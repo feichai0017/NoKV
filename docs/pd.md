@@ -69,7 +69,7 @@ NoKV intentionally keeps three region views with different authority:
 
 - **PD region catalog**: cluster routing truth. Clients and stores must treat
   PD as the authoritative key-to-region source.
-- **`raftstore/meta` local catalog**: store-local recovery truth. It exists so
+- **`raftstore/localmeta` local catalog**: store-local recovery truth. It exists so
   one store can restart hosted peers and replay raft WAL checkpoints even if
   PD is temporarily unavailable.
 - **`Store.regions` runtime catalog**: in-memory cache/view rebuilt from local
@@ -157,7 +157,7 @@ Related CLI behavior:
   - region catalog snapshots learned from heartbeats
   - allocator durability (`AllocID`, `TSO`)
 - PD is not the durable owner of a store's local raft/region truth. Store
-  restart truth remains in `raftstore/meta`, while PD keeps the routing and
+  restart truth remains in `raftstore/localmeta`, while PD keeps the routing and
   scheduling view.
 
 ---

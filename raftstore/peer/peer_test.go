@@ -7,7 +7,7 @@ import (
 
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/stretchr/testify/require"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
@@ -74,14 +74,14 @@ func TestSnapshotExportsPayloadAndRefreshesMetadata(t *testing.T) {
 	}))
 
 	p := newTestPeer(t, storage, nil)
-	p.region = &raftmeta.RegionMeta{
+	p.region = &localmeta.RegionMeta{
 		ID: 7,
-		Peers: []raftmeta.PeerMeta{
+		Peers: []localmeta.PeerMeta{
 			{StoreID: 1, PeerID: 11},
 			{StoreID: 2, PeerID: 22},
 		},
 	}
-	p.snapshotExport = func(region raftmeta.RegionMeta) ([]byte, error) {
+	p.snapshotExport = func(region localmeta.RegionMeta) ([]byte, error) {
 		require.Equal(t, uint64(7), region.ID)
 		return []byte("logical-payload"), nil
 	}
@@ -200,8 +200,8 @@ func TestEnsureEmptySnapshotPayloadTargetAllowsRetry(t *testing.T) {
 
 func TestPrepareMessagesAttachesSnapshotPayload(t *testing.T) {
 	p := &Peer{
-		region: &raftmeta.RegionMeta{ID: 7, State: raftmeta.RegionStateRunning},
-		snapshotExport: func(region raftmeta.RegionMeta) ([]byte, error) {
+		region: &localmeta.RegionMeta{ID: 7, State: localmeta.RegionStateRunning},
+		snapshotExport: func(region localmeta.RegionMeta) ([]byte, error) {
 			require.Equal(t, uint64(7), region.ID)
 			return []byte("payload"), nil
 		},
@@ -226,10 +226,10 @@ func TestHandleReadyImportsSnapshotPayloadBeforeRaftSnapshot(t *testing.T) {
 	p := &Peer{
 		storage: storage,
 		raftLog: newRaftLogTracker(1),
-		snapshotApply: func(payload []byte) (raftmeta.RegionMeta, error) {
+		snapshotApply: func(payload []byte) (localmeta.RegionMeta, error) {
 			require.Equal(t, []byte("payload"), payload)
 			imported = true
-			return raftmeta.RegionMeta{ID: 9, State: raftmeta.RegionStateRunning}, nil
+			return localmeta.RegionMeta{ID: 9, State: localmeta.RegionStateRunning}, nil
 		},
 	}
 	rd := myraft.Ready{
@@ -260,9 +260,9 @@ func TestStepRejectsSnapshotPayloadOnNonEmptyPeer(t *testing.T) {
 		Transport: noopPayloadTransport{},
 		Apply:     func([]myraft.Entry) error { return nil },
 		Storage:   storage,
-		SnapshotApply: func(payload []byte) (raftmeta.RegionMeta, error) {
+		SnapshotApply: func(payload []byte) (localmeta.RegionMeta, error) {
 			t.Fatalf("snapshot apply hook should not run")
-			return raftmeta.RegionMeta{}, nil
+			return localmeta.RegionMeta{}, nil
 		},
 	})
 	require.NoError(t, err)

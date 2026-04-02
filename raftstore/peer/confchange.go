@@ -1,7 +1,7 @@
 package peer
 
 import (
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
@@ -9,7 +9,7 @@ import (
 // been committed and applied by the raft peer.
 type ConfChangeEvent struct {
 	Peer       *Peer
-	RegionMeta *raftmeta.RegionMeta
+	RegionMeta *localmeta.RegionMeta
 	ConfChange raftpb.ConfChangeV2
 	Index      uint64
 	Term       uint64

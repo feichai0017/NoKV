@@ -1,4 +1,4 @@
-package meta
+package localmeta
 
 import (
 	"encoding/json"
@@ -43,7 +43,7 @@ func (s *Store) WorkDir() string {
 func OpenLocalStore(workdir string, fs vfs.FS) (*Store, error) {
 	workdir = strings.TrimSpace(workdir)
 	if workdir == "" {
-		return nil, fmt.Errorf("raftstore/meta: workdir is required")
+		return nil, fmt.Errorf("raftstore/localmeta: workdir is required")
 	}
 	fs = vfs.Ensure(fs)
 	if err := fs.MkdirAll(workdir, 0o755); err != nil {
@@ -107,7 +107,7 @@ func (s *Store) SaveRegion(meta RegionMeta) error {
 		return nil
 	}
 	if meta.ID == 0 {
-		return fmt.Errorf("raftstore/meta: region id is zero")
+		return fmt.Errorf("raftstore/localmeta: region id is zero")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -135,7 +135,7 @@ func (s *Store) SaveRaftPointer(ptr RaftLogPointer) error {
 		return nil
 	}
 	if ptr.GroupID == 0 {
-		return fmt.Errorf("raftstore/meta: raft pointer group id is zero")
+		return fmt.Errorf("raftstore/localmeta: raft pointer group id is zero")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

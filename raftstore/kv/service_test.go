@@ -13,7 +13,7 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/kv"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/stretchr/testify/require"
@@ -26,10 +26,10 @@ type noopTransport struct{}
 
 func (noopTransport) Send(context.Context, myraft.Message) {}
 
-func openTestDB(t *testing.T) (*NoKV.DB, *raftmeta.Store) {
+func openTestDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
-	localMeta, err := raftmeta.OpenLocalStore(opt.WorkDir, nil)
+	localMeta, err := localmeta.OpenLocalStore(opt.WorkDir, nil)
 	require.NoError(t, err)
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
 	db, err := NoKV.Open(opt)
@@ -39,7 +39,7 @@ func openTestDB(t *testing.T) (*NoKV.DB, *raftmeta.Store) {
 	return db, localMeta
 }
 
-func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *raftmeta.Store, groupID uint64) engine.PeerStorage {
+func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *localmeta.Store, groupID uint64) engine.PeerStorage {
 	t.Helper()
 	storage, err := db.RaftLog().Open(groupID, localMeta)
 	require.NoError(t, err)
@@ -90,7 +90,7 @@ type serviceHarness struct {
 	store   *store.Store
 	service *kv.Service
 	ctx     *pb.Context
-	region  *raftmeta.RegionMeta
+	region  *localmeta.RegionMeta
 }
 
 func newServiceHarness(t *testing.T, cfg harnessConfig) serviceHarness {
@@ -122,12 +122,12 @@ func newServiceHarness(t *testing.T, cfg harnessConfig) serviceHarness {
 	st := store.NewStore(store.Config{StoreID: cfg.storeID, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 
-	meta := &raftmeta.RegionMeta{
+	meta := &localmeta.RegionMeta{
 		ID:       cfg.regionID,
 		StartKey: append([]byte(nil), cfg.startKey...),
 		EndKey:   append([]byte(nil), cfg.endKey...),
-		Epoch:    raftmeta.RegionEpoch{Version: cfg.epochVersion, ConfVersion: cfg.epochConfVer},
-		Peers:    []raftmeta.PeerMeta{{StoreID: cfg.storeID, PeerID: cfg.peerID}},
+		Epoch:    localmeta.RegionEpoch{Version: cfg.epochVersion, ConfVersion: cfg.epochConfVer},
+		Peers:    []localmeta.PeerMeta{{StoreID: cfg.storeID, PeerID: cfg.peerID}},
 	}
 	cfgPeer := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -213,12 +213,12 @@ func TestServicePrewriteCommit(t *testing.T) {
 	st := store.NewStore(store.Config{StoreID: 1, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 
-	region := &raftmeta.RegionMeta{
+	region := &localmeta.RegionMeta{
 		ID:       501,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 11}},
+		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []localmeta.PeerMeta{{StoreID: 1, PeerID: 11}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -339,12 +339,12 @@ func TestServiceRegionEpochMismatch(t *testing.T) {
 	applier := kv.NewApplier(db, nil)
 	st := store.NewStore(store.Config{StoreID: 2, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
-	region := &raftmeta.RegionMeta{
+	region := &localmeta.RegionMeta{
 		ID:       601,
 		StartKey: []byte("a"),
 		EndKey:   []byte("b"),
-		Epoch:    raftmeta.RegionEpoch{Version: 2, ConfVersion: 1},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 2, PeerID: 22}},
+		Epoch:    localmeta.RegionEpoch{Version: 2, ConfVersion: 1},
+		Peers:    []localmeta.PeerMeta{{StoreID: 2, PeerID: 22}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{

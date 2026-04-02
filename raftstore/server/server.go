@@ -12,7 +12,7 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	adminsvc "github.com/feichai0017/NoKV/raftstore/admin"
 	"github.com/feichai0017/NoKV/raftstore/kv"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/raftstore/store"
@@ -137,8 +137,8 @@ func New(cfg Config) (*Server, error) {
 	return srv, nil
 }
 
-func defaultPeerBuilder(storage Storage, localMeta *raftmeta.Store, storeID uint64, baseRaft myraft.Config, tr transport.Transport) store.PeerBuilder {
-	return func(meta raftmeta.RegionMeta) (*peer.Config, error) {
+func defaultPeerBuilder(storage Storage, localMeta *localmeta.Store, storeID uint64, baseRaft myraft.Config, tr transport.Transport) store.PeerBuilder {
+	return func(meta localmeta.RegionMeta) (*peer.Config, error) {
 		var peerID uint64
 		for _, p := range meta.Peers {
 			if p.StoreID == storeID {
@@ -157,10 +157,10 @@ func defaultPeerBuilder(storage Storage, localMeta *raftmeta.Store, storeID uint
 		if !ok {
 			return nil, fmt.Errorf("raftstore/server: MVCC storage must provide snapshot bridge")
 		}
-		snapshotApply := func(payload []byte) (raftmeta.RegionMeta, error) {
+		snapshotApply := func(payload []byte) (localmeta.RegionMeta, error) {
 			result, err := snapshotBridge.ImportSnapshot(payload)
 			if err != nil {
-				return raftmeta.RegionMeta{}, err
+				return localmeta.RegionMeta{}, err
 			}
 			return result.Meta.Region, nil
 		}
@@ -172,7 +172,7 @@ func defaultPeerBuilder(storage Storage, localMeta *raftmeta.Store, storeID uint
 			SnapshotApply:  snapshotApply,
 			Storage:        peerStorage,
 			GroupID:        meta.ID,
-			Region:         raftmeta.CloneRegionMetaPtr(&meta),
+			Region:         localmeta.CloneRegionMetaPtr(&meta),
 		}, nil
 	}
 }

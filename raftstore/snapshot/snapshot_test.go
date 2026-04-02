@@ -11,7 +11,7 @@ import (
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
@@ -33,11 +33,11 @@ func TestExportDir(t *testing.T) {
 	}
 	require.NoError(t, srcDB.ApplyInternalEntries(entries))
 
-	region := raftmeta.RegionMeta{
+	region := localmeta.RegionMeta{
 		ID:       7,
 		StartKey: []byte("alpha"),
 		EndKey:   []byte("z"),
-		State:    raftmeta.RegionStateRunning,
+		State:    localmeta.RegionStateRunning,
 	}
 	snapshotDir := filepath.Join(t.TempDir(), "region.sst.snapshot")
 	result, err := srcDB.ExportSnapshotDir(snapshotDir, region)
@@ -91,11 +91,11 @@ func TestExportDirSplitsLargeSnapshotIntoMultipleTables(t *testing.T) {
 	}
 	require.NoError(t, srcDB.ApplyInternalEntries(entries))
 
-	region := raftmeta.RegionMeta{
+	region := localmeta.RegionMeta{
 		ID:       8,
 		StartKey: []byte("key-"),
 		EndKey:   []byte("zzz"),
-		State:    raftmeta.RegionStateRunning,
+		State:    localmeta.RegionStateRunning,
 	}
 	snapshotDir := filepath.Join(t.TempDir(), "region.multi.snapshot")
 	result, err := srcDB.ExportSnapshotDir(snapshotDir, region)
@@ -122,11 +122,11 @@ func TestExportPayloadRoundTrip(t *testing.T) {
 	}
 	require.NoError(t, srcDB.ApplyInternalEntries(entries))
 
-	region := raftmeta.RegionMeta{
+	region := localmeta.RegionMeta{
 		ID:       19,
 		StartKey: []byte("alpha"),
 		EndKey:   []byte("z"),
-		State:    raftmeta.RegionStateRunning,
+		State:    localmeta.RegionStateRunning,
 	}
 	payload, err := srcDB.ExportSnapshot(region)
 	require.NoError(t, err)
@@ -166,11 +166,11 @@ func TestExportPayloadToAndImportPayloadFromRoundTrip(t *testing.T) {
 	}
 	require.NoError(t, srcDB.ApplyInternalEntries(entries))
 
-	region := raftmeta.RegionMeta{
+	region := localmeta.RegionMeta{
 		ID:       23,
 		StartKey: []byte("alpha"),
 		EndKey:   []byte("z"),
-		State:    raftmeta.RegionStateRunning,
+		State:    localmeta.RegionStateRunning,
 	}
 
 	var payload bytes.Buffer
@@ -212,11 +212,11 @@ func TestImportPayloadRollback(t *testing.T) {
 	}
 	require.NoError(t, srcDB.ApplyInternalEntries(entries))
 
-	region := raftmeta.RegionMeta{
+	region := localmeta.RegionMeta{
 		ID:       29,
 		StartKey: []byte("alpha"),
 		EndKey:   []byte("z"),
-		State:    raftmeta.RegionStateRunning,
+		State:    localmeta.RegionStateRunning,
 	}
 	payload, err := srcDB.ExportSnapshot(region)
 	require.NoError(t, err)
@@ -259,11 +259,11 @@ func TestReadPayloadMetaRejectsMissingMeta(t *testing.T) {
 func TestImportPayloadRejectsMissingTableFile(t *testing.T) {
 	meta := snapshot.Meta{
 		Version: 1,
-		Region: raftmeta.RegionMeta{
+		Region: localmeta.RegionMeta{
 			ID:       41,
 			StartKey: []byte("a"),
 			EndKey:   []byte("z"),
-			State:    raftmeta.RegionStateRunning,
+			State:    localmeta.RegionStateRunning,
 		},
 		EntryCount:   1,
 		TableCount:   1,
@@ -306,11 +306,11 @@ func TestImportPayloadRejectsMissingTableFile(t *testing.T) {
 func TestImportPayloadRejectsAbsolutePath(t *testing.T) {
 	meta := snapshot.Meta{
 		Version: 1,
-		Region: raftmeta.RegionMeta{
+		Region: localmeta.RegionMeta{
 			ID:       42,
 			StartKey: []byte("a"),
 			EndKey:   []byte("z"),
-			State:    raftmeta.RegionStateRunning,
+			State:    localmeta.RegionStateRunning,
 		},
 		Compatibility: snapshot.Compatibility{
 			BlockSize:          lsm.DefaultBlockSize,
@@ -349,11 +349,11 @@ func TestImportPayloadRejectsAbsolutePath(t *testing.T) {
 func TestImportPayloadRejectsParentTraversalPath(t *testing.T) {
 	meta := snapshot.Meta{
 		Version: 1,
-		Region: raftmeta.RegionMeta{
+		Region: localmeta.RegionMeta{
 			ID:       46,
 			StartKey: []byte("a"),
 			EndKey:   []byte("z"),
-			State:    raftmeta.RegionStateRunning,
+			State:    localmeta.RegionStateRunning,
 		},
 		Compatibility: snapshot.Compatibility{
 			BlockSize:          lsm.DefaultBlockSize,
@@ -391,11 +391,11 @@ func TestImportPayloadRejectsParentTraversalPath(t *testing.T) {
 
 func TestClosedDBSnapshotCallsReturnError(t *testing.T) {
 	db := openSnapshotDB(t)
-	region := raftmeta.RegionMeta{
+	region := localmeta.RegionMeta{
 		ID:       43,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		State:    raftmeta.RegionStateRunning,
+		State:    localmeta.RegionStateRunning,
 	}
 	require.NoError(t, db.Close())
 
@@ -418,11 +418,11 @@ func TestImportDirRejectsIncompatibleTableFormat(t *testing.T) {
 	defer entry.DecrRef()
 	require.NoError(t, srcDB.ApplyInternalEntries([]*kv.Entry{entry}))
 
-	region := raftmeta.RegionMeta{
+	region := localmeta.RegionMeta{
 		ID:       44,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		State:    raftmeta.RegionStateRunning,
+		State:    localmeta.RegionStateRunning,
 	}
 	snapshotDir := filepath.Join(t.TempDir(), "region.incompatible.snapshot")
 	_, err := srcDB.ExportSnapshotDir(snapshotDir, region)
@@ -448,11 +448,11 @@ func TestImportDirRejectsIncompatibleBloomFalsePositive(t *testing.T) {
 	defer entry.DecrRef()
 	require.NoError(t, srcDB.ApplyInternalEntries([]*kv.Entry{entry}))
 
-	region := raftmeta.RegionMeta{
+	region := localmeta.RegionMeta{
 		ID:       45,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		State:    raftmeta.RegionStateRunning,
+		State:    localmeta.RegionStateRunning,
 	}
 	snapshotDir := filepath.Join(t.TempDir(), "region.bloom.incompatible.snapshot")
 	_, err := srcDB.ExportSnapshotDir(snapshotDir, region)

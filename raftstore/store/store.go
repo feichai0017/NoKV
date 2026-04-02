@@ -2,7 +2,7 @@ package store
 
 import (
 	"context"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"sync"
 	"time"
 
@@ -61,12 +61,12 @@ type schedulerRuntime struct {
 type PeerHandle struct {
 	ID     uint64
 	Peer   *peer.Peer
-	Region *raftmeta.RegionMeta
+	Region *localmeta.RegionMeta
 }
 
 // RegionSnapshot provides an external view of the tracked Region metadata.
 type RegionSnapshot struct {
-	Regions []raftmeta.RegionMeta `json:"regions"`
+	Regions []localmeta.RegionMeta `json:"regions"`
 }
 
 // NewStore constructs a Store using concrete dependencies. It keeps peer

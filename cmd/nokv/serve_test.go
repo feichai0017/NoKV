@@ -12,7 +12,7 @@ import (
 	"github.com/feichai0017/NoKV/pd/core"
 	pdserver "github.com/feichai0017/NoKV/pd/server"
 	"github.com/feichai0017/NoKV/pd/tso"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
@@ -98,11 +98,11 @@ func TestStartStorePeersSkipsMissing(t *testing.T) {
 		_ = db.Close()
 	}()
 
-	meta := raftmeta.RegionMeta{
+	meta := localmeta.RegionMeta{
 		ID:    10,
-		State: raftmeta.RegionStateRunning,
-		Epoch: raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers: []raftmeta.PeerMeta{{StoreID: 2, PeerID: 200}},
+		State: localmeta.RegionStateRunning,
+		Epoch: localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers: []localmeta.PeerMeta{{StoreID: 2, PeerID: 200}},
 	}
 	require.NoError(t, localMeta.SaveRegion(meta))
 
@@ -121,13 +121,13 @@ func TestStartStorePeersStartsPeer(t *testing.T) {
 		_ = db.Close()
 	}()
 
-	meta := raftmeta.RegionMeta{
+	meta := localmeta.RegionMeta{
 		ID:       11,
-		State:    raftmeta.RegionStateRunning,
+		State:    localmeta.RegionStateRunning,
 		StartKey: []byte("a"),
 		EndKey:   []byte("b"),
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 101}},
+		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []localmeta.PeerMeta{{StoreID: 1, PeerID: 101}},
 	}
 	require.NoError(t, localMeta.SaveRegion(meta))
 	require.NoError(t, server.Close())
@@ -169,21 +169,21 @@ func TestRunServeCmdWithRegions(t *testing.T) {
 		pdAddr, stopPD := startTestPDServer(t)
 		defer stopPD()
 		localMeta := openLocalMetaStore(t, dir)
-		require.NoError(t, localMeta.SaveRegion(raftmeta.RegionMeta{
+		require.NoError(t, localMeta.SaveRegion(localmeta.RegionMeta{
 			ID:       1,
-			State:    raftmeta.RegionStateRunning,
+			State:    localmeta.RegionStateRunning,
 			StartKey: nil,
 			EndKey:   nil,
-			Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-			Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 101}},
+			Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers:    []localmeta.PeerMeta{{StoreID: 1, PeerID: 101}},
 		}))
-		require.NoError(t, localMeta.SaveRegion(raftmeta.RegionMeta{
+		require.NoError(t, localMeta.SaveRegion(localmeta.RegionMeta{
 			ID:       2,
-			State:    raftmeta.RegionStateRunning,
+			State:    localmeta.RegionStateRunning,
 			StartKey: []byte("b"),
 			EndKey:   []byte("c"),
-			Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-			Peers:    []raftmeta.PeerMeta{{StoreID: 2, PeerID: 201}},
+			Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers:    []localmeta.PeerMeta{{StoreID: 2, PeerID: 201}},
 		}))
 
 		var buf bytes.Buffer
@@ -243,9 +243,9 @@ func newTestDBWithDir(t *testing.T, dir string) *NoKV.DB {
 	return db
 }
 
-func openLocalMetaStore(t *testing.T, dir string) *raftmeta.Store {
+func openLocalMetaStore(t *testing.T, dir string) *localmeta.Store {
 	t.Helper()
-	store, err := raftmeta.OpenLocalStore(dir, nil)
+	store, err := localmeta.OpenLocalStore(dir, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	return store
@@ -255,7 +255,7 @@ func newTestServer(t *testing.T, db *NoKV.DB, storeID uint64) *serverpkg.Server 
 	return newTestServerWithMeta(t, db, storeID, nil)
 }
 
-func newTestServerWithMeta(t *testing.T, db *NoKV.DB, storeID uint64, localMeta *raftmeta.Store) *serverpkg.Server {
+func newTestServerWithMeta(t *testing.T, db *NoKV.DB, storeID uint64, localMeta *localmeta.Store) *serverpkg.Server {
 	t.Helper()
 	server, err := serverpkg.New(serverpkg.Config{
 		Storage: serverpkg.Storage{

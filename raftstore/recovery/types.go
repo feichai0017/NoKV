@@ -2,7 +2,7 @@ package recovery
 
 import (
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	"github.com/feichai0017/NoKV/raftstore/meta"
+	"github.com/feichai0017/NoKV/raftstore/localmeta"
 )
 
 // ReplicaLocalState is the store-local restart state for one hosted replica.
@@ -12,7 +12,7 @@ import (
 type ReplicaLocalState struct {
 	RegionID    uint64
 	LocalPeerID uint64
-	State       meta.RegionState
+	State       localmeta.RegionState
 	Descriptor  *descriptor.Descriptor
 	LastApplied uint64
 	LastTerm    uint64
