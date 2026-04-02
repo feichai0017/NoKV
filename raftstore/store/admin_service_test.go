@@ -2,7 +2,7 @@ package store
 
 import (
 	"context"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -16,7 +16,7 @@ type adminTestTransport struct{}
 func (adminTestTransport) Send(context.Context, myraft.Message) {}
 
 func adminTestPeerBuilder(storeID uint64) PeerBuilder {
-	return func(region raftmeta.RegionMeta) (*peer.Config, error) {
+	return func(region localmeta.RegionMeta) (*peer.Config, error) {
 		return &peer.Config{
 			RaftConfig: myraft.Config{
 				ID:              region.Peers[0].PeerID,
@@ -27,7 +27,7 @@ func adminTestPeerBuilder(storeID uint64) PeerBuilder {
 			},
 			Transport: adminTestTransport{},
 			Apply:     func([]myraft.Entry) error { return nil },
-			Region:    raftmeta.CloneRegionMetaPtr(&region),
+			Region:    localmeta.CloneRegionMetaPtr(&region),
 		}, nil
 	}
 }
@@ -38,11 +38,11 @@ func TestStoreLocalSplitStartsChildPeer(t *testing.T) {
 	rs := NewStore(Config{PeerBuilder: peerBuilder, StoreID: storeID})
 	defer rs.Close()
 
-	parentMeta := raftmeta.RegionMeta{
+	parentMeta := localmeta.RegionMeta{
 		ID:       1000,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Peers:    []raftmeta.PeerMeta{{StoreID: storeID, PeerID: 1}},
+		Peers:    []localmeta.PeerMeta{{StoreID: storeID, PeerID: 1}},
 	}
 	parentCfg, err := peerBuilder(parentMeta)
 	require.NoError(t, err)
@@ -50,11 +50,11 @@ func TestStoreLocalSplitStartsChildPeer(t *testing.T) {
 	require.NoError(t, err)
 	defer rs.StopPeer(parentPeer.ID())
 
-	childMeta := raftmeta.RegionMeta{
+	childMeta := localmeta.RegionMeta{
 		ID:       2000,
 		StartKey: []byte("m"),
 		EndKey:   []byte("z"),
-		Peers:    []raftmeta.PeerMeta{{StoreID: storeID, PeerID: 2}},
+		Peers:    []localmeta.PeerMeta{{StoreID: storeID, PeerID: 2}},
 	}
 	childPeer, err := rs.splitRegionLocal(parentMeta.ID, childMeta)
 	require.NoError(t, err)

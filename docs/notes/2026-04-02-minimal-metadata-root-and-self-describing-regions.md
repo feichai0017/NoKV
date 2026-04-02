@@ -52,7 +52,7 @@ The current weak spot is not the snapshot pipeline. It is metadata ownership.
 Today NoKV still has prototype-style local state stores:
 
 - store-local recovery state:
-  - `raftstore/meta/store.go`
+  - `raftstore/localmeta/store.go`
 - PD-lite local state:
   - `pd/storage/local.go`
 
@@ -456,9 +456,9 @@ type Descriptor struct {
     RegionID    uint64
     StartKey    []byte
     EndKey      []byte
-    Epoch       raftmeta.RegionEpoch
-    Peers       []raftmeta.PeerMeta
-    State       raftmeta.RegionState
+    Epoch       localmeta.RegionEpoch
+    Peers       []localmeta.PeerMeta
+    State       localmeta.RegionState
     Parent      []LineageRef
     RootEpoch   uint64
     Hash        []byte
@@ -470,7 +470,7 @@ Suggested lineage types:
 ```go
 type LineageRef struct {
     RegionID uint64
-    Epoch    raftmeta.RegionEpoch
+    Epoch    localmeta.RegionEpoch
     Hash     []byte
     Kind     LineageKind
 }
@@ -526,7 +526,7 @@ Suggested logical types:
 type ReplicaLocalState struct {
     RegionID     uint64
     LocalPeerID  uint64
-    State        raftmeta.RegionState
+    State        localmeta.RegionState
     Descriptor   *descriptor.Descriptor
     LastApplied  uint64
     LastTerm     uint64
@@ -585,11 +585,11 @@ Views should be rebuilt from:
 
 This makes the control plane robust against cache loss.
 
-## `raftstore/meta`
+## `raftstore/localmeta`
 
 Keep:
 
-- `raftstore/meta/store.go`
+- `raftstore/localmeta/store.go`
 
 But shrink its semantic role.
 
@@ -611,7 +611,7 @@ every update. The right direction is:
 
 In other words:
 
-- `raftstore/meta` should shrink toward a compatibility bridge
+- `raftstore/localmeta` should shrink toward a compatibility bridge
 - `raftstore/recovery` should become the real local durability package
 
 ## Data ownership
@@ -846,7 +846,7 @@ There is little value in removing JSON from them.
 
 ## What should evolve away from full JSON state files
 
-- `raftstore/meta/store.go`
+- `raftstore/localmeta/store.go`
 - `pd/storage/local.go`
 
 These should move toward:

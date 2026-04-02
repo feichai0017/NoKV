@@ -3,14 +3,14 @@ package store
 import (
 	"fmt"
 	myraft "github.com/feichai0017/NoKV/raft"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 
 	"github.com/feichai0017/NoKV/metrics"
 )
 
 // RegionRuntimeStatus captures store-local runtime state for one region.
 type RegionRuntimeStatus struct {
-	Meta         raftmeta.RegionMeta
+	Meta         localmeta.RegionMeta
 	Hosted       bool
 	LocalPeerID  uint64
 	LeaderPeerID uint64
@@ -19,7 +19,7 @@ type RegionRuntimeStatus struct {
 	AppliedTerm  uint64
 }
 
-func (s *Store) applyRegionMeta(meta raftmeta.RegionMeta) error {
+func (s *Store) applyRegionMeta(meta localmeta.RegionMeta) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
@@ -33,7 +33,7 @@ func (s *Store) applyRegionRemoval(regionID uint64) error {
 	return s.regionMgr().applyRegionRemoval(regionID)
 }
 
-func (s *Store) applyRegionState(regionID uint64, state raftmeta.RegionState) error {
+func (s *Store) applyRegionState(regionID uint64, state localmeta.RegionState) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
@@ -54,10 +54,10 @@ func (s *Store) regionMetrics() *metrics.RegionMetrics {
 	return s.regions.metrics
 }
 
-// RegionMetas collects the known raftmeta.RegionMeta entries from registered
+// RegionMetas collects the known localmeta.RegionMeta entries from registered
 // peers. This mirrors the TinyKV store exposing region layout information to
 // schedulers and debugging endpoints.
-func (s *Store) RegionMetas() []raftmeta.RegionMeta {
+func (s *Store) RegionMetas() []localmeta.RegionMeta {
 	if s == nil {
 		return nil
 	}
@@ -69,12 +69,12 @@ func (s *Store) RegionMetas() []raftmeta.RegionMeta {
 
 // RegionMetaByID returns the stored metadata for the provided region, along
 // with a boolean indicating whether it exists.
-func (s *Store) RegionMetaByID(regionID uint64) (raftmeta.RegionMeta, bool) {
+func (s *Store) RegionMetaByID(regionID uint64) (localmeta.RegionMeta, bool) {
 	if s == nil || regionID == 0 {
-		return raftmeta.RegionMeta{}, false
+		return localmeta.RegionMeta{}, false
 	}
 	if s.regionMgr() == nil {
-		return raftmeta.RegionMeta{}, false
+		return localmeta.RegionMeta{}, false
 	}
 	return s.regionMgr().meta(regionID)
 }

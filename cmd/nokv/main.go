@@ -16,7 +16,7 @@ import (
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
 )
@@ -480,14 +480,14 @@ func runRegionsCmd(w io.Writer, args []string) error {
 		return fmt.Errorf("--workdir is required")
 	}
 
-	metaStore, err := raftmeta.OpenLocalStore(*workDir, nil)
+	metaStore, err := localmeta.OpenLocalStore(*workDir, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = metaStore.Close() }()
 
 	snapshot := metaStore.Snapshot()
-	regions := make([]raftmeta.RegionMeta, 0, len(snapshot))
+	regions := make([]localmeta.RegionMeta, 0, len(snapshot))
 	for _, meta := range snapshot {
 		regions = append(regions, meta)
 	}
@@ -520,7 +520,7 @@ func localStatsSnapshot(workDir string, attachMetrics bool) (NoKV.StatsSnapshot,
 	if workDir == "" {
 		return NoKV.StatsSnapshot{}, fmt.Errorf("workdir is required")
 	}
-	metaStore, err := raftmeta.OpenLocalStore(workDir, nil)
+	metaStore, err := localmeta.OpenLocalStore(workDir, nil)
 	if err != nil {
 		return NoKV.StatsSnapshot{}, err
 	}
@@ -637,22 +637,22 @@ func firstRegionMetrics() *metrics.RegionMetrics {
 	return nil
 }
 
-func formatRegionState(state raftmeta.RegionState) string {
+func formatRegionState(state localmeta.RegionState) string {
 	switch state {
-	case raftmeta.RegionStateNew:
+	case localmeta.RegionStateNew:
 		return "new"
-	case raftmeta.RegionStateRunning:
+	case localmeta.RegionStateRunning:
 		return "running"
-	case raftmeta.RegionStateRemoving:
+	case localmeta.RegionStateRemoving:
 		return "removing"
-	case raftmeta.RegionStateTombstone:
+	case localmeta.RegionStateTombstone:
 		return "tombstone"
 	default:
 		return fmt.Sprintf("unknown(%d)", state)
 	}
 }
 
-func formatPeers(peers []raftmeta.PeerMeta) string {
+func formatPeers(peers []localmeta.PeerMeta) string {
 	if len(peers) == 0 {
 		return "[]"
 	}

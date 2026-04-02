@@ -3,12 +3,12 @@ package migrate
 import (
 	"fmt"
 
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 )
 
 func validateSeedArtifacts(workDir string, storeID, regionID, peerID uint64) error {
-	localMeta, err := raftmeta.OpenLocalStore(workDir, nil)
+	localMeta, err := localmeta.OpenLocalStore(workDir, nil)
 	if err != nil {
 		return fmt.Errorf("migrate: validate local catalog: %w", err)
 	}

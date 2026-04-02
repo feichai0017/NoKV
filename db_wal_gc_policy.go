@@ -4,7 +4,7 @@ import (
 	"log/slog"
 
 	"github.com/feichai0017/NoKV/lsm"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/wal"
 )
 
@@ -18,7 +18,7 @@ import (
 //     by raft pointers and warn when a removable segment still contains raft
 //     records.
 type dbWALGCPolicy struct {
-	raftPointers   func() map[uint64]raftmeta.RaftLogPointer
+	raftPointers   func() map[uint64]localmeta.RaftLogPointer
 	segmentMetrics func(segmentID uint32) wal.RecordMetrics
 	warn           func(msg string, args ...any)
 }

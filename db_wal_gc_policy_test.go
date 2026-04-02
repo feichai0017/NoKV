@@ -5,14 +5,14 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/wal"
 )
 
 func TestDBWALGCPolicyRaftPointers(t *testing.T) {
 	policy := &dbWALGCPolicy{
-		raftPointers: func() map[uint64]raftmeta.RaftLogPointer {
-			return map[uint64]raftmeta.RaftLogPointer{
+		raftPointers: func() map[uint64]localmeta.RaftLogPointer {
+			return map[uint64]localmeta.RaftLogPointer{
 				1: {GroupID: 1, Segment: 4, Offset: 128},
 				2: {GroupID: 2, Segment: 2, Offset: 64},
 			}
@@ -26,8 +26,8 @@ func TestDBWALGCPolicyRaftPointers(t *testing.T) {
 
 func TestDBWALGCPolicyRaftSegmentIndex(t *testing.T) {
 	policy := &dbWALGCPolicy{
-		raftPointers: func() map[uint64]raftmeta.RaftLogPointer {
-			return map[uint64]raftmeta.RaftLogPointer{
+		raftPointers: func() map[uint64]localmeta.RaftLogPointer {
+			return map[uint64]localmeta.RaftLogPointer{
 				1: {GroupID: 1, SegmentIndex: 5},
 			}
 		},

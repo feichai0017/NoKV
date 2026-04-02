@@ -36,7 +36,7 @@ NoKV 当前这条桥接路径成立，核心靠的是几个设计决定同时为
 1. `DB` 仍然是底层共享数据面  
    不是把 standalone 数据导出后再导入另一种存储格式。
 
-2. `raftstore/meta` 与 `manifest` 分开  
+2. `raftstore/localmeta` 与 `manifest` 分开  
    引擎元数据和分布式恢复元数据没有继续混在一起。
 
 3. `raftstore/snapshot` 引入了逻辑 region snapshot  

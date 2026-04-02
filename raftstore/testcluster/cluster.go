@@ -20,7 +20,7 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	raftkv "github.com/feichai0017/NoKV/raftstore/kv"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
@@ -34,7 +34,7 @@ type Node struct {
 	StoreID   uint64
 	WorkDir   string
 	DB        *NoKV.DB
-	LocalMeta *raftmeta.Store
+	LocalMeta *localmeta.Store
 	Server    *serverpkg.Server
 }
 
@@ -75,7 +75,7 @@ func StartNode(tb testing.TB, storeID uint64, dir string, allowedModes []raftmod
 
 func StartNodeWithConfig(tb testing.TB, storeID uint64, dir string, cfg NodeConfig) *Node {
 	tb.Helper()
-	localMeta, err := raftmeta.OpenLocalStore(dir, nil)
+	localMeta, err := localmeta.OpenLocalStore(dir, nil)
 	if err != nil {
 		tb.Fatalf("open local meta: %v", err)
 	}
@@ -362,14 +362,14 @@ func AssertValue(tb testing.TB, db *NoKV.DB, key, value []byte) {
 	}
 }
 
-func peerConfig(node *Node, meta raftmeta.RegionMeta, peerID uint64, storage engine.PeerStorage) *peer.Config {
+func peerConfig(node *Node, meta localmeta.RegionMeta, peerID uint64, storage engine.PeerStorage) *peer.Config {
 	var snapshotExport peer.SnapshotExportFunc
 	if snapshotBridge, ok := any(node.DB).(snapshotpkg.SnapshotStore); ok {
 		snapshotExport = snapshotBridge.ExportSnapshot
-		snapshotApply := func(payload []byte) (raftmeta.RegionMeta, error) {
+		snapshotApply := func(payload []byte) (localmeta.RegionMeta, error) {
 			result, err := snapshotBridge.ImportSnapshot(payload)
 			if err != nil {
-				return raftmeta.RegionMeta{}, err
+				return localmeta.RegionMeta{}, err
 			}
 			return result.Meta.Region, nil
 		}
@@ -388,7 +388,7 @@ func peerConfig(node *Node, meta raftmeta.RegionMeta, peerID uint64, storage eng
 			SnapshotApply:  snapshotApply,
 			Storage:        storage,
 			GroupID:        meta.ID,
-			Region:         raftmeta.CloneRegionMetaPtr(&meta),
+			Region:         localmeta.CloneRegionMetaPtr(&meta),
 		}
 	}
 	return &peer.Config{
@@ -404,7 +404,7 @@ func peerConfig(node *Node, meta raftmeta.RegionMeta, peerID uint64, storage eng
 		Apply:     raftkv.NewEntryApplier(node.DB),
 		Storage:   storage,
 		GroupID:   meta.ID,
-		Region:    raftmeta.CloneRegionMetaPtr(&meta),
+		Region:    localmeta.CloneRegionMetaPtr(&meta),
 	}
 }
 

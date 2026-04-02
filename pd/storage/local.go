@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,8 +15,8 @@ import (
 )
 
 type diskState struct {
-	Regions   map[uint64]raftmeta.RegionMeta `json:"regions"`
-	Allocator AllocatorState                 `json:"allocator"`
+	Regions   map[uint64]localmeta.RegionMeta `json:"regions"`
+	Allocator AllocatorState                  `json:"allocator"`
 }
 
 // LocalStore persists PD metadata to a local state file owned by the PD
@@ -53,18 +53,18 @@ func OpenLocalStore(workdir string, fs vfs.FS) (*LocalStore, error) {
 // Load returns persisted region metadata and allocator counters.
 func (s *LocalStore) Load() (Snapshot, error) {
 	if s == nil {
-		return Snapshot{Regions: make(map[uint64]raftmeta.RegionMeta)}, nil
+		return Snapshot{Regions: make(map[uint64]localmeta.RegionMeta)}, nil
 	}
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 	return Snapshot{
-		Regions:   raftmeta.CloneRegionMetas(s.state.Regions),
+		Regions:   localmeta.CloneRegionMetas(s.state.Regions),
 		Allocator: s.state.Allocator,
 	}, nil
 }
 
 // SaveRegion persists one region metadata update.
-func (s *LocalStore) SaveRegion(meta raftmeta.RegionMeta) error {
+func (s *LocalStore) SaveRegion(meta localmeta.RegionMeta) error {
 	if s == nil {
 		return nil
 	}
@@ -74,9 +74,9 @@ func (s *LocalStore) SaveRegion(meta raftmeta.RegionMeta) error {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 	if s.state.Regions == nil {
-		s.state.Regions = make(map[uint64]raftmeta.RegionMeta)
+		s.state.Regions = make(map[uint64]localmeta.RegionMeta)
 	}
-	s.state.Regions[meta.ID] = raftmeta.CloneRegionMeta(meta)
+	s.state.Regions[meta.ID] = localmeta.CloneRegionMeta(meta)
 	return s.persistLocked()
 }
 
@@ -115,22 +115,22 @@ func loadDiskState(fs vfs.FS, workdir string) (diskState, error) {
 	data, err := fs.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return diskState{Regions: make(map[uint64]raftmeta.RegionMeta)}, nil
+			return diskState{Regions: make(map[uint64]localmeta.RegionMeta)}, nil
 		}
 		return diskState{}, err
 	}
 	if len(data) == 0 {
-		return diskState{Regions: make(map[uint64]raftmeta.RegionMeta)}, nil
+		return diskState{Regions: make(map[uint64]localmeta.RegionMeta)}, nil
 	}
 	var out diskState
 	if err := json.Unmarshal(data, &out); err != nil {
 		return diskState{}, err
 	}
 	if out.Regions == nil {
-		out.Regions = make(map[uint64]raftmeta.RegionMeta)
+		out.Regions = make(map[uint64]localmeta.RegionMeta)
 	}
 	for id, meta := range out.Regions {
-		out.Regions[id] = raftmeta.CloneRegionMeta(meta)
+		out.Regions[id] = localmeta.CloneRegionMeta(meta)
 	}
 	return out, nil
 }

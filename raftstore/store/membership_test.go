@@ -1,7 +1,7 @@
 package store
 
 import (
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -26,10 +26,10 @@ func TestHandlePeerConfChangeUpdatesRegionMeta(t *testing.T) {
 		},
 		Transport: noopTransport{},
 		Apply:     func([]myraft.Entry) error { return nil },
-		Region: &raftmeta.RegionMeta{
+		Region: &localmeta.RegionMeta{
 			ID:    regionID,
-			State: raftmeta.RegionStateRunning,
-			Peers: []raftmeta.PeerMeta{{StoreID: 1, PeerID: 1}},
+			State: localmeta.RegionStateRunning,
+			Peers: []localmeta.PeerMeta{{StoreID: 1, PeerID: 1}},
 		},
 	}
 
@@ -49,7 +49,7 @@ func TestHandlePeerConfChangeUpdatesRegionMeta(t *testing.T) {
 			Changes: []raftpb.ConfChangeSingle{
 				{Type: raftpb.ConfChangeAddNode, NodeID: 2},
 			},
-			Context: encodeConfChangeContext([]raftmeta.PeerMeta{{StoreID: 2, PeerID: 2}}),
+			Context: encodeConfChangeContext([]localmeta.PeerMeta{{StoreID: 2, PeerID: 2}}),
 		},
 	}
 	require.NoError(t, rs.handlePeerConfChange(addEvent))
@@ -58,7 +58,7 @@ func TestHandlePeerConfChangeUpdatesRegionMeta(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, meta.Peers, 2)
 	require.Equal(t, uint64(1), meta.Epoch.ConfVersion)
-	require.Contains(t, meta.Peers, raftmeta.PeerMeta{StoreID: 2, PeerID: 2})
+	require.Contains(t, meta.Peers, localmeta.PeerMeta{StoreID: 2, PeerID: 2})
 
 	removeEvent := peer.ConfChangeEvent{
 		Peer:       p,
@@ -67,7 +67,7 @@ func TestHandlePeerConfChangeUpdatesRegionMeta(t *testing.T) {
 			Changes: []raftpb.ConfChangeSingle{
 				{Type: raftpb.ConfChangeRemoveNode, NodeID: 1},
 			},
-			Context: encodeConfChangeContext([]raftmeta.PeerMeta{{StoreID: 1, PeerID: 1}}),
+			Context: encodeConfChangeContext([]localmeta.PeerMeta{{StoreID: 1, PeerID: 1}}),
 		},
 	}
 	require.NoError(t, rs.handlePeerConfChange(removeEvent))

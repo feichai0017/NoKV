@@ -3,7 +3,7 @@ package adapter
 import (
 	"context"
 	"errors"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -85,15 +85,15 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 		PD: pd,
 	})
 
-	meta := raftmeta.RegionMeta{
+	meta := localmeta.RegionMeta{
 		ID:       10,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch: raftmeta.RegionEpoch{
+		Epoch: localmeta.RegionEpoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
-		Peers: []raftmeta.PeerMeta{{StoreID: 1, PeerID: 101}},
+		Peers: []localmeta.PeerMeta{{StoreID: 1, PeerID: 101}},
 	}
 	sink.PublishRegion(context.Background(), meta)
 	ops := sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{
@@ -133,7 +133,7 @@ func TestSchedulerClientErrorCallbackAndClose(t *testing.T) {
 	})
 
 	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 7})
-	sink.PublishRegion(context.Background(), raftmeta.RegionMeta{ID: 9})
+	sink.PublishRegion(context.Background(), localmeta.RegionMeta{ID: 9})
 	require.Len(t, got, 2)
 	require.Contains(t, got[0], "StoreHeartbeat")
 	require.Contains(t, got[1], "RegionHeartbeat")
@@ -150,7 +150,7 @@ func TestSchedulerClientNoopOnZeroIDs(t *testing.T) {
 	pd := &fakePDClient{}
 	sink := NewSchedulerClient(SchedulerClientConfig{PD: pd})
 	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 0})
-	sink.PublishRegion(context.Background(), raftmeta.RegionMeta{ID: 0})
+	sink.PublishRegion(context.Background(), localmeta.RegionMeta{ID: 0})
 	sink.RemoveRegion(context.Background(), 0)
 	require.Empty(t, pd.storeReqs)
 	require.Empty(t, pd.regionReqs)
@@ -168,11 +168,11 @@ func TestSchedulerClientRemoveRegionForwardsAndReportsErrors(t *testing.T) {
 		},
 	})
 
-	meta := raftmeta.RegionMeta{
+	meta := localmeta.RegionMeta{
 		ID:       100,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch: raftmeta.RegionEpoch{
+		Epoch: localmeta.RegionEpoch{
 			Version:     1,
 			ConfVersion: 1,
 		},

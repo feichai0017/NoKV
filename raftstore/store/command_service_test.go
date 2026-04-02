@@ -8,7 +8,7 @@ import (
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/stretchr/testify/require"
 )
@@ -20,12 +20,12 @@ func TestStoreProposeCommandPrewriteCommit(t *testing.T) {
 	st := NewStore(Config{Scheduler: coord, StoreID: 1, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 
-	region := &raftmeta.RegionMeta{
+	region := &localmeta.RegionMeta{
 		ID:       101,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 1}},
+		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []localmeta.PeerMeta{{StoreID: 1, PeerID: 1}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -114,12 +114,12 @@ func TestStoreProposeCommandRejectsDuplicateRequestID(t *testing.T) {
 	})
 	t.Cleanup(func() { st.Close() })
 
-	region := &raftmeta.RegionMeta{
+	region := &localmeta.RegionMeta{
 		ID:       777,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 17}},
+		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []localmeta.PeerMeta{{StoreID: 1, PeerID: 17}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -189,12 +189,12 @@ func TestStoreProposeCommandNotLeader(t *testing.T) {
 	applier := newTestMVCCApplier(db)
 	st := NewStore(Config{StoreID: 2, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
-	region := &raftmeta.RegionMeta{
+	region := &localmeta.RegionMeta{
 		ID:       202,
 		StartKey: []byte("k"),
 		EndKey:   []byte("z"),
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 2, PeerID: 5}},
+		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []localmeta.PeerMeta{{StoreID: 2, PeerID: 5}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -231,12 +231,12 @@ func TestStoreProposeCommandEpochMismatch(t *testing.T) {
 	applier := newTestMVCCApplier(db)
 	st := NewStore(Config{StoreID: 3, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
-	region := &raftmeta.RegionMeta{
+	region := &localmeta.RegionMeta{
 		ID:       303,
 		StartKey: []byte("a"),
 		EndKey:   []byte("h"),
-		Epoch:    raftmeta.RegionEpoch{Version: 2, ConfVersion: 1},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 3, PeerID: 7}},
+		Epoch:    localmeta.RegionEpoch{Version: 2, ConfVersion: 1},
+		Peers:    []localmeta.PeerMeta{{StoreID: 3, PeerID: 7}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -280,12 +280,12 @@ func TestStoreProposeCommandSurvivesSchedulerUnavailable(t *testing.T) {
 	st := NewStore(Config{Scheduler: coord, StoreID: 1, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 
-	region := &raftmeta.RegionMeta{
+	region := &localmeta.RegionMeta{
 		ID:       909,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 1}},
+		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []localmeta.PeerMeta{{StoreID: 1, PeerID: 1}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{ID: 1, ElectionTick: 5, HeartbeatTick: 1, MaxSizePerMsg: 1 << 20, MaxInflightMsgs: 256, PreVote: true},

@@ -2,7 +2,7 @@ package adapter
 
 import (
 	"context"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"log/slog"
 	"sync"
 	"time"
@@ -51,7 +51,7 @@ func NewSchedulerClient(cfg SchedulerClientConfig) *SchedulerClient {
 }
 
 // PublishRegion publishes region metadata to PD.
-func (s *SchedulerClient) PublishRegion(ctx context.Context, meta raftmeta.RegionMeta) {
+func (s *SchedulerClient) PublishRegion(ctx context.Context, meta localmeta.RegionMeta) {
 	if s == nil || meta.ID == 0 || s.pd == nil {
 		return
 	}
@@ -192,7 +192,7 @@ func contextWithTimeout(parent context.Context, timeout time.Duration) (context.
 	return context.WithCancel(parent)
 }
 
-func toPBRegionMeta(meta raftmeta.RegionMeta) *pb.RegionMeta {
+func toPBRegionMeta(meta localmeta.RegionMeta) *pb.RegionMeta {
 	out := &pb.RegionMeta{
 		Id:               meta.ID,
 		StartKey:         append([]byte(nil), meta.StartKey...),

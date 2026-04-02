@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/pb"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/vfs"
 )
 
@@ -79,7 +79,7 @@ func ReadStatusWithConfig(cfg StatusConfig) (StatusResult, error) {
 		PeerID:   state.PeerID,
 	}
 
-	localMeta, err := raftmeta.OpenLocalStore(workDir, nil)
+	localMeta, err := localmeta.OpenLocalStore(workDir, nil)
 	if err != nil {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("local catalog open failed: %v", err))
 	} else {
