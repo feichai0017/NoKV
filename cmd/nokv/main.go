@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"io"
 	"net/http"
 	"os"
@@ -637,22 +638,22 @@ func firstRegionMetrics() *metrics.RegionMetrics {
 	return nil
 }
 
-func formatRegionState(state localmeta.RegionState) string {
+func formatRegionState(state metaregion.ReplicaState) string {
 	switch state {
-	case localmeta.RegionStateNew:
+	case metaregion.ReplicaStateNew:
 		return "new"
-	case localmeta.RegionStateRunning:
+	case metaregion.ReplicaStateRunning:
 		return "running"
-	case localmeta.RegionStateRemoving:
+	case metaregion.ReplicaStateRemoving:
 		return "removing"
-	case localmeta.RegionStateTombstone:
+	case metaregion.ReplicaStateTombstone:
 		return "tombstone"
 	default:
 		return fmt.Sprintf("unknown(%d)", state)
 	}
 }
 
-func formatPeers(peers []localmeta.PeerMeta) string {
+func formatPeers(peers []metaregion.Peer) string {
 	if len(peers) == 0 {
 		return "[]"
 	}

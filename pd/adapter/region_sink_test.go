@@ -3,29 +3,29 @@ package adapter
 import (
 	"context"
 	"errors"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 )
 
 type fakePDClient struct {
-	storeReqs  []*pb.StoreHeartbeatRequest
-	regionReqs []*pb.RegionHeartbeatRequest
-	removeReqs []*pb.RemoveRegionRequest
-	storeResp  *pb.StoreHeartbeatResponse
+	storeReqs  []*pdpb.StoreHeartbeatRequest
+	regionReqs []*pdpb.RegionHeartbeatRequest
+	removeReqs []*pdpb.RemoveRegionRequest
+	storeResp  *pdpb.StoreHeartbeatResponse
 	storeErr   error
 	regionErr  error
 	removeErr  error
 	closed     bool
 }
 
-func (f *fakePDClient) StoreHeartbeat(_ context.Context, req *pb.StoreHeartbeatRequest) (*pb.StoreHeartbeatResponse, error) {
+func (f *fakePDClient) StoreHeartbeat(_ context.Context, req *pdpb.StoreHeartbeatRequest) (*pdpb.StoreHeartbeatResponse, error) {
 	f.storeReqs = append(f.storeReqs, req)
 	if f.storeErr != nil {
 		return nil, f.storeErr
@@ -33,35 +33,35 @@ func (f *fakePDClient) StoreHeartbeat(_ context.Context, req *pb.StoreHeartbeatR
 	if f.storeResp != nil {
 		return f.storeResp, nil
 	}
-	return &pb.StoreHeartbeatResponse{Accepted: true}, nil
+	return &pdpb.StoreHeartbeatResponse{Accepted: true}, nil
 }
 
-func (f *fakePDClient) RegionHeartbeat(_ context.Context, req *pb.RegionHeartbeatRequest) (*pb.RegionHeartbeatResponse, error) {
+func (f *fakePDClient) RegionHeartbeat(_ context.Context, req *pdpb.RegionHeartbeatRequest) (*pdpb.RegionHeartbeatResponse, error) {
 	f.regionReqs = append(f.regionReqs, req)
 	if f.regionErr != nil {
 		return nil, f.regionErr
 	}
-	return &pb.RegionHeartbeatResponse{Accepted: true}, nil
+	return &pdpb.RegionHeartbeatResponse{Accepted: true}, nil
 }
 
-func (f *fakePDClient) RemoveRegion(_ context.Context, req *pb.RemoveRegionRequest) (*pb.RemoveRegionResponse, error) {
+func (f *fakePDClient) RemoveRegion(_ context.Context, req *pdpb.RemoveRegionRequest) (*pdpb.RemoveRegionResponse, error) {
 	f.removeReqs = append(f.removeReqs, req)
 	if f.removeErr != nil {
 		return nil, f.removeErr
 	}
-	return &pb.RemoveRegionResponse{Removed: true}, nil
+	return &pdpb.RemoveRegionResponse{Removed: true}, nil
 }
 
-func (f *fakePDClient) GetRegionByKey(context.Context, *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
-	return &pb.GetRegionByKeyResponse{}, nil
+func (f *fakePDClient) GetRegionByKey(context.Context, *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
+	return &pdpb.GetRegionByKeyResponse{}, nil
 }
 
-func (f *fakePDClient) AllocID(context.Context, *pb.AllocIDRequest) (*pb.AllocIDResponse, error) {
-	return &pb.AllocIDResponse{}, nil
+func (f *fakePDClient) AllocID(context.Context, *pdpb.AllocIDRequest) (*pdpb.AllocIDResponse, error) {
+	return &pdpb.AllocIDResponse{}, nil
 }
 
-func (f *fakePDClient) Tso(context.Context, *pb.TsoRequest) (*pb.TsoResponse, error) {
-	return &pb.TsoResponse{}, nil
+func (f *fakePDClient) Tso(context.Context, *pdpb.TsoRequest) (*pdpb.TsoResponse, error) {
+	return &pdpb.TsoResponse{}, nil
 }
 
 func (f *fakePDClient) Close() error {
@@ -71,11 +71,11 @@ func (f *fakePDClient) Close() error {
 
 func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 	pd := &fakePDClient{
-		storeResp: &pb.StoreHeartbeatResponse{
+		storeResp: &pdpb.StoreHeartbeatResponse{
 			Accepted: true,
-			Operations: []*pb.SchedulerOperation{
+			Operations: []*pdpb.SchedulerOperation{
 				{
-					Type:         pb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER,
+					Type:         pdpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER,
 					RegionId:     10,
 					SourcePeerId: 101,
 					TargetPeerId: 201,
@@ -208,13 +208,13 @@ func TestSchedulerClientStatusRecoversAfterSuccess(t *testing.T) {
 func TestFromPBOperationValidation(t *testing.T) {
 	_, ok := fromPBOperation(nil)
 	require.False(t, ok)
-	_, ok = fromPBOperation(&pb.SchedulerOperation{
-		Type: pb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_NONE,
+	_, ok = fromPBOperation(&pdpb.SchedulerOperation{
+		Type: pdpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_NONE,
 	})
 	require.False(t, ok)
 
-	op, ok := fromPBOperation(&pb.SchedulerOperation{
-		Type:         pb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER,
+	op, ok := fromPBOperation(&pdpb.SchedulerOperation{
+		Type:         pdpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER,
 		RegionId:     1,
 		SourcePeerId: 10,
 		TargetPeerId: 20,

@@ -3,6 +3,7 @@ package manifest_test
 import (
 	"encoding/binary"
 	"errors"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"os"
 	"path/filepath"
@@ -363,7 +364,7 @@ func TestManagerSnapshotsAndCloneHelpers(t *testing.T) {
 		ID:       1,
 		StartKey: []byte("a"),
 		EndKey:   []byte("b"),
-		Peers: []localmeta.PeerMeta{
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 10},
 		},
 	}

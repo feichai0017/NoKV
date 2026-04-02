@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"fmt"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 
 	"github.com/feichai0017/NoKV/pb"
@@ -47,7 +48,7 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta localmeta.RegionMeta
 		return nil, err
 	}
 	if childMeta.State == 0 {
-		childMeta.State = localmeta.RegionStateRunning
+		childMeta.State = metaregion.ReplicaStateRunning
 	}
 	cfg, bootstrapPeers, err := s.buildChildPeerConfig(childMeta)
 	if err != nil {
@@ -178,7 +179,7 @@ func (s *Store) handleSplitCommand(split *pb.SplitCommand) error {
 		return fmt.Errorf("raftstore: split command missing payload")
 	}
 	childMeta := pbRegionMetaToManifest(split.GetChild())
-	childMeta.State = localmeta.RegionStateRunning
+	childMeta.State = metaregion.ReplicaStateRunning
 	if len(childMeta.StartKey) == 0 {
 		childMeta.StartKey = append([]byte(nil), split.GetSplitKey()...)
 	}
@@ -204,7 +205,7 @@ func (s *Store) handleMergeCommand(merge *pb.MergeCommand) error {
 		// no-op instead of a fatal state divergence.
 		return nil
 	}
-	if sourceMeta.State == localmeta.RegionStateTombstone {
+	if sourceMeta.State == metaregion.ReplicaStateTombstone {
 		return nil
 	}
 	updated := parentMeta
@@ -254,7 +255,7 @@ func (s *Store) splitCommandAlreadyApplied(parentID uint64, childMeta localmeta.
 	return regionPeersEqual(existingChild.Peers, childMeta.Peers)
 }
 
-func regionPeersEqual(a, b []localmeta.PeerMeta) bool {
+func regionPeersEqual(a, b []metaregion.Peer) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -289,13 +290,13 @@ func pbRegionMetaToManifest(pbMeta *pb.RegionMeta) localmeta.RegionMeta {
 		ID:       pbMeta.GetId(),
 		StartKey: append([]byte(nil), pbMeta.GetStartKey()...),
 		EndKey:   append([]byte(nil), pbMeta.GetEndKey()...),
-		Epoch: localmeta.RegionEpoch{
+		Epoch: metaregion.Epoch{
 			Version:     pbMeta.GetEpochVersion(),
 			ConfVersion: pbMeta.GetEpochConfVersion(),
 		},
 	}
 	for _, peerPB := range pbMeta.GetPeers() {
-		meta.Peers = append(meta.Peers, localmeta.PeerMeta{
+		meta.Peers = append(meta.Peers, metaregion.Peer{
 			StoreID: peerPB.GetStoreId(),
 			PeerID:  peerPB.GetPeerId(),
 		})

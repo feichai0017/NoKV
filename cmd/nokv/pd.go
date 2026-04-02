@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"io"
 	"net"
 	"os"
@@ -13,7 +14,6 @@ import (
 	"syscall"
 
 	"github.com/feichai0017/NoKV/config"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/pd/core"
 	pdserver "github.com/feichai0017/NoKV/pd/server"
 	pdstorage "github.com/feichai0017/NoKV/pd/storage"
@@ -97,7 +97,7 @@ func runPDCmd(w io.Writer, args []string) error {
 	}
 
 	grpcServer := grpc.NewServer()
-	pb.RegisterPDServer(grpcServer, svc)
+	pdpb.RegisterPDServer(grpcServer, svc)
 
 	serveErrCh := make(chan error, 1)
 	go func() {

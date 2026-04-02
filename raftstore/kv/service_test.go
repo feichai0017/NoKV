@@ -2,6 +2,7 @@ package kv_test
 
 import (
 	"context"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"testing"
 	"time"
 
@@ -126,8 +127,8 @@ func newServiceHarness(t *testing.T, cfg harnessConfig) serviceHarness {
 		ID:       cfg.regionID,
 		StartKey: append([]byte(nil), cfg.startKey...),
 		EndKey:   append([]byte(nil), cfg.endKey...),
-		Epoch:    localmeta.RegionEpoch{Version: cfg.epochVersion, ConfVersion: cfg.epochConfVer},
-		Peers:    []localmeta.PeerMeta{{StoreID: cfg.storeID, PeerID: cfg.peerID}},
+		Epoch:    metaregion.Epoch{Version: cfg.epochVersion, ConfVersion: cfg.epochConfVer},
+		Peers:    []metaregion.Peer{{StoreID: cfg.storeID, PeerID: cfg.peerID}},
 	}
 	cfgPeer := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -217,8 +218,8 @@ func TestServicePrewriteCommit(t *testing.T) {
 		ID:       501,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []localmeta.PeerMeta{{StoreID: 1, PeerID: 11}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 11}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -343,8 +344,8 @@ func TestServiceRegionEpochMismatch(t *testing.T) {
 		ID:       601,
 		StartKey: []byte("a"),
 		EndKey:   []byte("b"),
-		Epoch:    localmeta.RegionEpoch{Version: 2, ConfVersion: 1},
-		Peers:    []localmeta.PeerMeta{{StoreID: 2, PeerID: 22}},
+		Epoch:    metaregion.Epoch{Version: 2, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 2, PeerID: 22}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{

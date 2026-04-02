@@ -3,6 +3,7 @@ package admin
 import (
 	"bytes"
 	"context"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"io"
 	"testing"
 
@@ -92,12 +93,12 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 		ID:       22,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers: []localmeta.PeerMeta{
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 101},
 			{StoreID: 2, PeerID: 201},
 		},
-		State: localmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 	require.NoError(t, sourceMeta.SaveRegion(region))
 
@@ -360,12 +361,12 @@ func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 		ID:       32,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers: []localmeta.PeerMeta{
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 101},
 			{StoreID: 2, PeerID: 201},
 		},
-		State: localmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 	require.NoError(t, sourceMeta.SaveRegion(region))
 
@@ -520,12 +521,12 @@ func TestServiceImportRegionSnapshotStreamRejectsMismatchedRegionMeta(t *testing
 		ID:       42,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers: []localmeta.PeerMeta{
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 101},
 			{StoreID: 2, PeerID: 201},
 		},
-		State: localmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 	require.NoError(t, sourceMeta.SaveRegion(region))
 

@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"testing"
 	"time"
 
@@ -47,12 +48,12 @@ func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
 	require.Equal(t, uint64(42), snapshot[0].Descriptor.RegionID)
 	require.False(t, snapshot[0].LastHeartbeat.IsZero())
 
-	require.NoError(t, rs.applyRegionState(42, localmeta.RegionStateRemoving))
+	require.NoError(t, rs.applyRegionState(42, metaregion.ReplicaStateRemoving))
 	require.Eventually(t, func() bool {
 		snapshot = sink.RegionSnapshot()
-		return len(snapshot) == 1 && snapshot[0].Descriptor.State == localmeta.RegionStateRemoving
+		return len(snapshot) == 1 && snapshot[0].Descriptor.State == metaregion.ReplicaStateRemoving
 	}, time.Second, 10*time.Millisecond)
-	require.Equal(t, localmeta.RegionStateRemoving, snapshot[0].Descriptor.State)
+	require.Equal(t, metaregion.ReplicaStateRemoving, snapshot[0].Descriptor.State)
 
 	require.NoError(t, rs.applyRegionRemoval(42))
 	require.Eventually(t, func() bool {
@@ -163,7 +164,7 @@ func TestStoreProposeSplitApplies(t *testing.T) {
 		ID:       3000,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Peers:    []localmeta.PeerMeta{{StoreID: storeID, PeerID: 31}},
+		Peers:    []metaregion.Peer{{StoreID: storeID, PeerID: 31}},
 	}
 	parentCfg, err := testPeerBuilder(storeID)(parentMeta)
 	require.NoError(t, err)
@@ -178,7 +179,7 @@ func TestStoreProposeSplitApplies(t *testing.T) {
 		ID:       3001,
 		StartKey: []byte("m"),
 		EndKey:   []byte("z"),
-		Peers:    []localmeta.PeerMeta{{StoreID: storeID, PeerID: 32}},
+		Peers:    []metaregion.Peer{{StoreID: storeID, PeerID: 32}},
 	}
 	require.NoError(t, rs.ProposeSplit(parentMeta.ID, childMeta, childMeta.StartKey))
 
@@ -231,7 +232,7 @@ func TestStoreProposeMergeApplies(t *testing.T) {
 		ID:       4000,
 		StartKey: []byte("a"),
 		EndKey:   []byte("m"),
-		Peers:    []localmeta.PeerMeta{{StoreID: storeID, PeerID: 41}},
+		Peers:    []metaregion.Peer{{StoreID: storeID, PeerID: 41}},
 	}
 	parentCfg, err := testPeerBuilder(storeID)(parentMeta)
 	require.NoError(t, err)
@@ -244,7 +245,7 @@ func TestStoreProposeMergeApplies(t *testing.T) {
 		ID:       4001,
 		StartKey: []byte("m"),
 		EndKey:   []byte("z"),
-		Peers:    []localmeta.PeerMeta{{StoreID: storeID, PeerID: 42}},
+		Peers:    []metaregion.Peer{{StoreID: storeID, PeerID: 42}},
 	}
 	sourceCfg, err := testPeerBuilder(storeID)(sourceMeta)
 	require.NoError(t, err)
@@ -319,7 +320,7 @@ func TestStoreSplitMergeLifecycle(t *testing.T) {
 		ID:       5000,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Peers:    []localmeta.PeerMeta{{StoreID: storeID, PeerID: 51}},
+		Peers:    []metaregion.Peer{{StoreID: storeID, PeerID: 51}},
 	}
 	parentCfg, err := testPeerBuilder(storeID)(parentMeta)
 	require.NoError(t, err)
@@ -332,7 +333,7 @@ func TestStoreSplitMergeLifecycle(t *testing.T) {
 		ID:       5001,
 		StartKey: []byte("m"),
 		EndKey:   []byte("z"),
-		Peers:    []localmeta.PeerMeta{{StoreID: storeID, PeerID: 52}},
+		Peers:    []metaregion.Peer{{StoreID: storeID, PeerID: 52}},
 	}
 	require.NoError(t, rs.ProposeSplit(parentMeta.ID, childMeta, childMeta.StartKey))
 	require.Eventually(t, func() bool {
@@ -371,8 +372,8 @@ func TestStoreRestartPreservesSplitMergeLocalMeta(t *testing.T) {
 		ID:       7000,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		State:    localmeta.RegionStateRunning,
-		Peers:    []localmeta.PeerMeta{{StoreID: storeID, PeerID: 71}},
+		State:    metaregion.ReplicaStateRunning,
+		Peers:    []metaregion.Peer{{StoreID: storeID, PeerID: 71}},
 	}
 	parentCfg, err := testPeerBuilder(storeID)(parentMeta)
 	require.NoError(t, err)
@@ -384,8 +385,8 @@ func TestStoreRestartPreservesSplitMergeLocalMeta(t *testing.T) {
 		ID:       7001,
 		StartKey: []byte("m"),
 		EndKey:   []byte("z"),
-		State:    localmeta.RegionStateRunning,
-		Peers:    []localmeta.PeerMeta{{StoreID: storeID, PeerID: 72}},
+		State:    metaregion.ReplicaStateRunning,
+		Peers:    []metaregion.Peer{{StoreID: storeID, PeerID: 72}},
 	}
 	require.NoError(t, rs.ProposeSplit(parentMeta.ID, childMeta, childMeta.StartKey))
 	require.Eventually(t, func() bool {
@@ -433,8 +434,8 @@ func TestStoreHandleSplitCommandReplayIsIdempotent(t *testing.T) {
 		ID:       8100,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		State:    localmeta.RegionStateRunning,
-		Peers:    []localmeta.PeerMeta{{StoreID: storeID, PeerID: 81}},
+		State:    metaregion.ReplicaStateRunning,
+		Peers:    []metaregion.Peer{{StoreID: storeID, PeerID: 81}},
 	}
 	require.NoError(t, rs.applyRegionMeta(parentMeta))
 
@@ -442,8 +443,8 @@ func TestStoreHandleSplitCommandReplayIsIdempotent(t *testing.T) {
 		ID:       8101,
 		StartKey: []byte("m"),
 		EndKey:   []byte("z"),
-		State:    localmeta.RegionStateRunning,
-		Peers:    []localmeta.PeerMeta{{StoreID: storeID, PeerID: 82}},
+		State:    metaregion.ReplicaStateRunning,
+		Peers:    []metaregion.Peer{{StoreID: storeID, PeerID: 82}},
 	}
 	_, err := rs.splitRegionLocal(parentMeta.ID, childMeta)
 	require.NoError(t, err)
@@ -475,15 +476,15 @@ func TestStoreHandleMergeCommandReplayIsIdempotent(t *testing.T) {
 		ID:       8200,
 		StartKey: []byte("a"),
 		EndKey:   []byte("m"),
-		State:    localmeta.RegionStateRunning,
-		Peers:    []localmeta.PeerMeta{{StoreID: storeID, PeerID: 91}},
+		State:    metaregion.ReplicaStateRunning,
+		Peers:    []metaregion.Peer{{StoreID: storeID, PeerID: 91}},
 	}
 	sourceMeta := localmeta.RegionMeta{
 		ID:       8201,
 		StartKey: []byte("m"),
 		EndKey:   []byte("z"),
-		State:    localmeta.RegionStateRunning,
-		Peers:    []localmeta.PeerMeta{{StoreID: storeID, PeerID: 92}},
+		State:    metaregion.ReplicaStateRunning,
+		Peers:    []metaregion.Peer{{StoreID: storeID, PeerID: 92}},
 	}
 	require.NoError(t, rs.applyRegionMeta(parentMeta))
 	require.NoError(t, rs.applyRegionMeta(sourceMeta))

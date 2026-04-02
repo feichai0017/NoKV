@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"sort"
 	"time"
 
@@ -97,7 +98,7 @@ func (c *Client) regionForKeyFromCache(key []byte) (regionSnapshot, bool) {
 func (c *Client) regionForKeyFromResolver(ctx context.Context, key []byte) (regionSnapshot, error) {
 	ctx, cancel := contextWithTimeout(ctx, c.routeLookupTimeout)
 	defer cancel()
-	resp, err := c.regionResolver.GetRegionByKey(ctx, &pb.GetRegionByKeyRequest{Key: append([]byte(nil), key...)})
+	resp, err := c.regionResolver.GetRegionByKey(ctx, &pdpb.GetRegionByKeyRequest{Key: append([]byte(nil), key...)})
 	if err != nil {
 		return regionSnapshot{}, &RouteUnavailableError{
 			Key: append([]byte(nil), key...),

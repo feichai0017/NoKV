@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"maps"
 	"sync"
 	"time"
@@ -78,7 +79,7 @@ type StoreEndpoint struct {
 // RegionResolver resolves Region metadata for an arbitrary key. A PD client
 // implementation should satisfy this interface.
 type RegionResolver interface {
-	GetRegionByKey(ctx context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error)
+	GetRegionByKey(ctx context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error)
 	Close() error
 }
 

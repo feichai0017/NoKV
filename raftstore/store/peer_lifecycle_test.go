@@ -1,6 +1,7 @@
 package store
 
 import (
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
@@ -33,12 +34,12 @@ func TestStoreStepBootstrapsPeerFromSnapshotPayload(t *testing.T) {
 		ID:       77,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 2},
-		Peers: []localmeta.PeerMeta{
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 2},
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 11},
 			{StoreID: 2, PeerID: 22},
 		},
-		State: localmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 	payload, err := sourceDB.ExportSnapshot(region)
 	require.NoError(t, err)
@@ -110,12 +111,12 @@ func TestStoreInstallRegionSnapshotBootstrapsPeer(t *testing.T) {
 		ID:       78,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 2},
-		Peers: []localmeta.PeerMeta{
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 2},
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 11},
 			{StoreID: 2, PeerID: 22},
 		},
-		State: localmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 	payload, err := sourceDB.ExportSnapshot(region)
 	require.NoError(t, err)

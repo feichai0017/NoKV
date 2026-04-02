@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"sync"
 
 	"github.com/feichai0017/NoKV/metrics"
@@ -111,15 +112,15 @@ func (rm *regionManager) applyRegionMeta(meta localmeta.RegionMeta) error {
 	}
 	metaCopy := localmeta.CloneRegionMeta(meta)
 	if metaCopy.State == 0 {
-		metaCopy.State = localmeta.RegionStateRunning
+		metaCopy.State = metaregion.ReplicaStateRunning
 	}
 
-	var currentState localmeta.RegionState
+	var currentState metaregion.ReplicaState
 	rm.mu.RLock()
 	if existing, ok := rm.metaByID[metaCopy.ID]; ok {
 		currentState = existing.State
 	} else {
-		currentState = localmeta.RegionStateNew
+		currentState = metaregion.ReplicaStateNew
 	}
 	rm.mu.RUnlock()
 
@@ -155,7 +156,7 @@ func (rm *regionManager) applyRegionMeta(meta localmeta.RegionMeta) error {
 	return nil
 }
 
-func (rm *regionManager) applyRegionState(regionID uint64, state localmeta.RegionState) error {
+func (rm *regionManager) applyRegionState(regionID uint64, state metaregion.ReplicaState) error {
 	if rm == nil {
 		return fmt.Errorf("raftstore: region manager nil")
 	}
@@ -178,8 +179,8 @@ func (rm *regionManager) applyRegionRemoval(regionID uint64) error {
 	if !ok {
 		return fmt.Errorf("raftstore: region %d not found", regionID)
 	}
-	if meta.State != localmeta.RegionStateTombstone {
-		meta.State = localmeta.RegionStateTombstone
+	if meta.State != metaregion.ReplicaStateTombstone {
+		meta.State = metaregion.ReplicaStateTombstone
 		if err := rm.applyRegionMeta(meta); err != nil {
 			return err
 		}
@@ -205,19 +206,19 @@ func (rm *regionManager) applyRegionRemoval(regionID uint64) error {
 	return nil
 }
 
-func validRegionStateTransition(current, next localmeta.RegionState) bool {
+func validRegionStateTransition(current, next metaregion.ReplicaState) bool {
 	if current == next {
 		return true
 	}
 	switch current {
-	case localmeta.RegionStateNew:
-		return next == localmeta.RegionStateRunning
-	case localmeta.RegionStateRunning:
-		return next == localmeta.RegionStateRemoving || next == localmeta.RegionStateTombstone
-	case localmeta.RegionStateRemoving:
-		return next == localmeta.RegionStateTombstone
-	case localmeta.RegionStateTombstone:
-		return next == localmeta.RegionStateTombstone
+	case metaregion.ReplicaStateNew:
+		return next == metaregion.ReplicaStateRunning
+	case metaregion.ReplicaStateRunning:
+		return next == metaregion.ReplicaStateRemoving || next == metaregion.ReplicaStateTombstone
+	case metaregion.ReplicaStateRemoving:
+		return next == metaregion.ReplicaStateTombstone
+	case metaregion.ReplicaStateTombstone:
+		return next == metaregion.ReplicaStateTombstone
 	default:
 		return false
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -322,13 +323,13 @@ func TestParseExpvarSnapshotHotKeysMapFloat(t *testing.T) {
 }
 
 func TestFormatHelpers(t *testing.T) {
-	require.Equal(t, "new", formatRegionState(localmeta.RegionStateNew))
-	require.Equal(t, "running", formatRegionState(localmeta.RegionStateRunning))
-	require.Equal(t, "removing", formatRegionState(localmeta.RegionStateRemoving))
-	require.Equal(t, "tombstone", formatRegionState(localmeta.RegionStateTombstone))
+	require.Equal(t, "new", formatRegionState(metaregion.ReplicaStateNew))
+	require.Equal(t, "running", formatRegionState(metaregion.ReplicaStateRunning))
+	require.Equal(t, "removing", formatRegionState(metaregion.ReplicaStateRemoving))
+	require.Equal(t, "tombstone", formatRegionState(metaregion.ReplicaStateTombstone))
 	require.Equal(t, "unknown(99)", formatRegionState(99))
 
-	peers := []localmeta.PeerMeta{{StoreID: 1, PeerID: 2}}
+	peers := []metaregion.Peer{{StoreID: 1, PeerID: 2}}
 	require.Equal(t, "[{store:1 peer:2}]", formatPeers(peers))
 	require.Equal(t, "[]", formatPeers(nil))
 
@@ -441,11 +442,11 @@ func TestMainRegionsCommand(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, metaStore.SaveRegion(localmeta.RegionMeta{
 		ID:       1,
-		State:    localmeta.RegionStateRunning,
+		State:    metaregion.ReplicaStateRunning,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []localmeta.PeerMeta{{StoreID: 1, PeerID: 10}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 10}},
 	}))
 	require.NoError(t, metaStore.Close())
 	code := captureExitCode(t, func() {
@@ -763,11 +764,11 @@ func TestRunRegionsCmdPlainWithRegion(t *testing.T) {
 	require.NoError(t, err)
 	meta := localmeta.RegionMeta{
 		ID:       10,
-		State:    localmeta.RegionStateTombstone,
+		State:    metaregion.ReplicaStateTombstone,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []localmeta.PeerMeta{{StoreID: 1, PeerID: 10}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 10}},
 	}
 	require.NoError(t, metaStore.SaveRegion(meta))
 	require.NoError(t, metaStore.Close())
@@ -808,11 +809,11 @@ func TestRunMigratePlanCmdBlocksNonEmptyCatalog(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, metaStore.SaveRegion(localmeta.RegionMeta{
 		ID:       1,
-		State:    localmeta.RegionStateRunning,
+		State:    metaregion.ReplicaStateRunning,
 		StartKey: []byte(""),
 		EndKey:   nil,
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []localmeta.PeerMeta{{StoreID: 1, PeerID: 10}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 10}},
 	}))
 	require.NoError(t, metaStore.Close())
 

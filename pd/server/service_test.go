@@ -5,6 +5,7 @@ import (
 	"errors"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"testing"
 
@@ -12,7 +13,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/feichai0017/NoKV/pb"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/pd/core"
 	"github.com/feichai0017/NoKV/pd/tso"
@@ -70,7 +70,7 @@ func testRegionDescriptorProto(meta localmeta.RegionMeta) *metapb.RegionDescript
 func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
 
-	storeResp, err := svc.StoreHeartbeat(context.Background(), &pb.StoreHeartbeatRequest{
+	storeResp, err := svc.StoreHeartbeat(context.Background(), &pdpb.StoreHeartbeatRequest{
 		StoreId:   1,
 		RegionNum: 3,
 		LeaderNum: 1,
@@ -80,7 +80,7 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, storeResp.GetAccepted())
 
-	_, err = svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
+	_, err = svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
 		RegionDescriptor: testRegionDescriptorProto(localmeta.RegionMeta{
 			ID:       11,
 			StartKey: []byte(""),
@@ -96,7 +96,7 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	getResp, err := svc.GetRegionByKey(context.Background(), &pb.GetRegionByKeyRequest{Key: []byte("a")})
+	getResp, err := svc.GetRegionByKey(context.Background(), &pdpb.GetRegionByKeyRequest{Key: []byte("a")})
 	require.NoError(t, err)
 	require.False(t, getResp.GetNotFound())
 	require.NotNil(t, getResp.GetRegionDescriptor())
@@ -105,7 +105,7 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 
 func TestServiceRemoveRegion(t *testing.T) {
 	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
-	_, err := svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
+	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
 		RegionDescriptor: testRegionDescriptorProto(localmeta.RegionMeta{
 			ID:       11,
 			StartKey: []byte("a"),
@@ -118,22 +118,22 @@ func TestServiceRemoveRegion(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	resp, err := svc.RemoveRegion(context.Background(), &pb.RemoveRegionRequest{RegionId: 11})
+	resp, err := svc.RemoveRegion(context.Background(), &pdpb.RemoveRegionRequest{RegionId: 11})
 	require.NoError(t, err)
 	require.True(t, resp.GetRemoved())
 
-	getResp, err := svc.GetRegionByKey(context.Background(), &pb.GetRegionByKeyRequest{Key: []byte("m")})
+	getResp, err := svc.GetRegionByKey(context.Background(), &pdpb.GetRegionByKeyRequest{Key: []byte("m")})
 	require.NoError(t, err)
 	require.True(t, getResp.GetNotFound())
 
-	resp, err = svc.RemoveRegion(context.Background(), &pb.RemoveRegionRequest{RegionId: 11})
+	resp, err = svc.RemoveRegion(context.Background(), &pdpb.RemoveRegionRequest{RegionId: 11})
 	require.NoError(t, err)
 	require.False(t, resp.GetRemoved())
 }
 
 func TestServiceRegionHeartbeatRejectsStaleAndOverlap(t *testing.T) {
 	svc := NewService(core.NewCluster(), nil, nil)
-	_, err := svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
+	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
 		RegionDescriptor: testRegionDescriptorProto(localmeta.RegionMeta{
 			ID:       1,
 			StartKey: []byte("a"),
@@ -146,7 +146,7 @@ func TestServiceRegionHeartbeatRejectsStaleAndOverlap(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
+	_, err = svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
 		RegionDescriptor: testRegionDescriptorProto(localmeta.RegionMeta{
 			ID:       1,
 			StartKey: []byte("a"),
@@ -160,7 +160,7 @@ func TestServiceRegionHeartbeatRejectsStaleAndOverlap(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 
-	_, err = svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
+	_, err = svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
 		RegionDescriptor: testRegionDescriptorProto(localmeta.RegionMeta{
 			ID:       2,
 			StartKey: []byte("l"),
@@ -178,12 +178,12 @@ func TestServiceRegionHeartbeatRejectsStaleAndOverlap(t *testing.T) {
 func TestServiceAllocIDAndTSO(t *testing.T) {
 	svc := NewService(core.NewCluster(), core.NewIDAllocator(100), tso.NewAllocator(500))
 
-	idResp, err := svc.AllocID(context.Background(), &pb.AllocIDRequest{Count: 3})
+	idResp, err := svc.AllocID(context.Background(), &pdpb.AllocIDRequest{Count: 3})
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), idResp.GetFirstId())
 	require.Equal(t, uint64(3), idResp.GetCount())
 
-	tsResp, err := svc.Tso(context.Background(), &pb.TsoRequest{Count: 2})
+	tsResp, err := svc.Tso(context.Background(), &pdpb.TsoRequest{Count: 2})
 	require.NoError(t, err)
 	require.Equal(t, uint64(500), tsResp.GetTimestamp())
 	require.Equal(t, uint64(2), tsResp.GetCount())
@@ -196,7 +196,7 @@ func TestServiceRequestValidation(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	_, err = svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{})
+	_, err = svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{})
 	require.Error(t, err)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
@@ -212,14 +212,14 @@ func TestServiceRequestValidation(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	_, err = svc.RemoveRegion(context.Background(), &pb.RemoveRegionRequest{RegionId: 0})
+	_, err = svc.RemoveRegion(context.Background(), &pdpb.RemoveRegionRequest{RegionId: 0})
 	require.Error(t, err)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 }
 
 func TestServiceStoreHeartbeatReturnsLeaderTransferHint(t *testing.T) {
 	svc := NewService(core.NewCluster(), nil, nil)
-	_, err := svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
+	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
 		RegionDescriptor: testRegionDescriptorProto(localmeta.RegionMeta{
 			ID:       100,
 			StartKey: []byte(""),
@@ -236,14 +236,14 @@ func TestServiceStoreHeartbeatReturnsLeaderTransferHint(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = svc.StoreHeartbeat(context.Background(), &pb.StoreHeartbeatRequest{
+	_, err = svc.StoreHeartbeat(context.Background(), &pdpb.StoreHeartbeatRequest{
 		StoreId:   2,
 		LeaderNum: 1,
 		RegionNum: 1,
 	})
 	require.NoError(t, err)
 
-	resp, err := svc.StoreHeartbeat(context.Background(), &pb.StoreHeartbeatRequest{
+	resp, err := svc.StoreHeartbeat(context.Background(), &pdpb.StoreHeartbeatRequest{
 		StoreId:   1,
 		LeaderNum: 10,
 		RegionNum: 1,
@@ -252,7 +252,7 @@ func TestServiceStoreHeartbeatReturnsLeaderTransferHint(t *testing.T) {
 	require.True(t, resp.GetAccepted())
 	require.Len(t, resp.GetOperations(), 1)
 	op := resp.GetOperations()[0]
-	require.Equal(t, pb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER, op.GetType())
+	require.Equal(t, pdpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER, op.GetType())
 	require.Equal(t, uint64(100), op.GetRegionId())
 	require.Equal(t, uint64(101), op.GetSourcePeerId())
 	require.Equal(t, uint64(201), op.GetTargetPeerId())
@@ -263,7 +263,7 @@ func TestServicePersistsRegionCatalog(t *testing.T) {
 	store := &fakeStorage{}
 	svc.SetStorage(store)
 
-	_, err := svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
+	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
 		RegionDescriptor: testRegionDescriptorProto(localmeta.RegionMeta{
 			ID:       42,
 			StartKey: []byte("a"),
@@ -277,7 +277,7 @@ func TestServicePersistsRegionCatalog(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, store.updateCalls)
 
-	_, err = svc.RemoveRegion(context.Background(), &pb.RemoveRegionRequest{RegionId: 42})
+	_, err = svc.RemoveRegion(context.Background(), &pdpb.RemoveRegionRequest{RegionId: 42})
 	require.NoError(t, err)
 	require.Equal(t, 1, store.deleteCalls)
 }
@@ -287,7 +287,7 @@ func TestServiceRegionCatalogPersistenceErrors(t *testing.T) {
 	store := &fakeStorage{updateErr: errors.New("persist update failed")}
 	svc.SetStorage(store)
 
-	_, err := svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
+	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
 		RegionDescriptor: testRegionDescriptorProto(localmeta.RegionMeta{
 			ID:       8,
 			StartKey: []byte("a"),
@@ -302,7 +302,7 @@ func TestServiceRegionCatalogPersistenceErrors(t *testing.T) {
 	require.Equal(t, codes.Internal, status.Code(err))
 
 	store.updateErr = nil
-	_, err = svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
+	_, err = svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
 		RegionDescriptor: testRegionDescriptorProto(localmeta.RegionMeta{
 			ID:       8,
 			StartKey: []byte("a"),
@@ -315,7 +315,7 @@ func TestServiceRegionCatalogPersistenceErrors(t *testing.T) {
 	})
 	require.NoError(t, err)
 	store.deleteErr = errors.New("persist delete failed")
-	_, err = svc.RemoveRegion(context.Background(), &pb.RemoveRegionRequest{RegionId: 8})
+	_, err = svc.RemoveRegion(context.Background(), &pdpb.RemoveRegionRequest{RegionId: 8})
 	require.Error(t, err)
 	require.Equal(t, codes.Internal, status.Code(err))
 }
@@ -325,14 +325,14 @@ func TestServicePersistsAllocatorState(t *testing.T) {
 	store := &fakeStorage{}
 	svc.SetStorage(store)
 
-	idResp, err := svc.AllocID(context.Background(), &pb.AllocIDRequest{Count: 2})
+	idResp, err := svc.AllocID(context.Background(), &pdpb.AllocIDRequest{Count: 2})
 	require.NoError(t, err)
 	require.Equal(t, uint64(10), idResp.GetFirstId())
 	require.Equal(t, 1, store.saveCalls)
 	require.Equal(t, uint64(11), store.lastID)
 	require.Equal(t, uint64(99), store.lastTS)
 
-	tsResp, err := svc.Tso(context.Background(), &pb.TsoRequest{Count: 3})
+	tsResp, err := svc.Tso(context.Background(), &pdpb.TsoRequest{Count: 3})
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), tsResp.GetTimestamp())
 	require.Equal(t, 2, store.saveCalls)
@@ -345,7 +345,7 @@ func TestServiceAllocatorStatePersistenceError(t *testing.T) {
 	store := &fakeStorage{saveErr: errors.New("persist failed")}
 	svc.SetStorage(store)
 
-	_, err := svc.AllocID(context.Background(), &pb.AllocIDRequest{Count: 1})
+	_, err := svc.AllocID(context.Background(), &pdpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
 	require.Equal(t, codes.Internal, status.Code(err))
 }

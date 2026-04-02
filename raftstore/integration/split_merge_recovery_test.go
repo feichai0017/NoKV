@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"testing"
 	"time"
 
@@ -51,11 +52,11 @@ func TestSplitMergeRestartSafetyAcrossStores(t *testing.T) {
 		ID:       72,
 		StartKey: []byte("m"),
 		EndKey:   nil,
-		Epoch: localmeta.RegionEpoch{
+		Epoch: metaregion.Epoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
-		Peers: []localmeta.PeerMeta{
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 102},
 			{StoreID: 2, PeerID: 202},
 		},

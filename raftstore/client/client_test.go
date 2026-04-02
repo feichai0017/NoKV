@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"errors"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"net"
 	"sort"
 	"sync"
@@ -97,7 +98,7 @@ type keyedBlockingResolver struct {
 	regions     []*pb.RegionMeta
 }
 
-func (mr *mockRegionResolver) GetRegionByKey(_ context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
+func (mr *mockRegionResolver) GetRegionByKey(_ context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
 	mr.mu.Lock()
 	defer mr.mu.Unlock()
 	mr.calls++
@@ -112,7 +113,7 @@ func (mr *mockRegionResolver) GetRegionByKey(_ context.Context, req *pb.GetRegio
 		return nil, mr.err
 	}
 	if req == nil {
-		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+		return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
 	if len(mr.regions) > 0 {
 		for _, meta := range mr.regions {
@@ -120,10 +121,10 @@ func (mr *mockRegionResolver) GetRegionByKey(_ context.Context, req *pb.GetRegio
 				return routeResponse(meta), nil
 			}
 		}
-		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+		return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
 	if mr.region == nil || !containsKey(metacodec.DescriptorFromLegacyRegionMeta(mr.region), req.GetKey()) {
-		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+		return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
 	return routeResponse(mr.region), nil
 }
@@ -135,7 +136,7 @@ func (mr *mockRegionResolver) Close() error {
 	return mr.closeErr
 }
 
-func (br *blockingRegionResolver) GetRegionByKey(ctx context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
+func (br *blockingRegionResolver) GetRegionByKey(ctx context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
 	if br.started != nil {
 		select {
 		case br.started <- struct{}{}:
@@ -148,7 +149,7 @@ func (br *blockingRegionResolver) GetRegionByKey(ctx context.Context, req *pb.Ge
 
 func (br *blockingRegionResolver) Close() error { return nil }
 
-func (kr *keyedBlockingResolver) GetRegionByKey(ctx context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
+func (kr *keyedBlockingResolver) GetRegionByKey(ctx context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
 	if req != nil {
 		if _, blocked := kr.blockedKeys[string(req.GetKey())]; blocked {
 			if kr.started != nil {
@@ -166,7 +167,7 @@ func (kr *keyedBlockingResolver) GetRegionByKey(ctx context.Context, req *pb.Get
 			}
 		}
 	}
-	return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+	return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
 }
 
 func (kr *keyedBlockingResolver) Close() error { return nil }
@@ -1289,11 +1290,11 @@ func TestClientHandleRegionErrorUpdatesIndexedCache(t *testing.T) {
 
 // Utility helpers
 
-func routeResponse(meta *pb.RegionMeta) *pb.GetRegionByKeyResponse {
+func routeResponse(meta *pb.RegionMeta) *pdpb.GetRegionByKeyResponse {
 	if meta == nil {
-		return &pb.GetRegionByKeyResponse{NotFound: true}
+		return &pdpb.GetRegionByKeyResponse{NotFound: true}
 	}
-	return &pb.GetRegionByKeyResponse{
+	return &pdpb.GetRegionByKeyResponse{
 		RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromLegacyRegionMeta(meta)),
 	}
 }
