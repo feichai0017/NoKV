@@ -1128,12 +1128,18 @@ The current code has moved beyond the first single-node skeleton:
 - in-memory multi-node transport for replication tests
 - 3-node election and descriptor replication tests
 - follower reopen and catch-up tests
+- gRPC metadata-root service for:
+  - root reads
+  - root appends
+  - allocator fencing
+  - raft message delivery between nodes
+- checkpoint-driven raft snapshot creation and local log compaction
 
 What is still intentionally missing:
 
-- networked transport
-- quorum-facing root service wrapper
-- snapshot shipping / compaction policy
+- production-grade transport tuning, retries, and observability
+- membership reconfiguration workflow
+- snapshot shipping policy beyond local checkpoint-backed snapshots
 - PD wiring to use the replicated backend directly
 
 Even at this stage the package shape is already correct:
@@ -1141,4 +1147,6 @@ Even at this stage the package shape is already correct:
 - root commands are separate from data-plane commands
 - root state machine materializes descriptor truth and allocator fences
 - restart recovery is aligned with checkpoint-applied cursors
+- gRPC transport and root API share one metadata-root protocol boundary
+- raft snapshot data carries compact root checkpoints for install/recovery
 - the future HA backend can extend this package instead of replacing it

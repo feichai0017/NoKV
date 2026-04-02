@@ -3,6 +3,7 @@ package rootraft
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/feichai0017/NoKV/vfs"
 )
@@ -12,6 +13,8 @@ const (
 	defaultHeartbeatTick = 1
 	defaultMaxMsgBytes   = 1 << 20
 	defaultMaxInflight   = 256
+	defaultTickInterval  = 100 * time.Millisecond
+	defaultSnapshotEvery = 64
 )
 
 // Peer identifies one metadata-root raft voter.
@@ -29,6 +32,8 @@ type Config struct {
 	FS              vfs.FS
 	ElectionTick    int
 	HeartbeatTick   int
+	TickInterval    time.Duration
+	SnapshotEvery   uint64
 	MaxSizePerMsg   uint64
 	MaxInflightMsgs int
 }
@@ -42,6 +47,12 @@ func (c Config) withDefaults() (Config, error) {
 	}
 	if c.HeartbeatTick <= 0 {
 		c.HeartbeatTick = defaultHeartbeatTick
+	}
+	if c.TickInterval <= 0 {
+		c.TickInterval = defaultTickInterval
+	}
+	if c.SnapshotEvery == 0 {
+		c.SnapshotEvery = defaultSnapshotEvery
 	}
 	if c.ElectionTick <= c.HeartbeatTick {
 		return Config{}, fmt.Errorf("meta/root/raft: election tick must be greater than heartbeat tick")
