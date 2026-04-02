@@ -26,7 +26,7 @@ type fakeStorage struct {
 	lastTS      uint64
 }
 
-func (f *fakeStorage) SaveRegion(meta localmeta.RegionMeta) error {
+func (f *fakeStorage) PublishRegionDescriptor(meta localmeta.RegionMeta) error {
 	f.updateCalls++
 	if f.updateErr != nil {
 		return f.updateErr
@@ -37,7 +37,7 @@ func (f *fakeStorage) SaveRegion(meta localmeta.RegionMeta) error {
 	return nil
 }
 
-func (f *fakeStorage) DeleteRegion(regionID uint64) error {
+func (f *fakeStorage) TombstoneRegion(regionID uint64) error {
 	f.deleteCalls++
 	if f.deleteErr != nil {
 		return f.deleteErr

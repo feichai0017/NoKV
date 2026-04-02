@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootlocal "github.com/feichai0017/NoKV/meta/root/local"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -49,8 +50,8 @@ func (s *RootStore) Load() (Snapshot, error) {
 	}, nil
 }
 
-// SaveRegion publishes the latest descriptor truth for one region.
-func (s *RootStore) SaveRegion(meta localmeta.RegionMeta) error {
+// PublishRegionDescriptor publishes the latest descriptor truth for one region.
+func (s *RootStore) PublishRegionDescriptor(meta localmeta.RegionMeta) error {
 	if s == nil || meta.ID == 0 {
 		return nil
 	}
@@ -59,7 +60,20 @@ func (s *RootStore) SaveRegion(meta localmeta.RegionMeta) error {
 		return err
 	}
 	desc := descriptor.FromRegionMeta(meta, state.ClusterEpoch+1)
-	commit, err := s.root.Append(rootpkg.RegionDescriptorPublished(desc))
+
+	s.mu.RLock()
+	prev, existed := s.snapshot.Regions[meta.ID]
+	s.mu.RUnlock()
+
+	if existed {
+		prevDesc := descriptor.FromRegionMeta(prev, state.ClusterEpoch)
+		if descriptorsEqual(prevDesc, desc) {
+			return nil
+		}
+	}
+
+	event := regionEvent(prev, existed, desc)
+	commit, err := s.root.Append(event)
 	if err != nil {
 		return err
 	}
@@ -74,8 +88,8 @@ func (s *RootStore) SaveRegion(meta localmeta.RegionMeta) error {
 	return nil
 }
 
-// DeleteRegion tombstones one region from the rooted catalog.
-func (s *RootStore) DeleteRegion(regionID uint64) error {
+// TombstoneRegion tombstones one region from the rooted catalog.
+func (s *RootStore) TombstoneRegion(regionID uint64) error {
 	if s == nil || regionID == 0 {
 		return nil
 	}
@@ -161,4 +175,69 @@ func applyRootEvent(snapshot *Snapshot, event rootpkg.Event) {
 	case event.PeerChange != nil:
 		snapshot.Regions[event.PeerChange.Region.RegionID] = event.PeerChange.Region.ToRegionMeta()
 	}
+}
+
+func regionEvent(prev localmeta.RegionMeta, existed bool, next descriptor.Descriptor) rootpkg.Event {
+	if !existed {
+		return rootpkg.RegionBootstrapped(next)
+	}
+	added, removed := peerDelta(prev.Peers, next.Peers)
+	switch {
+	case len(added) == 1 && len(removed) == 0:
+		return rootpkg.PeerAdded(next.RegionID, added[0].StoreID, added[0].PeerID, next)
+	case len(added) == 0 && len(removed) == 1:
+		return rootpkg.PeerRemoved(next.RegionID, removed[0].StoreID, removed[0].PeerID, next)
+	default:
+		return rootpkg.RegionDescriptorPublished(next)
+	}
+}
+
+func peerDelta(prev, next []localmeta.PeerMeta) (added, removed []localmeta.PeerMeta) {
+	prevSet := make(map[uint64]localmeta.PeerMeta, len(prev))
+	nextSet := make(map[uint64]localmeta.PeerMeta, len(next))
+	for _, peer := range prev {
+		prevSet[peer.PeerID] = peer
+	}
+	for _, peer := range next {
+		nextSet[peer.PeerID] = peer
+	}
+	for id, peer := range nextSet {
+		if _, ok := prevSet[id]; !ok {
+			added = append(added, peer)
+		}
+	}
+	for id, peer := range prevSet {
+		if _, ok := nextSet[id]; !ok {
+			removed = append(removed, peer)
+		}
+	}
+	return added, removed
+}
+
+func descriptorsEqual(a, b descriptor.Descriptor) bool {
+	if a.RegionID != b.RegionID ||
+		a.State != b.State ||
+		a.Epoch != b.Epoch ||
+		!bytes.Equal(a.StartKey, b.StartKey) ||
+		!bytes.Equal(a.EndKey, b.EndKey) ||
+		!bytes.Equal(a.Hash, b.Hash) {
+		return false
+	}
+	if len(a.Peers) != len(b.Peers) || len(a.Lineage) != len(b.Lineage) {
+		return false
+	}
+	for i := range a.Peers {
+		if a.Peers[i] != b.Peers[i] {
+			return false
+		}
+	}
+	for i := range a.Lineage {
+		if a.Lineage[i].RegionID != b.Lineage[i].RegionID ||
+			a.Lineage[i].Epoch != b.Lineage[i].Epoch ||
+			a.Lineage[i].Kind != b.Lineage[i].Kind ||
+			!bytes.Equal(a.Lineage[i].Hash, b.Lineage[i].Hash) {
+			return false
+		}
+	}
+	return true
 }
