@@ -107,6 +107,134 @@ func (x *ReplicaLocalState) GetLastTerm() uint64 {
 	return 0
 }
 
+type LocalRegionMeta struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	StartKey      []byte                 `protobuf:"bytes,2,opt,name=start_key,json=startKey,proto3" json:"start_key,omitempty"`
+	EndKey        []byte                 `protobuf:"bytes,3,opt,name=end_key,json=endKey,proto3" json:"end_key,omitempty"`
+	Epoch         *RegionEpoch           `protobuf:"bytes,4,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Peers         []*RegionPeer          `protobuf:"bytes,5,rep,name=peers,proto3" json:"peers,omitempty"`
+	State         RegionReplicaState     `protobuf:"varint,6,opt,name=state,proto3,enum=nokv.meta.v1.RegionReplicaState" json:"state,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LocalRegionMeta) Reset() {
+	*x = LocalRegionMeta{}
+	mi := &file_meta_recovery_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LocalRegionMeta) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LocalRegionMeta) ProtoMessage() {}
+
+func (x *LocalRegionMeta) ProtoReflect() protoreflect.Message {
+	mi := &file_meta_recovery_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LocalRegionMeta.ProtoReflect.Descriptor instead.
+func (*LocalRegionMeta) Descriptor() ([]byte, []int) {
+	return file_meta_recovery_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *LocalRegionMeta) GetRegionId() uint64 {
+	if x != nil {
+		return x.RegionId
+	}
+	return 0
+}
+
+func (x *LocalRegionMeta) GetStartKey() []byte {
+	if x != nil {
+		return x.StartKey
+	}
+	return nil
+}
+
+func (x *LocalRegionMeta) GetEndKey() []byte {
+	if x != nil {
+		return x.EndKey
+	}
+	return nil
+}
+
+func (x *LocalRegionMeta) GetEpoch() *RegionEpoch {
+	if x != nil {
+		return x.Epoch
+	}
+	return nil
+}
+
+func (x *LocalRegionMeta) GetPeers() []*RegionPeer {
+	if x != nil {
+		return x.Peers
+	}
+	return nil
+}
+
+func (x *LocalRegionMeta) GetState() RegionReplicaState {
+	if x != nil {
+		return x.State
+	}
+	return RegionReplicaState_REGION_REPLICA_STATE_UNSPECIFIED
+}
+
+type ReplicaLocalCatalog struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Regions       []*LocalRegionMeta     `protobuf:"bytes,1,rep,name=regions,proto3" json:"regions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReplicaLocalCatalog) Reset() {
+	*x = ReplicaLocalCatalog{}
+	mi := &file_meta_recovery_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReplicaLocalCatalog) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReplicaLocalCatalog) ProtoMessage() {}
+
+func (x *ReplicaLocalCatalog) ProtoReflect() protoreflect.Message {
+	mi := &file_meta_recovery_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReplicaLocalCatalog.ProtoReflect.Descriptor instead.
+func (*ReplicaLocalCatalog) Descriptor() ([]byte, []int) {
+	return file_meta_recovery_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ReplicaLocalCatalog) GetRegions() []*LocalRegionMeta {
+	if x != nil {
+		return x.Regions
+	}
+	return nil
+}
+
 type RaftProgress struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	GroupId         uint64                 `protobuf:"varint,1,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
@@ -127,7 +255,7 @@ type RaftProgress struct {
 
 func (x *RaftProgress) Reset() {
 	*x = RaftProgress{}
-	mi := &file_meta_recovery_proto_msgTypes[1]
+	mi := &file_meta_recovery_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -139,7 +267,7 @@ func (x *RaftProgress) String() string {
 func (*RaftProgress) ProtoMessage() {}
 
 func (x *RaftProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_recovery_proto_msgTypes[1]
+	mi := &file_meta_recovery_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -152,7 +280,7 @@ func (x *RaftProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RaftProgress.ProtoReflect.Descriptor instead.
 func (*RaftProgress) Descriptor() ([]byte, []int) {
-	return file_meta_recovery_proto_rawDescGZIP(), []int{1}
+	return file_meta_recovery_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *RaftProgress) GetGroupId() uint64 {
@@ -239,6 +367,50 @@ func (x *RaftProgress) GetTruncatedOffset() uint64 {
 	return 0
 }
 
+type RaftProgressCatalog struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Entries       []*RaftProgress        `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RaftProgressCatalog) Reset() {
+	*x = RaftProgressCatalog{}
+	mi := &file_meta_recovery_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RaftProgressCatalog) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RaftProgressCatalog) ProtoMessage() {}
+
+func (x *RaftProgressCatalog) ProtoReflect() protoreflect.Message {
+	mi := &file_meta_recovery_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RaftProgressCatalog.ProtoReflect.Descriptor instead.
+func (*RaftProgressCatalog) Descriptor() ([]byte, []int) {
+	return file_meta_recovery_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *RaftProgressCatalog) GetEntries() []*RaftProgress {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
 var File_meta_recovery_proto protoreflect.FileDescriptor
 
 const file_meta_recovery_proto_rawDesc = "" +
@@ -252,7 +424,16 @@ const file_meta_recovery_proto_rawDesc = "" +
 	"descriptor\x18\x04 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\n" +
 	"descriptor\x12!\n" +
 	"\flast_applied\x18\x05 \x01(\x04R\vlastApplied\x12\x1b\n" +
-	"\tlast_term\x18\x06 \x01(\x04R\blastTerm\"\xad\x03\n" +
+	"\tlast_term\x18\x06 \x01(\x04R\blastTerm\"\xfd\x01\n" +
+	"\x0fLocalRegionMeta\x12\x1b\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12\x1b\n" +
+	"\tstart_key\x18\x02 \x01(\fR\bstartKey\x12\x17\n" +
+	"\aend_key\x18\x03 \x01(\fR\x06endKey\x12/\n" +
+	"\x05epoch\x18\x04 \x01(\v2\x19.nokv.meta.v1.RegionEpochR\x05epoch\x12.\n" +
+	"\x05peers\x18\x05 \x03(\v2\x18.nokv.meta.v1.RegionPeerR\x05peers\x126\n" +
+	"\x05state\x18\x06 \x01(\x0e2 .nokv.meta.v1.RegionReplicaStateR\x05state\"N\n" +
+	"\x13ReplicaLocalCatalog\x127\n" +
+	"\aregions\x18\x01 \x03(\v2\x1d.nokv.meta.v1.LocalRegionMetaR\aregions\"\xad\x03\n" +
 	"\fRaftProgress\x12\x19\n" +
 	"\bgroup_id\x18\x01 \x01(\x04R\agroupId\x12\x18\n" +
 	"\asegment\x18\x02 \x01(\rR\asegment\x12\x16\n" +
@@ -266,7 +447,9 @@ const file_meta_recovery_proto_rawDesc = "" +
 	"\x0etruncated_term\x18\n" +
 	" \x01(\x04R\rtruncatedTerm\x12#\n" +
 	"\rsegment_index\x18\v \x01(\x04R\fsegmentIndex\x12)\n" +
-	"\x10truncated_offset\x18\f \x01(\x04R\x0ftruncatedOffsetB,Z*github.com/feichai0017/NoKV/pb/meta;metapbb\x06proto3"
+	"\x10truncated_offset\x18\f \x01(\x04R\x0ftruncatedOffset\"K\n" +
+	"\x13RaftProgressCatalog\x124\n" +
+	"\aentries\x18\x01 \x03(\v2\x1a.nokv.meta.v1.RaftProgressR\aentriesB,Z*github.com/feichai0017/NoKV/pb/meta;metapbb\x06proto3"
 
 var (
 	file_meta_recovery_proto_rawDescOnce sync.Once
@@ -280,21 +463,31 @@ func file_meta_recovery_proto_rawDescGZIP() []byte {
 	return file_meta_recovery_proto_rawDescData
 }
 
-var file_meta_recovery_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_meta_recovery_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_meta_recovery_proto_goTypes = []any{
-	(*ReplicaLocalState)(nil), // 0: nokv.meta.v1.ReplicaLocalState
-	(*RaftProgress)(nil),      // 1: nokv.meta.v1.RaftProgress
-	(RegionReplicaState)(0),   // 2: nokv.meta.v1.RegionReplicaState
-	(*RegionDescriptor)(nil),  // 3: nokv.meta.v1.RegionDescriptor
+	(*ReplicaLocalState)(nil),   // 0: nokv.meta.v1.ReplicaLocalState
+	(*LocalRegionMeta)(nil),     // 1: nokv.meta.v1.LocalRegionMeta
+	(*ReplicaLocalCatalog)(nil), // 2: nokv.meta.v1.ReplicaLocalCatalog
+	(*RaftProgress)(nil),        // 3: nokv.meta.v1.RaftProgress
+	(*RaftProgressCatalog)(nil), // 4: nokv.meta.v1.RaftProgressCatalog
+	(RegionReplicaState)(0),     // 5: nokv.meta.v1.RegionReplicaState
+	(*RegionDescriptor)(nil),    // 6: nokv.meta.v1.RegionDescriptor
+	(*RegionEpoch)(nil),         // 7: nokv.meta.v1.RegionEpoch
+	(*RegionPeer)(nil),          // 8: nokv.meta.v1.RegionPeer
 }
 var file_meta_recovery_proto_depIdxs = []int32{
-	2, // 0: nokv.meta.v1.ReplicaLocalState.state:type_name -> nokv.meta.v1.RegionReplicaState
-	3, // 1: nokv.meta.v1.ReplicaLocalState.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	5, // 0: nokv.meta.v1.ReplicaLocalState.state:type_name -> nokv.meta.v1.RegionReplicaState
+	6, // 1: nokv.meta.v1.ReplicaLocalState.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	7, // 2: nokv.meta.v1.LocalRegionMeta.epoch:type_name -> nokv.meta.v1.RegionEpoch
+	8, // 3: nokv.meta.v1.LocalRegionMeta.peers:type_name -> nokv.meta.v1.RegionPeer
+	5, // 4: nokv.meta.v1.LocalRegionMeta.state:type_name -> nokv.meta.v1.RegionReplicaState
+	1, // 5: nokv.meta.v1.ReplicaLocalCatalog.regions:type_name -> nokv.meta.v1.LocalRegionMeta
+	3, // 6: nokv.meta.v1.RaftProgressCatalog.entries:type_name -> nokv.meta.v1.RaftProgress
+	7, // [7:7] is the sub-list for method output_type
+	7, // [7:7] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	7, // [7:7] is the sub-list for extension extendee
+	0, // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_meta_recovery_proto_init() }
@@ -310,7 +503,7 @@ func file_meta_recovery_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_meta_recovery_proto_rawDesc), len(file_meta_recovery_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
