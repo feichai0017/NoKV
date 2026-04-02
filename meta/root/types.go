@@ -1,5 +1,7 @@
 package root
 
+import "github.com/feichai0017/NoKV/raftstore/descriptor"
+
 // AllocatorKind identifies one globally fenced allocator domain.
 type AllocatorKind uint8
 
@@ -60,19 +62,24 @@ type StoreMembership struct {
 	Address string
 }
 
+// RegionBootstrap records the initial descriptor of one newly rooted region.
+type RegionBootstrap struct {
+	Descriptor descriptor.Descriptor
+}
+
 // RangeSplit describes one split intent or committed split transition.
 type RangeSplit struct {
 	ParentRegionID uint64
-	LeftRegionID   uint64
-	RightRegionID  uint64
 	SplitKey       []byte
+	Left           descriptor.Descriptor
+	Right          descriptor.Descriptor
 }
 
 // RangeMerge describes one merge transition.
 type RangeMerge struct {
 	LeftRegionID   uint64
 	RightRegionID  uint64
-	MergedRegionID uint64
+	Merged         descriptor.Descriptor
 }
 
 // PeerChange describes one region membership mutation.
@@ -80,6 +87,7 @@ type PeerChange struct {
 	RegionID uint64
 	StoreID  uint64
 	PeerID   uint64
+	Region   descriptor.Descriptor
 }
 
 // LeaderTransfer describes one leadership movement intent.
@@ -104,6 +112,7 @@ type Event struct {
 	Kind EventKind
 
 	StoreMembership *StoreMembership
+	RegionBootstrap *RegionBootstrap
 	RangeSplit      *RangeSplit
 	RangeMerge      *RangeMerge
 	PeerChange      *PeerChange

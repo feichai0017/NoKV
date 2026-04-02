@@ -40,6 +40,33 @@ type Descriptor struct {
 	Hash      []byte
 }
 
+// FromRegionMeta lifts store/local region metadata into a distributed
+// descriptor shape.
+func FromRegionMeta(meta localmeta.RegionMeta, rootEpoch uint64) Descriptor {
+	return Descriptor{
+		RegionID:  meta.ID,
+		StartKey:  append([]byte(nil), meta.StartKey...),
+		EndKey:    append([]byte(nil), meta.EndKey...),
+		Epoch:     meta.Epoch,
+		Peers:     append([]localmeta.PeerMeta(nil), meta.Peers...),
+		State:     meta.State,
+		RootEpoch: rootEpoch,
+	}
+}
+
+// ToRegionMeta drops one descriptor back to the region metadata shape used by
+// PD views and local recovery.
+func (d Descriptor) ToRegionMeta() localmeta.RegionMeta {
+	return localmeta.RegionMeta{
+		ID:       d.RegionID,
+		StartKey: append([]byte(nil), d.StartKey...),
+		EndKey:   append([]byte(nil), d.EndKey...),
+		Epoch:    d.Epoch,
+		Peers:    append([]localmeta.PeerMeta(nil), d.Peers...),
+		State:    d.State,
+	}
+}
+
 // Clone returns a detached copy of the descriptor.
 func (d Descriptor) Clone() Descriptor {
 	cp := d

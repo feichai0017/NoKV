@@ -7,6 +7,8 @@ import (
 
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -22,7 +24,12 @@ func TestStoreAppendReadAndReopen(t *testing.T) {
 
 	commit, err := store.Append(
 		rootpkg.Event{Kind: rootpkg.EventKindStoreJoined, StoreMembership: &rootpkg.StoreMembership{StoreID: 1, Address: "s1"}},
-		rootpkg.Event{Kind: rootpkg.EventKindRegionSplitCommitted, RangeSplit: &rootpkg.RangeSplit{ParentRegionID: 10, LeftRegionID: 11, RightRegionID: 12, SplitKey: []byte("m")}},
+		rootpkg.Event{Kind: rootpkg.EventKindRegionSplitCommitted, RangeSplit: &rootpkg.RangeSplit{
+			ParentRegionID: 10,
+			SplitKey:       []byte("m"),
+			Left:           testDescriptor(11, []byte("a"), []byte("m")),
+			Right:          testDescriptor(12, []byte("m"), []byte("z")),
+		}},
 		rootpkg.Event{Kind: rootpkg.EventKindPlacementPolicyChanged, PlacementPolicy: &rootpkg.PlacementPolicy{Name: "default", Version: 7}},
 	)
 	require.NoError(t, err)
@@ -38,6 +45,8 @@ func TestStoreAppendReadAndReopen(t *testing.T) {
 	require.Equal(t, rootpkg.EventKindStoreJoined, events[0].Kind)
 	require.Equal(t, uint64(1), events[0].StoreMembership.StoreID)
 	require.Equal(t, []byte("m"), events[1].RangeSplit.SplitKey)
+	require.Equal(t, uint64(11), events[1].RangeSplit.Left.RegionID)
+	require.Equal(t, uint64(12), events[1].RangeSplit.Right.RegionID)
 	require.Equal(t, uint64(7), events[2].PlacementPolicy.Version)
 
 	reopened, err := Open(dir, nil)
@@ -100,7 +109,12 @@ func TestStoreReplaysLogAfterStaleCheckpoint(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, nil)
 	require.NoError(t, err)
-	commit, err := store.Append(rootpkg.Event{Kind: rootpkg.EventKindPeerAdded, PeerChange: &rootpkg.PeerChange{RegionID: 1, StoreID: 2, PeerID: 3}})
+	commit, err := store.Append(rootpkg.Event{Kind: rootpkg.EventKindPeerAdded, PeerChange: &rootpkg.PeerChange{
+		RegionID: 1,
+		StoreID:  2,
+		PeerID:   3,
+		Region:   testDescriptor(1, []byte("a"), []byte("z")),
+	}})
 	require.NoError(t, err)
 	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 1}, commit.Cursor)
 
@@ -114,4 +128,21 @@ func TestStoreReplaysLogAfterStaleCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), state.ClusterEpoch)
 	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 1}, state.LastCommitted)
+}
+
+func testDescriptor(regionID uint64, start, end []byte) descriptor.Descriptor {
+	return descriptor.FromRegionMeta(localmeta.RegionMeta{
+		ID:       regionID,
+		StartKey: append([]byte(nil), start...),
+		EndKey:   append([]byte(nil), end...),
+		Epoch: localmeta.RegionEpoch{
+			Version:     1,
+			ConfVersion: 1,
+		},
+		Peers: []localmeta.PeerMeta{
+			{StoreID: 1, PeerID: regionID*10 + 1},
+			{StoreID: 2, PeerID: regionID*10 + 2},
+		},
+		State: localmeta.RegionStateRunning,
+	}, 1)
 }
