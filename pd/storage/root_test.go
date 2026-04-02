@@ -3,6 +3,7 @@ package storage
 import (
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootlocal "github.com/feichai0017/NoKV/meta/root/local"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"path/filepath"
 	"testing"
@@ -31,7 +32,7 @@ func TestRootStorePersistsRegionsAndAllocator(t *testing.T) {
 		},
 		State: localmeta.RegionStateRunning,
 	}
-	require.NoError(t, store.PublishRegionDescriptor(meta))
+	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(meta, 0)))
 	require.NoError(t, store.SaveAllocatorState(123, 456))
 
 	snapshot, err := store.Load()
@@ -60,7 +61,7 @@ func TestRootStoreDeleteRegion(t *testing.T) {
 	store, err := OpenRootStore(root)
 	require.NoError(t, err)
 
-	require.NoError(t, store.PublishRegionDescriptor(localmeta.RegionMeta{
+	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
 		ID:       7,
 		StartKey: []byte("x"),
 		EndKey:   []byte("z"),
@@ -69,7 +70,7 @@ func TestRootStoreDeleteRegion(t *testing.T) {
 			ConfVersion: 1,
 		},
 		State: localmeta.RegionStateRunning,
-	}))
+	}, 0)))
 	require.NoError(t, store.TombstoneRegion(7))
 
 	snapshot, err := store.Load()
@@ -101,8 +102,8 @@ func TestRootStoreSkipsDuplicateRegionDescriptorHeartbeat(t *testing.T) {
 		},
 		State: localmeta.RegionStateRunning,
 	}
-	require.NoError(t, store.PublishRegionDescriptor(meta))
-	require.NoError(t, store.PublishRegionDescriptor(meta))
+	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(meta, 0)))
+	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(meta, 0)))
 
 	events, _, err := root.ReadSince(rootpkg.Cursor{})
 	require.NoError(t, err)
@@ -126,10 +127,10 @@ func TestRootStoreEmitsPeerAddedEvent(t *testing.T) {
 		},
 		State: localmeta.RegionStateRunning,
 	}
-	require.NoError(t, store.PublishRegionDescriptor(meta))
+	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(meta, 0)))
 	meta.Peers = append(meta.Peers, localmeta.PeerMeta{StoreID: 2, PeerID: 201})
 	meta.Epoch.ConfVersion = 2
-	require.NoError(t, store.PublishRegionDescriptor(meta))
+	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(meta, 0)))
 
 	events, _, err := root.ReadSince(rootpkg.Cursor{})
 	require.NoError(t, err)
@@ -158,10 +159,10 @@ func TestRootStoreEmitsPeerRemovedEvent(t *testing.T) {
 		},
 		State: localmeta.RegionStateRunning,
 	}
-	require.NoError(t, store.PublishRegionDescriptor(meta))
+	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(meta, 0)))
 	meta.Peers = meta.Peers[:1]
 	meta.Epoch.ConfVersion = 3
-	require.NoError(t, store.PublishRegionDescriptor(meta))
+	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(meta, 0)))
 
 	events, _, err := root.ReadSince(rootpkg.Cursor{})
 	require.NoError(t, err)

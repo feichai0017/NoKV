@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 
 	"github.com/feichai0017/NoKV/pb"
@@ -81,8 +82,9 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pb.RegionHeartbeatRequ
 	if req == nil || req.GetRegion() == nil {
 		return nil, status.Error(codes.InvalidArgument, "region heartbeat request missing region")
 	}
-	meta := pbToManifestRegion(req.GetRegion())
-	err := s.cluster.UpsertRegionHeartbeat(meta)
+	meta := pbToRegionMeta(req.GetRegion())
+	desc := descriptor.FromRegionMeta(meta, 0)
+	err := s.cluster.PublishRegionDescriptor(desc)
 	if err != nil {
 		switch {
 		case errors.Is(err, core.ErrInvalidRegionID):
@@ -94,7 +96,7 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pb.RegionHeartbeatRequ
 		}
 	}
 	if s.storage != nil {
-		if err := s.storage.PublishRegionDescriptor(meta); err != nil {
+		if err := s.storage.PublishRegionDescriptor(desc); err != nil {
 			return nil, status.Error(codes.Internal, "publish region descriptor: "+err.Error())
 		}
 	}
@@ -129,7 +131,7 @@ func (s *Service) GetRegionByKey(_ context.Context, req *pb.GetRegionByKeyReques
 		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
 	return &pb.GetRegionByKeyResponse{
-		Region:   manifestToPBRegion(meta),
+		Region:   regionMetaToPB(meta),
 		NotFound: false,
 	}, nil
 }
@@ -191,7 +193,7 @@ func (s *Service) persistAllocatorState() error {
 	return s.storage.SaveAllocatorState(s.ids.Current(), s.tso.Current())
 }
 
-func pbToManifestRegion(meta *pb.RegionMeta) localmeta.RegionMeta {
+func pbToRegionMeta(meta *pb.RegionMeta) localmeta.RegionMeta {
 	out := localmeta.RegionMeta{
 		ID:       meta.GetId(),
 		StartKey: append([]byte(nil), meta.GetStartKey()...),
@@ -216,7 +218,7 @@ func pbToManifestRegion(meta *pb.RegionMeta) localmeta.RegionMeta {
 	return out
 }
 
-func manifestToPBRegion(meta localmeta.RegionMeta) *pb.RegionMeta {
+func regionMetaToPB(meta localmeta.RegionMeta) *pb.RegionMeta {
 	out := &pb.RegionMeta{
 		Id:               meta.ID,
 		StartKey:         append([]byte(nil), meta.StartKey...),
