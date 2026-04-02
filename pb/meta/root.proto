@@ -83,10 +83,12 @@ message RootPlacementPolicy {
 
 message RootEvent {
   RootEventKind kind = 1;
-  RootStoreMembership store_membership = 2;
-  RootRangeSplit range_split = 3;
-  RootRangeMerge range_merge = 4;
-  RootPeerChange peer_change = 5;
-  RootLeaderTransfer leader_transfer = 6;
-  RootPlacementPolicy placement_policy = 7;
+  oneof payload {
+    RootStoreMembership store_membership = 2;
+    RootRangeSplit range_split = 3;
+    RootRangeMerge range_merge = 4;
+    RootPeerChange peer_change = 5;
+    RootLeaderTransfer leader_transfer = 6;
+    RootPlacementPolicy placement_policy = 7;
+  }
 }

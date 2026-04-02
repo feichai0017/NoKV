@@ -697,16 +697,19 @@ func (x *RootPlacementPolicy) GetName() string {
 }
 
 type RootEvent struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Kind            RootEventKind          `protobuf:"varint,1,opt,name=kind,proto3,enum=nokv.meta.v1.RootEventKind" json:"kind,omitempty"`
-	StoreMembership *RootStoreMembership   `protobuf:"bytes,2,opt,name=store_membership,json=storeMembership,proto3" json:"store_membership,omitempty"`
-	RangeSplit      *RootRangeSplit        `protobuf:"bytes,3,opt,name=range_split,json=rangeSplit,proto3" json:"range_split,omitempty"`
-	RangeMerge      *RootRangeMerge        `protobuf:"bytes,4,opt,name=range_merge,json=rangeMerge,proto3" json:"range_merge,omitempty"`
-	PeerChange      *RootPeerChange        `protobuf:"bytes,5,opt,name=peer_change,json=peerChange,proto3" json:"peer_change,omitempty"`
-	LeaderTransfer  *RootLeaderTransfer    `protobuf:"bytes,6,opt,name=leader_transfer,json=leaderTransfer,proto3" json:"leader_transfer,omitempty"`
-	PlacementPolicy *RootPlacementPolicy   `protobuf:"bytes,7,opt,name=placement_policy,json=placementPolicy,proto3" json:"placement_policy,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Kind  RootEventKind          `protobuf:"varint,1,opt,name=kind,proto3,enum=nokv.meta.v1.RootEventKind" json:"kind,omitempty"`
+	// Types that are valid to be assigned to Payload:
+	//
+	//	*RootEvent_StoreMembership
+	//	*RootEvent_RangeSplit
+	//	*RootEvent_RangeMerge
+	//	*RootEvent_PeerChange
+	//	*RootEvent_LeaderTransfer
+	//	*RootEvent_PlacementPolicy
+	Payload       isRootEvent_Payload `protobuf_oneof:"payload"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RootEvent) Reset() {
@@ -746,47 +749,106 @@ func (x *RootEvent) GetKind() RootEventKind {
 	return RootEventKind_ROOT_EVENT_KIND_UNSPECIFIED
 }
 
+func (x *RootEvent) GetPayload() isRootEvent_Payload {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
 func (x *RootEvent) GetStoreMembership() *RootStoreMembership {
 	if x != nil {
-		return x.StoreMembership
+		if x, ok := x.Payload.(*RootEvent_StoreMembership); ok {
+			return x.StoreMembership
+		}
 	}
 	return nil
 }
 
 func (x *RootEvent) GetRangeSplit() *RootRangeSplit {
 	if x != nil {
-		return x.RangeSplit
+		if x, ok := x.Payload.(*RootEvent_RangeSplit); ok {
+			return x.RangeSplit
+		}
 	}
 	return nil
 }
 
 func (x *RootEvent) GetRangeMerge() *RootRangeMerge {
 	if x != nil {
-		return x.RangeMerge
+		if x, ok := x.Payload.(*RootEvent_RangeMerge); ok {
+			return x.RangeMerge
+		}
 	}
 	return nil
 }
 
 func (x *RootEvent) GetPeerChange() *RootPeerChange {
 	if x != nil {
-		return x.PeerChange
+		if x, ok := x.Payload.(*RootEvent_PeerChange); ok {
+			return x.PeerChange
+		}
 	}
 	return nil
 }
 
 func (x *RootEvent) GetLeaderTransfer() *RootLeaderTransfer {
 	if x != nil {
-		return x.LeaderTransfer
+		if x, ok := x.Payload.(*RootEvent_LeaderTransfer); ok {
+			return x.LeaderTransfer
+		}
 	}
 	return nil
 }
 
 func (x *RootEvent) GetPlacementPolicy() *RootPlacementPolicy {
 	if x != nil {
-		return x.PlacementPolicy
+		if x, ok := x.Payload.(*RootEvent_PlacementPolicy); ok {
+			return x.PlacementPolicy
+		}
 	}
 	return nil
 }
+
+type isRootEvent_Payload interface {
+	isRootEvent_Payload()
+}
+
+type RootEvent_StoreMembership struct {
+	StoreMembership *RootStoreMembership `protobuf:"bytes,2,opt,name=store_membership,json=storeMembership,proto3,oneof"`
+}
+
+type RootEvent_RangeSplit struct {
+	RangeSplit *RootRangeSplit `protobuf:"bytes,3,opt,name=range_split,json=rangeSplit,proto3,oneof"`
+}
+
+type RootEvent_RangeMerge struct {
+	RangeMerge *RootRangeMerge `protobuf:"bytes,4,opt,name=range_merge,json=rangeMerge,proto3,oneof"`
+}
+
+type RootEvent_PeerChange struct {
+	PeerChange *RootPeerChange `protobuf:"bytes,5,opt,name=peer_change,json=peerChange,proto3,oneof"`
+}
+
+type RootEvent_LeaderTransfer struct {
+	LeaderTransfer *RootLeaderTransfer `protobuf:"bytes,6,opt,name=leader_transfer,json=leaderTransfer,proto3,oneof"`
+}
+
+type RootEvent_PlacementPolicy struct {
+	PlacementPolicy *RootPlacementPolicy `protobuf:"bytes,7,opt,name=placement_policy,json=placementPolicy,proto3,oneof"`
+}
+
+func (*RootEvent_StoreMembership) isRootEvent_Payload() {}
+
+func (*RootEvent_RangeSplit) isRootEvent_Payload() {}
+
+func (*RootEvent_RangeMerge) isRootEvent_Payload() {}
+
+func (*RootEvent_PeerChange) isRootEvent_Payload() {}
+
+func (*RootEvent_LeaderTransfer) isRootEvent_Payload() {}
+
+func (*RootEvent_PlacementPolicy) isRootEvent_Payload() {}
 
 var File_meta_root_proto protoreflect.FileDescriptor
 
@@ -832,18 +894,19 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x0ftarget_store_id\x18\x04 \x01(\x04R\rtargetStoreId\"C\n" +
 	"\x13RootPlacementPolicy\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x04R\aversion\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"\xe0\x03\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"\xf7\x03\n" +
 	"\tRootEvent\x12/\n" +
-	"\x04kind\x18\x01 \x01(\x0e2\x1b.nokv.meta.v1.RootEventKindR\x04kind\x12L\n" +
-	"\x10store_membership\x18\x02 \x01(\v2!.nokv.meta.v1.RootStoreMembershipR\x0fstoreMembership\x12=\n" +
-	"\vrange_split\x18\x03 \x01(\v2\x1c.nokv.meta.v1.RootRangeSplitR\n" +
-	"rangeSplit\x12=\n" +
-	"\vrange_merge\x18\x04 \x01(\v2\x1c.nokv.meta.v1.RootRangeMergeR\n" +
-	"rangeMerge\x12=\n" +
-	"\vpeer_change\x18\x05 \x01(\v2\x1c.nokv.meta.v1.RootPeerChangeR\n" +
-	"peerChange\x12I\n" +
-	"\x0fleader_transfer\x18\x06 \x01(\v2 .nokv.meta.v1.RootLeaderTransferR\x0eleaderTransfer\x12L\n" +
-	"\x10placement_policy\x18\a \x01(\v2!.nokv.meta.v1.RootPlacementPolicyR\x0fplacementPolicy*^\n" +
+	"\x04kind\x18\x01 \x01(\x0e2\x1b.nokv.meta.v1.RootEventKindR\x04kind\x12N\n" +
+	"\x10store_membership\x18\x02 \x01(\v2!.nokv.meta.v1.RootStoreMembershipH\x00R\x0fstoreMembership\x12?\n" +
+	"\vrange_split\x18\x03 \x01(\v2\x1c.nokv.meta.v1.RootRangeSplitH\x00R\n" +
+	"rangeSplit\x12?\n" +
+	"\vrange_merge\x18\x04 \x01(\v2\x1c.nokv.meta.v1.RootRangeMergeH\x00R\n" +
+	"rangeMerge\x12?\n" +
+	"\vpeer_change\x18\x05 \x01(\v2\x1c.nokv.meta.v1.RootPeerChangeH\x00R\n" +
+	"peerChange\x12K\n" +
+	"\x0fleader_transfer\x18\x06 \x01(\v2 .nokv.meta.v1.RootLeaderTransferH\x00R\x0eleaderTransfer\x12N\n" +
+	"\x10placement_policy\x18\a \x01(\v2!.nokv.meta.v1.RootPlacementPolicyH\x00R\x0fplacementPolicyB\t\n" +
+	"\apayload*^\n" +
 	"\rAllocatorKind\x12\x1e\n" +
 	"\x1aALLOCATOR_KIND_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11ALLOCATOR_KIND_ID\x10\x01\x12\x16\n" +
@@ -913,6 +976,14 @@ func init() { file_meta_root_proto_init() }
 func file_meta_root_proto_init() {
 	if File_meta_root_proto != nil {
 		return
+	}
+	file_meta_root_proto_msgTypes[9].OneofWrappers = []any{
+		(*RootEvent_StoreMembership)(nil),
+		(*RootEvent_RangeSplit)(nil),
+		(*RootEvent_RangeMerge)(nil),
+		(*RootEvent_PeerChange)(nil),
+		(*RootEvent_LeaderTransfer)(nil),
+		(*RootEvent_PlacementPolicy)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

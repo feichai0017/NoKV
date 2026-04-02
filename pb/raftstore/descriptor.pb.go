@@ -9,7 +9,7 @@
 package raftstorepb
 
 import (
-	pb "github.com/feichai0017/NoKV/pb"
+	meta "github.com/feichai0017/NoKV/pb/meta"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -23,61 +23,6 @@ const (
 	// Verify that runtime/protoimpl is sufficiently up-to-date.
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
-
-type RegionReplicaState int32
-
-const (
-	RegionReplicaState_REGION_REPLICA_STATE_UNSPECIFIED RegionReplicaState = 0
-	RegionReplicaState_REGION_REPLICA_STATE_NEW         RegionReplicaState = 1
-	RegionReplicaState_REGION_REPLICA_STATE_RUNNING     RegionReplicaState = 2
-	RegionReplicaState_REGION_REPLICA_STATE_REMOVING    RegionReplicaState = 3
-	RegionReplicaState_REGION_REPLICA_STATE_TOMBSTONE   RegionReplicaState = 4
-)
-
-// Enum value maps for RegionReplicaState.
-var (
-	RegionReplicaState_name = map[int32]string{
-		0: "REGION_REPLICA_STATE_UNSPECIFIED",
-		1: "REGION_REPLICA_STATE_NEW",
-		2: "REGION_REPLICA_STATE_RUNNING",
-		3: "REGION_REPLICA_STATE_REMOVING",
-		4: "REGION_REPLICA_STATE_TOMBSTONE",
-	}
-	RegionReplicaState_value = map[string]int32{
-		"REGION_REPLICA_STATE_UNSPECIFIED": 0,
-		"REGION_REPLICA_STATE_NEW":         1,
-		"REGION_REPLICA_STATE_RUNNING":     2,
-		"REGION_REPLICA_STATE_REMOVING":    3,
-		"REGION_REPLICA_STATE_TOMBSTONE":   4,
-	}
-)
-
-func (x RegionReplicaState) Enum() *RegionReplicaState {
-	p := new(RegionReplicaState)
-	*p = x
-	return p
-}
-
-func (x RegionReplicaState) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (RegionReplicaState) Descriptor() protoreflect.EnumDescriptor {
-	return file_raftstore_descriptor_proto_enumTypes[0].Descriptor()
-}
-
-func (RegionReplicaState) Type() protoreflect.EnumType {
-	return &file_raftstore_descriptor_proto_enumTypes[0]
-}
-
-func (x RegionReplicaState) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use RegionReplicaState.Descriptor instead.
-func (RegionReplicaState) EnumDescriptor() ([]byte, []int) {
-	return file_raftstore_descriptor_proto_rawDescGZIP(), []int{0}
-}
 
 type DescriptorLineageKind int32
 
@@ -112,11 +57,11 @@ func (x DescriptorLineageKind) String() string {
 }
 
 func (DescriptorLineageKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_raftstore_descriptor_proto_enumTypes[1].Descriptor()
+	return file_raftstore_descriptor_proto_enumTypes[0].Descriptor()
 }
 
 func (DescriptorLineageKind) Type() protoreflect.EnumType {
-	return &file_raftstore_descriptor_proto_enumTypes[1]
+	return &file_raftstore_descriptor_proto_enumTypes[0]
 }
 
 func (x DescriptorLineageKind) Number() protoreflect.EnumNumber {
@@ -125,13 +70,13 @@ func (x DescriptorLineageKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use DescriptorLineageKind.Descriptor instead.
 func (DescriptorLineageKind) EnumDescriptor() ([]byte, []int) {
-	return file_raftstore_descriptor_proto_rawDescGZIP(), []int{1}
+	return file_raftstore_descriptor_proto_rawDescGZIP(), []int{0}
 }
 
 type DescriptorLineageRef struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
-	Epoch         *pb.RegionEpoch        `protobuf:"bytes,2,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Epoch         *meta.RegionEpoch      `protobuf:"bytes,2,opt,name=epoch,proto3" json:"epoch,omitempty"`
 	Hash          []byte                 `protobuf:"bytes,3,opt,name=hash,proto3" json:"hash,omitempty"`
 	Kind          DescriptorLineageKind  `protobuf:"varint,4,opt,name=kind,proto3,enum=nokv.raftstore.v1.DescriptorLineageKind" json:"kind,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -175,7 +120,7 @@ func (x *DescriptorLineageRef) GetRegionId() uint64 {
 	return 0
 }
 
-func (x *DescriptorLineageRef) GetEpoch() *pb.RegionEpoch {
+func (x *DescriptorLineageRef) GetEpoch() *meta.RegionEpoch {
 	if x != nil {
 		return x.Epoch
 	}
@@ -201,9 +146,9 @@ type RegionDescriptor struct {
 	RegionId      uint64                  `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
 	StartKey      []byte                  `protobuf:"bytes,2,opt,name=start_key,json=startKey,proto3" json:"start_key,omitempty"`
 	EndKey        []byte                  `protobuf:"bytes,3,opt,name=end_key,json=endKey,proto3" json:"end_key,omitempty"`
-	Epoch         *pb.RegionEpoch         `protobuf:"bytes,4,opt,name=epoch,proto3" json:"epoch,omitempty"`
-	Peers         []*pb.RegionPeer        `protobuf:"bytes,5,rep,name=peers,proto3" json:"peers,omitempty"`
-	State         RegionReplicaState      `protobuf:"varint,6,opt,name=state,proto3,enum=nokv.raftstore.v1.RegionReplicaState" json:"state,omitempty"`
+	Epoch         *meta.RegionEpoch       `protobuf:"bytes,4,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Peers         []*meta.RegionPeer      `protobuf:"bytes,5,rep,name=peers,proto3" json:"peers,omitempty"`
+	State         meta.RegionReplicaState `protobuf:"varint,6,opt,name=state,proto3,enum=nokv.meta.v1.RegionReplicaState" json:"state,omitempty"`
 	Lineage       []*DescriptorLineageRef `protobuf:"bytes,7,rep,name=lineage,proto3" json:"lineage,omitempty"`
 	RootEpoch     uint64                  `protobuf:"varint,8,opt,name=root_epoch,json=rootEpoch,proto3" json:"root_epoch,omitempty"`
 	Hash          []byte                  `protobuf:"bytes,9,opt,name=hash,proto3" json:"hash,omitempty"`
@@ -262,25 +207,25 @@ func (x *RegionDescriptor) GetEndKey() []byte {
 	return nil
 }
 
-func (x *RegionDescriptor) GetEpoch() *pb.RegionEpoch {
+func (x *RegionDescriptor) GetEpoch() *meta.RegionEpoch {
 	if x != nil {
 		return x.Epoch
 	}
 	return nil
 }
 
-func (x *RegionDescriptor) GetPeers() []*pb.RegionPeer {
+func (x *RegionDescriptor) GetPeers() []*meta.RegionPeer {
 	if x != nil {
 		return x.Peers
 	}
 	return nil
 }
 
-func (x *RegionDescriptor) GetState() RegionReplicaState {
+func (x *RegionDescriptor) GetState() meta.RegionReplicaState {
 	if x != nil {
 		return x.State
 	}
-	return RegionReplicaState_REGION_REPLICA_STATE_UNSPECIFIED
+	return meta.RegionReplicaState(0)
 }
 
 func (x *RegionDescriptor) GetLineage() []*DescriptorLineageRef {
@@ -308,29 +253,23 @@ var File_raftstore_descriptor_proto protoreflect.FileDescriptor
 
 const file_raftstore_descriptor_proto_rawDesc = "" +
 	"\n" +
-	"\x1araftstore/descriptor.proto\x12\x11nokv.raftstore.v1\x1a\fmetapb.proto\"\xac\x01\n" +
+	"\x1araftstore/descriptor.proto\x12\x11nokv.raftstore.v1\x1a\x11meta/region.proto\"\xb6\x01\n" +
 	"\x14DescriptorLineageRef\x12\x1b\n" +
-	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12%\n" +
-	"\x05epoch\x18\x02 \x01(\v2\x0f.pb.RegionEpochR\x05epoch\x12\x12\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12/\n" +
+	"\x05epoch\x18\x02 \x01(\v2\x19.nokv.meta.v1.RegionEpochR\x05epoch\x12\x12\n" +
 	"\x04hash\x18\x03 \x01(\fR\x04hash\x12<\n" +
-	"\x04kind\x18\x04 \x01(\x0e2(.nokv.raftstore.v1.DescriptorLineageKindR\x04kind\"\xe5\x02\n" +
+	"\x04kind\x18\x04 \x01(\x0e2(.nokv.raftstore.v1.DescriptorLineageKindR\x04kind\"\xf4\x02\n" +
 	"\x10RegionDescriptor\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12\x1b\n" +
 	"\tstart_key\x18\x02 \x01(\fR\bstartKey\x12\x17\n" +
-	"\aend_key\x18\x03 \x01(\fR\x06endKey\x12%\n" +
-	"\x05epoch\x18\x04 \x01(\v2\x0f.pb.RegionEpochR\x05epoch\x12$\n" +
-	"\x05peers\x18\x05 \x03(\v2\x0e.pb.RegionPeerR\x05peers\x12;\n" +
-	"\x05state\x18\x06 \x01(\x0e2%.nokv.raftstore.v1.RegionReplicaStateR\x05state\x12A\n" +
+	"\aend_key\x18\x03 \x01(\fR\x06endKey\x12/\n" +
+	"\x05epoch\x18\x04 \x01(\v2\x19.nokv.meta.v1.RegionEpochR\x05epoch\x12.\n" +
+	"\x05peers\x18\x05 \x03(\v2\x18.nokv.meta.v1.RegionPeerR\x05peers\x126\n" +
+	"\x05state\x18\x06 \x01(\x0e2 .nokv.meta.v1.RegionReplicaStateR\x05state\x12A\n" +
 	"\alineage\x18\a \x03(\v2'.nokv.raftstore.v1.DescriptorLineageRefR\alineage\x12\x1d\n" +
 	"\n" +
 	"root_epoch\x18\b \x01(\x04R\trootEpoch\x12\x12\n" +
-	"\x04hash\x18\t \x01(\fR\x04hash*\xc1\x01\n" +
-	"\x12RegionReplicaState\x12$\n" +
-	" REGION_REPLICA_STATE_UNSPECIFIED\x10\x00\x12\x1c\n" +
-	"\x18REGION_REPLICA_STATE_NEW\x10\x01\x12 \n" +
-	"\x1cREGION_REPLICA_STATE_RUNNING\x10\x02\x12!\n" +
-	"\x1dREGION_REPLICA_STATE_REMOVING\x10\x03\x12\"\n" +
-	"\x1eREGION_REPLICA_STATE_TOMBSTONE\x10\x04*\x94\x01\n" +
+	"\x04hash\x18\t \x01(\fR\x04hash*\x94\x01\n" +
 	"\x15DescriptorLineageKind\x12'\n" +
 	"#DESCRIPTOR_LINEAGE_KIND_UNSPECIFIED\x10\x00\x12(\n" +
 	"$DESCRIPTOR_LINEAGE_KIND_SPLIT_PARENT\x10\x01\x12(\n" +
@@ -348,23 +287,23 @@ func file_raftstore_descriptor_proto_rawDescGZIP() []byte {
 	return file_raftstore_descriptor_proto_rawDescData
 }
 
-var file_raftstore_descriptor_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_raftstore_descriptor_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_raftstore_descriptor_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_raftstore_descriptor_proto_goTypes = []any{
-	(RegionReplicaState)(0),      // 0: nokv.raftstore.v1.RegionReplicaState
-	(DescriptorLineageKind)(0),   // 1: nokv.raftstore.v1.DescriptorLineageKind
-	(*DescriptorLineageRef)(nil), // 2: nokv.raftstore.v1.DescriptorLineageRef
-	(*RegionDescriptor)(nil),     // 3: nokv.raftstore.v1.RegionDescriptor
-	(*pb.RegionEpoch)(nil),       // 4: pb.RegionEpoch
-	(*pb.RegionPeer)(nil),        // 5: pb.RegionPeer
+	(DescriptorLineageKind)(0),   // 0: nokv.raftstore.v1.DescriptorLineageKind
+	(*DescriptorLineageRef)(nil), // 1: nokv.raftstore.v1.DescriptorLineageRef
+	(*RegionDescriptor)(nil),     // 2: nokv.raftstore.v1.RegionDescriptor
+	(*meta.RegionEpoch)(nil),     // 3: nokv.meta.v1.RegionEpoch
+	(*meta.RegionPeer)(nil),      // 4: nokv.meta.v1.RegionPeer
+	(meta.RegionReplicaState)(0), // 5: nokv.meta.v1.RegionReplicaState
 }
 var file_raftstore_descriptor_proto_depIdxs = []int32{
-	4, // 0: nokv.raftstore.v1.DescriptorLineageRef.epoch:type_name -> pb.RegionEpoch
-	1, // 1: nokv.raftstore.v1.DescriptorLineageRef.kind:type_name -> nokv.raftstore.v1.DescriptorLineageKind
-	4, // 2: nokv.raftstore.v1.RegionDescriptor.epoch:type_name -> pb.RegionEpoch
-	5, // 3: nokv.raftstore.v1.RegionDescriptor.peers:type_name -> pb.RegionPeer
-	0, // 4: nokv.raftstore.v1.RegionDescriptor.state:type_name -> nokv.raftstore.v1.RegionReplicaState
-	2, // 5: nokv.raftstore.v1.RegionDescriptor.lineage:type_name -> nokv.raftstore.v1.DescriptorLineageRef
+	3, // 0: nokv.raftstore.v1.DescriptorLineageRef.epoch:type_name -> nokv.meta.v1.RegionEpoch
+	0, // 1: nokv.raftstore.v1.DescriptorLineageRef.kind:type_name -> nokv.raftstore.v1.DescriptorLineageKind
+	3, // 2: nokv.raftstore.v1.RegionDescriptor.epoch:type_name -> nokv.meta.v1.RegionEpoch
+	4, // 3: nokv.raftstore.v1.RegionDescriptor.peers:type_name -> nokv.meta.v1.RegionPeer
+	5, // 4: nokv.raftstore.v1.RegionDescriptor.state:type_name -> nokv.meta.v1.RegionReplicaState
+	1, // 5: nokv.raftstore.v1.RegionDescriptor.lineage:type_name -> nokv.raftstore.v1.DescriptorLineageRef
 	6, // [6:6] is the sub-list for method output_type
 	6, // [6:6] is the sub-list for method input_type
 	6, // [6:6] is the sub-list for extension type_name
@@ -382,7 +321,7 @@ func file_raftstore_descriptor_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_raftstore_descriptor_proto_rawDesc), len(file_raftstore_descriptor_proto_rawDesc)),
-			NumEnums:      2,
+			NumEnums:      1,
 			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,

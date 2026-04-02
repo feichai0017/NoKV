@@ -933,7 +933,8 @@ Goal:
 Add:
 
 - `meta/root/types.go`
-- `meta/root/root.proto`
+- `pb/meta/root.proto`
+- `pb/meta/region.proto`
 
 Define:
 
@@ -967,7 +968,7 @@ Suggested outputs:
 Add:
 
 - `raftstore/descriptor`
-- `raftstore/descriptor/descriptor.proto`
+- `pb/raftstore/descriptor.proto`
 
 Integrate with:
 
@@ -979,7 +980,7 @@ Integrate with:
 Also add:
 
 - `raftstore/recovery`
-- `raftstore/recovery/recovery.proto`
+- `pb/raftstore/recovery.proto`
 
 ## Phase 4: replace PD-local metadata authority with root + view
 
