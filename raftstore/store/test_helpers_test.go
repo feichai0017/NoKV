@@ -26,6 +26,7 @@ type testSchedulerSink struct {
 	mu      sync.RWMutex
 	regions map[uint64]regionHeartbeat
 	stores  map[uint64]StoreStats
+	history []schedulerEvent
 }
 
 type slowSchedulerSink struct {
@@ -44,6 +45,11 @@ type regionHeartbeat struct {
 	LastHeartbeat time.Time
 }
 
+type schedulerEvent struct {
+	kind     string
+	regionID uint64
+}
+
 func newTestSchedulerSink() *testSchedulerSink {
 	return &testSchedulerSink{
 		regions: make(map[uint64]regionHeartbeat),
@@ -60,6 +66,7 @@ func (s *testSchedulerSink) PublishRegion(_ context.Context, meta localmeta.Regi
 		Meta:          localmeta.CloneRegionMeta(meta),
 		LastHeartbeat: time.Now(),
 	}
+	s.history = append(s.history, schedulerEvent{kind: "publish", regionID: meta.ID})
 	s.mu.Unlock()
 }
 
@@ -69,6 +76,7 @@ func (s *testSchedulerSink) RemoveRegion(_ context.Context, id uint64) {
 	}
 	s.mu.Lock()
 	delete(s.regions, id)
+	s.history = append(s.history, schedulerEvent{kind: "remove", regionID: id})
 	s.mu.Unlock()
 }
 
@@ -127,6 +135,25 @@ func (s *testSchedulerSink) LastUpdate(regionID uint64) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return info.LastHeartbeat, true
+}
+
+func (s *testSchedulerSink) EventHistory() []schedulerEvent {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	out := append([]schedulerEvent(nil), s.history...)
+	s.mu.RUnlock()
+	return out
+}
+
+func (s *testSchedulerSink) ResetHistory() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.history = nil
+	s.mu.Unlock()
 }
 
 func (s *testSchedulerSink) Close() error {

@@ -3,7 +3,6 @@ package core
 import (
 	pdview "github.com/feichai0017/NoKV/pd/view"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"time"
 )
 
@@ -78,15 +77,6 @@ func (c *Cluster) RegionSnapshot() []RegionInfo {
 		return nil
 	}
 	return c.regions.Snapshot()
-}
-
-// GetRegionByKey returns the region containing key ([start, end)).
-func (c *Cluster) GetRegionByKey(key []byte) (localmeta.RegionMeta, bool) {
-	desc, ok := c.GetRegionDescriptorByKey(key)
-	if !ok {
-		return localmeta.RegionMeta{}, false
-	}
-	return desc.ToRegionMeta(), true
 }
 
 // GetRegionDescriptorByKey returns the rooted descriptor containing key
