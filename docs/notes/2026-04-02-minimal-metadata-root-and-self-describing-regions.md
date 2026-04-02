@@ -1067,3 +1067,65 @@ This note intentionally does not fully solve:
 - exact leader-election and root-failover procedure
 
 Those should be designed next as separate technical notes.
+
+## Metadata Root Raft Backend
+
+The metadata root should evolve from the current local file-backed backend:
+
+- `meta/root/local`
+
+into a dedicated replicated backend:
+
+- `meta/root/raft`
+
+### Reuse boundary
+
+`meta/root/raft` should reuse the existing raft algorithm wrapper:
+
+- `raft/raft.go`
+
+It should **not** reuse `raftstore` runtime semantics such as:
+
+- region peer lifecycle
+- SST snapshot install
+- local region catalog persistence
+- data-plane raft transport conventions
+
+The root problem is different from the region replication problem.
+
+### What the root raft replicates
+
+The root raft log should only replicate:
+
+- `RootEvent`
+- allocator fence commands
+- compact `RootState` checkpoints
+
+It should not become a general-purpose metadata KV store.
+
+### Package shape
+
+The first implementation keeps the following split:
+
+- `meta/root/raft/config.go`
+- `meta/root/raft/command.go`
+- `meta/root/raft/checkpoint.go`
+- `meta/root/raft/state_machine.go`
+- `meta/root/raft/storage.go`
+- `meta/root/raft/node.go`
+- `meta/root/raft/single_node.go`
+
+### Current implementation status
+
+The current code is intentionally minimal:
+
+- in-memory raft storage only
+- single-node root adapter for end-to-end tests
+- no networked transport yet
+- no persisted raft WAL yet
+
+This is enough to lock the internal design:
+
+- root commands are separate from data-plane commands
+- root state machine materializes descriptor truth and allocator fences
+- the eventual HA backend can extend this package instead of replacing it
