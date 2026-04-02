@@ -2,9 +2,11 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootlocal "github.com/feichai0017/NoKV/meta/root/local"
+	rootraft "github.com/feichai0017/NoKV/meta/root/raft"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"sync"
 )
@@ -31,6 +33,16 @@ func OpenRootStore(root rootpkg.Root) (*RootStore, error) {
 // root files in workdir.
 func OpenRootLocalStore(workdir string) (*RootStore, error) {
 	root, err := rootlocal.Open(workdir, nil)
+	if err != nil {
+		return nil, err
+	}
+	return OpenRootStore(root)
+}
+
+// OpenRootRaftStore opens a PD storage backend backed by a replicated metadata
+// root exposed over the metadata-root gRPC service.
+func OpenRootRaftStore(ctx context.Context, addr string) (*RootStore, error) {
+	root, err := rootraft.Dial(ctx, addr)
 	if err != nil {
 		return nil, err
 	}

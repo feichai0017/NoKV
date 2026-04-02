@@ -1,12 +1,15 @@
 package rootraft
 
 import (
+	"sync"
+
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	myraft "github.com/feichai0017/NoKV/raft"
 )
 
 // Node binds the raft algorithm, root state machine, and transport together.
 type Node struct {
+	mu         sync.Mutex
 	cfg        Config
 	raw        *myraft.RawNode
 	storage    *Storage
@@ -73,6 +76,8 @@ func OpenNode(cfg Config, checkpoint Checkpoint, transport Transport) (*Node, er
 }
 
 func (n *Node) Campaign() error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	if err := n.raw.Campaign(); err != nil {
 		return err
 	}
@@ -80,11 +85,15 @@ func (n *Node) Campaign() error {
 }
 
 func (n *Node) Tick() error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	n.raw.Tick()
 	return n.drainReady()
 }
 
 func (n *Node) Step(msg myraft.Message) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	if err := n.raw.Step(msg); err != nil {
 		return err
 	}
@@ -92,6 +101,8 @@ func (n *Node) Step(msg myraft.Message) error {
 }
 
 func (n *Node) Current() rootpkg.State {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	return n.machine.Current()
 }
 
@@ -100,22 +111,32 @@ func (n *Node) ID() uint64 {
 }
 
 func (n *Node) Status() myraft.Status {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	return n.raw.Status()
 }
 
 func (n *Node) IsLeader() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	return n.raw.Status().RaftState == myraft.StateLeader
 }
 
 func (n *Node) ReadSince(cursor rootpkg.Cursor) ([]rootpkg.Event, rootpkg.Cursor) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	return n.machine.ReadSince(cursor)
 }
 
 func (n *Node) Snapshot() Checkpoint {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	return n.machine.Snapshot()
 }
 
 func (n *Node) ProposeEvent(event rootpkg.Event) (rootpkg.CommitInfo, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	if n.raw.Status().Lead != n.cfg.NodeID {
 		return rootpkg.CommitInfo{}, ErrNotLeader
 	}
@@ -130,6 +151,8 @@ func (n *Node) ProposeEvent(event rootpkg.Event) (rootpkg.CommitInfo, error) {
 }
 
 func (n *Node) ProposeFence(kind rootpkg.AllocatorKind, min uint64) (rootpkg.CommitInfo, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	if n.raw.Status().Lead != n.cfg.NodeID {
 		return rootpkg.CommitInfo{}, ErrNotLeader
 	}
@@ -150,6 +173,14 @@ func (n *Node) drainReadyWithCommit() (rootpkg.CommitInfo, error) {
 		rd := n.raw.Ready()
 		if err := n.storage.AppendReady(rd); err != nil {
 			return rootpkg.CommitInfo{}, err
+		}
+		if !myraft.IsEmptySnap(rd.Snapshot) && len(rd.Snapshot.Data) > 0 {
+			cp, err := decodeCheckpoint(rd.Snapshot.Data)
+			if err != nil {
+				return rootpkg.CommitInfo{}, err
+			}
+			n.machine = NewStateMachine(cp)
+			commit = rootpkg.CommitInfo{Cursor: cp.State.LastCommitted, State: cp.State}
 		}
 		for _, ent := range rd.CommittedEntries {
 			cursor := rootpkg.Cursor{Term: ent.Term, Index: ent.Index}
@@ -177,11 +208,47 @@ func (n *Node) drainReadyWithCommit() (rootpkg.CommitInfo, error) {
 				return rootpkg.CommitInfo{}, err
 			}
 		}
+		if err := n.maybeCompact(); err != nil {
+			return rootpkg.CommitInfo{}, err
+		}
 		if len(outbound) > 0 {
+			n.mu.Unlock()
 			if err := n.transport.Send(outbound); err != nil {
+				n.mu.Lock()
 				return rootpkg.CommitInfo{}, err
 			}
+			n.mu.Lock()
 		}
 	}
 	return commit, nil
+}
+
+func (n *Node) maybeCompact() error {
+	if n.cfg.SnapshotEvery == 0 {
+		return nil
+	}
+	cp := n.machine.Snapshot()
+	if cp.State.LastCommitted.Index == 0 {
+		return nil
+	}
+	snap, err := n.storage.Snapshot()
+	if err != nil {
+		return err
+	}
+	if cp.State.LastCommitted.Index <= snap.Metadata.Index || cp.State.LastCommitted.Index-snap.Metadata.Index < n.cfg.SnapshotEvery {
+		return nil
+	}
+	data, err := encodeCheckpoint(cp)
+	if err != nil {
+		return err
+	}
+	if err := n.storage.CreateSnapshot(cp.State.LastCommitted.Index, data); err != nil {
+		return err
+	}
+	if cp.State.LastCommitted.Index > 1 {
+		if err := n.storage.Compact(cp.State.LastCommitted.Index - 1); err != nil && err != myraft.ErrCompacted {
+			return err
+		}
+	}
+	return nil
 }

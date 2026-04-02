@@ -90,3 +90,28 @@ func TestOpenNodeRestoresPersistentState(t *testing.T) {
 	require.Contains(t, snap.Descriptors, uint64(21))
 	require.Equal(t, []byte("a"), snap.Descriptors[21].StartKey)
 }
+
+func TestNodeCompactsRaftLogAfterSnapshotThreshold(t *testing.T) {
+	node, err := OpenNode(Config{
+		NodeID:        1,
+		Peers:         []Peer{{ID: 1}},
+		Bootstrap:     true,
+		SnapshotEvery: 2,
+	}, Checkpoint{}, nil)
+	require.NoError(t, err)
+	require.NoError(t, node.Campaign())
+
+	for i := 0; i < 5; i++ {
+		_, err = node.ProposeEvent(rootpkg.RegionDescriptorPublished(testDescriptor(uint64(100+i), "", "")))
+		require.NoError(t, err)
+	}
+
+	first, err := node.storage.FirstIndex()
+	require.NoError(t, err)
+	require.Greater(t, first, uint64(1))
+
+	snap, err := node.storage.Snapshot()
+	require.NoError(t, err)
+	require.Greater(t, snap.Metadata.Index, uint64(0))
+	require.NotEmpty(t, snap.Data)
+}

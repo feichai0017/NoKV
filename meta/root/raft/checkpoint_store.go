@@ -51,39 +51,14 @@ func (s *FileCheckpointStore) Load() (Checkpoint, error) {
 	if len(data) == 0 {
 		return Checkpoint{}, nil
 	}
-	var pb metapb.RootCheckpoint
-	if err := proto.Unmarshal(data, &pb); err != nil {
-		return Checkpoint{}, err
-	}
-	cp := Checkpoint{}
-	if pb.State != nil {
-		cp.State = stateFromRootPB(pb.State)
-	}
-	if len(pb.Descriptors) > 0 {
-		cp.Descriptors = make(map[uint64]descriptor.Descriptor, len(pb.Descriptors))
-		for _, desc := range pb.Descriptors {
-			if desc == nil {
-				continue
-			}
-			runtime := metacodec.DescriptorFromProto(desc)
-			cp.Descriptors[runtime.RegionID] = runtime
-		}
-	}
-	return cp, nil
+	return decodeCheckpoint(data)
 }
 
 func (s *FileCheckpointStore) Save(cp Checkpoint) error {
 	if s == nil {
 		return nil
 	}
-	pb := &metapb.RootCheckpoint{State: stateToRootPB(cp.State)}
-	if len(cp.Descriptors) > 0 {
-		pb.Descriptors = make([]*metapb.RegionDescriptor, 0, len(cp.Descriptors))
-		for _, desc := range cp.Descriptors {
-			pb.Descriptors = append(pb.Descriptors, metacodec.DescriptorToProto(desc))
-		}
-	}
-	data, err := proto.Marshal(pb)
+	data, err := encodeCheckpoint(cp)
 	if err != nil {
 		return err
 	}
@@ -111,6 +86,39 @@ func (s *FileCheckpointStore) Save(cp Checkpoint) error {
 		return err
 	}
 	return vfs.SyncDir(s.fs, s.workdir)
+}
+
+func encodeCheckpoint(cp Checkpoint) ([]byte, error) {
+	pb := &metapb.RootCheckpoint{State: stateToRootPB(cp.State)}
+	if len(cp.Descriptors) > 0 {
+		pb.Descriptors = make([]*metapb.RegionDescriptor, 0, len(cp.Descriptors))
+		for _, desc := range cp.Descriptors {
+			pb.Descriptors = append(pb.Descriptors, metacodec.DescriptorToProto(desc))
+		}
+	}
+	return proto.Marshal(pb)
+}
+
+func decodeCheckpoint(data []byte) (Checkpoint, error) {
+	var pb metapb.RootCheckpoint
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return Checkpoint{}, err
+	}
+	cp := Checkpoint{}
+	if pb.State != nil {
+		cp.State = stateFromRootPB(pb.State)
+	}
+	if len(pb.Descriptors) > 0 {
+		cp.Descriptors = make(map[uint64]descriptor.Descriptor, len(pb.Descriptors))
+		for _, desc := range pb.Descriptors {
+			if desc == nil {
+				continue
+			}
+			runtime := metacodec.DescriptorFromProto(desc)
+			cp.Descriptors[runtime.RegionID] = runtime
+		}
+	}
+	return cp, nil
 }
 
 func stateToRootPB(state rootpkg.State) *metapb.RootState {
