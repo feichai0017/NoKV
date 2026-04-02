@@ -297,6 +297,8 @@ func applyEvent(state *rootpkg.State, cursor rootpkg.Cursor, event rootpkg.Event
 	case rootpkg.EventKindStoreJoined, rootpkg.EventKindStoreLeft, rootpkg.EventKindStoreMarkedDraining:
 		state.MembershipEpoch++
 	case rootpkg.EventKindRegionBootstrap,
+		rootpkg.EventKindRegionDescriptorPublished,
+		rootpkg.EventKindRegionTombstoned,
 		rootpkg.EventKindRegionSplitRequested,
 		rootpkg.EventKindRegionSplitCommitted,
 		rootpkg.EventKindRegionMerged,
@@ -336,10 +338,14 @@ func cloneEvent(in rootpkg.Event) rootpkg.Event {
 		cp := *in.StoreMembership
 		out.StoreMembership = &cp
 	}
-	if in.RegionBootstrap != nil {
-		cp := *in.RegionBootstrap
-		cp.Descriptor = in.RegionBootstrap.Descriptor.Clone()
-		out.RegionBootstrap = &cp
+	if in.RegionDescriptor != nil {
+		cp := *in.RegionDescriptor
+		cp.Descriptor = in.RegionDescriptor.Descriptor.Clone()
+		out.RegionDescriptor = &cp
+	}
+	if in.RegionRemoval != nil {
+		cp := *in.RegionRemoval
+		out.RegionRemoval = &cp
 	}
 	if in.RangeSplit != nil {
 		cp := *in.RangeSplit
@@ -405,9 +411,13 @@ func eventToPB(event rootpkg.Event) *metapb.RootEvent {
 	switch {
 	case event.StoreMembership != nil:
 		pbEvent.Payload = &metapb.RootEvent_StoreMembership{StoreMembership: &metapb.RootStoreMembership{StoreId: event.StoreMembership.StoreID, Address: event.StoreMembership.Address}}
-	case event.RegionBootstrap != nil:
-		pbEvent.Payload = &metapb.RootEvent_RegionBootstrap{
-			RegionBootstrap: &metapb.RootRegionBootstrap{Descriptor_: descriptorToPB(event.RegionBootstrap.Descriptor)},
+	case event.RegionDescriptor != nil:
+		pbEvent.Payload = &metapb.RootEvent_RegionDescriptor{
+			RegionDescriptor: &metapb.RootRegionDescriptor{Descriptor_: descriptorToPB(event.RegionDescriptor.Descriptor)},
+		}
+	case event.RegionRemoval != nil:
+		pbEvent.Payload = &metapb.RootEvent_RegionRemoval{
+			RegionRemoval: &metapb.RootRegionRemoval{RegionId: event.RegionRemoval.RegionID},
 		}
 	case event.RangeSplit != nil:
 		pbEvent.Payload = &metapb.RootEvent_RangeSplit{RangeSplit: &metapb.RootRangeSplit{
@@ -445,8 +455,11 @@ func eventFromPB(pbEvent *metapb.RootEvent) rootpkg.Event {
 	if body := pbEvent.GetStoreMembership(); body != nil {
 		event.StoreMembership = &rootpkg.StoreMembership{StoreID: body.StoreId, Address: body.Address}
 	}
-	if body := pbEvent.GetRegionBootstrap(); body != nil {
-		event.RegionBootstrap = &rootpkg.RegionBootstrap{Descriptor: descriptorFromPB(body.GetDescriptor_())}
+	if body := pbEvent.GetRegionDescriptor(); body != nil {
+		event.RegionDescriptor = &rootpkg.RegionDescriptorRecord{Descriptor: descriptorFromPB(body.GetDescriptor_())}
+	}
+	if body := pbEvent.GetRegionRemoval(); body != nil {
+		event.RegionRemoval = &rootpkg.RegionRemoval{RegionID: body.RegionId}
 	}
 	if body := pbEvent.GetRangeSplit(); body != nil {
 		event.RangeSplit = &rootpkg.RangeSplit{
@@ -576,6 +589,10 @@ func eventKindToPB(kind rootpkg.EventKind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_STORE_MARKED_DRAINING
 	case rootpkg.EventKindRegionBootstrap:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_BOOTSTRAP
+	case rootpkg.EventKindRegionDescriptorPublished:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_DESCRIPTOR_PUBLISHED
+	case rootpkg.EventKindRegionTombstoned:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_TOMBSTONED
 	case rootpkg.EventKindRegionSplitRequested:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_REQUESTED
 	case rootpkg.EventKindRegionSplitCommitted:
@@ -605,6 +622,10 @@ func eventKindFromPB(kind metapb.RootEventKind) rootpkg.EventKind {
 		return rootpkg.EventKindStoreMarkedDraining
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_BOOTSTRAP:
 		return rootpkg.EventKindRegionBootstrap
+	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_DESCRIPTOR_PUBLISHED:
+		return rootpkg.EventKindRegionDescriptorPublished
+	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_TOMBSTONED:
+		return rootpkg.EventKindRegionTombstoned
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_REQUESTED:
 		return rootpkg.EventKindRegionSplitRequested
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED:
