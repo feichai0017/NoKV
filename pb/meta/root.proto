@@ -19,13 +19,15 @@ enum RootEventKind {
   ROOT_EVENT_KIND_STORE_LEFT = 2;
   ROOT_EVENT_KIND_STORE_MARKED_DRAINING = 3;
   ROOT_EVENT_KIND_REGION_BOOTSTRAP = 4;
-  ROOT_EVENT_KIND_REGION_SPLIT_REQUESTED = 5;
-  ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED = 6;
-  ROOT_EVENT_KIND_REGION_MERGED = 7;
-  ROOT_EVENT_KIND_PEER_ADDED = 8;
-  ROOT_EVENT_KIND_PEER_REMOVED = 9;
-  ROOT_EVENT_KIND_LEADER_TRANSFER_INTENT = 10;
-  ROOT_EVENT_KIND_PLACEMENT_POLICY_CHANGED = 11;
+  ROOT_EVENT_KIND_REGION_DESCRIPTOR_PUBLISHED = 5;
+  ROOT_EVENT_KIND_REGION_TOMBSTONED = 6;
+  ROOT_EVENT_KIND_REGION_SPLIT_REQUESTED = 7;
+  ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED = 8;
+  ROOT_EVENT_KIND_REGION_MERGED = 9;
+  ROOT_EVENT_KIND_PEER_ADDED = 10;
+  ROOT_EVENT_KIND_PEER_REMOVED = 11;
+  ROOT_EVENT_KIND_LEADER_TRANSFER_INTENT = 12;
+  ROOT_EVENT_KIND_PLACEMENT_POLICY_CHANGED = 13;
 }
 
 message RootCursor {
@@ -52,8 +54,12 @@ message RootStoreMembership {
   string address = 2;
 }
 
-message RootRegionBootstrap {
+message RootRegionDescriptor {
   nokv.meta.v1.RegionDescriptor descriptor = 1;
+}
+
+message RootRegionRemoval {
+  uint64 region_id = 1;
 }
 
 message RootRangeSplit {
@@ -92,11 +98,12 @@ message RootEvent {
   RootEventKind kind = 1;
   oneof payload {
     RootStoreMembership store_membership = 2;
-    RootRegionBootstrap region_bootstrap = 3;
-    RootRangeSplit range_split = 4;
-    RootRangeMerge range_merge = 5;
-    RootPeerChange peer_change = 6;
-    RootLeaderTransfer leader_transfer = 7;
-    RootPlacementPolicy placement_policy = 8;
+    RootRegionDescriptor region_descriptor = 3;
+    RootRegionRemoval region_removal = 4;
+    RootRangeSplit range_split = 5;
+    RootRangeMerge range_merge = 6;
+    RootPeerChange peer_change = 7;
+    RootLeaderTransfer leader_transfer = 8;
+    RootPlacementPolicy placement_policy = 9;
   }
 }

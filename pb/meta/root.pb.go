@@ -75,18 +75,20 @@ func (AllocatorKind) EnumDescriptor() ([]byte, []int) {
 type RootEventKind int32
 
 const (
-	RootEventKind_ROOT_EVENT_KIND_UNSPECIFIED              RootEventKind = 0
-	RootEventKind_ROOT_EVENT_KIND_STORE_JOINED             RootEventKind = 1
-	RootEventKind_ROOT_EVENT_KIND_STORE_LEFT               RootEventKind = 2
-	RootEventKind_ROOT_EVENT_KIND_STORE_MARKED_DRAINING    RootEventKind = 3
-	RootEventKind_ROOT_EVENT_KIND_REGION_BOOTSTRAP         RootEventKind = 4
-	RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_REQUESTED   RootEventKind = 5
-	RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED   RootEventKind = 6
-	RootEventKind_ROOT_EVENT_KIND_REGION_MERGED            RootEventKind = 7
-	RootEventKind_ROOT_EVENT_KIND_PEER_ADDED               RootEventKind = 8
-	RootEventKind_ROOT_EVENT_KIND_PEER_REMOVED             RootEventKind = 9
-	RootEventKind_ROOT_EVENT_KIND_LEADER_TRANSFER_INTENT   RootEventKind = 10
-	RootEventKind_ROOT_EVENT_KIND_PLACEMENT_POLICY_CHANGED RootEventKind = 11
+	RootEventKind_ROOT_EVENT_KIND_UNSPECIFIED                 RootEventKind = 0
+	RootEventKind_ROOT_EVENT_KIND_STORE_JOINED                RootEventKind = 1
+	RootEventKind_ROOT_EVENT_KIND_STORE_LEFT                  RootEventKind = 2
+	RootEventKind_ROOT_EVENT_KIND_STORE_MARKED_DRAINING       RootEventKind = 3
+	RootEventKind_ROOT_EVENT_KIND_REGION_BOOTSTRAP            RootEventKind = 4
+	RootEventKind_ROOT_EVENT_KIND_REGION_DESCRIPTOR_PUBLISHED RootEventKind = 5
+	RootEventKind_ROOT_EVENT_KIND_REGION_TOMBSTONED           RootEventKind = 6
+	RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_REQUESTED      RootEventKind = 7
+	RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED      RootEventKind = 8
+	RootEventKind_ROOT_EVENT_KIND_REGION_MERGED               RootEventKind = 9
+	RootEventKind_ROOT_EVENT_KIND_PEER_ADDED                  RootEventKind = 10
+	RootEventKind_ROOT_EVENT_KIND_PEER_REMOVED                RootEventKind = 11
+	RootEventKind_ROOT_EVENT_KIND_LEADER_TRANSFER_INTENT      RootEventKind = 12
+	RootEventKind_ROOT_EVENT_KIND_PLACEMENT_POLICY_CHANGED    RootEventKind = 13
 )
 
 // Enum value maps for RootEventKind.
@@ -97,27 +99,31 @@ var (
 		2:  "ROOT_EVENT_KIND_STORE_LEFT",
 		3:  "ROOT_EVENT_KIND_STORE_MARKED_DRAINING",
 		4:  "ROOT_EVENT_KIND_REGION_BOOTSTRAP",
-		5:  "ROOT_EVENT_KIND_REGION_SPLIT_REQUESTED",
-		6:  "ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED",
-		7:  "ROOT_EVENT_KIND_REGION_MERGED",
-		8:  "ROOT_EVENT_KIND_PEER_ADDED",
-		9:  "ROOT_EVENT_KIND_PEER_REMOVED",
-		10: "ROOT_EVENT_KIND_LEADER_TRANSFER_INTENT",
-		11: "ROOT_EVENT_KIND_PLACEMENT_POLICY_CHANGED",
+		5:  "ROOT_EVENT_KIND_REGION_DESCRIPTOR_PUBLISHED",
+		6:  "ROOT_EVENT_KIND_REGION_TOMBSTONED",
+		7:  "ROOT_EVENT_KIND_REGION_SPLIT_REQUESTED",
+		8:  "ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED",
+		9:  "ROOT_EVENT_KIND_REGION_MERGED",
+		10: "ROOT_EVENT_KIND_PEER_ADDED",
+		11: "ROOT_EVENT_KIND_PEER_REMOVED",
+		12: "ROOT_EVENT_KIND_LEADER_TRANSFER_INTENT",
+		13: "ROOT_EVENT_KIND_PLACEMENT_POLICY_CHANGED",
 	}
 	RootEventKind_value = map[string]int32{
-		"ROOT_EVENT_KIND_UNSPECIFIED":              0,
-		"ROOT_EVENT_KIND_STORE_JOINED":             1,
-		"ROOT_EVENT_KIND_STORE_LEFT":               2,
-		"ROOT_EVENT_KIND_STORE_MARKED_DRAINING":    3,
-		"ROOT_EVENT_KIND_REGION_BOOTSTRAP":         4,
-		"ROOT_EVENT_KIND_REGION_SPLIT_REQUESTED":   5,
-		"ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED":   6,
-		"ROOT_EVENT_KIND_REGION_MERGED":            7,
-		"ROOT_EVENT_KIND_PEER_ADDED":               8,
-		"ROOT_EVENT_KIND_PEER_REMOVED":             9,
-		"ROOT_EVENT_KIND_LEADER_TRANSFER_INTENT":   10,
-		"ROOT_EVENT_KIND_PLACEMENT_POLICY_CHANGED": 11,
+		"ROOT_EVENT_KIND_UNSPECIFIED":                 0,
+		"ROOT_EVENT_KIND_STORE_JOINED":                1,
+		"ROOT_EVENT_KIND_STORE_LEFT":                  2,
+		"ROOT_EVENT_KIND_STORE_MARKED_DRAINING":       3,
+		"ROOT_EVENT_KIND_REGION_BOOTSTRAP":            4,
+		"ROOT_EVENT_KIND_REGION_DESCRIPTOR_PUBLISHED": 5,
+		"ROOT_EVENT_KIND_REGION_TOMBSTONED":           6,
+		"ROOT_EVENT_KIND_REGION_SPLIT_REQUESTED":      7,
+		"ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED":      8,
+		"ROOT_EVENT_KIND_REGION_MERGED":               9,
+		"ROOT_EVENT_KIND_PEER_ADDED":                  10,
+		"ROOT_EVENT_KIND_PEER_REMOVED":                11,
+		"ROOT_EVENT_KIND_LEADER_TRANSFER_INTENT":      12,
+		"ROOT_EVENT_KIND_PLACEMENT_POLICY_CHANGED":    13,
 	}
 )
 
@@ -388,27 +394,27 @@ func (x *RootStoreMembership) GetAddress() string {
 	return ""
 }
 
-type RootRegionBootstrap struct {
+type RootRegionDescriptor struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Descriptor_   *RegionDescriptor      `protobuf:"bytes,1,opt,name=descriptor,proto3" json:"descriptor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *RootRegionBootstrap) Reset() {
-	*x = RootRegionBootstrap{}
+func (x *RootRegionDescriptor) Reset() {
+	*x = RootRegionDescriptor{}
 	mi := &file_meta_root_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RootRegionBootstrap) String() string {
+func (x *RootRegionDescriptor) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RootRegionBootstrap) ProtoMessage() {}
+func (*RootRegionDescriptor) ProtoMessage() {}
 
-func (x *RootRegionBootstrap) ProtoReflect() protoreflect.Message {
+func (x *RootRegionDescriptor) ProtoReflect() protoreflect.Message {
 	mi := &file_meta_root_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -420,16 +426,60 @@ func (x *RootRegionBootstrap) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RootRegionBootstrap.ProtoReflect.Descriptor instead.
-func (*RootRegionBootstrap) Descriptor() ([]byte, []int) {
+// Deprecated: Use RootRegionDescriptor.ProtoReflect.Descriptor instead.
+func (*RootRegionDescriptor) Descriptor() ([]byte, []int) {
 	return file_meta_root_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *RootRegionBootstrap) GetDescriptor_() *RegionDescriptor {
+func (x *RootRegionDescriptor) GetDescriptor_() *RegionDescriptor {
 	if x != nil {
 		return x.Descriptor_
 	}
 	return nil
+}
+
+type RootRegionRemoval struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RootRegionRemoval) Reset() {
+	*x = RootRegionRemoval{}
+	mi := &file_meta_root_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RootRegionRemoval) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RootRegionRemoval) ProtoMessage() {}
+
+func (x *RootRegionRemoval) ProtoReflect() protoreflect.Message {
+	mi := &file_meta_root_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RootRegionRemoval.ProtoReflect.Descriptor instead.
+func (*RootRegionRemoval) Descriptor() ([]byte, []int) {
+	return file_meta_root_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *RootRegionRemoval) GetRegionId() uint64 {
+	if x != nil {
+		return x.RegionId
+	}
+	return 0
 }
 
 type RootRangeSplit struct {
@@ -444,7 +494,7 @@ type RootRangeSplit struct {
 
 func (x *RootRangeSplit) Reset() {
 	*x = RootRangeSplit{}
-	mi := &file_meta_root_proto_msgTypes[5]
+	mi := &file_meta_root_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -456,7 +506,7 @@ func (x *RootRangeSplit) String() string {
 func (*RootRangeSplit) ProtoMessage() {}
 
 func (x *RootRangeSplit) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[5]
+	mi := &file_meta_root_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -469,7 +519,7 @@ func (x *RootRangeSplit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootRangeSplit.ProtoReflect.Descriptor instead.
 func (*RootRangeSplit) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{5}
+	return file_meta_root_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *RootRangeSplit) GetParentRegionId() uint64 {
@@ -511,7 +561,7 @@ type RootRangeMerge struct {
 
 func (x *RootRangeMerge) Reset() {
 	*x = RootRangeMerge{}
-	mi := &file_meta_root_proto_msgTypes[6]
+	mi := &file_meta_root_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -523,7 +573,7 @@ func (x *RootRangeMerge) String() string {
 func (*RootRangeMerge) ProtoMessage() {}
 
 func (x *RootRangeMerge) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[6]
+	mi := &file_meta_root_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -536,7 +586,7 @@ func (x *RootRangeMerge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootRangeMerge.ProtoReflect.Descriptor instead.
 func (*RootRangeMerge) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{6}
+	return file_meta_root_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *RootRangeMerge) GetLeftRegionId() uint64 {
@@ -572,7 +622,7 @@ type RootPeerChange struct {
 
 func (x *RootPeerChange) Reset() {
 	*x = RootPeerChange{}
-	mi := &file_meta_root_proto_msgTypes[7]
+	mi := &file_meta_root_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -584,7 +634,7 @@ func (x *RootPeerChange) String() string {
 func (*RootPeerChange) ProtoMessage() {}
 
 func (x *RootPeerChange) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[7]
+	mi := &file_meta_root_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -597,7 +647,7 @@ func (x *RootPeerChange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootPeerChange.ProtoReflect.Descriptor instead.
 func (*RootPeerChange) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{7}
+	return file_meta_root_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *RootPeerChange) GetRegionId() uint64 {
@@ -640,7 +690,7 @@ type RootLeaderTransfer struct {
 
 func (x *RootLeaderTransfer) Reset() {
 	*x = RootLeaderTransfer{}
-	mi := &file_meta_root_proto_msgTypes[8]
+	mi := &file_meta_root_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -652,7 +702,7 @@ func (x *RootLeaderTransfer) String() string {
 func (*RootLeaderTransfer) ProtoMessage() {}
 
 func (x *RootLeaderTransfer) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[8]
+	mi := &file_meta_root_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -665,7 +715,7 @@ func (x *RootLeaderTransfer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootLeaderTransfer.ProtoReflect.Descriptor instead.
 func (*RootLeaderTransfer) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{8}
+	return file_meta_root_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RootLeaderTransfer) GetRegionId() uint64 {
@@ -706,7 +756,7 @@ type RootPlacementPolicy struct {
 
 func (x *RootPlacementPolicy) Reset() {
 	*x = RootPlacementPolicy{}
-	mi := &file_meta_root_proto_msgTypes[9]
+	mi := &file_meta_root_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -718,7 +768,7 @@ func (x *RootPlacementPolicy) String() string {
 func (*RootPlacementPolicy) ProtoMessage() {}
 
 func (x *RootPlacementPolicy) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[9]
+	mi := &file_meta_root_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -731,7 +781,7 @@ func (x *RootPlacementPolicy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootPlacementPolicy.ProtoReflect.Descriptor instead.
 func (*RootPlacementPolicy) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{9}
+	return file_meta_root_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *RootPlacementPolicy) GetVersion() uint64 {
@@ -754,7 +804,8 @@ type RootEvent struct {
 	// Types that are valid to be assigned to Payload:
 	//
 	//	*RootEvent_StoreMembership
-	//	*RootEvent_RegionBootstrap
+	//	*RootEvent_RegionDescriptor
+	//	*RootEvent_RegionRemoval
 	//	*RootEvent_RangeSplit
 	//	*RootEvent_RangeMerge
 	//	*RootEvent_PeerChange
@@ -767,7 +818,7 @@ type RootEvent struct {
 
 func (x *RootEvent) Reset() {
 	*x = RootEvent{}
-	mi := &file_meta_root_proto_msgTypes[10]
+	mi := &file_meta_root_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -779,7 +830,7 @@ func (x *RootEvent) String() string {
 func (*RootEvent) ProtoMessage() {}
 
 func (x *RootEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[10]
+	mi := &file_meta_root_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -792,7 +843,7 @@ func (x *RootEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootEvent.ProtoReflect.Descriptor instead.
 func (*RootEvent) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{10}
+	return file_meta_root_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *RootEvent) GetKind() RootEventKind {
@@ -818,10 +869,19 @@ func (x *RootEvent) GetStoreMembership() *RootStoreMembership {
 	return nil
 }
 
-func (x *RootEvent) GetRegionBootstrap() *RootRegionBootstrap {
+func (x *RootEvent) GetRegionDescriptor() *RootRegionDescriptor {
 	if x != nil {
-		if x, ok := x.Payload.(*RootEvent_RegionBootstrap); ok {
-			return x.RegionBootstrap
+		if x, ok := x.Payload.(*RootEvent_RegionDescriptor); ok {
+			return x.RegionDescriptor
+		}
+	}
+	return nil
+}
+
+func (x *RootEvent) GetRegionRemoval() *RootRegionRemoval {
+	if x != nil {
+		if x, ok := x.Payload.(*RootEvent_RegionRemoval); ok {
+			return x.RegionRemoval
 		}
 	}
 	return nil
@@ -880,33 +940,39 @@ type RootEvent_StoreMembership struct {
 	StoreMembership *RootStoreMembership `protobuf:"bytes,2,opt,name=store_membership,json=storeMembership,proto3,oneof"`
 }
 
-type RootEvent_RegionBootstrap struct {
-	RegionBootstrap *RootRegionBootstrap `protobuf:"bytes,3,opt,name=region_bootstrap,json=regionBootstrap,proto3,oneof"`
+type RootEvent_RegionDescriptor struct {
+	RegionDescriptor *RootRegionDescriptor `protobuf:"bytes,3,opt,name=region_descriptor,json=regionDescriptor,proto3,oneof"`
+}
+
+type RootEvent_RegionRemoval struct {
+	RegionRemoval *RootRegionRemoval `protobuf:"bytes,4,opt,name=region_removal,json=regionRemoval,proto3,oneof"`
 }
 
 type RootEvent_RangeSplit struct {
-	RangeSplit *RootRangeSplit `protobuf:"bytes,4,opt,name=range_split,json=rangeSplit,proto3,oneof"`
+	RangeSplit *RootRangeSplit `protobuf:"bytes,5,opt,name=range_split,json=rangeSplit,proto3,oneof"`
 }
 
 type RootEvent_RangeMerge struct {
-	RangeMerge *RootRangeMerge `protobuf:"bytes,5,opt,name=range_merge,json=rangeMerge,proto3,oneof"`
+	RangeMerge *RootRangeMerge `protobuf:"bytes,6,opt,name=range_merge,json=rangeMerge,proto3,oneof"`
 }
 
 type RootEvent_PeerChange struct {
-	PeerChange *RootPeerChange `protobuf:"bytes,6,opt,name=peer_change,json=peerChange,proto3,oneof"`
+	PeerChange *RootPeerChange `protobuf:"bytes,7,opt,name=peer_change,json=peerChange,proto3,oneof"`
 }
 
 type RootEvent_LeaderTransfer struct {
-	LeaderTransfer *RootLeaderTransfer `protobuf:"bytes,7,opt,name=leader_transfer,json=leaderTransfer,proto3,oneof"`
+	LeaderTransfer *RootLeaderTransfer `protobuf:"bytes,8,opt,name=leader_transfer,json=leaderTransfer,proto3,oneof"`
 }
 
 type RootEvent_PlacementPolicy struct {
-	PlacementPolicy *RootPlacementPolicy `protobuf:"bytes,8,opt,name=placement_policy,json=placementPolicy,proto3,oneof"`
+	PlacementPolicy *RootPlacementPolicy `protobuf:"bytes,9,opt,name=placement_policy,json=placementPolicy,proto3,oneof"`
 }
 
 func (*RootEvent_StoreMembership) isRootEvent_Payload() {}
 
-func (*RootEvent_RegionBootstrap) isRootEvent_Payload() {}
+func (*RootEvent_RegionDescriptor) isRootEvent_Payload() {}
+
+func (*RootEvent_RegionRemoval) isRootEvent_Payload() {}
 
 func (*RootEvent_RangeSplit) isRootEvent_Payload() {}
 
@@ -939,11 +1005,13 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x05state\x18\x02 \x01(\v2\x17.nokv.meta.v1.RootStateR\x05state\"J\n" +
 	"\x13RootStoreMembership\x12\x19\n" +
 	"\bstore_id\x18\x01 \x01(\x04R\astoreId\x12\x18\n" +
-	"\aaddress\x18\x02 \x01(\tR\aaddress\"U\n" +
-	"\x13RootRegionBootstrap\x12>\n" +
+	"\aaddress\x18\x02 \x01(\tR\aaddress\"V\n" +
+	"\x14RootRegionDescriptor\x12>\n" +
 	"\n" +
 	"descriptor\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\n" +
-	"descriptor\"\xc1\x01\n" +
+	"descriptor\"0\n" +
+	"\x11RootRegionRemoval\x12\x1b\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\"\xc1\x01\n" +
 	"\x0eRootRangeSplit\x12(\n" +
 	"\x10parent_region_id\x18\x01 \x01(\x04R\x0eparentRegionId\x12\x1b\n" +
 	"\tsplit_key\x18\x02 \x01(\fR\bsplitKey\x122\n" +
@@ -969,38 +1037,41 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x0ftarget_store_id\x18\x04 \x01(\x04R\rtargetStoreId\"C\n" +
 	"\x13RootPlacementPolicy\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x04R\aversion\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"\xc7\x04\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"\x94\x05\n" +
 	"\tRootEvent\x12/\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1b.nokv.meta.v1.RootEventKindR\x04kind\x12N\n" +
-	"\x10store_membership\x18\x02 \x01(\v2!.nokv.meta.v1.RootStoreMembershipH\x00R\x0fstoreMembership\x12N\n" +
-	"\x10region_bootstrap\x18\x03 \x01(\v2!.nokv.meta.v1.RootRegionBootstrapH\x00R\x0fregionBootstrap\x12?\n" +
-	"\vrange_split\x18\x04 \x01(\v2\x1c.nokv.meta.v1.RootRangeSplitH\x00R\n" +
+	"\x10store_membership\x18\x02 \x01(\v2!.nokv.meta.v1.RootStoreMembershipH\x00R\x0fstoreMembership\x12Q\n" +
+	"\x11region_descriptor\x18\x03 \x01(\v2\".nokv.meta.v1.RootRegionDescriptorH\x00R\x10regionDescriptor\x12H\n" +
+	"\x0eregion_removal\x18\x04 \x01(\v2\x1f.nokv.meta.v1.RootRegionRemovalH\x00R\rregionRemoval\x12?\n" +
+	"\vrange_split\x18\x05 \x01(\v2\x1c.nokv.meta.v1.RootRangeSplitH\x00R\n" +
 	"rangeSplit\x12?\n" +
-	"\vrange_merge\x18\x05 \x01(\v2\x1c.nokv.meta.v1.RootRangeMergeH\x00R\n" +
+	"\vrange_merge\x18\x06 \x01(\v2\x1c.nokv.meta.v1.RootRangeMergeH\x00R\n" +
 	"rangeMerge\x12?\n" +
-	"\vpeer_change\x18\x06 \x01(\v2\x1c.nokv.meta.v1.RootPeerChangeH\x00R\n" +
+	"\vpeer_change\x18\a \x01(\v2\x1c.nokv.meta.v1.RootPeerChangeH\x00R\n" +
 	"peerChange\x12K\n" +
-	"\x0fleader_transfer\x18\a \x01(\v2 .nokv.meta.v1.RootLeaderTransferH\x00R\x0eleaderTransfer\x12N\n" +
-	"\x10placement_policy\x18\b \x01(\v2!.nokv.meta.v1.RootPlacementPolicyH\x00R\x0fplacementPolicyB\t\n" +
+	"\x0fleader_transfer\x18\b \x01(\v2 .nokv.meta.v1.RootLeaderTransferH\x00R\x0eleaderTransfer\x12N\n" +
+	"\x10placement_policy\x18\t \x01(\v2!.nokv.meta.v1.RootPlacementPolicyH\x00R\x0fplacementPolicyB\t\n" +
 	"\apayload*^\n" +
 	"\rAllocatorKind\x12\x1e\n" +
 	"\x1aALLOCATOR_KIND_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11ALLOCATOR_KIND_ID\x10\x01\x12\x16\n" +
-	"\x12ALLOCATOR_KIND_TSO\x10\x02*\xda\x03\n" +
+	"\x12ALLOCATOR_KIND_TSO\x10\x02*\xb2\x04\n" +
 	"\rRootEventKind\x12\x1f\n" +
 	"\x1bROOT_EVENT_KIND_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cROOT_EVENT_KIND_STORE_JOINED\x10\x01\x12\x1e\n" +
 	"\x1aROOT_EVENT_KIND_STORE_LEFT\x10\x02\x12)\n" +
 	"%ROOT_EVENT_KIND_STORE_MARKED_DRAINING\x10\x03\x12$\n" +
-	" ROOT_EVENT_KIND_REGION_BOOTSTRAP\x10\x04\x12*\n" +
-	"&ROOT_EVENT_KIND_REGION_SPLIT_REQUESTED\x10\x05\x12*\n" +
-	"&ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED\x10\x06\x12!\n" +
-	"\x1dROOT_EVENT_KIND_REGION_MERGED\x10\a\x12\x1e\n" +
-	"\x1aROOT_EVENT_KIND_PEER_ADDED\x10\b\x12 \n" +
-	"\x1cROOT_EVENT_KIND_PEER_REMOVED\x10\t\x12*\n" +
-	"&ROOT_EVENT_KIND_LEADER_TRANSFER_INTENT\x10\n" +
-	"\x12,\n" +
-	"(ROOT_EVENT_KIND_PLACEMENT_POLICY_CHANGED\x10\vB,Z*github.com/feichai0017/NoKV/pb/meta;metapbb\x06proto3"
+	" ROOT_EVENT_KIND_REGION_BOOTSTRAP\x10\x04\x12/\n" +
+	"+ROOT_EVENT_KIND_REGION_DESCRIPTOR_PUBLISHED\x10\x05\x12%\n" +
+	"!ROOT_EVENT_KIND_REGION_TOMBSTONED\x10\x06\x12*\n" +
+	"&ROOT_EVENT_KIND_REGION_SPLIT_REQUESTED\x10\a\x12*\n" +
+	"&ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED\x10\b\x12!\n" +
+	"\x1dROOT_EVENT_KIND_REGION_MERGED\x10\t\x12\x1e\n" +
+	"\x1aROOT_EVENT_KIND_PEER_ADDED\x10\n" +
+	"\x12 \n" +
+	"\x1cROOT_EVENT_KIND_PEER_REMOVED\x10\v\x12*\n" +
+	"&ROOT_EVENT_KIND_LEADER_TRANSFER_INTENT\x10\f\x12,\n" +
+	"(ROOT_EVENT_KIND_PLACEMENT_POLICY_CHANGED\x10\rB,Z*github.com/feichai0017/NoKV/pb/meta;metapbb\x06proto3"
 
 var (
 	file_meta_root_proto_rawDescOnce sync.Once
@@ -1015,45 +1086,47 @@ func file_meta_root_proto_rawDescGZIP() []byte {
 }
 
 var file_meta_root_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_meta_root_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_meta_root_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_meta_root_proto_goTypes = []any{
-	(AllocatorKind)(0),          // 0: nokv.meta.v1.AllocatorKind
-	(RootEventKind)(0),          // 1: nokv.meta.v1.RootEventKind
-	(*RootCursor)(nil),          // 2: nokv.meta.v1.RootCursor
-	(*RootState)(nil),           // 3: nokv.meta.v1.RootState
-	(*RootCommitInfo)(nil),      // 4: nokv.meta.v1.RootCommitInfo
-	(*RootStoreMembership)(nil), // 5: nokv.meta.v1.RootStoreMembership
-	(*RootRegionBootstrap)(nil), // 6: nokv.meta.v1.RootRegionBootstrap
-	(*RootRangeSplit)(nil),      // 7: nokv.meta.v1.RootRangeSplit
-	(*RootRangeMerge)(nil),      // 8: nokv.meta.v1.RootRangeMerge
-	(*RootPeerChange)(nil),      // 9: nokv.meta.v1.RootPeerChange
-	(*RootLeaderTransfer)(nil),  // 10: nokv.meta.v1.RootLeaderTransfer
-	(*RootPlacementPolicy)(nil), // 11: nokv.meta.v1.RootPlacementPolicy
-	(*RootEvent)(nil),           // 12: nokv.meta.v1.RootEvent
-	(*RegionDescriptor)(nil),    // 13: nokv.meta.v1.RegionDescriptor
+	(AllocatorKind)(0),           // 0: nokv.meta.v1.AllocatorKind
+	(RootEventKind)(0),           // 1: nokv.meta.v1.RootEventKind
+	(*RootCursor)(nil),           // 2: nokv.meta.v1.RootCursor
+	(*RootState)(nil),            // 3: nokv.meta.v1.RootState
+	(*RootCommitInfo)(nil),       // 4: nokv.meta.v1.RootCommitInfo
+	(*RootStoreMembership)(nil),  // 5: nokv.meta.v1.RootStoreMembership
+	(*RootRegionDescriptor)(nil), // 6: nokv.meta.v1.RootRegionDescriptor
+	(*RootRegionRemoval)(nil),    // 7: nokv.meta.v1.RootRegionRemoval
+	(*RootRangeSplit)(nil),       // 8: nokv.meta.v1.RootRangeSplit
+	(*RootRangeMerge)(nil),       // 9: nokv.meta.v1.RootRangeMerge
+	(*RootPeerChange)(nil),       // 10: nokv.meta.v1.RootPeerChange
+	(*RootLeaderTransfer)(nil),   // 11: nokv.meta.v1.RootLeaderTransfer
+	(*RootPlacementPolicy)(nil),  // 12: nokv.meta.v1.RootPlacementPolicy
+	(*RootEvent)(nil),            // 13: nokv.meta.v1.RootEvent
+	(*RegionDescriptor)(nil),     // 14: nokv.meta.v1.RegionDescriptor
 }
 var file_meta_root_proto_depIdxs = []int32{
 	2,  // 0: nokv.meta.v1.RootState.last_committed:type_name -> nokv.meta.v1.RootCursor
 	2,  // 1: nokv.meta.v1.RootCommitInfo.cursor:type_name -> nokv.meta.v1.RootCursor
 	3,  // 2: nokv.meta.v1.RootCommitInfo.state:type_name -> nokv.meta.v1.RootState
-	13, // 3: nokv.meta.v1.RootRegionBootstrap.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	13, // 4: nokv.meta.v1.RootRangeSplit.left:type_name -> nokv.meta.v1.RegionDescriptor
-	13, // 5: nokv.meta.v1.RootRangeSplit.right:type_name -> nokv.meta.v1.RegionDescriptor
-	13, // 6: nokv.meta.v1.RootRangeMerge.merged:type_name -> nokv.meta.v1.RegionDescriptor
-	13, // 7: nokv.meta.v1.RootPeerChange.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	14, // 3: nokv.meta.v1.RootRegionDescriptor.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	14, // 4: nokv.meta.v1.RootRangeSplit.left:type_name -> nokv.meta.v1.RegionDescriptor
+	14, // 5: nokv.meta.v1.RootRangeSplit.right:type_name -> nokv.meta.v1.RegionDescriptor
+	14, // 6: nokv.meta.v1.RootRangeMerge.merged:type_name -> nokv.meta.v1.RegionDescriptor
+	14, // 7: nokv.meta.v1.RootPeerChange.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
 	1,  // 8: nokv.meta.v1.RootEvent.kind:type_name -> nokv.meta.v1.RootEventKind
 	5,  // 9: nokv.meta.v1.RootEvent.store_membership:type_name -> nokv.meta.v1.RootStoreMembership
-	6,  // 10: nokv.meta.v1.RootEvent.region_bootstrap:type_name -> nokv.meta.v1.RootRegionBootstrap
-	7,  // 11: nokv.meta.v1.RootEvent.range_split:type_name -> nokv.meta.v1.RootRangeSplit
-	8,  // 12: nokv.meta.v1.RootEvent.range_merge:type_name -> nokv.meta.v1.RootRangeMerge
-	9,  // 13: nokv.meta.v1.RootEvent.peer_change:type_name -> nokv.meta.v1.RootPeerChange
-	10, // 14: nokv.meta.v1.RootEvent.leader_transfer:type_name -> nokv.meta.v1.RootLeaderTransfer
-	11, // 15: nokv.meta.v1.RootEvent.placement_policy:type_name -> nokv.meta.v1.RootPlacementPolicy
-	16, // [16:16] is the sub-list for method output_type
-	16, // [16:16] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	6,  // 10: nokv.meta.v1.RootEvent.region_descriptor:type_name -> nokv.meta.v1.RootRegionDescriptor
+	7,  // 11: nokv.meta.v1.RootEvent.region_removal:type_name -> nokv.meta.v1.RootRegionRemoval
+	8,  // 12: nokv.meta.v1.RootEvent.range_split:type_name -> nokv.meta.v1.RootRangeSplit
+	9,  // 13: nokv.meta.v1.RootEvent.range_merge:type_name -> nokv.meta.v1.RootRangeMerge
+	10, // 14: nokv.meta.v1.RootEvent.peer_change:type_name -> nokv.meta.v1.RootPeerChange
+	11, // 15: nokv.meta.v1.RootEvent.leader_transfer:type_name -> nokv.meta.v1.RootLeaderTransfer
+	12, // 16: nokv.meta.v1.RootEvent.placement_policy:type_name -> nokv.meta.v1.RootPlacementPolicy
+	17, // [17:17] is the sub-list for method output_type
+	17, // [17:17] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_meta_root_proto_init() }
@@ -1062,9 +1135,10 @@ func file_meta_root_proto_init() {
 		return
 	}
 	file_meta_descriptor_proto_init()
-	file_meta_root_proto_msgTypes[10].OneofWrappers = []any{
+	file_meta_root_proto_msgTypes[11].OneofWrappers = []any{
 		(*RootEvent_StoreMembership)(nil),
-		(*RootEvent_RegionBootstrap)(nil),
+		(*RootEvent_RegionDescriptor)(nil),
+		(*RootEvent_RegionRemoval)(nil),
 		(*RootEvent_RangeSplit)(nil),
 		(*RootEvent_RangeMerge)(nil),
 		(*RootEvent_PeerChange)(nil),
@@ -1077,7 +1151,7 @@ func file_meta_root_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_meta_root_proto_rawDesc), len(file_meta_root_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   11,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

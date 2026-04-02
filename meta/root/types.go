@@ -46,6 +46,8 @@ const (
 	EventKindStoreLeft
 	EventKindStoreMarkedDraining
 	EventKindRegionBootstrap
+	EventKindRegionDescriptorPublished
+	EventKindRegionTombstoned
 	EventKindRegionSplitRequested
 	EventKindRegionSplitCommitted
 	EventKindRegionMerged
@@ -62,9 +64,14 @@ type StoreMembership struct {
 	Address string
 }
 
-// RegionBootstrap records the initial descriptor of one newly rooted region.
-type RegionBootstrap struct {
+// RegionDescriptorRecord carries one descriptor snapshot into the root log.
+type RegionDescriptorRecord struct {
 	Descriptor descriptor.Descriptor
+}
+
+// RegionRemoval removes one region descriptor from the rooted topology view.
+type RegionRemoval struct {
+	RegionID uint64
 }
 
 // RangeSplit describes one split intent or committed split transition.
@@ -112,7 +119,8 @@ type Event struct {
 	Kind EventKind
 
 	StoreMembership *StoreMembership
-	RegionBootstrap *RegionBootstrap
+	RegionDescriptor *RegionDescriptorRecord
+	RegionRemoval   *RegionRemoval
 	RangeSplit      *RangeSplit
 	RangeMerge      *RangeMerge
 	PeerChange      *PeerChange
