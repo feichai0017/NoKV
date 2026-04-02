@@ -4,15 +4,17 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	errorpb "github.com/feichai0017/NoKV/pb/error"
+	metapb "github.com/feichai0017/NoKV/pb/legacy"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"time"
 
-	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
-func (s *Store) validateCommand(req *pb.RaftCmdRequest) (*peer.Peer, localmeta.RegionMeta, *pb.RaftCmdResponse, error) {
+func (s *Store) validateCommand(req *raftcmdpb.RaftCmdRequest) (*peer.Peer, localmeta.RegionMeta, *raftcmdpb.RaftCmdResponse, error) {
 	if s == nil {
 		return nil, localmeta.RegionMeta{}, nil, fmt.Errorf("raftstore: store is nil")
 	}
@@ -20,37 +22,37 @@ func (s *Store) validateCommand(req *pb.RaftCmdRequest) (*peer.Peer, localmeta.R
 		return nil, localmeta.RegionMeta{}, nil, fmt.Errorf("raftstore: command is nil")
 	}
 	if req.Header == nil {
-		req.Header = &pb.CmdHeader{}
+		req.Header = &raftcmdpb.CmdHeader{}
 	}
 	regionID := req.Header.GetRegionId()
 	if regionID == 0 {
 		return nil, localmeta.RegionMeta{}, nil, fmt.Errorf("raftstore: region id missing")
 	}
 	if requestStoreID := req.Header.GetStoreId(); requestStoreID != 0 && s.storeID != 0 && requestStoreID != s.storeID {
-		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: storeNotMatchError(requestStoreID, s.storeID)}
+		resp := &raftcmdpb.RaftCmdResponse{Header: req.Header, RegionError: storeNotMatchError(requestStoreID, s.storeID)}
 		return nil, localmeta.RegionMeta{}, resp, nil
 	}
 	meta, ok := s.RegionMetaByID(regionID)
 	if !ok {
-		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: regionNotFoundError(regionID)}
+		resp := &raftcmdpb.RaftCmdResponse{Header: req.Header, RegionError: regionNotFoundError(regionID)}
 		return nil, localmeta.RegionMeta{}, resp, nil
 	}
 	if err := validateRegionEpoch(req.Header.GetRegionEpoch(), meta); err != nil {
-		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: err}
+		resp := &raftcmdpb.RaftCmdResponse{Header: req.Header, RegionError: err}
 		return nil, meta, resp, nil
 	}
 	if err := validateRequestKeys(meta, req); err != nil {
-		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: err}
+		resp := &raftcmdpb.RaftCmdResponse{Header: req.Header, RegionError: err}
 		return nil, meta, resp, nil
 	}
 	peer := s.regionMgr().peer(regionID)
 	if peer == nil {
-		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: regionNotFoundError(regionID)}
+		resp := &raftcmdpb.RaftCmdResponse{Header: req.Header, RegionError: regionNotFoundError(regionID)}
 		return nil, meta, resp, nil
 	}
 	status := peer.Status()
 	if status.RaftState != myraft.StateLeader {
-		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: notLeaderError(meta, status.Lead)}
+		resp := &raftcmdpb.RaftCmdResponse{Header: req.Header, RegionError: notLeaderError(meta, status.Lead)}
 		return nil, meta, resp, nil
 	}
 	req.Header.PeerId = peer.ID()
@@ -60,7 +62,7 @@ func (s *Store) validateCommand(req *pb.RaftCmdRequest) (*peer.Peer, localmeta.R
 // ProposeCommand submits a raft command to the leader hosting the target
 // region. When the store is not leader or the request header is invalid the
 // returned response includes an appropriate RegionError.
-func (s *Store) ProposeCommand(ctx context.Context, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+func (s *Store) ProposeCommand(ctx context.Context, req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 	peer, _, resp, err := s.validateCommand(req)
 	if err != nil {
 		return nil, err
@@ -98,7 +100,7 @@ func (s *Store) ProposeCommand(ctx context.Context, req *pb.RaftCmdRequest) (*pb
 			return nil, result.err
 		}
 		if result.resp == nil {
-			return &pb.RaftCmdResponse{Header: req.Header}, nil
+			return &raftcmdpb.RaftCmdResponse{Header: req.Header}, nil
 		}
 		return result.resp, nil
 	case <-ctx.Done():
@@ -110,7 +112,7 @@ func (s *Store) ProposeCommand(ctx context.Context, req *pb.RaftCmdRequest) (*pb
 // ReadCommand executes the provided read-only raft command locally on the
 // leader. The command must only include read operations (Get/Scan). The method
 // returns a RegionError when the store is not leader for the target region.
-func (s *Store) ReadCommand(ctx context.Context, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+func (s *Store) ReadCommand(ctx context.Context, req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 	peer, meta, regionResp, err := s.validateCommand(req)
 	if err != nil {
 		return nil, err
@@ -128,7 +130,7 @@ func (s *Store) ReadCommand(ctx context.Context, req *pb.RaftCmdRequest) (*pb.Ra
 		return nil, fmt.Errorf("raftstore: command apply without handler")
 	}
 	if req.Header == nil {
-		req.Header = &pb.CmdHeader{}
+		req.Header = &raftcmdpb.CmdHeader{}
 	}
 	if s.commandPipe() != nil && req.Header.GetRequestId() == 0 {
 		req.Header.RequestId = s.commandPipe().nextProposalID()
@@ -160,7 +162,7 @@ func (s *Store) ReadCommand(ctx context.Context, req *pb.RaftCmdRequest) (*pb.Ra
 	return out, nil
 }
 
-func isReadOnlyRequest(req *pb.RaftCmdRequest) bool {
+func isReadOnlyRequest(req *raftcmdpb.RaftCmdRequest) bool {
 	if req == nil {
 		return false
 	}
@@ -169,7 +171,7 @@ func isReadOnlyRequest(req *pb.RaftCmdRequest) bool {
 			continue
 		}
 		switch r.GetCmdType() {
-		case pb.CmdType_CMD_GET, pb.CmdType_CMD_SCAN:
+		case raftcmdpb.CmdType_CMD_GET, raftcmdpb.CmdType_CMD_SCAN:
 			continue
 		default:
 			return false
@@ -178,7 +180,7 @@ func isReadOnlyRequest(req *pb.RaftCmdRequest) bool {
 	return true
 }
 
-func validateRegionEpoch(reqEpoch *pb.RegionEpoch, meta localmeta.RegionMeta) *pb.RegionError {
+func validateRegionEpoch(reqEpoch *metapb.RegionEpoch, meta localmeta.RegionMeta) *errorpb.RegionError {
 	if reqEpoch == nil {
 		return epochNotMatchError(&meta)
 	}
@@ -188,7 +190,7 @@ func validateRegionEpoch(reqEpoch *pb.RegionEpoch, meta localmeta.RegionMeta) *p
 	return nil
 }
 
-func validateRequestKeys(meta localmeta.RegionMeta, req *pb.RaftCmdRequest) *pb.RegionError {
+func validateRequestKeys(meta localmeta.RegionMeta, req *raftcmdpb.RaftCmdRequest) *errorpb.RegionError {
 	if req == nil {
 		return nil
 	}
@@ -197,17 +199,17 @@ func validateRequestKeys(meta localmeta.RegionMeta, req *pb.RaftCmdRequest) *pb.
 			continue
 		}
 		switch r.GetCmdType() {
-		case pb.CmdType_CMD_GET:
+		case raftcmdpb.CmdType_CMD_GET:
 			key := r.GetGet().GetKey()
 			if len(key) > 0 && !keyInRange(meta, key) {
 				return keyNotInRegionError(meta, key)
 			}
-		case pb.CmdType_CMD_SCAN:
+		case raftcmdpb.CmdType_CMD_SCAN:
 			start := r.GetScan().GetStartKey()
 			if len(start) > 0 && !keyInRange(meta, start) {
 				return keyNotInRegionError(meta, start)
 			}
-		case pb.CmdType_CMD_PREWRITE:
+		case raftcmdpb.CmdType_CMD_PREWRITE:
 			for _, mut := range r.GetPrewrite().GetMutations() {
 				if mut == nil {
 					continue
@@ -217,25 +219,25 @@ func validateRequestKeys(meta localmeta.RegionMeta, req *pb.RaftCmdRequest) *pb.
 					return keyNotInRegionError(meta, key)
 				}
 			}
-		case pb.CmdType_CMD_COMMIT:
+		case raftcmdpb.CmdType_CMD_COMMIT:
 			for _, key := range r.GetCommit().GetKeys() {
 				if len(key) > 0 && !keyInRange(meta, key) {
 					return keyNotInRegionError(meta, key)
 				}
 			}
-		case pb.CmdType_CMD_BATCH_ROLLBACK:
+		case raftcmdpb.CmdType_CMD_BATCH_ROLLBACK:
 			for _, key := range r.GetBatchRollback().GetKeys() {
 				if len(key) > 0 && !keyInRange(meta, key) {
 					return keyNotInRegionError(meta, key)
 				}
 			}
-		case pb.CmdType_CMD_RESOLVE_LOCK:
+		case raftcmdpb.CmdType_CMD_RESOLVE_LOCK:
 			for _, key := range r.GetResolveLock().GetKeys() {
 				if len(key) > 0 && !keyInRange(meta, key) {
 					return keyNotInRegionError(meta, key)
 				}
 			}
-		case pb.CmdType_CMD_CHECK_TXN_STATUS:
+		case raftcmdpb.CmdType_CMD_CHECK_TXN_STATUS:
 			key := r.GetCheckTxnStatus().GetPrimaryKey()
 			if len(key) > 0 && !keyInRange(meta, key) {
 				return keyNotInRegionError(meta, key)
@@ -260,7 +262,7 @@ func keyInRange(meta localmeta.RegionMeta, key []byte) bool {
 	return true
 }
 
-func trimScanResponse(meta localmeta.RegionMeta, req *pb.RaftCmdRequest, resp *pb.RaftCmdResponse) {
+func trimScanResponse(meta localmeta.RegionMeta, req *raftcmdpb.RaftCmdRequest, resp *raftcmdpb.RaftCmdResponse) {
 	if req == nil || resp == nil {
 		return
 	}
@@ -269,7 +271,7 @@ func trimScanResponse(meta localmeta.RegionMeta, req *pb.RaftCmdRequest, resp *p
 	}
 	requests := req.GetRequests()
 	for i, r := range requests {
-		if r == nil || r.GetCmdType() != pb.CmdType_CMD_SCAN {
+		if r == nil || r.GetCmdType() != raftcmdpb.CmdType_CMD_SCAN {
 			continue
 		}
 		if i >= len(resp.Responses) {
@@ -296,60 +298,60 @@ func trimScanResponse(meta localmeta.RegionMeta, req *pb.RaftCmdRequest, resp *p
 	}
 }
 
-func epochNotMatchError(meta *localmeta.RegionMeta) *pb.RegionError {
-	var current *pb.RegionEpoch
-	var regions []*pb.RegionMeta
+func epochNotMatchError(meta *localmeta.RegionMeta) *errorpb.RegionError {
+	var current *metapb.RegionEpoch
+	var regions []*metapb.RegionMeta
 	if meta != nil {
-		current = &pb.RegionEpoch{
+		current = &metapb.RegionEpoch{
 			ConfVer: meta.Epoch.ConfVersion,
 			Version: meta.Epoch.Version,
 		}
 		regions = append(regions, regionMetaToPB(*meta))
 	}
-	return &pb.RegionError{
-		EpochNotMatch: &pb.EpochNotMatch{
+	return &errorpb.RegionError{
+		EpochNotMatch: &errorpb.EpochNotMatch{
 			CurrentEpoch: current,
 			Regions:      regions,
 		},
 	}
 }
 
-func notLeaderError(meta localmeta.RegionMeta, leaderPeerID uint64) *pb.RegionError {
-	var leader *pb.RegionPeer
+func notLeaderError(meta localmeta.RegionMeta, leaderPeerID uint64) *errorpb.RegionError {
+	var leader *metapb.RegionPeer
 	if leaderPeerID != 0 {
 		for _, p := range meta.Peers {
 			if p.PeerID == leaderPeerID {
-				leader = &pb.RegionPeer{StoreId: p.StoreID, PeerId: p.PeerID}
+				leader = &metapb.RegionPeer{StoreId: p.StoreID, PeerId: p.PeerID}
 				break
 			}
 		}
 	}
-	return &pb.RegionError{
-		NotLeader: &pb.NotLeader{
+	return &errorpb.RegionError{
+		NotLeader: &errorpb.NotLeader{
 			RegionId: meta.ID,
 			Leader:   leader,
 		},
 	}
 }
 
-func storeNotMatchError(requestStoreID, actualStoreID uint64) *pb.RegionError {
-	return &pb.RegionError{
-		StoreNotMatch: &pb.StoreNotMatch{
+func storeNotMatchError(requestStoreID, actualStoreID uint64) *errorpb.RegionError {
+	return &errorpb.RegionError{
+		StoreNotMatch: &errorpb.StoreNotMatch{
 			RequestStoreId: requestStoreID,
 			ActualStoreId:  actualStoreID,
 		},
 	}
 }
 
-func regionNotFoundError(regionID uint64) *pb.RegionError {
-	return &pb.RegionError{
-		RegionNotFound: &pb.RegionNotFound{RegionId: regionID},
+func regionNotFoundError(regionID uint64) *errorpb.RegionError {
+	return &errorpb.RegionError{
+		RegionNotFound: &errorpb.RegionNotFound{RegionId: regionID},
 	}
 }
 
-func keyNotInRegionError(meta localmeta.RegionMeta, key []byte) *pb.RegionError {
-	return &pb.RegionError{
-		KeyNotInRegion: &pb.KeyNotInRegion{
+func keyNotInRegionError(meta localmeta.RegionMeta, key []byte) *errorpb.RegionError {
+	return &errorpb.RegionError{
+		KeyNotInRegion: &errorpb.KeyNotInRegion{
 			Key:      append([]byte(nil), key...),
 			RegionId: meta.ID,
 			StartKey: append([]byte(nil), meta.StartKey...),

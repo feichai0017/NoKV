@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"context"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	adminpb "github.com/feichai0017/NoKV/pb/admin"
+	metapb "github.com/feichai0017/NoKV/pb/legacy"
 	"io"
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -202,13 +203,13 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 	sourceSvc := NewServiceWithSnapshot(sourceStore, sourceDB)
 	targetSvc := NewServiceWithSnapshot(targetStore, targetDB)
 
-	exported, err := sourceSvc.ExportRegionSnapshot(context.Background(), &pb.ExportRegionSnapshotRequest{
+	exported, err := sourceSvc.ExportRegionSnapshot(context.Background(), &adminpb.ExportRegionSnapshotRequest{
 		RegionId: region.ID,
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, exported.GetSnapshot())
 
-	installed, err := targetSvc.ImportRegionSnapshot(context.Background(), &pb.ImportRegionSnapshotRequest{
+	installed, err := targetSvc.ImportRegionSnapshot(context.Background(), &adminpb.ImportRegionSnapshotRequest{
 		Snapshot: exported.GetSnapshot(),
 	})
 	require.NoError(t, err)
@@ -229,22 +230,22 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 
 type exportRegionSnapshotStreamCapture struct {
 	ctx    context.Context
-	chunks []*pb.ExportRegionSnapshotStreamResponse
+	chunks []*adminpb.ExportRegionSnapshotStreamResponse
 }
 
-func (s *exportRegionSnapshotStreamCapture) Send(resp *pb.ExportRegionSnapshotStreamResponse) error {
-	copyResp := &pb.ExportRegionSnapshotStreamResponse{
+func (s *exportRegionSnapshotStreamCapture) Send(resp *adminpb.ExportRegionSnapshotStreamResponse) error {
+	copyResp := &adminpb.ExportRegionSnapshotStreamResponse{
 		SnapshotHeader: append([]byte(nil), resp.GetSnapshotHeader()...),
 		Chunk:          append([]byte(nil), resp.GetChunk()...),
 	}
 	if resp.GetRegion() != nil {
-		copyResp.Region = &pb.RegionMeta{
+		copyResp.Region = &metapb.RegionMeta{
 			Id:               resp.GetRegion().GetId(),
 			StartKey:         append([]byte(nil), resp.GetRegion().GetStartKey()...),
 			EndKey:           append([]byte(nil), resp.GetRegion().GetEndKey()...),
 			EpochVersion:     resp.GetRegion().GetEpochVersion(),
 			EpochConfVersion: resp.GetRegion().GetEpochConfVersion(),
-			Peers:            append([]*pb.RegionPeer(nil), resp.GetRegion().GetPeers()...),
+			Peers:            append([]*metapb.RegionPeer(nil), resp.GetRegion().GetPeers()...),
 		}
 	}
 	s.chunks = append(s.chunks, copyResp)
@@ -260,12 +261,12 @@ func (s *exportRegionSnapshotStreamCapture) RecvMsg(any) error            { retu
 
 type importRegionSnapshotStreamFeed struct {
 	ctx  context.Context
-	reqs []*pb.ImportRegionSnapshotStreamRequest
+	reqs []*adminpb.ImportRegionSnapshotStreamRequest
 	idx  int
-	resp *pb.ImportRegionSnapshotResponse
+	resp *adminpb.ImportRegionSnapshotResponse
 }
 
-func (s *importRegionSnapshotStreamFeed) Recv() (*pb.ImportRegionSnapshotStreamRequest, error) {
+func (s *importRegionSnapshotStreamFeed) Recv() (*adminpb.ImportRegionSnapshotStreamRequest, error) {
 	if s.idx >= len(s.reqs) {
 		return nil, io.EOF
 	}
@@ -274,7 +275,7 @@ func (s *importRegionSnapshotStreamFeed) Recv() (*pb.ImportRegionSnapshotStreamR
 	return req, nil
 }
 
-func (s *importRegionSnapshotStreamFeed) SendAndClose(resp *pb.ImportRegionSnapshotResponse) error {
+func (s *importRegionSnapshotStreamFeed) SendAndClose(resp *adminpb.ImportRegionSnapshotResponse) error {
 	s.resp = resp
 	return nil
 }
@@ -290,8 +291,8 @@ func TestServiceImportRegionSnapshotStreamRejectsMissingHeader(t *testing.T) {
 	svc := &Service{store: &store.Store{}, snapshot: noopSnapshotStore{}}
 	stream := &importRegionSnapshotStreamFeed{
 		ctx: context.Background(),
-		reqs: []*pb.ImportRegionSnapshotStreamRequest{{
-			Region: &pb.RegionMeta{Id: 1},
+		reqs: []*adminpb.ImportRegionSnapshotStreamRequest{{
+			Region: &metapb.RegionMeta{Id: 1},
 			Chunk:  []byte("payload"),
 		}},
 	}
@@ -306,7 +307,7 @@ func TestServiceImportRegionSnapshotStreamRejectsMissingRegion(t *testing.T) {
 	require.NoError(t, err)
 	stream := &importRegionSnapshotStreamFeed{
 		ctx: context.Background(),
-		reqs: []*pb.ImportRegionSnapshotStreamRequest{{
+		reqs: []*adminpb.ImportRegionSnapshotStreamRequest{{
 			SnapshotHeader: header,
 			Chunk:          []byte("payload"),
 		}},
@@ -322,10 +323,10 @@ func TestServiceImportRegionSnapshotStreamRejectsRepeatedHeader(t *testing.T) {
 	require.NoError(t, err)
 	stream := &importRegionSnapshotStreamFeed{
 		ctx: context.Background(),
-		reqs: []*pb.ImportRegionSnapshotStreamRequest{
+		reqs: []*adminpb.ImportRegionSnapshotStreamRequest{
 			{
 				SnapshotHeader: header,
-				Region: &pb.RegionMeta{
+				Region: &metapb.RegionMeta{
 					Id:       1,
 					StartKey: []byte("a"),
 					EndKey:   []byte("z"),
@@ -471,14 +472,14 @@ func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 	targetSvc := NewServiceWithSnapshot(targetStore, targetDB)
 
 	exportStream := &exportRegionSnapshotStreamCapture{ctx: context.Background()}
-	require.NoError(t, sourceSvc.ExportRegionSnapshotStream(&pb.ExportRegionSnapshotStreamRequest{
+	require.NoError(t, sourceSvc.ExportRegionSnapshotStream(&adminpb.ExportRegionSnapshotStreamRequest{
 		RegionId: region.ID,
 	}, exportStream))
 	require.NotEmpty(t, exportStream.chunks)
 
-	importReqs := make([]*pb.ImportRegionSnapshotStreamRequest, 0, len(exportStream.chunks))
+	importReqs := make([]*adminpb.ImportRegionSnapshotStreamRequest, 0, len(exportStream.chunks))
 	for _, chunk := range exportStream.chunks {
-		importReqs = append(importReqs, &pb.ImportRegionSnapshotStreamRequest{
+		importReqs = append(importReqs, &adminpb.ImportRegionSnapshotStreamRequest{
 			SnapshotHeader: append([]byte(nil), chunk.GetSnapshotHeader()...),
 			Region:         chunk.GetRegion(),
 			Chunk:          append([]byte(nil), chunk.GetChunk()...),
@@ -631,26 +632,26 @@ func TestServiceImportRegionSnapshotStreamRejectsMismatchedRegionMeta(t *testing
 	targetSvc := NewServiceWithSnapshot(targetStore, targetDB)
 
 	exportStream := &exportRegionSnapshotStreamCapture{ctx: context.Background()}
-	require.NoError(t, sourceSvc.ExportRegionSnapshotStream(&pb.ExportRegionSnapshotStreamRequest{
+	require.NoError(t, sourceSvc.ExportRegionSnapshotStream(&adminpb.ExportRegionSnapshotStreamRequest{
 		RegionId: region.ID,
 	}, exportStream))
 	require.NotEmpty(t, exportStream.chunks)
 
-	importReqs := make([]*pb.ImportRegionSnapshotStreamRequest, 0, len(exportStream.chunks))
+	importReqs := make([]*adminpb.ImportRegionSnapshotStreamRequest, 0, len(exportStream.chunks))
 	for i, chunk := range exportStream.chunks {
-		req := &pb.ImportRegionSnapshotStreamRequest{
+		req := &adminpb.ImportRegionSnapshotStreamRequest{
 			SnapshotHeader: append([]byte(nil), chunk.GetSnapshotHeader()...),
 			Region:         chunk.GetRegion(),
 			Chunk:          append([]byte(nil), chunk.GetChunk()...),
 		}
 		if i == 0 {
-			req.Region = &pb.RegionMeta{
+			req.Region = &metapb.RegionMeta{
 				Id:               chunk.GetRegion().GetId(),
 				StartKey:         append([]byte(nil), chunk.GetRegion().GetStartKey()...),
 				EndKey:           []byte("zz"),
 				EpochVersion:     chunk.GetRegion().GetEpochVersion(),
 				EpochConfVersion: chunk.GetRegion().GetEpochConfVersion(),
-				Peers:            append([]*pb.RegionPeer(nil), chunk.GetRegion().GetPeers()...),
+				Peers:            append([]*metapb.RegionPeer(nil), chunk.GetRegion().GetPeers()...),
 			}
 		}
 		importReqs = append(importReqs, req)

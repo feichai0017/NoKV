@@ -2,10 +2,10 @@ package peer
 
 import (
 	"context"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
 
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/stretchr/testify/require"
 
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -114,12 +114,12 @@ func TestDecodeAdminCommand(t *testing.T) {
 		t.Fatalf("expected error for short admin command")
 	}
 
-	cmd := &pb.AdminCommand{Type: pb.AdminCommand_SPLIT}
+	cmd := &raftcmdpb.AdminCommand{Type: raftcmdpb.AdminCommand_SPLIT}
 	data, err := proto.Marshal(cmd)
 	require.NoError(t, err)
 	decoded, err := decodeAdminCommand(append([]byte{adminCommandPrefix}, data...))
 	require.NoError(t, err)
-	require.Equal(t, pb.AdminCommand_SPLIT, decoded.GetType())
+	require.Equal(t, raftcmdpb.AdminCommand_SPLIT, decoded.GetType())
 }
 
 func TestPeerRegionMetaSetters(t *testing.T) {
@@ -184,7 +184,7 @@ func TestPeerProposeAdminAndConfChange(t *testing.T) {
 		t.Fatalf("expected error for empty admin command")
 	}
 
-	cmd := &pb.AdminCommand{Type: pb.AdminCommand_SPLIT}
+	cmd := &raftcmdpb.AdminCommand{Type: raftcmdpb.AdminCommand_SPLIT}
 	data, err := proto.Marshal(cmd)
 	require.NoError(t, err)
 	require.NoError(t, peer.ProposeAdmin(data))

@@ -3,9 +3,9 @@ package migrate
 import (
 	"context"
 	"fmt"
+	adminpb "github.com/feichai0017/NoKV/pb/admin"
+	metapb "github.com/feichai0017/NoKV/pb/legacy"
 	"time"
-
-	"github.com/feichai0017/NoKV/pb"
 )
 
 // RemovePeerConfig defines one explicit peer-removal request.
@@ -23,17 +23,17 @@ type RemovePeerConfig struct {
 
 // RemovePeerResult reports the observed state after one remove-peer request.
 type RemovePeerResult struct {
-	Addr             string         `json:"addr"`
-	TargetAdminAddr  string         `json:"target_admin_addr,omitempty"`
-	RegionID         uint64         `json:"region_id"`
-	PeerID           uint64         `json:"peer_id"`
-	LeaderKnown      bool           `json:"leader_known"`
-	LeaderRegion     *pb.RegionMeta `json:"leader_region,omitempty"`
-	TargetKnown      bool           `json:"target_known"`
-	TargetHosted     bool           `json:"target_hosted"`
-	TargetLocalPeer  uint64         `json:"target_local_peer_id,omitempty"`
-	TargetAppliedIdx uint64         `json:"target_applied_index,omitempty"`
-	Waited           bool           `json:"waited"`
+	Addr             string             `json:"addr"`
+	TargetAdminAddr  string             `json:"target_admin_addr,omitempty"`
+	RegionID         uint64             `json:"region_id"`
+	PeerID           uint64             `json:"peer_id"`
+	LeaderKnown      bool               `json:"leader_known"`
+	LeaderRegion     *metapb.RegionMeta `json:"leader_region,omitempty"`
+	TargetKnown      bool               `json:"target_known"`
+	TargetHosted     bool               `json:"target_hosted"`
+	TargetLocalPeer  uint64             `json:"target_local_peer_id,omitempty"`
+	TargetAppliedIdx uint64             `json:"target_applied_index,omitempty"`
+	Waited           bool               `json:"waited"`
 }
 
 // RemovePeer removes one peer from a region and optionally waits until the
@@ -62,7 +62,7 @@ func RemovePeer(ctx context.Context, cfg RemovePeerConfig) (RemovePeerResult, er
 		}
 	}()
 
-	resp, err := leaderClient.RemovePeer(ctx, &pb.RemovePeerRequest{RegionId: cfg.RegionID, PeerId: cfg.PeerID})
+	resp, err := leaderClient.RemovePeer(ctx, &adminpb.RemovePeerRequest{RegionId: cfg.RegionID, PeerId: cfg.PeerID})
 	if err != nil {
 		return RemovePeerResult{}, err
 	}
@@ -140,7 +140,7 @@ func waitForLeaderPeerRemoval(ctx context.Context, client AdminClient, regionID,
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		status, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: regionID})
+		status, err := client.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: regionID})
 		if err != nil {
 			return fmt.Errorf("migrate: poll leader region status after remove: %w", err)
 		}
@@ -163,7 +163,7 @@ func waitForTargetRemoval(ctx context.Context, client AdminClient, regionID, pee
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		status, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: regionID})
+		status, err := client.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: regionID})
 		if err != nil {
 			return fmt.Errorf("migrate: poll target region status after remove: %w", err)
 		}

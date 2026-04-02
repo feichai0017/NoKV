@@ -1,17 +1,17 @@
 package command
 
 import (
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/feichai0017/NoKV/pb"
 )
 
 func TestEncodeDecodeRoundTrip(t *testing.T) {
-	req := &pb.RaftCmdRequest{
-		Header:   &pb.CmdHeader{RegionId: 42},
-		Requests: []*pb.Request{{CmdType: pb.CmdType_CMD_GET, Cmd: &pb.Request_Get{Get: &pb.GetRequest{Key: []byte("a"), Version: 5}}}},
+	req := &raftcmdpb.RaftCmdRequest{
+		Header:   &raftcmdpb.CmdHeader{RegionId: 42},
+		Requests: []*raftcmdpb.Request{{CmdType: raftcmdpb.CmdType_CMD_GET, Cmd: &raftcmdpb.Request_Get{Get: &kvrpcpb.GetRequest{Key: []byte("a"), Version: 5}}}},
 	}
 	payload, err := Encode(req)
 	require.NoError(t, err)

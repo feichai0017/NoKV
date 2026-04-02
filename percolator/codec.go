@@ -3,8 +3,7 @@ package percolator
 import (
 	"encoding/binary"
 	"fmt"
-
-	"github.com/feichai0017/NoKV/pb"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
 const (
@@ -18,7 +17,7 @@ type Lock struct {
 	Primary     []byte
 	Ts          uint64
 	TTL         uint64
-	Kind        pb.Mutation_Op
+	Kind        kvrpcpb.Mutation_Op
 	MinCommitTs uint64
 }
 
@@ -73,7 +72,7 @@ func DecodeLock(data []byte) (Lock, error) {
 	if pos >= len(data) {
 		return Lock{}, fmt.Errorf("mvcc: lock kind missing")
 	}
-	lock.Kind = pb.Mutation_Op(data[pos])
+	lock.Kind = kvrpcpb.Mutation_Op(data[pos])
 	pos++
 	if pos < len(data) {
 		if lock.MinCommitTs, err = readUvarint(); err != nil {
@@ -86,7 +85,7 @@ func DecodeLock(data []byte) (Lock, error) {
 // Write captures the payload stored in the write column family once a
 // transaction commits.
 type Write struct {
-	Kind       pb.Mutation_Op
+	Kind       kvrpcpb.Mutation_Op
 	StartTs    uint64
 	ShortValue []byte
 	ExpiresAt  uint64
@@ -122,7 +121,7 @@ func DecodeWrite(data []byte) (Write, error) {
 		return Write{}, fmt.Errorf("mvcc: unsupported write version %d", data[0])
 	}
 	pos := 1
-	write := Write{Kind: pb.Mutation_Op(data[pos])}
+	write := Write{Kind: kvrpcpb.Mutation_Op(data[pos])}
 	pos++
 	startTs, n := binary.Uvarint(data[pos:])
 	if n <= 0 {

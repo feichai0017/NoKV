@@ -2,9 +2,9 @@ package store
 
 import (
 	"fmt"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"sync"
 
-	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 )
@@ -14,7 +14,7 @@ type commandProposal struct {
 }
 
 type proposalResult struct {
-	resp *pb.RaftCmdResponse
+	resp *raftcmdpb.RaftCmdResponse
 	err  error
 }
 
@@ -22,10 +22,10 @@ type commandPipeline struct {
 	mu        sync.Mutex
 	seq       uint64
 	proposals map[uint64]*commandProposal
-	applier   func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
+	applier   func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error)
 }
 
-func newCommandPipeline(applier func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)) *commandPipeline {
+func newCommandPipeline(applier func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error)) *commandPipeline {
 	return &commandPipeline{
 		proposals: make(map[uint64]*commandProposal),
 		applier:   applier,
@@ -65,7 +65,7 @@ func (cp *commandPipeline) removeProposal(id uint64) {
 	cp.mu.Unlock()
 }
 
-func (cp *commandPipeline) completeProposal(id uint64, resp *pb.RaftCmdResponse, err error) {
+func (cp *commandPipeline) completeProposal(id uint64, resp *raftcmdpb.RaftCmdResponse, err error) {
 	if cp == nil || id == 0 {
 		return
 	}

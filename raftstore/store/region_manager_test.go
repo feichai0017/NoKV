@@ -2,10 +2,10 @@ package store
 
 import (
 	"context"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
 
-	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
@@ -103,7 +103,7 @@ func TestStoreAndRouterHelpers(t *testing.T) {
 	if err := router.SendCommand(1, nil); err == nil {
 		t.Fatalf("expected SendCommand to fail for nil request")
 	}
-	if err := router.SendCommand(1, &pb.RaftCmdRequest{Header: &pb.CmdHeader{RegionId: 1}}); err == nil {
+	if err := router.SendCommand(1, &raftcmdpb.RaftCmdRequest{Header: &raftcmdpb.CmdHeader{RegionId: 1}}); err == nil {
 		t.Fatalf("expected SendCommand to fail for missing peer")
 	}
 	if err := router.SendTick(1); err == nil {
@@ -114,11 +114,11 @@ func TestStoreAndRouterHelpers(t *testing.T) {
 func TestStoreReadCommandValidation(t *testing.T) {
 	store := NewStore(Config{})
 
-	if _, err := store.ReadCommand(context.Background(), &pb.RaftCmdRequest{}); err == nil {
+	if _, err := store.ReadCommand(context.Background(), &raftcmdpb.RaftCmdRequest{}); err == nil {
 		t.Fatalf("expected missing region id error")
 	}
 
-	req := &pb.RaftCmdRequest{Header: &pb.CmdHeader{RegionId: 1}}
+	req := &raftcmdpb.RaftCmdRequest{Header: &raftcmdpb.CmdHeader{RegionId: 1}}
 	resp, err := store.ReadCommand(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -131,7 +131,7 @@ func TestStoreReadCommandValidation(t *testing.T) {
 func TestStoreReadCommandStoreNotMatch(t *testing.T) {
 	store := NewStore(Config{StoreID: 7})
 
-	req := &pb.RaftCmdRequest{Header: &pb.CmdHeader{RegionId: 1, StoreId: 9}}
+	req := &raftcmdpb.RaftCmdRequest{Header: &raftcmdpb.CmdHeader{RegionId: 1, StoreId: 9}}
 	resp, err := store.ReadCommand(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -160,15 +160,15 @@ func TestReadOnlyRequestPredicate(t *testing.T) {
 	if isReadOnlyRequest(nil) {
 		t.Fatalf("expected nil request to be read-only false")
 	}
-	readReq := &pb.RaftCmdRequest{Requests: []*pb.Request{
-		{CmdType: pb.CmdType_CMD_GET},
-		{CmdType: pb.CmdType_CMD_SCAN},
+	readReq := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{
+		{CmdType: raftcmdpb.CmdType_CMD_GET},
+		{CmdType: raftcmdpb.CmdType_CMD_SCAN},
 	}}
 	if !isReadOnlyRequest(readReq) {
 		t.Fatalf("expected read-only request to return true")
 	}
-	writeReq := &pb.RaftCmdRequest{Requests: []*pb.Request{
-		{CmdType: pb.CmdType_CMD_PREWRITE},
+	writeReq := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{
+		{CmdType: raftcmdpb.CmdType_CMD_PREWRITE},
 	}}
 	if isReadOnlyRequest(writeReq) {
 		t.Fatalf("expected write request to return false")

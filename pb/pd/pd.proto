@@ -4,7 +4,6 @@ syntax = "proto3";
 package nokv.pd.v1;
 
 import "meta/descriptor.proto";
-import "metapb.proto";
 
 option go_package = "github.com/feichai0017/NoKV/pb/pd;pdpb";
 

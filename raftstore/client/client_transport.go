@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"sync"
 	"time"
 
@@ -11,8 +12,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/status"
-
-	"github.com/feichai0017/NoKV/pb"
 )
 
 type storeConn struct {
@@ -22,7 +21,7 @@ type storeConn struct {
 
 	mu     sync.Mutex
 	conn   *grpc.ClientConn
-	client pb.NoKVClient
+	client kvrpcpb.NoKVClient
 }
 
 type retryKind uint8
@@ -51,7 +50,7 @@ func dialStore(ctx context.Context, target string, opts ...grpc.DialOption) (*gr
 	}
 }
 
-func (c *Client) storeClient(ctx context.Context, storeID uint64) (pb.NoKVClient, error) {
+func (c *Client) storeClient(ctx context.Context, storeID uint64) (kvrpcpb.NoKVClient, error) {
 	c.mu.RLock()
 	if storeID == 0 {
 		c.mu.RUnlock()
@@ -117,7 +116,7 @@ func normalizeRPCError(err error) error {
 	return err
 }
 
-func (st *storeConn) clientFor(ctx context.Context) (pb.NoKVClient, error) {
+func (st *storeConn) clientFor(ctx context.Context) (kvrpcpb.NoKVClient, error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if st.client != nil && st.conn != nil && st.conn.GetState() != connectivity.Shutdown {
@@ -135,7 +134,7 @@ func (st *storeConn) clientFor(ctx context.Context) (pb.NoKVClient, error) {
 		return nil, fmt.Errorf("client: dial %s: %w", st.addr, err)
 	}
 	st.conn = conn
-	st.client = pb.NewNoKVClient(conn)
+	st.client = kvrpcpb.NewNoKVClient(conn)
 	return st.client, nil
 }
 

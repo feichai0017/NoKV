@@ -2,13 +2,14 @@ package server
 
 import (
 	"fmt"
+	adminpb "github.com/feichai0017/NoKV/pb/admin"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"log"
 	"os"
 	"sync"
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	adminsvc "github.com/feichai0017/NoKV/raftstore/admin"
 	"github.com/feichai0017/NoKV/raftstore/kv"
@@ -110,8 +111,8 @@ func New(cfg Config) (*Server, error) {
 	service := kv.NewService(st)
 	adminService := adminsvc.NewServiceWithSnapshot(st, snapshotBridge)
 	if err := tr.RegisterServer(func(reg grpc.ServiceRegistrar) {
-		pb.RegisterNoKVServer(reg, service)
-		pb.RegisterRaftAdminServer(reg, adminService)
+		kvrpcpb.RegisterNoKVServer(reg, service)
+		adminpb.RegisterRaftAdminServer(reg, adminService)
 	}); err != nil {
 		_ = tr.Close()
 		return nil, err
