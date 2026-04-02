@@ -20,7 +20,7 @@ type Service struct {
 	cluster *core.Cluster
 	ids     *core.IDAllocator
 	tso     *tso.Allocator
-	storage pdstorage.Store
+	storage pdstorage.Sink
 }
 
 // NewService constructs a PD-lite service.
@@ -45,7 +45,7 @@ func NewService(cluster *core.Cluster, ids *core.IDAllocator, tsAlloc *tso.Alloc
 //
 // When configured, region metadata and allocator states are persisted through
 // the storage interface.
-func (s *Service) SetStorage(storage pdstorage.Store) {
+func (s *Service) SetStorage(storage pdstorage.Sink) {
 	if s == nil {
 		return
 	}
