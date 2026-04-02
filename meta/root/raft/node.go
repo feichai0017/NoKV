@@ -7,11 +7,12 @@ import (
 
 // Node binds the raft algorithm, root state machine, and transport together.
 type Node struct {
-	cfg       Config
-	raw       *myraft.RawNode
-	storage   *Storage
-	machine   *StateMachine
-	transport Transport
+	cfg        Config
+	raw        *myraft.RawNode
+	storage    *Storage
+	machine    *StateMachine
+	transport  Transport
+	checkpoint CheckpointStore
 }
 
 func OpenNode(cfg Config, checkpoint Checkpoint, transport Transport) (*Node, error) {
@@ -19,7 +20,24 @@ func OpenNode(cfg Config, checkpoint Checkpoint, transport Transport) (*Node, er
 	if err != nil {
 		return nil, err
 	}
-	storage := NewStorage()
+	var checkpointStore CheckpointStore
+	var storage *Storage
+	if cfg.WorkDir != "" {
+		checkpointStore, err = OpenFileCheckpointStore(cfg.WorkDir, cfg.FS)
+		if err != nil {
+			return nil, err
+		}
+		checkpoint, err = checkpointStore.Load()
+		if err != nil {
+			return nil, err
+		}
+		storage, err = OpenStorage(cfg.WorkDir, cfg.FS)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		storage = NewStorage()
+	}
 	raw, err := myraft.NewRawNode(&myraft.Config{
 		ID:              cfg.NodeID,
 		ElectionTick:    cfg.ElectionTick,
@@ -44,7 +62,7 @@ func OpenNode(cfg Config, checkpoint Checkpoint, transport Transport) (*Node, er
 	if transport == nil {
 		transport = nopTransport{}
 	}
-	node := &Node{cfg: cfg, raw: raw, storage: storage, machine: NewStateMachine(checkpoint), transport: transport}
+	node := &Node{cfg: cfg, raw: raw, storage: storage, machine: NewStateMachine(checkpoint), transport: transport, checkpoint: checkpointStore}
 	if cfg.Bootstrap {
 		if err := node.drainReady(); err != nil {
 			return nil, err
@@ -145,6 +163,11 @@ func (n *Node) drainReadyWithCommit() (rootpkg.CommitInfo, error) {
 			}
 		}
 		n.raw.Advance(rd)
+		if n.checkpoint != nil {
+			if err := n.checkpoint.Save(n.machine.Snapshot()); err != nil {
+				return rootpkg.CommitInfo{}, err
+			}
+		}
 	}
 	return commit, nil
 }

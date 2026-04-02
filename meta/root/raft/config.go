@@ -3,6 +3,8 @@ package rootraft
 import (
 	"fmt"
 	"strings"
+
+	"github.com/feichai0017/NoKV/vfs"
 )
 
 const (
@@ -23,6 +25,8 @@ type Config struct {
 	NodeID          uint64
 	Peers           []Peer
 	Bootstrap       bool
+	WorkDir         string
+	FS              vfs.FS
 	ElectionTick    int
 	HeartbeatTick   int
 	MaxSizePerMsg   uint64

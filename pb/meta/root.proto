@@ -49,6 +49,11 @@ message RootCommitInfo {
   RootState state = 2;
 }
 
+message RootCheckpoint {
+  RootState state = 1;
+  repeated nokv.meta.v1.RegionDescriptor descriptors = 2;
+}
+
 message RootStoreMembership {
   uint64 store_id = 1;
   string address = 2;
