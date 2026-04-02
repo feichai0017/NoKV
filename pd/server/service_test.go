@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 	"errors"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -31,7 +31,7 @@ func (f *fakeStorage) Load() (pdstorage.Snapshot, error) {
 	return pdstorage.Snapshot{}, nil
 }
 
-func (f *fakeStorage) SaveRegion(meta raftmeta.RegionMeta) error {
+func (f *fakeStorage) SaveRegion(meta localmeta.RegionMeta) error {
 	f.updateCalls++
 	if f.updateErr != nil {
 		return f.updateErr

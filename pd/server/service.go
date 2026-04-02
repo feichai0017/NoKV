@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 	"errors"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/pd/core"
@@ -191,23 +191,23 @@ func (s *Service) persistAllocatorState() error {
 	return s.storage.SaveAllocatorState(s.ids.Current(), s.tso.Current())
 }
 
-func pbToManifestRegion(meta *pb.RegionMeta) raftmeta.RegionMeta {
-	out := raftmeta.RegionMeta{
+func pbToManifestRegion(meta *pb.RegionMeta) localmeta.RegionMeta {
+	out := localmeta.RegionMeta{
 		ID:       meta.GetId(),
 		StartKey: append([]byte(nil), meta.GetStartKey()...),
 		EndKey:   append([]byte(nil), meta.GetEndKey()...),
-		Epoch: raftmeta.RegionEpoch{
+		Epoch: localmeta.RegionEpoch{
 			Version:     meta.GetEpochVersion(),
 			ConfVersion: meta.GetEpochConfVersion(),
 		},
 	}
 	if peers := meta.GetPeers(); len(peers) > 0 {
-		out.Peers = make([]raftmeta.PeerMeta, 0, len(peers))
+		out.Peers = make([]localmeta.PeerMeta, 0, len(peers))
 		for _, p := range peers {
 			if p == nil {
 				continue
 			}
-			out.Peers = append(out.Peers, raftmeta.PeerMeta{
+			out.Peers = append(out.Peers, localmeta.PeerMeta{
 				StoreID: p.GetStoreId(),
 				PeerID:  p.GetPeerId(),
 			})
@@ -216,7 +216,7 @@ func pbToManifestRegion(meta *pb.RegionMeta) raftmeta.RegionMeta {
 	return out
 }
 
-func manifestToPBRegion(meta raftmeta.RegionMeta) *pb.RegionMeta {
+func manifestToPBRegion(meta localmeta.RegionMeta) *pb.RegionMeta {
 	out := &pb.RegionMeta{
 		Id:               meta.ID,
 		StartKey:         append([]byte(nil), meta.StartKey...),

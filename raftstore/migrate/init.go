@@ -8,7 +8,7 @@ import (
 	NoKV "github.com/feichai0017/NoKV"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/vfs"
 	raftpb "go.etcd.io/raft/v3/raftpb"
@@ -106,22 +106,22 @@ func Init(cfg InitConfig) (InitResult, error) {
 		return InitResult{}, fmt.Errorf("migrate: unsupported mode %q", state.Mode)
 	}
 
-	region := raftmeta.RegionMeta{
+	region := localmeta.RegionMeta{
 		ID:       cfg.RegionID,
 		StartKey: nil,
 		EndKey:   nil,
-		Epoch: raftmeta.RegionEpoch{
+		Epoch: localmeta.RegionEpoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
-		Peers: []raftmeta.PeerMeta{{
+		Peers: []localmeta.PeerMeta{{
 			StoreID: cfg.StoreID,
 			PeerID:  cfg.PeerID,
 		}},
-		State: raftmeta.RegionStateRunning,
+		State: localmeta.RegionStateRunning,
 	}
 
-	localMeta, err := raftmeta.OpenLocalStore(cfg.WorkDir, nil)
+	localMeta, err := localmeta.OpenLocalStore(cfg.WorkDir, nil)
 	if err != nil {
 		return InitResult{}, fmt.Errorf("migrate: open local catalog: %w", err)
 	}

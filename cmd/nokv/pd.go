@@ -5,7 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"io"
 	"net"
 	"os"
@@ -157,7 +157,7 @@ func flagPassed(fs *flag.FlagSet, name string) bool {
 	return passed
 }
 
-func restorePDRegions(cluster *core.Cluster, snapshot map[uint64]raftmeta.RegionMeta) (int, error) {
+func restorePDRegions(cluster *core.Cluster, snapshot map[uint64]localmeta.RegionMeta) (int, error) {
 	if cluster == nil || len(snapshot) == 0 {
 		return 0, nil
 	}

@@ -9,7 +9,7 @@ import (
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/client"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
@@ -226,15 +226,15 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 	require.NoError(t, err)
 
 	parentLeader, _ := testcluster.FindLeader(t, ctx, 91, seed, target)
-	childMeta := raftmeta.RegionMeta{
+	childMeta := localmeta.RegionMeta{
 		ID:       92,
 		StartKey: []byte("m"),
 		EndKey:   nil,
-		Epoch: raftmeta.RegionEpoch{
+		Epoch: localmeta.RegionEpoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
-		Peers: []raftmeta.PeerMeta{
+		Peers: []localmeta.PeerMeta{
 			{StoreID: 1, PeerID: 102},
 			{StoreID: 2, PeerID: 202},
 		},

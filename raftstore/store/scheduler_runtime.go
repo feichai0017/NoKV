@@ -7,7 +7,7 @@ import (
 	"time"
 
 	myraft "github.com/feichai0017/NoKV/raft"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
@@ -27,7 +27,7 @@ const (
 type regionEvent struct {
 	kind     regionEventKind
 	regionID uint64
-	meta     raftmeta.RegionMeta
+	meta     localmeta.RegionMeta
 }
 
 func (s *Store) schedulerClient() SchedulerClient {
@@ -196,7 +196,7 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 			return
 		}
 		ev.regionID = ev.meta.ID
-		ev.meta = raftmeta.CloneRegionMeta(ev.meta)
+		ev.meta = localmeta.CloneRegionMeta(ev.meta)
 	case regionEventRemove:
 		if ev.regionID == 0 {
 			return

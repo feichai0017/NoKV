@@ -9,7 +9,7 @@ import (
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
 )
@@ -36,7 +36,7 @@ type installSink interface {
 
 // ExportDir persists one region snapshot as one or more self-contained SST
 // files. Values are materialized inline so the snapshot is self-contained.
-func ExportDir(src exportSource, dir string, region raftmeta.RegionMeta, fs vfs.FS) (*ExportResult, error) {
+func ExportDir(src exportSource, dir string, region localmeta.RegionMeta, fs vfs.FS) (*ExportResult, error) {
 	if src == nil {
 		return nil, fmt.Errorf("snapshot: export sst requires source")
 	}
@@ -75,7 +75,7 @@ func ExportDir(src exportSource, dir string, region raftmeta.RegionMeta, fs vfs.
 	}
 	meta := Meta{
 		Version:       sstVersion,
-		Region:        raftmeta.CloneRegionMeta(region),
+		Region:        localmeta.CloneRegionMeta(region),
 		InlineValues:  true,
 		Compatibility: snapshotCompatibility(opt),
 		CreatedAt:     time.Now().UTC(),
@@ -189,8 +189,8 @@ func (r *ImportResult) Rollback() error {
 	return r.rollback()
 }
 
-func collectMaterializedEntries(src exportSource, region raftmeta.RegionMeta) ([]*kv.Entry, error) {
-	bounds := raftmeta.CloneRegionMeta(region)
+func collectMaterializedEntries(src exportSource, region localmeta.RegionMeta) ([]*kv.Entry, error) {
+	bounds := localmeta.CloneRegionMeta(region)
 	iter := src.NewInternalIterator(&utils.Options{
 		IsAsc:      true,
 		LowerBound: bounds.StartKey,
@@ -285,7 +285,7 @@ func splitSnapshotEntries(entries []*kv.Entry, targetTableBytes int64) [][]*kv.E
 	return chunks
 }
 
-func keyInRegion(region raftmeta.RegionMeta, userKey []byte) bool {
+func keyInRegion(region localmeta.RegionMeta, userKey []byte) bool {
 	if len(region.StartKey) > 0 && bytes.Compare(userKey, region.StartKey) < 0 {
 		return false
 	}

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/vfs"
 )
 
@@ -37,14 +37,14 @@ type Compatibility struct {
 
 // Meta describes one region-scoped SST snapshot.
 type Meta struct {
-	Version       uint32              `json:"version"`
-	Region        raftmeta.RegionMeta `json:"region"`
-	EntryCount    uint64              `json:"entry_count"`
-	TableCount    uint64              `json:"table_count"`
-	InlineValues  bool                `json:"inline_values"`
-	Compatibility Compatibility       `json:"compatibility"`
-	Tables        []TableMeta         `json:"tables"`
-	CreatedAt     time.Time           `json:"created_at"`
+	Version       uint32               `json:"version"`
+	Region        localmeta.RegionMeta `json:"region"`
+	EntryCount    uint64               `json:"entry_count"`
+	TableCount    uint64               `json:"table_count"`
+	InlineValues  bool                 `json:"inline_values"`
+	Compatibility Compatibility        `json:"compatibility"`
+	Tables        []TableMeta          `json:"tables"`
+	CreatedAt     time.Time            `json:"created_at"`
 }
 
 // ExportResult reports the persisted snapshot metadata after a successful export.
@@ -59,9 +59,9 @@ type ExportResult struct {
 // simple region metadata view can read result.Meta.Region, while install paths
 // can still roll back imported SST files before peer publish completes.
 type SnapshotStore interface {
-	ExportSnapshot(region raftmeta.RegionMeta) ([]byte, error)
+	ExportSnapshot(region localmeta.RegionMeta) ([]byte, error)
 	ImportSnapshot(payload []byte) (*ImportResult, error)
-	ExportSnapshotTo(w io.Writer, region raftmeta.RegionMeta) (Meta, error)
+	ExportSnapshotTo(w io.Writer, region localmeta.RegionMeta) (Meta, error)
 	ImportSnapshotFrom(r io.Reader) (*ImportResult, error)
 }
 

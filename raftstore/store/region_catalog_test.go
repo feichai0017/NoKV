@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	myraft "github.com/feichai0017/NoKV/raft"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/stretchr/testify/require"
 )
@@ -25,7 +25,7 @@ func TestStorePeersSnapshot(t *testing.T) {
 		},
 		Transport: noopTransport{},
 		Apply:     func([]myraft.Entry) error { return nil },
-		Region: &raftmeta.RegionMeta{
+		Region: &localmeta.RegionMeta{
 			ID:       200,
 			StartKey: []byte("c"),
 			EndKey:   []byte("d"),
@@ -49,7 +49,7 @@ func TestStorePeersSnapshot(t *testing.T) {
 
 func TestStorePersistsRegionMetadata(t *testing.T) {
 	dir := t.TempDir()
-	metaStore, err := raftmeta.OpenLocalStore(dir, nil)
+	metaStore, err := localmeta.OpenLocalStore(dir, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = metaStore.Close() })
 
@@ -67,7 +67,7 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 		},
 		Transport: noopTransport{},
 		Apply:     func([]myraft.Entry) error { return nil },
-		Region: &raftmeta.RegionMeta{
+		Region: &localmeta.RegionMeta{
 			ID:       500,
 			StartKey: []byte("k"),
 			EndKey:   []byte("z"),
@@ -81,7 +81,7 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 	metas := rs.RegionMetas()
 	require.Len(t, metas, 1)
 	require.Equal(t, uint64(500), metas[0].ID)
-	require.Equal(t, raftmeta.RegionStateRunning, metas[0].State)
+	require.Equal(t, localmeta.RegionStateRunning, metas[0].State)
 	metricsSnap := rs.RegionMetrics().Snapshot()
 	require.Equal(t, uint64(1), metricsSnap.Total)
 	require.Equal(t, uint64(1), metricsSnap.Running)
@@ -90,19 +90,19 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 	require.Len(t, snapshot, 1)
 	meta, ok := snapshot[500]
 	require.True(t, ok)
-	require.Equal(t, raftmeta.RegionStateRunning, meta.State)
+	require.Equal(t, localmeta.RegionStateRunning, meta.State)
 	require.Zero(t, meta.Epoch.Version)
 
-	updated := raftmeta.RegionMeta{
+	updated := localmeta.RegionMeta{
 		ID:       500,
 		StartKey: []byte("k"),
 		EndKey:   []byte("z"),
-		Epoch: raftmeta.RegionEpoch{
+		Epoch: localmeta.RegionEpoch{
 			Version:     4,
 			ConfVersion: 6,
 		},
-		State: raftmeta.RegionStateRunning,
-		Peers: []raftmeta.PeerMeta{
+		State: localmeta.RegionStateRunning,
+		Peers: []localmeta.PeerMeta{
 			{StoreID: 1, PeerID: 11},
 			{StoreID: 2, PeerID: 22},
 		},
@@ -120,7 +120,7 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 
 	metaByID, ok := rs.RegionMetaByID(500)
 	require.True(t, ok)
-	require.Equal(t, raftmeta.RegionStateRunning, metaByID.State)
+	require.Equal(t, localmeta.RegionStateRunning, metaByID.State)
 	_, ok = rs.RegionMetaByID(999)
 	require.False(t, ok)
 
@@ -130,37 +130,37 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 	require.Equal(t, uint64(4), meta.Epoch.Version)
 	require.Len(t, meta.Peers, 2)
 
-	require.NoError(t, rs.applyRegionState(500, raftmeta.RegionStateRemoving))
+	require.NoError(t, rs.applyRegionState(500, localmeta.RegionStateRemoving))
 
 	metas = rs.RegionMetas()
-	require.Equal(t, raftmeta.RegionStateRemoving, metas[0].State)
+	require.Equal(t, localmeta.RegionStateRemoving, metas[0].State)
 	metricsSnap = rs.RegionMetrics().Snapshot()
 	require.Equal(t, uint64(1), metricsSnap.Total)
 	require.Equal(t, uint64(1), metricsSnap.Removing)
 	snapshot = metaStore.Snapshot()
 	meta, ok = snapshot[500]
 	require.True(t, ok)
-	require.Equal(t, raftmeta.RegionStateRemoving, meta.State)
+	require.Equal(t, localmeta.RegionStateRemoving, meta.State)
 
 	rs.StopPeer(p.ID())
 	snapshot = metaStore.Snapshot()
 	meta, ok = snapshot[500]
 	require.True(t, ok)
-	require.Equal(t, raftmeta.RegionStateRemoving, meta.State)
+	require.Equal(t, localmeta.RegionStateRemoving, meta.State)
 
-	require.NoError(t, rs.applyRegionState(500, raftmeta.RegionStateTombstone))
+	require.NoError(t, rs.applyRegionState(500, localmeta.RegionStateTombstone))
 
 	metas = rs.RegionMetas()
-	require.Equal(t, raftmeta.RegionStateTombstone, metas[0].State)
+	require.Equal(t, localmeta.RegionStateTombstone, metas[0].State)
 	metricsSnap = rs.RegionMetrics().Snapshot()
 	require.Equal(t, uint64(1), metricsSnap.Total)
 	require.Equal(t, uint64(1), metricsSnap.Tombstone)
 	snapshot = metaStore.Snapshot()
 	meta, ok = snapshot[500]
 	require.True(t, ok)
-	require.Equal(t, raftmeta.RegionStateTombstone, meta.State)
+	require.Equal(t, localmeta.RegionStateTombstone, meta.State)
 
-	err = rs.applyRegionState(500, raftmeta.RegionStateRunning)
+	err = rs.applyRegionState(500, localmeta.RegionStateRunning)
 	require.Error(t, err)
 
 	require.NoError(t, rs.applyRegionRemoval(500))
@@ -173,17 +173,17 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 	snapshot = metaStore.Snapshot()
 	require.Len(t, snapshot, 0)
 
-	child := raftmeta.RegionMeta{
+	child := localmeta.RegionMeta{
 		ID:       600,
 		StartKey: []byte("m"),
 		EndKey:   []byte("z"),
-		State:    raftmeta.RegionStateRunning,
+		State:    localmeta.RegionStateRunning,
 	}
-	parent := raftmeta.RegionMeta{
+	parent := localmeta.RegionMeta{
 		ID:       500,
 		StartKey: []byte("k"),
 		EndKey:   []byte("m"),
-		State:    raftmeta.RegionStateRunning,
+		State:    localmeta.RegionStateRunning,
 	}
 	require.NoError(t, rs.applyRegionMeta(parent))
 	require.NoError(t, rs.applyRegionMeta(child))
@@ -197,25 +197,25 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 
 func TestStoreLoadsLocalMetaSnapshotWithoutScheduler(t *testing.T) {
 	dir := t.TempDir()
-	metaStore, err := raftmeta.OpenLocalStore(dir, nil)
+	metaStore, err := localmeta.OpenLocalStore(dir, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = metaStore.Close() })
 
-	require.NoError(t, metaStore.SaveRegion(raftmeta.RegionMeta{
+	require.NoError(t, metaStore.SaveRegion(localmeta.RegionMeta{
 		ID:       901,
 		StartKey: []byte("a"),
 		EndKey:   []byte("m"),
-		State:    raftmeta.RegionStateRunning,
-		Epoch:    raftmeta.RegionEpoch{Version: 2, ConfVersion: 3},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 11}},
+		State:    localmeta.RegionStateRunning,
+		Epoch:    localmeta.RegionEpoch{Version: 2, ConfVersion: 3},
+		Peers:    []localmeta.PeerMeta{{StoreID: 1, PeerID: 11}},
 	}))
-	require.NoError(t, metaStore.SaveRegion(raftmeta.RegionMeta{
+	require.NoError(t, metaStore.SaveRegion(localmeta.RegionMeta{
 		ID:       902,
 		StartKey: []byte("m"),
 		EndKey:   nil,
-		State:    raftmeta.RegionStateRunning,
-		Epoch:    raftmeta.RegionEpoch{Version: 5, ConfVersion: 8},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 12}},
+		State:    localmeta.RegionStateRunning,
+		Epoch:    localmeta.RegionEpoch{Version: 5, ConfVersion: 8},
+		Peers:    []localmeta.PeerMeta{{StoreID: 1, PeerID: 12}},
 	}))
 
 	rs := NewStore(Config{

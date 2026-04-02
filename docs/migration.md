@@ -55,7 +55,7 @@ The migration path must preserve these invariants:
 2. The migrated workdir must not silently reopen as a normal standalone directory.
 3. Bootstrap is the only allowed non-apply path that creates the initial region truth for the promoted directory.
 4. Engine manifest stays storage-engine metadata only.
-5. Store-local region truth stays in `raftstore/meta`.
+5. Store-local region truth stays in `raftstore/localmeta`.
 6. PD does not create local truth during bootstrap.
 
 Those invariants are what make the feature defensible. Without them, “standalone to cluster” collapses into ad hoc tooling.
@@ -224,7 +224,7 @@ No mutation happens here.
 At a high level it does this:
 
 1. write mode = `preparing`
-2. persist a full-range local `RegionMeta` in `raftstore/meta`
+2. persist a full-range local `RegionMeta` in `raftstore/localmeta`
 3. export one full-range SST seed snapshot from the standalone DB
 4. synthesize the initial raft durable state for a single local voter
 5. persist the local raft replay pointer
@@ -235,7 +235,7 @@ At a high level it does this:
 After `init`, the promoted directory is not started through a special bootstrap runtime. It is opened through normal distributed startup:
 
 - open the same DB workdir
-- load local recovery metadata from `raftstore/meta`
+- load local recovery metadata from `raftstore/localmeta`
 - open group-local raft durable state
 - start one local peer
 - serve distributed traffic through the regular raftstore path

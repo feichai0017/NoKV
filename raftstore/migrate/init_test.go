@@ -5,7 +5,7 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/stretchr/testify/require"
 )
@@ -38,7 +38,7 @@ func TestInitFailpointAfterModePreparing(t *testing.T) {
 	require.Equal(t, CheckpointPreparingWritten, status.Checkpoint.Stage)
 	require.Contains(t, status.ResumeHint, "re-run nokv migrate init")
 
-	metaStore, err := raftmeta.OpenLocalStore(dir, nil)
+	metaStore, err := localmeta.OpenLocalStore(dir, nil)
 	require.NoError(t, err)
 	defer func() { _ = metaStore.Close() }()
 	require.Empty(t, metaStore.Snapshot())
@@ -60,7 +60,7 @@ func TestInitFailpointAfterCatalogPersist(t *testing.T) {
 	require.Equal(t, CheckpointCatalogPersisted, status.Checkpoint.Stage)
 	require.Contains(t, status.ResumeHint, "catalog persistence")
 
-	metaStore, err := raftmeta.OpenLocalStore(dir, nil)
+	metaStore, err := localmeta.OpenLocalStore(dir, nil)
 	require.NoError(t, err)
 	defer func() { _ = metaStore.Close() }()
 	snapshotMap := metaStore.Snapshot()
@@ -86,7 +86,7 @@ func TestInitFailpointAfterSeedSnapshot(t *testing.T) {
 	require.Equal(t, CheckpointSeedExported, status.Checkpoint.Stage)
 	require.Contains(t, status.ResumeHint, "seed snapshot export")
 
-	metaStore, err := raftmeta.OpenLocalStore(dir, nil)
+	metaStore, err := localmeta.OpenLocalStore(dir, nil)
 	require.NoError(t, err)
 	defer func() { _ = metaStore.Close() }()
 	snapshotMap := metaStore.Snapshot()

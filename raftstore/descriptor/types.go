@@ -1,7 +1,7 @@
 package descriptor
 
 import (
-	"github.com/feichai0017/NoKV/raftstore/meta"
+	"github.com/feichai0017/NoKV/raftstore/localmeta"
 )
 
 // LineageKind classifies how one descriptor references an older topology
@@ -18,7 +18,7 @@ const (
 // descriptor.
 type LineageRef struct {
 	RegionID uint64
-	Epoch    meta.RegionEpoch
+	Epoch    localmeta.RegionEpoch
 	Hash     []byte
 	Kind     LineageKind
 }
@@ -32,9 +32,9 @@ type Descriptor struct {
 	RegionID  uint64
 	StartKey  []byte
 	EndKey    []byte
-	Epoch     meta.RegionEpoch
-	Peers     []meta.PeerMeta
-	State     meta.RegionState
+	Epoch     localmeta.RegionEpoch
+	Peers     []localmeta.PeerMeta
+	State     localmeta.RegionState
 	Lineage   []LineageRef
 	RootEpoch uint64
 	Hash      []byte
@@ -50,7 +50,7 @@ func (d Descriptor) Clone() Descriptor {
 		cp.EndKey = append([]byte(nil), d.EndKey...)
 	}
 	if len(d.Peers) > 0 {
-		cp.Peers = append([]meta.PeerMeta(nil), d.Peers...)
+		cp.Peers = append([]localmeta.PeerMeta(nil), d.Peers...)
 	}
 	if len(d.Lineage) > 0 {
 		cp.Lineage = append([]LineageRef(nil), d.Lineage...)

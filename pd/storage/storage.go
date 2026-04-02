@@ -1,7 +1,7 @@
 package storage
 
 import (
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"math"
 )
 
@@ -16,7 +16,7 @@ type AllocatorState struct {
 
 // Snapshot contains persisted PD metadata loaded at startup.
 type Snapshot struct {
-	Regions   map[uint64]raftmeta.RegionMeta
+	Regions   map[uint64]localmeta.RegionMeta
 	Allocator AllocatorState
 }
 
@@ -25,7 +25,7 @@ type Store interface {
 	// Load returns the persisted snapshot.
 	Load() (Snapshot, error)
 	// SaveRegion persists one region metadata update.
-	SaveRegion(meta raftmeta.RegionMeta) error
+	SaveRegion(meta localmeta.RegionMeta) error
 	// DeleteRegion persists one region metadata delete.
 	DeleteRegion(regionID uint64) error
 	// SaveAllocatorState persists latest allocator counters.
@@ -44,11 +44,11 @@ func NewNoopStore() Store {
 
 // Load returns an empty snapshot.
 func (NoopStore) Load() (Snapshot, error) {
-	return Snapshot{Regions: make(map[uint64]raftmeta.RegionMeta)}, nil
+	return Snapshot{Regions: make(map[uint64]localmeta.RegionMeta)}, nil
 }
 
 // SaveRegion is a no-op.
-func (NoopStore) SaveRegion(raftmeta.RegionMeta) error {
+func (NoopStore) SaveRegion(localmeta.RegionMeta) error {
 	return nil
 }
 

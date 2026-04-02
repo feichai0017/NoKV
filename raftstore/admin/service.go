@@ -7,7 +7,7 @@ import (
 	"io"
 
 	"github.com/feichai0017/NoKV/pb"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	raftpb "go.etcd.io/raft/v3/raftpb"
@@ -45,7 +45,7 @@ func (s *Service) AddPeer(ctx context.Context, req *pb.AddPeerRequest) (*pb.AddP
 	if req.GetRegionId() == 0 || req.GetStoreId() == 0 || req.GetPeerId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, "region_id, store_id, and peer_id are required")
 	}
-	if err := s.store.ProposeAddPeer(req.GetRegionId(), raftmeta.PeerMeta{StoreID: req.GetStoreId(), PeerID: req.GetPeerId()}); err != nil {
+	if err := s.store.ProposeAddPeer(req.GetRegionId(), localmeta.PeerMeta{StoreID: req.GetStoreId(), PeerID: req.GetPeerId()}); err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
 	}
 	runtime, ok := s.store.RegionRuntimeStatus(req.GetRegionId())
@@ -211,13 +211,13 @@ func (s *Service) ImportRegionSnapshotStream(stream pb.RaftAdmin_ImportRegionSna
 	}
 	pr, pw := io.Pipe()
 	resultCh := make(chan struct {
-		meta raftmeta.RegionMeta
+		meta localmeta.RegionMeta
 		err  error
 	}, 1)
 	go func() {
 		installed, importErr := s.importRegionSnapshot(snap, &streamedImport{meta: meta, reader: pr})
 		resultCh <- struct {
-			meta raftmeta.RegionMeta
+			meta localmeta.RegionMeta
 			err  error
 		}{meta: installed, err: importErr}
 	}()
@@ -297,7 +297,7 @@ func (s *Service) RegionRuntimeStatus(ctx context.Context, req *pb.RegionRuntime
 	}, nil
 }
 
-func regionMetaToPB(meta raftmeta.RegionMeta) *pb.RegionMeta {
+func regionMetaToPB(meta localmeta.RegionMeta) *pb.RegionMeta {
 	peers := make([]*pb.RegionPeer, 0, len(meta.Peers))
 	for _, p := range meta.Peers {
 		peers = append(peers, &pb.RegionPeer{StoreId: p.StoreID, PeerId: p.PeerID})
@@ -312,22 +312,22 @@ func regionMetaToPB(meta raftmeta.RegionMeta) *pb.RegionMeta {
 	}
 }
 
-func regionMetaFromPB(meta *pb.RegionMeta) (raftmeta.RegionMeta, error) {
+func regionMetaFromPB(meta *pb.RegionMeta) (localmeta.RegionMeta, error) {
 	if meta == nil {
-		return raftmeta.RegionMeta{}, fmt.Errorf("region metadata is nil")
+		return localmeta.RegionMeta{}, fmt.Errorf("region metadata is nil")
 	}
-	peers := make([]raftmeta.PeerMeta, 0, len(meta.GetPeers()))
+	peers := make([]localmeta.PeerMeta, 0, len(meta.GetPeers()))
 	for _, peerMeta := range meta.GetPeers() {
 		if peerMeta.GetStoreId() == 0 || peerMeta.GetPeerId() == 0 {
-			return raftmeta.RegionMeta{}, fmt.Errorf("region peer metadata is incomplete")
+			return localmeta.RegionMeta{}, fmt.Errorf("region peer metadata is incomplete")
 		}
-		peers = append(peers, raftmeta.PeerMeta{StoreID: peerMeta.GetStoreId(), PeerID: peerMeta.GetPeerId()})
+		peers = append(peers, localmeta.PeerMeta{StoreID: peerMeta.GetStoreId(), PeerID: peerMeta.GetPeerId()})
 	}
-	return raftmeta.RegionMeta{
+	return localmeta.RegionMeta{
 		ID:       meta.GetId(),
 		StartKey: append([]byte(nil), meta.GetStartKey()...),
 		EndKey:   append([]byte(nil), meta.GetEndKey()...),
-		Epoch: raftmeta.RegionEpoch{
+		Epoch: localmeta.RegionEpoch{
 			Version:     meta.GetEpochVersion(),
 			ConfVersion: meta.GetEpochConfVersion(),
 		},
@@ -335,7 +335,7 @@ func regionMetaFromPB(meta *pb.RegionMeta) (raftmeta.RegionMeta, error) {
 	}, nil
 }
 
-func matchesSnapshotRegion(header, payload raftmeta.RegionMeta) bool {
+func matchesSnapshotRegion(header, payload localmeta.RegionMeta) bool {
 	if header.ID != payload.ID {
 		return false
 	}
@@ -359,24 +359,24 @@ func matchesSnapshotRegion(header, payload raftmeta.RegionMeta) bool {
 	return true
 }
 
-func (s *Service) prepareExportRegionSnapshot(regionID uint64) (raftmeta.RegionMeta, []byte, error) {
+func (s *Service) prepareExportRegionSnapshot(regionID uint64) (localmeta.RegionMeta, []byte, error) {
 	runtime, snap, err := s.exportRegionSnapshot(regionID)
 	if err != nil {
-		return raftmeta.RegionMeta{}, nil, err
+		return localmeta.RegionMeta{}, nil, err
 	}
 	headerSnap := snap
 	headerSnap.Data = nil
 	header, err := (&headerSnap).Marshal()
 	if err != nil {
-		return raftmeta.RegionMeta{}, nil, status.Errorf(codes.Internal, "marshal region snapshot header: %v", err)
+		return localmeta.RegionMeta{}, nil, status.Errorf(codes.Internal, "marshal region snapshot header: %v", err)
 	}
 	return runtime.Meta, header, nil
 }
 
-func (s *Service) startExportRegionSnapshot(regionID uint64) (raftmeta.RegionMeta, []byte, io.ReadCloser, func() error, error) {
+func (s *Service) startExportRegionSnapshot(regionID uint64) (localmeta.RegionMeta, []byte, io.ReadCloser, func() error, error) {
 	region, header, err := s.prepareExportRegionSnapshot(regionID)
 	if err != nil {
-		return raftmeta.RegionMeta{}, nil, nil, nil, err
+		return localmeta.RegionMeta{}, nil, nil, nil, err
 	}
 	pr, pw := io.Pipe()
 	errCh := make(chan error, 1)
@@ -418,19 +418,19 @@ func (s *Service) exportRegionSnapshot(regionID uint64) (store.RegionRuntimeStat
 }
 
 type streamedImport struct {
-	meta   raftmeta.RegionMeta
+	meta   localmeta.RegionMeta
 	reader io.Reader
 }
 
-func (s *Service) importRegionSnapshot(snap raftpb.Snapshot, streamed *streamedImport) (raftmeta.RegionMeta, error) {
+func (s *Service) importRegionSnapshot(snap raftpb.Snapshot, streamed *streamedImport) (localmeta.RegionMeta, error) {
 	if s.snapshot == nil {
-		return raftmeta.RegionMeta{}, status.Error(codes.FailedPrecondition, "sst snapshot import is not configured")
+		return localmeta.RegionMeta{}, status.Error(codes.FailedPrecondition, "sst snapshot import is not configured")
 	}
-	var meta raftmeta.RegionMeta
+	var meta localmeta.RegionMeta
 	if streamed == nil {
 		metaFile, metaErr := snapshotpkg.ReadPayloadMeta(snap.Data)
 		if metaErr != nil {
-			return raftmeta.RegionMeta{}, status.Errorf(codes.InvalidArgument, "decode sst snapshot payload: %v", metaErr)
+			return localmeta.RegionMeta{}, status.Errorf(codes.InvalidArgument, "decode sst snapshot payload: %v", metaErr)
 		}
 		meta = metaFile.Region
 	} else {
@@ -462,7 +462,7 @@ func (s *Service) importRegionSnapshot(snap raftpb.Snapshot, streamed *streamedI
 		return result.Rollback, nil
 	})
 	if err != nil {
-		return raftmeta.RegionMeta{}, status.Errorf(codes.FailedPrecondition, "%v", err)
+		return localmeta.RegionMeta{}, status.Errorf(codes.FailedPrecondition, "%v", err)
 	}
 	runtime, ok := s.store.RegionRuntimeStatus(installed.ID)
 	if !ok {

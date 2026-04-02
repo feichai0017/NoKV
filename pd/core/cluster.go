@@ -3,7 +3,7 @@ package core
 import (
 	"bytes"
 	"fmt"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"sort"
 	"sync"
 	"time"
@@ -21,8 +21,8 @@ type StoreStats struct {
 
 // RegionInfo captures region metadata with heartbeat timestamp.
 type RegionInfo struct {
-	Meta          raftmeta.RegionMeta `json:"meta"`
-	LastHeartbeat time.Time           `json:"last_heartbeat"`
+	Meta          localmeta.RegionMeta `json:"meta"`
+	LastHeartbeat time.Time            `json:"last_heartbeat"`
 }
 
 type regionIndexEntry struct {
@@ -41,7 +41,7 @@ type Cluster struct {
 
 	stores map[uint64]StoreStats
 
-	regions      map[uint64]raftmeta.RegionMeta
+	regions      map[uint64]localmeta.RegionMeta
 	regionLastHB map[uint64]time.Time
 	regionIndex  []regionIndexEntry
 }
@@ -50,7 +50,7 @@ type Cluster struct {
 func NewCluster() *Cluster {
 	return &Cluster{
 		stores:       make(map[uint64]StoreStats),
-		regions:      make(map[uint64]raftmeta.RegionMeta),
+		regions:      make(map[uint64]localmeta.RegionMeta),
 		regionLastHB: make(map[uint64]time.Time),
 	}
 }
@@ -98,7 +98,7 @@ func (c *Cluster) StoreSnapshot() []StoreStats {
 // UpsertRegionHeartbeat updates region metadata from a region heartbeat.
 //
 // It rejects stale epoch heartbeats and metadata that overlaps other regions.
-func (c *Cluster) UpsertRegionHeartbeat(meta raftmeta.RegionMeta) error {
+func (c *Cluster) UpsertRegionHeartbeat(meta localmeta.RegionMeta) error {
 	if c == nil {
 		return nil
 	}
@@ -123,7 +123,7 @@ func (c *Cluster) UpsertRegionHeartbeat(meta raftmeta.RegionMeta) error {
 		return fmt.Errorf("%w: region=%d overlaps region=%d", ErrRegionRangeOverlap, meta.ID, overlapID)
 	}
 
-	c.regions[meta.ID] = raftmeta.CloneRegionMeta(meta)
+	c.regions[meta.ID] = localmeta.CloneRegionMeta(meta)
 	c.regionLastHB[meta.ID] = time.Now()
 	c.rebuildRegionIndexLocked()
 	return nil
@@ -153,7 +153,7 @@ func (c *Cluster) RegionSnapshot() []RegionInfo {
 	out := make([]RegionInfo, 0, len(c.regions))
 	for id, meta := range c.regions {
 		out = append(out, RegionInfo{
-			Meta:          raftmeta.CloneRegionMeta(meta),
+			Meta:          localmeta.CloneRegionMeta(meta),
 			LastHeartbeat: c.regionLastHB[id],
 		})
 	}
@@ -163,34 +163,34 @@ func (c *Cluster) RegionSnapshot() []RegionInfo {
 }
 
 // GetRegionByKey returns the region containing key ([start, end)).
-func (c *Cluster) GetRegionByKey(key []byte) (raftmeta.RegionMeta, bool) {
+func (c *Cluster) GetRegionByKey(key []byte) (localmeta.RegionMeta, bool) {
 	if c == nil {
-		return raftmeta.RegionMeta{}, false
+		return localmeta.RegionMeta{}, false
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if len(c.regionIndex) == 0 {
-		return raftmeta.RegionMeta{}, false
+		return localmeta.RegionMeta{}, false
 	}
 
 	idx := sort.Search(len(c.regionIndex), func(i int) bool {
 		return bytes.Compare(c.regionIndex[i].start, key) > 0
 	})
 	if idx == 0 {
-		return raftmeta.RegionMeta{}, false
+		return localmeta.RegionMeta{}, false
 	}
 	entry := c.regionIndex[idx-1]
 	if bytes.Compare(key, entry.start) < 0 {
-		return raftmeta.RegionMeta{}, false
+		return localmeta.RegionMeta{}, false
 	}
 	if len(entry.end) > 0 && bytes.Compare(key, entry.end) >= 0 {
-		return raftmeta.RegionMeta{}, false
+		return localmeta.RegionMeta{}, false
 	}
 	meta, ok := c.regions[entry.id]
 	if !ok {
-		return raftmeta.RegionMeta{}, false
+		return localmeta.RegionMeta{}, false
 	}
-	return raftmeta.CloneRegionMeta(meta), true
+	return localmeta.CloneRegionMeta(meta), true
 }
 
 // RegionLastHeartbeat returns the latest heartbeat timestamp for regionID.
@@ -204,7 +204,7 @@ func (c *Cluster) RegionLastHeartbeat(regionID uint64) (time.Time, bool) {
 	return ts, ok
 }
 
-func (c *Cluster) findOverlapLocked(meta raftmeta.RegionMeta) (uint64, bool) {
+func (c *Cluster) findOverlapLocked(meta localmeta.RegionMeta) (uint64, bool) {
 	for id, existing := range c.regions {
 		if id == meta.ID {
 			continue
@@ -234,7 +234,7 @@ func (c *Cluster) rebuildRegionIndexLocked() {
 	c.regionIndex = index
 }
 
-func isEpochStale(incoming, current raftmeta.RegionEpoch) bool {
+func isEpochStale(incoming, current localmeta.RegionEpoch) bool {
 	if incoming.Version < current.Version {
 		return true
 	}
@@ -244,7 +244,7 @@ func isEpochStale(incoming, current raftmeta.RegionEpoch) bool {
 	return false
 }
 
-func rangesOverlap(a, b raftmeta.RegionMeta) bool {
+func rangesOverlap(a, b localmeta.RegionMeta) bool {
 	// [a.start, a.end) is fully before [b.start, b.end)
 	if len(a.EndKey) > 0 && bytes.Compare(a.EndKey, b.StartKey) <= 0 {
 		return false

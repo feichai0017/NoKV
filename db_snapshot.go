@@ -6,7 +6,7 @@ import (
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -68,7 +68,7 @@ func (db *DB) snapshotTarget() (snapshotTarget, error) {
 }
 
 // ExportSnapshotDir persists one region-scoped snapshot directory in SST form.
-func (db *DB) ExportSnapshotDir(dir string, region raftmeta.RegionMeta) (*snapshotpkg.ExportResult, error) {
+func (db *DB) ExportSnapshotDir(dir string, region localmeta.RegionMeta) (*snapshotpkg.ExportResult, error) {
 	src, err := db.snapshotSource()
 	if err != nil {
 		return nil, err
@@ -87,7 +87,7 @@ func (db *DB) ImportSnapshotDir(dir string) (*snapshotpkg.ImportResult, error) {
 
 // ExportSnapshot materializes one region-scoped snapshot payload using the
 // current DB's storage format and workdir.
-func (db *DB) ExportSnapshot(region raftmeta.RegionMeta) ([]byte, error) {
+func (db *DB) ExportSnapshot(region localmeta.RegionMeta) ([]byte, error) {
 	src, err := db.snapshotSource()
 	if err != nil {
 		return nil, err
@@ -98,7 +98,7 @@ func (db *DB) ExportSnapshot(region raftmeta.RegionMeta) ([]byte, error) {
 
 // ExportSnapshotTo materializes one region-scoped snapshot payload and writes
 // it to w.
-func (db *DB) ExportSnapshotTo(w io.Writer, region raftmeta.RegionMeta) (snapshotpkg.Meta, error) {
+func (db *DB) ExportSnapshotTo(w io.Writer, region localmeta.RegionMeta) (snapshotpkg.Meta, error) {
 	src, err := db.snapshotSource()
 	if err != nil {
 		return snapshotpkg.Meta{}, err

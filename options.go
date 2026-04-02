@@ -5,7 +5,7 @@ import (
 
 	"github.com/feichai0017/NoKV/kv"
 	lsmpkg "github.com/feichai0017/NoKV/lsm"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
@@ -177,7 +177,7 @@ type Options struct {
 	// RaftPointerSnapshot returns store-local raft WAL checkpoints used by WAL
 	// watchdogs, GC policy, and diagnostics. It must return a detached snapshot.
 	// Nil disables raft-specific backlog accounting.
-	RaftPointerSnapshot func() map[uint64]raftmeta.RaftLogPointer
+	RaftPointerSnapshot func() map[uint64]localmeta.RaftLogPointer
 
 	// DiscardStatsFlushThreshold controls how many discard-stat updates must be
 	// accumulated before they are flushed back into the LSM. Zero keeps the

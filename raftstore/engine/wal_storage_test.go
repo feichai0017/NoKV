@@ -11,7 +11,7 @@ import (
 
 	"github.com/feichai0017/NoKV/kv"
 	myraft "github.com/feichai0017/NoKV/raft"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/wal"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
@@ -113,7 +113,7 @@ func TestWALStorageRejectsLocalMetaPointerToNonRaftRecord(t *testing.T) {
 	plain.DecrRef()
 	require.NoError(t, walMgr.Sync())
 
-	ptr := raftmeta.RaftLogPointer{
+	ptr := localmeta.RaftLogPointer{
 		GroupID: 1,
 		Segment: info.SegmentID,
 		Offset:  recordEnd(info),
@@ -360,9 +360,9 @@ func openWalManager(t *testing.T, dir string) *wal.Manager {
 	return mgr
 }
 
-func openLocalMetaStore(t *testing.T, dir string) *raftmeta.Store {
+func openLocalMetaStore(t *testing.T, dir string) *localmeta.Store {
 	t.Helper()
-	mgr, err := raftmeta.OpenLocalStore(filepath.Join(dir, "raftmeta"), nil)
+	mgr, err := localmeta.OpenLocalStore(filepath.Join(dir, "raftmeta"), nil)
 	require.NoError(t, err)
 	return mgr
 }

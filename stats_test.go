@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"expvar"
 	"fmt"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"path/filepath"
 	"testing"
 
@@ -21,8 +21,8 @@ func TestStatsCollectSnapshots(t *testing.T) {
 
 	rm := metrics.NewRegionMetrics()
 	db.SetRegionMetrics(rm)
-	rm.RecordUpdate(raftmeta.RegionMeta{ID: 1, State: raftmeta.RegionStateRunning})
-	rm.RecordUpdate(raftmeta.RegionMeta{ID: 2, State: raftmeta.RegionStateRemoving})
+	rm.RecordUpdate(localmeta.RegionMeta{ID: 1, State: localmeta.RegionStateRunning})
+	rm.RecordUpdate(localmeta.RegionMeta{ID: 2, State: localmeta.RegionStateRemoving})
 
 	require.NoError(t, db.Set([]byte("stats-key"), []byte("stats-value")))
 	entry, err := db.Get([]byte("stats-key"))

@@ -13,7 +13,7 @@ import (
 	"github.com/feichai0017/NoKV/percolator/latch"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/stretchr/testify/require"
 )
@@ -40,7 +40,7 @@ type degradedSchedulerSink struct {
 }
 
 type regionHeartbeat struct {
-	Meta          raftmeta.RegionMeta
+	Meta          localmeta.RegionMeta
 	LastHeartbeat time.Time
 }
 
@@ -51,13 +51,13 @@ func newTestSchedulerSink() *testSchedulerSink {
 	}
 }
 
-func (s *testSchedulerSink) PublishRegion(_ context.Context, meta raftmeta.RegionMeta) {
+func (s *testSchedulerSink) PublishRegion(_ context.Context, meta localmeta.RegionMeta) {
 	if s == nil || meta.ID == 0 {
 		return
 	}
 	s.mu.Lock()
 	s.regions[meta.ID] = regionHeartbeat{
-		Meta:          raftmeta.CloneRegionMeta(meta),
+		Meta:          localmeta.CloneRegionMeta(meta),
 		LastHeartbeat: time.Now(),
 	}
 	s.mu.Unlock()
@@ -95,7 +95,7 @@ func (s *testSchedulerSink) RegionSnapshot() []regionHeartbeat {
 	out := make([]regionHeartbeat, 0, len(s.regions))
 	for _, info := range s.regions {
 		out = append(out, regionHeartbeat{
-			Meta:          raftmeta.CloneRegionMeta(info.Meta),
+			Meta:          localmeta.CloneRegionMeta(info.Meta),
 			LastHeartbeat: info.LastHeartbeat,
 		})
 	}
@@ -137,7 +137,7 @@ func (s *degradedSchedulerSink) Status() SchedulerStatus {
 	return s.status
 }
 
-func (s *slowSchedulerSink) PublishRegion(ctx context.Context, meta raftmeta.RegionMeta) {
+func (s *slowSchedulerSink) PublishRegion(ctx context.Context, meta localmeta.RegionMeta) {
 	if s.publishDelay > 0 {
 		select {
 		case <-time.After(s.publishDelay):
@@ -160,7 +160,7 @@ func (s *slowSchedulerSink) RemoveRegion(ctx context.Context, id uint64) {
 }
 
 func testPeerBuilder(storeID uint64) PeerBuilder {
-	return func(meta raftmeta.RegionMeta) (*peer.Config, error) {
+	return func(meta localmeta.RegionMeta) (*peer.Config, error) {
 		var peerID uint64
 		for _, peerMeta := range meta.Peers {
 			if peerMeta.StoreID == storeID {
@@ -183,17 +183,17 @@ func testPeerBuilder(storeID uint64) PeerBuilder {
 			Transport: noopTransport{},
 			Apply:     func([]myraft.Entry) error { return nil },
 			GroupID:   meta.ID,
-			Region:    raftmeta.CloneRegionMetaPtr(&meta),
+			Region:    localmeta.CloneRegionMetaPtr(&meta),
 		}
 		return cfg, nil
 	}
 }
 
-func openStoreDB(t *testing.T) (*NoKV.DB, *raftmeta.Store) {
+func openStoreDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
 	t.Helper()
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
-	localMeta, err := raftmeta.OpenLocalStore(opt.WorkDir, nil)
+	localMeta, err := localmeta.OpenLocalStore(opt.WorkDir, nil)
 	require.NoError(t, err)
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
 	db, err := NoKV.Open(opt)
@@ -203,7 +203,7 @@ func openStoreDB(t *testing.T) (*NoKV.DB, *raftmeta.Store) {
 	return db, localMeta
 }
 
-func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *raftmeta.Store, groupID uint64) engine.PeerStorage {
+func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *localmeta.Store, groupID uint64) engine.PeerStorage {
 	t.Helper()
 	storage, err := db.RaftLog().Open(groupID, localMeta)
 	require.NoError(t, err)
