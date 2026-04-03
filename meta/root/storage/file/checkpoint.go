@@ -1,4 +1,4 @@
-package local
+package file
 
 import (
 	"errors"
@@ -19,7 +19,7 @@ type fileCheckpointStore struct {
 	workdir string
 }
 
-func newFileCheckpointStore(fs vfs.FS, workdir string) rootstorage.CheckpointStore {
+func NewCheckpointStore(fs vfs.FS, workdir string) rootstorage.CheckpointStore {
 	return fileCheckpointStore{fs: fs, workdir: workdir}
 }
 

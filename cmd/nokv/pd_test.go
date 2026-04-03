@@ -51,6 +51,7 @@ func TestRunPDCmdStartsAndStopsWithReplicatedRoot(t *testing.T) {
 	require.NoError(t, runPDCmd(&buf, []string{
 		"-addr", "127.0.0.1:0",
 		"-root-mode", "replicated",
+		"-workdir", t.TempDir(),
 		"-root-node-id", "1",
 		"-root-transport-addr", "127.0.0.1:0",
 		"-root-peer", "1=127.0.0.1:7001",
@@ -86,6 +87,7 @@ func TestRunPDCmdReplicatedRootRequiresTransportAddress(t *testing.T) {
 	err := runPDCmd(&buf, []string{
 		"-addr", "127.0.0.1:0",
 		"-root-mode", "replicated",
+		"-workdir", t.TempDir(),
 		"-root-peer", "1=127.0.0.1:7001",
 		"-root-peer", "2=127.0.0.1:7002",
 		"-root-peer", "3=127.0.0.1:7003",
@@ -98,11 +100,25 @@ func TestRunPDCmdReplicatedRootRequiresThreePeers(t *testing.T) {
 	err := runPDCmd(&buf, []string{
 		"-addr", "127.0.0.1:0",
 		"-root-mode", "replicated",
+		"-workdir", t.TempDir(),
 		"-root-transport-addr", "127.0.0.1:0",
 		"-root-peer", "1=127.0.0.1:7001",
 		"-root-peer", "2=127.0.0.1:7002",
 	})
 	require.ErrorContains(t, err, "requires exactly 3 peer addresses")
+}
+
+func TestRunPDCmdReplicatedRootRequiresWorkdir(t *testing.T) {
+	var buf bytes.Buffer
+	err := runPDCmd(&buf, []string{
+		"-addr", "127.0.0.1:0",
+		"-root-mode", "replicated",
+		"-root-transport-addr", "127.0.0.1:0",
+		"-root-peer", "1=127.0.0.1:7001",
+		"-root-peer", "2=127.0.0.1:7002",
+		"-root-peer", "3=127.0.0.1:7003",
+	})
+	require.ErrorContains(t, err, "requires workdir")
 }
 
 func TestMainPDCommand(t *testing.T) {

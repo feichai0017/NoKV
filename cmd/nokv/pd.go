@@ -120,6 +120,7 @@ func runPDCmd(w io.Writer, args []string) error {
 		}
 		workdirPath = strings.TrimSpace(*workdir)
 		rootStore, openErr := pdstorage.OpenRootReplicatedStore(pdstorage.ReplicatedRootConfig{
+			WorkDir:       workdirPath,
 			NodeID:        *rootNodeID,
 			TransportAddr: strings.TrimSpace(*rootTransportAddr),
 			PeerAddrs:     rootPeers,

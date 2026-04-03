@@ -3,12 +3,16 @@ package replicated
 import (
 	"fmt"
 	"math"
+	"os"
 	"slices"
 	"sync"
 	"time"
 
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	rootfile "github.com/feichai0017/NoKV/meta/root/storage/file"
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/vfs"
+	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
 const defaultNetworkTickInterval = 100 * time.Millisecond
@@ -16,6 +20,7 @@ const defaultNetworkTickInterval = 100 * time.Millisecond
 // NetworkConfig wires one local raft node to a transport and a fixed peer set.
 type NetworkConfig struct {
 	ID           uint64
+	WorkDir      string
 	PeerIDs      []uint64
 	Transport    Transport
 	TickInterval time.Duration
@@ -25,21 +30,25 @@ type NetworkConfig struct {
 // transport, which is the first real landing point for multi-process metadata
 // replication.
 type NetworkDriver struct {
-	mu         sync.Mutex
-	closeOnce  sync.Once
-	id         uint64
-	checkpoint rootstorage.Checkpoint
-	records    []rootstorage.CommittedEvent
-	node       *networkNode
-	transport  Transport
-	stopCh     chan struct{}
-	wg         sync.WaitGroup
+	mu        sync.Mutex
+	closeOnce sync.Once
+	id        uint64
+	workdir   string
+	checkpt   rootstorage.CheckpointStore
+	log       rootstorage.EventLog
+	node      *networkNode
+	transport Transport
+	stopCh    chan struct{}
+	wg        sync.WaitGroup
 }
 
 // NewNetworkDriver creates one transport-backed local metadata replication node.
 func NewNetworkDriver(cfg NetworkConfig) (*NetworkDriver, error) {
 	if cfg.ID == 0 {
 		return nil, fmt.Errorf("meta/root/backend/replicated: network driver id must be non-zero")
+	}
+	if cfg.WorkDir == "" {
+		return nil, fmt.Errorf("meta/root/backend/replicated: network driver workdir is required")
 	}
 	if cfg.Transport == nil {
 		return nil, fmt.Errorf("meta/root/backend/replicated: network driver transport is required")
@@ -55,14 +64,31 @@ func NewNetworkDriver(cfg NetworkConfig) (*NetworkDriver, error) {
 	}
 	driver := &NetworkDriver{
 		id:        cfg.ID,
+		workdir:   cfg.WorkDir,
+		checkpt:   rootfile.NewCheckpointStore(vfs.Ensure(nil), cfg.WorkDir),
+		log:       rootfile.NewEventLog(vfs.Ensure(nil), cfg.WorkDir),
 		transport: cfg.Transport,
 		stopCh:    make(chan struct{}),
+	}
+	if err := os.MkdirAll(cfg.WorkDir, 0o755); err != nil {
+		return nil, err
 	}
 	node, err := newNetworkNode(cfg, driver.handleTransportMessage)
 	if err != nil {
 		return nil, err
 	}
 	driver.node = node
+	driver.mu.Lock()
+	_, outbound, err := driver.drainLocked()
+	driver.mu.Unlock()
+	if err != nil {
+		_ = driver.Close()
+		return nil, err
+	}
+	if err := driver.sendMessages(outbound); err != nil {
+		_ = driver.Close()
+		return nil, err
+	}
 	driver.wg.Add(1)
 	go driver.tickLoop(cfg.TickInterval)
 	return driver, nil
@@ -71,7 +97,7 @@ func NewNetworkDriver(cfg NetworkConfig) (*NetworkDriver, error) {
 func (d *NetworkDriver) Log() rootstorage.EventLog { return networkEventLog{driver: d} }
 
 func (d *NetworkDriver) CheckpointStore() rootstorage.CheckpointStore {
-	return networkCheckpointStore{driver: d}
+	return d.checkpt
 }
 
 func (d *NetworkDriver) BootstrapInstaller() rootstorage.BootstrapInstaller { return d }
@@ -95,11 +121,11 @@ func (d *NetworkDriver) LeaderID() uint64 {
 }
 
 func (d *NetworkDriver) State() DriverState {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	checkpoint, _ := d.checkpt.Load()
+	records, _ := d.log.Load(0)
 	return DriverState{
-		Checkpoint: rootstorage.CloneCheckpoint(d.checkpoint),
-		Records:    rootstorage.CloneCommittedEvents(d.records),
+		Checkpoint: rootstorage.CloneCheckpoint(checkpoint),
+		Records:    rootstorage.CloneCommittedEvents(records),
 	}
 }
 
@@ -124,9 +150,10 @@ func (d *NetworkDriver) Campaign() error {
 func (d *NetworkDriver) InstallBootstrap(checkpoint rootstorage.Checkpoint, records []rootstorage.CommittedEvent) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.checkpoint = rootstorage.CloneCheckpoint(checkpoint)
-	d.records = rootstorage.CloneCommittedEvents(records)
-	return nil
+	if err := d.log.Compact(records); err != nil {
+		return err
+	}
+	return d.checkpt.Save(checkpoint)
 }
 
 func (d *NetworkDriver) Close() error {
@@ -191,20 +218,24 @@ func (d *NetworkDriver) drainLocked() ([]rootstorage.CommittedEvent, []myraft.Me
 	var outbound []myraft.Message
 	for d.node.raw.HasReady() {
 		rd := d.node.raw.Ready()
+		persistProtocol := false
 		if !myraft.IsEmptyHardState(rd.HardState) {
 			if err := d.node.storage.SetHardState(rd.HardState); err != nil {
 				return nil, nil, err
 			}
+			persistProtocol = true
 		}
 		if !myraft.IsEmptySnap(rd.Snapshot) {
 			if err := d.node.storage.ApplySnapshot(rd.Snapshot); err != nil {
 				return nil, nil, err
 			}
+			persistProtocol = true
 		}
 		if len(rd.Entries) > 0 {
 			if err := d.node.storage.Append(rd.Entries); err != nil {
 				return nil, nil, err
 			}
+			persistProtocol = true
 		}
 		for _, entry := range rd.CommittedEntries {
 			if entry.Type != myraft.EntryNormal || len(entry.Data) == 0 {
@@ -214,11 +245,24 @@ func (d *NetworkDriver) drainLocked() ([]rootstorage.CommittedEvent, []myraft.Me
 			if err != nil {
 				return nil, nil, err
 			}
-			d.records = append(d.records, rec)
 			committed = append(committed, rec)
+		}
+		if persistProtocol {
+			state, err := captureProtocolState(d.node.storage)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := saveProtocolState(d.workdir, state); err != nil {
+				return nil, nil, err
+			}
 		}
 		outbound = append(outbound, rd.Messages...)
 		d.node.raw.Advance(rd)
+	}
+	if len(committed) > 0 {
+		if _, err := d.log.Append(committed...); err != nil {
+			return nil, nil, err
+		}
 	}
 	return committed, outbound, nil
 }
@@ -226,12 +270,7 @@ func (d *NetworkDriver) drainLocked() ([]rootstorage.CommittedEvent, []myraft.Me
 type networkEventLog struct{ driver *NetworkDriver }
 
 func (l networkEventLog) Load(offset int64) ([]rootstorage.CommittedEvent, error) {
-	l.driver.mu.Lock()
-	defer l.driver.mu.Unlock()
-	if offset <= 0 || int(offset) > len(l.driver.records) {
-		return rootstorage.CloneCommittedEvents(l.driver.records), nil
-	}
-	return rootstorage.CloneCommittedEvents(l.driver.records[int(offset):]), nil
+	return l.driver.log.Load(offset)
 }
 
 func (l networkEventLog) Append(records ...rootstorage.CommittedEvent) (int64, error) {
@@ -265,45 +304,17 @@ func (l networkEventLog) Append(records ...rootstorage.CommittedEvent) (int64, e
 		}
 		l.driver.mu.Lock()
 	}
-	size := int64(len(l.driver.records))
+	size, err := l.driver.log.Size()
 	l.driver.mu.Unlock()
-	return size, nil
+	return size, err
 }
 
 func (l networkEventLog) Compact(records []rootstorage.CommittedEvent) error {
-	l.driver.mu.Lock()
-	defer l.driver.mu.Unlock()
-	l.driver.records = rootstorage.CloneCommittedEvents(records)
-	return nil
+	return l.driver.log.Compact(records)
 }
 
 func (l networkEventLog) Size() (int64, error) {
-	l.driver.mu.Lock()
-	defer l.driver.mu.Unlock()
-	return int64(len(l.driver.records)), nil
-}
-
-func (l networkEventLog) Close() error {
-	return l.driver.Close()
-}
-
-type networkCheckpointStore struct{ driver *NetworkDriver }
-
-func (s networkCheckpointStore) Load() (rootstorage.Checkpoint, error) {
-	s.driver.mu.Lock()
-	defer s.driver.mu.Unlock()
-	return rootstorage.CloneCheckpoint(s.driver.checkpoint), nil
-}
-
-func (s networkCheckpointStore) Save(checkpoint rootstorage.Checkpoint) error {
-	s.driver.mu.Lock()
-	defer s.driver.mu.Unlock()
-	s.driver.checkpoint = rootstorage.CloneCheckpoint(checkpoint)
-	return nil
-}
-
-func (s networkCheckpointStore) Close() error {
-	return s.driver.Close()
+	return l.driver.log.Size()
 }
 
 type networkNode struct {
@@ -315,6 +326,25 @@ type networkNode struct {
 
 func newNetworkNode(cfg NetworkConfig, handler MessageHandler) (*networkNode, error) {
 	storage := myraft.NewMemoryStorage()
+	state, err := loadProtocolState(cfg.WorkDir)
+	if err != nil {
+		return nil, err
+	}
+	if !myraft.IsEmptySnap(state.Snapshot) {
+		if err := storage.ApplySnapshot(state.Snapshot); err != nil {
+			return nil, err
+		}
+	}
+	if !myraft.IsEmptyHardState(state.HardState) {
+		if err := storage.SetHardState(state.HardState); err != nil {
+			return nil, err
+		}
+	}
+	if len(state.Entries) > 0 {
+		if err := storage.Append(state.Entries); err != nil {
+			return nil, err
+		}
+	}
 	rcfg := &myraft.Config{
 		ID:              cfg.ID,
 		ElectionTick:    5,
@@ -328,12 +358,19 @@ func newNetworkNode(cfg NetworkConfig, handler MessageHandler) (*networkNode, er
 	if err != nil {
 		return nil, err
 	}
-	peers := make([]myraft.Peer, 0, len(cfg.PeerIDs))
-	for _, id := range cfg.PeerIDs {
-		peers = append(peers, myraft.Peer{ID: id})
-	}
-	if err := raw.Bootstrap(peers); err != nil {
-		return nil, err
+	restarted := !myraft.IsEmptyHardState(state.HardState) || !myraft.IsEmptySnap(state.Snapshot) || len(state.Entries) > 0
+	if !restarted {
+		peers := make([]myraft.Peer, 0, len(cfg.PeerIDs))
+		for _, id := range cfg.PeerIDs {
+			peers = append(peers, myraft.Peer{ID: id})
+		}
+		if err := raw.Bootstrap(peers); err != nil {
+			return nil, err
+		}
+	} else {
+		for _, id := range cfg.PeerIDs {
+			raw.ApplyConfChange(raftpb.ConfChange{NodeID: id, Type: raftpb.ConfChangeAddNode}.AsV2())
+		}
 	}
 	cfg.Transport.SetHandler(handler)
 	return &networkNode{
