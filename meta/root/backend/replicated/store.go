@@ -83,6 +83,27 @@ func Open(cfg Config) (*Store, error) {
 	}, nil
 }
 
+// Refresh reloads the rooted checkpoint plus retained committed tail from the
+// backing driver. Followers use this to catch up their in-memory view without
+// reopening the store.
+func (s *Store) Refresh() error {
+	if s == nil {
+		return nil
+	}
+	bootstrap, err := rootmaterialize.LoadBootstrap(s.checkpt, s.log)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.state = bootstrap.Snapshot.State
+	s.descs = bootstrap.Snapshot.Descriptors
+	s.records = bootstrap.Records
+	s.logBase = bootstrap.LogOffset
+	s.retainFrom = bootstrap.RetainFrom
+	s.mu.Unlock()
+	return nil
+}
+
 func (s *Store) Current() (rootstate.State, error) {
 	if s == nil {
 		return rootstate.State{}, nil
@@ -213,19 +234,7 @@ func (s *Store) InstallBootstrap(snapshot rootstate.Snapshot, records []rootstor
 	if err := s.install.InstallBootstrap(checkpoint, retained); err != nil {
 		return err
 	}
-	bootstrap, err := rootmaterialize.LoadBootstrap(s.checkpt, s.log)
-	if err != nil {
-		return err
-	}
-
-	s.mu.Lock()
-	s.state = bootstrap.Snapshot.State
-	s.descs = bootstrap.Snapshot.Descriptors
-	s.records = bootstrap.Records
-	s.logBase = bootstrap.LogOffset
-	s.retainFrom = bootstrap.RetainFrom
-	s.mu.Unlock()
-	return nil
+	return s.Refresh()
 }
 
 func (s *Store) Close() error {
