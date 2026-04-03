@@ -51,6 +51,11 @@
     <h3><a href="2026-04-03-future-metadata-ha-plan.html">未来 Metadata HA 路线规划</a></h3>
     <p>为什么 NoKV 未来更适合走 Delos-lite rooted log，而不是传统的大 PD 元数据架构。</p>
   </div>
+  <div class="blog-card">
+    <span class="blog-date">2026-04-03</span>
+    <h3><a href="2026-04-03-delos-lite-metadata-ha-design.html">Delos-lite Metadata HA 设计草案</a></h3>
+    <p>把未来 metadata HA 进一步细化到模块、事件、状态机、恢复路径和迁移步骤。</p>
+  </div>
 </div>
 
 ## 这里应该写什么
