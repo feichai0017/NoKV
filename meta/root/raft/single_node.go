@@ -73,3 +73,5 @@ func (r *SingleNodeRoot) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) 
 		return 0, nil
 	}
 }
+
+func (r *SingleNodeRoot) Close() error { return nil }

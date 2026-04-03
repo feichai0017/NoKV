@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/vfs"
@@ -89,7 +88,7 @@ func (s *FileCheckpointStore) Save(cp Checkpoint) error {
 }
 
 func encodeCheckpoint(cp Checkpoint) ([]byte, error) {
-	pb := &metapb.RootCheckpoint{State: stateToRootPB(cp.State)}
+	pb := &metapb.RootCheckpoint{State: metacodec.RootStateToProto(cp.State)}
 	if len(cp.Descriptors) > 0 {
 		pb.Descriptors = make([]*metapb.RegionDescriptor, 0, len(cp.Descriptors))
 		for _, desc := range cp.Descriptors {
@@ -106,7 +105,7 @@ func decodeCheckpoint(data []byte) (Checkpoint, error) {
 	}
 	cp := Checkpoint{}
 	if pb.State != nil {
-		cp.State = stateFromRootPB(pb.State)
+		cp.State = metacodec.RootStateFromProto(pb.State)
 	}
 	if len(pb.Descriptors) > 0 {
 		cp.Descriptors = make(map[uint64]descriptor.Descriptor, len(pb.Descriptors))
@@ -119,33 +118,4 @@ func decodeCheckpoint(data []byte) (Checkpoint, error) {
 		}
 	}
 	return cp, nil
-}
-
-func stateToRootPB(state rootpkg.State) *metapb.RootState {
-	return &metapb.RootState{
-		ClusterEpoch:    state.ClusterEpoch,
-		MembershipEpoch: state.MembershipEpoch,
-		PolicyVersion:   state.PolicyVersion,
-		LastCommitted:   &metapb.RootCursor{Term: state.LastCommitted.Term, Index: state.LastCommitted.Index},
-		IdFence:         state.IDFence,
-		TsoFence:        state.TSOFence,
-	}
-}
-
-func stateFromRootPB(pbState *metapb.RootState) rootpkg.State {
-	if pbState == nil {
-		return rootpkg.State{}
-	}
-	var cursor rootpkg.Cursor
-	if pbState.LastCommitted != nil {
-		cursor = rootpkg.Cursor{Term: pbState.LastCommitted.Term, Index: pbState.LastCommitted.Index}
-	}
-	return rootpkg.State{
-		ClusterEpoch:    pbState.ClusterEpoch,
-		MembershipEpoch: pbState.MembershipEpoch,
-		PolicyVersion:   pbState.PolicyVersion,
-		LastCommitted:   cursor,
-		IDFence:         pbState.IdFence,
-		TSOFence:        pbState.TsoFence,
-	}
 }
