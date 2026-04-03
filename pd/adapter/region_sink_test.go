@@ -176,36 +176,9 @@ func TestSchedulerClientNoopOnZeroIDs(t *testing.T) {
 	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 0})
 	sink.PublishRegionDescriptor(context.Background(), descriptor.Descriptor{})
 	sink.PublishRootEvent(context.Background(), rootevent.Event{})
-	sink.RemoveRegion(context.Background(), 0)
 	require.Empty(t, pd.storeReqs)
 	require.Empty(t, pd.regionReqs)
 	require.Empty(t, pd.rootEventReq)
-	require.Empty(t, pd.removeReqs)
-}
-
-func TestSchedulerClientRemoveRegionForwardsAndReportsErrors(t *testing.T) {
-	removeErr := errors.New("remove region failed")
-	pd := &fakePDClient{removeErr: removeErr}
-	var got []string
-	sink := NewSchedulerClient(SchedulerClientConfig{
-		PD: pd,
-		OnError: func(op string, err error) {
-			got = append(got, op+": "+err.Error())
-		},
-	})
-
-	sink.PublishRegionDescriptor(context.Background(), testDescriptor(100, []byte("a"), []byte("z"), metaregion.Epoch{
-		Version:     1,
-		ConfVersion: 1,
-	}, nil))
-
-	sink.RemoveRegion(context.Background(), 100)
-	require.Len(t, pd.removeReqs, 1)
-	require.Equal(t, uint64(100), pd.removeReqs[0].GetRegionId())
-	require.Len(t, got, 1)
-	require.Contains(t, got[0], "RemoveRegion")
-	require.True(t, sink.Status().Degraded)
-	require.Equal(t, storepkg.SchedulerModeUnavailable, sink.Status().Mode)
 }
 
 func TestSchedulerClientStatusRecoversAfterSuccess(t *testing.T) {

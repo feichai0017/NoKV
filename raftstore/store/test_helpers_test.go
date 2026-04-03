@@ -36,7 +36,6 @@ type testSchedulerSink struct {
 type slowSchedulerSink struct {
 	testSchedulerSink
 	publishDelay time.Duration
-	removeDelay  time.Duration
 }
 
 type degradedSchedulerSink struct {
@@ -93,16 +92,6 @@ func (s *testSchedulerSink) PublishRootEvent(_ context.Context, event rootevent.
 		}
 	}
 	s.history = append(s.history, schedulerEvent{kind: "root", regionID: rootEventRegionID(event)})
-	s.mu.Unlock()
-}
-
-func (s *testSchedulerSink) RemoveRegion(_ context.Context, id uint64) {
-	if s == nil || id == 0 {
-		return
-	}
-	s.mu.Lock()
-	delete(s.regions, id)
-	s.history = append(s.history, schedulerEvent{kind: "remove", regionID: id})
 	s.mu.Unlock()
 }
 
@@ -210,17 +199,6 @@ func (s *slowSchedulerSink) PublishRootEvent(ctx context.Context, event rooteven
 		}
 	}
 	s.testSchedulerSink.PublishRootEvent(ctx, event)
-}
-
-func (s *slowSchedulerSink) RemoveRegion(ctx context.Context, id uint64) {
-	if s.removeDelay > 0 {
-		select {
-		case <-time.After(s.removeDelay):
-		case <-ctx.Done():
-			return
-		}
-	}
-	s.testSchedulerSink.RemoveRegion(ctx, id)
 }
 
 func rootEventRegionID(event rootevent.Event) uint64 {
