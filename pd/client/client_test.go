@@ -17,7 +17,7 @@ import (
 	"github.com/feichai0017/NoKV/pd/core"
 	pdserver "github.com/feichai0017/NoKV/pd/server"
 	"github.com/feichai0017/NoKV/pd/tso"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
 func TestNewGRPCClientEmptyAddress(t *testing.T) {
@@ -64,15 +64,10 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.True(t, storeResp.GetAccepted())
 
 	_, err = cli.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromLocalRegionMeta(localmeta.RegionMeta{
-			ID:       11,
-			StartKey: []byte("a"),
-			EndKey:   []byte("z"),
-			Epoch: metaregion.Epoch{
-				Version:     1,
-				ConfVersion: 1,
-			},
-		}, 0)),
+		RegionDescriptor: metacodec.DescriptorToProto(testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{
+			Version:     1,
+			ConfVersion: 1,
+		})),
 	})
 	require.NoError(t, err)
 
@@ -98,4 +93,17 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), tsResp.GetTimestamp())
 	require.Equal(t, uint64(3), tsResp.GetCount())
+}
+
+func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descriptor.Descriptor {
+	desc := descriptor.Descriptor{
+		RegionID:  id,
+		StartKey:  append([]byte(nil), start...),
+		EndKey:    append([]byte(nil), end...),
+		Epoch:     epoch,
+		State:     metaregion.ReplicaStateRunning,
+		RootEpoch: 1,
+	}
+	desc.EnsureHash()
+	return desc
 }
