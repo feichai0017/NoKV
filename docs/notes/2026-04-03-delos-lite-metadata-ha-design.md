@@ -4,6 +4,25 @@
 
 ## 1. 设计目标
 
+> 实现状态更新（2026-04-03）：
+>
+> 当前仓库已经不只是设计草案。正式控制面模式已经收敛为：
+>
+> 1. `single pd + local meta`
+> 2. `3 pd + replicated meta`
+>
+> 其中第二种模式已经具备：
+>
+> - 三进程启动
+> - rooted leader 选举
+> - transport-backed rooted replication
+> - follower rooted refresh
+> - PD service leader-only write 语义
+> - 多 PD client failover
+> - leader failover 后继续写入与读路由
+>
+> 当前还没有完成的是更成熟的 follower push/watch 同步、以及更完整的运维/部署收口。
+
 NoKV 当前正式控制面模型是：
 
 - `standalone`：无 `pd`、无 `meta/root`

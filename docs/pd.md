@@ -61,47 +61,82 @@ plane deployment; it simply has no control plane.
 
 ### `distributed`
 
-- one `pd` process
-- one same-process `meta/root/backend/local`
-- data nodes use PD for routing, heartbeats, and allocator services
+`distributed` has two formal control-plane deployments:
 
-The current distributed control plane is intentionally single-node. The design
-keeps truth and view logically separated inside one process:
+1. `single pd + local meta`
+2. `3 pd + replicated meta`
 
-- `meta/root/backend/local`: durable control-plane truth
+Both deployments keep the same logical split:
+
+- `meta/root/*`: durable rooted truth
 - `pd/view` + `pd/core`: rebuildable routing/scheduling state
 - `pd/server`: gRPC API surface
 
-Metadata high availability is out of current scope. There is no supported
-multi-node metadata root deployment in the current product path.
+The difference is only the rooted backend:
+
+- `single pd + local meta`
+  - one `pd` process
+  - one same-process `meta/root/backend/local`
+  - single-node durable truth
+- `3 pd + replicated meta`
+  - three `pd` processes
+  - each process hosts one same-process `meta/root/backend/replicated`
+  - fixed three-replica rooted truth
+  - one rooted leader accepts truth writes, followers refresh rooted state and serve read/view traffic
+
+No other product control-plane mode is supported. In particular:
+
+- there is no separate `meta` cluster
+- there is no `pd` cluster larger than three members
+- there is no dynamic metadata membership today
 
 ---
 
 ## 4. Persistence (`--workdir`)
 
-When `--workdir` is provided, PD-lite persists durable control-plane truth in a
-single local metadata-root backend:
+`--workdir` is required for every formal PD deployment that hosts rooted truth.
+
+### `single pd + local meta`
+
+The rooted backend stores:
 
 - `metadata-root.log`
 - `metadata-root-checkpoint.pb`
 
-The PD storage layer rebuilds its region snapshot and allocator checkpoints by
-replaying root events:
+### `3 pd + replicated meta`
 
-- **Region descriptor publish/tombstone** events rebuild the route catalog.
-- **Allocator fences** rebuild:
+Each PD node has its own workdir and persists two layers of state:
+
+1. rooted truth state
+   - `metadata-root.log`
+   - `metadata-root-checkpoint.pb`
+2. replicated protocol state
+   - raft hard state
+   - raft snapshot
+   - retained raft entries
+
+Each node must have an isolated workdir. Workdirs are not shared.
+
+### Rooted bootstrap flow
+
+The PD storage layer rebuilds its region snapshot and allocator checkpoints by
+replaying rooted truth:
+
+- **region descriptor publish/tombstone** events rebuild the route catalog
+- **allocator fences** rebuild:
   - `id_current`
   - `ts_current`
 
 Startup flow:
 
-1. Open rooted `pd/storage` with `--workdir`.
-2. Replay the metadata root into a PD snapshot (`regions` + allocator fences).
+1. Open rooted `pd/storage` from `--workdir`.
+2. Reconstruct a rooted PD snapshot (`regions` + allocator fences).
 3. Compute starts as `max(cli_start, fence+1)`.
-4. Replay the rooted region snapshot into `pd/core.Cluster`.
+4. Materialize the rooted region snapshot into `pd/core.Cluster`.
 
-This avoids allocator rollback and removes the old parallel `PD_STATE.json`
-truth table.
+For replicated mode, followers periodically refresh rooted state and rebuild the
+service-side view. This avoids allocator rollback and removes the old parallel
+`PD_STATE.json` truth table.
 
 ### Region Truth Hierarchy
 
@@ -145,6 +180,9 @@ Helpers:
 - `config.ResolvePDWorkDir(scope)`
 - `nokv-config pd --field addr|workdir --scope host|docker`
 
+Replicated-root transport settings are currently CLI-driven, not config-file
+driven.
+
 ---
 
 ## 6. Routing Source Convergence
@@ -174,7 +212,90 @@ Related CLI behavior:
 
 ---
 
-## 8. Comparison: TinyKV / TiKV
+## 8. Service Semantics
+
+`PD-lite` intentionally separates rooted truth leadership from the outer gRPC
+service surface.
+
+In `3 pd + replicated meta`:
+
+- all three `pd` processes may listen and serve RPC
+- only the rooted leader may commit truth writes
+- followers refresh rooted state and serve read/view traffic
+
+### Leader-only writes
+
+These RPCs require rooted leadership:
+
+- `RegionHeartbeat`
+- `PublishRootEvent`
+- `RemoveRegion`
+- `AllocID`
+- `Tso`
+
+Followers return `FailedPrecondition` with `pd not leader` semantics, and
+clients are expected to retry against another PD endpoint.
+
+### Any-node reads
+
+These RPCs may be served by any PD node:
+
+- `GetRegionByKey`
+- `StoreHeartbeat` handling and store-view inspection
+
+Follower reads are driven by rooted refresh into `pd/core.Cluster`. They are
+expected to be shortly stale rather than linearly consistent.
+
+### Client behavior
+
+`pd/client` accepts multiple PD addresses. Write RPCs retry across PD nodes and
+converge on the rooted leader. Read RPCs may use any available PD endpoint.
+
+---
+
+## 9. Deployment Examples
+
+### `single pd + local meta`
+
+```bash
+go run ./cmd/nokv pd \
+  -addr 127.0.0.1:2379 \
+  -workdir ./artifacts/pd
+```
+
+### `3 pd + replicated meta`
+
+Node 1:
+
+```bash
+go run ./cmd/nokv pd \
+  -addr 127.0.0.1:2379 \
+  -workdir ./artifacts/pd1 \
+  -root-mode replicated \
+  -root-node-id 1 \
+  -root-transport-addr 127.0.0.1:2471 \
+  -root-peer 1=127.0.0.1:2471 \
+  -root-peer 2=127.0.0.1:2472 \
+  -root-peer 3=127.0.0.1:2473
+```
+
+Node 2 and node 3 use the same peer map, but change:
+
+- `-addr`
+- `-workdir`
+- `-root-node-id`
+- `-root-transport-addr`
+
+Current product assumptions:
+
+- exactly three rooted replicas
+- one workdir per PD node
+- one transport address per PD node
+- no dynamic membership
+
+---
+
+## 10. Comparison: TinyKV / TiKV
 
 ### TinyKV (teaching stack)
 
@@ -206,10 +327,14 @@ Related CLI behavior:
 
 ---
 
-## 9. Current Limitations / Next Steps
+## 11. Current Limitations / Next Steps
 
-- Control-plane truth is single-node rooted storage, not HA quorum metadata.
+- `single pd + local meta` remains the simpler and more mature deployment.
+- `3 pd + replicated meta` is now a formal product mode, but still has a
+  simpler follower sync path based on rooted refresh rather than push/watch.
 - Scheduler policy is intentionally small (leader transfer focused).
 - No advanced placement constraints yet.
+- Metadata membership is fixed at three replicas.
 
-These are deliberate scope limits for a fast-moving experimental platform.
+These are deliberate scope limits for a fast-moving experimental platform that
+keeps the rooted truth surface small.
