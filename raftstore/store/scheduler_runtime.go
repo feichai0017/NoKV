@@ -222,6 +222,7 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 	if s.sched.regionUpdates == nil {
 		s.sched.regionUpdates = make(map[uint64]regionEvent)
 	}
+	ev = s.normalizeRegionEventLocked(ev)
 	switch ev.kind {
 	case regionEventApply:
 		if ev.root != nil {
@@ -299,12 +300,42 @@ func (s *Store) flushRegionUpdates() {
 		case regionEventApply:
 			if ev.root != nil {
 				s.schedulerClient().PublishRootEvent(ctx, *ev.root)
+			}
+		case regionEventRemove:
+			if ev.root != nil {
+				s.schedulerClient().PublishRootEvent(ctx, *ev.root)
 				continue
 			}
-			s.schedulerClient().PublishRegionDescriptor(ctx, ev.desc)
-		case regionEventRemove:
 			s.schedulerClient().RemoveRegion(ctx, ev.regionID)
 		}
+	}
+}
+
+func (s *Store) normalizeRegionEventLocked(ev regionEvent) regionEvent {
+	if s == nil || s.sched == nil {
+		return ev
+	}
+	switch ev.kind {
+	case regionEventApply:
+		if ev.root != nil || ev.desc.RegionID == 0 {
+			return ev
+		}
+		_, existed := s.sched.descriptors[ev.regionID]
+		root := rootevent.RegionDescriptorPublished(ev.desc)
+		if !existed {
+			root = rootevent.RegionBootstrapped(ev.desc)
+		}
+		ev.root = &root
+		return ev
+	case regionEventRemove:
+		if ev.root != nil || ev.regionID == 0 {
+			return ev
+		}
+		root := rootevent.RegionTombstoned(ev.regionID)
+		ev.root = &root
+		return ev
+	default:
+		return ev
 	}
 }
 
