@@ -9,6 +9,7 @@ import (
 
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -224,7 +225,7 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 	switch ev.kind {
 	case regionEventApply:
 		if ev.root != nil {
-			rootpkg.ApplyEventToDescriptors(s.sched.descriptors, *ev.root)
+			rootmaterialize.ApplyEventToDescriptors(s.sched.descriptors, *ev.root)
 		} else {
 			s.sched.descriptors[ev.regionID] = ev.desc.Clone()
 		}

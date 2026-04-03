@@ -7,6 +7,7 @@ import (
 
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/vfs"
@@ -18,7 +19,7 @@ type fileCheckpointStore struct {
 	workdir string
 }
 
-func newFileCheckpointStore(fs vfs.FS, workdir string) rootpkg.CheckpointStore {
+func newFileCheckpointStore(fs vfs.FS, workdir string) rootstorage.CheckpointStore {
 	return fileCheckpointStore{fs: fs, workdir: workdir}
 }
 

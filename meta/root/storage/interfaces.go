@@ -1,9 +1,11 @@
-package root
+package storage
+
+import rootpkg "github.com/feichai0017/NoKV/meta/root"
 
 // CommittedEvent is one rooted metadata event paired with its committed cursor.
 type CommittedEvent struct {
-	Cursor Cursor
-	Event  Event
+	Cursor rootpkg.Cursor
+	Event  rootpkg.Event
 }
 
 // EventLog exposes the ordered committed metadata log surface needed by root
@@ -18,6 +20,6 @@ type EventLog interface {
 // CheckpointStore persists compact rooted metadata snapshots and their
 // associated retained-log boundary.
 type CheckpointStore interface {
-	Load() (snapshot Snapshot, logOffset int64, err error)
-	Save(snapshot Snapshot, logOffset uint64) error
+	Load() (snapshot rootpkg.Snapshot, logOffset int64, err error)
+	Save(snapshot rootpkg.Snapshot, logOffset uint64) error
 }

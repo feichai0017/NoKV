@@ -1,14 +1,15 @@
-package root
+package materialize
 
 import (
 	"sort"
 
+	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
 // ApplyEventToDescriptors applies one rooted topology event into a materialized
 // descriptor catalog.
-func ApplyEventToDescriptors(descriptors map[uint64]descriptor.Descriptor, event Event) {
+func ApplyEventToDescriptors(descriptors map[uint64]descriptor.Descriptor, event rootpkg.Event) {
 	if descriptors == nil {
 		return
 	}
@@ -32,7 +33,7 @@ func ApplyEventToDescriptors(descriptors map[uint64]descriptor.Descriptor, event
 
 // SnapshotDescriptorEvents materializes descriptor truth into a stable event
 // sequence for bootstrap/recovery callers.
-func SnapshotDescriptorEvents(descs map[uint64]descriptor.Descriptor) []Event {
+func SnapshotDescriptorEvents(descs map[uint64]descriptor.Descriptor) []rootpkg.Event {
 	if len(descs) == 0 {
 		return nil
 	}
@@ -41,9 +42,9 @@ func SnapshotDescriptorEvents(descs map[uint64]descriptor.Descriptor) []Event {
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	events := make([]Event, 0, len(ids))
+	events := make([]rootpkg.Event, 0, len(ids))
 	for _, id := range ids {
-		events = append(events, RegionDescriptorPublished(descs[id]))
+		events = append(events, rootpkg.RegionDescriptorPublished(descs[id]))
 	}
 	return events
 }

@@ -1,44 +1,46 @@
-package root
+package root_test
 
 import (
 	"testing"
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
 )
 
 func TestApplyEventToStateAdvancesEpochsAndCursor(t *testing.T) {
-	var state State
+	var state rootpkg.State
 
-	ApplyEventToState(&state, Cursor{Term: 1, Index: 1}, StoreJoined(1, "s1"))
+	rootpkg.ApplyEventToState(&state, rootpkg.Cursor{Term: 1, Index: 1}, rootpkg.StoreJoined(1, "s1"))
 	require.Equal(t, uint64(1), state.MembershipEpoch)
-	require.Equal(t, Cursor{Term: 1, Index: 1}, state.LastCommitted)
+	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 1}, state.LastCommitted)
 
-	ApplyEventToState(&state, Cursor{Term: 1, Index: 2}, RegionDescriptorPublished(testDescriptor(10, []byte("a"), []byte("z"))))
+	rootpkg.ApplyEventToState(&state, rootpkg.Cursor{Term: 1, Index: 2}, rootpkg.RegionDescriptorPublished(testDescriptor(10, []byte("a"), []byte("z"))))
 	require.Equal(t, uint64(1), state.ClusterEpoch)
-	require.Equal(t, Cursor{Term: 1, Index: 2}, state.LastCommitted)
+	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 2}, state.LastCommitted)
 
-	ApplyEventToState(&state, Cursor{Term: 1, Index: 3}, PlacementPolicyChanged("default", 9))
+	rootpkg.ApplyEventToState(&state, rootpkg.Cursor{Term: 1, Index: 3}, rootpkg.PlacementPolicyChanged("default", 9))
 	require.Equal(t, uint64(9), state.PolicyVersion)
-	require.Equal(t, Cursor{Term: 1, Index: 3}, state.LastCommitted)
+	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 3}, state.LastCommitted)
 }
 
 func TestCursorHelpers(t *testing.T) {
-	require.Equal(t, Cursor{Term: 1, Index: 1}, NextCursor(Cursor{}))
-	require.Equal(t, Cursor{Term: 2, Index: 8}, NextCursor(Cursor{Term: 2, Index: 7}))
-	require.True(t, CursorAfter(Cursor{Term: 1, Index: 2}, Cursor{Term: 1, Index: 1}))
-	require.True(t, CursorAfter(Cursor{Term: 2, Index: 1}, Cursor{Term: 1, Index: 99}))
-	require.False(t, CursorAfter(Cursor{Term: 1, Index: 1}, Cursor{Term: 1, Index: 1}))
+	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 1}, rootpkg.NextCursor(rootpkg.Cursor{}))
+	require.Equal(t, rootpkg.Cursor{Term: 2, Index: 8}, rootpkg.NextCursor(rootpkg.Cursor{Term: 2, Index: 7}))
+	require.True(t, rootpkg.CursorAfter(rootpkg.Cursor{Term: 1, Index: 2}, rootpkg.Cursor{Term: 1, Index: 1}))
+	require.True(t, rootpkg.CursorAfter(rootpkg.Cursor{Term: 2, Index: 1}, rootpkg.Cursor{Term: 1, Index: 99}))
+	require.False(t, rootpkg.CursorAfter(rootpkg.Cursor{Term: 1, Index: 1}, rootpkg.Cursor{Term: 1, Index: 1}))
 }
 
 func TestSnapshotDescriptorEventsSorted(t *testing.T) {
-	events := SnapshotDescriptorEvents(map[uint64]descriptor.Descriptor{
+	events := rootmaterialize.SnapshotDescriptorEvents(map[uint64]descriptor.Descriptor{
 		7: testDescriptor(7, []byte("m"), []byte("z")),
 		3: testDescriptor(3, []byte("a"), []byte("m")),
 	})
 	require.Len(t, events, 2)
-	require.Equal(t, EventKindRegionDescriptorPublished, events[0].Kind)
+	require.Equal(t, rootpkg.EventKindRegionDescriptorPublished, events[0].Kind)
 	require.Equal(t, uint64(3), events[0].RegionDescriptor.Descriptor.RegionID)
 	require.Equal(t, uint64(7), events[1].RegionDescriptor.Descriptor.RegionID)
 }
