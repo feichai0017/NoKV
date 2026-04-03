@@ -176,7 +176,7 @@ func runPDCmd(w io.Writer, args []string) error {
 	}
 	ctx, cancel := pdNotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	if refresher, ok := store.(pdstorage.Refresher); ok && rootModeValue == "replicated" && rootStore != nil {
+	if rootModeValue == "replicated" && rootStore != nil {
 		ticker := time.NewTicker(*rootRefresh)
 		defer ticker.Stop()
 		go func() {
@@ -192,7 +192,8 @@ func runPDCmd(w io.Writer, args []string) error {
 						last = next
 						continue
 					}
-					_ = refresher.Refresh()
+					// Allocator fence updates do not always advance LastCommitted,
+					// so replicated followers still need a bounded fallback refresh.
 					_ = svc.RefreshFromStorage()
 				}
 			}

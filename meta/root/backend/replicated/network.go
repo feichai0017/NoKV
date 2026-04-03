@@ -77,6 +77,9 @@ func NewNetworkDriver(cfg NetworkConfig) (*NetworkDriver, error) {
 	if err := os.MkdirAll(cfg.WorkDir, 0o755); err != nil {
 		return nil, err
 	}
+	if checkpoint, err := driver.checkpt.Load(); err == nil {
+		driver.latest = checkpoint.Snapshot.State.LastCommitted
+	}
 	node, err := newNetworkNode(cfg, driver.handleTransportMessage)
 	if err != nil {
 		return nil, err
@@ -186,7 +189,15 @@ func (d *NetworkDriver) InstallBootstrap(checkpoint rootstorage.Checkpoint, reco
 	if err := d.log.Compact(records); err != nil {
 		return err
 	}
-	return d.checkpt.Save(checkpoint)
+	if err := d.checkpt.Save(checkpoint); err != nil {
+		return err
+	}
+	d.latest = checkpoint.Snapshot.State.LastCommitted
+	select {
+	case d.notifyCh <- struct{}{}:
+	default:
+	}
+	return nil
 }
 
 func (d *NetworkDriver) Close() error {
