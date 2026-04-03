@@ -11,6 +11,7 @@ import (
 	"github.com/feichai0017/NoKV/pd/core"
 	pdstorage "github.com/feichai0017/NoKV/pd/storage"
 	"github.com/feichai0017/NoKV/pd/tso"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"sync"
@@ -106,11 +107,14 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pdpb.RegionHeartbeatRe
 	if req == nil || req.GetRegionDescriptor() == nil {
 		return nil, status.Error(codes.InvalidArgument, "region heartbeat request missing descriptor")
 	}
-	desc := metacodec.DescriptorFromProto(req.GetRegionDescriptor())
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
-	err := s.cluster.ValidateRegionDescriptor(desc)
+	event, err := s.rootEventForDescriptor(metacodec.DescriptorFromProto(req.GetRegionDescriptor()))
+	if err != nil {
+		return nil, status.Error(codes.Internal, "normalize region descriptor: "+err.Error())
+	}
+	err = s.cluster.ValidateRootEvent(event)
 	if err != nil {
 		switch {
 		case errors.Is(err, core.ErrInvalidRegionID):
@@ -122,11 +126,11 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pdpb.RegionHeartbeatRe
 		}
 	}
 	if s.storage != nil {
-		if err := s.storage.PublishRegionDescriptor(desc); err != nil {
+		if err := s.storage.AppendRootEvent(event); err != nil {
 			return nil, status.Error(codes.Internal, "publish region descriptor: "+err.Error())
 		}
 	}
-	if err := s.cluster.PublishRegionDescriptor(desc); err != nil {
+	if err := s.cluster.PublishRootEvent(event); err != nil {
 		return nil, status.Error(codes.Internal, "apply region descriptor after persist: "+err.Error())
 	}
 	return &pdpb.RegionHeartbeatResponse{Accepted: true}, nil
@@ -140,6 +144,10 @@ func (s *Service) PublishRootEvent(_ context.Context, req *pdpb.PublishRootEvent
 	event := metacodec.RootEventFromProto(req.GetEvent())
 	if event.Kind == rootevent.KindUnknown {
 		return nil, status.Error(codes.InvalidArgument, "publish root event requires known kind")
+	}
+	event, err := s.normalizeRootEvent(event)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "normalize root event: "+err.Error())
 	}
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
@@ -252,6 +260,78 @@ func (s *Service) Tso(_ context.Context, req *pdpb.TsoRequest) (*pdpb.TsoRespons
 		Timestamp: first,
 		Count:     got,
 	}, nil
+}
+
+func (s *Service) rootEventForDescriptor(desc descriptor.Descriptor) (rootevent.Event, error) {
+	desc, err := s.assignRootEpoch(desc)
+	if err != nil {
+		return rootevent.Event{}, err
+	}
+	if s.cluster.HasRegion(desc.RegionID) {
+		return rootevent.RegionDescriptorPublished(desc), nil
+	}
+	return rootevent.RegionBootstrapped(desc), nil
+}
+
+func (s *Service) normalizeRootEvent(event rootevent.Event) (rootevent.Event, error) {
+	nextEpoch, err := s.nextRootEpoch()
+	if err != nil {
+		return rootevent.Event{}, err
+	}
+	out := rootevent.CloneEvent(event)
+	switch {
+	case out.RegionDescriptor != nil:
+		out.RegionDescriptor.Descriptor = normalizeDescriptorRootEpoch(out.RegionDescriptor.Descriptor, nextEpoch)
+	case out.RangeSplit != nil:
+		out.RangeSplit.Left = normalizeDescriptorRootEpoch(out.RangeSplit.Left, nextEpoch)
+		out.RangeSplit.Right = normalizeDescriptorRootEpoch(out.RangeSplit.Right, nextEpoch)
+	case out.RangeMerge != nil:
+		out.RangeMerge.Merged = normalizeDescriptorRootEpoch(out.RangeMerge.Merged, nextEpoch)
+	case out.PeerChange != nil:
+		out.PeerChange.Region = normalizeDescriptorRootEpoch(out.PeerChange.Region, nextEpoch)
+	}
+	return out, nil
+}
+
+func (s *Service) assignRootEpoch(desc descriptor.Descriptor) (descriptor.Descriptor, error) {
+	nextEpoch, err := s.nextRootEpoch()
+	if err != nil {
+		return descriptor.Descriptor{}, err
+	}
+	return normalizeDescriptorRootEpoch(desc, nextEpoch), nil
+}
+
+func (s *Service) nextRootEpoch() (uint64, error) {
+	if s != nil && s.storage != nil {
+		snapshot, err := s.storage.Load()
+		if err != nil {
+			return 0, err
+		}
+		if snapshot.ClusterEpoch < ^uint64(0) {
+			return snapshot.ClusterEpoch + 1, nil
+		}
+		return snapshot.ClusterEpoch, nil
+	}
+	var maxEpoch uint64
+	if s != nil && s.cluster != nil {
+		for _, region := range s.cluster.RegionSnapshot() {
+			if region.Descriptor.RootEpoch > maxEpoch {
+				maxEpoch = region.Descriptor.RootEpoch
+			}
+		}
+	}
+	if maxEpoch < ^uint64(0) {
+		return maxEpoch + 1, nil
+	}
+	return maxEpoch, nil
+}
+
+func normalizeDescriptorRootEpoch(desc descriptor.Descriptor, rootEpoch uint64) descriptor.Descriptor {
+	if desc.RootEpoch != 0 {
+		return desc
+	}
+	desc.RootEpoch = rootEpoch
+	return desc
 }
 
 func (s *Service) reserveIDs(count uint64) (uint64, error) {
