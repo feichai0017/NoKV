@@ -75,12 +75,10 @@ func NewNetworkDriver(cfg NetworkConfig) (*NetworkDriver, error) {
 	if err := os.MkdirAll(cfg.WorkDir, 0o755); err != nil {
 		return nil, err
 	}
-	if checkpoint, err := driver.storage.LoadCheckpoint(); err == nil {
-		if tail, err := driver.storage.ReadCommitted(checkpoint.TailOffset); err == nil {
-			driver.latest.Cursor = tail.TailCursor(checkpoint.Snapshot.State.LastCommitted)
-			if driver.latest.Cursor != (rootstate.Cursor{}) || checkpoint.TailOffset != 0 || len(tail.Records) > 0 {
-				driver.latest.Revision = 1
-			}
+	if observed, err := rootstorage.ObserveCommitted(driver.storage, 0); err == nil {
+		driver.latest.Cursor = observed.LastCursor()
+		if driver.latest.Cursor != (rootstate.Cursor{}) || observed.Checkpoint.TailOffset != 0 || len(observed.Tail.Records) > 0 {
+			driver.latest.Revision = 1
 		}
 	}
 	node, err := newNetworkNode(cfg, driver.handleTransportMessage)
@@ -123,11 +121,10 @@ func (d *NetworkDriver) LeaderID() uint64 {
 }
 
 func (d *NetworkDriver) State() DriverState {
-	checkpoint, _ := d.storage.LoadCheckpoint()
-	stream, _ := d.storage.ReadCommitted(0)
+	observed, _ := rootstorage.ObserveCommitted(d.storage, 0)
 	return DriverState{
-		Checkpoint: rootstorage.CloneCheckpoint(checkpoint),
-		Records:    rootstorage.CloneCommittedEvents(stream.Records),
+		Checkpoint: rootstorage.CloneCheckpoint(observed.Checkpoint),
+		Records:    rootstorage.CloneCommittedEvents(observed.Tail.Records),
 	}
 }
 
@@ -320,11 +317,11 @@ func (d *NetworkDriver) SaveCheckpoint(checkpoint rootstorage.Checkpoint) error 
 	if err := d.storage.SaveCheckpoint(checkpoint); err != nil {
 		return err
 	}
-	cursor := checkpoint.Snapshot.State.LastCommitted
-	if tail, err := d.storage.ReadCommitted(checkpoint.TailOffset); err == nil {
-		cursor = tail.TailCursor(cursor)
+	observed, err := rootstorage.ObserveCommitted(d.storage, 0)
+	if err != nil {
+		return err
 	}
-	d.bumpLatestLocked(cursor)
+	d.bumpLatestLocked(observed.LastCursor())
 	d.signalLocked()
 	return nil
 }
@@ -385,18 +382,14 @@ func (d *NetworkDriver) Size() (int64, error) {
 }
 
 func (d *NetworkDriver) currentTailLocked() (rootstorage.TailAdvance, error) {
-	checkpoint, err := d.storage.LoadCheckpoint()
+	observed, err := rootstorage.ObserveCommitted(d.storage, 0)
 	if err != nil {
 		return rootstorage.TailAdvance{}, err
 	}
-	tail, err := d.storage.ReadCommitted(checkpoint.TailOffset)
-	if err != nil {
-		return rootstorage.TailAdvance{}, err
-	}
-	d.latest.Cursor = tail.TailCursor(checkpoint.Snapshot.State.LastCommitted)
+	d.latest.Cursor = observed.LastCursor()
 	return rootstorage.TailAdvance{
 		Token: d.latest,
-		Tail:  tail,
+		Tail:  observed.Tail,
 	}, nil
 }
 
