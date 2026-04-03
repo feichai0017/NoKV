@@ -25,8 +25,22 @@ func (s store) SaveCheckpoint(checkpoint rootstorage.Checkpoint) error {
 	return s.checkpt.SaveCheckpoint(checkpoint)
 }
 
-func (s store) ReadCommitted(offset int64) (rootstorage.CommittedTail, error) {
-	return s.log.ReadCommitted(offset)
+func (s store) ReadCommitted(requestedOffset int64) (rootstorage.CommittedTail, error) {
+	checkpoint, err := s.checkpt.LoadCheckpoint()
+	if err != nil {
+		return rootstorage.CommittedTail{}, err
+	}
+	startOffset := requestedOffset
+	if startOffset < checkpoint.TailOffset {
+		startOffset = checkpoint.TailOffset
+	}
+	tail, err := s.log.ReadCommitted(startOffset)
+	if err != nil {
+		return rootstorage.CommittedTail{}, err
+	}
+	tail.RequestedOffset = requestedOffset
+	tail.StartOffset = startOffset
+	return tail, nil
 }
 
 func (s store) AppendCommitted(records ...rootstorage.CommittedEvent) (int64, error) {

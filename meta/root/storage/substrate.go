@@ -41,21 +41,28 @@ func CloneCommittedEvents(in []CommittedEvent) []CommittedEvent {
 	return out
 }
 
-// CommittedTail is one retained committed rooted stream starting at one
-// durable log offset.
+// CommittedTail is one retained committed rooted tail returned by one read.
 type CommittedTail struct {
-	Offset    int64
-	EndOffset int64
-	Records   []CommittedEvent
+	RequestedOffset int64
+	StartOffset     int64
+	EndOffset       int64
+	Records         []CommittedEvent
 }
 
 // CloneCommittedTail returns a detached committed-stream view.
 func CloneCommittedTail(in CommittedTail) CommittedTail {
 	return CommittedTail{
-		Offset:    in.Offset,
-		EndOffset: in.EndOffset,
-		Records:   CloneCommittedEvents(in.Records),
+		RequestedOffset: in.RequestedOffset,
+		StartOffset:     in.StartOffset,
+		EndOffset:       in.EndOffset,
+		Records:         CloneCommittedEvents(in.Records),
 	}
+}
+
+// FellBehind reports whether the requested offset is already behind the
+// current retained tail boundary.
+func (s CommittedTail) FellBehind() bool {
+	return s.RequestedOffset < s.StartOffset
 }
 
 // RetainFrom returns the cursor immediately before the first retained event.
@@ -86,7 +93,7 @@ func (s CommittedTail) TailCursor(fallback rootstate.Cursor) rootstate.Cursor {
 type Substrate interface {
 	LoadCheckpoint() (checkpoint Checkpoint, err error)
 	SaveCheckpoint(checkpoint Checkpoint) error
-	ReadCommitted(offset int64) (CommittedTail, error)
+	ReadCommitted(requestedOffset int64) (CommittedTail, error)
 	AppendCommitted(records ...CommittedEvent) (logEnd int64, err error)
 	CompactCommitted(stream CommittedTail) error
 	InstallBootstrap(checkpoint Checkpoint, stream CommittedTail) error
