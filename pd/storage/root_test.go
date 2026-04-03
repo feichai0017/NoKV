@@ -80,7 +80,7 @@ func TestRootStoreSkipsDuplicateRegionDescriptorHeartbeat(t *testing.T) {
 	require.Equal(t, rootpkg.EventKindRegionBootstrap, events[0].Kind)
 }
 
-func TestRootStoreEmitsPeerAddedEvent(t *testing.T) {
+func TestRootStoreAppendRootEventPeerAdded(t *testing.T) {
 	root, err := rootlocal.Open(t.TempDir(), nil)
 	require.NoError(t, err)
 	store, err := OpenRootStore(root)
@@ -92,7 +92,7 @@ func TestRootStoreEmitsPeerAddedEvent(t *testing.T) {
 	desc.Epoch.ConfVersion = 2
 	desc.Hash = nil
 	desc.EnsureHash()
-	require.NoError(t, store.PublishRegionDescriptor(desc))
+	require.NoError(t, store.AppendRootEvent(rootpkg.PeerAdded(desc.RegionID, 2, 201, desc)))
 
 	events, _, err := root.ReadSince(rootpkg.Cursor{})
 	require.NoError(t, err)
@@ -104,7 +104,7 @@ func TestRootStoreEmitsPeerAddedEvent(t *testing.T) {
 	require.Equal(t, uint64(201), events[1].PeerChange.PeerID)
 }
 
-func TestRootStoreEmitsPeerRemovedEvent(t *testing.T) {
+func TestRootStoreAppendRootEventPeerRemoved(t *testing.T) {
 	root, err := rootlocal.Open(t.TempDir(), nil)
 	require.NoError(t, err)
 	store, err := OpenRootStore(root)
@@ -116,7 +116,7 @@ func TestRootStoreEmitsPeerRemovedEvent(t *testing.T) {
 	desc.Epoch.ConfVersion = 3
 	desc.Hash = nil
 	desc.EnsureHash()
-	require.NoError(t, store.PublishRegionDescriptor(desc))
+	require.NoError(t, store.AppendRootEvent(rootpkg.PeerRemoved(desc.RegionID, 2, 201, desc)))
 
 	events, _, err := root.ReadSince(rootpkg.Cursor{})
 	require.NoError(t, err)
@@ -127,7 +127,7 @@ func TestRootStoreEmitsPeerRemovedEvent(t *testing.T) {
 	require.Equal(t, uint64(201), events[1].PeerChange.PeerID)
 }
 
-func TestRootStoreEmitsSplitCommittedEvent(t *testing.T) {
+func TestRootStoreAppendRootEventSplitCommitted(t *testing.T) {
 	root, err := rootlocal.Open(t.TempDir(), nil)
 	require.NoError(t, err)
 	store, err := OpenRootStore(root)
@@ -136,31 +136,24 @@ func TestRootStoreEmitsSplitCommittedEvent(t *testing.T) {
 	parent := testDescriptor(51, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
 	require.NoError(t, store.PublishRegionDescriptor(parent))
 
+	childDesc := testDescriptor(52, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 102}})
 	parent.EndKey = []byte("m")
 	parent.Epoch.Version = 2
 	parent.Hash = nil
 	parent.EnsureHash()
-	require.NoError(t, store.PublishRegionDescriptor(parent))
-
-	childDesc := testDescriptor(52, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 102}})
-	childDesc.Lineage = append(childDesc.Lineage, descriptor.LineageRef{
-		RegionID: 51,
-		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
-		Kind:     descriptor.LineageKindSplitParent,
-	})
-	require.NoError(t, store.PublishRegionDescriptor(childDesc))
+	require.NoError(t, store.AppendRootEvent(rootpkg.RegionSplitCommitted(51, []byte("m"), parent, childDesc)))
 
 	events, _, err := root.ReadSince(rootpkg.Cursor{})
 	require.NoError(t, err)
-	require.Len(t, events, 3)
-	require.Equal(t, rootpkg.EventKindRegionSplitCommitted, events[2].Kind)
-	require.NotNil(t, events[2].RangeSplit)
-	require.Equal(t, uint64(51), events[2].RangeSplit.ParentRegionID)
-	require.Equal(t, uint64(51), events[2].RangeSplit.Left.RegionID)
-	require.Equal(t, uint64(52), events[2].RangeSplit.Right.RegionID)
+	require.Len(t, events, 2)
+	require.Equal(t, rootpkg.EventKindRegionSplitCommitted, events[1].Kind)
+	require.NotNil(t, events[1].RangeSplit)
+	require.Equal(t, uint64(51), events[1].RangeSplit.ParentRegionID)
+	require.Equal(t, uint64(51), events[1].RangeSplit.Left.RegionID)
+	require.Equal(t, uint64(52), events[1].RangeSplit.Right.RegionID)
 }
 
-func TestRootStoreEmitsRegionMergedEvent(t *testing.T) {
+func TestRootStoreAppendRootEventRegionMerged(t *testing.T) {
 	root, err := rootlocal.Open(t.TempDir(), nil)
 	require.NoError(t, err)
 	store, err := OpenRootStore(root)
@@ -176,12 +169,7 @@ func TestRootStoreEmitsRegionMergedEvent(t *testing.T) {
 	left.Hash = nil
 	left.EnsureHash()
 	mergedDesc := left
-	mergedDesc.Lineage = append(mergedDesc.Lineage, descriptor.LineageRef{
-		RegionID: 62,
-		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
-		Kind:     descriptor.LineageKindMergeSource,
-	})
-	require.NoError(t, store.PublishRegionDescriptor(mergedDesc))
+	require.NoError(t, store.AppendRootEvent(rootpkg.RegionMerged(61, 62, mergedDesc)))
 
 	events, _, err := root.ReadSince(rootpkg.Cursor{})
 	require.NoError(t, err)

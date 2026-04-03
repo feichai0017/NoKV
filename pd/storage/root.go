@@ -2,7 +2,6 @@ package storage
 
 import (
 	"bytes"
-	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootlocal "github.com/feichai0017/NoKV/meta/root/local"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -65,16 +64,13 @@ func (s *RootStore) PublishRegionDescriptor(desc descriptor.Descriptor) error {
 
 	s.mu.RLock()
 	prev, existed := s.snapshot.Descriptors[desc.RegionID]
-	current := cloneDescriptors(s.snapshot.Descriptors)
 	s.mu.RUnlock()
 
-	if existed {
-		if descriptorsEqual(prev, desc) {
-			return nil
-		}
+	if existed && descriptorsEqual(prev, desc) {
+		return nil
 	}
 
-	event := regionEvent(prev, existed, desc, current)
+	event := regionEvent(existed, desc)
 	commit, err := s.root.Append(event)
 	if err != nil {
 		return err
@@ -189,82 +185,11 @@ func cloneDescriptors(in map[uint64]descriptor.Descriptor) map[uint64]descriptor
 	return out
 }
 
-func regionEvent(prev descriptor.Descriptor, existed bool, next descriptor.Descriptor, current map[uint64]descriptor.Descriptor) rootpkg.Event {
-	if split, ok := classifySplitEventFromLineage(next, current); ok {
-		return split
-	}
-	if merge, ok := classifyMergeEventFromLineage(prev, existed, next, current); ok {
-		return merge
-	}
+func regionEvent(existed bool, next descriptor.Descriptor) rootpkg.Event {
 	if !existed {
 		return rootpkg.RegionBootstrapped(next)
 	}
-	added, removed := peerDelta(prev.Peers, next.Peers)
-	switch {
-	case len(added) == 1 && len(removed) == 0:
-		return rootpkg.PeerAdded(next.RegionID, added[0].StoreID, added[0].PeerID, next)
-	case len(added) == 0 && len(removed) == 1:
-		return rootpkg.PeerRemoved(next.RegionID, removed[0].StoreID, removed[0].PeerID, next)
-	default:
-		return rootpkg.RegionDescriptorPublished(next)
-	}
-}
-
-func classifySplitEventFromLineage(next descriptor.Descriptor, current map[uint64]descriptor.Descriptor) (rootpkg.Event, bool) {
-	for _, ref := range next.Lineage {
-		if ref.Kind != descriptor.LineageKindSplitParent || ref.RegionID == 0 || ref.RegionID == next.RegionID {
-			continue
-		}
-		parent, ok := current[ref.RegionID]
-		if !ok {
-			return rootpkg.Event{}, false
-		}
-		return rootpkg.RegionSplitCommitted(ref.RegionID, next.StartKey, parent.Clone(), next), true
-	}
-	return rootpkg.Event{}, false
-}
-
-func classifyMergeEventFromLineage(prev descriptor.Descriptor, existed bool, next descriptor.Descriptor, current map[uint64]descriptor.Descriptor) (rootpkg.Event, bool) {
-	if !existed {
-		return rootpkg.Event{}, false
-	}
-	for _, ref := range next.Lineage {
-		if ref.Kind != descriptor.LineageKindMergeSource || ref.RegionID == 0 || ref.RegionID == next.RegionID {
-			continue
-		}
-		source, ok := current[ref.RegionID]
-		if !ok {
-			return rootpkg.Event{}, false
-		}
-		leftID, rightID := next.RegionID, source.RegionID
-		if bytes.Compare(source.StartKey, next.StartKey) < 0 {
-			leftID, rightID = source.RegionID, next.RegionID
-		}
-		return rootpkg.RegionMerged(leftID, rightID, next), true
-	}
-	return rootpkg.Event{}, false
-}
-
-func peerDelta(prev, next []metaregion.Peer) (added, removed []metaregion.Peer) {
-	prevSet := make(map[uint64]metaregion.Peer, len(prev))
-	nextSet := make(map[uint64]metaregion.Peer, len(next))
-	for _, peer := range prev {
-		prevSet[peer.PeerID] = peer
-	}
-	for _, peer := range next {
-		nextSet[peer.PeerID] = peer
-	}
-	for id, peer := range nextSet {
-		if _, ok := prevSet[id]; !ok {
-			added = append(added, peer)
-		}
-	}
-	for id, peer := range prevSet {
-		if _, ok := nextSet[id]; !ok {
-			removed = append(removed, peer)
-		}
-	}
-	return added, removed
+	return rootpkg.RegionDescriptorPublished(next)
 }
 
 func descriptorsEqual(a, b descriptor.Descriptor) bool {
