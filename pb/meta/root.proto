@@ -11,17 +11,13 @@ enum RootEventKind {
   ROOT_EVENT_KIND_UNSPECIFIED = 0;
   ROOT_EVENT_KIND_STORE_JOINED = 1;
   ROOT_EVENT_KIND_STORE_LEFT = 2;
-  ROOT_EVENT_KIND_STORE_MARKED_DRAINING = 3;
   ROOT_EVENT_KIND_REGION_BOOTSTRAP = 4;
   ROOT_EVENT_KIND_REGION_DESCRIPTOR_PUBLISHED = 5;
   ROOT_EVENT_KIND_REGION_TOMBSTONED = 6;
-  ROOT_EVENT_KIND_REGION_SPLIT_REQUESTED = 7;
   ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED = 8;
   ROOT_EVENT_KIND_REGION_MERGED = 9;
   ROOT_EVENT_KIND_PEER_ADDED = 10;
   ROOT_EVENT_KIND_PEER_REMOVED = 11;
-  ROOT_EVENT_KIND_LEADER_TRANSFER_INTENT = 12;
-  ROOT_EVENT_KIND_PLACEMENT_POLICY_CHANGED = 13;
 }
 
 message RootCursor {
@@ -32,7 +28,6 @@ message RootCursor {
 message RootState {
   uint64 cluster_epoch = 1;
   uint64 membership_epoch = 2;
-  uint64 policy_version = 3;
   RootCursor last_committed = 4;
   uint64 id_fence = 5;
   uint64 tso_fence = 6;
@@ -77,18 +72,6 @@ message RootPeerChange {
   nokv.meta.v1.RegionDescriptor descriptor = 4;
 }
 
-message RootLeaderTransfer {
-  uint64 region_id = 1;
-  uint64 from_peer_id = 2;
-  uint64 to_peer_id = 3;
-  uint64 target_store_id = 4;
-}
-
-message RootPlacementPolicy {
-  uint64 version = 1;
-  string name = 2;
-}
-
 message RootEvent {
   RootEventKind kind = 1;
   oneof payload {
@@ -98,7 +81,5 @@ message RootEvent {
     RootRangeSplit range_split = 5;
     RootRangeMerge range_merge = 6;
     RootPeerChange peer_change = 7;
-    RootLeaderTransfer leader_transfer = 8;
-    RootPlacementPolicy placement_policy = 9;
   }
 }

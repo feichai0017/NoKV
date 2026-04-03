@@ -35,13 +35,5 @@ func CloneEvent(in Event) Event {
 		cp.Region = in.PeerChange.Region.Clone()
 		out.PeerChange = &cp
 	}
-	if in.LeaderTransfer != nil {
-		cp := *in.LeaderTransfer
-		out.LeaderTransfer = &cp
-	}
-	if in.PlacementPolicy != nil {
-		cp := *in.PlacementPolicy
-		out.PlacementPolicy = &cp
-	}
 	return out
 }

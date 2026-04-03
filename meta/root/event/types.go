@@ -9,17 +9,13 @@ const (
 	KindUnknown Kind = iota
 	KindStoreJoined
 	KindStoreLeft
-	KindStoreMarkedDraining
 	KindRegionBootstrap
 	KindRegionDescriptorPublished
 	KindRegionTombstoned
-	KindRegionSplitRequested
 	KindRegionSplitCommitted
 	KindRegionMerged
 	KindPeerAdded
 	KindPeerRemoved
-	KindLeaderTransferIntent
-	KindPlacementPolicyChanged
 )
 
 // StoreMembership describes one store membership change carried by a root event.
@@ -61,20 +57,6 @@ type PeerChange struct {
 	Region   descriptor.Descriptor
 }
 
-// LeaderTransfer describes one leadership movement intent.
-type LeaderTransfer struct {
-	RegionID      uint64
-	FromPeerID    uint64
-	ToPeerID      uint64
-	TargetStoreID uint64
-}
-
-// PlacementPolicy describes a cluster policy-version change.
-type PlacementPolicy struct {
-	Version uint64
-	Name    string
-}
-
 // Event is one globally ordered metadata-root mutation.
 type Event struct {
 	Kind Kind
@@ -85,8 +67,6 @@ type Event struct {
 	RangeSplit       *RangeSplit
 	RangeMerge       *RangeMerge
 	PeerChange       *PeerChange
-	LeaderTransfer   *LeaderTransfer
-	PlacementPolicy  *PlacementPolicy
 }
 
 func StoreJoined(storeID uint64, address string) Event {
@@ -95,10 +75,6 @@ func StoreJoined(storeID uint64, address string) Event {
 
 func StoreLeft(storeID uint64, address string) Event {
 	return Event{Kind: KindStoreLeft, StoreMembership: &StoreMembership{StoreID: storeID, Address: address}}
-}
-
-func StoreMarkedDraining(storeID uint64, address string) Event {
-	return Event{Kind: KindStoreMarkedDraining, StoreMembership: &StoreMembership{StoreID: storeID, Address: address}}
 }
 
 func RegionBootstrapped(desc descriptor.Descriptor) Event {
@@ -111,18 +87,6 @@ func RegionDescriptorPublished(desc descriptor.Descriptor) Event {
 
 func RegionTombstoned(regionID uint64) Event {
 	return Event{Kind: KindRegionTombstoned, RegionRemoval: &RegionRemoval{RegionID: regionID}}
-}
-
-func RegionSplitRequested(parentRegionID uint64, splitKey []byte, left, right descriptor.Descriptor) Event {
-	return Event{
-		Kind: KindRegionSplitRequested,
-		RangeSplit: &RangeSplit{
-			ParentRegionID: parentRegionID,
-			SplitKey:       append([]byte(nil), splitKey...),
-			Left:           left,
-			Right:          right,
-		},
-	}
 }
 
 func RegionSplitCommitted(parentRegionID uint64, splitKey []byte, left, right descriptor.Descriptor) Event {
@@ -170,20 +134,4 @@ func PeerRemoved(regionID, storeID, peerID uint64, region descriptor.Descriptor)
 			Region:   region,
 		},
 	}
-}
-
-func LeaderTransferPlanned(regionID, fromPeerID, toPeerID, targetStoreID uint64) Event {
-	return Event{
-		Kind: KindLeaderTransferIntent,
-		LeaderTransfer: &LeaderTransfer{
-			RegionID:      regionID,
-			FromPeerID:    fromPeerID,
-			ToPeerID:      toPeerID,
-			TargetStoreID: targetStoreID,
-		},
-	}
-}
-
-func PlacementPolicyChanged(name string, version uint64) Event {
-	return Event{Kind: KindPlacementPolicyChanged, PlacementPolicy: &PlacementPolicy{Name: name, Version: version}}
 }

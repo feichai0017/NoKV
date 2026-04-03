@@ -22,7 +22,6 @@ func RootStateToProto(state rootstate.State) *metapb.RootState {
 	return &metapb.RootState{
 		ClusterEpoch:    state.ClusterEpoch,
 		MembershipEpoch: state.MembershipEpoch,
-		PolicyVersion:   state.PolicyVersion,
 		LastCommitted:   RootCursorToProto(state.LastCommitted),
 		IdFence:         state.IDFence,
 		TsoFence:        state.TSOFence,
@@ -36,7 +35,6 @@ func RootStateFromProto(pbState *metapb.RootState) rootstate.State {
 	return rootstate.State{
 		ClusterEpoch:    pbState.ClusterEpoch,
 		MembershipEpoch: pbState.MembershipEpoch,
-		PolicyVersion:   pbState.PolicyVersion,
 		LastCommitted:   RootCursorFromProto(pbState.LastCommitted),
 		IDFence:         pbState.IdFence,
 		TSOFence:        pbState.TsoFence,
@@ -102,18 +100,6 @@ func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 			PeerId:      event.PeerChange.PeerID,
 			Descriptor_: DescriptorToProto(event.PeerChange.Region),
 		}}
-	case event.LeaderTransfer != nil:
-		pbEvent.Payload = &metapb.RootEvent_LeaderTransfer{LeaderTransfer: &metapb.RootLeaderTransfer{
-			RegionId:      event.LeaderTransfer.RegionID,
-			FromPeerId:    event.LeaderTransfer.FromPeerID,
-			ToPeerId:      event.LeaderTransfer.ToPeerID,
-			TargetStoreId: event.LeaderTransfer.TargetStoreID,
-		}}
-	case event.PlacementPolicy != nil:
-		pbEvent.Payload = &metapb.RootEvent_PlacementPolicy{PlacementPolicy: &metapb.RootPlacementPolicy{
-			Version: event.PlacementPolicy.Version,
-			Name:    event.PlacementPolicy.Name,
-		}}
 	}
 	return pbEvent
 }
@@ -155,17 +141,6 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 			Region:   DescriptorFromProto(body.GetDescriptor_()),
 		}
 	}
-	if body := pbEvent.GetLeaderTransfer(); body != nil {
-		event.LeaderTransfer = &rootevent.LeaderTransfer{
-			RegionID:      body.RegionId,
-			FromPeerID:    body.FromPeerId,
-			ToPeerID:      body.ToPeerId,
-			TargetStoreID: body.TargetStoreId,
-		}
-	}
-	if body := pbEvent.GetPlacementPolicy(); body != nil {
-		event.PlacementPolicy = &rootevent.PlacementPolicy{Version: body.Version, Name: body.Name}
-	}
 	return event
 }
 
@@ -175,16 +150,12 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_STORE_JOINED
 	case rootevent.KindStoreLeft:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_STORE_LEFT
-	case rootevent.KindStoreMarkedDraining:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_STORE_MARKED_DRAINING
 	case rootevent.KindRegionBootstrap:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_BOOTSTRAP
 	case rootevent.KindRegionDescriptorPublished:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_DESCRIPTOR_PUBLISHED
 	case rootevent.KindRegionTombstoned:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_TOMBSTONED
-	case rootevent.KindRegionSplitRequested:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_REQUESTED
 	case rootevent.KindRegionSplitCommitted:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED
 	case rootevent.KindRegionMerged:
@@ -193,10 +164,6 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_ADDED
 	case rootevent.KindPeerRemoved:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVED
-	case rootevent.KindLeaderTransferIntent:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_LEADER_TRANSFER_INTENT
-	case rootevent.KindPlacementPolicyChanged:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_PLACEMENT_POLICY_CHANGED
 	default:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_UNSPECIFIED
 	}
@@ -208,16 +175,12 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindStoreJoined
 	case metapb.RootEventKind_ROOT_EVENT_KIND_STORE_LEFT:
 		return rootevent.KindStoreLeft
-	case metapb.RootEventKind_ROOT_EVENT_KIND_STORE_MARKED_DRAINING:
-		return rootevent.KindStoreMarkedDraining
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_BOOTSTRAP:
 		return rootevent.KindRegionBootstrap
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_DESCRIPTOR_PUBLISHED:
 		return rootevent.KindRegionDescriptorPublished
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_TOMBSTONED:
 		return rootevent.KindRegionTombstoned
-	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_REQUESTED:
-		return rootevent.KindRegionSplitRequested
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED:
 		return rootevent.KindRegionSplitCommitted
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGED:
@@ -226,10 +189,6 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindPeerAdded
 	case metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVED:
 		return rootevent.KindPeerRemoved
-	case metapb.RootEventKind_ROOT_EVENT_KIND_LEADER_TRANSFER_INTENT:
-		return rootevent.KindLeaderTransferIntent
-	case metapb.RootEventKind_ROOT_EVENT_KIND_PLACEMENT_POLICY_CHANGED:
-		return rootevent.KindPlacementPolicyChanged
 	default:
 		return rootevent.KindUnknown
 	}
