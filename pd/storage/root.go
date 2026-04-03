@@ -8,6 +8,7 @@ import (
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"sync"
+	"time"
 )
 
 // RootStore persists PD truth on top of the metadata root and reconstructs the
@@ -43,6 +44,17 @@ func (s *RootStore) Refresh() error {
 		}
 	}
 	return s.reload()
+}
+
+func (s *RootStore) WaitForChange(after rootstate.Cursor, timeout time.Duration) (rootstate.Cursor, error) {
+	if s == nil || s.root == nil {
+		return rootstate.Cursor{}, nil
+	}
+	waiter, ok := s.root.(changeWaitingRoot)
+	if !ok {
+		return rootstate.Cursor{}, nil
+	}
+	return waiter.WaitForChange(after, timeout)
 }
 
 func (s *RootStore) IsLeader() bool {
