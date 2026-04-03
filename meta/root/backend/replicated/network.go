@@ -41,7 +41,7 @@ type NetworkDriver struct {
 	stopCh    chan struct{}
 	wg        sync.WaitGroup
 	notifyCh  chan struct{}
-	latest    rootstate.Cursor
+	latest    rootstorage.TailToken
 }
 
 // NewNetworkDriver creates one transport-backed local metadata replication node.
@@ -76,7 +76,12 @@ func NewNetworkDriver(cfg NetworkConfig) (*NetworkDriver, error) {
 		return nil, err
 	}
 	if checkpoint, err := driver.storage.LoadCheckpoint(); err == nil {
-		driver.latest = checkpoint.Snapshot.State.LastCommitted
+		if tail, err := driver.storage.ReadCommitted(checkpoint.TailOffset); err == nil {
+			driver.latest.Cursor = tail.TailCursor(checkpoint.Snapshot.State.LastCommitted)
+			if driver.latest.Cursor != (rootstate.Cursor{}) || checkpoint.TailOffset != 0 || len(tail.Records) > 0 {
+				driver.latest.Revision = 1
+			}
+		}
 	}
 	node, err := newNetworkNode(cfg, driver.handleTransportMessage)
 	if err != nil {
@@ -144,16 +149,20 @@ func (d *NetworkDriver) Campaign() error {
 	return d.sendMessages(outbound)
 }
 
-func (d *NetworkDriver) WaitForChange(after rootstate.Cursor, timeout time.Duration) (rootstate.Cursor, error) {
+func (d *NetworkDriver) WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error) {
 	if timeout <= 0 {
 		timeout = 200 * time.Millisecond
 	}
 	d.mu.Lock()
 	current := d.latest
 	notify := d.notifyCh
+	advance, err := d.currentTailLocked()
 	d.mu.Unlock()
-	if rootstate.CursorAfter(current, after) {
-		return current, nil
+	if err != nil {
+		return rootstorage.TailAdvance{}, err
+	}
+	if current.AdvancedSince(after) {
+		return advance, nil
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -161,15 +170,15 @@ func (d *NetworkDriver) WaitForChange(after rootstate.Cursor, timeout time.Durat
 	case <-d.stopCh:
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		return d.latest, fmt.Errorf("meta/root/backend/replicated: network driver is closed")
+		return rootstorage.TailAdvance{Token: d.latest}, fmt.Errorf("meta/root/backend/replicated: network driver is closed")
 	case <-notify:
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		return d.latest, nil
+		return d.currentTailLocked()
 	case <-timer.C:
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		return d.latest, nil
+		return d.currentTailLocked()
 	}
 }
 
@@ -179,11 +188,8 @@ func (d *NetworkDriver) InstallBootstrap(checkpoint rootstorage.Checkpoint, stre
 	if err := d.storage.InstallBootstrap(checkpoint, stream); err != nil {
 		return err
 	}
-	d.latest = checkpoint.Snapshot.State.LastCommitted
-	select {
-	case d.notifyCh <- struct{}{}:
-	default:
-	}
+	d.bumpLatestLocked(stream.TailCursor(checkpoint.Snapshot.State.LastCommitted))
+	d.signalLocked()
 	return nil
 }
 
@@ -193,11 +199,15 @@ func (d *NetworkDriver) Close() error {
 		close(d.stopCh)
 		d.wg.Wait()
 		d.mu.Lock()
-		defer d.mu.Unlock()
+		transport := d.transport
 		if d.transport != nil {
-			err = d.transport.Close()
+			d.transport = nil
 		}
 		d.node = nil
+		d.mu.Unlock()
+		if transport != nil {
+			err = transport.Close()
+		}
 	})
 	return err
 }
@@ -294,11 +304,8 @@ func (d *NetworkDriver) drainLocked() ([]rootstorage.CommittedEvent, []myraft.Me
 		if _, err := d.storage.AppendCommitted(committed...); err != nil {
 			return nil, nil, err
 		}
-		d.latest = committed[len(committed)-1].Cursor
-		select {
-		case d.notifyCh <- struct{}{}:
-		default:
-		}
+		d.bumpLatestLocked(committed[len(committed)-1].Cursor)
+		d.signalLocked()
 	}
 	return committed, outbound, nil
 }
@@ -308,7 +315,18 @@ func (d *NetworkDriver) LoadCheckpoint() (rootstorage.Checkpoint, error) {
 }
 
 func (d *NetworkDriver) SaveCheckpoint(checkpoint rootstorage.Checkpoint) error {
-	return d.storage.SaveCheckpoint(checkpoint)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := d.storage.SaveCheckpoint(checkpoint); err != nil {
+		return err
+	}
+	cursor := checkpoint.Snapshot.State.LastCommitted
+	if tail, err := d.storage.ReadCommitted(checkpoint.TailOffset); err == nil {
+		cursor = tail.TailCursor(cursor)
+	}
+	d.bumpLatestLocked(cursor)
+	d.signalLocked()
+	return nil
 }
 
 func (d *NetworkDriver) ReadCommitted(offset int64) (rootstorage.CommittedTail, error) {
@@ -352,11 +370,46 @@ func (d *NetworkDriver) AppendCommitted(records ...rootstorage.CommittedEvent) (
 }
 
 func (d *NetworkDriver) CompactCommitted(stream rootstorage.CommittedTail) error {
-	return d.storage.CompactCommitted(stream)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := d.storage.CompactCommitted(stream); err != nil {
+		return err
+	}
+	d.bumpLatestLocked(stream.TailCursor(d.latest.Cursor))
+	d.signalLocked()
+	return nil
 }
 
 func (d *NetworkDriver) Size() (int64, error) {
 	return d.storage.Size()
+}
+
+func (d *NetworkDriver) currentTailLocked() (rootstorage.TailAdvance, error) {
+	checkpoint, err := d.storage.LoadCheckpoint()
+	if err != nil {
+		return rootstorage.TailAdvance{}, err
+	}
+	tail, err := d.storage.ReadCommitted(checkpoint.TailOffset)
+	if err != nil {
+		return rootstorage.TailAdvance{}, err
+	}
+	d.latest.Cursor = tail.TailCursor(checkpoint.Snapshot.State.LastCommitted)
+	return rootstorage.TailAdvance{
+		Token: d.latest,
+		Tail:  tail,
+	}, nil
+}
+
+func (d *NetworkDriver) bumpLatestLocked(cursor rootstate.Cursor) {
+	d.latest.Cursor = cursor
+	d.latest.Revision++
+}
+
+func (d *NetworkDriver) signalLocked() {
+	select {
+	case d.notifyCh <- struct{}{}:
+	default:
+	}
 }
 
 type networkNode struct {

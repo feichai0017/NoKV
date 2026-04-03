@@ -5,6 +5,7 @@ import (
 	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"time"
 )
 
@@ -21,9 +22,9 @@ func OpenRootStore(root rootBackend) (*RootStore, error) {
 		store.refresh = refresher.Refresh
 	}
 	if waiter, ok := root.(interface {
-		WaitForChange(after rootstate.Cursor, timeout time.Duration) (rootstate.Cursor, error)
+		WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
 	}); ok {
-		store.waitForChange = waiter.WaitForChange
+		store.waitForTail = waiter.WaitForTail
 	}
 	if leader, ok := root.(interface {
 		IsLeader() bool

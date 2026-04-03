@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/config"
-	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/pd/core"
 	pdserver "github.com/feichai0017/NoKV/pd/server"
 	pdstorage "github.com/feichai0017/NoKV/pd/storage"
@@ -180,20 +180,21 @@ func runPDCmd(w io.Writer, args []string) error {
 		ticker := time.NewTicker(*rootRefresh)
 		defer ticker.Stop()
 		go func() {
-			var last rootstate.Cursor
+			var last rootstorage.TailToken
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					next, err := rootStore.WaitForChange(last, *rootRefresh)
-					if err == nil && rootstate.CursorAfter(next, last) {
+					next, err := rootStore.WaitForTail(last, *rootRefresh)
+					if err == nil && next.Token.AdvancedSince(last) {
 						_ = svc.RefreshFromStorage()
-						last = next
+						last = next.Token
 						continue
 					}
-					// Allocator fence updates do not always advance LastCommitted,
-					// so replicated followers still need a bounded fallback refresh.
+					// Checkpoint-only allocator fence changes are still not fully
+					// modeled as replicated tail advancement, so keep one bounded
+					// fallback refresh for now.
 					_ = svc.RefreshFromStorage()
 				}
 			}
