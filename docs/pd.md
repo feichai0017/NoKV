@@ -7,6 +7,13 @@ It exposes a gRPC API (`pb.PD`) and is started by:
 go run ./cmd/nokv pd --addr 127.0.0.1:2379
 ```
 
+For a single-node distributed control plane, PD can now host an embedded
+metadata-root raft node in the same process:
+
+```bash
+go run ./cmd/nokv pd --addr 127.0.0.1:2379 --workdir ./artifacts/pd --meta-backend raft-single
+```
+
 ---
 
 ## 1. Responsibilities
@@ -20,7 +27,8 @@ PD-lite currently owns:
 - **TSO**: `Tso`
 
 Runtime clients (for example `cmd/nokv-redis` raft backend) use PD as the
-routing source of truth.
+routing source of truth, but PD is not the durable owner of cluster topology
+truth. Durable truth lives in `meta/root`.
 
 ---
 
@@ -46,8 +54,25 @@ Core implementation units:
 
 ## 3. Persistence (`--workdir`)
 
-When `--workdir` is provided, PD-lite persists durable control-plane truth on
-top of the metadata root:
+When `--workdir` is provided, PD-lite opens one metadata-root backend.
+
+Supported backends:
+
+- `--meta-backend local`
+  - file-backed rooted state
+  - intended for reference/testing and the current non-raft compatibility path
+- `--meta-backend raft-single`
+  - single-node embedded metadata-root raft
+  - intended for distributed-dev mode
+
+`raft-single` persists:
+
+- `meta-root-raft/root-raft-wal`
+- `meta-root-raft/root-raft-hardstate.pb`
+- `meta-root-raft/root-raft-snapshot.pb`
+- `meta-root-raft/root-raft-checkpoint.pb`
+
+`local` persists:
 
 - `metadata-root.log`
 - `metadata-root-checkpoint.pb`
@@ -75,7 +100,8 @@ truth table.
 NoKV intentionally keeps three region views with different authority:
 
 - **PD region catalog**: cluster routing truth. Clients and stores must treat
-  PD as the authoritative key-to-region source.
+  PD as the authoritative key-to-region source at the service boundary, but
+  PD rebuilds this view from rooted metadata truth plus heartbeats.
 - **`raftstore/localmeta` local catalog**: store-local recovery truth. It exists so
   one store can restart hosted peers and replay raft WAL checkpoints even if
   PD is temporarily unavailable.
@@ -156,22 +182,29 @@ Related CLI behavior:
 
 ### NoKV PD-lite (current)
 
-- Single PD-lite process with rooted persistence (`--workdir`).
-- Sufficient for local clusters, testing, and architecture iteration.
-- API shape intentionally aligned with a PD-style control plane so migration to
-  stronger HA semantics is incremental.
-- PD persistence is intentionally limited to durable control-plane truth:
+- Standalone mode has no PD and no metadata-root service.
+- Distributed-dev mode can run one control-plane process:
+  - `pd`
+  - embedded `meta/root/raft` (`--meta-backend raft-single`)
+- Distributed HA mode is intended to run three control-plane processes, each
+  hosting:
+  - `pd`
+  - one `meta/root/raft` node
+- This keeps truth and view logically separate without forcing two independent
+  control-plane clusters.
+- PD persistence is intentionally limited to rooted control-plane truth:
   - region descriptor publish/tombstone events
   - allocator durability (`AllocID`, `TSO`)
 - PD is not the durable owner of a store's local raft/region truth. Store
-  restart truth remains in `raftstore/localmeta`, while PD keeps the routing and
-  scheduling truth rooted in `meta/root`.
+  restart truth remains in `raftstore/localmeta`, while PD keeps routing and
+  scheduling state rebuilt from `meta/root`.
 
 ---
 
 ## 8. Current Limitations / Next Steps
 
-- No multi-PD quorum and no automatic PD failover.
+- `--meta-backend raft-single` is embedded single-node only. Multi-node
+  control-plane bootstrapping is the next step.
 - Scheduler policy is intentionally small (leader transfer focused).
 - No advanced placement constraints yet.
 

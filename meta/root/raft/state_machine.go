@@ -1,6 +1,7 @@
 package rootraft
 
 import (
+	"slices"
 	"sync"
 
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
@@ -38,6 +39,18 @@ func (sm *StateMachine) Current() rootpkg.State {
 func (sm *StateMachine) ReadSince(cursor rootpkg.Cursor) ([]rootpkg.Event, rootpkg.Cursor) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
+	if cursor == (rootpkg.Cursor{}) && len(sm.records) == 0 && len(sm.descriptors) > 0 {
+		ids := make([]uint64, 0, len(sm.descriptors))
+		for id := range sm.descriptors {
+			ids = append(ids, id)
+		}
+		slices.Sort(ids)
+		out := make([]rootpkg.Event, 0, len(ids))
+		for _, id := range ids {
+			out = append(out, rootpkg.RegionDescriptorPublished(sm.descriptors[id].Clone()))
+		}
+		return out, sm.state.LastCommitted
+	}
 	out := make([]rootpkg.Event, 0, len(sm.records))
 	for _, rec := range sm.records {
 		if afterCursor(rec.cursor, cursor) {
