@@ -226,6 +226,24 @@ func TestRootStoreRefreshFromReplicatedFollower(t *testing.T) {
 	require.Equal(t, uint64(71), got.RegionID)
 }
 
+func TestOpenRootReplicatedStoreSharesThreeNodeCluster(t *testing.T) {
+	workdir := t.TempDir()
+	leader, err := OpenRootReplicatedStore(workdir, 1, []uint64{1, 2, 3})
+	require.NoError(t, err)
+	follower, err := OpenRootReplicatedStore(workdir, 2, []uint64{1, 2, 3})
+	require.NoError(t, err)
+
+	desc := testDescriptor(81, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
+	require.NoError(t, leader.PublishRegionDescriptor(desc))
+	require.NoError(t, follower.Refresh())
+
+	snapshot, err := follower.Load()
+	require.NoError(t, err)
+	got, ok := snapshot.Descriptors[81]
+	require.True(t, ok)
+	require.Equal(t, uint64(81), got.RegionID)
+}
+
 func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch, peers []metaregion.Peer) descriptor.Descriptor {
 	desc := descriptor.Descriptor{
 		RegionID: id,
