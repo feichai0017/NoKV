@@ -29,7 +29,7 @@ func (l fileEventLog) ReadCommitted(offset int64) (rootstorage.CommittedStream, 
 	f, err := l.fs.OpenHandle(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return rootstorage.CommittedStream{Offset: offset}, nil
+			return rootstorage.CommittedStream{Offset: offset, EndOffset: offset}, nil
 		}
 		return rootstorage.CommittedStream{}, err
 	}
@@ -46,9 +46,14 @@ func (l fileEventLog) ReadCommitted(offset int64) (rootstorage.CommittedStream, 
 			return rootstorage.CommittedStream{}, err
 		}
 		if !ok {
+			end, err := fileSize(f)
+			if err != nil {
+				return rootstorage.CommittedStream{}, err
+			}
 			return rootstorage.CommittedStream{
-				Offset:  offset,
-				Records: out,
+				Offset:    offset,
+				EndOffset: end,
+				Records:   out,
 			}, nil
 		}
 		out = append(out, rec)

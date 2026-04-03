@@ -44,15 +44,17 @@ func CloneCommittedEvents(in []CommittedEvent) []CommittedEvent {
 // CommittedStream is one retained committed rooted stream starting at one
 // durable log offset.
 type CommittedStream struct {
-	Offset  int64
-	Records []CommittedEvent
+	Offset    int64
+	EndOffset int64
+	Records   []CommittedEvent
 }
 
 // CloneCommittedStream returns a detached committed-stream view.
 func CloneCommittedStream(in CommittedStream) CommittedStream {
 	return CommittedStream{
-		Offset:  in.Offset,
-		Records: CloneCommittedEvents(in.Records),
+		Offset:    in.Offset,
+		EndOffset: in.EndOffset,
+		Records:   CloneCommittedEvents(in.Records),
 	}
 }
 
