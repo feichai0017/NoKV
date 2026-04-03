@@ -8,12 +8,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/vfs"
 	"google.golang.org/protobuf/proto"
 )
@@ -37,9 +39,12 @@ type Store struct {
 	fs      vfs.FS
 	workdir string
 
-	mu      sync.RWMutex
-	state   rootpkg.State
-	records []record
+	mu         sync.RWMutex
+	state      rootpkg.State
+	descs      map[uint64]descriptor.Descriptor
+	records    []record
+	logBase    int64
+	retainFrom rootpkg.Cursor
 }
 
 var _ rootpkg.Root = (*Store)(nil)
@@ -54,20 +59,29 @@ func Open(workdir string, fs vfs.FS) (*Store, error) {
 	if err := fs.MkdirAll(workdir, 0o755); err != nil {
 		return nil, err
 	}
-	state, err := loadCheckpoint(fs, workdir)
+	snapshot, logBase, err := loadCheckpoint(fs, workdir)
 	if err != nil {
 		return nil, err
 	}
-	records, err := loadLog(fs, workdir)
+	records, err := loadLog(fs, workdir, logBase)
 	if err != nil {
 		return nil, err
 	}
 	for _, rec := range records {
-		if after(rec.cursor, state.LastCommitted) {
-			applyEvent(&state, rec.cursor, rec.event)
+		if after(rec.cursor, snapshot.State.LastCommitted) {
+			applyEvent(&snapshot.State, rec.cursor, rec.event)
+			rootpkg.ApplyEventToDescriptors(snapshot.Descriptors, rec.event)
 		}
 	}
-	return &Store{fs: fs, workdir: workdir, state: state, records: records}, nil
+	return &Store{
+		fs:         fs,
+		workdir:    workdir,
+		state:      snapshot.State,
+		descs:      snapshot.Descriptors,
+		records:    records,
+		logBase:    logBase,
+		retainFrom: snapshot.State.LastCommitted,
+	}, nil
 }
 
 // Current returns the current compact root state.
@@ -80,6 +94,19 @@ func (s *Store) Current() (rootpkg.State, error) {
 	return cloneState(s.state), nil
 }
 
+// Snapshot returns the compact rooted metadata snapshot.
+func (s *Store) Snapshot() (rootpkg.Snapshot, error) {
+	if s == nil {
+		return rootpkg.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return rootpkg.CloneSnapshot(rootpkg.Snapshot{
+		State:       s.state,
+		Descriptors: s.descs,
+	}), nil
+}
+
 // ReadSince returns all events after cursor together with the current tail cursor.
 func (s *Store) ReadSince(cursor rootpkg.Cursor) ([]rootpkg.Event, rootpkg.Cursor, error) {
 	if s == nil {
@@ -87,6 +114,9 @@ func (s *Store) ReadSince(cursor rootpkg.Cursor) ([]rootpkg.Event, rootpkg.Curso
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if after(s.retainFrom, cursor) {
+		return snapshotEvents(s.descs), s.state.LastCommitted, nil
+	}
 	out := make([]rootpkg.Event, 0, len(s.records))
 	for _, rec := range s.records {
 		if after(rec.cursor, cursor) {
@@ -112,6 +142,7 @@ func (s *Store) Append(events ...rootpkg.Event) (rootpkg.CommitInfo, error) {
 	}
 	var next rootpkg.Cursor
 	state := cloneState(s.state)
+	descs := cloneDescriptors(s.descs)
 	records := make([]record, 0, len(events))
 	for _, evt := range events {
 		next = nextCursor(state.LastCommitted)
@@ -120,20 +151,28 @@ func (s *Store) Append(events ...rootpkg.Event) (rootpkg.CommitInfo, error) {
 			return rootpkg.CommitInfo{}, err
 		}
 		applyEvent(&state, next, evt)
+		rootpkg.ApplyEventToDescriptors(descs, evt)
 		records = append(records, record{cursor: next, event: cloneEvent(evt)})
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
 		return rootpkg.CommitInfo{}, err
 	}
+	logEnd, err := fileSize(f)
+	if err != nil {
+		_ = f.Close()
+		return rootpkg.CommitInfo{}, err
+	}
 	if err := f.Close(); err != nil {
 		return rootpkg.CommitInfo{}, err
 	}
-	if err := persistCheckpoint(s.fs, s.workdir, state); err != nil {
+	if err := persistCheckpoint(s.fs, s.workdir, rootpkg.Snapshot{State: state, Descriptors: descs}, uint64(logEnd)); err != nil {
 		return rootpkg.CommitInfo{}, err
 	}
 	s.state = state
+	s.descs = descs
 	s.records = append(s.records, records...)
+	s.logBase = logEnd
 	return rootpkg.CommitInfo{Cursor: state.LastCommitted, State: cloneState(state)}, nil
 }
 
@@ -158,35 +197,53 @@ func (s *Store) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, 
 		return *out, nil
 	}
 	*out = min
-	if err := persistCheckpoint(s.fs, s.workdir, state); err != nil {
+	logEnd, err := currentLogSize(s.fs, s.workdir)
+	if err != nil {
+		return 0, err
+	}
+	if err := persistCheckpoint(s.fs, s.workdir, rootpkg.Snapshot{State: state, Descriptors: cloneDescriptors(s.descs)}, uint64(logEnd)); err != nil {
 		return 0, err
 	}
 	s.state = state
+	s.logBase = logEnd
 	return *out, nil
 }
 
 func (s *Store) Close() error { return nil }
 
-func loadCheckpoint(fs vfs.FS, workdir string) (rootpkg.State, error) {
+func loadCheckpoint(fs vfs.FS, workdir string) (rootpkg.Snapshot, int64, error) {
 	path := filepath.Join(workdir, CheckpointFileName)
 	data, err := fs.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return rootpkg.State{}, nil
+			return rootpkg.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, 0, nil
 		}
-		return rootpkg.State{}, err
+		return rootpkg.Snapshot{}, 0, err
 	}
 	if len(data) == 0 {
-		return rootpkg.State{}, nil
+		return rootpkg.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, 0, nil
 	}
-	var pbState metapb.RootState
-	if err := proto.Unmarshal(data, &pbState); err != nil {
-		return rootpkg.State{}, err
+	var pbCheckpoint metapb.RootCheckpoint
+	if err := proto.Unmarshal(data, &pbCheckpoint); err != nil {
+		return rootpkg.Snapshot{}, 0, err
 	}
-	return metacodec.RootStateFromProto(&pbState), nil
+	if pbCheckpoint.State == nil && len(pbCheckpoint.Descriptors) == 0 {
+		var pbState metapb.RootState
+		if err := proto.Unmarshal(data, &pbState); err == nil {
+			return rootpkg.Snapshot{
+				State:       metacodec.RootStateFromProto(&pbState),
+				Descriptors: make(map[uint64]descriptor.Descriptor),
+			}, 0, nil
+		}
+	}
+	snapshot, logOffset := metacodec.RootSnapshotFromProto(&pbCheckpoint)
+	if snapshot.Descriptors == nil {
+		snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
+	}
+	return snapshot, int64(logOffset), nil
 }
 
-func loadLog(fs vfs.FS, workdir string) ([]record, error) {
+func loadLog(fs vfs.FS, workdir string, offset int64) ([]record, error) {
 	path := filepath.Join(workdir, LogFileName)
 	f, err := fs.OpenHandle(path)
 	if err != nil {
@@ -196,6 +253,11 @@ func loadLog(fs vfs.FS, workdir string) ([]record, error) {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
+	if offset > 0 {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			return nil, err
+		}
+	}
 	var out []record
 	for {
 		rec, ok, err := readRecord(f)
@@ -209,8 +271,8 @@ func loadLog(fs vfs.FS, workdir string) ([]record, error) {
 	}
 }
 
-func persistCheckpoint(fs vfs.FS, workdir string, state rootpkg.State) error {
-	payload, err := proto.Marshal(metacodec.RootStateToProto(state))
+func persistCheckpoint(fs vfs.FS, workdir string, snapshot rootpkg.Snapshot, logOffset uint64) error {
+	payload, err := proto.Marshal(metacodec.RootSnapshotToProto(snapshot, logOffset))
 	if err != nil {
 		return err
 	}
@@ -322,6 +384,52 @@ func nextCursor(prev rootpkg.Cursor) rootpkg.Cursor {
 		term = 1
 	}
 	return rootpkg.Cursor{Term: term, Index: prev.Index + 1}
+}
+
+func snapshotEvents(descs map[uint64]descriptor.Descriptor) []rootpkg.Event {
+	if len(descs) == 0 {
+		return nil
+	}
+	ids := make([]uint64, 0, len(descs))
+	for id := range descs {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	events := make([]rootpkg.Event, 0, len(ids))
+	for _, id := range ids {
+		events = append(events, rootpkg.RegionDescriptorPublished(descs[id]))
+	}
+	return events
+}
+
+func cloneDescriptors(in map[uint64]descriptor.Descriptor) map[uint64]descriptor.Descriptor {
+	if len(in) == 0 {
+		return make(map[uint64]descriptor.Descriptor)
+	}
+	out := make(map[uint64]descriptor.Descriptor, len(in))
+	for id, desc := range in {
+		out[id] = desc.Clone()
+	}
+	return out
+}
+
+func currentLogSize(fs vfs.FS, workdir string) (int64, error) {
+	info, err := fs.Stat(filepath.Join(workdir, LogFileName))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
+func fileSize(f vfs.File) (int64, error) {
+	info, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
 }
 
 func after(a, b rootpkg.Cursor) bool {
