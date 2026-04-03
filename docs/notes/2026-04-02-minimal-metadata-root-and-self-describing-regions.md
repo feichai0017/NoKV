@@ -1,1152 +1,530 @@
-# Minimal Metadata Root and Self-Describing Regions
+# 最小元数据根与自描述 Region 设计说明
 
-> Status: proposed architecture for the next distributed-control-plane phase.
+> 状态：当前分布式控制面设计说明。本文档描述的是 NoKV 现在已经收敛下来的主路径，而不是未来的高可用设想。
 
-## Why this matters
+## 1. 为什么要有这份设计
 
-NoKV already has a serious standalone data plane and a defensible
-standalone-to-cluster promotion path:
+NoKV 的出发点不是“先做一个大而全的分布式控制面”，而是：
 
-- one storage core
-- one snapshot/install pipeline
-- one migration workflow
+- 先把单机存储内核做扎实
+- 再在此基础上叠加分布式数据面
+- 最后才补最小必要的控制面能力
 
-That is the right foundation.
+因此，NoKV 当前最重要的架构目标不是追求控制面功能最多，而是回答这几个问题：
 
-The next architectural question is not “how to add more migration commands”.
-It is:
+1. 集群里的路由真相放在哪里
+2. store 本地恢复真相放在哪里
+3. `pd` 应该负责什么，不应该负责什么
+4. 如何在不引入第二套控制面集群的前提下，把 durable truth 和 runtime view 分开
 
-> how to manage distributed metadata without turning PD into a second large
-> database that itself needs another control plane behind it.
+本文档给出的答案是：
 
-The wrong answer is to keep adding more cluster truth into local JSON files.
-The also-wrong answer is to build a full TiKV-style PD clone before the rest of
-NoKV needs it.
+> NoKV 当前采用“单机无控制面、分布式单控制面进程、最小 rooted metadata truth、自描述 region、可重建 PD view”的架构。
 
-This note proposes a different direction:
+---
 
-> keep a very small globally replicated metadata root, move more truth into
-> region descriptors owned by the data plane, and treat PD/control-plane state
-> as a rebuildable view instead of the only metadata authority.
+## 2. 当前产品模式
 
-## Current system boundary
+NoKV 现在只有两种正式产品模式。
 
-Today the relevant layers are already mostly separated:
+### 2.1 `standalone`
 
-- raw SST primitives:
-  - `lsm/external_sst.go`
-- region snapshot format:
-  - `raftstore/snapshot/meta.go`
-  - `raftstore/snapshot/dir.go`
-  - `raftstore/snapshot/payload.go`
-- DB snapshot bridge:
-  - `db_snapshot.go`
-- distributed orchestration:
-  - `raftstore/admin/service.go`
-  - `raftstore/migrate/init.go`
-  - `raftstore/migrate/expand.go`
-  - `raftstore/store/peer_lifecycle.go`
+- 不启动 `pd`
+- 不启动 `meta/root`
+- 没有控制面进程
+- 所有真相都在单个存储进程里
 
-The current weak spot is not the snapshot pipeline. It is metadata ownership.
+这是默认模式，也是 NoKV 的第一公民模式。
 
-Today NoKV still has prototype-style local state stores:
+`standalone` 不是“退化版分布式”，而是没有控制面的本地存储模式。
 
-- store-local recovery state:
-  - `raftstore/localmeta/store.go`
-- PD-lite local state:
-  - `pd/storage/local.go`
+### 2.2 `distributed`
 
-Both are file-backed JSON state stores. That is acceptable for the current
-prototype, but it is not the long-term distributed metadata architecture.
+- 启动一个 `pd` 进程
+- 同进程托管一个 `meta/root/local`
+- 数据节点通过 `pd` 做：
+  - `GetRegionByKey`
+  - `StoreHeartbeat`
+  - `RegionHeartbeat`
+  - `AllocID`
+  - `Tso`
 
-## What looked easy but is wrong
+当前分布式模式刻意保持为**单控制面节点**，也就是：
 
-### Wrong approach 1: make PD the permanent owner of all metadata
+- 不做 `pd` 集群
+- 不做 `meta` 集群
+- 不做 metadata root 高可用
 
-This would converge on a familiar but heavy design:
+这样做是有意为之，用来把复杂度控制在当前项目可维护的范围内。
 
-- PD stores a full mutable region map
-- PD stores store descriptors
-- PD stores allocator state
-- PD becomes the only metadata authority
+---
 
-That works, but it pushes NoKV toward “another PD clone”, not toward a
-distinguishable architecture.
+## 3. 当前架构分层
 
-### Wrong approach 2: keep metadata in local JSON files and sync informally
-
-This is not acceptable once NoKV wants real distributed correctness.
-
-Local files are fine for:
-
-- recovery hints
-- mode markers
-- migration checkpoints
-
-They are not fine for:
-
-- cluster-wide range ownership truth
-- allocator fencing
-- reconfiguration ordering
-
-### Wrong approach 3: remove any globally replicated metadata root
-
-There is no free lunch here. Strongly consistent distributed metadata always
-needs a root of trust somewhere.
-
-The real design question is:
-
-> how small can that root be?
-
-## The design we chose
-
-The proposal is:
-
-> **minimal metadata root + event log + self-describing region descriptors +
-> rebuildable control-plane views**
-
-That means NoKV should no longer aim for:
-
-- “PD owns one big metadata table”
-
-Instead it should aim for:
-
-1. a very small globally replicated root
-2. region-owned descriptors that carry more local truth
-3. control-plane views that can be dropped and rebuilt
-
-## Target architecture
+当前控制面分层如下：
 
 ```mermaid
-flowchart TD
-    A["Applications / Clients"] --> B["Route Cache / Resolver"]
-    B --> C["Region Descriptor"]
-    B --> D["Metadata Root Reader"]
-
-    E["NoKV Data Plane<br/>DB + MVCC + LSM + VLog"] --> F["Raft Region Groups"]
-    F --> C
-
-    G["Minimal Metadata Root"] --> H["Allocator Fences"]
-    G --> I["Store Membership Events"]
-    G --> J["Split / Merge / Reconfig Events"]
-    G --> K["Policy Version"]
-
-    L["Control Plane / PD View Builder"] --> G
-    L --> M["Materialized Views"]
-    M --> B
-
-    N["Admin / Migration / Scheduler"] --> L
+flowchart LR
+    S["Store / raftstore"] -->|"StoreHeartbeat / RegionHeartbeat"| PD["pd/server"]
+    C["Client / Gateway"] -->|"GetRegionByKey / AllocID / Tso"| PD
+    PD --> CORE["pd/core + pd/view"]
+    CORE --> PSTORE["pd/storage/root"]
+    PSTORE --> ROOT["meta/root/local"]
 ```
 
-## Core principles
+### 3.1 `raftstore/localmeta`
 
-### 1. The data plane stays the data plane
+文件：
 
-The storage core remains:
+- `NoKV/raftstore/localmeta/types.go`
 
-- `db.go`
-- `lsm/*`
-- `vlog/*`
-- MVCC / Percolator layers
+职责：
 
-Distributed evolution must continue to reuse this truth instead of creating a
-second storage truth in the control plane.
+- store 本地 region catalog
+- peer 生命周期
+- restart / recovery 所需的本地真相
+- raft WAL、snapshot、apply 的本地恢复辅助信息
 
-### 2. Region descriptors carry local truth
+它代表的是：
 
-A region should not rely on PD to tell the world everything about it on every
-operation.
+> store-local runtime / recovery shape
 
-Each region descriptor should carry:
+它不是：
 
-- `region_id`
-- `start_key`
-- `end_key`
-- `epoch`
-- `peers`
-- `state`
-- `lineage`
-- `descriptor_hash`
+> 集群级路由权威
 
-The descriptor should be owned by the region lifecycle, not by a control-plane
-table row.
+### 3.2 `raftstore/descriptor`
 
-### 3. The metadata root only orders and fences
+文件：
 
-The globally replicated root should only store what truly requires global
-serialization:
+- `NoKV/raftstore/descriptor/types.go`
 
-- topology epoch
-- allocator fences
-- store membership events
-- split events
-- merge events
-- peer add/remove events
-- placement policy version
+职责：
 
-It should **not** store the full runtime metadata view for every region.
+- 分布式 topology object
+- route lookup 使用的 region 形状
+- split / merge lineage
+- peer membership 的分布式表达
 
-### 4. Views are disposable
+它代表的是：
 
-The scheduler and route resolver can maintain:
+> distributed topology shape
 
-- region directory caches
-- store load views
-- placement views
+### 3.3 `meta/root`
 
-But these views are rebuildable. They are not the only source of truth.
+文件：
 
-## Proposed modules
+- `NoKV/meta/root/types.go`
+- `NoKV/meta/root/local/store.go`
 
-Before defining packages, the terminology itself must become precise.
+职责：
 
-Today the codebase still uses the word `meta` for several different kinds of
-state:
+- 保存最小 durable control-plane truth
+- 保存 allocator fence
+- 保存 rooted topology event
+- 提供 compact checkpoint 和 bounded recovery
 
-- local recovery state
-- snapshot manifest state
-- PD control-plane state
-- region topology state
+它不是：
 
-That is acceptable during prototyping, but it is not good enough for the next
-phase. The design needs names that lock the boundaries in place.
+- 通用 metadata KV
+- route cache
+- scheduler runtime state
+- 大而全的 PD 元数据库
 
-## Naming rules
+### 3.4 `pd/view` 与 `pd/core`
 
-The following terms should be reserved:
+文件：
 
-### `RegionDescriptor`
+- `NoKV/pd/view/region_directory.go`
+- `NoKV/pd/core/cluster.go`
 
-Use this name for globally meaningful region topology state:
+职责：
 
-- range ownership
-- epoch
-- peer membership
-- lineage
-- descriptor hash
+- 维护 route view
+- 维护 heartbeat-derived store/region view
+- 为 `pd/server` 提供查询与调度输入
 
-This replaces the vague use of `RegionMeta` when the meaning is really “the
-distributed descriptor of a range”.
+它们代表的是：
 
-### `ReplicaLocalState`
+> 可重建的运行时视图
 
-Use this name for one store's local recovery state for one hosted replica:
+不是：
 
-- local replica lifecycle state
-- last applied information needed for restart
-- local-only recovery hints
+> durable truth
 
-This is not cluster authority and should not be called `RegionMeta`.
+### 3.5 `pd/server`
 
-### `RaftProgress`
+文件：
 
-Use this name for local raft/WAL/apply checkpoint information:
+- `NoKV/pd/server/service.go`
 
-- log pointer
-- applied index / term
-- committed index
-- snapshot/truncation markers
+职责：
 
-This keeps raft-replay durability separate from replica catalog durability.
+- 对外暴露 gRPC 控制面接口
+- 统一 RPC 边界、校验、错误映射
 
-### `RootState`
+它是：
 
-Use this name for the minimal globally replicated metadata root checkpoint:
+> 服务边界
 
-- allocator fences
-- topology epoch
-- membership epoch
-- policy version
-- last committed root cursor
+不是：
 
-### `RootEvent`
+> 元数据权威存储
 
-Use this name for one globally ordered metadata mutation event.
+---
 
-### `View`
+## 4. `RegionMeta` 与 `Descriptor` 的职责划分
 
-Use this term only for rebuildable control-plane projections:
+这两个对象会看起来相似，但它们不是一回事。
 
-- region directory view
-- store health view
-- scheduler input view
+### 4.1 `RegionMeta`
 
-Views are allowed to be stale. Root state is not.
+文件：
 
-## Suggested file names
+- `NoKV/raftstore/localmeta/types.go`
 
-The file names should reflect those boundaries directly.
+用途：
 
-### Files that can remain human-readable JSON
+- store-local recovery
+- peer lifecycle
+- 本地 hosted region 目录
 
-These are small, non-hot, and operator-facing:
+它是：
 
-- `MODE.json`
-- `MIGRATION_PROGRESS.json`
-- `sst-snapshot.json`
+> 本地副本与本地恢复对象
 
-These should remain JSON unless there is a compelling operational reason to
-change them.
+### 4.2 `Descriptor`
 
-### Files that should evolve into typed binary metadata
+文件：
 
-#### Store-local recovery files
+- `NoKV/raftstore/descriptor/types.go`
 
-- `replica-local-state.pb`
-- `raft-progress.pb`
+用途：
 
-These replace the current all-in-one `RAFTSTORE_STATE.json` direction.
+- route object
+- rooted topology object
+- PD 里的 region 语言
+- split / merge lineage
 
-#### Region descriptor artifacts
+它是：
 
-- `region-descriptor.pb`
+> 分布式拓扑对象
 
-If descriptors are stored per-region on disk, prefer a layout like:
+### 4.3 两者关系
 
-- `regions/<region-id>/descriptor.pb`
+当前设计里，允许的方向是：
 
-If a snapshot exports one descriptor alongside SST files, prefer:
+- `RegionMeta -> Descriptor`
 
-- `descriptor.pb`
+不鼓励的方向是：
 
-inside the snapshot directory.
+- `Descriptor -> RegionMeta`
 
-#### Metadata root durability
+也就是说：
 
-- `metadata-root.log`
-- `metadata-root-checkpoint.pb`
+- store 本地运行时可以把本地 region 形状提升成分布式 descriptor
+- 但 control-plane 不应该反向回写 store-local 语义
 
-The log stores ordered root events.
-The checkpoint stores a compact root snapshot.
+这也是为什么当前把 local-to-distributed 的转换收到了：
 
-#### Rebuildable control-plane views
+- `NoKV/meta/codec/local_region.go`
 
-If a process wants local checkpoints for restart speed, keep them explicitly
-named as views:
+而不是留在 `descriptor` 包内部。
 
-- `region-directory-view.pb`
-- `store-health-view.pb`
+---
 
-These are caches, not truth.
+## 5. `pd` 与 `meta/root` 之间如何交互
 
-## `meta/root`
+当前交互流程是：
 
-Suggested new package:
+### 5.1 数据节点启动
 
-- `meta/root`
+store 先从本地 `localmeta` 恢复：
 
-Responsibility:
+- hosted peers
+- 本地 region catalog
+- 本地 raft/recovery 进度
 
-- globally replicated metadata root
-- event append / sequencing
-- allocator fencing
-- topology epoch management
+这一阶段不依赖 `pd`。
 
-Suggested API:
+### 5.2 数据节点运行中上报
 
-```go
-type Root interface {
-    Current() (State, error)
-    ReadSince(cursor Cursor) ([]Event, Cursor, error)
-    Append(events ...Event) (CommitInfo, error)
-    FenceAllocator(kind AllocatorKind, min uint64) (uint64, error)
-}
-```
+store 通过 heartbeat 向 `pd` 汇报：
 
-Suggested logical types:
+- store stats
+- region descriptor
 
-```go
-type State struct {
-    ClusterEpoch     uint64
-    MembershipEpoch  uint64
-    PolicyVersion    uint64
-    LastCommitted    Cursor
-    IDFence          uint64
-    TSOFence         uint64
-}
+当前服务边界上，region 语言已经是：
 
-type Cursor struct {
-    Term  uint64
-    Index uint64
-}
+- `RegionDescriptor`
 
-type CommitInfo struct {
-    Cursor Cursor
-    State  State
-}
-```
+而不是把 `RegionMeta` 整条链路传到底。
 
-Suggested durable state:
+### 5.3 `pd` 落 durable truth
 
-- `cluster_epoch`
-- `event_log_head`
-- `id_allocator_fence`
-- `tso_allocator_fence`
-- `membership_epoch`
-- `policy_version`
+`pd` 通过：
 
-Suggested events:
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/storage/root.go`
 
-- `StoreJoined`
-- `StoreLeft`
-- `StoreMarkedDraining`
-- `RegionSplitRequested`
-- `RegionSplitCommitted`
-- `RegionMerged`
-- `PeerAdded`
-- `PeerRemoved`
-- `LeaderTransferIntent`
-- `PlacementPolicyChanged`
+把 descriptor 变化转换成 rooted event，并写入：
 
-The root should stay small enough that a fresh node can replay it quickly.
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/local/store.go`
 
-### What the root stores
+### 5.4 `pd` 从 rooted truth 重建 view
 
-The root should store only globally serialized control data:
+`pd` 重启时：
 
-- allocator fences
-- store membership events
-- topology events
-- placement policy version
-- cluster epoch
+1. 打开 `meta/root/local`
+2. 读取 compact snapshot
+3. 读取 retained tail
+4. 重建：
+   - descriptor snapshot
+   - allocator state
+   - region directory view
 
-The root should not store:
+这意味着：
 
-- the full current runtime region map
-- per-store heartbeat history
-- every replica's local state
-- scheduler caches
+- `meta/root` 才是 durable truth
+- `pd/view` 是重建出来的 runtime view
 
-That is the entire point of the design.
+---
 
-### Why the root still needs quorum
+## 6. 为什么不是“大一统 PD”
 
-This architecture still requires a strongly consistent root.
-The difference is that the root is now small and stable instead of a second
-large mutable metadata database.
+一种看起来省事但长期错误的做法是：
 
-For a real HA deployment, the recommended baseline is still:
+- 把 routing、allocator、scheduler、durable metadata、operator state 都放进 `PD`
 
-- 3 root replicas
-- majority commit
-- one elected leader for appends
+这样短期实现快，长期会出问题：
 
-This can be implemented with Raft or an equivalent quorum protocol.
+1. `PD` 会膨胀成一个大 authority
+2. route cache、view、runtime state 和 durable truth 混在一起
+3. 后续维护会越来越难
 
-The innovation here is not “avoid consensus entirely”.
-It is “reduce the consensus surface to the smallest defensible root”.
+NoKV 当前没有走这条路，而是明确要求：
 
-## `raftstore/descriptor`
+- `meta/root` 只保存最小 durable truth
+- `pd/view` 只保存可重建 view
+- `pd/server` 只负责 service 边界
 
-Suggested new package:
+这就是当前设计真正值钱的地方。
 
-- `raftstore/descriptor`
+---
 
-Responsibility:
+## 7. 为什么不是“两套控制面集群”
 
-- descriptor definition
-- descriptor validation
-- lineage tracking
-- stale-descriptor rejection
+另一种看起来“更正统”的做法是：
 
-Suggested descriptor:
+- 一套 `pd` 集群
+- 一套 `meta` 集群
 
-```go
-type Descriptor struct {
-    RegionID    uint64
-    StartKey    []byte
-    EndKey      []byte
-    Epoch       region.Epoch
-    Peers       []region.Peer
-    State       region.ReplicaState
-    Parent      []LineageRef
-    RootEpoch   uint64
-    Hash        []byte
-}
-```
+当前阶段没有走这条路，原因很直接：
 
-Suggested lineage types:
+1. 复杂度过高
+2. 运维对象翻倍
+3. 当前项目规模下，维护成本超过收益
 
-```go
-type LineageRef struct {
-    RegionID uint64
-    Epoch    region.Epoch
-    Hash     []byte
-    Kind     LineageKind
-}
+因此 NoKV 现在选择：
 
-type LineageKind uint8
-```
+> 逻辑上分离 `pd` 和 `meta`
+>
+> 部署上仍然是同进程单控制面节点
 
-Lineage should make split/merge explicit:
+这不是偷懒，而是为了让项目复杂度保持在当前阶段可以稳定收敛的范围内。
 
-- split child descriptors reference parent descriptor hash/epoch
-- merge descriptor references source descriptors
+---
 
-This gives NoKV a route to make region topology evolution auditable instead of
-implicitly buried in one control-plane table.
+## 8. 与 TiKV、CockroachDB、FoundationDB 的差异
 
-### Descriptor invariants
+### 8.1 TiKV / PD
 
-A valid descriptor must satisfy:
+TiKV 的典型路线是：
 
-1. `RegionID != 0`
-2. `StartKey < EndKey` when both bounds are present
-3. `Epoch.Version > 0`
-4. `len(Peers) > 0`
-5. peer identities are unique
-6. `RootEpoch` is not behind the topology event that created this descriptor
-7. `Hash` covers the canonical descriptor body, excluding transport wrappers
+- `PD` 是中心控制面
+- `PD` 是独立高可用集群
+- `PD` 内部通过 etcd 提供强一致 metadata 与 leader election
 
-### Descriptor ownership
+NoKV 当前不是这条路线。
 
-The descriptor is not a PD table row.
-It is a region-owned object that should be:
+NoKV 当前更像：
 
-- returned by region leaders
-- embedded in or referenced by snapshots
-- used by route caches
-- validated against root epochs when needed
+- `meta/root` 是最小 durable truth
+- `pd` 是 service + view
+- `pd` 与 `meta` 在逻辑上分层、在部署上同进程
 
-## `raftstore/recovery`
+**区别**
 
-Suggested new package:
+TiKV 更像：
 
-- `raftstore/recovery`
+> 强中心控制面
 
-Responsibility:
+NoKV 当前更像：
 
-- store-local replica catalog
-- store-local raft progress
-- restart recovery only
+> 最小 truth 子系统 + 薄服务层
 
-Suggested logical types:
+### 8.2 CockroachDB
 
-```go
-type ReplicaLocalState struct {
-    RegionID     uint64
-    LocalPeerID  uint64
-    State        region.ReplicaState
-    Descriptor   *descriptor.Descriptor
-    LastApplied  uint64
-    LastTerm     uint64
-}
+CockroachDB 的路线是：
 
-type RaftProgress struct {
-    GroupID         uint64
-    Segment         uint32
-    Offset          uint64
-    AppliedIndex    uint64
-    AppliedTerm     uint64
-    Committed       uint64
-    SnapshotIndex   uint64
-    SnapshotTerm    uint64
-    TruncatedIndex  uint64
-    TruncatedTerm   uint64
-    SegmentIndex    uint64
-    TruncatedOffset uint64
-}
-```
+- metadata 完全内生到数据面 ranges
+- `meta1/meta2` 本身就是 replicated ranges
+- 没有独立 `PD`
 
-This package should replace the current ambiguous “state file contains
-everything” direction over time.
+NoKV 当前没有走这条 fully in-band 路线。
 
-## `pd/view`
+NoKV 当前是：
 
-Suggested new package:
+- out-of-band rooted metadata truth
+- 独立 `pd` 服务边界
+- 没有把 metadata 完全内生进数据面
 
-- `pd/view`
+**区别**
 
-Responsibility:
+Cockroach 更偏：
 
-- materialized views for operators and schedulers
-- region directory cache
-- store stats and placement view
-- rebuild from root events + live heartbeats
+> metadata fully in-band
 
-This layer is allowed to be incomplete temporarily.
-It is not the root of trust.
+NoKV 当前更偏：
 
-Suggested components:
+> out-of-band minimal rooted truth
 
-- `RegionDirectoryView`
-- `StoreHealthView`
-- `PlacementView`
-- `SchedulerInputView`
+### 8.3 FoundationDB
 
-### View input model
+FoundationDB 的路线是：
 
-Views should be rebuilt from:
+- 极小协调根
+- 强角色化
+- coordinator / master / proxies / logs / storage 等明确分工
 
-1. root events
-2. current root checkpoint
-3. live store heartbeats
-4. optional descriptor observations from region leaders
+NoKV 当前借鉴的是：
 
-This makes the control plane robust against cache loss.
+- “小根”的思想
 
-## `raftstore/localmeta`
+但没有走：
 
-Keep:
+- 强角色化系统
+- 大量角色协作的架构
 
-- `raftstore/localmeta/store.go`
+**区别**
 
-But shrink its semantic role.
+FDB 更像：
 
-Future role:
+> 小协调根 + 强角色系统
 
-- local recovery only
-- persisted local peer catalog
-- local raft/apply checkpoint pointers
-- restart hints
+NoKV 当前更像：
 
-It must not become cluster authority.
+> 小真相层 + 轻控制面分层
 
-Over time, the implementation should stop rewriting one full JSON state blob on
-every update. The right direction is:
+---
 
-- split region local state from raft pointers
-- use finer-grained records
-- keep store-local durability separate from cluster metadata durability
+## 9. 当前设计的优点
 
-In other words:
+### 9.1 适合 `standalone-first`
 
-- `raftstore/localmeta` should shrink toward a compatibility bridge
-- `raftstore/recovery` should become the real local durability package
+单机模式明确没有控制面，不会被“伪分布式”代码污染。
 
-## Data ownership
+### 9.2 比大一统 PD 更克制
 
-The design only works if ownership stays explicit.
+`pd` 不再自然膨胀成另一个大数据库。
 
-### Data plane owns
+### 9.3 比双集群控制面更轻
 
-- user keys and values
-- MVCC state
-- SST files
-- WAL / vlog
-- region snapshots
-- region descriptors after install/apply
+不用维护：
 
-### Metadata root owns
+- `pd` 集群
+- `meta` 集群
 
-- cluster ordering of metadata-changing events
-- allocator fences
-- store membership root
-- topology / placement epochs
+两套控制面对象。
 
-### Control-plane views own
+### 9.4 truth 与 view 已经分离
 
-- caches
-- scheduler inputs
-- operator-facing summaries
+即使当前同进程，这个边界也有真实价值。
 
-Views may be stale. Root may not.
+### 9.5 符合当前项目维护能力
 
-## Responsibility matrix
+NoKV 现在更需要：
 
-| Concern | Owner | Durable? | Strongly consistent? |
-| --- | --- | --- | --- |
-| user KV data | data plane | yes | per raft group |
-| region descriptor | region quorum | yes | yes |
-| split/merge ordering | metadata root | yes | yes |
-| allocator fences | metadata root | yes | yes |
-| store membership | metadata root | yes | yes |
-| store heartbeat stats | control-plane view | optional | no |
-| route cache | client/server cache | no | no |
-| replica restart state | store-local recovery | yes | local only |
+- 清晰边界
+- 可维护性
+- 渐进演进
 
-## Routing model
+而不是一上来就堆完整 HA 控制面系统。
 
-The route path should become:
+---
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Cache as Route Cache
-    participant View as Region Directory View
-    participant Root as Metadata Root
-    participant Region as Region Leader
+## 10. 当前设计的限制
 
-    Client->>Cache: lookup(key)
-    alt cache hit and descriptor epoch valid
-        Cache-->>Client: descriptor
-    else miss or stale
-        Cache->>View: refresh(key)
-        View->>Root: read latest topology cursor
-        View-->>Cache: descriptor
-        Cache-->>Client: descriptor
-    end
+当前限制也必须明确：
 
-    Client->>Region: request with descriptor epoch
-    Region-->>Client: ok / stale descriptor / not leader
-```
+1. `pd` 是单点
+2. `meta/root/local` 是单点
+3. 当前没有 metadata quorum
+4. 当前不是生产级 HA control-plane
 
-This keeps the common path cheap while allowing the region to reject stale
-routing using its own descriptor epoch.
+这不是遗漏，而是明确的阶段性取舍。
 
-### Route miss contract
+---
 
-On a miss or stale descriptor:
+## 11. 当前最应该坚持的设计纪律
 
-1. the resolver checks local cache
-2. on cache miss it asks a directory view
-3. the view refreshes from root cursor if needed
-4. the resulting descriptor is tried against the target region
-5. the region may reject with newer descriptor metadata
+后续演进时，下面几条必须守住：
 
-That means the system does not need a central always-fresh routing oracle for
-every operation.
+### 11.1 `meta/root` 不再长大
 
-## Split / merge model
+只允许保存：
 
-The region topology path should be event-first, descriptor-second:
+- rooted topology truth
+- allocator fence
+- compact root state
 
-1. scheduler or operator proposes split/merge
-2. metadata root commits the topology event
-3. target region quorum applies descriptor change
-4. control-plane views rebuild
-5. route caches eventually converge
+不允许长成：
 
-The important point is:
+- 通用 metadata KV
+- route cache store
+- scheduler runtime store
 
-> the root serializes the topology change, but the region descriptor is what
-> the data plane actually serves with.
+### 11.2 `pd/view` 仍然是可重建 view
 
-### Suggested split sequence
+不能重新把 durable truth 放回 `pd`。
 
-```mermaid
-sequenceDiagram
-    participant Scheduler
-    participant Root
-    participant Parent as Parent Region
-    participant Child as Child Region
-    participant View
+### 11.3 `RegionMeta` 和 `Descriptor` 继续双投影
 
-    Scheduler->>Root: append split-request event
-    Root-->>Scheduler: committed root cursor
-    Scheduler->>Parent: propose split apply
-    Parent->>Child: create child descriptor
-    Parent-->>Scheduler: split applied
-    Scheduler->>Root: append split-committed event
-    Root-->>View: new topology cursor
-    View->>View: rebuild directory
-```
+不要再把本地恢复对象和分布式拓扑对象重新揉成一个结构。
 
-The root orders the split.
-The region quorum produces the serving descriptors.
+### 11.4 topology truth 尽量显式生产
 
-## Allocator model
+长期目标仍然是：
 
-Allocator state should be separated from the rest of metadata.
+- 上游直接生产 split / merge / peer-change truth event
 
-The metadata root should provide fencing only:
+而不是让 `pd/storage/root.go` 长期承担推断器职责。
 
-- `ID fence`
-- `TSO fence`
+---
 
-The allocator service can cache ranges locally, but the globally replicated
-root must be the monotonic lower bound that prevents rollback after failover.
+## 12. 总结
 
-This keeps allocator correctness independent from the full region catalog.
+NoKV 当前的分布式控制面设计，不是：
 
-### Suggested allocator strategy
+- 大一统 `PD`
+- 双集群控制面
+- fully in-band metadata
 
-The root should allocate in fenced ranges, not one ID at a time:
+而是：
 
-1. allocator service asks root to advance the fence
-2. root commits the new minimum durable bound
-3. allocator serves IDs or timestamps from the granted range locally
+> 单机无控制面
+>
+> 分布式单控制面进程
+>
+> 最小 rooted metadata truth
+>
+> 自描述 region
+>
+> 可重建 PD view
 
-This keeps root writes small while preserving monotonicity after failover.
+这套设计的价值不在于“功能最多”，而在于：
 
-## Migration and snapshot integration
+1. 结构清楚
+2. 维护成本可控
+3. 能支持当前项目阶段继续稳定演进
 
-The current migration path is a strength and should be preserved.
-
-Today:
-
-- `migrate init` exports a seed snapshot
-- `migrate expand` uses admin streaming export/import
-- `store.InstallRegionSSTSnapshot(...)` handles staged import and publish
-
-Under the proposed design:
-
-- promotion still uses SST snapshot install
-- the region descriptor becomes part of the snapshot contract
-- metadata root records:
-  - seed bootstrap
-  - peer addition
-  - peer removal
-  - leadership movement intent
-
-That means migration becomes:
-
-> data movement through SST snapshots + topology movement through metadata-root
-> events
-
-This preserves the current good boundary instead of throwing it away.
-
-### Descriptor-in-snapshot rule
-
-Once descriptors exist, every exported region snapshot should carry the current
-descriptor explicitly.
-
-That lets install paths validate:
-
-- region bounds
-- peer membership
-- epoch
-- lineage if needed
-
-before publish completes.
-
-## Bootstrap flow
-
-The bootstrap sequence should become:
-
-```mermaid
-flowchart TD
-    A["standalone workdir"] --> B["migrate init"]
-    B --> C["persist local recovery catalog"]
-    B --> D["export seed snapshot"]
-    B --> E["append bootstrap root event"]
-    B --> F["create initial region descriptor"]
-    B --> G["seeded workdir"]
-    G --> H["serve with control plane"]
-    H --> I["cluster-active"]
-```
-
-The key change is that a seeded workdir should no longer imply that all future
-cluster truth lives in PD-local mutable maps.
-
-### Bootstrap root contents
-
-The initial bootstrap event should record at least:
-
-- cluster epoch = 1
-- initial membership epoch = 1
-- initial region descriptor reference
-- initial allocator fences
-- seed store membership
-
-That gives the cluster a durable root without inventing a second full metadata
-table at bootstrap time.
-
-## Persistence strategy
-
-## What can stay JSON
-
-These files are small, non-hot, and operator-facing:
-
-- `MODE.json`
-- `MIGRATION_PROGRESS.json`
-- `sst-snapshot.json`
-
-There is little value in removing JSON from them.
-
-## What should evolve away from full JSON state files
-
-- `raftstore/localmeta/store.go`
-- `pd/storage/local.go`
-
-These should move toward:
-
-- local recovery records for store-local metadata
-- replicated event/checkpoint storage for metadata-root state
-
-The direction is not “ban JSON everywhere”.
-The direction is “stop rewriting full mutable metadata maps as the system
-grows”.
-
-## Physical encoding strategy
-
-The logical schemas should be explicit first.
-
-The recommended approach is:
-
-1. define logical schemas as typed protocol objects
-2. use protobuf-compatible message definitions for root state, root events,
-   descriptors, and recovery objects
-3. allow the physical on-disk encoding to evolve later if a hot path needs a
-   custom layout
-
-That means:
-
-- schema stability first
-- custom binary layout only where profiling proves it matters
-
-This is appropriate because these objects are control-plane and recovery-plane
-protocol objects, not SST blocks or WAL hot-path records.
-
-## PD role under this architecture
-
-PD still exists, but its role changes materially.
-
-### PD should do
-
-- propose root events
-- fence allocators
-- build materialized views
-- run scheduling logic
-- expose operator/admin APIs
-
-### PD should not do
-
-- own the only full mutable region map
-- act as the sole long-term copy of per-region truth
-- absorb store-local recovery metadata
-
-The distinction is important:
-
-> PD becomes a metadata-root manager and view builder, not a metadata database.
-
-## HA deployment shape
-
-The first real HA shape should be intentionally small:
-
-- 3 metadata-root replicas
-- 1 leader, 2 followers
-- majority commit
-- optional colocated PD API service on top of the same root replica set
-
-Suggested deployment choices:
-
-1. keep metadata-root replication separate from data-plane raft groups
-2. keep the root event schema very small
-3. do not colocate unrelated caches inside the root durability layer
-
-This gives NoKV one small strongly consistent control core instead of a large
-secondary metadata database.
-
-## Phased implementation plan
-
-## Phase 0: freeze current boundaries
-
-Goal:
-
-- keep `db_snapshot.go` as snapshot bridge only
-- keep `raftstore/snapshot` as format/install layer only
-- do not add more cluster authority semantics to local JSON stores
-
-## Phase 1: introduce root event types
-
-Add:
-
-- `meta/root/types.go`
-- `pb/meta/root.proto`
-- `pb/meta/region.proto`
-
-Define:
-
-- `Event`
-- `Cursor`
-- `CommitInfo`
-- `State`
-- allocator fence model
-- event kinds
-- checkpoint schema
-
-No runtime wiring yet.
-
-## Phase 2: add a local single-node root backend
-
-Add:
-
-- `meta/root/local`
-
-This is not the final HA backend.
-Its purpose is to make event and state shapes explicit before distributed
-replication is introduced.
-
-Suggested outputs:
-
-- `metadata-root.log`
-- `metadata-root-checkpoint.pb`
-
-## Phase 3: add region descriptor module
-
-Add:
-
-- `raftstore/descriptor`
-- `pb/meta/descriptor.proto`
-
-Integrate with:
-
-- snapshot export/import
-- peer bootstrap
-- stale-route rejection hooks
-- route cache entries
-
-Also add:
-
-- `raftstore/recovery`
-- `pb/meta/recovery.proto`
-
-## Phase 4: replace PD-local metadata authority with root + view
-
-Refactor:
-
-- `pd/storage/local.go`
-- `pd/server/service.go`
-
-So that PD becomes:
-
-- root event proposer
-- view builder
-- scheduler
-- allocator fence owner
-
-Instead of the owner of a full mutable region map.
-
-## Phase 5: integrate migration with root events
-
-Update:
-
-- `raftstore/migrate/init.go`
-- `raftstore/migrate/expand.go`
-- `raftstore/migrate/remove_peer.go`
-- `raftstore/migrate/transfer_leader.go`
-
-So migration persists topology transitions through root events in addition to
-the existing data-movement steps.
-
-## Phase 6: add HA root backend
-
-Only after the model is stable:
-
-- add a replicated backend for `meta/root`
-- keep the replicated state small
-- do not turn it into a second giant metadata database
-
-Suggested shape:
-
-- 3-node quorum
-- append-only root event log
-- periodic root checkpoint
-- explicit fencing on leader change
-
-## Implementation checklist
-
-The minimum useful engineering sequence is:
-
-1. define root schemas
-2. define descriptor schemas
-3. define recovery schemas
-4. add local root backend
-5. add descriptor validation helpers
-6. embed descriptors into snapshot export/import
-7. refactor PD into root + view roles
-8. wire migration events into root append path
-9. only then add HA root replication
-
-## What this changes
-
-If NoKV follows this design, the project's distinguishing story becomes:
-
-1. one storage core from standalone to cluster
-2. SST snapshot install as the shared data-movement primitive
-3. region-owned descriptors instead of a control-plane-owned giant metadata map
-4. a minimal globally replicated root for ordering and fencing only
-5. disposable control-plane views
-
-That is a more interesting system than either:
-
-- “single-node engine plus a separate PD table”
-- or “copy TiKV’s metadata story in smaller form”
-
-## What remains unsolved
-
-This note intentionally does not fully solve:
-
-- exact descriptor hash format
-- proof format for descriptor validation
-- cache invalidation protocol
-- split/merge commit protocol details
-- the final replicated backend implementation for `meta/root`
-- exact protobuf package layout
-- exact leader-election and root-failover procedure
-
-Those should be designed next as separate technical notes.
-
-## Metadata Root Raft Backend
-
-The metadata root should evolve from the current local file-backed backend:
-
-- `meta/root/local`
-
-into a dedicated replicated backend:
-
-- `meta/root/raft`
-
-### Reuse boundary
-
-`meta/root/raft` should reuse the existing raft algorithm wrapper:
-
-- `raft/raft.go`
-
-It should **not** reuse `raftstore` runtime semantics such as:
-
-- region peer lifecycle
-- SST snapshot install
-- local region catalog persistence
-- data-plane raft transport conventions
-
-The root problem is different from the region replication problem.
-
-### What the root raft replicates
-
-The root raft log should only replicate:
-
-- `RootEvent`
-- allocator fence commands
-- compact `RootState` checkpoints
-
-It should not become a general-purpose metadata KV store.
-
-### Package shape
-
-The first implementation keeps the following split:
-
-- `meta/root/raft/config.go`
-- `meta/root/raft/command.go`
-- `meta/root/raft/checkpoint.go`
-- `meta/root/raft/state_machine.go`
-- `meta/root/raft/storage.go`
-- `meta/root/raft/node.go`
-- `meta/root/raft/single_node.go`
-
-### Current implementation status
-
-The current code has moved beyond the first single-node skeleton:
-
-- persisted local raft state:
-  - `root-raft-wal`
-  - `root-raft-hardstate.pb`
-  - `root-raft-snapshot.pb`
-  - `root-raft-checkpoint.pb`
-- single-node root adapter for end-to-end tests and local restart recovery
-- in-memory multi-node transport for replication tests
-- 3-node election and descriptor replication tests
-- follower reopen and catch-up tests
-- gRPC metadata-root service for:
-  - root reads
-  - root appends
-  - allocator fencing
-  - raft message delivery between nodes
-- checkpoint-driven raft snapshot creation and local log compaction
-
-What is still intentionally missing:
-
-- production-grade transport tuning, retries, and observability
-- membership reconfiguration workflow
-- snapshot shipping policy beyond local checkpoint-backed snapshots
-- PD wiring to use the replicated backend directly
-
-Even at this stage the package shape is already correct:
-
-- root commands are separate from data-plane commands
-- root state machine materializes descriptor truth and allocator fences
-- restart recovery is aligned with checkpoint-applied cursors
-- gRPC transport and root API share one metadata-root protocol boundary
-- raft snapshot data carries compact root checkpoints for install/recovery
-- the future HA backend can extend this package instead of replacing it
+对 NoKV 现在这个阶段来说，这比提前做完整高可用 metadata control-plane 更合适。
