@@ -7,9 +7,14 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
+	pdstorage "github.com/feichai0017/NoKV/pd/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"net"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -88,6 +93,30 @@ func (f *fakeStorage) LeaderID() uint64 {
 		return 0
 	}
 	return f.leaderID
+}
+
+type fakeSyncStorage struct {
+	fakeStorage
+	snapshot pdstorage.Snapshot
+}
+
+func (f *fakeSyncStorage) Load() (pdstorage.Snapshot, error) {
+	return pdstorage.Snapshot{
+		Descriptors: rootCloneDescriptorsForTest(f.snapshot.Descriptors),
+		Allocator:   f.snapshot.Allocator,
+	}, nil
+}
+
+func (f *fakeSyncStorage) Refresh() error {
+	return nil
+}
+
+func rootCloneDescriptorsForTest(in map[uint64]descriptor.Descriptor) map[uint64]descriptor.Descriptor {
+	out := make(map[uint64]descriptor.Descriptor, len(in))
+	for id, desc := range in {
+		out[id] = desc.Clone()
+	}
+	return out
 }
 
 func testRegionDescriptorProto(desc descriptor.Descriptor) *metapb.RegionDescriptor {
@@ -384,6 +413,122 @@ func TestServiceRejectsWritesOnFollower(t *testing.T) {
 	require.NoError(t, err)
 	_, err = svc.GetRegionByKey(context.Background(), &pdpb.GetRegionByKeyRequest{Key: []byte("a")})
 	require.NoError(t, err)
+}
+
+func TestServiceRefreshFromStorageReloadsViewAndAllocatorState(t *testing.T) {
+	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	store := &fakeSyncStorage{
+		fakeStorage: fakeStorage{leader: false, leaderID: 2},
+		snapshot: pdstorage.Snapshot{
+			Descriptors: map[uint64]descriptor.Descriptor{
+				9: testDescriptor(9, []byte("a"), []byte("z"), metaregion.Epoch{Version: 3, ConfVersion: 1}, nil),
+			},
+			Allocator: pdstorage.AllocatorState{
+				IDCurrent: 120,
+				TSCurrent: 450,
+			},
+		},
+	}
+	svc.SetStorage(store)
+
+	require.NoError(t, svc.RefreshFromStorage())
+
+	getResp, err := svc.GetRegionByKey(context.Background(), &pdpb.GetRegionByKeyRequest{Key: []byte("m")})
+	require.NoError(t, err)
+	require.False(t, getResp.GetNotFound())
+	require.Equal(t, uint64(9), getResp.GetRegionDescriptor().GetRegionId())
+
+	idResp, err := svc.AllocID(context.Background(), &pdpb.AllocIDRequest{Count: 1})
+	require.Error(t, err)
+	require.Nil(t, idResp)
+
+	store.leader = true
+	store.leaderID = 0
+
+	idResp, err = svc.AllocID(context.Background(), &pdpb.AllocIDRequest{Count: 2})
+	require.NoError(t, err)
+	require.Equal(t, uint64(121), idResp.GetFirstId())
+
+	tsResp, err := svc.Tso(context.Background(), &pdpb.TsoRequest{Count: 2})
+	require.NoError(t, err)
+	require.Equal(t, uint64(451), tsResp.GetTimestamp())
+}
+
+func TestServiceRefreshFromReplicatedRootFollowerServesRead(t *testing.T) {
+	peerAddrs := reserveReplicatedRootPeerAddrs(t)
+	rootStores := make(map[uint64]*pdstorage.RootStore, 3)
+	services := make(map[uint64]*Service, 3)
+	for _, id := range []uint64{1, 2, 3} {
+		store, err := pdstorage.OpenRootReplicatedStore(pdstorage.ReplicatedRootConfig{
+			WorkDir:       filepath.Join(t.TempDir(), "root", "node-"+strconv.FormatUint(id, 10)),
+			NodeID:        id,
+			TransportAddr: peerAddrs[id],
+			PeerAddrs:     peerAddrs,
+		})
+		require.NoError(t, err)
+		rootStores[id] = store
+		t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+		cluster := core.NewCluster()
+		bootstrap, err := pdstorage.Bootstrap(store, cluster, 1, 1)
+		require.NoError(t, err)
+		svc := NewService(cluster, core.NewIDAllocator(bootstrap.IDStart), tso.NewAllocator(bootstrap.TSStart))
+		svc.SetStorage(store)
+		services[id] = svc
+	}
+
+	var leaderID uint64
+	require.Eventually(t, func() bool {
+		for id, store := range rootStores {
+			if store.IsLeader() {
+				leaderID = id
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 50*time.Millisecond)
+
+	followerID := replicatedFollowerID(leaderID)
+	leader := services[leaderID]
+	follower := services[followerID]
+
+	_, err := leader.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
+		RegionDescriptor: testRegionDescriptorProto(testDescriptor(91, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)),
+	})
+	require.NoError(t, err)
+
+	getResp, err := follower.GetRegionByKey(context.Background(), &pdpb.GetRegionByKeyRequest{Key: []byte("m")})
+	require.NoError(t, err)
+	require.True(t, getResp.GetNotFound())
+
+	require.Eventually(t, func() bool {
+		if err := follower.RefreshFromStorage(); err != nil {
+			return false
+		}
+		resp, err := follower.GetRegionByKey(context.Background(), &pdpb.GetRegionByKeyRequest{Key: []byte("m")})
+		return err == nil && !resp.GetNotFound() && resp.GetRegionDescriptor().GetRegionId() == 91
+	}, 5*time.Second, 50*time.Millisecond)
+}
+
+func reserveReplicatedRootPeerAddrs(t *testing.T) map[uint64]string {
+	t.Helper()
+	out := make(map[uint64]string, 3)
+	for _, id := range []uint64{1, 2, 3} {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		out[id] = ln.Addr().String()
+		require.NoError(t, ln.Close())
+	}
+	return out
+}
+
+func replicatedFollowerID(leaderID uint64) uint64 {
+	for _, id := range []uint64{1, 2, 3} {
+		if id != leaderID {
+			return id
+		}
+	}
+	return 0
 }
 
 func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch, peers []metaregion.Peer) descriptor.Descriptor {

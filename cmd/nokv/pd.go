@@ -176,6 +176,7 @@ func runPDCmd(w io.Writer, args []string) error {
 	ctx, cancel := pdNotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if refresher, ok := store.(pdstorage.Refresher); ok && rootModeValue == "replicated" {
+		_ = refresher
 		ticker := time.NewTicker(*rootRefresh)
 		defer ticker.Stop()
 		go func() {
@@ -184,7 +185,7 @@ func runPDCmd(w io.Writer, args []string) error {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					_ = refresher.Refresh()
+					_ = svc.RefreshFromStorage()
 				}
 			}
 		}()

@@ -92,6 +92,25 @@ func TestClusterRemoveRegion(t *testing.T) {
 	require.False(t, removed)
 }
 
+func TestClusterReplaceRegionSnapshot(t *testing.T) {
+	c := NewCluster()
+	require.NoError(t, c.PublishRegionDescriptor(testDescriptor(1, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1})))
+	require.NoError(t, c.PublishRegionDescriptor(testDescriptor(2, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})))
+
+	c.ReplaceRegionSnapshot(map[uint64]descriptor.Descriptor{
+		3: testDescriptor(3, []byte(""), []byte("z"), metaregion.Epoch{Version: 2, ConfVersion: 1}),
+	})
+
+	_, ok := c.GetRegionDescriptorByKey([]byte("b"))
+	require.True(t, ok)
+	desc, ok := c.GetRegionDescriptorByKey([]byte("x"))
+	require.True(t, ok)
+	require.Equal(t, uint64(3), desc.RegionID)
+	_, ok = c.GetRegionDescriptorByKey([]byte("m"))
+	require.True(t, ok)
+	require.Len(t, c.RegionSnapshot(), 1)
+}
+
 func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descriptor.Descriptor {
 	desc := descriptor.Descriptor{
 		RegionID: id,
