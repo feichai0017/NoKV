@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -23,26 +23,26 @@ func newFileCheckpointStore(fs vfs.FS, workdir string) rootstorage.CheckpointSto
 	return fileCheckpointStore{fs: fs, workdir: workdir}
 }
 
-func (s fileCheckpointStore) Load() (rootpkg.Snapshot, int64, error) {
+func (s fileCheckpointStore) Load() (rootstate.Snapshot, int64, error) {
 	path := filepath.Join(s.workdir, CheckpointFileName)
 	data, err := s.fs.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return rootpkg.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, 0, nil
+			return rootstate.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, 0, nil
 		}
-		return rootpkg.Snapshot{}, 0, err
+		return rootstate.Snapshot{}, 0, err
 	}
 	if len(data) == 0 {
-		return rootpkg.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, 0, nil
+		return rootstate.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, 0, nil
 	}
 	var pbCheckpoint metapb.RootCheckpoint
 	if err := proto.Unmarshal(data, &pbCheckpoint); err != nil {
-		return rootpkg.Snapshot{}, 0, err
+		return rootstate.Snapshot{}, 0, err
 	}
 	if pbCheckpoint.State == nil && len(pbCheckpoint.Descriptors) == 0 {
 		var pbState metapb.RootState
 		if err := proto.Unmarshal(data, &pbState); err == nil {
-			return rootpkg.Snapshot{
+			return rootstate.Snapshot{
 				State:       metacodec.RootStateFromProto(&pbState),
 				Descriptors: make(map[uint64]descriptor.Descriptor),
 			}, 0, nil
@@ -55,7 +55,7 @@ func (s fileCheckpointStore) Load() (rootpkg.Snapshot, int64, error) {
 	return snapshot, int64(logOffset), nil
 }
 
-func (s fileCheckpointStore) Save(snapshot rootpkg.Snapshot, logOffset uint64) error {
+func (s fileCheckpointStore) Save(snapshot rootstate.Snapshot, logOffset uint64) error {
 	payload, err := proto.Marshal(metacodec.RootSnapshotToProto(snapshot, logOffset))
 	if err != nil {
 		return err

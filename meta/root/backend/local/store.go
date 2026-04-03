@@ -6,7 +6,9 @@ import (
 	"sync"
 
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/vfs"
@@ -27,11 +29,11 @@ type Store struct {
 	log     rootstorage.EventLog
 
 	mu         sync.RWMutex
-	state      rootpkg.State
+	state      rootstate.State
 	descs      map[uint64]descriptor.Descriptor
 	records    []rootstorage.CommittedEvent
 	logBase    int64
-	retainFrom rootpkg.Cursor
+	retainFrom rootstate.Cursor
 }
 
 var _ rootpkg.Root = (*Store)(nil)
@@ -58,7 +60,7 @@ func Open(workdir string, fs vfs.FS) (*Store, error) {
 	}
 	for _, rec := range records {
 		if after(rec.Cursor, snapshot.State.LastCommitted) {
-			rootpkg.ApplyEventToState(&snapshot.State, rec.Cursor, rec.Event)
+			rootstate.ApplyEventToState(&snapshot.State, rec.Cursor, rec.Event)
 			rootmaterialize.ApplyEventToDescriptors(snapshot.Descriptors, rec.Event)
 		}
 	}
@@ -74,9 +76,9 @@ func Open(workdir string, fs vfs.FS) (*Store, error) {
 }
 
 // Current returns the current compact root state.
-func (s *Store) Current() (rootpkg.State, error) {
+func (s *Store) Current() (rootstate.State, error) {
 	if s == nil {
-		return rootpkg.State{}, nil
+		return rootstate.State{}, nil
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -84,62 +86,62 @@ func (s *Store) Current() (rootpkg.State, error) {
 }
 
 // Snapshot returns the compact rooted metadata snapshot.
-func (s *Store) Snapshot() (rootpkg.Snapshot, error) {
+func (s *Store) Snapshot() (rootstate.Snapshot, error) {
 	if s == nil {
-		return rootpkg.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
+		return rootstate.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return rootpkg.CloneSnapshot(rootpkg.Snapshot{
+	return rootstate.CloneSnapshot(rootstate.Snapshot{
 		State:       s.state,
 		Descriptors: s.descs,
 	}), nil
 }
 
 // ReadSince returns all events after cursor together with the current tail cursor.
-func (s *Store) ReadSince(cursor rootpkg.Cursor) ([]rootpkg.Event, rootpkg.Cursor, error) {
+func (s *Store) ReadSince(cursor rootstate.Cursor) ([]rootevent.Event, rootstate.Cursor, error) {
 	if s == nil {
-		return nil, rootpkg.Cursor{}, nil
+		return nil, rootstate.Cursor{}, nil
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if after(s.retainFrom, cursor) {
 		return rootmaterialize.SnapshotDescriptorEvents(s.descs), s.state.LastCommitted, nil
 	}
-	out := make([]rootpkg.Event, 0, len(s.records))
+	out := make([]rootevent.Event, 0, len(s.records))
 	for _, rec := range s.records {
 		if after(rec.Cursor, cursor) {
-			out = append(out, rootpkg.CloneEvent(rec.Event))
+			out = append(out, rootevent.CloneEvent(rec.Event))
 		}
 	}
 	return out, s.state.LastCommitted, nil
 }
 
 // Append appends ordered metadata events and advances the compact root state.
-func (s *Store) Append(events ...rootpkg.Event) (rootpkg.CommitInfo, error) {
+func (s *Store) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) {
 	if s == nil || len(events) == 0 {
 		state, _ := s.Current()
-		return rootpkg.CommitInfo{Cursor: state.LastCommitted, State: state}, nil
+		return rootstate.CommitInfo{Cursor: state.LastCommitted, State: state}, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var next rootpkg.Cursor
+	var next rootstate.Cursor
 	state := s.state
-	descs := rootpkg.CloneDescriptors(s.descs)
+	descs := rootstate.CloneDescriptors(s.descs)
 	records := make([]rootstorage.CommittedEvent, 0, len(events))
 	for _, evt := range events {
-		next = rootpkg.NextCursor(state.LastCommitted)
-		rootpkg.ApplyEventToState(&state, next, evt)
+		next = rootstate.NextCursor(state.LastCommitted)
+		rootstate.ApplyEventToState(&state, next, evt)
 		rootmaterialize.ApplyEventToDescriptors(descs, evt)
-		records = append(records, rootstorage.CommittedEvent{Cursor: next, Event: rootpkg.CloneEvent(evt)})
+		records = append(records, rootstorage.CommittedEvent{Cursor: next, Event: rootevent.CloneEvent(evt)})
 	}
 	logEnd, err := s.log.Append(records...)
 	if err != nil {
-		return rootpkg.CommitInfo{}, err
+		return rootstate.CommitInfo{}, err
 	}
-	if err := s.checkpt.Save(rootpkg.Snapshot{State: state, Descriptors: descs}, uint64(logEnd)); err != nil {
-		return rootpkg.CommitInfo{}, err
+	if err := s.checkpt.Save(rootstate.Snapshot{State: state, Descriptors: descs}, uint64(logEnd)); err != nil {
+		return rootstate.CommitInfo{}, err
 	}
 	s.state = state
 	s.descs = descs
@@ -147,7 +149,7 @@ func (s *Store) Append(events ...rootpkg.Event) (rootpkg.CommitInfo, error) {
 	s.logBase = logEnd
 	s.retainFrom = retainedFloor(s.records, state.LastCommitted)
 	s.maybeCompactLocked()
-	return rootpkg.CommitInfo{Cursor: state.LastCommitted, State: state}, nil
+	return rootstate.CommitInfo{Cursor: state.LastCommitted, State: state}, nil
 }
 
 // FenceAllocator advances one global allocator fence monotonically.
@@ -175,7 +177,7 @@ func (s *Store) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, 
 	if err != nil {
 		return 0, err
 	}
-	if err := s.checkpt.Save(rootpkg.Snapshot{State: state, Descriptors: rootpkg.CloneDescriptors(s.descs)}, uint64(logEnd)); err != nil {
+	if err := s.checkpt.Save(rootstate.Snapshot{State: state, Descriptors: rootstate.CloneDescriptors(s.descs)}, uint64(logEnd)); err != nil {
 		return 0, err
 	}
 	s.state = state
@@ -192,9 +194,9 @@ func (s *Store) maybeCompactLocked() {
 	}
 	start := len(s.records) - maxRetainedRecords
 	retained := cloneRecords(s.records[start:])
-	snapshot := rootpkg.Snapshot{
+	snapshot := rootstate.Snapshot{
 		State:       s.state,
-		Descriptors: rootpkg.CloneDescriptors(s.descs),
+		Descriptors: rootstate.CloneDescriptors(s.descs),
 	}
 	if err := s.log.Rewrite(retained); err != nil {
 		return
