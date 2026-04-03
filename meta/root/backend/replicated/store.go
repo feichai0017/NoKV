@@ -128,7 +128,10 @@ func (s *Store) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) 
 	if err != nil {
 		return rootstate.CommitInfo{}, err
 	}
-	if err := s.checkpt.Save(rootstate.Snapshot{State: state, Descriptors: descs}, uint64(logEnd)); err != nil {
+	if err := s.checkpt.Save(rootstorage.Checkpoint{
+		Snapshot:  rootstate.Snapshot{State: state, Descriptors: descs},
+		LogOffset: logEnd,
+	}); err != nil {
 		return rootstate.CommitInfo{}, err
 	}
 	s.state = state
@@ -164,7 +167,10 @@ func (s *Store) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, 
 	if err != nil {
 		return 0, err
 	}
-	if err := s.checkpt.Save(rootstate.Snapshot{State: state, Descriptors: rootstate.CloneDescriptors(s.descs)}, uint64(logEnd)); err != nil {
+	if err := s.checkpt.Save(rootstorage.Checkpoint{
+		Snapshot:  rootstate.Snapshot{State: state, Descriptors: rootstate.CloneDescriptors(s.descs)},
+		LogOffset: logEnd,
+	}); err != nil {
 		return 0, err
 	}
 	s.state = state
@@ -200,10 +206,10 @@ func (s *Store) maybeCompactLocked() {
 		State:       s.state,
 		Descriptors: rootstate.CloneDescriptors(s.descs),
 	}
-	if err := s.log.Rewrite(retained); err != nil {
+	if err := s.log.Compact(retained); err != nil {
 		return
 	}
-	if err := s.checkpt.Save(snapshot, 0); err != nil {
+	if err := s.checkpt.Save(rootstorage.Checkpoint{Snapshot: snapshot, LogOffset: 0}); err != nil {
 		return
 	}
 	s.records = retained
