@@ -32,6 +32,7 @@ type Store struct {
 	log     rootstorage.EventLog
 	checkpt rootstorage.CheckpointStore
 	install rootstorage.BootstrapInstaller
+	leader  LeaderAware
 
 	mu                 sync.RWMutex
 	state              rootstate.State
@@ -74,6 +75,7 @@ func Open(cfg Config) (*Store, error) {
 		log:                cfg.Log,
 		checkpt:            cfg.Checkpoint,
 		install:            cfg.Installer,
+		leader:             leaderAware(cfg.Driver),
 		state:              bootstrap.Snapshot.State,
 		descs:              bootstrap.Snapshot.Descriptors,
 		records:            bootstrap.Records,
@@ -81,6 +83,28 @@ func Open(cfg Config) (*Store, error) {
 		retainFrom:         bootstrap.RetainFrom,
 		maxRetainedRecords: cfg.MaxRetainedRecords,
 	}, nil
+}
+
+func leaderAware(driver Driver) LeaderAware {
+	if driver == nil {
+		return nil
+	}
+	leader, _ := driver.(LeaderAware)
+	return leader
+}
+
+func (s *Store) IsLeader() bool {
+	if s == nil || s.leader == nil {
+		return true
+	}
+	return s.leader.IsLeader()
+}
+
+func (s *Store) LeaderID() uint64 {
+	if s == nil || s.leader == nil {
+		return 0
+	}
+	return s.leader.LeaderID()
 }
 
 // Refresh reloads the rooted checkpoint plus retained committed tail from the
