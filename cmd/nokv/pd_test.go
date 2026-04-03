@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/config"
-	rootraft "github.com/feichai0017/NoKV/meta/root/raft"
 	"github.com/feichai0017/NoKV/pd/core"
 	pdstorage "github.com/feichai0017/NoKV/pd/storage"
 
@@ -143,38 +142,6 @@ func TestRunPDCmdReloadsPersistedRegionCatalog(t *testing.T) {
 		"-workdir", dir,
 	}))
 	require.Contains(t, buf.String(), "PD restored 2 region(s) from metadata root")
-}
-
-func TestRunPDCmdReloadsEmbeddedRootRaftCatalog(t *testing.T) {
-	origNotify := pdNotifyContext
-	pdNotifyContext = func(parent context.Context, _ ...os.Signal) (context.Context, context.CancelFunc) {
-		ctx, cancel := context.WithCancel(parent)
-		cancel()
-		return ctx, cancel
-	}
-	t.Cleanup(func() { pdNotifyContext = origNotify })
-
-	dir := t.TempDir()
-	root, err := rootraft.OpenSingleNode(rootraft.Config{NodeID: 1, WorkDir: pdEmbeddedRootRaftDir(dir)})
-	require.NoError(t, err)
-	store, err := pdstorage.OpenRootStore(root)
-	require.NoError(t, err)
-	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
-		ID:       41,
-		StartKey: []byte("a"),
-		EndKey:   []byte("m"),
-		Epoch:    metaregion.Epoch{Version: 2, ConfVersion: 1},
-	}, 0)))
-	require.NoError(t, store.Close())
-
-	var buf bytes.Buffer
-	require.NoError(t, runPDCmd(&buf, []string{
-		"-addr", "127.0.0.1:0",
-		"-workdir", dir,
-		"-meta-backend", "raft-single",
-	}))
-	require.Contains(t, buf.String(), "PD restored 1 region(s) from metadata root (raft-single)")
-	require.FileExists(t, filepath.Join(pdEmbeddedRootRaftDir(dir), "root-raft-checkpoint.pb"))
 }
 
 func TestRestorePDRegionsRejectsDivergentOverlap(t *testing.T) {

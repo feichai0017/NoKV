@@ -10,12 +10,10 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 
 	"github.com/feichai0017/NoKV/config"
-	rootraft "github.com/feichai0017/NoKV/meta/root/raft"
 	"github.com/feichai0017/NoKV/pd/core"
 	pdserver "github.com/feichai0017/NoKV/pd/server"
 	pdstorage "github.com/feichai0017/NoKV/pd/storage"
@@ -26,18 +24,12 @@ import (
 var pdNotifyContext = signal.NotifyContext
 var pdListen = net.Listen
 
-const (
-	pdMetaBackendLocal      = "local"
-	pdMetaBackendRaftSingle = "raft-single"
-)
-
 func runPDCmd(w io.Writer, args []string) error {
 	fs := flag.NewFlagSet("pd", flag.ContinueOnError)
 	addr := fs.String("addr", "127.0.0.1:2379", "listen address for PD-lite gRPC service")
 	idStart := fs.Uint64("id-start", 1, "initial ID allocator value")
 	tsStart := fs.Uint64("ts-start", 1, "initial TSO value")
 	workdir := fs.String("workdir", "", "optional PD local state directory for persisting allocator and region catalog")
-	metaBackend := fs.String("meta-backend", pdMetaBackendLocal, "metadata root backend: local|raft-single")
 	configPath := fs.String("config", "", "optional raft configuration file used to resolve pd workdir")
 	scope := fs.String("scope", "host", "scope for config-resolved pd workdir: host|docker")
 	metricsAddr := fs.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
@@ -80,13 +72,12 @@ func runPDCmd(w io.Writer, args []string) error {
 		store         pdstorage.Store
 		workdirPath   string
 		loadedRegions int
-		backendLabel  string
 	)
 	if strings.TrimSpace(*workdir) != "" {
 		workdirPath = strings.TrimSpace(*workdir)
-		rootStore, backend, err := openPDRootStore(workdirPath, strings.TrimSpace(*metaBackend))
+		rootStore, err := pdstorage.OpenRootLocalStore(workdirPath)
 		if err != nil {
-			return fmt.Errorf("pd open metadata root %q (%s): %w", workdirPath, strings.TrimSpace(*metaBackend), err)
+			return fmt.Errorf("pd open metadata root %q: %w", workdirPath, err)
 		}
 		defer func() { _ = rootStore.Close() }()
 		bootstrap, err := pdstorage.Bootstrap(rootStore, cluster, *idStart, *tsStart)
@@ -96,7 +87,6 @@ func runPDCmd(w io.Writer, args []string) error {
 		*idStart, *tsStart = bootstrap.IDStart, bootstrap.TSStart
 		loadedRegions = bootstrap.LoadedRegions
 		store = rootStore
-		backendLabel = backend
 	}
 
 	ids := core.NewIDAllocator(*idStart)
@@ -122,7 +112,7 @@ func runPDCmd(w io.Writer, args []string) error {
 	}
 
 	if store != nil {
-		_, _ = fmt.Fprintf(w, "PD restored %d region(s) from metadata root (%s): %s\n", loadedRegions, backendLabel, workdirPath)
+		_, _ = fmt.Fprintf(w, "PD restored %d region(s) from metadata root: %s\n", loadedRegions, workdirPath)
 		_, _ = fmt.Fprintf(w, "PD allocator starts: id=%d ts=%d\n", *idStart, *tsStart)
 	}
 	_, _ = fmt.Fprintf(w, "PD-lite service listening on %s\n", lis.Addr().String())
@@ -146,42 +136,6 @@ func runPDCmd(w io.Writer, args []string) error {
 		}
 		return nil
 	}
-}
-
-func openPDRootStore(workdir, backend string) (pdstorage.Store, string, error) {
-	switch normalizePDMetaBackend(backend) {
-	case pdMetaBackendLocal:
-		store, err := pdstorage.OpenRootLocalStore(workdir)
-		return store, pdMetaBackendLocal, err
-	case pdMetaBackendRaftSingle:
-		root, err := rootraft.OpenSingleNode(rootraft.Config{
-			NodeID:  1,
-			WorkDir: pdEmbeddedRootRaftDir(workdir),
-		})
-		if err != nil {
-			return nil, "", err
-		}
-		store, err := pdstorage.OpenRootStore(root)
-		if err != nil {
-			_ = root.Close()
-			return nil, "", err
-		}
-		return store, pdMetaBackendRaftSingle, nil
-	default:
-		return nil, "", fmt.Errorf("invalid meta backend %q (expected local|raft-single)", backend)
-	}
-}
-
-func normalizePDMetaBackend(backend string) string {
-	backend = strings.ToLower(strings.TrimSpace(backend))
-	if backend == "" {
-		return pdMetaBackendLocal
-	}
-	return backend
-}
-
-func pdEmbeddedRootRaftDir(workdir string) string {
-	return filepath.Join(strings.TrimSpace(workdir), "meta-root-raft")
 }
 
 func flagPassed(fs *flag.FlagSet, name string) bool {

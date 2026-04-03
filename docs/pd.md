@@ -7,13 +7,6 @@ It exposes a gRPC API (`pb.PD`) and is started by:
 go run ./cmd/nokv pd --addr 127.0.0.1:2379
 ```
 
-For a single-node distributed control plane, PD can now host an embedded
-metadata-root raft node in the same process:
-
-```bash
-go run ./cmd/nokv pd --addr 127.0.0.1:2379 --workdir ./artifacts/pd --meta-backend raft-single
-```
-
 ---
 
 ## 1. Responsibilities
@@ -54,25 +47,8 @@ Core implementation units:
 
 ## 3. Persistence (`--workdir`)
 
-When `--workdir` is provided, PD-lite opens one metadata-root backend.
-
-Supported backends:
-
-- `--meta-backend local`
-  - file-backed rooted state
-  - intended for reference/testing and the current non-raft compatibility path
-- `--meta-backend raft-single`
-  - single-node embedded metadata-root raft
-  - intended for distributed-dev mode
-
-`raft-single` persists:
-
-- `meta-root-raft/root-raft-wal`
-- `meta-root-raft/root-raft-hardstate.pb`
-- `meta-root-raft/root-raft-snapshot.pb`
-- `meta-root-raft/root-raft-checkpoint.pb`
-
-`local` persists:
+When `--workdir` is provided, PD-lite persists durable control-plane truth in a
+single local metadata-root backend:
 
 - `metadata-root.log`
 - `metadata-root-checkpoint.pb`
@@ -185,13 +161,10 @@ Related CLI behavior:
 - Standalone mode has no PD and no metadata-root service.
 - Distributed-dev mode can run one control-plane process:
   - `pd`
-  - embedded `meta/root/raft` (`--meta-backend raft-single`)
-- Distributed HA mode is intended to run three control-plane processes, each
-  hosting:
-  - `pd`
-  - one `meta/root/raft` node
-- This keeps truth and view logically separate without forcing two independent
-  control-plane clusters.
+  - one local `meta/root`
+- Current project scope does not enable metadata-root HA by default. The root
+  remains single-node so control-plane complexity stays bounded while truth and
+  view remain logically separated.
 - PD persistence is intentionally limited to rooted control-plane truth:
   - region descriptor publish/tombstone events
   - allocator durability (`AllocID`, `TSO`)
@@ -203,8 +176,7 @@ Related CLI behavior:
 
 ## 8. Current Limitations / Next Steps
 
-- `--meta-backend raft-single` is embedded single-node only. Multi-node
-  control-plane bootstrapping is the next step.
+- Control-plane truth is single-node rooted storage, not HA quorum metadata.
 - Scheduler policy is intentionally small (leader transfer focused).
 - No advanced placement constraints yet.
 
