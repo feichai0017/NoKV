@@ -41,7 +41,7 @@ func RootStateFromProto(pbState *metapb.RootState) rootstate.State {
 	}
 }
 
-func RootSnapshotToProto(snapshot rootstate.Snapshot, logOffset uint64) *metapb.RootCheckpoint {
+func RootSnapshotToProto(snapshot rootstate.Snapshot, tailOffset uint64) *metapb.RootCheckpoint {
 	descriptors := make([]*metapb.RegionDescriptor, 0, len(snapshot.Descriptors))
 	for _, desc := range snapshot.Descriptors {
 		descriptors = append(descriptors, DescriptorToProto(desc))
@@ -49,7 +49,7 @@ func RootSnapshotToProto(snapshot rootstate.Snapshot, logOffset uint64) *metapb.
 	return &metapb.RootCheckpoint{
 		State:       RootStateToProto(snapshot.State),
 		Descriptors: descriptors,
-		LogOffset:   logOffset,
+		LogOffset:   tailOffset,
 	}
 }
 

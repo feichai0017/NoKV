@@ -50,7 +50,7 @@ func Open(workdir string, fs vfs.FS) (*Store, error) {
 		storage:    storage,
 		state:      bootstrap.Snapshot.State,
 		descs:      bootstrap.Snapshot.Descriptors,
-		records:    bootstrap.Stream.Records,
+		records:    bootstrap.Tail.Records,
 		retainFrom: bootstrap.RetainFrom,
 	}, nil
 }
@@ -121,15 +121,15 @@ func (s *Store) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) 
 		return rootstate.CommitInfo{}, err
 	}
 	if err := s.storage.SaveCheckpoint(rootstorage.Checkpoint{
-		Snapshot:  rootstate.Snapshot{State: state, Descriptors: descs},
-		LogOffset: logEnd,
+		Snapshot:   rootstate.Snapshot{State: state, Descriptors: descs},
+		TailOffset: logEnd,
 	}); err != nil {
 		return rootstate.CommitInfo{}, err
 	}
 	s.state = state
 	s.descs = descs
 	s.records = append(s.records, records...)
-	s.retainFrom = (rootstorage.CommittedStream{Records: s.records}).RetainFrom(state.LastCommitted)
+	s.retainFrom = (rootstorage.CommittedTail{Records: s.records}).RetainFrom(state.LastCommitted)
 	s.maybeCompactLocked()
 	return rootstate.CommitInfo{Cursor: state.LastCommitted, State: state}, nil
 }
@@ -160,8 +160,8 @@ func (s *Store) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, 
 		return 0, err
 	}
 	if err := s.storage.SaveCheckpoint(rootstorage.Checkpoint{
-		Snapshot:  rootstate.Snapshot{State: state, Descriptors: rootstate.CloneDescriptors(s.descs)},
-		LogOffset: logEnd,
+		Snapshot:   rootstate.Snapshot{State: state, Descriptors: rootstate.CloneDescriptors(s.descs)},
+		TailOffset: logEnd,
 	}); err != nil {
 		return 0, err
 	}
@@ -182,12 +182,12 @@ func (s *Store) maybeCompactLocked() {
 		State:       s.state,
 		Descriptors: rootstate.CloneDescriptors(s.descs),
 	}
-	if err := s.storage.CompactCommitted(rootstorage.CommittedStream{Records: retained}); err != nil {
+	if err := s.storage.CompactCommitted(rootstorage.CommittedTail{Records: retained}); err != nil {
 		return
 	}
-	if err := s.storage.SaveCheckpoint(rootstorage.Checkpoint{Snapshot: snapshot, LogOffset: 0}); err != nil {
+	if err := s.storage.SaveCheckpoint(rootstorage.Checkpoint{Snapshot: snapshot, TailOffset: 0}); err != nil {
 		return
 	}
 	s.records = retained
-	s.retainFrom = (rootstorage.CommittedStream{Records: retained}).RetainFrom(s.state.LastCommitted)
+	s.retainFrom = (rootstorage.CommittedTail{Records: retained}).RetainFrom(s.state.LastCommitted)
 }

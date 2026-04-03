@@ -9,7 +9,7 @@ import (
 // Bootstrap is one materialized rooted snapshot plus its retained committed tail.
 type Bootstrap struct {
 	Snapshot   rootstate.Snapshot
-	Stream     rootstorage.CommittedStream
+	Tail       rootstorage.CommittedTail
 	RetainFrom rootstate.Cursor
 }
 
@@ -19,7 +19,7 @@ func LoadBootstrap(storage rootstorage.Substrate) (Bootstrap, error) {
 	if err != nil {
 		return Bootstrap{}, err
 	}
-	stream, err := storage.ReadCommitted(checkpoint.LogOffset)
+	stream, err := storage.ReadCommitted(checkpoint.TailOffset)
 	if err != nil {
 		return Bootstrap{}, err
 	}
@@ -32,7 +32,7 @@ func LoadBootstrap(storage rootstorage.Substrate) (Bootstrap, error) {
 	}
 	return Bootstrap{
 		Snapshot:   snapshot,
-		Stream:     stream,
+		Tail:       stream,
 		RetainFrom: stream.RetainFrom(snapshot.State.LastCommitted),
 	}, nil
 }

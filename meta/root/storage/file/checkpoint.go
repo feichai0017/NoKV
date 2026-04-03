@@ -54,11 +54,11 @@ func (s fileCheckpointStore) LoadCheckpoint() (rootstorage.Checkpoint, error) {
 	if snapshot.Descriptors == nil {
 		snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
 	}
-	return rootstorage.Checkpoint{Snapshot: snapshot, LogOffset: int64(logOffset)}, nil
+	return rootstorage.Checkpoint{Snapshot: snapshot, TailOffset: int64(logOffset)}, nil
 }
 
 func (s fileCheckpointStore) SaveCheckpoint(checkpoint rootstorage.Checkpoint) error {
-	payload, err := proto.Marshal(metacodec.RootSnapshotToProto(checkpoint.Snapshot, uint64(checkpoint.LogOffset)))
+	payload, err := proto.Marshal(metacodec.RootSnapshotToProto(checkpoint.Snapshot, uint64(checkpoint.TailOffset)))
 	if err != nil {
 		return err
 	}

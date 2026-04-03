@@ -8,15 +8,15 @@ import (
 // Checkpoint is one compact rooted snapshot plus the retained-log offset to
 // continue bootstrap replay from.
 type Checkpoint struct {
-	Snapshot  rootstate.Snapshot
-	LogOffset int64
+	Snapshot   rootstate.Snapshot
+	TailOffset int64
 }
 
 // CloneCheckpoint returns a detached rooted checkpoint.
 func CloneCheckpoint(in Checkpoint) Checkpoint {
 	return Checkpoint{
-		Snapshot:  rootstate.CloneSnapshot(in.Snapshot),
-		LogOffset: in.LogOffset,
+		Snapshot:   rootstate.CloneSnapshot(in.Snapshot),
+		TailOffset: in.TailOffset,
 	}
 }
 
@@ -41,17 +41,17 @@ func CloneCommittedEvents(in []CommittedEvent) []CommittedEvent {
 	return out
 }
 
-// CommittedStream is one retained committed rooted stream starting at one
+// CommittedTail is one retained committed rooted stream starting at one
 // durable log offset.
-type CommittedStream struct {
+type CommittedTail struct {
 	Offset    int64
 	EndOffset int64
 	Records   []CommittedEvent
 }
 
-// CloneCommittedStream returns a detached committed-stream view.
-func CloneCommittedStream(in CommittedStream) CommittedStream {
-	return CommittedStream{
+// CloneCommittedTail returns a detached committed-stream view.
+func CloneCommittedTail(in CommittedTail) CommittedTail {
+	return CommittedTail{
 		Offset:    in.Offset,
 		EndOffset: in.EndOffset,
 		Records:   CloneCommittedEvents(in.Records),
@@ -60,7 +60,7 @@ func CloneCommittedStream(in CommittedStream) CommittedStream {
 
 // RetainFrom returns the cursor immediately before the first retained event.
 // When the stream is empty, fallback is returned unchanged.
-func (s CommittedStream) RetainFrom(fallback rootstate.Cursor) rootstate.Cursor {
+func (s CommittedTail) RetainFrom(fallback rootstate.Cursor) rootstate.Cursor {
 	if len(s.Records) == 0 {
 		return fallback
 	}
@@ -73,7 +73,7 @@ func (s CommittedStream) RetainFrom(fallback rootstate.Cursor) rootstate.Cursor 
 
 // TailCursor returns the last committed cursor visible in this retained
 // stream. When the stream is empty, fallback is returned unchanged.
-func (s CommittedStream) TailCursor(fallback rootstate.Cursor) rootstate.Cursor {
+func (s CommittedTail) TailCursor(fallback rootstate.Cursor) rootstate.Cursor {
 	if len(s.Records) == 0 {
 		return fallback
 	}
@@ -86,9 +86,9 @@ func (s CommittedStream) TailCursor(fallback rootstate.Cursor) rootstate.Cursor 
 type Substrate interface {
 	LoadCheckpoint() (checkpoint Checkpoint, err error)
 	SaveCheckpoint(checkpoint Checkpoint) error
-	ReadCommitted(offset int64) (CommittedStream, error)
+	ReadCommitted(offset int64) (CommittedTail, error)
 	AppendCommitted(records ...CommittedEvent) (logEnd int64, err error)
-	CompactCommitted(stream CommittedStream) error
-	InstallBootstrap(checkpoint Checkpoint, stream CommittedStream) error
+	CompactCommitted(stream CommittedTail) error
+	InstallBootstrap(checkpoint Checkpoint, stream CommittedTail) error
 	Size() (int64, error)
 }

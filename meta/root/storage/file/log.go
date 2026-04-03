@@ -24,33 +24,33 @@ type fileEventLog struct {
 	workdir string
 }
 
-func (l fileEventLog) ReadCommitted(offset int64) (rootstorage.CommittedStream, error) {
+func (l fileEventLog) ReadCommitted(offset int64) (rootstorage.CommittedTail, error) {
 	path := filepath.Join(l.workdir, LogFileName)
 	f, err := l.fs.OpenHandle(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return rootstorage.CommittedStream{Offset: offset, EndOffset: offset}, nil
+			return rootstorage.CommittedTail{Offset: offset, EndOffset: offset}, nil
 		}
-		return rootstorage.CommittedStream{}, err
+		return rootstorage.CommittedTail{}, err
 	}
 	defer func() { _ = f.Close() }()
 	if offset > 0 {
 		if _, err := f.Seek(offset, io.SeekStart); err != nil {
-			return rootstorage.CommittedStream{}, err
+			return rootstorage.CommittedTail{}, err
 		}
 	}
 	var out []rootstorage.CommittedEvent
 	for {
 		rec, ok, err := readRecord(f)
 		if err != nil {
-			return rootstorage.CommittedStream{}, err
+			return rootstorage.CommittedTail{}, err
 		}
 		if !ok {
 			end, err := fileSize(f)
 			if err != nil {
-				return rootstorage.CommittedStream{}, err
+				return rootstorage.CommittedTail{}, err
 			}
-			return rootstorage.CommittedStream{
+			return rootstorage.CommittedTail{
 				Offset:    offset,
 				EndOffset: end,
 				Records:   out,
@@ -87,7 +87,7 @@ func (l fileEventLog) AppendCommitted(records ...rootstorage.CommittedEvent) (in
 	return logEnd, nil
 }
 
-func (l fileEventLog) CompactCommitted(stream rootstorage.CommittedStream) error {
+func (l fileEventLog) CompactCommitted(stream rootstorage.CommittedTail) error {
 	path := filepath.Join(l.workdir, LogFileName)
 	tmp := path + ".tmp"
 	f, err := l.fs.OpenFileHandle(tmp, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
