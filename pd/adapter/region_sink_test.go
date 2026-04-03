@@ -3,7 +3,6 @@ package adapter
 import (
 	"context"
 	"errors"
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"testing"
 
@@ -11,7 +10,6 @@ import (
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 )
 
@@ -88,17 +86,10 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 		PD: pd,
 	})
 
-	meta := localmeta.RegionMeta{
-		ID:       10,
-		StartKey: []byte("a"),
-		EndKey:   []byte("z"),
-		Epoch: metaregion.Epoch{
-			Version:     1,
-			ConfVersion: 1,
-		},
-		Peers: []metaregion.Peer{{StoreID: 1, PeerID: 101}},
-	}
-	sink.PublishRegionDescriptor(context.Background(), metacodec.DescriptorFromLocalRegionMeta(meta, 0))
+	sink.PublishRegionDescriptor(context.Background(), testDescriptor(10, []byte("a"), []byte("z"), metaregion.Epoch{
+		Version:     1,
+		ConfVersion: 1,
+	}, []metaregion.Peer{{StoreID: 1, PeerID: 101}}))
 	ops := sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{
 		StoreID:   1,
 		RegionNum: 3,
@@ -136,7 +127,7 @@ func TestSchedulerClientErrorCallbackAndClose(t *testing.T) {
 	})
 
 	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 7})
-	sink.PublishRegionDescriptor(context.Background(), metacodec.DescriptorFromLocalRegionMeta(localmeta.RegionMeta{ID: 9}, 0))
+	sink.PublishRegionDescriptor(context.Background(), testDescriptor(9, nil, nil, metaregion.Epoch{}, nil))
 	require.Len(t, got, 2)
 	require.Contains(t, got[0], "StoreHeartbeat")
 	require.Contains(t, got[1], "RegionHeartbeat")
@@ -171,16 +162,10 @@ func TestSchedulerClientRemoveRegionForwardsAndReportsErrors(t *testing.T) {
 		},
 	})
 
-	meta := localmeta.RegionMeta{
-		ID:       100,
-		StartKey: []byte("a"),
-		EndKey:   []byte("z"),
-		Epoch: metaregion.Epoch{
-			Version:     1,
-			ConfVersion: 1,
-		},
-	}
-	sink.PublishRegionDescriptor(context.Background(), metacodec.DescriptorFromLocalRegionMeta(meta, 0))
+	sink.PublishRegionDescriptor(context.Background(), testDescriptor(100, []byte("a"), []byte("z"), metaregion.Epoch{
+		Version:     1,
+		ConfVersion: 1,
+	}, nil))
 
 	sink.RemoveRegion(context.Background(), 100)
 	require.Len(t, pd.removeReqs, 1)
@@ -222,4 +207,18 @@ func TestFromPBOperationValidation(t *testing.T) {
 	})
 	require.True(t, ok)
 	require.Equal(t, storepkg.OperationLeaderTransfer, op.Type)
+}
+
+func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch, peers []metaregion.Peer) descriptor.Descriptor {
+	desc := descriptor.Descriptor{
+		RegionID:  id,
+		StartKey:  append([]byte(nil), start...),
+		EndKey:    append([]byte(nil), end...),
+		Epoch:     epoch,
+		Peers:     append([]metaregion.Peer(nil), peers...),
+		State:     metaregion.ReplicaStateRunning,
+		RootEpoch: 1,
+	}
+	desc.EnsureHash()
+	return desc
 }

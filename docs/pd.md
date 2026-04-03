@@ -45,7 +45,39 @@ Core implementation units:
 
 ---
 
-## 3. Persistence (`--workdir`)
+## 3. Mode Model
+
+NoKV currently has only two supported product modes:
+
+### `standalone`
+
+- no `pd`
+- no `meta/root`
+- no control-plane process
+- all truth remains inside the single storage process
+
+This is the default local engine shape. Standalone is not a degraded control
+plane deployment; it simply has no control plane.
+
+### `distributed`
+
+- one `pd` process
+- one same-process `meta/root/local`
+- data nodes use PD for routing, heartbeats, and allocator services
+
+The current distributed control plane is intentionally single-node. The design
+keeps truth and view logically separated inside one process:
+
+- `meta/root/local`: durable control-plane truth
+- `pd/view` + `pd/core`: rebuildable routing/scheduling state
+- `pd/server`: gRPC API surface
+
+Metadata high availability is out of current scope. There is no supported
+multi-node metadata root deployment in the current product path.
+
+---
+
+## 4. Persistence (`--workdir`)
 
 When `--workdir` is provided, PD-lite persists durable control-plane truth in a
 single local metadata-root backend:
@@ -89,7 +121,7 @@ cluster routing authority.
 
 ---
 
-## 4. Config Integration
+## 5. Config Integration
 
 `raft_config.json` supports PD endpoint + workdir defaults:
 
@@ -115,7 +147,7 @@ Helpers:
 
 ---
 
-## 5. Routing Source Convergence
+## 6. Routing Source Convergence
 
 NoKV now uses **PD-first routing**:
 
@@ -127,7 +159,7 @@ This avoids dual sources drifting over time (config vs PD).
 
 ---
 
-## 6. Serve Mode Semantics
+## 7. Serve Mode Semantics
 
 `nokv serve` is now PD-only:
 
@@ -142,7 +174,7 @@ Related CLI behavior:
 
 ---
 
-## 7. Comparison: TinyKV / TiKV
+## 8. Comparison: TinyKV / TiKV
 
 ### TinyKV (teaching stack)
 
@@ -159,12 +191,12 @@ Related CLI behavior:
 ### NoKV PD-lite (current)
 
 - Standalone mode has no PD and no metadata-root service.
-- Distributed-dev mode can run one control-plane process:
+- Distributed mode runs one control-plane process:
   - `pd`
   - one local `meta/root`
-- Current project scope does not enable metadata-root HA by default. The root
-  remains single-node so control-plane complexity stays bounded while truth and
-  view remain logically separated.
+- Current project scope intentionally keeps the metadata root single-node. This
+  bounds operational and maintenance complexity while still keeping truth and
+  view logically separated.
 - PD persistence is intentionally limited to rooted control-plane truth:
   - region descriptor publish/tombstone events
   - allocator durability (`AllocID`, `TSO`)
@@ -174,7 +206,7 @@ Related CLI behavior:
 
 ---
 
-## 8. Current Limitations / Next Steps
+## 9. Current Limitations / Next Steps
 
 - Control-plane truth is single-node rooted storage, not HA quorum metadata.
 - Scheduler policy is intentionally small (leader transfer focused).
