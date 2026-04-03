@@ -1,4 +1,4 @@
-package local
+package file
 
 import (
 	"encoding/binary"
@@ -24,7 +24,7 @@ type fileEventLog struct {
 	workdir string
 }
 
-func newFileEventLog(fs vfs.FS, workdir string) rootstorage.EventLog {
+func NewEventLog(fs vfs.FS, workdir string) rootstorage.EventLog {
 	return fileEventLog{fs: fs, workdir: workdir}
 }
 
@@ -161,7 +161,7 @@ func readRecord(r io.Reader) (rootstorage.CommittedEvent, bool, error) {
 		return rootstorage.CommittedEvent{}, false, err
 	}
 	if crc32.ChecksumIEEE(payload) != expectedCRC {
-		return rootstorage.CommittedEvent{}, false, fmt.Errorf("meta/root/backend/local: root log checksum mismatch")
+		return rootstorage.CommittedEvent{}, false, fmt.Errorf("meta/root/storage/file: root log checksum mismatch")
 	}
 	var pbEvent metapb.RootEvent
 	if err := proto.Unmarshal(payload, &pbEvent); err != nil {

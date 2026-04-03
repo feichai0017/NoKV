@@ -1,10 +1,12 @@
 package storage
 
 import (
+	"fmt"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootfile "github.com/feichai0017/NoKV/meta/root/storage/file"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"net"
 	"path/filepath"
@@ -196,7 +198,7 @@ func TestOpenRootLocalStoreCreatesMetadataRootFiles(t *testing.T) {
 	require.Equal(t, uint64(9), snapshot.Allocator.IDCurrent)
 	require.Equal(t, uint64(17), snapshot.Allocator.TSCurrent)
 
-	require.FileExists(t, filepath.Join(dir, rootlocal.CheckpointFileName))
+	require.FileExists(t, filepath.Join(dir, rootfile.CheckpointFileName))
 }
 
 func TestRootStoreRefreshFromReplicatedFollower(t *testing.T) {
@@ -241,6 +243,7 @@ func TestOpenRootReplicatedStoreSharesThreeNodeCluster(t *testing.T) {
 
 func TestReplicatedRootConfigValidate(t *testing.T) {
 	cfg := ReplicatedRootConfig{
+		WorkDir:       t.TempDir(),
 		NodeID:        1,
 		TransportAddr: "127.0.0.1:7001",
 		PeerAddrs: map[uint64]string{
@@ -281,6 +284,7 @@ func openReplicatedRootStores(t *testing.T) (map[uint64]*RootStore, uint64) {
 	rootStores := make(map[uint64]*RootStore, 3)
 	for _, id := range []uint64{1, 2, 3} {
 		store, err := OpenRootReplicatedStore(ReplicatedRootConfig{
+			WorkDir:       filepath.Join(t.TempDir(), fmt.Sprintf("root-%d", id)),
 			NodeID:        id,
 			TransportAddr: peerAddrs[id],
 			PeerAddrs:     peerAddrs,

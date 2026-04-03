@@ -13,6 +13,7 @@ const ReplicatedRootReplicaCount = 3
 // ReplicatedRootConfig describes one fixed three-replica transport-backed
 // metadata root node hosted by PD.
 type ReplicatedRootConfig struct {
+	WorkDir       string
 	NodeID        uint64
 	TransportAddr string
 	PeerAddrs     map[uint64]string
@@ -31,6 +32,7 @@ func OpenRootReplicatedStore(cfg ReplicatedRootConfig) (*RootStore, error) {
 	transport.SetPeers(cfg.PeerAddrs)
 	driver, err := rootreplicated.NewNetworkDriver(rootreplicated.NetworkConfig{
 		ID:        cfg.NodeID,
+		WorkDir:   cfg.WorkDir,
 		PeerIDs:   cfg.ClusterIDs(),
 		Transport: transport,
 	})
@@ -47,6 +49,9 @@ func OpenRootReplicatedStore(cfg ReplicatedRootConfig) (*RootStore, error) {
 }
 
 func (cfg ReplicatedRootConfig) Validate() error {
+	if strings.TrimSpace(cfg.WorkDir) == "" {
+		return fmt.Errorf("pd/storage: replicated root mode requires workdir")
+	}
 	if cfg.NodeID == 0 {
 		return fmt.Errorf("pd/storage: replicated root node id must be > 0")
 	}

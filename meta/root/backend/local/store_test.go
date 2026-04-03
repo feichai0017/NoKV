@@ -9,6 +9,7 @@ import (
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootfile "github.com/feichai0017/NoKV/meta/root/storage/file"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
@@ -88,7 +89,7 @@ func TestStoreIgnoresTruncatedLogTail(t *testing.T) {
 	_, err = store.Append(rootevent.StoreJoined(1, "s1"))
 	require.NoError(t, err)
 
-	f, err := os.OpenFile(filepath.Join(dir, LogFileName), os.O_WRONLY|os.O_APPEND, 0)
+	f, err := os.OpenFile(filepath.Join(dir, rootfile.LogFileName), os.O_WRONLY|os.O_APPEND, 0)
 	require.NoError(t, err)
 	_, err = f.Write([]byte{1, 2, 3, 4, 5})
 	require.NoError(t, err)
@@ -112,7 +113,7 @@ func TestStoreReplaysLogAfterStaleCheckpoint(t *testing.T) {
 
 	payload, err := proto.Marshal(&metapb.RootState{})
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, CheckpointFileName), payload, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, rootfile.CheckpointFileName), payload, 0o644))
 
 	reopened, err := Open(dir, nil)
 	require.NoError(t, err)
@@ -132,7 +133,7 @@ func TestStoreLoadsLegacyRootStateCheckpoint(t *testing.T) {
 		TsoFence:        22,
 	})
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, CheckpointFileName), payload, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, rootfile.CheckpointFileName), payload, 0o644))
 
 	reopened, err := Open(dir, nil)
 	require.NoError(t, err)
