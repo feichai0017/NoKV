@@ -1,6 +1,7 @@
 package core
 
 import (
+	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	pdview "github.com/feichai0017/NoKV/pd/view"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"time"
@@ -61,6 +62,35 @@ func (c *Cluster) PublishRegionDescriptor(desc descriptor.Descriptor) error {
 		return nil
 	}
 	return c.regions.Upsert(desc)
+}
+
+// PublishRootEvent applies one explicit rooted truth event into the runtime PD
+// route view.
+func (c *Cluster) PublishRootEvent(event rootpkg.Event) error {
+	if c == nil {
+		return nil
+	}
+	switch {
+	case event.RegionDescriptor != nil:
+		return c.PublishRegionDescriptor(event.RegionDescriptor.Descriptor)
+	case event.RegionRemoval != nil:
+		c.RemoveRegion(event.RegionRemoval.RegionID)
+		return nil
+	case event.RangeSplit != nil:
+		c.RemoveRegion(event.RangeSplit.ParentRegionID)
+		if err := c.PublishRegionDescriptor(event.RangeSplit.Left); err != nil {
+			return err
+		}
+		return c.PublishRegionDescriptor(event.RangeSplit.Right)
+	case event.RangeMerge != nil:
+		c.RemoveRegion(event.RangeMerge.LeftRegionID)
+		c.RemoveRegion(event.RangeMerge.RightRegionID)
+		return c.PublishRegionDescriptor(event.RangeMerge.Merged)
+	case event.PeerChange != nil:
+		return c.PublishRegionDescriptor(event.PeerChange.Region)
+	default:
+		return nil
+	}
 }
 
 // RemoveRegion removes a region from PD metadata and reports whether the region existed before removal.

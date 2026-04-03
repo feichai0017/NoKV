@@ -5,6 +5,7 @@ import (
 	"fmt"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -75,8 +76,8 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta localmeta.RegionMeta
 			Epoch:    originalParent.Epoch,
 			Kind:     descriptor.LineageKindSplitParent,
 		})
-		s.enqueueRegionEvent(regionEvent{kind: regionEventApply, regionID: parentDesc.RegionID, desc: parentDesc})
-		s.enqueueRegionEvent(regionEvent{kind: regionEventApply, regionID: childDesc.RegionID, desc: childDesc})
+		event := rootpkg.RegionSplitCommitted(originalParent.ID, childMeta.StartKey, parentDesc, childDesc)
+		s.enqueueRegionEvent(regionEvent{kind: regionEventApply, regionID: originalParent.ID, root: &event})
 	}
 	return childPeer, nil
 }
@@ -225,7 +226,12 @@ func (s *Store) handleMergeCommand(merge *raftcmdpb.MergeCommand) error {
 			Epoch:    sourceMeta.Epoch,
 			Kind:     descriptor.LineageKindMergeSource,
 		})
-		s.enqueueRegionEvent(regionEvent{kind: regionEventApply, regionID: mergedDesc.RegionID, desc: mergedDesc})
+		leftID, rightID := mergedDesc.RegionID, sourceMeta.ID
+		if bytes.Compare(sourceMeta.StartKey, mergedDesc.StartKey) < 0 {
+			leftID, rightID = sourceMeta.ID, mergedDesc.RegionID
+		}
+		event := rootpkg.RegionMerged(leftID, rightID, mergedDesc)
+		s.enqueueRegionEvent(regionEvent{kind: regionEventApply, regionID: mergedDesc.RegionID, root: &event})
 	}
 	if peer := s.regionMgr().peer(sourceMeta.ID); peer != nil {
 		s.StopPeer(peer.ID())

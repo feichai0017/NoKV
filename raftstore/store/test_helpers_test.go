@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"sync"
@@ -69,6 +70,28 @@ func (s *testSchedulerSink) PublishRegionDescriptor(_ context.Context, desc desc
 		LastHeartbeat: time.Now(),
 	}
 	s.history = append(s.history, schedulerEvent{kind: "publish", regionID: desc.RegionID})
+	s.mu.Unlock()
+}
+
+func (s *testSchedulerSink) PublishRootEvent(_ context.Context, event rootpkg.Event) {
+	if s == nil || event.Kind == rootpkg.EventKindUnknown {
+		return
+	}
+	s.mu.Lock()
+	descriptors := make(map[uint64]descriptor.Descriptor, len(s.regions))
+	for id, info := range s.regions {
+		descriptors[id] = info.Descriptor.Clone()
+	}
+	rootpkg.ApplyEventToDescriptors(descriptors, event)
+	now := time.Now()
+	s.regions = make(map[uint64]regionHeartbeat, len(descriptors))
+	for id, desc := range descriptors {
+		s.regions[id] = regionHeartbeat{
+			Descriptor:    desc.Clone(),
+			LastHeartbeat: now,
+		}
+	}
+	s.history = append(s.history, schedulerEvent{kind: "root", regionID: rootEventRegionID(event)})
 	s.mu.Unlock()
 }
 
@@ -177,6 +200,17 @@ func (s *slowSchedulerSink) PublishRegionDescriptor(ctx context.Context, desc de
 	s.testSchedulerSink.PublishRegionDescriptor(ctx, desc)
 }
 
+func (s *slowSchedulerSink) PublishRootEvent(ctx context.Context, event rootpkg.Event) {
+	if s.publishDelay > 0 {
+		select {
+		case <-time.After(s.publishDelay):
+		case <-ctx.Done():
+			return
+		}
+	}
+	s.testSchedulerSink.PublishRootEvent(ctx, event)
+}
+
 func (s *slowSchedulerSink) RemoveRegion(ctx context.Context, id uint64) {
 	if s.removeDelay > 0 {
 		select {
@@ -186,6 +220,23 @@ func (s *slowSchedulerSink) RemoveRegion(ctx context.Context, id uint64) {
 		}
 	}
 	s.testSchedulerSink.RemoveRegion(ctx, id)
+}
+
+func rootEventRegionID(event rootpkg.Event) uint64 {
+	switch {
+	case event.RegionDescriptor != nil:
+		return event.RegionDescriptor.Descriptor.RegionID
+	case event.RegionRemoval != nil:
+		return event.RegionRemoval.RegionID
+	case event.RangeSplit != nil:
+		return event.RangeSplit.ParentRegionID
+	case event.RangeMerge != nil:
+		return event.RangeMerge.Merged.RegionID
+	case event.PeerChange != nil:
+		return event.PeerChange.RegionID
+	default:
+		return 0
+	}
 }
 
 func testPeerBuilder(storeID uint64) PeerBuilder {

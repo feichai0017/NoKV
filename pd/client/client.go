@@ -17,6 +17,7 @@ var errEmptyAddress = errors.New("pd client: empty address")
 type Client interface {
 	StoreHeartbeat(ctx context.Context, req *pdpb.StoreHeartbeatRequest) (*pdpb.StoreHeartbeatResponse, error)
 	RegionHeartbeat(ctx context.Context, req *pdpb.RegionHeartbeatRequest) (*pdpb.RegionHeartbeatResponse, error)
+	PublishRootEvent(ctx context.Context, req *pdpb.PublishRootEventRequest) (*pdpb.PublishRootEventResponse, error)
 	RemoveRegion(ctx context.Context, req *pdpb.RemoveRegionRequest) (*pdpb.RemoveRegionResponse, error)
 	GetRegionByKey(ctx context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error)
 	AllocID(ctx context.Context, req *pdpb.AllocIDRequest) (*pdpb.AllocIDResponse, error)
@@ -66,6 +67,11 @@ func (c *GRPCClient) StoreHeartbeat(ctx context.Context, req *pdpb.StoreHeartbea
 // RegionHeartbeat forwards region heartbeat RPC.
 func (c *GRPCClient) RegionHeartbeat(ctx context.Context, req *pdpb.RegionHeartbeatRequest) (*pdpb.RegionHeartbeatResponse, error) {
 	return c.pd.RegionHeartbeat(ctx, req)
+}
+
+// PublishRootEvent forwards explicit rooted event RPC.
+func (c *GRPCClient) PublishRootEvent(ctx context.Context, req *pdpb.PublishRootEventRequest) (*pdpb.PublishRootEventResponse, error) {
+	return c.pd.PublishRootEvent(ctx, req)
 }
 
 // RemoveRegion forwards region removal RPC.

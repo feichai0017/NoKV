@@ -4,6 +4,7 @@ syntax = "proto3";
 package nokv.pd.v1;
 
 import "meta/descriptor.proto";
+import "meta/root.proto";
 
 option go_package = "github.com/feichai0017/NoKV/pb/pd;pdpb";
 
@@ -39,6 +40,14 @@ message RegionHeartbeatRequest {
 }
 
 message RegionHeartbeatResponse {
+  bool accepted = 1;
+}
+
+message PublishRootEventRequest {
+  nokv.meta.v1.RootEvent event = 1;
+}
+
+message PublishRootEventResponse {
   bool accepted = 1;
 }
 
@@ -80,6 +89,7 @@ message TsoResponse {
 service PD {
   rpc StoreHeartbeat(StoreHeartbeatRequest) returns (StoreHeartbeatResponse);
   rpc RegionHeartbeat(RegionHeartbeatRequest) returns (RegionHeartbeatResponse);
+  rpc PublishRootEvent(PublishRootEventRequest) returns (PublishRootEventResponse);
   rpc RemoveRegion(RemoveRegionRequest) returns (RemoveRegionResponse);
   rpc GetRegionByKey(GetRegionByKeyRequest) returns (GetRegionByKeyResponse);
   rpc AllocID(AllocIDRequest) returns (AllocIDResponse);

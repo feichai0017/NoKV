@@ -2,12 +2,13 @@ package adapter
 
 import (
 	"context"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
+	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"log/slog"
 	"sync"
 	"time"
 
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	pdclient "github.com/feichai0017/NoKV/pd/client"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
@@ -61,6 +62,21 @@ func (s *SchedulerClient) PublishRegionDescriptor(ctx context.Context, desc desc
 	_, err := s.pd.RegionHeartbeat(ctx, &pdpb.RegionHeartbeatRequest{RegionDescriptor: metacodec.DescriptorToProto(desc)})
 	if err != nil {
 		s.recordError("RegionHeartbeat", err)
+		return
+	}
+	s.markHealthy()
+}
+
+// PublishRootEvent publishes one explicit rooted truth event to PD.
+func (s *SchedulerClient) PublishRootEvent(ctx context.Context, event rootpkg.Event) {
+	if s == nil || event.Kind == rootpkg.EventKindUnknown || s.pd == nil {
+		return
+	}
+	ctx, cancel := contextWithTimeout(ctx, s.timeout)
+	defer cancel()
+	_, err := s.pd.PublishRootEvent(ctx, &pdpb.PublishRootEventRequest{Event: metacodec.RootEventToProto(event)})
+	if err != nil {
+		s.recordError("PublishRootEvent", err)
 		return
 	}
 	s.markHealthy()

@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
+	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -40,7 +42,29 @@ func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 		s.StopPeer(ev.Peer.ID())
 		return nil
 	}
-	return s.applyRegionMeta(meta)
+	if err := s.applyRegionMeta(meta); err != nil {
+		return err
+	}
+	if s.sched == nil || len(ev.ConfChange.Changes) != 1 {
+		return nil
+	}
+	desc := metacodec.DescriptorFromLocalRegionMeta(meta, 0)
+	change := ev.ConfChange.Changes[0]
+	switch change.Type {
+	case raftpb.ConfChangeAddNode, raftpb.ConfChangeAddLearnerNode:
+		event := rootpkg.PeerAdded(meta.ID, change.NodeID, change.NodeID, desc)
+		if peers, err := decodeConfChangeContext(ev.ConfChange.Context); err == nil && len(peers) > 0 {
+			event = rootpkg.PeerAdded(meta.ID, peers[0].StoreID, peers[0].PeerID, desc)
+		}
+		s.enqueueRegionEvent(regionEvent{kind: regionEventApply, regionID: meta.ID, root: &event})
+	case raftpb.ConfChangeRemoveNode:
+		event := rootpkg.PeerRemoved(meta.ID, change.NodeID, change.NodeID, desc)
+		if peers, err := decodeConfChangeContext(ev.ConfChange.Context); err == nil && len(peers) > 0 {
+			event = rootpkg.PeerRemoved(meta.ID, peers[0].StoreID, peers[0].PeerID, desc)
+		}
+		s.enqueueRegionEvent(regionEvent{kind: regionEventApply, regionID: meta.ID, root: &event})
+	}
+	return nil
 }
 
 // ProposeAddPeer issues a configuration change to add the provided peer to the

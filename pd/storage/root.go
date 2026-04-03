@@ -90,6 +90,26 @@ func (s *RootStore) PublishRegionDescriptor(desc descriptor.Descriptor) error {
 	return nil
 }
 
+// AppendRootEvent persists one explicit rooted metadata event.
+func (s *RootStore) AppendRootEvent(event rootpkg.Event) error {
+	if s == nil || s.root == nil || event.Kind == rootpkg.EventKindUnknown {
+		return nil
+	}
+	commit, err := s.root.Append(event)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.snapshot.Descriptors == nil {
+		s.snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
+	}
+	rootpkg.ApplyEventToDescriptors(s.snapshot.Descriptors, event)
+	s.snapshot.Allocator.IDCurrent = commit.State.IDFence
+	s.snapshot.Allocator.TSCurrent = commit.State.TSOFence
+	s.mu.Unlock()
+	return nil
+}
+
 // TombstoneRegion tombstones one region from the rooted catalog.
 func (s *RootStore) TombstoneRegion(regionID uint64) error {
 	if s == nil || regionID == 0 {
