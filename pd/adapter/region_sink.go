@@ -82,21 +82,6 @@ func (s *SchedulerClient) PublishRootEvent(ctx context.Context, event rootevent.
 	s.markHealthy()
 }
 
-// RemoveRegion removes region metadata from PD.
-func (s *SchedulerClient) RemoveRegion(ctx context.Context, regionID uint64) {
-	if s == nil || regionID == 0 || s.pd == nil {
-		return
-	}
-	ctx, cancel := contextWithTimeout(ctx, s.timeout)
-	defer cancel()
-	_, err := s.pd.RemoveRegion(ctx, &pdpb.RemoveRegionRequest{RegionId: regionID})
-	if err != nil {
-		s.recordError("RemoveRegion", err)
-		return
-	}
-	s.markHealthy()
-}
-
 // StoreHeartbeat publishes store stats to PD and returns any operations PD
 // wants the store to apply.
 func (s *SchedulerClient) StoreHeartbeat(ctx context.Context, stats storepkg.StoreStats) []storepkg.Operation {
