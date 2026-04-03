@@ -179,7 +179,7 @@ func (s *Service) RemoveRegion(_ context.Context, req *pdpb.RemoveRegionRequest)
 	}
 	removed := s.cluster.HasRegion(regionID)
 	if removed && s.storage != nil {
-		if err := s.storage.TombstoneRegion(regionID); err != nil {
+		if err := s.storage.AppendRootEvent(rootevent.RegionTombstoned(regionID)); err != nil {
 			return nil, status.Error(codes.Internal, "persist region tombstone: "+err.Error())
 		}
 	}

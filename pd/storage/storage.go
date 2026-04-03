@@ -38,8 +38,6 @@ type Store interface {
 	PublishRegionDescriptor(desc descriptor.Descriptor) error
 	// AppendRootEvent persists one explicit rooted truth event.
 	AppendRootEvent(event rootevent.Event) error
-	// TombstoneRegion persists one rooted region removal.
-	TombstoneRegion(regionID uint64) error
 	// SaveAllocatorState persists latest allocator counters.
 	SaveAllocatorState(idCurrent, tsCurrent uint64) error
 	// Refresh reloads the reconstructed rooted snapshot from the underlying root.
@@ -72,11 +70,6 @@ func (NoopStore) PublishRegionDescriptor(descriptor.Descriptor) error {
 
 // AppendRootEvent is a no-op.
 func (NoopStore) AppendRootEvent(rootevent.Event) error {
-	return nil
-}
-
-// TombstoneRegion is a no-op.
-func (NoopStore) TombstoneRegion(uint64) error {
 	return nil
 }
 
