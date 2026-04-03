@@ -500,7 +500,7 @@ func TestServiceRefreshFromReplicatedRootFollowerServesRead(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, store.Close()) })
 
 		cluster := core.NewCluster()
-		bootstrap, err := pdstorage.Bootstrap(store, cluster, 1, 1)
+		bootstrap, err := pdstorage.Bootstrap(store, cluster.PublishRegionDescriptor, 1, 1)
 		require.NoError(t, err)
 		svc := NewService(cluster, core.NewIDAllocator(bootstrap.IDStart), tso.NewAllocator(bootstrap.TSStart))
 		svc.SetStorage(store)

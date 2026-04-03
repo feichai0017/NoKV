@@ -107,7 +107,7 @@ func runPDCmd(w io.Writer, args []string) error {
 			return fmt.Errorf("pd open metadata root %q: %w", workdirPath, err)
 		}
 		defer func() { _ = rootStore.Close() }()
-		bootstrap, err := pdstorage.Bootstrap(rootStore, cluster, *idStart, *tsStart)
+		bootstrap, err := pdstorage.Bootstrap(rootStore, cluster.PublishRegionDescriptor, *idStart, *tsStart)
 		if err != nil {
 			return fmt.Errorf("pd bootstrap from %q: %w", workdirPath, err)
 		}
@@ -130,7 +130,7 @@ func runPDCmd(w io.Writer, args []string) error {
 			return fmt.Errorf("pd open replicated metadata root: %w", openErr)
 		}
 		defer func() { _ = rootStore.Close() }()
-		bootstrap, err := pdstorage.Bootstrap(rootStore, cluster, *idStart, *tsStart)
+		bootstrap, err := pdstorage.Bootstrap(rootStore, cluster.PublishRegionDescriptor, *idStart, *tsStart)
 		if err != nil {
 			return fmt.Errorf("pd bootstrap from replicated metadata root: %w", err)
 		}
