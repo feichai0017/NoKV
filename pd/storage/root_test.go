@@ -228,9 +228,17 @@ func TestRootStoreRefreshFromReplicatedFollower(t *testing.T) {
 
 func TestOpenRootReplicatedStoreSharesThreeNodeCluster(t *testing.T) {
 	workdir := t.TempDir()
-	leader, err := OpenRootReplicatedStore(workdir, 1, []uint64{1, 2, 3})
+	leader, err := OpenRootReplicatedStore(ReplicatedRootConfig{
+		WorkDir:    workdir,
+		NodeID:     1,
+		ClusterIDs: []uint64{1, 2, 3},
+	})
 	require.NoError(t, err)
-	follower, err := OpenRootReplicatedStore(workdir, 2, []uint64{1, 2, 3})
+	follower, err := OpenRootReplicatedStore(ReplicatedRootConfig{
+		WorkDir:    workdir,
+		NodeID:     2,
+		ClusterIDs: []uint64{1, 2, 3},
+	})
 	require.NoError(t, err)
 
 	desc := testDescriptor(81, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
