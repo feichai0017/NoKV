@@ -58,9 +58,36 @@ func TestObserveCommittedDerivesLastCursorAndRetainFrom(t *testing.T) {
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 4}, observed.RetainFrom())
 
 	advance := TailAdvance{
+		After:    TailToken{Cursor: rootstate.Cursor{Term: 2, Index: 5}, Revision: 1},
 		Token:    TailToken{Cursor: observed.LastCursor(), Revision: 2},
 		Observed: observed,
 	}
+	require.True(t, advance.Advanced())
+	require.Equal(t, TailAdvanceCursorAdvanced, advance.Kind())
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 6}, advance.LastCursor())
+	require.True(t, advance.FellBehind())
+}
+
+func TestTailAdvanceClassifiesWindowShiftWithoutCursorAdvance(t *testing.T) {
+	advance := TailAdvance{
+		After: TailToken{
+			Cursor:   rootstate.Cursor{Term: 3, Index: 9},
+			Revision: 4,
+		},
+		Token: TailToken{
+			Cursor:   rootstate.Cursor{Term: 3, Index: 9},
+			Revision: 5,
+		},
+		Observed: ObservedCommitted{
+			Checkpoint: Checkpoint{
+				Snapshot: rootstate.Snapshot{
+					State: rootstate.State{LastCommitted: rootstate.Cursor{Term: 3, Index: 9}},
+				},
+			},
+			Tail: CommittedTail{RequestedOffset: 10, StartOffset: 12, EndOffset: 16},
+		},
+	}
+	require.True(t, advance.Advanced())
+	require.Equal(t, TailAdvanceWindowShifted, advance.Kind())
 	require.True(t, advance.FellBehind())
 }

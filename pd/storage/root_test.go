@@ -275,7 +275,9 @@ func TestRootStoreWaitForTailTracksAllocatorFenceCheckpoint(t *testing.T) {
 	case err := <-errCh:
 		require.NoError(t, err)
 	case advance := <-done:
-		require.True(t, advance.Token.AdvancedSince(rootstorage.TailToken{}))
+		require.True(t, advance.Advanced())
+		require.Equal(t, rootstorage.TailAdvanceCursorAdvanced, advance.Kind())
+		require.NotEmpty(t, advance.Observed.Tail.Records)
 	case <-time.After(6 * time.Second):
 		t.Fatal("timed out waiting for allocator fence tail advance")
 	}

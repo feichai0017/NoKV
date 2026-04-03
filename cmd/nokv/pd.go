@@ -190,7 +190,7 @@ func runPDCmd(w io.Writer, args []string) error {
 					if err != nil {
 						continue
 					}
-					if !next.Token.AdvancedSince(last) {
+					if !next.Advanced() {
 						continue
 					}
 					_ = svc.RefreshFromStorage()
