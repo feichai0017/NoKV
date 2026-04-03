@@ -28,7 +28,6 @@ type Store struct {
 	state      rootstate.State
 	descs      map[uint64]descriptor.Descriptor
 	records    []rootstorage.CommittedEvent
-	logBase    int64
 	retainFrom rootstate.Cursor
 }
 
@@ -52,7 +51,6 @@ func Open(workdir string, fs vfs.FS) (*Store, error) {
 		state:      bootstrap.Snapshot.State,
 		descs:      bootstrap.Snapshot.Descriptors,
 		records:    bootstrap.Stream.Records,
-		logBase:    bootstrap.Stream.Offset,
 		retainFrom: bootstrap.RetainFrom,
 	}, nil
 }
@@ -131,7 +129,6 @@ func (s *Store) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) 
 	s.state = state
 	s.descs = descs
 	s.records = append(s.records, records...)
-	s.logBase = logEnd
 	s.retainFrom = rootmaterialize.RetainedFloor(s.records, state.LastCommitted)
 	s.maybeCompactLocked()
 	return rootstate.CommitInfo{Cursor: state.LastCommitted, State: state}, nil
@@ -169,7 +166,6 @@ func (s *Store) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, 
 		return 0, err
 	}
 	s.state = state
-	s.logBase = logEnd
 	s.maybeCompactLocked()
 	return *out, nil
 }
@@ -193,6 +189,5 @@ func (s *Store) maybeCompactLocked() {
 		return
 	}
 	s.records = retained
-	s.logBase = 0
 	s.retainFrom = rootmaterialize.RetainedFloor(retained, s.state.LastCommitted)
 }
