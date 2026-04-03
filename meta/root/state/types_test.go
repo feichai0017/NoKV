@@ -20,6 +20,10 @@ func TestApplyEventToStateAdvancesEpochsAndCursor(t *testing.T) {
 	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 2}, rootevent.RegionDescriptorPublished(testDescriptor(10, []byte("a"), []byte("z"))))
 	require.Equal(t, uint64(1), st.ClusterEpoch)
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 2}, st.LastCommitted)
+
+	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 3}, rootevent.PeerAdditionPlanned(10, 2, 201, testDescriptor(10, []byte("a"), []byte("z"))))
+	require.Equal(t, uint64(2), st.ClusterEpoch)
+	require.Equal(t, rootstate.Cursor{Term: 1, Index: 3}, st.LastCommitted)
 }
 
 func TestCursorHelpers(t *testing.T) {

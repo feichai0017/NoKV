@@ -169,6 +169,10 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED
 	case rootevent.KindRegionMerged:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGED
+	case rootevent.KindPeerAdditionPlanned:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_ADDITION_PLANNED
+	case rootevent.KindPeerRemovalPlanned:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVAL_PLANNED
 	case rootevent.KindPeerAdded:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_ADDED
 	case rootevent.KindPeerRemoved:
@@ -198,6 +202,10 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindRegionSplitCommitted
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGED:
 		return rootevent.KindRegionMerged
+	case metapb.RootEventKind_ROOT_EVENT_KIND_PEER_ADDITION_PLANNED:
+		return rootevent.KindPeerAdditionPlanned
+	case metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVAL_PLANNED:
+		return rootevent.KindPeerRemovalPlanned
 	case metapb.RootEventKind_ROOT_EVENT_KIND_PEER_ADDED:
 		return rootevent.KindPeerAdded
 	case metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVED:
