@@ -3,7 +3,7 @@ package storage
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
-	rootlocal "github.com/feichai0017/NoKV/meta/root/local"
+	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"path/filepath"
 	"testing"
