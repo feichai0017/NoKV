@@ -8,7 +8,7 @@ import (
 	"time"
 
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -32,7 +32,7 @@ type regionEvent struct {
 	kind     regionEventKind
 	regionID uint64
 	desc     descriptor.Descriptor
-	root     *rootpkg.Event
+	root     *rootevent.Event
 	seq      uint64
 }
 

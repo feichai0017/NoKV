@@ -1,7 +1,7 @@
 package storage
 
 import (
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"math"
 	"slices"
@@ -41,7 +41,7 @@ type Sink interface {
 	// PublishRegionDescriptor persists one rooted region descriptor update.
 	PublishRegionDescriptor(desc descriptor.Descriptor) error
 	// AppendRootEvent persists one explicit rooted truth event.
-	AppendRootEvent(event rootpkg.Event) error
+	AppendRootEvent(event rootevent.Event) error
 	// TombstoneRegion persists one rooted region removal.
 	TombstoneRegion(regionID uint64) error
 	// SaveAllocatorState persists latest allocator counters.
@@ -80,7 +80,7 @@ func (NoopStore) PublishRegionDescriptor(descriptor.Descriptor) error {
 }
 
 // AppendRootEvent is a no-op.
-func (NoopStore) AppendRootEvent(rootpkg.Event) error {
+func (NoopStore) AppendRootEvent(rootevent.Event) error {
 	return nil
 }
 

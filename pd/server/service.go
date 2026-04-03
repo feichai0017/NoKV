@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 
 	"github.com/feichai0017/NoKV/pd/core"
@@ -108,7 +108,7 @@ func (s *Service) PublishRootEvent(_ context.Context, req *pdpb.PublishRootEvent
 		return nil, status.Error(codes.InvalidArgument, "publish root event request missing event")
 	}
 	event := metacodec.RootEventFromProto(req.GetEvent())
-	if event.Kind == rootpkg.EventKindUnknown {
+	if event.Kind == rootevent.KindUnknown {
 		return nil, status.Error(codes.InvalidArgument, "publish root event requires known kind")
 	}
 	if err := s.cluster.PublishRootEvent(event); err != nil {

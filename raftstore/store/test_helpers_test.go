@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
@@ -74,8 +74,8 @@ func (s *testSchedulerSink) PublishRegionDescriptor(_ context.Context, desc desc
 	s.mu.Unlock()
 }
 
-func (s *testSchedulerSink) PublishRootEvent(_ context.Context, event rootpkg.Event) {
-	if s == nil || event.Kind == rootpkg.EventKindUnknown {
+func (s *testSchedulerSink) PublishRootEvent(_ context.Context, event rootevent.Event) {
+	if s == nil || event.Kind == rootevent.KindUnknown {
 		return
 	}
 	s.mu.Lock()
@@ -201,7 +201,7 @@ func (s *slowSchedulerSink) PublishRegionDescriptor(ctx context.Context, desc de
 	s.testSchedulerSink.PublishRegionDescriptor(ctx, desc)
 }
 
-func (s *slowSchedulerSink) PublishRootEvent(ctx context.Context, event rootpkg.Event) {
+func (s *slowSchedulerSink) PublishRootEvent(ctx context.Context, event rootevent.Event) {
 	if s.publishDelay > 0 {
 		select {
 		case <-time.After(s.publishDelay):
@@ -223,7 +223,7 @@ func (s *slowSchedulerSink) RemoveRegion(ctx context.Context, id uint64) {
 	s.testSchedulerSink.RemoveRegion(ctx, id)
 }
 
-func rootEventRegionID(event rootpkg.Event) uint64 {
+func rootEventRegionID(event rootevent.Event) uint64 {
 	switch {
 	case event.RegionDescriptor != nil:
 		return event.RegionDescriptor.Descriptor.RegionID

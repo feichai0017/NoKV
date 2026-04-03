@@ -3,7 +3,7 @@ package adapter
 import (
 	"context"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"log/slog"
 	"sync"
@@ -68,8 +68,8 @@ func (s *SchedulerClient) PublishRegionDescriptor(ctx context.Context, desc desc
 }
 
 // PublishRootEvent publishes one explicit rooted truth event to PD.
-func (s *SchedulerClient) PublishRootEvent(ctx context.Context, event rootpkg.Event) {
-	if s == nil || event.Kind == rootpkg.EventKindUnknown || s.pd == nil {
+func (s *SchedulerClient) PublishRootEvent(ctx context.Context, event rootevent.Event) {
+	if s == nil || event.Kind == rootevent.KindUnknown || s.pd == nil {
 		return
 	}
 	ctx, cancel := contextWithTimeout(ctx, s.timeout)

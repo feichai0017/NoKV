@@ -4,7 +4,9 @@ import (
 	"bytes"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"sync"
 )
@@ -53,7 +55,7 @@ func (s *RootStore) Load() (Snapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return Snapshot{
-		Descriptors: rootpkg.CloneDescriptors(s.snapshot.Descriptors),
+		Descriptors: rootstate.CloneDescriptors(s.snapshot.Descriptors),
 		Allocator:   s.snapshot.Allocator,
 	}, nil
 }
@@ -96,8 +98,8 @@ func (s *RootStore) PublishRegionDescriptor(desc descriptor.Descriptor) error {
 }
 
 // AppendRootEvent persists one explicit rooted metadata event.
-func (s *RootStore) AppendRootEvent(event rootpkg.Event) error {
-	if s == nil || s.root == nil || event.Kind == rootpkg.EventKindUnknown {
+func (s *RootStore) AppendRootEvent(event rootevent.Event) error {
+	if s == nil || s.root == nil || event.Kind == rootevent.KindUnknown {
 		return nil
 	}
 	commit, err := s.root.Append(event)
@@ -120,7 +122,7 @@ func (s *RootStore) TombstoneRegion(regionID uint64) error {
 	if s == nil || regionID == 0 {
 		return nil
 	}
-	commit, err := s.root.Append(rootpkg.RegionTombstoned(regionID))
+	commit, err := s.root.Append(rootevent.RegionTombstoned(regionID))
 	if err != nil {
 		return err
 	}
@@ -171,7 +173,7 @@ func (s *RootStore) reload() error {
 		return err
 	}
 	out := Snapshot{
-		Descriptors: rootpkg.CloneDescriptors(snapshot.Descriptors),
+		Descriptors: rootstate.CloneDescriptors(snapshot.Descriptors),
 		Allocator: AllocatorState{
 			IDCurrent: snapshot.State.IDFence,
 			TSCurrent: snapshot.State.TSOFence,
@@ -183,11 +185,11 @@ func (s *RootStore) reload() error {
 	return nil
 }
 
-func regionEvent(existed bool, next descriptor.Descriptor) rootpkg.Event {
+func regionEvent(existed bool, next descriptor.Descriptor) rootevent.Event {
 	if !existed {
-		return rootpkg.RegionBootstrapped(next)
+		return rootevent.RegionBootstrapped(next)
 	}
-	return rootpkg.RegionDescriptorPublished(next)
+	return rootevent.RegionDescriptorPublished(next)
 }
 
 func descriptorsEqual(a, b descriptor.Descriptor) bool {
