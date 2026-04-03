@@ -8,6 +8,7 @@ import (
 	"time"
 
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
+	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -30,6 +31,7 @@ type regionEvent struct {
 	kind     regionEventKind
 	regionID uint64
 	desc     descriptor.Descriptor
+	root     *rootpkg.Event
 	seq      uint64
 }
 
@@ -195,11 +197,16 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 	}
 	switch ev.kind {
 	case regionEventApply:
-		if ev.desc.RegionID == 0 {
+		if ev.root == nil && ev.desc.RegionID == 0 {
 			return
 		}
-		ev.regionID = ev.desc.RegionID
-		ev.desc = ev.desc.Clone()
+		if ev.root != nil {
+			rootEvent := *ev.root
+			ev.root = &rootEvent
+		} else {
+			ev.regionID = ev.desc.RegionID
+			ev.desc = ev.desc.Clone()
+		}
 	case regionEventRemove:
 		if ev.regionID == 0 {
 			return
@@ -216,7 +223,11 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 	}
 	switch ev.kind {
 	case regionEventApply:
-		s.sched.descriptors[ev.regionID] = ev.desc.Clone()
+		if ev.root != nil {
+			rootpkg.ApplyEventToDescriptors(s.sched.descriptors, *ev.root)
+		} else {
+			s.sched.descriptors[ev.regionID] = ev.desc.Clone()
+		}
 	case regionEventRemove:
 		delete(s.sched.descriptors, ev.regionID)
 	}
@@ -285,6 +296,10 @@ func (s *Store) flushRegionUpdates() {
 	for _, ev := range pending {
 		switch ev.kind {
 		case regionEventApply:
+			if ev.root != nil {
+				s.schedulerClient().PublishRootEvent(ctx, *ev.root)
+				continue
+			}
 			s.schedulerClient().PublishRegionDescriptor(ctx, ev.desc)
 		case regionEventRemove:
 			s.schedulerClient().RemoveRegion(ctx, ev.regionID)

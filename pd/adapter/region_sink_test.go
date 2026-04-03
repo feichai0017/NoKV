@@ -3,25 +3,29 @@ package adapter
 import (
 	"context"
 	"errors"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 )
 
 type fakePDClient struct {
-	storeReqs  []*pdpb.StoreHeartbeatRequest
-	regionReqs []*pdpb.RegionHeartbeatRequest
-	removeReqs []*pdpb.RemoveRegionRequest
-	storeResp  *pdpb.StoreHeartbeatResponse
-	storeErr   error
-	regionErr  error
-	removeErr  error
-	closed     bool
+	storeReqs    []*pdpb.StoreHeartbeatRequest
+	regionReqs   []*pdpb.RegionHeartbeatRequest
+	rootEventReq []*pdpb.PublishRootEventRequest
+	removeReqs   []*pdpb.RemoveRegionRequest
+	storeResp    *pdpb.StoreHeartbeatResponse
+	storeErr     error
+	regionErr    error
+	rootErr      error
+	removeErr    error
+	closed       bool
 }
 
 func (f *fakePDClient) StoreHeartbeat(_ context.Context, req *pdpb.StoreHeartbeatRequest) (*pdpb.StoreHeartbeatResponse, error) {
@@ -41,6 +45,14 @@ func (f *fakePDClient) RegionHeartbeat(_ context.Context, req *pdpb.RegionHeartb
 		return nil, f.regionErr
 	}
 	return &pdpb.RegionHeartbeatResponse{Accepted: true}, nil
+}
+
+func (f *fakePDClient) PublishRootEvent(_ context.Context, req *pdpb.PublishRootEventRequest) (*pdpb.PublishRootEventResponse, error) {
+	f.rootEventReq = append(f.rootEventReq, req)
+	if f.rootErr != nil {
+		return nil, f.rootErr
+	}
+	return &pdpb.PublishRootEventResponse{Accepted: true}, nil
 }
 
 func (f *fakePDClient) RemoveRegion(_ context.Context, req *pdpb.RemoveRegionRequest) (*pdpb.RemoveRegionResponse, error) {
@@ -66,6 +78,24 @@ func (f *fakePDClient) Tso(context.Context, *pdpb.TsoRequest) (*pdpb.TsoResponse
 func (f *fakePDClient) Close() error {
 	f.closed = true
 	return nil
+}
+
+func TestSchedulerClientPublishRootEvent(t *testing.T) {
+	pd := &fakePDClient{}
+	sink := NewSchedulerClient(SchedulerClientConfig{PD: pd})
+
+	event := rootpkg.PeerAdded(10, 2, 201, testDescriptor(10, []byte("a"), []byte("z"), metaregion.Epoch{
+		Version:     1,
+		ConfVersion: 2,
+	}, []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}}))
+	sink.PublishRootEvent(context.Background(), event)
+
+	require.Len(t, pd.rootEventReq, 1)
+	got := metacodec.RootEventFromProto(pd.rootEventReq[0].GetEvent())
+	require.Equal(t, rootpkg.EventKindPeerAdded, got.Kind)
+	require.NotNil(t, got.PeerChange)
+	require.Equal(t, uint64(10), got.PeerChange.RegionID)
+	require.False(t, sink.Status().Degraded)
 }
 
 func TestSchedulerClientForwardsAndPlans(t *testing.T) {
@@ -113,10 +143,10 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 
 func TestSchedulerClientErrorCallbackAndClose(t *testing.T) {
 	storeErr := errors.New("store heartbeat failed")
-	regionErr := errors.New("region heartbeat failed")
+	rootErr := errors.New("publish root event failed")
 	pd := &fakePDClient{
-		storeErr:  storeErr,
-		regionErr: regionErr,
+		storeErr: storeErr,
+		rootErr:  rootErr,
 	}
 	var got []string
 	sink := NewSchedulerClient(SchedulerClientConfig{
@@ -127,14 +157,14 @@ func TestSchedulerClientErrorCallbackAndClose(t *testing.T) {
 	})
 
 	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 7})
-	sink.PublishRegionDescriptor(context.Background(), testDescriptor(9, nil, nil, metaregion.Epoch{}, nil))
+	sink.PublishRootEvent(context.Background(), rootpkg.RegionDescriptorPublished(testDescriptor(9, nil, nil, metaregion.Epoch{}, nil)))
 	require.Len(t, got, 2)
 	require.Contains(t, got[0], "StoreHeartbeat")
-	require.Contains(t, got[1], "RegionHeartbeat")
+	require.Contains(t, got[1], "PublishRootEvent")
 	status := sink.Status()
 	require.True(t, status.Degraded)
 	require.Equal(t, storepkg.SchedulerModeUnavailable, status.Mode)
-	require.Contains(t, status.LastError, "RegionHeartbeat")
+	require.Contains(t, status.LastError, "PublishRootEvent")
 	require.False(t, status.LastErrorAt.IsZero())
 	require.NoError(t, sink.Close())
 	require.True(t, pd.closed)
@@ -145,9 +175,11 @@ func TestSchedulerClientNoopOnZeroIDs(t *testing.T) {
 	sink := NewSchedulerClient(SchedulerClientConfig{PD: pd})
 	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 0})
 	sink.PublishRegionDescriptor(context.Background(), descriptor.Descriptor{})
+	sink.PublishRootEvent(context.Background(), rootpkg.Event{})
 	sink.RemoveRegion(context.Background(), 0)
 	require.Empty(t, pd.storeReqs)
 	require.Empty(t, pd.regionReqs)
+	require.Empty(t, pd.rootEventReq)
 	require.Empty(t, pd.removeReqs)
 }
 

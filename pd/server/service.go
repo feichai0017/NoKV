@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
+	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 
 	"github.com/feichai0017/NoKV/pd/core"
@@ -99,6 +100,33 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pdpb.RegionHeartbeatRe
 		}
 	}
 	return &pdpb.RegionHeartbeatResponse{Accepted: true}, nil
+}
+
+// PublishRootEvent records one explicit rooted topology truth event.
+func (s *Service) PublishRootEvent(_ context.Context, req *pdpb.PublishRootEventRequest) (*pdpb.PublishRootEventResponse, error) {
+	if req == nil || req.GetEvent() == nil {
+		return nil, status.Error(codes.InvalidArgument, "publish root event request missing event")
+	}
+	event := metacodec.RootEventFromProto(req.GetEvent())
+	if event.Kind == rootpkg.EventKindUnknown {
+		return nil, status.Error(codes.InvalidArgument, "publish root event requires known kind")
+	}
+	if err := s.cluster.PublishRootEvent(event); err != nil {
+		switch {
+		case errors.Is(err, core.ErrInvalidRegionID):
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		case errors.Is(err, core.ErrRegionHeartbeatStale), errors.Is(err, core.ErrRegionRangeOverlap):
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		default:
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+	}
+	if s.storage != nil {
+		if err := s.storage.AppendRootEvent(event); err != nil {
+			return nil, status.Error(codes.Internal, "persist root event: "+err.Error())
+		}
+	}
+	return &pdpb.PublishRootEventResponse{Accepted: true}, nil
 }
 
 // RemoveRegion deletes region metadata from the PD in-memory catalog.
