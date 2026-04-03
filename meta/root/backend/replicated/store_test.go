@@ -147,6 +147,41 @@ func TestSingleNodeDriverAppendAndReopen(t *testing.T) {
 	require.Equal(t, uint64(20), driverState.Records[1].Event.RegionDescriptor.Descriptor.RegionID)
 }
 
+func TestFixedClusterReplicatesLeaderAppend(t *testing.T) {
+	stores, cluster, err := OpenFixedCluster(4, 1, 2, 3)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), cluster.LeaderID())
+
+	leader := stores[1]
+	commit, err := leader.Append(
+		rootevent.StoreJoined(1, "s1"),
+		rootevent.RegionDescriptorPublished(testDescriptor(30, []byte("a"), []byte("z"))),
+	)
+	require.NoError(t, err)
+
+	for _, id := range []uint64{1, 2, 3} {
+		driver, err := cluster.Driver(id)
+		require.NoError(t, err)
+		state := driver.State()
+		require.Len(t, state.Records, 2)
+		require.Equal(t, uint64(30), state.Records[1].Event.RegionDescriptor.Descriptor.RegionID)
+
+		reopened, err := Open(driver.Config(4))
+		require.NoError(t, err)
+		current, err := reopened.Current()
+		require.NoError(t, err)
+		require.Equal(t, commit.State, current)
+	}
+}
+
+func TestFixedClusterRejectsFollowerAppend(t *testing.T) {
+	stores, _, err := OpenFixedCluster(4, 1, 2, 3)
+	require.NoError(t, err)
+
+	_, err = stores[2].Append(rootevent.StoreJoined(2, "s2"))
+	require.Error(t, err)
+}
+
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
 	desc := descriptor.Descriptor{
 		RegionID:  id,
