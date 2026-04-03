@@ -2,8 +2,6 @@ package local
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -25,11 +23,13 @@ const (
 type Store struct {
 	fs      vfs.FS
 	workdir string
+	checkpt rootpkg.CheckpointStore
+	log     rootpkg.EventLog
 
 	mu         sync.RWMutex
 	state      rootpkg.State
 	descs      map[uint64]descriptor.Descriptor
-	records    []record
+	records    []rootpkg.CommittedEvent
 	logBase    int64
 	retainFrom rootpkg.Cursor
 }
@@ -46,23 +46,27 @@ func Open(workdir string, fs vfs.FS) (*Store, error) {
 	if err := fs.MkdirAll(workdir, 0o755); err != nil {
 		return nil, err
 	}
-	snapshot, logBase, err := loadCheckpoint(fs, workdir)
+	checkpt := newFileCheckpointStore(fs, workdir)
+	log := newFileEventLog(fs, workdir)
+	snapshot, logBase, err := checkpt.Load()
 	if err != nil {
 		return nil, err
 	}
-	records, err := loadLog(fs, workdir, logBase)
+	records, err := log.Load(logBase)
 	if err != nil {
 		return nil, err
 	}
 	for _, rec := range records {
-		if after(rec.cursor, snapshot.State.LastCommitted) {
-			rootpkg.ApplyEventToState(&snapshot.State, rec.cursor, rec.event)
-			rootpkg.ApplyEventToDescriptors(snapshot.Descriptors, rec.event)
+		if after(rec.Cursor, snapshot.State.LastCommitted) {
+			rootpkg.ApplyEventToState(&snapshot.State, rec.Cursor, rec.Event)
+			rootpkg.ApplyEventToDescriptors(snapshot.Descriptors, rec.Event)
 		}
 	}
 	return &Store{
 		fs:         fs,
 		workdir:    workdir,
+		checkpt:    checkpt,
+		log:        log,
 		state:      snapshot.State,
 		descs:      snapshot.Descriptors,
 		records:    records,
@@ -106,8 +110,8 @@ func (s *Store) ReadSince(cursor rootpkg.Cursor) ([]rootpkg.Event, rootpkg.Curso
 	}
 	out := make([]rootpkg.Event, 0, len(s.records))
 	for _, rec := range s.records {
-		if after(rec.cursor, cursor) {
-			out = append(out, cloneEvent(rec.event))
+		if after(rec.Cursor, cursor) {
+			out = append(out, cloneEvent(rec.Event))
 		}
 	}
 	return out, s.state.LastCommitted, nil
@@ -122,38 +126,21 @@ func (s *Store) Append(events ...rootpkg.Event) (rootpkg.CommitInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	logPath := filepath.Join(s.workdir, LogFileName)
-	f, err := s.fs.OpenFileHandle(logPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
-	if err != nil {
-		return rootpkg.CommitInfo{}, err
-	}
 	var next rootpkg.Cursor
 	state := cloneState(s.state)
 	descs := cloneDescriptors(s.descs)
-	records := make([]record, 0, len(events))
+	records := make([]rootpkg.CommittedEvent, 0, len(events))
 	for _, evt := range events {
 		next = rootpkg.NextCursor(state.LastCommitted)
-		if err := writeRecord(f, next, evt); err != nil {
-			_ = f.Close()
-			return rootpkg.CommitInfo{}, err
-		}
 		rootpkg.ApplyEventToState(&state, next, evt)
 		rootpkg.ApplyEventToDescriptors(descs, evt)
-		records = append(records, record{cursor: next, event: cloneEvent(evt)})
+		records = append(records, rootpkg.CommittedEvent{Cursor: next, Event: cloneEvent(evt)})
 	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return rootpkg.CommitInfo{}, err
-	}
-	logEnd, err := fileSize(f)
+	logEnd, err := s.log.Append(records...)
 	if err != nil {
-		_ = f.Close()
 		return rootpkg.CommitInfo{}, err
 	}
-	if err := f.Close(); err != nil {
-		return rootpkg.CommitInfo{}, err
-	}
-	if err := persistCheckpoint(s.fs, s.workdir, rootpkg.Snapshot{State: state, Descriptors: descs}, uint64(logEnd)); err != nil {
+	if err := s.checkpt.Save(rootpkg.Snapshot{State: state, Descriptors: descs}, uint64(logEnd)); err != nil {
 		return rootpkg.CommitInfo{}, err
 	}
 	s.state = state
@@ -186,11 +173,11 @@ func (s *Store) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, 
 		return *out, nil
 	}
 	*out = min
-	logEnd, err := currentLogSize(s.fs, s.workdir)
+	logEnd, err := s.log.Size()
 	if err != nil {
 		return 0, err
 	}
-	if err := persistCheckpoint(s.fs, s.workdir, rootpkg.Snapshot{State: state, Descriptors: cloneDescriptors(s.descs)}, uint64(logEnd)); err != nil {
+	if err := s.checkpt.Save(rootpkg.Snapshot{State: state, Descriptors: cloneDescriptors(s.descs)}, uint64(logEnd)); err != nil {
 		return 0, err
 	}
 	s.state = state
@@ -211,10 +198,10 @@ func (s *Store) maybeCompactLocked() {
 		State:       cloneState(s.state),
 		Descriptors: cloneDescriptors(s.descs),
 	}
-	if err := rewriteLog(s.fs, s.workdir, retained); err != nil {
+	if err := s.log.Rewrite(retained); err != nil {
 		return
 	}
-	if err := persistCheckpoint(s.fs, s.workdir, snapshot, 0); err != nil {
+	if err := s.checkpt.Save(snapshot, 0); err != nil {
 		return
 	}
 	s.records = retained
