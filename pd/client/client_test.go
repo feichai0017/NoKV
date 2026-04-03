@@ -17,7 +17,6 @@ import (
 	"github.com/feichai0017/NoKV/pd/core"
 	pdserver "github.com/feichai0017/NoKV/pd/server"
 	"github.com/feichai0017/NoKV/pd/tso"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 )
 
@@ -65,7 +64,7 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.True(t, storeResp.GetAccepted())
 
 	_, err = cli.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor: metacodec.DescriptorToProto(descriptor.FromRegionMeta(localmeta.RegionMeta{
+		RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromLocalRegionMeta(localmeta.RegionMeta{
 			ID:       11,
 			StartKey: []byte("a"),
 			EndKey:   []byte("z"),

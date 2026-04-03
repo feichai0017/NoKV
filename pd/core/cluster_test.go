@@ -3,7 +3,6 @@ package core
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -28,18 +27,8 @@ func TestClusterStoreHeartbeatAndSnapshot(t *testing.T) {
 
 func TestClusterRegionHeartbeatAndRouteLookup(t *testing.T) {
 	c := NewCluster()
-	require.NoError(t, c.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
-		ID:       1,
-		StartKey: []byte(""),
-		EndKey:   []byte("m"),
-		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
-	}, 0)))
-	require.NoError(t, c.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
-		ID:       2,
-		StartKey: []byte("m"),
-		EndKey:   []byte(""),
-		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
-	}, 0)))
+	require.NoError(t, c.PublishRegionDescriptor(testDescriptor(1, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1})))
+	require.NoError(t, c.PublishRegionDescriptor(testDescriptor(2, []byte("m"), []byte(""), metaregion.Epoch{Version: 1, ConfVersion: 1})))
 
 	desc, ok := c.GetRegionDescriptorByKey([]byte("a"))
 	require.True(t, ok)
@@ -59,57 +48,27 @@ func TestClusterRegionHeartbeatAndRouteLookup(t *testing.T) {
 
 func TestClusterRejectsStaleRegionHeartbeat(t *testing.T) {
 	c := NewCluster()
-	require.NoError(t, c.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
-		ID:       10,
-		StartKey: []byte("a"),
-		EndKey:   []byte("z"),
-		Epoch:    metaregion.Epoch{Version: 2, ConfVersion: 3},
-	}, 0)))
+	require.NoError(t, c.PublishRegionDescriptor(testDescriptor(10, []byte("a"), []byte("z"), metaregion.Epoch{Version: 2, ConfVersion: 3})))
 
-	err := c.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
-		ID:       10,
-		StartKey: []byte("a"),
-		EndKey:   []byte("z"),
-		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 99},
-	}, 0))
+	err := c.PublishRegionDescriptor(testDescriptor(10, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 99}))
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrRegionHeartbeatStale)
 }
 
 func TestClusterRejectsOverlappingRegionRanges(t *testing.T) {
 	c := NewCluster()
-	require.NoError(t, c.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
-		ID:       1,
-		StartKey: []byte("a"),
-		EndKey:   []byte("k"),
-		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
-	}, 0)))
+	require.NoError(t, c.PublishRegionDescriptor(testDescriptor(1, []byte("a"), []byte("k"), metaregion.Epoch{Version: 1, ConfVersion: 1})))
 
-	err := c.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
-		ID:       2,
-		StartKey: []byte("j"),
-		EndKey:   []byte("z"),
-		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
-	}, 0))
+	err := c.PublishRegionDescriptor(testDescriptor(2, []byte("j"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}))
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrRegionRangeOverlap)
 }
 
 func TestClusterAllowsReplacingSameRegionWithNewEpoch(t *testing.T) {
 	c := NewCluster()
-	require.NoError(t, c.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
-		ID:       7,
-		StartKey: []byte("a"),
-		EndKey:   []byte("m"),
-		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
-	}, 0)))
+	require.NoError(t, c.PublishRegionDescriptor(testDescriptor(7, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1})))
 
-	require.NoError(t, c.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
-		ID:       7,
-		StartKey: []byte("a"),
-		EndKey:   []byte("n"),
-		Epoch:    metaregion.Epoch{Version: 2, ConfVersion: 1},
-	}, 0)))
+	require.NoError(t, c.PublishRegionDescriptor(testDescriptor(7, []byte("a"), []byte("n"), metaregion.Epoch{Version: 2, ConfVersion: 1})))
 	desc, ok := c.GetRegionDescriptorByKey([]byte("m"))
 	require.True(t, ok)
 	require.Equal(t, uint64(7), desc.RegionID)
@@ -118,12 +77,7 @@ func TestClusterAllowsReplacingSameRegionWithNewEpoch(t *testing.T) {
 
 func TestClusterRemoveRegion(t *testing.T) {
 	c := NewCluster()
-	require.NoError(t, c.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
-		ID:       1,
-		StartKey: []byte("a"),
-		EndKey:   []byte("z"),
-		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
-	}, 0)))
+	require.NoError(t, c.PublishRegionDescriptor(testDescriptor(1, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})))
 
 	_, ok := c.GetRegionDescriptorByKey([]byte("m"))
 	require.True(t, ok)
@@ -136,4 +90,16 @@ func TestClusterRemoveRegion(t *testing.T) {
 
 	removed = c.RemoveRegion(1)
 	require.False(t, removed)
+}
+
+func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descriptor.Descriptor {
+	desc := descriptor.Descriptor{
+		RegionID: id,
+		StartKey: append([]byte(nil), start...),
+		EndKey:   append([]byte(nil), end...),
+		Epoch:    epoch,
+		State:    metaregion.ReplicaStateRunning,
+	}
+	desc.EnsureHash()
+	return desc
 }
