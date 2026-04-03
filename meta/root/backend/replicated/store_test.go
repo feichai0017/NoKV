@@ -122,6 +122,31 @@ func TestOpenAcceptsDriverConfig(t *testing.T) {
 	require.NotNil(t, store)
 }
 
+func TestSingleNodeDriverAppendAndReopen(t *testing.T) {
+	driver, err := NewSingleNodeDriver(1)
+	require.NoError(t, err)
+
+	store, err := Open(Config{Driver: driver, MaxRetainedRecords: 4})
+	require.NoError(t, err)
+
+	commit, err := store.Append(
+		rootevent.StoreJoined(1, "s1"),
+		rootevent.RegionDescriptorPublished(testDescriptor(20, []byte("a"), []byte("z"))),
+	)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.Cursor{Term: 1, Index: 2}, commit.Cursor)
+
+	reopened, err := Open(Config{Driver: driver, MaxRetainedRecords: 4})
+	require.NoError(t, err)
+	current, err := reopened.Current()
+	require.NoError(t, err)
+	require.Equal(t, commit.State, current)
+
+	driverState := driver.State()
+	require.Len(t, driverState.Records, 2)
+	require.Equal(t, uint64(20), driverState.Records[1].Event.RegionDescriptor.Descriptor.RegionID)
+}
+
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
 	desc := descriptor.Descriptor{
 		RegionID:  id,
