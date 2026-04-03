@@ -38,6 +38,26 @@ func TestRunPDCmdStartsAndStops(t *testing.T) {
 	require.Contains(t, buf.String(), "PD metrics endpoint listening on http://")
 }
 
+func TestRunPDCmdStartsAndStopsWithReplicatedRoot(t *testing.T) {
+	origNotify := pdNotifyContext
+	pdNotifyContext = func(parent context.Context, _ ...os.Signal) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(parent)
+		cancel()
+		return ctx, cancel
+	}
+	t.Cleanup(func() { pdNotifyContext = origNotify })
+
+	var buf bytes.Buffer
+	require.NoError(t, runPDCmd(&buf, []string{
+		"-addr", "127.0.0.1:0",
+		"-workdir", t.TempDir(),
+		"-root-mode", "replicated",
+		"-root-node-id", "1",
+	}))
+	require.Contains(t, buf.String(), "PD-lite service listening on")
+	require.Contains(t, buf.String(), "PD metadata root mode: replicated")
+}
+
 func TestRunPDCmdInvalidMetricsAddr(t *testing.T) {
 	origNotify := pdNotifyContext
 	pdNotifyContext = func(parent context.Context, _ ...os.Signal) (context.Context, context.CancelFunc) {
@@ -50,6 +70,18 @@ func TestRunPDCmdInvalidMetricsAddr(t *testing.T) {
 	var buf bytes.Buffer
 	err := runPDCmd(&buf, []string{"-addr", "127.0.0.1:0", "-metrics-addr", "bad"})
 	require.ErrorContains(t, err, "start pd metrics endpoint")
+}
+
+func TestRunPDCmdRejectsInvalidRootMode(t *testing.T) {
+	var buf bytes.Buffer
+	err := runPDCmd(&buf, []string{"-addr", "127.0.0.1:0", "-root-mode", "bad"})
+	require.ErrorContains(t, err, "invalid root mode")
+}
+
+func TestRunPDCmdReplicatedRootRequiresWorkdir(t *testing.T) {
+	var buf bytes.Buffer
+	err := runPDCmd(&buf, []string{"-addr", "127.0.0.1:0", "-root-mode", "replicated"})
+	require.ErrorContains(t, err, "requires -workdir")
 }
 
 func TestMainPDCommand(t *testing.T) {
