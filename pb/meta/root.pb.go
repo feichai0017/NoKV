@@ -11,7 +11,6 @@ package metapb
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
-	emptypb "google.golang.org/protobuf/types/known/emptypb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -23,55 +22,6 @@ const (
 	// Verify that runtime/protoimpl is sufficiently up-to-date.
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
-
-type AllocatorKind int32
-
-const (
-	AllocatorKind_ALLOCATOR_KIND_UNSPECIFIED AllocatorKind = 0
-	AllocatorKind_ALLOCATOR_KIND_ID          AllocatorKind = 1
-	AllocatorKind_ALLOCATOR_KIND_TSO         AllocatorKind = 2
-)
-
-// Enum value maps for AllocatorKind.
-var (
-	AllocatorKind_name = map[int32]string{
-		0: "ALLOCATOR_KIND_UNSPECIFIED",
-		1: "ALLOCATOR_KIND_ID",
-		2: "ALLOCATOR_KIND_TSO",
-	}
-	AllocatorKind_value = map[string]int32{
-		"ALLOCATOR_KIND_UNSPECIFIED": 0,
-		"ALLOCATOR_KIND_ID":          1,
-		"ALLOCATOR_KIND_TSO":         2,
-	}
-)
-
-func (x AllocatorKind) Enum() *AllocatorKind {
-	p := new(AllocatorKind)
-	*p = x
-	return p
-}
-
-func (x AllocatorKind) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (AllocatorKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_meta_root_proto_enumTypes[0].Descriptor()
-}
-
-func (AllocatorKind) Type() protoreflect.EnumType {
-	return &file_meta_root_proto_enumTypes[0]
-}
-
-func (x AllocatorKind) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use AllocatorKind.Descriptor instead.
-func (AllocatorKind) EnumDescriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{0}
-}
 
 type RootEventKind int32
 
@@ -139,11 +89,11 @@ func (x RootEventKind) String() string {
 }
 
 func (RootEventKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_meta_root_proto_enumTypes[1].Descriptor()
+	return file_meta_root_proto_enumTypes[0].Descriptor()
 }
 
 func (RootEventKind) Type() protoreflect.EnumType {
-	return &file_meta_root_proto_enumTypes[1]
+	return &file_meta_root_proto_enumTypes[0]
 }
 
 func (x RootEventKind) Number() protoreflect.EnumNumber {
@@ -152,7 +102,7 @@ func (x RootEventKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RootEventKind.Descriptor instead.
 func (RootEventKind) EnumDescriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{1}
+	return file_meta_root_proto_rawDescGZIP(), []int{0}
 }
 
 type RootCursor struct {
@@ -291,110 +241,6 @@ func (x *RootState) GetTsoFence() uint64 {
 	return 0
 }
 
-type RootCommitInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Cursor        *RootCursor            `protobuf:"bytes,1,opt,name=cursor,proto3" json:"cursor,omitempty"`
-	State         *RootState             `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RootCommitInfo) Reset() {
-	*x = RootCommitInfo{}
-	mi := &file_meta_root_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RootCommitInfo) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RootCommitInfo) ProtoMessage() {}
-
-func (x *RootCommitInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RootCommitInfo.ProtoReflect.Descriptor instead.
-func (*RootCommitInfo) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *RootCommitInfo) GetCursor() *RootCursor {
-	if x != nil {
-		return x.Cursor
-	}
-	return nil
-}
-
-func (x *RootCommitInfo) GetState() *RootState {
-	if x != nil {
-		return x.State
-	}
-	return nil
-}
-
-type RootCheckpoint struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	State         *RootState             `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
-	Descriptors   []*RegionDescriptor    `protobuf:"bytes,2,rep,name=descriptors,proto3" json:"descriptors,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RootCheckpoint) Reset() {
-	*x = RootCheckpoint{}
-	mi := &file_meta_root_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RootCheckpoint) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RootCheckpoint) ProtoMessage() {}
-
-func (x *RootCheckpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RootCheckpoint.ProtoReflect.Descriptor instead.
-func (*RootCheckpoint) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *RootCheckpoint) GetState() *RootState {
-	if x != nil {
-		return x.State
-	}
-	return nil
-}
-
-func (x *RootCheckpoint) GetDescriptors() []*RegionDescriptor {
-	if x != nil {
-		return x.Descriptors
-	}
-	return nil
-}
-
 type RootStoreMembership struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	StoreId       uint64                 `protobuf:"varint,1,opt,name=store_id,json=storeId,proto3" json:"store_id,omitempty"`
@@ -405,7 +251,7 @@ type RootStoreMembership struct {
 
 func (x *RootStoreMembership) Reset() {
 	*x = RootStoreMembership{}
-	mi := &file_meta_root_proto_msgTypes[4]
+	mi := &file_meta_root_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -417,7 +263,7 @@ func (x *RootStoreMembership) String() string {
 func (*RootStoreMembership) ProtoMessage() {}
 
 func (x *RootStoreMembership) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[4]
+	mi := &file_meta_root_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -430,7 +276,7 @@ func (x *RootStoreMembership) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootStoreMembership.ProtoReflect.Descriptor instead.
 func (*RootStoreMembership) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{4}
+	return file_meta_root_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *RootStoreMembership) GetStoreId() uint64 {
@@ -456,7 +302,7 @@ type RootRegionDescriptor struct {
 
 func (x *RootRegionDescriptor) Reset() {
 	*x = RootRegionDescriptor{}
-	mi := &file_meta_root_proto_msgTypes[5]
+	mi := &file_meta_root_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -468,7 +314,7 @@ func (x *RootRegionDescriptor) String() string {
 func (*RootRegionDescriptor) ProtoMessage() {}
 
 func (x *RootRegionDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[5]
+	mi := &file_meta_root_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -481,7 +327,7 @@ func (x *RootRegionDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootRegionDescriptor.ProtoReflect.Descriptor instead.
 func (*RootRegionDescriptor) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{5}
+	return file_meta_root_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *RootRegionDescriptor) GetDescriptor_() *RegionDescriptor {
@@ -500,7 +346,7 @@ type RootRegionRemoval struct {
 
 func (x *RootRegionRemoval) Reset() {
 	*x = RootRegionRemoval{}
-	mi := &file_meta_root_proto_msgTypes[6]
+	mi := &file_meta_root_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -512,7 +358,7 @@ func (x *RootRegionRemoval) String() string {
 func (*RootRegionRemoval) ProtoMessage() {}
 
 func (x *RootRegionRemoval) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[6]
+	mi := &file_meta_root_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -525,7 +371,7 @@ func (x *RootRegionRemoval) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootRegionRemoval.ProtoReflect.Descriptor instead.
 func (*RootRegionRemoval) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{6}
+	return file_meta_root_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *RootRegionRemoval) GetRegionId() uint64 {
@@ -547,7 +393,7 @@ type RootRangeSplit struct {
 
 func (x *RootRangeSplit) Reset() {
 	*x = RootRangeSplit{}
-	mi := &file_meta_root_proto_msgTypes[7]
+	mi := &file_meta_root_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -559,7 +405,7 @@ func (x *RootRangeSplit) String() string {
 func (*RootRangeSplit) ProtoMessage() {}
 
 func (x *RootRangeSplit) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[7]
+	mi := &file_meta_root_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -572,7 +418,7 @@ func (x *RootRangeSplit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootRangeSplit.ProtoReflect.Descriptor instead.
 func (*RootRangeSplit) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{7}
+	return file_meta_root_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *RootRangeSplit) GetParentRegionId() uint64 {
@@ -614,7 +460,7 @@ type RootRangeMerge struct {
 
 func (x *RootRangeMerge) Reset() {
 	*x = RootRangeMerge{}
-	mi := &file_meta_root_proto_msgTypes[8]
+	mi := &file_meta_root_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -626,7 +472,7 @@ func (x *RootRangeMerge) String() string {
 func (*RootRangeMerge) ProtoMessage() {}
 
 func (x *RootRangeMerge) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[8]
+	mi := &file_meta_root_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -639,7 +485,7 @@ func (x *RootRangeMerge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootRangeMerge.ProtoReflect.Descriptor instead.
 func (*RootRangeMerge) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{8}
+	return file_meta_root_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *RootRangeMerge) GetLeftRegionId() uint64 {
@@ -675,7 +521,7 @@ type RootPeerChange struct {
 
 func (x *RootPeerChange) Reset() {
 	*x = RootPeerChange{}
-	mi := &file_meta_root_proto_msgTypes[9]
+	mi := &file_meta_root_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -687,7 +533,7 @@ func (x *RootPeerChange) String() string {
 func (*RootPeerChange) ProtoMessage() {}
 
 func (x *RootPeerChange) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[9]
+	mi := &file_meta_root_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -700,7 +546,7 @@ func (x *RootPeerChange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootPeerChange.ProtoReflect.Descriptor instead.
 func (*RootPeerChange) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{9}
+	return file_meta_root_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *RootPeerChange) GetRegionId() uint64 {
@@ -743,7 +589,7 @@ type RootLeaderTransfer struct {
 
 func (x *RootLeaderTransfer) Reset() {
 	*x = RootLeaderTransfer{}
-	mi := &file_meta_root_proto_msgTypes[10]
+	mi := &file_meta_root_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -755,7 +601,7 @@ func (x *RootLeaderTransfer) String() string {
 func (*RootLeaderTransfer) ProtoMessage() {}
 
 func (x *RootLeaderTransfer) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[10]
+	mi := &file_meta_root_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -768,7 +614,7 @@ func (x *RootLeaderTransfer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootLeaderTransfer.ProtoReflect.Descriptor instead.
 func (*RootLeaderTransfer) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{10}
+	return file_meta_root_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *RootLeaderTransfer) GetRegionId() uint64 {
@@ -809,7 +655,7 @@ type RootPlacementPolicy struct {
 
 func (x *RootPlacementPolicy) Reset() {
 	*x = RootPlacementPolicy{}
-	mi := &file_meta_root_proto_msgTypes[11]
+	mi := &file_meta_root_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -821,7 +667,7 @@ func (x *RootPlacementPolicy) String() string {
 func (*RootPlacementPolicy) ProtoMessage() {}
 
 func (x *RootPlacementPolicy) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[11]
+	mi := &file_meta_root_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -834,7 +680,7 @@ func (x *RootPlacementPolicy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootPlacementPolicy.ProtoReflect.Descriptor instead.
 func (*RootPlacementPolicy) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{11}
+	return file_meta_root_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RootPlacementPolicy) GetVersion() uint64 {
@@ -871,7 +717,7 @@ type RootEvent struct {
 
 func (x *RootEvent) Reset() {
 	*x = RootEvent{}
-	mi := &file_meta_root_proto_msgTypes[12]
+	mi := &file_meta_root_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -883,7 +729,7 @@ func (x *RootEvent) String() string {
 func (*RootEvent) ProtoMessage() {}
 
 func (x *RootEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[12]
+	mi := &file_meta_root_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -896,7 +742,7 @@ func (x *RootEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootEvent.ProtoReflect.Descriptor instead.
 func (*RootEvent) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{12}
+	return file_meta_root_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *RootEvent) GetKind() RootEventKind {
@@ -1037,371 +883,11 @@ func (*RootEvent_LeaderTransfer) isRootEvent_Payload() {}
 
 func (*RootEvent_PlacementPolicy) isRootEvent_Payload() {}
 
-type RootCurrentRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RootCurrentRequest) Reset() {
-	*x = RootCurrentRequest{}
-	mi := &file_meta_root_proto_msgTypes[13]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RootCurrentRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RootCurrentRequest) ProtoMessage() {}
-
-func (x *RootCurrentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[13]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RootCurrentRequest.ProtoReflect.Descriptor instead.
-func (*RootCurrentRequest) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{13}
-}
-
-type RootCurrentResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	State         *RootState             `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RootCurrentResponse) Reset() {
-	*x = RootCurrentResponse{}
-	mi := &file_meta_root_proto_msgTypes[14]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RootCurrentResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RootCurrentResponse) ProtoMessage() {}
-
-func (x *RootCurrentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[14]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RootCurrentResponse.ProtoReflect.Descriptor instead.
-func (*RootCurrentResponse) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{14}
-}
-
-func (x *RootCurrentResponse) GetState() *RootState {
-	if x != nil {
-		return x.State
-	}
-	return nil
-}
-
-type RootReadSinceRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Cursor        *RootCursor            `protobuf:"bytes,1,opt,name=cursor,proto3" json:"cursor,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RootReadSinceRequest) Reset() {
-	*x = RootReadSinceRequest{}
-	mi := &file_meta_root_proto_msgTypes[15]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RootReadSinceRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RootReadSinceRequest) ProtoMessage() {}
-
-func (x *RootReadSinceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[15]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RootReadSinceRequest.ProtoReflect.Descriptor instead.
-func (*RootReadSinceRequest) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{15}
-}
-
-func (x *RootReadSinceRequest) GetCursor() *RootCursor {
-	if x != nil {
-		return x.Cursor
-	}
-	return nil
-}
-
-type RootReadSinceResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Events        []*RootEvent           `protobuf:"bytes,1,rep,name=events,proto3" json:"events,omitempty"`
-	Tail          *RootCursor            `protobuf:"bytes,2,opt,name=tail,proto3" json:"tail,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RootReadSinceResponse) Reset() {
-	*x = RootReadSinceResponse{}
-	mi := &file_meta_root_proto_msgTypes[16]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RootReadSinceResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RootReadSinceResponse) ProtoMessage() {}
-
-func (x *RootReadSinceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[16]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RootReadSinceResponse.ProtoReflect.Descriptor instead.
-func (*RootReadSinceResponse) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{16}
-}
-
-func (x *RootReadSinceResponse) GetEvents() []*RootEvent {
-	if x != nil {
-		return x.Events
-	}
-	return nil
-}
-
-func (x *RootReadSinceResponse) GetTail() *RootCursor {
-	if x != nil {
-		return x.Tail
-	}
-	return nil
-}
-
-type RootAppendRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Events        []*RootEvent           `protobuf:"bytes,1,rep,name=events,proto3" json:"events,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RootAppendRequest) Reset() {
-	*x = RootAppendRequest{}
-	mi := &file_meta_root_proto_msgTypes[17]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RootAppendRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RootAppendRequest) ProtoMessage() {}
-
-func (x *RootAppendRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[17]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RootAppendRequest.ProtoReflect.Descriptor instead.
-func (*RootAppendRequest) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{17}
-}
-
-func (x *RootAppendRequest) GetEvents() []*RootEvent {
-	if x != nil {
-		return x.Events
-	}
-	return nil
-}
-
-type RootFenceAllocatorRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Kind          AllocatorKind          `protobuf:"varint,1,opt,name=kind,proto3,enum=nokv.meta.v1.AllocatorKind" json:"kind,omitempty"`
-	Min           uint64                 `protobuf:"varint,2,opt,name=min,proto3" json:"min,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RootFenceAllocatorRequest) Reset() {
-	*x = RootFenceAllocatorRequest{}
-	mi := &file_meta_root_proto_msgTypes[18]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RootFenceAllocatorRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RootFenceAllocatorRequest) ProtoMessage() {}
-
-func (x *RootFenceAllocatorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[18]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RootFenceAllocatorRequest.ProtoReflect.Descriptor instead.
-func (*RootFenceAllocatorRequest) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{18}
-}
-
-func (x *RootFenceAllocatorRequest) GetKind() AllocatorKind {
-	if x != nil {
-		return x.Kind
-	}
-	return AllocatorKind_ALLOCATOR_KIND_UNSPECIFIED
-}
-
-func (x *RootFenceAllocatorRequest) GetMin() uint64 {
-	if x != nil {
-		return x.Min
-	}
-	return 0
-}
-
-type RootFenceAllocatorResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Fence         uint64                 `protobuf:"varint,1,opt,name=fence,proto3" json:"fence,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RootFenceAllocatorResponse) Reset() {
-	*x = RootFenceAllocatorResponse{}
-	mi := &file_meta_root_proto_msgTypes[19]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RootFenceAllocatorResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RootFenceAllocatorResponse) ProtoMessage() {}
-
-func (x *RootFenceAllocatorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[19]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RootFenceAllocatorResponse.ProtoReflect.Descriptor instead.
-func (*RootFenceAllocatorResponse) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{19}
-}
-
-func (x *RootFenceAllocatorResponse) GetFence() uint64 {
-	if x != nil {
-		return x.Fence
-	}
-	return 0
-}
-
-type RootRaftWireMessage struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Payload       []byte                 `protobuf:"bytes,1,opt,name=payload,proto3" json:"payload,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RootRaftWireMessage) Reset() {
-	*x = RootRaftWireMessage{}
-	mi := &file_meta_root_proto_msgTypes[20]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RootRaftWireMessage) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RootRaftWireMessage) ProtoMessage() {}
-
-func (x *RootRaftWireMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[20]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RootRaftWireMessage.ProtoReflect.Descriptor instead.
-func (*RootRaftWireMessage) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{20}
-}
-
-func (x *RootRaftWireMessage) GetPayload() []byte {
-	if x != nil {
-		return x.Payload
-	}
-	return nil
-}
-
 var File_meta_root_proto protoreflect.FileDescriptor
 
 const file_meta_root_proto_rawDesc = "" +
 	"\n" +
-	"\x0fmeta/root.proto\x12\fnokv.meta.v1\x1a\x15meta/descriptor.proto\x1a\x1bgoogle/protobuf/empty.proto\"6\n" +
+	"\x0fmeta/root.proto\x12\fnokv.meta.v1\x1a\x15meta/descriptor.proto\"6\n" +
 	"\n" +
 	"RootCursor\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x04R\x04term\x12\x14\n" +
@@ -1412,13 +898,7 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x0epolicy_version\x18\x03 \x01(\x04R\rpolicyVersion\x12?\n" +
 	"\x0elast_committed\x18\x04 \x01(\v2\x18.nokv.meta.v1.RootCursorR\rlastCommitted\x12\x19\n" +
 	"\bid_fence\x18\x05 \x01(\x04R\aidFence\x12\x1b\n" +
-	"\ttso_fence\x18\x06 \x01(\x04R\btsoFence\"q\n" +
-	"\x0eRootCommitInfo\x120\n" +
-	"\x06cursor\x18\x01 \x01(\v2\x18.nokv.meta.v1.RootCursorR\x06cursor\x12-\n" +
-	"\x05state\x18\x02 \x01(\v2\x17.nokv.meta.v1.RootStateR\x05state\"\x81\x01\n" +
-	"\x0eRootCheckpoint\x12-\n" +
-	"\x05state\x18\x01 \x01(\v2\x17.nokv.meta.v1.RootStateR\x05state\x12@\n" +
-	"\vdescriptors\x18\x02 \x03(\v2\x1e.nokv.meta.v1.RegionDescriptorR\vdescriptors\"J\n" +
+	"\ttso_fence\x18\x06 \x01(\x04R\btsoFence\"J\n" +
 	"\x13RootStoreMembership\x12\x19\n" +
 	"\bstore_id\x18\x01 \x01(\x04R\astoreId\x12\x18\n" +
 	"\aaddress\x18\x02 \x01(\tR\aaddress\"V\n" +
@@ -1467,28 +947,7 @@ const file_meta_root_proto_rawDesc = "" +
 	"peerChange\x12K\n" +
 	"\x0fleader_transfer\x18\b \x01(\v2 .nokv.meta.v1.RootLeaderTransferH\x00R\x0eleaderTransfer\x12N\n" +
 	"\x10placement_policy\x18\t \x01(\v2!.nokv.meta.v1.RootPlacementPolicyH\x00R\x0fplacementPolicyB\t\n" +
-	"\apayload\"\x14\n" +
-	"\x12RootCurrentRequest\"D\n" +
-	"\x13RootCurrentResponse\x12-\n" +
-	"\x05state\x18\x01 \x01(\v2\x17.nokv.meta.v1.RootStateR\x05state\"H\n" +
-	"\x14RootReadSinceRequest\x120\n" +
-	"\x06cursor\x18\x01 \x01(\v2\x18.nokv.meta.v1.RootCursorR\x06cursor\"v\n" +
-	"\x15RootReadSinceResponse\x12/\n" +
-	"\x06events\x18\x01 \x03(\v2\x17.nokv.meta.v1.RootEventR\x06events\x12,\n" +
-	"\x04tail\x18\x02 \x01(\v2\x18.nokv.meta.v1.RootCursorR\x04tail\"D\n" +
-	"\x11RootAppendRequest\x12/\n" +
-	"\x06events\x18\x01 \x03(\v2\x17.nokv.meta.v1.RootEventR\x06events\"^\n" +
-	"\x19RootFenceAllocatorRequest\x12/\n" +
-	"\x04kind\x18\x01 \x01(\x0e2\x1b.nokv.meta.v1.AllocatorKindR\x04kind\x12\x10\n" +
-	"\x03min\x18\x02 \x01(\x04R\x03min\"2\n" +
-	"\x1aRootFenceAllocatorResponse\x12\x14\n" +
-	"\x05fence\x18\x01 \x01(\x04R\x05fence\"/\n" +
-	"\x13RootRaftWireMessage\x12\x18\n" +
-	"\apayload\x18\x01 \x01(\fR\apayload*^\n" +
-	"\rAllocatorKind\x12\x1e\n" +
-	"\x1aALLOCATOR_KIND_UNSPECIFIED\x10\x00\x12\x15\n" +
-	"\x11ALLOCATOR_KIND_ID\x10\x01\x12\x16\n" +
-	"\x12ALLOCATOR_KIND_TSO\x10\x02*\xb2\x04\n" +
+	"\apayload*\xb2\x04\n" +
 	"\rRootEventKind\x12\x1f\n" +
 	"\x1bROOT_EVENT_KIND_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cROOT_EVENT_KIND_STORE_JOINED\x10\x01\x12\x1e\n" +
@@ -1504,13 +963,7 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x12 \n" +
 	"\x1cROOT_EVENT_KIND_PEER_REMOVED\x10\v\x12*\n" +
 	"&ROOT_EVENT_KIND_LEADER_TRANSFER_INTENT\x10\f\x12,\n" +
-	"(ROOT_EVENT_KIND_PLACEMENT_POLICY_CHANGED\x10\r2\xac\x03\n" +
-	"\x13MetadataRootService\x12N\n" +
-	"\aCurrent\x12 .nokv.meta.v1.RootCurrentRequest\x1a!.nokv.meta.v1.RootCurrentResponse\x12T\n" +
-	"\tReadSince\x12\".nokv.meta.v1.RootReadSinceRequest\x1a#.nokv.meta.v1.RootReadSinceResponse\x12G\n" +
-	"\x06Append\x12\x1f.nokv.meta.v1.RootAppendRequest\x1a\x1c.nokv.meta.v1.RootCommitInfo\x12c\n" +
-	"\x0eFenceAllocator\x12'.nokv.meta.v1.RootFenceAllocatorRequest\x1a(.nokv.meta.v1.RootFenceAllocatorResponse\x12A\n" +
-	"\x04Step\x12!.nokv.meta.v1.RootRaftWireMessage\x1a\x16.google.protobuf.EmptyB,Z*github.com/feichai0017/NoKV/pb/meta;metapbb\x06proto3"
+	"(ROOT_EVENT_KIND_PLACEMENT_POLICY_CHANGED\x10\rB,Z*github.com/feichai0017/NoKV/pb/meta;metapbb\x06proto3"
 
 var (
 	file_meta_root_proto_rawDescOnce sync.Once
@@ -1524,76 +977,44 @@ func file_meta_root_proto_rawDescGZIP() []byte {
 	return file_meta_root_proto_rawDescData
 }
 
-var file_meta_root_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_meta_root_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_meta_root_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_meta_root_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_meta_root_proto_goTypes = []any{
-	(AllocatorKind)(0),                 // 0: nokv.meta.v1.AllocatorKind
-	(RootEventKind)(0),                 // 1: nokv.meta.v1.RootEventKind
-	(*RootCursor)(nil),                 // 2: nokv.meta.v1.RootCursor
-	(*RootState)(nil),                  // 3: nokv.meta.v1.RootState
-	(*RootCommitInfo)(nil),             // 4: nokv.meta.v1.RootCommitInfo
-	(*RootCheckpoint)(nil),             // 5: nokv.meta.v1.RootCheckpoint
-	(*RootStoreMembership)(nil),        // 6: nokv.meta.v1.RootStoreMembership
-	(*RootRegionDescriptor)(nil),       // 7: nokv.meta.v1.RootRegionDescriptor
-	(*RootRegionRemoval)(nil),          // 8: nokv.meta.v1.RootRegionRemoval
-	(*RootRangeSplit)(nil),             // 9: nokv.meta.v1.RootRangeSplit
-	(*RootRangeMerge)(nil),             // 10: nokv.meta.v1.RootRangeMerge
-	(*RootPeerChange)(nil),             // 11: nokv.meta.v1.RootPeerChange
-	(*RootLeaderTransfer)(nil),         // 12: nokv.meta.v1.RootLeaderTransfer
-	(*RootPlacementPolicy)(nil),        // 13: nokv.meta.v1.RootPlacementPolicy
-	(*RootEvent)(nil),                  // 14: nokv.meta.v1.RootEvent
-	(*RootCurrentRequest)(nil),         // 15: nokv.meta.v1.RootCurrentRequest
-	(*RootCurrentResponse)(nil),        // 16: nokv.meta.v1.RootCurrentResponse
-	(*RootReadSinceRequest)(nil),       // 17: nokv.meta.v1.RootReadSinceRequest
-	(*RootReadSinceResponse)(nil),      // 18: nokv.meta.v1.RootReadSinceResponse
-	(*RootAppendRequest)(nil),          // 19: nokv.meta.v1.RootAppendRequest
-	(*RootFenceAllocatorRequest)(nil),  // 20: nokv.meta.v1.RootFenceAllocatorRequest
-	(*RootFenceAllocatorResponse)(nil), // 21: nokv.meta.v1.RootFenceAllocatorResponse
-	(*RootRaftWireMessage)(nil),        // 22: nokv.meta.v1.RootRaftWireMessage
-	(*RegionDescriptor)(nil),           // 23: nokv.meta.v1.RegionDescriptor
-	(*emptypb.Empty)(nil),              // 24: google.protobuf.Empty
+	(RootEventKind)(0),           // 0: nokv.meta.v1.RootEventKind
+	(*RootCursor)(nil),           // 1: nokv.meta.v1.RootCursor
+	(*RootState)(nil),            // 2: nokv.meta.v1.RootState
+	(*RootStoreMembership)(nil),  // 3: nokv.meta.v1.RootStoreMembership
+	(*RootRegionDescriptor)(nil), // 4: nokv.meta.v1.RootRegionDescriptor
+	(*RootRegionRemoval)(nil),    // 5: nokv.meta.v1.RootRegionRemoval
+	(*RootRangeSplit)(nil),       // 6: nokv.meta.v1.RootRangeSplit
+	(*RootRangeMerge)(nil),       // 7: nokv.meta.v1.RootRangeMerge
+	(*RootPeerChange)(nil),       // 8: nokv.meta.v1.RootPeerChange
+	(*RootLeaderTransfer)(nil),   // 9: nokv.meta.v1.RootLeaderTransfer
+	(*RootPlacementPolicy)(nil),  // 10: nokv.meta.v1.RootPlacementPolicy
+	(*RootEvent)(nil),            // 11: nokv.meta.v1.RootEvent
+	(*RegionDescriptor)(nil),     // 12: nokv.meta.v1.RegionDescriptor
 }
 var file_meta_root_proto_depIdxs = []int32{
-	2,  // 0: nokv.meta.v1.RootState.last_committed:type_name -> nokv.meta.v1.RootCursor
-	2,  // 1: nokv.meta.v1.RootCommitInfo.cursor:type_name -> nokv.meta.v1.RootCursor
-	3,  // 2: nokv.meta.v1.RootCommitInfo.state:type_name -> nokv.meta.v1.RootState
-	3,  // 3: nokv.meta.v1.RootCheckpoint.state:type_name -> nokv.meta.v1.RootState
-	23, // 4: nokv.meta.v1.RootCheckpoint.descriptors:type_name -> nokv.meta.v1.RegionDescriptor
-	23, // 5: nokv.meta.v1.RootRegionDescriptor.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	23, // 6: nokv.meta.v1.RootRangeSplit.left:type_name -> nokv.meta.v1.RegionDescriptor
-	23, // 7: nokv.meta.v1.RootRangeSplit.right:type_name -> nokv.meta.v1.RegionDescriptor
-	23, // 8: nokv.meta.v1.RootRangeMerge.merged:type_name -> nokv.meta.v1.RegionDescriptor
-	23, // 9: nokv.meta.v1.RootPeerChange.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	1,  // 10: nokv.meta.v1.RootEvent.kind:type_name -> nokv.meta.v1.RootEventKind
-	6,  // 11: nokv.meta.v1.RootEvent.store_membership:type_name -> nokv.meta.v1.RootStoreMembership
-	7,  // 12: nokv.meta.v1.RootEvent.region_descriptor:type_name -> nokv.meta.v1.RootRegionDescriptor
-	8,  // 13: nokv.meta.v1.RootEvent.region_removal:type_name -> nokv.meta.v1.RootRegionRemoval
-	9,  // 14: nokv.meta.v1.RootEvent.range_split:type_name -> nokv.meta.v1.RootRangeSplit
-	10, // 15: nokv.meta.v1.RootEvent.range_merge:type_name -> nokv.meta.v1.RootRangeMerge
-	11, // 16: nokv.meta.v1.RootEvent.peer_change:type_name -> nokv.meta.v1.RootPeerChange
-	12, // 17: nokv.meta.v1.RootEvent.leader_transfer:type_name -> nokv.meta.v1.RootLeaderTransfer
-	13, // 18: nokv.meta.v1.RootEvent.placement_policy:type_name -> nokv.meta.v1.RootPlacementPolicy
-	3,  // 19: nokv.meta.v1.RootCurrentResponse.state:type_name -> nokv.meta.v1.RootState
-	2,  // 20: nokv.meta.v1.RootReadSinceRequest.cursor:type_name -> nokv.meta.v1.RootCursor
-	14, // 21: nokv.meta.v1.RootReadSinceResponse.events:type_name -> nokv.meta.v1.RootEvent
-	2,  // 22: nokv.meta.v1.RootReadSinceResponse.tail:type_name -> nokv.meta.v1.RootCursor
-	14, // 23: nokv.meta.v1.RootAppendRequest.events:type_name -> nokv.meta.v1.RootEvent
-	0,  // 24: nokv.meta.v1.RootFenceAllocatorRequest.kind:type_name -> nokv.meta.v1.AllocatorKind
-	15, // 25: nokv.meta.v1.MetadataRootService.Current:input_type -> nokv.meta.v1.RootCurrentRequest
-	17, // 26: nokv.meta.v1.MetadataRootService.ReadSince:input_type -> nokv.meta.v1.RootReadSinceRequest
-	19, // 27: nokv.meta.v1.MetadataRootService.Append:input_type -> nokv.meta.v1.RootAppendRequest
-	20, // 28: nokv.meta.v1.MetadataRootService.FenceAllocator:input_type -> nokv.meta.v1.RootFenceAllocatorRequest
-	22, // 29: nokv.meta.v1.MetadataRootService.Step:input_type -> nokv.meta.v1.RootRaftWireMessage
-	16, // 30: nokv.meta.v1.MetadataRootService.Current:output_type -> nokv.meta.v1.RootCurrentResponse
-	18, // 31: nokv.meta.v1.MetadataRootService.ReadSince:output_type -> nokv.meta.v1.RootReadSinceResponse
-	4,  // 32: nokv.meta.v1.MetadataRootService.Append:output_type -> nokv.meta.v1.RootCommitInfo
-	21, // 33: nokv.meta.v1.MetadataRootService.FenceAllocator:output_type -> nokv.meta.v1.RootFenceAllocatorResponse
-	24, // 34: nokv.meta.v1.MetadataRootService.Step:output_type -> google.protobuf.Empty
-	30, // [30:35] is the sub-list for method output_type
-	25, // [25:30] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	1,  // 0: nokv.meta.v1.RootState.last_committed:type_name -> nokv.meta.v1.RootCursor
+	12, // 1: nokv.meta.v1.RootRegionDescriptor.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	12, // 2: nokv.meta.v1.RootRangeSplit.left:type_name -> nokv.meta.v1.RegionDescriptor
+	12, // 3: nokv.meta.v1.RootRangeSplit.right:type_name -> nokv.meta.v1.RegionDescriptor
+	12, // 4: nokv.meta.v1.RootRangeMerge.merged:type_name -> nokv.meta.v1.RegionDescriptor
+	12, // 5: nokv.meta.v1.RootPeerChange.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	0,  // 6: nokv.meta.v1.RootEvent.kind:type_name -> nokv.meta.v1.RootEventKind
+	3,  // 7: nokv.meta.v1.RootEvent.store_membership:type_name -> nokv.meta.v1.RootStoreMembership
+	4,  // 8: nokv.meta.v1.RootEvent.region_descriptor:type_name -> nokv.meta.v1.RootRegionDescriptor
+	5,  // 9: nokv.meta.v1.RootEvent.region_removal:type_name -> nokv.meta.v1.RootRegionRemoval
+	6,  // 10: nokv.meta.v1.RootEvent.range_split:type_name -> nokv.meta.v1.RootRangeSplit
+	7,  // 11: nokv.meta.v1.RootEvent.range_merge:type_name -> nokv.meta.v1.RootRangeMerge
+	8,  // 12: nokv.meta.v1.RootEvent.peer_change:type_name -> nokv.meta.v1.RootPeerChange
+	9,  // 13: nokv.meta.v1.RootEvent.leader_transfer:type_name -> nokv.meta.v1.RootLeaderTransfer
+	10, // 14: nokv.meta.v1.RootEvent.placement_policy:type_name -> nokv.meta.v1.RootPlacementPolicy
+	15, // [15:15] is the sub-list for method output_type
+	15, // [15:15] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_meta_root_proto_init() }
@@ -1602,7 +1023,7 @@ func file_meta_root_proto_init() {
 		return
 	}
 	file_meta_descriptor_proto_init()
-	file_meta_root_proto_msgTypes[12].OneofWrappers = []any{
+	file_meta_root_proto_msgTypes[10].OneofWrappers = []any{
 		(*RootEvent_StoreMembership)(nil),
 		(*RootEvent_RegionDescriptor)(nil),
 		(*RootEvent_RegionRemoval)(nil),
@@ -1617,10 +1038,10 @@ func file_meta_root_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_meta_root_proto_rawDesc), len(file_meta_root_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   21,
+			NumEnums:      1,
+			NumMessages:   11,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   0,
 		},
 		GoTypes:           file_meta_root_proto_goTypes,
 		DependencyIndexes: file_meta_root_proto_depIdxs,

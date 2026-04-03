@@ -4,15 +4,8 @@ syntax = "proto3";
 package nokv.meta.v1;
 
 import "meta/descriptor.proto";
-import "google/protobuf/empty.proto";
 
 option go_package = "github.com/feichai0017/NoKV/pb/meta;metapb";
-
-enum AllocatorKind {
-  ALLOCATOR_KIND_UNSPECIFIED = 0;
-  ALLOCATOR_KIND_ID = 1;
-  ALLOCATOR_KIND_TSO = 2;
-}
 
 enum RootEventKind {
   ROOT_EVENT_KIND_UNSPECIFIED = 0;
@@ -43,16 +36,6 @@ message RootState {
   RootCursor last_committed = 4;
   uint64 id_fence = 5;
   uint64 tso_fence = 6;
-}
-
-message RootCommitInfo {
-  RootCursor cursor = 1;
-  RootState state = 2;
-}
-
-message RootCheckpoint {
-  RootState state = 1;
-  repeated nokv.meta.v1.RegionDescriptor descriptors = 2;
 }
 
 message RootStoreMembership {
@@ -112,44 +95,4 @@ message RootEvent {
     RootLeaderTransfer leader_transfer = 8;
     RootPlacementPolicy placement_policy = 9;
   }
-}
-
-message RootCurrentRequest {}
-
-message RootCurrentResponse {
-  RootState state = 1;
-}
-
-message RootReadSinceRequest {
-  RootCursor cursor = 1;
-}
-
-message RootReadSinceResponse {
-  repeated RootEvent events = 1;
-  RootCursor tail = 2;
-}
-
-message RootAppendRequest {
-  repeated RootEvent events = 1;
-}
-
-message RootFenceAllocatorRequest {
-  AllocatorKind kind = 1;
-  uint64 min = 2;
-}
-
-message RootFenceAllocatorResponse {
-  uint64 fence = 1;
-}
-
-message RootRaftWireMessage {
-  bytes payload = 1;
-}
-
-service MetadataRootService {
-  rpc Current(RootCurrentRequest) returns (RootCurrentResponse);
-  rpc ReadSince(RootReadSinceRequest) returns (RootReadSinceResponse);
-  rpc Append(RootAppendRequest) returns (RootCommitInfo);
-  rpc FenceAllocator(RootFenceAllocatorRequest) returns (RootFenceAllocatorResponse);
-  rpc Step(RootRaftWireMessage) returns (google.protobuf.Empty);
 }

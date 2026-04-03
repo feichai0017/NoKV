@@ -137,45 +137,6 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootpkg.Event {
 	return event
 }
 
-func RootCommitInfoToProto(commit rootpkg.CommitInfo) *metapb.RootCommitInfo {
-	return &metapb.RootCommitInfo{
-		Cursor: RootCursorToProto(commit.Cursor),
-		State:  RootStateToProto(commit.State),
-	}
-}
-
-func RootCommitInfoFromProto(pb *metapb.RootCommitInfo) rootpkg.CommitInfo {
-	if pb == nil {
-		return rootpkg.CommitInfo{}
-	}
-	return rootpkg.CommitInfo{
-		Cursor: RootCursorFromProto(pb.Cursor),
-		State:  RootStateFromProto(pb.State),
-	}
-}
-
-func RootAllocatorKindToProto(kind rootpkg.AllocatorKind) metapb.AllocatorKind {
-	switch kind {
-	case rootpkg.AllocatorKindID:
-		return metapb.AllocatorKind_ALLOCATOR_KIND_ID
-	case rootpkg.AllocatorKindTSO:
-		return metapb.AllocatorKind_ALLOCATOR_KIND_TSO
-	default:
-		return metapb.AllocatorKind_ALLOCATOR_KIND_UNSPECIFIED
-	}
-}
-
-func RootAllocatorKindFromProto(kind metapb.AllocatorKind) rootpkg.AllocatorKind {
-	switch kind {
-	case metapb.AllocatorKind_ALLOCATOR_KIND_ID:
-		return rootpkg.AllocatorKindID
-	case metapb.AllocatorKind_ALLOCATOR_KIND_TSO:
-		return rootpkg.AllocatorKindTSO
-	default:
-		return rootpkg.AllocatorKindUnknown
-	}
-}
-
 func rootEventKindToProto(kind rootpkg.EventKind) metapb.RootEventKind {
 	switch kind {
 	case rootpkg.EventKindStoreJoined:
