@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"os"
 	"path/filepath"
 	"testing"
@@ -76,24 +74,14 @@ func TestRestorePDRegionsFromLocalSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	store, err := pdstorage.OpenRootLocalStore(dir)
 	require.NoError(t, err)
-	require.NoError(t, store.PublishRegionDescriptor(metacodec.DescriptorFromLocalRegionMeta(localmeta.RegionMeta{
-		ID:       10,
-		StartKey: []byte("a"),
-		EndKey:   []byte("m"),
-		Epoch: metaregion.Epoch{
-			Version:     1,
-			ConfVersion: 1,
-		},
-	}, 0)))
-	require.NoError(t, store.PublishRegionDescriptor(metacodec.DescriptorFromLocalRegionMeta(localmeta.RegionMeta{
-		ID:       20,
-		StartKey: []byte("m"),
-		EndKey:   nil,
-		Epoch: metaregion.Epoch{
-			Version:     1,
-			ConfVersion: 1,
-		},
-	}, 0)))
+	require.NoError(t, store.PublishRegionDescriptor(testDescriptor(10, []byte("a"), []byte("m"), metaregion.Epoch{
+		Version:     1,
+		ConfVersion: 1,
+	})))
+	require.NoError(t, store.PublishRegionDescriptor(testDescriptor(20, []byte("m"), nil, metaregion.Epoch{
+		Version:     1,
+		ConfVersion: 1,
+	})))
 	snapshotState, err := store.Load()
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
@@ -123,18 +111,8 @@ func TestRunPDCmdReloadsPersistedRegionCatalog(t *testing.T) {
 	dir := t.TempDir()
 	store, err := pdstorage.OpenRootLocalStore(dir)
 	require.NoError(t, err)
-	require.NoError(t, store.PublishRegionDescriptor(metacodec.DescriptorFromLocalRegionMeta(localmeta.RegionMeta{
-		ID:       31,
-		StartKey: []byte("a"),
-		EndKey:   []byte("m"),
-		Epoch:    metaregion.Epoch{Version: 2, ConfVersion: 1},
-	}, 0)))
-	require.NoError(t, store.PublishRegionDescriptor(metacodec.DescriptorFromLocalRegionMeta(localmeta.RegionMeta{
-		ID:       32,
-		StartKey: []byte("m"),
-		EndKey:   nil,
-		Epoch:    metaregion.Epoch{Version: 3, ConfVersion: 2},
-	}, 0)))
+	require.NoError(t, store.PublishRegionDescriptor(testDescriptor(31, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1})))
+	require.NoError(t, store.PublishRegionDescriptor(testDescriptor(32, []byte("m"), nil, metaregion.Epoch{Version: 3, ConfVersion: 2})))
 	require.NoError(t, store.Close())
 
 	var buf bytes.Buffer
@@ -310,4 +288,17 @@ func TestRunPDCmdExplicitAddrOverridesConfig(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, runPDCmd(&buf, []string{"-addr", "127.0.0.1:0", "-config", cfgPath}))
 	require.Contains(t, buf.String(), "PD-lite service listening on")
+}
+
+func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descriptor.Descriptor {
+	desc := descriptor.Descriptor{
+		RegionID:  id,
+		StartKey:  append([]byte(nil), start...),
+		EndKey:    append([]byte(nil), end...),
+		Epoch:     epoch,
+		State:     metaregion.ReplicaStateRunning,
+		RootEpoch: 1,
+	}
+	desc.EnsureHash()
+	return desc
 }
