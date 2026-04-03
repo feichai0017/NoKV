@@ -41,7 +41,7 @@ NoKV 现在只有两种正式产品模式。
 ### 2.2 `distributed`
 
 - 启动一个 `pd` 进程
-- 同进程托管一个 `meta/root/local`
+- 同进程托管一个 `meta/root/backend/local`
 - 数据节点通过 `pd` 做：
   - `GetRegionByKey`
   - `StoreHeartbeat`
@@ -69,7 +69,7 @@ flowchart LR
     C["Client / Gateway"] -->|"GetRegionByKey / AllocID / Tso"| PD
     PD --> CORE["pd/core + pd/view"]
     CORE --> PSTORE["pd/storage/root"]
-    PSTORE --> ROOT["meta/root/local"]
+    PSTORE --> ROOT["meta/root/backend/local"]
 ```
 
 ### 3.1 `raftstore/localmeta`
@@ -115,7 +115,7 @@ flowchart LR
 文件：
 
 - `NoKV/meta/root/types.go`
-- `NoKV/meta/root/local/store.go`
+- `NoKV/meta/root/backend/local/store.go`
 
 职责：
 
@@ -268,13 +268,13 @@ store 通过 heartbeat 向 `pd` 汇报：
 
 把 descriptor 变化转换成 rooted event，并写入：
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/local/store.go`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/local/store.go`
 
 ### 5.4 `pd` 从 rooted truth 重建 view
 
 `pd` 重启时：
 
-1. 打开 `meta/root/local`
+1. 打开 `meta/root/backend/local`
 2. 读取 compact snapshot
 3. 读取 retained tail
 4. 重建：
@@ -457,7 +457,7 @@ NoKV 现在更需要：
 当前限制也必须明确：
 
 1. `pd` 是单点
-2. `meta/root/local` 是单点
+2. `meta/root/backend/local` 是单点
 3. 当前没有 metadata quorum
 4. 当前不是生产级 HA control-plane
 

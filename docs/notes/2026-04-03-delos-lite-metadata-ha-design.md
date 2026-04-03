@@ -7,7 +7,7 @@
 NoKV 当前正式控制面模型是：
 
 - `standalone`：无 `pd`、无 `meta/root`
-- `distributed`：单个 `pd` + 同进程 `meta/root/local`
+- `distributed`：单个 `pd` + 同进程 `meta/root/backend/local`
 
 未来如果重新引入 metadata 高可用，目标不是做一个“大 PD + 大 metadata KV”，而是把当前已经做对的最小 rooted truth 边界升级成高可用 rooted truth。
 
@@ -173,7 +173,7 @@ type Machine interface {
 - checkpoint 恢复
 - snapshot + tail replay 边界
 
-这层未来应该吸收当前 `meta/root/local/store.go` 里的：
+这层未来应该吸收当前 `meta/root/backend/local/store.go` 里的：
 
 - compact snapshot encoding
 - bounded tail replay
@@ -455,7 +455,7 @@ sequenceDiagram
 
 ### 8.2 当前代码可复用的经验
 
-当前 `meta/root/local/store.go` 已经提供了几个重要经验：
+当前 `meta/root/backend/local/store.go` 已经提供了几个重要经验：
 
 - compact snapshot
 - bounded tail replay
@@ -506,7 +506,7 @@ sequenceDiagram
 
 ### 10.2 需要重构的部分
 
-#### `meta/root/local/store.go`
+#### `meta/root/backend/local/store.go`
 
 当前它同时承担：
 

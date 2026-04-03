@@ -23,8 +23,6 @@ const (
 // It is intentionally minimal: an append-only event log, a compact protobuf
 // checkpoint, and an in-memory event index for ReadSince.
 type Store struct {
-	fs      vfs.FS
-	workdir string
 	checkpt rootstorage.CheckpointStore
 	log     rootstorage.EventLog
 
@@ -42,7 +40,7 @@ var _ rootpkg.Root = (*Store)(nil)
 func Open(workdir string, fs vfs.FS) (*Store, error) {
 	workdir = strings.TrimSpace(workdir)
 	if workdir == "" {
-		return nil, fmt.Errorf("meta/root/local: workdir is required")
+		return nil, fmt.Errorf("meta/root/backend/local: workdir is required")
 	}
 	fs = vfs.Ensure(fs)
 	if err := fs.MkdirAll(workdir, 0o755); err != nil {
@@ -65,8 +63,6 @@ func Open(workdir string, fs vfs.FS) (*Store, error) {
 		}
 	}
 	return &Store{
-		fs:         fs,
-		workdir:    workdir,
 		checkpt:    checkpt,
 		log:        log,
 		state:      snapshot.State,
@@ -169,7 +165,7 @@ func (s *Store) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, 
 	case rootpkg.AllocatorKindTSO:
 		out = &state.TSOFence
 	default:
-		return 0, fmt.Errorf("meta/root/local: unknown allocator kind %d", kind)
+		return 0, fmt.Errorf("meta/root/backend/local: unknown allocator kind %d", kind)
 	}
 	if *out >= min {
 		return *out, nil

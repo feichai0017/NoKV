@@ -1,18 +1,18 @@
 # NoKV Delos-lite Metadata HA 迁移实施计划
 
-> 状态：实施计划草案。本文档的目标不是再解释 Delos-lite 的理念，而是把未来从当前 `meta/root/local` 形态迁移到 Delos-lite metadata HA 的实施步骤拆开，明确每个阶段的目标、代码切入点、完成标志和风险控制。
+> 状态：实施计划草案。本文档的目标不是再解释 Delos-lite 的理念，而是把未来从当前 `meta/root/backend/local` 形态迁移到 Delos-lite metadata HA 的实施步骤拆开，明确每个阶段的目标、代码切入点、完成标志和风险控制。
 
 ## 1. 当前起点
 
 当前 NoKV 的正式控制面模式是：
 
 - `standalone`：无 `pd`、无 `meta/root`
-- `distributed`：单个 `pd` + 同进程 `meta/root/local`
+- `distributed`：单个 `pd` + 同进程 `meta/root/backend/local`
 
 关键代码路径：
 
 - `meta/root/types.go`
-- `meta/root/local/store.go`
+- `meta/root/backend/local/store.go`
 - `meta/codec/root.go`
 - `pb/meta/root.proto`
 - `pd/storage/root.go`
@@ -205,7 +205,7 @@ flowchart LR
 
 ### 6.1 目标
 
-把当前 `meta/root/local/store.go` 一锅端的实现，拆成 Delos-lite 需要的内部层次：
+把当前 `meta/root/backend/local/store.go` 一锅端的实现，拆成 Delos-lite 需要的内部层次：
 
 - `event`
 - `state`
@@ -216,8 +216,8 @@ flowchart LR
 
 ### 6.2 当前切入点
 
-- `meta/root/local/store.go`
-- `meta/root/local/store_test.go`
+- `meta/root/backend/local/store.go`
+- `meta/root/backend/local/store_test.go`
 - `meta/codec/root.go`
 
 ### 6.3 本阶段要做的事
@@ -230,7 +230,7 @@ flowchart LR
 ### 6.4 完成标志
 
 1. local rooted backend 仍然可用
-2. `meta/root/local/store.go` 不再承担所有 root 逻辑
+2. `meta/root/backend/local/store.go` 不再承担所有 root 逻辑
 3. 可以清楚说出：
    - 这是 local log
    - 这是 rooted state machine
@@ -282,7 +282,7 @@ flowchart LR
 
 现有可复用：
 
-- `meta/root/local/store.go` 中的 checkpoint / compaction 经验
+- `meta/root/backend/local/store.go` 中的 checkpoint / compaction 经验
 - `meta/codec/root.go` 中的 schema codec
 
 ### 7.5 完成标志
@@ -312,7 +312,7 @@ flowchart LR
 当前模式：
 
 - `standalone`
-- `distributed(single pd + meta/root/local)`
+- `distributed(single pd + meta/root/backend/local)`
 
 未来可新增：
 
@@ -370,8 +370,8 @@ flowchart LR
 
 优先看：
 
-- `meta/root/local/store.go`
-- `meta/root/local/store_test.go`
+- `meta/root/backend/local/store.go`
+- `meta/root/backend/local/store_test.go`
 
 ### 阶段 4：replicated log 原型
 
@@ -433,7 +433,7 @@ flowchart LR
 
 1. 让 split/merge/peer-change 变成显式 truth event
 2. 把 `meta/root/types.go` 和 `pb/meta/root.proto` 收成 Delos-lite 所需边界
-3. 把 `meta/root/local/store.go` 拆成 event/state/checkpoint/local log
+3. 把 `meta/root/backend/local/store.go` 拆成 event/state/checkpoint/local log
 4. 再实现第一版 Raft-like ordered log
 5. 最后再加 `distributed-ha` 运行模式
 

@@ -7,7 +7,7 @@
 NoKV 当前已经收敛到一个明确的控制面形态：
 
 - `standalone`：无 `pd`、无 `meta/root`
-- `distributed`：单个 `pd` + 同进程 `meta/root/local`
+- `distributed`：单个 `pd` + 同进程 `meta/root/backend/local`
 
 这条主线是刻意收缩复杂度后的结果。当前最重要的是把：
 
@@ -47,7 +47,7 @@ flowchart LR
     C["Client / Gateway"] -->|"GetRegionByKey / AllocID / Tso"| PD
     PD --> CORE["pd/core + pd/view"]
     CORE --> PSTORE["pd/storage/root"]
-    PSTORE --> ROOT["meta/root/local"]
+    PSTORE --> ROOT["meta/root/backend/local"]
 ```
 
 对应代码：
@@ -55,7 +55,7 @@ flowchart LR
 - `raftstore/localmeta/types.go`
 - `raftstore/descriptor/types.go`
 - `meta/root/types.go`
-- `meta/root/local/store.go`
+- `meta/root/backend/local/store.go`
 - `pd/storage/root.go`
 - `pd/view/region_directory.go`
 - `pd/core/cluster.go`
@@ -94,7 +94,7 @@ flowchart LR
 文件：
 
 - `meta/root/types.go`
-- `meta/root/local/store.go`
+- `meta/root/backend/local/store.go`
 
 职责：
 
@@ -214,7 +214,7 @@ flowchart LR
 NoKV 现在已经有：
 
 - `meta/root/types.go`
-- `meta/root/local/store.go`
+- `meta/root/backend/local/store.go`
 - `pd/storage/root.go`
 - `pd/view/*`
 
@@ -578,7 +578,7 @@ NoKV 当然可以走传统路线：
 NoKV 当前已经收敛到：
 
 - `standalone` 无控制面
-- `distributed` 为单个 `pd + meta/root/local`
+- `distributed` 为单个 `pd + meta/root/backend/local`
 
 这条主线是对的，不应该轻易打破。
 
