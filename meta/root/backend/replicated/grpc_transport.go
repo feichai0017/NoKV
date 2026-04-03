@@ -27,10 +27,6 @@ type rootTransportServer interface {
 	Step(context.Context, *raftpb.Message) (*emptypb.Empty, error)
 }
 
-type rootTransportClient interface {
-	Step(ctx context.Context, in *raftpb.Message, opts ...grpc.CallOption) (*emptypb.Empty, error)
-}
-
 type rootTransportClientImpl struct {
 	cc grpc.ClientConnInterface
 }
@@ -98,7 +94,7 @@ type GRPCTransport struct {
 	addr        string
 	peers       map[uint64]string
 	conns       map[uint64]*grpc.ClientConn
-	clients     map[uint64]rootTransportClient
+	clients     map[uint64]*rootTransportClientImpl
 	handler     MessageHandler
 	server      *grpc.Server
 	ln          net.Listener
@@ -124,7 +120,7 @@ func NewGRPCTransport(localID uint64, listenAddr string) (*GRPCTransport, error)
 		addr:        ln.Addr().String(),
 		peers:       make(map[uint64]string),
 		conns:       make(map[uint64]*grpc.ClientConn),
-		clients:     make(map[uint64]rootTransportClient),
+		clients:     make(map[uint64]*rootTransportClientImpl),
 		server:      grpc.NewServer(),
 		ln:          ln,
 		dialTimeout: time.Second,
@@ -136,8 +132,6 @@ func NewGRPCTransport(localID uint64, listenAddr string) (*GRPCTransport, error)
 	}()
 	return t, nil
 }
-
-func (t *GRPCTransport) LocalID() uint64 { return t.localID }
 
 func (t *GRPCTransport) Addr() string { return t.addr }
 
@@ -201,7 +195,7 @@ func (t *GRPCTransport) Send(msgs ...myraft.Message) error {
 	return nil
 }
 
-func (t *GRPCTransport) clientFor(id uint64) (rootTransportClient, error) {
+func (t *GRPCTransport) clientFor(id uint64) (*rootTransportClientImpl, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -244,7 +238,7 @@ func (t *GRPCTransport) Close() error {
 	server := t.server
 	ln := t.ln
 	t.conns = make(map[uint64]*grpc.ClientConn)
-	t.clients = make(map[uint64]rootTransportClient)
+	t.clients = make(map[uint64]*rootTransportClientImpl)
 	t.mu.Unlock()
 
 	var firstErr error
