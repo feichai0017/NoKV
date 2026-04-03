@@ -10,7 +10,8 @@ import (
 	"path/filepath"
 
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/vfs"
@@ -168,7 +169,7 @@ func readRecord(r io.Reader) (rootstorage.CommittedEvent, bool, error) {
 		return rootstorage.CommittedEvent{}, false, err
 	}
 	return rootstorage.CommittedEvent{
-		Cursor: rootpkg.Cursor{
+		Cursor: rootstate.Cursor{
 			Term:  binary.LittleEndian.Uint64(hdr[0:8]),
 			Index: binary.LittleEndian.Uint64(hdr[8:16]),
 		},
@@ -184,7 +185,7 @@ func cloneRecords(in []rootstorage.CommittedEvent) []rootstorage.CommittedEvent 
 	for _, rec := range in {
 		out = append(out, rootstorage.CommittedEvent{
 			Cursor: rec.Cursor,
-			Event:  rootpkg.CloneEvent(rec.Event),
+			Event:  rootevent.CloneEvent(rec.Event),
 		})
 	}
 	return out

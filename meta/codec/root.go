@@ -1,23 +1,24 @@
 package codec
 
 import (
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
-func RootCursorToProto(cursor rootpkg.Cursor) *metapb.RootCursor {
+func RootCursorToProto(cursor rootstate.Cursor) *metapb.RootCursor {
 	return &metapb.RootCursor{Term: cursor.Term, Index: cursor.Index}
 }
 
-func RootCursorFromProto(pbCursor *metapb.RootCursor) rootpkg.Cursor {
+func RootCursorFromProto(pbCursor *metapb.RootCursor) rootstate.Cursor {
 	if pbCursor == nil {
-		return rootpkg.Cursor{}
+		return rootstate.Cursor{}
 	}
-	return rootpkg.Cursor{Term: pbCursor.Term, Index: pbCursor.Index}
+	return rootstate.Cursor{Term: pbCursor.Term, Index: pbCursor.Index}
 }
 
-func RootStateToProto(state rootpkg.State) *metapb.RootState {
+func RootStateToProto(state rootstate.State) *metapb.RootState {
 	return &metapb.RootState{
 		ClusterEpoch:    state.ClusterEpoch,
 		MembershipEpoch: state.MembershipEpoch,
@@ -28,11 +29,11 @@ func RootStateToProto(state rootpkg.State) *metapb.RootState {
 	}
 }
 
-func RootStateFromProto(pbState *metapb.RootState) rootpkg.State {
+func RootStateFromProto(pbState *metapb.RootState) rootstate.State {
 	if pbState == nil {
-		return rootpkg.State{}
+		return rootstate.State{}
 	}
-	return rootpkg.State{
+	return rootstate.State{
 		ClusterEpoch:    pbState.ClusterEpoch,
 		MembershipEpoch: pbState.MembershipEpoch,
 		PolicyVersion:   pbState.PolicyVersion,
@@ -42,7 +43,7 @@ func RootStateFromProto(pbState *metapb.RootState) rootpkg.State {
 	}
 }
 
-func RootSnapshotToProto(snapshot rootpkg.Snapshot, logOffset uint64) *metapb.RootCheckpoint {
+func RootSnapshotToProto(snapshot rootstate.Snapshot, logOffset uint64) *metapb.RootCheckpoint {
 	descriptors := make([]*metapb.RegionDescriptor, 0, len(snapshot.Descriptors))
 	for _, desc := range snapshot.Descriptors {
 		descriptors = append(descriptors, DescriptorToProto(desc))
@@ -54,11 +55,11 @@ func RootSnapshotToProto(snapshot rootpkg.Snapshot, logOffset uint64) *metapb.Ro
 	}
 }
 
-func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootpkg.Snapshot, uint64) {
+func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snapshot, uint64) {
 	if pbCheckpoint == nil {
-		return rootpkg.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, 0
+		return rootstate.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, 0
 	}
-	snapshot := rootpkg.Snapshot{
+	snapshot := rootstate.Snapshot{
 		State:       RootStateFromProto(pbCheckpoint.State),
 		Descriptors: make(map[uint64]descriptor.Descriptor, len(pbCheckpoint.Descriptors)),
 	}
@@ -72,7 +73,7 @@ func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootpkg.Snapsho
 	return snapshot, pbCheckpoint.LogOffset
 }
 
-func RootEventToProto(event rootpkg.Event) *metapb.RootEvent {
+func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 	pbEvent := &metapb.RootEvent{Kind: rootEventKindToProto(event.Kind)}
 	switch {
 	case event.StoreMembership != nil:
@@ -117,22 +118,22 @@ func RootEventToProto(event rootpkg.Event) *metapb.RootEvent {
 	return pbEvent
 }
 
-func RootEventFromProto(pbEvent *metapb.RootEvent) rootpkg.Event {
+func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 	if pbEvent == nil {
-		return rootpkg.Event{}
+		return rootevent.Event{}
 	}
-	event := rootpkg.Event{Kind: rootEventKindFromProto(pbEvent.Kind)}
+	event := rootevent.Event{Kind: rootEventKindFromProto(pbEvent.Kind)}
 	if body := pbEvent.GetStoreMembership(); body != nil {
-		event.StoreMembership = &rootpkg.StoreMembership{StoreID: body.StoreId, Address: body.Address}
+		event.StoreMembership = &rootevent.StoreMembership{StoreID: body.StoreId, Address: body.Address}
 	}
 	if body := pbEvent.GetRegionDescriptor(); body != nil {
-		event.RegionDescriptor = &rootpkg.RegionDescriptorRecord{Descriptor: DescriptorFromProto(body.GetDescriptor_())}
+		event.RegionDescriptor = &rootevent.RegionDescriptorRecord{Descriptor: DescriptorFromProto(body.GetDescriptor_())}
 	}
 	if body := pbEvent.GetRegionRemoval(); body != nil {
-		event.RegionRemoval = &rootpkg.RegionRemoval{RegionID: body.RegionId}
+		event.RegionRemoval = &rootevent.RegionRemoval{RegionID: body.RegionId}
 	}
 	if body := pbEvent.GetRangeSplit(); body != nil {
-		event.RangeSplit = &rootpkg.RangeSplit{
+		event.RangeSplit = &rootevent.RangeSplit{
 			ParentRegionID: body.ParentRegionId,
 			SplitKey:       append([]byte(nil), body.SplitKey...),
 			Left:           DescriptorFromProto(body.Left),
@@ -140,14 +141,14 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootpkg.Event {
 		}
 	}
 	if body := pbEvent.GetRangeMerge(); body != nil {
-		event.RangeMerge = &rootpkg.RangeMerge{
+		event.RangeMerge = &rootevent.RangeMerge{
 			LeftRegionID:  body.LeftRegionId,
 			RightRegionID: body.RightRegionId,
 			Merged:        DescriptorFromProto(body.Merged),
 		}
 	}
 	if body := pbEvent.GetPeerChange(); body != nil {
-		event.PeerChange = &rootpkg.PeerChange{
+		event.PeerChange = &rootevent.PeerChange{
 			RegionID: body.RegionId,
 			StoreID:  body.StoreId,
 			PeerID:   body.PeerId,
@@ -155,7 +156,7 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootpkg.Event {
 		}
 	}
 	if body := pbEvent.GetLeaderTransfer(); body != nil {
-		event.LeaderTransfer = &rootpkg.LeaderTransfer{
+		event.LeaderTransfer = &rootevent.LeaderTransfer{
 			RegionID:      body.RegionId,
 			FromPeerID:    body.FromPeerId,
 			ToPeerID:      body.ToPeerId,
@@ -163,73 +164,73 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootpkg.Event {
 		}
 	}
 	if body := pbEvent.GetPlacementPolicy(); body != nil {
-		event.PlacementPolicy = &rootpkg.PlacementPolicy{Version: body.Version, Name: body.Name}
+		event.PlacementPolicy = &rootevent.PlacementPolicy{Version: body.Version, Name: body.Name}
 	}
 	return event
 }
 
-func rootEventKindToProto(kind rootpkg.EventKind) metapb.RootEventKind {
+func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 	switch kind {
-	case rootpkg.EventKindStoreJoined:
+	case rootevent.KindStoreJoined:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_STORE_JOINED
-	case rootpkg.EventKindStoreLeft:
+	case rootevent.KindStoreLeft:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_STORE_LEFT
-	case rootpkg.EventKindStoreMarkedDraining:
+	case rootevent.KindStoreMarkedDraining:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_STORE_MARKED_DRAINING
-	case rootpkg.EventKindRegionBootstrap:
+	case rootevent.KindRegionBootstrap:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_BOOTSTRAP
-	case rootpkg.EventKindRegionDescriptorPublished:
+	case rootevent.KindRegionDescriptorPublished:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_DESCRIPTOR_PUBLISHED
-	case rootpkg.EventKindRegionTombstoned:
+	case rootevent.KindRegionTombstoned:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_TOMBSTONED
-	case rootpkg.EventKindRegionSplitRequested:
+	case rootevent.KindRegionSplitRequested:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_REQUESTED
-	case rootpkg.EventKindRegionSplitCommitted:
+	case rootevent.KindRegionSplitCommitted:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED
-	case rootpkg.EventKindRegionMerged:
+	case rootevent.KindRegionMerged:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGED
-	case rootpkg.EventKindPeerAdded:
+	case rootevent.KindPeerAdded:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_ADDED
-	case rootpkg.EventKindPeerRemoved:
+	case rootevent.KindPeerRemoved:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVED
-	case rootpkg.EventKindLeaderTransferIntent:
+	case rootevent.KindLeaderTransferIntent:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_LEADER_TRANSFER_INTENT
-	case rootpkg.EventKindPlacementPolicyChanged:
+	case rootevent.KindPlacementPolicyChanged:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_PLACEMENT_POLICY_CHANGED
 	default:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_UNSPECIFIED
 	}
 }
 
-func rootEventKindFromProto(kind metapb.RootEventKind) rootpkg.EventKind {
+func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 	switch kind {
 	case metapb.RootEventKind_ROOT_EVENT_KIND_STORE_JOINED:
-		return rootpkg.EventKindStoreJoined
+		return rootevent.KindStoreJoined
 	case metapb.RootEventKind_ROOT_EVENT_KIND_STORE_LEFT:
-		return rootpkg.EventKindStoreLeft
+		return rootevent.KindStoreLeft
 	case metapb.RootEventKind_ROOT_EVENT_KIND_STORE_MARKED_DRAINING:
-		return rootpkg.EventKindStoreMarkedDraining
+		return rootevent.KindStoreMarkedDraining
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_BOOTSTRAP:
-		return rootpkg.EventKindRegionBootstrap
+		return rootevent.KindRegionBootstrap
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_DESCRIPTOR_PUBLISHED:
-		return rootpkg.EventKindRegionDescriptorPublished
+		return rootevent.KindRegionDescriptorPublished
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_TOMBSTONED:
-		return rootpkg.EventKindRegionTombstoned
+		return rootevent.KindRegionTombstoned
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_REQUESTED:
-		return rootpkg.EventKindRegionSplitRequested
+		return rootevent.KindRegionSplitRequested
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED:
-		return rootpkg.EventKindRegionSplitCommitted
+		return rootevent.KindRegionSplitCommitted
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGED:
-		return rootpkg.EventKindRegionMerged
+		return rootevent.KindRegionMerged
 	case metapb.RootEventKind_ROOT_EVENT_KIND_PEER_ADDED:
-		return rootpkg.EventKindPeerAdded
+		return rootevent.KindPeerAdded
 	case metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVED:
-		return rootpkg.EventKindPeerRemoved
+		return rootevent.KindPeerRemoved
 	case metapb.RootEventKind_ROOT_EVENT_KIND_LEADER_TRANSFER_INTENT:
-		return rootpkg.EventKindLeaderTransferIntent
+		return rootevent.KindLeaderTransferIntent
 	case metapb.RootEventKind_ROOT_EVENT_KIND_PLACEMENT_POLICY_CHANGED:
-		return rootpkg.EventKindPlacementPolicyChanged
+		return rootevent.KindPlacementPolicyChanged
 	default:
-		return rootpkg.EventKindUnknown
+		return rootevent.KindUnknown
 	}
 }

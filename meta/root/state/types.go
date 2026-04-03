@@ -34,11 +34,11 @@ type CommitInfo struct {
 }
 
 func CloneSnapshot(snapshot Snapshot) Snapshot {
-	out := Snapshot{State: snapshot.State, Descriptors: cloneDescriptors(snapshot.Descriptors)}
+	out := Snapshot{State: snapshot.State, Descriptors: CloneDescriptors(snapshot.Descriptors)}
 	return out
 }
 
-func cloneDescriptors(in map[uint64]descriptor.Descriptor) map[uint64]descriptor.Descriptor {
+func CloneDescriptors(in map[uint64]descriptor.Descriptor) map[uint64]descriptor.Descriptor {
 	if len(in) == 0 {
 		return make(map[uint64]descriptor.Descriptor)
 	}
