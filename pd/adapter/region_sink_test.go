@@ -88,7 +88,7 @@ func TestSchedulerClientPublishRootEvent(t *testing.T) {
 		Version:     1,
 		ConfVersion: 2,
 	}, []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}}))
-	sink.PublishRootEvent(context.Background(), event)
+	require.NoError(t, sink.PublishRootEvent(context.Background(), event))
 
 	require.Len(t, pd.rootEventReq, 1)
 	require.Equal(t, uint64(1), pd.rootEventReq[0].GetExpectedClusterEpoch())
@@ -161,7 +161,7 @@ func TestSchedulerClientErrorCallbackAndClose(t *testing.T) {
 	})
 
 	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 7})
-	sink.PublishRootEvent(context.Background(), rootevent.RegionDescriptorPublished(testDescriptor(9, nil, nil, metaregion.Epoch{}, nil)))
+	require.Error(t, sink.PublishRootEvent(context.Background(), rootevent.RegionDescriptorPublished(testDescriptor(9, nil, nil, metaregion.Epoch{}, nil))))
 	require.Len(t, got, 2)
 	require.Contains(t, got[0], "StoreHeartbeat")
 	require.Contains(t, got[1], "PublishRootEvent")
@@ -179,7 +179,7 @@ func TestSchedulerClientNoopOnZeroIDs(t *testing.T) {
 	sink := NewSchedulerClient(SchedulerClientConfig{PD: pd})
 	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 0})
 	sink.PublishRegionDescriptor(context.Background(), descriptor.Descriptor{})
-	sink.PublishRootEvent(context.Background(), rootevent.Event{})
+	require.NoError(t, sink.PublishRootEvent(context.Background(), rootevent.Event{}))
 	require.Empty(t, pd.storeReqs)
 	require.Empty(t, pd.regionReqs)
 	require.Empty(t, pd.rootEventReq)
@@ -202,7 +202,7 @@ func TestSchedulerClientRejectsConflictingRootEpochsInOneEvent(t *testing.T) {
 	left.EnsureHash()
 	right.EnsureHash()
 
-	sink.PublishRootEvent(context.Background(), rootevent.RegionSplitCommitted(41, []byte("m"), left, right))
+	require.Error(t, sink.PublishRootEvent(context.Background(), rootevent.RegionSplitCommitted(41, []byte("m"), left, right)))
 	require.Empty(t, pd.rootEventReq)
 	require.Len(t, got, 1)
 	require.Contains(t, got[0], "conflicting root epochs")

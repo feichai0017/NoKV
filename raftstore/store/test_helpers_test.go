@@ -73,9 +73,9 @@ func (s *testSchedulerSink) PublishRegionDescriptor(_ context.Context, desc desc
 	s.mu.Unlock()
 }
 
-func (s *testSchedulerSink) PublishRootEvent(_ context.Context, event rootevent.Event) {
+func (s *testSchedulerSink) PublishRootEvent(_ context.Context, event rootevent.Event) error {
 	if s == nil || event.Kind == rootevent.KindUnknown {
-		return
+		return nil
 	}
 	s.mu.Lock()
 	descriptors := make(map[uint64]descriptor.Descriptor, len(s.regions))
@@ -93,6 +93,7 @@ func (s *testSchedulerSink) PublishRootEvent(_ context.Context, event rootevent.
 	}
 	s.history = append(s.history, schedulerEvent{kind: "root", regionID: rootEventRegionID(event)})
 	s.mu.Unlock()
+	return nil
 }
 
 func (s *testSchedulerSink) StoreHeartbeat(_ context.Context, stats StoreStats) []Operation {
@@ -190,15 +191,15 @@ func (s *slowSchedulerSink) PublishRegionDescriptor(ctx context.Context, desc de
 	s.testSchedulerSink.PublishRegionDescriptor(ctx, desc)
 }
 
-func (s *slowSchedulerSink) PublishRootEvent(ctx context.Context, event rootevent.Event) {
+func (s *slowSchedulerSink) PublishRootEvent(ctx context.Context, event rootevent.Event) error {
 	if s.publishDelay > 0 {
 		select {
 		case <-time.After(s.publishDelay):
 		case <-ctx.Done():
-			return
+			return nil
 		}
 	}
-	s.testSchedulerSink.PublishRootEvent(ctx, event)
+	return s.testSchedulerSink.PublishRootEvent(ctx, event)
 }
 
 func rootEventRegionID(event rootevent.Event) uint64 {

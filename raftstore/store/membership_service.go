@@ -3,8 +3,8 @@ package store
 import (
 	"encoding/binary"
 	"fmt"
-	metaregion "github.com/feichai0017/NoKV/meta/region"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -96,7 +96,10 @@ func (s *Store) ProposeAddPeer(regionID uint64, meta metaregion.Peer) error {
 		},
 		Context: encodeConfChangeContext([]metaregion.Peer{meta}),
 	}
-	return peerRef.ProposeConfChange(cc)
+	if err := peerRef.ProposeConfChange(cc); err != nil {
+		return err
+	}
+	return s.publishPeerChangeTarget(regionID, cc)
 }
 
 // ProposeRemovePeer issues a configuration change removing the peer with the
@@ -130,7 +133,10 @@ func (s *Store) ProposeRemovePeer(regionID, peerID uint64) error {
 		},
 		Context: encodeConfChangeContext([]metaregion.Peer{ctxMeta}),
 	}
-	return peerRef.ProposeConfChange(cc)
+	if err := peerRef.ProposeConfChange(cc); err != nil {
+		return err
+	}
+	return s.publishPeerChangeTarget(regionID, cc)
 }
 
 // TransferLeader initiates leadership transfer for the specified region to the
@@ -231,4 +237,43 @@ func peerIndexByID(peers []metaregion.Peer, peerID uint64) int {
 		}
 	}
 	return -1
+}
+
+func (s *Store) publishPeerChangeTarget(regionID uint64, cc raftpb.ConfChangeV2) error {
+	if s == nil || s.schedulerClient() == nil || regionID == 0 || len(cc.Changes) != 1 {
+		return nil
+	}
+	meta, ok := s.RegionMetaByID(regionID)
+	if !ok {
+		return nil
+	}
+	next := localmeta.CloneRegionMeta(meta)
+	changed, err := applyConfChangeToMeta(&next, cc)
+	if err != nil || !changed {
+		return err
+	}
+	next.Epoch.ConfVersion += uint64(len(cc.Changes))
+	desc := metacodec.DescriptorFromLocalRegionMeta(next, 0)
+	change := cc.Changes[0]
+	var event rootevent.Event
+	switch change.Type {
+	case raftpb.ConfChangeAddNode, raftpb.ConfChangeAddLearnerNode:
+		event = rootevent.PeerAdded(next.ID, change.NodeID, change.NodeID, desc)
+	case raftpb.ConfChangeRemoveNode:
+		event = rootevent.PeerRemoved(next.ID, change.NodeID, change.NodeID, desc)
+	default:
+		return nil
+	}
+	if peers, err := decodeConfChangeContext(cc.Context); err == nil && len(peers) > 0 {
+		switch change.Type {
+		case raftpb.ConfChangeAddNode, raftpb.ConfChangeAddLearnerNode:
+			event = rootevent.PeerAdded(next.ID, peers[0].StoreID, peers[0].PeerID, desc)
+		case raftpb.ConfChangeRemoveNode:
+			event = rootevent.PeerRemoved(next.ID, peers[0].StoreID, peers[0].PeerID, desc)
+		}
+	}
+	if err := s.schedulerClient().PublishRootEvent(s.runtimeContext(), event); err != nil {
+		return fmt.Errorf("raftstore: publish peer change target: %w", err)
+	}
+	return nil
 }

@@ -76,7 +76,7 @@ type SchedulerClient interface {
 	// state topology truth should use PublishRootEvent with explicit rooted
 	// events instead.
 	PublishRegionDescriptor(context.Context, descriptor.Descriptor)
-	PublishRootEvent(context.Context, rootevent.Event)
+	PublishRootEvent(context.Context, rootevent.Event) error
 	StoreHeartbeat(context.Context, StoreStats) []Operation
 	Status() SchedulerStatus
 	Close() error
