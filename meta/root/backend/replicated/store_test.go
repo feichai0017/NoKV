@@ -185,6 +185,7 @@ func TestFixedClusterRejectsFollowerAppend(t *testing.T) {
 func TestFixedClusterFollowerRefreshCatchesUp(t *testing.T) {
 	stores, cluster, err := OpenFixedCluster(4, 1, 2, 3)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cluster.Close()) })
 	require.Equal(t, uint64(1), cluster.LeaderID())
 
 	leader := stores[1]
@@ -212,6 +213,45 @@ func TestFixedClusterFollowerRefreshCatchesUp(t *testing.T) {
 	require.Equal(t, rootevent.KindStoreJoined, events[0].Kind)
 	require.Equal(t, uint64(40), events[1].RegionDescriptor.Descriptor.RegionID)
 	require.Equal(t, commit.Cursor, tail)
+}
+
+func TestFixedClusterWithGRPCTransportReplicatesLeaderAppend(t *testing.T) {
+	transports := map[uint64]Transport{}
+	for _, id := range []uint64{1, 2, 3} {
+		transport, err := NewGRPCTransport(id, "127.0.0.1:0")
+		require.NoError(t, err)
+		transports[id] = transport
+	}
+	for _, transport := range transports {
+		t.Cleanup(func() { _ = transport.Close() })
+	}
+
+	cluster, err := NewFixedClusterWithTransports(transports, 1, 2, 3)
+	require.NoError(t, err)
+
+	stores := make(map[uint64]*Store, 3)
+	for _, id := range []uint64{1, 2, 3} {
+		driver, err := cluster.Driver(id)
+		require.NoError(t, err)
+		store, err := Open(driver.Config(4))
+		require.NoError(t, err)
+		stores[id] = store
+	}
+
+	commit, err := stores[1].Append(
+		rootevent.StoreJoined(1, "s1"),
+		rootevent.RegionDescriptorPublished(testDescriptor(50, []byte("a"), []byte("z"))),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, stores[2].Refresh())
+	require.NoError(t, stores[3].Refresh())
+
+	for _, id := range []uint64{1, 2, 3} {
+		current, err := stores[id].Current()
+		require.NoError(t, err)
+		require.Equal(t, commit.State, current)
+	}
 }
 
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
