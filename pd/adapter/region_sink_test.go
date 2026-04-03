@@ -91,10 +91,12 @@ func TestSchedulerClientPublishRootEvent(t *testing.T) {
 	sink.PublishRootEvent(context.Background(), event)
 
 	require.Len(t, pd.rootEventReq, 1)
+	require.Equal(t, uint64(1), pd.rootEventReq[0].GetExpectedClusterEpoch())
 	got := metacodec.RootEventFromProto(pd.rootEventReq[0].GetEvent())
 	require.Equal(t, rootevent.KindPeerAdded, got.Kind)
 	require.NotNil(t, got.PeerChange)
 	require.Equal(t, uint64(10), got.PeerChange.RegionID)
+	require.Equal(t, uint64(0), got.PeerChange.Region.RootEpoch)
 	require.False(t, sink.Status().Degraded)
 }
 
@@ -130,6 +132,8 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 
 	require.Len(t, pd.regionReqs, 1)
 	require.Equal(t, uint64(10), pd.regionReqs[0].GetRegionDescriptor().GetRegionId())
+	require.Equal(t, uint64(1), pd.regionReqs[0].GetExpectedClusterEpoch())
+	require.Equal(t, uint64(0), pd.regionReqs[0].GetRegionDescriptor().GetRootEpoch())
 	require.Len(t, pd.storeReqs, 1)
 	require.Equal(t, uint64(1), pd.storeReqs[0].GetStoreId())
 
@@ -179,6 +183,30 @@ func TestSchedulerClientNoopOnZeroIDs(t *testing.T) {
 	require.Empty(t, pd.storeReqs)
 	require.Empty(t, pd.regionReqs)
 	require.Empty(t, pd.rootEventReq)
+}
+
+func TestSchedulerClientRejectsConflictingRootEpochsInOneEvent(t *testing.T) {
+	pd := &fakePDClient{}
+	var got []string
+	sink := NewSchedulerClient(SchedulerClientConfig{
+		PD: pd,
+		OnError: func(op string, err error) {
+			got = append(got, op+": "+err.Error())
+		},
+	})
+
+	left := testDescriptor(41, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)
+	right := testDescriptor(42, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
+	left.RootEpoch = 7
+	right.RootEpoch = 8
+	left.EnsureHash()
+	right.EnsureHash()
+
+	sink.PublishRootEvent(context.Background(), rootevent.RegionSplitCommitted(41, []byte("m"), left, right))
+	require.Empty(t, pd.rootEventReq)
+	require.Len(t, got, 1)
+	require.Contains(t, got[0], "conflicting root epochs")
+	require.True(t, sink.Status().Degraded)
 }
 
 func TestSchedulerClientStatusRecoversAfterSuccess(t *testing.T) {

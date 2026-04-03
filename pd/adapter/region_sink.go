@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"fmt"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
@@ -60,9 +61,15 @@ func (s *SchedulerClient) PublishRegionDescriptor(ctx context.Context, desc desc
 	if s == nil || desc.RegionID == 0 || s.pd == nil {
 		return
 	}
+	expected := desc.RootEpoch
+	desc = desc.Clone()
+	desc.RootEpoch = 0
 	ctx, cancel := contextWithTimeout(ctx, s.timeout)
 	defer cancel()
-	_, err := s.pd.RegionHeartbeat(ctx, &pdpb.RegionHeartbeatRequest{RegionDescriptor: metacodec.DescriptorToProto(desc)})
+	_, err := s.pd.RegionHeartbeat(ctx, &pdpb.RegionHeartbeatRequest{
+		RegionDescriptor:     metacodec.DescriptorToProto(desc),
+		ExpectedClusterEpoch: expected,
+	})
 	if err != nil {
 		s.recordError("RegionHeartbeat", err)
 		return
@@ -75,9 +82,17 @@ func (s *SchedulerClient) PublishRootEvent(ctx context.Context, event rootevent.
 	if s == nil || event.Kind == rootevent.KindUnknown || s.pd == nil {
 		return
 	}
+	expected, normalized, err := prepareRootEventRequest(event)
+	if err != nil {
+		s.recordError("PublishRootEvent", err)
+		return
+	}
 	ctx, cancel := contextWithTimeout(ctx, s.timeout)
 	defer cancel()
-	_, err := s.pd.PublishRootEvent(ctx, &pdpb.PublishRootEventRequest{Event: metacodec.RootEventToProto(event)})
+	_, err = s.pd.PublishRootEvent(ctx, &pdpb.PublishRootEventRequest{
+		Event:                metacodec.RootEventToProto(normalized),
+		ExpectedClusterEpoch: expected,
+	})
 	if err != nil {
 		s.recordError("PublishRootEvent", err)
 		return
@@ -195,4 +210,54 @@ func contextWithTimeout(parent context.Context, timeout time.Duration) (context.
 		return context.WithTimeout(parent, timeout)
 	}
 	return context.WithCancel(parent)
+}
+
+func prepareRootEventRequest(event rootevent.Event) (uint64, rootevent.Event, error) {
+	out := rootevent.CloneEvent(event)
+	var expected uint64
+	collect := func(epoch uint64) error {
+		if epoch == 0 {
+			return nil
+		}
+		if expected == 0 {
+			expected = epoch
+			return nil
+		}
+		if expected != epoch {
+			return fmt.Errorf("pd adapter: conflicting root epochs in one root event (%d vs %d)", expected, epoch)
+		}
+		return nil
+	}
+	zero := func(desc descriptor.Descriptor) descriptor.Descriptor {
+		desc = desc.Clone()
+		desc.RootEpoch = 0
+		return desc
+	}
+	switch {
+	case out.RegionDescriptor != nil:
+		if err := collect(out.RegionDescriptor.Descriptor.RootEpoch); err != nil {
+			return 0, rootevent.Event{}, err
+		}
+		out.RegionDescriptor.Descriptor = zero(out.RegionDescriptor.Descriptor)
+	case out.RangeSplit != nil:
+		if err := collect(out.RangeSplit.Left.RootEpoch); err != nil {
+			return 0, rootevent.Event{}, err
+		}
+		if err := collect(out.RangeSplit.Right.RootEpoch); err != nil {
+			return 0, rootevent.Event{}, err
+		}
+		out.RangeSplit.Left = zero(out.RangeSplit.Left)
+		out.RangeSplit.Right = zero(out.RangeSplit.Right)
+	case out.RangeMerge != nil:
+		if err := collect(out.RangeMerge.Merged.RootEpoch); err != nil {
+			return 0, rootevent.Event{}, err
+		}
+		out.RangeMerge.Merged = zero(out.RangeMerge.Merged)
+	case out.PeerChange != nil:
+		if err := collect(out.PeerChange.Region.RootEpoch); err != nil {
+			return 0, rootevent.Event{}, err
+		}
+		out.PeerChange.Region = zero(out.PeerChange.Region)
+	}
+	return expected, out, nil
 }
