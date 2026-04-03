@@ -5,6 +5,7 @@ import (
 	"errors"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"testing"
@@ -20,9 +21,11 @@ import (
 
 type fakeStorage struct {
 	updateCalls int
+	eventCalls  int
 	deleteCalls int
 	saveCalls   int
 	updateErr   error
+	eventErr    error
 	deleteErr   error
 	saveErr     error
 	lastID      uint64
@@ -36,6 +39,17 @@ func (f *fakeStorage) PublishRegionDescriptor(desc descriptor.Descriptor) error 
 	}
 	if desc.RegionID == 0 {
 		return errors.New("invalid region id")
+	}
+	return nil
+}
+
+func (f *fakeStorage) AppendRootEvent(event rootpkg.Event) error {
+	f.eventCalls++
+	if f.eventErr != nil {
+		return f.eventErr
+	}
+	if event.Kind == rootpkg.EventKindUnknown {
+		return errors.New("invalid root event")
 	}
 	return nil
 }
@@ -216,6 +230,58 @@ func TestServicePersistsRegionCatalog(t *testing.T) {
 	_, err = svc.RemoveRegion(context.Background(), &pdpb.RemoveRegionRequest{RegionId: 42})
 	require.NoError(t, err)
 	require.Equal(t, 1, store.deleteCalls)
+}
+
+func TestServicePublishRootEvent(t *testing.T) {
+	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	store := &fakeStorage{}
+	svc.SetStorage(store)
+
+	event := rootpkg.RegionSplitCommitted(
+		41,
+		[]byte("m"),
+		testDescriptor(41, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil),
+		testDescriptor(42, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil),
+	)
+	resp, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event: metacodec.RootEventToProto(event),
+	})
+	require.NoError(t, err)
+	require.True(t, resp.GetAccepted())
+	require.Equal(t, 1, store.eventCalls)
+
+	left, ok := svc.cluster.GetRegionDescriptorByKey([]byte("b"))
+	require.True(t, ok)
+	require.Equal(t, uint64(41), left.RegionID)
+
+	right, ok := svc.cluster.GetRegionDescriptorByKey([]byte("x"))
+	require.True(t, ok)
+	require.Equal(t, uint64(42), right.RegionID)
+}
+
+func TestServicePublishRootEventValidationAndPersistenceError(t *testing.T) {
+	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+
+	_, err := svc.PublishRootEvent(context.Background(), nil)
+	require.Error(t, err)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+
+	_, err = svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{})
+	require.Error(t, err)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+
+	store := &fakeStorage{eventErr: errors.New("persist root event failed")}
+	svc.SetStorage(store)
+	event := rootpkg.RegionMerged(
+		10,
+		11,
+		testDescriptor(10, []byte("a"), []byte("z"), metaregion.Epoch{Version: 3, ConfVersion: 1}, nil),
+	)
+	_, err = svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event: metacodec.RootEventToProto(event),
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.Internal, status.Code(err))
 }
 
 func TestServiceRegionCatalogPersistenceErrors(t *testing.T) {

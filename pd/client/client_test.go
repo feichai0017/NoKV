@@ -2,13 +2,14 @@ package client
 
 import (
 	"context"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"net"
 	"testing"
 	"time"
 
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -68,6 +69,19 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 			Version:     1,
 			ConfVersion: 1,
 		})),
+	})
+	require.NoError(t, err)
+
+	_, err = cli.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event: metacodec.RootEventToProto(rootpkg.PeerAdded(
+			11,
+			2,
+			201,
+			testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{
+				Version:     1,
+				ConfVersion: 2,
+			}),
+		)),
 	})
 	require.NoError(t, err)
 

@@ -212,8 +212,7 @@ func TestStoreProposeSplitApplies(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return hasSchedulerEventSubsequence(sink.EventHistory(),
-			schedulerEvent{kind: "publish", regionID: parentMeta.ID},
-			schedulerEvent{kind: "publish", regionID: childMeta.ID},
+			schedulerEvent{kind: "root", regionID: parentMeta.ID},
 		)
 	}, time.Second, 10*time.Millisecond)
 }
@@ -286,8 +285,7 @@ func TestStoreProposeMergeApplies(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return hasSchedulerEventSubsequence(sink.EventHistory(),
-			schedulerEvent{kind: "publish", regionID: parentMeta.ID},
-			schedulerEvent{kind: "remove", regionID: sourceMeta.ID},
+			schedulerEvent{kind: "root", regionID: parentMeta.ID},
 		)
 	}, time.Second, 10*time.Millisecond)
 }
