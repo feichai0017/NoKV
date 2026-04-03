@@ -148,6 +148,32 @@ func TestStoreLoadsLegacyRootStateCheckpoint(t *testing.T) {
 	require.Equal(t, uint64(22), state.TSOFence)
 }
 
+func TestStoreCompactsPhysicalLogAndKeepsRecentTail(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, nil)
+	require.NoError(t, err)
+
+	total := maxRetainedRecords + 8
+	for i := 0; i < total; i++ {
+		_, err := store.Append(rootpkg.RegionDescriptorPublished(testDescriptor(uint64(100+i), []byte{byte('a' + i%26)}, []byte{byte('b' + i%26)})))
+		require.NoError(t, err)
+	}
+
+	reopened, err := Open(dir, nil)
+	require.NoError(t, err)
+
+	tailCursor := rootpkg.Cursor{Term: 1, Index: uint64(total - maxRetainedRecords)}
+	events, tail, err := reopened.ReadSince(tailCursor)
+	require.NoError(t, err)
+	require.Len(t, events, maxRetainedRecords)
+	require.Equal(t, rootpkg.Cursor{Term: 1, Index: uint64(total)}, tail)
+
+	events, tail, err = reopened.ReadSince(rootpkg.Cursor{})
+	require.NoError(t, err)
+	require.Len(t, events, total)
+	require.Equal(t, rootpkg.Cursor{Term: 1, Index: uint64(total)}, tail)
+}
+
 func testDescriptor(regionID uint64, start, end []byte) descriptor.Descriptor {
 	desc := descriptor.Descriptor{
 		RegionID:  regionID,

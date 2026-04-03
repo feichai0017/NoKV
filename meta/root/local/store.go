@@ -24,6 +24,7 @@ const (
 	CheckpointFileName = "metadata-root-checkpoint.pb"
 	LogFileName        = "metadata-root.log"
 	recordHeaderSize   = 24
+	maxRetainedRecords = 64
 )
 
 type record struct {
@@ -80,7 +81,7 @@ func Open(workdir string, fs vfs.FS) (*Store, error) {
 		descs:      snapshot.Descriptors,
 		records:    records,
 		logBase:    logBase,
-		retainFrom: snapshot.State.LastCommitted,
+		retainFrom: retainedFloor(records, snapshot.State.LastCommitted),
 	}, nil
 }
 
@@ -173,6 +174,8 @@ func (s *Store) Append(events ...rootpkg.Event) (rootpkg.CommitInfo, error) {
 	s.descs = descs
 	s.records = append(s.records, records...)
 	s.logBase = logEnd
+	s.retainFrom = retainedFloor(s.records, state.LastCommitted)
+	s.maybeCompactLocked()
 	return rootpkg.CommitInfo{Cursor: state.LastCommitted, State: cloneState(state)}, nil
 }
 
@@ -206,6 +209,7 @@ func (s *Store) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, 
 	}
 	s.state = state
 	s.logBase = logEnd
+	s.maybeCompactLocked()
 	return *out, nil
 }
 
@@ -286,6 +290,35 @@ func persistCheckpoint(fs vfs.FS, workdir string, snapshot rootpkg.Snapshot, log
 		_ = f.Close()
 		_ = fs.Remove(tmp)
 		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = fs.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = fs.Remove(tmp)
+		return err
+	}
+	if err := fs.Rename(tmp, path); err != nil {
+		return err
+	}
+	return vfs.SyncDir(fs, workdir)
+}
+
+func rewriteLog(fs vfs.FS, workdir string, records []record) error {
+	path := filepath.Join(workdir, LogFileName)
+	tmp := path + ".tmp"
+	f, err := fs.OpenFileHandle(tmp, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	for _, rec := range records {
+		if err := writeRecord(f, rec.cursor, rec.event); err != nil {
+			_ = f.Close()
+			_ = fs.Remove(tmp)
+			return err
+		}
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
@@ -413,6 +446,20 @@ func cloneDescriptors(in map[uint64]descriptor.Descriptor) map[uint64]descriptor
 	return out
 }
 
+func cloneRecords(in []record) []record {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]record, 0, len(in))
+	for _, rec := range in {
+		out = append(out, record{
+			cursor: rec.cursor,
+			event:  cloneEvent(rec.event),
+		})
+	}
+	return out
+}
+
 func currentLogSize(fs vfs.FS, workdir string) (int64, error) {
 	info, err := fs.Stat(filepath.Join(workdir, LogFileName))
 	if err != nil {
@@ -437,6 +484,20 @@ func after(a, b rootpkg.Cursor) bool {
 		return a.Term > b.Term
 	}
 	return a.Index > b.Index
+}
+
+func previousCursor(in rootpkg.Cursor) rootpkg.Cursor {
+	if in.Index <= 1 {
+		return rootpkg.Cursor{}
+	}
+	return rootpkg.Cursor{Term: in.Term, Index: in.Index - 1}
+}
+
+func retainedFloor(records []record, fallback rootpkg.Cursor) rootpkg.Cursor {
+	if len(records) == 0 {
+		return fallback
+	}
+	return previousCursor(records[0].cursor)
 }
 
 func cloneState(in rootpkg.State) rootpkg.State { return in }
@@ -495,4 +556,25 @@ func writeAll(w io.Writer, data []byte) error {
 		data = data[n:]
 	}
 	return nil
+}
+
+func (s *Store) maybeCompactLocked() {
+	if s == nil || len(s.records) <= maxRetainedRecords {
+		return
+	}
+	start := len(s.records) - maxRetainedRecords
+	retained := cloneRecords(s.records[start:])
+	snapshot := rootpkg.Snapshot{
+		State:       cloneState(s.state),
+		Descriptors: cloneDescriptors(s.descs),
+	}
+	if err := rewriteLog(s.fs, s.workdir, retained); err != nil {
+		return
+	}
+	if err := persistCheckpoint(s.fs, s.workdir, snapshot, 0); err != nil {
+		return
+	}
+	s.records = retained
+	s.logBase = 0
+	s.retainFrom = retainedFloor(retained, s.state.LastCommitted)
 }
