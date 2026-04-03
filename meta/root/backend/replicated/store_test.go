@@ -36,14 +36,6 @@ func TestReplicatedStoreAppendAndReopen(t *testing.T) {
 func TestReplicatedStoreRequiresLogAndCheckpoint(t *testing.T) {
 	_, err := Open(Config{})
 	require.Error(t, err)
-
-	_, drivers, _ := openNetworkTestCluster(t, 4)
-	driver := drivers[1]
-
-	_, err = Open(Config{Log: driver.Log()})
-	require.Error(t, err)
-	_, err = Open(Config{Checkpoint: driver.CheckpointStore()})
-	require.Error(t, err)
 }
 
 func TestReplicatedStoreInstallBootstrapReplacesState(t *testing.T) {

@@ -20,25 +20,17 @@ const defaultRetainedRecords = 64
 // the injected log implementation, not by this package.
 type Config struct {
 	Driver             Driver
-	Log                rootstorage.EventLog
-	Checkpoint         rootstorage.CheckpointStore
-	Installer          rootstorage.BootstrapInstaller
 	MaxRetainedRecords int
-}
-
-type changeWaiter interface {
-	WaitForChange(after rootstate.Cursor, timeout time.Duration) (rootstate.Cursor, error)
 }
 
 // Store hosts the rooted state machine on top of an injected committed log and
 // checkpoint store. It is the future Delos-lite landing point for a replicated
 // metadata backend, without baking protocol concerns into the root domain.
 type Store struct {
+	driver  Driver
 	log     rootstorage.EventLog
 	checkpt rootstorage.CheckpointStore
 	install rootstorage.BootstrapInstaller
-	leader  LeaderAware
-	waiter  changeWaiter
 
 	mu                 sync.RWMutex
 	state              rootstate.State
@@ -52,37 +44,24 @@ type Store struct {
 var _ rootpkg.Backend = (*Store)(nil)
 
 func Open(cfg Config) (*Store, error) {
-	if cfg.Driver != nil {
-		derived := ConfigFromDriver(cfg.Driver, cfg.MaxRetainedRecords)
-		if cfg.Log == nil {
-			cfg.Log = derived.Log
-		}
-		if cfg.Checkpoint == nil {
-			cfg.Checkpoint = derived.Checkpoint
-		}
-		if cfg.Installer == nil {
-			cfg.Installer = derived.Installer
-		}
-	}
-	if cfg.Log == nil {
-		return nil, fmt.Errorf("meta/root/backend/replicated: log is required")
-	}
-	if cfg.Checkpoint == nil {
-		return nil, fmt.Errorf("meta/root/backend/replicated: checkpoint store is required")
+	if cfg.Driver == nil {
+		return nil, fmt.Errorf("meta/root/backend/replicated: driver is required")
 	}
 	if cfg.MaxRetainedRecords <= 0 {
 		cfg.MaxRetainedRecords = defaultRetainedRecords
 	}
-	bootstrap, err := rootmaterialize.LoadBootstrap(cfg.Checkpoint, cfg.Log)
+	log := cfg.Driver.Log()
+	checkpt := cfg.Driver.CheckpointStore()
+	install := cfg.Driver.BootstrapInstaller()
+	bootstrap, err := rootmaterialize.LoadBootstrap(checkpt, log)
 	if err != nil {
 		return nil, err
 	}
 	return &Store{
-		log:                cfg.Log,
-		checkpt:            cfg.Checkpoint,
-		install:            cfg.Installer,
-		leader:             leaderAware(cfg.Driver),
-		waiter:             driverWaiter(cfg.Driver),
+		driver:             cfg.Driver,
+		log:                log,
+		checkpt:            checkpt,
+		install:            install,
 		state:              bootstrap.Snapshot.State,
 		descs:              bootstrap.Snapshot.Descriptors,
 		records:            bootstrap.Records,
@@ -92,34 +71,18 @@ func Open(cfg Config) (*Store, error) {
 	}, nil
 }
 
-func leaderAware(driver Driver) LeaderAware {
-	if driver == nil {
-		return nil
-	}
-	leader, _ := driver.(LeaderAware)
-	return leader
-}
-
-func driverWaiter(driver Driver) changeWaiter {
-	if driver == nil {
-		return nil
-	}
-	waiter, _ := driver.(changeWaiter)
-	return waiter
-}
-
 func (s *Store) IsLeader() bool {
-	if s == nil || s.leader == nil {
+	if s == nil || s.driver == nil {
 		return true
 	}
-	return s.leader.IsLeader()
+	return s.driver.IsLeader()
 }
 
 func (s *Store) LeaderID() uint64 {
-	if s == nil || s.leader == nil {
+	if s == nil || s.driver == nil {
 		return 0
 	}
-	return s.leader.LeaderID()
+	return s.driver.LeaderID()
 }
 
 // Refresh reloads the rooted checkpoint plus retained committed tail from the
@@ -150,27 +113,7 @@ func (s *Store) WaitForChange(after rootstate.Cursor, timeout time.Duration) (ro
 	if s == nil {
 		return rootstate.Cursor{}, nil
 	}
-	if s.waiter != nil {
-		return s.waiter.WaitForChange(after, timeout)
-	}
-	if timeout <= 0 {
-		timeout = 200 * time.Millisecond
-	}
-	deadline := time.Now().Add(timeout)
-	for {
-		bootstrap, err := rootmaterialize.LoadBootstrap(s.checkpt, s.log)
-		if err != nil {
-			return rootstate.Cursor{}, err
-		}
-		current := bootstrap.Snapshot.State.LastCommitted
-		if rootstate.CursorAfter(current, after) {
-			return current, nil
-		}
-		if !time.Now().Before(deadline) {
-			return current, nil
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
+	return s.driver.WaitForChange(after, timeout)
 }
 
 func (s *Store) Current() (rootstate.State, error) {
