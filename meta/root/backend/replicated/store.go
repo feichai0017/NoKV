@@ -55,8 +55,8 @@ func Open(cfg Config) (*Store, error) {
 		storage:            cfg.Driver,
 		state:              bootstrap.Snapshot.State,
 		descs:              bootstrap.Snapshot.Descriptors,
-		records:            bootstrap.Records,
-		logBase:            bootstrap.LogOffset,
+		records:            bootstrap.Stream.Records,
+		logBase:            bootstrap.Stream.Offset,
 		retainFrom:         bootstrap.RetainFrom,
 		maxRetainedRecords: cfg.MaxRetainedRecords,
 	}, nil
@@ -90,8 +90,8 @@ func (s *Store) Refresh() error {
 	s.mu.Lock()
 	s.state = bootstrap.Snapshot.State
 	s.descs = bootstrap.Snapshot.Descriptors
-	s.records = bootstrap.Records
-	s.logBase = bootstrap.LogOffset
+	s.records = bootstrap.Stream.Records
+	s.logBase = bootstrap.Stream.Offset
 	s.retainFrom = bootstrap.RetainFrom
 	s.mu.Unlock()
 	return nil
@@ -230,7 +230,7 @@ func (s *Store) InstallBootstrap(snapshot rootstate.Snapshot, records []rootstor
 		LogOffset: 0,
 	}
 	retained := rootstorage.CloneCommittedEvents(records)
-	if err := s.storage.InstallBootstrap(checkpoint, retained); err != nil {
+	if err := s.storage.InstallBootstrap(checkpoint, rootstorage.CommittedStream{Records: retained}); err != nil {
 		return err
 	}
 	return s.Refresh()
@@ -258,7 +258,7 @@ func (s *Store) maybeCompactLocked() {
 		State:       s.state,
 		Descriptors: rootstate.CloneDescriptors(s.descs),
 	}
-	if err := s.storage.CompactCommitted(retained); err != nil {
+	if err := s.storage.CompactCommitted(rootstorage.CommittedStream{Records: retained}); err != nil {
 		return
 	}
 	if err := s.storage.SaveCheckpoint(rootstorage.Checkpoint{Snapshot: snapshot, LogOffset: 0}); err != nil {

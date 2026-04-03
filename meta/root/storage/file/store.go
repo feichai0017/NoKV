@@ -25,20 +25,20 @@ func (s store) SaveCheckpoint(checkpoint rootstorage.Checkpoint) error {
 	return s.checkpt.SaveCheckpoint(checkpoint)
 }
 
-func (s store) LoadCommitted(offset int64) ([]rootstorage.CommittedEvent, error) {
-	return s.log.LoadCommitted(offset)
+func (s store) ReadCommitted(offset int64) (rootstorage.CommittedStream, error) {
+	return s.log.ReadCommitted(offset)
 }
 
 func (s store) AppendCommitted(records ...rootstorage.CommittedEvent) (int64, error) {
 	return s.log.AppendCommitted(records...)
 }
 
-func (s store) CompactCommitted(records []rootstorage.CommittedEvent) error {
-	return s.log.CompactCommitted(records)
+func (s store) CompactCommitted(stream rootstorage.CommittedStream) error {
+	return s.log.CompactCommitted(stream)
 }
 
-func (s store) InstallBootstrap(checkpoint rootstorage.Checkpoint, records []rootstorage.CommittedEvent) error {
-	if err := s.log.CompactCommitted(records); err != nil {
+func (s store) InstallBootstrap(checkpoint rootstorage.Checkpoint, stream rootstorage.CommittedStream) error {
+	if err := s.log.CompactCommitted(stream); err != nil {
 		return err
 	}
 	return s.checkpt.SaveCheckpoint(checkpoint)

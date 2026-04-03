@@ -119,10 +119,10 @@ func (d *NetworkDriver) LeaderID() uint64 {
 
 func (d *NetworkDriver) State() DriverState {
 	checkpoint, _ := d.storage.LoadCheckpoint()
-	records, _ := d.storage.LoadCommitted(0)
+	stream, _ := d.storage.ReadCommitted(0)
 	return DriverState{
 		Checkpoint: rootstorage.CloneCheckpoint(checkpoint),
-		Records:    rootstorage.CloneCommittedEvents(records),
+		Records:    rootstorage.CloneCommittedEvents(stream.Records),
 	}
 }
 
@@ -173,10 +173,10 @@ func (d *NetworkDriver) WaitForChange(after rootstate.Cursor, timeout time.Durat
 	}
 }
 
-func (d *NetworkDriver) InstallBootstrap(checkpoint rootstorage.Checkpoint, records []rootstorage.CommittedEvent) error {
+func (d *NetworkDriver) InstallBootstrap(checkpoint rootstorage.Checkpoint, stream rootstorage.CommittedStream) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if err := d.storage.InstallBootstrap(checkpoint, records); err != nil {
+	if err := d.storage.InstallBootstrap(checkpoint, stream); err != nil {
 		return err
 	}
 	d.latest = checkpoint.Snapshot.State.LastCommitted
@@ -311,8 +311,8 @@ func (d *NetworkDriver) SaveCheckpoint(checkpoint rootstorage.Checkpoint) error 
 	return d.storage.SaveCheckpoint(checkpoint)
 }
 
-func (d *NetworkDriver) LoadCommitted(offset int64) ([]rootstorage.CommittedEvent, error) {
-	return d.storage.LoadCommitted(offset)
+func (d *NetworkDriver) ReadCommitted(offset int64) (rootstorage.CommittedStream, error) {
+	return d.storage.ReadCommitted(offset)
 }
 
 func (d *NetworkDriver) AppendCommitted(records ...rootstorage.CommittedEvent) (int64, error) {
@@ -351,8 +351,8 @@ func (d *NetworkDriver) AppendCommitted(records ...rootstorage.CommittedEvent) (
 	return size, err
 }
 
-func (d *NetworkDriver) CompactCommitted(records []rootstorage.CommittedEvent) error {
-	return d.storage.CompactCommitted(records)
+func (d *NetworkDriver) CompactCommitted(stream rootstorage.CommittedStream) error {
+	return d.storage.CompactCommitted(stream)
 }
 
 func (d *NetworkDriver) Size() (int64, error) {
