@@ -15,9 +15,10 @@ import (
 // no transport, no dynamic membership, but real raft message exchange across
 // three in-process nodes.
 type FixedCluster struct {
-	mu    sync.Mutex
-	ids   []uint64
-	nodes map[uint64]*clusterNode
+	mu         sync.Mutex
+	ids        []uint64
+	nodes      map[uint64]*clusterNode
+	transports map[uint64]Transport
 }
 
 type clusterNode struct {
@@ -37,6 +38,13 @@ type ClusterDriver struct {
 
 // NewFixedCluster creates one fixed-membership in-process raft cluster.
 func NewFixedCluster(ids ...uint64) (*FixedCluster, error) {
+	return NewFixedClusterWithTransports(nil, ids...)
+}
+
+// NewFixedClusterWithTransports creates one fixed-membership cluster backed by
+// the provided transports. When transports are nil, the cluster uses an
+// in-memory loopback transport while still exercising the transport boundary.
+func NewFixedClusterWithTransports(transports map[uint64]Transport, ids ...uint64) (*FixedCluster, error) {
 	if len(ids) == 0 {
 		ids = []uint64{1, 2, 3}
 	}
@@ -63,6 +71,17 @@ func NewFixedCluster(ids ...uint64) (*FixedCluster, error) {
 			return nil, err
 		}
 		cluster.nodes[id] = node
+	}
+	createdLoopback := false
+	if transports == nil {
+		transports = newLoopbackTransportSet(ids...)
+		createdLoopback = true
+	}
+	if err := cluster.attachTransportsLocked(transports); err != nil {
+		if createdLoopback {
+			_ = closeTransports(transports)
+		}
+		return nil, err
 	}
 	if err := cluster.drainAllLocked(); err != nil {
 		return nil, err
@@ -113,6 +132,16 @@ func OpenFixedCluster(maxRetainedRecords int, ids ...uint64) (map[uint64]*Store,
 		out[id] = store
 	}
 	return out, cluster, nil
+}
+
+// Close releases cluster-owned transports.
+func (c *FixedCluster) Close() error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return closeTransports(c.transports)
 }
 
 func (d *ClusterDriver) Config(maxRetainedRecords int) Config {
@@ -287,7 +316,7 @@ func (c *FixedCluster) leaderIDLocked() uint64 {
 func (c *FixedCluster) drainAllLocked() error {
 	for {
 		progress := false
-		var outbound []myraft.Message
+		outbound := make(map[uint64][]myraft.Message, len(c.ids))
 		for _, id := range c.ids {
 			node := c.nodes[id]
 			for node.raw.HasReady() {
@@ -318,17 +347,20 @@ func (c *FixedCluster) drainAllLocked() error {
 					}
 					node.records = append(node.records, rec)
 				}
-				outbound = append(outbound, rd.Messages...)
+				outbound[id] = append(outbound[id], rd.Messages...)
 				node.raw.Advance(rd)
 			}
 		}
-		for _, msg := range outbound {
-			target, ok := c.nodes[msg.To]
-			if !ok {
+		for from, msgs := range outbound {
+			if len(msgs) == 0 {
 				continue
 			}
 			progress = true
-			if err := target.raw.Step(msg); err != nil {
+			transport, ok := c.transports[from]
+			if !ok || transport == nil {
+				return fmt.Errorf("meta/root/backend/replicated: transport missing for node %d", from)
+			}
+			if err := transport.Send(msgs...); err != nil {
 				return err
 			}
 		}
@@ -362,4 +394,41 @@ func newClusterNode(id uint64, peers []myraft.Peer) (*clusterNode, error) {
 		raw:        raw,
 		checkpoint: rootstorage.Checkpoint{},
 	}, nil
+}
+
+func (c *FixedCluster) attachTransportsLocked(transports map[uint64]Transport) error {
+	if len(transports) != len(c.ids) {
+		return fmt.Errorf("meta/root/backend/replicated: transport set size mismatch")
+	}
+	peerAddrs := make(map[uint64]string, len(transports))
+	for _, id := range c.ids {
+		transport, ok := transports[id]
+		if !ok || transport == nil {
+			return fmt.Errorf("meta/root/backend/replicated: missing transport for node %d", id)
+		}
+		peerAddrs[id] = transport.Addr()
+	}
+	for _, id := range c.ids {
+		node := c.nodes[id]
+		transport := transports[id]
+		transport.SetHandler(func(msg myraft.Message) error {
+			return node.raw.Step(msg)
+		})
+		transport.SetPeers(peerAddrs)
+	}
+	c.transports = transports
+	return nil
+}
+
+func closeTransports(transports map[uint64]Transport) error {
+	var firstErr error
+	for _, transport := range transports {
+		if transport == nil {
+			continue
+		}
+		if err := transport.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
