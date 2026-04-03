@@ -61,6 +61,11 @@
     <h3><a href="2026-04-03-delos-lite-metadata-interfaces-and-schema.html">Delos-lite Metadata 接口与 Schema 草案</a></h3>
     <p>继续把 Delos-lite 细化到 Go 接口、proto 结构、checkpoint schema 和现有类型迁移建议。</p>
   </div>
+  <div class="blog-card">
+    <span class="blog-date">2026-04-03</span>
+    <h3><a href="2026-04-03-delos-lite-metadata-migration-plan.html">Delos-lite Metadata HA 迁移实施计划</a></h3>
+    <p>把未来从 local rooted model 演进到 Delos-lite HA 的阶段、依赖、风险和代码切入点拆开。</p>
+  </div>
 </div>
 
 ## 这里应该写什么
