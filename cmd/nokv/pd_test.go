@@ -156,7 +156,7 @@ func TestRestorePDRegionsFromLocalSnapshot(t *testing.T) {
 	require.NoError(t, store.Close())
 
 	cluster := core.NewCluster()
-	loaded, err := pdstorage.RestoreDescriptors(cluster, snapshotState.Descriptors)
+	loaded, err := pdstorage.RestoreDescriptors(cluster.PublishRegionDescriptor, snapshotState.Descriptors)
 	require.NoError(t, err)
 	require.Equal(t, 2, loaded)
 
@@ -209,7 +209,7 @@ func TestRestorePDRegionsRejectsDivergentOverlap(t *testing.T) {
 		},
 	}
 
-	loaded, err := pdstorage.RestoreDescriptors(cluster, snapshot)
+	loaded, err := pdstorage.RestoreDescriptors(cluster.PublishRegionDescriptor, snapshot)
 	require.Error(t, err)
 	require.Equal(t, 1, loaded)
 	desc, ok := cluster.GetRegionDescriptorByKey([]byte("b"))

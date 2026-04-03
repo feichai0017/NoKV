@@ -52,11 +52,6 @@ type Store interface {
 	Close() error
 }
 
-// DescriptorCatalog accepts region descriptor updates during PD bootstrap.
-type DescriptorCatalog interface {
-	PublishRegionDescriptor(desc descriptor.Descriptor) error
-}
-
 // NoopStore is an in-memory/no-op storage implementation.
 type NoopStore struct{}
 
@@ -131,8 +126,8 @@ func ResolveAllocatorStarts(idStart, tsStart uint64, state AllocatorState) (uint
 }
 
 // RestoreDescriptors replays a rooted descriptor catalog into one runtime cluster view.
-func RestoreDescriptors(catalog DescriptorCatalog, descriptors map[uint64]descriptor.Descriptor) (int, error) {
-	if catalog == nil || len(descriptors) == 0 {
+func RestoreDescriptors(apply func(descriptor.Descriptor) error, descriptors map[uint64]descriptor.Descriptor) (int, error) {
+	if apply == nil || len(descriptors) == 0 {
 		return 0, nil
 	}
 	ids := make([]uint64, 0, len(descriptors))
@@ -150,7 +145,7 @@ func RestoreDescriptors(catalog DescriptorCatalog, descriptors map[uint64]descri
 		if desc.RegionID == 0 {
 			continue
 		}
-		if err := catalog.PublishRegionDescriptor(desc); err != nil {
+		if err := apply(desc); err != nil {
 			return loaded, err
 		}
 		loaded++
@@ -160,7 +155,7 @@ func RestoreDescriptors(catalog DescriptorCatalog, descriptors map[uint64]descri
 
 // Bootstrap reconstructs one PD runtime view from rooted durable metadata and
 // resolves allocator starts against persisted fences.
-func Bootstrap(store Store, catalog DescriptorCatalog, idStart, tsStart uint64) (BootstrapInfo, error) {
+func Bootstrap(store Store, apply func(descriptor.Descriptor) error, idStart, tsStart uint64) (BootstrapInfo, error) {
 	if store == nil {
 		return BootstrapInfo{IDStart: idStart, TSStart: tsStart}, nil
 	}
@@ -168,7 +163,7 @@ func Bootstrap(store Store, catalog DescriptorCatalog, idStart, tsStart uint64) 
 	if err != nil {
 		return BootstrapInfo{}, err
 	}
-	loadedRegions, err := RestoreDescriptors(catalog, snapshot.Descriptors)
+	loadedRegions, err := RestoreDescriptors(apply, snapshot.Descriptors)
 	if err != nil {
 		return BootstrapInfo{}, err
 	}
