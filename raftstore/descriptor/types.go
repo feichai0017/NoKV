@@ -1,6 +1,7 @@
 package descriptor
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
@@ -92,4 +93,34 @@ func (d Descriptor) Clone() Descriptor {
 		cp.Hash = append([]byte(nil), d.Hash...)
 	}
 	return cp
+}
+
+// Equal reports whether two rooted descriptors carry the same topology truth.
+func (d Descriptor) Equal(other Descriptor) bool {
+	if d.RegionID != other.RegionID ||
+		d.State != other.State ||
+		d.Epoch != other.Epoch ||
+		d.RootEpoch != other.RootEpoch ||
+		!bytes.Equal(d.StartKey, other.StartKey) ||
+		!bytes.Equal(d.EndKey, other.EndKey) ||
+		!bytes.Equal(d.Hash, other.Hash) {
+		return false
+	}
+	if len(d.Peers) != len(other.Peers) || len(d.Lineage) != len(other.Lineage) {
+		return false
+	}
+	for i := range d.Peers {
+		if d.Peers[i] != other.Peers[i] {
+			return false
+		}
+	}
+	for i := range d.Lineage {
+		if d.Lineage[i].RegionID != other.Lineage[i].RegionID ||
+			d.Lineage[i].Epoch != other.Lineage[i].Epoch ||
+			d.Lineage[i].Kind != other.Lineage[i].Kind ||
+			!bytes.Equal(d.Lineage[i].Hash, other.Lineage[i].Hash) {
+			return false
+		}
+	}
+	return true
 }

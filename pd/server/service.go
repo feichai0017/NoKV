@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -149,7 +148,10 @@ func (s *Service) touchHeartbeatIfUnchanged(desc descriptor.Descriptor) bool {
 	if !ok {
 		return false
 	}
-	if !sameRegionDescriptorForHeartbeat(current, desc) {
+	if desc.RootEpoch == 0 {
+		desc.RootEpoch = current.RootEpoch
+	}
+	if !current.Equal(desc) {
 		return false
 	}
 	return s.cluster.TouchRegionHeartbeat(desc.RegionID)
@@ -351,38 +353,6 @@ func normalizeDescriptorRootEpoch(desc descriptor.Descriptor, rootEpoch uint64) 
 	}
 	desc.RootEpoch = rootEpoch
 	return desc
-}
-
-func sameRegionDescriptorForHeartbeat(current, incoming descriptor.Descriptor) bool {
-	if incoming.RootEpoch == 0 {
-		incoming.RootEpoch = current.RootEpoch
-	}
-	if current.RegionID != incoming.RegionID ||
-		current.RootEpoch != incoming.RootEpoch ||
-		current.State != incoming.State ||
-		current.Epoch != incoming.Epoch ||
-		!bytes.Equal(current.StartKey, incoming.StartKey) ||
-		!bytes.Equal(current.EndKey, incoming.EndKey) ||
-		!bytes.Equal(current.Hash, incoming.Hash) {
-		return false
-	}
-	if len(current.Peers) != len(incoming.Peers) || len(current.Lineage) != len(incoming.Lineage) {
-		return false
-	}
-	for i := range current.Peers {
-		if current.Peers[i] != incoming.Peers[i] {
-			return false
-		}
-	}
-	for i := range current.Lineage {
-		if current.Lineage[i].RegionID != incoming.Lineage[i].RegionID ||
-			current.Lineage[i].Epoch != incoming.Lineage[i].Epoch ||
-			current.Lineage[i].Kind != incoming.Lineage[i].Kind ||
-			!bytes.Equal(current.Lineage[i].Hash, incoming.Lineage[i].Hash) {
-			return false
-		}
-	}
-	return true
 }
 
 func (s *Service) reserveIDs(count uint64) (uint64, error) {
