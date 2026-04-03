@@ -15,7 +15,6 @@ type Cursor struct {
 type State struct {
 	ClusterEpoch    uint64
 	MembershipEpoch uint64
-	PolicyVersion   uint64
 	LastCommitted   Cursor
 	IDFence         uint64
 	TSOFence        uint64
@@ -55,23 +54,16 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		return
 	}
 	switch event.Kind {
-	case rootevent.KindStoreJoined, rootevent.KindStoreLeft, rootevent.KindStoreMarkedDraining:
+	case rootevent.KindStoreJoined, rootevent.KindStoreLeft:
 		state.MembershipEpoch++
 	case rootevent.KindRegionBootstrap,
 		rootevent.KindRegionDescriptorPublished,
 		rootevent.KindRegionTombstoned,
-		rootevent.KindRegionSplitRequested,
 		rootevent.KindRegionSplitCommitted,
 		rootevent.KindRegionMerged,
 		rootevent.KindPeerAdded,
 		rootevent.KindPeerRemoved:
 		state.ClusterEpoch++
-	case rootevent.KindPlacementPolicyChanged:
-		if event.PlacementPolicy != nil && event.PlacementPolicy.Version > state.PolicyVersion {
-			state.PolicyVersion = event.PlacementPolicy.Version
-		} else {
-			state.PolicyVersion++
-		}
 	}
 	state.LastCommitted = cursor
 }

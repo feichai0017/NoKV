@@ -20,10 +20,6 @@ func TestApplyEventToStateAdvancesEpochsAndCursor(t *testing.T) {
 	rootpkg.ApplyEventToState(&state, rootpkg.Cursor{Term: 1, Index: 2}, rootpkg.RegionDescriptorPublished(testDescriptor(10, []byte("a"), []byte("z"))))
 	require.Equal(t, uint64(1), state.ClusterEpoch)
 	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 2}, state.LastCommitted)
-
-	rootpkg.ApplyEventToState(&state, rootpkg.Cursor{Term: 1, Index: 3}, rootpkg.PlacementPolicyChanged("default", 9))
-	require.Equal(t, uint64(9), state.PolicyVersion)
-	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 3}, state.LastCommitted)
 }
 
 func TestCursorHelpers(t *testing.T) {
