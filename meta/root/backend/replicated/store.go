@@ -20,6 +20,7 @@ const defaultRetainedRecords = 64
 type Config struct {
 	Log                rootstorage.EventLog
 	Checkpoint         rootstorage.CheckpointStore
+	Installer          rootstorage.BootstrapInstaller
 	MaxRetainedRecords int
 }
 
@@ -29,6 +30,7 @@ type Config struct {
 type Store struct {
 	log     rootstorage.EventLog
 	checkpt rootstorage.CheckpointStore
+	install rootstorage.BootstrapInstaller
 
 	mu                 sync.RWMutex
 	state              rootstate.State
@@ -58,6 +60,7 @@ func Open(cfg Config) (*Store, error) {
 	return &Store{
 		log:                cfg.Log,
 		checkpt:            cfg.Checkpoint,
+		install:            cfg.Installer,
 		state:              bootstrap.Snapshot.State,
 		descs:              bootstrap.Snapshot.Descriptors,
 		records:            bootstrap.Records,
@@ -177,6 +180,39 @@ func (s *Store) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, 
 	s.logBase = logEnd
 	s.maybeCompactLocked()
 	return *out, nil
+}
+
+// InstallBootstrap replaces the rooted checkpoint and retained committed tail.
+// It is the future landing point for replicated snapshot installation.
+func (s *Store) InstallBootstrap(snapshot rootstate.Snapshot, records []rootstorage.CommittedEvent) error {
+	if s == nil {
+		return nil
+	}
+	if s.install == nil {
+		return fmt.Errorf("meta/root/backend/replicated: bootstrap installer is not configured")
+	}
+
+	checkpoint := rootstorage.Checkpoint{
+		Snapshot:  rootstate.CloneSnapshot(snapshot),
+		LogOffset: 0,
+	}
+	retained := rootstorage.CloneCommittedEvents(records)
+	if err := s.install.InstallBootstrap(checkpoint, retained); err != nil {
+		return err
+	}
+	bootstrap, err := rootmaterialize.LoadBootstrap(s.checkpt, s.log)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	s.state = bootstrap.Snapshot.State
+	s.descs = bootstrap.Snapshot.Descriptors
+	s.records = bootstrap.Records
+	s.logBase = bootstrap.LogOffset
+	s.retainFrom = bootstrap.RetainFrom
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *Store) Close() error {

@@ -54,3 +54,10 @@ type CheckpointStore interface {
 	Load() (checkpoint Checkpoint, err error)
 	Save(checkpoint Checkpoint) error
 }
+
+// BootstrapInstaller installs one checkpoint and retained committed tail as a
+// new root bootstrap boundary. Implementations should replace prior retained
+// state atomically when possible.
+type BootstrapInstaller interface {
+	InstallBootstrap(checkpoint Checkpoint, records []CommittedEvent) error
+}
