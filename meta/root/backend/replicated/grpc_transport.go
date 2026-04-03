@@ -249,7 +249,7 @@ func (t *GRPCTransport) Close() error {
 		delete(t.clients, id)
 	}
 	t.server.GracefulStop()
-	if err := t.ln.Close(); err != nil && firstErr == nil {
+	if err := t.ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) && firstErr == nil {
 		firstErr = err
 	}
 	return firstErr

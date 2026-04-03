@@ -50,9 +50,12 @@ func TestRunPDCmdStartsAndStopsWithReplicatedRoot(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, runPDCmd(&buf, []string{
 		"-addr", "127.0.0.1:0",
-		"-workdir", t.TempDir(),
 		"-root-mode", "replicated",
 		"-root-node-id", "1",
+		"-root-transport-addr", "127.0.0.1:0",
+		"-root-peer", "1=127.0.0.1:7001",
+		"-root-peer", "2=127.0.0.1:7002",
+		"-root-peer", "3=127.0.0.1:7003",
 	}))
 	require.Contains(t, buf.String(), "PD-lite service listening on")
 	require.Contains(t, buf.String(), "PD metadata root mode: replicated")
@@ -78,21 +81,28 @@ func TestRunPDCmdRejectsInvalidRootMode(t *testing.T) {
 	require.ErrorContains(t, err, "invalid root mode")
 }
 
-func TestRunPDCmdReplicatedRootRequiresWorkdir(t *testing.T) {
-	var buf bytes.Buffer
-	err := runPDCmd(&buf, []string{"-addr", "127.0.0.1:0", "-root-mode", "replicated"})
-	require.ErrorContains(t, err, "requires -workdir")
-}
-
-func TestRunPDCmdReplicatedRootRequiresThreeNodeCluster(t *testing.T) {
+func TestRunPDCmdReplicatedRootRequiresTransportAddress(t *testing.T) {
 	var buf bytes.Buffer
 	err := runPDCmd(&buf, []string{
 		"-addr", "127.0.0.1:0",
-		"-workdir", t.TempDir(),
 		"-root-mode", "replicated",
-		"-root-cluster", "1,2",
+		"-root-peer", "1=127.0.0.1:7001",
+		"-root-peer", "2=127.0.0.1:7002",
+		"-root-peer", "3=127.0.0.1:7003",
 	})
-	require.ErrorContains(t, err, "requires exactly 3 cluster ids")
+	require.ErrorContains(t, err, "requires transport address")
+}
+
+func TestRunPDCmdReplicatedRootRequiresThreePeers(t *testing.T) {
+	var buf bytes.Buffer
+	err := runPDCmd(&buf, []string{
+		"-addr", "127.0.0.1:0",
+		"-root-mode", "replicated",
+		"-root-transport-addr", "127.0.0.1:0",
+		"-root-peer", "1=127.0.0.1:7001",
+		"-root-peer", "2=127.0.0.1:7002",
+	})
+	require.ErrorContains(t, err, "requires exactly 3 peer addresses")
 }
 
 func TestMainPDCommand(t *testing.T) {

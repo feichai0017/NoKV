@@ -125,7 +125,8 @@ func (d *NetworkDriver) InstallBootstrap(checkpoint rootstorage.Checkpoint, reco
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.checkpoint = rootstorage.CloneCheckpoint(checkpoint)
-	return d.rebuildLocked(records)
+	d.records = rootstorage.CloneCommittedEvents(records)
+	return nil
 }
 
 func (d *NetworkDriver) Close() error {
@@ -180,55 +181,6 @@ func (d *NetworkDriver) handleTransportMessage(msg myraft.Message) error {
 		return err
 	}
 	return d.sendMessages(outbound)
-}
-
-func (d *NetworkDriver) rebuildLocked(records []rootstorage.CommittedEvent) error {
-	peers := d.node.peerIDs
-	node, err := newNetworkNode(NetworkConfig{
-		ID:        d.id,
-		PeerIDs:   peers,
-		Transport: d.transport,
-	}, d.handleTransportMessage)
-	if err != nil {
-		return err
-	}
-	d.node = node
-	d.records = nil
-	for _, rec := range records {
-		if d.node.raw.Status().RaftState != myraft.StateLeader {
-			if err := d.node.raw.Campaign(); err != nil {
-				return err
-			}
-			_, outbound, err := d.drainLocked()
-			if err != nil {
-				return err
-			}
-			d.mu.Unlock()
-			if err := d.sendMessages(outbound); err != nil {
-				d.mu.Lock()
-				return err
-			}
-			d.mu.Lock()
-		}
-		payload, err := marshalCommittedEvent(rec)
-		if err != nil {
-			return err
-		}
-		if err := d.node.raw.Propose(payload); err != nil {
-			return err
-		}
-		_, outbound, err := d.drainLocked()
-		if err != nil {
-			return err
-		}
-		d.mu.Unlock()
-		if err := d.sendMessages(outbound); err != nil {
-			d.mu.Lock()
-			return err
-		}
-		d.mu.Lock()
-	}
-	return nil
 }
 
 func (d *NetworkDriver) drainLocked() ([]rootstorage.CommittedEvent, []myraft.Message, error) {
@@ -321,7 +273,8 @@ func (l networkEventLog) Append(records ...rootstorage.CommittedEvent) (int64, e
 func (l networkEventLog) Compact(records []rootstorage.CommittedEvent) error {
 	l.driver.mu.Lock()
 	defer l.driver.mu.Unlock()
-	return l.driver.rebuildLocked(records)
+	l.driver.records = rootstorage.CloneCommittedEvents(records)
+	return nil
 }
 
 func (l networkEventLog) Size() (int64, error) {

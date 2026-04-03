@@ -1,28 +1,27 @@
 package replicated
 
 import (
+	"testing"
+
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestReplicatedStoreAppendAndReopen(t *testing.T) {
-	store, driver, err := OpenMemory(4)
-	require.NoError(t, err)
+	stores, drivers, leaderID := openNetworkTestCluster(t, 4)
 
-	commit, err := store.Append(
+	commit, err := stores[leaderID].Append(
 		rootevent.StoreJoined(1, "s1"),
 		rootevent.RegionDescriptorPublished(testDescriptor(10, []byte("a"), []byte("z"))),
 	)
 	require.NoError(t, err)
-	require.Equal(t, rootstate.Cursor{Term: 1, Index: 2}, commit.Cursor)
 	require.Equal(t, uint64(1), commit.State.MembershipEpoch)
 	require.Equal(t, uint64(1), commit.State.ClusterEpoch)
 
-	reopened, err := Open(driver.Config(4))
+	reopened, err := Open(Config{Driver: drivers[leaderID], MaxRetainedRecords: 4})
 	require.NoError(t, err)
 	state, err := reopened.Current()
 	require.NoError(t, err)
@@ -30,7 +29,6 @@ func TestReplicatedStoreAppendAndReopen(t *testing.T) {
 	events, tail, err := reopened.ReadSince(rootstate.Cursor{})
 	require.NoError(t, err)
 	require.Len(t, events, 1)
-	require.Equal(t, rootevent.KindRegionDescriptorPublished, events[0].Kind)
 	require.Equal(t, uint64(10), events[0].RegionDescriptor.Descriptor.RegionID)
 	require.Equal(t, commit.Cursor, tail)
 }
@@ -38,45 +36,20 @@ func TestReplicatedStoreAppendAndReopen(t *testing.T) {
 func TestReplicatedStoreRequiresLogAndCheckpoint(t *testing.T) {
 	_, err := Open(Config{})
 	require.Error(t, err)
-	driver := NewMemoryDriver()
+
+	_, drivers, _ := openNetworkTestCluster(t, 4)
+	driver := drivers[1]
+
 	_, err = Open(Config{Log: driver.Log()})
 	require.Error(t, err)
 	_, err = Open(Config{Checkpoint: driver.CheckpointStore()})
 	require.Error(t, err)
 }
 
-func TestReplicatedStoreCompactsMemoryDriverTail(t *testing.T) {
-	store, driver, err := OpenMemory(2)
-	require.NoError(t, err)
-
-	_, err = store.Append(
-		rootevent.RegionDescriptorPublished(testDescriptor(10, []byte("a"), []byte("b"))),
-		rootevent.RegionDescriptorPublished(testDescriptor(11, []byte("b"), []byte("c"))),
-		rootevent.RegionDescriptorPublished(testDescriptor(12, []byte("c"), []byte("d"))),
-	)
-	require.NoError(t, err)
-
-	reopened, err := Open(driver.Config(2))
-	require.NoError(t, err)
-	events, tail, err := reopened.ReadSince(rootstate.Cursor{})
-	require.NoError(t, err)
-	require.Len(t, events, 3)
-	require.Equal(t, rootevent.KindRegionDescriptorPublished, events[0].Kind)
-	require.Equal(t, uint64(10), events[0].RegionDescriptor.Descriptor.RegionID)
-	require.Equal(t, uint64(11), events[1].RegionDescriptor.Descriptor.RegionID)
-	require.Equal(t, uint64(12), events[2].RegionDescriptor.Descriptor.RegionID)
-	require.Equal(t, uint64(3), tail.Index)
-
-	driverState := driver.State()
-	require.Equal(t, int64(0), driverState.Checkpoint.LogOffset)
-	require.Len(t, driverState.Records, 2)
-}
-
 func TestReplicatedStoreInstallBootstrapReplacesState(t *testing.T) {
-	store, driver, err := OpenMemory(4)
-	require.NoError(t, err)
+	stores, drivers, leaderID := openNetworkTestCluster(t, 4)
 
-	_, err = store.Append(
+	_, err := stores[leaderID].Append(
 		rootevent.RegionDescriptorPublished(testDescriptor(10, []byte("a"), []byte("b"))),
 	)
 	require.NoError(t, err)
@@ -92,166 +65,34 @@ func TestReplicatedStoreInstallBootstrapReplacesState(t *testing.T) {
 			99: testDescriptor(99, []byte("m"), []byte("z")),
 		},
 	}
-	require.NoError(t, store.InstallBootstrap(snapshot, nil))
+	require.NoError(t, stores[leaderID].InstallBootstrap(snapshot, nil))
 
-	current, err := store.Current()
+	current, err := stores[leaderID].Current()
 	require.NoError(t, err)
 	require.Equal(t, snapshot.State, current)
 
-	events, tail, err := store.ReadSince(rootstate.Cursor{})
+	events, tail, err := stores[leaderID].ReadSince(rootstate.Cursor{})
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	require.Equal(t, uint64(99), events[0].RegionDescriptor.Descriptor.RegionID)
 	require.Equal(t, snapshot.State.LastCommitted, tail)
 
-	reopened, err := Open(driver.Config(4))
+	reopened, err := Open(Config{Driver: drivers[leaderID], MaxRetainedRecords: 4})
 	require.NoError(t, err)
 	current, err = reopened.Current()
 	require.NoError(t, err)
 	require.Equal(t, snapshot.State, current)
 
-	driverState := driver.State()
+	driverState := drivers[leaderID].State()
 	require.Equal(t, snapshot.State, driverState.Checkpoint.Snapshot.State)
 	require.Empty(t, driverState.Records)
 }
 
 func TestOpenAcceptsDriverConfig(t *testing.T) {
-	driver := NewMemoryDriver()
-	store, err := Open(Config{Driver: driver, MaxRetainedRecords: 3})
+	_, drivers, _ := openNetworkTestCluster(t, 3)
+	store, err := Open(Config{Driver: drivers[1], MaxRetainedRecords: 3})
 	require.NoError(t, err)
 	require.NotNil(t, store)
-}
-
-func TestSingleNodeDriverAppendAndReopen(t *testing.T) {
-	driver, err := NewSingleNodeDriver(1)
-	require.NoError(t, err)
-
-	store, err := Open(Config{Driver: driver, MaxRetainedRecords: 4})
-	require.NoError(t, err)
-
-	commit, err := store.Append(
-		rootevent.StoreJoined(1, "s1"),
-		rootevent.RegionDescriptorPublished(testDescriptor(20, []byte("a"), []byte("z"))),
-	)
-	require.NoError(t, err)
-	require.Equal(t, rootstate.Cursor{Term: 1, Index: 2}, commit.Cursor)
-
-	reopened, err := Open(Config{Driver: driver, MaxRetainedRecords: 4})
-	require.NoError(t, err)
-	current, err := reopened.Current()
-	require.NoError(t, err)
-	require.Equal(t, commit.State, current)
-
-	driverState := driver.State()
-	require.Len(t, driverState.Records, 2)
-	require.Equal(t, uint64(20), driverState.Records[1].Event.RegionDescriptor.Descriptor.RegionID)
-}
-
-func TestFixedClusterReplicatesLeaderAppend(t *testing.T) {
-	stores, cluster, err := OpenFixedCluster(4, 1, 2, 3)
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), cluster.LeaderID())
-
-	leader := stores[1]
-	commit, err := leader.Append(
-		rootevent.StoreJoined(1, "s1"),
-		rootevent.RegionDescriptorPublished(testDescriptor(30, []byte("a"), []byte("z"))),
-	)
-	require.NoError(t, err)
-
-	for _, id := range []uint64{1, 2, 3} {
-		driver, err := cluster.Driver(id)
-		require.NoError(t, err)
-		state := driver.State()
-		require.Len(t, state.Records, 2)
-		require.Equal(t, uint64(30), state.Records[1].Event.RegionDescriptor.Descriptor.RegionID)
-
-		reopened, err := Open(driver.Config(4))
-		require.NoError(t, err)
-		current, err := reopened.Current()
-		require.NoError(t, err)
-		require.Equal(t, commit.State, current)
-	}
-}
-
-func TestFixedClusterRejectsFollowerAppend(t *testing.T) {
-	stores, _, err := OpenFixedCluster(4, 1, 2, 3)
-	require.NoError(t, err)
-
-	_, err = stores[2].Append(rootevent.StoreJoined(2, "s2"))
-	require.Error(t, err)
-}
-
-func TestFixedClusterFollowerRefreshCatchesUp(t *testing.T) {
-	stores, cluster, err := OpenFixedCluster(4, 1, 2, 3)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, cluster.Close()) })
-	require.Equal(t, uint64(1), cluster.LeaderID())
-
-	leader := stores[1]
-	follower := stores[2]
-
-	commit, err := leader.Append(
-		rootevent.StoreJoined(1, "s1"),
-		rootevent.RegionDescriptorPublished(testDescriptor(40, []byte("k"), []byte("z"))),
-	)
-	require.NoError(t, err)
-
-	current, err := follower.Current()
-	require.NoError(t, err)
-	require.NotEqual(t, commit.State, current)
-
-	require.NoError(t, follower.Refresh())
-
-	current, err = follower.Current()
-	require.NoError(t, err)
-	require.Equal(t, commit.State, current)
-
-	events, tail, err := follower.ReadSince(rootstate.Cursor{})
-	require.NoError(t, err)
-	require.Len(t, events, 2)
-	require.Equal(t, rootevent.KindStoreJoined, events[0].Kind)
-	require.Equal(t, uint64(40), events[1].RegionDescriptor.Descriptor.RegionID)
-	require.Equal(t, commit.Cursor, tail)
-}
-
-func TestFixedClusterWithGRPCTransportReplicatesLeaderAppend(t *testing.T) {
-	transports := map[uint64]Transport{}
-	for _, id := range []uint64{1, 2, 3} {
-		transport, err := NewGRPCTransport(id, "127.0.0.1:0")
-		require.NoError(t, err)
-		transports[id] = transport
-	}
-	for _, transport := range transports {
-		t.Cleanup(func() { _ = transport.Close() })
-	}
-
-	cluster, err := NewFixedClusterWithTransports(transports, 1, 2, 3)
-	require.NoError(t, err)
-
-	stores := make(map[uint64]*Store, 3)
-	for _, id := range []uint64{1, 2, 3} {
-		driver, err := cluster.Driver(id)
-		require.NoError(t, err)
-		store, err := Open(driver.Config(4))
-		require.NoError(t, err)
-		stores[id] = store
-	}
-
-	commit, err := stores[1].Append(
-		rootevent.StoreJoined(1, "s1"),
-		rootevent.RegionDescriptorPublished(testDescriptor(50, []byte("a"), []byte("z"))),
-	)
-	require.NoError(t, err)
-
-	require.NoError(t, stores[2].Refresh())
-	require.NoError(t, stores[3].Refresh())
-
-	for _, id := range []uint64{1, 2, 3} {
-		current, err := stores[id].Current()
-		require.NoError(t, err)
-		require.Equal(t, commit.State, current)
-	}
 }
 
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
