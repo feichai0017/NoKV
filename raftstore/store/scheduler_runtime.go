@@ -304,9 +304,7 @@ func (s *Store) flushRegionUpdates() {
 		case regionEventRemove:
 			if ev.root != nil {
 				s.schedulerClient().PublishRootEvent(ctx, *ev.root)
-				continue
 			}
-			s.schedulerClient().RemoveRegion(ctx, ev.regionID)
 		}
 	}
 }

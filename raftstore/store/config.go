@@ -74,7 +74,6 @@ type SchedulerStatus struct {
 type SchedulerClient interface {
 	PublishRegionDescriptor(context.Context, descriptor.Descriptor)
 	PublishRootEvent(context.Context, rootevent.Event)
-	RemoveRegion(context.Context, uint64)
 	StoreHeartbeat(context.Context, StoreStats) []Operation
 	Status() SchedulerStatus
 	Close() error
