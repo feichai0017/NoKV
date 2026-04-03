@@ -109,6 +109,15 @@ func (c *Cluster) RegionSnapshot() []RegionInfo {
 	return c.regions.Snapshot()
 }
 
+// ReplaceRegionSnapshot replaces the region directory view from one rooted
+// snapshot while preserving store-health runtime observations.
+func (c *Cluster) ReplaceRegionSnapshot(descriptors map[uint64]descriptor.Descriptor) {
+	if c == nil {
+		return
+	}
+	c.regions.Replace(descriptors)
+}
+
 // GetRegionDescriptorByKey returns the rooted descriptor containing key
 // ([start, end)).
 func (c *Cluster) GetRegionDescriptorByKey(key []byte) (descriptor.Descriptor, bool) {

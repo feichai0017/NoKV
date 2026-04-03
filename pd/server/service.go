@@ -56,6 +56,31 @@ func (s *Service) SetStorage(storage pdstorage.Sink) {
 	s.storage = storage
 }
 
+// RefreshFromStorage refreshes rooted durable state into the in-memory service
+// view and fences allocator state so a future leader cannot allocate stale ids.
+func (s *Service) RefreshFromStorage() error {
+	if s == nil || s.storage == nil {
+		return nil
+	}
+	if refresher, ok := s.storage.(pdstorage.Refresher); ok {
+		if err := refresher.Refresh(); err != nil {
+			return err
+		}
+	}
+	loader, ok := s.storage.(pdstorage.Loader)
+	if !ok {
+		return nil
+	}
+	snapshot, err := loader.Load()
+	if err != nil {
+		return err
+	}
+	s.cluster.ReplaceRegionSnapshot(snapshot.Descriptors)
+	s.ids.Fence(snapshot.Allocator.IDCurrent)
+	s.tso.Fence(snapshot.Allocator.TSCurrent)
+	return nil
+}
+
 // StoreHeartbeat records store-level stats.
 func (s *Service) StoreHeartbeat(_ context.Context, req *pdpb.StoreHeartbeatRequest) (*pdpb.StoreHeartbeatResponse, error) {
 	if req == nil {

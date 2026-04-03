@@ -100,6 +100,27 @@ func (v *RegionDirectoryView) Snapshot() []RegionInfo {
 	return out
 }
 
+func (v *RegionDirectoryView) Replace(descriptors map[uint64]descriptor.Descriptor) {
+	if v == nil {
+		return
+	}
+	regions := make(map[uint64]descriptor.Descriptor, len(descriptors))
+	heartbeats := make(map[uint64]time.Time, len(descriptors))
+	now := time.Now()
+	for id, desc := range descriptors {
+		if id == 0 || desc.RegionID == 0 {
+			continue
+		}
+		regions[id] = desc.Clone()
+		heartbeats[id] = now
+	}
+	v.mu.Lock()
+	v.regions = regions
+	v.regionLastHB = heartbeats
+	v.rebuildIndexLocked()
+	v.mu.Unlock()
+}
+
 func (v *RegionDirectoryView) LookupDescriptor(key []byte) (descriptor.Descriptor, bool) {
 	if v == nil {
 		return descriptor.Descriptor{}, false
