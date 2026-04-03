@@ -179,6 +179,9 @@ func (s *Service) PublishRootEvent(_ context.Context, req *pdpb.PublishRootEvent
 	if err := s.requireExpectedClusterEpoch(req.GetExpectedClusterEpoch()); err != nil {
 		return nil, err
 	}
+	if s.sameAppliedPeerChange(event) {
+		return &pdpb.PublishRootEventResponse{Accepted: true}, nil
+	}
 	if err := s.cluster.ValidateRootEvent(event); err != nil {
 		switch {
 		case errors.Is(err, core.ErrInvalidRegionID):
@@ -304,31 +307,76 @@ func (s *Service) rootEventForDescriptor(desc descriptor.Descriptor) (rootevent.
 }
 
 func (s *Service) normalizeRootEvent(event rootevent.Event) (rootevent.Event, error) {
-	nextEpoch, err := s.nextRootEpoch()
-	if err != nil {
-		return rootevent.Event{}, err
-	}
 	out := rootevent.CloneEvent(event)
 	switch {
 	case out.RegionDescriptor != nil:
-		out.RegionDescriptor.Descriptor = normalizeDescriptorRootEpoch(out.RegionDescriptor.Descriptor, nextEpoch)
+		desc, err := s.normalizeDescriptorRootEpoch(out.RegionDescriptor.Descriptor)
+		if err != nil {
+			return rootevent.Event{}, err
+		}
+		out.RegionDescriptor.Descriptor = desc
 	case out.RangeSplit != nil:
-		out.RangeSplit.Left = normalizeDescriptorRootEpoch(out.RangeSplit.Left, nextEpoch)
-		out.RangeSplit.Right = normalizeDescriptorRootEpoch(out.RangeSplit.Right, nextEpoch)
+		left, err := s.normalizeDescriptorRootEpoch(out.RangeSplit.Left)
+		if err != nil {
+			return rootevent.Event{}, err
+		}
+		right, err := s.normalizeDescriptorRootEpoch(out.RangeSplit.Right)
+		if err != nil {
+			return rootevent.Event{}, err
+		}
+		out.RangeSplit.Left = left
+		out.RangeSplit.Right = right
 	case out.RangeMerge != nil:
-		out.RangeMerge.Merged = normalizeDescriptorRootEpoch(out.RangeMerge.Merged, nextEpoch)
+		merged, err := s.normalizeDescriptorRootEpoch(out.RangeMerge.Merged)
+		if err != nil {
+			return rootevent.Event{}, err
+		}
+		out.RangeMerge.Merged = merged
 	case out.PeerChange != nil:
-		out.PeerChange.Region = normalizeDescriptorRootEpoch(out.PeerChange.Region, nextEpoch)
+		desc, err := s.normalizeDescriptorRootEpoch(out.PeerChange.Region)
+		if err != nil {
+			return rootevent.Event{}, err
+		}
+		out.PeerChange.Region = desc
 	}
 	return out, nil
 }
 
 func (s *Service) assignRootEpoch(desc descriptor.Descriptor) (descriptor.Descriptor, error) {
+	return s.normalizeDescriptorRootEpoch(desc)
+}
+
+func (s *Service) normalizeDescriptorRootEpoch(desc descriptor.Descriptor) (descriptor.Descriptor, error) {
+	if desc.RootEpoch != 0 {
+		return desc, nil
+	}
+	if s != nil && s.cluster != nil {
+		current, ok := s.cluster.GetRegionDescriptor(desc.RegionID)
+		if ok {
+			probe := desc.Clone()
+			probe.RootEpoch = current.RootEpoch
+			if current.Equal(probe) {
+				return probe, nil
+			}
+		}
+	}
 	nextEpoch, err := s.nextRootEpoch()
 	if err != nil {
 		return descriptor.Descriptor{}, err
 	}
-	return normalizeDescriptorRootEpoch(desc, nextEpoch), nil
+	desc.RootEpoch = nextEpoch
+	return desc, nil
+}
+
+func (s *Service) sameAppliedPeerChange(event rootevent.Event) bool {
+	if s == nil || s.cluster == nil || event.PeerChange == nil {
+		return false
+	}
+	current, ok := s.cluster.GetRegionDescriptor(event.PeerChange.RegionID)
+	if !ok {
+		return false
+	}
+	return current.Equal(event.PeerChange.Region)
 }
 
 func (s *Service) nextRootEpoch() (uint64, error) {
@@ -354,14 +402,6 @@ func (s *Service) nextRootEpoch() (uint64, error) {
 		return maxEpoch + 1, nil
 	}
 	return maxEpoch, nil
-}
-
-func normalizeDescriptorRootEpoch(desc descriptor.Descriptor, rootEpoch uint64) descriptor.Descriptor {
-	if desc.RootEpoch != 0 {
-		return desc
-	}
-	desc.RootEpoch = rootEpoch
-	return desc
 }
 
 func (s *Service) reserveIDs(count uint64) (uint64, error) {
