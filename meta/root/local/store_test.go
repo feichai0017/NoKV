@@ -55,7 +55,7 @@ func TestStoreAppendReadAndReopen(t *testing.T) {
 	require.Equal(t, commit.State, state)
 	events, tail, err = reopened.ReadSince(rootpkg.Cursor{Term: 1, Index: 1})
 	require.NoError(t, err)
-	require.Len(t, events, 3)
+	require.Len(t, events, 2)
 	require.Equal(t, commit.Cursor, tail)
 }
 
@@ -100,7 +100,7 @@ func TestStoreIgnoresTruncatedLogTail(t *testing.T) {
 	require.NoError(t, err)
 	events, tail, err := reopened.ReadSince(rootpkg.Cursor{})
 	require.NoError(t, err)
-	require.Len(t, events, 1)
+	require.Len(t, events, 0)
 	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 1}, tail)
 }
 
@@ -122,6 +122,31 @@ func TestStoreReplaysLogAfterStaleCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), state.ClusterEpoch)
 	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 1}, state.LastCommitted)
+}
+
+func TestStoreLoadsLegacyRootStateCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	payload, err := proto.Marshal(&metapb.RootState{
+		ClusterEpoch:    7,
+		MembershipEpoch: 3,
+		PolicyVersion:   9,
+		LastCommitted:   &metapb.RootCursor{Term: 1, Index: 4},
+		IdFence:         11,
+		TsoFence:        22,
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, CheckpointFileName), payload, 0o644))
+
+	reopened, err := Open(dir, nil)
+	require.NoError(t, err)
+	state, err := reopened.Current()
+	require.NoError(t, err)
+	require.Equal(t, uint64(7), state.ClusterEpoch)
+	require.Equal(t, uint64(3), state.MembershipEpoch)
+	require.Equal(t, uint64(9), state.PolicyVersion)
+	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 4}, state.LastCommitted)
+	require.Equal(t, uint64(11), state.IDFence)
+	require.Equal(t, uint64(22), state.TSOFence)
 }
 
 func testDescriptor(regionID uint64, start, end []byte) descriptor.Descriptor {

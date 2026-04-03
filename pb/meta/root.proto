@@ -38,6 +38,12 @@ message RootState {
   uint64 tso_fence = 6;
 }
 
+message RootCheckpoint {
+  RootState state = 1;
+  repeated nokv.meta.v1.RegionDescriptor descriptors = 2;
+  uint64 log_offset = 3;
+}
+
 message RootStoreMembership {
   uint64 store_id = 1;
   string address = 2;

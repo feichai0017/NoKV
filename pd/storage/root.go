@@ -141,50 +141,21 @@ func (s *RootStore) reload() error {
 	if s == nil || s.root == nil {
 		return nil
 	}
-	state, err := s.root.Current()
+	snapshot, err := s.root.Snapshot()
 	if err != nil {
 		return err
 	}
-	events, _, err := s.root.ReadSince(rootpkg.Cursor{})
-	if err != nil {
-		return err
-	}
-	snapshot := Snapshot{
-		Descriptors: make(map[uint64]descriptor.Descriptor),
+	out := Snapshot{
+		Descriptors: cloneDescriptors(snapshot.Descriptors),
 		Allocator: AllocatorState{
-			IDCurrent: state.IDFence,
-			TSCurrent: state.TSOFence,
+			IDCurrent: snapshot.State.IDFence,
+			TSCurrent: snapshot.State.TSOFence,
 		},
 	}
-	for _, evt := range events {
-		applyRootEvent(&snapshot, evt)
-	}
 	s.mu.Lock()
-	s.snapshot = snapshot
+	s.snapshot = out
 	s.mu.Unlock()
 	return nil
-}
-
-func applyRootEvent(snapshot *Snapshot, event rootpkg.Event) {
-	if snapshot == nil {
-		return
-	}
-	switch {
-	case event.RegionDescriptor != nil:
-		snapshot.Descriptors[event.RegionDescriptor.Descriptor.RegionID] = event.RegionDescriptor.Descriptor.Clone()
-	case event.RegionRemoval != nil:
-		delete(snapshot.Descriptors, event.RegionRemoval.RegionID)
-	case event.RangeSplit != nil:
-		delete(snapshot.Descriptors, event.RangeSplit.ParentRegionID)
-		snapshot.Descriptors[event.RangeSplit.Left.RegionID] = event.RangeSplit.Left.Clone()
-		snapshot.Descriptors[event.RangeSplit.Right.RegionID] = event.RangeSplit.Right.Clone()
-	case event.RangeMerge != nil:
-		delete(snapshot.Descriptors, event.RangeMerge.LeftRegionID)
-		delete(snapshot.Descriptors, event.RangeMerge.RightRegionID)
-		snapshot.Descriptors[event.RangeMerge.Merged.RegionID] = event.RangeMerge.Merged.Clone()
-	case event.PeerChange != nil:
-		snapshot.Descriptors[event.PeerChange.Region.RegionID] = event.PeerChange.Region.Clone()
-	}
 }
 
 func cloneDescriptors(in map[uint64]descriptor.Descriptor) map[uint64]descriptor.Descriptor {
@@ -205,14 +176,6 @@ func regionEvent(prev descriptor.Descriptor, existed bool, next descriptor.Descr
 	if merge, ok := classifyMergeEventFromLineage(prev, existed, next, current); ok {
 		return merge
 	}
-	if !hasTopologyLineage(next) {
-		if split, ok := classifySplitEvent(prev, existed, next, current); ok {
-			return split
-		}
-		if merge, ok := classifyMergeEvent(prev, existed, next, current); ok {
-			return merge
-		}
-	}
 	if !existed {
 		return rootpkg.RegionBootstrapped(next)
 	}
@@ -225,16 +188,6 @@ func regionEvent(prev descriptor.Descriptor, existed bool, next descriptor.Descr
 	default:
 		return rootpkg.RegionDescriptorPublished(next)
 	}
-}
-
-func hasTopologyLineage(desc descriptor.Descriptor) bool {
-	for _, ref := range desc.Lineage {
-		switch ref.Kind {
-		case descriptor.LineageKindSplitParent, descriptor.LineageKindMergeSource:
-			return true
-		}
-	}
-	return false
 }
 
 func classifySplitEventFromLineage(next descriptor.Descriptor, current map[uint64]descriptor.Descriptor) (rootpkg.Event, bool) {
@@ -270,84 +223,6 @@ func classifyMergeEventFromLineage(prev descriptor.Descriptor, existed bool, nex
 		return rootpkg.RegionMerged(leftID, rightID, next), true
 	}
 	return rootpkg.Event{}, false
-}
-
-func classifySplitEvent(prev descriptor.Descriptor, existed bool, next descriptor.Descriptor, current map[uint64]descriptor.Descriptor) (rootpkg.Event, bool) {
-	if existed || len(current) == 0 {
-		return rootpkg.Event{}, false
-	}
-	var (
-		parent descriptor.Descriptor
-		found  bool
-	)
-	for _, candidate := range current {
-		if candidate.RegionID == next.RegionID {
-			continue
-		}
-		if !bytes.Equal(candidate.EndKey, next.StartKey) {
-			continue
-		}
-		if len(next.EndKey) > 0 && len(candidate.EndKey) > 0 && bytes.Compare(next.EndKey, candidate.EndKey) < 0 {
-			continue
-		}
-		if candidate.Epoch.Version <= 1 {
-			continue
-		}
-		if found {
-			return rootpkg.Event{}, false
-		}
-		parent = candidate.Clone()
-		found = true
-	}
-	if !found {
-		return rootpkg.Event{}, false
-	}
-	return rootpkg.RegionSplitCommitted(parent.RegionID, next.StartKey, parent, next), true
-}
-
-func classifyMergeEvent(prev descriptor.Descriptor, existed bool, next descriptor.Descriptor, current map[uint64]descriptor.Descriptor) (rootpkg.Event, bool) {
-	if !existed || len(current) < 2 {
-		return rootpkg.Event{}, false
-	}
-	if next.Epoch.Version <= prev.Epoch.Version {
-		return rootpkg.Event{}, false
-	}
-	if bytes.Equal(prev.StartKey, next.StartKey) && bytes.Equal(prev.EndKey, next.EndKey) {
-		return rootpkg.Event{}, false
-	}
-	if !rangeExpanded(prev, next) {
-		return rootpkg.Event{}, false
-	}
-	var (
-		source descriptor.Descriptor
-		found  bool
-	)
-	for _, candidate := range current {
-		if candidate.RegionID == next.RegionID {
-			continue
-		}
-		if !rangeWithin(next, candidate) {
-			continue
-		}
-		if bytes.Equal(candidate.StartKey, next.StartKey) && bytes.Equal(candidate.EndKey, next.EndKey) {
-			continue
-		}
-		if bytes.Equal(candidate.EndKey, prev.StartKey) || bytes.Equal(prev.EndKey, candidate.StartKey) {
-			if found {
-				return rootpkg.Event{}, false
-			}
-			source = candidate.Clone()
-			found = true
-		}
-	}
-	if !found {
-		return rootpkg.Event{}, false
-	}
-	leftID, rightID := next.RegionID, source.RegionID
-	if bytes.Compare(source.StartKey, next.StartKey) < 0 {
-		leftID, rightID = source.RegionID, next.RegionID
-	}
-	return rootpkg.RegionMerged(leftID, rightID, next), true
 }
 
 func peerDelta(prev, next []metaregion.Peer) (added, removed []metaregion.Peer) {
@@ -398,30 +273,4 @@ func descriptorsEqual(a, b descriptor.Descriptor) bool {
 		}
 	}
 	return true
-}
-
-func rangeWithin(outer, inner descriptor.Descriptor) bool {
-	if bytes.Compare(inner.StartKey, outer.StartKey) < 0 {
-		return false
-	}
-	switch {
-	case len(outer.EndKey) == 0:
-		return true
-	case len(inner.EndKey) == 0:
-		return false
-	default:
-		return bytes.Compare(inner.EndKey, outer.EndKey) <= 0
-	}
-}
-
-func rangeExpanded(prev, next descriptor.Descriptor) bool {
-	leftExpanded := bytes.Compare(next.StartKey, prev.StartKey) < 0
-	switch {
-	case len(prev.EndKey) == 0:
-		return leftExpanded
-	case len(next.EndKey) == 0:
-		return true
-	default:
-		return leftExpanded || bytes.Compare(next.EndKey, prev.EndKey) > 0
-	}
 }

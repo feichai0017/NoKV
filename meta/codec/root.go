@@ -3,6 +3,7 @@ package codec
 import (
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
 func RootCursorToProto(cursor rootpkg.Cursor) *metapb.RootCursor {
@@ -39,6 +40,36 @@ func RootStateFromProto(pbState *metapb.RootState) rootpkg.State {
 		IDFence:         pbState.IdFence,
 		TSOFence:        pbState.TsoFence,
 	}
+}
+
+func RootSnapshotToProto(snapshot rootpkg.Snapshot, logOffset uint64) *metapb.RootCheckpoint {
+	descriptors := make([]*metapb.RegionDescriptor, 0, len(snapshot.Descriptors))
+	for _, desc := range snapshot.Descriptors {
+		descriptors = append(descriptors, DescriptorToProto(desc))
+	}
+	return &metapb.RootCheckpoint{
+		State:       RootStateToProto(snapshot.State),
+		Descriptors: descriptors,
+		LogOffset:   logOffset,
+	}
+}
+
+func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootpkg.Snapshot, uint64) {
+	if pbCheckpoint == nil {
+		return rootpkg.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, 0
+	}
+	snapshot := rootpkg.Snapshot{
+		State:       RootStateFromProto(pbCheckpoint.State),
+		Descriptors: make(map[uint64]descriptor.Descriptor, len(pbCheckpoint.Descriptors)),
+	}
+	for _, pbDesc := range pbCheckpoint.Descriptors {
+		desc := DescriptorFromProto(pbDesc)
+		if desc.RegionID == 0 {
+			continue
+		}
+		snapshot.Descriptors[desc.RegionID] = desc
+	}
+	return snapshot, pbCheckpoint.LogOffset
 }
 
 func RootEventToProto(event rootpkg.Event) *metapb.RootEvent {
