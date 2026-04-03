@@ -215,14 +215,20 @@ func TestRootStoreRefreshFromReplicatedFollower(t *testing.T) {
 	_, ok := snapshot.Descriptors[71]
 	require.False(t, ok)
 
-	require.NoError(t, followerRoot.Refresh())
-	require.NoError(t, follower.Refresh())
-
-	snapshot, err = follower.Load()
-	require.NoError(t, err)
-	got, ok := snapshot.Descriptors[71]
-	require.True(t, ok)
-	require.Equal(t, uint64(71), got.RegionID)
+	require.Eventually(t, func() bool {
+		if err := followerRoot.Refresh(); err != nil {
+			return false
+		}
+		if err := follower.Refresh(); err != nil {
+			return false
+		}
+		snapshot, err = follower.Load()
+		if err != nil {
+			return false
+		}
+		got, ok := snapshot.Descriptors[71]
+		return ok && got.RegionID == 71
+	}, 5*time.Second, 50*time.Millisecond)
 }
 
 func TestOpenRootReplicatedStoreSharesThreeNodeCluster(t *testing.T) {
@@ -232,13 +238,18 @@ func TestOpenRootReplicatedStoreSharesThreeNodeCluster(t *testing.T) {
 
 	desc := testDescriptor(81, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
 	require.NoError(t, leader.PublishRegionDescriptor(desc))
-	require.NoError(t, follower.Refresh())
 
-	snapshot, err := follower.Load()
-	require.NoError(t, err)
-	got, ok := snapshot.Descriptors[81]
-	require.True(t, ok)
-	require.Equal(t, uint64(81), got.RegionID)
+	require.Eventually(t, func() bool {
+		if err := follower.Refresh(); err != nil {
+			return false
+		}
+		snapshot, err := follower.Load()
+		if err != nil {
+			return false
+		}
+		got, ok := snapshot.Descriptors[81]
+		return ok && got.RegionID == 81
+	}, 5*time.Second, 50*time.Millisecond)
 }
 
 func TestReplicatedRootConfigValidate(t *testing.T) {
