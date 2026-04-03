@@ -1,61 +1,9 @@
 package local
 
 import (
-	"sort"
-
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
-
-func applyEvent(state *rootpkg.State, cursor rootpkg.Cursor, event rootpkg.Event) {
-	if state == nil {
-		return
-	}
-	switch event.Kind {
-	case rootpkg.EventKindStoreJoined, rootpkg.EventKindStoreLeft, rootpkg.EventKindStoreMarkedDraining:
-		state.MembershipEpoch++
-	case rootpkg.EventKindRegionBootstrap,
-		rootpkg.EventKindRegionDescriptorPublished,
-		rootpkg.EventKindRegionTombstoned,
-		rootpkg.EventKindRegionSplitRequested,
-		rootpkg.EventKindRegionSplitCommitted,
-		rootpkg.EventKindRegionMerged,
-		rootpkg.EventKindPeerAdded,
-		rootpkg.EventKindPeerRemoved:
-		state.ClusterEpoch++
-	case rootpkg.EventKindPlacementPolicyChanged:
-		if event.PlacementPolicy != nil && event.PlacementPolicy.Version > state.PolicyVersion {
-			state.PolicyVersion = event.PlacementPolicy.Version
-		} else {
-			state.PolicyVersion++
-		}
-	}
-	state.LastCommitted = cursor
-}
-
-func nextCursor(prev rootpkg.Cursor) rootpkg.Cursor {
-	term := prev.Term
-	if term == 0 {
-		term = 1
-	}
-	return rootpkg.Cursor{Term: term, Index: prev.Index + 1}
-}
-
-func snapshotEvents(descs map[uint64]descriptor.Descriptor) []rootpkg.Event {
-	if len(descs) == 0 {
-		return nil
-	}
-	ids := make([]uint64, 0, len(descs))
-	for id := range descs {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	events := make([]rootpkg.Event, 0, len(ids))
-	for _, id := range ids {
-		events = append(events, rootpkg.RegionDescriptorPublished(descs[id]))
-	}
-	return events
-}
 
 func cloneDescriptors(in map[uint64]descriptor.Descriptor) map[uint64]descriptor.Descriptor {
 	if len(in) == 0 {
@@ -69,10 +17,7 @@ func cloneDescriptors(in map[uint64]descriptor.Descriptor) map[uint64]descriptor
 }
 
 func after(a, b rootpkg.Cursor) bool {
-	if a.Term != b.Term {
-		return a.Term > b.Term
-	}
-	return a.Index > b.Index
+	return rootpkg.CursorAfter(a, b)
 }
 
 func previousCursor(in rootpkg.Cursor) rootpkg.Cursor {
