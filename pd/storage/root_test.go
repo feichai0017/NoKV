@@ -3,12 +3,13 @@ package storage
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
-	rootreplicated "github.com/feichai0017/NoKV/meta/root/backend/replicated"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"net"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -199,14 +200,10 @@ func TestOpenRootLocalStoreCreatesMetadataRootFiles(t *testing.T) {
 }
 
 func TestRootStoreRefreshFromReplicatedFollower(t *testing.T) {
-	rootStores, _, err := rootreplicated.OpenFixedCluster(4, 1, 2, 3)
-	require.NoError(t, err)
-
-	leader, err := OpenRootStore(rootStores[1])
-	require.NoError(t, err)
-	followerRoot := rootStores[2]
-	follower, err := OpenRootStore(followerRoot)
-	require.NoError(t, err)
+	rootStores, leaderID := openReplicatedRootStores(t)
+	leader := rootStores[leaderID]
+	followerRoot := rootStores[followerID(leaderID)]
+	follower := followerRoot
 
 	desc := testDescriptor(71, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
 	require.NoError(t, leader.PublishRegionDescriptor(desc))
@@ -227,19 +224,9 @@ func TestRootStoreRefreshFromReplicatedFollower(t *testing.T) {
 }
 
 func TestOpenRootReplicatedStoreSharesThreeNodeCluster(t *testing.T) {
-	workdir := t.TempDir()
-	leader, err := OpenRootReplicatedStore(ReplicatedRootConfig{
-		WorkDir:    workdir,
-		NodeID:     1,
-		ClusterIDs: []uint64{1, 2, 3},
-	})
-	require.NoError(t, err)
-	follower, err := OpenRootReplicatedStore(ReplicatedRootConfig{
-		WorkDir:    workdir,
-		NodeID:     2,
-		ClusterIDs: []uint64{1, 2, 3},
-	})
-	require.NoError(t, err)
+	rootStores, leaderID := openReplicatedRootStores(t)
+	leader := rootStores[leaderID]
+	follower := rootStores[followerID(leaderID)]
 
 	desc := testDescriptor(81, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
 	require.NoError(t, leader.PublishRegionDescriptor(desc))
@@ -254,35 +241,24 @@ func TestOpenRootReplicatedStoreSharesThreeNodeCluster(t *testing.T) {
 
 func TestReplicatedRootConfigValidate(t *testing.T) {
 	cfg := ReplicatedRootConfig{
-		WorkDir:    t.TempDir(),
-		NodeID:     1,
-		ClusterIDs: []uint64{1, 2, 3},
-	}
-	require.NoError(t, cfg.Validate())
-
-	cfg.TransportAddr = "127.0.0.1:7001"
-	cfg.PeerAddrs = map[uint64]string{
-		1: "127.0.0.1:7001",
-		2: "127.0.0.1:7002",
-		3: "127.0.0.1:7003",
+		NodeID:        1,
+		TransportAddr: "127.0.0.1:7001",
+		PeerAddrs: map[uint64]string{
+			1: "127.0.0.1:7001",
+			2: "127.0.0.1:7002",
+			3: "127.0.0.1:7003",
+		},
 	}
 	require.NoError(t, cfg.Validate())
 
 	cfg.PeerAddrs = map[uint64]string{1: "127.0.0.1:7001"}
 	require.Error(t, cfg.Validate())
-}
-
-func TestParseReplicatedRootClusterIDs(t *testing.T) {
-	ids, err := ParseReplicatedRootClusterIDs("")
-	require.NoError(t, err)
-	require.Equal(t, []uint64{1, 2, 3}, ids)
-
-	ids, err = ParseReplicatedRootClusterIDs("1,2,3")
-	require.NoError(t, err)
-	require.Equal(t, []uint64{1, 2, 3}, ids)
-
-	_, err = ParseReplicatedRootClusterIDs("1,1,2")
-	require.Error(t, err)
+	cfg.PeerAddrs = map[uint64]string{
+		2: "127.0.0.1:7002",
+		3: "127.0.0.1:7003",
+		4: "127.0.0.1:7004",
+	}
+	require.Error(t, cfg.Validate())
 }
 
 func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch, peers []metaregion.Peer) descriptor.Descriptor {
@@ -296,4 +272,54 @@ func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch, peers 
 	}
 	desc.EnsureHash()
 	return desc
+}
+
+func openReplicatedRootStores(t *testing.T) (map[uint64]*RootStore, uint64) {
+	t.Helper()
+
+	peerAddrs := reserveRootPeerAddrs(t)
+	rootStores := make(map[uint64]*RootStore, 3)
+	for _, id := range []uint64{1, 2, 3} {
+		store, err := OpenRootReplicatedStore(ReplicatedRootConfig{
+			NodeID:        id,
+			TransportAddr: peerAddrs[id],
+			PeerAddrs:     peerAddrs,
+		})
+		require.NoError(t, err)
+		rootStores[id] = store
+		t.Cleanup(func() { require.NoError(t, store.Close()) })
+	}
+
+	var leaderID uint64
+	require.Eventually(t, func() bool {
+		for id, store := range rootStores {
+			if store.IsLeader() {
+				leaderID = id
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 50*time.Millisecond)
+	return rootStores, leaderID
+}
+
+func reserveRootPeerAddrs(t *testing.T) map[uint64]string {
+	t.Helper()
+	out := make(map[uint64]string, 3)
+	for _, id := range []uint64{1, 2, 3} {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		out[id] = ln.Addr().String()
+		require.NoError(t, ln.Close())
+	}
+	return out
+}
+
+func followerID(leaderID uint64) uint64 {
+	for _, id := range []uint64{1, 2, 3} {
+		if id != leaderID {
+			return id
+		}
+	}
+	return 0
 }

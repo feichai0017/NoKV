@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -32,12 +33,21 @@ func runPDCmd(w io.Writer, args []string) error {
 	tsStart := fs.Uint64("ts-start", 1, "initial TSO value")
 	rootMode := fs.String("root-mode", "local", "metadata root mode: local|replicated")
 	rootNodeID := fs.Uint64("root-node-id", 1, "metadata root node id for replicated mode")
-	rootCluster := fs.String("root-cluster", "1,2,3", "fixed metadata root cluster ids for replicated mode")
+	rootTransportAddr := fs.String("root-transport-addr", "", "metadata root raft transport address for replicated mode")
 	rootRefresh := fs.Duration("root-refresh", 200*time.Millisecond, "refresh interval for replicated rooted PD state")
 	workdir := fs.String("workdir", "", "optional PD local state directory for persisting allocator and region catalog")
 	configPath := fs.String("config", "", "optional raft configuration file used to resolve pd workdir")
 	scope := fs.String("scope", "host", "scope for config-resolved pd workdir: host|docker")
 	metricsAddr := fs.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
+	var rootPeerFlags []string
+	fs.Func("root-peer", "replicated metadata root peer mapping in the form nodeID=address (repeatable, exactly 3)", func(value string) error {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return fmt.Errorf("root-peer value cannot be empty")
+		}
+		rootPeerFlags = append(rootPeerFlags, value)
+		return nil
+	})
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -71,9 +81,6 @@ func runPDCmd(w io.Writer, args []string) error {
 	default:
 		return fmt.Errorf("invalid root mode %q (expected local|replicated)", *rootMode)
 	}
-	if rootModeValue == "replicated" && strings.TrimSpace(*workdir) == "" {
-		return fmt.Errorf("pd replicated root mode requires -workdir")
-	}
 
 	lis, err := pdListen("tcp", *addr)
 	if err != nil {
@@ -87,23 +94,14 @@ func runPDCmd(w io.Writer, args []string) error {
 		workdirPath   string
 		loadedRegions int
 	)
-	if strings.TrimSpace(*workdir) != "" {
-		workdirPath = strings.TrimSpace(*workdir)
-		var rootStore *pdstorage.RootStore
-		switch rootModeValue {
-		case "", "local":
-			rootStore, err = pdstorage.OpenRootLocalStore(workdirPath)
-		case "replicated":
-			clusterIDs, parseErr := pdstorage.ParseReplicatedRootClusterIDs(*rootCluster)
-			if parseErr != nil {
-				return parseErr
-			}
-			rootStore, err = pdstorage.OpenRootReplicatedStore(pdstorage.ReplicatedRootConfig{
-				WorkDir:    workdirPath,
-				NodeID:     *rootNodeID,
-				ClusterIDs: clusterIDs,
-			})
+	workdirPath = strings.TrimSpace(*workdir)
+	switch rootModeValue {
+	case "", "local":
+		if workdirPath == "" {
+			break
 		}
+		var rootStore *pdstorage.RootStore
+		rootStore, err = pdstorage.OpenRootLocalStore(workdirPath)
 		if err != nil {
 			return fmt.Errorf("pd open metadata root %q: %w", workdirPath, err)
 		}
@@ -111,6 +109,28 @@ func runPDCmd(w io.Writer, args []string) error {
 		bootstrap, err := pdstorage.Bootstrap(rootStore, cluster, *idStart, *tsStart)
 		if err != nil {
 			return fmt.Errorf("pd bootstrap from %q: %w", workdirPath, err)
+		}
+		*idStart, *tsStart = bootstrap.IDStart, bootstrap.TSStart
+		loadedRegions = bootstrap.LoadedRegions
+		store = rootStore
+	case "replicated":
+		rootPeers, err := parseReplicatedRootPeers(rootPeerFlags)
+		if err != nil {
+			return err
+		}
+		workdirPath = strings.TrimSpace(*workdir)
+		rootStore, openErr := pdstorage.OpenRootReplicatedStore(pdstorage.ReplicatedRootConfig{
+			NodeID:        *rootNodeID,
+			TransportAddr: strings.TrimSpace(*rootTransportAddr),
+			PeerAddrs:     rootPeers,
+		})
+		if openErr != nil {
+			return fmt.Errorf("pd open replicated metadata root: %w", openErr)
+		}
+		defer func() { _ = rootStore.Close() }()
+		bootstrap, err := pdstorage.Bootstrap(rootStore, cluster, *idStart, *tsStart)
+		if err != nil {
+			return fmt.Errorf("pd bootstrap from replicated metadata root: %w", err)
 		}
 		*idStart, *tsStart = bootstrap.IDStart, bootstrap.TSStart
 		loadedRegions = bootstrap.LoadedRegions
@@ -140,7 +160,11 @@ func runPDCmd(w io.Writer, args []string) error {
 	}
 
 	if store != nil {
-		_, _ = fmt.Fprintf(w, "PD restored %d region(s) from metadata root: %s\n", loadedRegions, workdirPath)
+		if rootModeValue == "replicated" {
+			_, _ = fmt.Fprintf(w, "PD restored %d region(s) from replicated metadata root\n", loadedRegions)
+		} else {
+			_, _ = fmt.Fprintf(w, "PD restored %d region(s) from metadata root: %s\n", loadedRegions, workdirPath)
+		}
 		_, _ = fmt.Fprintf(w, "PD allocator starts: id=%d ts=%d\n", *idStart, *tsStart)
 		_, _ = fmt.Fprintf(w, "PD metadata root mode: %s\n", rootModeValue)
 	}
@@ -179,6 +203,32 @@ func runPDCmd(w io.Writer, args []string) error {
 		}
 		return nil
 	}
+}
+
+func parseReplicatedRootPeers(values []string) (map[uint64]string, error) {
+	peers := make(map[uint64]string, len(values))
+	for _, raw := range values {
+		parts := strings.SplitN(strings.TrimSpace(raw), "=", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid -root-peer value %q (want nodeID=address)", raw)
+		}
+		id, err := strconv.ParseUint(strings.TrimSpace(parts[0]), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid root peer id in %q: %w", raw, err)
+		}
+		if id == 0 {
+			return nil, fmt.Errorf("invalid root peer id in %q: must be > 0", raw)
+		}
+		addr := strings.TrimSpace(parts[1])
+		if addr == "" {
+			return nil, fmt.Errorf("invalid -root-peer value %q (empty address)", raw)
+		}
+		if _, ok := peers[id]; ok {
+			return nil, fmt.Errorf("duplicate root peer id %d", id)
+		}
+		peers[id] = addr
+	}
+	return peers, nil
 }
 
 func flagPassed(fs *flag.FlagSet, name string) bool {
