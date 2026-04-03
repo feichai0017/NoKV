@@ -41,15 +41,30 @@ func CloneCommittedEvents(in []CommittedEvent) []CommittedEvent {
 	return out
 }
 
+// CommittedStream is one retained committed rooted stream starting at one
+// durable log offset.
+type CommittedStream struct {
+	Offset  int64
+	Records []CommittedEvent
+}
+
+// CloneCommittedStream returns a detached committed-stream view.
+func CloneCommittedStream(in CommittedStream) CommittedStream {
+	return CommittedStream{
+		Offset:  in.Offset,
+		Records: CloneCommittedEvents(in.Records),
+	}
+}
+
 // Substrate is the rooted metadata virtual-log surface consumed by root
 // backends. It combines one compact checkpoint boundary with one retained
 // committed stream and bootstrap installation semantics.
 type Substrate interface {
 	LoadCheckpoint() (checkpoint Checkpoint, err error)
 	SaveCheckpoint(checkpoint Checkpoint) error
-	LoadCommitted(offset int64) ([]CommittedEvent, error)
+	ReadCommitted(offset int64) (CommittedStream, error)
 	AppendCommitted(records ...CommittedEvent) (logEnd int64, err error)
-	CompactCommitted(records []CommittedEvent) error
-	InstallBootstrap(checkpoint Checkpoint, records []CommittedEvent) error
+	CompactCommitted(stream CommittedStream) error
+	InstallBootstrap(checkpoint Checkpoint, stream CommittedStream) error
 	Size() (int64, error)
 }

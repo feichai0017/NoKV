@@ -24,29 +24,32 @@ type fileEventLog struct {
 	workdir string
 }
 
-func (l fileEventLog) LoadCommitted(offset int64) ([]rootstorage.CommittedEvent, error) {
+func (l fileEventLog) ReadCommitted(offset int64) (rootstorage.CommittedStream, error) {
 	path := filepath.Join(l.workdir, LogFileName)
 	f, err := l.fs.OpenHandle(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return rootstorage.CommittedStream{Offset: offset}, nil
 		}
-		return nil, err
+		return rootstorage.CommittedStream{}, err
 	}
 	defer func() { _ = f.Close() }()
 	if offset > 0 {
 		if _, err := f.Seek(offset, io.SeekStart); err != nil {
-			return nil, err
+			return rootstorage.CommittedStream{}, err
 		}
 	}
 	var out []rootstorage.CommittedEvent
 	for {
 		rec, ok, err := readRecord(f)
 		if err != nil {
-			return nil, err
+			return rootstorage.CommittedStream{}, err
 		}
 		if !ok {
-			return out, nil
+			return rootstorage.CommittedStream{
+				Offset:  offset,
+				Records: out,
+			}, nil
 		}
 		out = append(out, rec)
 	}
@@ -79,14 +82,14 @@ func (l fileEventLog) AppendCommitted(records ...rootstorage.CommittedEvent) (in
 	return logEnd, nil
 }
 
-func (l fileEventLog) CompactCommitted(records []rootstorage.CommittedEvent) error {
+func (l fileEventLog) CompactCommitted(stream rootstorage.CommittedStream) error {
 	path := filepath.Join(l.workdir, LogFileName)
 	tmp := path + ".tmp"
 	f, err := l.fs.OpenFileHandle(tmp, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}
-	for _, rec := range records {
+	for _, rec := range stream.Records {
 		if err := writeRecord(f, rec); err != nil {
 			_ = f.Close()
 			_ = l.fs.Remove(tmp)

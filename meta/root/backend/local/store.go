@@ -51,8 +51,8 @@ func Open(workdir string, fs vfs.FS) (*Store, error) {
 		storage:    storage,
 		state:      bootstrap.Snapshot.State,
 		descs:      bootstrap.Snapshot.Descriptors,
-		records:    bootstrap.Records,
-		logBase:    bootstrap.LogOffset,
+		records:    bootstrap.Stream.Records,
+		logBase:    bootstrap.Stream.Offset,
 		retainFrom: bootstrap.RetainFrom,
 	}, nil
 }
@@ -186,7 +186,7 @@ func (s *Store) maybeCompactLocked() {
 		State:       s.state,
 		Descriptors: rootstate.CloneDescriptors(s.descs),
 	}
-	if err := s.storage.CompactCommitted(retained); err != nil {
+	if err := s.storage.CompactCommitted(rootstorage.CommittedStream{Records: retained}); err != nil {
 		return
 	}
 	if err := s.storage.SaveCheckpoint(rootstorage.Checkpoint{Snapshot: snapshot, LogOffset: 0}); err != nil {
