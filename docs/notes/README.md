@@ -46,6 +46,11 @@
     <h3><a href="2026-03-30-distributed-testing-and-failpoints.html">分布式测试与 failpoint</a></h3>
     <p>为什么 NoKV 同时使用 live integration 与窄边界 failpoint，以及 failpoint 应该如何克制。</p>
   </div>
+  <div class="blog-card">
+    <span class="blog-date">2026-04-03</span>
+    <h3><a href="2026-04-03-future-metadata-ha-plan.html">未来 Metadata HA 路线规划</a></h3>
+    <p>为什么 NoKV 未来更适合走 Delos-lite rooted log，而不是传统的大 PD 元数据架构。</p>
+  </div>
 </div>
 
 ## 这里应该写什么
