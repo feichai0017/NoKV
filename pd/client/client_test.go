@@ -173,7 +173,6 @@ func (f *followerStorage) Load() (pdstorage.Snapshot, error) {
 }
 func (f *followerStorage) PublishRegionDescriptor(descriptor.Descriptor) error { return nil }
 func (f *followerStorage) AppendRootEvent(rootevent.Event) error               { return nil }
-func (f *followerStorage) TombstoneRegion(uint64) error                        { return nil }
 func (f *followerStorage) SaveAllocatorState(uint64, uint64) error             { return nil }
 func (f *followerStorage) Refresh() error                                      { return nil }
 func (f *followerStorage) Close() error                                        { return nil }
