@@ -2,86 +2,21 @@ package storage
 
 import (
 	"bytes"
-	"fmt"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
-	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
-	rootreplicated "github.com/feichai0017/NoKV/meta/root/backend/replicated"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	"slices"
 	"sync"
 )
 
 // RootStore persists PD truth on top of the metadata root and reconstructs the
 // region catalog by replaying committed root events.
 type RootStore struct {
-	root interface {
-		rootpkg.StateReader
-		rootpkg.EventAppender
-		rootpkg.AllocatorFencer
-	}
+	root rootBackend
 
 	mu       sync.RWMutex
 	snapshot Snapshot
-}
-
-type replicatedRootEntry struct {
-	ids     []uint64
-	cluster *rootreplicated.FixedCluster
-}
-
-var replicatedRootRegistry struct {
-	mu       sync.Mutex
-	clusters map[string]replicatedRootEntry
-}
-
-// OpenRootStore opens a PD storage backend backed by the metadata root.
-func OpenRootStore(root interface {
-	rootpkg.StateReader
-	rootpkg.EventAppender
-	rootpkg.AllocatorFencer
-}) (*RootStore, error) {
-	store := &RootStore{root: root}
-	if err := store.reload(); err != nil {
-		return nil, err
-	}
-	return store, nil
-}
-
-// OpenRootLocalStore opens a PD storage backend backed by the local metadata
-// root files in workdir.
-func OpenRootLocalStore(workdir string) (*RootStore, error) {
-	root, err := rootlocal.Open(workdir, nil)
-	if err != nil {
-		return nil, err
-	}
-	return OpenRootStore(root)
-}
-
-// OpenRootReplicatedStore opens one PD storage backend backed by the
-// experimental in-process fixed-cluster replicated metadata root.
-func OpenRootReplicatedStore(workdir string, nodeID uint64, clusterIDs []uint64) (*RootStore, error) {
-	if workdir == "" {
-		return nil, fmt.Errorf("pd/storage: workdir is required for replicated root mode")
-	}
-	if nodeID == 0 {
-		return nil, fmt.Errorf("pd/storage: replicated root node id must be > 0")
-	}
-	cluster, err := getOrCreateReplicatedCluster(workdir, clusterIDs)
-	if err != nil {
-		return nil, err
-	}
-	driver, err := cluster.Driver(nodeID)
-	if err != nil {
-		return nil, err
-	}
-	root, err := rootreplicated.Open(rootreplicated.Config{Driver: driver})
-	if err != nil {
-		return nil, err
-	}
-	return OpenRootStore(root)
 }
 
 // Load returns the last reconstructed snapshot.
@@ -102,7 +37,7 @@ func (s *RootStore) Refresh() error {
 	if s == nil {
 		return nil
 	}
-	if refresher, ok := s.root.(interface{ Refresh() error }); ok {
+	if refresher, ok := s.root.(refreshableRoot); ok {
 		if err := refresher.Refresh(); err != nil {
 			return err
 		}
@@ -114,7 +49,7 @@ func (s *RootStore) IsLeader() bool {
 	if s == nil || s.root == nil {
 		return true
 	}
-	if leader, ok := s.root.(LeaderStatus); ok {
+	if leader, ok := s.root.(leaderAwareRoot); ok {
 		return leader.IsLeader()
 	}
 	return true
@@ -124,7 +59,7 @@ func (s *RootStore) LeaderID() uint64 {
 	if s == nil || s.root == nil {
 		return 0
 	}
-	if leader, ok := s.root.(LeaderStatus); ok {
+	if leader, ok := s.root.(leaderAwareRoot); ok {
 		return leader.LeaderID()
 	}
 	return 0
@@ -288,27 +223,4 @@ func descriptorsEqual(a, b descriptor.Descriptor) bool {
 		}
 	}
 	return true
-}
-
-func getOrCreateReplicatedCluster(workdir string, clusterIDs []uint64) (*rootreplicated.FixedCluster, error) {
-	replicatedRootRegistry.mu.Lock()
-	defer replicatedRootRegistry.mu.Unlock()
-	if replicatedRootRegistry.clusters == nil {
-		replicatedRootRegistry.clusters = make(map[string]replicatedRootEntry)
-	}
-	if entry, ok := replicatedRootRegistry.clusters[workdir]; ok {
-		if !slices.Equal(entry.ids, clusterIDs) {
-			return nil, fmt.Errorf("pd/storage: replicated root cluster ids for %q changed from %v to %v", workdir, entry.ids, clusterIDs)
-		}
-		return entry.cluster, nil
-	}
-	cluster, err := rootreplicated.NewFixedCluster(clusterIDs...)
-	if err != nil {
-		return nil, err
-	}
-	replicatedRootRegistry.clusters[workdir] = replicatedRootEntry{
-		ids:     slices.Clone(clusterIDs),
-		cluster: cluster,
-	}
-	return cluster, nil
 }

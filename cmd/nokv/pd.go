@@ -102,7 +102,11 @@ func runPDCmd(w io.Writer, args []string) error {
 			if len(clusterIDs) != 3 {
 				return fmt.Errorf("pd replicated root mode requires exactly 3 root cluster ids")
 			}
-			rootStore, err = pdstorage.OpenRootReplicatedStore(workdirPath, *rootNodeID, clusterIDs)
+			rootStore, err = pdstorage.OpenRootReplicatedStore(pdstorage.ReplicatedRootConfig{
+				WorkDir:    workdirPath,
+				NodeID:     *rootNodeID,
+				ClusterIDs: clusterIDs,
+			})
 		}
 		if err != nil {
 			return fmt.Errorf("pd open metadata root %q: %w", workdirPath, err)
