@@ -26,10 +26,7 @@ type Snapshot struct {
 func CloneSnapshot(snapshot Snapshot) Snapshot {
 	out := Snapshot{
 		State:       snapshot.State,
-		Descriptors: make(map[uint64]descriptor.Descriptor, len(snapshot.Descriptors)),
-	}
-	for id, desc := range snapshot.Descriptors {
-		out.Descriptors[id] = desc.Clone()
+		Descriptors: CloneDescriptors(snapshot.Descriptors),
 	}
 	return out
 }

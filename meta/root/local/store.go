@@ -82,7 +82,7 @@ func (s *Store) Current() (rootpkg.State, error) {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return cloneState(s.state), nil
+	return s.state, nil
 }
 
 // Snapshot returns the compact rooted metadata snapshot.
@@ -111,7 +111,7 @@ func (s *Store) ReadSince(cursor rootpkg.Cursor) ([]rootpkg.Event, rootpkg.Curso
 	out := make([]rootpkg.Event, 0, len(s.records))
 	for _, rec := range s.records {
 		if after(rec.Cursor, cursor) {
-			out = append(out, cloneEvent(rec.Event))
+			out = append(out, rootpkg.CloneEvent(rec.Event))
 		}
 	}
 	return out, s.state.LastCommitted, nil
@@ -127,14 +127,14 @@ func (s *Store) Append(events ...rootpkg.Event) (rootpkg.CommitInfo, error) {
 	defer s.mu.Unlock()
 
 	var next rootpkg.Cursor
-	state := cloneState(s.state)
-	descs := cloneDescriptors(s.descs)
+	state := s.state
+	descs := rootpkg.CloneDescriptors(s.descs)
 	records := make([]rootpkg.CommittedEvent, 0, len(events))
 	for _, evt := range events {
 		next = rootpkg.NextCursor(state.LastCommitted)
 		rootpkg.ApplyEventToState(&state, next, evt)
 		rootpkg.ApplyEventToDescriptors(descs, evt)
-		records = append(records, rootpkg.CommittedEvent{Cursor: next, Event: cloneEvent(evt)})
+		records = append(records, rootpkg.CommittedEvent{Cursor: next, Event: rootpkg.CloneEvent(evt)})
 	}
 	logEnd, err := s.log.Append(records...)
 	if err != nil {
@@ -149,7 +149,7 @@ func (s *Store) Append(events ...rootpkg.Event) (rootpkg.CommitInfo, error) {
 	s.logBase = logEnd
 	s.retainFrom = retainedFloor(s.records, state.LastCommitted)
 	s.maybeCompactLocked()
-	return rootpkg.CommitInfo{Cursor: state.LastCommitted, State: cloneState(state)}, nil
+	return rootpkg.CommitInfo{Cursor: state.LastCommitted, State: state}, nil
 }
 
 // FenceAllocator advances one global allocator fence monotonically.
@@ -159,7 +159,7 @@ func (s *Store) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	state := cloneState(s.state)
+	state := s.state
 	var out *uint64
 	switch kind {
 	case rootpkg.AllocatorKindID:
@@ -177,7 +177,7 @@ func (s *Store) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, 
 	if err != nil {
 		return 0, err
 	}
-	if err := s.checkpt.Save(rootpkg.Snapshot{State: state, Descriptors: cloneDescriptors(s.descs)}, uint64(logEnd)); err != nil {
+	if err := s.checkpt.Save(rootpkg.Snapshot{State: state, Descriptors: rootpkg.CloneDescriptors(s.descs)}, uint64(logEnd)); err != nil {
 		return 0, err
 	}
 	s.state = state
@@ -195,8 +195,8 @@ func (s *Store) maybeCompactLocked() {
 	start := len(s.records) - maxRetainedRecords
 	retained := cloneRecords(s.records[start:])
 	snapshot := rootpkg.Snapshot{
-		State:       cloneState(s.state),
-		Descriptors: cloneDescriptors(s.descs),
+		State:       s.state,
+		Descriptors: rootpkg.CloneDescriptors(s.descs),
 	}
 	if err := s.log.Rewrite(retained); err != nil {
 		return
