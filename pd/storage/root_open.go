@@ -9,7 +9,6 @@ import (
 )
 
 type rootBackend interface {
-	Current() (rootstate.State, error)
 	Snapshot() (rootstate.Snapshot, error)
 	Append(events ...rootevent.Event) (rootstate.CommitInfo, error)
 	FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, error)
