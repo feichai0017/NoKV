@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/config"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/pd/core"
 	pdserver "github.com/feichai0017/NoKV/pd/server"
 	pdstorage "github.com/feichai0017/NoKV/pd/storage"
@@ -176,15 +177,25 @@ func runPDCmd(w io.Writer, args []string) error {
 	ctx, cancel := pdNotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if refresher, ok := store.(pdstorage.Refresher); ok && rootModeValue == "replicated" {
-		_ = refresher
+		waiter, _ := store.(pdstorage.ChangeWaiter)
 		ticker := time.NewTicker(*rootRefresh)
 		defer ticker.Stop()
 		go func() {
+			var last rootstate.Cursor
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
+					if waiter != nil {
+						next, err := waiter.WaitForChange(last, *rootRefresh)
+						if err == nil && rootstate.CursorAfter(next, last) {
+							_ = svc.RefreshFromStorage()
+							last = next
+						}
+						continue
+					}
+					_ = refresher.Refresh()
 					_ = svc.RefreshFromStorage()
 				}
 			}

@@ -3,6 +3,7 @@ package replicated
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
@@ -126,6 +127,33 @@ func (s *Store) Refresh() error {
 	s.retainFrom = bootstrap.RetainFrom
 	s.mu.Unlock()
 	return nil
+}
+
+// WaitForChange waits until durable rooted truth advances past after.
+// This is a pragmatic catch-up primitive for follower services until a more
+// direct push/watch path exists.
+func (s *Store) WaitForChange(after rootstate.Cursor, timeout time.Duration) (rootstate.Cursor, error) {
+	if s == nil {
+		return rootstate.Cursor{}, nil
+	}
+	if timeout <= 0 {
+		timeout = 200 * time.Millisecond
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		bootstrap, err := rootmaterialize.LoadBootstrap(s.checkpt, s.log)
+		if err != nil {
+			return rootstate.Cursor{}, err
+		}
+		current := bootstrap.Snapshot.State.LastCommitted
+		if rootstate.CursorAfter(current, after) {
+			return current, nil
+		}
+		if !time.Now().Before(deadline) {
+			return current, nil
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 func (s *Store) Current() (rootstate.State, error) {

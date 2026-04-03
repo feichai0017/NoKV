@@ -2,9 +2,11 @@ package storage
 
 import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"math"
 	"slices"
+	"time"
 )
 
 // AllocatorState captures persisted counters for ID and TSO allocators.
@@ -59,6 +61,11 @@ type Store interface {
 // Refresher reloads the reconstructed PD snapshot from the underlying root.
 type Refresher interface {
 	Refresh() error
+}
+
+// ChangeWaiter waits until rooted truth advances past one committed cursor.
+type ChangeWaiter interface {
+	WaitForChange(after rootstate.Cursor, timeout time.Duration) (rootstate.Cursor, error)
 }
 
 // LeaderStatus reports whether the current rooted storage instance is the
