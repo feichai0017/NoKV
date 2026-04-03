@@ -26,6 +26,7 @@ func (d *MemoryDriver) Config(maxRetainedRecords int) Config {
 	return Config{
 		Log:                memoryEventLog{driver: d},
 		Checkpoint:         memoryCheckpointStore{driver: d},
+		Installer:          d,
 		MaxRetainedRecords: maxRetainedRecords,
 	}
 }
@@ -84,5 +85,15 @@ func (s memoryCheckpointStore) Save(checkpoint rootstorage.Checkpoint) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 	s.driver.checkpoint = rootstorage.CloneCheckpoint(checkpoint)
+	return nil
+}
+
+// InstallBootstrap replaces the in-memory checkpoint and retained committed
+// tail. It is the single-process reference implementation of snapshot install.
+func (d *MemoryDriver) InstallBootstrap(checkpoint rootstorage.Checkpoint, records []rootstorage.CommittedEvent) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.checkpoint = rootstorage.CloneCheckpoint(checkpoint)
+	d.records = rootstorage.CloneCommittedEvents(records)
 	return nil
 }

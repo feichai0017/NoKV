@@ -68,6 +68,45 @@ func TestReplicatedStoreCompactsMemoryDriverTail(t *testing.T) {
 	require.Equal(t, uint64(3), tail.Index)
 }
 
+func TestReplicatedStoreInstallBootstrapReplacesState(t *testing.T) {
+	store, driver, err := OpenMemory(4)
+	require.NoError(t, err)
+
+	_, err = store.Append(
+		rootevent.RegionDescriptorPublished(testDescriptor(10, []byte("a"), []byte("b"))),
+	)
+	require.NoError(t, err)
+
+	snapshot := rootstate.Snapshot{
+		State: rootstate.State{
+			ClusterEpoch:  7,
+			LastCommitted: rootstate.Cursor{Term: 3, Index: 9},
+			IDFence:       123,
+			TSOFence:      456,
+		},
+		Descriptors: map[uint64]descriptor.Descriptor{
+			99: testDescriptor(99, []byte("m"), []byte("z")),
+		},
+	}
+	require.NoError(t, store.InstallBootstrap(snapshot, nil))
+
+	current, err := store.Current()
+	require.NoError(t, err)
+	require.Equal(t, snapshot.State, current)
+
+	events, tail, err := store.ReadSince(rootstate.Cursor{})
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.Equal(t, uint64(99), events[0].RegionDescriptor.Descriptor.RegionID)
+	require.Equal(t, snapshot.State.LastCommitted, tail)
+
+	reopened, err := Open(driver.Config(4))
+	require.NoError(t, err)
+	current, err = reopened.Current()
+	require.NoError(t, err)
+	require.Equal(t, snapshot.State, current)
+}
+
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
 	desc := descriptor.Descriptor{
 		RegionID:  id,
