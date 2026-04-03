@@ -64,6 +64,16 @@ func (c *Cluster) PublishRegionDescriptor(desc descriptor.Descriptor) error {
 	return c.regions.Upsert(desc)
 }
 
+// ValidateRegionDescriptor checks whether one rooted descriptor can be applied
+// to the current runtime view without mutating in-memory state.
+func (c *Cluster) ValidateRegionDescriptor(desc descriptor.Descriptor) error {
+	if c == nil {
+		return nil
+	}
+	clone := c.clone()
+	return clone.PublishRegionDescriptor(desc)
+}
+
 // PublishRootEvent applies one explicit rooted truth event into the runtime PD
 // route view.
 func (c *Cluster) PublishRootEvent(event rootevent.Event) error {
@@ -93,12 +103,35 @@ func (c *Cluster) PublishRootEvent(event rootevent.Event) error {
 	}
 }
 
+// ValidateRootEvent checks whether one rooted truth event can be applied to the
+// current runtime view without mutating in-memory state.
+func (c *Cluster) ValidateRootEvent(event rootevent.Event) error {
+	if c == nil {
+		return nil
+	}
+	clone := c.clone()
+	return clone.PublishRootEvent(event)
+}
+
 // RemoveRegion removes a region from PD metadata and reports whether the region existed before removal.
 func (c *Cluster) RemoveRegion(regionID uint64) bool {
 	if c == nil {
 		return false
 	}
 	return c.regions.Remove(regionID)
+}
+
+// HasRegion reports whether the runtime view currently tracks regionID.
+func (c *Cluster) HasRegion(regionID uint64) bool {
+	if c == nil || regionID == 0 {
+		return false
+	}
+	for _, info := range c.RegionSnapshot() {
+		if info.Descriptor.RegionID == regionID {
+			return true
+		}
+	}
+	return false
 }
 
 // RegionSnapshot returns a stable copy of tracked region metadata.
@@ -137,4 +170,18 @@ func (c *Cluster) RegionLastHeartbeat(regionID uint64) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return c.regions.LastHeartbeat(regionID)
+}
+
+func (c *Cluster) clone() *Cluster {
+	if c == nil {
+		return NewCluster()
+	}
+	out := NewCluster()
+	for _, store := range c.StoreSnapshot() {
+		_ = out.UpsertStoreHeartbeat(store)
+	}
+	for _, region := range c.RegionSnapshot() {
+		_ = out.regions.UpsertAt(region.Descriptor, region.LastHeartbeat)
+	}
+	return out
 }

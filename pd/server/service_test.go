@@ -333,6 +333,8 @@ func TestServicePublishRootEventValidationAndPersistenceError(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.Internal, status.Code(err))
+	_, ok := svc.cluster.GetRegionDescriptorByKey([]byte("m"))
+	require.False(t, ok)
 }
 
 func TestServiceRegionCatalogPersistenceErrors(t *testing.T) {
@@ -345,6 +347,8 @@ func TestServiceRegionCatalogPersistenceErrors(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.Internal, status.Code(err))
+	_, ok := svc.cluster.GetRegionDescriptorByKey([]byte("b"))
+	require.False(t, ok)
 
 	store.updateErr = nil
 	_, err = svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
@@ -355,6 +359,9 @@ func TestServiceRegionCatalogPersistenceErrors(t *testing.T) {
 	_, err = svc.RemoveRegion(context.Background(), &pdpb.RemoveRegionRequest{RegionId: 8})
 	require.Error(t, err)
 	require.Equal(t, codes.Internal, status.Code(err))
+	resp, lookupErr := svc.GetRegionByKey(context.Background(), &pdpb.GetRegionByKeyRequest{Key: []byte("b")})
+	require.NoError(t, lookupErr)
+	require.False(t, resp.GetNotFound())
 }
 
 func TestServicePersistsAllocatorState(t *testing.T) {
@@ -385,6 +392,21 @@ func TestServiceAllocatorStatePersistenceError(t *testing.T) {
 	_, err := svc.AllocID(context.Background(), &pdpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
 	require.Equal(t, codes.Internal, status.Code(err))
+
+	store.saveErr = nil
+	idResp, err := svc.AllocID(context.Background(), &pdpb.AllocIDRequest{Count: 1})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), idResp.GetFirstId())
+
+	store.saveErr = errors.New("persist failed")
+	_, err = svc.Tso(context.Background(), &pdpb.TsoRequest{Count: 1})
+	require.Error(t, err)
+	require.Equal(t, codes.Internal, status.Code(err))
+
+	store.saveErr = nil
+	tsResp, err := svc.Tso(context.Background(), &pdpb.TsoRequest{Count: 1})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), tsResp.GetTimestamp())
 }
 
 func TestServiceRejectsWritesOnFollower(t *testing.T) {
