@@ -183,35 +183,31 @@ func (s *Store) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, 
 	if s == nil {
 		return 0, nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
 	state := s.state
-	var out *uint64
+	s.mu.RUnlock()
 	switch kind {
 	case rootpkg.AllocatorKindID:
-		out = &state.IDFence
+		if state.IDFence >= min {
+			return state.IDFence, nil
+		}
+		commit, err := s.Append(rootevent.IDAllocatorFenced(min))
+		if err != nil {
+			return 0, err
+		}
+		return commit.State.IDFence, nil
 	case rootpkg.AllocatorKindTSO:
-		out = &state.TSOFence
+		if state.TSOFence >= min {
+			return state.TSOFence, nil
+		}
+		commit, err := s.Append(rootevent.TSOAllocatorFenced(min))
+		if err != nil {
+			return 0, err
+		}
+		return commit.State.TSOFence, nil
 	default:
 		return 0, fmt.Errorf("meta/root/backend/replicated: unknown allocator kind %d", kind)
 	}
-	if *out >= min {
-		return *out, nil
-	}
-	*out = min
-	logEnd, err := s.storage.Size()
-	if err != nil {
-		return 0, err
-	}
-	if err := s.storage.SaveCheckpoint(rootstorage.Checkpoint{
-		Snapshot:   rootstate.Snapshot{State: state, Descriptors: rootstate.CloneDescriptors(s.descs)},
-		TailOffset: logEnd,
-	}); err != nil {
-		return 0, err
-	}
-	s.state = state
-	s.maybeCompactLocked()
-	return *out, nil
 }
 
 // InstallBootstrap replaces the rooted checkpoint and retained committed tail.

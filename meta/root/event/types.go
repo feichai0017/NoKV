@@ -9,6 +9,8 @@ const (
 	KindUnknown Kind = iota
 	KindStoreJoined
 	KindStoreLeft
+	KindIDAllocatorFenced
+	KindTSOAllocatorFenced
 	KindRegionBootstrap
 	KindRegionDescriptorPublished
 	KindRegionTombstoned
@@ -22,6 +24,11 @@ const (
 type StoreMembership struct {
 	StoreID uint64
 	Address string
+}
+
+// AllocatorFence raises one rooted allocator floor monotonically.
+type AllocatorFence struct {
+	Minimum uint64
 }
 
 // RegionDescriptorRecord carries one descriptor snapshot into the root log.
@@ -62,6 +69,7 @@ type Event struct {
 	Kind Kind
 
 	StoreMembership  *StoreMembership
+	AllocatorFence   *AllocatorFence
 	RegionDescriptor *RegionDescriptorRecord
 	RegionRemoval    *RegionRemoval
 	RangeSplit       *RangeSplit
@@ -75,6 +83,14 @@ func StoreJoined(storeID uint64, address string) Event {
 
 func StoreLeft(storeID uint64, address string) Event {
 	return Event{Kind: KindStoreLeft, StoreMembership: &StoreMembership{StoreID: storeID, Address: address}}
+}
+
+func IDAllocatorFenced(min uint64) Event {
+	return Event{Kind: KindIDAllocatorFenced, AllocatorFence: &AllocatorFence{Minimum: min}}
+}
+
+func TSOAllocatorFenced(min uint64) Event {
+	return Event{Kind: KindTSOAllocatorFenced, AllocatorFence: &AllocatorFence{Minimum: min}}
 }
 
 func RegionBootstrapped(desc descriptor.Descriptor) Event {

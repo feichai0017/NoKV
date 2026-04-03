@@ -76,6 +76,8 @@ func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 	switch {
 	case event.StoreMembership != nil:
 		pbEvent.Payload = &metapb.RootEvent_StoreMembership{StoreMembership: &metapb.RootStoreMembership{StoreId: event.StoreMembership.StoreID, Address: event.StoreMembership.Address}}
+	case event.AllocatorFence != nil:
+		pbEvent.Payload = &metapb.RootEvent_AllocatorFence{AllocatorFence: &metapb.RootAllocatorFence{Minimum: event.AllocatorFence.Minimum}}
 	case event.RegionDescriptor != nil:
 		pbEvent.Payload = &metapb.RootEvent_RegionDescriptor{RegionDescriptor: &metapb.RootRegionDescriptor{Descriptor_: DescriptorToProto(event.RegionDescriptor.Descriptor)}}
 	case event.RegionRemoval != nil:
@@ -111,6 +113,9 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 	event := rootevent.Event{Kind: rootEventKindFromProto(pbEvent.Kind)}
 	if body := pbEvent.GetStoreMembership(); body != nil {
 		event.StoreMembership = &rootevent.StoreMembership{StoreID: body.StoreId, Address: body.Address}
+	}
+	if body := pbEvent.GetAllocatorFence(); body != nil {
+		event.AllocatorFence = &rootevent.AllocatorFence{Minimum: body.Minimum}
 	}
 	if body := pbEvent.GetRegionDescriptor(); body != nil {
 		event.RegionDescriptor = &rootevent.RegionDescriptorRecord{Descriptor: DescriptorFromProto(body.GetDescriptor_())}
@@ -150,12 +155,16 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_STORE_JOINED
 	case rootevent.KindStoreLeft:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_STORE_LEFT
+	case rootevent.KindIDAllocatorFenced:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_ID_ALLOCATOR_FENCED
 	case rootevent.KindRegionBootstrap:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_BOOTSTRAP
 	case rootevent.KindRegionDescriptorPublished:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_DESCRIPTOR_PUBLISHED
 	case rootevent.KindRegionTombstoned:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_TOMBSTONED
+	case rootevent.KindTSOAllocatorFenced:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_TSO_ALLOCATOR_FENCED
 	case rootevent.KindRegionSplitCommitted:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED
 	case rootevent.KindRegionMerged:
@@ -175,12 +184,16 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindStoreJoined
 	case metapb.RootEventKind_ROOT_EVENT_KIND_STORE_LEFT:
 		return rootevent.KindStoreLeft
+	case metapb.RootEventKind_ROOT_EVENT_KIND_ID_ALLOCATOR_FENCED:
+		return rootevent.KindIDAllocatorFenced
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_BOOTSTRAP:
 		return rootevent.KindRegionBootstrap
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_DESCRIPTOR_PUBLISHED:
 		return rootevent.KindRegionDescriptorPublished
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_TOMBSTONED:
 		return rootevent.KindRegionTombstoned
+	case metapb.RootEventKind_ROOT_EVENT_KIND_TSO_ALLOCATOR_FENCED:
+		return rootevent.KindTSOAllocatorFenced
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED:
 		return rootevent.KindRegionSplitCommitted
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGED:

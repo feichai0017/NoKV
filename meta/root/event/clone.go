@@ -7,6 +7,10 @@ func CloneEvent(in Event) Event {
 		cp := *in.StoreMembership
 		out.StoreMembership = &cp
 	}
+	if in.AllocatorFence != nil {
+		cp := *in.AllocatorFence
+		out.AllocatorFence = &cp
+	}
 	if in.RegionDescriptor != nil {
 		cp := *in.RegionDescriptor
 		cp.Descriptor = in.RegionDescriptor.Descriptor.Clone()
