@@ -143,14 +143,13 @@ func (d *NetworkDriver) WaitForTail(after rootstorage.TailToken, timeout time.Du
 		timeout = 200 * time.Millisecond
 	}
 	d.mu.Lock()
-	current := d.latest
 	notify := d.notifyCh
-	advance, err := d.currentTailLocked()
+	advance, err := d.currentTailLocked(after)
 	d.mu.Unlock()
 	if err != nil {
 		return rootstorage.TailAdvance{}, err
 	}
-	if current.AdvancedSince(after) {
+	if advance.Advanced() {
 		return advance, nil
 	}
 	timer := time.NewTimer(timeout)
@@ -159,19 +158,19 @@ func (d *NetworkDriver) WaitForTail(after rootstorage.TailToken, timeout time.Du
 	case <-d.stopCh:
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		advance, tailErr := d.currentTailLocked()
+		advance, tailErr := d.currentTailLocked(after)
 		if tailErr != nil {
-			return rootstorage.TailAdvance{Token: d.latest}, fmt.Errorf("meta/root/backend/replicated: network driver is closed")
+			return rootstorage.TailAdvance{After: after, Token: d.latest}, fmt.Errorf("meta/root/backend/replicated: network driver is closed")
 		}
 		return advance, fmt.Errorf("meta/root/backend/replicated: network driver is closed")
 	case <-notify:
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		return d.currentTailLocked()
+		return d.currentTailLocked(after)
 	case <-timer.C:
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		return d.currentTailLocked()
+		return d.currentTailLocked(after)
 	}
 }
 
@@ -377,13 +376,14 @@ func (d *NetworkDriver) Size() (int64, error) {
 	return d.storage.Size()
 }
 
-func (d *NetworkDriver) currentTailLocked() (rootstorage.TailAdvance, error) {
+func (d *NetworkDriver) currentTailLocked(after rootstorage.TailToken) (rootstorage.TailAdvance, error) {
 	observed, err := rootstorage.ObserveCommitted(d.storage, 0)
 	if err != nil {
 		return rootstorage.TailAdvance{}, err
 	}
 	d.latest.Cursor = observed.LastCursor()
 	return rootstorage.TailAdvance{
+		After:    after,
 		Token:    d.latest,
 		Observed: observed,
 	}, nil
