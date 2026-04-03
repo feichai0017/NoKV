@@ -39,9 +39,9 @@ func TestReplicatedStoreRequiresLogAndCheckpoint(t *testing.T) {
 	_, err := Open(Config{})
 	require.Error(t, err)
 	driver := NewMemoryDriver()
-	_, err = Open(Config{Log: driver.Config(4).Log})
+	_, err = Open(Config{Log: driver.Log()})
 	require.Error(t, err)
-	_, err = Open(Config{Checkpoint: driver.Config(4).Checkpoint})
+	_, err = Open(Config{Checkpoint: driver.CheckpointStore()})
 	require.Error(t, err)
 }
 
@@ -66,6 +66,10 @@ func TestReplicatedStoreCompactsMemoryDriverTail(t *testing.T) {
 	require.Equal(t, uint64(11), events[1].RegionDescriptor.Descriptor.RegionID)
 	require.Equal(t, uint64(12), events[2].RegionDescriptor.Descriptor.RegionID)
 	require.Equal(t, uint64(3), tail.Index)
+
+	driverState := driver.State()
+	require.Equal(t, int64(0), driverState.Checkpoint.LogOffset)
+	require.Len(t, driverState.Records, 2)
 }
 
 func TestReplicatedStoreInstallBootstrapReplacesState(t *testing.T) {
@@ -105,6 +109,17 @@ func TestReplicatedStoreInstallBootstrapReplacesState(t *testing.T) {
 	current, err = reopened.Current()
 	require.NoError(t, err)
 	require.Equal(t, snapshot.State, current)
+
+	driverState := driver.State()
+	require.Equal(t, snapshot.State, driverState.Checkpoint.Snapshot.State)
+	require.Empty(t, driverState.Records)
+}
+
+func TestOpenAcceptsDriverConfig(t *testing.T) {
+	driver := NewMemoryDriver()
+	store, err := Open(Config{Driver: driver, MaxRetainedRecords: 3})
+	require.NoError(t, err)
+	require.NotNil(t, store)
 }
 
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
