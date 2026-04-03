@@ -134,6 +134,23 @@ func (c *Cluster) HasRegion(regionID uint64) bool {
 	return false
 }
 
+// GetRegionDescriptor returns the rooted descriptor tracked for regionID.
+func (c *Cluster) GetRegionDescriptor(regionID uint64) (descriptor.Descriptor, bool) {
+	if c == nil {
+		return descriptor.Descriptor{}, false
+	}
+	return c.regions.Descriptor(regionID)
+}
+
+// TouchRegionHeartbeat refreshes the runtime heartbeat timestamp without
+// mutating rooted topology truth.
+func (c *Cluster) TouchRegionHeartbeat(regionID uint64) bool {
+	if c == nil {
+		return false
+	}
+	return c.regions.Touch(regionID, time.Now())
+}
+
 // RegionSnapshot returns a stable copy of tracked region metadata.
 func (c *Cluster) RegionSnapshot() []RegionInfo {
 	if c == nil {

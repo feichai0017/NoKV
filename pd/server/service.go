@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -110,7 +111,11 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pdpb.RegionHeartbeatRe
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
-	event, err := s.rootEventForDescriptor(metacodec.DescriptorFromProto(req.GetRegionDescriptor()))
+	desc := metacodec.DescriptorFromProto(req.GetRegionDescriptor())
+	if s.touchHeartbeatIfUnchanged(desc) {
+		return &pdpb.RegionHeartbeatResponse{Accepted: true}, nil
+	}
+	event, err := s.rootEventForDescriptor(desc)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "normalize region descriptor: "+err.Error())
 	}
@@ -134,6 +139,20 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pdpb.RegionHeartbeatRe
 		return nil, status.Error(codes.Internal, "apply region descriptor after persist: "+err.Error())
 	}
 	return &pdpb.RegionHeartbeatResponse{Accepted: true}, nil
+}
+
+func (s *Service) touchHeartbeatIfUnchanged(desc descriptor.Descriptor) bool {
+	if s == nil || s.cluster == nil || desc.RegionID == 0 {
+		return false
+	}
+	current, ok := s.cluster.GetRegionDescriptor(desc.RegionID)
+	if !ok {
+		return false
+	}
+	if !sameRegionDescriptorForHeartbeat(current, desc) {
+		return false
+	}
+	return s.cluster.TouchRegionHeartbeat(desc.RegionID)
 }
 
 // PublishRootEvent records one explicit rooted topology truth event.
@@ -332,6 +351,38 @@ func normalizeDescriptorRootEpoch(desc descriptor.Descriptor, rootEpoch uint64) 
 	}
 	desc.RootEpoch = rootEpoch
 	return desc
+}
+
+func sameRegionDescriptorForHeartbeat(current, incoming descriptor.Descriptor) bool {
+	if incoming.RootEpoch == 0 {
+		incoming.RootEpoch = current.RootEpoch
+	}
+	if current.RegionID != incoming.RegionID ||
+		current.RootEpoch != incoming.RootEpoch ||
+		current.State != incoming.State ||
+		current.Epoch != incoming.Epoch ||
+		!bytes.Equal(current.StartKey, incoming.StartKey) ||
+		!bytes.Equal(current.EndKey, incoming.EndKey) ||
+		!bytes.Equal(current.Hash, incoming.Hash) {
+		return false
+	}
+	if len(current.Peers) != len(incoming.Peers) || len(current.Lineage) != len(incoming.Lineage) {
+		return false
+	}
+	for i := range current.Peers {
+		if current.Peers[i] != incoming.Peers[i] {
+			return false
+		}
+	}
+	for i := range current.Lineage {
+		if current.Lineage[i].RegionID != incoming.Lineage[i].RegionID ||
+			current.Lineage[i].Epoch != incoming.Lineage[i].Epoch ||
+			current.Lineage[i].Kind != incoming.Lineage[i].Kind ||
+			!bytes.Equal(current.Lineage[i].Hash, incoming.Lineage[i].Hash) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) reserveIDs(count uint64) (uint64, error) {

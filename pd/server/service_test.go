@@ -268,6 +268,38 @@ func TestServicePersistsRegionCatalog(t *testing.T) {
 	require.Equal(t, rootevent.KindRegionTombstoned, store.lastEvent.Kind)
 }
 
+func TestServiceRegionHeartbeatSkipsUnchangedDescriptorPersistence(t *testing.T) {
+	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	store := &fakeStorage{}
+	svc.SetStorage(store)
+
+	desc := testDescriptor(42, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
+	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
+		RegionDescriptor: testRegionDescriptorProto(desc),
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, store.eventCalls)
+
+	before, ok := svc.cluster.RegionLastHeartbeat(42)
+	require.True(t, ok)
+	time.Sleep(10 * time.Millisecond)
+
+	_, err = svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
+		RegionDescriptor: testRegionDescriptorProto(desc),
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, store.eventCalls)
+	after, ok := svc.cluster.RegionLastHeartbeat(42)
+	require.True(t, ok)
+	require.True(t, after.After(before) || after.Equal(before))
+
+	lookup, ok := svc.cluster.GetRegionDescriptor(42)
+	require.True(t, ok)
+	require.Equal(t, uint64(1), lookup.RootEpoch)
+	_, ok = svc.cluster.GetRegionDescriptorByKey([]byte("m"))
+	require.True(t, ok)
+}
+
 func TestServicePublishRootEvent(t *testing.T) {
 	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
 	store := &fakeStorage{}

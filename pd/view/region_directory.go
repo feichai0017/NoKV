@@ -150,6 +150,32 @@ func (v *RegionDirectoryView) LookupDescriptor(key []byte) (descriptor.Descripto
 	return desc.Clone(), true
 }
 
+func (v *RegionDirectoryView) Descriptor(regionID uint64) (descriptor.Descriptor, bool) {
+	if v == nil || regionID == 0 {
+		return descriptor.Descriptor{}, false
+	}
+	v.mu.RLock()
+	desc, ok := v.regions[regionID]
+	v.mu.RUnlock()
+	if !ok {
+		return descriptor.Descriptor{}, false
+	}
+	return desc.Clone(), true
+}
+
+func (v *RegionDirectoryView) Touch(regionID uint64, now time.Time) bool {
+	if v == nil || regionID == 0 {
+		return false
+	}
+	v.mu.Lock()
+	_, ok := v.regions[regionID]
+	if ok {
+		v.regionLastHB[regionID] = now
+	}
+	v.mu.Unlock()
+	return ok
+}
+
 func (v *RegionDirectoryView) LastHeartbeat(regionID uint64) (time.Time, bool) {
 	if v == nil || regionID == 0 {
 		return time.Time{}, false
