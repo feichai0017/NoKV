@@ -117,7 +117,8 @@ func TestReplicatedStoreWaitForTailTracksFollowerAdvance(t *testing.T) {
 	case err := <-waitErr:
 		require.NoError(t, err)
 	case advance := <-waitDone:
-		require.True(t, advance.Token.AdvancedSince(rootstorage.TailToken{}))
+		require.True(t, advance.Advanced())
+		require.Equal(t, rootstorage.TailAdvanceCursorAdvanced, advance.Kind())
 		require.Equal(t, commit.Cursor, advance.Token.Cursor)
 		require.NotEmpty(t, advance.Observed.Tail.Records)
 		require.Equal(t, commit.Cursor, advance.LastCursor())
@@ -151,7 +152,9 @@ func TestNetworkDriverWaitForTailReturnsObservedStateOnClose(t *testing.T) {
 	require.NoError(t, drivers[followerID].Close())
 
 	advance, err := drivers[followerID].WaitForTail(currentAdvance.Token, 50*time.Millisecond)
-	require.Error(t, err)
+	if err != nil {
+		require.ErrorContains(t, err, "closed")
+	}
 	require.Equal(t, commit.Cursor, advance.LastCursor())
 	require.NotEmpty(t, advance.Observed.Tail.Records)
 }

@@ -55,6 +55,15 @@ type TailToken struct {
 	Revision uint64
 }
 
+// TailAdvanceKind classifies one observed committed-tail change.
+type TailAdvanceKind uint8
+
+const (
+	TailAdvanceUnchanged TailAdvanceKind = iota
+	TailAdvanceCursorAdvanced
+	TailAdvanceWindowShifted
+)
+
 // AdvancedSince reports whether the observed tail view changed since prev.
 func (t TailToken) AdvancedSince(prev TailToken) bool {
 	return t.Revision > prev.Revision || rootstate.CursorAfter(t.Cursor, prev.Cursor)
@@ -62,6 +71,7 @@ func (t TailToken) AdvancedSince(prev TailToken) bool {
 
 // TailAdvance is one observed committed-tail read paired with its change token.
 type TailAdvance struct {
+	After    TailToken
 	Token    TailToken
 	Observed ObservedCommitted
 }
@@ -125,6 +135,22 @@ func (o ObservedCommitted) RetainFrom() rootstate.Cursor {
 // LastCursor returns the last committed cursor visible in the observed tail.
 func (a TailAdvance) LastCursor() rootstate.Cursor {
 	return a.Observed.LastCursor()
+}
+
+// Advanced reports whether the observed tail view changed past the requested token.
+func (a TailAdvance) Advanced() bool {
+	return a.Token.AdvancedSince(a.After)
+}
+
+// Kind classifies the observed tail change relative to the requested token.
+func (a TailAdvance) Kind() TailAdvanceKind {
+	if !a.Advanced() {
+		return TailAdvanceUnchanged
+	}
+	if rootstate.CursorAfter(a.Token.Cursor, a.After.Cursor) {
+		return TailAdvanceCursorAdvanced
+	}
+	return TailAdvanceWindowShifted
 }
 
 // FellBehind reports whether the observed retained tail had to fall back past
