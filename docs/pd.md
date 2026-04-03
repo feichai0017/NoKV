@@ -62,13 +62,13 @@ plane deployment; it simply has no control plane.
 ### `distributed`
 
 - one `pd` process
-- one same-process `meta/root/local`
+- one same-process `meta/root/backend/local`
 - data nodes use PD for routing, heartbeats, and allocator services
 
 The current distributed control plane is intentionally single-node. The design
 keeps truth and view logically separated inside one process:
 
-- `meta/root/local`: durable control-plane truth
+- `meta/root/backend/local`: durable control-plane truth
 - `pd/view` + `pd/core`: rebuildable routing/scheduling state
 - `pd/server`: gRPC API surface
 

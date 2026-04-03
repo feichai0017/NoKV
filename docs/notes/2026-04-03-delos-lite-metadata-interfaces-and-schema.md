@@ -423,7 +423,7 @@ type RootedCheckpoint struct {
 
 ### 6.1 为什么要带 `LogOffset`
 
-这是当前 `meta/root/local/store.go` 已经证明有价值的字段：
+这是当前 `meta/root/backend/local/store.go` 已经证明有价值的字段：
 
 - checkpoint 之后只 replay tail
 - 恢复成本 bounded

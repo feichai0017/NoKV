@@ -161,7 +161,7 @@ func readRecord(r io.Reader) (rootstorage.CommittedEvent, bool, error) {
 		return rootstorage.CommittedEvent{}, false, err
 	}
 	if crc32.ChecksumIEEE(payload) != expectedCRC {
-		return rootstorage.CommittedEvent{}, false, fmt.Errorf("meta/root/local: root log checksum mismatch")
+		return rootstorage.CommittedEvent{}, false, fmt.Errorf("meta/root/backend/local: root log checksum mismatch")
 	}
 	var pbEvent metapb.RootEvent
 	if err := proto.Unmarshal(payload, &pbEvent); err != nil {
