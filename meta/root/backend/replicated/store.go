@@ -41,8 +41,6 @@ type Store struct {
 	maxRetainedRecords int
 }
 
-var _ rootpkg.Backend = (*Store)(nil)
-
 func Open(cfg Config) (*Store, error) {
 	if cfg.Driver == nil {
 		return nil, fmt.Errorf("meta/root/backend/replicated: driver is required")
