@@ -13,6 +13,7 @@ import (
 	"github.com/feichai0017/NoKV/pd/tso"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"sync"
 )
 
 // Service implements the PD-lite gRPC API.
@@ -23,6 +24,7 @@ type Service struct {
 	ids     *core.IDAllocator
 	tso     *tso.Allocator
 	storage pdstorage.Store
+	allocMu sync.Mutex
 }
 
 const errNotLeaderPrefix = "pd not leader"
@@ -108,7 +110,7 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pdpb.RegionHeartbeatRe
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
-	err := s.cluster.PublishRegionDescriptor(desc)
+	err := s.cluster.ValidateRegionDescriptor(desc)
 	if err != nil {
 		switch {
 		case errors.Is(err, core.ErrInvalidRegionID):
@@ -123,6 +125,9 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pdpb.RegionHeartbeatRe
 		if err := s.storage.PublishRegionDescriptor(desc); err != nil {
 			return nil, status.Error(codes.Internal, "publish region descriptor: "+err.Error())
 		}
+	}
+	if err := s.cluster.PublishRegionDescriptor(desc); err != nil {
+		return nil, status.Error(codes.Internal, "apply region descriptor after persist: "+err.Error())
 	}
 	return &pdpb.RegionHeartbeatResponse{Accepted: true}, nil
 }
@@ -139,7 +144,7 @@ func (s *Service) PublishRootEvent(_ context.Context, req *pdpb.PublishRootEvent
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
-	if err := s.cluster.PublishRootEvent(event); err != nil {
+	if err := s.cluster.ValidateRootEvent(event); err != nil {
 		switch {
 		case errors.Is(err, core.ErrInvalidRegionID):
 			return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -153,6 +158,9 @@ func (s *Service) PublishRootEvent(_ context.Context, req *pdpb.PublishRootEvent
 		if err := s.storage.AppendRootEvent(event); err != nil {
 			return nil, status.Error(codes.Internal, "persist root event: "+err.Error())
 		}
+	}
+	if err := s.cluster.PublishRootEvent(event); err != nil {
+		return nil, status.Error(codes.Internal, "apply root event after persist: "+err.Error())
 	}
 	return &pdpb.PublishRootEventResponse{Accepted: true}, nil
 }
@@ -169,11 +177,14 @@ func (s *Service) RemoveRegion(_ context.Context, req *pdpb.RemoveRegionRequest)
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
-	removed := s.cluster.RemoveRegion(regionID)
+	removed := s.cluster.HasRegion(regionID)
 	if removed && s.storage != nil {
 		if err := s.storage.TombstoneRegion(regionID); err != nil {
 			return nil, status.Error(codes.Internal, "persist region tombstone: "+err.Error())
 		}
+	}
+	if removed {
+		s.cluster.RemoveRegion(regionID)
 	}
 	return &pdpb.RemoveRegionResponse{Removed: removed}, nil
 }
@@ -205,14 +216,11 @@ func (s *Service) AllocID(_ context.Context, req *pdpb.AllocIDRequest) (*pdpb.Al
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
-	first, _, err := s.ids.Reserve(count)
+	first, err := s.reserveIDs(count)
 	if err != nil {
 		if errors.Is(err, core.ErrInvalidBatch) {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	if err := s.persistAllocatorState(); err != nil {
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
 	return &pdpb.AllocIDResponse{
@@ -233,14 +241,11 @@ func (s *Service) Tso(_ context.Context, req *pdpb.TsoRequest) (*pdpb.TsoRespons
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
-	first, got, err := s.tso.Reserve(count)
+	first, got, err := s.reserveTSO(count)
 	if err != nil {
 		if errors.Is(err, core.ErrInvalidBatch) {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	if err := s.persistAllocatorState(); err != nil {
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
 	return &pdpb.TsoResponse{
@@ -249,11 +254,46 @@ func (s *Service) Tso(_ context.Context, req *pdpb.TsoRequest) (*pdpb.TsoRespons
 	}, nil
 }
 
-func (s *Service) persistAllocatorState() error {
-	if s == nil || s.storage == nil {
-		return nil
+func (s *Service) reserveIDs(count uint64) (uint64, error) {
+	if s == nil {
+		return 0, nil
 	}
-	return s.storage.SaveAllocatorState(s.ids.Current(), s.tso.Current())
+	if count == 0 {
+		return 0, fmt.Errorf("%w: reserve n must be >= 1", core.ErrInvalidBatch)
+	}
+	s.allocMu.Lock()
+	defer s.allocMu.Unlock()
+
+	current := s.ids.Current()
+	next := current + count
+	if s.storage != nil {
+		if err := s.storage.SaveAllocatorState(next, s.tso.Current()); err != nil {
+			return 0, err
+		}
+	}
+	s.ids.Fence(next)
+	return current + 1, nil
+}
+
+func (s *Service) reserveTSO(count uint64) (uint64, uint64, error) {
+	if s == nil {
+		return 0, 0, nil
+	}
+	if count == 0 {
+		return 0, 0, fmt.Errorf("%w: tso reserve n must be >= 1", core.ErrInvalidBatch)
+	}
+	s.allocMu.Lock()
+	defer s.allocMu.Unlock()
+
+	current := s.tso.Current()
+	next := current + count
+	if s.storage != nil {
+		if err := s.storage.SaveAllocatorState(s.ids.Current(), next); err != nil {
+			return 0, 0, err
+		}
+	}
+	s.tso.Fence(next)
+	return current + 1, count, nil
 }
 
 func (s *Service) requireLeaderForWrite() error {
