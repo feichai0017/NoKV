@@ -16,8 +16,9 @@ type AllocatorState struct {
 // Snapshot is the reconstructed PD bootstrap catalog derived from durable
 // metadata-root truth.
 type Snapshot struct {
-	Descriptors map[uint64]descriptor.Descriptor
-	Allocator   AllocatorState
+	ClusterEpoch uint64
+	Descriptors  map[uint64]descriptor.Descriptor
+	Allocator    AllocatorState
 }
 
 // BootstrapInfo captures rooted PD bootstrap results.
@@ -33,9 +34,6 @@ type BootstrapInfo struct {
 type Store interface {
 	// Load returns the reconstructed snapshot.
 	Load() (Snapshot, error)
-	// PublishRegionDescriptor persists one rooted descriptor update through the
-	// legacy bootstrap/compatibility path.
-	PublishRegionDescriptor(desc descriptor.Descriptor) error
 	// AppendRootEvent persists one explicit rooted truth event.
 	AppendRootEvent(event rootevent.Event) error
 	// SaveAllocatorState persists latest allocator counters.
@@ -61,11 +59,6 @@ func NewNoopStore() Store {
 // Load returns an empty snapshot.
 func (NoopStore) Load() (Snapshot, error) {
 	return Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
-}
-
-// PublishRegionDescriptor is a no-op.
-func (NoopStore) PublishRegionDescriptor(descriptor.Descriptor) error {
-	return nil
 }
 
 // AppendRootEvent is a no-op.

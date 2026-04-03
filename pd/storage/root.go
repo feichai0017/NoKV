@@ -31,8 +31,9 @@ func (s *RootStore) Load() (Snapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return Snapshot{
-		Descriptors: rootstate.CloneDescriptors(s.snapshot.Descriptors),
-		Allocator:   s.snapshot.Allocator,
+		ClusterEpoch: s.snapshot.ClusterEpoch,
+		Descriptors:  rootstate.CloneDescriptors(s.snapshot.Descriptors),
+		Allocator:    s.snapshot.Allocator,
 	}, nil
 }
 
@@ -86,17 +87,13 @@ func (s *RootStore) PublishRegionDescriptor(desc descriptor.Descriptor) error {
 	if s == nil || desc.RegionID == 0 {
 		return nil
 	}
-	state, err := s.root.Current()
-	if err != nil {
-		return err
-	}
-	if desc.RootEpoch == 0 {
-		desc.RootEpoch = state.ClusterEpoch + 1
-	}
-
 	s.mu.RLock()
+	clusterEpoch := s.snapshot.ClusterEpoch
 	prev, existed := s.snapshot.Descriptors[desc.RegionID]
 	s.mu.RUnlock()
+	if desc.RootEpoch == 0 {
+		desc.RootEpoch = clusterEpoch + 1
+	}
 
 	if existed && descriptorsEqual(prev, desc) {
 		return nil
@@ -165,7 +162,8 @@ func (s *RootStore) reload() error {
 		return err
 	}
 	out := Snapshot{
-		Descriptors: rootstate.CloneDescriptors(snapshot.Descriptors),
+		ClusterEpoch: snapshot.State.ClusterEpoch,
+		Descriptors:  rootstate.CloneDescriptors(snapshot.Descriptors),
 		Allocator: AllocatorState{
 			IDCurrent: snapshot.State.IDFence,
 			TSCurrent: snapshot.State.TSOFence,

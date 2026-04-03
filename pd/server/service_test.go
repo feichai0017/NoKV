@@ -26,32 +26,24 @@ import (
 )
 
 type fakeStorage struct {
-	updateCalls int
-	eventCalls  int
-	saveCalls   int
-	updateErr   error
-	eventErr    error
-	saveErr     error
-	lastID      uint64
-	lastTS      uint64
-	leader      bool
-	leaderID    uint64
-	lastEvent   rootevent.Event
+	eventCalls int
+	saveCalls  int
+	eventErr   error
+	saveErr    error
+	lastID     uint64
+	lastTS     uint64
+	leader     bool
+	leaderID   uint64
+	lastEvent  rootevent.Event
+	snapshot   pdstorage.Snapshot
 }
 
 func (f *fakeStorage) Load() (pdstorage.Snapshot, error) {
-	return pdstorage.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
-}
-
-func (f *fakeStorage) PublishRegionDescriptor(desc descriptor.Descriptor) error {
-	f.updateCalls++
-	if f.updateErr != nil {
-		return f.updateErr
-	}
-	if desc.RegionID == 0 {
-		return errors.New("invalid region id")
-	}
-	return nil
+	return pdstorage.Snapshot{
+		ClusterEpoch: f.snapshot.ClusterEpoch,
+		Descriptors:  rootCloneDescriptorsForTest(f.snapshot.Descriptors),
+		Allocator:    f.snapshot.Allocator,
+	}, nil
 }
 
 func (f *fakeStorage) AppendRootEvent(event rootevent.Event) error {
@@ -63,6 +55,7 @@ func (f *fakeStorage) AppendRootEvent(event rootevent.Event) error {
 	if event.Kind == rootevent.KindUnknown {
 		return errors.New("invalid root event")
 	}
+	f.snapshot.ClusterEpoch++
 	return nil
 }
 
@@ -265,11 +258,13 @@ func TestServicePersistsRegionCatalog(t *testing.T) {
 		RegionDescriptor: testRegionDescriptorProto(testDescriptor(42, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)),
 	})
 	require.NoError(t, err)
-	require.Equal(t, 1, store.updateCalls)
+	require.Equal(t, 1, store.eventCalls)
+	require.Equal(t, rootevent.KindRegionBootstrap, store.lastEvent.Kind)
+	require.Equal(t, uint64(1), store.lastEvent.RegionDescriptor.Descriptor.RootEpoch)
 
 	_, err = svc.RemoveRegion(context.Background(), &pdpb.RemoveRegionRequest{RegionId: 42})
 	require.NoError(t, err)
-	require.Equal(t, 1, store.eventCalls)
+	require.Equal(t, 2, store.eventCalls)
 	require.Equal(t, rootevent.KindRegionTombstoned, store.lastEvent.Kind)
 }
 
@@ -329,7 +324,7 @@ func TestServicePublishRootEventValidationAndPersistenceError(t *testing.T) {
 
 func TestServiceRegionCatalogPersistenceErrors(t *testing.T) {
 	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
-	store := &fakeStorage{updateErr: errors.New("persist update failed")}
+	store := &fakeStorage{eventErr: errors.New("persist update failed")}
 	svc.SetStorage(store)
 
 	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
@@ -340,7 +335,7 @@ func TestServiceRegionCatalogPersistenceErrors(t *testing.T) {
 	_, ok := svc.cluster.GetRegionDescriptorByKey([]byte("b"))
 	require.False(t, ok)
 
-	store.updateErr = nil
+	store.eventErr = nil
 	_, err = svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
 		RegionDescriptor: testRegionDescriptorProto(testDescriptor(8, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)),
 	})
@@ -440,6 +435,7 @@ func TestServiceRefreshFromStorageReloadsViewAndAllocatorState(t *testing.T) {
 	store := &fakeSyncStorage{
 		fakeStorage: fakeStorage{leader: false, leaderID: 2},
 		snapshot: pdstorage.Snapshot{
+			ClusterEpoch: 4,
 			Descriptors: map[uint64]descriptor.Descriptor{
 				9: testDescriptor(9, []byte("a"), []byte("z"), metaregion.Epoch{Version: 3, ConfVersion: 1}, nil),
 			},
@@ -472,6 +468,27 @@ func TestServiceRefreshFromStorageReloadsViewAndAllocatorState(t *testing.T) {
 	tsResp, err := svc.Tso(context.Background(), &pdpb.TsoRequest{Count: 2})
 	require.NoError(t, err)
 	require.Equal(t, uint64(451), tsResp.GetTimestamp())
+}
+
+func TestServicePublishRootEventAssignsRootEpoch(t *testing.T) {
+	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	store := &fakeStorage{}
+	svc.SetStorage(store)
+
+	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
+		RegionDescriptor: testRegionDescriptorProto(testDescriptor(1, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)),
+	})
+	require.NoError(t, err)
+
+	event := rootevent.PeerAdded(1, 2, 201, testDescriptor(1, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 2}, nil))
+	event.PeerChange.Region.RootEpoch = 0
+	_, err = svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event: metacodec.RootEventToProto(event),
+	})
+	require.NoError(t, err)
+	require.Equal(t, rootevent.KindPeerAdded, store.lastEvent.Kind)
+	require.Equal(t, uint64(2), store.lastEvent.PeerChange.Region.RootEpoch)
+	require.Equal(t, uint64(2), store.snapshot.ClusterEpoch)
 }
 
 func TestServiceRefreshFromReplicatedRootFollowerServesRead(t *testing.T) {
