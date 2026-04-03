@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"net"
 	"testing"
 	"time"
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -76,7 +76,7 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = cli.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(rootpkg.PeerAdded(
+		Event: metacodec.RootEventToProto(rootevent.PeerAdded(
 			11,
 			2,
 			201,
@@ -168,7 +168,7 @@ func TestGRPCClientWriteFailoverAcrossPDs(t *testing.T) {
 type followerStorage struct{}
 
 func (f *followerStorage) PublishRegionDescriptor(descriptor.Descriptor) error { return nil }
-func (f *followerStorage) AppendRootEvent(rootpkg.Event) error                 { return nil }
+func (f *followerStorage) AppendRootEvent(rootevent.Event) error              { return nil }
 func (f *followerStorage) TombstoneRegion(uint64) error                        { return nil }
 func (f *followerStorage) SaveAllocatorState(uint64, uint64) error             { return nil }
 func (f *followerStorage) Close() error                                        { return nil }

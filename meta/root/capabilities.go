@@ -1,9 +1,14 @@
 package root
 
+import (
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+)
+
 // StateReader exposes compact rooted metadata state.
 type StateReader interface {
-	Current() (State, error)
-	Snapshot() (Snapshot, error)
+	Current() (rootstate.State, error)
+	Snapshot() (rootstate.Snapshot, error)
 }
 
 // EventReader exposes retained rooted event history.
@@ -11,12 +16,12 @@ type EventReader interface {
 	// ReadSince returns retained root events after cursor. Implementations may
 	// compact older history, so callers should use Snapshot for bounded
 	// bootstrap/recovery rather than assuming a full event log from zero.
-	ReadSince(cursor Cursor) ([]Event, Cursor, error)
+	ReadSince(cursor rootstate.Cursor) ([]rootevent.Event, rootstate.Cursor, error)
 }
 
 // EventAppender appends ordered rooted metadata events.
 type EventAppender interface {
-	Append(events ...Event) (CommitInfo, error)
+	Append(events ...rootevent.Event) (rootstate.CommitInfo, error)
 }
 
 // AllocatorFencer advances global allocator fences monotonically.
