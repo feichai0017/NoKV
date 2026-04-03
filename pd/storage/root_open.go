@@ -6,9 +6,9 @@ import (
 )
 
 type rootBackend interface {
-	rootpkg.StateReader
-	rootpkg.EventAppender
-	rootpkg.AllocatorFencer
+	rootpkg.SnapshotReader
+	rootpkg.EventWriter
+	rootpkg.AllocatorFenceWriter
 }
 
 type refreshableRoot interface {

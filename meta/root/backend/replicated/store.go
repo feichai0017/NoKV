@@ -43,7 +43,7 @@ type Store struct {
 	maxRetainedRecords int
 }
 
-var _ rootpkg.Root = (*Store)(nil)
+var _ rootpkg.Backend = (*Store)(nil)
 
 func Open(cfg Config) (*Store, error) {
 	if cfg.Driver != nil {

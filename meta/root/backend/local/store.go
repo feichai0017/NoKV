@@ -36,7 +36,7 @@ type Store struct {
 	retainFrom rootstate.Cursor
 }
 
-var _ rootpkg.Root = (*Store)(nil)
+var _ rootpkg.Backend = (*Store)(nil)
 
 // Open opens or creates a local metadata-root store in workdir.
 func Open(workdir string, fs vfs.FS) (*Store, error) {
