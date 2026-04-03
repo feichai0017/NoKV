@@ -120,14 +120,6 @@ func (d *NetworkDriver) LeaderID() uint64 {
 	return d.node.raw.Status().Lead
 }
 
-func (d *NetworkDriver) State() DriverState {
-	observed, _ := rootstorage.ObserveCommitted(d.storage, 0)
-	return DriverState{
-		Checkpoint: rootstorage.CloneCheckpoint(observed.Checkpoint),
-		Records:    rootstorage.CloneCommittedEvents(observed.Tail.Records),
-	}
-}
-
 func (d *NetworkDriver) Campaign() error {
 	d.mu.Lock()
 	if d.node == nil {
@@ -167,7 +159,11 @@ func (d *NetworkDriver) WaitForTail(after rootstorage.TailToken, timeout time.Du
 	case <-d.stopCh:
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		return rootstorage.TailAdvance{Token: d.latest}, fmt.Errorf("meta/root/backend/replicated: network driver is closed")
+		advance, tailErr := d.currentTailLocked()
+		if tailErr != nil {
+			return rootstorage.TailAdvance{Token: d.latest}, fmt.Errorf("meta/root/backend/replicated: network driver is closed")
+		}
+		return advance, fmt.Errorf("meta/root/backend/replicated: network driver is closed")
 	case <-notify:
 		d.mu.Lock()
 		defer d.mu.Unlock()

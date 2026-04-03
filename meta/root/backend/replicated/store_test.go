@@ -77,9 +77,10 @@ func TestReplicatedStoreInstallBootstrapReplacesState(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, snapshot.State, current)
 
-	driverState := drivers[leaderID].State()
-	require.Equal(t, snapshot.State, driverState.Checkpoint.Snapshot.State)
-	require.Empty(t, driverState.Records)
+	observed, err := rootstorage.ObserveCommitted(drivers[leaderID], 0)
+	require.NoError(t, err)
+	require.Equal(t, snapshot.State, observed.Checkpoint.Snapshot.State)
+	require.Empty(t, observed.Tail.Records)
 }
 
 func TestOpenAcceptsDriverConfig(t *testing.T) {
@@ -123,6 +124,36 @@ func TestReplicatedStoreWaitForTailTracksFollowerAdvance(t *testing.T) {
 	case <-time.After(6 * time.Second):
 		t.Fatal("timed out waiting for replicated tail advance")
 	}
+}
+
+func TestNetworkDriverWaitForTailReturnsObservedStateOnClose(t *testing.T) {
+	stores, drivers, leaderID := openNetworkTestCluster(t, 4)
+	followerID := uint64(1)
+	if followerID == leaderID {
+		followerID = 2
+	}
+
+	commit, err := stores[leaderID].Append(
+		rootevent.RegionDescriptorPublished(testDescriptor(91, []byte("a"), []byte("z"))),
+	)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		if err := stores[followerID].Refresh(); err != nil {
+			return false
+		}
+		current, err := stores[followerID].Current()
+		return err == nil && current == commit.State
+	}, 5*time.Second, 50*time.Millisecond)
+
+	currentAdvance, err := drivers[followerID].WaitForTail(rootstorage.TailToken{}, 50*time.Millisecond)
+	require.NoError(t, err)
+
+	require.NoError(t, drivers[followerID].Close())
+
+	advance, err := drivers[followerID].WaitForTail(currentAdvance.Token, 50*time.Millisecond)
+	require.Error(t, err)
+	require.Equal(t, commit.Cursor, advance.LastCursor())
+	require.NotEmpty(t, advance.Observed.Tail.Records)
 }
 
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
