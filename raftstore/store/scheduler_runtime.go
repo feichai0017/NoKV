@@ -7,6 +7,7 @@ import (
 	"syscall"
 	"time"
 
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -241,7 +242,7 @@ func (s *Store) schedulerDescriptors() []descriptor.Descriptor {
 	if s.sched == nil {
 		out := make([]descriptor.Descriptor, 0, len(metas))
 		for _, meta := range metas {
-			out = append(out, descriptor.FromRegionMeta(meta, 0))
+			out = append(out, metacodec.DescriptorFromLocalRegionMeta(meta, 0))
 		}
 		return out
 	}
@@ -258,7 +259,7 @@ func (s *Store) schedulerDescriptors() []descriptor.Descriptor {
 			out = append(out, desc)
 			continue
 		}
-		out = append(out, descriptor.FromRegionMeta(meta, 0))
+		out = append(out, metacodec.DescriptorFromLocalRegionMeta(meta, 0))
 	}
 	return out
 }

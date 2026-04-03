@@ -3,7 +3,6 @@ package view
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
 	"time"
 
@@ -30,18 +29,8 @@ func TestStoreHealthViewSnapshot(t *testing.T) {
 func TestRegionDirectoryViewLookupAndValidation(t *testing.T) {
 	v := NewRegionDirectoryView()
 	now := time.Unix(200, 0)
-	require.NoError(t, v.UpsertAt(descriptor.FromRegionMeta(localmeta.RegionMeta{
-		ID:       1,
-		StartKey: []byte(""),
-		EndKey:   []byte("m"),
-		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
-	}, 0), now))
-	require.NoError(t, v.UpsertAt(descriptor.FromRegionMeta(localmeta.RegionMeta{
-		ID:       2,
-		StartKey: []byte("m"),
-		EndKey:   []byte(""),
-		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
-	}, 0), now))
+	require.NoError(t, v.UpsertAt(testDescriptor(1, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}), now))
+	require.NoError(t, v.UpsertAt(testDescriptor(2, []byte("m"), []byte(""), metaregion.Epoch{Version: 1, ConfVersion: 1}), now))
 
 	got, ok := v.LookupDescriptor([]byte("a"))
 	require.True(t, ok)
@@ -55,19 +44,21 @@ func TestRegionDirectoryViewLookupAndValidation(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, now, ts)
 
-	err := v.UpsertAt(descriptor.FromRegionMeta(localmeta.RegionMeta{
-		ID:       2,
-		StartKey: []byte("m"),
-		EndKey:   []byte(""),
-		Epoch:    metaregion.Epoch{Version: 0, ConfVersion: 1},
-	}, 0), now)
+	err := v.UpsertAt(testDescriptor(2, []byte("m"), []byte(""), metaregion.Epoch{Version: 0, ConfVersion: 1}), now)
 	require.ErrorIs(t, err, ErrRegionHeartbeatStale)
 
-	err = v.UpsertAt(descriptor.FromRegionMeta(localmeta.RegionMeta{
-		ID:       3,
-		StartKey: []byte("l"),
-		EndKey:   []byte("z"),
-		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
-	}, 0), now)
+	err = v.UpsertAt(testDescriptor(3, []byte("l"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}), now)
 	require.ErrorIs(t, err, ErrRegionRangeOverlap)
+}
+
+func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descriptor.Descriptor {
+	desc := descriptor.Descriptor{
+		RegionID: id,
+		StartKey: append([]byte(nil), start...),
+		EndKey:   append([]byte(nil), end...),
+		Epoch:    epoch,
+		State:    metaregion.ReplicaStateRunning,
+	}
+	desc.EnsureHash()
+	return desc
 }

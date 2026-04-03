@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	"github.com/feichai0017/NoKV/raftstore/localmeta"
 )
 
 // LineageKind classifies how one descriptor references an older topology
@@ -41,22 +40,6 @@ type Descriptor struct {
 	Lineage   []LineageRef
 	RootEpoch uint64
 	Hash      []byte
-}
-
-// FromRegionMeta lifts store-local region state into the distributed topology
-// descriptor shape used by root, views, and routing.
-func FromRegionMeta(meta localmeta.RegionMeta, rootEpoch uint64) Descriptor {
-	desc := Descriptor{
-		RegionID:  meta.ID,
-		StartKey:  append([]byte(nil), meta.StartKey...),
-		EndKey:    append([]byte(nil), meta.EndKey...),
-		Epoch:     meta.Epoch,
-		Peers:     append([]metaregion.Peer(nil), meta.Peers...),
-		State:     meta.State,
-		RootEpoch: rootEpoch,
-	}
-	desc.EnsureHash()
-	return desc
 }
 
 // EnsureHash populates the descriptor hash if it is missing.

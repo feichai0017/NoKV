@@ -63,8 +63,8 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta localmeta.RegionMeta
 		return nil, err
 	}
 	if s.sched != nil {
-		parentDesc := descriptor.FromRegionMeta(newParent, 0)
-		childDesc := descriptor.FromRegionMeta(childMeta, 0)
+		parentDesc := metacodec.DescriptorFromLocalRegionMeta(newParent, 0)
+		childDesc := metacodec.DescriptorFromLocalRegionMeta(childMeta, 0)
 		parentDesc.Lineage = append(parentDesc.Lineage, descriptor.LineageRef{
 			RegionID: originalParent.ID,
 			Epoch:    originalParent.Epoch,
@@ -219,7 +219,7 @@ func (s *Store) handleMergeCommand(merge *raftcmdpb.MergeCommand) error {
 		return err
 	}
 	if s.sched != nil {
-		mergedDesc := descriptor.FromRegionMeta(updated, 0)
+		mergedDesc := metacodec.DescriptorFromLocalRegionMeta(updated, 0)
 		mergedDesc.Lineage = append(mergedDesc.Lineage, descriptor.LineageRef{
 			RegionID: sourceMeta.ID,
 			Epoch:    sourceMeta.Epoch,

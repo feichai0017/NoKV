@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -75,7 +76,7 @@ func TestRestorePDRegionsFromLocalSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	store, err := pdstorage.OpenRootLocalStore(dir)
 	require.NoError(t, err)
-	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
+	require.NoError(t, store.PublishRegionDescriptor(metacodec.DescriptorFromLocalRegionMeta(localmeta.RegionMeta{
 		ID:       10,
 		StartKey: []byte("a"),
 		EndKey:   []byte("m"),
@@ -84,7 +85,7 @@ func TestRestorePDRegionsFromLocalSnapshot(t *testing.T) {
 			ConfVersion: 1,
 		},
 	}, 0)))
-	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
+	require.NoError(t, store.PublishRegionDescriptor(metacodec.DescriptorFromLocalRegionMeta(localmeta.RegionMeta{
 		ID:       20,
 		StartKey: []byte("m"),
 		EndKey:   nil,
@@ -122,13 +123,13 @@ func TestRunPDCmdReloadsPersistedRegionCatalog(t *testing.T) {
 	dir := t.TempDir()
 	store, err := pdstorage.OpenRootLocalStore(dir)
 	require.NoError(t, err)
-	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
+	require.NoError(t, store.PublishRegionDescriptor(metacodec.DescriptorFromLocalRegionMeta(localmeta.RegionMeta{
 		ID:       31,
 		StartKey: []byte("a"),
 		EndKey:   []byte("m"),
 		Epoch:    metaregion.Epoch{Version: 2, ConfVersion: 1},
 	}, 0)))
-	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
+	require.NoError(t, store.PublishRegionDescriptor(metacodec.DescriptorFromLocalRegionMeta(localmeta.RegionMeta{
 		ID:       32,
 		StartKey: []byte("m"),
 		EndKey:   nil,

@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"errors"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"testing"
 
@@ -97,7 +98,7 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 		},
 		Peers: []metaregion.Peer{{StoreID: 1, PeerID: 101}},
 	}
-	sink.PublishRegionDescriptor(context.Background(), descriptor.FromRegionMeta(meta, 0))
+	sink.PublishRegionDescriptor(context.Background(), metacodec.DescriptorFromLocalRegionMeta(meta, 0))
 	ops := sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{
 		StoreID:   1,
 		RegionNum: 3,
@@ -135,7 +136,7 @@ func TestSchedulerClientErrorCallbackAndClose(t *testing.T) {
 	})
 
 	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 7})
-	sink.PublishRegionDescriptor(context.Background(), descriptor.FromRegionMeta(localmeta.RegionMeta{ID: 9}, 0))
+	sink.PublishRegionDescriptor(context.Background(), metacodec.DescriptorFromLocalRegionMeta(localmeta.RegionMeta{ID: 9}, 0))
 	require.Len(t, got, 2)
 	require.Contains(t, got[0], "StoreHeartbeat")
 	require.Contains(t, got[1], "RegionHeartbeat")
@@ -179,7 +180,7 @@ func TestSchedulerClientRemoveRegionForwardsAndReportsErrors(t *testing.T) {
 			ConfVersion: 1,
 		},
 	}
-	sink.PublishRegionDescriptor(context.Background(), descriptor.FromRegionMeta(meta, 0))
+	sink.PublishRegionDescriptor(context.Background(), metacodec.DescriptorFromLocalRegionMeta(meta, 0))
 
 	sink.RemoveRegion(context.Background(), 100)
 	require.Len(t, pd.removeReqs, 1)

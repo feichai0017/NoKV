@@ -2,11 +2,11 @@ package store
 
 import (
 	"fmt"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"sync"
 
 	"github.com/feichai0017/NoKV/metrics"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
@@ -150,7 +150,7 @@ func (rm *regionManager) applyRegionMeta(meta localmeta.RegionMeta) error {
 		rm.notify(regionEvent{
 			kind:     regionEventApply,
 			regionID: metaCopy.ID,
-			desc:     descriptor.FromRegionMeta(metaCopy, 0),
+			desc:     metacodec.DescriptorFromLocalRegionMeta(metaCopy, 0),
 		})
 	}
 	return nil

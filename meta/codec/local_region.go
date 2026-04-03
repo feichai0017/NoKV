@@ -13,7 +13,24 @@ import (
 // distributed descriptor wire shape. Keep this at admin/raft compatibility
 // boundaries rather than reintroducing Descriptor -> RegionMeta methods.
 func LocalRegionMetaToDescriptorProto(meta localmeta.RegionMeta) *metapb.RegionDescriptor {
-	return DescriptorToProto(descriptor.FromRegionMeta(meta, 0))
+	return DescriptorToProto(DescriptorFromLocalRegionMeta(meta, 0))
+}
+
+// DescriptorFromLocalRegionMeta lifts one store-local region shape into the
+// distributed descriptor domain object. Keep this at adapter boundaries rather
+// than coupling the descriptor package back to localmeta.
+func DescriptorFromLocalRegionMeta(meta localmeta.RegionMeta, rootEpoch uint64) descriptor.Descriptor {
+	desc := descriptor.Descriptor{
+		RegionID:  meta.ID,
+		StartKey:  append([]byte(nil), meta.StartKey...),
+		EndKey:    append([]byte(nil), meta.EndKey...),
+		Epoch:     meta.Epoch,
+		Peers:     append([]metaregion.Peer(nil), meta.Peers...),
+		State:     meta.State,
+		RootEpoch: rootEpoch,
+	}
+	desc.EnsureHash()
+	return desc
 }
 
 // LocalRegionMetaFromDescriptorProto lowers one distributed descriptor wire
