@@ -10,7 +10,6 @@ type MessageHandler func(myraft.Message) error
 // The first implementation is gRPC-backed; higher layers should depend on this
 // narrow surface instead of in-process routing details.
 type Transport interface {
-	LocalID() uint64
 	Addr() string
 	SetHandler(MessageHandler)
 	SetPeer(id uint64, addr string)
