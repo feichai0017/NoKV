@@ -38,7 +38,26 @@ func OpenRootReplicatedStore(cfg ReplicatedRootConfig) (*RootStore, error) {
 		return nil, err
 	}
 	if cfg.UsesTransport() {
-		return nil, fmt.Errorf("pd/storage: replicated root transport mode is not wired into pd/storage yet")
+		transport, err := rootreplicated.NewGRPCTransport(cfg.NodeID, cfg.TransportAddr)
+		if err != nil {
+			return nil, err
+		}
+		transport.SetPeers(cfg.PeerAddrs)
+		driver, err := rootreplicated.NewNetworkDriver(rootreplicated.NetworkConfig{
+			ID:        cfg.NodeID,
+			PeerIDs:   cfg.ClusterIDs,
+			Transport: transport,
+		})
+		if err != nil {
+			_ = transport.Close()
+			return nil, err
+		}
+		root, err := rootreplicated.Open(rootreplicated.Config{Driver: driver})
+		if err != nil {
+			_ = driver.Close()
+			return nil, err
+		}
+		return OpenRootStore(root)
 	}
 	cluster, err := getOrCreateReplicatedCluster(cfg.WorkDir, cfg.ClusterIDs)
 	if err != nil {
