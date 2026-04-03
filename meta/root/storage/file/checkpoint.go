@@ -19,11 +19,7 @@ type fileCheckpointStore struct {
 	workdir string
 }
 
-func NewCheckpointStore(fs vfs.FS, workdir string) rootstorage.CheckpointStore {
-	return fileCheckpointStore{fs: fs, workdir: workdir}
-}
-
-func (s fileCheckpointStore) Load() (rootstorage.Checkpoint, error) {
+func (s fileCheckpointStore) LoadCheckpoint() (rootstorage.Checkpoint, error) {
 	path := filepath.Join(s.workdir, CheckpointFileName)
 	data, err := s.fs.ReadFile(path)
 	if err != nil {
@@ -61,7 +57,7 @@ func (s fileCheckpointStore) Load() (rootstorage.Checkpoint, error) {
 	return rootstorage.Checkpoint{Snapshot: snapshot, LogOffset: int64(logOffset)}, nil
 }
 
-func (s fileCheckpointStore) Save(checkpoint rootstorage.Checkpoint) error {
+func (s fileCheckpointStore) SaveCheckpoint(checkpoint rootstorage.Checkpoint) error {
 	payload, err := proto.Marshal(metacodec.RootSnapshotToProto(checkpoint.Snapshot, uint64(checkpoint.LogOffset)))
 	if err != nil {
 		return err

@@ -15,9 +15,7 @@ type DriverState struct {
 // Driver exposes the minimal committed-log, checkpoint, and bootstrap-install
 // capabilities required by the replicated metadata-root backend.
 type Driver interface {
-	Log() rootstorage.EventLog
-	CheckpointStore() rootstorage.CheckpointStore
-	BootstrapInstaller() rootstorage.BootstrapInstaller
+	rootstorage.Substrate
 	WaitForChange(after rootstate.Cursor, timeout time.Duration) (rootstate.Cursor, error)
 	IsLeader() bool
 	LeaderID() uint64

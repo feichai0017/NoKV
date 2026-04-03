@@ -41,23 +41,15 @@ func CloneCommittedEvents(in []CommittedEvent) []CommittedEvent {
 	return out
 }
 
-// EventLog exposes the ordered committed metadata log surface needed by root implementations.
-type EventLog interface {
-	Load(offset int64) ([]CommittedEvent, error)
-	Append(records ...CommittedEvent) (logEnd int64, err error)
-	Compact(records []CommittedEvent) error
-	Size() (int64, error)
-}
-
-// CheckpointStore persists compact rooted metadata snapshots and their associated retained-log boundary.
-type CheckpointStore interface {
-	Load() (checkpoint Checkpoint, err error)
-	Save(checkpoint Checkpoint) error
-}
-
-// BootstrapInstaller installs one checkpoint and retained committed tail as a
-// new root bootstrap boundary. Implementations should replace prior retained
-// state atomically when possible.
-type BootstrapInstaller interface {
+// Substrate is the rooted metadata virtual-log surface consumed by root
+// backends. It combines one compact checkpoint boundary with one retained
+// committed stream and bootstrap installation semantics.
+type Substrate interface {
+	LoadCheckpoint() (checkpoint Checkpoint, err error)
+	SaveCheckpoint(checkpoint Checkpoint) error
+	LoadCommitted(offset int64) ([]CommittedEvent, error)
+	AppendCommitted(records ...CommittedEvent) (logEnd int64, err error)
+	CompactCommitted(records []CommittedEvent) error
 	InstallBootstrap(checkpoint Checkpoint, records []CommittedEvent) error
+	Size() (int64, error)
 }

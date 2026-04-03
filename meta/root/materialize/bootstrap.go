@@ -15,12 +15,12 @@ type Bootstrap struct {
 }
 
 // LoadBootstrap loads one rooted checkpoint and replays retained committed events on top of it.
-func LoadBootstrap(checkpt rootstorage.CheckpointStore, log rootstorage.EventLog) (Bootstrap, error) {
-	checkpoint, err := checkpt.Load()
+func LoadBootstrap(storage rootstorage.Substrate) (Bootstrap, error) {
+	checkpoint, err := storage.LoadCheckpoint()
 	if err != nil {
 		return Bootstrap{}, err
 	}
-	records, err := log.Load(checkpoint.LogOffset)
+	records, err := storage.LoadCommitted(checkpoint.LogOffset)
 	if err != nil {
 		return Bootstrap{}, err
 	}

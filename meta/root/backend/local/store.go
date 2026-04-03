@@ -22,8 +22,7 @@ const maxRetainedRecords = 64
 // It is intentionally minimal: an append-only event log, a compact protobuf
 // checkpoint, and an in-memory event index for ReadSince.
 type Store struct {
-	checkpt rootstorage.CheckpointStore
-	log     rootstorage.EventLog
+	storage rootstorage.Substrate
 
 	mu         sync.RWMutex
 	state      rootstate.State
@@ -43,15 +42,13 @@ func Open(workdir string, fs vfs.FS) (*Store, error) {
 	if err := fs.MkdirAll(workdir, 0o755); err != nil {
 		return nil, err
 	}
-	checkpt := rootfile.NewCheckpointStore(fs, workdir)
-	log := rootfile.NewEventLog(fs, workdir)
-	bootstrap, err := rootmaterialize.LoadBootstrap(checkpt, log)
+	storage := rootfile.NewStore(fs, workdir)
+	bootstrap, err := rootmaterialize.LoadBootstrap(storage)
 	if err != nil {
 		return nil, err
 	}
 	return &Store{
-		checkpt:    checkpt,
-		log:        log,
+		storage:    storage,
 		state:      bootstrap.Snapshot.State,
 		descs:      bootstrap.Snapshot.Descriptors,
 		records:    bootstrap.Records,
@@ -121,11 +118,11 @@ func (s *Store) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) 
 		rootmaterialize.ApplyEventToDescriptors(descs, evt)
 		records = append(records, rootstorage.CommittedEvent{Cursor: next, Event: rootevent.CloneEvent(evt)})
 	}
-	logEnd, err := s.log.Append(records...)
+	logEnd, err := s.storage.AppendCommitted(records...)
 	if err != nil {
 		return rootstate.CommitInfo{}, err
 	}
-	if err := s.checkpt.Save(rootstorage.Checkpoint{
+	if err := s.storage.SaveCheckpoint(rootstorage.Checkpoint{
 		Snapshot:  rootstate.Snapshot{State: state, Descriptors: descs},
 		LogOffset: logEnd,
 	}); err != nil {
@@ -161,11 +158,11 @@ func (s *Store) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, 
 		return *out, nil
 	}
 	*out = min
-	logEnd, err := s.log.Size()
+	logEnd, err := s.storage.Size()
 	if err != nil {
 		return 0, err
 	}
-	if err := s.checkpt.Save(rootstorage.Checkpoint{
+	if err := s.storage.SaveCheckpoint(rootstorage.Checkpoint{
 		Snapshot:  rootstate.Snapshot{State: state, Descriptors: rootstate.CloneDescriptors(s.descs)},
 		LogOffset: logEnd,
 	}); err != nil {
@@ -189,10 +186,10 @@ func (s *Store) maybeCompactLocked() {
 		State:       s.state,
 		Descriptors: rootstate.CloneDescriptors(s.descs),
 	}
-	if err := s.log.Compact(retained); err != nil {
+	if err := s.storage.CompactCommitted(retained); err != nil {
 		return
 	}
-	if err := s.checkpt.Save(rootstorage.Checkpoint{Snapshot: snapshot, LogOffset: 0}); err != nil {
+	if err := s.storage.SaveCheckpoint(rootstorage.Checkpoint{Snapshot: snapshot, LogOffset: 0}); err != nil {
 		return
 	}
 	s.records = retained

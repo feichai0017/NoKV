@@ -24,11 +24,7 @@ type fileEventLog struct {
 	workdir string
 }
 
-func NewEventLog(fs vfs.FS, workdir string) rootstorage.EventLog {
-	return fileEventLog{fs: fs, workdir: workdir}
-}
-
-func (l fileEventLog) Load(offset int64) ([]rootstorage.CommittedEvent, error) {
+func (l fileEventLog) LoadCommitted(offset int64) ([]rootstorage.CommittedEvent, error) {
 	path := filepath.Join(l.workdir, LogFileName)
 	f, err := l.fs.OpenHandle(path)
 	if err != nil {
@@ -56,7 +52,7 @@ func (l fileEventLog) Load(offset int64) ([]rootstorage.CommittedEvent, error) {
 	}
 }
 
-func (l fileEventLog) Append(records ...rootstorage.CommittedEvent) (int64, error) {
+func (l fileEventLog) AppendCommitted(records ...rootstorage.CommittedEvent) (int64, error) {
 	path := filepath.Join(l.workdir, LogFileName)
 	f, err := l.fs.OpenFileHandle(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
 	if err != nil {
@@ -83,7 +79,7 @@ func (l fileEventLog) Append(records ...rootstorage.CommittedEvent) (int64, erro
 	return logEnd, nil
 }
 
-func (l fileEventLog) Compact(records []rootstorage.CommittedEvent) error {
+func (l fileEventLog) CompactCommitted(records []rootstorage.CommittedEvent) error {
 	path := filepath.Join(l.workdir, LogFileName)
 	tmp := path + ".tmp"
 	f, err := l.fs.OpenFileHandle(tmp, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)

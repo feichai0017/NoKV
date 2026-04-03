@@ -28,9 +28,7 @@ type Config struct {
 // metadata backend, without baking protocol concerns into the root domain.
 type Store struct {
 	driver  Driver
-	log     rootstorage.EventLog
-	checkpt rootstorage.CheckpointStore
-	install rootstorage.BootstrapInstaller
+	storage rootstorage.Substrate
 
 	mu                 sync.RWMutex
 	state              rootstate.State
@@ -48,18 +46,13 @@ func Open(cfg Config) (*Store, error) {
 	if cfg.MaxRetainedRecords <= 0 {
 		cfg.MaxRetainedRecords = defaultRetainedRecords
 	}
-	log := cfg.Driver.Log()
-	checkpt := cfg.Driver.CheckpointStore()
-	install := cfg.Driver.BootstrapInstaller()
-	bootstrap, err := rootmaterialize.LoadBootstrap(checkpt, log)
+	bootstrap, err := rootmaterialize.LoadBootstrap(cfg.Driver)
 	if err != nil {
 		return nil, err
 	}
 	return &Store{
 		driver:             cfg.Driver,
-		log:                log,
-		checkpt:            checkpt,
-		install:            install,
+		storage:            cfg.Driver,
 		state:              bootstrap.Snapshot.State,
 		descs:              bootstrap.Snapshot.Descriptors,
 		records:            bootstrap.Records,
@@ -90,7 +83,7 @@ func (s *Store) Refresh() error {
 	if s == nil {
 		return nil
 	}
-	bootstrap, err := rootmaterialize.LoadBootstrap(s.checkpt, s.log)
+	bootstrap, err := rootmaterialize.LoadBootstrap(s.storage)
 	if err != nil {
 		return err
 	}
@@ -171,11 +164,11 @@ func (s *Store) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) 
 		rootmaterialize.ApplyEventToDescriptors(descs, evt)
 		records = append(records, rootstorage.CommittedEvent{Cursor: next, Event: rootevent.CloneEvent(evt)})
 	}
-	logEnd, err := s.log.Append(records...)
+	logEnd, err := s.storage.AppendCommitted(records...)
 	if err != nil {
 		return rootstate.CommitInfo{}, err
 	}
-	if err := s.checkpt.Save(rootstorage.Checkpoint{
+	if err := s.storage.SaveCheckpoint(rootstorage.Checkpoint{
 		Snapshot:  rootstate.Snapshot{State: state, Descriptors: descs},
 		LogOffset: logEnd,
 	}); err != nil {
@@ -210,11 +203,11 @@ func (s *Store) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, 
 		return *out, nil
 	}
 	*out = min
-	logEnd, err := s.log.Size()
+	logEnd, err := s.storage.Size()
 	if err != nil {
 		return 0, err
 	}
-	if err := s.checkpt.Save(rootstorage.Checkpoint{
+	if err := s.storage.SaveCheckpoint(rootstorage.Checkpoint{
 		Snapshot:  rootstate.Snapshot{State: state, Descriptors: rootstate.CloneDescriptors(s.descs)},
 		LogOffset: logEnd,
 	}); err != nil {
@@ -232,16 +225,12 @@ func (s *Store) InstallBootstrap(snapshot rootstate.Snapshot, records []rootstor
 	if s == nil {
 		return nil
 	}
-	if s.install == nil {
-		return fmt.Errorf("meta/root/backend/replicated: bootstrap installer is not configured")
-	}
-
 	checkpoint := rootstorage.Checkpoint{
 		Snapshot:  rootstate.CloneSnapshot(snapshot),
 		LogOffset: 0,
 	}
 	retained := rootstorage.CloneCommittedEvents(records)
-	if err := s.install.InstallBootstrap(checkpoint, retained); err != nil {
+	if err := s.storage.InstallBootstrap(checkpoint, retained); err != nil {
 		return err
 	}
 	return s.Refresh()
@@ -251,12 +240,7 @@ func (s *Store) Close() error {
 	if s == nil {
 		return nil
 	}
-	if closer, ok := s.log.(interface{ Close() error }); ok {
-		if err := closer.Close(); err != nil {
-			return err
-		}
-	}
-	if closer, ok := s.checkpt.(interface{ Close() error }); ok {
+	if closer, ok := s.storage.(interface{ Close() error }); ok {
 		if err := closer.Close(); err != nil {
 			return err
 		}
@@ -274,10 +258,10 @@ func (s *Store) maybeCompactLocked() {
 		State:       s.state,
 		Descriptors: rootstate.CloneDescriptors(s.descs),
 	}
-	if err := s.log.Compact(retained); err != nil {
+	if err := s.storage.CompactCommitted(retained); err != nil {
 		return
 	}
-	if err := s.checkpt.Save(rootstorage.Checkpoint{Snapshot: snapshot, LogOffset: 0}); err != nil {
+	if err := s.storage.SaveCheckpoint(rootstorage.Checkpoint{Snapshot: snapshot, LogOffset: 0}); err != nil {
 		return
 	}
 	s.records = retained

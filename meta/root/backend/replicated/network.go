@@ -35,8 +35,7 @@ type NetworkDriver struct {
 	closeOnce sync.Once
 	id        uint64
 	workdir   string
-	checkpt   rootstorage.CheckpointStore
-	log       rootstorage.EventLog
+	storage   rootstorage.Substrate
 	node      *networkNode
 	transport Transport
 	stopCh    chan struct{}
@@ -68,8 +67,7 @@ func NewNetworkDriver(cfg NetworkConfig) (*NetworkDriver, error) {
 	driver := &NetworkDriver{
 		id:        cfg.ID,
 		workdir:   cfg.WorkDir,
-		checkpt:   rootfile.NewCheckpointStore(vfs.Ensure(nil), cfg.WorkDir),
-		log:       rootfile.NewEventLog(vfs.Ensure(nil), cfg.WorkDir),
+		storage:   rootfile.NewStore(vfs.Ensure(nil), cfg.WorkDir),
 		transport: cfg.Transport,
 		stopCh:    make(chan struct{}),
 		notifyCh:  make(chan struct{}, 1),
@@ -77,7 +75,7 @@ func NewNetworkDriver(cfg NetworkConfig) (*NetworkDriver, error) {
 	if err := os.MkdirAll(cfg.WorkDir, 0o755); err != nil {
 		return nil, err
 	}
-	if checkpoint, err := driver.checkpt.Load(); err == nil {
+	if checkpoint, err := driver.storage.LoadCheckpoint(); err == nil {
 		driver.latest = checkpoint.Snapshot.State.LastCommitted
 	}
 	node, err := newNetworkNode(cfg, driver.handleTransportMessage)
@@ -101,14 +99,6 @@ func NewNetworkDriver(cfg NetworkConfig) (*NetworkDriver, error) {
 	return driver, nil
 }
 
-func (d *NetworkDriver) Log() rootstorage.EventLog { return networkEventLog{driver: d} }
-
-func (d *NetworkDriver) CheckpointStore() rootstorage.CheckpointStore {
-	return d.checkpt
-}
-
-func (d *NetworkDriver) BootstrapInstaller() rootstorage.BootstrapInstaller { return d }
-
 func (d *NetworkDriver) IsLeader() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -128,8 +118,8 @@ func (d *NetworkDriver) LeaderID() uint64 {
 }
 
 func (d *NetworkDriver) State() DriverState {
-	checkpoint, _ := d.checkpt.Load()
-	records, _ := d.log.Load(0)
+	checkpoint, _ := d.storage.LoadCheckpoint()
+	records, _ := d.storage.LoadCommitted(0)
 	return DriverState{
 		Checkpoint: rootstorage.CloneCheckpoint(checkpoint),
 		Records:    rootstorage.CloneCommittedEvents(records),
@@ -186,10 +176,7 @@ func (d *NetworkDriver) WaitForChange(after rootstate.Cursor, timeout time.Durat
 func (d *NetworkDriver) InstallBootstrap(checkpoint rootstorage.Checkpoint, records []rootstorage.CommittedEvent) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if err := d.log.Compact(records); err != nil {
-		return err
-	}
-	if err := d.checkpt.Save(checkpoint); err != nil {
+	if err := d.storage.InstallBootstrap(checkpoint, records); err != nil {
 		return err
 	}
 	d.latest = checkpoint.Snapshot.State.LastCommitted
@@ -304,7 +291,7 @@ func (d *NetworkDriver) drainLocked() ([]rootstorage.CommittedEvent, []myraft.Me
 		d.node.raw.Advance(rd)
 	}
 	if len(committed) > 0 {
-		if _, err := d.log.Append(committed...); err != nil {
+		if _, err := d.storage.AppendCommitted(committed...); err != nil {
 			return nil, nil, err
 		}
 		d.latest = committed[len(committed)-1].Cursor
@@ -316,54 +303,60 @@ func (d *NetworkDriver) drainLocked() ([]rootstorage.CommittedEvent, []myraft.Me
 	return committed, outbound, nil
 }
 
-type networkEventLog struct{ driver *NetworkDriver }
-
-func (l networkEventLog) Load(offset int64) ([]rootstorage.CommittedEvent, error) {
-	return l.driver.log.Load(offset)
+func (d *NetworkDriver) LoadCheckpoint() (rootstorage.Checkpoint, error) {
+	return d.storage.LoadCheckpoint()
 }
 
-func (l networkEventLog) Append(records ...rootstorage.CommittedEvent) (int64, error) {
-	l.driver.mu.Lock()
-	if l.driver.node == nil {
-		l.driver.mu.Unlock()
+func (d *NetworkDriver) SaveCheckpoint(checkpoint rootstorage.Checkpoint) error {
+	return d.storage.SaveCheckpoint(checkpoint)
+}
+
+func (d *NetworkDriver) LoadCommitted(offset int64) ([]rootstorage.CommittedEvent, error) {
+	return d.storage.LoadCommitted(offset)
+}
+
+func (d *NetworkDriver) AppendCommitted(records ...rootstorage.CommittedEvent) (int64, error) {
+	d.mu.Lock()
+	if d.node == nil {
+		d.mu.Unlock()
 		return 0, fmt.Errorf("meta/root/backend/replicated: network driver is closed")
 	}
-	if l.driver.node.raw.Status().RaftState != myraft.StateLeader {
-		l.driver.mu.Unlock()
-		return 0, fmt.Errorf("meta/root/backend/replicated: node %d is not leader", l.driver.id)
+	if d.node.raw.Status().RaftState != myraft.StateLeader {
+		d.mu.Unlock()
+		return 0, fmt.Errorf("meta/root/backend/replicated: node %d is not leader", d.id)
 	}
 	for _, rec := range records {
 		payload, err := marshalCommittedEvent(rec)
 		if err != nil {
-			l.driver.mu.Unlock()
+			d.mu.Unlock()
 			return 0, err
 		}
-		if err := l.driver.node.raw.Propose(payload); err != nil {
-			l.driver.mu.Unlock()
+		if err := d.node.raw.Propose(payload); err != nil {
+			d.mu.Unlock()
 			return 0, err
 		}
-		_, outbound, err := l.driver.drainLocked()
+		_, outbound, err := d.drainLocked()
 		if err != nil {
-			l.driver.mu.Unlock()
+			d.mu.Unlock()
 			return 0, err
 		}
-		l.driver.mu.Unlock()
-		if err := l.driver.sendMessages(outbound); err != nil {
+		d.mu.Unlock()
+		if err := d.sendMessages(outbound); err != nil {
 			return 0, err
 		}
-		l.driver.mu.Lock()
+		d.mu.Lock()
 	}
-	size, err := l.driver.log.Size()
-	l.driver.mu.Unlock()
+	size, err := d.storage.Size()
+	d.mu.Unlock()
 	return size, err
 }
 
-func (l networkEventLog) Compact(records []rootstorage.CommittedEvent) error {
-	return l.driver.log.Compact(records)
+func (d *NetworkDriver) CompactCommitted(records []rootstorage.CommittedEvent) error {
+	return d.storage.CompactCommitted(records)
 }
 
-func (l networkEventLog) Size() (int64, error) {
-	return l.driver.log.Size()
+func (d *NetworkDriver) Size() (int64, error) {
+	return d.storage.Size()
 }
 
 type networkNode struct {
