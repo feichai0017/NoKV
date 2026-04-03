@@ -28,16 +28,15 @@ import (
 type fakeStorage struct {
 	updateCalls int
 	eventCalls  int
-	deleteCalls int
 	saveCalls   int
 	updateErr   error
 	eventErr    error
-	deleteErr   error
 	saveErr     error
 	lastID      uint64
 	lastTS      uint64
 	leader      bool
 	leaderID    uint64
+	lastEvent   rootevent.Event
 }
 
 func (f *fakeStorage) Load() (pdstorage.Snapshot, error) {
@@ -57,22 +56,12 @@ func (f *fakeStorage) PublishRegionDescriptor(desc descriptor.Descriptor) error 
 
 func (f *fakeStorage) AppendRootEvent(event rootevent.Event) error {
 	f.eventCalls++
+	f.lastEvent = event
 	if f.eventErr != nil {
 		return f.eventErr
 	}
 	if event.Kind == rootevent.KindUnknown {
 		return errors.New("invalid root event")
-	}
-	return nil
-}
-
-func (f *fakeStorage) TombstoneRegion(regionID uint64) error {
-	f.deleteCalls++
-	if f.deleteErr != nil {
-		return f.deleteErr
-	}
-	if regionID == 0 {
-		return errors.New("invalid region id")
 	}
 	return nil
 }
@@ -280,7 +269,8 @@ func TestServicePersistsRegionCatalog(t *testing.T) {
 
 	_, err = svc.RemoveRegion(context.Background(), &pdpb.RemoveRegionRequest{RegionId: 42})
 	require.NoError(t, err)
-	require.Equal(t, 1, store.deleteCalls)
+	require.Equal(t, 1, store.eventCalls)
+	require.Equal(t, rootevent.KindRegionTombstoned, store.lastEvent.Kind)
 }
 
 func TestServicePublishRootEvent(t *testing.T) {
@@ -355,7 +345,7 @@ func TestServiceRegionCatalogPersistenceErrors(t *testing.T) {
 		RegionDescriptor: testRegionDescriptorProto(testDescriptor(8, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)),
 	})
 	require.NoError(t, err)
-	store.deleteErr = errors.New("persist delete failed")
+	store.eventErr = errors.New("persist delete failed")
 	_, err = svc.RemoveRegion(context.Background(), &pdpb.RemoveRegionRequest{RegionId: 8})
 	require.Error(t, err)
 	require.Equal(t, codes.Internal, status.Code(err))
