@@ -252,6 +252,39 @@ func TestOpenRootReplicatedStoreSharesThreeNodeCluster(t *testing.T) {
 	require.Equal(t, uint64(81), got.RegionID)
 }
 
+func TestReplicatedRootConfigValidate(t *testing.T) {
+	cfg := ReplicatedRootConfig{
+		WorkDir:    t.TempDir(),
+		NodeID:     1,
+		ClusterIDs: []uint64{1, 2, 3},
+	}
+	require.NoError(t, cfg.Validate())
+
+	cfg.TransportAddr = "127.0.0.1:7001"
+	cfg.PeerAddrs = map[uint64]string{
+		1: "127.0.0.1:7001",
+		2: "127.0.0.1:7002",
+		3: "127.0.0.1:7003",
+	}
+	require.NoError(t, cfg.Validate())
+
+	cfg.PeerAddrs = map[uint64]string{1: "127.0.0.1:7001"}
+	require.Error(t, cfg.Validate())
+}
+
+func TestParseReplicatedRootClusterIDs(t *testing.T) {
+	ids, err := ParseReplicatedRootClusterIDs("")
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1, 2, 3}, ids)
+
+	ids, err = ParseReplicatedRootClusterIDs("1,2,3")
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1, 2, 3}, ids)
+
+	_, err = ParseReplicatedRootClusterIDs("1,1,2")
+	require.Error(t, err)
+}
+
 func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch, peers []metaregion.Peer) descriptor.Descriptor {
 	desc := descriptor.Descriptor{
 		RegionID: id,

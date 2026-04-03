@@ -10,7 +10,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -95,12 +94,9 @@ func runPDCmd(w io.Writer, args []string) error {
 		case "", "local":
 			rootStore, err = pdstorage.OpenRootLocalStore(workdirPath)
 		case "replicated":
-			clusterIDs, parseErr := parseRootClusterIDs(*rootCluster)
+			clusterIDs, parseErr := pdstorage.ParseReplicatedRootClusterIDs(*rootCluster)
 			if parseErr != nil {
 				return parseErr
-			}
-			if len(clusterIDs) != 3 {
-				return fmt.Errorf("pd replicated root mode requires exactly 3 root cluster ids")
 			}
 			rootStore, err = pdstorage.OpenRootReplicatedStore(pdstorage.ReplicatedRootConfig{
 				WorkDir:    workdirPath,
@@ -183,38 +179,6 @@ func runPDCmd(w io.Writer, args []string) error {
 		}
 		return nil
 	}
-}
-
-func parseRootClusterIDs(raw string) ([]uint64, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return []uint64{1, 2, 3}, nil
-	}
-	parts := strings.Split(raw, ",")
-	out := make([]uint64, 0, len(parts))
-	seen := make(map[uint64]struct{}, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		id, err := strconv.ParseUint(part, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("parse root cluster id %q: %w", part, err)
-		}
-		if id == 0 {
-			return nil, fmt.Errorf("root cluster ids must be > 0")
-		}
-		if _, ok := seen[id]; ok {
-			return nil, fmt.Errorf("duplicate root cluster id %d", id)
-		}
-		seen[id] = struct{}{}
-		out = append(out, id)
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("root cluster must contain at least one node id")
-	}
-	return out, nil
 }
 
 func flagPassed(fs *flag.FlagSet, name string) bool {
