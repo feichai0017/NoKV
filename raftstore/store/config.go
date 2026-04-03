@@ -2,7 +2,7 @@ package store
 
 import (
 	"context"
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"time"
 
@@ -73,7 +73,7 @@ type SchedulerStatus struct {
 // scheduling decisions that should be applied locally.
 type SchedulerClient interface {
 	PublishRegionDescriptor(context.Context, descriptor.Descriptor)
-	PublishRootEvent(context.Context, rootpkg.Event)
+	PublishRootEvent(context.Context, rootevent.Event)
 	RemoveRegion(context.Context, uint64)
 	StoreHeartbeat(context.Context, StoreStats) []Operation
 	Status() SchedulerStatus

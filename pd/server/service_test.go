@@ -5,7 +5,7 @@ import (
 	"errors"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"testing"
@@ -43,12 +43,12 @@ func (f *fakeStorage) PublishRegionDescriptor(desc descriptor.Descriptor) error 
 	return nil
 }
 
-func (f *fakeStorage) AppendRootEvent(event rootpkg.Event) error {
+func (f *fakeStorage) AppendRootEvent(event rootevent.Event) error {
 	f.eventCalls++
 	if f.eventErr != nil {
 		return f.eventErr
 	}
-	if event.Kind == rootpkg.EventKindUnknown {
+	if event.Kind == rootevent.KindUnknown {
 		return errors.New("invalid root event")
 	}
 	return nil
@@ -237,7 +237,7 @@ func TestServicePublishRootEvent(t *testing.T) {
 	store := &fakeStorage{}
 	svc.SetStorage(store)
 
-	event := rootpkg.RegionSplitCommitted(
+	event := rootevent.RegionSplitCommitted(
 		41,
 		[]byte("m"),
 		testDescriptor(41, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil),
@@ -272,7 +272,7 @@ func TestServicePublishRootEventValidationAndPersistenceError(t *testing.T) {
 
 	store := &fakeStorage{eventErr: errors.New("persist root event failed")}
 	svc.SetStorage(store)
-	event := rootpkg.RegionMerged(
+	event := rootevent.RegionMerged(
 		10,
 		11,
 		testDescriptor(10, []byte("a"), []byte("z"), metaregion.Epoch{Version: 3, ConfVersion: 1}, nil),

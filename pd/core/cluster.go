@@ -1,7 +1,7 @@
 package core
 
 import (
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	pdview "github.com/feichai0017/NoKV/pd/view"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"time"
@@ -66,7 +66,7 @@ func (c *Cluster) PublishRegionDescriptor(desc descriptor.Descriptor) error {
 
 // PublishRootEvent applies one explicit rooted truth event into the runtime PD
 // route view.
-func (c *Cluster) PublishRootEvent(event rootpkg.Event) error {
+func (c *Cluster) PublishRootEvent(event rootevent.Event) error {
 	if c == nil {
 		return nil
 	}

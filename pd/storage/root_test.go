@@ -2,8 +2,9 @@ package storage
 
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"path/filepath"
 	"testing"
@@ -74,10 +75,10 @@ func TestRootStoreSkipsDuplicateRegionDescriptorHeartbeat(t *testing.T) {
 	require.NoError(t, store.PublishRegionDescriptor(desc))
 	require.NoError(t, store.PublishRegionDescriptor(desc))
 
-	events, _, err := root.ReadSince(rootpkg.Cursor{})
+	events, _, err := root.ReadSince(rootstate.Cursor{})
 	require.NoError(t, err)
 	require.Len(t, events, 1)
-	require.Equal(t, rootpkg.EventKindRegionBootstrap, events[0].Kind)
+	require.Equal(t, rootevent.KindRegionBootstrap, events[0].Kind)
 }
 
 func TestRootStoreAppendRootEventPeerAdded(t *testing.T) {
@@ -92,13 +93,13 @@ func TestRootStoreAppendRootEventPeerAdded(t *testing.T) {
 	desc.Epoch.ConfVersion = 2
 	desc.Hash = nil
 	desc.EnsureHash()
-	require.NoError(t, store.AppendRootEvent(rootpkg.PeerAdded(desc.RegionID, 2, 201, desc)))
+	require.NoError(t, store.AppendRootEvent(rootevent.PeerAdded(desc.RegionID, 2, 201, desc)))
 
-	events, _, err := root.ReadSince(rootpkg.Cursor{})
+	events, _, err := root.ReadSince(rootstate.Cursor{})
 	require.NoError(t, err)
 	require.Len(t, events, 2)
-	require.Equal(t, rootpkg.EventKindRegionBootstrap, events[0].Kind)
-	require.Equal(t, rootpkg.EventKindPeerAdded, events[1].Kind)
+	require.Equal(t, rootevent.KindRegionBootstrap, events[0].Kind)
+	require.Equal(t, rootevent.KindPeerAdded, events[1].Kind)
 	require.NotNil(t, events[1].PeerChange)
 	require.Equal(t, uint64(2), events[1].PeerChange.StoreID)
 	require.Equal(t, uint64(201), events[1].PeerChange.PeerID)
@@ -116,12 +117,12 @@ func TestRootStoreAppendRootEventPeerRemoved(t *testing.T) {
 	desc.Epoch.ConfVersion = 3
 	desc.Hash = nil
 	desc.EnsureHash()
-	require.NoError(t, store.AppendRootEvent(rootpkg.PeerRemoved(desc.RegionID, 2, 201, desc)))
+	require.NoError(t, store.AppendRootEvent(rootevent.PeerRemoved(desc.RegionID, 2, 201, desc)))
 
-	events, _, err := root.ReadSince(rootpkg.Cursor{})
+	events, _, err := root.ReadSince(rootstate.Cursor{})
 	require.NoError(t, err)
 	require.Len(t, events, 2)
-	require.Equal(t, rootpkg.EventKindPeerRemoved, events[1].Kind)
+	require.Equal(t, rootevent.KindPeerRemoved, events[1].Kind)
 	require.NotNil(t, events[1].PeerChange)
 	require.Equal(t, uint64(2), events[1].PeerChange.StoreID)
 	require.Equal(t, uint64(201), events[1].PeerChange.PeerID)
@@ -141,12 +142,12 @@ func TestRootStoreAppendRootEventSplitCommitted(t *testing.T) {
 	parent.Epoch.Version = 2
 	parent.Hash = nil
 	parent.EnsureHash()
-	require.NoError(t, store.AppendRootEvent(rootpkg.RegionSplitCommitted(51, []byte("m"), parent, childDesc)))
+	require.NoError(t, store.AppendRootEvent(rootevent.RegionSplitCommitted(51, []byte("m"), parent, childDesc)))
 
-	events, _, err := root.ReadSince(rootpkg.Cursor{})
+	events, _, err := root.ReadSince(rootstate.Cursor{})
 	require.NoError(t, err)
 	require.Len(t, events, 2)
-	require.Equal(t, rootpkg.EventKindRegionSplitCommitted, events[1].Kind)
+	require.Equal(t, rootevent.KindRegionSplitCommitted, events[1].Kind)
 	require.NotNil(t, events[1].RangeSplit)
 	require.Equal(t, uint64(51), events[1].RangeSplit.ParentRegionID)
 	require.Equal(t, uint64(51), events[1].RangeSplit.Left.RegionID)
@@ -169,12 +170,12 @@ func TestRootStoreAppendRootEventRegionMerged(t *testing.T) {
 	left.Hash = nil
 	left.EnsureHash()
 	mergedDesc := left
-	require.NoError(t, store.AppendRootEvent(rootpkg.RegionMerged(61, 62, mergedDesc)))
+	require.NoError(t, store.AppendRootEvent(rootevent.RegionMerged(61, 62, mergedDesc)))
 
-	events, _, err := root.ReadSince(rootpkg.Cursor{})
+	events, _, err := root.ReadSince(rootstate.Cursor{})
 	require.NoError(t, err)
 	require.Len(t, events, 3)
-	require.Equal(t, rootpkg.EventKindRegionMerged, events[2].Kind)
+	require.Equal(t, rootevent.KindRegionMerged, events[2].Kind)
 	require.NotNil(t, events[2].RangeMerge)
 	require.Equal(t, uint64(61), events[2].RangeMerge.LeftRegionID)
 	require.Equal(t, uint64(62), events[2].RangeMerge.RightRegionID)

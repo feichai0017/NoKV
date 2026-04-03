@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 )
@@ -84,7 +84,7 @@ func TestSchedulerClientPublishRootEvent(t *testing.T) {
 	pd := &fakePDClient{}
 	sink := NewSchedulerClient(SchedulerClientConfig{PD: pd})
 
-	event := rootpkg.PeerAdded(10, 2, 201, testDescriptor(10, []byte("a"), []byte("z"), metaregion.Epoch{
+	event := rootevent.PeerAdded(10, 2, 201, testDescriptor(10, []byte("a"), []byte("z"), metaregion.Epoch{
 		Version:     1,
 		ConfVersion: 2,
 	}, []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}}))
@@ -92,7 +92,7 @@ func TestSchedulerClientPublishRootEvent(t *testing.T) {
 
 	require.Len(t, pd.rootEventReq, 1)
 	got := metacodec.RootEventFromProto(pd.rootEventReq[0].GetEvent())
-	require.Equal(t, rootpkg.EventKindPeerAdded, got.Kind)
+	require.Equal(t, rootevent.KindPeerAdded, got.Kind)
 	require.NotNil(t, got.PeerChange)
 	require.Equal(t, uint64(10), got.PeerChange.RegionID)
 	require.False(t, sink.Status().Degraded)
@@ -157,7 +157,7 @@ func TestSchedulerClientErrorCallbackAndClose(t *testing.T) {
 	})
 
 	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 7})
-	sink.PublishRootEvent(context.Background(), rootpkg.RegionDescriptorPublished(testDescriptor(9, nil, nil, metaregion.Epoch{}, nil)))
+	sink.PublishRootEvent(context.Background(), rootevent.RegionDescriptorPublished(testDescriptor(9, nil, nil, metaregion.Epoch{}, nil)))
 	require.Len(t, got, 2)
 	require.Contains(t, got[0], "StoreHeartbeat")
 	require.Contains(t, got[1], "PublishRootEvent")
@@ -175,7 +175,7 @@ func TestSchedulerClientNoopOnZeroIDs(t *testing.T) {
 	sink := NewSchedulerClient(SchedulerClientConfig{PD: pd})
 	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 0})
 	sink.PublishRegionDescriptor(context.Background(), descriptor.Descriptor{})
-	sink.PublishRootEvent(context.Background(), rootpkg.Event{})
+	sink.PublishRootEvent(context.Background(), rootevent.Event{})
 	sink.RemoveRegion(context.Background(), 0)
 	require.Empty(t, pd.storeReqs)
 	require.Empty(t, pd.regionReqs)
