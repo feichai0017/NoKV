@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"bytes"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -92,10 +91,14 @@ func (s *RootStore) PublishRegionDescriptor(desc descriptor.Descriptor) error {
 	prev, existed := s.snapshot.Descriptors[desc.RegionID]
 	s.mu.RUnlock()
 	if desc.RootEpoch == 0 {
-		desc.RootEpoch = clusterEpoch + 1
+		if existed && prev.RootEpoch != 0 {
+			desc.RootEpoch = prev.RootEpoch
+		} else {
+			desc.RootEpoch = clusterEpoch + 1
+		}
 	}
 
-	if existed && descriptorsEqual(prev, desc) {
+	if existed && prev.Equal(desc) {
 		return nil
 	}
 
@@ -180,32 +183,4 @@ func regionEvent(existed bool, next descriptor.Descriptor) rootevent.Event {
 		return rootevent.RegionBootstrapped(next)
 	}
 	return rootevent.RegionDescriptorPublished(next)
-}
-
-func descriptorsEqual(a, b descriptor.Descriptor) bool {
-	if a.RegionID != b.RegionID ||
-		a.State != b.State ||
-		a.Epoch != b.Epoch ||
-		!bytes.Equal(a.StartKey, b.StartKey) ||
-		!bytes.Equal(a.EndKey, b.EndKey) ||
-		!bytes.Equal(a.Hash, b.Hash) {
-		return false
-	}
-	if len(a.Peers) != len(b.Peers) || len(a.Lineage) != len(b.Lineage) {
-		return false
-	}
-	for i := range a.Peers {
-		if a.Peers[i] != b.Peers[i] {
-			return false
-		}
-	}
-	for i := range a.Lineage {
-		if a.Lineage[i].RegionID != b.Lineage[i].RegionID ||
-			a.Lineage[i].Epoch != b.Lineage[i].Epoch ||
-			a.Lineage[i].Kind != b.Lineage[i].Kind ||
-			!bytes.Equal(a.Lineage[i].Hash, b.Lineage[i].Hash) {
-			return false
-		}
-	}
-	return true
 }
