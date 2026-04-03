@@ -33,7 +33,7 @@ func LoadBootstrap(storage rootstorage.Substrate) (Bootstrap, error) {
 	return Bootstrap{
 		Snapshot:   snapshot,
 		Stream:     stream,
-		RetainFrom: RetainedFloor(stream.Records, snapshot.State.LastCommitted),
+		RetainFrom: stream.RetainFrom(snapshot.State.LastCommitted),
 	}, nil
 }
 
@@ -50,19 +50,4 @@ func CloneCommittedEvents(in []rootstorage.CommittedEvent) []rootstorage.Committ
 		})
 	}
 	return out
-}
-
-// RetainedFloor returns the cursor immediately before the first retained event.
-func RetainedFloor(records []rootstorage.CommittedEvent, fallback rootstate.Cursor) rootstate.Cursor {
-	if len(records) == 0 {
-		return fallback
-	}
-	return previousCursor(records[0].Cursor)
-}
-
-func previousCursor(in rootstate.Cursor) rootstate.Cursor {
-	if in.Index <= 1 {
-		return rootstate.Cursor{}
-	}
-	return rootstate.Cursor{Term: in.Term, Index: in.Index - 1}
 }

@@ -58,6 +58,28 @@ func CloneCommittedStream(in CommittedStream) CommittedStream {
 	}
 }
 
+// RetainFrom returns the cursor immediately before the first retained event.
+// When the stream is empty, fallback is returned unchanged.
+func (s CommittedStream) RetainFrom(fallback rootstate.Cursor) rootstate.Cursor {
+	if len(s.Records) == 0 {
+		return fallback
+	}
+	first := s.Records[0].Cursor
+	if first.Index <= 1 {
+		return rootstate.Cursor{}
+	}
+	return rootstate.Cursor{Term: first.Term, Index: first.Index - 1}
+}
+
+// TailCursor returns the last committed cursor visible in this retained
+// stream. When the stream is empty, fallback is returned unchanged.
+func (s CommittedStream) TailCursor(fallback rootstate.Cursor) rootstate.Cursor {
+	if len(s.Records) == 0 {
+		return fallback
+	}
+	return s.Records[len(s.Records)-1].Cursor
+}
+
 // Substrate is the rooted metadata virtual-log surface consumed by root
 // backends. It combines one compact checkpoint boundary with one retained
 // committed stream and bootstrap installation semantics.

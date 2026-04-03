@@ -174,7 +174,7 @@ func (s *Store) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) 
 	s.state = state
 	s.descs = descs
 	s.records = append(s.records, records...)
-	s.retainFrom = rootmaterialize.RetainedFloor(s.records, state.LastCommitted)
+	s.retainFrom = (rootstorage.CommittedStream{Records: s.records}).RetainFrom(state.LastCommitted)
 	s.maybeCompactLocked()
 	return rootstate.CommitInfo{Cursor: state.LastCommitted, State: state}, nil
 }
@@ -260,5 +260,5 @@ func (s *Store) maybeCompactLocked() {
 		return
 	}
 	s.records = retained
-	s.retainFrom = rootmaterialize.RetainedFloor(retained, s.state.LastCommitted)
+	s.retainFrom = (rootstorage.CommittedStream{Records: retained}).RetainFrom(s.state.LastCommitted)
 }
