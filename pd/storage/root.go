@@ -11,14 +11,22 @@ import (
 // RootStore persists PD truth on top of the metadata root and reconstructs the
 // region catalog by replaying committed root events.
 type RootStore struct {
-	root rootpkg.Root
+	root interface {
+		rootpkg.StateReader
+		rootpkg.EventAppender
+		rootpkg.AllocatorFencer
+	}
 
 	mu       sync.RWMutex
 	snapshot Snapshot
 }
 
 // OpenRootStore opens a PD storage backend backed by the metadata root.
-func OpenRootStore(root rootpkg.Root) (*RootStore, error) {
+func OpenRootStore(root interface {
+	rootpkg.StateReader
+	rootpkg.EventAppender
+	rootpkg.AllocatorFencer
+}) (*RootStore, error) {
 	store := &RootStore{root: root}
 	if err := store.reload(); err != nil {
 		return nil, err
