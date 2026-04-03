@@ -6,8 +6,8 @@ import (
 	"slices"
 	"sync"
 
-	myraft "github.com/feichai0017/NoKV/raft"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	myraft "github.com/feichai0017/NoKV/raft"
 )
 
 // FixedCluster is one single-process, fixed-membership replicated log cluster.
@@ -126,6 +126,14 @@ func (d *ClusterDriver) CheckpointStore() rootstorage.CheckpointStore {
 }
 
 func (d *ClusterDriver) BootstrapInstaller() rootstorage.BootstrapInstaller { return d }
+
+func (d *ClusterDriver) IsLeader() bool {
+	return d.cluster.LeaderID() == d.id
+}
+
+func (d *ClusterDriver) LeaderID() uint64 {
+	return d.cluster.LeaderID()
+}
 
 func (d *ClusterDriver) State() DriverState {
 	d.cluster.mu.Lock()

@@ -61,6 +61,13 @@ type Refresher interface {
 	Refresh() error
 }
 
+// LeaderStatus reports whether the current rooted storage instance is the
+// writable leader for metadata truth, and which leader is currently known.
+type LeaderStatus interface {
+	IsLeader() bool
+	LeaderID() uint64
+}
+
 // DescriptorCatalog accepts region descriptor updates during PD bootstrap.
 type DescriptorCatalog interface {
 	PublishRegionDescriptor(desc descriptor.Descriptor) error

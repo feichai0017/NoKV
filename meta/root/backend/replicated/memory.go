@@ -52,6 +52,10 @@ func (d *MemoryDriver) CheckpointStore() rootstorage.CheckpointStore {
 
 func (d *MemoryDriver) BootstrapInstaller() rootstorage.BootstrapInstaller { return d }
 
+func (d *MemoryDriver) IsLeader() bool { return true }
+
+func (d *MemoryDriver) LeaderID() uint64 { return 1 }
+
 // State returns one detached view of the driver's current checkpoint and
 // retained committed tail.
 func (d *MemoryDriver) State() DriverState {

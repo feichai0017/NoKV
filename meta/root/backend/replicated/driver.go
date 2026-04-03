@@ -10,6 +10,12 @@ type Driver interface {
 	BootstrapInstaller() rootstorage.BootstrapInstaller
 }
 
+// LeaderAware reports whether a replicated driver is currently leader-backed.
+type LeaderAware interface {
+	IsLeader() bool
+	LeaderID() uint64
+}
+
 // ConfigFromDriver wires one driver into the replicated backend config.
 func ConfigFromDriver(driver Driver, maxRetainedRecords int) Config {
 	if driver == nil {

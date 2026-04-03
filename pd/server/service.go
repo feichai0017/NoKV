@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
@@ -23,6 +24,8 @@ type Service struct {
 	tso     *tso.Allocator
 	storage pdstorage.Sink
 }
+
+const errNotLeaderPrefix = "pd not leader"
 
 // NewService constructs a PD-lite service.
 func NewService(cluster *core.Cluster, ids *core.IDAllocator, tsAlloc *tso.Allocator) *Service {
@@ -83,6 +86,9 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pdpb.RegionHeartbeatRe
 		return nil, status.Error(codes.InvalidArgument, "region heartbeat request missing descriptor")
 	}
 	desc := metacodec.DescriptorFromProto(req.GetRegionDescriptor())
+	if err := s.requireLeaderForWrite(); err != nil {
+		return nil, err
+	}
 	err := s.cluster.PublishRegionDescriptor(desc)
 	if err != nil {
 		switch {
@@ -111,6 +117,9 @@ func (s *Service) PublishRootEvent(_ context.Context, req *pdpb.PublishRootEvent
 	if event.Kind == rootevent.KindUnknown {
 		return nil, status.Error(codes.InvalidArgument, "publish root event requires known kind")
 	}
+	if err := s.requireLeaderForWrite(); err != nil {
+		return nil, err
+	}
 	if err := s.cluster.PublishRootEvent(event); err != nil {
 		switch {
 		case errors.Is(err, core.ErrInvalidRegionID):
@@ -137,6 +146,9 @@ func (s *Service) RemoveRegion(_ context.Context, req *pdpb.RemoveRegionRequest)
 	regionID := req.GetRegionId()
 	if regionID == 0 {
 		return nil, status.Error(codes.InvalidArgument, "remove region requires region_id > 0")
+	}
+	if err := s.requireLeaderForWrite(); err != nil {
+		return nil, err
 	}
 	removed := s.cluster.RemoveRegion(regionID)
 	if removed && s.storage != nil {
@@ -171,6 +183,9 @@ func (s *Service) AllocID(_ context.Context, req *pdpb.AllocIDRequest) (*pdpb.Al
 	if count == 0 {
 		count = 1
 	}
+	if err := s.requireLeaderForWrite(); err != nil {
+		return nil, err
+	}
 	first, _, err := s.ids.Reserve(count)
 	if err != nil {
 		if errors.Is(err, core.ErrInvalidBatch) {
@@ -196,6 +211,9 @@ func (s *Service) Tso(_ context.Context, req *pdpb.TsoRequest) (*pdpb.TsoRespons
 	if count == 0 {
 		count = 1
 	}
+	if err := s.requireLeaderForWrite(); err != nil {
+		return nil, err
+	}
 	first, got, err := s.tso.Reserve(count)
 	if err != nil {
 		if errors.Is(err, core.ErrInvalidBatch) {
@@ -217,4 +235,19 @@ func (s *Service) persistAllocatorState() error {
 		return nil
 	}
 	return s.storage.SaveAllocatorState(s.ids.Current(), s.tso.Current())
+}
+
+func (s *Service) requireLeaderForWrite() error {
+	if s == nil || s.storage == nil {
+		return nil
+	}
+	leader, ok := s.storage.(pdstorage.LeaderStatus)
+	if !ok || leader.IsLeader() {
+		return nil
+	}
+	leaderID := leader.LeaderID()
+	if leaderID != 0 {
+		return status.Error(codes.FailedPrecondition, fmt.Sprintf("%s (leader_id=%d)", errNotLeaderPrefix, leaderID))
+	}
+	return status.Error(codes.FailedPrecondition, errNotLeaderPrefix)
 }

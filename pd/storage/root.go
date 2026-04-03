@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"fmt"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
 	rootreplicated "github.com/feichai0017/NoKV/meta/root/backend/replicated"
@@ -9,7 +10,6 @@ import (
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	"fmt"
 	"slices"
 	"sync"
 )
@@ -108,6 +108,26 @@ func (s *RootStore) Refresh() error {
 		}
 	}
 	return s.reload()
+}
+
+func (s *RootStore) IsLeader() bool {
+	if s == nil || s.root == nil {
+		return true
+	}
+	if leader, ok := s.root.(LeaderStatus); ok {
+		return leader.IsLeader()
+	}
+	return true
+}
+
+func (s *RootStore) LeaderID() uint64 {
+	if s == nil || s.root == nil {
+		return 0
+	}
+	if leader, ok := s.root.(LeaderStatus); ok {
+		return leader.LeaderID()
+	}
+	return 0
 }
 
 // PublishRegionDescriptor publishes the latest descriptor truth for one region.

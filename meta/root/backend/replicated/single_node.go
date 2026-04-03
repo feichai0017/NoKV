@@ -4,8 +4,8 @@ import (
 	"math"
 	"sync"
 
-	myraft "github.com/feichai0017/NoKV/raft"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	myraft "github.com/feichai0017/NoKV/raft"
 )
 
 // SingleNodeDriver is one single-process ordered-log adapter backed by the
@@ -55,6 +55,10 @@ func (d *SingleNodeDriver) CheckpointStore() rootstorage.CheckpointStore {
 
 // BootstrapInstaller returns the bootstrap-install view of the driver.
 func (d *SingleNodeDriver) BootstrapInstaller() rootstorage.BootstrapInstaller { return d }
+
+func (d *SingleNodeDriver) IsLeader() bool { return true }
+
+func (d *SingleNodeDriver) LeaderID() uint64 { return d.id }
 
 // State returns one detached view of the driver's checkpoint and retained tail.
 func (d *SingleNodeDriver) State() DriverState {

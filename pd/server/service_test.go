@@ -8,6 +8,7 @@ import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -30,6 +31,8 @@ type fakeStorage struct {
 	saveErr     error
 	lastID      uint64
 	lastTS      uint64
+	leader      bool
+	leaderID    uint64
 }
 
 func (f *fakeStorage) PublishRegionDescriptor(desc descriptor.Descriptor) error {
@@ -74,6 +77,17 @@ func (f *fakeStorage) SaveAllocatorState(idCurrent, tsCurrent uint64) error {
 
 func (f *fakeStorage) Close() error {
 	return nil
+}
+
+func (f *fakeStorage) IsLeader() bool {
+	return f == nil || f.leader || f.leaderID == 0
+}
+
+func (f *fakeStorage) LeaderID() uint64 {
+	if f == nil {
+		return 0
+	}
+	return f.leaderID
 }
 
 func testRegionDescriptorProto(desc descriptor.Descriptor) *metapb.RegionDescriptor {
@@ -334,6 +348,42 @@ func TestServiceAllocatorStatePersistenceError(t *testing.T) {
 	_, err := svc.AllocID(context.Background(), &pdpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
 	require.Equal(t, codes.Internal, status.Code(err))
+}
+
+func TestServiceRejectsWritesOnFollower(t *testing.T) {
+	svc := NewService(core.NewCluster(), core.NewIDAllocator(10), tso.NewAllocator(100))
+	store := &fakeStorage{leader: false, leaderID: 2}
+	svc.SetStorage(store)
+
+	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
+		RegionDescriptor: testRegionDescriptorProto(testDescriptor(8, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)),
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.True(t, strings.Contains(err.Error(), errNotLeaderPrefix))
+
+	_, err = svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event: metacodec.RootEventToProto(rootevent.RegionTombstoned(8)),
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+
+	_, err = svc.RemoveRegion(context.Background(), &pdpb.RemoveRegionRequest{RegionId: 8})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+
+	_, err = svc.AllocID(context.Background(), &pdpb.AllocIDRequest{Count: 1})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+
+	_, err = svc.Tso(context.Background(), &pdpb.TsoRequest{Count: 1})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+
+	_, err = svc.StoreHeartbeat(context.Background(), &pdpb.StoreHeartbeatRequest{StoreId: 1})
+	require.NoError(t, err)
+	_, err = svc.GetRegionByKey(context.Background(), &pdpb.GetRegionByKeyRequest{Key: []byte("a")})
+	require.NoError(t, err)
 }
 
 func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch, peers []metaregion.Peer) descriptor.Descriptor {
