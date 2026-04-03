@@ -3,6 +3,7 @@ package storage
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
+	rootreplicated "github.com/feichai0017/NoKV/meta/root/backend/replicated"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -195,6 +196,34 @@ func TestOpenRootLocalStoreCreatesMetadataRootFiles(t *testing.T) {
 	require.Equal(t, uint64(17), snapshot.Allocator.TSCurrent)
 
 	require.FileExists(t, filepath.Join(dir, rootlocal.CheckpointFileName))
+}
+
+func TestRootStoreRefreshFromReplicatedFollower(t *testing.T) {
+	rootStores, _, err := rootreplicated.OpenFixedCluster(4, 1, 2, 3)
+	require.NoError(t, err)
+
+	leader, err := OpenRootStore(rootStores[1])
+	require.NoError(t, err)
+	followerRoot := rootStores[2]
+	follower, err := OpenRootStore(followerRoot)
+	require.NoError(t, err)
+
+	desc := testDescriptor(71, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
+	require.NoError(t, leader.PublishRegionDescriptor(desc))
+
+	snapshot, err := follower.Load()
+	require.NoError(t, err)
+	_, ok := snapshot.Descriptors[71]
+	require.False(t, ok)
+
+	require.NoError(t, followerRoot.Refresh())
+	require.NoError(t, follower.Refresh())
+
+	snapshot, err = follower.Load()
+	require.NoError(t, err)
+	got, ok := snapshot.Descriptors[71]
+	require.True(t, ok)
+	require.Equal(t, uint64(71), got.RegionID)
 }
 
 func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch, peers []metaregion.Peer) descriptor.Descriptor {

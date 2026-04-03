@@ -60,6 +60,14 @@ func (s *RootStore) Load() (Snapshot, error) {
 	}, nil
 }
 
+// Refresh reloads the reconstructed PD snapshot from the underlying metadata root.
+func (s *RootStore) Refresh() error {
+	if s == nil {
+		return nil
+	}
+	return s.reload()
+}
+
 // PublishRegionDescriptor publishes the latest descriptor truth for one region.
 func (s *RootStore) PublishRegionDescriptor(desc descriptor.Descriptor) error {
 	if s == nil || desc.RegionID == 0 {
