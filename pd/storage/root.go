@@ -103,7 +103,10 @@ func (s *RootStore) PublishRegionDescriptor(desc descriptor.Descriptor) error {
 		return nil
 	}
 
-	event := regionEvent(existed, desc)
+	event := rootevent.RegionDescriptorPublished(desc)
+	if !existed {
+		event = rootevent.RegionBootstrapped(desc)
+	}
 	if _, err := s.root.Append(event); err != nil {
 		return err
 	}
@@ -116,17 +119,6 @@ func (s *RootStore) AppendRootEvent(event rootevent.Event) error {
 		return nil
 	}
 	if _, err := s.root.Append(event); err != nil {
-		return err
-	}
-	return s.reload()
-}
-
-// TombstoneRegion tombstones one region from the rooted catalog.
-func (s *RootStore) TombstoneRegion(regionID uint64) error {
-	if s == nil || regionID == 0 {
-		return nil
-	}
-	if _, err := s.root.Append(rootevent.RegionTombstoned(regionID)); err != nil {
 		return err
 	}
 	return s.reload()
@@ -177,11 +169,4 @@ func (s *RootStore) reload() error {
 	s.snapshot = out
 	s.mu.Unlock()
 	return nil
-}
-
-func regionEvent(existed bool, next descriptor.Descriptor) rootevent.Event {
-	if !existed {
-		return rootevent.RegionBootstrapped(next)
-	}
-	return rootevent.RegionDescriptorPublished(next)
 }

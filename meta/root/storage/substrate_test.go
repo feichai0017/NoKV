@@ -56,4 +56,11 @@ func TestObserveCommittedDerivesLastCursorAndRetainFrom(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 6}, observed.LastCursor())
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 4}, observed.RetainFrom())
+
+	advance := TailAdvance{
+		Token:    TailToken{Cursor: observed.LastCursor(), Revision: 2},
+		Observed: observed,
+	}
+	require.Equal(t, rootstate.Cursor{Term: 2, Index: 6}, advance.LastCursor())
+	require.True(t, advance.FellBehind())
 }

@@ -388,8 +388,8 @@ func (d *NetworkDriver) currentTailLocked() (rootstorage.TailAdvance, error) {
 	}
 	d.latest.Cursor = observed.LastCursor()
 	return rootstorage.TailAdvance{
-		Token: d.latest,
-		Tail:  observed.Tail,
+		Token:    d.latest,
+		Observed: observed,
 	}, nil
 }
 
