@@ -114,6 +114,9 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pdpb.RegionHeartbeatRe
 	if s.touchHeartbeatIfUnchanged(desc) {
 		return &pdpb.RegionHeartbeatResponse{Accepted: true}, nil
 	}
+	if err := s.requireExpectedClusterEpoch(req.GetExpectedClusterEpoch()); err != nil {
+		return nil, err
+	}
 	event, err := s.rootEventForDescriptor(desc)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "normalize region descriptor: "+err.Error())
@@ -173,6 +176,9 @@ func (s *Service) PublishRootEvent(_ context.Context, req *pdpb.PublishRootEvent
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
+	if err := s.requireExpectedClusterEpoch(req.GetExpectedClusterEpoch()); err != nil {
+		return nil, err
+	}
 	if err := s.cluster.ValidateRootEvent(event); err != nil {
 		switch {
 		case errors.Is(err, core.ErrInvalidRegionID):
@@ -204,6 +210,9 @@ func (s *Service) RemoveRegion(_ context.Context, req *pdpb.RemoveRegionRequest)
 		return nil, status.Error(codes.InvalidArgument, "remove region requires region_id > 0")
 	}
 	if err := s.requireLeaderForWrite(); err != nil {
+		return nil, err
+	}
+	if err := s.requireExpectedClusterEpoch(req.GetExpectedClusterEpoch()); err != nil {
 		return nil, err
 	}
 	removed := s.cluster.HasRegion(regionID)
@@ -409,4 +418,37 @@ func (s *Service) requireLeaderForWrite() error {
 		return status.Error(codes.FailedPrecondition, fmt.Sprintf("%s (leader_id=%d)", errNotLeaderPrefix, leaderID))
 	}
 	return status.Error(codes.FailedPrecondition, errNotLeaderPrefix)
+}
+
+func (s *Service) requireExpectedClusterEpoch(expected uint64) error {
+	if expected == 0 {
+		return nil
+	}
+	current, err := s.currentClusterEpoch()
+	if err != nil {
+		return status.Error(codes.Internal, "load current cluster epoch: "+err.Error())
+	}
+	if current == expected {
+		return nil
+	}
+	return status.Error(codes.FailedPrecondition, fmt.Sprintf("pd/meta cluster epoch mismatch (expected=%d current=%d)", expected, current))
+}
+
+func (s *Service) currentClusterEpoch() (uint64, error) {
+	if s != nil && s.storage != nil {
+		snapshot, err := s.storage.Load()
+		if err != nil {
+			return 0, err
+		}
+		return snapshot.ClusterEpoch, nil
+	}
+	var maxEpoch uint64
+	if s != nil && s.cluster != nil {
+		for _, region := range s.cluster.RegionSnapshot() {
+			if region.Descriptor.RootEpoch > maxEpoch {
+				maxEpoch = region.Descriptor.RootEpoch
+			}
+		}
+	}
+	return maxEpoch, nil
 }

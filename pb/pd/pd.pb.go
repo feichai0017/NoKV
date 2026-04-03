@@ -267,10 +267,11 @@ func (x *StoreHeartbeatResponse) GetOperations() []*SchedulerOperation {
 }
 
 type RegionHeartbeatRequest struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	RegionDescriptor *meta.RegionDescriptor `protobuf:"bytes,1,opt,name=region_descriptor,json=regionDescriptor,proto3" json:"region_descriptor,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	RegionDescriptor     *meta.RegionDescriptor `protobuf:"bytes,1,opt,name=region_descriptor,json=regionDescriptor,proto3" json:"region_descriptor,omitempty"`
+	ExpectedClusterEpoch uint64                 `protobuf:"varint,2,opt,name=expected_cluster_epoch,json=expectedClusterEpoch,proto3" json:"expected_cluster_epoch,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *RegionHeartbeatRequest) Reset() {
@@ -308,6 +309,13 @@ func (x *RegionHeartbeatRequest) GetRegionDescriptor() *meta.RegionDescriptor {
 		return x.RegionDescriptor
 	}
 	return nil
+}
+
+func (x *RegionHeartbeatRequest) GetExpectedClusterEpoch() uint64 {
+	if x != nil {
+		return x.ExpectedClusterEpoch
+	}
+	return 0
 }
 
 type RegionHeartbeatResponse struct {
@@ -355,10 +363,11 @@ func (x *RegionHeartbeatResponse) GetAccepted() bool {
 }
 
 type PublishRootEventRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Event         *meta.RootEvent        `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	Event                *meta.RootEvent        `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
+	ExpectedClusterEpoch uint64                 `protobuf:"varint,2,opt,name=expected_cluster_epoch,json=expectedClusterEpoch,proto3" json:"expected_cluster_epoch,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *PublishRootEventRequest) Reset() {
@@ -396,6 +405,13 @@ func (x *PublishRootEventRequest) GetEvent() *meta.RootEvent {
 		return x.Event
 	}
 	return nil
+}
+
+func (x *PublishRootEventRequest) GetExpectedClusterEpoch() uint64 {
+	if x != nil {
+		return x.ExpectedClusterEpoch
+	}
+	return 0
 }
 
 type PublishRootEventResponse struct {
@@ -443,10 +459,11 @@ func (x *PublishRootEventResponse) GetAccepted() bool {
 }
 
 type RemoveRegionRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	RegionId             uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	ExpectedClusterEpoch uint64                 `protobuf:"varint,2,opt,name=expected_cluster_epoch,json=expectedClusterEpoch,proto3" json:"expected_cluster_epoch,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *RemoveRegionRequest) Reset() {
@@ -482,6 +499,13 @@ func (*RemoveRegionRequest) Descriptor() ([]byte, []int) {
 func (x *RemoveRegionRequest) GetRegionId() uint64 {
 	if x != nil {
 		return x.RegionId
+	}
+	return 0
+}
+
+func (x *RemoveRegionRequest) GetExpectedClusterEpoch() uint64 {
+	if x != nil {
+		return x.ExpectedClusterEpoch
 	}
 	return 0
 }
@@ -841,17 +865,20 @@ const file_pd_pd_proto_rawDesc = "" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12>\n" +
 	"\n" +
 	"operations\x18\x02 \x03(\v2\x1e.nokv.pd.v1.SchedulerOperationR\n" +
-	"operations\"e\n" +
+	"operations\"\x9b\x01\n" +
 	"\x16RegionHeartbeatRequest\x12K\n" +
-	"\x11region_descriptor\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x10regionDescriptor\"5\n" +
+	"\x11region_descriptor\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x10regionDescriptor\x124\n" +
+	"\x16expected_cluster_epoch\x18\x02 \x01(\x04R\x14expectedClusterEpoch\"5\n" +
 	"\x17RegionHeartbeatResponse\x12\x1a\n" +
-	"\baccepted\x18\x01 \x01(\bR\baccepted\"H\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted\"~\n" +
 	"\x17PublishRootEventRequest\x12-\n" +
-	"\x05event\x18\x01 \x01(\v2\x17.nokv.meta.v1.RootEventR\x05event\"6\n" +
+	"\x05event\x18\x01 \x01(\v2\x17.nokv.meta.v1.RootEventR\x05event\x124\n" +
+	"\x16expected_cluster_epoch\x18\x02 \x01(\x04R\x14expectedClusterEpoch\"6\n" +
 	"\x18PublishRootEventResponse\x12\x1a\n" +
-	"\baccepted\x18\x01 \x01(\bR\baccepted\"2\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted\"h\n" +
 	"\x13RemoveRegionRequest\x12\x1b\n" +
-	"\tregion_id\x18\x01 \x01(\x04R\bregionId\"0\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x124\n" +
+	"\x16expected_cluster_epoch\x18\x02 \x01(\x04R\x14expectedClusterEpoch\"0\n" +
 	"\x14RemoveRegionResponse\x12\x18\n" +
 	"\aremoved\x18\x01 \x01(\bR\aremoved\")\n" +
 	"\x15GetRegionByKeyRequest\x12\x10\n" +
