@@ -18,6 +18,7 @@ const defaultRetainedRecords = 64
 // replicated metadata-root backend. Replication and transport are supplied by
 // the injected log implementation, not by this package.
 type Config struct {
+	Driver             Driver
 	Log                rootstorage.EventLog
 	Checkpoint         rootstorage.CheckpointStore
 	Installer          rootstorage.BootstrapInstaller
@@ -44,6 +45,18 @@ type Store struct {
 var _ rootpkg.Root = (*Store)(nil)
 
 func Open(cfg Config) (*Store, error) {
+	if cfg.Driver != nil {
+		derived := ConfigFromDriver(cfg.Driver, cfg.MaxRetainedRecords)
+		if cfg.Log == nil {
+			cfg.Log = derived.Log
+		}
+		if cfg.Checkpoint == nil {
+			cfg.Checkpoint = derived.Checkpoint
+		}
+		if cfg.Installer == nil {
+			cfg.Installer = derived.Installer
+		}
+	}
 	if cfg.Log == nil {
 		return nil, fmt.Errorf("meta/root/backend/replicated: log is required")
 	}
