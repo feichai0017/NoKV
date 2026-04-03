@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"sync"
@@ -82,7 +83,7 @@ func (s *testSchedulerSink) PublishRootEvent(_ context.Context, event rootpkg.Ev
 	for id, info := range s.regions {
 		descriptors[id] = info.Descriptor.Clone()
 	}
-	rootpkg.ApplyEventToDescriptors(descriptors, event)
+	rootmaterialize.ApplyEventToDescriptors(descriptors, event)
 	now := time.Now()
 	s.regions = make(map[uint64]regionHeartbeat, len(descriptors))
 	for id, desc := range descriptors {

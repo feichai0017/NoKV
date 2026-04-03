@@ -11,6 +11,7 @@ import (
 
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/vfs"
 	"google.golang.org/protobuf/proto"
@@ -23,11 +24,11 @@ type fileEventLog struct {
 	workdir string
 }
 
-func newFileEventLog(fs vfs.FS, workdir string) rootpkg.EventLog {
+func newFileEventLog(fs vfs.FS, workdir string) rootstorage.EventLog {
 	return fileEventLog{fs: fs, workdir: workdir}
 }
 
-func (l fileEventLog) Load(offset int64) ([]rootpkg.CommittedEvent, error) {
+func (l fileEventLog) Load(offset int64) ([]rootstorage.CommittedEvent, error) {
 	path := filepath.Join(l.workdir, LogFileName)
 	f, err := l.fs.OpenHandle(path)
 	if err != nil {
@@ -42,7 +43,7 @@ func (l fileEventLog) Load(offset int64) ([]rootpkg.CommittedEvent, error) {
 			return nil, err
 		}
 	}
-	var out []rootpkg.CommittedEvent
+	var out []rootstorage.CommittedEvent
 	for {
 		rec, ok, err := readRecord(f)
 		if err != nil {
@@ -55,7 +56,7 @@ func (l fileEventLog) Load(offset int64) ([]rootpkg.CommittedEvent, error) {
 	}
 }
 
-func (l fileEventLog) Append(records ...rootpkg.CommittedEvent) (int64, error) {
+func (l fileEventLog) Append(records ...rootstorage.CommittedEvent) (int64, error) {
 	path := filepath.Join(l.workdir, LogFileName)
 	f, err := l.fs.OpenFileHandle(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
 	if err != nil {
@@ -82,7 +83,7 @@ func (l fileEventLog) Append(records ...rootpkg.CommittedEvent) (int64, error) {
 	return logEnd, nil
 }
 
-func (l fileEventLog) Rewrite(records []rootpkg.CommittedEvent) error {
+func (l fileEventLog) Rewrite(records []rootstorage.CommittedEvent) error {
 	path := filepath.Join(l.workdir, LogFileName)
 	tmp := path + ".tmp"
 	f, err := l.fs.OpenFileHandle(tmp, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
@@ -122,7 +123,7 @@ func (l fileEventLog) Size() (int64, error) {
 	return info.Size(), nil
 }
 
-func writeRecord(w io.Writer, rec rootpkg.CommittedEvent) error {
+func writeRecord(w io.Writer, rec rootstorage.CommittedEvent) error {
 	payload, err := proto.Marshal(metacodec.RootEventToProto(rec.Event))
 	if err != nil {
 		return err
@@ -138,35 +139,35 @@ func writeRecord(w io.Writer, rec rootpkg.CommittedEvent) error {
 	return writeAll(w, payload)
 }
 
-func readRecord(r io.Reader) (rootpkg.CommittedEvent, bool, error) {
+func readRecord(r io.Reader) (rootstorage.CommittedEvent, bool, error) {
 	hdr := make([]byte, recordHeaderSize)
 	n, err := io.ReadFull(r, hdr)
 	if err != nil {
 		if errors.Is(err, io.EOF) && n == 0 {
-			return rootpkg.CommittedEvent{}, false, nil
+			return rootstorage.CommittedEvent{}, false, nil
 		}
 		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
-			return rootpkg.CommittedEvent{}, false, nil
+			return rootstorage.CommittedEvent{}, false, nil
 		}
-		return rootpkg.CommittedEvent{}, false, err
+		return rootstorage.CommittedEvent{}, false, err
 	}
 	payloadLen := binary.LittleEndian.Uint32(hdr[16:20])
 	expectedCRC := binary.LittleEndian.Uint32(hdr[20:24])
 	payload := make([]byte, payloadLen)
 	if _, err := io.ReadFull(r, payload); err != nil {
 		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
-			return rootpkg.CommittedEvent{}, false, nil
+			return rootstorage.CommittedEvent{}, false, nil
 		}
-		return rootpkg.CommittedEvent{}, false, err
+		return rootstorage.CommittedEvent{}, false, err
 	}
 	if crc32.ChecksumIEEE(payload) != expectedCRC {
-		return rootpkg.CommittedEvent{}, false, fmt.Errorf("meta/root/local: root log checksum mismatch")
+		return rootstorage.CommittedEvent{}, false, fmt.Errorf("meta/root/local: root log checksum mismatch")
 	}
 	var pbEvent metapb.RootEvent
 	if err := proto.Unmarshal(payload, &pbEvent); err != nil {
-		return rootpkg.CommittedEvent{}, false, err
+		return rootstorage.CommittedEvent{}, false, err
 	}
-	return rootpkg.CommittedEvent{
+	return rootstorage.CommittedEvent{
 		Cursor: rootpkg.Cursor{
 			Term:  binary.LittleEndian.Uint64(hdr[0:8]),
 			Index: binary.LittleEndian.Uint64(hdr[8:16]),
@@ -175,13 +176,13 @@ func readRecord(r io.Reader) (rootpkg.CommittedEvent, bool, error) {
 	}, true, nil
 }
 
-func cloneRecords(in []rootpkg.CommittedEvent) []rootpkg.CommittedEvent {
+func cloneRecords(in []rootstorage.CommittedEvent) []rootstorage.CommittedEvent {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make([]rootpkg.CommittedEvent, 0, len(in))
+	out := make([]rootstorage.CommittedEvent, 0, len(in))
 	for _, rec := range in {
-		out = append(out, rootpkg.CommittedEvent{
+		out = append(out, rootstorage.CommittedEvent{
 			Cursor: rec.Cursor,
 			Event:  rootpkg.CloneEvent(rec.Event),
 		})

@@ -3,7 +3,8 @@ package storage
 import (
 	"bytes"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
-	rootlocal "github.com/feichai0017/NoKV/meta/root/local"
+	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
+	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"sync"
 )
@@ -107,7 +108,7 @@ func (s *RootStore) AppendRootEvent(event rootpkg.Event) error {
 	if s.snapshot.Descriptors == nil {
 		s.snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
 	}
-	rootpkg.ApplyEventToDescriptors(s.snapshot.Descriptors, event)
+	rootmaterialize.ApplyEventToDescriptors(s.snapshot.Descriptors, event)
 	s.snapshot.Allocator.IDCurrent = commit.State.IDFence
 	s.snapshot.Allocator.TSCurrent = commit.State.TSOFence
 	s.mu.Unlock()

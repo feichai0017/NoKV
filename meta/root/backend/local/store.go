@@ -6,6 +6,8 @@ import (
 	"sync"
 
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/vfs"
 )
@@ -23,13 +25,13 @@ const (
 type Store struct {
 	fs      vfs.FS
 	workdir string
-	checkpt rootpkg.CheckpointStore
-	log     rootpkg.EventLog
+	checkpt rootstorage.CheckpointStore
+	log     rootstorage.EventLog
 
 	mu         sync.RWMutex
 	state      rootpkg.State
 	descs      map[uint64]descriptor.Descriptor
-	records    []rootpkg.CommittedEvent
+	records    []rootstorage.CommittedEvent
 	logBase    int64
 	retainFrom rootpkg.Cursor
 }
@@ -59,7 +61,7 @@ func Open(workdir string, fs vfs.FS) (*Store, error) {
 	for _, rec := range records {
 		if after(rec.Cursor, snapshot.State.LastCommitted) {
 			rootpkg.ApplyEventToState(&snapshot.State, rec.Cursor, rec.Event)
-			rootpkg.ApplyEventToDescriptors(snapshot.Descriptors, rec.Event)
+			rootmaterialize.ApplyEventToDescriptors(snapshot.Descriptors, rec.Event)
 		}
 	}
 	return &Store{
@@ -106,7 +108,7 @@ func (s *Store) ReadSince(cursor rootpkg.Cursor) ([]rootpkg.Event, rootpkg.Curso
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if after(s.retainFrom, cursor) {
-		return rootpkg.SnapshotDescriptorEvents(s.descs), s.state.LastCommitted, nil
+		return rootmaterialize.SnapshotDescriptorEvents(s.descs), s.state.LastCommitted, nil
 	}
 	out := make([]rootpkg.Event, 0, len(s.records))
 	for _, rec := range s.records {
@@ -129,12 +131,12 @@ func (s *Store) Append(events ...rootpkg.Event) (rootpkg.CommitInfo, error) {
 	var next rootpkg.Cursor
 	state := s.state
 	descs := rootpkg.CloneDescriptors(s.descs)
-	records := make([]rootpkg.CommittedEvent, 0, len(events))
+	records := make([]rootstorage.CommittedEvent, 0, len(events))
 	for _, evt := range events {
 		next = rootpkg.NextCursor(state.LastCommitted)
 		rootpkg.ApplyEventToState(&state, next, evt)
-		rootpkg.ApplyEventToDescriptors(descs, evt)
-		records = append(records, rootpkg.CommittedEvent{Cursor: next, Event: rootpkg.CloneEvent(evt)})
+		rootmaterialize.ApplyEventToDescriptors(descs, evt)
+		records = append(records, rootstorage.CommittedEvent{Cursor: next, Event: rootpkg.CloneEvent(evt)})
 	}
 	logEnd, err := s.log.Append(records...)
 	if err != nil {
