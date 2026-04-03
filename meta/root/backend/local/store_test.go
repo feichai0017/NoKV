@@ -7,6 +7,8 @@ import (
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
@@ -20,25 +22,25 @@ func TestStoreAppendReadAndReopen(t *testing.T) {
 
 	state, err := store.Current()
 	require.NoError(t, err)
-	require.Equal(t, rootpkg.State{}, state)
+	require.Equal(t, rootstate.State{}, state)
 
 	commit, err := store.Append(
-		rootpkg.StoreJoined(1, "s1"),
-		rootpkg.RegionDescriptorPublished(testDescriptor(10, []byte("a"), []byte("z"))),
-		rootpkg.RegionSplitCommitted(10, []byte("m"), testDescriptor(11, []byte("a"), []byte("m")), testDescriptor(12, []byte("m"), []byte("z"))),
+		rootevent.StoreJoined(1, "s1"),
+		rootevent.RegionDescriptorPublished(testDescriptor(10, []byte("a"), []byte("z"))),
+		rootevent.RegionSplitCommitted(10, []byte("m"), testDescriptor(11, []byte("a"), []byte("m")), testDescriptor(12, []byte("m"), []byte("z"))),
 	)
 	require.NoError(t, err)
-	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 3}, commit.Cursor)
+	require.Equal(t, rootstate.Cursor{Term: 1, Index: 3}, commit.Cursor)
 	require.Equal(t, uint64(1), commit.State.MembershipEpoch)
 	require.Equal(t, uint64(2), commit.State.ClusterEpoch)
 
-	events, tail, err := store.ReadSince(rootpkg.Cursor{})
+	events, tail, err := store.ReadSince(rootstate.Cursor{})
 	require.NoError(t, err)
 	require.Len(t, events, 3)
 	require.Equal(t, commit.Cursor, tail)
-	require.Equal(t, rootpkg.EventKindStoreJoined, events[0].Kind)
+	require.Equal(t, rootevent.KindStoreJoined, events[0].Kind)
 	require.Equal(t, uint64(1), events[0].StoreMembership.StoreID)
-	require.Equal(t, rootpkg.EventKindRegionDescriptorPublished, events[1].Kind)
+	require.Equal(t, rootevent.KindRegionDescriptorPublished, events[1].Kind)
 	require.Equal(t, uint64(10), events[1].RegionDescriptor.Descriptor.RegionID)
 	require.Equal(t, []byte("m"), events[2].RangeSplit.SplitKey)
 	require.Equal(t, uint64(11), events[2].RangeSplit.Left.RegionID)
@@ -49,7 +51,7 @@ func TestStoreAppendReadAndReopen(t *testing.T) {
 	state, err = reopened.Current()
 	require.NoError(t, err)
 	require.Equal(t, commit.State, state)
-	events, tail, err = reopened.ReadSince(rootpkg.Cursor{Term: 1, Index: 1})
+	events, tail, err = reopened.ReadSince(rootstate.Cursor{Term: 1, Index: 1})
 	require.NoError(t, err)
 	require.Len(t, events, 2)
 	require.Equal(t, commit.Cursor, tail)
@@ -76,14 +78,14 @@ func TestStoreFenceAllocatorPersistsWithoutEvents(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(10), state.IDFence)
 	require.Equal(t, uint64(22), state.TSOFence)
-	require.Equal(t, rootpkg.Cursor{}, state.LastCommitted)
+	require.Equal(t, rootstate.Cursor{}, state.LastCommitted)
 }
 
 func TestStoreIgnoresTruncatedLogTail(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, nil)
 	require.NoError(t, err)
-	_, err = store.Append(rootpkg.StoreJoined(1, "s1"))
+	_, err = store.Append(rootevent.StoreJoined(1, "s1"))
 	require.NoError(t, err)
 
 	f, err := os.OpenFile(filepath.Join(dir, LogFileName), os.O_WRONLY|os.O_APPEND, 0)
@@ -94,19 +96,19 @@ func TestStoreIgnoresTruncatedLogTail(t *testing.T) {
 
 	reopened, err := Open(dir, nil)
 	require.NoError(t, err)
-	events, tail, err := reopened.ReadSince(rootpkg.Cursor{})
+	events, tail, err := reopened.ReadSince(rootstate.Cursor{})
 	require.NoError(t, err)
 	require.Len(t, events, 0)
-	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 1}, tail)
+	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, tail)
 }
 
 func TestStoreReplaysLogAfterStaleCheckpoint(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, nil)
 	require.NoError(t, err)
-	commit, err := store.Append(rootpkg.PeerAdded(1, 2, 3, testDescriptor(1, []byte("a"), []byte("z"))))
+	commit, err := store.Append(rootevent.PeerAdded(1, 2, 3, testDescriptor(1, []byte("a"), []byte("z"))))
 	require.NoError(t, err)
-	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 1}, commit.Cursor)
+	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, commit.Cursor)
 
 	payload, err := proto.Marshal(&metapb.RootState{})
 	require.NoError(t, err)
@@ -117,7 +119,7 @@ func TestStoreReplaysLogAfterStaleCheckpoint(t *testing.T) {
 	state, err := reopened.Current()
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), state.ClusterEpoch)
-	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 1}, state.LastCommitted)
+	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, state.LastCommitted)
 }
 
 func TestStoreLoadsLegacyRootStateCheckpoint(t *testing.T) {
@@ -138,7 +140,7 @@ func TestStoreLoadsLegacyRootStateCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(7), state.ClusterEpoch)
 	require.Equal(t, uint64(3), state.MembershipEpoch)
-	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 4}, state.LastCommitted)
+	require.Equal(t, rootstate.Cursor{Term: 1, Index: 4}, state.LastCommitted)
 	require.Equal(t, uint64(11), state.IDFence)
 	require.Equal(t, uint64(22), state.TSOFence)
 }
@@ -150,23 +152,23 @@ func TestStoreCompactsPhysicalLogAndKeepsRecentTail(t *testing.T) {
 
 	total := maxRetainedRecords + 8
 	for i := 0; i < total; i++ {
-		_, err := store.Append(rootpkg.RegionDescriptorPublished(testDescriptor(uint64(100+i), []byte{byte('a' + i%26)}, []byte{byte('b' + i%26)})))
+		_, err := store.Append(rootevent.RegionDescriptorPublished(testDescriptor(uint64(100+i), []byte{byte('a' + i%26)}, []byte{byte('b' + i%26)})))
 		require.NoError(t, err)
 	}
 
 	reopened, err := Open(dir, nil)
 	require.NoError(t, err)
 
-	tailCursor := rootpkg.Cursor{Term: 1, Index: uint64(total - maxRetainedRecords)}
+	tailCursor := rootstate.Cursor{Term: 1, Index: uint64(total - maxRetainedRecords)}
 	events, tail, err := reopened.ReadSince(tailCursor)
 	require.NoError(t, err)
 	require.Len(t, events, maxRetainedRecords)
-	require.Equal(t, rootpkg.Cursor{Term: 1, Index: uint64(total)}, tail)
+	require.Equal(t, rootstate.Cursor{Term: 1, Index: uint64(total)}, tail)
 
-	events, tail, err = reopened.ReadSince(rootpkg.Cursor{})
+	events, tail, err = reopened.ReadSince(rootstate.Cursor{})
 	require.NoError(t, err)
 	require.Len(t, events, total)
-	require.Equal(t, rootpkg.Cursor{Term: 1, Index: uint64(total)}, tail)
+	require.Equal(t, rootstate.Cursor{Term: 1, Index: uint64(total)}, tail)
 }
 
 func testDescriptor(regionID uint64, start, end []byte) descriptor.Descriptor {

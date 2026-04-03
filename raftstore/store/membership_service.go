@@ -5,7 +5,7 @@ import (
 	"fmt"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -52,15 +52,15 @@ func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 	change := ev.ConfChange.Changes[0]
 	switch change.Type {
 	case raftpb.ConfChangeAddNode, raftpb.ConfChangeAddLearnerNode:
-		event := rootpkg.PeerAdded(meta.ID, change.NodeID, change.NodeID, desc)
+		event := rootevent.PeerAdded(meta.ID, change.NodeID, change.NodeID, desc)
 		if peers, err := decodeConfChangeContext(ev.ConfChange.Context); err == nil && len(peers) > 0 {
-			event = rootpkg.PeerAdded(meta.ID, peers[0].StoreID, peers[0].PeerID, desc)
+			event = rootevent.PeerAdded(meta.ID, peers[0].StoreID, peers[0].PeerID, desc)
 		}
 		s.enqueueRegionEvent(regionEvent{kind: regionEventApply, regionID: meta.ID, root: &event})
 	case raftpb.ConfChangeRemoveNode:
-		event := rootpkg.PeerRemoved(meta.ID, change.NodeID, change.NodeID, desc)
+		event := rootevent.PeerRemoved(meta.ID, change.NodeID, change.NodeID, desc)
 		if peers, err := decodeConfChangeContext(ev.ConfChange.Context); err == nil && len(peers) > 0 {
-			event = rootpkg.PeerRemoved(meta.ID, peers[0].StoreID, peers[0].PeerID, desc)
+			event = rootevent.PeerRemoved(meta.ID, peers[0].StoreID, peers[0].PeerID, desc)
 		}
 		s.enqueueRegionEvent(regionEvent{kind: regionEventApply, regionID: meta.ID, root: &event})
 	}
