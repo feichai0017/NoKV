@@ -56,7 +56,7 @@ func Open(workdir string, fs vfs.FS) (*Store, error) {
 	}
 	for _, rec := range records {
 		if after(rec.cursor, snapshot.State.LastCommitted) {
-			applyEvent(&snapshot.State, rec.cursor, rec.event)
+			rootpkg.ApplyEventToState(&snapshot.State, rec.cursor, rec.event)
 			rootpkg.ApplyEventToDescriptors(snapshot.Descriptors, rec.event)
 		}
 	}
@@ -102,7 +102,7 @@ func (s *Store) ReadSince(cursor rootpkg.Cursor) ([]rootpkg.Event, rootpkg.Curso
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if after(s.retainFrom, cursor) {
-		return snapshotEvents(s.descs), s.state.LastCommitted, nil
+		return rootpkg.SnapshotDescriptorEvents(s.descs), s.state.LastCommitted, nil
 	}
 	out := make([]rootpkg.Event, 0, len(s.records))
 	for _, rec := range s.records {
@@ -132,12 +132,12 @@ func (s *Store) Append(events ...rootpkg.Event) (rootpkg.CommitInfo, error) {
 	descs := cloneDescriptors(s.descs)
 	records := make([]record, 0, len(events))
 	for _, evt := range events {
-		next = nextCursor(state.LastCommitted)
+		next = rootpkg.NextCursor(state.LastCommitted)
 		if err := writeRecord(f, next, evt); err != nil {
 			_ = f.Close()
 			return rootpkg.CommitInfo{}, err
 		}
-		applyEvent(&state, next, evt)
+		rootpkg.ApplyEventToState(&state, next, evt)
 		rootpkg.ApplyEventToDescriptors(descs, evt)
 		records = append(records, record{cursor: next, event: cloneEvent(evt)})
 	}
