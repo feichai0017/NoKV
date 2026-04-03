@@ -52,7 +52,7 @@ func (s *RootStore) Load() (Snapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return Snapshot{
-		Descriptors: cloneDescriptors(s.snapshot.Descriptors),
+		Descriptors: rootpkg.CloneDescriptors(s.snapshot.Descriptors),
 		Allocator:   s.snapshot.Allocator,
 	}, nil
 }
@@ -170,7 +170,7 @@ func (s *RootStore) reload() error {
 		return err
 	}
 	out := Snapshot{
-		Descriptors: cloneDescriptors(snapshot.Descriptors),
+		Descriptors: rootpkg.CloneDescriptors(snapshot.Descriptors),
 		Allocator: AllocatorState{
 			IDCurrent: snapshot.State.IDFence,
 			TSCurrent: snapshot.State.TSOFence,
@@ -180,17 +180,6 @@ func (s *RootStore) reload() error {
 	s.snapshot = out
 	s.mu.Unlock()
 	return nil
-}
-
-func cloneDescriptors(in map[uint64]descriptor.Descriptor) map[uint64]descriptor.Descriptor {
-	if len(in) == 0 {
-		return make(map[uint64]descriptor.Descriptor)
-	}
-	out := make(map[uint64]descriptor.Descriptor, len(in))
-	for id, desc := range in {
-		out[id] = desc.Clone()
-	}
-	return out
 }
 
 func regionEvent(existed bool, next descriptor.Descriptor) rootpkg.Event {

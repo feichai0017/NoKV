@@ -183,7 +183,7 @@ func cloneRecords(in []rootpkg.CommittedEvent) []rootpkg.CommittedEvent {
 	for _, rec := range in {
 		out = append(out, rootpkg.CommittedEvent{
 			Cursor: rec.Cursor,
-			Event:  cloneEvent(rec.Event),
+			Event:  rootpkg.CloneEvent(rec.Event),
 		})
 	}
 	return out
