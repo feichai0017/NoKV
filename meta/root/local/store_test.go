@@ -9,7 +9,6 @@ import (
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -150,18 +149,15 @@ func TestStoreLoadsLegacyRootStateCheckpoint(t *testing.T) {
 }
 
 func testDescriptor(regionID uint64, start, end []byte) descriptor.Descriptor {
-	return descriptor.FromRegionMeta(localmeta.RegionMeta{
-		ID:       regionID,
-		StartKey: append([]byte(nil), start...),
-		EndKey:   append([]byte(nil), end...),
-		Epoch: metaregion.Epoch{
-			Version:     1,
-			ConfVersion: 1,
-		},
-		Peers: []metaregion.Peer{
-			{StoreID: 1, PeerID: regionID*10 + 1},
-			{StoreID: 2, PeerID: regionID*10 + 2},
-		},
-		State: metaregion.ReplicaStateRunning,
-	}, 1)
+	desc := descriptor.Descriptor{
+		RegionID:  regionID,
+		StartKey:  append([]byte(nil), start...),
+		EndKey:    append([]byte(nil), end...),
+		Epoch:     metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:     []metaregion.Peer{{StoreID: 1, PeerID: regionID*10 + 1}, {StoreID: 2, PeerID: regionID*10 + 2}},
+		State:     metaregion.ReplicaStateRunning,
+		RootEpoch: 1,
+	}
+	desc.EnsureHash()
+	return desc
 }
