@@ -37,6 +37,20 @@ func NewSingleNodeDriver(id uint64) (*SingleNodeDriver, error) {
 	return &SingleNodeDriver{id: id, node: node}, nil
 }
 
+// OpenSingleNode opens one replicated root store backed by a single-node
+// raft committed-log driver.
+func OpenSingleNode(id uint64, maxRetainedRecords int) (*Store, *SingleNodeDriver, error) {
+	driver, err := NewSingleNodeDriver(id)
+	if err != nil {
+		return nil, nil, err
+	}
+	store, err := Open(Config{Driver: driver, MaxRetainedRecords: maxRetainedRecords})
+	if err != nil {
+		return nil, nil, err
+	}
+	return store, driver, nil
+}
+
 // Log returns the ordered committed-log view of the driver.
 func (d *SingleNodeDriver) Log() rootstorage.EventLog { return singleNodeEventLog{driver: d} }
 
