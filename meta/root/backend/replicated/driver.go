@@ -5,12 +5,6 @@ import (
 	"time"
 )
 
-// DriverState is one detached view of one replicated metadata driver state.
-type DriverState struct {
-	Checkpoint rootstorage.Checkpoint
-	Records    []rootstorage.CommittedEvent
-}
-
 // Driver exposes the minimal committed-log, checkpoint, and bootstrap-install
 // capabilities required by the replicated metadata-root backend.
 type Driver interface {
