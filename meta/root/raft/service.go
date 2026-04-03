@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -152,7 +153,7 @@ func (s *Service) Current(_ context.Context, _ *metapb.RootCurrentRequest) (*met
 	if err != nil {
 		return nil, toStatusError(err)
 	}
-	return &metapb.RootCurrentResponse{State: stateToRootPB(state)}, nil
+	return &metapb.RootCurrentResponse{State: metacodec.RootStateToProto(state)}, nil
 }
 
 func (s *Service) ReadSince(_ context.Context, req *metapb.RootReadSinceRequest) (*metapb.RootReadSinceResponse, error) {
@@ -168,7 +169,7 @@ func (s *Service) ReadSince(_ context.Context, req *metapb.RootReadSinceRequest)
 	if len(events) > 0 {
 		resp.Events = make([]*metapb.RootEvent, 0, len(events))
 		for _, event := range events {
-			resp.Events = append(resp.Events, eventToPB(event))
+			resp.Events = append(resp.Events, metacodec.RootEventToProto(event))
 		}
 	}
 	return resp, nil
@@ -179,24 +180,21 @@ func (s *Service) Append(_ context.Context, req *metapb.RootAppendRequest) (*met
 	if req != nil && len(req.Events) > 0 {
 		events = make([]rootpkg.Event, 0, len(req.Events))
 		for _, event := range req.Events {
-			events = append(events, eventFromPB(event))
+			events = append(events, metacodec.RootEventFromProto(event))
 		}
 	}
 	commit, err := s.appendEvents(events...)
 	if err != nil {
 		return nil, toStatusError(err)
 	}
-	return &metapb.RootCommitInfo{
-		Cursor: &metapb.RootCursor{Term: commit.Cursor.Term, Index: commit.Cursor.Index},
-		State:  stateToRootPB(commit.State),
-	}, nil
+	return metacodec.RootCommitInfoToProto(commit), nil
 }
 
 func (s *Service) FenceAllocator(_ context.Context, req *metapb.RootFenceAllocatorRequest) (*metapb.RootFenceAllocatorResponse, error) {
 	if req == nil {
 		return &metapb.RootFenceAllocatorResponse{}, nil
 	}
-	fence, err := s.fenceAllocator(allocatorKindFromPB(req.Kind), req.Min)
+	fence, err := s.fenceAllocator(metacodec.RootAllocatorKindFromProto(req.Kind), req.Min)
 	if err != nil {
 		return nil, toStatusError(err)
 	}
@@ -218,8 +216,8 @@ func (s *Service) Step(_ context.Context, req *metapb.RootRaftWireMessage) (*emp
 }
 
 type Client struct {
-	cc   *grpc.ClientConn
-	rpc  metapb.MetadataRootServiceClient
+	cc  *grpc.ClientConn
+	rpc metapb.MetadataRootServiceClient
 }
 
 var _ rootpkg.Root = (*Client)(nil)
@@ -247,7 +245,7 @@ func (c *Client) Current() (rootpkg.State, error) {
 	if err != nil {
 		return rootpkg.State{}, err
 	}
-	return stateFromRootPB(resp.GetState()), nil
+	return metacodec.RootStateFromProto(resp.GetState()), nil
 }
 
 func (c *Client) ReadSince(cursor rootpkg.Cursor) ([]rootpkg.Event, rootpkg.Cursor, error) {
@@ -259,7 +257,7 @@ func (c *Client) ReadSince(cursor rootpkg.Cursor) ([]rootpkg.Event, rootpkg.Curs
 	}
 	events := make([]rootpkg.Event, 0, len(resp.GetEvents()))
 	for _, event := range resp.GetEvents() {
-		events = append(events, eventFromPB(event))
+		events = append(events, metacodec.RootEventFromProto(event))
 	}
 	var tail rootpkg.Cursor
 	if resp.Tail != nil {
@@ -273,58 +271,25 @@ func (c *Client) Append(events ...rootpkg.Event) (rootpkg.CommitInfo, error) {
 	if len(events) > 0 {
 		req.Events = make([]*metapb.RootEvent, 0, len(events))
 		for _, event := range events {
-			req.Events = append(req.Events, eventToPB(event))
+			req.Events = append(req.Events, metacodec.RootEventToProto(event))
 		}
 	}
 	resp, err := c.rpc.Append(context.Background(), req)
 	if err != nil {
 		return rootpkg.CommitInfo{}, err
 	}
-	return commitFromPB(resp), nil
+	return metacodec.RootCommitInfoFromProto(resp), nil
 }
 
 func (c *Client) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, error) {
 	resp, err := c.rpc.FenceAllocator(context.Background(), &metapb.RootFenceAllocatorRequest{
-		Kind: allocatorKindToPB(kind),
+		Kind: metacodec.RootAllocatorKindToProto(kind),
 		Min:  min,
 	})
 	if err != nil {
 		return 0, err
 	}
 	return resp.Fence, nil
-}
-
-func commitFromPB(pb *metapb.RootCommitInfo) rootpkg.CommitInfo {
-	if pb == nil {
-		return rootpkg.CommitInfo{}
-	}
-	var cursor rootpkg.Cursor
-	if pb.Cursor != nil {
-		cursor = rootpkg.Cursor{Term: pb.Cursor.Term, Index: pb.Cursor.Index}
-	}
-	return rootpkg.CommitInfo{Cursor: cursor, State: stateFromRootPB(pb.State)}
-}
-
-func allocatorKindToPB(kind rootpkg.AllocatorKind) metapb.AllocatorKind {
-	switch kind {
-	case rootpkg.AllocatorKindID:
-		return metapb.AllocatorKind_ALLOCATOR_KIND_ID
-	case rootpkg.AllocatorKindTSO:
-		return metapb.AllocatorKind_ALLOCATOR_KIND_TSO
-	default:
-		return metapb.AllocatorKind_ALLOCATOR_KIND_UNSPECIFIED
-	}
-}
-
-func allocatorKindFromPB(kind metapb.AllocatorKind) rootpkg.AllocatorKind {
-	switch kind {
-	case metapb.AllocatorKind_ALLOCATOR_KIND_ID:
-		return rootpkg.AllocatorKindID
-	case metapb.AllocatorKind_ALLOCATOR_KIND_TSO:
-		return rootpkg.AllocatorKindTSO
-	default:
-		return rootpkg.AllocatorKindUnknown
-	}
 }
 
 func localPeerAddress(cfg Config) string {

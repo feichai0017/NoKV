@@ -139,7 +139,15 @@ func (s *RootStore) SaveAllocatorState(idCurrent, tsCurrent uint64) error {
 }
 
 // Close releases storage resources.
-func (s *RootStore) Close() error { return nil }
+func (s *RootStore) Close() error {
+	if s == nil {
+		return nil
+	}
+	if closer, ok := s.root.(interface{ Close() error }); ok {
+		return closer.Close()
+	}
+	return nil
+}
 
 func (s *RootStore) reload() error {
 	if s == nil || s.root == nil {

@@ -41,6 +41,19 @@ func OpenNode(cfg Config, checkpoint Checkpoint, transport Transport) (*Node, er
 	} else {
 		storage = NewStorage()
 	}
+	if len(cfg.Peers) > 0 {
+		voters := make([]uint64, 0, len(cfg.Peers))
+		for _, peer := range cfg.Peers {
+			voters = append(voters, peer.ID)
+		}
+		snapshotData, err := encodeCheckpoint(checkpoint)
+		if err != nil {
+			return nil, err
+		}
+		if err := storage.EnsureConfState(voters, snapshotData); err != nil {
+			return nil, err
+		}
+	}
 	raw, err := myraft.NewRawNode(&myraft.Config{
 		ID:              cfg.NodeID,
 		ElectionTick:    cfg.ElectionTick,
@@ -54,7 +67,7 @@ func OpenNode(cfg Config, checkpoint Checkpoint, transport Transport) (*Node, er
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Bootstrap {
+	if cfg.Bootstrap && bootstrapRequired(storage) {
 		peers := make([]myraft.Peer, 0, len(cfg.Peers))
 		for _, peer := range cfg.Peers {
 			peers = append(peers, myraft.Peer{ID: peer.ID})
@@ -221,6 +234,17 @@ func (n *Node) drainReadyWithCommit() (rootpkg.CommitInfo, error) {
 		}
 	}
 	return commit, nil
+}
+
+func bootstrapRequired(storage *Storage) bool {
+	if storage == nil {
+		return true
+	}
+	last, err := storage.LastIndex()
+	if err != nil {
+		return true
+	}
+	return last == 0
 }
 
 func (n *Node) maybeCompact() error {
