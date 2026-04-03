@@ -83,7 +83,7 @@ func (l fileEventLog) Append(records ...rootstorage.CommittedEvent) (int64, erro
 	return logEnd, nil
 }
 
-func (l fileEventLog) Rewrite(records []rootstorage.CommittedEvent) error {
+func (l fileEventLog) Compact(records []rootstorage.CommittedEvent) error {
 	path := filepath.Join(l.workdir, LogFileName)
 	tmp := path + ".tmp"
 	f, err := l.fs.OpenFileHandle(tmp, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)

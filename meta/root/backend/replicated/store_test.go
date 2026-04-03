@@ -11,17 +11,15 @@ import (
 )
 
 type memCheckpoint struct {
-	snapshot  rootstate.Snapshot
-	logOffset int64
+	checkpoint rootstorage.Checkpoint
 }
 
-func (m *memCheckpoint) Load() (rootstate.Snapshot, int64, error) {
-	return rootstate.CloneSnapshot(m.snapshot), m.logOffset, nil
+func (m *memCheckpoint) Load() (rootstorage.Checkpoint, error) {
+	return rootstorage.CloneCheckpoint(m.checkpoint), nil
 }
 
-func (m *memCheckpoint) Save(snapshot rootstate.Snapshot, logOffset uint64) error {
-	m.snapshot = rootstate.CloneSnapshot(snapshot)
-	m.logOffset = int64(logOffset)
+func (m *memCheckpoint) Save(checkpoint rootstorage.Checkpoint) error {
+	m.checkpoint = rootstorage.CloneCheckpoint(checkpoint)
 	return nil
 }
 
@@ -39,7 +37,7 @@ func (m *memLog) Append(records ...rootstorage.CommittedEvent) (int64, error) {
 	return int64(len(m.records)), nil
 }
 
-func (m *memLog) Rewrite(records []rootstorage.CommittedEvent) error {
+func (m *memLog) Compact(records []rootstorage.CommittedEvent) error {
 	m.records = rootstorage.CloneCommittedEvents(records)
 	return nil
 }
@@ -47,7 +45,7 @@ func (m *memLog) Rewrite(records []rootstorage.CommittedEvent) error {
 func (m *memLog) Size() (int64, error) { return int64(len(m.records)), nil }
 
 func TestReplicatedStoreAppendAndReopen(t *testing.T) {
-	cp := &memCheckpoint{snapshot: rootstate.Snapshot{Descriptors: map[uint64]descriptor.Descriptor{}}}
+	cp := &memCheckpoint{checkpoint: rootstorage.Checkpoint{Snapshot: rootstate.Snapshot{Descriptors: map[uint64]descriptor.Descriptor{}}}}
 	log := &memLog{}
 	store, err := Open(Config{Log: log, Checkpoint: cp, MaxRetainedRecords: 4})
 	require.NoError(t, err)
@@ -79,7 +77,7 @@ func TestReplicatedStoreRequiresLogAndCheckpoint(t *testing.T) {
 	require.Error(t, err)
 	_, err = Open(Config{Log: &memLog{}})
 	require.Error(t, err)
-	_, err = Open(Config{Checkpoint: &memCheckpoint{snapshot: rootstate.Snapshot{Descriptors: map[uint64]descriptor.Descriptor{}}}})
+	_, err = Open(Config{Checkpoint: &memCheckpoint{checkpoint: rootstorage.Checkpoint{Snapshot: rootstate.Snapshot{Descriptors: map[uint64]descriptor.Descriptor{}}}}})
 	require.Error(t, err)
 }
 

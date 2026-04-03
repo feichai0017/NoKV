@@ -5,6 +5,21 @@ import (
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 )
 
+// Checkpoint is one compact rooted snapshot plus the retained-log offset to
+// continue bootstrap replay from.
+type Checkpoint struct {
+	Snapshot  rootstate.Snapshot
+	LogOffset int64
+}
+
+// CloneCheckpoint returns a detached rooted checkpoint.
+func CloneCheckpoint(in Checkpoint) Checkpoint {
+	return Checkpoint{
+		Snapshot:  rootstate.CloneSnapshot(in.Snapshot),
+		LogOffset: in.LogOffset,
+	}
+}
+
 // CommittedEvent is one rooted metadata event paired with its committed cursor.
 type CommittedEvent struct {
 	Cursor rootstate.Cursor
@@ -30,12 +45,12 @@ func CloneCommittedEvents(in []CommittedEvent) []CommittedEvent {
 type EventLog interface {
 	Load(offset int64) ([]CommittedEvent, error)
 	Append(records ...CommittedEvent) (logEnd int64, err error)
-	Rewrite(records []CommittedEvent) error
+	Compact(records []CommittedEvent) error
 	Size() (int64, error)
 }
 
 // CheckpointStore persists compact rooted metadata snapshots and their associated retained-log boundary.
 type CheckpointStore interface {
-	Load() (snapshot rootstate.Snapshot, logOffset int64, err error)
-	Save(snapshot rootstate.Snapshot, logOffset uint64) error
+	Load() (checkpoint Checkpoint, err error)
+	Save(checkpoint Checkpoint) error
 }

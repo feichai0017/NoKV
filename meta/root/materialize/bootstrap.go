@@ -16,14 +16,15 @@ type Bootstrap struct {
 
 // LoadBootstrap loads one rooted checkpoint and replays retained committed events on top of it.
 func LoadBootstrap(checkpt rootstorage.CheckpointStore, log rootstorage.EventLog) (Bootstrap, error) {
-	snapshot, logOffset, err := checkpt.Load()
+	checkpoint, err := checkpt.Load()
 	if err != nil {
 		return Bootstrap{}, err
 	}
-	records, err := log.Load(logOffset)
+	records, err := log.Load(checkpoint.LogOffset)
 	if err != nil {
 		return Bootstrap{}, err
 	}
+	snapshot := checkpoint.Snapshot
 	for _, rec := range records {
 		if rootstate.CursorAfter(rec.Cursor, snapshot.State.LastCommitted) {
 			rootstate.ApplyEventToState(&snapshot.State, rec.Cursor, rec.Event)
@@ -33,7 +34,7 @@ func LoadBootstrap(checkpt rootstorage.CheckpointStore, log rootstorage.EventLog
 	return Bootstrap{
 		Snapshot:   snapshot,
 		Records:    records,
-		LogOffset:  logOffset,
+		LogOffset:  checkpoint.LogOffset,
 		RetainFrom: RetainedFloor(records, snapshot.State.LastCommitted),
 	}, nil
 }
