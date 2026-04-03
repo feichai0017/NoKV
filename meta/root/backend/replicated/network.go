@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	rootfile "github.com/feichai0017/NoKV/meta/root/storage/file"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -40,6 +41,8 @@ type NetworkDriver struct {
 	transport Transport
 	stopCh    chan struct{}
 	wg        sync.WaitGroup
+	notifyCh  chan struct{}
+	latest    rootstate.Cursor
 }
 
 // NewNetworkDriver creates one transport-backed local metadata replication node.
@@ -69,6 +72,7 @@ func NewNetworkDriver(cfg NetworkConfig) (*NetworkDriver, error) {
 		log:       rootfile.NewEventLog(vfs.Ensure(nil), cfg.WorkDir),
 		transport: cfg.Transport,
 		stopCh:    make(chan struct{}),
+		notifyCh:  make(chan struct{}, 1),
 	}
 	if err := os.MkdirAll(cfg.WorkDir, 0o755); err != nil {
 		return nil, err
@@ -145,6 +149,35 @@ func (d *NetworkDriver) Campaign() error {
 		return err
 	}
 	return d.sendMessages(outbound)
+}
+
+func (d *NetworkDriver) WaitForChange(after rootstate.Cursor, timeout time.Duration) (rootstate.Cursor, error) {
+	if timeout <= 0 {
+		timeout = 200 * time.Millisecond
+	}
+	d.mu.Lock()
+	current := d.latest
+	notify := d.notifyCh
+	d.mu.Unlock()
+	if rootstate.CursorAfter(current, after) {
+		return current, nil
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-d.stopCh:
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return d.latest, fmt.Errorf("meta/root/backend/replicated: network driver is closed")
+	case <-notify:
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return d.latest, nil
+	case <-timer.C:
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return d.latest, nil
+	}
 }
 
 func (d *NetworkDriver) InstallBootstrap(checkpoint rootstorage.Checkpoint, records []rootstorage.CommittedEvent) error {
@@ -262,6 +295,11 @@ func (d *NetworkDriver) drainLocked() ([]rootstorage.CommittedEvent, []myraft.Me
 	if len(committed) > 0 {
 		if _, err := d.log.Append(committed...); err != nil {
 			return nil, nil, err
+		}
+		d.latest = committed[len(committed)-1].Cursor
+		select {
+		case d.notifyCh <- struct{}{}:
+		default:
 		}
 	}
 	return committed, outbound, nil
