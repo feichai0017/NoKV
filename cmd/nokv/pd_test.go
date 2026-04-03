@@ -92,7 +92,7 @@ func TestRunPDCmdReplicatedRootRequiresThreeNodeCluster(t *testing.T) {
 		"-root-mode", "replicated",
 		"-root-cluster", "1,2",
 	})
-	require.ErrorContains(t, err, "requires exactly 3 root cluster ids")
+	require.ErrorContains(t, err, "requires exactly 3 cluster ids")
 }
 
 func TestMainPDCommand(t *testing.T) {
