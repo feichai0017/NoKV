@@ -30,6 +30,13 @@ type State struct {
 	TSOFence        uint64
 }
 
+// Snapshot is the compact materialized rooted metadata state used for bounded
+// control-plane bootstrap and recovery.
+type Snapshot struct {
+	State       State
+	Descriptors map[uint64]descriptor.Descriptor
+}
+
 // CommitInfo reports one successful root append together with the resulting
 // compact root state.
 type CommitInfo struct {
@@ -254,7 +261,47 @@ func PlacementPolicyChanged(name string, version uint64) Event {
 // only depend on ordered events, compact checkpoints, and allocator fencing.
 type Root interface {
 	Current() (State, error)
+	Snapshot() (Snapshot, error)
+	// ReadSince returns retained root events after cursor. Implementations may
+	// compact older history, so callers should use Snapshot for bounded
+	// bootstrap/recovery rather than assuming a full event log from zero.
 	ReadSince(cursor Cursor) ([]Event, Cursor, error)
 	Append(events ...Event) (CommitInfo, error)
 	FenceAllocator(kind AllocatorKind, min uint64) (uint64, error)
+}
+
+// CloneSnapshot returns a detached copy of one rooted metadata snapshot.
+func CloneSnapshot(snapshot Snapshot) Snapshot {
+	out := Snapshot{
+		State:       snapshot.State,
+		Descriptors: make(map[uint64]descriptor.Descriptor, len(snapshot.Descriptors)),
+	}
+	for id, desc := range snapshot.Descriptors {
+		out.Descriptors[id] = desc.Clone()
+	}
+	return out
+}
+
+// ApplyEventToDescriptors applies one rooted topology event into a materialized
+// descriptor catalog.
+func ApplyEventToDescriptors(descriptors map[uint64]descriptor.Descriptor, event Event) {
+	if descriptors == nil {
+		return
+	}
+	switch {
+	case event.RegionDescriptor != nil:
+		descriptors[event.RegionDescriptor.Descriptor.RegionID] = event.RegionDescriptor.Descriptor.Clone()
+	case event.RegionRemoval != nil:
+		delete(descriptors, event.RegionRemoval.RegionID)
+	case event.RangeSplit != nil:
+		delete(descriptors, event.RangeSplit.ParentRegionID)
+		descriptors[event.RangeSplit.Left.RegionID] = event.RangeSplit.Left.Clone()
+		descriptors[event.RangeSplit.Right.RegionID] = event.RangeSplit.Right.Clone()
+	case event.RangeMerge != nil:
+		delete(descriptors, event.RangeMerge.LeftRegionID)
+		delete(descriptors, event.RangeMerge.RightRegionID)
+		descriptors[event.RangeMerge.Merged.RegionID] = event.RangeMerge.Merged.Clone()
+	case event.PeerChange != nil:
+		descriptors[event.PeerChange.Region.RegionID] = event.PeerChange.Region.Clone()
+	}
 }
