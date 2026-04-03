@@ -182,6 +182,38 @@ func TestFixedClusterRejectsFollowerAppend(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestFixedClusterFollowerRefreshCatchesUp(t *testing.T) {
+	stores, cluster, err := OpenFixedCluster(4, 1, 2, 3)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), cluster.LeaderID())
+
+	leader := stores[1]
+	follower := stores[2]
+
+	commit, err := leader.Append(
+		rootevent.StoreJoined(1, "s1"),
+		rootevent.RegionDescriptorPublished(testDescriptor(40, []byte("k"), []byte("z"))),
+	)
+	require.NoError(t, err)
+
+	current, err := follower.Current()
+	require.NoError(t, err)
+	require.NotEqual(t, commit.State, current)
+
+	require.NoError(t, follower.Refresh())
+
+	current, err = follower.Current()
+	require.NoError(t, err)
+	require.Equal(t, commit.State, current)
+
+	events, tail, err := follower.ReadSince(rootstate.Cursor{})
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	require.Equal(t, rootevent.KindStoreJoined, events[0].Kind)
+	require.Equal(t, uint64(40), events[1].RegionDescriptor.Descriptor.RegionID)
+	require.Equal(t, commit.Cursor, tail)
+}
+
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
 	desc := descriptor.Descriptor{
 		RegionID:  id,
