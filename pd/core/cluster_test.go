@@ -2,6 +2,7 @@ package core
 
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"testing"
 
@@ -73,6 +74,38 @@ func TestClusterAllowsReplacingSameRegionWithNewEpoch(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, uint64(7), desc.RegionID)
 	require.Equal(t, []byte("n"), desc.EndKey)
+}
+
+func TestClusterValidateRegionDescriptorDoesNotMutate(t *testing.T) {
+	c := NewCluster()
+	require.NoError(t, c.PublishRegionDescriptor(testDescriptor(1, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1})))
+
+	err := c.ValidateRegionDescriptor(testDescriptor(2, []byte("l"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}))
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrRegionRangeOverlap)
+
+	desc, ok := c.GetRegionDescriptorByKey([]byte("b"))
+	require.True(t, ok)
+	require.Equal(t, uint64(1), desc.RegionID)
+	_, ok = c.GetRegionDescriptorByKey([]byte("x"))
+	require.False(t, ok)
+}
+
+func TestClusterValidateRootEventDoesNotMutate(t *testing.T) {
+	c := NewCluster()
+	require.NoError(t, c.PublishRegionDescriptor(testDescriptor(1, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1})))
+
+	err := c.ValidateRootEvent(rootevent.RegionDescriptorPublished(
+		testDescriptor(2, []byte("l"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}),
+	))
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrRegionRangeOverlap)
+
+	desc, ok := c.GetRegionDescriptorByKey([]byte("b"))
+	require.True(t, ok)
+	require.Equal(t, uint64(1), desc.RegionID)
+	_, ok = c.GetRegionDescriptorByKey([]byte("x"))
+	require.False(t, ok)
 }
 
 func TestClusterRemoveRegion(t *testing.T) {

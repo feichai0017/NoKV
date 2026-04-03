@@ -33,7 +33,8 @@ type BootstrapInfo struct {
 type Store interface {
 	// Load returns the reconstructed snapshot.
 	Load() (Snapshot, error)
-	// PublishRegionDescriptor persists one rooted region descriptor update.
+	// PublishRegionDescriptor persists one rooted descriptor update through the
+	// legacy bootstrap/compatibility path.
 	PublishRegionDescriptor(desc descriptor.Descriptor) error
 	// AppendRootEvent persists one explicit rooted truth event.
 	AppendRootEvent(event rootevent.Event) error
