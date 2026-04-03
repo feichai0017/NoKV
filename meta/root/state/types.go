@@ -56,6 +56,14 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 	switch event.Kind {
 	case rootevent.KindStoreJoined, rootevent.KindStoreLeft:
 		state.MembershipEpoch++
+	case rootevent.KindIDAllocatorFenced:
+		if event.AllocatorFence != nil && event.AllocatorFence.Minimum > state.IDFence {
+			state.IDFence = event.AllocatorFence.Minimum
+		}
+	case rootevent.KindTSOAllocatorFenced:
+		if event.AllocatorFence != nil && event.AllocatorFence.Minimum > state.TSOFence {
+			state.TSOFence = event.AllocatorFence.Minimum
+		}
 	case rootevent.KindRegionBootstrap,
 		rootevent.KindRegionDescriptorPublished,
 		rootevent.KindRegionTombstoned,

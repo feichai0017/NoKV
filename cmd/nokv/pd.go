@@ -187,15 +187,14 @@ func runPDCmd(w io.Writer, args []string) error {
 					return
 				case <-ticker.C:
 					next, err := rootStore.WaitForTail(last, *rootRefresh)
-					if err == nil && next.Token.AdvancedSince(last) {
-						_ = svc.RefreshFromStorage()
-						last = next.Token
+					if err != nil {
 						continue
 					}
-					// Checkpoint-only allocator fence changes are still not fully
-					// modeled as replicated tail advancement, so keep one bounded
-					// fallback refresh for now.
+					if !next.Token.AdvancedSince(last) {
+						continue
+					}
 					_ = svc.RefreshFromStorage()
+					last = next.Token
 				}
 			}
 		}()

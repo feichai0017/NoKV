@@ -6,6 +6,7 @@ import (
 	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	rootfile "github.com/feichai0017/NoKV/meta/root/storage/file"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"net"
@@ -250,6 +251,40 @@ func TestOpenRootReplicatedStoreSharesThreeNodeCluster(t *testing.T) {
 		got, ok := snapshot.Descriptors[81]
 		return ok && got.RegionID == 81
 	}, 5*time.Second, 50*time.Millisecond)
+}
+
+func TestRootStoreWaitForTailTracksAllocatorFenceCheckpoint(t *testing.T) {
+	rootStores, leaderID := openReplicatedRootStores(t)
+	leader := rootStores[leaderID]
+	follower := rootStores[followerID(leaderID)]
+
+	done := make(chan rootstorage.TailAdvance, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		advance, err := follower.WaitForTail(rootstorage.TailToken{}, 5*time.Second)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		done <- advance
+	}()
+
+	require.NoError(t, leader.SaveAllocatorState(123, 456))
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case advance := <-done:
+		require.True(t, advance.Token.AdvancedSince(rootstorage.TailToken{}))
+	case <-time.After(6 * time.Second):
+		t.Fatal("timed out waiting for allocator fence tail advance")
+	}
+
+	require.NoError(t, follower.Refresh())
+	snapshot, err := follower.Load()
+	require.NoError(t, err)
+	require.Equal(t, uint64(123), snapshot.Allocator.IDCurrent)
+	require.Equal(t, uint64(456), snapshot.Allocator.TSCurrent)
 }
 
 func TestReplicatedRootConfigValidate(t *testing.T) {
