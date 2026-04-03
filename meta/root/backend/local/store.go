@@ -50,28 +50,18 @@ func Open(workdir string, fs vfs.FS) (*Store, error) {
 	}
 	checkpt := newFileCheckpointStore(fs, workdir)
 	log := newFileEventLog(fs, workdir)
-	snapshot, logBase, err := checkpt.Load()
+	bootstrap, err := rootmaterialize.LoadBootstrap(checkpt, log)
 	if err != nil {
 		return nil, err
-	}
-	records, err := log.Load(logBase)
-	if err != nil {
-		return nil, err
-	}
-	for _, rec := range records {
-		if after(rec.Cursor, snapshot.State.LastCommitted) {
-			rootstate.ApplyEventToState(&snapshot.State, rec.Cursor, rec.Event)
-			rootmaterialize.ApplyEventToDescriptors(snapshot.Descriptors, rec.Event)
-		}
 	}
 	return &Store{
 		checkpt:    checkpt,
 		log:        log,
-		state:      snapshot.State,
-		descs:      snapshot.Descriptors,
-		records:    records,
-		logBase:    logBase,
-		retainFrom: retainedFloor(records, snapshot.State.LastCommitted),
+		state:      bootstrap.Snapshot.State,
+		descs:      bootstrap.Snapshot.Descriptors,
+		records:    bootstrap.Records,
+		logBase:    bootstrap.LogOffset,
+		retainFrom: bootstrap.RetainFrom,
 	}, nil
 }
 
@@ -105,12 +95,12 @@ func (s *Store) ReadSince(cursor rootstate.Cursor) ([]rootevent.Event, rootstate
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if after(s.retainFrom, cursor) {
+	if rootstate.CursorAfter(s.retainFrom, cursor) {
 		return rootmaterialize.SnapshotDescriptorEvents(s.descs), s.state.LastCommitted, nil
 	}
 	out := make([]rootevent.Event, 0, len(s.records))
 	for _, rec := range s.records {
-		if after(rec.Cursor, cursor) {
+		if rootstate.CursorAfter(rec.Cursor, cursor) {
 			out = append(out, rootevent.CloneEvent(rec.Event))
 		}
 	}
@@ -147,7 +137,7 @@ func (s *Store) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) 
 	s.descs = descs
 	s.records = append(s.records, records...)
 	s.logBase = logEnd
-	s.retainFrom = retainedFloor(s.records, state.LastCommitted)
+	s.retainFrom = rootmaterialize.RetainedFloor(s.records, state.LastCommitted)
 	s.maybeCompactLocked()
 	return rootstate.CommitInfo{Cursor: state.LastCommitted, State: state}, nil
 }
@@ -193,7 +183,7 @@ func (s *Store) maybeCompactLocked() {
 		return
 	}
 	start := len(s.records) - maxRetainedRecords
-	retained := cloneRecords(s.records[start:])
+	retained := rootmaterialize.CloneCommittedEvents(s.records[start:])
 	snapshot := rootstate.Snapshot{
 		State:       s.state,
 		Descriptors: rootstate.CloneDescriptors(s.descs),
@@ -206,5 +196,5 @@ func (s *Store) maybeCompactLocked() {
 	}
 	s.records = retained
 	s.logBase = 0
-	s.retainFrom = retainedFloor(retained, s.state.LastCommitted)
+	s.retainFrom = rootmaterialize.RetainedFloor(retained, s.state.LastCommitted)
 }
