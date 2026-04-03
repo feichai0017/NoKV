@@ -523,6 +523,62 @@ func TestServicePublishRootEventAssignsRootEpoch(t *testing.T) {
 	require.Equal(t, uint64(2), store.snapshot.ClusterEpoch)
 }
 
+func TestServiceMutatingWritesRespectExpectedClusterEpoch(t *testing.T) {
+	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	store := &fakeStorage{snapshot: pdstorage.Snapshot{ClusterEpoch: 7}}
+	svc.SetStorage(store)
+
+	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
+		RegionDescriptor:     testRegionDescriptorProto(testDescriptor(11, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)),
+		ExpectedClusterEpoch: 6,
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Equal(t, 0, store.eventCalls)
+
+	_, err = svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
+		RegionDescriptor:     testRegionDescriptorProto(testDescriptor(11, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)),
+		ExpectedClusterEpoch: 7,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, store.eventCalls)
+	require.Equal(t, uint64(8), store.snapshot.ClusterEpoch)
+
+	event := rootevent.PeerAdded(11, 2, 201, testDescriptor(11, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 2}, nil))
+	_, err = svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event:                metacodec.RootEventToProto(event),
+		ExpectedClusterEpoch: 7,
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Equal(t, 1, store.eventCalls)
+
+	_, err = svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event:                metacodec.RootEventToProto(event),
+		ExpectedClusterEpoch: 8,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, store.eventCalls)
+	require.Equal(t, uint64(9), store.snapshot.ClusterEpoch)
+
+	_, err = svc.RemoveRegion(context.Background(), &pdpb.RemoveRegionRequest{
+		RegionId:             11,
+		ExpectedClusterEpoch: 8,
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Equal(t, 2, store.eventCalls)
+
+	resp, err := svc.RemoveRegion(context.Background(), &pdpb.RemoveRegionRequest{
+		RegionId:             11,
+		ExpectedClusterEpoch: 9,
+	})
+	require.NoError(t, err)
+	require.True(t, resp.GetRemoved())
+	require.Equal(t, 3, store.eventCalls)
+	require.Equal(t, uint64(10), store.snapshot.ClusterEpoch)
+}
+
 func TestServiceRefreshFromReplicatedRootFollowerServesRead(t *testing.T) {
 	peerAddrs := reserveReplicatedRootPeerAddrs(t)
 	rootStores := make(map[uint64]*pdstorage.RootStore, 3)
