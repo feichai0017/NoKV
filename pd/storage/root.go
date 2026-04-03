@@ -4,6 +4,7 @@ import (
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"sync"
 	"time"
@@ -12,11 +13,11 @@ import (
 // RootStore persists PD truth on top of the metadata root and reconstructs the
 // region catalog by replaying committed root events.
 type RootStore struct {
-	root          rootBackend
-	refresh       func() error
-	waitForChange func(after rootstate.Cursor, timeout time.Duration) (rootstate.Cursor, error)
-	isLeader      func() bool
-	leaderID      func() uint64
+	root        rootBackend
+	refresh     func() error
+	waitForTail func(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
+	isLeader    func() bool
+	leaderID    func() uint64
 
 	mu       sync.RWMutex
 	snapshot Snapshot
@@ -49,14 +50,14 @@ func (s *RootStore) Refresh() error {
 	return s.reload()
 }
 
-func (s *RootStore) WaitForChange(after rootstate.Cursor, timeout time.Duration) (rootstate.Cursor, error) {
+func (s *RootStore) WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error) {
 	if s == nil || s.root == nil {
-		return rootstate.Cursor{}, nil
+		return rootstorage.TailAdvance{}, nil
 	}
-	if s.waitForChange == nil {
-		return rootstate.Cursor{}, nil
+	if s.waitForTail == nil {
+		return rootstorage.TailAdvance{}, nil
 	}
-	return s.waitForChange(after, timeout)
+	return s.waitForTail(after, timeout)
 }
 
 func (s *RootStore) IsLeader() bool {
