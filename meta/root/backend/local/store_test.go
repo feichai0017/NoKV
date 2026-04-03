@@ -79,7 +79,7 @@ func TestStoreFenceAllocatorPersistsWithoutEvents(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(10), state.IDFence)
 	require.Equal(t, uint64(22), state.TSOFence)
-	require.Equal(t, rootstate.Cursor{}, state.LastCommitted)
+	require.Equal(t, rootstate.Cursor{Term: 1, Index: 2}, state.LastCommitted)
 }
 
 func TestStoreIgnoresTruncatedLogTail(t *testing.T) {
