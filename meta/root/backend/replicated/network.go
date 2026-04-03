@@ -173,7 +173,7 @@ func (d *NetworkDriver) WaitForChange(after rootstate.Cursor, timeout time.Durat
 	}
 }
 
-func (d *NetworkDriver) InstallBootstrap(checkpoint rootstorage.Checkpoint, stream rootstorage.CommittedStream) error {
+func (d *NetworkDriver) InstallBootstrap(checkpoint rootstorage.Checkpoint, stream rootstorage.CommittedTail) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if err := d.storage.InstallBootstrap(checkpoint, stream); err != nil {
@@ -311,7 +311,7 @@ func (d *NetworkDriver) SaveCheckpoint(checkpoint rootstorage.Checkpoint) error 
 	return d.storage.SaveCheckpoint(checkpoint)
 }
 
-func (d *NetworkDriver) ReadCommitted(offset int64) (rootstorage.CommittedStream, error) {
+func (d *NetworkDriver) ReadCommitted(offset int64) (rootstorage.CommittedTail, error) {
 	return d.storage.ReadCommitted(offset)
 }
 
@@ -351,7 +351,7 @@ func (d *NetworkDriver) AppendCommitted(records ...rootstorage.CommittedEvent) (
 	return size, err
 }
 
-func (d *NetworkDriver) CompactCommitted(stream rootstorage.CommittedStream) error {
+func (d *NetworkDriver) CompactCommitted(stream rootstorage.CommittedTail) error {
 	return d.storage.CompactCommitted(stream)
 }
 
