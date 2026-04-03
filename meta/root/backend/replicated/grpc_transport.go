@@ -235,21 +235,26 @@ func (t *GRPCTransport) Close() error {
 		return nil
 	}
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if t.closed {
+		t.mu.Unlock()
 		return nil
 	}
 	t.closed = true
+	conns := t.conns
+	server := t.server
+	ln := t.ln
+	t.conns = make(map[uint64]*grpc.ClientConn)
+	t.clients = make(map[uint64]rootTransportClient)
+	t.mu.Unlock()
+
 	var firstErr error
-	for id, conn := range t.conns {
+	for _, conn := range conns {
 		if err := conn.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
-		delete(t.conns, id)
-		delete(t.clients, id)
 	}
-	t.server.GracefulStop()
-	if err := t.ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) && firstErr == nil {
+	server.GracefulStop()
+	if err := ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) && firstErr == nil {
 		firstErr = err
 	}
 	return firstErr

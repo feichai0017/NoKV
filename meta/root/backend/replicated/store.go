@@ -26,6 +26,10 @@ type Config struct {
 	MaxRetainedRecords int
 }
 
+type changeWaiter interface {
+	WaitForChange(after rootstate.Cursor, timeout time.Duration) (rootstate.Cursor, error)
+}
+
 // Store hosts the rooted state machine on top of an injected committed log and
 // checkpoint store. It is the future Delos-lite landing point for a replicated
 // metadata backend, without baking protocol concerns into the root domain.
@@ -34,6 +38,7 @@ type Store struct {
 	checkpt rootstorage.CheckpointStore
 	install rootstorage.BootstrapInstaller
 	leader  LeaderAware
+	waiter  changeWaiter
 
 	mu                 sync.RWMutex
 	state              rootstate.State
@@ -77,6 +82,7 @@ func Open(cfg Config) (*Store, error) {
 		checkpt:            cfg.Checkpoint,
 		install:            cfg.Installer,
 		leader:             leaderAware(cfg.Driver),
+		waiter:             driverWaiter(cfg.Driver),
 		state:              bootstrap.Snapshot.State,
 		descs:              bootstrap.Snapshot.Descriptors,
 		records:            bootstrap.Records,
@@ -92,6 +98,14 @@ func leaderAware(driver Driver) LeaderAware {
 	}
 	leader, _ := driver.(LeaderAware)
 	return leader
+}
+
+func driverWaiter(driver Driver) changeWaiter {
+	if driver == nil {
+		return nil
+	}
+	waiter, _ := driver.(changeWaiter)
+	return waiter
 }
 
 func (s *Store) IsLeader() bool {
@@ -135,6 +149,9 @@ func (s *Store) Refresh() error {
 func (s *Store) WaitForChange(after rootstate.Cursor, timeout time.Duration) (rootstate.Cursor, error) {
 	if s == nil {
 		return rootstate.Cursor{}, nil
+	}
+	if s.waiter != nil {
+		return s.waiter.WaitForChange(after, timeout)
 	}
 	if timeout <= 0 {
 		timeout = 200 * time.Millisecond

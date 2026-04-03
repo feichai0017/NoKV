@@ -92,6 +92,7 @@ func runPDCmd(w io.Writer, args []string) error {
 	cluster := core.NewCluster()
 	var (
 		store         pdstorage.Store
+		rootStore     *pdstorage.RootStore
 		workdirPath   string
 		loadedRegions int
 	)
@@ -101,7 +102,6 @@ func runPDCmd(w io.Writer, args []string) error {
 		if workdirPath == "" {
 			break
 		}
-		var rootStore *pdstorage.RootStore
 		rootStore, err = pdstorage.OpenRootLocalStore(workdirPath)
 		if err != nil {
 			return fmt.Errorf("pd open metadata root %q: %w", workdirPath, err)
@@ -176,8 +176,7 @@ func runPDCmd(w io.Writer, args []string) error {
 	}
 	ctx, cancel := pdNotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	if refresher, ok := store.(pdstorage.Refresher); ok && rootModeValue == "replicated" {
-		waiter, _ := store.(pdstorage.ChangeWaiter)
+	if refresher, ok := store.(pdstorage.Refresher); ok && rootModeValue == "replicated" && rootStore != nil {
 		ticker := time.NewTicker(*rootRefresh)
 		defer ticker.Stop()
 		go func() {
@@ -187,12 +186,10 @@ func runPDCmd(w io.Writer, args []string) error {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					if waiter != nil {
-						next, err := waiter.WaitForChange(last, *rootRefresh)
-						if err == nil && rootstate.CursorAfter(next, last) {
-							_ = svc.RefreshFromStorage()
-							last = next
-						}
+					next, err := rootStore.WaitForChange(last, *rootRefresh)
+					if err == nil && rootstate.CursorAfter(next, last) {
+						_ = svc.RefreshFromStorage()
+						last = next
 						continue
 					}
 					_ = refresher.Refresh()
