@@ -1,11 +1,5 @@
 package root
 
-import (
-	"sort"
-
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
-)
-
 // ApplyEventToState applies one rooted metadata event into compact root state.
 func ApplyEventToState(state *State, cursor Cursor, event Event) {
 	if state == nil {
@@ -48,22 +42,4 @@ func CursorAfter(a, b Cursor) bool {
 		return a.Term > b.Term
 	}
 	return a.Index > b.Index
-}
-
-// SnapshotDescriptorEvents materializes descriptor truth into a stable event
-// sequence for bootstrap/recovery callers.
-func SnapshotDescriptorEvents(descs map[uint64]descriptor.Descriptor) []Event {
-	if len(descs) == 0 {
-		return nil
-	}
-	ids := make([]uint64, 0, len(descs))
-	for id := range descs {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	events := make([]Event, 0, len(ids))
-	for _, id := range ids {
-		events = append(events, RegionDescriptorPublished(descs[id]))
-	}
-	return events
 }
