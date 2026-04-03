@@ -4,7 +4,6 @@ import (
 	"bytes"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"sync"
@@ -102,19 +101,10 @@ func (s *RootStore) PublishRegionDescriptor(desc descriptor.Descriptor) error {
 	}
 
 	event := regionEvent(existed, desc)
-	commit, err := s.root.Append(event)
-	if err != nil {
+	if _, err := s.root.Append(event); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	if s.snapshot.Descriptors == nil {
-		s.snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
-	}
-	s.snapshot.Descriptors[desc.RegionID] = desc.Clone()
-	s.snapshot.Allocator.IDCurrent = commit.State.IDFence
-	s.snapshot.Allocator.TSCurrent = commit.State.TSOFence
-	s.mu.Unlock()
-	return nil
+	return s.reload()
 }
 
 // AppendRootEvent persists one explicit rooted metadata event.
@@ -122,19 +112,10 @@ func (s *RootStore) AppendRootEvent(event rootevent.Event) error {
 	if s == nil || s.root == nil || event.Kind == rootevent.KindUnknown {
 		return nil
 	}
-	commit, err := s.root.Append(event)
-	if err != nil {
+	if _, err := s.root.Append(event); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	if s.snapshot.Descriptors == nil {
-		s.snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
-	}
-	rootmaterialize.ApplyEventToDescriptors(s.snapshot.Descriptors, event)
-	s.snapshot.Allocator.IDCurrent = commit.State.IDFence
-	s.snapshot.Allocator.TSCurrent = commit.State.TSOFence
-	s.mu.Unlock()
-	return nil
+	return s.reload()
 }
 
 // TombstoneRegion tombstones one region from the rooted catalog.
@@ -142,16 +123,10 @@ func (s *RootStore) TombstoneRegion(regionID uint64) error {
 	if s == nil || regionID == 0 {
 		return nil
 	}
-	commit, err := s.root.Append(rootevent.RegionTombstoned(regionID))
-	if err != nil {
+	if _, err := s.root.Append(rootevent.RegionTombstoned(regionID)); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	delete(s.snapshot.Descriptors, regionID)
-	s.snapshot.Allocator.IDCurrent = commit.State.IDFence
-	s.snapshot.Allocator.TSCurrent = commit.State.TSOFence
-	s.mu.Unlock()
-	return nil
+	return s.reload()
 }
 
 // SaveAllocatorState raises allocator fences in the metadata root.
@@ -159,18 +134,13 @@ func (s *RootStore) SaveAllocatorState(idCurrent, tsCurrent uint64) error {
 	if s == nil {
 		return nil
 	}
-	idFence, err := s.root.FenceAllocator(rootpkg.AllocatorKindID, idCurrent)
-	if err != nil {
+	if _, err := s.root.FenceAllocator(rootpkg.AllocatorKindID, idCurrent); err != nil {
 		return err
 	}
-	tsoFence, err := s.root.FenceAllocator(rootpkg.AllocatorKindTSO, tsCurrent)
-	if err != nil {
+	if _, err := s.root.FenceAllocator(rootpkg.AllocatorKindTSO, tsCurrent); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	s.snapshot.Allocator = AllocatorState{IDCurrent: idFence, TSCurrent: tsoFence}
-	s.mu.Unlock()
-	return nil
+	return s.reload()
 }
 
 // Close releases storage resources.

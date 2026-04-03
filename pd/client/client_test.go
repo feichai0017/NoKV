@@ -11,6 +11,7 @@ import (
 	"time"
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	pdstorage "github.com/feichai0017/NoKV/pd/storage"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -167,10 +168,14 @@ func TestGRPCClientWriteFailoverAcrossPDs(t *testing.T) {
 
 type followerStorage struct{}
 
+func (f *followerStorage) Load() (pdstorage.Snapshot, error) {
+	return pdstorage.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
+}
 func (f *followerStorage) PublishRegionDescriptor(descriptor.Descriptor) error { return nil }
-func (f *followerStorage) AppendRootEvent(rootevent.Event) error              { return nil }
+func (f *followerStorage) AppendRootEvent(rootevent.Event) error               { return nil }
 func (f *followerStorage) TombstoneRegion(uint64) error                        { return nil }
 func (f *followerStorage) SaveAllocatorState(uint64, uint64) error             { return nil }
+func (f *followerStorage) Refresh() error                                      { return nil }
 func (f *followerStorage) Close() error                                        { return nil }
 func (f *followerStorage) IsLeader() bool                                      { return false }
 func (f *followerStorage) LeaderID() uint64                                    { return 2 }

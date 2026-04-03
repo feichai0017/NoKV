@@ -40,6 +40,10 @@ type fakeStorage struct {
 	leaderID    uint64
 }
 
+func (f *fakeStorage) Load() (pdstorage.Snapshot, error) {
+	return pdstorage.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
+}
+
 func (f *fakeStorage) PublishRegionDescriptor(desc descriptor.Descriptor) error {
 	f.updateCalls++
 	if f.updateErr != nil {
@@ -81,6 +85,10 @@ func (f *fakeStorage) SaveAllocatorState(idCurrent, tsCurrent uint64) error {
 }
 
 func (f *fakeStorage) Close() error {
+	return nil
+}
+
+func (f *fakeStorage) Refresh() error {
 	return nil
 }
 

@@ -22,7 +22,7 @@ type Service struct {
 	cluster *core.Cluster
 	ids     *core.IDAllocator
 	tso     *tso.Allocator
-	storage pdstorage.Sink
+	storage pdstorage.Store
 }
 
 const errNotLeaderPrefix = "pd not leader"
@@ -49,7 +49,7 @@ func NewService(cluster *core.Cluster, ids *core.IDAllocator, tsAlloc *tso.Alloc
 //
 // When configured, region metadata and allocator states are persisted through
 // the storage interface.
-func (s *Service) SetStorage(storage pdstorage.Sink) {
+func (s *Service) SetStorage(storage pdstorage.Store) {
 	if s == nil {
 		return
 	}
@@ -62,16 +62,10 @@ func (s *Service) RefreshFromStorage() error {
 	if s == nil || s.storage == nil {
 		return nil
 	}
-	if refresher, ok := s.storage.(pdstorage.Refresher); ok {
-		if err := refresher.Refresh(); err != nil {
-			return err
-		}
+	if err := s.storage.Refresh(); err != nil {
+		return err
 	}
-	loader, ok := s.storage.(pdstorage.Loader)
-	if !ok {
-		return nil
-	}
-	snapshot, err := loader.Load()
+	snapshot, err := s.storage.Load()
 	if err != nil {
 		return err
 	}
@@ -266,11 +260,10 @@ func (s *Service) requireLeaderForWrite() error {
 	if s == nil || s.storage == nil {
 		return nil
 	}
-	leader, ok := s.storage.(pdstorage.LeaderStatus)
-	if !ok || leader.IsLeader() {
+	if s.storage.IsLeader() {
 		return nil
 	}
-	leaderID := leader.LeaderID()
+	leaderID := s.storage.LeaderID()
 	if leaderID != 0 {
 		return status.Error(codes.FailedPrecondition, fmt.Sprintf("%s (leader_id=%d)", errNotLeaderPrefix, leaderID))
 	}
