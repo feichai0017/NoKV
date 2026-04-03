@@ -78,14 +78,14 @@ func (s *SchedulerClient) PublishRegionDescriptor(ctx context.Context, desc desc
 }
 
 // PublishRootEvent publishes one explicit rooted truth event to PD.
-func (s *SchedulerClient) PublishRootEvent(ctx context.Context, event rootevent.Event) {
+func (s *SchedulerClient) PublishRootEvent(ctx context.Context, event rootevent.Event) error {
 	if s == nil || event.Kind == rootevent.KindUnknown || s.pd == nil {
-		return
+		return nil
 	}
 	expected, normalized, err := prepareRootEventRequest(event)
 	if err != nil {
 		s.recordError("PublishRootEvent", err)
-		return
+		return err
 	}
 	ctx, cancel := contextWithTimeout(ctx, s.timeout)
 	defer cancel()
@@ -95,9 +95,10 @@ func (s *SchedulerClient) PublishRootEvent(ctx context.Context, event rootevent.
 	})
 	if err != nil {
 		s.recordError("PublishRootEvent", err)
-		return
+		return err
 	}
 	s.markHealthy()
+	return nil
 }
 
 // StoreHeartbeat publishes store stats to PD and returns any operations PD

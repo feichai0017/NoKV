@@ -299,11 +299,11 @@ func (s *Store) flushRegionUpdates() {
 		switch ev.kind {
 		case regionEventApply:
 			if ev.root != nil {
-				s.schedulerClient().PublishRootEvent(ctx, *ev.root)
+				_ = s.schedulerClient().PublishRootEvent(ctx, *ev.root)
 			}
 		case regionEventRemove:
 			if ev.root != nil {
-				s.schedulerClient().PublishRootEvent(ctx, *ev.root)
+				_ = s.schedulerClient().PublishRootEvent(ctx, *ev.root)
 			}
 		}
 	}
