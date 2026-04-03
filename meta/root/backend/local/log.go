@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
-	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
@@ -175,20 +174,6 @@ func readRecord(r io.Reader) (rootstorage.CommittedEvent, bool, error) {
 		},
 		Event: metacodec.RootEventFromProto(&pbEvent),
 	}, true, nil
-}
-
-func cloneRecords(in []rootstorage.CommittedEvent) []rootstorage.CommittedEvent {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]rootstorage.CommittedEvent, 0, len(in))
-	for _, rec := range in {
-		out = append(out, rootstorage.CommittedEvent{
-			Cursor: rec.Cursor,
-			Event:  rootevent.CloneEvent(rec.Event),
-		})
-	}
-	return out
 }
 
 func writeAll(w io.Writer, data []byte) error {
