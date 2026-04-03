@@ -56,6 +56,11 @@
     <h3><a href="2026-04-03-delos-lite-metadata-ha-design.html">Delos-lite Metadata HA 设计草案</a></h3>
     <p>把未来 metadata HA 进一步细化到模块、事件、状态机、恢复路径和迁移步骤。</p>
   </div>
+  <div class="blog-card">
+    <span class="blog-date">2026-04-03</span>
+    <h3><a href="2026-04-03-delos-lite-metadata-interfaces-and-schema.html">Delos-lite Metadata 接口与 Schema 草案</a></h3>
+    <p>继续把 Delos-lite 细化到 Go 接口、proto 结构、checkpoint schema 和现有类型迁移建议。</p>
+  </div>
 </div>
 
 ## 这里应该写什么
