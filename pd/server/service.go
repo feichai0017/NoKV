@@ -372,6 +372,11 @@ func (s *Service) sameAppliedPeerChange(event rootevent.Event) bool {
 	if s == nil || s.cluster == nil || event.PeerChange == nil {
 		return false
 	}
+	switch event.Kind {
+	case rootevent.KindPeerAdded, rootevent.KindPeerRemoved:
+	default:
+		return false
+	}
 	current, ok := s.cluster.GetRegionDescriptor(event.PeerChange.RegionID)
 	if !ok {
 		return false

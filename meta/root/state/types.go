@@ -69,6 +69,8 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		rootevent.KindRegionTombstoned,
 		rootevent.KindRegionSplitCommitted,
 		rootevent.KindRegionMerged,
+		rootevent.KindPeerAdditionPlanned,
+		rootevent.KindPeerRemovalPlanned,
 		rootevent.KindPeerAdded,
 		rootevent.KindPeerRemoved:
 		state.ClusterEpoch++
