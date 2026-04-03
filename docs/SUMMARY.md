@@ -43,7 +43,4 @@
   - [2026-03-30 Distributed Testing and Failpoints](notes/2026-03-30-distributed-testing-and-failpoints.md)
   - [2026-03-31 SST Snapshot Install for Migration](notes/2026-03-31-sst-snapshot-install.md)
   - [2026-04-02 Minimal Metadata Root and Self-Describing Regions](notes/2026-04-02-minimal-metadata-root-and-self-describing-regions.md)
-  - [2026-04-03 NoKV 未来 Metadata HA 路线规划](notes/2026-04-03-future-metadata-ha-plan.md)
-  - [2026-04-03 NoKV Delos-lite Metadata HA 设计草案](notes/2026-04-03-delos-lite-metadata-ha-design.md)
-  - [2026-04-03 NoKV Delos-lite Metadata 接口与 Schema 草案](notes/2026-04-03-delos-lite-metadata-interfaces-and-schema.md)
-  - [2026-04-03 NoKV Delos-lite Metadata HA 迁移实施计划](notes/2026-04-03-delos-lite-metadata-migration-plan.md)
+  - [2026-04-03 NoKV Delos-lite Metadata Root 与 Virtual Log 路线](notes/2026-04-03-delos-lite-metadata-root-roadmap.md)
