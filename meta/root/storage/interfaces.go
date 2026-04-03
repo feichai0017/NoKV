@@ -11,6 +11,21 @@ type CommittedEvent struct {
 	Event  rootevent.Event
 }
 
+// CloneCommittedEvents returns a detached committed-event slice.
+func CloneCommittedEvents(in []CommittedEvent) []CommittedEvent {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]CommittedEvent, 0, len(in))
+	for _, rec := range in {
+		out = append(out, CommittedEvent{
+			Cursor: rec.Cursor,
+			Event:  rootevent.CloneEvent(rec.Event),
+		})
+	}
+	return out
+}
+
 // EventLog exposes the ordered committed metadata log surface needed by root implementations.
 type EventLog interface {
 	Load(offset int64) ([]CommittedEvent, error)
