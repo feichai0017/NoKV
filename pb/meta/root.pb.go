@@ -36,8 +36,10 @@ const (
 	RootEventKind_ROOT_EVENT_KIND_TSO_ALLOCATOR_FENCED        RootEventKind = 7
 	RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED      RootEventKind = 8
 	RootEventKind_ROOT_EVENT_KIND_REGION_MERGED               RootEventKind = 9
-	RootEventKind_ROOT_EVENT_KIND_PEER_ADDED                  RootEventKind = 10
-	RootEventKind_ROOT_EVENT_KIND_PEER_REMOVED                RootEventKind = 11
+	RootEventKind_ROOT_EVENT_KIND_PEER_ADDITION_PLANNED       RootEventKind = 10
+	RootEventKind_ROOT_EVENT_KIND_PEER_REMOVAL_PLANNED        RootEventKind = 11
+	RootEventKind_ROOT_EVENT_KIND_PEER_ADDED                  RootEventKind = 12
+	RootEventKind_ROOT_EVENT_KIND_PEER_REMOVED                RootEventKind = 13
 )
 
 // Enum value maps for RootEventKind.
@@ -53,8 +55,10 @@ var (
 		7:  "ROOT_EVENT_KIND_TSO_ALLOCATOR_FENCED",
 		8:  "ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED",
 		9:  "ROOT_EVENT_KIND_REGION_MERGED",
-		10: "ROOT_EVENT_KIND_PEER_ADDED",
-		11: "ROOT_EVENT_KIND_PEER_REMOVED",
+		10: "ROOT_EVENT_KIND_PEER_ADDITION_PLANNED",
+		11: "ROOT_EVENT_KIND_PEER_REMOVAL_PLANNED",
+		12: "ROOT_EVENT_KIND_PEER_ADDED",
+		13: "ROOT_EVENT_KIND_PEER_REMOVED",
 	}
 	RootEventKind_value = map[string]int32{
 		"ROOT_EVENT_KIND_UNSPECIFIED":                 0,
@@ -67,8 +71,10 @@ var (
 		"ROOT_EVENT_KIND_TSO_ALLOCATOR_FENCED":        7,
 		"ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED":      8,
 		"ROOT_EVENT_KIND_REGION_MERGED":               9,
-		"ROOT_EVENT_KIND_PEER_ADDED":                  10,
-		"ROOT_EVENT_KIND_PEER_REMOVED":                11,
+		"ROOT_EVENT_KIND_PEER_ADDITION_PLANNED":       10,
+		"ROOT_EVENT_KIND_PEER_REMOVAL_PLANNED":        11,
+		"ROOT_EVENT_KIND_PEER_ADDED":                  12,
+		"ROOT_EVENT_KIND_PEER_REMOVED":                13,
 	}
 )
 
@@ -896,7 +902,7 @@ const file_meta_root_proto_rawDesc = "" +
 	"rangeMerge\x12?\n" +
 	"\vpeer_change\x18\b \x01(\v2\x1c.nokv.meta.v1.RootPeerChangeH\x00R\n" +
 	"peerChangeB\t\n" +
-	"\apayload*\xd4\x03\n" +
+	"\apayload*\xa9\x04\n" +
 	"\rRootEventKind\x12\x1f\n" +
 	"\x1bROOT_EVENT_KIND_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cROOT_EVENT_KIND_STORE_JOINED\x10\x01\x12\x1e\n" +
@@ -907,10 +913,12 @@ const file_meta_root_proto_rawDesc = "" +
 	"!ROOT_EVENT_KIND_REGION_TOMBSTONED\x10\x06\x12(\n" +
 	"$ROOT_EVENT_KIND_TSO_ALLOCATOR_FENCED\x10\a\x12*\n" +
 	"&ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED\x10\b\x12!\n" +
-	"\x1dROOT_EVENT_KIND_REGION_MERGED\x10\t\x12\x1e\n" +
-	"\x1aROOT_EVENT_KIND_PEER_ADDED\x10\n" +
-	"\x12 \n" +
-	"\x1cROOT_EVENT_KIND_PEER_REMOVED\x10\vB,Z*github.com/feichai0017/NoKV/pb/meta;metapbb\x06proto3"
+	"\x1dROOT_EVENT_KIND_REGION_MERGED\x10\t\x12)\n" +
+	"%ROOT_EVENT_KIND_PEER_ADDITION_PLANNED\x10\n" +
+	"\x12(\n" +
+	"$ROOT_EVENT_KIND_PEER_REMOVAL_PLANNED\x10\v\x12\x1e\n" +
+	"\x1aROOT_EVENT_KIND_PEER_ADDED\x10\f\x12 \n" +
+	"\x1cROOT_EVENT_KIND_PEER_REMOVED\x10\rB,Z*github.com/feichai0017/NoKV/pb/meta;metapbb\x06proto3"
 
 var (
 	file_meta_root_proto_rawDescOnce sync.Once

@@ -361,6 +361,41 @@ func TestServicePublishRootEventSkipsRedundantPeerApply(t *testing.T) {
 	require.Equal(t, uint64(5), store.snapshot.ClusterEpoch)
 }
 
+func TestServicePublishRootEventPersistsPeerPlan(t *testing.T) {
+	cluster := core.NewCluster()
+	current := testDescriptor(12, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{
+		{StoreID: 1, PeerID: 101},
+	})
+	current.RootEpoch = 5
+	current.EnsureHash()
+	require.NoError(t, cluster.PublishRegionDescriptor(current))
+
+	target := current.Clone()
+	target.Peers = append(target.Peers, metaregion.Peer{StoreID: 2, PeerID: 201})
+	target.Epoch.ConfVersion++
+	target.RootEpoch = 0
+	target.EnsureHash()
+
+	store := &fakeStorage{
+		leader: true,
+		snapshot: pdstorage.Snapshot{
+			ClusterEpoch: 5,
+			Descriptors:  map[uint64]descriptor.Descriptor{current.RegionID: current},
+		},
+	}
+	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc.SetStorage(store)
+
+	resp, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event: metacodec.RootEventToProto(rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)),
+	})
+	require.NoError(t, err)
+	require.True(t, resp.GetAccepted())
+	require.Equal(t, 1, store.eventCalls)
+	require.Equal(t, rootevent.KindPeerAdditionPlanned, store.lastEvent.Kind)
+	require.Equal(t, uint64(6), store.lastEvent.PeerChange.Region.RootEpoch)
+}
+
 func TestServicePublishRootEventValidationAndPersistenceError(t *testing.T) {
 	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
 

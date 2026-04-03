@@ -258,18 +258,18 @@ func (s *Store) publishPeerChangeTarget(regionID uint64, cc raftpb.ConfChangeV2)
 	var event rootevent.Event
 	switch change.Type {
 	case raftpb.ConfChangeAddNode, raftpb.ConfChangeAddLearnerNode:
-		event = rootevent.PeerAdded(next.ID, change.NodeID, change.NodeID, desc)
+		event = rootevent.PeerAdditionPlanned(next.ID, change.NodeID, change.NodeID, desc)
 	case raftpb.ConfChangeRemoveNode:
-		event = rootevent.PeerRemoved(next.ID, change.NodeID, change.NodeID, desc)
+		event = rootevent.PeerRemovalPlanned(next.ID, change.NodeID, change.NodeID, desc)
 	default:
 		return nil
 	}
 	if peers, err := decodeConfChangeContext(cc.Context); err == nil && len(peers) > 0 {
 		switch change.Type {
 		case raftpb.ConfChangeAddNode, raftpb.ConfChangeAddLearnerNode:
-			event = rootevent.PeerAdded(next.ID, peers[0].StoreID, peers[0].PeerID, desc)
+			event = rootevent.PeerAdditionPlanned(next.ID, peers[0].StoreID, peers[0].PeerID, desc)
 		case raftpb.ConfChangeRemoveNode:
-			event = rootevent.PeerRemoved(next.ID, peers[0].StoreID, peers[0].PeerID, desc)
+			event = rootevent.PeerRemovalPlanned(next.ID, peers[0].StoreID, peers[0].PeerID, desc)
 		}
 	}
 	if err := s.schedulerClient().PublishRootEvent(s.runtimeContext(), event); err != nil {

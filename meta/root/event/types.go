@@ -16,6 +16,8 @@ const (
 	KindRegionTombstoned
 	KindRegionSplitCommitted
 	KindRegionMerged
+	KindPeerAdditionPlanned
+	KindPeerRemovalPlanned
 	KindPeerAdded
 	KindPeerRemoved
 )
@@ -131,6 +133,30 @@ func RegionMerged(leftRegionID, rightRegionID uint64, merged descriptor.Descript
 func PeerAdded(regionID, storeID, peerID uint64, region descriptor.Descriptor) Event {
 	return Event{
 		Kind: KindPeerAdded,
+		PeerChange: &PeerChange{
+			RegionID: regionID,
+			StoreID:  storeID,
+			PeerID:   peerID,
+			Region:   region,
+		},
+	}
+}
+
+func PeerAdditionPlanned(regionID, storeID, peerID uint64, region descriptor.Descriptor) Event {
+	return Event{
+		Kind: KindPeerAdditionPlanned,
+		PeerChange: &PeerChange{
+			RegionID: regionID,
+			StoreID:  storeID,
+			PeerID:   peerID,
+			Region:   region,
+		},
+	}
+}
+
+func PeerRemovalPlanned(regionID, storeID, peerID uint64, region descriptor.Descriptor) Event {
+	return Event{
+		Kind: KindPeerRemovalPlanned,
 		PeerChange: &PeerChange{
 			RegionID: regionID,
 			StoreID:  storeID,
