@@ -46,3 +46,4 @@
   - [2026-04-03 NoKV 未来 Metadata HA 路线规划](notes/2026-04-03-future-metadata-ha-plan.md)
   - [2026-04-03 NoKV Delos-lite Metadata HA 设计草案](notes/2026-04-03-delos-lite-metadata-ha-design.md)
   - [2026-04-03 NoKV Delos-lite Metadata 接口与 Schema 草案](notes/2026-04-03-delos-lite-metadata-interfaces-and-schema.md)
+  - [2026-04-03 NoKV Delos-lite Metadata HA 迁移实施计划](notes/2026-04-03-delos-lite-metadata-migration-plan.md)
