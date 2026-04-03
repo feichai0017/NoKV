@@ -94,14 +94,14 @@ func (s *Store) Refresh() error {
 	return nil
 }
 
-// WaitForChange waits until durable rooted truth advances past after.
-// This is a pragmatic catch-up primitive for follower services until a more
+// WaitForTail waits until the durable committed tail view changes past after.
+// This is the current catch-up primitive for follower services until a more
 // direct push/watch path exists.
-func (s *Store) WaitForChange(after rootstate.Cursor, timeout time.Duration) (rootstate.Cursor, error) {
+func (s *Store) WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error) {
 	if s == nil {
-		return rootstate.Cursor{}, nil
+		return rootstorage.TailAdvance{}, nil
 	}
-	return s.driver.WaitForChange(after, timeout)
+	return s.driver.WaitForTail(after, timeout)
 }
 
 func (s *Store) Current() (rootstate.State, error) {

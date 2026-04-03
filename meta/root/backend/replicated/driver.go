@@ -1,7 +1,6 @@
 package replicated
 
 import (
-	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"time"
 )
@@ -16,7 +15,7 @@ type DriverState struct {
 // capabilities required by the replicated metadata-root backend.
 type Driver interface {
 	rootstorage.Substrate
-	WaitForChange(after rootstate.Cursor, timeout time.Duration) (rootstate.Cursor, error)
+	WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
 	IsLeader() bool
 	LeaderID() uint64
 }

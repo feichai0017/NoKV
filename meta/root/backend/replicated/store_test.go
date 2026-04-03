@@ -2,10 +2,12 @@ package replicated
 
 import (
 	"testing"
+	"time"
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
 )
@@ -85,6 +87,42 @@ func TestOpenAcceptsDriverConfig(t *testing.T) {
 	store, err := Open(Config{Driver: drivers[1], MaxRetainedRecords: 3})
 	require.NoError(t, err)
 	require.NotNil(t, store)
+}
+
+func TestReplicatedStoreWaitForTailTracksFollowerAdvance(t *testing.T) {
+	stores, _, leaderID := openNetworkTestCluster(t, 4)
+	followerID := uint64(1)
+	if followerID == leaderID {
+		followerID = 2
+	}
+
+	waitDone := make(chan rootstorage.TailAdvance, 1)
+	waitErr := make(chan error, 1)
+	go func() {
+		advance, err := stores[followerID].WaitForTail(rootstorage.TailToken{}, 5*time.Second)
+		if err != nil {
+			waitErr <- err
+			return
+		}
+		waitDone <- advance
+	}()
+
+	commit, err := stores[leaderID].Append(
+		rootevent.RegionDescriptorPublished(testDescriptor(77, []byte("a"), []byte("z"))),
+	)
+	require.NoError(t, err)
+
+	select {
+	case err := <-waitErr:
+		require.NoError(t, err)
+	case advance := <-waitDone:
+		require.True(t, advance.Token.AdvancedSince(rootstorage.TailToken{}))
+		require.Equal(t, commit.Cursor, advance.Token.Cursor)
+		require.NotEmpty(t, advance.Tail.Records)
+		require.Equal(t, commit.Cursor, advance.Tail.TailCursor(rootstate.Cursor{}))
+	case <-time.After(6 * time.Second):
+		t.Fatal("timed out waiting for replicated tail advance")
+	}
 }
 
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {

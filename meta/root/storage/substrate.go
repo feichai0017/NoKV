@@ -49,6 +49,23 @@ type CommittedTail struct {
 	Records         []CommittedEvent
 }
 
+// TailToken identifies one observed committed-tail view.
+type TailToken struct {
+	Cursor   rootstate.Cursor
+	Revision uint64
+}
+
+// AdvancedSince reports whether the observed tail view changed since prev.
+func (t TailToken) AdvancedSince(prev TailToken) bool {
+	return t.Revision > prev.Revision || rootstate.CursorAfter(t.Cursor, prev.Cursor)
+}
+
+// TailAdvance is one observed committed-tail read paired with its change token.
+type TailAdvance struct {
+	Token TailToken
+	Tail  CommittedTail
+}
+
 // CloneCommittedTail returns a detached committed-stream view.
 func CloneCommittedTail(in CommittedTail) CommittedTail {
 	return CommittedTail{
