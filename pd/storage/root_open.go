@@ -3,6 +3,8 @@ package storage
 import (
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	"time"
 )
 
 type rootBackend interface {
@@ -18,6 +20,10 @@ type refreshableRoot interface {
 type leaderAwareRoot interface {
 	IsLeader() bool
 	LeaderID() uint64
+}
+
+type changeWaitingRoot interface {
+	WaitForChange(after rootstate.Cursor, timeout time.Duration) (rootstate.Cursor, error)
 }
 
 // OpenRootStore opens a PD storage backend backed by the metadata root.
