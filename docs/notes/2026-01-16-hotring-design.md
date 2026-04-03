@@ -1,4 +1,4 @@
-# 2026-01-16 hotring design
+# 2026-01-16 HotRing 设计说明
 
 本文档记录 `hotring` 的原始设计思路。需要注意：当前生产实现已经收口，HotRing 只保留为可选的内部热点检测器和写热点限流工具；文中关于读预取、compaction hint 和 value-log 热冷路由的设想不再代表当前默认实现。
 

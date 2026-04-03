@@ -1,4 +1,4 @@
-# 2026-02-01 compaction and ingest
+# 2026-02-01 Compaction 与 Ingest Buffer 设计
 
 本文档深入解析 NoKV 的 **Compaction（压缩）** 机制与 **Ingest Buffer（导入缓冲）** 的协同设计。这是 NoKV 解决 LSM Tree 经典的“写停顿（Write Stall）”问题的核心武器，也是体现其工业级稳定性的关键设计。
 

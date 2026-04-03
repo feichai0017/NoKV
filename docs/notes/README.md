@@ -1,91 +1,94 @@
-# Notes & Essays
+# 设计笔记与实现记录
 
-This section is the long-form writing side of NoKV.
+这一节是 NoKV 的长文档区域。
 
-The main docs are a reference manual. The notes section is closer to an
-engineering blog: design tradeoffs, implementation lessons, debugging
-narratives, and the reasons behind the architectural boundaries in the code.
+主文档更偏参考手册，`notes` 更像工程记录与技术随笔，主要用来解释：
+
+- 某个边界为什么存在
+- 某次实现为什么要推翻重做
+- 哪些“看起来简单”的方案最后证明是错的
+- 代码库在演进过程中学到了什么
 
 <div class="blog-hero">
   <div class="blog-hero-copy">
-    <span class="masthead-kicker">Engineering Journal</span>
-    <h2>How NoKV is being built</h2>
-    <p>These posts explain why certain boundaries exist, what broke during implementation, what looked like an easy shortcut, and what the codebase learned from it.</p>
+    <span class="masthead-kicker">工程日志</span>
+    <h2>NoKV 是怎么被做出来的</h2>
+    <p>这些文章记录设计取舍、实现教训、调试过程，以及代码中那些边界背后的原因。</p>
   </div>
   <div class="blog-hero-meta">
-    <div class="tag-pill">Design</div>
-    <div class="tag-pill">Implementation</div>
-    <div class="tag-pill">Distributed Systems</div>
-    <div class="tag-pill">Storage Internals</div>
+    <div class="tag-pill">设计</div>
+    <div class="tag-pill">实现</div>
+    <div class="tag-pill">分布式系统</div>
+    <div class="tag-pill">存储内核</div>
   </div>
 </div>
 
-## Featured Posts
+## 推荐阅读
 
 <div class="blog-grid">
   <div class="blog-card">
     <span class="blog-date">2026-03-30</span>
-    <h3><a href="2026-03-30-standalone-to-distributed-bridge.html">Standalone to Distributed Bridge</a></h3>
-    <p>Why NoKV treats standalone and distributed mode as one system, and why migration had to become a protocol instead of a dump/import tool.</p>
+    <h3><a href="2026-03-30-standalone-to-distributed-bridge.html">standalone 到 distributed 的桥接</a></h3>
+    <p>为什么 NoKV 把单机和分布式视为同一套系统，以及为什么迁移必须做成协议而不是 dump/import 工具。</p>
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-03-30</span>
-    <h3><a href="2026-03-30-pd-and-raftadmin-layering.html">PD and RaftAdmin Layering</a></h3>
-    <p>Why control plane and execution plane are deliberately separated, and why PD should not become a writer of local truth.</p>
+    <h3><a href="2026-03-30-pd-and-raftadmin-layering.html">PD 与 RaftAdmin 分层</a></h3>
+    <p>为什么 control plane 和 execution plane 必须分开，以及为什么 PD 不能直接写本地 truth。</p>
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-03-30</span>
-    <h3><a href="2026-03-30-migration-mode-and-snapshot.html">Migration Mode and Snapshot</a></h3>
-    <p>The migration story is really about lifecycle and snapshot semantics, not just adding more CLI commands.</p>
+    <h3><a href="2026-03-30-migration-mode-and-snapshot.html">migration 的 mode 与 snapshot</a></h3>
+    <p>迁移的本体其实是生命周期和快照语义，而不是补几条 CLI 命令。</p>
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-03-30</span>
-    <h3><a href="2026-03-30-distributed-testing-and-failpoints.html">Distributed Testing and Failpoints</a></h3>
-    <p>Why NoKV uses both live integration tests and narrow boundary failpoints, and how to keep failpoint usage disciplined.</p>
+    <h3><a href="2026-03-30-distributed-testing-and-failpoints.html">分布式测试与 failpoint</a></h3>
+    <p>为什么 NoKV 同时使用 live integration 与窄边界 failpoint，以及 failpoint 应该如何克制。</p>
   </div>
 </div>
 
-## What belongs here
+## 这里应该写什么
 
-- design decisions that deserve more narrative than the reference docs
-- debugging writeups with a concrete symptom, failed assumptions, and final fix
-- performance investigations with benchmark setup and code-path analysis
-- refactor notes that explain how package boundaries changed and why
+- 参考文档放不下的设计取舍
+- 有明确症状、错误假设和最终修复的调试记录
+- 带 benchmark 背景和代码路径分析的性能调查
+- 解释包边界为何变化的重构说明
 
-## Writing style
+## 写作风格
 
-Treat each note as a small technical blog post:
+每篇 note 都应该像一篇小型技术博客，但保持工程视角：
 
-1. Start with the concrete problem or design question.
-2. Show the system boundary involved.
-3. Explain the tradeoffs and rejected alternatives.
-4. Include diagrams, code references, and command snippets where useful.
-5. End with what changed in the codebase and what still remains open.
+1. 从具体问题或设计问题开始
+2. 先把系统边界讲清楚
+3. 讲清 tradeoff 和被否决的方案
+4. 需要时放图、代码路径和命令
+5. 最后说明代码里已经改了什么、还有什么没解决
 
-## Suggested post template
+## 建议模板
 
 ```md
-# Title
+# 标题
 
-## Why this matters
+## 为什么这件事重要
 
-## The system boundary
+## 当前系统边界
 
-## What looked easy but was wrong
+## 看起来简单但其实错的路
 
-## The design we chose
+## 我们最终采用的设计
 
-## Code path
+## 关键代码路径
 
-## Diagram
+## 图示
 
-## What this changes
+## 这次改变了什么
 
-## What remains unsolved
+## 还没解决什么
 ```
 
-## Add a new post
+## 新增一篇 note
 
-1. Create `docs/notes/YYYY-MM-DD-short-title.md`.
-2. Add it to `docs/SUMMARY.md`.
-3. Prefer diagrams, code snippets, and explicit file references over generic prose.
+1. 创建 `docs/notes/YYYY-MM-DD-short-title.md`
+2. 把它加到 `docs/SUMMARY.md`
+3. 优先写清楚图、代码路径和明确文件引用，少写空泛描述
