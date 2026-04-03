@@ -84,6 +84,17 @@ func TestRunPDCmdReplicatedRootRequiresWorkdir(t *testing.T) {
 	require.ErrorContains(t, err, "requires -workdir")
 }
 
+func TestRunPDCmdReplicatedRootRequiresThreeNodeCluster(t *testing.T) {
+	var buf bytes.Buffer
+	err := runPDCmd(&buf, []string{
+		"-addr", "127.0.0.1:0",
+		"-workdir", t.TempDir(),
+		"-root-mode", "replicated",
+		"-root-cluster", "1,2",
+	})
+	require.ErrorContains(t, err, "requires exactly 3 root cluster ids")
+}
+
 func TestMainPDCommand(t *testing.T) {
 	origNotify := pdNotifyContext
 	pdNotifyContext = func(parent context.Context, _ ...os.Signal) (context.Context, context.CancelFunc) {

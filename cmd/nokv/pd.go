@@ -99,6 +99,9 @@ func runPDCmd(w io.Writer, args []string) error {
 			if parseErr != nil {
 				return parseErr
 			}
+			if len(clusterIDs) != 3 {
+				return fmt.Errorf("pd replicated root mode requires exactly 3 root cluster ids")
+			}
 			rootStore, err = pdstorage.OpenRootReplicatedStore(workdirPath, *rootNodeID, clusterIDs)
 		}
 		if err != nil {

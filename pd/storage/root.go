@@ -10,6 +10,7 @@ import (
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"fmt"
+	"slices"
 	"sync"
 )
 
@@ -26,9 +27,14 @@ type RootStore struct {
 	snapshot Snapshot
 }
 
+type replicatedRootEntry struct {
+	ids     []uint64
+	cluster *rootreplicated.FixedCluster
+}
+
 var replicatedRootRegistry struct {
 	mu       sync.Mutex
-	clusters map[string]*rootreplicated.FixedCluster
+	clusters map[string]replicatedRootEntry
 }
 
 // OpenRootStore opens a PD storage backend backed by the metadata root.
@@ -95,6 +101,11 @@ func (s *RootStore) Load() (Snapshot, error) {
 func (s *RootStore) Refresh() error {
 	if s == nil {
 		return nil
+	}
+	if refresher, ok := s.root.(interface{ Refresh() error }); ok {
+		if err := refresher.Refresh(); err != nil {
+			return err
+		}
 	}
 	return s.reload()
 }
@@ -263,15 +274,21 @@ func getOrCreateReplicatedCluster(workdir string, clusterIDs []uint64) (*rootrep
 	replicatedRootRegistry.mu.Lock()
 	defer replicatedRootRegistry.mu.Unlock()
 	if replicatedRootRegistry.clusters == nil {
-		replicatedRootRegistry.clusters = make(map[string]*rootreplicated.FixedCluster)
+		replicatedRootRegistry.clusters = make(map[string]replicatedRootEntry)
 	}
-	if cluster, ok := replicatedRootRegistry.clusters[workdir]; ok {
-		return cluster, nil
+	if entry, ok := replicatedRootRegistry.clusters[workdir]; ok {
+		if !slices.Equal(entry.ids, clusterIDs) {
+			return nil, fmt.Errorf("pd/storage: replicated root cluster ids for %q changed from %v to %v", workdir, entry.ids, clusterIDs)
+		}
+		return entry.cluster, nil
 	}
 	cluster, err := rootreplicated.NewFixedCluster(clusterIDs...)
 	if err != nil {
 		return nil, err
 	}
-	replicatedRootRegistry.clusters[workdir] = cluster
+	replicatedRootRegistry.clusters[workdir] = replicatedRootEntry{
+		ids:     slices.Clone(clusterIDs),
+		cluster: cluster,
+	}
 	return cluster, nil
 }
