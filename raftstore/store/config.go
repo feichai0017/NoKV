@@ -72,6 +72,9 @@ type SchedulerStatus struct {
 // SchedulerClient publishes store state to the control plane and returns any
 // scheduling decisions that should be applied locally.
 type SchedulerClient interface {
+	// PublishRegionDescriptor is the heartbeat/compatibility path only. Steady-
+	// state topology truth should use PublishRootEvent with explicit rooted
+	// events instead.
 	PublishRegionDescriptor(context.Context, descriptor.Descriptor)
 	PublishRootEvent(context.Context, rootevent.Event)
 	StoreHeartbeat(context.Context, StoreStats) []Operation
