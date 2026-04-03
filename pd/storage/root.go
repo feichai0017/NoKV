@@ -14,7 +14,11 @@ import (
 // RootStore persists PD truth on top of the metadata root and reconstructs the
 // region catalog by replaying committed root events.
 type RootStore struct {
-	root rootBackend
+	root          rootBackend
+	refresh       func() error
+	waitForChange func(after rootstate.Cursor, timeout time.Duration) (rootstate.Cursor, error)
+	isLeader      func() bool
+	leaderID      func() uint64
 
 	mu       sync.RWMutex
 	snapshot Snapshot
@@ -38,8 +42,8 @@ func (s *RootStore) Refresh() error {
 	if s == nil {
 		return nil
 	}
-	if refresher, ok := s.root.(refreshableRoot); ok {
-		if err := refresher.Refresh(); err != nil {
+	if s.refresh != nil {
+		if err := s.refresh(); err != nil {
 			return err
 		}
 	}
@@ -50,19 +54,18 @@ func (s *RootStore) WaitForChange(after rootstate.Cursor, timeout time.Duration)
 	if s == nil || s.root == nil {
 		return rootstate.Cursor{}, nil
 	}
-	waiter, ok := s.root.(changeWaitingRoot)
-	if !ok {
+	if s.waitForChange == nil {
 		return rootstate.Cursor{}, nil
 	}
-	return waiter.WaitForChange(after, timeout)
+	return s.waitForChange(after, timeout)
 }
 
 func (s *RootStore) IsLeader() bool {
 	if s == nil || s.root == nil {
 		return true
 	}
-	if leader, ok := s.root.(leaderAwareRoot); ok {
-		return leader.IsLeader()
+	if s.isLeader != nil {
+		return s.isLeader()
 	}
 	return true
 }
@@ -71,8 +74,8 @@ func (s *RootStore) LeaderID() uint64 {
 	if s == nil || s.root == nil {
 		return 0
 	}
-	if leader, ok := s.root.(leaderAwareRoot); ok {
-		return leader.LeaderID()
+	if s.leaderID != nil {
+		return s.leaderID()
 	}
 	return 0
 }
