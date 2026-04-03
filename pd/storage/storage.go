@@ -56,6 +56,11 @@ type Store interface {
 	Sink
 }
 
+// Refresher reloads the reconstructed PD snapshot from the underlying root.
+type Refresher interface {
+	Refresh() error
+}
+
 // DescriptorCatalog accepts region descriptor updates during PD bootstrap.
 type DescriptorCatalog interface {
 	PublishRegionDescriptor(desc descriptor.Descriptor) error

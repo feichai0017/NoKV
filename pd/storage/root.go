@@ -4,10 +4,12 @@ import (
 	"bytes"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
+	rootreplicated "github.com/feichai0017/NoKV/meta/root/backend/replicated"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"fmt"
 	"sync"
 )
 
@@ -22,6 +24,11 @@ type RootStore struct {
 
 	mu       sync.RWMutex
 	snapshot Snapshot
+}
+
+var replicatedRootRegistry struct {
+	mu       sync.Mutex
+	clusters map[string]*rootreplicated.FixedCluster
 }
 
 // OpenRootStore opens a PD storage backend backed by the metadata root.
@@ -41,6 +48,30 @@ func OpenRootStore(root interface {
 // root files in workdir.
 func OpenRootLocalStore(workdir string) (*RootStore, error) {
 	root, err := rootlocal.Open(workdir, nil)
+	if err != nil {
+		return nil, err
+	}
+	return OpenRootStore(root)
+}
+
+// OpenRootReplicatedStore opens one PD storage backend backed by the
+// experimental in-process fixed-cluster replicated metadata root.
+func OpenRootReplicatedStore(workdir string, nodeID uint64, clusterIDs []uint64) (*RootStore, error) {
+	if workdir == "" {
+		return nil, fmt.Errorf("pd/storage: workdir is required for replicated root mode")
+	}
+	if nodeID == 0 {
+		return nil, fmt.Errorf("pd/storage: replicated root node id must be > 0")
+	}
+	cluster, err := getOrCreateReplicatedCluster(workdir, clusterIDs)
+	if err != nil {
+		return nil, err
+	}
+	driver, err := cluster.Driver(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	root, err := rootreplicated.Open(rootreplicated.Config{Driver: driver})
 	if err != nil {
 		return nil, err
 	}
@@ -226,4 +257,21 @@ func descriptorsEqual(a, b descriptor.Descriptor) bool {
 		}
 	}
 	return true
+}
+
+func getOrCreateReplicatedCluster(workdir string, clusterIDs []uint64) (*rootreplicated.FixedCluster, error) {
+	replicatedRootRegistry.mu.Lock()
+	defer replicatedRootRegistry.mu.Unlock()
+	if replicatedRootRegistry.clusters == nil {
+		replicatedRootRegistry.clusters = make(map[string]*rootreplicated.FixedCluster)
+	}
+	if cluster, ok := replicatedRootRegistry.clusters[workdir]; ok {
+		return cluster, nil
+	}
+	cluster, err := rootreplicated.NewFixedCluster(clusterIDs...)
+	if err != nil {
+		return nil, err
+	}
+	replicatedRootRegistry.clusters[workdir] = cluster
+	return cluster, nil
 }
