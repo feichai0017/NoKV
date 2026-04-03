@@ -26,17 +26,15 @@ func TestStoreAppendReadAndReopen(t *testing.T) {
 		rootpkg.StoreJoined(1, "s1"),
 		rootpkg.RegionDescriptorPublished(testDescriptor(10, []byte("a"), []byte("z"))),
 		rootpkg.RegionSplitCommitted(10, []byte("m"), testDescriptor(11, []byte("a"), []byte("m")), testDescriptor(12, []byte("m"), []byte("z"))),
-		rootpkg.PlacementPolicyChanged("default", 7),
 	)
 	require.NoError(t, err)
-	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 4}, commit.Cursor)
+	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 3}, commit.Cursor)
 	require.Equal(t, uint64(1), commit.State.MembershipEpoch)
 	require.Equal(t, uint64(2), commit.State.ClusterEpoch)
-	require.Equal(t, uint64(7), commit.State.PolicyVersion)
 
 	events, tail, err := store.ReadSince(rootpkg.Cursor{})
 	require.NoError(t, err)
-	require.Len(t, events, 4)
+	require.Len(t, events, 3)
 	require.Equal(t, commit.Cursor, tail)
 	require.Equal(t, rootpkg.EventKindStoreJoined, events[0].Kind)
 	require.Equal(t, uint64(1), events[0].StoreMembership.StoreID)
@@ -45,7 +43,6 @@ func TestStoreAppendReadAndReopen(t *testing.T) {
 	require.Equal(t, []byte("m"), events[2].RangeSplit.SplitKey)
 	require.Equal(t, uint64(11), events[2].RangeSplit.Left.RegionID)
 	require.Equal(t, uint64(12), events[2].RangeSplit.Right.RegionID)
-	require.Equal(t, uint64(7), events[3].PlacementPolicy.Version)
 
 	reopened, err := Open(dir, nil)
 	require.NoError(t, err)
@@ -128,7 +125,6 @@ func TestStoreLoadsLegacyRootStateCheckpoint(t *testing.T) {
 	payload, err := proto.Marshal(&metapb.RootState{
 		ClusterEpoch:    7,
 		MembershipEpoch: 3,
-		PolicyVersion:   9,
 		LastCommitted:   &metapb.RootCursor{Term: 1, Index: 4},
 		IdFence:         11,
 		TsoFence:        22,
@@ -142,7 +138,6 @@ func TestStoreLoadsLegacyRootStateCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(7), state.ClusterEpoch)
 	require.Equal(t, uint64(3), state.MembershipEpoch)
-	require.Equal(t, uint64(9), state.PolicyVersion)
 	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 4}, state.LastCommitted)
 	require.Equal(t, uint64(11), state.IDFence)
 	require.Equal(t, uint64(22), state.TSOFence)
