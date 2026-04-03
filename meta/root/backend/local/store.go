@@ -10,15 +10,12 @@ import (
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	rootfile "github.com/feichai0017/NoKV/meta/root/storage/file"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/vfs"
 )
 
-const (
-	CheckpointFileName = "metadata-root-checkpoint.pb"
-	LogFileName        = "metadata-root.log"
-	maxRetainedRecords = 64
-)
+const maxRetainedRecords = 64
 
 // Store is a file-backed local metadata-root implementation.
 //
@@ -48,8 +45,8 @@ func Open(workdir string, fs vfs.FS) (*Store, error) {
 	if err := fs.MkdirAll(workdir, 0o755); err != nil {
 		return nil, err
 	}
-	checkpt := newFileCheckpointStore(fs, workdir)
-	log := newFileEventLog(fs, workdir)
+	checkpt := rootfile.NewCheckpointStore(fs, workdir)
+	log := rootfile.NewEventLog(fs, workdir)
 	bootstrap, err := rootmaterialize.LoadBootstrap(checkpt, log)
 	if err != nil {
 		return nil, err
