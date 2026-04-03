@@ -27,11 +27,11 @@ func previousCursor(in rootpkg.Cursor) rootpkg.Cursor {
 	return rootpkg.Cursor{Term: in.Term, Index: in.Index - 1}
 }
 
-func retainedFloor(records []record, fallback rootpkg.Cursor) rootpkg.Cursor {
+func retainedFloor(records []rootpkg.CommittedEvent, fallback rootpkg.Cursor) rootpkg.Cursor {
 	if len(records) == 0 {
 		return fallback
 	}
-	return previousCursor(records[0].cursor)
+	return previousCursor(records[0].Cursor)
 }
 
 func cloneState(in rootpkg.State) rootpkg.State { return in }

@@ -13,9 +13,18 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func loadCheckpoint(fs vfs.FS, workdir string) (rootpkg.Snapshot, int64, error) {
-	path := filepath.Join(workdir, CheckpointFileName)
-	data, err := fs.ReadFile(path)
+type fileCheckpointStore struct {
+	fs      vfs.FS
+	workdir string
+}
+
+func newFileCheckpointStore(fs vfs.FS, workdir string) rootpkg.CheckpointStore {
+	return fileCheckpointStore{fs: fs, workdir: workdir}
+}
+
+func (s fileCheckpointStore) Load() (rootpkg.Snapshot, int64, error) {
+	path := filepath.Join(s.workdir, CheckpointFileName)
+	data, err := s.fs.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return rootpkg.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, 0, nil
@@ -45,46 +54,35 @@ func loadCheckpoint(fs vfs.FS, workdir string) (rootpkg.Snapshot, int64, error) 
 	return snapshot, int64(logOffset), nil
 }
 
-func persistCheckpoint(fs vfs.FS, workdir string, snapshot rootpkg.Snapshot, logOffset uint64) error {
+func (s fileCheckpointStore) Save(snapshot rootpkg.Snapshot, logOffset uint64) error {
 	payload, err := proto.Marshal(metacodec.RootSnapshotToProto(snapshot, logOffset))
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(workdir, CheckpointFileName)
+	path := filepath.Join(s.workdir, CheckpointFileName)
 	tmp := path + ".tmp"
-	f, err := fs.OpenFileHandle(tmp, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
+	f, err := s.fs.OpenFileHandle(tmp, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}
 	if err := writeAll(f, payload); err != nil {
 		_ = f.Close()
-		_ = fs.Remove(tmp)
+		_ = s.fs.Remove(tmp)
 		return err
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
-		_ = fs.Remove(tmp)
+		_ = s.fs.Remove(tmp)
 		return err
 	}
 	if err := f.Close(); err != nil {
-		_ = fs.Remove(tmp)
+		_ = s.fs.Remove(tmp)
 		return err
 	}
-	if err := fs.Rename(tmp, path); err != nil {
+	if err := s.fs.Rename(tmp, path); err != nil {
 		return err
 	}
-	return vfs.SyncDir(fs, workdir)
-}
-
-func currentLogSize(fs vfs.FS, workdir string) (int64, error) {
-	info, err := fs.Stat(filepath.Join(workdir, LogFileName))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return 0, nil
-		}
-		return 0, err
-	}
-	return info.Size(), nil
+	return vfs.SyncDir(s.fs, s.workdir)
 }
 
 func fileSize(f vfs.File) (int64, error) {
