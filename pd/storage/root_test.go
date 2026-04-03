@@ -55,7 +55,7 @@ func TestRootStoreDeleteRegion(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, store.PublishRegionDescriptor(testDescriptor(7, []byte("x"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)))
-	require.NoError(t, store.TombstoneRegion(7))
+	require.NoError(t, store.AppendRootEvent(rootevent.RegionTombstoned(7)))
 
 	snapshot, err := store.Load()
 	require.NoError(t, err)

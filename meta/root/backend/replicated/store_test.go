@@ -118,8 +118,8 @@ func TestReplicatedStoreWaitForTailTracksFollowerAdvance(t *testing.T) {
 	case advance := <-waitDone:
 		require.True(t, advance.Token.AdvancedSince(rootstorage.TailToken{}))
 		require.Equal(t, commit.Cursor, advance.Token.Cursor)
-		require.NotEmpty(t, advance.Tail.Records)
-		require.Equal(t, commit.Cursor, advance.Tail.TailCursor(rootstate.Cursor{}))
+		require.NotEmpty(t, advance.Observed.Tail.Records)
+		require.Equal(t, commit.Cursor, advance.LastCursor())
 	case <-time.After(6 * time.Second):
 		t.Fatal("timed out waiting for replicated tail advance")
 	}

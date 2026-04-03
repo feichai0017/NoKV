@@ -62,8 +62,8 @@ func (t TailToken) AdvancedSince(prev TailToken) bool {
 
 // TailAdvance is one observed committed-tail read paired with its change token.
 type TailAdvance struct {
-	Token TailToken
-	Tail  CommittedTail
+	Token    TailToken
+	Observed ObservedCommitted
 }
 
 // ObservedCommitted is one compact checkpoint observed together with one
@@ -120,6 +120,17 @@ func (o ObservedCommitted) LastCursor() rootstate.Cursor {
 // observed view.
 func (o ObservedCommitted) RetainFrom() rootstate.Cursor {
 	return o.Tail.RetainFrom(o.Checkpoint.Snapshot.State.LastCommitted)
+}
+
+// LastCursor returns the last committed cursor visible in the observed tail.
+func (a TailAdvance) LastCursor() rootstate.Cursor {
+	return a.Observed.LastCursor()
+}
+
+// FellBehind reports whether the observed retained tail had to fall back past
+// the requested offset due to compaction.
+func (a TailAdvance) FellBehind() bool {
+	return a.Observed.Tail.FellBehind()
 }
 
 // ObserveCommitted loads one compact checkpoint together with one retained
