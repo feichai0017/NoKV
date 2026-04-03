@@ -66,6 +66,13 @@ type TailAdvance struct {
 	Tail  CommittedTail
 }
 
+// ObservedCommitted is one compact checkpoint observed together with one
+// retained committed tail view.
+type ObservedCommitted struct {
+	Checkpoint Checkpoint
+	Tail       CommittedTail
+}
+
 // CloneCommittedTail returns a detached committed-stream view.
 func CloneCommittedTail(in CommittedTail) CommittedTail {
 	return CommittedTail{
@@ -102,6 +109,34 @@ func (s CommittedTail) TailCursor(fallback rootstate.Cursor) rootstate.Cursor {
 		return fallback
 	}
 	return s.Records[len(s.Records)-1].Cursor
+}
+
+// LastCursor returns the last committed cursor visible in the observed view.
+func (o ObservedCommitted) LastCursor() rootstate.Cursor {
+	return o.Tail.TailCursor(o.Checkpoint.Snapshot.State.LastCommitted)
+}
+
+// RetainFrom returns the cursor immediately before the retained tail in the
+// observed view.
+func (o ObservedCommitted) RetainFrom() rootstate.Cursor {
+	return o.Tail.RetainFrom(o.Checkpoint.Snapshot.State.LastCommitted)
+}
+
+// ObserveCommitted loads one compact checkpoint together with one retained
+// committed tail view starting at requestedOffset.
+func ObserveCommitted(storage Substrate, requestedOffset int64) (ObservedCommitted, error) {
+	checkpoint, err := storage.LoadCheckpoint()
+	if err != nil {
+		return ObservedCommitted{}, err
+	}
+	tail, err := storage.ReadCommitted(requestedOffset)
+	if err != nil {
+		return ObservedCommitted{}, err
+	}
+	return ObservedCommitted{
+		Checkpoint: checkpoint,
+		Tail:       tail,
+	}, nil
 }
 
 // Substrate is the rooted metadata virtual-log surface consumed by root
