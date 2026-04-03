@@ -37,6 +37,7 @@ message StoreHeartbeatResponse {
 
 message RegionHeartbeatRequest {
   nokv.meta.v1.RegionDescriptor region_descriptor = 1;
+  uint64 expected_cluster_epoch = 2;
 }
 
 message RegionHeartbeatResponse {
@@ -45,6 +46,7 @@ message RegionHeartbeatResponse {
 
 message PublishRootEventRequest {
   nokv.meta.v1.RootEvent event = 1;
+  uint64 expected_cluster_epoch = 2;
 }
 
 message PublishRootEventResponse {
@@ -53,6 +55,7 @@ message PublishRootEventResponse {
 
 message RemoveRegionRequest {
   uint64 region_id = 1;
+  uint64 expected_cluster_epoch = 2;
 }
 
 message RemoveRegionResponse {
