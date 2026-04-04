@@ -57,20 +57,7 @@ func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 	if s.sched == nil || len(ev.ConfChange.Changes) != 1 {
 		return nil
 	}
-	desc := metacodec.DescriptorFromLocalRegionMeta(meta, 0)
-	change := ev.ConfChange.Changes[0]
-	switch change.Type {
-	case raftpb.ConfChangeAddNode, raftpb.ConfChangeAddLearnerNode:
-		event := rootevent.PeerAdded(meta.ID, change.NodeID, change.NodeID, desc)
-		if peers, err := decodeConfChangeContext(ev.ConfChange.Context); err == nil && len(peers) > 0 {
-			event = rootevent.PeerAdded(meta.ID, peers[0].StoreID, peers[0].PeerID, desc)
-		}
-		s.enqueueAppliedRootEvent(meta.ID, event)
-	case raftpb.ConfChangeRemoveNode:
-		event := rootevent.PeerRemoved(meta.ID, change.NodeID, change.NodeID, desc)
-		if peers, err := decodeConfChangeContext(ev.ConfChange.Context); err == nil && len(peers) > 0 {
-			event = rootevent.PeerRemoved(meta.ID, peers[0].StoreID, peers[0].PeerID, desc)
-		}
+	if event, ok := appliedPeerChangeEvent(meta, ev.ConfChange); ok {
 		s.enqueueAppliedRootEvent(meta.ID, event)
 	}
 	return nil
@@ -230,6 +217,26 @@ func peerIndexByID(peers []metaregion.Peer, peerID uint64) int {
 		}
 	}
 	return -1
+}
+
+func appliedPeerChangeEvent(meta localmeta.RegionMeta, cc raftpb.ConfChangeV2) (rootevent.Event, bool) {
+	if meta.ID == 0 || len(cc.Changes) != 1 {
+		return rootevent.Event{}, false
+	}
+	desc := metacodec.DescriptorFromLocalRegionMeta(meta, 0)
+	change := cc.Changes[0]
+	storeID, peerID := change.NodeID, change.NodeID
+	if peers, err := decodeConfChangeContext(cc.Context); err == nil && len(peers) > 0 {
+		storeID, peerID = peers[0].StoreID, peers[0].PeerID
+	}
+	switch change.Type {
+	case raftpb.ConfChangeAddNode, raftpb.ConfChangeAddLearnerNode:
+		return rootevent.PeerAdded(meta.ID, storeID, peerID, desc), true
+	case raftpb.ConfChangeRemoveNode:
+		return rootevent.PeerRemoved(meta.ID, storeID, peerID, desc), true
+	default:
+		return rootevent.Event{}, false
+	}
 }
 
 func (s *Store) planPeerChange(regionID uint64, cc raftpb.ConfChangeV2) (peerChangePlan, error) {
