@@ -153,9 +153,6 @@ func (s *Store) planSplit(parentID uint64, childMeta localmeta.RegionMeta, split
 	if parentID == 0 || childMeta.ID == 0 {
 		return transitionPlan{}, fmt.Errorf("raftstore: invalid region identifiers")
 	}
-	if _, err := s.leaderPeer(parentID); err != nil {
-		return transitionPlan{}, err
-	}
 	if splitAlreadyAppliedLocal(s, parentID, childMeta, splitKey) {
 		return transitionPlan{RegionID: parentID, Noop: true}, nil
 	}
@@ -191,9 +188,6 @@ func (s *Store) planMerge(targetRegionID, sourceRegionID uint64) (transitionPlan
 	}
 	if targetRegionID == 0 || sourceRegionID == 0 {
 		return transitionPlan{}, fmt.Errorf("raftstore: invalid region identifiers")
-	}
-	if _, err := s.leaderPeer(targetRegionID); err != nil {
-		return transitionPlan{}, err
 	}
 	transition, err := s.buildMergeTransition(targetRegionID, sourceRegionID)
 	if err != nil {
@@ -276,21 +270,25 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta localmeta.RegionMeta
 	newParent := transition.parent
 	childMeta = transition.child
 	var childPeer *peer.Peer
-	if err := s.applyTerminalTransition(committedSplitEvent(transition), func() error {
-		if err := s.applyRegionMetaSilent(newParent); err != nil {
-			return err
-		}
-		cfg, bootstrapPeers, err := s.buildChildPeerConfig(childMeta)
-		if err != nil {
-			_ = s.applyRegionMetaSilent(originalParent)
-			return err
-		}
-		childPeer, err = s.startPeer(cfg, bootstrapPeers, false)
-		if err != nil {
-			_ = s.applyRegionMetaSilent(originalParent)
-			return err
-		}
-		return nil
+	if err := s.applyTerminalTransition(terminalTransition{
+		Event:  committedSplitEvent(transition),
+		Action: "split",
+		Apply: func() error {
+			if err := s.applyRegionMetaSilent(newParent); err != nil {
+				return err
+			}
+			cfg, bootstrapPeers, err := s.buildChildPeerConfig(childMeta)
+			if err != nil {
+				_ = s.applyRegionMetaSilent(originalParent)
+				return err
+			}
+			childPeer, err = s.startPeer(cfg, bootstrapPeers, false)
+			if err != nil {
+				_ = s.applyRegionMetaSilent(originalParent)
+				return err
+			}
+			return nil
+		},
 	}); err != nil {
 		return nil, err
 	}
@@ -386,14 +384,18 @@ func (s *Store) handleMergeCommand(merge *raftcmdpb.MergeCommand) error {
 		return nil
 	}
 	updated := transition.target
-	return s.applyTerminalTransition(committedMergeEvent(transition), func() error {
-		if err := s.applyRegionMetaSilent(updated); err != nil {
-			return err
-		}
-		if peer := s.regionMgr().peer(sourceMeta.ID); peer != nil {
-			s.stopPeer(peer.ID(), false)
-		}
-		return s.applyRegionRemovalSilent(sourceMeta.ID)
+	return s.applyTerminalTransition(terminalTransition{
+		Event:  committedMergeEvent(transition),
+		Action: "merge",
+		Apply: func() error {
+			if err := s.applyRegionMetaSilent(updated); err != nil {
+				return err
+			}
+			if peer := s.regionMgr().peer(sourceMeta.ID); peer != nil {
+				s.stopPeer(peer.ID(), false)
+			}
+			return s.applyRegionRemovalSilent(sourceMeta.ID)
+		},
 	})
 }
 

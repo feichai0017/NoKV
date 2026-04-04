@@ -70,6 +70,13 @@ func TestEvaluatePeerChangeLifecycle(t *testing.T) {
 	decision, err = rootstate.EvaluatePeerChangeLifecycle(nil, target, true, planned)
 	require.NoError(t, err)
 	require.Equal(t, rootstate.PeerChangeLifecycleSkip, decision)
+
+	newer := target.Clone()
+	newer.RootEpoch = target.RootEpoch + 1
+	newer.EnsureHash()
+	decision, err = rootstate.EvaluatePeerChangeLifecycle(nil, newer, true, applied)
+	require.Error(t, err)
+	require.Equal(t, rootstate.PeerChangeLifecycleSkip, decision)
 }
 
 func TestObservePeerChangeCompletion(t *testing.T) {
@@ -106,6 +113,7 @@ func TestObservePeerChangeLifecycle(t *testing.T) {
 	outcome := rootstate.ObservePeerChangeLifecycle(nil, descriptor.Descriptor{}, false, planned)
 	require.Equal(t, rootstate.PeerChangeLifecycleApply, outcome.Decision)
 	require.True(t, outcome.Completion.Open())
+	require.Equal(t, rootstate.TransitionStatusOpen, outcome.Status)
 	require.False(t, outcome.Retryable())
 
 	change, ok := rootstate.PendingPeerChangeFromEvent(planned)
@@ -117,11 +125,24 @@ func TestObservePeerChangeLifecycle(t *testing.T) {
 		conflicting,
 	)
 	require.Equal(t, rootstate.PeerChangeLifecycleApply, outcome.Decision)
+	require.Equal(t, rootstate.TransitionStatusConflict, outcome.Status)
 	require.True(t, outcome.Retryable())
 
 	outcome = rootstate.ObservePeerChangeLifecycle(nil, target, true, applied)
 	require.Equal(t, rootstate.PeerChangeLifecycleSkip, outcome.Decision)
 	require.True(t, outcome.Completion.Completed())
+	require.Equal(t, rootstate.TransitionStatusCompleted, outcome.Status)
+
+	newer := target.Clone()
+	newer.RootEpoch = target.RootEpoch + 1
+	newer.EnsureHash()
+	outcome = rootstate.ObservePeerChangeLifecycle(nil, newer, true, planned)
+	require.Equal(t, rootstate.PeerChangeLifecycleSkip, outcome.Decision)
+	require.Equal(t, rootstate.TransitionStatusSuperseded, outcome.Status)
+
+	outcome = rootstate.ObservePeerChangeLifecycle(nil, newer, true, applied)
+	require.Equal(t, rootstate.PeerChangeLifecycleSkip, outcome.Decision)
+	require.Equal(t, rootstate.TransitionStatusAborted, outcome.Status)
 }
 
 func TestPendingRangeChangeMatchesEvent(t *testing.T) {
@@ -258,6 +279,7 @@ func TestObserveRangeChangeLifecycle(t *testing.T) {
 	outcome := rootstate.ObserveRangeChangeLifecycle(nil, nil, splitPlanned)
 	require.Equal(t, rootstate.RangeChangeLifecycleApply, outcome.Decision)
 	require.True(t, outcome.Completion.Open())
+	require.Equal(t, rootstate.TransitionStatusOpen, outcome.Status)
 	require.False(t, outcome.Retryable())
 
 	key, pending, ok := rootstate.PendingRangeChangeFromEvent(splitPlanned)
@@ -272,6 +294,7 @@ func TestObserveRangeChangeLifecycle(t *testing.T) {
 		conflicting,
 	)
 	require.Equal(t, rootstate.RangeChangeLifecycleApply, outcome.Decision)
+	require.Equal(t, rootstate.TransitionStatusConflict, outcome.Status)
 	require.True(t, outcome.Retryable())
 
 	outcome = rootstate.ObserveRangeChangeLifecycle(
@@ -284,6 +307,43 @@ func TestObserveRangeChangeLifecycle(t *testing.T) {
 	)
 	require.Equal(t, rootstate.RangeChangeLifecycleSkip, outcome.Decision)
 	require.True(t, outcome.Completion.Completed())
+	require.Equal(t, rootstate.TransitionStatusCompleted, outcome.Status)
+
+	newerLeft := left.Clone()
+	newerLeft.RootEpoch++
+	newerLeft.EndKey = []byte("l")
+	newerLeft.EnsureHash()
+	outcome = rootstate.ObserveRangeChangeLifecycle(
+		nil,
+		map[uint64]descriptor.Descriptor{newerLeft.RegionID: newerLeft},
+		splitPlanned,
+	)
+	require.Equal(t, rootstate.RangeChangeLifecycleSkip, outcome.Decision)
+	require.Equal(t, rootstate.TransitionStatusSuperseded, outcome.Status)
+
+	outcome = rootstate.ObserveRangeChangeLifecycle(
+		nil,
+		map[uint64]descriptor.Descriptor{newerLeft.RegionID: newerLeft},
+		splitCommitted,
+	)
+	require.Equal(t, rootstate.RangeChangeLifecycleSkip, outcome.Decision)
+	require.Equal(t, rootstate.TransitionStatusAborted, outcome.Status)
+}
+
+func TestObserveRootEventLifecycle(t *testing.T) {
+	target := testDescriptor(80, []byte("a"), []byte("z"))
+	planned := rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)
+	change, ok := rootstate.PendingPeerChangeFromEvent(planned)
+	require.True(t, ok)
+
+	lifecycle := rootstate.ObserveRootEventLifecycle(rootstate.Snapshot{
+		Descriptors:        map[uint64]descriptor.Descriptor{target.RegionID: target},
+		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{target.RegionID: change},
+	}, planned)
+	require.Equal(t, rootstate.TransitionKindPeerChange, lifecycle.Kind)
+	require.Equal(t, target.RegionID, lifecycle.Key)
+	require.Equal(t, rootstate.TransitionStatusPending, lifecycle.Status)
+	require.Equal(t, rootstate.RootEventLifecycleSkip, lifecycle.Decision)
 }
 
 func TestEvaluateRootEventLifecycle(t *testing.T) {

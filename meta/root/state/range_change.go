@@ -33,6 +33,9 @@ type RangeChangeCompletion struct {
 type RangeChangeLifecycle struct {
 	Decision   RangeChangeLifecycleDecision
 	Completion RangeChangeCompletion
+	Status     TransitionStatus
+	RetryClass TransitionRetryClass
+	Reason     TransitionReason
 	Conflict   bool
 }
 
@@ -120,7 +123,46 @@ func (c RangeChangeCompletion) NeedsEpochAdvance(planned bool) bool {
 }
 
 func (l RangeChangeLifecycle) Retryable() bool {
-	return l.Conflict
+	return l.RetryClass != TransitionRetryNone
+}
+
+func rangeChangeSuperseded(descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) bool {
+	switch event.Kind {
+	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionSplitCommitted:
+		if event.RangeSplit == nil {
+			return false
+		}
+		left := event.RangeSplit.Left
+		right := event.RangeSplit.Right
+		targetEpoch := left.RootEpoch
+		if right.RootEpoch > targetEpoch {
+			targetEpoch = right.RootEpoch
+		}
+		if targetEpoch == 0 {
+			return false
+		}
+		if current, ok := descriptors[event.RangeSplit.ParentRegionID]; ok && current.RootEpoch > targetEpoch {
+			return true
+		}
+		if current, ok := descriptors[left.RegionID]; ok && !current.Equal(left) && current.RootEpoch > left.RootEpoch {
+			return true
+		}
+		if current, ok := descriptors[right.RegionID]; ok && !current.Equal(right) && current.RootEpoch > right.RootEpoch {
+			return true
+		}
+	case rootevent.KindRegionMergePlanned, rootevent.KindRegionMerged:
+		if event.RangeMerge == nil {
+			return false
+		}
+		target := event.RangeMerge.Merged
+		if target.RootEpoch == 0 {
+			return false
+		}
+		if current, ok := descriptors[target.RegionID]; ok && !current.Equal(target) && current.RootEpoch > target.RootEpoch {
+			return true
+		}
+	}
+	return false
 }
 
 func ObserveRangeChangeCompletion(pendingRangeChanges map[uint64]PendingRangeChange, descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) RangeChangeCompletion {
@@ -150,10 +192,15 @@ func ObserveRangeChangeCompletion(pendingRangeChanges map[uint64]PendingRangeCha
 func ObserveRangeChangeLifecycle(pendingRangeChanges map[uint64]PendingRangeChange, descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) RangeChangeLifecycle {
 	key, _, ok := PendingRangeChangeFromEvent(event)
 	if !ok {
-		return RangeChangeLifecycle{Decision: RangeChangeLifecycleApply}
+		return RangeChangeLifecycle{
+			Decision: RangeChangeLifecycleApply,
+			Status:   TransitionStatusOpen,
+			Reason:   TransitionReasonOpenApply,
+		}
 	}
 	completion := ObserveRangeChangeCompletion(pendingRangeChanges, descriptors, event)
 	_, exists := pendingRangeChanges[key]
+	superseded := rangeChangeSuperseded(descriptors, event)
 	switch event.Kind {
 	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionMergePlanned:
 		switch {
@@ -161,17 +208,31 @@ func ObserveRangeChangeLifecycle(pendingRangeChanges map[uint64]PendingRangeChan
 			return RangeChangeLifecycle{
 				Decision:   RangeChangeLifecycleSkip,
 				Completion: completion,
+				Status:     rangeCompletionStatus(completion),
+				Reason:     rangeCompletionReason(completion),
+			}
+		case superseded:
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleSkip,
+				Completion: completion,
+				Status:     TransitionStatusSuperseded,
+				Reason:     TransitionReasonSupersededTarget,
 			}
 		default:
 			if !exists {
 				return RangeChangeLifecycle{
 					Decision:   RangeChangeLifecycleApply,
 					Completion: completion,
+					Status:     TransitionStatusOpen,
+					Reason:     TransitionReasonOpenApply,
 				}
 			}
 			return RangeChangeLifecycle{
 				Decision:   RangeChangeLifecycleApply,
 				Completion: completion,
+				Status:     TransitionStatusConflict,
+				RetryClass: TransitionRetryConflict,
+				Reason:     TransitionReasonConflictingPending,
 				Conflict:   true,
 			}
 		}
@@ -181,29 +242,47 @@ func ObserveRangeChangeLifecycle(pendingRangeChanges map[uint64]PendingRangeChan
 			return RangeChangeLifecycle{
 				Decision:   RangeChangeLifecycleApply,
 				Completion: completion,
+				Status:     TransitionStatusPending,
+				Reason:     TransitionReasonMatchingPending,
 			}
 		case completion.Completed():
 			return RangeChangeLifecycle{
 				Decision:   RangeChangeLifecycleSkip,
 				Completion: completion,
+				Status:     TransitionStatusCompleted,
+				Reason:     TransitionReasonAlreadyCompleted,
+			}
+		case superseded:
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleSkip,
+				Completion: completion,
+				Status:     TransitionStatusAborted,
+				Reason:     TransitionReasonAbortedApply,
 			}
 		default:
 			if exists {
 				return RangeChangeLifecycle{
 					Decision:   RangeChangeLifecycleApply,
 					Completion: completion,
+					Status:     TransitionStatusConflict,
+					RetryClass: TransitionRetryConflict,
+					Reason:     TransitionReasonConflictingPending,
 					Conflict:   true,
 				}
 			}
 			return RangeChangeLifecycle{
 				Decision:   RangeChangeLifecycleApply,
 				Completion: completion,
+				Status:     TransitionStatusOpen,
+				Reason:     TransitionReasonOpenApply,
 			}
 		}
 	}
 	return RangeChangeLifecycle{
 		Decision:   RangeChangeLifecycleApply,
 		Completion: completion,
+		Status:     TransitionStatusOpen,
+		Reason:     TransitionReasonOpenApply,
 	}
 }
 
@@ -214,6 +293,9 @@ func EvaluateRangeChangeLifecycle(pendingRangeChanges map[uint64]PendingRangeCha
 	}
 	outcome := ObserveRangeChangeLifecycle(pendingRangeChanges, descriptors, event)
 	if !outcome.Conflict {
+		if outcome.Status == TransitionStatusAborted {
+			return outcome.Decision, fmt.Errorf("range change target for region %d was superseded before apply", key)
+		}
 		return outcome.Decision, nil
 	}
 	switch event.Kind {
@@ -223,6 +305,28 @@ func EvaluateRangeChangeLifecycle(pendingRangeChanges map[uint64]PendingRangeCha
 		return outcome.Decision, fmt.Errorf("range change apply does not match pending target for region %d", key)
 	default:
 		return outcome.Decision, nil
+	}
+}
+
+func rangeCompletionStatus(completion RangeChangeCompletion) TransitionStatus {
+	switch completion.State {
+	case RangeChangeCompletionPending:
+		return TransitionStatusPending
+	case RangeChangeCompletionCompleted:
+		return TransitionStatusCompleted
+	default:
+		return TransitionStatusOpen
+	}
+}
+
+func rangeCompletionReason(completion RangeChangeCompletion) TransitionReason {
+	switch completion.State {
+	case RangeChangeCompletionPending:
+		return TransitionReasonMatchingPending
+	case RangeChangeCompletionCompleted:
+		return TransitionReasonAlreadyCompleted
+	default:
+		return TransitionReasonOpenApply
 	}
 }
 

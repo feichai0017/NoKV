@@ -31,6 +31,9 @@ type PeerChangeCompletion struct {
 type PeerChangeLifecycle struct {
 	Decision   PeerChangeLifecycleDecision
 	Completion PeerChangeCompletion
+	Status     TransitionStatus
+	RetryClass TransitionRetryClass
+	Reason     TransitionReason
 	Conflict   bool
 }
 
@@ -82,7 +85,18 @@ func (c PeerChangeCompletion) Completed() bool {
 }
 
 func (l PeerChangeLifecycle) Retryable() bool {
-	return l.Conflict
+	return l.RetryClass != TransitionRetryNone
+}
+
+func peerChangeSuperseded(current descriptor.Descriptor, hasCurrent bool, event rootevent.Event) bool {
+	if event.PeerChange == nil || !hasCurrent {
+		return false
+	}
+	target := event.PeerChange.Region
+	if current.Equal(target) {
+		return false
+	}
+	return target.RootEpoch != 0 && current.RootEpoch > target.RootEpoch
 }
 
 func ObservePeerChangeCompletion(pendingPeerChanges map[uint64]PendingPeerChange, current descriptor.Descriptor, hasCurrent bool, event rootevent.Event) PeerChangeCompletion {
@@ -110,10 +124,15 @@ func ObservePeerChangeCompletion(pendingPeerChanges map[uint64]PendingPeerChange
 
 func ObservePeerChangeLifecycle(pendingPeerChanges map[uint64]PendingPeerChange, current descriptor.Descriptor, hasCurrent bool, event rootevent.Event) PeerChangeLifecycle {
 	if event.PeerChange == nil {
-		return PeerChangeLifecycle{Decision: PeerChangeLifecycleApply}
+		return PeerChangeLifecycle{
+			Decision: PeerChangeLifecycleApply,
+			Status:   TransitionStatusOpen,
+			Reason:   TransitionReasonOpenApply,
+		}
 	}
 	completion := ObservePeerChangeCompletion(pendingPeerChanges, current, hasCurrent, event)
 	_, pending := pendingPeerChanges[event.PeerChange.RegionID]
+	superseded := peerChangeSuperseded(current, hasCurrent, event)
 	switch event.Kind {
 	case rootevent.KindPeerAdditionPlanned, rootevent.KindPeerRemovalPlanned:
 		switch {
@@ -121,17 +140,31 @@ func ObservePeerChangeLifecycle(pendingPeerChanges map[uint64]PendingPeerChange,
 			return PeerChangeLifecycle{
 				Decision:   PeerChangeLifecycleSkip,
 				Completion: completion,
+				Status:     completionStatus(completion),
+				Reason:     completionReason(completion),
+			}
+		case superseded:
+			return PeerChangeLifecycle{
+				Decision:   PeerChangeLifecycleSkip,
+				Completion: completion,
+				Status:     TransitionStatusSuperseded,
+				Reason:     TransitionReasonSupersededTarget,
 			}
 		default:
 			if !pending {
 				return PeerChangeLifecycle{
 					Decision:   PeerChangeLifecycleApply,
 					Completion: completion,
+					Status:     TransitionStatusOpen,
+					Reason:     TransitionReasonOpenApply,
 				}
 			}
 			return PeerChangeLifecycle{
 				Decision:   PeerChangeLifecycleApply,
 				Completion: completion,
+				Status:     TransitionStatusConflict,
+				RetryClass: TransitionRetryConflict,
+				Reason:     TransitionReasonConflictingPending,
 				Conflict:   true,
 			}
 		}
@@ -141,28 +174,46 @@ func ObservePeerChangeLifecycle(pendingPeerChanges map[uint64]PendingPeerChange,
 			return PeerChangeLifecycle{
 				Decision:   PeerChangeLifecycleApply,
 				Completion: completion,
+				Status:     TransitionStatusPending,
+				Reason:     TransitionReasonMatchingPending,
 			}
 		case completion.Completed():
 			return PeerChangeLifecycle{
 				Decision:   PeerChangeLifecycleSkip,
 				Completion: completion,
+				Status:     TransitionStatusCompleted,
+				Reason:     TransitionReasonAlreadyCompleted,
+			}
+		case superseded:
+			return PeerChangeLifecycle{
+				Decision:   PeerChangeLifecycleSkip,
+				Completion: completion,
+				Status:     TransitionStatusAborted,
+				Reason:     TransitionReasonAbortedApply,
 			}
 		case pending:
 			return PeerChangeLifecycle{
 				Decision:   PeerChangeLifecycleApply,
 				Completion: completion,
+				Status:     TransitionStatusConflict,
+				RetryClass: TransitionRetryConflict,
+				Reason:     TransitionReasonConflictingPending,
 				Conflict:   true,
 			}
 		default:
 			return PeerChangeLifecycle{
 				Decision:   PeerChangeLifecycleApply,
 				Completion: completion,
+				Status:     TransitionStatusOpen,
+				Reason:     TransitionReasonOpenApply,
 			}
 		}
 	}
 	return PeerChangeLifecycle{
 		Decision:   PeerChangeLifecycleApply,
 		Completion: completion,
+		Status:     TransitionStatusOpen,
+		Reason:     TransitionReasonOpenApply,
 	}
 }
 
@@ -172,6 +223,9 @@ func EvaluatePeerChangeLifecycle(pendingPeerChanges map[uint64]PendingPeerChange
 	}
 	outcome := ObservePeerChangeLifecycle(pendingPeerChanges, current, hasCurrent, event)
 	if !outcome.Conflict {
+		if outcome.Status == TransitionStatusAborted {
+			return outcome.Decision, fmt.Errorf("peer change target for region %d was superseded before apply", event.PeerChange.RegionID)
+		}
 		return outcome.Decision, nil
 	}
 	switch event.Kind {
@@ -181,5 +235,27 @@ func EvaluatePeerChangeLifecycle(pendingPeerChanges map[uint64]PendingPeerChange
 		return outcome.Decision, fmt.Errorf("peer change apply does not match pending target for region %d", event.PeerChange.RegionID)
 	default:
 		return outcome.Decision, nil
+	}
+}
+
+func completionStatus(completion PeerChangeCompletion) TransitionStatus {
+	switch completion.State {
+	case PeerChangeCompletionPending:
+		return TransitionStatusPending
+	case PeerChangeCompletionCompleted:
+		return TransitionStatusCompleted
+	default:
+		return TransitionStatusOpen
+	}
+}
+
+func completionReason(completion PeerChangeCompletion) TransitionReason {
+	switch completion.State {
+	case PeerChangeCompletionPending:
+		return TransitionReasonMatchingPending
+	case PeerChangeCompletionCompleted:
+		return TransitionReasonAlreadyCompleted
+	default:
+		return TransitionReasonOpenApply
 	}
 }
