@@ -57,6 +57,14 @@ type TailWindow struct {
 	EndOffset       int64
 }
 
+// TailCompactionPlan is one retention/compaction decision derived from the
+// current committed rooted tail.
+type TailCompactionPlan struct {
+	Tail       CommittedTail
+	RetainFrom rootstate.Cursor
+	Compacted  bool
+}
+
 // TailToken identifies one observed committed-tail view.
 type TailToken struct {
 	Cursor   rootstate.Cursor
@@ -116,6 +124,25 @@ func CloneCommittedTail(in CommittedTail) CommittedTail {
 		StartOffset:     in.StartOffset,
 		EndOffset:       in.EndOffset,
 		Records:         CloneCommittedEvents(in.Records),
+	}
+}
+
+// PlanTailCompaction trims the retained committed tail down to at most
+// maxRetained records and reports the resulting retain-from cursor.
+func PlanTailCompaction(records []CommittedEvent, lastCommitted rootstate.Cursor, maxRetained int) TailCompactionPlan {
+	if maxRetained <= 0 || len(records) <= maxRetained {
+		tail := CommittedTail{Records: CloneCommittedEvents(records)}
+		return TailCompactionPlan{
+			Tail:       tail,
+			RetainFrom: tail.RetainFrom(lastCommitted),
+		}
+	}
+	start := len(records) - maxRetained
+	tail := CommittedTail{Records: CloneCommittedEvents(records[start:])}
+	return TailCompactionPlan{
+		Tail:       tail,
+		RetainFrom: tail.RetainFrom(lastCommitted),
+		Compacted:  true,
 	}
 }
 

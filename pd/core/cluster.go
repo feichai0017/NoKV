@@ -18,6 +18,10 @@ type RegionInfo = pdview.RegionInfo
 // PD runtime view.
 type TransitionSnapshot = pdview.TransitionSnapshot
 
+// TransitionAssessment captures one explicit rooted transition assessment
+// materialized for PD operator/debugging surfaces.
+type TransitionAssessment = pdview.TransitionAssessment
+
 // Cluster stores in-memory PD metadata and provides route lookups.
 //
 // NOTE: Cluster intentionally keeps only the in-memory metadata/state model.
@@ -194,7 +198,7 @@ func (c *Cluster) ReplaceRootSnapshot(
 		return
 	}
 	c.regions.Replace(descriptors)
-	c.transitions.Replace(pendingPeerChanges, pendingRangeChanges)
+	c.transitions.Replace(descriptors, pendingPeerChanges, pendingRangeChanges)
 }
 
 // TransitionSnapshot returns a stable copy of rooted pending execution state.
@@ -206,6 +210,21 @@ func (c *Cluster) TransitionSnapshot() TransitionSnapshot {
 		}
 	}
 	return c.transitions.Snapshot()
+}
+
+// ObserveRootEventLifecycle evaluates one rooted transition event against the
+// current rooted runtime snapshot materialized in PD.
+func (c *Cluster) ObserveRootEventLifecycle(event rootevent.Event) TransitionAssessment {
+	if c == nil {
+		return TransitionAssessment{}
+	}
+	transitions := c.TransitionSnapshot()
+	return pdview.AssessTransition(
+		descriptorsFromRegionInfos(c.RegionSnapshot()),
+		transitions.PendingPeerChanges,
+		transitions.PendingRangeChanges,
+		event,
+	)
 }
 
 // GetRegionDescriptorByKey returns the rooted descriptor containing key
@@ -241,7 +260,11 @@ func (c *Cluster) clone() *Cluster {
 		_ = out.regions.UpsertAt(region.Descriptor, region.LastHeartbeat)
 	}
 	transitions := c.TransitionSnapshot()
-	out.transitions.Replace(transitions.PendingPeerChanges, transitions.PendingRangeChanges)
+	out.transitions.Replace(
+		descriptorsFromRegionInfos(c.RegionSnapshot()),
+		transitions.PendingPeerChanges,
+		transitions.PendingRangeChanges,
+	)
 	return out
 }
 
@@ -256,7 +279,7 @@ func (c *Cluster) applyRootEventToTransitions(event rootevent.Event) {
 		PendingRangeChanges: transitions.PendingRangeChanges,
 	}
 	rootstate.ApplyEventToSnapshot(&snapshot, snapshot.State.LastCommitted, event)
-	c.transitions.Replace(snapshot.PendingPeerChanges, snapshot.PendingRangeChanges)
+	c.transitions.Replace(snapshot.Descriptors, snapshot.PendingPeerChanges, snapshot.PendingRangeChanges)
 }
 
 func descriptorsFromRegionInfos(in []RegionInfo) map[uint64]descriptor.Descriptor {

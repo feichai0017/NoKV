@@ -16,6 +16,13 @@ type transitionPlan struct {
 	Propose  func(*peer.Peer) error
 }
 
+type terminalTransition struct {
+	Event  rootevent.Event
+	Action string
+	Noop   bool
+	Apply  func() error
+}
+
 func (s *Store) leaderPeer(regionID uint64) (*peer.Peer, error) {
 	if s == nil {
 		return nil, fmt.Errorf("raftstore: store is nil")
@@ -91,15 +98,18 @@ func (s *Store) enqueueAppliedRootEvent(event rootevent.Event) {
 	})
 }
 
-func (s *Store) applyTerminalTransition(event rootevent.Event, mutate func() error) error {
+func (s *Store) applyTerminalTransition(term terminalTransition) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
-	if mutate != nil {
-		if err := mutate(); err != nil {
+	if term.Noop {
+		return nil
+	}
+	if term.Apply != nil {
+		if err := term.Apply(); err != nil {
 			return err
 		}
 	}
-	s.enqueueAppliedRootEvent(event)
+	s.enqueueAppliedRootEvent(term.Event)
 	return nil
 }
