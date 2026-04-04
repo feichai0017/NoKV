@@ -124,6 +124,40 @@ func TestEvaluateRangeChangeLifecycle(t *testing.T) {
 	require.Equal(t, rootstate.RangeChangeLifecycleSkip, decision)
 }
 
+func TestEvaluateRootEventLifecycle(t *testing.T) {
+	target := testDescriptor(50, []byte("a"), []byte("z"))
+	peerPlanned := rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)
+	peerApplied := rootevent.PeerAdded(target.RegionID, 2, 201, target)
+
+	change, ok := rootstate.PendingPeerChangeFromEvent(peerPlanned)
+	require.True(t, ok)
+	snapshot := rootstate.Snapshot{
+		Descriptors:        map[uint64]descriptor.Descriptor{target.RegionID: target},
+		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{target.RegionID: change},
+	}
+
+	decision, err := rootstate.EvaluateRootEventLifecycle(snapshot, peerPlanned)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.RootEventLifecycleSkip, decision)
+
+	decision, err = rootstate.EvaluateRootEventLifecycle(snapshot, peerApplied)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.RootEventLifecycleApply, decision)
+
+	left := testDescriptor(60, []byte("a"), []byte("m"))
+	right := testDescriptor(61, []byte("m"), []byte("z"))
+	splitPlanned := rootevent.RegionSplitPlanned(59, []byte("m"), left, right)
+	key, pending, ok := rootstate.PendingRangeChangeFromEvent(splitPlanned)
+	require.True(t, ok)
+
+	rangeSnapshot := rootstate.Snapshot{
+		PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{key: pending},
+	}
+	decision, err = rootstate.EvaluateRootEventLifecycle(rangeSnapshot, splitPlanned)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.RootEventLifecycleSkip, decision)
+}
+
 func TestApplyRangeChangeToSnapshot(t *testing.T) {
 	parent := testDescriptor(40, []byte("a"), []byte("z"))
 	left := testDescriptor(40, []byte("a"), []byte("m"))
