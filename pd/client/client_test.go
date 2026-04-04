@@ -76,6 +76,10 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	liveResp, err := cli.RegionLiveness(context.Background(), &pdpb.RegionLivenessRequest{RegionId: 11})
+	require.NoError(t, err)
+	require.True(t, liveResp.GetAccepted())
+
 	_, err = cli.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
 		Event: metacodec.RootEventToProto(rootevent.PeerAdded(
 			11,
