@@ -222,13 +222,19 @@ func (s *Service) guardPeerChangeLifecycle(event rootevent.Event) (bool, error) 
 		if !pending {
 			return false, nil
 		}
-		if matchesPendingPeerChange(event, change) {
+		if change.Stage == rootstate.PendingPeerChangeStagePlanned && matchesPendingPeerChange(event, change) {
 			return true, nil
+		}
+		if change.Stage == rootstate.PendingPeerChangeStageApplied {
+			return false, nil
 		}
 		return false, fmt.Errorf("pending peer change already exists for region %d", event.PeerChange.RegionID)
 	case rootevent.KindPeerAdded, rootevent.KindPeerRemoved:
 		if pending {
 			if matchesPendingPeerChange(event, change) {
+				if change.Stage == rootstate.PendingPeerChangeStageApplied {
+					return true, nil
+				}
 				return false, nil
 			}
 			return false, fmt.Errorf("peer change apply does not match pending target for region %d", event.PeerChange.RegionID)

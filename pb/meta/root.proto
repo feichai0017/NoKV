@@ -87,12 +87,19 @@ enum RootPendingPeerChangeKind {
   ROOT_PENDING_PEER_CHANGE_KIND_REMOVAL = 2;
 }
 
+enum RootPendingPeerChangeStage {
+  ROOT_PENDING_PEER_CHANGE_STAGE_UNSPECIFIED = 0;
+  ROOT_PENDING_PEER_CHANGE_STAGE_PLANNED = 1;
+  ROOT_PENDING_PEER_CHANGE_STAGE_APPLIED = 2;
+}
+
 message RootPendingPeerChange {
   uint64 region_id = 1;
   uint64 store_id = 2;
   uint64 peer_id = 3;
   RootPendingPeerChangeKind kind = 4;
   nokv.meta.v1.RegionDescriptor descriptor = 5;
+  RootPendingPeerChangeStage stage = 6;
 }
 
 message RootEvent {
