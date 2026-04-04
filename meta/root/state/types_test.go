@@ -130,6 +130,37 @@ func TestEvaluateRangeChangeLifecycle(t *testing.T) {
 	decision, err = rootstate.EvaluateRangeChangeLifecycle(nil, descriptors, splitPlanned)
 	require.NoError(t, err)
 	require.Equal(t, rootstate.RangeChangeLifecycleSkip, decision)
+
+	merged := testDescriptor(50, []byte("a"), []byte("z"))
+	mergePlanned := rootevent.RegionMergePlanned(48, 49, merged)
+	mergeCommitted := rootevent.RegionMerged(48, 49, merged)
+
+	decision, err = rootstate.EvaluateRangeChangeLifecycle(nil, nil, mergePlanned)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.RangeChangeLifecycleApply, decision)
+
+	key, pending, ok = rootstate.PendingRangeChangeFromEvent(mergePlanned)
+	require.True(t, ok)
+	pendingMap = map[uint64]rootstate.PendingRangeChange{key: pending}
+
+	decision, err = rootstate.EvaluateRangeChangeLifecycle(pendingMap, nil, mergePlanned)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.RangeChangeLifecycleSkip, decision)
+
+	decision, err = rootstate.EvaluateRangeChangeLifecycle(pendingMap, nil, mergeCommitted)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.RangeChangeLifecycleApply, decision)
+
+	mergeDescriptors := map[uint64]descriptor.Descriptor{
+		merged.RegionID: merged,
+	}
+	decision, err = rootstate.EvaluateRangeChangeLifecycle(nil, mergeDescriptors, mergeCommitted)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.RangeChangeLifecycleSkip, decision)
+
+	decision, err = rootstate.EvaluateRangeChangeLifecycle(nil, mergeDescriptors, mergePlanned)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.RangeChangeLifecycleSkip, decision)
 }
 
 func TestEvaluateRootEventLifecycle(t *testing.T) {

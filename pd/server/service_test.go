@@ -624,6 +624,33 @@ func TestServicePublishRootEventSkipsCompletedSplitPlan(t *testing.T) {
 	require.Equal(t, 0, store.eventCalls)
 }
 
+func TestServicePublishRootEventSkipsCompletedMergePlan(t *testing.T) {
+	cluster := core.NewCluster()
+	merged := testDescriptor(151, []byte("a"), []byte("z"), metaregion.Epoch{Version: 3, ConfVersion: 1}, nil)
+	merged.RootEpoch = 7
+	merged.EnsureHash()
+	require.NoError(t, cluster.PublishRegionDescriptor(merged))
+
+	store := &fakeStorage{
+		leader: true,
+		snapshot: pdstorage.Snapshot{
+			ClusterEpoch: 7,
+			Descriptors: map[uint64]descriptor.Descriptor{
+				merged.RegionID: merged,
+			},
+		},
+	}
+	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc.SetStorage(store)
+
+	resp, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event: metacodec.RootEventToProto(rootevent.RegionMergePlanned(149, 150, merged)),
+	})
+	require.NoError(t, err)
+	require.True(t, resp.GetAccepted())
+	require.Equal(t, 0, store.eventCalls)
+}
+
 func TestServicePublishRootEventRejectsMismatchedMergeApply(t *testing.T) {
 	cluster := core.NewCluster()
 	merged := testDescriptor(50, []byte("a"), []byte("z"), metaregion.Epoch{Version: 3, ConfVersion: 1}, nil)
