@@ -125,6 +125,11 @@ func TestAddPeerPublishesPlannedTarget(t *testing.T) {
 		meta, ok := rs.RegionMetaByID(region.ID)
 		return ok && peerIndexByID(meta.Peers, 2) >= 0
 	}, time.Second, 10*time.Millisecond)
+	for _, ev := range sink.EventHistory() {
+		require.NotEqual(t, rootevent.KindRegionBootstrap, ev.rootKind)
+		require.NotEqual(t, rootevent.KindRegionDescriptorPublished, ev.rootKind)
+		require.NotEqual(t, rootevent.KindRegionTombstoned, ev.rootKind)
+	}
 
 	sink.ResetHistory()
 	require.NoError(t, rs.AddPeer(region.ID, metaregion.Peer{StoreID: 2, PeerID: 2}))

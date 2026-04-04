@@ -217,6 +217,11 @@ func TestStoreProposeSplitApplies(t *testing.T) {
 			schedulerEvent{kind: "root", regionID: parentMeta.ID, rootKind: rootevent.KindRegionSplitCommitted},
 		)
 	}, time.Second, 10*time.Millisecond)
+	for _, ev := range sink.EventHistory() {
+		require.NotEqual(t, rootevent.KindRegionBootstrap, ev.rootKind)
+		require.NotEqual(t, rootevent.KindRegionDescriptorPublished, ev.rootKind)
+		require.NotEqual(t, rootevent.KindRegionTombstoned, ev.rootKind)
+	}
 
 	sink.ResetHistory()
 	require.NoError(t, rs.ProposeSplit(parentMeta.ID, childMeta, childMeta.StartKey))
@@ -299,6 +304,11 @@ func TestStoreProposeMergeApplies(t *testing.T) {
 			schedulerEvent{kind: "root", regionID: parentMeta.ID, rootKind: rootevent.KindRegionMerged},
 		)
 	}, time.Second, 10*time.Millisecond)
+	for _, ev := range sink.EventHistory() {
+		require.NotEqual(t, rootevent.KindRegionBootstrap, ev.rootKind)
+		require.NotEqual(t, rootevent.KindRegionDescriptorPublished, ev.rootKind)
+		require.NotEqual(t, rootevent.KindRegionTombstoned, ev.rootKind)
+	}
 }
 
 func hasSchedulerEventSubsequence(history []schedulerEvent, want ...schedulerEvent) bool {
