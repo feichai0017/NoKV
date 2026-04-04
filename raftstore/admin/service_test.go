@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"context"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"io"
+	"sync"
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/kv"
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
@@ -44,6 +47,44 @@ func (noopSnapshotStore) ImportSnapshotFrom(io.Reader) (*snapshotpkg.ImportResul
 	return nil, nil
 }
 
+type captureSchedulerClient struct {
+	mu     sync.Mutex
+	events []rootevent.Event
+}
+
+func (c *captureSchedulerClient) PublishRegionDescriptor(context.Context, descriptor.Descriptor) {}
+
+func (c *captureSchedulerClient) PublishRootEvent(_ context.Context, event rootevent.Event) error {
+	c.mu.Lock()
+	c.events = append(c.events, rootevent.CloneEvent(event))
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *captureSchedulerClient) StoreHeartbeat(context.Context, store.StoreStats) []store.Operation {
+	return nil
+}
+
+func (c *captureSchedulerClient) Status() store.SchedulerStatus { return store.SchedulerStatus{} }
+
+func (c *captureSchedulerClient) Close() error { return nil }
+
+func (c *captureSchedulerClient) RootEvents() []rootevent.Event {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]rootevent.Event, 0, len(c.events))
+	for _, event := range c.events {
+		out = append(out, rootevent.CloneEvent(event))
+	}
+	return out
+}
+
+func (c *captureSchedulerClient) Reset() {
+	c.mu.Lock()
+	c.events = nil
+	c.mu.Unlock()
+}
+
 func openAdminTestDBWithTweak(t *testing.T, dir string, tweak func(*NoKV.Options)) (*NoKV.DB, *localmeta.Store) {
 	t.Helper()
 	localMeta, err := localmeta.OpenLocalStore(dir, nil)
@@ -73,6 +114,70 @@ func testSSTApply(db *NoKV.DB) peer.SnapshotApplyFunc {
 		}
 		return result.Meta.Region, nil
 	}
+}
+
+func TestServiceAddPeerPublishesPlannedTarget(t *testing.T) {
+	dir := t.TempDir()
+	db, localMeta := openAdminTestDBWithTweak(t, dir, nil)
+	defer func() {
+		require.NoError(t, db.Close())
+		require.NoError(t, localMeta.Close())
+	}()
+
+	sink := &captureSchedulerClient{}
+	st := store.NewStore(store.Config{
+		StoreID:     1,
+		LocalMeta:   localMeta,
+		Scheduler:   sink,
+		PeerBuilder: nil,
+	})
+	defer st.Close()
+
+	region := localmeta.RegionMeta{
+		ID:       88,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 101}},
+		State:    metaregion.ReplicaStateRunning,
+	}
+	storage, err := db.RaftLog().Open(region.ID, localMeta)
+	require.NoError(t, err)
+	cfg := &peer.Config{
+		RaftConfig: myraft.Config{
+			ID:              101,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		},
+		Transport: noopTransport{},
+		Apply:     func([]myraft.Entry) error { return nil },
+		Storage:   storage,
+		GroupID:   region.ID,
+		Region:    localmeta.CloneRegionMetaPtr(&region),
+	}
+	p, err := st.StartPeer(cfg, []myraft.Peer{{ID: 101}})
+	require.NoError(t, err)
+	defer st.StopPeer(p.ID())
+	require.NoError(t, p.Campaign())
+	sink.Reset()
+
+	svc := NewService(st)
+	_, err = svc.AddPeer(context.Background(), &adminpb.AddPeerRequest{
+		RegionId: region.ID,
+		StoreId:  2,
+		PeerId:   201,
+	})
+	require.NoError(t, err)
+
+	events := sink.RootEvents()
+	require.NotEmpty(t, events)
+	require.Equal(t, rootevent.KindPeerAdditionPlanned, events[0].Kind)
+	require.NotNil(t, events[0].PeerChange)
+	require.Equal(t, uint64(2), events[0].PeerChange.StoreID)
+	require.Equal(t, uint64(201), events[0].PeerChange.PeerID)
 }
 
 func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {

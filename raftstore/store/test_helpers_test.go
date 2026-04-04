@@ -51,6 +51,7 @@ type regionHeartbeat struct {
 type schedulerEvent struct {
 	kind     string
 	regionID uint64
+	rootKind rootevent.Kind
 }
 
 func newTestSchedulerSink() *testSchedulerSink {
@@ -91,7 +92,7 @@ func (s *testSchedulerSink) PublishRootEvent(_ context.Context, event rootevent.
 			LastHeartbeat: now,
 		}
 	}
-	s.history = append(s.history, schedulerEvent{kind: "root", regionID: rootEventRegionID(event)})
+	s.history = append(s.history, schedulerEvent{kind: "root", regionID: rootEventRegionID(event), rootKind: event.Kind})
 	s.mu.Unlock()
 	return nil
 }
