@@ -16,6 +16,13 @@ import (
 	proto "google.golang.org/protobuf/proto"
 )
 
+type rangeChangePlan struct {
+	RegionID uint64
+	Event    rootevent.Event
+	Command  *raftcmdpb.AdminCommand
+	Noop     bool
+}
+
 func (s *Store) planSplitEvent(parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) (rootevent.Event, error) {
 	if s == nil {
 		return rootevent.Event{}, fmt.Errorf("raftstore: store is nil")
@@ -92,6 +99,132 @@ func (s *Store) planMergeEvent(targetRegionID, sourceRegionID uint64) (rootevent
 	return rootevent.RegionMergePlanned(leftID, rightID, mergedDesc), nil
 }
 
+func (s *Store) planSplit(parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) (rangeChangePlan, error) {
+	if s == nil {
+		return rangeChangePlan{}, fmt.Errorf("raftstore: store is nil")
+	}
+	if parentID == 0 || childMeta.ID == 0 {
+		return rangeChangePlan{}, fmt.Errorf("raftstore: invalid region identifiers")
+	}
+	peerRef := s.regionMgr().peer(parentID)
+	if peerRef == nil {
+		return rangeChangePlan{}, fmt.Errorf("raftstore: region %d not hosted on this store", parentID)
+	}
+	if status := peerRef.Status(); status.RaftState != myraft.StateLeader {
+		return rangeChangePlan{}, fmt.Errorf("raftstore: peer %d is not leader", peerRef.ID())
+	}
+	if splitAlreadyAppliedLocal(s, parentID, childMeta, splitKey) {
+		return rangeChangePlan{RegionID: parentID, Noop: true}, nil
+	}
+	event, err := s.planSplitEvent(parentID, childMeta, splitKey)
+	if err != nil {
+		return rangeChangePlan{}, err
+	}
+	return rangeChangePlan{
+		RegionID: parentID,
+		Event:    event,
+		Command: &raftcmdpb.AdminCommand{
+			Type: raftcmdpb.AdminCommand_SPLIT,
+			Split: &raftcmdpb.SplitCommand{
+				ParentRegionId: parentID,
+				SplitKey:       append([]byte(nil), splitKey...),
+				Child:          metacodec.LocalRegionMetaToDescriptorProto(childMeta),
+			},
+		},
+	}, nil
+}
+
+func (s *Store) planMerge(targetRegionID, sourceRegionID uint64) (rangeChangePlan, error) {
+	if s == nil {
+		return rangeChangePlan{}, fmt.Errorf("raftstore: store is nil")
+	}
+	if targetRegionID == 0 || sourceRegionID == 0 {
+		return rangeChangePlan{}, fmt.Errorf("raftstore: invalid region identifiers")
+	}
+	peerRef := s.regionMgr().peer(targetRegionID)
+	if peerRef == nil {
+		return rangeChangePlan{}, fmt.Errorf("raftstore: region %d not hosted on this store", targetRegionID)
+	}
+	if status := peerRef.Status(); status.RaftState != myraft.StateLeader {
+		return rangeChangePlan{}, fmt.Errorf("raftstore: peer %d is not leader", peerRef.ID())
+	}
+	event, err := s.planMergeEvent(targetRegionID, sourceRegionID)
+	if err != nil {
+		return rangeChangePlan{}, err
+	}
+	return rangeChangePlan{
+		RegionID: targetRegionID,
+		Event:    event,
+		Command: &raftcmdpb.AdminCommand{
+			Type: raftcmdpb.AdminCommand_MERGE,
+			Merge: &raftcmdpb.MergeCommand{
+				TargetRegionId: targetRegionID,
+				SourceRegionId: sourceRegionID,
+			},
+		},
+	}, nil
+}
+
+func (s *Store) executeRangeChangePlan(plan rangeChangePlan) error {
+	if s == nil {
+		return fmt.Errorf("raftstore: store is nil")
+	}
+	if plan.Noop {
+		return nil
+	}
+	if s.schedulerClient() != nil && plan.RegionID != 0 && plan.Event.Kind != rootevent.KindUnknown {
+		if err := s.schedulerClient().PublishRootEvent(s.runtimeContext(), plan.Event); err != nil {
+			switch plan.Event.Kind {
+			case rootevent.KindRegionSplitPlanned:
+				return fmt.Errorf("raftstore: publish split target: %w", err)
+			case rootevent.KindRegionMergePlanned:
+				return fmt.Errorf("raftstore: publish merge target: %w", err)
+			default:
+				return fmt.Errorf("raftstore: publish range-change target: %w", err)
+			}
+		}
+	}
+	peerRef := s.regionMgr().peer(plan.RegionID)
+	if peerRef == nil {
+		return fmt.Errorf("raftstore: region %d not hosted on this store", plan.RegionID)
+	}
+	if status := peerRef.Status(); status.RaftState != myraft.StateLeader {
+		return fmt.Errorf("raftstore: peer %d is not leader", peerRef.ID())
+	}
+	data, err := proto.Marshal(plan.Command)
+	if err != nil {
+		return err
+	}
+	return peerRef.ProposeAdmin(data)
+}
+
+func splitAlreadyAppliedLocal(s *Store, parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) bool {
+	if s == nil || parentID == 0 || childMeta.ID == 0 {
+		return false
+	}
+	parentMeta, ok := s.RegionMetaByID(parentID)
+	if !ok {
+		return false
+	}
+	if !bytes.Equal(parentMeta.EndKey, splitKey) {
+		return false
+	}
+	currentChild, ok := s.RegionMetaByID(childMeta.ID)
+	if !ok {
+		return false
+	}
+	nextChild := localmeta.CloneRegionMeta(childMeta)
+	if len(nextChild.StartKey) == 0 {
+		nextChild.StartKey = append([]byte(nil), splitKey...)
+	}
+	if nextChild.State == 0 {
+		nextChild.State = metaregion.ReplicaStateRunning
+	}
+	got := metacodec.DescriptorFromLocalRegionMeta(currentChild, 0)
+	want := metacodec.DescriptorFromLocalRegionMeta(nextChild, 0)
+	return got.Equal(want)
+}
+
 // splitRegionLocal updates the parent region metadata and bootstraps a new
 // peer for the child region. It is intentionally kept local to the store
 // package so callers cannot bypass raft and mutate region layout directly.
@@ -161,79 +294,20 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta localmeta.RegionMeta
 // ProposeSplit issues a split command through the raft log of the parent
 // region. The child metadata must describe the new region configuration.
 func (s *Store) ProposeSplit(parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) error {
-	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
-	}
-	if parentID == 0 || childMeta.ID == 0 {
-		return fmt.Errorf("raftstore: invalid region identifiers")
-	}
-	parentPeer := s.regionMgr().peer(parentID)
-	if parentPeer == nil {
-		return fmt.Errorf("raftstore: region %d not hosted on this store", parentID)
-	}
-	if status := parentPeer.Status(); status.RaftState != myraft.StateLeader {
-		return fmt.Errorf("raftstore: peer %d is not leader", parentPeer.ID())
-	}
-	if s.schedulerClient() != nil {
-		event, err := s.planSplitEvent(parentID, childMeta, splitKey)
-		if err != nil {
-			return err
-		}
-		if err := s.schedulerClient().PublishRootEvent(s.runtimeContext(), event); err != nil {
-			return fmt.Errorf("raftstore: publish split target: %w", err)
-		}
-	}
-	cmd := &raftcmdpb.AdminCommand{
-		Type: raftcmdpb.AdminCommand_SPLIT,
-		Split: &raftcmdpb.SplitCommand{
-			ParentRegionId: parentID,
-			SplitKey:       append([]byte(nil), splitKey...),
-			Child:          metacodec.LocalRegionMetaToDescriptorProto(childMeta),
-		},
-	}
-	data, err := proto.Marshal(cmd)
+	plan, err := s.planSplit(parentID, childMeta, splitKey)
 	if err != nil {
 		return err
 	}
-	return parentPeer.ProposeAdmin(data)
+	return s.executeRangeChangePlan(plan)
 }
 
 // ProposeMerge submits a merge admin command merging source region into target.
 func (s *Store) ProposeMerge(targetRegionID, sourceRegionID uint64) error {
-	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
-	}
-	if targetRegionID == 0 || sourceRegionID == 0 {
-		return fmt.Errorf("raftstore: invalid region identifiers")
-	}
-	peer := s.regionMgr().peer(targetRegionID)
-	if peer == nil {
-		return fmt.Errorf("raftstore: region %d not hosted on this store", targetRegionID)
-	}
-	if status := peer.Status(); status.RaftState != myraft.StateLeader {
-		return fmt.Errorf("raftstore: peer %d is not leader", peer.ID())
-	}
-	if s.schedulerClient() != nil {
-		event, err := s.planMergeEvent(targetRegionID, sourceRegionID)
-		if err != nil {
-			return err
-		}
-		if err := s.schedulerClient().PublishRootEvent(s.runtimeContext(), event); err != nil {
-			return fmt.Errorf("raftstore: publish merge target: %w", err)
-		}
-	}
-	cmd := &raftcmdpb.AdminCommand{
-		Type: raftcmdpb.AdminCommand_MERGE,
-		Merge: &raftcmdpb.MergeCommand{
-			TargetRegionId: targetRegionID,
-			SourceRegionId: sourceRegionID,
-		},
-	}
-	data, err := proto.Marshal(cmd)
+	plan, err := s.planMerge(targetRegionID, sourceRegionID)
 	if err != nil {
 		return err
 	}
-	return peer.ProposeAdmin(data)
+	return s.executeRangeChangePlan(plan)
 }
 
 func (s *Store) buildChildPeerConfig(child localmeta.RegionMeta) (*peer.Config, []myraft.Peer, error) {
