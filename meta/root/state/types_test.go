@@ -68,6 +68,62 @@ func TestEvaluatePeerChangeLifecycle(t *testing.T) {
 	require.Equal(t, rootstate.PeerChangeLifecycleSkip, decision)
 }
 
+func TestPendingRangeChangeMatchesEvent(t *testing.T) {
+	left := testDescriptor(20, []byte("a"), []byte("m"))
+	right := testDescriptor(21, []byte("m"), []byte("z"))
+	merged := testDescriptor(20, []byte("a"), []byte("z"))
+
+	_, split, ok := rootstate.PendingRangeChangeFromEvent(rootevent.RegionSplitPlanned(10, []byte("m"), left, right))
+	require.True(t, ok)
+	require.True(t, rootstate.PendingRangeChangeMatchesEvent(split, rootevent.RegionSplitPlanned(10, []byte("m"), left, right)))
+	require.True(t, rootstate.PendingRangeChangeMatchesEvent(split, rootevent.RegionSplitCommitted(10, []byte("m"), left, right)))
+	require.False(t, rootstate.PendingRangeChangeMatchesEvent(split, rootevent.RegionMerged(20, 21, merged)))
+
+	_, merge, ok := rootstate.PendingRangeChangeFromEvent(rootevent.RegionMergePlanned(20, 21, merged))
+	require.True(t, ok)
+	require.True(t, rootstate.PendingRangeChangeMatchesEvent(merge, rootevent.RegionMergePlanned(20, 21, merged)))
+	require.True(t, rootstate.PendingRangeChangeMatchesEvent(merge, rootevent.RegionMerged(20, 21, merged)))
+}
+
+func TestEvaluateRangeChangeLifecycle(t *testing.T) {
+	left := testDescriptor(30, []byte("a"), []byte("m"))
+	right := testDescriptor(31, []byte("m"), []byte("z"))
+	splitPlanned := rootevent.RegionSplitPlanned(29, []byte("m"), left, right)
+	splitCommitted := rootevent.RegionSplitCommitted(29, []byte("m"), left, right)
+
+	decision, err := rootstate.EvaluateRangeChangeLifecycle(nil, nil, splitPlanned)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.RangeChangeLifecycleApply, decision)
+
+	key, pending, ok := rootstate.PendingRangeChangeFromEvent(splitPlanned)
+	require.True(t, ok)
+	pendingMap := map[uint64]rootstate.PendingRangeChange{key: pending}
+
+	decision, err = rootstate.EvaluateRangeChangeLifecycle(pendingMap, nil, splitPlanned)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.RangeChangeLifecycleSkip, decision)
+
+	decision, err = rootstate.EvaluateRangeChangeLifecycle(pendingMap, nil, splitCommitted)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.RangeChangeLifecycleApply, decision)
+
+	conflictingRight := right.Clone()
+	conflictingRight.EndKey = []byte("zz")
+	conflictingRight.EnsureHash()
+	conflicting := rootevent.RegionSplitCommitted(29, []byte("m"), left, conflictingRight)
+	decision, err = rootstate.EvaluateRangeChangeLifecycle(pendingMap, nil, conflicting)
+	require.Error(t, err)
+	require.Equal(t, rootstate.RangeChangeLifecycleApply, decision)
+
+	descriptors := map[uint64]descriptor.Descriptor{
+		left.RegionID:  left,
+		right.RegionID: right,
+	}
+	decision, err = rootstate.EvaluateRangeChangeLifecycle(nil, descriptors, splitCommitted)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.RangeChangeLifecycleSkip, decision)
+}
+
 func TestCursorHelpers(t *testing.T) {
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, rootstate.NextCursor(rootstate.Cursor{}))
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 8}, rootstate.NextCursor(rootstate.Cursor{Term: 2, Index: 7}))

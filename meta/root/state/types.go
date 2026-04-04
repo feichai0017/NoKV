@@ -35,11 +35,30 @@ type PendingPeerChange struct {
 	Target  descriptor.Descriptor
 }
 
+type PendingRangeChangeKind uint8
+
+const (
+	PendingRangeChangeUnknown PendingRangeChangeKind = iota
+	PendingRangeChangeSplit
+	PendingRangeChangeMerge
+)
+
+type PendingRangeChange struct {
+	Kind           PendingRangeChangeKind
+	ParentRegionID uint64
+	LeftRegionID   uint64
+	RightRegionID  uint64
+	Left           descriptor.Descriptor
+	Right          descriptor.Descriptor
+	Merged         descriptor.Descriptor
+}
+
 // Snapshot is the compact materialized rooted metadata state used for bounded bootstrap and recovery.
 type Snapshot struct {
-	State              State
-	Descriptors        map[uint64]descriptor.Descriptor
-	PendingPeerChanges map[uint64]PendingPeerChange
+	State               State
+	Descriptors         map[uint64]descriptor.Descriptor
+	PendingPeerChanges  map[uint64]PendingPeerChange
+	PendingRangeChanges map[uint64]PendingRangeChange
 }
 
 // CommitInfo reports one successful root append together with the resulting compact root state.
@@ -50,9 +69,10 @@ type CommitInfo struct {
 
 func CloneSnapshot(snapshot Snapshot) Snapshot {
 	out := Snapshot{
-		State:              snapshot.State,
-		Descriptors:        CloneDescriptors(snapshot.Descriptors),
-		PendingPeerChanges: ClonePendingPeerChanges(snapshot.PendingPeerChanges),
+		State:               snapshot.State,
+		Descriptors:         CloneDescriptors(snapshot.Descriptors),
+		PendingPeerChanges:  ClonePendingPeerChanges(snapshot.PendingPeerChanges),
+		PendingRangeChanges: ClonePendingRangeChanges(snapshot.PendingRangeChanges),
 	}
 	return out
 }
@@ -79,6 +99,25 @@ func ClonePendingPeerChanges(in map[uint64]PendingPeerChange) map[uint64]Pending
 			StoreID: change.StoreID,
 			PeerID:  change.PeerID,
 			Target:  change.Target.Clone(),
+		}
+	}
+	return out
+}
+
+func ClonePendingRangeChanges(in map[uint64]PendingRangeChange) map[uint64]PendingRangeChange {
+	if len(in) == 0 {
+		return make(map[uint64]PendingRangeChange)
+	}
+	out := make(map[uint64]PendingRangeChange, len(in))
+	for id, change := range in {
+		out[id] = PendingRangeChange{
+			Kind:           change.Kind,
+			ParentRegionID: change.ParentRegionID,
+			LeftRegionID:   change.LeftRegionID,
+			RightRegionID:  change.RightRegionID,
+			Left:           change.Left.Clone(),
+			Right:          change.Right.Clone(),
+			Merged:         change.Merged.Clone(),
 		}
 	}
 	return out

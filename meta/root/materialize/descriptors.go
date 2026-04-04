@@ -43,6 +43,9 @@ func ApplyEventToSnapshot(snapshot *rootstate.Snapshot, cursor rootstate.Cursor,
 	if snapshot.PendingPeerChanges == nil {
 		snapshot.PendingPeerChanges = make(map[uint64]rootstate.PendingPeerChange)
 	}
+	if snapshot.PendingRangeChanges == nil {
+		snapshot.PendingRangeChanges = make(map[uint64]rootstate.PendingRangeChange)
+	}
 	switch event.Kind {
 	case rootevent.KindStoreJoined, rootevent.KindStoreLeft:
 		snapshot.State.MembershipEpoch++
@@ -59,29 +62,45 @@ func ApplyEventToSnapshot(snapshot *rootstate.Snapshot, cursor rootstate.Cursor,
 		desc := event.RegionDescriptor.Descriptor.Clone()
 		snapshot.Descriptors[desc.RegionID] = desc
 		delete(snapshot.PendingPeerChanges, desc.RegionID)
+		delete(snapshot.PendingRangeChanges, desc.RegionID)
 	case rootevent.KindRegionTombstoned:
 		snapshot.State.ClusterEpoch++
 		delete(snapshot.Descriptors, event.RegionRemoval.RegionID)
 		delete(snapshot.PendingPeerChanges, event.RegionRemoval.RegionID)
+		delete(snapshot.PendingRangeChanges, event.RegionRemoval.RegionID)
 	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionSplitCommitted:
+		key, change, _ := rootstate.PendingRangeChangeFromEvent(event)
 		if event.Kind == rootevent.KindRegionSplitPlanned ||
-			!splitStateMatches(snapshot.Descriptors, event.RangeSplit.ParentRegionID, event.RangeSplit.Left, event.RangeSplit.Right) {
+			!rootstate.RangeChangeStateMatches(snapshot.Descriptors, event) {
 			snapshot.State.ClusterEpoch++
 		}
 		delete(snapshot.Descriptors, event.RangeSplit.ParentRegionID)
 		delete(snapshot.PendingPeerChanges, event.RangeSplit.ParentRegionID)
 		snapshot.Descriptors[event.RangeSplit.Left.RegionID] = event.RangeSplit.Left.Clone()
 		snapshot.Descriptors[event.RangeSplit.Right.RegionID] = event.RangeSplit.Right.Clone()
+		if event.Kind == rootevent.KindRegionSplitPlanned {
+			snapshot.PendingRangeChanges[key] = change
+		} else {
+			delete(snapshot.PendingRangeChanges, key)
+		}
 	case rootevent.KindRegionMergePlanned, rootevent.KindRegionMerged:
+		key, change, _ := rootstate.PendingRangeChangeFromEvent(event)
 		if event.Kind == rootevent.KindRegionMergePlanned ||
-			!mergeStateMatches(snapshot.Descriptors, event.RangeMerge.LeftRegionID, event.RangeMerge.RightRegionID, event.RangeMerge.Merged) {
+			!rootstate.RangeChangeStateMatches(snapshot.Descriptors, event) {
 			snapshot.State.ClusterEpoch++
 		}
 		delete(snapshot.Descriptors, event.RangeMerge.LeftRegionID)
 		delete(snapshot.Descriptors, event.RangeMerge.RightRegionID)
 		delete(snapshot.PendingPeerChanges, event.RangeMerge.LeftRegionID)
 		delete(snapshot.PendingPeerChanges, event.RangeMerge.RightRegionID)
+		delete(snapshot.PendingRangeChanges, event.RangeMerge.LeftRegionID)
+		delete(snapshot.PendingRangeChanges, event.RangeMerge.RightRegionID)
 		snapshot.Descriptors[event.RangeMerge.Merged.RegionID] = event.RangeMerge.Merged.Clone()
+		if event.Kind == rootevent.KindRegionMergePlanned {
+			snapshot.PendingRangeChanges[key] = change
+		} else {
+			delete(snapshot.PendingRangeChanges, key)
+		}
 	case rootevent.KindPeerAdditionPlanned, rootevent.KindPeerRemovalPlanned:
 		snapshot.State.ClusterEpoch++
 		change, _ := rootstate.PendingPeerChangeFromEvent(event)
@@ -98,29 +117,6 @@ func ApplyEventToSnapshot(snapshot *rootstate.Snapshot, cursor rootstate.Cursor,
 		delete(snapshot.PendingPeerChanges, event.PeerChange.RegionID)
 	}
 	snapshot.State.LastCommitted = cursor
-}
-
-func splitStateMatches(descriptors map[uint64]descriptor.Descriptor, parentRegionID uint64, left, right descriptor.Descriptor) bool {
-	if _, ok := descriptors[parentRegionID]; ok {
-		return false
-	}
-	gotLeft, ok := descriptors[left.RegionID]
-	if !ok || !gotLeft.Equal(left) {
-		return false
-	}
-	gotRight, ok := descriptors[right.RegionID]
-	return ok && gotRight.Equal(right)
-}
-
-func mergeStateMatches(descriptors map[uint64]descriptor.Descriptor, leftRegionID, rightRegionID uint64, merged descriptor.Descriptor) bool {
-	if _, ok := descriptors[leftRegionID]; ok {
-		return false
-	}
-	if _, ok := descriptors[rightRegionID]; ok {
-		return false
-	}
-	gotMerged, ok := descriptors[merged.RegionID]
-	return ok && gotMerged.Equal(merged)
 }
 
 // SnapshotDescriptorEvents materializes descriptor truth into a stable event sequence for bootstrap/recovery callers.

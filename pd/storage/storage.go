@@ -17,10 +17,11 @@ type AllocatorState struct {
 // Snapshot is the reconstructed PD bootstrap catalog derived from durable
 // metadata-root truth.
 type Snapshot struct {
-	ClusterEpoch       uint64
-	Descriptors        map[uint64]descriptor.Descriptor
-	PendingPeerChanges map[uint64]rootstate.PendingPeerChange
-	Allocator          AllocatorState
+	ClusterEpoch        uint64
+	Descriptors         map[uint64]descriptor.Descriptor
+	PendingPeerChanges  map[uint64]rootstate.PendingPeerChange
+	PendingRangeChanges map[uint64]rootstate.PendingRangeChange
+	Allocator           AllocatorState
 }
 
 // BootstrapInfo captures rooted PD bootstrap results.

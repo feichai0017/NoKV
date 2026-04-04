@@ -31,10 +31,11 @@ func (s *RootStore) Load() (Snapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return Snapshot{
-		ClusterEpoch:       s.snapshot.ClusterEpoch,
-		Descriptors:        rootstate.CloneDescriptors(s.snapshot.Descriptors),
-		PendingPeerChanges: rootstate.ClonePendingPeerChanges(s.snapshot.PendingPeerChanges),
-		Allocator:          s.snapshot.Allocator,
+		ClusterEpoch:        s.snapshot.ClusterEpoch,
+		Descriptors:         rootstate.CloneDescriptors(s.snapshot.Descriptors),
+		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.snapshot.PendingPeerChanges),
+		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.snapshot.PendingRangeChanges),
+		Allocator:           s.snapshot.Allocator,
 	}, nil
 }
 
@@ -159,9 +160,10 @@ func (s *RootStore) reload() error {
 		return err
 	}
 	out := Snapshot{
-		ClusterEpoch:       snapshot.State.ClusterEpoch,
-		Descriptors:        rootstate.CloneDescriptors(snapshot.Descriptors),
-		PendingPeerChanges: rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
+		ClusterEpoch:        snapshot.State.ClusterEpoch,
+		Descriptors:         rootstate.CloneDescriptors(snapshot.Descriptors),
+		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
+		PendingRangeChanges: rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),
 		Allocator: AllocatorState{
 			IDCurrent: snapshot.State.IDFence,
 			TSCurrent: snapshot.State.TSOFence,
