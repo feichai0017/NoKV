@@ -68,11 +68,13 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, storeResp.GetAccepted())
 
-	_, err = cli.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor: metacodec.DescriptorToProto(testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{
-			Version:     1,
-			ConfVersion: 1,
-		})),
+	_, err = cli.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event: metacodec.RootEventToProto(rootevent.RegionBootstrapped(
+			testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{
+				Version:     1,
+				ConfVersion: 1,
+			}),
+		)),
 	})
 	require.NoError(t, err)
 

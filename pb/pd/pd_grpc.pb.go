@@ -22,7 +22,6 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	PD_StoreHeartbeat_FullMethodName   = "/nokv.pd.v1.PD/StoreHeartbeat"
-	PD_RegionHeartbeat_FullMethodName  = "/nokv.pd.v1.PD/RegionHeartbeat"
 	PD_RegionLiveness_FullMethodName   = "/nokv.pd.v1.PD/RegionLiveness"
 	PD_PublishRootEvent_FullMethodName = "/nokv.pd.v1.PD/PublishRootEvent"
 	PD_RemoveRegion_FullMethodName     = "/nokv.pd.v1.PD/RemoveRegion"
@@ -36,7 +35,6 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type PDClient interface {
 	StoreHeartbeat(ctx context.Context, in *StoreHeartbeatRequest, opts ...grpc.CallOption) (*StoreHeartbeatResponse, error)
-	RegionHeartbeat(ctx context.Context, in *RegionHeartbeatRequest, opts ...grpc.CallOption) (*RegionHeartbeatResponse, error)
 	RegionLiveness(ctx context.Context, in *RegionLivenessRequest, opts ...grpc.CallOption) (*RegionLivenessResponse, error)
 	PublishRootEvent(ctx context.Context, in *PublishRootEventRequest, opts ...grpc.CallOption) (*PublishRootEventResponse, error)
 	RemoveRegion(ctx context.Context, in *RemoveRegionRequest, opts ...grpc.CallOption) (*RemoveRegionResponse, error)
@@ -57,16 +55,6 @@ func (c *pDClient) StoreHeartbeat(ctx context.Context, in *StoreHeartbeatRequest
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StoreHeartbeatResponse)
 	err := c.cc.Invoke(ctx, PD_StoreHeartbeat_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *pDClient) RegionHeartbeat(ctx context.Context, in *RegionHeartbeatRequest, opts ...grpc.CallOption) (*RegionHeartbeatResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RegionHeartbeatResponse)
-	err := c.cc.Invoke(ctx, PD_RegionHeartbeat_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +126,6 @@ func (c *pDClient) Tso(ctx context.Context, in *TsoRequest, opts ...grpc.CallOpt
 // for forward compatibility.
 type PDServer interface {
 	StoreHeartbeat(context.Context, *StoreHeartbeatRequest) (*StoreHeartbeatResponse, error)
-	RegionHeartbeat(context.Context, *RegionHeartbeatRequest) (*RegionHeartbeatResponse, error)
 	RegionLiveness(context.Context, *RegionLivenessRequest) (*RegionLivenessResponse, error)
 	PublishRootEvent(context.Context, *PublishRootEventRequest) (*PublishRootEventResponse, error)
 	RemoveRegion(context.Context, *RemoveRegionRequest) (*RemoveRegionResponse, error)
@@ -156,9 +143,6 @@ type UnimplementedPDServer struct{}
 
 func (UnimplementedPDServer) StoreHeartbeat(context.Context, *StoreHeartbeatRequest) (*StoreHeartbeatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StoreHeartbeat not implemented")
-}
-func (UnimplementedPDServer) RegionHeartbeat(context.Context, *RegionHeartbeatRequest) (*RegionHeartbeatResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method RegionHeartbeat not implemented")
 }
 func (UnimplementedPDServer) RegionLiveness(context.Context, *RegionLivenessRequest) (*RegionLivenessResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegionLiveness not implemented")
@@ -212,24 +196,6 @@ func _PD_StoreHeartbeat_Handler(srv interface{}, ctx context.Context, dec func(i
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PDServer).StoreHeartbeat(ctx, req.(*StoreHeartbeatRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PD_RegionHeartbeat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RegionHeartbeatRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PDServer).RegionHeartbeat(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PD_RegionHeartbeat_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PDServer).RegionHeartbeat(ctx, req.(*RegionHeartbeatRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -352,10 +318,6 @@ var PD_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StoreHeartbeat",
 			Handler:    _PD_StoreHeartbeat_Handler,
-		},
-		{
-			MethodName: "RegionHeartbeat",
-			Handler:    _PD_RegionHeartbeat_Handler,
 		},
 		{
 			MethodName: "RegionLiveness",
