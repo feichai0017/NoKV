@@ -6,7 +6,6 @@ import (
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"time"
 
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
@@ -75,7 +74,7 @@ type SchedulerClient interface {
 	// ReportRegionHeartbeat is the region heartbeat/bootstrap compatibility
 	// path only. Steady-state topology truth should use PublishRootEvent with
 	// explicit rooted events instead.
-	ReportRegionHeartbeat(context.Context, descriptor.Descriptor)
+	ReportRegionHeartbeat(context.Context, uint64)
 	PublishRootEvent(context.Context, rootevent.Event) error
 	StoreHeartbeat(context.Context, StoreStats) []Operation
 	Status() SchedulerStatus

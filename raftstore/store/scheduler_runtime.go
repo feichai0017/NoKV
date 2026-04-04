@@ -7,7 +7,6 @@ import (
 	"syscall"
 	"time"
 
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -181,8 +180,8 @@ func (s *Store) sendHeartbeats() {
 		return
 	}
 	ctx := s.runtimeContext()
-	for _, desc := range s.schedulerDescriptors() {
-		s.schedulerClient().ReportRegionHeartbeat(ctx, desc)
+	for _, regionID := range s.schedulerRegionIDs() {
+		s.schedulerClient().ReportRegionHeartbeat(ctx, regionID)
 	}
 	if s.storeID == 0 {
 		return
@@ -247,32 +246,17 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 	}
 }
 
-func (s *Store) schedulerDescriptors() []descriptor.Descriptor {
+func (s *Store) schedulerRegionIDs() []uint64 {
 	if s == nil {
 		return nil
 	}
 	metas := s.RegionMetas()
-	if s.sched == nil {
-		out := make([]descriptor.Descriptor, 0, len(metas))
-		for _, meta := range metas {
-			out = append(out, metacodec.DescriptorFromLocalRegionMeta(meta, 0))
-		}
-		return out
-	}
-	s.sched.mu.Lock()
-	cached := make(map[uint64]descriptor.Descriptor, len(s.sched.descriptors))
-	for regionID, desc := range s.sched.descriptors {
-		cached[regionID] = desc.Clone()
-	}
-	s.sched.mu.Unlock()
-
-	out := make([]descriptor.Descriptor, 0, len(metas))
+	out := make([]uint64, 0, len(metas))
 	for _, meta := range metas {
-		if desc, ok := cached[meta.ID]; ok {
-			out = append(out, desc)
+		if meta.ID == 0 {
 			continue
 		}
-		out = append(out, metacodec.DescriptorFromLocalRegionMeta(meta, 0))
+		out = append(out, meta.ID)
 	}
 	return out
 }

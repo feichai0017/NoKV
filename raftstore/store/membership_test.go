@@ -5,6 +5,7 @@ import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -119,6 +120,11 @@ func TestAddPeerPublishesPlannedTarget(t *testing.T) {
 	require.Len(t, history, 1)
 	require.Equal(t, "root", history[0].kind)
 	require.Equal(t, rootevent.KindPeerAdditionPlanned, history[0].rootKind)
+
+	require.Eventually(t, func() bool {
+		meta, ok := rs.RegionMetaByID(region.ID)
+		return ok && peerIndexByID(meta.Peers, 2) >= 0
+	}, time.Second, 10*time.Millisecond)
 
 	sink.ResetHistory()
 	require.NoError(t, rs.AddPeer(region.ID, metaregion.Peer{StoreID: 2, PeerID: 2}))

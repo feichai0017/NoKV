@@ -14,7 +14,6 @@ import (
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/kv"
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
@@ -52,7 +51,7 @@ type captureSchedulerClient struct {
 	events []rootevent.Event
 }
 
-func (c *captureSchedulerClient) ReportRegionHeartbeat(context.Context, descriptor.Descriptor) {}
+func (c *captureSchedulerClient) ReportRegionHeartbeat(context.Context, uint64) {}
 
 func (c *captureSchedulerClient) PublishRootEvent(_ context.Context, event rootevent.Event) error {
 	c.mu.Lock()
