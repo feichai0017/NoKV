@@ -8,6 +8,14 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
+type transitionPlan struct {
+	RegionID uint64
+	Event    rootevent.Event
+	Action   string
+	Noop     bool
+	Propose  func(*peer.Peer) error
+}
+
 func (s *Store) leaderPeer(regionID uint64) (*peer.Peer, error) {
 	if s == nil {
 		return nil, fmt.Errorf("raftstore: store is nil")
@@ -58,6 +66,22 @@ func (s *Store) executePlannedTransition(regionID uint64, event rootevent.Event,
 	return propose(peerRef)
 }
 
+func (s *Store) executeTransitionPlan(plan transitionPlan) error {
+	if s == nil {
+		return fmt.Errorf("raftstore: store is nil")
+	}
+	if plan.Noop {
+		return nil
+	}
+	if plan.RegionID == 0 {
+		return fmt.Errorf("raftstore: transition region id is zero")
+	}
+	if plan.Propose == nil {
+		return fmt.Errorf("raftstore: transition propose func is nil")
+	}
+	return s.executePlannedTransition(plan.RegionID, plan.Event, plan.Action, plan.Propose)
+}
+
 func (s *Store) enqueueAppliedRootEvent(event rootevent.Event) {
 	if s == nil || s.sched == nil || event.Kind == rootevent.KindUnknown {
 		return
@@ -65,4 +89,17 @@ func (s *Store) enqueueAppliedRootEvent(event rootevent.Event) {
 	s.enqueueRegionEvent(regionEvent{
 		root: event,
 	})
+}
+
+func (s *Store) applyTerminalTransition(event rootevent.Event, mutate func() error) error {
+	if s == nil {
+		return fmt.Errorf("raftstore: store is nil")
+	}
+	if mutate != nil {
+		if err := mutate(); err != nil {
+			return err
+		}
+	}
+	s.enqueueAppliedRootEvent(event)
+	return nil
 }

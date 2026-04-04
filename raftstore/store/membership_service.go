@@ -12,16 +12,6 @@ import (
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
-// peerChangePlan captures one target-state peer membership transition. The
-// coordinator publishes Event to Meta before the executor proposes Change to
-// the data-plane raft group.
-type peerChangePlan struct {
-	RegionID uint64
-	Change   raftpb.ConfChangeV2
-	Event    rootevent.Event
-	Noop     bool
-}
-
 func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 	if s == nil {
 		return nil
@@ -46,23 +36,22 @@ func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 	}
 	appliedEvent, hasAppliedEvent := appliedPeerChangeEvent(meta, ev.ConfChange)
 	if ev.Peer != nil && peerIndexByID(meta.Peers, ev.Peer.ID()) == -1 {
-		if hasAppliedEvent {
-			s.enqueueAppliedRootEvent(appliedEvent)
-		}
-		if err := s.applyRegionRemovalSilent(meta.ID); err != nil {
-			return err
-		}
-		s.stopPeer(ev.Peer.ID(), false)
-		return nil
-	}
-	if err := s.applyRegionMetaSilent(meta); err != nil {
-		return err
+		return s.applyTerminalTransition(appliedEvent, func() error {
+			if err := s.applyRegionRemovalSilent(meta.ID); err != nil {
+				return err
+			}
+			s.stopPeer(ev.Peer.ID(), false)
+			return nil
+		})
 	}
 	if !hasAppliedEvent {
-		return nil
+		return s.applyTerminalTransition(rootevent.Event{}, func() error {
+			return s.applyRegionMetaSilent(meta)
+		})
 	}
-	s.enqueueAppliedRootEvent(appliedEvent)
-	return nil
+	return s.applyTerminalTransition(appliedEvent, func() error {
+		return s.applyRegionMetaSilent(meta)
+	})
 }
 
 // AddPeer publishes one planned peer-addition target into Meta and then
@@ -90,7 +79,7 @@ func (s *Store) AddPeer(regionID uint64, meta metaregion.Peer) error {
 	if err != nil {
 		return err
 	}
-	return s.executePeerChangePlan(plan)
+	return s.executeTransitionPlan(plan)
 }
 
 // RemovePeer publishes one planned peer-removal target into Meta and then
@@ -121,7 +110,7 @@ func (s *Store) RemovePeer(regionID, peerID uint64) error {
 	if err != nil {
 		return err
 	}
-	return s.executePeerChangePlan(plan)
+	return s.executeTransitionPlan(plan)
 }
 
 // TransferLeader initiates leadership transfer for the specified region to the
@@ -263,48 +252,39 @@ func confChangeTargetPeer(change raftpb.ConfChangeSingle, ctx []byte) metaregion
 	return peerMeta
 }
 
-func (s *Store) planPeerChange(regionID uint64, cc raftpb.ConfChangeV2) (peerChangePlan, error) {
+func (s *Store) planPeerChange(regionID uint64, cc raftpb.ConfChangeV2) (transitionPlan, error) {
 	if s == nil {
-		return peerChangePlan{}, fmt.Errorf("raftstore: store is nil")
+		return transitionPlan{}, fmt.Errorf("raftstore: store is nil")
 	}
 	if regionID == 0 || len(cc.Changes) != 1 {
-		return peerChangePlan{}, fmt.Errorf("raftstore: invalid peer change plan")
+		return transitionPlan{}, fmt.Errorf("raftstore: invalid peer change plan")
 	}
 	if _, err := s.leaderPeer(regionID); err != nil {
-		return peerChangePlan{}, err
+		return transitionPlan{}, err
 	}
 	meta, ok := s.RegionMetaByID(regionID)
 	if !ok {
-		return peerChangePlan{}, fmt.Errorf("raftstore: region %d metadata not found", regionID)
+		return transitionPlan{}, fmt.Errorf("raftstore: region %d metadata not found", regionID)
 	}
 	next := localmeta.CloneRegionMeta(meta)
 	changed, err := applyConfChangeToMeta(&next, cc)
 	if err != nil || !changed {
 		if err != nil {
-			return peerChangePlan{}, err
+			return transitionPlan{}, err
 		}
-		return peerChangePlan{RegionID: regionID, Noop: true}, nil
+		return transitionPlan{RegionID: regionID, Noop: true}, nil
 	}
 	next.Epoch.ConfVersion += uint64(len(cc.Changes))
 	event, err := plannedPeerChangeEvent(next, cc)
 	if err != nil {
-		return peerChangePlan{}, err
+		return transitionPlan{}, err
 	}
-	return peerChangePlan{
+	return transitionPlan{
 		RegionID: regionID,
-		Change:   cc,
 		Event:    event,
+		Action:   "peer change",
+		Propose: func(peerRef *peer.Peer) error {
+			return peerRef.ProposeConfChange(cc)
+		},
 	}, nil
-}
-
-func (s *Store) executePeerChangePlan(plan peerChangePlan) error {
-	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
-	}
-	if plan.Noop {
-		return nil
-	}
-	return s.executePlannedTransition(plan.RegionID, plan.Event, "peer change", func(peerRef *peer.Peer) error {
-		return peerRef.ProposeConfChange(plan.Change)
-	})
 }

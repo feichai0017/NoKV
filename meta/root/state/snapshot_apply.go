@@ -74,9 +74,9 @@ func ApplyPeerChangeToSnapshot(snapshot *Snapshot, event rootevent.Event) bool {
 		return true
 	case rootevent.KindPeerAdded, rootevent.KindPeerRemoved:
 		change, _ := PendingPeerChangeFromEvent(event)
-		prev, ok := snapshot.PendingPeerChanges[event.PeerChange.RegionID]
-		matchedPending := ok && PendingPeerChangeMatchesEvent(prev, event)
-		if !matchedPending {
+		current, hasCurrent := snapshot.Descriptors[event.PeerChange.RegionID]
+		completion := ObservePeerChangeCompletion(snapshot.PendingPeerChanges, current, hasCurrent, event)
+		if completion.Open() {
 			snapshot.State.ClusterEpoch++
 		}
 		snapshot.Descriptors[event.PeerChange.RegionID] = change.Target.Clone()
