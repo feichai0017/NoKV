@@ -48,8 +48,8 @@
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-04-03</span>
-    <h3><a href="2026-04-03-delos-lite-metadata-root-roadmap.html">Delos-lite Metadata Root 与 Virtual Log 路线</a></h3>
-    <p>统一描述 NoKV 的 metadata root 正式模式、Delos 借鉴点、Virtual Log 目标边界，以及下一阶段的实现重点。</p>
+    <h3><a href="2026-04-03-delos-lite-metadata-root-roadmap.html">Rooted Metadata、Delos-lite 与 Virtual Log</a></h3>
+    <p>完整说明 NoKV 当前的 metadata truth、PD 隔离、Virtual Log substrate、local/replicated backend，以及为什么这条主线适合作为后续研究平台。</p>
   </div>
 </div>
 

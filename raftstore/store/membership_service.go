@@ -86,7 +86,7 @@ func (s *Store) AddPeer(regionID uint64, meta metaregion.Peer) error {
 		},
 		Context: encodeConfChangeContext([]metaregion.Peer{meta}),
 	}
-	target, err := s.peerChangeTarget(regionID, cc)
+	target, err := s.buildPeerChangeTarget(regionID, cc)
 	if err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ func (s *Store) RemovePeer(regionID, peerID uint64) error {
 		},
 		Context: encodeConfChangeContext([]metaregion.Peer{ctxMeta}),
 	}
-	target, err := s.peerChangeTarget(regionID, cc)
+	target, err := s.buildPeerChangeTarget(regionID, cc)
 	if err != nil {
 		return err
 	}
@@ -263,7 +263,7 @@ func confChangeTargetPeer(change raftpb.ConfChangeSingle, ctx []byte) metaregion
 	return peerMeta
 }
 
-func (s *Store) peerChangeTarget(regionID uint64, cc raftpb.ConfChangeV2) (transitionTarget, error) {
+func (s *Store) buildPeerChangeTarget(regionID uint64, cc raftpb.ConfChangeV2) (transitionTarget, error) {
 	if s == nil {
 		return transitionTarget{}, fmt.Errorf("raftstore: store is nil")
 	}
@@ -291,7 +291,7 @@ func (s *Store) peerChangeTarget(regionID uint64, cc raftpb.ConfChangeV2) (trans
 		RegionID: regionID,
 		Event:    event,
 		Action:   "peer change",
-		Plan: transitionPlan{
+		Proposal: transitionProposal{
 			ConfChange: &cc,
 		},
 	}, nil

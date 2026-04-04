@@ -2,6 +2,7 @@ package storage
 
 import (
 	"testing"
+	"time"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -174,4 +175,34 @@ func TestPlanTailCompaction(t *testing.T) {
 	require.False(t, plan.Compacted)
 	require.Len(t, plan.Tail.Records, 3)
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 2}, plan.RetainFrom)
+}
+
+func TestTailSubscriptionTracksAcknowledgedToken(t *testing.T) {
+	initial := TailToken{Cursor: rootstate.Cursor{Term: 2, Index: 4}, Revision: 3}
+	expected := TailAdvance{
+		After: initial,
+		Token: TailToken{Cursor: rootstate.Cursor{Term: 2, Index: 5}, Revision: 4},
+		Observed: ObservedCommitted{
+			Checkpoint: Checkpoint{
+				Snapshot: rootstate.Snapshot{
+					State: rootstate.State{LastCommitted: rootstate.Cursor{Term: 2, Index: 5}},
+				},
+			},
+		},
+	}
+
+	var seen TailToken
+	sub := NewTailSubscription(initial, func(after TailToken, timeout time.Duration) (TailAdvance, error) {
+		seen = after
+		return expected, nil
+	})
+	require.NotNil(t, sub)
+
+	advance, err := sub.Wait(50 * time.Millisecond)
+	require.NoError(t, err)
+	require.Equal(t, initial, seen)
+	require.Equal(t, expected.Token, advance.Token)
+
+	sub.Acknowledge(advance)
+	require.Equal(t, expected.Token, sub.Token())
 }
