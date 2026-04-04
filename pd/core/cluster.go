@@ -2,6 +2,7 @@ package core
 
 import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	pdview "github.com/feichai0017/NoKV/pd/view"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"time"
@@ -13,21 +14,27 @@ type StoreStats = pdview.StoreStats
 // RegionInfo captures region metadata with heartbeat timestamp.
 type RegionInfo = pdview.RegionInfo
 
+// TransitionSnapshot captures rooted pending execution state materialized into
+// PD runtime view.
+type TransitionSnapshot = pdview.TransitionSnapshot
+
 // Cluster stores in-memory PD metadata and provides route lookups.
 //
 // NOTE: Cluster intentionally keeps only the in-memory metadata/state model.
 // PD RPC wiring and persistence are handled by higher layers (pd/server and
 // pd/storage).
 type Cluster struct {
-	stores  *pdview.StoreHealthView
-	regions *pdview.RegionDirectoryView
+	stores      *pdview.StoreHealthView
+	regions     *pdview.RegionDirectoryView
+	transitions *pdview.TransitionView
 }
 
 // NewCluster creates an empty in-memory cluster metadata view.
 func NewCluster() *Cluster {
 	return &Cluster{
-		stores:  pdview.NewStoreHealthView(),
-		regions: pdview.NewRegionDirectoryView(),
+		stores:      pdview.NewStoreHealthView(),
+		regions:     pdview.NewRegionDirectoryView(),
+		transitions: pdview.NewTransitionView(),
 	}
 }
 
@@ -77,6 +84,17 @@ func (c *Cluster) ValidateRegionDescriptor(desc descriptor.Descriptor) error {
 // PublishRootEvent applies one explicit rooted truth event into the runtime PD
 // route view.
 func (c *Cluster) PublishRootEvent(event rootevent.Event) error {
+	if c == nil {
+		return nil
+	}
+	if err := c.applyRootEventToRegions(event); err != nil {
+		return err
+	}
+	c.applyRootEventToTransitions(event)
+	return nil
+}
+
+func (c *Cluster) applyRootEventToRegions(event rootevent.Event) error {
 	if c == nil {
 		return nil
 	}
@@ -162,10 +180,32 @@ func (c *Cluster) RegionSnapshot() []RegionInfo {
 // ReplaceRegionSnapshot replaces the region directory view from one rooted
 // snapshot while preserving store-health runtime observations.
 func (c *Cluster) ReplaceRegionSnapshot(descriptors map[uint64]descriptor.Descriptor) {
+	c.ReplaceRootSnapshot(descriptors, nil, nil)
+}
+
+// ReplaceRootSnapshot replaces the runtime rooted view from one rooted durable
+// snapshot while preserving store-heartbeat observations.
+func (c *Cluster) ReplaceRootSnapshot(
+	descriptors map[uint64]descriptor.Descriptor,
+	pendingPeerChanges map[uint64]rootstate.PendingPeerChange,
+	pendingRangeChanges map[uint64]rootstate.PendingRangeChange,
+) {
 	if c == nil {
 		return
 	}
 	c.regions.Replace(descriptors)
+	c.transitions.Replace(pendingPeerChanges, pendingRangeChanges)
+}
+
+// TransitionSnapshot returns a stable copy of rooted pending execution state.
+func (c *Cluster) TransitionSnapshot() TransitionSnapshot {
+	if c == nil {
+		return TransitionSnapshot{
+			PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
+			PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
+		}
+	}
+	return c.transitions.Snapshot()
 }
 
 // GetRegionDescriptorByKey returns the rooted descriptor containing key
@@ -199,6 +239,37 @@ func (c *Cluster) clone() *Cluster {
 	}
 	for _, region := range c.RegionSnapshot() {
 		_ = out.regions.UpsertAt(region.Descriptor, region.LastHeartbeat)
+	}
+	transitions := c.TransitionSnapshot()
+	out.transitions.Replace(transitions.PendingPeerChanges, transitions.PendingRangeChanges)
+	return out
+}
+
+func (c *Cluster) applyRootEventToTransitions(event rootevent.Event) {
+	if c == nil || c.transitions == nil {
+		return
+	}
+	transitions := c.transitions.Snapshot()
+	snapshot := rootstate.Snapshot{
+		Descriptors:         descriptorsFromRegionInfos(c.RegionSnapshot()),
+		PendingPeerChanges:  transitions.PendingPeerChanges,
+		PendingRangeChanges: transitions.PendingRangeChanges,
+	}
+	rootstate.ApplyEventToSnapshot(&snapshot, snapshot.State.LastCommitted, event)
+	c.transitions.Replace(snapshot.PendingPeerChanges, snapshot.PendingRangeChanges)
+}
+
+func descriptorsFromRegionInfos(in []RegionInfo) map[uint64]descriptor.Descriptor {
+	if len(in) == 0 {
+		return make(map[uint64]descriptor.Descriptor)
+	}
+	out := make(map[uint64]descriptor.Descriptor, len(in))
+	for _, region := range in {
+		desc := region.Descriptor
+		if desc.RegionID == 0 {
+			continue
+		}
+		out[desc.RegionID] = desc.Clone()
 	}
 	return out
 }

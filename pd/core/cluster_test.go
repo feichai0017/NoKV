@@ -144,6 +144,25 @@ func TestClusterReplaceRegionSnapshot(t *testing.T) {
 	require.Len(t, c.RegionSnapshot(), 1)
 }
 
+func TestClusterPublishRootEventTracksTransitionSnapshot(t *testing.T) {
+	c := NewCluster()
+	current := testDescriptor(20, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
+	require.NoError(t, c.PublishRegionDescriptor(current))
+
+	target := current.Clone()
+	target.Peers = append(target.Peers, metaregion.Peer{StoreID: 2, PeerID: 201})
+	target.Epoch.ConfVersion++
+	target.EnsureHash()
+
+	require.NoError(t, c.PublishRootEvent(rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)))
+	transitions := c.TransitionSnapshot()
+	require.Contains(t, transitions.PendingPeerChanges, target.RegionID)
+
+	require.NoError(t, c.PublishRootEvent(rootevent.PeerAdded(target.RegionID, 2, 201, target)))
+	transitions = c.TransitionSnapshot()
+	require.NotContains(t, transitions.PendingPeerChanges, target.RegionID)
+}
+
 func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descriptor.Descriptor {
 	desc := descriptor.Descriptor{
 		RegionID: id,
