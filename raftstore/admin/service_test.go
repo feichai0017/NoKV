@@ -52,7 +52,7 @@ type captureSchedulerClient struct {
 	events []rootevent.Event
 }
 
-func (c *captureSchedulerClient) PublishRegionDescriptor(context.Context, descriptor.Descriptor) {}
+func (c *captureSchedulerClient) ReportRegionHeartbeat(context.Context, descriptor.Descriptor) {}
 
 func (c *captureSchedulerClient) PublishRootEvent(_ context.Context, event rootevent.Event) error {
 	c.mu.Lock()
