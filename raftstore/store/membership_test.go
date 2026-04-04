@@ -80,7 +80,7 @@ func TestHandlePeerConfChangeUpdatesRegionMeta(t *testing.T) {
 	require.False(t, hosted)
 }
 
-func TestPlanAddPeerSeparatesPublishFromProposal(t *testing.T) {
+func TestAddPeerPublishesPlannedTarget(t *testing.T) {
 	db, localMeta := openStoreDB(t)
 	sink := newTestSchedulerSink()
 	rs := NewStore(Config{Scheduler: sink, StoreID: 1})
@@ -114,12 +114,7 @@ func TestPlanAddPeerSeparatesPublishFromProposal(t *testing.T) {
 	require.NoError(t, p.Campaign())
 	sink.ResetHistory()
 
-	plan, err := rs.PlanAddPeer(region.ID, metaregion.Peer{StoreID: 2, PeerID: 2})
-	require.NoError(t, err)
-	require.Equal(t, rootevent.KindPeerAdditionPlanned, plan.Event.Kind)
-	require.Empty(t, sink.EventHistory())
-
-	require.NoError(t, rs.PublishPeerChangePlan(plan))
+	require.NoError(t, rs.AddPeer(region.ID, metaregion.Peer{StoreID: 2, PeerID: 2}))
 	history := sink.EventHistory()
 	require.Len(t, history, 1)
 	require.Equal(t, "root", history[0].kind)

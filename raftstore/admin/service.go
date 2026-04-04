@@ -46,14 +46,7 @@ func (s *Service) AddPeer(_ context.Context, req *adminpb.AddPeerRequest) (*admi
 	if req.GetRegionId() == 0 || req.GetStoreId() == 0 || req.GetPeerId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, "region_id, store_id, and peer_id are required")
 	}
-	plan, err := s.store.PlanAddPeer(req.GetRegionId(), metaregion.Peer{StoreID: req.GetStoreId(), PeerID: req.GetPeerId()})
-	if err != nil {
-		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
-	}
-	if err := s.store.PublishPeerChangePlan(plan); err != nil {
-		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
-	}
-	if err := s.store.ProposePeerChange(plan); err != nil {
+	if err := s.store.AddPeer(req.GetRegionId(), metaregion.Peer{StoreID: req.GetStoreId(), PeerID: req.GetPeerId()}); err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
 	}
 	runtime, ok := s.store.RegionRuntimeStatus(req.GetRegionId())
@@ -71,14 +64,7 @@ func (s *Service) RemovePeer(_ context.Context, req *adminpb.RemovePeerRequest) 
 	if req.GetRegionId() == 0 || req.GetPeerId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, "region_id and peer_id are required")
 	}
-	plan, err := s.store.PlanRemovePeer(req.GetRegionId(), req.GetPeerId())
-	if err != nil {
-		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
-	}
-	if err := s.store.PublishPeerChangePlan(plan); err != nil {
-		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
-	}
-	if err := s.store.ProposePeerChange(plan); err != nil {
+	if err := s.store.RemovePeer(req.GetRegionId(), req.GetPeerId()); err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
 	}
 	runtime, ok := s.store.RegionRuntimeStatus(req.GetRegionId())
