@@ -39,15 +39,21 @@ func NewServiceWithSnapshot(st *store.Store, snapshot snapshotpkg.SnapshotStore)
 }
 
 // AddPeer issues one raft configuration change on the region leader.
-func (s *Service) AddPeer(ctx context.Context, req *adminpb.AddPeerRequest) (*adminpb.AddPeerResponse, error) {
-	_ = ctx
+func (s *Service) AddPeer(_ context.Context, req *adminpb.AddPeerRequest) (*adminpb.AddPeerResponse, error) {
 	if s == nil || s.store == nil {
 		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
 	}
 	if req.GetRegionId() == 0 || req.GetStoreId() == 0 || req.GetPeerId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, "region_id, store_id, and peer_id are required")
 	}
-	if err := s.store.ProposeAddPeer(req.GetRegionId(), metaregion.Peer{StoreID: req.GetStoreId(), PeerID: req.GetPeerId()}); err != nil {
+	plan, err := s.store.PlanAddPeer(req.GetRegionId(), metaregion.Peer{StoreID: req.GetStoreId(), PeerID: req.GetPeerId()})
+	if err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
+	}
+	if err := s.store.PublishPeerChangePlan(plan); err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
+	}
+	if err := s.store.ProposePeerChange(plan); err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
 	}
 	runtime, ok := s.store.RegionRuntimeStatus(req.GetRegionId())
@@ -58,15 +64,21 @@ func (s *Service) AddPeer(ctx context.Context, req *adminpb.AddPeerRequest) (*ad
 }
 
 // RemovePeer issues one raft configuration change removing the specified peer.
-func (s *Service) RemovePeer(ctx context.Context, req *adminpb.RemovePeerRequest) (*adminpb.RemovePeerResponse, error) {
-	_ = ctx
+func (s *Service) RemovePeer(_ context.Context, req *adminpb.RemovePeerRequest) (*adminpb.RemovePeerResponse, error) {
 	if s == nil || s.store == nil {
 		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
 	}
 	if req.GetRegionId() == 0 || req.GetPeerId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, "region_id and peer_id are required")
 	}
-	if err := s.store.ProposeRemovePeer(req.GetRegionId(), req.GetPeerId()); err != nil {
+	plan, err := s.store.PlanRemovePeer(req.GetRegionId(), req.GetPeerId())
+	if err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
+	}
+	if err := s.store.PublishPeerChangePlan(plan); err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
+	}
+	if err := s.store.ProposePeerChange(plan); err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
 	}
 	runtime, ok := s.store.RegionRuntimeStatus(req.GetRegionId())

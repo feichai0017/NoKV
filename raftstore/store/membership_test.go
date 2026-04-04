@@ -2,6 +2,7 @@ package store
 
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
 
@@ -77,4 +78,50 @@ func TestHandlePeerConfChangeUpdatesRegionMeta(t *testing.T) {
 	require.False(t, ok)
 	_, hosted := rs.Peer(1)
 	require.False(t, hosted)
+}
+
+func TestPlanAddPeerSeparatesPublishFromProposal(t *testing.T) {
+	db, localMeta := openStoreDB(t)
+	sink := newTestSchedulerSink()
+	rs := NewStore(Config{Scheduler: sink, StoreID: 1})
+	t.Cleanup(func() { rs.Close() })
+
+	region := &localmeta.RegionMeta{
+		ID:       202,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 1}},
+		State:    metaregion.ReplicaStateRunning,
+	}
+	cfg := &peer.Config{
+		RaftConfig: myraft.Config{
+			ID:              1,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		},
+		Transport: noopTransport{},
+		Storage:   mustPeerStorage(t, db, localMeta, region.ID),
+		GroupID:   region.ID,
+		Region:    region,
+	}
+	p, err := rs.StartPeer(cfg, []myraft.Peer{{ID: 1}})
+	require.NoError(t, err)
+	t.Cleanup(func() { rs.StopPeer(p.ID()) })
+	require.NoError(t, p.Campaign())
+	sink.ResetHistory()
+
+	plan, err := rs.PlanAddPeer(region.ID, metaregion.Peer{StoreID: 2, PeerID: 2})
+	require.NoError(t, err)
+	require.Equal(t, rootevent.KindPeerAdditionPlanned, plan.Event.Kind)
+	require.Empty(t, sink.EventHistory())
+
+	require.NoError(t, rs.PublishPeerChangePlan(plan))
+	history := sink.EventHistory()
+	require.Len(t, history, 1)
+	require.Equal(t, "root", history[0].kind)
+	require.Equal(t, rootevent.KindPeerAdditionPlanned, history[0].rootKind)
 }
