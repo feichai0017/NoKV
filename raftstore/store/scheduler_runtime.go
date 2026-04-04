@@ -182,7 +182,7 @@ func (s *Store) sendHeartbeats() {
 	}
 	ctx := s.runtimeContext()
 	for _, desc := range s.schedulerDescriptors() {
-		s.schedulerClient().PublishRegionDescriptor(ctx, desc)
+		s.schedulerClient().ReportRegionHeartbeat(ctx, desc)
 	}
 	if s.storeID == 0 {
 		return
