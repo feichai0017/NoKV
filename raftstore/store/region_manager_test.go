@@ -48,10 +48,10 @@ func TestRegionManagerPeerTracking(t *testing.T) {
 
 func TestRegionManagerRemove(t *testing.T) {
 	rm := newRegionManager(nil, nil, nil)
-	requireNoError(t, rm.applyRegionMeta(localmeta.RegionMeta{ID: 3}))
+	requireNoError(t, rm.applyRegionMeta(localmeta.RegionMeta{ID: 3}, true))
 	rm.setPeer(3, &peer.Peer{})
 
-	requireNoError(t, rm.applyRegionRemoval(3))
+	requireNoError(t, rm.applyRegionRemoval(3, true))
 	if _, ok := rm.meta(3); ok {
 		t.Fatalf("meta should be removed")
 	}
