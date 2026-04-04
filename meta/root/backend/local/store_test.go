@@ -123,7 +123,7 @@ func TestStoreReplaysLogAfterStaleCheckpoint(t *testing.T) {
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, state.LastCommitted)
 }
 
-func TestStoreLoadsLegacyRootStateCheckpoint(t *testing.T) {
+func TestStoreRejectsLegacyRootStateCheckpoint(t *testing.T) {
 	dir := t.TempDir()
 	payload, err := proto.Marshal(&metapb.RootState{
 		ClusterEpoch:    7,
@@ -135,15 +135,8 @@ func TestStoreLoadsLegacyRootStateCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, rootfile.CheckpointFileName), payload, 0o644))
 
-	reopened, err := Open(dir, nil)
-	require.NoError(t, err)
-	state, err := reopened.Current()
-	require.NoError(t, err)
-	require.Equal(t, uint64(7), state.ClusterEpoch)
-	require.Equal(t, uint64(3), state.MembershipEpoch)
-	require.Equal(t, rootstate.Cursor{Term: 1, Index: 4}, state.LastCommitted)
-	require.Equal(t, uint64(11), state.IDFence)
-	require.Equal(t, uint64(22), state.TSOFence)
+	_, err = Open(dir, nil)
+	require.Error(t, err)
 }
 
 func TestStoreCompactsPhysicalLogAndKeepsRecentTail(t *testing.T) {

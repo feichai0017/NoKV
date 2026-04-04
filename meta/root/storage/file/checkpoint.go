@@ -24,12 +24,6 @@ type fileCheckpointStore struct {
 //
 // On-disk format:
 //   - one binary protobuf blob encoded as metapb.RootCheckpoint
-//
-// Compatibility note:
-//   - older workdirs may still contain a checkpoint encoded as metapb.RootState
-//     without descriptor materialization; that legacy payload is still accepted
-//     here so storage recovery stays monotonic even though the canonical format
-//     is now RootCheckpoint.
 func (s fileCheckpointStore) LoadCheckpoint() (rootstorage.Checkpoint, error) {
 	path := filepath.Join(s.workdir, CheckpointFileName)
 	data, err := s.fs.ReadFile(path)
@@ -50,22 +44,14 @@ func (s fileCheckpointStore) LoadCheckpoint() (rootstorage.Checkpoint, error) {
 	if err := proto.Unmarshal(data, &pbCheckpoint); err != nil {
 		return rootstorage.Checkpoint{}, err
 	}
-	if pbCheckpoint.State == nil && len(pbCheckpoint.Descriptors) == 0 {
-		var pbState metapb.RootState
-		if err := proto.Unmarshal(data, &pbState); err == nil {
-			return rootstorage.Checkpoint{
-				Snapshot: rootstate.Snapshot{
-					State:       metacodec.RootStateFromProto(&pbState),
-					Descriptors: make(map[uint64]descriptor.Descriptor),
-				},
-			}, nil
-		}
+	if pbCheckpoint.State == nil {
+		return rootstorage.Checkpoint{}, errors.New("root checkpoint missing state")
 	}
-	snapshot, logOffset := metacodec.RootSnapshotFromProto(&pbCheckpoint)
+	snapshot, tailOffset := metacodec.RootSnapshotFromProto(&pbCheckpoint)
 	if snapshot.Descriptors == nil {
 		snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
 	}
-	return rootstorage.Checkpoint{Snapshot: snapshot, TailOffset: int64(logOffset)}, nil
+	return rootstorage.Checkpoint{Snapshot: snapshot, TailOffset: int64(tailOffset)}, nil
 }
 
 // SaveCheckpoint publishes a new rooted checkpoint atomically.

@@ -23,7 +23,6 @@ const (
 	TransitionStatusCompleted
 	TransitionStatusConflict
 	TransitionStatusSuperseded
-	// TransitionStatusCancelled is reserved for future explicit withdrawn plans.
 	TransitionStatusCancelled
 	TransitionStatusAborted
 )

@@ -36,12 +36,16 @@ const (
 	RootEventKind_ROOT_EVENT_KIND_TSO_ALLOCATOR_FENCED        RootEventKind = 7
 	RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_PLANNED        RootEventKind = 8
 	RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED      RootEventKind = 9
+	RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_CANCELLED      RootEventKind = 16
 	RootEventKind_ROOT_EVENT_KIND_REGION_MERGE_PLANNED        RootEventKind = 10
 	RootEventKind_ROOT_EVENT_KIND_REGION_MERGED               RootEventKind = 11
+	RootEventKind_ROOT_EVENT_KIND_REGION_MERGE_CANCELLED      RootEventKind = 17
 	RootEventKind_ROOT_EVENT_KIND_PEER_ADDITION_PLANNED       RootEventKind = 12
 	RootEventKind_ROOT_EVENT_KIND_PEER_REMOVAL_PLANNED        RootEventKind = 13
 	RootEventKind_ROOT_EVENT_KIND_PEER_ADDED                  RootEventKind = 14
 	RootEventKind_ROOT_EVENT_KIND_PEER_REMOVED                RootEventKind = 15
+	RootEventKind_ROOT_EVENT_KIND_PEER_ADDITION_CANCELLED     RootEventKind = 18
+	RootEventKind_ROOT_EVENT_KIND_PEER_REMOVAL_CANCELLED      RootEventKind = 19
 )
 
 // Enum value maps for RootEventKind.
@@ -57,12 +61,16 @@ var (
 		7:  "ROOT_EVENT_KIND_TSO_ALLOCATOR_FENCED",
 		8:  "ROOT_EVENT_KIND_REGION_SPLIT_PLANNED",
 		9:  "ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED",
+		16: "ROOT_EVENT_KIND_REGION_SPLIT_CANCELLED",
 		10: "ROOT_EVENT_KIND_REGION_MERGE_PLANNED",
 		11: "ROOT_EVENT_KIND_REGION_MERGED",
+		17: "ROOT_EVENT_KIND_REGION_MERGE_CANCELLED",
 		12: "ROOT_EVENT_KIND_PEER_ADDITION_PLANNED",
 		13: "ROOT_EVENT_KIND_PEER_REMOVAL_PLANNED",
 		14: "ROOT_EVENT_KIND_PEER_ADDED",
 		15: "ROOT_EVENT_KIND_PEER_REMOVED",
+		18: "ROOT_EVENT_KIND_PEER_ADDITION_CANCELLED",
+		19: "ROOT_EVENT_KIND_PEER_REMOVAL_CANCELLED",
 	}
 	RootEventKind_value = map[string]int32{
 		"ROOT_EVENT_KIND_UNSPECIFIED":                 0,
@@ -75,12 +83,16 @@ var (
 		"ROOT_EVENT_KIND_TSO_ALLOCATOR_FENCED":        7,
 		"ROOT_EVENT_KIND_REGION_SPLIT_PLANNED":        8,
 		"ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED":      9,
+		"ROOT_EVENT_KIND_REGION_SPLIT_CANCELLED":      16,
 		"ROOT_EVENT_KIND_REGION_MERGE_PLANNED":        10,
 		"ROOT_EVENT_KIND_REGION_MERGED":               11,
+		"ROOT_EVENT_KIND_REGION_MERGE_CANCELLED":      17,
 		"ROOT_EVENT_KIND_PEER_ADDITION_PLANNED":       12,
 		"ROOT_EVENT_KIND_PEER_REMOVAL_PLANNED":        13,
 		"ROOT_EVENT_KIND_PEER_ADDED":                  14,
 		"ROOT_EVENT_KIND_PEER_REMOVED":                15,
+		"ROOT_EVENT_KIND_PEER_ADDITION_CANCELLED":     18,
+		"ROOT_EVENT_KIND_PEER_REMOVAL_CANCELLED":      19,
 	}
 )
 
@@ -341,7 +353,7 @@ type RootCheckpoint struct {
 	state               protoimpl.MessageState    `protogen:"open.v1"`
 	State               *RootState                `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
 	Descriptors         []*RegionDescriptor       `protobuf:"bytes,2,rep,name=descriptors,proto3" json:"descriptors,omitempty"`
-	LogOffset           uint64                    `protobuf:"varint,3,opt,name=log_offset,json=logOffset,proto3" json:"log_offset,omitempty"`
+	TailOffset          uint64                    `protobuf:"varint,3,opt,name=tail_offset,json=tailOffset,proto3" json:"tail_offset,omitempty"`
 	PendingPeerChanges  []*RootPendingPeerChange  `protobuf:"bytes,4,rep,name=pending_peer_changes,json=pendingPeerChanges,proto3" json:"pending_peer_changes,omitempty"`
 	PendingRangeChanges []*RootPendingRangeChange `protobuf:"bytes,5,rep,name=pending_range_changes,json=pendingRangeChanges,proto3" json:"pending_range_changes,omitempty"`
 	unknownFields       protoimpl.UnknownFields
@@ -392,9 +404,9 @@ func (x *RootCheckpoint) GetDescriptors() []*RegionDescriptor {
 	return nil
 }
 
-func (x *RootCheckpoint) GetLogOffset() uint64 {
+func (x *RootCheckpoint) GetTailOffset() uint64 {
 	if x != nil {
-		return x.LogOffset
+		return x.TailOffset
 	}
 	return 0
 }
@@ -603,6 +615,7 @@ type RootRangeSplit struct {
 	SplitKey       []byte                 `protobuf:"bytes,2,opt,name=split_key,json=splitKey,proto3" json:"split_key,omitempty"`
 	Left           *RegionDescriptor      `protobuf:"bytes,3,opt,name=left,proto3" json:"left,omitempty"`
 	Right          *RegionDescriptor      `protobuf:"bytes,4,opt,name=right,proto3" json:"right,omitempty"`
+	BaseParent     *RegionDescriptor      `protobuf:"bytes,5,opt,name=base_parent,json=baseParent,proto3" json:"base_parent,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -665,11 +678,20 @@ func (x *RootRangeSplit) GetRight() *RegionDescriptor {
 	return nil
 }
 
+func (x *RootRangeSplit) GetBaseParent() *RegionDescriptor {
+	if x != nil {
+		return x.BaseParent
+	}
+	return nil
+}
+
 type RootRangeMerge struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	LeftRegionId  uint64                 `protobuf:"varint,1,opt,name=left_region_id,json=leftRegionId,proto3" json:"left_region_id,omitempty"`
 	RightRegionId uint64                 `protobuf:"varint,2,opt,name=right_region_id,json=rightRegionId,proto3" json:"right_region_id,omitempty"`
 	Merged        *RegionDescriptor      `protobuf:"bytes,3,opt,name=merged,proto3" json:"merged,omitempty"`
+	BaseLeft      *RegionDescriptor      `protobuf:"bytes,4,opt,name=base_left,json=baseLeft,proto3" json:"base_left,omitempty"`
+	BaseRight     *RegionDescriptor      `protobuf:"bytes,5,opt,name=base_right,json=baseRight,proto3" json:"base_right,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -725,12 +747,27 @@ func (x *RootRangeMerge) GetMerged() *RegionDescriptor {
 	return nil
 }
 
+func (x *RootRangeMerge) GetBaseLeft() *RegionDescriptor {
+	if x != nil {
+		return x.BaseLeft
+	}
+	return nil
+}
+
+func (x *RootRangeMerge) GetBaseRight() *RegionDescriptor {
+	if x != nil {
+		return x.BaseRight
+	}
+	return nil
+}
+
 type RootPeerChange struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
 	StoreId       uint64                 `protobuf:"varint,2,opt,name=store_id,json=storeId,proto3" json:"store_id,omitempty"`
 	PeerId        uint64                 `protobuf:"varint,3,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
-	Descriptor_   *RegionDescriptor      `protobuf:"bytes,4,opt,name=descriptor,proto3" json:"descriptor,omitempty"`
+	Target        *RegionDescriptor      `protobuf:"bytes,4,opt,name=target,proto3" json:"target,omitempty"`
+	Base          *RegionDescriptor      `protobuf:"bytes,5,opt,name=base,proto3" json:"base,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -786,9 +823,16 @@ func (x *RootPeerChange) GetPeerId() uint64 {
 	return 0
 }
 
-func (x *RootPeerChange) GetDescriptor_() *RegionDescriptor {
+func (x *RootPeerChange) GetTarget() *RegionDescriptor {
 	if x != nil {
-		return x.Descriptor_
+		return x.Target
+	}
+	return nil
+}
+
+func (x *RootPeerChange) GetBase() *RegionDescriptor {
+	if x != nil {
+		return x.Base
 	}
 	return nil
 }
@@ -799,7 +843,8 @@ type RootPendingPeerChange struct {
 	StoreId       uint64                    `protobuf:"varint,2,opt,name=store_id,json=storeId,proto3" json:"store_id,omitempty"`
 	PeerId        uint64                    `protobuf:"varint,3,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
 	Kind          RootPendingPeerChangeKind `protobuf:"varint,4,opt,name=kind,proto3,enum=nokv.meta.v1.RootPendingPeerChangeKind" json:"kind,omitempty"`
-	Descriptor_   *RegionDescriptor         `protobuf:"bytes,5,opt,name=descriptor,proto3" json:"descriptor,omitempty"`
+	Target        *RegionDescriptor         `protobuf:"bytes,5,opt,name=target,proto3" json:"target,omitempty"`
+	Base          *RegionDescriptor         `protobuf:"bytes,6,opt,name=base,proto3" json:"base,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -862,9 +907,16 @@ func (x *RootPendingPeerChange) GetKind() RootPendingPeerChangeKind {
 	return RootPendingPeerChangeKind_ROOT_PENDING_PEER_CHANGE_KIND_UNSPECIFIED
 }
 
-func (x *RootPendingPeerChange) GetDescriptor_() *RegionDescriptor {
+func (x *RootPendingPeerChange) GetTarget() *RegionDescriptor {
 	if x != nil {
-		return x.Descriptor_
+		return x.Target
+	}
+	return nil
+}
+
+func (x *RootPendingPeerChange) GetBase() *RegionDescriptor {
+	if x != nil {
+		return x.Base
 	}
 	return nil
 }
@@ -879,6 +931,9 @@ type RootPendingRangeChange struct {
 	Left           *RegionDescriptor          `protobuf:"bytes,6,opt,name=left,proto3" json:"left,omitempty"`
 	Right          *RegionDescriptor          `protobuf:"bytes,7,opt,name=right,proto3" json:"right,omitempty"`
 	Merged         *RegionDescriptor          `protobuf:"bytes,8,opt,name=merged,proto3" json:"merged,omitempty"`
+	BaseParent     *RegionDescriptor          `protobuf:"bytes,9,opt,name=base_parent,json=baseParent,proto3" json:"base_parent,omitempty"`
+	BaseLeft       *RegionDescriptor          `protobuf:"bytes,10,opt,name=base_left,json=baseLeft,proto3" json:"base_left,omitempty"`
+	BaseRight      *RegionDescriptor          `protobuf:"bytes,11,opt,name=base_right,json=baseRight,proto3" json:"base_right,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -965,6 +1020,27 @@ func (x *RootPendingRangeChange) GetRight() *RegionDescriptor {
 func (x *RootPendingRangeChange) GetMerged() *RegionDescriptor {
 	if x != nil {
 		return x.Merged
+	}
+	return nil
+}
+
+func (x *RootPendingRangeChange) GetBaseParent() *RegionDescriptor {
+	if x != nil {
+		return x.BaseParent
+	}
+	return nil
+}
+
+func (x *RootPendingRangeChange) GetBaseLeft() *RegionDescriptor {
+	if x != nil {
+		return x.BaseLeft
+	}
+	return nil
+}
+
+func (x *RootPendingRangeChange) GetBaseRight() *RegionDescriptor {
+	if x != nil {
+		return x.BaseRight
 	}
 	return nil
 }
@@ -1153,12 +1229,12 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x10membership_epoch\x18\x02 \x01(\x04R\x0fmembershipEpoch\x12?\n" +
 	"\x0elast_committed\x18\x04 \x01(\v2\x18.nokv.meta.v1.RootCursorR\rlastCommitted\x12\x19\n" +
 	"\bid_fence\x18\x05 \x01(\x04R\aidFence\x12\x1b\n" +
-	"\ttso_fence\x18\x06 \x01(\x04R\btsoFence\"\xd1\x02\n" +
+	"\ttso_fence\x18\x06 \x01(\x04R\btsoFence\"\xd3\x02\n" +
 	"\x0eRootCheckpoint\x12-\n" +
 	"\x05state\x18\x01 \x01(\v2\x17.nokv.meta.v1.RootStateR\x05state\x12@\n" +
-	"\vdescriptors\x18\x02 \x03(\v2\x1e.nokv.meta.v1.RegionDescriptorR\vdescriptors\x12\x1d\n" +
-	"\n" +
-	"log_offset\x18\x03 \x01(\x04R\tlogOffset\x12U\n" +
+	"\vdescriptors\x18\x02 \x03(\v2\x1e.nokv.meta.v1.RegionDescriptorR\vdescriptors\x12\x1f\n" +
+	"\vtail_offset\x18\x03 \x01(\x04R\n" +
+	"tailOffset\x12U\n" +
 	"\x14pending_peer_changes\x18\x04 \x03(\v2#.nokv.meta.v1.RootPendingPeerChangeR\x12pendingPeerChanges\x12X\n" +
 	"\x15pending_range_changes\x18\x05 \x03(\v2$.nokv.meta.v1.RootPendingRangeChangeR\x13pendingRangeChanges\"J\n" +
 	"\x13RootStoreMembership\x12\x19\n" +
@@ -1171,31 +1247,34 @@ const file_meta_root_proto_rawDesc = "" +
 	"descriptor\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\n" +
 	"descriptor\"0\n" +
 	"\x11RootRegionRemoval\x12\x1b\n" +
-	"\tregion_id\x18\x01 \x01(\x04R\bregionId\"\xc1\x01\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\"\x82\x02\n" +
 	"\x0eRootRangeSplit\x12(\n" +
 	"\x10parent_region_id\x18\x01 \x01(\x04R\x0eparentRegionId\x12\x1b\n" +
 	"\tsplit_key\x18\x02 \x01(\fR\bsplitKey\x122\n" +
 	"\x04left\x18\x03 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x04left\x124\n" +
-	"\x05right\x18\x04 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x05right\"\x96\x01\n" +
+	"\x05right\x18\x04 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x05right\x12?\n" +
+	"\vbase_parent\x18\x05 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\n" +
+	"baseParent\"\x92\x02\n" +
 	"\x0eRootRangeMerge\x12$\n" +
 	"\x0eleft_region_id\x18\x01 \x01(\x04R\fleftRegionId\x12&\n" +
 	"\x0fright_region_id\x18\x02 \x01(\x04R\rrightRegionId\x126\n" +
-	"\x06merged\x18\x03 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x06merged\"\xa1\x01\n" +
+	"\x06merged\x18\x03 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x06merged\x12;\n" +
+	"\tbase_left\x18\x04 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\bbaseLeft\x12=\n" +
+	"\n" +
+	"base_right\x18\x05 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\tbaseRight\"\xcd\x01\n" +
 	"\x0eRootPeerChange\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12\x19\n" +
 	"\bstore_id\x18\x02 \x01(\x04R\astoreId\x12\x17\n" +
-	"\apeer_id\x18\x03 \x01(\x04R\x06peerId\x12>\n" +
-	"\n" +
-	"descriptor\x18\x04 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\n" +
-	"descriptor\"\xe5\x01\n" +
+	"\apeer_id\x18\x03 \x01(\x04R\x06peerId\x126\n" +
+	"\x06target\x18\x04 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x06target\x122\n" +
+	"\x04base\x18\x05 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x04base\"\x91\x02\n" +
 	"\x15RootPendingPeerChange\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12\x19\n" +
 	"\bstore_id\x18\x02 \x01(\x04R\astoreId\x12\x17\n" +
 	"\apeer_id\x18\x03 \x01(\x04R\x06peerId\x12;\n" +
-	"\x04kind\x18\x04 \x01(\x0e2'.nokv.meta.v1.RootPendingPeerChangeKindR\x04kind\x12>\n" +
-	"\n" +
-	"descriptor\x18\x05 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\n" +
-	"descriptor\"\x8d\x03\n" +
+	"\x04kind\x18\x04 \x01(\x0e2'.nokv.meta.v1.RootPendingPeerChangeKindR\x04kind\x126\n" +
+	"\x06target\x18\x05 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x06target\x122\n" +
+	"\x04base\x18\x06 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x04base\"\xca\x04\n" +
 	"\x16RootPendingRangeChange\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12<\n" +
 	"\x04kind\x18\x02 \x01(\x0e2(.nokv.meta.v1.RootPendingRangeChangeKindR\x04kind\x12(\n" +
@@ -1204,7 +1283,13 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x0fright_region_id\x18\x05 \x01(\x04R\rrightRegionId\x122\n" +
 	"\x04left\x18\x06 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x04left\x124\n" +
 	"\x05right\x18\a \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x05right\x126\n" +
-	"\x06merged\x18\b \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x06merged\"\xc4\x04\n" +
+	"\x06merged\x18\b \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x06merged\x12?\n" +
+	"\vbase_parent\x18\t \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\n" +
+	"baseParent\x12;\n" +
+	"\tbase_left\x18\n" +
+	" \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\bbaseLeft\x12=\n" +
+	"\n" +
+	"base_right\x18\v \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\tbaseRight\"\xc4\x04\n" +
 	"\tRootEvent\x12/\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1b.nokv.meta.v1.RootEventKindR\x04kind\x12N\n" +
 	"\x10store_membership\x18\x02 \x01(\v2!.nokv.meta.v1.RootStoreMembershipH\x00R\x0fstoreMembership\x12K\n" +
@@ -1217,7 +1302,7 @@ const file_meta_root_proto_rawDesc = "" +
 	"rangeMerge\x12?\n" +
 	"\vpeer_change\x18\b \x01(\v2\x1c.nokv.meta.v1.RootPeerChangeH\x00R\n" +
 	"peerChangeB\t\n" +
-	"\apayload*\xfd\x04\n" +
+	"\apayload*\xae\x06\n" +
 	"\rRootEventKind\x12\x1f\n" +
 	"\x1bROOT_EVENT_KIND_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cROOT_EVENT_KIND_STORE_JOINED\x10\x01\x12\x1e\n" +
@@ -1228,14 +1313,18 @@ const file_meta_root_proto_rawDesc = "" +
 	"!ROOT_EVENT_KIND_REGION_TOMBSTONED\x10\x06\x12(\n" +
 	"$ROOT_EVENT_KIND_TSO_ALLOCATOR_FENCED\x10\a\x12(\n" +
 	"$ROOT_EVENT_KIND_REGION_SPLIT_PLANNED\x10\b\x12*\n" +
-	"&ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED\x10\t\x12(\n" +
+	"&ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED\x10\t\x12*\n" +
+	"&ROOT_EVENT_KIND_REGION_SPLIT_CANCELLED\x10\x10\x12(\n" +
 	"$ROOT_EVENT_KIND_REGION_MERGE_PLANNED\x10\n" +
 	"\x12!\n" +
-	"\x1dROOT_EVENT_KIND_REGION_MERGED\x10\v\x12)\n" +
+	"\x1dROOT_EVENT_KIND_REGION_MERGED\x10\v\x12*\n" +
+	"&ROOT_EVENT_KIND_REGION_MERGE_CANCELLED\x10\x11\x12)\n" +
 	"%ROOT_EVENT_KIND_PEER_ADDITION_PLANNED\x10\f\x12(\n" +
 	"$ROOT_EVENT_KIND_PEER_REMOVAL_PLANNED\x10\r\x12\x1e\n" +
 	"\x1aROOT_EVENT_KIND_PEER_ADDED\x10\x0e\x12 \n" +
-	"\x1cROOT_EVENT_KIND_PEER_REMOVED\x10\x0f*\xa1\x01\n" +
+	"\x1cROOT_EVENT_KIND_PEER_REMOVED\x10\x0f\x12+\n" +
+	"'ROOT_EVENT_KIND_PEER_ADDITION_CANCELLED\x10\x12\x12*\n" +
+	"&ROOT_EVENT_KIND_PEER_REMOVAL_CANCELLED\x10\x13*\xa1\x01\n" +
 	"\x19RootPendingPeerChangeKind\x12-\n" +
 	")ROOT_PENDING_PEER_CHANGE_KIND_UNSPECIFIED\x10\x00\x12*\n" +
 	"&ROOT_PENDING_PEER_CHANGE_KIND_ADDITION\x10\x01\x12)\n" +
@@ -1287,27 +1376,35 @@ var file_meta_root_proto_depIdxs = []int32{
 	16, // 5: nokv.meta.v1.RootRegionDescriptor.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
 	16, // 6: nokv.meta.v1.RootRangeSplit.left:type_name -> nokv.meta.v1.RegionDescriptor
 	16, // 7: nokv.meta.v1.RootRangeSplit.right:type_name -> nokv.meta.v1.RegionDescriptor
-	16, // 8: nokv.meta.v1.RootRangeMerge.merged:type_name -> nokv.meta.v1.RegionDescriptor
-	16, // 9: nokv.meta.v1.RootPeerChange.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	1,  // 10: nokv.meta.v1.RootPendingPeerChange.kind:type_name -> nokv.meta.v1.RootPendingPeerChangeKind
-	16, // 11: nokv.meta.v1.RootPendingPeerChange.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	2,  // 12: nokv.meta.v1.RootPendingRangeChange.kind:type_name -> nokv.meta.v1.RootPendingRangeChangeKind
-	16, // 13: nokv.meta.v1.RootPendingRangeChange.left:type_name -> nokv.meta.v1.RegionDescriptor
-	16, // 14: nokv.meta.v1.RootPendingRangeChange.right:type_name -> nokv.meta.v1.RegionDescriptor
-	16, // 15: nokv.meta.v1.RootPendingRangeChange.merged:type_name -> nokv.meta.v1.RegionDescriptor
-	0,  // 16: nokv.meta.v1.RootEvent.kind:type_name -> nokv.meta.v1.RootEventKind
-	6,  // 17: nokv.meta.v1.RootEvent.store_membership:type_name -> nokv.meta.v1.RootStoreMembership
-	7,  // 18: nokv.meta.v1.RootEvent.allocator_fence:type_name -> nokv.meta.v1.RootAllocatorFence
-	8,  // 19: nokv.meta.v1.RootEvent.region_descriptor:type_name -> nokv.meta.v1.RootRegionDescriptor
-	9,  // 20: nokv.meta.v1.RootEvent.region_removal:type_name -> nokv.meta.v1.RootRegionRemoval
-	10, // 21: nokv.meta.v1.RootEvent.range_split:type_name -> nokv.meta.v1.RootRangeSplit
-	11, // 22: nokv.meta.v1.RootEvent.range_merge:type_name -> nokv.meta.v1.RootRangeMerge
-	12, // 23: nokv.meta.v1.RootEvent.peer_change:type_name -> nokv.meta.v1.RootPeerChange
-	24, // [24:24] is the sub-list for method output_type
-	24, // [24:24] is the sub-list for method input_type
-	24, // [24:24] is the sub-list for extension type_name
-	24, // [24:24] is the sub-list for extension extendee
-	0,  // [0:24] is the sub-list for field type_name
+	16, // 8: nokv.meta.v1.RootRangeSplit.base_parent:type_name -> nokv.meta.v1.RegionDescriptor
+	16, // 9: nokv.meta.v1.RootRangeMerge.merged:type_name -> nokv.meta.v1.RegionDescriptor
+	16, // 10: nokv.meta.v1.RootRangeMerge.base_left:type_name -> nokv.meta.v1.RegionDescriptor
+	16, // 11: nokv.meta.v1.RootRangeMerge.base_right:type_name -> nokv.meta.v1.RegionDescriptor
+	16, // 12: nokv.meta.v1.RootPeerChange.target:type_name -> nokv.meta.v1.RegionDescriptor
+	16, // 13: nokv.meta.v1.RootPeerChange.base:type_name -> nokv.meta.v1.RegionDescriptor
+	1,  // 14: nokv.meta.v1.RootPendingPeerChange.kind:type_name -> nokv.meta.v1.RootPendingPeerChangeKind
+	16, // 15: nokv.meta.v1.RootPendingPeerChange.target:type_name -> nokv.meta.v1.RegionDescriptor
+	16, // 16: nokv.meta.v1.RootPendingPeerChange.base:type_name -> nokv.meta.v1.RegionDescriptor
+	2,  // 17: nokv.meta.v1.RootPendingRangeChange.kind:type_name -> nokv.meta.v1.RootPendingRangeChangeKind
+	16, // 18: nokv.meta.v1.RootPendingRangeChange.left:type_name -> nokv.meta.v1.RegionDescriptor
+	16, // 19: nokv.meta.v1.RootPendingRangeChange.right:type_name -> nokv.meta.v1.RegionDescriptor
+	16, // 20: nokv.meta.v1.RootPendingRangeChange.merged:type_name -> nokv.meta.v1.RegionDescriptor
+	16, // 21: nokv.meta.v1.RootPendingRangeChange.base_parent:type_name -> nokv.meta.v1.RegionDescriptor
+	16, // 22: nokv.meta.v1.RootPendingRangeChange.base_left:type_name -> nokv.meta.v1.RegionDescriptor
+	16, // 23: nokv.meta.v1.RootPendingRangeChange.base_right:type_name -> nokv.meta.v1.RegionDescriptor
+	0,  // 24: nokv.meta.v1.RootEvent.kind:type_name -> nokv.meta.v1.RootEventKind
+	6,  // 25: nokv.meta.v1.RootEvent.store_membership:type_name -> nokv.meta.v1.RootStoreMembership
+	7,  // 26: nokv.meta.v1.RootEvent.allocator_fence:type_name -> nokv.meta.v1.RootAllocatorFence
+	8,  // 27: nokv.meta.v1.RootEvent.region_descriptor:type_name -> nokv.meta.v1.RootRegionDescriptor
+	9,  // 28: nokv.meta.v1.RootEvent.region_removal:type_name -> nokv.meta.v1.RootRegionRemoval
+	10, // 29: nokv.meta.v1.RootEvent.range_split:type_name -> nokv.meta.v1.RootRangeSplit
+	11, // 30: nokv.meta.v1.RootEvent.range_merge:type_name -> nokv.meta.v1.RootRangeMerge
+	12, // 31: nokv.meta.v1.RootEvent.peer_change:type_name -> nokv.meta.v1.RootPeerChange
+	32, // [32:32] is the sub-list for method output_type
+	32, // [32:32] is the sub-list for method input_type
+	32, // [32:32] is the sub-list for extension type_name
+	32, // [32:32] is the sub-list for extension extendee
+	0,  // [0:32] is the sub-list for field type_name
 }
 
 func init() { file_meta_root_proto_init() }

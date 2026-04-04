@@ -25,6 +25,8 @@ type Client interface {
 	StoreHeartbeat(ctx context.Context, req *pdpb.StoreHeartbeatRequest) (*pdpb.StoreHeartbeatResponse, error)
 	RegionLiveness(ctx context.Context, req *pdpb.RegionLivenessRequest) (*pdpb.RegionLivenessResponse, error)
 	PublishRootEvent(ctx context.Context, req *pdpb.PublishRootEventRequest) (*pdpb.PublishRootEventResponse, error)
+	ListTransitions(ctx context.Context, req *pdpb.ListTransitionsRequest) (*pdpb.ListTransitionsResponse, error)
+	AssessRootEvent(ctx context.Context, req *pdpb.AssessRootEventRequest) (*pdpb.AssessRootEventResponse, error)
 	RemoveRegion(ctx context.Context, req *pdpb.RemoveRegionRequest) (*pdpb.RemoveRegionResponse, error)
 	GetRegionByKey(ctx context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error)
 	AllocID(ctx context.Context, req *pdpb.AllocIDRequest) (*pdpb.AllocIDResponse, error)
@@ -112,6 +114,20 @@ func (c *GRPCClient) RegionLiveness(ctx context.Context, req *pdpb.RegionLivenes
 func (c *GRPCClient) PublishRootEvent(ctx context.Context, req *pdpb.PublishRootEventRequest) (*pdpb.PublishRootEventResponse, error) {
 	return invokeRPC(c, retryableWrite, func(pd pdpb.PDClient) (*pdpb.PublishRootEventResponse, error) {
 		return pd.PublishRootEvent(ctx, req)
+	})
+}
+
+// ListTransitions returns the rooted pending transition/operator view.
+func (c *GRPCClient) ListTransitions(ctx context.Context, req *pdpb.ListTransitionsRequest) (*pdpb.ListTransitionsResponse, error) {
+	return invokeRPC(c, retryableRead, func(pd pdpb.PDClient) (*pdpb.ListTransitionsResponse, error) {
+		return pd.ListTransitions(ctx, req)
+	})
+}
+
+// AssessRootEvent evaluates one rooted transition event without mutating truth.
+func (c *GRPCClient) AssessRootEvent(ctx context.Context, req *pdpb.AssessRootEventRequest) (*pdpb.AssessRootEventResponse, error) {
+	return invokeRPC(c, retryableRead, func(pd pdpb.PDClient) (*pdpb.AssessRootEventResponse, error) {
+		return pd.AssessRootEvent(ctx, req)
 	})
 }
 

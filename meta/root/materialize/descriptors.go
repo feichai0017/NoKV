@@ -17,6 +17,26 @@ func ApplyEventToDescriptors(descriptors map[uint64]descriptor.Descriptor, event
 		descriptors[event.RegionDescriptor.Descriptor.RegionID] = event.RegionDescriptor.Descriptor.Clone()
 	case event.RegionRemoval != nil:
 		delete(descriptors, event.RegionRemoval.RegionID)
+	case event.PeerChange != nil && (event.Kind == rootevent.KindPeerAdditionCancelled || event.Kind == rootevent.KindPeerRemovalCancelled):
+		if event.PeerChange.Base.RegionID == 0 {
+			delete(descriptors, event.PeerChange.RegionID)
+			return
+		}
+		descriptors[event.PeerChange.Base.RegionID] = event.PeerChange.Base.Clone()
+	case event.RangeSplit != nil && event.Kind == rootevent.KindRegionSplitCancelled:
+		delete(descriptors, event.RangeSplit.Left.RegionID)
+		delete(descriptors, event.RangeSplit.Right.RegionID)
+		if event.RangeSplit.BaseParent.RegionID != 0 {
+			descriptors[event.RangeSplit.BaseParent.RegionID] = event.RangeSplit.BaseParent.Clone()
+		}
+	case event.RangeMerge != nil && event.Kind == rootevent.KindRegionMergeCancelled:
+		delete(descriptors, event.RangeMerge.Merged.RegionID)
+		if event.RangeMerge.BaseLeft.RegionID != 0 {
+			descriptors[event.RangeMerge.BaseLeft.RegionID] = event.RangeMerge.BaseLeft.Clone()
+		}
+		if event.RangeMerge.BaseRight.RegionID != 0 {
+			descriptors[event.RangeMerge.BaseRight.RegionID] = event.RangeMerge.BaseRight.Clone()
+		}
 	case event.RangeSplit != nil:
 		delete(descriptors, event.RangeSplit.ParentRegionID)
 		descriptors[event.RangeSplit.Left.RegionID] = event.RangeSplit.Left.Clone()

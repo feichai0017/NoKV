@@ -623,6 +623,87 @@ func TestServiceRefreshFromStorageReplacesTransitionView(t *testing.T) {
 	require.Len(t, svc.cluster.RegionSnapshot(), 2)
 }
 
+func TestServiceListTransitionsReturnsOperatorView(t *testing.T) {
+	cluster := core.NewCluster()
+	current := testDescriptor(160, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{
+		{StoreID: 1, PeerID: 101},
+	})
+	current.RootEpoch = 5
+	current.EnsureHash()
+
+	target := current.Clone()
+	target.Peers = append(target.Peers, metaregion.Peer{StoreID: 2, PeerID: 201})
+	target.Epoch.ConfVersion++
+	target.RootEpoch = 6
+	target.EnsureHash()
+
+	cluster.ReplaceRootSnapshot(
+		map[uint64]descriptor.Descriptor{target.RegionID: target},
+		map[uint64]rootstate.PendingPeerChange{
+			target.RegionID: {
+				Kind:    rootstate.PendingPeerChangeAddition,
+				StoreID: 2,
+				PeerID:  201,
+				Base:    current,
+				Target:  target,
+			},
+		},
+		nil,
+	)
+
+	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	resp, err := svc.ListTransitions(context.Background(), &pdpb.ListTransitionsRequest{})
+	require.NoError(t, err)
+	require.Len(t, resp.GetEntries(), 1)
+	require.Equal(t, pdpb.TransitionKind_TRANSITION_KIND_PEER_CHANGE, resp.GetEntries()[0].GetKind())
+	require.Equal(t, pdpb.TransitionStatus_TRANSITION_STATUS_PENDING, resp.GetEntries()[0].GetStatus())
+	require.NotNil(t, resp.GetEntries()[0].GetPendingPeerChange())
+}
+
+func TestServiceAssessRootEventReturnsConflictAssessment(t *testing.T) {
+	cluster := core.NewCluster()
+	current := testDescriptor(161, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{
+		{StoreID: 1, PeerID: 101},
+	})
+	current.RootEpoch = 5
+	current.EnsureHash()
+
+	target := current.Clone()
+	target.Peers = append(target.Peers, metaregion.Peer{StoreID: 2, PeerID: 201})
+	target.Epoch.ConfVersion++
+	target.RootEpoch = 6
+	target.EnsureHash()
+
+	cluster.ReplaceRootSnapshot(
+		map[uint64]descriptor.Descriptor{target.RegionID: target},
+		map[uint64]rootstate.PendingPeerChange{
+			target.RegionID: {
+				Kind:    rootstate.PendingPeerChangeAddition,
+				StoreID: 2,
+				PeerID:  201,
+				Base:    current,
+				Target:  target,
+			},
+		},
+		nil,
+	)
+
+	conflicting := current.Clone()
+	conflicting.Peers = append(conflicting.Peers, metaregion.Peer{StoreID: 3, PeerID: 301})
+	conflicting.Epoch.ConfVersion++
+	conflicting.RootEpoch = 0
+	conflicting.EnsureHash()
+
+	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	resp, err := svc.AssessRootEvent(context.Background(), &pdpb.AssessRootEventRequest{
+		Event: metacodec.RootEventToProto(rootevent.PeerAdditionPlanned(conflicting.RegionID, 3, 301, conflicting)),
+	})
+	require.NoError(t, err)
+	require.Equal(t, pdpb.TransitionStatus_TRANSITION_STATUS_CONFLICT, resp.GetAssessment().GetStatus())
+	require.Equal(t, pdpb.TransitionRetryClass_TRANSITION_RETRY_CLASS_CONFLICT, resp.GetAssessment().GetRetryClass())
+	require.Equal(t, pdpb.TransitionDecision_TRANSITION_DECISION_APPLY, resp.GetAssessment().GetDecision())
+}
+
 func TestServicePublishRootEventSkipsCompletedSplitPlan(t *testing.T) {
 	cluster := core.NewCluster()
 	left := testDescriptor(141, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)

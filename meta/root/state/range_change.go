@@ -41,7 +41,7 @@ type RangeChangeLifecycle struct {
 
 func PendingRangeChangeFromEvent(event rootevent.Event) (uint64, PendingRangeChange, bool) {
 	switch event.Kind {
-	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionSplitCommitted:
+	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionSplitCommitted, rootevent.KindRegionSplitCancelled:
 		if event.RangeSplit == nil {
 			return 0, PendingRangeChange{}, false
 		}
@@ -53,7 +53,7 @@ func PendingRangeChangeFromEvent(event rootevent.Event) (uint64, PendingRangeCha
 			Left:           event.RangeSplit.Left.Clone(),
 			Right:          event.RangeSplit.Right.Clone(),
 		}, true
-	case rootevent.KindRegionMergePlanned, rootevent.KindRegionMerged:
+	case rootevent.KindRegionMergePlanned, rootevent.KindRegionMerged, rootevent.KindRegionMergeCancelled:
 		if event.RangeMerge == nil {
 			return 0, PendingRangeChange{}, false
 		}
@@ -91,12 +91,12 @@ func PendingRangeChangeMatchesEvent(change PendingRangeChange, event rootevent.E
 
 func RangeChangeStateMatches(descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) bool {
 	switch event.Kind {
-	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionSplitCommitted:
+	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionSplitCommitted, rootevent.KindRegionSplitCancelled:
 		if event.RangeSplit == nil {
 			return false
 		}
 		return splitStateMatches(descriptors, event.RangeSplit.ParentRegionID, event.RangeSplit.Left, event.RangeSplit.Right)
-	case rootevent.KindRegionMergePlanned, rootevent.KindRegionMerged:
+	case rootevent.KindRegionMergePlanned, rootevent.KindRegionMerged, rootevent.KindRegionMergeCancelled:
 		if event.RangeMerge == nil {
 			return false
 		}
@@ -236,6 +236,46 @@ func ObserveRangeChangeLifecycle(pendingRangeChanges map[uint64]PendingRangeChan
 				Conflict:   true,
 			}
 		}
+	case rootevent.KindRegionSplitCancelled, rootevent.KindRegionMergeCancelled:
+		switch {
+		case completion.PendingState():
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleApply,
+				Completion: completion,
+				Status:     TransitionStatusPending,
+				Reason:     TransitionReasonMatchingPending,
+			}
+		case superseded:
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleSkip,
+				Completion: completion,
+				Status:     TransitionStatusSuperseded,
+				Reason:     TransitionReasonSupersededTarget,
+			}
+		case exists:
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleApply,
+				Completion: completion,
+				Status:     TransitionStatusConflict,
+				RetryClass: TransitionRetryConflict,
+				Reason:     TransitionReasonConflictingPending,
+				Conflict:   true,
+			}
+		case !RangeChangeStateMatches(descriptors, event):
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleSkip,
+				Completion: completion,
+				Status:     TransitionStatusCancelled,
+				Reason:     TransitionReasonCancelledTarget,
+			}
+		default:
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleSkip,
+				Completion: completion,
+				Status:     TransitionStatusAborted,
+				Reason:     TransitionReasonAbortedApply,
+			}
+		}
 	case rootevent.KindRegionSplitCommitted, rootevent.KindRegionMerged:
 		switch {
 		case completion.PendingState():
@@ -294,13 +334,20 @@ func EvaluateRangeChangeLifecycle(pendingRangeChanges map[uint64]PendingRangeCha
 	outcome := ObserveRangeChangeLifecycle(pendingRangeChanges, descriptors, event)
 	if !outcome.Conflict {
 		if outcome.Status == TransitionStatusAborted {
-			return outcome.Decision, fmt.Errorf("range change target for region %d was superseded before apply", key)
+			switch event.Kind {
+			case rootevent.KindRegionSplitCancelled, rootevent.KindRegionMergeCancelled:
+				return outcome.Decision, fmt.Errorf("range change target for region %d can no longer be cancelled", key)
+			default:
+				return outcome.Decision, fmt.Errorf("range change target for region %d was superseded before apply", key)
+			}
 		}
 		return outcome.Decision, nil
 	}
 	switch event.Kind {
 	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionMergePlanned:
 		return outcome.Decision, fmt.Errorf("pending range change already exists for region %d", key)
+	case rootevent.KindRegionSplitCancelled, rootevent.KindRegionMergeCancelled:
+		return outcome.Decision, fmt.Errorf("range change cancel does not match pending target for region %d", key)
 	case rootevent.KindRegionSplitCommitted, rootevent.KindRegionMerged:
 		return outcome.Decision, fmt.Errorf("range change apply does not match pending target for region %d", key)
 	default:

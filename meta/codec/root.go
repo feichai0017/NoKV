@@ -48,31 +48,16 @@ func RootSnapshotToProto(snapshot rootstate.Snapshot, tailOffset uint64) *metapb
 	}
 	pending := make([]*metapb.RootPendingPeerChange, 0, len(snapshot.PendingPeerChanges))
 	for regionID, change := range snapshot.PendingPeerChanges {
-		pending = append(pending, &metapb.RootPendingPeerChange{
-			RegionId:    regionID,
-			StoreId:     change.StoreID,
-			PeerId:      change.PeerID,
-			Kind:        rootPendingPeerChangeKindToProto(change.Kind),
-			Descriptor_: DescriptorToProto(change.Target),
-		})
+		pending = append(pending, RootPendingPeerChangeToProto(regionID, change))
 	}
 	pendingRanges := make([]*metapb.RootPendingRangeChange, 0, len(snapshot.PendingRangeChanges))
 	for regionID, change := range snapshot.PendingRangeChanges {
-		pendingRanges = append(pendingRanges, &metapb.RootPendingRangeChange{
-			RegionId:       regionID,
-			Kind:           rootPendingRangeChangeKindToProto(change.Kind),
-			ParentRegionId: change.ParentRegionID,
-			LeftRegionId:   change.LeftRegionID,
-			RightRegionId:  change.RightRegionID,
-			Left:           DescriptorToProto(change.Left),
-			Right:          DescriptorToProto(change.Right),
-			Merged:         DescriptorToProto(change.Merged),
-		})
+		pendingRanges = append(pendingRanges, RootPendingRangeChangeToProto(regionID, change))
 	}
 	return &metapb.RootCheckpoint{
 		State:               RootStateToProto(snapshot.State),
 		Descriptors:         descriptors,
-		LogOffset:           tailOffset,
+		TailOffset:          tailOffset,
 		PendingPeerChanges:  pending,
 		PendingRangeChanges: pendingRanges,
 	}
@@ -96,31 +81,78 @@ func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snaps
 		snapshot.Descriptors[desc.RegionID] = desc
 	}
 	for _, pbPending := range pbCheckpoint.PendingPeerChanges {
-		if pbPending.GetRegionId() == 0 {
+		regionID, change := RootPendingPeerChangeFromProto(pbPending)
+		if regionID == 0 {
 			continue
 		}
-		snapshot.PendingPeerChanges[pbPending.GetRegionId()] = rootstate.PendingPeerChange{
-			Kind:    rootPendingPeerChangeKindFromProto(pbPending.GetKind()),
-			StoreID: pbPending.GetStoreId(),
-			PeerID:  pbPending.GetPeerId(),
-			Target:  DescriptorFromProto(pbPending.GetDescriptor_()),
-		}
+		snapshot.PendingPeerChanges[regionID] = change
 	}
 	for _, pbPending := range pbCheckpoint.PendingRangeChanges {
-		if pbPending.GetRegionId() == 0 {
+		regionID, change := RootPendingRangeChangeFromProto(pbPending)
+		if regionID == 0 {
 			continue
 		}
-		snapshot.PendingRangeChanges[pbPending.GetRegionId()] = rootstate.PendingRangeChange{
-			Kind:           rootPendingRangeChangeKindFromProto(pbPending.GetKind()),
-			ParentRegionID: pbPending.GetParentRegionId(),
-			LeftRegionID:   pbPending.GetLeftRegionId(),
-			RightRegionID:  pbPending.GetRightRegionId(),
-			Left:           DescriptorFromProto(pbPending.GetLeft()),
-			Right:          DescriptorFromProto(pbPending.GetRight()),
-			Merged:         DescriptorFromProto(pbPending.GetMerged()),
-		}
+		snapshot.PendingRangeChanges[regionID] = change
 	}
-	return snapshot, pbCheckpoint.LogOffset
+	return snapshot, pbCheckpoint.TailOffset
+}
+
+func RootPendingPeerChangeToProto(regionID uint64, change rootstate.PendingPeerChange) *metapb.RootPendingPeerChange {
+	return &metapb.RootPendingPeerChange{
+		RegionId: regionID,
+		StoreId:  change.StoreID,
+		PeerId:   change.PeerID,
+		Kind:     rootPendingPeerChangeKindToProto(change.Kind),
+		Target:   DescriptorToProto(change.Target),
+		Base:     DescriptorToProto(change.Base),
+	}
+}
+
+func RootPendingPeerChangeFromProto(pbPending *metapb.RootPendingPeerChange) (uint64, rootstate.PendingPeerChange) {
+	if pbPending == nil || pbPending.GetRegionId() == 0 {
+		return 0, rootstate.PendingPeerChange{}
+	}
+	return pbPending.GetRegionId(), rootstate.PendingPeerChange{
+		Kind:    rootPendingPeerChangeKindFromProto(pbPending.GetKind()),
+		StoreID: pbPending.GetStoreId(),
+		PeerID:  pbPending.GetPeerId(),
+		Base:    DescriptorFromProto(pbPending.GetBase()),
+		Target:  DescriptorFromProto(pbPending.GetTarget()),
+	}
+}
+
+func RootPendingRangeChangeToProto(regionID uint64, change rootstate.PendingRangeChange) *metapb.RootPendingRangeChange {
+	return &metapb.RootPendingRangeChange{
+		RegionId:       regionID,
+		Kind:           rootPendingRangeChangeKindToProto(change.Kind),
+		ParentRegionId: change.ParentRegionID,
+		LeftRegionId:   change.LeftRegionID,
+		RightRegionId:  change.RightRegionID,
+		Left:           DescriptorToProto(change.Left),
+		Right:          DescriptorToProto(change.Right),
+		Merged:         DescriptorToProto(change.Merged),
+		BaseParent:     DescriptorToProto(change.BaseParent),
+		BaseLeft:       DescriptorToProto(change.BaseLeft),
+		BaseRight:      DescriptorToProto(change.BaseRight),
+	}
+}
+
+func RootPendingRangeChangeFromProto(pbPending *metapb.RootPendingRangeChange) (uint64, rootstate.PendingRangeChange) {
+	if pbPending == nil || pbPending.GetRegionId() == 0 {
+		return 0, rootstate.PendingRangeChange{}
+	}
+	return pbPending.GetRegionId(), rootstate.PendingRangeChange{
+		Kind:           rootPendingRangeChangeKindFromProto(pbPending.GetKind()),
+		ParentRegionID: pbPending.GetParentRegionId(),
+		LeftRegionID:   pbPending.GetLeftRegionId(),
+		RightRegionID:  pbPending.GetRightRegionId(),
+		BaseParent:     DescriptorFromProto(pbPending.GetBaseParent()),
+		BaseLeft:       DescriptorFromProto(pbPending.GetBaseLeft()),
+		BaseRight:      DescriptorFromProto(pbPending.GetBaseRight()),
+		Left:           DescriptorFromProto(pbPending.GetLeft()),
+		Right:          DescriptorFromProto(pbPending.GetRight()),
+		Merged:         DescriptorFromProto(pbPending.GetMerged()),
+	}
 }
 
 func rootPendingPeerChangeKindToProto(kind rootstate.PendingPeerChangeKind) metapb.RootPendingPeerChangeKind {
@@ -184,19 +216,23 @@ func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 			SplitKey:       append([]byte(nil), event.RangeSplit.SplitKey...),
 			Left:           DescriptorToProto(event.RangeSplit.Left),
 			Right:          DescriptorToProto(event.RangeSplit.Right),
+			BaseParent:     DescriptorToProto(event.RangeSplit.BaseParent),
 		}}
 	case event.RangeMerge != nil:
 		pbEvent.Payload = &metapb.RootEvent_RangeMerge{RangeMerge: &metapb.RootRangeMerge{
 			LeftRegionId:  event.RangeMerge.LeftRegionID,
 			RightRegionId: event.RangeMerge.RightRegionID,
 			Merged:        DescriptorToProto(event.RangeMerge.Merged),
+			BaseLeft:      DescriptorToProto(event.RangeMerge.BaseLeft),
+			BaseRight:     DescriptorToProto(event.RangeMerge.BaseRight),
 		}}
 	case event.PeerChange != nil:
 		pbEvent.Payload = &metapb.RootEvent_PeerChange{PeerChange: &metapb.RootPeerChange{
-			RegionId:    event.PeerChange.RegionID,
-			StoreId:     event.PeerChange.StoreID,
-			PeerId:      event.PeerChange.PeerID,
-			Descriptor_: DescriptorToProto(event.PeerChange.Region),
+			RegionId: event.PeerChange.RegionID,
+			StoreId:  event.PeerChange.StoreID,
+			PeerId:   event.PeerChange.PeerID,
+			Target:   DescriptorToProto(event.PeerChange.Region),
+			Base:     DescriptorToProto(event.PeerChange.Base),
 		}}
 	}
 	return pbEvent
@@ -225,6 +261,7 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 			SplitKey:       append([]byte(nil), body.SplitKey...),
 			Left:           DescriptorFromProto(body.Left),
 			Right:          DescriptorFromProto(body.Right),
+			BaseParent:     DescriptorFromProto(body.BaseParent),
 		}
 	}
 	if body := pbEvent.GetRangeMerge(); body != nil {
@@ -232,6 +269,8 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 			LeftRegionID:  body.LeftRegionId,
 			RightRegionID: body.RightRegionId,
 			Merged:        DescriptorFromProto(body.Merged),
+			BaseLeft:      DescriptorFromProto(body.BaseLeft),
+			BaseRight:     DescriptorFromProto(body.BaseRight),
 		}
 	}
 	if body := pbEvent.GetPeerChange(); body != nil {
@@ -239,7 +278,8 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 			RegionID: body.RegionId,
 			StoreID:  body.StoreId,
 			PeerID:   body.PeerId,
-			Region:   DescriptorFromProto(body.GetDescriptor_()),
+			Region:   DescriptorFromProto(body.GetTarget()),
+			Base:     DescriptorFromProto(body.GetBase()),
 		}
 	}
 	return event
@@ -265,10 +305,14 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_PLANNED
 	case rootevent.KindRegionSplitCommitted:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED
+	case rootevent.KindRegionSplitCancelled:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_CANCELLED
 	case rootevent.KindRegionMergePlanned:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGE_PLANNED
 	case rootevent.KindRegionMerged:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGED
+	case rootevent.KindRegionMergeCancelled:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGE_CANCELLED
 	case rootevent.KindPeerAdditionPlanned:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_ADDITION_PLANNED
 	case rootevent.KindPeerRemovalPlanned:
@@ -277,6 +321,10 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_ADDED
 	case rootevent.KindPeerRemoved:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVED
+	case rootevent.KindPeerAdditionCancelled:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_ADDITION_CANCELLED
+	case rootevent.KindPeerRemovalCancelled:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVAL_CANCELLED
 	default:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_UNSPECIFIED
 	}
@@ -302,10 +350,14 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindRegionSplitPlanned
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED:
 		return rootevent.KindRegionSplitCommitted
+	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_CANCELLED:
+		return rootevent.KindRegionSplitCancelled
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGE_PLANNED:
 		return rootevent.KindRegionMergePlanned
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGED:
 		return rootevent.KindRegionMerged
+	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGE_CANCELLED:
+		return rootevent.KindRegionMergeCancelled
 	case metapb.RootEventKind_ROOT_EVENT_KIND_PEER_ADDITION_PLANNED:
 		return rootevent.KindPeerAdditionPlanned
 	case metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVAL_PLANNED:
@@ -314,6 +366,10 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindPeerAdded
 	case metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVED:
 		return rootevent.KindPeerRemoved
+	case metapb.RootEventKind_ROOT_EVENT_KIND_PEER_ADDITION_CANCELLED:
+		return rootevent.KindPeerAdditionCancelled
+	case metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVAL_CANCELLED:
+		return rootevent.KindPeerRemovalCancelled
 	default:
 		return rootevent.KindUnknown
 	}

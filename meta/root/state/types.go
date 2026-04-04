@@ -32,6 +32,7 @@ type PendingPeerChange struct {
 	Kind    PendingPeerChangeKind
 	StoreID uint64
 	PeerID  uint64
+	Base    descriptor.Descriptor
 	Target  descriptor.Descriptor
 }
 
@@ -48,6 +49,9 @@ type PendingRangeChange struct {
 	ParentRegionID uint64
 	LeftRegionID   uint64
 	RightRegionID  uint64
+	BaseParent     descriptor.Descriptor
+	BaseLeft       descriptor.Descriptor
+	BaseRight      descriptor.Descriptor
 	Left           descriptor.Descriptor
 	Right          descriptor.Descriptor
 	Merged         descriptor.Descriptor
@@ -98,6 +102,7 @@ func ClonePendingPeerChanges(in map[uint64]PendingPeerChange) map[uint64]Pending
 			Kind:    change.Kind,
 			StoreID: change.StoreID,
 			PeerID:  change.PeerID,
+			Base:    change.Base.Clone(),
 			Target:  change.Target.Clone(),
 		}
 	}
@@ -115,6 +120,9 @@ func ClonePendingRangeChanges(in map[uint64]PendingRangeChange) map[uint64]Pendi
 			ParentRegionID: change.ParentRegionID,
 			LeftRegionID:   change.LeftRegionID,
 			RightRegionID:  change.RightRegionID,
+			BaseParent:     change.BaseParent.Clone(),
+			BaseLeft:       change.BaseLeft.Clone(),
+			BaseRight:      change.BaseRight.Clone(),
 			Left:           change.Left.Clone(),
 			Right:          change.Right.Clone(),
 			Merged:         change.Merged.Clone(),
@@ -144,12 +152,16 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		rootevent.KindRegionTombstoned,
 		rootevent.KindRegionSplitPlanned,
 		rootevent.KindRegionSplitCommitted,
+		rootevent.KindRegionSplitCancelled,
 		rootevent.KindRegionMergePlanned,
 		rootevent.KindRegionMerged,
+		rootevent.KindRegionMergeCancelled,
 		rootevent.KindPeerAdditionPlanned,
 		rootevent.KindPeerRemovalPlanned,
 		rootevent.KindPeerAdded,
-		rootevent.KindPeerRemoved:
+		rootevent.KindPeerRemoved,
+		rootevent.KindPeerAdditionCancelled,
+		rootevent.KindPeerRemovalCancelled:
 		state.ClusterEpoch++
 	}
 	state.LastCommitted = cursor
