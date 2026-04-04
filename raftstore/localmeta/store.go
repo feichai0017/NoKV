@@ -18,10 +18,10 @@ import (
 const (
 	// ReplicaStateFileName is the durable local replica catalog file used by one
 	// store for restart recovery.
-	ReplicaStateFileName = "replica-local-state.pb"
+	ReplicaStateFileName = "replicas.binpb"
 	// RaftProgressFileName is the durable local raft progress file used by one
 	// store for WAL/apply recovery.
-	RaftProgressFileName = "raft-progress.pb"
+	RaftProgressFileName = "raft-progress.binpb"
 )
 
 type diskState struct {

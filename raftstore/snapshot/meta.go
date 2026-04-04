@@ -14,7 +14,7 @@ import (
 
 const (
 	sstVersion       = 1
-	sstSnapshotName  = "sst-snapshot.json"
+	sstSnapshotName  = "snapshot.json"
 	sstTablesDirName = "tables"
 )
 

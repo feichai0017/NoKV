@@ -100,20 +100,19 @@ No other product control-plane mode is supported. In particular:
 
 The rooted backend stores:
 
-- `metadata-root.log`
-- `metadata-root-checkpoint.pb`
+- `root.events.wal`
+- `root.checkpoint.binpb`
 
 ### `3 pd + replicated meta`
 
 Each PD node has its own workdir and persists two layers of state:
 
 1. rooted truth state
-   - `metadata-root.log`
-   - `metadata-root-checkpoint.pb`
+   - `root.events.wal`
+   - `root.checkpoint.binpb`
 2. replicated protocol state
-   - raft hard state
-   - raft snapshot
-   - retained raft entries
+   - `root.raft.bin`
+   - contains raft hard state, raft snapshot, and retained raft entries
 
 Each node must have an isolated workdir. Workdirs are not shared.
 

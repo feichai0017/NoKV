@@ -253,7 +253,7 @@ func TestReadPayloadMetaRejectsMissingMeta(t *testing.T) {
 
 	_, err = snapshot.ReadPayloadMeta(payload.Bytes())
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "missing sst-snapshot.json")
+	require.Contains(t, err.Error(), "missing snapshot.json")
 }
 
 func TestImportPayloadRejectsMissingTableFile(t *testing.T) {
@@ -287,7 +287,7 @@ func TestImportPayloadRejectsMissingTableFile(t *testing.T) {
 	var payload bytes.Buffer
 	tw := tar.NewWriter(&payload)
 	require.NoError(t, tw.WriteHeader(&tar.Header{
-		Name: "sst-snapshot.json",
+		Name: "snapshot.json",
 		Mode: 0o600,
 		Size: int64(len(metaBytes)),
 	}))
@@ -323,7 +323,7 @@ func TestImportPayloadRejectsAbsolutePath(t *testing.T) {
 	var payload bytes.Buffer
 	tw := tar.NewWriter(&payload)
 	require.NoError(t, tw.WriteHeader(&tar.Header{
-		Name: "sst-snapshot.json",
+		Name: "snapshot.json",
 		Mode: 0o600,
 		Size: int64(len(metaBytes)),
 	}))
@@ -366,7 +366,7 @@ func TestImportPayloadRejectsParentTraversalPath(t *testing.T) {
 	var payload bytes.Buffer
 	tw := tar.NewWriter(&payload)
 	require.NoError(t, tw.WriteHeader(&tar.Header{
-		Name: "sst-snapshot.json",
+		Name: "snapshot.json",
 		Mode: 0o600,
 		Size: int64(len(metaBytes)),
 	}))
