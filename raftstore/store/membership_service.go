@@ -47,7 +47,7 @@ func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 	appliedEvent, hasAppliedEvent := appliedPeerChangeEvent(meta, ev.ConfChange)
 	if ev.Peer != nil && peerIndexByID(meta.Peers, ev.Peer.ID()) == -1 {
 		if hasAppliedEvent {
-			s.enqueueAppliedRootEvent(meta.ID, appliedEvent)
+			s.enqueueAppliedRootEvent(appliedEvent)
 		}
 		if err := s.applyRegionRemovalSilent(meta.ID); err != nil {
 			return err
@@ -61,7 +61,7 @@ func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 	if !hasAppliedEvent {
 		return nil
 	}
-	s.enqueueAppliedRootEvent(meta.ID, appliedEvent)
+	s.enqueueAppliedRootEvent(appliedEvent)
 	return nil
 }
 
@@ -227,18 +227,40 @@ func appliedPeerChangeEvent(meta localmeta.RegionMeta, cc raftpb.ConfChangeV2) (
 	}
 	desc := metacodec.DescriptorFromLocalRegionMeta(meta, 0)
 	change := cc.Changes[0]
-	storeID, peerID := change.NodeID, change.NodeID
-	if peers, err := decodeConfChangeContext(cc.Context); err == nil && len(peers) > 0 {
-		storeID, peerID = peers[0].StoreID, peers[0].PeerID
-	}
+	peerMeta := confChangeTargetPeer(change, cc.Context)
 	switch change.Type {
 	case raftpb.ConfChangeAddNode, raftpb.ConfChangeAddLearnerNode:
-		return rootevent.PeerAdded(meta.ID, storeID, peerID, desc), true
+		return rootevent.PeerAdded(meta.ID, peerMeta.StoreID, peerMeta.PeerID, desc), true
 	case raftpb.ConfChangeRemoveNode:
-		return rootevent.PeerRemoved(meta.ID, storeID, peerID, desc), true
+		return rootevent.PeerRemoved(meta.ID, peerMeta.StoreID, peerMeta.PeerID, desc), true
 	default:
 		return rootevent.Event{}, false
 	}
+}
+
+func plannedPeerChangeEvent(meta localmeta.RegionMeta, cc raftpb.ConfChangeV2) (rootevent.Event, error) {
+	if meta.ID == 0 || len(cc.Changes) != 1 {
+		return rootevent.Event{}, fmt.Errorf("raftstore: invalid peer change event")
+	}
+	desc := metacodec.DescriptorFromLocalRegionMeta(meta, 0)
+	change := cc.Changes[0]
+	peerMeta := confChangeTargetPeer(change, cc.Context)
+	switch change.Type {
+	case raftpb.ConfChangeAddNode, raftpb.ConfChangeAddLearnerNode:
+		return rootevent.PeerAdditionPlanned(meta.ID, peerMeta.StoreID, peerMeta.PeerID, desc), nil
+	case raftpb.ConfChangeRemoveNode:
+		return rootevent.PeerRemovalPlanned(meta.ID, peerMeta.StoreID, peerMeta.PeerID, desc), nil
+	default:
+		return rootevent.Event{}, fmt.Errorf("raftstore: unsupported conf change type %v", change.Type)
+	}
+}
+
+func confChangeTargetPeer(change raftpb.ConfChangeSingle, ctx []byte) metaregion.Peer {
+	peerMeta := metaregion.Peer{StoreID: change.NodeID, PeerID: change.NodeID}
+	if peers, err := decodeConfChangeContext(ctx); err == nil && len(peers) > 0 {
+		peerMeta = peers[0]
+	}
+	return peerMeta
 }
 
 func (s *Store) planPeerChange(regionID uint64, cc raftpb.ConfChangeV2) (peerChangePlan, error) {
@@ -264,24 +286,9 @@ func (s *Store) planPeerChange(regionID uint64, cc raftpb.ConfChangeV2) (peerCha
 		return peerChangePlan{RegionID: regionID, Noop: true}, nil
 	}
 	next.Epoch.ConfVersion += uint64(len(cc.Changes))
-	desc := metacodec.DescriptorFromLocalRegionMeta(next, 0)
-	change := cc.Changes[0]
-	var event rootevent.Event
-	switch change.Type {
-	case raftpb.ConfChangeAddNode, raftpb.ConfChangeAddLearnerNode:
-		event = rootevent.PeerAdditionPlanned(next.ID, change.NodeID, change.NodeID, desc)
-	case raftpb.ConfChangeRemoveNode:
-		event = rootevent.PeerRemovalPlanned(next.ID, change.NodeID, change.NodeID, desc)
-	default:
-		return peerChangePlan{}, fmt.Errorf("raftstore: unsupported conf change type %v", change.Type)
-	}
-	if peers, err := decodeConfChangeContext(cc.Context); err == nil && len(peers) > 0 {
-		switch change.Type {
-		case raftpb.ConfChangeAddNode, raftpb.ConfChangeAddLearnerNode:
-			event = rootevent.PeerAdditionPlanned(next.ID, peers[0].StoreID, peers[0].PeerID, desc)
-		case raftpb.ConfChangeRemoveNode:
-			event = rootevent.PeerRemovalPlanned(next.ID, peers[0].StoreID, peers[0].PeerID, desc)
-		}
+	event, err := plannedPeerChangeEvent(next, cc)
+	if err != nil {
+		return peerChangePlan{}, err
 	}
 	return peerChangePlan{
 		RegionID: regionID,
@@ -297,12 +304,7 @@ func (s *Store) executePeerChangePlan(plan peerChangePlan) error {
 	if plan.Noop {
 		return nil
 	}
-	if err := s.publishPlannedRootEvent(plan.RegionID, plan.Event, "peer change"); err != nil {
-		return err
-	}
-	peerRef, err := s.leaderPeer(plan.RegionID)
-	if err != nil {
-		return err
-	}
-	return peerRef.ProposeConfChange(plan.Change)
+	return s.executePlannedTransition(plan.RegionID, plan.Event, "peer change", func(peerRef *peer.Peer) error {
+		return peerRef.ProposeConfChange(plan.Change)
+	})
 }

@@ -38,14 +38,31 @@ func (s *Store) publishPlannedRootEvent(regionID uint64, event rootevent.Event, 
 	return nil
 }
 
-func (s *Store) enqueueAppliedRootEvent(regionID uint64, event rootevent.Event) {
-	if s == nil || s.sched == nil || regionID == 0 || event.Kind == rootevent.KindUnknown {
+func (s *Store) executePlannedTransition(regionID uint64, event rootevent.Event, action string, propose func(*peer.Peer) error) error {
+	if s == nil {
+		return fmt.Errorf("raftstore: store is nil")
+	}
+	if regionID == 0 {
+		return fmt.Errorf("raftstore: region id is zero")
+	}
+	if propose == nil {
+		return fmt.Errorf("raftstore: transition propose func is nil")
+	}
+	if err := s.publishPlannedRootEvent(regionID, event, action); err != nil {
+		return err
+	}
+	peerRef, err := s.leaderPeer(regionID)
+	if err != nil {
+		return err
+	}
+	return propose(peerRef)
+}
+
+func (s *Store) enqueueAppliedRootEvent(event rootevent.Event) {
+	if s == nil || s.sched == nil || event.Kind == rootevent.KindUnknown {
 		return
 	}
-	cp := rootevent.CloneEvent(event)
 	s.enqueueRegionEvent(regionEvent{
-		kind:     regionEventApply,
-		regionID: regionID,
-		root:     &cp,
+		root: event,
 	})
 }
