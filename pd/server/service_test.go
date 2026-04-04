@@ -446,6 +446,34 @@ func TestServicePublishRootEventSkipsDuplicatePeerPlan(t *testing.T) {
 	require.Len(t, store.snapshot.PendingPeerChanges, 1)
 }
 
+func TestServicePublishRootEventSkipsCompletedPeerPlan(t *testing.T) {
+	cluster := core.NewCluster()
+	target := testDescriptor(131, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 2}, []metaregion.Peer{
+		{StoreID: 1, PeerID: 101},
+		{StoreID: 2, PeerID: 201},
+	})
+	target.RootEpoch = 6
+	target.EnsureHash()
+	require.NoError(t, cluster.PublishRegionDescriptor(target))
+
+	store := &fakeStorage{
+		leader: true,
+		snapshot: pdstorage.Snapshot{
+			ClusterEpoch: 6,
+			Descriptors:  map[uint64]descriptor.Descriptor{target.RegionID: target},
+		},
+	}
+	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc.SetStorage(store)
+
+	resp, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event: metacodec.RootEventToProto(rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)),
+	})
+	require.NoError(t, err)
+	require.True(t, resp.GetAccepted())
+	require.Equal(t, 0, store.eventCalls)
+}
+
 func TestServicePublishRootEventRejectsConflictingPeerPlan(t *testing.T) {
 	cluster := core.NewCluster()
 	current := testDescriptor(14, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{
@@ -558,6 +586,38 @@ func TestServicePublishRootEventSkipsDuplicateSplitPlan(t *testing.T) {
 
 	resp, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
 		Event: metacodec.RootEventToProto(rootevent.RegionSplitPlanned(40, []byte("m"), left, right)),
+	})
+	require.NoError(t, err)
+	require.True(t, resp.GetAccepted())
+	require.Equal(t, 0, store.eventCalls)
+}
+
+func TestServicePublishRootEventSkipsCompletedSplitPlan(t *testing.T) {
+	cluster := core.NewCluster()
+	left := testDescriptor(141, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)
+	right := testDescriptor(142, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
+	left.RootEpoch = 6
+	right.RootEpoch = 6
+	left.EnsureHash()
+	right.EnsureHash()
+	require.NoError(t, cluster.PublishRegionDescriptor(left))
+	require.NoError(t, cluster.PublishRegionDescriptor(right))
+
+	store := &fakeStorage{
+		leader: true,
+		snapshot: pdstorage.Snapshot{
+			ClusterEpoch: 6,
+			Descriptors: map[uint64]descriptor.Descriptor{
+				left.RegionID:  left,
+				right.RegionID: right,
+			},
+		},
+	}
+	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc.SetStorage(store)
+
+	resp, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event: metacodec.RootEventToProto(rootevent.RegionSplitPlanned(140, []byte("m"), left, right)),
 	})
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())

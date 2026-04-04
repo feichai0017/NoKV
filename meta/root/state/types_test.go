@@ -66,6 +66,10 @@ func TestEvaluatePeerChangeLifecycle(t *testing.T) {
 	decision, err = rootstate.EvaluatePeerChangeLifecycle(nil, target, true, applied)
 	require.NoError(t, err)
 	require.Equal(t, rootstate.PeerChangeLifecycleSkip, decision)
+
+	decision, err = rootstate.EvaluatePeerChangeLifecycle(nil, target, true, planned)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.PeerChangeLifecycleSkip, decision)
 }
 
 func TestPendingRangeChangeMatchesEvent(t *testing.T) {
@@ -120,6 +124,10 @@ func TestEvaluateRangeChangeLifecycle(t *testing.T) {
 		right.RegionID: right,
 	}
 	decision, err = rootstate.EvaluateRangeChangeLifecycle(nil, descriptors, splitCommitted)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.RangeChangeLifecycleSkip, decision)
+
+	decision, err = rootstate.EvaluateRangeChangeLifecycle(nil, descriptors, splitPlanned)
 	require.NoError(t, err)
 	require.Equal(t, rootstate.RangeChangeLifecycleSkip, decision)
 }

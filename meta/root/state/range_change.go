@@ -90,6 +90,9 @@ func EvaluateRangeChangeLifecycle(pendingRangeChanges map[uint64]PendingRangeCha
 	switch event.Kind {
 	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionMergePlanned:
 		if !exists {
+			if RangeChangeStateMatches(descriptors, event) {
+				return RangeChangeLifecycleSkip, nil
+			}
 			return RangeChangeLifecycleApply, nil
 		}
 		if PendingRangeChangeMatchesEvent(pending, event) {
