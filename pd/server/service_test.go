@@ -39,13 +39,7 @@ type fakeStorage struct {
 }
 
 func (f *fakeStorage) Load() (pdstorage.Snapshot, error) {
-	return pdstorage.Snapshot{
-		ClusterEpoch:        f.snapshot.ClusterEpoch,
-		Descriptors:         rootCloneDescriptorsForTest(f.snapshot.Descriptors),
-		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(f.snapshot.PendingPeerChanges),
-		PendingRangeChanges: rootstate.ClonePendingRangeChanges(f.snapshot.PendingRangeChanges),
-		Allocator:           f.snapshot.Allocator,
-	}, nil
+	return pdstorage.CloneSnapshot(f.snapshot), nil
 }
 
 func (f *fakeStorage) AppendRootEvent(event rootevent.Event) error {
@@ -69,12 +63,7 @@ func (f *fakeStorage) AppendRootEvent(event rootevent.Event) error {
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(f.snapshot.PendingRangeChanges),
 	}
 	rootstate.ApplyEventToSnapshot(&snapshot, snapshot.State.LastCommitted, event)
-	f.snapshot.ClusterEpoch = snapshot.State.ClusterEpoch
-	f.snapshot.Descriptors = rootCloneDescriptorsForTest(snapshot.Descriptors)
-	f.snapshot.PendingPeerChanges = rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges)
-	f.snapshot.PendingRangeChanges = rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges)
-	f.snapshot.Allocator.IDCurrent = snapshot.State.IDFence
-	f.snapshot.Allocator.TSCurrent = snapshot.State.TSOFence
+	f.snapshot = pdstorage.SnapshotFromRoot(snapshot)
 	return nil
 }
 
@@ -110,13 +99,7 @@ type fakeSyncStorage struct {
 }
 
 func (f *fakeSyncStorage) Load() (pdstorage.Snapshot, error) {
-	return pdstorage.Snapshot{
-		ClusterEpoch:        f.snapshot.ClusterEpoch,
-		Descriptors:         rootCloneDescriptorsForTest(f.snapshot.Descriptors),
-		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(f.snapshot.PendingPeerChanges),
-		PendingRangeChanges: rootstate.ClonePendingRangeChanges(f.snapshot.PendingRangeChanges),
-		Allocator:           f.snapshot.Allocator,
-	}, nil
+	return pdstorage.CloneSnapshot(f.snapshot), nil
 }
 
 func (f *fakeSyncStorage) Refresh() error {
