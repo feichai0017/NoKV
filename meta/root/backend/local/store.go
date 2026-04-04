@@ -123,7 +123,7 @@ func (s *Store) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) 
 	records := make([]rootstorage.CommittedEvent, 0, len(events))
 	for _, evt := range events {
 		next = rootstate.NextCursor(snapshot.State.LastCommitted)
-		rootmaterialize.ApplyEventToSnapshot(&snapshot, next, evt)
+		rootstate.ApplyEventToSnapshot(&snapshot, next, evt)
 		records = append(records, rootstorage.CommittedEvent{Cursor: next, Event: rootevent.CloneEvent(evt)})
 	}
 	logEnd, err := s.storage.AppendCommitted(records...)

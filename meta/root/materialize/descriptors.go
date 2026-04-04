@@ -4,7 +4,6 @@ import (
 	"sort"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
@@ -29,52 +28,6 @@ func ApplyEventToDescriptors(descriptors map[uint64]descriptor.Descriptor, event
 	case event.PeerChange != nil:
 		descriptors[event.PeerChange.Region.RegionID] = event.PeerChange.Region.Clone()
 	}
-}
-
-// ApplyEventToSnapshot applies one rooted metadata event into the compact
-// rooted snapshot, including pending peer-change execution state.
-func ApplyEventToSnapshot(snapshot *rootstate.Snapshot, cursor rootstate.Cursor, event rootevent.Event) {
-	if snapshot == nil {
-		return
-	}
-	if snapshot.Descriptors == nil {
-		snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
-	}
-	if snapshot.PendingPeerChanges == nil {
-		snapshot.PendingPeerChanges = make(map[uint64]rootstate.PendingPeerChange)
-	}
-	if snapshot.PendingRangeChanges == nil {
-		snapshot.PendingRangeChanges = make(map[uint64]rootstate.PendingRangeChange)
-	}
-	switch event.Kind {
-	case rootevent.KindStoreJoined, rootevent.KindStoreLeft:
-		snapshot.State.MembershipEpoch++
-	case rootevent.KindIDAllocatorFenced:
-		if event.AllocatorFence != nil && event.AllocatorFence.Minimum > snapshot.State.IDFence {
-			snapshot.State.IDFence = event.AllocatorFence.Minimum
-		}
-	case rootevent.KindTSOAllocatorFenced:
-		if event.AllocatorFence != nil && event.AllocatorFence.Minimum > snapshot.State.TSOFence {
-			snapshot.State.TSOFence = event.AllocatorFence.Minimum
-		}
-	case rootevent.KindRegionBootstrap, rootevent.KindRegionDescriptorPublished:
-		snapshot.State.ClusterEpoch++
-		desc := event.RegionDescriptor.Descriptor.Clone()
-		snapshot.Descriptors[desc.RegionID] = desc
-		delete(snapshot.PendingPeerChanges, desc.RegionID)
-		delete(snapshot.PendingRangeChanges, desc.RegionID)
-	case rootevent.KindRegionTombstoned:
-		snapshot.State.ClusterEpoch++
-		delete(snapshot.Descriptors, event.RegionRemoval.RegionID)
-		delete(snapshot.PendingPeerChanges, event.RegionRemoval.RegionID)
-		delete(snapshot.PendingRangeChanges, event.RegionRemoval.RegionID)
-	default:
-		if rootstate.ApplyRangeChangeToSnapshot(snapshot, event) {
-			break
-		}
-		_ = rootstate.ApplyPeerChangeToSnapshot(snapshot, event)
-	}
-	snapshot.State.LastCommitted = cursor
 }
 
 // SnapshotDescriptorEvents materializes descriptor truth into a stable event sequence for bootstrap/recovery callers.
