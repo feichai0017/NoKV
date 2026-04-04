@@ -72,6 +72,27 @@ func TestEvaluatePeerChangeLifecycle(t *testing.T) {
 	require.Equal(t, rootstate.PeerChangeLifecycleSkip, decision)
 }
 
+func TestObservePeerChangeCompletion(t *testing.T) {
+	target := testDescriptor(16, []byte("a"), []byte("z"))
+	planned := rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)
+
+	completion := rootstate.ObservePeerChangeCompletion(nil, descriptor.Descriptor{}, false, planned)
+	require.Equal(t, rootstate.PeerChangeCompletionOpen, completion)
+
+	change, ok := rootstate.PendingPeerChangeFromEvent(planned)
+	require.True(t, ok)
+	completion = rootstate.ObservePeerChangeCompletion(
+		map[uint64]rootstate.PendingPeerChange{target.RegionID: change},
+		descriptor.Descriptor{},
+		false,
+		planned,
+	)
+	require.Equal(t, rootstate.PeerChangeCompletionPending, completion)
+
+	completion = rootstate.ObservePeerChangeCompletion(nil, target, true, planned)
+	require.Equal(t, rootstate.PeerChangeCompletionCompleted, completion)
+}
+
 func TestPendingRangeChangeMatchesEvent(t *testing.T) {
 	left := testDescriptor(20, []byte("a"), []byte("m"))
 	right := testDescriptor(21, []byte("m"), []byte("z"))

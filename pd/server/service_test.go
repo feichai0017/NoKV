@@ -371,6 +371,8 @@ func TestServicePublishRootEventAppliedPeerChangeMarksPendingApplied(t *testing.
 	require.Equal(t, 1, store.eventCalls)
 	require.Equal(t, uint64(5), store.snapshot.ClusterEpoch)
 	require.NotContains(t, store.snapshot.PendingPeerChanges, target.RegionID)
+	transitions := svc.cluster.TransitionSnapshot()
+	require.NotContains(t, transitions.PendingPeerChanges, target.RegionID)
 }
 
 func TestServicePublishRootEventPersistsPeerPlan(t *testing.T) {
@@ -406,6 +408,9 @@ func TestServicePublishRootEventPersistsPeerPlan(t *testing.T) {
 	require.Equal(t, 1, store.eventCalls)
 	require.Equal(t, rootevent.KindPeerAdditionPlanned, store.lastEvent.Kind)
 	require.Equal(t, uint64(6), store.lastEvent.PeerChange.Region.RootEpoch)
+	transitions := svc.cluster.TransitionSnapshot()
+	require.Contains(t, transitions.PendingPeerChanges, target.RegionID)
+	require.Equal(t, rootstate.PendingPeerChangeAddition, transitions.PendingPeerChanges[target.RegionID].Kind)
 }
 
 func TestServicePublishRootEventSkipsDuplicatePeerPlan(t *testing.T) {
@@ -590,6 +595,32 @@ func TestServicePublishRootEventSkipsDuplicateSplitPlan(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())
 	require.Equal(t, 0, store.eventCalls)
+}
+
+func TestServiceRefreshFromStorageReplacesTransitionView(t *testing.T) {
+	cluster := core.NewCluster()
+	left := testDescriptor(61, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)
+	right := testDescriptor(62, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
+	store := &fakeStorage{
+		leader: true,
+		snapshot: pdstorage.Snapshot{
+			ClusterEpoch: 9,
+			Descriptors: map[uint64]descriptor.Descriptor{
+				left.RegionID:  left,
+				right.RegionID: right,
+			},
+			PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
+				60: {Kind: rootstate.PendingRangeChangeSplit, ParentRegionID: 60, LeftRegionID: left.RegionID, RightRegionID: right.RegionID, Left: left, Right: right},
+			},
+		},
+	}
+	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc.SetStorage(store)
+
+	require.NoError(t, svc.RefreshFromStorage())
+	transitions := svc.cluster.TransitionSnapshot()
+	require.Contains(t, transitions.PendingRangeChanges, uint64(60))
+	require.Len(t, svc.cluster.RegionSnapshot(), 2)
 }
 
 func TestServicePublishRootEventSkipsCompletedSplitPlan(t *testing.T) {
