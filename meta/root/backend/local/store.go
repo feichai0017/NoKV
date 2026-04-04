@@ -27,6 +27,7 @@ type Store struct {
 	mu         sync.RWMutex
 	state      rootstate.State
 	descs      map[uint64]descriptor.Descriptor
+	pending    map[uint64]rootstate.PendingPeerChange
 	records    []rootstorage.CommittedEvent
 	retainFrom rootstate.Cursor
 }
@@ -50,6 +51,7 @@ func Open(workdir string, fs vfs.FS) (*Store, error) {
 		storage:    storage,
 		state:      bootstrap.Snapshot.State,
 		descs:      bootstrap.Snapshot.Descriptors,
+		pending:    bootstrap.Snapshot.PendingPeerChanges,
 		records:    bootstrap.Tail.Records,
 		retainFrom: bootstrap.RetainFrom,
 	}, nil
@@ -73,8 +75,9 @@ func (s *Store) Snapshot() (rootstate.Snapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return rootstate.CloneSnapshot(rootstate.Snapshot{
-		State:       s.state,
-		Descriptors: s.descs,
+		State:              s.state,
+		Descriptors:        s.descs,
+		PendingPeerChanges: s.pending,
 	}), nil
 }
 
@@ -108,12 +111,15 @@ func (s *Store) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) 
 
 	var next rootstate.Cursor
 	state := s.state
-	descs := rootstate.CloneDescriptors(s.descs)
+	snapshot := rootstate.Snapshot{
+		State:              state,
+		Descriptors:        rootstate.CloneDescriptors(s.descs),
+		PendingPeerChanges: rootstate.ClonePendingPeerChanges(s.pending),
+	}
 	records := make([]rootstorage.CommittedEvent, 0, len(events))
 	for _, evt := range events {
-		next = rootstate.NextCursor(state.LastCommitted)
-		rootstate.ApplyEventToState(&state, next, evt)
-		rootmaterialize.ApplyEventToDescriptors(descs, evt)
+		next = rootstate.NextCursor(snapshot.State.LastCommitted)
+		rootmaterialize.ApplyEventToSnapshot(&snapshot, next, evt)
 		records = append(records, rootstorage.CommittedEvent{Cursor: next, Event: rootevent.CloneEvent(evt)})
 	}
 	logEnd, err := s.storage.AppendCommitted(records...)
@@ -121,17 +127,18 @@ func (s *Store) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) 
 		return rootstate.CommitInfo{}, err
 	}
 	if err := s.storage.SaveCheckpoint(rootstorage.Checkpoint{
-		Snapshot:   rootstate.Snapshot{State: state, Descriptors: descs},
+		Snapshot:   rootstate.CloneSnapshot(snapshot),
 		TailOffset: logEnd,
 	}); err != nil {
 		return rootstate.CommitInfo{}, err
 	}
-	s.state = state
-	s.descs = descs
+	s.state = snapshot.State
+	s.descs = snapshot.Descriptors
+	s.pending = snapshot.PendingPeerChanges
 	s.records = append(s.records, records...)
-	s.retainFrom = (rootstorage.CommittedTail{Records: s.records}).RetainFrom(state.LastCommitted)
+	s.retainFrom = (rootstorage.CommittedTail{Records: s.records}).RetainFrom(snapshot.State.LastCommitted)
 	s.maybeCompactLocked()
-	return rootstate.CommitInfo{Cursor: state.LastCommitted, State: state}, nil
+	return rootstate.CommitInfo{Cursor: snapshot.State.LastCommitted, State: snapshot.State}, nil
 }
 
 // FenceAllocator advances one global allocator fence monotonically.
@@ -175,8 +182,9 @@ func (s *Store) maybeCompactLocked() {
 	start := len(s.records) - maxRetainedRecords
 	retained := rootmaterialize.CloneCommittedEvents(s.records[start:])
 	snapshot := rootstate.Snapshot{
-		State:       s.state,
-		Descriptors: rootstate.CloneDescriptors(s.descs),
+		State:              s.state,
+		Descriptors:        rootstate.CloneDescriptors(s.descs),
+		PendingPeerChanges: rootstate.ClonePendingPeerChanges(s.pending),
 	}
 	if err := s.storage.CompactCommitted(rootstorage.CommittedTail{Records: retained}); err != nil {
 		return

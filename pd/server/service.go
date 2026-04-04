@@ -179,9 +179,6 @@ func (s *Service) PublishRootEvent(_ context.Context, req *pdpb.PublishRootEvent
 	if err := s.requireExpectedClusterEpoch(req.GetExpectedClusterEpoch()); err != nil {
 		return nil, err
 	}
-	if s.sameAppliedPeerChange(event) {
-		return &pdpb.PublishRootEventResponse{Accepted: true}, nil
-	}
 	if err := s.cluster.ValidateRootEvent(event); err != nil {
 		switch {
 		case errors.Is(err, core.ErrInvalidRegionID):
@@ -366,22 +363,6 @@ func (s *Service) normalizeDescriptorRootEpoch(desc descriptor.Descriptor) (desc
 	}
 	desc.RootEpoch = nextEpoch
 	return desc, nil
-}
-
-func (s *Service) sameAppliedPeerChange(event rootevent.Event) bool {
-	if s == nil || s.cluster == nil || event.PeerChange == nil {
-		return false
-	}
-	switch event.Kind {
-	case rootevent.KindPeerAdded, rootevent.KindPeerRemoved:
-	default:
-		return false
-	}
-	current, ok := s.cluster.GetRegionDescriptor(event.PeerChange.RegionID)
-	if !ok {
-		return false
-	}
-	return current.Equal(event.PeerChange.Region)
 }
 
 func (s *Service) nextRootEpoch() (uint64, error) {

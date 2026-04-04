@@ -6,6 +6,8 @@ import (
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	pdstorage "github.com/feichai0017/NoKV/pd/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -40,9 +42,10 @@ type fakeStorage struct {
 
 func (f *fakeStorage) Load() (pdstorage.Snapshot, error) {
 	return pdstorage.Snapshot{
-		ClusterEpoch: f.snapshot.ClusterEpoch,
-		Descriptors:  rootCloneDescriptorsForTest(f.snapshot.Descriptors),
-		Allocator:    f.snapshot.Allocator,
+		ClusterEpoch:       f.snapshot.ClusterEpoch,
+		Descriptors:        rootCloneDescriptorsForTest(f.snapshot.Descriptors),
+		PendingPeerChanges: rootstate.ClonePendingPeerChanges(f.snapshot.PendingPeerChanges),
+		Allocator:          f.snapshot.Allocator,
 	}, nil
 }
 
@@ -55,7 +58,22 @@ func (f *fakeStorage) AppendRootEvent(event rootevent.Event) error {
 	if event.Kind == rootevent.KindUnknown {
 		return errors.New("invalid root event")
 	}
-	f.snapshot.ClusterEpoch++
+	snapshot := rootstate.Snapshot{
+		State: rootstate.State{
+			ClusterEpoch:  f.snapshot.ClusterEpoch,
+			IDFence:       f.snapshot.Allocator.IDCurrent,
+			TSOFence:      f.snapshot.Allocator.TSCurrent,
+			LastCommitted: rootstate.Cursor{Term: 1, Index: uint64(f.eventCalls)},
+		},
+		Descriptors:        rootCloneDescriptorsForTest(f.snapshot.Descriptors),
+		PendingPeerChanges: rootstate.ClonePendingPeerChanges(f.snapshot.PendingPeerChanges),
+	}
+	rootmaterialize.ApplyEventToSnapshot(&snapshot, snapshot.State.LastCommitted, event)
+	f.snapshot.ClusterEpoch = snapshot.State.ClusterEpoch
+	f.snapshot.Descriptors = rootCloneDescriptorsForTest(snapshot.Descriptors)
+	f.snapshot.PendingPeerChanges = rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges)
+	f.snapshot.Allocator.IDCurrent = snapshot.State.IDFence
+	f.snapshot.Allocator.TSCurrent = snapshot.State.TSOFence
 	return nil
 }
 
@@ -92,8 +110,10 @@ type fakeSyncStorage struct {
 
 func (f *fakeSyncStorage) Load() (pdstorage.Snapshot, error) {
 	return pdstorage.Snapshot{
-		Descriptors: rootCloneDescriptorsForTest(f.snapshot.Descriptors),
-		Allocator:   f.snapshot.Allocator,
+		ClusterEpoch:       f.snapshot.ClusterEpoch,
+		Descriptors:        rootCloneDescriptorsForTest(f.snapshot.Descriptors),
+		PendingPeerChanges: rootstate.ClonePendingPeerChanges(f.snapshot.PendingPeerChanges),
+		Allocator:          f.snapshot.Allocator,
 	}, nil
 }
 
@@ -327,7 +347,7 @@ func TestServicePublishRootEvent(t *testing.T) {
 	require.Equal(t, uint64(42), right.RegionID)
 }
 
-func TestServicePublishRootEventSkipsRedundantPeerApply(t *testing.T) {
+func TestServicePublishRootEventAppliedPeerChangeClearsPending(t *testing.T) {
 	cluster := core.NewCluster()
 	target := testDescriptor(11, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 2}, []metaregion.Peer{
 		{StoreID: 1, PeerID: 101},
@@ -340,8 +360,9 @@ func TestServicePublishRootEventSkipsRedundantPeerApply(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: pdstorage.Snapshot{
-			ClusterEpoch: 5,
-			Descriptors:  map[uint64]descriptor.Descriptor{target.RegionID: target},
+			ClusterEpoch:       5,
+			Descriptors:        map[uint64]descriptor.Descriptor{target.RegionID: target},
+			PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{target.RegionID: {Kind: rootstate.PendingPeerChangeAddition, StoreID: 2, PeerID: 201, Target: target}},
 		},
 	}
 	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
@@ -357,8 +378,9 @@ func TestServicePublishRootEventSkipsRedundantPeerApply(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())
-	require.Equal(t, 0, store.eventCalls)
+	require.Equal(t, 1, store.eventCalls)
 	require.Equal(t, uint64(5), store.snapshot.ClusterEpoch)
+	require.Empty(t, store.snapshot.PendingPeerChanges)
 }
 
 func TestServicePublishRootEventPersistsPeerPlan(t *testing.T) {

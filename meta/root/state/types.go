@@ -20,10 +20,26 @@ type State struct {
 	TSOFence        uint64
 }
 
+type PendingPeerChangeKind uint8
+
+const (
+	PendingPeerChangeUnknown PendingPeerChangeKind = iota
+	PendingPeerChangeAddition
+	PendingPeerChangeRemoval
+)
+
+type PendingPeerChange struct {
+	Kind    PendingPeerChangeKind
+	StoreID uint64
+	PeerID  uint64
+	Target  descriptor.Descriptor
+}
+
 // Snapshot is the compact materialized rooted metadata state used for bounded bootstrap and recovery.
 type Snapshot struct {
-	State       State
-	Descriptors map[uint64]descriptor.Descriptor
+	State              State
+	Descriptors        map[uint64]descriptor.Descriptor
+	PendingPeerChanges map[uint64]PendingPeerChange
 }
 
 // CommitInfo reports one successful root append together with the resulting compact root state.
@@ -33,7 +49,11 @@ type CommitInfo struct {
 }
 
 func CloneSnapshot(snapshot Snapshot) Snapshot {
-	out := Snapshot{State: snapshot.State, Descriptors: CloneDescriptors(snapshot.Descriptors)}
+	out := Snapshot{
+		State:              snapshot.State,
+		Descriptors:        CloneDescriptors(snapshot.Descriptors),
+		PendingPeerChanges: ClonePendingPeerChanges(snapshot.PendingPeerChanges),
+	}
 	return out
 }
 
@@ -44,6 +64,22 @@ func CloneDescriptors(in map[uint64]descriptor.Descriptor) map[uint64]descriptor
 	out := make(map[uint64]descriptor.Descriptor, len(in))
 	for id, desc := range in {
 		out[id] = desc.Clone()
+	}
+	return out
+}
+
+func ClonePendingPeerChanges(in map[uint64]PendingPeerChange) map[uint64]PendingPeerChange {
+	if len(in) == 0 {
+		return make(map[uint64]PendingPeerChange)
+	}
+	out := make(map[uint64]PendingPeerChange, len(in))
+	for id, change := range in {
+		out[id] = PendingPeerChange{
+			Kind:    change.Kind,
+			StoreID: change.StoreID,
+			PeerID:  change.PeerID,
+			Target:  change.Target.Clone(),
+		}
 	}
 	return out
 }
