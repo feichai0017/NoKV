@@ -418,6 +418,128 @@ func TestServicePublishRootEventPersistsPeerPlan(t *testing.T) {
 	require.Equal(t, uint64(6), store.lastEvent.PeerChange.Region.RootEpoch)
 }
 
+func TestServicePublishRootEventSkipsDuplicatePeerPlan(t *testing.T) {
+	cluster := core.NewCluster()
+	current := testDescriptor(13, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{
+		{StoreID: 1, PeerID: 101},
+	})
+	current.RootEpoch = 5
+	current.EnsureHash()
+	require.NoError(t, cluster.PublishRegionDescriptor(current))
+
+	target := current.Clone()
+	target.Peers = append(target.Peers, metaregion.Peer{StoreID: 2, PeerID: 201})
+	target.Epoch.ConfVersion++
+	target.RootEpoch = 6
+	target.EnsureHash()
+
+	store := &fakeStorage{
+		leader: true,
+		snapshot: pdstorage.Snapshot{
+			ClusterEpoch: 6,
+			Descriptors:  map[uint64]descriptor.Descriptor{target.RegionID: target},
+			PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
+				target.RegionID: {Kind: rootstate.PendingPeerChangeAddition, StoreID: 2, PeerID: 201, Target: target},
+			},
+		},
+	}
+	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc.SetStorage(store)
+
+	resp, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event: metacodec.RootEventToProto(rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)),
+	})
+	require.NoError(t, err)
+	require.True(t, resp.GetAccepted())
+	require.Equal(t, 0, store.eventCalls)
+	require.Equal(t, uint64(6), store.snapshot.ClusterEpoch)
+	require.Len(t, store.snapshot.PendingPeerChanges, 1)
+}
+
+func TestServicePublishRootEventRejectsConflictingPeerPlan(t *testing.T) {
+	cluster := core.NewCluster()
+	current := testDescriptor(14, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{
+		{StoreID: 1, PeerID: 101},
+	})
+	current.RootEpoch = 5
+	current.EnsureHash()
+	require.NoError(t, cluster.PublishRegionDescriptor(current))
+
+	target := current.Clone()
+	target.Peers = append(target.Peers, metaregion.Peer{StoreID: 2, PeerID: 201})
+	target.Epoch.ConfVersion++
+	target.RootEpoch = 6
+	target.EnsureHash()
+
+	conflicting := current.Clone()
+	conflicting.Peers = append(conflicting.Peers, metaregion.Peer{StoreID: 3, PeerID: 301})
+	conflicting.Epoch.ConfVersion++
+	conflicting.RootEpoch = 6
+	conflicting.EnsureHash()
+
+	store := &fakeStorage{
+		leader: true,
+		snapshot: pdstorage.Snapshot{
+			ClusterEpoch: 6,
+			Descriptors:  map[uint64]descriptor.Descriptor{target.RegionID: target},
+			PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
+				target.RegionID: {Kind: rootstate.PendingPeerChangeAddition, StoreID: 2, PeerID: 201, Target: target},
+			},
+		},
+	}
+	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc.SetStorage(store)
+
+	_, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event: metacodec.RootEventToProto(rootevent.PeerAdditionPlanned(conflicting.RegionID, 3, 301, conflicting)),
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Equal(t, 0, store.eventCalls)
+}
+
+func TestServicePublishRootEventRejectsMismatchedPeerApply(t *testing.T) {
+	cluster := core.NewCluster()
+	current := testDescriptor(15, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{
+		{StoreID: 1, PeerID: 101},
+	})
+	current.RootEpoch = 5
+	current.EnsureHash()
+	require.NoError(t, cluster.PublishRegionDescriptor(current))
+
+	target := current.Clone()
+	target.Peers = append(target.Peers, metaregion.Peer{StoreID: 2, PeerID: 201})
+	target.Epoch.ConfVersion++
+	target.RootEpoch = 6
+	target.EnsureHash()
+
+	mismatched := current.Clone()
+	mismatched.Peers = append(mismatched.Peers, metaregion.Peer{StoreID: 3, PeerID: 301})
+	mismatched.Epoch.ConfVersion++
+	mismatched.RootEpoch = 6
+	mismatched.EnsureHash()
+
+	store := &fakeStorage{
+		leader: true,
+		snapshot: pdstorage.Snapshot{
+			ClusterEpoch: 6,
+			Descriptors:  map[uint64]descriptor.Descriptor{target.RegionID: target},
+			PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
+				target.RegionID: {Kind: rootstate.PendingPeerChangeAddition, StoreID: 2, PeerID: 201, Target: target},
+			},
+		},
+	}
+	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc.SetStorage(store)
+
+	_, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event: metacodec.RootEventToProto(rootevent.PeerAdded(mismatched.RegionID, 3, 301, mismatched)),
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Equal(t, 0, store.eventCalls)
+}
+
 func TestServicePublishRootEventValidationAndPersistenceError(t *testing.T) {
 	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
 

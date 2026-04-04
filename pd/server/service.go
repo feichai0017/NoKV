@@ -6,6 +6,7 @@ import (
 	"fmt"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 
 	"github.com/feichai0017/NoKV/pd/core"
@@ -179,6 +180,13 @@ func (s *Service) PublishRootEvent(_ context.Context, req *pdpb.PublishRootEvent
 	if err := s.requireExpectedClusterEpoch(req.GetExpectedClusterEpoch()); err != nil {
 		return nil, err
 	}
+	skip, err := s.guardPeerChangeLifecycle(event)
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	if skip {
+		return &pdpb.PublishRootEventResponse{Accepted: true}, nil
+	}
 	if err := s.cluster.ValidateRootEvent(event); err != nil {
 		switch {
 		case errors.Is(err, core.ErrInvalidRegionID):
@@ -198,6 +206,61 @@ func (s *Service) PublishRootEvent(_ context.Context, req *pdpb.PublishRootEvent
 		return nil, status.Error(codes.Internal, "apply root event after persist: "+err.Error())
 	}
 	return &pdpb.PublishRootEventResponse{Accepted: true}, nil
+}
+
+func (s *Service) guardPeerChangeLifecycle(event rootevent.Event) (bool, error) {
+	if s == nil || s.storage == nil || event.PeerChange == nil {
+		return false, nil
+	}
+	snapshot, err := s.storage.Load()
+	if err != nil {
+		return false, fmt.Errorf("load rooted snapshot: %w", err)
+	}
+	change, pending := snapshot.PendingPeerChanges[event.PeerChange.RegionID]
+	switch event.Kind {
+	case rootevent.KindPeerAdditionPlanned, rootevent.KindPeerRemovalPlanned:
+		if !pending {
+			return false, nil
+		}
+		if matchesPendingPeerChange(event, change) {
+			return true, nil
+		}
+		return false, fmt.Errorf("pending peer change already exists for region %d", event.PeerChange.RegionID)
+	case rootevent.KindPeerAdded, rootevent.KindPeerRemoved:
+		if pending {
+			if matchesPendingPeerChange(event, change) {
+				return false, nil
+			}
+			return false, fmt.Errorf("peer change apply does not match pending target for region %d", event.PeerChange.RegionID)
+		}
+		current, ok := s.cluster.GetRegionDescriptor(event.PeerChange.RegionID)
+		if ok && current.Equal(event.PeerChange.Region) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func matchesPendingPeerChange(event rootevent.Event, pending rootstate.PendingPeerChange) bool {
+	if event.PeerChange == nil {
+		return false
+	}
+	if pending.StoreID != event.PeerChange.StoreID || pending.PeerID != event.PeerChange.PeerID {
+		return false
+	}
+	switch event.Kind {
+	case rootevent.KindPeerAdditionPlanned, rootevent.KindPeerAdded:
+		if pending.Kind != rootstate.PendingPeerChangeAddition {
+			return false
+		}
+	case rootevent.KindPeerRemovalPlanned, rootevent.KindPeerRemoved:
+		if pending.Kind != rootstate.PendingPeerChangeRemoval {
+			return false
+		}
+	default:
+		return false
+	}
+	return pending.Target.Equal(event.PeerChange.Region)
 }
 
 // RemoveRegion deletes region metadata from the PD in-memory catalog.
