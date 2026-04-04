@@ -154,6 +154,55 @@ func (RootPendingPeerChangeKind) EnumDescriptor() ([]byte, []int) {
 	return file_meta_root_proto_rawDescGZIP(), []int{1}
 }
 
+type RootPendingPeerChangeStage int32
+
+const (
+	RootPendingPeerChangeStage_ROOT_PENDING_PEER_CHANGE_STAGE_UNSPECIFIED RootPendingPeerChangeStage = 0
+	RootPendingPeerChangeStage_ROOT_PENDING_PEER_CHANGE_STAGE_PLANNED     RootPendingPeerChangeStage = 1
+	RootPendingPeerChangeStage_ROOT_PENDING_PEER_CHANGE_STAGE_APPLIED     RootPendingPeerChangeStage = 2
+)
+
+// Enum value maps for RootPendingPeerChangeStage.
+var (
+	RootPendingPeerChangeStage_name = map[int32]string{
+		0: "ROOT_PENDING_PEER_CHANGE_STAGE_UNSPECIFIED",
+		1: "ROOT_PENDING_PEER_CHANGE_STAGE_PLANNED",
+		2: "ROOT_PENDING_PEER_CHANGE_STAGE_APPLIED",
+	}
+	RootPendingPeerChangeStage_value = map[string]int32{
+		"ROOT_PENDING_PEER_CHANGE_STAGE_UNSPECIFIED": 0,
+		"ROOT_PENDING_PEER_CHANGE_STAGE_PLANNED":     1,
+		"ROOT_PENDING_PEER_CHANGE_STAGE_APPLIED":     2,
+	}
+)
+
+func (x RootPendingPeerChangeStage) Enum() *RootPendingPeerChangeStage {
+	p := new(RootPendingPeerChangeStage)
+	*p = x
+	return p
+}
+
+func (x RootPendingPeerChangeStage) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RootPendingPeerChangeStage) Descriptor() protoreflect.EnumDescriptor {
+	return file_meta_root_proto_enumTypes[2].Descriptor()
+}
+
+func (RootPendingPeerChangeStage) Type() protoreflect.EnumType {
+	return &file_meta_root_proto_enumTypes[2]
+}
+
+func (x RootPendingPeerChangeStage) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RootPendingPeerChangeStage.Descriptor instead.
+func (RootPendingPeerChangeStage) EnumDescriptor() ([]byte, []int) {
+	return file_meta_root_proto_rawDescGZIP(), []int{2}
+}
+
 type RootCursor struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Term          uint64                 `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`
@@ -731,12 +780,13 @@ func (x *RootPeerChange) GetDescriptor_() *RegionDescriptor {
 }
 
 type RootPendingPeerChange struct {
-	state         protoimpl.MessageState    `protogen:"open.v1"`
-	RegionId      uint64                    `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
-	StoreId       uint64                    `protobuf:"varint,2,opt,name=store_id,json=storeId,proto3" json:"store_id,omitempty"`
-	PeerId        uint64                    `protobuf:"varint,3,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
-	Kind          RootPendingPeerChangeKind `protobuf:"varint,4,opt,name=kind,proto3,enum=nokv.meta.v1.RootPendingPeerChangeKind" json:"kind,omitempty"`
-	Descriptor_   *RegionDescriptor         `protobuf:"bytes,5,opt,name=descriptor,proto3" json:"descriptor,omitempty"`
+	state         protoimpl.MessageState     `protogen:"open.v1"`
+	RegionId      uint64                     `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	StoreId       uint64                     `protobuf:"varint,2,opt,name=store_id,json=storeId,proto3" json:"store_id,omitempty"`
+	PeerId        uint64                     `protobuf:"varint,3,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
+	Kind          RootPendingPeerChangeKind  `protobuf:"varint,4,opt,name=kind,proto3,enum=nokv.meta.v1.RootPendingPeerChangeKind" json:"kind,omitempty"`
+	Descriptor_   *RegionDescriptor          `protobuf:"bytes,5,opt,name=descriptor,proto3" json:"descriptor,omitempty"`
+	Stage         RootPendingPeerChangeStage `protobuf:"varint,6,opt,name=stage,proto3,enum=nokv.meta.v1.RootPendingPeerChangeStage" json:"stage,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -804,6 +854,13 @@ func (x *RootPendingPeerChange) GetDescriptor_() *RegionDescriptor {
 		return x.Descriptor_
 	}
 	return nil
+}
+
+func (x *RootPendingPeerChange) GetStage() RootPendingPeerChangeStage {
+	if x != nil {
+		return x.Stage
+	}
+	return RootPendingPeerChangeStage_ROOT_PENDING_PEER_CHANGE_STAGE_UNSPECIFIED
 }
 
 type RootEvent struct {
@@ -1023,7 +1080,7 @@ const file_meta_root_proto_rawDesc = "" +
 	"\apeer_id\x18\x03 \x01(\x04R\x06peerId\x12>\n" +
 	"\n" +
 	"descriptor\x18\x04 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\n" +
-	"descriptor\"\xe5\x01\n" +
+	"descriptor\"\xa5\x02\n" +
 	"\x15RootPendingPeerChange\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12\x19\n" +
 	"\bstore_id\x18\x02 \x01(\x04R\astoreId\x12\x17\n" +
@@ -1031,7 +1088,8 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x04kind\x18\x04 \x01(\x0e2'.nokv.meta.v1.RootPendingPeerChangeKindR\x04kind\x12>\n" +
 	"\n" +
 	"descriptor\x18\x05 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\n" +
-	"descriptor\"\xc4\x04\n" +
+	"descriptor\x12>\n" +
+	"\x05stage\x18\x06 \x01(\x0e2(.nokv.meta.v1.RootPendingPeerChangeStageR\x05stage\"\xc4\x04\n" +
 	"\tRootEvent\x12/\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1b.nokv.meta.v1.RootEventKindR\x04kind\x12N\n" +
 	"\x10store_membership\x18\x02 \x01(\v2!.nokv.meta.v1.RootStoreMembershipH\x00R\x0fstoreMembership\x12K\n" +
@@ -1064,7 +1122,11 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x19RootPendingPeerChangeKind\x12-\n" +
 	")ROOT_PENDING_PEER_CHANGE_KIND_UNSPECIFIED\x10\x00\x12*\n" +
 	"&ROOT_PENDING_PEER_CHANGE_KIND_ADDITION\x10\x01\x12)\n" +
-	"%ROOT_PENDING_PEER_CHANGE_KIND_REMOVAL\x10\x02B,Z*github.com/feichai0017/NoKV/pb/meta;metapbb\x06proto3"
+	"%ROOT_PENDING_PEER_CHANGE_KIND_REMOVAL\x10\x02*\xa4\x01\n" +
+	"\x1aRootPendingPeerChangeStage\x12.\n" +
+	"*ROOT_PENDING_PEER_CHANGE_STAGE_UNSPECIFIED\x10\x00\x12*\n" +
+	"&ROOT_PENDING_PEER_CHANGE_STAGE_PLANNED\x10\x01\x12*\n" +
+	"&ROOT_PENDING_PEER_CHANGE_STAGE_APPLIED\x10\x02B,Z*github.com/feichai0017/NoKV/pb/meta;metapbb\x06proto3"
 
 var (
 	file_meta_root_proto_rawDescOnce sync.Once
@@ -1078,50 +1140,52 @@ func file_meta_root_proto_rawDescGZIP() []byte {
 	return file_meta_root_proto_rawDescData
 }
 
-var file_meta_root_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_meta_root_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_meta_root_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_meta_root_proto_goTypes = []any{
-	(RootEventKind)(0),             // 0: nokv.meta.v1.RootEventKind
-	(RootPendingPeerChangeKind)(0), // 1: nokv.meta.v1.RootPendingPeerChangeKind
-	(*RootCursor)(nil),             // 2: nokv.meta.v1.RootCursor
-	(*RootState)(nil),              // 3: nokv.meta.v1.RootState
-	(*RootCheckpoint)(nil),         // 4: nokv.meta.v1.RootCheckpoint
-	(*RootStoreMembership)(nil),    // 5: nokv.meta.v1.RootStoreMembership
-	(*RootAllocatorFence)(nil),     // 6: nokv.meta.v1.RootAllocatorFence
-	(*RootRegionDescriptor)(nil),   // 7: nokv.meta.v1.RootRegionDescriptor
-	(*RootRegionRemoval)(nil),      // 8: nokv.meta.v1.RootRegionRemoval
-	(*RootRangeSplit)(nil),         // 9: nokv.meta.v1.RootRangeSplit
-	(*RootRangeMerge)(nil),         // 10: nokv.meta.v1.RootRangeMerge
-	(*RootPeerChange)(nil),         // 11: nokv.meta.v1.RootPeerChange
-	(*RootPendingPeerChange)(nil),  // 12: nokv.meta.v1.RootPendingPeerChange
-	(*RootEvent)(nil),              // 13: nokv.meta.v1.RootEvent
-	(*RegionDescriptor)(nil),       // 14: nokv.meta.v1.RegionDescriptor
+	(RootEventKind)(0),              // 0: nokv.meta.v1.RootEventKind
+	(RootPendingPeerChangeKind)(0),  // 1: nokv.meta.v1.RootPendingPeerChangeKind
+	(RootPendingPeerChangeStage)(0), // 2: nokv.meta.v1.RootPendingPeerChangeStage
+	(*RootCursor)(nil),              // 3: nokv.meta.v1.RootCursor
+	(*RootState)(nil),               // 4: nokv.meta.v1.RootState
+	(*RootCheckpoint)(nil),          // 5: nokv.meta.v1.RootCheckpoint
+	(*RootStoreMembership)(nil),     // 6: nokv.meta.v1.RootStoreMembership
+	(*RootAllocatorFence)(nil),      // 7: nokv.meta.v1.RootAllocatorFence
+	(*RootRegionDescriptor)(nil),    // 8: nokv.meta.v1.RootRegionDescriptor
+	(*RootRegionRemoval)(nil),       // 9: nokv.meta.v1.RootRegionRemoval
+	(*RootRangeSplit)(nil),          // 10: nokv.meta.v1.RootRangeSplit
+	(*RootRangeMerge)(nil),          // 11: nokv.meta.v1.RootRangeMerge
+	(*RootPeerChange)(nil),          // 12: nokv.meta.v1.RootPeerChange
+	(*RootPendingPeerChange)(nil),   // 13: nokv.meta.v1.RootPendingPeerChange
+	(*RootEvent)(nil),               // 14: nokv.meta.v1.RootEvent
+	(*RegionDescriptor)(nil),        // 15: nokv.meta.v1.RegionDescriptor
 }
 var file_meta_root_proto_depIdxs = []int32{
-	2,  // 0: nokv.meta.v1.RootState.last_committed:type_name -> nokv.meta.v1.RootCursor
-	3,  // 1: nokv.meta.v1.RootCheckpoint.state:type_name -> nokv.meta.v1.RootState
-	14, // 2: nokv.meta.v1.RootCheckpoint.descriptors:type_name -> nokv.meta.v1.RegionDescriptor
-	12, // 3: nokv.meta.v1.RootCheckpoint.pending_peer_changes:type_name -> nokv.meta.v1.RootPendingPeerChange
-	14, // 4: nokv.meta.v1.RootRegionDescriptor.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	14, // 5: nokv.meta.v1.RootRangeSplit.left:type_name -> nokv.meta.v1.RegionDescriptor
-	14, // 6: nokv.meta.v1.RootRangeSplit.right:type_name -> nokv.meta.v1.RegionDescriptor
-	14, // 7: nokv.meta.v1.RootRangeMerge.merged:type_name -> nokv.meta.v1.RegionDescriptor
-	14, // 8: nokv.meta.v1.RootPeerChange.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	3,  // 0: nokv.meta.v1.RootState.last_committed:type_name -> nokv.meta.v1.RootCursor
+	4,  // 1: nokv.meta.v1.RootCheckpoint.state:type_name -> nokv.meta.v1.RootState
+	15, // 2: nokv.meta.v1.RootCheckpoint.descriptors:type_name -> nokv.meta.v1.RegionDescriptor
+	13, // 3: nokv.meta.v1.RootCheckpoint.pending_peer_changes:type_name -> nokv.meta.v1.RootPendingPeerChange
+	15, // 4: nokv.meta.v1.RootRegionDescriptor.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	15, // 5: nokv.meta.v1.RootRangeSplit.left:type_name -> nokv.meta.v1.RegionDescriptor
+	15, // 6: nokv.meta.v1.RootRangeSplit.right:type_name -> nokv.meta.v1.RegionDescriptor
+	15, // 7: nokv.meta.v1.RootRangeMerge.merged:type_name -> nokv.meta.v1.RegionDescriptor
+	15, // 8: nokv.meta.v1.RootPeerChange.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
 	1,  // 9: nokv.meta.v1.RootPendingPeerChange.kind:type_name -> nokv.meta.v1.RootPendingPeerChangeKind
-	14, // 10: nokv.meta.v1.RootPendingPeerChange.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	0,  // 11: nokv.meta.v1.RootEvent.kind:type_name -> nokv.meta.v1.RootEventKind
-	5,  // 12: nokv.meta.v1.RootEvent.store_membership:type_name -> nokv.meta.v1.RootStoreMembership
-	6,  // 13: nokv.meta.v1.RootEvent.allocator_fence:type_name -> nokv.meta.v1.RootAllocatorFence
-	7,  // 14: nokv.meta.v1.RootEvent.region_descriptor:type_name -> nokv.meta.v1.RootRegionDescriptor
-	8,  // 15: nokv.meta.v1.RootEvent.region_removal:type_name -> nokv.meta.v1.RootRegionRemoval
-	9,  // 16: nokv.meta.v1.RootEvent.range_split:type_name -> nokv.meta.v1.RootRangeSplit
-	10, // 17: nokv.meta.v1.RootEvent.range_merge:type_name -> nokv.meta.v1.RootRangeMerge
-	11, // 18: nokv.meta.v1.RootEvent.peer_change:type_name -> nokv.meta.v1.RootPeerChange
-	19, // [19:19] is the sub-list for method output_type
-	19, // [19:19] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	15, // 10: nokv.meta.v1.RootPendingPeerChange.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	2,  // 11: nokv.meta.v1.RootPendingPeerChange.stage:type_name -> nokv.meta.v1.RootPendingPeerChangeStage
+	0,  // 12: nokv.meta.v1.RootEvent.kind:type_name -> nokv.meta.v1.RootEventKind
+	6,  // 13: nokv.meta.v1.RootEvent.store_membership:type_name -> nokv.meta.v1.RootStoreMembership
+	7,  // 14: nokv.meta.v1.RootEvent.allocator_fence:type_name -> nokv.meta.v1.RootAllocatorFence
+	8,  // 15: nokv.meta.v1.RootEvent.region_descriptor:type_name -> nokv.meta.v1.RootRegionDescriptor
+	9,  // 16: nokv.meta.v1.RootEvent.region_removal:type_name -> nokv.meta.v1.RootRegionRemoval
+	10, // 17: nokv.meta.v1.RootEvent.range_split:type_name -> nokv.meta.v1.RootRangeSplit
+	11, // 18: nokv.meta.v1.RootEvent.range_merge:type_name -> nokv.meta.v1.RootRangeMerge
+	12, // 19: nokv.meta.v1.RootEvent.peer_change:type_name -> nokv.meta.v1.RootPeerChange
+	20, // [20:20] is the sub-list for method output_type
+	20, // [20:20] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_meta_root_proto_init() }
@@ -1144,7 +1208,7 @@ func file_meta_root_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_meta_root_proto_rawDesc), len(file_meta_root_proto_rawDesc)),
-			NumEnums:      2,
+			NumEnums:      3,
 			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,

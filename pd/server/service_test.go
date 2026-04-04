@@ -347,7 +347,7 @@ func TestServicePublishRootEvent(t *testing.T) {
 	require.Equal(t, uint64(42), right.RegionID)
 }
 
-func TestServicePublishRootEventAppliedPeerChangeClearsPending(t *testing.T) {
+func TestServicePublishRootEventAppliedPeerChangeMarksPendingApplied(t *testing.T) {
 	cluster := core.NewCluster()
 	target := testDescriptor(11, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 2}, []metaregion.Peer{
 		{StoreID: 1, PeerID: 101},
@@ -362,7 +362,7 @@ func TestServicePublishRootEventAppliedPeerChangeClearsPending(t *testing.T) {
 		snapshot: pdstorage.Snapshot{
 			ClusterEpoch:       5,
 			Descriptors:        map[uint64]descriptor.Descriptor{target.RegionID: target},
-			PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{target.RegionID: {Kind: rootstate.PendingPeerChangeAddition, StoreID: 2, PeerID: 201, Target: target}},
+			PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{target.RegionID: {Kind: rootstate.PendingPeerChangeAddition, Stage: rootstate.PendingPeerChangeStagePlanned, StoreID: 2, PeerID: 201, Target: target}},
 		},
 	}
 	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
@@ -380,7 +380,8 @@ func TestServicePublishRootEventAppliedPeerChangeClearsPending(t *testing.T) {
 	require.True(t, resp.GetAccepted())
 	require.Equal(t, 1, store.eventCalls)
 	require.Equal(t, uint64(5), store.snapshot.ClusterEpoch)
-	require.Empty(t, store.snapshot.PendingPeerChanges)
+	require.Contains(t, store.snapshot.PendingPeerChanges, target.RegionID)
+	require.Equal(t, rootstate.PendingPeerChangeStageApplied, store.snapshot.PendingPeerChanges[target.RegionID].Stage)
 }
 
 func TestServicePublishRootEventPersistsPeerPlan(t *testing.T) {
@@ -439,7 +440,7 @@ func TestServicePublishRootEventSkipsDuplicatePeerPlan(t *testing.T) {
 			ClusterEpoch: 6,
 			Descriptors:  map[uint64]descriptor.Descriptor{target.RegionID: target},
 			PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
-				target.RegionID: {Kind: rootstate.PendingPeerChangeAddition, StoreID: 2, PeerID: 201, Target: target},
+				target.RegionID: {Kind: rootstate.PendingPeerChangeAddition, Stage: rootstate.PendingPeerChangeStagePlanned, StoreID: 2, PeerID: 201, Target: target},
 			},
 		},
 	}
@@ -483,7 +484,7 @@ func TestServicePublishRootEventRejectsConflictingPeerPlan(t *testing.T) {
 			ClusterEpoch: 6,
 			Descriptors:  map[uint64]descriptor.Descriptor{target.RegionID: target},
 			PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
-				target.RegionID: {Kind: rootstate.PendingPeerChangeAddition, StoreID: 2, PeerID: 201, Target: target},
+				target.RegionID: {Kind: rootstate.PendingPeerChangeAddition, Stage: rootstate.PendingPeerChangeStagePlanned, StoreID: 2, PeerID: 201, Target: target},
 			},
 		},
 	}
@@ -525,7 +526,7 @@ func TestServicePublishRootEventRejectsMismatchedPeerApply(t *testing.T) {
 			ClusterEpoch: 6,
 			Descriptors:  map[uint64]descriptor.Descriptor{target.RegionID: target},
 			PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
-				target.RegionID: {Kind: rootstate.PendingPeerChangeAddition, StoreID: 2, PeerID: 201, Target: target},
+				target.RegionID: {Kind: rootstate.PendingPeerChangeAddition, Stage: rootstate.PendingPeerChangeStagePlanned, StoreID: 2, PeerID: 201, Target: target},
 			},
 		},
 	}
