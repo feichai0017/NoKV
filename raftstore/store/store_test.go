@@ -4,6 +4,7 @@ import (
 	"bytes"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"testing"
 	"time"
@@ -212,7 +213,8 @@ func TestStoreProposeSplitApplies(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return hasSchedulerEventSubsequence(sink.EventHistory(),
-			schedulerEvent{kind: "root", regionID: parentMeta.ID},
+			schedulerEvent{kind: "root", regionID: parentMeta.ID, rootKind: rootevent.KindRegionSplitPlanned},
+			schedulerEvent{kind: "root", regionID: parentMeta.ID, rootKind: rootevent.KindRegionSplitCommitted},
 		)
 	}, time.Second, 10*time.Millisecond)
 }
@@ -285,7 +287,8 @@ func TestStoreProposeMergeApplies(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return hasSchedulerEventSubsequence(sink.EventHistory(),
-			schedulerEvent{kind: "root", regionID: parentMeta.ID},
+			schedulerEvent{kind: "root", regionID: parentMeta.ID, rootKind: rootevent.KindRegionMergePlanned},
+			schedulerEvent{kind: "root", regionID: parentMeta.ID, rootKind: rootevent.KindRegionMerged},
 		)
 	}, time.Second, 10*time.Millisecond)
 }

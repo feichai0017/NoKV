@@ -20,6 +20,7 @@ type peerChangePlan struct {
 	RegionID uint64
 	Change   raftpb.ConfChangeV2
 	Event    rootevent.Event
+	Noop     bool
 }
 
 func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
@@ -259,7 +260,7 @@ func (s *Store) planPeerChange(regionID uint64, cc raftpb.ConfChangeV2) (peerCha
 		if err != nil {
 			return peerChangePlan{}, err
 		}
-		return peerChangePlan{}, fmt.Errorf("raftstore: peer change does not modify region %d", regionID)
+		return peerChangePlan{RegionID: regionID, Noop: true}, nil
 	}
 	next.Epoch.ConfVersion += uint64(len(cc.Changes))
 	desc := metacodec.DescriptorFromLocalRegionMeta(next, 0)
@@ -291,6 +292,9 @@ func (s *Store) planPeerChange(regionID uint64, cc raftpb.ConfChangeV2) (peerCha
 func (s *Store) executePeerChangePlan(plan peerChangePlan) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
+	}
+	if plan.Noop {
+		return nil
 	}
 	if s.schedulerClient() != nil && plan.RegionID != 0 && plan.Event.Kind != rootevent.KindUnknown {
 		if err := s.schedulerClient().PublishRootEvent(s.runtimeContext(), plan.Event); err != nil {

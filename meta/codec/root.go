@@ -210,8 +210,12 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_TOMBSTONED
 	case rootevent.KindTSOAllocatorFenced:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_TSO_ALLOCATOR_FENCED
+	case rootevent.KindRegionSplitPlanned:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_PLANNED
 	case rootevent.KindRegionSplitCommitted:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED
+	case rootevent.KindRegionMergePlanned:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGE_PLANNED
 	case rootevent.KindRegionMerged:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGED
 	case rootevent.KindPeerAdditionPlanned:
@@ -243,8 +247,12 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindRegionTombstoned
 	case metapb.RootEventKind_ROOT_EVENT_KIND_TSO_ALLOCATOR_FENCED:
 		return rootevent.KindTSOAllocatorFenced
+	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_PLANNED:
+		return rootevent.KindRegionSplitPlanned
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED:
 		return rootevent.KindRegionSplitCommitted
+	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGE_PLANNED:
+		return rootevent.KindRegionMergePlanned
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGED:
 		return rootevent.KindRegionMerged
 	case metapb.RootEventKind_ROOT_EVENT_KIND_PEER_ADDITION_PLANNED:

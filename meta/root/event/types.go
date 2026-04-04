@@ -14,7 +14,9 @@ const (
 	KindRegionBootstrap
 	KindRegionDescriptorPublished
 	KindRegionTombstoned
+	KindRegionSplitPlanned
 	KindRegionSplitCommitted
+	KindRegionMergePlanned
 	KindRegionMerged
 	KindPeerAdditionPlanned
 	KindPeerRemovalPlanned
@@ -107,6 +109,18 @@ func RegionTombstoned(regionID uint64) Event {
 	return Event{Kind: KindRegionTombstoned, RegionRemoval: &RegionRemoval{RegionID: regionID}}
 }
 
+func RegionSplitPlanned(parentRegionID uint64, splitKey []byte, left, right descriptor.Descriptor) Event {
+	return Event{
+		Kind: KindRegionSplitPlanned,
+		RangeSplit: &RangeSplit{
+			ParentRegionID: parentRegionID,
+			SplitKey:       append([]byte(nil), splitKey...),
+			Left:           left,
+			Right:          right,
+		},
+	}
+}
+
 func RegionSplitCommitted(parentRegionID uint64, splitKey []byte, left, right descriptor.Descriptor) Event {
 	return Event{
 		Kind: KindRegionSplitCommitted,
@@ -115,6 +129,17 @@ func RegionSplitCommitted(parentRegionID uint64, splitKey []byte, left, right de
 			SplitKey:       append([]byte(nil), splitKey...),
 			Left:           left,
 			Right:          right,
+		},
+	}
+}
+
+func RegionMergePlanned(leftRegionID, rightRegionID uint64, merged descriptor.Descriptor) Event {
+	return Event{
+		Kind: KindRegionMergePlanned,
+		RangeMerge: &RangeMerge{
+			LeftRegionID:  leftRegionID,
+			RightRegionID: rightRegionID,
+			Merged:        merged,
 		},
 	}
 }

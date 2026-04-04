@@ -22,6 +22,19 @@ func TestRegionSplitCommittedClonesSplitKey(t *testing.T) {
 	require.Equal(t, []byte("m"), event.RangeSplit.SplitKey)
 }
 
+func TestRegionSplitPlannedClonesSplitKey(t *testing.T) {
+	key := []byte("m")
+	left := testDescriptor(1, []byte("a"), []byte("m"))
+	right := testDescriptor(2, []byte("m"), []byte("z"))
+
+	event := rootevent.RegionSplitPlanned(1, key, left, right)
+	key[0] = 'x'
+
+	require.Equal(t, rootevent.KindRegionSplitPlanned, event.Kind)
+	require.NotNil(t, event.RangeSplit)
+	require.Equal(t, []byte("m"), event.RangeSplit.SplitKey)
+}
+
 func TestCloneEventDetachesPayload(t *testing.T) {
 	in := rootevent.RegionDescriptorPublished(testDescriptor(9, []byte("a"), []byte("z")))
 	cloned := rootevent.CloneEvent(in)
