@@ -12,6 +12,11 @@ import (
 	"github.com/feichai0017/NoKV/vfs"
 )
 
+// protocolStateFileName stores replicated metadata protocol recovery state.
+//
+// The file is backend-private and not cluster truth. It only exists so one
+// rooted replicated node can restart its raft protocol state without having to
+// reconstruct hard state, raft snapshot, and retained raft entries from peers.
 const protocolStateFileName = "root.raft.bin"
 
 type persistedProtocolState struct {
@@ -20,6 +25,13 @@ type persistedProtocolState struct {
 	Entries   []myraft.Entry
 }
 
+// loadProtocolState reads root.raft.bin.
+//
+// On-disk format:
+//   - uint32 length + HardState marshaled bytes
+//   - uint32 length + Snapshot marshaled bytes
+//   - uint32 entry count
+//   - repeated: uint32 length + Entry marshaled bytes
 func loadProtocolState(workdir string) (persistedProtocolState, error) {
 	path := filepath.Join(workdir, protocolStateFileName)
 	data, err := os.ReadFile(path)
@@ -85,6 +97,7 @@ func loadProtocolState(workdir string) (persistedProtocolState, error) {
 	return state, nil
 }
 
+// saveProtocolState publishes root.raft.bin atomically via temp-file replace.
 func saveProtocolState(workdir string, state persistedProtocolState) error {
 	if err := os.MkdirAll(workdir, 0o755); err != nil {
 		return err
@@ -125,6 +138,8 @@ func saveProtocolState(workdir string, state persistedProtocolState) error {
 	return vfs.SyncDir(vfs.Ensure(nil), workdir)
 }
 
+// captureProtocolState snapshots the in-memory raft storage into the durable
+// backend-private recovery image persisted as root.raft.bin.
 func captureProtocolState(storage *myraft.MemoryStorage) (persistedProtocolState, error) {
 	if storage == nil {
 		return persistedProtocolState{}, nil

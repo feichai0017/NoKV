@@ -24,6 +24,17 @@ type fileEventLog struct {
 	workdir string
 }
 
+// ReadCommitted reads the retained rooted event WAL from root.events.wal.
+//
+// On-disk record format:
+//   - term        uint64 little-endian
+//   - index       uint64 little-endian
+//   - payload_len uint32 little-endian
+//   - payload_crc uint32 little-endian
+//   - payload     []byte protobuf(metapb.RootEvent)
+//
+// A short trailing record is treated as a torn tail and ignored so recovery can
+// continue from the last fully published committed record.
 func (l fileEventLog) ReadCommitted(offset int64) (rootstorage.CommittedTail, error) {
 	path := filepath.Join(l.workdir, LogFileName)
 	f, err := l.fs.OpenHandle(path)
@@ -61,6 +72,8 @@ func (l fileEventLog) ReadCommitted(offset int64) (rootstorage.CommittedTail, er
 	}
 }
 
+// AppendCommitted appends one or more committed rooted events to root.events.wal
+// and fsyncs the file before reporting the new end offset.
 func (l fileEventLog) AppendCommitted(records ...rootstorage.CommittedEvent) (int64, error) {
 	path := filepath.Join(l.workdir, LogFileName)
 	f, err := l.fs.OpenFileHandle(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
@@ -88,6 +101,10 @@ func (l fileEventLog) AppendCommitted(records ...rootstorage.CommittedEvent) (in
 	return logEnd, nil
 }
 
+// CompactCommitted rewrites the retained committed window into a fresh WAL file
+// and atomically publishes it. This is how the file backend materializes
+// retention/compaction after old committed records have fallen behind the
+// checkpoint.
 func (l fileEventLog) CompactCommitted(stream rootstorage.CommittedTail) error {
 	path := filepath.Join(l.workdir, LogFileName)
 	tmp := path + ".tmp"
@@ -128,6 +145,7 @@ func (l fileEventLog) Size() (int64, error) {
 	return info.Size(), nil
 }
 
+// writeRecord writes one framed committed rooted event to the WAL.
 func writeRecord(w io.Writer, rec rootstorage.CommittedEvent) error {
 	payload, err := proto.Marshal(metacodec.RootEventToProto(rec.Event))
 	if err != nil {
@@ -144,6 +162,7 @@ func writeRecord(w io.Writer, rec rootstorage.CommittedEvent) error {
 	return writeAll(w, payload)
 }
 
+// readRecord decodes one framed committed rooted event from the WAL.
 func readRecord(r io.Reader) (rootstorage.CommittedEvent, bool, error) {
 	hdr := make([]byte, recordHeaderSize)
 	n, err := io.ReadFull(r, hdr)

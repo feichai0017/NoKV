@@ -19,6 +19,17 @@ type fileCheckpointStore struct {
 	workdir string
 }
 
+// LoadCheckpoint reads the rooted compact state image from
+// root.checkpoint.binpb.
+//
+// On-disk format:
+//   - one binary protobuf blob encoded as metapb.RootCheckpoint
+//
+// Compatibility note:
+//   - older workdirs may still contain a checkpoint encoded as metapb.RootState
+//     without descriptor materialization; that legacy payload is still accepted
+//     here so storage recovery stays monotonic even though the canonical format
+//     is now RootCheckpoint.
 func (s fileCheckpointStore) LoadCheckpoint() (rootstorage.Checkpoint, error) {
 	path := filepath.Join(s.workdir, CheckpointFileName)
 	data, err := s.fs.ReadFile(path)
@@ -57,6 +68,14 @@ func (s fileCheckpointStore) LoadCheckpoint() (rootstorage.Checkpoint, error) {
 	return rootstorage.Checkpoint{Snapshot: snapshot, TailOffset: int64(logOffset)}, nil
 }
 
+// SaveCheckpoint publishes a new rooted checkpoint atomically.
+//
+// Write path:
+//   - marshal metapb.RootCheckpoint
+//   - write to <file>.tmp
+//   - fsync temp file
+//   - rename over the final path
+//   - fsync parent directory
 func (s fileCheckpointStore) SaveCheckpoint(checkpoint rootstorage.Checkpoint) error {
 	payload, err := proto.Marshal(metacodec.RootSnapshotToProto(checkpoint.Snapshot, uint64(checkpoint.TailOffset)))
 	if err != nil {
