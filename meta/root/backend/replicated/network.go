@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	rootfile "github.com/feichai0017/NoKV/meta/root/storage/file"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -35,13 +34,11 @@ type NetworkDriver struct {
 	closeOnce sync.Once
 	id        uint64
 	workdir   string
-	storage   rootstorage.Substrate
+	adapter   *substrateAdapter
 	node      *networkNode
 	transport Transport
 	stopCh    chan struct{}
 	wg        sync.WaitGroup
-	notifyCh  chan struct{}
-	latest    rootstorage.TailToken
 }
 
 // NewNetworkDriver creates one transport-backed local metadata replication node.
@@ -67,20 +64,17 @@ func NewNetworkDriver(cfg NetworkConfig) (*NetworkDriver, error) {
 	driver := &NetworkDriver{
 		id:        cfg.ID,
 		workdir:   cfg.WorkDir,
-		storage:   rootfile.NewStore(vfs.Ensure(nil), cfg.WorkDir),
 		transport: cfg.Transport,
 		stopCh:    make(chan struct{}),
-		notifyCh:  make(chan struct{}, 1),
 	}
 	if err := os.MkdirAll(cfg.WorkDir, 0o755); err != nil {
 		return nil, err
 	}
-	if observed, err := rootstorage.ObserveCommitted(driver.storage, 0); err == nil {
-		driver.latest.Cursor = observed.LastCursor()
-		if driver.latest.Cursor != (rootstate.Cursor{}) || observed.Checkpoint.TailOffset != 0 || len(observed.Tail.Records) > 0 {
-			driver.latest.Revision = 1
-		}
+	adapter, err := newSubstrateAdapter(rootfile.NewStore(vfs.Ensure(nil), cfg.WorkDir))
+	if err != nil {
+		return nil, err
 	}
+	driver.adapter = adapter
 	node, err := newNetworkNode(cfg, driver.handleTransportMessage)
 	if err != nil {
 		return nil, err
@@ -143,7 +137,7 @@ func (d *NetworkDriver) WaitForTail(after rootstorage.TailToken, timeout time.Du
 		timeout = 200 * time.Millisecond
 	}
 	d.mu.Lock()
-	notify := d.notifyCh
+	notify := d.adapter.waitChannel()
 	advance, err := d.currentTailLocked(after)
 	d.mu.Unlock()
 	if err != nil {
@@ -160,7 +154,7 @@ func (d *NetworkDriver) WaitForTail(after rootstorage.TailToken, timeout time.Du
 		defer d.mu.Unlock()
 		advance, tailErr := d.currentTailLocked(after)
 		if tailErr != nil {
-			return rootstorage.ObservedCommitted{}.Advance(after, d.latest), fmt.Errorf("meta/root/backend/replicated: network driver is closed")
+			return d.adapter.closedAdvance(after), fmt.Errorf("meta/root/backend/replicated: network driver is closed")
 		}
 		return advance, fmt.Errorf("meta/root/backend/replicated: network driver is closed")
 	case <-notify:
@@ -177,12 +171,7 @@ func (d *NetworkDriver) WaitForTail(after rootstorage.TailToken, timeout time.Du
 func (d *NetworkDriver) InstallBootstrap(observed rootstorage.ObservedCommitted) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if err := d.storage.InstallBootstrap(observed); err != nil {
-		return err
-	}
-	d.bumpLatestLocked(observed.LastCursor())
-	d.signalLocked()
-	return nil
+	return d.adapter.installBootstrapLocked(observed)
 }
 
 func (d *NetworkDriver) Close() error {
@@ -293,36 +282,25 @@ func (d *NetworkDriver) drainLocked() ([]rootstorage.CommittedEvent, []myraft.Me
 		d.node.raw.Advance(rd)
 	}
 	if len(committed) > 0 {
-		if _, err := d.storage.AppendCommitted(committed...); err != nil {
+		if err := d.adapter.appendCommittedLocked(committed); err != nil {
 			return nil, nil, err
 		}
-		d.bumpLatestLocked(committed[len(committed)-1].Cursor)
-		d.signalLocked()
 	}
 	return committed, outbound, nil
 }
 
 func (d *NetworkDriver) LoadCheckpoint() (rootstorage.Checkpoint, error) {
-	return d.storage.LoadCheckpoint()
+	return d.adapter.loadCheckpoint()
 }
 
 func (d *NetworkDriver) SaveCheckpoint(checkpoint rootstorage.Checkpoint) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if err := d.storage.SaveCheckpoint(checkpoint); err != nil {
-		return err
-	}
-	observed, err := rootstorage.ObserveCommitted(d.storage, 0)
-	if err != nil {
-		return err
-	}
-	d.bumpLatestLocked(observed.LastCursor())
-	d.signalLocked()
-	return nil
+	return d.adapter.saveCheckpointLocked(checkpoint)
 }
 
 func (d *NetworkDriver) ReadCommitted(offset int64) (rootstorage.CommittedTail, error) {
-	return d.storage.ReadCommitted(offset)
+	return d.adapter.readCommitted(offset)
 }
 
 func (d *NetworkDriver) AppendCommitted(records ...rootstorage.CommittedEvent) (int64, error) {
@@ -356,7 +334,7 @@ func (d *NetworkDriver) AppendCommitted(records ...rootstorage.CommittedEvent) (
 		}
 		d.mu.Lock()
 	}
-	size, err := d.storage.Size()
+	size, err := d.adapter.size()
 	d.mu.Unlock()
 	return size, err
 }
@@ -364,37 +342,15 @@ func (d *NetworkDriver) AppendCommitted(records ...rootstorage.CommittedEvent) (
 func (d *NetworkDriver) CompactCommitted(stream rootstorage.CommittedTail) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if err := d.storage.CompactCommitted(stream); err != nil {
-		return err
-	}
-	d.bumpLatestLocked(stream.TailCursor(d.latest.Cursor))
-	d.signalLocked()
-	return nil
+	return d.adapter.compactCommittedLocked(stream)
 }
 
 func (d *NetworkDriver) Size() (int64, error) {
-	return d.storage.Size()
+	return d.adapter.size()
 }
 
 func (d *NetworkDriver) currentTailLocked(after rootstorage.TailToken) (rootstorage.TailAdvance, error) {
-	observed, err := rootstorage.ObserveCommitted(d.storage, 0)
-	if err != nil {
-		return rootstorage.TailAdvance{}, err
-	}
-	d.latest.Cursor = observed.LastCursor()
-	return observed.Advance(after, d.latest), nil
-}
-
-func (d *NetworkDriver) bumpLatestLocked(cursor rootstate.Cursor) {
-	d.latest.Cursor = cursor
-	d.latest.Revision++
-}
-
-func (d *NetworkDriver) signalLocked() {
-	select {
-	case d.notifyCh <- struct{}{}:
-	default:
-	}
+	return d.adapter.observeLocked(after)
 }
 
 type networkNode struct {

@@ -1,7 +1,7 @@
 package materialize
 
 import (
-	"sort"
+	"slices"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -59,7 +59,7 @@ func SnapshotDescriptorEvents(descs map[uint64]descriptor.Descriptor) []rooteven
 	for id := range descs {
 		ids = append(ids, id)
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	events := make([]rootevent.Event, 0, len(ids))
 	for _, id := range ids {
 		events = append(events, rootevent.RegionDescriptorPublished(descs[id]))

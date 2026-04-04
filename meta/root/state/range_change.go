@@ -134,10 +134,7 @@ func rangeChangeSuperseded(descriptors map[uint64]descriptor.Descriptor, event r
 		}
 		left := event.RangeSplit.Left
 		right := event.RangeSplit.Right
-		targetEpoch := left.RootEpoch
-		if right.RootEpoch > targetEpoch {
-			targetEpoch = right.RootEpoch
-		}
+		targetEpoch := max(right.RootEpoch, left.RootEpoch)
 		if targetEpoch == 0 {
 			return false
 		}

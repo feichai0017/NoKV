@@ -86,11 +86,11 @@ func (s *Store) AddPeer(regionID uint64, meta metaregion.Peer) error {
 		},
 		Context: encodeConfChangeContext([]metaregion.Peer{meta}),
 	}
-	plan, err := s.planPeerChange(regionID, cc)
+	target, err := s.peerChangeTarget(regionID, cc)
 	if err != nil {
 		return err
 	}
-	return s.executeTransitionPlan(plan)
+	return s.executeTransitionTarget(target)
 }
 
 // RemovePeer publishes one planned peer-removal target into Meta and then
@@ -117,11 +117,11 @@ func (s *Store) RemovePeer(regionID, peerID uint64) error {
 		},
 		Context: encodeConfChangeContext([]metaregion.Peer{ctxMeta}),
 	}
-	plan, err := s.planPeerChange(regionID, cc)
+	target, err := s.peerChangeTarget(regionID, cc)
 	if err != nil {
 		return err
 	}
-	return s.executeTransitionPlan(plan)
+	return s.executeTransitionTarget(target)
 }
 
 // TransferLeader initiates leadership transfer for the specified region to the
@@ -263,34 +263,36 @@ func confChangeTargetPeer(change raftpb.ConfChangeSingle, ctx []byte) metaregion
 	return peerMeta
 }
 
-func (s *Store) planPeerChange(regionID uint64, cc raftpb.ConfChangeV2) (transitionPlan, error) {
+func (s *Store) peerChangeTarget(regionID uint64, cc raftpb.ConfChangeV2) (transitionTarget, error) {
 	if s == nil {
-		return transitionPlan{}, fmt.Errorf("raftstore: store is nil")
+		return transitionTarget{}, fmt.Errorf("raftstore: store is nil")
 	}
 	if regionID == 0 || len(cc.Changes) != 1 {
-		return transitionPlan{}, fmt.Errorf("raftstore: invalid peer change plan")
+		return transitionTarget{}, fmt.Errorf("raftstore: invalid peer change target")
 	}
 	meta, ok := s.RegionMetaByID(regionID)
 	if !ok {
-		return transitionPlan{}, fmt.Errorf("raftstore: region %d metadata not found", regionID)
+		return transitionTarget{}, fmt.Errorf("raftstore: region %d metadata not found", regionID)
 	}
 	next := localmeta.CloneRegionMeta(meta)
 	changed, err := applyConfChangeToMeta(&next, cc)
 	if err != nil || !changed {
 		if err != nil {
-			return transitionPlan{}, err
+			return transitionTarget{}, err
 		}
-		return transitionPlan{RegionID: regionID, Noop: true}, nil
+		return transitionTarget{RegionID: regionID, Noop: true}, nil
 	}
 	next.Epoch.ConfVersion += uint64(len(cc.Changes))
 	event, err := plannedPeerChangeEvent(next, cc)
 	if err != nil {
-		return transitionPlan{}, err
+		return transitionTarget{}, err
 	}
-	return transitionPlan{
-		RegionID:   regionID,
-		Event:      event,
-		Action:     "peer change",
-		ConfChange: &cc,
+	return transitionTarget{
+		RegionID: regionID,
+		Event:    event,
+		Action:   "peer change",
+		Plan: transitionPlan{
+			ConfChange: &cc,
+		},
 	}, nil
 }
