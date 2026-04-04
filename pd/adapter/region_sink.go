@@ -61,17 +61,13 @@ func (s *SchedulerClient) ReportRegionHeartbeat(ctx context.Context, desc descri
 	if s == nil || desc.RegionID == 0 || s.pd == nil {
 		return
 	}
-	expected := desc.RootEpoch
-	desc = desc.Clone()
-	desc.RootEpoch = 0
 	ctx, cancel := contextWithTimeout(ctx, s.timeout)
 	defer cancel()
-	_, err := s.pd.RegionHeartbeat(ctx, &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor:     metacodec.DescriptorToProto(desc),
-		ExpectedClusterEpoch: expected,
+	_, err := s.pd.RegionLiveness(ctx, &pdpb.RegionLivenessRequest{
+		RegionId: desc.RegionID,
 	})
 	if err != nil {
-		s.recordError("RegionHeartbeat", err)
+		s.recordError("RegionLiveness", err)
 		return
 	}
 	s.markHealthy()

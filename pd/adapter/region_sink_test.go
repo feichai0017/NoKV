@@ -18,6 +18,7 @@ import (
 type fakePDClient struct {
 	storeReqs    []*pdpb.StoreHeartbeatRequest
 	regionReqs   []*pdpb.RegionHeartbeatRequest
+	livenessReqs []*pdpb.RegionLivenessRequest
 	rootEventReq []*pdpb.PublishRootEventRequest
 	removeReqs   []*pdpb.RemoveRegionRequest
 	storeResp    *pdpb.StoreHeartbeatResponse
@@ -45,6 +46,14 @@ func (f *fakePDClient) RegionHeartbeat(_ context.Context, req *pdpb.RegionHeartb
 		return nil, f.regionErr
 	}
 	return &pdpb.RegionHeartbeatResponse{Accepted: true}, nil
+}
+
+func (f *fakePDClient) RegionLiveness(_ context.Context, req *pdpb.RegionLivenessRequest) (*pdpb.RegionLivenessResponse, error) {
+	f.livenessReqs = append(f.livenessReqs, req)
+	if f.regionErr != nil {
+		return nil, f.regionErr
+	}
+	return &pdpb.RegionLivenessResponse{Accepted: true}, nil
 }
 
 func (f *fakePDClient) PublishRootEvent(_ context.Context, req *pdpb.PublishRootEventRequest) (*pdpb.PublishRootEventResponse, error) {
@@ -130,10 +139,8 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 		Available: 800,
 	})
 
-	require.Len(t, pd.regionReqs, 1)
-	require.Equal(t, uint64(10), pd.regionReqs[0].GetRegionDescriptor().GetRegionId())
-	require.Equal(t, uint64(1), pd.regionReqs[0].GetExpectedClusterEpoch())
-	require.Equal(t, uint64(0), pd.regionReqs[0].GetRegionDescriptor().GetRootEpoch())
+	require.Len(t, pd.livenessReqs, 1)
+	require.Equal(t, uint64(10), pd.livenessReqs[0].GetRegionId())
 	require.Len(t, pd.storeReqs, 1)
 	require.Equal(t, uint64(1), pd.storeReqs[0].GetStoreId())
 
@@ -182,6 +189,7 @@ func TestSchedulerClientNoopOnZeroIDs(t *testing.T) {
 	require.NoError(t, sink.PublishRootEvent(context.Background(), rootevent.Event{}))
 	require.Empty(t, pd.storeReqs)
 	require.Empty(t, pd.regionReqs)
+	require.Empty(t, pd.livenessReqs)
 	require.Empty(t, pd.rootEventReq)
 }
 

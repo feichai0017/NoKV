@@ -24,6 +24,7 @@ const errNotLeaderPrefix = "pd not leader"
 type Client interface {
 	StoreHeartbeat(ctx context.Context, req *pdpb.StoreHeartbeatRequest) (*pdpb.StoreHeartbeatResponse, error)
 	RegionHeartbeat(ctx context.Context, req *pdpb.RegionHeartbeatRequest) (*pdpb.RegionHeartbeatResponse, error)
+	RegionLiveness(ctx context.Context, req *pdpb.RegionLivenessRequest) (*pdpb.RegionLivenessResponse, error)
 	PublishRootEvent(ctx context.Context, req *pdpb.PublishRootEventRequest) (*pdpb.PublishRootEventResponse, error)
 	RemoveRegion(ctx context.Context, req *pdpb.RemoveRegionRequest) (*pdpb.RemoveRegionResponse, error)
 	GetRegionByKey(ctx context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error)
@@ -105,6 +106,13 @@ func (c *GRPCClient) StoreHeartbeat(ctx context.Context, req *pdpb.StoreHeartbea
 func (c *GRPCClient) RegionHeartbeat(ctx context.Context, req *pdpb.RegionHeartbeatRequest) (*pdpb.RegionHeartbeatResponse, error) {
 	return invokeRPC(c, retryableWrite, func(pd pdpb.PDClient) (*pdpb.RegionHeartbeatResponse, error) {
 		return pd.RegionHeartbeat(ctx, req)
+	})
+}
+
+// RegionLiveness forwards region liveness heartbeat RPC.
+func (c *GRPCClient) RegionLiveness(ctx context.Context, req *pdpb.RegionLivenessRequest) (*pdpb.RegionLivenessResponse, error) {
+	return invokeRPC(c, retryableRead, func(pd pdpb.PDClient) (*pdpb.RegionLivenessResponse, error) {
+		return pd.RegionLiveness(ctx, req)
 	})
 }
 

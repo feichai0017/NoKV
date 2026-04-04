@@ -227,6 +227,10 @@ func TestServiceRequestValidation(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
+	_, err = svc.RegionLiveness(context.Background(), &pdpb.RegionLivenessRequest{})
+	require.Error(t, err)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+
 	_, err = svc.AllocID(context.Background(), nil)
 	require.Error(t, err)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
@@ -242,6 +246,22 @@ func TestServiceRequestValidation(t *testing.T) {
 	_, err = svc.RemoveRegion(context.Background(), &pdpb.RemoveRegionRequest{RegionId: 0})
 	require.Error(t, err)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
+}
+
+func TestServiceRegionLivenessTouchesExistingRegion(t *testing.T) {
+	svc := NewService(core.NewCluster(), nil, nil)
+	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
+		RegionDescriptor: testRegionDescriptorProto(testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)),
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.RegionLiveness(context.Background(), &pdpb.RegionLivenessRequest{RegionId: 11})
+	require.NoError(t, err)
+	require.True(t, resp.GetAccepted())
+
+	resp, err = svc.RegionLiveness(context.Background(), &pdpb.RegionLivenessRequest{RegionId: 99})
+	require.NoError(t, err)
+	require.False(t, resp.GetAccepted())
 }
 
 func TestServiceStoreHeartbeatReturnsLeaderTransferHint(t *testing.T) {

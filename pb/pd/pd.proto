@@ -44,6 +44,14 @@ message RegionHeartbeatResponse {
   bool accepted = 1;
 }
 
+message RegionLivenessRequest {
+  uint64 region_id = 1;
+}
+
+message RegionLivenessResponse {
+  bool accepted = 1;
+}
+
 message PublishRootEventRequest {
   nokv.meta.v1.RootEvent event = 1;
   uint64 expected_cluster_epoch = 2;
@@ -92,6 +100,7 @@ message TsoResponse {
 service PD {
   rpc StoreHeartbeat(StoreHeartbeatRequest) returns (StoreHeartbeatResponse);
   rpc RegionHeartbeat(RegionHeartbeatRequest) returns (RegionHeartbeatResponse);
+  rpc RegionLiveness(RegionLivenessRequest) returns (RegionLivenessResponse);
   rpc PublishRootEvent(PublishRootEventRequest) returns (PublishRootEventResponse);
   rpc RemoveRegion(RemoveRegionRequest) returns (RemoveRegionResponse);
   rpc GetRegionByKey(GetRegionByKeyRequest) returns (GetRegionByKeyResponse);
