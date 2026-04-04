@@ -55,6 +55,14 @@ func (f *fakePDClient) PublishRootEvent(_ context.Context, req *pdpb.PublishRoot
 	return &pdpb.PublishRootEventResponse{Accepted: true}, nil
 }
 
+func (f *fakePDClient) ListTransitions(context.Context, *pdpb.ListTransitionsRequest) (*pdpb.ListTransitionsResponse, error) {
+	return &pdpb.ListTransitionsResponse{}, nil
+}
+
+func (f *fakePDClient) AssessRootEvent(context.Context, *pdpb.AssessRootEventRequest) (*pdpb.AssessRootEventResponse, error) {
+	return &pdpb.AssessRootEventResponse{}, nil
+}
+
 func (f *fakePDClient) RemoveRegion(_ context.Context, req *pdpb.RemoveRegionRequest) (*pdpb.RemoveRegionResponse, error) {
 	f.removeReqs = append(f.removeReqs, req)
 	if f.removeErr != nil {

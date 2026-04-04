@@ -108,6 +108,30 @@ func (c *Cluster) applyRootEventToRegions(event rootevent.Event) error {
 	case event.RegionRemoval != nil:
 		c.RemoveRegion(event.RegionRemoval.RegionID)
 		return nil
+	case event.PeerChange != nil && (event.Kind == rootevent.KindPeerAdditionCancelled || event.Kind == rootevent.KindPeerRemovalCancelled):
+		if event.PeerChange.Base.RegionID == 0 {
+			c.RemoveRegion(event.PeerChange.RegionID)
+			return nil
+		}
+		return c.PublishRegionDescriptor(event.PeerChange.Base)
+	case event.RangeSplit != nil && event.Kind == rootevent.KindRegionSplitCancelled:
+		c.RemoveRegion(event.RangeSplit.Left.RegionID)
+		c.RemoveRegion(event.RangeSplit.Right.RegionID)
+		if event.RangeSplit.BaseParent.RegionID != 0 {
+			return c.PublishRegionDescriptor(event.RangeSplit.BaseParent)
+		}
+		return nil
+	case event.RangeMerge != nil && event.Kind == rootevent.KindRegionMergeCancelled:
+		c.RemoveRegion(event.RangeMerge.Merged.RegionID)
+		if event.RangeMerge.BaseLeft.RegionID != 0 {
+			if err := c.PublishRegionDescriptor(event.RangeMerge.BaseLeft); err != nil {
+				return err
+			}
+		}
+		if event.RangeMerge.BaseRight.RegionID != 0 {
+			return c.PublishRegionDescriptor(event.RangeMerge.BaseRight)
+		}
+		return nil
 	case event.RangeSplit != nil:
 		c.RemoveRegion(event.RangeSplit.ParentRegionID)
 		if err := c.PublishRegionDescriptor(event.RangeSplit.Left); err != nil {

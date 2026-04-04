@@ -16,12 +16,16 @@ const (
 	KindRegionTombstoned
 	KindRegionSplitPlanned
 	KindRegionSplitCommitted
+	KindRegionSplitCancelled
 	KindRegionMergePlanned
 	KindRegionMerged
+	KindRegionMergeCancelled
 	KindPeerAdditionPlanned
 	KindPeerRemovalPlanned
 	KindPeerAdded
 	KindPeerRemoved
+	KindPeerAdditionCancelled
+	KindPeerRemovalCancelled
 )
 
 // StoreMembership describes one store membership change carried by a root event.
@@ -51,6 +55,7 @@ type RangeSplit struct {
 	SplitKey       []byte
 	Left           descriptor.Descriptor
 	Right          descriptor.Descriptor
+	BaseParent     descriptor.Descriptor
 }
 
 // RangeMerge describes one merge transition.
@@ -58,6 +63,8 @@ type RangeMerge struct {
 	LeftRegionID  uint64
 	RightRegionID uint64
 	Merged        descriptor.Descriptor
+	BaseLeft      descriptor.Descriptor
+	BaseRight     descriptor.Descriptor
 }
 
 // PeerChange describes one region membership mutation.
@@ -66,6 +73,7 @@ type PeerChange struct {
 	StoreID  uint64
 	PeerID   uint64
 	Region   descriptor.Descriptor
+	Base     descriptor.Descriptor
 }
 
 // Event is one globally ordered metadata-root mutation.
@@ -133,6 +141,19 @@ func RegionSplitCommitted(parentRegionID uint64, splitKey []byte, left, right de
 	}
 }
 
+func RegionSplitCancelled(parentRegionID uint64, splitKey []byte, left, right, base descriptor.Descriptor) Event {
+	return Event{
+		Kind: KindRegionSplitCancelled,
+		RangeSplit: &RangeSplit{
+			ParentRegionID: parentRegionID,
+			SplitKey:       append([]byte(nil), splitKey...),
+			Left:           left,
+			Right:          right,
+			BaseParent:     base,
+		},
+	}
+}
+
 func RegionMergePlanned(leftRegionID, rightRegionID uint64, merged descriptor.Descriptor) Event {
 	return Event{
 		Kind: KindRegionMergePlanned,
@@ -151,6 +172,19 @@ func RegionMerged(leftRegionID, rightRegionID uint64, merged descriptor.Descript
 			LeftRegionID:  leftRegionID,
 			RightRegionID: rightRegionID,
 			Merged:        merged,
+		},
+	}
+}
+
+func RegionMergeCancelled(leftRegionID, rightRegionID uint64, merged, baseLeft, baseRight descriptor.Descriptor) Event {
+	return Event{
+		Kind: KindRegionMergeCancelled,
+		RangeMerge: &RangeMerge{
+			LeftRegionID:  leftRegionID,
+			RightRegionID: rightRegionID,
+			Merged:        merged,
+			BaseLeft:      baseLeft,
+			BaseRight:     baseRight,
 		},
 	}
 }
@@ -179,6 +213,19 @@ func PeerAdditionPlanned(regionID, storeID, peerID uint64, region descriptor.Des
 	}
 }
 
+func PeerAdditionCancelled(regionID, storeID, peerID uint64, region, base descriptor.Descriptor) Event {
+	return Event{
+		Kind: KindPeerAdditionCancelled,
+		PeerChange: &PeerChange{
+			RegionID: regionID,
+			StoreID:  storeID,
+			PeerID:   peerID,
+			Region:   region,
+			Base:     base,
+		},
+	}
+}
+
 func PeerRemovalPlanned(regionID, storeID, peerID uint64, region descriptor.Descriptor) Event {
 	return Event{
 		Kind: KindPeerRemovalPlanned,
@@ -187,6 +234,19 @@ func PeerRemovalPlanned(regionID, storeID, peerID uint64, region descriptor.Desc
 			StoreID:  storeID,
 			PeerID:   peerID,
 			Region:   region,
+		},
+	}
+}
+
+func PeerRemovalCancelled(regionID, storeID, peerID uint64, region, base descriptor.Descriptor) Event {
+	return Event{
+		Kind: KindPeerRemovalCancelled,
+		PeerChange: &PeerChange{
+			RegionID: regionID,
+			StoreID:  storeID,
+			PeerID:   peerID,
+			Region:   region,
+			Base:     base,
 		},
 	}
 }

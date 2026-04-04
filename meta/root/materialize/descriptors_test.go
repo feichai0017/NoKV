@@ -100,6 +100,47 @@ func TestApplyEventToSnapshotTracksPendingMergeLifecycle(t *testing.T) {
 	require.NotContains(t, snapshot.PendingRangeChanges, merged.RegionID)
 }
 
+func TestApplyEventToDescriptorsRestoresCancelledPeerChange(t *testing.T) {
+	current := testDescriptor(81, []byte("a"), []byte("m"))
+	target := current.Clone()
+	target.Peers = append(target.Peers, metaregion.Peer{StoreID: 2, PeerID: 201})
+	target.Epoch.ConfVersion++
+	target.RootEpoch++
+	target.EnsureHash()
+
+	descriptors := map[uint64]descriptor.Descriptor{target.RegionID: target}
+	rootmaterialize.ApplyEventToDescriptors(descriptors, rootevent.PeerAdditionCancelled(target.RegionID, 2, 201, target, current))
+	require.Equal(t, current, descriptors[current.RegionID])
+}
+
+func TestApplyEventToDescriptorsRestoresCancelledSplit(t *testing.T) {
+	parent := testDescriptor(90, []byte("a"), []byte("z"))
+	left := testDescriptor(90, []byte("a"), []byte("m"))
+	right := testDescriptor(91, []byte("m"), []byte("z"))
+	descriptors := map[uint64]descriptor.Descriptor{
+		left.RegionID:  left,
+		right.RegionID: right,
+	}
+
+	rootmaterialize.ApplyEventToDescriptors(descriptors, rootevent.RegionSplitCancelled(parent.RegionID, []byte("m"), left, right, parent))
+	require.Equal(t, parent, descriptors[parent.RegionID])
+	require.NotContains(t, descriptors, right.RegionID)
+}
+
+func TestApplyEventToDescriptorsRestoresCancelledMerge(t *testing.T) {
+	baseLeft := testDescriptor(98, []byte("a"), []byte("m"))
+	baseRight := testDescriptor(99, []byte("m"), []byte("z"))
+	merged := testDescriptor(100, []byte("a"), []byte("z"))
+	descriptors := map[uint64]descriptor.Descriptor{
+		merged.RegionID: merged,
+	}
+
+	rootmaterialize.ApplyEventToDescriptors(descriptors, rootevent.RegionMergeCancelled(baseLeft.RegionID, baseRight.RegionID, merged, baseLeft, baseRight))
+	require.Equal(t, baseLeft, descriptors[baseLeft.RegionID])
+	require.Equal(t, baseRight, descriptors[baseRight.RegionID])
+	require.NotContains(t, descriptors, merged.RegionID)
+}
+
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
 	desc := descriptor.Descriptor{
 		RegionID:  id,
