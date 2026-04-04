@@ -23,22 +23,30 @@ type rangeChangePlan struct {
 	Noop     bool
 }
 
-func (s *Store) planSplitEvent(parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) (rootevent.Event, error) {
+type splitTransition struct {
+	originalParent localmeta.RegionMeta
+	parent         localmeta.RegionMeta
+	child          localmeta.RegionMeta
+	parentDesc     descriptor.Descriptor
+	childDesc      descriptor.Descriptor
+}
+
+func (s *Store) buildSplitTransition(parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) (splitTransition, error) {
 	if s == nil {
-		return rootevent.Event{}, fmt.Errorf("raftstore: store is nil")
+		return splitTransition{}, fmt.Errorf("raftstore: store is nil")
 	}
 	if parentID == 0 || childMeta.ID == 0 {
-		return rootevent.Event{}, fmt.Errorf("raftstore: invalid region identifiers")
+		return splitTransition{}, fmt.Errorf("raftstore: invalid region identifiers")
 	}
 	parentMeta, ok := s.RegionMetaByID(parentID)
 	if !ok {
-		return rootevent.Event{}, fmt.Errorf("raftstore: parent region %d not found", parentID)
+		return splitTransition{}, fmt.Errorf("raftstore: parent region %d not found", parentID)
 	}
 	if len(parentMeta.EndKey) > 0 && bytes.Compare(splitKey, parentMeta.EndKey) >= 0 {
-		return rootevent.Event{}, fmt.Errorf("raftstore: split key >= parent end key")
+		return splitTransition{}, fmt.Errorf("raftstore: split key >= parent end key")
 	}
 	if bytes.Compare(splitKey, parentMeta.StartKey) <= 0 {
-		return rootevent.Event{}, fmt.Errorf("raftstore: split key must be greater than parent start key")
+		return splitTransition{}, fmt.Errorf("raftstore: split key must be greater than parent start key")
 	}
 	originalParent := localmeta.CloneRegionMeta(parentMeta)
 	newParent := parentMeta
@@ -63,23 +71,55 @@ func (s *Store) planSplitEvent(parentID uint64, childMeta localmeta.RegionMeta, 
 		Epoch:    originalParent.Epoch,
 		Kind:     descriptor.LineageKindSplitParent,
 	})
-	return rootevent.RegionSplitPlanned(originalParent.ID, splitKey, parentDesc, childDesc), nil
+	return splitTransition{
+		originalParent: originalParent,
+		parent:         newParent,
+		child:          childMeta,
+		parentDesc:     parentDesc,
+		childDesc:      childDesc,
+	}, nil
 }
 
-func (s *Store) planMergeEvent(targetRegionID, sourceRegionID uint64) (rootevent.Event, error) {
+func plannedSplitEvent(transition splitTransition) rootevent.Event {
+	return rootevent.RegionSplitPlanned(
+		transition.originalParent.ID,
+		transition.child.StartKey,
+		transition.parentDesc,
+		transition.childDesc,
+	)
+}
+
+func committedSplitEvent(transition splitTransition) rootevent.Event {
+	return rootevent.RegionSplitCommitted(
+		transition.originalParent.ID,
+		transition.child.StartKey,
+		transition.parentDesc,
+		transition.childDesc,
+	)
+}
+
+type mergeTransition struct {
+	target     localmeta.RegionMeta
+	source     localmeta.RegionMeta
+	mergedDesc descriptor.Descriptor
+	leftID     uint64
+	rightID    uint64
+}
+
+func (s *Store) buildMergeTransition(targetRegionID, sourceRegionID uint64) (mergeTransition, error) {
 	if s == nil {
-		return rootevent.Event{}, fmt.Errorf("raftstore: store is nil")
+		return mergeTransition{}, fmt.Errorf("raftstore: store is nil")
 	}
 	if targetRegionID == 0 || sourceRegionID == 0 {
-		return rootevent.Event{}, fmt.Errorf("raftstore: invalid region identifiers")
+		return mergeTransition{}, fmt.Errorf("raftstore: invalid region identifiers")
 	}
 	parentMeta, ok := s.RegionMetaByID(targetRegionID)
 	if !ok {
-		return rootevent.Event{}, fmt.Errorf("raftstore: target region %d not found", targetRegionID)
+		return mergeTransition{}, fmt.Errorf("raftstore: target region %d not found", targetRegionID)
 	}
 	sourceMeta, ok := s.RegionMetaByID(sourceRegionID)
 	if !ok {
-		return rootevent.Event{}, fmt.Errorf("raftstore: source region %d not found", sourceRegionID)
+		return mergeTransition{}, fmt.Errorf("raftstore: source region %d not found", sourceRegionID)
 	}
 	updated := parentMeta
 	updated.Epoch.Version++
@@ -96,7 +136,21 @@ func (s *Store) planMergeEvent(targetRegionID, sourceRegionID uint64) (rootevent
 	if bytes.Compare(sourceMeta.StartKey, mergedDesc.StartKey) < 0 {
 		leftID, rightID = sourceMeta.ID, mergedDesc.RegionID
 	}
-	return rootevent.RegionMergePlanned(leftID, rightID, mergedDesc), nil
+	return mergeTransition{
+		target:     updated,
+		source:     sourceMeta,
+		mergedDesc: mergedDesc,
+		leftID:     leftID,
+		rightID:    rightID,
+	}, nil
+}
+
+func plannedMergeEvent(transition mergeTransition) rootevent.Event {
+	return rootevent.RegionMergePlanned(transition.leftID, transition.rightID, transition.mergedDesc)
+}
+
+func committedMergeEvent(transition mergeTransition) rootevent.Event {
+	return rootevent.RegionMerged(transition.leftID, transition.rightID, transition.mergedDesc)
 }
 
 func (s *Store) planSplit(parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) (rangeChangePlan, error) {
@@ -116,19 +170,19 @@ func (s *Store) planSplit(parentID uint64, childMeta localmeta.RegionMeta, split
 	if splitAlreadyAppliedLocal(s, parentID, childMeta, splitKey) {
 		return rangeChangePlan{RegionID: parentID, Noop: true}, nil
 	}
-	event, err := s.planSplitEvent(parentID, childMeta, splitKey)
+	transition, err := s.buildSplitTransition(parentID, childMeta, splitKey)
 	if err != nil {
 		return rangeChangePlan{}, err
 	}
 	return rangeChangePlan{
 		RegionID: parentID,
-		Event:    event,
+		Event:    plannedSplitEvent(transition),
 		Command: &raftcmdpb.AdminCommand{
 			Type: raftcmdpb.AdminCommand_SPLIT,
 			Split: &raftcmdpb.SplitCommand{
 				ParentRegionId: parentID,
 				SplitKey:       append([]byte(nil), splitKey...),
-				Child:          metacodec.LocalRegionMetaToDescriptorProto(childMeta),
+				Child:          metacodec.LocalRegionMetaToDescriptorProto(transition.child),
 			},
 		},
 	}, nil
@@ -148,13 +202,13 @@ func (s *Store) planMerge(targetRegionID, sourceRegionID uint64) (rangeChangePla
 	if status := peerRef.Status(); status.RaftState != myraft.StateLeader {
 		return rangeChangePlan{}, fmt.Errorf("raftstore: peer %d is not leader", peerRef.ID())
 	}
-	event, err := s.planMergeEvent(targetRegionID, sourceRegionID)
+	transition, err := s.buildMergeTransition(targetRegionID, sourceRegionID)
 	if err != nil {
 		return rangeChangePlan{}, err
 	}
 	return rangeChangePlan{
 		RegionID: targetRegionID,
-		Event:    event,
+		Event:    plannedMergeEvent(transition),
 		Command: &raftcmdpb.AdminCommand{
 			Type: raftcmdpb.AdminCommand_MERGE,
 			Merge: &raftcmdpb.MergeCommand{
@@ -247,20 +301,14 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta localmeta.RegionMeta
 		return nil, fmt.Errorf("raftstore: parent region %d not found", parentID)
 	}
 	originalParent := localmeta.CloneRegionMeta(parentMeta)
-	if len(parentMeta.EndKey) > 0 && bytes.Compare(childMeta.StartKey, parentMeta.EndKey) >= 0 {
-		return nil, fmt.Errorf("raftstore: split key >= parent end key")
-	}
-	if bytes.Compare(childMeta.StartKey, parentMeta.StartKey) <= 0 {
-		return nil, fmt.Errorf("raftstore: split key must be greater than parent start key")
-	}
-	newParent := parentMeta
-	newParent.EndKey = append([]byte(nil), childMeta.StartKey...)
-	newParent.Epoch.Version++
-	if err := s.applyRegionMeta(newParent); err != nil {
+	transition, err := s.buildSplitTransition(parentID, childMeta, childMeta.StartKey)
+	if err != nil {
 		return nil, err
 	}
-	if childMeta.State == 0 {
-		childMeta.State = metaregion.ReplicaStateRunning
+	newParent := transition.parent
+	childMeta = transition.child
+	if err := s.applyRegionMeta(newParent); err != nil {
+		return nil, err
 	}
 	cfg, bootstrapPeers, err := s.buildChildPeerConfig(childMeta)
 	if err != nil {
@@ -273,19 +321,7 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta localmeta.RegionMeta
 		return nil, err
 	}
 	if s.sched != nil {
-		parentDesc := metacodec.DescriptorFromLocalRegionMeta(newParent, 0)
-		childDesc := metacodec.DescriptorFromLocalRegionMeta(childMeta, 0)
-		parentDesc.Lineage = append(parentDesc.Lineage, descriptor.LineageRef{
-			RegionID: originalParent.ID,
-			Epoch:    originalParent.Epoch,
-			Kind:     descriptor.LineageKindSplitParent,
-		})
-		childDesc.Lineage = append(childDesc.Lineage, descriptor.LineageRef{
-			RegionID: originalParent.ID,
-			Epoch:    originalParent.Epoch,
-			Kind:     descriptor.LineageKindSplitParent,
-		})
-		event := rootevent.RegionSplitCommitted(originalParent.ID, childMeta.StartKey, parentDesc, childDesc)
+		event := committedSplitEvent(transition)
 		s.enqueueRegionEvent(regionEvent{kind: regionEventApply, regionID: originalParent.ID, root: &event})
 	}
 	return childPeer, nil
@@ -365,41 +401,27 @@ func (s *Store) handleMergeCommand(merge *raftcmdpb.MergeCommand) error {
 	if merge == nil {
 		return fmt.Errorf("raftstore: merge command missing payload")
 	}
-	parentMeta, ok := s.RegionMetaByID(merge.GetTargetRegionId())
-	if !ok {
-		return fmt.Errorf("raftstore: target region %d not found", merge.GetTargetRegionId())
-	}
-	sourceMeta, ok := s.RegionMetaByID(merge.GetSourceRegionId())
-	if !ok {
+	transition, err := s.buildMergeTransition(merge.GetTargetRegionId(), merge.GetSourceRegionId())
+	if err != nil {
 		// Merge apply must be replay-safe across restart. Once the source region
 		// has already been removed locally, replaying the committed merge is a
 		// no-op instead of a fatal state divergence.
-		return nil
+		if _, ok := s.RegionMetaByID(merge.GetSourceRegionId()); !ok {
+			return nil
+		}
+		return err
 	}
+	sourceMeta := transition.source
 	if sourceMeta.State == metaregion.ReplicaStateTombstone {
 		return nil
 	}
-	updated := parentMeta
-	updated.Epoch.Version++
-	if len(sourceMeta.EndKey) == 0 || bytes.Compare(sourceMeta.EndKey, updated.EndKey) > 0 {
-		updated.EndKey = append([]byte(nil), sourceMeta.EndKey...)
-	}
+	updated := transition.target
 	if err := s.applyRegionMeta(updated); err != nil {
 		return err
 	}
 	if s.sched != nil {
-		mergedDesc := metacodec.DescriptorFromLocalRegionMeta(updated, 0)
-		mergedDesc.Lineage = append(mergedDesc.Lineage, descriptor.LineageRef{
-			RegionID: sourceMeta.ID,
-			Epoch:    sourceMeta.Epoch,
-			Kind:     descriptor.LineageKindMergeSource,
-		})
-		leftID, rightID := mergedDesc.RegionID, sourceMeta.ID
-		if bytes.Compare(sourceMeta.StartKey, mergedDesc.StartKey) < 0 {
-			leftID, rightID = sourceMeta.ID, mergedDesc.RegionID
-		}
-		event := rootevent.RegionMerged(leftID, rightID, mergedDesc)
-		s.enqueueRegionEvent(regionEvent{kind: regionEventApply, regionID: mergedDesc.RegionID, root: &event})
+		event := committedMergeEvent(transition)
+		s.enqueueRegionEvent(regionEvent{kind: regionEventApply, regionID: transition.mergedDesc.RegionID, root: &event})
 	}
 	if peer := s.regionMgr().peer(sourceMeta.ID); peer != nil {
 		s.StopPeer(peer.ID())
