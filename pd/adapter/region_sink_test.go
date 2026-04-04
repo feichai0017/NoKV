@@ -17,13 +17,12 @@ import (
 
 type fakePDClient struct {
 	storeReqs    []*pdpb.StoreHeartbeatRequest
-	regionReqs   []*pdpb.RegionHeartbeatRequest
 	livenessReqs []*pdpb.RegionLivenessRequest
 	rootEventReq []*pdpb.PublishRootEventRequest
 	removeReqs   []*pdpb.RemoveRegionRequest
 	storeResp    *pdpb.StoreHeartbeatResponse
 	storeErr     error
-	regionErr    error
+	livenessErr  error
 	rootErr      error
 	removeErr    error
 	closed       bool
@@ -40,18 +39,10 @@ func (f *fakePDClient) StoreHeartbeat(_ context.Context, req *pdpb.StoreHeartbea
 	return &pdpb.StoreHeartbeatResponse{Accepted: true}, nil
 }
 
-func (f *fakePDClient) RegionHeartbeat(_ context.Context, req *pdpb.RegionHeartbeatRequest) (*pdpb.RegionHeartbeatResponse, error) {
-	f.regionReqs = append(f.regionReqs, req)
-	if f.regionErr != nil {
-		return nil, f.regionErr
-	}
-	return &pdpb.RegionHeartbeatResponse{Accepted: true}, nil
-}
-
 func (f *fakePDClient) RegionLiveness(_ context.Context, req *pdpb.RegionLivenessRequest) (*pdpb.RegionLivenessResponse, error) {
 	f.livenessReqs = append(f.livenessReqs, req)
-	if f.regionErr != nil {
-		return nil, f.regionErr
+	if f.livenessErr != nil {
+		return nil, f.livenessErr
 	}
 	return &pdpb.RegionLivenessResponse{Accepted: true}, nil
 }
@@ -185,7 +176,6 @@ func TestSchedulerClientNoopOnZeroIDs(t *testing.T) {
 	sink.ReportRegionHeartbeat(context.Background(), 0)
 	require.NoError(t, sink.PublishRootEvent(context.Background(), rootevent.Event{}))
 	require.Empty(t, pd.storeReqs)
-	require.Empty(t, pd.regionReqs)
 	require.Empty(t, pd.livenessReqs)
 	require.Empty(t, pd.rootEventReq)
 }

@@ -53,10 +53,7 @@ func NewSchedulerClient(cfg SchedulerClientConfig) *SchedulerClient {
 	}
 }
 
-// ReportRegionHeartbeat forwards one region heartbeat descriptor to PD.
-//
-// This is the heartbeat/compatibility path only. Event-driven topology truth
-// should use PublishRootEvent instead.
+// ReportRegionHeartbeat forwards one runtime region-liveness heartbeat to PD.
 func (s *SchedulerClient) ReportRegionHeartbeat(ctx context.Context, regionID uint64) {
 	if s == nil || regionID == 0 || s.pd == nil {
 		return

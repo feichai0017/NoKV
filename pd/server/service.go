@@ -103,55 +103,6 @@ func (s *Service) StoreHeartbeat(_ context.Context, req *pdpb.StoreHeartbeatRequ
 	}, nil
 }
 
-// RegionHeartbeat records region-level metadata.
-func (s *Service) RegionHeartbeat(_ context.Context, req *pdpb.RegionHeartbeatRequest) (*pdpb.RegionHeartbeatResponse, error) {
-	if req == nil || req.GetRegionDescriptor() == nil {
-		return nil, status.Error(codes.InvalidArgument, "region heartbeat request missing descriptor")
-	}
-	if err := s.requireLeaderForWrite(); err != nil {
-		return nil, err
-	}
-	desc := metacodec.DescriptorFromProto(req.GetRegionDescriptor())
-	if s.cluster != nil && desc.RegionID != 0 {
-		current, ok := s.cluster.GetRegionDescriptor(desc.RegionID)
-		if ok {
-			if desc.RootEpoch == 0 {
-				desc.RootEpoch = current.RootEpoch
-			}
-			if current.Equal(desc) && s.cluster.TouchRegionHeartbeat(desc.RegionID) {
-				return &pdpb.RegionHeartbeatResponse{Accepted: true}, nil
-			}
-		}
-	}
-	if err := s.requireExpectedClusterEpoch(req.GetExpectedClusterEpoch()); err != nil {
-		return nil, err
-	}
-	event, err := s.rootEventForDescriptor(desc)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "normalize region descriptor: "+err.Error())
-	}
-	err = s.cluster.ValidateRootEvent(event)
-	if err != nil {
-		switch {
-		case errors.Is(err, core.ErrInvalidRegionID):
-			return nil, status.Error(codes.InvalidArgument, err.Error())
-		case errors.Is(err, core.ErrRegionHeartbeatStale), errors.Is(err, core.ErrRegionRangeOverlap):
-			return nil, status.Error(codes.FailedPrecondition, err.Error())
-		default:
-			return nil, status.Error(codes.Internal, err.Error())
-		}
-	}
-	if s.storage != nil {
-		if err := s.storage.AppendRootEvent(event); err != nil {
-			return nil, status.Error(codes.Internal, "publish region descriptor: "+err.Error())
-		}
-	}
-	if err := s.cluster.PublishRootEvent(event); err != nil {
-		return nil, status.Error(codes.Internal, "apply region descriptor after persist: "+err.Error())
-	}
-	return &pdpb.RegionHeartbeatResponse{Accepted: true}, nil
-}
-
 // RegionLiveness records one runtime heartbeat without mutating rooted truth.
 func (s *Service) RegionLiveness(_ context.Context, req *pdpb.RegionLivenessRequest) (*pdpb.RegionLivenessResponse, error) {
 	if req == nil || req.GetRegionId() == 0 {
@@ -320,17 +271,6 @@ func (s *Service) Tso(_ context.Context, req *pdpb.TsoRequest) (*pdpb.TsoRespons
 	}, nil
 }
 
-func (s *Service) rootEventForDescriptor(desc descriptor.Descriptor) (rootevent.Event, error) {
-	desc, err := s.assignRootEpoch(desc)
-	if err != nil {
-		return rootevent.Event{}, err
-	}
-	if s.cluster.HasRegion(desc.RegionID) {
-		return rootevent.RegionDescriptorPublished(desc), nil
-	}
-	return rootevent.RegionBootstrapped(desc), nil
-}
-
 func (s *Service) normalizeRootEvent(event rootevent.Event) (rootevent.Event, error) {
 	out := rootevent.CloneEvent(event)
 	switch {
@@ -365,10 +305,6 @@ func (s *Service) normalizeRootEvent(event rootevent.Event) (rootevent.Event, er
 		out.PeerChange.Region = desc
 	}
 	return out, nil
-}
-
-func (s *Service) assignRootEpoch(desc descriptor.Descriptor) (descriptor.Descriptor, error) {
-	return s.normalizeDescriptorRootEpoch(desc)
 }
 
 func (s *Service) normalizeDescriptorRootEpoch(desc descriptor.Descriptor) (descriptor.Descriptor, error) {

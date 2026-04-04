@@ -23,7 +23,6 @@ const errNotLeaderPrefix = "pd not leader"
 // Client defines the PD-lite control-plane RPC contract consumed by stores.
 type Client interface {
 	StoreHeartbeat(ctx context.Context, req *pdpb.StoreHeartbeatRequest) (*pdpb.StoreHeartbeatResponse, error)
-	RegionHeartbeat(ctx context.Context, req *pdpb.RegionHeartbeatRequest) (*pdpb.RegionHeartbeatResponse, error)
 	RegionLiveness(ctx context.Context, req *pdpb.RegionLivenessRequest) (*pdpb.RegionLivenessResponse, error)
 	PublishRootEvent(ctx context.Context, req *pdpb.PublishRootEventRequest) (*pdpb.PublishRootEventResponse, error)
 	RemoveRegion(ctx context.Context, req *pdpb.RemoveRegionRequest) (*pdpb.RemoveRegionResponse, error)
@@ -99,13 +98,6 @@ func (c *GRPCClient) Close() error {
 func (c *GRPCClient) StoreHeartbeat(ctx context.Context, req *pdpb.StoreHeartbeatRequest) (*pdpb.StoreHeartbeatResponse, error) {
 	return invokeRPC(c, retryableRead, func(pd pdpb.PDClient) (*pdpb.StoreHeartbeatResponse, error) {
 		return pd.StoreHeartbeat(ctx, req)
-	})
-}
-
-// RegionHeartbeat forwards region heartbeat RPC.
-func (c *GRPCClient) RegionHeartbeat(ctx context.Context, req *pdpb.RegionHeartbeatRequest) (*pdpb.RegionHeartbeatResponse, error) {
-	return invokeRPC(c, retryableWrite, func(pd pdpb.PDClient) (*pdpb.RegionHeartbeatResponse, error) {
-		return pd.RegionHeartbeat(ctx, req)
 	})
 }
 
