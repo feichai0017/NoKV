@@ -38,6 +38,49 @@ func TestPendingPeerChangeMatchesEvent(t *testing.T) {
 	require.False(t, rootstate.PendingPeerChangeMatchesEvent(change, rootevent.PeerRemoved(10, 2, 201, desc)))
 }
 
+func TestEvaluatePeerChangeLifecycle(t *testing.T) {
+	target := testDescriptor(10, []byte("a"), []byte("z"))
+	planned := rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)
+	applied := rootevent.PeerAdded(target.RegionID, 2, 201, target)
+
+	decision, err := rootstate.EvaluatePeerChangeLifecycle(nil, descriptor.Descriptor{}, false, planned)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.PeerChangeLifecycleApply, decision)
+
+	change, ok := rootstate.PendingPeerChangeFromEvent(planned, rootstate.PendingPeerChangeStagePlanned)
+	require.True(t, ok)
+	snapshot := rootstate.Snapshot{
+		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{target.RegionID: change},
+	}
+
+	decision, err = rootstate.EvaluatePeerChangeLifecycle(snapshot.PendingPeerChanges, descriptor.Descriptor{}, false, planned)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.PeerChangeLifecycleSkip, decision)
+
+	decision, err = rootstate.EvaluatePeerChangeLifecycle(snapshot.PendingPeerChanges, descriptor.Descriptor{}, false, applied)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.PeerChangeLifecycleApply, decision)
+
+	conflicting := rootevent.PeerRemoved(target.RegionID, 3, 301, target)
+	decision, err = rootstate.EvaluatePeerChangeLifecycle(snapshot.PendingPeerChanges, descriptor.Descriptor{}, false, conflicting)
+	require.Error(t, err)
+	require.Equal(t, rootstate.PeerChangeLifecycleApply, decision)
+
+	appliedChange, ok := rootstate.PendingPeerChangeFromEvent(applied, rootstate.PendingPeerChangeStageApplied)
+	require.True(t, ok)
+	appliedSnapshot := rootstate.Snapshot{
+		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{target.RegionID: appliedChange},
+	}
+
+	decision, err = rootstate.EvaluatePeerChangeLifecycle(appliedSnapshot.PendingPeerChanges, descriptor.Descriptor{}, false, applied)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.PeerChangeLifecycleSkip, decision)
+
+	decision, err = rootstate.EvaluatePeerChangeLifecycle(nil, target, true, applied)
+	require.NoError(t, err)
+	require.Equal(t, rootstate.PeerChangeLifecycleSkip, decision)
+}
+
 func TestCursorHelpers(t *testing.T) {
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, rootstate.NextCursor(rootstate.Cursor{}))
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 8}, rootstate.NextCursor(rootstate.Cursor{Term: 2, Index: 7}))
