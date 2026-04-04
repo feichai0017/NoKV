@@ -171,7 +171,7 @@ func (s *Service) PublishRootEvent(_ context.Context, req *pdpb.PublishRootEvent
 	if err := s.requireExpectedClusterEpoch(req.GetExpectedClusterEpoch()); err != nil {
 		return nil, err
 	}
-	skip, err := s.guardPeerChangeLifecycle(event)
+	skip, err := s.guardRootEventLifecycle(event)
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
@@ -199,17 +199,24 @@ func (s *Service) PublishRootEvent(_ context.Context, req *pdpb.PublishRootEvent
 	return &pdpb.PublishRootEventResponse{Accepted: true}, nil
 }
 
-func (s *Service) guardPeerChangeLifecycle(event rootevent.Event) (bool, error) {
-	if s == nil || s.storage == nil || event.PeerChange == nil {
+func (s *Service) guardRootEventLifecycle(event rootevent.Event) (bool, error) {
+	if s == nil || s.storage == nil {
 		return false, nil
 	}
 	snapshot, err := s.storage.Load()
 	if err != nil {
 		return false, fmt.Errorf("load rooted snapshot: %w", err)
 	}
-	current, ok := s.cluster.GetRegionDescriptor(event.PeerChange.RegionID)
-	decision, err := rootstate.EvaluatePeerChangeLifecycle(snapshot.PendingPeerChanges, current, ok, event)
-	return decision == rootstate.PeerChangeLifecycleSkip, err
+	if event.PeerChange != nil {
+		current, ok := s.cluster.GetRegionDescriptor(event.PeerChange.RegionID)
+		decision, err := rootstate.EvaluatePeerChangeLifecycle(snapshot.PendingPeerChanges, current, ok, event)
+		return decision == rootstate.PeerChangeLifecycleSkip, err
+	}
+	if event.RangeSplit != nil || event.RangeMerge != nil {
+		decision, err := rootstate.EvaluateRangeChangeLifecycle(snapshot.PendingRangeChanges, snapshot.Descriptors, event)
+		return decision == rootstate.RangeChangeLifecycleSkip, err
+	}
+	return false, nil
 }
 
 // RemoveRegion deletes region metadata from the PD in-memory catalog.

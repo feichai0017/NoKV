@@ -42,10 +42,11 @@ type fakeStorage struct {
 
 func (f *fakeStorage) Load() (pdstorage.Snapshot, error) {
 	return pdstorage.Snapshot{
-		ClusterEpoch:       f.snapshot.ClusterEpoch,
-		Descriptors:        rootCloneDescriptorsForTest(f.snapshot.Descriptors),
-		PendingPeerChanges: rootstate.ClonePendingPeerChanges(f.snapshot.PendingPeerChanges),
-		Allocator:          f.snapshot.Allocator,
+		ClusterEpoch:        f.snapshot.ClusterEpoch,
+		Descriptors:         rootCloneDescriptorsForTest(f.snapshot.Descriptors),
+		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(f.snapshot.PendingPeerChanges),
+		PendingRangeChanges: rootstate.ClonePendingRangeChanges(f.snapshot.PendingRangeChanges),
+		Allocator:           f.snapshot.Allocator,
 	}, nil
 }
 
@@ -65,13 +66,15 @@ func (f *fakeStorage) AppendRootEvent(event rootevent.Event) error {
 			TSOFence:      f.snapshot.Allocator.TSCurrent,
 			LastCommitted: rootstate.Cursor{Term: 1, Index: uint64(f.eventCalls)},
 		},
-		Descriptors:        rootCloneDescriptorsForTest(f.snapshot.Descriptors),
-		PendingPeerChanges: rootstate.ClonePendingPeerChanges(f.snapshot.PendingPeerChanges),
+		Descriptors:         rootCloneDescriptorsForTest(f.snapshot.Descriptors),
+		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(f.snapshot.PendingPeerChanges),
+		PendingRangeChanges: rootstate.ClonePendingRangeChanges(f.snapshot.PendingRangeChanges),
 	}
 	rootmaterialize.ApplyEventToSnapshot(&snapshot, snapshot.State.LastCommitted, event)
 	f.snapshot.ClusterEpoch = snapshot.State.ClusterEpoch
 	f.snapshot.Descriptors = rootCloneDescriptorsForTest(snapshot.Descriptors)
 	f.snapshot.PendingPeerChanges = rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges)
+	f.snapshot.PendingRangeChanges = rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges)
 	f.snapshot.Allocator.IDCurrent = snapshot.State.IDFence
 	f.snapshot.Allocator.TSCurrent = snapshot.State.TSOFence
 	return nil
@@ -110,10 +113,11 @@ type fakeSyncStorage struct {
 
 func (f *fakeSyncStorage) Load() (pdstorage.Snapshot, error) {
 	return pdstorage.Snapshot{
-		ClusterEpoch:       f.snapshot.ClusterEpoch,
-		Descriptors:        rootCloneDescriptorsForTest(f.snapshot.Descriptors),
-		PendingPeerChanges: rootstate.ClonePendingPeerChanges(f.snapshot.PendingPeerChanges),
-		Allocator:          f.snapshot.Allocator,
+		ClusterEpoch:        f.snapshot.ClusterEpoch,
+		Descriptors:         rootCloneDescriptorsForTest(f.snapshot.Descriptors),
+		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(f.snapshot.PendingPeerChanges),
+		PendingRangeChanges: rootstate.ClonePendingRangeChanges(f.snapshot.PendingRangeChanges),
+		Allocator:           f.snapshot.Allocator,
 	}, nil
 }
 
@@ -534,6 +538,71 @@ func TestServicePublishRootEventRejectsMismatchedPeerApply(t *testing.T) {
 
 	_, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
 		Event: metacodec.RootEventToProto(rootevent.PeerAdded(mismatched.RegionID, 3, 301, mismatched)),
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Equal(t, 0, store.eventCalls)
+}
+
+func TestServicePublishRootEventSkipsDuplicateSplitPlan(t *testing.T) {
+	cluster := core.NewCluster()
+	left := testDescriptor(41, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)
+	right := testDescriptor(42, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
+	left.RootEpoch = 6
+	right.RootEpoch = 6
+	left.EnsureHash()
+	right.EnsureHash()
+	require.NoError(t, cluster.PublishRootEvent(rootevent.RegionSplitPlanned(40, []byte("m"), left, right)))
+
+	store := &fakeStorage{
+		leader: true,
+		snapshot: pdstorage.Snapshot{
+			ClusterEpoch: 6,
+			Descriptors: map[uint64]descriptor.Descriptor{
+				left.RegionID:  left,
+				right.RegionID: right,
+			},
+			PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
+				40: {Kind: rootstate.PendingRangeChangeSplit, ParentRegionID: 40, LeftRegionID: left.RegionID, RightRegionID: right.RegionID, Left: left, Right: right},
+			},
+		},
+	}
+	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc.SetStorage(store)
+
+	resp, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event: metacodec.RootEventToProto(rootevent.RegionSplitPlanned(40, []byte("m"), left, right)),
+	})
+	require.NoError(t, err)
+	require.True(t, resp.GetAccepted())
+	require.Equal(t, 0, store.eventCalls)
+}
+
+func TestServicePublishRootEventRejectsMismatchedMergeApply(t *testing.T) {
+	cluster := core.NewCluster()
+	merged := testDescriptor(50, []byte("a"), []byte("z"), metaregion.Epoch{Version: 3, ConfVersion: 1}, nil)
+	merged.RootEpoch = 7
+	merged.EnsureHash()
+	require.NoError(t, cluster.PublishRegionDescriptor(merged))
+
+	store := &fakeStorage{
+		leader: true,
+		snapshot: pdstorage.Snapshot{
+			ClusterEpoch: 7,
+			Descriptors:  map[uint64]descriptor.Descriptor{merged.RegionID: merged},
+			PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
+				merged.RegionID: {Kind: rootstate.PendingRangeChangeMerge, LeftRegionID: 50, RightRegionID: 51, Merged: merged},
+			},
+		},
+	}
+	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc.SetStorage(store)
+
+	mismatched := merged.Clone()
+	mismatched.RootEpoch = 0
+	mismatched.EnsureHash()
+	_, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event: metacodec.RootEventToProto(rootevent.RegionMerged(50, 52, mismatched)),
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))

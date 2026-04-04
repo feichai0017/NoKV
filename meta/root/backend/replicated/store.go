@@ -34,6 +34,7 @@ type Store struct {
 	state              rootstate.State
 	descs              map[uint64]descriptor.Descriptor
 	pending            map[uint64]rootstate.PendingPeerChange
+	pendingRange       map[uint64]rootstate.PendingRangeChange
 	records            []rootstorage.CommittedEvent
 	retainFrom         rootstate.Cursor
 	maxRetainedRecords int
@@ -56,6 +57,7 @@ func Open(cfg Config) (*Store, error) {
 		state:              bootstrap.Snapshot.State,
 		descs:              bootstrap.Snapshot.Descriptors,
 		pending:            bootstrap.Snapshot.PendingPeerChanges,
+		pendingRange:       bootstrap.Snapshot.PendingRangeChanges,
 		records:            bootstrap.Tail.Records,
 		retainFrom:         bootstrap.RetainFrom,
 		maxRetainedRecords: cfg.MaxRetainedRecords,
@@ -91,6 +93,7 @@ func (s *Store) Refresh() error {
 	s.state = bootstrap.Snapshot.State
 	s.descs = bootstrap.Snapshot.Descriptors
 	s.pending = bootstrap.Snapshot.PendingPeerChanges
+	s.pendingRange = bootstrap.Snapshot.PendingRangeChanges
 	s.records = bootstrap.Tail.Records
 	s.retainFrom = bootstrap.RetainFrom
 	s.mu.Unlock()
@@ -123,9 +126,10 @@ func (s *Store) Snapshot() (rootstate.Snapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return rootstate.CloneSnapshot(rootstate.Snapshot{
-		State:              s.state,
-		Descriptors:        s.descs,
-		PendingPeerChanges: s.pending,
+		State:               s.state,
+		Descriptors:         s.descs,
+		PendingPeerChanges:  s.pending,
+		PendingRangeChanges: s.pendingRange,
 	}), nil
 }
 
@@ -157,9 +161,10 @@ func (s *Store) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) 
 
 	var next rootstate.Cursor
 	snapshot := rootstate.Snapshot{
-		State:              s.state,
-		Descriptors:        rootstate.CloneDescriptors(s.descs),
-		PendingPeerChanges: rootstate.ClonePendingPeerChanges(s.pending),
+		State:               s.state,
+		Descriptors:         rootstate.CloneDescriptors(s.descs),
+		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.pending),
+		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.pendingRange),
 	}
 	records := make([]rootstorage.CommittedEvent, 0, len(events))
 	for _, evt := range events {
@@ -180,6 +185,7 @@ func (s *Store) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) 
 	s.state = snapshot.State
 	s.descs = snapshot.Descriptors
 	s.pending = snapshot.PendingPeerChanges
+	s.pendingRange = snapshot.PendingRangeChanges
 	s.records = append(s.records, records...)
 	s.retainFrom = (rootstorage.CommittedTail{Records: s.records}).RetainFrom(snapshot.State.LastCommitted)
 	s.maybeCompactLocked()
@@ -253,9 +259,10 @@ func (s *Store) maybeCompactLocked() {
 	start := len(s.records) - s.maxRetainedRecords
 	retained := rootmaterialize.CloneCommittedEvents(s.records[start:])
 	snapshot := rootstate.Snapshot{
-		State:              s.state,
-		Descriptors:        rootstate.CloneDescriptors(s.descs),
-		PendingPeerChanges: rootstate.ClonePendingPeerChanges(s.pending),
+		State:               s.state,
+		Descriptors:         rootstate.CloneDescriptors(s.descs),
+		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.pending),
+		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.pendingRange),
 	}
 	if err := s.storage.CompactCommitted(rootstorage.CommittedTail{Records: retained}); err != nil {
 		return

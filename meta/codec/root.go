@@ -56,11 +56,25 @@ func RootSnapshotToProto(snapshot rootstate.Snapshot, tailOffset uint64) *metapb
 			Descriptor_: DescriptorToProto(change.Target),
 		})
 	}
+	pendingRanges := make([]*metapb.RootPendingRangeChange, 0, len(snapshot.PendingRangeChanges))
+	for regionID, change := range snapshot.PendingRangeChanges {
+		pendingRanges = append(pendingRanges, &metapb.RootPendingRangeChange{
+			RegionId:       regionID,
+			Kind:           rootPendingRangeChangeKindToProto(change.Kind),
+			ParentRegionId: change.ParentRegionID,
+			LeftRegionId:   change.LeftRegionID,
+			RightRegionId:  change.RightRegionID,
+			Left:           DescriptorToProto(change.Left),
+			Right:          DescriptorToProto(change.Right),
+			Merged:         DescriptorToProto(change.Merged),
+		})
+	}
 	return &metapb.RootCheckpoint{
-		State:              RootStateToProto(snapshot.State),
-		Descriptors:        descriptors,
-		LogOffset:          tailOffset,
-		PendingPeerChanges: pending,
+		State:               RootStateToProto(snapshot.State),
+		Descriptors:         descriptors,
+		LogOffset:           tailOffset,
+		PendingPeerChanges:  pending,
+		PendingRangeChanges: pendingRanges,
 	}
 }
 
@@ -69,9 +83,10 @@ func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snaps
 		return rootstate.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, 0
 	}
 	snapshot := rootstate.Snapshot{
-		State:              RootStateFromProto(pbCheckpoint.State),
-		Descriptors:        make(map[uint64]descriptor.Descriptor, len(pbCheckpoint.Descriptors)),
-		PendingPeerChanges: make(map[uint64]rootstate.PendingPeerChange, len(pbCheckpoint.PendingPeerChanges)),
+		State:               RootStateFromProto(pbCheckpoint.State),
+		Descriptors:         make(map[uint64]descriptor.Descriptor, len(pbCheckpoint.Descriptors)),
+		PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange, len(pbCheckpoint.PendingPeerChanges)),
+		PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange, len(pbCheckpoint.PendingRangeChanges)),
 	}
 	for _, pbDesc := range pbCheckpoint.Descriptors {
 		desc := DescriptorFromProto(pbDesc)
@@ -89,6 +104,20 @@ func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snaps
 			StoreID: pbPending.GetStoreId(),
 			PeerID:  pbPending.GetPeerId(),
 			Target:  DescriptorFromProto(pbPending.GetDescriptor_()),
+		}
+	}
+	for _, pbPending := range pbCheckpoint.PendingRangeChanges {
+		if pbPending.GetRegionId() == 0 {
+			continue
+		}
+		snapshot.PendingRangeChanges[pbPending.GetRegionId()] = rootstate.PendingRangeChange{
+			Kind:           rootPendingRangeChangeKindFromProto(pbPending.GetKind()),
+			ParentRegionID: pbPending.GetParentRegionId(),
+			LeftRegionID:   pbPending.GetLeftRegionId(),
+			RightRegionID:  pbPending.GetRightRegionId(),
+			Left:           DescriptorFromProto(pbPending.GetLeft()),
+			Right:          DescriptorFromProto(pbPending.GetRight()),
+			Merged:         DescriptorFromProto(pbPending.GetMerged()),
 		}
 	}
 	return snapshot, pbCheckpoint.LogOffset
@@ -113,6 +142,28 @@ func rootPendingPeerChangeKindFromProto(kind metapb.RootPendingPeerChangeKind) r
 		return rootstate.PendingPeerChangeRemoval
 	default:
 		return rootstate.PendingPeerChangeUnknown
+	}
+}
+
+func rootPendingRangeChangeKindToProto(kind rootstate.PendingRangeChangeKind) metapb.RootPendingRangeChangeKind {
+	switch kind {
+	case rootstate.PendingRangeChangeSplit:
+		return metapb.RootPendingRangeChangeKind_ROOT_PENDING_RANGE_CHANGE_KIND_SPLIT
+	case rootstate.PendingRangeChangeMerge:
+		return metapb.RootPendingRangeChangeKind_ROOT_PENDING_RANGE_CHANGE_KIND_MERGE
+	default:
+		return metapb.RootPendingRangeChangeKind_ROOT_PENDING_RANGE_CHANGE_KIND_UNSPECIFIED
+	}
+}
+
+func rootPendingRangeChangeKindFromProto(kind metapb.RootPendingRangeChangeKind) rootstate.PendingRangeChangeKind {
+	switch kind {
+	case metapb.RootPendingRangeChangeKind_ROOT_PENDING_RANGE_CHANGE_KIND_SPLIT:
+		return rootstate.PendingRangeChangeSplit
+	case metapb.RootPendingRangeChangeKind_ROOT_PENDING_RANGE_CHANGE_KIND_MERGE:
+		return rootstate.PendingRangeChangeMerge
+	default:
+		return rootstate.PendingRangeChangeUnknown
 	}
 }
 
