@@ -24,14 +24,28 @@ func (s *Store) applyRegionMeta(meta localmeta.RegionMeta) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
-	return s.regionMgr().applyRegionMeta(meta)
+	return s.regionMgr().applyRegionMeta(meta, true)
+}
+
+func (s *Store) applyRegionMetaSilent(meta localmeta.RegionMeta) error {
+	if s == nil {
+		return fmt.Errorf("raftstore: store is nil")
+	}
+	return s.regionMgr().applyRegionMeta(meta, false)
 }
 
 func (s *Store) applyRegionRemoval(regionID uint64) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
-	return s.regionMgr().applyRegionRemoval(regionID)
+	return s.regionMgr().applyRegionRemoval(regionID, true)
+}
+
+func (s *Store) applyRegionRemovalSilent(regionID uint64) error {
+	if s == nil {
+		return fmt.Errorf("raftstore: store is nil")
+	}
+	return s.regionMgr().applyRegionRemoval(regionID, false)
 }
 
 func (s *Store) applyRegionState(regionID uint64, state metaregion.ReplicaState) error {

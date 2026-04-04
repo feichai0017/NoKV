@@ -294,17 +294,17 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta localmeta.RegionMeta
 	}
 	newParent := transition.parent
 	childMeta = transition.child
-	if err := s.applyRegionMeta(newParent); err != nil {
+	if err := s.applyRegionMetaSilent(newParent); err != nil {
 		return nil, err
 	}
 	cfg, bootstrapPeers, err := s.buildChildPeerConfig(childMeta)
 	if err != nil {
-		_ = s.applyRegionMeta(originalParent)
+		_ = s.applyRegionMetaSilent(originalParent)
 		return nil, err
 	}
-	childPeer, err := s.StartPeer(cfg, bootstrapPeers)
+	childPeer, err := s.startPeer(cfg, bootstrapPeers, false)
 	if err != nil {
-		_ = s.applyRegionMeta(originalParent)
+		_ = s.applyRegionMetaSilent(originalParent)
 		return nil, err
 	}
 	s.enqueueAppliedRootEvent(originalParent.ID, committedSplitEvent(transition))
@@ -400,14 +400,14 @@ func (s *Store) handleMergeCommand(merge *raftcmdpb.MergeCommand) error {
 		return nil
 	}
 	updated := transition.target
-	if err := s.applyRegionMeta(updated); err != nil {
+	if err := s.applyRegionMetaSilent(updated); err != nil {
 		return err
 	}
 	s.enqueueAppliedRootEvent(transition.mergedDesc.RegionID, committedMergeEvent(transition))
 	if peer := s.regionMgr().peer(sourceMeta.ID); peer != nil {
-		s.StopPeer(peer.ID())
+		s.stopPeer(peer.ID(), false)
 	}
-	if err := s.applyRegionRemoval(sourceMeta.ID); err != nil {
+	if err := s.applyRegionRemovalSilent(sourceMeta.ID); err != nil {
 		return err
 	}
 	return nil

@@ -44,22 +44,24 @@ func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 	if len(ev.ConfChange.Changes) > 0 {
 		meta.Epoch.ConfVersion += uint64(len(ev.ConfChange.Changes))
 	}
+	appliedEvent, hasAppliedEvent := appliedPeerChangeEvent(meta, ev.ConfChange)
 	if ev.Peer != nil && peerIndexByID(meta.Peers, ev.Peer.ID()) == -1 {
-		if err := s.applyRegionRemoval(meta.ID); err != nil {
+		if hasAppliedEvent {
+			s.enqueueAppliedRootEvent(meta.ID, appliedEvent)
+		}
+		if err := s.applyRegionRemovalSilent(meta.ID); err != nil {
 			return err
 		}
-		s.StopPeer(ev.Peer.ID())
+		s.stopPeer(ev.Peer.ID(), false)
 		return nil
 	}
-	if err := s.applyRegionMeta(meta); err != nil {
+	if err := s.applyRegionMetaSilent(meta); err != nil {
 		return err
 	}
-	if s.sched == nil || len(ev.ConfChange.Changes) != 1 {
+	if !hasAppliedEvent {
 		return nil
 	}
-	if event, ok := appliedPeerChangeEvent(meta, ev.ConfChange); ok {
-		s.enqueueAppliedRootEvent(meta.ID, event)
-	}
+	s.enqueueAppliedRootEvent(meta.ID, appliedEvent)
 	return nil
 }
 
