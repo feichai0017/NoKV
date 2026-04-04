@@ -49,6 +49,14 @@ type CommittedTail struct {
 	Records         []CommittedEvent
 }
 
+// TailWindow describes one retained committed-tail window observed from the
+// virtual log substrate.
+type TailWindow struct {
+	RequestedOffset int64
+	StartOffset     int64
+	EndOffset       int64
+}
+
 // TailToken identifies one observed committed-tail view.
 type TailToken struct {
 	Cursor   rootstate.Cursor
@@ -93,10 +101,30 @@ func CloneCommittedTail(in CommittedTail) CommittedTail {
 	}
 }
 
+// Window returns the retained committed-tail boundaries without record payloads.
+func (s CommittedTail) Window() TailWindow {
+	return TailWindow{
+		RequestedOffset: s.RequestedOffset,
+		StartOffset:     s.StartOffset,
+		EndOffset:       s.EndOffset,
+	}
+}
+
 // FellBehind reports whether the requested offset is already behind the
 // current retained tail boundary.
 func (s CommittedTail) FellBehind() bool {
-	return s.RequestedOffset < s.StartOffset
+	return s.Window().FellBehind()
+}
+
+// Empty reports whether the retained window currently contains no bytes.
+func (w TailWindow) Empty() bool {
+	return w.StartOffset >= w.EndOffset
+}
+
+// FellBehind reports whether the requested offset is already behind the
+// current retained tail boundary.
+func (w TailWindow) FellBehind() bool {
+	return w.RequestedOffset < w.StartOffset
 }
 
 // RetainFrom returns the cursor immediately before the first retained event.
@@ -132,9 +160,19 @@ func (o ObservedCommitted) RetainFrom() rootstate.Cursor {
 	return o.Tail.RetainFrom(o.Checkpoint.Snapshot.State.LastCommitted)
 }
 
+// Window returns the retained committed-tail window in the observed view.
+func (o ObservedCommitted) Window() TailWindow {
+	return o.Tail.Window()
+}
+
 // LastCursor returns the last committed cursor visible in the observed tail.
 func (a TailAdvance) LastCursor() rootstate.Cursor {
 	return a.Observed.LastCursor()
+}
+
+// Window returns the retained committed-tail window visible in this advance.
+func (a TailAdvance) Window() TailWindow {
+	return a.Observed.Window()
 }
 
 // Advanced reports whether the observed tail view changed past the requested token.
@@ -142,12 +180,23 @@ func (a TailAdvance) Advanced() bool {
 	return a.Token.AdvancedSince(a.After)
 }
 
+// CursorAdvanced reports whether the committed cursor frontier advanced.
+func (a TailAdvance) CursorAdvanced() bool {
+	return rootstate.CursorAfter(a.Token.Cursor, a.After.Cursor)
+}
+
+// WindowShifted reports whether the retained tail window changed without
+// advancing the committed cursor frontier.
+func (a TailAdvance) WindowShifted() bool {
+	return a.Advanced() && !a.CursorAdvanced()
+}
+
 // Kind classifies the observed tail change relative to the requested token.
 func (a TailAdvance) Kind() TailAdvanceKind {
 	if !a.Advanced() {
 		return TailAdvanceUnchanged
 	}
-	if rootstate.CursorAfter(a.Token.Cursor, a.After.Cursor) {
+	if a.CursorAdvanced() {
 		return TailAdvanceCursorAdvanced
 	}
 	return TailAdvanceWindowShifted
@@ -156,7 +205,7 @@ func (a TailAdvance) Kind() TailAdvanceKind {
 // FellBehind reports whether the observed retained tail had to fall back past
 // the requested offset due to compaction.
 func (a TailAdvance) FellBehind() bool {
-	return a.Observed.Tail.FellBehind()
+	return a.Window().FellBehind()
 }
 
 // ObserveCommitted loads one compact checkpoint together with one retained

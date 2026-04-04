@@ -163,6 +163,34 @@ func TestEvaluateRangeChangeLifecycle(t *testing.T) {
 	require.Equal(t, rootstate.RangeChangeLifecycleSkip, decision)
 }
 
+func TestObserveRangeChangeCompletion(t *testing.T) {
+	left := testDescriptor(70, []byte("a"), []byte("m"))
+	right := testDescriptor(71, []byte("m"), []byte("z"))
+	splitPlanned := rootevent.RegionSplitPlanned(69, []byte("m"), left, right)
+
+	completion := rootstate.ObserveRangeChangeCompletion(nil, nil, splitPlanned)
+	require.Equal(t, rootstate.RangeChangeCompletionOpen, completion)
+
+	key, pending, ok := rootstate.PendingRangeChangeFromEvent(splitPlanned)
+	require.True(t, ok)
+	completion = rootstate.ObserveRangeChangeCompletion(
+		map[uint64]rootstate.PendingRangeChange{key: pending},
+		nil,
+		splitPlanned,
+	)
+	require.Equal(t, rootstate.RangeChangeCompletionPending, completion)
+
+	completion = rootstate.ObserveRangeChangeCompletion(
+		nil,
+		map[uint64]descriptor.Descriptor{
+			left.RegionID:  left,
+			right.RegionID: right,
+		},
+		splitPlanned,
+	)
+	require.Equal(t, rootstate.RangeChangeCompletionCompleted, completion)
+}
+
 func TestEvaluateRootEventLifecycle(t *testing.T) {
 	target := testDescriptor(50, []byte("a"), []byte("z"))
 	peerPlanned := rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)
