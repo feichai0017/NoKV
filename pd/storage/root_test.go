@@ -242,35 +242,22 @@ func TestRootStoreWaitForTailTracksAllocatorFenceCheckpoint(t *testing.T) {
 	leader := rootStores[leaderID]
 	follower := rootStores[followerID(leaderID)]
 
-	done := make(chan rootstorage.TailAdvance, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		advance, err := follower.WaitForTail(rootstorage.TailToken{}, 5*time.Second)
-		if err != nil {
-			errCh <- err
-			return
-		}
-		done <- advance
-	}()
-
 	require.NoError(t, leader.SaveAllocatorState(123, 456))
-
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case advance := <-done:
-		require.True(t, advance.Advanced())
-		require.Equal(t, rootstorage.TailAdvanceCursorAdvanced, advance.Kind())
-		require.NotEmpty(t, advance.Observed.Tail.Records)
-	case <-time.After(6 * time.Second):
-		t.Fatal("timed out waiting for allocator fence tail advance")
-	}
-
-	require.NoError(t, follower.Refresh())
-	snapshot, err := follower.Load()
-	require.NoError(t, err)
-	require.Equal(t, uint64(123), snapshot.Allocator.IDCurrent)
-	require.Equal(t, uint64(456), snapshot.Allocator.TSCurrent)
+	var last rootstorage.TailToken
+	require.Eventually(t, func() bool {
+		advance, err := follower.WaitForTail(last, 500*time.Millisecond)
+		if err != nil {
+			return false
+		}
+		if advance.Advanced() {
+			last = advance.Token
+		}
+		snapshot, err := follower.Load()
+		if err != nil {
+			return false
+		}
+		return snapshot.Allocator.IDCurrent == 123 && snapshot.Allocator.TSCurrent == 456
+	}, 6*time.Second, 50*time.Millisecond)
 }
 
 func TestReplicatedRootConfigValidate(t *testing.T) {

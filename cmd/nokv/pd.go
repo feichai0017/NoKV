@@ -192,7 +192,7 @@ func runPDCmd(w io.Writer, args []string) error {
 					}
 					switch next.CatchUpAction() {
 					case rootstorage.TailCatchUpRefreshState:
-						if err := svc.RefreshFromStorage(); err != nil {
+						if err := svc.ReloadFromStorage(); err != nil {
 							continue
 						}
 						last = next.Token
