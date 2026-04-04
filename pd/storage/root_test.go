@@ -25,7 +25,7 @@ func TestRootStorePersistsRegionsAndAllocator(t *testing.T) {
 	require.NoError(t, err)
 
 	desc := testDescriptor(11, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}})
-	require.NoError(t, store.PublishRegionDescriptor(desc))
+	require.NoError(t, store.PublishRegionDescriptorCompat(desc))
 	require.NoError(t, store.SaveAllocatorState(123, 456))
 
 	snapshot, err := store.Load()
@@ -54,7 +54,7 @@ func TestRootStoreDeleteRegion(t *testing.T) {
 	store, err := OpenRootStore(root)
 	require.NoError(t, err)
 
-	require.NoError(t, store.PublishRegionDescriptor(testDescriptor(7, []byte("x"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)))
+	require.NoError(t, store.PublishRegionDescriptorCompat(testDescriptor(7, []byte("x"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)))
 	require.NoError(t, store.AppendRootEvent(rootevent.RegionTombstoned(7)))
 
 	snapshot, err := store.Load()
@@ -77,8 +77,8 @@ func TestRootStoreSkipsDuplicateRegionDescriptorHeartbeat(t *testing.T) {
 	require.NoError(t, err)
 
 	desc := testDescriptor(21, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
-	require.NoError(t, store.PublishRegionDescriptor(desc))
-	require.NoError(t, store.PublishRegionDescriptor(desc))
+	require.NoError(t, store.PublishRegionDescriptorCompat(desc))
+	require.NoError(t, store.PublishRegionDescriptorCompat(desc))
 
 	events, _, err := root.ReadSince(rootstate.Cursor{})
 	require.NoError(t, err)
@@ -93,7 +93,7 @@ func TestRootStoreAppendRootEventPeerAdded(t *testing.T) {
 	require.NoError(t, err)
 
 	desc := testDescriptor(31, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
-	require.NoError(t, store.PublishRegionDescriptor(desc))
+	require.NoError(t, store.PublishRegionDescriptorCompat(desc))
 	desc.Peers = append(desc.Peers, metaregion.Peer{StoreID: 2, PeerID: 201})
 	desc.Epoch.ConfVersion = 2
 	desc.Hash = nil
@@ -117,7 +117,7 @@ func TestRootStoreAppendRootEventPeerRemoved(t *testing.T) {
 	require.NoError(t, err)
 
 	desc := testDescriptor(41, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 2}, []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}})
-	require.NoError(t, store.PublishRegionDescriptor(desc))
+	require.NoError(t, store.PublishRegionDescriptorCompat(desc))
 	desc.Peers = desc.Peers[:1]
 	desc.Epoch.ConfVersion = 3
 	desc.Hash = nil
@@ -140,7 +140,7 @@ func TestRootStoreAppendRootEventSplitCommitted(t *testing.T) {
 	require.NoError(t, err)
 
 	parent := testDescriptor(51, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
-	require.NoError(t, store.PublishRegionDescriptor(parent))
+	require.NoError(t, store.PublishRegionDescriptorCompat(parent))
 
 	childDesc := testDescriptor(52, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 102}})
 	parent.EndKey = []byte("m")
@@ -167,8 +167,8 @@ func TestRootStoreAppendRootEventRegionMerged(t *testing.T) {
 
 	left := testDescriptor(61, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
 	right := testDescriptor(62, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 102}})
-	require.NoError(t, store.PublishRegionDescriptor(left))
-	require.NoError(t, store.PublishRegionDescriptor(right))
+	require.NoError(t, store.PublishRegionDescriptorCompat(left))
+	require.NoError(t, store.PublishRegionDescriptorCompat(right))
 
 	left.EndKey = []byte("z")
 	left.Epoch.Version = 2
@@ -209,7 +209,7 @@ func TestRootStoreRefreshFromReplicatedFollower(t *testing.T) {
 	follower := followerRoot
 
 	desc := testDescriptor(71, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
-	require.NoError(t, leader.PublishRegionDescriptor(desc))
+	require.NoError(t, leader.PublishRegionDescriptorCompat(desc))
 
 	snapshot, err := follower.Load()
 	require.NoError(t, err)
@@ -238,7 +238,7 @@ func TestOpenRootReplicatedStoreSharesThreeNodeCluster(t *testing.T) {
 	follower := rootStores[followerID(leaderID)]
 
 	desc := testDescriptor(81, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
-	require.NoError(t, leader.PublishRegionDescriptor(desc))
+	require.NoError(t, leader.PublishRegionDescriptorCompat(desc))
 
 	require.Eventually(t, func() bool {
 		if err := follower.Refresh(); err != nil {
