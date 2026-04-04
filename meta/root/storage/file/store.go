@@ -51,11 +51,11 @@ func (s store) CompactCommitted(stream rootstorage.CommittedTail) error {
 	return s.log.CompactCommitted(stream)
 }
 
-func (s store) InstallBootstrap(checkpoint rootstorage.Checkpoint, stream rootstorage.CommittedTail) error {
-	if err := s.log.CompactCommitted(stream); err != nil {
+func (s store) InstallBootstrap(observed rootstorage.ObservedCommitted) error {
+	if err := s.log.CompactCommitted(observed.Tail); err != nil {
 		return err
 	}
-	return s.checkpt.SaveCheckpoint(checkpoint)
+	return s.checkpt.SaveCheckpoint(observed.Checkpoint)
 }
 
 func (s store) Size() (int64, error) {

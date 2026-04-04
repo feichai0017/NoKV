@@ -229,12 +229,15 @@ func (s *Store) InstallBootstrap(snapshot rootstate.Snapshot, records []rootstor
 	if s == nil {
 		return nil
 	}
-	checkpoint := rootstorage.Checkpoint{
-		Snapshot:   rootstate.CloneSnapshot(snapshot),
-		TailOffset: 0,
-	}
-	retained := rootstorage.CloneCommittedEvents(records)
-	if err := s.storage.InstallBootstrap(checkpoint, rootstorage.CommittedTail{Records: retained}); err != nil {
+	if err := s.storage.InstallBootstrap(rootstorage.ObservedCommitted{
+		Checkpoint: rootstorage.Checkpoint{
+			Snapshot:   rootstate.CloneSnapshot(snapshot),
+			TailOffset: 0,
+		},
+		Tail: rootstorage.CommittedTail{
+			Records: rootstorage.CloneCommittedEvents(records),
+		},
+	}); err != nil {
 		return err
 	}
 	return s.Refresh()

@@ -136,7 +136,8 @@ func ApplyRangeChangeToSnapshot(snapshot *Snapshot, event rootevent.Event) bool 
 }
 
 func applyRangeChangeSnapshotMutation(snapshot *Snapshot, event rootevent.Event, key uint64, change PendingRangeChange, mutate func(*Snapshot)) bool {
-	if isPlannedRangeChangeEvent(event) || !RangeChangeStateMatches(snapshot.Descriptors, event) {
+	completion := ObserveRangeChangeCompletion(snapshot.PendingRangeChanges, snapshot.Descriptors, event)
+	if isPlannedRangeChangeEvent(event) || completion == RangeChangeCompletionOpen {
 		snapshot.State.ClusterEpoch++
 	}
 	mutate(snapshot)

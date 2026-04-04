@@ -91,6 +91,14 @@ type ObservedCommitted struct {
 	Tail       CommittedTail
 }
 
+// CloneObservedCommitted returns a detached observed committed view.
+func CloneObservedCommitted(in ObservedCommitted) ObservedCommitted {
+	return ObservedCommitted{
+		Checkpoint: CloneCheckpoint(in.Checkpoint),
+		Tail:       CloneCommittedTail(in.Tail),
+	}
+}
+
 // CloneCommittedTail returns a detached committed-stream view.
 func CloneCommittedTail(in CommittedTail) CommittedTail {
 	return CommittedTail{
@@ -165,6 +173,16 @@ func (o ObservedCommitted) Window() TailWindow {
 	return o.Tail.Window()
 }
 
+// Advance packages one observed view together with tail tokens into a
+// classified tail-advance result.
+func (o ObservedCommitted) Advance(after, token TailToken) TailAdvance {
+	return TailAdvance{
+		After:    after,
+		Token:    token,
+		Observed: o,
+	}
+}
+
 // LastCursor returns the last committed cursor visible in the observed tail.
 func (a TailAdvance) LastCursor() rootstate.Cursor {
 	return a.Observed.LastCursor()
@@ -234,6 +252,6 @@ type Substrate interface {
 	ReadCommitted(requestedOffset int64) (CommittedTail, error)
 	AppendCommitted(records ...CommittedEvent) (logEnd int64, err error)
 	CompactCommitted(stream CommittedTail) error
-	InstallBootstrap(checkpoint Checkpoint, stream CommittedTail) error
+	InstallBootstrap(observed ObservedCommitted) error
 	Size() (int64, error)
 }
