@@ -57,14 +57,14 @@ func NewSchedulerClient(cfg SchedulerClientConfig) *SchedulerClient {
 //
 // This is the heartbeat/compatibility path only. Event-driven topology truth
 // should use PublishRootEvent instead.
-func (s *SchedulerClient) ReportRegionHeartbeat(ctx context.Context, desc descriptor.Descriptor) {
-	if s == nil || desc.RegionID == 0 || s.pd == nil {
+func (s *SchedulerClient) ReportRegionHeartbeat(ctx context.Context, regionID uint64) {
+	if s == nil || regionID == 0 || s.pd == nil {
 		return
 	}
 	ctx, cancel := contextWithTimeout(ctx, s.timeout)
 	defer cancel()
 	_, err := s.pd.RegionLiveness(ctx, &pdpb.RegionLivenessRequest{
-		RegionId: desc.RegionID,
+		RegionId: regionID,
 	})
 	if err != nil {
 		s.recordError("RegionLiveness", err)

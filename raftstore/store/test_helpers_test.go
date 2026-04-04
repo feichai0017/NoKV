@@ -61,16 +61,19 @@ func newTestSchedulerSink() *testSchedulerSink {
 	}
 }
 
-func (s *testSchedulerSink) ReportRegionHeartbeat(_ context.Context, desc descriptor.Descriptor) {
-	if s == nil || desc.RegionID == 0 {
+func (s *testSchedulerSink) ReportRegionHeartbeat(_ context.Context, regionID uint64) {
+	if s == nil || regionID == 0 {
 		return
 	}
 	s.mu.Lock()
-	s.regions[desc.RegionID] = regionHeartbeat{
-		Descriptor:    desc.Clone(),
-		LastHeartbeat: time.Now(),
+	info := s.regions[regionID]
+	info.Descriptor.RegionID = regionID
+	info.LastHeartbeat = time.Now()
+	s.regions[regionID] = regionHeartbeat{
+		Descriptor:    info.Descriptor,
+		LastHeartbeat: info.LastHeartbeat,
 	}
-	s.history = append(s.history, schedulerEvent{kind: "publish", regionID: desc.RegionID})
+	s.history = append(s.history, schedulerEvent{kind: "publish", regionID: regionID})
 	s.mu.Unlock()
 }
 
@@ -181,7 +184,7 @@ func (s *degradedSchedulerSink) Status() SchedulerStatus {
 	return s.status
 }
 
-func (s *slowSchedulerSink) ReportRegionHeartbeat(ctx context.Context, desc descriptor.Descriptor) {
+func (s *slowSchedulerSink) ReportRegionHeartbeat(ctx context.Context, regionID uint64) {
 	if s.publishDelay > 0 {
 		select {
 		case <-time.After(s.publishDelay):
@@ -189,7 +192,7 @@ func (s *slowSchedulerSink) ReportRegionHeartbeat(ctx context.Context, desc desc
 			return
 		}
 	}
-	s.testSchedulerSink.ReportRegionHeartbeat(ctx, desc)
+	s.testSchedulerSink.ReportRegionHeartbeat(ctx, regionID)
 }
 
 func (s *slowSchedulerSink) PublishRootEvent(ctx context.Context, event rootevent.Event) error {
