@@ -13,12 +13,9 @@ type Bootstrap struct {
 	RetainFrom rootstate.Cursor
 }
 
-// LoadBootstrap loads one rooted checkpoint and replays retained committed events on top of it.
-func LoadBootstrap(storage rootstorage.Substrate) (Bootstrap, error) {
-	observed, err := rootstorage.ObserveCommitted(storage, 0)
-	if err != nil {
-		return Bootstrap{}, err
-	}
+// BootstrapFromObserved materializes one rooted bootstrap image from one
+// observed checkpoint plus retained committed tail.
+func BootstrapFromObserved(observed rootstorage.ObservedCommitted) Bootstrap {
 	snapshot := observed.Checkpoint.Snapshot
 	for _, rec := range observed.Tail.Records {
 		if rootstate.CursorAfter(rec.Cursor, snapshot.State.LastCommitted) {
@@ -29,7 +26,16 @@ func LoadBootstrap(storage rootstorage.Substrate) (Bootstrap, error) {
 		Snapshot:   snapshot,
 		Tail:       observed.Tail,
 		RetainFrom: observed.RetainFrom(),
-	}, nil
+	}
+}
+
+// LoadBootstrap loads one rooted checkpoint and replays retained committed events on top of it.
+func LoadBootstrap(storage rootstorage.Substrate) (Bootstrap, error) {
+	observed, err := rootstorage.ObserveCommitted(storage, 0)
+	if err != nil {
+		return Bootstrap{}, err
+	}
+	return BootstrapFromObserved(observed), nil
 }
 
 // CloneCommittedEvents returns a detached committed-event slice.

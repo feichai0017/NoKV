@@ -59,7 +59,11 @@ func TestReplicatedStoreInstallBootstrapReplacesState(t *testing.T) {
 			99: testDescriptor(99, []byte("m"), []byte("z")),
 		},
 	}
-	require.NoError(t, stores[leaderID].InstallBootstrap(snapshot, nil))
+	require.NoError(t, stores[leaderID].InstallBootstrap(rootstorage.ObservedCommitted{
+		Checkpoint: rootstorage.Checkpoint{
+			Snapshot: snapshot,
+		},
+	}))
 
 	current, err := stores[leaderID].Current()
 	require.NoError(t, err)

@@ -75,6 +75,21 @@ func (s *Service) RefreshFromStorage() error {
 	return nil
 }
 
+// ReloadFromStorage reloads the in-memory rooted view from the storage cache
+// without forcing the underlying rooted backend to refresh first.
+func (s *Service) ReloadFromStorage() error {
+	if s == nil || s.storage == nil {
+		return nil
+	}
+	snapshot, err := s.reloadRootedView(false)
+	if err != nil {
+		return err
+	}
+	s.ids.Fence(snapshot.Allocator.IDCurrent)
+	s.tso.Fence(snapshot.Allocator.TSCurrent)
+	return nil
+}
+
 // StoreHeartbeat records store-level stats.
 func (s *Service) StoreHeartbeat(_ context.Context, req *pdpb.StoreHeartbeatRequest) (*pdpb.StoreHeartbeatResponse, error) {
 	if req == nil {
