@@ -22,7 +22,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/pd/core"
 	"github.com/feichai0017/NoKV/pd/tso"
 )
@@ -133,8 +132,17 @@ func rootCloneDescriptorsForTest(in map[uint64]descriptor.Descriptor) map[uint64
 	return out
 }
 
-func testRegionDescriptorProto(desc descriptor.Descriptor) *metapb.RegionDescriptor {
-	return metacodec.DescriptorToProto(desc)
+func publishDescriptorEvent(t *testing.T, svc *Service, desc descriptor.Descriptor, expected uint64) error {
+	t.Helper()
+	event := rootevent.RegionBootstrapped(desc)
+	if svc != nil && svc.cluster != nil && svc.cluster.HasRegion(desc.RegionID) {
+		event = rootevent.RegionDescriptorPublished(desc)
+	}
+	_, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event:                metacodec.RootEventToProto(event),
+		ExpectedClusterEpoch: expected,
+	})
+	return err
 }
 
 func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
@@ -150,9 +158,7 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, storeResp.GetAccepted())
 
-	_, err = svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor: testRegionDescriptorProto(testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})),
-	})
+	err = publishDescriptorEvent(t, svc, testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}}), 0)
 	require.NoError(t, err)
 
 	getResp, err := svc.GetRegionByKey(context.Background(), &pdpb.GetRegionByKeyRequest{Key: []byte("a")})
@@ -164,9 +170,7 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 
 func TestServiceRemoveRegion(t *testing.T) {
 	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
-	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor: testRegionDescriptorProto(testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)),
-	})
+	err := publishDescriptorEvent(t, svc, testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 0)
 	require.NoError(t, err)
 
 	resp, err := svc.RemoveRegion(context.Background(), &pdpb.RemoveRegionRequest{RegionId: 11})
@@ -182,22 +186,16 @@ func TestServiceRemoveRegion(t *testing.T) {
 	require.False(t, resp.GetRemoved())
 }
 
-func TestServiceRegionHeartbeatRejectsStaleAndOverlap(t *testing.T) {
+func TestServiceRegionDescriptorUpdateRejectsStaleAndOverlap(t *testing.T) {
 	svc := NewService(core.NewCluster(), nil, nil)
-	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor: testRegionDescriptorProto(testDescriptor(1, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 2}, nil)),
-	})
+	err := publishDescriptorEvent(t, svc, testDescriptor(1, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 2}, nil), 0)
 	require.NoError(t, err)
 
-	_, err = svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor: testRegionDescriptorProto(testDescriptor(1, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 2}, nil)),
-	})
+	err = publishDescriptorEvent(t, svc, testDescriptor(1, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 2}, nil), 0)
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 
-	_, err = svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor: testRegionDescriptorProto(testDescriptor(2, []byte("l"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)),
-	})
+	err = publishDescriptorEvent(t, svc, testDescriptor(2, []byte("l"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 0)
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 }
@@ -220,10 +218,6 @@ func TestServiceRequestValidation(t *testing.T) {
 	svc := NewService(nil, nil, nil)
 
 	_, err := svc.StoreHeartbeat(context.Background(), nil)
-	require.Error(t, err)
-	require.Equal(t, codes.InvalidArgument, status.Code(err))
-
-	_, err = svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{})
 	require.Error(t, err)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
@@ -250,9 +244,7 @@ func TestServiceRequestValidation(t *testing.T) {
 
 func TestServiceRegionLivenessTouchesExistingRegion(t *testing.T) {
 	svc := NewService(core.NewCluster(), nil, nil)
-	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor: testRegionDescriptorProto(testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)),
-	})
+	err := publishDescriptorEvent(t, svc, testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 0)
 	require.NoError(t, err)
 
 	resp, err := svc.RegionLiveness(context.Background(), &pdpb.RegionLivenessRequest{RegionId: 11})
@@ -266,9 +258,7 @@ func TestServiceRegionLivenessTouchesExistingRegion(t *testing.T) {
 
 func TestServiceStoreHeartbeatReturnsLeaderTransferHint(t *testing.T) {
 	svc := NewService(core.NewCluster(), nil, nil)
-	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor: testRegionDescriptorProto(testDescriptor(100, []byte(""), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}})),
-	})
+	err := publishDescriptorEvent(t, svc, testDescriptor(100, []byte(""), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}}), 0)
 	require.NoError(t, err)
 
 	_, err = svc.StoreHeartbeat(context.Background(), &pdpb.StoreHeartbeatRequest{
@@ -298,9 +288,7 @@ func TestServicePersistsRegionCatalog(t *testing.T) {
 	store := &fakeStorage{}
 	svc.SetStorage(store)
 
-	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor: testRegionDescriptorProto(testDescriptor(42, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)),
-	})
+	err := publishDescriptorEvent(t, svc, testDescriptor(42, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 0)
 	require.NoError(t, err)
 	require.Equal(t, 1, store.eventCalls)
 	require.Equal(t, rootevent.KindRegionBootstrap, store.lastEvent.Kind)
@@ -312,15 +300,13 @@ func TestServicePersistsRegionCatalog(t *testing.T) {
 	require.Equal(t, rootevent.KindRegionTombstoned, store.lastEvent.Kind)
 }
 
-func TestServiceRegionHeartbeatSkipsUnchangedDescriptorPersistence(t *testing.T) {
+func TestServiceRegionLivenessSkipsTruthPersistence(t *testing.T) {
 	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
 	store := &fakeStorage{}
 	svc.SetStorage(store)
 
 	desc := testDescriptor(42, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
-	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor: testRegionDescriptorProto(desc),
-	})
+	err := publishDescriptorEvent(t, svc, desc, 0)
 	require.NoError(t, err)
 	require.Equal(t, 1, store.eventCalls)
 
@@ -328,9 +314,7 @@ func TestServiceRegionHeartbeatSkipsUnchangedDescriptorPersistence(t *testing.T)
 	require.True(t, ok)
 	time.Sleep(10 * time.Millisecond)
 
-	_, err = svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor: testRegionDescriptorProto(desc),
-	})
+	_, err = svc.RegionLiveness(context.Background(), &pdpb.RegionLivenessRequest{RegionId: desc.RegionID})
 	require.NoError(t, err)
 	require.Equal(t, 1, store.eventCalls)
 	after, ok := svc.cluster.RegionLastHeartbeat(42)
@@ -661,18 +645,14 @@ func TestServiceRegionCatalogPersistenceErrors(t *testing.T) {
 	store := &fakeStorage{eventErr: errors.New("persist update failed")}
 	svc.SetStorage(store)
 
-	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor: testRegionDescriptorProto(testDescriptor(8, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)),
-	})
+	err := publishDescriptorEvent(t, svc, testDescriptor(8, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 0)
 	require.Error(t, err)
 	require.Equal(t, codes.Internal, status.Code(err))
 	_, ok := svc.cluster.GetRegionDescriptorByKey([]byte("b"))
 	require.False(t, ok)
 
 	store.eventErr = nil
-	_, err = svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor: testRegionDescriptorProto(testDescriptor(8, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)),
-	})
+	err = publishDescriptorEvent(t, svc, testDescriptor(8, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil), 0)
 	require.NoError(t, err)
 	store.eventErr = errors.New("persist delete failed")
 	_, err = svc.RemoveRegion(context.Background(), &pdpb.RemoveRegionRequest{RegionId: 8})
@@ -733,9 +713,7 @@ func TestServiceRejectsWritesOnFollower(t *testing.T) {
 	store := &fakeStorage{leader: false, leaderID: 2}
 	svc.SetStorage(store)
 
-	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor: testRegionDescriptorProto(testDescriptor(8, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)),
-	})
+	err := publishDescriptorEvent(t, svc, testDescriptor(8, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 0)
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 	require.True(t, strings.Contains(err.Error(), errNotLeaderPrefix))
@@ -809,9 +787,7 @@ func TestServicePublishRootEventAssignsRootEpoch(t *testing.T) {
 	store := &fakeStorage{}
 	svc.SetStorage(store)
 
-	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor: testRegionDescriptorProto(testDescriptor(1, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)),
-	})
+	err := publishDescriptorEvent(t, svc, testDescriptor(1, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 0)
 	require.NoError(t, err)
 
 	event := rootevent.PeerAdded(1, 2, 201, testDescriptor(1, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 2}, nil))
@@ -830,18 +806,12 @@ func TestServiceMutatingWritesRespectExpectedClusterEpoch(t *testing.T) {
 	store := &fakeStorage{snapshot: pdstorage.Snapshot{ClusterEpoch: 7}}
 	svc.SetStorage(store)
 
-	_, err := svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor:     testRegionDescriptorProto(testDescriptor(11, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)),
-		ExpectedClusterEpoch: 6,
-	})
+	err := publishDescriptorEvent(t, svc, testDescriptor(11, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 6)
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 	require.Equal(t, 0, store.eventCalls)
 
-	_, err = svc.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor:     testRegionDescriptorProto(testDescriptor(11, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)),
-		ExpectedClusterEpoch: 7,
-	})
+	err = publishDescriptorEvent(t, svc, testDescriptor(11, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 7)
 	require.NoError(t, err)
 	require.Equal(t, 1, store.eventCalls)
 	require.Equal(t, uint64(8), store.snapshot.ClusterEpoch)
@@ -919,9 +889,7 @@ func TestServiceRefreshFromReplicatedRootFollowerServesRead(t *testing.T) {
 	leader := services[leaderID]
 	follower := services[followerID]
 
-	_, err := leader.RegionHeartbeat(context.Background(), &pdpb.RegionHeartbeatRequest{
-		RegionDescriptor: testRegionDescriptorProto(testDescriptor(91, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)),
-	})
+	err := publishDescriptorEvent(t, leader, testDescriptor(91, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 0)
 	require.NoError(t, err)
 
 	getResp, err := follower.GetRegionByKey(context.Background(), &pdpb.GetRegionByKeyRequest{Key: []byte("m")})
