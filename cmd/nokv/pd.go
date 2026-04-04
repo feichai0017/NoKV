@@ -177,28 +177,29 @@ func runPDCmd(w io.Writer, args []string) error {
 	ctx, cancel := pdNotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if rootModeValue == "replicated" && rootStore != nil {
-		ticker := time.NewTicker(*rootRefresh)
-		defer ticker.Stop()
 		go func() {
-			var last rootstorage.TailToken
+			subscription := rootStore.SubscribeTail(rootstorage.TailToken{})
+			if subscription == nil {
+				return
+			}
 			for {
 				select {
 				case <-ctx.Done():
 					return
-				case <-ticker.C:
-					next, err := rootStore.WaitForTail(last, *rootRefresh)
-					if err != nil {
+				default:
+				}
+				next, err := subscription.Wait(*rootRefresh)
+				if err != nil {
+					continue
+				}
+				switch next.CatchUpAction() {
+				case rootstorage.TailCatchUpRefreshState, rootstorage.TailCatchUpInstallBootstrap:
+					if err := svc.ReloadFromStorage(); err != nil {
 						continue
 					}
-					switch next.CatchUpAction() {
-					case rootstorage.TailCatchUpRefreshState, rootstorage.TailCatchUpInstallBootstrap:
-						if err := svc.ReloadFromStorage(); err != nil {
-							continue
-						}
-						last = next.Token
-					case rootstorage.TailCatchUpAcknowledgeWindow:
-						last = next.Token
-					}
+					subscription.Acknowledge(next)
+				case rootstorage.TailCatchUpAcknowledgeWindow:
+					subscription.Acknowledge(next)
 				}
 			}
 		}()

@@ -4,18 +4,20 @@ import (
 	"fmt"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	raftpb "go.etcd.io/raft/v3/raftpb"
+	proto "google.golang.org/protobuf/proto"
 )
 
-type transitionPlan struct {
-	ConfChange   *raftpb.ConfChangeV2
-	AdminPayload []byte
+type transitionProposal struct {
+	ConfChange *raftpb.ConfChangeV2
+	Admin      *raftcmdpb.AdminCommand
 }
 
-func (p transitionPlan) empty() bool {
-	return p.ConfChange == nil && len(p.AdminPayload) == 0
+func (p transitionProposal) empty() bool {
+	return p.ConfChange == nil && p.Admin == nil
 }
 
 type transitionTarget struct {
@@ -23,7 +25,7 @@ type transitionTarget struct {
 	Event    rootevent.Event
 	Action   string
 	Noop     bool
-	Plan     transitionPlan
+	Proposal transitionProposal
 }
 
 type terminalTransition struct {
@@ -63,14 +65,14 @@ func (s *Store) publishPlannedRootEvent(regionID uint64, event rootevent.Event, 
 	return nil
 }
 
-func (s *Store) proposeTransition(regionID uint64, plan transitionPlan) error {
+func (s *Store) proposeTransition(regionID uint64, proposal transitionProposal) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
 	if regionID == 0 {
 		return fmt.Errorf("raftstore: transition region id is zero")
 	}
-	if plan.empty() {
+	if proposal.empty() {
 		return fmt.Errorf("raftstore: transition proposal is empty")
 	}
 	peerRef, err := s.leaderPeer(regionID)
@@ -78,10 +80,14 @@ func (s *Store) proposeTransition(regionID uint64, plan transitionPlan) error {
 		return err
 	}
 	switch {
-	case plan.ConfChange != nil:
-		return peerRef.ProposeConfChange(*plan.ConfChange)
-	case len(plan.AdminPayload) > 0:
-		return peerRef.ProposeAdmin(plan.AdminPayload)
+	case proposal.ConfChange != nil:
+		return peerRef.ProposeConfChange(*proposal.ConfChange)
+	case proposal.Admin != nil:
+		payload, err := proto.Marshal(proposal.Admin)
+		if err != nil {
+			return fmt.Errorf("raftstore: marshal transition admin proposal: %w", err)
+		}
+		return peerRef.ProposeAdmin(payload)
 	default:
 		return fmt.Errorf("raftstore: transition proposal is empty")
 	}
@@ -97,13 +103,13 @@ func (s *Store) executeTransitionTarget(target transitionTarget) error {
 	if target.RegionID == 0 {
 		return fmt.Errorf("raftstore: transition region id is zero")
 	}
-	if target.Plan.empty() {
+	if target.Proposal.empty() {
 		return fmt.Errorf("raftstore: transition proposal is empty")
 	}
 	if err := s.publishPlannedRootEvent(target.RegionID, target.Event, target.Action); err != nil {
 		return err
 	}
-	return s.proposeTransition(target.RegionID, target.Plan)
+	return s.proposeTransition(target.RegionID, target.Proposal)
 }
 
 func (s *Store) enqueueAppliedRootEvent(event rootevent.Event) {

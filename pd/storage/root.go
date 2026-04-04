@@ -64,6 +64,16 @@ func (s *RootStore) WaitForTail(after rootstorage.TailToken, timeout time.Durati
 	return advance, nil
 }
 
+// SubscribeTail returns one watch-like rooted tail subscription. The
+// subscription keeps its own acknowledged token and reuses the store wait path
+// so callers no longer have to open-code tail-token loops.
+func (s *RootStore) SubscribeTail(after rootstorage.TailToken) *rootstorage.TailSubscription {
+	if s == nil || s.root == nil || s.waitForTail == nil {
+		return nil
+	}
+	return rootstorage.NewTailSubscription(after, s.WaitForTail)
+}
+
 func (s *RootStore) IsLeader() bool {
 	if s == nil || s.root == nil {
 		return true

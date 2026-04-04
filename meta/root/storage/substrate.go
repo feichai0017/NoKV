@@ -3,6 +3,8 @@ package storage
 import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	"sync"
+	"time"
 )
 
 // Checkpoint is one compact rooted snapshot plus the retained-log offset to
@@ -71,6 +73,10 @@ type TailToken struct {
 	Revision uint64
 }
 
+// TailWaitFunc is one virtual-log wait primitive used to drive one follower
+// subscription from one previously acknowledged tail token.
+type TailWaitFunc func(after TailToken, timeout time.Duration) (TailAdvance, error)
+
 // TailAdvanceKind classifies one observed committed-tail change.
 type TailAdvanceKind uint8
 
@@ -101,6 +107,55 @@ type TailAdvance struct {
 	After    TailToken
 	Token    TailToken
 	Observed ObservedCommitted
+}
+
+// TailSubscription is one watch-like follower subscription over the rooted
+// virtual log. Callers wait from one acknowledged token and explicitly advance
+// the subscription only after they have consumed the returned view.
+type TailSubscription struct {
+	mu    sync.Mutex
+	token TailToken
+	wait  TailWaitFunc
+}
+
+// NewTailSubscription constructs one watch-like rooted tail subscription.
+func NewTailSubscription(after TailToken, wait TailWaitFunc) *TailSubscription {
+	if wait == nil {
+		return nil
+	}
+	return &TailSubscription{token: after, wait: wait}
+}
+
+// Token returns the last acknowledged tail token for this subscription.
+func (s *TailSubscription) Token() TailToken {
+	if s == nil {
+		return TailToken{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.token
+}
+
+// Wait blocks until the rooted tail changes past the current acknowledged
+// token, or until timeout elapses.
+func (s *TailSubscription) Wait(timeout time.Duration) (TailAdvance, error) {
+	if s == nil || s.wait == nil {
+		return TailAdvance{}, nil
+	}
+	return s.wait(s.Token(), timeout)
+}
+
+// Acknowledge advances the subscription token after the caller has consumed
+// one observed tail advance.
+func (s *TailSubscription) Acknowledge(advance TailAdvance) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if advance.Token.AdvancedSince(s.token) {
+		s.token = advance.Token
+	}
 }
 
 // ObservedCommitted is one compact checkpoint observed together with one

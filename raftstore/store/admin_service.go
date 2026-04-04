@@ -13,7 +13,6 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-	proto "google.golang.org/protobuf/proto"
 )
 
 type splitTransition struct {
@@ -146,7 +145,7 @@ func committedMergeEvent(transition mergeTransition) rootevent.Event {
 	return rootevent.RegionMerged(transition.leftID, transition.rightID, transition.mergedDesc)
 }
 
-func (s *Store) splitTarget(parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) (transitionTarget, error) {
+func (s *Store) buildSplitTarget(parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) (transitionTarget, error) {
 	if s == nil {
 		return transitionTarget{}, fmt.Errorf("raftstore: store is nil")
 	}
@@ -168,21 +167,17 @@ func (s *Store) splitTarget(parentID uint64, childMeta localmeta.RegionMeta, spl
 			Child:          metacodec.LocalRegionMetaToDescriptorProto(transition.child),
 		},
 	}
-	data, err := proto.Marshal(command)
-	if err != nil {
-		return transitionTarget{}, err
-	}
 	return transitionTarget{
 		RegionID: parentID,
 		Event:    plannedSplitEvent(transition),
 		Action:   "split",
-		Plan: transitionPlan{
-			AdminPayload: data,
+		Proposal: transitionProposal{
+			Admin: command,
 		},
 	}, nil
 }
 
-func (s *Store) mergeTarget(targetRegionID, sourceRegionID uint64) (transitionTarget, error) {
+func (s *Store) buildMergeTarget(targetRegionID, sourceRegionID uint64) (transitionTarget, error) {
 	if s == nil {
 		return transitionTarget{}, fmt.Errorf("raftstore: store is nil")
 	}
@@ -200,16 +195,12 @@ func (s *Store) mergeTarget(targetRegionID, sourceRegionID uint64) (transitionTa
 			SourceRegionId: sourceRegionID,
 		},
 	}
-	data, err := proto.Marshal(command)
-	if err != nil {
-		return transitionTarget{}, err
-	}
 	return transitionTarget{
 		RegionID: targetRegionID,
 		Event:    plannedMergeEvent(transition),
 		Action:   "merge",
-		Plan: transitionPlan{
-			AdminPayload: data,
+		Proposal: transitionProposal{
+			Admin: command,
 		},
 	}, nil
 }
@@ -298,7 +289,7 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta localmeta.RegionMeta
 // ProposeSplit issues a split command through the raft log of the parent
 // region. The child metadata must describe the new region configuration.
 func (s *Store) ProposeSplit(parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) error {
-	target, err := s.splitTarget(parentID, childMeta, splitKey)
+	target, err := s.buildSplitTarget(parentID, childMeta, splitKey)
 	if err != nil {
 		return err
 	}
@@ -307,7 +298,7 @@ func (s *Store) ProposeSplit(parentID uint64, childMeta localmeta.RegionMeta, sp
 
 // ProposeMerge submits a merge admin command merging source region into target.
 func (s *Store) ProposeMerge(targetRegionID, sourceRegionID uint64) error {
-	target, err := s.mergeTarget(targetRegionID, sourceRegionID)
+	target, err := s.buildMergeTarget(targetRegionID, sourceRegionID)
 	if err != nil {
 		return err
 	}

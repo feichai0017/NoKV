@@ -241,16 +241,18 @@ func TestRootStoreWaitForTailTracksAllocatorFenceCheckpoint(t *testing.T) {
 	rootStores, leaderID := openReplicatedRootStores(t)
 	leader := rootStores[leaderID]
 	follower := rootStores[followerID(leaderID)]
+	subscription := follower.SubscribeTail(rootstorage.TailToken{})
+	require.NotNil(t, subscription)
 
 	require.NoError(t, leader.SaveAllocatorState(123, 456))
-	var last rootstorage.TailToken
 	require.Eventually(t, func() bool {
-		advance, err := follower.WaitForTail(last, 500*time.Millisecond)
+		advance, err := subscription.Wait(500 * time.Millisecond)
 		if err != nil {
 			return false
 		}
-		if advance.Advanced() {
-			last = advance.Token
+		switch advance.CatchUpAction() {
+		case rootstorage.TailCatchUpRefreshState, rootstorage.TailCatchUpInstallBootstrap, rootstorage.TailCatchUpAcknowledgeWindow:
+			subscription.Acknowledge(advance)
 		}
 		snapshot, err := follower.Load()
 		if err != nil {
