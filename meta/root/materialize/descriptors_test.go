@@ -38,11 +38,11 @@ func TestApplyEventToSnapshotTracksPeerChangeStage(t *testing.T) {
 		Descriptors: map[uint64]descriptor.Descriptor{current.RegionID: current},
 	}
 
-	rootmaterialize.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 1}, rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target))
+	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 1}, rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target))
 	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
 	require.Contains(t, snapshot.PendingPeerChanges, target.RegionID)
 
-	rootmaterialize.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 2}, rootevent.PeerAdded(target.RegionID, 2, 201, target))
+	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 2}, rootevent.PeerAdded(target.RegionID, 2, 201, target))
 	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
 	require.NotContains(t, snapshot.PendingPeerChanges, target.RegionID)
 }
@@ -63,11 +63,11 @@ func TestApplyEventToSnapshotTracksPendingSplitLifecycle(t *testing.T) {
 		Descriptors: map[uint64]descriptor.Descriptor{parent.RegionID: parent},
 	}
 
-	rootmaterialize.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 1}, rootevent.RegionSplitPlanned(parent.RegionID, []byte("m"), left, right))
+	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 1}, rootevent.RegionSplitPlanned(parent.RegionID, []byte("m"), left, right))
 	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
 	require.Contains(t, snapshot.PendingRangeChanges, parent.RegionID)
 
-	rootmaterialize.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 2}, rootevent.RegionSplitCommitted(parent.RegionID, []byte("m"), left, right))
+	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 2}, rootevent.RegionSplitCommitted(parent.RegionID, []byte("m"), left, right))
 	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
 	require.NotContains(t, snapshot.PendingRangeChanges, parent.RegionID)
 }

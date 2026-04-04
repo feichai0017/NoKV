@@ -6,7 +6,6 @@ import (
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	pdstorage "github.com/feichai0017/NoKV/pd/storage"
@@ -69,7 +68,7 @@ func (f *fakeStorage) AppendRootEvent(event rootevent.Event) error {
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(f.snapshot.PendingPeerChanges),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(f.snapshot.PendingRangeChanges),
 	}
-	rootmaterialize.ApplyEventToSnapshot(&snapshot, snapshot.State.LastCommitted, event)
+	rootstate.ApplyEventToSnapshot(&snapshot, snapshot.State.LastCommitted, event)
 	f.snapshot.ClusterEpoch = snapshot.State.ClusterEpoch
 	f.snapshot.Descriptors = rootCloneDescriptorsForTest(snapshot.Descriptors)
 	f.snapshot.PendingPeerChanges = rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges)

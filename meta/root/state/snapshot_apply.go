@@ -5,6 +5,52 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
+// ApplyEventToSnapshot applies one rooted metadata event into the compact
+// rooted snapshot, including pending execution state.
+func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Event) {
+	if snapshot == nil {
+		return
+	}
+	if snapshot.Descriptors == nil {
+		snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
+	}
+	if snapshot.PendingPeerChanges == nil {
+		snapshot.PendingPeerChanges = make(map[uint64]PendingPeerChange)
+	}
+	if snapshot.PendingRangeChanges == nil {
+		snapshot.PendingRangeChanges = make(map[uint64]PendingRangeChange)
+	}
+	switch event.Kind {
+	case rootevent.KindStoreJoined, rootevent.KindStoreLeft:
+		snapshot.State.MembershipEpoch++
+	case rootevent.KindIDAllocatorFenced:
+		if event.AllocatorFence != nil && event.AllocatorFence.Minimum > snapshot.State.IDFence {
+			snapshot.State.IDFence = event.AllocatorFence.Minimum
+		}
+	case rootevent.KindTSOAllocatorFenced:
+		if event.AllocatorFence != nil && event.AllocatorFence.Minimum > snapshot.State.TSOFence {
+			snapshot.State.TSOFence = event.AllocatorFence.Minimum
+		}
+	case rootevent.KindRegionBootstrap, rootevent.KindRegionDescriptorPublished:
+		snapshot.State.ClusterEpoch++
+		desc := event.RegionDescriptor.Descriptor.Clone()
+		snapshot.Descriptors[desc.RegionID] = desc
+		delete(snapshot.PendingPeerChanges, desc.RegionID)
+		delete(snapshot.PendingRangeChanges, desc.RegionID)
+	case rootevent.KindRegionTombstoned:
+		snapshot.State.ClusterEpoch++
+		delete(snapshot.Descriptors, event.RegionRemoval.RegionID)
+		delete(snapshot.PendingPeerChanges, event.RegionRemoval.RegionID)
+		delete(snapshot.PendingRangeChanges, event.RegionRemoval.RegionID)
+	default:
+		if ApplyRangeChangeToSnapshot(snapshot, event) {
+			break
+		}
+		_ = ApplyPeerChangeToSnapshot(snapshot, event)
+	}
+	snapshot.State.LastCommitted = cursor
+}
+
 // ApplyPeerChangeToSnapshot applies one peer-change lifecycle event into the
 // compact rooted snapshot. It returns false when the event is not a peer-change
 // lifecycle event.
