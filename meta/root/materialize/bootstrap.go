@@ -22,7 +22,7 @@ func LoadBootstrap(storage rootstorage.Substrate) (Bootstrap, error) {
 	snapshot := observed.Checkpoint.Snapshot
 	for _, rec := range observed.Tail.Records {
 		if rootstate.CursorAfter(rec.Cursor, snapshot.State.LastCommitted) {
-			ApplyEventToSnapshot(&snapshot, rec.Cursor, rec.Event)
+			rootstate.ApplyEventToSnapshot(&snapshot, rec.Cursor, rec.Event)
 		}
 	}
 	return Bootstrap{
