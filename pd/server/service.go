@@ -66,14 +66,10 @@ func (s *Service) RefreshFromStorage() error {
 	if s == nil || s.storage == nil {
 		return nil
 	}
-	if err := s.storage.Refresh(); err != nil {
-		return err
-	}
-	snapshot, err := s.storage.Load()
+	snapshot, err := s.reloadRootedView(true)
 	if err != nil {
 		return err
 	}
-	s.cluster.ReplaceRegionSnapshot(snapshot.Descriptors)
 	s.ids.Fence(snapshot.Allocator.IDCurrent)
 	s.tso.Fence(snapshot.Allocator.TSCurrent)
 	return nil
@@ -152,6 +148,10 @@ func (s *Service) PublishRootEvent(_ context.Context, req *pdpb.PublishRootEvent
 		if err := s.storage.AppendRootEvent(event); err != nil {
 			return nil, status.Error(codes.Internal, "persist root event: "+err.Error())
 		}
+		if _, err := s.reloadRootedView(false); err != nil {
+			return nil, status.Error(codes.Internal, "reload rooted view: "+err.Error())
+		}
+		return &pdpb.PublishRootEventResponse{Accepted: true}, nil
 	}
 	if err := s.cluster.PublishRootEvent(event); err != nil {
 		return nil, status.Error(codes.Internal, "apply root event after persist: "+err.Error())
@@ -195,11 +195,32 @@ func (s *Service) RemoveRegion(_ context.Context, req *pdpb.RemoveRegionRequest)
 		if err := s.storage.AppendRootEvent(rootevent.RegionTombstoned(regionID)); err != nil {
 			return nil, status.Error(codes.Internal, "persist region tombstone: "+err.Error())
 		}
+		if _, err := s.reloadRootedView(false); err != nil {
+			return nil, status.Error(codes.Internal, "reload rooted view: "+err.Error())
+		}
+		return &pdpb.RemoveRegionResponse{Removed: true}, nil
 	}
 	if removed {
 		s.cluster.RemoveRegion(regionID)
 	}
 	return &pdpb.RemoveRegionResponse{Removed: removed}, nil
+}
+
+func (s *Service) reloadRootedView(refresh bool) (pdstorage.Snapshot, error) {
+	if s == nil || s.storage == nil {
+		return pdstorage.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
+	}
+	if refresh {
+		if err := s.storage.Refresh(); err != nil {
+			return pdstorage.Snapshot{}, err
+		}
+	}
+	snapshot, err := s.storage.Load()
+	if err != nil {
+		return pdstorage.Snapshot{}, err
+	}
+	s.cluster.ReplaceRootSnapshot(snapshot.Descriptors, snapshot.PendingPeerChanges, snapshot.PendingRangeChanges)
+	return snapshot, nil
 }
 
 // GetRegionByKey returns region metadata for the specified key.

@@ -14,6 +14,14 @@ const (
 	PeerChangeLifecycleSkip
 )
 
+type PeerChangeCompletionState uint8
+
+const (
+	PeerChangeCompletionOpen PeerChangeCompletionState = iota
+	PeerChangeCompletionPending
+	PeerChangeCompletionCompleted
+)
+
 func PendingPeerChangeFromEvent(event rootevent.Event) (PendingPeerChange, bool) {
 	if event.PeerChange == nil {
 		return PendingPeerChange{}, false
@@ -49,32 +57,50 @@ func PendingPeerChangeMatchesEvent(change PendingPeerChange, event rootevent.Eve
 		change.Target.Equal(expected.Target)
 }
 
+func ObservePeerChangeCompletion(pendingPeerChanges map[uint64]PendingPeerChange, current descriptor.Descriptor, hasCurrent bool, event rootevent.Event) PeerChangeCompletionState {
+	if event.PeerChange == nil {
+		return PeerChangeCompletionOpen
+	}
+	if pending, exists := pendingPeerChanges[event.PeerChange.RegionID]; exists && PendingPeerChangeMatchesEvent(pending, event) {
+		return PeerChangeCompletionPending
+	}
+	if hasCurrent && current.Equal(event.PeerChange.Region) {
+		return PeerChangeCompletionCompleted
+	}
+	return PeerChangeCompletionOpen
+}
+
 func EvaluatePeerChangeLifecycle(pendingPeerChanges map[uint64]PendingPeerChange, current descriptor.Descriptor, hasCurrent bool, event rootevent.Event) (PeerChangeLifecycleDecision, error) {
 	if event.PeerChange == nil {
 		return PeerChangeLifecycleApply, nil
 	}
 	change, pending := pendingPeerChanges[event.PeerChange.RegionID]
+	completion := ObservePeerChangeCompletion(pendingPeerChanges, current, hasCurrent, event)
 	switch event.Kind {
 	case rootevent.KindPeerAdditionPlanned, rootevent.KindPeerRemovalPlanned:
-		if !pending {
-			if hasCurrent && current.Equal(event.PeerChange.Region) {
-				return PeerChangeLifecycleSkip, nil
-			}
-			return PeerChangeLifecycleApply, nil
-		}
-		if PendingPeerChangeMatchesEvent(change, event) {
+		switch completion {
+		case PeerChangeCompletionCompleted, PeerChangeCompletionPending:
 			return PeerChangeLifecycleSkip, nil
-		}
-		return PeerChangeLifecycleApply, fmt.Errorf("pending peer change already exists for region %d", event.PeerChange.RegionID)
-	case rootevent.KindPeerAdded, rootevent.KindPeerRemoved:
-		if pending {
-			if PendingPeerChangeMatchesEvent(change, event) {
+		default:
+			if !pending {
 				return PeerChangeLifecycleApply, nil
 			}
-			return PeerChangeLifecycleApply, fmt.Errorf("peer change apply does not match pending target for region %d", event.PeerChange.RegionID)
+			return PeerChangeLifecycleApply, fmt.Errorf("pending peer change already exists for region %d", event.PeerChange.RegionID)
 		}
-		if hasCurrent && current.Equal(event.PeerChange.Region) {
+	case rootevent.KindPeerAdded, rootevent.KindPeerRemoved:
+		switch completion {
+		case PeerChangeCompletionPending:
+			return PeerChangeLifecycleApply, nil
+		case PeerChangeCompletionCompleted:
 			return PeerChangeLifecycleSkip, nil
+		default:
+			if pending {
+				if PendingPeerChangeMatchesEvent(change, event) {
+					return PeerChangeLifecycleApply, nil
+				}
+				return PeerChangeLifecycleApply, fmt.Errorf("peer change apply does not match pending target for region %d", event.PeerChange.RegionID)
+			}
+			return PeerChangeLifecycleApply, nil
 		}
 	}
 	return PeerChangeLifecycleApply, nil
