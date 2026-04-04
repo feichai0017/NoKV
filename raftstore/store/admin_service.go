@@ -146,19 +146,19 @@ func committedMergeEvent(transition mergeTransition) rootevent.Event {
 	return rootevent.RegionMerged(transition.leftID, transition.rightID, transition.mergedDesc)
 }
 
-func (s *Store) planSplit(parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) (transitionPlan, error) {
+func (s *Store) splitTarget(parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) (transitionTarget, error) {
 	if s == nil {
-		return transitionPlan{}, fmt.Errorf("raftstore: store is nil")
+		return transitionTarget{}, fmt.Errorf("raftstore: store is nil")
 	}
 	if parentID == 0 || childMeta.ID == 0 {
-		return transitionPlan{}, fmt.Errorf("raftstore: invalid region identifiers")
+		return transitionTarget{}, fmt.Errorf("raftstore: invalid region identifiers")
 	}
 	if splitAlreadyAppliedLocal(s, parentID, childMeta, splitKey) {
-		return transitionPlan{RegionID: parentID, Noop: true}, nil
+		return transitionTarget{RegionID: parentID, Noop: true}, nil
 	}
 	transition, err := s.buildSplitTransition(parentID, childMeta, splitKey)
 	if err != nil {
-		return transitionPlan{}, err
+		return transitionTarget{}, err
 	}
 	command := &raftcmdpb.AdminCommand{
 		Type: raftcmdpb.AdminCommand_SPLIT,
@@ -170,26 +170,28 @@ func (s *Store) planSplit(parentID uint64, childMeta localmeta.RegionMeta, split
 	}
 	data, err := proto.Marshal(command)
 	if err != nil {
-		return transitionPlan{}, err
+		return transitionTarget{}, err
 	}
-	return transitionPlan{
-		RegionID:     parentID,
-		Event:        plannedSplitEvent(transition),
-		Action:       "split",
-		AdminPayload: data,
+	return transitionTarget{
+		RegionID: parentID,
+		Event:    plannedSplitEvent(transition),
+		Action:   "split",
+		Plan: transitionPlan{
+			AdminPayload: data,
+		},
 	}, nil
 }
 
-func (s *Store) planMerge(targetRegionID, sourceRegionID uint64) (transitionPlan, error) {
+func (s *Store) mergeTarget(targetRegionID, sourceRegionID uint64) (transitionTarget, error) {
 	if s == nil {
-		return transitionPlan{}, fmt.Errorf("raftstore: store is nil")
+		return transitionTarget{}, fmt.Errorf("raftstore: store is nil")
 	}
 	if targetRegionID == 0 || sourceRegionID == 0 {
-		return transitionPlan{}, fmt.Errorf("raftstore: invalid region identifiers")
+		return transitionTarget{}, fmt.Errorf("raftstore: invalid region identifiers")
 	}
 	transition, err := s.buildMergeTransition(targetRegionID, sourceRegionID)
 	if err != nil {
-		return transitionPlan{}, err
+		return transitionTarget{}, err
 	}
 	command := &raftcmdpb.AdminCommand{
 		Type: raftcmdpb.AdminCommand_MERGE,
@@ -200,13 +202,15 @@ func (s *Store) planMerge(targetRegionID, sourceRegionID uint64) (transitionPlan
 	}
 	data, err := proto.Marshal(command)
 	if err != nil {
-		return transitionPlan{}, err
+		return transitionTarget{}, err
 	}
-	return transitionPlan{
-		RegionID:     targetRegionID,
-		Event:        plannedMergeEvent(transition),
-		Action:       "merge",
-		AdminPayload: data,
+	return transitionTarget{
+		RegionID: targetRegionID,
+		Event:    plannedMergeEvent(transition),
+		Action:   "merge",
+		Plan: transitionPlan{
+			AdminPayload: data,
+		},
 	}, nil
 }
 
@@ -294,20 +298,20 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta localmeta.RegionMeta
 // ProposeSplit issues a split command through the raft log of the parent
 // region. The child metadata must describe the new region configuration.
 func (s *Store) ProposeSplit(parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) error {
-	plan, err := s.planSplit(parentID, childMeta, splitKey)
+	target, err := s.splitTarget(parentID, childMeta, splitKey)
 	if err != nil {
 		return err
 	}
-	return s.executeTransitionPlan(plan)
+	return s.executeTransitionTarget(target)
 }
 
 // ProposeMerge submits a merge admin command merging source region into target.
 func (s *Store) ProposeMerge(targetRegionID, sourceRegionID uint64) error {
-	plan, err := s.planMerge(targetRegionID, sourceRegionID)
+	target, err := s.mergeTarget(targetRegionID, sourceRegionID)
 	if err != nil {
 		return err
 	}
-	return s.executeTransitionPlan(plan)
+	return s.executeTransitionTarget(target)
 }
 
 func (s *Store) buildChildPeerConfig(child localmeta.RegionMeta) (*peer.Config, []myraft.Peer, error) {

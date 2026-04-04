@@ -6,5 +6,5 @@ const (
 	CheckpointFileName = "root.checkpoint.binpb"
 	// LogFileName stores the retained committed rooted event stream as a framed
 	// append-only WAL. Each record carries one protobuf-encoded RootEvent.
-	LogFileName        = "root.events.wal"
+	LogFileName = "root.events.wal"
 )

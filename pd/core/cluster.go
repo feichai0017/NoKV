@@ -243,12 +243,11 @@ func (c *Cluster) ObserveRootEventLifecycle(event rootevent.Event) TransitionAss
 		return TransitionAssessment{}
 	}
 	transitions := c.TransitionSnapshot()
-	return pdview.AssessTransition(
-		descriptorsFromRegionInfos(c.RegionSnapshot()),
-		transitions.PendingPeerChanges,
-		transitions.PendingRangeChanges,
-		event,
-	)
+	return rootstate.AssessTransition(rootstate.Snapshot{
+		Descriptors:         descriptorsFromRegionInfos(c.RegionSnapshot()),
+		PendingPeerChanges:  transitions.PendingPeerChanges,
+		PendingRangeChanges: transitions.PendingRangeChanges,
+	}, event)
 }
 
 // GetRegionDescriptorByKey returns the rooted descriptor containing key

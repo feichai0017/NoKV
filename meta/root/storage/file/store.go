@@ -30,10 +30,7 @@ func (s store) ReadCommitted(requestedOffset int64) (rootstorage.CommittedTail, 
 	if err != nil {
 		return rootstorage.CommittedTail{}, err
 	}
-	startOffset := requestedOffset
-	if startOffset < checkpoint.TailOffset {
-		startOffset = checkpoint.TailOffset
-	}
+	startOffset := max(requestedOffset, checkpoint.TailOffset)
 	tail, err := s.log.ReadCommitted(startOffset)
 	if err != nil {
 		return rootstorage.CommittedTail{}, err
