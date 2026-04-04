@@ -47,10 +47,11 @@ func Open(cfg Config) (*Store, error) {
 	if cfg.MaxRetainedRecords <= 0 {
 		cfg.MaxRetainedRecords = defaultRetainedRecords
 	}
-	bootstrap, err := rootmaterialize.LoadBootstrap(cfg.Driver)
+	observed, err := rootstorage.ObserveCommitted(cfg.Driver, 0)
 	if err != nil {
 		return nil, err
 	}
+	bootstrap := rootmaterialize.BootstrapFromObserved(observed)
 	return &Store{
 		driver:             cfg.Driver,
 		storage:            cfg.Driver,
@@ -85,19 +86,21 @@ func (s *Store) Refresh() error {
 	if s == nil {
 		return nil
 	}
-	bootstrap, err := rootmaterialize.LoadBootstrap(s.storage)
+	observed, err := s.ObserveCommitted()
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	s.state = bootstrap.Snapshot.State
-	s.descs = bootstrap.Snapshot.Descriptors
-	s.pending = bootstrap.Snapshot.PendingPeerChanges
-	s.pendingRange = bootstrap.Snapshot.PendingRangeChanges
-	s.records = bootstrap.Tail.Records
-	s.retainFrom = bootstrap.RetainFrom
-	s.mu.Unlock()
+	s.applyObserved(observed)
 	return nil
+}
+
+// ObserveCommitted returns the current compact checkpoint plus retained
+// committed tail observed from the replicated root substrate.
+func (s *Store) ObserveCommitted() (rootstorage.ObservedCommitted, error) {
+	if s == nil {
+		return rootstorage.ObservedCommitted{}, nil
+	}
+	return rootstorage.ObserveCommitted(s.storage, 0)
 }
 
 // WaitForTail waits until the durable committed tail view changes past after.
@@ -225,22 +228,15 @@ func (s *Store) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, 
 
 // InstallBootstrap replaces the rooted checkpoint and retained committed tail.
 // It is the future landing point for replicated snapshot installation.
-func (s *Store) InstallBootstrap(snapshot rootstate.Snapshot, records []rootstorage.CommittedEvent) error {
+func (s *Store) InstallBootstrap(observed rootstorage.ObservedCommitted) error {
 	if s == nil {
 		return nil
 	}
-	if err := s.storage.InstallBootstrap(rootstorage.ObservedCommitted{
-		Checkpoint: rootstorage.Checkpoint{
-			Snapshot:   rootstate.CloneSnapshot(snapshot),
-			TailOffset: 0,
-		},
-		Tail: rootstorage.CommittedTail{
-			Records: rootstorage.CloneCommittedEvents(records),
-		},
-	}); err != nil {
+	if err := s.storage.InstallBootstrap(observed); err != nil {
 		return err
 	}
-	return s.Refresh()
+	s.applyObserved(observed)
+	return nil
 }
 
 func (s *Store) Close() error {
@@ -275,4 +271,19 @@ func (s *Store) maybeCompactLocked() {
 	}
 	s.records = retained
 	s.retainFrom = (rootstorage.CommittedTail{Records: retained}).RetainFrom(s.state.LastCommitted)
+}
+
+func (s *Store) applyObserved(observed rootstorage.ObservedCommitted) {
+	if s == nil {
+		return
+	}
+	bootstrap := rootmaterialize.BootstrapFromObserved(observed)
+	s.mu.Lock()
+	s.state = bootstrap.Snapshot.State
+	s.descs = bootstrap.Snapshot.Descriptors
+	s.pending = bootstrap.Snapshot.PendingPeerChanges
+	s.pendingRange = bootstrap.Snapshot.PendingRangeChanges
+	s.records = bootstrap.Tail.Records
+	s.retainFrom = bootstrap.RetainFrom
+	s.mu.Unlock()
 }

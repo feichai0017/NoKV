@@ -3,6 +3,7 @@ package storage
 import (
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"sync"
@@ -15,6 +16,7 @@ type RootStore struct {
 	root        rootBackend
 	refresh     func() error
 	waitForTail func(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
+	observe     func() (rootstorage.ObservedCommitted, error)
 	isLeader    func() bool
 	leaderID    func() uint64
 
@@ -52,7 +54,14 @@ func (s *RootStore) WaitForTail(after rootstorage.TailToken, timeout time.Durati
 	if s.waitForTail == nil {
 		return rootstorage.TailAdvance{}, nil
 	}
-	return s.waitForTail(after, timeout)
+	advance, err := s.waitForTail(after, timeout)
+	if err != nil {
+		return advance, err
+	}
+	if advance.ShouldRefreshState() {
+		s.replaceObserved(advance.Observed)
+	}
+	return advance, nil
 }
 
 func (s *RootStore) IsLeader() bool {
@@ -115,6 +124,14 @@ func (s *RootStore) reload() error {
 	if s == nil || s.root == nil {
 		return nil
 	}
+	if s.observe != nil {
+		observed, err := s.observe()
+		if err != nil {
+			return err
+		}
+		s.replaceObserved(observed)
+		return nil
+	}
 	snapshot, err := s.root.Snapshot()
 	if err != nil {
 		return err
@@ -124,4 +141,15 @@ func (s *RootStore) reload() error {
 	s.snapshot = out
 	s.mu.Unlock()
 	return nil
+}
+
+func (s *RootStore) replaceObserved(observed rootstorage.ObservedCommitted) {
+	if s == nil {
+		return
+	}
+	bootstrap := rootmaterialize.BootstrapFromObserved(observed)
+	out := SnapshotFromRoot(bootstrap.Snapshot)
+	s.mu.Lock()
+	s.snapshot = out
+	s.mu.Unlock()
 }

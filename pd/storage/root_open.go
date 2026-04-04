@@ -26,6 +26,11 @@ func OpenRootStore(root rootBackend) (*RootStore, error) {
 	}); ok {
 		store.waitForTail = waiter.WaitForTail
 	}
+	if observer, ok := root.(interface {
+		ObserveCommitted() (rootstorage.ObservedCommitted, error)
+	}); ok {
+		store.observe = observer.ObserveCommitted
+	}
 	if leader, ok := root.(interface {
 		IsLeader() bool
 		LeaderID() uint64
