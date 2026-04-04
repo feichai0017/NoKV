@@ -217,6 +217,14 @@ func TestStoreProposeSplitApplies(t *testing.T) {
 			schedulerEvent{kind: "root", regionID: parentMeta.ID, rootKind: rootevent.KindRegionSplitCommitted},
 		)
 	}, time.Second, 10*time.Millisecond)
+
+	sink.ResetHistory()
+	require.NoError(t, rs.ProposeSplit(parentMeta.ID, childMeta, childMeta.StartKey))
+	time.Sleep(50 * time.Millisecond)
+	for _, ev := range sink.EventHistory() {
+		require.NotEqual(t, rootevent.KindRegionSplitPlanned, ev.rootKind)
+		require.NotEqual(t, rootevent.KindRegionSplitCommitted, ev.rootKind)
+	}
 }
 
 func TestStoreProposeMergeApplies(t *testing.T) {
