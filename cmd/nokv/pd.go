@@ -191,7 +191,7 @@ func runPDCmd(w io.Writer, args []string) error {
 						continue
 					}
 					switch next.CatchUpAction() {
-					case rootstorage.TailCatchUpRefreshState:
+					case rootstorage.TailCatchUpRefreshState, rootstorage.TailCatchUpInstallBootstrap:
 						if err := svc.ReloadFromStorage(); err != nil {
 							continue
 						}

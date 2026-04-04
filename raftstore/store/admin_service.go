@@ -168,17 +168,15 @@ func (s *Store) planSplit(parentID uint64, childMeta localmeta.RegionMeta, split
 			Child:          metacodec.LocalRegionMetaToDescriptorProto(transition.child),
 		},
 	}
+	data, err := proto.Marshal(command)
+	if err != nil {
+		return transitionPlan{}, err
+	}
 	return transitionPlan{
-		RegionID: parentID,
-		Event:    plannedSplitEvent(transition),
-		Action:   "split",
-		Propose: func(peerRef *peer.Peer) error {
-			data, err := proto.Marshal(command)
-			if err != nil {
-				return err
-			}
-			return peerRef.ProposeAdmin(data)
-		},
+		RegionID:     parentID,
+		Event:        plannedSplitEvent(transition),
+		Action:       "split",
+		AdminPayload: data,
 	}, nil
 }
 
@@ -200,17 +198,15 @@ func (s *Store) planMerge(targetRegionID, sourceRegionID uint64) (transitionPlan
 			SourceRegionId: sourceRegionID,
 		},
 	}
+	data, err := proto.Marshal(command)
+	if err != nil {
+		return transitionPlan{}, err
+	}
 	return transitionPlan{
-		RegionID: targetRegionID,
-		Event:    plannedMergeEvent(transition),
-		Action:   "merge",
-		Propose: func(peerRef *peer.Peer) error {
-			data, err := proto.Marshal(command)
-			if err != nil {
-				return err
-			}
-			return peerRef.ProposeAdmin(data)
-		},
+		RegionID:     targetRegionID,
+		Event:        plannedMergeEvent(transition),
+		Action:       "merge",
+		AdminPayload: data,
 	}, nil
 }
 

@@ -47,3 +47,33 @@ func TestStoreReadCommittedReportsFellBehindCompaction(t *testing.T) {
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 2}, tail.Records[0].Cursor)
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 3}, tail.TailCursor(rootstate.Cursor{}))
 }
+
+func TestStoreInstallBootstrapNormalizesTailOrigin(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(vfs.Ensure(nil), dir)
+
+	observed := rootstorage.ObservedCommitted{
+		Checkpoint: rootstorage.Checkpoint{
+			Snapshot:   rootstate.Snapshot{State: rootstate.State{LastCommitted: rootstate.Cursor{Term: 1, Index: 2}}},
+			TailOffset: 64,
+		},
+		Tail: rootstorage.CommittedTail{
+			RequestedOffset: 32,
+			StartOffset:     64,
+			EndOffset:       96,
+			Records: []rootstorage.CommittedEvent{
+				{Cursor: rootstate.Cursor{Term: 1, Index: 2}, Event: rootevent.StoreJoined(2, "s2")},
+			},
+		},
+	}
+	require.NoError(t, store.InstallBootstrap(observed))
+
+	checkpoint, err := store.LoadCheckpoint()
+	require.NoError(t, err)
+	require.Equal(t, int64(0), checkpoint.TailOffset)
+
+	tail, err := store.ReadCommitted(0)
+	require.NoError(t, err)
+	require.Len(t, tail.Records, 1)
+	require.Equal(t, rootstate.Cursor{Term: 1, Index: 2}, tail.Records[0].Cursor)
+}
