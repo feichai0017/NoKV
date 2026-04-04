@@ -1,6 +1,18 @@
 package state
 
-import rootevent "github.com/feichai0017/NoKV/meta/root/event"
+import (
+	"fmt"
+
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
+)
+
+type PeerChangeLifecycleDecision uint8
+
+const (
+	PeerChangeLifecycleApply PeerChangeLifecycleDecision = iota
+	PeerChangeLifecycleSkip
+)
 
 func IsPeerChangePlannedEvent(event rootevent.Event) bool {
 	switch event.Kind {
@@ -54,4 +66,38 @@ func PendingPeerChangeMatchesEvent(change PendingPeerChange, event rootevent.Eve
 		change.StoreID == expected.StoreID &&
 		change.PeerID == expected.PeerID &&
 		change.Target.Equal(expected.Target)
+}
+
+func EvaluatePeerChangeLifecycle(pendingPeerChanges map[uint64]PendingPeerChange, current descriptor.Descriptor, hasCurrent bool, event rootevent.Event) (PeerChangeLifecycleDecision, error) {
+	if event.PeerChange == nil {
+		return PeerChangeLifecycleApply, nil
+	}
+	change, pending := pendingPeerChanges[event.PeerChange.RegionID]
+	switch event.Kind {
+	case rootevent.KindPeerAdditionPlanned, rootevent.KindPeerRemovalPlanned:
+		if !pending {
+			return PeerChangeLifecycleApply, nil
+		}
+		if change.Stage == PendingPeerChangeStagePlanned && PendingPeerChangeMatchesEvent(change, event) {
+			return PeerChangeLifecycleSkip, nil
+		}
+		if change.Stage == PendingPeerChangeStageApplied {
+			return PeerChangeLifecycleApply, nil
+		}
+		return PeerChangeLifecycleApply, fmt.Errorf("pending peer change already exists for region %d", event.PeerChange.RegionID)
+	case rootevent.KindPeerAdded, rootevent.KindPeerRemoved:
+		if pending {
+			if PendingPeerChangeMatchesEvent(change, event) {
+				if change.Stage == PendingPeerChangeStageApplied {
+					return PeerChangeLifecycleSkip, nil
+				}
+				return PeerChangeLifecycleApply, nil
+			}
+			return PeerChangeLifecycleApply, fmt.Errorf("peer change apply does not match pending target for region %d", event.PeerChange.RegionID)
+		}
+		if hasCurrent && current.Equal(event.PeerChange.Region) {
+			return PeerChangeLifecycleSkip, nil
+		}
+	}
+	return PeerChangeLifecycleApply, nil
 }

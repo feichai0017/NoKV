@@ -216,35 +216,9 @@ func (s *Service) guardPeerChangeLifecycle(event rootevent.Event) (bool, error) 
 	if err != nil {
 		return false, fmt.Errorf("load rooted snapshot: %w", err)
 	}
-	change, pending := snapshot.PendingPeerChanges[event.PeerChange.RegionID]
-	switch event.Kind {
-	case rootevent.KindPeerAdditionPlanned, rootevent.KindPeerRemovalPlanned:
-		if !pending {
-			return false, nil
-		}
-		if change.Stage == rootstate.PendingPeerChangeStagePlanned && rootstate.PendingPeerChangeMatchesEvent(change, event) {
-			return true, nil
-		}
-		if change.Stage == rootstate.PendingPeerChangeStageApplied {
-			return false, nil
-		}
-		return false, fmt.Errorf("pending peer change already exists for region %d", event.PeerChange.RegionID)
-	case rootevent.KindPeerAdded, rootevent.KindPeerRemoved:
-		if pending {
-			if rootstate.PendingPeerChangeMatchesEvent(change, event) {
-				if change.Stage == rootstate.PendingPeerChangeStageApplied {
-					return true, nil
-				}
-				return false, nil
-			}
-			return false, fmt.Errorf("peer change apply does not match pending target for region %d", event.PeerChange.RegionID)
-		}
-		current, ok := s.cluster.GetRegionDescriptor(event.PeerChange.RegionID)
-		if ok && current.Equal(event.PeerChange.Region) {
-			return true, nil
-		}
-	}
-	return false, nil
+	current, ok := s.cluster.GetRegionDescriptor(event.PeerChange.RegionID)
+	decision, err := rootstate.EvaluatePeerChangeLifecycle(snapshot.PendingPeerChanges, current, ok, event)
+	return decision == rootstate.PeerChangeLifecycleSkip, err
 }
 
 // RemoveRegion deletes region metadata from the PD in-memory catalog.
