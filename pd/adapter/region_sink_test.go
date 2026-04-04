@@ -118,7 +118,7 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 		PD: pd,
 	})
 
-	sink.PublishRegionDescriptor(context.Background(), testDescriptor(10, []byte("a"), []byte("z"), metaregion.Epoch{
+	sink.ReportRegionHeartbeat(context.Background(), testDescriptor(10, []byte("a"), []byte("z"), metaregion.Epoch{
 		Version:     1,
 		ConfVersion: 1,
 	}, []metaregion.Peer{{StoreID: 1, PeerID: 101}}))
@@ -178,7 +178,7 @@ func TestSchedulerClientNoopOnZeroIDs(t *testing.T) {
 	pd := &fakePDClient{}
 	sink := NewSchedulerClient(SchedulerClientConfig{PD: pd})
 	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 0})
-	sink.PublishRegionDescriptor(context.Background(), descriptor.Descriptor{})
+	sink.ReportRegionHeartbeat(context.Background(), descriptor.Descriptor{})
 	require.NoError(t, sink.PublishRootEvent(context.Background(), rootevent.Event{}))
 	require.Empty(t, pd.storeReqs)
 	require.Empty(t, pd.regionReqs)

@@ -61,7 +61,7 @@ func newTestSchedulerSink() *testSchedulerSink {
 	}
 }
 
-func (s *testSchedulerSink) PublishRegionDescriptor(_ context.Context, desc descriptor.Descriptor) {
+func (s *testSchedulerSink) ReportRegionHeartbeat(_ context.Context, desc descriptor.Descriptor) {
 	if s == nil || desc.RegionID == 0 {
 		return
 	}
@@ -181,7 +181,7 @@ func (s *degradedSchedulerSink) Status() SchedulerStatus {
 	return s.status
 }
 
-func (s *slowSchedulerSink) PublishRegionDescriptor(ctx context.Context, desc descriptor.Descriptor) {
+func (s *slowSchedulerSink) ReportRegionHeartbeat(ctx context.Context, desc descriptor.Descriptor) {
 	if s.publishDelay > 0 {
 		select {
 		case <-time.After(s.publishDelay):
@@ -189,7 +189,7 @@ func (s *slowSchedulerSink) PublishRegionDescriptor(ctx context.Context, desc de
 			return
 		}
 	}
-	s.testSchedulerSink.PublishRegionDescriptor(ctx, desc)
+	s.testSchedulerSink.ReportRegionHeartbeat(ctx, desc)
 }
 
 func (s *slowSchedulerSink) PublishRootEvent(ctx context.Context, event rootevent.Event) error {
