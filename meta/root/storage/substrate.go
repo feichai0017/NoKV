@@ -88,6 +88,7 @@ const (
 	TailCatchUpIdle TailCatchUpAction = iota
 	TailCatchUpRefreshState
 	TailCatchUpAcknowledgeWindow
+	TailCatchUpInstallBootstrap
 )
 
 // AdvancedSince reports whether the observed tail view changed since prev.
@@ -127,6 +128,35 @@ func CloneCommittedTail(in CommittedTail) CommittedTail {
 	}
 }
 
+// Installable normalizes one retained tail for bootstrap installation into a
+// fresh substrate instance. Installation rewrites the retained stream as a new
+// origin, so byte offsets are reset.
+func (s CommittedTail) Installable() CommittedTail {
+	out := CloneCommittedTail(s)
+	out.RequestedOffset = 0
+	out.StartOffset = 0
+	out.EndOffset = 0
+	return out
+}
+
+// Installable normalizes one checkpoint for bootstrap installation into a
+// fresh substrate instance. Installation rewrites the retained stream as a new
+// origin, so the next retained-tail offset resets to zero.
+func (c Checkpoint) Installable() Checkpoint {
+	out := CloneCheckpoint(c)
+	out.TailOffset = 0
+	return out
+}
+
+// Installable normalizes one observed view for bootstrap installation into a
+// fresh substrate instance.
+func (o ObservedCommitted) Installable() ObservedCommitted {
+	out := CloneObservedCommitted(o)
+	out.Checkpoint = out.Checkpoint.Installable()
+	out.Tail = out.Tail.Installable()
+	return out
+}
+
 // PlanTailCompaction trims the retained committed tail down to at most
 // maxRetained records and reports the resulting retain-from cursor.
 func PlanTailCompaction(records []CommittedEvent, lastCommitted rootstate.Cursor, maxRetained int) TailCompactionPlan {
@@ -143,6 +173,16 @@ func PlanTailCompaction(records []CommittedEvent, lastCommitted rootstate.Cursor
 		Tail:       tail,
 		RetainFrom: tail.RetainFrom(lastCommitted),
 		Compacted:  true,
+	}
+}
+
+// Observed packages one compaction decision into one installable observed view
+// so callers can publish compaction through the same install contract used by
+// bootstrap and recovery.
+func (p TailCompactionPlan) Observed(snapshot rootstate.Snapshot) ObservedCommitted {
+	return ObservedCommitted{
+		Checkpoint: Checkpoint{Snapshot: rootstate.CloneSnapshot(snapshot), TailOffset: 0},
+		Tail:       p.Tail.Installable(),
 	}
 }
 
@@ -260,6 +300,9 @@ func (a TailAdvance) Kind() TailAdvanceKind {
 // CatchUpAction classifies whether the caller should reload rooted state or
 // only acknowledge a retained-window shift.
 func (a TailAdvance) CatchUpAction() TailCatchUpAction {
+	if a.NeedsBootstrapInstall() {
+		return TailCatchUpInstallBootstrap
+	}
 	switch a.Kind() {
 	case TailAdvanceCursorAdvanced:
 		return TailCatchUpRefreshState
@@ -270,10 +313,22 @@ func (a TailAdvance) CatchUpAction() TailCatchUpAction {
 	}
 }
 
-// ShouldRefreshState reports whether the observed tail advance carries new
-// committed truth that should be reloaded into a follower view.
-func (a TailAdvance) ShouldRefreshState() bool {
-	return a.CatchUpAction() == TailCatchUpRefreshState
+// NeedsBootstrapInstall reports whether the caller has already fallen behind
+// the retained committed tail and therefore must reload/install one bootstrap
+// image instead of replaying tail deltas.
+func (a TailAdvance) NeedsBootstrapInstall() bool {
+	return a.Advanced() && rootstate.CursorAfter(a.Observed.RetainFrom(), a.After.Cursor)
+}
+
+// ShouldReloadState reports whether the observed tail advance carries rooted
+// truth that should be reloaded into a follower view.
+func (a TailAdvance) ShouldReloadState() bool {
+	switch a.CatchUpAction() {
+	case TailCatchUpRefreshState, TailCatchUpInstallBootstrap:
+		return true
+	default:
+		return false
+	}
 }
 
 // FellBehind reports whether the observed retained tail had to fall back past

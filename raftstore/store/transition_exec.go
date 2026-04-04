@@ -6,14 +6,16 @@ import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
 type transitionPlan struct {
-	RegionID uint64
-	Event    rootevent.Event
-	Action   string
-	Noop     bool
-	Propose  func(*peer.Peer) error
+	RegionID     uint64
+	Event        rootevent.Event
+	Action       string
+	Noop         bool
+	ConfChange   *raftpb.ConfChangeV2
+	AdminPayload []byte
 }
 
 type terminalTransition struct {
@@ -53,26 +55,6 @@ func (s *Store) publishPlannedRootEvent(regionID uint64, event rootevent.Event, 
 	return nil
 }
 
-func (s *Store) executePlannedTransition(regionID uint64, event rootevent.Event, action string, propose func(*peer.Peer) error) error {
-	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
-	}
-	if regionID == 0 {
-		return fmt.Errorf("raftstore: region id is zero")
-	}
-	if propose == nil {
-		return fmt.Errorf("raftstore: transition propose func is nil")
-	}
-	if err := s.publishPlannedRootEvent(regionID, event, action); err != nil {
-		return err
-	}
-	peerRef, err := s.leaderPeer(regionID)
-	if err != nil {
-		return err
-	}
-	return propose(peerRef)
-}
-
 func (s *Store) executeTransitionPlan(plan transitionPlan) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
@@ -83,10 +65,24 @@ func (s *Store) executeTransitionPlan(plan transitionPlan) error {
 	if plan.RegionID == 0 {
 		return fmt.Errorf("raftstore: transition region id is zero")
 	}
-	if plan.Propose == nil {
-		return fmt.Errorf("raftstore: transition propose func is nil")
+	if plan.ConfChange == nil && len(plan.AdminPayload) == 0 {
+		return fmt.Errorf("raftstore: transition proposal is empty")
 	}
-	return s.executePlannedTransition(plan.RegionID, plan.Event, plan.Action, plan.Propose)
+	if err := s.publishPlannedRootEvent(plan.RegionID, plan.Event, plan.Action); err != nil {
+		return err
+	}
+	peerRef, err := s.leaderPeer(plan.RegionID)
+	if err != nil {
+		return err
+	}
+	switch {
+	case plan.ConfChange != nil:
+		return peerRef.ProposeConfChange(*plan.ConfChange)
+	case len(plan.AdminPayload) > 0:
+		return peerRef.ProposeAdmin(plan.AdminPayload)
+	default:
+		return fmt.Errorf("raftstore: transition proposal is empty")
+	}
 }
 
 func (s *Store) enqueueAppliedRootEvent(event rootevent.Event) {

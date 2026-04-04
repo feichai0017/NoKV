@@ -68,7 +68,8 @@ func TestObserveCommittedDerivesLastCursorAndRetainFrom(t *testing.T) {
 	require.False(t, advance.WindowShifted())
 	require.Equal(t, TailAdvanceCursorAdvanced, advance.Kind())
 	require.Equal(t, TailCatchUpRefreshState, advance.CatchUpAction())
-	require.True(t, advance.ShouldRefreshState())
+	require.False(t, advance.NeedsBootstrapInstall())
+	require.True(t, advance.ShouldReloadState())
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 6}, advance.LastCursor())
 	require.True(t, advance.FellBehind())
 }
@@ -97,10 +98,65 @@ func TestTailAdvanceClassifiesWindowShiftWithoutCursorAdvance(t *testing.T) {
 	require.True(t, advance.WindowShifted())
 	require.Equal(t, TailAdvanceWindowShifted, advance.Kind())
 	require.Equal(t, TailCatchUpAcknowledgeWindow, advance.CatchUpAction())
-	require.False(t, advance.ShouldRefreshState())
+	require.False(t, advance.NeedsBootstrapInstall())
+	require.False(t, advance.ShouldReloadState())
 	require.True(t, advance.FellBehind())
 	require.Equal(t, TailWindow{RequestedOffset: 10, StartOffset: 12, EndOffset: 16}, advance.Window())
 	require.False(t, advance.Window().Empty())
+}
+
+func TestTailAdvanceDetectsBootstrapInstall(t *testing.T) {
+	advance := TailAdvance{
+		After: TailToken{
+			Cursor:   rootstate.Cursor{Term: 3, Index: 7},
+			Revision: 4,
+		},
+		Token: TailToken{
+			Cursor:   rootstate.Cursor{Term: 3, Index: 9},
+			Revision: 5,
+		},
+		Observed: ObservedCommitted{
+			Checkpoint: Checkpoint{
+				Snapshot: rootstate.Snapshot{
+					State: rootstate.State{LastCommitted: rootstate.Cursor{Term: 3, Index: 9}},
+				},
+			},
+			Tail: CommittedTail{
+				RequestedOffset: 0,
+				StartOffset:     12,
+				EndOffset:       16,
+				Records: []CommittedEvent{
+					{Cursor: rootstate.Cursor{Term: 3, Index: 9}, Event: rootevent.StoreJoined(1, "a")},
+				},
+			},
+		},
+	}
+	require.True(t, advance.NeedsBootstrapInstall())
+	require.Equal(t, TailCatchUpInstallBootstrap, advance.CatchUpAction())
+	require.True(t, advance.ShouldReloadState())
+}
+
+func TestObservedCommittedInstallableResetsTailOrigin(t *testing.T) {
+	observed := ObservedCommitted{
+		Checkpoint: Checkpoint{
+			Snapshot:   rootstate.Snapshot{State: rootstate.State{LastCommitted: rootstate.Cursor{Term: 1, Index: 3}}},
+			TailOffset: 48,
+		},
+		Tail: CommittedTail{
+			RequestedOffset: 16,
+			StartOffset:     48,
+			EndOffset:       96,
+			Records: []CommittedEvent{
+				{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Event: rootevent.StoreJoined(1, "a")},
+			},
+		},
+	}
+	installable := observed.Installable()
+	require.Equal(t, int64(0), installable.Checkpoint.TailOffset)
+	require.Equal(t, int64(0), installable.Tail.RequestedOffset)
+	require.Equal(t, int64(0), installable.Tail.StartOffset)
+	require.Equal(t, int64(0), installable.Tail.EndOffset)
+	require.Len(t, installable.Tail.Records, 1)
 }
 
 func TestPlanTailCompaction(t *testing.T) {
