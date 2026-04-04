@@ -70,6 +70,278 @@ func (SchedulerOperationType) EnumDescriptor() ([]byte, []int) {
 	return file_pd_pd_proto_rawDescGZIP(), []int{0}
 }
 
+type TransitionKind int32
+
+const (
+	TransitionKind_TRANSITION_KIND_UNSPECIFIED  TransitionKind = 0
+	TransitionKind_TRANSITION_KIND_PEER_CHANGE  TransitionKind = 1
+	TransitionKind_TRANSITION_KIND_RANGE_CHANGE TransitionKind = 2
+)
+
+// Enum value maps for TransitionKind.
+var (
+	TransitionKind_name = map[int32]string{
+		0: "TRANSITION_KIND_UNSPECIFIED",
+		1: "TRANSITION_KIND_PEER_CHANGE",
+		2: "TRANSITION_KIND_RANGE_CHANGE",
+	}
+	TransitionKind_value = map[string]int32{
+		"TRANSITION_KIND_UNSPECIFIED":  0,
+		"TRANSITION_KIND_PEER_CHANGE":  1,
+		"TRANSITION_KIND_RANGE_CHANGE": 2,
+	}
+)
+
+func (x TransitionKind) Enum() *TransitionKind {
+	p := new(TransitionKind)
+	*p = x
+	return p
+}
+
+func (x TransitionKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TransitionKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_pd_pd_proto_enumTypes[1].Descriptor()
+}
+
+func (TransitionKind) Type() protoreflect.EnumType {
+	return &file_pd_pd_proto_enumTypes[1]
+}
+
+func (x TransitionKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TransitionKind.Descriptor instead.
+func (TransitionKind) EnumDescriptor() ([]byte, []int) {
+	return file_pd_pd_proto_rawDescGZIP(), []int{1}
+}
+
+type TransitionStatus int32
+
+const (
+	TransitionStatus_TRANSITION_STATUS_UNSPECIFIED TransitionStatus = 0
+	TransitionStatus_TRANSITION_STATUS_OPEN        TransitionStatus = 1
+	TransitionStatus_TRANSITION_STATUS_PENDING     TransitionStatus = 2
+	TransitionStatus_TRANSITION_STATUS_COMPLETED   TransitionStatus = 3
+	TransitionStatus_TRANSITION_STATUS_CONFLICT    TransitionStatus = 4
+	TransitionStatus_TRANSITION_STATUS_SUPERSEDED  TransitionStatus = 5
+	TransitionStatus_TRANSITION_STATUS_CANCELLED   TransitionStatus = 6
+	TransitionStatus_TRANSITION_STATUS_ABORTED     TransitionStatus = 7
+)
+
+// Enum value maps for TransitionStatus.
+var (
+	TransitionStatus_name = map[int32]string{
+		0: "TRANSITION_STATUS_UNSPECIFIED",
+		1: "TRANSITION_STATUS_OPEN",
+		2: "TRANSITION_STATUS_PENDING",
+		3: "TRANSITION_STATUS_COMPLETED",
+		4: "TRANSITION_STATUS_CONFLICT",
+		5: "TRANSITION_STATUS_SUPERSEDED",
+		6: "TRANSITION_STATUS_CANCELLED",
+		7: "TRANSITION_STATUS_ABORTED",
+	}
+	TransitionStatus_value = map[string]int32{
+		"TRANSITION_STATUS_UNSPECIFIED": 0,
+		"TRANSITION_STATUS_OPEN":        1,
+		"TRANSITION_STATUS_PENDING":     2,
+		"TRANSITION_STATUS_COMPLETED":   3,
+		"TRANSITION_STATUS_CONFLICT":    4,
+		"TRANSITION_STATUS_SUPERSEDED":  5,
+		"TRANSITION_STATUS_CANCELLED":   6,
+		"TRANSITION_STATUS_ABORTED":     7,
+	}
+)
+
+func (x TransitionStatus) Enum() *TransitionStatus {
+	p := new(TransitionStatus)
+	*p = x
+	return p
+}
+
+func (x TransitionStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TransitionStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_pd_pd_proto_enumTypes[2].Descriptor()
+}
+
+func (TransitionStatus) Type() protoreflect.EnumType {
+	return &file_pd_pd_proto_enumTypes[2]
+}
+
+func (x TransitionStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TransitionStatus.Descriptor instead.
+func (TransitionStatus) EnumDescriptor() ([]byte, []int) {
+	return file_pd_pd_proto_rawDescGZIP(), []int{2}
+}
+
+type TransitionRetryClass int32
+
+const (
+	TransitionRetryClass_TRANSITION_RETRY_CLASS_NONE      TransitionRetryClass = 0
+	TransitionRetryClass_TRANSITION_RETRY_CLASS_CONFLICT  TransitionRetryClass = 1
+	TransitionRetryClass_TRANSITION_RETRY_CLASS_TRANSIENT TransitionRetryClass = 2
+)
+
+// Enum value maps for TransitionRetryClass.
+var (
+	TransitionRetryClass_name = map[int32]string{
+		0: "TRANSITION_RETRY_CLASS_NONE",
+		1: "TRANSITION_RETRY_CLASS_CONFLICT",
+		2: "TRANSITION_RETRY_CLASS_TRANSIENT",
+	}
+	TransitionRetryClass_value = map[string]int32{
+		"TRANSITION_RETRY_CLASS_NONE":      0,
+		"TRANSITION_RETRY_CLASS_CONFLICT":  1,
+		"TRANSITION_RETRY_CLASS_TRANSIENT": 2,
+	}
+)
+
+func (x TransitionRetryClass) Enum() *TransitionRetryClass {
+	p := new(TransitionRetryClass)
+	*p = x
+	return p
+}
+
+func (x TransitionRetryClass) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TransitionRetryClass) Descriptor() protoreflect.EnumDescriptor {
+	return file_pd_pd_proto_enumTypes[3].Descriptor()
+}
+
+func (TransitionRetryClass) Type() protoreflect.EnumType {
+	return &file_pd_pd_proto_enumTypes[3]
+}
+
+func (x TransitionRetryClass) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TransitionRetryClass.Descriptor instead.
+func (TransitionRetryClass) EnumDescriptor() ([]byte, []int) {
+	return file_pd_pd_proto_rawDescGZIP(), []int{3}
+}
+
+type TransitionReason int32
+
+const (
+	TransitionReason_TRANSITION_REASON_NONE                TransitionReason = 0
+	TransitionReason_TRANSITION_REASON_OPEN_APPLY          TransitionReason = 1
+	TransitionReason_TRANSITION_REASON_MATCHING_PENDING    TransitionReason = 2
+	TransitionReason_TRANSITION_REASON_ALREADY_COMPLETED   TransitionReason = 3
+	TransitionReason_TRANSITION_REASON_CONFLICTING_PENDING TransitionReason = 4
+	TransitionReason_TRANSITION_REASON_SUPERSEDED_TARGET   TransitionReason = 5
+	TransitionReason_TRANSITION_REASON_CANCELLED_TARGET    TransitionReason = 6
+	TransitionReason_TRANSITION_REASON_ABORTED_APPLY       TransitionReason = 7
+)
+
+// Enum value maps for TransitionReason.
+var (
+	TransitionReason_name = map[int32]string{
+		0: "TRANSITION_REASON_NONE",
+		1: "TRANSITION_REASON_OPEN_APPLY",
+		2: "TRANSITION_REASON_MATCHING_PENDING",
+		3: "TRANSITION_REASON_ALREADY_COMPLETED",
+		4: "TRANSITION_REASON_CONFLICTING_PENDING",
+		5: "TRANSITION_REASON_SUPERSEDED_TARGET",
+		6: "TRANSITION_REASON_CANCELLED_TARGET",
+		7: "TRANSITION_REASON_ABORTED_APPLY",
+	}
+	TransitionReason_value = map[string]int32{
+		"TRANSITION_REASON_NONE":                0,
+		"TRANSITION_REASON_OPEN_APPLY":          1,
+		"TRANSITION_REASON_MATCHING_PENDING":    2,
+		"TRANSITION_REASON_ALREADY_COMPLETED":   3,
+		"TRANSITION_REASON_CONFLICTING_PENDING": 4,
+		"TRANSITION_REASON_SUPERSEDED_TARGET":   5,
+		"TRANSITION_REASON_CANCELLED_TARGET":    6,
+		"TRANSITION_REASON_ABORTED_APPLY":       7,
+	}
+)
+
+func (x TransitionReason) Enum() *TransitionReason {
+	p := new(TransitionReason)
+	*p = x
+	return p
+}
+
+func (x TransitionReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TransitionReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_pd_pd_proto_enumTypes[4].Descriptor()
+}
+
+func (TransitionReason) Type() protoreflect.EnumType {
+	return &file_pd_pd_proto_enumTypes[4]
+}
+
+func (x TransitionReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TransitionReason.Descriptor instead.
+func (TransitionReason) EnumDescriptor() ([]byte, []int) {
+	return file_pd_pd_proto_rawDescGZIP(), []int{4}
+}
+
+type TransitionDecision int32
+
+const (
+	TransitionDecision_TRANSITION_DECISION_APPLY TransitionDecision = 0
+	TransitionDecision_TRANSITION_DECISION_SKIP  TransitionDecision = 1
+)
+
+// Enum value maps for TransitionDecision.
+var (
+	TransitionDecision_name = map[int32]string{
+		0: "TRANSITION_DECISION_APPLY",
+		1: "TRANSITION_DECISION_SKIP",
+	}
+	TransitionDecision_value = map[string]int32{
+		"TRANSITION_DECISION_APPLY": 0,
+		"TRANSITION_DECISION_SKIP":  1,
+	}
+)
+
+func (x TransitionDecision) Enum() *TransitionDecision {
+	p := new(TransitionDecision)
+	*p = x
+	return p
+}
+
+func (x TransitionDecision) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TransitionDecision) Descriptor() protoreflect.EnumDescriptor {
+	return file_pd_pd_proto_enumTypes[5].Descriptor()
+}
+
+func (TransitionDecision) Type() protoreflect.EnumType {
+	return &file_pd_pd_proto_enumTypes[5]
+}
+
+func (x TransitionDecision) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TransitionDecision.Descriptor instead.
+func (TransitionDecision) EnumDescriptor() ([]byte, []int) {
+	return file_pd_pd_proto_rawDescGZIP(), []int{5}
+}
+
 type StoreHeartbeatRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	StoreId       uint64                 `protobuf:"varint,1,opt,name=store_id,json=storeId,proto3" json:"store_id,omitempty"`
@@ -450,6 +722,350 @@ func (x *PublishRootEventResponse) GetAccepted() bool {
 	return false
 }
 
+type TransitionEntry struct {
+	state              protoimpl.MessageState       `protogen:"open.v1"`
+	Key                uint64                       `protobuf:"varint,1,opt,name=key,proto3" json:"key,omitempty"`
+	Kind               TransitionKind               `protobuf:"varint,2,opt,name=kind,proto3,enum=nokv.pd.v1.TransitionKind" json:"kind,omitempty"`
+	Status             TransitionStatus             `protobuf:"varint,3,opt,name=status,proto3,enum=nokv.pd.v1.TransitionStatus" json:"status,omitempty"`
+	RetryClass         TransitionRetryClass         `protobuf:"varint,4,opt,name=retry_class,json=retryClass,proto3,enum=nokv.pd.v1.TransitionRetryClass" json:"retry_class,omitempty"`
+	Reason             TransitionReason             `protobuf:"varint,5,opt,name=reason,proto3,enum=nokv.pd.v1.TransitionReason" json:"reason,omitempty"`
+	PendingPeerChange  *meta.RootPendingPeerChange  `protobuf:"bytes,6,opt,name=pending_peer_change,json=pendingPeerChange,proto3" json:"pending_peer_change,omitempty"`
+	PendingRangeChange *meta.RootPendingRangeChange `protobuf:"bytes,7,opt,name=pending_range_change,json=pendingRangeChange,proto3" json:"pending_range_change,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *TransitionEntry) Reset() {
+	*x = TransitionEntry{}
+	mi := &file_pd_pd_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TransitionEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TransitionEntry) ProtoMessage() {}
+
+func (x *TransitionEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_pd_pd_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TransitionEntry.ProtoReflect.Descriptor instead.
+func (*TransitionEntry) Descriptor() ([]byte, []int) {
+	return file_pd_pd_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *TransitionEntry) GetKey() uint64 {
+	if x != nil {
+		return x.Key
+	}
+	return 0
+}
+
+func (x *TransitionEntry) GetKind() TransitionKind {
+	if x != nil {
+		return x.Kind
+	}
+	return TransitionKind_TRANSITION_KIND_UNSPECIFIED
+}
+
+func (x *TransitionEntry) GetStatus() TransitionStatus {
+	if x != nil {
+		return x.Status
+	}
+	return TransitionStatus_TRANSITION_STATUS_UNSPECIFIED
+}
+
+func (x *TransitionEntry) GetRetryClass() TransitionRetryClass {
+	if x != nil {
+		return x.RetryClass
+	}
+	return TransitionRetryClass_TRANSITION_RETRY_CLASS_NONE
+}
+
+func (x *TransitionEntry) GetReason() TransitionReason {
+	if x != nil {
+		return x.Reason
+	}
+	return TransitionReason_TRANSITION_REASON_NONE
+}
+
+func (x *TransitionEntry) GetPendingPeerChange() *meta.RootPendingPeerChange {
+	if x != nil {
+		return x.PendingPeerChange
+	}
+	return nil
+}
+
+func (x *TransitionEntry) GetPendingRangeChange() *meta.RootPendingRangeChange {
+	if x != nil {
+		return x.PendingRangeChange
+	}
+	return nil
+}
+
+type TransitionAssessment struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           uint64                 `protobuf:"varint,1,opt,name=key,proto3" json:"key,omitempty"`
+	Kind          TransitionKind         `protobuf:"varint,2,opt,name=kind,proto3,enum=nokv.pd.v1.TransitionKind" json:"kind,omitempty"`
+	Status        TransitionStatus       `protobuf:"varint,3,opt,name=status,proto3,enum=nokv.pd.v1.TransitionStatus" json:"status,omitempty"`
+	RetryClass    TransitionRetryClass   `protobuf:"varint,4,opt,name=retry_class,json=retryClass,proto3,enum=nokv.pd.v1.TransitionRetryClass" json:"retry_class,omitempty"`
+	Reason        TransitionReason       `protobuf:"varint,5,opt,name=reason,proto3,enum=nokv.pd.v1.TransitionReason" json:"reason,omitempty"`
+	Decision      TransitionDecision     `protobuf:"varint,6,opt,name=decision,proto3,enum=nokv.pd.v1.TransitionDecision" json:"decision,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TransitionAssessment) Reset() {
+	*x = TransitionAssessment{}
+	mi := &file_pd_pd_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TransitionAssessment) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TransitionAssessment) ProtoMessage() {}
+
+func (x *TransitionAssessment) ProtoReflect() protoreflect.Message {
+	mi := &file_pd_pd_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TransitionAssessment.ProtoReflect.Descriptor instead.
+func (*TransitionAssessment) Descriptor() ([]byte, []int) {
+	return file_pd_pd_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *TransitionAssessment) GetKey() uint64 {
+	if x != nil {
+		return x.Key
+	}
+	return 0
+}
+
+func (x *TransitionAssessment) GetKind() TransitionKind {
+	if x != nil {
+		return x.Kind
+	}
+	return TransitionKind_TRANSITION_KIND_UNSPECIFIED
+}
+
+func (x *TransitionAssessment) GetStatus() TransitionStatus {
+	if x != nil {
+		return x.Status
+	}
+	return TransitionStatus_TRANSITION_STATUS_UNSPECIFIED
+}
+
+func (x *TransitionAssessment) GetRetryClass() TransitionRetryClass {
+	if x != nil {
+		return x.RetryClass
+	}
+	return TransitionRetryClass_TRANSITION_RETRY_CLASS_NONE
+}
+
+func (x *TransitionAssessment) GetReason() TransitionReason {
+	if x != nil {
+		return x.Reason
+	}
+	return TransitionReason_TRANSITION_REASON_NONE
+}
+
+func (x *TransitionAssessment) GetDecision() TransitionDecision {
+	if x != nil {
+		return x.Decision
+	}
+	return TransitionDecision_TRANSITION_DECISION_APPLY
+}
+
+type ListTransitionsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListTransitionsRequest) Reset() {
+	*x = ListTransitionsRequest{}
+	mi := &file_pd_pd_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListTransitionsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTransitionsRequest) ProtoMessage() {}
+
+func (x *ListTransitionsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pd_pd_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTransitionsRequest.ProtoReflect.Descriptor instead.
+func (*ListTransitionsRequest) Descriptor() ([]byte, []int) {
+	return file_pd_pd_proto_rawDescGZIP(), []int{9}
+}
+
+type ListTransitionsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Entries       []*TransitionEntry     `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListTransitionsResponse) Reset() {
+	*x = ListTransitionsResponse{}
+	mi := &file_pd_pd_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListTransitionsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTransitionsResponse) ProtoMessage() {}
+
+func (x *ListTransitionsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pd_pd_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTransitionsResponse.ProtoReflect.Descriptor instead.
+func (*ListTransitionsResponse) Descriptor() ([]byte, []int) {
+	return file_pd_pd_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ListTransitionsResponse) GetEntries() []*TransitionEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+type AssessRootEventRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Event         *meta.RootEvent        `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AssessRootEventRequest) Reset() {
+	*x = AssessRootEventRequest{}
+	mi := &file_pd_pd_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssessRootEventRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssessRootEventRequest) ProtoMessage() {}
+
+func (x *AssessRootEventRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pd_pd_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssessRootEventRequest.ProtoReflect.Descriptor instead.
+func (*AssessRootEventRequest) Descriptor() ([]byte, []int) {
+	return file_pd_pd_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *AssessRootEventRequest) GetEvent() *meta.RootEvent {
+	if x != nil {
+		return x.Event
+	}
+	return nil
+}
+
+type AssessRootEventResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Assessment    *TransitionAssessment  `protobuf:"bytes,1,opt,name=assessment,proto3" json:"assessment,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AssessRootEventResponse) Reset() {
+	*x = AssessRootEventResponse{}
+	mi := &file_pd_pd_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssessRootEventResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssessRootEventResponse) ProtoMessage() {}
+
+func (x *AssessRootEventResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pd_pd_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssessRootEventResponse.ProtoReflect.Descriptor instead.
+func (*AssessRootEventResponse) Descriptor() ([]byte, []int) {
+	return file_pd_pd_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *AssessRootEventResponse) GetAssessment() *TransitionAssessment {
+	if x != nil {
+		return x.Assessment
+	}
+	return nil
+}
+
 type RemoveRegionRequest struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	RegionId             uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
@@ -460,7 +1076,7 @@ type RemoveRegionRequest struct {
 
 func (x *RemoveRegionRequest) Reset() {
 	*x = RemoveRegionRequest{}
-	mi := &file_pd_pd_proto_msgTypes[7]
+	mi := &file_pd_pd_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -472,7 +1088,7 @@ func (x *RemoveRegionRequest) String() string {
 func (*RemoveRegionRequest) ProtoMessage() {}
 
 func (x *RemoveRegionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pd_pd_proto_msgTypes[7]
+	mi := &file_pd_pd_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -485,7 +1101,7 @@ func (x *RemoveRegionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveRegionRequest.ProtoReflect.Descriptor instead.
 func (*RemoveRegionRequest) Descriptor() ([]byte, []int) {
-	return file_pd_pd_proto_rawDescGZIP(), []int{7}
+	return file_pd_pd_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *RemoveRegionRequest) GetRegionId() uint64 {
@@ -511,7 +1127,7 @@ type RemoveRegionResponse struct {
 
 func (x *RemoveRegionResponse) Reset() {
 	*x = RemoveRegionResponse{}
-	mi := &file_pd_pd_proto_msgTypes[8]
+	mi := &file_pd_pd_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -523,7 +1139,7 @@ func (x *RemoveRegionResponse) String() string {
 func (*RemoveRegionResponse) ProtoMessage() {}
 
 func (x *RemoveRegionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pd_pd_proto_msgTypes[8]
+	mi := &file_pd_pd_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -536,7 +1152,7 @@ func (x *RemoveRegionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveRegionResponse.ProtoReflect.Descriptor instead.
 func (*RemoveRegionResponse) Descriptor() ([]byte, []int) {
-	return file_pd_pd_proto_rawDescGZIP(), []int{8}
+	return file_pd_pd_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *RemoveRegionResponse) GetRemoved() bool {
@@ -555,7 +1171,7 @@ type GetRegionByKeyRequest struct {
 
 func (x *GetRegionByKeyRequest) Reset() {
 	*x = GetRegionByKeyRequest{}
-	mi := &file_pd_pd_proto_msgTypes[9]
+	mi := &file_pd_pd_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -567,7 +1183,7 @@ func (x *GetRegionByKeyRequest) String() string {
 func (*GetRegionByKeyRequest) ProtoMessage() {}
 
 func (x *GetRegionByKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pd_pd_proto_msgTypes[9]
+	mi := &file_pd_pd_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -580,7 +1196,7 @@ func (x *GetRegionByKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRegionByKeyRequest.ProtoReflect.Descriptor instead.
 func (*GetRegionByKeyRequest) Descriptor() ([]byte, []int) {
-	return file_pd_pd_proto_rawDescGZIP(), []int{9}
+	return file_pd_pd_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *GetRegionByKeyRequest) GetKey() []byte {
@@ -600,7 +1216,7 @@ type GetRegionByKeyResponse struct {
 
 func (x *GetRegionByKeyResponse) Reset() {
 	*x = GetRegionByKeyResponse{}
-	mi := &file_pd_pd_proto_msgTypes[10]
+	mi := &file_pd_pd_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -612,7 +1228,7 @@ func (x *GetRegionByKeyResponse) String() string {
 func (*GetRegionByKeyResponse) ProtoMessage() {}
 
 func (x *GetRegionByKeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pd_pd_proto_msgTypes[10]
+	mi := &file_pd_pd_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -625,7 +1241,7 @@ func (x *GetRegionByKeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRegionByKeyResponse.ProtoReflect.Descriptor instead.
 func (*GetRegionByKeyResponse) Descriptor() ([]byte, []int) {
-	return file_pd_pd_proto_rawDescGZIP(), []int{10}
+	return file_pd_pd_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetRegionByKeyResponse) GetRegionDescriptor() *meta.RegionDescriptor {
@@ -651,7 +1267,7 @@ type AllocIDRequest struct {
 
 func (x *AllocIDRequest) Reset() {
 	*x = AllocIDRequest{}
-	mi := &file_pd_pd_proto_msgTypes[11]
+	mi := &file_pd_pd_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -663,7 +1279,7 @@ func (x *AllocIDRequest) String() string {
 func (*AllocIDRequest) ProtoMessage() {}
 
 func (x *AllocIDRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pd_pd_proto_msgTypes[11]
+	mi := &file_pd_pd_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -676,7 +1292,7 @@ func (x *AllocIDRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AllocIDRequest.ProtoReflect.Descriptor instead.
 func (*AllocIDRequest) Descriptor() ([]byte, []int) {
-	return file_pd_pd_proto_rawDescGZIP(), []int{11}
+	return file_pd_pd_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *AllocIDRequest) GetCount() uint64 {
@@ -696,7 +1312,7 @@ type AllocIDResponse struct {
 
 func (x *AllocIDResponse) Reset() {
 	*x = AllocIDResponse{}
-	mi := &file_pd_pd_proto_msgTypes[12]
+	mi := &file_pd_pd_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -708,7 +1324,7 @@ func (x *AllocIDResponse) String() string {
 func (*AllocIDResponse) ProtoMessage() {}
 
 func (x *AllocIDResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pd_pd_proto_msgTypes[12]
+	mi := &file_pd_pd_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -721,7 +1337,7 @@ func (x *AllocIDResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AllocIDResponse.ProtoReflect.Descriptor instead.
 func (*AllocIDResponse) Descriptor() ([]byte, []int) {
-	return file_pd_pd_proto_rawDescGZIP(), []int{12}
+	return file_pd_pd_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *AllocIDResponse) GetFirstId() uint64 {
@@ -747,7 +1363,7 @@ type TsoRequest struct {
 
 func (x *TsoRequest) Reset() {
 	*x = TsoRequest{}
-	mi := &file_pd_pd_proto_msgTypes[13]
+	mi := &file_pd_pd_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -759,7 +1375,7 @@ func (x *TsoRequest) String() string {
 func (*TsoRequest) ProtoMessage() {}
 
 func (x *TsoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pd_pd_proto_msgTypes[13]
+	mi := &file_pd_pd_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -772,7 +1388,7 @@ func (x *TsoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TsoRequest.ProtoReflect.Descriptor instead.
 func (*TsoRequest) Descriptor() ([]byte, []int) {
-	return file_pd_pd_proto_rawDescGZIP(), []int{13}
+	return file_pd_pd_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *TsoRequest) GetCount() uint64 {
@@ -792,7 +1408,7 @@ type TsoResponse struct {
 
 func (x *TsoResponse) Reset() {
 	*x = TsoResponse{}
-	mi := &file_pd_pd_proto_msgTypes[14]
+	mi := &file_pd_pd_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -804,7 +1420,7 @@ func (x *TsoResponse) String() string {
 func (*TsoResponse) ProtoMessage() {}
 
 func (x *TsoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pd_pd_proto_msgTypes[14]
+	mi := &file_pd_pd_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -817,7 +1433,7 @@ func (x *TsoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TsoResponse.ProtoReflect.Descriptor instead.
 func (*TsoResponse) Descriptor() ([]byte, []int) {
-	return file_pd_pd_proto_rawDescGZIP(), []int{14}
+	return file_pd_pd_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *TsoResponse) GetTimestamp() uint64 {
@@ -866,7 +1482,33 @@ const file_pd_pd_proto_rawDesc = "" +
 	"\x05event\x18\x01 \x01(\v2\x17.nokv.meta.v1.RootEventR\x05event\x124\n" +
 	"\x16expected_cluster_epoch\x18\x02 \x01(\x04R\x14expectedClusterEpoch\"6\n" +
 	"\x18PublishRootEventResponse\x12\x1a\n" +
-	"\baccepted\x18\x01 \x01(\bR\baccepted\"h\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted\"\xaf\x03\n" +
+	"\x0fTransitionEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\x04R\x03key\x12.\n" +
+	"\x04kind\x18\x02 \x01(\x0e2\x1a.nokv.pd.v1.TransitionKindR\x04kind\x124\n" +
+	"\x06status\x18\x03 \x01(\x0e2\x1c.nokv.pd.v1.TransitionStatusR\x06status\x12A\n" +
+	"\vretry_class\x18\x04 \x01(\x0e2 .nokv.pd.v1.TransitionRetryClassR\n" +
+	"retryClass\x124\n" +
+	"\x06reason\x18\x05 \x01(\x0e2\x1c.nokv.pd.v1.TransitionReasonR\x06reason\x12S\n" +
+	"\x13pending_peer_change\x18\x06 \x01(\v2#.nokv.meta.v1.RootPendingPeerChangeR\x11pendingPeerChange\x12V\n" +
+	"\x14pending_range_change\x18\a \x01(\v2$.nokv.meta.v1.RootPendingRangeChangeR\x12pendingRangeChange\"\xc3\x02\n" +
+	"\x14TransitionAssessment\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\x04R\x03key\x12.\n" +
+	"\x04kind\x18\x02 \x01(\x0e2\x1a.nokv.pd.v1.TransitionKindR\x04kind\x124\n" +
+	"\x06status\x18\x03 \x01(\x0e2\x1c.nokv.pd.v1.TransitionStatusR\x06status\x12A\n" +
+	"\vretry_class\x18\x04 \x01(\x0e2 .nokv.pd.v1.TransitionRetryClassR\n" +
+	"retryClass\x124\n" +
+	"\x06reason\x18\x05 \x01(\x0e2\x1c.nokv.pd.v1.TransitionReasonR\x06reason\x12:\n" +
+	"\bdecision\x18\x06 \x01(\x0e2\x1e.nokv.pd.v1.TransitionDecisionR\bdecision\"\x18\n" +
+	"\x16ListTransitionsRequest\"P\n" +
+	"\x17ListTransitionsResponse\x125\n" +
+	"\aentries\x18\x01 \x03(\v2\x1b.nokv.pd.v1.TransitionEntryR\aentries\"G\n" +
+	"\x16AssessRootEventRequest\x12-\n" +
+	"\x05event\x18\x01 \x01(\v2\x17.nokv.meta.v1.RootEventR\x05event\"[\n" +
+	"\x17AssessRootEventResponse\x12@\n" +
+	"\n" +
+	"assessment\x18\x01 \x01(\v2 .nokv.pd.v1.TransitionAssessmentR\n" +
+	"assessment\"h\n" +
 	"\x13RemoveRegionRequest\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x124\n" +
 	"\x16expected_cluster_epoch\x18\x02 \x01(\x04R\x14expectedClusterEpoch\"0\n" +
@@ -890,11 +1532,42 @@ const file_pd_pd_proto_rawDesc = "" +
 	"\x05count\x18\x02 \x01(\x04R\x05count*i\n" +
 	"\x16SchedulerOperationType\x12!\n" +
 	"\x1dSCHEDULER_OPERATION_TYPE_NONE\x10\x00\x12,\n" +
-	"(SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER\x10\x012\xbd\x04\n" +
+	"(SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER\x10\x01*t\n" +
+	"\x0eTransitionKind\x12\x1f\n" +
+	"\x1bTRANSITION_KIND_UNSPECIFIED\x10\x00\x12\x1f\n" +
+	"\x1bTRANSITION_KIND_PEER_CHANGE\x10\x01\x12 \n" +
+	"\x1cTRANSITION_KIND_RANGE_CHANGE\x10\x02*\x93\x02\n" +
+	"\x10TransitionStatus\x12!\n" +
+	"\x1dTRANSITION_STATUS_UNSPECIFIED\x10\x00\x12\x1a\n" +
+	"\x16TRANSITION_STATUS_OPEN\x10\x01\x12\x1d\n" +
+	"\x19TRANSITION_STATUS_PENDING\x10\x02\x12\x1f\n" +
+	"\x1bTRANSITION_STATUS_COMPLETED\x10\x03\x12\x1e\n" +
+	"\x1aTRANSITION_STATUS_CONFLICT\x10\x04\x12 \n" +
+	"\x1cTRANSITION_STATUS_SUPERSEDED\x10\x05\x12\x1f\n" +
+	"\x1bTRANSITION_STATUS_CANCELLED\x10\x06\x12\x1d\n" +
+	"\x19TRANSITION_STATUS_ABORTED\x10\a*\x82\x01\n" +
+	"\x14TransitionRetryClass\x12\x1f\n" +
+	"\x1bTRANSITION_RETRY_CLASS_NONE\x10\x00\x12#\n" +
+	"\x1fTRANSITION_RETRY_CLASS_CONFLICT\x10\x01\x12$\n" +
+	" TRANSITION_RETRY_CLASS_TRANSIENT\x10\x02*\xc2\x02\n" +
+	"\x10TransitionReason\x12\x1a\n" +
+	"\x16TRANSITION_REASON_NONE\x10\x00\x12 \n" +
+	"\x1cTRANSITION_REASON_OPEN_APPLY\x10\x01\x12&\n" +
+	"\"TRANSITION_REASON_MATCHING_PENDING\x10\x02\x12'\n" +
+	"#TRANSITION_REASON_ALREADY_COMPLETED\x10\x03\x12)\n" +
+	"%TRANSITION_REASON_CONFLICTING_PENDING\x10\x04\x12'\n" +
+	"#TRANSITION_REASON_SUPERSEDED_TARGET\x10\x05\x12&\n" +
+	"\"TRANSITION_REASON_CANCELLED_TARGET\x10\x06\x12#\n" +
+	"\x1fTRANSITION_REASON_ABORTED_APPLY\x10\a*Q\n" +
+	"\x12TransitionDecision\x12\x1d\n" +
+	"\x19TRANSITION_DECISION_APPLY\x10\x00\x12\x1c\n" +
+	"\x18TRANSITION_DECISION_SKIP\x10\x012\xf5\x05\n" +
 	"\x02PD\x12W\n" +
 	"\x0eStoreHeartbeat\x12!.nokv.pd.v1.StoreHeartbeatRequest\x1a\".nokv.pd.v1.StoreHeartbeatResponse\x12W\n" +
 	"\x0eRegionLiveness\x12!.nokv.pd.v1.RegionLivenessRequest\x1a\".nokv.pd.v1.RegionLivenessResponse\x12]\n" +
-	"\x10PublishRootEvent\x12#.nokv.pd.v1.PublishRootEventRequest\x1a$.nokv.pd.v1.PublishRootEventResponse\x12Q\n" +
+	"\x10PublishRootEvent\x12#.nokv.pd.v1.PublishRootEventRequest\x1a$.nokv.pd.v1.PublishRootEventResponse\x12Z\n" +
+	"\x0fListTransitions\x12\".nokv.pd.v1.ListTransitionsRequest\x1a#.nokv.pd.v1.ListTransitionsResponse\x12Z\n" +
+	"\x0fAssessRootEvent\x12\".nokv.pd.v1.AssessRootEventRequest\x1a#.nokv.pd.v1.AssessRootEventResponse\x12Q\n" +
 	"\fRemoveRegion\x12\x1f.nokv.pd.v1.RemoveRegionRequest\x1a .nokv.pd.v1.RemoveRegionResponse\x12W\n" +
 	"\x0eGetRegionByKey\x12!.nokv.pd.v1.GetRegionByKeyRequest\x1a\".nokv.pd.v1.GetRegionByKeyResponse\x12B\n" +
 	"\aAllocID\x12\x1a.nokv.pd.v1.AllocIDRequest\x1a\x1b.nokv.pd.v1.AllocIDResponse\x126\n" +
@@ -912,52 +1585,83 @@ func file_pd_pd_proto_rawDescGZIP() []byte {
 	return file_pd_pd_proto_rawDescData
 }
 
-var file_pd_pd_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_pd_pd_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_pd_pd_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
+var file_pd_pd_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_pd_pd_proto_goTypes = []any{
-	(SchedulerOperationType)(0),      // 0: nokv.pd.v1.SchedulerOperationType
-	(*StoreHeartbeatRequest)(nil),    // 1: nokv.pd.v1.StoreHeartbeatRequest
-	(*SchedulerOperation)(nil),       // 2: nokv.pd.v1.SchedulerOperation
-	(*StoreHeartbeatResponse)(nil),   // 3: nokv.pd.v1.StoreHeartbeatResponse
-	(*RegionLivenessRequest)(nil),    // 4: nokv.pd.v1.RegionLivenessRequest
-	(*RegionLivenessResponse)(nil),   // 5: nokv.pd.v1.RegionLivenessResponse
-	(*PublishRootEventRequest)(nil),  // 6: nokv.pd.v1.PublishRootEventRequest
-	(*PublishRootEventResponse)(nil), // 7: nokv.pd.v1.PublishRootEventResponse
-	(*RemoveRegionRequest)(nil),      // 8: nokv.pd.v1.RemoveRegionRequest
-	(*RemoveRegionResponse)(nil),     // 9: nokv.pd.v1.RemoveRegionResponse
-	(*GetRegionByKeyRequest)(nil),    // 10: nokv.pd.v1.GetRegionByKeyRequest
-	(*GetRegionByKeyResponse)(nil),   // 11: nokv.pd.v1.GetRegionByKeyResponse
-	(*AllocIDRequest)(nil),           // 12: nokv.pd.v1.AllocIDRequest
-	(*AllocIDResponse)(nil),          // 13: nokv.pd.v1.AllocIDResponse
-	(*TsoRequest)(nil),               // 14: nokv.pd.v1.TsoRequest
-	(*TsoResponse)(nil),              // 15: nokv.pd.v1.TsoResponse
-	(*meta.RootEvent)(nil),           // 16: nokv.meta.v1.RootEvent
-	(*meta.RegionDescriptor)(nil),    // 17: nokv.meta.v1.RegionDescriptor
+	(SchedulerOperationType)(0),         // 0: nokv.pd.v1.SchedulerOperationType
+	(TransitionKind)(0),                 // 1: nokv.pd.v1.TransitionKind
+	(TransitionStatus)(0),               // 2: nokv.pd.v1.TransitionStatus
+	(TransitionRetryClass)(0),           // 3: nokv.pd.v1.TransitionRetryClass
+	(TransitionReason)(0),               // 4: nokv.pd.v1.TransitionReason
+	(TransitionDecision)(0),             // 5: nokv.pd.v1.TransitionDecision
+	(*StoreHeartbeatRequest)(nil),       // 6: nokv.pd.v1.StoreHeartbeatRequest
+	(*SchedulerOperation)(nil),          // 7: nokv.pd.v1.SchedulerOperation
+	(*StoreHeartbeatResponse)(nil),      // 8: nokv.pd.v1.StoreHeartbeatResponse
+	(*RegionLivenessRequest)(nil),       // 9: nokv.pd.v1.RegionLivenessRequest
+	(*RegionLivenessResponse)(nil),      // 10: nokv.pd.v1.RegionLivenessResponse
+	(*PublishRootEventRequest)(nil),     // 11: nokv.pd.v1.PublishRootEventRequest
+	(*PublishRootEventResponse)(nil),    // 12: nokv.pd.v1.PublishRootEventResponse
+	(*TransitionEntry)(nil),             // 13: nokv.pd.v1.TransitionEntry
+	(*TransitionAssessment)(nil),        // 14: nokv.pd.v1.TransitionAssessment
+	(*ListTransitionsRequest)(nil),      // 15: nokv.pd.v1.ListTransitionsRequest
+	(*ListTransitionsResponse)(nil),     // 16: nokv.pd.v1.ListTransitionsResponse
+	(*AssessRootEventRequest)(nil),      // 17: nokv.pd.v1.AssessRootEventRequest
+	(*AssessRootEventResponse)(nil),     // 18: nokv.pd.v1.AssessRootEventResponse
+	(*RemoveRegionRequest)(nil),         // 19: nokv.pd.v1.RemoveRegionRequest
+	(*RemoveRegionResponse)(nil),        // 20: nokv.pd.v1.RemoveRegionResponse
+	(*GetRegionByKeyRequest)(nil),       // 21: nokv.pd.v1.GetRegionByKeyRequest
+	(*GetRegionByKeyResponse)(nil),      // 22: nokv.pd.v1.GetRegionByKeyResponse
+	(*AllocIDRequest)(nil),              // 23: nokv.pd.v1.AllocIDRequest
+	(*AllocIDResponse)(nil),             // 24: nokv.pd.v1.AllocIDResponse
+	(*TsoRequest)(nil),                  // 25: nokv.pd.v1.TsoRequest
+	(*TsoResponse)(nil),                 // 26: nokv.pd.v1.TsoResponse
+	(*meta.RootEvent)(nil),              // 27: nokv.meta.v1.RootEvent
+	(*meta.RootPendingPeerChange)(nil),  // 28: nokv.meta.v1.RootPendingPeerChange
+	(*meta.RootPendingRangeChange)(nil), // 29: nokv.meta.v1.RootPendingRangeChange
+	(*meta.RegionDescriptor)(nil),       // 30: nokv.meta.v1.RegionDescriptor
 }
 var file_pd_pd_proto_depIdxs = []int32{
 	0,  // 0: nokv.pd.v1.SchedulerOperation.type:type_name -> nokv.pd.v1.SchedulerOperationType
-	2,  // 1: nokv.pd.v1.StoreHeartbeatResponse.operations:type_name -> nokv.pd.v1.SchedulerOperation
-	16, // 2: nokv.pd.v1.PublishRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
-	17, // 3: nokv.pd.v1.GetRegionByKeyResponse.region_descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	1,  // 4: nokv.pd.v1.PD.StoreHeartbeat:input_type -> nokv.pd.v1.StoreHeartbeatRequest
-	4,  // 5: nokv.pd.v1.PD.RegionLiveness:input_type -> nokv.pd.v1.RegionLivenessRequest
-	6,  // 6: nokv.pd.v1.PD.PublishRootEvent:input_type -> nokv.pd.v1.PublishRootEventRequest
-	8,  // 7: nokv.pd.v1.PD.RemoveRegion:input_type -> nokv.pd.v1.RemoveRegionRequest
-	10, // 8: nokv.pd.v1.PD.GetRegionByKey:input_type -> nokv.pd.v1.GetRegionByKeyRequest
-	12, // 9: nokv.pd.v1.PD.AllocID:input_type -> nokv.pd.v1.AllocIDRequest
-	14, // 10: nokv.pd.v1.PD.Tso:input_type -> nokv.pd.v1.TsoRequest
-	3,  // 11: nokv.pd.v1.PD.StoreHeartbeat:output_type -> nokv.pd.v1.StoreHeartbeatResponse
-	5,  // 12: nokv.pd.v1.PD.RegionLiveness:output_type -> nokv.pd.v1.RegionLivenessResponse
-	7,  // 13: nokv.pd.v1.PD.PublishRootEvent:output_type -> nokv.pd.v1.PublishRootEventResponse
-	9,  // 14: nokv.pd.v1.PD.RemoveRegion:output_type -> nokv.pd.v1.RemoveRegionResponse
-	11, // 15: nokv.pd.v1.PD.GetRegionByKey:output_type -> nokv.pd.v1.GetRegionByKeyResponse
-	13, // 16: nokv.pd.v1.PD.AllocID:output_type -> nokv.pd.v1.AllocIDResponse
-	15, // 17: nokv.pd.v1.PD.Tso:output_type -> nokv.pd.v1.TsoResponse
-	11, // [11:18] is the sub-list for method output_type
-	4,  // [4:11] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	7,  // 1: nokv.pd.v1.StoreHeartbeatResponse.operations:type_name -> nokv.pd.v1.SchedulerOperation
+	27, // 2: nokv.pd.v1.PublishRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
+	1,  // 3: nokv.pd.v1.TransitionEntry.kind:type_name -> nokv.pd.v1.TransitionKind
+	2,  // 4: nokv.pd.v1.TransitionEntry.status:type_name -> nokv.pd.v1.TransitionStatus
+	3,  // 5: nokv.pd.v1.TransitionEntry.retry_class:type_name -> nokv.pd.v1.TransitionRetryClass
+	4,  // 6: nokv.pd.v1.TransitionEntry.reason:type_name -> nokv.pd.v1.TransitionReason
+	28, // 7: nokv.pd.v1.TransitionEntry.pending_peer_change:type_name -> nokv.meta.v1.RootPendingPeerChange
+	29, // 8: nokv.pd.v1.TransitionEntry.pending_range_change:type_name -> nokv.meta.v1.RootPendingRangeChange
+	1,  // 9: nokv.pd.v1.TransitionAssessment.kind:type_name -> nokv.pd.v1.TransitionKind
+	2,  // 10: nokv.pd.v1.TransitionAssessment.status:type_name -> nokv.pd.v1.TransitionStatus
+	3,  // 11: nokv.pd.v1.TransitionAssessment.retry_class:type_name -> nokv.pd.v1.TransitionRetryClass
+	4,  // 12: nokv.pd.v1.TransitionAssessment.reason:type_name -> nokv.pd.v1.TransitionReason
+	5,  // 13: nokv.pd.v1.TransitionAssessment.decision:type_name -> nokv.pd.v1.TransitionDecision
+	13, // 14: nokv.pd.v1.ListTransitionsResponse.entries:type_name -> nokv.pd.v1.TransitionEntry
+	27, // 15: nokv.pd.v1.AssessRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
+	14, // 16: nokv.pd.v1.AssessRootEventResponse.assessment:type_name -> nokv.pd.v1.TransitionAssessment
+	30, // 17: nokv.pd.v1.GetRegionByKeyResponse.region_descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	6,  // 18: nokv.pd.v1.PD.StoreHeartbeat:input_type -> nokv.pd.v1.StoreHeartbeatRequest
+	9,  // 19: nokv.pd.v1.PD.RegionLiveness:input_type -> nokv.pd.v1.RegionLivenessRequest
+	11, // 20: nokv.pd.v1.PD.PublishRootEvent:input_type -> nokv.pd.v1.PublishRootEventRequest
+	15, // 21: nokv.pd.v1.PD.ListTransitions:input_type -> nokv.pd.v1.ListTransitionsRequest
+	17, // 22: nokv.pd.v1.PD.AssessRootEvent:input_type -> nokv.pd.v1.AssessRootEventRequest
+	19, // 23: nokv.pd.v1.PD.RemoveRegion:input_type -> nokv.pd.v1.RemoveRegionRequest
+	21, // 24: nokv.pd.v1.PD.GetRegionByKey:input_type -> nokv.pd.v1.GetRegionByKeyRequest
+	23, // 25: nokv.pd.v1.PD.AllocID:input_type -> nokv.pd.v1.AllocIDRequest
+	25, // 26: nokv.pd.v1.PD.Tso:input_type -> nokv.pd.v1.TsoRequest
+	8,  // 27: nokv.pd.v1.PD.StoreHeartbeat:output_type -> nokv.pd.v1.StoreHeartbeatResponse
+	10, // 28: nokv.pd.v1.PD.RegionLiveness:output_type -> nokv.pd.v1.RegionLivenessResponse
+	12, // 29: nokv.pd.v1.PD.PublishRootEvent:output_type -> nokv.pd.v1.PublishRootEventResponse
+	16, // 30: nokv.pd.v1.PD.ListTransitions:output_type -> nokv.pd.v1.ListTransitionsResponse
+	18, // 31: nokv.pd.v1.PD.AssessRootEvent:output_type -> nokv.pd.v1.AssessRootEventResponse
+	20, // 32: nokv.pd.v1.PD.RemoveRegion:output_type -> nokv.pd.v1.RemoveRegionResponse
+	22, // 33: nokv.pd.v1.PD.GetRegionByKey:output_type -> nokv.pd.v1.GetRegionByKeyResponse
+	24, // 34: nokv.pd.v1.PD.AllocID:output_type -> nokv.pd.v1.AllocIDResponse
+	26, // 35: nokv.pd.v1.PD.Tso:output_type -> nokv.pd.v1.TsoResponse
+	27, // [27:36] is the sub-list for method output_type
+	18, // [18:27] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_pd_pd_proto_init() }
@@ -970,8 +1674,8 @@ func file_pd_pd_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pd_pd_proto_rawDesc), len(file_pd_pd_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   15,
+			NumEnums:      6,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

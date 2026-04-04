@@ -43,9 +43,9 @@ func PendingPeerChangeFromEvent(event rootevent.Event) (PendingPeerChange, bool)
 	}
 	var kind PendingPeerChangeKind
 	switch event.Kind {
-	case rootevent.KindPeerAdditionPlanned, rootevent.KindPeerAdded:
+	case rootevent.KindPeerAdditionPlanned, rootevent.KindPeerAdded, rootevent.KindPeerAdditionCancelled:
 		kind = PendingPeerChangeAddition
-	case rootevent.KindPeerRemovalPlanned, rootevent.KindPeerRemoved:
+	case rootevent.KindPeerRemovalPlanned, rootevent.KindPeerRemoved, rootevent.KindPeerRemovalCancelled:
 		kind = PendingPeerChangeRemoval
 	default:
 		return PendingPeerChange{}, false
@@ -168,6 +168,46 @@ func ObservePeerChangeLifecycle(pendingPeerChanges map[uint64]PendingPeerChange,
 				Conflict:   true,
 			}
 		}
+	case rootevent.KindPeerAdditionCancelled, rootevent.KindPeerRemovalCancelled:
+		switch {
+		case completion.PendingState():
+			return PeerChangeLifecycle{
+				Decision:   PeerChangeLifecycleApply,
+				Completion: completion,
+				Status:     TransitionStatusPending,
+				Reason:     TransitionReasonMatchingPending,
+			}
+		case superseded:
+			return PeerChangeLifecycle{
+				Decision:   PeerChangeLifecycleSkip,
+				Completion: completion,
+				Status:     TransitionStatusSuperseded,
+				Reason:     TransitionReasonSupersededTarget,
+			}
+		case pending:
+			return PeerChangeLifecycle{
+				Decision:   PeerChangeLifecycleApply,
+				Completion: completion,
+				Status:     TransitionStatusConflict,
+				RetryClass: TransitionRetryConflict,
+				Reason:     TransitionReasonConflictingPending,
+				Conflict:   true,
+			}
+		case !hasCurrent || !current.Equal(event.PeerChange.Region):
+			return PeerChangeLifecycle{
+				Decision:   PeerChangeLifecycleSkip,
+				Completion: completion,
+				Status:     TransitionStatusCancelled,
+				Reason:     TransitionReasonCancelledTarget,
+			}
+		default:
+			return PeerChangeLifecycle{
+				Decision:   PeerChangeLifecycleSkip,
+				Completion: completion,
+				Status:     TransitionStatusAborted,
+				Reason:     TransitionReasonAbortedApply,
+			}
+		}
 	case rootevent.KindPeerAdded, rootevent.KindPeerRemoved:
 		switch {
 		case completion.PendingState():
@@ -224,13 +264,20 @@ func EvaluatePeerChangeLifecycle(pendingPeerChanges map[uint64]PendingPeerChange
 	outcome := ObservePeerChangeLifecycle(pendingPeerChanges, current, hasCurrent, event)
 	if !outcome.Conflict {
 		if outcome.Status == TransitionStatusAborted {
-			return outcome.Decision, fmt.Errorf("peer change target for region %d was superseded before apply", event.PeerChange.RegionID)
+			switch event.Kind {
+			case rootevent.KindPeerAdditionCancelled, rootevent.KindPeerRemovalCancelled:
+				return outcome.Decision, fmt.Errorf("peer change target for region %d can no longer be cancelled", event.PeerChange.RegionID)
+			default:
+				return outcome.Decision, fmt.Errorf("peer change target for region %d was superseded before apply", event.PeerChange.RegionID)
+			}
 		}
 		return outcome.Decision, nil
 	}
 	switch event.Kind {
 	case rootevent.KindPeerAdditionPlanned, rootevent.KindPeerRemovalPlanned:
 		return outcome.Decision, fmt.Errorf("pending peer change already exists for region %d", event.PeerChange.RegionID)
+	case rootevent.KindPeerAdditionCancelled, rootevent.KindPeerRemovalCancelled:
+		return outcome.Decision, fmt.Errorf("peer change cancel does not match pending target for region %d", event.PeerChange.RegionID)
 	case rootevent.KindPeerAdded, rootevent.KindPeerRemoved:
 		return outcome.Decision, fmt.Errorf("peer change apply does not match pending target for region %d", event.PeerChange.RegionID)
 	default:

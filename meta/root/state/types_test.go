@@ -145,6 +145,41 @@ func TestObservePeerChangeLifecycle(t *testing.T) {
 	require.Equal(t, rootstate.TransitionStatusAborted, outcome.Status)
 }
 
+func TestObservePeerChangeCancelLifecycle(t *testing.T) {
+	current := testDescriptor(171, []byte("a"), []byte("z"))
+	target := current.Clone()
+	target.Peers = append(target.Peers, metaregion.Peer{StoreID: 2, PeerID: 201})
+	target.Epoch.ConfVersion++
+	target.RootEpoch++
+	target.EnsureHash()
+
+	pending := rootstate.PendingPeerChange{
+		Kind:    rootstate.PendingPeerChangeAddition,
+		StoreID: 2,
+		PeerID:  201,
+		Base:    current,
+		Target:  target,
+	}
+
+	outcome := rootstate.ObservePeerChangeLifecycle(
+		map[uint64]rootstate.PendingPeerChange{target.RegionID: pending},
+		target,
+		true,
+		rootevent.PeerAdditionCancelled(target.RegionID, 2, 201, target, current),
+	)
+	require.Equal(t, rootstate.PeerChangeLifecycleApply, outcome.Decision)
+	require.Equal(t, rootstate.TransitionStatusPending, outcome.Status)
+
+	outcome = rootstate.ObservePeerChangeLifecycle(
+		nil,
+		current,
+		true,
+		rootevent.PeerAdditionCancelled(target.RegionID, 2, 201, target, current),
+	)
+	require.Equal(t, rootstate.PeerChangeLifecycleSkip, outcome.Decision)
+	require.Equal(t, rootstate.TransitionStatusCancelled, outcome.Status)
+}
+
 func TestPendingRangeChangeMatchesEvent(t *testing.T) {
 	left := testDescriptor(20, []byte("a"), []byte("m"))
 	right := testDescriptor(21, []byte("m"), []byte("z"))
@@ -330,6 +365,46 @@ func TestObserveRangeChangeLifecycle(t *testing.T) {
 	require.Equal(t, rootstate.TransitionStatusAborted, outcome.Status)
 }
 
+func TestObserveRangeChangeCancelLifecycle(t *testing.T) {
+	parent := testDescriptor(260, []byte("a"), []byte("z"))
+	left := testDescriptor(260, []byte("a"), []byte("m"))
+	right := testDescriptor(261, []byte("m"), []byte("z"))
+	left.RootEpoch = parent.RootEpoch + 1
+	right.RootEpoch = parent.RootEpoch + 1
+	left.EnsureHash()
+	right.EnsureHash()
+
+	key := parent.RegionID
+	pending := rootstate.PendingRangeChange{
+		Kind:           rootstate.PendingRangeChangeSplit,
+		ParentRegionID: parent.RegionID,
+		LeftRegionID:   left.RegionID,
+		RightRegionID:  right.RegionID,
+		BaseParent:     parent,
+		Left:           left,
+		Right:          right,
+	}
+
+	outcome := rootstate.ObserveRangeChangeLifecycle(
+		map[uint64]rootstate.PendingRangeChange{key: pending},
+		map[uint64]descriptor.Descriptor{
+			left.RegionID:  left,
+			right.RegionID: right,
+		},
+		rootevent.RegionSplitCancelled(parent.RegionID, []byte("m"), left, right, parent),
+	)
+	require.Equal(t, rootstate.RangeChangeLifecycleApply, outcome.Decision)
+	require.Equal(t, rootstate.TransitionStatusPending, outcome.Status)
+
+	outcome = rootstate.ObserveRangeChangeLifecycle(
+		nil,
+		map[uint64]descriptor.Descriptor{parent.RegionID: parent},
+		rootevent.RegionSplitCancelled(parent.RegionID, []byte("m"), left, right, parent),
+	)
+	require.Equal(t, rootstate.RangeChangeLifecycleSkip, outcome.Decision)
+	require.Equal(t, rootstate.TransitionStatusCancelled, outcome.Status)
+}
+
 func TestObserveRootEventLifecycle(t *testing.T) {
 	target := testDescriptor(80, []byte("a"), []byte("z"))
 	planned := rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)
@@ -418,6 +493,52 @@ func TestApplyRangeChangeToSnapshot(t *testing.T) {
 	require.NotContains(t, mergeSnapshot.PendingRangeChanges, merged.RegionID)
 }
 
+func TestApplyRangeChangeCancelToSnapshot(t *testing.T) {
+	parent := testDescriptor(140, []byte("a"), []byte("z"))
+	left := testDescriptor(140, []byte("a"), []byte("m"))
+	right := testDescriptor(141, []byte("m"), []byte("z"))
+	left.RootEpoch = parent.RootEpoch + 1
+	right.RootEpoch = parent.RootEpoch + 1
+	left.EnsureHash()
+	right.EnsureHash()
+
+	splitSnapshot := rootstate.Snapshot{
+		State:       rootstate.State{ClusterEpoch: 10},
+		Descriptors: map[uint64]descriptor.Descriptor{parent.RegionID: parent},
+	}
+	require.True(t, rootstate.ApplyRangeChangeToSnapshot(&splitSnapshot, rootevent.RegionSplitPlanned(parent.RegionID, []byte("m"), left, right)))
+	require.Equal(t, parent, splitSnapshot.PendingRangeChanges[parent.RegionID].BaseParent)
+	require.True(t, rootstate.ApplyRangeChangeToSnapshot(&splitSnapshot, rootevent.RegionSplitCancelled(parent.RegionID, []byte("m"), left, right, parent)))
+	require.Equal(t, parent, splitSnapshot.Descriptors[parent.RegionID])
+	require.NotContains(t, splitSnapshot.Descriptors, right.RegionID)
+	require.NotContains(t, splitSnapshot.PendingRangeChanges, parent.RegionID)
+
+	baseLeft := testDescriptor(148, []byte("a"), []byte("m"))
+	baseRight := testDescriptor(149, []byte("m"), []byte("z"))
+	merged := testDescriptor(150, []byte("a"), []byte("z"))
+	baseLeft.RootEpoch = 5
+	baseRight.RootEpoch = 5
+	merged.RootEpoch = 6
+	baseLeft.EnsureHash()
+	baseRight.EnsureHash()
+	merged.EnsureHash()
+	mergeSnapshot := rootstate.Snapshot{
+		State: rootstate.State{ClusterEpoch: 20},
+		Descriptors: map[uint64]descriptor.Descriptor{
+			baseLeft.RegionID:  baseLeft,
+			baseRight.RegionID: baseRight,
+		},
+	}
+	require.True(t, rootstate.ApplyRangeChangeToSnapshot(&mergeSnapshot, rootevent.RegionMergePlanned(baseLeft.RegionID, baseRight.RegionID, merged)))
+	require.Equal(t, baseLeft, mergeSnapshot.PendingRangeChanges[merged.RegionID].BaseLeft)
+	require.Equal(t, baseRight, mergeSnapshot.PendingRangeChanges[merged.RegionID].BaseRight)
+	require.True(t, rootstate.ApplyRangeChangeToSnapshot(&mergeSnapshot, rootevent.RegionMergeCancelled(baseLeft.RegionID, baseRight.RegionID, merged, baseLeft, baseRight)))
+	require.Equal(t, baseLeft, mergeSnapshot.Descriptors[baseLeft.RegionID])
+	require.Equal(t, baseRight, mergeSnapshot.Descriptors[baseRight.RegionID])
+	require.NotContains(t, mergeSnapshot.Descriptors, merged.RegionID)
+	require.NotContains(t, mergeSnapshot.PendingRangeChanges, merged.RegionID)
+}
+
 func TestApplyPeerChangeToSnapshot(t *testing.T) {
 	current := testDescriptor(11, []byte("a"), []byte("m"))
 	target := current.Clone()
@@ -434,10 +555,30 @@ func TestApplyPeerChangeToSnapshot(t *testing.T) {
 	require.True(t, rootstate.ApplyPeerChangeToSnapshot(&snapshot, rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)))
 	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
 	require.Contains(t, snapshot.PendingPeerChanges, target.RegionID)
+	require.Equal(t, current, snapshot.PendingPeerChanges[target.RegionID].Base)
 
 	require.True(t, rootstate.ApplyPeerChangeToSnapshot(&snapshot, rootevent.PeerAdded(target.RegionID, 2, 201, target)))
 	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
 	require.NotContains(t, snapshot.PendingPeerChanges, target.RegionID)
+}
+
+func TestApplyPeerChangeCancelToSnapshot(t *testing.T) {
+	current := testDescriptor(111, []byte("a"), []byte("m"))
+	target := current.Clone()
+	target.Peers = append(target.Peers, metaregion.Peer{StoreID: 2, PeerID: 201})
+	target.Epoch.ConfVersion++
+	target.RootEpoch++
+	target.EnsureHash()
+
+	snapshot := rootstate.Snapshot{
+		State:       rootstate.State{ClusterEpoch: 5},
+		Descriptors: map[uint64]descriptor.Descriptor{current.RegionID: current},
+	}
+	require.True(t, rootstate.ApplyPeerChangeToSnapshot(&snapshot, rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)))
+	require.True(t, rootstate.ApplyPeerChangeToSnapshot(&snapshot, rootevent.PeerAdditionCancelled(target.RegionID, 2, 201, target, current)))
+	require.Equal(t, current, snapshot.Descriptors[current.RegionID])
+	require.NotContains(t, snapshot.PendingPeerChanges, current.RegionID)
+	require.Equal(t, uint64(7), snapshot.State.ClusterEpoch)
 }
 
 func TestCursorHelpers(t *testing.T) {
