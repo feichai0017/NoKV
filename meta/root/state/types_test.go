@@ -124,6 +124,47 @@ func TestEvaluateRangeChangeLifecycle(t *testing.T) {
 	require.Equal(t, rootstate.RangeChangeLifecycleSkip, decision)
 }
 
+func TestApplyRangeChangeToSnapshot(t *testing.T) {
+	parent := testDescriptor(40, []byte("a"), []byte("z"))
+	left := testDescriptor(40, []byte("a"), []byte("m"))
+	right := testDescriptor(41, []byte("m"), []byte("z"))
+
+	snapshot := rootstate.Snapshot{
+		State:       rootstate.State{ClusterEpoch: 5},
+		Descriptors: map[uint64]descriptor.Descriptor{parent.RegionID: parent},
+	}
+
+	require.True(t, rootstate.ApplyRangeChangeToSnapshot(&snapshot, rootevent.RegionSplitPlanned(parent.RegionID, []byte("m"), left, right)))
+	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
+	require.Contains(t, snapshot.PendingRangeChanges, parent.RegionID)
+
+	require.True(t, rootstate.ApplyRangeChangeToSnapshot(&snapshot, rootevent.RegionSplitCommitted(parent.RegionID, []byte("m"), left, right)))
+	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
+	require.NotContains(t, snapshot.PendingRangeChanges, parent.RegionID)
+}
+
+func TestApplyPeerChangeToSnapshot(t *testing.T) {
+	current := testDescriptor(11, []byte("a"), []byte("m"))
+	target := current.Clone()
+	target.Peers = append(target.Peers, metaregion.Peer{StoreID: 2, PeerID: 201})
+	target.Epoch.ConfVersion++
+	target.RootEpoch++
+	target.EnsureHash()
+
+	snapshot := rootstate.Snapshot{
+		State:       rootstate.State{ClusterEpoch: 5},
+		Descriptors: map[uint64]descriptor.Descriptor{current.RegionID: current},
+	}
+
+	require.True(t, rootstate.ApplyPeerChangeToSnapshot(&snapshot, rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)))
+	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
+	require.Contains(t, snapshot.PendingPeerChanges, target.RegionID)
+
+	require.True(t, rootstate.ApplyPeerChangeToSnapshot(&snapshot, rootevent.PeerAdded(target.RegionID, 2, 201, target)))
+	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
+	require.NotContains(t, snapshot.PendingPeerChanges, target.RegionID)
+}
+
 func TestCursorHelpers(t *testing.T) {
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, rootstate.NextCursor(rootstate.Cursor{}))
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 8}, rootstate.NextCursor(rootstate.Cursor{Term: 2, Index: 7}))

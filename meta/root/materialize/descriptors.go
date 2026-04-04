@@ -68,53 +68,11 @@ func ApplyEventToSnapshot(snapshot *rootstate.Snapshot, cursor rootstate.Cursor,
 		delete(snapshot.Descriptors, event.RegionRemoval.RegionID)
 		delete(snapshot.PendingPeerChanges, event.RegionRemoval.RegionID)
 		delete(snapshot.PendingRangeChanges, event.RegionRemoval.RegionID)
-	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionSplitCommitted:
-		key, change, _ := rootstate.PendingRangeChangeFromEvent(event)
-		if event.Kind == rootevent.KindRegionSplitPlanned ||
-			!rootstate.RangeChangeStateMatches(snapshot.Descriptors, event) {
-			snapshot.State.ClusterEpoch++
+	default:
+		if rootstate.ApplyRangeChangeToSnapshot(snapshot, event) {
+			break
 		}
-		delete(snapshot.Descriptors, event.RangeSplit.ParentRegionID)
-		delete(snapshot.PendingPeerChanges, event.RangeSplit.ParentRegionID)
-		snapshot.Descriptors[event.RangeSplit.Left.RegionID] = event.RangeSplit.Left.Clone()
-		snapshot.Descriptors[event.RangeSplit.Right.RegionID] = event.RangeSplit.Right.Clone()
-		if event.Kind == rootevent.KindRegionSplitPlanned {
-			snapshot.PendingRangeChanges[key] = change
-		} else {
-			delete(snapshot.PendingRangeChanges, key)
-		}
-	case rootevent.KindRegionMergePlanned, rootevent.KindRegionMerged:
-		key, change, _ := rootstate.PendingRangeChangeFromEvent(event)
-		if event.Kind == rootevent.KindRegionMergePlanned ||
-			!rootstate.RangeChangeStateMatches(snapshot.Descriptors, event) {
-			snapshot.State.ClusterEpoch++
-		}
-		delete(snapshot.Descriptors, event.RangeMerge.LeftRegionID)
-		delete(snapshot.Descriptors, event.RangeMerge.RightRegionID)
-		delete(snapshot.PendingPeerChanges, event.RangeMerge.LeftRegionID)
-		delete(snapshot.PendingPeerChanges, event.RangeMerge.RightRegionID)
-		delete(snapshot.PendingRangeChanges, event.RangeMerge.LeftRegionID)
-		delete(snapshot.PendingRangeChanges, event.RangeMerge.RightRegionID)
-		snapshot.Descriptors[event.RangeMerge.Merged.RegionID] = event.RangeMerge.Merged.Clone()
-		if event.Kind == rootevent.KindRegionMergePlanned {
-			snapshot.PendingRangeChanges[key] = change
-		} else {
-			delete(snapshot.PendingRangeChanges, key)
-		}
-	case rootevent.KindPeerAdditionPlanned, rootevent.KindPeerRemovalPlanned:
-		snapshot.State.ClusterEpoch++
-		change, _ := rootstate.PendingPeerChangeFromEvent(event)
-		snapshot.Descriptors[event.PeerChange.RegionID] = change.Target.Clone()
-		snapshot.PendingPeerChanges[event.PeerChange.RegionID] = change
-	case rootevent.KindPeerAdded, rootevent.KindPeerRemoved:
-		change, _ := rootstate.PendingPeerChangeFromEvent(event)
-		prev, ok := snapshot.PendingPeerChanges[event.PeerChange.RegionID]
-		matchedPending := ok && rootstate.PendingPeerChangeMatchesEvent(prev, event)
-		if !matchedPending {
-			snapshot.State.ClusterEpoch++
-		}
-		snapshot.Descriptors[event.PeerChange.RegionID] = change.Target.Clone()
-		delete(snapshot.PendingPeerChanges, event.PeerChange.RegionID)
+		_ = rootstate.ApplyPeerChangeToSnapshot(snapshot, event)
 	}
 	snapshot.State.LastCommitted = cursor
 }
