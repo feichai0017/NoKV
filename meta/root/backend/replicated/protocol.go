@@ -12,7 +12,7 @@ import (
 	"github.com/feichai0017/NoKV/vfs"
 )
 
-const protocolStateFileName = "metadata-root-raft-state.bin"
+const protocolStateFileName = "root.raft.bin"
 
 type persistedProtocolState struct {
 	HardState myraft.HardState
