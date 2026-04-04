@@ -146,15 +146,8 @@ func (rm *regionManager) applyRegionMeta(meta localmeta.RegionMeta, publish bool
 		rm.regionMetrics.RecordUpdate(metaCopy)
 	}
 	if publish && rm.notify != nil {
-		desc := metacodec.DescriptorFromLocalRegionMeta(metaCopy, 0)
-		event := rootevent.RegionDescriptorPublished(desc)
-		if !existed {
-			event = rootevent.RegionBootstrapped(desc)
-		}
 		rm.notify(regionEvent{
-			kind:     regionEventApply,
-			regionID: metaCopy.ID,
-			root:     &event,
+			root: catalogApplyRootEvent(metaCopy, existed),
 		})
 	}
 	return nil
@@ -203,11 +196,22 @@ func (rm *regionManager) applyRegionRemoval(regionID uint64, publish bool) error
 	}
 	if publish && rm.notify != nil {
 		rm.notify(regionEvent{
-			kind:     regionEventRemove,
-			regionID: regionID,
+			root: catalogRemovalRootEvent(regionID),
 		})
 	}
 	return nil
+}
+
+func catalogApplyRootEvent(meta localmeta.RegionMeta, existed bool) rootevent.Event {
+	desc := metacodec.DescriptorFromLocalRegionMeta(meta, 0)
+	if !existed {
+		return rootevent.RegionBootstrapped(desc)
+	}
+	return rootevent.RegionDescriptorPublished(desc)
+}
+
+func catalogRemovalRootEvent(regionID uint64) rootevent.Event {
+	return rootevent.RegionTombstoned(regionID)
 }
 
 func validRegionStateTransition(current, next metaregion.ReplicaState) bool {

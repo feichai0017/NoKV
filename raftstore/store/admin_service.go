@@ -225,18 +225,13 @@ func (s *Store) executeRangeChangePlan(plan rangeChangePlan) error {
 	case rootevent.KindRegionMergePlanned:
 		action = "merge"
 	}
-	if err := s.publishPlannedRootEvent(plan.RegionID, plan.Event, action); err != nil {
-		return err
-	}
-	peerRef, err := s.leaderPeer(plan.RegionID)
-	if err != nil {
-		return err
-	}
-	data, err := proto.Marshal(plan.Command)
-	if err != nil {
-		return err
-	}
-	return peerRef.ProposeAdmin(data)
+	return s.executePlannedTransition(plan.RegionID, plan.Event, action, func(peerRef *peer.Peer) error {
+		data, err := proto.Marshal(plan.Command)
+		if err != nil {
+			return err
+		}
+		return peerRef.ProposeAdmin(data)
+	})
 }
 
 func splitAlreadyAppliedLocal(s *Store, parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) bool {
@@ -307,7 +302,7 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta localmeta.RegionMeta
 		_ = s.applyRegionMetaSilent(originalParent)
 		return nil, err
 	}
-	s.enqueueAppliedRootEvent(originalParent.ID, committedSplitEvent(transition))
+	s.enqueueAppliedRootEvent(committedSplitEvent(transition))
 	return childPeer, nil
 }
 
@@ -403,7 +398,7 @@ func (s *Store) handleMergeCommand(merge *raftcmdpb.MergeCommand) error {
 	if err := s.applyRegionMetaSilent(updated); err != nil {
 		return err
 	}
-	s.enqueueAppliedRootEvent(transition.mergedDesc.RegionID, committedMergeEvent(transition))
+	s.enqueueAppliedRootEvent(committedMergeEvent(transition))
 	if peer := s.regionMgr().peer(sourceMeta.ID); peer != nil {
 		s.stopPeer(peer.ID(), false)
 	}
