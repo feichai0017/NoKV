@@ -30,6 +30,12 @@ type RangeChangeCompletion struct {
 	Pending PendingRangeChange
 }
 
+type RangeChangeLifecycle struct {
+	Decision   RangeChangeLifecycleDecision
+	Completion RangeChangeCompletion
+	Conflict   bool
+}
+
 func PendingRangeChangeFromEvent(event rootevent.Event) (uint64, PendingRangeChange, bool) {
 	switch event.Kind {
 	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionSplitCommitted:
@@ -113,6 +119,10 @@ func (c RangeChangeCompletion) NeedsEpochAdvance(planned bool) bool {
 	return planned || c.Open()
 }
 
+func (l RangeChangeLifecycle) Retryable() bool {
+	return l.Conflict
+}
+
 func ObserveRangeChangeCompletion(pendingRangeChanges map[uint64]PendingRangeChange, descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) RangeChangeCompletion {
 	key, _, ok := PendingRangeChangeFromEvent(event)
 	if !ok {
@@ -137,41 +147,83 @@ func ObserveRangeChangeCompletion(pendingRangeChanges map[uint64]PendingRangeCha
 	}
 }
 
+func ObserveRangeChangeLifecycle(pendingRangeChanges map[uint64]PendingRangeChange, descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) RangeChangeLifecycle {
+	key, _, ok := PendingRangeChangeFromEvent(event)
+	if !ok {
+		return RangeChangeLifecycle{Decision: RangeChangeLifecycleApply}
+	}
+	completion := ObserveRangeChangeCompletion(pendingRangeChanges, descriptors, event)
+	_, exists := pendingRangeChanges[key]
+	switch event.Kind {
+	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionMergePlanned:
+		switch {
+		case completion.Completed(), completion.PendingState():
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleSkip,
+				Completion: completion,
+			}
+		default:
+			if !exists {
+				return RangeChangeLifecycle{
+					Decision:   RangeChangeLifecycleApply,
+					Completion: completion,
+				}
+			}
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleApply,
+				Completion: completion,
+				Conflict:   true,
+			}
+		}
+	case rootevent.KindRegionSplitCommitted, rootevent.KindRegionMerged:
+		switch {
+		case completion.PendingState():
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleApply,
+				Completion: completion,
+			}
+		case completion.Completed():
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleSkip,
+				Completion: completion,
+			}
+		default:
+			if exists {
+				return RangeChangeLifecycle{
+					Decision:   RangeChangeLifecycleApply,
+					Completion: completion,
+					Conflict:   true,
+				}
+			}
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleApply,
+				Completion: completion,
+			}
+		}
+	}
+	return RangeChangeLifecycle{
+		Decision:   RangeChangeLifecycleApply,
+		Completion: completion,
+	}
+}
+
 func EvaluateRangeChangeLifecycle(pendingRangeChanges map[uint64]PendingRangeChange, descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) (RangeChangeLifecycleDecision, error) {
 	key, _, ok := PendingRangeChangeFromEvent(event)
 	if !ok {
 		return RangeChangeLifecycleApply, nil
 	}
-	pending, exists := pendingRangeChanges[key]
-	completion := ObserveRangeChangeCompletion(pendingRangeChanges, descriptors, event)
+	outcome := ObserveRangeChangeLifecycle(pendingRangeChanges, descriptors, event)
+	if !outcome.Conflict {
+		return outcome.Decision, nil
+	}
 	switch event.Kind {
 	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionMergePlanned:
-		switch {
-		case completion.Completed(), completion.PendingState():
-			return RangeChangeLifecycleSkip, nil
-		default:
-			if !exists {
-				return RangeChangeLifecycleApply, nil
-			}
-			return RangeChangeLifecycleApply, fmt.Errorf("pending range change already exists for region %d", key)
-		}
+		return outcome.Decision, fmt.Errorf("pending range change already exists for region %d", key)
 	case rootevent.KindRegionSplitCommitted, rootevent.KindRegionMerged:
-		switch {
-		case completion.PendingState():
-			return RangeChangeLifecycleApply, nil
-		case completion.Completed():
-			return RangeChangeLifecycleSkip, nil
-		default:
-			if exists {
-				if PendingRangeChangeMatchesEvent(pending, event) {
-					return RangeChangeLifecycleApply, nil
-				}
-				return RangeChangeLifecycleApply, fmt.Errorf("range change apply does not match pending target for region %d", key)
-			}
-			return RangeChangeLifecycleApply, nil
-		}
+		return outcome.Decision, fmt.Errorf("range change apply does not match pending target for region %d", key)
+	default:
+		return outcome.Decision, nil
 	}
-	return RangeChangeLifecycleApply, nil
 }
 
 func splitStateMatches(descriptors map[uint64]descriptor.Descriptor, parentRegionID uint64, left, right descriptor.Descriptor) bool {

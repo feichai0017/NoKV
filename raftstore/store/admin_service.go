@@ -16,13 +16,6 @@ import (
 	proto "google.golang.org/protobuf/proto"
 )
 
-type rangeChangePlan struct {
-	RegionID uint64
-	Event    rootevent.Event
-	Command  *raftcmdpb.AdminCommand
-	Noop     bool
-}
-
 type splitTransition struct {
 	originalParent localmeta.RegionMeta
 	parent         localmeta.RegionMeta
@@ -153,85 +146,78 @@ func committedMergeEvent(transition mergeTransition) rootevent.Event {
 	return rootevent.RegionMerged(transition.leftID, transition.rightID, transition.mergedDesc)
 }
 
-func (s *Store) planSplit(parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) (rangeChangePlan, error) {
+func (s *Store) planSplit(parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) (transitionPlan, error) {
 	if s == nil {
-		return rangeChangePlan{}, fmt.Errorf("raftstore: store is nil")
+		return transitionPlan{}, fmt.Errorf("raftstore: store is nil")
 	}
 	if parentID == 0 || childMeta.ID == 0 {
-		return rangeChangePlan{}, fmt.Errorf("raftstore: invalid region identifiers")
+		return transitionPlan{}, fmt.Errorf("raftstore: invalid region identifiers")
 	}
 	if _, err := s.leaderPeer(parentID); err != nil {
-		return rangeChangePlan{}, err
+		return transitionPlan{}, err
 	}
 	if splitAlreadyAppliedLocal(s, parentID, childMeta, splitKey) {
-		return rangeChangePlan{RegionID: parentID, Noop: true}, nil
+		return transitionPlan{RegionID: parentID, Noop: true}, nil
 	}
 	transition, err := s.buildSplitTransition(parentID, childMeta, splitKey)
 	if err != nil {
-		return rangeChangePlan{}, err
+		return transitionPlan{}, err
 	}
-	return rangeChangePlan{
+	command := &raftcmdpb.AdminCommand{
+		Type: raftcmdpb.AdminCommand_SPLIT,
+		Split: &raftcmdpb.SplitCommand{
+			ParentRegionId: parentID,
+			SplitKey:       append([]byte(nil), splitKey...),
+			Child:          metacodec.LocalRegionMetaToDescriptorProto(transition.child),
+		},
+	}
+	return transitionPlan{
 		RegionID: parentID,
 		Event:    plannedSplitEvent(transition),
-		Command: &raftcmdpb.AdminCommand{
-			Type: raftcmdpb.AdminCommand_SPLIT,
-			Split: &raftcmdpb.SplitCommand{
-				ParentRegionId: parentID,
-				SplitKey:       append([]byte(nil), splitKey...),
-				Child:          metacodec.LocalRegionMetaToDescriptorProto(transition.child),
-			},
+		Action:   "split",
+		Propose: func(peerRef *peer.Peer) error {
+			data, err := proto.Marshal(command)
+			if err != nil {
+				return err
+			}
+			return peerRef.ProposeAdmin(data)
 		},
 	}, nil
 }
 
-func (s *Store) planMerge(targetRegionID, sourceRegionID uint64) (rangeChangePlan, error) {
+func (s *Store) planMerge(targetRegionID, sourceRegionID uint64) (transitionPlan, error) {
 	if s == nil {
-		return rangeChangePlan{}, fmt.Errorf("raftstore: store is nil")
+		return transitionPlan{}, fmt.Errorf("raftstore: store is nil")
 	}
 	if targetRegionID == 0 || sourceRegionID == 0 {
-		return rangeChangePlan{}, fmt.Errorf("raftstore: invalid region identifiers")
+		return transitionPlan{}, fmt.Errorf("raftstore: invalid region identifiers")
 	}
 	if _, err := s.leaderPeer(targetRegionID); err != nil {
-		return rangeChangePlan{}, err
+		return transitionPlan{}, err
 	}
 	transition, err := s.buildMergeTransition(targetRegionID, sourceRegionID)
 	if err != nil {
-		return rangeChangePlan{}, err
+		return transitionPlan{}, err
 	}
-	return rangeChangePlan{
+	command := &raftcmdpb.AdminCommand{
+		Type: raftcmdpb.AdminCommand_MERGE,
+		Merge: &raftcmdpb.MergeCommand{
+			TargetRegionId: targetRegionID,
+			SourceRegionId: sourceRegionID,
+		},
+	}
+	return transitionPlan{
 		RegionID: targetRegionID,
 		Event:    plannedMergeEvent(transition),
-		Command: &raftcmdpb.AdminCommand{
-			Type: raftcmdpb.AdminCommand_MERGE,
-			Merge: &raftcmdpb.MergeCommand{
-				TargetRegionId: targetRegionID,
-				SourceRegionId: sourceRegionID,
-			},
+		Action:   "merge",
+		Propose: func(peerRef *peer.Peer) error {
+			data, err := proto.Marshal(command)
+			if err != nil {
+				return err
+			}
+			return peerRef.ProposeAdmin(data)
 		},
 	}, nil
-}
-
-func (s *Store) executeRangeChangePlan(plan rangeChangePlan) error {
-	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
-	}
-	if plan.Noop {
-		return nil
-	}
-	action := "range-change"
-	switch plan.Event.Kind {
-	case rootevent.KindRegionSplitPlanned:
-		action = "split"
-	case rootevent.KindRegionMergePlanned:
-		action = "merge"
-	}
-	return s.executePlannedTransition(plan.RegionID, plan.Event, action, func(peerRef *peer.Peer) error {
-		data, err := proto.Marshal(plan.Command)
-		if err != nil {
-			return err
-		}
-		return peerRef.ProposeAdmin(data)
-	})
 }
 
 func splitAlreadyAppliedLocal(s *Store, parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) bool {
@@ -289,20 +275,25 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta localmeta.RegionMeta
 	}
 	newParent := transition.parent
 	childMeta = transition.child
-	if err := s.applyRegionMetaSilent(newParent); err != nil {
+	var childPeer *peer.Peer
+	if err := s.applyTerminalTransition(committedSplitEvent(transition), func() error {
+		if err := s.applyRegionMetaSilent(newParent); err != nil {
+			return err
+		}
+		cfg, bootstrapPeers, err := s.buildChildPeerConfig(childMeta)
+		if err != nil {
+			_ = s.applyRegionMetaSilent(originalParent)
+			return err
+		}
+		childPeer, err = s.startPeer(cfg, bootstrapPeers, false)
+		if err != nil {
+			_ = s.applyRegionMetaSilent(originalParent)
+			return err
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
-	cfg, bootstrapPeers, err := s.buildChildPeerConfig(childMeta)
-	if err != nil {
-		_ = s.applyRegionMetaSilent(originalParent)
-		return nil, err
-	}
-	childPeer, err := s.startPeer(cfg, bootstrapPeers, false)
-	if err != nil {
-		_ = s.applyRegionMetaSilent(originalParent)
-		return nil, err
-	}
-	s.enqueueAppliedRootEvent(committedSplitEvent(transition))
 	return childPeer, nil
 }
 
@@ -313,7 +304,7 @@ func (s *Store) ProposeSplit(parentID uint64, childMeta localmeta.RegionMeta, sp
 	if err != nil {
 		return err
 	}
-	return s.executeRangeChangePlan(plan)
+	return s.executeTransitionPlan(plan)
 }
 
 // ProposeMerge submits a merge admin command merging source region into target.
@@ -322,7 +313,7 @@ func (s *Store) ProposeMerge(targetRegionID, sourceRegionID uint64) error {
 	if err != nil {
 		return err
 	}
-	return s.executeRangeChangePlan(plan)
+	return s.executeTransitionPlan(plan)
 }
 
 func (s *Store) buildChildPeerConfig(child localmeta.RegionMeta) (*peer.Config, []myraft.Peer, error) {
@@ -395,17 +386,15 @@ func (s *Store) handleMergeCommand(merge *raftcmdpb.MergeCommand) error {
 		return nil
 	}
 	updated := transition.target
-	if err := s.applyRegionMetaSilent(updated); err != nil {
-		return err
-	}
-	s.enqueueAppliedRootEvent(committedMergeEvent(transition))
-	if peer := s.regionMgr().peer(sourceMeta.ID); peer != nil {
-		s.stopPeer(peer.ID(), false)
-	}
-	if err := s.applyRegionRemovalSilent(sourceMeta.ID); err != nil {
-		return err
-	}
-	return nil
+	return s.applyTerminalTransition(committedMergeEvent(transition), func() error {
+		if err := s.applyRegionMetaSilent(updated); err != nil {
+			return err
+		}
+		if peer := s.regionMgr().peer(sourceMeta.ID); peer != nil {
+			s.stopPeer(peer.ID(), false)
+		}
+		return s.applyRegionRemovalSilent(sourceMeta.ID)
+	})
 }
 
 func (s *Store) splitCommandAlreadyApplied(parentID uint64, childMeta localmeta.RegionMeta) bool {
