@@ -47,6 +47,31 @@ func TestApplyEventToSnapshotTracksPeerChangeStage(t *testing.T) {
 	require.NotContains(t, snapshot.PendingPeerChanges, target.RegionID)
 }
 
+func TestApplyEventToSnapshotTracksPendingSplitLifecycle(t *testing.T) {
+	parent := testDescriptor(40, []byte("a"), []byte("z"))
+	parent.RootEpoch = 5
+	parent.EnsureHash()
+	left := testDescriptor(40, []byte("a"), []byte("m"))
+	right := testDescriptor(41, []byte("m"), []byte("z"))
+	left.RootEpoch = 6
+	right.RootEpoch = 6
+	left.EnsureHash()
+	right.EnsureHash()
+
+	snapshot := rootstate.Snapshot{
+		State:       rootstate.State{ClusterEpoch: 5},
+		Descriptors: map[uint64]descriptor.Descriptor{parent.RegionID: parent},
+	}
+
+	rootmaterialize.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 1}, rootevent.RegionSplitPlanned(parent.RegionID, []byte("m"), left, right))
+	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
+	require.Contains(t, snapshot.PendingRangeChanges, parent.RegionID)
+
+	rootmaterialize.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 2}, rootevent.RegionSplitCommitted(parent.RegionID, []byte("m"), left, right))
+	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
+	require.NotContains(t, snapshot.PendingRangeChanges, parent.RegionID)
+}
+
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
 	desc := descriptor.Descriptor{
 		RegionID:  id,
