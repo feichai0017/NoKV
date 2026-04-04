@@ -190,11 +190,15 @@ func runPDCmd(w io.Writer, args []string) error {
 					if err != nil {
 						continue
 					}
-					if !next.Advanced() {
-						continue
+					switch next.CatchUpAction() {
+					case rootstorage.TailCatchUpRefreshState:
+						if err := svc.RefreshFromStorage(); err != nil {
+							continue
+						}
+						last = next.Token
+					case rootstorage.TailCatchUpAcknowledgeWindow:
+						last = next.Token
 					}
-					_ = svc.RefreshFromStorage()
-					last = next.Token
 				}
 			}
 		}()
