@@ -3,7 +3,6 @@ package storage
 import (
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"sync"
@@ -30,13 +29,7 @@ func (s *RootStore) Load() (Snapshot, error) {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return Snapshot{
-		ClusterEpoch:        s.snapshot.ClusterEpoch,
-		Descriptors:         rootstate.CloneDescriptors(s.snapshot.Descriptors),
-		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.snapshot.PendingPeerChanges),
-		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.snapshot.PendingRangeChanges),
-		Allocator:           s.snapshot.Allocator,
-	}, nil
+	return CloneSnapshot(s.snapshot), nil
 }
 
 // Refresh reloads the reconstructed PD snapshot from the underlying metadata root.
@@ -126,16 +119,7 @@ func (s *RootStore) reload() error {
 	if err != nil {
 		return err
 	}
-	out := Snapshot{
-		ClusterEpoch:        snapshot.State.ClusterEpoch,
-		Descriptors:         rootstate.CloneDescriptors(snapshot.Descriptors),
-		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
-		PendingRangeChanges: rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),
-		Allocator: AllocatorState{
-			IDCurrent: snapshot.State.IDFence,
-			TSCurrent: snapshot.State.TSOFence,
-		},
-	}
+	out := SnapshotFromRoot(snapshot)
 	s.mu.Lock()
 	s.snapshot = out
 	s.mu.Unlock()

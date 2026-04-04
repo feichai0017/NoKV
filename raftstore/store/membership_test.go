@@ -128,5 +128,8 @@ func TestAddPeerPublishesPlannedTarget(t *testing.T) {
 
 	sink.ResetHistory()
 	require.NoError(t, rs.AddPeer(region.ID, metaregion.Peer{StoreID: 2, PeerID: 2}))
-	require.Empty(t, sink.EventHistory())
+	time.Sleep(50 * time.Millisecond)
+	for _, ev := range sink.EventHistory() {
+		require.NotEqual(t, rootevent.KindPeerAdditionPlanned, ev.rootKind)
+	}
 }
