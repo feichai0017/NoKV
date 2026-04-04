@@ -36,21 +36,32 @@ func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 	}
 	appliedEvent, hasAppliedEvent := appliedPeerChangeEvent(meta, ev.ConfChange)
 	if ev.Peer != nil && peerIndexByID(meta.Peers, ev.Peer.ID()) == -1 {
-		return s.applyTerminalTransition(appliedEvent, func() error {
-			if err := s.applyRegionRemovalSilent(meta.ID); err != nil {
-				return err
-			}
-			s.stopPeer(ev.Peer.ID(), false)
-			return nil
+		return s.applyTerminalTransition(terminalTransition{
+			Event:  appliedEvent,
+			Action: "peer change",
+			Apply: func() error {
+				if err := s.applyRegionRemovalSilent(meta.ID); err != nil {
+					return err
+				}
+				s.stopPeer(ev.Peer.ID(), false)
+				return nil
+			},
 		})
 	}
 	if !hasAppliedEvent {
-		return s.applyTerminalTransition(rootevent.Event{}, func() error {
-			return s.applyRegionMetaSilent(meta)
+		return s.applyTerminalTransition(terminalTransition{
+			Action: "peer change",
+			Apply: func() error {
+				return s.applyRegionMetaSilent(meta)
+			},
 		})
 	}
-	return s.applyTerminalTransition(appliedEvent, func() error {
-		return s.applyRegionMetaSilent(meta)
+	return s.applyTerminalTransition(terminalTransition{
+		Event:  appliedEvent,
+		Action: "peer change",
+		Apply: func() error {
+			return s.applyRegionMetaSilent(meta)
+		},
 	})
 }
 
@@ -258,9 +269,6 @@ func (s *Store) planPeerChange(regionID uint64, cc raftpb.ConfChangeV2) (transit
 	}
 	if regionID == 0 || len(cc.Changes) != 1 {
 		return transitionPlan{}, fmt.Errorf("raftstore: invalid peer change plan")
-	}
-	if _, err := s.leaderPeer(regionID); err != nil {
-		return transitionPlan{}, err
 	}
 	meta, ok := s.RegionMetaByID(regionID)
 	if !ok {

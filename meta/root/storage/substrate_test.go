@@ -102,3 +102,20 @@ func TestTailAdvanceClassifiesWindowShiftWithoutCursorAdvance(t *testing.T) {
 	require.Equal(t, TailWindow{RequestedOffset: 10, StartOffset: 12, EndOffset: 16}, advance.Window())
 	require.False(t, advance.Window().Empty())
 }
+
+func TestPlanTailCompaction(t *testing.T) {
+	records := []CommittedEvent{
+		{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Event: rootevent.StoreJoined(1, "a")},
+		{Cursor: rootstate.Cursor{Term: 1, Index: 4}, Event: rootevent.StoreJoined(2, "b")},
+		{Cursor: rootstate.Cursor{Term: 1, Index: 5}, Event: rootevent.StoreJoined(3, "c")},
+	}
+	plan := PlanTailCompaction(records, rootstate.Cursor{Term: 1, Index: 5}, 2)
+	require.True(t, plan.Compacted)
+	require.Len(t, plan.Tail.Records, 2)
+	require.Equal(t, rootstate.Cursor{Term: 1, Index: 3}, plan.RetainFrom)
+
+	plan = PlanTailCompaction(records, rootstate.Cursor{Term: 1, Index: 5}, 4)
+	require.False(t, plan.Compacted)
+	require.Len(t, plan.Tail.Records, 3)
+	require.Equal(t, rootstate.Cursor{Term: 1, Index: 2}, plan.RetainFrom)
+}

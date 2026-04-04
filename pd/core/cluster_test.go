@@ -3,6 +3,7 @@ package core
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"testing"
 
@@ -157,10 +158,16 @@ func TestClusterPublishRootEventTracksTransitionSnapshot(t *testing.T) {
 	require.NoError(t, c.PublishRootEvent(rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)))
 	transitions := c.TransitionSnapshot()
 	require.Contains(t, transitions.PendingPeerChanges, target.RegionID)
+	require.Len(t, transitions.Entries, 1)
+	require.Equal(t, rootstate.TransitionStatusPending, transitions.Entries[0].Status)
 
 	require.NoError(t, c.PublishRootEvent(rootevent.PeerAdded(target.RegionID, 2, 201, target)))
 	transitions = c.TransitionSnapshot()
 	require.NotContains(t, transitions.PendingPeerChanges, target.RegionID)
+
+	assessment := c.ObserveRootEventLifecycle(rootevent.PeerAdded(target.RegionID, 2, 201, target))
+	require.Equal(t, rootstate.TransitionStatusCompleted, assessment.Status)
+	require.Equal(t, rootstate.RootEventLifecycleSkip, assessment.Decision)
 }
 
 func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descriptor.Descriptor {
