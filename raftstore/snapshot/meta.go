@@ -14,7 +14,10 @@ import (
 
 const (
 	sstVersion       = 1
+	// sstSnapshotName stores one region snapshot manifest as JSON metadata.
 	sstSnapshotName  = "snapshot.json"
+	// sstTablesDirName stores the referenced SST payload files for one imported
+	// or exported region snapshot.
 	sstTablesDirName = "tables"
 )
 
@@ -36,6 +39,9 @@ type Compatibility struct {
 }
 
 // Meta describes one region-scoped SST snapshot.
+//
+// On disk, snapshot.json is a JSON document and tables/ contains the material
+// SST payload files referenced by Meta.Tables.
 type Meta struct {
 	Version       uint32               `json:"version"`
 	Region        localmeta.RegionMeta `json:"region"`

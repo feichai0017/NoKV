@@ -17,10 +17,12 @@ import (
 
 const (
 	// ReplicaStateFileName is the durable local replica catalog file used by one
-	// store for restart recovery.
+	// store for restart recovery. The payload is one binary protobuf blob encoded
+	// as metapb.ReplicaLocalCatalog.
 	ReplicaStateFileName = "replicas.binpb"
 	// RaftProgressFileName is the durable local raft progress file used by one
-	// store for WAL/apply recovery.
+	// store for WAL/apply recovery. The payload is one binary protobuf blob
+	// encoded as metapb.RaftProgressCatalog.
 	RaftProgressFileName = "raft-progress.binpb"
 )
 
@@ -30,7 +32,12 @@ type diskState struct {
 }
 
 // Store persists store-local region metadata used only for local recovery.
-// It is not cluster authority and must not be treated as routing truth.
+//
+// Files:
+//   - replicas.binpb      -> metapb.ReplicaLocalCatalog
+//   - raft-progress.binpb -> metapb.RaftProgressCatalog
+//
+// This store is not cluster authority and must not be treated as routing truth.
 type Store struct {
 	fs      vfs.FS
 	workdir string
