@@ -207,7 +207,7 @@ NoKV 采用了 value separation：
 
 ```text
 snapshot/
-  sst-snapshot.json
+  snapshot.json
   tables/
     000001.sst
     000002.sst

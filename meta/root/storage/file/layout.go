@@ -1,6 +1,6 @@
 package file
 
 const (
-	CheckpointFileName = "metadata-root-checkpoint.pb"
-	LogFileName        = "metadata-root.log"
+	CheckpointFileName = "root.checkpoint.binpb"
+	LogFileName        = "root.events.wal"
 )
