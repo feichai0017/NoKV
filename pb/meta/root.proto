@@ -41,6 +41,7 @@ message RootCheckpoint {
   RootState state = 1;
   repeated nokv.meta.v1.RegionDescriptor descriptors = 2;
   uint64 log_offset = 3;
+  repeated RootPendingPeerChange pending_peer_changes = 4;
 }
 
 message RootStoreMembership {
@@ -78,6 +79,20 @@ message RootPeerChange {
   uint64 store_id = 2;
   uint64 peer_id = 3;
   nokv.meta.v1.RegionDescriptor descriptor = 4;
+}
+
+enum RootPendingPeerChangeKind {
+  ROOT_PENDING_PEER_CHANGE_KIND_UNSPECIFIED = 0;
+  ROOT_PENDING_PEER_CHANGE_KIND_ADDITION = 1;
+  ROOT_PENDING_PEER_CHANGE_KIND_REMOVAL = 2;
+}
+
+message RootPendingPeerChange {
+  uint64 region_id = 1;
+  uint64 store_id = 2;
+  uint64 peer_id = 3;
+  RootPendingPeerChangeKind kind = 4;
+  nokv.meta.v1.RegionDescriptor descriptor = 5;
 }
 
 message RootEvent {

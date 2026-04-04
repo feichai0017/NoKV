@@ -2,6 +2,7 @@ package storage
 
 import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"math"
 	"slices"
@@ -16,9 +17,10 @@ type AllocatorState struct {
 // Snapshot is the reconstructed PD bootstrap catalog derived from durable
 // metadata-root truth.
 type Snapshot struct {
-	ClusterEpoch uint64
-	Descriptors  map[uint64]descriptor.Descriptor
-	Allocator    AllocatorState
+	ClusterEpoch       uint64
+	Descriptors        map[uint64]descriptor.Descriptor
+	PendingPeerChanges map[uint64]rootstate.PendingPeerChange
+	Allocator          AllocatorState
 }
 
 // BootstrapInfo captures rooted PD bootstrap results.

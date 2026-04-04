@@ -46,10 +46,21 @@ func RootSnapshotToProto(snapshot rootstate.Snapshot, tailOffset uint64) *metapb
 	for _, desc := range snapshot.Descriptors {
 		descriptors = append(descriptors, DescriptorToProto(desc))
 	}
+	pending := make([]*metapb.RootPendingPeerChange, 0, len(snapshot.PendingPeerChanges))
+	for regionID, change := range snapshot.PendingPeerChanges {
+		pending = append(pending, &metapb.RootPendingPeerChange{
+			RegionId:    regionID,
+			StoreId:     change.StoreID,
+			PeerId:      change.PeerID,
+			Kind:        rootPendingPeerChangeKindToProto(change.Kind),
+			Descriptor_: DescriptorToProto(change.Target),
+		})
+	}
 	return &metapb.RootCheckpoint{
-		State:       RootStateToProto(snapshot.State),
-		Descriptors: descriptors,
-		LogOffset:   tailOffset,
+		State:              RootStateToProto(snapshot.State),
+		Descriptors:        descriptors,
+		LogOffset:          tailOffset,
+		PendingPeerChanges: pending,
 	}
 }
 
@@ -58,8 +69,9 @@ func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snaps
 		return rootstate.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, 0
 	}
 	snapshot := rootstate.Snapshot{
-		State:       RootStateFromProto(pbCheckpoint.State),
-		Descriptors: make(map[uint64]descriptor.Descriptor, len(pbCheckpoint.Descriptors)),
+		State:              RootStateFromProto(pbCheckpoint.State),
+		Descriptors:        make(map[uint64]descriptor.Descriptor, len(pbCheckpoint.Descriptors)),
+		PendingPeerChanges: make(map[uint64]rootstate.PendingPeerChange, len(pbCheckpoint.PendingPeerChanges)),
 	}
 	for _, pbDesc := range pbCheckpoint.Descriptors {
 		desc := DescriptorFromProto(pbDesc)
@@ -68,7 +80,40 @@ func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snaps
 		}
 		snapshot.Descriptors[desc.RegionID] = desc
 	}
+	for _, pbPending := range pbCheckpoint.PendingPeerChanges {
+		if pbPending.GetRegionId() == 0 {
+			continue
+		}
+		snapshot.PendingPeerChanges[pbPending.GetRegionId()] = rootstate.PendingPeerChange{
+			Kind:    rootPendingPeerChangeKindFromProto(pbPending.GetKind()),
+			StoreID: pbPending.GetStoreId(),
+			PeerID:  pbPending.GetPeerId(),
+			Target:  DescriptorFromProto(pbPending.GetDescriptor_()),
+		}
+	}
 	return snapshot, pbCheckpoint.LogOffset
+}
+
+func rootPendingPeerChangeKindToProto(kind rootstate.PendingPeerChangeKind) metapb.RootPendingPeerChangeKind {
+	switch kind {
+	case rootstate.PendingPeerChangeAddition:
+		return metapb.RootPendingPeerChangeKind_ROOT_PENDING_PEER_CHANGE_KIND_ADDITION
+	case rootstate.PendingPeerChangeRemoval:
+		return metapb.RootPendingPeerChangeKind_ROOT_PENDING_PEER_CHANGE_KIND_REMOVAL
+	default:
+		return metapb.RootPendingPeerChangeKind_ROOT_PENDING_PEER_CHANGE_KIND_UNSPECIFIED
+	}
+}
+
+func rootPendingPeerChangeKindFromProto(kind metapb.RootPendingPeerChangeKind) rootstate.PendingPeerChangeKind {
+	switch kind {
+	case metapb.RootPendingPeerChangeKind_ROOT_PENDING_PEER_CHANGE_KIND_ADDITION:
+		return rootstate.PendingPeerChangeAddition
+	case metapb.RootPendingPeerChangeKind_ROOT_PENDING_PEER_CHANGE_KIND_REMOVAL:
+		return rootstate.PendingPeerChangeRemoval
+	default:
+		return rootstate.PendingPeerChangeUnknown
+	}
 }
 
 func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
