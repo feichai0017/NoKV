@@ -222,7 +222,7 @@ func (s *Service) guardPeerChangeLifecycle(event rootevent.Event) (bool, error) 
 		if !pending {
 			return false, nil
 		}
-		if change.Stage == rootstate.PendingPeerChangeStagePlanned && matchesPendingPeerChange(event, change) {
+		if change.Stage == rootstate.PendingPeerChangeStagePlanned && rootstate.PendingPeerChangeMatchesEvent(change, event) {
 			return true, nil
 		}
 		if change.Stage == rootstate.PendingPeerChangeStageApplied {
@@ -231,7 +231,7 @@ func (s *Service) guardPeerChangeLifecycle(event rootevent.Event) (bool, error) 
 		return false, fmt.Errorf("pending peer change already exists for region %d", event.PeerChange.RegionID)
 	case rootevent.KindPeerAdded, rootevent.KindPeerRemoved:
 		if pending {
-			if matchesPendingPeerChange(event, change) {
+			if rootstate.PendingPeerChangeMatchesEvent(change, event) {
 				if change.Stage == rootstate.PendingPeerChangeStageApplied {
 					return true, nil
 				}
@@ -245,28 +245,6 @@ func (s *Service) guardPeerChangeLifecycle(event rootevent.Event) (bool, error) 
 		}
 	}
 	return false, nil
-}
-
-func matchesPendingPeerChange(event rootevent.Event, pending rootstate.PendingPeerChange) bool {
-	if event.PeerChange == nil {
-		return false
-	}
-	if pending.StoreID != event.PeerChange.StoreID || pending.PeerID != event.PeerChange.PeerID {
-		return false
-	}
-	switch event.Kind {
-	case rootevent.KindPeerAdditionPlanned, rootevent.KindPeerAdded:
-		if pending.Kind != rootstate.PendingPeerChangeAddition {
-			return false
-		}
-	case rootevent.KindPeerRemovalPlanned, rootevent.KindPeerRemoved:
-		if pending.Kind != rootstate.PendingPeerChangeRemoval {
-			return false
-		}
-	default:
-		return false
-	}
-	return pending.Target.Equal(event.PeerChange.Region)
 }
 
 // RemoveRegion deletes region metadata from the PD in-memory catalog.
