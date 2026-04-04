@@ -26,6 +26,18 @@ func TestApplyEventToStateAdvancesEpochsAndCursor(t *testing.T) {
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 3}, st.LastCommitted)
 }
 
+func TestPendingPeerChangeMatchesEvent(t *testing.T) {
+	desc := testDescriptor(10, []byte("a"), []byte("z"))
+	change, ok := rootstate.PendingPeerChangeFromEvent(
+		rootevent.PeerAdditionPlanned(10, 2, 201, desc),
+		rootstate.PendingPeerChangeStagePlanned,
+	)
+	require.True(t, ok)
+	require.True(t, rootstate.PendingPeerChangeMatchesEvent(change, rootevent.PeerAdditionPlanned(10, 2, 201, desc)))
+	require.True(t, rootstate.PendingPeerChangeMatchesEvent(change, rootevent.PeerAdded(10, 2, 201, desc)))
+	require.False(t, rootstate.PendingPeerChangeMatchesEvent(change, rootevent.PeerRemoved(10, 2, 201, desc)))
+}
+
 func TestCursorHelpers(t *testing.T) {
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, rootstate.NextCursor(rootstate.Cursor{}))
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 8}, rootstate.NextCursor(rootstate.Cursor{Term: 2, Index: 7}))
