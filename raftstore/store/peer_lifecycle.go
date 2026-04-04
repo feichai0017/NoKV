@@ -25,6 +25,10 @@ func (s *Store) Router() *Router {
 // When bootstrapPeers is non-empty StartPeer will call Bootstrap with those
 // peers after the peer is registered.
 func (s *Store) StartPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer) (*peer.Peer, error) {
+	return s.startPeer(cfg, bootstrapPeers, true)
+}
+
+func (s *Store) startPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer, publishCatalog bool) (*peer.Peer, error) {
 	if s == nil {
 		return nil, fmt.Errorf("raftstore: store is nil")
 	}
@@ -60,7 +64,11 @@ func (s *Store) StartPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer) (*peer
 	}
 
 	if regionMeta != nil {
-		if err := s.applyRegionMeta(*regionMeta); err != nil {
+		applyMeta := s.applyRegionMeta
+		if !publishCatalog {
+			applyMeta = s.applyRegionMetaSilent
+		}
+		if err := applyMeta(*regionMeta); err != nil {
 			s.router.remove(id)
 			s.regionMgr().setPeer(regionMeta.ID, nil)
 			_ = p.Close()
@@ -78,6 +86,10 @@ func (s *Store) StartPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer) (*peer
 
 // StopPeer removes the peer from the router and closes it.
 func (s *Store) StopPeer(id uint64) {
+	s.stopPeer(id, true)
+}
+
+func (s *Store) stopPeer(id uint64, publishCatalog bool) {
 	if s == nil || id == 0 {
 		return
 	}
@@ -90,7 +102,9 @@ func (s *Store) StopPeer(id uint64) {
 	}
 	if regionID != 0 {
 		s.regionMgr().setPeer(regionID, nil)
-		_ = s.applyRegionState(regionID, metaregion.ReplicaStateRemoving)
+		if publishCatalog {
+			_ = s.applyRegionState(regionID, metaregion.ReplicaStateRemoving)
+		}
 	}
 	if p != nil {
 		_ = p.Close()

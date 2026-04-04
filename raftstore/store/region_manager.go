@@ -104,7 +104,7 @@ func (rm *regionManager) listMetas() []localmeta.RegionMeta {
 	return out
 }
 
-func (rm *regionManager) applyRegionMeta(meta localmeta.RegionMeta) error {
+func (rm *regionManager) applyRegionMeta(meta localmeta.RegionMeta, publish bool) error {
 	if rm == nil {
 		return fmt.Errorf("raftstore: region manager nil")
 	}
@@ -145,7 +145,7 @@ func (rm *regionManager) applyRegionMeta(meta localmeta.RegionMeta) error {
 	if rm.regionMetrics != nil {
 		rm.regionMetrics.RecordUpdate(metaCopy)
 	}
-	if rm.notify != nil {
+	if publish && rm.notify != nil {
 		desc := metacodec.DescriptorFromLocalRegionMeta(metaCopy, 0)
 		event := rootevent.RegionDescriptorPublished(desc)
 		if !existed {
@@ -169,10 +169,10 @@ func (rm *regionManager) applyRegionState(regionID uint64, state metaregion.Repl
 		return fmt.Errorf("raftstore: region %d not found", regionID)
 	}
 	meta.State = state
-	return rm.applyRegionMeta(meta)
+	return rm.applyRegionMeta(meta, true)
 }
 
-func (rm *regionManager) applyRegionRemoval(regionID uint64) error {
+func (rm *regionManager) applyRegionRemoval(regionID uint64, publish bool) error {
 	if rm == nil {
 		return fmt.Errorf("raftstore: region manager nil")
 	}
@@ -185,7 +185,7 @@ func (rm *regionManager) applyRegionRemoval(regionID uint64) error {
 	}
 	if meta.State != metaregion.ReplicaStateTombstone {
 		meta.State = metaregion.ReplicaStateTombstone
-		if err := rm.applyRegionMeta(meta); err != nil {
+		if err := rm.applyRegionMeta(meta, publish); err != nil {
 			return err
 		}
 	}
@@ -201,7 +201,7 @@ func (rm *regionManager) applyRegionRemoval(regionID uint64) error {
 	if rm.regionMetrics != nil {
 		rm.regionMetrics.RecordRemove(regionID)
 	}
-	if rm.notify != nil {
+	if publish && rm.notify != nil {
 		rm.notify(regionEvent{
 			kind:     regionEventRemove,
 			regionID: regionID,
