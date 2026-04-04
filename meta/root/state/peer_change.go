@@ -57,6 +57,9 @@ func EvaluatePeerChangeLifecycle(pendingPeerChanges map[uint64]PendingPeerChange
 	switch event.Kind {
 	case rootevent.KindPeerAdditionPlanned, rootevent.KindPeerRemovalPlanned:
 		if !pending {
+			if hasCurrent && current.Equal(event.PeerChange.Region) {
+				return PeerChangeLifecycleSkip, nil
+			}
 			return PeerChangeLifecycleApply, nil
 		}
 		if PendingPeerChangeMatchesEvent(change, event) {
