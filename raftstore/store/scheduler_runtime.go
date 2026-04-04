@@ -19,19 +19,9 @@ type operationKey struct {
 	typeID OperationType
 }
 
-type regionEventKind uint8
-
-const (
-	regionEventNone regionEventKind = iota
-	regionEventApply
-	regionEventRemove
-)
-
 type regionEvent struct {
-	kind     regionEventKind
-	regionID uint64
-	root     *rootevent.Event
-	seq      uint64
+	root rootevent.Event
+	seq  uint64
 }
 
 func (s *Store) schedulerClient() SchedulerClient {
@@ -194,20 +184,14 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 	if s == nil || s.schedulerClient() == nil || s.sched == nil {
 		return
 	}
-	switch ev.kind {
-	case regionEventApply:
-		if ev.root == nil {
-			return
-		}
-		rootEvent := *ev.root
-		ev.root = &rootEvent
-	case regionEventRemove:
-		if ev.regionID == 0 {
-			return
-		}
-	default:
+	if ev.root.Kind == rootevent.KindUnknown {
 		return
 	}
+	regionID, ok := schedulerRegionEventKey(ev.root)
+	if !ok || regionID == 0 {
+		return
+	}
+	ev.root = rootevent.CloneEvent(ev.root)
 	s.sched.mu.Lock()
 	if s.sched.descriptors == nil {
 		s.sched.descriptors = make(map[uint64]descriptor.Descriptor)
@@ -215,19 +199,10 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 	if s.sched.regionUpdates == nil {
 		s.sched.regionUpdates = make(map[uint64]regionEvent)
 	}
-	switch ev.kind {
-	case regionEventApply:
-		rootmaterialize.ApplyEventToDescriptors(s.sched.descriptors, *ev.root)
-	case regionEventRemove:
-		if ev.root == nil {
-			root := rootevent.RegionTombstoned(ev.regionID)
-			ev.root = &root
-		}
-		delete(s.sched.descriptors, ev.regionID)
-	}
+	rootmaterialize.ApplyEventToDescriptors(s.sched.descriptors, ev.root)
 	s.sched.nextRegionSeq++
 	ev.seq = s.sched.nextRegionSeq
-	s.sched.regionUpdates[ev.regionID] = ev
+	s.sched.regionUpdates[regionID] = ev
 	signal := s.sched.regionSignal
 	s.sched.mu.Unlock()
 	if signal == nil {
@@ -273,14 +248,24 @@ func (s *Store) flushRegionUpdates() {
 
 	ctx := s.runtimeContext()
 	for _, ev := range pending {
-		switch ev.kind {
-		case regionEventApply:
-			_ = s.schedulerClient().PublishRootEvent(ctx, *ev.root)
-		case regionEventRemove:
-			if ev.root != nil {
-				_ = s.schedulerClient().PublishRootEvent(ctx, *ev.root)
-			}
-		}
+		_ = s.schedulerClient().PublishRootEvent(ctx, ev.root)
+	}
+}
+
+func schedulerRegionEventKey(event rootevent.Event) (uint64, bool) {
+	switch {
+	case event.RegionDescriptor != nil:
+		return event.RegionDescriptor.Descriptor.RegionID, true
+	case event.RegionRemoval != nil:
+		return event.RegionRemoval.RegionID, true
+	case event.PeerChange != nil:
+		return event.PeerChange.RegionID, true
+	case event.RangeSplit != nil:
+		return event.RangeSplit.ParentRegionID, true
+	case event.RangeMerge != nil:
+		return event.RangeMerge.Merged.RegionID, true
+	default:
+		return 0, false
 	}
 }
 
