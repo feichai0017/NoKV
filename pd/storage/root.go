@@ -81,10 +81,10 @@ func (s *RootStore) LeaderID() uint64 {
 	return 0
 }
 
-// PublishRegionDescriptor persists one rooted descriptor through the legacy
-// bootstrap/compatibility path. The steady-state topology truth path should use
-// AppendRootEvent with explicit rooted events instead.
-func (s *RootStore) PublishRegionDescriptor(desc descriptor.Descriptor) error {
+// PublishRegionDescriptorCompat persists one rooted descriptor through the
+// legacy bootstrap/compatibility path. The steady-state topology truth path
+// should use AppendRootEvent with explicit rooted events instead.
+func (s *RootStore) PublishRegionDescriptorCompat(desc descriptor.Descriptor) error {
 	if s == nil || desc.RegionID == 0 {
 		return nil
 	}
