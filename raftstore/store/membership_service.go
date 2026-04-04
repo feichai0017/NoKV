@@ -288,11 +288,9 @@ func (s *Store) planPeerChange(regionID uint64, cc raftpb.ConfChangeV2) (transit
 		return transitionPlan{}, err
 	}
 	return transitionPlan{
-		RegionID: regionID,
-		Event:    event,
-		Action:   "peer change",
-		Propose: func(peerRef *peer.Peer) error {
-			return peerRef.ProposeConfChange(cc)
-		},
+		RegionID:   regionID,
+		Event:      event,
+		Action:     "peer change",
+		ConfChange: &cc,
 	}, nil
 }

@@ -184,20 +184,21 @@ func (s *Store) maybeCompactLocked() {
 	if s == nil || len(s.records) <= maxRetainedRecords {
 		return
 	}
-	start := len(s.records) - maxRetainedRecords
-	retained := rootmaterialize.CloneCommittedEvents(s.records[start:])
 	snapshot := rootstate.Snapshot{
 		State:               s.state,
 		Descriptors:         rootstate.CloneDescriptors(s.descs),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.pending),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.pendingRange),
 	}
-	if err := s.storage.CompactCommitted(rootstorage.CommittedTail{Records: retained}); err != nil {
+	plan := rootstorage.PlanTailCompaction(s.records, s.state.LastCommitted, maxRetainedRecords)
+	if !plan.Compacted {
+		s.records = plan.Tail.Records
+		s.retainFrom = plan.RetainFrom
 		return
 	}
-	if err := s.storage.SaveCheckpoint(rootstorage.Checkpoint{Snapshot: snapshot, TailOffset: 0}); err != nil {
+	if err := s.storage.InstallBootstrap(plan.Observed(snapshot)); err != nil {
 		return
 	}
-	s.records = retained
-	s.retainFrom = (rootstorage.CommittedTail{Records: retained}).RetainFrom(s.state.LastCommitted)
+	s.records = plan.Tail.Records
+	s.retainFrom = plan.RetainFrom
 }

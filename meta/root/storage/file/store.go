@@ -52,6 +52,7 @@ func (s store) CompactCommitted(stream rootstorage.CommittedTail) error {
 }
 
 func (s store) InstallBootstrap(observed rootstorage.ObservedCommitted) error {
+	observed = observed.Installable()
 	if err := s.log.CompactCommitted(observed.Tail); err != nil {
 		return err
 	}

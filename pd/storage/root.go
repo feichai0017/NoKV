@@ -58,7 +58,7 @@ func (s *RootStore) WaitForTail(after rootstorage.TailToken, timeout time.Durati
 	if err != nil {
 		return advance, err
 	}
-	if advance.ShouldRefreshState() {
+	if advance.ShouldReloadState() {
 		s.replaceObserved(advance.Observed)
 	}
 	return advance, nil
