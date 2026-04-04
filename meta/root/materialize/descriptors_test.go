@@ -40,11 +40,11 @@ func TestApplyEventToSnapshotTracksPeerChangeStage(t *testing.T) {
 
 	rootmaterialize.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 1}, rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target))
 	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
-	require.Equal(t, rootstate.PendingPeerChangeStagePlanned, snapshot.PendingPeerChanges[target.RegionID].Stage)
+	require.Contains(t, snapshot.PendingPeerChanges, target.RegionID)
 
 	rootmaterialize.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 2}, rootevent.PeerAdded(target.RegionID, 2, 201, target))
 	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
-	require.Equal(t, rootstate.PendingPeerChangeStageApplied, snapshot.PendingPeerChanges[target.RegionID].Stage)
+	require.NotContains(t, snapshot.PendingPeerChanges, target.RegionID)
 }
 
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
