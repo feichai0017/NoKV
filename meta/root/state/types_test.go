@@ -214,6 +214,25 @@ func TestApplyRangeChangeToSnapshot(t *testing.T) {
 	require.True(t, rootstate.ApplyRangeChangeToSnapshot(&snapshot, rootevent.RegionSplitCommitted(parent.RegionID, []byte("m"), left, right)))
 	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
 	require.NotContains(t, snapshot.PendingRangeChanges, parent.RegionID)
+
+	merged := testDescriptor(50, []byte("a"), []byte("z"))
+	leftMerge := testDescriptor(48, []byte("a"), []byte("m"))
+	rightMerge := testDescriptor(49, []byte("m"), []byte("z"))
+	mergeSnapshot := rootstate.Snapshot{
+		State: rootstate.State{ClusterEpoch: 7},
+		Descriptors: map[uint64]descriptor.Descriptor{
+			leftMerge.RegionID:  leftMerge,
+			rightMerge.RegionID: rightMerge,
+		},
+	}
+
+	require.True(t, rootstate.ApplyRangeChangeToSnapshot(&mergeSnapshot, rootevent.RegionMergePlanned(leftMerge.RegionID, rightMerge.RegionID, merged)))
+	require.Equal(t, uint64(8), mergeSnapshot.State.ClusterEpoch)
+	require.Contains(t, mergeSnapshot.PendingRangeChanges, merged.RegionID)
+
+	require.True(t, rootstate.ApplyRangeChangeToSnapshot(&mergeSnapshot, rootevent.RegionMerged(leftMerge.RegionID, rightMerge.RegionID, merged)))
+	require.Equal(t, uint64(8), mergeSnapshot.State.ClusterEpoch)
+	require.NotContains(t, mergeSnapshot.PendingRangeChanges, merged.RegionID)
 }
 
 func TestApplyPeerChangeToSnapshot(t *testing.T) {
