@@ -160,7 +160,7 @@ func (d *NetworkDriver) WaitForTail(after rootstorage.TailToken, timeout time.Du
 		defer d.mu.Unlock()
 		advance, tailErr := d.currentTailLocked(after)
 		if tailErr != nil {
-			return rootstorage.TailAdvance{After: after, Token: d.latest}, fmt.Errorf("meta/root/backend/replicated: network driver is closed")
+			return rootstorage.ObservedCommitted{}.Advance(after, d.latest), fmt.Errorf("meta/root/backend/replicated: network driver is closed")
 		}
 		return advance, fmt.Errorf("meta/root/backend/replicated: network driver is closed")
 	case <-notify:
@@ -174,13 +174,13 @@ func (d *NetworkDriver) WaitForTail(after rootstorage.TailToken, timeout time.Du
 	}
 }
 
-func (d *NetworkDriver) InstallBootstrap(checkpoint rootstorage.Checkpoint, stream rootstorage.CommittedTail) error {
+func (d *NetworkDriver) InstallBootstrap(observed rootstorage.ObservedCommitted) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if err := d.storage.InstallBootstrap(checkpoint, stream); err != nil {
+	if err := d.storage.InstallBootstrap(observed); err != nil {
 		return err
 	}
-	d.bumpLatestLocked(stream.TailCursor(checkpoint.Snapshot.State.LastCommitted))
+	d.bumpLatestLocked(observed.LastCursor())
 	d.signalLocked()
 	return nil
 }
@@ -382,11 +382,7 @@ func (d *NetworkDriver) currentTailLocked(after rootstorage.TailToken) (rootstor
 		return rootstorage.TailAdvance{}, err
 	}
 	d.latest.Cursor = observed.LastCursor()
-	return rootstorage.TailAdvance{
-		After:    after,
-		Token:    d.latest,
-		Observed: observed,
-	}, nil
+	return observed.Advance(after, d.latest), nil
 }
 
 func (d *NetworkDriver) bumpLatestLocked(cursor rootstate.Cursor) {

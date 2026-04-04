@@ -27,7 +27,7 @@ func (f fakeSubstrate) AppendCommitted(...CommittedEvent) (int64, error) { retur
 
 func (f fakeSubstrate) CompactCommitted(CommittedTail) error { return nil }
 
-func (f fakeSubstrate) InstallBootstrap(Checkpoint, CommittedTail) error { return nil }
+func (f fakeSubstrate) InstallBootstrap(ObservedCommitted) error { return nil }
 
 func (f fakeSubstrate) Size() (int64, error) { return 0, nil }
 
