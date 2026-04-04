@@ -112,8 +112,16 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pdpb.RegionHeartbeatRe
 		return nil, err
 	}
 	desc := metacodec.DescriptorFromProto(req.GetRegionDescriptor())
-	if s.touchHeartbeatIfUnchanged(desc) {
-		return &pdpb.RegionHeartbeatResponse{Accepted: true}, nil
+	if s.cluster != nil && desc.RegionID != 0 {
+		current, ok := s.cluster.GetRegionDescriptor(desc.RegionID)
+		if ok {
+			if desc.RootEpoch == 0 {
+				desc.RootEpoch = current.RootEpoch
+			}
+			if current.Equal(desc) && s.cluster.TouchRegionHeartbeat(desc.RegionID) {
+				return &pdpb.RegionHeartbeatResponse{Accepted: true}, nil
+			}
+		}
 	}
 	if err := s.requireExpectedClusterEpoch(req.GetExpectedClusterEpoch()); err != nil {
 		return nil, err
@@ -142,23 +150,6 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pdpb.RegionHeartbeatRe
 		return nil, status.Error(codes.Internal, "apply region descriptor after persist: "+err.Error())
 	}
 	return &pdpb.RegionHeartbeatResponse{Accepted: true}, nil
-}
-
-func (s *Service) touchHeartbeatIfUnchanged(desc descriptor.Descriptor) bool {
-	if s == nil || s.cluster == nil || desc.RegionID == 0 {
-		return false
-	}
-	current, ok := s.cluster.GetRegionDescriptor(desc.RegionID)
-	if !ok {
-		return false
-	}
-	if desc.RootEpoch == 0 {
-		desc.RootEpoch = current.RootEpoch
-	}
-	if !current.Equal(desc) {
-		return false
-	}
-	return s.cluster.TouchRegionHeartbeat(desc.RegionID)
 }
 
 // PublishRootEvent records one explicit rooted topology truth event.
