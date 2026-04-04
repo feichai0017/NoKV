@@ -65,13 +65,13 @@ func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 		if peers, err := decodeConfChangeContext(ev.ConfChange.Context); err == nil && len(peers) > 0 {
 			event = rootevent.PeerAdded(meta.ID, peers[0].StoreID, peers[0].PeerID, desc)
 		}
-		s.enqueueRegionEvent(regionEvent{kind: regionEventApply, regionID: meta.ID, root: &event})
+		s.enqueueAppliedRootEvent(meta.ID, event)
 	case raftpb.ConfChangeRemoveNode:
 		event := rootevent.PeerRemoved(meta.ID, change.NodeID, change.NodeID, desc)
 		if peers, err := decodeConfChangeContext(ev.ConfChange.Context); err == nil && len(peers) > 0 {
 			event = rootevent.PeerRemoved(meta.ID, peers[0].StoreID, peers[0].PeerID, desc)
 		}
-		s.enqueueRegionEvent(regionEvent{kind: regionEventApply, regionID: meta.ID, root: &event})
+		s.enqueueAppliedRootEvent(meta.ID, event)
 	}
 	return nil
 }
