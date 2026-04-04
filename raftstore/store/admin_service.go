@@ -160,12 +160,8 @@ func (s *Store) planSplit(parentID uint64, childMeta localmeta.RegionMeta, split
 	if parentID == 0 || childMeta.ID == 0 {
 		return rangeChangePlan{}, fmt.Errorf("raftstore: invalid region identifiers")
 	}
-	peerRef := s.regionMgr().peer(parentID)
-	if peerRef == nil {
-		return rangeChangePlan{}, fmt.Errorf("raftstore: region %d not hosted on this store", parentID)
-	}
-	if status := peerRef.Status(); status.RaftState != myraft.StateLeader {
-		return rangeChangePlan{}, fmt.Errorf("raftstore: peer %d is not leader", peerRef.ID())
+	if _, err := s.leaderPeer(parentID); err != nil {
+		return rangeChangePlan{}, err
 	}
 	if splitAlreadyAppliedLocal(s, parentID, childMeta, splitKey) {
 		return rangeChangePlan{RegionID: parentID, Noop: true}, nil
@@ -195,12 +191,8 @@ func (s *Store) planMerge(targetRegionID, sourceRegionID uint64) (rangeChangePla
 	if targetRegionID == 0 || sourceRegionID == 0 {
 		return rangeChangePlan{}, fmt.Errorf("raftstore: invalid region identifiers")
 	}
-	peerRef := s.regionMgr().peer(targetRegionID)
-	if peerRef == nil {
-		return rangeChangePlan{}, fmt.Errorf("raftstore: region %d not hosted on this store", targetRegionID)
-	}
-	if status := peerRef.Status(); status.RaftState != myraft.StateLeader {
-		return rangeChangePlan{}, fmt.Errorf("raftstore: peer %d is not leader", peerRef.ID())
+	if _, err := s.leaderPeer(targetRegionID); err != nil {
+		return rangeChangePlan{}, err
 	}
 	transition, err := s.buildMergeTransition(targetRegionID, sourceRegionID)
 	if err != nil {
@@ -226,24 +218,19 @@ func (s *Store) executeRangeChangePlan(plan rangeChangePlan) error {
 	if plan.Noop {
 		return nil
 	}
-	if s.schedulerClient() != nil && plan.RegionID != 0 && plan.Event.Kind != rootevent.KindUnknown {
-		if err := s.schedulerClient().PublishRootEvent(s.runtimeContext(), plan.Event); err != nil {
-			switch plan.Event.Kind {
-			case rootevent.KindRegionSplitPlanned:
-				return fmt.Errorf("raftstore: publish split target: %w", err)
-			case rootevent.KindRegionMergePlanned:
-				return fmt.Errorf("raftstore: publish merge target: %w", err)
-			default:
-				return fmt.Errorf("raftstore: publish range-change target: %w", err)
-			}
-		}
+	action := "range-change"
+	switch plan.Event.Kind {
+	case rootevent.KindRegionSplitPlanned:
+		action = "split"
+	case rootevent.KindRegionMergePlanned:
+		action = "merge"
 	}
-	peerRef := s.regionMgr().peer(plan.RegionID)
-	if peerRef == nil {
-		return fmt.Errorf("raftstore: region %d not hosted on this store", plan.RegionID)
+	if err := s.publishPlannedRootEvent(plan.RegionID, plan.Event, action); err != nil {
+		return err
 	}
-	if status := peerRef.Status(); status.RaftState != myraft.StateLeader {
-		return fmt.Errorf("raftstore: peer %d is not leader", peerRef.ID())
+	peerRef, err := s.leaderPeer(plan.RegionID)
+	if err != nil {
+		return err
 	}
 	data, err := proto.Marshal(plan.Command)
 	if err != nil {

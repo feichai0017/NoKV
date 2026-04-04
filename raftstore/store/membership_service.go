@@ -6,7 +6,6 @@ import (
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 
@@ -145,12 +144,9 @@ func (s *Store) TransferLeader(regionID, targetPeerID uint64) error {
 	if regionID == 0 || targetPeerID == 0 {
 		return fmt.Errorf("raftstore: invalid region (%d) or peer (%d) id", regionID, targetPeerID)
 	}
-	peerRef := s.regionMgr().peer(regionID)
-	if peerRef == nil {
-		return fmt.Errorf("raftstore: region %d not hosted on this store", regionID)
-	}
-	if status := peerRef.Status(); status.RaftState != myraft.StateLeader {
-		return fmt.Errorf("raftstore: peer %d is not leader", peerRef.ID())
+	peerRef, err := s.leaderPeer(regionID)
+	if err != nil {
+		return err
 	}
 	return peerRef.TransferLeader(targetPeerID)
 }
@@ -243,12 +239,8 @@ func (s *Store) planPeerChange(regionID uint64, cc raftpb.ConfChangeV2) (peerCha
 	if regionID == 0 || len(cc.Changes) != 1 {
 		return peerChangePlan{}, fmt.Errorf("raftstore: invalid peer change plan")
 	}
-	peerRef := s.regionMgr().peer(regionID)
-	if peerRef == nil {
-		return peerChangePlan{}, fmt.Errorf("raftstore: region %d not hosted on this store", regionID)
-	}
-	if status := peerRef.Status(); status.RaftState != myraft.StateLeader {
-		return peerChangePlan{}, fmt.Errorf("raftstore: peer %d is not leader", peerRef.ID())
+	if _, err := s.leaderPeer(regionID); err != nil {
+		return peerChangePlan{}, err
 	}
 	meta, ok := s.RegionMetaByID(regionID)
 	if !ok {
@@ -296,17 +288,12 @@ func (s *Store) executePeerChangePlan(plan peerChangePlan) error {
 	if plan.Noop {
 		return nil
 	}
-	if s.schedulerClient() != nil && plan.RegionID != 0 && plan.Event.Kind != rootevent.KindUnknown {
-		if err := s.schedulerClient().PublishRootEvent(s.runtimeContext(), plan.Event); err != nil {
-			return fmt.Errorf("raftstore: publish peer change target: %w", err)
-		}
+	if err := s.publishPlannedRootEvent(plan.RegionID, plan.Event, "peer change"); err != nil {
+		return err
 	}
-	peerRef := s.regionMgr().peer(plan.RegionID)
-	if peerRef == nil {
-		return fmt.Errorf("raftstore: region %d not hosted on this store", plan.RegionID)
-	}
-	if status := peerRef.Status(); status.RaftState != myraft.StateLeader {
-		return fmt.Errorf("raftstore: peer %d is not leader", peerRef.ID())
+	peerRef, err := s.leaderPeer(plan.RegionID)
+	if err != nil {
+		return err
 	}
 	return peerRef.ProposeConfChange(plan.Change)
 }
