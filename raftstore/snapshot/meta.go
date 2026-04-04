@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	sstVersion       = 1
+	sstVersion = 1
 	// sstSnapshotName stores one region snapshot manifest as JSON metadata.
-	sstSnapshotName  = "snapshot.json"
+	sstSnapshotName = "snapshot.json"
 	// sstTablesDirName stores the referenced SST payload files for one imported
 	// or exported region snapshot.
 	sstTablesDirName = "tables"

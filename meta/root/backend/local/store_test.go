@@ -145,7 +145,7 @@ func TestStoreCompactsPhysicalLogAndKeepsRecentTail(t *testing.T) {
 	require.NoError(t, err)
 
 	total := maxRetainedRecords + 8
-	for i := 0; i < total; i++ {
+	for i := range total {
 		_, err := store.Append(rootevent.RegionDescriptorPublished(testDescriptor(uint64(100+i), []byte{byte('a' + i%26)}, []byte{byte('b' + i%26)})))
 		require.NoError(t, err)
 	}

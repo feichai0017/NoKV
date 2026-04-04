@@ -81,7 +81,7 @@ func loadProtocolState(workdir string) (persistedProtocolState, error) {
 	count := int(binary.LittleEndian.Uint32(data[off : off+4]))
 	off += 4
 	state.Entries = make([]myraft.Entry, 0, count)
-	for i := 0; i < count; i++ {
+	for range count {
 		payload, err := read()
 		if err != nil {
 			return persistedProtocolState{}, err

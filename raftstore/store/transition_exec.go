@@ -10,12 +10,20 @@ import (
 )
 
 type transitionPlan struct {
-	RegionID     uint64
-	Event        rootevent.Event
-	Action       string
-	Noop         bool
 	ConfChange   *raftpb.ConfChangeV2
 	AdminPayload []byte
+}
+
+func (p transitionPlan) empty() bool {
+	return p.ConfChange == nil && len(p.AdminPayload) == 0
+}
+
+type transitionTarget struct {
+	RegionID uint64
+	Event    rootevent.Event
+	Action   string
+	Noop     bool
+	Plan     transitionPlan
 }
 
 type terminalTransition struct {
@@ -55,23 +63,17 @@ func (s *Store) publishPlannedRootEvent(regionID uint64, event rootevent.Event, 
 	return nil
 }
 
-func (s *Store) executeTransitionPlan(plan transitionPlan) error {
+func (s *Store) proposeTransition(regionID uint64, plan transitionPlan) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
-	if plan.Noop {
-		return nil
-	}
-	if plan.RegionID == 0 {
+	if regionID == 0 {
 		return fmt.Errorf("raftstore: transition region id is zero")
 	}
-	if plan.ConfChange == nil && len(plan.AdminPayload) == 0 {
+	if plan.empty() {
 		return fmt.Errorf("raftstore: transition proposal is empty")
 	}
-	if err := s.publishPlannedRootEvent(plan.RegionID, plan.Event, plan.Action); err != nil {
-		return err
-	}
-	peerRef, err := s.leaderPeer(plan.RegionID)
+	peerRef, err := s.leaderPeer(regionID)
 	if err != nil {
 		return err
 	}
@@ -83,6 +85,25 @@ func (s *Store) executeTransitionPlan(plan transitionPlan) error {
 	default:
 		return fmt.Errorf("raftstore: transition proposal is empty")
 	}
+}
+
+func (s *Store) executeTransitionTarget(target transitionTarget) error {
+	if s == nil {
+		return fmt.Errorf("raftstore: store is nil")
+	}
+	if target.Noop {
+		return nil
+	}
+	if target.RegionID == 0 {
+		return fmt.Errorf("raftstore: transition region id is zero")
+	}
+	if target.Plan.empty() {
+		return fmt.Errorf("raftstore: transition proposal is empty")
+	}
+	if err := s.publishPlannedRootEvent(target.RegionID, target.Event, target.Action); err != nil {
+		return err
+	}
+	return s.proposeTransition(target.RegionID, target.Plan)
 }
 
 func (s *Store) enqueueAppliedRootEvent(event rootevent.Event) {

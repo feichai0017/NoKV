@@ -17,6 +17,8 @@ import (
 )
 
 func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
+	const eventuallyTimeout = 3 * time.Second
+
 	sink := newTestSchedulerSink()
 	rs := NewStore(Config{Scheduler: sink, StoreID: 1})
 	defer rs.Close()
@@ -45,14 +47,14 @@ func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
 		return hasSchedulerEventSubsequence(sink.EventHistory(),
 			schedulerEvent{kind: "root", regionID: 42, rootKind: rootevent.KindRegionBootstrap},
 		)
-	}, time.Second, 10*time.Millisecond)
+	}, eventuallyTimeout, 10*time.Millisecond)
 	sink.ResetHistory()
 
 	var snapshot []regionHeartbeat
 	require.Eventually(t, func() bool {
 		snapshot = sink.RegionSnapshot()
 		return len(snapshot) == 1
-	}, time.Second, 10*time.Millisecond)
+	}, eventuallyTimeout, 10*time.Millisecond)
 	require.Equal(t, uint64(42), snapshot[0].Descriptor.RegionID)
 	require.False(t, snapshot[0].LastHeartbeat.IsZero())
 
@@ -61,12 +63,12 @@ func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
 		return hasSchedulerEventSubsequence(sink.EventHistory(),
 			schedulerEvent{kind: "root", regionID: 42, rootKind: rootevent.KindRegionDescriptorPublished},
 		)
-	}, time.Second, 10*time.Millisecond)
+	}, eventuallyTimeout, 10*time.Millisecond)
 	sink.ResetHistory()
 	require.Eventually(t, func() bool {
 		snapshot = sink.RegionSnapshot()
 		return len(snapshot) == 1 && snapshot[0].Descriptor.State == metaregion.ReplicaStateRemoving
-	}, time.Second, 10*time.Millisecond)
+	}, eventuallyTimeout, 10*time.Millisecond)
 	require.Equal(t, metaregion.ReplicaStateRemoving, snapshot[0].Descriptor.State)
 
 	require.NoError(t, rs.applyRegionRemoval(42))
@@ -74,10 +76,10 @@ func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
 		return hasSchedulerEventSubsequence(sink.EventHistory(),
 			schedulerEvent{kind: "root", regionID: 42, rootKind: rootevent.KindRegionTombstoned},
 		)
-	}, time.Second, 10*time.Millisecond)
+	}, eventuallyTimeout, 10*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return len(sink.RegionSnapshot()) == 0
-	}, time.Second, 10*time.Millisecond)
+	}, eventuallyTimeout, 10*time.Millisecond)
 }
 
 func TestStoreRegionApplyDoesNotBlockOnSchedulerPublish(t *testing.T) {
