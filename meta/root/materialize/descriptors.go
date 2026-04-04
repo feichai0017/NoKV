@@ -78,20 +78,18 @@ func ApplyEventToSnapshot(snapshot *rootstate.Snapshot, cursor rootstate.Cursor,
 		snapshot.Descriptors[event.RangeMerge.Merged.RegionID] = event.RangeMerge.Merged.Clone()
 	case rootevent.KindPeerAdditionPlanned, rootevent.KindPeerRemovalPlanned:
 		snapshot.State.ClusterEpoch++
-		change, _ := rootstate.PendingPeerChangeFromEvent(event, rootstate.PendingPeerChangeStagePlanned)
+		change, _ := rootstate.PendingPeerChangeFromEvent(event)
 		snapshot.Descriptors[event.PeerChange.RegionID] = change.Target.Clone()
 		snapshot.PendingPeerChanges[event.PeerChange.RegionID] = change
 	case rootevent.KindPeerAdded, rootevent.KindPeerRemoved:
-		change, _ := rootstate.PendingPeerChangeFromEvent(event, rootstate.PendingPeerChangeStageApplied)
+		change, _ := rootstate.PendingPeerChangeFromEvent(event)
 		prev, ok := snapshot.PendingPeerChanges[event.PeerChange.RegionID]
-		matchedPlanned := ok &&
-			prev.Stage == rootstate.PendingPeerChangeStagePlanned &&
-			rootstate.PendingPeerChangeMatchesEvent(prev, event)
-		if !matchedPlanned {
+		matchedPending := ok && rootstate.PendingPeerChangeMatchesEvent(prev, event)
+		if !matchedPending {
 			snapshot.State.ClusterEpoch++
 		}
 		snapshot.Descriptors[event.PeerChange.RegionID] = change.Target.Clone()
-		snapshot.PendingPeerChanges[event.PeerChange.RegionID] = change
+		delete(snapshot.PendingPeerChanges, event.PeerChange.RegionID)
 	}
 	snapshot.State.LastCommitted = cursor
 }

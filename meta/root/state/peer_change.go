@@ -32,7 +32,7 @@ func IsPeerChangeAppliedEvent(event rootevent.Event) bool {
 	}
 }
 
-func PendingPeerChangeFromEvent(event rootevent.Event, stage PendingPeerChangeStage) (PendingPeerChange, bool) {
+func PendingPeerChangeFromEvent(event rootevent.Event) (PendingPeerChange, bool) {
 	if event.PeerChange == nil {
 		return PendingPeerChange{}, false
 	}
@@ -47,7 +47,6 @@ func PendingPeerChangeFromEvent(event rootevent.Event, stage PendingPeerChangeSt
 	}
 	return PendingPeerChange{
 		Kind:    kind,
-		Stage:   stage,
 		StoreID: event.PeerChange.StoreID,
 		PeerID:  event.PeerChange.PeerID,
 		Target:  event.PeerChange.Region.Clone(),
@@ -58,7 +57,7 @@ func PendingPeerChangeMatchesEvent(change PendingPeerChange, event rootevent.Eve
 	if event.PeerChange == nil {
 		return false
 	}
-	expected, ok := PendingPeerChangeFromEvent(event, change.Stage)
+	expected, ok := PendingPeerChangeFromEvent(event)
 	if !ok {
 		return false
 	}
@@ -78,19 +77,13 @@ func EvaluatePeerChangeLifecycle(pendingPeerChanges map[uint64]PendingPeerChange
 		if !pending {
 			return PeerChangeLifecycleApply, nil
 		}
-		if change.Stage == PendingPeerChangeStagePlanned && PendingPeerChangeMatchesEvent(change, event) {
+		if PendingPeerChangeMatchesEvent(change, event) {
 			return PeerChangeLifecycleSkip, nil
-		}
-		if change.Stage == PendingPeerChangeStageApplied {
-			return PeerChangeLifecycleApply, nil
 		}
 		return PeerChangeLifecycleApply, fmt.Errorf("pending peer change already exists for region %d", event.PeerChange.RegionID)
 	case rootevent.KindPeerAdded, rootevent.KindPeerRemoved:
 		if pending {
 			if PendingPeerChangeMatchesEvent(change, event) {
-				if change.Stage == PendingPeerChangeStageApplied {
-					return PeerChangeLifecycleSkip, nil
-				}
 				return PeerChangeLifecycleApply, nil
 			}
 			return PeerChangeLifecycleApply, fmt.Errorf("peer change apply does not match pending target for region %d", event.PeerChange.RegionID)

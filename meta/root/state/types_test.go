@@ -28,10 +28,7 @@ func TestApplyEventToStateAdvancesEpochsAndCursor(t *testing.T) {
 
 func TestPendingPeerChangeMatchesEvent(t *testing.T) {
 	desc := testDescriptor(10, []byte("a"), []byte("z"))
-	change, ok := rootstate.PendingPeerChangeFromEvent(
-		rootevent.PeerAdditionPlanned(10, 2, 201, desc),
-		rootstate.PendingPeerChangeStagePlanned,
-	)
+	change, ok := rootstate.PendingPeerChangeFromEvent(rootevent.PeerAdditionPlanned(10, 2, 201, desc))
 	require.True(t, ok)
 	require.True(t, rootstate.PendingPeerChangeMatchesEvent(change, rootevent.PeerAdditionPlanned(10, 2, 201, desc)))
 	require.True(t, rootstate.PendingPeerChangeMatchesEvent(change, rootevent.PeerAdded(10, 2, 201, desc)))
@@ -47,7 +44,7 @@ func TestEvaluatePeerChangeLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, rootstate.PeerChangeLifecycleApply, decision)
 
-	change, ok := rootstate.PendingPeerChangeFromEvent(planned, rootstate.PendingPeerChangeStagePlanned)
+	change, ok := rootstate.PendingPeerChangeFromEvent(planned)
 	require.True(t, ok)
 	snapshot := rootstate.Snapshot{
 		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{target.RegionID: change},
@@ -65,16 +62,6 @@ func TestEvaluatePeerChangeLifecycle(t *testing.T) {
 	decision, err = rootstate.EvaluatePeerChangeLifecycle(snapshot.PendingPeerChanges, descriptor.Descriptor{}, false, conflicting)
 	require.Error(t, err)
 	require.Equal(t, rootstate.PeerChangeLifecycleApply, decision)
-
-	appliedChange, ok := rootstate.PendingPeerChangeFromEvent(applied, rootstate.PendingPeerChangeStageApplied)
-	require.True(t, ok)
-	appliedSnapshot := rootstate.Snapshot{
-		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{target.RegionID: appliedChange},
-	}
-
-	decision, err = rootstate.EvaluatePeerChangeLifecycle(appliedSnapshot.PendingPeerChanges, descriptor.Descriptor{}, false, applied)
-	require.NoError(t, err)
-	require.Equal(t, rootstate.PeerChangeLifecycleSkip, decision)
 
 	decision, err = rootstate.EvaluatePeerChangeLifecycle(nil, target, true, applied)
 	require.NoError(t, err)

@@ -53,7 +53,6 @@ func RootSnapshotToProto(snapshot rootstate.Snapshot, tailOffset uint64) *metapb
 			StoreId:     change.StoreID,
 			PeerId:      change.PeerID,
 			Kind:        rootPendingPeerChangeKindToProto(change.Kind),
-			Stage:       rootPendingPeerChangeStageToProto(change.Stage),
 			Descriptor_: DescriptorToProto(change.Target),
 		})
 	}
@@ -87,7 +86,6 @@ func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snaps
 		}
 		snapshot.PendingPeerChanges[pbPending.GetRegionId()] = rootstate.PendingPeerChange{
 			Kind:    rootPendingPeerChangeKindFromProto(pbPending.GetKind()),
-			Stage:   rootPendingPeerChangeStageFromProto(pbPending.GetStage()),
 			StoreID: pbPending.GetStoreId(),
 			PeerID:  pbPending.GetPeerId(),
 			Target:  DescriptorFromProto(pbPending.GetDescriptor_()),
@@ -115,28 +113,6 @@ func rootPendingPeerChangeKindFromProto(kind metapb.RootPendingPeerChangeKind) r
 		return rootstate.PendingPeerChangeRemoval
 	default:
 		return rootstate.PendingPeerChangeUnknown
-	}
-}
-
-func rootPendingPeerChangeStageToProto(stage rootstate.PendingPeerChangeStage) metapb.RootPendingPeerChangeStage {
-	switch stage {
-	case rootstate.PendingPeerChangeStagePlanned:
-		return metapb.RootPendingPeerChangeStage_ROOT_PENDING_PEER_CHANGE_STAGE_PLANNED
-	case rootstate.PendingPeerChangeStageApplied:
-		return metapb.RootPendingPeerChangeStage_ROOT_PENDING_PEER_CHANGE_STAGE_APPLIED
-	default:
-		return metapb.RootPendingPeerChangeStage_ROOT_PENDING_PEER_CHANGE_STAGE_UNSPECIFIED
-	}
-}
-
-func rootPendingPeerChangeStageFromProto(stage metapb.RootPendingPeerChangeStage) rootstate.PendingPeerChangeStage {
-	switch stage {
-	case metapb.RootPendingPeerChangeStage_ROOT_PENDING_PEER_CHANGE_STAGE_PLANNED:
-		return rootstate.PendingPeerChangeStagePlanned
-	case metapb.RootPendingPeerChangeStage_ROOT_PENDING_PEER_CHANGE_STAGE_APPLIED:
-		return rootstate.PendingPeerChangeStageApplied
-	default:
-		return rootstate.PendingPeerChangeStageUnknown
 	}
 }
 
