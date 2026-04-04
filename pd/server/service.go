@@ -152,6 +152,15 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pdpb.RegionHeartbeatRe
 	return &pdpb.RegionHeartbeatResponse{Accepted: true}, nil
 }
 
+// RegionLiveness records one runtime heartbeat without mutating rooted truth.
+func (s *Service) RegionLiveness(_ context.Context, req *pdpb.RegionLivenessRequest) (*pdpb.RegionLivenessResponse, error) {
+	if req == nil || req.GetRegionId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "region liveness request missing region_id")
+	}
+	accepted := s.cluster.TouchRegionHeartbeat(req.GetRegionId())
+	return &pdpb.RegionLivenessResponse{Accepted: accepted}, nil
+}
+
 // PublishRootEvent records one explicit rooted topology truth event.
 func (s *Service) PublishRootEvent(_ context.Context, req *pdpb.PublishRootEventRequest) (*pdpb.PublishRootEventResponse, error) {
 	if req == nil || req.GetEvent() == nil {
