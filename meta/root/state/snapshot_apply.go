@@ -110,41 +110,44 @@ func ApplyRangeChangeToSnapshot(snapshot *Snapshot, event rootevent.Event) bool 
 		if !ok {
 			return false
 		}
-		if event.Kind == rootevent.KindRegionSplitPlanned || !RangeChangeStateMatches(snapshot.Descriptors, event) {
-			snapshot.State.ClusterEpoch++
-		}
-		delete(snapshot.Descriptors, event.RangeSplit.ParentRegionID)
-		delete(snapshot.PendingPeerChanges, event.RangeSplit.ParentRegionID)
-		snapshot.Descriptors[event.RangeSplit.Left.RegionID] = event.RangeSplit.Left.Clone()
-		snapshot.Descriptors[event.RangeSplit.Right.RegionID] = event.RangeSplit.Right.Clone()
-		if event.Kind == rootevent.KindRegionSplitPlanned {
-			snapshot.PendingRangeChanges[key] = change
-		} else {
-			delete(snapshot.PendingRangeChanges, key)
-		}
-		return true
+		return applyRangeChangeSnapshotMutation(snapshot, event, key, change, func(snapshot *Snapshot) {
+			delete(snapshot.Descriptors, event.RangeSplit.ParentRegionID)
+			delete(snapshot.PendingPeerChanges, event.RangeSplit.ParentRegionID)
+			snapshot.Descriptors[event.RangeSplit.Left.RegionID] = event.RangeSplit.Left.Clone()
+			snapshot.Descriptors[event.RangeSplit.Right.RegionID] = event.RangeSplit.Right.Clone()
+		})
 	case rootevent.KindRegionMergePlanned, rootevent.KindRegionMerged:
 		key, change, ok := PendingRangeChangeFromEvent(event)
 		if !ok {
 			return false
 		}
-		if event.Kind == rootevent.KindRegionMergePlanned || !RangeChangeStateMatches(snapshot.Descriptors, event) {
-			snapshot.State.ClusterEpoch++
-		}
-		delete(snapshot.Descriptors, event.RangeMerge.LeftRegionID)
-		delete(snapshot.Descriptors, event.RangeMerge.RightRegionID)
-		delete(snapshot.PendingPeerChanges, event.RangeMerge.LeftRegionID)
-		delete(snapshot.PendingPeerChanges, event.RangeMerge.RightRegionID)
-		delete(snapshot.PendingRangeChanges, event.RangeMerge.LeftRegionID)
-		delete(snapshot.PendingRangeChanges, event.RangeMerge.RightRegionID)
-		snapshot.Descriptors[event.RangeMerge.Merged.RegionID] = event.RangeMerge.Merged.Clone()
-		if event.Kind == rootevent.KindRegionMergePlanned {
-			snapshot.PendingRangeChanges[key] = change
-		} else {
-			delete(snapshot.PendingRangeChanges, key)
-		}
-		return true
+		return applyRangeChangeSnapshotMutation(snapshot, event, key, change, func(snapshot *Snapshot) {
+			delete(snapshot.Descriptors, event.RangeMerge.LeftRegionID)
+			delete(snapshot.Descriptors, event.RangeMerge.RightRegionID)
+			delete(snapshot.PendingPeerChanges, event.RangeMerge.LeftRegionID)
+			delete(snapshot.PendingPeerChanges, event.RangeMerge.RightRegionID)
+			delete(snapshot.PendingRangeChanges, event.RangeMerge.LeftRegionID)
+			delete(snapshot.PendingRangeChanges, event.RangeMerge.RightRegionID)
+			snapshot.Descriptors[event.RangeMerge.Merged.RegionID] = event.RangeMerge.Merged.Clone()
+		})
 	default:
 		return false
 	}
+}
+
+func applyRangeChangeSnapshotMutation(snapshot *Snapshot, event rootevent.Event, key uint64, change PendingRangeChange, mutate func(*Snapshot)) bool {
+	if isPlannedRangeChangeEvent(event) || !RangeChangeStateMatches(snapshot.Descriptors, event) {
+		snapshot.State.ClusterEpoch++
+	}
+	mutate(snapshot)
+	if isPlannedRangeChangeEvent(event) {
+		snapshot.PendingRangeChanges[key] = change
+		return true
+	}
+	delete(snapshot.PendingRangeChanges, key)
+	return true
+}
+
+func isPlannedRangeChangeEvent(event rootevent.Event) bool {
+	return event.Kind == rootevent.KindRegionSplitPlanned || event.Kind == rootevent.KindRegionMergePlanned
 }

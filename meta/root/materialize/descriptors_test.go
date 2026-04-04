@@ -72,6 +72,34 @@ func TestApplyEventToSnapshotTracksPendingSplitLifecycle(t *testing.T) {
 	require.NotContains(t, snapshot.PendingRangeChanges, parent.RegionID)
 }
 
+func TestApplyEventToSnapshotTracksPendingMergeLifecycle(t *testing.T) {
+	left := testDescriptor(48, []byte("a"), []byte("m"))
+	right := testDescriptor(49, []byte("m"), []byte("z"))
+	merged := testDescriptor(50, []byte("a"), []byte("z"))
+	left.RootEpoch = 5
+	right.RootEpoch = 5
+	merged.RootEpoch = 6
+	left.EnsureHash()
+	right.EnsureHash()
+	merged.EnsureHash()
+
+	snapshot := rootstate.Snapshot{
+		State: rootstate.State{ClusterEpoch: 5},
+		Descriptors: map[uint64]descriptor.Descriptor{
+			left.RegionID:  left,
+			right.RegionID: right,
+		},
+	}
+
+	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 1}, rootevent.RegionMergePlanned(left.RegionID, right.RegionID, merged))
+	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
+	require.Contains(t, snapshot.PendingRangeChanges, merged.RegionID)
+
+	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 2}, rootevent.RegionMerged(left.RegionID, right.RegionID, merged))
+	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
+	require.NotContains(t, snapshot.PendingRangeChanges, merged.RegionID)
+}
+
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
 	desc := descriptor.Descriptor{
 		RegionID:  id,
