@@ -13,6 +13,15 @@ import (
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
+// PeerChangePlan captures one target-state peer membership transition. The
+// coordinator publishes Event to Meta before the executor proposes Change to
+// the data-plane raft group.
+type PeerChangePlan struct {
+	RegionID uint64
+	Change   raftpb.ConfChangeV2
+	Event    rootevent.Event
+}
+
 func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 	if s == nil {
 		return nil
@@ -67,25 +76,17 @@ func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 	return nil
 }
 
-// ProposeAddPeer issues a configuration change to add the provided peer to the
-// region's raft group. Local region metadata is updated once the configuration
-// change is committed and applied.
-func (s *Store) ProposeAddPeer(regionID uint64, meta metaregion.Peer) error {
+// PlanAddPeer constructs one planned peer-addition transition for the region
+// leader to publish into Meta before the data-plane raft group executes it.
+func (s *Store) PlanAddPeer(regionID uint64, meta metaregion.Peer) (PeerChangePlan, error) {
 	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
+		return PeerChangePlan{}, fmt.Errorf("raftstore: store is nil")
 	}
 	if regionID == 0 {
-		return fmt.Errorf("raftstore: region id is zero")
+		return PeerChangePlan{}, fmt.Errorf("raftstore: region id is zero")
 	}
 	if meta.PeerID == 0 {
-		return fmt.Errorf("raftstore: peer id is zero")
-	}
-	peerRef := s.regionMgr().peer(regionID)
-	if peerRef == nil {
-		return fmt.Errorf("raftstore: region %d not hosted on this store", regionID)
-	}
-	if status := peerRef.Status(); status.RaftState != myraft.StateLeader {
-		return fmt.Errorf("raftstore: peer %d is not leader", peerRef.ID())
+		return PeerChangePlan{}, fmt.Errorf("raftstore: peer id is zero")
 	}
 	cc := raftpb.ConfChangeV2{
 		Changes: []raftpb.ConfChangeSingle{
@@ -96,27 +97,17 @@ func (s *Store) ProposeAddPeer(regionID uint64, meta metaregion.Peer) error {
 		},
 		Context: encodeConfChangeContext([]metaregion.Peer{meta}),
 	}
-	if err := peerRef.ProposeConfChange(cc); err != nil {
-		return err
-	}
-	return s.publishPeerChangeTarget(regionID, cc)
+	return s.planPeerChange(regionID, cc)
 }
 
-// ProposeRemovePeer issues a configuration change removing the peer with the
-// provided peer ID from the region's raft group.
-func (s *Store) ProposeRemovePeer(regionID, peerID uint64) error {
+// PlanRemovePeer constructs one planned peer-removal transition for the region
+// leader to publish into Meta before the data-plane raft group executes it.
+func (s *Store) PlanRemovePeer(regionID, peerID uint64) (PeerChangePlan, error) {
 	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
+		return PeerChangePlan{}, fmt.Errorf("raftstore: store is nil")
 	}
 	if regionID == 0 || peerID == 0 {
-		return fmt.Errorf("raftstore: invalid region (%d) or peer (%d) id", regionID, peerID)
-	}
-	peerRef := s.regionMgr().peer(regionID)
-	if peerRef == nil {
-		return fmt.Errorf("raftstore: region %d not hosted on this store", regionID)
-	}
-	if status := peerRef.Status(); status.RaftState != myraft.StateLeader {
-		return fmt.Errorf("raftstore: peer %d is not leader", peerRef.ID())
+		return PeerChangePlan{}, fmt.Errorf("raftstore: invalid region (%d) or peer (%d) id", regionID, peerID)
 	}
 	ctxMeta := metaregion.Peer{StoreID: peerID, PeerID: peerID}
 	if meta, ok := s.RegionMetaByID(regionID); ok {
@@ -133,10 +124,37 @@ func (s *Store) ProposeRemovePeer(regionID, peerID uint64) error {
 		},
 		Context: encodeConfChangeContext([]metaregion.Peer{ctxMeta}),
 	}
-	if err := peerRef.ProposeConfChange(cc); err != nil {
-		return err
+	return s.planPeerChange(regionID, cc)
+}
+
+// PublishPeerChangePlan records one planned peer membership transition in Meta.
+func (s *Store) PublishPeerChangePlan(plan PeerChangePlan) error {
+	if s == nil || s.schedulerClient() == nil || plan.RegionID == 0 || plan.Event.Kind == rootevent.KindUnknown {
+		return nil
 	}
-	return s.publishPeerChangeTarget(regionID, cc)
+	if err := s.schedulerClient().PublishRootEvent(s.runtimeContext(), plan.Event); err != nil {
+		return fmt.Errorf("raftstore: publish peer change target: %w", err)
+	}
+	return nil
+}
+
+// ProposePeerChange submits one previously planned peer membership change to
+// the local region leader for execution.
+func (s *Store) ProposePeerChange(plan PeerChangePlan) error {
+	if s == nil {
+		return fmt.Errorf("raftstore: store is nil")
+	}
+	if plan.RegionID == 0 || len(plan.Change.Changes) != 1 {
+		return fmt.Errorf("raftstore: invalid peer change plan")
+	}
+	peerRef := s.regionMgr().peer(plan.RegionID)
+	if peerRef == nil {
+		return fmt.Errorf("raftstore: region %d not hosted on this store", plan.RegionID)
+	}
+	if status := peerRef.Status(); status.RaftState != myraft.StateLeader {
+		return fmt.Errorf("raftstore: peer %d is not leader", peerRef.ID())
+	}
+	return peerRef.ProposeConfChange(plan.Change)
 }
 
 // TransferLeader initiates leadership transfer for the specified region to the
@@ -239,18 +257,31 @@ func peerIndexByID(peers []metaregion.Peer, peerID uint64) int {
 	return -1
 }
 
-func (s *Store) publishPeerChangeTarget(regionID uint64, cc raftpb.ConfChangeV2) error {
-	if s == nil || s.schedulerClient() == nil || regionID == 0 || len(cc.Changes) != 1 {
-		return nil
+func (s *Store) planPeerChange(regionID uint64, cc raftpb.ConfChangeV2) (PeerChangePlan, error) {
+	if s == nil {
+		return PeerChangePlan{}, fmt.Errorf("raftstore: store is nil")
+	}
+	if regionID == 0 || len(cc.Changes) != 1 {
+		return PeerChangePlan{}, fmt.Errorf("raftstore: invalid peer change plan")
+	}
+	peerRef := s.regionMgr().peer(regionID)
+	if peerRef == nil {
+		return PeerChangePlan{}, fmt.Errorf("raftstore: region %d not hosted on this store", regionID)
+	}
+	if status := peerRef.Status(); status.RaftState != myraft.StateLeader {
+		return PeerChangePlan{}, fmt.Errorf("raftstore: peer %d is not leader", peerRef.ID())
 	}
 	meta, ok := s.RegionMetaByID(regionID)
 	if !ok {
-		return nil
+		return PeerChangePlan{}, fmt.Errorf("raftstore: region %d metadata not found", regionID)
 	}
 	next := localmeta.CloneRegionMeta(meta)
 	changed, err := applyConfChangeToMeta(&next, cc)
 	if err != nil || !changed {
-		return err
+		if err != nil {
+			return PeerChangePlan{}, err
+		}
+		return PeerChangePlan{}, fmt.Errorf("raftstore: peer change does not modify region %d", regionID)
 	}
 	next.Epoch.ConfVersion += uint64(len(cc.Changes))
 	desc := metacodec.DescriptorFromLocalRegionMeta(next, 0)
@@ -262,7 +293,7 @@ func (s *Store) publishPeerChangeTarget(regionID uint64, cc raftpb.ConfChangeV2)
 	case raftpb.ConfChangeRemoveNode:
 		event = rootevent.PeerRemovalPlanned(next.ID, change.NodeID, change.NodeID, desc)
 	default:
-		return nil
+		return PeerChangePlan{}, fmt.Errorf("raftstore: unsupported conf change type %v", change.Type)
 	}
 	if peers, err := decodeConfChangeContext(cc.Context); err == nil && len(peers) > 0 {
 		switch change.Type {
@@ -272,8 +303,9 @@ func (s *Store) publishPeerChangeTarget(regionID uint64, cc raftpb.ConfChangeV2)
 			event = rootevent.PeerRemovalPlanned(next.ID, peers[0].StoreID, peers[0].PeerID, desc)
 		}
 	}
-	if err := s.schedulerClient().PublishRootEvent(s.runtimeContext(), event); err != nil {
-		return fmt.Errorf("raftstore: publish peer change target: %w", err)
-	}
-	return nil
+	return PeerChangePlan{
+		RegionID: regionID,
+		Change:   cc,
+		Event:    event,
+	}, nil
 }

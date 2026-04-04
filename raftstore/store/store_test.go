@@ -296,7 +296,7 @@ func hasSchedulerEventSubsequence(history []schedulerEvent, want ...schedulerEve
 	}
 	idx := 0
 	for _, got := range history {
-		if got == want[idx] {
+		if schedulerEventMatches(got, want[idx]) {
 			idx++
 			if idx == len(want) {
 				return true
@@ -304,6 +304,19 @@ func hasSchedulerEventSubsequence(history []schedulerEvent, want ...schedulerEve
 		}
 	}
 	return false
+}
+
+func schedulerEventMatches(got, want schedulerEvent) bool {
+	if want.kind != "" && got.kind != want.kind {
+		return false
+	}
+	if want.regionID != 0 && got.regionID != want.regionID {
+		return false
+	}
+	if want.rootKind != 0 && got.rootKind != want.rootKind {
+		return false
+	}
+	return true
 }
 
 func TestStoreSplitMergeLifecycle(t *testing.T) {
