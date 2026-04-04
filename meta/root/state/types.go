@@ -28,8 +28,17 @@ const (
 	PendingPeerChangeRemoval
 )
 
+type PendingPeerChangeStage uint8
+
+const (
+	PendingPeerChangeStageUnknown PendingPeerChangeStage = iota
+	PendingPeerChangeStagePlanned
+	PendingPeerChangeStageApplied
+)
+
 type PendingPeerChange struct {
 	Kind    PendingPeerChangeKind
+	Stage   PendingPeerChangeStage
 	StoreID uint64
 	PeerID  uint64
 	Target  descriptor.Descriptor
@@ -76,6 +85,7 @@ func ClonePendingPeerChanges(in map[uint64]PendingPeerChange) map[uint64]Pending
 	for id, change := range in {
 		out[id] = PendingPeerChange{
 			Kind:    change.Kind,
+			Stage:   change.Stage,
 			StoreID: change.StoreID,
 			PeerID:  change.PeerID,
 			Target:  change.Target.Clone(),
