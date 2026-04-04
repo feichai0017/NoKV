@@ -37,3 +37,15 @@ func (s *Store) publishPlannedRootEvent(regionID uint64, event rootevent.Event, 
 	}
 	return nil
 }
+
+func (s *Store) enqueueAppliedRootEvent(regionID uint64, event rootevent.Event) {
+	if s == nil || s.sched == nil || regionID == 0 || event.Kind == rootevent.KindUnknown {
+		return
+	}
+	cp := rootevent.CloneEvent(event)
+	s.enqueueRegionEvent(regionEvent{
+		kind:     regionEventApply,
+		regionID: regionID,
+		root:     &cp,
+	})
+}

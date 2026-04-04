@@ -308,8 +308,7 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta localmeta.RegionMeta
 		return nil, err
 	}
 	if s.sched != nil {
-		event := committedSplitEvent(transition)
-		s.enqueueRegionEvent(regionEvent{kind: regionEventApply, regionID: originalParent.ID, root: &event})
+		s.enqueueAppliedRootEvent(originalParent.ID, committedSplitEvent(transition))
 	}
 	return childPeer, nil
 }
@@ -407,8 +406,7 @@ func (s *Store) handleMergeCommand(merge *raftcmdpb.MergeCommand) error {
 		return err
 	}
 	if s.sched != nil {
-		event := committedMergeEvent(transition)
-		s.enqueueRegionEvent(regionEvent{kind: regionEventApply, regionID: transition.mergedDesc.RegionID, root: &event})
+		s.enqueueAppliedRootEvent(transition.mergedDesc.RegionID, committedMergeEvent(transition))
 	}
 	if peer := s.regionMgr().peer(sourceMeta.ID); peer != nil {
 		s.StopPeer(peer.ID())
