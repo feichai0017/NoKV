@@ -30,7 +30,6 @@ const (
 type regionEvent struct {
 	kind     regionEventKind
 	regionID uint64
-	desc     descriptor.Descriptor
 	root     *rootevent.Event
 	seq      uint64
 }
@@ -197,16 +196,11 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 	}
 	switch ev.kind {
 	case regionEventApply:
-		if ev.root == nil && ev.desc.RegionID == 0 {
+		if ev.root == nil {
 			return
 		}
-		if ev.root != nil {
-			rootEvent := *ev.root
-			ev.root = &rootEvent
-		} else {
-			ev.regionID = ev.desc.RegionID
-			ev.desc = ev.desc.Clone()
-		}
+		rootEvent := *ev.root
+		ev.root = &rootEvent
 	case regionEventRemove:
 		if ev.regionID == 0 {
 			return
@@ -221,15 +215,14 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 	if s.sched.regionUpdates == nil {
 		s.sched.regionUpdates = make(map[uint64]regionEvent)
 	}
-	ev = s.normalizeRegionEventLocked(ev)
 	switch ev.kind {
 	case regionEventApply:
-		if ev.root != nil {
-			rootmaterialize.ApplyEventToDescriptors(s.sched.descriptors, *ev.root)
-		} else {
-			s.sched.descriptors[ev.regionID] = ev.desc.Clone()
-		}
+		rootmaterialize.ApplyEventToDescriptors(s.sched.descriptors, *ev.root)
 	case regionEventRemove:
+		if ev.root == nil {
+			root := rootevent.RegionTombstoned(ev.regionID)
+			ev.root = &root
+		}
 		delete(s.sched.descriptors, ev.regionID)
 	}
 	s.sched.nextRegionSeq++
@@ -282,42 +275,12 @@ func (s *Store) flushRegionUpdates() {
 	for _, ev := range pending {
 		switch ev.kind {
 		case regionEventApply:
-			if ev.root != nil {
-				_ = s.schedulerClient().PublishRootEvent(ctx, *ev.root)
-			}
+			_ = s.schedulerClient().PublishRootEvent(ctx, *ev.root)
 		case regionEventRemove:
 			if ev.root != nil {
 				_ = s.schedulerClient().PublishRootEvent(ctx, *ev.root)
 			}
 		}
-	}
-}
-
-func (s *Store) normalizeRegionEventLocked(ev regionEvent) regionEvent {
-	if s == nil || s.sched == nil {
-		return ev
-	}
-	switch ev.kind {
-	case regionEventApply:
-		if ev.root != nil || ev.desc.RegionID == 0 {
-			return ev
-		}
-		_, existed := s.sched.descriptors[ev.regionID]
-		root := rootevent.RegionDescriptorPublished(ev.desc)
-		if !existed {
-			root = rootevent.RegionBootstrapped(ev.desc)
-		}
-		ev.root = &root
-		return ev
-	case regionEventRemove:
-		if ev.root != nil || ev.regionID == 0 {
-			return ev
-		}
-		root := rootevent.RegionTombstoned(ev.regionID)
-		ev.root = &root
-		return ev
-	default:
-		return ev
 	}
 }
 
