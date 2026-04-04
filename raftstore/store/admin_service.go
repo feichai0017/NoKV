@@ -16,6 +16,82 @@ import (
 	proto "google.golang.org/protobuf/proto"
 )
 
+func (s *Store) planSplitEvent(parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) (rootevent.Event, error) {
+	if s == nil {
+		return rootevent.Event{}, fmt.Errorf("raftstore: store is nil")
+	}
+	if parentID == 0 || childMeta.ID == 0 {
+		return rootevent.Event{}, fmt.Errorf("raftstore: invalid region identifiers")
+	}
+	parentMeta, ok := s.RegionMetaByID(parentID)
+	if !ok {
+		return rootevent.Event{}, fmt.Errorf("raftstore: parent region %d not found", parentID)
+	}
+	if len(parentMeta.EndKey) > 0 && bytes.Compare(splitKey, parentMeta.EndKey) >= 0 {
+		return rootevent.Event{}, fmt.Errorf("raftstore: split key >= parent end key")
+	}
+	if bytes.Compare(splitKey, parentMeta.StartKey) <= 0 {
+		return rootevent.Event{}, fmt.Errorf("raftstore: split key must be greater than parent start key")
+	}
+	originalParent := localmeta.CloneRegionMeta(parentMeta)
+	newParent := parentMeta
+	newParent.EndKey = append([]byte(nil), splitKey...)
+	newParent.Epoch.Version++
+	childMeta = localmeta.CloneRegionMeta(childMeta)
+	if len(childMeta.StartKey) == 0 {
+		childMeta.StartKey = append([]byte(nil), splitKey...)
+	}
+	if childMeta.State == 0 {
+		childMeta.State = metaregion.ReplicaStateRunning
+	}
+	parentDesc := metacodec.DescriptorFromLocalRegionMeta(newParent, 0)
+	childDesc := metacodec.DescriptorFromLocalRegionMeta(childMeta, 0)
+	parentDesc.Lineage = append(parentDesc.Lineage, descriptor.LineageRef{
+		RegionID: originalParent.ID,
+		Epoch:    originalParent.Epoch,
+		Kind:     descriptor.LineageKindSplitParent,
+	})
+	childDesc.Lineage = append(childDesc.Lineage, descriptor.LineageRef{
+		RegionID: originalParent.ID,
+		Epoch:    originalParent.Epoch,
+		Kind:     descriptor.LineageKindSplitParent,
+	})
+	return rootevent.RegionSplitPlanned(originalParent.ID, splitKey, parentDesc, childDesc), nil
+}
+
+func (s *Store) planMergeEvent(targetRegionID, sourceRegionID uint64) (rootevent.Event, error) {
+	if s == nil {
+		return rootevent.Event{}, fmt.Errorf("raftstore: store is nil")
+	}
+	if targetRegionID == 0 || sourceRegionID == 0 {
+		return rootevent.Event{}, fmt.Errorf("raftstore: invalid region identifiers")
+	}
+	parentMeta, ok := s.RegionMetaByID(targetRegionID)
+	if !ok {
+		return rootevent.Event{}, fmt.Errorf("raftstore: target region %d not found", targetRegionID)
+	}
+	sourceMeta, ok := s.RegionMetaByID(sourceRegionID)
+	if !ok {
+		return rootevent.Event{}, fmt.Errorf("raftstore: source region %d not found", sourceRegionID)
+	}
+	updated := parentMeta
+	updated.Epoch.Version++
+	if len(sourceMeta.EndKey) == 0 || bytes.Compare(sourceMeta.EndKey, updated.EndKey) > 0 {
+		updated.EndKey = append([]byte(nil), sourceMeta.EndKey...)
+	}
+	mergedDesc := metacodec.DescriptorFromLocalRegionMeta(updated, 0)
+	mergedDesc.Lineage = append(mergedDesc.Lineage, descriptor.LineageRef{
+		RegionID: sourceMeta.ID,
+		Epoch:    sourceMeta.Epoch,
+		Kind:     descriptor.LineageKindMergeSource,
+	})
+	leftID, rightID := mergedDesc.RegionID, sourceMeta.ID
+	if bytes.Compare(sourceMeta.StartKey, mergedDesc.StartKey) < 0 {
+		leftID, rightID = sourceMeta.ID, mergedDesc.RegionID
+	}
+	return rootevent.RegionMergePlanned(leftID, rightID, mergedDesc), nil
+}
+
 // splitRegionLocal updates the parent region metadata and bootstraps a new
 // peer for the child region. It is intentionally kept local to the store
 // package so callers cannot bypass raft and mutate region layout directly.
@@ -98,6 +174,15 @@ func (s *Store) ProposeSplit(parentID uint64, childMeta localmeta.RegionMeta, sp
 	if status := parentPeer.Status(); status.RaftState != myraft.StateLeader {
 		return fmt.Errorf("raftstore: peer %d is not leader", parentPeer.ID())
 	}
+	if s.schedulerClient() != nil {
+		event, err := s.planSplitEvent(parentID, childMeta, splitKey)
+		if err != nil {
+			return err
+		}
+		if err := s.schedulerClient().PublishRootEvent(s.runtimeContext(), event); err != nil {
+			return fmt.Errorf("raftstore: publish split target: %w", err)
+		}
+	}
 	cmd := &raftcmdpb.AdminCommand{
 		Type: raftcmdpb.AdminCommand_SPLIT,
 		Split: &raftcmdpb.SplitCommand{
@@ -127,6 +212,15 @@ func (s *Store) ProposeMerge(targetRegionID, sourceRegionID uint64) error {
 	}
 	if status := peer.Status(); status.RaftState != myraft.StateLeader {
 		return fmt.Errorf("raftstore: peer %d is not leader", peer.ID())
+	}
+	if s.schedulerClient() != nil {
+		event, err := s.planMergeEvent(targetRegionID, sourceRegionID)
+		if err != nil {
+			return err
+		}
+		if err := s.schedulerClient().PublishRootEvent(s.runtimeContext(), event); err != nil {
+			return fmt.Errorf("raftstore: publish merge target: %w", err)
+		}
 	}
 	cmd := &raftcmdpb.AdminCommand{
 		Type: raftcmdpb.AdminCommand_MERGE,
