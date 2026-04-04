@@ -82,39 +82,6 @@ func (s *RootStore) LeaderID() uint64 {
 	return 0
 }
 
-// PublishRegionDescriptorCompat persists one rooted descriptor through the
-// legacy bootstrap/compatibility path. The steady-state topology truth path
-// should use AppendRootEvent with explicit rooted events instead.
-func (s *RootStore) PublishRegionDescriptorCompat(desc descriptor.Descriptor) error {
-	if s == nil || desc.RegionID == 0 {
-		return nil
-	}
-	s.mu.RLock()
-	clusterEpoch := s.snapshot.ClusterEpoch
-	prev, existed := s.snapshot.Descriptors[desc.RegionID]
-	s.mu.RUnlock()
-	if desc.RootEpoch == 0 {
-		if existed && prev.RootEpoch != 0 {
-			desc.RootEpoch = prev.RootEpoch
-		} else {
-			desc.RootEpoch = clusterEpoch + 1
-		}
-	}
-
-	if existed && prev.Equal(desc) {
-		return nil
-	}
-
-	event := rootevent.RegionDescriptorPublished(desc)
-	if !existed {
-		event = rootevent.RegionBootstrapped(desc)
-	}
-	if _, err := s.root.Append(event); err != nil {
-		return err
-	}
-	return s.reload()
-}
-
 // AppendRootEvent persists one explicit rooted metadata event.
 func (s *RootStore) AppendRootEvent(event rootevent.Event) error {
 	if s == nil || s.root == nil || event.Kind == rootevent.KindUnknown {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"os"
 	"path/filepath"
@@ -143,14 +144,14 @@ func TestRestorePDRegionsFromLocalSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	store, err := pdstorage.OpenRootLocalStore(dir)
 	require.NoError(t, err)
-	require.NoError(t, store.PublishRegionDescriptorCompat(testDescriptor(10, []byte("a"), []byte("m"), metaregion.Epoch{
+	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(testDescriptor(10, []byte("a"), []byte("m"), metaregion.Epoch{
 		Version:     1,
 		ConfVersion: 1,
-	})))
-	require.NoError(t, store.PublishRegionDescriptorCompat(testDescriptor(20, []byte("m"), nil, metaregion.Epoch{
+	}))))
+	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(testDescriptor(20, []byte("m"), nil, metaregion.Epoch{
 		Version:     1,
 		ConfVersion: 1,
-	})))
+	}))))
 	snapshotState, err := store.Load()
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
@@ -180,8 +181,8 @@ func TestRunPDCmdReloadsPersistedRegionCatalog(t *testing.T) {
 	dir := t.TempDir()
 	store, err := pdstorage.OpenRootLocalStore(dir)
 	require.NoError(t, err)
-	require.NoError(t, store.PublishRegionDescriptorCompat(testDescriptor(31, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1})))
-	require.NoError(t, store.PublishRegionDescriptorCompat(testDescriptor(32, []byte("m"), nil, metaregion.Epoch{Version: 3, ConfVersion: 2})))
+	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(testDescriptor(31, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}))))
+	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(testDescriptor(32, []byte("m"), nil, metaregion.Epoch{Version: 3, ConfVersion: 2}))))
 	require.NoError(t, store.Close())
 
 	var buf bytes.Buffer
