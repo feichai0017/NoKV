@@ -4,6 +4,7 @@ import (
 	"fmt"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	"sync"
 
 	"github.com/feichai0017/NoKV/metrics"
@@ -135,6 +136,7 @@ func (rm *regionManager) applyRegionMeta(meta localmeta.RegionMeta) error {
 	}
 
 	rm.mu.Lock()
+	_, existed := rm.metaByID[metaCopy.ID]
 	rm.metaByID[metaCopy.ID] = localmeta.CloneRegionMeta(metaCopy)
 	p := rm.peers[metaCopy.ID]
 	rm.mu.Unlock()
@@ -144,13 +146,15 @@ func (rm *regionManager) applyRegionMeta(meta localmeta.RegionMeta) error {
 		rm.regionMetrics.RecordUpdate(metaCopy)
 	}
 	if rm.notify != nil {
-		// Lift the local region mutation into descriptor form once when it leaves
-		// the store-local catalog. Control-plane consumers should stay on
-		// descriptor semantics instead of feeding RegionMeta back in.
+		desc := metacodec.DescriptorFromLocalRegionMeta(metaCopy, 0)
+		event := rootevent.RegionDescriptorPublished(desc)
+		if !existed {
+			event = rootevent.RegionBootstrapped(desc)
+		}
 		rm.notify(regionEvent{
 			kind:     regionEventApply,
 			regionID: metaCopy.ID,
-			desc:     metacodec.DescriptorFromLocalRegionMeta(metaCopy, 0),
+			root:     &event,
 		})
 	}
 	return nil
