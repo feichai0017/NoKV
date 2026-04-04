@@ -24,6 +24,29 @@ type Snapshot struct {
 	Allocator           AllocatorState
 }
 
+func CloneSnapshot(snapshot Snapshot) Snapshot {
+	return Snapshot{
+		ClusterEpoch:        snapshot.ClusterEpoch,
+		Descriptors:         rootstate.CloneDescriptors(snapshot.Descriptors),
+		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
+		PendingRangeChanges: rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),
+		Allocator:           snapshot.Allocator,
+	}
+}
+
+func SnapshotFromRoot(snapshot rootstate.Snapshot) Snapshot {
+	return Snapshot{
+		ClusterEpoch:        snapshot.State.ClusterEpoch,
+		Descriptors:         rootstate.CloneDescriptors(snapshot.Descriptors),
+		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
+		PendingRangeChanges: rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),
+		Allocator: AllocatorState{
+			IDCurrent: snapshot.State.IDFence,
+			TSCurrent: snapshot.State.TSOFence,
+		},
+	}
+}
+
 // BootstrapInfo captures rooted PD bootstrap results.
 type BootstrapInfo struct {
 	LoadedRegions int
