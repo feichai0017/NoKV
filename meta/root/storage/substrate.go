@@ -72,6 +72,16 @@ const (
 	TailAdvanceWindowShifted
 )
 
+// TailCatchUpAction classifies what a follower/view consumer should do with one
+// observed tail advance.
+type TailCatchUpAction uint8
+
+const (
+	TailCatchUpIdle TailCatchUpAction = iota
+	TailCatchUpRefreshState
+	TailCatchUpAcknowledgeWindow
+)
+
 // AdvancedSince reports whether the observed tail view changed since prev.
 func (t TailToken) AdvancedSince(prev TailToken) bool {
 	return t.Revision > prev.Revision || rootstate.CursorAfter(t.Cursor, prev.Cursor)
@@ -218,6 +228,25 @@ func (a TailAdvance) Kind() TailAdvanceKind {
 		return TailAdvanceCursorAdvanced
 	}
 	return TailAdvanceWindowShifted
+}
+
+// CatchUpAction classifies whether the caller should reload rooted state or
+// only acknowledge a retained-window shift.
+func (a TailAdvance) CatchUpAction() TailCatchUpAction {
+	switch a.Kind() {
+	case TailAdvanceCursorAdvanced:
+		return TailCatchUpRefreshState
+	case TailAdvanceWindowShifted:
+		return TailCatchUpAcknowledgeWindow
+	default:
+		return TailCatchUpIdle
+	}
+}
+
+// ShouldRefreshState reports whether the observed tail advance carries new
+// committed truth that should be reloaded into a follower view.
+func (a TailAdvance) ShouldRefreshState() bool {
+	return a.CatchUpAction() == TailCatchUpRefreshState
 }
 
 // FellBehind reports whether the observed retained tail had to fall back past

@@ -190,7 +190,9 @@ func TestObserveRangeChangeCompletion(t *testing.T) {
 	splitPlanned := rootevent.RegionSplitPlanned(69, []byte("m"), left, right)
 
 	completion := rootstate.ObserveRangeChangeCompletion(nil, nil, splitPlanned)
-	require.Equal(t, rootstate.RangeChangeCompletionOpen, completion)
+	require.Equal(t, rootstate.RangeChangeCompletionOpen, completion.State)
+	require.True(t, completion.Open())
+	require.True(t, completion.NeedsEpochAdvance(false))
 
 	key, pending, ok := rootstate.PendingRangeChangeFromEvent(splitPlanned)
 	require.True(t, ok)
@@ -199,7 +201,9 @@ func TestObserveRangeChangeCompletion(t *testing.T) {
 		nil,
 		splitPlanned,
 	)
-	require.Equal(t, rootstate.RangeChangeCompletionPending, completion)
+	require.Equal(t, rootstate.RangeChangeCompletionPending, completion.State)
+	require.True(t, completion.PendingState())
+	require.Equal(t, key, completion.Key)
 
 	completion = rootstate.ObserveRangeChangeCompletion(
 		nil,
@@ -209,7 +213,9 @@ func TestObserveRangeChangeCompletion(t *testing.T) {
 		},
 		splitPlanned,
 	)
-	require.Equal(t, rootstate.RangeChangeCompletionCompleted, completion)
+	require.Equal(t, rootstate.RangeChangeCompletionCompleted, completion.State)
+	require.True(t, completion.Completed())
+	require.True(t, completion.NeedsEpochAdvance(true))
 }
 
 func TestEvaluateRootEventLifecycle(t *testing.T) {
