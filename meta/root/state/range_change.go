@@ -14,24 +14,6 @@ const (
 	RangeChangeLifecycleSkip
 )
 
-func IsRangeChangePlannedEvent(event rootevent.Event) bool {
-	switch event.Kind {
-	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionMergePlanned:
-		return true
-	default:
-		return false
-	}
-}
-
-func IsRangeChangeCommittedEvent(event rootevent.Event) bool {
-	switch event.Kind {
-	case rootevent.KindRegionSplitCommitted, rootevent.KindRegionMerged:
-		return true
-	default:
-		return false
-	}
-}
-
 func PendingRangeChangeFromEvent(event rootevent.Event) (uint64, PendingRangeChange, bool) {
 	switch event.Kind {
 	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionSplitCommitted:
@@ -100,7 +82,7 @@ func RangeChangeStateMatches(descriptors map[uint64]descriptor.Descriptor, event
 }
 
 func EvaluateRangeChangeLifecycle(pendingRangeChanges map[uint64]PendingRangeChange, descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) (RangeChangeLifecycleDecision, error) {
-	key, change, ok := PendingRangeChangeFromEvent(event)
+	key, _, ok := PendingRangeChangeFromEvent(event)
 	if !ok {
 		return RangeChangeLifecycleApply, nil
 	}
@@ -125,7 +107,6 @@ func EvaluateRangeChangeLifecycle(pendingRangeChanges map[uint64]PendingRangeCha
 			return RangeChangeLifecycleSkip, nil
 		}
 	}
-	_ = change
 	return RangeChangeLifecycleApply, nil
 }
 

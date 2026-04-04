@@ -14,24 +14,6 @@ const (
 	PeerChangeLifecycleSkip
 )
 
-func IsPeerChangePlannedEvent(event rootevent.Event) bool {
-	switch event.Kind {
-	case rootevent.KindPeerAdditionPlanned, rootevent.KindPeerRemovalPlanned:
-		return true
-	default:
-		return false
-	}
-}
-
-func IsPeerChangeAppliedEvent(event rootevent.Event) bool {
-	switch event.Kind {
-	case rootevent.KindPeerAdded, rootevent.KindPeerRemoved:
-		return true
-	default:
-		return false
-	}
-}
-
 func PendingPeerChangeFromEvent(event rootevent.Event) (PendingPeerChange, bool) {
 	if event.PeerChange == nil {
 		return PendingPeerChange{}, false
