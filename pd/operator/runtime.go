@@ -12,14 +12,14 @@ import (
 // such as ownership, admission, and conflict backoff.
 type Runtime struct {
 	mu      sync.RWMutex
-	entries []Entry
-	state   map[string]Entry
+	entries []RuntimeEntry
+	state   map[string]RuntimeEntry
 	clock   func() time.Time
 }
 
 func NewRuntime() *Runtime {
 	return &Runtime{
-		state: make(map[string]Entry),
+		state: make(map[string]RuntimeEntry),
 		clock: time.Now,
 	}
 }
@@ -29,8 +29,8 @@ func (r *Runtime) ReplaceRootedTransitions(entries []rootstate.TransitionEntry) 
 		return
 	}
 	now := r.now()
-	nextEntries := make([]Entry, 0, len(entries))
-	nextState := make(map[string]Entry, len(entries))
+	nextEntries := make([]RuntimeEntry, 0, len(entries))
+	nextState := make(map[string]RuntimeEntry, len(entries))
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -38,7 +38,7 @@ func (r *Runtime) ReplaceRootedTransitions(entries []rootstate.TransitionEntry) 
 		key := runtimeKey(rooted)
 		entry, ok := r.state[key]
 		if !ok {
-			entry = Entry{
+			entry = RuntimeEntry{
 				Owner:   defaultOwner,
 				Attempt: 1,
 			}
@@ -52,17 +52,17 @@ func (r *Runtime) ReplaceRootedTransitions(entries []rootstate.TransitionEntry) 
 	r.state = nextState
 }
 
-func (r *Runtime) Snapshot() Snapshot {
+func (r *Runtime) Snapshot() RuntimeSnapshot {
 	if r == nil {
-		return Snapshot{}
+		return RuntimeSnapshot{}
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]Entry, 0, len(r.entries))
+	out := make([]RuntimeEntry, 0, len(r.entries))
 	for _, entry := range r.entries {
 		out = append(out, cloneEntry(entry))
 	}
-	return Snapshot{Entries: out}
+	return RuntimeSnapshot{Entries: out}
 }
 
 func (r *Runtime) now() time.Time {
@@ -72,7 +72,7 @@ func (r *Runtime) now() time.Time {
 	return r.clock()
 }
 
-func reconcileEntry(now time.Time, entry Entry) Entry {
+func reconcileEntry(now time.Time, entry RuntimeEntry) RuntimeEntry {
 	switch entry.Transition.Status {
 	case rootstate.TransitionStatusPending, rootstate.TransitionStatusOpen:
 		entry.Admitted = true
@@ -106,7 +106,7 @@ func runtimeKey(entry rootstate.TransitionEntry) string {
 	}
 }
 
-func cloneEntry(in Entry) Entry {
+func cloneEntry(in RuntimeEntry) RuntimeEntry {
 	out := in
 	out.Transition = cloneTransitionEntry(in.Transition)
 	return out

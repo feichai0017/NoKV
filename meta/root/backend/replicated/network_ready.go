@@ -22,7 +22,7 @@ func (d *NetworkDriver) drainLocked() ([]rootstorage.CommittedEvent, []myraft.Me
 		d.node.raw.Advance(rd)
 	}
 	if len(committed) > 0 {
-		if err := d.adapter.appendCommittedLocked(committed); err != nil {
+		if err := d.adapter.appendCommitted(committed); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -87,4 +87,3 @@ func decodeCommittedEntries(entries []myraft.Entry) ([]rootstorage.CommittedEven
 	}
 	return committed, nil
 }
-

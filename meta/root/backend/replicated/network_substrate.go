@@ -9,14 +9,10 @@ import (
 )
 
 func (d *NetworkDriver) ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.adapter.observeLocked(after)
+	return d.adapter.observe(after)
 }
 
 func (d *NetworkDriver) TailNotify() <-chan struct{} {
-	d.mu.Lock()
-	defer d.mu.Unlock()
 	return d.adapter.watchChannel()
 }
 
@@ -36,9 +32,7 @@ func (d *NetworkDriver) WaitForTail(after rootstorage.TailToken, timeout time.Du
 	defer timer.Stop()
 	select {
 	case <-d.stopCh:
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		advance, tailErr := d.adapter.observeLocked(after)
+		advance, tailErr := d.adapter.observe(after)
 		if tailErr != nil {
 			return d.adapter.closedAdvance(after), fmt.Errorf("meta/root/backend/replicated: network driver is closed")
 		}
@@ -53,7 +47,7 @@ func (d *NetworkDriver) WaitForTail(after rootstorage.TailToken, timeout time.Du
 func (d *NetworkDriver) InstallBootstrap(observed rootstorage.ObservedCommitted) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.adapter.installBootstrapLocked(observed)
+	return d.adapter.installBootstrap(observed)
 }
 
 func (d *NetworkDriver) LoadCheckpoint() (rootstorage.Checkpoint, error) {
@@ -61,9 +55,7 @@ func (d *NetworkDriver) LoadCheckpoint() (rootstorage.Checkpoint, error) {
 }
 
 func (d *NetworkDriver) SaveCheckpoint(checkpoint rootstorage.Checkpoint) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.adapter.saveCheckpointLocked(checkpoint)
+	return d.adapter.saveCheckpoint(checkpoint)
 }
 
 func (d *NetworkDriver) ReadCommitted(offset int64) (rootstorage.CommittedTail, error) {
@@ -107,12 +99,9 @@ func (d *NetworkDriver) AppendCommitted(records ...rootstorage.CommittedEvent) (
 }
 
 func (d *NetworkDriver) CompactCommitted(stream rootstorage.CommittedTail) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.adapter.compactCommittedLocked(stream)
+	return d.adapter.compactCommitted(stream)
 }
 
 func (d *NetworkDriver) Size() (int64, error) {
 	return d.adapter.size()
 }
-
