@@ -33,7 +33,7 @@ func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 	}
 	appliedEvent, hasAppliedEvent := appliedPeerChangeEvent(meta, ev.ConfChange)
 	if ev.Peer != nil && peerIndexByID(meta.Peers, ev.Peer.ID()) == -1 {
-		return s.applyTerminalTransition(terminalTransition{
+		return s.applyTerminalOutcome(terminalOutcome{
 			Event:  appliedEvent,
 			Action: "peer change",
 			Apply: func() error {
@@ -46,14 +46,14 @@ func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 		})
 	}
 	if !hasAppliedEvent {
-		return s.applyTerminalTransition(terminalTransition{
+		return s.applyTerminalOutcome(terminalOutcome{
 			Action: "peer change",
 			Apply: func() error {
 				return s.applyRegionMetaSilent(meta)
 			},
 		})
 	}
-	return s.applyTerminalTransition(terminalTransition{
+	return s.applyTerminalOutcome(terminalOutcome{
 		Event:  appliedEvent,
 		Action: "peer change",
 		Apply: func() error {

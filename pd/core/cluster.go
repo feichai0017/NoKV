@@ -27,6 +27,10 @@ type TransitionAssessment = pdview.TransitionAssessment
 // transitions.
 type OperatorSnapshot = pdoperator.Snapshot
 
+// OperatorEntry is one runtime operator record derived from rooted
+// transitions.
+type OperatorEntry = pdoperator.Entry
+
 // Cluster stores in-memory PD metadata and provides route lookups.
 //
 // NOTE: Cluster intentionally keeps only the in-memory metadata/state model.

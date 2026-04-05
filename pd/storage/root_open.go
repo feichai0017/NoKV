@@ -27,6 +27,14 @@ func OpenRootStore(root rootBackend) (*RootStore, error) {
 		store.waitForTail = waiter.WaitForTail
 	}
 	if observer, ok := root.(interface {
+		ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
+	}); ok {
+		store.observeTail = observer.ObserveTail
+	}
+	if notifier, ok := root.(interface{ TailNotify() <-chan struct{} }); ok {
+		store.tailNotify = notifier.TailNotify
+	}
+	if observer, ok := root.(interface {
 		ObserveCommitted() (rootstorage.ObservedCommitted, error)
 	}); ok {
 		store.observe = observer.ObserveCommitted

@@ -657,6 +657,9 @@ func TestServiceListTransitionsReturnsOperatorView(t *testing.T) {
 	require.Len(t, resp.GetEntries(), 1)
 	require.Equal(t, pdpb.TransitionKind_TRANSITION_KIND_PEER_CHANGE, resp.GetEntries()[0].GetKind())
 	require.Equal(t, pdpb.TransitionStatus_TRANSITION_STATUS_PENDING, resp.GetEntries()[0].GetStatus())
+	require.Equal(t, "pd", resp.GetEntries()[0].GetOwner())
+	require.Equal(t, uint64(1), resp.GetEntries()[0].GetAttempt())
+	require.True(t, resp.GetEntries()[0].GetAdmitted())
 	require.NotNil(t, resp.GetEntries()[0].GetPendingPeerChange())
 }
 
