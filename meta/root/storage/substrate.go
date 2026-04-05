@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"sync"
@@ -77,6 +78,10 @@ type TailToken struct {
 // subscription from one previously acknowledged tail token.
 type TailWaitFunc func(after TailToken, timeout time.Duration) (TailAdvance, error)
 
+// TailObserveFunc reads the current rooted tail view relative to one token
+// without blocking for new commits.
+type TailObserveFunc func(after TailToken) (TailAdvance, error)
+
 // TailAdvanceKind classifies one observed committed-tail change.
 type TailAdvanceKind uint8
 
@@ -113,9 +118,11 @@ type TailAdvance struct {
 // virtual log. Callers wait from one acknowledged token and explicitly advance
 // the subscription only after they have consumed the returned view.
 type TailSubscription struct {
-	mu    sync.Mutex
-	token TailToken
-	wait  TailWaitFunc
+	mu      sync.Mutex
+	token   TailToken
+	wait    TailWaitFunc
+	observe TailObserveFunc
+	watch   <-chan struct{}
 }
 
 // NewTailSubscription constructs one watch-like rooted tail subscription.
@@ -124,6 +131,21 @@ func NewTailSubscription(after TailToken, wait TailWaitFunc) *TailSubscription {
 		return nil
 	}
 	return &TailSubscription{token: after, wait: wait}
+}
+
+// NewWatchedTailSubscription constructs one watch-first rooted tail
+// subscription. It first re-observes the current tail and then blocks on watch
+// notifications, falling back to wait when needed.
+func NewWatchedTailSubscription(after TailToken, observe TailObserveFunc, watch <-chan struct{}, wait TailWaitFunc) *TailSubscription {
+	if observe == nil && wait == nil {
+		return nil
+	}
+	return &TailSubscription{
+		token:   after,
+		wait:    wait,
+		observe: observe,
+		watch:   watch,
+	}
 }
 
 // Token returns the last acknowledged tail token for this subscription.
@@ -140,9 +162,43 @@ func (s *TailSubscription) Token() TailToken {
 // token, or until timeout elapses.
 func (s *TailSubscription) Wait(timeout time.Duration) (TailAdvance, error) {
 	if s == nil || s.wait == nil {
-		return TailAdvance{}, nil
+		if s == nil || s.observe == nil {
+			return TailAdvance{}, nil
+		}
+		return s.observe(s.Token())
 	}
 	return s.wait(s.Token(), timeout)
+}
+
+// Next waits for the next rooted tail advance using watch notifications when
+// available and falling back to the wait primitive otherwise.
+func (s *TailSubscription) Next(ctx context.Context, fallback time.Duration) (TailAdvance, error) {
+	if s == nil {
+		return TailAdvance{}, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s.observe == nil {
+		return s.waitWithContext(ctx, fallback)
+	}
+	for {
+		advance, err := s.observe(s.Token())
+		if err != nil {
+			return TailAdvance{}, err
+		}
+		if advance.Advanced() || s.watch == nil {
+			if advance.Advanced() {
+				return advance, nil
+			}
+			return s.waitWithContext(ctx, fallback)
+		}
+		select {
+		case <-ctx.Done():
+			return TailAdvance{}, ctx.Err()
+		case <-s.watch:
+		}
+	}
 }
 
 // Acknowledge advances the subscription token after the caller has consumed
@@ -156,6 +212,28 @@ func (s *TailSubscription) Acknowledge(advance TailAdvance) {
 	if advance.Token.AdvancedSince(s.token) {
 		s.token = advance.Token
 	}
+}
+
+func (s *TailSubscription) waitWithContext(ctx context.Context, fallback time.Duration) (TailAdvance, error) {
+	if s == nil {
+		return TailAdvance{}, nil
+	}
+	if s.wait == nil {
+		if s.observe != nil {
+			return s.observe(s.Token())
+		}
+		return TailAdvance{}, nil
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout := max(time.Until(deadline), 0)
+		if fallback <= 0 || timeout < fallback {
+			fallback = timeout
+		}
+	}
+	if fallback <= 0 {
+		fallback = 200 * time.Millisecond
+	}
+	return s.wait(s.Token(), fallback)
 }
 
 // ObservedCommitted is one compact checkpoint observed together with one
