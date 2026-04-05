@@ -27,8 +27,7 @@ type Config struct {
 // checkpoint store. It is the future Delos-lite landing point for a replicated
 // metadata backend, without baking protocol concerns into the root domain.
 type Store struct {
-	driver  Driver
-	storage rootstorage.Substrate
+	driver Driver
 
 	mu                 sync.RWMutex
 	state              rootstate.State
@@ -54,7 +53,6 @@ func Open(cfg Config) (*Store, error) {
 	bootstrap := rootmaterialize.BootstrapFromObserved(observed)
 	return &Store{
 		driver:             cfg.Driver,
-		storage:            cfg.Driver,
 		state:              bootstrap.Snapshot.State,
 		descs:              bootstrap.Snapshot.Descriptors,
 		pending:            bootstrap.Snapshot.PendingPeerChanges,
@@ -100,7 +98,7 @@ func (s *Store) ObserveCommitted() (rootstorage.ObservedCommitted, error) {
 	if s == nil {
 		return rootstorage.ObservedCommitted{}, nil
 	}
-	return rootstorage.ObserveCommitted(s.storage, 0)
+	return rootstorage.ObserveCommitted(s.driver, 0)
 }
 
 // WaitForTail waits until the durable committed tail view changes past after.
@@ -113,13 +111,27 @@ func (s *Store) WaitForTail(after rootstorage.TailToken, timeout time.Duration) 
 	return s.driver.WaitForTail(after, timeout)
 }
 
+func (s *Store) ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error) {
+	if s == nil {
+		return rootstorage.TailAdvance{}, nil
+	}
+	return s.driver.ObserveTail(after)
+}
+
+func (s *Store) TailNotify() <-chan struct{} {
+	if s == nil {
+		return nil
+	}
+	return s.driver.TailNotify()
+}
+
 // SubscribeTail returns one watch-like rooted tail subscription over the
 // replicated metadata substrate.
 func (s *Store) SubscribeTail(after rootstorage.TailToken) *rootstorage.TailSubscription {
 	if s == nil {
 		return nil
 	}
-	return rootstorage.NewTailSubscription(after, s.WaitForTail)
+	return rootstorage.NewWatchedTailSubscription(after, s.ObserveTail, s.TailNotify(), s.WaitForTail)
 }
 
 func (s *Store) Current() (rootstate.State, error) {
@@ -184,11 +196,11 @@ func (s *Store) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) 
 		rootstate.ApplyEventToSnapshot(&snapshot, next, evt)
 		records = append(records, rootstorage.CommittedEvent{Cursor: next, Event: rootevent.CloneEvent(evt)})
 	}
-	logEnd, err := s.storage.AppendCommitted(records...)
+	logEnd, err := s.driver.AppendCommitted(records...)
 	if err != nil {
 		return rootstate.CommitInfo{}, err
 	}
-	if err := s.storage.SaveCheckpoint(rootstorage.Checkpoint{
+	if err := s.driver.SaveCheckpoint(rootstorage.Checkpoint{
 		Snapshot:   rootstate.CloneSnapshot(snapshot),
 		TailOffset: logEnd,
 	}); err != nil {
@@ -241,7 +253,7 @@ func (s *Store) InstallBootstrap(observed rootstorage.ObservedCommitted) error {
 	if s == nil {
 		return nil
 	}
-	if err := s.storage.InstallBootstrap(observed); err != nil {
+	if err := s.driver.InstallBootstrap(observed); err != nil {
 		return err
 	}
 	s.applyObserved(observed)
@@ -252,7 +264,7 @@ func (s *Store) Close() error {
 	if s == nil {
 		return nil
 	}
-	if closer, ok := s.storage.(interface{ Close() error }); ok {
+	if closer, ok := s.driver.(interface{ Close() error }); ok {
 		if err := closer.Close(); err != nil {
 			return err
 		}
@@ -276,7 +288,7 @@ func (s *Store) maybeCompactLocked() {
 		s.retainFrom = plan.RetainFrom
 		return
 	}
-	if err := s.storage.InstallBootstrap(plan.Observed(snapshot)); err != nil {
+	if err := s.driver.InstallBootstrap(plan.Observed(snapshot)); err != nil {
 		return
 	}
 	s.records = plan.Tail.Records

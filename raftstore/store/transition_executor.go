@@ -28,7 +28,7 @@ type transitionTarget struct {
 	Proposal transitionProposal
 }
 
-type terminalTransition struct {
+type terminalOutcome struct {
 	Event  rootevent.Event
 	Action string
 	Noop   bool
@@ -121,7 +121,7 @@ func (s *Store) enqueueAppliedRootEvent(event rootevent.Event) {
 	})
 }
 
-func (s *Store) applyTerminalTransition(term terminalTransition) error {
+func (s *Store) applyTerminalOutcome(term terminalOutcome) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}

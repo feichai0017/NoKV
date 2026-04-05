@@ -3,6 +3,7 @@ package core
 import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	pdoperator "github.com/feichai0017/NoKV/pd/operator"
 	pdview "github.com/feichai0017/NoKV/pd/view"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"time"
@@ -16,11 +17,19 @@ type RegionInfo = pdview.RegionInfo
 
 // TransitionSnapshot captures rooted pending execution state materialized into
 // PD runtime view.
-type TransitionSnapshot = pdview.TransitionSnapshot
+type TransitionSnapshot = pdview.PendingSnapshot
 
 // TransitionAssessment captures one explicit rooted transition assessment
 // materialized for PD operator/debugging surfaces.
 type TransitionAssessment = pdview.TransitionAssessment
+
+// OperatorSnapshot captures the operator-runtime view derived from rooted
+// transitions.
+type OperatorSnapshot = pdoperator.RuntimeSnapshot
+
+// OperatorEntry is one runtime operator record derived from rooted
+// transitions.
+type OperatorEntry = pdoperator.RuntimeEntry
 
 // Cluster stores in-memory PD metadata and provides route lookups.
 //
@@ -30,7 +39,8 @@ type TransitionAssessment = pdview.TransitionAssessment
 type Cluster struct {
 	stores      *pdview.StoreHealthView
 	regions     *pdview.RegionDirectoryView
-	transitions *pdview.TransitionView
+	transitions *pdview.PendingView
+	operators   *pdoperator.Runtime
 }
 
 // NewCluster creates an empty in-memory cluster metadata view.
@@ -38,7 +48,8 @@ func NewCluster() *Cluster {
 	return &Cluster{
 		stores:      pdview.NewStoreHealthView(),
 		regions:     pdview.NewRegionDirectoryView(),
-		transitions: pdview.NewTransitionView(),
+		transitions: pdview.NewPendingView(),
+		operators:   pdoperator.NewRuntime(),
 	}
 }
 
@@ -222,7 +233,11 @@ func (c *Cluster) ReplaceRootSnapshot(
 		return
 	}
 	c.regions.Replace(descriptors)
-	c.transitions.Replace(descriptors, pendingPeerChanges, pendingRangeChanges)
+	c.replaceTransitionRuntime(rootstate.Snapshot{
+		Descriptors:         rootstate.CloneDescriptors(descriptors),
+		PendingPeerChanges:  pendingPeerChanges,
+		PendingRangeChanges: pendingRangeChanges,
+	})
 }
 
 // TransitionSnapshot returns a stable copy of rooted pending execution state.
@@ -234,6 +249,15 @@ func (c *Cluster) TransitionSnapshot() TransitionSnapshot {
 		}
 	}
 	return c.transitions.Snapshot()
+}
+
+// OperatorSnapshot returns a stable copy of the operator runtime derived from
+// rooted transitions.
+func (c *Cluster) OperatorSnapshot() OperatorSnapshot {
+	if c == nil {
+		return OperatorSnapshot{}
+	}
+	return c.operators.Snapshot()
 }
 
 // ObserveRootEventLifecycle evaluates one rooted transition event against the
@@ -283,11 +307,11 @@ func (c *Cluster) clone() *Cluster {
 		_ = out.regions.UpsertAt(region.Descriptor, region.LastHeartbeat)
 	}
 	transitions := c.TransitionSnapshot()
-	out.transitions.Replace(
-		descriptorsFromRegionInfos(c.RegionSnapshot()),
-		transitions.PendingPeerChanges,
-		transitions.PendingRangeChanges,
-	)
+	out.replaceTransitionRuntime(rootstate.Snapshot{
+		Descriptors:         descriptorsFromRegionInfos(c.RegionSnapshot()),
+		PendingPeerChanges:  transitions.PendingPeerChanges,
+		PendingRangeChanges: transitions.PendingRangeChanges,
+	})
 	return out
 }
 
@@ -302,7 +326,17 @@ func (c *Cluster) applyRootEventToTransitions(event rootevent.Event) {
 		PendingRangeChanges: transitions.PendingRangeChanges,
 	}
 	rootstate.ApplyEventToSnapshot(&snapshot, snapshot.State.LastCommitted, event)
-	c.transitions.Replace(snapshot.Descriptors, snapshot.PendingPeerChanges, snapshot.PendingRangeChanges)
+	c.replaceTransitionRuntime(snapshot)
+}
+
+func (c *Cluster) replaceTransitionRuntime(snapshot rootstate.Snapshot) {
+	if c == nil {
+		return
+	}
+	c.transitions.Replace(snapshot.PendingPeerChanges, snapshot.PendingRangeChanges)
+	if c.operators != nil {
+		c.operators.ReplaceRootedTransitions(rootstate.BuildTransitionEntries(snapshot))
+	}
 }
 
 func descriptorsFromRegionInfos(in []RegionInfo) map[uint64]descriptor.Descriptor {

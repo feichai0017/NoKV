@@ -7,6 +7,7 @@ import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
+	pdoperator "github.com/feichai0017/NoKV/pd/operator"
 	pdview "github.com/feichai0017/NoKV/pd/view"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -18,7 +19,7 @@ func (s *Service) ListTransitions(_ context.Context, _ *pdpb.ListTransitionsRequ
 	if s == nil || s.cluster == nil {
 		return &pdpb.ListTransitionsResponse{}, nil
 	}
-	snapshot := s.cluster.TransitionSnapshot()
+	snapshot := s.cluster.OperatorSnapshot()
 	entries := make([]*pdpb.TransitionEntry, 0, len(snapshot.Entries))
 	for _, entry := range snapshot.Entries {
 		entries = append(entries, transitionEntryToProto(entry))
@@ -46,19 +47,19 @@ func (s *Service) AssessRootEvent(_ context.Context, req *pdpb.AssessRootEventRe
 	}, nil
 }
 
-func transitionEntryToProto(entry pdview.TransitionEntry) *pdpb.TransitionEntry {
+func transitionEntryToProto(entry pdoperator.RuntimeEntry) *pdpb.TransitionEntry {
 	out := &pdpb.TransitionEntry{
-		Key:        entry.Key,
-		Kind:       transitionKindToProto(entry.Kind),
-		Status:     transitionStatusToProto(entry.Status),
-		RetryClass: transitionRetryClassToProto(entry.RetryClass),
-		Reason:     transitionReasonToProto(entry.Reason),
+		Key:        entry.Transition.Key,
+		Kind:       transitionKindToProto(entry.Transition.Kind),
+		Status:     transitionStatusToProto(entry.Transition.Status),
+		RetryClass: transitionRetryClassToProto(entry.Transition.RetryClass),
+		Reason:     transitionReasonToProto(entry.Transition.Reason),
 	}
-	if entry.PeerChange != nil {
-		out.PendingPeerChange = metacodec.RootPendingPeerChangeToProto(entry.Key, *entry.PeerChange)
+	if entry.Transition.PeerChange != nil {
+		out.PendingPeerChange = metacodec.RootPendingPeerChangeToProto(entry.Transition.Key, *entry.Transition.PeerChange)
 	}
-	if entry.RangeChange != nil {
-		out.PendingRangeChange = metacodec.RootPendingRangeChangeToProto(entry.Key, *entry.RangeChange)
+	if entry.Transition.RangeChange != nil {
+		out.PendingRangeChange = metacodec.RootPendingRangeChangeToProto(entry.Transition.Key, *entry.Transition.RangeChange)
 	}
 	return out
 }

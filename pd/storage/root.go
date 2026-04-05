@@ -15,7 +15,9 @@ import (
 type RootStore struct {
 	root        rootBackend
 	refresh     func() error
+	observeTail func(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
 	waitForTail func(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
+	tailNotify  func() <-chan struct{}
 	observe     func() (rootstorage.ObservedCommitted, error)
 	isLeader    func() bool
 	leaderID    func() uint64
@@ -64,11 +66,42 @@ func (s *RootStore) WaitForTail(after rootstorage.TailToken, timeout time.Durati
 	return advance, nil
 }
 
-// SubscribeTail returns one watch-like rooted tail subscription. The
-// subscription keeps its own acknowledged token and reuses the store wait path
-// so callers no longer have to open-code tail-token loops.
+// ObserveTail observes the current rooted tail relative to after while keeping
+// the cached rooted snapshot in sync whenever the observed advance requires a
+// state reload or bootstrap install.
+func (s *RootStore) ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error) {
+	if s == nil || s.root == nil {
+		return rootstorage.TailAdvance{}, nil
+	}
+	if s.observeTail == nil {
+		return rootstorage.TailAdvance{}, nil
+	}
+	advance, err := s.observeTail(after)
+	if err != nil {
+		return advance, err
+	}
+	if advance.ShouldReloadState() {
+		s.replaceObserved(advance.Observed)
+	}
+	return advance, nil
+}
+
+// SubscribeTail returns one rooted tail subscription. The subscription keeps
+// its own acknowledged token and routes both watch-first observation and wait
+// fallback through RootStore so callers no longer have to open-code tail-token
+// loops or manage cache refresh themselves.
 func (s *RootStore) SubscribeTail(after rootstorage.TailToken) *rootstorage.TailSubscription {
-	if s == nil || s.root == nil || s.waitForTail == nil {
+	if s == nil || s.root == nil {
+		return nil
+	}
+	if s.observeTail != nil {
+		var watch <-chan struct{}
+		if s.tailNotify != nil {
+			watch = s.tailNotify()
+		}
+		return rootstorage.NewWatchedTailSubscription(after, s.ObserveTail, watch, s.WaitForTail)
+	}
+	if s.waitForTail == nil {
 		return nil
 	}
 	return rootstorage.NewTailSubscription(after, s.WaitForTail)
