@@ -4,7 +4,6 @@ import (
 	"sync"
 
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
 // TransitionSnapshot captures rooted pending transition state materialized into
@@ -12,12 +11,7 @@ import (
 type TransitionSnapshot struct {
 	PendingPeerChanges  map[uint64]rootstate.PendingPeerChange
 	PendingRangeChanges map[uint64]rootstate.PendingRangeChange
-	Entries             []TransitionEntry
 }
-
-// TransitionEntry is one rooted transition currently visible to PD operator and
-// debugging surfaces.
-type TransitionEntry = rootstate.TransitionEntry
 
 // TransitionAssessment is one explicit lifecycle assessment for a proposed
 // rooted transition event against the current rooted snapshot.
@@ -29,7 +23,6 @@ type TransitionView struct {
 	mu                 sync.RWMutex
 	pendingPeerChanges map[uint64]rootstate.PendingPeerChange
 	pendingRangeChange map[uint64]rootstate.PendingRangeChange
-	entries            []TransitionEntry
 }
 
 func NewTransitionView() *TransitionView {
@@ -39,18 +32,13 @@ func NewTransitionView() *TransitionView {
 	}
 }
 
-func (v *TransitionView) Replace(descriptors map[uint64]descriptor.Descriptor, peers map[uint64]rootstate.PendingPeerChange, ranges map[uint64]rootstate.PendingRangeChange) {
+func (v *TransitionView) Replace(peers map[uint64]rootstate.PendingPeerChange, ranges map[uint64]rootstate.PendingRangeChange) {
 	if v == nil {
 		return
 	}
 	v.mu.Lock()
 	v.pendingPeerChanges = rootstate.ClonePendingPeerChanges(peers)
 	v.pendingRangeChange = rootstate.ClonePendingRangeChanges(ranges)
-	v.entries = rootstate.BuildTransitionEntries(rootstate.Snapshot{
-		Descriptors:         rootstate.CloneDescriptors(descriptors),
-		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(v.pendingPeerChanges),
-		PendingRangeChanges: rootstate.ClonePendingRangeChanges(v.pendingRangeChange),
-	})
 	v.mu.Unlock()
 }
 
@@ -59,7 +47,6 @@ func (v *TransitionView) Snapshot() TransitionSnapshot {
 		return TransitionSnapshot{
 			PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
 			PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
-			Entries:             nil,
 		}
 	}
 	v.mu.RLock()
@@ -67,6 +54,5 @@ func (v *TransitionView) Snapshot() TransitionSnapshot {
 	return TransitionSnapshot{
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(v.pendingPeerChanges),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(v.pendingRangeChange),
-		Entries:             rootstate.CloneTransitionEntries(v.entries),
 	}
 }

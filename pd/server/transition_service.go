@@ -18,7 +18,7 @@ func (s *Service) ListTransitions(_ context.Context, _ *pdpb.ListTransitionsRequ
 	if s == nil || s.cluster == nil {
 		return &pdpb.ListTransitionsResponse{}, nil
 	}
-	snapshot := s.cluster.TransitionSnapshot()
+	snapshot := s.cluster.OperatorSnapshot()
 	entries := make([]*pdpb.TransitionEntry, 0, len(snapshot.Entries))
 	for _, entry := range snapshot.Entries {
 		entries = append(entries, transitionEntryToProto(entry))
@@ -46,7 +46,7 @@ func (s *Service) AssessRootEvent(_ context.Context, req *pdpb.AssessRootEventRe
 	}, nil
 }
 
-func transitionEntryToProto(entry pdview.TransitionEntry) *pdpb.TransitionEntry {
+func transitionEntryToProto(entry rootstate.TransitionEntry) *pdpb.TransitionEntry {
 	out := &pdpb.TransitionEntry{
 		Key:        entry.Key,
 		Kind:       transitionKindToProto(entry.Kind),
