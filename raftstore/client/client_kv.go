@@ -4,15 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	errorpb "github.com/feichai0017/NoKV/pb/error"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"time"
 
 	"google.golang.org/protobuf/proto"
-
-	"github.com/feichai0017/NoKV/pb"
 )
 
 // Get issues a KvGet for the provided key/version. It retries on region errors.
-func (c *Client) Get(ctx context.Context, key []byte, version uint64) (*pb.GetResponse, error) {
+func (c *Client) Get(ctx context.Context, key []byte, version uint64) (*kvrpcpb.GetResponse, error) {
 	var lastErr error
 	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
 		region, err := c.routeKeyWithRetry(ctx, key)
@@ -31,7 +31,7 @@ func (c *Client) Get(ctx context.Context, key []byte, version uint64) (*pb.GetRe
 			return nil, err
 		}
 		if regionErr != nil {
-			lastErr = c.handleRegionError(region.meta.GetId(), regionErr)
+			lastErr = c.handleRegionError(region.desc.RegionID, regionErr)
 			if lastErr != nil {
 				return nil, lastErr
 			}
@@ -54,8 +54,8 @@ func (c *Client) Get(ctx context.Context, key []byte, version uint64) (*pb.GetRe
 // BatchGet fetches multiple keys using the same snapshot version. Keys are
 // grouped by region so that each group shares a single KvBatchGet round-trip
 // and read index.
-func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string]*pb.GetResponse, error) {
-	results := make(map[string]*pb.GetResponse, len(keys))
+func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string]*kvrpcpb.GetResponse, error) {
+	results := make(map[string]*kvrpcpb.GetResponse, len(keys))
 	if len(keys) == 0 {
 		return results, nil
 	}
@@ -77,7 +77,7 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 			if err != nil {
 				return nil, err
 			}
-			regionID := region.meta.GetId()
+			regionID := region.desc.RegionID
 			group := groups[regionID]
 			if group == nil {
 				group = &regionBatch{region: region}
@@ -105,11 +105,11 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 			}
 			responses := resp.GetResponses()
 			for i, keyID := range group.ids {
-				var getResp *pb.GetResponse
+				var getResp *kvrpcpb.GetResponse
 				if i < len(responses) && responses[i] != nil {
 					getResp = responses[i]
 				} else {
-					getResp = &pb.GetResponse{NotFound: true}
+					getResp = &kvrpcpb.GetResponse{NotFound: true}
 				}
 				results[keyID] = getResp
 				completed = append(completed, keyID)
@@ -142,7 +142,7 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 	return results, nil
 }
 
-func (c *Client) callGet(ctx context.Context, region regionSnapshot, key []byte, version uint64) (*pb.GetResponse, *pb.RegionError, error) {
+func (c *Client) callGet(ctx context.Context, region regionSnapshot, key []byte, version uint64) (*kvrpcpb.GetResponse, *errorpb.RegionError, error) {
 	cl, err := c.storeClient(ctx, region.leader)
 	if err != nil {
 		return nil, nil, err
@@ -151,9 +151,9 @@ func (c *Client) callGet(ctx context.Context, region regionSnapshot, key []byte,
 	if err != nil {
 		return nil, nil, err
 	}
-	resp, err := cl.KvGet(ctx, &pb.KvGetRequest{
+	resp, err := cl.KvGet(ctx, &kvrpcpb.KvGetRequest{
 		Context: header,
-		Request: &pb.GetRequest{
+		Request: &kvrpcpb.GetRequest{
 			Key:     append([]byte(nil), key...),
 			Version: version,
 		},
@@ -164,9 +164,9 @@ func (c *Client) callGet(ctx context.Context, region regionSnapshot, key []byte,
 	return resp.GetResponse(), resp.GetRegionError(), nil
 }
 
-func (c *Client) callBatchGet(ctx context.Context, region regionSnapshot, keys [][]byte, version uint64) (*pb.BatchGetResponse, *pb.RegionError, error) {
+func (c *Client) callBatchGet(ctx context.Context, region regionSnapshot, keys [][]byte, version uint64) (*kvrpcpb.BatchGetResponse, *errorpb.RegionError, error) {
 	if len(keys) == 0 {
-		return &pb.BatchGetResponse{}, nil, nil
+		return &kvrpcpb.BatchGetResponse{}, nil, nil
 	}
 	cl, err := c.storeClient(ctx, region.leader)
 	if err != nil {
@@ -176,30 +176,30 @@ func (c *Client) callBatchGet(ctx context.Context, region regionSnapshot, keys [
 	if err != nil {
 		return nil, nil, err
 	}
-	request := &pb.BatchGetRequest{Requests: make([]*pb.GetRequest, 0, len(keys))}
+	request := &kvrpcpb.BatchGetRequest{Requests: make([]*kvrpcpb.GetRequest, 0, len(keys))}
 	for _, key := range keys {
-		request.Requests = append(request.Requests, &pb.GetRequest{
+		request.Requests = append(request.Requests, &kvrpcpb.GetRequest{
 			Key:     append([]byte(nil), key...),
 			Version: version,
 		})
 	}
-	resp, err := cl.KvBatchGet(ctx, &pb.KvBatchGetRequest{Context: header, Request: request})
+	resp, err := cl.KvBatchGet(ctx, &kvrpcpb.KvBatchGetRequest{Context: header, Request: request})
 	if err != nil {
 		return nil, nil, normalizeRPCError(err)
 	}
 	out := resp.GetResponse()
 	if out == nil {
-		out = &pb.BatchGetResponse{}
+		out = &kvrpcpb.BatchGetResponse{}
 	}
 	return out, resp.GetRegionError(), nil
 }
 
 // Scan issues a forward KvScan starting at startKey, reading up to limit keys.
-func (c *Client) Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]*pb.KV, error) {
+func (c *Client) Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]*kvrpcpb.KV, error) {
 	if limit == 0 {
 		return nil, errors.New("client: scan limit must be > 0")
 	}
-	collected := make([]*pb.KV, 0, limit)
+	collected := make([]*kvrpcpb.KV, 0, limit)
 	currentKey := append([]byte(nil), startKey...)
 	remaining := limit
 	for remaining > 0 {
@@ -218,7 +218,7 @@ func (c *Client) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 			return nil, err
 		}
 		if regionErr != nil {
-			if err := c.handleRegionError(region.meta.GetId(), regionErr); err != nil {
+			if err := c.handleRegionError(region.desc.RegionID, regionErr); err != nil {
 				return nil, err
 			}
 			if err := c.waitRetry(ctx, 0, retryRegionError); err != nil {
@@ -229,7 +229,7 @@ func (c *Client) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 		kvs := resp.GetKvs()
 		collected = append(collected, kvs...)
 		if len(kvs) == 0 {
-			endKey := region.meta.GetEndKey()
+			endKey := region.desc.EndKey
 			if len(endKey) == 0 {
 				break
 			}
@@ -240,7 +240,7 @@ func (c *Client) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 		if remaining == 0 {
 			break
 		}
-		endKey := region.meta.GetEndKey()
+		endKey := region.desc.EndKey
 		nextKey := incrementKey(kvs[len(kvs)-1].GetKey())
 		if len(endKey) > 0 && bytesCompare(nextKey, endKey) >= 0 {
 			currentKey = append([]byte(nil), endKey...)
@@ -251,7 +251,7 @@ func (c *Client) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 	return collected, nil
 }
 
-func (c *Client) callScan(ctx context.Context, region regionSnapshot, startKey []byte, limit uint32, version uint64) (*pb.ScanResponse, *pb.RegionError, error) {
+func (c *Client) callScan(ctx context.Context, region regionSnapshot, startKey []byte, limit uint32, version uint64) (*kvrpcpb.ScanResponse, *errorpb.RegionError, error) {
 	cl, err := c.storeClient(ctx, region.leader)
 	if err != nil {
 		return nil, nil, err
@@ -260,9 +260,9 @@ func (c *Client) callScan(ctx context.Context, region regionSnapshot, startKey [
 	if err != nil {
 		return nil, nil, err
 	}
-	resp, err := cl.KvScan(ctx, &pb.KvScanRequest{
+	resp, err := cl.KvScan(ctx, &kvrpcpb.KvScanRequest{
 		Context: header,
-		Request: &pb.ScanRequest{
+		Request: &kvrpcpb.ScanRequest{
 			StartKey:     append([]byte(nil), startKey...),
 			Limit:        limit,
 			Version:      version,
@@ -277,11 +277,11 @@ func (c *Client) callScan(ctx context.Context, region regionSnapshot, startKey [
 
 // Mutate wraps TwoPhaseCommit with a ready-made mutation slice. The caller must
 // ensure the primary key is part of the mutation set.
-func (c *Client) Mutate(ctx context.Context, primary []byte, mutations []*pb.Mutation, startVersion, commitVersion, lockTTL uint64) error {
+func (c *Client) Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error {
 	if len(primary) == 0 {
 		return fmt.Errorf("client: primary key required")
 	}
-	cleaned := make([]*pb.Mutation, 0, len(mutations))
+	cleaned := make([]*kvrpcpb.Mutation, 0, len(mutations))
 	for _, mut := range mutations {
 		if mut == nil {
 			continue
@@ -299,29 +299,29 @@ func (c *Client) Mutate(ctx context.Context, primary []byte, mutations []*pb.Mut
 
 // Put performs a single-key Put using the two-phase commit path.
 func (c *Client) Put(ctx context.Context, key, value []byte, startVersion, commitVersion, lockTTL uint64) error {
-	mut := &pb.Mutation{
-		Op:    pb.Mutation_Put,
+	mut := &kvrpcpb.Mutation{
+		Op:    kvrpcpb.Mutation_Put,
 		Key:   append([]byte(nil), key...),
 		Value: append([]byte(nil), value...),
 	}
-	return c.Mutate(ctx, key, []*pb.Mutation{mut}, startVersion, commitVersion, lockTTL)
+	return c.Mutate(ctx, key, []*kvrpcpb.Mutation{mut}, startVersion, commitVersion, lockTTL)
 }
 
 // Delete removes a key using a two-phase commit delete mutation.
 func (c *Client) Delete(ctx context.Context, key []byte, startVersion, commitVersion, lockTTL uint64) error {
-	mut := &pb.Mutation{
-		Op:  pb.Mutation_Delete,
+	mut := &kvrpcpb.Mutation{
+		Op:  kvrpcpb.Mutation_Delete,
 		Key: append([]byte(nil), key...),
 	}
-	return c.Mutate(ctx, key, []*pb.Mutation{mut}, startVersion, commitVersion, lockTTL)
+	return c.Mutate(ctx, key, []*kvrpcpb.Mutation{mut}, startVersion, commitVersion, lockTTL)
 }
 
 // TwoPhaseCommit runs Prewrite followed by Commit across the supplied mutations.
-func (c *Client) TwoPhaseCommit(ctx context.Context, primary []byte, mutations []*pb.Mutation, startVersion, commitVersion, lockTTL uint64) error {
+func (c *Client) TwoPhaseCommit(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error {
 	if len(mutations) == 0 {
 		return nil
 	}
-	grouped := make(map[uint64][]*pb.Mutation)
+	grouped := make(map[uint64][]*kvrpcpb.Mutation)
 	for _, mut := range mutations {
 		if mut == nil {
 			continue
@@ -330,14 +330,14 @@ func (c *Client) TwoPhaseCommit(ctx context.Context, primary []byte, mutations [
 		if err != nil {
 			return err
 		}
-		id := region.meta.GetId()
+		id := region.desc.RegionID
 		grouped[id] = append(grouped[id], cloneMutation(mut))
 	}
 	primaryRegion, err := c.routeKeyWithRetry(ctx, primary)
 	if err != nil {
 		return err
 	}
-	primaryID := primaryRegion.meta.GetId()
+	primaryID := primaryRegion.desc.RegionID
 	primaryMutations, ok := grouped[primaryID]
 	if !ok || len(primaryMutations) == 0 {
 		return fmt.Errorf("client: primary key %q missing from mutations", primary)
@@ -367,7 +367,7 @@ func (c *Client) TwoPhaseCommit(ctx context.Context, primary []byte, mutations [
 	return nil
 }
 
-func (c *Client) prewriteRegion(ctx context.Context, regionID uint64, primary []byte, startVersion, ttl uint64, muts []*pb.Mutation) error {
+func (c *Client) prewriteRegion(ctx context.Context, regionID uint64, primary []byte, startVersion, ttl uint64, muts []*kvrpcpb.Mutation) error {
 	var lastErr error
 	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
 		region, ok := c.regionSnapshot(regionID)
@@ -389,9 +389,9 @@ func (c *Client) prewriteRegion(ctx context.Context, regionID uint64, primary []
 		if err != nil {
 			return err
 		}
-		req := &pb.KvPrewriteRequest{
+		req := &kvrpcpb.KvPrewriteRequest{
 			Context: header,
-			Request: &pb.PrewriteRequest{
+			Request: &kvrpcpb.PrewriteRequest{
 				Mutations:    muts,
 				PrimaryLock:  append([]byte(nil), primary...),
 				StartVersion: startVersion,
@@ -448,9 +448,9 @@ func (c *Client) commitRegion(ctx context.Context, regionID uint64, keys [][]byt
 		if err != nil {
 			return err
 		}
-		req := &pb.KvCommitRequest{
+		req := &kvrpcpb.KvCommitRequest{
 			Context: header,
-			Request: &pb.CommitRequest{
+			Request: &kvrpcpb.CommitRequest{
 				Keys:          cloneKeys(keys),
 				StartVersion:  startVersion,
 				CommitVersion: commitVersion,
@@ -486,7 +486,7 @@ func (c *Client) commitRegion(ctx context.Context, regionID uint64, keys [][]byt
 
 // CheckTxnStatus inspects the primary lock for a transaction and returns the
 // scheduler's decision (rollback, still alive, or already committed).
-func (c *Client) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, currentTs uint64) (*pb.CheckTxnStatusResponse, error) {
+func (c *Client) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, currentTs uint64) (*kvrpcpb.CheckTxnStatusResponse, error) {
 	var lastErr error
 	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
 		region, err := c.routeKeyWithRetry(ctx, primary)
@@ -508,9 +508,9 @@ func (c *Client) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, cur
 		if err != nil {
 			return nil, err
 		}
-		req := &pb.KvCheckTxnStatusRequest{
+		req := &kvrpcpb.KvCheckTxnStatusRequest{
 			Context: header,
-			Request: &pb.CheckTxnStatusRequest{
+			Request: &kvrpcpb.CheckTxnStatusRequest{
 				PrimaryKey:         append([]byte(nil), primary...),
 				LockTs:             lockTs,
 				CurrentTs:          currentTs,
@@ -524,7 +524,7 @@ func (c *Client) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, cur
 			return nil, normalizeRPCError(err)
 		}
 		if regionErr := resp.GetRegionError(); regionErr != nil {
-			lastErr = c.handleRegionError(region.meta.GetId(), regionErr)
+			lastErr = c.handleRegionError(region.desc.RegionID, regionErr)
 			if lastErr != nil {
 				return nil, lastErr
 			}
@@ -556,7 +556,7 @@ func (c *Client) ResolveLocks(ctx context.Context, startVersion, commitVersion u
 		if err != nil {
 			return 0, err
 		}
-		id := region.meta.GetId()
+		id := region.desc.RegionID
 		grouped[id] = append(grouped[id], append([]byte(nil), key...))
 	}
 	var resolved uint64
@@ -592,9 +592,9 @@ func (c *Client) resolveRegionLocks(ctx context.Context, regionID uint64, startV
 		if err != nil {
 			return 0, err
 		}
-		req := &pb.KvResolveLockRequest{
+		req := &kvrpcpb.KvResolveLockRequest{
 			Context: header,
-			Request: &pb.ResolveLockRequest{
+			Request: &kvrpcpb.ResolveLockRequest{
 				StartVersion:  startVersion,
 				CommitVersion: commitVersion,
 				Keys:          cloneKeys(keys),
@@ -631,11 +631,11 @@ func (c *Client) resolveRegionLocks(ctx context.Context, regionID uint64, startV
 	return 0, fmt.Errorf("client: resolve lock retries exhausted for region %d", regionID)
 }
 
-func cloneMutation(mut *pb.Mutation) *pb.Mutation {
+func cloneMutation(mut *kvrpcpb.Mutation) *kvrpcpb.Mutation {
 	if mut == nil {
 		return nil
 	}
-	return proto.Clone(mut).(*pb.Mutation)
+	return proto.Clone(mut).(*kvrpcpb.Mutation)
 }
 
 func cloneKeys(keys [][]byte) [][]byte {
@@ -646,7 +646,7 @@ func cloneKeys(keys [][]byte) [][]byte {
 	return out
 }
 
-func collectKeys(muts []*pb.Mutation) [][]byte {
+func collectKeys(muts []*kvrpcpb.Mutation) [][]byte {
 	out := make([][]byte, 0, len(muts))
 	for _, mut := range muts {
 		if mut == nil {
@@ -657,7 +657,7 @@ func collectKeys(muts []*pb.Mutation) [][]byte {
 	return out
 }
 
-func mutationHasPrimary(muts []*pb.Mutation, primary []byte) bool {
+func mutationHasPrimary(muts []*kvrpcpb.Mutation, primary []byte) bool {
 	for _, mut := range muts {
 		if mut == nil {
 			continue

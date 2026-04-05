@@ -5,13 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	adminpb "github.com/feichai0017/NoKV/pb/admin"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"net"
 	"slices"
 	"testing"
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/pb"
 	pdadapter "github.com/feichai0017/NoKV/pd/adapter"
 	pdclient "github.com/feichai0017/NoKV/pd/client"
 	"github.com/feichai0017/NoKV/pd/core"
@@ -20,7 +21,7 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	raftkv "github.com/feichai0017/NoKV/raftstore/kv"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
@@ -34,7 +35,7 @@ type Node struct {
 	StoreID   uint64
 	WorkDir   string
 	DB        *NoKV.DB
-	LocalMeta *raftmeta.Store
+	LocalMeta *localmeta.Store
 	Server    *serverpkg.Server
 }
 
@@ -75,7 +76,7 @@ func StartNode(tb testing.TB, storeID uint64, dir string, allowedModes []raftmod
 
 func StartNodeWithConfig(tb testing.TB, storeID uint64, dir string, cfg NodeConfig) *Node {
 	tb.Helper()
-	localMeta, err := raftmeta.OpenLocalStore(dir, nil)
+	localMeta, err := localmeta.OpenLocalStore(dir, nil)
 	if err != nil {
 		tb.Fatalf("open local meta: %v", err)
 	}
@@ -127,7 +128,7 @@ func StartPD(tb testing.TB) *PD {
 	}
 	svc := pdserver.NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
 	grpcServer := grpc.NewServer()
-	pb.RegisterPDServer(grpcServer, svc)
+	pdpb.RegisterPDServer(grpcServer, svc)
 	go func() {
 		_ = grpcServer.Serve(lis)
 	}()
@@ -271,7 +272,7 @@ func (n *Node) Close(tb testing.TB) {
 	}
 }
 
-func FetchRuntimeStatus(tb testing.TB, ctx context.Context, addr string, regionID uint64) *pb.RegionRuntimeStatusResponse {
+func FetchRuntimeStatus(tb testing.TB, ctx context.Context, addr string, regionID uint64) *adminpb.RegionRuntimeStatusResponse {
 	tb.Helper()
 	status, err := TryFetchRuntimeStatus(ctx, addr, regionID)
 	if err != nil {
@@ -280,7 +281,7 @@ func FetchRuntimeStatus(tb testing.TB, ctx context.Context, addr string, regionI
 	return status
 }
 
-func TryFetchRuntimeStatus(ctx context.Context, addr string, regionID uint64) (*pb.RegionRuntimeStatusResponse, error) {
+func TryFetchRuntimeStatus(ctx context.Context, addr string, regionID uint64) (*adminpb.RegionRuntimeStatusResponse, error) {
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, fmt.Errorf("dial admin %s: %w", addr, err)
@@ -288,8 +289,8 @@ func TryFetchRuntimeStatus(ctx context.Context, addr string, regionID uint64) (*
 	defer func() {
 		_ = conn.Close()
 	}()
-	client := pb.NewRaftAdminClient(conn)
-	status, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: regionID})
+	client := adminpb.NewRaftAdminClient(conn)
+	status, err := client.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: regionID})
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +336,7 @@ func WaitForNotHosted(tb testing.TB, ctx context.Context, addr string, regionID 
 	tb.Fatalf("timed out waiting for region %d at %s to become not hosted", regionID, addr)
 }
 
-func FindLeader(tb testing.TB, ctx context.Context, regionID uint64, nodes ...*Node) (*Node, *pb.RegionRuntimeStatusResponse) {
+func FindLeader(tb testing.TB, ctx context.Context, regionID uint64, nodes ...*Node) (*Node, *adminpb.RegionRuntimeStatusResponse) {
 	tb.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -362,14 +363,14 @@ func AssertValue(tb testing.TB, db *NoKV.DB, key, value []byte) {
 	}
 }
 
-func peerConfig(node *Node, meta raftmeta.RegionMeta, peerID uint64, storage engine.PeerStorage) *peer.Config {
+func peerConfig(node *Node, meta localmeta.RegionMeta, peerID uint64, storage engine.PeerStorage) *peer.Config {
 	var snapshotExport peer.SnapshotExportFunc
 	if snapshotBridge, ok := any(node.DB).(snapshotpkg.SnapshotStore); ok {
 		snapshotExport = snapshotBridge.ExportSnapshot
-		snapshotApply := func(payload []byte) (raftmeta.RegionMeta, error) {
+		snapshotApply := func(payload []byte) (localmeta.RegionMeta, error) {
 			result, err := snapshotBridge.ImportSnapshot(payload)
 			if err != nil {
-				return raftmeta.RegionMeta{}, err
+				return localmeta.RegionMeta{}, err
 			}
 			return result.Meta.Region, nil
 		}
@@ -388,7 +389,7 @@ func peerConfig(node *Node, meta raftmeta.RegionMeta, peerID uint64, storage eng
 			SnapshotApply:  snapshotApply,
 			Storage:        storage,
 			GroupID:        meta.ID,
-			Region:         raftmeta.CloneRegionMetaPtr(&meta),
+			Region:         localmeta.CloneRegionMetaPtr(&meta),
 		}
 	}
 	return &peer.Config{
@@ -404,7 +405,7 @@ func peerConfig(node *Node, meta raftmeta.RegionMeta, peerID uint64, storage eng
 		Apply:     raftkv.NewEntryApplier(node.DB),
 		Storage:   storage,
 		GroupID:   meta.ID,
-		Region:    raftmeta.CloneRegionMetaPtr(&meta),
+		Region:    localmeta.CloneRegionMetaPtr(&meta),
 	}
 }
 

@@ -4,13 +4,13 @@ package file
 
 import (
 	"bytes"
+	storagepb "github.com/feichai0017/NoKV/pb/storage"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -20,8 +20,8 @@ func writeTestSSTable(t *testing.T, path string) ([]byte, []byte) {
 	t.Helper()
 	dataBlock := []byte("data-block")
 	key := kv.InternalKey(kv.CFDefault, []byte("a"), 1)
-	index := &pb.TableIndex{
-		Offsets: []*pb.BlockOffset{{
+	index := &storagepb.TableIndex{
+		Offsets: []*storagepb.BlockOffset{{
 			Key:    key,
 			Offset: 0,
 			Len:    uint32(len(dataBlock)),

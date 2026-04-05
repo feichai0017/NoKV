@@ -19,7 +19,7 @@ import (
 	"github.com/feichai0017/NoKV/manifest"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
@@ -1103,7 +1103,7 @@ func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = walMgr.Close() }()
 
-	localMeta, err := raftmeta.OpenLocalStore(manifestDir, nil)
+	localMeta, err := localmeta.OpenLocalStore(manifestDir, nil)
 	require.NoError(t, err)
 	defer func() { _ = localMeta.Close() }()
 
@@ -1142,7 +1142,7 @@ func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = walMgrRestore.Close() }()
 
-	localMetaRestore, err := raftmeta.OpenLocalStore(restoreManifestDir, nil)
+	localMetaRestore, err := localmeta.OpenLocalStore(restoreManifestDir, nil)
 	require.NoError(t, err)
 	defer func() { _ = localMetaRestore.Close() }()
 
@@ -1216,7 +1216,7 @@ func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 		MaxBatchCount:       32,
 		MaxBatchSize:        1 << 20,
 	}
-	localMeta, err := raftmeta.OpenLocalStore(root, nil)
+	localMeta, err := localmeta.OpenLocalStore(root, nil)
 	require.NoError(t, err)
 	defer func() { _ = localMeta.Close() }()
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
@@ -1233,8 +1233,8 @@ func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 	}
 
 	appendRaft("group1-seg1")
-	require.NoError(t, localMeta.SaveRaftPointer(raftmeta.RaftLogPointer{GroupID: 1, Segment: walMgr.ActiveSegment(), AppliedIndex: 10, AppliedTerm: 1}))
-	require.NoError(t, localMeta.SaveRaftPointer(raftmeta.RaftLogPointer{GroupID: 2, Segment: walMgr.ActiveSegment(), AppliedIndex: 9, AppliedTerm: 1}))
+	require.NoError(t, localMeta.SaveRaftPointer(localmeta.RaftLogPointer{GroupID: 1, Segment: walMgr.ActiveSegment(), AppliedIndex: 10, AppliedTerm: 1}))
+	require.NoError(t, localMeta.SaveRaftPointer(localmeta.RaftLogPointer{GroupID: 2, Segment: walMgr.ActiveSegment(), AppliedIndex: 9, AppliedTerm: 1}))
 
 	snapBefore := db.Info().Snapshot()
 	logRecoveryMetric(t, "raft_wal_backlog_pre", map[string]any{
@@ -1247,7 +1247,7 @@ func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 	require.NoError(t, walMgr.SwitchSegment(3, true))
 	appendRaft("group1-seg3")
 
-	require.NoError(t, localMeta.SaveRaftPointer(raftmeta.RaftLogPointer{
+	require.NoError(t, localMeta.SaveRaftPointer(localmeta.RaftLogPointer{
 		GroupID:        1,
 		Segment:        3,
 		AppliedIndex:   30,
@@ -1256,7 +1256,7 @@ func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 		TruncatedTerm:  4,
 		SegmentIndex:   3,
 	}))
-	require.NoError(t, localMeta.SaveRaftPointer(raftmeta.RaftLogPointer{
+	require.NoError(t, localMeta.SaveRaftPointer(localmeta.RaftLogPointer{
 		GroupID:        2,
 		Segment:        3,
 		AppliedIndex:   28,

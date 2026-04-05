@@ -2,17 +2,19 @@ package store
 
 import (
 	"context"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
 
-	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
 func TestRegionManagerLoadAndMeta(t *testing.T) {
 	rm := newRegionManager(nil, nil, nil)
-	snapshot := map[uint64]raftmeta.RegionMeta{
+	snapshot := map[uint64]localmeta.RegionMeta{
 		1: {
 			ID:       1,
 			StartKey: []byte("a"),
@@ -48,10 +50,10 @@ func TestRegionManagerPeerTracking(t *testing.T) {
 
 func TestRegionManagerRemove(t *testing.T) {
 	rm := newRegionManager(nil, nil, nil)
-	requireNoError(t, rm.applyRegionMeta(raftmeta.RegionMeta{ID: 3}))
+	requireNoError(t, rm.applyRegionMeta(localmeta.RegionMeta{ID: 3}, true))
 	rm.setPeer(3, &peer.Peer{})
 
-	requireNoError(t, rm.applyRegionRemoval(3))
+	requireNoError(t, rm.applyRegionRemoval(3, true))
 	if _, ok := rm.meta(3); ok {
 		t.Fatalf("meta should be removed")
 	}
@@ -62,13 +64,44 @@ func TestRegionManagerRemove(t *testing.T) {
 
 func TestRegionManagerListMetas(t *testing.T) {
 	rm := newRegionManager(nil, nil, nil)
-	rm.loadBootstrapSnapshot(map[uint64]raftmeta.RegionMeta{
+	rm.loadBootstrapSnapshot(map[uint64]localmeta.RegionMeta{
 		4: {ID: 4},
 		5: {ID: 5},
 	})
 	metas := rm.listMetas()
 	if len(metas) != 2 {
 		t.Fatalf("expected two metas, got %d", len(metas))
+	}
+}
+
+func TestRegionManagerPublishesCatalogRootEvents(t *testing.T) {
+	var events []regionEvent
+	rm := newRegionManager(nil, nil, func(ev regionEvent) {
+		events = append(events, ev)
+	})
+
+	requireNoError(t, rm.applyRegionMeta(localmeta.RegionMeta{
+		ID:       9,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		State:    metaregion.ReplicaStateRunning,
+	}, true))
+	if len(events) != 1 || events[0].root.Kind != rootevent.KindRegionBootstrap {
+		t.Fatalf("expected bootstrap root event, got %+v", events)
+	}
+
+	events = nil
+	requireNoError(t, rm.applyRegionState(9, metaregion.ReplicaStateRemoving))
+	if len(events) != 1 || events[0].root.Kind != rootevent.KindRegionDescriptorPublished {
+		t.Fatalf("expected descriptor publish root event, got %+v", events)
+	}
+
+	events = nil
+	requireNoError(t, rm.applyRegionRemoval(9, true))
+	if len(events) != 2 ||
+		events[0].root.Kind != rootevent.KindRegionDescriptorPublished ||
+		events[1].root.Kind != rootevent.KindRegionTombstoned {
+		t.Fatalf("expected tombstone root event, got %+v", events)
 	}
 }
 
@@ -103,7 +136,7 @@ func TestStoreAndRouterHelpers(t *testing.T) {
 	if err := router.SendCommand(1, nil); err == nil {
 		t.Fatalf("expected SendCommand to fail for nil request")
 	}
-	if err := router.SendCommand(1, &pb.RaftCmdRequest{Header: &pb.CmdHeader{RegionId: 1}}); err == nil {
+	if err := router.SendCommand(1, &raftcmdpb.RaftCmdRequest{Header: &raftcmdpb.CmdHeader{RegionId: 1}}); err == nil {
 		t.Fatalf("expected SendCommand to fail for missing peer")
 	}
 	if err := router.SendTick(1); err == nil {
@@ -114,11 +147,11 @@ func TestStoreAndRouterHelpers(t *testing.T) {
 func TestStoreReadCommandValidation(t *testing.T) {
 	store := NewStore(Config{})
 
-	if _, err := store.ReadCommand(context.Background(), &pb.RaftCmdRequest{}); err == nil {
+	if _, err := store.ReadCommand(context.Background(), &raftcmdpb.RaftCmdRequest{}); err == nil {
 		t.Fatalf("expected missing region id error")
 	}
 
-	req := &pb.RaftCmdRequest{Header: &pb.CmdHeader{RegionId: 1}}
+	req := &raftcmdpb.RaftCmdRequest{Header: &raftcmdpb.CmdHeader{RegionId: 1}}
 	resp, err := store.ReadCommand(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -131,7 +164,7 @@ func TestStoreReadCommandValidation(t *testing.T) {
 func TestStoreReadCommandStoreNotMatch(t *testing.T) {
 	store := NewStore(Config{StoreID: 7})
 
-	req := &pb.RaftCmdRequest{Header: &pb.CmdHeader{RegionId: 1, StoreId: 9}}
+	req := &raftcmdpb.RaftCmdRequest{Header: &raftcmdpb.CmdHeader{RegionId: 1, StoreId: 9}}
 	resp, err := store.ReadCommand(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -160,15 +193,15 @@ func TestReadOnlyRequestPredicate(t *testing.T) {
 	if isReadOnlyRequest(nil) {
 		t.Fatalf("expected nil request to be read-only false")
 	}
-	readReq := &pb.RaftCmdRequest{Requests: []*pb.Request{
-		{CmdType: pb.CmdType_CMD_GET},
-		{CmdType: pb.CmdType_CMD_SCAN},
+	readReq := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{
+		{CmdType: raftcmdpb.CmdType_CMD_GET},
+		{CmdType: raftcmdpb.CmdType_CMD_SCAN},
 	}}
 	if !isReadOnlyRequest(readReq) {
 		t.Fatalf("expected read-only request to return true")
 	}
-	writeReq := &pb.RaftCmdRequest{Requests: []*pb.Request{
-		{CmdType: pb.CmdType_CMD_PREWRITE},
+	writeReq := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{
+		{CmdType: raftcmdpb.CmdType_CMD_PREWRITE},
 	}}
 	if isReadOnlyRequest(writeReq) {
 		t.Fatalf("expected write request to return false")

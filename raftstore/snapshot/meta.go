@@ -8,13 +8,16 @@ import (
 	"path/filepath"
 	"time"
 
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/vfs"
 )
 
 const (
-	sstVersion       = 1
-	sstSnapshotName  = "sst-snapshot.json"
+	sstVersion = 1
+	// sstSnapshotName stores one region snapshot manifest as JSON metadata.
+	sstSnapshotName = "snapshot.json"
+	// sstTablesDirName stores the referenced SST payload files for one imported
+	// or exported region snapshot.
 	sstTablesDirName = "tables"
 )
 
@@ -36,15 +39,18 @@ type Compatibility struct {
 }
 
 // Meta describes one region-scoped SST snapshot.
+//
+// On disk, snapshot.json is a JSON document and tables/ contains the material
+// SST payload files referenced by Meta.Tables.
 type Meta struct {
-	Version       uint32              `json:"version"`
-	Region        raftmeta.RegionMeta `json:"region"`
-	EntryCount    uint64              `json:"entry_count"`
-	TableCount    uint64              `json:"table_count"`
-	InlineValues  bool                `json:"inline_values"`
-	Compatibility Compatibility       `json:"compatibility"`
-	Tables        []TableMeta         `json:"tables"`
-	CreatedAt     time.Time           `json:"created_at"`
+	Version       uint32               `json:"version"`
+	Region        localmeta.RegionMeta `json:"region"`
+	EntryCount    uint64               `json:"entry_count"`
+	TableCount    uint64               `json:"table_count"`
+	InlineValues  bool                 `json:"inline_values"`
+	Compatibility Compatibility        `json:"compatibility"`
+	Tables        []TableMeta          `json:"tables"`
+	CreatedAt     time.Time            `json:"created_at"`
 }
 
 // ExportResult reports the persisted snapshot metadata after a successful export.
@@ -59,9 +65,9 @@ type ExportResult struct {
 // simple region metadata view can read result.Meta.Region, while install paths
 // can still roll back imported SST files before peer publish completes.
 type SnapshotStore interface {
-	ExportSnapshot(region raftmeta.RegionMeta) ([]byte, error)
+	ExportSnapshot(region localmeta.RegionMeta) ([]byte, error)
 	ImportSnapshot(payload []byte) (*ImportResult, error)
-	ExportSnapshotTo(w io.Writer, region raftmeta.RegionMeta) (Meta, error)
+	ExportSnapshotTo(w io.Writer, region localmeta.RegionMeta) (Meta, error)
 	ImportSnapshotFrom(r io.Reader) (*ImportResult, error)
 }
 

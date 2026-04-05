@@ -1,12 +1,13 @@
 package store
 
 import (
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/kv"
 	myraft "github.com/feichai0017/NoKV/raft"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/stretchr/testify/require"
 	raftpb "go.etcd.io/raft/v3/raftpb"
@@ -14,10 +15,10 @@ import (
 
 func testSSTApply(t *testing.T, db *NoKV.DB) peer.SnapshotApplyFunc {
 	t.Helper()
-	return func(payload []byte) (raftmeta.RegionMeta, error) {
+	return func(payload []byte) (localmeta.RegionMeta, error) {
 		result, err := db.ImportSnapshot(payload)
 		if err != nil {
-			return raftmeta.RegionMeta{}, err
+			return localmeta.RegionMeta{}, err
 		}
 		return result.Meta.Region, nil
 	}
@@ -29,22 +30,22 @@ func TestStoreStepBootstrapsPeerFromSnapshotPayload(t *testing.T) {
 	t.Cleanup(func() { value.DecrRef() })
 	require.NoError(t, sourceDB.ApplyInternalEntries([]*entrykv.Entry{value}))
 
-	region := raftmeta.RegionMeta{
+	region := localmeta.RegionMeta{
 		ID:       77,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 2},
-		Peers: []raftmeta.PeerMeta{
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 2},
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 11},
 			{StoreID: 2, PeerID: 22},
 		},
-		State: raftmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 	payload, err := sourceDB.ExportSnapshot(region)
 	require.NoError(t, err)
 
 	targetDB, targetMeta := openStoreDB(t)
-	builder := func(meta raftmeta.RegionMeta) (*peer.Config, error) {
+	builder := func(meta localmeta.RegionMeta) (*peer.Config, error) {
 		return &peer.Config{
 			RaftConfig: myraft.Config{
 				ID:              22,
@@ -59,7 +60,7 @@ func TestStoreStepBootstrapsPeerFromSnapshotPayload(t *testing.T) {
 			SnapshotApply: testSSTApply(t, targetDB),
 			Storage:       mustPeerStorage(t, targetDB, targetMeta, meta.ID),
 			GroupID:       meta.ID,
-			Region:        raftmeta.CloneRegionMetaPtr(&meta),
+			Region:        localmeta.CloneRegionMetaPtr(&meta),
 		}, nil
 	}
 	st := NewStore(Config{
@@ -106,22 +107,22 @@ func TestStoreInstallRegionSnapshotBootstrapsPeer(t *testing.T) {
 	t.Cleanup(func() { value.DecrRef() })
 	require.NoError(t, sourceDB.ApplyInternalEntries([]*entrykv.Entry{value}))
 
-	region := raftmeta.RegionMeta{
+	region := localmeta.RegionMeta{
 		ID:       78,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 2},
-		Peers: []raftmeta.PeerMeta{
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 2},
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 11},
 			{StoreID: 2, PeerID: 22},
 		},
-		State: raftmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 	payload, err := sourceDB.ExportSnapshot(region)
 	require.NoError(t, err)
 
 	targetDB, targetMeta := openStoreDB(t)
-	builder := func(meta raftmeta.RegionMeta) (*peer.Config, error) {
+	builder := func(meta localmeta.RegionMeta) (*peer.Config, error) {
 		return &peer.Config{
 			RaftConfig: myraft.Config{
 				ID:              22,
@@ -136,7 +137,7 @@ func TestStoreInstallRegionSnapshotBootstrapsPeer(t *testing.T) {
 			SnapshotApply: testSSTApply(t, targetDB),
 			Storage:       mustPeerStorage(t, targetDB, targetMeta, meta.ID),
 			GroupID:       meta.ID,
-			Region:        raftmeta.CloneRegionMetaPtr(&meta),
+			Region:        localmeta.CloneRegionMetaPtr(&meta),
 		}, nil
 	}
 	st := NewStore(Config{
@@ -174,7 +175,7 @@ func TestStoreInstallRegionSnapshotBootstrapsPeer(t *testing.T) {
 
 func TestStoreInstallRegionSnapshotRejectsCorruptPayloadWithoutHostingPeer(t *testing.T) {
 	targetDB, targetMeta := openStoreDB(t)
-	builder := func(meta raftmeta.RegionMeta) (*peer.Config, error) {
+	builder := func(meta localmeta.RegionMeta) (*peer.Config, error) {
 		return &peer.Config{
 			RaftConfig: myraft.Config{
 				ID:              22,
@@ -189,7 +190,7 @@ func TestStoreInstallRegionSnapshotRejectsCorruptPayloadWithoutHostingPeer(t *te
 			SnapshotApply: testSSTApply(t, targetDB),
 			Storage:       mustPeerStorage(t, targetDB, targetMeta, meta.ID),
 			GroupID:       meta.ID,
-			Region:        raftmeta.CloneRegionMetaPtr(&meta),
+			Region:        localmeta.CloneRegionMetaPtr(&meta),
 		}, nil
 	}
 	st := NewStore(Config{StoreID: 2, LocalMeta: targetMeta, PeerBuilder: builder})
@@ -227,7 +228,7 @@ func TestStorePeerLifecycle(t *testing.T) {
 		},
 		Transport: noopTransport{},
 		Apply:     func([]myraft.Entry) error { return nil },
-		Region: &raftmeta.RegionMeta{
+		Region: &localmeta.RegionMeta{
 			ID:       100,
 			StartKey: []byte("a"),
 			EndKey:   []byte("b"),

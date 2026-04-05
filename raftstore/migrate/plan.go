@@ -8,7 +8,7 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/manifest"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/utils"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
 	"github.com/feichai0017/NoKV/wal"
@@ -105,7 +105,7 @@ func BuildPlan(workDir string) (PlanResult, error) {
 	}
 
 	if workDirExists && manifestPresent {
-		localMeta, err := raftmeta.OpenLocalStore(workDir, nil)
+		localMeta, err := localmeta.OpenLocalStore(workDir, nil)
 		if err != nil {
 			addBlocker(&result, fmt.Sprintf("local catalog open failed: %v", err))
 		} else {

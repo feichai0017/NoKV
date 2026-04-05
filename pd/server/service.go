@@ -3,25 +3,33 @@ package server
 import (
 	"context"
 	"errors"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	"fmt"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/pd/core"
 	pdstorage "github.com/feichai0017/NoKV/pd/storage"
 	"github.com/feichai0017/NoKV/pd/tso"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"sync"
 )
 
 // Service implements the PD-lite gRPC API.
 type Service struct {
-	pb.UnimplementedPDServer
+	pdpb.UnimplementedPDServer
 
 	cluster *core.Cluster
 	ids     *core.IDAllocator
 	tso     *tso.Allocator
 	storage pdstorage.Store
+	allocMu sync.Mutex
 }
+
+const errNotLeaderPrefix = "pd not leader"
 
 // NewService constructs a PD-lite service.
 func NewService(cluster *core.Cluster, ids *core.IDAllocator, tsAlloc *tso.Allocator) *Service {
@@ -52,8 +60,38 @@ func (s *Service) SetStorage(storage pdstorage.Store) {
 	s.storage = storage
 }
 
+// RefreshFromStorage refreshes rooted durable state into the in-memory service
+// view and fences allocator state so a future leader cannot allocate stale ids.
+func (s *Service) RefreshFromStorage() error {
+	if s == nil || s.storage == nil {
+		return nil
+	}
+	snapshot, err := s.reloadRootedView(true)
+	if err != nil {
+		return err
+	}
+	s.ids.Fence(snapshot.Allocator.IDCurrent)
+	s.tso.Fence(snapshot.Allocator.TSCurrent)
+	return nil
+}
+
+// ReloadFromStorage reloads the in-memory rooted view from the storage cache
+// without forcing the underlying rooted backend to refresh first.
+func (s *Service) ReloadFromStorage() error {
+	if s == nil || s.storage == nil {
+		return nil
+	}
+	snapshot, err := s.reloadRootedView(false)
+	if err != nil {
+		return err
+	}
+	s.ids.Fence(snapshot.Allocator.IDCurrent)
+	s.tso.Fence(snapshot.Allocator.TSCurrent)
+	return nil
+}
+
 // StoreHeartbeat records store-level stats.
-func (s *Service) StoreHeartbeat(_ context.Context, req *pb.StoreHeartbeatRequest) (*pb.StoreHeartbeatResponse, error) {
+func (s *Service) StoreHeartbeat(_ context.Context, req *pdpb.StoreHeartbeatRequest) (*pdpb.StoreHeartbeatResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "store heartbeat request is nil")
 	}
@@ -70,20 +108,48 @@ func (s *Service) StoreHeartbeat(_ context.Context, req *pb.StoreHeartbeatReques
 		}
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	return &pb.StoreHeartbeatResponse{
+	return &pdpb.StoreHeartbeatResponse{
 		Accepted:   true,
 		Operations: s.planStoreOperations(req.GetStoreId()),
 	}, nil
 }
 
-// RegionHeartbeat records region-level metadata.
-func (s *Service) RegionHeartbeat(_ context.Context, req *pb.RegionHeartbeatRequest) (*pb.RegionHeartbeatResponse, error) {
-	if req == nil || req.GetRegion() == nil {
-		return nil, status.Error(codes.InvalidArgument, "region heartbeat request missing region")
+// RegionLiveness records one runtime heartbeat without mutating rooted truth.
+func (s *Service) RegionLiveness(_ context.Context, req *pdpb.RegionLivenessRequest) (*pdpb.RegionLivenessResponse, error) {
+	if req == nil || req.GetRegionId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "region liveness request missing region_id")
 	}
-	meta := pbToManifestRegion(req.GetRegion())
-	err := s.cluster.UpsertRegionHeartbeat(meta)
+	accepted := s.cluster.TouchRegionHeartbeat(req.GetRegionId())
+	return &pdpb.RegionLivenessResponse{Accepted: accepted}, nil
+}
+
+// PublishRootEvent records one explicit rooted topology truth event.
+func (s *Service) PublishRootEvent(_ context.Context, req *pdpb.PublishRootEventRequest) (*pdpb.PublishRootEventResponse, error) {
+	if req == nil || req.GetEvent() == nil {
+		return nil, status.Error(codes.InvalidArgument, "publish root event request missing event")
+	}
+	event := metacodec.RootEventFromProto(req.GetEvent())
+	if event.Kind == rootevent.KindUnknown {
+		return nil, status.Error(codes.InvalidArgument, "publish root event requires known kind")
+	}
+	event, err := s.normalizeRootEvent(event)
 	if err != nil {
+		return nil, status.Error(codes.Internal, "normalize root event: "+err.Error())
+	}
+	if err := s.requireLeaderForWrite(); err != nil {
+		return nil, err
+	}
+	if err := s.requireExpectedClusterEpoch(req.GetExpectedClusterEpoch()); err != nil {
+		return nil, err
+	}
+	skip, err := s.guardRootEventLifecycle(event)
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	if skip {
+		return &pdpb.PublishRootEventResponse{Accepted: true}, nil
+	}
+	if err := s.cluster.ValidateRootEvent(event); err != nil {
 		switch {
 		case errors.Is(err, core.ErrInvalidRegionID):
 			return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -94,15 +160,38 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pb.RegionHeartbeatRequ
 		}
 	}
 	if s.storage != nil {
-		if err := s.storage.SaveRegion(meta); err != nil {
-			return nil, status.Error(codes.Internal, "persist region metadata: "+err.Error())
+		if err := s.storage.AppendRootEvent(event); err != nil {
+			return nil, status.Error(codes.Internal, "persist root event: "+err.Error())
 		}
+		if _, err := s.reloadRootedView(false); err != nil {
+			return nil, status.Error(codes.Internal, "reload rooted view: "+err.Error())
+		}
+		return &pdpb.PublishRootEventResponse{Accepted: true}, nil
 	}
-	return &pb.RegionHeartbeatResponse{Accepted: true}, nil
+	if err := s.cluster.PublishRootEvent(event); err != nil {
+		return nil, status.Error(codes.Internal, "apply root event after persist: "+err.Error())
+	}
+	return &pdpb.PublishRootEventResponse{Accepted: true}, nil
+}
+
+func (s *Service) guardRootEventLifecycle(event rootevent.Event) (bool, error) {
+	if s == nil || s.storage == nil {
+		return false, nil
+	}
+	snapshot, err := s.storage.Load()
+	if err != nil {
+		return false, fmt.Errorf("load rooted snapshot: %w", err)
+	}
+	decision, err := rootstate.EvaluateRootEventLifecycle(rootstate.Snapshot{
+		Descriptors:         snapshot.Descriptors,
+		PendingPeerChanges:  snapshot.PendingPeerChanges,
+		PendingRangeChanges: snapshot.PendingRangeChanges,
+	}, event)
+	return decision == rootstate.RootEventLifecycleSkip, err
 }
 
 // RemoveRegion deletes region metadata from the PD in-memory catalog.
-func (s *Service) RemoveRegion(_ context.Context, req *pb.RemoveRegionRequest) (*pb.RemoveRegionResponse, error) {
+func (s *Service) RemoveRegion(_ context.Context, req *pdpb.RemoveRegionRequest) (*pdpb.RemoveRegionResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "remove region request is nil")
 	}
@@ -110,32 +199,62 @@ func (s *Service) RemoveRegion(_ context.Context, req *pb.RemoveRegionRequest) (
 	if regionID == 0 {
 		return nil, status.Error(codes.InvalidArgument, "remove region requires region_id > 0")
 	}
-	removed := s.cluster.RemoveRegion(regionID)
+	if err := s.requireLeaderForWrite(); err != nil {
+		return nil, err
+	}
+	if err := s.requireExpectedClusterEpoch(req.GetExpectedClusterEpoch()); err != nil {
+		return nil, err
+	}
+	removed := s.cluster.HasRegion(regionID)
 	if removed && s.storage != nil {
-		if err := s.storage.DeleteRegion(regionID); err != nil {
-			return nil, status.Error(codes.Internal, "persist region delete: "+err.Error())
+		if err := s.storage.AppendRootEvent(rootevent.RegionTombstoned(regionID)); err != nil {
+			return nil, status.Error(codes.Internal, "persist region tombstone: "+err.Error())
+		}
+		if _, err := s.reloadRootedView(false); err != nil {
+			return nil, status.Error(codes.Internal, "reload rooted view: "+err.Error())
+		}
+		return &pdpb.RemoveRegionResponse{Removed: true}, nil
+	}
+	if removed {
+		s.cluster.RemoveRegion(regionID)
+	}
+	return &pdpb.RemoveRegionResponse{Removed: removed}, nil
+}
+
+func (s *Service) reloadRootedView(refresh bool) (pdstorage.Snapshot, error) {
+	if s == nil || s.storage == nil {
+		return pdstorage.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
+	}
+	if refresh {
+		if err := s.storage.Refresh(); err != nil {
+			return pdstorage.Snapshot{}, err
 		}
 	}
-	return &pb.RemoveRegionResponse{Removed: removed}, nil
+	snapshot, err := s.storage.Load()
+	if err != nil {
+		return pdstorage.Snapshot{}, err
+	}
+	s.cluster.ReplaceRootSnapshot(snapshot.Descriptors, snapshot.PendingPeerChanges, snapshot.PendingRangeChanges)
+	return snapshot, nil
 }
 
 // GetRegionByKey returns region metadata for the specified key.
-func (s *Service) GetRegionByKey(_ context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
+func (s *Service) GetRegionByKey(_ context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "get region by key request is nil")
 	}
-	meta, ok := s.cluster.GetRegionByKey(req.GetKey())
+	desc, ok := s.cluster.GetRegionDescriptorByKey(req.GetKey())
 	if !ok {
-		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+		return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
-	return &pb.GetRegionByKeyResponse{
-		Region:   manifestToPBRegion(meta),
-		NotFound: false,
+	return &pdpb.GetRegionByKeyResponse{
+		RegionDescriptor: metacodec.DescriptorToProto(desc),
+		NotFound:         false,
 	}, nil
 }
 
 // AllocID allocates one or more globally unique ids.
-func (s *Service) AllocID(_ context.Context, req *pb.AllocIDRequest) (*pb.AllocIDResponse, error) {
+func (s *Service) AllocID(_ context.Context, req *pdpb.AllocIDRequest) (*pdpb.AllocIDResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "alloc id request is nil")
 	}
@@ -143,24 +262,24 @@ func (s *Service) AllocID(_ context.Context, req *pb.AllocIDRequest) (*pb.AllocI
 	if count == 0 {
 		count = 1
 	}
-	first, _, err := s.ids.Reserve(count)
+	if err := s.requireLeaderForWrite(); err != nil {
+		return nil, err
+	}
+	first, err := s.reserveIDs(count)
 	if err != nil {
 		if errors.Is(err, core.ErrInvalidBatch) {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	if err := s.persistAllocatorState(); err != nil {
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
-	return &pb.AllocIDResponse{
+	return &pdpb.AllocIDResponse{
 		FirstId: first,
 		Count:   count,
 	}, nil
 }
 
 // Tso allocates one or more timestamps.
-func (s *Service) Tso(_ context.Context, req *pb.TsoRequest) (*pb.TsoResponse, error) {
+func (s *Service) Tso(_ context.Context, req *pdpb.TsoRequest) (*pdpb.TsoResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "tso request is nil")
 	}
@@ -168,70 +287,190 @@ func (s *Service) Tso(_ context.Context, req *pb.TsoRequest) (*pb.TsoResponse, e
 	if count == 0 {
 		count = 1
 	}
-	first, got, err := s.tso.Reserve(count)
+	if err := s.requireLeaderForWrite(); err != nil {
+		return nil, err
+	}
+	first, got, err := s.reserveTSO(count)
 	if err != nil {
 		if errors.Is(err, core.ErrInvalidBatch) {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	if err := s.persistAllocatorState(); err != nil {
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
-	return &pb.TsoResponse{
+	return &pdpb.TsoResponse{
 		Timestamp: first,
 		Count:     got,
 	}, nil
 }
 
-func (s *Service) persistAllocatorState() error {
+func (s *Service) normalizeRootEvent(event rootevent.Event) (rootevent.Event, error) {
+	out := rootevent.CloneEvent(event)
+	switch {
+	case out.RegionDescriptor != nil:
+		desc, err := s.normalizeDescriptorRootEpoch(out.RegionDescriptor.Descriptor)
+		if err != nil {
+			return rootevent.Event{}, err
+		}
+		out.RegionDescriptor.Descriptor = desc
+	case out.RangeSplit != nil:
+		left, err := s.normalizeDescriptorRootEpoch(out.RangeSplit.Left)
+		if err != nil {
+			return rootevent.Event{}, err
+		}
+		right, err := s.normalizeDescriptorRootEpoch(out.RangeSplit.Right)
+		if err != nil {
+			return rootevent.Event{}, err
+		}
+		out.RangeSplit.Left = left
+		out.RangeSplit.Right = right
+	case out.RangeMerge != nil:
+		merged, err := s.normalizeDescriptorRootEpoch(out.RangeMerge.Merged)
+		if err != nil {
+			return rootevent.Event{}, err
+		}
+		out.RangeMerge.Merged = merged
+	case out.PeerChange != nil:
+		desc, err := s.normalizeDescriptorRootEpoch(out.PeerChange.Region)
+		if err != nil {
+			return rootevent.Event{}, err
+		}
+		out.PeerChange.Region = desc
+	}
+	return out, nil
+}
+
+func (s *Service) normalizeDescriptorRootEpoch(desc descriptor.Descriptor) (descriptor.Descriptor, error) {
+	if desc.RootEpoch != 0 {
+		return desc, nil
+	}
+	if s != nil && s.cluster != nil {
+		current, ok := s.cluster.GetRegionDescriptor(desc.RegionID)
+		if ok {
+			probe := desc.Clone()
+			probe.RootEpoch = current.RootEpoch
+			if current.Equal(probe) {
+				return probe, nil
+			}
+		}
+	}
+	nextEpoch, err := s.nextRootEpoch()
+	if err != nil {
+		return descriptor.Descriptor{}, err
+	}
+	desc.RootEpoch = nextEpoch
+	return desc, nil
+}
+
+func (s *Service) nextRootEpoch() (uint64, error) {
+	if s != nil && s.storage != nil {
+		snapshot, err := s.storage.Load()
+		if err != nil {
+			return 0, err
+		}
+		if snapshot.ClusterEpoch < ^uint64(0) {
+			return snapshot.ClusterEpoch + 1, nil
+		}
+		return snapshot.ClusterEpoch, nil
+	}
+	var maxEpoch uint64
+	if s != nil && s.cluster != nil {
+		for _, region := range s.cluster.RegionSnapshot() {
+			if region.Descriptor.RootEpoch > maxEpoch {
+				maxEpoch = region.Descriptor.RootEpoch
+			}
+		}
+	}
+	if maxEpoch < ^uint64(0) {
+		return maxEpoch + 1, nil
+	}
+	return maxEpoch, nil
+}
+
+func (s *Service) reserveIDs(count uint64) (uint64, error) {
+	if s == nil {
+		return 0, nil
+	}
+	if count == 0 {
+		return 0, fmt.Errorf("%w: reserve n must be >= 1", core.ErrInvalidBatch)
+	}
+	s.allocMu.Lock()
+	defer s.allocMu.Unlock()
+
+	current := s.ids.Current()
+	next := current + count
+	if s.storage != nil {
+		if err := s.storage.SaveAllocatorState(next, s.tso.Current()); err != nil {
+			return 0, err
+		}
+	}
+	s.ids.Fence(next)
+	return current + 1, nil
+}
+
+func (s *Service) reserveTSO(count uint64) (uint64, uint64, error) {
+	if s == nil {
+		return 0, 0, nil
+	}
+	if count == 0 {
+		return 0, 0, fmt.Errorf("%w: tso reserve n must be >= 1", core.ErrInvalidBatch)
+	}
+	s.allocMu.Lock()
+	defer s.allocMu.Unlock()
+
+	current := s.tso.Current()
+	next := current + count
+	if s.storage != nil {
+		if err := s.storage.SaveAllocatorState(s.ids.Current(), next); err != nil {
+			return 0, 0, err
+		}
+	}
+	s.tso.Fence(next)
+	return current + 1, count, nil
+}
+
+func (s *Service) requireLeaderForWrite() error {
 	if s == nil || s.storage == nil {
 		return nil
 	}
-	return s.storage.SaveAllocatorState(s.ids.Current(), s.tso.Current())
+	if s.storage.IsLeader() {
+		return nil
+	}
+	leaderID := s.storage.LeaderID()
+	if leaderID != 0 {
+		return status.Error(codes.FailedPrecondition, fmt.Sprintf("%s (leader_id=%d)", errNotLeaderPrefix, leaderID))
+	}
+	return status.Error(codes.FailedPrecondition, errNotLeaderPrefix)
 }
 
-func pbToManifestRegion(meta *pb.RegionMeta) raftmeta.RegionMeta {
-	out := raftmeta.RegionMeta{
-		ID:       meta.GetId(),
-		StartKey: append([]byte(nil), meta.GetStartKey()...),
-		EndKey:   append([]byte(nil), meta.GetEndKey()...),
-		Epoch: raftmeta.RegionEpoch{
-			Version:     meta.GetEpochVersion(),
-			ConfVersion: meta.GetEpochConfVersion(),
-		},
+func (s *Service) requireExpectedClusterEpoch(expected uint64) error {
+	if expected == 0 {
+		return nil
 	}
-	if peers := meta.GetPeers(); len(peers) > 0 {
-		out.Peers = make([]raftmeta.PeerMeta, 0, len(peers))
-		for _, p := range peers {
-			if p == nil {
-				continue
+	current, err := s.currentClusterEpoch()
+	if err != nil {
+		return status.Error(codes.Internal, "load current cluster epoch: "+err.Error())
+	}
+	if current == expected {
+		return nil
+	}
+	return status.Error(codes.FailedPrecondition, fmt.Sprintf("pd/meta cluster epoch mismatch (expected=%d current=%d)", expected, current))
+}
+
+func (s *Service) currentClusterEpoch() (uint64, error) {
+	if s != nil && s.storage != nil {
+		snapshot, err := s.storage.Load()
+		if err != nil {
+			return 0, err
+		}
+		return snapshot.ClusterEpoch, nil
+	}
+	var maxEpoch uint64
+	if s != nil && s.cluster != nil {
+		for _, region := range s.cluster.RegionSnapshot() {
+			if region.Descriptor.RootEpoch > maxEpoch {
+				maxEpoch = region.Descriptor.RootEpoch
 			}
-			out.Peers = append(out.Peers, raftmeta.PeerMeta{
-				StoreID: p.GetStoreId(),
-				PeerID:  p.GetPeerId(),
-			})
 		}
 	}
-	return out
-}
-
-func manifestToPBRegion(meta raftmeta.RegionMeta) *pb.RegionMeta {
-	out := &pb.RegionMeta{
-		Id:               meta.ID,
-		StartKey:         append([]byte(nil), meta.StartKey...),
-		EndKey:           append([]byte(nil), meta.EndKey...),
-		EpochVersion:     meta.Epoch.Version,
-		EpochConfVersion: meta.Epoch.ConfVersion,
-	}
-	if len(meta.Peers) > 0 {
-		out.Peers = make([]*pb.RegionPeer, 0, len(meta.Peers))
-		for _, p := range meta.Peers {
-			out.Peers = append(out.Peers, &pb.RegionPeer{
-				StoreId: p.StoreID,
-				PeerId:  p.PeerID,
-			})
-		}
-	}
-	return out
+	return maxEpoch, nil
 }

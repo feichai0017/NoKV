@@ -20,7 +20,7 @@
 | [`store`](../raftstore/store) | Orchestrates peer set, command pipeline, region manager, scheduler/heartbeat loops; exposes helpers such as `StartPeer`, `ProposeCommand`, `SplitRegion`. |
 | [`peer`](../raftstore/peer) | Wraps etcd/raft `RawNode`, drives Ready processing (persist to WAL, send messages, apply entries), tracks snapshot resend/backlog. |
 | [`engine`](../raftstore/engine) | WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while tracking store-local raft replay metadata. |
-| [`meta`](../raftstore/meta) | Store-local durable metadata: peer catalog for restart and raft WAL replay checkpoints for replay/GC. |
+| [`meta`](../raftstore/localmeta) | Store-local durable metadata: peer catalog for restart and raft WAL replay checkpoints for replay/GC. |
 | [`transport`](../raftstore/transport) | gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (NoKV). |
 | [`kv`](../raftstore/kv) | NoKV RPC implementation, bridging Raft commands to MVCC operations via `kv.Apply`. |
 | [`server`](../raftstore/server) | `ServerConfig` + `New` that bind DB, Store, transport, and NoKV server into a reusable node primitive. |
@@ -39,7 +39,7 @@ flowchart TD
         Store --> Peer["peer.Peer"]
         Store --> Scheduler["scheduler runtime"]
         Store --> Admin["admin service"]
-        Store --> Meta["raftstore/meta"]
+        Store --> Meta["raftstore/localmeta"]
         Peer --> Engine["raftstore/engine"]
         Peer --> Apply["kv.Apply"]
     end
@@ -61,7 +61,7 @@ flowchart TD
    })
    ```
    - A gRPC transport is created, the NoKV service is registered, and `transport.SetHandler(store.Step)` wires raft Step handling.
-   - `store.Store` loads the local peer catalog from `raftstore/meta` to rebuild the Region catalog (router + metrics).
+   - `store.Store` loads the local peer catalog from `raftstore/localmeta` to rebuild the Region catalog (router + metrics).
 
 2. **Start local peers**
    - CLI (`nokv serve`) loads the local peer catalog and calls `Store.StartPeer` for every region that includes the local store.
@@ -93,7 +93,7 @@ flowchart TD
 ### Write (via Propose)
 1. Write RPCs (Prewrite/Commit/…) call `Store.ProposeCommand`, encoding the command and routing to the leader peer.
 2. The leader appends the encoded request to raft, replicates, and once committed the command pipeline hands data to `kv.Apply`, which maps Prewrite/Commit/ResolveLock to the `percolator` package.
-3. `engine.WALStorage` persists raft entries/state snapshots and updates `raftstore/meta` raft pointers. This keeps WAL GC and raft truncation aligned without polluting the storage manifest.
+3. `engine.WALStorage` persists raft entries/state snapshots and updates `raftstore/localmeta` raft pointers. This keeps WAL GC and raft truncation aligned without polluting the storage manifest.
 4. Raft apply only accepts command-encoded payloads (`RaftCmdRequest`). Legacy raw KV payloads are rejected as unsupported.
 
 ### Command flow diagram
@@ -140,7 +140,7 @@ sequenceDiagram
 ## 5. Storage Backend (engine)
 
 - `WALStorage` piggybacks on the embedded WAL: each Raft group writes typed entries, HardState, and snapshots into the shared log.
-- `raftstore/meta` persists the store-local raft replay pointer used by WAL GC and replay.
+- `raftstore/localmeta` persists the store-local raft replay pointer used by WAL GC and replay.
 - Alternative storage backends (`DiskStorage`, `MemoryStorage`) are available for tests and special scenarios.
 
 ---
@@ -237,7 +237,7 @@ equal authority:
    - This is the runtime source of truth for what a store currently hosts.
 
 2. **Store-local persistent mirror**
-   - Owned by [`raftstore/meta`](../raftstore/meta).
+   - Owned by [`raftstore/localmeta`](../raftstore/localmeta).
    - Persists:
      - local region catalog entries for restart
      - local raft WAL replay checkpoints
@@ -256,7 +256,7 @@ equal authority:
 The resulting rule is simple:
 
 - `raft apply/bootstrap` advances local truth
-- `raftstore/meta` mirrors that truth for restart
+- `raftstore/localmeta` mirrors that truth for restart
 - `PD` observes and schedules from heartbeats
 
 This separation is what prevents parallel truth sources from creeping back into
