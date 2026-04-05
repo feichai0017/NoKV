@@ -1,16 +1,19 @@
 package core
 
-import "errors"
+import (
+	"errors"
+	pdview "github.com/feichai0017/NoKV/pd/view"
+)
 
 var (
 	// ErrInvalidStoreID indicates the heartbeat uses an invalid store id.
-	ErrInvalidStoreID = errors.New("pd/core: invalid store id")
+	ErrInvalidStoreID = pdview.ErrInvalidStoreID
 	// ErrInvalidRegionID indicates the heartbeat uses an invalid region id.
-	ErrInvalidRegionID = errors.New("pd/core: invalid region id")
+	ErrInvalidRegionID = pdview.ErrInvalidRegionID
 	// ErrRegionHeartbeatStale indicates a region heartbeat regressed epoch.
-	ErrRegionHeartbeatStale = errors.New("pd/core: stale region heartbeat epoch")
+	ErrRegionHeartbeatStale = pdview.ErrRegionHeartbeatStale
 	// ErrRegionRangeOverlap indicates the incoming region overlaps another region.
-	ErrRegionRangeOverlap = errors.New("pd/core: region range overlap")
+	ErrRegionRangeOverlap = pdview.ErrRegionRangeOverlap
 	// ErrInvalidBatch indicates a requested allocation batch is invalid.
 	ErrInvalidBatch = errors.New("pd/core: invalid batch")
 )

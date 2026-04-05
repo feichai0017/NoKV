@@ -3,7 +3,8 @@ package manifest_test
 import (
 	"encoding/binary"
 	"errors"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"os"
 	"path/filepath"
 	"strings"
@@ -359,28 +360,28 @@ func TestManagerSnapshotsAndCloneHelpers(t *testing.T) {
 		t.Fatalf("rewrite: %v", err)
 	}
 
-	meta := raftmeta.RegionMeta{
+	meta := localmeta.RegionMeta{
 		ID:       1,
 		StartKey: []byte("a"),
 		EndKey:   []byte("b"),
-		Peers: []raftmeta.PeerMeta{
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 10},
 		},
 	}
-	cp := raftmeta.CloneRegionMeta(meta)
+	cp := localmeta.CloneRegionMeta(meta)
 	meta.StartKey[0] = 'z'
 	if string(cp.StartKey) != "a" {
 		t.Fatalf("expected clone to preserve start key")
 	}
 
-	ptrMeta := raftmeta.CloneRegionMetaPtr(&meta)
+	ptrMeta := localmeta.CloneRegionMetaPtr(&meta)
 	meta.EndKey[0] = 'y'
 	if string(ptrMeta.EndKey) != "b" {
 		t.Fatalf("expected cloned ptr meta to preserve end key")
 	}
 
-	metaMap := map[uint64]raftmeta.RegionMeta{1: meta}
-	cloned := raftmeta.CloneRegionMetas(metaMap)
+	metaMap := map[uint64]localmeta.RegionMeta{1: meta}
+	cloned := localmeta.CloneRegionMetas(metaMap)
 	meta.Peers[0].PeerID = 99
 	if cloned[1].Peers[0].PeerID != 10 {
 		t.Fatalf("expected cloned map to preserve peers")

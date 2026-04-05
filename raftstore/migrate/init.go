@@ -2,13 +2,14 @@ package migrate
 
 import (
 	"fmt"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"os"
 	"path/filepath"
 
 	NoKV "github.com/feichai0017/NoKV"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/vfs"
 	raftpb "go.etcd.io/raft/v3/raftpb"
@@ -106,22 +107,22 @@ func Init(cfg InitConfig) (InitResult, error) {
 		return InitResult{}, fmt.Errorf("migrate: unsupported mode %q", state.Mode)
 	}
 
-	region := raftmeta.RegionMeta{
+	region := localmeta.RegionMeta{
 		ID:       cfg.RegionID,
 		StartKey: nil,
 		EndKey:   nil,
-		Epoch: raftmeta.RegionEpoch{
+		Epoch: metaregion.Epoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
-		Peers: []raftmeta.PeerMeta{{
+		Peers: []metaregion.Peer{{
 			StoreID: cfg.StoreID,
 			PeerID:  cfg.PeerID,
 		}},
-		State: raftmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 
-	localMeta, err := raftmeta.OpenLocalStore(cfg.WorkDir, nil)
+	localMeta, err := localmeta.OpenLocalStore(cfg.WorkDir, nil)
 	if err != nil {
 		return InitResult{}, fmt.Errorf("migrate: open local catalog: %w", err)
 	}

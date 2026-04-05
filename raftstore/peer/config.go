@@ -5,7 +5,7 @@ import (
 
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/transport"
 )
 
@@ -26,7 +26,7 @@ type Config struct {
 	Storage          engine.PeerStorage
 	StorageDir       string
 	GroupID          uint64
-	Region           *raftmeta.RegionMeta
+	Region           *localmeta.RegionMeta
 	LogRetainEntries uint64
 	MaxInFlightApply uint64
 	// AllowSnapshotInstallRetry permits snapshot payload install onto durable

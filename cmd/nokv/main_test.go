@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,7 +17,7 @@ import (
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	migratepkg "github.com/feichai0017/NoKV/raftstore/migrate"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
@@ -322,13 +323,13 @@ func TestParseExpvarSnapshotHotKeysMapFloat(t *testing.T) {
 }
 
 func TestFormatHelpers(t *testing.T) {
-	require.Equal(t, "new", formatRegionState(raftmeta.RegionStateNew))
-	require.Equal(t, "running", formatRegionState(raftmeta.RegionStateRunning))
-	require.Equal(t, "removing", formatRegionState(raftmeta.RegionStateRemoving))
-	require.Equal(t, "tombstone", formatRegionState(raftmeta.RegionStateTombstone))
+	require.Equal(t, "new", formatRegionState(metaregion.ReplicaStateNew))
+	require.Equal(t, "running", formatRegionState(metaregion.ReplicaStateRunning))
+	require.Equal(t, "removing", formatRegionState(metaregion.ReplicaStateRemoving))
+	require.Equal(t, "tombstone", formatRegionState(metaregion.ReplicaStateTombstone))
 	require.Equal(t, "unknown(99)", formatRegionState(99))
 
-	peers := []raftmeta.PeerMeta{{StoreID: 1, PeerID: 2}}
+	peers := []metaregion.Peer{{StoreID: 1, PeerID: 2}}
 	require.Equal(t, "[{store:1 peer:2}]", formatPeers(peers))
 	require.Equal(t, "[]", formatPeers(nil))
 
@@ -437,15 +438,15 @@ func TestMainVlogCommand(t *testing.T) {
 
 func TestMainRegionsCommand(t *testing.T) {
 	dir := t.TempDir()
-	metaStore, err := raftmeta.OpenLocalStore(dir, nil)
+	metaStore, err := localmeta.OpenLocalStore(dir, nil)
 	require.NoError(t, err)
-	require.NoError(t, metaStore.SaveRegion(raftmeta.RegionMeta{
+	require.NoError(t, metaStore.SaveRegion(localmeta.RegionMeta{
 		ID:       1,
-		State:    raftmeta.RegionStateRunning,
+		State:    metaregion.ReplicaStateRunning,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 10}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 10}},
 	}))
 	require.NoError(t, metaStore.Close())
 	code := captureExitCode(t, func() {
@@ -759,15 +760,15 @@ func TestRunRegionsCmdMissingWorkdir(t *testing.T) {
 
 func TestRunRegionsCmdPlainWithRegion(t *testing.T) {
 	dir := t.TempDir()
-	metaStore, err := raftmeta.OpenLocalStore(dir, nil)
+	metaStore, err := localmeta.OpenLocalStore(dir, nil)
 	require.NoError(t, err)
-	meta := raftmeta.RegionMeta{
+	meta := localmeta.RegionMeta{
 		ID:       10,
-		State:    raftmeta.RegionStateTombstone,
+		State:    metaregion.ReplicaStateTombstone,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 10}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 10}},
 	}
 	require.NoError(t, metaStore.SaveRegion(meta))
 	require.NoError(t, metaStore.Close())
@@ -804,15 +805,15 @@ func TestRunMigratePlanCmd(t *testing.T) {
 
 func TestRunMigratePlanCmdBlocksNonEmptyCatalog(t *testing.T) {
 	dir := prepareDBWorkdir(t)
-	metaStore, err := raftmeta.OpenLocalStore(dir, nil)
+	metaStore, err := localmeta.OpenLocalStore(dir, nil)
 	require.NoError(t, err)
-	require.NoError(t, metaStore.SaveRegion(raftmeta.RegionMeta{
+	require.NoError(t, metaStore.SaveRegion(localmeta.RegionMeta{
 		ID:       1,
-		State:    raftmeta.RegionStateRunning,
+		State:    metaregion.ReplicaStateRunning,
 		StartKey: []byte(""),
 		EndKey:   nil,
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 10}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 10}},
 	}))
 	require.NoError(t, metaStore.Close())
 
@@ -912,7 +913,7 @@ func TestRunMigrateInitCmd(t *testing.T) {
 	require.True(t, status.SeedSnapshotPresent)
 	require.Contains(t, status.Next, "nokv serve")
 
-	metaStore, err := raftmeta.OpenLocalStore(dir, nil)
+	metaStore, err := localmeta.OpenLocalStore(dir, nil)
 	require.NoError(t, err)
 	defer func() { _ = metaStore.Close() }()
 	snapshot := metaStore.Snapshot()

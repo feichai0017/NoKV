@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/feichai0017/NoKV/config"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 )
 
 var exit = os.Exit
@@ -253,10 +254,10 @@ func runCatalog(args []string) error {
 		return fmt.Errorf("at least one --peer is required")
 	}
 
-	meta := raftmeta.RegionMeta{
+	meta := localmeta.RegionMeta{
 		ID:    *regionID,
 		State: parseRegionState(*stateStr),
-		Epoch: raftmeta.RegionEpoch{
+		Epoch: metaregion.Epoch{
 			Version:     *version,
 			ConfVersion: *confVer,
 		},
@@ -269,7 +270,7 @@ func runCatalog(args []string) error {
 		if err != nil {
 			return fmt.Errorf("parsing --peer %q: %w", entry, err)
 		}
-		meta.Peers = append(meta.Peers, raftmeta.PeerMeta{
+		meta.Peers = append(meta.Peers, metaregion.Peer{
 			StoreID: storeID,
 			PeerID:  peerID,
 		})
@@ -279,7 +280,7 @@ func runCatalog(args []string) error {
 		meta.Epoch.ConfVersion = uint64(len(meta.Peers))
 	}
 
-	metaStore, err := raftmeta.OpenLocalStore(*workdir, nil)
+	metaStore, err := localmeta.OpenLocalStore(*workdir, nil)
 	if err != nil {
 		return fmt.Errorf("open local peer catalog at %s: %w", *workdir, err)
 	}
@@ -339,14 +340,14 @@ func parseUint(value string) (uint64, error) {
 	return out, nil
 }
 
-func parseRegionState(state string) raftmeta.RegionState {
+func parseRegionState(state string) metaregion.ReplicaState {
 	switch strings.ToLower(strings.TrimSpace(state)) {
 	case "", "running":
-		return raftmeta.RegionStateRunning
+		return metaregion.ReplicaStateRunning
 	case "tombstone":
-		return raftmeta.RegionStateTombstone
+		return metaregion.ReplicaStateTombstone
 	default:
-		return raftmeta.RegionStateRunning
+		return metaregion.ReplicaStateRunning
 	}
 }
 

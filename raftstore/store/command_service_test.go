@@ -2,13 +2,16 @@ package store
 
 import (
 	"context"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"testing"
 	"time"
 
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/stretchr/testify/require"
 )
@@ -20,12 +23,12 @@ func TestStoreProposeCommandPrewriteCommit(t *testing.T) {
 	st := NewStore(Config{Scheduler: coord, StoreID: 1, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 
-	region := &raftmeta.RegionMeta{
+	region := &localmeta.RegionMeta{
 		ID:       101,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 1}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 1}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -46,14 +49,14 @@ func TestStoreProposeCommandPrewriteCommit(t *testing.T) {
 	t.Cleanup(func() { st.StopPeer(peer.ID()) })
 	require.NoError(t, peer.Campaign())
 
-	epoch := &pb.RegionEpoch{Version: 1, ConfVer: 1}
-	prewrite := &pb.RaftCmdRequest{
-		Header: &pb.CmdHeader{RegionId: region.ID, RegionEpoch: epoch},
-		Requests: []*pb.Request{{
-			CmdType: pb.CmdType_CMD_PREWRITE,
-			Cmd: &pb.Request_Prewrite{Prewrite: &pb.PrewriteRequest{
-				Mutations: []*pb.Mutation{{
-					Op:    pb.Mutation_Put,
+	epoch := &metapb.RegionEpoch{Version: 1, ConfVersion: 1}
+	prewrite := &raftcmdpb.RaftCmdRequest{
+		Header: &raftcmdpb.CmdHeader{RegionId: region.ID, RegionEpoch: epoch},
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_PREWRITE,
+			Cmd: &raftcmdpb.Request_Prewrite{Prewrite: &kvrpcpb.PrewriteRequest{
+				Mutations: []*kvrpcpb.Mutation{{
+					Op:    kvrpcpb.Mutation_Put,
 					Key:   []byte("cmd-key"),
 					Value: []byte("cmd-value"),
 				}},
@@ -70,11 +73,11 @@ func TestStoreProposeCommandPrewriteCommit(t *testing.T) {
 	require.Empty(t, resp.GetResponses()[0].GetPrewrite().GetErrors())
 	require.NotZero(t, resp.GetHeader().GetRequestId())
 
-	commit := &pb.RaftCmdRequest{
-		Header: &pb.CmdHeader{RegionId: region.ID, RegionEpoch: epoch},
-		Requests: []*pb.Request{{
-			CmdType: pb.CmdType_CMD_COMMIT,
-			Cmd: &pb.Request_Commit{Commit: &pb.CommitRequest{
+	commit := &raftcmdpb.RaftCmdRequest{
+		Header: &raftcmdpb.CmdHeader{RegionId: region.ID, RegionEpoch: epoch},
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_COMMIT,
+			Cmd: &raftcmdpb.Request_Commit{Commit: &kvrpcpb.CommitRequest{
 				Keys:          [][]byte{[]byte("cmd-key")},
 				StartVersion:  20,
 				CommitVersion: 40,
@@ -97,13 +100,13 @@ func TestStoreProposeCommandRejectsDuplicateRequestID(t *testing.T) {
 	db, localMeta := openStoreDB(t)
 	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
-	applier := func(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+	applier := func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 		select {
 		case entered <- struct{}{}:
 		default:
 		}
 		<-release
-		return &pb.RaftCmdResponse{
+		return &raftcmdpb.RaftCmdResponse{
 			Header: req.GetHeader(),
 		}, nil
 	}
@@ -114,12 +117,12 @@ func TestStoreProposeCommandRejectsDuplicateRequestID(t *testing.T) {
 	})
 	t.Cleanup(func() { st.Close() })
 
-	region := &raftmeta.RegionMeta{
+	region := &localmeta.RegionMeta{
 		ID:       777,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 17}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 17}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -140,16 +143,16 @@ func TestStoreProposeCommandRejectsDuplicateRequestID(t *testing.T) {
 	t.Cleanup(func() { st.StopPeer(p.ID()) })
 	require.NoError(t, p.Campaign())
 
-	req := func() *pb.RaftCmdRequest {
-		return &pb.RaftCmdRequest{
-			Header: &pb.CmdHeader{
+	req := func() *raftcmdpb.RaftCmdRequest {
+		return &raftcmdpb.RaftCmdRequest{
+			Header: &raftcmdpb.CmdHeader{
 				RegionId:    region.ID,
-				RegionEpoch: &pb.RegionEpoch{Version: 1, ConfVer: 1},
+				RegionEpoch: &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 				RequestId:   9001,
 			},
-			Requests: []*pb.Request{{
-				CmdType: pb.CmdType_CMD_GET,
-				Cmd: &pb.Request_Get{Get: &pb.GetRequest{
+			Requests: []*raftcmdpb.Request{{
+				CmdType: raftcmdpb.CmdType_CMD_GET,
+				Cmd: &raftcmdpb.Request_Get{Get: &kvrpcpb.GetRequest{
 					Key: []byte("dup-key"),
 				}},
 			}},
@@ -189,12 +192,12 @@ func TestStoreProposeCommandNotLeader(t *testing.T) {
 	applier := newTestMVCCApplier(db)
 	st := NewStore(Config{StoreID: 2, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
-	region := &raftmeta.RegionMeta{
+	region := &localmeta.RegionMeta{
 		ID:       202,
 		StartKey: []byte("k"),
 		EndKey:   []byte("z"),
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 2, PeerID: 5}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 2, PeerID: 5}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -213,11 +216,11 @@ func TestStoreProposeCommandNotLeader(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { st.StopPeer(peer.ID()) })
 
-	req := &pb.RaftCmdRequest{
-		Header: &pb.CmdHeader{RegionId: region.ID, RegionEpoch: &pb.RegionEpoch{Version: 1, ConfVer: 1}},
-		Requests: []*pb.Request{{
-			CmdType: pb.CmdType_CMD_PREWRITE,
-			Cmd:     &pb.Request_Prewrite{Prewrite: &pb.PrewriteRequest{StartVersion: 1}},
+	req := &raftcmdpb.RaftCmdRequest{
+		Header: &raftcmdpb.CmdHeader{RegionId: region.ID, RegionEpoch: &metapb.RegionEpoch{Version: 1, ConfVersion: 1}},
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_PREWRITE,
+			Cmd:     &raftcmdpb.Request_Prewrite{Prewrite: &kvrpcpb.PrewriteRequest{StartVersion: 1}},
 		}},
 	}
 	resp, err := st.ProposeCommand(context.Background(), req)
@@ -231,12 +234,12 @@ func TestStoreProposeCommandEpochMismatch(t *testing.T) {
 	applier := newTestMVCCApplier(db)
 	st := NewStore(Config{StoreID: 3, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
-	region := &raftmeta.RegionMeta{
+	region := &localmeta.RegionMeta{
 		ID:       303,
 		StartKey: []byte("a"),
 		EndKey:   []byte("h"),
-		Epoch:    raftmeta.RegionEpoch{Version: 2, ConfVersion: 1},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 3, PeerID: 7}},
+		Epoch:    metaregion.Epoch{Version: 2, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 3, PeerID: 7}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -256,9 +259,9 @@ func TestStoreProposeCommandEpochMismatch(t *testing.T) {
 	t.Cleanup(func() { st.StopPeer(peer.ID()) })
 	require.NoError(t, peer.Campaign())
 
-	badReq := &pb.RaftCmdRequest{
-		Header:   &pb.CmdHeader{RegionId: region.ID, RegionEpoch: &pb.RegionEpoch{Version: 1, ConfVer: 1}},
-		Requests: []*pb.Request{{CmdType: pb.CmdType_CMD_PREWRITE}},
+	badReq := &raftcmdpb.RaftCmdRequest{
+		Header:   &raftcmdpb.CmdHeader{RegionId: region.ID, RegionEpoch: &metapb.RegionEpoch{Version: 1, ConfVersion: 1}},
+		Requests: []*raftcmdpb.Request{{CmdType: raftcmdpb.CmdType_CMD_PREWRITE}},
 	}
 	resp, err := st.ProposeCommand(context.Background(), badReq)
 	require.NoError(t, err)
@@ -280,12 +283,12 @@ func TestStoreProposeCommandSurvivesSchedulerUnavailable(t *testing.T) {
 	st := NewStore(Config{Scheduler: coord, StoreID: 1, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 
-	region := &raftmeta.RegionMeta{
+	region := &localmeta.RegionMeta{
 		ID:       909,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 1}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 1}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{ID: 1, ElectionTick: 5, HeartbeatTick: 1, MaxSizePerMsg: 1 << 20, MaxInflightMsgs: 256, PreVote: true},
@@ -299,11 +302,11 @@ func TestStoreProposeCommandSurvivesSchedulerUnavailable(t *testing.T) {
 	t.Cleanup(func() { st.StopPeer(p.ID()) })
 	require.NoError(t, p.Campaign())
 
-	epoch := &pb.RegionEpoch{Version: 1, ConfVer: 1}
-	prewrite := &pb.RaftCmdRequest{
-		Header: &pb.CmdHeader{RegionId: region.ID, RegionEpoch: epoch},
-		Requests: []*pb.Request{{CmdType: pb.CmdType_CMD_PREWRITE, Cmd: &pb.Request_Prewrite{Prewrite: &pb.PrewriteRequest{
-			Mutations:   []*pb.Mutation{{Op: pb.Mutation_Put, Key: []byte("sched-key"), Value: []byte("sched-value")}},
+	epoch := &metapb.RegionEpoch{Version: 1, ConfVersion: 1}
+	prewrite := &raftcmdpb.RaftCmdRequest{
+		Header: &raftcmdpb.CmdHeader{RegionId: region.ID, RegionEpoch: epoch},
+		Requests: []*raftcmdpb.Request{{CmdType: raftcmdpb.CmdType_CMD_PREWRITE, Cmd: &raftcmdpb.Request_Prewrite{Prewrite: &kvrpcpb.PrewriteRequest{
+			Mutations:   []*kvrpcpb.Mutation{{Op: kvrpcpb.Mutation_Put, Key: []byte("sched-key"), Value: []byte("sched-value")}},
 			PrimaryLock: []byte("sched-key"), StartVersion: 50, LockTtl: 3000,
 		}}}},
 	}
@@ -311,9 +314,9 @@ func TestStoreProposeCommandSurvivesSchedulerUnavailable(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, resp.GetRegionError())
 
-	commit := &pb.RaftCmdRequest{
-		Header: &pb.CmdHeader{RegionId: region.ID, RegionEpoch: epoch},
-		Requests: []*pb.Request{{CmdType: pb.CmdType_CMD_COMMIT, Cmd: &pb.Request_Commit{Commit: &pb.CommitRequest{
+	commit := &raftcmdpb.RaftCmdRequest{
+		Header: &raftcmdpb.CmdHeader{RegionId: region.ID, RegionEpoch: epoch},
+		Requests: []*raftcmdpb.Request{{CmdType: raftcmdpb.CmdType_CMD_COMMIT, Cmd: &raftcmdpb.Request_Commit{Commit: &kvrpcpb.CommitRequest{
 			Keys: [][]byte{[]byte("sched-key")}, StartVersion: 50, CommitVersion: 80,
 		}}}},
 	}

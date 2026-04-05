@@ -11,13 +11,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/vfs"
 )
 
 // ExportPayload materializes one SST snapshot and bundles it into
 // a transport-safe payload.
-func ExportPayload(src exportSource, workDir string, region raftmeta.RegionMeta, fs vfs.FS) ([]byte, Meta, error) {
+func ExportPayload(src exportSource, workDir string, region localmeta.RegionMeta, fs vfs.FS) ([]byte, Meta, error) {
 	var payload bytes.Buffer
 	meta, err := ExportPayloadTo(&payload, src, workDir, region, fs)
 	if err != nil {
@@ -27,7 +27,7 @@ func ExportPayload(src exportSource, workDir string, region raftmeta.RegionMeta,
 }
 
 // ExportPayloadTo materializes one SST snapshot and writes its tar payload to w.
-func ExportPayloadTo(w io.Writer, src exportSource, workDir string, region raftmeta.RegionMeta, fs vfs.FS) (Meta, error) {
+func ExportPayloadTo(w io.Writer, src exportSource, workDir string, region localmeta.RegionMeta, fs vfs.FS) (Meta, error) {
 	if w == nil {
 		return Meta{}, fmt.Errorf("snapshot: export payload requires writer")
 	}

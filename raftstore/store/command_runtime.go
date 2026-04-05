@@ -2,13 +2,12 @@ package store
 
 import (
 	"context"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"time"
-
-	"github.com/feichai0017/NoKV/pb"
 )
 
 type commandRuntime struct {
-	apply   func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
+	apply   func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error)
 	pipe    *commandPipeline
 	timeout time.Duration
 }
@@ -20,7 +19,7 @@ func (s *Store) commandPipe() *commandPipeline {
 	return s.cmds.pipe
 }
 
-func (s *Store) commandApply() func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+func (s *Store) commandApply() func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 	if s == nil || s.cmds == nil {
 		return nil
 	}

@@ -2,17 +2,18 @@ package store
 
 import (
 	"context"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"time"
 
-	"github.com/feichai0017/NoKV/pb"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
 // PeerBuilder constructs peer configuration for the provided region metadata.
 // It allows the store to spawn new peers for splits without external callers
 // wiring the configuration manually.
-type PeerBuilder func(meta raftmeta.RegionMeta) (*peer.Config, error)
+type PeerBuilder func(meta localmeta.RegionMeta) (*peer.Config, error)
 
 // StoreStats captures minimal store-level heartbeat information.
 type StoreStats struct {
@@ -70,8 +71,9 @@ type SchedulerStatus struct {
 // SchedulerClient publishes store state to the control plane and returns any
 // scheduling decisions that should be applied locally.
 type SchedulerClient interface {
-	PublishRegion(context.Context, raftmeta.RegionMeta)
-	RemoveRegion(context.Context, uint64)
+	// ReportRegionHeartbeat reports one runtime region-liveness heartbeat.
+	ReportRegionHeartbeat(context.Context, uint64)
+	PublishRootEvent(context.Context, rootevent.Event) error
 	StoreHeartbeat(context.Context, StoreStats) []Operation
 	Status() SchedulerStatus
 	Close() error
@@ -82,7 +84,7 @@ type SchedulerClient interface {
 type Config struct {
 	Router             *Router
 	PeerBuilder        PeerBuilder
-	LocalMeta          *raftmeta.Store
+	LocalMeta          *localmeta.Store
 	WorkDir            string
 	Scheduler          SchedulerClient
 	HeartbeatInterval  time.Duration
@@ -91,6 +93,6 @@ type Config struct {
 	OperationCooldown  time.Duration
 	OperationInterval  time.Duration
 	OperationBurst     int
-	CommandApplier     func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
+	CommandApplier     func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error)
 	CommandTimeout     time.Duration
 }

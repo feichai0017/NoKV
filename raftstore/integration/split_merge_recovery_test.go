@@ -2,10 +2,11 @@ package integration
 
 import (
 	"context"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"testing"
 	"time"
 
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
@@ -47,15 +48,15 @@ func TestSplitMergeRestartSafetyAcrossStores(t *testing.T) {
 	require.NoError(t, err)
 
 	parentLeader, _ := testcluster.FindLeader(t, ctx, 71, seed, target)
-	childMeta := raftmeta.RegionMeta{
+	childMeta := localmeta.RegionMeta{
 		ID:       72,
 		StartKey: []byte("m"),
 		EndKey:   nil,
-		Epoch: raftmeta.RegionEpoch{
+		Epoch: metaregion.Epoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
-		Peers: []raftmeta.PeerMeta{
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 102},
 			{StoreID: 2, PeerID: 202},
 		},

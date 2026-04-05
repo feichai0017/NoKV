@@ -49,3 +49,20 @@ func (a *IDAllocator) Current() uint64 {
 	}
 	return a.next.Load()
 }
+
+// Fence raises the allocator floor so future allocations are strictly greater
+// than or equal to min+1. Existing higher values are preserved.
+func (a *IDAllocator) Fence(min uint64) {
+	if a == nil {
+		return
+	}
+	for {
+		cur := a.next.Load()
+		if cur >= min {
+			return
+		}
+		if a.next.CompareAndSwap(cur, min) {
+			return
+		}
+	}
+}

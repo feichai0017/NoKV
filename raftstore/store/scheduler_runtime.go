@@ -3,11 +3,14 @@ package store
 import (
 	"fmt"
 	"log/slog"
+	"sort"
 	"syscall"
 	"time"
 
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	myraft "github.com/feichai0017/NoKV/raft"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
@@ -16,18 +19,9 @@ type operationKey struct {
 	typeID OperationType
 }
 
-type regionEventKind uint8
-
-const (
-	regionEventNone regionEventKind = iota
-	regionEventApply
-	regionEventRemove
-)
-
 type regionEvent struct {
-	kind     regionEventKind
-	regionID uint64
-	meta     raftmeta.RegionMeta
+	root rootevent.Event
+	seq  uint64
 }
 
 func (s *Store) schedulerClient() SchedulerClient {
@@ -175,8 +169,8 @@ func (s *Store) sendHeartbeats() {
 		return
 	}
 	ctx := s.runtimeContext()
-	for _, meta := range s.RegionMetas() {
-		s.schedulerClient().PublishRegion(ctx, meta)
+	for _, regionID := range s.schedulerRegionIDs() {
+		s.schedulerClient().ReportRegionHeartbeat(ctx, regionID)
 	}
 	if s.storeID == 0 {
 		return
@@ -190,25 +184,25 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 	if s == nil || s.schedulerClient() == nil || s.sched == nil {
 		return
 	}
-	switch ev.kind {
-	case regionEventApply:
-		if ev.meta.ID == 0 {
-			return
-		}
-		ev.regionID = ev.meta.ID
-		ev.meta = raftmeta.CloneRegionMeta(ev.meta)
-	case regionEventRemove:
-		if ev.regionID == 0 {
-			return
-		}
-	default:
+	if ev.root.Kind == rootevent.KindUnknown {
 		return
 	}
+	regionID, ok := schedulerRegionEventKey(ev.root)
+	if !ok || regionID == 0 {
+		return
+	}
+	ev.root = rootevent.CloneEvent(ev.root)
 	s.sched.mu.Lock()
+	if s.sched.descriptors == nil {
+		s.sched.descriptors = make(map[uint64]descriptor.Descriptor)
+	}
 	if s.sched.regionUpdates == nil {
 		s.sched.regionUpdates = make(map[uint64]regionEvent)
 	}
-	s.sched.regionUpdates[ev.regionID] = ev
+	rootmaterialize.ApplyEventToDescriptors(s.sched.descriptors, ev.root)
+	s.sched.nextRegionSeq++
+	ev.seq = s.sched.nextRegionSeq
+	s.sched.regionUpdates[regionID] = ev
 	signal := s.sched.regionSignal
 	s.sched.mu.Unlock()
 	if signal == nil {
@@ -218,6 +212,21 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 	case signal <- struct{}{}:
 	default:
 	}
+}
+
+func (s *Store) schedulerRegionIDs() []uint64 {
+	if s == nil {
+		return nil
+	}
+	metas := s.RegionMetas()
+	out := make([]uint64, 0, len(metas))
+	for _, meta := range metas {
+		if meta.ID == 0 {
+			continue
+		}
+		out = append(out, meta.ID)
+	}
+	return out
 }
 
 func (s *Store) flushRegionUpdates() {
@@ -235,15 +244,28 @@ func (s *Store) flushRegionUpdates() {
 	}
 	clear(s.sched.regionUpdates)
 	s.sched.mu.Unlock()
+	sort.Slice(pending, func(i, j int) bool { return pending[i].seq < pending[j].seq })
 
 	ctx := s.runtimeContext()
 	for _, ev := range pending {
-		switch ev.kind {
-		case regionEventApply:
-			s.schedulerClient().PublishRegion(ctx, ev.meta)
-		case regionEventRemove:
-			s.schedulerClient().RemoveRegion(ctx, ev.regionID)
-		}
+		_ = s.schedulerClient().PublishRootEvent(ctx, ev.root)
+	}
+}
+
+func schedulerRegionEventKey(event rootevent.Event) (uint64, bool) {
+	switch {
+	case event.RegionDescriptor != nil:
+		return event.RegionDescriptor.Descriptor.RegionID, true
+	case event.RegionRemoval != nil:
+		return event.RegionRemoval.RegionID, true
+	case event.PeerChange != nil:
+		return event.PeerChange.RegionID, true
+	case event.RangeSplit != nil:
+		return event.RangeSplit.ParentRegionID, true
+	case event.RangeMerge != nil:
+		return event.RangeMerge.Merged.RegionID, true
+	default:
+		return 0, false
 	}
 }
 

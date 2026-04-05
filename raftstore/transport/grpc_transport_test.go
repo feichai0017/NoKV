@@ -10,6 +10,8 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"fmt"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"math"
 	"math/big"
 	"net"
@@ -28,25 +30,23 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	"github.com/feichai0017/NoKV/raftstore/kv"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	peerpkg "github.com/feichai0017/NoKV/raftstore/peer"
 	transportpkg "github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/utils"
 
 	"google.golang.org/grpc/credentials"
-
-	"github.com/feichai0017/NoKV/pb"
 )
 
 func mustEncodePutCommand(t *testing.T, key, value []byte, startVersion uint64) []byte {
 	t.Helper()
-	req := &pb.RaftCmdRequest{
-		Requests: []*pb.Request{
+	req := &raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{
 			{
-				CmdType: pb.CmdType_CMD_PREWRITE,
-				Cmd: &pb.Request_Prewrite{Prewrite: &pb.PrewriteRequest{
-					Mutations: []*pb.Mutation{{
-						Op:    pb.Mutation_Put,
+				CmdType: raftcmdpb.CmdType_CMD_PREWRITE,
+				Cmd: &raftcmdpb.Request_Prewrite{Prewrite: &kvrpcpb.PrewriteRequest{
+					Mutations: []*kvrpcpb.Mutation{{
+						Op:    kvrpcpb.Mutation_Put,
 						Key:   append([]byte(nil), key...),
 						Value: append([]byte(nil), value...),
 					}},
@@ -56,8 +56,8 @@ func mustEncodePutCommand(t *testing.T, key, value []byte, startVersion uint64) 
 				}},
 			},
 			{
-				CmdType: pb.CmdType_CMD_COMMIT,
-				Cmd: &pb.Request_Commit{Commit: &pb.CommitRequest{
+				CmdType: raftcmdpb.CmdType_CMD_COMMIT,
+				Cmd: &raftcmdpb.Request_Commit{Commit: &kvrpcpb.CommitRequest{
 					Keys:          [][]byte{append([]byte(nil), key...)},
 					StartVersion:  startVersion,
 					CommitVersion: startVersion + 1,
@@ -70,7 +70,7 @@ func mustEncodePutCommand(t *testing.T, key, value []byte, startVersion uint64) 
 	return payload
 }
 
-func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *raftmeta.Store, groupID uint64) engine.PeerStorage {
+func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *localmeta.Store, groupID uint64) engine.PeerStorage {
 	t.Helper()
 	storage, err := db.RaftLog().Open(groupID, localMeta)
 	require.NoError(t, err)
@@ -384,7 +384,7 @@ type grpcTestCluster struct {
 type grpcTestNode struct {
 	id        uint64
 	db        *NoKV.DB
-	localMeta *raftmeta.Store
+	localMeta *localmeta.Store
 	peer      *peerpkg.Peer
 	transport *transportpkg.GRPCTransport
 }
@@ -521,7 +521,7 @@ func (c *grpcTestCluster) db(id uint64) *NoKV.DB {
 	return c.nodes[id].db
 }
 
-func (c *grpcTestCluster) localMeta(id uint64) *raftmeta.Store {
+func (c *grpcTestCluster) localMeta(id uint64) *localmeta.Store {
 	return c.nodes[id].localMeta
 }
 
@@ -567,12 +567,12 @@ func buildTestCredentials(t *testing.T) (credentials.TransportCredentials, crede
 	return serverCreds, clientCreds
 }
 
-func openDBAt(t *testing.T, dir string) (*NoKV.DB, *raftmeta.Store) {
+func openDBAt(t *testing.T, dir string) (*NoKV.DB, *localmeta.Store) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", dir, err)
 	}
-	localMeta, err := raftmeta.OpenLocalStore(dir, nil)
+	localMeta, err := localmeta.OpenLocalStore(dir, nil)
 	require.NoError(t, err)
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir

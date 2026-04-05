@@ -189,7 +189,7 @@ flowchart TD
         Store["Store runtime root"]
         Peer["Peer runtime"]
         Admin["RaftAdmin<br/>execution plane"]
-        Meta["raftstore/meta<br/>local recovery metadata"]
+        Meta["raftstore/localmeta<br/>local recovery metadata"]
         RaftEngine["raftstore/engine<br/>raft durable state"]
         Snap["logical region snapshot"]
     end

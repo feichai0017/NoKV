@@ -11,8 +11,8 @@ func TestNoopStoreLoadInitializesRegionsMap(t *testing.T) {
 	store := NewNoopStore()
 	snapshot, err := store.Load()
 	require.NoError(t, err)
-	require.NotNil(t, snapshot.Regions)
-	require.Empty(t, snapshot.Regions)
+	require.NotNil(t, snapshot.Descriptors)
+	require.Empty(t, snapshot.Descriptors)
 }
 
 func TestResolveAllocatorStartsBasic(t *testing.T) {

@@ -3,13 +3,17 @@ package integration
 import (
 	"context"
 	"errors"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"testing"
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/pb"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	"github.com/feichai0017/NoKV/raftstore/client"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
@@ -21,37 +25,38 @@ import (
 )
 
 type staticResolver struct {
-	regions []*pb.RegionMeta
+	regions []*metapb.RegionDescriptor
 }
 
-func (r *staticResolver) GetRegionByKey(ctx context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
+func (r *staticResolver) GetRegionByKey(ctx context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
 	for _, region := range r.regions {
 		if region != nil && containsRegionKey(region, req.GetKey()) {
-			return &pb.GetRegionByKeyResponse{Region: cloneRegionMeta(region)}, nil
+			return &pdpb.GetRegionByKeyResponse{
+				RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromProto(region)),
+			}, nil
 		}
 	}
-	return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+	return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
 }
 
 func (r *staticResolver) Close() error { return nil }
 
-func cloneRegionMeta(meta *pb.RegionMeta) *pb.RegionMeta {
+func cloneRegionMeta(meta *metapb.RegionDescriptor) *metapb.RegionDescriptor {
 	if meta == nil {
 		return nil
 	}
-	out := &pb.RegionMeta{
-		Id:               meta.GetId(),
-		StartKey:         append([]byte(nil), meta.GetStartKey()...),
-		EndKey:           append([]byte(nil), meta.GetEndKey()...),
-		EpochVersion:     meta.GetEpochVersion(),
-		EpochConfVersion: meta.GetEpochConfVersion(),
+	out := &metapb.RegionDescriptor{
+		RegionId: meta.GetRegionId(),
+		StartKey: append([]byte(nil), meta.GetStartKey()...),
+		EndKey:   append([]byte(nil), meta.GetEndKey()...),
+		Epoch:    &metapb.RegionEpoch{Version: meta.GetEpoch().GetVersion(), ConfVersion: meta.GetEpoch().GetConfVersion()},
 	}
-	out.Peers = make([]*pb.RegionPeer, 0, len(meta.GetPeers()))
+	out.Peers = make([]*metapb.RegionPeer, 0, len(meta.GetPeers()))
 	for _, peer := range meta.GetPeers() {
 		if peer == nil {
 			continue
 		}
-		out.Peers = append(out.Peers, &pb.RegionPeer{
+		out.Peers = append(out.Peers, &metapb.RegionPeer{
 			StoreId: peer.GetStoreId(),
 			PeerId:  peer.GetPeerId(),
 		})
@@ -59,7 +64,7 @@ func cloneRegionMeta(meta *pb.RegionMeta) *pb.RegionMeta {
 	return out
 }
 
-func regionMetaWithLeaderFirst(meta *pb.RegionMeta, leaderStoreID uint64) *pb.RegionMeta {
+func regionMetaWithLeaderFirst(meta *metapb.RegionDescriptor, leaderStoreID uint64) *metapb.RegionDescriptor {
 	out := cloneRegionMeta(meta)
 	if out == nil || leaderStoreID == 0 || len(out.Peers) < 2 {
 		return out
@@ -74,7 +79,7 @@ func regionMetaWithLeaderFirst(meta *pb.RegionMeta, leaderStoreID uint64) *pb.Re
 	return out
 }
 
-func containsRegionKey(meta *pb.RegionMeta, key []byte) bool {
+func containsRegionKey(meta *metapb.RegionDescriptor, key []byte) bool {
 	if meta == nil {
 		return false
 	}
@@ -132,7 +137,7 @@ func TestClientReadWriteHonorContextUnderQuorumLoss(t *testing.T) {
 			{StoreID: 2, Addr: target2.Addr()},
 			{StoreID: 3, Addr: target3.Addr()},
 		},
-		RegionResolver: &staticResolver{regions: []*pb.RegionMeta{leaderStatus.GetRegion()}},
+		RegionResolver: &staticResolver{regions: []*metapb.RegionDescriptor{leaderStatus.GetRegion()}},
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 		Retry: client.RetryPolicy{
 			MaxAttempts:                 1,
@@ -226,15 +231,15 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 	require.NoError(t, err)
 
 	parentLeader, _ := testcluster.FindLeader(t, ctx, 91, seed, target)
-	childMeta := raftmeta.RegionMeta{
+	childMeta := localmeta.RegionMeta{
 		ID:       92,
 		StartKey: []byte("m"),
 		EndKey:   nil,
-		Epoch: raftmeta.RegionEpoch{
+		Epoch: metaregion.Epoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
-		Peers: []raftmeta.PeerMeta{
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 102},
 			{StoreID: 2, PeerID: 202},
 		},
@@ -257,7 +262,7 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 			{StoreID: 1, Addr: seed.Addr()},
 			{StoreID: 2, Addr: target.Addr()},
 		},
-		RegionResolver: &staticResolver{regions: []*pb.RegionMeta{
+		RegionResolver: &staticResolver{regions: []*metapb.RegionDescriptor{
 			regionMetaWithLeaderFirst(parentStatus.GetRegion(), parentLeaderNode.StoreID),
 			regionMetaWithLeaderFirst(childSeedStatus.GetRegion(), childLeaderNode.StoreID),
 		}},
@@ -281,9 +286,9 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 
 	txnCtx, txnCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer txnCancel()
-	err = cli.TwoPhaseCommit(txnCtx, []byte("bravo"), []*pb.Mutation{
-		{Op: pb.Mutation_Put, Key: []byte("bravo"), Value: []byte("v1")},
-		{Op: pb.Mutation_Put, Key: []byte("tango"), Value: []byte("v2")},
+	err = cli.TwoPhaseCommit(txnCtx, []byte("bravo"), []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("bravo"), Value: []byte("v1")},
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("tango"), Value: []byte("v2")},
 	}, 100, 101, 3000)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded, "expected deadline propagation, got %v", err)
@@ -294,9 +299,9 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 	require.Eventually(t, func() bool {
 		testCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		err := cli.TwoPhaseCommit(testCtx, []byte("charlie"), []*pb.Mutation{
-			{Op: pb.Mutation_Put, Key: []byte("charlie"), Value: []byte("ok1")},
-			{Op: pb.Mutation_Put, Key: []byte("yankee"), Value: []byte("ok2")},
+		err := cli.TwoPhaseCommit(testCtx, []byte("charlie"), []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: []byte("charlie"), Value: []byte("ok1")},
+			{Op: kvrpcpb.Mutation_Put, Key: []byte("yankee"), Value: []byte("ok2")},
 		}, 200, 201, 3000)
 		return err == nil
 	}, 5*time.Second, 50*time.Millisecond)

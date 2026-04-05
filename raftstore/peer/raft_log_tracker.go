@@ -4,14 +4,14 @@ import (
 	"fmt"
 	"sync"
 
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 )
 
 type raftLogTracker struct {
 	mu      sync.Mutex
 	groupID uint64
 
-	lastPointer raftmeta.RaftLogPointer
+	lastPointer localmeta.RaftLogPointer
 	lastError   error
 	injected    bool
 }
@@ -20,7 +20,7 @@ func newRaftLogTracker(groupID uint64) *raftLogTracker {
 	return &raftLogTracker{groupID: groupID}
 }
 
-func (r *raftLogTracker) capturePointer(ptr raftmeta.RaftLogPointer) {
+func (r *raftLogTracker) capturePointer(ptr localmeta.RaftLogPointer) {
 	if r == nil {
 		return
 	}
@@ -68,7 +68,7 @@ func (r *raftLogTracker) Info() *RaftLogInfo {
 }
 
 type RaftLogInfo struct {
-	Pointer  raftmeta.RaftLogPointer
+	Pointer  localmeta.RaftLogPointer
 	LastErr  error
 	Injected bool
 }

@@ -4,20 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"maps"
 	"sync"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-
-	"github.com/feichai0017/NoKV/pb"
 )
 
 // KeyConflictError represents prewrite-time key conflicts surfaced by the raft
 // service. Callers can inspect the KeyErrors to resolve locks before retrying.
 type KeyConflictError struct {
-	Errors []*pb.KeyError
+	Errors []*kvrpcpb.KeyError
 }
 
 func (e *KeyConflictError) Error() string {
@@ -78,7 +78,7 @@ type StoreEndpoint struct {
 // RegionResolver resolves Region metadata for an arbitrary key. A PD client
 // implementation should satisfy this interface.
 type RegionResolver interface {
-	GetRegionByKey(ctx context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error)
+	GetRegionByKey(ctx context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error)
 	Close() error
 }
 

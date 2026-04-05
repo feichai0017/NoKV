@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"expvar"
 	"fmt"
+	storagepb "github.com/feichai0017/NoKV/pb/storage"
 	"io"
 	"log/slog"
 	"math"
@@ -16,7 +17,6 @@ import (
 	stderrors "errors"
 	"github.com/feichai0017/NoKV/file"
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
 )
@@ -44,7 +44,7 @@ type table struct {
 	maxVersion    uint64
 	hasBloom      bool
 
-	idx atomic.Pointer[pb.TableIndex]
+	idx atomic.Pointer[storagepb.TableIndex]
 
 	mu   sync.Mutex
 	ss   *file.SSTable
@@ -87,7 +87,7 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) (out *
 		return nil, fmt.Errorf("open table %s: nil sstable handle", tableName)
 	}
 	// initialize the sst file, load the index
-	// The Index Block is stored as a Protobuf message (pb.TableIndex).
+	// The Index Block is stored as a Protobuf message (storagepb.TableIndex).
 	// The overall SSTable structure is:
 	// +--------------------+ ... +--------------------+--------------------+
 	// | Data Block 1       |     | Data Block N       | Index Block (Proto)|
@@ -141,7 +141,7 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) (out *
 }
 
 // Metadata accessors and cached table metadata.
-func (t *table) index() *pb.TableIndex {
+func (t *table) index() *storagepb.TableIndex {
 	if t == nil {
 		return nil
 	}
@@ -216,7 +216,7 @@ func (t *table) HasBloomFilter() bool {
 	return false
 }
 
-func (t *table) blockOffset(i int) (*pb.BlockOffset, bool) {
+func (t *table) blockOffset(i int) (*storagepb.BlockOffset, bool) {
 	index := t.index()
 	if index == nil {
 		return nil, false
@@ -284,7 +284,7 @@ func (t *table) searchExactCandidate(key []byte, maxVs *uint64) (entry *kv.Entry
 	return t.searchPointWithIndex(idx, key, maxVs)
 }
 
-func (t *table) searchPointWithIndex(idx *pb.TableIndex, key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
+func (t *table) searchPointWithIndex(idx *storagepb.TableIndex, key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	offsets := idx.GetOffsets()
 	if len(offsets) == 0 {
 		return nil, utils.ErrKeyNotFound
@@ -446,7 +446,7 @@ type tableIterator struct {
 	upperUser    []byte
 	bi           *blockIterator
 	err          error
-	index        *pb.TableIndex
+	index        *storagepb.TableIndex
 	closeCh      chan struct{}
 	wg           sync.WaitGroup
 	closeOnce    sync.Once
@@ -695,7 +695,7 @@ func (it *tableIterator) seekToLast() {
 
 // searchFirstBlockWithBaseKeyGT returns the first block index whose base key is > key.
 // If none exists it returns len(offsets).
-func searchFirstBlockWithBaseKeyGT(offsets []*pb.BlockOffset, key []byte) int {
+func searchFirstBlockWithBaseKeyGT(offsets []*storagepb.BlockOffset, key []byte) int {
 	lo, hi := 0, len(offsets)
 	for lo < hi {
 		mid := lo + (hi-lo)/2
@@ -708,7 +708,7 @@ func searchFirstBlockWithBaseKeyGT(offsets []*pb.BlockOffset, key []byte) int {
 	return lo
 }
 
-func searchFirstBlockWithBaseKeyGE(offsets []*pb.BlockOffset, baseKey []byte) int {
+func searchFirstBlockWithBaseKeyGE(offsets []*storagepb.BlockOffset, baseKey []byte) int {
 	lo, hi := 0, len(offsets)
 	for lo < hi {
 		mid := lo + (hi-lo)/2
@@ -728,7 +728,7 @@ func compareOffsetBaseKey(internalKey, baseKey []byte) int {
 	return bytes.Compare(internalKey, baseKey)
 }
 
-func blockRangeForBounds(index *pb.TableIndex, lower, upper []byte) (int, int) {
+func blockRangeForBounds(index *storagepb.TableIndex, lower, upper []byte) (int, int) {
 	if index == nil {
 		return 0, 0
 	}

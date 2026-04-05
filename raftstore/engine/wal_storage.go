@@ -10,7 +10,7 @@ import (
 
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/wal"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
@@ -21,7 +21,7 @@ const walRecordOverhead = 8 // length (4 bytes) + checksum (4 bytes)
 type WALStorageConfig struct {
 	GroupID   uint64
 	WAL       *wal.Manager
-	LocalMeta *raftmeta.Store
+	LocalMeta *localmeta.Store
 }
 
 var errStopPointerValidation = errors.New("raftstore: stop pointer validation")
@@ -41,9 +41,9 @@ type WALStorage struct {
 	mu         sync.Mutex
 	groupID    uint64
 	wal        *wal.Manager
-	localMeta  *raftmeta.Store
+	localMeta  *localmeta.Store
 	mem        *myraft.MemoryStorage
-	pointer    raftmeta.RaftLogPointer
+	pointer    localmeta.RaftLogPointer
 	entrySpans []entrySpan
 }
 
@@ -71,7 +71,7 @@ func OpenWALStorage(cfg WALStorageConfig) (*WALStorage, error) {
 		}
 	}
 
-	var replayPtr raftmeta.RaftLogPointer
+	var replayPtr localmeta.RaftLogPointer
 
 	if err := cfg.WAL.Replay(func(info wal.EntryInfo, payload []byte) error {
 		switch info.Type {
@@ -349,7 +349,7 @@ func (ws *WALStorage) Snapshot() (myraft.Snapshot, error) {
 
 // Internal helpers ----------------------------------------------------------
 
-func (ws *WALStorage) updatePointer(ptr raftmeta.RaftLogPointer) error {
+func (ws *WALStorage) updatePointer(ptr localmeta.RaftLogPointer) error {
 	if ptr.Segment == 0 {
 		return nil
 	}
@@ -537,7 +537,7 @@ func recordEnd(info wal.EntryInfo) uint64 {
 	return uint64(info.Offset) + uint64(info.Length) + walRecordOverhead
 }
 
-func isPointerAhead(newPtr, oldPtr raftmeta.RaftLogPointer) bool {
+func isPointerAhead(newPtr, oldPtr localmeta.RaftLogPointer) bool {
 	if newPtr.Segment == 0 {
 		return false
 	}
@@ -550,7 +550,7 @@ func isPointerAhead(newPtr, oldPtr raftmeta.RaftLogPointer) bool {
 	return newPtr.Offset > oldPtr.Offset
 }
 
-func validateRaftPointer(walMgr *wal.Manager, ptr raftmeta.RaftLogPointer) error {
+func validateRaftPointer(walMgr *wal.Manager, ptr localmeta.RaftLogPointer) error {
 	if walMgr == nil {
 		return nil
 	}

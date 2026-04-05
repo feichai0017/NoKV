@@ -3,6 +3,7 @@ package lsm
 import (
 	"errors"
 	"fmt"
+	storagepb "github.com/feichai0017/NoKV/pb/storage"
 	"log/slog"
 	"math"
 	"sort"
@@ -13,7 +14,6 @@ import (
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm/tombstone"
 	"github.com/feichai0017/NoKV/manifest"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
 )
@@ -189,7 +189,7 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 	}
 	for _, ch := range changeSet.Changes {
 		switch ch.Op {
-		case pb.ManifestChange_CREATE:
+		case storagepb.ManifestChange_CREATE:
 			tbl := findTableByID(newTables, ch.Id)
 			if tbl == nil {
 				continue
@@ -208,7 +208,7 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 				},
 			}
 			manifestEdits = append(manifestEdits, add)
-		case pb.ManifestChange_DELETE:
+		case storagepb.ManifestChange_DELETE:
 			level := levelByID[ch.Id]
 			del := manifest.Edit{
 				Type: manifest.EditDeleteFile,
@@ -289,8 +289,8 @@ func tablesToString(tables []*table) []string {
 }
 
 // buildChangeSet _
-func buildChangeSet(cd *compactDef, newTables []*table) pb.ManifestChangeSet {
-	changes := []*pb.ManifestChange{}
+func buildChangeSet(cd *compactDef, newTables []*table) storagepb.ManifestChangeSet {
+	changes := []*storagepb.ManifestChange{}
 	for _, table := range newTables {
 		changes = append(changes, newCreateChange(table.fid, cd.nextLevel.levelNum))
 	}
@@ -300,21 +300,21 @@ func buildChangeSet(cd *compactDef, newTables []*table) pb.ManifestChangeSet {
 	for _, table := range cd.bot {
 		changes = append(changes, newDeleteChange(table.fid))
 	}
-	return pb.ManifestChangeSet{Changes: changes}
+	return storagepb.ManifestChangeSet{Changes: changes}
 }
 
-func newDeleteChange(id uint64) *pb.ManifestChange {
-	return &pb.ManifestChange{
+func newDeleteChange(id uint64) *storagepb.ManifestChange {
+	return &storagepb.ManifestChange{
 		Id: id,
-		Op: pb.ManifestChange_DELETE,
+		Op: storagepb.ManifestChange_DELETE,
 	}
 }
 
 // newCreateChange
-func newCreateChange(id uint64, level int) *pb.ManifestChange {
-	return &pb.ManifestChange{
+func newCreateChange(id uint64, level int) *storagepb.ManifestChange {
+	return &storagepb.ManifestChange{
 		Id:    id,
-		Op:    pb.ManifestChange_CREATE,
+		Op:    storagepb.ManifestChange_CREATE,
 		Level: uint32(level),
 	}
 }

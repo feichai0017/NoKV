@@ -1,15 +1,16 @@
 package server
 
 import (
-	"github.com/feichai0017/NoKV/pb"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"github.com/feichai0017/NoKV/pd/core"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
 // planStoreOperations builds lightweight scheduling hints for the heartbeat
 // source store. This is a minimal heuristic to bootstrap PD-to-store
 // downlinks; it can be replaced by a richer scheduler in follow-up work.
-func (s *Service) planStoreOperations(heartbeatStoreID uint64) []*pb.SchedulerOperation {
+func (s *Service) planStoreOperations(heartbeatStoreID uint64) []*pdpb.SchedulerOperation {
 	if s == nil || s.cluster == nil || heartbeatStoreID == 0 {
 		return nil
 	}
@@ -26,7 +27,7 @@ func (s *Service) planStoreOperations(heartbeatStoreID uint64) []*pb.SchedulerOp
 	if !ok {
 		return nil
 	}
-	return []*pb.SchedulerOperation{op}
+	return []*pdpb.SchedulerOperation{op}
 }
 
 func selectLeaderRebalancePair(stores []core.StoreStats, heartbeatStoreID uint64) (core.StoreStats, core.StoreStats, bool) {
@@ -56,53 +57,53 @@ func selectLeaderRebalancePair(stores []core.StoreStats, heartbeatStoreID uint64
 	return src, dst, true
 }
 
-func chooseLeaderTransferOperation(regions []core.RegionInfo, srcStoreID, dstStoreID uint64) (*pb.SchedulerOperation, bool) {
+func chooseLeaderTransferOperation(regions []core.RegionInfo, srcStoreID, dstStoreID uint64) (*pdpb.SchedulerOperation, bool) {
 	if srcStoreID == 0 || dstStoreID == 0 {
 		return nil, false
 	}
 	// Prefer regions whose first peer belongs to the source store; this aligns
 	// with common bootstrap ordering and increases chance of immediate success.
 	for _, region := range regions {
-		if op, ok := buildLeaderTransfer(region.Meta, srcStoreID, dstStoreID, true); ok {
+		if op, ok := buildLeaderTransfer(region.Descriptor, srcStoreID, dstStoreID, true); ok {
 			return op, true
 		}
 	}
 	// Fallback to any region that has peers on both stores.
 	for _, region := range regions {
-		if op, ok := buildLeaderTransfer(region.Meta, srcStoreID, dstStoreID, false); ok {
+		if op, ok := buildLeaderTransfer(region.Descriptor, srcStoreID, dstStoreID, false); ok {
 			return op, true
 		}
 	}
 	return nil, false
 }
 
-func buildLeaderTransfer(meta raftmeta.RegionMeta, srcStoreID, dstStoreID uint64, requireFirstPeerSrc bool) (*pb.SchedulerOperation, bool) {
-	if meta.ID == 0 || len(meta.Peers) == 0 {
+func buildLeaderTransfer(desc descriptor.Descriptor, srcStoreID, dstStoreID uint64, requireFirstPeerSrc bool) (*pdpb.SchedulerOperation, bool) {
+	if desc.RegionID == 0 || len(desc.Peers) == 0 {
 		return nil, false
 	}
-	if requireFirstPeerSrc && meta.Peers[0].StoreID != srcStoreID {
+	if requireFirstPeerSrc && desc.Peers[0].StoreID != srcStoreID {
 		return nil, false
 	}
-	srcPeerID, ok := peerIDOnStore(meta.Peers, srcStoreID)
+	srcPeerID, ok := peerIDOnStore(desc.Peers, srcStoreID)
 	if !ok {
 		return nil, false
 	}
-	dstPeerID, ok := peerIDOnStore(meta.Peers, dstStoreID)
+	dstPeerID, ok := peerIDOnStore(desc.Peers, dstStoreID)
 	if !ok {
 		return nil, false
 	}
 	if srcPeerID == dstPeerID {
 		return nil, false
 	}
-	return &pb.SchedulerOperation{
-		Type:         pb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER,
-		RegionId:     meta.ID,
+	return &pdpb.SchedulerOperation{
+		Type:         pdpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER,
+		RegionId:     desc.RegionID,
 		SourcePeerId: srcPeerID,
 		TargetPeerId: dstPeerID,
 	}, true
 }
 
-func peerIDOnStore(peers []raftmeta.PeerMeta, storeID uint64) (uint64, bool) {
+func peerIDOnStore(peers []metaregion.Peer, storeID uint64) (uint64, bool) {
 	for _, p := range peers {
 		if p.StoreID == storeID && p.PeerID != 0 {
 			return p.PeerID, true

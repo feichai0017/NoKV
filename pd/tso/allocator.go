@@ -51,3 +51,20 @@ func (a *Allocator) Current() uint64 {
 	}
 	return a.counter.Load()
 }
+
+// Fence raises the allocator floor so future allocations are strictly greater
+// than or equal to min+1. Existing higher values are preserved.
+func (a *Allocator) Fence(min uint64) {
+	if a == nil {
+		return
+	}
+	for {
+		cur := a.counter.Load()
+		if cur >= min {
+			return
+		}
+		if a.counter.CompareAndSwap(cur, min) {
+			return
+		}
+	}
+}

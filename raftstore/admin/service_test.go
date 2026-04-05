@@ -3,14 +3,18 @@ package admin
 import (
 	"bytes"
 	"context"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	adminpb "github.com/feichai0017/NoKV/pb/admin"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"io"
+	"sync"
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/raftstore/store"
@@ -26,7 +30,7 @@ type noopSnapshotStore struct{}
 
 func (noopTransport) Send(context.Context, myraft.Message) {}
 
-func (noopSnapshotStore) ExportSnapshot(raftmeta.RegionMeta) ([]byte, error) {
+func (noopSnapshotStore) ExportSnapshot(localmeta.RegionMeta) ([]byte, error) {
 	return nil, nil
 }
 
@@ -34,7 +38,7 @@ func (noopSnapshotStore) ImportSnapshot([]byte) (*snapshotpkg.ImportResult, erro
 	return nil, nil
 }
 
-func (noopSnapshotStore) ExportSnapshotTo(io.Writer, raftmeta.RegionMeta) (snapshotpkg.Meta, error) {
+func (noopSnapshotStore) ExportSnapshotTo(io.Writer, localmeta.RegionMeta) (snapshotpkg.Meta, error) {
 	return snapshotpkg.Meta{}, nil
 }
 
@@ -42,9 +46,47 @@ func (noopSnapshotStore) ImportSnapshotFrom(io.Reader) (*snapshotpkg.ImportResul
 	return nil, nil
 }
 
-func openAdminTestDBWithTweak(t *testing.T, dir string, tweak func(*NoKV.Options)) (*NoKV.DB, *raftmeta.Store) {
+type captureSchedulerClient struct {
+	mu     sync.Mutex
+	events []rootevent.Event
+}
+
+func (c *captureSchedulerClient) ReportRegionHeartbeat(context.Context, uint64) {}
+
+func (c *captureSchedulerClient) PublishRootEvent(_ context.Context, event rootevent.Event) error {
+	c.mu.Lock()
+	c.events = append(c.events, rootevent.CloneEvent(event))
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *captureSchedulerClient) StoreHeartbeat(context.Context, store.StoreStats) []store.Operation {
+	return nil
+}
+
+func (c *captureSchedulerClient) Status() store.SchedulerStatus { return store.SchedulerStatus{} }
+
+func (c *captureSchedulerClient) Close() error { return nil }
+
+func (c *captureSchedulerClient) RootEvents() []rootevent.Event {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]rootevent.Event, 0, len(c.events))
+	for _, event := range c.events {
+		out = append(out, rootevent.CloneEvent(event))
+	}
+	return out
+}
+
+func (c *captureSchedulerClient) Reset() {
+	c.mu.Lock()
+	c.events = nil
+	c.mu.Unlock()
+}
+
+func openAdminTestDBWithTweak(t *testing.T, dir string, tweak func(*NoKV.Options)) (*NoKV.DB, *localmeta.Store) {
 	t.Helper()
-	localMeta, err := raftmeta.OpenLocalStore(dir, nil)
+	localMeta, err := localmeta.OpenLocalStore(dir, nil)
 	require.NoError(t, err)
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
@@ -58,19 +100,83 @@ func openAdminTestDBWithTweak(t *testing.T, dir string, tweak func(*NoKV.Options
 }
 
 func testSSTExport(db *NoKV.DB) peer.SnapshotExportFunc {
-	return func(region raftmeta.RegionMeta) ([]byte, error) {
+	return func(region localmeta.RegionMeta) ([]byte, error) {
 		return db.ExportSnapshot(region)
 	}
 }
 
 func testSSTApply(db *NoKV.DB) peer.SnapshotApplyFunc {
-	return func(payload []byte) (raftmeta.RegionMeta, error) {
+	return func(payload []byte) (localmeta.RegionMeta, error) {
 		result, err := db.ImportSnapshot(payload)
 		if err != nil {
-			return raftmeta.RegionMeta{}, err
+			return localmeta.RegionMeta{}, err
 		}
 		return result.Meta.Region, nil
 	}
+}
+
+func TestServiceAddPeerPublishesPlannedTarget(t *testing.T) {
+	dir := t.TempDir()
+	db, localMeta := openAdminTestDBWithTweak(t, dir, nil)
+	defer func() {
+		require.NoError(t, db.Close())
+		require.NoError(t, localMeta.Close())
+	}()
+
+	sink := &captureSchedulerClient{}
+	st := store.NewStore(store.Config{
+		StoreID:     1,
+		LocalMeta:   localMeta,
+		Scheduler:   sink,
+		PeerBuilder: nil,
+	})
+	defer st.Close()
+
+	region := localmeta.RegionMeta{
+		ID:       88,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 101}},
+		State:    metaregion.ReplicaStateRunning,
+	}
+	storage, err := db.RaftLog().Open(region.ID, localMeta)
+	require.NoError(t, err)
+	cfg := &peer.Config{
+		RaftConfig: myraft.Config{
+			ID:              101,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		},
+		Transport: noopTransport{},
+		Apply:     func([]myraft.Entry) error { return nil },
+		Storage:   storage,
+		GroupID:   region.ID,
+		Region:    localmeta.CloneRegionMetaPtr(&region),
+	}
+	p, err := st.StartPeer(cfg, []myraft.Peer{{ID: 101}})
+	require.NoError(t, err)
+	defer st.StopPeer(p.ID())
+	require.NoError(t, p.Campaign())
+	sink.Reset()
+
+	svc := NewService(st)
+	_, err = svc.AddPeer(context.Background(), &adminpb.AddPeerRequest{
+		RegionId: region.ID,
+		StoreId:  2,
+		PeerId:   201,
+	})
+	require.NoError(t, err)
+
+	events := sink.RootEvents()
+	require.NotEmpty(t, events)
+	require.Equal(t, rootevent.KindPeerAdditionPlanned, events[0].Kind)
+	require.NotNil(t, events[0].PeerChange)
+	require.Equal(t, uint64(2), events[0].PeerChange.StoreID)
+	require.Equal(t, uint64(201), events[0].PeerChange.PeerID)
 }
 
 func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
@@ -88,16 +194,16 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 	defer entry.DecrRef()
 	require.NoError(t, sourceDB.ApplyInternalEntries([]*entrykv.Entry{entry}))
 
-	region := raftmeta.RegionMeta{
+	region := localmeta.RegionMeta{
 		ID:       22,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers: []raftmeta.PeerMeta{
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 101},
 			{StoreID: 2, PeerID: 201},
 		},
-		State: raftmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 	require.NoError(t, sourceMeta.SaveRegion(region))
 
@@ -116,7 +222,7 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 	sourceStore := store.NewStore(store.Config{
 		StoreID:   1,
 		LocalMeta: sourceMeta,
-		PeerBuilder: func(meta raftmeta.RegionMeta) (*peer.Config, error) {
+		PeerBuilder: func(meta localmeta.RegionMeta) (*peer.Config, error) {
 			return &peer.Config{
 				RaftConfig: myraft.Config{
 					ID:              101,
@@ -131,7 +237,7 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 				SnapshotExport: testSSTExport(sourceDB),
 				Storage:        sourceStorage,
 				GroupID:        meta.ID,
-				Region:         raftmeta.CloneRegionMetaPtr(&meta),
+				Region:         localmeta.CloneRegionMetaPtr(&meta),
 			}, nil
 		},
 	})
@@ -151,7 +257,7 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 		SnapshotExport: testSSTExport(sourceDB),
 		Storage:        sourceStorage,
 		GroupID:        region.ID,
-		Region:         raftmeta.CloneRegionMetaPtr(&region),
+		Region:         localmeta.CloneRegionMetaPtr(&region),
 	}
 	_, err = sourceStore.StartPeer(sourcePeerCfg, nil)
 	require.NoError(t, err)
@@ -175,7 +281,7 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 	targetStore := store.NewStore(store.Config{
 		StoreID:   2,
 		LocalMeta: targetMeta,
-		PeerBuilder: func(meta raftmeta.RegionMeta) (*peer.Config, error) {
+		PeerBuilder: func(meta localmeta.RegionMeta) (*peer.Config, error) {
 			storage, err := targetDB.RaftLog().Open(meta.ID, targetMeta)
 			require.NoError(t, err)
 			return &peer.Config{
@@ -192,7 +298,7 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 				SnapshotApply: testSSTApply(targetDB),
 				Storage:       storage,
 				GroupID:       meta.ID,
-				Region:        raftmeta.CloneRegionMetaPtr(&meta),
+				Region:        localmeta.CloneRegionMetaPtr(&meta),
 			}, nil
 		},
 	})
@@ -201,17 +307,17 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 	sourceSvc := NewServiceWithSnapshot(sourceStore, sourceDB)
 	targetSvc := NewServiceWithSnapshot(targetStore, targetDB)
 
-	exported, err := sourceSvc.ExportRegionSnapshot(context.Background(), &pb.ExportRegionSnapshotRequest{
+	exported, err := sourceSvc.ExportRegionSnapshot(context.Background(), &adminpb.ExportRegionSnapshotRequest{
 		RegionId: region.ID,
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, exported.GetSnapshot())
 
-	installed, err := targetSvc.ImportRegionSnapshot(context.Background(), &pb.ImportRegionSnapshotRequest{
+	installed, err := targetSvc.ImportRegionSnapshot(context.Background(), &adminpb.ImportRegionSnapshotRequest{
 		Snapshot: exported.GetSnapshot(),
 	})
 	require.NoError(t, err)
-	require.Equal(t, region.ID, installed.GetRegion().GetId())
+	require.Equal(t, region.ID, installed.GetRegion().GetRegionId())
 
 	status, ok := targetStore.RegionRuntimeStatus(region.ID)
 	require.True(t, ok)
@@ -228,22 +334,21 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 
 type exportRegionSnapshotStreamCapture struct {
 	ctx    context.Context
-	chunks []*pb.ExportRegionSnapshotStreamResponse
+	chunks []*adminpb.ExportRegionSnapshotStreamResponse
 }
 
-func (s *exportRegionSnapshotStreamCapture) Send(resp *pb.ExportRegionSnapshotStreamResponse) error {
-	copyResp := &pb.ExportRegionSnapshotStreamResponse{
+func (s *exportRegionSnapshotStreamCapture) Send(resp *adminpb.ExportRegionSnapshotStreamResponse) error {
+	copyResp := &adminpb.ExportRegionSnapshotStreamResponse{
 		SnapshotHeader: append([]byte(nil), resp.GetSnapshotHeader()...),
 		Chunk:          append([]byte(nil), resp.GetChunk()...),
 	}
 	if resp.GetRegion() != nil {
-		copyResp.Region = &pb.RegionMeta{
-			Id:               resp.GetRegion().GetId(),
-			StartKey:         append([]byte(nil), resp.GetRegion().GetStartKey()...),
-			EndKey:           append([]byte(nil), resp.GetRegion().GetEndKey()...),
-			EpochVersion:     resp.GetRegion().GetEpochVersion(),
-			EpochConfVersion: resp.GetRegion().GetEpochConfVersion(),
-			Peers:            append([]*pb.RegionPeer(nil), resp.GetRegion().GetPeers()...),
+		copyResp.Region = &metapb.RegionDescriptor{
+			RegionId: resp.GetRegion().GetRegionId(),
+			StartKey: append([]byte(nil), resp.GetRegion().GetStartKey()...),
+			EndKey:   append([]byte(nil), resp.GetRegion().GetEndKey()...),
+			Epoch:    &metapb.RegionEpoch{Version: resp.GetRegion().GetEpoch().GetVersion(), ConfVersion: resp.GetRegion().GetEpoch().GetConfVersion()},
+			Peers:    append([]*metapb.RegionPeer(nil), resp.GetRegion().GetPeers()...),
 		}
 	}
 	s.chunks = append(s.chunks, copyResp)
@@ -259,12 +364,12 @@ func (s *exportRegionSnapshotStreamCapture) RecvMsg(any) error            { retu
 
 type importRegionSnapshotStreamFeed struct {
 	ctx  context.Context
-	reqs []*pb.ImportRegionSnapshotStreamRequest
+	reqs []*adminpb.ImportRegionSnapshotStreamRequest
 	idx  int
-	resp *pb.ImportRegionSnapshotResponse
+	resp *adminpb.ImportRegionSnapshotResponse
 }
 
-func (s *importRegionSnapshotStreamFeed) Recv() (*pb.ImportRegionSnapshotStreamRequest, error) {
+func (s *importRegionSnapshotStreamFeed) Recv() (*adminpb.ImportRegionSnapshotStreamRequest, error) {
 	if s.idx >= len(s.reqs) {
 		return nil, io.EOF
 	}
@@ -273,7 +378,7 @@ func (s *importRegionSnapshotStreamFeed) Recv() (*pb.ImportRegionSnapshotStreamR
 	return req, nil
 }
 
-func (s *importRegionSnapshotStreamFeed) SendAndClose(resp *pb.ImportRegionSnapshotResponse) error {
+func (s *importRegionSnapshotStreamFeed) SendAndClose(resp *adminpb.ImportRegionSnapshotResponse) error {
 	s.resp = resp
 	return nil
 }
@@ -289,8 +394,8 @@ func TestServiceImportRegionSnapshotStreamRejectsMissingHeader(t *testing.T) {
 	svc := &Service{store: &store.Store{}, snapshot: noopSnapshotStore{}}
 	stream := &importRegionSnapshotStreamFeed{
 		ctx: context.Background(),
-		reqs: []*pb.ImportRegionSnapshotStreamRequest{{
-			Region: &pb.RegionMeta{Id: 1},
+		reqs: []*adminpb.ImportRegionSnapshotStreamRequest{{
+			Region: &metapb.RegionDescriptor{RegionId: 1},
 			Chunk:  []byte("payload"),
 		}},
 	}
@@ -305,7 +410,7 @@ func TestServiceImportRegionSnapshotStreamRejectsMissingRegion(t *testing.T) {
 	require.NoError(t, err)
 	stream := &importRegionSnapshotStreamFeed{
 		ctx: context.Background(),
-		reqs: []*pb.ImportRegionSnapshotStreamRequest{{
+		reqs: []*adminpb.ImportRegionSnapshotStreamRequest{{
 			SnapshotHeader: header,
 			Chunk:          []byte("payload"),
 		}},
@@ -321,11 +426,11 @@ func TestServiceImportRegionSnapshotStreamRejectsRepeatedHeader(t *testing.T) {
 	require.NoError(t, err)
 	stream := &importRegionSnapshotStreamFeed{
 		ctx: context.Background(),
-		reqs: []*pb.ImportRegionSnapshotStreamRequest{
+		reqs: []*adminpb.ImportRegionSnapshotStreamRequest{
 			{
 				SnapshotHeader: header,
-				Region: &pb.RegionMeta{
-					Id:       1,
+				Region: &metapb.RegionDescriptor{
+					RegionId: 1,
 					StartKey: []byte("a"),
 					EndKey:   []byte("z"),
 				},
@@ -356,16 +461,16 @@ func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 	defer entry.DecrRef()
 	require.NoError(t, sourceDB.ApplyInternalEntries([]*entrykv.Entry{entry}))
 
-	region := raftmeta.RegionMeta{
+	region := localmeta.RegionMeta{
 		ID:       32,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers: []raftmeta.PeerMeta{
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 101},
 			{StoreID: 2, PeerID: 201},
 		},
-		State: raftmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 	require.NoError(t, sourceMeta.SaveRegion(region))
 
@@ -384,7 +489,7 @@ func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 	sourceStore := store.NewStore(store.Config{
 		StoreID:   1,
 		LocalMeta: sourceMeta,
-		PeerBuilder: func(meta raftmeta.RegionMeta) (*peer.Config, error) {
+		PeerBuilder: func(meta localmeta.RegionMeta) (*peer.Config, error) {
 			return &peer.Config{
 				RaftConfig: myraft.Config{
 					ID:              101,
@@ -399,7 +504,7 @@ func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 				SnapshotExport: testSSTExport(sourceDB),
 				Storage:        sourceStorage,
 				GroupID:        meta.ID,
-				Region:         raftmeta.CloneRegionMetaPtr(&meta),
+				Region:         localmeta.CloneRegionMetaPtr(&meta),
 			}, nil
 		},
 	})
@@ -419,7 +524,7 @@ func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 		SnapshotExport: testSSTExport(sourceDB),
 		Storage:        sourceStorage,
 		GroupID:        region.ID,
-		Region:         raftmeta.CloneRegionMetaPtr(&region),
+		Region:         localmeta.CloneRegionMetaPtr(&region),
 	}
 	_, err = sourceStore.StartPeer(sourcePeerCfg, nil)
 	require.NoError(t, err)
@@ -443,7 +548,7 @@ func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 	targetStore := store.NewStore(store.Config{
 		StoreID:   2,
 		LocalMeta: targetMeta,
-		PeerBuilder: func(meta raftmeta.RegionMeta) (*peer.Config, error) {
+		PeerBuilder: func(meta localmeta.RegionMeta) (*peer.Config, error) {
 			storage, err := targetDB.RaftLog().Open(meta.ID, targetMeta)
 			require.NoError(t, err)
 			return &peer.Config{
@@ -460,7 +565,7 @@ func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 				SnapshotApply: testSSTApply(targetDB),
 				Storage:       storage,
 				GroupID:       meta.ID,
-				Region:        raftmeta.CloneRegionMetaPtr(&meta),
+				Region:        localmeta.CloneRegionMetaPtr(&meta),
 			}, nil
 		},
 	})
@@ -470,14 +575,14 @@ func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 	targetSvc := NewServiceWithSnapshot(targetStore, targetDB)
 
 	exportStream := &exportRegionSnapshotStreamCapture{ctx: context.Background()}
-	require.NoError(t, sourceSvc.ExportRegionSnapshotStream(&pb.ExportRegionSnapshotStreamRequest{
+	require.NoError(t, sourceSvc.ExportRegionSnapshotStream(&adminpb.ExportRegionSnapshotStreamRequest{
 		RegionId: region.ID,
 	}, exportStream))
 	require.NotEmpty(t, exportStream.chunks)
 
-	importReqs := make([]*pb.ImportRegionSnapshotStreamRequest, 0, len(exportStream.chunks))
+	importReqs := make([]*adminpb.ImportRegionSnapshotStreamRequest, 0, len(exportStream.chunks))
 	for _, chunk := range exportStream.chunks {
-		importReqs = append(importReqs, &pb.ImportRegionSnapshotStreamRequest{
+		importReqs = append(importReqs, &adminpb.ImportRegionSnapshotStreamRequest{
 			SnapshotHeader: append([]byte(nil), chunk.GetSnapshotHeader()...),
 			Region:         chunk.GetRegion(),
 			Chunk:          append([]byte(nil), chunk.GetChunk()...),
@@ -486,7 +591,7 @@ func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 	importStream := &importRegionSnapshotStreamFeed{ctx: context.Background(), reqs: importReqs}
 	require.NoError(t, targetSvc.ImportRegionSnapshotStream(importStream))
 	require.NotNil(t, importStream.resp)
-	require.Equal(t, region.ID, importStream.resp.GetRegion().GetId())
+	require.Equal(t, region.ID, importStream.resp.GetRegion().GetRegionId())
 
 	status, ok := targetStore.RegionRuntimeStatus(region.ID)
 	require.True(t, ok)
@@ -516,16 +621,16 @@ func TestServiceImportRegionSnapshotStreamRejectsMismatchedRegionMeta(t *testing
 	defer entry.DecrRef()
 	require.NoError(t, sourceDB.ApplyInternalEntries([]*entrykv.Entry{entry}))
 
-	region := raftmeta.RegionMeta{
+	region := localmeta.RegionMeta{
 		ID:       42,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers: []raftmeta.PeerMeta{
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 101},
 			{StoreID: 2, PeerID: 201},
 		},
-		State: raftmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 	require.NoError(t, sourceMeta.SaveRegion(region))
 
@@ -544,7 +649,7 @@ func TestServiceImportRegionSnapshotStreamRejectsMismatchedRegionMeta(t *testing
 	sourceStore := store.NewStore(store.Config{
 		StoreID:   1,
 		LocalMeta: sourceMeta,
-		PeerBuilder: func(meta raftmeta.RegionMeta) (*peer.Config, error) {
+		PeerBuilder: func(meta localmeta.RegionMeta) (*peer.Config, error) {
 			return &peer.Config{
 				RaftConfig: myraft.Config{
 					ID:              101,
@@ -559,7 +664,7 @@ func TestServiceImportRegionSnapshotStreamRejectsMismatchedRegionMeta(t *testing
 				SnapshotExport: testSSTExport(sourceDB),
 				Storage:        sourceStorage,
 				GroupID:        meta.ID,
-				Region:         raftmeta.CloneRegionMetaPtr(&meta),
+				Region:         localmeta.CloneRegionMetaPtr(&meta),
 			}, nil
 		},
 	})
@@ -579,7 +684,7 @@ func TestServiceImportRegionSnapshotStreamRejectsMismatchedRegionMeta(t *testing
 		SnapshotExport: testSSTExport(sourceDB),
 		Storage:        sourceStorage,
 		GroupID:        region.ID,
-		Region:         raftmeta.CloneRegionMetaPtr(&region),
+		Region:         localmeta.CloneRegionMetaPtr(&region),
 	}
 	_, err = sourceStore.StartPeer(sourcePeerCfg, nil)
 	require.NoError(t, err)
@@ -603,7 +708,7 @@ func TestServiceImportRegionSnapshotStreamRejectsMismatchedRegionMeta(t *testing
 	targetStore := store.NewStore(store.Config{
 		StoreID:   2,
 		LocalMeta: targetMeta,
-		PeerBuilder: func(meta raftmeta.RegionMeta) (*peer.Config, error) {
+		PeerBuilder: func(meta localmeta.RegionMeta) (*peer.Config, error) {
 			storage, err := targetDB.RaftLog().Open(meta.ID, targetMeta)
 			require.NoError(t, err)
 			return &peer.Config{
@@ -620,7 +725,7 @@ func TestServiceImportRegionSnapshotStreamRejectsMismatchedRegionMeta(t *testing
 				SnapshotApply: testSSTApply(targetDB),
 				Storage:       storage,
 				GroupID:       meta.ID,
-				Region:        raftmeta.CloneRegionMetaPtr(&meta),
+				Region:        localmeta.CloneRegionMetaPtr(&meta),
 			}, nil
 		},
 	})
@@ -630,26 +735,25 @@ func TestServiceImportRegionSnapshotStreamRejectsMismatchedRegionMeta(t *testing
 	targetSvc := NewServiceWithSnapshot(targetStore, targetDB)
 
 	exportStream := &exportRegionSnapshotStreamCapture{ctx: context.Background()}
-	require.NoError(t, sourceSvc.ExportRegionSnapshotStream(&pb.ExportRegionSnapshotStreamRequest{
+	require.NoError(t, sourceSvc.ExportRegionSnapshotStream(&adminpb.ExportRegionSnapshotStreamRequest{
 		RegionId: region.ID,
 	}, exportStream))
 	require.NotEmpty(t, exportStream.chunks)
 
-	importReqs := make([]*pb.ImportRegionSnapshotStreamRequest, 0, len(exportStream.chunks))
+	importReqs := make([]*adminpb.ImportRegionSnapshotStreamRequest, 0, len(exportStream.chunks))
 	for i, chunk := range exportStream.chunks {
-		req := &pb.ImportRegionSnapshotStreamRequest{
+		req := &adminpb.ImportRegionSnapshotStreamRequest{
 			SnapshotHeader: append([]byte(nil), chunk.GetSnapshotHeader()...),
 			Region:         chunk.GetRegion(),
 			Chunk:          append([]byte(nil), chunk.GetChunk()...),
 		}
 		if i == 0 {
-			req.Region = &pb.RegionMeta{
-				Id:               chunk.GetRegion().GetId(),
-				StartKey:         append([]byte(nil), chunk.GetRegion().GetStartKey()...),
-				EndKey:           []byte("zz"),
-				EpochVersion:     chunk.GetRegion().GetEpochVersion(),
-				EpochConfVersion: chunk.GetRegion().GetEpochConfVersion(),
-				Peers:            append([]*pb.RegionPeer(nil), chunk.GetRegion().GetPeers()...),
+			req.Region = &metapb.RegionDescriptor{
+				RegionId: chunk.GetRegion().GetRegionId(),
+				StartKey: append([]byte(nil), chunk.GetRegion().GetStartKey()...),
+				EndKey:   []byte("zz"),
+				Epoch:    &metapb.RegionEpoch{Version: chunk.GetRegion().GetEpoch().GetVersion(), ConfVersion: chunk.GetRegion().GetEpoch().GetConfVersion()},
+				Peers:    append([]*metapb.RegionPeer(nil), chunk.GetRegion().GetPeers()...),
 			}
 		}
 		importReqs = append(importReqs, req)

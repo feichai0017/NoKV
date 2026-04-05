@@ -10,7 +10,7 @@ import (
 	"github.com/feichai0017/NoKV/hotring"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/metrics"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	transportpkg "github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
@@ -469,7 +469,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	var (
 		wstats         *wal.Metrics
 		segmentMetrics map[uint32]wal.RecordMetrics
-		ptrs           map[uint64]raftmeta.RaftLogPointer
+		ptrs           map[uint64]localmeta.RaftLogPointer
 	)
 	if s.db.wal != nil {
 		wstats = s.db.wal.Metrics()

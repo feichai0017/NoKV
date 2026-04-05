@@ -2,13 +2,16 @@ package adapter
 
 import (
 	"context"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	"fmt"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"log/slog"
 	"sync"
 	"time"
 
-	"github.com/feichai0017/NoKV/pb"
 	pdclient "github.com/feichai0017/NoKV/pd/client"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 )
 
@@ -50,34 +53,45 @@ func NewSchedulerClient(cfg SchedulerClientConfig) *SchedulerClient {
 	}
 }
 
-// PublishRegion publishes region metadata to PD.
-func (s *SchedulerClient) PublishRegion(ctx context.Context, meta raftmeta.RegionMeta) {
-	if s == nil || meta.ID == 0 || s.pd == nil {
-		return
-	}
-	ctx, cancel := contextWithTimeout(ctx, s.timeout)
-	defer cancel()
-	_, err := s.pd.RegionHeartbeat(ctx, &pb.RegionHeartbeatRequest{Region: toPBRegionMeta(meta)})
-	if err != nil {
-		s.recordError("RegionHeartbeat", err)
-		return
-	}
-	s.markHealthy()
-}
-
-// RemoveRegion removes region metadata from PD.
-func (s *SchedulerClient) RemoveRegion(ctx context.Context, regionID uint64) {
+// ReportRegionHeartbeat forwards one runtime region-liveness heartbeat to PD.
+func (s *SchedulerClient) ReportRegionHeartbeat(ctx context.Context, regionID uint64) {
 	if s == nil || regionID == 0 || s.pd == nil {
 		return
 	}
 	ctx, cancel := contextWithTimeout(ctx, s.timeout)
 	defer cancel()
-	_, err := s.pd.RemoveRegion(ctx, &pb.RemoveRegionRequest{RegionId: regionID})
+	_, err := s.pd.RegionLiveness(ctx, &pdpb.RegionLivenessRequest{
+		RegionId: regionID,
+	})
 	if err != nil {
-		s.recordError("RemoveRegion", err)
+		s.recordError("RegionLiveness", err)
 		return
 	}
 	s.markHealthy()
+}
+
+// PublishRootEvent publishes one explicit rooted truth event to PD.
+func (s *SchedulerClient) PublishRootEvent(ctx context.Context, event rootevent.Event) error {
+	if s == nil || event.Kind == rootevent.KindUnknown || s.pd == nil {
+		return nil
+	}
+	expected, normalized, err := prepareRootEventRequest(event)
+	if err != nil {
+		s.recordError("PublishRootEvent", err)
+		return err
+	}
+	ctx, cancel := contextWithTimeout(ctx, s.timeout)
+	defer cancel()
+	_, err = s.pd.PublishRootEvent(ctx, &pdpb.PublishRootEventRequest{
+		Event:                metacodec.RootEventToProto(normalized),
+		ExpectedClusterEpoch: expected,
+	})
+	if err != nil {
+		s.recordError("PublishRootEvent", err)
+		return err
+	}
+	s.markHealthy()
+	return nil
 }
 
 // StoreHeartbeat publishes store stats to PD and returns any operations PD
@@ -88,7 +102,7 @@ func (s *SchedulerClient) StoreHeartbeat(ctx context.Context, stats storepkg.Sto
 	}
 	ctx, cancel := contextWithTimeout(ctx, s.timeout)
 	defer cancel()
-	resp, err := s.pd.StoreHeartbeat(ctx, &pb.StoreHeartbeatRequest{
+	resp, err := s.pd.StoreHeartbeat(ctx, &pdpb.StoreHeartbeatRequest{
 		StoreId:   stats.StoreID,
 		RegionNum: stats.RegionNum,
 		LeaderNum: stats.LeaderNum,
@@ -113,7 +127,7 @@ func (s *SchedulerClient) Status() storepkg.SchedulerStatus {
 	return s.status
 }
 
-func fromPBOperations(ops []*pb.SchedulerOperation) []storepkg.Operation {
+func fromPBOperations(ops []*pdpb.SchedulerOperation) []storepkg.Operation {
 	if len(ops) == 0 {
 		return nil
 	}
@@ -129,12 +143,12 @@ func fromPBOperations(ops []*pb.SchedulerOperation) []storepkg.Operation {
 	return converted
 }
 
-func fromPBOperation(op *pb.SchedulerOperation) (storepkg.Operation, bool) {
+func fromPBOperation(op *pdpb.SchedulerOperation) (storepkg.Operation, bool) {
 	if op == nil {
 		return storepkg.Operation{}, false
 	}
 	switch op.GetType() {
-	case pb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER:
+	case pdpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER:
 		if op.GetRegionId() == 0 || op.GetSourcePeerId() == 0 || op.GetTargetPeerId() == 0 {
 			return storepkg.Operation{}, false
 		}
@@ -192,23 +206,52 @@ func contextWithTimeout(parent context.Context, timeout time.Duration) (context.
 	return context.WithCancel(parent)
 }
 
-func toPBRegionMeta(meta raftmeta.RegionMeta) *pb.RegionMeta {
-	out := &pb.RegionMeta{
-		Id:               meta.ID,
-		StartKey:         append([]byte(nil), meta.StartKey...),
-		EndKey:           append([]byte(nil), meta.EndKey...),
-		EpochVersion:     meta.Epoch.Version,
-		EpochConfVersion: meta.Epoch.ConfVersion,
+func prepareRootEventRequest(event rootevent.Event) (uint64, rootevent.Event, error) {
+	out := rootevent.CloneEvent(event)
+	var expected uint64
+	collect := func(epoch uint64) error {
+		if epoch == 0 {
+			return nil
+		}
+		if expected == 0 {
+			expected = epoch
+			return nil
+		}
+		if expected != epoch {
+			return fmt.Errorf("pd adapter: conflicting root epochs in one root event (%d vs %d)", expected, epoch)
+		}
+		return nil
 	}
-	if len(meta.Peers) == 0 {
-		return out
+	zero := func(desc descriptor.Descriptor) descriptor.Descriptor {
+		desc = desc.Clone()
+		desc.RootEpoch = 0
+		return desc
 	}
-	out.Peers = make([]*pb.RegionPeer, 0, len(meta.Peers))
-	for _, p := range meta.Peers {
-		out.Peers = append(out.Peers, &pb.RegionPeer{
-			StoreId: p.StoreID,
-			PeerId:  p.PeerID,
-		})
+	switch {
+	case out.RegionDescriptor != nil:
+		if err := collect(out.RegionDescriptor.Descriptor.RootEpoch); err != nil {
+			return 0, rootevent.Event{}, err
+		}
+		out.RegionDescriptor.Descriptor = zero(out.RegionDescriptor.Descriptor)
+	case out.RangeSplit != nil:
+		if err := collect(out.RangeSplit.Left.RootEpoch); err != nil {
+			return 0, rootevent.Event{}, err
+		}
+		if err := collect(out.RangeSplit.Right.RootEpoch); err != nil {
+			return 0, rootevent.Event{}, err
+		}
+		out.RangeSplit.Left = zero(out.RangeSplit.Left)
+		out.RangeSplit.Right = zero(out.RangeSplit.Right)
+	case out.RangeMerge != nil:
+		if err := collect(out.RangeMerge.Merged.RootEpoch); err != nil {
+			return 0, rootevent.Event{}, err
+		}
+		out.RangeMerge.Merged = zero(out.RangeMerge.Merged)
+	case out.PeerChange != nil:
+		if err := collect(out.PeerChange.Region.RootEpoch); err != nil {
+			return 0, rootevent.Event{}, err
+		}
+		out.PeerChange.Region = zero(out.PeerChange.Region)
 	}
-	return out
+	return expected, out, nil
 }

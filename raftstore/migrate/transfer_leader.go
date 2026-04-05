@@ -3,9 +3,9 @@ package migrate
 import (
 	"context"
 	"fmt"
+	adminpb "github.com/feichai0017/NoKV/pb/admin"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"time"
-
-	"github.com/feichai0017/NoKV/pb"
 )
 
 // TransferLeaderConfig defines one leader-transfer request.
@@ -23,19 +23,19 @@ type TransferLeaderConfig struct {
 
 // TransferLeaderResult reports the observed state after one leader transfer.
 type TransferLeaderResult struct {
-	Addr            string         `json:"addr"`
-	TargetAdminAddr string         `json:"target_admin_addr,omitempty"`
-	RegionID        uint64         `json:"region_id"`
-	PeerID          uint64         `json:"peer_id"`
-	LeaderKnown     bool           `json:"leader_known"`
-	LeaderRegion    *pb.RegionMeta `json:"leader_region,omitempty"`
-	LeaderPeerID    uint64         `json:"leader_peer_id,omitempty"`
-	TargetKnown     bool           `json:"target_known"`
-	TargetHosted    bool           `json:"target_hosted"`
-	TargetLeader    bool           `json:"target_leader"`
-	TargetLocalID   uint64         `json:"target_local_peer_id,omitempty"`
-	TargetApplied   uint64         `json:"target_applied_index,omitempty"`
-	Waited          bool           `json:"waited"`
+	Addr            string                   `json:"addr"`
+	TargetAdminAddr string                   `json:"target_admin_addr,omitempty"`
+	RegionID        uint64                   `json:"region_id"`
+	PeerID          uint64                   `json:"peer_id"`
+	LeaderKnown     bool                     `json:"leader_known"`
+	LeaderRegion    *metapb.RegionDescriptor `json:"leader_region,omitempty"`
+	LeaderPeerID    uint64                   `json:"leader_peer_id,omitempty"`
+	TargetKnown     bool                     `json:"target_known"`
+	TargetHosted    bool                     `json:"target_hosted"`
+	TargetLeader    bool                     `json:"target_leader"`
+	TargetLocalID   uint64                   `json:"target_local_peer_id,omitempty"`
+	TargetApplied   uint64                   `json:"target_applied_index,omitempty"`
+	Waited          bool                     `json:"waited"`
 }
 
 // TransferLeader requests leadership transfer and optionally waits until the
@@ -64,7 +64,7 @@ func TransferLeader(ctx context.Context, cfg TransferLeaderConfig) (TransferLead
 		}
 	}()
 
-	resp, err := leaderClient.TransferLeader(ctx, &pb.TransferLeaderRequest{RegionId: cfg.RegionID, PeerId: cfg.PeerID})
+	resp, err := leaderClient.TransferLeader(ctx, &adminpb.TransferLeaderRequest{RegionId: cfg.RegionID, PeerId: cfg.PeerID})
 	if err != nil {
 		return TransferLeaderResult{}, err
 	}
@@ -142,7 +142,7 @@ func waitForLeaderTransfer(ctx context.Context, client AdminClient, regionID, pe
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		status, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: regionID})
+		status, err := client.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: regionID})
 		if err != nil {
 			return fmt.Errorf("migrate: poll leader region status after transfer: %w", err)
 		}
@@ -166,7 +166,7 @@ func waitForTargetLeader(ctx context.Context, client AdminClient, regionID, peer
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		status, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: regionID})
+		status, err := client.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: regionID})
 		if err != nil {
 			return fmt.Errorf("migrate: poll target region status after transfer: %w", err)
 		}

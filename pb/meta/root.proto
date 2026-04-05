@@ -1,0 +1,141 @@
+// Use scripts/gen.sh to generate .pb.go files.
+syntax = "proto3";
+
+package nokv.meta.v1;
+
+import "meta/descriptor.proto";
+
+option go_package = "github.com/feichai0017/NoKV/pb/meta;metapb";
+
+enum RootEventKind {
+  ROOT_EVENT_KIND_UNSPECIFIED = 0;
+  ROOT_EVENT_KIND_STORE_JOINED = 1;
+  ROOT_EVENT_KIND_STORE_LEFT = 2;
+  ROOT_EVENT_KIND_ID_ALLOCATOR_FENCED = 3;
+  ROOT_EVENT_KIND_REGION_BOOTSTRAP = 4;
+  ROOT_EVENT_KIND_REGION_DESCRIPTOR_PUBLISHED = 5;
+  ROOT_EVENT_KIND_REGION_TOMBSTONED = 6;
+  ROOT_EVENT_KIND_TSO_ALLOCATOR_FENCED = 7;
+  ROOT_EVENT_KIND_REGION_SPLIT_PLANNED = 8;
+  ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED = 9;
+  ROOT_EVENT_KIND_REGION_SPLIT_CANCELLED = 16;
+  ROOT_EVENT_KIND_REGION_MERGE_PLANNED = 10;
+  ROOT_EVENT_KIND_REGION_MERGED = 11;
+  ROOT_EVENT_KIND_REGION_MERGE_CANCELLED = 17;
+  ROOT_EVENT_KIND_PEER_ADDITION_PLANNED = 12;
+  ROOT_EVENT_KIND_PEER_REMOVAL_PLANNED = 13;
+  ROOT_EVENT_KIND_PEER_ADDED = 14;
+  ROOT_EVENT_KIND_PEER_REMOVED = 15;
+  ROOT_EVENT_KIND_PEER_ADDITION_CANCELLED = 18;
+  ROOT_EVENT_KIND_PEER_REMOVAL_CANCELLED = 19;
+}
+
+message RootCursor {
+  uint64 term = 1;
+  uint64 index = 2;
+}
+
+message RootState {
+  uint64 cluster_epoch = 1;
+  uint64 membership_epoch = 2;
+  RootCursor last_committed = 4;
+  uint64 id_fence = 5;
+  uint64 tso_fence = 6;
+}
+
+message RootCheckpoint {
+  RootState state = 1;
+  repeated nokv.meta.v1.RegionDescriptor descriptors = 2;
+  uint64 tail_offset = 3;
+  repeated RootPendingPeerChange pending_peer_changes = 4;
+  repeated RootPendingRangeChange pending_range_changes = 5;
+}
+
+message RootStoreMembership {
+  uint64 store_id = 1;
+  string address = 2;
+}
+
+message RootAllocatorFence {
+  uint64 minimum = 1;
+}
+
+message RootRegionDescriptor {
+  nokv.meta.v1.RegionDescriptor descriptor = 1;
+}
+
+message RootRegionRemoval {
+  uint64 region_id = 1;
+}
+
+message RootRangeSplit {
+  uint64 parent_region_id = 1;
+  bytes split_key = 2;
+  nokv.meta.v1.RegionDescriptor left = 3;
+  nokv.meta.v1.RegionDescriptor right = 4;
+  nokv.meta.v1.RegionDescriptor base_parent = 5;
+}
+
+message RootRangeMerge {
+  uint64 left_region_id = 1;
+  uint64 right_region_id = 2;
+  nokv.meta.v1.RegionDescriptor merged = 3;
+  nokv.meta.v1.RegionDescriptor base_left = 4;
+  nokv.meta.v1.RegionDescriptor base_right = 5;
+}
+
+message RootPeerChange {
+  uint64 region_id = 1;
+  uint64 store_id = 2;
+  uint64 peer_id = 3;
+  nokv.meta.v1.RegionDescriptor target = 4;
+  nokv.meta.v1.RegionDescriptor base = 5;
+}
+
+enum RootPendingPeerChangeKind {
+  ROOT_PENDING_PEER_CHANGE_KIND_UNSPECIFIED = 0;
+  ROOT_PENDING_PEER_CHANGE_KIND_ADDITION = 1;
+  ROOT_PENDING_PEER_CHANGE_KIND_REMOVAL = 2;
+}
+
+message RootPendingPeerChange {
+  uint64 region_id = 1;
+  uint64 store_id = 2;
+  uint64 peer_id = 3;
+  RootPendingPeerChangeKind kind = 4;
+  nokv.meta.v1.RegionDescriptor target = 5;
+  nokv.meta.v1.RegionDescriptor base = 6;
+}
+
+enum RootPendingRangeChangeKind {
+  ROOT_PENDING_RANGE_CHANGE_KIND_UNSPECIFIED = 0;
+  ROOT_PENDING_RANGE_CHANGE_KIND_SPLIT = 1;
+  ROOT_PENDING_RANGE_CHANGE_KIND_MERGE = 2;
+}
+
+message RootPendingRangeChange {
+  uint64 region_id = 1;
+  RootPendingRangeChangeKind kind = 2;
+  uint64 parent_region_id = 3;
+  uint64 left_region_id = 4;
+  uint64 right_region_id = 5;
+  nokv.meta.v1.RegionDescriptor left = 6;
+  nokv.meta.v1.RegionDescriptor right = 7;
+  nokv.meta.v1.RegionDescriptor merged = 8;
+  nokv.meta.v1.RegionDescriptor base_parent = 9;
+  nokv.meta.v1.RegionDescriptor base_left = 10;
+  nokv.meta.v1.RegionDescriptor base_right = 11;
+}
+
+message RootEvent {
+  RootEventKind kind = 1;
+  oneof payload {
+    RootStoreMembership store_membership = 2;
+    RootAllocatorFence allocator_fence = 3;
+    RootRegionDescriptor region_descriptor = 4;
+    RootRegionRemoval region_removal = 5;
+    RootRangeSplit range_split = 6;
+    RootRangeMerge range_merge = 7;
+    RootPeerChange peer_change = 8;
+  }
+}

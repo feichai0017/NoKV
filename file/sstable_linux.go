@@ -3,6 +3,7 @@
 package file
 
 import (
+	storagepb "github.com/feichai0017/NoKV/pb/storage"
 	"io"
 	"os"
 	"sync"
@@ -10,7 +11,6 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
 	"google.golang.org/protobuf/proto"
@@ -22,7 +22,7 @@ type SSTable struct {
 	f              *MmapFile
 	maxKey         []byte
 	minKey         []byte
-	idxTables      *pb.TableIndex
+	idxTables      *storagepb.TableIndex
 	hasBloomFilter bool
 	idxLen         int
 	idxStart       int
@@ -43,7 +43,7 @@ func OpenSStable(opt *Options) *SSTable {
 
 // Init initialize
 func (ss *SSTable) Init() error {
-	var ko *pb.BlockOffset
+	var ko *storagepb.BlockOffset
 	var err error
 	if ko, err = ss.initTable(); err != nil {
 		return err
@@ -71,7 +71,7 @@ func (ss *SSTable) Init() error {
 func (ss *SSTable) SetMaxKey(maxKey []byte) {
 	ss.maxKey = maxKey
 }
-func (ss *SSTable) initTable() (bo *pb.BlockOffset, err error) {
+func (ss *SSTable) initTable() (bo *storagepb.BlockOffset, err error) {
 	readPos := int(ss.Size())
 
 	// Read checksum len from the last 4 bytes.
@@ -98,7 +98,7 @@ func (ss *SSTable) initTable() (bo *pb.BlockOffset, err error) {
 	if err := utils.VerifyChecksum(data, expectedChk); err != nil {
 		return nil, errors.Wrapf(err, "failed to verify checksum for table: %s", ss.f.File.Name())
 	}
-	indexTable := &pb.TableIndex{}
+	indexTable := &storagepb.TableIndex{}
 	if err := proto.Unmarshal(data, indexTable); err != nil {
 		return nil, err
 	}
@@ -117,7 +117,7 @@ func (ss *SSTable) Close() error {
 }
 
 // Indexs _
-func (ss *SSTable) Indexs() *pb.TableIndex {
+func (ss *SSTable) Indexs() *storagepb.TableIndex {
 	return ss.idxTables
 }
 

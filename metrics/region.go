@@ -1,7 +1,8 @@
 package metrics
 
 import (
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"sync"
 )
 
@@ -9,8 +10,8 @@ import (
 type RegionMetrics struct {
 	mu        sync.Mutex
 	total     uint64
-	stateByID map[uint64]raftmeta.RegionState
-	counts    map[raftmeta.RegionState]uint64
+	stateByID map[uint64]metaregion.ReplicaState
+	counts    map[metaregion.ReplicaState]uint64
 }
 
 // RegionMetricsSnapshot captures point-in-time counts per region state.
@@ -26,8 +27,8 @@ type RegionMetricsSnapshot struct {
 // NewRegionMetrics creates an empty recorder.
 func NewRegionMetrics() *RegionMetrics {
 	return &RegionMetrics{
-		stateByID: make(map[uint64]raftmeta.RegionState),
-		counts:    make(map[raftmeta.RegionState]uint64),
+		stateByID: make(map[uint64]metaregion.ReplicaState),
+		counts:    make(map[metaregion.ReplicaState]uint64),
 	}
 }
 
@@ -42,13 +43,13 @@ func (rm *RegionMetrics) Snapshot() RegionMetricsSnapshot {
 	snap := RegionMetricsSnapshot{Total: rm.total}
 	for state, count := range rm.counts {
 		switch state {
-		case raftmeta.RegionStateNew:
+		case metaregion.ReplicaStateNew:
 			snap.New = count
-		case raftmeta.RegionStateRunning:
+		case metaregion.ReplicaStateRunning:
 			snap.Running = count
-		case raftmeta.RegionStateRemoving:
+		case metaregion.ReplicaStateRemoving:
 			snap.Removing = count
-		case raftmeta.RegionStateTombstone:
+		case metaregion.ReplicaStateTombstone:
 			snap.Tombstone = count
 		default:
 			snap.Other += count
@@ -58,7 +59,7 @@ func (rm *RegionMetrics) Snapshot() RegionMetricsSnapshot {
 }
 
 // RecordUpdate updates the metrics snapshot for a region metadata change.
-func (rm *RegionMetrics) RecordUpdate(meta raftmeta.RegionMeta) {
+func (rm *RegionMetrics) RecordUpdate(meta localmeta.RegionMeta) {
 	if rm == nil || meta.ID == 0 {
 		return
 	}
@@ -95,11 +96,11 @@ func (rm *RegionMetrics) RecordRemove(regionID uint64) {
 	}
 }
 
-func (rm *RegionMetrics) increment(state raftmeta.RegionState) {
+func (rm *RegionMetrics) increment(state metaregion.ReplicaState) {
 	rm.counts[state] = rm.counts[state] + 1
 }
 
-func (rm *RegionMetrics) decrement(state raftmeta.RegionState) {
+func (rm *RegionMetrics) decrement(state metaregion.ReplicaState) {
 	if curr, ok := rm.counts[state]; ok {
 		if curr <= 1 {
 			delete(rm.counts, state)

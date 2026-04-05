@@ -5,15 +5,15 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"sync"
 	"sync/atomic"
 
-	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/utils"
 	raftpb "go.etcd.io/raft/v3/raftpb"
@@ -25,15 +25,15 @@ import (
 type ApplyFunc func(entries []myraft.Entry) error
 
 // AdminApplyFunc consumes admin commands (split, merge, etc.).
-type AdminApplyFunc func(cmd *pb.AdminCommand) error
+type AdminApplyFunc func(cmd *raftcmdpb.AdminCommand) error
 
 // SnapshotExportFunc materializes region state for one outgoing raft snapshot
 // message as an opaque payload.
-type SnapshotExportFunc func(region raftmeta.RegionMeta) ([]byte, error)
+type SnapshotExportFunc func(region localmeta.RegionMeta) ([]byte, error)
 
 // SnapshotApplyFunc imports region state from one incoming raft snapshot
 // payload and returns the region metadata carried by that payload.
-type SnapshotApplyFunc func(payload []byte) (raftmeta.RegionMeta, error)
+type SnapshotApplyFunc func(payload []byte) (localmeta.RegionMeta, error)
 
 // Peer wraps a RawNode with simple storage and apply plumbing.
 type Peer struct {
@@ -56,7 +56,7 @@ type Peer struct {
 	applyLimit                uint64
 	stopCtx                   context.Context
 	stopCancel                context.CancelFunc
-	region                    *raftmeta.RegionMeta
+	region                    *localmeta.RegionMeta
 	readSeq                   atomic.Uint64
 	readMu                    sync.Mutex
 	pendingReads              map[string]chan uint64
@@ -73,11 +73,11 @@ func isAdminEntry(data []byte) bool {
 	return len(data) > 0 && data[0] == adminCommandPrefix
 }
 
-func decodeAdminCommand(data []byte) (*pb.AdminCommand, error) {
+func decodeAdminCommand(data []byte) (*raftcmdpb.AdminCommand, error) {
 	if len(data) <= 1 {
 		return nil, fmt.Errorf("raftstore: admin command payload too short")
 	}
-	var cmd pb.AdminCommand
+	var cmd raftcmdpb.AdminCommand
 	if err := proto.Unmarshal(data[1:], &cmd); err != nil {
 		return nil, err
 	}
@@ -126,7 +126,7 @@ func NewPeer(cfg *Config) (*Peer, error) {
 		applyCloser:               utils.NewCloserInitial(1),
 		stopCtx:                   stopCtx,
 		stopCancel:                stopCancel,
-		region:                    raftmeta.CloneRegionMetaPtr(cfg.Region),
+		region:                    localmeta.CloneRegionMetaPtr(cfg.Region),
 		pendingReads:              make(map[string]chan uint64),
 		allowSnapshotInstallRetry: cfg.AllowSnapshotInstallRetry,
 	}
@@ -151,22 +151,22 @@ func (p *Peer) ID() uint64 {
 // RegionMeta returns a clone of the region metadata associated with this
 // peer. It mirrors TinyKV's approach of surfacing region layout through the
 // store for schedulers and debugging endpoints.
-func (p *Peer) RegionMeta() *raftmeta.RegionMeta {
+func (p *Peer) RegionMeta() *localmeta.RegionMeta {
 	if p == nil || p.region == nil {
 		return nil
 	}
-	return raftmeta.CloneRegionMetaPtr(p.region)
+	return localmeta.CloneRegionMetaPtr(p.region)
 }
 
 // ApplyRegionMetaMirror replaces the peer's in-memory region metadata mirror.
 // It exists only so raftstore can synchronize peer-local snapshots after
 // apply/bootstrap has already advanced the store-local region truth. It must
 // not be treated as a consensus state mutation entrypoint.
-func (p *Peer) ApplyRegionMetaMirror(meta raftmeta.RegionMeta) {
+func (p *Peer) ApplyRegionMetaMirror(meta localmeta.RegionMeta) {
 	if p == nil {
 		return
 	}
-	cp := raftmeta.CloneRegionMetaPtr(&meta)
+	cp := localmeta.CloneRegionMetaPtr(&meta)
 	p.mu.Lock()
 	p.region = cp
 	p.mu.Unlock()
@@ -242,7 +242,7 @@ func (p *Peer) Propose(data []byte) error {
 
 // ProposeCommand encodes the provided raft command request and submits it to
 // the raft log.
-func (p *Peer) ProposeCommand(req *pb.RaftCmdRequest) error {
+func (p *Peer) ProposeCommand(req *raftcmdpb.RaftCmdRequest) error {
 	payload, err := command.Encode(req)
 	if err != nil {
 		return err
@@ -250,7 +250,7 @@ func (p *Peer) ProposeCommand(req *pb.RaftCmdRequest) error {
 	return p.Propose(payload)
 }
 
-// ProposeAdmin submits an admin command encoded as pb.AdminCommand payload.
+// ProposeAdmin submits an admin command encoded as raftcmdpb.AdminCommand payload.
 func (p *Peer) ProposeAdmin(cmdData []byte) error {
 	if len(cmdData) == 0 {
 		return fmt.Errorf("raftstore: empty admin command")
@@ -415,7 +415,7 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 			return err
 		}
 		if info := p.raftLog; info != nil {
-			info.capturePointer(raftmeta.RaftLogPointer{
+			info.capturePointer(localmeta.RaftLogPointer{
 				GroupID:      info.groupID,
 				AppliedIndex: rd.Commit,
 				AppliedTerm:  rd.Term,
@@ -441,7 +441,7 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 		}
 		if info := p.raftLog; info != nil {
 			meta := rd.Snapshot.Metadata
-			info.capturePointer(raftmeta.RaftLogPointer{
+			info.capturePointer(localmeta.RaftLogPointer{
 				GroupID:       info.groupID,
 				SnapshotIndex: meta.Index,
 				SnapshotTerm:  meta.Term,
@@ -460,7 +460,7 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 		}
 		if info := p.raftLog; info != nil {
 			last := rd.Entries[len(rd.Entries)-1]
-			info.capturePointer(raftmeta.RaftLogPointer{
+			info.capturePointer(localmeta.RaftLogPointer{
 				GroupID:      info.groupID,
 				AppliedIndex: last.Index,
 				AppliedTerm:  last.Term,
@@ -615,7 +615,7 @@ func (p *Peer) maybeCompact(applied uint64) error {
 	return ws.MaybeCompact(applied, p.logRetainEntries)
 }
 
-func (p *Peer) applyAdminCommand(cmd *pb.AdminCommand) error {
+func (p *Peer) applyAdminCommand(cmd *raftcmdpb.AdminCommand) error {
 	if p == nil || cmd == nil {
 		return nil
 	}

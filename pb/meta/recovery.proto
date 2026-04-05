@@ -1,0 +1,50 @@
+// Use scripts/gen.sh to generate .pb.go files.
+syntax = "proto3";
+
+package nokv.meta.v1;
+
+import "meta/descriptor.proto";
+import "meta/region.proto";
+
+option go_package = "github.com/feichai0017/NoKV/pb/meta;metapb";
+
+message ReplicaLocalState {
+  uint64 region_id = 1;
+  uint64 local_peer_id = 2;
+  nokv.meta.v1.RegionReplicaState state = 3;
+  RegionDescriptor descriptor = 4;
+  uint64 last_applied = 5;
+  uint64 last_term = 6;
+}
+
+message LocalRegionMeta {
+  uint64 region_id = 1;
+  bytes start_key = 2;
+  bytes end_key = 3;
+  nokv.meta.v1.RegionEpoch epoch = 4;
+  repeated nokv.meta.v1.RegionPeer peers = 5;
+  nokv.meta.v1.RegionReplicaState state = 6;
+}
+
+message ReplicaLocalCatalog {
+  repeated LocalRegionMeta regions = 1;
+}
+
+message RaftProgress {
+  uint64 group_id = 1;
+  uint32 segment = 2;
+  uint64 offset = 3;
+  uint64 applied_index = 4;
+  uint64 applied_term = 5;
+  uint64 committed = 6;
+  uint64 snapshot_index = 7;
+  uint64 snapshot_term = 8;
+  uint64 truncated_index = 9;
+  uint64 truncated_term = 10;
+  uint64 segment_index = 11;
+  uint64 truncated_offset = 12;
+}
+
+message RaftProgressCatalog {
+  repeated RaftProgress entries = 1;
+}

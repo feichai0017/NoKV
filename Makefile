@@ -2,7 +2,7 @@
 # Provides standardized commands for development workflow
 
 .PHONY: help build test test-short test-race test-coverage lint fmt clean docker-up docker-down bench install-tools
-.PHONY: proto proto-check
+.PHONY: proto proto-check proto-breaking-check
 
 GOLANGCI_LINT_VERSION ?= v2.9.0
 BUF_VERSION ?= 1.66.0
@@ -20,7 +20,8 @@ help:
 	@echo "  make lint               - Run golangci-lint (requires installation)"
 	@echo "  make fmt                - Run go fix, format code with gofmt, and tidy modules"
 	@echo "  make proto              - Format .proto files and regenerate protobuf Go code"
-	@echo "  make proto-check        - Verify proto format, lint, breaking checks, and generated code"
+	@echo "  make proto-check        - Verify proto format, lint, and generated code"
+	@echo "  make proto-breaking-check - Run Buf breaking checks against main"
 	@echo "  make bench              - Run benchmarks"
 	@echo "  make install-tools      - Install development tools"
 	@echo "  make docker-up          - Start Docker Compose cluster"
@@ -84,21 +85,25 @@ proto:
 	@echo "✓ Protobufs formatted and generated"
 
 proto-check:
-	@echo "Checking proto format, lint, breaking changes, and generated code..."
+	@echo "Checking proto format, lint, and generated code..."
 	buf format -d --exit-code
 	buf lint
+	@set -e; \
+	before="$$(find pb -type f \( -name '*.pb.go' -o -name '*_grpc.pb.go' \) | sort | xargs sha256sum)"; \
+	./scripts/gen.sh; \
+	after="$$(find pb -type f \( -name '*.pb.go' -o -name '*_grpc.pb.go' \) | sort | xargs sha256sum)"; \
+	test "$$before" = "$$after"
+	@echo "✓ Proto checks passed"
+
+proto-breaking-check:
+	@echo "Checking proto breaking changes against main..."
 	@set -e; \
 	base_ref="refs/remotes/origin/main"; \
 	if ! git show-ref --verify --quiet "$$base_ref"; then \
 		base_ref="refs/heads/main"; \
 	fi; \
 	buf breaking --against ".git#ref=$$base_ref,subdir=pb"
-	@set -e; \
-	before="$$(sha256sum pb/*.pb.go pb/*_grpc.pb.go)"; \
-	./scripts/gen.sh; \
-	after="$$(sha256sum pb/*.pb.go pb/*_grpc.pb.go)"; \
-	test "$$before" = "$$after"
-	@echo "✓ Proto checks passed"
+	@echo "✓ Proto breaking checks passed"
 
 # Run benchmarks
 bench:

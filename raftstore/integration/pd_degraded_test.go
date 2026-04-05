@@ -2,10 +2,10 @@ package integration
 
 import (
 	"context"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"testing"
 	"time"
 
-	"github.com/feichai0017/NoKV/pb"
 	pdclient "github.com/feichai0017/NoKV/pd/client"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
@@ -123,7 +123,7 @@ func TestClusterSurvivesPDUnavailableAfterStartup(t *testing.T) {
 
 type unavailableResolver struct{}
 
-func (u *unavailableResolver) GetRegionByKey(ctx context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
+func (u *unavailableResolver) GetRegionByKey(ctx context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
 	return nil, context.DeadlineExceeded
 }
 

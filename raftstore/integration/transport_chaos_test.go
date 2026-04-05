@@ -2,10 +2,10 @@ package integration
 
 import (
 	"context"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"testing"
 	"time"
 
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
@@ -15,7 +15,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-func regionHasPeer(meta *pb.RegionMeta, peerID uint64) bool {
+func regionHasPeer(meta *metapb.RegionDescriptor, peerID uint64) bool {
 	if meta == nil {
 		return false
 	}
@@ -69,7 +69,7 @@ func TestPartitionedFollowerCatchesUpAfterRecovery(t *testing.T) {
 			{StoreID: 2, Addr: target2.Addr()},
 			{StoreID: 3, Addr: target3.Addr()},
 		},
-		RegionResolver: &staticResolver{regions: []*pb.RegionMeta{leaderStatus.GetRegion()}},
+		RegionResolver: &staticResolver{regions: []*metapb.RegionDescriptor{leaderStatus.GetRegion()}},
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 	})
 	require.NoError(t, err)
