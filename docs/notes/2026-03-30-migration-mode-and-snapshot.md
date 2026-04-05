@@ -1,110 +1,211 @@
-# 2026-03-30 迁移设计里最关键的不是命令，而是 mode 和 snapshot
+# 2026-03-30 迁移设计里最关键的不是命令，而是 mode 和 snapshot 语义
 
-这篇记录 migration 主线真正值钱的地方。表面上看，我们只是补了 `plan`、`init`、`expand` 这些命令；但真正让迁移成立的不是命令名，而是背后的状态协议。
+> 状态：当前 migration 主线已经形成。本文关注的是背后的状态协议，而不是 CLI 表面。
 
----
+## 导读
 
-## 背景
+- 🧭 主题：迁移为什么首先是目录生命周期协议，而不是一组运维命令。
+- 🧱 核心对象：`mode`、raft durable snapshot、logical region snapshot。
+- 🔁 调用链：`standalone -> preparing -> seeded -> serve/expand -> cluster`。
+- 📚 参考对象：分布式数据库里的 lifecycle gate、逻辑快照与协议快照分层。
 
-NoKV 当前 migration 主线已经形成：
+## 1. 为什么这件事重要
 
-- `plan`
-- `init`
-- `serve`
-- `expand`
-- `remove-peer`
-- `transfer-leader`
+在分布式系统里，迁移经常被误解成一组“方便运维的命令”。
 
-但如果只从 CLI 角度理解这套功能，很容易误判成“就是几条方便的运维命令”。
+但真正决定迁移是否成立的，不是命令数量，而是两个更深的东西：
 
-## 问题
+1. workdir 当前到底处于什么生命周期状态
+2. snapshot 到底代表什么语义层次
 
-分布式迁移最容易犯的两个错误是：
+如果这两个问题没有被严格定义，最后通常会出现：
 
-1. **把迁移做成脚本串联**
-2. **把 snapshot 当成一个模糊的大概念**
+- 目录状态模糊
+- 半迁移目录仍然能被错误打开
+- snapshot 混杂 raft metadata 和应用状态
+- 扩副本和恢复只能靠脚本和运气
 
-结果通常是：
+## 2. 当前相关实现
 
-- 目录状态不清楚
-- 半迁移目录还能被普通 DB 打开
-- 应用状态和 raft metadata 混在一起
-- 增副本靠碰运气，不靠协议
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/mode`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/engine/snapshot.go`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot`
 
-## 分析
+当前主线可以概括成：
 
-当前 migration 真正成立，依赖两条主线：
+```mermaid
+flowchart TD
+    A["standalone workdir"] --> B["mode: preparing"]
+    B --> C["migrate init\n写 seed region 语义"]
+    C --> D["mode: seeded"]
+    D --> E["serve / expand"]
+    E --> F["mode: cluster"]
+```
 
-### 1. workdir mode gate
+## 3. `mode` 为什么是协议，不是状态枚举
 
-`raftstore/mode` 现在有：
+### 当前 mode
 
 - `standalone`
 - `preparing`
 - `seeded`
 - `cluster`
 
-这不是 migration 私有状态，而是 workdir 运行形态协议。
+### 为什么它重要
 
-最关键的一步是：
+这不是给 CLI 提示用的标签，而是 workdir lifecycle contract。
 
-> `DB.Open()` 不再无条件认为目录永远是 standalone。
+只要一个目录进入了 `preparing/seeded/cluster`，系统就必须明确知道：
 
-也就是说，一旦 workdir 进入 `preparing/seeded/cluster`，普通单机路径就不能继续把它当成简单本地 DB 来写。
+- 它不再是普通 standalone DB
+- 某些打开路径必须拒绝
+- 某些恢复逻辑必须切到 region/peer 语义
 
-### 2. snapshot 分层
+也就是说：
 
-NoKV 当前明确分成两种 snapshot：
+> `mode` 是对目录身份的正式判定。
 
-- `raftstore/engine/snapshot.go`
-  - raft durable metadata snapshot
-- `raftstore/snapshot/snapshot.go`
-  - logical region state snapshot
+没有这一层，迁移过程就只能靠“别乱用目录”这种口头约定。
 
-这条分层非常关键。
+## 4. snapshot 为什么必须分层
 
-因为 migration 需要的不只是：
+相关代码：
+
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/engine/snapshot.go`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot`
+
+当前最重要的分层是：
+
+### 4.1 raft durable metadata snapshot
+
+表达的是：
 
 - index
 - term
 - conf state
+- durable protocol metadata
 
-它还需要：
+### 4.2 logical region snapshot
 
-- 某个 region key range 内的真实状态机内容
+表达的是：
 
-## 根因
+- 某个 key range 内真正的逻辑状态
+- region-scoped state
+- 后续 bootstrap/install 所需的数据语义
 
-standalone 到 distributed 的桥接之所以难，不是因为“缺一个命令”，而是因为：
+### 为什么这条分层必须存在
 
-> 系统缺少一种能把已有 workdir 正式提升成 region state 的语义。
+因为迁移要解决的问题不是“恢复一个 raft group”，而是：
 
-如果没有 mode gate，迁移中的 workdir 仍然可能被错误使用。  
-如果没有逻辑 region snapshot，`expand` 和 seed bootstrap 就只能建立在不干净的目录复制或隐式状态假设上。
+- 把一个原本没有分布式身份的 workdir
+- 提升成一个有 region/peer 语义的状态片段
+- 然后让它能进入 cluster 生命周期
 
-## 方案
+如果 snapshot 不分层，迁移就会变成：
 
-当前 NoKV 的迁移协议是成立的，因为它做了三件对的事情：
+- 一部分协议 metadata
+- 一部分逻辑数据
+- 一部分目录复制
+- 一部分脚本约定
 
-1. 用 `mode` 把 workdir 生命周期写死。
-2. 用 logical region snapshot 提供状态提升原语。
-3. 用 `RaftAdmin` + membership orchestration 把 seed 扩成 replicated region。
+最终谁也说不清系统到底在恢复什么。
 
-换句话说，`migrate` 的命令只是入口，真正关键的是：
+## 5. 当前调用逻辑
 
-- 状态边界
-- 快照边界
-- 恢复边界
+### `migrate init`
 
-## 后续
+```mermaid
+sequenceDiagram
+    participant CLI as migrate init
+    participant MODE as mode gate
+    participant SNAP as logical snapshot
+    participant LM as localmeta
 
-1. 下一阶段的提升不应该破坏这条分层  
-   例如未来做 SST-based snapshot install，也应该继续保留：
-   - raft metadata snapshot
-   - region state snapshot
-   这两层语义分离。
-2. `mode` 不要继续塞杂项状态  
-   保持它只是 workdir lifecycle contract。
-3. 迁移文档里可以更明确强调：
-   - CLI 是表层
-   - protocol 才是本体
+    CLI->>MODE: standalone -> preparing
+    CLI->>SNAP: 构造 seed region state
+    CLI->>LM: 写 replicas.binpb / raft-progress.binpb
+    CLI->>MODE: preparing -> seeded
+```
+
+### `serve / expand`
+
+```mermaid
+sequenceDiagram
+    participant CLI as serve/expand
+    participant RS as raftstore
+    participant PD as pd
+    participant MR as meta/root
+
+    CLI->>RS: 启动 seeded workdir
+    RS->>PD: 注册 rooted truth / liveness
+    PD->>MR: append rooted metadata
+    CLI->>RS: expand membership
+    RS->>MR: planned + terminal truth
+```
+
+## 6. 哪些看起来简单但其实是错路
+
+### 6.1 只把迁移做成脚本链
+
+这会让：
+
+- 状态边界不清楚
+- 错误恢复路径不清楚
+- 测试只能测脚本 happy path
+
+### 6.2 把 snapshot 当成一个统称
+
+如果不分 raft durable snapshot 和 logical region snapshot，后面所有关于：
+
+- install
+- migration
+- restore
+- reshard
+
+的设计都会反复纠缠。
+
+### 6.3 让 standalone 打开路径默认接受所有目录
+
+这会直接让迁移中的目录被错误当成普通 DB 继续写，最终破坏状态提升协议。
+
+## 7. 设计理念
+
+这里背后的理念其实很简单：
+
+### 7.1 目录生命周期要写进协议
+
+### 7.2 snapshot 语义要精确，不要模糊
+
+### 7.3 迁移是状态提升，不是工具链拼接
+
+## 8. 参考对象
+
+这条线借鉴的是一类通用工程原则，而不是某个系统的现成模块：
+
+- 分布式数据库里关于生命周期 gate 的做法
+- region/shard 系统里逻辑快照与协议快照分层的经验
+- Delos/FDB 一类系统对“最小 durable 核心 + 可重建 view”的强调
+
+## 9. 当前已经做到的
+
+- mode gate 已经存在
+- localmeta / snapshot / migrate 已经分层
+- migration 已经不是 dump/import 风格
+- 后续可以自然接到 `pd` / `meta/root` 主线
+
+## 10. 后续还值得继续做的
+
+- 更强的 migration observability
+- SST-based snapshot install 与 migration 更深整合
+- 更完整的 operator 编排和故障恢复
+
+## 11. 总结
+
+NoKV 当前 migration 设计真正成立的关键，不是有多少命令，而是：
+
+- workdir mode 被做成了正式协议
+- snapshot 被做成了分层语义
+- standalone 到 distributed 是状态提升，而不是系统切换
+
+这也是为什么后面的 control-plane、snapshot install、operator runtime 都能继续建立在这条主线上，而不是重做一遍。

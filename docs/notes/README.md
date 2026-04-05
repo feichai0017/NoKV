@@ -28,23 +28,28 @@
 <div class="blog-grid">
   <div class="blog-card">
     <span class="blog-date">2026-03-30</span>
-    <h3><a href="2026-03-30-standalone-to-distributed-bridge.html">standalone 到 distributed 的桥接</a></h3>
-    <p>为什么 NoKV 把单机和分布式视为同一套系统，以及为什么迁移必须做成协议而不是 dump/import 工具。</p>
+    <h3><a href="2026-03-30-standalone-to-distributed-bridge.html">从单机到分布式的桥接</a></h3>
+    <p>解释为什么 NoKV 把单机和分布式视为同一套系统，以及为什么迁移必须做成协议而不是 dump/import 工具。</p>
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-03-30</span>
-    <h3><a href="2026-03-30-pd-and-raftadmin-layering.html">PD 与 RaftAdmin 分层</a></h3>
-    <p>为什么 control plane 和 execution plane 必须分开，以及为什么 PD 不能直接写本地 truth。</p>
+    <h3><a href="2026-03-30-pd-and-raftadmin-layering.html">PD 与执行面分层</a></h3>
+    <p>解释为什么 control plane、truth kernel 和 data-plane executor 必须分开，以及为什么 PD 不能直接写本地 truth。</p>
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-03-30</span>
-    <h3><a href="2026-03-30-migration-mode-and-snapshot.html">migration 的 mode 与 snapshot</a></h3>
-    <p>迁移的本体其实是生命周期和快照语义，而不是补几条 CLI 命令。</p>
+    <h3><a href="2026-03-30-migration-mode-and-snapshot.html">迁移里的 mode 与 snapshot 语义</a></h3>
+    <p>说明 migration 的本体其实是目录生命周期协议和 snapshot 分层，而不是补几条 CLI 命令。</p>
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-03-30</span>
     <h3><a href="2026-03-30-distributed-testing-and-failpoints.html">分布式测试与 failpoint</a></h3>
-    <p>为什么 NoKV 同时使用 live integration 与窄边界 failpoint，以及 failpoint 应该如何克制。</p>
+    <p>解释为什么 NoKV 同时使用 live integration、testcluster 和窄边界 failpoint，以及 failpoint 应该如何克制。</p>
+  </div>
+  <div class="blog-card">
+    <span class="blog-date">2026-03-31</span>
+    <h3><a href="2026-03-31-sst-snapshot-install.html">基于 SST 的 Snapshot Install</a></h3>
+    <p>说明 NoKV 为什么选择 region-scoped、self-contained、与源端 vlog 独立的 SST snapshot install 方案。</p>
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-04-03</span>
@@ -67,13 +72,27 @@
 1. 从具体问题或设计问题开始
 2. 先把系统边界讲清楚
 3. 讲清 tradeoff 和被否决的方案
-4. 需要时放图、代码路径和命令
+4. 需要时放图、调用链、代码路径和命令
 5. 最后说明代码里已经改了什么、还有什么没解决
+
+建议在最近的设计类 note 顶部增加一个简短导读块，至少包含：
+
+- 🧭 主题
+- 🧱 核心对象
+- 🔁 调用链
+- 📚 参考对象
 
 ## 建议模板
 
 ```md
 # 标题
+
+## 导读
+
+- 🧭 主题：
+- 🧱 核心对象：
+- 🔁 调用链：
+- 📚 参考对象：
 
 ## 为什么这件事重要
 
@@ -85,7 +104,11 @@
 
 ## 关键代码路径
 
-## 图示
+## 图示与调用逻辑
+
+## 设计理念
+
+## 参考对象
 
 ## 这次改变了什么
 
@@ -96,4 +119,5 @@
 
 1. 创建 `docs/notes/YYYY-MM-DD-short-title.md`
 2. 把它加到 `docs/SUMMARY.md`
-3. 优先写清楚图、代码路径和明确文件引用，少写空泛描述
+3. 优先写清楚图、代码路径、调用链和设计理念，少写空泛描述
+4. `notes` 统一使用中文撰写；必要时保留英文术语，但不要把正文写成中英混杂的半成品
