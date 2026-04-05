@@ -56,13 +56,18 @@
     <h3><a href="2026-04-03-delos-lite-metadata-root-roadmap.html">Rooted Metadata、Delos-lite 与 Virtual Log</a></h3>
     <p>完整说明 NoKV 当前的 metadata truth、PD 隔离、Virtual Log substrate、local/replicated backend，以及为什么这条主线适合作为后续研究平台。</p>
   </div>
+  <div class="blog-card">
+    <span class="blog-date">2026-04-05</span>
+    <h3><a href="2026-04-05-range-filter-from-grf.html">Range Filter：从 GRF 得到启发，但不照搬 GRF</a></h3>
+    <p>解释 NoKV 为什么需要 read-path pruning、GRF 到底提供了什么启发、为什么当前实现选择更保守的 in-memory advisory 方案，以及它与 LSM 读路径的关系。</p>
+  </div>
 </div>
 
 ## 这里应该写什么
 
 - 参考文档放不下的设计取舍
 - 有明确症状、错误假设和最终修复的调试记录
-- 带 benchmark 背景和代码路径分析的性能调查
+- 带 benchmark 背景和设计解释的性能调查
 - 解释包边界为何变化的重构说明
 
 ## 写作风格
@@ -72,8 +77,10 @@
 1. 从具体问题或设计问题开始
 2. 先把系统边界讲清楚
 3. 讲清 tradeoff 和被否决的方案
-4. 需要时放图、调用链、代码路径和命令
+4. 需要时放图、调用链、对象关系和命令
 5. 最后说明代码里已经改了什么、还有什么没解决
+
+`notes` 的重点是解释设计和演进，而不是把正文写成文件导航。除非某个模块名或文件名对理解确实必要，否则不需要强制罗列具体代码路径；相比“这个函数在哪”，更重要的是“为什么这样分层、为什么不选别的路、边界到底是什么”。
 
 建议在最近的设计类 note 顶部增加一个简短导读块，至少包含：
 
@@ -102,7 +109,7 @@
 
 ## 我们最终采用的设计
 
-## 关键代码路径
+## 关键对象与边界
 
 ## 图示与调用逻辑
 
@@ -119,5 +126,5 @@
 
 1. 创建 `docs/notes/YYYY-MM-DD-short-title.md`
 2. 把它加到 `docs/SUMMARY.md`
-3. 优先写清楚图、代码路径、调用链和设计理念，少写空泛描述
+3. 优先写清楚图、对象关系、调用链和设计理念，少写空泛描述
 4. `notes` 统一使用中文撰写；必要时保留英文术语，但不要把正文写成中英混杂的半成品

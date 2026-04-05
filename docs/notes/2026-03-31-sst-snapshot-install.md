@@ -34,14 +34,14 @@
 
 相关代码：
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/meta.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/dir.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/payload.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate/init.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate/expand.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/peer_lifecycle.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/lsm/external_sst.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/db_snapshot.go`
+- `raftstore/snapshot/meta.go`
+- `raftstore/snapshot/dir.go`
+- `raftstore/snapshot/payload.go`
+- `raftstore/migrate/init.go`
+- `raftstore/migrate/expand.go`
+- `raftstore/store/peer_lifecycle.go`
+- `lsm/external_sst.go`
+- `db_snapshot.go`
 
 分层如下：
 
