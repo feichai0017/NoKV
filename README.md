@@ -1,4 +1,4 @@
-# 🚀 NoKV – High-performance distributed KV storage based on LSM Tree
+# 🚀 NoKV — Not Only KV Store
 
 <div align="center">
   <img src="./img/logo.svg" width="220" alt="NoKV Logo" />
@@ -34,11 +34,11 @@
     </a>
   </p>
 
-  <p><strong>LSM Tree • ValueLog • MVCC • Multi-Raft Regions • Redis-Compatible</strong></p>
+  <p><strong>Not Only KV Store • LSM Tree • ValueLog • MVCC • Multi-Raft Regions • Redis-Compatible</strong></p>
 </div>
 
 
-NoKV is a Go-native storage system that starts as a serious standalone engine and grows into a multi-Raft distributed KV cluster without changing its underlying data plane.
+NoKV stands for <strong>Not Only KV Store</strong>. It is a Go-native storage system that starts as a serious standalone engine and grows into a multi-Raft distributed KV cluster without changing its underlying data plane.
 
 The interesting part is not just that it has WAL, LSM, MVCC, Redis compatibility, or Raft. The interesting part is that these pieces are built as one system: a single storage substrate that can be embedded locally, migrated into a seeded distributed node, and then expanded into a replicated cluster with an explicit protocol.
 
