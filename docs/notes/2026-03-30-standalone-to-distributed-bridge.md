@@ -1,92 +1,248 @@
-# 2026-03-30 standalone 到 distributed 的桥接为什么重要
+# 2026-03-30 从单机到分布式的桥接为什么是 NoKV 的主线能力
 
-这篇记录不是在描述某个单点实现，而是在解释 NoKV 目前最有产品价值的一条主线：**单机和分布式不是两套割裂系统，而是同一套数据面在不同运行形态下的演进。**
+> 状态：当前设计已经落地，相关实现分散在 `DB`、`raftstore`、`migrate`、`pd` 与 `meta/root` 中。本文重点不是复述命令，而是解释为什么 NoKV 没有把“单机版”和“分布式版”做成两套系统。
 
----
+## 导读
 
-## 背景
+- 🧭 主题：单机 workdir 如何通过协议提升成分布式 store，而不是走 dump/import 外挂工具路线。
+- 🧱 核心对象：`mode`、`snapshot`、`localmeta`、`seed region`。
+- 🔁 调用链：`standalone -> preparing -> seeded -> cluster`。
+- 📚 参考对象：range/shard 系统的身份提升、Delos/FDB 一类的小控制面骨架。
 
-项目同时具备：
+## 1. 为什么这件事重要
 
-- `DB` 单机数据面
-- `raftstore` 分布式执行层
-- `pd` 控制面
-- `migrate` 独立迁移协议
+很多 KV 项目在早期会先把单机版做出来，等到需要分布式能力时，再额外补一套新的元数据、恢复、运维和数据导入逻辑。这样做短期上手快，但长期会带来三个问题：
 
-看起来像是在做两个系统，但当前的设计目标不是“单机一个产品、分布式另一个产品”，而是让两者共享同一套底层状态。
+1. 单机数据和分布式数据不是同一个世界，后续只能 dump/import。
+2. 运维和恢复心智要分两套，项目复杂度成倍增长。
+3. 很多设计在单机阶段看起来成立，进入分布式后全部重做。
 
-## 问题
+NoKV 不希望走这条路。NoKV 的目标不是“先做一个单机 KV，再做一个分布式 KV”，而是：
 
-很多存储项目一旦走到分布式阶段，就会遇到一个非常实际的问题：
+> 同一套数据面先以单机形态运行，再通过协议和恢复层逐步提升为分布式形态。
 
-1. 单机阶段先跑得起来。
-2. 后面需要扩展时，发现分布式实际上是另一套系统。
-3. 最终只能：
-   - 重新建集群
-   - dump/import
-   - 重新做工具链
-   - 背一套新的运维心智
+## 2. 当前系统边界
 
-这会直接把“从小到大演进”的故事打断。
+当前相关实现主要分布在：
 
-## 分析
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/db.go`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/localmeta`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/mode`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root`
 
-NoKV 当前这条桥接路径成立，核心靠的是几个设计决定同时为真：
+分层如下：
 
-1. `DB` 仍然是底层共享数据面  
-   不是把 standalone 数据导出后再导入另一种存储格式。
+```mermaid
+flowchart TD
+    DB["DB / 单机数据面"] --> LM["raftstore/localmeta\n本地恢复元数据"]
+    DB --> SNAP["raftstore/snapshot\n逻辑 Region 快照"]
+    MODE["raftstore/mode\nworkdir 生命周期门"] --> MIG["raftstore/migrate\n桥接协议"]
+    SNAP --> MIG
+    LM --> MIG
+    MIG --> RS["raftstore\n分布式执行层"]
+    RS --> PD["pd\nview + service"]
+    PD --> MR["meta/root\n最小真相源"]
+```
 
-2. `raftstore/localmeta` 与 `manifest` 分开  
-   引擎元数据和分布式恢复元数据没有继续混在一起。
+### 关键判断
 
-3. `raftstore/snapshot` 引入了逻辑 region snapshot  
-   把“应用状态快照”和“raft durable snapshot metadata”分层。
+1. `DB` 仍然是底层共享数据面，不是导出后再导入另一种格式。
+2. `raftstore/localmeta` 只负责 store-local 恢复，不是 cluster authority。
+3. `raftstore/snapshot` 是逻辑 region 快照，不等于 raft durable snapshot metadata。
+4. `migrate` 是协议，不是脚本集合。
 
-4. `raftstore/mode` 把 workdir lifecycle 写成协议  
-   `standalone`、`preparing`、`seeded`、`cluster` 不只是 CLI 状态，而是库级 gate。
+## 3. 如果不这样做，会发生什么
 
-5. `migrate` 把桥接过程显式化  
-   `plan -> init -> serve -> expand` 不是脚本约定，而是正式控制流。
+如果单机和分布式是两套系统，典型结果会是：
 
-## 根因
+- 单机目录直接被视为“旧格式”，只能整体导出。
+- 分布式 bootstrap 依赖外部工具，而不是系统自身的生命周期协议。
+- 恢复、校验、观测、测试路径出现双轨制。
+- 后面任何关于 snapshot、reshard、operator 的研究都要分别做两遍。
 
-真正让单机和分布式难以衔接的，不是“技术栈不同”，而是**状态语义不同**。
+对于研究平台来说，这种分裂尤其糟糕。因为你无法回答一个最基本的问题：
 
-单机系统通常只需要：
+> 你研究的是同一个系统的扩展，还是两套系统之间的迁移工具？
 
-- engine manifest
-- WAL
-- SST
-- VLog
+NoKV 现在的做法是明确回答前者。
 
-分布式系统还需要：
+## 4. 当前设计怎么把桥接做成协议
 
+核心不是 CLI 名字，而是状态边界。
+
+### 4.1 workdir mode 是正式协议
+
+相关代码：
+
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/mode`
+
+当前生命周期至少包括：
+
+- `standalone`
+- `preparing`
+- `seeded`
+- `cluster`
+
+这意味着：
+
+- 一个 workdir 不再永远被假设成普通本地 DB。
+- 一旦目录进入 `preparing/seeded/cluster`，普通单机打开路径就必须被 gate 住。
+- 生命周期不再靠“运维同学记住别手抖”，而是靠库级约束。
+
+### 4.2 snapshot 被分层，而不是一个模糊大概念
+
+相关代码：
+
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/engine/snapshot.go`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot`
+
+当前有两层 snapshot：
+
+1. raft durable metadata snapshot
+2. region logical state snapshot
+
+这条分层很重要，因为单机提升到分布式，真正需要提升的是：
+
+- key range 对应的数据状态
 - region identity
 - peer identity
-- raft durable state
 - local recovery metadata
-- control-plane view
 
-如果这些额外语义没有被设计成可提升、可恢复、可验证的状态层，那么单机到分布式就只剩下粗暴搬运数据。
+而不是只搬一份 term/index/confstate。
 
-## 方案
+### 4.3 migrate 是状态提升协议，不是命令拼接
 
-NoKV 当前的修法，本质上是把“增加 distributed identity”这件事协议化了：
+相关代码：
 
-1. 先用 `mode` 锁住 workdir 生命周期。
-2. 用 `migrate init` 为原 workdir 写入 seed region 语义。
-3. 用逻辑 region snapshot 提供状态提升原语。
-4. 用 `serve` 接管 seeded workdir 进入 cluster 语义。
-5. 用 `expand/remove-peer/transfer-leader` 完成 membership reshape。
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate/init.go`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate/expand.go`
 
-这条线的意义是：
+当前主线可以概括成：
 
-> NoKV 的分布式能力不是独立产品，而是同一套系统的放大形态。
+```mermaid
+sequenceDiagram
+    participant DB as 单机 workdir
+    participant MODE as mode gate
+    participant MIG as migrate
+    participant RS as raftstore
+    participant PD as pd/meta
 
-## 后续
+    DB->>MODE: standalone -> preparing
+    MODE->>MIG: 允许写入 seed 语义
+    MIG->>RS: init 一个 full-range seed region
+    RS->>MODE: preparing -> seeded
+    MIG->>RS: serve / expand
+    RS->>PD: 加入 cluster control-plane
+    RS->>MODE: seeded -> cluster
+```
 
-1. 后面如果继续推进，这条桥最该加强的是：
-   - SST-based snapshot install
-   - 更成熟的 PD orchestration
-   - 更强的 migration observability
-2. 这条设计值得在项目介绍里长期突出，因为它比“又做了一个 KV”更有辨识度。
+这里真正值钱的是：
+
+- state promotion 有明确边界
+- snapshot 有明确边界
+- 恢复和正常执行走同一套语义
+
+## 5. 调用逻辑
+
+### `migrate init`
+
+目标：
+
+- 给原 standalone workdir 写入 seed region 语义
+- 让它不再只是“一个 DB 目录”
+
+做的事情大致是：
+
+1. 检查当前 mode 是否允许提升。
+2. 为 workdir 生成初始 region / peer / localmeta。
+3. 导出逻辑 region snapshot 或建立 seed state。
+4. 把目录推进到 `seeded`。
+
+### `serve`
+
+目标：
+
+- 让 seeded workdir 进入真正的 cluster 语义
+
+做的事情大致是：
+
+1. 启动 `raftstore`。
+2. 恢复本地 `replicas.binpb` 和 `raft-progress.binpb`。
+3. 向 `pd` / `meta/root` 注册 rooted truth。
+4. 开始按 region/peer 身份参与执行面。
+
+### `expand`
+
+目标：
+
+- 把 seed region 扩成 replicated region
+
+做的事情大致是：
+
+1. 生成新的 peer change / split / merge 目标。
+2. 通过 `pd` proposal gate 进入 `meta/root`。
+3. 由 `raftstore` 执行真正的 conf change / snapshot install。
+4. terminal truth 回写 `meta/root`。
+
+## 6. 设计理念
+
+这条桥接路线背后的理念有三条：
+
+### 6.1 不重复造两套数据面
+
+单机和分布式共享底层 DB / LSM / WAL / VLog。
+
+### 6.2 身份提升比数据搬运更重要
+
+困难不在于“把字节拷过去”，而在于：
+
+- 让原本匿名的本地状态变成带 region/peer 身份的状态
+- 让它进入可恢复、可验证、可编排的 cluster 生命周期
+
+### 6.3 迁移必须走协议
+
+如果桥接只是一个脚本，后面所有关于：
+
+- restore
+- reshard
+- operator runtime
+- snapshot install
+- failover
+
+的研究都会变得含糊不清。
+
+## 7. 参考对象
+
+这一块没有直接照搬某一个系统，但思路上接近几类工业实践：
+
+- TiKV / Cockroach 里关于 range/shard 身份与复制元数据分层的经验
+- FoundationDB / Delos 一类系统里“让小而稳定的控制面成为系统骨架”的思路
+- 数据库内核里“把生命周期写进协议而不是运维手册”的做法
+
+## 8. 当前实现已经做到的
+
+- workdir mode 已经进入正式实现
+- localmeta 与 engine metadata 已明确分开
+- region snapshot 已是单独层
+- migration 主线已形成 protocol 化入口
+- 后续 `pd` / `meta/root` 主线能直接承接这条桥
+
+## 9. 还没做完的
+
+- 更成熟的 migration observability
+- 更系统的 operator runtime 编排
+- 更完整的 snapshot install 与 reshard 联动
+- 对超大数据量场景的性能与恢复策略
+
+## 10. 总结
+
+NoKV 这条“从单机到分布式”的桥接路线，真正值钱的不是多了几条 CLI，而是：
+
+- 它没有把单机和分布式做成两套系统
+- 它把 state promotion 写成了协议
+- 它让后续关于 control-plane、operator、snapshot、调度的研究，都能建立在同一套系统之上
+
+这比“再做一个分布式 KV 外壳”更重要，因为它决定了 NoKV 后面能不能持续演进，而不是每往前走一步都重造一层。
