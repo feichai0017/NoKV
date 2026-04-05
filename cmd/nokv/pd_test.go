@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"os"
 	"path/filepath"
 	"testing"
@@ -37,6 +39,30 @@ func TestRunPDCmdStartsAndStops(t *testing.T) {
 	require.Contains(t, buf.String(), "PD metrics endpoint listening on http://")
 }
 
+func TestRunPDCmdStartsAndStopsWithReplicatedRoot(t *testing.T) {
+	origNotify := pdNotifyContext
+	pdNotifyContext = func(parent context.Context, _ ...os.Signal) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(parent)
+		cancel()
+		return ctx, cancel
+	}
+	t.Cleanup(func() { pdNotifyContext = origNotify })
+
+	var buf bytes.Buffer
+	require.NoError(t, runPDCmd(&buf, []string{
+		"-addr", "127.0.0.1:0",
+		"-root-mode", "replicated",
+		"-workdir", t.TempDir(),
+		"-root-node-id", "1",
+		"-root-transport-addr", "127.0.0.1:0",
+		"-root-peer", "1=127.0.0.1:7001",
+		"-root-peer", "2=127.0.0.1:7002",
+		"-root-peer", "3=127.0.0.1:7003",
+	}))
+	require.Contains(t, buf.String(), "PD-lite service listening on")
+	require.Contains(t, buf.String(), "PD metadata root mode: replicated")
+}
+
 func TestRunPDCmdInvalidMetricsAddr(t *testing.T) {
 	origNotify := pdNotifyContext
 	pdNotifyContext = func(parent context.Context, _ ...os.Signal) (context.Context, context.CancelFunc) {
@@ -49,6 +75,51 @@ func TestRunPDCmdInvalidMetricsAddr(t *testing.T) {
 	var buf bytes.Buffer
 	err := runPDCmd(&buf, []string{"-addr", "127.0.0.1:0", "-metrics-addr", "bad"})
 	require.ErrorContains(t, err, "start pd metrics endpoint")
+}
+
+func TestRunPDCmdRejectsInvalidRootMode(t *testing.T) {
+	var buf bytes.Buffer
+	err := runPDCmd(&buf, []string{"-addr", "127.0.0.1:0", "-root-mode", "bad"})
+	require.ErrorContains(t, err, "invalid root mode")
+}
+
+func TestRunPDCmdReplicatedRootRequiresTransportAddress(t *testing.T) {
+	var buf bytes.Buffer
+	err := runPDCmd(&buf, []string{
+		"-addr", "127.0.0.1:0",
+		"-root-mode", "replicated",
+		"-workdir", t.TempDir(),
+		"-root-peer", "1=127.0.0.1:7001",
+		"-root-peer", "2=127.0.0.1:7002",
+		"-root-peer", "3=127.0.0.1:7003",
+	})
+	require.ErrorContains(t, err, "requires transport address")
+}
+
+func TestRunPDCmdReplicatedRootRequiresThreePeers(t *testing.T) {
+	var buf bytes.Buffer
+	err := runPDCmd(&buf, []string{
+		"-addr", "127.0.0.1:0",
+		"-root-mode", "replicated",
+		"-workdir", t.TempDir(),
+		"-root-transport-addr", "127.0.0.1:0",
+		"-root-peer", "1=127.0.0.1:7001",
+		"-root-peer", "2=127.0.0.1:7002",
+	})
+	require.ErrorContains(t, err, "requires exactly 3 peer addresses")
+}
+
+func TestRunPDCmdReplicatedRootRequiresWorkdir(t *testing.T) {
+	var buf bytes.Buffer
+	err := runPDCmd(&buf, []string{
+		"-addr", "127.0.0.1:0",
+		"-root-mode", "replicated",
+		"-root-transport-addr", "127.0.0.1:0",
+		"-root-peer", "1=127.0.0.1:7001",
+		"-root-peer", "2=127.0.0.1:7002",
+		"-root-peer", "3=127.0.0.1:7003",
+	})
+	require.ErrorContains(t, err, "requires workdir")
 }
 
 func TestMainPDCommand(t *testing.T) {
@@ -71,41 +142,31 @@ func TestMainPDCommand(t *testing.T) {
 
 func TestRestorePDRegionsFromLocalSnapshot(t *testing.T) {
 	dir := t.TempDir()
-	store, err := pdstorage.OpenLocalStore(dir, nil)
+	store, err := pdstorage.OpenRootLocalStore(dir)
 	require.NoError(t, err)
-	require.NoError(t, store.SaveRegion(raftmeta.RegionMeta{
-		ID:       10,
-		StartKey: []byte("a"),
-		EndKey:   []byte("m"),
-		Epoch: raftmeta.RegionEpoch{
-			Version:     1,
-			ConfVersion: 1,
-		},
-	}))
-	require.NoError(t, store.SaveRegion(raftmeta.RegionMeta{
-		ID:       20,
-		StartKey: []byte("m"),
-		EndKey:   nil,
-		Epoch: raftmeta.RegionEpoch{
-			Version:     1,
-			ConfVersion: 1,
-		},
-	}))
+	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(testDescriptor(10, []byte("a"), []byte("m"), metaregion.Epoch{
+		Version:     1,
+		ConfVersion: 1,
+	}))))
+	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(testDescriptor(20, []byte("m"), nil, metaregion.Epoch{
+		Version:     1,
+		ConfVersion: 1,
+	}))))
 	snapshotState, err := store.Load()
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 
 	cluster := core.NewCluster()
-	loaded, err := restorePDRegions(cluster, snapshotState.Regions)
+	loaded, err := pdstorage.RestoreDescriptors(cluster.PublishRegionDescriptor, snapshotState.Descriptors)
 	require.NoError(t, err)
 	require.Equal(t, 2, loaded)
 
-	meta, ok := cluster.GetRegionByKey([]byte("b"))
+	desc, ok := cluster.GetRegionDescriptorByKey([]byte("b"))
 	require.True(t, ok)
-	require.Equal(t, uint64(10), meta.ID)
-	meta, ok = cluster.GetRegionByKey([]byte("z"))
+	require.Equal(t, uint64(10), desc.RegionID)
+	desc, ok = cluster.GetRegionDescriptorByKey([]byte("z"))
 	require.True(t, ok)
-	require.Equal(t, uint64(20), meta.ID)
+	require.Equal(t, uint64(20), desc.RegionID)
 }
 
 func TestRunPDCmdReloadsPersistedRegionCatalog(t *testing.T) {
@@ -118,20 +179,10 @@ func TestRunPDCmdReloadsPersistedRegionCatalog(t *testing.T) {
 	t.Cleanup(func() { pdNotifyContext = origNotify })
 
 	dir := t.TempDir()
-	store, err := pdstorage.OpenLocalStore(dir, nil)
+	store, err := pdstorage.OpenRootLocalStore(dir)
 	require.NoError(t, err)
-	require.NoError(t, store.SaveRegion(raftmeta.RegionMeta{
-		ID:       31,
-		StartKey: []byte("a"),
-		EndKey:   []byte("m"),
-		Epoch:    raftmeta.RegionEpoch{Version: 2, ConfVersion: 1},
-	}))
-	require.NoError(t, store.SaveRegion(raftmeta.RegionMeta{
-		ID:       32,
-		StartKey: []byte("m"),
-		EndKey:   nil,
-		Epoch:    raftmeta.RegionEpoch{Version: 3, ConfVersion: 2},
-	}))
+	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(testDescriptor(31, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}))))
+	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(testDescriptor(32, []byte("m"), nil, metaregion.Epoch{Version: 3, ConfVersion: 2}))))
 	require.NoError(t, store.Close())
 
 	var buf bytes.Buffer
@@ -139,38 +190,38 @@ func TestRunPDCmdReloadsPersistedRegionCatalog(t *testing.T) {
 		"-addr", "127.0.0.1:0",
 		"-workdir", dir,
 	}))
-	require.Contains(t, buf.String(), "PD restored 2 region(s) from local storage")
+	require.Contains(t, buf.String(), "PD restored 2 region(s) from metadata root")
 }
 
 func TestRestorePDRegionsRejectsDivergentOverlap(t *testing.T) {
 	cluster := core.NewCluster()
-	snapshot := map[uint64]raftmeta.RegionMeta{
+	snapshot := map[uint64]descriptor.Descriptor{
 		10: {
-			ID:       10,
+			RegionID: 10,
 			StartKey: []byte("a"),
 			EndKey:   []byte("m"),
-			Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+			Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
 		},
 		20: {
-			ID:       20,
+			RegionID: 20,
 			StartKey: []byte("l"),
 			EndKey:   []byte("z"),
-			Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+			Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
 		},
 	}
 
-	loaded, err := restorePDRegions(cluster, snapshot)
+	loaded, err := pdstorage.RestoreDescriptors(cluster.PublishRegionDescriptor, snapshot)
 	require.Error(t, err)
 	require.Equal(t, 1, loaded)
-	meta, ok := cluster.GetRegionByKey([]byte("b"))
+	desc, ok := cluster.GetRegionDescriptorByKey([]byte("b"))
 	require.True(t, ok)
-	require.Equal(t, uint64(10), meta.ID)
-	_, ok = cluster.GetRegionByKey([]byte("x"))
+	require.Equal(t, uint64(10), desc.RegionID)
+	_, ok = cluster.GetRegionDescriptorByKey([]byte("x"))
 	require.False(t, ok)
 }
 
-func TestPDLocalStoreSaveAndLoadAllocatorState(t *testing.T) {
-	store, err := pdstorage.OpenLocalStore(t.TempDir(), nil)
+func TestPDRootStoreSaveAndLoadAllocatorState(t *testing.T) {
+	store, err := pdstorage.OpenRootLocalStore(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, store.Close())
@@ -236,9 +287,9 @@ func TestRunPDCmdResolvesWorkdirFromConfig(t *testing.T) {
 
 	var buf bytes.Buffer
 	require.NoError(t, runPDCmd(&buf, []string{"-addr", "127.0.0.1:0", "-config", cfgPath}))
-	require.Contains(t, buf.String(), "PD restored 0 region(s) from local storage")
+	require.Contains(t, buf.String(), "PD restored 0 region(s) from metadata root")
 	require.DirExists(t, cfg.PD.WorkDir)
-	store, err := pdstorage.OpenLocalStore(cfg.PD.WorkDir, nil)
+	store, err := pdstorage.OpenRootLocalStore(cfg.PD.WorkDir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 }
@@ -307,4 +358,17 @@ func TestRunPDCmdExplicitAddrOverridesConfig(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, runPDCmd(&buf, []string{"-addr", "127.0.0.1:0", "-config", cfgPath}))
 	require.Contains(t, buf.String(), "PD-lite service listening on")
+}
+
+func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descriptor.Descriptor {
+	desc := descriptor.Descriptor{
+		RegionID:  id,
+		StartKey:  append([]byte(nil), start...),
+		EndKey:    append([]byte(nil), end...),
+		Epoch:     epoch,
+		State:     metaregion.ReplicaStateRunning,
+		RootEpoch: 1,
+	}
+	desc.EnsureHash()
+	return desc
 }

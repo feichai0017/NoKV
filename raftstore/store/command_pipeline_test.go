@@ -2,19 +2,19 @@ package store
 
 import (
 	"errors"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 )
 
 func mustCommandEntry(t *testing.T, requestID uint64) myraft.Entry {
 	t.Helper()
-	payload, err := command.Encode(&pb.RaftCmdRequest{
-		Header: &pb.CmdHeader{RequestId: requestID},
+	payload, err := command.Encode(&raftcmdpb.RaftCmdRequest{
+		Header: &raftcmdpb.CmdHeader{RequestId: requestID},
 	})
 	require.NoError(t, err)
 	return myraft.Entry{Type: myraft.EntryNormal, Data: payload}
@@ -23,7 +23,7 @@ func mustCommandEntry(t *testing.T, requestID uint64) myraft.Entry {
 func TestCommandPipelineApplyEntriesReturnsApplyError(t *testing.T) {
 	applyErr := errors.New("apply boom")
 	var applied []uint64
-	cp := newCommandPipeline(func(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+	cp := newCommandPipeline(func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 		applied = append(applied, req.GetHeader().GetRequestId())
 		return nil, applyErr
 	})
@@ -65,14 +65,14 @@ func TestCommandPipelineRegisterProposalRejectsDuplicateID(t *testing.T) {
 	require.Contains(t, err.Error(), "duplicate proposal id")
 	require.Nil(t, second)
 
-	cp.completeProposal(7, &pb.RaftCmdResponse{}, nil)
+	cp.completeProposal(7, &raftcmdpb.RaftCmdResponse{}, nil)
 	result := <-first.ch
 	require.NoError(t, result.err)
 	require.NotNil(t, result.resp)
 }
 
 func TestCommandPipelineRejectsLegacyPayload(t *testing.T) {
-	cp := newCommandPipeline(func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+	cp := newCommandPipeline(func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 		t.Fatal("legacy payload must not reach applier")
 		return nil, nil
 	})

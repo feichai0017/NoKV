@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/config"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/stretchr/testify/require"
 )
 
@@ -124,7 +125,7 @@ func TestRunRegionCatalogWritesRegion(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, output, "stored region 99 in local peer catalog")
 
-	metaStore, err := raftmeta.OpenLocalStore(manifestDir, nil)
+	metaStore, err := localmeta.OpenLocalStore(manifestDir, nil)
 	require.NoError(t, err)
 	defer func() {
 		_ = metaStore.Close()
@@ -138,7 +139,7 @@ func TestRunRegionCatalogWritesRegion(t *testing.T) {
 	require.Equal(t, uint64(7), meta.Epoch.Version)
 	require.Equal(t, uint64(5), meta.Epoch.ConfVersion)
 	require.Len(t, meta.Peers, 2)
-	require.Equal(t, raftmeta.PeerMeta{StoreID: 1, PeerID: 1001}, meta.Peers[0])
+	require.Equal(t, metaregion.Peer{StoreID: 1, PeerID: 1001}, meta.Peers[0])
 }
 
 func TestMainStoresCommand(t *testing.T) {
@@ -382,9 +383,9 @@ func TestParseUintErrors(t *testing.T) {
 }
 
 func TestParseRegionState(t *testing.T) {
-	require.Equal(t, raftmeta.RegionStateRunning, parseRegionState(""))
-	require.Equal(t, raftmeta.RegionStateTombstone, parseRegionState("tombstone"))
-	require.Equal(t, raftmeta.RegionStateRunning, parseRegionState("unknown"))
+	require.Equal(t, metaregion.ReplicaStateRunning, parseRegionState(""))
+	require.Equal(t, metaregion.ReplicaStateTombstone, parseRegionState("tombstone"))
+	require.Equal(t, metaregion.ReplicaStateRunning, parseRegionState("unknown"))
 }
 
 func TestDecodeKeyInvalidHexPanics(t *testing.T) {

@@ -2,11 +2,12 @@ package store
 
 import (
 	"context"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"sync"
 	"time"
 
 	"github.com/feichai0017/NoKV/metrics"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
@@ -45,7 +46,9 @@ type schedulerRuntime struct {
 	mu            sync.Mutex
 	pending       map[operationKey]struct{}
 	lastApply     map[operationKey]time.Time
+	descriptors   map[uint64]descriptor.Descriptor
 	regionUpdates map[uint64]regionEvent
+	nextRegionSeq uint64
 	dropped       uint64
 	degraded      bool
 	lastError     string
@@ -61,12 +64,12 @@ type schedulerRuntime struct {
 type PeerHandle struct {
 	ID     uint64
 	Peer   *peer.Peer
-	Region *raftmeta.RegionMeta
+	Region *localmeta.RegionMeta
 }
 
 // RegionSnapshot provides an external view of the tracked Region metadata.
 type RegionSnapshot struct {
-	Regions []raftmeta.RegionMeta `json:"regions"`
+	Regions []localmeta.RegionMeta `json:"regions"`
 }
 
 // NewStore constructs a Store using concrete dependencies. It keeps peer
@@ -113,6 +116,7 @@ func NewStore(cfg Config) *Store {
 			burst:         operationBurst,
 			pending:       make(map[operationKey]struct{}),
 			lastApply:     make(map[operationKey]time.Time),
+			descriptors:   make(map[uint64]descriptor.Descriptor),
 			regionUpdates: make(map[uint64]regionEvent),
 		},
 		cmds: &commandRuntime{

@@ -3,6 +3,11 @@ package server_test
 import (
 	"context"
 	"fmt"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	adminpb "github.com/feichai0017/NoKV/pb/admin"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"sort"
 	"testing"
 	"time"
@@ -16,12 +21,12 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/pb"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/kv"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
@@ -38,15 +43,15 @@ func (fakeMVCCStore) NewInternalIterator(opt *utils.Options) utils.Iterator { re
 
 type fakeRaftLog struct{}
 
-func (fakeRaftLog) Open(groupID uint64, meta *raftmeta.Store) (engine.PeerStorage, error) {
+func (fakeRaftLog) Open(groupID uint64, meta *localmeta.Store) (engine.PeerStorage, error) {
 	return nil, nil
 }
 
-func openTestDB(t *testing.T) (*NoKV.DB, *raftmeta.Store) {
+func openTestDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
 	t.Helper()
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
-	localMeta, err := raftmeta.OpenLocalStore(opt.WorkDir, nil)
+	localMeta, err := localmeta.OpenLocalStore(opt.WorkDir, nil)
 	require.NoError(t, err)
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
 	db, err := NoKV.Open(opt)
@@ -81,10 +86,10 @@ func TestServerStartsNoKVService(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
 
-	client := pb.NewNoKVClient(conn)
+	client := kvrpcpb.NewNoKVClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, err = client.KvGet(ctx, &pb.KvGetRequest{})
+	_, err = client.KvGet(ctx, &kvrpcpb.KvGetRequest{})
 	require.Error(t, err)
 	st, ok := status.FromError(err)
 	require.True(t, ok)
@@ -130,12 +135,12 @@ func TestServerStartsRaftAdminService(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Close() })
 
-	region := raftmeta.RegionMeta{
+	region := localmeta.RegionMeta{
 		ID:       7,
 		StartKey: []byte("a"),
 		EndKey:   nil,
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 101}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 101}},
 	}
 	startRegionPeer(t, testNode{
 		storeID:   1,
@@ -150,11 +155,11 @@ func TestServerStartsRaftAdminService(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
 
-	adminClient := pb.NewRaftAdminClient(conn)
+	adminClient := adminpb.NewRaftAdminClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	statusResp, err := adminClient.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: region.ID})
+	statusResp, err := adminClient.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: region.ID})
 	require.NoError(t, err)
 	require.True(t, statusResp.GetKnown())
 	require.True(t, statusResp.GetHosted())
@@ -162,7 +167,7 @@ func TestServerStartsRaftAdminService(t *testing.T) {
 	require.Equal(t, uint64(101), statusResp.GetLocalPeerId())
 	require.GreaterOrEqual(t, statusResp.GetAppliedIndex(), uint64(0))
 
-	addResp, err := adminClient.AddPeer(ctx, &pb.AddPeerRequest{
+	addResp, err := adminClient.AddPeer(ctx, &adminpb.AddPeerRequest{
 		RegionId: region.ID,
 		StoreId:  2,
 		PeerId:   202,
@@ -170,18 +175,18 @@ func TestServerStartsRaftAdminService(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, addResp.GetRegion().GetPeers(), 2)
 
-	statusResp, err = adminClient.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: region.ID})
+	statusResp, err = adminClient.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: region.ID})
 	require.NoError(t, err)
 	require.True(t, statusResp.GetKnown())
 	require.Len(t, statusResp.GetRegion().GetPeers(), 2)
 
-	_, err = adminClient.TransferLeader(ctx, &pb.TransferLeaderRequest{
+	_, err = adminClient.TransferLeader(ctx, &adminpb.TransferLeaderRequest{
 		RegionId: region.ID,
 		PeerId:   101,
 	})
 	require.NoError(t, err)
 
-	_, err = adminClient.RemovePeer(ctx, &pb.RemovePeerRequest{
+	_, err = adminClient.RemovePeer(ctx, &adminpb.RemovePeerRequest{
 		RegionId: region.ID,
 		PeerId:   202,
 	})
@@ -191,29 +196,29 @@ func TestServerStartsRaftAdminService(t *testing.T) {
 type testNode struct {
 	storeID   uint64
 	peerID    uint64
-	region    raftmeta.RegionMeta
+	region    localmeta.RegionMeta
 	db        *NoKV.DB
-	localMeta *raftmeta.Store
+	localMeta *localmeta.Store
 	srv       *serverpkg.Server
 	addr      string
 }
 
 type staticRegionResolver struct {
-	regions []*pb.RegionMeta
+	regions []*metapb.RegionDescriptor
 }
 
-func (r *staticRegionResolver) GetRegionByKey(_ context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
+func (r *staticRegionResolver) GetRegionByKey(_ context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("resolver: nil request")
 	}
 	for _, region := range r.regions {
 		if regionContainsKey(region, req.GetKey()) {
-			return &pb.GetRegionByKeyResponse{
-				Region: cloneRegionMetaPB(region),
+			return &pdpb.GetRegionByKeyResponse{
+				RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromProto(cloneRegionMetaPB(region))),
 			}, nil
 		}
 	}
-	return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+	return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
 }
 
 func (r *staticRegionResolver) Close() error { return nil }
@@ -223,23 +228,23 @@ func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 		{
 			storeID: 1,
 			peerID:  101,
-			region: raftmeta.RegionMeta{
+			region: localmeta.RegionMeta{
 				ID:       1,
 				StartKey: []byte("a"),
 				EndKey:   []byte("m"),
-				Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-				Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 101}},
+				Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+				Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 101}},
 			},
 		},
 		{
 			storeID: 2,
 			peerID:  201,
-			region: raftmeta.RegionMeta{
+			region: localmeta.RegionMeta{
 				ID:       2,
 				StartKey: []byte("m"),
 				EndKey:   nil,
-				Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-				Peers:    []raftmeta.PeerMeta{{StoreID: 2, PeerID: 201}},
+				Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+				Peers:    []metaregion.Peer{{StoreID: 2, PeerID: 201}},
 			},
 		},
 	}
@@ -248,7 +253,7 @@ func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 		workDir := t.TempDir()
 		opt := NoKV.NewDefaultOptions()
 		opt.WorkDir = workDir
-		localMeta, err := raftmeta.OpenLocalStore(workDir, nil)
+		localMeta, err := localmeta.OpenLocalStore(workDir, nil)
 		require.NoError(t, err)
 		opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
 		db, err := NoKV.Open(opt)
@@ -298,12 +303,12 @@ func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 	}
 
 	stores := make([]client.StoreEndpoint, 0, len(nodes))
-	regions := make([]*pb.RegionMeta, 0, len(nodes))
+	regions := make([]*metapb.RegionDescriptor, 0, len(nodes))
 	for _, n := range nodes {
 		stores = append(stores, client.StoreEndpoint{StoreID: n.storeID, Addr: n.addr})
 		regions = append(regions, regionMetaToPB(n.region))
 	}
-	sort.Slice(regions, func(i, j int) bool { return regions[i].GetId() < regions[j].GetId() })
+	sort.Slice(regions, func(i, j int) bool { return regions[i].GetRegionId() < regions[j].GetRegionId() })
 
 	cli, err := client.New(client.Config{
 		Stores:         stores,
@@ -317,9 +322,9 @@ func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	mutations := []*pb.Mutation{
-		{Op: pb.Mutation_Put, Key: []byte("alfa"), Value: []byte("value-a")},
-		{Op: pb.Mutation_Put, Key: []byte("zoo"), Value: []byte("value-z")},
+	mutations := []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("value-a")},
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("zoo"), Value: []byte("value-z")},
 	}
 	err = cli.Mutate(ctx, []byte("alfa"), mutations, 100, 150, 3000)
 	require.NoError(t, err)
@@ -362,7 +367,7 @@ func startRegionPeer(t *testing.T, n testNode) {
 		Apply:     kv.NewEntryApplier(n.db),
 		Storage:   peerStorage,
 		GroupID:   n.region.ID,
-		Region:    raftmeta.CloneRegionMetaPtr(&n.region),
+		Region:    localmeta.CloneRegionMetaPtr(&n.region),
 	}
 	bootstrap := []myraft.Peer{{ID: n.peerID}}
 	p, err := store.StartPeer(cfg, bootstrap)
@@ -374,29 +379,28 @@ func startRegionPeer(t *testing.T, n testNode) {
 	}, time.Second, 10*time.Millisecond)
 }
 
-func regionMetaToPB(meta raftmeta.RegionMeta) *pb.RegionMeta {
-	peers := make([]*pb.RegionPeer, 0, len(meta.Peers))
+func regionMetaToPB(meta localmeta.RegionMeta) *metapb.RegionDescriptor {
+	peers := make([]*metapb.RegionPeer, 0, len(meta.Peers))
 	for _, p := range meta.Peers {
-		peers = append(peers, &pb.RegionPeer{StoreId: p.StoreID, PeerId: p.PeerID})
+		peers = append(peers, &metapb.RegionPeer{StoreId: p.StoreID, PeerId: p.PeerID})
 	}
-	return &pb.RegionMeta{
-		Id:               meta.ID,
-		StartKey:         append([]byte(nil), meta.StartKey...),
-		EndKey:           append([]byte(nil), meta.EndKey...),
-		EpochVersion:     meta.Epoch.Version,
-		EpochConfVersion: meta.Epoch.ConfVersion,
-		Peers:            peers,
+	return &metapb.RegionDescriptor{
+		RegionId: meta.ID,
+		StartKey: append([]byte(nil), meta.StartKey...),
+		EndKey:   append([]byte(nil), meta.EndKey...),
+		Epoch:    &metapb.RegionEpoch{Version: meta.Epoch.Version, ConfVersion: meta.Epoch.ConfVersion},
+		Peers:    peers,
 	}
 }
 
-func cloneRegionMetaPB(meta *pb.RegionMeta) *pb.RegionMeta {
+func cloneRegionMetaPB(meta *metapb.RegionDescriptor) *metapb.RegionDescriptor {
 	if meta == nil {
 		return nil
 	}
-	return proto.Clone(meta).(*pb.RegionMeta)
+	return proto.Clone(meta).(*metapb.RegionDescriptor)
 }
 
-func regionContainsKey(meta *pb.RegionMeta, key []byte) bool {
+func regionContainsKey(meta *metapb.RegionDescriptor, key []byte) bool {
 	if meta == nil {
 		return false
 	}

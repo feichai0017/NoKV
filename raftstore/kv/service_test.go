@@ -2,18 +2,20 @@ package kv_test
 
 import (
 	"context"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"testing"
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/kv"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/stretchr/testify/require"
@@ -26,10 +28,10 @@ type noopTransport struct{}
 
 func (noopTransport) Send(context.Context, myraft.Message) {}
 
-func openTestDB(t *testing.T) (*NoKV.DB, *raftmeta.Store) {
+func openTestDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
-	localMeta, err := raftmeta.OpenLocalStore(opt.WorkDir, nil)
+	localMeta, err := localmeta.OpenLocalStore(opt.WorkDir, nil)
 	require.NoError(t, err)
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
 	db, err := NoKV.Open(opt)
@@ -39,7 +41,7 @@ func openTestDB(t *testing.T) (*NoKV.DB, *raftmeta.Store) {
 	return db, localMeta
 }
 
-func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *raftmeta.Store, groupID uint64) engine.PeerStorage {
+func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *localmeta.Store, groupID uint64) engine.PeerStorage {
 	t.Helper()
 	storage, err := db.RaftLog().Open(groupID, localMeta)
 	require.NoError(t, err)
@@ -89,8 +91,8 @@ type serviceHarness struct {
 	db      *NoKV.DB
 	store   *store.Store
 	service *kv.Service
-	ctx     *pb.Context
-	region  *raftmeta.RegionMeta
+	ctx     *kvrpcpb.Context
+	region  *localmeta.RegionMeta
 }
 
 func newServiceHarness(t *testing.T, cfg harnessConfig) serviceHarness {
@@ -122,12 +124,12 @@ func newServiceHarness(t *testing.T, cfg harnessConfig) serviceHarness {
 	st := store.NewStore(store.Config{StoreID: cfg.storeID, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 
-	meta := &raftmeta.RegionMeta{
+	meta := &localmeta.RegionMeta{
 		ID:       cfg.regionID,
 		StartKey: append([]byte(nil), cfg.startKey...),
 		EndKey:   append([]byte(nil), cfg.endKey...),
-		Epoch:    raftmeta.RegionEpoch{Version: cfg.epochVersion, ConfVersion: cfg.epochConfVer},
-		Peers:    []raftmeta.PeerMeta{{StoreID: cfg.storeID, PeerID: cfg.peerID}},
+		Epoch:    metaregion.Epoch{Version: cfg.epochVersion, ConfVersion: cfg.epochConfVer},
+		Peers:    []metaregion.Peer{{StoreID: cfg.storeID, PeerID: cfg.peerID}},
 	}
 	cfgPeer := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -152,10 +154,10 @@ func newServiceHarness(t *testing.T, cfg harnessConfig) serviceHarness {
 	}
 
 	service := kv.NewService(st)
-	ctx := &pb.Context{
+	ctx := &kvrpcpb.Context{
 		RegionId:    meta.ID,
-		RegionEpoch: &pb.RegionEpoch{Version: cfg.epochVersion, ConfVer: cfg.epochConfVer},
-		Peer:        &pb.RegionPeer{StoreId: cfg.storeID, PeerId: cfg.peerID},
+		RegionEpoch: &metapb.RegionEpoch{Version: cfg.epochVersion, ConfVersion: cfg.epochConfVer},
+		Peer:        &metapb.RegionPeer{StoreId: cfg.storeID, PeerId: cfg.peerID},
 	}
 	return serviceHarness{
 		db:      db,
@@ -166,13 +168,13 @@ func newServiceHarness(t *testing.T, cfg harnessConfig) serviceHarness {
 	}
 }
 
-func prewriteKey(t *testing.T, service *kv.Service, ctx *pb.Context, key, value []byte, startVersion uint64) {
+func prewriteKey(t *testing.T, service *kv.Service, ctx *kvrpcpb.Context, key, value []byte, startVersion uint64) {
 	t.Helper()
-	req := &pb.KvPrewriteRequest{
+	req := &kvrpcpb.KvPrewriteRequest{
 		Context: ctx,
-		Request: &pb.PrewriteRequest{
-			Mutations: []*pb.Mutation{{
-				Op:    pb.Mutation_Put,
+		Request: &kvrpcpb.PrewriteRequest{
+			Mutations: []*kvrpcpb.Mutation{{
+				Op:    kvrpcpb.Mutation_Put,
 				Key:   key,
 				Value: value,
 			}},
@@ -189,11 +191,11 @@ func prewriteKey(t *testing.T, service *kv.Service, ctx *pb.Context, key, value 
 	require.Empty(t, resp.GetResponse().GetErrors())
 }
 
-func commitKey(t *testing.T, service *kv.Service, ctx *pb.Context, key []byte, startVersion, commitVersion uint64) {
+func commitKey(t *testing.T, service *kv.Service, ctx *kvrpcpb.Context, key []byte, startVersion, commitVersion uint64) {
 	t.Helper()
-	req := &pb.KvCommitRequest{
+	req := &kvrpcpb.KvCommitRequest{
 		Context: ctx,
-		Request: &pb.CommitRequest{
+		Request: &kvrpcpb.CommitRequest{
 			Keys:          [][]byte{entrykv.SafeCopy(nil, key)},
 			StartVersion:  startVersion,
 			CommitVersion: commitVersion,
@@ -213,12 +215,12 @@ func TestServicePrewriteCommit(t *testing.T) {
 	st := store.NewStore(store.Config{StoreID: 1, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 
-	region := &raftmeta.RegionMeta{
+	region := &localmeta.RegionMeta{
 		ID:       501,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 11}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 11}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -241,12 +243,12 @@ func TestServicePrewriteCommit(t *testing.T) {
 	require.NoError(t, peer.Campaign())
 
 	service := kv.NewService(st)
-	ctx := &pb.Context{RegionId: region.ID, RegionEpoch: &pb.RegionEpoch{Version: 1, ConfVer: 1}}
-	prewriteReq := &pb.KvPrewriteRequest{
+	ctx := &kvrpcpb.Context{RegionId: region.ID, RegionEpoch: &metapb.RegionEpoch{Version: 1, ConfVersion: 1}}
+	prewriteReq := &kvrpcpb.KvPrewriteRequest{
 		Context: ctx,
-		Request: &pb.PrewriteRequest{
-			Mutations: []*pb.Mutation{{
-				Op:    pb.Mutation_Put,
+		Request: &kvrpcpb.PrewriteRequest{
+			Mutations: []*kvrpcpb.Mutation{{
+				Op:    kvrpcpb.Mutation_Put,
 				Key:   []byte("sk"),
 				Value: []byte("sv"),
 			}},
@@ -260,7 +262,7 @@ func TestServicePrewriteCommit(t *testing.T) {
 	require.Nil(t, preResp.GetRegionError())
 	require.Empty(t, preResp.GetResponse().GetErrors())
 
-	commitReq := &pb.KvCommitRequest{Context: ctx, Request: &pb.CommitRequest{
+	commitReq := &kvrpcpb.KvCommitRequest{Context: ctx, Request: &kvrpcpb.CommitRequest{
 		Keys:          [][]byte{[]byte("sk")},
 		StartVersion:  7,
 		CommitVersion: 9,
@@ -273,9 +275,9 @@ func TestServicePrewriteCommit(t *testing.T) {
 
 func TestServiceBatchGetEmpty(t *testing.T) {
 	h := newServiceHarness(t, harnessConfig{campaignLeader: true})
-	resp, err := h.service.KvBatchGet(context.Background(), &pb.KvBatchGetRequest{
+	resp, err := h.service.KvBatchGet(context.Background(), &kvrpcpb.KvBatchGetRequest{
 		Context: h.ctx,
-		Request: &pb.BatchGetRequest{},
+		Request: &kvrpcpb.BatchGetRequest{},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
@@ -285,10 +287,10 @@ func TestServiceBatchGetEmpty(t *testing.T) {
 
 func TestServiceInvalidContext(t *testing.T) {
 	h := newServiceHarness(t, harnessConfig{campaignLeader: true})
-	_, err := h.service.KvGet(context.Background(), &pb.KvGetRequest{})
+	_, err := h.service.KvGet(context.Background(), &kvrpcpb.KvGetRequest{})
 	require.Error(t, err)
 
-	_, err = h.service.KvScan(context.Background(), &pb.KvScanRequest{})
+	_, err = h.service.KvScan(context.Background(), &kvrpcpb.KvScanRequest{})
 	require.Error(t, err)
 }
 
@@ -298,9 +300,9 @@ func TestServiceResolveAndCheckStatus(t *testing.T) {
 	key := []byte("lock-key")
 	prewriteKey(t, h.service, h.ctx, key, []byte("value"), 10)
 
-	resp, err := h.service.KvCheckTxnStatus(context.Background(), &pb.KvCheckTxnStatusRequest{
+	resp, err := h.service.KvCheckTxnStatus(context.Background(), &kvrpcpb.KvCheckTxnStatusRequest{
 		Context: h.ctx,
-		Request: &pb.CheckTxnStatusRequest{
+		Request: &kvrpcpb.CheckTxnStatusRequest{
 			PrimaryKey:         key,
 			LockTs:             10,
 			CurrentTs:          20,
@@ -312,9 +314,9 @@ func TestServiceResolveAndCheckStatus(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 
-	resolveResp, err := h.service.KvResolveLock(context.Background(), &pb.KvResolveLockRequest{
+	resolveResp, err := h.service.KvResolveLock(context.Background(), &kvrpcpb.KvResolveLockRequest{
 		Context: h.ctx,
-		Request: &pb.ResolveLockRequest{
+		Request: &kvrpcpb.ResolveLockRequest{
 			StartVersion:  10,
 			CommitVersion: 0,
 			Keys:          [][]byte{entrykv.SafeCopy(nil, key)},
@@ -323,9 +325,9 @@ func TestServiceResolveAndCheckStatus(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resolveResp)
 
-	rollbackResp, err := h.service.KvBatchRollback(context.Background(), &pb.KvBatchRollbackRequest{
+	rollbackResp, err := h.service.KvBatchRollback(context.Background(), &kvrpcpb.KvBatchRollbackRequest{
 		Context: h.ctx,
-		Request: &pb.BatchRollbackRequest{
+		Request: &kvrpcpb.BatchRollbackRequest{
 			Keys:         [][]byte{entrykv.SafeCopy(nil, key)},
 			StartVersion: 10,
 		},
@@ -339,12 +341,12 @@ func TestServiceRegionEpochMismatch(t *testing.T) {
 	applier := kv.NewApplier(db, nil)
 	st := store.NewStore(store.Config{StoreID: 2, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
-	region := &raftmeta.RegionMeta{
+	region := &localmeta.RegionMeta{
 		ID:       601,
 		StartKey: []byte("a"),
 		EndKey:   []byte("b"),
-		Epoch:    raftmeta.RegionEpoch{Version: 2, ConfVersion: 1},
-		Peers:    []raftmeta.PeerMeta{{StoreID: 2, PeerID: 22}},
+		Epoch:    metaregion.Epoch{Version: 2, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 2, PeerID: 22}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -366,8 +368,8 @@ func TestServiceRegionEpochMismatch(t *testing.T) {
 	require.NoError(t, peer.Campaign())
 
 	service := kv.NewService(st)
-	badCtx := &pb.Context{RegionId: region.ID, RegionEpoch: &pb.RegionEpoch{Version: 1, ConfVer: 1}}
-	resp, err := service.KvCommit(context.Background(), &pb.KvCommitRequest{Context: badCtx, Request: &pb.CommitRequest{StartVersion: 1}})
+	badCtx := &kvrpcpb.Context{RegionId: region.ID, RegionEpoch: &metapb.RegionEpoch{Version: 1, ConfVersion: 1}}
+	resp, err := service.KvCommit(context.Background(), &kvrpcpb.KvCommitRequest{Context: badCtx, Request: &kvrpcpb.CommitRequest{StartVersion: 1}})
 	require.NoError(t, err)
 	require.NotNil(t, resp.GetRegionError())
 	require.NotNil(t, resp.GetRegionError().GetEpochNotMatch())
@@ -384,11 +386,11 @@ func TestServiceKvGetLeaderRead(t *testing.T) {
 	key := []byte("alpha")
 	value := []byte("value")
 	expiresAt := uint64(time.Now().Add(time.Hour).Unix())
-	prewriteReq := &pb.KvPrewriteRequest{
+	prewriteReq := &kvrpcpb.KvPrewriteRequest{
 		Context: env.ctx,
-		Request: &pb.PrewriteRequest{
-			Mutations: []*pb.Mutation{{
-				Op:        pb.Mutation_Put,
+		Request: &kvrpcpb.PrewriteRequest{
+			Mutations: []*kvrpcpb.Mutation{{
+				Op:        kvrpcpb.Mutation_Put,
 				Key:       key,
 				Value:     value,
 				ExpiresAt: expiresAt,
@@ -405,9 +407,9 @@ func TestServiceKvGetLeaderRead(t *testing.T) {
 	require.NotNil(t, preResp.GetResponse())
 	require.Empty(t, preResp.GetResponse().GetErrors())
 
-	commitReq := &pb.KvCommitRequest{
+	commitReq := &kvrpcpb.KvCommitRequest{
 		Context: env.ctx,
-		Request: &pb.CommitRequest{
+		Request: &kvrpcpb.CommitRequest{
 			Keys:          [][]byte{key},
 			StartVersion:  42,
 			CommitVersion: 46,
@@ -420,9 +422,9 @@ func TestServiceKvGetLeaderRead(t *testing.T) {
 	require.NotNil(t, commitResp.GetResponse())
 	require.Nil(t, commitResp.GetResponse().GetError())
 
-	readReq := &pb.KvGetRequest{
+	readReq := &kvrpcpb.KvGetRequest{
 		Context: env.ctx,
-		Request: &pb.GetRequest{
+		Request: &kvrpcpb.GetRequest{
 			Key:     key,
 			Version: 50,
 		},
@@ -449,11 +451,11 @@ func TestServiceKvGetLeaderReadExpiredValue(t *testing.T) {
 	key := []byte("expired")
 	value := []byte("value")
 	expiredAt := uint64(time.Now().Add(-time.Second).Unix())
-	prewriteReq := &pb.KvPrewriteRequest{
+	prewriteReq := &kvrpcpb.KvPrewriteRequest{
 		Context: env.ctx,
-		Request: &pb.PrewriteRequest{
-			Mutations: []*pb.Mutation{{
-				Op:        pb.Mutation_Put,
+		Request: &kvrpcpb.PrewriteRequest{
+			Mutations: []*kvrpcpb.Mutation{{
+				Op:        kvrpcpb.Mutation_Put,
 				Key:       key,
 				Value:     value,
 				ExpiresAt: expiredAt,
@@ -468,9 +470,9 @@ func TestServiceKvGetLeaderReadExpiredValue(t *testing.T) {
 	require.Nil(t, preResp.GetRegionError())
 	require.Empty(t, preResp.GetResponse().GetErrors())
 
-	commitResp, err := env.service.KvCommit(context.Background(), &pb.KvCommitRequest{
+	commitResp, err := env.service.KvCommit(context.Background(), &kvrpcpb.KvCommitRequest{
 		Context: env.ctx,
-		Request: &pb.CommitRequest{
+		Request: &kvrpcpb.CommitRequest{
 			Keys:          [][]byte{key},
 			StartVersion:  52,
 			CommitVersion: 56,
@@ -480,9 +482,9 @@ func TestServiceKvGetLeaderReadExpiredValue(t *testing.T) {
 	require.Nil(t, commitResp.GetRegionError())
 	require.Nil(t, commitResp.GetResponse().GetError())
 
-	readResp, err := env.service.KvGet(context.Background(), &pb.KvGetRequest{
+	readResp, err := env.service.KvGet(context.Background(), &kvrpcpb.KvGetRequest{
 		Context: env.ctx,
-		Request: &pb.GetRequest{
+		Request: &kvrpcpb.GetRequest{
 			Key:     key,
 			Version: 60,
 		},
@@ -501,9 +503,9 @@ func TestServiceKvGetNotLeader(t *testing.T) {
 		campaignLeader: false,
 	})
 
-	req := &pb.KvGetRequest{
+	req := &kvrpcpb.KvGetRequest{
 		Context: env.ctx,
-		Request: &pb.GetRequest{
+		Request: &kvrpcpb.GetRequest{
 			Key:     []byte("missing"),
 			Version: 1,
 		},
@@ -532,9 +534,9 @@ func TestServiceKvScanLeaderRead(t *testing.T) {
 	prewriteKey(t, env.service, env.ctx, []byte("bk"), []byte("value-b"), 200)
 	commitKey(t, env.service, env.ctx, []byte("bk"), 200, 250)
 
-	resp, err := env.service.KvScan(context.Background(), &pb.KvScanRequest{
+	resp, err := env.service.KvScan(context.Background(), &kvrpcpb.KvScanRequest{
 		Context: env.ctx,
-		Request: &pb.ScanRequest{
+		Request: &kvrpcpb.ScanRequest{
 			StartKey:     []byte("a"),
 			Limit:        4,
 			Version:      500,
@@ -552,9 +554,9 @@ func TestServiceKvScanLeaderRead(t *testing.T) {
 	require.Equal(t, []byte("bk"), kvs[1].GetKey())
 	require.Equal(t, []byte("value-b"), kvs[1].GetValue())
 
-	next, err := env.service.KvScan(context.Background(), &pb.KvScanRequest{
+	next, err := env.service.KvScan(context.Background(), &kvrpcpb.KvScanRequest{
 		Context: env.ctx,
-		Request: &pb.ScanRequest{
+		Request: &kvrpcpb.ScanRequest{
 			StartKey:     []byte("ak"),
 			Limit:        1,
 			Version:      500,
@@ -589,12 +591,12 @@ func TestServiceKvScanRespectsRegionEnd(t *testing.T) {
 	startTs := uint64(10)
 	commitTs := uint64(20)
 	applyVersionedEntryForServiceTest(t, env.db, entrykv.CFDefault, []byte("mz"), startTs, []byte("value-z"), 0)
-	write := percolator.EncodeWrite(percolator.Write{Kind: pb.Mutation_Put, StartTs: startTs})
+	write := percolator.EncodeWrite(percolator.Write{Kind: kvrpcpb.Mutation_Put, StartTs: startTs})
 	applyVersionedEntryForServiceTest(t, env.db, entrykv.CFWrite, []byte("mz"), commitTs, write, 0)
 
-	resp, err := env.service.KvScan(context.Background(), &pb.KvScanRequest{
+	resp, err := env.service.KvScan(context.Background(), &kvrpcpb.KvScanRequest{
 		Context: env.ctx,
-		Request: &pb.ScanRequest{
+		Request: &kvrpcpb.ScanRequest{
 			StartKey:     []byte("a"),
 			Limit:        10,
 			Version:      500,
@@ -618,17 +620,17 @@ func TestServiceBatchGetEdgeCases(t *testing.T) {
 		campaignLeader: true,
 	})
 
-	_, err := env.service.KvBatchGet(context.Background(), &pb.KvBatchGetRequest{})
+	_, err := env.service.KvBatchGet(context.Background(), &kvrpcpb.KvBatchGetRequest{})
 	require.Error(t, err)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	_, err = env.service.KvBatchGet(context.Background(), &pb.KvBatchGetRequest{Context: env.ctx})
+	_, err = env.service.KvBatchGet(context.Background(), &kvrpcpb.KvBatchGetRequest{Context: env.ctx})
 	require.Error(t, err)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	resp, err := env.service.KvBatchGet(context.Background(), &pb.KvBatchGetRequest{
+	resp, err := env.service.KvBatchGet(context.Background(), &kvrpcpb.KvBatchGetRequest{
 		Context: env.ctx,
-		Request: &pb.BatchGetRequest{},
+		Request: &kvrpcpb.BatchGetRequest{},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
@@ -641,9 +643,9 @@ func TestServiceBatchGetEdgeCases(t *testing.T) {
 	prewriteKey(t, env.service, env.ctx, []byte("bb"), []byte("value-b"), 300)
 	commitKey(t, env.service, env.ctx, []byte("bb"), 300, 350)
 
-	batchResp, err := env.service.KvBatchGet(context.Background(), &pb.KvBatchGetRequest{
+	batchResp, err := env.service.KvBatchGet(context.Background(), &kvrpcpb.KvBatchGetRequest{
 		Context: env.ctx,
-		Request: &pb.BatchGetRequest{Requests: []*pb.GetRequest{
+		Request: &kvrpcpb.BatchGetRequest{Requests: []*kvrpcpb.GetRequest{
 			{Key: []byte("aa"), Version: 260},
 			nil,
 			{Key: []byte("missing"), Version: 260},
@@ -664,20 +666,20 @@ func TestServiceHeaderAndScanErrors(t *testing.T) {
 		campaignLeader: true,
 	})
 
-	_, err := env.service.KvGet(context.Background(), &pb.KvGetRequest{})
+	_, err := env.service.KvGet(context.Background(), &kvrpcpb.KvGetRequest{})
 	require.Error(t, err)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	_, err = env.service.KvGet(context.Background(), &pb.KvGetRequest{
-		Context: &pb.Context{RegionId: 0},
-		Request: &pb.GetRequest{Key: []byte("k"), Version: 1},
+	_, err = env.service.KvGet(context.Background(), &kvrpcpb.KvGetRequest{
+		Context: &kvrpcpb.Context{RegionId: 0},
+		Request: &kvrpcpb.GetRequest{Key: []byte("k"), Version: 1},
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	_, err = env.service.KvScan(context.Background(), &pb.KvScanRequest{
+	_, err = env.service.KvScan(context.Background(), &kvrpcpb.KvScanRequest{
 		Context: env.ctx,
-		Request: &pb.ScanRequest{
+		Request: &kvrpcpb.ScanRequest{
 			StartKey: []byte("a"),
 			Limit:    1,
 			Reverse:  true,
@@ -695,12 +697,12 @@ func TestServiceKvGetStoreNotMatch(t *testing.T) {
 		campaignLeader: true,
 	})
 
-	ctx := proto.Clone(env.ctx).(*pb.Context)
-	ctx.Peer = &pb.RegionPeer{StoreId: 999, PeerId: env.ctx.GetPeer().GetPeerId()}
+	ctx := proto.Clone(env.ctx).(*kvrpcpb.Context)
+	ctx.Peer = &metapb.RegionPeer{StoreId: 999, PeerId: env.ctx.GetPeer().GetPeerId()}
 
-	resp, err := env.service.KvGet(context.Background(), &pb.KvGetRequest{
+	resp, err := env.service.KvGet(context.Background(), &kvrpcpb.KvGetRequest{
 		Context: ctx,
-		Request: &pb.GetRequest{Key: []byte("ak"), Version: 1},
+		Request: &kvrpcpb.GetRequest{Key: []byte("ak"), Version: 1},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
@@ -720,9 +722,9 @@ func TestServiceKvGetKeyNotInRegion(t *testing.T) {
 		campaignLeader: true,
 	})
 
-	resp, err := env.service.KvGet(context.Background(), &pb.KvGetRequest{
+	resp, err := env.service.KvGet(context.Background(), &kvrpcpb.KvGetRequest{
 		Context: env.ctx,
-		Request: &pb.GetRequest{Key: []byte("z"), Version: 1},
+		Request: &kvrpcpb.GetRequest{Key: []byte("z"), Version: 1},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
@@ -740,9 +742,9 @@ func TestServiceKvScanNotLeader(t *testing.T) {
 		campaignLeader: false,
 	})
 
-	resp, err := env.service.KvScan(context.Background(), &pb.KvScanRequest{
+	resp, err := env.service.KvScan(context.Background(), &kvrpcpb.KvScanRequest{
 		Context: env.ctx,
-		Request: &pb.ScanRequest{
+		Request: &kvrpcpb.ScanRequest{
 			StartKey: []byte("a"),
 			Limit:    1,
 			Version:  10,

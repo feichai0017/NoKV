@@ -18,7 +18,7 @@ import (
 	pdclient "github.com/feichai0017/NoKV/pd/client"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/kv"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
@@ -68,7 +68,7 @@ func runServeCmd(w io.Writer, args []string) error {
 		return fmt.Errorf("--pd-addr is required (PD is the only scheduler/control-plane source)")
 	}
 
-	localMeta, err := raftmeta.OpenLocalStore(*workDir, nil)
+	localMeta, err := localmeta.OpenLocalStore(*workDir, nil)
 	if err != nil {
 		return fmt.Errorf("open raftstore local metadata: %w", err)
 	}
@@ -214,7 +214,7 @@ func promoteClusterMode(workDir string, storeID uint64) error {
 	return raftmode.Write(workDir, state)
 }
 
-func startStorePeers(server *serverpkg.Server, storage serverpkg.Storage, localMeta *raftmeta.Store, storeID uint64, electionTick, heartbeatTick, maxMsgBytes, maxInflight int) ([]raftmeta.RegionMeta, int, error) {
+func startStorePeers(server *serverpkg.Server, storage serverpkg.Storage, localMeta *localmeta.Store, storeID uint64, electionTick, heartbeatTick, maxMsgBytes, maxInflight int) ([]localmeta.RegionMeta, int, error) {
 	if server == nil || storage.MVCC == nil || storage.Raft == nil || localMeta == nil {
 		return nil, 0, fmt.Errorf("raftstore: server, storage, or local metadata is nil")
 	}
@@ -234,7 +234,7 @@ func startStorePeers(server *serverpkg.Server, storage serverpkg.Storage, localM
 	}
 	slices.Sort(ids)
 
-	var started []raftmeta.RegionMeta
+	var started []localmeta.RegionMeta
 	for _, id := range ids {
 		meta := snapshot[id]
 		var peerID uint64
@@ -264,7 +264,7 @@ func startStorePeers(server *serverpkg.Server, storage serverpkg.Storage, localM
 			Apply:     kv.NewEntryApplier(storage.MVCC),
 			Storage:   peerStorage,
 			GroupID:   meta.ID,
-			Region:    raftmeta.CloneRegionMetaPtr(&meta),
+			Region:    localmeta.CloneRegionMetaPtr(&meta),
 		}
 		var bootstrapPeers []myraft.Peer
 		for _, p := range meta.Peers {

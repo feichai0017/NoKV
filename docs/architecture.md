@@ -121,7 +121,7 @@ Then read:
 - `vlog.Manager` tracks the active head and uses flush discard stats to trigger GC; manifest records new heads and removed segments.
 
 ### 2.3 Manifest
-- `manifest.Manager` stores only storage-engine metadata: SST metadata, WAL checkpoints, and ValueLog metadata. Store-local raft replay pointers live in `raftstore/meta`.
+- `manifest.Manager` stores only storage-engine metadata: SST metadata, WAL checkpoints, and ValueLog metadata. Store-local raft replay pointers live in `raftstore/localmeta`.
 - `CURRENT` provides crash-safe pointer updates for storage-engine metadata. Region descriptors are no longer stored in the storage manifest.
 
 ### 2.4 LSM Compaction & Ingest Buffer
@@ -195,7 +195,7 @@ Then read:
 - `raftstore/store/store.go`
 - `raftstore/peer/peer.go`
 - `raftstore/engine/wal_storage.go`
-- `raftstore/meta/store.go`
+- `raftstore/localmeta/store.go`
 
 | Package | Responsibility |
 | --- | --- |
@@ -262,7 +262,7 @@ The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC
 
 ## 6. Failure Handling
 
-- Manifest edits capture only storage metadata, WAL checkpoints, and ValueLog pointers. Store-local region recovery state and raft replay pointers are loaded from `raftstore/meta`.
+- Manifest edits capture only storage metadata, WAL checkpoints, and ValueLog pointers. Store-local region recovery state and raft replay pointers are loaded from `raftstore/localmeta`.
 - WAL replay reconstructs memtables and Raft groups; ValueLog recovery trims partial records.
 - `Stats.StartStats` resumes metrics sampling immediately after restart, making it easy to verify recovery correctness via `nokv stats`.
 

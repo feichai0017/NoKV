@@ -2,34 +2,37 @@ package store
 
 import (
 	"fmt"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	"sync"
 
 	"github.com/feichai0017/NoKV/metrics"
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
 type regionManager struct {
 	mu            sync.RWMutex
-	metaByID      map[uint64]raftmeta.RegionMeta
+	metaByID      map[uint64]localmeta.RegionMeta
 	peers         map[uint64]*peer.Peer
-	localMeta     *raftmeta.Store
+	localMeta     *localmeta.Store
 	regionMetrics *metrics.RegionMetrics
 	notify        func(regionEvent)
 }
 
 // syncPeerMirror updates a peer's in-memory region snapshot after the local
 // region truth has already been persisted and applied to the catalog.
-func (rm *regionManager) syncPeerMirror(p *peer.Peer, meta raftmeta.RegionMeta) {
+func (rm *regionManager) syncPeerMirror(p *peer.Peer, meta localmeta.RegionMeta) {
 	if p == nil {
 		return
 	}
 	p.ApplyRegionMetaMirror(meta)
 }
 
-func newRegionManager(localMeta *raftmeta.Store, regionMetrics *metrics.RegionMetrics, notify func(regionEvent)) *regionManager {
+func newRegionManager(localMeta *localmeta.Store, regionMetrics *metrics.RegionMetrics, notify func(regionEvent)) *regionManager {
 	return &regionManager{
-		metaByID:      make(map[uint64]raftmeta.RegionMeta),
+		metaByID:      make(map[uint64]localmeta.RegionMeta),
 		peers:         make(map[uint64]*peer.Peer),
 		localMeta:     localMeta,
 		regionMetrics: regionMetrics,
@@ -37,13 +40,13 @@ func newRegionManager(localMeta *raftmeta.Store, regionMetrics *metrics.RegionMe
 	}
 }
 
-func (rm *regionManager) loadBootstrapSnapshot(snapshot map[uint64]raftmeta.RegionMeta) {
+func (rm *regionManager) loadBootstrapSnapshot(snapshot map[uint64]localmeta.RegionMeta) {
 	if rm == nil || len(snapshot) == 0 {
 		return
 	}
 	rm.mu.Lock()
 	for id, meta := range snapshot {
-		metaCopy := raftmeta.CloneRegionMeta(meta)
+		metaCopy := localmeta.CloneRegionMeta(meta)
 		rm.metaByID[id] = metaCopy
 		if rm.regionMetrics != nil {
 			rm.regionMetrics.RecordUpdate(metaCopy)
@@ -75,50 +78,50 @@ func (rm *regionManager) peer(regionID uint64) *peer.Peer {
 	return p
 }
 
-func (rm *regionManager) meta(regionID uint64) (raftmeta.RegionMeta, bool) {
+func (rm *regionManager) meta(regionID uint64) (localmeta.RegionMeta, bool) {
 	if rm == nil || regionID == 0 {
-		return raftmeta.RegionMeta{}, false
+		return localmeta.RegionMeta{}, false
 	}
 	rm.mu.RLock()
 	meta, ok := rm.metaByID[regionID]
 	rm.mu.RUnlock()
 	if !ok {
-		return raftmeta.RegionMeta{}, false
+		return localmeta.RegionMeta{}, false
 	}
-	return raftmeta.CloneRegionMeta(meta), true
+	return localmeta.CloneRegionMeta(meta), true
 }
 
-func (rm *regionManager) listMetas() []raftmeta.RegionMeta {
+func (rm *regionManager) listMetas() []localmeta.RegionMeta {
 	if rm == nil {
 		return nil
 	}
 	rm.mu.RLock()
-	out := make([]raftmeta.RegionMeta, 0, len(rm.metaByID))
+	out := make([]localmeta.RegionMeta, 0, len(rm.metaByID))
 	for _, meta := range rm.metaByID {
-		out = append(out, raftmeta.CloneRegionMeta(meta))
+		out = append(out, localmeta.CloneRegionMeta(meta))
 	}
 	rm.mu.RUnlock()
 	return out
 }
 
-func (rm *regionManager) applyRegionMeta(meta raftmeta.RegionMeta) error {
+func (rm *regionManager) applyRegionMeta(meta localmeta.RegionMeta, publish bool) error {
 	if rm == nil {
 		return fmt.Errorf("raftstore: region manager nil")
 	}
 	if meta.ID == 0 {
 		return fmt.Errorf("raftstore: region id is zero")
 	}
-	metaCopy := raftmeta.CloneRegionMeta(meta)
+	metaCopy := localmeta.CloneRegionMeta(meta)
 	if metaCopy.State == 0 {
-		metaCopy.State = raftmeta.RegionStateRunning
+		metaCopy.State = metaregion.ReplicaStateRunning
 	}
 
-	var currentState raftmeta.RegionState
+	var currentState metaregion.ReplicaState
 	rm.mu.RLock()
 	if existing, ok := rm.metaByID[metaCopy.ID]; ok {
 		currentState = existing.State
 	} else {
-		currentState = raftmeta.RegionStateNew
+		currentState = metaregion.ReplicaStateNew
 	}
 	rm.mu.RUnlock()
 
@@ -133,7 +136,8 @@ func (rm *regionManager) applyRegionMeta(meta raftmeta.RegionMeta) error {
 	}
 
 	rm.mu.Lock()
-	rm.metaByID[metaCopy.ID] = raftmeta.CloneRegionMeta(metaCopy)
+	_, existed := rm.metaByID[metaCopy.ID]
+	rm.metaByID[metaCopy.ID] = localmeta.CloneRegionMeta(metaCopy)
 	p := rm.peers[metaCopy.ID]
 	rm.mu.Unlock()
 
@@ -141,17 +145,15 @@ func (rm *regionManager) applyRegionMeta(meta raftmeta.RegionMeta) error {
 	if rm.regionMetrics != nil {
 		rm.regionMetrics.RecordUpdate(metaCopy)
 	}
-	if rm.notify != nil {
+	if publish && rm.notify != nil {
 		rm.notify(regionEvent{
-			kind:     regionEventApply,
-			regionID: metaCopy.ID,
-			meta:     metaCopy,
+			root: catalogApplyRootEvent(metaCopy, existed),
 		})
 	}
 	return nil
 }
 
-func (rm *regionManager) applyRegionState(regionID uint64, state raftmeta.RegionState) error {
+func (rm *regionManager) applyRegionState(regionID uint64, state metaregion.ReplicaState) error {
 	if rm == nil {
 		return fmt.Errorf("raftstore: region manager nil")
 	}
@@ -160,10 +162,10 @@ func (rm *regionManager) applyRegionState(regionID uint64, state raftmeta.Region
 		return fmt.Errorf("raftstore: region %d not found", regionID)
 	}
 	meta.State = state
-	return rm.applyRegionMeta(meta)
+	return rm.applyRegionMeta(meta, true)
 }
 
-func (rm *regionManager) applyRegionRemoval(regionID uint64) error {
+func (rm *regionManager) applyRegionRemoval(regionID uint64, publish bool) error {
 	if rm == nil {
 		return fmt.Errorf("raftstore: region manager nil")
 	}
@@ -174,9 +176,9 @@ func (rm *regionManager) applyRegionRemoval(regionID uint64) error {
 	if !ok {
 		return fmt.Errorf("raftstore: region %d not found", regionID)
 	}
-	if meta.State != raftmeta.RegionStateTombstone {
-		meta.State = raftmeta.RegionStateTombstone
-		if err := rm.applyRegionMeta(meta); err != nil {
+	if meta.State != metaregion.ReplicaStateTombstone {
+		meta.State = metaregion.ReplicaStateTombstone
+		if err := rm.applyRegionMeta(meta, publish); err != nil {
 			return err
 		}
 	}
@@ -192,28 +194,39 @@ func (rm *regionManager) applyRegionRemoval(regionID uint64) error {
 	if rm.regionMetrics != nil {
 		rm.regionMetrics.RecordRemove(regionID)
 	}
-	if rm.notify != nil {
+	if publish && rm.notify != nil {
 		rm.notify(regionEvent{
-			kind:     regionEventRemove,
-			regionID: regionID,
+			root: catalogRemovalRootEvent(regionID),
 		})
 	}
 	return nil
 }
 
-func validRegionStateTransition(current, next raftmeta.RegionState) bool {
+func catalogApplyRootEvent(meta localmeta.RegionMeta, existed bool) rootevent.Event {
+	desc := metacodec.DescriptorFromLocalRegionMeta(meta, 0)
+	if !existed {
+		return rootevent.RegionBootstrapped(desc)
+	}
+	return rootevent.RegionDescriptorPublished(desc)
+}
+
+func catalogRemovalRootEvent(regionID uint64) rootevent.Event {
+	return rootevent.RegionTombstoned(regionID)
+}
+
+func validRegionStateTransition(current, next metaregion.ReplicaState) bool {
 	if current == next {
 		return true
 	}
 	switch current {
-	case raftmeta.RegionStateNew:
-		return next == raftmeta.RegionStateRunning
-	case raftmeta.RegionStateRunning:
-		return next == raftmeta.RegionStateRemoving || next == raftmeta.RegionStateTombstone
-	case raftmeta.RegionStateRemoving:
-		return next == raftmeta.RegionStateTombstone
-	case raftmeta.RegionStateTombstone:
-		return next == raftmeta.RegionStateTombstone
+	case metaregion.ReplicaStateNew:
+		return next == metaregion.ReplicaStateRunning
+	case metaregion.ReplicaStateRunning:
+		return next == metaregion.ReplicaStateRemoving || next == metaregion.ReplicaStateTombstone
+	case metaregion.ReplicaStateRemoving:
+		return next == metaregion.ReplicaStateTombstone
+	case metaregion.ReplicaStateTombstone:
+		return next == metaregion.ReplicaStateTombstone
 	default:
 		return false
 	}

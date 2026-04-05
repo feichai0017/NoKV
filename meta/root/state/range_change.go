@@ -1,0 +1,400 @@
+package state
+
+import (
+	"fmt"
+
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
+)
+
+type RangeChangeLifecycleDecision uint8
+
+const (
+	RangeChangeLifecycleApply RangeChangeLifecycleDecision = iota
+	RangeChangeLifecycleSkip
+)
+
+type RangeChangeCompletionState uint8
+
+const (
+	RangeChangeCompletionOpen RangeChangeCompletionState = iota
+	RangeChangeCompletionPending
+	RangeChangeCompletionCompleted
+)
+
+// RangeChangeCompletion is one observed split/merge completion result relative
+// to the current rooted snapshot.
+type RangeChangeCompletion struct {
+	Key     uint64
+	State   RangeChangeCompletionState
+	Pending PendingRangeChange
+}
+
+type RangeChangeLifecycle struct {
+	Decision   RangeChangeLifecycleDecision
+	Completion RangeChangeCompletion
+	Status     TransitionStatus
+	RetryClass TransitionRetryClass
+	Reason     TransitionReason
+	Conflict   bool
+}
+
+func PendingRangeChangeFromEvent(event rootevent.Event) (uint64, PendingRangeChange, bool) {
+	switch event.Kind {
+	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionSplitCommitted, rootevent.KindRegionSplitCancelled:
+		if event.RangeSplit == nil {
+			return 0, PendingRangeChange{}, false
+		}
+		return event.RangeSplit.ParentRegionID, PendingRangeChange{
+			Kind:           PendingRangeChangeSplit,
+			ParentRegionID: event.RangeSplit.ParentRegionID,
+			LeftRegionID:   event.RangeSplit.Left.RegionID,
+			RightRegionID:  event.RangeSplit.Right.RegionID,
+			Left:           event.RangeSplit.Left.Clone(),
+			Right:          event.RangeSplit.Right.Clone(),
+		}, true
+	case rootevent.KindRegionMergePlanned, rootevent.KindRegionMerged, rootevent.KindRegionMergeCancelled:
+		if event.RangeMerge == nil {
+			return 0, PendingRangeChange{}, false
+		}
+		return event.RangeMerge.Merged.RegionID, PendingRangeChange{
+			Kind:          PendingRangeChangeMerge,
+			LeftRegionID:  event.RangeMerge.LeftRegionID,
+			RightRegionID: event.RangeMerge.RightRegionID,
+			Merged:        event.RangeMerge.Merged.Clone(),
+		}, true
+	default:
+		return 0, PendingRangeChange{}, false
+	}
+}
+
+func PendingRangeChangeMatchesEvent(change PendingRangeChange, event rootevent.Event) bool {
+	_, expected, ok := PendingRangeChangeFromEvent(event)
+	if !ok {
+		return false
+	}
+	switch expected.Kind {
+	case PendingRangeChangeSplit:
+		return change.Kind == expected.Kind &&
+			change.ParentRegionID == expected.ParentRegionID &&
+			change.Left.Equal(expected.Left) &&
+			change.Right.Equal(expected.Right)
+	case PendingRangeChangeMerge:
+		return change.Kind == expected.Kind &&
+			change.LeftRegionID == expected.LeftRegionID &&
+			change.RightRegionID == expected.RightRegionID &&
+			change.Merged.Equal(expected.Merged)
+	default:
+		return false
+	}
+}
+
+func RangeChangeStateMatches(descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) bool {
+	switch event.Kind {
+	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionSplitCommitted, rootevent.KindRegionSplitCancelled:
+		if event.RangeSplit == nil {
+			return false
+		}
+		return splitStateMatches(descriptors, event.RangeSplit.ParentRegionID, event.RangeSplit.Left, event.RangeSplit.Right)
+	case rootevent.KindRegionMergePlanned, rootevent.KindRegionMerged, rootevent.KindRegionMergeCancelled:
+		if event.RangeMerge == nil {
+			return false
+		}
+		return mergeStateMatches(descriptors, event.RangeMerge.LeftRegionID, event.RangeMerge.RightRegionID, event.RangeMerge.Merged)
+	default:
+		return false
+	}
+}
+
+func (c RangeChangeCompletion) Open() bool {
+	return c.State == RangeChangeCompletionOpen
+}
+
+func (c RangeChangeCompletion) PendingState() bool {
+	return c.State == RangeChangeCompletionPending
+}
+
+func (c RangeChangeCompletion) Completed() bool {
+	return c.State == RangeChangeCompletionCompleted
+}
+
+func (c RangeChangeCompletion) NeedsEpochAdvance(planned bool) bool {
+	return planned || c.Open()
+}
+
+func (l RangeChangeLifecycle) Retryable() bool {
+	return l.RetryClass != TransitionRetryNone
+}
+
+func rangeChangeSuperseded(descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) bool {
+	switch event.Kind {
+	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionSplitCommitted:
+		if event.RangeSplit == nil {
+			return false
+		}
+		left := event.RangeSplit.Left
+		right := event.RangeSplit.Right
+		targetEpoch := max(right.RootEpoch, left.RootEpoch)
+		if targetEpoch == 0 {
+			return false
+		}
+		if current, ok := descriptors[event.RangeSplit.ParentRegionID]; ok && current.RootEpoch > targetEpoch {
+			return true
+		}
+		if current, ok := descriptors[left.RegionID]; ok && !current.Equal(left) && current.RootEpoch > left.RootEpoch {
+			return true
+		}
+		if current, ok := descriptors[right.RegionID]; ok && !current.Equal(right) && current.RootEpoch > right.RootEpoch {
+			return true
+		}
+	case rootevent.KindRegionMergePlanned, rootevent.KindRegionMerged:
+		if event.RangeMerge == nil {
+			return false
+		}
+		target := event.RangeMerge.Merged
+		if target.RootEpoch == 0 {
+			return false
+		}
+		if current, ok := descriptors[target.RegionID]; ok && !current.Equal(target) && current.RootEpoch > target.RootEpoch {
+			return true
+		}
+	}
+	return false
+}
+
+func ObserveRangeChangeCompletion(pendingRangeChanges map[uint64]PendingRangeChange, descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) RangeChangeCompletion {
+	key, _, ok := PendingRangeChangeFromEvent(event)
+	if !ok {
+		return RangeChangeCompletion{State: RangeChangeCompletionOpen}
+	}
+	if pending, exists := pendingRangeChanges[key]; exists && PendingRangeChangeMatchesEvent(pending, event) {
+		return RangeChangeCompletion{
+			Key:     key,
+			State:   RangeChangeCompletionPending,
+			Pending: pending,
+		}
+	}
+	if RangeChangeStateMatches(descriptors, event) {
+		return RangeChangeCompletion{
+			Key:   key,
+			State: RangeChangeCompletionCompleted,
+		}
+	}
+	return RangeChangeCompletion{
+		Key:   key,
+		State: RangeChangeCompletionOpen,
+	}
+}
+
+func ObserveRangeChangeLifecycle(pendingRangeChanges map[uint64]PendingRangeChange, descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) RangeChangeLifecycle {
+	key, _, ok := PendingRangeChangeFromEvent(event)
+	if !ok {
+		return RangeChangeLifecycle{
+			Decision: RangeChangeLifecycleApply,
+			Status:   TransitionStatusOpen,
+			Reason:   TransitionReasonOpenApply,
+		}
+	}
+	completion := ObserveRangeChangeCompletion(pendingRangeChanges, descriptors, event)
+	_, exists := pendingRangeChanges[key]
+	superseded := rangeChangeSuperseded(descriptors, event)
+	switch event.Kind {
+	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionMergePlanned:
+		switch {
+		case completion.Completed(), completion.PendingState():
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleSkip,
+				Completion: completion,
+				Status:     rangeCompletionStatus(completion),
+				Reason:     rangeCompletionReason(completion),
+			}
+		case superseded:
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleSkip,
+				Completion: completion,
+				Status:     TransitionStatusSuperseded,
+				Reason:     TransitionReasonSupersededTarget,
+			}
+		default:
+			if !exists {
+				return RangeChangeLifecycle{
+					Decision:   RangeChangeLifecycleApply,
+					Completion: completion,
+					Status:     TransitionStatusOpen,
+					Reason:     TransitionReasonOpenApply,
+				}
+			}
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleApply,
+				Completion: completion,
+				Status:     TransitionStatusConflict,
+				RetryClass: TransitionRetryConflict,
+				Reason:     TransitionReasonConflictingPending,
+				Conflict:   true,
+			}
+		}
+	case rootevent.KindRegionSplitCancelled, rootevent.KindRegionMergeCancelled:
+		switch {
+		case completion.PendingState():
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleApply,
+				Completion: completion,
+				Status:     TransitionStatusPending,
+				Reason:     TransitionReasonMatchingPending,
+			}
+		case superseded:
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleSkip,
+				Completion: completion,
+				Status:     TransitionStatusSuperseded,
+				Reason:     TransitionReasonSupersededTarget,
+			}
+		case exists:
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleApply,
+				Completion: completion,
+				Status:     TransitionStatusConflict,
+				RetryClass: TransitionRetryConflict,
+				Reason:     TransitionReasonConflictingPending,
+				Conflict:   true,
+			}
+		case !RangeChangeStateMatches(descriptors, event):
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleSkip,
+				Completion: completion,
+				Status:     TransitionStatusCancelled,
+				Reason:     TransitionReasonCancelledTarget,
+			}
+		default:
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleSkip,
+				Completion: completion,
+				Status:     TransitionStatusAborted,
+				Reason:     TransitionReasonAbortedApply,
+			}
+		}
+	case rootevent.KindRegionSplitCommitted, rootevent.KindRegionMerged:
+		switch {
+		case completion.PendingState():
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleApply,
+				Completion: completion,
+				Status:     TransitionStatusPending,
+				Reason:     TransitionReasonMatchingPending,
+			}
+		case completion.Completed():
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleSkip,
+				Completion: completion,
+				Status:     TransitionStatusCompleted,
+				Reason:     TransitionReasonAlreadyCompleted,
+			}
+		case superseded:
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleSkip,
+				Completion: completion,
+				Status:     TransitionStatusAborted,
+				Reason:     TransitionReasonAbortedApply,
+			}
+		default:
+			if exists {
+				return RangeChangeLifecycle{
+					Decision:   RangeChangeLifecycleApply,
+					Completion: completion,
+					Status:     TransitionStatusConflict,
+					RetryClass: TransitionRetryConflict,
+					Reason:     TransitionReasonConflictingPending,
+					Conflict:   true,
+				}
+			}
+			return RangeChangeLifecycle{
+				Decision:   RangeChangeLifecycleApply,
+				Completion: completion,
+				Status:     TransitionStatusOpen,
+				Reason:     TransitionReasonOpenApply,
+			}
+		}
+	}
+	return RangeChangeLifecycle{
+		Decision:   RangeChangeLifecycleApply,
+		Completion: completion,
+		Status:     TransitionStatusOpen,
+		Reason:     TransitionReasonOpenApply,
+	}
+}
+
+func EvaluateRangeChangeLifecycle(pendingRangeChanges map[uint64]PendingRangeChange, descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) (RangeChangeLifecycleDecision, error) {
+	key, _, ok := PendingRangeChangeFromEvent(event)
+	if !ok {
+		return RangeChangeLifecycleApply, nil
+	}
+	outcome := ObserveRangeChangeLifecycle(pendingRangeChanges, descriptors, event)
+	if !outcome.Conflict {
+		if outcome.Status == TransitionStatusAborted {
+			switch event.Kind {
+			case rootevent.KindRegionSplitCancelled, rootevent.KindRegionMergeCancelled:
+				return outcome.Decision, fmt.Errorf("range change target for region %d can no longer be cancelled", key)
+			default:
+				return outcome.Decision, fmt.Errorf("range change target for region %d was superseded before apply", key)
+			}
+		}
+		return outcome.Decision, nil
+	}
+	switch event.Kind {
+	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionMergePlanned:
+		return outcome.Decision, fmt.Errorf("pending range change already exists for region %d", key)
+	case rootevent.KindRegionSplitCancelled, rootevent.KindRegionMergeCancelled:
+		return outcome.Decision, fmt.Errorf("range change cancel does not match pending target for region %d", key)
+	case rootevent.KindRegionSplitCommitted, rootevent.KindRegionMerged:
+		return outcome.Decision, fmt.Errorf("range change apply does not match pending target for region %d", key)
+	default:
+		return outcome.Decision, nil
+	}
+}
+
+func rangeCompletionStatus(completion RangeChangeCompletion) TransitionStatus {
+	switch completion.State {
+	case RangeChangeCompletionPending:
+		return TransitionStatusPending
+	case RangeChangeCompletionCompleted:
+		return TransitionStatusCompleted
+	default:
+		return TransitionStatusOpen
+	}
+}
+
+func rangeCompletionReason(completion RangeChangeCompletion) TransitionReason {
+	switch completion.State {
+	case RangeChangeCompletionPending:
+		return TransitionReasonMatchingPending
+	case RangeChangeCompletionCompleted:
+		return TransitionReasonAlreadyCompleted
+	default:
+		return TransitionReasonOpenApply
+	}
+}
+
+func splitStateMatches(descriptors map[uint64]descriptor.Descriptor, parentRegionID uint64, left, right descriptor.Descriptor) bool {
+	if parentRegionID != left.RegionID {
+		if _, ok := descriptors[parentRegionID]; ok {
+			return false
+		}
+	}
+	gotLeft, ok := descriptors[left.RegionID]
+	if !ok || !gotLeft.Equal(left) {
+		return false
+	}
+	gotRight, ok := descriptors[right.RegionID]
+	return ok && gotRight.Equal(right)
+}
+
+func mergeStateMatches(descriptors map[uint64]descriptor.Descriptor, leftRegionID, rightRegionID uint64, merged descriptor.Descriptor) bool {
+	if _, ok := descriptors[leftRegionID]; ok {
+		return false
+	}
+	if _, ok := descriptors[rightRegionID]; ok {
+		return false
+	}
+	gotMerged, ok := descriptors[merged.RegionID]
+	return ok && gotMerged.Equal(merged)
+}
