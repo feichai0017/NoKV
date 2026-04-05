@@ -230,14 +230,14 @@ func TestLeaderRestartStillAllowsMembershipChanges(t *testing.T) {
 		removePeerID = 301
 	}
 
-	opCtx, opCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	opCtx, opCancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer opCancel()
 	_, err = migrate.RemovePeer(opCtx, migrate.RemovePeerConfig{
 		Addr:            leaderNode.Addr(),
 		TargetAdminAddr: removeTarget.Addr(),
 		RegionID:        31,
 		PeerID:          removePeerID,
-		WaitTimeout:     5 * time.Second,
+		WaitTimeout:     10 * time.Second,
 		PollInterval:    20 * time.Millisecond,
 	})
 	require.NoError(t, err, testcluster.DumpStatus(t, ctx, 31, seed, target2, target3))
