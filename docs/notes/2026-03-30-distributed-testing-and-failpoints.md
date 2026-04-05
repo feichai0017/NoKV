@@ -31,11 +31,11 @@ NoKV 现在的方向不是选其中之一，而是分层：
 
 ## 2. 当前相关实现
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/testcluster`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/failpoints`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/integration`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/replicated`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/server`
+- `raftstore/testcluster`
+- `raftstore/failpoints`
+- `raftstore/integration`
+- `meta/root/backend/replicated`
+- `pd/server`
 
 ## 3. 为什么不能只靠黑盒
 

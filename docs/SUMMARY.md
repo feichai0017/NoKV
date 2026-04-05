@@ -43,3 +43,4 @@
   - [2026-03-30 分布式测试与 failpoint](notes/2026-03-30-distributed-testing-and-failpoints.md)
   - [2026-03-31 基于 SST 的 Snapshot Install](notes/2026-03-31-sst-snapshot-install.md)
   - [2026-04-03 Rooted Metadata、Delos-lite 与 Virtual Log](notes/2026-04-03-delos-lite-metadata-root-roadmap.md)
+  - [2026-04-05 Range Filter：从 GRF 得到启发，但不照搬 GRF](notes/2026-04-05-range-filter-from-grf.md)

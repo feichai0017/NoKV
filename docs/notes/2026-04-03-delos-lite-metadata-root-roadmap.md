@@ -79,15 +79,15 @@ flowchart LR
 
 这两种模式共享同一个 rooted metadata 领域面：
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/event`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/state`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/materialize`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/storage`
+- `meta/root/event`
+- `meta/root/state`
+- `meta/root/materialize`
+- `meta/root/storage`
 
 差别只在 backend：
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/local`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/replicated`
+- `meta/root/backend/local`
+- `meta/root/backend/replicated`
 
 这点非常重要，因为它意味着：
 
@@ -213,9 +213,9 @@ flowchart LR
 
 关键代码：
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/event/types.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/state`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/storage/substrate.go`
+- `meta/root/event/types.go`
+- `meta/root/state`
+- `meta/root/storage/substrate.go`
 
 `meta/root` 当前是 NoKV 的最小 metadata truth kernel。
 
@@ -245,7 +245,7 @@ flowchart LR
 
 位置：
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/localmeta`
+- `raftstore/localmeta`
 
 角色：
 
@@ -257,7 +257,7 @@ flowchart LR
 
 位置：
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/descriptor`
+- `raftstore/descriptor`
 
 角色：
 
@@ -269,7 +269,7 @@ flowchart LR
 
 位置：
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/event/types.go`
+- `meta/root/event/types.go`
 
 角色：
 
@@ -319,12 +319,12 @@ flowchart LR
 
 关键代码：
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/storage/root.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/core/cluster.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/view/pending_view.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/operator`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/server/service.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/server/transition_service.go`
+- `pd/storage/root.go`
+- `pd/core/cluster.go`
+- `pd/view/pending_view.go`
+- `pd/operator`
+- `pd/server/service.go`
+- `pd/server/transition_service.go`
 
 当前 `pd` 负责：
 
@@ -342,11 +342,11 @@ flowchart LR
 
 关键代码：
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/transition_builder.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/transition_executor.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/transition_outcome.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/membership_service.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/admin_service.go`
+- `raftstore/store/transition_builder.go`
+- `raftstore/store/transition_executor.go`
+- `raftstore/store/transition_outcome.go`
+- `raftstore/store/membership_service.go`
+- `raftstore/store/admin_service.go`
 
 当前 `raftstore` 越来越接近这样的形态：
 
@@ -361,7 +361,7 @@ flowchart LR
 
 核心在：
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/storage/substrate.go`
+- `meta/root/storage/substrate.go`
 
 关键对象：
 
@@ -418,7 +418,7 @@ flowchart TD
 
 位置：
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/local`
+- `meta/root/backend/local`
 
 作用：
 
@@ -431,7 +431,7 @@ flowchart TD
 
 位置：
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/replicated`
+- `meta/root/backend/replicated`
 
 作用：
 

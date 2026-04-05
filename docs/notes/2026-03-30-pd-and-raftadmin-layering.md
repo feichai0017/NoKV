@@ -33,9 +33,9 @@ NoKV 当前选择的是另一条路：
 
 相关代码：
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store`
+- `pd`
+- `meta/root`
+- `raftstore/store`
 
 结构如下：
 
@@ -107,9 +107,9 @@ flowchart LR
 
 相关代码：
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/transition_executor.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/membership_service.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/admin_service.go`
+- `raftstore/store/transition_executor.go`
+- `raftstore/store/membership_service.go`
+- `raftstore/store/admin_service.go`
 
 真正执行时必须经过：
 
@@ -152,11 +152,11 @@ sequenceDiagram
 
 当前 `pd` 的主要代码：
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/storage/root.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/core/cluster.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/view/pending_view.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/operator`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/server`
+- `pd/storage/root.go`
+- `pd/core/cluster.go`
+- `pd/view/pending_view.go`
+- `pd/operator`
+- `pd/server`
 
 可以看出来，它已经不是一个“大 metadata 数据库”了，而是一个 rooted view host。
 

@@ -27,10 +27,10 @@
 
 ## 2. 当前相关实现
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/mode`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/engine/snapshot.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot`
+- `raftstore/mode`
+- `raftstore/migrate`
+- `raftstore/engine/snapshot.go`
+- `raftstore/snapshot`
 
 当前主线可以概括成：
 
@@ -72,8 +72,8 @@ flowchart TD
 
 相关代码：
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/engine/snapshot.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot`
+- `raftstore/engine/snapshot.go`
+- `raftstore/snapshot`
 
 当前最重要的分层是：
 
