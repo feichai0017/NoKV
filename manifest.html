@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e2903395.js";
+            window.path_to_searchindex_js = "searchindex-72fa220b.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b976cdea.js"></script>
+        <script src="toc-41a84e3a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -252,7 +252,7 @@
 <tr><td><code>lsm/levels.go::build</code></td><td>During startup, missing/corrupt SST entries are marked stale and cleaned via <code>EditDeleteFile</code>.</td></tr>
 <tr><td><code>wal</code></td><td>Replays from manifest checkpoint (<code>LogSegment</code>, <code>LogOffset</code>).</td></tr>
 <tr><td><code>vlog</code></td><td>Persists head/update/delete metadata and uses manifest state for stale/orphan cleanup on startup.</td></tr>
-<tr><td><code>raftstore</code></td><td>Does not own manifest state. Store-local region catalogs and raft WAL replay checkpoints live in <code>raftstore/meta</code>; runtime routing state lives in PD storage.</td></tr>
+<tr><td><code>raftstore</code></td><td>Does not own manifest state. Store-local region catalogs and raft WAL replay checkpoints live in <code>raftstore/localmeta</code>; runtime routing state lives in PD storage.</td></tr>
 </tbody>
 </table>
 </div>

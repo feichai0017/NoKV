@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e2903395.js";
+            window.path_to_searchindex_js = "../searchindex-72fa220b.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b976cdea.js"></script>
+        <script src="../toc-41a84e3a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,14 +178,17 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="sst-snapshot-install-for-migration"><a class="header" href="#sst-snapshot-install-for-migration">SST Snapshot Install for Migration</a></h1>
-<p>This note tracks the design and implementation behind GitHub issue <code>#28</code>:
-<code>[Feature Request] Implement SSTable-based Snapshot Install for RaftStore</code>.</p>
+                        <h1 id="基于-sst-的-snapshot-install-设计与实现"><a class="header" href="#基于-sst-的-snapshot-install-设计与实现">基于 SST 的 Snapshot Install 设计与实现</a></h1>
 <blockquote>
-<p>Status: implemented in the migration path and the internal raft snapshot payload path.</p>
+<p>状态：已在 migration 路径和内部 raft snapshot payload 路径中落地。</p>
 </blockquote>
-<h2 id="why-this-matters"><a class="header" href="#why-this-matters">Why this matters</a></h2>
-<p>NoKV already has a correct standalone-to-cluster promotion path:</p>
+<p>这篇记录 GitHub issue <code>#28</code> 背后的设计与实现：</p>
+<blockquote>
+<p>为 <code>RaftStore</code> 实现基于 SSTable 的 Snapshot Install。</p>
+</blockquote>
+<hr>
+<h2 id="1-为什么这件事重要"><a class="header" href="#1-为什么这件事重要">1. 为什么这件事重要</a></h2>
+<p>NoKV 之前已经有一条正确的 standalone 到 cluster 的提升路径：</p>
 <ul>
 <li><code>plan</code></li>
 <li><code>init</code></li>
@@ -194,162 +197,177 @@
 <li><code>transfer-leader</code></li>
 <li><code>remove-peer</code></li>
 </ul>
-<p>That path is now documented, checkpointed, resumable, and validated. The next bottleneck is no longer workflow shape. It is data movement.</p>
-<p>The original region bootstrap/install path was intentionally correctness-first:</p>
+<p>这条路径的工作流、checkpoint、恢复和测试都已经成立。接下来真正的瓶颈不再是“流程怎么走”，而是：</p>
+<blockquote>
+<p>数据怎么搬过去。</p>
+</blockquote>
+<p>最初的 region bootstrap / install 路径是刻意 correctness-first 的：</p>
 <ul>
-<li><code>init</code> exported a region snapshot into the local seed directory</li>
-<li><code>expand</code> exported an in-memory snapshot payload</li>
-<li>the target imported detached entries through the regular write/apply path</li>
+<li><code>init</code> 把 region snapshot 导出到本地 seed 目录</li>
+<li><code>expand</code> 生成内存 snapshot payload</li>
+<li>目标节点通过常规 write/apply 路径导入这些逻辑 entry</li>
 </ul>
-<p>That was the right first implementation. It kept lifecycle semantics clear and made recovery easy to reason about. It is no longer the final install pipeline.</p>
-<p>For larger regions, the current path pays for:</p>
+<p>这条路第一阶段是对的，因为：</p>
 <ul>
-<li>full logical re-encoding</li>
-<li>larger in-memory payloads</li>
-<li>target-side replay through the regular write path</li>
-<li>avoidable write amplification</li>
+<li>生命周期语义清楚</li>
+<li>恢复容易推理</li>
+<li>不会过早把存储层细节泄露到 migration 协议里</li>
 </ul>
-<p>That upgrade has now been implemented without rewriting the migration story.</p>
-<h2 id="current-boundary"><a class="header" href="#current-boundary">Current boundary</a></h2>
-<h3 id="what-exists-today"><a class="header" href="#what-exists-today">What exists today</a></h3>
-<p>The current implementation is split across:</p>
+<p>但它也有明显代价：</p>
 <ul>
-<li><code>raftstore/snapshot/meta.go</code></li>
-<li><code>raftstore/snapshot/dir.go</code></li>
-<li><code>raftstore/snapshot/payload.go</code></li>
-<li><code>raftstore/migrate/init.go</code></li>
-<li><code>raftstore/migrate/expand.go</code></li>
-<li><code>raftstore/store/peer_lifecycle.go</code></li>
-<li><code>lsm/external_sst.go</code></li>
-<li><code>db_snapshot.go</code></li>
+<li>全量逻辑重编码</li>
+<li>大 snapshot 会占用更多内存</li>
+<li>目标侧还要走一遍常规 write path</li>
+<li>存在可避免的写放大</li>
 </ul>
-<p>The raftstore wiring now talks to a narrow snapshot bridge:</p>
+<p>因此，数据搬运层需要升级，但 migration 主线本身不应该被推翻。</p>
+<hr>
+<h2 id="2-当前系统边界"><a class="header" href="#2-当前系统边界">2. 当前系统边界</a></h2>
+<p>当前实现相关代码主要分布在：</p>
+<ul>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/meta.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/dir.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/payload.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate/init.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate/expand.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/peer_lifecycle.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/lsm/external_sst.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/db_snapshot.go</code></li>
+</ul>
+<p>当前 snapshot bridge 暴露的是一层窄接口：</p>
 <ul>
 <li><code>ExportSnapshot(...)</code></li>
 <li><code>ImportSnapshot(...)</code></li>
 <li><code>ExportSnapshotTo(...)</code></li>
 <li><code>ImportSnapshotFrom(...)</code></li>
 </ul>
-<p>That bridge keeps peer/admin wiring at the region-snapshot level while the LSM
-layer continues to own raw <code>ExportExternalSST(...)</code>,
-<code>ImportExternalSST(...)</code>, and <code>RollbackExternalSST(...)</code>.</p>
-<p>The important properties are:</p>
-<ol>
-<li>snapshot export is region-scoped</li>
-<li>target install happens before peer publish</li>
-<li>install currently assumes an empty peer target</li>
-<li>checkpoint/report/failpoint coverage already exists around publish/install boundaries</li>
-<li>publish-before-complete failures roll back imported external SST files</li>
-</ol>
-<p>On the admin path, the region snapshot API now exists in both forms:</p>
+<p>这层接口故意维持在“region snapshot”语义，不直接把 LSM 的底层 SST builder 暴露给 raftstore。</p>
+<h3 id="当前已经具备的能力"><a class="header" href="#当前已经具备的能力">当前已经具备的能力</a></h3>
+<p>存储层已经有 SST ingest 支持：</p>
 <ul>
-<li>unary <code>ExportRegionSnapshot(...)</code> / <code>ImportRegionSnapshot(...)</code></li>
-<li>streaming <code>ExportRegionSnapshotStream(...)</code> / <code>ImportRegionSnapshotStream(...)</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/lsm/external_sst.go</code></li>
 </ul>
-<p><code>migrate expand</code> now uses the streaming path so large region snapshots no
-longer have to move through one single admin RPC payload.</p>
-<p>That means the lifecycle contract survived the transport change. The data movement path is now SST-based.</p>
-<h3 id="what-the-storage-layer-already-gives-us"><a class="header" href="#what-the-storage-layer-already-gives-us">What the storage layer already gives us</a></h3>
-<p>NoKV already has LSM ingest support:</p>
+<p><code>ExportExternalSST(...)</code> / <code>ImportExternalSST(...)</code> / <code>RollbackExternalSST(...)</code> 已经处理了：</p>
 <ul>
-<li><code>lsm/external_sst.go</code></li>
+<li>从 materialized entries 生成 snapshot SST</li>
+<li>输入校验</li>
+<li>key-range overlap 检查</li>
+<li>与现有 L0 的冲突检查</li>
+<li>manifest logging</li>
+<li>失败回滚</li>
 </ul>
-<p><code>ExportExternalSST(...)</code>, <code>ImportExternalSST(...)</code>, and <code>RollbackExternalSST(...)</code> now handle:</p>
-<ul>
-<li>snapshot SST generation from materialized entries</li>
-<li>input validation</li>
-<li>key-range overlap checks between imported SSTs</li>
-<li>overlap checks against existing L0</li>
-<li>LSM manifest logging</li>
-<li>rollback on failure</li>
-</ul>
-<p>This is the storage primitive under the higher-level snapshot path. It is not the migration workflow by itself.</p>
-<h3 id="the-constraint-that-makes-this-non-trivial"><a class="header" href="#the-constraint-that-makes-this-non-trivial">The constraint that makes this non-trivial</a></h3>
-<p>NoKV uses value separation.</p>
-<p>Relevant code:</p>
-<ul>
-<li><code>kv/value.go</code></li>
-<li><code>db.go</code></li>
-<li><code>vlog.go</code></li>
-</ul>
-<p>Large values can be stored as <code>ValuePtr</code>, not inline user bytes. So “copy SSTs and ingest them” is not automatically correct. The imported table may still point at source-side vlog segments.</p>
-<p>That is the main design constraint.</p>
-<h2 id="the-design-we-chose"><a class="header" href="#the-design-we-chose">The design we chose</a></h2>
-<h3 id="design-goal"><a class="header" href="#design-goal">Design goal</a></h3>
-<p>Keep the migration semantics exactly where they are today:</p>
-<ul>
-<li>promote one standalone workdir into one full-range seed region</li>
-<li>expand that seed into more peers</li>
-<li>keep publish/install boundaries unchanged</li>
-</ul>
-<p>Only replace the data movement pipeline.</p>
-<h3 id="the-key-decision"><a class="header" href="#the-key-decision">The key decision</a></h3>
-<p>The first SST-based migration snapshot should be:</p>
+<p>也就是说，SST ingest primitive 已经存在，真正要解决的是：</p>
 <blockquote>
-<p><strong>region-scoped, self-contained, and independent from source-side vlog files</strong></p>
+<p>如何把它放进 migration / snapshot 协议，而不是让存储层细节反向污染迁移层。</p>
 </blockquote>
-<p>The implemented snapshot SST export materializes values inline inside the exported snapshot tables, even if the source DB currently stores some values behind <code>ValuePtr</code>.</p>
-<p>This avoids dragging value-log replication into phase one.</p>
-<h2 id="why-importsnapshot-returns-a-rich-result"><a class="header" href="#why-importsnapshot-returns-a-rich-result">Why <code>ImportSnapshot</code> Returns A Rich Result</a></h2>
-<p><code>ImportSnapshot(...)</code> intentionally returns the full staged-import result, not
-just region metadata.</p>
-<p>The admin/install path needs to:</p>
+<h3 id="让问题变复杂的约束"><a class="header" href="#让问题变复杂的约束">让问题变复杂的约束</a></h3>
+<p>NoKV 采用了 value separation：</p>
+<ul>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/kv/value.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/db.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/vlog.go</code></li>
+</ul>
+<p>一部分 value 可能以 <code>ValuePtr</code> 的形式留在 vlog，而不是直接 inline 在 LSM 里。</p>
+<p>这意味着：</p>
+<blockquote>
+<p>“直接拷贝现有 SST 文件再 ingest” 并不自动成立。</p>
+</blockquote>
+<p>因为导入后的 SST 可能仍然指向源节点的 vlog 文件。</p>
+<hr>
+<h2 id="3-我们最终采用的设计"><a class="header" href="#3-我们最终采用的设计">3. 我们最终采用的设计</a></h2>
+<h3 id="31-设计目标"><a class="header" href="#31-设计目标">3.1 设计目标</a></h3>
+<p>目标不是重写 migration 主线，而是只替换“数据搬运层”：</p>
+<ul>
+<li>仍然先把一个 standalone workdir 提升成 full-range seed region</li>
+<li>仍然通过 <code>expand</code> 把 seed 扩成 replicated region</li>
+<li>仍然保留 install-before-publish 的生命周期边界</li>
+</ul>
+<h3 id="32-关键决策"><a class="header" href="#32-关键决策">3.2 关键决策</a></h3>
+<p>当前第一阶段的 SST snapshot 采用：</p>
+<blockquote>
+<p><strong>region-scoped、self-contained、与源端 vlog 独立</strong></p>
+</blockquote>
+<p>也就是：</p>
+<ul>
+<li>snapshot 仍然是 region 范围内的逻辑快照</li>
+<li>导出的 SST 文件里，value 会被 materialize 成 inline user bytes</li>
+<li>不依赖源端 vlog segment 继续存在</li>
+</ul>
+<p>这样做的结果是：</p>
+<ul>
+<li>snapshot install 仍然保持 region-scoped</li>
+<li>目标端不需要先理解源端 vlog 布局</li>
+<li>rollback 和恢复语义保持简单</li>
+</ul>
+<h3 id="33-为什么-importsnapshot-要返回富结果"><a class="header" href="#33-为什么-importsnapshot-要返回富结果">3.3 为什么 <code>ImportSnapshot(...)</code> 要返回富结果</a></h3>
+<p><code>ImportSnapshot(...)</code> 当前不是只返回 region meta，而是返回完整 staged-import 结果。</p>
+<p>原因是 install 路径需要完整处理这条生命周期：</p>
 <ol>
-<li>import SST files into the target engine</li>
-<li>attempt peer publish / hosting</li>
-<li>if publish fails, roll back the imported SST files</li>
+<li>导入 SST</li>
+<li>尝试 publish / host peer</li>
+<li>如果 publish 失败，回滚已导入的 SST 文件</li>
 </ol>
-<p>So the single import primitive must surface:</p>
+<p>所以 import primitive 必须能携带：</p>
 <ul>
 <li><code>result.Meta.Region</code></li>
 <li><code>result.ImportedFileIDs</code></li>
 <li><code>result.Rollback()</code></li>
 </ul>
-<p>This keeps rollback state available without re-exposing raw external-SST
-details to raftstore wiring, while simple callers can still just read
-<code>result.Meta.Region</code>.</p>
-<h2 id="what-looked-easy-but-is-wrong"><a class="header" href="#what-looked-easy-but-is-wrong">What looked easy but is wrong</a></h2>
-<h3 id="wrong-approach-1-reuse-existing-on-disk-sst-files-directly"><a class="header" href="#wrong-approach-1-reuse-existing-on-disk-sst-files-directly">Wrong approach 1: reuse existing on-disk SST files directly</a></h3>
-<p>This is attractive but wrong for migration phase one.</p>
-<p>Problems:</p>
+<p>这样高层 install 逻辑就可以：</p>
+<ul>
+<li>保持 snapshot-level 语义</li>
+<li>同时仍然拿得到 storage rollback 所需的信息</li>
+</ul>
+<hr>
+<h2 id="4-哪些看起来简单的方案是错的"><a class="header" href="#4-哪些看起来简单的方案是错的">4. 哪些“看起来简单”的方案是错的</a></h2>
+<h3 id="41-直接复用现有-sst-文件"><a class="header" href="#41-直接复用现有-sst-文件">4.1 直接复用现有 SST 文件</a></h3>
+<p>这个看起来最省事，但对 migration phase one 是错的。</p>
+<p>原因：</p>
 <ol>
-<li>Existing SSTs are LSM/layout artifacts, not region snapshot artifacts.</li>
-<li>Existing SST boundaries do not necessarily align with the region snapshot boundary.</li>
-<li>Existing SST entries may still reference source-side vlog segments.</li>
-<li>Reusing existing SSTs couples migration to compaction history instead of region truth.</li>
+<li>现有 SST 是 LSM/compaction 产物，不是 region snapshot 产物</li>
+<li>SST 边界未必和 region 边界对齐</li>
+<li>现有 SST 里的 value 可能仍然依赖源端 vlog</li>
+<li>这样会把 migration 协议和 compaction 历史绑定在一起</li>
 </ol>
-<p>This would make the snapshot protocol leak storage-layout internals that do not belong in the migration contract.</p>
-<h3 id="wrong-approach-2-ship-source-vlog-segments-together-with-ssts"><a class="header" href="#wrong-approach-2-ship-source-vlog-segments-together-with-ssts">Wrong approach 2: ship source vlog segments together with SSTs</a></h3>
-<p>This is also too heavy for phase one.</p>
-<p>Problems:</p>
+<h3 id="42-把源端-vlog-一起打包过去"><a class="header" href="#42-把源端-vlog-一起打包过去">4.2 把源端 vlog 一起打包过去</a></h3>
+<p>这也不适合作为第一阶段方案。</p>
+<p>问题在于：</p>
 <ol>
-<li>The install snapshot becomes cross-layer: SST files + vlog segments + head metadata.</li>
-<li>Import/recovery must now reason about both manifest edits and vlog ownership.</li>
-<li>Target-side cleanup/rollback gets much harder.</li>
-<li>The snapshot stops being region-scoped in a clean way.</li>
+<li>install snapshot 会变成跨层协议：
+<ul>
+<li>SST 文件</li>
+<li>vlog segments</li>
+<li>vlog head / manifest 语义</li>
+</ul>
+</li>
+<li>目标端导入和回滚会复杂很多</li>
+<li>snapshot 不再干净地保持 region-scoped</li>
 </ol>
-<p>This may become interesting later for very large values, but it is the wrong first step.</p>
-<h3 id="wrong-approach-3-solve-split-and-sst-install-together"><a class="header" href="#wrong-approach-3-solve-split-and-sst-install-together">Wrong approach 3: solve split and SST install together</a></h3>
-<p>Current migration intentionally promotes one full-range region first.</p>
-<p>Pulling split/re-shard into the same effort would mix:</p>
+<p>以后对于超大 value，也许可以继续优化，但不该作为第一步。</p>
+<h3 id="43-把-split--reshard-和-snapshot-install-一起做"><a class="header" href="#43-把-split--reshard-和-snapshot-install-一起做">4.3 把 split / reshard 和 snapshot install 一起做</a></h3>
+<p>当前 migration 的主线仍然是：</p>
+<ul>
+<li>先提升出一个 full-range region</li>
+<li>再在这个基础上做扩副本和后续 reshape</li>
+</ul>
+<p>如果把 split / re-shard 和 SST install 一起改，会把以下几件事缠在一起：</p>
 <ul>
 <li>snapshot redesign</li>
 <li>install semantics</li>
-<li>region-layout evolution</li>
+<li>region 布局演化</li>
 </ul>
-<p>That is too much surface area for one iteration.</p>
-<h2 id="snapshot-layout"><a class="header" href="#snapshot-layout">Snapshot Layout</a></h2>
-<h3 id="artifact-shape"><a class="header" href="#artifact-shape">Artifact shape</a></h3>
-<p>The current SST snapshot directory looks like:</p>
+<p>当前阶段不值得这么做。</p>
+<hr>
+<h2 id="5-snapshot-产物长什么样"><a class="header" href="#5-snapshot-产物长什么样">5. Snapshot 产物长什么样</a></h2>
+<p>当前 SST snapshot 目录形态大致是：</p>
 <pre><code class="language-text">snapshot/
-  sst-snapshot.json
+  snapshot.json
   tables/
     000001.sst
     000002.sst
     ...
 </code></pre>
-<h3 id="manifest-fields"><a class="header" href="#manifest-fields">Manifest fields</a></h3>
-<p>The SST snapshot meta carries:</p>
+<p>元信息里会明确记录：</p>
 <ul>
 <li><code>version</code></li>
 <li><code>region</code></li>
@@ -358,7 +376,7 @@ details to raftstore wiring, while simple callers can still just read
 <li><code>inline_values = true</code></li>
 <li>aggregate <code>size_bytes</code></li>
 <li>aggregate <code>value_bytes</code></li>
-<li>per-table:
+<li>per-table：
 <ul>
 <li>relative path</li>
 <li>smallest key</li>
@@ -370,148 +388,83 @@ details to raftstore wiring, while simple callers can still just read
 </li>
 <li><code>created_at</code></li>
 </ul>
-<p>This keeps the region contract explicit and makes target-side validation deterministic without overloading the LSM <code>MANIFEST</code> meaning.</p>
-<h2 id="export-pipeline"><a class="header" href="#export-pipeline">Export pipeline</a></h2>
-<h3 id="source-of-truth"><a class="header" href="#source-of-truth">Source of truth</a></h3>
-<p>Export should still be driven by region-scoped logical iteration, not by existing SST file discovery.</p>
-<p>That means:</p>
+<p>这个 manifest 的目的不是替代 LSM <code>MANIFEST</code>，而是把：</p>
+<blockquote>
+<p>region-scoped snapshot contract</p>
+</blockquote>
+<p>写清楚。</p>
+<hr>
+<h2 id="6-导出与安装流程"><a class="header" href="#6-导出与安装流程">6. 导出与安装流程</a></h2>
+<h3 id="61-导出流程"><a class="header" href="#61-导出流程">6.1 导出流程</a></h3>
+<p>导出仍然以 region-scoped logical iteration 为驱动，而不是扫描当前磁盘上“有哪些现成 SST 能搬”。</p>
+<p>流程是：</p>
 <ol>
-<li>iterate internal entries in region bounds</li>
-<li>materialize each entry through the current snapshot source path</li>
-<li>ensure exported entries are inline-value entries</li>
-<li>write snapshot-specific SST files</li>
+<li>以 region key range 为边界迭代内部 entry</li>
+<li>通过当前 snapshot source 路径把 entry materialize 出来</li>
+<li>确保导出结果是 inline value entry</li>
+<li>写成 snapshot 专用 SST 文件</li>
 </ol>
-<p>This preserves the current semantic boundary while changing the snapshot payload from <code>entries.bin</code> to <code>tables/*.sst</code>.</p>
-<h3 id="implementation-seam"><a class="header" href="#implementation-seam">Implementation seam</a></h3>
-<p>We do not expose raw <code>tableBuilder</code> as a public migration API.</p>
-<p>Instead the code is split across:</p>
+<p>这样做的好处是：</p>
 <ul>
-<li><code>lsm/external_sst.go</code></li>
-<li><code>raftstore/snapshot/dir.go</code></li>
-<li><code>raftstore/snapshot/payload.go</code></li>
+<li>语义边界清楚</li>
+<li>不依赖 compaction 历史</li>
+<li>不把底层 LSM layout 直接暴露给 migration 协议</li>
 </ul>
-<p>The narrow seam does only this:</p>
-<ul>
-<li>take materialized internal entries</li>
-<li>build one or more external SST files</li>
-<li>return manifest metadata</li>
-</ul>
-<p>It does not become a second generic ingestion framework.</p>
-<h2 id="install-pipeline"><a class="header" href="#install-pipeline">Install pipeline</a></h2>
-<h3 id="target-side-contract"><a class="header" href="#target-side-contract">Target-side contract</a></h3>
-<p>Keep the current contract:</p>
-<ul>
-<li>install only into an empty peer target</li>
-<li>validate before publish</li>
-<li>publish only after local data install succeeds</li>
-</ul>
-<h3 id="install-steps"><a class="header" href="#install-steps">Install steps</a></h3>
+<h3 id="62-安装流程"><a class="header" href="#62-安装流程">6.2 安装流程</a></h3>
+<p>目标端安装流程保持原有生命周期原则：</p>
 <ol>
-<li>validate manifest</li>
-<li>validate peer target is empty and region metadata matches</li>
-<li>ingest SST files via <code>ImportExternalSST</code></li>
-<li>persist any local metadata required to treat install as durable</li>
-<li>only then publish/host the peer</li>
+<li>先导入 snapshot SST</li>
+<li>再执行 publish / host peer</li>
+<li>如果 publish 失败，则回滚已导入的 external SST</li>
 </ol>
-<p>The existing boundary failpoint still matters:</p>
+<p>这条边界仍然非常关键，因为它决定了：</p>
 <ul>
-<li><code>raftstore/store/peer_lifecycle.go</code></li>
-<li><code>AfterSnapshotApplyBeforePublish</code></li>
+<li>install 完成前，不允许 region 对外可见</li>
+<li>publish 失败时，不留下半安装状态</li>
 </ul>
-<p>The point of the implementation is to preserve this install/publish boundary, not remove it.</p>
-<h2 id="transport-shape"><a class="header" href="#transport-shape">Transport shape</a></h2>
-<h3 id="init"><a class="header" href="#init"><code>init</code></a></h3>
-<p>For local standalone-to-seed promotion:</p>
+<hr>
+<h2 id="7-这次改动真正改变了什么"><a class="header" href="#7-这次改动真正改变了什么">7. 这次改动真正改变了什么</a></h2>
+<h3 id="没变的"><a class="header" href="#没变的">没变的</a></h3>
 <ul>
-<li>export directly into the seed snapshot directory in the same workdir</li>
+<li>migration 主线没变</li>
+<li>seed -&gt; expand 的故事没变</li>
+<li>install-before-publish 的生命周期边界没变</li>
+<li>raft metadata snapshot 和 region state snapshot 仍然分层</li>
 </ul>
-<p>No network transport change is needed.</p>
-<h3 id="expand"><a class="header" href="#expand"><code>expand</code></a></h3>
-<p>For seed-to-target install, the current implementation keeps a transport payload for simplicity, but the payload now contains SST snapshot files instead of detached logical entries.</p>
-<h2 id="the-value-log-decision"><a class="header" href="#the-value-log-decision">The value-log decision</a></h2>
-<h3 id="what-the-implementation-does"><a class="header" href="#what-the-implementation-does">What the implementation does</a></h3>
-<p>The SST snapshot export forces inline values in the exported SST files.</p>
-<p>That means:</p>
+<h3 id="变了的"><a class="header" href="#变了的">变了的</a></h3>
 <ul>
-<li>snapshot export materializes <code>ValuePtr</code> payloads back into value bytes</li>
-<li>exported snapshot SSTs contain no source-side vlog dependency</li>
+<li>数据搬运从“逻辑 entry payload”为主，升级成“SST snapshot payload”为主</li>
+<li>大 region 的安装不再需要把所有内容都走常规 write/apply path</li>
+<li>snapshot install 的写放大和内存压力明显下降</li>
 </ul>
-<h3 id="why-this-was-the-right-first-step"><a class="header" href="#why-this-was-the-right-first-step">Why this was the right first step</a></h3>
+<p>也就是说：</p>
+<blockquote>
+<p>这次升级改的是 transport / install 形态，不是 migration 的语义本体。</p>
+</blockquote>
+<hr>
+<h2 id="8-还没解决什么"><a class="header" href="#8-还没解决什么">8. 还没解决什么</a></h2>
+<p>当前这条 SST snapshot install 路线仍然有明确边界：</p>
 <ol>
-<li>The snapshot becomes self-contained.</li>
-<li>Install can reuse existing LSM ingest without also rebuilding vlog ownership.</li>
-<li>Recovery remains much easier to reason about.</li>
-<li>The migration contract stays region-scoped and portable.</li>
+<li>还没有把源端 vlog 复制纳入 snapshot 协议</li>
+<li>还没有把 split / reshard 并入同一轮改造</li>
+<li>还没有把 snapshot install 扩展成更通用的大规模 region rebalance 机制</li>
 </ol>
-<h3 id="cost"><a class="header" href="#cost">Cost</a></h3>
-<p>This does mean the snapshot is not “copy existing SST files verbatim”.</p>
-<p>That is acceptable. The goal is faster install and lower target-side write amplification, not absolute zero-copy on day one.</p>
-<h2 id="what-landed"><a class="header" href="#what-landed">What landed</a></h2>
-<p>The implementation now covers:</p>
+<p>这些都可以做，但不属于当前阶段最值得一起推进的内容。</p>
+<hr>
+<h2 id="9-总结"><a class="header" href="#9-总结">9. 总结</a></h2>
+<p>这次设计最关键的点不是“我们开始支持 SST snapshot 了”，而是：</p>
+<blockquote>
+<p>在不破坏 migration 主线和 lifecycle contract 的前提下，把 snapshot install 的数据搬运层升级成了更像工业系统的形态。</p>
+</blockquote>
+<p>这比单纯追求“更快搬数据”更重要。</p>
+<p>因为如果为了搬得快而把：</p>
 <ul>
-<li>full-range seed promotion through SST snapshot files</li>
-<li><code>migrate expand</code> through SST payload install</li>
-<li>internal raft peer snapshot payload export/apply through SST</li>
-<li>rollback of imported SST files when install succeeds but publish fails</li>
-<li>restart and interruption coverage in the integration suite</li>
+<li>region truth</li>
+<li>snapshot contract</li>
+<li>rollback 语义</li>
+<li>publish 边界</li>
 </ul>
-<h2 id="testing-plan"><a class="header" href="#testing-plan">Testing plan</a></h2>
-<h3 id="current-tests"><a class="header" href="#current-tests">Current tests</a></h3>
-<ol>
-<li>SST meta round-trip and payload decode checks</li>
-<li>exported tables contain only keys in region range</li>
-<li>exported snapshot tables contain no <code>ValuePtr</code></li>
-<li>target import installs all data correctly</li>
-<li>payloads missing meta or table files are rejected</li>
-</ol>
-<h3 id="integration-tests"><a class="header" href="#integration-tests">Integration tests</a></h3>
-<ol>
-<li>seed promotion with low <code>ValueThreshold</code> still restores values correctly after SST export/import</li>
-<li>add-peer install with low <code>ValueThreshold</code> works with SST snapshot payloads</li>
-<li>restart after ingest-before-publish behaves correctly</li>
-<li>failpoint before publish still leaves target unpublished and retries cleanly</li>
-</ol>
-<h3 id="recovery-tests"><a class="header" href="#recovery-tests">Recovery tests</a></h3>
-<ol>
-<li>crash after snapshot payload transfer but before ingest</li>
-<li>crash after ingest but before publish</li>
-<li>repeated install attempt is safe or rejected clearly</li>
-</ol>
-<h2 id="code-path-sketch"><a class="header" href="#code-path-sketch">Code path sketch</a></h2>
-<pre class="mermaid">flowchart TD
-    A["Standalone / Leader Region"] --&gt; B["Region-scoped iterator"]
-    B --&gt; C["Materialize internal entries"]
-    C --&gt; D["Build snapshot SST files with inline values"]
-    D --&gt; E["sst-snapshot.json + tables/*.sst"]
-    E --&gt; F["transfer payload to target temp dir"]
-    F --&gt; G["Validate manifest and empty-peer target"]
-    G --&gt; H["ImportExternalSST(...)"]
-    H --&gt; I["publish hosted peer"]
-</pre>
-
-<h2 id="non-goals-for-this-stage"><a class="header" href="#non-goals-for-this-stage">Non-goals for this stage</a></h2>
-<ul>
-<li>zero-downtime online migration</li>
-<li>dual-write cutover</li>
-<li>split/re-shard during migration</li>
-<li>direct reuse of arbitrary existing SST layout</li>
-<li>source vlog segment shipping</li>
-</ul>
-<h2 id="what-this-changed"><a class="header" href="#what-this-changed">What this changed</a></h2>
-<p>NoKV now keeps the migration story intact while upgrading the expensive part:</p>
-<ul>
-<li>logical region truth stays the source contract</li>
-<li>install becomes file-oriented instead of entry-replay-oriented</li>
-<li>target write amplification goes down</li>
-<li>the snapshot path becomes more industrial without dragging split or vlog orchestration into the first SST phase</li>
-</ul>
-<h2 id="what-remains-unsolved"><a class="header" href="#what-remains-unsolved">What remains unsolved</a></h2>
-<ul>
-<li>whether a later phase should support vlog-aware snapshot modes</li>
-<li>whether the admin API should stream files or expose file pull endpoints</li>
-<li>how much reusable builder surface should be exposed from the LSM layer</li>
-<li>when it is worth introducing split-aware migration snapshots</li>
-</ul>
+<p>一起搞乱，那这条路长期是维护不住的。</p>
 
                     </main>
 
@@ -521,6 +474,9 @@ details to raftstore wiring, while simple callers can still just read
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
+                            <a rel="next prefetch" href="../notes/2026-04-03-delos-lite-metadata-root-roadmap.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -532,6 +488,9 @@ details to raftstore wiring, while simple callers can still just read
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
+                    <a rel="next prefetch" href="../notes/2026-04-03-delos-lite-metadata-root-roadmap.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
             </nav>
 
         </div>

@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e2903395.js";
+            window.path_to_searchindex_js = "../searchindex-72fa220b.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b976cdea.js"></script>
+        <script src="../toc-41a84e3a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,10 +178,10 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="2026-03-30-migration-设计里最关键的不是命令而是-mode-和-snapshot"><a class="header" href="#2026-03-30-migration-设计里最关键的不是命令而是-mode-和-snapshot">2026-03-30 migration 设计里最关键的不是命令，而是 mode 和 snapshot</a></h1>
+                        <h1 id="2026-03-30-迁移设计里最关键的不是命令而是-mode-和-snapshot"><a class="header" href="#2026-03-30-迁移设计里最关键的不是命令而是-mode-和-snapshot">2026-03-30 迁移设计里最关键的不是命令，而是 mode 和 snapshot</a></h1>
 <p>这篇记录 migration 主线真正值钱的地方。表面上看，我们只是补了 <code>plan</code>、<code>init</code>、<code>expand</code> 这些命令；但真正让迁移成立的不是命令名，而是背后的状态协议。</p>
 <hr>
-<h2 id="context"><a class="header" href="#context">Context</a></h2>
+<h2 id="背景"><a class="header" href="#背景">背景</a></h2>
 <p>NoKV 当前 migration 主线已经形成：</p>
 <ul>
 <li><code>plan</code></li>
@@ -192,7 +192,7 @@
 <li><code>transfer-leader</code></li>
 </ul>
 <p>但如果只从 CLI 角度理解这套功能，很容易误判成“就是几条方便的运维命令”。</p>
-<h2 id="symptom"><a class="header" href="#symptom">Symptom</a></h2>
+<h2 id="问题"><a class="header" href="#问题">问题</a></h2>
 <p>分布式迁移最容易犯的两个错误是：</p>
 <ol>
 <li><strong>把迁移做成脚本串联</strong></li>
@@ -205,7 +205,7 @@
 <li>应用状态和 raft metadata 混在一起</li>
 <li>增副本靠碰运气，不靠协议</li>
 </ul>
-<h2 id="investigation"><a class="header" href="#investigation">Investigation</a></h2>
+<h2 id="分析"><a class="header" href="#分析">分析</a></h2>
 <p>当前 migration 真正成立，依赖两条主线：</p>
 <h3 id="1-workdir-mode-gate"><a class="header" href="#1-workdir-mode-gate">1. workdir mode gate</a></h3>
 <p><code>raftstore/mode</code> 现在有：</p>
@@ -246,13 +246,13 @@
 <ul>
 <li>某个 region key range 内的真实状态机内容</li>
 </ul>
-<h2 id="root-cause"><a class="header" href="#root-cause">Root cause</a></h2>
+<h2 id="根因"><a class="header" href="#根因">根因</a></h2>
 <p>standalone 到 distributed 的桥接之所以难，不是因为“缺一个命令”，而是因为：</p>
 <blockquote>
 <p>系统缺少一种能把已有 workdir 正式提升成 region state 的语义。</p>
 </blockquote>
 <p>如果没有 mode gate，迁移中的 workdir 仍然可能被错误使用。<br>如果没有逻辑 region snapshot，<code>expand</code> 和 seed bootstrap 就只能建立在不干净的目录复制或隐式状态假设上。</p>
-<h2 id="fix"><a class="header" href="#fix">Fix</a></h2>
+<h2 id="方案"><a class="header" href="#方案">方案</a></h2>
 <p>当前 NoKV 的迁移协议是成立的，因为它做了三件对的事情：</p>
 <ol>
 <li>用 <code>mode</code> 把 workdir 生命周期写死。</li>
@@ -265,7 +265,7 @@
 <li>快照边界</li>
 <li>恢复边界</li>
 </ul>
-<h2 id="follow-ups"><a class="header" href="#follow-ups">Follow-ups</a></h2>
+<h2 id="后续"><a class="header" href="#后续">后续</a></h2>
 <ol>
 <li>下一阶段的提升不应该破坏这条分层<br>例如未来做 SST-based snapshot install，也应该继续保留：
 <ul>

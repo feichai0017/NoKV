@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e2903395.js";
+            window.path_to_searchindex_js = "../searchindex-72fa220b.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b976cdea.js"></script>
+        <script src="../toc-41a84e3a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,7 +181,7 @@
                         <h1 id="2026-03-30-为什么-pd-和-raftadmin-不能混成一层"><a class="header" href="#2026-03-30-为什么-pd-和-raftadmin-不能混成一层">2026-03-30 为什么 PD 和 RaftAdmin 不能混成一层</a></h1>
 <p>这篇记录当前 <code>PD</code> 与 <code>RaftAdmin</code> 的职责边界。这个边界看起来像“小命名问题”，实际上直接影响整个分布式系统的真相源和控制流是否会变脏。</p>
 <hr>
-<h2 id="context"><a class="header" href="#context">Context</a></h2>
+<h2 id="背景"><a class="header" href="#背景">背景</a></h2>
 <p>NoKV 现在同时有两层控制相关接口：</p>
 <ul>
 <li><code>pd</code></li>
@@ -191,7 +191,7 @@
 <blockquote>
 <p>既然有 PD，为什么还需要 <code>RaftAdmin</code>？</p>
 </blockquote>
-<h2 id="symptom"><a class="header" href="#symptom">Symptom</a></h2>
+<h2 id="问题"><a class="header" href="#问题">问题</a></h2>
 <p>如果边界不清楚，系统很容易滑向两种坏形态：</p>
 <ol>
 <li>
@@ -202,7 +202,7 @@
 </li>
 </ol>
 <p>这两种都不是长期可维护的架构。</p>
-<h2 id="investigation"><a class="header" href="#investigation">Investigation</a></h2>
+<h2 id="分析"><a class="header" href="#分析">分析</a></h2>
 <p>当前 NoKV 的分层本质上是：</p>
 <h3 id="raftadmin"><a class="header" href="#raftadmin"><code>RaftAdmin</code></a></h3>
 <p>负责：</p>
@@ -230,7 +230,7 @@
 <blockquote>
 <p><strong>cluster 级 control plane</strong></p>
 </blockquote>
-<h2 id="root-cause"><a class="header" href="#root-cause">Root cause</a></h2>
+<h2 id="根因"><a class="header" href="#根因">根因</a></h2>
 <p>两者不能混成一层，根本原因是：</p>
 <h3 id="control-plane-不等于-execution-plane"><a class="header" href="#control-plane-不等于-execution-plane">control plane 不等于 execution plane</a></h3>
 <p>PD 最擅长的是：</p>
@@ -253,7 +253,7 @@
 <li>恢复路径和正常执行路径不一致</li>
 <li>分布式错误难以收敛，因为调度器开始兼做执行器</li>
 </ol>
-<h2 id="fix"><a class="header" href="#fix">Fix</a></h2>
+<h2 id="方案"><a class="header" href="#方案">方案</a></h2>
 <p>当前 NoKV 的正确做法是：</p>
 <ol>
 <li>保留 <code>RaftAdmin</code> 作为 execution plane。</li>
@@ -266,7 +266,7 @@
 </li>
 </ol>
 <p>而不是让 <code>PD</code> 直接篡改本地运行时。</p>
-<h2 id="follow-ups"><a class="header" href="#follow-ups">Follow-ups</a></h2>
+<h2 id="后续"><a class="header" href="#后续">后续</a></h2>
 <ol>
 <li><code>RegionRuntimeStatus</code> 要保持克制<br>不要把它继续膨胀成万能 dump API。</li>
 <li><code>PD</code> 以后如果做 operator framework，应明确只编排，不直接改本地 truth。</li>

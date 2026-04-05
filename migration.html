@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e2903395.js";
+            window.path_to_searchindex_js = "searchindex-72fa220b.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b976cdea.js"></script>
+        <script src="toc-41a84e3a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -244,7 +244,7 @@ NoKV does not treat standalone and distributed mode as two separate products glu
 <li>The migrated workdir must not silently reopen as a normal standalone directory.</li>
 <li>Bootstrap is the only allowed non-apply path that creates the initial region truth for the promoted directory.</li>
 <li>Engine manifest stays storage-engine metadata only.</li>
-<li>Store-local region truth stays in <code>raftstore/meta</code>.</li>
+<li>Store-local region truth stays in <code>raftstore/localmeta</code>.</li>
 <li>PD does not create local truth during bootstrap.</li>
 </ol>
 <p>Those invariants are what make the feature defensible. Without them, “standalone to cluster” collapses into ad hoc tooling.</p>
@@ -402,7 +402,7 @@ That checkpoint records which milestone of the standalone-to-seed promotion has 
 <p>At a high level it does this:</p>
 <ol>
 <li>write mode = <code>preparing</code></li>
-<li>persist a full-range local <code>RegionMeta</code> in <code>raftstore/meta</code></li>
+<li>persist a full-range local <code>RegionMeta</code> in <code>raftstore/localmeta</code></li>
 <li>export one full-range SST seed snapshot from the standalone DB</li>
 <li>synthesize the initial raft durable state for a single local voter</li>
 <li>persist the local raft replay pointer</li>
@@ -412,7 +412,7 @@ That checkpoint records which milestone of the standalone-to-seed promotion has 
 <p>After <code>init</code>, the promoted directory is not started through a special bootstrap runtime. It is opened through normal distributed startup:</p>
 <ul>
 <li>open the same DB workdir</li>
-<li>load local recovery metadata from <code>raftstore/meta</code></li>
+<li>load local recovery metadata from <code>raftstore/localmeta</code></li>
 <li>open group-local raft durable state</li>
 <li>start one local peer</li>
 <li>serve distributed traffic through the regular raftstore path</li>

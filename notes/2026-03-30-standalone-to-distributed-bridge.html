@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e2903395.js";
+            window.path_to_searchindex_js = "../searchindex-72fa220b.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b976cdea.js"></script>
+        <script src="../toc-41a84e3a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,10 +178,10 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="2026-03-30-standalone-到-distributed-的桥接为什么值钱"><a class="header" href="#2026-03-30-standalone-到-distributed-的桥接为什么值钱">2026-03-30 standalone 到 distributed 的桥接为什么值钱</a></h1>
+                        <h1 id="2026-03-30-standalone-到-distributed-的桥接为什么重要"><a class="header" href="#2026-03-30-standalone-到-distributed-的桥接为什么重要">2026-03-30 standalone 到 distributed 的桥接为什么重要</a></h1>
 <p>这篇记录不是在描述某个单点实现，而是在解释 NoKV 目前最有产品价值的一条主线：<strong>单机和分布式不是两套割裂系统，而是同一套数据面在不同运行形态下的演进。</strong></p>
 <hr>
-<h2 id="context"><a class="header" href="#context">Context</a></h2>
+<h2 id="背景"><a class="header" href="#背景">背景</a></h2>
 <p>项目同时具备：</p>
 <ul>
 <li><code>DB</code> 单机数据面</li>
@@ -190,7 +190,7 @@
 <li><code>migrate</code> 独立迁移协议</li>
 </ul>
 <p>看起来像是在做两个系统，但当前的设计目标不是“单机一个产品、分布式另一个产品”，而是让两者共享同一套底层状态。</p>
-<h2 id="symptom"><a class="header" href="#symptom">Symptom</a></h2>
+<h2 id="问题"><a class="header" href="#问题">问题</a></h2>
 <p>很多存储项目一旦走到分布式阶段，就会遇到一个非常实际的问题：</p>
 <ol>
 <li>单机阶段先跑得起来。</li>
@@ -205,14 +205,14 @@
 </li>
 </ol>
 <p>这会直接把“从小到大演进”的故事打断。</p>
-<h2 id="investigation"><a class="header" href="#investigation">Investigation</a></h2>
+<h2 id="分析"><a class="header" href="#分析">分析</a></h2>
 <p>NoKV 当前这条桥接路径成立，核心靠的是几个设计决定同时为真：</p>
 <ol>
 <li>
 <p><code>DB</code> 仍然是底层共享数据面<br>不是把 standalone 数据导出后再导入另一种存储格式。</p>
 </li>
 <li>
-<p><code>raftstore/meta</code> 与 <code>manifest</code> 分开<br>引擎元数据和分布式恢复元数据没有继续混在一起。</p>
+<p><code>raftstore/localmeta</code> 与 <code>manifest</code> 分开<br>引擎元数据和分布式恢复元数据没有继续混在一起。</p>
 </li>
 <li>
 <p><code>raftstore/snapshot</code> 引入了逻辑 region snapshot<br>把“应用状态快照”和“raft durable snapshot metadata”分层。</p>
@@ -224,7 +224,7 @@
 <p><code>migrate</code> 把桥接过程显式化<br><code>plan -&gt; init -&gt; serve -&gt; expand</code> 不是脚本约定，而是正式控制流。</p>
 </li>
 </ol>
-<h2 id="root-cause"><a class="header" href="#root-cause">Root cause</a></h2>
+<h2 id="根因"><a class="header" href="#根因">根因</a></h2>
 <p>真正让单机和分布式难以衔接的，不是“技术栈不同”，而是<strong>状态语义不同</strong>。</p>
 <p>单机系统通常只需要：</p>
 <ul>
@@ -242,7 +242,7 @@
 <li>control-plane view</li>
 </ul>
 <p>如果这些额外语义没有被设计成可提升、可恢复、可验证的状态层，那么单机到分布式就只剩下粗暴搬运数据。</p>
-<h2 id="fix"><a class="header" href="#fix">Fix</a></h2>
+<h2 id="方案"><a class="header" href="#方案">方案</a></h2>
 <p>NoKV 当前的修法，本质上是把“增加 distributed identity”这件事协议化了：</p>
 <ol>
 <li>先用 <code>mode</code> 锁住 workdir 生命周期。</li>
@@ -255,7 +255,7 @@
 <blockquote>
 <p>NoKV 的分布式能力不是独立产品，而是同一套系统的放大形态。</p>
 </blockquote>
-<h2 id="follow-ups"><a class="header" href="#follow-ups">Follow-ups</a></h2>
+<h2 id="后续"><a class="header" href="#后续">后续</a></h2>
 <ol>
 <li>后面如果继续推进，这条桥最该加强的是：
 <ul>

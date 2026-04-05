@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e2903395.js";
+            window.path_to_searchindex_js = "searchindex-72fa220b.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b976cdea.js"></script>
+        <script src="toc-41a84e3a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -201,7 +201,7 @@
 <tr><td><a href="../raftstore/store"><code>store</code></a></td><td>Orchestrates peer set, command pipeline, region manager, scheduler/heartbeat loops; exposes helpers such as <code>StartPeer</code>, <code>ProposeCommand</code>, <code>SplitRegion</code>.</td></tr>
 <tr><td><a href="../raftstore/peer"><code>peer</code></a></td><td>Wraps etcd/raft <code>RawNode</code>, drives Ready processing (persist to WAL, send messages, apply entries), tracks snapshot resend/backlog.</td></tr>
 <tr><td><a href="../raftstore/engine"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while tracking store-local raft replay metadata.</td></tr>
-<tr><td><a href="../raftstore/meta"><code>meta</code></a></td><td>Store-local durable metadata: peer catalog for restart and raft WAL replay checkpoints for replay/GC.</td></tr>
+<tr><td><a href="../raftstore/localmeta"><code>meta</code></a></td><td>Store-local durable metadata: peer catalog for restart and raft WAL replay checkpoints for replay/GC.</td></tr>
 <tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (NoKV).</td></tr>
 <tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>NoKV RPC implementation, bridging Raft commands to MVCC operations via <code>kv.Apply</code>.</td></tr>
 <tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>ServerConfig</code> + <code>New</code> that bind DB, Store, transport, and NoKV server into a reusable node primitive.</td></tr>
@@ -220,7 +220,7 @@
         Store --&gt; Peer["peer.Peer"]
         Store --&gt; Scheduler["scheduler runtime"]
         Store --&gt; Admin["admin service"]
-        Store --&gt; Meta["raftstore/meta"]
+        Store --&gt; Meta["raftstore/localmeta"]
         Peer --&gt; Engine["raftstore/engine"]
         Peer --&gt; Apply["kv.Apply"]
     end
@@ -242,7 +242,7 @@
 </code></pre>
 <ul>
 <li>A gRPC transport is created, the NoKV service is registered, and <code>transport.SetHandler(store.Step)</code> wires raft Step handling.</li>
-<li><code>store.Store</code> loads the local peer catalog from <code>raftstore/meta</code> to rebuild the Region catalog (router + metrics).</li>
+<li><code>store.Store</code> loads the local peer catalog from <code>raftstore/localmeta</code> to rebuild the Region catalog (router + metrics).</li>
 </ul>
 </li>
 <li>
@@ -282,7 +282,7 @@
 <ol>
 <li>Write RPCs (Prewrite/Commit/…) call <code>Store.ProposeCommand</code>, encoding the command and routing to the leader peer.</li>
 <li>The leader appends the encoded request to raft, replicates, and once committed the command pipeline hands data to <code>kv.Apply</code>, which maps Prewrite/Commit/ResolveLock to the <code>percolator</code> package.</li>
-<li><code>engine.WALStorage</code> persists raft entries/state snapshots and updates <code>raftstore/meta</code> raft pointers. This keeps WAL GC and raft truncation aligned without polluting the storage manifest.</li>
+<li><code>engine.WALStorage</code> persists raft entries/state snapshots and updates <code>raftstore/localmeta</code> raft pointers. This keeps WAL GC and raft truncation aligned without polluting the storage manifest.</li>
 <li>Raft apply only accepts command-encoded payloads (<code>RaftCmdRequest</code>). Legacy raw KV payloads are rejected as unsupported.</li>
 </ol>
 <h3 id="command-flow-diagram"><a class="header" href="#command-flow-diagram">Command flow diagram</a></h3>
@@ -325,7 +325,7 @@
 <h2 id="5-storage-backend-engine"><a class="header" href="#5-storage-backend-engine">5. Storage Backend (engine)</a></h2>
 <ul>
 <li><code>WALStorage</code> piggybacks on the embedded WAL: each Raft group writes typed entries, HardState, and snapshots into the shared log.</li>
-<li><code>raftstore/meta</code> persists the store-local raft replay pointer used by WAL GC and replay.</li>
+<li><code>raftstore/localmeta</code> persists the store-local raft replay pointer used by WAL GC and replay.</li>
 <li>Alternative storage backends (<code>DiskStorage</code>, <code>MemoryStorage</code>) are available for tests and special scenarios.</li>
 </ul>
 <hr>
@@ -432,7 +432,7 @@ equal authority:</p>
 <li>
 <p><strong>Store-local persistent mirror</strong></p>
 <ul>
-<li>Owned by <a href="../raftstore/meta"><code>raftstore/meta</code></a>.</li>
+<li>Owned by <a href="../raftstore/localmeta"><code>raftstore/localmeta</code></a>.</li>
 <li>Persists:
 <ul>
 <li>local region catalog entries for restart</li>
@@ -462,7 +462,7 @@ authority and must not be treated as consensus truth outside the store.</li>
 <p>The resulting rule is simple:</p>
 <ul>
 <li><code>raft apply/bootstrap</code> advances local truth</li>
-<li><code>raftstore/meta</code> mirrors that truth for restart</li>
+<li><code>raftstore/localmeta</code> mirrors that truth for restart</li>
 <li><code>PD</code> observes and schedules from heartbeats</li>
 </ul>
 <p>This separation is what prevents parallel truth sources from creeping back into

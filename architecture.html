@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e2903395.js";
+            window.path_to_searchindex_js = "searchindex-72fa220b.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b976cdea.js"></script>
+        <script src="toc-41a84e3a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -290,7 +290,7 @@ fmt.Println(string(entry.Value))
 </ul>
 <h3 id="23-manifest"><a class="header" href="#23-manifest">2.3 Manifest</a></h3>
 <ul>
-<li><code>manifest.Manager</code> stores only storage-engine metadata: SST metadata, WAL checkpoints, and ValueLog metadata. Store-local raft replay pointers live in <code>raftstore/meta</code>.</li>
+<li><code>manifest.Manager</code> stores only storage-engine metadata: SST metadata, WAL checkpoints, and ValueLog metadata. Store-local raft replay pointers live in <code>raftstore/localmeta</code>.</li>
 <li><code>CURRENT</code> provides crash-safe pointer updates for storage-engine metadata. Region descriptors are no longer stored in the storage manifest.</li>
 </ul>
 <h3 id="24-lsm-compaction--ingest-buffer"><a class="header" href="#24-lsm-compaction--ingest-buffer">2.4 LSM Compaction &amp; Ingest Buffer</a></h3>
@@ -364,7 +364,7 @@ defer srv.Close()
 <li><code>raftstore/store/store.go</code></li>
 <li><code>raftstore/peer/peer.go</code></li>
 <li><code>raftstore/engine/wal_storage.go</code></li>
-<li><code>raftstore/meta/store.go</code></li>
+<li><code>raftstore/localmeta/store.go</code></li>
 </ul>
 <div class="table-wrapper">
 <table>
@@ -442,7 +442,7 @@ defer srv.Close()
 <hr>
 <h2 id="6-failure-handling"><a class="header" href="#6-failure-handling">6. Failure Handling</a></h2>
 <ul>
-<li>Manifest edits capture only storage metadata, WAL checkpoints, and ValueLog pointers. Store-local region recovery state and raft replay pointers are loaded from <code>raftstore/meta</code>.</li>
+<li>Manifest edits capture only storage metadata, WAL checkpoints, and ValueLog pointers. Store-local region recovery state and raft replay pointers are loaded from <code>raftstore/localmeta</code>.</li>
 <li>WAL replay reconstructs memtables and Raft groups; ValueLog recovery trims partial records.</li>
 <li><code>Stats.StartStats</code> resumes metrics sampling immediately after restart, making it easy to verify recovery correctness via <code>nokv stats</code>.</li>
 </ul>

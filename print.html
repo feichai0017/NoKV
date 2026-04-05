@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e2903395.js";
+            window.path_to_searchindex_js = "searchindex-72fa220b.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b976cdea.js"></script>
+        <script src="toc-41a84e3a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -884,7 +884,7 @@ fmt.Println(string(entry.Value))
 </ul>
 <h3 id="23-manifest"><a class="header" href="#23-manifest">2.3 Manifest</a></h3>
 <ul>
-<li><code>manifest.Manager</code> stores only storage-engine metadata: SST metadata, WAL checkpoints, and ValueLog metadata. Store-local raft replay pointers live in <code>raftstore/meta</code>.</li>
+<li><code>manifest.Manager</code> stores only storage-engine metadata: SST metadata, WAL checkpoints, and ValueLog metadata. Store-local raft replay pointers live in <code>raftstore/localmeta</code>.</li>
 <li><code>CURRENT</code> provides crash-safe pointer updates for storage-engine metadata. Region descriptors are no longer stored in the storage manifest.</li>
 </ul>
 <h3 id="24-lsm-compaction--ingest-buffer"><a class="header" href="#24-lsm-compaction--ingest-buffer">2.4 LSM Compaction &amp; Ingest Buffer</a></h3>
@@ -958,7 +958,7 @@ defer srv.Close()
 <li><code>raftstore/store/store.go</code></li>
 <li><code>raftstore/peer/peer.go</code></li>
 <li><code>raftstore/engine/wal_storage.go</code></li>
-<li><code>raftstore/meta/store.go</code></li>
+<li><code>raftstore/localmeta/store.go</code></li>
 </ul>
 <div class="table-wrapper">
 <table>
@@ -1036,7 +1036,7 @@ defer srv.Close()
 <hr>
 <h2 id="6-failure-handling"><a class="header" href="#6-failure-handling">6. Failure Handling</a></h2>
 <ul>
-<li>Manifest edits capture only storage metadata, WAL checkpoints, and ValueLog pointers. Store-local region recovery state and raft replay pointers are loaded from <code>raftstore/meta</code>.</li>
+<li>Manifest edits capture only storage metadata, WAL checkpoints, and ValueLog pointers. Store-local region recovery state and raft replay pointers are loaded from <code>raftstore/localmeta</code>.</li>
 <li>WAL replay reconstructs memtables and Raft groups; ValueLog recovery trims partial records.</li>
 <li><code>Stats.StartStats</code> resumes metrics sampling immediately after restart, making it easy to verify recovery correctness via <code>nokv stats</code>.</li>
 </ul>
@@ -2393,7 +2393,7 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 <tr><td><code>DB.commitWorker</code></td><td>Commit worker applies batched writes via <code>writeToLSM</code>, which calls <code>lsm.SetBatch</code> and appends one WAL entry-batch record per request batch.</td></tr>
 <tr><td><code>DB.Set</code> / <code>DB.SetBatch</code> / <code>DB.SetWithTTL</code> / <code>DB.Del</code> / <code>DB.DeleteRange</code> / <code>DB.ApplyInternalEntries</code></td><td>User/internal writes all flow through the same commit queue and eventually reach <code>lsm.SetBatch</code> + WAL append.</td></tr>
 <tr><td><code>lsm/levels.go::flush</code></td><td>Persists WAL checkpoint via <code>manifest.LogEdits(EditAddFile, EditLogPointer)</code> during flush install.</td></tr>
-<tr><td><code>lsm/levels.go::flush</code> + <code>lsm/levelManager.canRemoveWalSegment</code></td><td>Removes obsolete WAL segments after storage checkpoint and <code>raftstore/meta</code> replay constraints are satisfied.</td></tr>
+<tr><td><code>lsm/levels.go::flush</code> + <code>lsm/levelManager.canRemoveWalSegment</code></td><td>Removes obsolete WAL segments after storage checkpoint and <code>raftstore/localmeta</code> replay constraints are satisfied.</td></tr>
 <tr><td><code>db.runRecoveryChecks</code></td><td>Ensures WAL directory invariants before manifest replay, similar to Badger’s directory bootstrap.</td></tr>
 </tbody>
 </table>
@@ -2413,7 +2413,7 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 surface warnings when raft-typed records dominate the log. It:</p>
 <ul>
 <li>Samples WAL metrics + per-segment metrics and combines them with
-<code>raftstore/meta</code> raft pointer snapshots to compute removable segments.</li>
+<code>raftstore/localmeta</code> raft pointer snapshots to compute removable segments.</li>
 <li>Removes up to <code>WALAutoGCMaxBatch</code> segments when at least
 <code>WALAutoGCMinRemovable</code> are eligible.</li>
 <li>Exposes counters (<code>wal.auto_gc_runs/removed/last_unix</code>) and warning state
@@ -2447,7 +2447,7 @@ surface warnings when raft-typed records dominate the log. It:</p>
 <h2 id="9-truncation-metadata"><a class="header" href="#9-truncation-metadata">9. Truncation Metadata</a></h2>
 <ul>
 <li><code>raftstore/engine/wal_storage</code> keeps a per-group index of <code>[firstIndex,lastIndex]</code> spans for each WAL record so it can map raft log indices back to the segment that stored them.</li>
-<li>When a log is truncated (either via snapshot or future compaction hooks), the store-local metadata in <code>raftstore/meta</code> is updated with the index/term, segment ID (<code>RaftLogPointer.SegmentIndex</code>), and byte offset (<code>RaftLogPointer.TruncatedOffset</code>) that delimit the remaining WAL data.</li>
+<li>When a log is truncated (either via snapshot or future compaction hooks), the store-local metadata in <code>raftstore/localmeta</code> is updated with the index/term, segment ID (<code>RaftLogPointer.SegmentIndex</code>), and byte offset (<code>RaftLogPointer.TruncatedOffset</code>) that delimit the remaining WAL data.</li>
 <li><code>lsm/levelManager.canRemoveWalSegment</code> blocks garbage collection whenever any raft group still references a segment through that store-local truncation metadata, preventing slow followers from losing required WAL history while letting aggressively compacted groups release older segments earlier.</li>
 </ul>
 <p>For broader context, read the <a href="#nokv-architecture-overview">architecture overview</a> and <a href="#memtable-flush-pipeline">flush pipeline</a> documents.</p>
@@ -2698,7 +2698,7 @@ _ = mgr.Remove(fid)  // close + delete file
 <tr><td><code>lsm/levels.go::build</code></td><td>During startup, missing/corrupt SST entries are marked stale and cleaned via <code>EditDeleteFile</code>.</td></tr>
 <tr><td><code>wal</code></td><td>Replays from manifest checkpoint (<code>LogSegment</code>, <code>LogOffset</code>).</td></tr>
 <tr><td><code>vlog</code></td><td>Persists head/update/delete metadata and uses manifest state for stale/orphan cleanup on startup.</td></tr>
-<tr><td><code>raftstore</code></td><td>Does not own manifest state. Store-local region catalogs and raft WAL replay checkpoints live in <code>raftstore/meta</code>; runtime routing state lives in PD storage.</td></tr>
+<tr><td><code>raftstore</code></td><td>Does not own manifest state. Store-local region catalogs and raft WAL replay checkpoints live in <code>raftstore/localmeta</code>; runtime routing state lives in PD storage.</td></tr>
 </tbody>
 </table>
 </div>
@@ -3517,7 +3517,7 @@ is not present.</li>
 <tr><td><a href="../raftstore/store"><code>store</code></a></td><td>Orchestrates peer set, command pipeline, region manager, scheduler/heartbeat loops; exposes helpers such as <code>StartPeer</code>, <code>ProposeCommand</code>, <code>SplitRegion</code>.</td></tr>
 <tr><td><a href="../raftstore/peer"><code>peer</code></a></td><td>Wraps etcd/raft <code>RawNode</code>, drives Ready processing (persist to WAL, send messages, apply entries), tracks snapshot resend/backlog.</td></tr>
 <tr><td><a href="../raftstore/engine"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while tracking store-local raft replay metadata.</td></tr>
-<tr><td><a href="../raftstore/meta"><code>meta</code></a></td><td>Store-local durable metadata: peer catalog for restart and raft WAL replay checkpoints for replay/GC.</td></tr>
+<tr><td><a href="../raftstore/localmeta"><code>meta</code></a></td><td>Store-local durable metadata: peer catalog for restart and raft WAL replay checkpoints for replay/GC.</td></tr>
 <tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (NoKV).</td></tr>
 <tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>NoKV RPC implementation, bridging Raft commands to MVCC operations via <code>kv.Apply</code>.</td></tr>
 <tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>ServerConfig</code> + <code>New</code> that bind DB, Store, transport, and NoKV server into a reusable node primitive.</td></tr>
@@ -3536,7 +3536,7 @@ is not present.</li>
         Store --&gt; Peer["peer.Peer"]
         Store --&gt; Scheduler["scheduler runtime"]
         Store --&gt; Admin["admin service"]
-        Store --&gt; Meta["raftstore/meta"]
+        Store --&gt; Meta["raftstore/localmeta"]
         Peer --&gt; Engine["raftstore/engine"]
         Peer --&gt; Apply["kv.Apply"]
     end
@@ -3558,7 +3558,7 @@ is not present.</li>
 </code></pre>
 <ul>
 <li>A gRPC transport is created, the NoKV service is registered, and <code>transport.SetHandler(store.Step)</code> wires raft Step handling.</li>
-<li><code>store.Store</code> loads the local peer catalog from <code>raftstore/meta</code> to rebuild the Region catalog (router + metrics).</li>
+<li><code>store.Store</code> loads the local peer catalog from <code>raftstore/localmeta</code> to rebuild the Region catalog (router + metrics).</li>
 </ul>
 </li>
 <li>
@@ -3598,7 +3598,7 @@ is not present.</li>
 <ol>
 <li>Write RPCs (Prewrite/Commit/…) call <code>Store.ProposeCommand</code>, encoding the command and routing to the leader peer.</li>
 <li>The leader appends the encoded request to raft, replicates, and once committed the command pipeline hands data to <code>kv.Apply</code>, which maps Prewrite/Commit/ResolveLock to the <code>percolator</code> package.</li>
-<li><code>engine.WALStorage</code> persists raft entries/state snapshots and updates <code>raftstore/meta</code> raft pointers. This keeps WAL GC and raft truncation aligned without polluting the storage manifest.</li>
+<li><code>engine.WALStorage</code> persists raft entries/state snapshots and updates <code>raftstore/localmeta</code> raft pointers. This keeps WAL GC and raft truncation aligned without polluting the storage manifest.</li>
 <li>Raft apply only accepts command-encoded payloads (<code>RaftCmdRequest</code>). Legacy raw KV payloads are rejected as unsupported.</li>
 </ol>
 <h3 id="command-flow-diagram"><a class="header" href="#command-flow-diagram">Command flow diagram</a></h3>
@@ -3641,7 +3641,7 @@ is not present.</li>
 <h2 id="5-storage-backend-engine"><a class="header" href="#5-storage-backend-engine">5. Storage Backend (engine)</a></h2>
 <ul>
 <li><code>WALStorage</code> piggybacks on the embedded WAL: each Raft group writes typed entries, HardState, and snapshots into the shared log.</li>
-<li><code>raftstore/meta</code> persists the store-local raft replay pointer used by WAL GC and replay.</li>
+<li><code>raftstore/localmeta</code> persists the store-local raft replay pointer used by WAL GC and replay.</li>
 <li>Alternative storage backends (<code>DiskStorage</code>, <code>MemoryStorage</code>) are available for tests and special scenarios.</li>
 </ul>
 <hr>
@@ -3748,7 +3748,7 @@ equal authority:</p>
 <li>
 <p><strong>Store-local persistent mirror</strong></p>
 <ul>
-<li>Owned by <a href="../raftstore/meta"><code>raftstore/meta</code></a>.</li>
+<li>Owned by <a href="../raftstore/localmeta"><code>raftstore/localmeta</code></a>.</li>
 <li>Persists:
 <ul>
 <li>local region catalog entries for restart</li>
@@ -3778,7 +3778,7 @@ authority and must not be treated as consensus truth outside the store.</li>
 <p>The resulting rule is simple:</p>
 <ul>
 <li><code>raft apply/bootstrap</code> advances local truth</li>
-<li><code>raftstore/meta</code> mirrors that truth for restart</li>
+<li><code>raftstore/localmeta</code> mirrors that truth for restart</li>
 <li><code>PD</code> observes and schedules from heartbeats</li>
 </ul>
 <p>This separation is what prevents parallel truth sources from creeping back into
@@ -3811,7 +3811,8 @@ count, backlog, and scheduling health.</li>
 <li><strong>TSO</strong>: <code>Tso</code></li>
 </ul>
 <p>Runtime clients (for example <code>cmd/nokv-redis</code> raft backend) use PD as the
-routing source of truth.</p>
+routing source of truth, but PD is not the durable owner of cluster topology
+truth. Durable truth lives in <code>meta/root</code>.</p>
 <hr>
 <h2 id="2-runtime-architecture"><a class="header" href="#2-runtime-architecture">2. Runtime Architecture</a></h2>
 <pre class="mermaid">flowchart LR
@@ -3824,18 +3825,91 @@ routing source of truth.</p>
 <p>Core implementation units:</p>
 <ul>
 <li><code>pd/core</code>: in-memory cluster metadata model + allocators.</li>
-<li><code>pd/storage</code>: persistence abstraction (<code>Store</code>) with local manifest+state implementation.</li>
+<li><code>pd/storage</code>: persistence abstraction (<code>Store</code>) backed by the metadata root.</li>
 <li><code>pd/server</code>: gRPC service + RPC validation/error mapping.</li>
 <li><code>pd/client</code>: client wrapper used by store/gateway.</li>
 <li><code>pd/adapter</code>: scheduler sink that forwards heartbeats into PD.</li>
 </ul>
 <hr>
-<h2 id="3-persistence---workdir"><a class="header" href="#3-persistence---workdir">3. Persistence (<code>--workdir</code>)</a></h2>
-<p>When <code>--workdir</code> is provided, PD-lite persists control-plane state in
-<code>PD_STATE.json</code>:</p>
+<h2 id="3-mode-model"><a class="header" href="#3-mode-model">3. Mode Model</a></h2>
+<p>NoKV currently has only two supported product modes:</p>
+<h3 id="standalone"><a class="header" href="#standalone"><code>standalone</code></a></h3>
 <ul>
-<li><strong>Region catalog</strong> for route recovery.</li>
-<li><strong>Allocator checkpoints</strong>:
+<li>no <code>pd</code></li>
+<li>no <code>meta/root</code></li>
+<li>no control-plane process</li>
+<li>all truth remains inside the single storage process</li>
+</ul>
+<p>This is the default local engine shape. Standalone is not a degraded control
+plane deployment; it simply has no control plane.</p>
+<h3 id="distributed"><a class="header" href="#distributed"><code>distributed</code></a></h3>
+<p><code>distributed</code> has two formal control-plane deployments:</p>
+<ol>
+<li><code>single pd + local meta</code></li>
+<li><code>3 pd + replicated meta</code></li>
+</ol>
+<p>Both deployments keep the same logical split:</p>
+<ul>
+<li><code>meta/root/*</code>: durable rooted truth</li>
+<li><code>pd/view</code> + <code>pd/core</code>: rebuildable routing/scheduling state</li>
+<li><code>pd/server</code>: gRPC API surface</li>
+</ul>
+<p>The difference is only the rooted backend:</p>
+<ul>
+<li><code>single pd + local meta</code>
+<ul>
+<li>one <code>pd</code> process</li>
+<li>one same-process <code>meta/root/backend/local</code></li>
+<li>single-node durable truth</li>
+</ul>
+</li>
+<li><code>3 pd + replicated meta</code>
+<ul>
+<li>three <code>pd</code> processes</li>
+<li>each process hosts one same-process <code>meta/root/backend/replicated</code></li>
+<li>fixed three-replica rooted truth</li>
+<li>one rooted leader accepts truth writes, followers refresh rooted state and serve read/view traffic</li>
+</ul>
+</li>
+</ul>
+<p>No other product control-plane mode is supported. In particular:</p>
+<ul>
+<li>there is no separate <code>meta</code> cluster</li>
+<li>there is no <code>pd</code> cluster larger than three members</li>
+<li>there is no dynamic metadata membership today</li>
+</ul>
+<hr>
+<h2 id="4-persistence---workdir"><a class="header" href="#4-persistence---workdir">4. Persistence (<code>--workdir</code>)</a></h2>
+<p><code>--workdir</code> is required for every formal PD deployment that hosts rooted truth.</p>
+<h3 id="single-pd--local-meta"><a class="header" href="#single-pd--local-meta"><code>single pd + local meta</code></a></h3>
+<p>The rooted backend stores:</p>
+<ul>
+<li><code>root.events.wal</code></li>
+<li><code>root.checkpoint.binpb</code></li>
+</ul>
+<h3 id="3-pd--replicated-meta"><a class="header" href="#3-pd--replicated-meta"><code>3 pd + replicated meta</code></a></h3>
+<p>Each PD node has its own workdir and persists two layers of state:</p>
+<ol>
+<li>rooted truth state
+<ul>
+<li><code>root.events.wal</code></li>
+<li><code>root.checkpoint.binpb</code></li>
+</ul>
+</li>
+<li>replicated protocol state
+<ul>
+<li><code>root.raft.bin</code></li>
+<li>contains raft hard state, raft snapshot, and retained raft entries</li>
+</ul>
+</li>
+</ol>
+<p>Each node must have an isolated workdir. Workdirs are not shared.</p>
+<h3 id="rooted-bootstrap-flow"><a class="header" href="#rooted-bootstrap-flow">Rooted bootstrap flow</a></h3>
+<p>The PD storage layer rebuilds its region snapshot and allocator checkpoints by
+replaying rooted truth:</p>
+<ul>
+<li><strong>region descriptor publish/tombstone</strong> events rebuild the route catalog</li>
+<li><strong>allocator fences</strong> rebuild:
 <ul>
 <li><code>id_current</code></li>
 <li><code>ts_current</code></li>
@@ -3844,18 +3918,21 @@ routing source of truth.</p>
 </ul>
 <p>Startup flow:</p>
 <ol>
-<li>Open <code>pd/storage</code> with <code>--workdir</code>.</li>
-<li>Load snapshot (<code>regions</code> + allocator counters).</li>
-<li>Compute starts as <code>max(cli_start, checkpoint+1)</code>.</li>
-<li>Replay region snapshot into <code>pd/core.Cluster</code>.</li>
+<li>Open rooted <code>pd/storage</code> from <code>--workdir</code>.</li>
+<li>Reconstruct a rooted PD snapshot (<code>regions</code> + allocator fences).</li>
+<li>Compute starts as <code>max(cli_start, fence+1)</code>.</li>
+<li>Materialize the rooted region snapshot into <code>pd/core.Cluster</code>.</li>
 </ol>
-<p>This avoids allocator rollback after restart and keeps route metadata stable.</p>
+<p>For replicated mode, followers periodically refresh rooted state and rebuild the
+service-side view. This avoids allocator rollback and removes the old parallel
+<code>PD_STATE.json</code> truth table.</p>
 <h3 id="region-truth-hierarchy"><a class="header" href="#region-truth-hierarchy">Region Truth Hierarchy</a></h3>
 <p>NoKV intentionally keeps three region views with different authority:</p>
 <ul>
 <li><strong>PD region catalog</strong>: cluster routing truth. Clients and stores must treat
-PD as the authoritative key-to-region source.</li>
-<li><strong><code>raftstore/meta</code> local catalog</strong>: store-local recovery truth. It exists so
+PD as the authoritative key-to-region source at the service boundary, but
+PD rebuilds this view from rooted metadata truth plus heartbeats.</li>
+<li><strong><code>raftstore/localmeta</code> local catalog</strong>: store-local recovery truth. It exists so
 one store can restart hosted peers and replay raft WAL checkpoints even if
 PD is temporarily unavailable.</li>
 <li><strong><code>Store.regions</code> runtime catalog</strong>: in-memory cache/view rebuilt from local
@@ -3864,7 +3941,7 @@ metadata at startup and then advanced by peer lifecycle plus raft apply.</li>
 <p>These layers are not interchangeable. Local metadata is recovery state, not
 cluster routing authority.</p>
 <hr>
-<h2 id="4-config-integration"><a class="header" href="#4-config-integration">4. Config Integration</a></h2>
+<h2 id="5-config-integration"><a class="header" href="#5-config-integration">5. Config Integration</a></h2>
 <p><code>raft_config.json</code> supports PD endpoint + workdir defaults:</p>
 <pre><code class="language-json">"pd": {
   "addr": "127.0.0.1:2379",
@@ -3884,8 +3961,10 @@ cluster routing authority.</p>
 <li><code>config.ResolvePDWorkDir(scope)</code></li>
 <li><code>nokv-config pd --field addr|workdir --scope host|docker</code></li>
 </ul>
+<p>Replicated-root transport settings are currently CLI-driven, not config-file
+driven.</p>
 <hr>
-<h2 id="5-routing-source-convergence"><a class="header" href="#5-routing-source-convergence">5. Routing Source Convergence</a></h2>
+<h2 id="6-routing-source-convergence"><a class="header" href="#6-routing-source-convergence">6. Routing Source Convergence</a></h2>
 <p>NoKV now uses <strong>PD-first routing</strong>:</p>
 <ul>
 <li><code>raftstore/client</code> resolves regions with <code>GetRegionByKey</code>.</li>
@@ -3894,7 +3973,7 @@ cluster routing authority.</p>
 </ul>
 <p>This avoids dual sources drifting over time (config vs PD).</p>
 <hr>
-<h2 id="6-serve-mode-semantics"><a class="header" href="#6-serve-mode-semantics">6. Serve Mode Semantics</a></h2>
+<h2 id="7-serve-mode-semantics"><a class="header" href="#7-serve-mode-semantics">7. Serve Mode Semantics</a></h2>
 <p><code>nokv serve</code> is now PD-only:</p>
 <ul>
 <li><code>--pd-addr</code> is required.</li>
@@ -3907,7 +3986,72 @@ cluster routing authority.</p>
 <li><code>nokv serve --metrics-addr &lt;host:port&gt;</code> exposes store/runtime expvar on <code>/debug/vars</code>.</li>
 </ul>
 <hr>
-<h2 id="7-comparison-tinykv--tikv"><a class="header" href="#7-comparison-tinykv--tikv">7. Comparison: TinyKV / TiKV</a></h2>
+<h2 id="8-service-semantics"><a class="header" href="#8-service-semantics">8. Service Semantics</a></h2>
+<p><code>PD-lite</code> intentionally separates rooted truth leadership from the outer gRPC
+service surface.</p>
+<p>In <code>3 pd + replicated meta</code>:</p>
+<ul>
+<li>all three <code>pd</code> processes may listen and serve RPC</li>
+<li>only the rooted leader may commit truth writes</li>
+<li>followers refresh rooted state and serve read/view traffic</li>
+</ul>
+<h3 id="leader-only-writes"><a class="header" href="#leader-only-writes">Leader-only writes</a></h3>
+<p>These RPCs require rooted leadership:</p>
+<ul>
+<li><code>RegionHeartbeat</code></li>
+<li><code>PublishRootEvent</code></li>
+<li><code>RemoveRegion</code></li>
+<li><code>AllocID</code></li>
+<li><code>Tso</code></li>
+</ul>
+<p>Followers return <code>FailedPrecondition</code> with <code>pd not leader</code> semantics, and
+clients are expected to retry against another PD endpoint.</p>
+<h3 id="any-node-reads"><a class="header" href="#any-node-reads">Any-node reads</a></h3>
+<p>These RPCs may be served by any PD node:</p>
+<ul>
+<li><code>GetRegionByKey</code></li>
+<li><code>StoreHeartbeat</code> handling and store-view inspection</li>
+</ul>
+<p>Follower reads are driven by rooted refresh into <code>pd/core.Cluster</code>. They are
+expected to be shortly stale rather than linearly consistent.</p>
+<h3 id="client-behavior"><a class="header" href="#client-behavior">Client behavior</a></h3>
+<p><code>pd/client</code> accepts multiple PD addresses. Write RPCs retry across PD nodes and
+converge on the rooted leader. Read RPCs may use any available PD endpoint.</p>
+<hr>
+<h2 id="9-deployment-examples"><a class="header" href="#9-deployment-examples">9. Deployment Examples</a></h2>
+<h3 id="single-pd--local-meta-1"><a class="header" href="#single-pd--local-meta-1"><code>single pd + local meta</code></a></h3>
+<pre><code class="language-bash">go run ./cmd/nokv pd \
+  -addr 127.0.0.1:2379 \
+  -workdir ./artifacts/pd
+</code></pre>
+<h3 id="3-pd--replicated-meta-1"><a class="header" href="#3-pd--replicated-meta-1"><code>3 pd + replicated meta</code></a></h3>
+<p>Node 1:</p>
+<pre><code class="language-bash">go run ./cmd/nokv pd \
+  -addr 127.0.0.1:2379 \
+  -workdir ./artifacts/pd1 \
+  -root-mode replicated \
+  -root-node-id 1 \
+  -root-transport-addr 127.0.0.1:2471 \
+  -root-peer 1=127.0.0.1:2471 \
+  -root-peer 2=127.0.0.1:2472 \
+  -root-peer 3=127.0.0.1:2473
+</code></pre>
+<p>Node 2 and node 3 use the same peer map, but change:</p>
+<ul>
+<li><code>-addr</code></li>
+<li><code>-workdir</code></li>
+<li><code>-root-node-id</code></li>
+<li><code>-root-transport-addr</code></li>
+</ul>
+<p>Current product assumptions:</p>
+<ul>
+<li>exactly three rooted replicas</li>
+<li>one workdir per PD node</li>
+<li>one transport address per PD node</li>
+<li>no dynamic membership</li>
+</ul>
+<hr>
+<h2 id="10-comparison-tinykv--tikv"><a class="header" href="#10-comparison-tinykv--tikv">10. Comparison: TinyKV / TiKV</a></h2>
 <h3 id="tinykv-teaching-stack"><a class="header" href="#tinykv-teaching-stack">TinyKV (teaching stack)</a></h3>
 <ul>
 <li>Uses a scheduler server (<code>tinyscheduler</code>) as separate process.</li>
@@ -3922,28 +4066,38 @@ cluster routing authority.</p>
 </ul>
 <h3 id="nokv-pd-lite-current"><a class="header" href="#nokv-pd-lite-current">NoKV PD-lite (current)</a></h3>
 <ul>
-<li>Single PD-lite process with optional local persistence (<code>--workdir</code>).</li>
-<li>Sufficient for local clusters, testing, and architecture iteration.</li>
-<li>API shape intentionally aligned with a PD-style control plane so migration to
-stronger HA semantics is incremental.</li>
-<li>PD persistence is intentionally limited to control-plane state:
+<li>Standalone mode has no PD and no metadata-root service.</li>
+<li>Distributed mode runs one control-plane process:
 <ul>
-<li>region catalog snapshots learned from heartbeats</li>
+<li><code>pd</code></li>
+<li>one local <code>meta/root</code></li>
+</ul>
+</li>
+<li>Current project scope intentionally keeps the metadata root single-node. This
+bounds operational and maintenance complexity while still keeping truth and
+view logically separated.</li>
+<li>PD persistence is intentionally limited to rooted control-plane truth:
+<ul>
+<li>region descriptor publish/tombstone events</li>
 <li>allocator durability (<code>AllocID</code>, <code>TSO</code>)</li>
 </ul>
 </li>
 <li>PD is not the durable owner of a store’s local raft/region truth. Store
-restart truth remains in <code>raftstore/meta</code>, while PD keeps the routing and
-scheduling view.</li>
+restart truth remains in <code>raftstore/localmeta</code>, while PD keeps routing and
+scheduling state rebuilt from <code>meta/root</code>.</li>
 </ul>
 <hr>
-<h2 id="8-current-limitations--next-steps"><a class="header" href="#8-current-limitations--next-steps">8. Current Limitations / Next Steps</a></h2>
+<h2 id="11-current-limitations--next-steps"><a class="header" href="#11-current-limitations--next-steps">11. Current Limitations / Next Steps</a></h2>
 <ul>
-<li>No multi-PD quorum and no automatic PD failover.</li>
+<li><code>single pd + local meta</code> remains the simpler and more mature deployment.</li>
+<li><code>3 pd + replicated meta</code> is now a formal product mode, but still has a
+simpler follower sync path based on rooted refresh rather than push/watch.</li>
 <li>Scheduler policy is intentionally small (leader transfer focused).</li>
 <li>No advanced placement constraints yet.</li>
+<li>Metadata membership is fixed at three replicas.</li>
 </ul>
-<p>These are deliberate scope limits for a fast-moving experimental platform.</p>
+<p>These are deliberate scope limits for a fast-moving experimental platform that
+keeps the rooted truth surface small.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="from-standalone-to-cluster"><a class="header" href="#from-standalone-to-cluster">From Standalone to Cluster</a></h1>
 <p class="chapter-lead">
@@ -4011,7 +4165,7 @@ NoKV does not treat standalone and distributed mode as two separate products glu
 <li>The migrated workdir must not silently reopen as a normal standalone directory.</li>
 <li>Bootstrap is the only allowed non-apply path that creates the initial region truth for the promoted directory.</li>
 <li>Engine manifest stays storage-engine metadata only.</li>
-<li>Store-local region truth stays in <code>raftstore/meta</code>.</li>
+<li>Store-local region truth stays in <code>raftstore/localmeta</code>.</li>
 <li>PD does not create local truth during bootstrap.</li>
 </ol>
 <p>Those invariants are what make the feature defensible. Without them, “standalone to cluster” collapses into ad hoc tooling.</p>
@@ -4169,7 +4323,7 @@ That checkpoint records which milestone of the standalone-to-seed promotion has 
 <p>At a high level it does this:</p>
 <ol>
 <li>write mode = <code>preparing</code></li>
-<li>persist a full-range local <code>RegionMeta</code> in <code>raftstore/meta</code></li>
+<li>persist a full-range local <code>RegionMeta</code> in <code>raftstore/localmeta</code></li>
 <li>export one full-range SST seed snapshot from the standalone DB</li>
 <li>synthesize the initial raft durable state for a single local voter</li>
 <li>persist the local raft replay pointer</li>
@@ -4179,7 +4333,7 @@ That checkpoint records which milestone of the standalone-to-seed promotion has 
 <p>After <code>init</code>, the promoted directory is not started through a special bootstrap runtime. It is opened through normal distributed startup:</p>
 <ul>
 <li>open the same DB workdir</li>
-<li>load local recovery metadata from <code>raftstore/meta</code></li>
+<li>load local recovery metadata from <code>raftstore/localmeta</code></li>
 <li>open group-local raft durable state</li>
 <li>start one local peer</li>
 <li>serve distributed traffic through the regular raftstore path</li>
@@ -4995,51 +5149,55 @@ nokv-config regions --config raft_config.json --format json | jq '.[] | {id:.id,
 </code></pre>
 <p>These counters are part of the process-wide expvar output and can be scraped alongside the rest of NoKV’s metrics.</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="notes--essays"><a class="header" href="#notes--essays">Notes &amp; Essays</a></h1>
-<p>This section is the long-form writing side of NoKV.</p>
-<p>The main docs are a reference manual. The notes section is closer to an
-engineering blog: design tradeoffs, implementation lessons, debugging
-narratives, and the reasons behind the architectural boundaries in the code.</p>
+<h1 id="设计笔记与实现记录"><a class="header" href="#设计笔记与实现记录">设计笔记与实现记录</a></h1>
+<p>这一节是 NoKV 的长文档区域。</p>
+<p>主文档更偏参考手册，<code>notes</code> 更像工程记录与技术随笔，主要用来解释：</p>
+<ul>
+<li>某个边界为什么存在</li>
+<li>某次实现为什么要推翻重做</li>
+<li>哪些“看起来简单”的方案最后证明是错的</li>
+<li>代码库在演进过程中学到了什么</li>
+</ul>
 <div class="blog-hero">
   
 <div class="blog-hero-copy">
-    <span class="masthead-kicker">Engineering Journal</span>
+    <span class="masthead-kicker">工程日志</span>
     
-<h2>How NoKV is being built</h2>
+<h2>NoKV 是怎么被做出来的</h2>
 
     
-<p>These posts explain why certain boundaries exist, what broke during implementation, what looked like an easy shortcut, and what the codebase learned from it.</p>
+<p>这些文章记录设计取舍、实现教训、调试过程，以及代码中那些边界背后的原因。</p>
 
   </div>
 
   
 <div class="blog-hero-meta">
     
-<div class="tag-pill">Design</div>
+<div class="tag-pill">设计</div>
 
     
-<div class="tag-pill">Implementation</div>
+<div class="tag-pill">实现</div>
 
     
-<div class="tag-pill">Distributed Systems</div>
+<div class="tag-pill">分布式系统</div>
 
     
-<div class="tag-pill">Storage Internals</div>
+<div class="tag-pill">存储内核</div>
 
   </div>
 
 </div>
 
-<h2 id="featured-posts"><a class="header" href="#featured-posts">Featured Posts</a></h2>
+<h2 id="推荐阅读"><a class="header" href="#推荐阅读">推荐阅读</a></h2>
 <div class="blog-grid">
   
 <div class="blog-card">
     <span class="blog-date">2026-03-30</span>
     
-<h3><a href="#2026-03-30-standalone-到-distributed-的桥接为什么值钱">Standalone to Distributed Bridge</a></h3>
+<h3><a href="#2026-03-30-standalone-到-distributed-的桥接为什么重要">standalone 到 distributed 的桥接</a></h3>
 
     
-<p>Why NoKV treats standalone and distributed mode as one system, and why migration had to become a protocol instead of a dump/import tool.</p>
+<p>为什么 NoKV 把单机和分布式视为同一套系统，以及为什么迁移必须做成协议而不是 dump/import 工具。</p>
 
   </div>
 
@@ -5047,10 +5205,10 @@ narratives, and the reasons behind the architectural boundaries in the code.</p>
 <div class="blog-card">
     <span class="blog-date">2026-03-30</span>
     
-<h3><a href="#2026-03-30-为什么-pd-和-raftadmin-不能混成一层">PD and RaftAdmin Layering</a></h3>
+<h3><a href="#2026-03-30-为什么-pd-和-raftadmin-不能混成一层">PD 与 RaftAdmin 分层</a></h3>
 
     
-<p>Why control plane and execution plane are deliberately separated, and why PD should not become a writer of local truth.</p>
+<p>为什么 control plane 和 execution plane 必须分开，以及为什么 PD 不能直接写本地 truth。</p>
 
   </div>
 
@@ -5058,10 +5216,10 @@ narratives, and the reasons behind the architectural boundaries in the code.</p>
 <div class="blog-card">
     <span class="blog-date">2026-03-30</span>
     
-<h3><a href="#2026-03-30-migration-设计里最关键的不是命令而是-mode-和-snapshot">Migration Mode and Snapshot</a></h3>
+<h3><a href="#2026-03-30-迁移设计里最关键的不是命令而是-mode-和-snapshot">migration 的 mode 与 snapshot</a></h3>
 
     
-<p>The migration story is really about lifecycle and snapshot semantics, not just adding more CLI commands.</p>
+<p>迁移的本体其实是生命周期和快照语义，而不是补几条 CLI 命令。</p>
 
   </div>
 
@@ -5069,58 +5227,69 @@ narratives, and the reasons behind the architectural boundaries in the code.</p>
 <div class="blog-card">
     <span class="blog-date">2026-03-30</span>
     
-<h3><a href="#2026-03-30-分布式测试为什么不能只靠黑盒以及-failpoint-该怎么克制">Distributed Testing and Failpoints</a></h3>
+<h3><a href="#2026-03-30-分布式测试为什么不能只靠黑盒以及-failpoint-该怎么克制">分布式测试与 failpoint</a></h3>
 
     
-<p>Why NoKV uses both live integration tests and narrow boundary failpoints, and how to keep failpoint usage disciplined.</p>
+<p>为什么 NoKV 同时使用 live integration 与窄边界 failpoint，以及 failpoint 应该如何克制。</p>
+
+  </div>
+
+  
+<div class="blog-card">
+    <span class="blog-date">2026-04-03</span>
+    
+<h3><a href="#rooted-metadatadelos-lite-与-virtual-log-设计说明">Rooted Metadata、Delos-lite 与 Virtual Log</a></h3>
+
+    
+<p>完整说明 NoKV 当前的 metadata truth、PD 隔离、Virtual Log substrate、local/replicated backend，以及为什么这条主线适合作为后续研究平台。</p>
 
   </div>
 
 </div>
 
-<h2 id="what-belongs-here"><a class="header" href="#what-belongs-here">What belongs here</a></h2>
+<h2 id="这里应该写什么"><a class="header" href="#这里应该写什么">这里应该写什么</a></h2>
 <ul>
-<li>design decisions that deserve more narrative than the reference docs</li>
-<li>debugging writeups with a concrete symptom, failed assumptions, and final fix</li>
-<li>performance investigations with benchmark setup and code-path analysis</li>
-<li>refactor notes that explain how package boundaries changed and why</li>
+<li>参考文档放不下的设计取舍</li>
+<li>有明确症状、错误假设和最终修复的调试记录</li>
+<li>带 benchmark 背景和代码路径分析的性能调查</li>
+<li>解释包边界为何变化的重构说明</li>
 </ul>
-<h2 id="writing-style"><a class="header" href="#writing-style">Writing style</a></h2>
-<p>Treat each note as a small technical blog post:</p>
+<h2 id="写作风格"><a class="header" href="#写作风格">写作风格</a></h2>
+<p>每篇 note 都应该像一篇小型技术博客，但保持工程视角：</p>
 <ol>
-<li>Start with the concrete problem or design question.</li>
-<li>Show the system boundary involved.</li>
-<li>Explain the tradeoffs and rejected alternatives.</li>
-<li>Include diagrams, code references, and command snippets where useful.</li>
-<li>End with what changed in the codebase and what still remains open.</li>
+<li>从具体问题或设计问题开始</li>
+<li>先把系统边界讲清楚</li>
+<li>讲清 tradeoff 和被否决的方案</li>
+<li>需要时放图、代码路径和命令</li>
+<li>最后说明代码里已经改了什么、还有什么没解决</li>
 </ol>
-<h2 id="suggested-post-template"><a class="header" href="#suggested-post-template">Suggested post template</a></h2>
-<pre><code class="language-md"># Title
+<h2 id="建议模板"><a class="header" href="#建议模板">建议模板</a></h2>
+<pre><code class="language-md"># 标题
 
-## Why this matters
+## 为什么这件事重要
 
-## The system boundary
+## 当前系统边界
 
-## What looked easy but was wrong
+## 看起来简单但其实错的路
 
-## The design we chose
+## 我们最终采用的设计
 
-## Code path
+## 关键代码路径
 
-## Diagram
+## 图示
 
-## What this changes
+## 这次改变了什么
 
-## What remains unsolved
+## 还没解决什么
 </code></pre>
-<h2 id="add-a-new-post"><a class="header" href="#add-a-new-post">Add a new post</a></h2>
+<h2 id="新增一篇-note"><a class="header" href="#新增一篇-note">新增一篇 note</a></h2>
 <ol>
-<li>Create <code>docs/notes/YYYY-MM-DD-short-title.md</code>.</li>
-<li>Add it to <code>docs/SUMMARY.md</code>.</li>
-<li>Prefer diagrams, code snippets, and explicit file references over generic prose.</li>
+<li>创建 <code>docs/notes/YYYY-MM-DD-short-title.md</code></li>
+<li>把它加到 <code>docs/SUMMARY.md</code></li>
+<li>优先写清楚图、代码路径和明确文件引用，少写空泛描述</li>
 </ol>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="2026-01-16-mmap-choice"><a class="header" href="#2026-01-16-mmap-choice">2026-01-16 mmap choice</a></h1>
+<h1 id="2026-01-16-mmap-选型说明"><a class="header" href="#2026-01-16-mmap-选型说明">2026-01-16 mmap 选型说明</a></h1>
 <p>本文档详细对比了主流文件 I/O 模型的差异，并解析 NoKV 在不同组件（SSTable, WAL, VLog）中做出不同 I/O 选择的深层原因与权衡。</p>
 <h2 id="1-io-模型的四国杀"><a class="header" href="#1-io-模型的四国杀">1. I/O 模型的四国杀</a></h2>
 <p>在 Linux/Unix 环境下，我们在设计存储引擎时通常面临四种选择。理解它们的优劣是做出正确架构决策的前提。</p>
@@ -5228,7 +5397,7 @@ narratives, and the reasons behind the architectural boundaries in the code.</p>
 </ol>
 <p>理解这些权衡，是掌握存储引擎底层性能优化的关键。</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="2026-01-16-hotring-design"><a class="header" href="#2026-01-16-hotring-design">2026-01-16 hotring design</a></h1>
+<h1 id="2026-01-16-hotring-设计说明"><a class="header" href="#2026-01-16-hotring-设计说明">2026-01-16 HotRing 设计说明</a></h1>
 <p>本文档记录 <code>hotring</code> 的原始设计思路。需要注意：当前生产实现已经收口，HotRing 只保留为可选的内部热点检测器和写热点限流工具；文中关于读预取、compaction hint 和 value-log 热冷路由的设想不再代表当前默认实现。</p>
 <p>当前实现已并入 NoKV 仓库，位于 <code>hotring/</code> 包。</p>
 <hr>
@@ -5377,7 +5546,7 @@ Hot Keys:
 <h2 id="6-总结"><a class="header" href="#6-总结">6. 总结</a></h2>
 <p>NoKV 的 <code>hotring</code> 是一个 <strong>“学术灵感 + 工程务实”</strong> 的典范。它没有追求理论上完美的环形索引结构，而是抓住了“热点感知”这一核心价值，用混合并发结构（Lock-Free + SpinLock）解决了工程中最头疼的<strong>监控盲区</strong>问题，并成功反哺了 Compaction 调度。</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="2026-02-01-compaction-and-ingest"><a class="header" href="#2026-02-01-compaction-and-ingest">2026-02-01 compaction and ingest</a></h1>
+<h1 id="2026-02-01-compaction-与-ingest-buffer-设计"><a class="header" href="#2026-02-01-compaction-与-ingest-buffer-设计">2026-02-01 Compaction 与 Ingest Buffer 设计</a></h1>
 <p>本文档深入解析 NoKV 的 <strong>Compaction（压缩）</strong> 机制与 <strong>Ingest Buffer（导入缓冲）</strong> 的协同设计。这是 NoKV 解决 LSM Tree 经典的“写停顿（Write Stall）”问题的核心武器，也是体现其工业级稳定性的关键设计。</p>
 <hr>
 <h2 id="1-设计理念拒绝写停顿"><a class="header" href="#1-设计理念拒绝写停顿">1. 设计理念：拒绝“写停顿”</a></h2>
@@ -6148,10 +6317,10 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 </div>
 <p><strong>总结</strong>：VFS 并不是一种代码开销，它是 <strong>“对每一行磁盘操作负责”</strong> 的态度。通过 VFS，NoKV 将复杂的底层系统调用和不可预测的硬件故障，收敛为了一个可预测、可测试、可证明的确定性模型。</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="2026-03-30-standalone-到-distributed-的桥接为什么值钱"><a class="header" href="#2026-03-30-standalone-到-distributed-的桥接为什么值钱">2026-03-30 standalone 到 distributed 的桥接为什么值钱</a></h1>
+<h1 id="2026-03-30-standalone-到-distributed-的桥接为什么重要"><a class="header" href="#2026-03-30-standalone-到-distributed-的桥接为什么重要">2026-03-30 standalone 到 distributed 的桥接为什么重要</a></h1>
 <p>这篇记录不是在描述某个单点实现，而是在解释 NoKV 目前最有产品价值的一条主线：<strong>单机和分布式不是两套割裂系统，而是同一套数据面在不同运行形态下的演进。</strong></p>
 <hr>
-<h2 id="context"><a class="header" href="#context">Context</a></h2>
+<h2 id="背景"><a class="header" href="#背景">背景</a></h2>
 <p>项目同时具备：</p>
 <ul>
 <li><code>DB</code> 单机数据面</li>
@@ -6160,7 +6329,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li><code>migrate</code> 独立迁移协议</li>
 </ul>
 <p>看起来像是在做两个系统，但当前的设计目标不是“单机一个产品、分布式另一个产品”，而是让两者共享同一套底层状态。</p>
-<h2 id="symptom"><a class="header" href="#symptom">Symptom</a></h2>
+<h2 id="问题"><a class="header" href="#问题">问题</a></h2>
 <p>很多存储项目一旦走到分布式阶段，就会遇到一个非常实际的问题：</p>
 <ol>
 <li>单机阶段先跑得起来。</li>
@@ -6175,14 +6344,14 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 </li>
 </ol>
 <p>这会直接把“从小到大演进”的故事打断。</p>
-<h2 id="investigation"><a class="header" href="#investigation">Investigation</a></h2>
+<h2 id="分析"><a class="header" href="#分析">分析</a></h2>
 <p>NoKV 当前这条桥接路径成立，核心靠的是几个设计决定同时为真：</p>
 <ol>
 <li>
 <p><code>DB</code> 仍然是底层共享数据面<br>不是把 standalone 数据导出后再导入另一种存储格式。</p>
 </li>
 <li>
-<p><code>raftstore/meta</code> 与 <code>manifest</code> 分开<br>引擎元数据和分布式恢复元数据没有继续混在一起。</p>
+<p><code>raftstore/localmeta</code> 与 <code>manifest</code> 分开<br>引擎元数据和分布式恢复元数据没有继续混在一起。</p>
 </li>
 <li>
 <p><code>raftstore/snapshot</code> 引入了逻辑 region snapshot<br>把“应用状态快照”和“raft durable snapshot metadata”分层。</p>
@@ -6194,7 +6363,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <p><code>migrate</code> 把桥接过程显式化<br><code>plan -&gt; init -&gt; serve -&gt; expand</code> 不是脚本约定，而是正式控制流。</p>
 </li>
 </ol>
-<h2 id="root-cause"><a class="header" href="#root-cause">Root cause</a></h2>
+<h2 id="根因"><a class="header" href="#根因">根因</a></h2>
 <p>真正让单机和分布式难以衔接的，不是“技术栈不同”，而是<strong>状态语义不同</strong>。</p>
 <p>单机系统通常只需要：</p>
 <ul>
@@ -6212,7 +6381,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>control-plane view</li>
 </ul>
 <p>如果这些额外语义没有被设计成可提升、可恢复、可验证的状态层，那么单机到分布式就只剩下粗暴搬运数据。</p>
-<h2 id="fix"><a class="header" href="#fix">Fix</a></h2>
+<h2 id="方案"><a class="header" href="#方案">方案</a></h2>
 <p>NoKV 当前的修法，本质上是把“增加 distributed identity”这件事协议化了：</p>
 <ol>
 <li>先用 <code>mode</code> 锁住 workdir 生命周期。</li>
@@ -6225,7 +6394,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <blockquote>
 <p>NoKV 的分布式能力不是独立产品，而是同一套系统的放大形态。</p>
 </blockquote>
-<h2 id="follow-ups"><a class="header" href="#follow-ups">Follow-ups</a></h2>
+<h2 id="后续"><a class="header" href="#后续">后续</a></h2>
 <ol>
 <li>后面如果继续推进，这条桥最该加强的是：
 <ul>
@@ -6240,7 +6409,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <h1 id="2026-03-30-为什么-pd-和-raftadmin-不能混成一层"><a class="header" href="#2026-03-30-为什么-pd-和-raftadmin-不能混成一层">2026-03-30 为什么 PD 和 RaftAdmin 不能混成一层</a></h1>
 <p>这篇记录当前 <code>PD</code> 与 <code>RaftAdmin</code> 的职责边界。这个边界看起来像“小命名问题”，实际上直接影响整个分布式系统的真相源和控制流是否会变脏。</p>
 <hr>
-<h2 id="context-1"><a class="header" href="#context-1">Context</a></h2>
+<h2 id="背景-1"><a class="header" href="#背景-1">背景</a></h2>
 <p>NoKV 现在同时有两层控制相关接口：</p>
 <ul>
 <li><code>pd</code></li>
@@ -6250,7 +6419,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <blockquote>
 <p>既然有 PD，为什么还需要 <code>RaftAdmin</code>？</p>
 </blockquote>
-<h2 id="symptom-1"><a class="header" href="#symptom-1">Symptom</a></h2>
+<h2 id="问题-1"><a class="header" href="#问题-1">问题</a></h2>
 <p>如果边界不清楚，系统很容易滑向两种坏形态：</p>
 <ol>
 <li>
@@ -6261,7 +6430,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 </li>
 </ol>
 <p>这两种都不是长期可维护的架构。</p>
-<h2 id="investigation-1"><a class="header" href="#investigation-1">Investigation</a></h2>
+<h2 id="分析-1"><a class="header" href="#分析-1">分析</a></h2>
 <p>当前 NoKV 的分层本质上是：</p>
 <h3 id="raftadmin"><a class="header" href="#raftadmin"><code>RaftAdmin</code></a></h3>
 <p>负责：</p>
@@ -6289,7 +6458,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <blockquote>
 <p><strong>cluster 级 control plane</strong></p>
 </blockquote>
-<h2 id="root-cause-1"><a class="header" href="#root-cause-1">Root cause</a></h2>
+<h2 id="根因-1"><a class="header" href="#根因-1">根因</a></h2>
 <p>两者不能混成一层，根本原因是：</p>
 <h3 id="control-plane-不等于-execution-plane"><a class="header" href="#control-plane-不等于-execution-plane">control plane 不等于 execution plane</a></h3>
 <p>PD 最擅长的是：</p>
@@ -6312,7 +6481,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>恢复路径和正常执行路径不一致</li>
 <li>分布式错误难以收敛，因为调度器开始兼做执行器</li>
 </ol>
-<h2 id="fix-1"><a class="header" href="#fix-1">Fix</a></h2>
+<h2 id="方案-1"><a class="header" href="#方案-1">方案</a></h2>
 <p>当前 NoKV 的正确做法是：</p>
 <ol>
 <li>保留 <code>RaftAdmin</code> 作为 execution plane。</li>
@@ -6325,7 +6494,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 </li>
 </ol>
 <p>而不是让 <code>PD</code> 直接篡改本地运行时。</p>
-<h2 id="follow-ups-1"><a class="header" href="#follow-ups-1">Follow-ups</a></h2>
+<h2 id="后续-1"><a class="header" href="#后续-1">后续</a></h2>
 <ol>
 <li><code>RegionRuntimeStatus</code> 要保持克制<br>不要把它继续膨胀成万能 dump API。</li>
 <li><code>PD</code> 以后如果做 operator framework，应明确只编排，不直接改本地 truth。</li>
@@ -6337,10 +6506,10 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 </li>
 </ol>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="2026-03-30-migration-设计里最关键的不是命令而是-mode-和-snapshot"><a class="header" href="#2026-03-30-migration-设计里最关键的不是命令而是-mode-和-snapshot">2026-03-30 migration 设计里最关键的不是命令，而是 mode 和 snapshot</a></h1>
+<h1 id="2026-03-30-迁移设计里最关键的不是命令而是-mode-和-snapshot"><a class="header" href="#2026-03-30-迁移设计里最关键的不是命令而是-mode-和-snapshot">2026-03-30 迁移设计里最关键的不是命令，而是 mode 和 snapshot</a></h1>
 <p>这篇记录 migration 主线真正值钱的地方。表面上看，我们只是补了 <code>plan</code>、<code>init</code>、<code>expand</code> 这些命令；但真正让迁移成立的不是命令名，而是背后的状态协议。</p>
 <hr>
-<h2 id="context-2"><a class="header" href="#context-2">Context</a></h2>
+<h2 id="背景-2"><a class="header" href="#背景-2">背景</a></h2>
 <p>NoKV 当前 migration 主线已经形成：</p>
 <ul>
 <li><code>plan</code></li>
@@ -6351,7 +6520,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li><code>transfer-leader</code></li>
 </ul>
 <p>但如果只从 CLI 角度理解这套功能，很容易误判成“就是几条方便的运维命令”。</p>
-<h2 id="symptom-2"><a class="header" href="#symptom-2">Symptom</a></h2>
+<h2 id="问题-2"><a class="header" href="#问题-2">问题</a></h2>
 <p>分布式迁移最容易犯的两个错误是：</p>
 <ol>
 <li><strong>把迁移做成脚本串联</strong></li>
@@ -6364,7 +6533,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>应用状态和 raft metadata 混在一起</li>
 <li>增副本靠碰运气，不靠协议</li>
 </ul>
-<h2 id="investigation-2"><a class="header" href="#investigation-2">Investigation</a></h2>
+<h2 id="分析-2"><a class="header" href="#分析-2">分析</a></h2>
 <p>当前 migration 真正成立，依赖两条主线：</p>
 <h3 id="1-workdir-mode-gate"><a class="header" href="#1-workdir-mode-gate">1. workdir mode gate</a></h3>
 <p><code>raftstore/mode</code> 现在有：</p>
@@ -6405,13 +6574,13 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <ul>
 <li>某个 region key range 内的真实状态机内容</li>
 </ul>
-<h2 id="root-cause-2"><a class="header" href="#root-cause-2">Root cause</a></h2>
+<h2 id="根因-2"><a class="header" href="#根因-2">根因</a></h2>
 <p>standalone 到 distributed 的桥接之所以难，不是因为“缺一个命令”，而是因为：</p>
 <blockquote>
 <p>系统缺少一种能把已有 workdir 正式提升成 region state 的语义。</p>
 </blockquote>
 <p>如果没有 mode gate，迁移中的 workdir 仍然可能被错误使用。<br>如果没有逻辑 region snapshot，<code>expand</code> 和 seed bootstrap 就只能建立在不干净的目录复制或隐式状态假设上。</p>
-<h2 id="fix-2"><a class="header" href="#fix-2">Fix</a></h2>
+<h2 id="方案-2"><a class="header" href="#方案-2">方案</a></h2>
 <p>当前 NoKV 的迁移协议是成立的，因为它做了三件对的事情：</p>
 <ol>
 <li>用 <code>mode</code> 把 workdir 生命周期写死。</li>
@@ -6424,7 +6593,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>快照边界</li>
 <li>恢复边界</li>
 </ul>
-<h2 id="follow-ups-2"><a class="header" href="#follow-ups-2">Follow-ups</a></h2>
+<h2 id="后续-2"><a class="header" href="#后续-2">后续</a></h2>
 <ol>
 <li>下一阶段的提升不应该破坏这条分层<br>例如未来做 SST-based snapshot install，也应该继续保留：
 <ul>
@@ -6443,9 +6612,9 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 </ol>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="2026-03-30-分布式测试为什么不能只靠黑盒以及-failpoint-该怎么克制"><a class="header" href="#2026-03-30-分布式测试为什么不能只靠黑盒以及-failpoint-该怎么克制">2026-03-30 分布式测试为什么不能只靠黑盒，以及 failpoint 该怎么克制</a></h1>
-<p>这篇记录最近一轮分布式测试体系收口后的判断。重点不是“case 变多了”，而是测试开始按边界和故障模型分层，而不是只靠少量 happy-path integration。</p>
+<p>这篇记录最近一轮分布式测试体系收口后的判断。重点不是“case 变多了”，而是测试开始按边界和故障模型分层，而不是只靠少量 happy-path 集成测试。</p>
 <hr>
-<h2 id="context-3"><a class="header" href="#context-3">Context</a></h2>
+<h2 id="背景-3"><a class="header" href="#背景-3">背景</a></h2>
 <p>最近这轮测试增强之后，NoKV 现在已经有：</p>
 <ul>
 <li>package-level protocol tests</li>
@@ -6457,7 +6626,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>publish-boundary failpoints</li>
 <li><code>testcluster</code> 集群测试基础设施</li>
 </ul>
-<h2 id="symptom-3"><a class="header" href="#symptom-3">Symptom</a></h2>
+<h2 id="问题-3"><a class="header" href="#问题-3">问题</a></h2>
 <p>分布式系统如果只靠两类测试，很快就会失真：</p>
 <ol>
 <li><strong>只靠单测</strong>
@@ -6476,7 +6645,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>测试很多，但抓不到真实故障点</li>
 <li>或者为了命中中间态，把生产代码改得很脏</li>
 </ul>
-<h2 id="investigation-3"><a class="header" href="#investigation-3">Investigation</a></h2>
+<h2 id="分析-3"><a class="header" href="#分析-3">分析</a></h2>
 <p>当前 NoKV 的收法是两条线一起做：</p>
 <h3 id="1-testcluster"><a class="header" href="#1-testcluster">1. <code>testcluster</code></a></h3>
 <p><code>raftstore/testcluster</code> 解决的是：</p>
@@ -6502,7 +6671,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>都很难靠黑盒稳定命中</li>
 <li>一旦出错，最容易留下半状态</li>
 </ul>
-<h2 id="root-cause-3"><a class="header" href="#root-cause-3">Root cause</a></h2>
+<h2 id="根因-3"><a class="header" href="#根因-3">根因</a></h2>
 <p>很多人对 failpoint 的直觉是“侵入性太强”。这个担心没错，但问题不是“要不要 failpoint”，而是：</p>
 <blockquote>
 <p>failpoint 是否只打在真正高价值、黑盒难覆盖、资源注入又不够精确的边界上。</p>
@@ -6511,10 +6680,10 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <ul>
 <li>业务分支</li>
 <li>模糊条件</li>
-<li>到处 scattered 的测试开关</li>
+<li>到处散落的测试开关</li>
 </ul>
 <p>那它就会迅速退化成脏代码。</p>
-<h2 id="fix-3"><a class="header" href="#fix-3">Fix</a></h2>
+<h2 id="方案-3"><a class="header" href="#方案-3">方案</a></h2>
 <p>当前 NoKV 的正确方向是：</p>
 <ol>
 <li>黑盒 cluster integration 负责系统级收敛。</li>
@@ -6525,7 +6694,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <blockquote>
 <p>不是“只靠 failpoint”，也不是“完全不用 failpoint”，而是分层使用。</p>
 </blockquote>
-<h2 id="follow-ups-3"><a class="header" href="#follow-ups-3">Follow-ups</a></h2>
+<h2 id="后续-3"><a class="header" href="#后续-3">后续</a></h2>
 <ol>
 <li>新增 failpoint 时必须回答三个问题：
 <ul>
@@ -6544,14 +6713,17 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 </li>
 </ol>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="sst-snapshot-install-for-migration"><a class="header" href="#sst-snapshot-install-for-migration">SST Snapshot Install for Migration</a></h1>
-<p>This note tracks the design and implementation behind GitHub issue <code>#28</code>:
-<code>[Feature Request] Implement SSTable-based Snapshot Install for RaftStore</code>.</p>
+<h1 id="基于-sst-的-snapshot-install-设计与实现"><a class="header" href="#基于-sst-的-snapshot-install-设计与实现">基于 SST 的 Snapshot Install 设计与实现</a></h1>
 <blockquote>
-<p>Status: implemented in the migration path and the internal raft snapshot payload path.</p>
+<p>状态：已在 migration 路径和内部 raft snapshot payload 路径中落地。</p>
 </blockquote>
-<h2 id="why-this-matters"><a class="header" href="#why-this-matters">Why this matters</a></h2>
-<p>NoKV already has a correct standalone-to-cluster promotion path:</p>
+<p>这篇记录 GitHub issue <code>#28</code> 背后的设计与实现：</p>
+<blockquote>
+<p>为 <code>RaftStore</code> 实现基于 SSTable 的 Snapshot Install。</p>
+</blockquote>
+<hr>
+<h2 id="1-为什么这件事重要"><a class="header" href="#1-为什么这件事重要">1. 为什么这件事重要</a></h2>
+<p>NoKV 之前已经有一条正确的 standalone 到 cluster 的提升路径：</p>
 <ul>
 <li><code>plan</code></li>
 <li><code>init</code></li>
@@ -6560,162 +6732,177 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li><code>transfer-leader</code></li>
 <li><code>remove-peer</code></li>
 </ul>
-<p>That path is now documented, checkpointed, resumable, and validated. The next bottleneck is no longer workflow shape. It is data movement.</p>
-<p>The original region bootstrap/install path was intentionally correctness-first:</p>
+<p>这条路径的工作流、checkpoint、恢复和测试都已经成立。接下来真正的瓶颈不再是“流程怎么走”，而是：</p>
+<blockquote>
+<p>数据怎么搬过去。</p>
+</blockquote>
+<p>最初的 region bootstrap / install 路径是刻意 correctness-first 的：</p>
 <ul>
-<li><code>init</code> exported a region snapshot into the local seed directory</li>
-<li><code>expand</code> exported an in-memory snapshot payload</li>
-<li>the target imported detached entries through the regular write/apply path</li>
+<li><code>init</code> 把 region snapshot 导出到本地 seed 目录</li>
+<li><code>expand</code> 生成内存 snapshot payload</li>
+<li>目标节点通过常规 write/apply 路径导入这些逻辑 entry</li>
 </ul>
-<p>That was the right first implementation. It kept lifecycle semantics clear and made recovery easy to reason about. It is no longer the final install pipeline.</p>
-<p>For larger regions, the current path pays for:</p>
+<p>这条路第一阶段是对的，因为：</p>
 <ul>
-<li>full logical re-encoding</li>
-<li>larger in-memory payloads</li>
-<li>target-side replay through the regular write path</li>
-<li>avoidable write amplification</li>
+<li>生命周期语义清楚</li>
+<li>恢复容易推理</li>
+<li>不会过早把存储层细节泄露到 migration 协议里</li>
 </ul>
-<p>That upgrade has now been implemented without rewriting the migration story.</p>
-<h2 id="current-boundary"><a class="header" href="#current-boundary">Current boundary</a></h2>
-<h3 id="what-exists-today"><a class="header" href="#what-exists-today">What exists today</a></h3>
-<p>The current implementation is split across:</p>
+<p>但它也有明显代价：</p>
 <ul>
-<li><code>raftstore/snapshot/meta.go</code></li>
-<li><code>raftstore/snapshot/dir.go</code></li>
-<li><code>raftstore/snapshot/payload.go</code></li>
-<li><code>raftstore/migrate/init.go</code></li>
-<li><code>raftstore/migrate/expand.go</code></li>
-<li><code>raftstore/store/peer_lifecycle.go</code></li>
-<li><code>lsm/external_sst.go</code></li>
-<li><code>db_snapshot.go</code></li>
+<li>全量逻辑重编码</li>
+<li>大 snapshot 会占用更多内存</li>
+<li>目标侧还要走一遍常规 write path</li>
+<li>存在可避免的写放大</li>
 </ul>
-<p>The raftstore wiring now talks to a narrow snapshot bridge:</p>
+<p>因此，数据搬运层需要升级，但 migration 主线本身不应该被推翻。</p>
+<hr>
+<h2 id="2-当前系统边界"><a class="header" href="#2-当前系统边界">2. 当前系统边界</a></h2>
+<p>当前实现相关代码主要分布在：</p>
+<ul>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/meta.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/dir.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/payload.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate/init.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate/expand.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/peer_lifecycle.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/lsm/external_sst.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/db_snapshot.go</code></li>
+</ul>
+<p>当前 snapshot bridge 暴露的是一层窄接口：</p>
 <ul>
 <li><code>ExportSnapshot(...)</code></li>
 <li><code>ImportSnapshot(...)</code></li>
 <li><code>ExportSnapshotTo(...)</code></li>
 <li><code>ImportSnapshotFrom(...)</code></li>
 </ul>
-<p>That bridge keeps peer/admin wiring at the region-snapshot level while the LSM
-layer continues to own raw <code>ExportExternalSST(...)</code>,
-<code>ImportExternalSST(...)</code>, and <code>RollbackExternalSST(...)</code>.</p>
-<p>The important properties are:</p>
-<ol>
-<li>snapshot export is region-scoped</li>
-<li>target install happens before peer publish</li>
-<li>install currently assumes an empty peer target</li>
-<li>checkpoint/report/failpoint coverage already exists around publish/install boundaries</li>
-<li>publish-before-complete failures roll back imported external SST files</li>
-</ol>
-<p>On the admin path, the region snapshot API now exists in both forms:</p>
+<p>这层接口故意维持在“region snapshot”语义，不直接把 LSM 的底层 SST builder 暴露给 raftstore。</p>
+<h3 id="当前已经具备的能力"><a class="header" href="#当前已经具备的能力">当前已经具备的能力</a></h3>
+<p>存储层已经有 SST ingest 支持：</p>
 <ul>
-<li>unary <code>ExportRegionSnapshot(...)</code> / <code>ImportRegionSnapshot(...)</code></li>
-<li>streaming <code>ExportRegionSnapshotStream(...)</code> / <code>ImportRegionSnapshotStream(...)</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/lsm/external_sst.go</code></li>
 </ul>
-<p><code>migrate expand</code> now uses the streaming path so large region snapshots no
-longer have to move through one single admin RPC payload.</p>
-<p>That means the lifecycle contract survived the transport change. The data movement path is now SST-based.</p>
-<h3 id="what-the-storage-layer-already-gives-us"><a class="header" href="#what-the-storage-layer-already-gives-us">What the storage layer already gives us</a></h3>
-<p>NoKV already has LSM ingest support:</p>
+<p><code>ExportExternalSST(...)</code> / <code>ImportExternalSST(...)</code> / <code>RollbackExternalSST(...)</code> 已经处理了：</p>
 <ul>
-<li><code>lsm/external_sst.go</code></li>
+<li>从 materialized entries 生成 snapshot SST</li>
+<li>输入校验</li>
+<li>key-range overlap 检查</li>
+<li>与现有 L0 的冲突检查</li>
+<li>manifest logging</li>
+<li>失败回滚</li>
 </ul>
-<p><code>ExportExternalSST(...)</code>, <code>ImportExternalSST(...)</code>, and <code>RollbackExternalSST(...)</code> now handle:</p>
-<ul>
-<li>snapshot SST generation from materialized entries</li>
-<li>input validation</li>
-<li>key-range overlap checks between imported SSTs</li>
-<li>overlap checks against existing L0</li>
-<li>LSM manifest logging</li>
-<li>rollback on failure</li>
-</ul>
-<p>This is the storage primitive under the higher-level snapshot path. It is not the migration workflow by itself.</p>
-<h3 id="the-constraint-that-makes-this-non-trivial"><a class="header" href="#the-constraint-that-makes-this-non-trivial">The constraint that makes this non-trivial</a></h3>
-<p>NoKV uses value separation.</p>
-<p>Relevant code:</p>
-<ul>
-<li><code>kv/value.go</code></li>
-<li><code>db.go</code></li>
-<li><code>vlog.go</code></li>
-</ul>
-<p>Large values can be stored as <code>ValuePtr</code>, not inline user bytes. So “copy SSTs and ingest them” is not automatically correct. The imported table may still point at source-side vlog segments.</p>
-<p>That is the main design constraint.</p>
-<h2 id="the-design-we-chose"><a class="header" href="#the-design-we-chose">The design we chose</a></h2>
-<h3 id="design-goal"><a class="header" href="#design-goal">Design goal</a></h3>
-<p>Keep the migration semantics exactly where they are today:</p>
-<ul>
-<li>promote one standalone workdir into one full-range seed region</li>
-<li>expand that seed into more peers</li>
-<li>keep publish/install boundaries unchanged</li>
-</ul>
-<p>Only replace the data movement pipeline.</p>
-<h3 id="the-key-decision"><a class="header" href="#the-key-decision">The key decision</a></h3>
-<p>The first SST-based migration snapshot should be:</p>
+<p>也就是说，SST ingest primitive 已经存在，真正要解决的是：</p>
 <blockquote>
-<p><strong>region-scoped, self-contained, and independent from source-side vlog files</strong></p>
+<p>如何把它放进 migration / snapshot 协议，而不是让存储层细节反向污染迁移层。</p>
 </blockquote>
-<p>The implemented snapshot SST export materializes values inline inside the exported snapshot tables, even if the source DB currently stores some values behind <code>ValuePtr</code>.</p>
-<p>This avoids dragging value-log replication into phase one.</p>
-<h2 id="why-importsnapshot-returns-a-rich-result"><a class="header" href="#why-importsnapshot-returns-a-rich-result">Why <code>ImportSnapshot</code> Returns A Rich Result</a></h2>
-<p><code>ImportSnapshot(...)</code> intentionally returns the full staged-import result, not
-just region metadata.</p>
-<p>The admin/install path needs to:</p>
+<h3 id="让问题变复杂的约束"><a class="header" href="#让问题变复杂的约束">让问题变复杂的约束</a></h3>
+<p>NoKV 采用了 value separation：</p>
+<ul>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/kv/value.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/db.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/vlog.go</code></li>
+</ul>
+<p>一部分 value 可能以 <code>ValuePtr</code> 的形式留在 vlog，而不是直接 inline 在 LSM 里。</p>
+<p>这意味着：</p>
+<blockquote>
+<p>“直接拷贝现有 SST 文件再 ingest” 并不自动成立。</p>
+</blockquote>
+<p>因为导入后的 SST 可能仍然指向源节点的 vlog 文件。</p>
+<hr>
+<h2 id="3-我们最终采用的设计"><a class="header" href="#3-我们最终采用的设计">3. 我们最终采用的设计</a></h2>
+<h3 id="31-设计目标"><a class="header" href="#31-设计目标">3.1 设计目标</a></h3>
+<p>目标不是重写 migration 主线，而是只替换“数据搬运层”：</p>
+<ul>
+<li>仍然先把一个 standalone workdir 提升成 full-range seed region</li>
+<li>仍然通过 <code>expand</code> 把 seed 扩成 replicated region</li>
+<li>仍然保留 install-before-publish 的生命周期边界</li>
+</ul>
+<h3 id="32-关键决策"><a class="header" href="#32-关键决策">3.2 关键决策</a></h3>
+<p>当前第一阶段的 SST snapshot 采用：</p>
+<blockquote>
+<p><strong>region-scoped、self-contained、与源端 vlog 独立</strong></p>
+</blockquote>
+<p>也就是：</p>
+<ul>
+<li>snapshot 仍然是 region 范围内的逻辑快照</li>
+<li>导出的 SST 文件里，value 会被 materialize 成 inline user bytes</li>
+<li>不依赖源端 vlog segment 继续存在</li>
+</ul>
+<p>这样做的结果是：</p>
+<ul>
+<li>snapshot install 仍然保持 region-scoped</li>
+<li>目标端不需要先理解源端 vlog 布局</li>
+<li>rollback 和恢复语义保持简单</li>
+</ul>
+<h3 id="33-为什么-importsnapshot-要返回富结果"><a class="header" href="#33-为什么-importsnapshot-要返回富结果">3.3 为什么 <code>ImportSnapshot(...)</code> 要返回富结果</a></h3>
+<p><code>ImportSnapshot(...)</code> 当前不是只返回 region meta，而是返回完整 staged-import 结果。</p>
+<p>原因是 install 路径需要完整处理这条生命周期：</p>
 <ol>
-<li>import SST files into the target engine</li>
-<li>attempt peer publish / hosting</li>
-<li>if publish fails, roll back the imported SST files</li>
+<li>导入 SST</li>
+<li>尝试 publish / host peer</li>
+<li>如果 publish 失败，回滚已导入的 SST 文件</li>
 </ol>
-<p>So the single import primitive must surface:</p>
+<p>所以 import primitive 必须能携带：</p>
 <ul>
 <li><code>result.Meta.Region</code></li>
 <li><code>result.ImportedFileIDs</code></li>
 <li><code>result.Rollback()</code></li>
 </ul>
-<p>This keeps rollback state available without re-exposing raw external-SST
-details to raftstore wiring, while simple callers can still just read
-<code>result.Meta.Region</code>.</p>
-<h2 id="what-looked-easy-but-is-wrong"><a class="header" href="#what-looked-easy-but-is-wrong">What looked easy but is wrong</a></h2>
-<h3 id="wrong-approach-1-reuse-existing-on-disk-sst-files-directly"><a class="header" href="#wrong-approach-1-reuse-existing-on-disk-sst-files-directly">Wrong approach 1: reuse existing on-disk SST files directly</a></h3>
-<p>This is attractive but wrong for migration phase one.</p>
-<p>Problems:</p>
+<p>这样高层 install 逻辑就可以：</p>
+<ul>
+<li>保持 snapshot-level 语义</li>
+<li>同时仍然拿得到 storage rollback 所需的信息</li>
+</ul>
+<hr>
+<h2 id="4-哪些看起来简单的方案是错的"><a class="header" href="#4-哪些看起来简单的方案是错的">4. 哪些“看起来简单”的方案是错的</a></h2>
+<h3 id="41-直接复用现有-sst-文件"><a class="header" href="#41-直接复用现有-sst-文件">4.1 直接复用现有 SST 文件</a></h3>
+<p>这个看起来最省事，但对 migration phase one 是错的。</p>
+<p>原因：</p>
 <ol>
-<li>Existing SSTs are LSM/layout artifacts, not region snapshot artifacts.</li>
-<li>Existing SST boundaries do not necessarily align with the region snapshot boundary.</li>
-<li>Existing SST entries may still reference source-side vlog segments.</li>
-<li>Reusing existing SSTs couples migration to compaction history instead of region truth.</li>
+<li>现有 SST 是 LSM/compaction 产物，不是 region snapshot 产物</li>
+<li>SST 边界未必和 region 边界对齐</li>
+<li>现有 SST 里的 value 可能仍然依赖源端 vlog</li>
+<li>这样会把 migration 协议和 compaction 历史绑定在一起</li>
 </ol>
-<p>This would make the snapshot protocol leak storage-layout internals that do not belong in the migration contract.</p>
-<h3 id="wrong-approach-2-ship-source-vlog-segments-together-with-ssts"><a class="header" href="#wrong-approach-2-ship-source-vlog-segments-together-with-ssts">Wrong approach 2: ship source vlog segments together with SSTs</a></h3>
-<p>This is also too heavy for phase one.</p>
-<p>Problems:</p>
+<h3 id="42-把源端-vlog-一起打包过去"><a class="header" href="#42-把源端-vlog-一起打包过去">4.2 把源端 vlog 一起打包过去</a></h3>
+<p>这也不适合作为第一阶段方案。</p>
+<p>问题在于：</p>
 <ol>
-<li>The install snapshot becomes cross-layer: SST files + vlog segments + head metadata.</li>
-<li>Import/recovery must now reason about both manifest edits and vlog ownership.</li>
-<li>Target-side cleanup/rollback gets much harder.</li>
-<li>The snapshot stops being region-scoped in a clean way.</li>
+<li>install snapshot 会变成跨层协议：
+<ul>
+<li>SST 文件</li>
+<li>vlog segments</li>
+<li>vlog head / manifest 语义</li>
+</ul>
+</li>
+<li>目标端导入和回滚会复杂很多</li>
+<li>snapshot 不再干净地保持 region-scoped</li>
 </ol>
-<p>This may become interesting later for very large values, but it is the wrong first step.</p>
-<h3 id="wrong-approach-3-solve-split-and-sst-install-together"><a class="header" href="#wrong-approach-3-solve-split-and-sst-install-together">Wrong approach 3: solve split and SST install together</a></h3>
-<p>Current migration intentionally promotes one full-range region first.</p>
-<p>Pulling split/re-shard into the same effort would mix:</p>
+<p>以后对于超大 value，也许可以继续优化，但不该作为第一步。</p>
+<h3 id="43-把-split--reshard-和-snapshot-install-一起做"><a class="header" href="#43-把-split--reshard-和-snapshot-install-一起做">4.3 把 split / reshard 和 snapshot install 一起做</a></h3>
+<p>当前 migration 的主线仍然是：</p>
+<ul>
+<li>先提升出一个 full-range region</li>
+<li>再在这个基础上做扩副本和后续 reshape</li>
+</ul>
+<p>如果把 split / re-shard 和 SST install 一起改，会把以下几件事缠在一起：</p>
 <ul>
 <li>snapshot redesign</li>
 <li>install semantics</li>
-<li>region-layout evolution</li>
+<li>region 布局演化</li>
 </ul>
-<p>That is too much surface area for one iteration.</p>
-<h2 id="snapshot-layout"><a class="header" href="#snapshot-layout">Snapshot Layout</a></h2>
-<h3 id="artifact-shape"><a class="header" href="#artifact-shape">Artifact shape</a></h3>
-<p>The current SST snapshot directory looks like:</p>
+<p>当前阶段不值得这么做。</p>
+<hr>
+<h2 id="5-snapshot-产物长什么样"><a class="header" href="#5-snapshot-产物长什么样">5. Snapshot 产物长什么样</a></h2>
+<p>当前 SST snapshot 目录形态大致是：</p>
 <pre><code class="language-text">snapshot/
-  sst-snapshot.json
+  snapshot.json
   tables/
     000001.sst
     000002.sst
     ...
 </code></pre>
-<h3 id="manifest-fields"><a class="header" href="#manifest-fields">Manifest fields</a></h3>
-<p>The SST snapshot meta carries:</p>
+<p>元信息里会明确记录：</p>
 <ul>
 <li><code>version</code></li>
 <li><code>region</code></li>
@@ -6724,7 +6911,7 @@ details to raftstore wiring, while simple callers can still just read
 <li><code>inline_values = true</code></li>
 <li>aggregate <code>size_bytes</code></li>
 <li>aggregate <code>value_bytes</code></li>
-<li>per-table:
+<li>per-table：
 <ul>
 <li>relative path</li>
 <li>smallest key</li>
@@ -6736,148 +6923,620 @@ details to raftstore wiring, while simple callers can still just read
 </li>
 <li><code>created_at</code></li>
 </ul>
-<p>This keeps the region contract explicit and makes target-side validation deterministic without overloading the LSM <code>MANIFEST</code> meaning.</p>
-<h2 id="export-pipeline"><a class="header" href="#export-pipeline">Export pipeline</a></h2>
-<h3 id="source-of-truth"><a class="header" href="#source-of-truth">Source of truth</a></h3>
-<p>Export should still be driven by region-scoped logical iteration, not by existing SST file discovery.</p>
-<p>That means:</p>
+<p>这个 manifest 的目的不是替代 LSM <code>MANIFEST</code>，而是把：</p>
+<blockquote>
+<p>region-scoped snapshot contract</p>
+</blockquote>
+<p>写清楚。</p>
+<hr>
+<h2 id="6-导出与安装流程"><a class="header" href="#6-导出与安装流程">6. 导出与安装流程</a></h2>
+<h3 id="61-导出流程"><a class="header" href="#61-导出流程">6.1 导出流程</a></h3>
+<p>导出仍然以 region-scoped logical iteration 为驱动，而不是扫描当前磁盘上“有哪些现成 SST 能搬”。</p>
+<p>流程是：</p>
 <ol>
-<li>iterate internal entries in region bounds</li>
-<li>materialize each entry through the current snapshot source path</li>
-<li>ensure exported entries are inline-value entries</li>
-<li>write snapshot-specific SST files</li>
+<li>以 region key range 为边界迭代内部 entry</li>
+<li>通过当前 snapshot source 路径把 entry materialize 出来</li>
+<li>确保导出结果是 inline value entry</li>
+<li>写成 snapshot 专用 SST 文件</li>
 </ol>
-<p>This preserves the current semantic boundary while changing the snapshot payload from <code>entries.bin</code> to <code>tables/*.sst</code>.</p>
-<h3 id="implementation-seam"><a class="header" href="#implementation-seam">Implementation seam</a></h3>
-<p>We do not expose raw <code>tableBuilder</code> as a public migration API.</p>
-<p>Instead the code is split across:</p>
+<p>这样做的好处是：</p>
 <ul>
-<li><code>lsm/external_sst.go</code></li>
-<li><code>raftstore/snapshot/dir.go</code></li>
-<li><code>raftstore/snapshot/payload.go</code></li>
+<li>语义边界清楚</li>
+<li>不依赖 compaction 历史</li>
+<li>不把底层 LSM layout 直接暴露给 migration 协议</li>
 </ul>
-<p>The narrow seam does only this:</p>
-<ul>
-<li>take materialized internal entries</li>
-<li>build one or more external SST files</li>
-<li>return manifest metadata</li>
-</ul>
-<p>It does not become a second generic ingestion framework.</p>
-<h2 id="install-pipeline"><a class="header" href="#install-pipeline">Install pipeline</a></h2>
-<h3 id="target-side-contract"><a class="header" href="#target-side-contract">Target-side contract</a></h3>
-<p>Keep the current contract:</p>
-<ul>
-<li>install only into an empty peer target</li>
-<li>validate before publish</li>
-<li>publish only after local data install succeeds</li>
-</ul>
-<h3 id="install-steps"><a class="header" href="#install-steps">Install steps</a></h3>
+<h3 id="62-安装流程"><a class="header" href="#62-安装流程">6.2 安装流程</a></h3>
+<p>目标端安装流程保持原有生命周期原则：</p>
 <ol>
-<li>validate manifest</li>
-<li>validate peer target is empty and region metadata matches</li>
-<li>ingest SST files via <code>ImportExternalSST</code></li>
-<li>persist any local metadata required to treat install as durable</li>
-<li>only then publish/host the peer</li>
+<li>先导入 snapshot SST</li>
+<li>再执行 publish / host peer</li>
+<li>如果 publish 失败，则回滚已导入的 external SST</li>
 </ol>
-<p>The existing boundary failpoint still matters:</p>
+<p>这条边界仍然非常关键，因为它决定了：</p>
 <ul>
-<li><code>raftstore/store/peer_lifecycle.go</code></li>
-<li><code>AfterSnapshotApplyBeforePublish</code></li>
+<li>install 完成前，不允许 region 对外可见</li>
+<li>publish 失败时，不留下半安装状态</li>
 </ul>
-<p>The point of the implementation is to preserve this install/publish boundary, not remove it.</p>
-<h2 id="transport-shape"><a class="header" href="#transport-shape">Transport shape</a></h2>
-<h3 id="init"><a class="header" href="#init"><code>init</code></a></h3>
-<p>For local standalone-to-seed promotion:</p>
+<hr>
+<h2 id="7-这次改动真正改变了什么"><a class="header" href="#7-这次改动真正改变了什么">7. 这次改动真正改变了什么</a></h2>
+<h3 id="没变的"><a class="header" href="#没变的">没变的</a></h3>
 <ul>
-<li>export directly into the seed snapshot directory in the same workdir</li>
+<li>migration 主线没变</li>
+<li>seed -&gt; expand 的故事没变</li>
+<li>install-before-publish 的生命周期边界没变</li>
+<li>raft metadata snapshot 和 region state snapshot 仍然分层</li>
 </ul>
-<p>No network transport change is needed.</p>
-<h3 id="expand"><a class="header" href="#expand"><code>expand</code></a></h3>
-<p>For seed-to-target install, the current implementation keeps a transport payload for simplicity, but the payload now contains SST snapshot files instead of detached logical entries.</p>
-<h2 id="the-value-log-decision"><a class="header" href="#the-value-log-decision">The value-log decision</a></h2>
-<h3 id="what-the-implementation-does"><a class="header" href="#what-the-implementation-does">What the implementation does</a></h3>
-<p>The SST snapshot export forces inline values in the exported SST files.</p>
-<p>That means:</p>
+<h3 id="变了的"><a class="header" href="#变了的">变了的</a></h3>
 <ul>
-<li>snapshot export materializes <code>ValuePtr</code> payloads back into value bytes</li>
-<li>exported snapshot SSTs contain no source-side vlog dependency</li>
+<li>数据搬运从“逻辑 entry payload”为主，升级成“SST snapshot payload”为主</li>
+<li>大 region 的安装不再需要把所有内容都走常规 write/apply path</li>
+<li>snapshot install 的写放大和内存压力明显下降</li>
 </ul>
-<h3 id="why-this-was-the-right-first-step"><a class="header" href="#why-this-was-the-right-first-step">Why this was the right first step</a></h3>
+<p>也就是说：</p>
+<blockquote>
+<p>这次升级改的是 transport / install 形态，不是 migration 的语义本体。</p>
+</blockquote>
+<hr>
+<h2 id="8-还没解决什么"><a class="header" href="#8-还没解决什么">8. 还没解决什么</a></h2>
+<p>当前这条 SST snapshot install 路线仍然有明确边界：</p>
 <ol>
-<li>The snapshot becomes self-contained.</li>
-<li>Install can reuse existing LSM ingest without also rebuilding vlog ownership.</li>
-<li>Recovery remains much easier to reason about.</li>
-<li>The migration contract stays region-scoped and portable.</li>
+<li>还没有把源端 vlog 复制纳入 snapshot 协议</li>
+<li>还没有把 split / reshard 并入同一轮改造</li>
+<li>还没有把 snapshot install 扩展成更通用的大规模 region rebalance 机制</li>
 </ol>
-<h3 id="cost"><a class="header" href="#cost">Cost</a></h3>
-<p>This does mean the snapshot is not “copy existing SST files verbatim”.</p>
-<p>That is acceptable. The goal is faster install and lower target-side write amplification, not absolute zero-copy on day one.</p>
-<h2 id="what-landed"><a class="header" href="#what-landed">What landed</a></h2>
-<p>The implementation now covers:</p>
+<p>这些都可以做，但不属于当前阶段最值得一起推进的内容。</p>
+<hr>
+<h2 id="9-总结"><a class="header" href="#9-总结">9. 总结</a></h2>
+<p>这次设计最关键的点不是“我们开始支持 SST snapshot 了”，而是：</p>
+<blockquote>
+<p>在不破坏 migration 主线和 lifecycle contract 的前提下，把 snapshot install 的数据搬运层升级成了更像工业系统的形态。</p>
+</blockquote>
+<p>这比单纯追求“更快搬数据”更重要。</p>
+<p>因为如果为了搬得快而把：</p>
 <ul>
-<li>full-range seed promotion through SST snapshot files</li>
-<li><code>migrate expand</code> through SST payload install</li>
-<li>internal raft peer snapshot payload export/apply through SST</li>
-<li>rollback of imported SST files when install succeeds but publish fails</li>
-<li>restart and interruption coverage in the integration suite</li>
+<li>region truth</li>
+<li>snapshot contract</li>
+<li>rollback 语义</li>
+<li>publish 边界</li>
 </ul>
-<h2 id="testing-plan"><a class="header" href="#testing-plan">Testing plan</a></h2>
-<h3 id="current-tests"><a class="header" href="#current-tests">Current tests</a></h3>
+<p>一起搞乱，那这条路长期是维护不住的。</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="rooted-metadatadelos-lite-与-virtual-log-设计说明"><a class="header" href="#rooted-metadatadelos-lite-与-virtual-log-设计说明">Rooted Metadata、Delos-lite 与 Virtual Log 设计说明</a></h1>
+<blockquote>
+<p>状态：当前 NoKV metadata/control-plane 主线设计说明。本文档合并了此前关于“最小 metadata root 与自描述 region”以及“Delos-lite Metadata Root 与 Virtual Log 路线”的两篇 note，只保留当前代码仍然有效、且能直接指导后续实现与研究的部分。</p>
+</blockquote>
+<h2 id="1-为什么现在要把文档合并"><a class="header" href="#1-为什么现在要把文档合并">1. 为什么现在要把文档合并</a></h2>
+<p>NoKV 之前关于 metadata/control-plane 的说明分散在两篇 note 里：</p>
+<ul>
+<li>一篇强调最小 metadata root、自描述 region、<code>RegionMeta</code> 与 <code>Descriptor</code> 的边界。</li>
+<li>一篇强调 Delos-lite、Virtual Log、local/replicated backend 和后续路线。</li>
+</ul>
+<p>这两篇文章讲的是同一条主线的两个侧面。继续并排保留，会产生三个问题：</p>
 <ol>
-<li>SST meta round-trip and payload decode checks</li>
-<li>exported tables contain only keys in region range</li>
-<li>exported snapshot tables contain no <code>ValuePtr</code></li>
-<li>target import installs all data correctly</li>
-<li>payloads missing meta or table files are rejected</li>
+<li>同一组边界被重复描述。</li>
+<li>读者要自己猜哪些内容已经过时。</li>
+<li>代码继续演进后，两篇 note 很容易漂移。</li>
 </ol>
-<h3 id="integration-tests"><a class="header" href="#integration-tests">Integration tests</a></h3>
+<p>所以这里直接合并成一篇正式说明，目标很简单：</p>
+<ul>
+<li>把 NoKV 当前已经成立的 metadata/control-plane 设计一次讲清楚。</li>
+<li>明确哪些是已经实现的，哪些只是下一阶段研究方向。</li>
+<li>把 Delos 借鉴点和 NoKV 当前真实实现区分开，不再混说。</li>
+</ul>
+<h2 id="2-当前结论"><a class="header" href="#2-当前结论">2. 当前结论</a></h2>
+<p>NoKV 当前的正式模式可以理解成三层：</p>
 <ol>
-<li>seed promotion with low <code>ValueThreshold</code> still restores values correctly after SST export/import</li>
-<li>add-peer install with low <code>ValueThreshold</code> works with SST snapshot payloads</li>
-<li>restart after ingest-before-publish behaves correctly</li>
-<li>failpoint before publish still leaves target unpublished and retries cleanly</li>
+<li><code>meta/root</code>
+<ul>
+<li>最小 durable truth</li>
+<li>transition state machine</li>
+<li>rooted virtual-log substrate</li>
+</ul>
+</li>
+<li><code>pd</code>
+<ul>
+<li>rooted route view</li>
+<li>rooted transition/operator view</li>
+<li>proposal gate + service host</li>
+</ul>
+</li>
+<li><code>raftstore</code>
+<ul>
+<li>data-plane executor</li>
+<li>消费 target</li>
+<li>执行 local raft/admin change</li>
+<li>发布 terminal truth</li>
+</ul>
+</li>
 </ol>
-<h3 id="recovery-tests"><a class="header" href="#recovery-tests">Recovery tests</a></h3>
-<ol>
-<li>crash after snapshot payload transfer but before ingest</li>
-<li>crash after ingest but before publish</li>
-<li>repeated install attempt is safe or rejected clearly</li>
-</ol>
-<h2 id="code-path-sketch"><a class="header" href="#code-path-sketch">Code path sketch</a></h2>
-<pre class="mermaid">flowchart TD
-    A["Standalone / Leader Region"] --&gt; B["Region-scoped iterator"]
-    B --&gt; C["Materialize internal entries"]
-    C --&gt; D["Build snapshot SST files with inline values"]
-    D --&gt; E["sst-snapshot.json + tables/*.sst"]
-    E --&gt; F["transfer payload to target temp dir"]
-    F --&gt; G["Validate manifest and empty-peer target"]
-    G --&gt; H["ImportExternalSST(...)"]
-    H --&gt; I["publish hosted peer"]
+<p>它们之间的关系是：</p>
+<pre class="mermaid">flowchart LR
+    C["Client / Gateway"] --&gt; P["PD Service"]
+    S["Raftstore / Executor"] --&gt; P
+    P --&gt; V["PD Views"]
+    P --&gt; M["Meta Root Truth"]
+    M --&gt; V
+    M --&gt; B["Virtual Log Substrate"]
 </pre>
 
-<h2 id="non-goals-for-this-stage"><a class="header" href="#non-goals-for-this-stage">Non-goals for this stage</a></h2>
+<p>当前最关键的判断有三条：</p>
+<ol>
+<li><code>meta/root</code> 已经不是临时存储，而是真正的最小真相核。</li>
+<li><code>pd</code> 已经不再是 authority，而是 rooted view 和 service 层。</li>
+<li><code>raftstore</code> 已经从“半个 control-plane”收敛成越来越纯的 executor。</li>
+</ol>
+<h2 id="3-当前产品模式"><a class="header" href="#3-当前产品模式">3. 当前产品模式</a></h2>
+<p>NoKV 当前的控制面正式模式只有两种：</p>
+<ol>
+<li><code>single pd + local meta</code></li>
+<li><code>3 pd + replicated meta</code></li>
+</ol>
+<p>这两种模式共享同一个 rooted metadata 领域模型：</p>
 <ul>
-<li>zero-downtime online migration</li>
-<li>dual-write cutover</li>
-<li>split/re-shard during migration</li>
-<li>direct reuse of arbitrary existing SST layout</li>
-<li>source vlog segment shipping</li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/event</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/state</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/materialize</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/storage</code></li>
 </ul>
-<h2 id="what-this-changed"><a class="header" href="#what-this-changed">What this changed</a></h2>
-<p>NoKV now keeps the migration story intact while upgrading the expensive part:</p>
+<p>差别只在 backend：</p>
 <ul>
-<li>logical region truth stays the source contract</li>
-<li>install becomes file-oriented instead of entry-replay-oriented</li>
-<li>target write amplification goes down</li>
-<li>the snapshot path becomes more industrial without dragging split or vlog orchestration into the first SST phase</li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/local</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/replicated</code></li>
 </ul>
-<h2 id="what-remains-unsolved"><a class="header" href="#what-remains-unsolved">What remains unsolved</a></h2>
+<p>这点非常重要，因为它意味着：</p>
 <ul>
-<li>whether a later phase should support vlog-aware snapshot modes</li>
-<li>whether the admin API should stream files or expose file pull endpoints</li>
-<li>how much reusable builder surface should be exposed from the LSM layer</li>
-<li>when it is worth introducing split-aware migration snapshots</li>
+<li>单机不是另一套 metadata 系统。</li>
+<li>高可用也不是另一套 metadata 系统。</li>
+<li>上层 <code>pd</code> 和 <code>raftstore</code> 不需要针对 local/replicated 分叉设计。</li>
 </ul>
+<h2 id="4-为什么要借鉴-delos"><a class="header" href="#4-为什么要借鉴-delos">4. 为什么要借鉴 Delos</a></h2>
+<p>NoKV 参考 Delos，不是为了照搬它的协议实现，而是为了借鉴它最值钱的结构原则。</p>
+<p>真正借鉴的是这四条：</p>
+<h3 id="41-最小真相源"><a class="header" href="#41-最小真相源">4.1 最小真相源</a></h3>
+<p>真正需要强一致、需要 durable、需要全局收敛的东西应该尽量少。</p>
+<p>在 NoKV 里，这些东西进入了 <code>meta/root</code>：</p>
+<ul>
+<li>region descriptor truth</li>
+<li>peer change / split / merge transition truth</li>
+<li>allocator fence truth</li>
+<li>compact checkpoint</li>
+<li>retained committed tail</li>
+</ul>
+<p>这些东西不应该进入 <code>meta/root</code>：</p>
+<ul>
+<li>高频 heartbeat</li>
+<li>store load</li>
+<li>hot region 观测</li>
+<li>scheduler runtime 草稿</li>
+<li>cache / view / stats</li>
+</ul>
+<h3 id="42-truth--view--service-分离"><a class="header" href="#42-truth--view--service-分离">4.2 truth / view / service 分离</a></h3>
+<p>Delos 的关键不是“有个 log”，而是：</p>
+<ul>
+<li>truth 不等于 service</li>
+<li>service 不等于 protocol</li>
+<li>materialized view 可以从 truth 重建</li>
+</ul>
+<p>NoKV 当前对应关系已经比较清楚：</p>
+<ul>
+<li>truth：<code>meta/root</code></li>
+<li>view：<code>pd/view</code>、<code>pd/core</code></li>
+<li>service：<code>pd/server</code></li>
+</ul>
+<h3 id="43-virtual-log-而不是把上层绑死在协议细节上"><a class="header" href="#43-virtual-log-而不是把上层绑死在协议细节上">4.3 virtual log 而不是把上层绑死在协议细节上</a></h3>
+<p>上层消费的应该是：</p>
+<ul>
+<li>committed truth stream</li>
+<li>checkpoint</li>
+<li>catch-up/install/compaction contract</li>
+</ul>
+<p>而不是：</p>
+<ul>
+<li>raft rawnode</li>
+<li>term/vote 细节</li>
+<li>transport 细节</li>
+<li>protocol storage layout</li>
+</ul>
+<h3 id="44-backend-可替换"><a class="header" href="#44-backend-可替换">4.4 backend 可替换</a></h3>
+<p>Delos-lite 的价值在于：</p>
+<ul>
+<li>上层 rooted domain 稳定</li>
+<li>底层 backend 可演进</li>
+</ul>
+<p>对应到 NoKV，就是：</p>
+<ul>
+<li><code>backend/local</code></li>
+<li><code>backend/replicated</code></li>
+</ul>
+<p>共享同一个 <code>meta/root</code> 领域面，而不是维护两套 metadata 实现。</p>
+<h2 id="5-当前-metaroot-到底是什么"><a class="header" href="#5-当前-metaroot-到底是什么">5. 当前 <code>meta/root</code> 到底是什么</a></h2>
+<p><code>meta/root</code> 现在是 NoKV 的最小 metadata truth kernel。</p>
+<p>关键代码路径：</p>
+<ul>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/event/types.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/state</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/storage/substrate.go</code></li>
+</ul>
+<p>它负责：</p>
+<ul>
+<li>定义显式 <code>RootEvent</code></li>
+<li>定义 compact rooted <code>Snapshot</code></li>
+<li>定义 transition lifecycle</li>
+<li>定义 pending execution state</li>
+<li>定义 virtual-log read/install/catch-up/compaction contract</li>
+</ul>
+<p>它不负责：</p>
+<ul>
+<li>route lookup API</li>
+<li>heartbeat runtime state</li>
+<li>scheduler runtime decisions</li>
+<li>operator runtime lifecycle</li>
+<li>data-plane local recovery</li>
+</ul>
+<p>这条边界已经是对的，而且要继续守住。</p>
+<h2 id="6-regionmetadescriptorrootevent-的分层"><a class="header" href="#6-regionmetadescriptorrootevent-的分层">6. <code>RegionMeta</code>、<code>Descriptor</code>、<code>RootEvent</code> 的分层</a></h2>
+<p>当前这三个对象已经各归其位。</p>
+<h3 id="regionmeta"><a class="header" href="#regionmeta"><code>RegionMeta</code></a></h3>
+<p>位置：</p>
+<ul>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/localmeta</code></li>
+</ul>
+<p>角色：</p>
+<ul>
+<li>store-local execution / recovery object</li>
+<li>单机恢复真相</li>
+<li>不应该成为跨层 authority schema</li>
+</ul>
+<h3 id="descriptor"><a class="header" href="#descriptor"><code>Descriptor</code></a></h3>
+<p>位置：</p>
+<ul>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/descriptor</code></li>
+</ul>
+<p>角色：</p>
+<ul>
+<li>跨层共享的 topology object</li>
+<li>PD route view 的语言</li>
+<li>rooted truth payload 的主要对象</li>
+</ul>
+<h3 id="rootevent"><a class="header" href="#rootevent"><code>RootEvent</code></a></h3>
+<p>位置：</p>
+<ul>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/event/types.go</code></li>
+</ul>
+<p>角色：</p>
+<ul>
+<li>explicit rooted truth transition</li>
+<li>metadata/control-plane 正式写语言</li>
+</ul>
+<p>一句话：</p>
+<ul>
+<li><code>RegionMeta</code> 是本地执行态</li>
+<li><code>Descriptor</code> 是共享拓扑对象</li>
+<li><code>RootEvent</code> 是 durable truth transition</li>
+</ul>
+<h2 id="7-meta-和-pd-现在隔离得怎么样"><a class="header" href="#7-meta-和-pd-现在隔离得怎么样">7. <code>meta</code> 和 <code>pd</code> 现在隔离得怎么样</a></h2>
+<p>当前这条边界已经比较清楚，而且是当前分支最重要的进展之一。</p>
+<h3 id="metaroot-负责的事情"><a class="header" href="#metaroot-负责的事情"><code>meta/root</code> 负责的事情</a></h3>
+<ul>
+<li>保存和恢复最小 rooted truth</li>
+<li>transition state machine</li>
+<li>checkpoint + retained tail</li>
+<li>catch-up / install / compaction contract</li>
+</ul>
+<h3 id="pd-负责的事情"><a class="header" href="#pd-负责的事情"><code>pd</code> 负责的事情</a></h3>
+<ul>
+<li>rooted route view</li>
+<li>rooted transition/operator view</li>
+<li>proposal gate</li>
+<li>liveness service</li>
+<li>对外 RPC 语义</li>
+</ul>
+<h3 id="当前已经做到的隔离"><a class="header" href="#当前已经做到的隔离">当前已经做到的隔离</a></h3>
+<ol>
+<li><code>pd</code> 不再维护第二份 authority metadata。</li>
+<li><code>pd</code> 写路径是 <code>persist rooted truth first, reload rooted view later</code>。</li>
+<li>liveness 已经从 truth path 分开。</li>
+<li>operator/debug surface 也是 rooted projection，不是 <code>pd</code> 自己发明的平行状态机。</li>
+</ol>
+<p>这意味着：</p>
+<ul>
+<li><code>pd</code> 可以失效</li>
+<li><code>pd</code> 可以重建</li>
+<li><code>pd</code> view 可以丢弃并重新 materialize</li>
+<li>truth 仍然稳定留在 <code>meta/root</code></li>
+</ul>
+<h2 id="8-当前-pd-的职责"><a class="header" href="#8-当前-pd-的职责">8. 当前 <code>pd</code> 的职责</a></h2>
+<p>关键代码：</p>
+<ul>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/storage/root.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/core/cluster.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/view/transition_view.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/server/service.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/server/transition_service.go</code></li>
+</ul>
+<p>现在 <code>pd</code> 已经比较清楚地承担三件事：</p>
+<h3 id="81-rooted-route-view"><a class="header" href="#81-rooted-route-view">8.1 rooted route view</a></h3>
+<ul>
+<li><code>Descriptor</code> route directory</li>
+<li><code>GetRegionByKey</code></li>
+<li>region/store heartbeat runtime observation</li>
+</ul>
+<h3 id="82-rooted-transitionoperator-view"><a class="header" href="#82-rooted-transitionoperator-view">8.2 rooted transition/operator view</a></h3>
+<ul>
+<li>pending / completed / conflict / superseded / cancelled / aborted</li>
+<li>operator/debug inspection</li>
+<li>transition assessment RPC</li>
+</ul>
+<h3 id="83-proposal-gate"><a class="header" href="#83-proposal-gate">8.3 proposal gate</a></h3>
+<ul>
+<li>接收来自 client / executor 的变更意图</li>
+<li>先评估 rooted lifecycle</li>
+<li>persist truth</li>
+<li>再刷新 rooted view</li>
+</ul>
+<h2 id="9-当前-raftstore-的角色"><a class="header" href="#9-当前-raftstore-的角色">9. 当前 <code>raftstore</code> 的角色</a></h2>
+<p>关键代码：</p>
+<ul>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/transition_exec.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/membership_service.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/admin_service.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/region_manager.go</code></li>
+</ul>
+<p><code>raftstore</code> 当前已经不是旧式的“本地先改 descriptor，再顺手推导 truth”。</p>
+<p>它当前更接近：</p>
+<ol>
+<li>构造 rooted transition target</li>
+<li>执行 local raft/admin proposal</li>
+<li>本地 apply data-plane change</li>
+<li>发布 terminal rooted truth</li>
+</ol>
+<p>最近这轮又收了一步：</p>
+<ul>
+<li>target 现在携带的是语义 proposal 对象，而不是已经编码好的 proposal 字节</li>
+<li>executor 负责：
+<ul>
+<li>leader check</li>
+<li>marshal admin proposal</li>
+<li>send conf/admin</li>
+<li>publish terminal truth</li>
+</ul>
+</li>
+</ul>
+<p>这说明 <code>raftstore</code> 正在继续纯 executor 化。</p>
+<h2 id="10-nokv-里的-virtual-log-是什么"><a class="header" href="#10-nokv-里的-virtual-log-是什么">10. NoKV 里的 Virtual Log 是什么</a></h2>
+<p>这里的 Virtual Log 不是一个新的大通用日志系统，而是 rooted metadata truth 的稳定 substrate。</p>
+<p>关键代码：</p>
+<ul>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/storage/substrate.go</code></li>
+</ul>
+<p>当前它主要围绕这些对象构建：</p>
+<h3 id="checkpoint"><a class="header" href="#checkpoint"><code>Checkpoint</code></a></h3>
+<ul>
+<li>一个 compact rooted snapshot</li>
+<li>带 <code>TailOffset</code></li>
+</ul>
+<h3 id="committedtail"><a class="header" href="#committedtail"><code>CommittedTail</code></a></h3>
+<ul>
+<li>一个 retained committed truth tail</li>
+<li>带 <code>RequestedOffset / StartOffset / EndOffset</code></li>
+</ul>
+<h3 id="observedcommitted"><a class="header" href="#observedcommitted"><code>ObservedCommitted</code></a></h3>
+<ul>
+<li><code>Checkpoint + CommittedTail</code></li>
+<li>一个完整的 rooted read image</li>
+</ul>
+<h3 id="tailtoken"><a class="header" href="#tailtoken"><code>TailToken</code></a></h3>
+<ul>
+<li>一次 follower/consumer 已知的 tail frontier</li>
+</ul>
+<h3 id="tailadvance"><a class="header" href="#tailadvance"><code>TailAdvance</code></a></h3>
+<ul>
+<li>相对于某个 token 的 tail 变化结果</li>
+<li>包括：
+<ul>
+<li><code>TailAdvanceUnchanged</code></li>
+<li><code>TailAdvanceCursorAdvanced</code></li>
+<li><code>TailAdvanceWindowShifted</code></li>
+</ul>
+</li>
+</ul>
+<h3 id="tailwindow"><a class="header" href="#tailwindow"><code>TailWindow</code></a></h3>
+<ul>
+<li>retained window 本身的边界</li>
+</ul>
+<h3 id="tailcatchupaction"><a class="header" href="#tailcatchupaction"><code>TailCatchUpAction</code></a></h3>
+<p>现在不只是“要不要 refresh”，而是：</p>
+<ul>
+<li><code>TailCatchUpIdle</code></li>
+<li><code>TailCatchUpRefreshState</code></li>
+<li><code>TailCatchUpAcknowledgeWindow</code></li>
+<li><code>TailCatchUpInstallBootstrap</code></li>
+</ul>
+<h3 id="tailsubscription"><a class="header" href="#tailsubscription"><code>TailSubscription</code></a></h3>
+<p>这轮又往前收了一层，增加了 watch-like subscription：</p>
+<ul>
+<li><code>NewTailSubscription(...)</code></li>
+<li><code>Wait(...)</code></li>
+<li><code>Acknowledge(...)</code></li>
+<li><code>Token()</code></li>
+</ul>
+<p>它的意义是：</p>
+<ul>
+<li>follower 不再到处手搓 <code>TailToken</code> 循环</li>
+<li>watch / catch-up contract 现在开始成为显式对象</li>
+</ul>
+<h2 id="11-virtual-log-的实际工作方式"><a class="header" href="#11-virtual-log-的实际工作方式">11. Virtual Log 的实际工作方式</a></h2>
+<h3 id="111-写入"><a class="header" href="#111-写入">11.1 写入</a></h3>
+<p>上层 append 的不是裸协议 entry，而是：</p>
+<ul>
+<li><code>RootEvent</code></li>
+</ul>
+<p>backend 把它们变成：</p>
+<ul>
+<li>committed rooted truth stream</li>
+</ul>
+<h3 id="112-读取"><a class="header" href="#112-读取">11.2 读取</a></h3>
+<p>上层看到的是：</p>
+<ul>
+<li>当前 checkpoint</li>
+<li>当前 retained committed tail</li>
+<li>相对上次观察到了什么变化</li>
+</ul>
+<p>而不是直接去理解 protocol log / transport / memory storage。</p>
+<h3 id="113-follower-catch-up"><a class="header" href="#113-follower-catch-up">11.3 follower catch-up</a></h3>
+<p>当前 follower catch-up 已经围绕 <code>TailAdvance</code> 工作：</p>
+<pre class="mermaid">flowchart TD
+    A["TailSubscription.Wait()"] --&gt; B{"CatchUpAction"}
+    B --&gt;|Idle| C["do nothing"]
+    B --&gt;|AcknowledgeWindow| D["ack token only"]
+    B --&gt;|RefreshState| E["reload rooted view"]
+    B --&gt;|InstallBootstrap| F["install / reload bootstrap image"]
+</pre>
+
+<p>这意味着 catch-up 已经不是“简单定时 refresh”，而是有了正式 contract。</p>
+<h3 id="114-compaction"><a class="header" href="#114-compaction">11.4 compaction</a></h3>
+<p>现在 compaction 已经统一到 install contract 上：</p>
+<ul>
+<li><code>PlanTailCompaction(...)</code></li>
+<li><code>plan.Observed(snapshot)</code></li>
+<li><code>InstallBootstrap(observed)</code></li>
+</ul>
+<p>这样 compaction、bootstrap install、recovery install 用的是同一条 substrate 语义，而不是 backend 私有分支逻辑。</p>
+<h2 id="12-现在底层协议是不是已经变了"><a class="header" href="#12-现在底层协议是不是已经变了">12. 现在底层协议是不是已经变了</a></h2>
+<p>没有。当前 replicated backend 的协议驱动仍然是 raft。</p>
+<p>关键代码：</p>
+<ul>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/replicated/network.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/replicated/driver.go</code></li>
+</ul>
+<p>也就是说：</p>
+<ul>
+<li>底层 replicated metadata backend 目前仍然是 raft 驱动</li>
+<li>并没有直接替换成 CURP 或别的协议</li>
+</ul>
+<p>真正变化的是：</p>
+<ul>
+<li>上层已经基本不直接消费 raft 细节</li>
+<li>上层更多消费的是 <code>ObservedCommitted</code>、<code>TailAdvance</code>、<code>TailSubscription</code>、<code>InstallBootstrap</code> 这类稳定 contract</li>
+</ul>
+<p>这很关键，因为它意味着：</p>
+<ul>
+<li>未来如果研究不同 replicated substrate</li>
+<li>改动的主战场在 <code>meta/root/backend/replicated</code></li>
+<li>而不是去污染 <code>pd</code> 或 <code>meta/root/state</code></li>
+</ul>
+<h2 id="13-当前-durable-layout"><a class="header" href="#13-当前-durable-layout">13. 当前 durable layout</a></h2>
+<p>metadata/control-plane 相关 durable 文件现在已经统一成：</p>
+<h3 id="pd-workdir"><a class="header" href="#pd-workdir"><code>pd</code> workdir</a></h3>
+<ul>
+<li><code>root.checkpoint.binpb</code></li>
+<li><code>root.events.wal</code></li>
+<li><code>root.raft.bin</code>（replicated mode only）</li>
+</ul>
+<h3 id="raftstorelocalmeta"><a class="header" href="#raftstorelocalmeta"><code>raftstore/localmeta</code></a></h3>
+<ul>
+<li><code>replicas.binpb</code></li>
+<li><code>raft-progress.binpb</code></li>
+</ul>
+<h3 id="snapshot-dir"><a class="header" href="#snapshot-dir">snapshot dir</a></h3>
+<ul>
+<li><code>snapshot.json</code></li>
+<li><code>tables/*.sst</code></li>
+</ul>
+<p>它们的职责也已经明确：</p>
+<ul>
+<li><code>root.checkpoint.binpb</code> + <code>root.events.wal</code>
+<ul>
+<li>rooted cluster truth</li>
+</ul>
+</li>
+<li><code>root.raft.bin</code>
+<ul>
+<li>replicated backend protocol recovery state</li>
+</ul>
+</li>
+<li><code>replicas.binpb</code> + <code>raft-progress.binpb</code>
+<ul>
+<li>store-local recovery state</li>
+</ul>
+</li>
+<li><code>snapshot.json</code> + <code>tables/*.sst</code>
+<ul>
+<li>region snapshot payload</li>
+</ul>
+</li>
+</ul>
+<h2 id="14-当前这条主线已经做完了什么"><a class="header" href="#14-当前这条主线已经做完了什么">14. 当前这条主线已经做完了什么</a></h2>
+<p>当前已经基本完成的收敛：</p>
+<ol>
+<li><code>meta/root</code> 成为最小 truth kernel</li>
+<li><code>pd</code> 退出 authority 角色</li>
+<li>liveness 从 truth path 分离</li>
+<li><code>RootEvent</code> 成为正式 truth 写语言</li>
+<li><code>peer/split/merge</code> transition state machine 明显成型</li>
+<li>cancel / conflict / superseded / aborted / retry class 已闭环</li>
+<li>operator/debug surface 已正式 RPC 化</li>
+<li>durable 文件命名和格式语义已清晰化</li>
+<li>Virtual Log read/install/catch-up/compaction contract 已经明显成型</li>
+</ol>
+<h2 id="15-当前还没到终局的地方"><a class="header" href="#15-当前还没到终局的地方">15. 当前还没到终局的地方</a></h2>
+<p>这条主线已经工程化，但还没到工业终局。</p>
+<p>主要还差：</p>
+<h3 id="151-operator-runtime--scheduler-lifecycle"><a class="header" href="#151-operator-runtime--scheduler-lifecycle">15.1 operator runtime / scheduler lifecycle</a></h3>
+<p>当前已经有 transition/operator view，但还没有成熟的：</p>
+<ul>
+<li>owner</li>
+<li>attempt</li>
+<li>backoff</li>
+<li>admission</li>
+<li>anti-thrash</li>
+<li>placement / failure-domain policy</li>
+</ul>
+<h3 id="152-replicated-substrate-还值得继续研究"><a class="header" href="#152-replicated-substrate-还值得继续研究">15.2 replicated substrate 还值得继续研究</a></h3>
+<p>尤其是：</p>
+<ul>
+<li>watch/subscribe 进一步 formalization</li>
+<li>protocol driver 与 substrate adapter 继续细分</li>
+<li>catch-up/install 策略调优</li>
+<li>potential alternative protocol exploration</li>
+</ul>
+<h3 id="153-raftstore-还可以继续纯-executor-化"><a class="header" href="#153-raftstore-还可以继续纯-executor-化">15.3 <code>raftstore</code> 还可以继续纯 executor 化</a></h3>
+<p>当前它已经更像 executor，但 target construction 仍然长在 store 层。后面如果继续深入，可以让 planner surface 更明确，再把 executor 压窄。</p>
+<h2 id="16-当前不应该做什么"><a class="header" href="#16-当前不应该做什么">16. 当前不应该做什么</a></h2>
+<p>下面这些方向现在都不应该抢优先级：</p>
+<ol>
+<li>再把 runtime state 塞回 <code>meta/root</code></li>
+<li>重新让 <code>pd</code> 长成 authority</li>
+<li>先追更复杂协议优化</li>
+<li>提前做过度复杂的 control-plane deployment 拆分</li>
+<li>在 <code>raftstore</code> 里继续加新的 control-plane 语义</li>
+</ol>
+<h2 id="17-这套设计为什么适合作为研究平台"><a class="header" href="#17-这套设计为什么适合作为研究平台">17. 这套设计为什么适合作为研究平台</a></h2>
+<p>因为它已经满足研究平台最需要的三个条件：</p>
+<h3 id="171-主骨架稳定"><a class="header" href="#171-主骨架稳定">17.1 主骨架稳定</a></h3>
+<ul>
+<li>truth / view / executor 已分开</li>
+<li>durable layout 清楚</li>
+<li>local / replicated 共用一个 root domain</li>
+</ul>
+<h3 id="172-关键边界没有缠死"><a class="header" href="#172-关键边界没有缠死">17.2 关键边界没有缠死</a></h3>
+<ul>
+<li>可以单独研究 <code>replicated backend</code></li>
+<li>可以单独研究 <code>scheduler/operator runtime</code></li>
+<li>可以单独研究 <code>executor pureification</code></li>
+</ul>
+<h3 id="173-不需要先推翻架构"><a class="header" href="#173-不需要先推翻架构">17.3 不需要先推翻架构</a></h3>
+<p>当前后续研究大多是“继续在正确结构上深入”，而不是“先拆掉重来”。</p>
+<h2 id="18-一句话总结"><a class="header" href="#18-一句话总结">18. 一句话总结</a></h2>
+<p>NoKV 当前这条 metadata/control-plane 主线，已经是一条成立的 Delos-lite 设计：</p>
+<ul>
+<li><code>meta/root</code> 是最小 durable truth kernel</li>
+<li><code>pd</code> 是 rooted view + service + proposal gate</li>
+<li><code>raftstore</code> 是越来越纯的 data-plane executor</li>
+<li>Virtual Log substrate 已经围绕 <code>ObservedCommitted</code>、<code>TailAdvance</code>、<code>TailSubscription</code>、<code>InstallBootstrap</code>、<code>PlanTailCompaction</code> 建立起稳定 contract</li>
+<li>底层 replicated backend 目前仍然是 raft 驱动，但上层已经基本不被 raft 细节绑死</li>
+</ul>
+<p>这意味着 NoKV 现在已经不仅适合作为工程主线继续演进，也非常适合作为 metadata architecture、operator runtime、scheduler、protocol substrate 和 distributed storage experiment 的研究平台。</p>
 
                     </main>
 

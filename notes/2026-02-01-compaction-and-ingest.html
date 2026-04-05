@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e2903395.js";
+            window.path_to_searchindex_js = "../searchindex-72fa220b.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b976cdea.js"></script>
+        <script src="../toc-41a84e3a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,7 +178,7 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="2026-02-01-compaction-and-ingest"><a class="header" href="#2026-02-01-compaction-and-ingest">2026-02-01 compaction and ingest</a></h1>
+                        <h1 id="2026-02-01-compaction-与-ingest-buffer-设计"><a class="header" href="#2026-02-01-compaction-与-ingest-buffer-设计">2026-02-01 Compaction 与 Ingest Buffer 设计</a></h1>
 <p>本文档深入解析 NoKV 的 <strong>Compaction（压缩）</strong> 机制与 <strong>Ingest Buffer（导入缓冲）</strong> 的协同设计。这是 NoKV 解决 LSM Tree 经典的“写停顿（Write Stall）”问题的核心武器，也是体现其工业级稳定性的关键设计。</p>
 <hr>
 <h2 id="1-设计理念拒绝写停顿"><a class="header" href="#1-设计理念拒绝写停顿">1. 设计理念：拒绝“写停顿”</a></h2>

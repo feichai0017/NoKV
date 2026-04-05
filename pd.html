@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e2903395.js";
+            window.path_to_searchindex_js = "searchindex-72fa220b.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b976cdea.js"></script>
+        <script src="toc-41a84e3a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -193,7 +193,8 @@
 <li><strong>TSO</strong>: <code>Tso</code></li>
 </ul>
 <p>Runtime clients (for example <code>cmd/nokv-redis</code> raft backend) use PD as the
-routing source of truth.</p>
+routing source of truth, but PD is not the durable owner of cluster topology
+truth. Durable truth lives in <code>meta/root</code>.</p>
 <hr>
 <h2 id="2-runtime-architecture"><a class="header" href="#2-runtime-architecture">2. Runtime Architecture</a></h2>
 <pre class="mermaid">flowchart LR
@@ -206,18 +207,91 @@ routing source of truth.</p>
 <p>Core implementation units:</p>
 <ul>
 <li><code>pd/core</code>: in-memory cluster metadata model + allocators.</li>
-<li><code>pd/storage</code>: persistence abstraction (<code>Store</code>) with local manifest+state implementation.</li>
+<li><code>pd/storage</code>: persistence abstraction (<code>Store</code>) backed by the metadata root.</li>
 <li><code>pd/server</code>: gRPC service + RPC validation/error mapping.</li>
 <li><code>pd/client</code>: client wrapper used by store/gateway.</li>
 <li><code>pd/adapter</code>: scheduler sink that forwards heartbeats into PD.</li>
 </ul>
 <hr>
-<h2 id="3-persistence---workdir"><a class="header" href="#3-persistence---workdir">3. Persistence (<code>--workdir</code>)</a></h2>
-<p>When <code>--workdir</code> is provided, PD-lite persists control-plane state in
-<code>PD_STATE.json</code>:</p>
+<h2 id="3-mode-model"><a class="header" href="#3-mode-model">3. Mode Model</a></h2>
+<p>NoKV currently has only two supported product modes:</p>
+<h3 id="standalone"><a class="header" href="#standalone"><code>standalone</code></a></h3>
 <ul>
-<li><strong>Region catalog</strong> for route recovery.</li>
-<li><strong>Allocator checkpoints</strong>:
+<li>no <code>pd</code></li>
+<li>no <code>meta/root</code></li>
+<li>no control-plane process</li>
+<li>all truth remains inside the single storage process</li>
+</ul>
+<p>This is the default local engine shape. Standalone is not a degraded control
+plane deployment; it simply has no control plane.</p>
+<h3 id="distributed"><a class="header" href="#distributed"><code>distributed</code></a></h3>
+<p><code>distributed</code> has two formal control-plane deployments:</p>
+<ol>
+<li><code>single pd + local meta</code></li>
+<li><code>3 pd + replicated meta</code></li>
+</ol>
+<p>Both deployments keep the same logical split:</p>
+<ul>
+<li><code>meta/root/*</code>: durable rooted truth</li>
+<li><code>pd/view</code> + <code>pd/core</code>: rebuildable routing/scheduling state</li>
+<li><code>pd/server</code>: gRPC API surface</li>
+</ul>
+<p>The difference is only the rooted backend:</p>
+<ul>
+<li><code>single pd + local meta</code>
+<ul>
+<li>one <code>pd</code> process</li>
+<li>one same-process <code>meta/root/backend/local</code></li>
+<li>single-node durable truth</li>
+</ul>
+</li>
+<li><code>3 pd + replicated meta</code>
+<ul>
+<li>three <code>pd</code> processes</li>
+<li>each process hosts one same-process <code>meta/root/backend/replicated</code></li>
+<li>fixed three-replica rooted truth</li>
+<li>one rooted leader accepts truth writes, followers refresh rooted state and serve read/view traffic</li>
+</ul>
+</li>
+</ul>
+<p>No other product control-plane mode is supported. In particular:</p>
+<ul>
+<li>there is no separate <code>meta</code> cluster</li>
+<li>there is no <code>pd</code> cluster larger than three members</li>
+<li>there is no dynamic metadata membership today</li>
+</ul>
+<hr>
+<h2 id="4-persistence---workdir"><a class="header" href="#4-persistence---workdir">4. Persistence (<code>--workdir</code>)</a></h2>
+<p><code>--workdir</code> is required for every formal PD deployment that hosts rooted truth.</p>
+<h3 id="single-pd--local-meta"><a class="header" href="#single-pd--local-meta"><code>single pd + local meta</code></a></h3>
+<p>The rooted backend stores:</p>
+<ul>
+<li><code>root.events.wal</code></li>
+<li><code>root.checkpoint.binpb</code></li>
+</ul>
+<h3 id="3-pd--replicated-meta"><a class="header" href="#3-pd--replicated-meta"><code>3 pd + replicated meta</code></a></h3>
+<p>Each PD node has its own workdir and persists two layers of state:</p>
+<ol>
+<li>rooted truth state
+<ul>
+<li><code>root.events.wal</code></li>
+<li><code>root.checkpoint.binpb</code></li>
+</ul>
+</li>
+<li>replicated protocol state
+<ul>
+<li><code>root.raft.bin</code></li>
+<li>contains raft hard state, raft snapshot, and retained raft entries</li>
+</ul>
+</li>
+</ol>
+<p>Each node must have an isolated workdir. Workdirs are not shared.</p>
+<h3 id="rooted-bootstrap-flow"><a class="header" href="#rooted-bootstrap-flow">Rooted bootstrap flow</a></h3>
+<p>The PD storage layer rebuilds its region snapshot and allocator checkpoints by
+replaying rooted truth:</p>
+<ul>
+<li><strong>region descriptor publish/tombstone</strong> events rebuild the route catalog</li>
+<li><strong>allocator fences</strong> rebuild:
 <ul>
 <li><code>id_current</code></li>
 <li><code>ts_current</code></li>
@@ -226,18 +300,21 @@ routing source of truth.</p>
 </ul>
 <p>Startup flow:</p>
 <ol>
-<li>Open <code>pd/storage</code> with <code>--workdir</code>.</li>
-<li>Load snapshot (<code>regions</code> + allocator counters).</li>
-<li>Compute starts as <code>max(cli_start, checkpoint+1)</code>.</li>
-<li>Replay region snapshot into <code>pd/core.Cluster</code>.</li>
+<li>Open rooted <code>pd/storage</code> from <code>--workdir</code>.</li>
+<li>Reconstruct a rooted PD snapshot (<code>regions</code> + allocator fences).</li>
+<li>Compute starts as <code>max(cli_start, fence+1)</code>.</li>
+<li>Materialize the rooted region snapshot into <code>pd/core.Cluster</code>.</li>
 </ol>
-<p>This avoids allocator rollback after restart and keeps route metadata stable.</p>
+<p>For replicated mode, followers periodically refresh rooted state and rebuild the
+service-side view. This avoids allocator rollback and removes the old parallel
+<code>PD_STATE.json</code> truth table.</p>
 <h3 id="region-truth-hierarchy"><a class="header" href="#region-truth-hierarchy">Region Truth Hierarchy</a></h3>
 <p>NoKV intentionally keeps three region views with different authority:</p>
 <ul>
 <li><strong>PD region catalog</strong>: cluster routing truth. Clients and stores must treat
-PD as the authoritative key-to-region source.</li>
-<li><strong><code>raftstore/meta</code> local catalog</strong>: store-local recovery truth. It exists so
+PD as the authoritative key-to-region source at the service boundary, but
+PD rebuilds this view from rooted metadata truth plus heartbeats.</li>
+<li><strong><code>raftstore/localmeta</code> local catalog</strong>: store-local recovery truth. It exists so
 one store can restart hosted peers and replay raft WAL checkpoints even if
 PD is temporarily unavailable.</li>
 <li><strong><code>Store.regions</code> runtime catalog</strong>: in-memory cache/view rebuilt from local
@@ -246,7 +323,7 @@ metadata at startup and then advanced by peer lifecycle plus raft apply.</li>
 <p>These layers are not interchangeable. Local metadata is recovery state, not
 cluster routing authority.</p>
 <hr>
-<h2 id="4-config-integration"><a class="header" href="#4-config-integration">4. Config Integration</a></h2>
+<h2 id="5-config-integration"><a class="header" href="#5-config-integration">5. Config Integration</a></h2>
 <p><code>raft_config.json</code> supports PD endpoint + workdir defaults:</p>
 <pre><code class="language-json">"pd": {
   "addr": "127.0.0.1:2379",
@@ -266,8 +343,10 @@ cluster routing authority.</p>
 <li><code>config.ResolvePDWorkDir(scope)</code></li>
 <li><code>nokv-config pd --field addr|workdir --scope host|docker</code></li>
 </ul>
+<p>Replicated-root transport settings are currently CLI-driven, not config-file
+driven.</p>
 <hr>
-<h2 id="5-routing-source-convergence"><a class="header" href="#5-routing-source-convergence">5. Routing Source Convergence</a></h2>
+<h2 id="6-routing-source-convergence"><a class="header" href="#6-routing-source-convergence">6. Routing Source Convergence</a></h2>
 <p>NoKV now uses <strong>PD-first routing</strong>:</p>
 <ul>
 <li><code>raftstore/client</code> resolves regions with <code>GetRegionByKey</code>.</li>
@@ -276,7 +355,7 @@ cluster routing authority.</p>
 </ul>
 <p>This avoids dual sources drifting over time (config vs PD).</p>
 <hr>
-<h2 id="6-serve-mode-semantics"><a class="header" href="#6-serve-mode-semantics">6. Serve Mode Semantics</a></h2>
+<h2 id="7-serve-mode-semantics"><a class="header" href="#7-serve-mode-semantics">7. Serve Mode Semantics</a></h2>
 <p><code>nokv serve</code> is now PD-only:</p>
 <ul>
 <li><code>--pd-addr</code> is required.</li>
@@ -289,7 +368,72 @@ cluster routing authority.</p>
 <li><code>nokv serve --metrics-addr &lt;host:port&gt;</code> exposes store/runtime expvar on <code>/debug/vars</code>.</li>
 </ul>
 <hr>
-<h2 id="7-comparison-tinykv--tikv"><a class="header" href="#7-comparison-tinykv--tikv">7. Comparison: TinyKV / TiKV</a></h2>
+<h2 id="8-service-semantics"><a class="header" href="#8-service-semantics">8. Service Semantics</a></h2>
+<p><code>PD-lite</code> intentionally separates rooted truth leadership from the outer gRPC
+service surface.</p>
+<p>In <code>3 pd + replicated meta</code>:</p>
+<ul>
+<li>all three <code>pd</code> processes may listen and serve RPC</li>
+<li>only the rooted leader may commit truth writes</li>
+<li>followers refresh rooted state and serve read/view traffic</li>
+</ul>
+<h3 id="leader-only-writes"><a class="header" href="#leader-only-writes">Leader-only writes</a></h3>
+<p>These RPCs require rooted leadership:</p>
+<ul>
+<li><code>RegionHeartbeat</code></li>
+<li><code>PublishRootEvent</code></li>
+<li><code>RemoveRegion</code></li>
+<li><code>AllocID</code></li>
+<li><code>Tso</code></li>
+</ul>
+<p>Followers return <code>FailedPrecondition</code> with <code>pd not leader</code> semantics, and
+clients are expected to retry against another PD endpoint.</p>
+<h3 id="any-node-reads"><a class="header" href="#any-node-reads">Any-node reads</a></h3>
+<p>These RPCs may be served by any PD node:</p>
+<ul>
+<li><code>GetRegionByKey</code></li>
+<li><code>StoreHeartbeat</code> handling and store-view inspection</li>
+</ul>
+<p>Follower reads are driven by rooted refresh into <code>pd/core.Cluster</code>. They are
+expected to be shortly stale rather than linearly consistent.</p>
+<h3 id="client-behavior"><a class="header" href="#client-behavior">Client behavior</a></h3>
+<p><code>pd/client</code> accepts multiple PD addresses. Write RPCs retry across PD nodes and
+converge on the rooted leader. Read RPCs may use any available PD endpoint.</p>
+<hr>
+<h2 id="9-deployment-examples"><a class="header" href="#9-deployment-examples">9. Deployment Examples</a></h2>
+<h3 id="single-pd--local-meta-1"><a class="header" href="#single-pd--local-meta-1"><code>single pd + local meta</code></a></h3>
+<pre><code class="language-bash">go run ./cmd/nokv pd \
+  -addr 127.0.0.1:2379 \
+  -workdir ./artifacts/pd
+</code></pre>
+<h3 id="3-pd--replicated-meta-1"><a class="header" href="#3-pd--replicated-meta-1"><code>3 pd + replicated meta</code></a></h3>
+<p>Node 1:</p>
+<pre><code class="language-bash">go run ./cmd/nokv pd \
+  -addr 127.0.0.1:2379 \
+  -workdir ./artifacts/pd1 \
+  -root-mode replicated \
+  -root-node-id 1 \
+  -root-transport-addr 127.0.0.1:2471 \
+  -root-peer 1=127.0.0.1:2471 \
+  -root-peer 2=127.0.0.1:2472 \
+  -root-peer 3=127.0.0.1:2473
+</code></pre>
+<p>Node 2 and node 3 use the same peer map, but change:</p>
+<ul>
+<li><code>-addr</code></li>
+<li><code>-workdir</code></li>
+<li><code>-root-node-id</code></li>
+<li><code>-root-transport-addr</code></li>
+</ul>
+<p>Current product assumptions:</p>
+<ul>
+<li>exactly three rooted replicas</li>
+<li>one workdir per PD node</li>
+<li>one transport address per PD node</li>
+<li>no dynamic membership</li>
+</ul>
+<hr>
+<h2 id="10-comparison-tinykv--tikv"><a class="header" href="#10-comparison-tinykv--tikv">10. Comparison: TinyKV / TiKV</a></h2>
 <h3 id="tinykv-teaching-stack"><a class="header" href="#tinykv-teaching-stack">TinyKV (teaching stack)</a></h3>
 <ul>
 <li>Uses a scheduler server (<code>tinyscheduler</code>) as separate process.</li>
@@ -304,28 +448,38 @@ cluster routing authority.</p>
 </ul>
 <h3 id="nokv-pd-lite-current"><a class="header" href="#nokv-pd-lite-current">NoKV PD-lite (current)</a></h3>
 <ul>
-<li>Single PD-lite process with optional local persistence (<code>--workdir</code>).</li>
-<li>Sufficient for local clusters, testing, and architecture iteration.</li>
-<li>API shape intentionally aligned with a PD-style control plane so migration to
-stronger HA semantics is incremental.</li>
-<li>PD persistence is intentionally limited to control-plane state:
+<li>Standalone mode has no PD and no metadata-root service.</li>
+<li>Distributed mode runs one control-plane process:
 <ul>
-<li>region catalog snapshots learned from heartbeats</li>
+<li><code>pd</code></li>
+<li>one local <code>meta/root</code></li>
+</ul>
+</li>
+<li>Current project scope intentionally keeps the metadata root single-node. This
+bounds operational and maintenance complexity while still keeping truth and
+view logically separated.</li>
+<li>PD persistence is intentionally limited to rooted control-plane truth:
+<ul>
+<li>region descriptor publish/tombstone events</li>
 <li>allocator durability (<code>AllocID</code>, <code>TSO</code>)</li>
 </ul>
 </li>
 <li>PD is not the durable owner of a store’s local raft/region truth. Store
-restart truth remains in <code>raftstore/meta</code>, while PD keeps the routing and
-scheduling view.</li>
+restart truth remains in <code>raftstore/localmeta</code>, while PD keeps routing and
+scheduling state rebuilt from <code>meta/root</code>.</li>
 </ul>
 <hr>
-<h2 id="8-current-limitations--next-steps"><a class="header" href="#8-current-limitations--next-steps">8. Current Limitations / Next Steps</a></h2>
+<h2 id="11-current-limitations--next-steps"><a class="header" href="#11-current-limitations--next-steps">11. Current Limitations / Next Steps</a></h2>
 <ul>
-<li>No multi-PD quorum and no automatic PD failover.</li>
+<li><code>single pd + local meta</code> remains the simpler and more mature deployment.</li>
+<li><code>3 pd + replicated meta</code> is now a formal product mode, but still has a
+simpler follower sync path based on rooted refresh rather than push/watch.</li>
 <li>Scheduler policy is intentionally small (leader transfer focused).</li>
 <li>No advanced placement constraints yet.</li>
+<li>Metadata membership is fixed at three replicas.</li>
 </ul>
-<p>These are deliberate scope limits for a fast-moving experimental platform.</p>
+<p>These are deliberate scope limits for a fast-moving experimental platform that
+keeps the rooted truth surface small.</p>
 
                     </main>
 
