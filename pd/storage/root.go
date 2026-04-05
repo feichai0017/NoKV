@@ -15,7 +15,9 @@ import (
 type RootStore struct {
 	root        rootBackend
 	refresh     func() error
+	observeTail func(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
 	waitForTail func(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
+	tailNotify  func() <-chan struct{}
 	observe     func() (rootstorage.ObservedCommitted, error)
 	isLeader    func() bool
 	leaderID    func() uint64
@@ -68,7 +70,17 @@ func (s *RootStore) WaitForTail(after rootstorage.TailToken, timeout time.Durati
 // subscription keeps its own acknowledged token and reuses the store wait path
 // so callers no longer have to open-code tail-token loops.
 func (s *RootStore) SubscribeTail(after rootstorage.TailToken) *rootstorage.TailSubscription {
-	if s == nil || s.root == nil || s.waitForTail == nil {
+	if s == nil || s.root == nil {
+		return nil
+	}
+	if s.observeTail != nil {
+		var watch <-chan struct{}
+		if s.tailNotify != nil {
+			watch = s.tailNotify()
+		}
+		return rootstorage.NewWatchedTailSubscription(after, s.observeTail, watch, s.WaitForTail)
+	}
+	if s.waitForTail == nil {
 		return nil
 	}
 	return rootstorage.NewTailSubscription(after, s.WaitForTail)

@@ -17,7 +17,7 @@ import (
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
-type splitTransition struct {
+type splitPlan struct {
 	originalParent localmeta.RegionMeta
 	parent         localmeta.RegionMeta
 	child          localmeta.RegionMeta
@@ -25,7 +25,7 @@ type splitTransition struct {
 	childDesc      descriptor.Descriptor
 }
 
-type mergeTransition struct {
+type mergePlan struct {
 	target     localmeta.RegionMeta
 	source     localmeta.RegionMeta
 	mergedDesc descriptor.Descriptor
@@ -67,22 +67,22 @@ func (s *Store) buildPeerChangeTarget(regionID uint64, cc raftpb.ConfChangeV2) (
 	}, nil
 }
 
-func (s *Store) buildSplitTransition(parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) (splitTransition, error) {
+func (s *Store) buildSplitPlan(parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) (splitPlan, error) {
 	if s == nil {
-		return splitTransition{}, fmt.Errorf("raftstore: store is nil")
+		return splitPlan{}, fmt.Errorf("raftstore: store is nil")
 	}
 	if parentID == 0 || childMeta.ID == 0 {
-		return splitTransition{}, fmt.Errorf("raftstore: invalid region identifiers")
+		return splitPlan{}, fmt.Errorf("raftstore: invalid region identifiers")
 	}
 	parentMeta, ok := s.RegionMetaByID(parentID)
 	if !ok {
-		return splitTransition{}, fmt.Errorf("raftstore: parent region %d not found", parentID)
+		return splitPlan{}, fmt.Errorf("raftstore: parent region %d not found", parentID)
 	}
 	if len(parentMeta.EndKey) > 0 && bytes.Compare(splitKey, parentMeta.EndKey) >= 0 {
-		return splitTransition{}, fmt.Errorf("raftstore: split key >= parent end key")
+		return splitPlan{}, fmt.Errorf("raftstore: split key >= parent end key")
 	}
 	if bytes.Compare(splitKey, parentMeta.StartKey) <= 0 {
-		return splitTransition{}, fmt.Errorf("raftstore: split key must be greater than parent start key")
+		return splitPlan{}, fmt.Errorf("raftstore: split key must be greater than parent start key")
 	}
 	originalParent := localmeta.CloneRegionMeta(parentMeta)
 	newParent := parentMeta
@@ -107,7 +107,7 @@ func (s *Store) buildSplitTransition(parentID uint64, childMeta localmeta.Region
 		Epoch:    originalParent.Epoch,
 		Kind:     descriptor.LineageKindSplitParent,
 	})
-	return splitTransition{
+	return splitPlan{
 		originalParent: originalParent,
 		parent:         newParent,
 		child:          childMeta,
@@ -116,20 +116,20 @@ func (s *Store) buildSplitTransition(parentID uint64, childMeta localmeta.Region
 	}, nil
 }
 
-func (s *Store) buildMergeTransition(targetRegionID, sourceRegionID uint64) (mergeTransition, error) {
+func (s *Store) buildMergePlan(targetRegionID, sourceRegionID uint64) (mergePlan, error) {
 	if s == nil {
-		return mergeTransition{}, fmt.Errorf("raftstore: store is nil")
+		return mergePlan{}, fmt.Errorf("raftstore: store is nil")
 	}
 	if targetRegionID == 0 || sourceRegionID == 0 {
-		return mergeTransition{}, fmt.Errorf("raftstore: invalid region identifiers")
+		return mergePlan{}, fmt.Errorf("raftstore: invalid region identifiers")
 	}
 	parentMeta, ok := s.RegionMetaByID(targetRegionID)
 	if !ok {
-		return mergeTransition{}, fmt.Errorf("raftstore: target region %d not found", targetRegionID)
+		return mergePlan{}, fmt.Errorf("raftstore: target region %d not found", targetRegionID)
 	}
 	sourceMeta, ok := s.RegionMetaByID(sourceRegionID)
 	if !ok {
-		return mergeTransition{}, fmt.Errorf("raftstore: source region %d not found", sourceRegionID)
+		return mergePlan{}, fmt.Errorf("raftstore: source region %d not found", sourceRegionID)
 	}
 	updated := parentMeta
 	updated.Epoch.Version++
@@ -146,7 +146,7 @@ func (s *Store) buildMergeTransition(targetRegionID, sourceRegionID uint64) (mer
 	if bytes.Compare(sourceMeta.StartKey, mergedDesc.StartKey) < 0 {
 		leftID, rightID = sourceMeta.ID, mergedDesc.RegionID
 	}
-	return mergeTransition{
+	return mergePlan{
 		target:     updated,
 		source:     sourceMeta,
 		mergedDesc: mergedDesc,
@@ -165,7 +165,7 @@ func (s *Store) buildSplitTarget(parentID uint64, childMeta localmeta.RegionMeta
 	if splitAlreadyAppliedLocal(s, parentID, childMeta, splitKey) {
 		return transitionTarget{RegionID: parentID, Noop: true}, nil
 	}
-	transition, err := s.buildSplitTransition(parentID, childMeta, splitKey)
+	plan, err := s.buildSplitPlan(parentID, childMeta, splitKey)
 	if err != nil {
 		return transitionTarget{}, err
 	}
@@ -174,12 +174,12 @@ func (s *Store) buildSplitTarget(parentID uint64, childMeta localmeta.RegionMeta
 		Split: &raftcmdpb.SplitCommand{
 			ParentRegionId: parentID,
 			SplitKey:       append([]byte(nil), splitKey...),
-			Child:          metacodec.LocalRegionMetaToDescriptorProto(transition.child),
+			Child:          metacodec.LocalRegionMetaToDescriptorProto(plan.child),
 		},
 	}
 	return transitionTarget{
 		RegionID: parentID,
-		Event:    plannedSplitEvent(transition),
+		Event:    plannedSplitEvent(plan),
 		Action:   "split",
 		Proposal: transitionProposal{
 			Admin: command,
@@ -194,7 +194,7 @@ func (s *Store) buildMergeTarget(targetRegionID, sourceRegionID uint64) (transit
 	if targetRegionID == 0 || sourceRegionID == 0 {
 		return transitionTarget{}, fmt.Errorf("raftstore: invalid region identifiers")
 	}
-	transition, err := s.buildMergeTransition(targetRegionID, sourceRegionID)
+	plan, err := s.buildMergePlan(targetRegionID, sourceRegionID)
 	if err != nil {
 		return transitionTarget{}, err
 	}
@@ -207,7 +207,7 @@ func (s *Store) buildMergeTarget(targetRegionID, sourceRegionID uint64) (transit
 	}
 	return transitionTarget{
 		RegionID: targetRegionID,
-		Event:    plannedMergeEvent(transition),
+		Event:    plannedMergeEvent(plan),
 		Action:   "merge",
 		Proposal: transitionProposal{
 			Admin: command,
@@ -313,17 +313,17 @@ func plannedPeerChangeEvent(meta localmeta.RegionMeta, cc raftpb.ConfChangeV2) (
 	}
 }
 
-func plannedSplitEvent(transition splitTransition) rootevent.Event {
+func plannedSplitEvent(plan splitPlan) rootevent.Event {
 	return rootevent.RegionSplitPlanned(
-		transition.originalParent.ID,
-		transition.child.StartKey,
-		transition.parentDesc,
-		transition.childDesc,
+		plan.originalParent.ID,
+		plan.child.StartKey,
+		plan.parentDesc,
+		plan.childDesc,
 	)
 }
 
-func plannedMergeEvent(transition mergeTransition) rootevent.Event {
-	return rootevent.RegionMergePlanned(transition.leftID, transition.rightID, transition.mergedDesc)
+func plannedMergeEvent(plan mergePlan) rootevent.Event {
+	return rootevent.RegionMergePlanned(plan.leftID, plan.rightID, plan.mergedDesc)
 }
 
 func confChangeTargetPeer(change raftpb.ConfChangeSingle, ctx []byte) metaregion.Peer {

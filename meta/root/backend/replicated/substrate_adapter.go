@@ -40,7 +40,7 @@ func (a *substrateAdapter) bootstrap() error {
 	return nil
 }
 
-func (a *substrateAdapter) waitChannel() <-chan struct{} {
+func (a *substrateAdapter) watchChannel() <-chan struct{} {
 	if a == nil {
 		return nil
 	}

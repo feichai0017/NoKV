@@ -111,13 +111,27 @@ func (s *Store) WaitForTail(after rootstorage.TailToken, timeout time.Duration) 
 	return s.driver.WaitForTail(after, timeout)
 }
 
+func (s *Store) ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error) {
+	if s == nil {
+		return rootstorage.TailAdvance{}, nil
+	}
+	return s.driver.ObserveTail(after)
+}
+
+func (s *Store) TailNotify() <-chan struct{} {
+	if s == nil {
+		return nil
+	}
+	return s.driver.TailNotify()
+}
+
 // SubscribeTail returns one watch-like rooted tail subscription over the
 // replicated metadata substrate.
 func (s *Store) SubscribeTail(after rootstorage.TailToken) *rootstorage.TailSubscription {
 	if s == nil {
 		return nil
 	}
-	return rootstorage.NewTailSubscription(after, s.WaitForTail)
+	return rootstorage.NewWatchedTailSubscription(after, s.ObserveTail, s.TailNotify(), s.WaitForTail)
 }
 
 func (s *Store) Current() (rootstate.State, error) {

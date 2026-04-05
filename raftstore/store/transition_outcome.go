@@ -24,15 +24,15 @@ func appliedPeerChangeEvent(meta localmeta.RegionMeta, cc raftpb.ConfChangeV2) (
 	}
 }
 
-func committedSplitEvent(transition splitTransition) rootevent.Event {
+func committedSplitEvent(plan splitPlan) rootevent.Event {
 	return rootevent.RegionSplitCommitted(
-		transition.originalParent.ID,
-		transition.child.StartKey,
-		transition.parentDesc,
-		transition.childDesc,
+		plan.originalParent.ID,
+		plan.child.StartKey,
+		plan.parentDesc,
+		plan.childDesc,
 	)
 }
 
-func committedMergeEvent(transition mergeTransition) rootevent.Event {
-	return rootevent.RegionMerged(transition.leftID, transition.rightID, transition.mergedDesc)
+func committedMergeEvent(plan mergePlan) rootevent.Event {
+	return rootevent.RegionMerged(plan.leftID, plan.rightID, plan.mergedDesc)
 }

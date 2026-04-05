@@ -160,7 +160,7 @@ func TestClusterPublishRootEventTracksTransitionSnapshot(t *testing.T) {
 	require.Contains(t, transitions.PendingPeerChanges, target.RegionID)
 	operators := c.OperatorSnapshot()
 	require.Len(t, operators.Entries, 1)
-	require.Equal(t, rootstate.TransitionStatusPending, operators.Entries[0].Status)
+	require.Equal(t, rootstate.TransitionStatusPending, operators.Entries[0].Transition.Status)
 
 	require.NoError(t, c.PublishRootEvent(rootevent.PeerAdded(target.RegionID, 2, 201, target)))
 	transitions = c.TransitionSnapshot()

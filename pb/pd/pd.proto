@@ -3,6 +3,7 @@ syntax = "proto3";
 
 package nokv.pd.v1;
 
+import "google/protobuf/timestamp.proto";
 import "meta/descriptor.proto";
 import "meta/root.proto";
 
@@ -99,6 +100,10 @@ message TransitionEntry {
   TransitionReason reason = 5;
   nokv.meta.v1.RootPendingPeerChange pending_peer_change = 6;
   nokv.meta.v1.RootPendingRangeChange pending_range_change = 7;
+  string owner = 8;
+  uint64 attempt = 9;
+  bool admitted = 10;
+  google.protobuf.Timestamp backoff_until = 11;
 }
 
 message TransitionAssessment {
