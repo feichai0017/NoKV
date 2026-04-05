@@ -66,9 +66,30 @@ func (s *RootStore) WaitForTail(after rootstorage.TailToken, timeout time.Durati
 	return advance, nil
 }
 
-// SubscribeTail returns one watch-like rooted tail subscription. The
-// subscription keeps its own acknowledged token and reuses the store wait path
-// so callers no longer have to open-code tail-token loops.
+// ObserveTail observes the current rooted tail relative to after while keeping
+// the cached rooted snapshot in sync whenever the observed advance requires a
+// state reload or bootstrap install.
+func (s *RootStore) ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error) {
+	if s == nil || s.root == nil {
+		return rootstorage.TailAdvance{}, nil
+	}
+	if s.observeTail == nil {
+		return rootstorage.TailAdvance{}, nil
+	}
+	advance, err := s.observeTail(after)
+	if err != nil {
+		return advance, err
+	}
+	if advance.ShouldReloadState() {
+		s.replaceObserved(advance.Observed)
+	}
+	return advance, nil
+}
+
+// SubscribeTail returns one rooted tail subscription. The subscription keeps
+// its own acknowledged token and routes both watch-first observation and wait
+// fallback through RootStore so callers no longer have to open-code tail-token
+// loops or manage cache refresh themselves.
 func (s *RootStore) SubscribeTail(after rootstorage.TailToken) *rootstorage.TailSubscription {
 	if s == nil || s.root == nil {
 		return nil
@@ -78,7 +99,7 @@ func (s *RootStore) SubscribeTail(after rootstorage.TailToken) *rootstorage.Tail
 		if s.tailNotify != nil {
 			watch = s.tailNotify()
 		}
-		return rootstorage.NewWatchedTailSubscription(after, s.observeTail, watch, s.WaitForTail)
+		return rootstorage.NewWatchedTailSubscription(after, s.ObserveTail, watch, s.WaitForTail)
 	}
 	if s.waitForTail == nil {
 		return nil

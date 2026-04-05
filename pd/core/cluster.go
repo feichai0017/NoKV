@@ -17,7 +17,7 @@ type RegionInfo = pdview.RegionInfo
 
 // TransitionSnapshot captures rooted pending execution state materialized into
 // PD runtime view.
-type TransitionSnapshot = pdview.TransitionSnapshot
+type TransitionSnapshot = pdview.PendingSnapshot
 
 // TransitionAssessment captures one explicit rooted transition assessment
 // materialized for PD operator/debugging surfaces.
@@ -25,11 +25,11 @@ type TransitionAssessment = pdview.TransitionAssessment
 
 // OperatorSnapshot captures the operator-runtime view derived from rooted
 // transitions.
-type OperatorSnapshot = pdoperator.Snapshot
+type OperatorSnapshot = pdoperator.RuntimeSnapshot
 
 // OperatorEntry is one runtime operator record derived from rooted
 // transitions.
-type OperatorEntry = pdoperator.Entry
+type OperatorEntry = pdoperator.RuntimeEntry
 
 // Cluster stores in-memory PD metadata and provides route lookups.
 //
@@ -39,7 +39,7 @@ type OperatorEntry = pdoperator.Entry
 type Cluster struct {
 	stores      *pdview.StoreHealthView
 	regions     *pdview.RegionDirectoryView
-	transitions *pdview.TransitionView
+	transitions *pdview.PendingView
 	operators   *pdoperator.Runtime
 }
 
@@ -48,7 +48,7 @@ func NewCluster() *Cluster {
 	return &Cluster{
 		stores:      pdview.NewStoreHealthView(),
 		regions:     pdview.NewRegionDirectoryView(),
-		transitions: pdview.NewTransitionView(),
+		transitions: pdview.NewPendingView(),
 		operators:   pdoperator.NewRuntime(),
 	}
 }
