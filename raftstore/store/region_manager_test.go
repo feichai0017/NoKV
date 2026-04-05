@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
@@ -69,6 +71,37 @@ func TestRegionManagerListMetas(t *testing.T) {
 	metas := rm.listMetas()
 	if len(metas) != 2 {
 		t.Fatalf("expected two metas, got %d", len(metas))
+	}
+}
+
+func TestRegionManagerPublishesCatalogRootEvents(t *testing.T) {
+	var events []regionEvent
+	rm := newRegionManager(nil, nil, func(ev regionEvent) {
+		events = append(events, ev)
+	})
+
+	requireNoError(t, rm.applyRegionMeta(localmeta.RegionMeta{
+		ID:       9,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		State:    metaregion.ReplicaStateRunning,
+	}, true))
+	if len(events) != 1 || events[0].root.Kind != rootevent.KindRegionBootstrap {
+		t.Fatalf("expected bootstrap root event, got %+v", events)
+	}
+
+	events = nil
+	requireNoError(t, rm.applyRegionState(9, metaregion.ReplicaStateRemoving))
+	if len(events) != 1 || events[0].root.Kind != rootevent.KindRegionDescriptorPublished {
+		t.Fatalf("expected descriptor publish root event, got %+v", events)
+	}
+
+	events = nil
+	requireNoError(t, rm.applyRegionRemoval(9, true))
+	if len(events) != 2 ||
+		events[0].root.Kind != rootevent.KindRegionDescriptorPublished ||
+		events[1].root.Kind != rootevent.KindRegionTombstoned {
+		t.Fatalf("expected tombstone root event, got %+v", events)
 	}
 }
 

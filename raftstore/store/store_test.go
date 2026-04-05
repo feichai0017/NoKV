@@ -43,12 +43,6 @@ func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
 	peer, err := rs.StartPeer(cfg, []myraft.Peer{{ID: 1}})
 	require.NoError(t, err)
 	defer rs.StopPeer(peer.ID())
-	require.Eventually(t, func() bool {
-		return hasSchedulerEventSubsequence(sink.EventHistory(),
-			schedulerEvent{kind: "root", regionID: 42, rootKind: rootevent.KindRegionBootstrap},
-		)
-	}, eventuallyTimeout, 10*time.Millisecond)
-	sink.ResetHistory()
 
 	var snapshot []regionHeartbeat
 	require.Eventually(t, func() bool {
@@ -60,23 +54,12 @@ func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
 
 	require.NoError(t, rs.applyRegionState(42, metaregion.ReplicaStateRemoving))
 	require.Eventually(t, func() bool {
-		return hasSchedulerEventSubsequence(sink.EventHistory(),
-			schedulerEvent{kind: "root", regionID: 42, rootKind: rootevent.KindRegionDescriptorPublished},
-		)
-	}, eventuallyTimeout, 10*time.Millisecond)
-	sink.ResetHistory()
-	require.Eventually(t, func() bool {
 		snapshot = sink.RegionSnapshot()
 		return len(snapshot) == 1 && snapshot[0].Descriptor.State == metaregion.ReplicaStateRemoving
 	}, eventuallyTimeout, 10*time.Millisecond)
 	require.Equal(t, metaregion.ReplicaStateRemoving, snapshot[0].Descriptor.State)
 
 	require.NoError(t, rs.applyRegionRemoval(42))
-	require.Eventually(t, func() bool {
-		return hasSchedulerEventSubsequence(sink.EventHistory(),
-			schedulerEvent{kind: "root", regionID: 42, rootKind: rootevent.KindRegionTombstoned},
-		)
-	}, eventuallyTimeout, 10*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return len(sink.RegionSnapshot()) == 0
 	}, eventuallyTimeout, 10*time.Millisecond)

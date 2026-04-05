@@ -11,6 +11,7 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
@@ -52,7 +53,13 @@ func (s *grpcTransportService) Step(ctx context.Context, msg *raftpb.Message) (*
 		return &emptypb.Empty{}, nil
 	}
 	if err := handler(myraft.Message(*msg)); err != nil {
-		return nil, status.Error(status.Code(err), err.Error())
+		if st, ok := status.FromError(err); ok {
+			return nil, st.Err()
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, status.FromContextError(err).Err()
+		}
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return &emptypb.Empty{}, nil
 }

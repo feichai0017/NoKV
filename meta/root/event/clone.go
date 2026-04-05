@@ -27,16 +27,20 @@ func CloneEvent(in Event) Event {
 		}
 		cp.Left = in.RangeSplit.Left.Clone()
 		cp.Right = in.RangeSplit.Right.Clone()
+		cp.BaseParent = in.RangeSplit.BaseParent.Clone()
 		out.RangeSplit = &cp
 	}
 	if in.RangeMerge != nil {
 		cp := *in.RangeMerge
 		cp.Merged = in.RangeMerge.Merged.Clone()
+		cp.BaseLeft = in.RangeMerge.BaseLeft.Clone()
+		cp.BaseRight = in.RangeMerge.BaseRight.Clone()
 		out.RangeMerge = &cp
 	}
 	if in.PeerChange != nil {
 		cp := *in.PeerChange
 		cp.Region = in.PeerChange.Region.Clone()
+		cp.Base = in.PeerChange.Base.Clone()
 		out.PeerChange = &cp
 	}
 	return out
