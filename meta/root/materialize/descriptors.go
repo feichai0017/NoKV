@@ -46,7 +46,7 @@ func ApplyEventToDescriptors(descriptors map[uint64]descriptor.Descriptor, event
 		delete(descriptors, event.RangeMerge.RightRegionID)
 		descriptors[event.RangeMerge.Merged.RegionID] = event.RangeMerge.Merged.Clone()
 	case event.PeerChange != nil:
-		descriptors[event.PeerChange.Region.RegionID] = event.PeerChange.Region.Clone()
+		descriptors[event.PeerChange.RegionID] = event.PeerChange.Region.Clone()
 	}
 }
 
