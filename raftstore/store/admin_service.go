@@ -103,7 +103,7 @@ func (s *Store) handleSplitCommand(split *raftcmdpb.SplitCommand) error {
 	if split == nil {
 		return fmt.Errorf("raftstore: split command missing payload")
 	}
-	childMeta := pbRegionMetaToManifest(split.GetChild())
+	childMeta := regionMetaFromDescriptorProto(split.GetChild())
 	childMeta.State = metaregion.ReplicaStateRunning
 	if len(childMeta.StartKey) == 0 {
 		childMeta.StartKey = append([]byte(nil), split.GetSplitKey()...)
@@ -182,7 +182,7 @@ func regionPeersEqual(a, b []metaregion.Peer) bool {
 	return true
 }
 
-func pbRegionMetaToManifest(pbMeta *metapb.RegionDescriptor) localmeta.RegionMeta {
+func regionMetaFromDescriptorProto(pbMeta *metapb.RegionDescriptor) localmeta.RegionMeta {
 	if pbMeta == nil {
 		return localmeta.RegionMeta{}
 	}

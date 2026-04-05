@@ -11,7 +11,6 @@ import (
 	pdview "github.com/feichai0017/NoKV/pd/view"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // ListTransitions returns the rooted transition/operator view currently
@@ -48,19 +47,13 @@ func (s *Service) AssessRootEvent(_ context.Context, req *pdpb.AssessRootEventRe
 	}, nil
 }
 
-func transitionEntryToProto(entry pdoperator.Entry) *pdpb.TransitionEntry {
+func transitionEntryToProto(entry pdoperator.RuntimeEntry) *pdpb.TransitionEntry {
 	out := &pdpb.TransitionEntry{
 		Key:        entry.Transition.Key,
 		Kind:       transitionKindToProto(entry.Transition.Kind),
 		Status:     transitionStatusToProto(entry.Transition.Status),
 		RetryClass: transitionRetryClassToProto(entry.Transition.RetryClass),
 		Reason:     transitionReasonToProto(entry.Transition.Reason),
-		Owner:      entry.Owner,
-		Attempt:    entry.Attempt,
-		Admitted:   entry.Admitted,
-	}
-	if !entry.BackoffUntil.IsZero() {
-		out.BackoffUntil = timestamppb.New(entry.BackoffUntil)
 	}
 	if entry.Transition.PeerChange != nil {
 		out.PendingPeerChange = metacodec.RootPendingPeerChangeToProto(entry.Transition.Key, *entry.Transition.PeerChange)
