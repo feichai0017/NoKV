@@ -286,7 +286,7 @@ Delos-lite 的价值在于：
 
 关键代码：
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/transition_exec.go`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/transition_executor.go`
 - `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/membership_service.go`
 - `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/admin_service.go`
 - `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/region_manager.go`
@@ -428,7 +428,7 @@ flowchart TD
 
 关键代码：
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/replicated/network.go`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/replicated/network_driver.go`
 - `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/replicated/driver.go`
 
 也就是说：

@@ -12,6 +12,7 @@ import (
 	meta "github.com/feichai0017/NoKV/pb/meta"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -731,6 +732,10 @@ type TransitionEntry struct {
 	Reason             TransitionReason             `protobuf:"varint,5,opt,name=reason,proto3,enum=nokv.pd.v1.TransitionReason" json:"reason,omitempty"`
 	PendingPeerChange  *meta.RootPendingPeerChange  `protobuf:"bytes,6,opt,name=pending_peer_change,json=pendingPeerChange,proto3" json:"pending_peer_change,omitempty"`
 	PendingRangeChange *meta.RootPendingRangeChange `protobuf:"bytes,7,opt,name=pending_range_change,json=pendingRangeChange,proto3" json:"pending_range_change,omitempty"`
+	Owner              string                       `protobuf:"bytes,8,opt,name=owner,proto3" json:"owner,omitempty"`
+	Attempt            uint64                       `protobuf:"varint,9,opt,name=attempt,proto3" json:"attempt,omitempty"`
+	Admitted           bool                         `protobuf:"varint,10,opt,name=admitted,proto3" json:"admitted,omitempty"`
+	BackoffUntil       *timestamppb.Timestamp       `protobuf:"bytes,11,opt,name=backoff_until,json=backoffUntil,proto3" json:"backoff_until,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -810,6 +815,34 @@ func (x *TransitionEntry) GetPendingPeerChange() *meta.RootPendingPeerChange {
 func (x *TransitionEntry) GetPendingRangeChange() *meta.RootPendingRangeChange {
 	if x != nil {
 		return x.PendingRangeChange
+	}
+	return nil
+}
+
+func (x *TransitionEntry) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
+}
+
+func (x *TransitionEntry) GetAttempt() uint64 {
+	if x != nil {
+		return x.Attempt
+	}
+	return 0
+}
+
+func (x *TransitionEntry) GetAdmitted() bool {
+	if x != nil {
+		return x.Admitted
+	}
+	return false
+}
+
+func (x *TransitionEntry) GetBackoffUntil() *timestamppb.Timestamp {
+	if x != nil {
+		return x.BackoffUntil
 	}
 	return nil
 }
@@ -1455,7 +1488,7 @@ var File_pd_pd_proto protoreflect.FileDescriptor
 const file_pd_pd_proto_rawDesc = "" +
 	"\n" +
 	"\vpd/pd.proto\x12\n" +
-	"nokv.pd.v1\x1a\x15meta/descriptor.proto\x1a\x0fmeta/root.proto\"\xaa\x01\n" +
+	"nokv.pd.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x15meta/descriptor.proto\x1a\x0fmeta/root.proto\"\xaa\x01\n" +
 	"\x15StoreHeartbeatRequest\x12\x19\n" +
 	"\bstore_id\x18\x01 \x01(\x04R\astoreId\x12\x1d\n" +
 	"\n" +
@@ -1482,7 +1515,7 @@ const file_pd_pd_proto_rawDesc = "" +
 	"\x05event\x18\x01 \x01(\v2\x17.nokv.meta.v1.RootEventR\x05event\x124\n" +
 	"\x16expected_cluster_epoch\x18\x02 \x01(\x04R\x14expectedClusterEpoch\"6\n" +
 	"\x18PublishRootEventResponse\x12\x1a\n" +
-	"\baccepted\x18\x01 \x01(\bR\baccepted\"\xaf\x03\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted\"\xbc\x04\n" +
 	"\x0fTransitionEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\x04R\x03key\x12.\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x1a.nokv.pd.v1.TransitionKindR\x04kind\x124\n" +
@@ -1491,7 +1524,12 @@ const file_pd_pd_proto_rawDesc = "" +
 	"retryClass\x124\n" +
 	"\x06reason\x18\x05 \x01(\x0e2\x1c.nokv.pd.v1.TransitionReasonR\x06reason\x12S\n" +
 	"\x13pending_peer_change\x18\x06 \x01(\v2#.nokv.meta.v1.RootPendingPeerChangeR\x11pendingPeerChange\x12V\n" +
-	"\x14pending_range_change\x18\a \x01(\v2$.nokv.meta.v1.RootPendingRangeChangeR\x12pendingRangeChange\"\xc3\x02\n" +
+	"\x14pending_range_change\x18\a \x01(\v2$.nokv.meta.v1.RootPendingRangeChangeR\x12pendingRangeChange\x12\x14\n" +
+	"\x05owner\x18\b \x01(\tR\x05owner\x12\x18\n" +
+	"\aattempt\x18\t \x01(\x04R\aattempt\x12\x1a\n" +
+	"\badmitted\x18\n" +
+	" \x01(\bR\badmitted\x12?\n" +
+	"\rbackoff_until\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\fbackoffUntil\"\xc3\x02\n" +
 	"\x14TransitionAssessment\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\x04R\x03key\x12.\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x1a.nokv.pd.v1.TransitionKindR\x04kind\x124\n" +
@@ -1618,7 +1656,8 @@ var file_pd_pd_proto_goTypes = []any{
 	(*meta.RootEvent)(nil),              // 27: nokv.meta.v1.RootEvent
 	(*meta.RootPendingPeerChange)(nil),  // 28: nokv.meta.v1.RootPendingPeerChange
 	(*meta.RootPendingRangeChange)(nil), // 29: nokv.meta.v1.RootPendingRangeChange
-	(*meta.RegionDescriptor)(nil),       // 30: nokv.meta.v1.RegionDescriptor
+	(*timestamppb.Timestamp)(nil),       // 30: google.protobuf.Timestamp
+	(*meta.RegionDescriptor)(nil),       // 31: nokv.meta.v1.RegionDescriptor
 }
 var file_pd_pd_proto_depIdxs = []int32{
 	0,  // 0: nokv.pd.v1.SchedulerOperation.type:type_name -> nokv.pd.v1.SchedulerOperationType
@@ -1630,38 +1669,39 @@ var file_pd_pd_proto_depIdxs = []int32{
 	4,  // 6: nokv.pd.v1.TransitionEntry.reason:type_name -> nokv.pd.v1.TransitionReason
 	28, // 7: nokv.pd.v1.TransitionEntry.pending_peer_change:type_name -> nokv.meta.v1.RootPendingPeerChange
 	29, // 8: nokv.pd.v1.TransitionEntry.pending_range_change:type_name -> nokv.meta.v1.RootPendingRangeChange
-	1,  // 9: nokv.pd.v1.TransitionAssessment.kind:type_name -> nokv.pd.v1.TransitionKind
-	2,  // 10: nokv.pd.v1.TransitionAssessment.status:type_name -> nokv.pd.v1.TransitionStatus
-	3,  // 11: nokv.pd.v1.TransitionAssessment.retry_class:type_name -> nokv.pd.v1.TransitionRetryClass
-	4,  // 12: nokv.pd.v1.TransitionAssessment.reason:type_name -> nokv.pd.v1.TransitionReason
-	5,  // 13: nokv.pd.v1.TransitionAssessment.decision:type_name -> nokv.pd.v1.TransitionDecision
-	13, // 14: nokv.pd.v1.ListTransitionsResponse.entries:type_name -> nokv.pd.v1.TransitionEntry
-	27, // 15: nokv.pd.v1.AssessRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
-	14, // 16: nokv.pd.v1.AssessRootEventResponse.assessment:type_name -> nokv.pd.v1.TransitionAssessment
-	30, // 17: nokv.pd.v1.GetRegionByKeyResponse.region_descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	6,  // 18: nokv.pd.v1.PD.StoreHeartbeat:input_type -> nokv.pd.v1.StoreHeartbeatRequest
-	9,  // 19: nokv.pd.v1.PD.RegionLiveness:input_type -> nokv.pd.v1.RegionLivenessRequest
-	11, // 20: nokv.pd.v1.PD.PublishRootEvent:input_type -> nokv.pd.v1.PublishRootEventRequest
-	15, // 21: nokv.pd.v1.PD.ListTransitions:input_type -> nokv.pd.v1.ListTransitionsRequest
-	17, // 22: nokv.pd.v1.PD.AssessRootEvent:input_type -> nokv.pd.v1.AssessRootEventRequest
-	19, // 23: nokv.pd.v1.PD.RemoveRegion:input_type -> nokv.pd.v1.RemoveRegionRequest
-	21, // 24: nokv.pd.v1.PD.GetRegionByKey:input_type -> nokv.pd.v1.GetRegionByKeyRequest
-	23, // 25: nokv.pd.v1.PD.AllocID:input_type -> nokv.pd.v1.AllocIDRequest
-	25, // 26: nokv.pd.v1.PD.Tso:input_type -> nokv.pd.v1.TsoRequest
-	8,  // 27: nokv.pd.v1.PD.StoreHeartbeat:output_type -> nokv.pd.v1.StoreHeartbeatResponse
-	10, // 28: nokv.pd.v1.PD.RegionLiveness:output_type -> nokv.pd.v1.RegionLivenessResponse
-	12, // 29: nokv.pd.v1.PD.PublishRootEvent:output_type -> nokv.pd.v1.PublishRootEventResponse
-	16, // 30: nokv.pd.v1.PD.ListTransitions:output_type -> nokv.pd.v1.ListTransitionsResponse
-	18, // 31: nokv.pd.v1.PD.AssessRootEvent:output_type -> nokv.pd.v1.AssessRootEventResponse
-	20, // 32: nokv.pd.v1.PD.RemoveRegion:output_type -> nokv.pd.v1.RemoveRegionResponse
-	22, // 33: nokv.pd.v1.PD.GetRegionByKey:output_type -> nokv.pd.v1.GetRegionByKeyResponse
-	24, // 34: nokv.pd.v1.PD.AllocID:output_type -> nokv.pd.v1.AllocIDResponse
-	26, // 35: nokv.pd.v1.PD.Tso:output_type -> nokv.pd.v1.TsoResponse
-	27, // [27:36] is the sub-list for method output_type
-	18, // [18:27] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	30, // 9: nokv.pd.v1.TransitionEntry.backoff_until:type_name -> google.protobuf.Timestamp
+	1,  // 10: nokv.pd.v1.TransitionAssessment.kind:type_name -> nokv.pd.v1.TransitionKind
+	2,  // 11: nokv.pd.v1.TransitionAssessment.status:type_name -> nokv.pd.v1.TransitionStatus
+	3,  // 12: nokv.pd.v1.TransitionAssessment.retry_class:type_name -> nokv.pd.v1.TransitionRetryClass
+	4,  // 13: nokv.pd.v1.TransitionAssessment.reason:type_name -> nokv.pd.v1.TransitionReason
+	5,  // 14: nokv.pd.v1.TransitionAssessment.decision:type_name -> nokv.pd.v1.TransitionDecision
+	13, // 15: nokv.pd.v1.ListTransitionsResponse.entries:type_name -> nokv.pd.v1.TransitionEntry
+	27, // 16: nokv.pd.v1.AssessRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
+	14, // 17: nokv.pd.v1.AssessRootEventResponse.assessment:type_name -> nokv.pd.v1.TransitionAssessment
+	31, // 18: nokv.pd.v1.GetRegionByKeyResponse.region_descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	6,  // 19: nokv.pd.v1.PD.StoreHeartbeat:input_type -> nokv.pd.v1.StoreHeartbeatRequest
+	9,  // 20: nokv.pd.v1.PD.RegionLiveness:input_type -> nokv.pd.v1.RegionLivenessRequest
+	11, // 21: nokv.pd.v1.PD.PublishRootEvent:input_type -> nokv.pd.v1.PublishRootEventRequest
+	15, // 22: nokv.pd.v1.PD.ListTransitions:input_type -> nokv.pd.v1.ListTransitionsRequest
+	17, // 23: nokv.pd.v1.PD.AssessRootEvent:input_type -> nokv.pd.v1.AssessRootEventRequest
+	19, // 24: nokv.pd.v1.PD.RemoveRegion:input_type -> nokv.pd.v1.RemoveRegionRequest
+	21, // 25: nokv.pd.v1.PD.GetRegionByKey:input_type -> nokv.pd.v1.GetRegionByKeyRequest
+	23, // 26: nokv.pd.v1.PD.AllocID:input_type -> nokv.pd.v1.AllocIDRequest
+	25, // 27: nokv.pd.v1.PD.Tso:input_type -> nokv.pd.v1.TsoRequest
+	8,  // 28: nokv.pd.v1.PD.StoreHeartbeat:output_type -> nokv.pd.v1.StoreHeartbeatResponse
+	10, // 29: nokv.pd.v1.PD.RegionLiveness:output_type -> nokv.pd.v1.RegionLivenessResponse
+	12, // 30: nokv.pd.v1.PD.PublishRootEvent:output_type -> nokv.pd.v1.PublishRootEventResponse
+	16, // 31: nokv.pd.v1.PD.ListTransitions:output_type -> nokv.pd.v1.ListTransitionsResponse
+	18, // 32: nokv.pd.v1.PD.AssessRootEvent:output_type -> nokv.pd.v1.AssessRootEventResponse
+	20, // 33: nokv.pd.v1.PD.RemoveRegion:output_type -> nokv.pd.v1.RemoveRegionResponse
+	22, // 34: nokv.pd.v1.PD.GetRegionByKey:output_type -> nokv.pd.v1.GetRegionByKeyResponse
+	24, // 35: nokv.pd.v1.PD.AllocID:output_type -> nokv.pd.v1.AllocIDResponse
+	26, // 36: nokv.pd.v1.PD.Tso:output_type -> nokv.pd.v1.TsoResponse
+	28, // [28:37] is the sub-list for method output_type
+	19, // [19:28] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_pd_pd_proto_init() }

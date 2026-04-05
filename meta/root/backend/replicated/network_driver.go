@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	rootfile "github.com/feichai0017/NoKV/meta/root/storage/file"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/vfs"
@@ -132,48 +131,6 @@ func (d *NetworkDriver) Campaign() error {
 	return d.sendMessages(outbound)
 }
 
-func (d *NetworkDriver) WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error) {
-	if timeout <= 0 {
-		timeout = 200 * time.Millisecond
-	}
-	d.mu.Lock()
-	notify := d.adapter.waitChannel()
-	advance, err := d.currentTailLocked(after)
-	d.mu.Unlock()
-	if err != nil {
-		return rootstorage.TailAdvance{}, err
-	}
-	if advance.Advanced() {
-		return advance, nil
-	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-d.stopCh:
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		advance, tailErr := d.currentTailLocked(after)
-		if tailErr != nil {
-			return d.adapter.closedAdvance(after), fmt.Errorf("meta/root/backend/replicated: network driver is closed")
-		}
-		return advance, fmt.Errorf("meta/root/backend/replicated: network driver is closed")
-	case <-notify:
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		return d.currentTailLocked(after)
-	case <-timer.C:
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		return d.currentTailLocked(after)
-	}
-}
-
-func (d *NetworkDriver) InstallBootstrap(observed rootstorage.ObservedCommitted) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.adapter.installBootstrapLocked(observed)
-}
-
 func (d *NetworkDriver) Close() error {
 	var err error
 	d.closeOnce.Do(func() {
@@ -230,127 +187,6 @@ func (d *NetworkDriver) handleTransportMessage(msg myraft.Message) error {
 		return err
 	}
 	return d.sendMessages(outbound)
-}
-
-func (d *NetworkDriver) drainLocked() ([]rootstorage.CommittedEvent, []myraft.Message, error) {
-	if d.node == nil {
-		return nil, nil, nil
-	}
-	var committed []rootstorage.CommittedEvent
-	var outbound []myraft.Message
-	for d.node.raw.HasReady() {
-		rd := d.node.raw.Ready()
-		persistProtocol := false
-		if !myraft.IsEmptyHardState(rd.HardState) {
-			if err := d.node.storage.SetHardState(rd.HardState); err != nil {
-				return nil, nil, err
-			}
-			persistProtocol = true
-		}
-		if !myraft.IsEmptySnap(rd.Snapshot) {
-			if err := d.node.storage.ApplySnapshot(rd.Snapshot); err != nil {
-				return nil, nil, err
-			}
-			persistProtocol = true
-		}
-		if len(rd.Entries) > 0 {
-			if err := d.node.storage.Append(rd.Entries); err != nil {
-				return nil, nil, err
-			}
-			persistProtocol = true
-		}
-		for _, entry := range rd.CommittedEntries {
-			if entry.Type != myraft.EntryNormal || len(entry.Data) == 0 {
-				continue
-			}
-			rec, err := unmarshalCommittedEvent(entry.Data)
-			if err != nil {
-				return nil, nil, err
-			}
-			committed = append(committed, rec)
-		}
-		if persistProtocol {
-			state, err := captureProtocolState(d.node.storage)
-			if err != nil {
-				return nil, nil, err
-			}
-			if err := saveProtocolState(d.workdir, state); err != nil {
-				return nil, nil, err
-			}
-		}
-		outbound = append(outbound, rd.Messages...)
-		d.node.raw.Advance(rd)
-	}
-	if len(committed) > 0 {
-		if err := d.adapter.appendCommittedLocked(committed); err != nil {
-			return nil, nil, err
-		}
-	}
-	return committed, outbound, nil
-}
-
-func (d *NetworkDriver) LoadCheckpoint() (rootstorage.Checkpoint, error) {
-	return d.adapter.loadCheckpoint()
-}
-
-func (d *NetworkDriver) SaveCheckpoint(checkpoint rootstorage.Checkpoint) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.adapter.saveCheckpointLocked(checkpoint)
-}
-
-func (d *NetworkDriver) ReadCommitted(offset int64) (rootstorage.CommittedTail, error) {
-	return d.adapter.readCommitted(offset)
-}
-
-func (d *NetworkDriver) AppendCommitted(records ...rootstorage.CommittedEvent) (int64, error) {
-	d.mu.Lock()
-	if d.node == nil {
-		d.mu.Unlock()
-		return 0, fmt.Errorf("meta/root/backend/replicated: network driver is closed")
-	}
-	if d.node.raw.Status().RaftState != myraft.StateLeader {
-		d.mu.Unlock()
-		return 0, fmt.Errorf("meta/root/backend/replicated: node %d is not leader", d.id)
-	}
-	for _, rec := range records {
-		payload, err := marshalCommittedEvent(rec)
-		if err != nil {
-			d.mu.Unlock()
-			return 0, err
-		}
-		if err := d.node.raw.Propose(payload); err != nil {
-			d.mu.Unlock()
-			return 0, err
-		}
-		_, outbound, err := d.drainLocked()
-		if err != nil {
-			d.mu.Unlock()
-			return 0, err
-		}
-		d.mu.Unlock()
-		if err := d.sendMessages(outbound); err != nil {
-			return 0, err
-		}
-		d.mu.Lock()
-	}
-	size, err := d.adapter.size()
-	d.mu.Unlock()
-	return size, err
-}
-
-func (d *NetworkDriver) CompactCommitted(stream rootstorage.CommittedTail) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.adapter.compactCommittedLocked(stream)
-}
-
-func (d *NetworkDriver) Size() (int64, error) {
-	return d.adapter.size()
-}
-
-func (d *NetworkDriver) currentTailLocked(after rootstorage.TailToken) (rootstorage.TailAdvance, error) {
-	return d.adapter.observeLocked(after)
 }
 
 type networkNode struct {

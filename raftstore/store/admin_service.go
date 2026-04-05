@@ -34,15 +34,15 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta localmeta.RegionMeta
 		return nil, fmt.Errorf("raftstore: parent region %d not found", parentID)
 	}
 	originalParent := localmeta.CloneRegionMeta(parentMeta)
-	transition, err := s.buildSplitTransition(parentID, childMeta, childMeta.StartKey)
+	plan, err := s.buildSplitPlan(parentID, childMeta, childMeta.StartKey)
 	if err != nil {
 		return nil, err
 	}
-	newParent := transition.parent
-	childMeta = transition.child
+	newParent := plan.parent
+	childMeta = plan.child
 	var childPeer *peer.Peer
-	if err := s.applyTerminalTransition(terminalTransition{
-		Event:  committedSplitEvent(transition),
+	if err := s.applyTerminalOutcome(terminalOutcome{
+		Event:  committedSplitEvent(plan),
 		Action: "split",
 		Apply: func() error {
 			if err := s.applyRegionMetaSilent(newParent); err != nil {
@@ -119,7 +119,7 @@ func (s *Store) handleMergeCommand(merge *raftcmdpb.MergeCommand) error {
 	if merge == nil {
 		return fmt.Errorf("raftstore: merge command missing payload")
 	}
-	transition, err := s.buildMergeTransition(merge.GetTargetRegionId(), merge.GetSourceRegionId())
+	plan, err := s.buildMergePlan(merge.GetTargetRegionId(), merge.GetSourceRegionId())
 	if err != nil {
 		// Merge apply must be replay-safe across restart. Once the source region
 		// has already been removed locally, replaying the committed merge is a
@@ -129,13 +129,13 @@ func (s *Store) handleMergeCommand(merge *raftcmdpb.MergeCommand) error {
 		}
 		return err
 	}
-	sourceMeta := transition.source
+	sourceMeta := plan.source
 	if sourceMeta.State == metaregion.ReplicaStateTombstone {
 		return nil
 	}
-	updated := transition.target
-	return s.applyTerminalTransition(terminalTransition{
-		Event:  committedMergeEvent(transition),
+	updated := plan.target
+	return s.applyTerminalOutcome(terminalOutcome{
+		Event:  committedMergeEvent(plan),
 		Action: "merge",
 		Apply: func() error {
 			if err := s.applyRegionMetaSilent(updated); err != nil {

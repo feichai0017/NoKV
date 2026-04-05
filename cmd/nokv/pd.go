@@ -183,13 +183,11 @@ func runPDCmd(w io.Writer, args []string) error {
 				return
 			}
 			for {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-				next, err := subscription.Wait(*rootRefresh)
+				next, err := subscription.Next(ctx, *rootRefresh)
 				if err != nil {
+					if errors.Is(err, context.Canceled) {
+						return
+					}
 					continue
 				}
 				switch next.CatchUpAction() {
