@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -205,4 +206,44 @@ func TestTailSubscriptionTracksAcknowledgedToken(t *testing.T) {
 
 	sub.Acknowledge(advance)
 	require.Equal(t, expected.Token, sub.Token())
+}
+
+func TestWatchedTailSubscriptionUsesWatchChannel(t *testing.T) {
+	initial := TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 4}, Revision: 3}
+	watch := make(chan struct{}, 1)
+	next := TailAdvance{
+		After: initial,
+		Token: TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 5}, Revision: 4},
+		Observed: ObservedCommitted{
+			Checkpoint: Checkpoint{
+				Snapshot: rootstate.Snapshot{
+					State: rootstate.State{LastCommitted: rootstate.Cursor{Term: 1, Index: 5}},
+				},
+			},
+		},
+	}
+	calls := 0
+	sub := NewWatchedTailSubscription(
+		initial,
+		func(after TailToken) (TailAdvance, error) {
+			calls++
+			if calls == 1 {
+				return TailAdvance{After: after, Token: after}, nil
+			}
+			return next, nil
+		},
+		watch,
+		nil,
+	)
+	require.NotNil(t, sub)
+	done := make(chan TailAdvance, 1)
+	go func() {
+		advance, err := sub.Next(context.Background(), time.Second)
+		require.NoError(t, err)
+		done <- advance
+	}()
+	time.Sleep(20 * time.Millisecond)
+	watch <- struct{}{}
+	advance := <-done
+	require.Equal(t, next.Token, advance.Token)
 }

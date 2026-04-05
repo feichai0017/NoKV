@@ -7,6 +7,7 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	pdstorage "github.com/feichai0017/NoKV/pd/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -597,7 +598,7 @@ func TestServicePublishRootEventSkipsDuplicateSplitPlan(t *testing.T) {
 	require.Equal(t, 0, store.eventCalls)
 }
 
-func TestServiceRefreshFromStorageReplacesTransitionView(t *testing.T) {
+func TestServiceRefreshFromStorageReplacesPendingView(t *testing.T) {
 	cluster := core.NewCluster()
 	left := testDescriptor(61, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)
 	right := testDescriptor(62, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
@@ -1083,6 +1084,70 @@ func TestServiceRefreshFromReplicatedRootFollowerServesRead(t *testing.T) {
 		}
 		resp, err := follower.GetRegionByKey(context.Background(), &pdpb.GetRegionByKeyRequest{Key: []byte("m")})
 		return err == nil && !resp.GetNotFound() && resp.GetRegionDescriptor().GetRegionId() == 91
+	}, 5*time.Second, 50*time.Millisecond)
+}
+
+func TestServiceReloadFromStorageTracksWatchedTailSubscription(t *testing.T) {
+	peerAddrs := reserveReplicatedRootPeerAddrs(t)
+	rootStores := make(map[uint64]*pdstorage.RootStore, 3)
+	services := make(map[uint64]*Service, 3)
+	for _, id := range []uint64{1, 2, 3} {
+		store, err := pdstorage.OpenRootReplicatedStore(pdstorage.ReplicatedRootConfig{
+			WorkDir:       filepath.Join(t.TempDir(), "root", "node-"+strconv.FormatUint(id, 10)),
+			NodeID:        id,
+			TransportAddr: peerAddrs[id],
+			PeerAddrs:     peerAddrs,
+		})
+		require.NoError(t, err)
+		rootStores[id] = store
+		t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+		cluster := core.NewCluster()
+		bootstrap, err := pdstorage.Bootstrap(store, cluster.PublishRegionDescriptor, 1, 1)
+		require.NoError(t, err)
+		svc := NewService(cluster, core.NewIDAllocator(bootstrap.IDStart), tso.NewAllocator(bootstrap.TSStart))
+		svc.SetStorage(store)
+		services[id] = svc
+	}
+
+	var leaderID uint64
+	require.Eventually(t, func() bool {
+		for id, store := range rootStores {
+			if store.IsLeader() {
+				leaderID = id
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 50*time.Millisecond)
+
+	followerID := replicatedFollowerID(leaderID)
+	leader := services[leaderID]
+	follower := services[followerID]
+	subscription := rootStores[followerID].SubscribeTail(rootstorage.TailToken{})
+	require.NotNil(t, subscription)
+
+	desc := testDescriptor(92, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
+	require.NoError(t, publishDescriptorEvent(t, leader, desc, 0))
+
+	require.Eventually(t, func() bool {
+		advance, err := subscription.Next(context.Background(), 500*time.Millisecond)
+		if err != nil {
+			return false
+		}
+		switch advance.CatchUpAction() {
+		case rootstorage.TailCatchUpRefreshState, rootstorage.TailCatchUpInstallBootstrap:
+			if err := follower.ReloadFromStorage(); err != nil {
+				return false
+			}
+			subscription.Acknowledge(advance)
+		case rootstorage.TailCatchUpAcknowledgeWindow:
+			subscription.Acknowledge(advance)
+		default:
+			return false
+		}
+		resp, err := follower.GetRegionByKey(context.Background(), &pdpb.GetRegionByKeyRequest{Key: []byte("m")})
+		return err == nil && !resp.GetNotFound() && resp.GetRegionDescriptor().GetRegionId() == 92
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
