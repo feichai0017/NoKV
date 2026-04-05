@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>2026-03-30 PD and RaftAdmin Layering - NoKV Docs</title>
+        <title>2026-03-30 PD 与执行面分层 - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-72fa220b.js";
+            window.path_to_searchindex_js = "../searchindex-e201db35.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-41a84e3a.js"></script>
+        <script src="../toc-8bd88094.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,105 +178,199 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="2026-03-30-为什么-pd-和-raftadmin-不能混成一层"><a class="header" href="#2026-03-30-为什么-pd-和-raftadmin-不能混成一层">2026-03-30 为什么 PD 和 RaftAdmin 不能混成一层</a></h1>
-<p>这篇记录当前 <code>PD</code> 与 <code>RaftAdmin</code> 的职责边界。这个边界看起来像“小命名问题”，实际上直接影响整个分布式系统的真相源和控制流是否会变脏。</p>
-<hr>
-<h2 id="背景"><a class="header" href="#背景">背景</a></h2>
-<p>NoKV 现在同时有两层控制相关接口：</p>
-<ul>
-<li><code>pd</code></li>
-<li><code>raftstore/admin</code></li>
-</ul>
-<p>两者都和 region、membership、leader、路由有关，很容易让人产生一个问题：</p>
+                        <h1 id="2026-03-30-为什么-pd-和执行面必须分层"><a class="header" href="#2026-03-30-为什么-pd-和执行面必须分层">2026-03-30 为什么 PD 和执行面必须分层</a></h1>
 <blockquote>
-<p>既然有 PD，为什么还需要 <code>RaftAdmin</code>？</p>
+<p>状态：当前这条边界已经进一步收敛。<code>pd</code> 负责 rooted view、service 和 proposal gate；<code>raftstore</code> 负责 data-plane execute；<code>meta/root</code> 负责最小 truth。本文重点解释为什么 <code>PD</code> 不能和执行面混成一层。</p>
 </blockquote>
-<h2 id="问题"><a class="header" href="#问题">问题</a></h2>
-<p>如果边界不清楚，系统很容易滑向两种坏形态：</p>
+<h2 id="导读"><a class="header" href="#导读">导读</a></h2>
+<ul>
+<li>🧭 主题：为什么 <code>pd</code> 必须是 view/service 层，而不是半个执行器。</li>
+<li>🧱 核心对象：<code>meta/root</code>、<code>pd</code>、<code>raftstore</code>、<code>RootEvent</code>。</li>
+<li>🔁 调用链：<code>planned truth -&gt; data-plane execute -&gt; terminal truth</code>。</li>
+<li>📚 参考对象：TiKV 的控制面/执行面分离、Delos/FDB 的 truth/service 解耦。</li>
+</ul>
+<h2 id="1-为什么这件事重要"><a class="header" href="#1-为什么这件事重要">1. 为什么这件事重要</a></h2>
+<p>分布式 KV 最容易在控制面上犯的一个错误是：</p>
+<ul>
+<li>先做一个中心服务</li>
+<li>再把目录、调度、元数据、执行入口、运维命令慢慢都堆进去</li>
+<li>最后得到一个又大又胖的“控制平面大脑”</li>
+</ul>
+<p>这样短期看起来方便，长期的问题非常明显：</p>
 <ol>
-<li>
-<p><strong>PD 越界写本地 truth</strong><br>control plane 直接变成 local state 的执行者。</p>
-</li>
-<li>
-<p><strong>所有动作都塞进 store / CLI</strong><br>结果控制面、执行面、运维面全部混在一起。</p>
-</li>
+<li>authority 和 runtime 混在一起</li>
+<li>恢复路径和正常执行路径不一致</li>
+<li>执行面被 control-plane 越权写脏</li>
 </ol>
-<p>这两种都不是长期可维护的架构。</p>
-<h2 id="分析"><a class="header" href="#分析">分析</a></h2>
-<p>当前 NoKV 的分层本质上是：</p>
-<h3 id="raftadmin"><a class="header" href="#raftadmin"><code>RaftAdmin</code></a></h3>
+<p>NoKV 当前选择的是另一条路：</p>
+<ul>
+<li><code>meta/root</code> 作为最小 truth kernel</li>
+<li><code>pd</code> 作为 rooted view + service</li>
+<li><code>raftstore</code> 作为 executor</li>
+</ul>
+<h2 id="2-当前分层"><a class="header" href="#2-当前分层">2. 当前分层</a></h2>
+<p>相关代码：</p>
+<ul>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store</code></li>
+</ul>
+<p>结构如下：</p>
+<pre class="mermaid">flowchart LR
+    C["Client / Operator"] --&gt; PD["PD\nview + service + gate"]
+    PD --&gt; MR["meta/root\ntruth kernel"]
+    RS["raftstore\nexecutor"] --&gt; PD
+    RS --&gt; DP["data-plane peer runtime"]
+    DP --&gt; PD
+</pre>
+
+<h3 id="三层职责"><a class="header" href="#三层职责">三层职责</a></h3>
+<h4 id="metaroot"><a class="header" href="#metaroot"><code>meta/root</code></a></h4>
 <p>负责：</p>
+<ul>
+<li>rooted truth</li>
+<li>transition state machine</li>
+<li>checkpoint + retained tail</li>
+</ul>
+<h4 id="pd"><a class="header" href="#pd"><code>pd</code></a></h4>
+<p>负责：</p>
+<ul>
+<li>route view</li>
+<li>pending/operator view</li>
+<li>leader-only write gate</li>
+<li>assessment / inspection RPC</li>
+<li>liveness service</li>
+</ul>
+<h4 id="raftstore"><a class="header" href="#raftstore"><code>raftstore</code></a></h4>
+<p>负责：</p>
+<ul>
+<li>consume target</li>
+<li>执行 conf change / admin command</li>
+<li>local apply</li>
+<li>terminal truth publish</li>
+</ul>
+<h2 id="3-为什么-pd-不能直接做执行面"><a class="header" href="#3-为什么-pd-不能直接做执行面">3. 为什么 <code>PD</code> 不能直接做执行面</a></h2>
+<h3 id="31-control-plane-不等于-execution-plane"><a class="header" href="#31-control-plane-不等于-execution-plane">3.1 control-plane 不等于 execution-plane</a></h3>
+<p><code>PD</code> 擅长的是：</p>
+<ul>
+<li>看全局视图</li>
+<li>做路由和目录服务</li>
+<li>做 proposal gate</li>
+<li>做 operator/scheduler runtime</li>
+</ul>
+<p>但真正执行这些动作的仍然是 leader store：</p>
 <ul>
 <li><code>AddPeer</code></li>
 <li><code>RemovePeer</code></li>
 <li><code>TransferLeader</code></li>
-<li><code>RegionRuntimeStatus</code></li>
-</ul>
-<p>也就是：</p>
-<blockquote>
-<p><strong>leader store 上的执行面</strong></p>
-</blockquote>
-<p>它的职责是把一个明确的 membership 操作落到真实的 region leader 上。</p>
-<h3 id="pd"><a class="header" href="#pd"><code>PD</code></a></h3>
-<p>负责：</p>
-<ul>
-<li>route lookup</li>
-<li>allocator / TSO</li>
-<li>heartbeat 聚合</li>
-<li>cluster 视图</li>
-<li>未来的调度和编排</li>
-</ul>
-<p>也就是：</p>
-<blockquote>
-<p><strong>cluster 级 control plane</strong></p>
-</blockquote>
-<h2 id="根因"><a class="header" href="#根因">根因</a></h2>
-<p>两者不能混成一层，根本原因是：</p>
-<h3 id="control-plane-不等于-execution-plane"><a class="header" href="#control-plane-不等于-execution-plane">control plane 不等于 execution plane</a></h3>
-<p>PD 最擅长的是：</p>
-<ul>
-<li>看全局</li>
-<li>做决策</li>
-<li>提供目录服务</li>
-<li>承担调度语义</li>
-</ul>
-<p>但真正执行：</p>
-<ul>
-<li>conf change</li>
-<li>leader transfer</li>
+<li><code>Split</code></li>
+<li><code>Merge</code></li>
 <li>snapshot install</li>
 </ul>
-<p>这些动作的仍然是 region leader 所在的 store / peer runtime。</p>
-<p>如果让 PD 直接越过这些路径写本地 state，会有三个问题：</p>
+<p>如果让 <code>PD</code> 直接改本地 region 运行时，会立刻出现三个问题：</p>
 <ol>
-<li>本地 truth 被破坏</li>
-<li>恢复路径和正常执行路径不一致</li>
-<li>分布式错误难以收敛，因为调度器开始兼做执行器</li>
+<li>本地 truth 与 raft apply 路径脱节</li>
+<li>正常执行和恢复路径不一致</li>
+<li>control-plane 开始兼做 executor，错误模型爆炸</li>
 </ol>
-<h2 id="方案"><a class="header" href="#方案">方案</a></h2>
-<p>当前 NoKV 的正确做法是：</p>
-<ol>
-<li>保留 <code>RaftAdmin</code> 作为 execution plane。</li>
-<li>保留 <code>PD</code> 作为 control plane。</li>
-<li>未来如果要做更高级 orchestrator，也应该是：
+<h3 id="32-执行必须落在-leader-peer-上"><a class="header" href="#32-执行必须落在-leader-peer-上">3.2 执行必须落在 leader peer 上</a></h3>
+<p>相关代码：</p>
 <ul>
-<li><code>PD</code> 决策</li>
-<li><code>RaftAdmin</code> 执行</li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/transition_executor.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/membership_service.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/admin_service.go</code></li>
 </ul>
-</li>
-</ol>
-<p>而不是让 <code>PD</code> 直接篡改本地运行时。</p>
-<h2 id="后续"><a class="header" href="#后续">后续</a></h2>
+<p>真正执行时必须经过：</p>
 <ol>
-<li><code>RegionRuntimeStatus</code> 要保持克制<br>不要把它继续膨胀成万能 dump API。</li>
-<li><code>PD</code> 以后如果做 operator framework，应明确只编排，不直接改本地 truth。</li>
-<li>文档里应该长期强调：
-<ul>
-<li><code>PD</code> 是 control plane</li>
-<li><code>RaftAdmin</code> 是 execution plane</li>
-</ul>
-</li>
+<li>找到本地 leader peer</li>
+<li>publish planned truth</li>
+<li>propose conf change / admin command</li>
+<li>local apply</li>
+<li>publish terminal truth</li>
 </ol>
+<p>这条路径必须保持清楚，否则整个 lifecycle 会变脏。</p>
+<h2 id="4-当前实际调用逻辑"><a class="header" href="#4-当前实际调用逻辑">4. 当前实际调用逻辑</a></h2>
+<h3 id="41-peer-change"><a class="header" href="#41-peer-change">4.1 peer change</a></h3>
+<pre class="mermaid">sequenceDiagram
+    participant OP as Operator/Client
+    participant PD as PD
+    participant MR as Meta Root
+    participant RS as Raftstore
+    participant RP as Region Leader Peer
+
+    OP-&gt;&gt;PD: 请求加副本/删副本
+    PD-&gt;&gt;MR: rooted lifecycle assessment + append planned event
+    PD--&gt;&gt;RS: target 可执行
+    RS-&gt;&gt;RP: propose conf change
+    RP--&gt;&gt;RS: apply 完成
+    RS-&gt;&gt;PD: publish terminal event
+    PD-&gt;&gt;MR: append applied truth
+</pre>
+
+<h3 id="42-split--merge"><a class="header" href="#42-split--merge">4.2 split / merge</a></h3>
+<p>路径类似，只是 proposal payload 从 conf change 换成 admin command。</p>
+<h2 id="5-这条分层的收益"><a class="header" href="#5-这条分层的收益">5. 这条分层的收益</a></h2>
+<h3 id="51-pd-不重新长成-authority"><a class="header" href="#51-pd-不重新长成-authority">5.1 <code>PD</code> 不重新长成 authority</a></h3>
+<p>当前 <code>pd</code> 的主要代码：</p>
+<ul>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/storage/root.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/core/cluster.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/view/pending_view.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/operator</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/server</code></li>
+</ul>
+<p>可以看出来，它已经不是一个“大 metadata 数据库”了，而是一个 rooted view host。</p>
+<h3 id="52-执行面更容易纯化"><a class="header" href="#52-执行面更容易纯化">5.2 执行面更容易纯化</a></h3>
+<p><code>raftstore</code> 当前已经被进一步压成：</p>
+<ul>
+<li>builder</li>
+<li>executor</li>
+<li>outcome</li>
+</ul>
+<p>这为后续继续做纯 executor 化提供了清楚的落点。</p>
+<h3 id="53-后续-scheduleroperator-runtime-更容易单独生长"><a class="header" href="#53-后续-scheduleroperator-runtime-更容易单独生长">5.3 后续 scheduler/operator runtime 更容易单独生长</a></h3>
+<p>你以后可以继续在 <code>PD</code> 里做：</p>
+<ul>
+<li>owner</li>
+<li>attempt</li>
+<li>admission</li>
+<li>backoff</li>
+<li>operator runtime</li>
+</ul>
+<p>但这些都不需要倒灌进 <code>meta/root</code>。</p>
+<h2 id="6-设计理念"><a class="header" href="#6-设计理念">6. 设计理念</a></h2>
+<p>这里的核心理念有两条：</p>
+<h3 id="61-pd-是全局视图和服务层不是本地状态执行器"><a class="header" href="#61-pd-是全局视图和服务层不是本地状态执行器">6.1 <code>PD</code> 是全局视图和服务层，不是本地状态执行器</a></h3>
+<h3 id="62-执行路径必须和恢复路径共享同一条-truth-model"><a class="header" href="#62-执行路径必须和恢复路径共享同一条-truth-model">6.2 执行路径必须和恢复路径共享同一条 truth model</a></h3>
+<p>如果一个动作只能在运行时成立、恢复后解释不出来，那它就是设计上不干净。</p>
+<h2 id="7-参考对象"><a class="header" href="#7-参考对象">7. 参考对象</a></h2>
+<p>这条分层借鉴的是一些工业系统长期证明有效的结构：</p>
+<ul>
+<li>TiKV 里 control-plane 与 raft 执行面的基本分离</li>
+<li>FoundationDB / Delos 一类系统里 truth 与 service 的解耦</li>
+<li>数据库内核里“不要让编排器直接写执行器本地状态”的基本原则</li>
+</ul>
+<h2 id="8-当前已经做对的地方"><a class="header" href="#8-当前已经做对的地方">8. 当前已经做对的地方</a></h2>
+<ul>
+<li><code>PD</code> 不再维护第二份 authority truth</li>
+<li><code>meta/root</code> 持有 transition state machine</li>
+<li><code>raftstore</code> 已经更接近 target-driven executor</li>
+<li>pending/operator view 已经从 rooted truth materialize 出来</li>
+</ul>
+<h2 id="9-还值得继续做的"><a class="header" href="#9-还值得继续做的">9. 还值得继续做的</a></h2>
+<ul>
+<li><code>pd/operator</code> 真正长出 scheduler/operator runtime</li>
+<li><code>raftstore</code> 继续纯 executor 化</li>
+<li><code>PD</code> 对外 operator/debug surface 继续增强</li>
+</ul>
+<h2 id="10-总结"><a class="header" href="#10-总结">10. 总结</a></h2>
+<p><code>PD</code> 和执行面不能混成一层，根本原因不是“命名要好看”，而是：</p>
+<ul>
+<li>control-plane 不应该篡改本地执行态</li>
+<li>authority、view、runtime、executor 必须分层</li>
+<li>只有这样，系统恢复、测试、调度和演进才不会互相污染</li>
+</ul>
+<p>当前 NoKV 这条线已经开始站稳，而且它是后续继续做 scheduler/operator 研究的必要前提。</p>
 
                     </main>
 

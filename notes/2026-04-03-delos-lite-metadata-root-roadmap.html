@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-72fa220b.js";
+            window.path_to_searchindex_js = "../searchindex-e201db35.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-41a84e3a.js"></script>
+        <script src="../toc-8bd88094.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,30 +178,41 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="rooted-metadatadelos-lite-与-virtual-log-设计说明"><a class="header" href="#rooted-metadatadelos-lite-与-virtual-log-设计说明">Rooted Metadata、Delos-lite 与 Virtual Log 设计说明</a></h1>
+                        <h1 id="2026-04-03-rooted-metadatadelos-lite-与-virtual-log-设计说明"><a class="header" href="#2026-04-03-rooted-metadatadelos-lite-与-virtual-log-设计说明">2026-04-03 Rooted Metadata、Delos-lite 与 Virtual Log 设计说明</a></h1>
 <blockquote>
-<p>状态：当前 NoKV metadata/control-plane 主线设计说明。本文档合并了此前关于“最小 metadata root 与自描述 region”以及“Delos-lite Metadata Root 与 Virtual Log 路线”的两篇 note，只保留当前代码仍然有效、且能直接指导后续实现与研究的部分。</p>
+<p>状态：当前 NoKV metadata/control-plane 主线的正式设计说明。本文档用中文完整解释 <code>meta/root</code>、<code>pd</code>、<code>raftstore</code> 三层的职责、调用链、持久化布局、Virtual Log substrate，以及它与 Delos / etcd 风格元数据服务的关系。</p>
 </blockquote>
-<h2 id="1-为什么现在要把文档合并"><a class="header" href="#1-为什么现在要把文档合并">1. 为什么现在要把文档合并</a></h2>
-<p>NoKV 之前关于 metadata/control-plane 的说明分散在两篇 note 里：</p>
+<h2 id="导读"><a class="header" href="#导读">导读</a></h2>
 <ul>
-<li>一篇强调最小 metadata root、自描述 region、<code>RegionMeta</code> 与 <code>Descriptor</code> 的边界。</li>
-<li>一篇强调 Delos-lite、Virtual Log、local/replicated backend 和后续路线。</li>
+<li>🧭 主题：NoKV 当前 <code>meta/root + pd + raftstore</code> 控制面为什么是一条 Delos-lite 主线。</li>
+<li>🧱 核心对象：<code>RootEvent</code>、<code>ObservedCommitted</code>、<code>TailAdvance</code>、<code>TailSubscription</code>、<code>PendingView</code>。</li>
+<li>🔁 调用链：<code>planned truth -&gt; execute -&gt; terminal truth</code> 与 <code>watch-first catch-up</code>。</li>
+<li>📚 参考对象：Delos、FoundationDB、TiKV/PD+etcd、CockroachDB。</li>
 </ul>
-<p>这两篇文章讲的是同一条主线的两个侧面。继续并排保留，会产生三个问题：</p>
-<ol>
-<li>同一组边界被重复描述。</li>
-<li>读者要自己猜哪些内容已经过时。</li>
-<li>代码继续演进后，两篇 note 很容易漂移。</li>
-</ol>
-<p>所以这里直接合并成一篇正式说明，目标很简单：</p>
+<h2 id="1-为什么需要这篇文档"><a class="header" href="#1-为什么需要这篇文档">1. 为什么需要这篇文档</a></h2>
+<p>NoKV 在最近几轮里，已经把 metadata/control-plane 主线收成了一个比较清楚的工程化设计：</p>
 <ul>
-<li>把 NoKV 当前已经成立的 metadata/control-plane 设计一次讲清楚。</li>
-<li>明确哪些是已经实现的，哪些只是下一阶段研究方向。</li>
-<li>把 Delos 借鉴点和 NoKV 当前真实实现区分开，不再混说。</li>
+<li><code>meta/root</code> 成为最小 truth kernel</li>
+<li><code>pd</code> 不再是 authority，而是 rooted view + service + proposal gate</li>
+<li><code>raftstore</code> 越来越接近 target-driven executor</li>
+<li><code>local</code> 和 <code>replicated</code> backend 共享同一个 rooted domain</li>
+</ul>
+<p>如果不把这条主线正式写清楚，后面很容易再次回到这些坏形态：</p>
+<ol>
+<li><code>pd</code> 重新长成“大脑兼数据库”</li>
+<li>运行时观测和 durable truth 混在一起</li>
+<li><code>raftstore</code> 重新承担过多 control-plane 职责</li>
+<li>replicated backend 的协议细节反向污染上层领域模型</li>
+</ol>
+<p>所以这篇文档的目的不是描述一个理想图，而是明确：</p>
+<ul>
+<li>当前已经做成了什么</li>
+<li>为什么要这样分层</li>
+<li>这和 Delos / etcd 风格设计的区别是什么</li>
+<li>哪些地方已经稳定，哪些地方仍然属于研究空间</li>
 </ul>
 <h2 id="2-当前结论"><a class="header" href="#2-当前结论">2. 当前结论</a></h2>
-<p>NoKV 当前的正式模式可以理解成三层：</p>
+<p>NoKV 当前的 metadata/control-plane 可以理解成三层：</p>
 <ol>
 <li><code>meta/root</code>
 <ul>
@@ -213,42 +224,44 @@
 <li><code>pd</code>
 <ul>
 <li>rooted route view</li>
-<li>rooted transition/operator view</li>
+<li>rooted pending/operator view</li>
 <li>proposal gate + service host</li>
 </ul>
 </li>
 <li><code>raftstore</code>
 <ul>
 <li>data-plane executor</li>
-<li>消费 target</li>
+<li>consume target</li>
 <li>执行 local raft/admin change</li>
 <li>发布 terminal truth</li>
 </ul>
 </li>
 </ol>
-<p>它们之间的关系是：</p>
+<p>整体关系如下：</p>
 <pre class="mermaid">flowchart LR
-    C["Client / Gateway"] --&gt; P["PD Service"]
-    S["Raftstore / Executor"] --&gt; P
-    P --&gt; V["PD Views"]
-    P --&gt; M["Meta Root Truth"]
-    M --&gt; V
-    M --&gt; B["Virtual Log Substrate"]
+    C["Client / Operator / Store RPC"] --&gt; PD["PD\nview + service + gate"]
+    RS["Raftstore\nexecutor"] --&gt; PD
+    PD --&gt; RV["Route View"]
+    PD --&gt; OV["Pending / Operator View"]
+    PD --&gt; MR["meta/root\ntruth kernel"]
+    MR --&gt; PD
+    MR --&gt; VS["Virtual Log Substrate"]
+    VS --&gt; BK["local / replicated backend"]
 </pre>
 
-<p>当前最关键的判断有三条：</p>
+<p>这套设计最重要的三个判断是：</p>
 <ol>
-<li><code>meta/root</code> 已经不是临时存储，而是真正的最小真相核。</li>
-<li><code>pd</code> 已经不再是 authority，而是 rooted view 和 service 层。</li>
-<li><code>raftstore</code> 已经从“半个 control-plane”收敛成越来越纯的 executor。</li>
+<li><code>meta/root</code> 不是临时存储，而是真正的最小真相源。</li>
+<li><code>pd</code> 不是 authority，而是 rooted view 和服务层。</li>
+<li><code>raftstore</code> 不再是半个 control-plane，而是越来越纯的 executor。</li>
 </ol>
 <h2 id="3-当前产品模式"><a class="header" href="#3-当前产品模式">3. 当前产品模式</a></h2>
-<p>NoKV 当前的控制面正式模式只有两种：</p>
+<p>当前正式支持的 metadata/control-plane 模式只有两种：</p>
 <ol>
 <li><code>single pd + local meta</code></li>
 <li><code>3 pd + replicated meta</code></li>
 </ol>
-<p>这两种模式共享同一个 rooted metadata 领域模型：</p>
+<p>这两种模式共享同一个 rooted metadata 领域面：</p>
 <ul>
 <li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/event</code></li>
 <li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/state</code></li>
@@ -262,16 +275,15 @@
 </ul>
 <p>这点非常重要，因为它意味着：</p>
 <ul>
-<li>单机不是另一套 metadata 系统。</li>
-<li>高可用也不是另一套 metadata 系统。</li>
-<li>上层 <code>pd</code> 和 <code>raftstore</code> 不需要针对 local/replicated 分叉设计。</li>
+<li>单机不是另一套 metadata 系统</li>
+<li>高可用也不是另一套 metadata 系统</li>
+<li>上层 <code>pd</code> 和 <code>raftstore</code> 不需要为了 local/replicated 分叉设计</li>
 </ul>
-<h2 id="4-为什么要借鉴-delos"><a class="header" href="#4-为什么要借鉴-delos">4. 为什么要借鉴 Delos</a></h2>
-<p>NoKV 参考 Delos，不是为了照搬它的协议实现，而是为了借鉴它最值钱的结构原则。</p>
-<p>真正借鉴的是这四条：</p>
+<h2 id="4-为什么借鉴-delos而不是直接做成-etcd-style-metadata-service"><a class="header" href="#4-为什么借鉴-delos而不是直接做成-etcd-style-metadata-service">4. 为什么借鉴 Delos，而不是直接做成 etcd-style metadata service</a></h2>
+<p>NoKV 参考 Delos，并不是为了照搬某个协议，而是为了借它最值钱的结构原则。</p>
 <h3 id="41-最小真相源"><a class="header" href="#41-最小真相源">4.1 最小真相源</a></h3>
 <p>真正需要强一致、需要 durable、需要全局收敛的东西应该尽量少。</p>
-<p>在 NoKV 里，这些东西进入了 <code>meta/root</code>：</p>
+<p>在 NoKV 里，进入 <code>meta/root</code> 的只有：</p>
 <ul>
 <li>region descriptor truth</li>
 <li>peer change / split / merge transition truth</li>
@@ -285,7 +297,7 @@
 <li>store load</li>
 <li>hot region 观测</li>
 <li>scheduler runtime 草稿</li>
-<li>cache / view / stats</li>
+<li>route cache</li>
 </ul>
 <h3 id="42-truth--view--service-分离"><a class="header" href="#42-truth--view--service-分离">4.2 truth / view / service 分离</a></h3>
 <p>Delos 的关键不是“有个 log”，而是：</p>
@@ -294,46 +306,88 @@
 <li>service 不等于 protocol</li>
 <li>materialized view 可以从 truth 重建</li>
 </ul>
-<p>NoKV 当前对应关系已经比较清楚：</p>
+<p>NoKV 当前已经形成：</p>
 <ul>
 <li>truth：<code>meta/root</code></li>
-<li>view：<code>pd/view</code>、<code>pd/core</code></li>
+<li>view：<code>pd/core</code>、<code>pd/view</code>、<code>pd/operator</code></li>
 <li>service：<code>pd/server</code></li>
 </ul>
-<h3 id="43-virtual-log-而不是把上层绑死在协议细节上"><a class="header" href="#43-virtual-log-而不是把上层绑死在协议细节上">4.3 virtual log 而不是把上层绑死在协议细节上</a></h3>
-<p>上层消费的应该是：</p>
+<h3 id="43-virtual-log而不是把上层绑死在协议细节上"><a class="header" href="#43-virtual-log而不是把上层绑死在协议细节上">4.3 virtual log，而不是把上层绑死在协议细节上</a></h3>
+<p>上层应该消费：</p>
 <ul>
 <li>committed truth stream</li>
 <li>checkpoint</li>
-<li>catch-up/install/compaction contract</li>
+<li>catch-up / install / compaction contract</li>
 </ul>
 <p>而不是：</p>
 <ul>
 <li>raft rawnode</li>
-<li>term/vote 细节</li>
-<li>transport 细节</li>
+<li>term/vote/transport 细节</li>
 <li>protocol storage layout</li>
 </ul>
 <h3 id="44-backend-可替换"><a class="header" href="#44-backend-可替换">4.4 backend 可替换</a></h3>
-<p>Delos-lite 的价值在于：</p>
+<p>Delos-lite 的工程价值在于：</p>
 <ul>
 <li>上层 rooted domain 稳定</li>
 <li>底层 backend 可演进</li>
 </ul>
-<p>对应到 NoKV，就是：</p>
+<p>在 NoKV 中体现为：</p>
 <ul>
 <li><code>backend/local</code></li>
 <li><code>backend/replicated</code></li>
 </ul>
-<p>共享同一个 <code>meta/root</code> 领域面，而不是维护两套 metadata 实现。</p>
-<h2 id="5-当前-metaroot-到底是什么"><a class="header" href="#5-当前-metaroot-到底是什么">5. 当前 <code>meta/root</code> 到底是什么</a></h2>
-<p><code>meta/root</code> 现在是 NoKV 的最小 metadata truth kernel。</p>
-<p>关键代码路径：</p>
+<p>共享同一个 root domain。</p>
+<h2 id="5-和-etcd-风格-metadata-service-有什么不同"><a class="header" href="#5-和-etcd-风格-metadata-service-有什么不同">5. 和 etcd 风格 metadata service 有什么不同</a></h2>
+<p>如果直接用 etcd 存 metadata，最自然的形态通常会是：</p>
+<ul>
+<li>用 key/value 表达 region、operator、runtime state</li>
+<li>用 revision/watch 拼 catch-up</li>
+<li>用应用层 schema 解释 lifecycle</li>
+</ul>
+<p>NoKV 当前选择的是另一条路：</p>
+<ul>
+<li>写语言是 <code>RootEvent</code></li>
+<li>读语言是 <code>Snapshot + CommittedTail</code></li>
+<li>catch-up 语言是 <code>TailAdvance / TailSubscription</code></li>
+<li>lifecycle 语义内建在 <code>meta/root/state</code></li>
+</ul>
+<p>也就是说：</p>
+<blockquote>
+<p>etcd 是通用分布式 KV substrate。<br>NoKV 的 <code>meta/root</code> 是专用的 metadata truth substrate。</p>
+</blockquote>
+<p>可以把差异简单看成下面两种路线：</p>
+<pre class="mermaid">flowchart LR
+    subgraph ETCD["etcd 风格元数据服务"]
+        EKV["通用 KV / MVCC / Watch"]
+        APP["应用层 schema\n前缀、键、revision、watch 解释"]
+        EKV --&gt; APP
+    end
+
+    subgraph ROOT["NoKV rooted metadata"]
+        EVT["RootEvent\n领域写语言"]
+        STM["root state machine\nlifecycle / pending / completion"]
+        VLOG["Virtual Log\ncheckpoint + tail + subscription"]
+        EVT --&gt; STM
+        STM --&gt; VLOG
+    end
+</pre>
+
+<p>这使它更适合作为研究平台，因为你们研究的是：</p>
+<ul>
+<li>最小 truth model</li>
+<li>control-plane 分层</li>
+<li>virtual log contract</li>
+<li>backend 可替换性</li>
+</ul>
+<p>而不是如何在 etcd 的 key space 里拼出这些语义。</p>
+<h2 id="6-metaroot-到底是什么"><a class="header" href="#6-metaroot-到底是什么">6. <code>meta/root</code> 到底是什么</a></h2>
+<p>关键代码：</p>
 <ul>
 <li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/event/types.go</code></li>
 <li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/state</code></li>
 <li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/storage/substrate.go</code></li>
 </ul>
+<p><code>meta/root</code> 当前是 NoKV 的最小 metadata truth kernel。</p>
 <p>它负责：</p>
 <ul>
 <li>定义显式 <code>RootEvent</code></li>
@@ -346,12 +400,12 @@
 <ul>
 <li>route lookup API</li>
 <li>heartbeat runtime state</li>
-<li>scheduler runtime decisions</li>
-<li>operator runtime lifecycle</li>
-<li>data-plane local recovery</li>
+<li>scheduler runtime 决策</li>
+<li>operator runtime 生命周期</li>
+<li>store-local recovery</li>
 </ul>
-<p>这条边界已经是对的，而且要继续守住。</p>
-<h2 id="6-regionmetadescriptorrootevent-的分层"><a class="header" href="#6-regionmetadescriptorrootevent-的分层">6. <code>RegionMeta</code>、<code>Descriptor</code>、<code>RootEvent</code> 的分层</a></h2>
+<p>这条边界现在是对的，而且必须继续守住。</p>
+<h2 id="7-regionmetadescriptorrootevent-的分层"><a class="header" href="#7-regionmetadescriptorrootevent-的分层">7. <code>RegionMeta</code>、<code>Descriptor</code>、<code>RootEvent</code> 的分层</a></h2>
 <p>当前这三个对象已经各归其位。</p>
 <h3 id="regionmeta"><a class="header" href="#regionmeta"><code>RegionMeta</code></a></h3>
 <p>位置：</p>
@@ -391,329 +445,311 @@
 <li><code>Descriptor</code> 是共享拓扑对象</li>
 <li><code>RootEvent</code> 是 durable truth transition</li>
 </ul>
-<h2 id="7-meta-和-pd-现在隔离得怎么样"><a class="header" href="#7-meta-和-pd-现在隔离得怎么样">7. <code>meta</code> 和 <code>pd</code> 现在隔离得怎么样</a></h2>
-<p>当前这条边界已经比较清楚，而且是当前分支最重要的进展之一。</p>
-<h3 id="metaroot-负责的事情"><a class="header" href="#metaroot-负责的事情"><code>meta/root</code> 负责的事情</a></h3>
+<h2 id="8-meta-和-pd-现在隔离得怎么样"><a class="header" href="#8-meta-和-pd-现在隔离得怎么样">8. <code>meta</code> 和 <code>pd</code> 现在隔离得怎么样</a></h2>
+<p>当前这条边界已经比较清楚，而且是当前主线最重要的成果之一。</p>
+<h3 id="metaroot-负责"><a class="header" href="#metaroot-负责"><code>meta/root</code> 负责</a></h3>
 <ul>
 <li>保存和恢复最小 rooted truth</li>
 <li>transition state machine</li>
 <li>checkpoint + retained tail</li>
 <li>catch-up / install / compaction contract</li>
 </ul>
-<h3 id="pd-负责的事情"><a class="header" href="#pd-负责的事情"><code>pd</code> 负责的事情</a></h3>
+<h3 id="pd-负责"><a class="header" href="#pd-负责"><code>pd</code> 负责</a></h3>
 <ul>
 <li>rooted route view</li>
-<li>rooted transition/operator view</li>
+<li>rooted pending/operator view</li>
 <li>proposal gate</li>
 <li>liveness service</li>
-<li>对外 RPC 语义</li>
+<li>对外 RPC</li>
 </ul>
-<h3 id="当前已经做到的隔离"><a class="header" href="#当前已经做到的隔离">当前已经做到的隔离</a></h3>
+<h3 id="已经做到的隔离"><a class="header" href="#已经做到的隔离">已经做到的隔离</a></h3>
 <ol>
 <li><code>pd</code> 不再维护第二份 authority metadata。</li>
-<li><code>pd</code> 写路径是 <code>persist rooted truth first, reload rooted view later</code>。</li>
+<li><code>pd</code> 写路径是 <code>persist truth first, reload rooted view later</code>。</li>
 <li>liveness 已经从 truth path 分开。</li>
-<li>operator/debug surface 也是 rooted projection，不是 <code>pd</code> 自己发明的平行状态机。</li>
+<li>operator/debug surface 是 rooted projection，而不是 <code>pd</code> 自己维护的平行状态机。</li>
 </ol>
 <p>这意味着：</p>
 <ul>
 <li><code>pd</code> 可以失效</li>
 <li><code>pd</code> 可以重建</li>
-<li><code>pd</code> view 可以丢弃并重新 materialize</li>
+<li><code>pd</code> view 可以被丢弃并重建</li>
 <li>truth 仍然稳定留在 <code>meta/root</code></li>
 </ul>
-<h2 id="8-当前-pd-的职责"><a class="header" href="#8-当前-pd-的职责">8. 当前 <code>pd</code> 的职责</a></h2>
+<h2 id="9-pd-当前到底做什么"><a class="header" href="#9-pd-当前到底做什么">9. <code>pd</code> 当前到底做什么</a></h2>
 <p>关键代码：</p>
 <ul>
 <li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/storage/root.go</code></li>
 <li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/core/cluster.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/view/transition_view.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/view/pending_view.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/operator</code></li>
 <li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/server/service.go</code></li>
 <li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/server/transition_service.go</code></li>
 </ul>
-<p>现在 <code>pd</code> 已经比较清楚地承担三件事：</p>
-<h3 id="81-rooted-route-view"><a class="header" href="#81-rooted-route-view">8.1 rooted route view</a></h3>
+<p>当前 <code>pd</code> 负责：</p>
 <ul>
-<li><code>Descriptor</code> route directory</li>
-<li><code>GetRegionByKey</code></li>
-<li>region/store heartbeat runtime observation</li>
+<li>rooted snapshot -&gt; runtime route view</li>
+<li>rooted pending transition -&gt; pending/operator view</li>
+<li>leader-only proposal gate</li>
+<li>liveness / allocator / route RPC</li>
+<li>assessment / inspection RPC</li>
 </ul>
-<h3 id="82-rooted-transitionoperator-view"><a class="header" href="#82-rooted-transitionoperator-view">8.2 rooted transition/operator view</a></h3>
-<ul>
-<li>pending / completed / conflict / superseded / cancelled / aborted</li>
-<li>operator/debug inspection</li>
-<li>transition assessment RPC</li>
-</ul>
-<h3 id="83-proposal-gate"><a class="header" href="#83-proposal-gate">8.3 proposal gate</a></h3>
-<ul>
-<li>接收来自 client / executor 的变更意图</li>
-<li>先评估 rooted lifecycle</li>
-<li>persist truth</li>
-<li>再刷新 rooted view</li>
-</ul>
-<h2 id="9-当前-raftstore-的角色"><a class="header" href="#9-当前-raftstore-的角色">9. 当前 <code>raftstore</code> 的角色</a></h2>
+<p>也就是说：</p>
+<p><code>pd</code> 不是 metadata DB。<code>pd</code> 是 rooted metadata 的服务宿主和 view 宿主。</p>
+<h2 id="10-raftstore-当前到底做什么"><a class="header" href="#10-raftstore-当前到底做什么">10. <code>raftstore</code> 当前到底做什么</a></h2>
 <p>关键代码：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/transition_exec.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/transition_builder.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/transition_executor.go</code></li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/transition_outcome.go</code></li>
 <li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/membership_service.go</code></li>
 <li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/admin_service.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/region_manager.go</code></li>
 </ul>
-<p><code>raftstore</code> 当前已经不是旧式的“本地先改 descriptor，再顺手推导 truth”。</p>
-<p>它当前更接近：</p>
+<p>当前 <code>raftstore</code> 越来越接近这样的形态：</p>
 <ol>
-<li>构造 rooted transition target</li>
-<li>执行 local raft/admin proposal</li>
-<li>本地 apply data-plane change</li>
-<li>发布 terminal rooted truth</li>
-</ol>
-<p>最近这轮又收了一步：</p>
-<ul>
-<li>target 现在携带的是语义 proposal 对象，而不是已经编码好的 proposal 字节</li>
-<li>executor 负责：
-<ul>
-<li>leader check</li>
-<li>marshal admin proposal</li>
-<li>send conf/admin</li>
+<li>build target</li>
+<li>execute target</li>
+<li>local apply</li>
 <li>publish terminal truth</li>
-</ul>
-</li>
-</ul>
-<p>这说明 <code>raftstore</code> 正在继续纯 executor 化。</p>
-<h2 id="10-nokv-里的-virtual-log-是什么"><a class="header" href="#10-nokv-里的-virtual-log-是什么">10. NoKV 里的 Virtual Log 是什么</a></h2>
-<p>这里的 Virtual Log 不是一个新的大通用日志系统，而是 rooted metadata truth 的稳定 substrate。</p>
-<p>关键代码：</p>
+</ol>
+<p>也就是说，它越来越像一个纯 executor，而不是半个 control-plane。</p>
+<h2 id="11-virtual-log-substrate-是怎么设计的"><a class="header" href="#11-virtual-log-substrate-是怎么设计的">11. Virtual Log substrate 是怎么设计的</a></h2>
+<p>核心在：</p>
 <ul>
 <li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/storage/substrate.go</code></li>
 </ul>
-<p>当前它主要围绕这些对象构建：</p>
-<h3 id="checkpoint"><a class="header" href="#checkpoint"><code>Checkpoint</code></a></h3>
+<p>关键对象：</p>
 <ul>
-<li>一个 compact rooted snapshot</li>
-<li>带 <code>TailOffset</code></li>
+<li><code>Checkpoint</code></li>
+<li><code>CommittedTail</code></li>
+<li><code>ObservedCommitted</code></li>
+<li><code>TailToken</code></li>
+<li><code>TailAdvance</code></li>
+<li><code>TailWindow</code></li>
+<li><code>TailSubscription</code></li>
+<li><code>TailCompactionPlan</code></li>
 </ul>
-<h3 id="committedtail"><a class="header" href="#committedtail"><code>CommittedTail</code></a></h3>
-<ul>
-<li>一个 retained committed truth tail</li>
-<li>带 <code>RequestedOffset / StartOffset / EndOffset</code></li>
-</ul>
-<h3 id="observedcommitted"><a class="header" href="#observedcommitted"><code>ObservedCommitted</code></a></h3>
-<ul>
-<li><code>Checkpoint + CommittedTail</code></li>
-<li>一个完整的 rooted read image</li>
-</ul>
-<h3 id="tailtoken"><a class="header" href="#tailtoken"><code>TailToken</code></a></h3>
-<ul>
-<li>一次 follower/consumer 已知的 tail frontier</li>
-</ul>
-<h3 id="tailadvance"><a class="header" href="#tailadvance"><code>TailAdvance</code></a></h3>
-<ul>
-<li>相对于某个 token 的 tail 变化结果</li>
-<li>包括：
-<ul>
-<li><code>TailAdvanceUnchanged</code></li>
-<li><code>TailAdvanceCursorAdvanced</code></li>
-<li><code>TailAdvanceWindowShifted</code></li>
-</ul>
-</li>
-</ul>
-<h3 id="tailwindow"><a class="header" href="#tailwindow"><code>TailWindow</code></a></h3>
-<ul>
-<li>retained window 本身的边界</li>
-</ul>
-<h3 id="tailcatchupaction"><a class="header" href="#tailcatchupaction"><code>TailCatchUpAction</code></a></h3>
-<p>现在不只是“要不要 refresh”，而是：</p>
-<ul>
-<li><code>TailCatchUpIdle</code></li>
-<li><code>TailCatchUpRefreshState</code></li>
-<li><code>TailCatchUpAcknowledgeWindow</code></li>
-<li><code>TailCatchUpInstallBootstrap</code></li>
-</ul>
-<h3 id="tailsubscription"><a class="header" href="#tailsubscription"><code>TailSubscription</code></a></h3>
-<p>这轮又往前收了一层，增加了 watch-like subscription：</p>
-<ul>
-<li><code>NewTailSubscription(...)</code></li>
-<li><code>Wait(...)</code></li>
-<li><code>Acknowledge(...)</code></li>
-<li><code>Token()</code></li>
-</ul>
-<p>它的意义是：</p>
-<ul>
-<li>follower 不再到处手搓 <code>TailToken</code> 循环</li>
-<li>watch / catch-up contract 现在开始成为显式对象</li>
-</ul>
-<h2 id="11-virtual-log-的实际工作方式"><a class="header" href="#11-virtual-log-的实际工作方式">11. Virtual Log 的实际工作方式</a></h2>
-<h3 id="111-写入"><a class="header" href="#111-写入">11.1 写入</a></h3>
-<p>上层 append 的不是裸协议 entry，而是：</p>
-<ul>
-<li><code>RootEvent</code></li>
-</ul>
-<p>backend 把它们变成：</p>
-<ul>
-<li>committed rooted truth stream</li>
-</ul>
-<h3 id="112-读取"><a class="header" href="#112-读取">11.2 读取</a></h3>
-<p>上层看到的是：</p>
-<ul>
-<li>当前 checkpoint</li>
-<li>当前 retained committed tail</li>
-<li>相对上次观察到了什么变化</li>
-</ul>
-<p>而不是直接去理解 protocol log / transport / memory storage。</p>
-<h3 id="113-follower-catch-up"><a class="header" href="#113-follower-catch-up">11.3 follower catch-up</a></h3>
-<p>当前 follower catch-up 已经围绕 <code>TailAdvance</code> 工作：</p>
+<h3 id="它到底表达什么"><a class="header" href="#它到底表达什么">它到底表达什么</a></h3>
+<p>不是“直接暴露 raft log”。</p>
+<p>它表达的是：</p>
+<ol>
+<li>当前 compact rooted truth 是什么</li>
+<li>当前 retained committed tail 是什么</li>
+<li>相对上次观察，这次发生了什么变化</li>
+<li>该 refresh、ack window，还是 install bootstrap</li>
+</ol>
+<h3 id="读写合同"><a class="header" href="#读写合同">读写合同</a></h3>
 <pre class="mermaid">flowchart TD
-    A["TailSubscription.Wait()"] --&gt; B{"CatchUpAction"}
-    B --&gt;|Idle| C["do nothing"]
-    B --&gt;|AcknowledgeWindow| D["ack token only"]
-    B --&gt;|RefreshState| E["reload rooted view"]
-    B --&gt;|InstallBootstrap| F["install / reload bootstrap image"]
+    EVT["RootEvent append"] --&gt; CT["CommittedTail"]
+    CT --&gt; CK["Checkpoint"]
+    CK --&gt; OC["ObservedCommitted"]
+    OC --&gt; TA["TailAdvance"]
+    TA --&gt; TS["TailSubscription"]
 </pre>
 
-<p>这意味着 catch-up 已经不是“简单定时 refresh”，而是有了正式 contract。</p>
-<h3 id="114-compaction"><a class="header" href="#114-compaction">11.4 compaction</a></h3>
-<p>现在 compaction 已经统一到 install contract 上：</p>
+<h3 id="follower-catch-up-逻辑"><a class="header" href="#follower-catch-up-逻辑">follower catch-up 逻辑</a></h3>
+<p>当前 follower 不再只是定时 reload，而是通过：</p>
 <ul>
-<li><code>PlanTailCompaction(...)</code></li>
-<li><code>plan.Observed(snapshot)</code></li>
-<li><code>InstallBootstrap(observed)</code></li>
+<li><code>TailSubscription.Next(...)</code></li>
+<li><code>TailAdvance.CatchUpAction()</code></li>
 </ul>
-<p>这样 compaction、bootstrap install、recovery install 用的是同一条 substrate 语义，而不是 backend 私有分支逻辑。</p>
-<h2 id="12-现在底层协议是不是已经变了"><a class="header" href="#12-现在底层协议是不是已经变了">12. 现在底层协议是不是已经变了</a></h2>
-<p>没有。当前 replicated backend 的协议驱动仍然是 raft。</p>
-<p>关键代码：</p>
+<p>来决定：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/replicated/network.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/replicated/driver.go</code></li>
+<li><code>Idle</code></li>
+<li><code>RefreshState</code></li>
+<li><code>AcknowledgeWindow</code></li>
+<li><code>InstallBootstrap</code></li>
 </ul>
-<p>也就是说：</p>
+<p>这使 catch-up 语义正式进入 substrate contract，而不是散落在入口层的 if/else。</p>
+<h2 id="12-local-backend-和-replicated-backend"><a class="header" href="#12-local-backend-和-replicated-backend">12. local backend 和 replicated backend</a></h2>
+<h3 id="backendlocal"><a class="header" href="#backendlocal"><code>backend/local</code></a></h3>
+<p>位置：</p>
 <ul>
-<li>底层 replicated metadata backend 目前仍然是 raft 驱动</li>
-<li>并没有直接替换成 CURP 或别的协议</li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/local</code></li>
 </ul>
-<p>真正变化的是：</p>
+<p>作用：</p>
 <ul>
-<li>上层已经基本不直接消费 raft 细节</li>
-<li>上层更多消费的是 <code>ObservedCommitted</code>、<code>TailAdvance</code>、<code>TailSubscription</code>、<code>InstallBootstrap</code> 这类稳定 contract</li>
-</ul>
-<p>这很关键，因为它意味着：</p>
-<ul>
-<li>未来如果研究不同 replicated substrate</li>
-<li>改动的主战场在 <code>meta/root/backend/replicated</code></li>
-<li>而不是去污染 <code>pd</code> 或 <code>meta/root/state</code></li>
-</ul>
-<h2 id="13-当前-durable-layout"><a class="header" href="#13-当前-durable-layout">13. 当前 durable layout</a></h2>
-<p>metadata/control-plane 相关 durable 文件现在已经统一成：</p>
-<h3 id="pd-workdir"><a class="header" href="#pd-workdir"><code>pd</code> workdir</a></h3>
+<li>单节点 rooted metadata 存储</li>
+<li>持久化文件：
 <ul>
 <li><code>root.checkpoint.binpb</code></li>
 <li><code>root.events.wal</code></li>
-<li><code>root.raft.bin</code>（replicated mode only）</li>
 </ul>
-<h3 id="raftstorelocalmeta"><a class="header" href="#raftstorelocalmeta"><code>raftstore/localmeta</code></a></h3>
+</li>
+</ul>
+<h3 id="backendreplicated"><a class="header" href="#backendreplicated"><code>backend/replicated</code></a></h3>
+<p>位置：</p>
+<ul>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/replicated</code></li>
+</ul>
+<p>作用：</p>
+<ul>
+<li>replicated metadata substrate</li>
+<li>当前仍然是 raft 驱动</li>
+<li>但上层已经被 <code>Substrate</code> / <code>ObservedCommitted</code> 解耦</li>
+</ul>
+<p>当前大致分层：</p>
+<ul>
+<li><code>network_driver.go</code>
+<ul>
+<li>rawnode / transport / tick / campaign</li>
+</ul>
+</li>
+<li><code>network_ready.go</code>
+<ul>
+<li>ready drain / protocol persistence / committed decode</li>
+</ul>
+</li>
+<li><code>network_substrate.go</code>
+<ul>
+<li>substrate-facing methods</li>
+</ul>
+</li>
+<li><code>substrate_adapter.go</code>
+<ul>
+<li>rooted virtual-log adapter</li>
+</ul>
+</li>
+<li><code>store.go</code>
+<ul>
+<li>rooted state machine host</li>
+</ul>
+</li>
+</ul>
+<h2 id="13-持久化布局"><a class="header" href="#13-持久化布局">13. 持久化布局</a></h2>
+<h3 id="rooted-metadata"><a class="header" href="#rooted-metadata">rooted metadata</a></h3>
+<ul>
+<li><code>root.checkpoint.binpb</code></li>
+<li><code>root.events.wal</code></li>
+<li><code>root.raft.bin</code></li>
+</ul>
+<h3 id="store-local-metadata"><a class="header" href="#store-local-metadata">store-local metadata</a></h3>
 <ul>
 <li><code>replicas.binpb</code></li>
 <li><code>raft-progress.binpb</code></li>
 </ul>
-<h3 id="snapshot-dir"><a class="header" href="#snapshot-dir">snapshot dir</a></h3>
+<h3 id="snapshot"><a class="header" href="#snapshot">snapshot</a></h3>
 <ul>
 <li><code>snapshot.json</code></li>
 <li><code>tables/*.sst</code></li>
 </ul>
-<p>它们的职责也已经明确：</p>
+<p>这几组文件的角色已经比较清楚：</p>
 <ul>
-<li><code>root.checkpoint.binpb</code> + <code>root.events.wal</code>
+<li><code>meta/root</code>：cluster truth</li>
+<li><code>root.raft.bin</code>：protocol recovery state</li>
+<li><code>raftstore/localmeta</code>：store-local recovery</li>
+<li><code>snapshot/</code>：region-scoped snapshot contract</li>
+</ul>
+<h2 id="14-实际调用逻辑"><a class="header" href="#14-实际调用逻辑">14. 实际调用逻辑</a></h2>
+<h3 id="topology-变更写路径"><a class="header" href="#topology-变更写路径">topology 变更写路径</a></h3>
+<pre class="mermaid">sequenceDiagram
+    participant OP as Operator/Client
+    participant RS as raftstore
+    participant PD as pd
+    participant MR as meta/root
+
+    OP-&gt;&gt;RS: 构造 peer/split/merge 目标
+    RS-&gt;&gt;PD: publish planned RootEvent
+    PD-&gt;&gt;MR: lifecycle assessment + append truth
+    RS-&gt;&gt;RS: propose raft/admin command
+    RS-&gt;&gt;PD: publish terminal RootEvent
+    PD-&gt;&gt;MR: append terminal truth
+</pre>
+
+<h3 id="follower-catch-up"><a class="header" href="#follower-catch-up">follower catch-up</a></h3>
+<pre class="mermaid">sequenceDiagram
+    participant F as PD follower
+    participant SUB as TailSubscription
+    participant MR as meta/root
+
+    F-&gt;&gt;SUB: Next(ctx, fallback)
+    SUB-&gt;&gt;MR: ObserveTail / WaitForTail
+    MR--&gt;&gt;SUB: TailAdvance
+    SUB--&gt;&gt;F: CatchUpAction
+    alt RefreshState / InstallBootstrap
+        F-&gt;&gt;MR: reload rooted state
+        F-&gt;&gt;SUB: Acknowledge
+    else AcknowledgeWindow
+        F-&gt;&gt;SUB: Acknowledge
+    end
+</pre>
+
+<h2 id="15-设计理念"><a class="header" href="#15-设计理念">15. 设计理念</a></h2>
+<p>这套设计背后真正坚持的理念有五条：</p>
+<h3 id="151-真相必须小"><a class="header" href="#151-真相必须小">15.1 真相必须小</a></h3>
+<h3 id="152-truth--view--runtime--executor-必须分层"><a class="header" href="#152-truth--view--runtime--executor-必须分层">15.2 truth / view / runtime / executor 必须分层</a></h3>
+<h3 id="153-上层不应该直接被协议绑死"><a class="header" href="#153-上层不应该直接被协议绑死">15.3 上层不应该直接被协议绑死</a></h3>
+<h3 id="154-local-和-replicated-必须共享同一个领域面"><a class="header" href="#154-local-和-replicated-必须共享同一个领域面">15.4 local 和 replicated 必须共享同一个领域面</a></h3>
+<h3 id="155-研究平台首先要可解释而不是先堆现成功能"><a class="header" href="#155-研究平台首先要可解释而不是先堆现成功能">15.5 研究平台首先要可解释，而不是先堆现成功能</a></h3>
+<h2 id="16-参考对象"><a class="header" href="#16-参考对象">16. 参考对象</a></h2>
+<h3 id="delos"><a class="header" href="#delos">Delos</a></h3>
+<p>借鉴点：</p>
 <ul>
-<li>rooted cluster truth</li>
+<li>最小 truth kernel</li>
+<li>truth / service 分离</li>
+<li>virtual log substrate</li>
+<li>backend 可替换</li>
 </ul>
-</li>
-<li><code>root.raft.bin</code>
+<h3 id="foundationdb"><a class="header" href="#foundationdb">FoundationDB</a></h3>
+<p>借鉴点：</p>
 <ul>
-<li>replicated backend protocol recovery state</li>
+<li>小而强的一致性根</li>
+<li>由小 truth 核心支撑更大的服务面</li>
 </ul>
-</li>
-<li><code>replicas.binpb</code> + <code>raft-progress.binpb</code>
+<h3 id="tikv--pd--etcd"><a class="header" href="#tikv--pd--etcd">TiKV / PD + etcd</a></h3>
+<p>对比对象：</p>
 <ul>
-<li>store-local recovery state</li>
+<li>让我们更明确看见，为什么 <code>pd</code> 不该重新长成 authority metadata service</li>
 </ul>
-</li>
-<li><code>snapshot.json</code> + <code>tables/*.sst</code>
+<h3 id="cockroachdb"><a class="header" href="#cockroachdb">CockroachDB</a></h3>
+<p>对比对象：</p>
 <ul>
-<li>region snapshot payload</li>
+<li>它更偏 in-band metadata</li>
+<li>NoKV 当前选择的是小型 out-of-band truth kernel</li>
 </ul>
-</li>
+<h2 id="17-当前已经完成的"><a class="header" href="#17-当前已经完成的">17. 当前已经完成的</a></h2>
+<ul>
+<li><code>meta/root</code> 已成为最小 truth kernel</li>
+<li><code>pd</code> 已退出 authority 角色</li>
+<li><code>raftstore</code> 已明显收敛为 executor</li>
+<li>Virtual Log contract 已经成型</li>
+<li>local / replicated backend 已共享同一个 rooted domain</li>
+<li>持久化布局和命名已经清楚很多</li>
 </ul>
-<h2 id="14-当前这条主线已经做完了什么"><a class="header" href="#14-当前这条主线已经做完了什么">14. 当前这条主线已经做完了什么</a></h2>
-<p>当前已经基本完成的收敛：</p>
+<h2 id="18-当前还没做完的"><a class="header" href="#18-当前还没做完的">18. 当前还没做完的</a></h2>
+<ul>
+<li>更成熟的 scheduler/operator runtime</li>
+<li>replicated substrate 的进一步研究</li>
+<li>Virtual Log 更强的 push/stream 模型</li>
+<li><code>raftstore</code> 进一步纯 executor 化</li>
+<li>更系统的性能基准与策略研究</li>
+</ul>
+<h2 id="19-这套设计为什么适合作为研究平台"><a class="header" href="#19-这套设计为什么适合作为研究平台">19. 这套设计为什么适合作为研究平台</a></h2>
+<p>因为它现在已经具备：</p>
 <ol>
-<li><code>meta/root</code> 成为最小 truth kernel</li>
-<li><code>pd</code> 退出 authority 角色</li>
-<li>liveness 从 truth path 分离</li>
-<li><code>RootEvent</code> 成为正式 truth 写语言</li>
-<li><code>peer/split/merge</code> transition state machine 明显成型</li>
-<li>cancel / conflict / superseded / aborted / retry class 已闭环</li>
-<li>operator/debug surface 已正式 RPC 化</li>
-<li>durable 文件命名和格式语义已清晰化</li>
-<li>Virtual Log read/install/catch-up/compaction contract 已经明显成型</li>
+<li>足够清楚的 truth kernel</li>
+<li>足够稳定的 view/service 边界</li>
+<li>足够清楚的 executor 面</li>
+<li>足够独立的 replicated substrate</li>
 </ol>
-<h2 id="15-当前还没到终局的地方"><a class="header" href="#15-当前还没到终局的地方">15. 当前还没到终局的地方</a></h2>
-<p>这条主线已经工程化，但还没到工业终局。</p>
-<p>主要还差：</p>
-<h3 id="151-operator-runtime--scheduler-lifecycle"><a class="header" href="#151-operator-runtime--scheduler-lifecycle">15.1 operator runtime / scheduler lifecycle</a></h3>
-<p>当前已经有 transition/operator view，但还没有成熟的：</p>
+<p>所以你可以分别研究：</p>
 <ul>
-<li>owner</li>
-<li>attempt</li>
-<li>backoff</li>
-<li>admission</li>
-<li>anti-thrash</li>
-<li>placement / failure-domain policy</li>
+<li>metadata truth model</li>
+<li>operator runtime</li>
+<li>scheduler/orchestrator</li>
+<li>replicated protocol/substrate</li>
+<li>catch-up / compaction / install 策略</li>
 </ul>
-<h3 id="152-replicated-substrate-还值得继续研究"><a class="header" href="#152-replicated-substrate-还值得继续研究">15.2 replicated substrate 还值得继续研究</a></h3>
-<p>尤其是：</p>
+<p>而不需要先推翻整个系统。</p>
+<h2 id="20-总结"><a class="header" href="#20-总结">20. 总结</a></h2>
+<p>NoKV 当前的 metadata/control-plane 设计，真正值钱的不是“实现了一个新的元数据存储”，而是：</p>
 <ul>
-<li>watch/subscribe 进一步 formalization</li>
-<li>protocol driver 与 substrate adapter 继续细分</li>
-<li>catch-up/install 策略调优</li>
-<li>potential alternative protocol exploration</li>
+<li>它把最小 truth、view、runtime、executor 明确拆开了</li>
+<li>它把 <code>meta/root</code> 做成了一个专用的 rooted metadata substrate，而不是通用 KV</li>
+<li>它借鉴 Delos 的地方是结构原则，而不是协议照搬</li>
+<li>它让 local / replicated、单机 / 分布式、truth / view 都进入了同一个稳定框架</li>
 </ul>
-<h3 id="153-raftstore-还可以继续纯-executor-化"><a class="header" href="#153-raftstore-还可以继续纯-executor-化">15.3 <code>raftstore</code> 还可以继续纯 executor 化</a></h3>
-<p>当前它已经更像 executor，但 target construction 仍然长在 store 层。后面如果继续深入，可以让 planner surface 更明确，再把 executor 压窄。</p>
-<h2 id="16-当前不应该做什么"><a class="header" href="#16-当前不应该做什么">16. 当前不应该做什么</a></h2>
-<p>下面这些方向现在都不应该抢优先级：</p>
-<ol>
-<li>再把 runtime state 塞回 <code>meta/root</code></li>
-<li>重新让 <code>pd</code> 长成 authority</li>
-<li>先追更复杂协议优化</li>
-<li>提前做过度复杂的 control-plane deployment 拆分</li>
-<li>在 <code>raftstore</code> 里继续加新的 control-plane 语义</li>
-</ol>
-<h2 id="17-这套设计为什么适合作为研究平台"><a class="header" href="#17-这套设计为什么适合作为研究平台">17. 这套设计为什么适合作为研究平台</a></h2>
-<p>因为它已经满足研究平台最需要的三个条件：</p>
-<h3 id="171-主骨架稳定"><a class="header" href="#171-主骨架稳定">17.1 主骨架稳定</a></h3>
-<ul>
-<li>truth / view / executor 已分开</li>
-<li>durable layout 清楚</li>
-<li>local / replicated 共用一个 root domain</li>
-</ul>
-<h3 id="172-关键边界没有缠死"><a class="header" href="#172-关键边界没有缠死">17.2 关键边界没有缠死</a></h3>
-<ul>
-<li>可以单独研究 <code>replicated backend</code></li>
-<li>可以单独研究 <code>scheduler/operator runtime</code></li>
-<li>可以单独研究 <code>executor pureification</code></li>
-</ul>
-<h3 id="173-不需要先推翻架构"><a class="header" href="#173-不需要先推翻架构">17.3 不需要先推翻架构</a></h3>
-<p>当前后续研究大多是“继续在正确结构上深入”，而不是“先拆掉重来”。</p>
-<h2 id="18-一句话总结"><a class="header" href="#18-一句话总结">18. 一句话总结</a></h2>
-<p>NoKV 当前这条 metadata/control-plane 主线，已经是一条成立的 Delos-lite 设计：</p>
-<ul>
-<li><code>meta/root</code> 是最小 durable truth kernel</li>
-<li><code>pd</code> 是 rooted view + service + proposal gate</li>
-<li><code>raftstore</code> 是越来越纯的 data-plane executor</li>
-<li>Virtual Log substrate 已经围绕 <code>ObservedCommitted</code>、<code>TailAdvance</code>、<code>TailSubscription</code>、<code>InstallBootstrap</code>、<code>PlanTailCompaction</code> 建立起稳定 contract</li>
-<li>底层 replicated backend 目前仍然是 raft 驱动，但上层已经基本不被 raft 细节绑死</li>
-</ul>
-<p>这意味着 NoKV 现在已经不仅适合作为工程主线继续演进，也非常适合作为 metadata architecture、operator runtime、scheduler、protocol substrate 和 distributed storage experiment 的研究平台。</p>
+<p>这也是为什么这条主线现在已经不仅能支撑代码实现，还能支撑后续继续做 control-plane、scheduler、Virtual Log 和 protocol 方向的研究。</p>
 
                     </main>
 
