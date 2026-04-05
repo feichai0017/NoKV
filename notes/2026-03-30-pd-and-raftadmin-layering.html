@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e201db35.js";
+            window.path_to_searchindex_js = "../searchindex-9b05464c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8bd88094.js"></script>
+        <script src="../toc-69e2a819.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -211,9 +211,9 @@
 <h2 id="2-当前分层"><a class="header" href="#2-当前分层">2. 当前分层</a></h2>
 <p>相关代码：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store</code></li>
+<li><code>pd</code></li>
+<li><code>meta/root</code></li>
+<li><code>raftstore/store</code></li>
 </ul>
 <p>结构如下：</p>
 <pre class="mermaid">flowchart LR
@@ -276,9 +276,9 @@
 <h3 id="32-执行必须落在-leader-peer-上"><a class="header" href="#32-执行必须落在-leader-peer-上">3.2 执行必须落在 leader peer 上</a></h3>
 <p>相关代码：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/transition_executor.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/membership_service.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/admin_service.go</code></li>
+<li><code>raftstore/store/transition_executor.go</code></li>
+<li><code>raftstore/store/membership_service.go</code></li>
+<li><code>raftstore/store/admin_service.go</code></li>
 </ul>
 <p>真正执行时必须经过：</p>
 <ol>
@@ -313,11 +313,11 @@
 <h3 id="51-pd-不重新长成-authority"><a class="header" href="#51-pd-不重新长成-authority">5.1 <code>PD</code> 不重新长成 authority</a></h3>
 <p>当前 <code>pd</code> 的主要代码：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/storage/root.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/core/cluster.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/view/pending_view.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/operator</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/server</code></li>
+<li><code>pd/storage/root.go</code></li>
+<li><code>pd/core/cluster.go</code></li>
+<li><code>pd/view/pending_view.go</code></li>
+<li><code>pd/operator</code></li>
+<li><code>pd/server</code></li>
 </ul>
 <p>可以看出来，它已经不是一个“大 metadata 数据库”了，而是一个 rooted view host。</p>
 <h3 id="52-执行面更容易纯化"><a class="header" href="#52-执行面更容易纯化">5.2 执行面更容易纯化</a></h3>

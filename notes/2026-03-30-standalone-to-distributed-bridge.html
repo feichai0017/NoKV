@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e201db35.js";
+            window.path_to_searchindex_js = "../searchindex-9b05464c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8bd88094.js"></script>
+        <script src="../toc-69e2a819.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -203,13 +203,13 @@
 <h2 id="2-当前系统边界"><a class="header" href="#2-当前系统边界">2. 当前系统边界</a></h2>
 <p>当前相关实现主要分布在：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/db.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/localmeta</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/mode</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root</code></li>
+<li><code>db.go</code></li>
+<li><code>raftstore/localmeta</code></li>
+<li><code>raftstore/snapshot</code></li>
+<li><code>raftstore/mode</code></li>
+<li><code>raftstore/migrate</code></li>
+<li><code>pd</code></li>
+<li><code>meta/root</code></li>
 </ul>
 <p>分层如下：</p>
 <pre class="mermaid">flowchart TD
@@ -248,7 +248,7 @@
 <h3 id="41-workdir-mode-是正式协议"><a class="header" href="#41-workdir-mode-是正式协议">4.1 workdir mode 是正式协议</a></h3>
 <p>相关代码：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/mode</code></li>
+<li><code>raftstore/mode</code></li>
 </ul>
 <p>当前生命周期至少包括：</p>
 <ul>
@@ -266,8 +266,8 @@
 <h3 id="42-snapshot-被分层而不是一个模糊大概念"><a class="header" href="#42-snapshot-被分层而不是一个模糊大概念">4.2 snapshot 被分层，而不是一个模糊大概念</a></h3>
 <p>相关代码：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/engine/snapshot.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot</code></li>
+<li><code>raftstore/engine/snapshot.go</code></li>
+<li><code>raftstore/snapshot</code></li>
 </ul>
 <p>当前有两层 snapshot：</p>
 <ol>
@@ -285,8 +285,8 @@
 <h3 id="43-migrate-是状态提升协议不是命令拼接"><a class="header" href="#43-migrate-是状态提升协议不是命令拼接">4.3 migrate 是状态提升协议，不是命令拼接</a></h3>
 <p>相关代码：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate/init.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate/expand.go</code></li>
+<li><code>raftstore/migrate/init.go</code></li>
+<li><code>raftstore/migrate/expand.go</code></li>
 </ul>
 <p>当前主线可以概括成：</p>
 <pre class="mermaid">sequenceDiagram

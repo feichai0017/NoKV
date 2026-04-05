@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e201db35.js";
+            window.path_to_searchindex_js = "../searchindex-9b05464c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8bd88094.js"></script>
+        <script src="../toc-69e2a819.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -263,15 +263,15 @@
 </ol>
 <p>这两种模式共享同一个 rooted metadata 领域面：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/event</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/state</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/materialize</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/storage</code></li>
+<li><code>meta/root/event</code></li>
+<li><code>meta/root/state</code></li>
+<li><code>meta/root/materialize</code></li>
+<li><code>meta/root/storage</code></li>
 </ul>
 <p>差别只在 backend：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/local</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/replicated</code></li>
+<li><code>meta/root/backend/local</code></li>
+<li><code>meta/root/backend/replicated</code></li>
 </ul>
 <p>这点非常重要，因为它意味着：</p>
 <ul>
@@ -383,9 +383,9 @@
 <h2 id="6-metaroot-到底是什么"><a class="header" href="#6-metaroot-到底是什么">6. <code>meta/root</code> 到底是什么</a></h2>
 <p>关键代码：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/event/types.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/state</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/storage/substrate.go</code></li>
+<li><code>meta/root/event/types.go</code></li>
+<li><code>meta/root/state</code></li>
+<li><code>meta/root/storage/substrate.go</code></li>
 </ul>
 <p><code>meta/root</code> 当前是 NoKV 的最小 metadata truth kernel。</p>
 <p>它负责：</p>
@@ -410,7 +410,7 @@
 <h3 id="regionmeta"><a class="header" href="#regionmeta"><code>RegionMeta</code></a></h3>
 <p>位置：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/localmeta</code></li>
+<li><code>raftstore/localmeta</code></li>
 </ul>
 <p>角色：</p>
 <ul>
@@ -421,7 +421,7 @@
 <h3 id="descriptor"><a class="header" href="#descriptor"><code>Descriptor</code></a></h3>
 <p>位置：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/descriptor</code></li>
+<li><code>raftstore/descriptor</code></li>
 </ul>
 <p>角色：</p>
 <ul>
@@ -432,7 +432,7 @@
 <h3 id="rootevent"><a class="header" href="#rootevent"><code>RootEvent</code></a></h3>
 <p>位置：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/event/types.go</code></li>
+<li><code>meta/root/event/types.go</code></li>
 </ul>
 <p>角色：</p>
 <ul>
@@ -479,12 +479,12 @@
 <h2 id="9-pd-当前到底做什么"><a class="header" href="#9-pd-当前到底做什么">9. <code>pd</code> 当前到底做什么</a></h2>
 <p>关键代码：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/storage/root.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/core/cluster.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/view/pending_view.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/operator</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/server/service.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/pd/server/transition_service.go</code></li>
+<li><code>pd/storage/root.go</code></li>
+<li><code>pd/core/cluster.go</code></li>
+<li><code>pd/view/pending_view.go</code></li>
+<li><code>pd/operator</code></li>
+<li><code>pd/server/service.go</code></li>
+<li><code>pd/server/transition_service.go</code></li>
 </ul>
 <p>当前 <code>pd</code> 负责：</p>
 <ul>
@@ -499,11 +499,11 @@
 <h2 id="10-raftstore-当前到底做什么"><a class="header" href="#10-raftstore-当前到底做什么">10. <code>raftstore</code> 当前到底做什么</a></h2>
 <p>关键代码：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/transition_builder.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/transition_executor.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/transition_outcome.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/membership_service.go</code></li>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/admin_service.go</code></li>
+<li><code>raftstore/store/transition_builder.go</code></li>
+<li><code>raftstore/store/transition_executor.go</code></li>
+<li><code>raftstore/store/transition_outcome.go</code></li>
+<li><code>raftstore/store/membership_service.go</code></li>
+<li><code>raftstore/store/admin_service.go</code></li>
 </ul>
 <p>当前 <code>raftstore</code> 越来越接近这样的形态：</p>
 <ol>
@@ -516,7 +516,7 @@
 <h2 id="11-virtual-log-substrate-是怎么设计的"><a class="header" href="#11-virtual-log-substrate-是怎么设计的">11. Virtual Log substrate 是怎么设计的</a></h2>
 <p>核心在：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/storage/substrate.go</code></li>
+<li><code>meta/root/storage/substrate.go</code></li>
 </ul>
 <p>关键对象：</p>
 <ul>
@@ -565,7 +565,7 @@
 <h3 id="backendlocal"><a class="header" href="#backendlocal"><code>backend/local</code></a></h3>
 <p>位置：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/local</code></li>
+<li><code>meta/root/backend/local</code></li>
 </ul>
 <p>作用：</p>
 <ul>
@@ -580,7 +580,7 @@
 <h3 id="backendreplicated"><a class="header" href="#backendreplicated"><code>backend/replicated</code></a></h3>
 <p>位置：</p>
 <ul>
-<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/meta/root/backend/replicated</code></li>
+<li><code>meta/root/backend/replicated</code></li>
 </ul>
 <p>作用：</p>
 <ul>
@@ -759,6 +759,9 @@
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
+                            <a rel="next prefetch" href="../notes/2026-04-05-range-filter-from-grf.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -770,6 +773,9 @@
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
+                    <a rel="next prefetch" href="../notes/2026-04-05-range-filter-from-grf.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
             </nav>
 
         </div>

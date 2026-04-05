@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Percolator - NoKV Docs</title>
+        <title>2026-04-05 Range Filter：从 GRF 得到启发，但不照搬 GRF - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -12,34 +12,34 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="favicon-8114d1fc.png">
-        <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-2459343d.css">
-        <link rel="stylesheet" href="css/chrome-ae938929.css">
-        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-2459343d.css">
+        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="docs/custom-a69f6233.css">
+        <link rel="stylesheet" href="../docs/custom-a69f6233.css">
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "";
+            const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-9b05464c.js";
+            window.path_to_searchindex_js = "../searchindex-9b05464c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-69e2a819.js"></script>
+        <script src="../toc-69e2a819.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -106,7 +106,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -141,7 +141,7 @@
                     <h1 class="menu-title">NoKV Docs</h1>
 
                     <div class="right-buttons">
-                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
@@ -178,300 +178,268 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="percolator-distributed-transaction-design"><a class="header" href="#percolator-distributed-transaction-design">Percolator Distributed Transaction Design</a></h1>
-<p>This document explains NoKV’s distributed transaction path implemented by <code>percolator/</code> and executed through <code>raftstore</code>.</p>
-<p>The scope here is the current code path:</p>
+                        <h1 id="2026-04-05-range-filter从-grf-得到启发但不照搬-grf"><a class="header" href="#2026-04-05-range-filter从-grf-得到启发但不照搬-grf">2026-04-05 Range Filter：从 GRF 得到启发，但不照搬 GRF</a></h1>
+<blockquote>
+<p>状态：当前 NoKV 单机引擎读路径优化的设计说明。本文档解释我们为什么要做 <code>range filter</code>、从 GRF 论文里具体借了什么、为什么没有直接实现 full GRF，以及当前方案在 NoKV 里的边界和收益。</p>
+</blockquote>
+<h2 id="导读"><a class="header" href="#导读">导读</a></h2>
 <ul>
-<li><code>Prewrite</code></li>
-<li><code>Commit</code></li>
-<li><code>BatchRollback</code></li>
-<li><code>ResolveLock</code></li>
-<li><code>CheckTxnStatus</code></li>
-<li>MVCC read visibility (<code>KvGet</code>/<code>KvScan</code> through <code>percolator.Reader</code>)</li>
+<li>🧭 主题：NoKV 为什么需要 <code>range filter</code>，以及为什么它是一个更保守的 GRF-inspired 设计。</li>
+<li>🧱 核心对象：LSM level、table span、block range、point lookup、bounded scan。</li>
+<li>🔁 调用链：<code>先裁剪候选表 -&gt; 再裁剪表内 block 范围 -&gt; 最后进入真正的 table/block probe</code>。</li>
+<li>📚 参考对象：GRF、Bloom Filter、传统 LSM non-overlap level pruning。</li>
 </ul>
-<hr>
-<h2 id="1-where-it-runs"><a class="header" href="#1-where-it-runs">1. Where It Runs</a></h2>
-<p>Percolator logic is executed on the Raft apply path:</p>
+<h2 id="1-为什么要做这件事"><a class="header" href="#1-为什么要做这件事">1. 为什么要做这件事</a></h2>
+<p>NoKV 当前的单机引擎，已经有比较完整的：</p>
+<ul>
+<li>memtable</li>
+<li>WAL</li>
+<li>leveled compaction</li>
+<li>ingest buffer</li>
+<li>block/index cache</li>
+</ul>
+<p>但只做到这里，还不够。</p>
+<p>在读路径上，LSM 系统经常会浪费大量时间在两个问题上：</p>
 <ol>
-<li>Client sends NoKV RPC (<code>KvPrewrite</code>, <code>KvCommit</code>, …).</li>
-<li><code>raftstore/kv/service.go</code> wraps it into a <code>RaftCmdRequest</code>.</li>
-<li>Store proposes command through Raft.</li>
-<li>On apply, <code>raftstore/kv/apply.go</code> dispatches to <code>percolator.*</code>.</li>
+<li>哪些 SST 根本不值得看</li>
+<li>某个 SST 里，哪些 block 根本不值得扫</li>
 </ol>
-<pre class="mermaid">sequenceDiagram
-    participant C as raftstore/client
-    participant S as kv.Service
-    participant R as Raft (leader-&gt;followers)
-    participant A as kv.Apply
-    participant P as percolator
-    participant DB as NoKV DB
-    C-&gt;&gt;S: KvPrewrite/KvCommit...
-    S-&gt;&gt;R: ProposeCommand(RaftCmdRequest)
-    R-&gt;&gt;A: Apply committed log
-    A-&gt;&gt;P: percolator.Prewrite/Commit...
-    P-&gt;&gt;DB: CFDefault/CFLock/CFWrite reads+writes
-    A--&gt;&gt;S: RaftCmdResponse
-    S--&gt;&gt;C: NoKV RPC response
+<p>这在下面几类场景里尤其明显：</p>
+<ul>
+<li>point miss</li>
+<li>point hit，但 level 里表很多</li>
+<li>很窄的 bounded scan</li>
+<li>读偏 workload 下的大量短读</li>
+</ul>
+<p>如果不做额外裁剪，系统即使最终只需要访问一个很小的 key range，也可能先付出很多无效的 table probe、index decode 和 block 边界判断成本。</p>
+<p>所以 <code>range filter</code> 的目标从一开始就不是“做一个更聪明的 filter”，而是非常务实地回答：</p>
+<blockquote>
+<p>在不改变恢复语义、不增加新的 durable 元数据、不过度绑定 compaction 策略的前提下，能不能把这部分无效 probe 明显砍掉？</p>
+</blockquote>
+<h2 id="2-我们从-grf-真正借了什么"><a class="header" href="#2-我们从-grf-真正借了什么">2. 我们从 GRF 真正借了什么</a></h2>
+<p>GRF 论文给我们的启发，不是“照着实现一套全局编码结构”，而是下面三个更本质的判断：</p>
+<ol>
+<li>读路径里真正贵的，很多时候不是最终访问那一个 block，而是前面的候选集筛选成本</li>
+<li>只要 pruning 足够早，哪怕不是最强版本，也能拿到可观收益</li>
+<li>这种 pruning 如果要工程上可落地，就必须把 correctness 放在第一位，宁可保守，也不能误剪</li>
+</ol>
+<p>可以把这件事简单理解成：</p>
+<pre class="mermaid">flowchart LR
+    Query["读请求"] --&gt; Naive["逐层找表\n逐表看范围\n逐表进 block"]
+    Query --&gt; RF["先做范围裁剪\n再进真正 probe"]
 </pre>
 
-<p>Key files:</p>
-<ul>
-<li><a href="../percolator/txn.go"><code>percolator/txn.go</code></a></li>
-<li><a href="../percolator/reader.go"><code>percolator/reader.go</code></a></li>
-<li><a href="../percolator/codec.go"><code>percolator/codec.go</code></a></li>
-<li><a href="../percolator/latch/latch.go"><code>percolator/latch/latch.go</code></a></li>
-<li><a href="../raftstore/kv/apply.go"><code>raftstore/kv/apply.go</code></a></li>
-<li><a href="../raftstore/client/client.go"><code>raftstore/client/client.go</code></a></li>
-</ul>
-<h3 id="11-rpc-to-percolator-function-mapping"><a class="header" href="#11-rpc-to-percolator-function-mapping">1.1 RPC to Percolator Function Mapping</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>NoKV RPC</th><th><code>kv.Apply</code> branch</th><th>Percolator function</th></tr>
-</thead>
-<tbody>
-<tr><td><code>KvPrewrite</code></td><td><code>CMD_PREWRITE</code></td><td><code>Prewrite</code></td></tr>
-<tr><td><code>KvCommit</code></td><td><code>CMD_COMMIT</code></td><td><code>Commit</code></td></tr>
-<tr><td><code>KvBatchRollback</code></td><td><code>CMD_BATCH_ROLLBACK</code></td><td><code>BatchRollback</code></td></tr>
-<tr><td><code>KvResolveLock</code></td><td><code>CMD_RESOLVE_LOCK</code></td><td><code>ResolveLock</code></td></tr>
-<tr><td><code>KvCheckTxnStatus</code></td><td><code>CMD_CHECK_TXN_STATUS</code></td><td><code>CheckTxnStatus</code></td></tr>
-<tr><td><code>KvGet</code></td><td><code>CMD_GET</code></td><td><code>Reader.GetLock</code> + <code>Reader.GetValue</code></td></tr>
-<tr><td><code>KvScan</code></td><td><code>CMD_SCAN</code></td><td><code>Reader.GetLock</code> + CFWrite iteration + <code>GetInternalEntry</code></td></tr>
-</tbody>
-</table>
-</div>
-<hr>
-<h2 id="2-mvcc-data-model"><a class="header" href="#2-mvcc-data-model">2. MVCC Data Model</a></h2>
-<p>NoKV uses three MVCC column families:</p>
-<ul>
-<li><code>CFDefault</code>: stores user values at <code>start_ts</code></li>
-<li><code>CFLock</code>: stores lock metadata at fixed <code>lockColumnTs = MaxUint64</code></li>
-<li><code>CFWrite</code>: stores commit records at <code>commit_ts</code></li>
-</ul>
-<h3 id="21-lock-record"><a class="header" href="#21-lock-record">2.1 Lock Record</a></h3>
-<p><code>percolator.Lock</code> (encoded by <code>EncodeLock</code>):</p>
-<ul>
-<li><code>Primary</code></li>
-<li><code>Ts</code> (start timestamp)</li>
-<li><code>TTL</code></li>
-<li><code>Kind</code> (<code>Put/Delete/Lock</code>)</li>
-<li><code>MinCommitTs</code></li>
-</ul>
-<h3 id="22-write-record"><a class="header" href="#22-write-record">2.2 Write Record</a></h3>
-<p><code>percolator.Write</code> (encoded by <code>EncodeWrite</code>):</p>
-<ul>
-<li><code>Kind</code></li>
-<li><code>StartTs</code></li>
-<li><code>ShortValue</code> (codec supports it; current commit path does not populate it)</li>
-</ul>
-<hr>
-<h2 id="3-concurrency-control-latches"><a class="header" href="#3-concurrency-control-latches">3. Concurrency Control: Latches</a></h2>
-<p>Before mutating keys, percolator acquires striped latches:</p>
-<ul>
-<li><code>latch.Manager</code> hashes keys to stripe mutexes.</li>
-<li>Stripes are deduplicated and acquired in sorted order to avoid deadlocks.</li>
-<li>Guard releases in reverse order.</li>
-</ul>
-<p>In <code>raftstore/kv</code>, latches are passed explicitly:</p>
-<ul>
-<li><code>NewEntryApplier</code> creates one <code>latch.NewManager(512)</code> and reuses it.</li>
-<li><code>Apply</code> / <code>NewApplier</code> accept an injected manager; <code>nil</code> falls back to <code>latch.NewManager(512)</code>.</li>
-</ul>
-<p>This serializes conflicting apply operations on overlapping keys in one node.</p>
-<hr>
-<h2 id="4-two-phase-commit-flow"><a class="header" href="#4-two-phase-commit-flow">4. Two-Phase Commit Flow</a></h2>
-<p>Client side (<code>raftstore/client.Client.TwoPhaseCommit</code>):</p>
+<p>GRF 告诉我们的，是“前置裁剪值得认真做”；但它并没有强迫我们必须把整篇论文原样搬进 NoKV。</p>
+<h2 id="3-为什么没有直接实现-full-grf"><a class="header" href="#3-为什么没有直接实现-full-grf">3. 为什么没有直接实现 full GRF</a></h2>
+<p>如果照论文完整实现，我们理论上可以得到更强的全局 pruning 能力。但这会把当前 NoKV 拉进另一类复杂度里：</p>
 <ol>
-<li>Group mutations by region.</li>
-<li>Prewrite primary region.</li>
-<li>Prewrite secondary regions.</li>
-<li>Commit primary region.</li>
-<li>Commit secondary regions.</li>
+<li>要引入更强的全局 filter 元数据</li>
+<li>要把 filter 生命周期更紧地绑定到 compaction shape</li>
+<li>要考虑 version / snapshot / rebuild 的额外维护成本</li>
+<li>要决定这些元数据是内存态、持久态，还是两者混合</li>
 </ol>
-<pre class="mermaid">sequenceDiagram
-    participant Cli as Client
-    participant R1 as Region(primary)
-    participant R2 as Region(secondary)
-    Cli-&gt;&gt;R1: Prewrite(primary + local muts)
-    Cli-&gt;&gt;R2: Prewrite(secondary muts)
-    Cli-&gt;&gt;R1: Commit(keys,startTs,commitTs)
-    Cli-&gt;&gt;R2: Commit(keys,startTs,commitTs)
+<p>而 NoKV 当前并不需要为了一个读路径优化，把整个恢复和元数据系统一起复杂化。</p>
+<p>更具体地说，当前 NoKV 还在几个更基础的点上持续演进：</p>
+<ul>
+<li>L0 overlap 形态</li>
+<li>compaction 债务控制</li>
+<li>ingest buffer 与 main level 的关系</li>
+<li>cache / block load / iterator 热路径</li>
+</ul>
+<p>在这个阶段直接做 full GRF，风险很高：</p>
+<ul>
+<li>容易把 filter 绑到还没完全稳定的 LSM shape 上</li>
+<li>容易新增一层持久化和 rebuild 责任</li>
+<li>容易让读路径优化反过来主导 compaction 设计</li>
+</ul>
+<p>这不是我们想要的。</p>
+<p>所以 NoKV 当前的取舍是：</p>
+<blockquote>
+<p>先拿 GRF 最值得的那部分收益，也就是“更早做范围裁剪”；<br>但不为此引入新的恢复责任和复杂持久化语义。</p>
+</blockquote>
+<h2 id="4-当前-nokv-的设计边界"><a class="header" href="#4-当前-nokv-的设计边界">4. 当前 NoKV 的设计边界</a></h2>
+<p>当前 <code>range filter</code> 的边界非常明确：</p>
+<ul>
+<li><code>in-memory</code></li>
+<li><code>advisory</code></li>
+<li><code>correctness-first</code></li>
+<li><code>table-level pruning + table-internal block-range pruning</code></li>
+</ul>
+<p>它不是：</p>
+<ul>
+<li>全局 authoritative filter</li>
+<li>persisted metadata</li>
+<li>full shape encoding</li>
+<li>compaction policy controller</li>
+</ul>
+<p>也就是说，它从一开始就不是“真相源”，而只是一个更聪明的读路径裁剪层。</p>
+<h2 id="5-我们最终采用的结构"><a class="header" href="#5-我们最终采用的结构">5. 我们最终采用的结构</a></h2>
+<p>当前设计可以概括成两段式裁剪：</p>
+<h3 id="第一段先裁剪表"><a class="header" href="#第一段先裁剪表">第一段：先裁剪表</a></h3>
+<p>对每个 level，我们维护一组表的 key span。</p>
+<p>对于 non-overlap level：</p>
+<ul>
+<li>可以更激进地缩小候选表范围</li>
+<li>point lookup 往往会落到极少量候选表，很多时候就是一个</li>
+</ul>
+<p>对于 overlap level 或过小 level：</p>
+<ul>
+<li>走更保守的策略</li>
+<li>不强求 filter 一定生效</li>
+</ul>
+<h3 id="第二段再裁剪表内-block-范围"><a class="header" href="#第二段再裁剪表内-block-范围">第二段：再裁剪表内 block 范围</a></h3>
+<p>当某张表已经成为候选之后，我们并不直接无脑扫整张表，而是继续利用 table index 里的 block base key 信息，把真正需要进入的 block 范围缩窄。</p>
+<p>整体形状如下：</p>
+<pre class="mermaid">flowchart TD
+    Q["Point Lookup / Narrow Scan"] --&gt; L["按 level 选择候选表"]
+    L --&gt; T["range filter 裁剪 table span"]
+    T --&gt; B["在候选表内裁剪 block range"]
+    B --&gt; P["真正进入 table/block probe"]
 </pre>
 
-<hr>
-<h2 id="5-write-side-operations"><a class="header" href="#5-write-side-operations">5. Write-Side Operations</a></h2>
-<h3 id="51-prewrite"><a class="header" href="#51-prewrite">5.1 Prewrite</a></h3>
-<p><code>Prewrite</code> runs mutation-by-mutation:</p>
+<p>这套结构很务实：</p>
+<ul>
+<li>第一段解决“这张表要不要看”</li>
+<li>第二段解决“这张表里哪些 block 要看”</li>
+</ul>
+<p>它没有试图一次性解决所有问题，但已经覆盖了当前最值钱的两层裁剪。</p>
+<h2 id="6-为什么这个设计更适合-nokv-当前阶段"><a class="header" href="#6-为什么这个设计更适合-nokv-当前阶段">6. 为什么这个设计更适合 NoKV 当前阶段</a></h2>
+<h3 id="61-不新增-durable-负担"><a class="header" href="#61-不新增-durable-负担">6.1 不新增 durable 负担</a></h3>
+<p>这是最重要的一点。</p>
+<p>当前 <code>range filter</code> 不需要：</p>
+<ul>
+<li>新 manifest 语义</li>
+<li>新 recovery 路径</li>
+<li>新 snapshot/install 负担</li>
+</ul>
+<p>表集合一旦变化，filter 就在现有 level ownership 边界内重建。这样读路径优化不会污染恢复模型。</p>
+<h3 id="62-对现有-lsm-结构侵入很小"><a class="header" href="#62-对现有-lsm-结构侵入很小">6.2 对现有 LSM 结构侵入很小</a></h3>
+<p>NoKV 已经有自己的：</p>
+<ul>
+<li>leveled compaction</li>
+<li>ingest buffer</li>
+<li>table install / replace</li>
+</ul>
+<p><code>range filter</code> 只依赖“当前 level 上有哪些表、它们的范围是什么”，而不要求系统先具备更强的 run ID、shape encoding 或跨版本索引。</p>
+<h3 id="63-correctness-很容易讲清楚"><a class="header" href="#63-correctness-很容易讲清楚">6.3 correctness 很容易讲清楚</a></h3>
+<p>我们现在坚持一个简单规则：</p>
+<blockquote>
+<p>只要不确定，就 fallback。</p>
+</blockquote>
+<p>也就是：</p>
+<ul>
+<li>overlap 时保守</li>
+<li>level 太小时保守</li>
+<li>算不准时保守</li>
+<li>永远不能 false-negative prune</li>
+</ul>
+<p>这条规则让 <code>range filter</code> 在工程上非常安全。</p>
+<h2 id="7-和-bloom-filter-的关系"><a class="header" href="#7-和-bloom-filter-的关系">7. 和 Bloom Filter 的关系</a></h2>
+<p>Bloom Filter 解决的问题是：</p>
+<ul>
+<li>这张表里大概率有没有这个 key</li>
+</ul>
+<p><code>range filter</code> 解决的问题是：</p>
+<ul>
+<li>这张表值不值得先去看</li>
+<li>这张表里哪些 block 值不值得先去碰</li>
+</ul>
+<p>两者不是替代关系，而是不同层次的裁剪。</p>
+<p>可以粗略理解成：</p>
+<pre class="mermaid">flowchart LR
+    Query["读请求"] --&gt; RF["Range Filter\n先裁剪候选表和 block 范围"]
+    RF --&gt; BF["Bloom Filter\n判断候选表是否可能命中"]
+    BF --&gt; IO["真正访问 block / value"]
+</pre>
+
+<p><code>range filter</code> 更像“读路径计划层”的 pruning，Bloom 更像“单表内部 membership 层”的 pruning。</p>
+<h2 id="8-这个设计实际带来了什么收益"><a class="header" href="#8-这个设计实际带来了什么收益">8. 这个设计实际带来了什么收益</a></h2>
+<p>当前收益最明确的场景有：</p>
+<ul>
+<li>point miss</li>
+<li>point hit on many-table non-overlap levels</li>
+<li>narrow bounded scan</li>
+<li>读偏 workload</li>
+</ul>
+<p>它不会自动把所有 workload 都变快。</p>
+<p>特别是这些场景，收益没有那么直接：</p>
+<ul>
+<li>L0 overlap 很重时</li>
+<li>scan 很长时</li>
+<li>block load 或 cache miss 才是主要成本时</li>
+<li>mixed workload 下 compaction debt 已经成为主瓶颈时</li>
+</ul>
+<p>这也是为什么我们现在对它的定位很克制：</p>
+<blockquote>
+<p>它是一个有效的 read-path pruning 层，<br>不是整个读路径性能的唯一答案。</p>
+</blockquote>
+<h2 id="9-设计理念"><a class="header" href="#9-设计理念">9. 设计理念</a></h2>
+<p>这次 <code>range filter</code> 设计里，最重要的理念有三条。</p>
+<h3 id="91-借论文的结构判断不照搬论文的全部机制"><a class="header" href="#91-借论文的结构判断不照搬论文的全部机制">9.1 借论文的结构判断，不照搬论文的全部机制</a></h3>
+<p>论文的价值在于指出一个方向，而不是强迫系统按论文的全部假设生长。</p>
+<h3 id="92-优先拿最便宜的早期收益"><a class="header" href="#92-优先拿最便宜的早期收益">9.2 优先拿“最便宜的早期收益”</a></h3>
+<p>相比一上来做 persisted global filter，先把：</p>
+<ul>
+<li>表级裁剪</li>
+<li>表内 block-range 裁剪</li>
+</ul>
+<p>做扎实，性价比更高。</p>
+<h3 id="93-读路径优化不能反向污染恢复和元数据设计"><a class="header" href="#93-读路径优化不能反向污染恢复和元数据设计">9.3 读路径优化不能反向污染恢复和元数据设计</a></h3>
+<p>这条对 NoKV 很重要。</p>
+<p>NoKV 现在的工程主线不是“某个 filter 多先进”，而是：</p>
+<ul>
+<li>单机引擎边界清楚</li>
+<li>恢复模型清楚</li>
+<li>从单机到分布式可连续演进</li>
+</ul>
+<p>所以任何优化，只要开始逼迫：</p>
+<ul>
+<li>manifest 变复杂</li>
+<li>compaction 被 filter 绑架</li>
+<li>recovery 多出新责任</li>
+</ul>
+<p>就要非常谨慎。</p>
+<h2 id="10-参考对象"><a class="header" href="#10-参考对象">10. 参考对象</a></h2>
+<ul>
+<li>GRF: A Global Range Filter for LSM-Trees with Shape Encoding</li>
+<li>Bloom Filter 在 LSM 中的传统用法</li>
+<li>NoKV 当前 leveled compaction + ingest buffer 的工程边界</li>
+</ul>
+<h2 id="11-这次记录了什么"><a class="header" href="#11-这次记录了什么">11. 这次记录了什么</a></h2>
+<p>这篇 note 不是在宣布一个全新 feature，而是在把当前 <code>range filter</code> 的设计边界正式写清楚：</p>
+<ul>
+<li>灵感来自 GRF</li>
+<li>但当前实现不是 full GRF</li>
+<li>当前是更保守、correctness-first、工程上更稳的 pruning 方案</li>
+</ul>
+<h2 id="12-还没解决什么"><a class="header" href="#12-还没解决什么">12. 还没解决什么</a></h2>
+<p>当前还没解决的点也很明确：</p>
 <ol>
-<li>Check existing lock on key:
+<li><code>L0</code> overlap heavy 场景下，裁剪能力仍然保守</li>
+<li>还没有 persisted / global range filter</li>
+<li>还没有更强的 shape-aware pruning</li>
+<li>读路径的剩余成本仍然可能来自：
 <ul>
-<li>if lock exists with different <code>Ts</code> -&gt; <code>KeyError.Locked</code></li>
-</ul>
-</li>
-<li>Check latest committed write:
-<ul>
-<li>if <code>commit_ts &gt;= req.start_version</code> -&gt; <code>WriteConflict</code></li>
-</ul>
-</li>
-<li>Apply data intent:
-<ul>
-<li><code>Put</code>: write value into <code>CFDefault</code> at <code>start_ts</code></li>
-<li><code>Delete</code>/<code>Lock</code>: delete default value at <code>start_ts</code> (if exists)</li>
-</ul>
-</li>
-<li>Write lock into <code>CFLock</code> at <code>lockColumnTs</code></li>
-</ol>
-<h3 id="52-commit"><a class="header" href="#52-commit">5.2 Commit</a></h3>
-<p>For each key:</p>
-<ol>
-<li>Read lock</li>
-<li>If no lock:
-<ul>
-<li>if write with same <code>start_ts</code> exists -&gt; idempotent success</li>
-<li>else -&gt; abort (<code>lock not found</code>)</li>
-</ul>
-</li>
-<li>If lock <code>Ts != start_version</code> -&gt; <code>KeyError.Locked</code></li>
-<li><code>commitKey</code>:
-<ul>
-<li>if <code>min_commit_ts &gt; commit_version</code> -&gt; <code>CommitTsExpired</code></li>
-<li>if write with same <code>start_ts</code> already exists:
-<ul>
-<li>rollback write -&gt; abort</li>
-<li>write with different commit ts -&gt; treat success, clean lock</li>
-<li>same commit ts -&gt; success</li>
-</ul>
-</li>
-<li>else write <code>CFWrite[key@commit_ts] = {kind,start_ts}</code></li>
-<li>remove lock from <code>CFLock</code></li>
+<li>block load</li>
+<li>cache miss</li>
+<li>iterator 组装</li>
+<li>compaction debt</li>
 </ul>
 </li>
 </ol>
-<h3 id="53-batchrollback"><a class="header" href="#53-batchrollback">5.3 BatchRollback</a></h3>
-<p>For each key:</p>
-<ol>
-<li>If already has write at <code>start_ts</code>:
-<ul>
-<li>rollback marker already exists -&gt; success</li>
-<li>non-rollback write exists -&gt; success (already committed)</li>
-</ul>
-</li>
-<li>Remove lock (if any)</li>
-<li>Remove default value at <code>start_ts</code> (if any)</li>
-<li>Write rollback marker to <code>CFWrite</code> at <code>start_ts</code></li>
-</ol>
-<h3 id="54-resolvelock"><a class="header" href="#54-resolvelock">5.4 ResolveLock</a></h3>
-<ul>
-<li><code>commit_version == 0</code> -&gt; rollback matching locks</li>
-<li><code>commit_version &gt; 0</code> -&gt; commit matching locks</li>
-<li>Returns number of resolved keys</li>
-</ul>
-<hr>
-<h2 id="6-transaction-status-check"><a class="header" href="#6-transaction-status-check">6. Transaction Status Check</a></h2>
-<p><code>CheckTxnStatus</code> targets the primary key and decides whether txn is alive, committed, or should be rolled back.</p>
-<p>Decision order:</p>
-<ol>
-<li>Read lock on primary</li>
-<li>If lock exists but <code>lock.ts != req.lock_ts</code> -&gt; <code>KeyError.Locked</code></li>
-<li>If lock exists and TTL expired (<code>current_ts &gt;= lock.ts + ttl</code>):
-<ul>
-<li>rollback primary</li>
-<li>action = <code>TTLExpireRollback</code></li>
-</ul>
-</li>
-<li>If lock exists and caller pushes timestamp:
-<ul>
-<li><code>min_commit_ts = max(min_commit_ts, caller_start_ts+1)</code></li>
-<li>action = <code>MinCommitTsPushed</code></li>
-</ul>
-</li>
-<li>If no lock, check write by <code>start_ts</code>:
-<ul>
-<li>committed write -&gt; return <code>commit_version</code></li>
-<li>rollback write -&gt; action <code>LockNotExistRollback</code></li>
-</ul>
-</li>
-<li>If no lock and no write, and <code>rollback_if_not_exist</code> is true:
-<ul>
-<li>write rollback marker</li>
-<li>action <code>LockNotExistRollback</code></li>
-</ul>
-</li>
-</ol>
-<hr>
-<h2 id="7-read-path-semantics-mvcc-visibility"><a class="header" href="#7-read-path-semantics-mvcc-visibility">7. Read Path Semantics (MVCC Visibility)</a></h2>
-<p><code>KvGet</code> and <code>KvScan</code> read through <code>percolator.Reader</code>:</p>
-<ol>
-<li>Check lock first:
-<ul>
-<li>if lock exists and <code>read_ts &gt;= lock.ts</code>, return locked error</li>
-</ul>
-</li>
-<li>Find visible write in <code>CFWrite</code>:
-<ul>
-<li>latest <code>commit_ts &lt;= read_ts</code></li>
-</ul>
-</li>
-<li>Interpret write kind:
-<ul>
-<li><code>Delete</code>/<code>Rollback</code> =&gt; not found</li>
-<li><code>Put</code> =&gt; read value from <code>CFDefault</code> at <code>start_ts</code></li>
-</ul>
-</li>
-</ol>
-<p>Notes:</p>
-<ul>
-<li><code>KvScan</code> currently rejects reverse scan.</li>
-<li><code>scanWrites</code> uses internal iterator over <code>CFWrite</code>.</li>
-</ul>
-<hr>
-<h2 id="8-error-and-idempotency-behavior"><a class="header" href="#8-error-and-idempotency-behavior">8. Error and Idempotency Behavior</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Operation</th><th>Idempotency/Conflict behavior</th></tr>
-</thead>
-<tbody>
-<tr><td>Prewrite</td><td>Rejects lock conflicts and write conflicts; returns per-key <code>KeyError</code> list.</td></tr>
-<tr><td>Commit</td><td>Idempotent for already committed keys with same <code>start_ts</code>; stale/missing lock may abort.</td></tr>
-<tr><td>BatchRollback</td><td>Safe to repeat; rollback marker prevents duplicate side effects.</td></tr>
-<tr><td>ResolveLock</td><td>Safe to retry per key set; resolves only matching <code>start_ts</code> locks.</td></tr>
-<tr><td>CheckTxnStatus</td><td>May push <code>min_commit_ts</code>, rollback expired primary lock, or return committed version.</td></tr>
-</tbody>
-</table>
-</div>
-<hr>
-<h2 id="9-current-operational-boundaries"><a class="header" href="#9-current-operational-boundaries">9. Current Operational Boundaries</a></h2>
-<ul>
-<li>Percolator execution is tied to NoKV RPC + Raft apply path, with the command shape still following the TinyKV/TiKV MVCC model.</li>
-<li>Latch scope is process-local when one store shares a single <code>latch.Manager</code>;
-region correctness still comes from Raft ordering.</li>
-<li><code>Write.ShortValue</code> and <code>Write.ExpiresAt</code> are codec fields; current commit path
-stores primary value bytes in <code>CFDefault</code> and reads from there when short value
-is not present.</li>
-</ul>
-<hr>
-<h2 id="10-validation-and-tests"><a class="header" href="#10-validation-and-tests">10. Validation and Tests</a></h2>
-<p>Primary coverage:</p>
-<ul>
-<li><a href="../percolator/txn_test.go"><code>percolator/txn_test.go</code></a></li>
-<li><a href="../raftstore/kv/service_test.go"><code>raftstore/kv/service_test.go</code></a></li>
-<li><a href="../raftstore/client/client_test.go"><code>raftstore/client/client_test.go</code></a></li>
-<li><a href="../raftstore/server/server_test.go"><code>raftstore/server/server_test.go</code></a></li>
-</ul>
-<p>These tests cover 2PC happy path, lock conflicts, status checks, resolve/rollback behavior, and client region-aware retries.</p>
+<p>所以这篇文档的结论不是“已经做完了”，而是：</p>
+<blockquote>
+<p>当前版本已经拿到了最稳妥的一段收益，<br>但仍然给后续更强的 range-aware 设计保留了空间。</p>
+</blockquote>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="hotring.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../notes/2026-04-03-delos-lite-metadata-root-roadmap.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="raftstore.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -479,13 +447,10 @@ is not present.</li>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="hotring.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../notes/2026-04-03-delos-lite-metadata-root-roadmap.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="raftstore.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                    </a>
             </nav>
 
         </div>
@@ -503,17 +468,17 @@ is not present.</li>
         </script>
 
 
-        <script src="elasticlunr-ef4e11c1.min.js"></script>
-        <script src="mark-09e88c2c.min.js"></script>
-        <script src="searcher-c2a407aa.js"></script>
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-c2a407aa.js"></script>
 
-        <script src="clipboard-1626706a.min.js"></script>
-        <script src="highlight-abc7f01d.js"></script>
-        <script src="book-a0b12cfe.js"></script>
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="docs/custom-732fa610.js"></script>
-        <script src="docs/mermaid-init-8a66ee6c.js"></script>
+        <script src="../docs/custom-732fa610.js"></script>
+        <script src="../docs/mermaid-init-8a66ee6c.js"></script>
 
 
 

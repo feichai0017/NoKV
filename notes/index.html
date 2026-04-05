@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e201db35.js";
+            window.path_to_searchindex_js = "../searchindex-9b05464c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8bd88094.js"></script>
+        <script src="../toc-69e2a819.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -285,13 +285,24 @@
 
   </div>
 
+  
+<div class="blog-card">
+    <span class="blog-date">2026-04-05</span>
+    
+<h3><a href="2026-04-05-range-filter-from-grf.html">Range Filter：从 GRF 得到启发，但不照搬 GRF</a></h3>
+
+    
+<p>解释 NoKV 为什么需要 read-path pruning、GRF 到底提供了什么启发、为什么当前实现选择更保守的 in-memory advisory 方案，以及它与 LSM 读路径的关系。</p>
+
+  </div>
+
 </div>
 
 <h2 id="这里应该写什么"><a class="header" href="#这里应该写什么">这里应该写什么</a></h2>
 <ul>
 <li>参考文档放不下的设计取舍</li>
 <li>有明确症状、错误假设和最终修复的调试记录</li>
-<li>带 benchmark 背景和代码路径分析的性能调查</li>
+<li>带 benchmark 背景和设计解释的性能调查</li>
 <li>解释包边界为何变化的重构说明</li>
 </ul>
 <h2 id="写作风格"><a class="header" href="#写作风格">写作风格</a></h2>
@@ -300,9 +311,10 @@
 <li>从具体问题或设计问题开始</li>
 <li>先把系统边界讲清楚</li>
 <li>讲清 tradeoff 和被否决的方案</li>
-<li>需要时放图、调用链、代码路径和命令</li>
+<li>需要时放图、调用链、对象关系和命令</li>
 <li>最后说明代码里已经改了什么、还有什么没解决</li>
 </ol>
+<p><code>notes</code> 的重点是解释设计和演进，而不是把正文写成文件导航。除非某个模块名或文件名对理解确实必要，否则不需要强制罗列具体代码路径；相比“这个函数在哪”，更重要的是“为什么这样分层、为什么不选别的路、边界到底是什么”。</p>
 <p>建议在最近的设计类 note 顶部增加一个简短导读块，至少包含：</p>
 <ul>
 <li>🧭 主题</li>
@@ -328,7 +340,7 @@
 
 ## 我们最终采用的设计
 
-## 关键代码路径
+## 关键对象与边界
 
 ## 图示与调用逻辑
 
@@ -344,7 +356,7 @@
 <ol>
 <li>创建 <code>docs/notes/YYYY-MM-DD-short-title.md</code></li>
 <li>把它加到 <code>docs/SUMMARY.md</code></li>
-<li>优先写清楚图、代码路径、调用链和设计理念，少写空泛描述</li>
+<li>优先写清楚图、对象关系、调用链和设计理念，少写空泛描述</li>
 <li><code>notes</code> 统一使用中文撰写；必要时保留英文术语，但不要把正文写成中英混杂的半成品</li>
 </ol>
 
