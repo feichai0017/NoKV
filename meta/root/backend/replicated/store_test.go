@@ -6,7 +6,6 @@ import (
 	"time"
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
@@ -203,19 +202,19 @@ func TestReplicatedStoreFenceAllocator(t *testing.T) {
 		followerID = 2
 	}
 
-	idFence, err := stores[leaderID].FenceAllocator(rootpkg.AllocatorKindID, 123)
+	idFence, err := stores[leaderID].FenceAllocator(rootstate.AllocatorKindID, 123)
 	require.NoError(t, err)
 	require.Equal(t, uint64(123), idFence)
 
-	tsoFence, err := stores[leaderID].FenceAllocator(rootpkg.AllocatorKindTSO, 456)
+	tsoFence, err := stores[leaderID].FenceAllocator(rootstate.AllocatorKindTSO, 456)
 	require.NoError(t, err)
 	require.Equal(t, uint64(456), tsoFence)
 
-	idFence, err = stores[leaderID].FenceAllocator(rootpkg.AllocatorKindID, 120)
+	idFence, err = stores[leaderID].FenceAllocator(rootstate.AllocatorKindID, 120)
 	require.NoError(t, err)
 	require.Equal(t, uint64(123), idFence)
 
-	_, err = stores[leaderID].FenceAllocator(rootpkg.AllocatorKind(99), 1)
+	_, err = stores[leaderID].FenceAllocator(rootstate.AllocatorKind(99), 1)
 	require.Error(t, err)
 
 	require.Eventually(t, func() bool {

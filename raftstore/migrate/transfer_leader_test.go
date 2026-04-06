@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	adminclient "github.com/feichai0017/NoKV/raftstore/admin"
 	"github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/stretchr/testify/require"
 )
@@ -24,7 +25,7 @@ func TestTransferLeaderWaitsForTargetLeadership(t *testing.T) {
 			{Known: true, Hosted: true, LocalPeerId: 22, AppliedIndex: 1, Leader: true},
 		},
 	}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		switch addr {
 		case "leader":
 			return leader, func() error { return nil }, nil
@@ -54,7 +55,7 @@ func TestTransferLeaderTimesOutWhenLeaderDoesNotMove(t *testing.T) {
 	leader := &fakeAdminClient{
 		statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, LeaderPeerId: 11, Region: &metapb.RegionDescriptor{RegionId: 8}}},
 	}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		require.Equal(t, "leader", addr)
 		return leader, func() error { return nil }, nil
 	}
@@ -78,7 +79,7 @@ func TestTransferLeaderTimesOutWhenTargetNeverBecomesLeader(t *testing.T) {
 	target := &fakeAdminClient{
 		statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, Hosted: true, LocalPeerId: 22, AppliedIndex: 1, Leader: false}},
 	}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		switch addr {
 		case "leader":
 			return leader, func() error { return nil }, nil
@@ -119,7 +120,7 @@ func TestTransferLeaderWritesWorkdirCheckpoint(t *testing.T) {
 			{Known: true, Hosted: true, LocalPeerId: 22, AppliedIndex: 1, Leader: true},
 		},
 	}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		switch addr {
 		case "leader":
 			return leader, func() error { return nil }, nil
@@ -158,7 +159,7 @@ func TestTransferLeaderNoWaitDoesNotLeaveStartedCheckpoint(t *testing.T) {
 	require.NoError(t, mode.Write(workDir, mode.State{Mode: mode.ModeCluster, StoreID: 1, RegionID: 8, PeerID: 11}))
 
 	leader := &fakeAdminClient{}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		require.Equal(t, "leader", addr)
 		return leader, func() error { return nil }, nil
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
+	adminclient "github.com/feichai0017/NoKV/raftstore/admin"
 	"time"
 )
 
@@ -18,7 +19,7 @@ type TransferLeaderConfig struct {
 	WaitTimeout     time.Duration
 	PollInterval    time.Duration
 
-	Dial DialFunc
+	Dial adminclient.DialFunc
 }
 
 // TransferLeaderResult reports the observed state after one leader transfer.
@@ -48,7 +49,7 @@ func TransferLeader(ctx context.Context, cfg TransferLeaderConfig) (TransferLead
 		return TransferLeaderResult{}, fmt.Errorf("migrate: region and peer ids are required")
 	}
 	if cfg.Dial == nil {
-		cfg.Dial = defaultDial
+		cfg.Dial = adminclient.Dial
 	}
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = defaultExpandPollInterval
@@ -138,7 +139,7 @@ func TransferLeader(ctx context.Context, cfg TransferLeaderConfig) (TransferLead
 	return result, nil
 }
 
-func waitForLeaderTransfer(ctx context.Context, client AdminClient, regionID, peerID uint64, interval time.Duration, result *TransferLeaderResult) error {
+func waitForLeaderTransfer(ctx context.Context, client adminclient.Client, regionID, peerID uint64, interval time.Duration, result *TransferLeaderResult) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -162,7 +163,7 @@ func waitForLeaderTransfer(ctx context.Context, client AdminClient, regionID, pe
 	}
 }
 
-func waitForTargetLeader(ctx context.Context, client AdminClient, regionID, peerID uint64, interval time.Duration, result *TransferLeaderResult) error {
+func waitForTargetLeader(ctx context.Context, client adminclient.Client, regionID, peerID uint64, interval time.Duration, result *TransferLeaderResult) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {

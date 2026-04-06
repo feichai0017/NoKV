@@ -1,7 +1,6 @@
-package core
+package catalog
 
 import (
-	"errors"
 	pdview "github.com/feichai0017/NoKV/pd/view"
 )
 
@@ -14,6 +13,4 @@ var (
 	ErrRegionHeartbeatStale = pdview.ErrRegionHeartbeatStale
 	// ErrRegionRangeOverlap indicates the incoming region overlaps another region.
 	ErrRegionRangeOverlap = pdview.ErrRegionRangeOverlap
-	// ErrInvalidBatch indicates a requested allocation batch is invalid.
-	ErrInvalidBatch = errors.New("pd/core: invalid batch")
 )

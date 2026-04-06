@@ -5,6 +5,7 @@ import (
 	"fmt"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
+	adminclient "github.com/feichai0017/NoKV/raftstore/admin"
 	"time"
 )
 
@@ -18,7 +19,7 @@ type RemovePeerConfig struct {
 	WaitTimeout     time.Duration
 	PollInterval    time.Duration
 
-	Dial DialFunc
+	Dial adminclient.DialFunc
 }
 
 // RemovePeerResult reports the observed state after one remove-peer request.
@@ -46,7 +47,7 @@ func RemovePeer(ctx context.Context, cfg RemovePeerConfig) (RemovePeerResult, er
 		return RemovePeerResult{}, fmt.Errorf("migrate: region and peer ids are required")
 	}
 	if cfg.Dial == nil {
-		cfg.Dial = defaultDial
+		cfg.Dial = adminclient.Dial
 	}
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = defaultExpandPollInterval
@@ -136,7 +137,7 @@ func RemovePeer(ctx context.Context, cfg RemovePeerConfig) (RemovePeerResult, er
 	return result, nil
 }
 
-func waitForLeaderPeerRemoval(ctx context.Context, client AdminClient, regionID, peerID uint64, interval time.Duration, result *RemovePeerResult) error {
+func waitForLeaderPeerRemoval(ctx context.Context, client adminclient.Client, regionID, peerID uint64, interval time.Duration, result *RemovePeerResult) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -159,7 +160,7 @@ func waitForLeaderPeerRemoval(ctx context.Context, client AdminClient, regionID,
 	}
 }
 
-func waitForTargetRemoval(ctx context.Context, client AdminClient, regionID, peerID uint64, interval time.Duration, result *RemovePeerResult) error {
+func waitForTargetRemoval(ctx context.Context, client adminclient.Client, regionID, peerID uint64, interval time.Duration, result *RemovePeerResult) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {

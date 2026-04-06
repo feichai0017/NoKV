@@ -5,7 +5,6 @@ import (
 	"strings"
 	"sync"
 
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -147,7 +146,7 @@ func (s *Store) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) 
 }
 
 // FenceAllocator advances one global allocator fence monotonically.
-func (s *Store) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, error) {
+func (s *Store) FenceAllocator(kind rootstate.AllocatorKind, min uint64) (uint64, error) {
 	if s == nil {
 		return 0, nil
 	}
@@ -155,7 +154,7 @@ func (s *Store) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, 
 	state := s.state
 	s.mu.RUnlock()
 	switch kind {
-	case rootpkg.AllocatorKindID:
+	case rootstate.AllocatorKindID:
 		if state.IDFence >= min {
 			return state.IDFence, nil
 		}
@@ -164,7 +163,7 @@ func (s *Store) FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, 
 			return 0, err
 		}
 		return commit.State.IDFence, nil
-	case rootpkg.AllocatorKindTSO:
+	case rootstate.AllocatorKindTSO:
 		if state.TSOFence >= min {
 			return state.TSOFence, nil
 		}

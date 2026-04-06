@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	adminclient "github.com/feichai0017/NoKV/raftstore/admin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,7 +35,7 @@ func TestReadStatusWithRuntimeUsesSeedRegionID(t *testing.T) {
 			},
 		}},
 	}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		require.Equal(t, "leader", addr)
 		return admin, func() error { return nil }, nil
 	}
@@ -63,7 +64,7 @@ func TestReadStatusWithRuntimeCapturesRemoteError(t *testing.T) {
 	_, err := Init(InitConfig{WorkDir: dir, StoreID: 1, RegionID: 9, PeerID: 109})
 	require.NoError(t, err)
 
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		return nil, nil, fmt.Errorf("boom")
 	}
 
@@ -102,7 +103,7 @@ func TestBuildReportIncludesClusterSummary(t *testing.T) {
 			},
 		}},
 	}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		require.Equal(t, "leader", addr)
 		return admin, func() error { return nil }, nil
 	}

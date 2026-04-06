@@ -18,7 +18,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/feichai0017/NoKV/pd/core"
+	"github.com/feichai0017/NoKV/pd/catalog"
+	"github.com/feichai0017/NoKV/pd/idalloc"
 	"github.com/feichai0017/NoKV/pd/tso"
 )
 
@@ -125,7 +126,7 @@ func publishDescriptorEvent(t *testing.T, svc *Service, desc descriptor.Descript
 }
 
 func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
-	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 
 	storeResp, err := svc.StoreHeartbeat(context.Background(), &pdpb.StoreHeartbeatRequest{
 		StoreId:   1,
@@ -148,7 +149,7 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 }
 
 func TestServiceRemoveRegion(t *testing.T) {
-	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	err := publishDescriptorEvent(t, svc, testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 0)
 	require.NoError(t, err)
 
@@ -166,7 +167,7 @@ func TestServiceRemoveRegion(t *testing.T) {
 }
 
 func TestServiceRegionDescriptorUpdateRejectsStaleAndOverlap(t *testing.T) {
-	svc := NewService(core.NewCluster(), nil, nil)
+	svc := NewService(catalog.NewCluster(), nil, nil)
 	err := publishDescriptorEvent(t, svc, testDescriptor(1, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 2}, nil), 0)
 	require.NoError(t, err)
 
@@ -180,7 +181,7 @@ func TestServiceRegionDescriptorUpdateRejectsStaleAndOverlap(t *testing.T) {
 }
 
 func TestServiceAllocIDAndTSO(t *testing.T) {
-	svc := NewService(core.NewCluster(), core.NewIDAllocator(100), tso.NewAllocator(500))
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(100), tso.NewAllocator(500))
 
 	idResp, err := svc.AllocID(context.Background(), &pdpb.AllocIDRequest{Count: 3})
 	require.NoError(t, err)
@@ -222,7 +223,7 @@ func TestServiceRequestValidation(t *testing.T) {
 }
 
 func TestServiceRegionLivenessTouchesExistingRegion(t *testing.T) {
-	svc := NewService(core.NewCluster(), nil, nil)
+	svc := NewService(catalog.NewCluster(), nil, nil)
 	err := publishDescriptorEvent(t, svc, testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 0)
 	require.NoError(t, err)
 
@@ -236,7 +237,7 @@ func TestServiceRegionLivenessTouchesExistingRegion(t *testing.T) {
 }
 
 func TestServiceStoreHeartbeatReturnsLeaderTransferHint(t *testing.T) {
-	svc := NewService(core.NewCluster(), nil, nil)
+	svc := NewService(catalog.NewCluster(), nil, nil)
 	err := publishDescriptorEvent(t, svc, testDescriptor(100, []byte(""), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}}), 0)
 	require.NoError(t, err)
 
@@ -263,7 +264,7 @@ func TestServiceStoreHeartbeatReturnsLeaderTransferHint(t *testing.T) {
 }
 
 func TestServicePersistsRegionCatalog(t *testing.T) {
-	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	store := &fakeStorage{}
 	svc.SetStorage(store)
 
@@ -280,7 +281,7 @@ func TestServicePersistsRegionCatalog(t *testing.T) {
 }
 
 func TestServiceRegionLivenessSkipsTruthPersistence(t *testing.T) {
-	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	store := &fakeStorage{}
 	svc.SetStorage(store)
 
@@ -308,7 +309,7 @@ func TestServiceRegionLivenessSkipsTruthPersistence(t *testing.T) {
 }
 
 func TestServicePublishRootEvent(t *testing.T) {
-	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	store := &fakeStorage{}
 	svc.SetStorage(store)
 
@@ -335,7 +336,7 @@ func TestServicePublishRootEvent(t *testing.T) {
 }
 
 func TestServicePublishRootEventAppliedPeerChangeMarksPendingApplied(t *testing.T) {
-	cluster := core.NewCluster()
+	cluster := catalog.NewCluster()
 	target := testDescriptor(11, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 2}, []metaregion.Peer{
 		{StoreID: 1, PeerID: 101},
 		{StoreID: 2, PeerID: 201},
@@ -352,7 +353,7 @@ func TestServicePublishRootEventAppliedPeerChangeMarksPendingApplied(t *testing.
 			PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{target.RegionID: {Kind: rootstate.PendingPeerChangeAddition, StoreID: 2, PeerID: 201, Target: target}},
 		},
 	}
-	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	svc.SetStorage(store)
 
 	applied := rootevent.PeerAdded(target.RegionID, 2, 201, func() descriptor.Descriptor {
@@ -373,7 +374,7 @@ func TestServicePublishRootEventAppliedPeerChangeMarksPendingApplied(t *testing.
 }
 
 func TestServicePublishRootEventPersistsPeerPlan(t *testing.T) {
-	cluster := core.NewCluster()
+	cluster := catalog.NewCluster()
 	current := testDescriptor(12, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{
 		{StoreID: 1, PeerID: 101},
 	})
@@ -394,7 +395,7 @@ func TestServicePublishRootEventPersistsPeerPlan(t *testing.T) {
 			Descriptors:  map[uint64]descriptor.Descriptor{current.RegionID: current},
 		},
 	}
-	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	svc.SetStorage(store)
 
 	resp, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
@@ -411,7 +412,7 @@ func TestServicePublishRootEventPersistsPeerPlan(t *testing.T) {
 }
 
 func TestServicePublishRootEventSkipsDuplicatePeerPlan(t *testing.T) {
-	cluster := core.NewCluster()
+	cluster := catalog.NewCluster()
 	current := testDescriptor(13, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{
 		{StoreID: 1, PeerID: 101},
 	})
@@ -435,7 +436,7 @@ func TestServicePublishRootEventSkipsDuplicatePeerPlan(t *testing.T) {
 			},
 		},
 	}
-	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	svc.SetStorage(store)
 
 	resp, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
@@ -449,7 +450,7 @@ func TestServicePublishRootEventSkipsDuplicatePeerPlan(t *testing.T) {
 }
 
 func TestServicePublishRootEventSkipsCompletedPeerPlan(t *testing.T) {
-	cluster := core.NewCluster()
+	cluster := catalog.NewCluster()
 	target := testDescriptor(131, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 2}, []metaregion.Peer{
 		{StoreID: 1, PeerID: 101},
 		{StoreID: 2, PeerID: 201},
@@ -465,7 +466,7 @@ func TestServicePublishRootEventSkipsCompletedPeerPlan(t *testing.T) {
 			Descriptors:  map[uint64]descriptor.Descriptor{target.RegionID: target},
 		},
 	}
-	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	svc.SetStorage(store)
 
 	resp, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
@@ -477,7 +478,7 @@ func TestServicePublishRootEventSkipsCompletedPeerPlan(t *testing.T) {
 }
 
 func TestServicePublishRootEventRejectsConflictingPeerPlan(t *testing.T) {
-	cluster := core.NewCluster()
+	cluster := catalog.NewCluster()
 	current := testDescriptor(14, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{
 		{StoreID: 1, PeerID: 101},
 	})
@@ -507,7 +508,7 @@ func TestServicePublishRootEventRejectsConflictingPeerPlan(t *testing.T) {
 			},
 		},
 	}
-	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	svc.SetStorage(store)
 
 	_, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
@@ -519,7 +520,7 @@ func TestServicePublishRootEventRejectsConflictingPeerPlan(t *testing.T) {
 }
 
 func TestServicePublishRootEventRejectsMismatchedPeerApply(t *testing.T) {
-	cluster := core.NewCluster()
+	cluster := catalog.NewCluster()
 	current := testDescriptor(15, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{
 		{StoreID: 1, PeerID: 101},
 	})
@@ -549,7 +550,7 @@ func TestServicePublishRootEventRejectsMismatchedPeerApply(t *testing.T) {
 			},
 		},
 	}
-	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	svc.SetStorage(store)
 
 	_, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
@@ -561,7 +562,7 @@ func TestServicePublishRootEventRejectsMismatchedPeerApply(t *testing.T) {
 }
 
 func TestServicePublishRootEventSkipsDuplicateSplitPlan(t *testing.T) {
-	cluster := core.NewCluster()
+	cluster := catalog.NewCluster()
 	left := testDescriptor(41, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)
 	right := testDescriptor(42, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
 	left.RootEpoch = 6
@@ -583,7 +584,7 @@ func TestServicePublishRootEventSkipsDuplicateSplitPlan(t *testing.T) {
 			},
 		},
 	}
-	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	svc.SetStorage(store)
 
 	resp, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
@@ -595,7 +596,7 @@ func TestServicePublishRootEventSkipsDuplicateSplitPlan(t *testing.T) {
 }
 
 func TestServiceRefreshFromStorageReplacesPendingView(t *testing.T) {
-	cluster := core.NewCluster()
+	cluster := catalog.NewCluster()
 	left := testDescriptor(61, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)
 	right := testDescriptor(62, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
 	store := &fakeStorage{
@@ -611,7 +612,7 @@ func TestServiceRefreshFromStorageReplacesPendingView(t *testing.T) {
 			},
 		},
 	}
-	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	svc.SetStorage(store)
 
 	require.NoError(t, svc.RefreshFromStorage())
@@ -621,7 +622,7 @@ func TestServiceRefreshFromStorageReplacesPendingView(t *testing.T) {
 }
 
 func TestServiceListTransitionsReturnsOperatorView(t *testing.T) {
-	cluster := core.NewCluster()
+	cluster := catalog.NewCluster()
 	current := testDescriptor(160, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{
 		{StoreID: 1, PeerID: 101},
 	})
@@ -648,7 +649,7 @@ func TestServiceListTransitionsReturnsOperatorView(t *testing.T) {
 		nil,
 	)
 
-	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	resp, err := svc.ListTransitions(context.Background(), &pdpb.ListTransitionsRequest{})
 	require.NoError(t, err)
 	require.Len(t, resp.GetEntries(), 1)
@@ -658,7 +659,7 @@ func TestServiceListTransitionsReturnsOperatorView(t *testing.T) {
 }
 
 func TestServiceAssessRootEventReturnsConflictAssessment(t *testing.T) {
-	cluster := core.NewCluster()
+	cluster := catalog.NewCluster()
 	current := testDescriptor(161, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{
 		{StoreID: 1, PeerID: 101},
 	})
@@ -691,7 +692,7 @@ func TestServiceAssessRootEventReturnsConflictAssessment(t *testing.T) {
 	conflicting.RootEpoch = 0
 	conflicting.EnsureHash()
 
-	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	resp, err := svc.AssessRootEvent(context.Background(), &pdpb.AssessRootEventRequest{
 		Event: metacodec.RootEventToProto(rootevent.PeerAdditionPlanned(conflicting.RegionID, 3, 301, conflicting)),
 	})
@@ -702,7 +703,7 @@ func TestServiceAssessRootEventReturnsConflictAssessment(t *testing.T) {
 }
 
 func TestServicePublishRootEventSkipsCompletedSplitPlan(t *testing.T) {
-	cluster := core.NewCluster()
+	cluster := catalog.NewCluster()
 	left := testDescriptor(141, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)
 	right := testDescriptor(142, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
 	left.RootEpoch = 6
@@ -722,7 +723,7 @@ func TestServicePublishRootEventSkipsCompletedSplitPlan(t *testing.T) {
 			},
 		},
 	}
-	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	svc.SetStorage(store)
 
 	resp, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
@@ -734,7 +735,7 @@ func TestServicePublishRootEventSkipsCompletedSplitPlan(t *testing.T) {
 }
 
 func TestServicePublishRootEventSkipsCompletedMergePlan(t *testing.T) {
-	cluster := core.NewCluster()
+	cluster := catalog.NewCluster()
 	merged := testDescriptor(151, []byte("a"), []byte("z"), metaregion.Epoch{Version: 3, ConfVersion: 1}, nil)
 	merged.RootEpoch = 7
 	merged.EnsureHash()
@@ -749,7 +750,7 @@ func TestServicePublishRootEventSkipsCompletedMergePlan(t *testing.T) {
 			},
 		},
 	}
-	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	svc.SetStorage(store)
 
 	resp, err := svc.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
@@ -761,7 +762,7 @@ func TestServicePublishRootEventSkipsCompletedMergePlan(t *testing.T) {
 }
 
 func TestServicePublishRootEventRejectsMismatchedMergeApply(t *testing.T) {
-	cluster := core.NewCluster()
+	cluster := catalog.NewCluster()
 	merged := testDescriptor(50, []byte("a"), []byte("z"), metaregion.Epoch{Version: 3, ConfVersion: 1}, nil)
 	merged.RootEpoch = 7
 	merged.EnsureHash()
@@ -777,7 +778,7 @@ func TestServicePublishRootEventRejectsMismatchedMergeApply(t *testing.T) {
 			},
 		},
 	}
-	svc := NewService(cluster, core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	svc.SetStorage(store)
 
 	mismatched := merged.Clone()
@@ -792,7 +793,7 @@ func TestServicePublishRootEventRejectsMismatchedMergeApply(t *testing.T) {
 }
 
 func TestServicePublishRootEventValidationAndPersistenceError(t *testing.T) {
-	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 
 	_, err := svc.PublishRootEvent(context.Background(), nil)
 	require.Error(t, err)
@@ -819,7 +820,7 @@ func TestServicePublishRootEventValidationAndPersistenceError(t *testing.T) {
 }
 
 func TestServiceRegionCatalogPersistenceErrors(t *testing.T) {
-	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	store := &fakeStorage{eventErr: errors.New("persist update failed")}
 	svc.SetStorage(store)
 
@@ -842,7 +843,7 @@ func TestServiceRegionCatalogPersistenceErrors(t *testing.T) {
 }
 
 func TestServicePersistsAllocatorState(t *testing.T) {
-	svc := NewService(core.NewCluster(), core.NewIDAllocator(10), tso.NewAllocator(100))
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100))
 	store := &fakeStorage{}
 	svc.SetStorage(store)
 
@@ -862,7 +863,7 @@ func TestServicePersistsAllocatorState(t *testing.T) {
 }
 
 func TestServiceAllocatorStatePersistenceError(t *testing.T) {
-	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	store := &fakeStorage{saveErr: errors.New("persist failed")}
 	svc.SetStorage(store)
 
@@ -887,7 +888,7 @@ func TestServiceAllocatorStatePersistenceError(t *testing.T) {
 }
 
 func TestServiceRejectsWritesOnFollower(t *testing.T) {
-	svc := NewService(core.NewCluster(), core.NewIDAllocator(10), tso.NewAllocator(100))
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100))
 	store := &fakeStorage{leader: false, leaderID: 2}
 	svc.SetStorage(store)
 
@@ -921,7 +922,7 @@ func TestServiceRejectsWritesOnFollower(t *testing.T) {
 }
 
 func TestServiceRefreshFromStorageReloadsViewAndAllocatorState(t *testing.T) {
-	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	store := &fakeSyncStorage{
 		fakeStorage: fakeStorage{leader: false, leaderID: 2},
 		snapshot: pdstorage.Snapshot{
@@ -961,7 +962,7 @@ func TestServiceRefreshFromStorageReloadsViewAndAllocatorState(t *testing.T) {
 }
 
 func TestServicePublishRootEventAssignsRootEpoch(t *testing.T) {
-	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	store := &fakeStorage{}
 	svc.SetStorage(store)
 
@@ -980,7 +981,7 @@ func TestServicePublishRootEventAssignsRootEpoch(t *testing.T) {
 }
 
 func TestServiceMutatingWritesRespectExpectedClusterEpoch(t *testing.T) {
-	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	store := &fakeStorage{snapshot: pdstorage.Snapshot{ClusterEpoch: 7}}
 	svc.SetStorage(store)
 

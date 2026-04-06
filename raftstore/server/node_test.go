@@ -3,25 +3,18 @@ package server_test
 import (
 	"context"
 	"fmt"
+	"sort"
+	"testing"
+	"time"
+
+	NoKV "github.com/feichai0017/NoKV"
+	entrykv "github.com/feichai0017/NoKV/kv"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
-	"sort"
-	"testing"
-	"time"
-
-	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
-
-	NoKV "github.com/feichai0017/NoKV"
-	entrykv "github.com/feichai0017/NoKV/kv"
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/engine"
@@ -31,39 +24,17 @@ import (
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
-type fakeMVCCStore struct{}
-
-func (fakeMVCCStore) ApplyInternalEntries(entries []*entrykv.Entry) error { return nil }
-func (fakeMVCCStore) GetInternalEntry(cf entrykv.ColumnFamily, key []byte, version uint64) (*entrykv.Entry, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-func (fakeMVCCStore) NewInternalIterator(opt *utils.Options) utils.Iterator { return nil }
-
-type fakeRaftLog struct{}
-
-func (fakeRaftLog) Open(groupID uint64, meta *localmeta.Store) (engine.PeerStorage, error) {
-	return nil, nil
-}
-
-func openTestDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
-	t.Helper()
-	opt := NoKV.NewDefaultOptions()
-	opt.WorkDir = t.TempDir()
-	localMeta, err := localmeta.OpenLocalStore(opt.WorkDir, nil)
-	require.NoError(t, err)
-	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
-	db, err := NoKV.Open(opt)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	t.Cleanup(func() { _ = localMeta.Close() })
-	return db, localMeta
-}
-
-func TestServerStartsNoKVService(t *testing.T) {
+func TestNodeStartsKVService(t *testing.T) {
 	db, _ := openTestDB(t)
-	srv, err := serverpkg.New(serverpkg.Config{
+	node, err := serverpkg.NewNode(serverpkg.Config{
 		Storage: serverpkg.Storage{
 			MVCC: db,
 			Raft: db.RaftLog(),
@@ -74,15 +45,13 @@ func TestServerStartsNoKVService(t *testing.T) {
 		TransportAddr: "127.0.0.1:0",
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = node.Close() })
 
-	addr := srv.Addr()
-	require.NotEmpty(t, addr)
-	require.NotNil(t, srv.Store())
-	require.NotNil(t, srv.Transport())
-	require.NotNil(t, srv.Service())
+	require.NotEmpty(t, node.Addr())
+	require.NotNil(t, node.Store())
+	require.NotNil(t, node.Transport())
 
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(node.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
 
@@ -96,8 +65,8 @@ func TestServerStartsNoKVService(t *testing.T) {
 	require.Equal(t, codes.InvalidArgument, st.Code())
 }
 
-func TestServerRequiresSnapshotBridge(t *testing.T) {
-	srv, err := serverpkg.New(serverpkg.Config{
+func TestNodeRequiresSnapshotBridge(t *testing.T) {
+	node, err := serverpkg.NewNode(serverpkg.Config{
 		Storage: serverpkg.Storage{
 			MVCC: fakeMVCCStore{},
 			Raft: fakeRaftLog{},
@@ -107,14 +76,14 @@ func TestServerRequiresSnapshotBridge(t *testing.T) {
 		},
 		TransportAddr: "127.0.0.1:0",
 	})
-	require.Nil(t, srv)
+	require.Nil(t, node)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "snapshot bridge")
 }
 
-func TestServerStartsRaftAdminService(t *testing.T) {
+func TestNodeStartsRaftAdminService(t *testing.T) {
 	db, localMeta := openTestDB(t)
-	srv, err := serverpkg.New(serverpkg.Config{
+	node, err := serverpkg.NewNode(serverpkg.Config{
 		Storage: serverpkg.Storage{
 			MVCC: db,
 			Raft: db.RaftLog(),
@@ -133,7 +102,7 @@ func TestServerStartsRaftAdminService(t *testing.T) {
 		TransportAddr: "127.0.0.1:0",
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = node.Close() })
 
 	region := localmeta.RegionMeta{
 		ID:       7,
@@ -148,10 +117,10 @@ func TestServerStartsRaftAdminService(t *testing.T) {
 		region:    region,
 		db:        db,
 		localMeta: localMeta,
-		srv:       srv,
+		node:      node,
 	})
 
-	conn, err := grpc.NewClient(srv.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(node.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
 
@@ -193,37 +162,7 @@ func TestServerStartsRaftAdminService(t *testing.T) {
 	require.NoError(t, err)
 }
 
-type testNode struct {
-	storeID   uint64
-	peerID    uint64
-	region    localmeta.RegionMeta
-	db        *NoKV.DB
-	localMeta *localmeta.Store
-	srv       *serverpkg.Server
-	addr      string
-}
-
-type staticRegionResolver struct {
-	regions []*metapb.RegionDescriptor
-}
-
-func (r *staticRegionResolver) GetRegionByKey(_ context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
-	if req == nil {
-		return nil, fmt.Errorf("resolver: nil request")
-	}
-	for _, region := range r.regions {
-		if regionContainsKey(region, req.GetKey()) {
-			return &pdpb.GetRegionByKeyResponse{
-				RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromProto(cloneRegionMetaPB(region))),
-			}, nil
-		}
-	}
-	return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
-}
-
-func (r *staticRegionResolver) Close() error { return nil }
-
-func TestServerWithClientTwoPhaseCommit(t *testing.T) {
+func TestNodeWithClientTwoPhaseCommit(t *testing.T) {
 	nodes := []testNode{
 		{
 			storeID: 1,
@@ -261,7 +200,7 @@ func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 		nodes[i].db = db
 		nodes[i].localMeta = localMeta
 
-		srv, err := serverpkg.New(serverpkg.Config{
+		node, err := serverpkg.NewNode(serverpkg.Config{
 			Storage: serverpkg.Storage{
 				MVCC: db,
 				Raft: db.RaftLog(),
@@ -280,14 +219,14 @@ func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 			TransportAddr: "127.0.0.1:0",
 		})
 		require.NoError(t, err)
-		nodes[i].srv = srv
-		nodes[i].addr = srv.Addr()
+		nodes[i].node = node
+		nodes[i].addr = node.Addr()
 	}
 
 	defer func() {
 		for i := range nodes {
-			if nodes[i].srv != nil {
-				_ = nodes[i].srv.Close()
+			if nodes[i].node != nil {
+				_ = nodes[i].node.Close()
 			}
 			if nodes[i].db != nil {
 				_ = nodes[i].db.Close()
@@ -350,8 +289,66 @@ func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 	require.True(t, delResp.GetNotFound())
 }
 
+type fakeMVCCStore struct{}
+
+func (fakeMVCCStore) ApplyInternalEntries(entries []*entrykv.Entry) error { return nil }
+func (fakeMVCCStore) GetInternalEntry(cf entrykv.ColumnFamily, key []byte, version uint64) (*entrykv.Entry, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (fakeMVCCStore) NewInternalIterator(opt *utils.Options) utils.Iterator { return nil }
+
+type fakeRaftLog struct{}
+
+func (fakeRaftLog) Open(groupID uint64, meta *localmeta.Store) (engine.PeerStorage, error) {
+	return nil, nil
+}
+
+func openTestDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
+	t.Helper()
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	localMeta, err := localmeta.OpenLocalStore(opt.WorkDir, nil)
+	require.NoError(t, err)
+	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	t.Cleanup(func() { _ = localMeta.Close() })
+	return db, localMeta
+}
+
+type testNode struct {
+	storeID   uint64
+	peerID    uint64
+	region    localmeta.RegionMeta
+	db        *NoKV.DB
+	localMeta *localmeta.Store
+	node      *serverpkg.Node
+	addr      string
+}
+
+type staticRegionResolver struct {
+	regions []*metapb.RegionDescriptor
+}
+
+func (r *staticRegionResolver) GetRegionByKey(_ context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("resolver: nil request")
+	}
+	for _, region := range r.regions {
+		if regionContainsKey(region, req.GetKey()) {
+			return &pdpb.GetRegionByKeyResponse{
+				RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromProto(cloneRegionMetaPB(region))),
+			}, nil
+		}
+	}
+	return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
+}
+
+func (r *staticRegionResolver) Close() error { return nil }
+
 func startRegionPeer(t *testing.T, n testNode) {
-	store := n.srv.Store()
+	store := n.node.Store()
 	peerStorage, err := n.db.RaftLog().Open(n.region.ID, n.localMeta)
 	require.NoError(t, err)
 	cfg := &peer.Config{
@@ -363,7 +360,7 @@ func startRegionPeer(t *testing.T, n testNode) {
 			MaxInflightMsgs: 256,
 			PreVote:         true,
 		},
-		Transport: n.srv.Transport(),
+		Transport: n.node.Transport(),
 		Apply:     kv.NewEntryApplier(n.db),
 		Storage:   peerStorage,
 		GroupID:   n.region.ID,

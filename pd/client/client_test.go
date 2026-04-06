@@ -17,7 +17,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
-	"github.com/feichai0017/NoKV/pd/core"
+	"github.com/feichai0017/NoKV/pd/catalog"
+	"github.com/feichai0017/NoKV/pd/idalloc"
 	pdserver "github.com/feichai0017/NoKV/pd/server"
 	"github.com/feichai0017/NoKV/pd/tso"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -38,7 +39,7 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 		_ = listener.Close()
 	})
 
-	svc := pdserver.NewService(core.NewCluster(), core.NewIDAllocator(10), tso.NewAllocator(100))
+	svc := pdserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100))
 	grpcServer := grpc.NewServer()
 	pdpb.RegisterPDServer(grpcServer, svc)
 	go func() {
@@ -128,14 +129,14 @@ func TestGRPCClientWriteFailoverAcrossPDs(t *testing.T) {
 		_ = leaderListener.Close()
 	})
 
-	followerSvc := pdserver.NewService(core.NewCluster(), core.NewIDAllocator(10), tso.NewAllocator(100))
+	followerSvc := pdserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100))
 	followerSvc.SetStorage(&followerStorage{})
 	followerGRPC := grpc.NewServer()
 	pdpb.RegisterPDServer(followerGRPC, followerSvc)
 	go func() { _ = followerGRPC.Serve(followerListener) }()
 	t.Cleanup(followerGRPC.GracefulStop)
 
-	leaderSvc := pdserver.NewService(core.NewCluster(), core.NewIDAllocator(10), tso.NewAllocator(100))
+	leaderSvc := pdserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100))
 	leaderGRPC := grpc.NewServer()
 	pdpb.RegisterPDServer(leaderGRPC, leaderSvc)
 	go func() { _ = leaderGRPC.Serve(leaderListener) }()

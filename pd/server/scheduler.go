@@ -3,7 +3,7 @@ package server
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
-	"github.com/feichai0017/NoKV/pd/core"
+	pdview "github.com/feichai0017/NoKV/pd/view"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
@@ -30,9 +30,9 @@ func (s *Service) planStoreOperations(heartbeatStoreID uint64) []*pdpb.Scheduler
 	return []*pdpb.SchedulerOperation{op}
 }
 
-func selectLeaderRebalancePair(stores []core.StoreStats, heartbeatStoreID uint64) (core.StoreStats, core.StoreStats, bool) {
+func selectLeaderRebalancePair(stores []pdview.StoreStats, heartbeatStoreID uint64) (pdview.StoreStats, pdview.StoreStats, bool) {
 	if len(stores) < 2 {
-		return core.StoreStats{}, core.StoreStats{}, false
+		return pdview.StoreStats{}, pdview.StoreStats{}, false
 	}
 	src := stores[0]
 	dst := stores[0]
@@ -45,19 +45,19 @@ func selectLeaderRebalancePair(stores []core.StoreStats, heartbeatStoreID uint64
 		}
 	}
 	if src.StoreID == 0 || dst.StoreID == 0 || src.StoreID == dst.StoreID {
-		return core.StoreStats{}, core.StoreStats{}, false
+		return pdview.StoreStats{}, pdview.StoreStats{}, false
 	}
 	if heartbeatStoreID != src.StoreID {
-		return core.StoreStats{}, core.StoreStats{}, false
+		return pdview.StoreStats{}, pdview.StoreStats{}, false
 	}
 	// Require at least two leaders skew before scheduling a transfer.
 	if src.LeaderNum <= dst.LeaderNum+1 {
-		return core.StoreStats{}, core.StoreStats{}, false
+		return pdview.StoreStats{}, pdview.StoreStats{}, false
 	}
 	return src, dst, true
 }
 
-func chooseLeaderTransferOperation(regions []core.RegionInfo, srcStoreID, dstStoreID uint64) (*pdpb.SchedulerOperation, bool) {
+func chooseLeaderTransferOperation(regions []pdview.RegionInfo, srcStoreID, dstStoreID uint64) (*pdpb.SchedulerOperation, bool) {
 	if srcStoreID == 0 || dstStoreID == 0 {
 		return nil, false
 	}

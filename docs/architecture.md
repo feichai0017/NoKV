@@ -64,7 +64,7 @@ flowchart LR
     end
 
     subgraph "Distributed shape"
-        RPC --> Server["server.Server"]
+        RPC --> Server["server.Node"]
         Server --> Store["store.Store"]
         Store --> Peer["peer.Peer"]
         Peer --> Core
@@ -177,8 +177,8 @@ NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrR
 If you want to inspect the distributed side first, start here:
 
 ```go
-srv, err := server.New(server.Config{
-    DB: db,
+srv, err := server.NewNode(server.Config{
+    Storage: server.Storage{MVCC: db, Raft: db.RaftLog()},
     Store: store.Config{StoreID: 1},
     Raft: myraft.Config{ElectionTick: 10, HeartbeatTick: 2, PreVote: true},
     TransportAddr: "127.0.0.1:20160",
@@ -191,7 +191,7 @@ defer srv.Close()
 
 Then read:
 
-- `raftstore/server/server.go`
+- `raftstore/server/node.go`
 - `raftstore/store/store.go`
 - `raftstore/peer/peer.go`
 - `raftstore/engine/wal_storage.go`
@@ -204,10 +204,10 @@ Then read:
 | [`engine`](../raftstore/engine) | WALStorage/DiskStorage/MemoryStorage, reusing the DB's WAL while keeping store-local raft replay metadata in sync. |
 | [`transport`](../raftstore/transport) | gRPC transport for Raft Step messages, connection management, retries/blocks/TLS. Also acts as the host for NoKV RPC. |
 | [`kv`](../raftstore/kv) | NoKV RPC handler plus `kv.Apply` bridging Raft commands to MVCC logic. |
-| [`server`](../raftstore/server) | `ServerConfig` + `New` combine DB, Store, transport, and NoKV service into a reusable node instance. |
+| [`server`](../raftstore/server) | `Config` + `NewNode` combine DB, Store, transport, and NoKV service into a reusable node instance. |
 
 ### 3.1 Bootstrap Sequence
-1. `server.New` wires DB, store configuration (StoreID, hooks, scheduler), Raft config, and transport address. It registers NoKV RPC on the shared gRPC server and sets `transport.SetHandler(store.Step)`.
+1. `server.NewNode` wires DB, store configuration (StoreID, hooks, scheduler), Raft config, and transport address. It registers NoKV RPC on the shared gRPC server and sets `transport.SetHandler(store.Step)`.
 2. CLI (`nokv serve`) or application enumerates the local peer catalog and calls `Store.StartPeer` for every Region containing the local store:
    - `peer.Config` includes Raft params, transport, `kv.NewEntryApplier`, peer storage, and Region metadata.
    - Router registration, regionManager bookkeeping, optional `Peer.Bootstrap` with initial peer list, leader campaign.
@@ -236,7 +236,7 @@ Then read:
 | `KvResolveLock` | `percolator.ResolveLock` | `pb.ResolveLockResponse` |
 | `KvCheckTxnStatus` | `percolator.CheckTxnStatus` | `pb.CheckTxnStatusResponse` |
 
-`nokv serve` is the CLI entry point—open the DB, construct `raftstore.Server`, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). `scripts/dev/cluster.sh` builds the CLI, writes a minimal local peer catalog, launches multiple `nokv serve` processes on localhost, and handles cleanup on Ctrl+C.
+`nokv serve` is the CLI entry point—open the DB, construct `server.Node`, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). `scripts/dev/cluster.sh` builds the CLI, writes a minimal local peer catalog, launches multiple `nokv serve` processes on localhost, and handles cleanup on Ctrl+C.
 
 The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC and region semantics remain familiar, but the service name exposed on the wire is `pb.NoKV`.
 
@@ -256,7 +256,7 @@ The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC
 1. Regions `[a,m)` and `[m,+∞)`, each led by a different store.
 2. `Mutate(ctx, primary="alfa", mutations, startTs, commitTs, ttl)` prewrites and commits across the relevant regions.
 3. `Get/Scan` retries automatically if the leader changes.
-4. See `raftstore/server/server_test.go` for a full end-to-end example using real `raftstore.Server` instances.
+4. See `raftstore/server/node_test.go` for a full end-to-end example using real `server.Node` instances.
 
 ---
 

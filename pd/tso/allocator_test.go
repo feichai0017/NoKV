@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/feichai0017/NoKV/pd/core"
+	"github.com/feichai0017/NoKV/pd/idalloc"
 )
 
 func TestAllocatorNextMonotonic(t *testing.T) {
@@ -29,5 +29,5 @@ func TestAllocatorReserveRejectsZero(t *testing.T) {
 	a := NewAllocator(1)
 	_, _, err := a.Reserve(0)
 	require.Error(t, err)
-	require.ErrorIs(t, err, core.ErrInvalidBatch)
+	require.ErrorIs(t, err, idalloc.ErrInvalidBatch)
 }

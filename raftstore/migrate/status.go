@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	adminclient "github.com/feichai0017/NoKV/raftstore/admin"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/vfs"
 )
@@ -20,7 +21,7 @@ type StatusConfig struct {
 	AdminAddr string
 	RegionID  uint64
 	Timeout   time.Duration
-	Dial      DialFunc
+	Dial      adminclient.DialFunc
 }
 
 type RuntimeStatus struct {
@@ -89,7 +90,7 @@ func ReadStatusWithConfig(cfg StatusConfig) (StatusResult, error) {
 	}
 
 	if result.RegionID != 0 {
-		result.SeedSnapshotDir = SeedSnapshotDir(workDir, result.RegionID)
+		result.SeedSnapshotDir = seedSnapshotDir(workDir, result.RegionID)
 		fs := vfs.Ensure(nil)
 		if _, err := fs.Stat(result.SeedSnapshotDir); err == nil {
 			result.SeedSnapshotPresent = true
@@ -146,7 +147,7 @@ func queryRuntimeStatus(cfg StatusConfig) (*RuntimeStatus, error) {
 	}
 	dial := cfg.Dial
 	if dial == nil {
-		dial = defaultDial
+		dial = adminclient.Dial
 	}
 	timeout := cfg.Timeout
 	if timeout <= 0 {

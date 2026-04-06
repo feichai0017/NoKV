@@ -8,7 +8,6 @@ import (
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	pdoperator "github.com/feichai0017/NoKV/pd/operator"
-	pdview "github.com/feichai0017/NoKV/pd/view"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -64,7 +63,7 @@ func transitionEntryToProto(entry pdoperator.RuntimeEntry) *pdpb.TransitionEntry
 	return out
 }
 
-func transitionAssessmentToProto(assessment pdview.TransitionAssessment) *pdpb.TransitionAssessment {
+func transitionAssessmentToProto(assessment rootstate.TransitionAssessment) *pdpb.TransitionAssessment {
 	return &pdpb.TransitionAssessment{
 		Key:        assessment.Key,
 		Kind:       transitionKindToProto(assessment.Kind),

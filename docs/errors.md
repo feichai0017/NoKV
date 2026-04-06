@@ -14,7 +14,7 @@ Examples:
 
 - `kv`: entry codec/read-decode errors.
 - `vfs`: filesystem contract errors.
-- `pd/core`: control-plane validation/conflict errors.
+- `pd/catalog`: control-plane validation/conflict errors.
 
 ---
 
@@ -30,7 +30,7 @@ Examples:
 ## 3. Naming Rules
 
 1. Exported sentinels use `ErrXxx`.
-2. Error text should be lowercase and package-scoped when useful (for example `pd/core: ...`, `vfs: ...`).
+2. Error text should be lowercase and package-scoped when useful (for example `pd/catalog: ...`, `pd/idalloc: ...`, `vfs: ...`).
 3. Avoid duplicate sentinels with identical semantics in different packages.
 
 ---
@@ -51,7 +51,7 @@ Examples:
 - `pb/errorpb.proto`: region/store routing protobuf errors (`RegionError`,
   `StoreNotMatch`, `RegionNotFound`, `KeyNotInRegion`, ...)
 - `wal/errors.go`: WAL encode/decode and segment errors
-- `pd/core/errors.go`: PD metadata and range validation errors
+- `pd/catalog/errors.go`: PD metadata and range validation errors
 
 ---
 

@@ -1,7 +1,6 @@
 package storage
 
 import (
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -12,7 +11,7 @@ import (
 type rootBackend interface {
 	Snapshot() (rootstate.Snapshot, error)
 	Append(events ...rootevent.Event) (rootstate.CommitInfo, error)
-	FenceAllocator(kind rootpkg.AllocatorKind, min uint64) (uint64, error)
+	FenceAllocator(kind rootstate.AllocatorKind, min uint64) (uint64, error)
 }
 
 // OpenRootStore opens a PD storage backend backed by the metadata root.

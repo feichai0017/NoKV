@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	adminclient "github.com/feichai0017/NoKV/raftstore/admin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,7 +54,7 @@ func (f *fakeAdminClient) TransferLeader(context.Context, *adminpb.TransferLeade
 	return &adminpb.TransferLeaderResponse{}, nil
 }
 
-func (f *fakeAdminClient) ExportRegionSnapshotStream(_ context.Context, req *adminpb.ExportRegionSnapshotStreamRequest) (*SnapshotExportStream, error) {
+func (f *fakeAdminClient) ExportRegionSnapshotStream(_ context.Context, req *adminpb.ExportRegionSnapshotStreamRequest) (*adminclient.SnapshotExportStream, error) {
 	f.exportSnapshotReqs = append(f.exportSnapshotReqs, &adminpb.ExportRegionSnapshotRequest{RegionId: req.GetRegionId()})
 	if f.exportSnapshotErr != nil {
 		return nil, f.exportSnapshotErr
@@ -62,7 +63,7 @@ func (f *fakeAdminClient) ExportRegionSnapshotStream(_ context.Context, req *adm
 	if resp == nil {
 		resp = &adminpb.ExportRegionSnapshotResponse{Snapshot: []byte("snapshot")}
 	}
-	return &SnapshotExportStream{
+	return &adminclient.SnapshotExportStream{
 		Header: []byte("header"),
 		Region: resp.GetRegion(),
 		Reader: io.NopCloser(bytes.NewReader(resp.GetSnapshot())),
@@ -115,7 +116,7 @@ func TestExpandWaitsForTargetHosted(t *testing.T) {
 			{Known: true, Hosted: true, LocalPeerId: 22, AppliedIndex: 1, AppliedTerm: 1},
 		},
 	}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		switch addr {
 		case "leader":
 			return leader, func() error { return nil }, nil
@@ -156,7 +157,7 @@ func TestExpandWithoutWaitReturnsAfterAddPeer(t *testing.T) {
 			Region: &metapb.RegionDescriptor{RegionId: 9, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 33}}},
 		},
 	}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		require.Equal(t, "leader", addr)
 		return leader, func() error { return nil }, nil
 	}
@@ -188,7 +189,7 @@ func TestExpandRollsTargetsSequentially(t *testing.T) {
 	}
 	target2 := &fakeAdminClient{statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, Hosted: true, LocalPeerId: 22, AppliedIndex: 1, AppliedTerm: 1}}}
 	target3 := &fakeAdminClient{statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, Hosted: true, LocalPeerId: 33, AppliedIndex: 1, AppliedTerm: 1}}}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		switch addr {
 		case "leader":
 			return leader, func() error { return nil }, nil
@@ -237,7 +238,7 @@ func TestExpandWritesWorkdirCheckpoint(t *testing.T) {
 			{Known: true, Hosted: true, LocalPeerId: 22, AppliedIndex: 1, AppliedTerm: 1},
 		},
 	}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		switch addr {
 		case "leader":
 			return leader, func() error { return nil }, nil
@@ -286,7 +287,7 @@ func TestExpandRequestsRegionSnapshot(t *testing.T) {
 			{Known: true, Hosted: true, LocalPeerId: 28, AppliedIndex: 1, AppliedTerm: 1},
 		},
 	}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		switch addr {
 		case "leader":
 			return leader, func() error { return nil }, nil
@@ -324,7 +325,7 @@ func TestExpandFailsWhenLeaderSnapshotExportFails(t *testing.T) {
 		},
 	}
 	target := &fakeAdminClient{}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		switch addr {
 		case "leader":
 			return leader, func() error { return nil }, nil
@@ -358,7 +359,7 @@ func TestExpandFailsWhenTargetSnapshotInstallFails(t *testing.T) {
 		},
 	}
 	target := &fakeAdminClient{importSnapshotErr: context.DeadlineExceeded}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		switch addr {
 		case "leader":
 			return leader, func() error { return nil }, nil
@@ -390,7 +391,7 @@ func TestExpandTimesOutWhenLeaderNeverPublishesPeer(t *testing.T) {
 			{Known: true, Region: &metapb.RegionDescriptor{RegionId: 14}},
 		},
 	}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		require.Equal(t, "leader", addr)
 		return leader, func() error { return nil }, nil
 	}
@@ -416,7 +417,7 @@ func TestExpandTimesOutWhenTargetNeverHostsPeer(t *testing.T) {
 		},
 	}
 	target := &fakeAdminClient{statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, Hosted: false}}}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		switch addr {
 		case "leader":
 			return leader, func() error { return nil }, nil

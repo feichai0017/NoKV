@@ -5,7 +5,8 @@ import (
 	rootreplicated "github.com/feichai0017/NoKV/meta/root/backend/replicated"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
-	"github.com/feichai0017/NoKV/pd/core"
+	"github.com/feichai0017/NoKV/pd/catalog"
+	"github.com/feichai0017/NoKV/pd/idalloc"
 	pdserver "github.com/feichai0017/NoKV/pd/server"
 	pdstorage "github.com/feichai0017/NoKV/pd/storage"
 	"github.com/feichai0017/NoKV/pd/tso"
@@ -65,10 +66,10 @@ func OpenReplicatedWithTickIntervals(tb testing.TB, tickIntervals map[uint64]tim
 		require.NoError(tb, err)
 		c.RootStores[id] = store
 
-		cluster := core.NewCluster()
+		cluster := catalog.NewCluster()
 		bootstrap, err := pdstorage.Bootstrap(store, cluster.PublishRegionDescriptor, 1, 1)
 		require.NoError(tb, err)
-		svc := pdserver.NewService(cluster, core.NewIDAllocator(bootstrap.IDStart), tso.NewAllocator(bootstrap.TSStart))
+		svc := pdserver.NewService(cluster, idalloc.NewIDAllocator(bootstrap.IDStart), tso.NewAllocator(bootstrap.TSStart))
 		svc.SetStorage(store)
 		c.Services[id] = svc
 	}

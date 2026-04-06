@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	adminclient "github.com/feichai0017/NoKV/raftstore/admin"
 	"github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/stretchr/testify/require"
 )
@@ -24,7 +25,7 @@ func TestRemovePeerWaitsForTargetDrop(t *testing.T) {
 			{},
 		},
 	}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		switch addr {
 		case "leader":
 			return leader, func() error { return nil }, nil
@@ -53,7 +54,7 @@ func TestRemovePeerTimesOutWhenLeaderStillPublishesPeer(t *testing.T) {
 	leader := &fakeAdminClient{
 		statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, Region: &metapb.RegionDescriptor{RegionId: 8, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}}}}},
 	}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		require.Equal(t, "leader", addr)
 		return leader, func() error { return nil }, nil
 	}
@@ -77,7 +78,7 @@ func TestRemovePeerTreatsLeaderDehostAsSuccess(t *testing.T) {
 			{Known: false},
 		},
 	}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		require.Equal(t, "leader", addr)
 		return leader, func() error { return nil }, nil
 	}
@@ -98,7 +99,7 @@ func TestRemovePeerTreatsLeaderDehostAsSuccess(t *testing.T) {
 func TestRemovePeerTimesOutWhenTargetStillHosted(t *testing.T) {
 	leader := &fakeAdminClient{statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, Region: &metapb.RegionDescriptor{RegionId: 8}}}}
 	target := &fakeAdminClient{statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, Hosted: true, LocalPeerId: 22, AppliedIndex: 1}}}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		switch addr {
 		case "leader":
 			return leader, func() error { return nil }, nil
@@ -139,7 +140,7 @@ func TestRemovePeerWritesWorkdirCheckpoint(t *testing.T) {
 			{},
 		},
 	}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		switch addr {
 		case "leader":
 			return leader, func() error { return nil }, nil
@@ -178,7 +179,7 @@ func TestRemovePeerNoWaitDoesNotLeaveStartedCheckpoint(t *testing.T) {
 	require.NoError(t, mode.Write(workDir, mode.State{Mode: mode.ModeCluster, StoreID: 1, RegionID: 8, PeerID: 11}))
 
 	leader := &fakeAdminClient{}
-	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+	dial := func(ctx context.Context, addr string) (adminclient.Client, func() error, error) {
 		require.Equal(t, "leader", addr)
 		return leader, func() error { return nil }, nil
 	}

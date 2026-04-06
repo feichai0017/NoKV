@@ -1,9 +1,9 @@
 package storage
 
 import (
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"sync"
@@ -151,10 +151,10 @@ func (s *RootStore) SaveAllocatorState(idCurrent, tsCurrent uint64) error {
 	if s == nil {
 		return nil
 	}
-	if _, err := s.root.FenceAllocator(rootpkg.AllocatorKindID, idCurrent); err != nil {
+	if _, err := s.root.FenceAllocator(rootstate.AllocatorKindID, idCurrent); err != nil {
 		return err
 	}
-	if _, err := s.root.FenceAllocator(rootpkg.AllocatorKindTSO, tsCurrent); err != nil {
+	if _, err := s.root.FenceAllocator(rootstate.AllocatorKindTSO, tsCurrent); err != nil {
 		return err
 	}
 	return s.reload()

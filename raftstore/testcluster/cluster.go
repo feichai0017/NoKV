@@ -14,8 +14,9 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	pdadapter "github.com/feichai0017/NoKV/pd/adapter"
+	"github.com/feichai0017/NoKV/pd/catalog"
 	pdclient "github.com/feichai0017/NoKV/pd/client"
-	"github.com/feichai0017/NoKV/pd/core"
+	"github.com/feichai0017/NoKV/pd/idalloc"
 	pdserver "github.com/feichai0017/NoKV/pd/server"
 	"github.com/feichai0017/NoKV/pd/tso"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -36,7 +37,7 @@ type Node struct {
 	WorkDir   string
 	DB        *NoKV.DB
 	LocalMeta *localmeta.Store
-	Server    *serverpkg.Server
+	Server    *serverpkg.Node
 }
 
 type NodeConfig struct {
@@ -91,7 +92,7 @@ func StartNodeWithConfig(tb testing.TB, storeID uint64, dir string, cfg NodeConf
 		_ = localMeta.Close()
 		tb.Fatalf("open node db: %v", err)
 	}
-	srv, err := serverpkg.New(serverpkg.Config{
+	srv, err := serverpkg.NewNode(serverpkg.Config{
 		Storage: serverpkg.Storage{MVCC: db, Raft: db.RaftLog()},
 		Store: storepkg.Config{
 			StoreID:           storeID,
@@ -126,7 +127,7 @@ func StartPD(tb testing.TB) *PD {
 	if err != nil {
 		tb.Fatalf("listen pd: %v", err)
 	}
-	svc := pdserver.NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := pdserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	grpcServer := grpc.NewServer()
 	pdpb.RegisterPDServer(grpcServer, svc)
 	go func() {

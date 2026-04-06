@@ -23,7 +23,7 @@
 | [`meta`](../raftstore/localmeta) | Store-local durable metadata: peer catalog for restart and raft WAL replay checkpoints for replay/GC. |
 | [`transport`](../raftstore/transport) | gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (NoKV). |
 | [`kv`](../raftstore/kv) | NoKV RPC implementation, bridging Raft commands to MVCC operations via `kv.Apply`. |
-| [`server`](../raftstore/server) | `ServerConfig` + `New` that bind DB, Store, transport, and NoKV server into a reusable node primitive. |
+| [`server`](../raftstore/server) | `Config` + `NewNode` that bind storage, Store, transport, and the shared KV/admin RPC surfaces into a reusable node primitive. |
 
 ### Runtime ownership sketch
 
@@ -34,7 +34,7 @@ flowchart TD
     Client --> PD["PD-lite"]
 
     subgraph "Node runtime"
-        Server["server.Server"] --> Store["store.Store"]
+        Server["server.Node"] --> Store["store.Store"]
         Store --> Router["router"]
         Store --> Peer["peer.Peer"]
         Store --> Scheduler["scheduler runtime"]
@@ -53,8 +53,8 @@ flowchart TD
 
 1. **Construct Server**
    ```go
-   srv, _ := server.New(server.Config{
-       DB: db,
+   srv, _ := server.NewNode(server.Config{
+       Storage: server.Storage{MVCC: db, Raft: db.RaftLog()},
        Store: store.Config{StoreID: 1},
        Raft: myraft.Config{ElectionTick: 10, HeartbeatTick: 2, PreVote: true},
        TransportAddr: "127.0.0.1:20160",
@@ -152,7 +152,7 @@ sequenceDiagram
 | `KvGet` / `KvScan` | `ReadCommand` → `LinearizableRead(ReadIndex)` + `WaitApplied` → `kv.Apply` (read mode) | Leader-only strong read with Raft linearizability barrier.
 | `KvPrewrite` / `KvCommit` / `KvBatchRollback` / `KvResolveLock` / `KvCheckTxnStatus` | `ProposeCommand` → command pipeline → raft log → `kv.Apply` | Pipeline matches proposals with apply results; MVCC latch manager prevents write conflicts.
 
-The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a local peer catalog summary (key ranges, peers) so operators can verify the node’s recovery view at startup.
+The `cmd/nokv serve` command uses `server.Node` internally and prints a local peer catalog summary (key ranges, peers) so operators can verify the node’s recovery view at startup.
 
 ---
 
@@ -161,7 +161,7 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a loc
 - Region-aware routing with NotLeader/EpochNotMatch retry.
 - `Mutate` splits mutations by region and performs two-phase commit (primary first). `Put` / `Delete` are convenience wrappers.
 - `Scan` transparently walks region boundaries.
-- End-to-end coverage lives in `raftstore/server/server_test.go`, which launches real servers, uses the client to write and delete keys, and verifies the results.
+- End-to-end coverage lives in `raftstore/server/node_test.go`, which launches real nodes, uses the client to write and delete keys, and verifies the results.
 
 ---
 

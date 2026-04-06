@@ -930,7 +930,7 @@ func TestRunMigrateInitCmd(t *testing.T) {
 	require.Equal(t, uint64(1), ptr.SnapshotTerm)
 	require.Equal(t, uint64(1), ptr.Committed)
 
-	snapshotMeta, err := snapshotpkg.ReadMeta(migratepkg.SeedSnapshotDir(dir, 2), nil)
+	snapshotMeta, err := snapshotpkg.ReadMeta(status.SeedSnapshotDir, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), snapshotMeta.Region.ID)
 	require.Greater(t, snapshotMeta.EntryCount, uint64(0))

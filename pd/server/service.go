@@ -8,10 +8,11 @@ import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
-
-	"github.com/feichai0017/NoKV/pd/core"
+	"github.com/feichai0017/NoKV/pd/catalog"
+	"github.com/feichai0017/NoKV/pd/idalloc"
 	pdstorage "github.com/feichai0017/NoKV/pd/storage"
 	"github.com/feichai0017/NoKV/pd/tso"
+	pdview "github.com/feichai0017/NoKV/pd/view"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -22,8 +23,8 @@ import (
 type Service struct {
 	pdpb.UnimplementedPDServer
 
-	cluster *core.Cluster
-	ids     *core.IDAllocator
+	cluster *catalog.Cluster
+	ids     *idalloc.IDAllocator
 	tso     *tso.Allocator
 	storage pdstorage.Store
 	allocMu sync.Mutex
@@ -32,12 +33,12 @@ type Service struct {
 const errNotLeaderPrefix = "pd not leader"
 
 // NewService constructs a PD-lite service.
-func NewService(cluster *core.Cluster, ids *core.IDAllocator, tsAlloc *tso.Allocator) *Service {
+func NewService(cluster *catalog.Cluster, ids *idalloc.IDAllocator, tsAlloc *tso.Allocator) *Service {
 	if cluster == nil {
-		cluster = core.NewCluster()
+		cluster = catalog.NewCluster()
 	}
 	if ids == nil {
-		ids = core.NewIDAllocator(1)
+		ids = idalloc.NewIDAllocator(1)
 	}
 	if tsAlloc == nil {
 		tsAlloc = tso.NewAllocator(1)
@@ -95,7 +96,7 @@ func (s *Service) StoreHeartbeat(_ context.Context, req *pdpb.StoreHeartbeatRequ
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "store heartbeat request is nil")
 	}
-	err := s.cluster.UpsertStoreHeartbeat(core.StoreStats{
+	err := s.cluster.UpsertStoreHeartbeat(pdview.StoreStats{
 		StoreID:   req.GetStoreId(),
 		RegionNum: req.GetRegionNum(),
 		LeaderNum: req.GetLeaderNum(),
@@ -103,7 +104,7 @@ func (s *Service) StoreHeartbeat(_ context.Context, req *pdpb.StoreHeartbeatRequ
 		Available: req.GetAvailable(),
 	})
 	if err != nil {
-		if errors.Is(err, core.ErrInvalidStoreID) {
+		if errors.Is(err, catalog.ErrInvalidStoreID) {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 		return nil, status.Error(codes.Internal, err.Error())
@@ -151,9 +152,9 @@ func (s *Service) PublishRootEvent(_ context.Context, req *pdpb.PublishRootEvent
 	}
 	if err := s.cluster.ValidateRootEvent(event); err != nil {
 		switch {
-		case errors.Is(err, core.ErrInvalidRegionID):
+		case errors.Is(err, catalog.ErrInvalidRegionID):
 			return nil, status.Error(codes.InvalidArgument, err.Error())
-		case errors.Is(err, core.ErrRegionHeartbeatStale), errors.Is(err, core.ErrRegionRangeOverlap):
+		case errors.Is(err, catalog.ErrRegionHeartbeatStale), errors.Is(err, catalog.ErrRegionRangeOverlap):
 			return nil, status.Error(codes.FailedPrecondition, err.Error())
 		default:
 			return nil, status.Error(codes.Internal, err.Error())
@@ -267,7 +268,7 @@ func (s *Service) AllocID(_ context.Context, req *pdpb.AllocIDRequest) (*pdpb.Al
 	}
 	first, err := s.reserveIDs(count)
 	if err != nil {
-		if errors.Is(err, core.ErrInvalidBatch) {
+		if errors.Is(err, idalloc.ErrInvalidBatch) {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
@@ -292,7 +293,7 @@ func (s *Service) Tso(_ context.Context, req *pdpb.TsoRequest) (*pdpb.TsoRespons
 	}
 	first, got, err := s.reserveTSO(count)
 	if err != nil {
-		if errors.Is(err, core.ErrInvalidBatch) {
+		if errors.Is(err, idalloc.ErrInvalidBatch) {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
@@ -391,7 +392,7 @@ func (s *Service) reserveIDs(count uint64) (uint64, error) {
 		return 0, nil
 	}
 	if count == 0 {
-		return 0, fmt.Errorf("%w: reserve n must be >= 1", core.ErrInvalidBatch)
+		return 0, fmt.Errorf("%w: reserve n must be >= 1", idalloc.ErrInvalidBatch)
 	}
 	s.allocMu.Lock()
 	defer s.allocMu.Unlock()
@@ -412,7 +413,7 @@ func (s *Service) reserveTSO(count uint64) (uint64, uint64, error) {
 		return 0, 0, nil
 	}
 	if count == 0 {
-		return 0, 0, fmt.Errorf("%w: tso reserve n must be >= 1", core.ErrInvalidBatch)
+		return 0, 0, fmt.Errorf("%w: tso reserve n must be >= 1", idalloc.ErrInvalidBatch)
 	}
 	s.allocMu.Lock()
 	defer s.allocMu.Unlock()

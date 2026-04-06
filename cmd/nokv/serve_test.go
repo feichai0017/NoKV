@@ -10,7 +10,8 @@ import (
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/pd/core"
+	"github.com/feichai0017/NoKV/pd/catalog"
+	"github.com/feichai0017/NoKV/pd/idalloc"
 	pdserver "github.com/feichai0017/NoKV/pd/server"
 	"github.com/feichai0017/NoKV/pd/tso"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -252,13 +253,13 @@ func openLocalMetaStore(t *testing.T, dir string) *localmeta.Store {
 	return store
 }
 
-func newTestServer(t *testing.T, db *NoKV.DB, storeID uint64) *serverpkg.Server {
+func newTestServer(t *testing.T, db *NoKV.DB, storeID uint64) *serverpkg.Node {
 	return newTestServerWithMeta(t, db, storeID, nil)
 }
 
-func newTestServerWithMeta(t *testing.T, db *NoKV.DB, storeID uint64, localMeta *localmeta.Store) *serverpkg.Server {
+func newTestServerWithMeta(t *testing.T, db *NoKV.DB, storeID uint64, localMeta *localmeta.Store) *serverpkg.Node {
 	t.Helper()
-	server, err := serverpkg.New(serverpkg.Config{
+	server, err := serverpkg.NewNode(serverpkg.Config{
 		Storage: serverpkg.Storage{
 			MVCC: db,
 			Raft: db.RaftLog(),
@@ -278,7 +279,7 @@ func startTestPDServer(t *testing.T) (addr string, stop func()) {
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	svc := pdserver.NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := pdserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	srv := grpc.NewServer()
 	pdpb.RegisterPDServer(srv, svc)
 

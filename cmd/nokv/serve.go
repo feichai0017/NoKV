@@ -104,7 +104,7 @@ func runServeCmd(w io.Writer, args []string) error {
 		Timeout: *pdTimeout,
 	})
 
-	server, err := serverpkg.New(serverpkg.Config{
+	server, err := serverpkg.NewNode(serverpkg.Config{
 		Storage: serverpkg.Storage{
 			MVCC: db,
 			Raft: db.RaftLog(),
@@ -214,7 +214,7 @@ func promoteClusterMode(workDir string, storeID uint64) error {
 	return raftmode.Write(workDir, state)
 }
 
-func startStorePeers(server *serverpkg.Server, storage serverpkg.Storage, localMeta *localmeta.Store, storeID uint64, electionTick, heartbeatTick, maxMsgBytes, maxInflight int) ([]localmeta.RegionMeta, int, error) {
+func startStorePeers(server *serverpkg.Node, storage serverpkg.Storage, localMeta *localmeta.Store, storeID uint64, electionTick, heartbeatTick, maxMsgBytes, maxInflight int) ([]localmeta.RegionMeta, int, error) {
 	if server == nil || storage.MVCC == nil || storage.Raft == nil || localMeta == nil {
 		return nil, 0, fmt.Errorf("raftstore: server, storage, or local metadata is nil")
 	}

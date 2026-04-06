@@ -1,4 +1,4 @@
-package core
+package catalog
 
 import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
@@ -8,28 +8,6 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"time"
 )
-
-// StoreStats captures store-level heartbeat data tracked by PD.
-type StoreStats = pdview.StoreStats
-
-// RegionInfo captures region metadata with heartbeat timestamp.
-type RegionInfo = pdview.RegionInfo
-
-// TransitionSnapshot captures rooted pending execution state materialized into
-// PD runtime view.
-type TransitionSnapshot = pdview.PendingSnapshot
-
-// TransitionAssessment captures one explicit rooted transition assessment
-// materialized for PD operator/debugging surfaces.
-type TransitionAssessment = pdview.TransitionAssessment
-
-// OperatorSnapshot captures the operator-runtime view derived from rooted
-// transitions.
-type OperatorSnapshot = pdoperator.RuntimeSnapshot
-
-// OperatorEntry is one runtime operator record derived from rooted
-// transitions.
-type OperatorEntry = pdoperator.RuntimeEntry
 
 // Cluster stores in-memory PD metadata and provides route lookups.
 //
@@ -54,7 +32,7 @@ func NewCluster() *Cluster {
 }
 
 // UpsertStoreHeartbeat updates store metadata from a store heartbeat.
-func (c *Cluster) UpsertStoreHeartbeat(stats StoreStats) error {
+func (c *Cluster) UpsertStoreHeartbeat(stats pdview.StoreStats) error {
 	if c == nil {
 		return nil
 	}
@@ -70,7 +48,7 @@ func (c *Cluster) RemoveStore(storeID uint64) {
 }
 
 // StoreSnapshot returns a stable copy of tracked store metadata.
-func (c *Cluster) StoreSnapshot() []StoreStats {
+func (c *Cluster) StoreSnapshot() []pdview.StoreStats {
 	if c == nil {
 		return nil
 	}
@@ -209,7 +187,7 @@ func (c *Cluster) TouchRegionHeartbeat(regionID uint64) bool {
 }
 
 // RegionSnapshot returns a stable copy of tracked region metadata.
-func (c *Cluster) RegionSnapshot() []RegionInfo {
+func (c *Cluster) RegionSnapshot() []pdview.RegionInfo {
 	if c == nil {
 		return nil
 	}
@@ -241,9 +219,9 @@ func (c *Cluster) ReplaceRootSnapshot(
 }
 
 // TransitionSnapshot returns a stable copy of rooted pending execution state.
-func (c *Cluster) TransitionSnapshot() TransitionSnapshot {
+func (c *Cluster) TransitionSnapshot() pdview.PendingSnapshot {
 	if c == nil {
-		return TransitionSnapshot{
+		return pdview.PendingSnapshot{
 			PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
 			PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
 		}
@@ -253,18 +231,18 @@ func (c *Cluster) TransitionSnapshot() TransitionSnapshot {
 
 // OperatorSnapshot returns a stable copy of the operator runtime derived from
 // rooted transitions.
-func (c *Cluster) OperatorSnapshot() OperatorSnapshot {
+func (c *Cluster) OperatorSnapshot() pdoperator.RuntimeSnapshot {
 	if c == nil {
-		return OperatorSnapshot{}
+		return pdoperator.RuntimeSnapshot{}
 	}
 	return c.operators.Snapshot()
 }
 
 // ObserveRootEventLifecycle evaluates one rooted transition event against the
 // current rooted runtime snapshot materialized in PD.
-func (c *Cluster) ObserveRootEventLifecycle(event rootevent.Event) TransitionAssessment {
+func (c *Cluster) ObserveRootEventLifecycle(event rootevent.Event) rootstate.TransitionAssessment {
 	if c == nil {
-		return TransitionAssessment{}
+		return rootstate.TransitionAssessment{}
 	}
 	transitions := c.TransitionSnapshot()
 	return rootstate.AssessTransition(rootstate.Snapshot{
@@ -339,7 +317,7 @@ func (c *Cluster) replaceTransitionRuntime(snapshot rootstate.Snapshot) {
 	}
 }
 
-func descriptorsFromRegionInfos(in []RegionInfo) map[uint64]descriptor.Descriptor {
+func descriptorsFromRegionInfos(in []pdview.RegionInfo) map[uint64]descriptor.Descriptor {
 	if len(in) == 0 {
 		return make(map[uint64]descriptor.Descriptor)
 	}

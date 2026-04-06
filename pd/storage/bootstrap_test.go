@@ -10,25 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNoopStoreLoadInitializesRegionsMap(t *testing.T) {
-	store := NewNoopStore()
-	snapshot, err := store.Load()
-	require.NoError(t, err)
-	require.NotNil(t, snapshot.Descriptors)
-	require.Empty(t, snapshot.Descriptors)
-}
-
-func TestNoopStoreMethodsAreStableNoOps(t *testing.T) {
-	store := NewNoopStore()
-
-	require.NoError(t, store.AppendRootEvent(rootevent.Event{}))
-	require.NoError(t, store.SaveAllocatorState(1, 2))
-	require.NoError(t, store.Refresh())
-	require.True(t, store.IsLeader())
-	require.Equal(t, uint64(0), store.LeaderID())
-	require.NoError(t, store.Close())
-}
-
 func TestResolveAllocatorStartsBasic(t *testing.T) {
 	id, ts := ResolveAllocatorStarts(1, 100, AllocatorState{
 		IDCurrent: 50,

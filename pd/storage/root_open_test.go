@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
@@ -180,7 +179,7 @@ func (*stubRootBackend) Append(...rootevent.Event) (rootstate.CommitInfo, error)
 	return rootstate.CommitInfo{}, nil
 }
 
-func (*stubRootBackend) FenceAllocator(rootpkg.AllocatorKind, uint64) (uint64, error) {
+func (*stubRootBackend) FenceAllocator(rootstate.AllocatorKind, uint64) (uint64, error) {
 	return 0, nil
 }
 

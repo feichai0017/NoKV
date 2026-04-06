@@ -17,7 +17,8 @@ import (
 
 	"github.com/feichai0017/NoKV/config"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
-	"github.com/feichai0017/NoKV/pd/core"
+	"github.com/feichai0017/NoKV/pd/catalog"
+	"github.com/feichai0017/NoKV/pd/idalloc"
 	pdserver "github.com/feichai0017/NoKV/pd/server"
 	pdstorage "github.com/feichai0017/NoKV/pd/storage"
 	"github.com/feichai0017/NoKV/pd/tso"
@@ -89,7 +90,7 @@ func runPDCmd(w io.Writer, args []string) error {
 	}
 	defer func() { _ = lis.Close() }()
 
-	cluster := core.NewCluster()
+	cluster := catalog.NewCluster()
 	var (
 		store         pdstorage.Store
 		rootStore     *pdstorage.RootStore
@@ -139,7 +140,7 @@ func runPDCmd(w io.Writer, args []string) error {
 		store = rootStore
 	}
 
-	ids := core.NewIDAllocator(*idStart)
+	ids := idalloc.NewIDAllocator(*idStart)
 	tsAlloc := tso.NewAllocator(*tsStart)
 	svc := pdserver.NewService(cluster, ids, tsAlloc)
 	if store != nil {

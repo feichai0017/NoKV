@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootfile "github.com/feichai0017/NoKV/meta/root/storage/file"
@@ -63,13 +62,13 @@ func TestStoreFenceAllocatorPersistsWithoutEvents(t *testing.T) {
 	store, err := Open(dir, nil)
 	require.NoError(t, err)
 
-	fence, err := store.FenceAllocator(rootpkg.AllocatorKindID, 10)
+	fence, err := store.FenceAllocator(rootstate.AllocatorKindID, 10)
 	require.NoError(t, err)
 	require.Equal(t, uint64(10), fence)
-	fence, err = store.FenceAllocator(rootpkg.AllocatorKindID, 3)
+	fence, err = store.FenceAllocator(rootstate.AllocatorKindID, 3)
 	require.NoError(t, err)
 	require.Equal(t, uint64(10), fence)
-	fence, err = store.FenceAllocator(rootpkg.AllocatorKindTSO, 22)
+	fence, err = store.FenceAllocator(rootstate.AllocatorKindTSO, 22)
 	require.NoError(t, err)
 	require.Equal(t, uint64(22), fence)
 
