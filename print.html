@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-32b61556.js";
+            window.path_to_searchindex_js = "searchindex-0b928a4f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-69e2a819.js"></script>
@@ -4852,7 +4852,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <li><strong>Protocol unit tests</strong>: package-local tests under <code>raftstore/peer</code>, <code>raftstore/store</code>, <code>raftstore/admin</code>, <code>raftstore/snapshot</code>, and <code>raftstore/migrate</code> validate one protocol surface at a time.</li>
 <li><strong>Node-local integration tests</strong>: store/admin tests verify snapshot install, membership application, and region runtime publication without booting a full cluster.</li>
 <li><strong>Multi-node deterministic data-plane integration tests</strong>: <code>raftstore/integration</code> uses <code>raftstore/testcluster</code> to boot real stores, wire transports, and drive migration/member flows against live runtimes.</li>
-<li><strong>Multi-node deterministic control-plane integration tests</strong>: <code>pd/server/control_plane_integration_test.go</code> uses <code>pd/testcluster</code> to boot <code>3 pd + replicated meta</code>, exercise rooted watch/reload propagation, and keep metadata HA behavior separate from store/data-plane tests.</li>
+<li><strong>Multi-node deterministic control-plane integration tests</strong>: <code>pd/integration/*_test.go</code> uses <code>pd/testcluster</code> to boot <code>3 pd + replicated meta</code>, exercise rooted watch/reload propagation, follower write rejection, allocator-fence/remove-region propagation, and control-plane read staleness without mixing those cases into store/data-plane tests.</li>
 <li><strong>Restart and recovery suites</strong>: <code>raftstore/integration/restart_recovery_test.go</code> covers restarted followers, removed-peer dehost persistence, and leader restart with subsequent membership changes.</li>
 <li><strong>Control-plane degradation and publish-boundary tests</strong>: <code>raftstore/integration/pd_degraded_test.go</code> and <code>raftstore/integration/snapshot_interruption_test.go</code> cover live PD outage after startup and failpoint-driven snapshot interruption before peer publication.</li>
 </ul>
