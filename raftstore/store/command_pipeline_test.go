@@ -71,6 +71,23 @@ func TestCommandPipelineRegisterProposalRejectsDuplicateID(t *testing.T) {
 	require.NotNil(t, result.resp)
 }
 
+func TestCommandPipelineRemoveProposalDropsPendingResult(t *testing.T) {
+	cp := newCommandPipeline(nil)
+
+	prop, err := cp.registerProposal(9)
+	require.NoError(t, err)
+	require.NotNil(t, prop)
+
+	cp.removeProposal(9)
+	cp.completeProposal(9, &raftcmdpb.RaftCmdResponse{}, nil)
+
+	select {
+	case <-prop.ch:
+		t.Fatal("removed proposal should not receive a completion result")
+	default:
+	}
+}
+
 func TestCommandPipelineRejectsLegacyPayload(t *testing.T) {
 	cp := newCommandPipeline(func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 		t.Fatal("legacy payload must not reach applier")

@@ -31,3 +31,13 @@ func TestIDAllocatorReserveRejectsZero(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrInvalidBatch)
 }
+
+func TestIDAllocatorFence(t *testing.T) {
+	a := NewIDAllocator(10)
+	a.Fence(99)
+	require.Equal(t, uint64(99), a.Current())
+	require.Equal(t, uint64(100), a.Alloc())
+
+	a.Fence(50)
+	require.Equal(t, uint64(100), a.Current())
+}

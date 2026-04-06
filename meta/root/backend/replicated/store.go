@@ -77,6 +77,13 @@ func (s *Store) LeaderID() uint64 {
 	return s.driver.LeaderID()
 }
 
+func (s *Store) Campaign() error {
+	if s == nil || s.driver == nil {
+		return nil
+	}
+	return s.driver.Campaign()
+}
+
 // Refresh reloads the rooted checkpoint plus retained committed tail from the
 // backing driver. Followers use this to catch up their in-memory view without
 // reopening the store.

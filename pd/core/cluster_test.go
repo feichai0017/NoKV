@@ -126,6 +126,29 @@ func TestClusterRemoveRegion(t *testing.T) {
 	require.False(t, removed)
 }
 
+func TestClusterRegionAccessorsAndHeartbeat(t *testing.T) {
+	c := NewCluster()
+	desc := testDescriptor(4, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
+	require.NoError(t, c.PublishRegionDescriptor(desc))
+
+	require.True(t, c.HasRegion(4))
+	require.False(t, c.HasRegion(99))
+
+	got, ok := c.GetRegionDescriptor(4)
+	require.True(t, ok)
+	require.Equal(t, desc.RegionID, got.RegionID)
+	got.StartKey = []byte("mutated")
+	fresh, ok := c.GetRegionDescriptor(4)
+	require.True(t, ok)
+	require.Equal(t, []byte("a"), fresh.StartKey)
+
+	require.True(t, c.TouchRegionHeartbeat(4))
+	lastHB, ok := c.RegionLastHeartbeat(4)
+	require.True(t, ok)
+	require.False(t, lastHB.IsZero())
+	require.False(t, c.TouchRegionHeartbeat(404))
+}
+
 func TestClusterReplaceRegionSnapshot(t *testing.T) {
 	c := NewCluster()
 	require.NoError(t, c.PublishRegionDescriptor(testDescriptor(1, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1})))
@@ -169,6 +192,149 @@ func TestClusterPublishRootEventTracksTransitionSnapshot(t *testing.T) {
 	assessment := c.ObserveRootEventLifecycle(rootevent.PeerAdded(target.RegionID, 2, 201, target))
 	require.Equal(t, rootstate.TransitionStatusCompleted, assessment.Status)
 	require.Equal(t, rootstate.RootEventLifecycleSkip, assessment.Decision)
+}
+
+func TestClusterReplaceRootSnapshotPreservesStoreStateAndRefreshesRuntime(t *testing.T) {
+	c := NewCluster()
+	require.NoError(t, c.UpsertStoreHeartbeat(StoreStats{StoreID: 9, RegionNum: 2}))
+
+	base := testDescriptor(30, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
+	target := base.Clone()
+	target.Peers = append(target.Peers, metaregion.Peer{StoreID: 2, PeerID: 201})
+	target.Epoch.ConfVersion++
+	target.EnsureHash()
+
+	c.ReplaceRootSnapshot(
+		map[uint64]descriptor.Descriptor{base.RegionID: base},
+		map[uint64]rootstate.PendingPeerChange{
+			base.RegionID: {
+				Kind:    rootstate.PendingPeerChangeAddition,
+				StoreID: 2,
+				PeerID:  201,
+				Base:    base,
+				Target:  target,
+			},
+		},
+		nil,
+	)
+
+	require.Len(t, c.StoreSnapshot(), 1)
+	require.Len(t, c.RegionSnapshot(), 1)
+	transitions := c.TransitionSnapshot()
+	require.Contains(t, transitions.PendingPeerChanges, base.RegionID)
+	operators := c.OperatorSnapshot()
+	require.Len(t, operators.Entries, 1)
+	require.Equal(t, uint64(30), operators.Entries[0].Transition.Key)
+	require.Equal(t, "pd", operators.Entries[0].Owner)
+
+	entry := operators.Entries[0]
+	entry.Owner = "mutated"
+	operators.Entries[0] = entry
+	change := transitions.PendingPeerChanges[base.RegionID]
+	change.Target.StartKey = []byte("mutated")
+	transitions.PendingPeerChanges[base.RegionID] = change
+
+	freshOperators := c.OperatorSnapshot()
+	freshTransitions := c.TransitionSnapshot()
+	require.Equal(t, "pd", freshOperators.Entries[0].Owner)
+	require.Equal(t, []byte("a"), freshTransitions.PendingPeerChanges[base.RegionID].Target.StartKey)
+
+	c.ReplaceRootSnapshot(nil, nil, nil)
+	require.Len(t, c.StoreSnapshot(), 1)
+	require.Empty(t, c.RegionSnapshot())
+	require.Empty(t, c.TransitionSnapshot().PendingPeerChanges)
+	require.Empty(t, c.OperatorSnapshot().Entries)
+}
+
+func TestClusterPublishRootEventCoversTopologyLifecycleBranches(t *testing.T) {
+	t.Run("region removal", func(t *testing.T) {
+		c := NewCluster()
+		desc := testDescriptor(50, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
+		require.NoError(t, c.PublishRegionDescriptor(desc))
+		require.NoError(t, c.PublishRootEvent(rootevent.RegionTombstoned(desc.RegionID)))
+		require.False(t, c.HasRegion(desc.RegionID))
+	})
+
+	t.Run("peer addition cancelled without base removes region", func(t *testing.T) {
+		c := NewCluster()
+		desc := testDescriptor(51, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
+		require.NoError(t, c.PublishRegionDescriptor(desc))
+		require.NoError(t, c.PublishRootEvent(rootevent.PeerAdditionCancelled(desc.RegionID, 2, 201, desc, descriptor.Descriptor{})))
+		require.False(t, c.HasRegion(desc.RegionID))
+	})
+
+	t.Run("peer removal cancelled restores base descriptor", func(t *testing.T) {
+		c := NewCluster()
+		base := testDescriptor(52, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
+		current := base.Clone()
+		current.EndKey = []byte("y")
+		current.EnsureHash()
+		require.NoError(t, c.PublishRegionDescriptor(current))
+		require.NoError(t, c.PublishRootEvent(rootevent.PeerRemovalCancelled(base.RegionID, 2, 201, current, base)))
+		got, ok := c.GetRegionDescriptor(base.RegionID)
+		require.True(t, ok)
+		require.Equal(t, base.EndKey, got.EndKey)
+		require.Equal(t, base.Epoch, got.Epoch)
+	})
+
+	t.Run("split committed replaces parent with children", func(t *testing.T) {
+		c := NewCluster()
+		parent := testDescriptor(53, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
+		left := testDescriptor(53, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1})
+		right := testDescriptor(54, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
+		require.NoError(t, c.PublishRegionDescriptor(parent))
+		require.NoError(t, c.PublishRootEvent(rootevent.RegionSplitCommitted(parent.RegionID, []byte("m"), left, right)))
+		gotLeft, ok := c.GetRegionDescriptor(left.RegionID)
+		require.True(t, ok)
+		require.Equal(t, left.EndKey, gotLeft.EndKey)
+		gotRight, ok := c.GetRegionDescriptor(right.RegionID)
+		require.True(t, ok)
+		require.Equal(t, right.StartKey, gotRight.StartKey)
+	})
+
+	t.Run("split cancelled restores base parent", func(t *testing.T) {
+		c := NewCluster()
+		base := testDescriptor(55, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
+		left := testDescriptor(55, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1})
+		right := testDescriptor(56, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
+		require.NoError(t, c.PublishRegionDescriptor(left))
+		require.NoError(t, c.PublishRegionDescriptor(right))
+		require.NoError(t, c.PublishRootEvent(rootevent.RegionSplitCancelled(base.RegionID, []byte("m"), left, right, base)))
+		got, ok := c.GetRegionDescriptor(base.RegionID)
+		require.True(t, ok)
+		require.Equal(t, base.StartKey, got.StartKey)
+		require.Equal(t, base.EndKey, got.EndKey)
+		require.False(t, c.HasRegion(right.RegionID))
+	})
+
+	t.Run("merge committed replaces left and right with merged", func(t *testing.T) {
+		c := NewCluster()
+		left := testDescriptor(57, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1})
+		right := testDescriptor(58, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
+		merged := testDescriptor(57, []byte("a"), []byte("z"), metaregion.Epoch{Version: 2, ConfVersion: 1})
+		require.NoError(t, c.PublishRegionDescriptor(left))
+		require.NoError(t, c.PublishRegionDescriptor(right))
+		require.NoError(t, c.PublishRootEvent(rootevent.RegionMerged(left.RegionID, right.RegionID, merged)))
+		require.False(t, c.HasRegion(right.RegionID))
+		got, ok := c.GetRegionDescriptor(merged.RegionID)
+		require.True(t, ok)
+		require.Equal(t, merged.EndKey, got.EndKey)
+	})
+
+	t.Run("merge cancelled restores left and right", func(t *testing.T) {
+		c := NewCluster()
+		baseLeft := testDescriptor(59, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1})
+		baseRight := testDescriptor(60, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
+		merged := testDescriptor(59, []byte("a"), []byte("z"), metaregion.Epoch{Version: 2, ConfVersion: 1})
+		require.NoError(t, c.PublishRegionDescriptor(merged))
+		require.NoError(t, c.PublishRootEvent(rootevent.RegionMergeCancelled(baseLeft.RegionID, baseRight.RegionID, merged, baseLeft, baseRight)))
+		gotLeft, ok := c.GetRegionDescriptor(baseLeft.RegionID)
+		require.True(t, ok)
+		require.Equal(t, baseLeft.EndKey, gotLeft.EndKey)
+		gotRight, ok := c.GetRegionDescriptor(baseRight.RegionID)
+		require.True(t, ok)
+		require.Equal(t, baseRight.StartKey, gotRight.StartKey)
+	})
 }
 
 func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descriptor.Descriptor {

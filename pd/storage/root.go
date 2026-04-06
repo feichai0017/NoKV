@@ -21,6 +21,7 @@ type RootStore struct {
 	observe     func() (rootstorage.ObservedCommitted, error)
 	isLeader    func() bool
 	leaderID    func() uint64
+	campaign    func() error
 
 	mu       sync.RWMutex
 	snapshot Snapshot
@@ -125,6 +126,13 @@ func (s *RootStore) LeaderID() uint64 {
 		return s.leaderID()
 	}
 	return 0
+}
+
+func (s *RootStore) Campaign() error {
+	if s == nil || s.root == nil || s.campaign == nil {
+		return nil
+	}
+	return s.campaign()
 }
 
 // AppendRootEvent persists one explicit rooted metadata event.

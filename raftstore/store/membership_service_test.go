@@ -138,3 +138,57 @@ func TestAddPeerPublishesPlannedTarget(t *testing.T) {
 		require.NotEqual(t, rootevent.KindPeerAdditionPlanned, ev.rootKind)
 	}
 }
+
+func TestRemovePeerAndTransferLeader(t *testing.T) {
+	db, localMeta := openStoreDB(t)
+	rs := NewStore(Config{Scheduler: newTestSchedulerSink(), StoreID: 1})
+	t.Cleanup(rs.Close)
+
+	region := &localmeta.RegionMeta{
+		ID:       303,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers: []metaregion.Peer{
+			{StoreID: 1, PeerID: 1},
+		},
+		State: metaregion.ReplicaStateRunning,
+	}
+	cfg := &peer.Config{
+		RaftConfig: myraft.Config{
+			ID:              1,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		},
+		Transport: noopTransport{},
+		Apply:     func([]myraft.Entry) error { return nil },
+		Storage:   mustPeerStorage(t, db, localMeta, region.ID),
+		GroupID:   region.ID,
+		Region:    region,
+	}
+	p, err := rs.StartPeer(cfg, []myraft.Peer{{ID: 1}})
+	require.NoError(t, err)
+	t.Cleanup(func() { rs.StopPeer(p.ID()) })
+	require.NoError(t, p.Campaign())
+
+	require.NoError(t, rs.TransferLeader(region.ID, 1))
+	require.Error(t, rs.TransferLeader(region.ID, 0))
+	require.Error(t, rs.RemovePeer(0, 2))
+	require.Error(t, rs.RemovePeer(region.ID, 0))
+
+	require.NoError(t, rs.applyRegionMetaSilent(localmeta.RegionMeta{
+		ID:       region.ID,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 2},
+		Peers: []metaregion.Peer{
+			{StoreID: 1, PeerID: 1},
+			{StoreID: 2, PeerID: 2},
+		},
+		State: metaregion.ReplicaStateRunning,
+	}))
+	require.NoError(t, rs.RemovePeer(region.ID, 2))
+}
