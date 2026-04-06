@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0b928a4f.js";
+            window.path_to_searchindex_js = "searchindex-a7cfe865.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-69e2a819.js"></script>
@@ -191,7 +191,7 @@
 <ul>
 <li><code>kv</code>: entry codec/read-decode errors.</li>
 <li><code>vfs</code>: filesystem contract errors.</li>
-<li><code>pd/core</code>: control-plane validation/conflict errors.</li>
+<li><code>pd/catalog</code>: control-plane validation/conflict errors.</li>
 </ul>
 <hr>
 <h2 id="2-propagation-rules"><a class="header" href="#2-propagation-rules">2. Propagation Rules</a></h2>
@@ -205,7 +205,7 @@
 <h2 id="3-naming-rules"><a class="header" href="#3-naming-rules">3. Naming Rules</a></h2>
 <ol>
 <li>Exported sentinels use <code>ErrXxx</code>.</li>
-<li>Error text should be lowercase and package-scoped when useful (for example <code>pd/core: ...</code>, <code>vfs: ...</code>).</li>
+<li>Error text should be lowercase and package-scoped when useful (for example <code>pd/catalog: ...</code>, <code>pd/idalloc: ...</code>, <code>vfs: ...</code>).</li>
 <li>Avoid duplicate sentinels with identical semantics in different packages.</li>
 </ol>
 <hr>
@@ -224,7 +224,7 @@ key/value validation errors, throttling, and lifecycle guards.</li>
 <li><code>pb/errorpb.proto</code>: region/store routing protobuf errors (<code>RegionError</code>,
 <code>StoreNotMatch</code>, <code>RegionNotFound</code>, <code>KeyNotInRegion</code>, …)</li>
 <li><code>wal/errors.go</code>: WAL encode/decode and segment errors</li>
-<li><code>pd/core/errors.go</code>: PD metadata and range validation errors</li>
+<li><code>pd/catalog/errors.go</code>: PD metadata and range validation errors</li>
 </ul>
 <hr>
 <h2 id="5-propagation-in-hot-paths"><a class="header" href="#5-propagation-in-hot-paths">5. Propagation in Hot Paths</a></h2>

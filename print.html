@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0b928a4f.js";
+            window.path_to_searchindex_js = "searchindex-a7cfe865.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-69e2a819.js"></script>
@@ -832,7 +832,7 @@ func main() {
     end
 
     subgraph "Distributed shape"
-        RPC --&gt; Server["server.Server"]
+        RPC --&gt; Server["server.Node"]
         Server --&gt; Store["store.Store"]
         Store --&gt; Peer["peer.Peer"]
         Peer --&gt; Core
@@ -941,8 +941,8 @@ fmt.Println(string(entry.Value))
 <h2 id="3-replication-layer-raftstore"><a class="header" href="#3-replication-layer-raftstore">3. Replication Layer (raftstore)</a></h2>
 <h3 id="code-entry-points-1"><a class="header" href="#code-entry-points-1">Code entry points</a></h3>
 <p>If you want to inspect the distributed side first, start here:</p>
-<pre><code class="language-go">srv, err := server.New(server.Config{
-    DB: db,
+<pre><code class="language-go">srv, err := server.NewNode(server.Config{
+    Storage: server.Storage{MVCC: db, Raft: db.RaftLog()},
     Store: store.Config{StoreID: 1},
     Raft: myraft.Config{ElectionTick: 10, HeartbeatTick: 2, PreVote: true},
     TransportAddr: "127.0.0.1:20160",
@@ -954,7 +954,7 @@ defer srv.Close()
 </code></pre>
 <p>Then read:</p>
 <ul>
-<li><code>raftstore/server/server.go</code></li>
+<li><code>raftstore/server/node.go</code></li>
 <li><code>raftstore/store/store.go</code></li>
 <li><code>raftstore/peer/peer.go</code></li>
 <li><code>raftstore/engine/wal_storage.go</code></li>
@@ -971,13 +971,13 @@ defer srv.Close()
 <tr><td><a href="../raftstore/engine"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage, reusing the DB’s WAL while keeping store-local raft replay metadata in sync.</td></tr>
 <tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport for Raft Step messages, connection management, retries/blocks/TLS. Also acts as the host for NoKV RPC.</td></tr>
 <tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>NoKV RPC handler plus <code>kv.Apply</code> bridging Raft commands to MVCC logic.</td></tr>
-<tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>ServerConfig</code> + <code>New</code> combine DB, Store, transport, and NoKV service into a reusable node instance.</td></tr>
+<tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>Config</code> + <code>NewNode</code> combine DB, Store, transport, and NoKV service into a reusable node instance.</td></tr>
 </tbody>
 </table>
 </div>
 <h3 id="31-bootstrap-sequence"><a class="header" href="#31-bootstrap-sequence">3.1 Bootstrap Sequence</a></h3>
 <ol>
-<li><code>server.New</code> wires DB, store configuration (StoreID, hooks, scheduler), Raft config, and transport address. It registers NoKV RPC on the shared gRPC server and sets <code>transport.SetHandler(store.Step)</code>.</li>
+<li><code>server.NewNode</code> wires DB, store configuration (StoreID, hooks, scheduler), Raft config, and transport address. It registers NoKV RPC on the shared gRPC server and sets <code>transport.SetHandler(store.Step)</code>.</li>
 <li>CLI (<code>nokv serve</code>) or application enumerates the local peer catalog and calls <code>Store.StartPeer</code> for every Region containing the local store:
 <ul>
 <li><code>peer.Config</code> includes Raft params, transport, <code>kv.NewEntryApplier</code>, peer storage, and Region metadata.</li>
@@ -1014,7 +1014,7 @@ defer srv.Close()
 </tbody>
 </table>
 </div>
-<p><code>nokv serve</code> is the CLI entry point—open the DB, construct <code>raftstore.Server</code>, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). <code>scripts/dev/cluster.sh</code> builds the CLI, writes a minimal local peer catalog, launches multiple <code>nokv serve</code> processes on localhost, and handles cleanup on Ctrl+C.</p>
+<p><code>nokv serve</code> is the CLI entry point—open the DB, construct <code>server.Node</code>, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). <code>scripts/dev/cluster.sh</code> builds the CLI, writes a minimal local peer catalog, launches multiple <code>nokv serve</code> processes on localhost, and handles cleanup on Ctrl+C.</p>
 <p>The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC and region semantics remain familiar, but the service name exposed on the wire is <code>pb.NoKV</code>.</p>
 <hr>
 <h2 id="5-client-workflow"><a class="header" href="#5-client-workflow">5. Client Workflow</a></h2>
@@ -1031,7 +1031,7 @@ defer srv.Close()
 <li>Regions <code>[a,m)</code> and <code>[m,+∞)</code>, each led by a different store.</li>
 <li><code>Mutate(ctx, primary="alfa", mutations, startTs, commitTs, ttl)</code> prewrites and commits across the relevant regions.</li>
 <li><code>Get/Scan</code> retries automatically if the leader changes.</li>
-<li>See <code>raftstore/server/server_test.go</code> for a full end-to-end example using real <code>raftstore.Server</code> instances.</li>
+<li>See <code>raftstore/server/node_test.go</code> for a full end-to-end example using real <code>server.Node</code> instances.</li>
 </ol>
 <hr>
 <h2 id="6-failure-handling"><a class="header" href="#6-failure-handling">6. Failure Handling</a></h2>
@@ -1324,7 +1324,7 @@ vlog -&gt; LSM/WAL, with optional sync handoff).</li>
 <ul>
 <li><code>kv</code>: entry codec/read-decode errors.</li>
 <li><code>vfs</code>: filesystem contract errors.</li>
-<li><code>pd/core</code>: control-plane validation/conflict errors.</li>
+<li><code>pd/catalog</code>: control-plane validation/conflict errors.</li>
 </ul>
 <hr>
 <h2 id="2-propagation-rules"><a class="header" href="#2-propagation-rules">2. Propagation Rules</a></h2>
@@ -1338,7 +1338,7 @@ vlog -&gt; LSM/WAL, with optional sync handoff).</li>
 <h2 id="3-naming-rules"><a class="header" href="#3-naming-rules">3. Naming Rules</a></h2>
 <ol>
 <li>Exported sentinels use <code>ErrXxx</code>.</li>
-<li>Error text should be lowercase and package-scoped when useful (for example <code>pd/core: ...</code>, <code>vfs: ...</code>).</li>
+<li>Error text should be lowercase and package-scoped when useful (for example <code>pd/catalog: ...</code>, <code>pd/idalloc: ...</code>, <code>vfs: ...</code>).</li>
 <li>Avoid duplicate sentinels with identical semantics in different packages.</li>
 </ol>
 <hr>
@@ -1357,7 +1357,7 @@ key/value validation errors, throttling, and lifecycle guards.</li>
 <li><code>pb/errorpb.proto</code>: region/store routing protobuf errors (<code>RegionError</code>,
 <code>StoreNotMatch</code>, <code>RegionNotFound</code>, <code>KeyNotInRegion</code>, …)</li>
 <li><code>wal/errors.go</code>: WAL encode/decode and segment errors</li>
-<li><code>pd/core/errors.go</code>: PD metadata and range validation errors</li>
+<li><code>pd/catalog/errors.go</code>: PD metadata and range validation errors</li>
 </ul>
 <hr>
 <h2 id="5-propagation-in-hot-paths"><a class="header" href="#5-propagation-in-hot-paths">5. Propagation in Hot Paths</a></h2>
@@ -3490,7 +3490,7 @@ is not present.</li>
 <li><a href="../percolator/txn_test.go"><code>percolator/txn_test.go</code></a></li>
 <li><a href="../raftstore/kv/service_test.go"><code>raftstore/kv/service_test.go</code></a></li>
 <li><a href="../raftstore/client/client_test.go"><code>raftstore/client/client_test.go</code></a></li>
-<li><a href="../raftstore/server/server_test.go"><code>raftstore/server/server_test.go</code></a></li>
+<li><a href="../raftstore/server/node_test.go"><code>raftstore/server/node_test.go</code></a></li>
 </ul>
 <p>These tests cover 2PC happy path, lock conflicts, status checks, resolve/rollback behavior, and client region-aware retries.</p>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -3520,7 +3520,7 @@ is not present.</li>
 <tr><td><a href="../raftstore/localmeta"><code>meta</code></a></td><td>Store-local durable metadata: peer catalog for restart and raft WAL replay checkpoints for replay/GC.</td></tr>
 <tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (NoKV).</td></tr>
 <tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>NoKV RPC implementation, bridging Raft commands to MVCC operations via <code>kv.Apply</code>.</td></tr>
-<tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>ServerConfig</code> + <code>New</code> that bind DB, Store, transport, and NoKV server into a reusable node primitive.</td></tr>
+<tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>Config</code> + <code>NewNode</code> that bind storage, Store, transport, and the shared KV/admin RPC surfaces into a reusable node primitive.</td></tr>
 </tbody>
 </table>
 </div>
@@ -3531,7 +3531,7 @@ is not present.</li>
     Client --&gt; PD["PD-lite"]
 
     subgraph "Node runtime"
-        Server["server.Server"] --&gt; Store["store.Store"]
+        Server["server.Node"] --&gt; Store["store.Store"]
         Store --&gt; Router["router"]
         Store --&gt; Peer["peer.Peer"]
         Store --&gt; Scheduler["scheduler runtime"]
@@ -3549,8 +3549,8 @@ is not present.</li>
 <ol>
 <li>
 <p><strong>Construct Server</strong></p>
-<pre><code class="language-go">srv, _ := server.New(server.Config{
-    DB: db,
+<pre><code class="language-go">srv, _ := server.NewNode(server.Config{
+    Storage: server.Storage{MVCC: db, Raft: db.RaftLog()},
     Store: store.Config{StoreID: 1},
     Raft: myraft.Config{ElectionTick: 10, HeartbeatTick: 2, PreVote: true},
     TransportAddr: "127.0.0.1:20160",
@@ -3657,14 +3657,14 @@ is not present.</li>
 </tbody>
 </table>
 </div>
-<p>The <code>cmd/nokv serve</code> command uses <code>raftstore.Server</code> internally and prints a local peer catalog summary (key ranges, peers) so operators can verify the node’s recovery view at startup.</p>
+<p>The <code>cmd/nokv serve</code> command uses <code>server.Node</code> internally and prints a local peer catalog summary (key ranges, peers) so operators can verify the node’s recovery view at startup.</p>
 <hr>
 <h2 id="7-client-interaction-raftstoreclient"><a class="header" href="#7-client-interaction-raftstoreclient">7. Client Interaction (<code>raftstore/client</code>)</a></h2>
 <ul>
 <li>Region-aware routing with NotLeader/EpochNotMatch retry.</li>
 <li><code>Mutate</code> splits mutations by region and performs two-phase commit (primary first). <code>Put</code> / <code>Delete</code> are convenience wrappers.</li>
 <li><code>Scan</code> transparently walks region boundaries.</li>
-<li>End-to-end coverage lives in <code>raftstore/server/server_test.go</code>, which launches real servers, uses the client to write and delete keys, and verifies the results.</li>
+<li>End-to-end coverage lives in <code>raftstore/server/node_test.go</code>, which launches real nodes, uses the client to write and delete keys, and verifies the results.</li>
 </ul>
 <hr>
 <h2 id="8-control-plane--region-operations"><a class="header" href="#8-control-plane--region-operations">8. Control Plane &amp; Region Operations</a></h2>
@@ -3818,13 +3818,14 @@ truth. Durable truth lives in <code>meta/root</code>.</p>
 <pre class="mermaid">flowchart LR
     Store["nokv serve"] --&gt;|"StoreHeartbeat / RegionHeartbeat"| PD["PD-lite (gRPC)"]
     Gateway["nokv-redis (raft mode)"] --&gt;|"GetRegionByKey / Tso"| PD
-    PD --&gt; Cluster["pd/core.Cluster"]
+    PD --&gt; Cluster["pd/catalog.Cluster"]
     Cluster --&gt; Scheduler["leader-transfer hint planner"]
 </pre>
 
 <p>Core implementation units:</p>
 <ul>
-<li><code>pd/core</code>: in-memory cluster metadata model + allocators.</li>
+<li><code>pd/catalog</code>: in-memory cluster metadata model.</li>
+<li><code>pd/idalloc</code>: monotonic ID allocator used by PD.</li>
 <li><code>pd/storage</code>: persistence abstraction (<code>Store</code>) backed by the metadata root.</li>
 <li><code>pd/server</code>: gRPC service + RPC validation/error mapping.</li>
 <li><code>pd/client</code>: client wrapper used by store/gateway.</li>
@@ -3851,7 +3852,7 @@ plane deployment; it simply has no control plane.</p>
 <p>Both deployments keep the same logical split:</p>
 <ul>
 <li><code>meta/root/*</code>: durable rooted truth</li>
-<li><code>pd/view</code> + <code>pd/core</code>: rebuildable routing/scheduling state</li>
+<li><code>pd/view</code> + <code>pd/catalog</code>: rebuildable routing/scheduling state</li>
 <li><code>pd/server</code>: gRPC API surface</li>
 </ul>
 <p>The difference is only the rooted backend:</p>
@@ -3921,7 +3922,7 @@ replaying rooted truth:</p>
 <li>Open rooted <code>pd/storage</code> from <code>--workdir</code>.</li>
 <li>Reconstruct a rooted PD snapshot (<code>regions</code> + allocator fences).</li>
 <li>Compute starts as <code>max(cli_start, fence+1)</code>.</li>
-<li>Materialize the rooted region snapshot into <code>pd/core.Cluster</code>.</li>
+<li>Materialize the rooted region snapshot into <code>pd/catalog.Cluster</code>.</li>
 </ol>
 <p>For replicated mode, followers periodically refresh rooted state and rebuild the
 service-side view. This avoids allocator rollback and removes the old parallel
@@ -4013,7 +4014,7 @@ clients are expected to retry against another PD endpoint.</p>
 <li><code>StoreHeartbeat</code> handling and store-view inspection</li>
 </ul>
 <p>Follower reads are driven by a rooted watch-first tail subscription, with
-explicit refresh/reload as fallback into <code>pd/core.Cluster</code>. They are expected
+explicit refresh/reload as fallback into <code>pd/catalog.Cluster</code>. They are expected
 to be shortly stale rather than linearly consistent.</p>
 <h3 id="client-behavior"><a class="header" href="#client-behavior">Client behavior</a></h3>
 <p><code>pd/client</code> accepts multiple PD addresses. Write RPCs retry across PD nodes and
@@ -4874,7 +4875,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <tr><td>Follower restart after snapshot install</td><td>Covered</td><td><code>raftstore/integration/restart_recovery_test.go::TestExpandedPeerRestartPreservesRegionAndData</code></td><td>Ensures installed peer persists region metadata and data after restart.</td></tr>
 <tr><td>Removed peer restart</td><td>Covered</td><td><code>raftstore/integration/restart_recovery_test.go::TestRemovedPeerRestartDoesNotRehost</code></td><td>Ensures dehosted peers do not come back after restart.</td></tr>
 <tr><td>Leader restart with follow-up membership change</td><td>Covered</td><td><code>raftstore/integration/restart_recovery_test.go::TestLeaderRestartStillAllowsMembershipChanges</code></td><td>Exercises leadership churn before a later remove-peer operation.</td></tr>
-<tr><td>Control-plane degraded / PD unavailable</td><td>Covered</td><td><code>pd/adapter/region_sink_test.go</code>, <code>raftstore/store/command_service_test.go::TestStoreProposeCommandSurvivesSchedulerUnavailable</code>, <code>raftstore/integration/pd_degraded_test.go::TestClusterSurvivesPDUnavailableAfterStartup</code></td><td>Covers both local degraded scheduler semantics and live multi-node PD outage after route cache warmup; new cold-route misses still fail with <code>RouteUnavailable</code> as expected.</td></tr>
+<tr><td>Control-plane degraded / PD unavailable</td><td>Covered</td><td><code>pd/adapter/scheduler_client_test.go</code>, <code>raftstore/store/command_service_test.go::TestStoreProposeCommandSurvivesSchedulerUnavailable</code>, <code>raftstore/integration/pd_degraded_test.go::TestClusterSurvivesPDUnavailableAfterStartup</code></td><td>Covers both local degraded scheduler semantics and live multi-node PD outage after route cache warmup; new cold-route misses still fail with <code>RouteUnavailable</code> as expected.</td></tr>
 <tr><td>Scheduler queue overflow / dropped operations</td><td>Covered</td><td><code>raftstore/store/scheduler_runtime_test.go::TestStoreSchedulerStatusTracksQueueDrop</code></td><td>Validates local degraded status and dropped operation accounting.</td></tr>
 <tr><td>Snapshot install interrupted before publish</td><td>Covered</td><td><code>raftstore/integration/snapshot_interruption_test.go::TestExpandSnapshotInstallInterruptedBeforePublish</code>, <code>raftstore/store/peer_lifecycle_test.go::TestStoreInstallRegionSnapshotRejectsCorruptPayload</code></td><td>Uses failpoint injection to verify target install aborts without leaving a hosted peer or polluted region metadata, then retries cleanly after restart.</td></tr>
 <tr><td>Request cancel / deadline propagation</td><td>Covered</td><td><code>raftstore/client/client_test.go::TestClientGetHonorsCanceledContextDuringRouteLookup</code>, <code>raftstore/client/client_test.go::TestClientGetHonorsCanceledContextDuringRPC</code>, <code>raftstore/client/client_test.go::TestClientPutHonorsCanceledContextDuringRouteLookup</code>, <code>raftstore/client/client_test.go::TestClientPutHonorsCanceledContextDuringRPC</code>, <code>raftstore/client/client_test.go::TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRouteLookup</code>, <code>raftstore/client/client_test.go::TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRPC</code>, <code>raftstore/client/client_test.go::TestClientResolveLocksHonorsCanceledContextDuringMultiRegionRPC</code>, <code>raftstore/integration/context_propagation_test.go::TestClientReadWriteHonorContextUnderQuorumLoss</code>, <code>raftstore/integration/context_propagation_test.go::TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLoss</code></td><td>Verifies read/write paths plus multi-region 2PC and resolve-lock flows preserve caller cancellation/deadlines through route lookup, RPC, and live split-region quorum loss instead of collapsing to generic retry exhaustion.</td></tr>
@@ -6728,7 +6729,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <p>当前 <code>pd</code> 的主要代码：</p>
 <ul>
 <li><code>pd/storage/root.go</code></li>
-<li><code>pd/core/cluster.go</code></li>
+<li><code>pd/catalog/cluster.go</code></li>
 <li><code>pd/view/pending_view.go</code></li>
 <li><code>pd/operator</code></li>
 <li><code>pd/server</code></li>
@@ -7495,7 +7496,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <p>NoKV 当前已经形成：</p>
 <ul>
 <li>truth：<code>meta/root</code></li>
-<li>view：<code>pd/core</code>、<code>pd/view</code>、<code>pd/operator</code></li>
+<li>view：<code>pd/catalog</code>、<code>pd/view</code>、<code>pd/operator</code></li>
 <li>service：<code>pd/server</code></li>
 </ul>
 <h3 id="43-virtual-log而不是把上层绑死在协议细节上"><a class="header" href="#43-virtual-log而不是把上层绑死在协议细节上">4.3 virtual log，而不是把上层绑死在协议细节上</a></h3>
@@ -7666,7 +7667,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <p>关键代码：</p>
 <ul>
 <li><code>pd/storage/root.go</code></li>
-<li><code>pd/core/cluster.go</code></li>
+<li><code>pd/catalog/cluster.go</code></li>
 <li><code>pd/view/pending_view.go</code></li>
 <li><code>pd/operator</code></li>
 <li><code>pd/server/service.go</code></li>

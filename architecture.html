@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0b928a4f.js";
+            window.path_to_searchindex_js = "searchindex-a7cfe865.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-69e2a819.js"></script>
@@ -238,7 +238,7 @@
     end
 
     subgraph "Distributed shape"
-        RPC --&gt; Server["server.Server"]
+        RPC --&gt; Server["server.Node"]
         Server --&gt; Store["store.Store"]
         Store --&gt; Peer["peer.Peer"]
         Peer --&gt; Core
@@ -347,8 +347,8 @@ fmt.Println(string(entry.Value))
 <h2 id="3-replication-layer-raftstore"><a class="header" href="#3-replication-layer-raftstore">3. Replication Layer (raftstore)</a></h2>
 <h3 id="code-entry-points-1"><a class="header" href="#code-entry-points-1">Code entry points</a></h3>
 <p>If you want to inspect the distributed side first, start here:</p>
-<pre><code class="language-go">srv, err := server.New(server.Config{
-    DB: db,
+<pre><code class="language-go">srv, err := server.NewNode(server.Config{
+    Storage: server.Storage{MVCC: db, Raft: db.RaftLog()},
     Store: store.Config{StoreID: 1},
     Raft: myraft.Config{ElectionTick: 10, HeartbeatTick: 2, PreVote: true},
     TransportAddr: "127.0.0.1:20160",
@@ -360,7 +360,7 @@ defer srv.Close()
 </code></pre>
 <p>Then read:</p>
 <ul>
-<li><code>raftstore/server/server.go</code></li>
+<li><code>raftstore/server/node.go</code></li>
 <li><code>raftstore/store/store.go</code></li>
 <li><code>raftstore/peer/peer.go</code></li>
 <li><code>raftstore/engine/wal_storage.go</code></li>
@@ -377,13 +377,13 @@ defer srv.Close()
 <tr><td><a href="../raftstore/engine"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage, reusing the DB’s WAL while keeping store-local raft replay metadata in sync.</td></tr>
 <tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport for Raft Step messages, connection management, retries/blocks/TLS. Also acts as the host for NoKV RPC.</td></tr>
 <tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>NoKV RPC handler plus <code>kv.Apply</code> bridging Raft commands to MVCC logic.</td></tr>
-<tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>ServerConfig</code> + <code>New</code> combine DB, Store, transport, and NoKV service into a reusable node instance.</td></tr>
+<tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>Config</code> + <code>NewNode</code> combine DB, Store, transport, and NoKV service into a reusable node instance.</td></tr>
 </tbody>
 </table>
 </div>
 <h3 id="31-bootstrap-sequence"><a class="header" href="#31-bootstrap-sequence">3.1 Bootstrap Sequence</a></h3>
 <ol>
-<li><code>server.New</code> wires DB, store configuration (StoreID, hooks, scheduler), Raft config, and transport address. It registers NoKV RPC on the shared gRPC server and sets <code>transport.SetHandler(store.Step)</code>.</li>
+<li><code>server.NewNode</code> wires DB, store configuration (StoreID, hooks, scheduler), Raft config, and transport address. It registers NoKV RPC on the shared gRPC server and sets <code>transport.SetHandler(store.Step)</code>.</li>
 <li>CLI (<code>nokv serve</code>) or application enumerates the local peer catalog and calls <code>Store.StartPeer</code> for every Region containing the local store:
 <ul>
 <li><code>peer.Config</code> includes Raft params, transport, <code>kv.NewEntryApplier</code>, peer storage, and Region metadata.</li>
@@ -420,7 +420,7 @@ defer srv.Close()
 </tbody>
 </table>
 </div>
-<p><code>nokv serve</code> is the CLI entry point—open the DB, construct <code>raftstore.Server</code>, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). <code>scripts/dev/cluster.sh</code> builds the CLI, writes a minimal local peer catalog, launches multiple <code>nokv serve</code> processes on localhost, and handles cleanup on Ctrl+C.</p>
+<p><code>nokv serve</code> is the CLI entry point—open the DB, construct <code>server.Node</code>, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). <code>scripts/dev/cluster.sh</code> builds the CLI, writes a minimal local peer catalog, launches multiple <code>nokv serve</code> processes on localhost, and handles cleanup on Ctrl+C.</p>
 <p>The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC and region semantics remain familiar, but the service name exposed on the wire is <code>pb.NoKV</code>.</p>
 <hr>
 <h2 id="5-client-workflow"><a class="header" href="#5-client-workflow">5. Client Workflow</a></h2>
@@ -437,7 +437,7 @@ defer srv.Close()
 <li>Regions <code>[a,m)</code> and <code>[m,+∞)</code>, each led by a different store.</li>
 <li><code>Mutate(ctx, primary="alfa", mutations, startTs, commitTs, ttl)</code> prewrites and commits across the relevant regions.</li>
 <li><code>Get/Scan</code> retries automatically if the leader changes.</li>
-<li>See <code>raftstore/server/server_test.go</code> for a full end-to-end example using real <code>raftstore.Server</code> instances.</li>
+<li>See <code>raftstore/server/node_test.go</code> for a full end-to-end example using real <code>server.Node</code> instances.</li>
 </ol>
 <hr>
 <h2 id="6-failure-handling"><a class="header" href="#6-failure-handling">6. Failure Handling</a></h2>

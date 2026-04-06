@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0b928a4f.js";
+            window.path_to_searchindex_js = "searchindex-a7cfe865.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-69e2a819.js"></script>
@@ -200,13 +200,14 @@ truth. Durable truth lives in <code>meta/root</code>.</p>
 <pre class="mermaid">flowchart LR
     Store["nokv serve"] --&gt;|"StoreHeartbeat / RegionHeartbeat"| PD["PD-lite (gRPC)"]
     Gateway["nokv-redis (raft mode)"] --&gt;|"GetRegionByKey / Tso"| PD
-    PD --&gt; Cluster["pd/core.Cluster"]
+    PD --&gt; Cluster["pd/catalog.Cluster"]
     Cluster --&gt; Scheduler["leader-transfer hint planner"]
 </pre>
 
 <p>Core implementation units:</p>
 <ul>
-<li><code>pd/core</code>: in-memory cluster metadata model + allocators.</li>
+<li><code>pd/catalog</code>: in-memory cluster metadata model.</li>
+<li><code>pd/idalloc</code>: monotonic ID allocator used by PD.</li>
 <li><code>pd/storage</code>: persistence abstraction (<code>Store</code>) backed by the metadata root.</li>
 <li><code>pd/server</code>: gRPC service + RPC validation/error mapping.</li>
 <li><code>pd/client</code>: client wrapper used by store/gateway.</li>
@@ -233,7 +234,7 @@ plane deployment; it simply has no control plane.</p>
 <p>Both deployments keep the same logical split:</p>
 <ul>
 <li><code>meta/root/*</code>: durable rooted truth</li>
-<li><code>pd/view</code> + <code>pd/core</code>: rebuildable routing/scheduling state</li>
+<li><code>pd/view</code> + <code>pd/catalog</code>: rebuildable routing/scheduling state</li>
 <li><code>pd/server</code>: gRPC API surface</li>
 </ul>
 <p>The difference is only the rooted backend:</p>
@@ -303,7 +304,7 @@ replaying rooted truth:</p>
 <li>Open rooted <code>pd/storage</code> from <code>--workdir</code>.</li>
 <li>Reconstruct a rooted PD snapshot (<code>regions</code> + allocator fences).</li>
 <li>Compute starts as <code>max(cli_start, fence+1)</code>.</li>
-<li>Materialize the rooted region snapshot into <code>pd/core.Cluster</code>.</li>
+<li>Materialize the rooted region snapshot into <code>pd/catalog.Cluster</code>.</li>
 </ol>
 <p>For replicated mode, followers periodically refresh rooted state and rebuild the
 service-side view. This avoids allocator rollback and removes the old parallel
@@ -395,7 +396,7 @@ clients are expected to retry against another PD endpoint.</p>
 <li><code>StoreHeartbeat</code> handling and store-view inspection</li>
 </ul>
 <p>Follower reads are driven by a rooted watch-first tail subscription, with
-explicit refresh/reload as fallback into <code>pd/core.Cluster</code>. They are expected
+explicit refresh/reload as fallback into <code>pd/catalog.Cluster</code>. They are expected
 to be shortly stale rather than linearly consistent.</p>
 <h3 id="client-behavior"><a class="header" href="#client-behavior">Client behavior</a></h3>
 <p><code>pd/client</code> accepts multiple PD addresses. Write RPCs retry across PD nodes and
