@@ -1,0 +1,56 @@
+package replicated
+
+import (
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestNetworkDriverCompactCommittedShiftsTailWindow(t *testing.T) {
+	_, drivers, leaderID := openNetworkTestCluster(t, 8)
+	driver := drivers[leaderID]
+	records := make([]rootstorage.CommittedEvent, 0, 3)
+	for i := 0; i < 3; i++ {
+		records = append(records, rootstorage.CommittedEvent{
+			Cursor: rootstate.Cursor{Term: 1, Index: uint64(i + 1)},
+			Event: rootevent.RegionDescriptorPublished(testDescriptor(
+				uint64(200+i),
+				[]byte{byte('a' + i)},
+				[]byte{byte('b' + i)},
+			)),
+		})
+	}
+	_, err := driver.AppendCommitted(records...)
+	require.NoError(t, err)
+
+	before, err := driver.ObserveTail(rootstorage.TailToken{})
+	require.NoError(t, err)
+	require.True(t, before.Advanced())
+
+	sizeBefore, err := driver.Size()
+	require.NoError(t, err)
+	require.Greater(t, sizeBefore, int64(0))
+
+	stream := before.Observed.Tail
+	require.Len(t, stream.Records, 3)
+
+	compacted := rootstorage.CommittedTail{Records: rootstorage.CloneCommittedEvents(stream.Records[2:])}
+	require.NoError(t, driver.CompactCommitted(compacted))
+
+	sizeAfter, err := driver.Size()
+	require.NoError(t, err)
+	require.Greater(t, sizeAfter, int64(0))
+
+	after, err := driver.ObserveTail(before.Token)
+	require.NoError(t, err)
+	require.True(t, after.Advanced())
+	require.True(t, after.WindowShifted())
+	require.Equal(t, rootstorage.TailAdvanceWindowShifted, after.Kind())
+	require.Equal(t, before.LastCursor(), after.LastCursor())
+
+	require.Len(t, after.Observed.Tail.Records, 1)
+	require.Equal(t, stream.Records[2].Cursor, after.Observed.Tail.Records[0].Cursor)
+}

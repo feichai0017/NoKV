@@ -1,10 +1,12 @@
 package replicated
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
@@ -161,6 +163,71 @@ func TestNetworkDriverWaitForTailReturnsObservedStateOnClose(t *testing.T) {
 	}
 	require.Equal(t, commit.Cursor, advance.LastCursor())
 	require.NotEmpty(t, advance.Observed.Tail.Records)
+}
+
+func TestReplicatedStoreLeaderAndTailWrappers(t *testing.T) {
+	stores, _, leaderID := openNetworkTestCluster(t, 4)
+	followerID := uint64(1)
+	if followerID == leaderID {
+		followerID = 2
+	}
+
+	require.True(t, stores[leaderID].IsLeader())
+	require.False(t, stores[followerID].IsLeader())
+	require.Equal(t, leaderID, stores[followerID].LeaderID())
+	require.NotNil(t, stores[followerID].TailNotify())
+
+	subscription := stores[followerID].SubscribeTail(rootstorage.TailToken{})
+	require.NotNil(t, subscription)
+
+	commit, err := stores[leaderID].Append(
+		rootevent.RegionDescriptorPublished(testDescriptor(101, []byte("a"), []byte("z"))),
+	)
+	require.NoError(t, err)
+
+	advance, err := subscription.Next(context.Background(), 2*time.Second)
+	require.NoError(t, err)
+	require.True(t, advance.Advanced())
+	require.Equal(t, commit.Cursor, advance.LastCursor())
+
+	subscription.Acknowledge(advance)
+	next, err := stores[followerID].ObserveTail(subscription.Token())
+	require.NoError(t, err)
+	require.False(t, next.Advanced())
+}
+
+func TestReplicatedStoreFenceAllocator(t *testing.T) {
+	stores, _, leaderID := openNetworkTestCluster(t, 4)
+	followerID := uint64(1)
+	if followerID == leaderID {
+		followerID = 2
+	}
+
+	idFence, err := stores[leaderID].FenceAllocator(rootpkg.AllocatorKindID, 123)
+	require.NoError(t, err)
+	require.Equal(t, uint64(123), idFence)
+
+	tsoFence, err := stores[leaderID].FenceAllocator(rootpkg.AllocatorKindTSO, 456)
+	require.NoError(t, err)
+	require.Equal(t, uint64(456), tsoFence)
+
+	idFence, err = stores[leaderID].FenceAllocator(rootpkg.AllocatorKindID, 120)
+	require.NoError(t, err)
+	require.Equal(t, uint64(123), idFence)
+
+	_, err = stores[leaderID].FenceAllocator(rootpkg.AllocatorKind(99), 1)
+	require.Error(t, err)
+
+	require.Eventually(t, func() bool {
+		if err := stores[followerID].Refresh(); err != nil {
+			return false
+		}
+		current, err := stores[followerID].Current()
+		if err != nil {
+			return false
+		}
+		return current.IDFence == 123 && current.TSOFence == 456
+	}, 5*time.Second, 50*time.Millisecond)
 }
 
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {

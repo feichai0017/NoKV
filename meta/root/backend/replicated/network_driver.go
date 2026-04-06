@@ -29,15 +29,16 @@ type NetworkConfig struct {
 // transport, which is the first real landing point for multi-process metadata
 // replication.
 type NetworkDriver struct {
-	mu        sync.Mutex
-	closeOnce sync.Once
-	id        uint64
-	workdir   string
-	adapter   *substrateAdapter
-	node      *networkNode
-	transport Transport
-	stopCh    chan struct{}
-	wg        sync.WaitGroup
+	mu          sync.Mutex
+	closeOnce   sync.Once
+	id          uint64
+	workdir     string
+	adapter     *substrateAdapter
+	node        *networkNode
+	transport   Transport
+	ticksPaused bool
+	stopCh      chan struct{}
+	wg          sync.WaitGroup
 }
 
 // NewNetworkDriver creates one transport-backed local metadata replication node.
@@ -131,6 +132,33 @@ func (d *NetworkDriver) Campaign() error {
 	return d.sendMessages(outbound)
 }
 
+func (d *NetworkDriver) PauseTicks() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.ticksPaused = true
+}
+
+func (d *NetworkDriver) ResumeTicks() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.ticksPaused = false
+}
+
+func (d *NetworkDriver) Tick() error {
+	d.mu.Lock()
+	if d.node == nil {
+		d.mu.Unlock()
+		return fmt.Errorf("meta/root/backend/replicated: network driver is closed")
+	}
+	d.node.raw.Tick()
+	_, outbound, err := d.drainLocked()
+	d.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return d.sendMessages(outbound)
+}
+
 func (d *NetworkDriver) Close() error {
 	var err error
 	d.closeOnce.Do(func() {
@@ -161,7 +189,7 @@ func (d *NetworkDriver) tickLoop(interval time.Duration) {
 		case <-ticker.C:
 			d.mu.Lock()
 			var outbound []myraft.Message
-			if d.node != nil {
+			if d.node != nil && !d.ticksPaused {
 				d.node.raw.Tick()
 				_, outbound, _ = d.drainLocked()
 			}

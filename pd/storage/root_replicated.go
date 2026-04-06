@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 )
 
 const ReplicatedRootReplicaCount = 3
@@ -17,6 +18,7 @@ type ReplicatedRootConfig struct {
 	NodeID        uint64
 	TransportAddr string
 	PeerAddrs     map[uint64]string
+	TickInterval  time.Duration
 }
 
 // OpenRootReplicatedStore opens one PD storage backend backed by the
@@ -31,10 +33,11 @@ func OpenRootReplicatedStore(cfg ReplicatedRootConfig) (*RootStore, error) {
 	}
 	transport.SetPeers(cfg.PeerAddrs)
 	driver, err := rootreplicated.NewNetworkDriver(rootreplicated.NetworkConfig{
-		ID:        cfg.NodeID,
-		WorkDir:   cfg.WorkDir,
-		PeerIDs:   cfg.ClusterIDs(),
-		Transport: transport,
+		ID:           cfg.NodeID,
+		WorkDir:      cfg.WorkDir,
+		PeerIDs:      cfg.ClusterIDs(),
+		Transport:    transport,
+		TickInterval: cfg.TickInterval,
 	})
 	if err != nil {
 		_ = transport.Close()
