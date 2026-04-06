@@ -71,14 +71,29 @@ NoKV 现在的方向不是选其中之一，而是分层：
 ```mermaid
 flowchart TD
     U["unit tests\n窄逻辑与状态机"] --> I["integration\n单节点与局部路径"]
-    I --> C["testcluster\n多节点 deterministic"]
-    C --> F["failpoints\n命中高价值边界"]
-    C --> X["transport chaos / restart / recovery"]
+    I --> D["raftstore/testcluster\n数据面 deterministic"]
+    I --> P["pd/testcluster\n控制面 deterministic"]
+    D --> F["failpoints\n命中高价值边界"]
+    D --> X["transport chaos / restart / recovery"]
+    P --> F
 ```
 
 ### 5.1 `testcluster`
 
-它的价值不是“写测试方便一点”，而是把多节点环境搭建收成正式 harness：
+它的价值不是“写测试方便一点”，而是把多节点环境搭建收成正式 harness。
+
+当前已经明确分成两层：
+
+- `raftstore/testcluster`
+  - 起 store
+  - 接 transport
+  - 带单 PD 依赖跑 data-plane 场景
+- `pd/testcluster`
+  - 起 `3 pd + replicated meta`
+  - 测 rooted watch/reload、leader/follower propagation
+  - 专门承接 control-plane 场景
+
+`raftstore/testcluster` 负责的能力主要是：
 
 - 起 PD
 - 起多个节点
@@ -86,7 +101,7 @@ flowchart TD
 - restart node
 - wait leader / hosted / scheduler mode
 
-这样 migration、snapshot、membership 测试就不用重复造 cluster 脚手架。
+这样 migration、snapshot、membership 测试就不用重复造 data-plane cluster 脚手架；而 control-plane 集成测试也不再继续塞进 store harness。
 
 ### 5.2 failpoint
 
