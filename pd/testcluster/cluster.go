@@ -210,6 +210,29 @@ func (c *Cluster) WaitReloaded(serviceID uint64, sub *rootstorage.TailSubscripti
 	}, 8*time.Second, 50*time.Millisecond)
 }
 
+func (c *Cluster) WaitNotFoundReloaded(serviceID uint64, sub *rootstorage.TailSubscription, key []byte) {
+	c.tb.Helper()
+	require.Eventually(c.tb, func() bool {
+		advance, err := sub.Next(context.Background(), 500*time.Millisecond)
+		if err != nil {
+			return false
+		}
+		switch advance.CatchUpAction() {
+		case rootstorage.TailCatchUpRefreshState, rootstorage.TailCatchUpInstallBootstrap:
+			if err := c.Services[serviceID].ReloadFromStorage(); err != nil {
+				return false
+			}
+			sub.Acknowledge(advance)
+		case rootstorage.TailCatchUpAcknowledgeWindow:
+			sub.Acknowledge(advance)
+		default:
+			return false
+		}
+		resp, err := c.Services[serviceID].GetRegionByKey(context.Background(), &pdpb.GetRegionByKeyRequest{Key: key})
+		return err == nil && resp.GetNotFound()
+	}, 8*time.Second, 50*time.Millisecond)
+}
+
 func reservePeerAddrs(tb testing.TB) map[uint64]string {
 	tb.Helper()
 	out := make(map[uint64]string, 3)
