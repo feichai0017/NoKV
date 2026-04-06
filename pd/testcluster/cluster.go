@@ -152,7 +152,7 @@ func (c *Cluster) TickNode(nodeID uint64, n int) {
 	c.tb.Helper()
 	driver, ok := c.Drivers[nodeID]
 	require.True(c.tb, ok, "missing root driver %d", nodeID)
-	for i := 0; i < n; i++ {
+	for range n {
 		_ = driver.Tick()
 	}
 }

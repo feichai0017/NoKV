@@ -13,7 +13,7 @@ func TestNetworkDriverCompactCommittedShiftsTailWindow(t *testing.T) {
 	_, drivers, leaderID := openNetworkTestCluster(t, 8)
 	driver := drivers[leaderID]
 	records := make([]rootstorage.CommittedEvent, 0, 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		records = append(records, rootstorage.CommittedEvent{
 			Cursor: rootstate.Cursor{Term: 1, Index: uint64(i + 1)},
 			Event: rootevent.RegionDescriptorPublished(testDescriptor(
