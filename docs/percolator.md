@@ -254,6 +254,6 @@ Primary coverage:
 - [`percolator/txn_test.go`](../percolator/txn_test.go)
 - [`raftstore/kv/service_test.go`](../raftstore/kv/service_test.go)
 - [`raftstore/client/client_test.go`](../raftstore/client/client_test.go)
-- [`raftstore/server/server_test.go`](../raftstore/server/server_test.go)
+- [`raftstore/server/node_test.go`](../raftstore/server/node_test.go)
 
 These tests cover 2PC happy path, lock conflicts, status checks, resolve/rollback behavior, and client region-aware retries.

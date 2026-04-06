@@ -97,7 +97,7 @@ func Init(cfg InitConfig) (InitResult, error) {
 				StoreID:     cfg.StoreID,
 				RegionID:    cfg.RegionID,
 				PeerID:      cfg.PeerID,
-				SnapshotDir: SeedSnapshotDir(cfg.WorkDir, cfg.RegionID),
+				SnapshotDir: seedSnapshotDir(cfg.WorkDir, cfg.RegionID),
 			}, nil
 		}
 		return InitResult{}, fmt.Errorf("migrate: workdir already seeded for store=%d region=%d peer=%d", state.StoreID, state.RegionID, state.PeerID)
@@ -159,7 +159,7 @@ func Init(cfg InitConfig) (InitResult, error) {
 	}
 	defer func() { _ = db.Close() }()
 
-	snapshotDir := SeedSnapshotDir(cfg.WorkDir, cfg.RegionID)
+	snapshotDir := seedSnapshotDir(cfg.WorkDir, cfg.RegionID)
 	fs := vfs.Ensure(nil)
 	if _, err := fs.Stat(snapshotDir); err == nil {
 		if err := fs.RemoveAll(snapshotDir); err != nil {
@@ -242,8 +242,6 @@ func Init(cfg InitConfig) (InitResult, error) {
 	}, nil
 }
 
-// SeedSnapshotDir returns the deterministic directory used for the
-// seeded region snapshot exported during standalone migration.
-func SeedSnapshotDir(workDir string, regionID uint64) string {
+func seedSnapshotDir(workDir string, regionID uint64) string {
 	return filepath.Join(filepath.Clean(workDir), snapshotRootDirName, fmt.Sprintf("region-%020d", regionID))
 }

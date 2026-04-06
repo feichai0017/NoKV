@@ -24,8 +24,8 @@ type SchedulerClientConfig struct {
 	OnError func(op string, err error)
 }
 
-// SchedulerClient forwards region/store metadata to PD and returns the
-// scheduling operations PD wants the store to apply.
+// SchedulerClient forwards store-facing scheduler traffic to PD and returns
+// the scheduling operations PD wants the store to apply.
 type SchedulerClient struct {
 	pd      pdclient.Client
 	timeout time.Duration

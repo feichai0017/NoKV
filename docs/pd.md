@@ -31,13 +31,14 @@ truth. Durable truth lives in `meta/root`.
 flowchart LR
     Store["nokv serve"] -->|"StoreHeartbeat / RegionHeartbeat"| PD["PD-lite (gRPC)"]
     Gateway["nokv-redis (raft mode)"] -->|"GetRegionByKey / Tso"| PD
-    PD --> Cluster["pd/core.Cluster"]
+    PD --> Cluster["pd/catalog.Cluster"]
     Cluster --> Scheduler["leader-transfer hint planner"]
 ```
 
 Core implementation units:
 
-- `pd/core`: in-memory cluster metadata model + allocators.
+- `pd/catalog`: in-memory cluster metadata model.
+- `pd/idalloc`: monotonic ID allocator used by PD.
 - `pd/storage`: persistence abstraction (`Store`) backed by the metadata root.
 - `pd/server`: gRPC service + RPC validation/error mapping.
 - `pd/client`: client wrapper used by store/gateway.
@@ -69,7 +70,7 @@ plane deployment; it simply has no control plane.
 Both deployments keep the same logical split:
 
 - `meta/root/*`: durable rooted truth
-- `pd/view` + `pd/core`: rebuildable routing/scheduling state
+- `pd/view` + `pd/catalog`: rebuildable routing/scheduling state
 - `pd/server`: gRPC API surface
 
 The difference is only the rooted backend:
@@ -131,7 +132,7 @@ Startup flow:
 1. Open rooted `pd/storage` from `--workdir`.
 2. Reconstruct a rooted PD snapshot (`regions` + allocator fences).
 3. Compute starts as `max(cli_start, fence+1)`.
-4. Materialize the rooted region snapshot into `pd/core.Cluster`.
+4. Materialize the rooted region snapshot into `pd/catalog.Cluster`.
 
 For replicated mode, followers periodically refresh rooted state and rebuild the
 service-side view. This avoids allocator rollback and removes the old parallel
@@ -243,7 +244,7 @@ These RPCs may be served by any PD node:
 - `StoreHeartbeat` handling and store-view inspection
 
 Follower reads are driven by a rooted watch-first tail subscription, with
-explicit refresh/reload as fallback into `pd/core.Cluster`. They are expected
+explicit refresh/reload as fallback into `pd/catalog.Cluster`. They are expected
 to be shortly stale rather than linearly consistent.
 
 ### Client behavior

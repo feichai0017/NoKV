@@ -5,6 +5,7 @@ import (
 	"fmt"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
+	adminclient "github.com/feichai0017/NoKV/raftstore/admin"
 	"time"
 )
 
@@ -26,7 +27,7 @@ type ExpandConfig struct {
 	PollInterval time.Duration
 	Targets      []PeerTarget
 
-	Dial DialFunc
+	Dial adminclient.DialFunc
 }
 
 // ExpandResult reports the observed state after one add-peer request.
@@ -65,7 +66,7 @@ func Expand(ctx context.Context, cfg ExpandConfig) (ExpandResultSet, error) {
 		return ExpandResultSet{}, fmt.Errorf("migrate: at least one peer target is required")
 	}
 	if cfg.Dial == nil {
-		cfg.Dial = defaultDial
+		cfg.Dial = adminclient.Dial
 	}
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = defaultExpandPollInterval
@@ -129,7 +130,7 @@ func Expand(ctx context.Context, cfg ExpandConfig) (ExpandResultSet, error) {
 	return result, nil
 }
 
-func expandTargetWithLeaderClient(ctx context.Context, leaderClient AdminClient, cfg ExpandConfig, target PeerTarget) (ExpandResult, error) {
+func expandTargetWithLeaderClient(ctx context.Context, leaderClient adminclient.Client, cfg ExpandConfig, target PeerTarget) (ExpandResult, error) {
 	addResp, err := leaderClient.AddPeer(ctx, &adminpb.AddPeerRequest{
 		RegionId: cfg.RegionID,
 		StoreId:  target.StoreID,
@@ -206,7 +207,7 @@ func expandTargetWithLeaderClient(ctx context.Context, leaderClient AdminClient,
 	return result, nil
 }
 
-func waitForLeaderPeer(ctx context.Context, client AdminClient, regionID, peerID uint64, interval time.Duration, result *ExpandResult) (*metapb.RegionDescriptor, error) {
+func waitForLeaderPeer(ctx context.Context, client adminclient.Client, regionID, peerID uint64, interval time.Duration, result *ExpandResult) (*metapb.RegionDescriptor, error) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -231,7 +232,7 @@ func waitForLeaderPeer(ctx context.Context, client AdminClient, regionID, peerID
 	}
 }
 
-func waitForTargetHosted(ctx context.Context, client AdminClient, regionID, peerID uint64, interval time.Duration, result *ExpandResult) error {
+func waitForTargetHosted(ctx context.Context, client adminclient.Client, regionID, peerID uint64, interval time.Duration, result *ExpandResult) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	var lastStatus *adminpb.RegionRuntimeStatusResponse

@@ -153,7 +153,7 @@ sequenceDiagram
 当前 `pd` 的主要代码：
 
 - `pd/storage/root.go`
-- `pd/core/cluster.go`
+- `pd/catalog/cluster.go`
 - `pd/view/pending_view.go`
 - `pd/operator`
 - `pd/server`

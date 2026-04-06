@@ -1,9 +1,12 @@
-package core
+package idalloc
 
 import (
 	"fmt"
 	"sync/atomic"
 )
+
+// ErrInvalidBatch indicates a requested allocation batch is invalid.
+var ErrInvalidBatch = fmt.Errorf("pd/idalloc: invalid batch")
 
 // IDAllocator allocates globally unique increasing IDs.
 type IDAllocator struct {
