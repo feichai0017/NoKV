@@ -14,6 +14,7 @@ const (
 
 	ycsbNoKVWriteBatchMaxCount = 10_000
 	ycsbNoKVWriteBatchMaxSize  = 128 << 20
+	ycsbNoKVValueLogBuckets    = 16
 
 	ycsbBadgerNumVersionsToKeep       = 1
 	ycsbBadgerNumMemtables            = 5
@@ -89,27 +90,28 @@ func buildNoKVBenchmarkOptions(dir string, opts ycsbEngineOptions, memtable NoKV
 	totalCacheMB := normalizeTotalCacheMB(opts.BlockCacheMB)
 	blockCacheMB, indexCacheMB := resolveNoKVCacheBudgetMB(totalCacheMB, opts.NoKVIndexCacheMB)
 	return &NoKV.Options{
-		WorkDir:            dir,
-		MemTableSize:       int64(opts.MemtableMB) << 20,
-		MemTableEngine:     memtable,
-		SSTableMaxSz:       int64(opts.SSTableMB) << 20,
-		ValueLogFileSize:   opts.VlogFileMB << 20,
-		ValueLogMaxEntries: 1 << 20,
-		ValueThreshold:     int64(opts.ValueThreshold),
-		WriteBatchMaxCount: ycsbNoKVWriteBatchMaxCount,
-		WriteBatchMaxSize:  ycsbNoKVWriteBatchMaxSize,
-		MaxBatchCount:      ycsbNoKVWriteBatchMaxCount,
-		MaxBatchSize:       ycsbNoKVWriteBatchMaxSize,
-		DetectConflicts:    false,
-		SyncWrites:         opts.SyncWrites,
-		BlockCacheBytes:    cacheBudgetBytes(blockCacheMB),
-		IndexCacheBytes:    cacheBudgetBytes(indexCacheMB),
-		CompactionPolicy:   compactionPolicy,
-		WriteBatchWait:     0,
-		WriteHotKeyLimit:   0,
-		EnableWALWatchdog:  false,
-		ValueLogGCInterval: 0,
-		ManifestSync:       false,
+		WorkDir:             dir,
+		MemTableSize:        int64(opts.MemtableMB) << 20,
+		MemTableEngine:      memtable,
+		SSTableMaxSz:        int64(opts.SSTableMB) << 20,
+		ValueLogFileSize:    opts.VlogFileMB << 20,
+		ValueLogMaxEntries:  1 << 20,
+		ValueThreshold:      int64(opts.ValueThreshold),
+		WriteBatchMaxCount:  ycsbNoKVWriteBatchMaxCount,
+		WriteBatchMaxSize:   ycsbNoKVWriteBatchMaxSize,
+		MaxBatchCount:       ycsbNoKVWriteBatchMaxCount,
+		MaxBatchSize:        ycsbNoKVWriteBatchMaxSize,
+		DetectConflicts:     false,
+		SyncWrites:          opts.SyncWrites,
+		BlockCacheBytes:     cacheBudgetBytes(blockCacheMB),
+		IndexCacheBytes:     cacheBudgetBytes(indexCacheMB),
+		CompactionPolicy:    compactionPolicy,
+		ValueLogBucketCount: ycsbNoKVValueLogBuckets,
+		WriteBatchWait:      0,
+		WriteHotKeyLimit:    0,
+		EnableWALWatchdog:   false,
+		ValueLogGCInterval:  0,
+		ManifestSync:        false,
 	}
 }
 
