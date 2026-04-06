@@ -12,7 +12,21 @@ import (
 	"github.com/feichai0017/NoKV/wal"
 )
 
+const (
+	benchMemTableEngineART      = "art"
+	benchMemTableEngineSkiplist = "skiplist"
+)
+
+var benchMemTableEngines = []string{
+	benchMemTableEngineART,
+	benchMemTableEngineSkiplist,
+}
+
 func newBenchLSM(b *testing.B, memTableSize int64) *LSM {
+	return newBenchLSMWithEngine(b, memTableSize, benchMemTableEngineART)
+}
+
+func newBenchLSMWithEngine(b *testing.B, memTableSize int64, memTableEngine string) *LSM {
 	b.Helper()
 	dir := b.TempDir()
 	wlog, err := wal.Open(wal.Config{Dir: dir, SyncOnWrite: false})
@@ -22,7 +36,7 @@ func newBenchLSM(b *testing.B, memTableSize int64) *LSM {
 	opt := &Options{
 		WorkDir:                       dir,
 		MemTableSize:                  memTableSize,
-		MemTableEngine:                "skiplist",
+		MemTableEngine:                memTableEngine,
 		SSTableMaxSz:                  256 << 20,
 		BlockSize:                     8 * 1024,
 		BloomFalsePositive:            0.01,
@@ -86,33 +100,119 @@ func waitForFlush(b *testing.B, lsm *LSM) {
 }
 
 func BenchmarkLSMSetBatch(b *testing.B) {
-	lsm := newBenchLSM(b, 64<<20)
 	batchSize := 64
 	valueSize := 128
-	b.ReportAllocs()
-	b.SetBytes(int64(batchSize * valueSize))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		entries := makeLSMBatch(batchSize, valueSize)
-		if err := lsm.SetBatch(entries); err != nil {
-			b.Fatalf("set batch: %v", err)
-		}
+	for _, memTableEngine := range benchMemTableEngines {
+		b.Run(memTableEngine, func(b *testing.B) {
+			lsm := newBenchLSMWithEngine(b, 64<<20, memTableEngine)
+			b.ReportAllocs()
+			b.SetBytes(int64(batchSize * valueSize))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				entries := makeLSMBatch(batchSize, valueSize)
+				if err := lsm.SetBatch(entries); err != nil {
+					b.Fatalf("set batch: %v", err)
+				}
+			}
+		})
 	}
 }
 
 func BenchmarkLSMRotateFlush(b *testing.B) {
-	lsm := newBenchLSM(b, 1<<20)
 	entries := makeLSMBatch(256, 256)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if err := lsm.SetBatch(entries); err != nil {
-			b.Fatalf("set batch: %v", err)
-		}
-		if err := lsm.Rotate(); err != nil {
-			b.Fatalf("rotate: %v", err)
-		}
-		waitForFlush(b, lsm)
+	for _, memTableEngine := range benchMemTableEngines {
+		b.Run(memTableEngine, func(b *testing.B) {
+			lsm := newBenchLSMWithEngine(b, 1<<20, memTableEngine)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := lsm.SetBatch(entries); err != nil {
+					b.Fatalf("set batch: %v", err)
+				}
+				if err := lsm.Rotate(); err != nil {
+					b.Fatalf("rotate: %v", err)
+				}
+				waitForFlush(b, lsm)
+			}
+		})
+	}
+}
+
+func BenchmarkLSMGetMemtableHit(b *testing.B) {
+	const (
+		keySpace  = 4096
+		valueSize = 128
+	)
+	for _, memTableEngine := range benchMemTableEngines {
+		b.Run(memTableEngine, func(b *testing.B) {
+			lsm := newBenchLSMWithEngine(b, 64<<20, memTableEngine)
+			lookups := make([][]byte, keySpace)
+			for i := range keySpace {
+				userKey := make([]byte, 8)
+				binary.LittleEndian.PutUint64(userKey, uint64(i))
+				internal := kv.InternalKey(kv.CFDefault, userKey, uint64(i+1))
+				lookups[i] = internal
+				entry := &kv.Entry{
+					Key:     internal,
+					Value:   bytes.Repeat([]byte("v"), valueSize),
+					CF:      kv.CFDefault,
+					Version: uint64(i + 1),
+				}
+				if err := lsm.Set(entry); err != nil {
+					b.Fatalf("seed memtable: %v", err)
+				}
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				entry, err := lsm.Get(lookups[i%len(lookups)])
+				if err != nil {
+					b.Fatalf("get: %v", err)
+				}
+				if entry == nil {
+					b.Fatal("expected entry")
+				}
+				entry.DecrRef()
+			}
+		})
+	}
+}
+
+func BenchmarkLSMMemtableIterSeek(b *testing.B) {
+	const (
+		keySpace  = 4096
+		valueSize = 64
+	)
+	for _, memTableEngine := range benchMemTableEngines {
+		b.Run(memTableEngine, func(b *testing.B) {
+			lsm := newBenchLSMWithEngine(b, 64<<20, memTableEngine)
+			seekKeys := make([][]byte, keySpace)
+			for i := range keySpace {
+				userKey := make([]byte, 8)
+				binary.LittleEndian.PutUint64(userKey, uint64(i))
+				internal := kv.InternalKey(kv.CFDefault, userKey, uint64(i+1))
+				seekKeys[i] = internal
+				entry := &kv.Entry{
+					Key:     internal,
+					Value:   bytes.Repeat([]byte("v"), valueSize),
+					CF:      kv.CFDefault,
+					Version: uint64(i + 1),
+				}
+				if err := lsm.Set(entry); err != nil {
+					b.Fatalf("seed memtable: %v", err)
+				}
+			}
+			it := lsm.memTable.NewIterator(&utils.Options{IsAsc: true})
+			defer func() { _ = it.Close() }()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				it.Seek(seekKeys[i%len(seekKeys)])
+				if !it.Valid() {
+					b.Fatal("seek missed key")
+				}
+			}
+		})
 	}
 }
 
