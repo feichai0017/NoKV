@@ -46,6 +46,9 @@ func OpenRootStore(root rootBackend) (*RootStore, error) {
 		store.isLeader = leader.IsLeader
 		store.leaderID = leader.LeaderID
 	}
+	if campaigner, ok := root.(interface{ Campaign() error }); ok {
+		store.campaign = campaigner.Campaign
+	}
 	if err := store.reload(); err != nil {
 		return nil, err
 	}

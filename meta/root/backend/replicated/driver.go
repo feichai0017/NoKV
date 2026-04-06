@@ -14,4 +14,5 @@ type Driver interface {
 	TailNotify() <-chan struct{}
 	IsLeader() bool
 	LeaderID() uint64
+	Campaign() error
 }
