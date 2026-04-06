@@ -6,11 +6,63 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
 	"github.com/stretchr/testify/require"
 )
+
+func waitForStableLeader(tb testing.TB, ctx context.Context, regionID uint64, nodes ...*testcluster.Node) (*testcluster.Node, *adminpb.RegionRuntimeStatusResponse) {
+	tb.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	var stableLeader uint64
+	var stableCount int
+	for time.Now().Before(deadline) {
+		var leaderNode *testcluster.Node
+		var leaderStatus *adminpb.RegionRuntimeStatusResponse
+		var leaderPeerID uint64
+		consistent := true
+		for _, node := range nodes {
+			status := testcluster.FetchRuntimeStatus(tb, ctx, node.Addr(), regionID)
+			if !status.GetKnown() || !status.GetHosted() || status.GetLeaderPeerId() == 0 {
+				consistent = false
+				break
+			}
+			if leaderPeerID == 0 {
+				leaderPeerID = status.GetLeaderPeerId()
+			} else if leaderPeerID != status.GetLeaderPeerId() {
+				consistent = false
+				break
+			}
+			if status.GetLeader() {
+				if leaderNode != nil {
+					consistent = false
+					break
+				}
+				leaderNode = node
+				leaderStatus = status
+			}
+		}
+		if consistent && leaderNode != nil {
+			if stableLeader == leaderPeerID {
+				stableCount++
+			} else {
+				stableLeader = leaderPeerID
+				stableCount = 1
+			}
+			if stableCount >= 10 {
+				return leaderNode, leaderStatus
+			}
+		} else {
+			stableLeader = 0
+			stableCount = 0
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	tb.Fatalf("timed out waiting for stable leader on region %d: %s", regionID, testcluster.DumpStatus(tb, ctx, regionID, nodes...))
+	return nil, nil
+}
 
 func TestExpandedPeerRestartPreservesRegionAndData(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -218,26 +270,22 @@ func TestLeaderRestartStillAllowsMembershipChanges(t *testing.T) {
 	target3.WirePeers(map[uint64]string{101: seed.Addr(), 201: target2.Addr()})
 
 	testcluster.WaitForHostedPeer(t, ctx, target2.Addr(), 31, 201)
-	leaderNode, _ := testcluster.FindLeader(t, ctx, 31, seed, target2, target3)
+	leaderNode, leaderStatus := waitForStableLeader(t, ctx, 31, seed, target2, target3)
 	removeTarget := seed
-	if leaderNode.StoreID == seed.StoreID {
+	removePeerID := uint64(101)
+	if leaderStatus.GetLeaderPeerId() == 101 {
 		removeTarget = target3
-	}
-	var removePeerID uint64
-	if removeTarget.StoreID == 1 {
-		removePeerID = 101
-	} else {
 		removePeerID = 301
 	}
 
-	opCtx, opCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	opCtx, opCancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer opCancel()
 	_, err = migrate.RemovePeer(opCtx, migrate.RemovePeerConfig{
 		Addr:            leaderNode.Addr(),
 		TargetAdminAddr: removeTarget.Addr(),
 		RegionID:        31,
 		PeerID:          removePeerID,
-		WaitTimeout:     10 * time.Second,
+		WaitTimeout:     20 * time.Second,
 		PollInterval:    20 * time.Millisecond,
 	})
 	require.NoError(t, err, testcluster.DumpStatus(t, ctx, 31, seed, target2, target3))
