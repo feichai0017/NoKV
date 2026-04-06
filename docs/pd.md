@@ -242,8 +242,9 @@ These RPCs may be served by any PD node:
 - `GetRegionByKey`
 - `StoreHeartbeat` handling and store-view inspection
 
-Follower reads are driven by rooted refresh into `pd/core.Cluster`. They are
-expected to be shortly stale rather than linearly consistent.
+Follower reads are driven by a rooted watch-first tail subscription, with
+explicit refresh/reload as fallback into `pd/core.Cluster`. They are expected
+to be shortly stale rather than linearly consistent.
 
 ### Client behavior
 
@@ -311,12 +312,11 @@ Current product assumptions:
 ### NoKV PD-lite (current)
 
 - Standalone mode has no PD and no metadata-root service.
-- Distributed mode runs one control-plane process:
-  - `pd`
-  - one local `meta/root`
-- Current project scope intentionally keeps the metadata root single-node. This
-  bounds operational and maintenance complexity while still keeping truth and
-  view logically separated.
+- Distributed mode has two formal control-plane deployments:
+  - `single pd + local meta`
+  - `3 pd + replicated meta`
+- In both deployments, each `pd` process hosts a same-process rooted backend
+  and rebuilds its service-side view from rooted truth.
 - PD persistence is intentionally limited to rooted control-plane truth:
   - region descriptor publish/tombstone events
   - allocator durability (`AllocID`, `TSO`)
@@ -330,10 +330,12 @@ Current product assumptions:
 
 - `single pd + local meta` remains the simpler and more mature deployment.
 - `3 pd + replicated meta` is now a formal product mode, but still has a
-  simpler follower sync path based on rooted refresh rather than push/watch.
+  deliberately small HA surface:
+  - fixed three replicas
+  - no dynamic metadata membership
+  - follower convergence uses watch-first tailing with refresh/reload fallback
 - Scheduler policy is intentionally small (leader transfer focused).
 - No advanced placement constraints yet.
-- Metadata membership is fixed at three replicas.
 
 These are deliberate scope limits for a fast-moving experimental platform that
 keeps the rooted truth surface small.
