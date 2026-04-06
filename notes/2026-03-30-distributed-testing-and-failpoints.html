@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b05464c.js";
+            window.path_to_searchindex_js = "../searchindex-32b61556.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-69e2a819.js"></script>
@@ -243,13 +243,33 @@
 <h2 id="5-当前-nokv-的测试分层"><a class="header" href="#5-当前-nokv-的测试分层">5. 当前 NoKV 的测试分层</a></h2>
 <pre class="mermaid">flowchart TD
     U["unit tests\n窄逻辑与状态机"] --&gt; I["integration\n单节点与局部路径"]
-    I --&gt; C["testcluster\n多节点 deterministic"]
-    C --&gt; F["failpoints\n命中高价值边界"]
-    C --&gt; X["transport chaos / restart / recovery"]
+    I --&gt; D["raftstore/testcluster\n数据面 deterministic"]
+    I --&gt; P["pd/testcluster\n控制面 deterministic"]
+    D --&gt; F["failpoints\n命中高价值边界"]
+    D --&gt; X["transport chaos / restart / recovery"]
+    P --&gt; F
 </pre>
 
 <h3 id="51-testcluster"><a class="header" href="#51-testcluster">5.1 <code>testcluster</code></a></h3>
-<p>它的价值不是“写测试方便一点”，而是把多节点环境搭建收成正式 harness：</p>
+<p>它的价值不是“写测试方便一点”，而是把多节点环境搭建收成正式 harness。</p>
+<p>当前已经明确分成两层：</p>
+<ul>
+<li><code>raftstore/testcluster</code>
+<ul>
+<li>起 store</li>
+<li>接 transport</li>
+<li>带单 PD 依赖跑 data-plane 场景</li>
+</ul>
+</li>
+<li><code>pd/testcluster</code>
+<ul>
+<li>起 <code>3 pd + replicated meta</code></li>
+<li>测 rooted watch/reload、leader/follower propagation</li>
+<li>专门承接 control-plane 场景</li>
+</ul>
+</li>
+</ul>
+<p><code>raftstore/testcluster</code> 负责的能力主要是：</p>
 <ul>
 <li>起 PD</li>
 <li>起多个节点</li>
@@ -257,7 +277,7 @@
 <li>restart node</li>
 <li>wait leader / hosted / scheduler mode</li>
 </ul>
-<p>这样 migration、snapshot、membership 测试就不用重复造 cluster 脚手架。</p>
+<p>这样 migration、snapshot、membership 测试就不用重复造 data-plane cluster 脚手架；而 control-plane 集成测试也不再继续塞进 store harness。</p>
 <h3 id="52-failpoint"><a class="header" href="#52-failpoint">5.2 failpoint</a></h3>
 <p>当前合理的 failpoint 应该集中在：</p>
 <ul>

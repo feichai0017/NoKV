@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-9b05464c.js";
+            window.path_to_searchindex_js = "searchindex-32b61556.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-69e2a819.js"></script>
@@ -394,8 +394,9 @@ clients are expected to retry against another PD endpoint.</p>
 <li><code>GetRegionByKey</code></li>
 <li><code>StoreHeartbeat</code> handling and store-view inspection</li>
 </ul>
-<p>Follower reads are driven by rooted refresh into <code>pd/core.Cluster</code>. They are
-expected to be shortly stale rather than linearly consistent.</p>
+<p>Follower reads are driven by a rooted watch-first tail subscription, with
+explicit refresh/reload as fallback into <code>pd/core.Cluster</code>. They are expected
+to be shortly stale rather than linearly consistent.</p>
 <h3 id="client-behavior"><a class="header" href="#client-behavior">Client behavior</a></h3>
 <p><code>pd/client</code> accepts multiple PD addresses. Write RPCs retry across PD nodes and
 converge on the rooted leader. Read RPCs may use any available PD endpoint.</p>
@@ -449,15 +450,14 @@ converge on the rooted leader. Read RPCs may use any available PD endpoint.</p>
 <h3 id="nokv-pd-lite-current"><a class="header" href="#nokv-pd-lite-current">NoKV PD-lite (current)</a></h3>
 <ul>
 <li>Standalone mode has no PD and no metadata-root service.</li>
-<li>Distributed mode runs one control-plane process:
+<li>Distributed mode has two formal control-plane deployments:
 <ul>
-<li><code>pd</code></li>
-<li>one local <code>meta/root</code></li>
+<li><code>single pd + local meta</code></li>
+<li><code>3 pd + replicated meta</code></li>
 </ul>
 </li>
-<li>Current project scope intentionally keeps the metadata root single-node. This
-bounds operational and maintenance complexity while still keeping truth and
-view logically separated.</li>
+<li>In both deployments, each <code>pd</code> process hosts a same-process rooted backend
+and rebuilds its service-side view from rooted truth.</li>
 <li>PD persistence is intentionally limited to rooted control-plane truth:
 <ul>
 <li>region descriptor publish/tombstone events</li>
@@ -473,10 +473,15 @@ scheduling state rebuilt from <code>meta/root</code>.</li>
 <ul>
 <li><code>single pd + local meta</code> remains the simpler and more mature deployment.</li>
 <li><code>3 pd + replicated meta</code> is now a formal product mode, but still has a
-simpler follower sync path based on rooted refresh rather than push/watch.</li>
+deliberately small HA surface:
+<ul>
+<li>fixed three replicas</li>
+<li>no dynamic metadata membership</li>
+<li>follower convergence uses watch-first tailing with refresh/reload fallback</li>
+</ul>
+</li>
 <li>Scheduler policy is intentionally small (leader transfer focused).</li>
 <li>No advanced placement constraints yet.</li>
-<li>Metadata membership is fixed at three replicas.</li>
 </ul>
 <p>These are deliberate scope limits for a fast-moving experimental platform that
 keeps the rooted truth surface small.</p>
