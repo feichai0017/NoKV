@@ -113,7 +113,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 - **Protocol unit tests**: package-local tests under `raftstore/peer`, `raftstore/store`, `raftstore/admin`, `raftstore/snapshot`, and `raftstore/migrate` validate one protocol surface at a time.
 - **Node-local integration tests**: store/admin tests verify snapshot install, membership application, and region runtime publication without booting a full cluster.
 - **Multi-node deterministic data-plane integration tests**: `raftstore/integration` uses `raftstore/testcluster` to boot real stores, wire transports, and drive migration/member flows against live runtimes.
-- **Multi-node deterministic control-plane integration tests**: `pd/server/control_plane_integration_test.go` uses `pd/testcluster` to boot `3 pd + replicated meta`, exercise rooted watch/reload propagation, and keep metadata HA behavior separate from store/data-plane tests.
+- **Multi-node deterministic control-plane integration tests**: `pd/integration/*_test.go` uses `pd/testcluster` to boot `3 pd + replicated meta`, exercise rooted watch/reload propagation, follower write rejection, allocator-fence/remove-region propagation, and control-plane read staleness without mixing those cases into store/data-plane tests.
 - **Restart and recovery suites**: `raftstore/integration/restart_recovery_test.go` covers restarted followers, removed-peer dehost persistence, and leader restart with subsequent membership changes.
 - **Control-plane degradation and publish-boundary tests**: `raftstore/integration/pd_degraded_test.go` and `raftstore/integration/snapshot_interruption_test.go` cover live PD outage after startup and failpoint-driven snapshot interruption before peer publication.
 
