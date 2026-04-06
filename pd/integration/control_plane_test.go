@@ -1,7 +1,10 @@
-package server_test
+package integration_test
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
@@ -10,10 +13,9 @@ import (
 	pdserver "github.com/feichai0017/NoKV/pd/server"
 	pdtestcluster "github.com/feichai0017/NoKV/pd/testcluster"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	"testing"
-	"time"
-
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestControlPlaneFollowerRefreshesFromReplicatedRoot(t *testing.T) {
@@ -69,6 +71,55 @@ func TestControlPlaneReplicatedRootPropagatesToBothFollowers(t *testing.T) {
 		resp, err := cluster.Services[refreshingFollowerID].GetRegionByKey(context.Background(), &pdpb.GetRegionByKeyRequest{Key: []byte("x")})
 		return err == nil && !resp.GetNotFound() && resp.GetRegionDescriptor().GetRegionId() == 193
 	}, 8*time.Second, 50*time.Millisecond)
+}
+
+func TestControlPlaneFollowerRejectsLeaderOnlyWrites(t *testing.T) {
+	cluster := pdtestcluster.OpenReplicated(t)
+	leaderID, leader := cluster.LeaderService()
+	followerID := cluster.FollowerIDs(leaderID)[0]
+	follower := cluster.Services[followerID]
+
+	_, err := follower.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event: metacodec.RootEventToProto(rootevent.RegionBootstrapped(controlPlaneDescriptor(194, []byte("a"), []byte("b")))),
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, status.Convert(err).Message(), "pd not leader")
+
+	_, err = leader.PublishRootEvent(context.Background(), &pdpb.PublishRootEventRequest{
+		Event: metacodec.RootEventToProto(rootevent.RegionBootstrapped(controlPlaneDescriptor(195, []byte("b"), []byte("c")))),
+	})
+	require.NoError(t, err)
+}
+
+func TestControlPlaneLeaderOnlyAllocatorsRejectFollowerWrites(t *testing.T) {
+	cluster := pdtestcluster.OpenReplicated(t)
+	leaderID, leader := cluster.LeaderService()
+	follower := cluster.Services[cluster.FollowerIDs(leaderID)[0]]
+
+	alloc, err := leader.AllocID(context.Background(), &pdpb.AllocIDRequest{Count: 3})
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), alloc.GetCount())
+	require.NotZero(t, alloc.GetFirstId())
+
+	nextAlloc, err := leader.AllocID(context.Background(), &pdpb.AllocIDRequest{Count: 1})
+	require.NoError(t, err)
+	require.Equal(t, alloc.GetFirstId()+alloc.GetCount(), nextAlloc.GetFirstId())
+
+	ts, err := leader.Tso(context.Background(), &pdpb.TsoRequest{Count: 2})
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), ts.GetCount())
+	require.NotZero(t, ts.GetTimestamp())
+
+	_, err = follower.AllocID(context.Background(), &pdpb.AllocIDRequest{Count: 1})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, status.Convert(err).Message(), "pd not leader")
+
+	_, err = follower.Tso(context.Background(), &pdpb.TsoRequest{Count: 1})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, status.Convert(err).Message(), "pd not leader")
 }
 
 func publishControlPlaneDescriptorEvent(svc *pdserver.Service, desc descriptor.Descriptor) error {
