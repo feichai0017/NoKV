@@ -130,7 +130,7 @@ Delos 的关键不是“有个 log”，而是：
 NoKV 当前已经形成：
 
 - truth：`meta/root`
-- view：`pd/core`、`pd/view`、`pd/operator`
+- view：`pd/catalog`、`pd/view`、`pd/operator`
 - service：`pd/server`
 
 ### 4.3 virtual log，而不是把上层绑死在协议细节上
@@ -320,7 +320,7 @@ flowchart LR
 关键代码：
 
 - `pd/storage/root.go`
-- `pd/core/cluster.go`
+- `pd/catalog/cluster.go`
 - `pd/view/pending_view.go`
 - `pd/operator`
 - `pd/server/service.go`

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/feichai0017/NoKV/pd/core"
+	"github.com/feichai0017/NoKV/pd/idalloc"
 )
 
 // Allocator provides monotonic timestamp allocation for PD-lite.
@@ -37,7 +37,7 @@ func (a *Allocator) Reserve(n uint64) (first, count uint64, err error) {
 		return 0, 0, nil
 	}
 	if n == 0 {
-		return 0, 0, fmt.Errorf("%w: tso reserve n must be >= 1", core.ErrInvalidBatch)
+		return 0, 0, fmt.Errorf("%w: tso reserve n must be >= 1", idalloc.ErrInvalidBatch)
 	}
 	last := a.counter.Add(n)
 	first = last - n + 1

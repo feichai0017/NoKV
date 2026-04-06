@@ -1,9 +1,10 @@
-package core
+package catalog
 
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	pdview "github.com/feichai0017/NoKV/pd/view"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"testing"
 
@@ -12,8 +13,8 @@ import (
 
 func TestClusterStoreHeartbeatAndSnapshot(t *testing.T) {
 	c := NewCluster()
-	require.NoError(t, c.UpsertStoreHeartbeat(StoreStats{StoreID: 1, RegionNum: 3}))
-	require.NoError(t, c.UpsertStoreHeartbeat(StoreStats{StoreID: 2, RegionNum: 5}))
+	require.NoError(t, c.UpsertStoreHeartbeat(pdview.StoreStats{StoreID: 1, RegionNum: 3}))
+	require.NoError(t, c.UpsertStoreHeartbeat(pdview.StoreStats{StoreID: 2, RegionNum: 5}))
 
 	snap := c.StoreSnapshot()
 	require.Len(t, snap, 2)
@@ -196,7 +197,7 @@ func TestClusterPublishRootEventTracksTransitionSnapshot(t *testing.T) {
 
 func TestClusterReplaceRootSnapshotPreservesStoreStateAndRefreshesRuntime(t *testing.T) {
 	c := NewCluster()
-	require.NoError(t, c.UpsertStoreHeartbeat(StoreStats{StoreID: 9, RegionNum: 2}))
+	require.NoError(t, c.UpsertStoreHeartbeat(pdview.StoreStats{StoreID: 9, RegionNum: 2}))
 
 	base := testDescriptor(30, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
 	target := base.Clone()

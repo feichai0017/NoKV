@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/config"
-	"github.com/feichai0017/NoKV/pd/core"
+	"github.com/feichai0017/NoKV/pd/catalog"
 	pdstorage "github.com/feichai0017/NoKV/pd/storage"
 
 	"github.com/stretchr/testify/require"
@@ -156,7 +156,7 @@ func TestRestorePDRegionsFromLocalSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 
-	cluster := core.NewCluster()
+	cluster := catalog.NewCluster()
 	loaded, err := pdstorage.RestoreDescriptors(cluster.PublishRegionDescriptor, snapshotState.Descriptors)
 	require.NoError(t, err)
 	require.Equal(t, 2, loaded)
@@ -194,7 +194,7 @@ func TestRunPDCmdReloadsPersistedRegionCatalog(t *testing.T) {
 }
 
 func TestRestorePDRegionsRejectsDivergentOverlap(t *testing.T) {
-	cluster := core.NewCluster()
+	cluster := catalog.NewCluster()
 	snapshot := map[uint64]descriptor.Descriptor{
 		10: {
 			RegionID: 10,

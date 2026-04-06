@@ -27,7 +27,7 @@ func validateSeedArtifacts(workDir string, storeID, regionID, peerID uint64) err
 			regionID, region.Peers[0].StoreID, region.Peers[0].PeerID, storeID, peerID)
 	}
 
-	meta, err := snapshotpkg.ReadMeta(SeedSnapshotDir(workDir, regionID), nil)
+	meta, err := snapshotpkg.ReadMeta(seedSnapshotDir(workDir, regionID), nil)
 	if err != nil {
 		return fmt.Errorf("migrate: validate seed snapshot meta: %w", err)
 	}
