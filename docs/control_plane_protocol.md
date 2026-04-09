@@ -201,13 +201,18 @@ These names are short and carry clear serving intent.
 
 ### 4.4 Transition phases
 
+Current protocol v1 keeps the phase set intentionally small.
+
 - `Planned`
 - `Admitted`
-- `Applied`
-- `Published`
 - `Completed`
+- `Conflicted`
+- `Superseded`
 - `Cancelled`
-- `Stalled`
+- `Aborted`
+
+`Applied`, `Published`, and `Stalled` remain useful future concepts, but they
+are not part of the current protocol surface yet.
 
 ### 4.5 Degraded modes
 
@@ -461,64 +466,51 @@ This makes causality explicit:
 
 #### `Planned`
 
-Rooted truth records the topology intent.
+The rooted lifecycle assessment says the transition exists as an intended
+topology change, but the operator runtime has not yet admitted it for forward
+progress.
 
-This is the earliest durable acknowledgment that:
+This is the phase used by:
 
-- the control plane accepted the transition
-- the transition exists as system truth
+- `AssessRootEvent`
+- `PublishRootEventResponse.assessment`
 
 #### `Admitted`
 
-The transition has been accepted for execution progress.
+The rooted transition is currently pending or open, and the operator runtime has
+admitted it for execution progress.
 
-This phase exists to separate:
+This is the phase used by:
 
-- "truth records intent"
-from
-- "the system has admitted the transition into forward progress"
+- `ListTransitions`
 
-#### `Applied`
-
-The required topology action has completed on the execution side.
-
-At this point, the action itself happened, but terminal rooted publication may still be pending.
-
-#### `Published`
-
-Terminal rooted truth has been written.
-
-This matters because:
-
-- data-plane completion
-- and control-plane truth publication
-
-are not the same moment.
+It is intentionally runtime-facing. It does not appear in
+`PublishRootEventResponse.assessment`, because that response reports a
+pre-persist lifecycle assessment rather than post-admission runtime state.
 
 #### `Completed`
 
-The materialized Coordinator catalog has converged on the terminal rooted truth.
-
-This phase is needed because:
-
-- a terminal rooted event may already exist
-- but followers or derived views may not yet have caught up
+The rooted lifecycle says the requested transition target is already satisfied.
+For a plan event, this usually means the requested topology is already present.
 
 #### `Cancelled`
 
-The transition no longer has authority to continue.
+The rooted lifecycle says the requested transition target was cancelled.
 
-Typical reasons:
+#### `Conflicted`
 
-- superseded by later rooted truth
-- invalidated by newer epoch
-- explicitly cancelled
+The rooted lifecycle says a different pending transition already owns progress
+for the same target.
 
-#### `Stalled`
+#### `Superseded`
 
-The transition is not progressing within policy bounds.
+The rooted lifecycle says a newer rooted topology already superseded this
+transition target.
 
-This is a control-plane diagnosis phase, not necessarily a permanent terminal state.
+#### `Aborted`
+
+The rooted lifecycle says an apply or terminal event does not match the current
+pending rooted target.
 
 ### 7.4 Why lifecycle matters
 
@@ -788,7 +780,10 @@ Target outcomes:
 
 - durable `TransitionID`
 - lifecycle-aware operator/runtime view
-- explicit publish/completion distinctions
+- explicit phase semantics across:
+  - `ListTransitions`
+  - `AssessRootEvent`
+  - `PublishRootEvent`
 
 ### Phase 4: DegradedMode
 
@@ -838,4 +833,3 @@ Avoid reintroducing weaker names like:
 
 Those may still exist as helper fields, but the public model should stay anchored
 to the smaller protocol vocabulary above.
-
