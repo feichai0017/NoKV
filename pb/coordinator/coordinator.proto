@@ -50,6 +50,7 @@ message PublishRootEventRequest {
 
 message PublishRootEventResponse {
   bool accepted = 1;
+  TransitionAssessment assessment = 2;
 }
 
 enum TransitionKind {

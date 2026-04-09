@@ -145,12 +145,16 @@ func (s *Service) PublishRootEvent(_ context.Context, req *coordpb.PublishRootEv
 	if err := s.requireExpectedClusterEpoch(req.GetExpectedClusterEpoch()); err != nil {
 		return nil, err
 	}
-	skip, err := s.guardRootEventLifecycle(event)
+	assessment, err := s.assessRootEventLifecycle(event)
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
-	if skip {
-		return &coordpb.PublishRootEventResponse{Accepted: true}, nil
+	resp := &coordpb.PublishRootEventResponse{
+		Assessment: transitionAssessmentToProto(assessment),
+	}
+	if assessment.Decision == rootstate.RootEventLifecycleSkip {
+		resp.Accepted = true
+		return resp, nil
 	}
 	if err := s.cluster.ValidateRootEvent(event); err != nil {
 		switch {
@@ -169,28 +173,38 @@ func (s *Service) PublishRootEvent(_ context.Context, req *coordpb.PublishRootEv
 		if _, err := s.reloadRootedView(false); err != nil {
 			return nil, status.Error(codes.Internal, "reload rooted view: "+err.Error())
 		}
-		return &coordpb.PublishRootEventResponse{Accepted: true}, nil
+		resp.Accepted = true
+		return resp, nil
 	}
 	if err := s.cluster.PublishRootEvent(event); err != nil {
 		return nil, status.Error(codes.Internal, "apply root event after persist: "+err.Error())
 	}
-	return &coordpb.PublishRootEventResponse{Accepted: true}, nil
+	resp.Accepted = true
+	return resp, nil
 }
 
-func (s *Service) guardRootEventLifecycle(event rootevent.Event) (bool, error) {
+func (s *Service) assessRootEventLifecycle(event rootevent.Event) (rootstate.TransitionAssessment, error) {
 	if s == nil || s.storage == nil {
-		return false, nil
+		if s == nil || s.cluster == nil {
+			return rootstate.TransitionAssessment{}, nil
+		}
+		return s.cluster.ObserveRootEventLifecycle(event), nil
 	}
 	snapshot, err := s.storage.Load()
 	if err != nil {
-		return false, fmt.Errorf("load rooted snapshot: %w", err)
+		return rootstate.TransitionAssessment{}, fmt.Errorf("load rooted snapshot: %w", err)
 	}
-	decision, err := rootstate.EvaluateRootEventLifecycle(rootstate.Snapshot{
+	assessment := rootstate.AssessTransition(rootstate.Snapshot{
 		Descriptors:         snapshot.Descriptors,
 		PendingPeerChanges:  snapshot.PendingPeerChanges,
 		PendingRangeChanges: snapshot.PendingRangeChanges,
 	}, event)
-	return decision == rootstate.RootEventLifecycleSkip, err
+	_, err = rootstate.EvaluateRootEventLifecycle(rootstate.Snapshot{
+		Descriptors:         snapshot.Descriptors,
+		PendingPeerChanges:  snapshot.PendingPeerChanges,
+		PendingRangeChanges: snapshot.PendingRangeChanges,
+	}, event)
+	return assessment, err
 }
 
 // RemoveRegion deletes region metadata from the Coordinator in-memory catalog.
