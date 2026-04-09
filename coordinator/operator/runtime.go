@@ -96,6 +96,9 @@ func reconcileEntry(now time.Time, entry RuntimeEntry) RuntimeEntry {
 }
 
 func runtimeKey(entry rootstate.TransitionEntry) string {
+	if entry.ID != "" {
+		return entry.ID
+	}
 	switch {
 	case entry.PeerChange != nil:
 		return fmt.Sprintf("peer:%d:%d:%d:%d", entry.Key, entry.PeerChange.Kind, entry.PeerChange.StoreID, entry.PeerChange.PeerID)

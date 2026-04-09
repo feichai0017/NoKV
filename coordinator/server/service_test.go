@@ -844,6 +844,8 @@ func TestServiceListTransitionsReturnsOperatorView(t *testing.T) {
 	require.Len(t, resp.GetEntries(), 1)
 	require.Equal(t, coordpb.TransitionKind_TRANSITION_KIND_PEER_CHANGE, resp.GetEntries()[0].GetKind())
 	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_PENDING, resp.GetEntries()[0].GetStatus())
+	require.Equal(t, "peer:160:2:201", resp.GetEntries()[0].GetTransitionId())
+	require.Equal(t, coordpb.TransitionPhase_TRANSITION_PHASE_ADMITTED, resp.GetEntries()[0].GetPhase())
 	require.NotNil(t, resp.GetEntries()[0].GetPendingPeerChange())
 }
 
@@ -890,6 +892,8 @@ func TestServiceAssessRootEventReturnsConflictAssessment(t *testing.T) {
 	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_CONFLICT, resp.GetAssessment().GetStatus())
 	require.Equal(t, coordpb.TransitionRetryClass_TRANSITION_RETRY_CLASS_CONFLICT, resp.GetAssessment().GetRetryClass())
 	require.Equal(t, coordpb.TransitionDecision_TRANSITION_DECISION_APPLY, resp.GetAssessment().GetDecision())
+	require.Equal(t, "peer:161:3:301", resp.GetAssessment().GetTransitionId())
+	require.Equal(t, coordpb.TransitionPhase_TRANSITION_PHASE_CONFLICTED, resp.GetAssessment().GetPhase())
 }
 
 func TestServicePublishRootEventSkipsCompletedSplitPlan(t *testing.T) {

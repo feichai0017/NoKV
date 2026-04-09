@@ -91,6 +91,17 @@ enum TransitionDecision {
   TRANSITION_DECISION_SKIP = 1;
 }
 
+enum TransitionPhase {
+  TRANSITION_PHASE_UNSPECIFIED = 0;
+  TRANSITION_PHASE_PLANNED = 1;
+  TRANSITION_PHASE_ADMITTED = 2;
+  TRANSITION_PHASE_COMPLETED = 3;
+  TRANSITION_PHASE_CONFLICTED = 4;
+  TRANSITION_PHASE_SUPERSEDED = 5;
+  TRANSITION_PHASE_CANCELLED = 6;
+  TRANSITION_PHASE_ABORTED = 7;
+}
+
 message TransitionEntry {
   uint64 key = 1;
   TransitionKind kind = 2;
@@ -99,6 +110,8 @@ message TransitionEntry {
   TransitionReason reason = 5;
   nokv.meta.v1.RootPendingPeerChange pending_peer_change = 6;
   nokv.meta.v1.RootPendingRangeChange pending_range_change = 7;
+  string transition_id = 8;
+  TransitionPhase phase = 9;
 }
 
 message TransitionAssessment {
@@ -108,6 +121,8 @@ message TransitionAssessment {
   TransitionRetryClass retry_class = 4;
   TransitionReason reason = 5;
   TransitionDecision decision = 6;
+  string transition_id = 7;
+  TransitionPhase phase = 8;
 }
 
 message ListTransitionsRequest {}
