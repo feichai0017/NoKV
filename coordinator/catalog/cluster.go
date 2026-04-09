@@ -5,6 +5,7 @@ import (
 	pdview "github.com/feichai0017/NoKV/coordinator/view"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"time"
 )
@@ -19,6 +20,7 @@ type Cluster struct {
 	regions     *pdview.RegionDirectoryView
 	transitions *pdview.PendingView
 	operators   *pdoperator.Runtime
+	rootToken   rootstorage.TailToken
 }
 
 // NewCluster creates an empty in-memory cluster metadata view.
@@ -197,7 +199,7 @@ func (c *Cluster) RegionSnapshot() []pdview.RegionInfo {
 // ReplaceRegionSnapshot replaces the region directory view from one rooted
 // snapshot while preserving store-health runtime observations.
 func (c *Cluster) ReplaceRegionSnapshot(descriptors map[uint64]descriptor.Descriptor) {
-	c.ReplaceRootSnapshot(descriptors, nil, nil)
+	c.ReplaceRootSnapshot(descriptors, nil, nil, rootstorage.TailToken{})
 }
 
 // ReplaceRootSnapshot replaces the runtime rooted view from one rooted durable
@@ -206,16 +208,25 @@ func (c *Cluster) ReplaceRootSnapshot(
 	descriptors map[uint64]descriptor.Descriptor,
 	pendingPeerChanges map[uint64]rootstate.PendingPeerChange,
 	pendingRangeChanges map[uint64]rootstate.PendingRangeChange,
+	token rootstorage.TailToken,
 ) {
 	if c == nil {
 		return
 	}
 	c.regions.Replace(descriptors)
+	c.rootToken = token
 	c.replaceTransitionRuntime(rootstate.Snapshot{
 		Descriptors:         rootstate.CloneDescriptors(descriptors),
 		PendingPeerChanges:  pendingPeerChanges,
 		PendingRangeChanges: pendingRangeChanges,
 	})
+}
+
+func (c *Cluster) CatalogRootToken() rootstorage.TailToken {
+	if c == nil {
+		return rootstorage.TailToken{}
+	}
+	return c.rootToken
 }
 
 // TransitionSnapshot returns a stable copy of rooted pending execution state.
@@ -290,6 +301,7 @@ func (c *Cluster) clone() *Cluster {
 		PendingPeerChanges:  transitions.PendingPeerChanges,
 		PendingRangeChanges: transitions.PendingRangeChanges,
 	})
+	out.rootToken = c.rootToken
 	return out
 }
 

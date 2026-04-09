@@ -149,13 +149,15 @@ enum Freshness {
 enum DegradedMode {
   DEGRADED_MODE_UNSPECIFIED = 0;
   DEGRADED_MODE_HEALTHY = 1;
-  DEGRADED_MODE_ROOT_UNAVAILABLE = 2;
+  DEGRADED_MODE_ROOT_LAGGING = 2;
+  DEGRADED_MODE_ROOT_UNAVAILABLE = 3;
 }
 
 message GetRegionByKeyRequest {
   bytes key = 1;
   Freshness freshness = 2;
   RootToken required_root_token = 3;
+  uint64 max_root_lag = 4;
 }
 
 message GetRegionByKeyResponse {
@@ -165,6 +167,8 @@ message GetRegionByKeyResponse {
   Freshness served_freshness = 4;
   DegradedMode degraded_mode = 5;
   bool served_by_leader = 6;
+  RootToken current_root_token = 7;
+  uint64 root_lag = 8;
 }
 
 message AllocIDRequest {

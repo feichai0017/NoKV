@@ -154,6 +154,7 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 	require.Equal(t, coordpb.Freshness_FRESHNESS_BEST_EFFORT, getResp.GetServedFreshness())
 	require.Equal(t, coordpb.DegradedMode_DEGRADED_MODE_HEALTHY, getResp.GetDegradedMode())
 	require.True(t, getResp.GetServedByLeader())
+	require.Zero(t, getResp.GetRootLag())
 }
 
 func TestServiceGetRegionByKeyStrongReadRejectsFollower(t *testing.T) {
@@ -177,15 +178,21 @@ func TestServiceGetRegionByKeyStrongReadRejectsFollower(t *testing.T) {
 
 func TestServiceGetRegionByKeyRequiredRootToken(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+	desc := testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
+	svc.cluster.ReplaceRootSnapshot(
+		map[uint64]descriptor.Descriptor{desc.RegionID: desc},
+		nil,
+		nil,
+		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 5},
+	)
 	storage := &fakeStorage{
 		leader: true,
 		snapshot: coordstorage.Snapshot{
 			RootToken:   rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 5},
-			Descriptors: make(map[uint64]descriptor.Descriptor),
+			Descriptors: map[uint64]descriptor.Descriptor{desc.RegionID: desc},
 		},
 	}
 	svc.SetStorage(storage)
-	require.NoError(t, svc.cluster.PublishRegionDescriptor(testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)))
 
 	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
 		Key: []byte("a"),
@@ -237,6 +244,60 @@ func TestServiceGetRegionByKeyBestEffortWithUnavailableRoot(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 	require.Contains(t, err.Error(), errRootUnavailable)
+}
+
+func TestServiceGetRegionByKeyReportsRootLagging(t *testing.T) {
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+	svc.cluster.ReplaceRootSnapshot(
+		map[uint64]descriptor.Descriptor{
+			11: testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil),
+		},
+		nil,
+		nil,
+		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 3},
+	)
+	storage := &fakeStorage{
+		leader: true,
+		snapshot: coordstorage.Snapshot{
+			RootToken: rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 5}, Revision: 7},
+			Descriptors: map[uint64]descriptor.Descriptor{
+				11: testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil),
+			},
+		},
+	}
+	svc.SetStorage(storage)
+
+	resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
+	require.NoError(t, err)
+	require.Equal(t, coordpb.DegradedMode_DEGRADED_MODE_ROOT_LAGGING, resp.GetDegradedMode())
+	require.Equal(t, uint64(4), resp.GetRootLag())
+	require.Equal(t, uint64(3), resp.GetServedRootToken().GetRevision())
+	require.Equal(t, uint64(7), resp.GetCurrentRootToken().GetRevision())
+
+	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:        []byte("a"),
+		Freshness:  coordpb.Freshness_FRESHNESS_BOUNDED,
+		MaxRootLag: 3,
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, err.Error(), "root lag exceeds bound")
+
+	resp, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:        []byte("a"),
+		Freshness:  coordpb.Freshness_FRESHNESS_BOUNDED,
+		MaxRootLag: 4,
+	})
+	require.NoError(t, err)
+	require.Equal(t, coordpb.DegradedMode_DEGRADED_MODE_ROOT_LAGGING, resp.GetDegradedMode())
+
+	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:       []byte("a"),
+		Freshness: coordpb.Freshness_FRESHNESS_STRONG,
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, err.Error(), "root lag exceeds strong freshness")
 }
 
 func TestServiceRemoveRegion(t *testing.T) {
@@ -738,6 +799,7 @@ func TestServiceListTransitionsReturnsOperatorView(t *testing.T) {
 			},
 		},
 		nil,
+		rootstorage.TailToken{},
 	)
 
 	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
@@ -775,6 +837,7 @@ func TestServiceAssessRootEventReturnsConflictAssessment(t *testing.T) {
 			},
 		},
 		nil,
+		rootstorage.TailToken{},
 	)
 
 	conflicting := current.Clone()
