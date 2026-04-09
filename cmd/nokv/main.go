@@ -48,8 +48,8 @@ func main() {
 		err = runMigrateCmd(os.Stdout, args)
 	case "serve":
 		err = runServeCmd(os.Stdout, args)
-	case "pd":
-		err = runPDCmd(os.Stdout, args)
+	case "coordinator":
+		err = runCoordinatorCmd(os.Stdout, args)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -72,7 +72,7 @@ func printUsage(w io.Writer) {
 	  regions   Show the local peer catalog used for store recovery
 	  migrate   Inspect or convert a standalone workdir for distributed mode
 	  serve     Start NoKV gRPC service backed by a local raftstore
-	  pd        Start PD-lite gRPC service (control plane)
+	  coordinator Start coordinator gRPC service (control plane)
 
 Run "nokv <command> -h" for command-specific flags.`)
 }

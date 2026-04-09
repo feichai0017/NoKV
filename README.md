@@ -53,11 +53,11 @@ The interesting part is not just that it has WAL, LSM, MVCC, Redis compatibility
   Mode gates, logical region snapshots, local recovery metadata, and a clean split between execution plane and control plane keep lifecycle semantics explicit.
 
 - **Tested as a System**  
-  The project is validated with migration flow tests, restart recovery, PD degradation, transport chaos, context propagation, and publish-boundary failpoints.
+  The project is validated with migration flow tests, restart recovery, Coordinator degradation, transport chaos, context propagation, and publish-boundary failpoints.
 
 ## 🚦 Quick Start
 
-Start an end-to-end playground with either the local script or Docker Compose. Both spin up a three-node Raft cluster with a PD-lite service and expose the Redis-compatible gateway.
+Start an end-to-end playground with either the local script or Docker Compose. Both spin up a three-node Raft cluster with a Coordinator service and expose the Redis-compatible gateway.
 
 ![NoKV demo](./img/nokv-demo.gif)
 
@@ -70,7 +70,7 @@ go run ./cmd/nokv-redis \
   --raft-config ./raft_config.example.json \
   --metrics-addr 127.0.0.1:9100
 
-# Option B: Docker Compose (cluster + gateway + PD)
+# Option B: Docker Compose (cluster + gateway + Coordinator)
 docker compose up --build
 # Tear down
 docker compose down -v
@@ -129,7 +129,7 @@ func main() {
 > - `DB.SetWithTTL` accepts `time.Duration` (relative TTL). `DB.Set`/`DB.SetBatch`/`DB.SetWithTTL` reject `nil` values; use `DB.Del` or `DB.DeleteRange(start,end)` for deletes.
 > - `DB.NewIterator` exposes user-facing entries, while `DB.NewInternalIterator` scans raw internal keys (`cf+user_key+ts`).
 
-> ℹ️ `scripts/dev/cluster.sh` rebuilds `nokv` and `nokv-config`, seeds local peer catalogs via `nokv-config catalog`, starts PD-lite (`nokv pd`), streams PD/store logs to the current terminal, and also writes them under `artifacts/cluster/store-<id>/server.log` and `artifacts/cluster/pd.log`. Use `Ctrl+C` to exit cleanly; if the process crashes, wipe the workdir (`rm -rf ./artifacts/cluster`) before restarting to avoid WAL replay errors.
+> ℹ️ `scripts/dev/cluster.sh` rebuilds `nokv` and `nokv-config`, seeds local peer catalogs via `nokv-config catalog`, starts Coordinator (`nokv coordinator`), streams Coordinator/store logs to the current terminal, and also writes them under `artifacts/cluster/store-<id>/server.log` and `artifacts/cluster/coordinator.log`. Use `Ctrl+C` to exit cleanly; if the process crashes, wipe the workdir (`rm -rf ./artifacts/cluster`) before restarting to avoid WAL replay errors.
 
 ---
 
@@ -138,7 +138,7 @@ func main() {
 Everything hangs off a single file: [`raft_config.example.json`](./raft_config.example.json).
 
 ```jsonc
-"pd": { "addr": "127.0.0.1:2379", "docker_addr": "nokv-pd:2379" },
+"coordinator": { "addr": "127.0.0.1:2379", "docker_addr": "nokv-coordinator:2379" },
 "stores": [
   { "store_id": 1, "listen_addr": "127.0.0.1:20170", ... },
   { "store_id": 2, "listen_addr": "127.0.0.1:20171", ... },
@@ -161,7 +161,7 @@ Everything hangs off a single file: [`raft_config.example.json`](./raft_config.e
 | --- | --- | --- |
 | Storage Core | `lsm/`, `wal/`, `vlog/` | Hybrid log-structured design with manifest-backed durability and value separation. |
 | Concurrency | `percolator/`, `raftstore/client` | Distributed 2PC, lock management, and MVCC version semantics in raft mode. |
-| Replication | `raftstore/*` + `pd/*` | Multi-Raft data plane plus PD-backed control plane (routing, TSO, heartbeats). |
+| Replication | `raftstore/*` + `coordinator/*` | Multi-Raft data plane plus Coordinator-backed control plane (routing, TSO, heartbeats). |
 | Tooling | `cmd/nokv`, `cmd/nokv-config`, `cmd/nokv-redis` | CLI, config helper, Redis-compatible gateway share the same topology file. |
 | Observability | `stats`, `hotring`, expvar | Built-in metrics, hot-key analytics, and crash recovery traces. |
 
@@ -184,7 +184,7 @@ flowchart TD
     subgraph Distributed["Distributed Shape"]
         Gateway["NoKV RPC / Redis Gateway"]
         Client["raftstore/client"]
-        PD["PD-lite<br/>route / tso / heartbeats"]
+        Coordinator["Coordinator<br/>route / tso / heartbeats"]
         Server["Node Server"]
         Store["Store runtime root"]
         Peer["Peer runtime"]
@@ -213,7 +213,7 @@ flowchart TD
     App --> Embedded
     App --> Gateway
     Gateway --> Client
-    Client --> PD
+    Client --> Coordinator
     Client --> Server
     Server --> Store
     Store --> Peer
@@ -239,7 +239,7 @@ flowchart TD
 What makes this layout distinctive:
 - **One storage core, two deployment shapes** – embedded mode and raft mode both sit on the same `DB` substrate instead of splitting into separate engines.
 - **Migration is a protocol, not a dump/import hack** – `plan → init → seeded → expand` turns an existing standalone workdir into a replicated cluster path with explicit lifecycle state.
-- **Execution plane and control plane are split on purpose** – `RaftAdmin` executes leader-side membership changes, while `PD-lite` stays responsible for routing, allocation, timestamps, and cluster view.
+- **Execution plane and control plane are split on purpose** – `RaftAdmin` executes leader-side membership changes, while `Coordinator` stays responsible for routing, allocation, timestamps, and cluster view.
 - **Recovery metadata is not mixed with engine metadata** – manifest, local recovery catalog, raft durable state, and logical region snapshots each have distinct ownership.
 
 Key ideas:
@@ -325,7 +325,7 @@ More in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-obser
 
 - `cmd/nokv-redis` exposes a RESP-compatible endpoint. In embedded mode (`--workdir`) commands execute through regular DB APIs; in distributed mode (`--raft-config`) calls are routed through `raftstore/client` and committed with TwoPhaseCommit.
 - In raft mode, TTL is persisted directly in each value entry (`expires_at`) through the same 2PC write path as the value payload.
-- `--metrics-addr` exposes Redis gateway metrics under `NoKV.Stats.redis` via expvar. In raft mode, `--pd-addr` can override `config.pd` when you need a non-default PD endpoint.
+- `--metrics-addr` exposes Redis gateway metrics under `NoKV.Stats.redis` via expvar. In raft mode, `--coordinator-addr` can override `config.coordinator` when you need a non-default Coordinator endpoint.
 - A ready-to-use cluster configuration is available at `raft_config.example.json`, matching both `scripts/dev/cluster.sh` and the Docker Compose setup.
 
 > For the complete command matrix, configuration and deployment guides, see [docs/nokv-redis.md](docs/nokv-redis.md).

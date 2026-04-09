@@ -12,9 +12,9 @@ import (
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
-	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/engine"
@@ -331,18 +331,18 @@ type staticRegionResolver struct {
 	regions []*metapb.RegionDescriptor
 }
 
-func (r *staticRegionResolver) GetRegionByKey(_ context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
+func (r *staticRegionResolver) GetRegionByKey(_ context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("resolver: nil request")
 	}
 	for _, region := range r.regions {
 		if regionContainsKey(region, req.GetKey()) {
-			return &pdpb.GetRegionByKeyResponse{
+			return &coordpb.GetRegionByKeyResponse{
 				RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromProto(cloneRegionMetaPB(region))),
 			}, nil
 		}
 	}
-	return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
+	return &coordpb.GetRegionByKeyResponse{NotFound: true}, nil
 }
 
 func (r *staticRegionResolver) Close() error { return nil }

@@ -177,62 +177,62 @@ func TestValidateStoreWorkDirTemplateRequiresID(t *testing.T) {
 	}
 }
 
-func TestResolvePDAddr(t *testing.T) {
+func TestResolveCoordinatorAddr(t *testing.T) {
 	cfg := &File{
-		PD: &PD{
+		Coordinator: &Coordinator{
 			Addr:       "127.0.0.1:2379",
 			DockerAddr: "nokv-pd:2379",
 		},
 	}
-	if got := cfg.ResolvePDAddr("host"); got != "127.0.0.1:2379" {
-		t.Fatalf("host pd addr mismatch: got %q", got)
+	if got := cfg.ResolveCoordinatorAddr("host"); got != "127.0.0.1:2379" {
+		t.Fatalf("host coordinator addr mismatch: got %q", got)
 	}
-	if got := cfg.ResolvePDAddr("docker"); got != "nokv-pd:2379" {
-		t.Fatalf("docker pd addr mismatch: got %q", got)
+	if got := cfg.ResolveCoordinatorAddr("docker"); got != "nokv-pd:2379" {
+		t.Fatalf("docker coordinator addr mismatch: got %q", got)
 	}
 }
 
-func TestResolvePDAddrFallbackAndNil(t *testing.T) {
+func TestResolveCoordinatorAddrFallbackAndNil(t *testing.T) {
 	var nilCfg *File
-	if got := nilCfg.ResolvePDAddr("host"); got != "" {
+	if got := nilCfg.ResolveCoordinatorAddr("host"); got != "" {
 		t.Fatalf("expected empty address for nil cfg, got %q", got)
 	}
 
-	cfg := &File{PD: &PD{Addr: "127.0.0.1:2379"}}
-	if got := cfg.ResolvePDAddr("docker"); got != "127.0.0.1:2379" {
+	cfg := &File{Coordinator: &Coordinator{Addr: "127.0.0.1:2379"}}
+	if got := cfg.ResolveCoordinatorAddr("docker"); got != "127.0.0.1:2379" {
 		t.Fatalf("expected docker fallback to host addr, got %q", got)
 	}
-	if got := cfg.ResolvePDAddr("weird"); got != "127.0.0.1:2379" {
+	if got := cfg.ResolveCoordinatorAddr("weird"); got != "127.0.0.1:2379" {
 		t.Fatalf("expected unknown scope fallback to host addr, got %q", got)
 	}
 }
 
-func TestResolvePDWorkDir(t *testing.T) {
+func TestResolveCoordinatorWorkDir(t *testing.T) {
 	cfg := &File{
-		PD: &PD{
-			WorkDir:       "/var/lib/nokv-pd",
-			DockerWorkDir: "/var/lib/nokv-pd-docker",
+		Coordinator: &Coordinator{
+			WorkDir:       "/var/lib/nokv-coordinator",
+			DockerWorkDir: "/var/lib/nokv-coordinator-docker",
 		},
 	}
-	if got := cfg.ResolvePDWorkDir("host"); got != "/var/lib/nokv-pd" {
-		t.Fatalf("host pd work dir mismatch: got %q", got)
+	if got := cfg.ResolveCoordinatorWorkDir("host"); got != "/var/lib/nokv-coordinator" {
+		t.Fatalf("host coordinator work dir mismatch: got %q", got)
 	}
-	if got := cfg.ResolvePDWorkDir("docker"); got != "/var/lib/nokv-pd-docker" {
-		t.Fatalf("docker pd work dir mismatch: got %q", got)
+	if got := cfg.ResolveCoordinatorWorkDir("docker"); got != "/var/lib/nokv-coordinator-docker" {
+		t.Fatalf("docker coordinator work dir mismatch: got %q", got)
 	}
 }
 
-func TestResolvePDWorkDirFallbackAndNil(t *testing.T) {
+func TestResolveCoordinatorWorkDirFallbackAndNil(t *testing.T) {
 	var nilCfg *File
-	if got := nilCfg.ResolvePDWorkDir("host"); got != "" {
+	if got := nilCfg.ResolveCoordinatorWorkDir("host"); got != "" {
 		t.Fatalf("expected empty work dir for nil cfg, got %q", got)
 	}
 
-	cfg := &File{PD: &PD{WorkDir: "/var/lib/nokv-pd"}}
-	if got := cfg.ResolvePDWorkDir("docker"); got != "/var/lib/nokv-pd" {
+	cfg := &File{Coordinator: &Coordinator{WorkDir: "/var/lib/nokv-coordinator"}}
+	if got := cfg.ResolveCoordinatorWorkDir("docker"); got != "/var/lib/nokv-coordinator" {
 		t.Fatalf("expected docker fallback to host work dir, got %q", got)
 	}
-	if got := cfg.ResolvePDWorkDir("weird"); got != "/var/lib/nokv-pd" {
+	if got := cfg.ResolveCoordinatorWorkDir("weird"); got != "/var/lib/nokv-coordinator" {
 		t.Fatalf("expected unknown scope fallback to host work dir, got %q", got)
 	}
 }

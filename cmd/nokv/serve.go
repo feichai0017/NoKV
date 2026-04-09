@@ -14,8 +14,8 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	pdadapter "github.com/feichai0017/NoKV/pd/adapter"
-	pdclient "github.com/feichai0017/NoKV/pd/client"
+	coordadapter "github.com/feichai0017/NoKV/coordinator/adapter"
+	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -38,8 +38,8 @@ func runServeCmd(w io.Writer, args []string) error {
 	maxInflight := fs.Int("raft-max-inflight", 256, "raft max inflight messages")
 	raftTickInterval := fs.Duration("raft-tick-interval", 0, "interval between raft ticks (default 100ms)")
 	raftDebugLog := fs.Bool("raft-debug-log", false, "enable verbose raft debug logging")
-	pdAddr := fs.String("pd-addr", "", "PD-lite gRPC endpoint for cluster mode (required)")
-	pdTimeout := fs.Duration("pd-timeout", 2*time.Second, "timeout for PD-lite heartbeat RPCs")
+	coordAddr := fs.String("coordinator-addr", "", "coordinator gRPC endpoint for cluster mode (required)")
+	coordTimeout := fs.Duration("coordinator-timeout", 2*time.Second, "timeout for coordinator heartbeat RPCs")
 	metricsAddr := fs.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
 	var peerFlags []string
 	fs.Func("peer", "remote raft peer mapping in the form peerID=address (repeatable)", func(value string) error {
@@ -64,8 +64,8 @@ func runServeCmd(w io.Writer, args []string) error {
 	if *electionTick <= 0 || *heartbeatTick <= 0 {
 		return fmt.Errorf("heartbeat and election ticks must be > 0")
 	}
-	if strings.TrimSpace(*pdAddr) == "" {
-		return fmt.Errorf("--pd-addr is required (PD is the only scheduler/control-plane source)")
+	if strings.TrimSpace(*coordAddr) == "" {
+		return fmt.Errorf("--coordinator-addr is required (coordinator is the only scheduler/control-plane source)")
 	}
 
 	localMeta, err := localmeta.OpenLocalStore(*workDir, nil)
@@ -92,16 +92,16 @@ func runServeCmd(w io.Writer, args []string) error {
 		_ = db.Close()
 	}()
 
-	// Cluster mode only: route scheduler heartbeats and operations through PD.
+	// Cluster mode only: route scheduler heartbeats and operations through the Coordinator.
 	dialCtx, cancelDial := context.WithTimeout(context.Background(), 5*time.Second)
-	pdCli, err := pdclient.NewGRPCClient(dialCtx, strings.TrimSpace(*pdAddr))
+	coordCli, err := coordclient.NewGRPCClient(dialCtx, strings.TrimSpace(*coordAddr))
 	cancelDial()
 	if err != nil {
-		return fmt.Errorf("dial pd %q: %w", *pdAddr, err)
+		return fmt.Errorf("dial coordinator %q: %w", *coordAddr, err)
 	}
-	pdScheduler := pdadapter.NewSchedulerClient(pdadapter.SchedulerClientConfig{
-		PD:      pdCli,
-		Timeout: *pdTimeout,
+	coordScheduler := coordadapter.NewSchedulerClient(coordadapter.SchedulerClientConfig{
+		Coordinator: coordCli,
+		Timeout:     *coordTimeout,
 	})
 
 	server, err := serverpkg.NewNode(serverpkg.Config{
@@ -113,7 +113,7 @@ func runServeCmd(w io.Writer, args []string) error {
 			StoreID:   *storeID,
 			LocalMeta: localMeta,
 			WorkDir:   *workDir,
-			Scheduler: pdScheduler,
+			Scheduler: coordScheduler,
 		},
 		EnableRaftDebugLog: *raftDebugLog,
 		RaftTickInterval:   *raftTickInterval,
@@ -185,11 +185,11 @@ func runServeCmd(w io.Writer, args []string) error {
 	if metricsLn != nil {
 		_, _ = fmt.Fprintf(w, "Serve metrics endpoint listening on http://%s/debug/vars\n", metricsLn.Addr().String())
 	}
-	_, _ = fmt.Fprintf(w, "Serve mode: cluster (PD enabled, addr=%s)\n", strings.TrimSpace(*pdAddr))
+	_, _ = fmt.Fprintf(w, "Serve mode: cluster (coordinator enabled, addr=%s)\n", strings.TrimSpace(*coordAddr))
 	if len(peerFlags) > 0 {
 		_, _ = fmt.Fprintf(w, "Configured peers: %s\n", strings.Join(peerFlags, ", "))
 	}
-	_, _ = fmt.Fprintf(w, "PD heartbeat sink enabled: %s\n", strings.TrimSpace(*pdAddr))
+	_, _ = fmt.Fprintf(w, "coordinator heartbeat sink enabled: %s\n", strings.TrimSpace(*coordAddr))
 	_, _ = fmt.Fprintln(w, "Press Ctrl+C to stop")
 
 	ctx, cancel := notifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

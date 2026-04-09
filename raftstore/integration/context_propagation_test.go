@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
-	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"testing"
 	"time"
 
@@ -28,15 +28,15 @@ type staticResolver struct {
 	regions []*metapb.RegionDescriptor
 }
 
-func (r *staticResolver) GetRegionByKey(ctx context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
+func (r *staticResolver) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
 	for _, region := range r.regions {
 		if region != nil && containsRegionKey(region, req.GetKey()) {
-			return &pdpb.GetRegionByKeyResponse{
+			return &coordpb.GetRegionByKeyResponse{
 				RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromProto(region)),
 			}, nil
 		}
 	}
-	return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
+	return &coordpb.GetRegionByKeyResponse{NotFound: true}, nil
 }
 
 func (r *staticResolver) Close() error { return nil }

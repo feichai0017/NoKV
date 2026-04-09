@@ -67,42 +67,42 @@ func TestRunPDSimpleFormat(t *testing.T) {
 	cfgPath := writeSampleConfig(t)
 
 	output, err := captureStdout(t, func() error {
-		return runPD([]string{"--config", cfgPath, "--format", "simple", "--scope", "host"})
+		return runCoordinator([]string{"--config", cfgPath, "--format", "simple", "--scope", "host"})
 	})
 	require.NoError(t, err)
 	require.Equal(t, "127.0.0.1:2379", strings.TrimSpace(output))
 
 	output, err = captureStdout(t, func() error {
-		return runPD([]string{"--config", cfgPath, "--format", "simple", "--scope", "docker"})
+		return runCoordinator([]string{"--config", cfgPath, "--format", "simple", "--scope", "docker"})
 	})
 	require.NoError(t, err)
 	require.Equal(t, "nokv-pd:2379", strings.TrimSpace(output))
 
 	output, err = captureStdout(t, func() error {
-		return runPD([]string{"--config", cfgPath, "--format", "simple", "--scope", "host", "--field", "workdir"})
+		return runCoordinator([]string{"--config", cfgPath, "--format", "simple", "--scope", "host", "--field", "workdir"})
 	})
 	require.NoError(t, err)
-	require.Equal(t, "./artifacts/cluster/pd", strings.TrimSpace(output))
+	require.Equal(t, "./artifacts/cluster/coordinator", strings.TrimSpace(output))
 
 	output, err = captureStdout(t, func() error {
-		return runPD([]string{"--config", cfgPath, "--format", "simple", "--scope", "docker", "--field", "workdir"})
+		return runCoordinator([]string{"--config", cfgPath, "--format", "simple", "--scope", "docker", "--field", "workdir"})
 	})
 	require.NoError(t, err)
-	require.Equal(t, "/var/lib/nokv-pd", strings.TrimSpace(output))
+	require.Equal(t, "/var/lib/nokv-coordinator", strings.TrimSpace(output))
 }
 
 func TestRunPDJSONFormat(t *testing.T) {
 	cfgPath := writeSampleConfig(t)
 	output, err := captureStdout(t, func() error {
-		return runPD([]string{"--config", cfgPath, "--format", "json"})
+		return runCoordinator([]string{"--config", cfgPath, "--format", "json"})
 	})
 	require.NoError(t, err)
-	var endpoint config.PD
+	var endpoint config.Coordinator
 	require.NoError(t, json.Unmarshal([]byte(output), &endpoint))
 	require.Equal(t, "127.0.0.1:2379", endpoint.Addr)
 	require.Equal(t, "nokv-pd:2379", endpoint.DockerAddr)
-	require.Equal(t, "./artifacts/cluster/pd", endpoint.WorkDir)
-	require.Equal(t, "/var/lib/nokv-pd", endpoint.DockerWorkDir)
+	require.Equal(t, "./artifacts/cluster/coordinator", endpoint.WorkDir)
+	require.Equal(t, "/var/lib/nokv-coordinator", endpoint.DockerWorkDir)
 }
 
 func TestRunRegionCatalogWritesRegion(t *testing.T) {
@@ -201,13 +201,13 @@ func TestMainRegionsCommand(t *testing.T) {
 	require.Equal(t, 0, code)
 }
 
-func TestMainPDCommand(t *testing.T) {
+func TestMainCoordinatorCommand(t *testing.T) {
 	cfgPath := writeSampleConfig(t)
 	origArgs := os.Args
 	defer func() { os.Args = origArgs }()
 	os.Args = []string{
 		"nokv-config",
-		"pd",
+		"coordinator",
 		"--config",
 		cfgPath,
 		"--format",
@@ -350,15 +350,15 @@ func TestRunPDMissingBlock(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 	require.NoError(t, os.WriteFile(path, raw, 0o600))
 
-	err = runPD([]string{"--config", path})
+	err = runCoordinator([]string{"--config", path})
 	require.Error(t, err)
 }
 
 func TestRunPDUnknownFormatAndScope(t *testing.T) {
 	cfgPath := writeSampleConfig(t)
-	require.Error(t, runPD([]string{"--config", cfgPath, "--format", "bad"}))
-	require.Error(t, runPD([]string{"--config", cfgPath, "--scope", "oops"}))
-	require.Error(t, runPD([]string{"--config", cfgPath, "--field", "bad"}))
+	require.Error(t, runCoordinator([]string{"--config", cfgPath, "--format", "bad"}))
+	require.Error(t, runCoordinator([]string{"--config", cfgPath, "--scope", "oops"}))
+	require.Error(t, runCoordinator([]string{"--config", cfgPath, "--field", "bad"}))
 }
 
 func TestLoadConfigMissingFile(t *testing.T) {
@@ -491,11 +491,11 @@ func writeSampleConfig(t *testing.T) string {
 	t.Helper()
 	cfg := config.File{
 		MaxRetries: 3,
-		PD: &config.PD{
+		Coordinator: &config.Coordinator{
 			Addr:          "127.0.0.1:2379",
 			DockerAddr:    "nokv-pd:2379",
-			WorkDir:       "./artifacts/cluster/pd",
-			DockerWorkDir: "/var/lib/nokv-pd",
+			WorkDir:       "./artifacts/cluster/coordinator",
+			DockerWorkDir: "/var/lib/nokv-coordinator",
 		},
 		StoreWorkDirTemplate:       "./artifacts/cluster/store-{id}",
 		StoreDockerWorkDirTemplate: "/var/lib/nokv/store-{id}",

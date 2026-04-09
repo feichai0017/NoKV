@@ -48,7 +48,7 @@
     </div>
     <div class="hero-stat">
       <strong>Tested as a System</strong>
-      <span>Migration flow, restart recovery, PD degradation, transport chaos, and publish-boundary failpoints.</span>
+      <span>Migration flow, restart recovery, Coordinator degradation, transport chaos, and publish-boundary failpoints.</span>
     </div>
   </div>
 
@@ -87,7 +87,7 @@
 
   <p class="hero-footer">
     Built around Go, WAL + LSM storage, Percolator-style MVCC, multi-Raft replication,
-    PD-lite control plane, and a formal standalone-to-cluster migration path.
+    Coordinator control plane, and a formal standalone-to-cluster migration path.
   </p>
 </div>
 
@@ -107,7 +107,7 @@
     <ul>
       <li>One storage substrate instead of separate standalone and distributed engines.</li>
       <li>Formal lifecycle and migration protocol instead of dump/import glue.</li>
-      <li>System-level verification under restart, degraded PD, chaos, and failpoints.</li>
+      <li>System-level verification under restart, degraded Coordinator, chaos, and failpoints.</li>
     </ul>
   </div>
 </div>
@@ -138,7 +138,7 @@
     <div class="feature-card">
       <span class="feature-eyebrow">Runtime Ownership</span>
       <h3>Replication with clear ownership</h3>
-      <p><code>Store</code> owns the node runtime, <code>Peer</code> owns a region replica runtime, <code>RaftAdmin</code> is the execution plane, and PD stays in the control plane.</p>
+      <p><code>Store</code> owns the node runtime, <code>Peer</code> owns a region replica runtime, <code>RaftAdmin</code> is the execution plane, and Coordinator stays in the control plane.</p>
       <small>The system avoids mixing local truth, local recovery metadata, and cluster control metadata.</small>
     </div>
     <div class="feature-card">
@@ -150,7 +150,7 @@
     <div class="feature-card">
       <span class="feature-eyebrow">Validation Surface</span>
       <h3>System-level validation</h3>
-      <p>The project is tested beyond unit semantics: migration flow, restart safety, degraded PD behavior, transport chaos, and context propagation are all exercised.</p>
+      <p>The project is tested beyond unit semantics: migration flow, restart safety, degraded Coordinator behavior, transport chaos, and context propagation are all exercised.</p>
       <small>The goal is to verify lifecycle and recovery behavior, not just happy-path RPCs.</small>
     </div>
   </div>
@@ -180,7 +180,7 @@
       <strong>01</strong>
       <div>
         <h4>Start the cluster</h4>
-        <p>Use the shared topology file and bring up the local PD + store layout.</p>
+        <p>Use the shared topology file and bring up the local Coordinator + store layout.</p>
       </div>
     </div>
     <div class="launch-step">
@@ -259,8 +259,8 @@ If you only read three pages, read these first:
   </div>
   <div class="path-card">
     <h3>Distributed Runtime</h3>
-    <p>Read this route if Store/Peer ownership, transport, snapshots, and PD-lite are the parts you want to reason about.</p>
-    <p><a href="raftstore.html">Raftstore</a> · <a href="pd.html">PD-lite</a> · <a href="runtime.html">Runtime</a></p>
+    <p>Read this route if Store/Peer ownership, transport, snapshots, and Coordinator are the parts you want to reason about.</p>
+    <p><a href="raftstore.html">Raftstore</a> · <a href="coordinator.html">Coordinator</a> · <a href="runtime.html">Runtime</a></p>
   </div>
   <div class="path-card">
     <h3>Migration & Operations</h3>
@@ -269,7 +269,7 @@ If you only read three pages, read these first:
   </div>
   <div class="path-card">
     <h3>Testing & Validation</h3>
-    <p>Read this route if you want to see how NoKV verifies correctness under restart, degraded PD, chaos, and failpoint boundaries.</p>
+    <p>Read this route if you want to see how NoKV verifies correctness under restart, degraded Coordinator, chaos, and failpoint boundaries.</p>
     <p><a href="testing.html">Testing</a> · <a href="notes/README.html">Notes</a></p>
   </div>
 </div>
@@ -282,7 +282,7 @@ If you only read three pages, read these first:
   <a class="quicklink" href="cli.html">CLI surface</a>
   <a class="quicklink" href="config.html">Topology config</a>
   <a class="quicklink" href="scripts.html">Scripts layout</a>
-  <a class="quicklink" href="pd.html">PD-lite</a>
+  <a class="quicklink" href="coordinator.html">Coordinator</a>
   <a class="quicklink" href="percolator.html">Percolator / MVCC</a>
   <a class="quicklink" href="runtime.html">Runtime call chains</a>
 </div>
@@ -298,7 +298,7 @@ If you only read three pages, read these first:
 }}%%
 graph TD
     Client["Client / App / Redis"] -->|RPC / RESP| Server["Node Server"]
-    Client -->|Route / TSO / control queries| PD["PD-lite"]
+    Client -->|Route / TSO / control queries| Coordinator["Coordinator"]
 
     subgraph "Distributed Runtime"
         Server --> Store["Store runtime root"]

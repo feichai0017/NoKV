@@ -117,9 +117,9 @@ func describeMode(status StatusResult, plan PlanResult) modeReport {
 		return modeReport{
 			Stage:   "seed-ready",
 			Summary: "workdir has been promoted into a seed and is ready to boot in distributed mode",
-			Next:    fmt.Sprintf("nokv serve --workdir %s --store-id %d --pd-addr <pd>", status.WorkDir, status.StoreID),
+			Next:    fmt.Sprintf("nokv serve --workdir %s --store-id %d --coordinator-addr <coordinator>", status.WorkDir, status.StoreID),
 			NextSteps: []string{
-				fmt.Sprintf("nokv serve --workdir %s --store-id %d --pd-addr <pd>", status.WorkDir, status.StoreID),
+				fmt.Sprintf("nokv serve --workdir %s --store-id %d --coordinator-addr <coordinator>", status.WorkDir, status.StoreID),
 				"after boot, use nokv migrate expand to add more peers",
 			},
 		}

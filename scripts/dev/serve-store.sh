@@ -11,7 +11,7 @@ Usage: scripts/dev/serve-store.sh --config <config> --store-id <id> --workdir <d
 
 Options:
   --scope <local|docker>   Select which addresses to use (default: local)
-  --pd-addr <addr>         Optional PD gRPC endpoint override passed to "nokv serve"
+  --coordinator-addr <addr>         Optional Coordinator gRPC endpoint override passed to "nokv serve"
   --raft-debug-log         Enable verbose etcd/raft debug logging
   --no-raft-debug-log      Disable verbose etcd/raft debug logging
   --extra <args...>        Additional arguments passed to "nokv serve"
@@ -44,7 +44,7 @@ while [[ $# -gt 0 ]]; do
       SCOPE=$2
       shift 2
       ;;
-    --pd-addr)
+    --coordinator-addr)
       PD_ADDR=$2
       shift 2
       ;;
@@ -86,11 +86,11 @@ if [[ "$SCOPE" != "local" && "$SCOPE" != "docker" ]]; then
 fi
 
 if [[ -z "$PD_ADDR" ]]; then
-  pd_scope="host"
+  coordinator_scope="host"
   if [[ "$SCOPE" == "docker" ]]; then
-    pd_scope="docker"
+    coordinator_scope="docker"
   fi
-  PD_ADDR=$(nokv_config_pd_addr "$CONFIG" "$pd_scope")
+  PD_ADDR=$(nokv_config_coordinator_addr "$CONFIG" "$coordinator_scope")
 fi
 
 STORE_LINES=()
@@ -165,7 +165,7 @@ if [[ $RAFT_DEBUG -eq 1 ]]; then
 fi
 
 if [[ -n "$PD_ADDR" ]]; then
-  cmd+=(--pd-addr "$PD_ADDR")
+  cmd+=(--coordinator-addr "$PD_ADDR")
 fi
 
 cmd+=("${peer_args[@]}")

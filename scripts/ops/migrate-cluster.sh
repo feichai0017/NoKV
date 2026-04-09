@@ -17,7 +17,7 @@ Options:
   --seed-region ID         Region ID used during migrate init (required)
   --seed-peer ID           Peer ID used during migrate init (required)
   --target SPEC            Target peer rollout in <store>:<peer>[@addr] form; may be repeated
-  --pd-listen ADDR         PD gRPC listen/address override
+  --coordinator-listen ADDR         Coordinator gRPC listen/address override
   --wait DURATION          Wait timeout passed to migrate commands (default: 30s)
   --poll-interval DURATION Poll interval passed to migrate commands (default: 200ms)
   --transfer-leader PEER   Optional peer ID to transfer leadership to after expansion
@@ -30,7 +30,7 @@ Options:
 Notes:
   - The seed workdir must already contain standalone data.
   - Target stores must use fresh workdirs; this script refuses to reuse existing stores.
-  - The script starts PD and store processes locally, runs the migration flow, then keeps
+  - The script starts Coordinator and store processes locally, runs the migration flow, then keeps
     the cluster running in the foreground until interrupted.
 USAGE
 }
@@ -41,8 +41,8 @@ WORKDIR=""
 SEED_STORE_ID=""
 SEED_REGION_ID=""
 SEED_PEER_ID=""
-PD_LISTEN=""
-PD_LISTEN_SET=0
+COORDINATOR_LISTEN=""
+COORDINATOR_LISTEN_SET=0
 WAIT_TIMEOUT="30s"
 POLL_INTERVAL="200ms"
 DRY_RUN=0
@@ -80,9 +80,9 @@ while [[ $# -gt 0 ]]; do
       TARGET_SPECS+=("$2")
       shift 2
       ;;
-    --pd-listen)
-      PD_LISTEN=$2
-      PD_LISTEN_SET=1
+    --coordinator-listen)
+      COORDINATOR_LISTEN=$2
+      COORDINATOR_LISTEN_SET=1
       shift 2
       ;;
     --wait)
@@ -145,20 +145,20 @@ CONFIG_DIR=$(nokv_config_dir "$CONFIG_PATH")
 nokv_build_cli_binaries
 nokv_prepend_build_path
 
-if [[ $PD_LISTEN_SET -eq 0 ]]; then
-  PD_LISTEN=$(nokv_config_pd_addr "$CONFIG_PATH" host)
+if [[ $COORDINATOR_LISTEN_SET -eq 0 ]]; then
+  COORDINATOR_LISTEN=$(nokv_config_coordinator_addr "$CONFIG_PATH" host)
 fi
-if [[ -z "$PD_LISTEN" ]]; then
-  PD_LISTEN="127.0.0.1:2379"
+if [[ -z "$COORDINATOR_LISTEN" ]]; then
+  COORDINATOR_LISTEN="127.0.0.1:2379"
 fi
 
-PD_WORKDIR=$(nokv_config_pd_workdir "$CONFIG_PATH")
-if [[ -z "$PD_WORKDIR" ]]; then
-  PD_WORKDIR="$ROOT_DIR/artifacts/migration/pd"
+COORDINATOR_WORKDIR=$(nokv_config_coordinator_workdir "$CONFIG_PATH")
+if [[ -z "$COORDINATOR_WORKDIR" ]]; then
+  COORDINATOR_WORKDIR="$ROOT_DIR/artifacts/migration/coordinator"
 else
-  PD_WORKDIR=$(nokv_resolve_path "$CONFIG_DIR" "$PD_WORKDIR")
+  COORDINATOR_WORKDIR=$(nokv_resolve_path "$CONFIG_DIR" "$COORDINATOR_WORKDIR")
 fi
-mkdir -p "$PD_WORKDIR"
+mkdir -p "$COORDINATOR_WORKDIR"
 
 run_cmd() {
   echo "+ $*"
@@ -203,7 +203,7 @@ write_report() {
     echo "Seed store:        $SEED_STORE_ID"
     echo "Seed region:       $SEED_REGION_ID"
     echo "Seed peer:         $SEED_PEER_ID"
-    echo "PD address:        $PD_LISTEN"
+    echo "Coordinator address:        $COORDINATOR_LISTEN"
     echo "Leader admin:      $leader_admin_addr"
     echo "Wait timeout:      $WAIT_TIMEOUT"
     echo "Poll interval:     $POLL_INTERVAL"
@@ -349,7 +349,7 @@ fi
 
 cleaned=0
 STORE_PIDS=()
-PD_PID=""
+COORDINATOR_PID=""
 cleanup() {
   if [[ $cleaned -eq 1 ]]; then
     return
@@ -360,16 +360,16 @@ cleanup() {
       kill -INT "$pid" 2>/dev/null || true
     fi
   done
-  if [[ -n "${PD_PID:-}" ]] && kill -0 "$PD_PID" 2>/dev/null; then
-    kill -INT "$PD_PID" 2>/dev/null || true
+  if [[ -n "${COORDINATOR_PID:-}" ]] && kill -0 "$COORDINATOR_PID" 2>/dev/null; then
+    kill -INT "$COORDINATOR_PID" 2>/dev/null || true
   fi
   for pid in "${STORE_PIDS[@]:-}"; do
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
       wait "$pid" || true
     fi
   done
-  if [[ -n "${PD_PID:-}" ]]; then
-    wait "$PD_PID" 2>/dev/null || true
+  if [[ -n "${COORDINATOR_PID:-}" ]]; then
+    wait "$COORDINATOR_PID" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
@@ -393,9 +393,9 @@ info "local status after init:"
 show_local_status
 
 stage "Start Control Plane"
-info "starting PD service on $PD_LISTEN"
-start_with_logs PD_PID "pd" "$ROOT_DIR/artifacts/migration/pd.log" \
-  nokv pd --addr "$PD_LISTEN" --id-start 1 --ts-start 100 --workdir "$PD_WORKDIR"
+info "starting Coordinator service on $COORDINATOR_LISTEN"
+start_with_logs COORDINATOR_PID "coordinator" "$ROOT_DIR/artifacts/migration/coordinator.log" \
+  nokv coordinator --addr "$COORDINATOR_LISTEN" --id-start 1 --ts-start 100 --workdir "$COORDINATOR_WORKDIR"
 
 seed_log="$WORKDIR/server.log"
 stage "Start Seed Store"
@@ -405,7 +405,7 @@ start_with_logs seed_pid "store-${SEED_STORE_ID}" "$seed_log" \
   --config "$CONFIG_PATH" \
   --store-id "$SEED_STORE_ID" \
   --workdir "$WORKDIR" \
-  --pd-addr "$PD_LISTEN" \
+  --coordinator-addr "$COORDINATOR_LISTEN" \
   "${serve_debug_args[@]}"
 STORE_PIDS+=("$seed_pid")
 
@@ -418,14 +418,14 @@ for target_store in "${TARGET_STORE_IDS[@]}"; do
     --config "$CONFIG_PATH" \
     --store-id "$target_store" \
     --workdir "$target_dir" \
-    --pd-addr "$PD_LISTEN" \
+    --coordinator-addr "$COORDINATOR_LISTEN" \
     "${serve_debug_args[@]}"
   STORE_PIDS+=("$store_pid")
 done
 
 if [[ $DRY_RUN -eq 0 ]]; then
   stage "Wait For Services"
-  nokv_wait_for_tcp "$PD_LISTEN" 30
+  nokv_wait_for_tcp "$COORDINATOR_LISTEN" 30
   nokv_wait_for_tcp "$leader_admin_addr" 30
   for target_store in "${TARGET_STORE_IDS[@]}"; do
     nokv_wait_for_tcp "${TARGET_ADMIN_ADDR_BY_STORE[$target_store]}" 30

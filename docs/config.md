@@ -128,11 +128,11 @@ Minimal shape:
 ```jsonc
 {
   "max_retries": 8,
-  "pd": {
+  "coordinator": {
     "addr": "127.0.0.1:2379",
-    "docker_addr": "nokv-pd:2379",
-    "work_dir": "./artifacts/cluster/pd",
-    "docker_work_dir": "/var/lib/nokv-pd"
+    "docker_addr": "nokv-coordinator:2379",
+    "work_dir": "./artifacts/cluster/coordinator",
+    "docker_work_dir": "/var/lib/nokv-coordinator"
   },
   "store_work_dir_template": "./artifacts/cluster/store-{id}",
   "store_docker_work_dir_template": "/var/lib/nokv/store-{id}",
@@ -165,17 +165,17 @@ Notes:
 - Store workdir can be configured per store (`stores[i].work_dir` / `docker_work_dir`)
   or via global templates (`store_work_dir_template` /
   `store_docker_work_dir_template`, both must include `{id}`).
-- `pd.addr` is the default PD endpoint for host scope; `pd.docker_addr` is used
+- `coordinator.addr` is the default Coordinator endpoint for host scope; `coordinator.docker_addr` is used
   when tools run in docker scope.
-- `pd.work_dir` / `pd.docker_work_dir` are optional PD persistence directories
-  used by bootstrap tooling and `nokv pd --config ...` when `--workdir` is not
+- `coordinator.work_dir` / `coordinator.docker_work_dir` are optional Coordinator persistence directories
+  used by bootstrap tooling and `nokv coordinator --config ...` when `--workdir` is not
   set explicitly.
 - Store workdir resolution order (`ResolveStoreWorkDir`):
   1. store-scoped override
   2. global template
   3. empty (caller falls back to its own default)
 - `leader_store_id` is optional bootstrap metadata. Runtime routing in cluster
-  mode is resolved through PD (`GetRegionByKey`), not static leader hints.
+  mode is resolved through Coordinator (`GetRegionByKey`), not static leader hints.
 
 Programmatic loading:
 

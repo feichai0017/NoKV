@@ -3,10 +3,10 @@ package client
 import (
 	"context"
 	"errors"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
-	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"net"
 	"sort"
 	"sync"
@@ -100,7 +100,7 @@ type keyedBlockingResolver struct {
 	regions     []*metapb.RegionDescriptor
 }
 
-func (mr *mockRegionResolver) GetRegionByKey(_ context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
+func (mr *mockRegionResolver) GetRegionByKey(_ context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
 	mr.mu.Lock()
 	defer mr.mu.Unlock()
 	mr.calls++
@@ -115,7 +115,7 @@ func (mr *mockRegionResolver) GetRegionByKey(_ context.Context, req *pdpb.GetReg
 		return nil, mr.err
 	}
 	if req == nil {
-		return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
+		return &coordpb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
 	if len(mr.regions) > 0 {
 		for _, meta := range mr.regions {
@@ -123,10 +123,10 @@ func (mr *mockRegionResolver) GetRegionByKey(_ context.Context, req *pdpb.GetReg
 				return routeResponse(meta), nil
 			}
 		}
-		return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
+		return &coordpb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
 	if mr.region == nil || !containsKey(metacodec.DescriptorFromProto(mr.region), req.GetKey()) {
-		return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
+		return &coordpb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
 	return routeResponse(mr.region), nil
 }
@@ -138,7 +138,7 @@ func (mr *mockRegionResolver) Close() error {
 	return mr.closeErr
 }
 
-func (br *blockingRegionResolver) GetRegionByKey(ctx context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
+func (br *blockingRegionResolver) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
 	if br.started != nil {
 		select {
 		case br.started <- struct{}{}:
@@ -151,7 +151,7 @@ func (br *blockingRegionResolver) GetRegionByKey(ctx context.Context, req *pdpb.
 
 func (br *blockingRegionResolver) Close() error { return nil }
 
-func (kr *keyedBlockingResolver) GetRegionByKey(ctx context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
+func (kr *keyedBlockingResolver) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
 	if req != nil {
 		if _, blocked := kr.blockedKeys[string(req.GetKey())]; blocked {
 			if kr.started != nil {
@@ -169,7 +169,7 @@ func (kr *keyedBlockingResolver) GetRegionByKey(ctx context.Context, req *pdpb.G
 			}
 		}
 	}
-	return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
+	return &coordpb.GetRegionByKeyResponse{NotFound: true}, nil
 }
 
 func (kr *keyedBlockingResolver) Close() error { return nil }
@@ -572,7 +572,7 @@ func TestClientTwoPhaseCommitAndGet(t *testing.T) {
 		RegionResolver: func() *mockRegionResolver {
 			resolver := resolverFromCluster(cluster)
 			// Force an initial stale leader guess so NotLeader retry path is
-			// exercised under PD-resolver mode as well.
+			// exercised under Coordinator-resolver mode as well.
 			for _, meta := range resolver.regions {
 				if meta == nil || len(meta.GetPeers()) < 2 {
 					continue
@@ -1274,11 +1274,11 @@ func TestClientHandleRegionErrorUpdatesIndexedCache(t *testing.T) {
 
 // Utility helpers
 
-func routeResponse(meta *metapb.RegionDescriptor) *pdpb.GetRegionByKeyResponse {
+func routeResponse(meta *metapb.RegionDescriptor) *coordpb.GetRegionByKeyResponse {
 	if meta == nil {
-		return &pdpb.GetRegionByKeyResponse{NotFound: true}
+		return &coordpb.GetRegionByKeyResponse{NotFound: true}
 	}
-	return &pdpb.GetRegionByKeyResponse{
+	return &coordpb.GetRegionByKeyResponse{
 		RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromProto(meta)),
 	}
 }

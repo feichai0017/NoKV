@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"maps"
 	"sync"
 	"time"
@@ -75,10 +75,10 @@ type StoreEndpoint struct {
 	Addr    string
 }
 
-// RegionResolver resolves Region metadata for an arbitrary key. A PD client
+// RegionResolver resolves Region metadata for an arbitrary key. A Coordinator client
 // implementation should satisfy this interface.
 type RegionResolver interface {
-	GetRegionByKey(ctx context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error)
+	GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error)
 	Close() error
 }
 
