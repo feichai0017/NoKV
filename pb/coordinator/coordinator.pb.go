@@ -346,13 +346,23 @@ type TransitionPhase int32
 
 const (
 	TransitionPhase_TRANSITION_PHASE_UNSPECIFIED TransitionPhase = 0
-	TransitionPhase_TRANSITION_PHASE_PLANNED     TransitionPhase = 1
-	TransitionPhase_TRANSITION_PHASE_ADMITTED    TransitionPhase = 2
-	TransitionPhase_TRANSITION_PHASE_COMPLETED   TransitionPhase = 3
-	TransitionPhase_TRANSITION_PHASE_CONFLICTED  TransitionPhase = 4
-	TransitionPhase_TRANSITION_PHASE_SUPERSEDED  TransitionPhase = 5
-	TransitionPhase_TRANSITION_PHASE_CANCELLED   TransitionPhase = 6
-	TransitionPhase_TRANSITION_PHASE_ABORTED     TransitionPhase = 7
+	// Planned means rooted lifecycle assessment recognizes the transition target,
+	// but operator runtime admission has not yet been observed.
+	TransitionPhase_TRANSITION_PHASE_PLANNED TransitionPhase = 1
+	// Admitted means the operator runtime currently treats the rooted transition
+	// as admitted for forward execution progress.
+	TransitionPhase_TRANSITION_PHASE_ADMITTED TransitionPhase = 2
+	// Completed means the requested transition target is already satisfied by rooted truth.
+	TransitionPhase_TRANSITION_PHASE_COMPLETED TransitionPhase = 3
+	// Conflicted means another pending rooted transition currently owns progress
+	// for the same transition target.
+	TransitionPhase_TRANSITION_PHASE_CONFLICTED TransitionPhase = 4
+	// Superseded means newer rooted topology truth has replaced this transition target.
+	TransitionPhase_TRANSITION_PHASE_SUPERSEDED TransitionPhase = 5
+	// Cancelled means the rooted transition target was explicitly cancelled.
+	TransitionPhase_TRANSITION_PHASE_CANCELLED TransitionPhase = 6
+	// Aborted means an apply or terminal event does not match the current rooted target.
+	TransitionPhase_TRANSITION_PHASE_ABORTED TransitionPhase = 7
 )
 
 // Enum value maps for TransitionPhase.
@@ -410,8 +420,11 @@ type Freshness int32
 
 const (
 	Freshness_FRESHNESS_UNSPECIFIED Freshness = 0
-	Freshness_FRESHNESS_STRONG      Freshness = 1
-	Freshness_FRESHNESS_BOUNDED     Freshness = 2
+	// Strong requires leader-grade freshness.
+	Freshness_FRESHNESS_STRONG Freshness = 1
+	// Bounded allows follower service within an explicit rooted lag limit.
+	Freshness_FRESHNESS_BOUNDED Freshness = 2
+	// BestEffort allows stale catalog service when stronger guarantees cannot be met.
 	Freshness_FRESHNESS_BEST_EFFORT Freshness = 3
 )
 
@@ -461,9 +474,12 @@ func (Freshness) EnumDescriptor() ([]byte, []int) {
 type DegradedMode int32
 
 const (
-	DegradedMode_DEGRADED_MODE_UNSPECIFIED      DegradedMode = 0
-	DegradedMode_DEGRADED_MODE_HEALTHY          DegradedMode = 1
-	DegradedMode_DEGRADED_MODE_ROOT_LAGGING     DegradedMode = 2
+	DegradedMode_DEGRADED_MODE_UNSPECIFIED DegradedMode = 0
+	// Healthy means rooted truth and catalog freshness are within normal policy.
+	DegradedMode_DEGRADED_MODE_HEALTHY DegradedMode = 1
+	// RootLagging means rooted truth is available but the served catalog trails it.
+	DegradedMode_DEGRADED_MODE_ROOT_LAGGING DegradedMode = 2
+	// RootUnavailable means rooted truth could not be loaded or refreshed.
 	DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE DegradedMode = 3
 )
 
@@ -513,11 +529,16 @@ func (DegradedMode) EnumDescriptor() ([]byte, []int) {
 type CatchUpState int32
 
 const (
-	CatchUpState_CATCH_UP_STATE_UNSPECIFIED        CatchUpState = 0
-	CatchUpState_CATCH_UP_STATE_FRESH              CatchUpState = 1
-	CatchUpState_CATCH_UP_STATE_LAGGING            CatchUpState = 2
+	CatchUpState_CATCH_UP_STATE_UNSPECIFIED CatchUpState = 0
+	// Fresh means the serving catalog has converged to current rooted truth.
+	CatchUpState_CATCH_UP_STATE_FRESH CatchUpState = 1
+	// Lagging means the serving catalog trails rooted truth but can still advance.
+	CatchUpState_CATCH_UP_STATE_LAGGING CatchUpState = 2
+	// BootstrapRequired means retained tail advancement is no longer sufficient and
+	// a bootstrap or checkpoint install is required.
 	CatchUpState_CATCH_UP_STATE_BOOTSTRAP_REQUIRED CatchUpState = 3
-	CatchUpState_CATCH_UP_STATE_UNAVAILABLE        CatchUpState = 4
+	// Unavailable means rooted truth cannot currently support catch-up decisions.
+	CatchUpState_CATCH_UP_STATE_UNAVAILABLE CatchUpState = 4
 )
 
 // Enum value maps for CatchUpState.
@@ -850,9 +871,11 @@ func (x *RegionLivenessResponse) GetAccepted() bool {
 }
 
 type PublishRootEventRequest struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	Event                *meta.RootEvent        `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
-	ExpectedClusterEpoch uint64                 `protobuf:"varint,2,opt,name=expected_cluster_epoch,json=expectedClusterEpoch,proto3" json:"expected_cluster_epoch,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// event is one explicit rooted topology event proposed to the control plane.
+	Event *meta.RootEvent `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
+	// expected_cluster_epoch optionally fences writes against a stale cluster view.
+	ExpectedClusterEpoch uint64 `protobuf:"varint,2,opt,name=expected_cluster_epoch,json=expectedClusterEpoch,proto3" json:"expected_cluster_epoch,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -902,9 +925,13 @@ func (x *PublishRootEventRequest) GetExpectedClusterEpoch() uint64 {
 }
 
 type PublishRootEventResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Accepted      bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
-	Assessment    *TransitionAssessment  `protobuf:"bytes,2,opt,name=assessment,proto3" json:"assessment,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// accepted reports whether the request was accepted as a valid control-plane write.
+	Accepted bool `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	// assessment returns the pre-persist lifecycle assessment used for this decision.
+	// It describes how the requested event relates to current rooted truth before
+	// any persistence or catalog reload happens.
+	Assessment    *TransitionAssessment `protobuf:"bytes,2,opt,name=assessment,proto3" json:"assessment,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -954,7 +981,9 @@ func (x *PublishRootEventResponse) GetAssessment() *TransitionAssessment {
 }
 
 type TransitionEntry struct {
-	state              protoimpl.MessageState       `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// key is the rooted transition family key: region id for peer changes, or
+	// parent/merge key for range transitions.
 	Key                uint64                       `protobuf:"varint,1,opt,name=key,proto3" json:"key,omitempty"`
 	Kind               TransitionKind               `protobuf:"varint,2,opt,name=kind,proto3,enum=nokv.coordinator.v1.TransitionKind" json:"kind,omitempty"`
 	Status             TransitionStatus             `protobuf:"varint,3,opt,name=status,proto3,enum=nokv.coordinator.v1.TransitionStatus" json:"status,omitempty"`
@@ -962,10 +991,12 @@ type TransitionEntry struct {
 	Reason             TransitionReason             `protobuf:"varint,5,opt,name=reason,proto3,enum=nokv.coordinator.v1.TransitionReason" json:"reason,omitempty"`
 	PendingPeerChange  *meta.RootPendingPeerChange  `protobuf:"bytes,6,opt,name=pending_peer_change,json=pendingPeerChange,proto3" json:"pending_peer_change,omitempty"`
 	PendingRangeChange *meta.RootPendingRangeChange `protobuf:"bytes,7,opt,name=pending_range_change,json=pendingRangeChange,proto3" json:"pending_range_change,omitempty"`
-	TransitionId       string                       `protobuf:"bytes,8,opt,name=transition_id,json=transitionId,proto3" json:"transition_id,omitempty"`
-	Phase              TransitionPhase              `protobuf:"varint,9,opt,name=phase,proto3,enum=nokv.coordinator.v1.TransitionPhase" json:"phase,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// transition_id is the stable identity of the transition target.
+	TransitionId string `protobuf:"bytes,8,opt,name=transition_id,json=transitionId,proto3" json:"transition_id,omitempty"`
+	// phase is the current runtime-facing lifecycle phase.
+	Phase         TransitionPhase `protobuf:"varint,9,opt,name=phase,proto3,enum=nokv.coordinator.v1.TransitionPhase" json:"phase,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TransitionEntry) Reset() {
@@ -1062,15 +1093,20 @@ func (x *TransitionEntry) GetPhase() TransitionPhase {
 }
 
 type TransitionAssessment struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Key           uint64                 `protobuf:"varint,1,opt,name=key,proto3" json:"key,omitempty"`
-	Kind          TransitionKind         `protobuf:"varint,2,opt,name=kind,proto3,enum=nokv.coordinator.v1.TransitionKind" json:"kind,omitempty"`
-	Status        TransitionStatus       `protobuf:"varint,3,opt,name=status,proto3,enum=nokv.coordinator.v1.TransitionStatus" json:"status,omitempty"`
-	RetryClass    TransitionRetryClass   `protobuf:"varint,4,opt,name=retry_class,json=retryClass,proto3,enum=nokv.coordinator.v1.TransitionRetryClass" json:"retry_class,omitempty"`
-	Reason        TransitionReason       `protobuf:"varint,5,opt,name=reason,proto3,enum=nokv.coordinator.v1.TransitionReason" json:"reason,omitempty"`
-	Decision      TransitionDecision     `protobuf:"varint,6,opt,name=decision,proto3,enum=nokv.coordinator.v1.TransitionDecision" json:"decision,omitempty"`
-	TransitionId  string                 `protobuf:"bytes,7,opt,name=transition_id,json=transitionId,proto3" json:"transition_id,omitempty"`
-	Phase         TransitionPhase        `protobuf:"varint,8,opt,name=phase,proto3,enum=nokv.coordinator.v1.TransitionPhase" json:"phase,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// key is the rooted transition family key used for lifecycle evaluation.
+	Key        uint64               `protobuf:"varint,1,opt,name=key,proto3" json:"key,omitempty"`
+	Kind       TransitionKind       `protobuf:"varint,2,opt,name=kind,proto3,enum=nokv.coordinator.v1.TransitionKind" json:"kind,omitempty"`
+	Status     TransitionStatus     `protobuf:"varint,3,opt,name=status,proto3,enum=nokv.coordinator.v1.TransitionStatus" json:"status,omitempty"`
+	RetryClass TransitionRetryClass `protobuf:"varint,4,opt,name=retry_class,json=retryClass,proto3,enum=nokv.coordinator.v1.TransitionRetryClass" json:"retry_class,omitempty"`
+	Reason     TransitionReason     `protobuf:"varint,5,opt,name=reason,proto3,enum=nokv.coordinator.v1.TransitionReason" json:"reason,omitempty"`
+	// decision says whether the proposed rooted event should be applied or skipped.
+	Decision TransitionDecision `protobuf:"varint,6,opt,name=decision,proto3,enum=nokv.coordinator.v1.TransitionDecision" json:"decision,omitempty"`
+	// transition_id is the stable identity derived from the proposed rooted event.
+	TransitionId string `protobuf:"bytes,7,opt,name=transition_id,json=transitionId,proto3" json:"transition_id,omitempty"`
+	// phase is the assessment-facing lifecycle phase. It is intentionally
+	// pre-runtime: it does not imply operator admission.
+	Phase         TransitionPhase `protobuf:"varint,8,opt,name=phase,proto3,enum=nokv.coordinator.v1.TransitionPhase" json:"phase,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1426,10 +1462,13 @@ func (x *RemoveRegionResponse) GetRemoved() bool {
 }
 
 type RootToken struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Term          uint64                 `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`
-	Index         uint64                 `protobuf:"varint,2,opt,name=index,proto3" json:"index,omitempty"`
-	Revision      uint64                 `protobuf:"varint,3,opt,name=revision,proto3" json:"revision,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// term is the rooted leadership term that produced this token, when available.
+	Term uint64 `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`
+	// index is the rooted durable log position, when available.
+	Index uint64 `protobuf:"varint,2,opt,name=index,proto3" json:"index,omitempty"`
+	// revision is the monotonic rooted revision incorporated by a view.
+	Revision      uint64 `protobuf:"varint,3,opt,name=revision,proto3" json:"revision,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1486,13 +1525,16 @@ func (x *RootToken) GetRevision() uint64 {
 }
 
 type GetRegionByKeyRequest struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	Key               []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	Freshness         Freshness              `protobuf:"varint,2,opt,name=freshness,proto3,enum=nokv.coordinator.v1.Freshness" json:"freshness,omitempty"`
-	RequiredRootToken *RootToken             `protobuf:"bytes,3,opt,name=required_root_token,json=requiredRootToken,proto3" json:"required_root_token,omitempty"`
-	MaxRootLag        uint64                 `protobuf:"varint,4,opt,name=max_root_lag,json=maxRootLag,proto3" json:"max_root_lag,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Key   []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	// freshness declares the requested serving contract.
+	Freshness Freshness `protobuf:"varint,2,opt,name=freshness,proto3,enum=nokv.coordinator.v1.Freshness" json:"freshness,omitempty"`
+	// required_root_token optionally requires the result to include at least this rooted truth.
+	RequiredRootToken *RootToken `protobuf:"bytes,3,opt,name=required_root_token,json=requiredRootToken,proto3" json:"required_root_token,omitempty"`
+	// max_root_lag bounds the allowed rooted revision gap for bounded reads.
+	MaxRootLag    uint64 `protobuf:"varint,4,opt,name=max_root_lag,json=maxRootLag,proto3" json:"max_root_lag,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetRegionByKeyRequest) Reset() {
@@ -1557,15 +1599,22 @@ type GetRegionByKeyResponse struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	RegionDescriptor *meta.RegionDescriptor `protobuf:"bytes,1,opt,name=region_descriptor,json=regionDescriptor,proto3" json:"region_descriptor,omitempty"`
 	NotFound         bool                   `protobuf:"varint,2,opt,name=not_found,json=notFound,proto3" json:"not_found,omitempty"`
-	ServedRootToken  *RootToken             `protobuf:"bytes,3,opt,name=served_root_token,json=servedRootToken,proto3" json:"served_root_token,omitempty"`
-	ServedFreshness  Freshness              `protobuf:"varint,4,opt,name=served_freshness,json=servedFreshness,proto3,enum=nokv.coordinator.v1.Freshness" json:"served_freshness,omitempty"`
-	DegradedMode     DegradedMode           `protobuf:"varint,5,opt,name=degraded_mode,json=degradedMode,proto3,enum=nokv.coordinator.v1.DegradedMode" json:"degraded_mode,omitempty"`
-	ServedByLeader   bool                   `protobuf:"varint,6,opt,name=served_by_leader,json=servedByLeader,proto3" json:"served_by_leader,omitempty"`
-	CurrentRootToken *RootToken             `protobuf:"bytes,7,opt,name=current_root_token,json=currentRootToken,proto3" json:"current_root_token,omitempty"`
-	RootLag          uint64                 `protobuf:"varint,8,opt,name=root_lag,json=rootLag,proto3" json:"root_lag,omitempty"`
-	CatchUpState     CatchUpState           `protobuf:"varint,9,opt,name=catch_up_state,json=catchUpState,proto3,enum=nokv.coordinator.v1.CatchUpState" json:"catch_up_state,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// served_root_token is the rooted token already incorporated by the served catalog.
+	ServedRootToken *RootToken `protobuf:"bytes,3,opt,name=served_root_token,json=servedRootToken,proto3" json:"served_root_token,omitempty"`
+	// served_freshness is the contract actually used for the response.
+	ServedFreshness Freshness `protobuf:"varint,4,opt,name=served_freshness,json=servedFreshness,proto3,enum=nokv.coordinator.v1.Freshness" json:"served_freshness,omitempty"`
+	// degraded_mode reports the current externally visible control-plane restriction level.
+	DegradedMode DegradedMode `protobuf:"varint,5,opt,name=degraded_mode,json=degradedMode,proto3,enum=nokv.coordinator.v1.DegradedMode" json:"degraded_mode,omitempty"`
+	// served_by_leader reports whether the responding node served as rooted write leader.
+	ServedByLeader bool `protobuf:"varint,6,opt,name=served_by_leader,json=servedByLeader,proto3" json:"served_by_leader,omitempty"`
+	// current_root_token is the latest rooted token currently known to the node.
+	CurrentRootToken *RootToken `protobuf:"bytes,7,opt,name=current_root_token,json=currentRootToken,proto3" json:"current_root_token,omitempty"`
+	// root_lag is the revision distance between current_root_token and served_root_token.
+	RootLag uint64 `protobuf:"varint,8,opt,name=root_lag,json=rootLag,proto3" json:"root_lag,omitempty"`
+	// catch_up_state reports the node's current rooted catch-up state.
+	CatchUpState  CatchUpState `protobuf:"varint,9,opt,name=catch_up_state,json=catchUpState,proto3,enum=nokv.coordinator.v1.CatchUpState" json:"catch_up_state,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetRegionByKeyResponse) Reset() {
