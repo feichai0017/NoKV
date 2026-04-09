@@ -8,6 +8,7 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"strings"
@@ -28,6 +29,7 @@ type fakeStorage struct {
 	saveCalls  int
 	eventErr   error
 	saveErr    error
+	loadErr    error
 	lastID     uint64
 	lastTS     uint64
 	leader     bool
@@ -37,6 +39,9 @@ type fakeStorage struct {
 }
 
 func (f *fakeStorage) Load() (coordstorage.Snapshot, error) {
+	if f.loadErr != nil {
+		return coordstorage.Snapshot{}, f.loadErr
+	}
 	return coordstorage.CloneSnapshot(f.snapshot), nil
 }
 
@@ -146,6 +151,92 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 	require.False(t, getResp.GetNotFound())
 	require.NotNil(t, getResp.GetRegionDescriptor())
 	require.Equal(t, uint64(11), getResp.GetRegionDescriptor().GetRegionId())
+	require.Equal(t, coordpb.Freshness_FRESHNESS_BEST_EFFORT, getResp.GetServedFreshness())
+	require.Equal(t, coordpb.DegradedMode_DEGRADED_MODE_HEALTHY, getResp.GetDegradedMode())
+	require.True(t, getResp.GetServedByLeader())
+}
+
+func TestServiceGetRegionByKeyStrongReadRejectsFollower(t *testing.T) {
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+	storage := &fakeStorage{
+		leader:   false,
+		leaderID: 7,
+		snapshot: coordstorage.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)},
+	}
+	svc.SetStorage(storage)
+	require.NoError(t, svc.cluster.PublishRegionDescriptor(testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)))
+
+	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:       []byte("a"),
+		Freshness: coordpb.Freshness_FRESHNESS_STRONG,
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, err.Error(), errNotLeaderPrefix)
+}
+
+func TestServiceGetRegionByKeyRequiredRootToken(t *testing.T) {
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+	storage := &fakeStorage{
+		leader: true,
+		snapshot: coordstorage.Snapshot{
+			RootToken:   rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 5},
+			Descriptors: make(map[uint64]descriptor.Descriptor),
+		},
+	}
+	svc.SetStorage(storage)
+	require.NoError(t, svc.cluster.PublishRegionDescriptor(testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)))
+
+	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key: []byte("a"),
+		RequiredRootToken: &coordpb.RootToken{
+			Term:     1,
+			Index:    10,
+			Revision: 10,
+		},
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, err.Error(), "required rooted token not satisfied")
+
+	resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key: []byte("a"),
+		RequiredRootToken: &coordpb.RootToken{
+			Term:     1,
+			Index:    1,
+			Revision: 1,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(5), resp.GetServedRootToken().GetRevision())
+	require.Equal(t, uint64(1), resp.GetServedRootToken().GetTerm())
+	require.Equal(t, uint64(3), resp.GetServedRootToken().GetIndex())
+}
+
+func TestServiceGetRegionByKeyBestEffortWithUnavailableRoot(t *testing.T) {
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+	storage := &fakeStorage{
+		leader:   true,
+		snapshot: coordstorage.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)},
+	}
+	svc.SetStorage(storage)
+	err := publishDescriptorEvent(t, svc, testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 0)
+	require.NoError(t, err)
+	storage.loadErr = errors.New("root unavailable")
+
+	resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
+	require.NoError(t, err)
+	require.False(t, resp.GetNotFound())
+	require.Equal(t, coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE, resp.GetDegradedMode())
+	require.Equal(t, coordpb.Freshness_FRESHNESS_BEST_EFFORT, resp.GetServedFreshness())
+
+	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:       []byte("a"),
+		Freshness: coordpb.Freshness_FRESHNESS_BOUNDED,
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, err.Error(), errRootUnavailable)
 }
 
 func TestServiceRemoveRegion(t *testing.T) {
