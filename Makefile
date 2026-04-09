@@ -6,7 +6,7 @@
 
 GOLANGCI_LINT_VERSION ?= v2.9.0
 BUF_VERSION ?= 1.66.0
-PROJECT_GO_VERSION ?= $(shell awk '/^go /{print $$2}' go.mod)
+PROJECT_GO_VERSION ?= 1.26.0
 
 # Default target
 help:
