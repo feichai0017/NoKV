@@ -48,11 +48,13 @@ func (s *Service) AssessRootEvent(_ context.Context, req *coordpb.AssessRootEven
 
 func transitionEntryToProto(entry pdoperator.RuntimeEntry) *coordpb.TransitionEntry {
 	out := &coordpb.TransitionEntry{
-		Key:        entry.Transition.Key,
-		Kind:       transitionKindToProto(entry.Transition.Kind),
-		Status:     transitionStatusToProto(entry.Transition.Status),
-		RetryClass: transitionRetryClassToProto(entry.Transition.RetryClass),
-		Reason:     transitionReasonToProto(entry.Transition.Reason),
+		Key:          entry.Transition.Key,
+		Kind:         transitionKindToProto(entry.Transition.Kind),
+		Status:       transitionStatusToProto(entry.Transition.Status),
+		RetryClass:   transitionRetryClassToProto(entry.Transition.RetryClass),
+		Reason:       transitionReasonToProto(entry.Transition.Reason),
+		TransitionId: entry.Transition.ID,
+		Phase:        transitionPhaseFromRuntime(entry),
 	}
 	if entry.Transition.PeerChange != nil {
 		out.PendingPeerChange = metacodec.RootPendingPeerChangeToProto(entry.Transition.Key, *entry.Transition.PeerChange)
@@ -65,12 +67,55 @@ func transitionEntryToProto(entry pdoperator.RuntimeEntry) *coordpb.TransitionEn
 
 func transitionAssessmentToProto(assessment rootstate.TransitionAssessment) *coordpb.TransitionAssessment {
 	return &coordpb.TransitionAssessment{
-		Key:        assessment.Key,
-		Kind:       transitionKindToProto(assessment.Kind),
-		Status:     transitionStatusToProto(assessment.Status),
-		RetryClass: transitionRetryClassToProto(assessment.RetryClass),
-		Reason:     transitionReasonToProto(assessment.Reason),
-		Decision:   transitionDecisionToProto(assessment.Decision),
+		Key:          assessment.Key,
+		Kind:         transitionKindToProto(assessment.Kind),
+		Status:       transitionStatusToProto(assessment.Status),
+		RetryClass:   transitionRetryClassToProto(assessment.RetryClass),
+		Reason:       transitionReasonToProto(assessment.Reason),
+		Decision:     transitionDecisionToProto(assessment.Decision),
+		TransitionId: assessment.ID,
+		Phase:        transitionPhaseFromAssessment(assessment),
+	}
+}
+
+func transitionPhaseFromRuntime(entry pdoperator.RuntimeEntry) coordpb.TransitionPhase {
+	switch entry.Transition.Status {
+	case rootstate.TransitionStatusOpen, rootstate.TransitionStatusPending:
+		if entry.Admitted {
+			return coordpb.TransitionPhase_TRANSITION_PHASE_ADMITTED
+		}
+		return coordpb.TransitionPhase_TRANSITION_PHASE_PLANNED
+	case rootstate.TransitionStatusCompleted:
+		return coordpb.TransitionPhase_TRANSITION_PHASE_COMPLETED
+	case rootstate.TransitionStatusConflict:
+		return coordpb.TransitionPhase_TRANSITION_PHASE_CONFLICTED
+	case rootstate.TransitionStatusSuperseded:
+		return coordpb.TransitionPhase_TRANSITION_PHASE_SUPERSEDED
+	case rootstate.TransitionStatusCancelled:
+		return coordpb.TransitionPhase_TRANSITION_PHASE_CANCELLED
+	case rootstate.TransitionStatusAborted:
+		return coordpb.TransitionPhase_TRANSITION_PHASE_ABORTED
+	default:
+		return coordpb.TransitionPhase_TRANSITION_PHASE_UNSPECIFIED
+	}
+}
+
+func transitionPhaseFromAssessment(assessment rootstate.TransitionAssessment) coordpb.TransitionPhase {
+	switch assessment.Status {
+	case rootstate.TransitionStatusOpen, rootstate.TransitionStatusPending:
+		return coordpb.TransitionPhase_TRANSITION_PHASE_PLANNED
+	case rootstate.TransitionStatusCompleted:
+		return coordpb.TransitionPhase_TRANSITION_PHASE_COMPLETED
+	case rootstate.TransitionStatusConflict:
+		return coordpb.TransitionPhase_TRANSITION_PHASE_CONFLICTED
+	case rootstate.TransitionStatusSuperseded:
+		return coordpb.TransitionPhase_TRANSITION_PHASE_SUPERSEDED
+	case rootstate.TransitionStatusCancelled:
+		return coordpb.TransitionPhase_TRANSITION_PHASE_CANCELLED
+	case rootstate.TransitionStatusAborted:
+		return coordpb.TransitionPhase_TRANSITION_PHASE_ABORTED
+	default:
+		return coordpb.TransitionPhase_TRANSITION_PHASE_UNSPECIFIED
 	}
 }
 
