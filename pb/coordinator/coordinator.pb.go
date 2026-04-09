@@ -399,7 +399,8 @@ type DegradedMode int32
 const (
 	DegradedMode_DEGRADED_MODE_UNSPECIFIED      DegradedMode = 0
 	DegradedMode_DEGRADED_MODE_HEALTHY          DegradedMode = 1
-	DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE DegradedMode = 2
+	DegradedMode_DEGRADED_MODE_ROOT_LAGGING     DegradedMode = 2
+	DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE DegradedMode = 3
 )
 
 // Enum value maps for DegradedMode.
@@ -407,12 +408,14 @@ var (
 	DegradedMode_name = map[int32]string{
 		0: "DEGRADED_MODE_UNSPECIFIED",
 		1: "DEGRADED_MODE_HEALTHY",
-		2: "DEGRADED_MODE_ROOT_UNAVAILABLE",
+		2: "DEGRADED_MODE_ROOT_LAGGING",
+		3: "DEGRADED_MODE_ROOT_UNAVAILABLE",
 	}
 	DegradedMode_value = map[string]int32{
 		"DEGRADED_MODE_UNSPECIFIED":      0,
 		"DEGRADED_MODE_HEALTHY":          1,
-		"DEGRADED_MODE_ROOT_UNAVAILABLE": 2,
+		"DEGRADED_MODE_ROOT_LAGGING":     2,
+		"DEGRADED_MODE_ROOT_UNAVAILABLE": 3,
 	}
 )
 
@@ -1328,6 +1331,7 @@ type GetRegionByKeyRequest struct {
 	Key               []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
 	Freshness         Freshness              `protobuf:"varint,2,opt,name=freshness,proto3,enum=nokv.coordinator.v1.Freshness" json:"freshness,omitempty"`
 	RequiredRootToken *RootToken             `protobuf:"bytes,3,opt,name=required_root_token,json=requiredRootToken,proto3" json:"required_root_token,omitempty"`
+	MaxRootLag        uint64                 `protobuf:"varint,4,opt,name=max_root_lag,json=maxRootLag,proto3" json:"max_root_lag,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -1383,6 +1387,13 @@ func (x *GetRegionByKeyRequest) GetRequiredRootToken() *RootToken {
 	return nil
 }
 
+func (x *GetRegionByKeyRequest) GetMaxRootLag() uint64 {
+	if x != nil {
+		return x.MaxRootLag
+	}
+	return 0
+}
+
 type GetRegionByKeyResponse struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	RegionDescriptor *meta.RegionDescriptor `protobuf:"bytes,1,opt,name=region_descriptor,json=regionDescriptor,proto3" json:"region_descriptor,omitempty"`
@@ -1391,6 +1402,8 @@ type GetRegionByKeyResponse struct {
 	ServedFreshness  Freshness              `protobuf:"varint,4,opt,name=served_freshness,json=servedFreshness,proto3,enum=nokv.coordinator.v1.Freshness" json:"served_freshness,omitempty"`
 	DegradedMode     DegradedMode           `protobuf:"varint,5,opt,name=degraded_mode,json=degradedMode,proto3,enum=nokv.coordinator.v1.DegradedMode" json:"degraded_mode,omitempty"`
 	ServedByLeader   bool                   `protobuf:"varint,6,opt,name=served_by_leader,json=servedByLeader,proto3" json:"served_by_leader,omitempty"`
+	CurrentRootToken *RootToken             `protobuf:"bytes,7,opt,name=current_root_token,json=currentRootToken,proto3" json:"current_root_token,omitempty"`
+	RootLag          uint64                 `protobuf:"varint,8,opt,name=root_lag,json=rootLag,proto3" json:"root_lag,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -1465,6 +1478,20 @@ func (x *GetRegionByKeyResponse) GetServedByLeader() bool {
 		return x.ServedByLeader
 	}
 	return false
+}
+
+func (x *GetRegionByKeyResponse) GetCurrentRootToken() *RootToken {
+	if x != nil {
+		return x.CurrentRootToken
+	}
+	return nil
+}
+
+func (x *GetRegionByKeyResponse) GetRootLag() uint64 {
+	if x != nil {
+		return x.RootLag
+	}
+	return 0
 }
 
 type AllocIDRequest struct {
@@ -1725,18 +1752,22 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\tRootToken\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x04R\x04term\x12\x14\n" +
 	"\x05index\x18\x02 \x01(\x04R\x05index\x12\x1a\n" +
-	"\brevision\x18\x03 \x01(\x04R\brevision\"\xb7\x01\n" +
+	"\brevision\x18\x03 \x01(\x04R\brevision\"\xd9\x01\n" +
 	"\x15GetRegionByKeyRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12<\n" +
 	"\tfreshness\x18\x02 \x01(\x0e2\x1e.nokv.coordinator.v1.FreshnessR\tfreshness\x12N\n" +
-	"\x13required_root_token\x18\x03 \x01(\v2\x1e.nokv.coordinator.v1.RootTokenR\x11requiredRootToken\"\x8b\x03\n" +
+	"\x13required_root_token\x18\x03 \x01(\v2\x1e.nokv.coordinator.v1.RootTokenR\x11requiredRootToken\x12 \n" +
+	"\fmax_root_lag\x18\x04 \x01(\x04R\n" +
+	"maxRootLag\"\xf4\x03\n" +
 	"\x16GetRegionByKeyResponse\x12K\n" +
 	"\x11region_descriptor\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x10regionDescriptor\x12\x1b\n" +
 	"\tnot_found\x18\x02 \x01(\bR\bnotFound\x12J\n" +
 	"\x11served_root_token\x18\x03 \x01(\v2\x1e.nokv.coordinator.v1.RootTokenR\x0fservedRootToken\x12I\n" +
 	"\x10served_freshness\x18\x04 \x01(\x0e2\x1e.nokv.coordinator.v1.FreshnessR\x0fservedFreshness\x12F\n" +
 	"\rdegraded_mode\x18\x05 \x01(\x0e2!.nokv.coordinator.v1.DegradedModeR\fdegradedMode\x12(\n" +
-	"\x10served_by_leader\x18\x06 \x01(\bR\x0eservedByLeader\"&\n" +
+	"\x10served_by_leader\x18\x06 \x01(\bR\x0eservedByLeader\x12L\n" +
+	"\x12current_root_token\x18\a \x01(\v2\x1e.nokv.coordinator.v1.RootTokenR\x10currentRootToken\x12\x19\n" +
+	"\broot_lag\x18\b \x01(\x04R\arootLag\"&\n" +
 	"\x0eAllocIDRequest\x12\x14\n" +
 	"\x05count\x18\x01 \x01(\x04R\x05count\"B\n" +
 	"\x0fAllocIDResponse\x12\x19\n" +
@@ -1784,11 +1815,12 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\x15FRESHNESS_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10FRESHNESS_STRONG\x10\x01\x12\x15\n" +
 	"\x11FRESHNESS_BOUNDED\x10\x02\x12\x19\n" +
-	"\x15FRESHNESS_BEST_EFFORT\x10\x03*l\n" +
+	"\x15FRESHNESS_BEST_EFFORT\x10\x03*\x8c\x01\n" +
 	"\fDegradedMode\x12\x1d\n" +
 	"\x19DEGRADED_MODE_UNSPECIFIED\x10\x00\x12\x19\n" +
-	"\x15DEGRADED_MODE_HEALTHY\x10\x01\x12\"\n" +
-	"\x1eDEGRADED_MODE_ROOT_UNAVAILABLE\x10\x022\xa0\a\n" +
+	"\x15DEGRADED_MODE_HEALTHY\x10\x01\x12\x1e\n" +
+	"\x1aDEGRADED_MODE_ROOT_LAGGING\x10\x02\x12\"\n" +
+	"\x1eDEGRADED_MODE_ROOT_UNAVAILABLE\x10\x032\xa0\a\n" +
 	"\vCoordinator\x12i\n" +
 	"\x0eStoreHeartbeat\x12*.nokv.coordinator.v1.StoreHeartbeatRequest\x1a+.nokv.coordinator.v1.StoreHeartbeatResponse\x12i\n" +
 	"\x0eRegionLiveness\x12*.nokv.coordinator.v1.RegionLivenessRequest\x1a+.nokv.coordinator.v1.RegionLivenessResponse\x12o\n" +
@@ -1874,29 +1906,30 @@ var file_coordinator_coordinator_proto_depIdxs = []int32{
 	23, // 20: nokv.coordinator.v1.GetRegionByKeyResponse.served_root_token:type_name -> nokv.coordinator.v1.RootToken
 	6,  // 21: nokv.coordinator.v1.GetRegionByKeyResponse.served_freshness:type_name -> nokv.coordinator.v1.Freshness
 	7,  // 22: nokv.coordinator.v1.GetRegionByKeyResponse.degraded_mode:type_name -> nokv.coordinator.v1.DegradedMode
-	8,  // 23: nokv.coordinator.v1.Coordinator.StoreHeartbeat:input_type -> nokv.coordinator.v1.StoreHeartbeatRequest
-	11, // 24: nokv.coordinator.v1.Coordinator.RegionLiveness:input_type -> nokv.coordinator.v1.RegionLivenessRequest
-	13, // 25: nokv.coordinator.v1.Coordinator.PublishRootEvent:input_type -> nokv.coordinator.v1.PublishRootEventRequest
-	17, // 26: nokv.coordinator.v1.Coordinator.ListTransitions:input_type -> nokv.coordinator.v1.ListTransitionsRequest
-	19, // 27: nokv.coordinator.v1.Coordinator.AssessRootEvent:input_type -> nokv.coordinator.v1.AssessRootEventRequest
-	21, // 28: nokv.coordinator.v1.Coordinator.RemoveRegion:input_type -> nokv.coordinator.v1.RemoveRegionRequest
-	24, // 29: nokv.coordinator.v1.Coordinator.GetRegionByKey:input_type -> nokv.coordinator.v1.GetRegionByKeyRequest
-	26, // 30: nokv.coordinator.v1.Coordinator.AllocID:input_type -> nokv.coordinator.v1.AllocIDRequest
-	28, // 31: nokv.coordinator.v1.Coordinator.Tso:input_type -> nokv.coordinator.v1.TsoRequest
-	10, // 32: nokv.coordinator.v1.Coordinator.StoreHeartbeat:output_type -> nokv.coordinator.v1.StoreHeartbeatResponse
-	12, // 33: nokv.coordinator.v1.Coordinator.RegionLiveness:output_type -> nokv.coordinator.v1.RegionLivenessResponse
-	14, // 34: nokv.coordinator.v1.Coordinator.PublishRootEvent:output_type -> nokv.coordinator.v1.PublishRootEventResponse
-	18, // 35: nokv.coordinator.v1.Coordinator.ListTransitions:output_type -> nokv.coordinator.v1.ListTransitionsResponse
-	20, // 36: nokv.coordinator.v1.Coordinator.AssessRootEvent:output_type -> nokv.coordinator.v1.AssessRootEventResponse
-	22, // 37: nokv.coordinator.v1.Coordinator.RemoveRegion:output_type -> nokv.coordinator.v1.RemoveRegionResponse
-	25, // 38: nokv.coordinator.v1.Coordinator.GetRegionByKey:output_type -> nokv.coordinator.v1.GetRegionByKeyResponse
-	27, // 39: nokv.coordinator.v1.Coordinator.AllocID:output_type -> nokv.coordinator.v1.AllocIDResponse
-	29, // 40: nokv.coordinator.v1.Coordinator.Tso:output_type -> nokv.coordinator.v1.TsoResponse
-	32, // [32:41] is the sub-list for method output_type
-	23, // [23:32] is the sub-list for method input_type
-	23, // [23:23] is the sub-list for extension type_name
-	23, // [23:23] is the sub-list for extension extendee
-	0,  // [0:23] is the sub-list for field type_name
+	23, // 23: nokv.coordinator.v1.GetRegionByKeyResponse.current_root_token:type_name -> nokv.coordinator.v1.RootToken
+	8,  // 24: nokv.coordinator.v1.Coordinator.StoreHeartbeat:input_type -> nokv.coordinator.v1.StoreHeartbeatRequest
+	11, // 25: nokv.coordinator.v1.Coordinator.RegionLiveness:input_type -> nokv.coordinator.v1.RegionLivenessRequest
+	13, // 26: nokv.coordinator.v1.Coordinator.PublishRootEvent:input_type -> nokv.coordinator.v1.PublishRootEventRequest
+	17, // 27: nokv.coordinator.v1.Coordinator.ListTransitions:input_type -> nokv.coordinator.v1.ListTransitionsRequest
+	19, // 28: nokv.coordinator.v1.Coordinator.AssessRootEvent:input_type -> nokv.coordinator.v1.AssessRootEventRequest
+	21, // 29: nokv.coordinator.v1.Coordinator.RemoveRegion:input_type -> nokv.coordinator.v1.RemoveRegionRequest
+	24, // 30: nokv.coordinator.v1.Coordinator.GetRegionByKey:input_type -> nokv.coordinator.v1.GetRegionByKeyRequest
+	26, // 31: nokv.coordinator.v1.Coordinator.AllocID:input_type -> nokv.coordinator.v1.AllocIDRequest
+	28, // 32: nokv.coordinator.v1.Coordinator.Tso:input_type -> nokv.coordinator.v1.TsoRequest
+	10, // 33: nokv.coordinator.v1.Coordinator.StoreHeartbeat:output_type -> nokv.coordinator.v1.StoreHeartbeatResponse
+	12, // 34: nokv.coordinator.v1.Coordinator.RegionLiveness:output_type -> nokv.coordinator.v1.RegionLivenessResponse
+	14, // 35: nokv.coordinator.v1.Coordinator.PublishRootEvent:output_type -> nokv.coordinator.v1.PublishRootEventResponse
+	18, // 36: nokv.coordinator.v1.Coordinator.ListTransitions:output_type -> nokv.coordinator.v1.ListTransitionsResponse
+	20, // 37: nokv.coordinator.v1.Coordinator.AssessRootEvent:output_type -> nokv.coordinator.v1.AssessRootEventResponse
+	22, // 38: nokv.coordinator.v1.Coordinator.RemoveRegion:output_type -> nokv.coordinator.v1.RemoveRegionResponse
+	25, // 39: nokv.coordinator.v1.Coordinator.GetRegionByKey:output_type -> nokv.coordinator.v1.GetRegionByKeyResponse
+	27, // 40: nokv.coordinator.v1.Coordinator.AllocID:output_type -> nokv.coordinator.v1.AllocIDResponse
+	29, // 41: nokv.coordinator.v1.Coordinator.Tso:output_type -> nokv.coordinator.v1.TsoResponse
+	33, // [33:42] is the sub-list for method output_type
+	24, // [24:33] is the sub-list for method input_type
+	24, // [24:24] is the sub-list for extension type_name
+	24, // [24:24] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_coordinator_coordinator_proto_init() }
