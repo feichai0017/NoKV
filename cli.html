@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a7cfe865.js";
+            window.path_to_searchindex_js = "searchindex-b3ee6b57.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-69e2a819.js"></script>
+        <script src="toc-b4bd04d1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -296,7 +296,7 @@ no longer reports it as hosted</li>
 <h3 id="nokv-serve"><a class="header" href="#nokv-serve"><code>nokv serve</code></a></h3>
 <ul>
 <li>Starts NoKV gRPC service backed by local <code>raftstore</code></li>
-<li>Requires <code>--workdir</code>, <code>--store-id</code>, and <code>--pd-addr</code></li>
+<li>Requires <code>--workdir</code>, <code>--store-id</code>, and <code>--coordinator-addr</code></li>
 <li>Common flags:
 <ul>
 <li><code>--addr</code> (default <code>127.0.0.1:20160</code>)</li>
@@ -313,15 +313,15 @@ no longer reports it as hosted</li>
   --workdir ./artifacts/cluster/store-1 \
   --store-id 1 \
   --addr 127.0.0.1:20170 \
-  --pd-addr 127.0.0.1:2379 \
+  --coordinator-addr 127.0.0.1:2379 \
   --peer 201=127.0.0.1:20171 \
   --peer 301=127.0.0.1:20172
 </code></pre>
 <p>When a store hosts multiple regions, include mappings for every remote peer ID
 reachable from those regions (using <code>scripts/dev/serve-store.sh</code> avoids manual drift).</p>
-<h3 id="nokv-pd"><a class="header" href="#nokv-pd"><code>nokv pd</code></a></h3>
+<h3 id="nokv-coordinator"><a class="header" href="#nokv-coordinator"><code>nokv coordinator</code></a></h3>
 <ul>
-<li>Starts the PD-lite gRPC service used by distributed mode.</li>
+<li>Starts the Coordinator gRPC service used by distributed mode.</li>
 <li>Common flags:
 <ul>
 <li><code>--addr</code> (default <code>127.0.0.1:2379</code>)</li>
@@ -333,7 +333,7 @@ reachable from those regions (using <code>scripts/dev/serve-store.sh</code> avoi
 </li>
 </ul>
 <p>Example:</p>
-<pre><code class="language-bash">nokv pd \
+<pre><code class="language-bash">nokv coordinator \
   --config ./raft_config.example.json \
   --scope host \
   --metrics-addr 127.0.0.1:23790

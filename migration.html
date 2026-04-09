@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a7cfe865.js";
+            window.path_to_searchindex_js = "searchindex-b3ee6b57.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-69e2a819.js"></script>
+        <script src="toc-b4bd04d1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -245,7 +245,7 @@ NoKV does not treat standalone and distributed mode as two separate products glu
 <li>Bootstrap is the only allowed non-apply path that creates the initial region truth for the promoted directory.</li>
 <li>Engine manifest stays storage-engine metadata only.</li>
 <li>Store-local region truth stays in <code>raftstore/localmeta</code>.</li>
-<li>PD does not create local truth during bootstrap.</li>
+<li>Coordinator does not create local truth during bootstrap.</li>
 </ol>
 <p>Those invariants are what make the feature defensible. Without them, “standalone to cluster” collapses into ad hoc tooling.</p>
 <h2 id="the-minimal-operator-flow"><a class="header" href="#the-minimal-operator-flow">The Minimal Operator Flow</a></h2>
@@ -253,7 +253,7 @@ NoKV does not treat standalone and distributed mode as two separate products glu
     A["Standalone workdir"] --&gt; B["nokv migrate plan"]
     B --&gt; C["nokv migrate init"]
     C --&gt; D["Seeded workdir"]
-    D --&gt; E["nokv serve --pd-addr ..."]
+    D --&gt; E["nokv serve --coordinator-addr ..."]
     E --&gt; F["Single-store cluster seed"]
     F --&gt; G["nokv migrate expand"]
     G --&gt; H["Replicated cluster"]
@@ -274,7 +274,7 @@ go run ./cmd/nokv migrate init \
 go run ./cmd/nokv serve \
   --workdir ./data/store-1 \
   --store-id 1 \
-  --pd-addr 127.0.0.1:2379
+  --coordinator-addr 127.0.0.1:2379
 
 # 4. Expand the seed into more replicas
 go run ./cmd/nokv migrate expand \
@@ -506,7 +506,7 @@ needs snapshot-based catch-up instead of regular log replication</li>
 <li>restarted follower recovery</li>
 <li>removed-peer restart</li>
 <li>repeated transport flap during membership changes</li>
-<li>PD outage after startup</li>
+<li>Coordinator outage after startup</li>
 </ul>
 <h2 id="test-and-validation-story"><a class="header" href="#test-and-validation-story">Test and Validation Story</a></h2>
 <p>This feature only counts if it is validated as a lifecycle, not just as a command list.</p>
@@ -598,7 +598,7 @@ needs snapshot-based catch-up instead of regular log replication</li>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="pd.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="coordinator.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -612,7 +612,7 @@ needs snapshot-based catch-up instead of regular log replication</li>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="pd.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="coordinator.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

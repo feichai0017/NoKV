@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a7cfe865.js";
+            window.path_to_searchindex_js = "searchindex-b3ee6b57.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-69e2a819.js"></script>
+        <script src="toc-b4bd04d1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -224,7 +224,7 @@
 <ul>
 <li><strong>Embedded mode</strong> uses <code>NoKV.Open</code> directly: WAL→MemTable→SST durability, ValueLog separation, non-transactional APIs with internal version ordering, and rich stats.</li>
 <li><strong>Distributed mode</strong> layers <code>raftstore</code> on top: multi-Raft regions reuse the same WAL, keep store-local recovery metadata separate from storage manifest state, expose metrics, and serve NoKV RPCs.</li>
-<li><strong>Control plane split</strong>: <code>raft_config</code> provides bootstrap topology; PD provides runtime routing/TSO/control-plane state in cluster mode.</li>
+<li><strong>Control plane split</strong>: <code>raft_config</code> provides bootstrap topology; Coordinator provides runtime routing/TSO/control-plane state in cluster mode.</li>
 <li><strong>Clients</strong> obtain leader-aware routing, automatic NotLeader/EpochNotMatch retries, and two-phase commit helpers.</li>
 </ul>
 <h3 id="same-system-two-shapes"><a class="header" href="#same-system-two-shapes">Same system, two shapes</a></h3>
@@ -242,7 +242,7 @@
         Server --&gt; Store["store.Store"]
         Store --&gt; Peer["peer.Peer"]
         Peer --&gt; Core
-        Store --&gt; PD["PD-lite"]
+        Store --&gt; Coordinator["Coordinator"]
     end
 
     Embedded -. migrate init / seed .-&gt; Store
@@ -316,7 +316,7 @@ fmt.Println(string(entry.Value))
 <h3 id="25-distributed-transaction-path"><a class="header" href="#25-distributed-transaction-path">2.5 Distributed Transaction Path</a></h3>
 <ul>
 <li><code>percolator</code> implements Prewrite/Commit/ResolveLock/CheckTxnStatus; <code>kv.Apply</code> dispatches raft commands to these helpers.</li>
-<li>MVCC timestamps come from the distributed client/PD TSO flow, not from an embedded standalone transaction API.</li>
+<li>MVCC timestamps come from the distributed client/Coordinator TSO flow, not from an embedded standalone transaction API.</li>
 <li>Watermarks (<code>utils.WaterMark</code>) are used in durability/visibility coordination; they have no background goroutine and advance via mutex + atomics.</li>
 </ul>
 <h3 id="26-write-pipeline--backpressure"><a class="header" href="#26-write-pipeline--backpressure">2.6 Write Pipeline &amp; Backpressure</a></h3>
@@ -390,7 +390,7 @@ defer srv.Close()
 <li>Router registration, regionManager bookkeeping, optional <code>Peer.Bootstrap</code> with initial peer list, leader campaign.</li>
 </ul>
 </li>
-<li>Peers from other stores can be configured through <code>transport.SetPeer(peerID, addr)</code> (raft peer ID). In cluster mode, runtime routing/control-plane decisions come from PD.</li>
+<li>Peers from other stores can be configured through <code>transport.SetPeer(peerID, addr)</code> (raft peer ID). In cluster mode, runtime routing/control-plane decisions come from Coordinator.</li>
 </ol>
 <h3 id="32-command-paths"><a class="header" href="#32-command-paths">3.2 Command Paths</a></h3>
 <ul>
@@ -426,11 +426,11 @@ defer srv.Close()
 <h2 id="5-client-workflow"><a class="header" href="#5-client-workflow">5. Client Workflow</a></h2>
 <p><code>raftstore/client</code> offers a leader-aware client with retry logic and convenient helpers:</p>
 <ul>
-<li><strong>Initialization</strong>: provide <code>[]StoreEndpoint</code> + <code>RegionResolver</code> (<code>GetRegionByKey</code>) so runtime routing is PD-driven.</li>
+<li><strong>Initialization</strong>: provide <code>[]StoreEndpoint</code> + <code>RegionResolver</code> (<code>GetRegionByKey</code>) so runtime routing is Coordinator-driven.</li>
 <li><strong>Reads</strong>: <code>Get</code> and <code>Scan</code> pick the leader store for a key range, issue NoKV RPCs, and retry on NotLeader/EpochNotMatch.</li>
 <li><strong>Writes</strong>: <code>Mutate</code> bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); <code>Put</code> and <code>Delete</code> are convenience wrappers using the same 2PC path.</li>
-<li><strong>Timestamps</strong>: clients must supply <code>startVersion</code>/<code>commitVersion</code>. For distributed demos, use PD-lite (<code>nokv pd</code>) to obtain globally increasing values before calling <code>TwoPhaseCommit</code>.</li>
-<li><strong>Bootstrap helpers</strong>: <code>scripts/dev/cluster.sh --config raft_config.example.json</code> builds the binaries, seeds local peer catalogs via <code>nokv-config catalog</code>, launches PD-lite, and starts the stores declared in the config.</li>
+<li><strong>Timestamps</strong>: clients must supply <code>startVersion</code>/<code>commitVersion</code>. For distributed demos, use Coordinator (<code>nokv coordinator</code>) to obtain globally increasing values before calling <code>TwoPhaseCommit</code>.</li>
+<li><strong>Bootstrap helpers</strong>: <code>scripts/dev/cluster.sh --config raft_config.example.json</code> builds the binaries, seeds local peer catalogs via <code>nokv-config catalog</code>, launches Coordinator, and starts the stores declared in the config.</li>
 </ul>
 <p><strong>Example (two regions)</strong></p>
 <ol>
@@ -452,7 +452,7 @@ defer srv.Close()
 <li><code>StatsSnapshot</code> publishes flush/compaction/WAL/VLog/raft/region/hot/cache metrics. <code>nokv stats</code> and the expvar endpoint expose the same data.</li>
 <li><code>nokv regions</code> inspects the local peer catalog.</li>
 <li><code>nokv serve</code> advertises Region samples on startup (ID, key range, peers) for quick verification.</li>
-<li>Inspect scheduler/control-plane state via PD APIs/metrics.</li>
+<li>Inspect scheduler/control-plane state via Coordinator APIs/metrics.</li>
 <li>Scripts:
 <ul>
 <li><code>scripts/dev/cluster.sh</code> – launch a multi-node NoKV cluster locally.</li>
@@ -468,7 +468,7 @@ defer srv.Close()
 <li><strong>Distributed</strong>: deploy <code>nokv serve</code> nodes, use <code>raftstore/client</code> (or any NoKV gRPC client) to perform reads, scans, and 2PC writes.</li>
 <li><strong>Observability-first</strong>: inspection via CLI or expvar is built-in; Region, WAL, Flush, and Raft metrics are accessible without extra instrumentation.</li>
 </ul>
-<p>See also <a href="raftstore.html"><code>docs/raftstore.md</code></a> for deeper internals, <a href="pd.html"><code>docs/pd.md</code></a> for control-plane details, and <a href="testing.html"><code>docs/testing.md</code></a> for coverage details.</p>
+<p>See also <a href="raftstore.html"><code>docs/raftstore.md</code></a> for deeper internals, <a href="coordinator.html"><code>docs/coordinator.md</code></a> for control-plane details, and <a href="testing.html"><code>docs/testing.md</code></a> for coverage details.</p>
 
                     </main>
 

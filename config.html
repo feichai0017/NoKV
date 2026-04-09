@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a7cfe865.js";
+            window.path_to_searchindex_js = "searchindex-b3ee6b57.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-69e2a819.js"></script>
+        <script src="toc-b4bd04d1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -317,11 +317,11 @@ file, CLI flags take precedence; config acts as startup defaults.</p>
 <p>Minimal shape:</p>
 <pre><code class="language-jsonc">{
   "max_retries": 8,
-  "pd": {
+  "coordinator": {
     "addr": "127.0.0.1:2379",
-    "docker_addr": "nokv-pd:2379",
-    "work_dir": "./artifacts/cluster/pd",
-    "docker_work_dir": "/var/lib/nokv-pd"
+    "docker_addr": "nokv-coordinator:2379",
+    "work_dir": "./artifacts/cluster/coordinator",
+    "docker_work_dir": "/var/lib/nokv-coordinator"
   },
   "store_work_dir_template": "./artifacts/cluster/store-{id}",
   "store_docker_work_dir_template": "/var/lib/nokv/store-{id}",
@@ -354,10 +354,10 @@ file, CLI flags take precedence; config acts as startup defaults.</p>
 <li>Store workdir can be configured per store (<code>stores[i].work_dir</code> / <code>docker_work_dir</code>)
 or via global templates (<code>store_work_dir_template</code> /
 <code>store_docker_work_dir_template</code>, both must include <code>{id}</code>).</li>
-<li><code>pd.addr</code> is the default PD endpoint for host scope; <code>pd.docker_addr</code> is used
+<li><code>coordinator.addr</code> is the default Coordinator endpoint for host scope; <code>coordinator.docker_addr</code> is used
 when tools run in docker scope.</li>
-<li><code>pd.work_dir</code> / <code>pd.docker_work_dir</code> are optional PD persistence directories
-used by bootstrap tooling and <code>nokv pd --config ...</code> when <code>--workdir</code> is not
+<li><code>coordinator.work_dir</code> / <code>coordinator.docker_work_dir</code> are optional Coordinator persistence directories
+used by bootstrap tooling and <code>nokv coordinator --config ...</code> when <code>--workdir</code> is not
 set explicitly.</li>
 <li>Store workdir resolution order (<code>ResolveStoreWorkDir</code>):
 <ol>
@@ -367,7 +367,7 @@ set explicitly.</li>
 </ol>
 </li>
 <li><code>leader_store_id</code> is optional bootstrap metadata. Runtime routing in cluster
-mode is resolved through PD (<code>GetRegionByKey</code>), not static leader hints.</li>
+mode is resolved through Coordinator (<code>GetRegionByKey</code>), not static leader hints.</li>
 </ul>
 <p>Programmatic loading:</p>
 <pre><code class="language-go">cfg, _ := config.LoadFile("raft_config.example.json")

@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a7cfe865.js";
+            window.path_to_searchindex_js = "searchindex-b3ee6b57.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-69e2a819.js"></script>
+        <script src="toc-b4bd04d1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -188,7 +188,7 @@
 <li>Start with section 1 if you want package ownership.</li>
 <li>Jump to section 3 if you want request execution.</li>
 <li>Jump to section 8 if you care about split/merge and control-plane behavior.</li>
-<li>Read this together with <a href="pd.html"><code>pd.md</code></a> and <a href="migration.html"><code>migration.md</code></a> if your focus is lifecycle rather than just request flow.</li>
+<li>Read this together with <a href="coordinator.html"><code>coordinator.md</code></a> and <a href="migration.html"><code>migration.md</code></a> if your focus is lifecycle rather than just request flow.</li>
 </ul>
 <hr>
 <h2 id="1-package-structure"><a class="header" href="#1-package-structure">1. Package Structure</a></h2>
@@ -212,7 +212,7 @@
 <pre class="mermaid">flowchart TD
     Client["Client / Redis gateway / CLI"]
     Client --&gt; KV["kv.Service"]
-    Client --&gt; PD["PD-lite"]
+    Client --&gt; Coordinator["Coordinator"]
 
     subgraph "Node runtime"
         Server["server.Node"] --&gt; Store["store.Store"]
@@ -267,7 +267,7 @@
 <li><code>Store</code> is the runtime owner for what this node hosts.</li>
 <li><code>Peer</code> is one region replica’s state machine and raft runtime.</li>
 <li><code>Meta</code> is a local recovery mirror, not cluster truth.</li>
-<li><code>PD</code> is control plane, not a writer of local truth.</li>
+<li><code>Coordinator</code> is control plane, not a writer of local truth.</li>
 </ul>
 <hr>
 <h2 id="3-command-execution"><a class="header" href="#3-command-execution">3. Command Execution</a></h2>
@@ -356,17 +356,17 @@
 <ul>
 <li>Topology is sourced from <code>raft_config.example.json</code> (via <code>config.LoadFile</code>) and
 reused by scripts, Docker Compose, and the Redis gateway as bootstrap metadata.</li>
-<li>Runtime routing is PD-first: <code>raftstore/client</code> resolves Regions by key through
+<li>Runtime routing is Coordinator-first: <code>raftstore/client</code> resolves Regions by key through
 <code>GetRegionByKey</code> and caches route entries for retries.</li>
 <li><code>raft_config</code> regions are treated as bootstrap/deployment metadata and are not
-the runtime source of truth once PD is available.</li>
-<li>PD is the only control-plane source of truth for runtime scheduling/routing.</li>
+the runtime source of truth once Coordinator is available.</li>
+<li>Coordinator is the only control-plane source of truth for runtime scheduling/routing.</li>
 </ul>
 <h3 id="why-the-layering-matters"><a class="header" href="#why-the-layering-matters">Why the layering matters</a></h3>
 <p>The design rule is:</p>
 <ul>
 <li><code>RaftAdmin</code> executes membership operations against the current leader store.</li>
-<li><code>PD</code> decides and observes at the cluster level.</li>
+<li><code>Coordinator</code> decides and observes at the cluster level.</li>
 <li><code>Store/Peer</code> own local truth and apply.</li>
 </ul>
 <p>That split is what keeps migration and scheduling from becoming a second,
@@ -444,9 +444,9 @@ authority and must not be treated as consensus truth outside the store.</li>
 </ul>
 </li>
 <li>
-<p><strong>PD control-plane view</strong></p>
+<p><strong>Coordinator control-plane view</strong></p>
 <ul>
-<li>Owned by PD and persisted through <a href="../pd/storage"><code>pd/storage</code></a>.</li>
+<li>Owned by Coordinator and persisted through <a href="../coordinator/storage"><code>coordinator/storage</code></a>.</li>
 <li>Built from region/store heartbeats and allocator durability checkpoints.</li>
 <li>Used for:
 <ul>
@@ -455,7 +455,7 @@ authority and must not be treated as consensus truth outside the store.</li>
 <li>allocator durability</li>
 </ul>
 </li>
-<li>PD is not allowed to overwrite local raftstore truth directly.</li>
+<li>Coordinator is not allowed to overwrite local raftstore truth directly.</li>
 </ul>
 </li>
 </ol>
@@ -463,7 +463,7 @@ authority and must not be treated as consensus truth outside the store.</li>
 <ul>
 <li><code>raft apply/bootstrap</code> advances local truth</li>
 <li><code>raftstore/localmeta</code> mirrors that truth for restart</li>
-<li><code>PD</code> observes and schedules from heartbeats</li>
+<li><code>Coordinator</code> observes and schedules from heartbeats</li>
 </ul>
 <p>This separation is what prevents parallel truth sources from creeping back into
 the design.</p>
@@ -488,7 +488,7 @@ count, backlog, and scheduling health.</li>
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="pd.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="coordinator.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -502,7 +502,7 @@ count, backlog, and scheduling health.</li>
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="pd.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="coordinator.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

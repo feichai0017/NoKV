@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a7cfe865.js";
+            window.path_to_searchindex_js = "searchindex-b3ee6b57.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-69e2a819.js"></script>
+        <script src="toc-b4bd04d1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -187,10 +187,10 @@
 <li>(Optional) Docker + Docker Compose for containerized runs</li>
 </ul>
 <h2 id="option-a-local-cluster-recommended-for-dev"><a class="header" href="#option-a-local-cluster-recommended-for-dev">Option A: Local Cluster (recommended for dev)</a></h2>
-<p>This launches a 3-node Raft cluster plus a PD-lite service.</p>
+<p>This launches a 3-node Raft cluster plus a Coordinator service.</p>
 <pre><code class="language-bash">./scripts/dev/cluster.sh --config ./raft_config.example.json
 </code></pre>
-<p>The launcher stays attached, streams PD/store logs to the terminal, and also writes them under <code>./artifacts/cluster/</code>.</p>
+<p>The launcher stays attached, streams Coordinator/store logs to the terminal, and also writes them under <code>./artifacts/cluster/</code>.</p>
 <p>Start the Redis-compatible gateway in another shell:</p>
 <pre><code class="language-bash">go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --raft-config raft_config.example.json
 </code></pre>

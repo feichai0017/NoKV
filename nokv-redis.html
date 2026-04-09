@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a7cfe865.js";
+            window.path_to_searchindex_js = "searchindex-b3ee6b57.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-69e2a819.js"></script>
+        <script src="toc-b4bd04d1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -187,7 +187,7 @@
 </thead>
 <tbody>
 <tr><td>Embedded (<code>embedded</code>)</td><td>Opens a local <code>*NoKV.DB</code> work directory. Commands (<code>SET</code>, <code>SET NX/XX</code>, <code>EX/PX/EXAT/PXAT</code>, <code>MSET</code>, <code>INCR/DECR</code>, <code>DEL</code>, <code>MGET</code>, <code>EXISTS</code>, …) run through regular DB APIs (<code>Get/Set/SetWithTTL/Del</code>) with backend-side synchronization for read-modify-write operations.</td><td><code>--workdir &lt;dir&gt;</code></td></tr>
-<tr><td>Raft (<code>raft</code>)</td><td>Routes requests through <code>raftstore/client</code> and a NoKV cluster. Writes execute via TwoPhaseCommit; TTL is persisted directly in entry <code>expires_at</code> metadata (same write path as value updates). Routing and TSO allocation are provided by PD-lite over gRPC (PD is runtime route source; config regions are bootstrap metadata).</td><td><code>--raft-config &lt;file&gt;</code><br><code>--pd-addr host:port</code> (optional override; defaults to <code>config.pd</code>)</td></tr>
+<tr><td>Raft (<code>raft</code>)</td><td>Routes requests through <code>raftstore/client</code> and a NoKV cluster. Writes execute via TwoPhaseCommit; TTL is persisted directly in entry <code>expires_at</code> metadata (same write path as value updates). Routing and TSO allocation are provided by Coordinator over gRPC (Coordinator is runtime route source; config regions are bootstrap metadata).</td><td><code>--raft-config &lt;file&gt;</code><br><code>--coordinator-addr host:port</code> (optional override; defaults to <code>config.coordinator</code>)</td></tr>
 </tbody>
 </table>
 </div>
@@ -203,7 +203,7 @@
 <h3 id="raft-backend"><a class="header" href="#raft-backend">Raft backend</a></h3>
 <ol>
 <li>
-<p>Start NoKV and PD-lite using the helper script or Docker Compose. Both consume <code>raft_config.example.json</code>, initialise manifests for each store, and launch <code>nokv pd</code> automatically:</p>
+<p>Start NoKV and Coordinator using the helper script or Docker Compose. Both consume <code>raft_config.example.json</code>, initialise manifests for each store, and launch <code>nokv coordinator</code> automatically:</p>
 <pre><code class="language-bash">./scripts/dev/cluster.sh
 # or: docker compose up --build
 </code></pre>
@@ -235,10 +235,10 @@
 <li><code>stores</code> – store ID, gRPC address, and optional container listen/advertise addresses</li>
 <li><code>regions</code> – region ID, start/end keys (use <code>hex:&lt;bytes&gt;</code> for binary data), epoch, peer list, leader store ID</li>
 <li><code>max_retries</code> – maximum retries for region errors in the distributed client</li>
-<li><code>pd</code> – PD-lite endpoint(s) and optional persistence dirs:
+<li><code>coordinator</code> – Coordinator endpoint(s) and optional persistence dirs:
 <ul>
 <li><code>addr</code> / <code>docker_addr</code> for endpoint resolution by scope</li>
-<li><code>work_dir</code> / <code>docker_work_dir</code> for PD state persistence defaults</li>
+<li><code>work_dir</code> / <code>docker_work_dir</code> for Coordinator state persistence defaults</li>
 </ul>
 </li>
 </ul>

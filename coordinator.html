@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>PD-lite - NoKV Docs</title>
+        <title>Coordinator - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a7cfe865.js";
+            window.path_to_searchindex_js = "searchindex-b3ee6b57.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-69e2a819.js"></script>
+        <script src="toc-b4bd04d1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,13 +178,13 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="pd-lite"><a class="header" href="#pd-lite">PD-lite</a></h1>
-<p><code>PD-lite</code> is NoKV’s control-plane service for distributed mode.<br>It exposes a gRPC API (<code>pb.PD</code>) and is started by:</p>
-<pre><code class="language-bash">go run ./cmd/nokv pd --addr 127.0.0.1:2379
+                        <h1 id="coordinator"><a class="header" href="#coordinator">Coordinator</a></h1>
+<p><code>Coordinator</code> is NoKV’s control-plane service for distributed mode.<br>It exposes a gRPC API (<code>pb.Coordinator</code>) and is started by:</p>
+<pre><code class="language-bash">go run ./cmd/nokv coordinator --addr 127.0.0.1:2379
 </code></pre>
 <hr>
 <h2 id="1-responsibilities"><a class="header" href="#1-responsibilities">1. Responsibilities</a></h2>
-<p>PD-lite currently owns:</p>
+<p>Coordinator currently owns:</p>
 <ul>
 <li><strong>Routing</strong>: <code>GetRegionByKey</code></li>
 <li><strong>Heartbeats</strong>: <code>StoreHeartbeat</code>, <code>RegionHeartbeat</code></li>
@@ -192,33 +192,33 @@
 <li><strong>ID service</strong>: <code>AllocID</code></li>
 <li><strong>TSO</strong>: <code>Tso</code></li>
 </ul>
-<p>Runtime clients (for example <code>cmd/nokv-redis</code> raft backend) use PD as the
-routing source of truth, but PD is not the durable owner of cluster topology
+<p>Runtime clients (for example <code>cmd/nokv-redis</code> raft backend) use Coordinator as the
+routing source of truth, but Coordinator is not the durable owner of cluster topology
 truth. Durable truth lives in <code>meta/root</code>.</p>
 <hr>
 <h2 id="2-runtime-architecture"><a class="header" href="#2-runtime-architecture">2. Runtime Architecture</a></h2>
 <pre class="mermaid">flowchart LR
-    Store["nokv serve"] --&gt;|"StoreHeartbeat / RegionHeartbeat"| PD["PD-lite (gRPC)"]
-    Gateway["nokv-redis (raft mode)"] --&gt;|"GetRegionByKey / Tso"| PD
-    PD --&gt; Cluster["pd/catalog.Cluster"]
+    Store["nokv serve"] --&gt;|"StoreHeartbeat / RegionHeartbeat"| Coordinator["Coordinator (gRPC)"]
+    Gateway["nokv-redis (raft mode)"] --&gt;|"GetRegionByKey / Tso"| Coordinator
+    Coordinator --&gt; Cluster["coordinator/catalog.Cluster"]
     Cluster --&gt; Scheduler["leader-transfer hint planner"]
 </pre>
 
 <p>Core implementation units:</p>
 <ul>
-<li><code>pd/catalog</code>: in-memory cluster metadata model.</li>
-<li><code>pd/idalloc</code>: monotonic ID allocator used by PD.</li>
-<li><code>pd/storage</code>: persistence abstraction (<code>Store</code>) backed by the metadata root.</li>
-<li><code>pd/server</code>: gRPC service + RPC validation/error mapping.</li>
-<li><code>pd/client</code>: client wrapper used by store/gateway.</li>
-<li><code>pd/adapter</code>: scheduler sink that forwards heartbeats into PD.</li>
+<li><code>coordinator/catalog</code>: in-memory cluster metadata model.</li>
+<li><code>coordinator/idalloc</code>: monotonic ID allocator used by Coordinator.</li>
+<li><code>coordinator/storage</code>: persistence abstraction (<code>Store</code>) backed by the metadata root.</li>
+<li><code>coordinator/server</code>: gRPC service + RPC validation/error mapping.</li>
+<li><code>coordinator/client</code>: client wrapper used by store/gateway.</li>
+<li><code>coordinator/adapter</code>: scheduler sink that forwards heartbeats into Coordinator.</li>
 </ul>
 <hr>
 <h2 id="3-mode-model"><a class="header" href="#3-mode-model">3. Mode Model</a></h2>
 <p>NoKV currently has only two supported product modes:</p>
 <h3 id="standalone"><a class="header" href="#standalone"><code>standalone</code></a></h3>
 <ul>
-<li>no <code>pd</code></li>
+<li>no <code>coordinator</code></li>
 <li>no <code>meta/root</code></li>
 <li>no control-plane process</li>
 <li>all truth remains inside the single storage process</li>
@@ -228,27 +228,27 @@ plane deployment; it simply has no control plane.</p>
 <h3 id="distributed"><a class="header" href="#distributed"><code>distributed</code></a></h3>
 <p><code>distributed</code> has two formal control-plane deployments:</p>
 <ol>
-<li><code>single pd + local meta</code></li>
-<li><code>3 pd + replicated meta</code></li>
+<li><code>single coordinator + local meta</code></li>
+<li><code>3 coordinator + replicated meta</code></li>
 </ol>
 <p>Both deployments keep the same logical split:</p>
 <ul>
 <li><code>meta/root/*</code>: durable rooted truth</li>
-<li><code>pd/view</code> + <code>pd/catalog</code>: rebuildable routing/scheduling state</li>
-<li><code>pd/server</code>: gRPC API surface</li>
+<li><code>coordinator/view</code> + <code>coordinator/catalog</code>: rebuildable routing/scheduling state</li>
+<li><code>coordinator/server</code>: gRPC API surface</li>
 </ul>
 <p>The difference is only the rooted backend:</p>
 <ul>
-<li><code>single pd + local meta</code>
+<li><code>single coordinator + local meta</code>
 <ul>
-<li>one <code>pd</code> process</li>
+<li>one <code>coordinator</code> process</li>
 <li>one same-process <code>meta/root/backend/local</code></li>
 <li>single-node durable truth</li>
 </ul>
 </li>
-<li><code>3 pd + replicated meta</code>
+<li><code>3 coordinator + replicated meta</code>
 <ul>
-<li>three <code>pd</code> processes</li>
+<li>three <code>coordinator</code> processes</li>
 <li>each process hosts one same-process <code>meta/root/backend/replicated</code></li>
 <li>fixed three-replica rooted truth</li>
 <li>one rooted leader accepts truth writes, followers refresh rooted state and serve read/view traffic</li>
@@ -258,20 +258,20 @@ plane deployment; it simply has no control plane.</p>
 <p>No other product control-plane mode is supported. In particular:</p>
 <ul>
 <li>there is no separate <code>meta</code> cluster</li>
-<li>there is no <code>pd</code> cluster larger than three members</li>
+<li>there is no <code>coordinator</code> cluster larger than three members</li>
 <li>there is no dynamic metadata membership today</li>
 </ul>
 <hr>
 <h2 id="4-persistence---workdir"><a class="header" href="#4-persistence---workdir">4. Persistence (<code>--workdir</code>)</a></h2>
-<p><code>--workdir</code> is required for every formal PD deployment that hosts rooted truth.</p>
-<h3 id="single-pd--local-meta"><a class="header" href="#single-pd--local-meta"><code>single pd + local meta</code></a></h3>
+<p><code>--workdir</code> is required for every formal Coordinator deployment that hosts rooted truth.</p>
+<h3 id="single-coordinator--local-meta"><a class="header" href="#single-coordinator--local-meta"><code>single coordinator + local meta</code></a></h3>
 <p>The rooted backend stores:</p>
 <ul>
 <li><code>root.events.wal</code></li>
 <li><code>root.checkpoint.binpb</code></li>
 </ul>
-<h3 id="3-pd--replicated-meta"><a class="header" href="#3-pd--replicated-meta"><code>3 pd + replicated meta</code></a></h3>
-<p>Each PD node has its own workdir and persists two layers of state:</p>
+<h3 id="3-coordinator--replicated-meta"><a class="header" href="#3-coordinator--replicated-meta"><code>3 coordinator + replicated meta</code></a></h3>
+<p>Each Coordinator node has its own workdir and persists two layers of state:</p>
 <ol>
 <li>rooted truth state
 <ul>
@@ -288,7 +288,7 @@ plane deployment; it simply has no control plane.</p>
 </ol>
 <p>Each node must have an isolated workdir. Workdirs are not shared.</p>
 <h3 id="rooted-bootstrap-flow"><a class="header" href="#rooted-bootstrap-flow">Rooted bootstrap flow</a></h3>
-<p>The PD storage layer rebuilds its region snapshot and allocator checkpoints by
+<p>The Coordinator storage layer rebuilds its region snapshot and allocator checkpoints by
 replaying rooted truth:</p>
 <ul>
 <li><strong>region descriptor publish/tombstone</strong> events rebuild the route catalog</li>
@@ -301,10 +301,10 @@ replaying rooted truth:</p>
 </ul>
 <p>Startup flow:</p>
 <ol>
-<li>Open rooted <code>pd/storage</code> from <code>--workdir</code>.</li>
-<li>Reconstruct a rooted PD snapshot (<code>regions</code> + allocator fences).</li>
+<li>Open rooted <code>coordinator/storage</code> from <code>--workdir</code>.</li>
+<li>Reconstruct a rooted Coordinator snapshot (<code>regions</code> + allocator fences).</li>
 <li>Compute starts as <code>max(cli_start, fence+1)</code>.</li>
-<li>Materialize the rooted region snapshot into <code>pd/catalog.Cluster</code>.</li>
+<li>Materialize the rooted region snapshot into <code>coordinator/catalog.Cluster</code>.</li>
 </ol>
 <p>For replicated mode, followers periodically refresh rooted state and rebuild the
 service-side view. This avoids allocator rollback and removes the old parallel
@@ -312,12 +312,12 @@ service-side view. This avoids allocator rollback and removes the old parallel
 <h3 id="region-truth-hierarchy"><a class="header" href="#region-truth-hierarchy">Region Truth Hierarchy</a></h3>
 <p>NoKV intentionally keeps three region views with different authority:</p>
 <ul>
-<li><strong>PD region catalog</strong>: cluster routing truth. Clients and stores must treat
-PD as the authoritative key-to-region source at the service boundary, but
-PD rebuilds this view from rooted metadata truth plus heartbeats.</li>
+<li><strong>Coordinator region catalog</strong>: cluster routing truth. Clients and stores must treat
+Coordinator as the authoritative key-to-region source at the service boundary, but
+Coordinator rebuilds this view from rooted metadata truth plus heartbeats.</li>
 <li><strong><code>raftstore/localmeta</code> local catalog</strong>: store-local recovery truth. It exists so
 one store can restart hosted peers and replay raft WAL checkpoints even if
-PD is temporarily unavailable.</li>
+Coordinator is temporarily unavailable.</li>
 <li><strong><code>Store.regions</code> runtime catalog</strong>: in-memory cache/view rebuilt from local
 metadata at startup and then advanced by peer lifecycle plus raft apply.</li>
 </ul>
@@ -325,12 +325,12 @@ metadata at startup and then advanced by peer lifecycle plus raft apply.</li>
 cluster routing authority.</p>
 <hr>
 <h2 id="5-config-integration"><a class="header" href="#5-config-integration">5. Config Integration</a></h2>
-<p><code>raft_config.json</code> supports PD endpoint + workdir defaults:</p>
-<pre><code class="language-json">"pd": {
+<p><code>raft_config.json</code> supports Coordinator endpoint + workdir defaults:</p>
+<pre><code class="language-json">"coordinator": {
   "addr": "127.0.0.1:2379",
-  "docker_addr": "nokv-pd:2379",
-  "work_dir": "./artifacts/cluster/pd",
-  "docker_work_dir": "/var/lib/nokv-pd"
+  "docker_addr": "nokv-coordinator:2379",
+  "work_dir": "./artifacts/cluster/coordinator",
+  "docker_work_dir": "/var/lib/nokv-coordinator"
 }
 </code></pre>
 <p>Resolution rules:</p>
@@ -340,41 +340,41 @@ cluster routing authority.</p>
 </ul>
 <p>Helpers:</p>
 <ul>
-<li><code>config.ResolvePDAddr(scope)</code></li>
-<li><code>config.ResolvePDWorkDir(scope)</code></li>
-<li><code>nokv-config pd --field addr|workdir --scope host|docker</code></li>
+<li><code>config.ResolveCoordinatorAddr(scope)</code></li>
+<li><code>config.ResolveCoordinatorWorkDir(scope)</code></li>
+<li><code>nokv-config coordinator --field addr|workdir --scope host|docker</code></li>
 </ul>
 <p>Replicated-root transport settings are currently CLI-driven, not config-file
 driven.</p>
 <hr>
 <h2 id="6-routing-source-convergence"><a class="header" href="#6-routing-source-convergence">6. Routing Source Convergence</a></h2>
-<p>NoKV now uses <strong>PD-first routing</strong>:</p>
+<p>NoKV now uses <strong>Coordinator-first routing</strong>:</p>
 <ul>
 <li><code>raftstore/client</code> resolves regions with <code>GetRegionByKey</code>.</li>
 <li><code>raft_config</code> regions are bootstrap/deployment metadata.</li>
-<li>Runtime route truth comes from PD heartbeats + PD region catalog.</li>
+<li>Runtime route truth comes from Coordinator heartbeats + Coordinator region catalog.</li>
 </ul>
-<p>This avoids dual sources drifting over time (config vs PD).</p>
+<p>This avoids dual sources drifting over time (config vs Coordinator).</p>
 <hr>
 <h2 id="7-serve-mode-semantics"><a class="header" href="#7-serve-mode-semantics">7. Serve Mode Semantics</a></h2>
-<p><code>nokv serve</code> is now PD-only:</p>
+<p><code>nokv serve</code> is now Coordinator-only:</p>
 <ul>
-<li><code>--pd-addr</code> is required.</li>
-<li>Runtime routing/scheduling control-plane state is sourced from PD.</li>
+<li><code>--coordinator-addr</code> is required.</li>
+<li>Runtime routing/scheduling control-plane state is sourced from Coordinator.</li>
 </ul>
 <p>Related CLI behavior:</p>
 <ul>
-<li>Inspect control-plane state through PD APIs/metrics.</li>
-<li><code>nokv pd --metrics-addr &lt;host:port&gt;</code> exposes native expvar on <code>/debug/vars</code>.</li>
+<li>Inspect control-plane state through Coordinator APIs/metrics.</li>
+<li><code>nokv coordinator --metrics-addr &lt;host:port&gt;</code> exposes native expvar on <code>/debug/vars</code>.</li>
 <li><code>nokv serve --metrics-addr &lt;host:port&gt;</code> exposes store/runtime expvar on <code>/debug/vars</code>.</li>
 </ul>
 <hr>
 <h2 id="8-service-semantics"><a class="header" href="#8-service-semantics">8. Service Semantics</a></h2>
-<p><code>PD-lite</code> intentionally separates rooted truth leadership from the outer gRPC
+<p><code>Coordinator</code> intentionally separates rooted truth leadership from the outer gRPC
 service surface.</p>
-<p>In <code>3 pd + replicated meta</code>:</p>
+<p>In <code>3 coordinator + replicated meta</code>:</p>
 <ul>
-<li>all three <code>pd</code> processes may listen and serve RPC</li>
+<li>all three <code>coordinator</code> processes may listen and serve RPC</li>
 <li>only the rooted leader may commit truth writes</li>
 <li>followers refresh rooted state and serve read/view traffic</li>
 </ul>
@@ -387,32 +387,32 @@ service surface.</p>
 <li><code>AllocID</code></li>
 <li><code>Tso</code></li>
 </ul>
-<p>Followers return <code>FailedPrecondition</code> with <code>pd not leader</code> semantics, and
-clients are expected to retry against another PD endpoint.</p>
+<p>Followers return <code>FailedPrecondition</code> with <code>coordinator not leader</code> semantics, and
+clients are expected to retry against another Coordinator endpoint.</p>
 <h3 id="any-node-reads"><a class="header" href="#any-node-reads">Any-node reads</a></h3>
-<p>These RPCs may be served by any PD node:</p>
+<p>These RPCs may be served by any Coordinator node:</p>
 <ul>
 <li><code>GetRegionByKey</code></li>
 <li><code>StoreHeartbeat</code> handling and store-view inspection</li>
 </ul>
 <p>Follower reads are driven by a rooted watch-first tail subscription, with
-explicit refresh/reload as fallback into <code>pd/catalog.Cluster</code>. They are expected
+explicit refresh/reload as fallback into <code>coordinator/catalog.Cluster</code>. They are expected
 to be shortly stale rather than linearly consistent.</p>
 <h3 id="client-behavior"><a class="header" href="#client-behavior">Client behavior</a></h3>
-<p><code>pd/client</code> accepts multiple PD addresses. Write RPCs retry across PD nodes and
-converge on the rooted leader. Read RPCs may use any available PD endpoint.</p>
+<p><code>coordinator/client</code> accepts multiple Coordinator addresses. Write RPCs retry across Coordinator nodes and
+converge on the rooted leader. Read RPCs may use any available Coordinator endpoint.</p>
 <hr>
 <h2 id="9-deployment-examples"><a class="header" href="#9-deployment-examples">9. Deployment Examples</a></h2>
-<h3 id="single-pd--local-meta-1"><a class="header" href="#single-pd--local-meta-1"><code>single pd + local meta</code></a></h3>
-<pre><code class="language-bash">go run ./cmd/nokv pd \
+<h3 id="single-coordinator--local-meta-1"><a class="header" href="#single-coordinator--local-meta-1"><code>single coordinator + local meta</code></a></h3>
+<pre><code class="language-bash">go run ./cmd/nokv coordinator \
   -addr 127.0.0.1:2379 \
-  -workdir ./artifacts/pd
+  -workdir ./artifacts/coordinator
 </code></pre>
-<h3 id="3-pd--replicated-meta-1"><a class="header" href="#3-pd--replicated-meta-1"><code>3 pd + replicated meta</code></a></h3>
+<h3 id="3-coordinator--replicated-meta-1"><a class="header" href="#3-coordinator--replicated-meta-1"><code>3 coordinator + replicated meta</code></a></h3>
 <p>Node 1:</p>
-<pre><code class="language-bash">go run ./cmd/nokv pd \
+<pre><code class="language-bash">go run ./cmd/nokv coordinator \
   -addr 127.0.0.1:2379 \
-  -workdir ./artifacts/pd1 \
+  -workdir ./artifacts/coordinator1 \
   -root-mode replicated \
   -root-node-id 1 \
   -root-transport-addr 127.0.0.1:2471 \
@@ -430,8 +430,8 @@ converge on the rooted leader. Read RPCs may use any available PD endpoint.</p>
 <p>Current product assumptions:</p>
 <ul>
 <li>exactly three rooted replicas</li>
-<li>one workdir per PD node</li>
-<li>one transport address per PD node</li>
+<li>one workdir per Coordinator node</li>
+<li>one transport address per Coordinator node</li>
 <li>no dynamic membership</li>
 </ul>
 <hr>
@@ -444,36 +444,33 @@ converge on the rooted leader. Read RPCs may use any available PD endpoint.</p>
 </ul>
 <h3 id="tikv-production-stack"><a class="header" href="#tikv-production-stack">TiKV (production stack)</a></h3>
 <ul>
-<li>PD is an independent, highly available cluster.</li>
-<li>PD internally uses etcd Raft for durable metadata + leader election.</li>
+<li>Coordinator is an independent, highly available cluster.</li>
+<li>Coordinator internally uses etcd Raft for durable metadata + leader election.</li>
 <li>Rich scheduling and balancing policies, rolling updates, robust ops tooling.</li>
 </ul>
-<h3 id="nokv-pd-lite-current"><a class="header" href="#nokv-pd-lite-current">NoKV PD-lite (current)</a></h3>
+<h3 id="nokv-coordinator-current"><a class="header" href="#nokv-coordinator-current">NoKV Coordinator (current)</a></h3>
 <ul>
-<li>Standalone mode has no PD and no metadata-root service.</li>
-<li>Distributed mode has two formal control-plane deployments:
-<ul>
-<li><code>single pd + local meta</code></li>
-<li><code>3 pd + replicated meta</code></li>
-</ul>
-</li>
-<li>In both deployments, each <code>pd</code> process hosts a same-process rooted backend
+<li>Standalone mode has no Coordinator and no metadata-root service.</li>
+<li>Distributed mode has two formal control-plane deployments:</li>
+<li><code>single coordinator + local meta</code></li>
+<li><code>3 coordinator + replicated meta</code></li>
+<li>In both deployments, each <code>coordinator</code> process hosts a same-process rooted backend
 and rebuilds its service-side view from rooted truth.</li>
-<li>PD persistence is intentionally limited to rooted control-plane truth:
+<li>Coordinator persistence is intentionally limited to rooted control-plane truth:
 <ul>
 <li>region descriptor publish/tombstone events</li>
 <li>allocator durability (<code>AllocID</code>, <code>TSO</code>)</li>
 </ul>
 </li>
-<li>PD is not the durable owner of a store’s local raft/region truth. Store
-restart truth remains in <code>raftstore/localmeta</code>, while PD keeps routing and
+<li>Coordinator is not the durable owner of a store’s local raft/region truth. Store
+restart truth remains in <code>raftstore/localmeta</code>, while Coordinator keeps routing and
 scheduling state rebuilt from <code>meta/root</code>.</li>
 </ul>
 <hr>
 <h2 id="11-current-limitations--next-steps"><a class="header" href="#11-current-limitations--next-steps">11. Current Limitations / Next Steps</a></h2>
 <ul>
-<li><code>single pd + local meta</code> remains the simpler and more mature deployment.</li>
-<li><code>3 pd + replicated meta</code> is now a formal product mode, but still has a
+<li><code>single coordinator + local meta</code> remains the simpler and more mature deployment.</li>
+<li><code>3 coordinator + replicated meta</code> is now a formal product mode, but still has a
 deliberately small HA surface:
 <ul>
 <li>fixed three replicas</li>
