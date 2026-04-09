@@ -119,11 +119,16 @@ nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
 ### `nokv serve`
 
 - Starts NoKV gRPC service backed by local `raftstore`
-- Requires `--workdir`, `--store-id`, and `--coordinator-addr`
+- Requires `--store-id`
+- Also requires enough address metadata to reach the Coordinator and all remote
+  raft peers:
+  - either explicit flags (`--workdir`, `--addr`, `--coordinator-addr`, `--peer`)
+  - or `--config <raft_config.json> --scope host|docker`
 - Common flags:
   - `--addr` (default `127.0.0.1:20160`)
+  - `--config`, `--scope host|docker`
   - `--metrics-addr` (optional expvar endpoint, exposes `/debug/vars`)
-  - `--peer peerID=address` (repeatable, uses raft peer IDs from region metadata)
+  - `--peer peerID=address` (repeatable override for remote peer transport addresses)
   - `--election-tick`, `--heartbeat-tick`
   - `--raft-max-msg-bytes`, `--raft-max-inflight`
   - `--raft-tick-interval`, `--raft-debug-log`
@@ -132,16 +137,21 @@ Example:
 
 ```bash
 nokv serve \
-  --workdir ./artifacts/cluster/store-1 \
+  --config ./raft_config.example.json \
+  --scope host \
   --store-id 1 \
-  --addr 127.0.0.1:20170 \
-  --coordinator-addr 127.0.0.1:2379 \
-  --peer 201=127.0.0.1:20171 \
-  --peer 301=127.0.0.1:20172
+  --workdir ./artifacts/cluster/store-1
 ```
 
-When a store hosts multiple regions, include mappings for every remote peer ID
-reachable from those regions (using `scripts/dev/serve-store.sh` avoids manual drift).
+Restart semantics:
+
+- hosted peers come from `raftstore/localmeta`, not `raft_config.json` region lines
+- `--config` is used only to resolve:
+  - store listen address
+  - Coordinator address
+  - `storeID -> addr`, which `serve` expands into remote `peerID -> addr`
+- `--peer` remains available as an explicit override for debugging or partial
+  address overrides
 
 ### `nokv coordinator`
 

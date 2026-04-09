@@ -48,6 +48,30 @@ For the next-stage protocol direction on freshness, rooted catch-up,
 transition lifecycle, and degraded semantics, see
 [`docs/control_plane_protocol.md`](control_plane_protocol.md).
 
+### Control-Plane Protocol Status
+
+Coordinator now uses a **minimal formal control-plane protocol v1** for its key
+route and transition surfaces.
+
+Already in active use:
+
+- route-read `Freshness`
+- rooted token serving metadata
+- rooted lag exposure
+- `DegradedMode`
+- `CatchUpState`
+- `TransitionID`
+- minimal `TransitionPhase`
+- publish-time lifecycle assessment on `PublishRootEvent`
+
+This means Coordinator no longer exposes only best-effort implementation
+behavior. It now returns explicit protocol state that callers, tests, and docs
+can rely on.
+
+The current protocol is intentionally minimal. It does not yet expose the full
+future runtime/operator model such as stalled transitions or richer catch-up
+actions.
+
 ---
 
 ## 3. Mode Model
@@ -208,6 +232,36 @@ This avoids dual sources drifting over time (config vs Coordinator).
 - `--coordinator-addr` is required.
 - Runtime routing/scheduling control-plane state is sourced from Coordinator.
 
+For restart and recovery, `nokv serve` intentionally separates runtime truth from
+deployment metadata:
+
+- hosted region/peer truth comes from `raftstore/localmeta`
+- raft durable progress comes from the store workdir (`WAL`, raft log, local metadata)
+- `raft_config.json` is used only to resolve static addresses (`Coordinator`,
+  `store listen`, `store transport`)
+
+This means:
+
+- bootstrap-time `config.regions` are not replayed during restart
+- runtime split/merge/peer-change results continue to come back from local recovery state
+- `--peer` is an optional override, not the normal restart path
+
+The recommended restart shape is therefore:
+
+```bash
+nokv serve \
+  --config ./raft_config.example.json \
+  --scope host \
+  --store-id 1 \
+  --workdir ./artifacts/cluster/store-1
+```
+
+`serve` will:
+
+1. load the local peer catalog from the store workdir
+2. derive the current remote peer set from local metadata
+3. use config `stores` only to map `storeID -> addr`
+
 Related CLI behavior:
 
 - Inspect control-plane state through Coordinator APIs/metrics.
@@ -250,6 +304,15 @@ These RPCs may be served by any Coordinator node:
 Follower reads are driven by a rooted watch-first tail subscription, with
 explicit refresh/reload as fallback into `coordinator/catalog.Cluster`. They are expected
 to be shortly stale rather than linearly consistent.
+
+For `GetRegionByKey`, that follower-service behavior is now explicit in the
+protocol surface:
+
+- callers can request `Freshness`
+- responses include rooted token metadata
+- responses disclose `DegradedMode` and `CatchUpState`
+- bounded-freshness reads may be rejected if rooted lag exceeds the requested
+  limit
 
 ### Client behavior
 

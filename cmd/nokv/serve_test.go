@@ -3,17 +3,20 @@ package main
 import (
 	"bytes"
 	"context"
-	metaregion "github.com/feichai0017/NoKV/meta/region"
-	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
+	"encoding/json"
 	"net"
 	"os"
+	"path/filepath"
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/config"
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
 	pdserver "github.com/feichai0017/NoKV/coordinator/server"
 	"github.com/feichai0017/NoKV/coordinator/tso"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
@@ -40,6 +43,35 @@ func TestRunServeCmdErrors(t *testing.T) {
 	require.Error(t, runServeCmd(&buf, []string{"-workdir", t.TempDir(), "-store-id", "1", "-peer", "bad"}))
 	require.Error(t, runServeCmd(&buf, []string{"-workdir", t.TempDir(), "-store-id", "1", "-peer", "x=addr"}))
 	require.ErrorContains(t, runServeCmd(&buf, []string{"-workdir", t.TempDir(), "-store-id", "1", "-peer", "2=127.0.0.1:20160"}), "--coordinator-addr is required")
+}
+
+func TestRunServeCmdResolvesStoreDefaultsFromConfig(t *testing.T) {
+	withNotifyContext(t, true, func() {
+		dir := t.TempDir()
+		coordAddr, stopCoordinator := startTestCoordinatorServer(t)
+		defer stopCoordinator()
+
+		cfgPath := writeServeConfig(t, config.File{
+			Coordinator: &config.Coordinator{
+				Addr: coordAddr,
+			},
+			Stores: []config.Store{{
+				StoreID:    1,
+				Addr:       "127.0.0.1:20170",
+				ListenAddr: "127.0.0.1:0",
+				WorkDir:    dir,
+			}},
+		})
+
+		var buf bytes.Buffer
+		err := runServeCmd(&buf, []string{
+			"-config", cfgPath,
+			"-scope", "host",
+			"-store-id", "1",
+		})
+		require.NoError(t, err)
+		require.Contains(t, buf.String(), "Serve mode: cluster (coordinator enabled, addr="+coordAddr+")")
+	})
 }
 
 func TestRunServeCmdInvalidMetricsAddr(t *testing.T) {
@@ -193,7 +225,7 @@ func TestRunServeCmdWithRegions(t *testing.T) {
 			"-workdir", dir,
 			"-store-id", "1",
 			"-addr", "127.0.0.1:0",
-			"-peer", "2=127.0.0.1:20160",
+			"-peer", "201=127.0.0.1:20160",
 			"-coordinator-addr", coordAddr,
 		})
 		require.NoError(t, err)
@@ -209,6 +241,75 @@ func TestRunServeCmdWithRegions(t *testing.T) {
 		require.Equal(t, raftmode.ModeCluster, state.Mode)
 		require.Equal(t, uint64(1), state.StoreID)
 	})
+}
+
+func TestResolveTransportPeersFromConfig(t *testing.T) {
+	cfg := &config.File{
+		Stores: []config.Store{
+			{StoreID: 1, Addr: "127.0.0.1:20170"},
+			{StoreID: 2, Addr: "127.0.0.1:20171"},
+			{StoreID: 3, Addr: "127.0.0.1:20172"},
+		},
+	}
+	snapshot := map[uint64]localmeta.RegionMeta{
+		1: {
+			ID:    1,
+			Peers: []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}, {StoreID: 3, PeerID: 301}},
+		},
+	}
+	peers, err := resolveTransportPeersFromConfig(cfg, "host", snapshot, 1, nil)
+	require.NoError(t, err)
+	require.Equal(t, map[uint64]string{
+		201: "127.0.0.1:20171",
+		301: "127.0.0.1:20172",
+	}, peers)
+}
+
+func TestResolveTransportPeersFromConfigHonorsExplicitOverride(t *testing.T) {
+	cfg := &config.File{
+		Stores: []config.Store{
+			{StoreID: 1, Addr: "127.0.0.1:20170"},
+			{StoreID: 2, Addr: "127.0.0.1:20171"},
+		},
+	}
+	snapshot := map[uint64]localmeta.RegionMeta{
+		1: {
+			ID:    1,
+			Peers: []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}},
+		},
+	}
+	peers, err := resolveTransportPeersFromConfig(cfg, "host", snapshot, 1, map[uint64]string{201: "127.0.0.1:29999"})
+	require.NoError(t, err)
+	require.Empty(t, peers)
+}
+
+func TestResolveTransportPeersFromConfigRequiresStoreAddr(t *testing.T) {
+	cfg := &config.File{
+		Stores: []config.Store{
+			{StoreID: 1, Addr: "127.0.0.1:20170"},
+			{StoreID: 2},
+		},
+	}
+	snapshot := map[uint64]localmeta.RegionMeta{
+		1: {
+			ID:    1,
+			Peers: []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}},
+		},
+	}
+	_, err := resolveTransportPeersFromConfig(cfg, "host", snapshot, 1, nil)
+	require.ErrorContains(t, err, "missing store address in config")
+}
+
+func TestRequireExplicitTransportPeers(t *testing.T) {
+	snapshot := map[uint64]localmeta.RegionMeta{
+		1: {
+			ID:    1,
+			Peers: []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}},
+		},
+	}
+	err := requireExplicitTransportPeers(snapshot, 1, nil)
+	require.ErrorContains(t, err, "missing transport address for remote peer 201")
+	require.NoError(t, requireExplicitTransportPeers(snapshot, 1, map[uint64]string{201: "127.0.0.1:20171"}))
 }
 
 func TestFormatKeyNonEmpty(t *testing.T) {
@@ -290,4 +391,14 @@ func startTestCoordinatorServer(t *testing.T) (addr string, stop func()) {
 		srv.Stop()
 		_ = lis.Close()
 	}
+}
+
+func writeServeConfig(t *testing.T, cfg config.File) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "raft_config.json")
+	content, err := json.MarshalIndent(cfg, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, content, 0o600))
+	return path
 }

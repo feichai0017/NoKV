@@ -16,7 +16,7 @@ This split is deliberate:
 - `ops` scripts must treat the migration CLI as source of truth and stay stricter.
 - `lib` is where shared rules live, so shell semantics do not drift across scripts.
 
-## Development Scripts
+## Bootstrap & Local Launch
 
 ### `scripts/dev/cluster.sh`
 - Purpose: build `nokv` and `nokv-config`, read `raft_config.json`, seed local peer catalogs, start Coordinator, then start the configured stores.
@@ -33,36 +33,42 @@ This split is deliberate:
   - `--workdir` defaults to `./artifacts/cluster`
   - store workdirs are rejected if they contain unexpected files
   - logs stream with `[coordinator]` / `[store-<id>]` prefixes and are still written to `coordinator.log` / `server.log`
+  - this is a bootstrap/dev launcher, not a restart command
+  - it may seed fresh workdirs from `config.regions`, so it should not be used against stores that already contain runtime raft/local metadata
 
-### `scripts/dev/bootstrap.sh`
+### `scripts/ops/bootstrap.sh`
 - Purpose: seed local peer catalog metadata into a set of store directories derived from a path template.
 - Intended for:
   - Docker Compose bootstrap
   - local static-topology experiments
 - Example:
   ```bash
-  ./scripts/dev/bootstrap.sh --config /etc/nokv/raft_config.json --path-template /data/store-{id}
+  ./scripts/ops/bootstrap.sh --config /etc/nokv/raft_config.json --path-template /data/store-{id}
   ```
 - Notes:
   - skips stores that already contain `CURRENT`
   - refuses to seed into dirty directories
+  - this is bootstrap-only; it does not recover runtime topology
+  - use `nokv serve` / `scripts/ops/serve-store.sh` to restart an existing store from the same workdir
 
-### `scripts/dev/serve-store.sh`
-- Purpose: convert `raft_config.json` into a concrete `nokv serve` invocation for one store.
+### `scripts/ops/serve-store.sh`
+- Purpose: thin wrapper around `nokv serve` for one store.
 - Example:
   ```bash
-  ./scripts/dev/serve-store.sh \
+  ./scripts/ops/serve-store.sh \
     --config ./raft_config.example.json \
     --store-id 1 \
     --workdir ./artifacts/cluster/store-1 \
     --scope local
   ```
 - Notes:
-  - resolves peer transport addresses from config
-  - resolves Coordinator address from config unless `--coordinator-addr` overrides it
+  - resolves store listen/workdir/Coordinator defaults through `nokv serve --config`
+  - remote peer recovery comes from `raftstore/localmeta`; config `stores` only
+    provide `storeID -> addr`
+  - no longer treats `config.regions` as restart-time topology truth
   - `--scope docker` selects container-friendly addresses
 
-## Operator Script
+## Migration Workflow
 
 ### `scripts/ops/migrate-cluster.sh`
 - Purpose: one-shot local operator wrapper for the standalone-to-cluster migration path.
@@ -134,6 +140,7 @@ go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedP
 ## Relationship with `nokv-config`
 
 - `nokv-config stores` / `regions` / `coordinator` remain the structured topology source for shell scripts.
+- `config.regions` remain bootstrap/deployment metadata, not restart-time peer truth.
 - `nokv-config catalog` writes Region metadata into the local peer catalog.
 - `cmd/nokv-redis` uses the same `raft_config.json`, so local scripts and Redis gateway stay aligned.
 - Go tools can import `github.com/feichai0017/NoKV/config` and call `config.LoadFile` / `Validate` directly.
