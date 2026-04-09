@@ -119,7 +119,7 @@ nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
 ### `nokv serve`
 
 - Starts NoKV gRPC service backed by local `raftstore`
-- Requires `--workdir`, `--store-id`, and `--pd-addr`
+- Requires `--workdir`, `--store-id`, and `--coordinator-addr`
 - Common flags:
   - `--addr` (default `127.0.0.1:20160`)
   - `--metrics-addr` (optional expvar endpoint, exposes `/debug/vars`)
@@ -135,7 +135,7 @@ nokv serve \
   --workdir ./artifacts/cluster/store-1 \
   --store-id 1 \
   --addr 127.0.0.1:20170 \
-  --pd-addr 127.0.0.1:2379 \
+  --coordinator-addr 127.0.0.1:2379 \
   --peer 201=127.0.0.1:20171 \
   --peer 301=127.0.0.1:20172
 ```
@@ -143,9 +143,9 @@ nokv serve \
 When a store hosts multiple regions, include mappings for every remote peer ID
 reachable from those regions (using `scripts/dev/serve-store.sh` avoids manual drift).
 
-### `nokv pd`
+### `nokv coordinator`
 
-- Starts the PD-lite gRPC service used by distributed mode.
+- Starts the Coordinator gRPC service used by distributed mode.
 - Common flags:
   - `--addr` (default `127.0.0.1:2379`)
   - `--workdir` (optional persistence directory for region catalog + allocator state)
@@ -156,7 +156,7 @@ reachable from those regions (using `scripts/dev/serve-store.sh` avoids manual d
 Example:
 
 ```bash
-nokv pd \
+nokv coordinator \
   --config ./raft_config.example.json \
   --scope host \
   --metrics-addr 127.0.0.1:23790

@@ -13,7 +13,7 @@ Usage: scripts/dev/cluster.sh [options]
 Options:
   --config PATH         Raft configuration file (default: ./raft_config.example.json)
   --workdir DIR         Base directory for cluster data (default: ./artifacts/cluster)
-  --pd-listen ADDR      PD gRPC listen address override (default: config.pd.addr or 127.0.0.1:2379)
+  --coordinator-listen ADDR      Coordinator gRPC listen address override (default: config.coordinator.addr or 127.0.0.1:2379)
   --raft-debug-log      Enable verbose raft debug logging (default: enabled)
   --no-raft-debug-log   Disable raft debug logging
 USAGE
@@ -23,8 +23,8 @@ ROOT_DIR=$NOKV_ROOT_DIR
 CONFIG_PATH="$ROOT_DIR/raft_config.example.json"
 WORKDIR=""
 WORKDIR_SET=0
-PD_LISTEN=""
-PD_LISTEN_SET=0
+COORDINATOR_LISTEN=""
+COORDINATOR_LISTEN_SET=0
 RAFT_DEBUG=1
 
 while [[ $# -gt 0 ]]; do
@@ -38,9 +38,9 @@ while [[ $# -gt 0 ]]; do
       WORKDIR_SET=1
       shift 2
       ;;
-    --pd-listen)
-      PD_LISTEN=$2
-      PD_LISTEN_SET=1
+    --coordinator-listen)
+      COORDINATOR_LISTEN=$2
+      COORDINATOR_LISTEN_SET=1
       shift 2
       ;;
     --raft-debug-log)
@@ -87,7 +87,7 @@ start_with_logs() {
 
 cleaned=0
 STORE_PIDS=()
-PD_PID=""
+COORDINATOR_PID=""
 
 cleanup() {
   if [[ $cleaned -eq 1 ]]; then
@@ -101,8 +101,8 @@ cleanup() {
     fi
   done
 
-  if [[ -n "${PD_PID:-}" ]] && kill -0 "$PD_PID" 2>/dev/null; then
-    kill -INT "$PD_PID" 2>/dev/null || true
+  if [[ -n "${COORDINATOR_PID:-}" ]] && kill -0 "$COORDINATOR_PID" 2>/dev/null; then
+    kill -INT "$COORDINATOR_PID" 2>/dev/null || true
   fi
 
   for pid in "${STORE_PIDS[@]:-}"; do
@@ -111,8 +111,8 @@ cleanup() {
     fi
   done
 
-  if [[ -n "${PD_PID:-}" ]]; then
-    wait "$PD_PID" 2>/dev/null || true
+  if [[ -n "${COORDINATOR_PID:-}" ]]; then
+    wait "$COORDINATOR_PID" 2>/dev/null || true
   fi
 }
 
@@ -121,20 +121,20 @@ trap 'cleanup; exit 0' INT TERM
 
 nokv_prepend_build_path
 
-if [[ $PD_LISTEN_SET -eq 0 ]]; then
-  PD_LISTEN=$(nokv_config_pd_addr "$CONFIG_PATH" host)
+if [[ $COORDINATOR_LISTEN_SET -eq 0 ]]; then
+  COORDINATOR_LISTEN=$(nokv_config_coordinator_addr "$CONFIG_PATH" host)
 fi
-if [[ -z "$PD_LISTEN" ]]; then
-  PD_LISTEN="127.0.0.1:2379"
+if [[ -z "$COORDINATOR_LISTEN" ]]; then
+  COORDINATOR_LISTEN="127.0.0.1:2379"
 fi
 
-PD_WORKDIR=$(nokv_config_pd_workdir "$CONFIG_PATH")
-if [[ -z "$PD_WORKDIR" ]]; then
-  PD_WORKDIR="$WORKDIR/pd"
+COORDINATOR_WORKDIR=$(nokv_config_coordinator_workdir "$CONFIG_PATH")
+if [[ -z "$COORDINATOR_WORKDIR" ]]; then
+  COORDINATOR_WORKDIR="$WORKDIR/coordinator"
 else
-  PD_WORKDIR=$(nokv_resolve_path "$CONFIG_DIR" "$PD_WORKDIR")
+  COORDINATOR_WORKDIR=$(nokv_resolve_path "$CONFIG_DIR" "$COORDINATOR_WORKDIR")
 fi
-mkdir -p "$PD_WORKDIR"
+mkdir -p "$COORDINATOR_WORKDIR"
 
 STORE_LINES=()
 while IFS= read -r _line; do STORE_LINES+=("$_line"); done < <(nokv_config_store_lines "$CONFIG_PATH")
@@ -196,9 +196,9 @@ for idx in "${!STORE_IDS[@]}"; do
   done
 done
 
-echo "Starting PD service on ${PD_LISTEN}"
-start_with_logs PD_PID "pd" "$WORKDIR/pd.log" \
-  nokv pd --addr "$PD_LISTEN" --id-start 1 --ts-start 100 --workdir "$PD_WORKDIR"
+echo "Starting Coordinator service on ${COORDINATOR_LISTEN}"
+start_with_logs COORDINATOR_PID "coordinator" "$WORKDIR/coordinator.log" \
+  nokv coordinator --addr "$COORDINATOR_LISTEN" --id-start 1 --ts-start 100 --workdir "$COORDINATOR_WORKDIR"
 
 serve_debug_args=()
 if [[ $RAFT_DEBUG -eq 1 ]]; then
@@ -213,7 +213,7 @@ for idx in "${!STORE_IDS[@]}"; do
     --config "$CONFIG_PATH"
     --store-id "$store_id"
     --workdir "$store_dir"
-    --pd-addr "$PD_LISTEN"
+    --coordinator-addr "$COORDINATOR_LISTEN"
     "${serve_debug_args[@]}"
   )
   start_with_logs store_pid "store-${store_id}" "$store_dir/server.log" \
@@ -221,6 +221,6 @@ for idx in "${!STORE_IDS[@]}"; do
   STORE_PIDS+=("$store_pid")
 done
 
-echo "Cluster running. PD available at ${PD_LISTEN}"
+echo "Cluster running. Coordinator available at ${COORDINATOR_LISTEN}"
 echo "Logs are streaming to this terminal and saved under ${WORKDIR}"
 wait

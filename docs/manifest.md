@@ -81,7 +81,7 @@ If rewrite fails before `CURRENT` update, restart continues using previous manif
 | `lsm/levels.go::build` | During startup, missing/corrupt SST entries are marked stale and cleaned via `EditDeleteFile`. |
 | `wal` | Replays from manifest checkpoint (`LogSegment`, `LogOffset`). |
 | `vlog` | Persists head/update/delete metadata and uses manifest state for stale/orphan cleanup on startup. |
-| `raftstore` | Does not own manifest state. Store-local region catalogs and raft WAL replay checkpoints live in `raftstore/localmeta`; runtime routing state lives in PD storage. |
+| `raftstore` | Does not own manifest state. Store-local region catalogs and raft WAL replay checkpoints live in `raftstore/localmeta`; runtime routing state lives in Coordinator storage. |
 
 ---
 

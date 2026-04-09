@@ -95,7 +95,7 @@ func TestStoreRegionApplyDoesNotBlockOnSchedulerPublish(t *testing.T) {
 	elapsed := time.Since(start)
 	require.NoError(t, err)
 	defer rs.StopPeer(peer.ID())
-	require.Less(t, elapsed, sink.publishDelay/2, "region apply path should not block on slow PD publish")
+	require.Less(t, elapsed, sink.publishDelay/2, "region apply path should not block on slow coordinator publish")
 	require.Eventually(t, func() bool {
 		snapshot := sink.RegionSnapshot()
 		return len(snapshot) == 1 && snapshot[0].Descriptor.RegionID == 88

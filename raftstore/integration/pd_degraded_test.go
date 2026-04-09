@@ -2,11 +2,11 @@ package integration
 
 import (
 	"context"
-	pdpb "github.com/feichai0017/NoKV/pb/pd"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"testing"
 	"time"
 
-	pdclient "github.com/feichai0017/NoKV/pd/client"
+	pdclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
@@ -21,7 +21,7 @@ func TestClusterSurvivesPDUnavailableAfterStartup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 
-	pd := testcluster.StartPD(t)
+	pd := testcluster.StartCoordinator(t)
 	defer pd.Close(t)
 
 	seedDir := t.TempDir()
@@ -123,7 +123,7 @@ func TestClusterSurvivesPDUnavailableAfterStartup(t *testing.T) {
 
 type unavailableResolver struct{}
 
-func (u *unavailableResolver) GetRegionByKey(ctx context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
+func (u *unavailableResolver) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
 	return nil, context.DeadlineExceeded
 }
 

@@ -6,19 +6,19 @@ import (
 	"errors"
 	"fmt"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
-	pdpb "github.com/feichai0017/NoKV/pb/pd"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"net"
 	"slices"
 	"testing"
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	pdadapter "github.com/feichai0017/NoKV/pd/adapter"
-	"github.com/feichai0017/NoKV/pd/catalog"
-	pdclient "github.com/feichai0017/NoKV/pd/client"
-	"github.com/feichai0017/NoKV/pd/idalloc"
-	pdserver "github.com/feichai0017/NoKV/pd/server"
-	"github.com/feichai0017/NoKV/pd/tso"
+	coordadapter "github.com/feichai0017/NoKV/coordinator/adapter"
+	"github.com/feichai0017/NoKV/coordinator/catalog"
+	coordclient "github.com/feichai0017/NoKV/coordinator/client"
+	"github.com/feichai0017/NoKV/coordinator/idalloc"
+	coordserver "github.com/feichai0017/NoKV/coordinator/server"
+	"github.com/feichai0017/NoKV/coordinator/tso"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	raftkv "github.com/feichai0017/NoKV/raftstore/kv"
@@ -47,7 +47,7 @@ type NodeConfig struct {
 	HeartbeatInterval time.Duration
 }
 
-type PD struct {
+type Coordinator struct {
 	addr   string
 	lis    net.Listener
 	server *grpc.Server
@@ -121,60 +121,60 @@ func StartNodeWithConfig(tb testing.TB, storeID uint64, dir string, cfg NodeConf
 	return node
 }
 
-func StartPD(tb testing.TB) *PD {
+func StartCoordinator(tb testing.TB) *Coordinator {
 	tb.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		tb.Fatalf("listen pd: %v", err)
+		tb.Fatalf("listen coordinator: %v", err)
 	}
-	svc := pdserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+	svc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	grpcServer := grpc.NewServer()
-	pdpb.RegisterPDServer(grpcServer, svc)
+	coordpb.RegisterCoordinatorServer(grpcServer, svc)
 	go func() {
 		_ = grpcServer.Serve(lis)
 	}()
-	return &PD{
+	return &Coordinator{
 		addr:   lis.Addr().String(),
 		lis:    lis,
 		server: grpcServer,
 	}
 }
 
-func (pd *PD) Addr() string {
-	if pd == nil {
+func (c *Coordinator) Addr() string {
+	if c == nil {
 		return ""
 	}
-	return pd.addr
+	return c.addr
 }
 
-func (pd *PD) Close(tb testing.TB) {
+func (c *Coordinator) Close(tb testing.TB) {
 	tb.Helper()
-	if pd == nil {
+	if c == nil {
 		return
 	}
-	if pd.server != nil {
-		pd.server.Stop()
-		pd.server = nil
+	if c.server != nil {
+		c.server.Stop()
+		c.server = nil
 	}
-	if pd.lis != nil {
-		if err := pd.lis.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			tb.Fatalf("close pd listener: %v", err)
+	if c.lis != nil {
+		if err := c.lis.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			tb.Fatalf("close coordinator listener: %v", err)
 		}
-		pd.lis = nil
+		c.lis = nil
 	}
 }
 
-func NewScheduler(tb testing.TB, pdAddr string, timeout time.Duration) storepkg.SchedulerClient {
+func NewScheduler(tb testing.TB, coordAddr string, timeout time.Duration) storepkg.SchedulerClient {
 	tb.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	cli, err := pdclient.NewGRPCClient(ctx, pdAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	cli, err := coordclient.NewGRPCClient(ctx, coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		tb.Fatalf("dial pd client %s: %v", pdAddr, err)
+		tb.Fatalf("dial coordinator client %s: %v", coordAddr, err)
 	}
-	return pdadapter.NewSchedulerClient(pdadapter.SchedulerClientConfig{
-		PD:      cli,
-		Timeout: timeout,
+	return coordadapter.NewSchedulerClient(coordadapter.SchedulerClientConfig{
+		Coordinator: cli,
+		Timeout:     timeout,
 	})
 }
 

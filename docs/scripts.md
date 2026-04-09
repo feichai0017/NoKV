@@ -19,7 +19,7 @@ This split is deliberate:
 ## Development Scripts
 
 ### `scripts/dev/cluster.sh`
-- Purpose: build `nokv` and `nokv-config`, read `raft_config.json`, seed local peer catalogs, start PD-lite, then start the configured stores.
+- Purpose: build `nokv` and `nokv-config`, read `raft_config.json`, seed local peer catalogs, start Coordinator, then start the configured stores.
 - Uses shared rules from:
   - `scripts/lib/common.sh`
   - `scripts/lib/config.sh`
@@ -32,7 +32,7 @@ This split is deliberate:
   - `--config` defaults to `./raft_config.example.json`
   - `--workdir` defaults to `./artifacts/cluster`
   - store workdirs are rejected if they contain unexpected files
-  - logs stream with `[pd]` / `[store-<id>]` prefixes and are still written to `pd.log` / `server.log`
+  - logs stream with `[coordinator]` / `[store-<id>]` prefixes and are still written to `coordinator.log` / `server.log`
 
 ### `scripts/dev/bootstrap.sh`
 - Purpose: seed local peer catalog metadata into a set of store directories derived from a path template.
@@ -59,7 +59,7 @@ This split is deliberate:
   ```
 - Notes:
   - resolves peer transport addresses from config
-  - resolves PD address from config unless `--pd-addr` overrides it
+  - resolves Coordinator address from config unless `--coordinator-addr` overrides it
   - `--scope docker` selects container-friendly addresses
 
 ## Operator Script
@@ -101,8 +101,8 @@ This split is deliberate:
 - shared `nokv-config` lookups for:
   - store lines
   - region lines
-  - PD address
-  - PD workdir
+  - Coordinator address
+  - Coordinator workdir
 
 ### `scripts/lib/workdir.sh`
 - shared workdir hygiene rules:
@@ -133,7 +133,7 @@ go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedP
 
 ## Relationship with `nokv-config`
 
-- `nokv-config stores` / `regions` / `pd` remain the structured topology source for shell scripts.
+- `nokv-config stores` / `regions` / `coordinator` remain the structured topology source for shell scripts.
 - `nokv-config catalog` writes Region metadata into the local peer catalog.
 - `cmd/nokv-redis` uses the same `raft_config.json`, so local scripts and Redis gateway stay aligned.
 - Go tools can import `github.com/feichai0017/NoKV/config` and call `config.LoadFile` / `Validate` directly.

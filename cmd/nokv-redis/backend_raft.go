@@ -6,15 +6,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	coordclient "github.com/feichai0017/NoKV/coordinator/client"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"math"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/feichai0017/NoKV/config"
-	pdclient "github.com/feichai0017/NoKV/pd/client"
 	"github.com/feichai0017/NoKV/raftstore/client"
 )
 
@@ -28,8 +28,8 @@ type timestampAllocator interface {
 	Reserve(n uint64) (uint64, error)
 }
 
-type pdTSOClient interface {
-	Tso(ctx context.Context, req *pdpb.TsoRequest) (*pdpb.TsoResponse, error)
+type coordinatorTSOClient interface {
+	Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.TsoResponse, error)
 }
 
 type raftClient interface {
@@ -40,24 +40,24 @@ type raftClient interface {
 	Close() error
 }
 
-type pdTSOAllocator struct {
+type coordinatorTSOAllocator struct {
 	ctx     context.Context
-	client  pdTSOClient
+	client  coordinatorTSOClient
 	timeout time.Duration
 }
 
-func newPDTSOAllocator(ctx context.Context, client pdTSOClient, timeout time.Duration) *pdTSOAllocator {
+func newCoordinatorTSOAllocator(ctx context.Context, client coordinatorTSOClient, timeout time.Duration) *coordinatorTSOAllocator {
 	if timeout <= 0 {
 		timeout = 3 * time.Second
 	}
-	return &pdTSOAllocator{
+	return &coordinatorTSOAllocator{
 		ctx:     ctx,
 		client:  client,
 		timeout: timeout,
 	}
 }
 
-func (p *pdTSOAllocator) Reserve(n uint64) (uint64, error) {
+func (p *coordinatorTSOAllocator) Reserve(n uint64) (uint64, error) {
 	if n == 0 {
 		return 0, fmt.Errorf("tso reserve: n must be >= 1")
 	}
@@ -66,7 +66,7 @@ func (p *pdTSOAllocator) Reserve(n uint64) (uint64, error) {
 	}
 	ctx, cancel := contextWithTimeout(p.ctx, p.timeout)
 	defer cancel()
-	resp, err := p.client.Tso(ctx, &pdpb.TsoRequest{Count: n})
+	resp, err := p.client.Tso(ctx, &coordpb.TsoRequest{Count: n})
 	if err != nil {
 		return 0, fmt.Errorf("tso reserve: rpc failed: %w", err)
 	}
@@ -79,7 +79,7 @@ func (p *pdTSOAllocator) Reserve(n uint64) (uint64, error) {
 	return resp.GetTimestamp(), nil
 }
 
-func newRaftBackend(ctx context.Context, cfgPath, pdAddr, addrScope string) (*raftBackend, error) {
+func newRaftBackend(ctx context.Context, cfgPath, coordAddr, addrScope string) (*raftBackend, error) {
 	cfgFile, err := config.LoadFile(cfgPath)
 	if err != nil {
 		return nil, fmt.Errorf("raft backend: read config: %w", err)
@@ -103,32 +103,32 @@ func newRaftBackend(ctx context.Context, cfgPath, pdAddr, addrScope string) (*ra
 			Addr:    addr,
 		})
 	}
-	// Route source is converged to PD resolver. raft_config regions are treated
+	// Route source is converged to the Coordinator resolver. raft_config regions are treated
 	// as bootstrap/deployment metadata and are not used as runtime routing truth.
-	pdAddr = strings.TrimSpace(pdAddr)
-	if pdAddr == "" {
-		pdAddr = cfgFile.ResolvePDAddr(addrScope)
+	coordAddr = strings.TrimSpace(coordAddr)
+	if coordAddr == "" {
+		coordAddr = cfgFile.ResolveCoordinatorAddr(addrScope)
 	}
-	if pdAddr == "" {
-		return nil, fmt.Errorf("raft backend: pd-addr is required in raft mode (flag or config.pd)")
+	if coordAddr == "" {
+		return nil, fmt.Errorf("raft backend: coordinator-addr is required in raft mode (flag or config.coordinator)")
 	}
 	dialCtx, cancel := contextWithTimeout(ctx, 3*time.Second)
-	pdCli, err := pdclient.NewGRPCClient(dialCtx, pdAddr)
+	coordCli, err := coordclient.NewGRPCClient(dialCtx, coordAddr)
 	cancel()
 	if err != nil {
-		return nil, fmt.Errorf("raft backend: init pd client: %w", err)
+		return nil, fmt.Errorf("raft backend: init coordinator client: %w", err)
 	}
-	cfg.RegionResolver = pdCli
+	cfg.RegionResolver = coordCli
 	cl, err := client.New(cfg)
 	if err != nil {
-		_ = pdCli.Close()
+		_ = coordCli.Close()
 		return nil, fmt.Errorf("raft backend: init client: %w", err)
 	}
 
 	return &raftBackend{
 		ctx:    ctx,
 		client: cl,
-		ts:     newPDTSOAllocator(ctx, pdCli, 3*time.Second),
+		ts:     newCoordinatorTSOAllocator(ctx, coordCli, 3*time.Second),
 	}, nil
 }
 

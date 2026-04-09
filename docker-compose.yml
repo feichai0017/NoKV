@@ -21,13 +21,13 @@ services:
       - node3-data:/volumes/store-3
     restart: "no"
 
-  pd:
+  coordinator:
     image: nokv:latest
-    container_name: nokv-pd
+    container_name: nokv-coordinator
     entrypoint: ["/usr/local/bin/nokv"]
     command:
       [
-        "pd",
+        "coordinator",
         "--addr",
         "0.0.0.0:2379",
         "--id-start",
@@ -35,7 +35,7 @@ services:
         "--ts-start",
         "100",
         "--workdir",
-        "/var/lib/nokv-pd"
+        "/var/lib/nokv-coordinator"
       ]
     expose:
       - "2379"
@@ -43,7 +43,7 @@ services:
       - "2379:2379"
     volumes:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
-      - pd-data:/var/lib/nokv-pd
+      - coordinator-data:/var/lib/nokv-coordinator
     restart: "no"
     stop_signal: SIGINT
     stop_grace_period: 30s
@@ -71,7 +71,7 @@ services:
     depends_on:
       bootstrap:
         condition: service_completed_successfully
-      pd:
+      coordinator:
         condition: service_started
     restart: "no"
     stop_signal: SIGINT
@@ -100,7 +100,7 @@ services:
     depends_on:
       bootstrap:
         condition: service_completed_successfully
-      pd:
+      coordinator:
         condition: service_started
     restart: "no"
     stop_signal: SIGINT
@@ -129,7 +129,7 @@ services:
     depends_on:
       bootstrap:
         condition: service_completed_successfully
-      pd:
+      coordinator:
         condition: service_started
     restart: "no"
     stop_signal: SIGINT
@@ -159,7 +159,7 @@ services:
         condition: service_started
       node3:
         condition: service_started
-      pd:
+      coordinator:
         condition: service_started
     restart: "no"
     stop_signal: SIGINT
@@ -169,4 +169,4 @@ volumes:
   node1-data:
   node2-data:
   node3-data:
-  pd-data:
+  coordinator-data:

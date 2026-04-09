@@ -8,13 +8,13 @@ This guide gets you from zero to a running NoKV cluster (or an embedded DB) in a
 - (Optional) Docker + Docker Compose for containerized runs
 
 ## Option A: Local Cluster (recommended for dev)
-This launches a 3-node Raft cluster plus a PD-lite service.
+This launches a 3-node Raft cluster plus a Coordinator service.
 
 ```bash
 ./scripts/dev/cluster.sh --config ./raft_config.example.json
 ```
 
-The launcher stays attached, streams PD/store logs to the terminal, and also writes them under `./artifacts/cluster/`.
+The launcher stays attached, streams Coordinator/store logs to the terminal, and also writes them under `./artifacts/cluster/`.
 
 Start the Redis-compatible gateway in another shell:
 

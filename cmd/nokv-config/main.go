@@ -32,8 +32,8 @@ func main() {
 		err = runStores(args)
 	case "regions":
 		err = runRegions(args)
-	case "pd":
-		err = runPD(args)
+	case "coordinator":
+		err = runCoordinator(args)
 	case "catalog":
 		err = runCatalog(args)
 	default:
@@ -126,8 +126,8 @@ func runRegions(args []string) error {
 	}
 }
 
-func runPD(args []string) error {
-	fs := flag.NewFlagSet("pd", flag.ExitOnError)
+func runCoordinator(args []string) error {
+	fs := flag.NewFlagSet("coordinator", flag.ExitOnError)
 	configPath := fs.String("config", defaultConfigPath(), "path to raft configuration file")
 	format := fs.String("format", "simple", "output format: simple|json")
 	scope := fs.String("scope", "host", "address scope: host|docker")
@@ -145,25 +145,25 @@ func runPD(args []string) error {
 	if err != nil {
 		return err
 	}
-	if cfg.PD == nil {
-		return fmt.Errorf("pd block missing from configuration")
+	if cfg.Coordinator == nil {
+		return fmt.Errorf("coordinator block missing from configuration")
 	}
 
 	switch strings.ToLower(*format) {
 	case "json":
-		return json.NewEncoder(os.Stdout).Encode(cfg.PD)
+		return json.NewEncoder(os.Stdout).Encode(cfg.Coordinator)
 	case "simple":
 		switch strings.ToLower(strings.TrimSpace(*field)) {
 		case "addr":
-			addr := cfg.ResolvePDAddr(scopeNorm)
+			addr := cfg.ResolveCoordinatorAddr(scopeNorm)
 			if addr == "" {
-				return fmt.Errorf("pd address missing for scope %q", scopeNorm)
+				return fmt.Errorf("coordinator address missing for scope %q", scopeNorm)
 			}
 			fmt.Println(addr)
 		case "workdir":
-			workdir := cfg.ResolvePDWorkDir(scopeNorm)
+			workdir := cfg.ResolveCoordinatorWorkDir(scopeNorm)
 			if workdir == "" {
-				return fmt.Errorf("pd workdir missing for scope %q", scopeNorm)
+				return fmt.Errorf("coordinator workdir missing for scope %q", scopeNorm)
 			}
 			fmt.Println(workdir)
 		default:
@@ -220,13 +220,13 @@ func printUsage() {
 Commands:
   stores   Print store endpoints from the raft configuration
   regions  Print region metadata from the raft configuration
-  pd       Print PD-lite endpoint from the raft configuration
+  coordinator Print coordinator endpoint from the raft configuration
   catalog  Write region metadata into the raftstore local peer catalog
 
 Flags:
   --config <path>   Path to raft_config JSON (defaults to ./raft_config.example.json)
   --format <fmt>    Output format (simple|json) depending on the command
-  --field <name>    For "pd --format simple": addr|workdir`)
+  --field <name>    For "coordinator --format simple": addr|workdir`)
 }
 
 func runCatalog(args []string) error {

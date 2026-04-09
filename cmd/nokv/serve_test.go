@@ -4,16 +4,16 @@ import (
 	"bytes"
 	"context"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	pdpb "github.com/feichai0017/NoKV/pb/pd"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"net"
 	"os"
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/pd/catalog"
-	"github.com/feichai0017/NoKV/pd/idalloc"
-	pdserver "github.com/feichai0017/NoKV/pd/server"
-	"github.com/feichai0017/NoKV/pd/tso"
+	"github.com/feichai0017/NoKV/coordinator/catalog"
+	"github.com/feichai0017/NoKV/coordinator/idalloc"
+	pdserver "github.com/feichai0017/NoKV/coordinator/server"
+	"github.com/feichai0017/NoKV/coordinator/tso"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
@@ -39,20 +39,20 @@ func TestRunServeCmdErrors(t *testing.T) {
 	require.Error(t, runServeCmd(&buf, []string{"-workdir", t.TempDir(), "-store-id", "1", "-election-tick", "0"}))
 	require.Error(t, runServeCmd(&buf, []string{"-workdir", t.TempDir(), "-store-id", "1", "-peer", "bad"}))
 	require.Error(t, runServeCmd(&buf, []string{"-workdir", t.TempDir(), "-store-id", "1", "-peer", "x=addr"}))
-	require.ErrorContains(t, runServeCmd(&buf, []string{"-workdir", t.TempDir(), "-store-id", "1", "-peer", "2=127.0.0.1:20160"}), "--pd-addr is required")
+	require.ErrorContains(t, runServeCmd(&buf, []string{"-workdir", t.TempDir(), "-store-id", "1", "-peer", "2=127.0.0.1:20160"}), "--coordinator-addr is required")
 }
 
 func TestRunServeCmdInvalidMetricsAddr(t *testing.T) {
 	withNotifyContext(t, true, func() {
 		dir := t.TempDir()
-		pdAddr, stopPD := startTestPDServer(t)
-		defer stopPD()
+		coordAddr, stopCoordinator := startTestCoordinatorServer(t)
+		defer stopCoordinator()
 		var buf bytes.Buffer
 		err := runServeCmd(&buf, []string{
 			"-workdir", dir,
 			"-store-id", "1",
 			"-addr", "127.0.0.1:0",
-			"-pd-addr", pdAddr,
+			"-coordinator-addr", coordAddr,
 			"-metrics-addr", "bad",
 		})
 		require.ErrorContains(t, err, "start serve metrics endpoint")
@@ -144,20 +144,20 @@ func TestStartStorePeersStartsPeer(t *testing.T) {
 func TestRunServeCmdNoRegions(t *testing.T) {
 	withNotifyContext(t, true, func() {
 		dir := t.TempDir()
-		pdAddr, stopPD := startTestPDServer(t)
-		defer stopPD()
+		coordAddr, stopCoordinator := startTestCoordinatorServer(t)
+		defer stopCoordinator()
 		var buf bytes.Buffer
 		err := runServeCmd(&buf, []string{
 			"-workdir", dir,
 			"-store-id", "1",
 			"-addr", "127.0.0.1:0",
-			"-pd-addr", pdAddr,
+			"-coordinator-addr", coordAddr,
 			"-metrics-addr", "127.0.0.1:0",
 		})
 		require.NoError(t, err)
 		require.Contains(t, buf.String(), "Local peer catalog contains no regions")
 		require.Contains(t, buf.String(), "Serve metrics endpoint listening on http://")
-		require.Contains(t, buf.String(), "Serve mode: cluster (PD enabled, addr="+pdAddr+")")
+		require.Contains(t, buf.String(), "Serve mode: cluster (coordinator enabled, addr="+coordAddr+")")
 		state, err := raftmode.Read(dir)
 		require.NoError(t, err)
 		require.Equal(t, raftmode.ModeCluster, state.Mode)
@@ -168,8 +168,8 @@ func TestRunServeCmdNoRegions(t *testing.T) {
 func TestRunServeCmdWithRegions(t *testing.T) {
 	withNotifyContext(t, true, func() {
 		dir := t.TempDir()
-		pdAddr, stopPD := startTestPDServer(t)
-		defer stopPD()
+		coordAddr, stopCoordinator := startTestCoordinatorServer(t)
+		defer stopCoordinator()
 		localMeta := openLocalMetaStore(t, dir)
 		require.NoError(t, localMeta.SaveRegion(localmeta.RegionMeta{
 			ID:       1,
@@ -194,7 +194,7 @@ func TestRunServeCmdWithRegions(t *testing.T) {
 			"-store-id", "1",
 			"-addr", "127.0.0.1:0",
 			"-peer", "2=127.0.0.1:20160",
-			"-pd-addr", pdAddr,
+			"-coordinator-addr", coordAddr,
 		})
 		require.NoError(t, err)
 		out := buf.String()
@@ -202,8 +202,8 @@ func TestRunServeCmdWithRegions(t *testing.T) {
 		require.Contains(t, out, "Store 1 not present in 1 region(s)")
 		require.Contains(t, out, "Sample regions:")
 		require.Contains(t, out, "Configured peers:")
-		require.Contains(t, out, "Serve mode: cluster (PD enabled, addr="+pdAddr+")")
-		require.Contains(t, out, "PD heartbeat sink enabled: "+pdAddr)
+		require.Contains(t, out, "Serve mode: cluster (coordinator enabled, addr="+coordAddr+")")
+		require.Contains(t, out, "coordinator heartbeat sink enabled: "+coordAddr)
 		state, err := raftmode.Read(dir)
 		require.NoError(t, err)
 		require.Equal(t, raftmode.ModeCluster, state.Mode)
@@ -274,14 +274,14 @@ func newTestServerWithMeta(t *testing.T, db *NoKV.DB, storeID uint64, localMeta 
 	return server
 }
 
-func startTestPDServer(t *testing.T) (addr string, stop func()) {
+func startTestCoordinatorServer(t *testing.T) (addr string, stop func()) {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
 	svc := pdserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	srv := grpc.NewServer()
-	pdpb.RegisterPDServer(srv, svc)
+	coordpb.RegisterCoordinatorServer(srv, svc)
 
 	go func() {
 		_ = srv.Serve(lis)

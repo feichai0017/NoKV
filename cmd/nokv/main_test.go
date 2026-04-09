@@ -479,11 +479,11 @@ func TestMainServeCommand(t *testing.T) {
 	t.Cleanup(func() { notifyContext = origNotify })
 
 	dir := t.TempDir()
-	pdAddr, stopPD := startTestPDServer(t)
-	defer stopPD()
+	coordAddr, stopCoordinator := startTestCoordinatorServer(t)
+	defer stopCoordinator()
 	code := captureExitCode(t, func() {
 		oldArgs := os.Args
-		os.Args = []string{"nokv", "serve", "-workdir", dir, "-store-id", "1", "-addr", "127.0.0.1:0", "-pd-addr", pdAddr}
+		os.Args = []string{"nokv", "serve", "-workdir", dir, "-store-id", "1", "-addr", "127.0.0.1:0", "-coordinator-addr", coordAddr}
 		defer func() { os.Args = oldArgs }()
 		main()
 	})

@@ -14,16 +14,16 @@ const (
 
 // File models the raft topology configuration shared by CLIs and gateways.
 type File struct {
-	MaxRetries                 int      `json:"max_retries"`
-	PD                         *PD      `json:"pd,omitempty"`
-	StoreWorkDirTemplate       string   `json:"store_work_dir_template,omitempty"`
-	StoreDockerWorkDirTemplate string   `json:"store_docker_work_dir_template,omitempty"`
-	Stores                     []Store  `json:"stores"`
-	Regions                    []Region `json:"regions"`
+	MaxRetries                 int          `json:"max_retries"`
+	Coordinator                *Coordinator `json:"coordinator,omitempty"`
+	StoreWorkDirTemplate       string       `json:"store_work_dir_template,omitempty"`
+	StoreDockerWorkDirTemplate string       `json:"store_docker_work_dir_template,omitempty"`
+	Stores                     []Store      `json:"stores"`
+	Regions                    []Region     `json:"regions"`
 }
 
-// PD describes PD-lite endpoints for host and docker scopes.
-type PD struct {
+// Coordinator describes coordinator endpoints for host and docker scopes.
+type Coordinator struct {
 	Addr          string `json:"addr"`
 	DockerAddr    string `json:"docker_addr,omitempty"`
 	WorkDir       string `json:"work_dir,omitempty"`
@@ -118,26 +118,26 @@ func (f *File) Validate() error {
 	return nil
 }
 
-// ResolvePDAddr resolves the PD endpoint for the provided scope.
+// ResolveCoordinatorAddr resolves the coordinator endpoint for the provided scope.
 //
 // Supported scopes are "host" (default) and "docker". Unknown scopes fallback
 // to host semantics.
-func (f *File) ResolvePDAddr(scope string) string {
-	if f == nil || f.PD == nil {
+func (f *File) ResolveCoordinatorAddr(scope string) string {
+	if f == nil || f.Coordinator == nil {
 		return ""
 	}
-	return resolveScopedValue(f.PD.Addr, f.PD.DockerAddr, scope)
+	return resolveScopedValue(f.Coordinator.Addr, f.Coordinator.DockerAddr, scope)
 }
 
-// ResolvePDWorkDir resolves the PD work directory for the provided scope.
+// ResolveCoordinatorWorkDir resolves the coordinator work directory for the provided scope.
 //
 // Supported scopes are "host" (default) and "docker". Unknown scopes fallback
 // to host semantics.
-func (f *File) ResolvePDWorkDir(scope string) string {
-	if f == nil || f.PD == nil {
+func (f *File) ResolveCoordinatorWorkDir(scope string) string {
+	if f == nil || f.Coordinator == nil {
 		return ""
 	}
-	return resolveScopedValue(f.PD.WorkDir, f.PD.DockerWorkDir, scope)
+	return resolveScopedValue(f.Coordinator.WorkDir, f.Coordinator.DockerWorkDir, scope)
 }
 
 // ResolveStoreWorkDir resolves the work directory for the given store and scope.

@@ -5,7 +5,7 @@
 | Mode | Description | Key flags |
 | --- | --- | --- |
 | Embedded (`embedded`) | Opens a local `*NoKV.DB` work directory. Commands (`SET`, `SET NX/XX`, `EX/PX/EXAT/PXAT`, `MSET`, `INCR/DECR`, `DEL`, `MGET`, `EXISTS`, …) run through regular DB APIs (`Get/Set/SetWithTTL/Del`) with backend-side synchronization for read-modify-write operations. | `--workdir <dir>` |
-| Raft (`raft`) | Routes requests through `raftstore/client` and a NoKV cluster. Writes execute via TwoPhaseCommit; TTL is persisted directly in entry `expires_at` metadata (same write path as value updates). Routing and TSO allocation are provided by PD-lite over gRPC (PD is runtime route source; config regions are bootstrap metadata). | `--raft-config <file>`<br>`--pd-addr host:port` (optional override; defaults to `config.pd`) |
+| Raft (`raft`) | Routes requests through `raftstore/client` and a NoKV cluster. Writes execute via TwoPhaseCommit; TTL is persisted directly in entry `expires_at` metadata (same write path as value updates). Routing and TSO allocation are provided by Coordinator over gRPC (Coordinator is runtime route source; config regions are bootstrap metadata). | `--raft-config <file>`<br>`--coordinator-addr host:port` (optional override; defaults to `config.coordinator`) |
 
 When both CLI and config provide the same setting, CLI wins.
 
@@ -24,7 +24,7 @@ Validate with `redis-cli -p 6380 ping`. Metrics are exposed at `http://127.0.0.1
 
 ### Raft backend
 
-1. Start NoKV and PD-lite using the helper script or Docker Compose. Both consume `raft_config.example.json`, initialise manifests for each store, and launch `nokv pd` automatically:
+1. Start NoKV and Coordinator using the helper script or Docker Compose. Both consume `raft_config.example.json`, initialise manifests for each store, and launch `nokv coordinator` automatically:
 
    ```bash
    ./scripts/dev/cluster.sh
@@ -60,9 +60,9 @@ In both modes write commands are atomic. The Raft backend batches multi-key upda
 - `stores` – store ID, gRPC address, and optional container listen/advertise addresses
 - `regions` – region ID, start/end keys (use `hex:<bytes>` for binary data), epoch, peer list, leader store ID
 - `max_retries` – maximum retries for region errors in the distributed client
-- `pd` – PD-lite endpoint(s) and optional persistence dirs:
+- `coordinator` – Coordinator endpoint(s) and optional persistence dirs:
   - `addr` / `docker_addr` for endpoint resolution by scope
-  - `work_dir` / `docker_work_dir` for PD state persistence defaults
+  - `work_dir` / `docker_work_dir` for Coordinator state persistence defaults
 
 Use `nokv-config` to inspect or validate the configuration:
 

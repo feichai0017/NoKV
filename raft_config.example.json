@@ -1,10 +1,10 @@
 {
   "max_retries": 5,
-  "pd": {
+  "coordinator": {
     "addr": "127.0.0.1:2379",
-    "docker_addr": "nokv-pd:2379",
-    "work_dir": "./artifacts/cluster/pd",
-    "docker_work_dir": "/var/lib/nokv-pd"
+    "docker_addr": "nokv-coordinator:2379",
+    "work_dir": "./artifacts/cluster/coordinator",
+    "docker_work_dir": "/var/lib/nokv-coordinator"
   },
   "store_work_dir_template": "./artifacts/cluster/store-{id}",
   "store_docker_work_dir_template": "/var/lib/nokv/store-{id}",

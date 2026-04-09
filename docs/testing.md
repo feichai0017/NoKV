@@ -27,14 +27,14 @@ make proto-check
 CHAOS_TRACE_METRICS=1 \
 go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport
 
-# Sample PD-lite service for shared TSO / routing in distributed tests
-go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100 --workdir ./artifacts/pd
+# Sample Coordinator service for shared TSO / routing in distributed tests
+go run ./cmd/nokv coordinator --addr 127.0.0.1:2379 --id-start 1 --ts-start 100 --workdir ./artifacts/coordinator
 
-# Local three-node cluster (includes catalog bootstrap + PD-lite)
+# Local three-node cluster (includes catalog bootstrap + Coordinator)
 ./scripts/dev/cluster.sh --config ./raft_config.example.json
 # Tear down with Ctrl+C
 
-# Docker-compose sandbox (3 nodes + PD-lite)
+# Docker-compose sandbox (3 nodes + Coordinator)
 docker compose up --build
 docker compose down -v
 
@@ -69,9 +69,9 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 | Percolator / Distributed Txn | `percolator/*_test.go`, `raftstore/client/client_test.go`, `stats_test.go` | Prewrite/Commit/ResolveLock flows, 2PC retries, timestamp-driven MVCC behaviour, metrics accounting. | Mixed multi-region fuzzing with lock TTL and leader churn. |
 | DB Integration | `db_test.go`, `db_write_bench_test.go` | End-to-end writes, recovery, and throttle behaviour. | Combine ValueLog GC + compaction stress, multi-DB interference. |
 | CLI & Stats | `cmd/nokv/main_test.go`, `stats_test.go` | Golden JSON output, stats snapshot correctness, hot key ranking. | CLI error handling, expvar HTTP integration tests. |
-| Redis Gateway | `cmd/nokv-redis/backend_embedded_test.go`, `cmd/nokv-redis/server_test.go`, `cmd/nokv-redis/backend_raft_test.go` | Embedded backend semantics (NX/XX, TTL, counters), RESP parser, raft backend config wiring, and PD-backed routing/TSO discovery. | End-to-end multi-region CRUD with raft backend, TTL lock cleanup under failures. |
+| Redis Gateway | `cmd/nokv-redis/backend_embedded_test.go`, `cmd/nokv-redis/server_test.go`, `cmd/nokv-redis/backend_raft_test.go` | Embedded backend semantics (NX/XX, TTL, counters), RESP parser, raft backend config wiring, and Coordinator-backed routing/TSO discovery. | End-to-end multi-region CRUD with raft backend, TTL lock cleanup under failures. |
 | Scripts & Tooling | `cmd/nokv-config/main_test.go`, `cmd/nokv/serve_test.go` | `nokv-config` JSON/simple formats, catalog bootstrap CLI, serve bootstrap behavior. | Add direct shell-script golden tests (currently not present) and failure-path diagnostics for `cluster.sh`. |
-| Distributed Migration & Membership | `raftstore/integration/*_test.go`, `raftstore/migrate/*_test.go`, `raftstore/admin/service_test.go` | Standalone -> seeded -> cluster flow, snapshot install, add/remove peer, leader transfer, restart/dehost recovery, PD outage after startup, quorum-loss context propagation, multi-region 2PC deadline propagation, repeated link flap during membership changes, partitioned follower catch-up, and snapshot-install interruption before publish. | Keep expanding publish-boundary coverage and larger fault matrices around runtime/transport interleavings. |
+| Distributed Migration & Membership | `raftstore/integration/*_test.go`, `raftstore/migrate/*_test.go`, `raftstore/admin/service_test.go` | Standalone -> seeded -> cluster flow, snapshot install, add/remove peer, leader transfer, restart/dehost recovery, Coordinator outage after startup, quorum-loss context propagation, multi-region 2PC deadline propagation, repeated link flap during membership changes, partitioned follower catch-up, and snapshot-install interruption before publish. | Keep expanding publish-boundary coverage and larger fault matrices around runtime/transport interleavings. |
 | Benchmark | `benchmark/ycsb_test.go`, `benchmark/ycsb_runner.go` | YCSB throughput/latency comparisons across engines (A-F) with detailed percentile + operation mix reporting. | Automate multi-node deployments and add longer-running, multi-GB stability baselines. |
 
 ---
@@ -87,7 +87,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 | Iterator consistency | `lsm/iterator_test.go` | Snapshot visibility, merging iterators across levels and memtables. |
 | Throttling / backpressure | `lsm/compaction_test.go`, `db_test.go::TestWriteThrottle` | L0 backlog triggers, flush queue growth, metrics observation. |
 | Distributed NoKV client | `raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet`, `raftstore/transport/grpc_transport_test.go::TestGRPCTransportManualTicksDriveElection` | Region-aware routing, NotLeader retries, manual tick-driven elections, cross-region 2PC sequencing. |
-| Migration & membership orchestration | `raftstore/integration/migration_flow_test.go`, `raftstore/integration/restart_recovery_test.go`, `raftstore/integration/pd_degraded_test.go`, `raftstore/integration/snapshot_interruption_test.go`, `raftstore/integration/context_propagation_test.go`, `raftstore/integration/transport_chaos_test.go` | Seed bootstrap, multi-peer rollout, leader transfer, peer removal, restarted follower recovery, removed-peer dehost after restart, PD outage after startup, quorum-loss read/write timeouts, split-region 2PC deadline propagation, repeated link flap during membership changes, partitioned follower catch-up, transfer-leader retry after partition recovery, and snapshot-install interruption before publish. |
+| Migration & membership orchestration | `raftstore/integration/migration_flow_test.go`, `raftstore/integration/restart_recovery_test.go`, `raftstore/integration/pd_degraded_test.go`, `raftstore/integration/snapshot_interruption_test.go`, `raftstore/integration/context_propagation_test.go`, `raftstore/integration/transport_chaos_test.go` | Seed bootstrap, multi-peer rollout, leader transfer, peer removal, restarted follower recovery, removed-peer dehost after restart, Coordinator outage after startup, quorum-loss read/write timeouts, split-region 2PC deadline propagation, repeated link flap during membership changes, partitioned follower catch-up, transfer-leader retry after partition recovery, and snapshot-install interruption before publish. |
 | Performance regression | `benchmark` package | Compare NoKV vs Badger/Pebble by default (RocksDB optional), produce human-readable reports under `benchmark/benchmark_results`. |
 
 ---
@@ -113,14 +113,14 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 - **Protocol unit tests**: package-local tests under `raftstore/peer`, `raftstore/store`, `raftstore/admin`, `raftstore/snapshot`, and `raftstore/migrate` validate one protocol surface at a time.
 - **Node-local integration tests**: store/admin tests verify snapshot install, membership application, and region runtime publication without booting a full cluster.
 - **Multi-node deterministic data-plane integration tests**: `raftstore/integration` uses `raftstore/testcluster` to boot real stores, wire transports, and drive migration/member flows against live runtimes.
-- **Multi-node deterministic control-plane integration tests**: `pd/integration/*_test.go` uses `pd/testcluster` to boot `3 pd + replicated meta`, exercise rooted watch/reload propagation, follower write rejection, allocator-fence/remove-region propagation, and control-plane read staleness without mixing those cases into store/data-plane tests.
+- **Multi-node deterministic control-plane integration tests**: `coordinator/integration/*_test.go` uses `coordinator/testcluster` to boot `3 pd + replicated meta`, exercise rooted watch/reload propagation, follower write rejection, allocator-fence/remove-region propagation, and control-plane read staleness without mixing those cases into store/data-plane tests.
 - **Restart and recovery suites**: `raftstore/integration/restart_recovery_test.go` covers restarted followers, removed-peer dehost persistence, and leader restart with subsequent membership changes.
-- **Control-plane degradation and publish-boundary tests**: `raftstore/integration/pd_degraded_test.go` and `raftstore/integration/snapshot_interruption_test.go` cover live PD outage after startup and failpoint-driven snapshot interruption before peer publication.
+- **Control-plane degradation and publish-boundary tests**: `raftstore/integration/pd_degraded_test.go` and `raftstore/integration/snapshot_interruption_test.go` cover live Coordinator outage after startup and failpoint-driven snapshot interruption before peer publication.
 
 When adding new distributed tests:
 
 - use `raftstore/testcluster` for store/data-plane behavior
-- use `pd/testcluster` for control-plane / replicated-root behavior
+- use `coordinator/testcluster` for control-plane / replicated-root behavior
 - avoid embedding ad-hoc cluster bootstrap helpers into feature-specific test files
 
 ## 7. Distributed Fault Matrix
@@ -132,7 +132,7 @@ When adding new distributed tests:
 | Follower restart after snapshot install | Covered | `raftstore/integration/restart_recovery_test.go::TestExpandedPeerRestartPreservesRegionAndData` | Ensures installed peer persists region metadata and data after restart. |
 | Removed peer restart | Covered | `raftstore/integration/restart_recovery_test.go::TestRemovedPeerRestartDoesNotRehost` | Ensures dehosted peers do not come back after restart. |
 | Leader restart with follow-up membership change | Covered | `raftstore/integration/restart_recovery_test.go::TestLeaderRestartStillAllowsMembershipChanges` | Exercises leadership churn before a later remove-peer operation. |
-| Control-plane degraded / PD unavailable | Covered | `pd/adapter/scheduler_client_test.go`, `raftstore/store/command_service_test.go::TestStoreProposeCommandSurvivesSchedulerUnavailable`, `raftstore/integration/pd_degraded_test.go::TestClusterSurvivesPDUnavailableAfterStartup` | Covers both local degraded scheduler semantics and live multi-node PD outage after route cache warmup; new cold-route misses still fail with `RouteUnavailable` as expected. |
+| Control-plane degraded / Coordinator unavailable | Covered | `coordinator/adapter/scheduler_client_test.go`, `raftstore/store/command_service_test.go::TestStoreProposeCommandSurvivesSchedulerUnavailable`, `raftstore/integration/pd_degraded_test.go::TestClusterSurvivesPDUnavailableAfterStartup` | Covers both local degraded scheduler semantics and live multi-node Coordinator outage after route cache warmup; new cold-route misses still fail with `RouteUnavailable` as expected. |
 | Scheduler queue overflow / dropped operations | Covered | `raftstore/store/scheduler_runtime_test.go::TestStoreSchedulerStatusTracksQueueDrop` | Validates local degraded status and dropped operation accounting. |
 | Snapshot install interrupted before publish | Covered | `raftstore/integration/snapshot_interruption_test.go::TestExpandSnapshotInstallInterruptedBeforePublish`, `raftstore/store/peer_lifecycle_test.go::TestStoreInstallRegionSnapshotRejectsCorruptPayload` | Uses failpoint injection to verify target install aborts without leaving a hosted peer or polluted region metadata, then retries cleanly after restart. |
 | Request cancel / deadline propagation | Covered | `raftstore/client/client_test.go::TestClientGetHonorsCanceledContextDuringRouteLookup`, `raftstore/client/client_test.go::TestClientGetHonorsCanceledContextDuringRPC`, `raftstore/client/client_test.go::TestClientPutHonorsCanceledContextDuringRouteLookup`, `raftstore/client/client_test.go::TestClientPutHonorsCanceledContextDuringRPC`, `raftstore/client/client_test.go::TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRouteLookup`, `raftstore/client/client_test.go::TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRPC`, `raftstore/client/client_test.go::TestClientResolveLocksHonorsCanceledContextDuringMultiRegionRPC`, `raftstore/integration/context_propagation_test.go::TestClientReadWriteHonorContextUnderQuorumLoss`, `raftstore/integration/context_propagation_test.go::TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLoss` | Verifies read/write paths plus multi-region 2PC and resolve-lock flows preserve caller cancellation/deadlines through route lookup, RPC, and live split-region quorum loss instead of collapsing to generic retry exhaustion. |

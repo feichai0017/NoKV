@@ -9,7 +9,7 @@
 - Start with section 1 if you want package ownership.
 - Jump to section 3 if you want request execution.
 - Jump to section 8 if you care about split/merge and control-plane behavior.
-- Read this together with [`pd.md`](pd.md) and [`migration.md`](migration.md) if your focus is lifecycle rather than just request flow.
+- Read this together with [`coordinator.md`](coordinator.md) and [`migration.md`](migration.md) if your focus is lifecycle rather than just request flow.
 
 ---
 
@@ -31,7 +31,7 @@
 flowchart TD
     Client["Client / Redis gateway / CLI"]
     Client --> KV["kv.Service"]
-    Client --> PD["PD-lite"]
+    Client --> Coordinator["Coordinator"]
 
     subgraph "Node runtime"
         Server["server.Node"] --> Store["store.Store"]
@@ -78,7 +78,7 @@ flowchart TD
 - `Store` is the runtime owner for what this node hosts.
 - `Peer` is one region replica’s state machine and raft runtime.
 - `Meta` is a local recovery mirror, not cluster truth.
-- `PD` is control plane, not a writer of local truth.
+- `Coordinator` is control plane, not a writer of local truth.
 
 ---
 
@@ -170,18 +170,18 @@ The `cmd/nokv serve` command uses `server.Node` internally and prints a local pe
 ### 8.1 Topology & Routing
 - Topology is sourced from `raft_config.example.json` (via `config.LoadFile`) and
   reused by scripts, Docker Compose, and the Redis gateway as bootstrap metadata.
-- Runtime routing is PD-first: `raftstore/client` resolves Regions by key through
+- Runtime routing is Coordinator-first: `raftstore/client` resolves Regions by key through
   `GetRegionByKey` and caches route entries for retries.
 - `raft_config` regions are treated as bootstrap/deployment metadata and are not
-  the runtime source of truth once PD is available.
-- PD is the only control-plane source of truth for runtime scheduling/routing.
+  the runtime source of truth once Coordinator is available.
+- Coordinator is the only control-plane source of truth for runtime scheduling/routing.
 
 ### Why the layering matters
 
 The design rule is:
 
 - `RaftAdmin` executes membership operations against the current leader store.
-- `PD` decides and observes at the cluster level.
+- `Coordinator` decides and observes at the cluster level.
 - `Store/Peer` own local truth and apply.
 
 That split is what keeps migration and scheduling from becoming a second,
@@ -244,20 +244,20 @@ equal authority:
    - This mirror exists for local recovery only. It is not cluster routing
      authority and must not be treated as consensus truth outside the store.
 
-3. **PD control-plane view**
-   - Owned by PD and persisted through [`pd/storage`](../pd/storage).
+3. **Coordinator control-plane view**
+   - Owned by Coordinator and persisted through [`coordinator/storage`](../coordinator/storage).
    - Built from region/store heartbeats and allocator durability checkpoints.
    - Used for:
      - route lookup
      - scheduler decisions
      - allocator durability
-   - PD is not allowed to overwrite local raftstore truth directly.
+   - Coordinator is not allowed to overwrite local raftstore truth directly.
 
 The resulting rule is simple:
 
 - `raft apply/bootstrap` advances local truth
 - `raftstore/localmeta` mirrors that truth for restart
-- `PD` observes and schedules from heartbeats
+- `Coordinator` observes and schedules from heartbeats
 
 This separation is what prevents parallel truth sources from creeping back into
 the design.

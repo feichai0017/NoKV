@@ -48,7 +48,7 @@ NoKV delivers a hybrid storage engine that can operate as a standalone embedded 
 
 - **Embedded mode** uses `NoKV.Open` directly: WAL→MemTable→SST durability, ValueLog separation, non-transactional APIs with internal version ordering, and rich stats.
 - **Distributed mode** layers `raftstore` on top: multi-Raft regions reuse the same WAL, keep store-local recovery metadata separate from storage manifest state, expose metrics, and serve NoKV RPCs.
-- **Control plane split**: `raft_config` provides bootstrap topology; PD provides runtime routing/TSO/control-plane state in cluster mode.
+- **Control plane split**: `raft_config` provides bootstrap topology; Coordinator provides runtime routing/TSO/control-plane state in cluster mode.
 - **Clients** obtain leader-aware routing, automatic NotLeader/EpochNotMatch retries, and two-phase commit helpers.
 
 ### Same system, two shapes
@@ -68,7 +68,7 @@ flowchart LR
         Server --> Store["store.Store"]
         Store --> Peer["peer.Peer"]
         Peer --> Core
-        Store --> PD["PD-lite"]
+        Store --> Coordinator["Coordinator"]
     end
 
     Embedded -. migrate init / seed .-> Store
@@ -146,7 +146,7 @@ flowchart TD
 
 ### 2.5 Distributed Transaction Path
 - `percolator` implements Prewrite/Commit/ResolveLock/CheckTxnStatus; `kv.Apply` dispatches raft commands to these helpers.
-- MVCC timestamps come from the distributed client/PD TSO flow, not from an embedded standalone transaction API.
+- MVCC timestamps come from the distributed client/Coordinator TSO flow, not from an embedded standalone transaction API.
 - Watermarks (`utils.WaterMark`) are used in durability/visibility coordination; they have no background goroutine and advance via mutex + atomics.
 
 ### 2.6 Write Pipeline & Backpressure
@@ -211,7 +211,7 @@ Then read:
 2. CLI (`nokv serve`) or application enumerates the local peer catalog and calls `Store.StartPeer` for every Region containing the local store:
    - `peer.Config` includes Raft params, transport, `kv.NewEntryApplier`, peer storage, and Region metadata.
    - Router registration, regionManager bookkeeping, optional `Peer.Bootstrap` with initial peer list, leader campaign.
-3. Peers from other stores can be configured through `transport.SetPeer(peerID, addr)` (raft peer ID). In cluster mode, runtime routing/control-plane decisions come from PD.
+3. Peers from other stores can be configured through `transport.SetPeer(peerID, addr)` (raft peer ID). In cluster mode, runtime routing/control-plane decisions come from Coordinator.
 
 ### 3.2 Command Paths
 - **ReadCommand** (`KvGet`/`KvScan`): validate Region & leader, execute Raft ReadIndex (`LinearizableRead`) and `WaitApplied`, then run `commandApplier` (i.e. `kv.Apply` in read mode) to fetch data from the DB. This yields leader-strong reads with an explicit Raft linearizability barrier.
@@ -246,11 +246,11 @@ The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC
 
 `raftstore/client` offers a leader-aware client with retry logic and convenient helpers:
 
-- **Initialization**: provide `[]StoreEndpoint` + `RegionResolver` (`GetRegionByKey`) so runtime routing is PD-driven.
+- **Initialization**: provide `[]StoreEndpoint` + `RegionResolver` (`GetRegionByKey`) so runtime routing is Coordinator-driven.
 - **Reads**: `Get` and `Scan` pick the leader store for a key range, issue NoKV RPCs, and retry on NotLeader/EpochNotMatch.
 - **Writes**: `Mutate` bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); `Put` and `Delete` are convenience wrappers using the same 2PC path.
-- **Timestamps**: clients must supply `startVersion`/`commitVersion`. For distributed demos, use PD-lite (`nokv pd`) to obtain globally increasing values before calling `TwoPhaseCommit`.
-- **Bootstrap helpers**: `scripts/dev/cluster.sh --config raft_config.example.json` builds the binaries, seeds local peer catalogs via `nokv-config catalog`, launches PD-lite, and starts the stores declared in the config.
+- **Timestamps**: clients must supply `startVersion`/`commitVersion`. For distributed demos, use Coordinator (`nokv coordinator`) to obtain globally increasing values before calling `TwoPhaseCommit`.
+- **Bootstrap helpers**: `scripts/dev/cluster.sh --config raft_config.example.json` builds the binaries, seeds local peer catalogs via `nokv-config catalog`, launches Coordinator, and starts the stores declared in the config.
 
 **Example (two regions)**
 1. Regions `[a,m)` and `[m,+∞)`, each led by a different store.
@@ -273,7 +273,7 @@ The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC
 - `StatsSnapshot` publishes flush/compaction/WAL/VLog/raft/region/hot/cache metrics. `nokv stats` and the expvar endpoint expose the same data.
 - `nokv regions` inspects the local peer catalog.
 - `nokv serve` advertises Region samples on startup (ID, key range, peers) for quick verification.
-- Inspect scheduler/control-plane state via PD APIs/metrics.
+- Inspect scheduler/control-plane state via Coordinator APIs/metrics.
 - Scripts:
   - `scripts/dev/cluster.sh` – launch a multi-node NoKV cluster locally.
   - `RECOVERY_TRACE_METRICS=1 go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFromManifest|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v` – crash-recovery validation.
@@ -287,4 +287,4 @@ The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC
 - **Distributed**: deploy `nokv serve` nodes, use `raftstore/client` (or any NoKV gRPC client) to perform reads, scans, and 2PC writes.
 - **Observability-first**: inspection via CLI or expvar is built-in; Region, WAL, Flush, and Raft metrics are accessible without extra instrumentation.
 
-See also [`docs/raftstore.md`](raftstore.md) for deeper internals, [`docs/pd.md`](pd.md) for control-plane details, and [`docs/testing.md`](testing.md) for coverage details.
+See also [`docs/raftstore.md`](raftstore.md) for deeper internals, [`docs/coordinator.md`](coordinator.md) for control-plane details, and [`docs/testing.md`](testing.md) for coverage details.

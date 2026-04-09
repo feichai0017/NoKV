@@ -12,15 +12,15 @@ nokv_config_dir() {
   cd "$(dirname "$config_path")" && pwd
 }
 
-nokv_config_pd_addr() {
+nokv_config_coordinator_addr() {
   local config_path=$1
   local scope=${2:-host}
-  nokv-config pd --config "$config_path" --scope "$scope" --format simple 2>/dev/null | tr -d '\r' | sed -n '1p'
+  nokv-config coordinator --config "$config_path" --scope "$scope" --format simple 2>/dev/null | tr -d '\r' | sed -n '1p'
 }
 
-nokv_config_pd_workdir() {
+nokv_config_coordinator_workdir() {
   local config_path=$1
-  nokv-config pd --config "$config_path" --scope host --format simple --field workdir 2>/dev/null | tr -d '\r' | sed -n '1p'
+  nokv-config coordinator --config "$config_path" --scope host --format simple --field workdir 2>/dev/null | tr -d '\r' | sed -n '1p'
 }
 
 nokv_config_store_lines() {
