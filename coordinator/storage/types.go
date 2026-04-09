@@ -12,11 +12,22 @@ type AllocatorState struct {
 	TSCurrent uint64
 }
 
+type CatchUpState uint8
+
+const (
+	CatchUpStateUnspecified CatchUpState = iota
+	CatchUpStateFresh
+	CatchUpStateLagging
+	CatchUpStateBootstrapRequired
+	CatchUpStateUnavailable
+)
+
 // Snapshot is the reconstructed Coordinator bootstrap catalog derived from durable
 // metadata-root truth.
 type Snapshot struct {
 	ClusterEpoch        uint64
 	RootToken           rootstorage.TailToken
+	CatchUpState        CatchUpState
 	Descriptors         map[uint64]descriptor.Descriptor
 	PendingPeerChanges  map[uint64]rootstate.PendingPeerChange
 	PendingRangeChanges map[uint64]rootstate.PendingRangeChange
@@ -27,6 +38,7 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 	return Snapshot{
 		ClusterEpoch:        snapshot.ClusterEpoch,
 		RootToken:           snapshot.RootToken,
+		CatchUpState:        snapshot.CatchUpState,
 		Descriptors:         rootstate.CloneDescriptors(snapshot.Descriptors),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),
@@ -41,6 +53,7 @@ func SnapshotFromRoot(snapshot rootstate.Snapshot) Snapshot {
 			Cursor:   snapshot.State.LastCommitted,
 			Revision: 0,
 		},
+		CatchUpState:        CatchUpStateFresh,
 		Descriptors:         rootstate.CloneDescriptors(snapshot.Descriptors),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),

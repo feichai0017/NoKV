@@ -61,6 +61,7 @@ func (s *RootStore) WaitForTail(after rootstorage.TailToken, timeout time.Durati
 	if err != nil {
 		return advance, err
 	}
+	s.setCatchUpState(catchUpStateFromAdvance(advance))
 	if advance.ShouldReloadState() {
 		s.replaceObserved(advance.Observed, advance.Token)
 	}
@@ -81,6 +82,7 @@ func (s *RootStore) ObserveTail(after rootstorage.TailToken) (rootstorage.TailAd
 	if err != nil {
 		return advance, err
 	}
+	s.setCatchUpState(catchUpStateFromAdvance(advance))
 	if advance.ShouldReloadState() {
 		s.replaceObserved(advance.Observed, advance.Token)
 	}
@@ -188,6 +190,7 @@ func (s *RootStore) reload() error {
 		return err
 	}
 	out := SnapshotFromRoot(snapshot)
+	out.CatchUpState = CatchUpStateFresh
 	s.mu.Lock()
 	s.snapshot = out
 	s.mu.Unlock()
@@ -204,7 +207,50 @@ func (s *RootStore) replaceObserved(observed rootstorage.ObservedCommitted, toke
 		token.Cursor = observed.LastCursor()
 	}
 	out.RootToken = token
+	if current, ok := s.currentSnapshot(); ok {
+		switch current.CatchUpState {
+		case CatchUpStateBootstrapRequired:
+			out.CatchUpState = CatchUpStateBootstrapRequired
+		case CatchUpStateLagging:
+			out.CatchUpState = CatchUpStateLagging
+		default:
+			out.CatchUpState = CatchUpStateFresh
+		}
+	} else {
+		out.CatchUpState = CatchUpStateFresh
+	}
 	s.mu.Lock()
 	s.snapshot = out
 	s.mu.Unlock()
+}
+
+func (s *RootStore) currentSnapshot() (Snapshot, bool) {
+	if s == nil {
+		return Snapshot{}, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return CloneSnapshot(s.snapshot), true
+}
+
+func (s *RootStore) setCatchUpState(state CatchUpState) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.snapshot.CatchUpState = state
+}
+
+func catchUpStateFromAdvance(advance rootstorage.TailAdvance) CatchUpState {
+	switch advance.CatchUpAction() {
+	case rootstorage.TailCatchUpInstallBootstrap:
+		return CatchUpStateBootstrapRequired
+	case rootstorage.TailCatchUpRefreshState:
+		return CatchUpStateLagging
+	case rootstorage.TailCatchUpAcknowledgeWindow, rootstorage.TailCatchUpIdle:
+		return CatchUpStateFresh
+	default:
+		return CatchUpStateUnspecified
+	}
 }
