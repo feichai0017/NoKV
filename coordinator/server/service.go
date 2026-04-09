@@ -237,7 +237,7 @@ func (s *Service) reloadRootedView(refresh bool) (coordstorage.Snapshot, error) 
 	if err != nil {
 		return coordstorage.Snapshot{}, err
 	}
-	s.cluster.ReplaceRootSnapshot(snapshot.Descriptors, snapshot.PendingPeerChanges, snapshot.PendingRangeChanges)
+	s.cluster.ReplaceRootSnapshot(snapshot.Descriptors, snapshot.PendingPeerChanges, snapshot.PendingRangeChanges, snapshot.RootToken)
 	return snapshot, nil
 }
 
@@ -257,42 +257,64 @@ func (s *Service) GetRegionByKey(_ context.Context, req *coordpb.GetRegionByKeyR
 	if freshness == coordpb.Freshness_FRESHNESS_STRONG && !state.servedByLeader {
 		return nil, s.notLeaderError()
 	}
+	if freshness == coordpb.Freshness_FRESHNESS_STRONG && state.rootLag > 0 {
+		return nil, status.Error(codes.FailedPrecondition, "root lag exceeds strong freshness")
+	}
 	required := rootTokenFromProto(req.GetRequiredRootToken())
-	if !rootTokenSatisfied(state.token, required) {
+	if !rootTokenSatisfied(state.servedToken, required) {
 		return nil, status.Error(codes.FailedPrecondition, "required rooted token not satisfied")
+	}
+	if freshness == coordpb.Freshness_FRESHNESS_BOUNDED && !boundedLagSatisfied(state.rootLag, req.GetMaxRootLag()) {
+		return nil, status.Error(codes.FailedPrecondition, "root lag exceeds bound")
 	}
 	desc, ok := s.cluster.GetRegionDescriptorByKey(req.GetKey())
 	if !ok {
 		return &coordpb.GetRegionByKeyResponse{
-			NotFound:        true,
-			ServedRootToken: rootTokenToProto(state.token),
-			ServedFreshness: freshness,
-			DegradedMode:    state.degraded,
-			ServedByLeader:  state.servedByLeader,
+			NotFound:         true,
+			ServedRootToken:  rootTokenToProto(state.servedToken),
+			ServedFreshness:  freshness,
+			DegradedMode:     state.degraded,
+			ServedByLeader:   state.servedByLeader,
+			CurrentRootToken: rootTokenToProto(state.currentToken),
+			RootLag:          state.rootLag,
 		}, nil
 	}
 	return &coordpb.GetRegionByKeyResponse{
 		RegionDescriptor: metacodec.DescriptorToProto(desc),
 		NotFound:         false,
-		ServedRootToken:  rootTokenToProto(state.token),
+		ServedRootToken:  rootTokenToProto(state.servedToken),
 		ServedFreshness:  freshness,
 		DegradedMode:     state.degraded,
 		ServedByLeader:   state.servedByLeader,
+		CurrentRootToken: rootTokenToProto(state.currentToken),
+		RootLag:          state.rootLag,
 	}, nil
 }
 
 type readState struct {
-	token          rootstorage.TailToken
+	servedToken    rootstorage.TailToken
+	currentToken   rootstorage.TailToken
+	rootLag        uint64
 	degraded       coordpb.DegradedMode
 	servedByLeader bool
 }
 
 func (s *Service) currentReadState() (readState, error) {
+	if s == nil {
+		return readState{degraded: coordpb.DegradedMode_DEGRADED_MODE_HEALTHY, servedByLeader: true}, nil
+	}
+	servedToken := rootstorage.TailToken{}
+	if s.cluster != nil {
+		servedToken = s.cluster.CatalogRootToken()
+	}
 	state := readState{
 		degraded:       coordpb.DegradedMode_DEGRADED_MODE_HEALTHY,
 		servedByLeader: s.storage == nil || s.storage.IsLeader(),
+		servedToken:    servedToken,
+		currentToken:   servedToken,
 	}
-	if s == nil || s.storage == nil {
+	if s.storage == nil {
+		state.rootLag = rootLag(state.currentToken, state.servedToken)
 		return state, nil
 	}
 	snapshot, err := s.storage.Load()
@@ -300,7 +322,11 @@ func (s *Service) currentReadState() (readState, error) {
 		state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE
 		return state, err
 	}
-	state.token = snapshot.RootToken
+	state.currentToken = snapshot.RootToken
+	state.rootLag = rootLag(state.currentToken, state.servedToken)
+	if state.rootLag > 0 {
+		state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_LAGGING
+	}
 	return state, nil
 }
 
@@ -355,6 +381,29 @@ func rootTokenSatisfied(current, required rootstorage.TailToken) bool {
 		return current.Revision >= required.Revision && !rootstate.CursorAfter(required.Cursor, current.Cursor)
 	}
 	return !rootstate.CursorAfter(required.Cursor, current.Cursor)
+}
+
+func rootLag(current, served rootstorage.TailToken) uint64 {
+	if !rootTokenSatisfied(current, served) {
+		return 0
+	}
+	if current.Revision > 0 || served.Revision > 0 {
+		if current.Revision >= served.Revision {
+			return current.Revision - served.Revision
+		}
+		return 0
+	}
+	if rootstate.CursorAfter(current.Cursor, served.Cursor) {
+		return 1
+	}
+	return 0
+}
+
+func boundedLagSatisfied(lag, bound uint64) bool {
+	if bound == 0 {
+		return lag == 0
+	}
+	return lag <= bound
 }
 
 // AllocID allocates one or more globally unique ids.

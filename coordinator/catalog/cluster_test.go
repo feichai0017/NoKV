@@ -5,6 +5,7 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"testing"
 
@@ -217,6 +218,7 @@ func TestClusterReplaceRootSnapshotPreservesStoreStateAndRefreshesRuntime(t *tes
 			},
 		},
 		nil,
+		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 9}, Revision: 4},
 	)
 
 	require.Len(t, c.StoreSnapshot(), 1)
@@ -239,8 +241,9 @@ func TestClusterReplaceRootSnapshotPreservesStoreStateAndRefreshesRuntime(t *tes
 	freshTransitions := c.TransitionSnapshot()
 	require.Equal(t, "coordinator", freshOperators.Entries[0].Owner)
 	require.Equal(t, []byte("a"), freshTransitions.PendingPeerChanges[base.RegionID].Target.StartKey)
+	require.Equal(t, uint64(4), c.CatalogRootToken().Revision)
 
-	c.ReplaceRootSnapshot(nil, nil, nil)
+	c.ReplaceRootSnapshot(nil, nil, nil, rootstorage.TailToken{})
 	require.Len(t, c.StoreSnapshot(), 1)
 	require.Empty(t, c.RegionSnapshot())
 	require.Empty(t, c.TransitionSnapshot().PendingPeerChanges)
