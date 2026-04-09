@@ -56,7 +56,7 @@ The migration path must preserve these invariants:
 3. Bootstrap is the only allowed non-apply path that creates the initial region truth for the promoted directory.
 4. Engine manifest stays storage-engine metadata only.
 5. Store-local region truth stays in `raftstore/localmeta`.
-6. PD does not create local truth during bootstrap.
+6. Coordinator does not create local truth during bootstrap.
 
 Those invariants are what make the feature defensible. Without them, “standalone to cluster” collapses into ad hoc tooling.
 
@@ -67,7 +67,7 @@ flowchart LR
     A["Standalone workdir"] --> B["nokv migrate plan"]
     B --> C["nokv migrate init"]
     C --> D["Seeded workdir"]
-    D --> E["nokv serve --pd-addr ..."]
+    D --> E["nokv serve --coordinator-addr ..."]
     E --> F["Single-store cluster seed"]
     F --> G["nokv migrate expand"]
     G --> H["Replicated cluster"]
@@ -90,7 +90,7 @@ go run ./cmd/nokv migrate init \
 go run ./cmd/nokv serve \
   --workdir ./data/store-1 \
   --store-id 1 \
-  --pd-addr 127.0.0.1:2379
+  --coordinator-addr 127.0.0.1:2379
 
 # 4. Expand the seed into more replicas
 go run ./cmd/nokv migrate expand \
@@ -345,7 +345,7 @@ That is why the current test matrix includes:
 - restarted follower recovery
 - removed-peer restart
 - repeated transport flap during membership changes
-- PD outage after startup
+- Coordinator outage after startup
 
 ## Test and Validation Story
 

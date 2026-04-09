@@ -1,0 +1,70 @@
+package tso
+
+import (
+	"fmt"
+	"sync/atomic"
+
+	"github.com/feichai0017/NoKV/coordinator/idalloc"
+)
+
+// Allocator provides monotonic timestamp allocation for Coordinator.
+type Allocator struct {
+	counter atomic.Uint64
+}
+
+// NewAllocator creates a timestamp allocator whose first allocation is start.
+// When start is zero, allocation starts from 1.
+func NewAllocator(start uint64) *Allocator {
+	if start == 0 {
+		start = 1
+	}
+	a := &Allocator{}
+	a.counter.Store(start - 1)
+	return a
+}
+
+// Next allocates one timestamp.
+func (a *Allocator) Next() uint64 {
+	if a == nil {
+		return 0
+	}
+	return a.counter.Add(1)
+}
+
+// Reserve allocates n consecutive timestamps and returns (first, count).
+func (a *Allocator) Reserve(n uint64) (first, count uint64, err error) {
+	if a == nil {
+		return 0, 0, nil
+	}
+	if n == 0 {
+		return 0, 0, fmt.Errorf("%w: tso reserve n must be >= 1", idalloc.ErrInvalidBatch)
+	}
+	last := a.counter.Add(n)
+	first = last - n + 1
+	return first, n, nil
+}
+
+// Current returns the latest allocated timestamp.
+func (a *Allocator) Current() uint64 {
+	if a == nil {
+		return 0
+	}
+	return a.counter.Load()
+}
+
+// Fence raises the allocator floor so future allocations are strictly greater
+// than or equal to min+1. Existing higher values are preserved.
+func (a *Allocator) Fence(min uint64) {
+	if a == nil {
+		return
+	}
+	for {
+		cur := a.counter.Load()
+		if cur >= min {
+			return
+		}
+		if a.counter.CompareAndSwap(cur, min) {
+			return
+		}
+	}
+}
