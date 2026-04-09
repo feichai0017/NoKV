@@ -55,6 +55,8 @@ func TestRootStoreObserveTailRefreshesCachedSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, snapshot.Descriptors, uint64(91))
 	require.Contains(t, snapshot.Descriptors, uint64(92))
+	require.Equal(t, uint64(1), snapshot.RootToken.Revision)
+	require.Equal(t, updated.LastCursor(), snapshot.RootToken.Cursor)
 }
 
 func TestRootStoreWaitForTailRefreshesCachedSnapshot(t *testing.T) {

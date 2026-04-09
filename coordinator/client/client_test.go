@@ -100,6 +100,9 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, getResp.GetNotFound())
 	require.Equal(t, uint64(11), getResp.GetRegionDescriptor().GetRegionId())
+	require.Equal(t, coordpb.Freshness_FRESHNESS_BEST_EFFORT, getResp.GetServedFreshness())
+	require.True(t, getResp.GetServedByLeader())
+	require.Equal(t, coordpb.DegradedMode_DEGRADED_MODE_HEALTHY, getResp.GetDegradedMode())
 
 	removeResp, err := cli.RemoveRegion(context.Background(), &coordpb.RemoveRegionRequest{RegionId: 11})
 	require.NoError(t, err)
