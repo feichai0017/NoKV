@@ -1,6 +1,7 @@
 # Control-Plane Protocol
 
-This note defines the next-stage protocol design for NoKV's control plane.
+This note defines NoKV's control-plane protocol and the next-stage evolution
+around it.
 
 It focuses only on the contract between:
 
@@ -11,15 +12,49 @@ The purpose of this document is not to replace Raft or redesign the data plane.
 The purpose is to make NoKV's existing control-plane behavior explicit,
 testable, and evolvable.
 
-The control plane should become protocolized around four ideas:
+The control plane is protocolized around four ideas:
 
 - `Freshness`
 - `CatchUp`
 - `Transition`
 - `DegradedMode`
 
-These four ideas already exist in partial form inside the implementation.
-What is missing is a stable vocabulary, explicit invariants, and a rollout plan.
+These four ideas already existed in partial form inside the implementation.
+The current work turns them into a stable vocabulary, explicit invariants, and a
+clear rollout line.
+
+---
+
+## 0. Current Status
+
+The protocol now has a **minimal implemented v1**.
+
+Already implemented and exposed through `pb/coordinator/coordinator.proto`,
+`coordinator/server`, `coordinator/storage`, and tests:
+
+- route-read `Freshness`
+- `RootToken`
+- `root_lag`
+- `DegradedMode`
+- `CatchUpState`
+- `TransitionID`
+- minimal `TransitionPhase`
+- `PublishRootEventResponse.assessment` as a **pre-persist lifecycle assessment**
+
+This means the protocol is no longer only a design direction. It is already the
+formal serving contract for key Coordinator APIs.
+
+What is **not** yet fully protocolized:
+
+- richer transition phases such as `Published` / `Stalled`
+- a fuller catch-up action surface exposed through API
+- automatic recovery policy derived from protocol state
+- broad client-side policy that consumes every protocol field
+
+So the right description today is:
+
+> control-plane protocol v1 is implemented and in use, while later runtime and
+> operator semantics remain future work.
 
 ---
 
@@ -42,7 +77,8 @@ The control plane works, but many important semantics are still implicit:
 - what phase a topology change is in
 - what "degraded" actually means to callers
 
-The design goal is to turn these implicit behaviors into a formal protocol.
+The design goal is to keep turning these implicit behaviors into a formal
+protocol.
 
 That protocol should be:
 
@@ -747,53 +783,66 @@ Every control-plane transition must be referencable as a stable object, not just
 
 ---
 
-## 12. Rollout Plan
+## 12. Rollout State
 
-The rollout should stay incremental.
+The rollout stays incremental, but the first protocol line is already in use.
 
 ### Phase 1: Freshness
 
-Implement explicit freshness semantics on route reads.
+Status: **implemented**
 
-Target outcomes:
+Delivered outcomes:
 
 - `GetRegionByKey` can express requested freshness
 - route responses disclose served freshness and rooted token
-- follower-read behavior stops being implicit
+- follower-read behavior is no longer implicit
 
 ### Phase 2: Catch-Up
 
-Make convergence state explicit in rooted storage and Coordinator runtime.
+Status: **minimal v1 implemented**
 
-Target outcomes:
+Delivered outcomes:
 
 - `CatchUpState`
-- `CatchUpAction`
 - formal bootstrap-required boundary
 - rooted lag awareness in serving decisions
 
+Still open:
+
+- a wider public `CatchUpAction` surface
+- more explicit recovery diagnostics
+
 ### Phase 3: Transition
 
-Introduce stable transition identity and explicit phases.
+Status: **minimal v1 implemented**
 
-Target outcomes:
+Delivered outcomes:
 
 - durable `TransitionID`
-- lifecycle-aware operator/runtime view
 - explicit phase semantics across:
   - `ListTransitions`
   - `AssessRootEvent`
   - `PublishRootEvent`
+- publish-time pre-persist lifecycle assessment
+
+Still open:
+
+- richer runtime phases
+- stuck / timeout diagnosis
 
 ### Phase 4: DegradedMode
 
-Expose degraded operating modes through API, metrics, and tests.
+Status: **minimal v1 implemented**
 
-Target outcomes:
+Delivered outcomes:
 
-- explicit degraded semantics
-- cleaner retry policy
-- cleaner CLI/operator diagnostics
+- explicit degraded semantics in route responses
+- route-serving rejection under rooted lag / rooted unavailability
+
+Still open:
+
+- broader surfacing through metrics and diagnostics
+- tighter client retry policy based on degraded state
 
 ---
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/config"
 	coordadapter "github.com/feichai0017/NoKV/coordinator/adapter"
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -39,6 +40,8 @@ func runServeCmd(w io.Writer, args []string) error {
 	raftTickInterval := fs.Duration("raft-tick-interval", 0, "interval between raft ticks (default 100ms)")
 	raftDebugLog := fs.Bool("raft-debug-log", false, "enable verbose raft debug logging")
 	coordAddr := fs.String("coordinator-addr", "", "coordinator gRPC endpoint for cluster mode (required)")
+	configPath := fs.String("config", "", "optional raft configuration file used to resolve listen/workdir/peer addresses")
+	scope := fs.String("scope", "host", "scope for config-resolved addresses: host|docker")
 	coordTimeout := fs.Duration("coordinator-timeout", 2*time.Second, "timeout for coordinator heartbeat RPCs")
 	metricsAddr := fs.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
 	var peerFlags []string
@@ -55,11 +58,45 @@ func runServeCmd(w io.Writer, args []string) error {
 		return err
 	}
 
-	if *workDir == "" {
-		return fmt.Errorf("--workdir is required")
+	var cfg *config.File
+	if strings.TrimSpace(*configPath) != "" {
+		scopeNorm := strings.ToLower(strings.TrimSpace(*scope))
+		if scopeNorm != "host" && scopeNorm != "docker" {
+			return fmt.Errorf("invalid serve scope %q (expected host|docker)", *scope)
+		}
+		loaded, err := config.LoadFile(strings.TrimSpace(*configPath))
+		if err != nil {
+			return fmt.Errorf("serve load config %q: %w", strings.TrimSpace(*configPath), err)
+		}
+		if err := loaded.Validate(); err != nil {
+			return fmt.Errorf("serve validate config %q: %w", strings.TrimSpace(*configPath), err)
+		}
+		cfg = loaded
 	}
+
 	if *storeID == 0 {
 		return fmt.Errorf("--store-id is required")
+	}
+	if cfg != nil {
+		scopeNorm := strings.ToLower(strings.TrimSpace(*scope))
+		if !flagPassed(fs, "workdir") {
+			if resolved := cfg.ResolveStoreWorkDir(*storeID, scopeNorm); resolved != "" {
+				*workDir = resolved
+			}
+		}
+		if !flagPassed(fs, "addr") {
+			if resolved := cfg.ResolveStoreListenAddr(*storeID, scopeNorm); resolved != "" {
+				*listenAddr = resolved
+			}
+		}
+		if !flagPassed(fs, "coordinator-addr") {
+			if resolved := cfg.ResolveCoordinatorAddr(scopeNorm); resolved != "" {
+				*coordAddr = resolved
+			}
+		}
+	}
+	if *workDir == "" {
+		return fmt.Errorf("--workdir is required")
 	}
 	if *electionTick <= 0 || *heartbeatTick <= 0 {
 		return fmt.Errorf("heartbeat and election ticks must be > 0")
@@ -143,6 +180,7 @@ func runServeCmd(w io.Writer, args []string) error {
 	}
 
 	transport := server.Transport()
+	explicitPeers := make(map[uint64]string, len(peerFlags))
 	for _, mapping := range peerFlags {
 		parts := strings.SplitN(mapping, "=", 2)
 		if len(parts) != 2 {
@@ -152,7 +190,28 @@ func runServeCmd(w io.Writer, args []string) error {
 		if err != nil {
 			return fmt.Errorf("invalid peer id in --peer %q: %w", mapping, err)
 		}
-		transport.SetPeer(id, parts[1])
+		explicitPeers[id] = strings.TrimSpace(parts[1])
+	}
+	snapshot := localMeta.Snapshot()
+	if cfg != nil {
+		autoPeers, err := resolveTransportPeersFromConfig(cfg, strings.ToLower(strings.TrimSpace(*scope)), snapshot, *storeID, explicitPeers)
+		if err != nil {
+			return err
+		}
+		for peerID, addr := range autoPeers {
+			if strings.TrimSpace(addr) == "" {
+				continue
+			}
+			transport.SetPeer(peerID, addr)
+		}
+	} else if err := requireExplicitTransportPeers(snapshot, *storeID, explicitPeers); err != nil {
+		return err
+	}
+	for peerID, addr := range explicitPeers {
+		if strings.TrimSpace(addr) == "" {
+			continue
+		}
+		transport.SetPeer(peerID, addr)
 	}
 
 	startedRegions, totalRegions, err := startStorePeers(server, serverpkg.Storage{MVCC: db, Raft: db.RaftLog()}, localMeta, *storeID, *electionTick, *heartbeatTick, *maxMsgBytes, *maxInflight)
@@ -197,6 +256,54 @@ func runServeCmd(w io.Writer, args []string) error {
 	<-ctx.Done()
 	_, _ = fmt.Fprintln(w, "\nShutting down...")
 	return nil
+}
+
+func resolveTransportPeersFromConfig(cfg *config.File, scope string, snapshot map[uint64]localmeta.RegionMeta, localStoreID uint64, explicit map[uint64]string) (map[uint64]string, error) {
+	if cfg == nil || localStoreID == 0 {
+		return nil, nil
+	}
+	needed := collectRemotePeers(snapshot, localStoreID)
+	if len(needed) == 0 {
+		return nil, nil
+	}
+	out := make(map[uint64]string, len(needed))
+	for peerID, storeID := range needed {
+		if _, ok := explicit[peerID]; ok {
+			continue
+		}
+		addr := strings.TrimSpace(cfg.ResolveStoreAddr(storeID, scope))
+		if addr == "" {
+			return nil, fmt.Errorf("serve resolve peer %d on store %d: missing store address in config (use --peer to override)", peerID, storeID)
+		}
+		out[peerID] = addr
+	}
+	return out, nil
+}
+
+func requireExplicitTransportPeers(snapshot map[uint64]localmeta.RegionMeta, localStoreID uint64, explicit map[uint64]string) error {
+	for peerID, storeID := range collectRemotePeers(snapshot, localStoreID) {
+		if _, ok := explicit[peerID]; ok {
+			continue
+		}
+		return fmt.Errorf("serve missing transport address for remote peer %d on store %d (provide --config or --peer)", peerID, storeID)
+	}
+	return nil
+}
+
+func collectRemotePeers(snapshot map[uint64]localmeta.RegionMeta, localStoreID uint64) map[uint64]uint64 {
+	if len(snapshot) == 0 || localStoreID == 0 {
+		return nil
+	}
+	out := make(map[uint64]uint64)
+	for _, meta := range snapshot {
+		for _, p := range meta.Peers {
+			if p.StoreID == 0 || p.PeerID == 0 || p.StoreID == localStoreID {
+				continue
+			}
+			out[p.PeerID] = p.StoreID
+		}
+	}
+	return out
 }
 
 func promoteClusterMode(workDir string, storeID uint64) error {

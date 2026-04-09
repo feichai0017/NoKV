@@ -41,6 +41,18 @@ type Store struct {
 	DockerWorkDir    string `json:"docker_work_dir,omitempty"`
 }
 
+func (f *File) resolveStore(storeID uint64) *Store {
+	if f == nil || storeID == 0 {
+		return nil
+	}
+	for i := range f.Stores {
+		if f.Stores[i].StoreID == storeID {
+			return &f.Stores[i]
+		}
+	}
+	return nil
+}
+
 // Region defines a key range and its peer set.
 type Region struct {
 	ID            uint64      `json:"id"`
@@ -152,13 +164,7 @@ func (f *File) ResolveStoreWorkDir(storeID uint64, scope string) string {
 	if f == nil || storeID == 0 {
 		return ""
 	}
-	var store *Store
-	for i := range f.Stores {
-		if f.Stores[i].StoreID == storeID {
-			store = &f.Stores[i]
-			break
-		}
-	}
+	store := f.resolveStore(storeID)
 	if store == nil {
 		return ""
 	}
@@ -178,6 +184,30 @@ func (f *File) ResolveStoreWorkDir(storeID uint64, scope string) string {
 		return resolveStoreDirTemplate(v, storeID)
 	}
 	return ""
+}
+
+// ResolveStoreListenAddr resolves the listen address for the given store and scope.
+//
+// Supported scopes are "host" (default) and "docker". Unknown scopes fallback
+// to host semantics.
+func (f *File) ResolveStoreListenAddr(storeID uint64, scope string) string {
+	store := f.resolveStore(storeID)
+	if store == nil {
+		return ""
+	}
+	return resolveScopedValue(store.ListenAddr, store.DockerListenAddr, scope)
+}
+
+// ResolveStoreAddr resolves the transport/client-facing address for the given store and scope.
+//
+// Supported scopes are "host" (default) and "docker". Unknown scopes fallback
+// to host semantics.
+func (f *File) ResolveStoreAddr(storeID uint64, scope string) string {
+	store := f.resolveStore(storeID)
+	if store == nil {
+		return ""
+	}
+	return resolveScopedValue(store.Addr, store.DockerAddr, scope)
 }
 
 func resolveStoreDirTemplate(template string, storeID uint64) string {
