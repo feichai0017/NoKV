@@ -8,12 +8,17 @@ source "$SCRIPT_DIR/../lib/workdir.sh"
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/dev/bootstrap.sh --config <path> --path-template <template>
+Usage: scripts/ops/bootstrap.sh --config <path> --path-template <template>
 
 Options:
   --config PATH          Raft configuration file (default: ./raft_config.example.json)
   --path-template TMPL   Template for store workdirs, e.g. /data/store-{id}
   --state STATE          Optional region state (running|tombstone)
+
+Notes:
+  - bootstrap.sh only seeds fresh store workdirs from config.regions.
+  - It must not be used to restart a store that already has runtime raft/local metadata.
+  - Runtime topology changes are recovered from local metadata, not from config.regions.
 USAGE
 }
 

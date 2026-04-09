@@ -28,9 +28,9 @@ COPY --from=builder /out/nokv /usr/local/bin/nokv
 COPY --from=builder /out/nokv-config /usr/local/bin/nokv-config
 COPY --from=builder /out/nokv-redis /usr/local/bin/nokv-redis
 COPY scripts /usr/local/lib/nokv-scripts
-RUN chmod +x /usr/local/lib/nokv-scripts/dev/serve-store.sh /usr/local/lib/nokv-scripts/dev/bootstrap.sh \
-    && ln -sf /usr/local/lib/nokv-scripts/dev/serve-store.sh /usr/local/bin/serve-store.sh \
-    && ln -sf /usr/local/lib/nokv-scripts/dev/bootstrap.sh /usr/local/bin/bootstrap.sh \
+RUN chmod +x /usr/local/lib/nokv-scripts/ops/serve-store.sh /usr/local/lib/nokv-scripts/ops/bootstrap.sh \
+    && ln -sf /usr/local/lib/nokv-scripts/ops/serve-store.sh /usr/local/bin/serve-store.sh \
+    && ln -sf /usr/local/lib/nokv-scripts/ops/bootstrap.sh /usr/local/bin/bootstrap.sh \
     && mkdir -p /etc/nokv
 COPY raft_config.example.json /etc/nokv/raft_config.json
 USER nokv
