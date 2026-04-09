@@ -44,6 +44,10 @@ Core implementation units:
 - `coordinator/client`: client wrapper used by store/gateway.
 - `coordinator/adapter`: scheduler sink that forwards heartbeats into Coordinator.
 
+For the next-stage protocol direction on freshness, rooted catch-up,
+transition lifecycle, and degraded semantics, see
+[`docs/control_plane_protocol.md`](control_plane_protocol.md).
+
 ---
 
 ## 3. Mode Model

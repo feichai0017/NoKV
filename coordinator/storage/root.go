@@ -62,7 +62,7 @@ func (s *RootStore) WaitForTail(after rootstorage.TailToken, timeout time.Durati
 		return advance, err
 	}
 	if advance.ShouldReloadState() {
-		s.replaceObserved(advance.Observed)
+		s.replaceObserved(advance.Observed, advance.Token)
 	}
 	return advance, nil
 }
@@ -82,7 +82,7 @@ func (s *RootStore) ObserveTail(after rootstorage.TailToken) (rootstorage.TailAd
 		return advance, err
 	}
 	if advance.ShouldReloadState() {
-		s.replaceObserved(advance.Observed)
+		s.replaceObserved(advance.Observed, advance.Token)
 	}
 	return advance, nil
 }
@@ -180,7 +180,7 @@ func (s *RootStore) reload() error {
 		if err != nil {
 			return err
 		}
-		s.replaceObserved(observed)
+		s.replaceObserved(observed, rootstorage.TailToken{Cursor: observed.LastCursor()})
 		return nil
 	}
 	snapshot, err := s.root.Snapshot()
@@ -194,12 +194,16 @@ func (s *RootStore) reload() error {
 	return nil
 }
 
-func (s *RootStore) replaceObserved(observed rootstorage.ObservedCommitted) {
+func (s *RootStore) replaceObserved(observed rootstorage.ObservedCommitted, token rootstorage.TailToken) {
 	if s == nil {
 		return
 	}
 	bootstrap := rootmaterialize.BootstrapFromObserved(observed)
 	out := SnapshotFromRoot(bootstrap.Snapshot)
+	if token.Cursor.Term == 0 && token.Cursor.Index == 0 {
+		token.Cursor = observed.LastCursor()
+	}
+	out.RootToken = token
 	s.mu.Lock()
 	s.snapshot = out
 	s.mu.Unlock()

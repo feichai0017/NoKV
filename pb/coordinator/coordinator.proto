@@ -133,13 +133,38 @@ message RemoveRegionResponse {
   bool removed = 1;
 }
 
+message RootToken {
+  uint64 term = 1;
+  uint64 index = 2;
+  uint64 revision = 3;
+}
+
+enum Freshness {
+  FRESHNESS_UNSPECIFIED = 0;
+  FRESHNESS_STRONG = 1;
+  FRESHNESS_BOUNDED = 2;
+  FRESHNESS_BEST_EFFORT = 3;
+}
+
+enum DegradedMode {
+  DEGRADED_MODE_UNSPECIFIED = 0;
+  DEGRADED_MODE_HEALTHY = 1;
+  DEGRADED_MODE_ROOT_UNAVAILABLE = 2;
+}
+
 message GetRegionByKeyRequest {
   bytes key = 1;
+  Freshness freshness = 2;
+  RootToken required_root_token = 3;
 }
 
 message GetRegionByKeyResponse {
   nokv.meta.v1.RegionDescriptor region_descriptor = 1;
   bool not_found = 2;
+  RootToken served_root_token = 3;
+  Freshness served_freshness = 4;
+  DegradedMode degraded_mode = 5;
+  bool served_by_leader = 6;
 }
 
 message AllocIDRequest {

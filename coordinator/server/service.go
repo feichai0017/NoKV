@@ -12,6 +12,7 @@ import (
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"google.golang.org/grpc/codes"
@@ -31,6 +32,7 @@ type Service struct {
 }
 
 const errNotLeaderPrefix = "coordinator not leader"
+const errRootUnavailable = "coordinator root unavailable"
 
 // NewService constructs a Coordinator service.
 func NewService(cluster *catalog.Cluster, ids *idalloc.IDAllocator, tsAlloc *tso.Allocator) *Service {
@@ -244,14 +246,115 @@ func (s *Service) GetRegionByKey(_ context.Context, req *coordpb.GetRegionByKeyR
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "get region by key request is nil")
 	}
+	freshness := normalizeFreshness(req.GetFreshness())
+	state, err := s.currentReadState()
+	if err != nil {
+		if freshness == coordpb.Freshness_FRESHNESS_STRONG || freshness == coordpb.Freshness_FRESHNESS_BOUNDED {
+			return nil, status.Error(codes.FailedPrecondition, errRootUnavailable)
+		}
+		state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE
+	}
+	if freshness == coordpb.Freshness_FRESHNESS_STRONG && !state.servedByLeader {
+		return nil, s.notLeaderError()
+	}
+	required := rootTokenFromProto(req.GetRequiredRootToken())
+	if !rootTokenSatisfied(state.token, required) {
+		return nil, status.Error(codes.FailedPrecondition, "required rooted token not satisfied")
+	}
 	desc, ok := s.cluster.GetRegionDescriptorByKey(req.GetKey())
 	if !ok {
-		return &coordpb.GetRegionByKeyResponse{NotFound: true}, nil
+		return &coordpb.GetRegionByKeyResponse{
+			NotFound:        true,
+			ServedRootToken: rootTokenToProto(state.token),
+			ServedFreshness: freshness,
+			DegradedMode:    state.degraded,
+			ServedByLeader:  state.servedByLeader,
+		}, nil
 	}
 	return &coordpb.GetRegionByKeyResponse{
 		RegionDescriptor: metacodec.DescriptorToProto(desc),
 		NotFound:         false,
+		ServedRootToken:  rootTokenToProto(state.token),
+		ServedFreshness:  freshness,
+		DegradedMode:     state.degraded,
+		ServedByLeader:   state.servedByLeader,
 	}, nil
+}
+
+type readState struct {
+	token          rootstorage.TailToken
+	degraded       coordpb.DegradedMode
+	servedByLeader bool
+}
+
+func (s *Service) currentReadState() (readState, error) {
+	state := readState{
+		degraded:       coordpb.DegradedMode_DEGRADED_MODE_HEALTHY,
+		servedByLeader: s.storage == nil || s.storage.IsLeader(),
+	}
+	if s == nil || s.storage == nil {
+		return state, nil
+	}
+	snapshot, err := s.storage.Load()
+	if err != nil {
+		state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE
+		return state, err
+	}
+	state.token = snapshot.RootToken
+	return state, nil
+}
+
+func (s *Service) notLeaderError() error {
+	if s == nil || s.storage == nil {
+		return status.Error(codes.FailedPrecondition, errNotLeaderPrefix)
+	}
+	leaderID := s.storage.LeaderID()
+	if leaderID == 0 {
+		return status.Error(codes.FailedPrecondition, errNotLeaderPrefix)
+	}
+	return status.Error(codes.FailedPrecondition, fmt.Sprintf("%s (leader_id=%d)", errNotLeaderPrefix, leaderID))
+}
+
+func normalizeFreshness(f coordpb.Freshness) coordpb.Freshness {
+	switch f {
+	case coordpb.Freshness_FRESHNESS_STRONG,
+		coordpb.Freshness_FRESHNESS_BOUNDED,
+		coordpb.Freshness_FRESHNESS_BEST_EFFORT:
+		return f
+	default:
+		return coordpb.Freshness_FRESHNESS_BEST_EFFORT
+	}
+}
+
+func rootTokenToProto(token rootstorage.TailToken) *coordpb.RootToken {
+	return &coordpb.RootToken{
+		Term:     token.Cursor.Term,
+		Index:    token.Cursor.Index,
+		Revision: token.Revision,
+	}
+}
+
+func rootTokenFromProto(token *coordpb.RootToken) rootstorage.TailToken {
+	if token == nil {
+		return rootstorage.TailToken{}
+	}
+	return rootstorage.TailToken{
+		Cursor: rootstate.Cursor{
+			Term:  token.GetTerm(),
+			Index: token.GetIndex(),
+		},
+		Revision: token.GetRevision(),
+	}
+}
+
+func rootTokenSatisfied(current, required rootstorage.TailToken) bool {
+	if required.Cursor.Term == 0 && required.Cursor.Index == 0 && required.Revision == 0 {
+		return true
+	}
+	if current.Revision != 0 || required.Revision != 0 {
+		return current.Revision >= required.Revision && !rootstate.CursorAfter(required.Cursor, current.Cursor)
+	}
+	return !rootstate.CursorAfter(required.Cursor, current.Cursor)
 }
 
 // AllocID allocates one or more globally unique ids.
