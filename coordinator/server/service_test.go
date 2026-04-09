@@ -153,6 +153,7 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 	require.Equal(t, uint64(11), getResp.GetRegionDescriptor().GetRegionId())
 	require.Equal(t, coordpb.Freshness_FRESHNESS_BEST_EFFORT, getResp.GetServedFreshness())
 	require.Equal(t, coordpb.DegradedMode_DEGRADED_MODE_HEALTHY, getResp.GetDegradedMode())
+	require.Equal(t, coordpb.CatchUpState_CATCH_UP_STATE_FRESH, getResp.GetCatchUpState())
 	require.True(t, getResp.GetServedByLeader())
 	require.Zero(t, getResp.GetRootLag())
 }
@@ -271,6 +272,7 @@ func TestServiceGetRegionByKeyReportsRootLagging(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, coordpb.DegradedMode_DEGRADED_MODE_ROOT_LAGGING, resp.GetDegradedMode())
 	require.Equal(t, uint64(4), resp.GetRootLag())
+	require.Equal(t, coordpb.CatchUpState_CATCH_UP_STATE_LAGGING, resp.GetCatchUpState())
 	require.Equal(t, uint64(3), resp.GetServedRootToken().GetRevision())
 	require.Equal(t, uint64(7), resp.GetCurrentRootToken().GetRevision())
 
@@ -298,6 +300,40 @@ func TestServiceGetRegionByKeyReportsRootLagging(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 	require.Contains(t, err.Error(), "root lag exceeds strong freshness")
+}
+
+func TestServiceGetRegionByKeyBoundedRejectsBootstrapRequired(t *testing.T) {
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+	desc := testDescriptor(21, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
+	svc.cluster.ReplaceRootSnapshot(
+		map[uint64]descriptor.Descriptor{desc.RegionID: desc},
+		nil,
+		nil,
+		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 2}, Revision: 2},
+	)
+	storage := &fakeStorage{
+		leader: true,
+		snapshot: coordstorage.Snapshot{
+			RootToken:    rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 2, Index: 9}, Revision: 7},
+			CatchUpState: coordstorage.CatchUpStateBootstrapRequired,
+			Descriptors:  map[uint64]descriptor.Descriptor{desc.RegionID: desc},
+		},
+	}
+	svc.SetStorage(storage)
+
+	resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
+	require.NoError(t, err)
+	require.Equal(t, coordpb.CatchUpState_CATCH_UP_STATE_BOOTSTRAP_REQUIRED, resp.GetCatchUpState())
+	require.Equal(t, coordpb.DegradedMode_DEGRADED_MODE_ROOT_LAGGING, resp.GetDegradedMode())
+
+	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:        []byte("a"),
+		Freshness:  coordpb.Freshness_FRESHNESS_BOUNDED,
+		MaxRootLag: 16,
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, err.Error(), "bootstrap required before bounded freshness")
 }
 
 func TestServiceRemoveRegion(t *testing.T) {
