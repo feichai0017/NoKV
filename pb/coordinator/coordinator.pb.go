@@ -446,6 +446,61 @@ func (DegradedMode) EnumDescriptor() ([]byte, []int) {
 	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{7}
 }
 
+type CatchUpState int32
+
+const (
+	CatchUpState_CATCH_UP_STATE_UNSPECIFIED        CatchUpState = 0
+	CatchUpState_CATCH_UP_STATE_FRESH              CatchUpState = 1
+	CatchUpState_CATCH_UP_STATE_LAGGING            CatchUpState = 2
+	CatchUpState_CATCH_UP_STATE_BOOTSTRAP_REQUIRED CatchUpState = 3
+	CatchUpState_CATCH_UP_STATE_UNAVAILABLE        CatchUpState = 4
+)
+
+// Enum value maps for CatchUpState.
+var (
+	CatchUpState_name = map[int32]string{
+		0: "CATCH_UP_STATE_UNSPECIFIED",
+		1: "CATCH_UP_STATE_FRESH",
+		2: "CATCH_UP_STATE_LAGGING",
+		3: "CATCH_UP_STATE_BOOTSTRAP_REQUIRED",
+		4: "CATCH_UP_STATE_UNAVAILABLE",
+	}
+	CatchUpState_value = map[string]int32{
+		"CATCH_UP_STATE_UNSPECIFIED":        0,
+		"CATCH_UP_STATE_FRESH":              1,
+		"CATCH_UP_STATE_LAGGING":            2,
+		"CATCH_UP_STATE_BOOTSTRAP_REQUIRED": 3,
+		"CATCH_UP_STATE_UNAVAILABLE":        4,
+	}
+)
+
+func (x CatchUpState) Enum() *CatchUpState {
+	p := new(CatchUpState)
+	*p = x
+	return p
+}
+
+func (x CatchUpState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CatchUpState) Descriptor() protoreflect.EnumDescriptor {
+	return file_coordinator_coordinator_proto_enumTypes[8].Descriptor()
+}
+
+func (CatchUpState) Type() protoreflect.EnumType {
+	return &file_coordinator_coordinator_proto_enumTypes[8]
+}
+
+func (x CatchUpState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CatchUpState.Descriptor instead.
+func (CatchUpState) EnumDescriptor() ([]byte, []int) {
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{8}
+}
+
 type StoreHeartbeatRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	StoreId       uint64                 `protobuf:"varint,1,opt,name=store_id,json=storeId,proto3" json:"store_id,omitempty"`
@@ -1404,6 +1459,7 @@ type GetRegionByKeyResponse struct {
 	ServedByLeader   bool                   `protobuf:"varint,6,opt,name=served_by_leader,json=servedByLeader,proto3" json:"served_by_leader,omitempty"`
 	CurrentRootToken *RootToken             `protobuf:"bytes,7,opt,name=current_root_token,json=currentRootToken,proto3" json:"current_root_token,omitempty"`
 	RootLag          uint64                 `protobuf:"varint,8,opt,name=root_lag,json=rootLag,proto3" json:"root_lag,omitempty"`
+	CatchUpState     CatchUpState           `protobuf:"varint,9,opt,name=catch_up_state,json=catchUpState,proto3,enum=nokv.coordinator.v1.CatchUpState" json:"catch_up_state,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -1492,6 +1548,13 @@ func (x *GetRegionByKeyResponse) GetRootLag() uint64 {
 		return x.RootLag
 	}
 	return 0
+}
+
+func (x *GetRegionByKeyResponse) GetCatchUpState() CatchUpState {
+	if x != nil {
+		return x.CatchUpState
+	}
+	return CatchUpState_CATCH_UP_STATE_UNSPECIFIED
 }
 
 type AllocIDRequest struct {
@@ -1758,7 +1821,7 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\tfreshness\x18\x02 \x01(\x0e2\x1e.nokv.coordinator.v1.FreshnessR\tfreshness\x12N\n" +
 	"\x13required_root_token\x18\x03 \x01(\v2\x1e.nokv.coordinator.v1.RootTokenR\x11requiredRootToken\x12 \n" +
 	"\fmax_root_lag\x18\x04 \x01(\x04R\n" +
-	"maxRootLag\"\xf4\x03\n" +
+	"maxRootLag\"\xbd\x04\n" +
 	"\x16GetRegionByKeyResponse\x12K\n" +
 	"\x11region_descriptor\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x10regionDescriptor\x12\x1b\n" +
 	"\tnot_found\x18\x02 \x01(\bR\bnotFound\x12J\n" +
@@ -1767,7 +1830,8 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\rdegraded_mode\x18\x05 \x01(\x0e2!.nokv.coordinator.v1.DegradedModeR\fdegradedMode\x12(\n" +
 	"\x10served_by_leader\x18\x06 \x01(\bR\x0eservedByLeader\x12L\n" +
 	"\x12current_root_token\x18\a \x01(\v2\x1e.nokv.coordinator.v1.RootTokenR\x10currentRootToken\x12\x19\n" +
-	"\broot_lag\x18\b \x01(\x04R\arootLag\"&\n" +
+	"\broot_lag\x18\b \x01(\x04R\arootLag\x12G\n" +
+	"\x0ecatch_up_state\x18\t \x01(\x0e2!.nokv.coordinator.v1.CatchUpStateR\fcatchUpState\"&\n" +
 	"\x0eAllocIDRequest\x12\x14\n" +
 	"\x05count\x18\x01 \x01(\x04R\x05count\"B\n" +
 	"\x0fAllocIDResponse\x12\x19\n" +
@@ -1820,7 +1884,13 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\x19DEGRADED_MODE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15DEGRADED_MODE_HEALTHY\x10\x01\x12\x1e\n" +
 	"\x1aDEGRADED_MODE_ROOT_LAGGING\x10\x02\x12\"\n" +
-	"\x1eDEGRADED_MODE_ROOT_UNAVAILABLE\x10\x032\xa0\a\n" +
+	"\x1eDEGRADED_MODE_ROOT_UNAVAILABLE\x10\x03*\xab\x01\n" +
+	"\fCatchUpState\x12\x1e\n" +
+	"\x1aCATCH_UP_STATE_UNSPECIFIED\x10\x00\x12\x18\n" +
+	"\x14CATCH_UP_STATE_FRESH\x10\x01\x12\x1a\n" +
+	"\x16CATCH_UP_STATE_LAGGING\x10\x02\x12%\n" +
+	"!CATCH_UP_STATE_BOOTSTRAP_REQUIRED\x10\x03\x12\x1e\n" +
+	"\x1aCATCH_UP_STATE_UNAVAILABLE\x10\x042\xa0\a\n" +
 	"\vCoordinator\x12i\n" +
 	"\x0eStoreHeartbeat\x12*.nokv.coordinator.v1.StoreHeartbeatRequest\x1a+.nokv.coordinator.v1.StoreHeartbeatResponse\x12i\n" +
 	"\x0eRegionLiveness\x12*.nokv.coordinator.v1.RegionLivenessRequest\x1a+.nokv.coordinator.v1.RegionLivenessResponse\x12o\n" +
@@ -1844,7 +1914,7 @@ func file_coordinator_coordinator_proto_rawDescGZIP() []byte {
 	return file_coordinator_coordinator_proto_rawDescData
 }
 
-var file_coordinator_coordinator_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
+var file_coordinator_coordinator_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
 var file_coordinator_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_coordinator_coordinator_proto_goTypes = []any{
 	(SchedulerOperationType)(0),         // 0: nokv.coordinator.v1.SchedulerOperationType
@@ -1855,81 +1925,83 @@ var file_coordinator_coordinator_proto_goTypes = []any{
 	(TransitionDecision)(0),             // 5: nokv.coordinator.v1.TransitionDecision
 	(Freshness)(0),                      // 6: nokv.coordinator.v1.Freshness
 	(DegradedMode)(0),                   // 7: nokv.coordinator.v1.DegradedMode
-	(*StoreHeartbeatRequest)(nil),       // 8: nokv.coordinator.v1.StoreHeartbeatRequest
-	(*SchedulerOperation)(nil),          // 9: nokv.coordinator.v1.SchedulerOperation
-	(*StoreHeartbeatResponse)(nil),      // 10: nokv.coordinator.v1.StoreHeartbeatResponse
-	(*RegionLivenessRequest)(nil),       // 11: nokv.coordinator.v1.RegionLivenessRequest
-	(*RegionLivenessResponse)(nil),      // 12: nokv.coordinator.v1.RegionLivenessResponse
-	(*PublishRootEventRequest)(nil),     // 13: nokv.coordinator.v1.PublishRootEventRequest
-	(*PublishRootEventResponse)(nil),    // 14: nokv.coordinator.v1.PublishRootEventResponse
-	(*TransitionEntry)(nil),             // 15: nokv.coordinator.v1.TransitionEntry
-	(*TransitionAssessment)(nil),        // 16: nokv.coordinator.v1.TransitionAssessment
-	(*ListTransitionsRequest)(nil),      // 17: nokv.coordinator.v1.ListTransitionsRequest
-	(*ListTransitionsResponse)(nil),     // 18: nokv.coordinator.v1.ListTransitionsResponse
-	(*AssessRootEventRequest)(nil),      // 19: nokv.coordinator.v1.AssessRootEventRequest
-	(*AssessRootEventResponse)(nil),     // 20: nokv.coordinator.v1.AssessRootEventResponse
-	(*RemoveRegionRequest)(nil),         // 21: nokv.coordinator.v1.RemoveRegionRequest
-	(*RemoveRegionResponse)(nil),        // 22: nokv.coordinator.v1.RemoveRegionResponse
-	(*RootToken)(nil),                   // 23: nokv.coordinator.v1.RootToken
-	(*GetRegionByKeyRequest)(nil),       // 24: nokv.coordinator.v1.GetRegionByKeyRequest
-	(*GetRegionByKeyResponse)(nil),      // 25: nokv.coordinator.v1.GetRegionByKeyResponse
-	(*AllocIDRequest)(nil),              // 26: nokv.coordinator.v1.AllocIDRequest
-	(*AllocIDResponse)(nil),             // 27: nokv.coordinator.v1.AllocIDResponse
-	(*TsoRequest)(nil),                  // 28: nokv.coordinator.v1.TsoRequest
-	(*TsoResponse)(nil),                 // 29: nokv.coordinator.v1.TsoResponse
-	(*meta.RootEvent)(nil),              // 30: nokv.meta.v1.RootEvent
-	(*meta.RootPendingPeerChange)(nil),  // 31: nokv.meta.v1.RootPendingPeerChange
-	(*meta.RootPendingRangeChange)(nil), // 32: nokv.meta.v1.RootPendingRangeChange
-	(*meta.RegionDescriptor)(nil),       // 33: nokv.meta.v1.RegionDescriptor
+	(CatchUpState)(0),                   // 8: nokv.coordinator.v1.CatchUpState
+	(*StoreHeartbeatRequest)(nil),       // 9: nokv.coordinator.v1.StoreHeartbeatRequest
+	(*SchedulerOperation)(nil),          // 10: nokv.coordinator.v1.SchedulerOperation
+	(*StoreHeartbeatResponse)(nil),      // 11: nokv.coordinator.v1.StoreHeartbeatResponse
+	(*RegionLivenessRequest)(nil),       // 12: nokv.coordinator.v1.RegionLivenessRequest
+	(*RegionLivenessResponse)(nil),      // 13: nokv.coordinator.v1.RegionLivenessResponse
+	(*PublishRootEventRequest)(nil),     // 14: nokv.coordinator.v1.PublishRootEventRequest
+	(*PublishRootEventResponse)(nil),    // 15: nokv.coordinator.v1.PublishRootEventResponse
+	(*TransitionEntry)(nil),             // 16: nokv.coordinator.v1.TransitionEntry
+	(*TransitionAssessment)(nil),        // 17: nokv.coordinator.v1.TransitionAssessment
+	(*ListTransitionsRequest)(nil),      // 18: nokv.coordinator.v1.ListTransitionsRequest
+	(*ListTransitionsResponse)(nil),     // 19: nokv.coordinator.v1.ListTransitionsResponse
+	(*AssessRootEventRequest)(nil),      // 20: nokv.coordinator.v1.AssessRootEventRequest
+	(*AssessRootEventResponse)(nil),     // 21: nokv.coordinator.v1.AssessRootEventResponse
+	(*RemoveRegionRequest)(nil),         // 22: nokv.coordinator.v1.RemoveRegionRequest
+	(*RemoveRegionResponse)(nil),        // 23: nokv.coordinator.v1.RemoveRegionResponse
+	(*RootToken)(nil),                   // 24: nokv.coordinator.v1.RootToken
+	(*GetRegionByKeyRequest)(nil),       // 25: nokv.coordinator.v1.GetRegionByKeyRequest
+	(*GetRegionByKeyResponse)(nil),      // 26: nokv.coordinator.v1.GetRegionByKeyResponse
+	(*AllocIDRequest)(nil),              // 27: nokv.coordinator.v1.AllocIDRequest
+	(*AllocIDResponse)(nil),             // 28: nokv.coordinator.v1.AllocIDResponse
+	(*TsoRequest)(nil),                  // 29: nokv.coordinator.v1.TsoRequest
+	(*TsoResponse)(nil),                 // 30: nokv.coordinator.v1.TsoResponse
+	(*meta.RootEvent)(nil),              // 31: nokv.meta.v1.RootEvent
+	(*meta.RootPendingPeerChange)(nil),  // 32: nokv.meta.v1.RootPendingPeerChange
+	(*meta.RootPendingRangeChange)(nil), // 33: nokv.meta.v1.RootPendingRangeChange
+	(*meta.RegionDescriptor)(nil),       // 34: nokv.meta.v1.RegionDescriptor
 }
 var file_coordinator_coordinator_proto_depIdxs = []int32{
 	0,  // 0: nokv.coordinator.v1.SchedulerOperation.type:type_name -> nokv.coordinator.v1.SchedulerOperationType
-	9,  // 1: nokv.coordinator.v1.StoreHeartbeatResponse.operations:type_name -> nokv.coordinator.v1.SchedulerOperation
-	30, // 2: nokv.coordinator.v1.PublishRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
+	10, // 1: nokv.coordinator.v1.StoreHeartbeatResponse.operations:type_name -> nokv.coordinator.v1.SchedulerOperation
+	31, // 2: nokv.coordinator.v1.PublishRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
 	1,  // 3: nokv.coordinator.v1.TransitionEntry.kind:type_name -> nokv.coordinator.v1.TransitionKind
 	2,  // 4: nokv.coordinator.v1.TransitionEntry.status:type_name -> nokv.coordinator.v1.TransitionStatus
 	3,  // 5: nokv.coordinator.v1.TransitionEntry.retry_class:type_name -> nokv.coordinator.v1.TransitionRetryClass
 	4,  // 6: nokv.coordinator.v1.TransitionEntry.reason:type_name -> nokv.coordinator.v1.TransitionReason
-	31, // 7: nokv.coordinator.v1.TransitionEntry.pending_peer_change:type_name -> nokv.meta.v1.RootPendingPeerChange
-	32, // 8: nokv.coordinator.v1.TransitionEntry.pending_range_change:type_name -> nokv.meta.v1.RootPendingRangeChange
+	32, // 7: nokv.coordinator.v1.TransitionEntry.pending_peer_change:type_name -> nokv.meta.v1.RootPendingPeerChange
+	33, // 8: nokv.coordinator.v1.TransitionEntry.pending_range_change:type_name -> nokv.meta.v1.RootPendingRangeChange
 	1,  // 9: nokv.coordinator.v1.TransitionAssessment.kind:type_name -> nokv.coordinator.v1.TransitionKind
 	2,  // 10: nokv.coordinator.v1.TransitionAssessment.status:type_name -> nokv.coordinator.v1.TransitionStatus
 	3,  // 11: nokv.coordinator.v1.TransitionAssessment.retry_class:type_name -> nokv.coordinator.v1.TransitionRetryClass
 	4,  // 12: nokv.coordinator.v1.TransitionAssessment.reason:type_name -> nokv.coordinator.v1.TransitionReason
 	5,  // 13: nokv.coordinator.v1.TransitionAssessment.decision:type_name -> nokv.coordinator.v1.TransitionDecision
-	15, // 14: nokv.coordinator.v1.ListTransitionsResponse.entries:type_name -> nokv.coordinator.v1.TransitionEntry
-	30, // 15: nokv.coordinator.v1.AssessRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
-	16, // 16: nokv.coordinator.v1.AssessRootEventResponse.assessment:type_name -> nokv.coordinator.v1.TransitionAssessment
+	16, // 14: nokv.coordinator.v1.ListTransitionsResponse.entries:type_name -> nokv.coordinator.v1.TransitionEntry
+	31, // 15: nokv.coordinator.v1.AssessRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
+	17, // 16: nokv.coordinator.v1.AssessRootEventResponse.assessment:type_name -> nokv.coordinator.v1.TransitionAssessment
 	6,  // 17: nokv.coordinator.v1.GetRegionByKeyRequest.freshness:type_name -> nokv.coordinator.v1.Freshness
-	23, // 18: nokv.coordinator.v1.GetRegionByKeyRequest.required_root_token:type_name -> nokv.coordinator.v1.RootToken
-	33, // 19: nokv.coordinator.v1.GetRegionByKeyResponse.region_descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	23, // 20: nokv.coordinator.v1.GetRegionByKeyResponse.served_root_token:type_name -> nokv.coordinator.v1.RootToken
+	24, // 18: nokv.coordinator.v1.GetRegionByKeyRequest.required_root_token:type_name -> nokv.coordinator.v1.RootToken
+	34, // 19: nokv.coordinator.v1.GetRegionByKeyResponse.region_descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	24, // 20: nokv.coordinator.v1.GetRegionByKeyResponse.served_root_token:type_name -> nokv.coordinator.v1.RootToken
 	6,  // 21: nokv.coordinator.v1.GetRegionByKeyResponse.served_freshness:type_name -> nokv.coordinator.v1.Freshness
 	7,  // 22: nokv.coordinator.v1.GetRegionByKeyResponse.degraded_mode:type_name -> nokv.coordinator.v1.DegradedMode
-	23, // 23: nokv.coordinator.v1.GetRegionByKeyResponse.current_root_token:type_name -> nokv.coordinator.v1.RootToken
-	8,  // 24: nokv.coordinator.v1.Coordinator.StoreHeartbeat:input_type -> nokv.coordinator.v1.StoreHeartbeatRequest
-	11, // 25: nokv.coordinator.v1.Coordinator.RegionLiveness:input_type -> nokv.coordinator.v1.RegionLivenessRequest
-	13, // 26: nokv.coordinator.v1.Coordinator.PublishRootEvent:input_type -> nokv.coordinator.v1.PublishRootEventRequest
-	17, // 27: nokv.coordinator.v1.Coordinator.ListTransitions:input_type -> nokv.coordinator.v1.ListTransitionsRequest
-	19, // 28: nokv.coordinator.v1.Coordinator.AssessRootEvent:input_type -> nokv.coordinator.v1.AssessRootEventRequest
-	21, // 29: nokv.coordinator.v1.Coordinator.RemoveRegion:input_type -> nokv.coordinator.v1.RemoveRegionRequest
-	24, // 30: nokv.coordinator.v1.Coordinator.GetRegionByKey:input_type -> nokv.coordinator.v1.GetRegionByKeyRequest
-	26, // 31: nokv.coordinator.v1.Coordinator.AllocID:input_type -> nokv.coordinator.v1.AllocIDRequest
-	28, // 32: nokv.coordinator.v1.Coordinator.Tso:input_type -> nokv.coordinator.v1.TsoRequest
-	10, // 33: nokv.coordinator.v1.Coordinator.StoreHeartbeat:output_type -> nokv.coordinator.v1.StoreHeartbeatResponse
-	12, // 34: nokv.coordinator.v1.Coordinator.RegionLiveness:output_type -> nokv.coordinator.v1.RegionLivenessResponse
-	14, // 35: nokv.coordinator.v1.Coordinator.PublishRootEvent:output_type -> nokv.coordinator.v1.PublishRootEventResponse
-	18, // 36: nokv.coordinator.v1.Coordinator.ListTransitions:output_type -> nokv.coordinator.v1.ListTransitionsResponse
-	20, // 37: nokv.coordinator.v1.Coordinator.AssessRootEvent:output_type -> nokv.coordinator.v1.AssessRootEventResponse
-	22, // 38: nokv.coordinator.v1.Coordinator.RemoveRegion:output_type -> nokv.coordinator.v1.RemoveRegionResponse
-	25, // 39: nokv.coordinator.v1.Coordinator.GetRegionByKey:output_type -> nokv.coordinator.v1.GetRegionByKeyResponse
-	27, // 40: nokv.coordinator.v1.Coordinator.AllocID:output_type -> nokv.coordinator.v1.AllocIDResponse
-	29, // 41: nokv.coordinator.v1.Coordinator.Tso:output_type -> nokv.coordinator.v1.TsoResponse
-	33, // [33:42] is the sub-list for method output_type
-	24, // [24:33] is the sub-list for method input_type
-	24, // [24:24] is the sub-list for extension type_name
-	24, // [24:24] is the sub-list for extension extendee
-	0,  // [0:24] is the sub-list for field type_name
+	24, // 23: nokv.coordinator.v1.GetRegionByKeyResponse.current_root_token:type_name -> nokv.coordinator.v1.RootToken
+	8,  // 24: nokv.coordinator.v1.GetRegionByKeyResponse.catch_up_state:type_name -> nokv.coordinator.v1.CatchUpState
+	9,  // 25: nokv.coordinator.v1.Coordinator.StoreHeartbeat:input_type -> nokv.coordinator.v1.StoreHeartbeatRequest
+	12, // 26: nokv.coordinator.v1.Coordinator.RegionLiveness:input_type -> nokv.coordinator.v1.RegionLivenessRequest
+	14, // 27: nokv.coordinator.v1.Coordinator.PublishRootEvent:input_type -> nokv.coordinator.v1.PublishRootEventRequest
+	18, // 28: nokv.coordinator.v1.Coordinator.ListTransitions:input_type -> nokv.coordinator.v1.ListTransitionsRequest
+	20, // 29: nokv.coordinator.v1.Coordinator.AssessRootEvent:input_type -> nokv.coordinator.v1.AssessRootEventRequest
+	22, // 30: nokv.coordinator.v1.Coordinator.RemoveRegion:input_type -> nokv.coordinator.v1.RemoveRegionRequest
+	25, // 31: nokv.coordinator.v1.Coordinator.GetRegionByKey:input_type -> nokv.coordinator.v1.GetRegionByKeyRequest
+	27, // 32: nokv.coordinator.v1.Coordinator.AllocID:input_type -> nokv.coordinator.v1.AllocIDRequest
+	29, // 33: nokv.coordinator.v1.Coordinator.Tso:input_type -> nokv.coordinator.v1.TsoRequest
+	11, // 34: nokv.coordinator.v1.Coordinator.StoreHeartbeat:output_type -> nokv.coordinator.v1.StoreHeartbeatResponse
+	13, // 35: nokv.coordinator.v1.Coordinator.RegionLiveness:output_type -> nokv.coordinator.v1.RegionLivenessResponse
+	15, // 36: nokv.coordinator.v1.Coordinator.PublishRootEvent:output_type -> nokv.coordinator.v1.PublishRootEventResponse
+	19, // 37: nokv.coordinator.v1.Coordinator.ListTransitions:output_type -> nokv.coordinator.v1.ListTransitionsResponse
+	21, // 38: nokv.coordinator.v1.Coordinator.AssessRootEvent:output_type -> nokv.coordinator.v1.AssessRootEventResponse
+	23, // 39: nokv.coordinator.v1.Coordinator.RemoveRegion:output_type -> nokv.coordinator.v1.RemoveRegionResponse
+	26, // 40: nokv.coordinator.v1.Coordinator.GetRegionByKey:output_type -> nokv.coordinator.v1.GetRegionByKeyResponse
+	28, // 41: nokv.coordinator.v1.Coordinator.AllocID:output_type -> nokv.coordinator.v1.AllocIDResponse
+	30, // 42: nokv.coordinator.v1.Coordinator.Tso:output_type -> nokv.coordinator.v1.TsoResponse
+	34, // [34:43] is the sub-list for method output_type
+	25, // [25:34] is the sub-list for method input_type
+	25, // [25:25] is the sub-list for extension type_name
+	25, // [25:25] is the sub-list for extension extendee
+	0,  // [0:25] is the sub-list for field type_name
 }
 
 func init() { file_coordinator_coordinator_proto_init() }
@@ -1942,7 +2014,7 @@ func file_coordinator_coordinator_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_coordinator_coordinator_proto_rawDesc), len(file_coordinator_coordinator_proto_rawDesc)),
-			NumEnums:      8,
+			NumEnums:      9,
 			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,

@@ -153,6 +153,14 @@ enum DegradedMode {
   DEGRADED_MODE_ROOT_UNAVAILABLE = 3;
 }
 
+enum CatchUpState {
+  CATCH_UP_STATE_UNSPECIFIED = 0;
+  CATCH_UP_STATE_FRESH = 1;
+  CATCH_UP_STATE_LAGGING = 2;
+  CATCH_UP_STATE_BOOTSTRAP_REQUIRED = 3;
+  CATCH_UP_STATE_UNAVAILABLE = 4;
+}
+
 message GetRegionByKeyRequest {
   bytes key = 1;
   Freshness freshness = 2;
@@ -169,6 +177,7 @@ message GetRegionByKeyResponse {
   bool served_by_leader = 6;
   RootToken current_root_token = 7;
   uint64 root_lag = 8;
+  CatchUpState catch_up_state = 9;
 }
 
 message AllocIDRequest {

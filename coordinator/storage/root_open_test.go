@@ -34,7 +34,11 @@ func TestOpenRootLocalStoreCreatesMetadataRootFiles(t *testing.T) {
 
 func TestRootStoreObserveTailRefreshesCachedSnapshot(t *testing.T) {
 	initial := observedDescriptorsSnapshot(testDescriptor(91, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), rootstate.Cursor{Term: 1, Index: 1})
-	updated := observedDescriptorsSnapshot(testDescriptor(92, []byte("m"), []byte("z"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil), rootstate.Cursor{Term: 1, Index: 2})
+	updated := observedDescriptorsTailSnapshot(
+		testDescriptor(92, []byte("m"), []byte("z"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil),
+		rootstate.Cursor{Term: 1, Index: 1},
+		rootstate.Cursor{Term: 1, Index: 2},
+	)
 	backend := &stubRootBackend{observed: initial}
 	backend.observeTailFn = func(after rootstorage.TailToken) (rootstorage.TailAdvance, error) {
 		return updated.Advance(after, rootstorage.TailToken{Cursor: updated.LastCursor(), Revision: 1}), nil
@@ -47,7 +51,7 @@ func TestRootStoreObserveTailRefreshesCachedSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, snapshot.Descriptors, uint64(91))
 
-	advance, err := store.ObserveTail(rootstorage.TailToken{})
+	advance, err := store.ObserveTail(rootstorage.TailToken{Cursor: initial.LastCursor()})
 	require.NoError(t, err)
 	require.True(t, advance.ShouldReloadState())
 
@@ -57,11 +61,16 @@ func TestRootStoreObserveTailRefreshesCachedSnapshot(t *testing.T) {
 	require.Contains(t, snapshot.Descriptors, uint64(92))
 	require.Equal(t, uint64(1), snapshot.RootToken.Revision)
 	require.Equal(t, updated.LastCursor(), snapshot.RootToken.Cursor)
+	require.Equal(t, CatchUpStateLagging, snapshot.CatchUpState)
 }
 
 func TestRootStoreWaitForTailRefreshesCachedSnapshot(t *testing.T) {
 	initial := observedDescriptorsSnapshot(testDescriptor(101, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), rootstate.Cursor{Term: 1, Index: 1})
-	updated := observedDescriptorsSnapshot(testDescriptor(102, []byte("m"), []byte("z"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil), rootstate.Cursor{Term: 1, Index: 2})
+	updated := observedDescriptorsTailSnapshot(
+		testDescriptor(102, []byte("m"), []byte("z"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil),
+		rootstate.Cursor{Term: 1, Index: 1},
+		rootstate.Cursor{Term: 1, Index: 2},
+	)
 	backend := &stubRootBackend{observed: initial}
 	backend.waitForTailFn = func(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error) {
 		return updated.Advance(after, rootstorage.TailToken{Cursor: updated.LastCursor(), Revision: 1}), nil
@@ -70,13 +79,53 @@ func TestRootStoreWaitForTailRefreshesCachedSnapshot(t *testing.T) {
 	store, err := OpenRootStore(backend)
 	require.NoError(t, err)
 
-	advance, err := store.WaitForTail(rootstorage.TailToken{}, time.Second)
+	advance, err := store.WaitForTail(rootstorage.TailToken{Cursor: initial.LastCursor()}, time.Second)
 	require.NoError(t, err)
 	require.True(t, advance.ShouldReloadState())
 
 	snapshot, err := store.Load()
 	require.NoError(t, err)
 	require.Contains(t, snapshot.Descriptors, uint64(102))
+	require.Equal(t, CatchUpStateLagging, snapshot.CatchUpState)
+}
+
+func TestRootStoreObserveTailMarksBootstrapRequired(t *testing.T) {
+	initial := observedDescriptorsSnapshot(testDescriptor(131, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), rootstate.Cursor{Term: 1, Index: 1})
+	updated := rootstorage.ObservedCommitted{
+		Checkpoint: rootstorage.Checkpoint{
+			Snapshot: rootstate.Snapshot{
+				State: rootstate.State{LastCommitted: rootstate.Cursor{Term: 2, Index: 9}},
+				Descriptors: map[uint64]descriptor.Descriptor{
+					132: testDescriptor(132, []byte("m"), []byte("z"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil),
+				},
+				PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
+				PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
+			},
+			TailOffset: 20,
+		},
+		Tail: rootstorage.CommittedTail{
+			RequestedOffset: 1,
+			StartOffset:     20,
+			EndOffset:       20,
+		},
+	}
+	backend := &stubRootBackend{observed: initial}
+	backend.observeTailFn = func(after rootstorage.TailToken) (rootstorage.TailAdvance, error) {
+		return updated.Advance(after, rootstorage.TailToken{Cursor: updated.LastCursor(), Revision: 7}), nil
+	}
+
+	store, err := OpenRootStore(backend)
+	require.NoError(t, err)
+
+	advance, err := store.ObserveTail(rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 1}, Revision: 1})
+	require.NoError(t, err)
+	require.True(t, advance.NeedsBootstrapInstall())
+
+	snapshot, err := store.Load()
+	require.NoError(t, err)
+	require.Equal(t, CatchUpStateBootstrapRequired, snapshot.CatchUpState)
+	require.Equal(t, uint64(7), snapshot.RootToken.Revision)
+	require.Contains(t, snapshot.Descriptors, uint64(132))
 }
 
 func TestRootStoreSubscribeTailNextRefreshesCachedSnapshot(t *testing.T) {
@@ -233,6 +282,30 @@ func observedDescriptorsSnapshot(desc descriptor.Descriptor, cursor rootstate.Cu
 				Descriptors:         map[uint64]descriptor.Descriptor{desc.RegionID: desc},
 				PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
 				PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
+			},
+		},
+	}
+}
+
+func observedDescriptorsTailSnapshot(desc descriptor.Descriptor, checkpointCursor, tailCursor rootstate.Cursor) rootstorage.ObservedCommitted {
+	return rootstorage.ObservedCommitted{
+		Checkpoint: rootstorage.Checkpoint{
+			Snapshot: rootstate.Snapshot{
+				State: rootstate.State{LastCommitted: checkpointCursor},
+				Descriptors: map[uint64]descriptor.Descriptor{
+					desc.RegionID: desc,
+				},
+				PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
+				PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
+			},
+			TailOffset: 1,
+		},
+		Tail: rootstorage.CommittedTail{
+			RequestedOffset: 1,
+			StartOffset:     1,
+			EndOffset:       2,
+			Records: []rootstorage.CommittedEvent{
+				{Cursor: tailCursor, Event: rootevent.RegionDescriptorPublished(desc)},
 			},
 		},
 	}

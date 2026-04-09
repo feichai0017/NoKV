@@ -260,6 +260,9 @@ func (s *Service) GetRegionByKey(_ context.Context, req *coordpb.GetRegionByKeyR
 	if freshness == coordpb.Freshness_FRESHNESS_STRONG && state.rootLag > 0 {
 		return nil, status.Error(codes.FailedPrecondition, "root lag exceeds strong freshness")
 	}
+	if freshness == coordpb.Freshness_FRESHNESS_BOUNDED && state.catchUpState == coordstorage.CatchUpStateBootstrapRequired {
+		return nil, status.Error(codes.FailedPrecondition, "bootstrap required before bounded freshness")
+	}
 	required := rootTokenFromProto(req.GetRequiredRootToken())
 	if !rootTokenSatisfied(state.servedToken, required) {
 		return nil, status.Error(codes.FailedPrecondition, "required rooted token not satisfied")
@@ -277,6 +280,7 @@ func (s *Service) GetRegionByKey(_ context.Context, req *coordpb.GetRegionByKeyR
 			ServedByLeader:   state.servedByLeader,
 			CurrentRootToken: rootTokenToProto(state.currentToken),
 			RootLag:          state.rootLag,
+			CatchUpState:     catchUpStateToProto(state.catchUpState),
 		}, nil
 	}
 	return &coordpb.GetRegionByKeyResponse{
@@ -288,6 +292,7 @@ func (s *Service) GetRegionByKey(_ context.Context, req *coordpb.GetRegionByKeyR
 		ServedByLeader:   state.servedByLeader,
 		CurrentRootToken: rootTokenToProto(state.currentToken),
 		RootLag:          state.rootLag,
+		CatchUpState:     catchUpStateToProto(state.catchUpState),
 	}, nil
 }
 
@@ -295,13 +300,18 @@ type readState struct {
 	servedToken    rootstorage.TailToken
 	currentToken   rootstorage.TailToken
 	rootLag        uint64
+	catchUpState   coordstorage.CatchUpState
 	degraded       coordpb.DegradedMode
 	servedByLeader bool
 }
 
 func (s *Service) currentReadState() (readState, error) {
 	if s == nil {
-		return readState{degraded: coordpb.DegradedMode_DEGRADED_MODE_HEALTHY, servedByLeader: true}, nil
+		return readState{
+			degraded:       coordpb.DegradedMode_DEGRADED_MODE_HEALTHY,
+			servedByLeader: true,
+			catchUpState:   coordstorage.CatchUpStateFresh,
+		}, nil
 	}
 	servedToken := rootstorage.TailToken{}
 	if s.cluster != nil {
@@ -312,6 +322,7 @@ func (s *Service) currentReadState() (readState, error) {
 		servedByLeader: s.storage == nil || s.storage.IsLeader(),
 		servedToken:    servedToken,
 		currentToken:   servedToken,
+		catchUpState:   coordstorage.CatchUpStateFresh,
 	}
 	if s.storage == nil {
 		state.rootLag = rootLag(state.currentToken, state.servedToken)
@@ -320,10 +331,19 @@ func (s *Service) currentReadState() (readState, error) {
 	snapshot, err := s.storage.Load()
 	if err != nil {
 		state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE
+		state.catchUpState = coordstorage.CatchUpStateUnavailable
 		return state, err
 	}
 	state.currentToken = snapshot.RootToken
 	state.rootLag = rootLag(state.currentToken, state.servedToken)
+	state.catchUpState = snapshot.CatchUpState
+	if state.rootLag == 0 {
+		state.catchUpState = coordstorage.CatchUpStateFresh
+		return state, nil
+	}
+	if state.catchUpState == coordstorage.CatchUpStateFresh || state.catchUpState == coordstorage.CatchUpStateUnspecified {
+		state.catchUpState = coordstorage.CatchUpStateLagging
+	}
 	if state.rootLag > 0 {
 		state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_LAGGING
 	}
@@ -404,6 +424,21 @@ func boundedLagSatisfied(lag, bound uint64) bool {
 		return lag == 0
 	}
 	return lag <= bound
+}
+
+func catchUpStateToProto(state coordstorage.CatchUpState) coordpb.CatchUpState {
+	switch state {
+	case coordstorage.CatchUpStateFresh:
+		return coordpb.CatchUpState_CATCH_UP_STATE_FRESH
+	case coordstorage.CatchUpStateLagging:
+		return coordpb.CatchUpState_CATCH_UP_STATE_LAGGING
+	case coordstorage.CatchUpStateBootstrapRequired:
+		return coordpb.CatchUpState_CATCH_UP_STATE_BOOTSTRAP_REQUIRED
+	case coordstorage.CatchUpStateUnavailable:
+		return coordpb.CatchUpState_CATCH_UP_STATE_UNAVAILABLE
+	default:
+		return coordpb.CatchUpState_CATCH_UP_STATE_UNSPECIFIED
+	}
 }
 
 // AllocID allocates one or more globally unique ids.
