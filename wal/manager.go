@@ -38,8 +38,8 @@ type Config struct {
 	FS          vfs.FS
 }
 
-// normalized resolves legacy defaults once at the WAL constructor boundary.
-func (cfg Config) normalized() (Config, error) {
+// resolveOpenConfig resolves constructor defaults once at the WAL open boundary.
+func (cfg Config) resolveOpenConfig() (Config, error) {
 	if cfg.Dir == "" {
 		return Config{}, fmt.Errorf("wal: directory required")
 	}
@@ -111,7 +111,7 @@ type Manager struct {
 // Open creates or resumes a WAL manager.
 func Open(cfg Config) (*Manager, error) {
 	var err error
-	cfg, err = cfg.normalized()
+	cfg, err = cfg.resolveOpenConfig()
 	if err != nil {
 		return nil, err
 	}

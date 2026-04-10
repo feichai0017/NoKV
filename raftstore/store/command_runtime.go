@@ -1,8 +1,9 @@
 package store
 
 import (
-	"context"
+	"fmt"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
+	myraft "github.com/feichai0017/NoKV/raft"
 	"time"
 )
 
@@ -12,30 +13,12 @@ type commandRuntime struct {
 	timeout time.Duration
 }
 
-func (s *Store) commandPipe() *commandPipeline {
-	if s == nil || s.cmds == nil {
-		return nil
-	}
-	return s.cmds.pipe
-}
-
-func (s *Store) commandApply() func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
-	if s == nil || s.cmds == nil {
-		return nil
-	}
-	return s.cmds.apply
-}
-
-func (s *Store) commandWait() time.Duration {
-	if s == nil || s.cmds == nil {
-		return 0
-	}
-	return s.cmds.timeout
-}
-
-func (s *Store) runtimeContext() context.Context {
+func (s *Store) applyEntries(entries []myraft.Entry) error {
 	if s == nil {
-		return context.Background()
+		return fmt.Errorf("raftstore: store is nil")
 	}
-	return s.ctx
+	if s.cmds == nil || s.cmds.pipe == nil {
+		return fmt.Errorf("raftstore: command apply without handler")
+	}
+	return s.cmds.pipe.applyEntries(entries)
 }

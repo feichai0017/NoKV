@@ -32,13 +32,11 @@ func enableRaftDebugLogging() {
 // Node hosts one raftstore store together with the shared gRPC transport,
 // data-plane KV service, and admin service.
 type Node struct {
-	store        *store.Store
-	kvService    *kv.Service
-	adminService *admin.Service
-	transport    *transport.GRPCTransport
-	tickStop     chan struct{}
-	tickWG       sync.WaitGroup
-	tickEvery    time.Duration
+	store     *store.Store
+	transport *transport.GRPCTransport
+	tickStop  chan struct{}
+	tickWG    sync.WaitGroup
+	tickEvery time.Duration
 }
 
 // NewNode constructs one raftstore node using the provided configuration.
@@ -101,10 +99,8 @@ func NewNode(cfg Config) (*Node, error) {
 	}
 
 	node := &Node{
-		store:        st,
-		kvService:    kvService,
-		adminService: adminService,
-		transport:    tr,
+		store:     st,
+		transport: tr,
 	}
 	interval := cfg.RaftTickInterval
 	if interval <= 0 {

@@ -117,7 +117,7 @@ func (c *GRPCClient) PublishRootEvent(ctx context.Context, req *coordpb.PublishR
 	})
 }
 
-// ListTransitions returns the rooted pending transition/operator view.
+// ListTransitions returns the rooted pending transition view.
 func (c *GRPCClient) ListTransitions(ctx context.Context, req *coordpb.ListTransitionsRequest) (*coordpb.ListTransitionsResponse, error) {
 	return invokeRPC(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListTransitionsResponse, error) {
 		return coord.ListTransitions(ctx, req)

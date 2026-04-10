@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 
-	pdoperator "github.com/feichai0017/NoKV/coordinator/operator"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -12,15 +11,19 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// ListTransitions returns the rooted transition/operator view currently
-// materialized inside Coordinator.
+// ListTransitions returns the rooted transition view currently materialized
+// inside Coordinator.
 func (s *Service) ListTransitions(_ context.Context, _ *coordpb.ListTransitionsRequest) (*coordpb.ListTransitionsResponse, error) {
 	if s == nil || s.cluster == nil {
 		return &coordpb.ListTransitionsResponse{}, nil
 	}
-	snapshot := s.cluster.OperatorSnapshot()
-	entries := make([]*coordpb.TransitionEntry, 0, len(snapshot.Entries))
-	for _, entry := range snapshot.Entries {
+	transitions := s.cluster.TransitionSnapshot()
+	rooted := rootstate.BuildTransitionEntries(rootstate.Snapshot{
+		PendingPeerChanges:  transitions.PendingPeerChanges,
+		PendingRangeChanges: transitions.PendingRangeChanges,
+	})
+	entries := make([]*coordpb.TransitionEntry, 0, len(rooted))
+	for _, entry := range rooted {
 		entries = append(entries, transitionEntryToProto(entry))
 	}
 	return &coordpb.ListTransitionsResponse{Entries: entries}, nil
@@ -40,37 +43,42 @@ func (s *Service) AssessRootEvent(_ context.Context, req *coordpb.AssessRootEven
 	if err != nil {
 		return nil, status.Error(codes.Internal, "normalize root event: "+err.Error())
 	}
-	assessment := s.cluster.ObserveRootEventLifecycle(event)
+	assessment, err := s.assessRootEventLifecycle(event)
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
 	return &coordpb.AssessRootEventResponse{
 		Assessment: transitionAssessmentToProto(assessment),
 	}, nil
 }
 
-func transitionEntryToProto(entry pdoperator.RuntimeEntry) *coordpb.TransitionEntry {
+func transitionEntryToProto(entry rootstate.TransitionEntry) *coordpb.TransitionEntry {
 	out := &coordpb.TransitionEntry{
-		Key:        entry.Transition.Key,
-		Kind:       transitionKindToProto(entry.Transition.Kind),
-		Status:     transitionStatusToProto(entry.Transition.Status),
-		RetryClass: transitionRetryClassToProto(entry.Transition.RetryClass),
-		Reason:     transitionReasonToProto(entry.Transition.Reason),
+		Key:          entry.Key,
+		Kind:         transitionKindToProto(entry.Kind),
+		Status:       transitionStatusToProto(entry.Status),
+		RetryClass:   transitionRetryClassToProto(entry.RetryClass),
+		Reason:       transitionReasonToProto(entry.Reason),
+		TransitionId: entry.ID,
 	}
-	if entry.Transition.PeerChange != nil {
-		out.PendingPeerChange = metacodec.RootPendingPeerChangeToProto(entry.Transition.Key, *entry.Transition.PeerChange)
+	if entry.PeerChange != nil {
+		out.PendingPeerChange = metacodec.RootPendingPeerChangeToProto(entry.Key, *entry.PeerChange)
 	}
-	if entry.Transition.RangeChange != nil {
-		out.PendingRangeChange = metacodec.RootPendingRangeChangeToProto(entry.Transition.Key, *entry.Transition.RangeChange)
+	if entry.RangeChange != nil {
+		out.PendingRangeChange = metacodec.RootPendingRangeChangeToProto(entry.Key, *entry.RangeChange)
 	}
 	return out
 }
 
 func transitionAssessmentToProto(assessment rootstate.TransitionAssessment) *coordpb.TransitionAssessment {
 	return &coordpb.TransitionAssessment{
-		Key:        assessment.Key,
-		Kind:       transitionKindToProto(assessment.Kind),
-		Status:     transitionStatusToProto(assessment.Status),
-		RetryClass: transitionRetryClassToProto(assessment.RetryClass),
-		Reason:     transitionReasonToProto(assessment.Reason),
-		Decision:   transitionDecisionToProto(assessment.Decision),
+		Key:          assessment.Key,
+		Kind:         transitionKindToProto(assessment.Kind),
+		Status:       transitionStatusToProto(assessment.Status),
+		RetryClass:   transitionRetryClassToProto(assessment.RetryClass),
+		Reason:       transitionReasonToProto(assessment.Reason),
+		Decision:     transitionDecisionToProto(assessment.Decision),
+		TransitionId: assessment.ID,
 	}
 }
 
@@ -110,8 +118,6 @@ func transitionRetryClassToProto(class rootstate.TransitionRetryClass) coordpb.T
 	switch class {
 	case rootstate.TransitionRetryConflict:
 		return coordpb.TransitionRetryClass_TRANSITION_RETRY_CLASS_CONFLICT
-	case rootstate.TransitionRetryTransient:
-		return coordpb.TransitionRetryClass_TRANSITION_RETRY_CLASS_TRANSIENT
 	default:
 		return coordpb.TransitionRetryClass_TRANSITION_RETRY_CLASS_NONE
 	}

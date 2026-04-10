@@ -114,7 +114,7 @@ func TestObservePeerChangeLifecycle(t *testing.T) {
 	require.Equal(t, rootstate.PeerChangeLifecycleApply, outcome.Decision)
 	require.True(t, outcome.Completion.Open())
 	require.Equal(t, rootstate.TransitionStatusOpen, outcome.Status)
-	require.False(t, outcome.Retryable())
+	require.Equal(t, rootstate.TransitionRetryNone, outcome.RetryClass)
 
 	change, ok := rootstate.PendingPeerChangeFromEvent(planned)
 	require.True(t, ok)
@@ -126,7 +126,7 @@ func TestObservePeerChangeLifecycle(t *testing.T) {
 	)
 	require.Equal(t, rootstate.PeerChangeLifecycleApply, outcome.Decision)
 	require.Equal(t, rootstate.TransitionStatusConflict, outcome.Status)
-	require.True(t, outcome.Retryable())
+	require.Equal(t, rootstate.TransitionRetryConflict, outcome.RetryClass)
 
 	outcome = rootstate.ObservePeerChangeLifecycle(nil, target, true, applied)
 	require.Equal(t, rootstate.PeerChangeLifecycleSkip, outcome.Decision)
@@ -315,7 +315,7 @@ func TestObserveRangeChangeLifecycle(t *testing.T) {
 	require.Equal(t, rootstate.RangeChangeLifecycleApply, outcome.Decision)
 	require.True(t, outcome.Completion.Open())
 	require.Equal(t, rootstate.TransitionStatusOpen, outcome.Status)
-	require.False(t, outcome.Retryable())
+	require.Equal(t, rootstate.TransitionRetryNone, outcome.RetryClass)
 
 	key, pending, ok := rootstate.PendingRangeChangeFromEvent(splitPlanned)
 	require.True(t, ok)
@@ -330,7 +330,7 @@ func TestObserveRangeChangeLifecycle(t *testing.T) {
 	)
 	require.Equal(t, rootstate.RangeChangeLifecycleApply, outcome.Decision)
 	require.Equal(t, rootstate.TransitionStatusConflict, outcome.Status)
-	require.True(t, outcome.Retryable())
+	require.Equal(t, rootstate.TransitionRetryConflict, outcome.RetryClass)
 
 	outcome = rootstate.ObserveRangeChangeLifecycle(
 		nil,

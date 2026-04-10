@@ -2,6 +2,7 @@ package storage
 
 import (
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
@@ -11,10 +12,22 @@ type AllocatorState struct {
 	TSCurrent uint64
 }
 
+type CatchUpState uint8
+
+const (
+	CatchUpStateUnspecified CatchUpState = iota
+	CatchUpStateFresh
+	CatchUpStateLagging
+	CatchUpStateBootstrapRequired
+	CatchUpStateUnavailable
+)
+
 // Snapshot is the reconstructed Coordinator bootstrap catalog derived from durable
 // metadata-root truth.
 type Snapshot struct {
 	ClusterEpoch        uint64
+	RootToken           rootstorage.TailToken
+	CatchUpState        CatchUpState
 	Descriptors         map[uint64]descriptor.Descriptor
 	PendingPeerChanges  map[uint64]rootstate.PendingPeerChange
 	PendingRangeChanges map[uint64]rootstate.PendingRangeChange
@@ -24,6 +37,8 @@ type Snapshot struct {
 func CloneSnapshot(snapshot Snapshot) Snapshot {
 	return Snapshot{
 		ClusterEpoch:        snapshot.ClusterEpoch,
+		RootToken:           snapshot.RootToken,
+		CatchUpState:        snapshot.CatchUpState,
 		Descriptors:         rootstate.CloneDescriptors(snapshot.Descriptors),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),
@@ -33,7 +48,12 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 
 func SnapshotFromRoot(snapshot rootstate.Snapshot) Snapshot {
 	return Snapshot{
-		ClusterEpoch:        snapshot.State.ClusterEpoch,
+		ClusterEpoch: snapshot.State.ClusterEpoch,
+		RootToken: rootstorage.TailToken{
+			Cursor:   snapshot.State.LastCommitted,
+			Revision: 0,
+		},
+		CatchUpState:        CatchUpStateFresh,
 		Descriptors:         rootstate.CloneDescriptors(snapshot.Descriptors),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),

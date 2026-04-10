@@ -122,10 +122,6 @@ func (c RangeChangeCompletion) NeedsEpochAdvance(planned bool) bool {
 	return planned || c.Open()
 }
 
-func (l RangeChangeLifecycle) Retryable() bool {
-	return l.RetryClass != TransitionRetryNone
-}
-
 func rangeChangeSuperseded(descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) bool {
 	switch event.Kind {
 	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionSplitCommitted:

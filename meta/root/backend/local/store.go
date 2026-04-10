@@ -21,7 +21,7 @@ const maxRetainedRecords = 64
 // It is intentionally minimal: an append-only event log, a compact protobuf
 // checkpoint, and an in-memory event index for ReadSince.
 type Store struct {
-	storage rootstorage.Substrate
+	log rootstorage.VirtualLog
 
 	mu           sync.RWMutex
 	state        rootstate.State
@@ -42,13 +42,13 @@ func Open(workdir string, fs vfs.FS) (*Store, error) {
 	if err := fs.MkdirAll(workdir, 0o755); err != nil {
 		return nil, err
 	}
-	storage := rootfile.NewStore(fs, workdir)
-	bootstrap, err := rootmaterialize.LoadBootstrap(storage)
+	log := rootfile.NewStore(fs, workdir)
+	bootstrap, err := rootmaterialize.LoadBootstrap(log)
 	if err != nil {
 		return nil, err
 	}
 	return &Store{
-		storage:      storage,
+		log:          log,
 		state:        bootstrap.Snapshot.State,
 		descs:        bootstrap.Snapshot.Descriptors,
 		pending:      bootstrap.Snapshot.PendingPeerChanges,
@@ -125,11 +125,11 @@ func (s *Store) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) 
 		rootstate.ApplyEventToSnapshot(&snapshot, next, evt)
 		records = append(records, rootstorage.CommittedEvent{Cursor: next, Event: rootevent.CloneEvent(evt)})
 	}
-	logEnd, err := s.storage.AppendCommitted(records...)
+	logEnd, err := s.log.AppendCommitted(records...)
 	if err != nil {
 		return rootstate.CommitInfo{}, err
 	}
-	if err := s.storage.SaveCheckpoint(rootstorage.Checkpoint{
+	if err := s.log.SaveCheckpoint(rootstorage.Checkpoint{
 		Snapshot:   rootstate.CloneSnapshot(snapshot),
 		TailOffset: logEnd,
 	}); err != nil {
@@ -195,7 +195,7 @@ func (s *Store) maybeCompactLocked() {
 		s.retainFrom = plan.RetainFrom
 		return
 	}
-	if err := s.storage.InstallBootstrap(plan.Observed(snapshot)); err != nil {
+	if err := s.log.InstallBootstrap(plan.Observed(snapshot)); err != nil {
 		return
 	}
 	s.records = plan.Tail.Records

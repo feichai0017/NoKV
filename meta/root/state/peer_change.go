@@ -84,10 +84,6 @@ func (c PeerChangeCompletion) Completed() bool {
 	return c.State == PeerChangeCompletionCompleted
 }
 
-func (l PeerChangeLifecycle) Retryable() bool {
-	return l.RetryClass != TransitionRetryNone
-}
-
 func peerChangeSuperseded(current descriptor.Descriptor, hasCurrent bool, event rootevent.Event) bool {
 	if event.PeerChange == nil || !hasCurrent {
 		return false

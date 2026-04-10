@@ -297,6 +297,156 @@ func (s *Service) RegionRuntimeStatus(ctx context.Context, req *adminpb.RegionRu
 	}, nil
 }
 
+// ExecutionStatus returns store-local execution-plane diagnostics derived from
+// the store's admission, topology, and restart runtime state.
+func (s *Service) ExecutionStatus(ctx context.Context, req *adminpb.ExecutionStatusRequest) (*adminpb.ExecutionStatusResponse, error) {
+	_ = ctx
+	_ = req
+	if s == nil || s.store == nil {
+		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
+	}
+	lastAdmission := s.store.LastAdmission()
+	topology := s.store.TopologyExecutions()
+	resp := &adminpb.ExecutionStatusResponse{
+		LastAdmission: buildExecutionAdmissionStatus(lastAdmission),
+		Restart:       buildExecutionRestartStatus(s.store.RestartStatus()),
+		Topology:      make([]*adminpb.ExecutionTopologyStatus, 0, len(topology)),
+	}
+	for _, entry := range topology {
+		resp.Topology = append(resp.Topology, buildExecutionTopologyStatus(entry))
+	}
+	return resp, nil
+}
+
+func buildExecutionAdmissionStatus(admission store.Admission) *adminpb.ExecutionAdmissionStatus {
+	return &adminpb.ExecutionAdmissionStatus{
+		Observed:   executionAdmissionObserved(admission),
+		Class:      executionAdmissionClassProto(admission.Class),
+		Reason:     executionAdmissionReasonProto(admission.Reason),
+		Accepted:   admission.Accepted,
+		RegionId:   admission.RegionID,
+		PeerId:     admission.PeerID,
+		RequestId:  admission.RequestID,
+		Detail:     admission.Detail,
+		AtUnixNano: admission.At.UnixNano(),
+	}
+}
+
+func executionAdmissionObserved(admission store.Admission) bool {
+	return !admission.At.IsZero() ||
+		admission.Class != store.AdmissionClassUnknown ||
+		admission.Reason != store.AdmissionReasonUnknown ||
+		admission.Accepted ||
+		admission.RegionID != 0 ||
+		admission.PeerID != 0 ||
+		admission.RequestID != 0 ||
+		admission.Detail != ""
+}
+
+func executionAdmissionClassProto(class store.AdmissionClass) adminpb.ExecutionAdmissionClass {
+	switch class {
+	case store.AdmissionClassRead:
+		return adminpb.ExecutionAdmissionClass_EXECUTION_ADMISSION_CLASS_READ
+	case store.AdmissionClassWrite:
+		return adminpb.ExecutionAdmissionClass_EXECUTION_ADMISSION_CLASS_WRITE
+	case store.AdmissionClassTopology:
+		return adminpb.ExecutionAdmissionClass_EXECUTION_ADMISSION_CLASS_TOPOLOGY
+	default:
+		return adminpb.ExecutionAdmissionClass_EXECUTION_ADMISSION_CLASS_UNSPECIFIED
+	}
+}
+
+func executionAdmissionReasonProto(reason store.AdmissionReason) adminpb.ExecutionAdmissionReason {
+	switch reason {
+	case store.AdmissionReasonAccepted:
+		return adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_ACCEPTED
+	case store.AdmissionReasonInvalid:
+		return adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_INVALID
+	case store.AdmissionReasonStoreNotMatch:
+		return adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_STORE_NOT_MATCH
+	case store.AdmissionReasonNotHosted:
+		return adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_NOT_HOSTED
+	case store.AdmissionReasonEpochMismatch:
+		return adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_EPOCH_MISMATCH
+	case store.AdmissionReasonKeyNotInRegion:
+		return adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_KEY_NOT_IN_REGION
+	case store.AdmissionReasonNotLeader:
+		return adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_NOT_LEADER
+	case store.AdmissionReasonCanceled:
+		return adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_CANCELED
+	case store.AdmissionReasonTimedOut:
+		return adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_TIMED_OUT
+	default:
+		return adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_UNSPECIFIED
+	}
+}
+
+func buildExecutionTopologyStatus(entry store.TopologyExecution) *adminpb.ExecutionTopologyStatus {
+	return &adminpb.ExecutionTopologyStatus{
+		TransitionId:      entry.TransitionID,
+		RegionId:          entry.RegionID,
+		Action:            entry.Action,
+		Outcome:           executionTopologyOutcomeProto(entry.Outcome),
+		Publish:           executionPublishStateProto(entry.Publish),
+		LastError:         entry.LastError,
+		UpdatedAtUnixNano: entry.UpdatedAt.UnixNano(),
+	}
+}
+
+func executionTopologyOutcomeProto(outcome store.ExecutionOutcome) adminpb.ExecutionTopologyOutcome {
+	switch outcome {
+	case store.ExecutionOutcomeRejected:
+		return adminpb.ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_REJECTED
+	case store.ExecutionOutcomeQueued:
+		return adminpb.ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_QUEUED
+	case store.ExecutionOutcomeProposed:
+		return adminpb.ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_PROPOSED
+	case store.ExecutionOutcomeApplied:
+		return adminpb.ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_APPLIED
+	case store.ExecutionOutcomeFailed:
+		return adminpb.ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_FAILED
+	default:
+		return adminpb.ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_UNSPECIFIED
+	}
+}
+
+func executionPublishStateProto(state store.PublishState) adminpb.ExecutionPublishState {
+	switch state {
+	case store.PublishStateNotRequired:
+		return adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_NOT_REQUIRED
+	case store.PublishStatePlannedPublished:
+		return adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_PLANNED_PUBLISHED
+	case store.PublishStateTerminalPending:
+		return adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_PENDING
+	case store.PublishStateTerminalPublished:
+		return adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_PUBLISHED
+	case store.PublishStateTerminalFailed:
+		return adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_FAILED
+	default:
+		return adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_UNSPECIFIED
+	}
+}
+
+func buildExecutionRestartStatus(restart store.RestartStatus) *adminpb.ExecutionRestartStatus {
+	return &adminpb.ExecutionRestartStatus{
+		State:              executionRestartStateProto(restart.State),
+		RegionCount:        uint64(restart.RegionCount),
+		RaftGroupCount:     uint64(restart.RaftGroupCount),
+		MissingRaftPointer: append([]uint64(nil), restart.MissingRaftPointer...),
+	}
+}
+
+func executionRestartStateProto(state store.RestartState) adminpb.ExecutionRestartState {
+	switch state {
+	case store.RestartStateReady:
+		return adminpb.ExecutionRestartState_EXECUTION_RESTART_STATE_READY
+	case store.RestartStateDegraded:
+		return adminpb.ExecutionRestartState_EXECUTION_RESTART_STATE_DEGRADED
+	default:
+		return adminpb.ExecutionRestartState_EXECUTION_RESTART_STATE_UNSPECIFIED
+	}
+}
+
 func matchesSnapshotRegion(header, payload localmeta.RegionMeta) bool {
 	if header.ID != payload.ID {
 		return false

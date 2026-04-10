@@ -65,7 +65,7 @@ func TestNewEntryApplierRejectsLegacyPayload(t *testing.T) {
 
 	err = applier([]myraft.Entry{{Type: myraft.EntryNormal, Data: []byte("legacy")}})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "unsupported legacy raft payload")
+	require.Contains(t, err.Error(), "unsupported unframed raft payload")
 }
 
 func TestLockedErrorMapping(t *testing.T) {
