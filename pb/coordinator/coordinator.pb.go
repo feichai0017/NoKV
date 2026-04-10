@@ -1532,7 +1532,7 @@ type GetRegionByKeyRequest struct {
 	// required_root_token optionally requires the result to include at least this rooted truth.
 	RequiredRootToken *RootToken `protobuf:"bytes,3,opt,name=required_root_token,json=requiredRootToken,proto3" json:"required_root_token,omitempty"`
 	// max_root_lag bounds the allowed rooted revision gap for bounded reads.
-	MaxRootLag    uint64 `protobuf:"varint,4,opt,name=max_root_lag,json=maxRootLag,proto3" json:"max_root_lag,omitempty"`
+	MaxRootLag    *uint64 `protobuf:"varint,4,opt,name=max_root_lag,json=maxRootLag,proto3,oneof" json:"max_root_lag,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1589,8 +1589,8 @@ func (x *GetRegionByKeyRequest) GetRequiredRootToken() *RootToken {
 }
 
 func (x *GetRegionByKeyRequest) GetMaxRootLag() uint64 {
-	if x != nil {
-		return x.MaxRootLag
+	if x != nil && x.MaxRootLag != nil {
+		return *x.MaxRootLag
 	}
 	return 0
 }
@@ -1975,13 +1975,14 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\tRootToken\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x04R\x04term\x12\x14\n" +
 	"\x05index\x18\x02 \x01(\x04R\x05index\x12\x1a\n" +
-	"\brevision\x18\x03 \x01(\x04R\brevision\"\xd9\x01\n" +
+	"\brevision\x18\x03 \x01(\x04R\brevision\"\xef\x01\n" +
 	"\x15GetRegionByKeyRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12<\n" +
 	"\tfreshness\x18\x02 \x01(\x0e2\x1e.nokv.coordinator.v1.FreshnessR\tfreshness\x12N\n" +
-	"\x13required_root_token\x18\x03 \x01(\v2\x1e.nokv.coordinator.v1.RootTokenR\x11requiredRootToken\x12 \n" +
-	"\fmax_root_lag\x18\x04 \x01(\x04R\n" +
-	"maxRootLag\"\xbd\x04\n" +
+	"\x13required_root_token\x18\x03 \x01(\v2\x1e.nokv.coordinator.v1.RootTokenR\x11requiredRootToken\x12%\n" +
+	"\fmax_root_lag\x18\x04 \x01(\x04H\x00R\n" +
+	"maxRootLag\x88\x01\x01B\x0f\n" +
+	"\r_max_root_lag\"\xbd\x04\n" +
 	"\x16GetRegionByKeyResponse\x12K\n" +
 	"\x11region_descriptor\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x10regionDescriptor\x12\x1b\n" +
 	"\tnot_found\x18\x02 \x01(\bR\bnotFound\x12J\n" +
@@ -2182,6 +2183,7 @@ func file_coordinator_coordinator_proto_init() {
 	if File_coordinator_coordinator_proto != nil {
 		return
 	}
+	file_coordinator_coordinator_proto_msgTypes[16].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

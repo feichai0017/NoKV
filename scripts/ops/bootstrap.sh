@@ -93,8 +93,7 @@ for store_line in "${STORE_LINES[@]}"; do
   store_path=${PATH_TEMPLATE//\{id\}/$store_id}
   mkdir -p "$store_path"
   if [[ -f "$store_path/CURRENT" ]]; then
-    echo "bootstrap.sh: store $store_id already bootstrapped; skipping"
-    continue
+    nokv_die "bootstrap.sh: store $store_id already bootstrapped; refusing to seed into an existing runtime workdir"
   fi
   nokv_assert_fresh_workdir "$store_path" "bootstrap.sh: store $store_id has stale files; refusing to seed into dirty directory"
   for region_line in "${REGION_LINES[@]}"; do

@@ -281,7 +281,7 @@ func (s *Service) GetRegionByKey(_ context.Context, req *coordpb.GetRegionByKeyR
 	if !rootTokenSatisfied(state.servedToken, required) {
 		return nil, status.Error(codes.FailedPrecondition, "required rooted token not satisfied")
 	}
-	if freshness == coordpb.Freshness_FRESHNESS_BOUNDED && !boundedLagSatisfied(state.rootLag, req.GetMaxRootLag()) {
+	if freshness == coordpb.Freshness_FRESHNESS_BOUNDED && req.MaxRootLag != nil && !boundedLagSatisfied(state.rootLag, req.GetMaxRootLag()) {
 		return nil, status.Error(codes.FailedPrecondition, "root lag exceeds bound")
 	}
 	desc, ok := s.cluster.GetRegionDescriptorByKey(req.GetKey())
@@ -418,25 +418,25 @@ func rootTokenSatisfied(current, required rootstorage.TailToken) bool {
 }
 
 func rootLag(current, served rootstorage.TailToken) uint64 {
-	if !rootTokenSatisfied(current, served) {
-		return 0
-	}
 	if current.Revision > 0 || served.Revision > 0 {
-		if current.Revision >= served.Revision {
+		if current.Revision > served.Revision {
 			return current.Revision - served.Revision
+		}
+		if served.Revision > current.Revision {
+			return served.Revision - current.Revision
+		}
+		if rootstate.CursorAfter(current.Cursor, served.Cursor) || rootstate.CursorAfter(served.Cursor, current.Cursor) {
+			return 1
 		}
 		return 0
 	}
-	if rootstate.CursorAfter(current.Cursor, served.Cursor) {
+	if rootstate.CursorAfter(current.Cursor, served.Cursor) || rootstate.CursorAfter(served.Cursor, current.Cursor) {
 		return 1
 	}
 	return 0
 }
 
 func boundedLagSatisfied(lag, bound uint64) bool {
-	if bound == 0 {
-		return lag == 0
-	}
 	return lag <= bound
 }
 
