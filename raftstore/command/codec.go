@@ -19,7 +19,7 @@ const (
 )
 
 // Encode serialises the provided RaftCmdRequest and prefixes it with the
-// command marker so peers can differentiate it from legacy payloads.
+// command marker so peers can reject unframed payloads explicitly.
 func Encode(req *raftcmdpb.RaftCmdRequest) ([]byte, error) {
 	if req == nil {
 		return nil, fmt.Errorf("raftstore: nil raft command")

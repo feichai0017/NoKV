@@ -10,31 +10,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type fakeSubstrate struct {
+type fakeVirtualLog struct {
 	checkpoint Checkpoint
 	tail       CommittedTail
 }
 
-func (f fakeSubstrate) LoadCheckpoint() (Checkpoint, error) {
+func (f fakeVirtualLog) LoadCheckpoint() (Checkpoint, error) {
 	return CloneCheckpoint(f.checkpoint), nil
 }
 
-func (f fakeSubstrate) SaveCheckpoint(Checkpoint) error { return nil }
+func (f fakeVirtualLog) SaveCheckpoint(Checkpoint) error { return nil }
 
-func (f fakeSubstrate) ReadCommitted(int64) (CommittedTail, error) {
+func (f fakeVirtualLog) ReadCommitted(int64) (CommittedTail, error) {
 	return CloneCommittedTail(f.tail), nil
 }
 
-func (f fakeSubstrate) AppendCommitted(...CommittedEvent) (int64, error) { return 0, nil }
+func (f fakeVirtualLog) AppendCommitted(...CommittedEvent) (int64, error) { return 0, nil }
 
-func (f fakeSubstrate) CompactCommitted(CommittedTail) error { return nil }
+func (f fakeVirtualLog) CompactCommitted(CommittedTail) error { return nil }
 
-func (f fakeSubstrate) InstallBootstrap(ObservedCommitted) error { return nil }
+func (f fakeVirtualLog) InstallBootstrap(ObservedCommitted) error { return nil }
 
-func (f fakeSubstrate) Size() (int64, error) { return 0, nil }
+func (f fakeVirtualLog) Size() (int64, error) { return 0, nil }
 
 func TestObserveCommittedDerivesLastCursorAndRetainFrom(t *testing.T) {
-	storage := fakeSubstrate{
+	log := fakeVirtualLog{
 		checkpoint: Checkpoint{
 			Snapshot: rootstate.Snapshot{
 				State: rootstate.State{
@@ -54,7 +54,7 @@ func TestObserveCommittedDerivesLastCursorAndRetainFrom(t *testing.T) {
 		},
 	}
 
-	observed, err := ObserveCommitted(storage, 0)
+	observed, err := ObserveCommitted(log, 0)
 	require.NoError(t, err)
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 6}, observed.LastCursor())
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 4}, observed.RetainFrom())

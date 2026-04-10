@@ -533,7 +533,7 @@ func TestValidateRequestKeysAcrossCommandKinds(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateRequestKeys(meta, tc.req)
+			err, _ := validateRequestKeys(meta, tc.req)
 			require.NotNil(t, err)
 			require.NotNil(t, tc.kind(err))
 		})

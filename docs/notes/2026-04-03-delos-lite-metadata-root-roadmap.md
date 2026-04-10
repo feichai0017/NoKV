@@ -215,7 +215,7 @@ flowchart LR
 
 - `meta/root/event/types.go`
 - `meta/root/state`
-- `meta/root/storage/substrate.go`
+- `meta/root/storage/virtual_log.go`
 
 `meta/root` 当前是 NoKV 的最小 metadata truth kernel。
 
@@ -361,7 +361,7 @@ flowchart LR
 
 核心在：
 
-- `meta/root/storage/substrate.go`
+- `meta/root/storage/virtual_log.go`
 
 关键对象：
 
@@ -437,7 +437,7 @@ flowchart TD
 
 - replicated metadata substrate
 - 当前仍然是 raft 驱动
-- 但上层已经被 `Substrate` / `ObservedCommitted` 解耦
+- 但上层已经被 `VirtualLog` / `ObservedCommitted` 解耦
 
 当前大致分层：
 
@@ -445,9 +445,9 @@ flowchart TD
   - rawnode / transport / tick / campaign
 - `network_ready.go`
   - ready drain / protocol persistence / committed decode
-- `network_substrate.go`
+- `network_virtual_log.go`
   - substrate-facing methods
-- `substrate_adapter.go`
+- `virtual_log_adapter.go`
   - rooted virtual-log adapter
 - `store.go`
   - rooted state machine host

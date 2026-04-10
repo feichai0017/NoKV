@@ -401,7 +401,7 @@ seed_log="$WORKDIR/server.log"
 stage "Start Seed Store"
 info "starting seed store ${SEED_STORE_ID} (workdir=${WORKDIR})"
 start_with_logs seed_pid "store-${SEED_STORE_ID}" "$seed_log" \
-  "$ROOT_DIR/scripts/dev/serve-store.sh" \
+  "$ROOT_DIR/scripts/ops/serve-store.sh" \
   --config "$CONFIG_PATH" \
   --store-id "$SEED_STORE_ID" \
   --workdir "$WORKDIR" \
@@ -414,7 +414,7 @@ for target_store in "${TARGET_STORE_IDS[@]}"; do
   target_dir=${STORE_WORKDIR[$target_store]:-"$ROOT_DIR/artifacts/cluster/store-$target_store"}
   info "starting target store ${target_store} (workdir=${target_dir})"
   start_with_logs store_pid "store-${target_store}" "$target_dir/server.log" \
-    "$ROOT_DIR/scripts/dev/serve-store.sh" \
+    "$ROOT_DIR/scripts/ops/serve-store.sh" \
     --config "$CONFIG_PATH" \
     --store-id "$target_store" \
     --workdir "$target_dir" \

@@ -150,7 +150,7 @@ Everything hangs off a single file: [`raft_config.example.json`](./raft_config.e
 ]
 ```
 
-- **Local scripts** (`scripts/dev/cluster.sh`, `scripts/dev/serve-store.sh`, `scripts/dev/bootstrap.sh`) ingest the same JSON, so local runs match production layouts.
+- **Local scripts** (`scripts/dev/cluster.sh`, `scripts/ops/serve-store.sh`, `scripts/ops/bootstrap.sh`) ingest the same JSON, so local runs match production layouts.
 - **Docker Compose** mounts the file into each container; manifests, transports, and Redis gateway all stay in sync.
 - Need more stores or regions? Update the JSON and re-run the script/Compose—no code changes required.
 - Programmatic access: import `github.com/feichai0017/NoKV/config` and call `config.LoadFile` / `Validate` for a single source of truth across tools.

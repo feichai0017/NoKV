@@ -8,6 +8,7 @@ import (
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 
@@ -58,12 +59,11 @@ func (s *Store) buildPeerChangeTarget(regionID uint64, cc raftpb.ConfChangeV2) (
 		return transitionTarget{}, err
 	}
 	return transitionTarget{
-		RegionID: regionID,
-		Event:    event,
-		Action:   "peer change",
-		Proposal: transitionProposal{
-			ConfChange: &cc,
-		},
+		TransitionID: rootstate.TransitionIDFromEvent(event),
+		RegionID:     regionID,
+		Event:        event,
+		Action:       "peer change",
+		ConfChange:   &cc,
 	}, nil
 }
 
@@ -177,13 +177,13 @@ func (s *Store) buildSplitTarget(parentID uint64, childMeta localmeta.RegionMeta
 			Child:          metacodec.LocalRegionMetaToDescriptorProto(plan.child),
 		},
 	}
+	event := splitEvent(rootevent.KindRegionSplitPlanned, plan)
 	return transitionTarget{
-		RegionID: parentID,
-		Event:    plannedSplitEvent(plan),
-		Action:   "split",
-		Proposal: transitionProposal{
-			Admin: command,
-		},
+		TransitionID: rootstate.TransitionIDFromEvent(event),
+		RegionID:     parentID,
+		Event:        event,
+		Action:       "split",
+		Admin:        command,
 	}, nil
 }
 
@@ -205,13 +205,13 @@ func (s *Store) buildMergeTarget(targetRegionID, sourceRegionID uint64) (transit
 			SourceRegionId: sourceRegionID,
 		},
 	}
+	event := mergeEvent(rootevent.KindRegionMergePlanned, plan)
 	return transitionTarget{
-		RegionID: targetRegionID,
-		Event:    plannedMergeEvent(plan),
-		Action:   "merge",
-		Proposal: transitionProposal{
-			Admin: command,
-		},
+		TransitionID: rootstate.TransitionIDFromEvent(event),
+		RegionID:     targetRegionID,
+		Event:        event,
+		Action:       "merge",
+		Admin:        command,
 	}, nil
 }
 
@@ -311,19 +311,6 @@ func plannedPeerChangeEvent(meta localmeta.RegionMeta, cc raftpb.ConfChangeV2) (
 	default:
 		return rootevent.Event{}, fmt.Errorf("raftstore: unsupported conf change type %v", change.Type)
 	}
-}
-
-func plannedSplitEvent(plan splitPlan) rootevent.Event {
-	return rootevent.RegionSplitPlanned(
-		plan.originalParent.ID,
-		plan.child.StartKey,
-		plan.parentDesc,
-		plan.childDesc,
-	)
-}
-
-func plannedMergeEvent(plan mergePlan) rootevent.Event {
-	return rootevent.RegionMergePlanned(plan.leftID, plan.rightID, plan.mergedDesc)
 }
 
 func confChangeTargetPeer(change raftpb.ConfChangeSingle, ctx []byte) metaregion.Peer {

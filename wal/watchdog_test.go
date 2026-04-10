@@ -58,8 +58,8 @@ func TestWatchdogAutoGC(t *testing.T) {
 	require.NotContains(t, joined, "00002.wal")
 }
 
-func TestWatchdogConfigNormalizedDefaults(t *testing.T) {
-	cfg := (WatchdogConfig{Manager: &Manager{}}).normalized()
+func TestWatchdogConfigResolveDefaults(t *testing.T) {
+	cfg := (WatchdogConfig{Manager: &Manager{}}).resolveDefaults()
 	require.Equal(t, defaultWatchdogInterval, cfg.Interval)
 	require.Equal(t, defaultWatchdogMinRemovable, cfg.MinRemovable)
 	require.Equal(t, defaultWatchdogMaxBatch, cfg.MaxBatch)

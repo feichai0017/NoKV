@@ -289,3 +289,53 @@ func TestResolveStoreWorkDirFallbackAndNil(t *testing.T) {
 		t.Fatalf("expected empty workdir for unknown store, got %q", got)
 	}
 }
+
+func TestResolveStoreListenAddr(t *testing.T) {
+	cfg := &File{
+		Stores: []Store{
+			{
+				StoreID:          1,
+				ListenAddr:       "127.0.0.1:20170",
+				DockerListenAddr: "nokv-store-1:20170",
+			},
+			{
+				StoreID:    2,
+				ListenAddr: "127.0.0.1:20171",
+			},
+		},
+	}
+	if got := cfg.ResolveStoreListenAddr(1, "host"); got != "127.0.0.1:20170" {
+		t.Fatalf("host listen addr mismatch: got %q", got)
+	}
+	if got := cfg.ResolveStoreListenAddr(1, "docker"); got != "nokv-store-1:20170" {
+		t.Fatalf("docker listen addr mismatch: got %q", got)
+	}
+	if got := cfg.ResolveStoreListenAddr(2, "docker"); got != "127.0.0.1:20171" {
+		t.Fatalf("docker fallback listen addr mismatch: got %q", got)
+	}
+}
+
+func TestResolveStoreAddr(t *testing.T) {
+	cfg := &File{
+		Stores: []Store{
+			{
+				StoreID:    1,
+				Addr:       "127.0.0.1:20170",
+				DockerAddr: "nokv-store-1:20170",
+			},
+			{
+				StoreID: 2,
+				Addr:    "127.0.0.1:20171",
+			},
+		},
+	}
+	if got := cfg.ResolveStoreAddr(1, "host"); got != "127.0.0.1:20170" {
+		t.Fatalf("host store addr mismatch: got %q", got)
+	}
+	if got := cfg.ResolveStoreAddr(1, "docker"); got != "nokv-store-1:20170" {
+		t.Fatalf("docker store addr mismatch: got %q", got)
+	}
+	if got := cfg.ResolveStoreAddr(2, "docker"); got != "127.0.0.1:20171" {
+		t.Fatalf("docker fallback store addr mismatch: got %q", got)
+	}
+}

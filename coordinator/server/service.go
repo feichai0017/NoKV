@@ -12,6 +12,7 @@ import (
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"google.golang.org/grpc/codes"
@@ -31,6 +32,7 @@ type Service struct {
 }
 
 const errNotLeaderPrefix = "coordinator not leader"
+const errRootUnavailable = "coordinator root unavailable"
 
 // NewService constructs a Coordinator service.
 func NewService(cluster *catalog.Cluster, ids *idalloc.IDAllocator, tsAlloc *tso.Allocator) *Service {
@@ -67,13 +69,7 @@ func (s *Service) RefreshFromStorage() error {
 	if s == nil || s.storage == nil {
 		return nil
 	}
-	snapshot, err := s.reloadRootedView(true)
-	if err != nil {
-		return err
-	}
-	s.ids.Fence(snapshot.Allocator.IDCurrent)
-	s.tso.Fence(snapshot.Allocator.TSCurrent)
-	return nil
+	return s.reloadAndFenceAllocators(true)
 }
 
 // ReloadFromStorage reloads the in-memory rooted view from the storage cache
@@ -82,13 +78,7 @@ func (s *Service) ReloadFromStorage() error {
 	if s == nil || s.storage == nil {
 		return nil
 	}
-	snapshot, err := s.reloadRootedView(false)
-	if err != nil {
-		return err
-	}
-	s.ids.Fence(snapshot.Allocator.IDCurrent)
-	s.tso.Fence(snapshot.Allocator.TSCurrent)
-	return nil
+	return s.reloadAndFenceAllocators(false)
 }
 
 // StoreHeartbeat records store-level stats.
@@ -143,12 +133,16 @@ func (s *Service) PublishRootEvent(_ context.Context, req *coordpb.PublishRootEv
 	if err := s.requireExpectedClusterEpoch(req.GetExpectedClusterEpoch()); err != nil {
 		return nil, err
 	}
-	skip, err := s.guardRootEventLifecycle(event)
+	assessment, err := s.assessRootEventLifecycle(event)
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
-	if skip {
-		return &coordpb.PublishRootEventResponse{Accepted: true}, nil
+	resp := &coordpb.PublishRootEventResponse{
+		Assessment: transitionAssessmentToProto(assessment),
+	}
+	if assessment.Decision == rootstate.RootEventLifecycleSkip {
+		resp.Accepted = true
+		return resp, nil
 	}
 	if err := s.cluster.ValidateRootEvent(event); err != nil {
 		switch {
@@ -167,28 +161,35 @@ func (s *Service) PublishRootEvent(_ context.Context, req *coordpb.PublishRootEv
 		if _, err := s.reloadRootedView(false); err != nil {
 			return nil, status.Error(codes.Internal, "reload rooted view: "+err.Error())
 		}
-		return &coordpb.PublishRootEventResponse{Accepted: true}, nil
+		resp.Accepted = true
+		return resp, nil
 	}
 	if err := s.cluster.PublishRootEvent(event); err != nil {
 		return nil, status.Error(codes.Internal, "apply root event after persist: "+err.Error())
 	}
-	return &coordpb.PublishRootEventResponse{Accepted: true}, nil
+	resp.Accepted = true
+	return resp, nil
 }
 
-func (s *Service) guardRootEventLifecycle(event rootevent.Event) (bool, error) {
+func (s *Service) assessRootEventLifecycle(event rootevent.Event) (rootstate.TransitionAssessment, error) {
 	if s == nil || s.storage == nil {
-		return false, nil
+		if s == nil || s.cluster == nil {
+			return rootstate.TransitionAssessment{}, nil
+		}
+		return s.cluster.ObserveRootEventLifecycle(event), nil
 	}
 	snapshot, err := s.storage.Load()
 	if err != nil {
-		return false, fmt.Errorf("load rooted snapshot: %w", err)
+		return rootstate.TransitionAssessment{}, fmt.Errorf("load rooted snapshot: %w", err)
 	}
-	decision, err := rootstate.EvaluateRootEventLifecycle(rootstate.Snapshot{
+	rooted := rootstate.Snapshot{
 		Descriptors:         snapshot.Descriptors,
 		PendingPeerChanges:  snapshot.PendingPeerChanges,
 		PendingRangeChanges: snapshot.PendingRangeChanges,
-	}, event)
-	return decision == rootstate.RootEventLifecycleSkip, err
+	}
+	assessment := rootstate.AssessTransition(rooted, event)
+	_, err = rootstate.EvaluateRootEventLifecycle(rooted, event)
+	return assessment, err
 }
 
 // RemoveRegion deletes region metadata from the Coordinator in-memory catalog.
@@ -235,8 +236,18 @@ func (s *Service) reloadRootedView(refresh bool) (coordstorage.Snapshot, error) 
 	if err != nil {
 		return coordstorage.Snapshot{}, err
 	}
-	s.cluster.ReplaceRootSnapshot(snapshot.Descriptors, snapshot.PendingPeerChanges, snapshot.PendingRangeChanges)
+	s.cluster.ReplaceRootSnapshot(snapshot.Descriptors, snapshot.PendingPeerChanges, snapshot.PendingRangeChanges, snapshot.RootToken)
 	return snapshot, nil
+}
+
+func (s *Service) reloadAndFenceAllocators(refresh bool) error {
+	snapshot, err := s.reloadRootedView(refresh)
+	if err != nil {
+		return err
+	}
+	s.ids.Fence(snapshot.Allocator.IDCurrent)
+	s.tso.Fence(snapshot.Allocator.TSCurrent)
+	return nil
 }
 
 // GetRegionByKey returns region metadata for the specified key.
@@ -244,14 +255,199 @@ func (s *Service) GetRegionByKey(_ context.Context, req *coordpb.GetRegionByKeyR
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "get region by key request is nil")
 	}
+	freshness := normalizeFreshness(req.GetFreshness())
+	state, err := s.currentReadState()
+	if err != nil {
+		if freshness == coordpb.Freshness_FRESHNESS_STRONG || freshness == coordpb.Freshness_FRESHNESS_BOUNDED {
+			return nil, status.Error(codes.FailedPrecondition, errRootUnavailable)
+		}
+		state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE
+	}
+	if freshness == coordpb.Freshness_FRESHNESS_STRONG && !state.servedByLeader {
+		return nil, s.notLeaderError()
+	}
+	if freshness == coordpb.Freshness_FRESHNESS_STRONG && state.rootLag > 0 {
+		return nil, status.Error(codes.FailedPrecondition, "root lag exceeds strong freshness")
+	}
+	if freshness == coordpb.Freshness_FRESHNESS_BOUNDED && state.catchUpState == coordstorage.CatchUpStateBootstrapRequired {
+		return nil, status.Error(codes.FailedPrecondition, "bootstrap required before bounded freshness")
+	}
+	required := rootTokenFromProto(req.GetRequiredRootToken())
+	if !rootTokenSatisfied(state.servedToken, required) {
+		return nil, status.Error(codes.FailedPrecondition, "required rooted token not satisfied")
+	}
+	if freshness == coordpb.Freshness_FRESHNESS_BOUNDED && req.MaxRootLag != nil && !boundedLagSatisfied(state.rootLag, req.GetMaxRootLag()) {
+		return nil, status.Error(codes.FailedPrecondition, "root lag exceeds bound")
+	}
 	desc, ok := s.cluster.GetRegionDescriptorByKey(req.GetKey())
 	if !ok {
-		return &coordpb.GetRegionByKeyResponse{NotFound: true}, nil
+		return &coordpb.GetRegionByKeyResponse{
+			NotFound:         true,
+			ServedRootToken:  rootTokenToProto(state.servedToken),
+			ServedFreshness:  freshness,
+			DegradedMode:     state.degraded,
+			ServedByLeader:   state.servedByLeader,
+			CurrentRootToken: rootTokenToProto(state.currentToken),
+			RootLag:          state.rootLag,
+			CatchUpState:     catchUpStateToProto(state.catchUpState),
+		}, nil
 	}
 	return &coordpb.GetRegionByKeyResponse{
 		RegionDescriptor: metacodec.DescriptorToProto(desc),
 		NotFound:         false,
+		ServedRootToken:  rootTokenToProto(state.servedToken),
+		ServedFreshness:  freshness,
+		DegradedMode:     state.degraded,
+		ServedByLeader:   state.servedByLeader,
+		CurrentRootToken: rootTokenToProto(state.currentToken),
+		RootLag:          state.rootLag,
+		CatchUpState:     catchUpStateToProto(state.catchUpState),
 	}, nil
+}
+
+type readState struct {
+	servedToken    rootstorage.TailToken
+	currentToken   rootstorage.TailToken
+	rootLag        uint64
+	catchUpState   coordstorage.CatchUpState
+	degraded       coordpb.DegradedMode
+	servedByLeader bool
+}
+
+func (s *Service) currentReadState() (readState, error) {
+	if s == nil {
+		return readState{
+			degraded:       coordpb.DegradedMode_DEGRADED_MODE_HEALTHY,
+			servedByLeader: true,
+			catchUpState:   coordstorage.CatchUpStateFresh,
+		}, nil
+	}
+	servedToken := rootstorage.TailToken{}
+	if s.cluster != nil {
+		servedToken = s.cluster.CatalogRootToken()
+	}
+	state := readState{
+		degraded:       coordpb.DegradedMode_DEGRADED_MODE_HEALTHY,
+		servedByLeader: s.storage == nil || s.storage.IsLeader(),
+		servedToken:    servedToken,
+		currentToken:   servedToken,
+		catchUpState:   coordstorage.CatchUpStateFresh,
+	}
+	if s.storage == nil {
+		state.rootLag = rootLag(state.currentToken, state.servedToken)
+		return state, nil
+	}
+	snapshot, err := s.storage.Load()
+	if err != nil {
+		state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE
+		state.catchUpState = coordstorage.CatchUpStateUnavailable
+		return state, err
+	}
+	state.currentToken = snapshot.RootToken
+	state.rootLag = rootLag(state.currentToken, state.servedToken)
+	state.catchUpState = snapshot.CatchUpState
+	if state.rootLag == 0 {
+		state.catchUpState = coordstorage.CatchUpStateFresh
+		return state, nil
+	}
+	if state.catchUpState == coordstorage.CatchUpStateFresh || state.catchUpState == coordstorage.CatchUpStateUnspecified {
+		state.catchUpState = coordstorage.CatchUpStateLagging
+	}
+	if state.rootLag > 0 {
+		state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_LAGGING
+	}
+	return state, nil
+}
+
+func (s *Service) notLeaderError() error {
+	if s == nil || s.storage == nil {
+		return status.Error(codes.FailedPrecondition, errNotLeaderPrefix)
+	}
+	leaderID := s.storage.LeaderID()
+	if leaderID == 0 {
+		return status.Error(codes.FailedPrecondition, errNotLeaderPrefix)
+	}
+	return status.Error(codes.FailedPrecondition, fmt.Sprintf("%s (leader_id=%d)", errNotLeaderPrefix, leaderID))
+}
+
+func normalizeFreshness(f coordpb.Freshness) coordpb.Freshness {
+	switch f {
+	case coordpb.Freshness_FRESHNESS_STRONG,
+		coordpb.Freshness_FRESHNESS_BOUNDED,
+		coordpb.Freshness_FRESHNESS_BEST_EFFORT:
+		return f
+	default:
+		return coordpb.Freshness_FRESHNESS_BEST_EFFORT
+	}
+}
+
+func rootTokenToProto(token rootstorage.TailToken) *coordpb.RootToken {
+	return &coordpb.RootToken{
+		Term:     token.Cursor.Term,
+		Index:    token.Cursor.Index,
+		Revision: token.Revision,
+	}
+}
+
+func rootTokenFromProto(token *coordpb.RootToken) rootstorage.TailToken {
+	if token == nil {
+		return rootstorage.TailToken{}
+	}
+	return rootstorage.TailToken{
+		Cursor: rootstate.Cursor{
+			Term:  token.GetTerm(),
+			Index: token.GetIndex(),
+		},
+		Revision: token.GetRevision(),
+	}
+}
+
+func rootTokenSatisfied(current, required rootstorage.TailToken) bool {
+	if required.Cursor.Term == 0 && required.Cursor.Index == 0 && required.Revision == 0 {
+		return true
+	}
+	if current.Revision != 0 || required.Revision != 0 {
+		return current.Revision >= required.Revision && !rootstate.CursorAfter(required.Cursor, current.Cursor)
+	}
+	return !rootstate.CursorAfter(required.Cursor, current.Cursor)
+}
+
+func rootLag(current, served rootstorage.TailToken) uint64 {
+	if current.Revision > 0 || served.Revision > 0 {
+		if current.Revision > served.Revision {
+			return current.Revision - served.Revision
+		}
+		if served.Revision > current.Revision {
+			return served.Revision - current.Revision
+		}
+		if rootstate.CursorAfter(current.Cursor, served.Cursor) || rootstate.CursorAfter(served.Cursor, current.Cursor) {
+			return 1
+		}
+		return 0
+	}
+	if rootstate.CursorAfter(current.Cursor, served.Cursor) || rootstate.CursorAfter(served.Cursor, current.Cursor) {
+		return 1
+	}
+	return 0
+}
+
+func boundedLagSatisfied(lag, bound uint64) bool {
+	return lag <= bound
+}
+
+func catchUpStateToProto(state coordstorage.CatchUpState) coordpb.CatchUpState {
+	switch state {
+	case coordstorage.CatchUpStateFresh:
+		return coordpb.CatchUpState_CATCH_UP_STATE_FRESH
+	case coordstorage.CatchUpStateLagging:
+		return coordpb.CatchUpState_CATCH_UP_STATE_LAGGING
+	case coordstorage.CatchUpStateBootstrapRequired:
+		return coordpb.CatchUpState_CATCH_UP_STATE_BOOTSTRAP_REQUIRED
+	case coordstorage.CatchUpStateUnavailable:
+		return coordpb.CatchUpState_CATCH_UP_STATE_UNAVAILABLE
+	default:
+		return coordpb.CatchUpState_CATCH_UP_STATE_UNSPECIFIED
+	}
 }
 
 // AllocID allocates one or more globally unique ids.

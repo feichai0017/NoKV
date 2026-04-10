@@ -16,6 +16,21 @@ This launches a 3-node Raft cluster plus a Coordinator service.
 
 The launcher stays attached, streams Coordinator/store logs to the terminal, and also writes them under `./artifacts/cluster/`.
 
+If you stop one store and want to restart it later, restart it against the same
+workdir:
+
+```bash
+./scripts/ops/serve-store.sh \
+  --config ./raft_config.example.json \
+  --store-id 1 \
+  --workdir ./artifacts/cluster/store-1
+```
+
+On restart, NoKV recovers hosted peers from local metadata in the store workdir.
+The config file is only used to resolve store and Coordinator addresses.
+Do not rerun `scripts/ops/bootstrap.sh` or treat `scripts/dev/cluster.sh` as the
+restart path for an already-running store.
+
 Start the Redis-compatible gateway in another shell:
 
 ```bash
