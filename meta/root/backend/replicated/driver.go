@@ -8,7 +8,7 @@ import (
 // Driver exposes the minimal committed-log, checkpoint, and bootstrap-install
 // capabilities required by the replicated metadata-root backend.
 type Driver interface {
-	rootstorage.Substrate
+	rootstorage.VirtualLog
 	ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
 	WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
 	TailNotify() <-chan struct{}

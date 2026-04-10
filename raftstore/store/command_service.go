@@ -15,10 +15,6 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
-func (s *Store) validateCommand(req *raftcmdpb.RaftCmdRequest) (*peer.Peer, localmeta.RegionMeta, *raftcmdpb.RaftCmdResponse, error) {
-	return s.validateCommandClass(AdmissionClassUnknown, req)
-}
-
 func (s *Store) validateCommandClass(class AdmissionClass, req *raftcmdpb.RaftCmdRequest) (*peer.Peer, localmeta.RegionMeta, *raftcmdpb.RaftCmdResponse, error) {
 	if s == nil {
 		if class != AdmissionClassUnknown {

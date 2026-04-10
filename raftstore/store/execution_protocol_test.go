@@ -175,7 +175,7 @@ func TestExecutionProtocolRetainsRecentTopologyExecutionsOnly(t *testing.T) {
 	rs := NewStore(Config{})
 	t.Cleanup(rs.Close)
 
-	for i := 0; i < executionTransitionRetention+8; i++ {
+	for i := range executionTransitionRetention + 8 {
 		rs.recordTopologyQueued(transitionTarget{
 			TransitionID: fmt.Sprintf("transition-%03d", i),
 			RegionID:     uint64(i + 1),

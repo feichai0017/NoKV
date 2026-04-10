@@ -300,16 +300,6 @@ func isEpochStale(incoming, current metaregion.Epoch) bool {
 	return false
 }
 
-func rangesOverlap(a, b descriptor.Descriptor) bool {
-	if len(a.EndKey) > 0 && bytes.Compare(a.EndKey, b.StartKey) <= 0 {
-		return false
-	}
-	if len(b.EndKey) > 0 && bytes.Compare(b.EndKey, a.StartKey) <= 0 {
-		return false
-	}
-	return true
-}
-
 func buildRegionIndex(regions map[uint64]descriptor.Descriptor) []regionIndexEntry {
 	index := make([]regionIndexEntry, 0, len(regions))
 	for id, desc := range regions {
