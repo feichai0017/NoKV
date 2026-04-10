@@ -42,8 +42,8 @@ func TestTransitionBuilderPeerChangeTarget(t *testing.T) {
 	require.Equal(t, uint64(10), target.RegionID)
 	require.Equal(t, "peer change", target.Action)
 	require.Equal(t, rootevent.KindPeerAdditionPlanned, target.Event.Kind)
-	require.NotNil(t, target.Proposal.ConfChange)
-	require.Nil(t, target.Proposal.Admin)
+	require.NotNil(t, target.ConfChange)
+	require.Nil(t, target.Admin)
 
 	require.NoError(t, rs.applyRegionMetaSilent(localmeta.RegionMeta{
 		ID:       10,
@@ -95,8 +95,8 @@ func TestTransitionBuilderSplitPlanTargetAndNoop(t *testing.T) {
 	target, err := rs.buildSplitTarget(parent.ID, child, []byte("m"))
 	require.NoError(t, err)
 	require.Equal(t, rootevent.KindRegionSplitPlanned, target.Event.Kind)
-	require.NotNil(t, target.Proposal.Admin)
-	require.Equal(t, raftcmdpb.AdminCommand_SPLIT, target.Proposal.Admin.Type)
+	require.NotNil(t, target.Admin)
+	require.Equal(t, raftcmdpb.AdminCommand_SPLIT, target.Admin.Type)
 
 	require.NoError(t, rs.applyRegionMetaSilent(plan.parent))
 	require.NoError(t, rs.applyRegionMetaSilent(plan.child))
@@ -140,8 +140,8 @@ func TestTransitionBuilderMergePlanAndChildConfig(t *testing.T) {
 	target, err := rs.buildMergeTarget(targetMeta.ID, sourceMeta.ID)
 	require.NoError(t, err)
 	require.Equal(t, rootevent.KindRegionMergePlanned, target.Event.Kind)
-	require.NotNil(t, target.Proposal.Admin)
-	require.Equal(t, raftcmdpb.AdminCommand_MERGE, target.Proposal.Admin.Type)
+	require.NotNil(t, target.Admin)
+	require.Equal(t, raftcmdpb.AdminCommand_MERGE, target.Admin.Type)
 
 	cfg, peers, err := rs.buildChildPeerConfig(sourceMeta)
 	require.NoError(t, err)

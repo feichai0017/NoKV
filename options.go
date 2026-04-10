@@ -36,11 +36,11 @@ type Options struct {
 	SSTableMaxSz   int64
 	// MaxBatchCount bounds the number of entries grouped into one internal
 	// write batch. NewDefaultOptions exposes a concrete default; zero is only
-	// interpreted as a legacy unset value during normalization.
+	// interpreted Open resolves the constructor default when left zero.
 	MaxBatchCount int64
 	// MaxBatchSize bounds the size in bytes of one internal write batch.
 	// NewDefaultOptions exposes a concrete default; zero is only interpreted as
-	// a legacy unset value during normalization.
+	// a Open resolves the constructor default when left zero.
 	MaxBatchSize       int64
 	ValueLogFileSize   int
 	ValueLogMaxEntries uint32
@@ -81,11 +81,11 @@ type Options struct {
 
 	// WriteBatchMaxCount bounds how many requests the commit worker coalesces in
 	// one pass. NewDefaultOptions exposes a concrete default; zero is only
-	// interpreted as a legacy unset value during normalization.
+	// interpreted Open resolves the constructor default when left zero.
 	WriteBatchMaxCount int
 	// WriteBatchMaxSize bounds the byte size the commit worker coalesces in one
 	// pass. NewDefaultOptions exposes a concrete default; zero is only
-	// interpreted as a legacy unset value during normalization.
+	// interpreted Open resolves the constructor default when left zero.
 	WriteBatchMaxSize int64
 
 	DetectConflicts bool
@@ -129,13 +129,12 @@ type Options struct {
 	WriteBatchWait time.Duration
 	// WriteThrottleMinRate is the target write admission rate in bytes/sec when
 	// slowdown pressure approaches the stop threshold. NewDefaultOptions
-	// exposes a concrete default; zero is only interpreted as a legacy unset
-	// value during normalization.
+	// exposes a concrete default; zero lets Open resolve the constructor
+	// default.
 	WriteThrottleMinRate int64
 	// WriteThrottleMaxRate is the target write admission rate in bytes/sec when
 	// slowdown first becomes active. NewDefaultOptions exposes a concrete
-	// default; zero is only interpreted as a legacy unset value during
-	// normalization.
+	// default; zero lets Open resolve the constructor default.
 	WriteThrottleMaxRate int64
 
 	// BlockCacheBytes bounds the in-memory budget for cached L0/L1 data blocks.
@@ -155,7 +154,7 @@ type Options struct {
 	// WALBufferSize controls the size of the in-memory write buffer used by
 	// the WAL manager. Larger buffers reduce syscall frequency at the cost of
 	// memory. NewDefaultOptions exposes a concrete default; zero is only
-	// interpreted as a legacy unset value during normalization.
+	// interpreted Open resolves the constructor default when left zero.
 	WALBufferSize int
 	// WALAutoGCInterval controls how frequently the watchdog evaluates WAL
 	// backlog for automated garbage collection.
@@ -192,39 +191,39 @@ type Options struct {
 	CompactionPolicy CompactionPolicy
 	// NumLevelZeroTables controls when write throttling kicks in and feeds into
 	// the compaction priority calculation. NewDefaultOptions populates a concrete
-	// default; normalizeInPlace only backfills zero-valued legacy configs.
+	// default; Open resolves the constructor default when left zero.
 	NumLevelZeroTables int
 	// L0SlowdownWritesTrigger starts write pacing when L0 table count reaches
 	// this threshold. Defaults are populated up front; zero is only interpreted
-	// as a legacy unset value during normalization.
+	// Open resolves the constructor default when left zero.
 	L0SlowdownWritesTrigger int
 	// L0StopWritesTrigger blocks writes when L0 table count reaches this
 	// threshold. Defaults are populated up front; zero is only interpreted as a
-	// legacy unset value during normalization.
+	// Open resolves the constructor default when left zero.
 	L0StopWritesTrigger int
 	// L0ResumeWritesTrigger clears throttling only when L0 table count drops to
 	// this threshold or lower. Defaults are populated up front; zero is only
-	// interpreted as a legacy unset value during normalization.
+	// interpreted Open resolves the constructor default when left zero.
 	L0ResumeWritesTrigger int
 	// CompactionSlowdownTrigger starts write pacing when max compaction score
 	// reaches this value. Defaults are populated up front; zero is only
-	// interpreted as a legacy unset value during normalization.
+	// interpreted Open resolves the constructor default when left zero.
 	CompactionSlowdownTrigger float64
 	// CompactionStopTrigger blocks writes when max compaction score reaches this
 	// value. Defaults are populated up front; zero is only interpreted as a
-	// legacy unset value during normalization.
+	// Open resolves the constructor default when left zero.
 	CompactionStopTrigger float64
 	// CompactionResumeTrigger clears throttling only when max compaction score
 	// drops to this value or lower. Defaults are populated up front; zero is only
-	// interpreted as a legacy unset value during normalization.
+	// interpreted Open resolves the constructor default when left zero.
 	CompactionResumeTrigger float64
 	// IngestCompactBatchSize decides how many L0 tables to promote into the
 	// ingest buffer per compaction cycle. NewDefaultOptions populates a concrete
-	// default; normalizeInPlace only backfills zero-valued legacy configs.
+	// default; Open resolves the constructor default when left zero.
 	IngestCompactBatchSize int
 	// IngestBacklogMergeScore triggers an ingest-merge task when the ingest
 	// backlog score exceeds this threshold. Defaults are populated up front; zero
-	// is only interpreted as a legacy unset value during normalization.
+	// is only interpreted Open resolves the constructor default when left zero.
 	IngestBacklogMergeScore float64
 
 	// CompactionValueWeight adjusts how aggressively the scheduler prioritises
@@ -329,11 +328,10 @@ func NewDefaultOptions() *Options {
 	return opt
 }
 
-// normalized returns a shallow copy with runtime defaults resolved once at the
-// DB boundary. Zero remains meaningful for settings that explicitly use zero to
-// disable a feature; only legacy unset fields are backfilled here for
-// compatibility with manually constructed zero-value configs.
-func (opt *Options) normalizeInPlace() {
+// resolveOpenDefaults resolves constructor-owned defaults once at the DB
+// boundary. Zero remains meaningful for settings that explicitly use zero to
+// disable a feature.
+func (opt *Options) resolveOpenDefaults() {
 	if opt == nil {
 		return
 	}

@@ -34,7 +34,6 @@ type TransitionRetryClass uint8
 const (
 	TransitionRetryNone TransitionRetryClass = iota
 	TransitionRetryConflict
-	TransitionRetryTransient
 )
 
 // TransitionReason provides a machine-readable explanation for one lifecycle
@@ -61,10 +60,6 @@ type RootEventLifecycle struct {
 	RetryClass TransitionRetryClass
 	Reason     TransitionReason
 	Decision   RootEventLifecycleDecision
-}
-
-func (l RootEventLifecycle) Retryable() bool {
-	return l.RetryClass != TransitionRetryNone
 }
 
 func rootEventLifecycleKey(event rootevent.Event) uint64 {

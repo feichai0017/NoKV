@@ -183,9 +183,13 @@ func TestClusterPublishRootEventTracksTransitionSnapshot(t *testing.T) {
 	require.NoError(t, c.PublishRootEvent(rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)))
 	transitions := c.TransitionSnapshot()
 	require.Contains(t, transitions.PendingPeerChanges, target.RegionID)
-	operators := c.OperatorSnapshot()
-	require.Len(t, operators.Entries, 1)
-	require.Equal(t, rootstate.TransitionStatusPending, operators.Entries[0].Transition.Status)
+	entries := rootstate.BuildTransitionEntries(rootstate.Snapshot{
+		Descriptors:         map[uint64]descriptor.Descriptor{target.RegionID: current},
+		PendingPeerChanges:  transitions.PendingPeerChanges,
+		PendingRangeChanges: transitions.PendingRangeChanges,
+	})
+	require.Len(t, entries, 1)
+	require.Equal(t, rootstate.TransitionStatusPending, entries[0].Status)
 
 	require.NoError(t, c.PublishRootEvent(rootevent.PeerAdded(target.RegionID, 2, 201, target)))
 	transitions = c.TransitionSnapshot()
@@ -225,21 +229,11 @@ func TestClusterReplaceRootSnapshotPreservesStoreStateAndRefreshesRuntime(t *tes
 	require.Len(t, c.RegionSnapshot(), 1)
 	transitions := c.TransitionSnapshot()
 	require.Contains(t, transitions.PendingPeerChanges, base.RegionID)
-	operators := c.OperatorSnapshot()
-	require.Len(t, operators.Entries, 1)
-	require.Equal(t, uint64(30), operators.Entries[0].Transition.Key)
-	require.Equal(t, "coordinator", operators.Entries[0].Owner)
-
-	entry := operators.Entries[0]
-	entry.Owner = "mutated"
-	operators.Entries[0] = entry
 	change := transitions.PendingPeerChanges[base.RegionID]
 	change.Target.StartKey = []byte("mutated")
 	transitions.PendingPeerChanges[base.RegionID] = change
 
-	freshOperators := c.OperatorSnapshot()
 	freshTransitions := c.TransitionSnapshot()
-	require.Equal(t, "coordinator", freshOperators.Entries[0].Owner)
 	require.Equal(t, []byte("a"), freshTransitions.PendingPeerChanges[base.RegionID].Target.StartKey)
 	require.Equal(t, uint64(4), c.CatalogRootToken().Revision)
 
@@ -247,7 +241,6 @@ func TestClusterReplaceRootSnapshotPreservesStoreStateAndRefreshesRuntime(t *tes
 	require.Len(t, c.StoreSnapshot(), 1)
 	require.Empty(t, c.RegionSnapshot())
 	require.Empty(t, c.TransitionSnapshot().PendingPeerChanges)
-	require.Empty(t, c.OperatorSnapshot().Entries)
 }
 
 func TestClusterPublishRootEventCoversTopologyLifecycleBranches(t *testing.T) {

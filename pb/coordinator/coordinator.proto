@@ -79,7 +79,6 @@ enum TransitionStatus {
 enum TransitionRetryClass {
   TRANSITION_RETRY_CLASS_NONE = 0;
   TRANSITION_RETRY_CLASS_CONFLICT = 1;
-  TRANSITION_RETRY_CLASS_TRANSIENT = 2;
 }
 
 enum TransitionReason {
@@ -98,27 +97,6 @@ enum TransitionDecision {
   TRANSITION_DECISION_SKIP = 1;
 }
 
-enum TransitionPhase {
-  TRANSITION_PHASE_UNSPECIFIED = 0;
-  // Planned means rooted lifecycle assessment recognizes the transition target,
-  // but operator runtime admission has not yet been observed.
-  TRANSITION_PHASE_PLANNED = 1;
-  // Admitted means the operator runtime currently treats the rooted transition
-  // as admitted for forward execution progress.
-  TRANSITION_PHASE_ADMITTED = 2;
-  // Completed means the requested transition target is already satisfied by rooted truth.
-  TRANSITION_PHASE_COMPLETED = 3;
-  // Conflicted means another pending rooted transition currently owns progress
-  // for the same transition target.
-  TRANSITION_PHASE_CONFLICTED = 4;
-  // Superseded means newer rooted topology truth has replaced this transition target.
-  TRANSITION_PHASE_SUPERSEDED = 5;
-  // Cancelled means the rooted transition target was explicitly cancelled.
-  TRANSITION_PHASE_CANCELLED = 6;
-  // Aborted means an apply or terminal event does not match the current rooted target.
-  TRANSITION_PHASE_ABORTED = 7;
-}
-
 message TransitionEntry {
   // key is the rooted transition family key: region id for peer changes, or
   // parent/merge key for range transitions.
@@ -131,8 +109,6 @@ message TransitionEntry {
   nokv.meta.v1.RootPendingRangeChange pending_range_change = 7;
   // transition_id is the stable identity of the transition target.
   string transition_id = 8;
-  // phase is the current runtime-facing lifecycle phase.
-  TransitionPhase phase = 9;
 }
 
 message TransitionAssessment {
@@ -146,9 +122,6 @@ message TransitionAssessment {
   TransitionDecision decision = 6;
   // transition_id is the stable identity derived from the proposed rooted event.
   string transition_id = 7;
-  // phase is the assessment-facing lifecycle phase. It is intentionally
-  // pre-runtime: it does not imply operator admission.
-  TransitionPhase phase = 8;
 }
 
 message ListTransitionsRequest {}

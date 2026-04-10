@@ -5,6 +5,8 @@ import (
 	"fmt"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -41,9 +43,12 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta localmeta.RegionMeta
 	newParent := plan.parent
 	childMeta = plan.child
 	var childPeer *peer.Peer
+	committed := splitEvent(rootevent.KindRegionSplitCommitted, plan)
 	if err := s.applyTerminalOutcome(terminalOutcome{
-		Event:  committedSplitEvent(plan),
-		Action: "split",
+		TransitionID: rootstate.TransitionIDFromEvent(committed),
+		RegionID:     parentID,
+		Event:        committed,
+		Action:       "split",
 		Apply: func() error {
 			if err := s.applyRegionMetaSilent(newParent); err != nil {
 				return err
@@ -134,9 +139,12 @@ func (s *Store) handleMergeCommand(merge *raftcmdpb.MergeCommand) error {
 		return nil
 	}
 	updated := plan.target
+	committed := mergeEvent(rootevent.KindRegionMerged, plan)
 	return s.applyTerminalOutcome(terminalOutcome{
-		Event:  committedMergeEvent(plan),
-		Action: "merge",
+		TransitionID: rootstate.TransitionIDFromEvent(committed),
+		RegionID:     merge.GetTargetRegionId(),
+		Event:        committed,
+		Action:       "merge",
 		Apply: func() error {
 			if err := s.applyRegionMetaSilent(updated); err != nil {
 				return err

@@ -23,7 +23,7 @@
 - [Percolator](percolator.md)
 - [Raftstore](raftstore.md)
 - [Coordinator](coordinator.md)
-- [Control-Plane Protocol](control_plane_protocol.md)
+- [Control and Execution Plane Protocols](control_and_execution_protocols.md)
 - [Migration](migration.md)
 - [Recovery](recovery.md)
 - [Stats](stats.md)
