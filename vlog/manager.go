@@ -28,8 +28,8 @@ type Config struct {
 	FS       vfs.FS
 }
 
-// normalized resolves constructor-boundary defaults for the value-log manager.
-func (cfg Config) normalized() (Config, error) {
+// resolveOpenConfig resolves constructor-boundary defaults for the value-log manager.
+func (cfg Config) resolveOpenConfig() (Config, error) {
 	if cfg.Dir == "" {
 		return Config{}, fmt.Errorf("vlog manager: dir required")
 	}
@@ -105,7 +105,7 @@ func (m *Manager) ensureActiveLocked() (*file.LogFile, uint32, error) {
 
 func Open(cfg Config) (*Manager, error) {
 	var err error
-	cfg, err = cfg.normalized()
+	cfg, err = cfg.resolveOpenConfig()
 	if err != nil {
 		return nil, err
 	}

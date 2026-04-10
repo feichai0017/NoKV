@@ -472,12 +472,12 @@ func (a TailAdvance) FellBehind() bool {
 
 // ObserveCommitted loads one compact checkpoint together with one retained
 // committed tail view starting at requestedOffset.
-func ObserveCommitted(storage Substrate, requestedOffset int64) (ObservedCommitted, error) {
-	checkpoint, err := storage.LoadCheckpoint()
+func ObserveCommitted(log VirtualLog, requestedOffset int64) (ObservedCommitted, error) {
+	checkpoint, err := log.LoadCheckpoint()
 	if err != nil {
 		return ObservedCommitted{}, err
 	}
-	tail, err := storage.ReadCommitted(requestedOffset)
+	tail, err := log.ReadCommitted(requestedOffset)
 	if err != nil {
 		return ObservedCommitted{}, err
 	}
@@ -487,10 +487,10 @@ func ObserveCommitted(storage Substrate, requestedOffset int64) (ObservedCommitt
 	}, nil
 }
 
-// Substrate is the rooted metadata virtual-log surface consumed by root
+// VirtualLog is the rooted metadata virtual-log surface consumed by root
 // backends. It combines one compact checkpoint boundary with one retained
 // committed stream and bootstrap installation semantics.
-type Substrate interface {
+type VirtualLog interface {
 	LoadCheckpoint() (checkpoint Checkpoint, err error)
 	SaveCheckpoint(checkpoint Checkpoint) error
 	ReadCommitted(requestedOffset int64) (CommittedTail, error)

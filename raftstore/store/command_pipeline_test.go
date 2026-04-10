@@ -88,9 +88,9 @@ func TestCommandPipelineRemoveProposalDropsPendingResult(t *testing.T) {
 	}
 }
 
-func TestCommandPipelineRejectsLegacyPayload(t *testing.T) {
+func TestCommandPipelineRejectsUnframedPayload(t *testing.T) {
 	cp := newCommandPipeline(func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
-		t.Fatal("legacy payload must not reach applier")
+		t.Fatal("unframed payload must not reach applier")
 		return nil, nil
 	})
 
@@ -98,5 +98,5 @@ func TestCommandPipelineRejectsLegacyPayload(t *testing.T) {
 		{Type: myraft.EntryNormal, Data: []byte("legacy-payload")},
 	})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "unsupported legacy raft payload")
+	require.Contains(t, err.Error(), "unsupported unframed raft payload")
 }

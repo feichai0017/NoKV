@@ -16,6 +16,12 @@ Options:
   --coordinator-listen ADDR      Coordinator gRPC listen address override (default: config.coordinator.addr or 127.0.0.1:2379)
   --raft-debug-log      Enable verbose raft debug logging (default: enabled)
   --no-raft-debug-log   Disable raft debug logging
+
+Notes:
+  - cluster.sh is a bootstrap/dev launcher, not a restart workflow.
+  - It seeds local peer catalogs from config.regions when a store workdir is fresh.
+  - If a store already has runtime state, restart it with "nokv serve" or
+    "scripts/ops/serve-store.sh" against the same workdir instead of rerunning cluster.sh.
 USAGE
 }
 
@@ -217,7 +223,7 @@ for idx in "${!STORE_IDS[@]}"; do
     "${serve_debug_args[@]}"
   )
   start_with_logs store_pid "store-${store_id}" "$store_dir/server.log" \
-    "$ROOT_DIR/scripts/dev/serve-store.sh" "${serve_args[@]}"
+    "$ROOT_DIR/scripts/ops/serve-store.sh" "${serve_args[@]}"
   STORE_PIDS+=("$store_pid")
 done
 

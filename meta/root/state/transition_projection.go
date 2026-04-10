@@ -6,9 +6,10 @@ import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 )
 
-// TransitionEntry is one rooted transition currently visible to operator and
-// debugging surfaces.
+// TransitionEntry is one rooted transition currently visible to debugging and
+// inspection surfaces.
 type TransitionEntry struct {
+	ID          string
 	Kind        TransitionKind
 	Key         uint64
 	Status      TransitionStatus
@@ -21,6 +22,7 @@ type TransitionEntry struct {
 // TransitionAssessment is one explicit lifecycle assessment for a proposed
 // rooted transition event against the current rooted snapshot.
 type TransitionAssessment struct {
+	ID         string
 	Kind       TransitionKind
 	Key        uint64
 	Status     TransitionStatus
@@ -33,11 +35,19 @@ type TransitionAssessment struct {
 // supplied rooted snapshot without mutating it.
 func AssessTransition(snapshot Snapshot, event rootevent.Event) TransitionAssessment {
 	lifecycle := ObserveRootEventLifecycle(snapshot, event)
-	return TransitionAssessment(lifecycle)
+	return TransitionAssessment{
+		ID:         TransitionIDFromEvent(event),
+		Kind:       lifecycle.Kind,
+		Key:        lifecycle.Key,
+		Status:     lifecycle.Status,
+		RetryClass: lifecycle.RetryClass,
+		Reason:     lifecycle.Reason,
+		Decision:   lifecycle.Decision,
+	}
 }
 
 // BuildTransitionEntries projects the rooted pending transition maps into one
-// stable operator/debug surface.
+// stable inspection surface.
 func BuildTransitionEntries(snapshot Snapshot) []TransitionEntry {
 	total := len(snapshot.PendingPeerChanges) + len(snapshot.PendingRangeChanges)
 	if total == 0 {
@@ -65,32 +75,12 @@ func BuildTransitionEntries(snapshot Snapshot) []TransitionEntry {
 	return entries
 }
 
-// CloneTransitionEntries returns a detached transition-entry slice.
-func CloneTransitionEntries(in []TransitionEntry) []TransitionEntry {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]TransitionEntry, 0, len(in))
-	for _, entry := range in {
-		item := entry
-		if entry.PeerChange != nil {
-			change := *entry.PeerChange
-			item.PeerChange = &change
-		}
-		if entry.RangeChange != nil {
-			change := *entry.RangeChange
-			item.RangeChange = &change
-		}
-		out = append(out, item)
-	}
-	return out
-}
-
 func transitionEntryFromPendingPeerChange(snapshot Snapshot, regionID uint64, change PendingPeerChange) TransitionEntry {
 	current, ok := snapshot.Descriptors[regionID]
 	lifecycle := ObservePeerChangeLifecycle(snapshot.PendingPeerChanges, current, ok, pendingPeerChangeEvent(regionID, change))
 	changeCopy := change
 	return TransitionEntry{
+		ID:         TransitionIDFromEvent(pendingPeerChangeEvent(regionID, change)),
 		Kind:       TransitionKindPeerChange,
 		Key:        regionID,
 		Status:     lifecycle.Status,
@@ -104,6 +94,7 @@ func transitionEntryFromPendingRangeChange(snapshot Snapshot, key uint64, change
 	lifecycle := ObserveRangeChangeLifecycle(snapshot.PendingRangeChanges, snapshot.Descriptors, pendingRangeChangeEvent(change))
 	changeCopy := change
 	return TransitionEntry{
+		ID:          TransitionIDFromEvent(pendingRangeChangeEvent(change)),
 		Kind:        TransitionKindRangeChange,
 		Key:         key,
 		Status:      lifecycle.Status,

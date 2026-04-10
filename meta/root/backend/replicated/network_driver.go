@@ -33,7 +33,7 @@ type NetworkDriver struct {
 	closeOnce   sync.Once
 	id          uint64
 	workdir     string
-	adapter     *substrateAdapter
+	adapter     *virtualLogAdapter
 	node        *networkNode
 	transport   Transport
 	ticksPaused bool
@@ -70,7 +70,7 @@ func NewNetworkDriver(cfg NetworkConfig) (*NetworkDriver, error) {
 	if err := os.MkdirAll(cfg.WorkDir, 0o755); err != nil {
 		return nil, err
 	}
-	adapter, err := newSubstrateAdapter(rootfile.NewStore(vfs.Ensure(nil), cfg.WorkDir))
+	adapter, err := newVirtualLogAdapter(rootfile.NewStore(vfs.Ensure(nil), cfg.WorkDir))
 	if err != nil {
 		return nil, err
 	}

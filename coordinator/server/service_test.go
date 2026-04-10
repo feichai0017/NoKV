@@ -8,6 +8,7 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
@@ -28,6 +30,7 @@ type fakeStorage struct {
 	saveCalls  int
 	eventErr   error
 	saveErr    error
+	loadErr    error
 	lastID     uint64
 	lastTS     uint64
 	leader     bool
@@ -37,6 +40,9 @@ type fakeStorage struct {
 }
 
 func (f *fakeStorage) Load() (coordstorage.Snapshot, error) {
+	if f.loadErr != nil {
+		return coordstorage.Snapshot{}, f.loadErr
+	}
 	return coordstorage.CloneSnapshot(f.snapshot), nil
 }
 
@@ -146,6 +152,207 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 	require.False(t, getResp.GetNotFound())
 	require.NotNil(t, getResp.GetRegionDescriptor())
 	require.Equal(t, uint64(11), getResp.GetRegionDescriptor().GetRegionId())
+	require.Equal(t, coordpb.Freshness_FRESHNESS_BEST_EFFORT, getResp.GetServedFreshness())
+	require.Equal(t, coordpb.DegradedMode_DEGRADED_MODE_HEALTHY, getResp.GetDegradedMode())
+	require.Equal(t, coordpb.CatchUpState_CATCH_UP_STATE_FRESH, getResp.GetCatchUpState())
+	require.True(t, getResp.GetServedByLeader())
+	require.Zero(t, getResp.GetRootLag())
+}
+
+func TestServiceGetRegionByKeyStrongReadRejectsFollower(t *testing.T) {
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+	storage := &fakeStorage{
+		leader:   false,
+		leaderID: 7,
+		snapshot: coordstorage.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)},
+	}
+	svc.SetStorage(storage)
+	require.NoError(t, svc.cluster.PublishRegionDescriptor(testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)))
+
+	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:       []byte("a"),
+		Freshness: coordpb.Freshness_FRESHNESS_STRONG,
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, err.Error(), errNotLeaderPrefix)
+}
+
+func TestServiceGetRegionByKeyRequiredRootToken(t *testing.T) {
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+	desc := testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
+	svc.cluster.ReplaceRootSnapshot(
+		map[uint64]descriptor.Descriptor{desc.RegionID: desc},
+		nil,
+		nil,
+		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 5},
+	)
+	storage := &fakeStorage{
+		leader: true,
+		snapshot: coordstorage.Snapshot{
+			RootToken:   rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 5},
+			Descriptors: map[uint64]descriptor.Descriptor{desc.RegionID: desc},
+		},
+	}
+	svc.SetStorage(storage)
+
+	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key: []byte("a"),
+		RequiredRootToken: &coordpb.RootToken{
+			Term:     1,
+			Index:    10,
+			Revision: 10,
+		},
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, err.Error(), "required rooted token not satisfied")
+
+	resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key: []byte("a"),
+		RequiredRootToken: &coordpb.RootToken{
+			Term:     1,
+			Index:    1,
+			Revision: 1,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(5), resp.GetServedRootToken().GetRevision())
+	require.Equal(t, uint64(1), resp.GetServedRootToken().GetTerm())
+	require.Equal(t, uint64(3), resp.GetServedRootToken().GetIndex())
+}
+
+func TestServiceGetRegionByKeyBestEffortWithUnavailableRoot(t *testing.T) {
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+	storage := &fakeStorage{
+		leader:   true,
+		snapshot: coordstorage.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)},
+	}
+	svc.SetStorage(storage)
+	err := publishDescriptorEvent(t, svc, testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 0)
+	require.NoError(t, err)
+	storage.loadErr = errors.New("root unavailable")
+
+	resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
+	require.NoError(t, err)
+	require.False(t, resp.GetNotFound())
+	require.Equal(t, coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE, resp.GetDegradedMode())
+	require.Equal(t, coordpb.Freshness_FRESHNESS_BEST_EFFORT, resp.GetServedFreshness())
+
+	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:       []byte("a"),
+		Freshness: coordpb.Freshness_FRESHNESS_BOUNDED,
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, err.Error(), errRootUnavailable)
+}
+
+func TestServiceGetRegionByKeyReportsRootLagging(t *testing.T) {
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+	svc.cluster.ReplaceRootSnapshot(
+		map[uint64]descriptor.Descriptor{
+			11: testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil),
+		},
+		nil,
+		nil,
+		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 3},
+	)
+	storage := &fakeStorage{
+		leader: true,
+		snapshot: coordstorage.Snapshot{
+			RootToken: rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 5}, Revision: 7},
+			Descriptors: map[uint64]descriptor.Descriptor{
+				11: testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil),
+			},
+		},
+	}
+	svc.SetStorage(storage)
+
+	resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
+	require.NoError(t, err)
+	require.Equal(t, coordpb.DegradedMode_DEGRADED_MODE_ROOT_LAGGING, resp.GetDegradedMode())
+	require.Equal(t, uint64(4), resp.GetRootLag())
+	require.Equal(t, coordpb.CatchUpState_CATCH_UP_STATE_LAGGING, resp.GetCatchUpState())
+	require.Equal(t, uint64(3), resp.GetServedRootToken().GetRevision())
+	require.Equal(t, uint64(7), resp.GetCurrentRootToken().GetRevision())
+
+	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:        []byte("a"),
+		Freshness:  coordpb.Freshness_FRESHNESS_BOUNDED,
+		MaxRootLag: proto.Uint64(3),
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, err.Error(), "root lag exceeds bound")
+
+	resp, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:        []byte("a"),
+		Freshness:  coordpb.Freshness_FRESHNESS_BOUNDED,
+		MaxRootLag: proto.Uint64(4),
+	})
+	require.NoError(t, err)
+	require.Equal(t, coordpb.DegradedMode_DEGRADED_MODE_ROOT_LAGGING, resp.GetDegradedMode())
+
+	resp, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:       []byte("a"),
+		Freshness: coordpb.Freshness_FRESHNESS_BOUNDED,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(4), resp.GetRootLag())
+
+	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:       []byte("a"),
+		Freshness: coordpb.Freshness_FRESHNESS_STRONG,
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, err.Error(), "root lag exceeds strong freshness")
+}
+
+func TestServiceGetRegionByKeyBoundedRejectsBootstrapRequired(t *testing.T) {
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+	desc := testDescriptor(21, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
+	svc.cluster.ReplaceRootSnapshot(
+		map[uint64]descriptor.Descriptor{desc.RegionID: desc},
+		nil,
+		nil,
+		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 2}, Revision: 2},
+	)
+	storage := &fakeStorage{
+		leader: true,
+		snapshot: coordstorage.Snapshot{
+			RootToken:    rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 2, Index: 9}, Revision: 7},
+			CatchUpState: coordstorage.CatchUpStateBootstrapRequired,
+			Descriptors:  map[uint64]descriptor.Descriptor{desc.RegionID: desc},
+		},
+	}
+	svc.SetStorage(storage)
+
+	resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
+	require.NoError(t, err)
+	require.Equal(t, coordpb.CatchUpState_CATCH_UP_STATE_BOOTSTRAP_REQUIRED, resp.GetCatchUpState())
+	require.Equal(t, coordpb.DegradedMode_DEGRADED_MODE_ROOT_LAGGING, resp.GetDegradedMode())
+
+	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:        []byte("a"),
+		Freshness:  coordpb.Freshness_FRESHNESS_BOUNDED,
+		MaxRootLag: proto.Uint64(16),
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, err.Error(), "bootstrap required before bounded freshness")
+}
+
+func TestRootLagCountsCursorMismatchAtSameRevision(t *testing.T) {
+	require.Equal(t, uint64(1), rootLag(
+		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 9}, Revision: 7},
+		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 8}, Revision: 7},
+	))
+	require.Equal(t, uint64(1), rootLag(
+		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 8}, Revision: 7},
+		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 9}, Revision: 7},
+	))
 }
 
 func TestServiceRemoveRegion(t *testing.T) {
@@ -403,6 +610,10 @@ func TestServicePublishRootEventPersistsPeerPlan(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())
+	require.NotNil(t, resp.GetAssessment())
+	require.Equal(t, "peer:12:add:2:201", resp.GetAssessment().GetTransitionId())
+	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_OPEN, resp.GetAssessment().GetStatus())
+	require.Equal(t, coordpb.TransitionDecision_TRANSITION_DECISION_APPLY, resp.GetAssessment().GetDecision())
 	require.Equal(t, 1, store.eventCalls)
 	require.Equal(t, rootevent.KindPeerAdditionPlanned, store.lastEvent.Kind)
 	require.Equal(t, uint64(6), store.lastEvent.PeerChange.Region.RootEpoch)
@@ -444,6 +655,10 @@ func TestServicePublishRootEventSkipsDuplicatePeerPlan(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())
+	require.NotNil(t, resp.GetAssessment())
+	require.Equal(t, "peer:13:add:2:201", resp.GetAssessment().GetTransitionId())
+	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_PENDING, resp.GetAssessment().GetStatus())
+	require.Equal(t, coordpb.TransitionDecision_TRANSITION_DECISION_SKIP, resp.GetAssessment().GetDecision())
 	require.Equal(t, 0, store.eventCalls)
 	require.Equal(t, uint64(6), store.snapshot.ClusterEpoch)
 	require.Len(t, store.snapshot.PendingPeerChanges, 1)
@@ -474,6 +689,10 @@ func TestServicePublishRootEventSkipsCompletedPeerPlan(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())
+	require.NotNil(t, resp.GetAssessment())
+	require.Equal(t, "peer:131:add:2:201", resp.GetAssessment().GetTransitionId())
+	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_COMPLETED, resp.GetAssessment().GetStatus())
+	require.Equal(t, coordpb.TransitionDecision_TRANSITION_DECISION_SKIP, resp.GetAssessment().GetDecision())
 	require.Equal(t, 0, store.eventCalls)
 }
 
@@ -595,7 +814,7 @@ func TestServicePublishRootEventSkipsDuplicateSplitPlan(t *testing.T) {
 	require.Equal(t, 0, store.eventCalls)
 }
 
-func TestServiceRefreshFromStorageReplacesPendingView(t *testing.T) {
+func TestServiceRefreshFromStorageReplacesPendingTransitions(t *testing.T) {
 	cluster := catalog.NewCluster()
 	left := testDescriptor(61, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)
 	right := testDescriptor(62, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
@@ -647,6 +866,7 @@ func TestServiceListTransitionsReturnsOperatorView(t *testing.T) {
 			},
 		},
 		nil,
+		rootstorage.TailToken{},
 	)
 
 	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
@@ -655,6 +875,7 @@ func TestServiceListTransitionsReturnsOperatorView(t *testing.T) {
 	require.Len(t, resp.GetEntries(), 1)
 	require.Equal(t, coordpb.TransitionKind_TRANSITION_KIND_PEER_CHANGE, resp.GetEntries()[0].GetKind())
 	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_PENDING, resp.GetEntries()[0].GetStatus())
+	require.Equal(t, "peer:160:add:2:201", resp.GetEntries()[0].GetTransitionId())
 	require.NotNil(t, resp.GetEntries()[0].GetPendingPeerChange())
 }
 
@@ -684,6 +905,7 @@ func TestServiceAssessRootEventReturnsConflictAssessment(t *testing.T) {
 			},
 		},
 		nil,
+		rootstorage.TailToken{},
 	)
 
 	conflicting := current.Clone()
@@ -700,6 +922,36 @@ func TestServiceAssessRootEventReturnsConflictAssessment(t *testing.T) {
 	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_CONFLICT, resp.GetAssessment().GetStatus())
 	require.Equal(t, coordpb.TransitionRetryClass_TRANSITION_RETRY_CLASS_CONFLICT, resp.GetAssessment().GetRetryClass())
 	require.Equal(t, coordpb.TransitionDecision_TRANSITION_DECISION_APPLY, resp.GetAssessment().GetDecision())
+	require.Equal(t, "peer:161:add:3:301", resp.GetAssessment().GetTransitionId())
+}
+
+func TestServiceAssessRootEventUsesStorageSnapshot(t *testing.T) {
+	cluster := catalog.NewCluster()
+	target := testDescriptor(171, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 2}, []metaregion.Peer{
+		{StoreID: 1, PeerID: 101},
+		{StoreID: 2, PeerID: 201},
+	})
+	target.RootEpoch = 6
+	target.EnsureHash()
+
+	store := &fakeStorage{
+		leader: true,
+		snapshot: coordstorage.Snapshot{
+			ClusterEpoch: 6,
+			Descriptors:  map[uint64]descriptor.Descriptor{target.RegionID: target},
+		},
+	}
+
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+	svc.SetStorage(store)
+
+	resp, err := svc.AssessRootEvent(context.Background(), &coordpb.AssessRootEventRequest{
+		Event: metacodec.RootEventToProto(rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)),
+	})
+	require.NoError(t, err)
+	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_COMPLETED, resp.GetAssessment().GetStatus())
+	require.Equal(t, coordpb.TransitionDecision_TRANSITION_DECISION_SKIP, resp.GetAssessment().GetDecision())
+	require.Equal(t, "peer:171:add:2:201", resp.GetAssessment().GetTransitionId())
 }
 
 func TestServicePublishRootEventSkipsCompletedSplitPlan(t *testing.T) {

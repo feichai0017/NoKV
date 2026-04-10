@@ -1,13 +1,19 @@
 package catalog
 
 import (
-	pdoperator "github.com/feichai0017/NoKV/coordinator/operator"
 	pdview "github.com/feichai0017/NoKV/coordinator/view"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"sync"
 	"time"
 )
+
+type PendingSnapshot struct {
+	PendingPeerChanges  map[uint64]rootstate.PendingPeerChange
+	PendingRangeChanges map[uint64]rootstate.PendingRangeChange
+}
 
 // Cluster stores in-memory Coordinator metadata and provides route lookups.
 //
@@ -15,19 +21,22 @@ import (
 // Coordinator RPC wiring and persistence are handled by higher layers
 // (coordinator/server and coordinator/storage).
 type Cluster struct {
-	stores      *pdview.StoreHealthView
-	regions     *pdview.RegionDirectoryView
-	transitions *pdview.PendingView
-	operators   *pdoperator.Runtime
+	stores              *pdview.StoreHealthView
+	regions             *pdview.RegionDirectoryView
+	pendingMu           sync.RWMutex
+	pendingPeerChanges  map[uint64]rootstate.PendingPeerChange
+	pendingRangeChanges map[uint64]rootstate.PendingRangeChange
+	rootMu              sync.RWMutex
+	rootToken           rootstorage.TailToken
 }
 
 // NewCluster creates an empty in-memory cluster metadata view.
 func NewCluster() *Cluster {
 	return &Cluster{
-		stores:      pdview.NewStoreHealthView(),
-		regions:     pdview.NewRegionDirectoryView(),
-		transitions: pdview.NewPendingView(),
-		operators:   pdoperator.NewRuntime(),
+		stores:              pdview.NewStoreHealthView(),
+		regions:             pdview.NewRegionDirectoryView(),
+		pendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
+		pendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
 	}
 }
 
@@ -70,8 +79,7 @@ func (c *Cluster) ValidateRegionDescriptor(desc descriptor.Descriptor) error {
 	if c == nil {
 		return nil
 	}
-	clone := c.clone()
-	return clone.PublishRegionDescriptor(desc)
+	return c.regions.Validate(desc)
 }
 
 // PublishRootEvent applies one explicit rooted truth event into the runtime Coordinator
@@ -80,59 +88,67 @@ func (c *Cluster) PublishRootEvent(event rootevent.Event) error {
 	if c == nil {
 		return nil
 	}
+	snapshot := c.rootedSnapshot()
+	if err := c.validateRootEventAgainstSnapshot(snapshot, event); err != nil {
+		return err
+	}
 	if err := c.applyRootEventToRegions(event); err != nil {
 		return err
 	}
-	c.applyRootEventToTransitions(event)
+	c.applyRootEventToTransitions(snapshot, event)
 	return nil
 }
 
 func (c *Cluster) applyRootEventToRegions(event rootevent.Event) error {
-	if c == nil {
+	return applyRootEventToRegionView(c.regions, event)
+}
+
+func applyRootEventToRegionView(regions *pdview.RegionDirectoryView, event rootevent.Event) error {
+	if regions == nil {
 		return nil
 	}
 	switch {
 	case event.RegionDescriptor != nil:
-		return c.PublishRegionDescriptor(event.RegionDescriptor.Descriptor)
+		return regions.Upsert(event.RegionDescriptor.Descriptor)
 	case event.RegionRemoval != nil:
-		c.RemoveRegion(event.RegionRemoval.RegionID)
+		regions.Remove(event.RegionRemoval.RegionID)
 		return nil
 	case event.PeerChange != nil && (event.Kind == rootevent.KindPeerAdditionCancelled || event.Kind == rootevent.KindPeerRemovalCancelled):
 		if event.PeerChange.Base.RegionID == 0 {
-			c.RemoveRegion(event.PeerChange.RegionID)
+			regions.Remove(event.PeerChange.RegionID)
 			return nil
 		}
-		return c.PublishRegionDescriptor(event.PeerChange.Base)
+		return regions.Upsert(event.PeerChange.Base)
 	case event.RangeSplit != nil && event.Kind == rootevent.KindRegionSplitCancelled:
-		c.RemoveRegion(event.RangeSplit.Left.RegionID)
-		c.RemoveRegion(event.RangeSplit.Right.RegionID)
+		regions.Remove(event.RangeSplit.Left.RegionID)
+		regions.Remove(event.RangeSplit.Right.RegionID)
 		if event.RangeSplit.BaseParent.RegionID != 0 {
-			return c.PublishRegionDescriptor(event.RangeSplit.BaseParent)
+			return regions.Upsert(event.RangeSplit.BaseParent)
 		}
 		return nil
 	case event.RangeMerge != nil && event.Kind == rootevent.KindRegionMergeCancelled:
-		c.RemoveRegion(event.RangeMerge.Merged.RegionID)
+		regions.Remove(event.RangeMerge.Merged.RegionID)
 		if event.RangeMerge.BaseLeft.RegionID != 0 {
-			if err := c.PublishRegionDescriptor(event.RangeMerge.BaseLeft); err != nil {
+			if err := regions.Upsert(event.RangeMerge.BaseLeft); err != nil {
 				return err
 			}
 		}
 		if event.RangeMerge.BaseRight.RegionID != 0 {
-			return c.PublishRegionDescriptor(event.RangeMerge.BaseRight)
+			return regions.Upsert(event.RangeMerge.BaseRight)
 		}
 		return nil
 	case event.RangeSplit != nil:
-		c.RemoveRegion(event.RangeSplit.ParentRegionID)
-		if err := c.PublishRegionDescriptor(event.RangeSplit.Left); err != nil {
+		regions.Remove(event.RangeSplit.ParentRegionID)
+		if err := regions.Upsert(event.RangeSplit.Left); err != nil {
 			return err
 		}
-		return c.PublishRegionDescriptor(event.RangeSplit.Right)
+		return regions.Upsert(event.RangeSplit.Right)
 	case event.RangeMerge != nil:
-		c.RemoveRegion(event.RangeMerge.LeftRegionID)
-		c.RemoveRegion(event.RangeMerge.RightRegionID)
-		return c.PublishRegionDescriptor(event.RangeMerge.Merged)
+		regions.Remove(event.RangeMerge.LeftRegionID)
+		regions.Remove(event.RangeMerge.RightRegionID)
+		return regions.Upsert(event.RangeMerge.Merged)
 	case event.PeerChange != nil:
-		return c.PublishRegionDescriptor(event.PeerChange.Region)
+		return regions.Upsert(event.PeerChange.Region)
 	default:
 		return nil
 	}
@@ -144,8 +160,7 @@ func (c *Cluster) ValidateRootEvent(event rootevent.Event) error {
 	if c == nil {
 		return nil
 	}
-	clone := c.clone()
-	return clone.PublishRootEvent(event)
+	return c.validateRootEventAgainstSnapshot(c.rootedSnapshot(), event)
 }
 
 // RemoveRegion removes a region from Coordinator metadata and reports whether the region existed before removal.
@@ -197,7 +212,7 @@ func (c *Cluster) RegionSnapshot() []pdview.RegionInfo {
 // ReplaceRegionSnapshot replaces the region directory view from one rooted
 // snapshot while preserving store-health runtime observations.
 func (c *Cluster) ReplaceRegionSnapshot(descriptors map[uint64]descriptor.Descriptor) {
-	c.ReplaceRootSnapshot(descriptors, nil, nil)
+	c.ReplaceRootSnapshot(descriptors, nil, nil, rootstorage.TailToken{})
 }
 
 // ReplaceRootSnapshot replaces the runtime rooted view from one rooted durable
@@ -206,36 +221,44 @@ func (c *Cluster) ReplaceRootSnapshot(
 	descriptors map[uint64]descriptor.Descriptor,
 	pendingPeerChanges map[uint64]rootstate.PendingPeerChange,
 	pendingRangeChanges map[uint64]rootstate.PendingRangeChange,
+	token rootstorage.TailToken,
 ) {
 	if c == nil {
 		return
 	}
 	c.regions.Replace(descriptors)
+	c.rootMu.Lock()
+	c.rootToken = token
+	c.rootMu.Unlock()
 	c.replaceTransitionRuntime(rootstate.Snapshot{
-		Descriptors:         rootstate.CloneDescriptors(descriptors),
 		PendingPeerChanges:  pendingPeerChanges,
 		PendingRangeChanges: pendingRangeChanges,
 	})
 }
 
-// TransitionSnapshot returns a stable copy of rooted pending execution state.
-func (c *Cluster) TransitionSnapshot() pdview.PendingSnapshot {
+func (c *Cluster) CatalogRootToken() rootstorage.TailToken {
 	if c == nil {
-		return pdview.PendingSnapshot{
+		return rootstorage.TailToken{}
+	}
+	c.rootMu.RLock()
+	defer c.rootMu.RUnlock()
+	return c.rootToken
+}
+
+// TransitionSnapshot returns a stable copy of rooted pending execution state.
+func (c *Cluster) TransitionSnapshot() PendingSnapshot {
+	if c == nil {
+		return PendingSnapshot{
 			PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
 			PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
 		}
 	}
-	return c.transitions.Snapshot()
-}
-
-// OperatorSnapshot returns a stable copy of the operator runtime derived from
-// rooted transitions.
-func (c *Cluster) OperatorSnapshot() pdoperator.RuntimeSnapshot {
-	if c == nil {
-		return pdoperator.RuntimeSnapshot{}
+	c.pendingMu.RLock()
+	defer c.pendingMu.RUnlock()
+	return PendingSnapshot{
+		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(c.pendingPeerChanges),
+		PendingRangeChanges: rootstate.ClonePendingRangeChanges(c.pendingRangeChanges),
 	}
-	return c.operators.Snapshot()
 }
 
 // ObserveRootEventLifecycle evaluates one rooted transition event against the
@@ -244,12 +267,7 @@ func (c *Cluster) ObserveRootEventLifecycle(event rootevent.Event) rootstate.Tra
 	if c == nil {
 		return rootstate.TransitionAssessment{}
 	}
-	transitions := c.TransitionSnapshot()
-	return rootstate.AssessTransition(rootstate.Snapshot{
-		Descriptors:         descriptorsFromRegionInfos(c.RegionSnapshot()),
-		PendingPeerChanges:  transitions.PendingPeerChanges,
-		PendingRangeChanges: transitions.PendingRangeChanges,
-	}, event)
+	return rootstate.AssessTransition(c.rootedSnapshot(), event)
 }
 
 // GetRegionDescriptorByKey returns the rooted descriptor containing key
@@ -273,35 +291,9 @@ func (c *Cluster) RegionLastHeartbeat(regionID uint64) (time.Time, bool) {
 	return c.regions.LastHeartbeat(regionID)
 }
 
-func (c *Cluster) clone() *Cluster {
+func (c *Cluster) applyRootEventToTransitions(snapshot rootstate.Snapshot, event rootevent.Event) {
 	if c == nil {
-		return NewCluster()
-	}
-	out := NewCluster()
-	for _, store := range c.StoreSnapshot() {
-		_ = out.UpsertStoreHeartbeat(store)
-	}
-	for _, region := range c.RegionSnapshot() {
-		_ = out.regions.UpsertAt(region.Descriptor, region.LastHeartbeat)
-	}
-	transitions := c.TransitionSnapshot()
-	out.replaceTransitionRuntime(rootstate.Snapshot{
-		Descriptors:         descriptorsFromRegionInfos(c.RegionSnapshot()),
-		PendingPeerChanges:  transitions.PendingPeerChanges,
-		PendingRangeChanges: transitions.PendingRangeChanges,
-	})
-	return out
-}
-
-func (c *Cluster) applyRootEventToTransitions(event rootevent.Event) {
-	if c == nil || c.transitions == nil {
 		return
-	}
-	transitions := c.transitions.Snapshot()
-	snapshot := rootstate.Snapshot{
-		Descriptors:         descriptorsFromRegionInfos(c.RegionSnapshot()),
-		PendingPeerChanges:  transitions.PendingPeerChanges,
-		PendingRangeChanges: transitions.PendingRangeChanges,
 	}
 	rootstate.ApplyEventToSnapshot(&snapshot, snapshot.State.LastCommitted, event)
 	c.replaceTransitionRuntime(snapshot)
@@ -311,23 +303,50 @@ func (c *Cluster) replaceTransitionRuntime(snapshot rootstate.Snapshot) {
 	if c == nil {
 		return
 	}
-	c.transitions.Replace(snapshot.PendingPeerChanges, snapshot.PendingRangeChanges)
-	if c.operators != nil {
-		c.operators.ReplaceRootedTransitions(rootstate.BuildTransitionEntries(snapshot))
+	c.pendingMu.Lock()
+	c.pendingPeerChanges = rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges)
+	c.pendingRangeChanges = rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges)
+	c.pendingMu.Unlock()
+}
+
+func (c *Cluster) rootedSnapshot() rootstate.Snapshot {
+	if c == nil {
+		return rootstate.Snapshot{
+			Descriptors:         make(map[uint64]descriptor.Descriptor),
+			PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
+			PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
+		}
+	}
+	return rootstate.Snapshot{
+		Descriptors:         c.regions.DescriptorsSnapshot(),
+		PendingPeerChanges:  c.clonePendingPeerChanges(),
+		PendingRangeChanges: c.clonePendingRangeChanges(),
 	}
 }
 
-func descriptorsFromRegionInfos(in []pdview.RegionInfo) map[uint64]descriptor.Descriptor {
-	if len(in) == 0 {
-		return make(map[uint64]descriptor.Descriptor)
+func (c *Cluster) validateRootEventAgainstSnapshot(snapshot rootstate.Snapshot, event rootevent.Event) error {
+	if c == nil {
+		return nil
 	}
-	out := make(map[uint64]descriptor.Descriptor, len(in))
-	for _, region := range in {
-		desc := region.Descriptor
-		if desc.RegionID == 0 {
-			continue
-		}
-		out[desc.RegionID] = desc.Clone()
+	regions := pdview.NewRegionDirectoryView()
+	regions.Replace(snapshot.Descriptors)
+	return applyRootEventToRegionView(regions, event)
+}
+
+func (c *Cluster) clonePendingPeerChanges() map[uint64]rootstate.PendingPeerChange {
+	if c == nil {
+		return make(map[uint64]rootstate.PendingPeerChange)
 	}
-	return out
+	c.pendingMu.RLock()
+	defer c.pendingMu.RUnlock()
+	return rootstate.ClonePendingPeerChanges(c.pendingPeerChanges)
+}
+
+func (c *Cluster) clonePendingRangeChanges() map[uint64]rootstate.PendingRangeChange {
+	if c == nil {
+		return make(map[uint64]rootstate.PendingRangeChange)
+	}
+	c.pendingMu.RLock()
+	defer c.pendingMu.RUnlock()
+	return rootstate.ClonePendingRangeChanges(c.pendingRangeChanges)
 }

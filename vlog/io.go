@@ -374,7 +374,7 @@ func (m *Manager) Sample(fid uint32, opt SampleOptions, cb SampleCallback) (*Sam
 // replays operate on consistent data.
 func VerifyDir(cfg Config) error {
 	var err error
-	cfg, err = cfg.normalized()
+	cfg, err = cfg.resolveOpenConfig()
 	if err != nil {
 		return err
 	}
@@ -418,7 +418,7 @@ func VerifyDir(cfg Config) error {
 // checksums and reports partial tails as errors.
 func CheckDir(cfg Config) error {
 	var err error
-	cfg, err = cfg.normalized()
+	cfg, err = cfg.resolveOpenConfig()
 	if err != nil {
 		return err
 	}
@@ -453,7 +453,7 @@ func CheckDir(cfg Config) error {
 // readable up to endOffset without mutating on-disk state.
 func CheckHead(cfg Config, fid uint32, endOffset uint32) error {
 	var err error
-	cfg, err = cfg.normalized()
+	cfg, err = cfg.resolveOpenConfig()
 	if err != nil {
 		return err
 	}

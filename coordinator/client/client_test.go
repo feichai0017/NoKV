@@ -69,7 +69,7 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, storeResp.GetAccepted())
 
-	_, err = cli.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
+	publishResp, err := cli.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
 		Event: metacodec.RootEventToProto(rootevent.RegionBootstrapped(
 			testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{
 				Version:     1,
@@ -78,12 +78,14 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 		)),
 	})
 	require.NoError(t, err)
+	require.True(t, publishResp.GetAccepted())
+	require.NotNil(t, publishResp.GetAssessment())
 
 	liveResp, err := cli.RegionLiveness(context.Background(), &coordpb.RegionLivenessRequest{RegionId: 11})
 	require.NoError(t, err)
 	require.True(t, liveResp.GetAccepted())
 
-	_, err = cli.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
+	publishResp, err = cli.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
 		Event: metacodec.RootEventToProto(rootevent.PeerAdded(
 			11,
 			2,
@@ -95,11 +97,18 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 		)),
 	})
 	require.NoError(t, err)
+	require.True(t, publishResp.GetAccepted())
+	require.NotNil(t, publishResp.GetAssessment())
+	require.Equal(t, "peer:11:add:2:201", publishResp.GetAssessment().GetTransitionId())
+	require.Equal(t, coordpb.TransitionDecision_TRANSITION_DECISION_APPLY, publishResp.GetAssessment().GetDecision())
 
 	getResp, err := cli.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("m")})
 	require.NoError(t, err)
 	require.False(t, getResp.GetNotFound())
 	require.Equal(t, uint64(11), getResp.GetRegionDescriptor().GetRegionId())
+	require.Equal(t, coordpb.Freshness_FRESHNESS_BEST_EFFORT, getResp.GetServedFreshness())
+	require.True(t, getResp.GetServedByLeader())
+	require.Equal(t, coordpb.DegradedMode_DEGRADED_MODE_HEALTHY, getResp.GetDegradedMode())
 
 	removeResp, err := cli.RemoveRegion(context.Background(), &coordpb.RemoveRegionRequest{RegionId: 11})
 	require.NoError(t, err)

@@ -44,12 +44,19 @@ message RegionLivenessResponse {
 }
 
 message PublishRootEventRequest {
+  // event is one explicit rooted topology event proposed to the control plane.
   nokv.meta.v1.RootEvent event = 1;
+  // expected_cluster_epoch optionally fences writes against a stale cluster view.
   uint64 expected_cluster_epoch = 2;
 }
 
 message PublishRootEventResponse {
+  // accepted reports whether the request was accepted as a valid control-plane write.
   bool accepted = 1;
+  // assessment returns the pre-persist lifecycle assessment used for this decision.
+  // It describes how the requested event relates to current rooted truth before
+  // any persistence or catalog reload happens.
+  TransitionAssessment assessment = 2;
 }
 
 enum TransitionKind {
@@ -72,7 +79,6 @@ enum TransitionStatus {
 enum TransitionRetryClass {
   TRANSITION_RETRY_CLASS_NONE = 0;
   TRANSITION_RETRY_CLASS_CONFLICT = 1;
-  TRANSITION_RETRY_CLASS_TRANSIENT = 2;
 }
 
 enum TransitionReason {
@@ -92,6 +98,8 @@ enum TransitionDecision {
 }
 
 message TransitionEntry {
+  // key is the rooted transition family key: region id for peer changes, or
+  // parent/merge key for range transitions.
   uint64 key = 1;
   TransitionKind kind = 2;
   TransitionStatus status = 3;
@@ -99,15 +107,21 @@ message TransitionEntry {
   TransitionReason reason = 5;
   nokv.meta.v1.RootPendingPeerChange pending_peer_change = 6;
   nokv.meta.v1.RootPendingRangeChange pending_range_change = 7;
+  // transition_id is the stable identity of the transition target.
+  string transition_id = 8;
 }
 
 message TransitionAssessment {
+  // key is the rooted transition family key used for lifecycle evaluation.
   uint64 key = 1;
   TransitionKind kind = 2;
   TransitionStatus status = 3;
   TransitionRetryClass retry_class = 4;
   TransitionReason reason = 5;
+  // decision says whether the proposed rooted event should be applied or skipped.
   TransitionDecision decision = 6;
+  // transition_id is the stable identity derived from the proposed rooted event.
+  string transition_id = 7;
 }
 
 message ListTransitionsRequest {}
@@ -133,13 +147,75 @@ message RemoveRegionResponse {
   bool removed = 1;
 }
 
+message RootToken {
+  // term is the rooted leadership term that produced this token, when available.
+  uint64 term = 1;
+  // index is the rooted durable log position, when available.
+  uint64 index = 2;
+  // revision is the monotonic rooted revision incorporated by a view.
+  uint64 revision = 3;
+}
+
+enum Freshness {
+  FRESHNESS_UNSPECIFIED = 0;
+  // Strong requires leader-grade freshness.
+  FRESHNESS_STRONG = 1;
+  // Bounded allows follower service within an explicit rooted lag limit.
+  FRESHNESS_BOUNDED = 2;
+  // BestEffort allows stale catalog service when stronger guarantees cannot be met.
+  FRESHNESS_BEST_EFFORT = 3;
+}
+
+enum DegradedMode {
+  DEGRADED_MODE_UNSPECIFIED = 0;
+  // Healthy means rooted truth and catalog freshness are within normal policy.
+  DEGRADED_MODE_HEALTHY = 1;
+  // RootLagging means rooted truth is available but the served catalog trails it.
+  DEGRADED_MODE_ROOT_LAGGING = 2;
+  // RootUnavailable means rooted truth could not be loaded or refreshed.
+  DEGRADED_MODE_ROOT_UNAVAILABLE = 3;
+}
+
+enum CatchUpState {
+  CATCH_UP_STATE_UNSPECIFIED = 0;
+  // Fresh means the serving catalog has converged to current rooted truth.
+  CATCH_UP_STATE_FRESH = 1;
+  // Lagging means the serving catalog trails rooted truth but can still advance.
+  CATCH_UP_STATE_LAGGING = 2;
+  // BootstrapRequired means retained tail advancement is no longer sufficient and
+  // a bootstrap or checkpoint install is required.
+  CATCH_UP_STATE_BOOTSTRAP_REQUIRED = 3;
+  // Unavailable means rooted truth cannot currently support catch-up decisions.
+  CATCH_UP_STATE_UNAVAILABLE = 4;
+}
+
 message GetRegionByKeyRequest {
   bytes key = 1;
+  // freshness declares the requested serving contract.
+  Freshness freshness = 2;
+  // required_root_token optionally requires the result to include at least this rooted truth.
+  RootToken required_root_token = 3;
+  // max_root_lag bounds the allowed rooted revision gap for bounded reads.
+  optional uint64 max_root_lag = 4;
 }
 
 message GetRegionByKeyResponse {
   nokv.meta.v1.RegionDescriptor region_descriptor = 1;
   bool not_found = 2;
+  // served_root_token is the rooted token already incorporated by the served catalog.
+  RootToken served_root_token = 3;
+  // served_freshness is the contract actually used for the response.
+  Freshness served_freshness = 4;
+  // degraded_mode reports the current externally visible control-plane restriction level.
+  DegradedMode degraded_mode = 5;
+  // served_by_leader reports whether the responding node served as rooted write leader.
+  bool served_by_leader = 6;
+  // current_root_token is the latest rooted token currently known to the node.
+  RootToken current_root_token = 7;
+  // root_lag is the revision distance between current_root_token and served_root_token.
+  uint64 root_lag = 8;
+  // catch_up_state reports the node's current rooted catch-up state.
+  CatchUpState catch_up_state = 9;
 }
 
 message AllocIDRequest {

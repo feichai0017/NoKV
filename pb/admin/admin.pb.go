@@ -24,6 +24,293 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type ExecutionAdmissionClass int32
+
+const (
+	ExecutionAdmissionClass_EXECUTION_ADMISSION_CLASS_UNSPECIFIED ExecutionAdmissionClass = 0
+	ExecutionAdmissionClass_EXECUTION_ADMISSION_CLASS_READ        ExecutionAdmissionClass = 1
+	ExecutionAdmissionClass_EXECUTION_ADMISSION_CLASS_WRITE       ExecutionAdmissionClass = 2
+	ExecutionAdmissionClass_EXECUTION_ADMISSION_CLASS_TOPOLOGY    ExecutionAdmissionClass = 3
+)
+
+// Enum value maps for ExecutionAdmissionClass.
+var (
+	ExecutionAdmissionClass_name = map[int32]string{
+		0: "EXECUTION_ADMISSION_CLASS_UNSPECIFIED",
+		1: "EXECUTION_ADMISSION_CLASS_READ",
+		2: "EXECUTION_ADMISSION_CLASS_WRITE",
+		3: "EXECUTION_ADMISSION_CLASS_TOPOLOGY",
+	}
+	ExecutionAdmissionClass_value = map[string]int32{
+		"EXECUTION_ADMISSION_CLASS_UNSPECIFIED": 0,
+		"EXECUTION_ADMISSION_CLASS_READ":        1,
+		"EXECUTION_ADMISSION_CLASS_WRITE":       2,
+		"EXECUTION_ADMISSION_CLASS_TOPOLOGY":    3,
+	}
+)
+
+func (x ExecutionAdmissionClass) Enum() *ExecutionAdmissionClass {
+	p := new(ExecutionAdmissionClass)
+	*p = x
+	return p
+}
+
+func (x ExecutionAdmissionClass) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ExecutionAdmissionClass) Descriptor() protoreflect.EnumDescriptor {
+	return file_admin_admin_proto_enumTypes[0].Descriptor()
+}
+
+func (ExecutionAdmissionClass) Type() protoreflect.EnumType {
+	return &file_admin_admin_proto_enumTypes[0]
+}
+
+func (x ExecutionAdmissionClass) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ExecutionAdmissionClass.Descriptor instead.
+func (ExecutionAdmissionClass) EnumDescriptor() ([]byte, []int) {
+	return file_admin_admin_proto_rawDescGZIP(), []int{0}
+}
+
+type ExecutionAdmissionReason int32
+
+const (
+	ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_UNSPECIFIED       ExecutionAdmissionReason = 0
+	ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_ACCEPTED          ExecutionAdmissionReason = 1
+	ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_INVALID           ExecutionAdmissionReason = 2
+	ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_STORE_NOT_MATCH   ExecutionAdmissionReason = 3
+	ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_NOT_HOSTED        ExecutionAdmissionReason = 4
+	ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_EPOCH_MISMATCH    ExecutionAdmissionReason = 5
+	ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_KEY_NOT_IN_REGION ExecutionAdmissionReason = 6
+	ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_NOT_LEADER        ExecutionAdmissionReason = 7
+	ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_CANCELED          ExecutionAdmissionReason = 8
+	ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_TIMED_OUT         ExecutionAdmissionReason = 9
+)
+
+// Enum value maps for ExecutionAdmissionReason.
+var (
+	ExecutionAdmissionReason_name = map[int32]string{
+		0: "EXECUTION_ADMISSION_REASON_UNSPECIFIED",
+		1: "EXECUTION_ADMISSION_REASON_ACCEPTED",
+		2: "EXECUTION_ADMISSION_REASON_INVALID",
+		3: "EXECUTION_ADMISSION_REASON_STORE_NOT_MATCH",
+		4: "EXECUTION_ADMISSION_REASON_NOT_HOSTED",
+		5: "EXECUTION_ADMISSION_REASON_EPOCH_MISMATCH",
+		6: "EXECUTION_ADMISSION_REASON_KEY_NOT_IN_REGION",
+		7: "EXECUTION_ADMISSION_REASON_NOT_LEADER",
+		8: "EXECUTION_ADMISSION_REASON_CANCELED",
+		9: "EXECUTION_ADMISSION_REASON_TIMED_OUT",
+	}
+	ExecutionAdmissionReason_value = map[string]int32{
+		"EXECUTION_ADMISSION_REASON_UNSPECIFIED":       0,
+		"EXECUTION_ADMISSION_REASON_ACCEPTED":          1,
+		"EXECUTION_ADMISSION_REASON_INVALID":           2,
+		"EXECUTION_ADMISSION_REASON_STORE_NOT_MATCH":   3,
+		"EXECUTION_ADMISSION_REASON_NOT_HOSTED":        4,
+		"EXECUTION_ADMISSION_REASON_EPOCH_MISMATCH":    5,
+		"EXECUTION_ADMISSION_REASON_KEY_NOT_IN_REGION": 6,
+		"EXECUTION_ADMISSION_REASON_NOT_LEADER":        7,
+		"EXECUTION_ADMISSION_REASON_CANCELED":          8,
+		"EXECUTION_ADMISSION_REASON_TIMED_OUT":         9,
+	}
+)
+
+func (x ExecutionAdmissionReason) Enum() *ExecutionAdmissionReason {
+	p := new(ExecutionAdmissionReason)
+	*p = x
+	return p
+}
+
+func (x ExecutionAdmissionReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ExecutionAdmissionReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_admin_admin_proto_enumTypes[1].Descriptor()
+}
+
+func (ExecutionAdmissionReason) Type() protoreflect.EnumType {
+	return &file_admin_admin_proto_enumTypes[1]
+}
+
+func (x ExecutionAdmissionReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ExecutionAdmissionReason.Descriptor instead.
+func (ExecutionAdmissionReason) EnumDescriptor() ([]byte, []int) {
+	return file_admin_admin_proto_rawDescGZIP(), []int{1}
+}
+
+type ExecutionTopologyOutcome int32
+
+const (
+	ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_UNSPECIFIED ExecutionTopologyOutcome = 0
+	ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_REJECTED    ExecutionTopologyOutcome = 1
+	ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_QUEUED      ExecutionTopologyOutcome = 2
+	ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_PROPOSED    ExecutionTopologyOutcome = 3
+	ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_APPLIED     ExecutionTopologyOutcome = 4
+	ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_FAILED      ExecutionTopologyOutcome = 5
+)
+
+// Enum value maps for ExecutionTopologyOutcome.
+var (
+	ExecutionTopologyOutcome_name = map[int32]string{
+		0: "EXECUTION_TOPOLOGY_OUTCOME_UNSPECIFIED",
+		1: "EXECUTION_TOPOLOGY_OUTCOME_REJECTED",
+		2: "EXECUTION_TOPOLOGY_OUTCOME_QUEUED",
+		3: "EXECUTION_TOPOLOGY_OUTCOME_PROPOSED",
+		4: "EXECUTION_TOPOLOGY_OUTCOME_APPLIED",
+		5: "EXECUTION_TOPOLOGY_OUTCOME_FAILED",
+	}
+	ExecutionTopologyOutcome_value = map[string]int32{
+		"EXECUTION_TOPOLOGY_OUTCOME_UNSPECIFIED": 0,
+		"EXECUTION_TOPOLOGY_OUTCOME_REJECTED":    1,
+		"EXECUTION_TOPOLOGY_OUTCOME_QUEUED":      2,
+		"EXECUTION_TOPOLOGY_OUTCOME_PROPOSED":    3,
+		"EXECUTION_TOPOLOGY_OUTCOME_APPLIED":     4,
+		"EXECUTION_TOPOLOGY_OUTCOME_FAILED":      5,
+	}
+)
+
+func (x ExecutionTopologyOutcome) Enum() *ExecutionTopologyOutcome {
+	p := new(ExecutionTopologyOutcome)
+	*p = x
+	return p
+}
+
+func (x ExecutionTopologyOutcome) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ExecutionTopologyOutcome) Descriptor() protoreflect.EnumDescriptor {
+	return file_admin_admin_proto_enumTypes[2].Descriptor()
+}
+
+func (ExecutionTopologyOutcome) Type() protoreflect.EnumType {
+	return &file_admin_admin_proto_enumTypes[2]
+}
+
+func (x ExecutionTopologyOutcome) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ExecutionTopologyOutcome.Descriptor instead.
+func (ExecutionTopologyOutcome) EnumDescriptor() ([]byte, []int) {
+	return file_admin_admin_proto_rawDescGZIP(), []int{2}
+}
+
+type ExecutionPublishState int32
+
+const (
+	ExecutionPublishState_EXECUTION_PUBLISH_STATE_UNSPECIFIED        ExecutionPublishState = 0
+	ExecutionPublishState_EXECUTION_PUBLISH_STATE_NOT_REQUIRED       ExecutionPublishState = 1
+	ExecutionPublishState_EXECUTION_PUBLISH_STATE_PLANNED_PUBLISHED  ExecutionPublishState = 2
+	ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_PENDING   ExecutionPublishState = 3
+	ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_PUBLISHED ExecutionPublishState = 4
+	ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_FAILED    ExecutionPublishState = 5
+)
+
+// Enum value maps for ExecutionPublishState.
+var (
+	ExecutionPublishState_name = map[int32]string{
+		0: "EXECUTION_PUBLISH_STATE_UNSPECIFIED",
+		1: "EXECUTION_PUBLISH_STATE_NOT_REQUIRED",
+		2: "EXECUTION_PUBLISH_STATE_PLANNED_PUBLISHED",
+		3: "EXECUTION_PUBLISH_STATE_TERMINAL_PENDING",
+		4: "EXECUTION_PUBLISH_STATE_TERMINAL_PUBLISHED",
+		5: "EXECUTION_PUBLISH_STATE_TERMINAL_FAILED",
+	}
+	ExecutionPublishState_value = map[string]int32{
+		"EXECUTION_PUBLISH_STATE_UNSPECIFIED":        0,
+		"EXECUTION_PUBLISH_STATE_NOT_REQUIRED":       1,
+		"EXECUTION_PUBLISH_STATE_PLANNED_PUBLISHED":  2,
+		"EXECUTION_PUBLISH_STATE_TERMINAL_PENDING":   3,
+		"EXECUTION_PUBLISH_STATE_TERMINAL_PUBLISHED": 4,
+		"EXECUTION_PUBLISH_STATE_TERMINAL_FAILED":    5,
+	}
+)
+
+func (x ExecutionPublishState) Enum() *ExecutionPublishState {
+	p := new(ExecutionPublishState)
+	*p = x
+	return p
+}
+
+func (x ExecutionPublishState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ExecutionPublishState) Descriptor() protoreflect.EnumDescriptor {
+	return file_admin_admin_proto_enumTypes[3].Descriptor()
+}
+
+func (ExecutionPublishState) Type() protoreflect.EnumType {
+	return &file_admin_admin_proto_enumTypes[3]
+}
+
+func (x ExecutionPublishState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ExecutionPublishState.Descriptor instead.
+func (ExecutionPublishState) EnumDescriptor() ([]byte, []int) {
+	return file_admin_admin_proto_rawDescGZIP(), []int{3}
+}
+
+type ExecutionRestartState int32
+
+const (
+	ExecutionRestartState_EXECUTION_RESTART_STATE_UNSPECIFIED ExecutionRestartState = 0
+	ExecutionRestartState_EXECUTION_RESTART_STATE_READY       ExecutionRestartState = 1
+	ExecutionRestartState_EXECUTION_RESTART_STATE_DEGRADED    ExecutionRestartState = 2
+)
+
+// Enum value maps for ExecutionRestartState.
+var (
+	ExecutionRestartState_name = map[int32]string{
+		0: "EXECUTION_RESTART_STATE_UNSPECIFIED",
+		1: "EXECUTION_RESTART_STATE_READY",
+		2: "EXECUTION_RESTART_STATE_DEGRADED",
+	}
+	ExecutionRestartState_value = map[string]int32{
+		"EXECUTION_RESTART_STATE_UNSPECIFIED": 0,
+		"EXECUTION_RESTART_STATE_READY":       1,
+		"EXECUTION_RESTART_STATE_DEGRADED":    2,
+	}
+)
+
+func (x ExecutionRestartState) Enum() *ExecutionRestartState {
+	p := new(ExecutionRestartState)
+	*p = x
+	return p
+}
+
+func (x ExecutionRestartState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ExecutionRestartState) Descriptor() protoreflect.EnumDescriptor {
+	return file_admin_admin_proto_enumTypes[4].Descriptor()
+}
+
+func (ExecutionRestartState) Type() protoreflect.EnumType {
+	return &file_admin_admin_proto_enumTypes[4]
+}
+
+func (x ExecutionRestartState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ExecutionRestartState.Descriptor instead.
+func (ExecutionRestartState) EnumDescriptor() ([]byte, []int) {
+	return file_admin_admin_proto_rawDescGZIP(), []int{4}
+}
+
 type AddPeerRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
@@ -812,6 +1099,370 @@ func (x *RegionRuntimeStatusResponse) GetAppliedTerm() uint64 {
 	return 0
 }
 
+type ExecutionStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionStatusRequest) Reset() {
+	*x = ExecutionStatusRequest{}
+	mi := &file_admin_admin_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionStatusRequest) ProtoMessage() {}
+
+func (x *ExecutionStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_admin_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionStatusRequest.ProtoReflect.Descriptor instead.
+func (*ExecutionStatusRequest) Descriptor() ([]byte, []int) {
+	return file_admin_admin_proto_rawDescGZIP(), []int{15}
+}
+
+type ExecutionAdmissionStatus struct {
+	state         protoimpl.MessageState   `protogen:"open.v1"`
+	Observed      bool                     `protobuf:"varint,1,opt,name=observed,proto3" json:"observed,omitempty"`
+	Class         ExecutionAdmissionClass  `protobuf:"varint,2,opt,name=class,proto3,enum=nokv.admin.v1.ExecutionAdmissionClass" json:"class,omitempty"`
+	Reason        ExecutionAdmissionReason `protobuf:"varint,3,opt,name=reason,proto3,enum=nokv.admin.v1.ExecutionAdmissionReason" json:"reason,omitempty"`
+	Accepted      bool                     `protobuf:"varint,4,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	RegionId      uint64                   `protobuf:"varint,5,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	PeerId        uint64                   `protobuf:"varint,6,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
+	RequestId     uint64                   `protobuf:"varint,7,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Detail        string                   `protobuf:"bytes,8,opt,name=detail,proto3" json:"detail,omitempty"`
+	AtUnixNano    int64                    `protobuf:"varint,9,opt,name=at_unix_nano,json=atUnixNano,proto3" json:"at_unix_nano,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionAdmissionStatus) Reset() {
+	*x = ExecutionAdmissionStatus{}
+	mi := &file_admin_admin_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionAdmissionStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionAdmissionStatus) ProtoMessage() {}
+
+func (x *ExecutionAdmissionStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_admin_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionAdmissionStatus.ProtoReflect.Descriptor instead.
+func (*ExecutionAdmissionStatus) Descriptor() ([]byte, []int) {
+	return file_admin_admin_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ExecutionAdmissionStatus) GetObserved() bool {
+	if x != nil {
+		return x.Observed
+	}
+	return false
+}
+
+func (x *ExecutionAdmissionStatus) GetClass() ExecutionAdmissionClass {
+	if x != nil {
+		return x.Class
+	}
+	return ExecutionAdmissionClass_EXECUTION_ADMISSION_CLASS_UNSPECIFIED
+}
+
+func (x *ExecutionAdmissionStatus) GetReason() ExecutionAdmissionReason {
+	if x != nil {
+		return x.Reason
+	}
+	return ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_UNSPECIFIED
+}
+
+func (x *ExecutionAdmissionStatus) GetAccepted() bool {
+	if x != nil {
+		return x.Accepted
+	}
+	return false
+}
+
+func (x *ExecutionAdmissionStatus) GetRegionId() uint64 {
+	if x != nil {
+		return x.RegionId
+	}
+	return 0
+}
+
+func (x *ExecutionAdmissionStatus) GetPeerId() uint64 {
+	if x != nil {
+		return x.PeerId
+	}
+	return 0
+}
+
+func (x *ExecutionAdmissionStatus) GetRequestId() uint64 {
+	if x != nil {
+		return x.RequestId
+	}
+	return 0
+}
+
+func (x *ExecutionAdmissionStatus) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
+func (x *ExecutionAdmissionStatus) GetAtUnixNano() int64 {
+	if x != nil {
+		return x.AtUnixNano
+	}
+	return 0
+}
+
+type ExecutionTopologyStatus struct {
+	state             protoimpl.MessageState   `protogen:"open.v1"`
+	TransitionId      string                   `protobuf:"bytes,1,opt,name=transition_id,json=transitionId,proto3" json:"transition_id,omitempty"`
+	RegionId          uint64                   `protobuf:"varint,2,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	Action            string                   `protobuf:"bytes,3,opt,name=action,proto3" json:"action,omitempty"`
+	Outcome           ExecutionTopologyOutcome `protobuf:"varint,4,opt,name=outcome,proto3,enum=nokv.admin.v1.ExecutionTopologyOutcome" json:"outcome,omitempty"`
+	Publish           ExecutionPublishState    `protobuf:"varint,5,opt,name=publish,proto3,enum=nokv.admin.v1.ExecutionPublishState" json:"publish,omitempty"`
+	LastError         string                   `protobuf:"bytes,6,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
+	UpdatedAtUnixNano int64                    `protobuf:"varint,7,opt,name=updated_at_unix_nano,json=updatedAtUnixNano,proto3" json:"updated_at_unix_nano,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *ExecutionTopologyStatus) Reset() {
+	*x = ExecutionTopologyStatus{}
+	mi := &file_admin_admin_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionTopologyStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionTopologyStatus) ProtoMessage() {}
+
+func (x *ExecutionTopologyStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_admin_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionTopologyStatus.ProtoReflect.Descriptor instead.
+func (*ExecutionTopologyStatus) Descriptor() ([]byte, []int) {
+	return file_admin_admin_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *ExecutionTopologyStatus) GetTransitionId() string {
+	if x != nil {
+		return x.TransitionId
+	}
+	return ""
+}
+
+func (x *ExecutionTopologyStatus) GetRegionId() uint64 {
+	if x != nil {
+		return x.RegionId
+	}
+	return 0
+}
+
+func (x *ExecutionTopologyStatus) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *ExecutionTopologyStatus) GetOutcome() ExecutionTopologyOutcome {
+	if x != nil {
+		return x.Outcome
+	}
+	return ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_UNSPECIFIED
+}
+
+func (x *ExecutionTopologyStatus) GetPublish() ExecutionPublishState {
+	if x != nil {
+		return x.Publish
+	}
+	return ExecutionPublishState_EXECUTION_PUBLISH_STATE_UNSPECIFIED
+}
+
+func (x *ExecutionTopologyStatus) GetLastError() string {
+	if x != nil {
+		return x.LastError
+	}
+	return ""
+}
+
+func (x *ExecutionTopologyStatus) GetUpdatedAtUnixNano() int64 {
+	if x != nil {
+		return x.UpdatedAtUnixNano
+	}
+	return 0
+}
+
+type ExecutionRestartStatus struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	State              ExecutionRestartState  `protobuf:"varint,1,opt,name=state,proto3,enum=nokv.admin.v1.ExecutionRestartState" json:"state,omitempty"`
+	RegionCount        uint64                 `protobuf:"varint,2,opt,name=region_count,json=regionCount,proto3" json:"region_count,omitempty"`
+	RaftGroupCount     uint64                 `protobuf:"varint,3,opt,name=raft_group_count,json=raftGroupCount,proto3" json:"raft_group_count,omitempty"`
+	MissingRaftPointer []uint64               `protobuf:"varint,4,rep,packed,name=missing_raft_pointer,json=missingRaftPointer,proto3" json:"missing_raft_pointer,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *ExecutionRestartStatus) Reset() {
+	*x = ExecutionRestartStatus{}
+	mi := &file_admin_admin_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionRestartStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionRestartStatus) ProtoMessage() {}
+
+func (x *ExecutionRestartStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_admin_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionRestartStatus.ProtoReflect.Descriptor instead.
+func (*ExecutionRestartStatus) Descriptor() ([]byte, []int) {
+	return file_admin_admin_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *ExecutionRestartStatus) GetState() ExecutionRestartState {
+	if x != nil {
+		return x.State
+	}
+	return ExecutionRestartState_EXECUTION_RESTART_STATE_UNSPECIFIED
+}
+
+func (x *ExecutionRestartStatus) GetRegionCount() uint64 {
+	if x != nil {
+		return x.RegionCount
+	}
+	return 0
+}
+
+func (x *ExecutionRestartStatus) GetRaftGroupCount() uint64 {
+	if x != nil {
+		return x.RaftGroupCount
+	}
+	return 0
+}
+
+func (x *ExecutionRestartStatus) GetMissingRaftPointer() []uint64 {
+	if x != nil {
+		return x.MissingRaftPointer
+	}
+	return nil
+}
+
+type ExecutionStatusResponse struct {
+	state         protoimpl.MessageState     `protogen:"open.v1"`
+	LastAdmission *ExecutionAdmissionStatus  `protobuf:"bytes,1,opt,name=last_admission,json=lastAdmission,proto3" json:"last_admission,omitempty"`
+	Restart       *ExecutionRestartStatus    `protobuf:"bytes,2,opt,name=restart,proto3" json:"restart,omitempty"`
+	Topology      []*ExecutionTopologyStatus `protobuf:"bytes,3,rep,name=topology,proto3" json:"topology,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionStatusResponse) Reset() {
+	*x = ExecutionStatusResponse{}
+	mi := &file_admin_admin_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionStatusResponse) ProtoMessage() {}
+
+func (x *ExecutionStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_admin_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionStatusResponse.ProtoReflect.Descriptor instead.
+func (*ExecutionStatusResponse) Descriptor() ([]byte, []int) {
+	return file_admin_admin_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *ExecutionStatusResponse) GetLastAdmission() *ExecutionAdmissionStatus {
+	if x != nil {
+		return x.LastAdmission
+	}
+	return nil
+}
+
+func (x *ExecutionStatusResponse) GetRestart() *ExecutionRestartStatus {
+	if x != nil {
+		return x.Restart
+	}
+	return nil
+}
+
+func (x *ExecutionStatusResponse) GetTopology() []*ExecutionTopologyStatus {
+	if x != nil {
+		return x.Topology
+	}
+	return nil
+}
+
 var File_admin_admin_proto protoreflect.FileDescriptor
 
 const file_admin_admin_proto_rawDesc = "" +
@@ -862,7 +1513,72 @@ const file_admin_admin_proto_rawDesc = "" +
 	"\x06leader\x18\x05 \x01(\bR\x06leader\x126\n" +
 	"\x06region\x18\x06 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x06region\x12#\n" +
 	"\rapplied_index\x18\a \x01(\x04R\fappliedIndex\x12!\n" +
-	"\fapplied_term\x18\b \x01(\x04R\vappliedTerm2\xdc\x06\n" +
+	"\fapplied_term\x18\b \x01(\x04R\vappliedTerm\"\x18\n" +
+	"\x16ExecutionStatusRequest\"\xe0\x02\n" +
+	"\x18ExecutionAdmissionStatus\x12\x1a\n" +
+	"\bobserved\x18\x01 \x01(\bR\bobserved\x12<\n" +
+	"\x05class\x18\x02 \x01(\x0e2&.nokv.admin.v1.ExecutionAdmissionClassR\x05class\x12?\n" +
+	"\x06reason\x18\x03 \x01(\x0e2'.nokv.admin.v1.ExecutionAdmissionReasonR\x06reason\x12\x1a\n" +
+	"\baccepted\x18\x04 \x01(\bR\baccepted\x12\x1b\n" +
+	"\tregion_id\x18\x05 \x01(\x04R\bregionId\x12\x17\n" +
+	"\apeer_id\x18\x06 \x01(\x04R\x06peerId\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\a \x01(\x04R\trequestId\x12\x16\n" +
+	"\x06detail\x18\b \x01(\tR\x06detail\x12 \n" +
+	"\fat_unix_nano\x18\t \x01(\x03R\n" +
+	"atUnixNano\"\xc6\x02\n" +
+	"\x17ExecutionTopologyStatus\x12#\n" +
+	"\rtransition_id\x18\x01 \x01(\tR\ftransitionId\x12\x1b\n" +
+	"\tregion_id\x18\x02 \x01(\x04R\bregionId\x12\x16\n" +
+	"\x06action\x18\x03 \x01(\tR\x06action\x12A\n" +
+	"\aoutcome\x18\x04 \x01(\x0e2'.nokv.admin.v1.ExecutionTopologyOutcomeR\aoutcome\x12>\n" +
+	"\apublish\x18\x05 \x01(\x0e2$.nokv.admin.v1.ExecutionPublishStateR\apublish\x12\x1d\n" +
+	"\n" +
+	"last_error\x18\x06 \x01(\tR\tlastError\x12/\n" +
+	"\x14updated_at_unix_nano\x18\a \x01(\x03R\x11updatedAtUnixNano\"\xd3\x01\n" +
+	"\x16ExecutionRestartStatus\x12:\n" +
+	"\x05state\x18\x01 \x01(\x0e2$.nokv.admin.v1.ExecutionRestartStateR\x05state\x12!\n" +
+	"\fregion_count\x18\x02 \x01(\x04R\vregionCount\x12(\n" +
+	"\x10raft_group_count\x18\x03 \x01(\x04R\x0eraftGroupCount\x120\n" +
+	"\x14missing_raft_pointer\x18\x04 \x03(\x04R\x12missingRaftPointer\"\xee\x01\n" +
+	"\x17ExecutionStatusResponse\x12N\n" +
+	"\x0elast_admission\x18\x01 \x01(\v2'.nokv.admin.v1.ExecutionAdmissionStatusR\rlastAdmission\x12?\n" +
+	"\arestart\x18\x02 \x01(\v2%.nokv.admin.v1.ExecutionRestartStatusR\arestart\x12B\n" +
+	"\btopology\x18\x03 \x03(\v2&.nokv.admin.v1.ExecutionTopologyStatusR\btopology*\xb5\x01\n" +
+	"\x17ExecutionAdmissionClass\x12)\n" +
+	"%EXECUTION_ADMISSION_CLASS_UNSPECIFIED\x10\x00\x12\"\n" +
+	"\x1eEXECUTION_ADMISSION_CLASS_READ\x10\x01\x12#\n" +
+	"\x1fEXECUTION_ADMISSION_CLASS_WRITE\x10\x02\x12&\n" +
+	"\"EXECUTION_ADMISSION_CLASS_TOPOLOGY\x10\x03*\xd1\x03\n" +
+	"\x18ExecutionAdmissionReason\x12*\n" +
+	"&EXECUTION_ADMISSION_REASON_UNSPECIFIED\x10\x00\x12'\n" +
+	"#EXECUTION_ADMISSION_REASON_ACCEPTED\x10\x01\x12&\n" +
+	"\"EXECUTION_ADMISSION_REASON_INVALID\x10\x02\x12.\n" +
+	"*EXECUTION_ADMISSION_REASON_STORE_NOT_MATCH\x10\x03\x12)\n" +
+	"%EXECUTION_ADMISSION_REASON_NOT_HOSTED\x10\x04\x12-\n" +
+	")EXECUTION_ADMISSION_REASON_EPOCH_MISMATCH\x10\x05\x120\n" +
+	",EXECUTION_ADMISSION_REASON_KEY_NOT_IN_REGION\x10\x06\x12)\n" +
+	"%EXECUTION_ADMISSION_REASON_NOT_LEADER\x10\a\x12'\n" +
+	"#EXECUTION_ADMISSION_REASON_CANCELED\x10\b\x12(\n" +
+	"$EXECUTION_ADMISSION_REASON_TIMED_OUT\x10\t*\x8e\x02\n" +
+	"\x18ExecutionTopologyOutcome\x12*\n" +
+	"&EXECUTION_TOPOLOGY_OUTCOME_UNSPECIFIED\x10\x00\x12'\n" +
+	"#EXECUTION_TOPOLOGY_OUTCOME_REJECTED\x10\x01\x12%\n" +
+	"!EXECUTION_TOPOLOGY_OUTCOME_QUEUED\x10\x02\x12'\n" +
+	"#EXECUTION_TOPOLOGY_OUTCOME_PROPOSED\x10\x03\x12&\n" +
+	"\"EXECUTION_TOPOLOGY_OUTCOME_APPLIED\x10\x04\x12%\n" +
+	"!EXECUTION_TOPOLOGY_OUTCOME_FAILED\x10\x05*\xa4\x02\n" +
+	"\x15ExecutionPublishState\x12'\n" +
+	"#EXECUTION_PUBLISH_STATE_UNSPECIFIED\x10\x00\x12(\n" +
+	"$EXECUTION_PUBLISH_STATE_NOT_REQUIRED\x10\x01\x12-\n" +
+	")EXECUTION_PUBLISH_STATE_PLANNED_PUBLISHED\x10\x02\x12,\n" +
+	"(EXECUTION_PUBLISH_STATE_TERMINAL_PENDING\x10\x03\x12.\n" +
+	"*EXECUTION_PUBLISH_STATE_TERMINAL_PUBLISHED\x10\x04\x12+\n" +
+	"'EXECUTION_PUBLISH_STATE_TERMINAL_FAILED\x10\x05*\x89\x01\n" +
+	"\x15ExecutionRestartState\x12'\n" +
+	"#EXECUTION_RESTART_STATE_UNSPECIFIED\x10\x00\x12!\n" +
+	"\x1dEXECUTION_RESTART_STATE_READY\x10\x01\x12$\n" +
+	" EXECUTION_RESTART_STATE_DEGRADED\x10\x022\xbe\a\n" +
 	"\tRaftAdmin\x12H\n" +
 	"\aAddPeer\x12\x1d.nokv.admin.v1.AddPeerRequest\x1a\x1e.nokv.admin.v1.AddPeerResponse\x12Q\n" +
 	"\n" +
@@ -872,7 +1588,8 @@ const file_admin_admin_proto_rawDesc = "" +
 	"\x1aExportRegionSnapshotStream\x120.nokv.admin.v1.ExportRegionSnapshotStreamRequest\x1a1.nokv.admin.v1.ExportRegionSnapshotStreamResponse0\x01\x12o\n" +
 	"\x14ImportRegionSnapshot\x12*.nokv.admin.v1.ImportRegionSnapshotRequest\x1a+.nokv.admin.v1.ImportRegionSnapshotResponse\x12}\n" +
 	"\x1aImportRegionSnapshotStream\x120.nokv.admin.v1.ImportRegionSnapshotStreamRequest\x1a+.nokv.admin.v1.ImportRegionSnapshotResponse(\x01\x12l\n" +
-	"\x13RegionRuntimeStatus\x12).nokv.admin.v1.RegionRuntimeStatusRequest\x1a*.nokv.admin.v1.RegionRuntimeStatusResponseB.Z,github.com/feichai0017/NoKV/pb/admin;adminpbb\x06proto3"
+	"\x13RegionRuntimeStatus\x12).nokv.admin.v1.RegionRuntimeStatusRequest\x1a*.nokv.admin.v1.RegionRuntimeStatusResponse\x12`\n" +
+	"\x0fExecutionStatus\x12%.nokv.admin.v1.ExecutionStatusRequest\x1a&.nokv.admin.v1.ExecutionStatusResponseB.Z,github.com/feichai0017/NoKV/pb/admin;adminpbb\x06proto3"
 
 var (
 	file_admin_admin_proto_rawDescOnce sync.Once
@@ -886,55 +1603,76 @@ func file_admin_admin_proto_rawDescGZIP() []byte {
 	return file_admin_admin_proto_rawDescData
 }
 
-var file_admin_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_admin_admin_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_admin_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_admin_admin_proto_goTypes = []any{
-	(*AddPeerRequest)(nil),                     // 0: nokv.admin.v1.AddPeerRequest
-	(*AddPeerResponse)(nil),                    // 1: nokv.admin.v1.AddPeerResponse
-	(*RemovePeerRequest)(nil),                  // 2: nokv.admin.v1.RemovePeerRequest
-	(*RemovePeerResponse)(nil),                 // 3: nokv.admin.v1.RemovePeerResponse
-	(*TransferLeaderRequest)(nil),              // 4: nokv.admin.v1.TransferLeaderRequest
-	(*TransferLeaderResponse)(nil),             // 5: nokv.admin.v1.TransferLeaderResponse
-	(*ExportRegionSnapshotRequest)(nil),        // 6: nokv.admin.v1.ExportRegionSnapshotRequest
-	(*ExportRegionSnapshotResponse)(nil),       // 7: nokv.admin.v1.ExportRegionSnapshotResponse
-	(*ExportRegionSnapshotStreamRequest)(nil),  // 8: nokv.admin.v1.ExportRegionSnapshotStreamRequest
-	(*ExportRegionSnapshotStreamResponse)(nil), // 9: nokv.admin.v1.ExportRegionSnapshotStreamResponse
-	(*ImportRegionSnapshotRequest)(nil),        // 10: nokv.admin.v1.ImportRegionSnapshotRequest
-	(*ImportRegionSnapshotResponse)(nil),       // 11: nokv.admin.v1.ImportRegionSnapshotResponse
-	(*ImportRegionSnapshotStreamRequest)(nil),  // 12: nokv.admin.v1.ImportRegionSnapshotStreamRequest
-	(*RegionRuntimeStatusRequest)(nil),         // 13: nokv.admin.v1.RegionRuntimeStatusRequest
-	(*RegionRuntimeStatusResponse)(nil),        // 14: nokv.admin.v1.RegionRuntimeStatusResponse
-	(*meta.RegionDescriptor)(nil),              // 15: nokv.meta.v1.RegionDescriptor
+	(ExecutionAdmissionClass)(0),               // 0: nokv.admin.v1.ExecutionAdmissionClass
+	(ExecutionAdmissionReason)(0),              // 1: nokv.admin.v1.ExecutionAdmissionReason
+	(ExecutionTopologyOutcome)(0),              // 2: nokv.admin.v1.ExecutionTopologyOutcome
+	(ExecutionPublishState)(0),                 // 3: nokv.admin.v1.ExecutionPublishState
+	(ExecutionRestartState)(0),                 // 4: nokv.admin.v1.ExecutionRestartState
+	(*AddPeerRequest)(nil),                     // 5: nokv.admin.v1.AddPeerRequest
+	(*AddPeerResponse)(nil),                    // 6: nokv.admin.v1.AddPeerResponse
+	(*RemovePeerRequest)(nil),                  // 7: nokv.admin.v1.RemovePeerRequest
+	(*RemovePeerResponse)(nil),                 // 8: nokv.admin.v1.RemovePeerResponse
+	(*TransferLeaderRequest)(nil),              // 9: nokv.admin.v1.TransferLeaderRequest
+	(*TransferLeaderResponse)(nil),             // 10: nokv.admin.v1.TransferLeaderResponse
+	(*ExportRegionSnapshotRequest)(nil),        // 11: nokv.admin.v1.ExportRegionSnapshotRequest
+	(*ExportRegionSnapshotResponse)(nil),       // 12: nokv.admin.v1.ExportRegionSnapshotResponse
+	(*ExportRegionSnapshotStreamRequest)(nil),  // 13: nokv.admin.v1.ExportRegionSnapshotStreamRequest
+	(*ExportRegionSnapshotStreamResponse)(nil), // 14: nokv.admin.v1.ExportRegionSnapshotStreamResponse
+	(*ImportRegionSnapshotRequest)(nil),        // 15: nokv.admin.v1.ImportRegionSnapshotRequest
+	(*ImportRegionSnapshotResponse)(nil),       // 16: nokv.admin.v1.ImportRegionSnapshotResponse
+	(*ImportRegionSnapshotStreamRequest)(nil),  // 17: nokv.admin.v1.ImportRegionSnapshotStreamRequest
+	(*RegionRuntimeStatusRequest)(nil),         // 18: nokv.admin.v1.RegionRuntimeStatusRequest
+	(*RegionRuntimeStatusResponse)(nil),        // 19: nokv.admin.v1.RegionRuntimeStatusResponse
+	(*ExecutionStatusRequest)(nil),             // 20: nokv.admin.v1.ExecutionStatusRequest
+	(*ExecutionAdmissionStatus)(nil),           // 21: nokv.admin.v1.ExecutionAdmissionStatus
+	(*ExecutionTopologyStatus)(nil),            // 22: nokv.admin.v1.ExecutionTopologyStatus
+	(*ExecutionRestartStatus)(nil),             // 23: nokv.admin.v1.ExecutionRestartStatus
+	(*ExecutionStatusResponse)(nil),            // 24: nokv.admin.v1.ExecutionStatusResponse
+	(*meta.RegionDescriptor)(nil),              // 25: nokv.meta.v1.RegionDescriptor
 }
 var file_admin_admin_proto_depIdxs = []int32{
-	15, // 0: nokv.admin.v1.AddPeerResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
-	15, // 1: nokv.admin.v1.RemovePeerResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
-	15, // 2: nokv.admin.v1.TransferLeaderResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
-	15, // 3: nokv.admin.v1.ExportRegionSnapshotResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
-	15, // 4: nokv.admin.v1.ExportRegionSnapshotStreamResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
-	15, // 5: nokv.admin.v1.ImportRegionSnapshotResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
-	15, // 6: nokv.admin.v1.ImportRegionSnapshotStreamRequest.region:type_name -> nokv.meta.v1.RegionDescriptor
-	15, // 7: nokv.admin.v1.RegionRuntimeStatusResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
-	0,  // 8: nokv.admin.v1.RaftAdmin.AddPeer:input_type -> nokv.admin.v1.AddPeerRequest
-	2,  // 9: nokv.admin.v1.RaftAdmin.RemovePeer:input_type -> nokv.admin.v1.RemovePeerRequest
-	4,  // 10: nokv.admin.v1.RaftAdmin.TransferLeader:input_type -> nokv.admin.v1.TransferLeaderRequest
-	6,  // 11: nokv.admin.v1.RaftAdmin.ExportRegionSnapshot:input_type -> nokv.admin.v1.ExportRegionSnapshotRequest
-	8,  // 12: nokv.admin.v1.RaftAdmin.ExportRegionSnapshotStream:input_type -> nokv.admin.v1.ExportRegionSnapshotStreamRequest
-	10, // 13: nokv.admin.v1.RaftAdmin.ImportRegionSnapshot:input_type -> nokv.admin.v1.ImportRegionSnapshotRequest
-	12, // 14: nokv.admin.v1.RaftAdmin.ImportRegionSnapshotStream:input_type -> nokv.admin.v1.ImportRegionSnapshotStreamRequest
-	13, // 15: nokv.admin.v1.RaftAdmin.RegionRuntimeStatus:input_type -> nokv.admin.v1.RegionRuntimeStatusRequest
-	1,  // 16: nokv.admin.v1.RaftAdmin.AddPeer:output_type -> nokv.admin.v1.AddPeerResponse
-	3,  // 17: nokv.admin.v1.RaftAdmin.RemovePeer:output_type -> nokv.admin.v1.RemovePeerResponse
-	5,  // 18: nokv.admin.v1.RaftAdmin.TransferLeader:output_type -> nokv.admin.v1.TransferLeaderResponse
-	7,  // 19: nokv.admin.v1.RaftAdmin.ExportRegionSnapshot:output_type -> nokv.admin.v1.ExportRegionSnapshotResponse
-	9,  // 20: nokv.admin.v1.RaftAdmin.ExportRegionSnapshotStream:output_type -> nokv.admin.v1.ExportRegionSnapshotStreamResponse
-	11, // 21: nokv.admin.v1.RaftAdmin.ImportRegionSnapshot:output_type -> nokv.admin.v1.ImportRegionSnapshotResponse
-	11, // 22: nokv.admin.v1.RaftAdmin.ImportRegionSnapshotStream:output_type -> nokv.admin.v1.ImportRegionSnapshotResponse
-	14, // 23: nokv.admin.v1.RaftAdmin.RegionRuntimeStatus:output_type -> nokv.admin.v1.RegionRuntimeStatusResponse
-	16, // [16:24] is the sub-list for method output_type
-	8,  // [8:16] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	25, // 0: nokv.admin.v1.AddPeerResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
+	25, // 1: nokv.admin.v1.RemovePeerResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
+	25, // 2: nokv.admin.v1.TransferLeaderResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
+	25, // 3: nokv.admin.v1.ExportRegionSnapshotResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
+	25, // 4: nokv.admin.v1.ExportRegionSnapshotStreamResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
+	25, // 5: nokv.admin.v1.ImportRegionSnapshotResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
+	25, // 6: nokv.admin.v1.ImportRegionSnapshotStreamRequest.region:type_name -> nokv.meta.v1.RegionDescriptor
+	25, // 7: nokv.admin.v1.RegionRuntimeStatusResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
+	0,  // 8: nokv.admin.v1.ExecutionAdmissionStatus.class:type_name -> nokv.admin.v1.ExecutionAdmissionClass
+	1,  // 9: nokv.admin.v1.ExecutionAdmissionStatus.reason:type_name -> nokv.admin.v1.ExecutionAdmissionReason
+	2,  // 10: nokv.admin.v1.ExecutionTopologyStatus.outcome:type_name -> nokv.admin.v1.ExecutionTopologyOutcome
+	3,  // 11: nokv.admin.v1.ExecutionTopologyStatus.publish:type_name -> nokv.admin.v1.ExecutionPublishState
+	4,  // 12: nokv.admin.v1.ExecutionRestartStatus.state:type_name -> nokv.admin.v1.ExecutionRestartState
+	21, // 13: nokv.admin.v1.ExecutionStatusResponse.last_admission:type_name -> nokv.admin.v1.ExecutionAdmissionStatus
+	23, // 14: nokv.admin.v1.ExecutionStatusResponse.restart:type_name -> nokv.admin.v1.ExecutionRestartStatus
+	22, // 15: nokv.admin.v1.ExecutionStatusResponse.topology:type_name -> nokv.admin.v1.ExecutionTopologyStatus
+	5,  // 16: nokv.admin.v1.RaftAdmin.AddPeer:input_type -> nokv.admin.v1.AddPeerRequest
+	7,  // 17: nokv.admin.v1.RaftAdmin.RemovePeer:input_type -> nokv.admin.v1.RemovePeerRequest
+	9,  // 18: nokv.admin.v1.RaftAdmin.TransferLeader:input_type -> nokv.admin.v1.TransferLeaderRequest
+	11, // 19: nokv.admin.v1.RaftAdmin.ExportRegionSnapshot:input_type -> nokv.admin.v1.ExportRegionSnapshotRequest
+	13, // 20: nokv.admin.v1.RaftAdmin.ExportRegionSnapshotStream:input_type -> nokv.admin.v1.ExportRegionSnapshotStreamRequest
+	15, // 21: nokv.admin.v1.RaftAdmin.ImportRegionSnapshot:input_type -> nokv.admin.v1.ImportRegionSnapshotRequest
+	17, // 22: nokv.admin.v1.RaftAdmin.ImportRegionSnapshotStream:input_type -> nokv.admin.v1.ImportRegionSnapshotStreamRequest
+	18, // 23: nokv.admin.v1.RaftAdmin.RegionRuntimeStatus:input_type -> nokv.admin.v1.RegionRuntimeStatusRequest
+	20, // 24: nokv.admin.v1.RaftAdmin.ExecutionStatus:input_type -> nokv.admin.v1.ExecutionStatusRequest
+	6,  // 25: nokv.admin.v1.RaftAdmin.AddPeer:output_type -> nokv.admin.v1.AddPeerResponse
+	8,  // 26: nokv.admin.v1.RaftAdmin.RemovePeer:output_type -> nokv.admin.v1.RemovePeerResponse
+	10, // 27: nokv.admin.v1.RaftAdmin.TransferLeader:output_type -> nokv.admin.v1.TransferLeaderResponse
+	12, // 28: nokv.admin.v1.RaftAdmin.ExportRegionSnapshot:output_type -> nokv.admin.v1.ExportRegionSnapshotResponse
+	14, // 29: nokv.admin.v1.RaftAdmin.ExportRegionSnapshotStream:output_type -> nokv.admin.v1.ExportRegionSnapshotStreamResponse
+	16, // 30: nokv.admin.v1.RaftAdmin.ImportRegionSnapshot:output_type -> nokv.admin.v1.ImportRegionSnapshotResponse
+	16, // 31: nokv.admin.v1.RaftAdmin.ImportRegionSnapshotStream:output_type -> nokv.admin.v1.ImportRegionSnapshotResponse
+	19, // 32: nokv.admin.v1.RaftAdmin.RegionRuntimeStatus:output_type -> nokv.admin.v1.RegionRuntimeStatusResponse
+	24, // 33: nokv.admin.v1.RaftAdmin.ExecutionStatus:output_type -> nokv.admin.v1.ExecutionStatusResponse
+	25, // [25:34] is the sub-list for method output_type
+	16, // [16:25] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_admin_admin_proto_init() }
@@ -947,13 +1685,14 @@ func file_admin_admin_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_admin_admin_proto_rawDesc), len(file_admin_admin_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   15,
+			NumEnums:      5,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_admin_admin_proto_goTypes,
 		DependencyIndexes: file_admin_admin_proto_depIdxs,
+		EnumInfos:         file_admin_admin_proto_enumTypes,
 		MessageInfos:      file_admin_admin_proto_msgTypes,
 	}.Build()
 	File_admin_admin_proto = out.File

@@ -96,6 +96,10 @@ func (f *fakeAdminClient) RegionRuntimeStatus(context.Context, *adminpb.RegionRu
 	return resp, nil
 }
 
+func (f *fakeAdminClient) ExecutionStatus(context.Context, *adminpb.ExecutionStatusRequest) (*adminpb.ExecutionStatusResponse, error) {
+	return &adminpb.ExecutionStatusResponse{}, nil
+}
+
 func TestExpandWaitsForTargetHosted(t *testing.T) {
 	leader := &fakeAdminClient{
 		addResp: &adminpb.AddPeerResponse{

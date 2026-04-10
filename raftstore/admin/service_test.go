@@ -6,7 +6,9 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"io"
 	"sync"
 	"testing"
@@ -177,6 +179,118 @@ func TestServiceAddPeerPublishesPlannedTarget(t *testing.T) {
 	require.NotNil(t, events[0].PeerChange)
 	require.Equal(t, uint64(2), events[0].PeerChange.StoreID)
 	require.Equal(t, uint64(201), events[0].PeerChange.PeerID)
+}
+
+func TestServiceExecutionStatusReportsProtocolState(t *testing.T) {
+	dir := t.TempDir()
+	db, localMeta := openAdminTestDBWithTweak(t, dir, nil)
+	defer func() {
+		require.NoError(t, db.Close())
+		require.NoError(t, localMeta.Close())
+	}()
+
+	sink := &captureSchedulerClient{}
+	st := store.NewStore(store.Config{
+		StoreID:     1,
+		LocalMeta:   localMeta,
+		Scheduler:   sink,
+		PeerBuilder: nil,
+	})
+	defer st.Close()
+
+	region := localmeta.RegionMeta{
+		ID:       88,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 101}},
+		State:    metaregion.ReplicaStateRunning,
+	}
+	storage, err := db.RaftLog().Open(region.ID, localMeta)
+	require.NoError(t, err)
+	cfg := &peer.Config{
+		RaftConfig: myraft.Config{
+			ID:              101,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		},
+		Transport: noopTransport{},
+		Apply:     func([]myraft.Entry) error { return nil },
+		Storage:   storage,
+		GroupID:   region.ID,
+		Region:    localmeta.CloneRegionMetaPtr(&region),
+	}
+	p, err := st.StartPeer(cfg, []myraft.Peer{{ID: 101}})
+	require.NoError(t, err)
+	defer st.StopPeer(p.ID())
+	require.NoError(t, p.Campaign())
+	require.NoError(t, localMeta.SaveRaftPointer(localmeta.RaftLogPointer{
+		GroupID:      region.ID,
+		AppliedIndex: 1,
+		AppliedTerm:  1,
+	}))
+
+	require.NoError(t, localMeta.SaveRegion(localmeta.RegionMeta{
+		ID:       99,
+		StartKey: []byte("za"),
+		EndKey:   []byte("zz"),
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 199}},
+		State:    metaregion.ReplicaStateRunning,
+	}))
+
+	svc := NewService(st)
+	addResp, err := svc.AddPeer(context.Background(), &adminpb.AddPeerRequest{
+		RegionId: region.ID,
+		StoreId:  2,
+		PeerId:   201,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, addResp.GetRegion())
+
+	readResp, err := st.ReadCommand(context.Background(), &raftcmdpb.RaftCmdRequest{
+		Header: &raftcmdpb.CmdHeader{
+			RegionId: region.ID,
+			RegionEpoch: &metapb.RegionEpoch{
+				Version:     addResp.GetRegion().GetEpoch().GetVersion(),
+				ConfVersion: addResp.GetRegion().GetEpoch().GetConfVersion(),
+			},
+		},
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_GET,
+			Cmd: &raftcmdpb.Request_Get{
+				Get: &kvrpcpb.GetRequest{Key: []byte("zz")},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, readResp.GetRegionError())
+
+	resp, err := svc.ExecutionStatus(context.Background(), &adminpb.ExecutionStatusRequest{})
+	require.NoError(t, err)
+	require.NotNil(t, resp.GetLastAdmission())
+	require.True(t, resp.GetLastAdmission().GetObserved())
+	require.Equal(t, adminpb.ExecutionAdmissionClass_EXECUTION_ADMISSION_CLASS_READ, resp.GetLastAdmission().GetClass())
+	require.Equal(t, adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_KEY_NOT_IN_REGION, resp.GetLastAdmission().GetReason())
+	require.Equal(t, region.ID, resp.GetLastAdmission().GetRegionId())
+	require.NotNil(t, resp.GetRestart())
+	require.Equal(t, adminpb.ExecutionRestartState_EXECUTION_RESTART_STATE_DEGRADED, resp.GetRestart().GetState())
+	require.Contains(t, resp.GetRestart().GetMissingRaftPointer(), uint64(99))
+	require.Len(t, resp.GetTopology(), 1)
+	require.Equal(t, region.ID, resp.GetTopology()[0].GetRegionId())
+	require.Contains(t, []adminpb.ExecutionTopologyOutcome{
+		adminpb.ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_PROPOSED,
+		adminpb.ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_APPLIED,
+	}, resp.GetTopology()[0].GetOutcome())
+	require.Contains(t, []adminpb.ExecutionPublishState{
+		adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_PLANNED_PUBLISHED,
+		adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_PENDING,
+		adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_PUBLISHED,
+	}, resp.GetTopology()[0].GetPublish())
+	require.NotEmpty(t, resp.GetTopology()[0].GetTransitionId())
 }
 
 func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {

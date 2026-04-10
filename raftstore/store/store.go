@@ -2,13 +2,9 @@ package store
 
 import (
 	"context"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	"sync"
-	"time"
-
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	"github.com/feichai0017/NoKV/raftstore/peer"
+	"time"
 )
 
 // Store hosts a collection of peers and exposes the concrete runtime helpers
@@ -24,52 +20,7 @@ type Store struct {
 	regions     *regionRuntime
 	sched       *schedulerRuntime
 	cmds        *commandRuntime
-}
-
-type regionRuntime struct {
-	metrics *metrics.RegionMetrics
-	mgr     *regionManager
-}
-
-type schedulerRuntime struct {
-	client SchedulerClient
-
-	input    chan Operation
-	stop     chan struct{}
-	wg       sync.WaitGroup
-	cooldown time.Duration
-	interval time.Duration
-	burst    int
-
-	regionSignal chan struct{}
-
-	mu            sync.Mutex
-	pending       map[operationKey]struct{}
-	lastApply     map[operationKey]time.Time
-	descriptors   map[uint64]descriptor.Descriptor
-	regionUpdates map[uint64]regionEvent
-	nextRegionSeq uint64
-	dropped       uint64
-	degraded      bool
-	lastError     string
-	lastErrorAt   time.Time
-	heartbeat     time.Duration
-	heartbeatStop chan struct{}
-	heartbeatWG   sync.WaitGroup
-}
-
-// PeerHandle is a lightweight view of a peer registered with the store. It is
-// designed for diagnostics and scheduling components so they can iterate over
-// the cluster topology without touching the internal map directly.
-type PeerHandle struct {
-	ID     uint64
-	Peer   *peer.Peer
-	Region *localmeta.RegionMeta
-}
-
-// RegionSnapshot provides an external view of the tracked Region metadata.
-type RegionSnapshot struct {
-	Regions []localmeta.RegionMeta `json:"regions"`
+	exec        *executionRuntime
 }
 
 // NewStore constructs a Store using concrete dependencies. It keeps peer
@@ -124,6 +75,7 @@ func NewStore(cfg Config) *Store {
 			pipe:    newCommandPipeline(cfg.CommandApplier),
 			timeout: commandTimeout,
 		},
+		exec: newExecutionRuntime(),
 	}
 	s.regions = &regionRuntime{
 		metrics: regionMetrics,
@@ -157,4 +109,11 @@ func (s *Store) WorkDir() string {
 		return ""
 	}
 	return s.workDir
+}
+
+func (s *Store) runtimeContext() context.Context {
+	if s == nil {
+		return context.Background()
+	}
+	return s.ctx
 }

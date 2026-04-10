@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -11,28 +12,23 @@ import (
 	proto "google.golang.org/protobuf/proto"
 )
 
-type transitionProposal struct {
-	ConfChange *raftpb.ConfChangeV2
-	Admin      *raftcmdpb.AdminCommand
-}
-
-func (p transitionProposal) empty() bool {
-	return p.ConfChange == nil && p.Admin == nil
-}
-
 type transitionTarget struct {
-	RegionID uint64
-	Event    rootevent.Event
-	Action   string
-	Noop     bool
-	Proposal transitionProposal
+	TransitionID string
+	RegionID     uint64
+	Event        rootevent.Event
+	Action       string
+	Noop         bool
+	ConfChange   *raftpb.ConfChangeV2
+	Admin        *raftcmdpb.AdminCommand
 }
 
 type terminalOutcome struct {
-	Event  rootevent.Event
-	Action string
-	Noop   bool
-	Apply  func() error
+	TransitionID string
+	RegionID     uint64
+	Event        rootevent.Event
+	Action       string
+	Noop         bool
+	Apply        func() error
 }
 
 func (s *Store) leaderPeer(regionID uint64) (*peer.Peer, error) {
@@ -65,25 +61,25 @@ func (s *Store) publishPlannedRootEvent(regionID uint64, event rootevent.Event, 
 	return nil
 }
 
-func (s *Store) proposeTransition(regionID uint64, proposal transitionProposal) error {
+func (s *Store) proposeTransition(target transitionTarget) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
-	if regionID == 0 {
+	if target.RegionID == 0 {
 		return fmt.Errorf("raftstore: transition region id is zero")
 	}
-	if proposal.empty() {
+	if target.ConfChange == nil && target.Admin == nil {
 		return fmt.Errorf("raftstore: transition proposal is empty")
 	}
-	peerRef, err := s.leaderPeer(regionID)
+	peerRef, err := s.leaderPeer(target.RegionID)
 	if err != nil {
 		return err
 	}
 	switch {
-	case proposal.ConfChange != nil:
-		return peerRef.ProposeConfChange(*proposal.ConfChange)
-	case proposal.Admin != nil:
-		payload, err := proto.Marshal(proposal.Admin)
+	case target.ConfChange != nil:
+		return peerRef.ProposeConfChange(*target.ConfChange)
+	case target.Admin != nil:
+		payload, err := proto.Marshal(target.Admin)
 		if err != nil {
 			return fmt.Errorf("raftstore: marshal transition admin proposal: %w", err)
 		}
@@ -101,15 +97,33 @@ func (s *Store) executeTransitionTarget(target transitionTarget) error {
 		return nil
 	}
 	if target.RegionID == 0 {
+		s.recordAdmission(Admission{Class: AdmissionClassTopology, Reason: AdmissionReasonInvalid, Detail: "transition region id is zero"})
+		s.recordTopologyRejected(target, fmt.Errorf("raftstore: transition region id is zero"))
 		return fmt.Errorf("raftstore: transition region id is zero")
 	}
-	if target.Proposal.empty() {
+	if target.ConfChange == nil && target.Admin == nil {
+		s.recordAdmission(Admission{Class: AdmissionClassTopology, Reason: AdmissionReasonInvalid, RegionID: target.RegionID, Detail: "transition proposal is empty"})
+		s.recordTopologyRejected(target, fmt.Errorf("raftstore: transition proposal is empty"))
 		return fmt.Errorf("raftstore: transition proposal is empty")
 	}
+	s.recordAdmission(Admission{
+		Class:    AdmissionClassTopology,
+		Reason:   AdmissionReasonAccepted,
+		Accepted: true,
+		RegionID: target.RegionID,
+		Detail:   target.Action,
+	})
+	s.recordTopologyQueued(target)
 	if err := s.publishPlannedRootEvent(target.RegionID, target.Event, target.Action); err != nil {
+		s.recordTopologyFailed(target.TransitionID, target.RegionID, target.Action, PublishStateUnknown, err)
 		return err
 	}
-	return s.proposeTransition(target.RegionID, target.Proposal)
+	if err := s.proposeTransition(target); err != nil {
+		s.recordTopologyFailed(target.TransitionID, target.RegionID, target.Action, PublishStatePlannedPublished, err)
+		return err
+	}
+	s.recordTopologyProposed(target)
+	return nil
 }
 
 func (s *Store) enqueueAppliedRootEvent(event rootevent.Event) {
@@ -117,7 +131,8 @@ func (s *Store) enqueueAppliedRootEvent(event rootevent.Event) {
 		return
 	}
 	s.enqueueRegionEvent(regionEvent{
-		root: event,
+		root:         event,
+		transitionID: rootstate.TransitionIDFromEvent(event),
 	})
 }
 
@@ -130,9 +145,14 @@ func (s *Store) applyTerminalOutcome(term terminalOutcome) error {
 	}
 	if term.Apply != nil {
 		if err := term.Apply(); err != nil {
+			s.recordTopologyFailed(term.TransitionID, term.RegionID, term.Action, PublishStateUnknown, err)
 			return err
 		}
 	}
+	if term.TransitionID == "" && term.Event.Kind != rootevent.KindUnknown {
+		term.TransitionID = rootstate.TransitionIDFromEvent(term.Event)
+	}
+	s.recordTopologyApplied(term)
 	s.enqueueAppliedRootEvent(term.Event)
 	return nil
 }

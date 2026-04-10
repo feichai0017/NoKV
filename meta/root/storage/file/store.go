@@ -10,7 +10,7 @@ type store struct {
 	log     fileEventLog
 }
 
-func NewStore(fs vfs.FS, workdir string) rootstorage.Substrate {
+func NewStore(fs vfs.FS, workdir string) rootstorage.VirtualLog {
 	return store{
 		checkpt: fileCheckpointStore{fs: fs, workdir: workdir},
 		log:     fileEventLog{fs: fs, workdir: workdir},

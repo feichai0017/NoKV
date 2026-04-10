@@ -14,6 +14,7 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/config"
 	coordadapter "github.com/feichai0017/NoKV/coordinator/adapter"
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -39,15 +40,17 @@ func runServeCmd(w io.Writer, args []string) error {
 	raftTickInterval := fs.Duration("raft-tick-interval", 0, "interval between raft ticks (default 100ms)")
 	raftDebugLog := fs.Bool("raft-debug-log", false, "enable verbose raft debug logging")
 	coordAddr := fs.String("coordinator-addr", "", "coordinator gRPC endpoint for cluster mode (required)")
+	configPath := fs.String("config", "", "optional raft configuration file used to resolve listen/workdir/store transport addresses")
+	scope := fs.String("scope", "host", "scope for config-resolved addresses: host|docker")
 	coordTimeout := fs.Duration("coordinator-timeout", 2*time.Second, "timeout for coordinator heartbeat RPCs")
 	metricsAddr := fs.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
-	var peerFlags []string
-	fs.Func("peer", "remote raft peer mapping in the form peerID=address (repeatable)", func(value string) error {
+	var storeAddrFlags []string
+	fs.Func("store-addr", "remote store transport mapping in the form storeID=address (repeatable)", func(value string) error {
 		value = strings.TrimSpace(value)
 		if value == "" {
-			return fmt.Errorf("peer value cannot be empty")
+			return fmt.Errorf("store address value cannot be empty")
 		}
-		peerFlags = append(peerFlags, value)
+		storeAddrFlags = append(storeAddrFlags, value)
 		return nil
 	})
 	fs.SetOutput(io.Discard)
@@ -55,17 +58,73 @@ func runServeCmd(w io.Writer, args []string) error {
 		return err
 	}
 
-	if *workDir == "" {
-		return fmt.Errorf("--workdir is required")
+	var cfg *config.File
+	if strings.TrimSpace(*configPath) != "" {
+		scopeNorm := strings.ToLower(strings.TrimSpace(*scope))
+		if scopeNorm != "host" && scopeNorm != "docker" {
+			return fmt.Errorf("invalid serve scope %q (expected host|docker)", *scope)
+		}
+		loaded, err := config.LoadFile(strings.TrimSpace(*configPath))
+		if err != nil {
+			return fmt.Errorf("serve load config %q: %w", strings.TrimSpace(*configPath), err)
+		}
+		if err := loaded.Validate(); err != nil {
+			return fmt.Errorf("serve validate config %q: %w", strings.TrimSpace(*configPath), err)
+		}
+		cfg = loaded
 	}
+
 	if *storeID == 0 {
 		return fmt.Errorf("--store-id is required")
+	}
+	if cfg != nil {
+		scopeNorm := strings.ToLower(strings.TrimSpace(*scope))
+		if !flagPassed(fs, "workdir") {
+			if resolved := cfg.ResolveStoreWorkDir(*storeID, scopeNorm); resolved != "" {
+				*workDir = resolved
+			}
+		}
+		if !flagPassed(fs, "addr") {
+			if resolved := cfg.ResolveStoreListenAddr(*storeID, scopeNorm); resolved != "" {
+				*listenAddr = resolved
+			}
+		}
+		if !flagPassed(fs, "coordinator-addr") {
+			if resolved := cfg.ResolveCoordinatorAddr(scopeNorm); resolved != "" {
+				*coordAddr = resolved
+			}
+		}
+	}
+	if *workDir == "" {
+		return fmt.Errorf("--workdir is required")
 	}
 	if *electionTick <= 0 || *heartbeatTick <= 0 {
 		return fmt.Errorf("heartbeat and election ticks must be > 0")
 	}
+	explicitStoreAddrs := make(map[uint64]string, len(storeAddrFlags))
+	for _, mapping := range storeAddrFlags {
+		parts := strings.SplitN(mapping, "=", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid --store-addr value %q (want storeID=address)", mapping)
+		}
+		id, err := parseUint(parts[0])
+		if err != nil {
+			return fmt.Errorf("invalid store id in --store-addr %q: %w", mapping, err)
+		}
+		if id == 0 {
+			return fmt.Errorf("invalid --store-addr value %q (store id must be > 0)", mapping)
+		}
+		addr := strings.TrimSpace(parts[1])
+		if addr == "" {
+			return fmt.Errorf("invalid --store-addr value %q (empty address)", mapping)
+		}
+		explicitStoreAddrs[id] = addr
+	}
 	if strings.TrimSpace(*coordAddr) == "" {
 		return fmt.Errorf("--coordinator-addr is required (coordinator is the only scheduler/control-plane source)")
+	}
+	if _, err := validateServeMode(*workDir, *storeID); err != nil {
+		return err
 	}
 
 	localMeta, err := localmeta.OpenLocalStore(*workDir, nil)
@@ -143,16 +202,16 @@ func runServeCmd(w io.Writer, args []string) error {
 	}
 
 	transport := server.Transport()
-	for _, mapping := range peerFlags {
-		parts := strings.SplitN(mapping, "=", 2)
-		if len(parts) != 2 {
-			return fmt.Errorf("invalid --peer value %q (want peerID=address)", mapping)
+	snapshot := localMeta.Snapshot()
+	transportPeers, err := resolveTransportPeers(snapshot, *storeID, cfg, strings.ToLower(strings.TrimSpace(*scope)), explicitStoreAddrs)
+	if err != nil {
+		return err
+	}
+	for peerID, addr := range transportPeers {
+		if strings.TrimSpace(addr) == "" {
+			continue
 		}
-		id, err := parseUint(parts[0])
-		if err != nil {
-			return fmt.Errorf("invalid peer id in --peer %q: %w", mapping, err)
-		}
-		transport.SetPeer(id, parts[1])
+		transport.SetPeer(peerID, addr)
 	}
 
 	startedRegions, totalRegions, err := startStorePeers(server, serverpkg.Storage{MVCC: db, Raft: db.RaftLog()}, localMeta, *storeID, *electionTick, *heartbeatTick, *maxMsgBytes, *maxInflight)
@@ -164,8 +223,10 @@ func runServeCmd(w io.Writer, args []string) error {
 	}
 	if totalRegions == 0 {
 		_, _ = fmt.Fprintln(w, "Local peer catalog contains no regions; waiting for bootstrap")
+		_, _ = fmt.Fprintln(w, "Serve lifecycle: bootstrap-wait (runtime topology will come from local metadata once seeded)")
 	} else {
 		_, _ = fmt.Fprintf(w, "Local peer catalog regions: %d, local peers started: %d\n", totalRegions, len(startedRegions))
+		_, _ = fmt.Fprintln(w, "Serve lifecycle: restart-recover (runtime topology sourced from local metadata)")
 		if missing := totalRegions - len(startedRegions); missing > 0 {
 			_, _ = fmt.Fprintf(w, "Store %d not present in %d region(s)\n", *storeID, missing)
 		}
@@ -186,8 +247,8 @@ func runServeCmd(w io.Writer, args []string) error {
 		_, _ = fmt.Fprintf(w, "Serve metrics endpoint listening on http://%s/debug/vars\n", metricsLn.Addr().String())
 	}
 	_, _ = fmt.Fprintf(w, "Serve mode: cluster (coordinator enabled, addr=%s)\n", strings.TrimSpace(*coordAddr))
-	if len(peerFlags) > 0 {
-		_, _ = fmt.Fprintf(w, "Configured peers: %s\n", strings.Join(peerFlags, ", "))
+	if len(storeAddrFlags) > 0 {
+		_, _ = fmt.Fprintf(w, "Configured store address overrides: %s\n", strings.Join(storeAddrFlags, ", "))
 	}
 	_, _ = fmt.Fprintf(w, "coordinator heartbeat sink enabled: %s\n", strings.TrimSpace(*coordAddr))
 	_, _ = fmt.Fprintln(w, "Press Ctrl+C to stop")
@@ -197,6 +258,64 @@ func runServeCmd(w io.Writer, args []string) error {
 	<-ctx.Done()
 	_, _ = fmt.Fprintln(w, "\nShutting down...")
 	return nil
+}
+
+func resolveTransportPeers(snapshot map[uint64]localmeta.RegionMeta, localStoreID uint64, cfg *config.File, scope string, explicitStoreAddrs map[uint64]string) (map[uint64]string, error) {
+	needed := collectRemotePeers(snapshot, localStoreID)
+	if len(needed) == 0 {
+		if len(explicitStoreAddrs) > 0 {
+			return nil, fmt.Errorf("serve received --store-addr overrides but local metadata has no remote stores to resolve")
+		}
+		return nil, nil
+	}
+	out := make(map[uint64]string, len(needed))
+	usedOverrides := make(map[uint64]struct{}, len(explicitStoreAddrs))
+	for peerID, storeID := range needed {
+		addr := strings.TrimSpace(explicitStoreAddrs[storeID])
+		if addr != "" {
+			usedOverrides[storeID] = struct{}{}
+		} else if cfg != nil {
+			addr = strings.TrimSpace(cfg.ResolveStoreAddr(storeID, scope))
+		}
+		if addr == "" {
+			return nil, fmt.Errorf("serve missing transport address for remote store %d (peer %d): provide --config store address or --store-addr override", storeID, peerID)
+		}
+		out[peerID] = addr
+	}
+	for storeID := range explicitStoreAddrs {
+		if _, ok := usedOverrides[storeID]; ok {
+			continue
+		}
+		return nil, fmt.Errorf("serve unused --store-addr override for store %d: local metadata does not reference that remote store", storeID)
+	}
+	return out, nil
+}
+
+func collectRemotePeers(snapshot map[uint64]localmeta.RegionMeta, localStoreID uint64) map[uint64]uint64 {
+	if len(snapshot) == 0 || localStoreID == 0 {
+		return nil
+	}
+	out := make(map[uint64]uint64)
+	for _, meta := range snapshot {
+		for _, p := range meta.Peers {
+			if p.StoreID == 0 || p.PeerID == 0 || p.StoreID == localStoreID {
+				continue
+			}
+			out[p.PeerID] = p.StoreID
+		}
+	}
+	return out
+}
+
+func validateServeMode(workDir string, storeID uint64) (raftmode.State, error) {
+	state, err := raftmode.Read(workDir)
+	if err != nil {
+		return raftmode.State{}, fmt.Errorf("read workdir mode: %w", err)
+	}
+	if state.StoreID != 0 && storeID != 0 && state.StoreID != storeID {
+		return raftmode.State{}, fmt.Errorf("serve store-id mismatch: workdir %q is bound to store %d, not store %d", workDir, state.StoreID, storeID)
+	}
+	return state, nil
 }
 
 func promoteClusterMode(workDir string, storeID uint64) error {
@@ -211,6 +330,8 @@ func promoteClusterMode(workDir string, storeID uint64) error {
 	if state.StoreID == 0 {
 		state.StoreID = storeID
 	}
+	state.RegionID = 0
+	state.PeerID = 0
 	return raftmode.Write(workDir, state)
 }
 
