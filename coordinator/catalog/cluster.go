@@ -7,6 +7,7 @@ import (
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"sync"
 	"time"
 )
 
@@ -20,6 +21,7 @@ type Cluster struct {
 	regions     *pdview.RegionDirectoryView
 	transitions *pdview.PendingView
 	operators   *pdoperator.Runtime
+	rootMu      sync.RWMutex
 	rootToken   rootstorage.TailToken
 }
 
@@ -214,7 +216,9 @@ func (c *Cluster) ReplaceRootSnapshot(
 		return
 	}
 	c.regions.Replace(descriptors)
+	c.rootMu.Lock()
 	c.rootToken = token
+	c.rootMu.Unlock()
 	c.replaceTransitionRuntime(rootstate.Snapshot{
 		Descriptors:         rootstate.CloneDescriptors(descriptors),
 		PendingPeerChanges:  pendingPeerChanges,
@@ -226,6 +230,8 @@ func (c *Cluster) CatalogRootToken() rootstorage.TailToken {
 	if c == nil {
 		return rootstorage.TailToken{}
 	}
+	c.rootMu.RLock()
+	defer c.rootMu.RUnlock()
 	return c.rootToken
 }
 
@@ -301,7 +307,7 @@ func (c *Cluster) clone() *Cluster {
 		PendingPeerChanges:  transitions.PendingPeerChanges,
 		PendingRangeChanges: transitions.PendingRangeChanges,
 	})
-	out.rootToken = c.rootToken
+	out.rootToken = c.CatalogRootToken()
 	return out
 }
 

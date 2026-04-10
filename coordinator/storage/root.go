@@ -61,10 +61,7 @@ func (s *RootStore) WaitForTail(after rootstorage.TailToken, timeout time.Durati
 	if err != nil {
 		return advance, err
 	}
-	s.setCatchUpState(catchUpStateFromAdvance(advance))
-	if advance.ShouldReloadState() {
-		s.replaceObserved(advance.Observed, advance.Token)
-	}
+	s.applyTailAdvance(advance)
 	return advance, nil
 }
 
@@ -82,10 +79,7 @@ func (s *RootStore) ObserveTail(after rootstorage.TailToken) (rootstorage.TailAd
 	if err != nil {
 		return advance, err
 	}
-	s.setCatchUpState(catchUpStateFromAdvance(advance))
-	if advance.ShouldReloadState() {
-		s.replaceObserved(advance.Observed, advance.Token)
-	}
+	s.applyTailAdvance(advance)
 	return advance, nil
 }
 
@@ -207,39 +201,34 @@ func (s *RootStore) replaceObserved(observed rootstorage.ObservedCommitted, toke
 		token.Cursor = observed.LastCursor()
 	}
 	out.RootToken = token
-	if current, ok := s.currentSnapshot(); ok {
-		switch current.CatchUpState {
-		case CatchUpStateBootstrapRequired:
-			out.CatchUpState = CatchUpStateBootstrapRequired
-		case CatchUpStateLagging:
-			out.CatchUpState = CatchUpStateLagging
-		default:
-			out.CatchUpState = CatchUpStateFresh
-		}
-	} else {
-		out.CatchUpState = CatchUpStateFresh
-	}
+	out.CatchUpState = CatchUpStateFresh
 	s.mu.Lock()
 	s.snapshot = out
 	s.mu.Unlock()
 }
 
-func (s *RootStore) currentSnapshot() (Snapshot, bool) {
-	if s == nil {
-		return Snapshot{}, false
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return CloneSnapshot(s.snapshot), true
-}
-
-func (s *RootStore) setCatchUpState(state CatchUpState) {
+func (s *RootStore) applyTailAdvance(advance rootstorage.TailAdvance) {
 	if s == nil {
 		return
 	}
+	state := catchUpStateFromAdvance(advance)
+	if !advance.ShouldReloadState() {
+		s.mu.Lock()
+		s.snapshot.CatchUpState = state
+		s.mu.Unlock()
+		return
+	}
+	bootstrap := rootmaterialize.BootstrapFromObserved(advance.Observed)
+	out := SnapshotFromRoot(bootstrap.Snapshot)
+	token := advance.Token
+	if token.Cursor.Term == 0 && token.Cursor.Index == 0 {
+		token.Cursor = advance.Observed.LastCursor()
+	}
+	out.RootToken = token
+	out.CatchUpState = state
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.snapshot.CatchUpState = state
+	s.snapshot = out
+	s.mu.Unlock()
 }
 
 func catchUpStateFromAdvance(advance rootstorage.TailAdvance) CatchUpState {

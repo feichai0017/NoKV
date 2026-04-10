@@ -214,6 +214,16 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 	}
 }
 
+func (s *Store) hasPendingRegionUpdate(regionID uint64) bool {
+	if s == nil || s.sched == nil || regionID == 0 {
+		return false
+	}
+	s.sched.mu.Lock()
+	defer s.sched.mu.Unlock()
+	_, ok := s.sched.regionUpdates[regionID]
+	return ok
+}
+
 func (s *Store) schedulerRegionIDs() []uint64 {
 	if s == nil {
 		return nil

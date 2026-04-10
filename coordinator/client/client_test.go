@@ -99,7 +99,7 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, publishResp.GetAccepted())
 	require.NotNil(t, publishResp.GetAssessment())
-	require.Equal(t, "peer:11:2:201", publishResp.GetAssessment().GetTransitionId())
+	require.Equal(t, "peer:11:add:2:201", publishResp.GetAssessment().GetTransitionId())
 	require.Equal(t, coordpb.TransitionPhase_TRANSITION_PHASE_PLANNED, publishResp.GetAssessment().GetPhase())
 	require.Equal(t, coordpb.TransitionDecision_TRANSITION_DECISION_APPLY, publishResp.GetAssessment().GetDecision())
 

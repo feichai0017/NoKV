@@ -91,7 +91,7 @@ func TestTransitionExecutorProposalAndTerminalOutcomeGuards(t *testing.T) {
 		Event:  rootevent.RegionTombstoned(55),
 		Action: "remove",
 	}))
-	require.Contains(t, rs.sched.regionUpdates, uint64(55))
+	require.True(t, rs.hasPendingRegionUpdate(55))
 }
 
 type errorSchedulerSink struct {
