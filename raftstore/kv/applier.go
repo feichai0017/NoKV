@@ -29,7 +29,7 @@ func NewEntryApplier(db NoKV.MVCCStore) peer.ApplyFunc {
 				}
 				continue
 			}
-			return fmt.Errorf("raftstore/kv: unsupported legacy raft payload")
+			return fmt.Errorf("raftstore/kv: unsupported unframed raft payload")
 		}
 		return nil
 	}

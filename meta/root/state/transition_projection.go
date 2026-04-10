@@ -6,8 +6,8 @@ import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 )
 
-// TransitionEntry is one rooted transition currently visible to operator and
-// debugging surfaces.
+// TransitionEntry is one rooted transition currently visible to debugging and
+// inspection surfaces.
 type TransitionEntry struct {
 	ID          string
 	Kind        TransitionKind
@@ -47,7 +47,7 @@ func AssessTransition(snapshot Snapshot, event rootevent.Event) TransitionAssess
 }
 
 // BuildTransitionEntries projects the rooted pending transition maps into one
-// stable operator/debug surface.
+// stable inspection surface.
 func BuildTransitionEntries(snapshot Snapshot) []TransitionEntry {
 	total := len(snapshot.PendingPeerChanges) + len(snapshot.PendingRangeChanges)
 	if total == 0 {
@@ -73,27 +73,6 @@ func BuildTransitionEntries(snapshot Snapshot) []TransitionEntry {
 		entries = append(entries, transitionEntryFromPendingRangeChange(snapshot, id, snapshot.PendingRangeChanges[id]))
 	}
 	return entries
-}
-
-// CloneTransitionEntries returns a detached transition-entry slice.
-func CloneTransitionEntries(in []TransitionEntry) []TransitionEntry {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]TransitionEntry, 0, len(in))
-	for _, entry := range in {
-		item := entry
-		if entry.PeerChange != nil {
-			change := *entry.PeerChange
-			item.PeerChange = &change
-		}
-		if entry.RangeChange != nil {
-			change := *entry.RangeChange
-			item.RangeChange = &change
-		}
-		out = append(out, item)
-	}
-	return out
 }
 
 func transitionEntryFromPendingPeerChange(snapshot Snapshot, regionID uint64, change PendingPeerChange) TransitionEntry {

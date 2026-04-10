@@ -69,13 +69,7 @@ func (s *Service) RefreshFromStorage() error {
 	if s == nil || s.storage == nil {
 		return nil
 	}
-	snapshot, err := s.reloadRootedView(true)
-	if err != nil {
-		return err
-	}
-	s.ids.Fence(snapshot.Allocator.IDCurrent)
-	s.tso.Fence(snapshot.Allocator.TSCurrent)
-	return nil
+	return s.reloadAndFenceAllocators(true)
 }
 
 // ReloadFromStorage reloads the in-memory rooted view from the storage cache
@@ -84,13 +78,7 @@ func (s *Service) ReloadFromStorage() error {
 	if s == nil || s.storage == nil {
 		return nil
 	}
-	snapshot, err := s.reloadRootedView(false)
-	if err != nil {
-		return err
-	}
-	s.ids.Fence(snapshot.Allocator.IDCurrent)
-	s.tso.Fence(snapshot.Allocator.TSCurrent)
-	return nil
+	return s.reloadAndFenceAllocators(false)
 }
 
 // StoreHeartbeat records store-level stats.
@@ -194,16 +182,13 @@ func (s *Service) assessRootEventLifecycle(event rootevent.Event) (rootstate.Tra
 	if err != nil {
 		return rootstate.TransitionAssessment{}, fmt.Errorf("load rooted snapshot: %w", err)
 	}
-	assessment := rootstate.AssessTransition(rootstate.Snapshot{
+	rooted := rootstate.Snapshot{
 		Descriptors:         snapshot.Descriptors,
 		PendingPeerChanges:  snapshot.PendingPeerChanges,
 		PendingRangeChanges: snapshot.PendingRangeChanges,
-	}, event)
-	_, err = rootstate.EvaluateRootEventLifecycle(rootstate.Snapshot{
-		Descriptors:         snapshot.Descriptors,
-		PendingPeerChanges:  snapshot.PendingPeerChanges,
-		PendingRangeChanges: snapshot.PendingRangeChanges,
-	}, event)
+	}
+	assessment := rootstate.AssessTransition(rooted, event)
+	_, err = rootstate.EvaluateRootEventLifecycle(rooted, event)
 	return assessment, err
 }
 
@@ -253,6 +238,16 @@ func (s *Service) reloadRootedView(refresh bool) (coordstorage.Snapshot, error) 
 	}
 	s.cluster.ReplaceRootSnapshot(snapshot.Descriptors, snapshot.PendingPeerChanges, snapshot.PendingRangeChanges, snapshot.RootToken)
 	return snapshot, nil
+}
+
+func (s *Service) reloadAndFenceAllocators(refresh bool) error {
+	snapshot, err := s.reloadRootedView(refresh)
+	if err != nil {
+		return err
+	}
+	s.ids.Fence(snapshot.Allocator.IDCurrent)
+	s.tso.Fence(snapshot.Allocator.TSCurrent)
+	return nil
 }
 
 // GetRegionByKey returns region metadata for the specified key.

@@ -63,12 +63,13 @@ defer db.Close()
 
 Notes:
 - `NewDefaultOptions()` populates concrete compaction/ingest defaults up front.
-  `Open()` only backfills zero-valued legacy fields for compatibility, then the
-  DB and LSM layers consume the resolved values directly.
+  `Open()` resolves constructor-owned defaults once, then the DB and LSM layers
+  consume the resolved values directly.
 - `WriteBatchMaxCount`, `WriteBatchMaxSize`, `MaxBatchCount`, `MaxBatchSize`,
   `WriteThrottleMinRate`, `WriteThrottleMaxRate`, and `WALBufferSize` now also
-  expose concrete defaults through `NewDefaultOptions()`. Zero remains a legacy
-  unset value only for manually constructed configs.
+  expose concrete defaults through `NewDefaultOptions()`. If you construct
+  `Options` manually, leaving these fields at zero lets `Open()` resolve the
+  constructor defaults.
 - Batch knobs are split by owner:
   - `WriteBatchMaxCount` / `WriteBatchMaxSize` bound commit-worker request
     coalescing.

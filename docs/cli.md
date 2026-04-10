@@ -122,13 +122,13 @@ nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
 - Requires `--store-id`
 - Also requires enough address metadata to reach the Coordinator and all remote
   raft peers:
-  - either explicit flags (`--workdir`, `--addr`, `--coordinator-addr`, `--peer`)
+  - either explicit flags (`--workdir`, `--addr`, `--coordinator-addr`, `--store-addr`)
   - or `--config <raft_config.json> --scope host|docker`
 - Common flags:
   - `--addr` (default `127.0.0.1:20160`)
   - `--config`, `--scope host|docker`
   - `--metrics-addr` (optional expvar endpoint, exposes `/debug/vars`)
-  - `--peer peerID=address` (repeatable override for remote peer transport addresses)
+  - `--store-addr storeID=address` (repeatable override for remote store transport addresses)
   - `--election-tick`, `--heartbeat-tick`
   - `--raft-max-msg-bytes`, `--raft-max-inflight`
   - `--raft-tick-interval`, `--raft-debug-log`
@@ -150,8 +150,9 @@ Restart semantics:
   - store listen address
   - Coordinator address
   - `storeID -> addr`, which `serve` expands into remote `peerID -> addr`
-- `--peer` remains available as an explicit override for debugging or partial
-  address overrides
+- `--store-id` must match the durable workdir identity once the workdir has been used
+- `--store-addr` is only an exceptional static override; it is keyed by stable
+  `storeID`, not by mutable runtime `peerID`
 
 ### `nokv coordinator`
 

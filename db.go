@@ -302,7 +302,7 @@ func Open(opt *Options) (_ *DB, err error) {
 		return nil, stderrors.New("open db: nil options")
 	}
 	frozen := *opt
-	frozen.normalizeInPlace()
+	frozen.resolveOpenDefaults()
 	db := newDB(&frozen)
 	defer func() {
 		if err != nil {

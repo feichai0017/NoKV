@@ -66,6 +66,8 @@ This split is deliberate:
   - remote peer recovery comes from `raftstore/localmeta`; config `stores` only
     provide `storeID -> addr`
   - no longer treats `config.regions` as restart-time topology truth
+  - if a static transport override is needed, use `--store-addr <store-id>=<addr>`
+    rather than a peer-id keyed mapping
   - `--scope docker` selects container-friendly addresses
 
 ## Migration Workflow

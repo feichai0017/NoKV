@@ -186,9 +186,8 @@ func (TransitionStatus) EnumDescriptor() ([]byte, []int) {
 type TransitionRetryClass int32
 
 const (
-	TransitionRetryClass_TRANSITION_RETRY_CLASS_NONE      TransitionRetryClass = 0
-	TransitionRetryClass_TRANSITION_RETRY_CLASS_CONFLICT  TransitionRetryClass = 1
-	TransitionRetryClass_TRANSITION_RETRY_CLASS_TRANSIENT TransitionRetryClass = 2
+	TransitionRetryClass_TRANSITION_RETRY_CLASS_NONE     TransitionRetryClass = 0
+	TransitionRetryClass_TRANSITION_RETRY_CLASS_CONFLICT TransitionRetryClass = 1
 )
 
 // Enum value maps for TransitionRetryClass.
@@ -196,12 +195,10 @@ var (
 	TransitionRetryClass_name = map[int32]string{
 		0: "TRANSITION_RETRY_CLASS_NONE",
 		1: "TRANSITION_RETRY_CLASS_CONFLICT",
-		2: "TRANSITION_RETRY_CLASS_TRANSIENT",
 	}
 	TransitionRetryClass_value = map[string]int32{
-		"TRANSITION_RETRY_CLASS_NONE":      0,
-		"TRANSITION_RETRY_CLASS_CONFLICT":  1,
-		"TRANSITION_RETRY_CLASS_TRANSIENT": 2,
+		"TRANSITION_RETRY_CLASS_NONE":     0,
+		"TRANSITION_RETRY_CLASS_CONFLICT": 1,
 	}
 )
 
@@ -342,80 +339,6 @@ func (TransitionDecision) EnumDescriptor() ([]byte, []int) {
 	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{5}
 }
 
-type TransitionPhase int32
-
-const (
-	TransitionPhase_TRANSITION_PHASE_UNSPECIFIED TransitionPhase = 0
-	// Planned means rooted lifecycle assessment recognizes the transition target,
-	// but operator runtime admission has not yet been observed.
-	TransitionPhase_TRANSITION_PHASE_PLANNED TransitionPhase = 1
-	// Admitted means the operator runtime currently treats the rooted transition
-	// as admitted for forward execution progress.
-	TransitionPhase_TRANSITION_PHASE_ADMITTED TransitionPhase = 2
-	// Completed means the requested transition target is already satisfied by rooted truth.
-	TransitionPhase_TRANSITION_PHASE_COMPLETED TransitionPhase = 3
-	// Conflicted means another pending rooted transition currently owns progress
-	// for the same transition target.
-	TransitionPhase_TRANSITION_PHASE_CONFLICTED TransitionPhase = 4
-	// Superseded means newer rooted topology truth has replaced this transition target.
-	TransitionPhase_TRANSITION_PHASE_SUPERSEDED TransitionPhase = 5
-	// Cancelled means the rooted transition target was explicitly cancelled.
-	TransitionPhase_TRANSITION_PHASE_CANCELLED TransitionPhase = 6
-	// Aborted means an apply or terminal event does not match the current rooted target.
-	TransitionPhase_TRANSITION_PHASE_ABORTED TransitionPhase = 7
-)
-
-// Enum value maps for TransitionPhase.
-var (
-	TransitionPhase_name = map[int32]string{
-		0: "TRANSITION_PHASE_UNSPECIFIED",
-		1: "TRANSITION_PHASE_PLANNED",
-		2: "TRANSITION_PHASE_ADMITTED",
-		3: "TRANSITION_PHASE_COMPLETED",
-		4: "TRANSITION_PHASE_CONFLICTED",
-		5: "TRANSITION_PHASE_SUPERSEDED",
-		6: "TRANSITION_PHASE_CANCELLED",
-		7: "TRANSITION_PHASE_ABORTED",
-	}
-	TransitionPhase_value = map[string]int32{
-		"TRANSITION_PHASE_UNSPECIFIED": 0,
-		"TRANSITION_PHASE_PLANNED":     1,
-		"TRANSITION_PHASE_ADMITTED":    2,
-		"TRANSITION_PHASE_COMPLETED":   3,
-		"TRANSITION_PHASE_CONFLICTED":  4,
-		"TRANSITION_PHASE_SUPERSEDED":  5,
-		"TRANSITION_PHASE_CANCELLED":   6,
-		"TRANSITION_PHASE_ABORTED":     7,
-	}
-)
-
-func (x TransitionPhase) Enum() *TransitionPhase {
-	p := new(TransitionPhase)
-	*p = x
-	return p
-}
-
-func (x TransitionPhase) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (TransitionPhase) Descriptor() protoreflect.EnumDescriptor {
-	return file_coordinator_coordinator_proto_enumTypes[6].Descriptor()
-}
-
-func (TransitionPhase) Type() protoreflect.EnumType {
-	return &file_coordinator_coordinator_proto_enumTypes[6]
-}
-
-func (x TransitionPhase) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use TransitionPhase.Descriptor instead.
-func (TransitionPhase) EnumDescriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{6}
-}
-
 type Freshness int32
 
 const (
@@ -455,11 +378,11 @@ func (x Freshness) String() string {
 }
 
 func (Freshness) Descriptor() protoreflect.EnumDescriptor {
-	return file_coordinator_coordinator_proto_enumTypes[7].Descriptor()
+	return file_coordinator_coordinator_proto_enumTypes[6].Descriptor()
 }
 
 func (Freshness) Type() protoreflect.EnumType {
-	return &file_coordinator_coordinator_proto_enumTypes[7]
+	return &file_coordinator_coordinator_proto_enumTypes[6]
 }
 
 func (x Freshness) Number() protoreflect.EnumNumber {
@@ -468,7 +391,7 @@ func (x Freshness) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Freshness.Descriptor instead.
 func (Freshness) EnumDescriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{7}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{6}
 }
 
 type DegradedMode int32
@@ -510,11 +433,11 @@ func (x DegradedMode) String() string {
 }
 
 func (DegradedMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_coordinator_coordinator_proto_enumTypes[8].Descriptor()
+	return file_coordinator_coordinator_proto_enumTypes[7].Descriptor()
 }
 
 func (DegradedMode) Type() protoreflect.EnumType {
-	return &file_coordinator_coordinator_proto_enumTypes[8]
+	return &file_coordinator_coordinator_proto_enumTypes[7]
 }
 
 func (x DegradedMode) Number() protoreflect.EnumNumber {
@@ -523,7 +446,7 @@ func (x DegradedMode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use DegradedMode.Descriptor instead.
 func (DegradedMode) EnumDescriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{8}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{7}
 }
 
 type CatchUpState int32
@@ -570,11 +493,11 @@ func (x CatchUpState) String() string {
 }
 
 func (CatchUpState) Descriptor() protoreflect.EnumDescriptor {
-	return file_coordinator_coordinator_proto_enumTypes[9].Descriptor()
+	return file_coordinator_coordinator_proto_enumTypes[8].Descriptor()
 }
 
 func (CatchUpState) Type() protoreflect.EnumType {
-	return &file_coordinator_coordinator_proto_enumTypes[9]
+	return &file_coordinator_coordinator_proto_enumTypes[8]
 }
 
 func (x CatchUpState) Number() protoreflect.EnumNumber {
@@ -583,7 +506,7 @@ func (x CatchUpState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use CatchUpState.Descriptor instead.
 func (CatchUpState) EnumDescriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{9}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{8}
 }
 
 type StoreHeartbeatRequest struct {
@@ -992,9 +915,7 @@ type TransitionEntry struct {
 	PendingPeerChange  *meta.RootPendingPeerChange  `protobuf:"bytes,6,opt,name=pending_peer_change,json=pendingPeerChange,proto3" json:"pending_peer_change,omitempty"`
 	PendingRangeChange *meta.RootPendingRangeChange `protobuf:"bytes,7,opt,name=pending_range_change,json=pendingRangeChange,proto3" json:"pending_range_change,omitempty"`
 	// transition_id is the stable identity of the transition target.
-	TransitionId string `protobuf:"bytes,8,opt,name=transition_id,json=transitionId,proto3" json:"transition_id,omitempty"`
-	// phase is the current runtime-facing lifecycle phase.
-	Phase         TransitionPhase `protobuf:"varint,9,opt,name=phase,proto3,enum=nokv.coordinator.v1.TransitionPhase" json:"phase,omitempty"`
+	TransitionId  string `protobuf:"bytes,8,opt,name=transition_id,json=transitionId,proto3" json:"transition_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1085,13 +1006,6 @@ func (x *TransitionEntry) GetTransitionId() string {
 	return ""
 }
 
-func (x *TransitionEntry) GetPhase() TransitionPhase {
-	if x != nil {
-		return x.Phase
-	}
-	return TransitionPhase_TRANSITION_PHASE_UNSPECIFIED
-}
-
 type TransitionAssessment struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// key is the rooted transition family key used for lifecycle evaluation.
@@ -1103,10 +1017,7 @@ type TransitionAssessment struct {
 	// decision says whether the proposed rooted event should be applied or skipped.
 	Decision TransitionDecision `protobuf:"varint,6,opt,name=decision,proto3,enum=nokv.coordinator.v1.TransitionDecision" json:"decision,omitempty"`
 	// transition_id is the stable identity derived from the proposed rooted event.
-	TransitionId string `protobuf:"bytes,7,opt,name=transition_id,json=transitionId,proto3" json:"transition_id,omitempty"`
-	// phase is the assessment-facing lifecycle phase. It is intentionally
-	// pre-runtime: it does not imply operator admission.
-	Phase         TransitionPhase `protobuf:"varint,8,opt,name=phase,proto3,enum=nokv.coordinator.v1.TransitionPhase" json:"phase,omitempty"`
+	TransitionId  string `protobuf:"bytes,7,opt,name=transition_id,json=transitionId,proto3" json:"transition_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1188,13 +1099,6 @@ func (x *TransitionAssessment) GetTransitionId() string {
 		return x.TransitionId
 	}
 	return ""
-}
-
-func (x *TransitionAssessment) GetPhase() TransitionPhase {
-	if x != nil {
-		return x.Phase
-	}
-	return TransitionPhase_TRANSITION_PHASE_UNSPECIFIED
 }
 
 type ListTransitionsRequest struct {
@@ -1936,7 +1840,7 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12I\n" +
 	"\n" +
 	"assessment\x18\x02 \x01(\v2).nokv.coordinator.v1.TransitionAssessmentR\n" +
-	"assessment\"\xb4\x04\n" +
+	"assessment\"\xf8\x03\n" +
 	"\x0fTransitionEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\x04R\x03key\x127\n" +
 	"\x04kind\x18\x02 \x01(\x0e2#.nokv.coordinator.v1.TransitionKindR\x04kind\x12=\n" +
@@ -1946,8 +1850,7 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\x06reason\x18\x05 \x01(\x0e2%.nokv.coordinator.v1.TransitionReasonR\x06reason\x12S\n" +
 	"\x13pending_peer_change\x18\x06 \x01(\v2#.nokv.meta.v1.RootPendingPeerChangeR\x11pendingPeerChange\x12V\n" +
 	"\x14pending_range_change\x18\a \x01(\v2$.nokv.meta.v1.RootPendingRangeChangeR\x12pendingRangeChange\x12#\n" +
-	"\rtransition_id\x18\b \x01(\tR\ftransitionId\x12:\n" +
-	"\x05phase\x18\t \x01(\x0e2$.nokv.coordinator.v1.TransitionPhaseR\x05phase\"\xd1\x03\n" +
+	"\rtransition_id\x18\b \x01(\tR\ftransitionId\"\x95\x03\n" +
 	"\x14TransitionAssessment\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\x04R\x03key\x127\n" +
 	"\x04kind\x18\x02 \x01(\x0e2#.nokv.coordinator.v1.TransitionKindR\x04kind\x12=\n" +
@@ -1956,8 +1859,7 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"retryClass\x12=\n" +
 	"\x06reason\x18\x05 \x01(\x0e2%.nokv.coordinator.v1.TransitionReasonR\x06reason\x12C\n" +
 	"\bdecision\x18\x06 \x01(\x0e2'.nokv.coordinator.v1.TransitionDecisionR\bdecision\x12#\n" +
-	"\rtransition_id\x18\a \x01(\tR\ftransitionId\x12:\n" +
-	"\x05phase\x18\b \x01(\x0e2$.nokv.coordinator.v1.TransitionPhaseR\x05phase\"\x18\n" +
+	"\rtransition_id\x18\a \x01(\tR\ftransitionId\"\x18\n" +
 	"\x16ListTransitionsRequest\"Y\n" +
 	"\x17ListTransitionsResponse\x12>\n" +
 	"\aentries\x18\x01 \x03(\v2$.nokv.coordinator.v1.TransitionEntryR\aentries\"G\n" +
@@ -2019,11 +1921,10 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\x1aTRANSITION_STATUS_CONFLICT\x10\x04\x12 \n" +
 	"\x1cTRANSITION_STATUS_SUPERSEDED\x10\x05\x12\x1f\n" +
 	"\x1bTRANSITION_STATUS_CANCELLED\x10\x06\x12\x1d\n" +
-	"\x19TRANSITION_STATUS_ABORTED\x10\a*\x82\x01\n" +
+	"\x19TRANSITION_STATUS_ABORTED\x10\a*\\\n" +
 	"\x14TransitionRetryClass\x12\x1f\n" +
 	"\x1bTRANSITION_RETRY_CLASS_NONE\x10\x00\x12#\n" +
-	"\x1fTRANSITION_RETRY_CLASS_CONFLICT\x10\x01\x12$\n" +
-	" TRANSITION_RETRY_CLASS_TRANSIENT\x10\x02*\xc2\x02\n" +
+	"\x1fTRANSITION_RETRY_CLASS_CONFLICT\x10\x01*\xc2\x02\n" +
 	"\x10TransitionReason\x12\x1a\n" +
 	"\x16TRANSITION_REASON_NONE\x10\x00\x12 \n" +
 	"\x1cTRANSITION_REASON_OPEN_APPLY\x10\x01\x12&\n" +
@@ -2035,16 +1936,7 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\x1fTRANSITION_REASON_ABORTED_APPLY\x10\a*Q\n" +
 	"\x12TransitionDecision\x12\x1d\n" +
 	"\x19TRANSITION_DECISION_APPLY\x10\x00\x12\x1c\n" +
-	"\x18TRANSITION_DECISION_SKIP\x10\x01*\x90\x02\n" +
-	"\x0fTransitionPhase\x12 \n" +
-	"\x1cTRANSITION_PHASE_UNSPECIFIED\x10\x00\x12\x1c\n" +
-	"\x18TRANSITION_PHASE_PLANNED\x10\x01\x12\x1d\n" +
-	"\x19TRANSITION_PHASE_ADMITTED\x10\x02\x12\x1e\n" +
-	"\x1aTRANSITION_PHASE_COMPLETED\x10\x03\x12\x1f\n" +
-	"\x1bTRANSITION_PHASE_CONFLICTED\x10\x04\x12\x1f\n" +
-	"\x1bTRANSITION_PHASE_SUPERSEDED\x10\x05\x12\x1e\n" +
-	"\x1aTRANSITION_PHASE_CANCELLED\x10\x06\x12\x1c\n" +
-	"\x18TRANSITION_PHASE_ABORTED\x10\a*n\n" +
+	"\x18TRANSITION_DECISION_SKIP\x10\x01*n\n" +
 	"\tFreshness\x12\x19\n" +
 	"\x15FRESHNESS_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10FRESHNESS_STRONG\x10\x01\x12\x15\n" +
@@ -2084,7 +1976,7 @@ func file_coordinator_coordinator_proto_rawDescGZIP() []byte {
 	return file_coordinator_coordinator_proto_rawDescData
 }
 
-var file_coordinator_coordinator_proto_enumTypes = make([]protoimpl.EnumInfo, 10)
+var file_coordinator_coordinator_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
 var file_coordinator_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_coordinator_coordinator_proto_goTypes = []any{
 	(SchedulerOperationType)(0),         // 0: nokv.coordinator.v1.SchedulerOperationType
@@ -2093,89 +1985,86 @@ var file_coordinator_coordinator_proto_goTypes = []any{
 	(TransitionRetryClass)(0),           // 3: nokv.coordinator.v1.TransitionRetryClass
 	(TransitionReason)(0),               // 4: nokv.coordinator.v1.TransitionReason
 	(TransitionDecision)(0),             // 5: nokv.coordinator.v1.TransitionDecision
-	(TransitionPhase)(0),                // 6: nokv.coordinator.v1.TransitionPhase
-	(Freshness)(0),                      // 7: nokv.coordinator.v1.Freshness
-	(DegradedMode)(0),                   // 8: nokv.coordinator.v1.DegradedMode
-	(CatchUpState)(0),                   // 9: nokv.coordinator.v1.CatchUpState
-	(*StoreHeartbeatRequest)(nil),       // 10: nokv.coordinator.v1.StoreHeartbeatRequest
-	(*SchedulerOperation)(nil),          // 11: nokv.coordinator.v1.SchedulerOperation
-	(*StoreHeartbeatResponse)(nil),      // 12: nokv.coordinator.v1.StoreHeartbeatResponse
-	(*RegionLivenessRequest)(nil),       // 13: nokv.coordinator.v1.RegionLivenessRequest
-	(*RegionLivenessResponse)(nil),      // 14: nokv.coordinator.v1.RegionLivenessResponse
-	(*PublishRootEventRequest)(nil),     // 15: nokv.coordinator.v1.PublishRootEventRequest
-	(*PublishRootEventResponse)(nil),    // 16: nokv.coordinator.v1.PublishRootEventResponse
-	(*TransitionEntry)(nil),             // 17: nokv.coordinator.v1.TransitionEntry
-	(*TransitionAssessment)(nil),        // 18: nokv.coordinator.v1.TransitionAssessment
-	(*ListTransitionsRequest)(nil),      // 19: nokv.coordinator.v1.ListTransitionsRequest
-	(*ListTransitionsResponse)(nil),     // 20: nokv.coordinator.v1.ListTransitionsResponse
-	(*AssessRootEventRequest)(nil),      // 21: nokv.coordinator.v1.AssessRootEventRequest
-	(*AssessRootEventResponse)(nil),     // 22: nokv.coordinator.v1.AssessRootEventResponse
-	(*RemoveRegionRequest)(nil),         // 23: nokv.coordinator.v1.RemoveRegionRequest
-	(*RemoveRegionResponse)(nil),        // 24: nokv.coordinator.v1.RemoveRegionResponse
-	(*RootToken)(nil),                   // 25: nokv.coordinator.v1.RootToken
-	(*GetRegionByKeyRequest)(nil),       // 26: nokv.coordinator.v1.GetRegionByKeyRequest
-	(*GetRegionByKeyResponse)(nil),      // 27: nokv.coordinator.v1.GetRegionByKeyResponse
-	(*AllocIDRequest)(nil),              // 28: nokv.coordinator.v1.AllocIDRequest
-	(*AllocIDResponse)(nil),             // 29: nokv.coordinator.v1.AllocIDResponse
-	(*TsoRequest)(nil),                  // 30: nokv.coordinator.v1.TsoRequest
-	(*TsoResponse)(nil),                 // 31: nokv.coordinator.v1.TsoResponse
-	(*meta.RootEvent)(nil),              // 32: nokv.meta.v1.RootEvent
-	(*meta.RootPendingPeerChange)(nil),  // 33: nokv.meta.v1.RootPendingPeerChange
-	(*meta.RootPendingRangeChange)(nil), // 34: nokv.meta.v1.RootPendingRangeChange
-	(*meta.RegionDescriptor)(nil),       // 35: nokv.meta.v1.RegionDescriptor
+	(Freshness)(0),                      // 6: nokv.coordinator.v1.Freshness
+	(DegradedMode)(0),                   // 7: nokv.coordinator.v1.DegradedMode
+	(CatchUpState)(0),                   // 8: nokv.coordinator.v1.CatchUpState
+	(*StoreHeartbeatRequest)(nil),       // 9: nokv.coordinator.v1.StoreHeartbeatRequest
+	(*SchedulerOperation)(nil),          // 10: nokv.coordinator.v1.SchedulerOperation
+	(*StoreHeartbeatResponse)(nil),      // 11: nokv.coordinator.v1.StoreHeartbeatResponse
+	(*RegionLivenessRequest)(nil),       // 12: nokv.coordinator.v1.RegionLivenessRequest
+	(*RegionLivenessResponse)(nil),      // 13: nokv.coordinator.v1.RegionLivenessResponse
+	(*PublishRootEventRequest)(nil),     // 14: nokv.coordinator.v1.PublishRootEventRequest
+	(*PublishRootEventResponse)(nil),    // 15: nokv.coordinator.v1.PublishRootEventResponse
+	(*TransitionEntry)(nil),             // 16: nokv.coordinator.v1.TransitionEntry
+	(*TransitionAssessment)(nil),        // 17: nokv.coordinator.v1.TransitionAssessment
+	(*ListTransitionsRequest)(nil),      // 18: nokv.coordinator.v1.ListTransitionsRequest
+	(*ListTransitionsResponse)(nil),     // 19: nokv.coordinator.v1.ListTransitionsResponse
+	(*AssessRootEventRequest)(nil),      // 20: nokv.coordinator.v1.AssessRootEventRequest
+	(*AssessRootEventResponse)(nil),     // 21: nokv.coordinator.v1.AssessRootEventResponse
+	(*RemoveRegionRequest)(nil),         // 22: nokv.coordinator.v1.RemoveRegionRequest
+	(*RemoveRegionResponse)(nil),        // 23: nokv.coordinator.v1.RemoveRegionResponse
+	(*RootToken)(nil),                   // 24: nokv.coordinator.v1.RootToken
+	(*GetRegionByKeyRequest)(nil),       // 25: nokv.coordinator.v1.GetRegionByKeyRequest
+	(*GetRegionByKeyResponse)(nil),      // 26: nokv.coordinator.v1.GetRegionByKeyResponse
+	(*AllocIDRequest)(nil),              // 27: nokv.coordinator.v1.AllocIDRequest
+	(*AllocIDResponse)(nil),             // 28: nokv.coordinator.v1.AllocIDResponse
+	(*TsoRequest)(nil),                  // 29: nokv.coordinator.v1.TsoRequest
+	(*TsoResponse)(nil),                 // 30: nokv.coordinator.v1.TsoResponse
+	(*meta.RootEvent)(nil),              // 31: nokv.meta.v1.RootEvent
+	(*meta.RootPendingPeerChange)(nil),  // 32: nokv.meta.v1.RootPendingPeerChange
+	(*meta.RootPendingRangeChange)(nil), // 33: nokv.meta.v1.RootPendingRangeChange
+	(*meta.RegionDescriptor)(nil),       // 34: nokv.meta.v1.RegionDescriptor
 }
 var file_coordinator_coordinator_proto_depIdxs = []int32{
 	0,  // 0: nokv.coordinator.v1.SchedulerOperation.type:type_name -> nokv.coordinator.v1.SchedulerOperationType
-	11, // 1: nokv.coordinator.v1.StoreHeartbeatResponse.operations:type_name -> nokv.coordinator.v1.SchedulerOperation
-	32, // 2: nokv.coordinator.v1.PublishRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
-	18, // 3: nokv.coordinator.v1.PublishRootEventResponse.assessment:type_name -> nokv.coordinator.v1.TransitionAssessment
+	10, // 1: nokv.coordinator.v1.StoreHeartbeatResponse.operations:type_name -> nokv.coordinator.v1.SchedulerOperation
+	31, // 2: nokv.coordinator.v1.PublishRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
+	17, // 3: nokv.coordinator.v1.PublishRootEventResponse.assessment:type_name -> nokv.coordinator.v1.TransitionAssessment
 	1,  // 4: nokv.coordinator.v1.TransitionEntry.kind:type_name -> nokv.coordinator.v1.TransitionKind
 	2,  // 5: nokv.coordinator.v1.TransitionEntry.status:type_name -> nokv.coordinator.v1.TransitionStatus
 	3,  // 6: nokv.coordinator.v1.TransitionEntry.retry_class:type_name -> nokv.coordinator.v1.TransitionRetryClass
 	4,  // 7: nokv.coordinator.v1.TransitionEntry.reason:type_name -> nokv.coordinator.v1.TransitionReason
-	33, // 8: nokv.coordinator.v1.TransitionEntry.pending_peer_change:type_name -> nokv.meta.v1.RootPendingPeerChange
-	34, // 9: nokv.coordinator.v1.TransitionEntry.pending_range_change:type_name -> nokv.meta.v1.RootPendingRangeChange
-	6,  // 10: nokv.coordinator.v1.TransitionEntry.phase:type_name -> nokv.coordinator.v1.TransitionPhase
-	1,  // 11: nokv.coordinator.v1.TransitionAssessment.kind:type_name -> nokv.coordinator.v1.TransitionKind
-	2,  // 12: nokv.coordinator.v1.TransitionAssessment.status:type_name -> nokv.coordinator.v1.TransitionStatus
-	3,  // 13: nokv.coordinator.v1.TransitionAssessment.retry_class:type_name -> nokv.coordinator.v1.TransitionRetryClass
-	4,  // 14: nokv.coordinator.v1.TransitionAssessment.reason:type_name -> nokv.coordinator.v1.TransitionReason
-	5,  // 15: nokv.coordinator.v1.TransitionAssessment.decision:type_name -> nokv.coordinator.v1.TransitionDecision
-	6,  // 16: nokv.coordinator.v1.TransitionAssessment.phase:type_name -> nokv.coordinator.v1.TransitionPhase
-	17, // 17: nokv.coordinator.v1.ListTransitionsResponse.entries:type_name -> nokv.coordinator.v1.TransitionEntry
-	32, // 18: nokv.coordinator.v1.AssessRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
-	18, // 19: nokv.coordinator.v1.AssessRootEventResponse.assessment:type_name -> nokv.coordinator.v1.TransitionAssessment
-	7,  // 20: nokv.coordinator.v1.GetRegionByKeyRequest.freshness:type_name -> nokv.coordinator.v1.Freshness
-	25, // 21: nokv.coordinator.v1.GetRegionByKeyRequest.required_root_token:type_name -> nokv.coordinator.v1.RootToken
-	35, // 22: nokv.coordinator.v1.GetRegionByKeyResponse.region_descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	25, // 23: nokv.coordinator.v1.GetRegionByKeyResponse.served_root_token:type_name -> nokv.coordinator.v1.RootToken
-	7,  // 24: nokv.coordinator.v1.GetRegionByKeyResponse.served_freshness:type_name -> nokv.coordinator.v1.Freshness
-	8,  // 25: nokv.coordinator.v1.GetRegionByKeyResponse.degraded_mode:type_name -> nokv.coordinator.v1.DegradedMode
-	25, // 26: nokv.coordinator.v1.GetRegionByKeyResponse.current_root_token:type_name -> nokv.coordinator.v1.RootToken
-	9,  // 27: nokv.coordinator.v1.GetRegionByKeyResponse.catch_up_state:type_name -> nokv.coordinator.v1.CatchUpState
-	10, // 28: nokv.coordinator.v1.Coordinator.StoreHeartbeat:input_type -> nokv.coordinator.v1.StoreHeartbeatRequest
-	13, // 29: nokv.coordinator.v1.Coordinator.RegionLiveness:input_type -> nokv.coordinator.v1.RegionLivenessRequest
-	15, // 30: nokv.coordinator.v1.Coordinator.PublishRootEvent:input_type -> nokv.coordinator.v1.PublishRootEventRequest
-	19, // 31: nokv.coordinator.v1.Coordinator.ListTransitions:input_type -> nokv.coordinator.v1.ListTransitionsRequest
-	21, // 32: nokv.coordinator.v1.Coordinator.AssessRootEvent:input_type -> nokv.coordinator.v1.AssessRootEventRequest
-	23, // 33: nokv.coordinator.v1.Coordinator.RemoveRegion:input_type -> nokv.coordinator.v1.RemoveRegionRequest
-	26, // 34: nokv.coordinator.v1.Coordinator.GetRegionByKey:input_type -> nokv.coordinator.v1.GetRegionByKeyRequest
-	28, // 35: nokv.coordinator.v1.Coordinator.AllocID:input_type -> nokv.coordinator.v1.AllocIDRequest
-	30, // 36: nokv.coordinator.v1.Coordinator.Tso:input_type -> nokv.coordinator.v1.TsoRequest
-	12, // 37: nokv.coordinator.v1.Coordinator.StoreHeartbeat:output_type -> nokv.coordinator.v1.StoreHeartbeatResponse
-	14, // 38: nokv.coordinator.v1.Coordinator.RegionLiveness:output_type -> nokv.coordinator.v1.RegionLivenessResponse
-	16, // 39: nokv.coordinator.v1.Coordinator.PublishRootEvent:output_type -> nokv.coordinator.v1.PublishRootEventResponse
-	20, // 40: nokv.coordinator.v1.Coordinator.ListTransitions:output_type -> nokv.coordinator.v1.ListTransitionsResponse
-	22, // 41: nokv.coordinator.v1.Coordinator.AssessRootEvent:output_type -> nokv.coordinator.v1.AssessRootEventResponse
-	24, // 42: nokv.coordinator.v1.Coordinator.RemoveRegion:output_type -> nokv.coordinator.v1.RemoveRegionResponse
-	27, // 43: nokv.coordinator.v1.Coordinator.GetRegionByKey:output_type -> nokv.coordinator.v1.GetRegionByKeyResponse
-	29, // 44: nokv.coordinator.v1.Coordinator.AllocID:output_type -> nokv.coordinator.v1.AllocIDResponse
-	31, // 45: nokv.coordinator.v1.Coordinator.Tso:output_type -> nokv.coordinator.v1.TsoResponse
-	37, // [37:46] is the sub-list for method output_type
-	28, // [28:37] is the sub-list for method input_type
-	28, // [28:28] is the sub-list for extension type_name
-	28, // [28:28] is the sub-list for extension extendee
-	0,  // [0:28] is the sub-list for field type_name
+	32, // 8: nokv.coordinator.v1.TransitionEntry.pending_peer_change:type_name -> nokv.meta.v1.RootPendingPeerChange
+	33, // 9: nokv.coordinator.v1.TransitionEntry.pending_range_change:type_name -> nokv.meta.v1.RootPendingRangeChange
+	1,  // 10: nokv.coordinator.v1.TransitionAssessment.kind:type_name -> nokv.coordinator.v1.TransitionKind
+	2,  // 11: nokv.coordinator.v1.TransitionAssessment.status:type_name -> nokv.coordinator.v1.TransitionStatus
+	3,  // 12: nokv.coordinator.v1.TransitionAssessment.retry_class:type_name -> nokv.coordinator.v1.TransitionRetryClass
+	4,  // 13: nokv.coordinator.v1.TransitionAssessment.reason:type_name -> nokv.coordinator.v1.TransitionReason
+	5,  // 14: nokv.coordinator.v1.TransitionAssessment.decision:type_name -> nokv.coordinator.v1.TransitionDecision
+	16, // 15: nokv.coordinator.v1.ListTransitionsResponse.entries:type_name -> nokv.coordinator.v1.TransitionEntry
+	31, // 16: nokv.coordinator.v1.AssessRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
+	17, // 17: nokv.coordinator.v1.AssessRootEventResponse.assessment:type_name -> nokv.coordinator.v1.TransitionAssessment
+	6,  // 18: nokv.coordinator.v1.GetRegionByKeyRequest.freshness:type_name -> nokv.coordinator.v1.Freshness
+	24, // 19: nokv.coordinator.v1.GetRegionByKeyRequest.required_root_token:type_name -> nokv.coordinator.v1.RootToken
+	34, // 20: nokv.coordinator.v1.GetRegionByKeyResponse.region_descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	24, // 21: nokv.coordinator.v1.GetRegionByKeyResponse.served_root_token:type_name -> nokv.coordinator.v1.RootToken
+	6,  // 22: nokv.coordinator.v1.GetRegionByKeyResponse.served_freshness:type_name -> nokv.coordinator.v1.Freshness
+	7,  // 23: nokv.coordinator.v1.GetRegionByKeyResponse.degraded_mode:type_name -> nokv.coordinator.v1.DegradedMode
+	24, // 24: nokv.coordinator.v1.GetRegionByKeyResponse.current_root_token:type_name -> nokv.coordinator.v1.RootToken
+	8,  // 25: nokv.coordinator.v1.GetRegionByKeyResponse.catch_up_state:type_name -> nokv.coordinator.v1.CatchUpState
+	9,  // 26: nokv.coordinator.v1.Coordinator.StoreHeartbeat:input_type -> nokv.coordinator.v1.StoreHeartbeatRequest
+	12, // 27: nokv.coordinator.v1.Coordinator.RegionLiveness:input_type -> nokv.coordinator.v1.RegionLivenessRequest
+	14, // 28: nokv.coordinator.v1.Coordinator.PublishRootEvent:input_type -> nokv.coordinator.v1.PublishRootEventRequest
+	18, // 29: nokv.coordinator.v1.Coordinator.ListTransitions:input_type -> nokv.coordinator.v1.ListTransitionsRequest
+	20, // 30: nokv.coordinator.v1.Coordinator.AssessRootEvent:input_type -> nokv.coordinator.v1.AssessRootEventRequest
+	22, // 31: nokv.coordinator.v1.Coordinator.RemoveRegion:input_type -> nokv.coordinator.v1.RemoveRegionRequest
+	25, // 32: nokv.coordinator.v1.Coordinator.GetRegionByKey:input_type -> nokv.coordinator.v1.GetRegionByKeyRequest
+	27, // 33: nokv.coordinator.v1.Coordinator.AllocID:input_type -> nokv.coordinator.v1.AllocIDRequest
+	29, // 34: nokv.coordinator.v1.Coordinator.Tso:input_type -> nokv.coordinator.v1.TsoRequest
+	11, // 35: nokv.coordinator.v1.Coordinator.StoreHeartbeat:output_type -> nokv.coordinator.v1.StoreHeartbeatResponse
+	13, // 36: nokv.coordinator.v1.Coordinator.RegionLiveness:output_type -> nokv.coordinator.v1.RegionLivenessResponse
+	15, // 37: nokv.coordinator.v1.Coordinator.PublishRootEvent:output_type -> nokv.coordinator.v1.PublishRootEventResponse
+	19, // 38: nokv.coordinator.v1.Coordinator.ListTransitions:output_type -> nokv.coordinator.v1.ListTransitionsResponse
+	21, // 39: nokv.coordinator.v1.Coordinator.AssessRootEvent:output_type -> nokv.coordinator.v1.AssessRootEventResponse
+	23, // 40: nokv.coordinator.v1.Coordinator.RemoveRegion:output_type -> nokv.coordinator.v1.RemoveRegionResponse
+	26, // 41: nokv.coordinator.v1.Coordinator.GetRegionByKey:output_type -> nokv.coordinator.v1.GetRegionByKeyResponse
+	28, // 42: nokv.coordinator.v1.Coordinator.AllocID:output_type -> nokv.coordinator.v1.AllocIDResponse
+	30, // 43: nokv.coordinator.v1.Coordinator.Tso:output_type -> nokv.coordinator.v1.TsoResponse
+	35, // [35:44] is the sub-list for method output_type
+	26, // [26:35] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_coordinator_coordinator_proto_init() }
@@ -2189,7 +2078,7 @@ func file_coordinator_coordinator_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_coordinator_coordinator_proto_rawDesc), len(file_coordinator_coordinator_proto_rawDesc)),
-			NumEnums:      10,
+			NumEnums:      9,
 			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,
