@@ -29,6 +29,7 @@ const (
 	RaftAdmin_ImportRegionSnapshot_FullMethodName       = "/nokv.admin.v1.RaftAdmin/ImportRegionSnapshot"
 	RaftAdmin_ImportRegionSnapshotStream_FullMethodName = "/nokv.admin.v1.RaftAdmin/ImportRegionSnapshotStream"
 	RaftAdmin_RegionRuntimeStatus_FullMethodName        = "/nokv.admin.v1.RaftAdmin/RegionRuntimeStatus"
+	RaftAdmin_ExecutionStatus_FullMethodName            = "/nokv.admin.v1.RaftAdmin/ExecutionStatus"
 )
 
 // RaftAdminClient is the client API for RaftAdmin service.
@@ -43,6 +44,7 @@ type RaftAdminClient interface {
 	ImportRegionSnapshot(ctx context.Context, in *ImportRegionSnapshotRequest, opts ...grpc.CallOption) (*ImportRegionSnapshotResponse, error)
 	ImportRegionSnapshotStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ImportRegionSnapshotStreamRequest, ImportRegionSnapshotResponse], error)
 	RegionRuntimeStatus(ctx context.Context, in *RegionRuntimeStatusRequest, opts ...grpc.CallOption) (*RegionRuntimeStatusResponse, error)
+	ExecutionStatus(ctx context.Context, in *ExecutionStatusRequest, opts ...grpc.CallOption) (*ExecutionStatusResponse, error)
 }
 
 type raftAdminClient struct {
@@ -145,6 +147,16 @@ func (c *raftAdminClient) RegionRuntimeStatus(ctx context.Context, in *RegionRun
 	return out, nil
 }
 
+func (c *raftAdminClient) ExecutionStatus(ctx context.Context, in *ExecutionStatusRequest, opts ...grpc.CallOption) (*ExecutionStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExecutionStatusResponse)
+	err := c.cc.Invoke(ctx, RaftAdmin_ExecutionStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RaftAdminServer is the server API for RaftAdmin service.
 // All implementations should embed UnimplementedRaftAdminServer
 // for forward compatibility.
@@ -157,6 +169,7 @@ type RaftAdminServer interface {
 	ImportRegionSnapshot(context.Context, *ImportRegionSnapshotRequest) (*ImportRegionSnapshotResponse, error)
 	ImportRegionSnapshotStream(grpc.ClientStreamingServer[ImportRegionSnapshotStreamRequest, ImportRegionSnapshotResponse]) error
 	RegionRuntimeStatus(context.Context, *RegionRuntimeStatusRequest) (*RegionRuntimeStatusResponse, error)
+	ExecutionStatus(context.Context, *ExecutionStatusRequest) (*ExecutionStatusResponse, error)
 }
 
 // UnimplementedRaftAdminServer should be embedded to have
@@ -189,6 +202,9 @@ func (UnimplementedRaftAdminServer) ImportRegionSnapshotStream(grpc.ClientStream
 }
 func (UnimplementedRaftAdminServer) RegionRuntimeStatus(context.Context, *RegionRuntimeStatusRequest) (*RegionRuntimeStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegionRuntimeStatus not implemented")
+}
+func (UnimplementedRaftAdminServer) ExecutionStatus(context.Context, *ExecutionStatusRequest) (*ExecutionStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExecutionStatus not implemented")
 }
 func (UnimplementedRaftAdminServer) testEmbeddedByValue() {}
 
@@ -336,6 +352,24 @@ func _RaftAdmin_RegionRuntimeStatus_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RaftAdmin_ExecutionStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExecutionStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RaftAdminServer).ExecutionStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RaftAdmin_ExecutionStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RaftAdminServer).ExecutionStatus(ctx, req.(*ExecutionStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RaftAdmin_ServiceDesc is the grpc.ServiceDesc for RaftAdmin service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -366,6 +400,10 @@ var RaftAdmin_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RegionRuntimeStatus",
 			Handler:    _RaftAdmin_RegionRuntimeStatus_Handler,
+		},
+		{
+			MethodName: "ExecutionStatus",
+			Handler:    _RaftAdmin_ExecutionStatus_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

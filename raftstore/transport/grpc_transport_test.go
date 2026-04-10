@@ -598,7 +598,7 @@ func applyToDB(db *NoKV.DB) peerpkg.ApplyFunc {
 				return err
 			}
 			if !ok {
-				return fmt.Errorf("raftstore transport test: unsupported legacy raft payload")
+				return fmt.Errorf("raftstore transport test: unsupported unframed raft payload")
 			}
 			if _, err := kv.Apply(db, nil, req); err != nil {
 				return err

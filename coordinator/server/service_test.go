@@ -614,7 +614,6 @@ func TestServicePublishRootEventPersistsPeerPlan(t *testing.T) {
 	require.Equal(t, "peer:12:add:2:201", resp.GetAssessment().GetTransitionId())
 	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_OPEN, resp.GetAssessment().GetStatus())
 	require.Equal(t, coordpb.TransitionDecision_TRANSITION_DECISION_APPLY, resp.GetAssessment().GetDecision())
-	require.Equal(t, coordpb.TransitionPhase_TRANSITION_PHASE_PLANNED, resp.GetAssessment().GetPhase())
 	require.Equal(t, 1, store.eventCalls)
 	require.Equal(t, rootevent.KindPeerAdditionPlanned, store.lastEvent.Kind)
 	require.Equal(t, uint64(6), store.lastEvent.PeerChange.Region.RootEpoch)
@@ -660,7 +659,6 @@ func TestServicePublishRootEventSkipsDuplicatePeerPlan(t *testing.T) {
 	require.Equal(t, "peer:13:add:2:201", resp.GetAssessment().GetTransitionId())
 	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_PENDING, resp.GetAssessment().GetStatus())
 	require.Equal(t, coordpb.TransitionDecision_TRANSITION_DECISION_SKIP, resp.GetAssessment().GetDecision())
-	require.Equal(t, coordpb.TransitionPhase_TRANSITION_PHASE_PLANNED, resp.GetAssessment().GetPhase())
 	require.Equal(t, 0, store.eventCalls)
 	require.Equal(t, uint64(6), store.snapshot.ClusterEpoch)
 	require.Len(t, store.snapshot.PendingPeerChanges, 1)
@@ -695,7 +693,6 @@ func TestServicePublishRootEventSkipsCompletedPeerPlan(t *testing.T) {
 	require.Equal(t, "peer:131:add:2:201", resp.GetAssessment().GetTransitionId())
 	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_COMPLETED, resp.GetAssessment().GetStatus())
 	require.Equal(t, coordpb.TransitionDecision_TRANSITION_DECISION_SKIP, resp.GetAssessment().GetDecision())
-	require.Equal(t, coordpb.TransitionPhase_TRANSITION_PHASE_COMPLETED, resp.GetAssessment().GetPhase())
 	require.Equal(t, 0, store.eventCalls)
 }
 
@@ -817,7 +814,7 @@ func TestServicePublishRootEventSkipsDuplicateSplitPlan(t *testing.T) {
 	require.Equal(t, 0, store.eventCalls)
 }
 
-func TestServiceRefreshFromStorageReplacesPendingView(t *testing.T) {
+func TestServiceRefreshFromStorageReplacesPendingTransitions(t *testing.T) {
 	cluster := catalog.NewCluster()
 	left := testDescriptor(61, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)
 	right := testDescriptor(62, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
@@ -879,7 +876,6 @@ func TestServiceListTransitionsReturnsOperatorView(t *testing.T) {
 	require.Equal(t, coordpb.TransitionKind_TRANSITION_KIND_PEER_CHANGE, resp.GetEntries()[0].GetKind())
 	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_PENDING, resp.GetEntries()[0].GetStatus())
 	require.Equal(t, "peer:160:add:2:201", resp.GetEntries()[0].GetTransitionId())
-	require.Equal(t, coordpb.TransitionPhase_TRANSITION_PHASE_ADMITTED, resp.GetEntries()[0].GetPhase())
 	require.NotNil(t, resp.GetEntries()[0].GetPendingPeerChange())
 }
 
@@ -927,7 +923,35 @@ func TestServiceAssessRootEventReturnsConflictAssessment(t *testing.T) {
 	require.Equal(t, coordpb.TransitionRetryClass_TRANSITION_RETRY_CLASS_CONFLICT, resp.GetAssessment().GetRetryClass())
 	require.Equal(t, coordpb.TransitionDecision_TRANSITION_DECISION_APPLY, resp.GetAssessment().GetDecision())
 	require.Equal(t, "peer:161:add:3:301", resp.GetAssessment().GetTransitionId())
-	require.Equal(t, coordpb.TransitionPhase_TRANSITION_PHASE_CONFLICTED, resp.GetAssessment().GetPhase())
+}
+
+func TestServiceAssessRootEventUsesStorageSnapshot(t *testing.T) {
+	cluster := catalog.NewCluster()
+	target := testDescriptor(171, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 2}, []metaregion.Peer{
+		{StoreID: 1, PeerID: 101},
+		{StoreID: 2, PeerID: 201},
+	})
+	target.RootEpoch = 6
+	target.EnsureHash()
+
+	store := &fakeStorage{
+		leader: true,
+		snapshot: coordstorage.Snapshot{
+			ClusterEpoch: 6,
+			Descriptors:  map[uint64]descriptor.Descriptor{target.RegionID: target},
+		},
+	}
+
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+	svc.SetStorage(store)
+
+	resp, err := svc.AssessRootEvent(context.Background(), &coordpb.AssessRootEventRequest{
+		Event: metacodec.RootEventToProto(rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)),
+	})
+	require.NoError(t, err)
+	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_COMPLETED, resp.GetAssessment().GetStatus())
+	require.Equal(t, coordpb.TransitionDecision_TRANSITION_DECISION_SKIP, resp.GetAssessment().GetDecision())
+	require.Equal(t, "peer:171:add:2:201", resp.GetAssessment().GetTransitionId())
 }
 
 func TestServicePublishRootEventSkipsCompletedSplitPlan(t *testing.T) {

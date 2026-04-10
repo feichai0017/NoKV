@@ -66,7 +66,7 @@ func applyToDB(db *NoKV.DB) peer.ApplyFunc {
 				return err
 			}
 			if !ok {
-				return status.Error(codes.InvalidArgument, "unsupported legacy raft payload")
+				return status.Error(codes.InvalidArgument, "unsupported unframed raft payload")
 			}
 			if _, err := kv.Apply(db, nil, req); err != nil {
 				return err

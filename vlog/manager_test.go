@@ -39,8 +39,8 @@ func TestManagerAppendRead(t *testing.T) {
 	}
 }
 
-func TestConfigNormalizedDefaults(t *testing.T) {
-	cfg, err := (Config{Dir: t.TempDir()}).normalized()
+func TestConfigResolveOpenConfigDefaults(t *testing.T) {
+	cfg, err := (Config{Dir: t.TempDir()}).resolveOpenConfig()
 	if err != nil {
 		t.Fatalf("normalized config: %v", err)
 	}
@@ -55,8 +55,8 @@ func TestConfigNormalizedDefaults(t *testing.T) {
 	}
 }
 
-func TestConfigNormalizedRequiresDir(t *testing.T) {
-	if _, err := (Config{}).normalized(); err == nil {
+func TestConfigResolveOpenConfigRequiresDir(t *testing.T) {
+	if _, err := (Config{}).resolveOpenConfig(); err == nil {
 		t.Fatalf("expected missing dir to return error")
 	}
 }

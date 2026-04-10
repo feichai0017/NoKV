@@ -28,6 +28,7 @@ type Client interface {
 	ExportRegionSnapshotStream(ctx context.Context, req *adminpb.ExportRegionSnapshotStreamRequest) (*SnapshotExportStream, error)
 	ImportRegionSnapshotStream(ctx context.Context, header []byte, region *metapb.RegionDescriptor, r io.Reader) (*adminpb.ImportRegionSnapshotResponse, error)
 	RegionRuntimeStatus(ctx context.Context, req *adminpb.RegionRuntimeStatusRequest) (*adminpb.RegionRuntimeStatusResponse, error)
+	ExecutionStatus(ctx context.Context, req *adminpb.ExecutionStatusRequest) (*adminpb.ExecutionStatusResponse, error)
 }
 
 // DialFunc connects one admin client to one store address.
@@ -124,6 +125,10 @@ func (c *grpcClient) ImportRegionSnapshotStream(ctx context.Context, header []by
 
 func (c *grpcClient) RegionRuntimeStatus(ctx context.Context, req *adminpb.RegionRuntimeStatusRequest) (*adminpb.RegionRuntimeStatusResponse, error) {
 	return c.client.RegionRuntimeStatus(ctx, req)
+}
+
+func (c *grpcClient) ExecutionStatus(ctx context.Context, req *adminpb.ExecutionStatusRequest) (*adminpb.ExecutionStatusResponse, error) {
+	return c.client.ExecutionStatus(ctx, req)
 }
 
 // Dial connects to one raftstore admin endpoint over gRPC.

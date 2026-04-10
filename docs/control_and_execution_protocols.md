@@ -1,16 +1,35 @@
-# Control-Plane Protocol
+# Control-Plane and Execution-Plane Protocols
 
-This note defines NoKV's control-plane protocol and the next-stage evolution
-around it.
+This note defines NoKV's protocol line for:
 
-It focuses only on the contract between:
+- the `control plane`
+- the `execution plane`
+
+and the next-stage evolution around them.
+
+The current implementation status is still asymmetric:
+
+- `control-plane protocol v1` is already partially implemented and exposed
+- `execution-plane protocol v1` now has a minimal store-local implementation
+  and a minimal admin diagnostics API surface
+
+The point of this document is to keep those two lines coordinated instead of
+letting them drift into separate, implicit rule sets.
+
+The control plane focuses on the contract between:
 
 - `meta/root`
 - `coordinator`
 
+The execution plane focuses on the contract between:
+
+- `coordinator`
+- `raftstore`
+- local durable state (`raftstore/localmeta`, raft log, restart replay)
+
 The purpose of this document is not to replace Raft or redesign the data plane.
-The purpose is to make NoKV's existing control-plane behavior explicit,
-testable, and evolvable.
+The purpose is to make NoKV's existing cross-plane behavior explicit, testable,
+and evolvable.
 
 The control plane is protocolized around four ideas:
 
@@ -23,11 +42,18 @@ These four ideas already existed in partial form inside the implementation.
 The current work turns them into a stable vocabulary, explicit invariants, and a
 clear rollout line.
 
+The execution plane is protocolized around four matching ideas:
+
+- `Admission`
+- `ExecutionTarget`
+- `PublishBoundary`
+- `RestartState`
+
 ---
 
 ## 0. Current Status
 
-The protocol now has a **minimal implemented v1**.
+The control plane now has a **minimal implemented v1**.
 
 Already implemented and exposed through `pb/coordinator/coordinator.proto`,
 `coordinator/server`, `coordinator/storage`, and tests:
@@ -38,7 +64,6 @@ Already implemented and exposed through `pb/coordinator/coordinator.proto`,
 - `DegradedMode`
 - `CatchUpState`
 - `TransitionID`
-- minimal `TransitionPhase`
 - `PublishRootEventResponse.assessment` as a **pre-persist lifecycle assessment**
 
 This means the protocol is no longer only a design direction. It is already the
@@ -55,6 +80,45 @@ So the right description today is:
 
 > control-plane protocol v1 is implemented and in use, while later runtime and
 > operator semantics remain future work.
+
+The execution plane is in a different state.
+
+Today, `raftstore` has a **minimal implemented v1** inside `raftstore/store`.
+
+Already implemented and exercised through store-local types, `raftstore/admin`,
+runtime state, and tests:
+
+- explicit `Admission` classes and reasons on read / write / topology entry
+  points
+- explicit topology `ExecutionOutcome`
+- explicit topology `PublishState`
+- explicit `RestartState` derived from `raftstore/localmeta` + raft replay
+  pointers
+- terminal publish failures retained as visible retry state instead of silent
+  drop
+- admin diagnostics exposure through `pb/admin/admin.proto` `ExecutionStatus`
+
+The execution plane still keeps many behaviors as implementation mechanics:
+
+- request validation and routing
+- local leader admission
+- context propagation
+- planned truth -> execute -> terminal truth
+- local restart through `raftstore/localmeta` + raft durable state
+- degraded local scheduler behavior
+
+The current landing is still mostly store-local and spread across:
+
+- `raftstore/store`
+- `raftstore/peer`
+- `raftstore/engine`
+- `raftstore/localmeta`
+
+So the right description there is:
+
+> execution-plane protocol v1 now exists as a minimal named runtime contract,
+> with store-local state and admin-visible diagnostics, while broader metrics,
+> policy, and richer executor states remain future work.
 
 ---
 
@@ -92,9 +156,9 @@ That protocol should be:
 
 ## 2. Scope
 
-This document covers control-plane protocol semantics only.
+This document covers both planes, but not at the same implementation depth.
 
-It defines the behavior of:
+For the control plane, it defines the behavior of:
 
 - rooted truth consumption
 - control-plane view freshness
@@ -102,16 +166,26 @@ It defines the behavior of:
 - topology transition lifecycle
 - degraded operating modes
 
+For the execution plane, it defines the protocol direction for:
+
+- request admission
+- transition execution
+- terminal truth publication
+- restart and local recovery alignment
+- degraded local behavior around scheduler / queue / publish boundaries
+
 It does **not** redefine:
 
 - Raft replication
 - Percolator / 2PC transaction semantics
 - store-local recovery metadata
-- the `raftstore` execution protocol
+- storage-engine internals unrelated to distributed lifecycle
 
-This document should be read as:
+This document should be read as two linked contracts:
 
-> durable truth + materialized control-plane view + formal serving contract
+> control plane = durable truth + materialized view + serving contract
+
+> execution plane = admitted work + local execution + publish/restart contract
 
 ---
 
@@ -235,22 +309,7 @@ These names are short and carry clear serving intent.
 - `Recovering`
 - `Unavailable`
 
-### 4.4 Transition phases
-
-Current protocol v1 keeps the phase set intentionally small.
-
-- `Planned`
-- `Admitted`
-- `Completed`
-- `Conflicted`
-- `Superseded`
-- `Cancelled`
-- `Aborted`
-
-`Applied`, `Published`, and `Stalled` remain useful future concepts, but they
-are not part of the current protocol surface yet.
-
-### 4.5 Degraded modes
+### 4.4 Degraded modes
 
 - `Healthy`
 - `CoordinatorDegraded`
@@ -259,7 +318,7 @@ are not part of the current protocol surface yet.
 - `ViewOnly`
 
 `ViewOnly` is deliberately chosen over more vague names like `ExecutionOnly`.
-This document only defines control-plane behavior, so the right question is:
+This section only defines control-plane behavior, so the right question is:
 
 > can this node still expose a stale view?
 
@@ -870,8 +929,15 @@ If this protocol starts landing in code, the implementation should prefer:
 - `CatchUpState`
 - `CatchUpAction`
 - `TransitionID`
-- `TransitionPhase`
 - `DegradedMode`
+
+For execution-plane work, prefer:
+
+- `Admission`
+- `ExecutionTarget`
+- `ExecutionOutcome`
+- `PublishState`
+- `RestartState`
 
 Avoid reintroducing weaker names like:
 
@@ -882,3 +948,305 @@ Avoid reintroducing weaker names like:
 
 Those may still exist as helper fields, but the public model should stay anchored
 to the smaller protocol vocabulary above.
+
+---
+
+## 15. Execution-Plane Protocol
+
+The execution plane is the contract between:
+
+- `raftstore`
+- local leader peer runtime
+- local durable recovery state
+- the control-plane publish boundary
+
+Its job is different from the control plane.
+
+The control plane answers:
+
+- what topology truth exists?
+- how fresh is the served view?
+- what transition lifecycle is visible globally?
+
+The execution plane answers:
+
+- may this request enter local execution now?
+- what target is being executed?
+- how far has local execution progressed?
+- has terminal truth been published yet?
+- what state is safe to recover after restart?
+
+### 15.1 Why this matters
+
+Without an explicit execution-plane protocol, the system keeps important
+distributed safety semantics hidden in code paths such as:
+
+- request validation and cancellation
+- queue admission and local degradation
+- planned truth publication before local execution
+- terminal truth publication after local apply
+- restart reconciliation between `localmeta`, raft durable state, and Coordinator
+
+Those are not low-level implementation details. They are correctness
+boundaries.
+
+### 15.2 Protocol objects
+
+The execution plane should be formalized around the following objects.
+
+#### `Admission`
+
+`Admission` is the local decision about whether one request may enter execution.
+
+It should answer:
+
+- is the local peer leader?
+- is the region epoch valid?
+- is the peer hosted and runnable?
+- is the request cancelled or timed out already?
+- is the queue or scheduler allowed to accept more work?
+
+The important design rule is that admission must be explicit, not an accidental
+mix of local checks and fallback retries.
+
+#### `ExecutionTarget`
+
+`ExecutionTarget` is the concrete unit of work the execution plane is trying to
+carry out.
+
+Examples:
+
+- one read command
+- one raft write proposal
+- one peer change target
+- one split target
+- one merge target
+
+For topology changes, `ExecutionTarget` must remain causally tied to the rooted
+transition object created by the control plane.
+
+#### `ExecutionOutcome`
+
+`ExecutionOutcome` is the local state reached by an admitted target.
+
+Minimal useful states are:
+
+- `Rejected`
+- `Queued`
+- `Proposed`
+- `Committed`
+- `Applied`
+- `Failed`
+
+This is the minimum needed to stop conflating "accepted by API", "replicated by
+raft", and "applied to local state".
+
+#### `PublishState`
+
+`PublishState` tracks the boundary between local apply and control-plane truth
+publication.
+
+This is a first-class boundary in NoKV's architecture:
+
+- planned truth is published before execution
+- terminal truth is published after local apply
+
+The protocol must therefore distinguish:
+
+- `NotRequired`
+- `Pending`
+- `Published`
+- `PublishFailed`
+
+This is the exact boundary where split/merge/peer-change correctness otherwise
+turns into invisible best-effort behavior.
+
+#### `RestartState`
+
+`RestartState` describes whether one store can safely resume from local durable
+state.
+
+It should answer:
+
+- is local peer metadata self-consistent?
+- is the local raft replay pointer usable?
+- does the store need Coordinator catch-up only, or local rebuild first?
+- is startup safe, degraded, or fatal?
+
+This object exists to stop restart behavior from being an implicit composition
+of:
+
+- `raftstore/localmeta`
+- raft log replay
+- ad hoc bootstrap logic
+
+### 15.3 Request classes and admission
+
+Execution-plane v1 should start by distinguishing three request classes:
+
+- `Read`
+  - local leader read admission
+  - read-index / wait-applied preconditions
+  - cancellation and deadline propagation
+- `Write`
+  - raft proposal admission
+  - proposal tracking through commit/apply
+  - retryable local rejection vs fatal local rejection
+- `Topology`
+  - peer change
+  - split
+  - merge
+  - explicit coupling to planned and terminal rooted truth
+
+These classes do not need separate RPC protocols, but they do need stable
+admission outcomes. At minimum, those outcomes should distinguish:
+
+- `NotLeader`
+- `EpochMismatch`
+- `NotHosted`
+- `Canceled`
+- `TimedOut`
+- `QueueSaturated`
+- `SchedulerDegraded`
+- `Accepted`
+
+Without this line, request behavior remains split across store-local branches
+instead of becoming one coherent executor contract.
+
+### 15.4 Publish lifecycle
+
+Execution-plane v1 should also make the publish boundary explicit for topology
+work.
+
+The minimal lifecycle is:
+
+1. `PlannedPublished`
+2. `LocallyExecuting`
+3. `Applied`
+4. `TerminalPublishPending`
+5. `TerminalPublished`
+6. `TerminalPublishFailed`
+
+The important rule is that `Applied` and `TerminalPublished` are different
+states. Local execution success does not mean global lifecycle completion until
+terminal truth is durably published.
+
+This is the boundary that should align:
+
+- `raftstore/store/transition_builder.go`
+- `raftstore/store/transition_executor.go`
+- `raftstore/store/transition_outcome.go`
+- `raftstore/store/scheduler_runtime.go`
+
+### 15.5 First landing points
+
+Execution-plane protocol v1 landed first in the places that already carried
+the boundary implicitly:
+
+- `raftstore/store/command_service.go`
+  - request admission and context semantics
+- `raftstore/store/command_pipeline.go`
+  - request lifecycle states visible to callers
+- `raftstore/store/scheduler_runtime.go`
+  - queue overflow / degraded local behavior
+- `raftstore/store/transition_builder.go`
+  - execution target construction from rooted truth
+- `raftstore/store/transition_executor.go`
+  - local execution and apply boundary
+- `raftstore/store/transition_outcome.go`
+  - terminal truth publication result
+- `raftstore/localmeta`
+  - restart state and local recovery truth
+
+These files still do not expose a new public API. But they now share one
+explicit local protocol vocabulary instead of inventing those semantics
+independently.
+
+### 15.6 Execution invariants
+
+The execution-plane protocol should preserve the following invariants.
+
+#### `Admission` invariant
+
+Every externally visible rejection should map to a stable admission reason, not
+only a transport error or generic retry exhaustion.
+
+#### `No skipped publish boundary` invariant
+
+If local apply completed but terminal truth publication did not, the system
+must surface that state explicitly. It must not be silently treated as fully
+complete.
+
+#### `Restart truth boundary` invariant
+
+Restart must derive hosted peer truth from local durable state, not from
+bootstrap config. Static config may resolve addresses, but must not overwrite
+runtime truth.
+
+#### `No hidden drop` invariant
+
+Queue overflow, scheduler degradation, and publish retry loss must be explicit
+protocol states or metrics-backed outcomes, not silent local behavior.
+
+### 15.7 Minimal rollout target
+
+Execution-plane protocol v1 started small.
+
+The minimum useful delivered line is now:
+
+1. request admission
+2. topology execution outcome
+3. publish boundary state
+4. restart state
+
+That is enough to formalize the most dangerous boundaries without trying to
+protocolize every internal raft detail.
+
+---
+
+## 16. Priority and Rollout Order
+
+The next protocol work should favor `execution-plane v1` before broadening
+`control-plane v2`.
+
+### 16.1 Why execution comes next
+
+The control plane now already has a minimal, externally visible contract:
+
+- freshness classes
+- rooted token / lag
+- degraded serving state
+- transition identity
+
+By contrast, the execution plane still has important correctness-sensitive
+semantics that are not yet formalized:
+
+- request admission and cancellation
+- queue overflow and degraded scheduler behavior
+- planned truth -> execute -> terminal truth publish boundary
+- restart alignment between local durable state and Coordinator
+
+That means the larger current ambiguity sits in `raftstore`, not in
+`coordinator`.
+
+### 16.2 What should not happen next
+
+The wrong next step would be to keep enriching control-plane phases and
+diagnostic fields while the execution plane still lacks a matching lifecycle.
+
+That would create a vocabulary mismatch:
+
+- control plane claims richer transition semantics
+- execution plane still cannot report them precisely
+
+### 16.3 Recommended order
+
+1. Finish execution-plane protocol v1 in design form.
+2. Land the first execution-plane states on the `raftstore` request and
+   transition boundaries.
+3. Then tighten control-plane protocol from v1 toward richer operator/runtime
+   phases.
+
+In short:
+
+> stabilize the executor contract first, then deepen the coordinator contract.

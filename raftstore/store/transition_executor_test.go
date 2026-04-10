@@ -70,15 +70,15 @@ func TestTransitionExecutorDispatchesConfChangeAndAdminTargets(t *testing.T) {
 
 func TestTransitionExecutorProposalAndTerminalOutcomeGuards(t *testing.T) {
 	var nilStore *Store
-	require.Error(t, nilStore.proposeTransition(1, transitionProposal{}))
+	require.Error(t, nilStore.proposeTransition(transitionTarget{RegionID: 1}))
 	require.Error(t, nilStore.executeTransitionTarget(transitionTarget{}))
 	require.Error(t, nilStore.applyTerminalOutcome(terminalOutcome{}))
 
 	rs := NewStore(Config{Scheduler: newTestSchedulerSink()})
 	require.NoError(t, rs.executeTransitionTarget(transitionTarget{Noop: true}))
 	require.Error(t, rs.executeTransitionTarget(transitionTarget{RegionID: 1}))
-	require.Error(t, rs.proposeTransition(0, transitionProposal{ConfChange: &raftpb.ConfChangeV2{}}))
-	require.Error(t, rs.proposeTransition(1, transitionProposal{}))
+	require.Error(t, rs.proposeTransition(transitionTarget{ConfChange: &raftpb.ConfChangeV2{}}))
+	require.Error(t, rs.proposeTransition(transitionTarget{RegionID: 1}))
 
 	applyErr := errors.New("apply failed")
 	err := rs.applyTerminalOutcome(terminalOutcome{
@@ -141,6 +141,9 @@ func startTransitionExecutorStore(t *testing.T, scheduler SchedulerClient, campa
 	t.Cleanup(func() { rs.StopPeer(p.ID()) })
 	if campaign {
 		require.NoError(t, p.Campaign())
+		require.Eventually(t, func() bool {
+			return p.Status().RaftState == myraft.StateLeader
+		}, time.Second, 10*time.Millisecond)
 	}
 	return rs, p, region
 }

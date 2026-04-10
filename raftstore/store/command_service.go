@@ -16,10 +16,20 @@ import (
 )
 
 func (s *Store) validateCommand(req *raftcmdpb.RaftCmdRequest) (*peer.Peer, localmeta.RegionMeta, *raftcmdpb.RaftCmdResponse, error) {
+	return s.validateCommandClass(AdmissionClassUnknown, req)
+}
+
+func (s *Store) validateCommandClass(class AdmissionClass, req *raftcmdpb.RaftCmdRequest) (*peer.Peer, localmeta.RegionMeta, *raftcmdpb.RaftCmdResponse, error) {
 	if s == nil {
+		if class != AdmissionClassUnknown {
+			s.recordAdmission(Admission{Class: class, Reason: AdmissionReasonInvalid, Detail: "store is nil"})
+		}
 		return nil, localmeta.RegionMeta{}, nil, fmt.Errorf("raftstore: store is nil")
 	}
 	if req == nil {
+		if class != AdmissionClassUnknown {
+			s.recordAdmission(Admission{Class: class, Reason: AdmissionReasonInvalid, Detail: "command is nil"})
+		}
 		return nil, localmeta.RegionMeta{}, nil, fmt.Errorf("raftstore: command is nil")
 	}
 	if req.Header == nil {
@@ -27,33 +37,96 @@ func (s *Store) validateCommand(req *raftcmdpb.RaftCmdRequest) (*peer.Peer, loca
 	}
 	regionID := req.Header.GetRegionId()
 	if regionID == 0 {
+		if class != AdmissionClassUnknown {
+			s.recordAdmission(Admission{
+				Class:     class,
+				Reason:    AdmissionReasonInvalid,
+				RequestID: req.Header.GetRequestId(),
+				Detail:    "region id missing",
+			})
+		}
 		return nil, localmeta.RegionMeta{}, nil, fmt.Errorf("raftstore: region id missing")
 	}
 	if requestStoreID := req.Header.GetStoreId(); requestStoreID != 0 && s.storeID != 0 && requestStoreID != s.storeID {
 		resp := &raftcmdpb.RaftCmdResponse{Header: req.Header, RegionError: storeNotMatchError(requestStoreID, s.storeID)}
+		if class != AdmissionClassUnknown {
+			s.recordAdmission(Admission{
+				Class:     class,
+				Reason:    AdmissionReasonStoreNotMatch,
+				RegionID:  regionID,
+				RequestID: req.Header.GetRequestId(),
+				Detail:    fmt.Sprintf("request store %d != local store %d", requestStoreID, s.storeID),
+			})
+		}
 		return nil, localmeta.RegionMeta{}, resp, nil
 	}
 	meta, ok := s.RegionMetaByID(regionID)
 	if !ok {
 		resp := &raftcmdpb.RaftCmdResponse{Header: req.Header, RegionError: regionNotFoundError(regionID)}
+		if class != AdmissionClassUnknown {
+			s.recordAdmission(Admission{
+				Class:     class,
+				Reason:    AdmissionReasonNotHosted,
+				RegionID:  regionID,
+				RequestID: req.Header.GetRequestId(),
+				Detail:    "region metadata not found",
+			})
+		}
 		return nil, localmeta.RegionMeta{}, resp, nil
 	}
 	if err := validateRegionEpoch(req.Header.GetRegionEpoch(), meta); err != nil {
 		resp := &raftcmdpb.RaftCmdResponse{Header: req.Header, RegionError: err}
+		if class != AdmissionClassUnknown {
+			s.recordAdmission(Admission{
+				Class:     class,
+				Reason:    AdmissionReasonEpochMismatch,
+				RegionID:  regionID,
+				RequestID: req.Header.GetRequestId(),
+				Detail:    "region epoch mismatch",
+			})
+		}
 		return nil, meta, resp, nil
 	}
-	if err := validateRequestKeys(meta, req); err != nil {
+	if err, reason := validateRequestKeys(meta, req); err != nil {
 		resp := &raftcmdpb.RaftCmdResponse{Header: req.Header, RegionError: err}
+		if class != AdmissionClassUnknown {
+			s.recordAdmission(Admission{
+				Class:     class,
+				Reason:    reason,
+				RegionID:  regionID,
+				RequestID: req.Header.GetRequestId(),
+				Detail:    "request keys failed local validation",
+			})
+		}
 		return nil, meta, resp, nil
 	}
 	peer := s.regionMgr().peer(regionID)
 	if peer == nil {
 		resp := &raftcmdpb.RaftCmdResponse{Header: req.Header, RegionError: regionNotFoundError(regionID)}
+		if class != AdmissionClassUnknown {
+			s.recordAdmission(Admission{
+				Class:     class,
+				Reason:    AdmissionReasonNotHosted,
+				RegionID:  regionID,
+				RequestID: req.Header.GetRequestId(),
+				Detail:    "region peer not hosted",
+			})
+		}
 		return nil, meta, resp, nil
 	}
 	status := peer.Status()
 	if status.RaftState != myraft.StateLeader {
 		resp := &raftcmdpb.RaftCmdResponse{Header: req.Header, RegionError: notLeaderError(meta, status.Lead)}
+		if class != AdmissionClassUnknown {
+			s.recordAdmission(Admission{
+				Class:     class,
+				Reason:    AdmissionReasonNotLeader,
+				RegionID:  regionID,
+				PeerID:    peer.ID(),
+				RequestID: req.Header.GetRequestId(),
+				Detail:    "local peer is not leader",
+			})
+		}
 		return nil, meta, resp, nil
 	}
 	req.Header.PeerId = peer.ID()
@@ -64,7 +137,7 @@ func (s *Store) validateCommand(req *raftcmdpb.RaftCmdRequest) (*peer.Peer, loca
 // region. When the store is not leader or the request header is invalid the
 // returned response includes an appropriate RegionError.
 func (s *Store) ProposeCommand(ctx context.Context, req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
-	peer, _, resp, err := s.validateCommand(req)
+	peer, _, resp, err := s.validateCommandClass(AdmissionClassWrite, req)
 	if err != nil {
 		return nil, err
 	}
@@ -72,24 +145,70 @@ func (s *Store) ProposeCommand(ctx context.Context, req *raftcmdpb.RaftCmdReques
 		return resp, nil
 	}
 	if req.Header.RequestId == 0 {
-		req.Header.RequestId = s.commandPipe().nextProposalID()
-	}
-	id := req.Header.RequestId
-	prop, err := s.commandPipe().registerProposal(id)
-	if err != nil {
-		return nil, err
-	}
-	if prop == nil {
-		return nil, fmt.Errorf("raftstore: command pipeline unavailable")
-	}
-	if err := s.router.SendCommand(peer.ID(), req); err != nil {
-		s.commandPipe().removeProposal(id)
-		return nil, err
+		req.Header.RequestId = s.cmds.pipe.nextProposalID()
 	}
 	if ctx == nil {
 		ctx = s.runtimeContext()
 	}
-	timeout := s.commandWait()
+	if err := ctx.Err(); err != nil {
+		s.recordAdmission(Admission{
+			Class:     AdmissionClassWrite,
+			Reason:    classifyContextAdmission(err),
+			RegionID:  req.Header.GetRegionId(),
+			PeerID:    peer.ID(),
+			RequestID: req.Header.GetRequestId(),
+			Detail:    "write request context already done before local admission",
+		})
+		return nil, fmt.Errorf("raftstore: command %d context unavailable: %w", req.Header.GetRequestId(), err)
+	}
+	id := req.Header.RequestId
+	prop, err := s.cmds.pipe.registerProposal(id)
+	if err != nil {
+		s.recordAdmission(Admission{
+			Class:     AdmissionClassWrite,
+			Reason:    AdmissionReasonInvalid,
+			RegionID:  req.Header.GetRegionId(),
+			PeerID:    peer.ID(),
+			RequestID: id,
+			Detail:    err.Error(),
+		})
+		return nil, err
+	}
+	if prop == nil {
+		s.recordAdmission(Admission{
+			Class:     AdmissionClassWrite,
+			Reason:    AdmissionReasonInvalid,
+			RegionID:  req.Header.GetRegionId(),
+			PeerID:    peer.ID(),
+			RequestID: id,
+			Detail:    "command pipeline unavailable",
+		})
+		return nil, fmt.Errorf("raftstore: command pipeline unavailable")
+	}
+	if err := s.router.SendCommand(peer.ID(), req); err != nil {
+		s.cmds.pipe.removeProposal(id)
+		s.recordAdmission(Admission{
+			Class:     AdmissionClassWrite,
+			Reason:    AdmissionReasonUnknown,
+			RegionID:  req.Header.GetRegionId(),
+			PeerID:    peer.ID(),
+			RequestID: id,
+			Detail:    err.Error(),
+		})
+		return nil, err
+	}
+	s.recordAdmission(Admission{
+		Class:     AdmissionClassWrite,
+		Reason:    AdmissionReasonAccepted,
+		Accepted:  true,
+		RegionID:  req.Header.GetRegionId(),
+		PeerID:    peer.ID(),
+		RequestID: id,
+	})
+	timeout := time.Duration(0)
+	if s != nil && s.cmds != nil {
+		timeout = s.cmds.timeout
+	}
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -105,7 +224,7 @@ func (s *Store) ProposeCommand(ctx context.Context, req *raftcmdpb.RaftCmdReques
 		}
 		return result.resp, nil
 	case <-ctx.Done():
-		s.commandPipe().removeProposal(id)
+		s.cmds.pipe.removeProposal(id)
 		return nil, fmt.Errorf("raftstore: command %d failed while waiting: %w", id, ctx.Err())
 	}
 }
@@ -114,7 +233,7 @@ func (s *Store) ProposeCommand(ctx context.Context, req *raftcmdpb.RaftCmdReques
 // leader. The command must only include read operations (Get/Scan). The method
 // returns a RegionError when the store is not leader for the target region.
 func (s *Store) ReadCommand(ctx context.Context, req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
-	peer, meta, regionResp, err := s.validateCommand(req)
+	peer, meta, regionResp, err := s.validateCommandClass(AdmissionClassRead, req)
 	if err != nil {
 		return nil, err
 	}
@@ -122,30 +241,55 @@ func (s *Store) ReadCommand(ctx context.Context, req *raftcmdpb.RaftCmdRequest) 
 		return regionResp, nil
 	}
 	if len(req.GetRequests()) == 0 {
+		s.recordAdmission(Admission{Class: AdmissionClassRead, Reason: AdmissionReasonInvalid, RegionID: req.Header.GetRegionId(), Detail: "read command missing requests"})
 		return nil, fmt.Errorf("raftstore: read command missing requests")
 	}
 	if !isReadOnlyRequest(req) {
+		s.recordAdmission(Admission{Class: AdmissionClassRead, Reason: AdmissionReasonInvalid, RegionID: req.Header.GetRegionId(), Detail: "read command must be read-only"})
 		return nil, fmt.Errorf("raftstore: read command must be read-only")
 	}
-	if s.commandApply() == nil {
+	if s == nil || s.cmds == nil || s.cmds.apply == nil {
+		s.recordAdmission(Admission{Class: AdmissionClassRead, Reason: AdmissionReasonInvalid, RegionID: req.Header.GetRegionId(), Detail: "command apply without handler"})
 		return nil, fmt.Errorf("raftstore: command apply without handler")
 	}
 	if req.Header == nil {
 		req.Header = &raftcmdpb.CmdHeader{}
 	}
-	if s.commandPipe() != nil && req.Header.GetRequestId() == 0 {
-		req.Header.RequestId = s.commandPipe().nextProposalID()
+	if s.cmds != nil && s.cmds.pipe != nil && req.Header.GetRequestId() == 0 {
+		req.Header.RequestId = s.cmds.pipe.nextProposalID()
 	}
-	timeout := s.commandWait()
+	timeout := time.Duration(0)
+	if s != nil && s.cmds != nil {
+		timeout = s.cmds.timeout
+	}
 	if timeout <= 0 {
 		timeout = 3 * time.Second
 	}
 	if ctx == nil {
 		ctx = s.runtimeContext()
 	}
+	if err := ctx.Err(); err != nil {
+		s.recordAdmission(Admission{
+			Class:     AdmissionClassRead,
+			Reason:    classifyContextAdmission(err),
+			RegionID:  req.Header.GetRegionId(),
+			PeerID:    peer.ID(),
+			RequestID: req.Header.GetRequestId(),
+			Detail:    "read request context already done before local admission",
+		})
+		return nil, fmt.Errorf("raftstore: read command %d context unavailable: %w", req.Header.GetRequestId(), err)
+	}
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithTimeout(ctx, timeout)
 	defer cancel()
+	s.recordAdmission(Admission{
+		Class:     AdmissionClassRead,
+		Reason:    AdmissionReasonAccepted,
+		Accepted:  true,
+		RegionID:  req.Header.GetRegionId(),
+		PeerID:    peer.ID(),
+		RequestID: req.Header.GetRequestId(),
+	})
 	index, err := peer.LinearizableRead(ctx)
 	if err != nil {
 		return nil, err
@@ -153,7 +297,7 @@ func (s *Store) ReadCommand(ctx context.Context, req *raftcmdpb.RaftCmdRequest) 
 	if err := peer.WaitApplied(ctx, index); err != nil {
 		return nil, err
 	}
-	out, err := s.commandApply()(req)
+	out, err := s.cmds.apply(req)
 	if err != nil {
 		return nil, err
 	}
@@ -191,9 +335,9 @@ func validateRegionEpoch(reqEpoch *metapb.RegionEpoch, meta localmeta.RegionMeta
 	return nil
 }
 
-func validateRequestKeys(meta localmeta.RegionMeta, req *raftcmdpb.RaftCmdRequest) *errorpb.RegionError {
+func validateRequestKeys(meta localmeta.RegionMeta, req *raftcmdpb.RaftCmdRequest) (*errorpb.RegionError, AdmissionReason) {
 	if req == nil {
-		return nil
+		return nil, AdmissionReasonUnknown
 	}
 	for _, r := range req.GetRequests() {
 		if r == nil {
@@ -203,12 +347,12 @@ func validateRequestKeys(meta localmeta.RegionMeta, req *raftcmdpb.RaftCmdReques
 		case raftcmdpb.CmdType_CMD_GET:
 			key := r.GetGet().GetKey()
 			if len(key) > 0 && !keyInRange(meta, key) {
-				return keyNotInRegionError(meta, key)
+				return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
 			}
 		case raftcmdpb.CmdType_CMD_SCAN:
 			start := r.GetScan().GetStartKey()
 			if len(start) > 0 && !keyInRange(meta, start) {
-				return keyNotInRegionError(meta, start)
+				return keyNotInRegionError(meta, start), AdmissionReasonKeyNotInRegion
 			}
 		case raftcmdpb.CmdType_CMD_PREWRITE:
 			for _, mut := range r.GetPrewrite().GetMutations() {
@@ -217,37 +361,37 @@ func validateRequestKeys(meta localmeta.RegionMeta, req *raftcmdpb.RaftCmdReques
 				}
 				key := mut.GetKey()
 				if len(key) > 0 && !keyInRange(meta, key) {
-					return keyNotInRegionError(meta, key)
+					return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
 				}
 			}
 		case raftcmdpb.CmdType_CMD_COMMIT:
 			for _, key := range r.GetCommit().GetKeys() {
 				if len(key) > 0 && !keyInRange(meta, key) {
-					return keyNotInRegionError(meta, key)
+					return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
 				}
 			}
 		case raftcmdpb.CmdType_CMD_BATCH_ROLLBACK:
 			for _, key := range r.GetBatchRollback().GetKeys() {
 				if len(key) > 0 && !keyInRange(meta, key) {
-					return keyNotInRegionError(meta, key)
+					return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
 				}
 			}
 		case raftcmdpb.CmdType_CMD_RESOLVE_LOCK:
 			for _, key := range r.GetResolveLock().GetKeys() {
 				if len(key) > 0 && !keyInRange(meta, key) {
-					return keyNotInRegionError(meta, key)
+					return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
 				}
 			}
 		case raftcmdpb.CmdType_CMD_CHECK_TXN_STATUS:
 			key := r.GetCheckTxnStatus().GetPrimaryKey()
 			if len(key) > 0 && !keyInRange(meta, key) {
-				return keyNotInRegionError(meta, key)
+				return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
 			}
 		default:
-			return epochNotMatchError(&meta)
+			return epochNotMatchError(&meta), AdmissionReasonInvalid
 		}
 	}
-	return nil
+	return nil, AdmissionReasonUnknown
 }
 
 func keyInRange(meta localmeta.RegionMeta, key []byte) bool {

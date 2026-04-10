@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"sync"
 	"syscall"
 	"time"
 
@@ -14,14 +15,42 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
+type schedulerRuntime struct {
+	client SchedulerClient
+
+	input    chan Operation
+	stop     chan struct{}
+	wg       sync.WaitGroup
+	cooldown time.Duration
+	interval time.Duration
+	burst    int
+
+	regionSignal chan struct{}
+
+	mu            sync.Mutex
+	pending       map[operationKey]struct{}
+	lastApply     map[operationKey]time.Time
+	descriptors   map[uint64]descriptor.Descriptor
+	regionUpdates map[uint64]regionEvent
+	nextRegionSeq uint64
+	dropped       uint64
+	degraded      bool
+	lastError     string
+	lastErrorAt   time.Time
+	heartbeat     time.Duration
+	heartbeatStop chan struct{}
+	heartbeatWG   sync.WaitGroup
+}
+
 type operationKey struct {
 	region uint64
 	typeID OperationType
 }
 
 type regionEvent struct {
-	root rootevent.Event
-	seq  uint64
+	root         rootevent.Event
+	transitionID string
+	seq          uint64
 }
 
 func (s *Store) schedulerClient() SchedulerClient {
@@ -84,16 +113,6 @@ func (s *Store) applyOperation(op Operation) bool {
 		return true
 	}
 	return false
-}
-
-func (s *Store) applyEntries(entries []myraft.Entry) error {
-	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
-	}
-	if s.commandPipe() == nil {
-		return fmt.Errorf("raftstore: command apply without handler")
-	}
-	return s.commandPipe().applyEntries(entries)
 }
 
 func (s *Store) enqueueOperation(op Operation) {
@@ -203,15 +222,8 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 	s.sched.nextRegionSeq++
 	ev.seq = s.sched.nextRegionSeq
 	s.sched.regionUpdates[regionID] = ev
-	signal := s.sched.regionSignal
 	s.sched.mu.Unlock()
-	if signal == nil {
-		return
-	}
-	select {
-	case signal <- struct{}{}:
-	default:
-	}
+	s.signalRegionFlush()
 }
 
 func (s *Store) hasPendingRegionUpdate(regionID uint64) bool {
@@ -257,9 +269,32 @@ func (s *Store) flushRegionUpdates() {
 	sort.Slice(pending, func(i, j int) bool { return pending[i].seq < pending[j].seq })
 
 	ctx := s.runtimeContext()
+	failed := make([]regionEvent, 0)
 	for _, ev := range pending {
-		_ = s.schedulerClient().PublishRootEvent(ctx, ev.root)
+		if err := s.schedulerClient().PublishRootEvent(ctx, ev.root); err != nil {
+			failed = append(failed, ev)
+			s.recordTopologyPublishFailure(rootstateTransitionEvent{transitionID: ev.transitionID}, err)
+			s.recordLocalSchedulerPublishFailure(ev, err)
+			continue
+		}
+		s.recordTopologyPublished(rootstateTransitionEvent{transitionID: ev.transitionID})
+		s.clearLocalSchedulerDegraded()
 	}
+	if len(failed) == 0 {
+		return
+	}
+	s.sched.mu.Lock()
+	for _, ev := range failed {
+		regionID, ok := schedulerRegionEventKey(ev.root)
+		if !ok || regionID == 0 {
+			continue
+		}
+		if current, ok := s.sched.regionUpdates[regionID]; !ok || current.seq < ev.seq {
+			s.sched.regionUpdates[regionID] = ev
+		}
+	}
+	s.sched.mu.Unlock()
+	s.signalRegionFlush()
 }
 
 func schedulerRegionEventKey(event rootevent.Event) (uint64, bool) {
@@ -276,6 +311,16 @@ func schedulerRegionEventKey(event rootevent.Event) (uint64, bool) {
 		return event.RangeMerge.Merged.RegionID, true
 	default:
 		return 0, false
+	}
+}
+
+func (s *Store) signalRegionFlush() {
+	if s == nil || s.sched == nil || s.sched.regionSignal == nil {
+		return
+	}
+	select {
+	case s.sched.regionSignal <- struct{}{}:
+	default:
 	}
 }
 
@@ -385,6 +430,21 @@ func (s *Store) recordLocalSchedulerDrop(op Operation) {
 	now := time.Now()
 	s.sched.mu.Lock()
 	s.sched.dropped++
+	s.sched.degraded = true
+	s.sched.lastError = msg
+	s.sched.lastErrorAt = now
+	s.sched.mu.Unlock()
+	slog.Default().Warn(msg)
+}
+
+func (s *Store) recordLocalSchedulerPublishFailure(ev regionEvent, err error) {
+	if s == nil || s.sched == nil || err == nil {
+		return
+	}
+	regionID, _ := schedulerRegionEventKey(ev.root)
+	msg := fmt.Sprintf("scheduler publish failed: region=%d kind=%d err=%v", regionID, ev.root.Kind, err)
+	now := time.Now()
+	s.sched.mu.Lock()
 	s.sched.degraded = true
 	s.sched.lastError = msg
 	s.sched.lastErrorAt = now

@@ -96,7 +96,7 @@ func (cp *commandPipeline) applyEntries(entries []myraft.Entry) error {
 			return err
 		}
 		if !isCmd {
-			return fmt.Errorf("commandPipeline: unsupported legacy raft payload")
+			return fmt.Errorf("commandPipeline: unsupported unframed raft payload")
 		}
 		if cp.applier == nil {
 			return fmt.Errorf("commandPipeline: apply without handler")

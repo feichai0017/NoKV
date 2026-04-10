@@ -44,7 +44,7 @@ func TestTransitionOutcomeAppliedPeerChangeEvent(t *testing.T) {
 }
 
 func TestTransitionOutcomeCommittedSplitAndMergeEvents(t *testing.T) {
-	split := committedSplitEvent(splitPlan{
+	split := splitEvent(rootevent.KindRegionSplitCommitted, splitPlan{
 		originalParent: localmeta.RegionMeta{ID: 61},
 		child:          localmeta.RegionMeta{StartKey: []byte("m")},
 		parentDesc:     descriptorForOutcome(61, []byte("a"), []byte("m")),
@@ -54,7 +54,7 @@ func TestTransitionOutcomeCommittedSplitAndMergeEvents(t *testing.T) {
 	require.Equal(t, uint64(61), split.RangeSplit.ParentRegionID)
 	require.Equal(t, uint64(62), split.RangeSplit.Right.RegionID)
 
-	merge := committedMergeEvent(mergePlan{
+	merge := mergeEvent(rootevent.KindRegionMerged, mergePlan{
 		leftID:     70,
 		rightID:    71,
 		mergedDesc: descriptorForOutcome(70, []byte("a"), []byte("z")),

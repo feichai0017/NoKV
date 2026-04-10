@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 
@@ -34,8 +35,10 @@ func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 	appliedEvent, hasAppliedEvent := appliedPeerChangeEvent(meta, ev.ConfChange)
 	if ev.Peer != nil && peerIndexByID(meta.Peers, ev.Peer.ID()) == -1 {
 		return s.applyTerminalOutcome(terminalOutcome{
-			Event:  appliedEvent,
-			Action: "peer change",
+			TransitionID: rootstate.TransitionIDFromEvent(appliedEvent),
+			RegionID:     meta.ID,
+			Event:        appliedEvent,
+			Action:       "peer change",
 			Apply: func() error {
 				if err := s.applyRegionRemovalSilent(meta.ID); err != nil {
 					return err
@@ -47,15 +50,18 @@ func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 	}
 	if !hasAppliedEvent {
 		return s.applyTerminalOutcome(terminalOutcome{
-			Action: "peer change",
+			RegionID: meta.ID,
+			Action:   "peer change",
 			Apply: func() error {
 				return s.applyRegionMetaSilent(meta)
 			},
 		})
 	}
 	return s.applyTerminalOutcome(terminalOutcome{
-		Event:  appliedEvent,
-		Action: "peer change",
+		TransitionID: rootstate.TransitionIDFromEvent(appliedEvent),
+		RegionID:     meta.ID,
+		Event:        appliedEvent,
+		Action:       "peer change",
 		Apply: func() error {
 			return s.applyRegionMetaSilent(meta)
 		},

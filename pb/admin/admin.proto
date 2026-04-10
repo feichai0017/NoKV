@@ -83,6 +83,87 @@ message RegionRuntimeStatusResponse {
   uint64 applied_term = 8;
 }
 
+message ExecutionStatusRequest {}
+
+enum ExecutionAdmissionClass {
+  EXECUTION_ADMISSION_CLASS_UNSPECIFIED = 0;
+  EXECUTION_ADMISSION_CLASS_READ = 1;
+  EXECUTION_ADMISSION_CLASS_WRITE = 2;
+  EXECUTION_ADMISSION_CLASS_TOPOLOGY = 3;
+}
+
+enum ExecutionAdmissionReason {
+  EXECUTION_ADMISSION_REASON_UNSPECIFIED = 0;
+  EXECUTION_ADMISSION_REASON_ACCEPTED = 1;
+  EXECUTION_ADMISSION_REASON_INVALID = 2;
+  EXECUTION_ADMISSION_REASON_STORE_NOT_MATCH = 3;
+  EXECUTION_ADMISSION_REASON_NOT_HOSTED = 4;
+  EXECUTION_ADMISSION_REASON_EPOCH_MISMATCH = 5;
+  EXECUTION_ADMISSION_REASON_KEY_NOT_IN_REGION = 6;
+  EXECUTION_ADMISSION_REASON_NOT_LEADER = 7;
+  EXECUTION_ADMISSION_REASON_CANCELED = 8;
+  EXECUTION_ADMISSION_REASON_TIMED_OUT = 9;
+}
+
+message ExecutionAdmissionStatus {
+  bool observed = 1;
+  ExecutionAdmissionClass class = 2;
+  ExecutionAdmissionReason reason = 3;
+  bool accepted = 4;
+  uint64 region_id = 5;
+  uint64 peer_id = 6;
+  uint64 request_id = 7;
+  string detail = 8;
+  int64 at_unix_nano = 9;
+}
+
+enum ExecutionTopologyOutcome {
+  EXECUTION_TOPOLOGY_OUTCOME_UNSPECIFIED = 0;
+  EXECUTION_TOPOLOGY_OUTCOME_REJECTED = 1;
+  EXECUTION_TOPOLOGY_OUTCOME_QUEUED = 2;
+  EXECUTION_TOPOLOGY_OUTCOME_PROPOSED = 3;
+  EXECUTION_TOPOLOGY_OUTCOME_APPLIED = 4;
+  EXECUTION_TOPOLOGY_OUTCOME_FAILED = 5;
+}
+
+enum ExecutionPublishState {
+  EXECUTION_PUBLISH_STATE_UNSPECIFIED = 0;
+  EXECUTION_PUBLISH_STATE_NOT_REQUIRED = 1;
+  EXECUTION_PUBLISH_STATE_PLANNED_PUBLISHED = 2;
+  EXECUTION_PUBLISH_STATE_TERMINAL_PENDING = 3;
+  EXECUTION_PUBLISH_STATE_TERMINAL_PUBLISHED = 4;
+  EXECUTION_PUBLISH_STATE_TERMINAL_FAILED = 5;
+}
+
+message ExecutionTopologyStatus {
+  string transition_id = 1;
+  uint64 region_id = 2;
+  string action = 3;
+  ExecutionTopologyOutcome outcome = 4;
+  ExecutionPublishState publish = 5;
+  string last_error = 6;
+  int64 updated_at_unix_nano = 7;
+}
+
+enum ExecutionRestartState {
+  EXECUTION_RESTART_STATE_UNSPECIFIED = 0;
+  EXECUTION_RESTART_STATE_READY = 1;
+  EXECUTION_RESTART_STATE_DEGRADED = 2;
+}
+
+message ExecutionRestartStatus {
+  ExecutionRestartState state = 1;
+  uint64 region_count = 2;
+  uint64 raft_group_count = 3;
+  repeated uint64 missing_raft_pointer = 4;
+}
+
+message ExecutionStatusResponse {
+  ExecutionAdmissionStatus last_admission = 1;
+  ExecutionRestartStatus restart = 2;
+  repeated ExecutionTopologyStatus topology = 3;
+}
+
 service RaftAdmin {
   rpc AddPeer(AddPeerRequest) returns (AddPeerResponse);
   rpc RemovePeer(RemovePeerRequest) returns (RemovePeerResponse);
@@ -92,4 +173,5 @@ service RaftAdmin {
   rpc ImportRegionSnapshot(ImportRegionSnapshotRequest) returns (ImportRegionSnapshotResponse);
   rpc ImportRegionSnapshotStream(stream ImportRegionSnapshotStreamRequest) returns (ImportRegionSnapshotResponse);
   rpc RegionRuntimeStatus(RegionRuntimeStatusRequest) returns (RegionRuntimeStatusResponse);
+  rpc ExecutionStatus(ExecutionStatusRequest) returns (ExecutionStatusResponse);
 }

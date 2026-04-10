@@ -14,6 +14,7 @@ Options:
   --workdir <dir>          Optional workdir override; otherwise resolved from config
   --coordinator-addr <addr>
                            Optional Coordinator gRPC endpoint override passed to "nokv serve"
+  --store-addr <id=addr>   Optional remote store transport override; may be repeated
   --raft-debug-log         Enable verbose etcd/raft debug logging
   --no-raft-debug-log      Disable verbose etcd/raft debug logging
   --extra <args...>        Additional arguments passed to "nokv serve"
@@ -26,6 +27,7 @@ WORKDIR=""
 SCOPE="local"
 COORDINATOR_ADDR=""
 RAFT_DEBUG=0
+STORE_ADDRS=()
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -48,6 +50,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --coordinator-addr)
       COORDINATOR_ADDR=$2
+      shift 2
+      ;;
+    --store-addr)
+      STORE_ADDRS+=("$2")
       shift 2
       ;;
     --raft-debug-log)
@@ -113,6 +119,10 @@ fi
 if [[ -n "$COORDINATOR_ADDR" ]]; then
   cmd+=(--coordinator-addr "$COORDINATOR_ADDR")
 fi
+
+for store_addr in "${STORE_ADDRS[@]}"; do
+  cmd+=(--store-addr "$store_addr")
+done
 
 cmd+=("${EXTRA_ARGS[@]}")
 

@@ -4,6 +4,10 @@
 
 > Read this page if you want to answer one question precisely: which package owns which responsibility once NoKV leaves standalone mode and becomes a cluster.
 
+For the protocol line that now minimally formalizes `raftstore` request
+admission, transition execution, publish boundaries, and restart state, read
+`docs/control_and_execution_protocols.md` together with this file.
+
 ## Reader Map
 
 - Start with section 1 if you want package ownership.
@@ -69,7 +73,7 @@ flowchart TD
    - `StartPeer` registers the peer through the peer-set/routing layer and may bootstrap or campaign for leadership.
 
 3. **Peer connectivity**
-   - `transport.SetPeer(peerID, addr)` defines outbound raft connections; the CLI exposes it via `--peer peerID=addr`.
+   - `transport.SetPeer(peerID, addr)` defines outbound raft connections; the CLI resolves those peer endpoints from local metadata plus stable `storeID -> addr` mapping.
    - Additional services can reuse the same gRPC server through `transport.WithServerRegistrar`.
 
 ### Minimal mental model
@@ -272,5 +276,20 @@ the design.
 - Command payload format on apply path is strict `RaftCmdRequest` encoding.
 - Region metadata (range/epoch/peers) is validated before both read and write
   command execution.
+- The store now records explicit execution-plane admission outcomes for read,
+  write, and topology entry points.
+- Topology transitions now record explicit local execution outcome plus publish
+  boundary state (`planned published`, `terminal pending`, `terminal published`,
+  `terminal failed`).
+- Terminal publish failure is retained as visible retry state rather than being
+  silently dropped.
+- Restart posture is now exposed explicitly from local durable recovery state
+  (`raftstore/localmeta` + raft replay pointers).
+- `raftstore/admin` now exposes execution-plane diagnostics through
+  `ExecutionStatus` for last admission, topology lifecycle, and restart
+  posture.
+- `nokv execution --addr <store-admin-addr>` now queries that diagnostics
+  surface directly from the CLI, with optional `--region` and `--transition`
+  filters on topology output.
 - `store.RegionMetrics` + `StatsSnapshot` provide runtime visibility for region
   count, backlog, and scheduling health.

@@ -29,8 +29,8 @@ type WatchdogConfig struct {
 	RaftPointers func() map[uint64]localmeta.RaftLogPointer
 }
 
-// normalized resolves constructor-boundary defaults for the watchdog config.
-func (cfg WatchdogConfig) normalized() WatchdogConfig {
+// resolveDefaults resolves constructor-boundary defaults for the watchdog config.
+func (cfg WatchdogConfig) resolveDefaults() WatchdogConfig {
 	if cfg.Interval <= 0 {
 		cfg.Interval = defaultWatchdogInterval
 	}
@@ -82,7 +82,7 @@ func NewWatchdog(cfg WatchdogConfig) *Watchdog {
 	if cfg.Manager == nil {
 		return nil
 	}
-	cfg = cfg.normalized()
+	cfg = cfg.resolveDefaults()
 	w := &Watchdog{
 		manager:      cfg.Manager,
 		interval:     cfg.Interval,

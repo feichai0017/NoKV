@@ -44,9 +44,8 @@ Core implementation units:
 - `coordinator/client`: client wrapper used by store/gateway.
 - `coordinator/adapter`: scheduler sink that forwards heartbeats into Coordinator.
 
-For the next-stage protocol direction on freshness, rooted catch-up,
-transition lifecycle, and degraded semantics, see
-[`docs/control_plane_protocol.md`](control_plane_protocol.md).
+For the next-stage protocol direction on both the control plane and the paired
+execution plane, see `docs/control_and_execution_protocols.md`.
 
 ### Control-Plane Protocol Status
 
@@ -61,7 +60,6 @@ Already in active use:
 - `DegradedMode`
 - `CatchUpState`
 - `TransitionID`
-- minimal `TransitionPhase`
 - publish-time lifecycle assessment on `PublishRootEvent`
 
 This means Coordinator no longer exposes only best-effort implementation
@@ -244,7 +242,8 @@ This means:
 
 - bootstrap-time `config.regions` are not replayed during restart
 - runtime split/merge/peer-change results continue to come back from local recovery state
-- `--peer` is an optional override, not the normal restart path
+- `--store-addr` is an exceptional static address override, not the normal restart path
+- `--store-id` must match the durable workdir identity when the workdir was already used
 
 The recommended restart shape is therefore:
 
@@ -261,6 +260,17 @@ nokv serve \
 1. load the local peer catalog from the store workdir
 2. derive the current remote peer set from local metadata
 3. use config `stores` only to map `storeID -> addr`
+
+If static transport overrides are needed, prefer stable store identities:
+
+```bash
+nokv serve \
+  --config ./raft_config.example.json \
+  --scope host \
+  --store-id 1 \
+  --workdir ./artifacts/cluster/store-1 \
+  --store-addr 2=10.0.0.12:20160
+```
 
 Related CLI behavior:
 
