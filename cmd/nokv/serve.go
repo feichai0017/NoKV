@@ -101,6 +101,25 @@ func runServeCmd(w io.Writer, args []string) error {
 	if *electionTick <= 0 || *heartbeatTick <= 0 {
 		return fmt.Errorf("heartbeat and election ticks must be > 0")
 	}
+	explicitPeers := make(map[uint64]string, len(peerFlags))
+	for _, mapping := range peerFlags {
+		parts := strings.SplitN(mapping, "=", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid --peer value %q (want peerID=address)", mapping)
+		}
+		id, err := parseUint(parts[0])
+		if err != nil {
+			return fmt.Errorf("invalid peer id in --peer %q: %w", mapping, err)
+		}
+		if id == 0 {
+			return fmt.Errorf("invalid --peer value %q (peer id must be > 0)", mapping)
+		}
+		addr := strings.TrimSpace(parts[1])
+		if addr == "" {
+			return fmt.Errorf("invalid --peer value %q (empty address)", mapping)
+		}
+		explicitPeers[id] = addr
+	}
 	if strings.TrimSpace(*coordAddr) == "" {
 		return fmt.Errorf("--coordinator-addr is required (coordinator is the only scheduler/control-plane source)")
 	}
@@ -180,18 +199,6 @@ func runServeCmd(w io.Writer, args []string) error {
 	}
 
 	transport := server.Transport()
-	explicitPeers := make(map[uint64]string, len(peerFlags))
-	for _, mapping := range peerFlags {
-		parts := strings.SplitN(mapping, "=", 2)
-		if len(parts) != 2 {
-			return fmt.Errorf("invalid --peer value %q (want peerID=address)", mapping)
-		}
-		id, err := parseUint(parts[0])
-		if err != nil {
-			return fmt.Errorf("invalid peer id in --peer %q: %w", mapping, err)
-		}
-		explicitPeers[id] = strings.TrimSpace(parts[1])
-	}
 	snapshot := localMeta.Snapshot()
 	if cfg != nil {
 		autoPeers, err := resolveTransportPeersFromConfig(cfg, strings.ToLower(strings.TrimSpace(*scope)), snapshot, *storeID, explicitPeers)

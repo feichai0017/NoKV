@@ -223,7 +223,7 @@ message GetRegionByKeyRequest {
   // required_root_token optionally requires the result to include at least this rooted truth.
   RootToken required_root_token = 3;
   // max_root_lag bounds the allowed rooted revision gap for bounded reads.
-  uint64 max_root_lag = 4;
+  optional uint64 max_root_lag = 4;
 }
 
 message GetRegionByKeyResponse {

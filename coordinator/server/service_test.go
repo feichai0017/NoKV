@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
@@ -279,7 +280,7 @@ func TestServiceGetRegionByKeyReportsRootLagging(t *testing.T) {
 	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
 		Key:        []byte("a"),
 		Freshness:  coordpb.Freshness_FRESHNESS_BOUNDED,
-		MaxRootLag: 3,
+		MaxRootLag: proto.Uint64(3),
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
@@ -288,10 +289,17 @@ func TestServiceGetRegionByKeyReportsRootLagging(t *testing.T) {
 	resp, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
 		Key:        []byte("a"),
 		Freshness:  coordpb.Freshness_FRESHNESS_BOUNDED,
-		MaxRootLag: 4,
+		MaxRootLag: proto.Uint64(4),
 	})
 	require.NoError(t, err)
 	require.Equal(t, coordpb.DegradedMode_DEGRADED_MODE_ROOT_LAGGING, resp.GetDegradedMode())
+
+	resp, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:       []byte("a"),
+		Freshness: coordpb.Freshness_FRESHNESS_BOUNDED,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(4), resp.GetRootLag())
 
 	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
 		Key:       []byte("a"),
@@ -329,11 +337,22 @@ func TestServiceGetRegionByKeyBoundedRejectsBootstrapRequired(t *testing.T) {
 	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
 		Key:        []byte("a"),
 		Freshness:  coordpb.Freshness_FRESHNESS_BOUNDED,
-		MaxRootLag: 16,
+		MaxRootLag: proto.Uint64(16),
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 	require.Contains(t, err.Error(), "bootstrap required before bounded freshness")
+}
+
+func TestRootLagCountsCursorMismatchAtSameRevision(t *testing.T) {
+	require.Equal(t, uint64(1), rootLag(
+		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 9}, Revision: 7},
+		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 8}, Revision: 7},
+	))
+	require.Equal(t, uint64(1), rootLag(
+		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 8}, Revision: 7},
+		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 9}, Revision: 7},
+	))
 }
 
 func TestServiceRemoveRegion(t *testing.T) {
@@ -592,7 +611,7 @@ func TestServicePublishRootEventPersistsPeerPlan(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())
 	require.NotNil(t, resp.GetAssessment())
-	require.Equal(t, "peer:12:2:201", resp.GetAssessment().GetTransitionId())
+	require.Equal(t, "peer:12:add:2:201", resp.GetAssessment().GetTransitionId())
 	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_OPEN, resp.GetAssessment().GetStatus())
 	require.Equal(t, coordpb.TransitionDecision_TRANSITION_DECISION_APPLY, resp.GetAssessment().GetDecision())
 	require.Equal(t, coordpb.TransitionPhase_TRANSITION_PHASE_PLANNED, resp.GetAssessment().GetPhase())
@@ -638,7 +657,7 @@ func TestServicePublishRootEventSkipsDuplicatePeerPlan(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())
 	require.NotNil(t, resp.GetAssessment())
-	require.Equal(t, "peer:13:2:201", resp.GetAssessment().GetTransitionId())
+	require.Equal(t, "peer:13:add:2:201", resp.GetAssessment().GetTransitionId())
 	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_PENDING, resp.GetAssessment().GetStatus())
 	require.Equal(t, coordpb.TransitionDecision_TRANSITION_DECISION_SKIP, resp.GetAssessment().GetDecision())
 	require.Equal(t, coordpb.TransitionPhase_TRANSITION_PHASE_PLANNED, resp.GetAssessment().GetPhase())
@@ -673,7 +692,7 @@ func TestServicePublishRootEventSkipsCompletedPeerPlan(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())
 	require.NotNil(t, resp.GetAssessment())
-	require.Equal(t, "peer:131:2:201", resp.GetAssessment().GetTransitionId())
+	require.Equal(t, "peer:131:add:2:201", resp.GetAssessment().GetTransitionId())
 	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_COMPLETED, resp.GetAssessment().GetStatus())
 	require.Equal(t, coordpb.TransitionDecision_TRANSITION_DECISION_SKIP, resp.GetAssessment().GetDecision())
 	require.Equal(t, coordpb.TransitionPhase_TRANSITION_PHASE_COMPLETED, resp.GetAssessment().GetPhase())
@@ -859,7 +878,7 @@ func TestServiceListTransitionsReturnsOperatorView(t *testing.T) {
 	require.Len(t, resp.GetEntries(), 1)
 	require.Equal(t, coordpb.TransitionKind_TRANSITION_KIND_PEER_CHANGE, resp.GetEntries()[0].GetKind())
 	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_PENDING, resp.GetEntries()[0].GetStatus())
-	require.Equal(t, "peer:160:2:201", resp.GetEntries()[0].GetTransitionId())
+	require.Equal(t, "peer:160:add:2:201", resp.GetEntries()[0].GetTransitionId())
 	require.Equal(t, coordpb.TransitionPhase_TRANSITION_PHASE_ADMITTED, resp.GetEntries()[0].GetPhase())
 	require.NotNil(t, resp.GetEntries()[0].GetPendingPeerChange())
 }
@@ -907,7 +926,7 @@ func TestServiceAssessRootEventReturnsConflictAssessment(t *testing.T) {
 	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_CONFLICT, resp.GetAssessment().GetStatus())
 	require.Equal(t, coordpb.TransitionRetryClass_TRANSITION_RETRY_CLASS_CONFLICT, resp.GetAssessment().GetRetryClass())
 	require.Equal(t, coordpb.TransitionDecision_TRANSITION_DECISION_APPLY, resp.GetAssessment().GetDecision())
-	require.Equal(t, "peer:161:3:301", resp.GetAssessment().GetTransitionId())
+	require.Equal(t, "peer:161:add:3:301", resp.GetAssessment().GetTransitionId())
 	require.Equal(t, coordpb.TransitionPhase_TRANSITION_PHASE_CONFLICTED, resp.GetAssessment().GetPhase())
 }
 
