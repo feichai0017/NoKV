@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b3ee6b57.js";
+            window.path_to_searchindex_js = "searchindex-01a1bb3c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b4bd04d1.js"></script>
+        <script src="toc-b8f8ac3b.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -200,7 +200,7 @@
 <li><code>ops</code> scripts must treat the migration CLI as source of truth and stay stricter.</li>
 <li><code>lib</code> is where shared rules live, so shell semantics do not drift across scripts.</li>
 </ul>
-<h2 id="development-scripts"><a class="header" href="#development-scripts">Development Scripts</a></h2>
+<h2 id="bootstrap--local-launch"><a class="header" href="#bootstrap--local-launch">Bootstrap &amp; Local Launch</a></h2>
 <h3 id="scriptsdevclustersh"><a class="header" href="#scriptsdevclustersh"><code>scripts/dev/cluster.sh</code></a></h3>
 <ul>
 <li>Purpose: build <code>nokv</code> and <code>nokv-config</code>, read <code>raft_config.json</code>, seed local peer catalogs, start Coordinator, then start the configured stores.</li>
@@ -221,10 +221,12 @@
 <li><code>--workdir</code> defaults to <code>./artifacts/cluster</code></li>
 <li>store workdirs are rejected if they contain unexpected files</li>
 <li>logs stream with <code>[coordinator]</code> / <code>[store-&lt;id&gt;]</code> prefixes and are still written to <code>coordinator.log</code> / <code>server.log</code></li>
+<li>this is a bootstrap/dev launcher, not a restart command</li>
+<li>it may seed fresh workdirs from <code>config.regions</code>, so it should not be used against stores that already contain runtime raft/local metadata</li>
 </ul>
 </li>
 </ul>
-<h3 id="scriptsdevbootstrapsh"><a class="header" href="#scriptsdevbootstrapsh"><code>scripts/dev/bootstrap.sh</code></a></h3>
+<h3 id="scriptsopsbootstrapsh"><a class="header" href="#scriptsopsbootstrapsh"><code>scripts/ops/bootstrap.sh</code></a></h3>
 <ul>
 <li>Purpose: seed local peer catalog metadata into a set of store directories derived from a path template.</li>
 <li>Intended for:
@@ -234,21 +236,23 @@
 </ul>
 </li>
 <li>Example:
-<pre><code class="language-bash">./scripts/dev/bootstrap.sh --config /etc/nokv/raft_config.json --path-template /data/store-{id}
+<pre><code class="language-bash">./scripts/ops/bootstrap.sh --config /etc/nokv/raft_config.json --path-template /data/store-{id}
 </code></pre>
 </li>
 <li>Notes:
 <ul>
 <li>skips stores that already contain <code>CURRENT</code></li>
 <li>refuses to seed into dirty directories</li>
+<li>this is bootstrap-only; it does not recover runtime topology</li>
+<li>use <code>nokv serve</code> / <code>scripts/ops/serve-store.sh</code> to restart an existing store from the same workdir</li>
 </ul>
 </li>
 </ul>
-<h3 id="scriptsdevserve-storesh"><a class="header" href="#scriptsdevserve-storesh"><code>scripts/dev/serve-store.sh</code></a></h3>
+<h3 id="scriptsopsserve-storesh"><a class="header" href="#scriptsopsserve-storesh"><code>scripts/ops/serve-store.sh</code></a></h3>
 <ul>
-<li>Purpose: convert <code>raft_config.json</code> into a concrete <code>nokv serve</code> invocation for one store.</li>
+<li>Purpose: thin wrapper around <code>nokv serve</code> for one store.</li>
 <li>Example:
-<pre><code class="language-bash">./scripts/dev/serve-store.sh \
+<pre><code class="language-bash">./scripts/ops/serve-store.sh \
   --config ./raft_config.example.json \
   --store-id 1 \
   --workdir ./artifacts/cluster/store-1 \
@@ -257,13 +261,17 @@
 </li>
 <li>Notes:
 <ul>
-<li>resolves peer transport addresses from config</li>
-<li>resolves Coordinator address from config unless <code>--coordinator-addr</code> overrides it</li>
+<li>resolves store listen/workdir/Coordinator defaults through <code>nokv serve --config</code></li>
+<li>remote peer recovery comes from <code>raftstore/localmeta</code>; config <code>stores</code> only
+provide <code>storeID -&gt; addr</code></li>
+<li>no longer treats <code>config.regions</code> as restart-time topology truth</li>
+<li>if a static transport override is needed, use <code>--store-addr &lt;store-id&gt;=&lt;addr&gt;</code>
+rather than a peer-id keyed mapping</li>
 <li><code>--scope docker</code> selects container-friendly addresses</li>
 </ul>
 </li>
 </ul>
-<h2 id="operator-script"><a class="header" href="#operator-script">Operator Script</a></h2>
+<h2 id="migration-workflow"><a class="header" href="#migration-workflow">Migration Workflow</a></h2>
 <h3 id="scriptsopsmigrate-clustersh"><a class="header" href="#scriptsopsmigrate-clustersh"><code>scripts/ops/migrate-cluster.sh</code></a></h3>
 <ul>
 <li>Purpose: one-shot local operator wrapper for the standalone-to-cluster migration path.</li>
@@ -350,6 +358,7 @@ go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedP
 <h2 id="relationship-with-nokv-config"><a class="header" href="#relationship-with-nokv-config">Relationship with <code>nokv-config</code></a></h2>
 <ul>
 <li><code>nokv-config stores</code> / <code>regions</code> / <code>coordinator</code> remain the structured topology source for shell scripts.</li>
+<li><code>config.regions</code> remain bootstrap/deployment metadata, not restart-time peer truth.</li>
 <li><code>nokv-config catalog</code> writes Region metadata into the local peer catalog.</li>
 <li><code>cmd/nokv-redis</code> uses the same <code>raft_config.json</code>, so local scripts and Redis gateway stay aligned.</li>
 <li>Go tools can import <code>github.com/feichai0017/NoKV/config</code> and call <code>config.LoadFile</code> / <code>Validate</code> directly.</li>

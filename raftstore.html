@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b3ee6b57.js";
+            window.path_to_searchindex_js = "searchindex-01a1bb3c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b4bd04d1.js"></script>
+        <script src="toc-b8f8ac3b.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -183,6 +183,9 @@
 <blockquote>
 <p>Read this page if you want to answer one question precisely: which package owns which responsibility once NoKV leaves standalone mode and becomes a cluster.</p>
 </blockquote>
+<p>For the protocol line that now minimally formalizes <code>raftstore</code> request
+admission, transition execution, publish boundaries, and restart state, read
+<code>docs/control_and_execution_protocols.md</code> together with this file.</p>
 <h2 id="reader-map"><a class="header" href="#reader-map">Reader Map</a></h2>
 <ul>
 <li>Start with section 1 if you want package ownership.</li>
@@ -256,7 +259,7 @@
 <li>
 <p><strong>Peer connectivity</strong></p>
 <ul>
-<li><code>transport.SetPeer(peerID, addr)</code> defines outbound raft connections; the CLI exposes it via <code>--peer peerID=addr</code>.</li>
+<li><code>transport.SetPeer(peerID, addr)</code> defines outbound raft connections; the CLI resolves those peer endpoints from local metadata plus stable <code>storeID -&gt; addr</code> mapping.</li>
 <li>Additional services can reuse the same gRPC server through <code>transport.WithServerRegistrar</code>.</li>
 </ul>
 </li>
@@ -476,6 +479,21 @@ linearizability barrier (<code>LinearizableRead</code> + <code>WaitApplied</code
 <li>Command payload format on apply path is strict <code>RaftCmdRequest</code> encoding.</li>
 <li>Region metadata (range/epoch/peers) is validated before both read and write
 command execution.</li>
+<li>The store now records explicit execution-plane admission outcomes for read,
+write, and topology entry points.</li>
+<li>Topology transitions now record explicit local execution outcome plus publish
+boundary state (<code>planned published</code>, <code>terminal pending</code>, <code>terminal published</code>,
+<code>terminal failed</code>).</li>
+<li>Terminal publish failure is retained as visible retry state rather than being
+silently dropped.</li>
+<li>Restart posture is now exposed explicitly from local durable recovery state
+(<code>raftstore/localmeta</code> + raft replay pointers).</li>
+<li><code>raftstore/admin</code> now exposes execution-plane diagnostics through
+<code>ExecutionStatus</code> for last admission, topology lifecycle, and restart
+posture.</li>
+<li><code>nokv execution --addr &lt;store-admin-addr&gt;</code> now queries that diagnostics
+surface directly from the CLI, with optional <code>--region</code> and <code>--transition</code>
+filters on topology output.</li>
 <li><code>store.RegionMetrics</code> + <code>StatsSnapshot</code> provide runtime visibility for region
 count, backlog, and scheduling health.</li>
 </ul>

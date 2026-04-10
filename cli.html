@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b3ee6b57.js";
+            window.path_to_searchindex_js = "searchindex-01a1bb3c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b4bd04d1.js"></script>
+        <script src="toc-b8f8ac3b.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -296,12 +296,20 @@ no longer reports it as hosted</li>
 <h3 id="nokv-serve"><a class="header" href="#nokv-serve"><code>nokv serve</code></a></h3>
 <ul>
 <li>Starts NoKV gRPC service backed by local <code>raftstore</code></li>
-<li>Requires <code>--workdir</code>, <code>--store-id</code>, and <code>--coordinator-addr</code></li>
+<li>Requires <code>--store-id</code></li>
+<li>Also requires enough address metadata to reach the Coordinator and all remote
+raft peers:
+<ul>
+<li>either explicit flags (<code>--workdir</code>, <code>--addr</code>, <code>--coordinator-addr</code>, <code>--store-addr</code>)</li>
+<li>or <code>--config &lt;raft_config.json&gt; --scope host|docker</code></li>
+</ul>
+</li>
 <li>Common flags:
 <ul>
 <li><code>--addr</code> (default <code>127.0.0.1:20160</code>)</li>
+<li><code>--config</code>, <code>--scope host|docker</code></li>
 <li><code>--metrics-addr</code> (optional expvar endpoint, exposes <code>/debug/vars</code>)</li>
-<li><code>--peer peerID=address</code> (repeatable, uses raft peer IDs from region metadata)</li>
+<li><code>--store-addr storeID=address</code> (repeatable override for remote store transport addresses)</li>
 <li><code>--election-tick</code>, <code>--heartbeat-tick</code></li>
 <li><code>--raft-max-msg-bytes</code>, <code>--raft-max-inflight</code></li>
 <li><code>--raft-tick-interval</code>, <code>--raft-debug-log</code></li>
@@ -310,15 +318,25 @@ no longer reports it as hosted</li>
 </ul>
 <p>Example:</p>
 <pre><code class="language-bash">nokv serve \
-  --workdir ./artifacts/cluster/store-1 \
+  --config ./raft_config.example.json \
+  --scope host \
   --store-id 1 \
-  --addr 127.0.0.1:20170 \
-  --coordinator-addr 127.0.0.1:2379 \
-  --peer 201=127.0.0.1:20171 \
-  --peer 301=127.0.0.1:20172
+  --workdir ./artifacts/cluster/store-1
 </code></pre>
-<p>When a store hosts multiple regions, include mappings for every remote peer ID
-reachable from those regions (using <code>scripts/dev/serve-store.sh</code> avoids manual drift).</p>
+<p>Restart semantics:</p>
+<ul>
+<li>hosted peers come from <code>raftstore/localmeta</code>, not <code>raft_config.json</code> region lines</li>
+<li><code>--config</code> is used only to resolve:
+<ul>
+<li>store listen address</li>
+<li>Coordinator address</li>
+<li><code>storeID -&gt; addr</code>, which <code>serve</code> expands into remote <code>peerID -&gt; addr</code></li>
+</ul>
+</li>
+<li><code>--store-id</code> must match the durable workdir identity once the workdir has been used</li>
+<li><code>--store-addr</code> is only an exceptional static override; it is keyed by stable
+<code>storeID</code>, not by mutable runtime <code>peerID</code></li>
+</ul>
 <h3 id="nokv-coordinator"><a class="header" href="#nokv-coordinator"><code>nokv coordinator</code></a></h3>
 <ul>
 <li>Starts the Coordinator gRPC service used by distributed mode.</li>

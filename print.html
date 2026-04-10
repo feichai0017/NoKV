@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b3ee6b57.js";
+            window.path_to_searchindex_js = "searchindex-01a1bb3c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b4bd04d1.js"></script>
+        <script src="toc-b8f8ac3b.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -691,6 +691,17 @@ graph TD
 <pre><code class="language-bash">./scripts/dev/cluster.sh --config ./raft_config.example.json
 </code></pre>
 <p>The launcher stays attached, streams Coordinator/store logs to the terminal, and also writes them under <code>./artifacts/cluster/</code>.</p>
+<p>If you stop one store and want to restart it later, restart it against the same
+workdir:</p>
+<pre><code class="language-bash">./scripts/ops/serve-store.sh \
+  --config ./raft_config.example.json \
+  --store-id 1 \
+  --workdir ./artifacts/cluster/store-1
+</code></pre>
+<p>On restart, NoKV recovers hosted peers from local metadata in the store workdir.
+The config file is only used to resolve store and Coordinator addresses.
+Do not rerun <code>scripts/ops/bootstrap.sh</code> or treat <code>scripts/dev/cluster.sh</code> as the
+restart path for an already-running store.</p>
 <p>Start the Redis-compatible gateway in another shell:</p>
 <pre><code class="language-bash">go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --raft-config raft_config.example.json
 </code></pre>
@@ -1707,12 +1718,13 @@ defer db.Close()
 <p>Notes:</p>
 <ul>
 <li><code>NewDefaultOptions()</code> populates concrete compaction/ingest defaults up front.
-<code>Open()</code> only backfills zero-valued legacy fields for compatibility, then the
-DB and LSM layers consume the resolved values directly.</li>
+<code>Open()</code> resolves constructor-owned defaults once, then the DB and LSM layers
+consume the resolved values directly.</li>
 <li><code>WriteBatchMaxCount</code>, <code>WriteBatchMaxSize</code>, <code>MaxBatchCount</code>, <code>MaxBatchSize</code>,
 <code>WriteThrottleMinRate</code>, <code>WriteThrottleMaxRate</code>, and <code>WALBufferSize</code> now also
-expose concrete defaults through <code>NewDefaultOptions()</code>. Zero remains a legacy
-unset value only for manually constructed configs.</li>
+expose concrete defaults through <code>NewDefaultOptions()</code>. If you construct
+<code>Options</code> manually, leaving these fields at zero lets <code>Open()</code> resolve the
+constructor defaults.</li>
 <li>Batch knobs are split by owner:
 <ul>
 <li><code>WriteBatchMaxCount</code> / <code>WriteBatchMaxSize</code> bound commit-worker request
@@ -1943,12 +1955,20 @@ no longer reports it as hosted</li>
 <h3 id="nokv-serve"><a class="header" href="#nokv-serve"><code>nokv serve</code></a></h3>
 <ul>
 <li>Starts NoKV gRPC service backed by local <code>raftstore</code></li>
-<li>Requires <code>--workdir</code>, <code>--store-id</code>, and <code>--coordinator-addr</code></li>
+<li>Requires <code>--store-id</code></li>
+<li>Also requires enough address metadata to reach the Coordinator and all remote
+raft peers:
+<ul>
+<li>either explicit flags (<code>--workdir</code>, <code>--addr</code>, <code>--coordinator-addr</code>, <code>--store-addr</code>)</li>
+<li>or <code>--config &lt;raft_config.json&gt; --scope host|docker</code></li>
+</ul>
+</li>
 <li>Common flags:
 <ul>
 <li><code>--addr</code> (default <code>127.0.0.1:20160</code>)</li>
+<li><code>--config</code>, <code>--scope host|docker</code></li>
 <li><code>--metrics-addr</code> (optional expvar endpoint, exposes <code>/debug/vars</code>)</li>
-<li><code>--peer peerID=address</code> (repeatable, uses raft peer IDs from region metadata)</li>
+<li><code>--store-addr storeID=address</code> (repeatable override for remote store transport addresses)</li>
 <li><code>--election-tick</code>, <code>--heartbeat-tick</code></li>
 <li><code>--raft-max-msg-bytes</code>, <code>--raft-max-inflight</code></li>
 <li><code>--raft-tick-interval</code>, <code>--raft-debug-log</code></li>
@@ -1957,15 +1977,25 @@ no longer reports it as hosted</li>
 </ul>
 <p>Example:</p>
 <pre><code class="language-bash">nokv serve \
-  --workdir ./artifacts/cluster/store-1 \
+  --config ./raft_config.example.json \
+  --scope host \
   --store-id 1 \
-  --addr 127.0.0.1:20170 \
-  --coordinator-addr 127.0.0.1:2379 \
-  --peer 201=127.0.0.1:20171 \
-  --peer 301=127.0.0.1:20172
+  --workdir ./artifacts/cluster/store-1
 </code></pre>
-<p>When a store hosts multiple regions, include mappings for every remote peer ID
-reachable from those regions (using <code>scripts/dev/serve-store.sh</code> avoids manual drift).</p>
+<p>Restart semantics:</p>
+<ul>
+<li>hosted peers come from <code>raftstore/localmeta</code>, not <code>raft_config.json</code> region lines</li>
+<li><code>--config</code> is used only to resolve:
+<ul>
+<li>store listen address</li>
+<li>Coordinator address</li>
+<li><code>storeID -&gt; addr</code>, which <code>serve</code> expands into remote <code>peerID -&gt; addr</code></li>
+</ul>
+</li>
+<li><code>--store-id</code> must match the durable workdir identity once the workdir has been used</li>
+<li><code>--store-addr</code> is only an exceptional static override; it is keyed by stable
+<code>storeID</code>, not by mutable runtime <code>peerID</code></li>
+</ul>
 <h3 id="nokv-coordinator"><a class="header" href="#nokv-coordinator"><code>nokv coordinator</code></a></h3>
 <ul>
 <li>Starts the Coordinator gRPC service used by distributed mode.</li>
@@ -3499,6 +3529,9 @@ is not present.</li>
 <blockquote>
 <p>Read this page if you want to answer one question precisely: which package owns which responsibility once NoKV leaves standalone mode and becomes a cluster.</p>
 </blockquote>
+<p>For the protocol line that now minimally formalizes <code>raftstore</code> request
+admission, transition execution, publish boundaries, and restart state, read
+<code>docs/control_and_execution_protocols.md</code> together with this file.</p>
 <h2 id="reader-map-1"><a class="header" href="#reader-map-1">Reader Map</a></h2>
 <ul>
 <li>Start with section 1 if you want package ownership.</li>
@@ -3572,7 +3605,7 @@ is not present.</li>
 <li>
 <p><strong>Peer connectivity</strong></p>
 <ul>
-<li><code>transport.SetPeer(peerID, addr)</code> defines outbound raft connections; the CLI exposes it via <code>--peer peerID=addr</code>.</li>
+<li><code>transport.SetPeer(peerID, addr)</code> defines outbound raft connections; the CLI resolves those peer endpoints from local metadata plus stable <code>storeID -&gt; addr</code> mapping.</li>
 <li>Additional services can reuse the same gRPC server through <code>transport.WithServerRegistrar</code>.</li>
 </ul>
 </li>
@@ -3792,6 +3825,21 @@ linearizability barrier (<code>LinearizableRead</code> + <code>WaitApplied</code
 <li>Command payload format on apply path is strict <code>RaftCmdRequest</code> encoding.</li>
 <li>Region metadata (range/epoch/peers) is validated before both read and write
 command execution.</li>
+<li>The store now records explicit execution-plane admission outcomes for read,
+write, and topology entry points.</li>
+<li>Topology transitions now record explicit local execution outcome plus publish
+boundary state (<code>planned published</code>, <code>terminal pending</code>, <code>terminal published</code>,
+<code>terminal failed</code>).</li>
+<li>Terminal publish failure is retained as visible retry state rather than being
+silently dropped.</li>
+<li>Restart posture is now exposed explicitly from local durable recovery state
+(<code>raftstore/localmeta</code> + raft replay pointers).</li>
+<li><code>raftstore/admin</code> now exposes execution-plane diagnostics through
+<code>ExecutionStatus</code> for last admission, topology lifecycle, and restart
+posture.</li>
+<li><code>nokv execution --addr &lt;store-admin-addr&gt;</code> now queries that diagnostics
+surface directly from the CLI, with optional <code>--region</code> and <code>--transition</code>
+filters on topology output.</li>
 <li><code>store.RegionMetrics</code> + <code>StatsSnapshot</code> provide runtime visibility for region
 count, backlog, and scheduling health.</li>
 </ul>
@@ -3831,6 +3879,27 @@ truth. Durable truth lives in <code>meta/root</code>.</p>
 <li><code>coordinator/client</code>: client wrapper used by store/gateway.</li>
 <li><code>coordinator/adapter</code>: scheduler sink that forwards heartbeats into Coordinator.</li>
 </ul>
+<p>For the next-stage protocol direction on both the control plane and the paired
+execution plane, see <code>docs/control_and_execution_protocols.md</code>.</p>
+<h3 id="control-plane-protocol-status"><a class="header" href="#control-plane-protocol-status">Control-Plane Protocol Status</a></h3>
+<p>Coordinator now uses a <strong>minimal formal control-plane protocol v1</strong> for its key
+route and transition surfaces.</p>
+<p>Already in active use:</p>
+<ul>
+<li>route-read <code>Freshness</code></li>
+<li>rooted token serving metadata</li>
+<li>rooted lag exposure</li>
+<li><code>DegradedMode</code></li>
+<li><code>CatchUpState</code></li>
+<li><code>TransitionID</code></li>
+<li>publish-time lifecycle assessment on <code>PublishRootEvent</code></li>
+</ul>
+<p>This means Coordinator no longer exposes only best-effort implementation
+behavior. It now returns explicit protocol state that callers, tests, and docs
+can rely on.</p>
+<p>The current protocol is intentionally minimal. It does not yet expose the full
+future runtime/operator model such as stalled transitions or richer catch-up
+actions.</p>
 <hr>
 <h2 id="3-mode-model"><a class="header" href="#3-mode-model">3. Mode Model</a></h2>
 <p>NoKV currently has only two supported product modes:</p>
@@ -3980,6 +4049,42 @@ driven.</p>
 <li><code>--coordinator-addr</code> is required.</li>
 <li>Runtime routing/scheduling control-plane state is sourced from Coordinator.</li>
 </ul>
+<p>For restart and recovery, <code>nokv serve</code> intentionally separates runtime truth from
+deployment metadata:</p>
+<ul>
+<li>hosted region/peer truth comes from <code>raftstore/localmeta</code></li>
+<li>raft durable progress comes from the store workdir (<code>WAL</code>, raft log, local metadata)</li>
+<li><code>raft_config.json</code> is used only to resolve static addresses (<code>Coordinator</code>,
+<code>store listen</code>, <code>store transport</code>)</li>
+</ul>
+<p>This means:</p>
+<ul>
+<li>bootstrap-time <code>config.regions</code> are not replayed during restart</li>
+<li>runtime split/merge/peer-change results continue to come back from local recovery state</li>
+<li><code>--store-addr</code> is an exceptional static address override, not the normal restart path</li>
+<li><code>--store-id</code> must match the durable workdir identity when the workdir was already used</li>
+</ul>
+<p>The recommended restart shape is therefore:</p>
+<pre><code class="language-bash">nokv serve \
+  --config ./raft_config.example.json \
+  --scope host \
+  --store-id 1 \
+  --workdir ./artifacts/cluster/store-1
+</code></pre>
+<p><code>serve</code> will:</p>
+<ol>
+<li>load the local peer catalog from the store workdir</li>
+<li>derive the current remote peer set from local metadata</li>
+<li>use config <code>stores</code> only to map <code>storeID -&gt; addr</code></li>
+</ol>
+<p>If static transport overrides are needed, prefer stable store identities:</p>
+<pre><code class="language-bash">nokv serve \
+  --config ./raft_config.example.json \
+  --scope host \
+  --store-id 1 \
+  --workdir ./artifacts/cluster/store-1 \
+  --store-addr 2=10.0.0.12:20160
+</code></pre>
 <p>Related CLI behavior:</p>
 <ul>
 <li>Inspect control-plane state through Coordinator APIs/metrics.</li>
@@ -4016,6 +4121,15 @@ clients are expected to retry against another Coordinator endpoint.</p>
 <p>Follower reads are driven by a rooted watch-first tail subscription, with
 explicit refresh/reload as fallback into <code>coordinator/catalog.Cluster</code>. They are expected
 to be shortly stale rather than linearly consistent.</p>
+<p>For <code>GetRegionByKey</code>, that follower-service behavior is now explicit in the
+protocol surface:</p>
+<ul>
+<li>callers can request <code>Freshness</code></li>
+<li>responses include rooted token metadata</li>
+<li>responses disclose <code>DegradedMode</code> and <code>CatchUpState</code></li>
+<li>bounded-freshness reads may be rejected if rooted lag exceeds the requested
+limit</li>
+</ul>
 <h3 id="client-behavior"><a class="header" href="#client-behavior">Client behavior</a></h3>
 <p><code>coordinator/client</code> accepts multiple Coordinator addresses. Write RPCs retry across Coordinator nodes and
 converge on the rooted leader. Read RPCs may use any available Coordinator endpoint.</p>
@@ -4101,6 +4215,1104 @@ deliberately small HA surface:
 </ul>
 <p>These are deliberate scope limits for a fast-moving experimental platform that
 keeps the rooted truth surface small.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="control-plane-and-execution-plane-protocols"><a class="header" href="#control-plane-and-execution-plane-protocols">Control-Plane and Execution-Plane Protocols</a></h1>
+<p>This note defines NoKV’s protocol line for:</p>
+<ul>
+<li>the <code>control plane</code></li>
+<li>the <code>execution plane</code></li>
+</ul>
+<p>and the next-stage evolution around them.</p>
+<p>The current implementation status is still asymmetric:</p>
+<ul>
+<li><code>control-plane protocol v1</code> is already partially implemented and exposed</li>
+<li><code>execution-plane protocol v1</code> now has a minimal store-local implementation
+and a minimal admin diagnostics API surface</li>
+</ul>
+<p>The point of this document is to keep those two lines coordinated instead of
+letting them drift into separate, implicit rule sets.</p>
+<p>The control plane focuses on the contract between:</p>
+<ul>
+<li><code>meta/root</code></li>
+<li><code>coordinator</code></li>
+</ul>
+<p>The execution plane focuses on the contract between:</p>
+<ul>
+<li><code>coordinator</code></li>
+<li><code>raftstore</code></li>
+<li>local durable state (<code>raftstore/localmeta</code>, raft log, restart replay)</li>
+</ul>
+<p>The purpose of this document is not to replace Raft or redesign the data plane.
+The purpose is to make NoKV’s existing cross-plane behavior explicit, testable,
+and evolvable.</p>
+<p>The control plane is protocolized around four ideas:</p>
+<ul>
+<li><code>Freshness</code></li>
+<li><code>CatchUp</code></li>
+<li><code>Transition</code></li>
+<li><code>DegradedMode</code></li>
+</ul>
+<p>These four ideas already existed in partial form inside the implementation.
+The current work turns them into a stable vocabulary, explicit invariants, and a
+clear rollout line.</p>
+<p>The execution plane is protocolized around four matching ideas:</p>
+<ul>
+<li><code>Admission</code></li>
+<li><code>ExecutionTarget</code></li>
+<li><code>PublishBoundary</code></li>
+<li><code>RestartState</code></li>
+</ul>
+<hr>
+<h2 id="0-current-status"><a class="header" href="#0-current-status">0. Current Status</a></h2>
+<p>The control plane now has a <strong>minimal implemented v1</strong>.</p>
+<p>Already implemented and exposed through <code>pb/coordinator/coordinator.proto</code>,
+<code>coordinator/server</code>, <code>coordinator/storage</code>, and tests:</p>
+<ul>
+<li>route-read <code>Freshness</code></li>
+<li><code>RootToken</code></li>
+<li><code>root_lag</code></li>
+<li><code>DegradedMode</code></li>
+<li><code>CatchUpState</code></li>
+<li><code>TransitionID</code></li>
+<li><code>PublishRootEventResponse.assessment</code> as a <strong>pre-persist lifecycle assessment</strong></li>
+</ul>
+<p>This means the protocol is no longer only a design direction. It is already the
+formal serving contract for key Coordinator APIs.</p>
+<p>What is <strong>not</strong> yet fully protocolized:</p>
+<ul>
+<li>richer transition phases such as <code>Published</code> / <code>Stalled</code></li>
+<li>a fuller catch-up action surface exposed through API</li>
+<li>automatic recovery policy derived from protocol state</li>
+<li>broad client-side policy that consumes every protocol field</li>
+</ul>
+<p>So the right description today is:</p>
+<blockquote>
+<p>control-plane protocol v1 is implemented and in use, while later runtime and
+operator semantics remain future work.</p>
+</blockquote>
+<p>The execution plane is in a different state.</p>
+<p>Today, <code>raftstore</code> has a <strong>minimal implemented v1</strong> inside <code>raftstore/store</code>.</p>
+<p>Already implemented and exercised through store-local types, <code>raftstore/admin</code>,
+runtime state, and tests:</p>
+<ul>
+<li>explicit <code>Admission</code> classes and reasons on read / write / topology entry
+points</li>
+<li>explicit topology <code>ExecutionOutcome</code></li>
+<li>explicit topology <code>PublishState</code></li>
+<li>explicit <code>RestartState</code> derived from <code>raftstore/localmeta</code> + raft replay
+pointers</li>
+<li>terminal publish failures retained as visible retry state instead of silent
+drop</li>
+<li>admin diagnostics exposure through <code>pb/admin/admin.proto</code> <code>ExecutionStatus</code></li>
+</ul>
+<p>The execution plane still keeps many behaviors as implementation mechanics:</p>
+<ul>
+<li>request validation and routing</li>
+<li>local leader admission</li>
+<li>context propagation</li>
+<li>planned truth -&gt; execute -&gt; terminal truth</li>
+<li>local restart through <code>raftstore/localmeta</code> + raft durable state</li>
+<li>degraded local scheduler behavior</li>
+</ul>
+<p>The current landing is still mostly store-local and spread across:</p>
+<ul>
+<li><code>raftstore/store</code></li>
+<li><code>raftstore/peer</code></li>
+<li><code>raftstore/engine</code></li>
+<li><code>raftstore/localmeta</code></li>
+</ul>
+<p>So the right description there is:</p>
+<blockquote>
+<p>execution-plane protocol v1 now exists as a minimal named runtime contract,
+with store-local state and admin-visible diagnostics, while broader metrics,
+policy, and richer executor states remain future work.</p>
+</blockquote>
+<hr>
+<h2 id="1-intent"><a class="header" href="#1-intent">1. Intent</a></h2>
+<p>NoKV already has the right building blocks:</p>
+<ul>
+<li>rooted truth events</li>
+<li>checkpoint + committed tail</li>
+<li>watch-first tail subscription</li>
+<li>rebuildable <code>coordinator/catalog</code></li>
+<li>explicit planned and terminal topology events</li>
+</ul>
+<p>Today, these pieces mostly exist as implementation mechanics.
+The control plane works, but many important semantics are still implicit:</p>
+<ul>
+<li>when a follower read is fresh enough</li>
+<li>when a follower must reload</li>
+<li>when retained tail catch-up is no longer enough</li>
+<li>what phase a topology change is in</li>
+<li>what “degraded” actually means to callers</li>
+</ul>
+<p>The design goal is to keep turning these implicit behaviors into a formal
+protocol.</p>
+<p>That protocol should be:</p>
+<ul>
+<li>small</li>
+<li>explicit</li>
+<li>observable</li>
+<li>testable</li>
+<li>compatible with the current architecture</li>
+</ul>
+<hr>
+<h2 id="2-scope"><a class="header" href="#2-scope">2. Scope</a></h2>
+<p>This document covers both planes, but not at the same implementation depth.</p>
+<p>For the control plane, it defines the behavior of:</p>
+<ul>
+<li>rooted truth consumption</li>
+<li>control-plane view freshness</li>
+<li>rooted catch-up progression</li>
+<li>topology transition lifecycle</li>
+<li>degraded operating modes</li>
+</ul>
+<p>For the execution plane, it defines the protocol direction for:</p>
+<ul>
+<li>request admission</li>
+<li>transition execution</li>
+<li>terminal truth publication</li>
+<li>restart and local recovery alignment</li>
+<li>degraded local behavior around scheduler / queue / publish boundaries</li>
+</ul>
+<p>It does <strong>not</strong> redefine:</p>
+<ul>
+<li>Raft replication</li>
+<li>Percolator / 2PC transaction semantics</li>
+<li>store-local recovery metadata</li>
+<li>storage-engine internals unrelated to distributed lifecycle</li>
+</ul>
+<p>This document should be read as two linked contracts:</p>
+<blockquote>
+<p>control plane = durable truth + materialized view + serving contract</p>
+</blockquote>
+<blockquote>
+<p>execution plane = admitted work + local execution + publish/restart contract</p>
+</blockquote>
+<hr>
+<h2 id="3-protocol-objects"><a class="header" href="#3-protocol-objects">3. Protocol Objects</a></h2>
+<p>The naming set should remain compact, stable, and precise.</p>
+<h3 id="31-roottoken"><a class="header" href="#31-roottoken">3.1 RootToken</a></h3>
+<p><code>RootToken</code> is the rooted truth position already incorporated by some materialized view.</p>
+<p>It is the control-plane equivalent of:</p>
+<ul>
+<li>“what truth have I already consumed?”</li>
+</ul>
+<p>It should be treated as:</p>
+<ul>
+<li>monotonic</li>
+<li>comparable</li>
+<li>portable across control-plane nodes</li>
+</ul>
+<p><code>RootToken</code> is not just an internal storage cursor.
+It is the anchor for:</p>
+<ul>
+<li>freshness</li>
+<li>catch-up state</li>
+<li>read eligibility</li>
+<li>transition causality</li>
+</ul>
+<h3 id="32-freshness"><a class="header" href="#32-freshness">3.2 Freshness</a></h3>
+<p><code>Freshness</code> is the serving contract attached to a read.</p>
+<p>It answers:</p>
+<ul>
+<li>how fresh did the caller ask for?</li>
+<li>how fresh was the returned answer?</li>
+</ul>
+<h3 id="33-catchupstate"><a class="header" href="#33-catchupstate">3.3 CatchUpState</a></h3>
+<p><code>CatchUpState</code> describes how far one Coordinator node has converged on rooted truth.</p>
+<p>It answers:</p>
+<ul>
+<li>can this node serve route reads?</li>
+<li>can it satisfy bounded-freshness reads?</li>
+<li>must it reload?</li>
+<li>must it install bootstrap?</li>
+</ul>
+<h3 id="34-transition"><a class="header" href="#34-transition">3.4 Transition</a></h3>
+<p><code>Transition</code> is one rooted topology change that moves through a formal lifecycle.</p>
+<p>Examples:</p>
+<ul>
+<li>peer addition</li>
+<li>peer removal</li>
+<li>region split</li>
+<li>region merge</li>
+<li>region tombstone</li>
+</ul>
+<p><code>Transition</code> is not just a single event.
+It is a causally tracked change with:</p>
+<ul>
+<li>identity</li>
+<li>source truth position</li>
+<li>phase</li>
+<li>progress</li>
+</ul>
+<h3 id="35-degradedmode"><a class="header" href="#35-degradedmode">3.5 DegradedMode</a></h3>
+<p><code>DegradedMode</code> is the externally visible restriction level of the control plane.</p>
+<p>It answers:</p>
+<ul>
+<li>what kind of reads may still be served?</li>
+<li>are rooted writes currently allowed?</li>
+<li>should clients retry elsewhere?</li>
+<li>is the node usable only as a stale view?</li>
+</ul>
+<hr>
+<h2 id="4-naming-set"><a class="header" href="#4-naming-set">4. Naming Set</a></h2>
+<p>The protocol should use one stable vocabulary across:</p>
+<ul>
+<li>API</li>
+<li>code</li>
+<li>logs</li>
+<li>metrics</li>
+<li>tests</li>
+<li>docs</li>
+</ul>
+<h3 id="41-read-classes"><a class="header" href="#41-read-classes">4.1 Read classes</a></h3>
+<ul>
+<li><code>Strong</code>
+<ul>
+<li>requires leader-grade freshness</li>
+</ul>
+</li>
+<li><code>Bounded</code>
+<ul>
+<li>allows follower service within explicit lag limits</li>
+</ul>
+</li>
+<li><code>BestEffort</code>
+<ul>
+<li>allows stale cache service</li>
+</ul>
+</li>
+</ul>
+<p>These names are short and carry clear serving intent.</p>
+<h3 id="42-catch-up-actions"><a class="header" href="#42-catch-up-actions">4.2 Catch-up actions</a></h3>
+<ul>
+<li><code>Reload</code>
+<ul>
+<li>rebuild catalog from rooted storage</li>
+</ul>
+</li>
+<li><code>Advance</code>
+<ul>
+<li>acknowledge rooted tail progress without a full rebuild</li>
+</ul>
+</li>
+<li><code>Bootstrap</code>
+<ul>
+<li>install a fresh checkpoint because retained tail is insufficient</li>
+</ul>
+</li>
+<li><code>Reject</code>
+<ul>
+<li>deny freshness-sensitive reads until convergence improves</li>
+</ul>
+</li>
+</ul>
+<h3 id="43-catch-up-states"><a class="header" href="#43-catch-up-states">4.3 Catch-up states</a></h3>
+<ul>
+<li><code>Fresh</code></li>
+<li><code>Lagging</code></li>
+<li><code>BootstrapRequired</code></li>
+<li><code>Recovering</code></li>
+<li><code>Unavailable</code></li>
+</ul>
+<h3 id="44-degraded-modes"><a class="header" href="#44-degraded-modes">4.4 Degraded modes</a></h3>
+<ul>
+<li><code>Healthy</code></li>
+<li><code>CoordinatorDegraded</code></li>
+<li><code>RootLagging</code></li>
+<li><code>RootUnavailable</code></li>
+<li><code>ViewOnly</code></li>
+</ul>
+<p><code>ViewOnly</code> is deliberately chosen over more vague names like <code>ExecutionOnly</code>.
+This section only defines control-plane behavior, so the right question is:</p>
+<blockquote>
+<p>can this node still expose a stale view?</p>
+</blockquote>
+<hr>
+<h2 id="5-freshness-contract"><a class="header" href="#5-freshness-contract">5. Freshness Contract</a></h2>
+<p>The control plane should stop treating all successful reads as equivalent.</p>
+<p>Every control-plane read should:</p>
+<ol>
+<li>declare the requested freshness class</li>
+<li>optionally declare a rooted lower bound</li>
+<li>receive an explicit served freshness result</li>
+</ol>
+<h3 id="51-why-this-matters"><a class="header" href="#51-why-this-matters">5.1 Why this matters</a></h3>
+<p>Today, follower reads are effectively:</p>
+<blockquote>
+<p>“good enough if the follower recently reloaded and is not too far behind”</p>
+</blockquote>
+<p>That is practical, but not a protocol.</p>
+<p>Without a formal freshness contract:</p>
+<ul>
+<li>clients cannot reason about route read quality</li>
+<li>tests cannot assert serving guarantees precisely</li>
+<li>degraded modes remain guesswork</li>
+<li>control-plane correctness is partly hidden in implementation details</li>
+</ul>
+<h3 id="52-request-fields"><a class="header" href="#52-request-fields">5.2 Request fields</a></h3>
+<p>Control-plane read RPCs should be able to express:</p>
+<ul>
+<li><code>freshness</code>
+<ul>
+<li><code>Strong</code>, <code>Bounded</code>, or <code>BestEffort</code></li>
+</ul>
+</li>
+<li><code>required_root_token</code>
+<ul>
+<li>optional lower bound on rooted truth already incorporated</li>
+</ul>
+</li>
+<li><code>max_root_lag</code>
+<ul>
+<li>optional bound on acceptable rooted lag</li>
+</ul>
+</li>
+</ul>
+<p>Not every caller will need all three fields.
+But the protocol should have room for them.</p>
+<h3 id="53-response-fields"><a class="header" href="#53-response-fields">5.3 Response fields</a></h3>
+<p>Control-plane read RPCs should return:</p>
+<ul>
+<li><code>served_root_token</code></li>
+<li><code>served_freshness</code></li>
+<li><code>served_by_leader</code></li>
+<li><code>degraded_mode</code></li>
+</ul>
+<p>Optional future fields:</p>
+<ul>
+<li><code>root_lag</code></li>
+<li><code>freshness_reason</code></li>
+</ul>
+<h3 id="54-serving-rules"><a class="header" href="#54-serving-rules">5.4 Serving rules</a></h3>
+<h4 id="strong"><a class="header" href="#strong"><code>Strong</code></a></h4>
+<p>Should be served only when:</p>
+<ul>
+<li>the node is rooted leader</li>
+<li>and the serving catalog has incorporated at least the requested <code>RootToken</code></li>
+</ul>
+<p>If this is not true, the server should reject rather than silently downgrade.</p>
+<h4 id="bounded"><a class="header" href="#bounded"><code>Bounded</code></a></h4>
+<p>May be served by a follower when:</p>
+<ul>
+<li>the node is not in <code>BootstrapRequired</code>, <code>Recovering</code>, or <code>Unavailable</code></li>
+<li>and lag is within declared bounds</li>
+<li>and the served token satisfies <code>required_root_token</code> if one was requested</li>
+</ul>
+<p>If bounds cannot be satisfied, the server should reject rather than silently serve stale data.</p>
+<h4 id="besteffort"><a class="header" href="#besteffort"><code>BestEffort</code></a></h4>
+<p>May be served from the current materialized catalog so long as:</p>
+<ul>
+<li>the catalog exists</li>
+<li>the node is not fully unavailable</li>
+</ul>
+<p>This class exists to make stale service explicit instead of accidental.</p>
+<h3 id="55-first-rollout-target"><a class="header" href="#55-first-rollout-target">5.5 First rollout target</a></h3>
+<p>The first RPC that should adopt this contract is:</p>
+<ul>
+<li><code>GetRegionByKey</code></li>
+</ul>
+<p>That gives the system a clear, high-value place to prove the model before wider rollout.</p>
+<hr>
+<h2 id="6-rooted-catch-up-protocol"><a class="header" href="#6-rooted-catch-up-protocol">6. Rooted Catch-Up Protocol</a></h2>
+<p>NoKV already has a good catch-up substrate:</p>
+<ul>
+<li>checkpoint</li>
+<li>committed tail</li>
+<li>watch-first subscription</li>
+<li>bootstrap install when retained tail is insufficient</li>
+</ul>
+<p>The next step is to give that behavior a formal state machine.</p>
+<h3 id="61-catch-up-state-definitions"><a class="header" href="#61-catch-up-state-definitions">6.1 Catch-up state definitions</a></h3>
+<h4 id="fresh"><a class="header" href="#fresh"><code>Fresh</code></a></h4>
+<p>The node’s materialized catalog is sufficiently close to rooted truth to serve:</p>
+<ul>
+<li><code>Bounded</code></li>
+<li><code>BestEffort</code></li>
+</ul>
+<p>and, if leader, possibly <code>Strong</code>.</p>
+<h4 id="lagging"><a class="header" href="#lagging"><code>Lagging</code></a></h4>
+<p>The node is behind, but still within retained-tail recovery range.</p>
+<p>This means:</p>
+<ul>
+<li>further rooted tail observation may repair the gap</li>
+<li>bootstrap install is not yet mandatory</li>
+<li>some bounded reads may need to be rejected</li>
+</ul>
+<h4 id="bootstraprequired"><a class="header" href="#bootstraprequired"><code>BootstrapRequired</code></a></h4>
+<p>The node is too far behind for retained tail replay.</p>
+<p>This means:</p>
+<ul>
+<li>a plain reload from retained tail is not sufficient</li>
+<li>a new checkpoint/bootstrap install is required</li>
+<li>freshness-sensitive reads should be rejected</li>
+</ul>
+<h4 id="recovering"><a class="header" href="#recovering"><code>Recovering</code></a></h4>
+<p>The node is actively rebuilding its materialized control-plane view.</p>
+<p>This means:</p>
+<ul>
+<li>catalog may be in transition</li>
+<li>only explicitly allowed stale reads may be served</li>
+</ul>
+<h4 id="unavailable"><a class="header" href="#unavailable"><code>Unavailable</code></a></h4>
+<p>The node cannot presently produce a valid control-plane view.</p>
+<p>This means:</p>
+<ul>
+<li>no rooted freshness contract can be satisfied</li>
+<li>the server should fail reads except possibly future explicit diagnostics</li>
+</ul>
+<h3 id="62-catch-up-actions"><a class="header" href="#62-catch-up-actions">6.2 Catch-up actions</a></h3>
+<h4 id="reload"><a class="header" href="#reload"><code>Reload</code></a></h4>
+<p>Used when rooted truth advanced in a way that requires rebuilding the materialized catalog.</p>
+<h4 id="advance"><a class="header" href="#advance"><code>Advance</code></a></h4>
+<p>Used when rooted tail progressed, but the catalog does not need a full rebuild.</p>
+<h4 id="bootstrap"><a class="header" href="#bootstrap"><code>Bootstrap</code></a></h4>
+<p>Used when the node must install a checkpoint because retained tail can no longer bridge the gap.</p>
+<h4 id="reject"><a class="header" href="#reject"><code>Reject</code></a></h4>
+<p>Used when the node should refuse freshness-sensitive serving until it converges further.</p>
+<h3 id="63-protocol-outputs"><a class="header" href="#63-protocol-outputs">6.3 Protocol outputs</a></h3>
+<p>The rooted subscription path should eventually expose a structured result like:</p>
+<ul>
+<li><code>root_token_before</code></li>
+<li><code>root_token_after</code></li>
+<li><code>catch_up_state</code></li>
+<li><code>catch_up_action</code></li>
+<li><code>reload_required</code></li>
+<li><code>bootstrap_required</code></li>
+</ul>
+<h3 id="64-why-protocolizing-this-matters"><a class="header" href="#64-why-protocolizing-this-matters">6.4 Why protocolizing this matters</a></h3>
+<p>Without explicit catch-up semantics:</p>
+<ul>
+<li>tests can only assert indirect effects</li>
+<li>follower-read serving policy stays implicit</li>
+<li>degraded-mode logic gets duplicated</li>
+<li>future clients cannot reason about retries properly</li>
+</ul>
+<p>This is one of the strongest places for NoKV to become distinctive.</p>
+<hr>
+<h2 id="7-transition-lifecycle-protocol"><a class="header" href="#7-transition-lifecycle-protocol">7. Transition Lifecycle Protocol</a></h2>
+<p>NoKV already records rooted topology intent and rooted completion.
+That is the start of a lifecycle, not yet the full protocol.</p>
+<p>The next stage is to make transition tracking first-class.</p>
+<h3 id="71-transition-identity"><a class="header" href="#71-transition-identity">7.1 Transition identity</a></h3>
+<p>Every topology transition should have a stable <code>TransitionID</code>.</p>
+<p><code>TransitionID</code> should be:</p>
+<ul>
+<li>deterministic</li>
+<li>durable</li>
+<li>safe to log, surface, and test against</li>
+</ul>
+<p>It should not require callers to infer identity from:</p>
+<ul>
+<li>region ID</li>
+<li>event kind</li>
+<li>timing</li>
+</ul>
+<p>alone.</p>
+<h3 id="72-transition-source"><a class="header" href="#72-transition-source">7.2 Transition source</a></h3>
+<p>Every transition should record:</p>
+<ul>
+<li>source rooted epoch or token</li>
+<li>target topology intent</li>
+<li>the event that created it</li>
+</ul>
+<p>This makes causality explicit:</p>
+<ul>
+<li>what truth position created this transition?</li>
+<li>what later truth position superseded it?</li>
+</ul>
+<h3 id="73-phase-definitions"><a class="header" href="#73-phase-definitions">7.3 Phase definitions</a></h3>
+<h4 id="planned"><a class="header" href="#planned"><code>Planned</code></a></h4>
+<p>The rooted lifecycle assessment says the transition exists as an intended
+topology change, but the operator runtime has not yet admitted it for forward
+progress.</p>
+<p>This is the phase used by:</p>
+<ul>
+<li><code>AssessRootEvent</code></li>
+<li><code>PublishRootEventResponse.assessment</code></li>
+</ul>
+<h4 id="admitted"><a class="header" href="#admitted"><code>Admitted</code></a></h4>
+<p>The rooted transition is currently pending or open, and the operator runtime has
+admitted it for execution progress.</p>
+<p>This is the phase used by:</p>
+<ul>
+<li><code>ListTransitions</code></li>
+</ul>
+<p>It is intentionally runtime-facing. It does not appear in
+<code>PublishRootEventResponse.assessment</code>, because that response reports a
+pre-persist lifecycle assessment rather than post-admission runtime state.</p>
+<h4 id="completed"><a class="header" href="#completed"><code>Completed</code></a></h4>
+<p>The rooted lifecycle says the requested transition target is already satisfied.
+For a plan event, this usually means the requested topology is already present.</p>
+<h4 id="cancelled"><a class="header" href="#cancelled"><code>Cancelled</code></a></h4>
+<p>The rooted lifecycle says the requested transition target was cancelled.</p>
+<h4 id="conflicted"><a class="header" href="#conflicted"><code>Conflicted</code></a></h4>
+<p>The rooted lifecycle says a different pending transition already owns progress
+for the same target.</p>
+<h4 id="superseded"><a class="header" href="#superseded"><code>Superseded</code></a></h4>
+<p>The rooted lifecycle says a newer rooted topology already superseded this
+transition target.</p>
+<h4 id="aborted"><a class="header" href="#aborted"><code>Aborted</code></a></h4>
+<p>The rooted lifecycle says an apply or terminal event does not match the current
+pending rooted target.</p>
+<h3 id="74-why-lifecycle-matters"><a class="header" href="#74-why-lifecycle-matters">7.4 Why lifecycle matters</a></h3>
+<p>A formal lifecycle enables:</p>
+<ul>
+<li>clear scheduling decisions</li>
+<li>proper retry/backoff</li>
+<li>stuck transition recovery</li>
+<li>operator runtime clarity</li>
+<li>precise testing around publish boundaries</li>
+</ul>
+<p>Without it, the system keeps relying on partial signals scattered across:</p>
+<ul>
+<li>rooted events</li>
+<li>in-memory views</li>
+<li>runtime heuristics</li>
+</ul>
+<hr>
+<h2 id="8-degraded-semantics"><a class="header" href="#8-degraded-semantics">8. Degraded Semantics</a></h2>
+<p>NoKV already has some degraded behavior:</p>
+<ul>
+<li>followers serve stale route views</li>
+<li>route cache may survive Coordinator outages</li>
+<li>scheduler paths may degrade</li>
+</ul>
+<p>These behaviors should become explicit protocol states.</p>
+<h3 id="81-mode-definitions"><a class="header" href="#81-mode-definitions">8.1 Mode definitions</a></h3>
+<h4 id="healthy"><a class="header" href="#healthy"><code>Healthy</code></a></h4>
+<p>Normal serving mode.</p>
+<p>Rooted truth, catalog freshness, and serving guarantees are all within policy.</p>
+<h4 id="coordinatordegraded"><a class="header" href="#coordinatordegraded"><code>CoordinatorDegraded</code></a></h4>
+<p>The Coordinator process is alive, but not all control-plane functions can be performed normally.</p>
+<p>Examples:</p>
+<ul>
+<li>partial RPC surface availability</li>
+<li>write restrictions while leadership is unsettled</li>
+</ul>
+<h4 id="rootlagging"><a class="header" href="#rootlagging"><code>RootLagging</code></a></h4>
+<p>Rooted truth exists, but this node’s materialized catalog is behind allowed freshness bounds.</p>
+<p>This is not full unavailability.
+It is a serving restriction mode.</p>
+<h4 id="rootunavailable"><a class="header" href="#rootunavailable"><code>RootUnavailable</code></a></h4>
+<p>The rooted backend cannot currently provide enough truth to support valid control-plane service.</p>
+<p>In this mode:</p>
+<ul>
+<li>truth-sensitive reads fail</li>
+<li>rooted writes fail</li>
+<li>diagnostics may still be exposed</li>
+</ul>
+<h4 id="viewonly"><a class="header" href="#viewonly"><code>ViewOnly</code></a></h4>
+<p>The node may still expose a stale materialized catalog, but cannot satisfy freshness-sensitive contracts.</p>
+<p>This mode is useful because it makes “stale but useful” explicit.</p>
+<h3 id="82-why-this-should-be-formal"><a class="header" href="#82-why-this-should-be-formal">8.2 Why this should be formal</a></h3>
+<p>Without explicit degraded modes, callers only see:</p>
+<ul>
+<li>transport failure</li>
+<li><code>not leader</code></li>
+<li><code>route unavailable</code></li>
+</ul>
+<p>Those errors do not express the actual system state.</p>
+<p>A real degraded protocol lets callers answer:</p>
+<ul>
+<li>retry elsewhere?</li>
+<li>retry later?</li>
+<li>accept stale?</li>
+<li>fail fast?</li>
+</ul>
+<h3 id="83-relationship-to-freshness"><a class="header" href="#83-relationship-to-freshness">8.3 Relationship to freshness</a></h3>
+<p><code>DegradedMode</code> and <code>Freshness</code> are related but not identical.</p>
+<ul>
+<li><code>Freshness</code> is the contract requested and served for one read</li>
+<li><code>DegradedMode</code> is the broader operating condition of the serving node</li>
+</ul>
+<p>A node may be:</p>
+<ul>
+<li><code>Healthy</code> and still reject a <code>Strong</code> read because it is not leader</li>
+<li><code>RootLagging</code> and still serve <code>BestEffort</code></li>
+<li><code>ViewOnly</code> and still serve diagnostics</li>
+</ul>
+<p>That distinction should remain sharp.</p>
+<hr>
+<h2 id="9-api-direction"><a class="header" href="#9-api-direction">9. API Direction</a></h2>
+<p>The most valuable first implementation step is at the Coordinator RPC boundary.</p>
+<h3 id="91-read-side-api-direction"><a class="header" href="#91-read-side-api-direction">9.1 Read-side API direction</a></h3>
+<p>Read APIs should conceptually grow:</p>
+<ul>
+<li><code>freshness</code></li>
+<li><code>required_root_token</code></li>
+<li><code>max_root_lag</code></li>
+</ul>
+<p>Read responses should conceptually expose:</p>
+<ul>
+<li><code>served_root_token</code></li>
+<li><code>served_freshness</code></li>
+<li><code>degraded_mode</code></li>
+<li><code>served_by_leader</code></li>
+</ul>
+<h3 id="92-write-side-api-direction"><a class="header" href="#92-write-side-api-direction">9.2 Write-side API direction</a></h3>
+<p>Leader-only writes should remain leader-only.</p>
+<p>Write requests should continue to require:</p>
+<ul>
+<li>rooted leadership</li>
+<li>expected cluster epoch where applicable</li>
+</ul>
+<p>Write responses should eventually expose:</p>
+<ul>
+<li><code>accepted_root_token</code></li>
+<li><code>transition_id</code> where topology change is involved</li>
+</ul>
+<p>This makes a write result more precise than:</p>
+<ul>
+<li><code>accepted = true</code></li>
+</ul>
+<h3 id="93-diagnostics-api-direction"><a class="header" href="#93-diagnostics-api-direction">9.3 Diagnostics API direction</a></h3>
+<p>The control plane will likely also benefit from an explicit diagnostics surface.</p>
+<p>Conceptually, that should expose:</p>
+<ul>
+<li>current rooted token</li>
+<li>catalog rooted token</li>
+<li>catch-up state</li>
+<li>degraded mode</li>
+<li>leader identity knowledge</li>
+<li>lag estimate</li>
+</ul>
+<p>This may become:</p>
+<ul>
+<li>a dedicated diagnostics RPC</li>
+<li>metrics</li>
+<li>CLI output</li>
+</ul>
+<p>or all three.</p>
+<hr>
+<h2 id="10-storage-and-catalog-direction"><a class="header" href="#10-storage-and-catalog-direction">10. Storage and Catalog Direction</a></h2>
+<p>To support the protocol above, the Coordinator catalog should become rooted-token aware.</p>
+<p>At minimum, the materialized control-plane view should track:</p>
+<ul>
+<li><code>catalog_root_token</code></li>
+<li><code>catalog_updated_at</code></li>
+<li><code>catch_up_state</code></li>
+<li><code>degraded_mode</code></li>
+</ul>
+<p>Optional future metadata:</p>
+<ul>
+<li><code>root_lag</code></li>
+<li><code>last_reload_reason</code></li>
+<li><code>leader_observed</code></li>
+</ul>
+<h3 id="101-ownership-rule"><a class="header" href="#101-ownership-rule">10.1 Ownership rule</a></h3>
+<p>This design does <strong>not</strong> change truth ownership.</p>
+<p>The ownership line remains:</p>
+<ul>
+<li><code>meta/root</code> owns durable truth</li>
+<li><code>coordinator/catalog</code> owns materialized serving state</li>
+</ul>
+<p>The catalog should become more informative, not more authoritative.</p>
+<h3 id="102-materialization-rule"><a class="header" href="#102-materialization-rule">10.2 Materialization rule</a></h3>
+<p>The catalog must remain:</p>
+<ul>
+<li>rebuildable</li>
+<li>discardable</li>
+<li>follower-local</li>
+</ul>
+<p>It should never become a second durable truth source.</p>
+<p>That is a core invariant.</p>
+<hr>
+<h2 id="11-invariants"><a class="header" href="#11-invariants">11. Invariants</a></h2>
+<p>This protocol should preserve the following invariants.</p>
+<h3 id="111-truth-ownership-invariant"><a class="header" href="#111-truth-ownership-invariant">11.1 Truth ownership invariant</a></h3>
+<p>Only <code>meta/root</code> owns durable control-plane truth.</p>
+<h3 id="112-materialization-invariant"><a class="header" href="#112-materialization-invariant">11.2 Materialization invariant</a></h3>
+<p><code>coordinator/catalog</code> is always derived state, never authority.</p>
+<h3 id="113-monotonic-token-invariant"><a class="header" href="#113-monotonic-token-invariant">11.3 Monotonic token invariant</a></h3>
+<p>The materialized rooted token of one node must never move backward.</p>
+<h3 id="114-no-silent-downgrade-invariant"><a class="header" href="#114-no-silent-downgrade-invariant">11.4 No silent downgrade invariant</a></h3>
+<p>If a caller requests <code>Strong</code> or bounded freshness and the node cannot satisfy it,
+the server should reject rather than silently serve <code>BestEffort</code>.</p>
+<h3 id="115-explicit-stale-service-invariant"><a class="header" href="#115-explicit-stale-service-invariant">11.5 Explicit stale service invariant</a></h3>
+<p>If stale service is allowed, the response should say so explicitly.</p>
+<h3 id="116-transition-identity-invariant"><a class="header" href="#116-transition-identity-invariant">11.6 Transition identity invariant</a></h3>
+<p>Every control-plane transition must be referencable as a stable object, not just inferred from event timing.</p>
+<hr>
+<h2 id="12-rollout-state"><a class="header" href="#12-rollout-state">12. Rollout State</a></h2>
+<p>The rollout stays incremental, but the first protocol line is already in use.</p>
+<h3 id="phase-1-freshness"><a class="header" href="#phase-1-freshness">Phase 1: Freshness</a></h3>
+<p>Status: <strong>implemented</strong></p>
+<p>Delivered outcomes:</p>
+<ul>
+<li><code>GetRegionByKey</code> can express requested freshness</li>
+<li>route responses disclose served freshness and rooted token</li>
+<li>follower-read behavior is no longer implicit</li>
+</ul>
+<h3 id="phase-2-catch-up"><a class="header" href="#phase-2-catch-up">Phase 2: Catch-Up</a></h3>
+<p>Status: <strong>minimal v1 implemented</strong></p>
+<p>Delivered outcomes:</p>
+<ul>
+<li><code>CatchUpState</code></li>
+<li>formal bootstrap-required boundary</li>
+<li>rooted lag awareness in serving decisions</li>
+</ul>
+<p>Still open:</p>
+<ul>
+<li>a wider public <code>CatchUpAction</code> surface</li>
+<li>more explicit recovery diagnostics</li>
+</ul>
+<h3 id="phase-3-transition"><a class="header" href="#phase-3-transition">Phase 3: Transition</a></h3>
+<p>Status: <strong>minimal v1 implemented</strong></p>
+<p>Delivered outcomes:</p>
+<ul>
+<li>durable <code>TransitionID</code></li>
+<li>explicit phase semantics across:
+<ul>
+<li><code>ListTransitions</code></li>
+<li><code>AssessRootEvent</code></li>
+<li><code>PublishRootEvent</code></li>
+</ul>
+</li>
+<li>publish-time pre-persist lifecycle assessment</li>
+</ul>
+<p>Still open:</p>
+<ul>
+<li>richer runtime phases</li>
+<li>stuck / timeout diagnosis</li>
+</ul>
+<h3 id="phase-4-degradedmode"><a class="header" href="#phase-4-degradedmode">Phase 4: DegradedMode</a></h3>
+<p>Status: <strong>minimal v1 implemented</strong></p>
+<p>Delivered outcomes:</p>
+<ul>
+<li>explicit degraded semantics in route responses</li>
+<li>route-serving rejection under rooted lag / rooted unavailability</li>
+</ul>
+<p>Still open:</p>
+<ul>
+<li>broader surfacing through metrics and diagnostics</li>
+<li>tighter client retry policy based on degraded state</li>
+</ul>
+<hr>
+<h2 id="13-what-not-to-do"><a class="header" href="#13-what-not-to-do">13. What Not To Do</a></h2>
+<p>The following are intentionally out of scope for this line of work:</p>
+<ul>
+<li>inventing a new general-purpose consensus algorithm</li>
+<li>replacing Raft in the mainline system</li>
+<li>redesigning 2PC before control-plane semantics are explicit</li>
+<li>collapsing rooted truth and catalog into one mixed layer</li>
+<li>treating stale follower service as an undocumented optimization</li>
+</ul>
+<p>NoKV’s control-plane innovation should come from stronger semantics and clearer
+ownership, not from unnecessary reinvention of already mature primitives.</p>
+<hr>
+<h2 id="14-current-practical-naming-guidance"><a class="header" href="#14-current-practical-naming-guidance">14. Current Practical Naming Guidance</a></h2>
+<p>If this protocol starts landing in code, the implementation should prefer:</p>
+<ul>
+<li><code>RootToken</code></li>
+<li><code>Freshness</code></li>
+<li><code>CatchUpState</code></li>
+<li><code>CatchUpAction</code></li>
+<li><code>TransitionID</code></li>
+<li><code>DegradedMode</code></li>
+</ul>
+<p>For execution-plane work, prefer:</p>
+<ul>
+<li><code>Admission</code></li>
+<li><code>ExecutionTarget</code></li>
+<li><code>ExecutionOutcome</code></li>
+<li><code>PublishState</code></li>
+<li><code>RestartState</code></li>
+</ul>
+<p>Avoid reintroducing weaker names like:</p>
+<ul>
+<li><code>state kind</code></li>
+<li><code>stale mode</code></li>
+<li><code>sync status</code></li>
+<li><code>reload reason</code> as the primary protocol object</li>
+</ul>
+<p>Those may still exist as helper fields, but the public model should stay anchored
+to the smaller protocol vocabulary above.</p>
+<hr>
+<h2 id="15-execution-plane-protocol"><a class="header" href="#15-execution-plane-protocol">15. Execution-Plane Protocol</a></h2>
+<p>The execution plane is the contract between:</p>
+<ul>
+<li><code>raftstore</code></li>
+<li>local leader peer runtime</li>
+<li>local durable recovery state</li>
+<li>the control-plane publish boundary</li>
+</ul>
+<p>Its job is different from the control plane.</p>
+<p>The control plane answers:</p>
+<ul>
+<li>what topology truth exists?</li>
+<li>how fresh is the served view?</li>
+<li>what transition lifecycle is visible globally?</li>
+</ul>
+<p>The execution plane answers:</p>
+<ul>
+<li>may this request enter local execution now?</li>
+<li>what target is being executed?</li>
+<li>how far has local execution progressed?</li>
+<li>has terminal truth been published yet?</li>
+<li>what state is safe to recover after restart?</li>
+</ul>
+<h3 id="151-why-this-matters"><a class="header" href="#151-why-this-matters">15.1 Why this matters</a></h3>
+<p>Without an explicit execution-plane protocol, the system keeps important
+distributed safety semantics hidden in code paths such as:</p>
+<ul>
+<li>request validation and cancellation</li>
+<li>queue admission and local degradation</li>
+<li>planned truth publication before local execution</li>
+<li>terminal truth publication after local apply</li>
+<li>restart reconciliation between <code>localmeta</code>, raft durable state, and Coordinator</li>
+</ul>
+<p>Those are not low-level implementation details. They are correctness
+boundaries.</p>
+<h3 id="152-protocol-objects"><a class="header" href="#152-protocol-objects">15.2 Protocol objects</a></h3>
+<p>The execution plane should be formalized around the following objects.</p>
+<h4 id="admission"><a class="header" href="#admission"><code>Admission</code></a></h4>
+<p><code>Admission</code> is the local decision about whether one request may enter execution.</p>
+<p>It should answer:</p>
+<ul>
+<li>is the local peer leader?</li>
+<li>is the region epoch valid?</li>
+<li>is the peer hosted and runnable?</li>
+<li>is the request cancelled or timed out already?</li>
+<li>is the queue or scheduler allowed to accept more work?</li>
+</ul>
+<p>The important design rule is that admission must be explicit, not an accidental
+mix of local checks and fallback retries.</p>
+<h4 id="executiontarget"><a class="header" href="#executiontarget"><code>ExecutionTarget</code></a></h4>
+<p><code>ExecutionTarget</code> is the concrete unit of work the execution plane is trying to
+carry out.</p>
+<p>Examples:</p>
+<ul>
+<li>one read command</li>
+<li>one raft write proposal</li>
+<li>one peer change target</li>
+<li>one split target</li>
+<li>one merge target</li>
+</ul>
+<p>For topology changes, <code>ExecutionTarget</code> must remain causally tied to the rooted
+transition object created by the control plane.</p>
+<h4 id="executionoutcome"><a class="header" href="#executionoutcome"><code>ExecutionOutcome</code></a></h4>
+<p><code>ExecutionOutcome</code> is the local state reached by an admitted target.</p>
+<p>Minimal useful states are:</p>
+<ul>
+<li><code>Rejected</code></li>
+<li><code>Queued</code></li>
+<li><code>Proposed</code></li>
+<li><code>Committed</code></li>
+<li><code>Applied</code></li>
+<li><code>Failed</code></li>
+</ul>
+<p>This is the minimum needed to stop conflating “accepted by API”, “replicated by
+raft”, and “applied to local state”.</p>
+<h4 id="publishstate"><a class="header" href="#publishstate"><code>PublishState</code></a></h4>
+<p><code>PublishState</code> tracks the boundary between local apply and control-plane truth
+publication.</p>
+<p>This is a first-class boundary in NoKV’s architecture:</p>
+<ul>
+<li>planned truth is published before execution</li>
+<li>terminal truth is published after local apply</li>
+</ul>
+<p>The protocol must therefore distinguish:</p>
+<ul>
+<li><code>NotRequired</code></li>
+<li><code>Pending</code></li>
+<li><code>Published</code></li>
+<li><code>PublishFailed</code></li>
+</ul>
+<p>This is the exact boundary where split/merge/peer-change correctness otherwise
+turns into invisible best-effort behavior.</p>
+<h4 id="restartstate"><a class="header" href="#restartstate"><code>RestartState</code></a></h4>
+<p><code>RestartState</code> describes whether one store can safely resume from local durable
+state.</p>
+<p>It should answer:</p>
+<ul>
+<li>is local peer metadata self-consistent?</li>
+<li>is the local raft replay pointer usable?</li>
+<li>does the store need Coordinator catch-up only, or local rebuild first?</li>
+<li>is startup safe, degraded, or fatal?</li>
+</ul>
+<p>This object exists to stop restart behavior from being an implicit composition
+of:</p>
+<ul>
+<li><code>raftstore/localmeta</code></li>
+<li>raft log replay</li>
+<li>ad hoc bootstrap logic</li>
+</ul>
+<h3 id="153-request-classes-and-admission"><a class="header" href="#153-request-classes-and-admission">15.3 Request classes and admission</a></h3>
+<p>Execution-plane v1 should start by distinguishing three request classes:</p>
+<ul>
+<li><code>Read</code>
+<ul>
+<li>local leader read admission</li>
+<li>read-index / wait-applied preconditions</li>
+<li>cancellation and deadline propagation</li>
+</ul>
+</li>
+<li><code>Write</code>
+<ul>
+<li>raft proposal admission</li>
+<li>proposal tracking through commit/apply</li>
+<li>retryable local rejection vs fatal local rejection</li>
+</ul>
+</li>
+<li><code>Topology</code>
+<ul>
+<li>peer change</li>
+<li>split</li>
+<li>merge</li>
+<li>explicit coupling to planned and terminal rooted truth</li>
+</ul>
+</li>
+</ul>
+<p>These classes do not need separate RPC protocols, but they do need stable
+admission outcomes. At minimum, those outcomes should distinguish:</p>
+<ul>
+<li><code>NotLeader</code></li>
+<li><code>EpochMismatch</code></li>
+<li><code>NotHosted</code></li>
+<li><code>Canceled</code></li>
+<li><code>TimedOut</code></li>
+<li><code>QueueSaturated</code></li>
+<li><code>SchedulerDegraded</code></li>
+<li><code>Accepted</code></li>
+</ul>
+<p>Without this line, request behavior remains split across store-local branches
+instead of becoming one coherent executor contract.</p>
+<h3 id="154-publish-lifecycle"><a class="header" href="#154-publish-lifecycle">15.4 Publish lifecycle</a></h3>
+<p>Execution-plane v1 should also make the publish boundary explicit for topology
+work.</p>
+<p>The minimal lifecycle is:</p>
+<ol>
+<li><code>PlannedPublished</code></li>
+<li><code>LocallyExecuting</code></li>
+<li><code>Applied</code></li>
+<li><code>TerminalPublishPending</code></li>
+<li><code>TerminalPublished</code></li>
+<li><code>TerminalPublishFailed</code></li>
+</ol>
+<p>The important rule is that <code>Applied</code> and <code>TerminalPublished</code> are different
+states. Local execution success does not mean global lifecycle completion until
+terminal truth is durably published.</p>
+<p>This is the boundary that should align:</p>
+<ul>
+<li><code>raftstore/store/transition_builder.go</code></li>
+<li><code>raftstore/store/transition_executor.go</code></li>
+<li><code>raftstore/store/transition_outcome.go</code></li>
+<li><code>raftstore/store/scheduler_runtime.go</code></li>
+</ul>
+<h3 id="155-first-landing-points"><a class="header" href="#155-first-landing-points">15.5 First landing points</a></h3>
+<p>Execution-plane protocol v1 landed first in the places that already carried
+the boundary implicitly:</p>
+<ul>
+<li><code>raftstore/store/command_service.go</code>
+<ul>
+<li>request admission and context semantics</li>
+</ul>
+</li>
+<li><code>raftstore/store/command_pipeline.go</code>
+<ul>
+<li>request lifecycle states visible to callers</li>
+</ul>
+</li>
+<li><code>raftstore/store/scheduler_runtime.go</code>
+<ul>
+<li>queue overflow / degraded local behavior</li>
+</ul>
+</li>
+<li><code>raftstore/store/transition_builder.go</code>
+<ul>
+<li>execution target construction from rooted truth</li>
+</ul>
+</li>
+<li><code>raftstore/store/transition_executor.go</code>
+<ul>
+<li>local execution and apply boundary</li>
+</ul>
+</li>
+<li><code>raftstore/store/transition_outcome.go</code>
+<ul>
+<li>terminal truth publication result</li>
+</ul>
+</li>
+<li><code>raftstore/localmeta</code>
+<ul>
+<li>restart state and local recovery truth</li>
+</ul>
+</li>
+</ul>
+<p>These files still do not expose a new public API. But they now share one
+explicit local protocol vocabulary instead of inventing those semantics
+independently.</p>
+<h3 id="156-execution-invariants"><a class="header" href="#156-execution-invariants">15.6 Execution invariants</a></h3>
+<p>The execution-plane protocol should preserve the following invariants.</p>
+<h4 id="admission-invariant"><a class="header" href="#admission-invariant"><code>Admission</code> invariant</a></h4>
+<p>Every externally visible rejection should map to a stable admission reason, not
+only a transport error or generic retry exhaustion.</p>
+<h4 id="no-skipped-publish-boundary-invariant"><a class="header" href="#no-skipped-publish-boundary-invariant"><code>No skipped publish boundary</code> invariant</a></h4>
+<p>If local apply completed but terminal truth publication did not, the system
+must surface that state explicitly. It must not be silently treated as fully
+complete.</p>
+<h4 id="restart-truth-boundary-invariant"><a class="header" href="#restart-truth-boundary-invariant"><code>Restart truth boundary</code> invariant</a></h4>
+<p>Restart must derive hosted peer truth from local durable state, not from
+bootstrap config. Static config may resolve addresses, but must not overwrite
+runtime truth.</p>
+<h4 id="no-hidden-drop-invariant"><a class="header" href="#no-hidden-drop-invariant"><code>No hidden drop</code> invariant</a></h4>
+<p>Queue overflow, scheduler degradation, and publish retry loss must be explicit
+protocol states or metrics-backed outcomes, not silent local behavior.</p>
+<h3 id="157-minimal-rollout-target"><a class="header" href="#157-minimal-rollout-target">15.7 Minimal rollout target</a></h3>
+<p>Execution-plane protocol v1 started small.</p>
+<p>The minimum useful delivered line is now:</p>
+<ol>
+<li>request admission</li>
+<li>topology execution outcome</li>
+<li>publish boundary state</li>
+<li>restart state</li>
+</ol>
+<p>That is enough to formalize the most dangerous boundaries without trying to
+protocolize every internal raft detail.</p>
+<hr>
+<h2 id="16-priority-and-rollout-order"><a class="header" href="#16-priority-and-rollout-order">16. Priority and Rollout Order</a></h2>
+<p>The next protocol work should favor <code>execution-plane v1</code> before broadening
+<code>control-plane v2</code>.</p>
+<h3 id="161-why-execution-comes-next"><a class="header" href="#161-why-execution-comes-next">16.1 Why execution comes next</a></h3>
+<p>The control plane now already has a minimal, externally visible contract:</p>
+<ul>
+<li>freshness classes</li>
+<li>rooted token / lag</li>
+<li>degraded serving state</li>
+<li>transition identity</li>
+</ul>
+<p>By contrast, the execution plane still has important correctness-sensitive
+semantics that are not yet formalized:</p>
+<ul>
+<li>request admission and cancellation</li>
+<li>queue overflow and degraded scheduler behavior</li>
+<li>planned truth -&gt; execute -&gt; terminal truth publish boundary</li>
+<li>restart alignment between local durable state and Coordinator</li>
+</ul>
+<p>That means the larger current ambiguity sits in <code>raftstore</code>, not in
+<code>coordinator</code>.</p>
+<h3 id="162-what-should-not-happen-next"><a class="header" href="#162-what-should-not-happen-next">16.2 What should not happen next</a></h3>
+<p>The wrong next step would be to keep enriching control-plane phases and
+diagnostic fields while the execution plane still lacks a matching lifecycle.</p>
+<p>That would create a vocabulary mismatch:</p>
+<ul>
+<li>control plane claims richer transition semantics</li>
+<li>execution plane still cannot report them precisely</li>
+</ul>
+<h3 id="163-recommended-order"><a class="header" href="#163-recommended-order">16.3 Recommended order</a></h3>
+<ol>
+<li>Finish execution-plane protocol v1 in design form.</li>
+<li>Land the first execution-plane states on the <code>raftstore</code> request and
+transition boundaries.</li>
+<li>Then tighten control-plane protocol from v1 toward richer operator/runtime
+phases.</li>
+</ol>
+<p>In short:</p>
+<blockquote>
+<p>stabilize the executor contract first, then deepen the coordinator contract.</p>
+</blockquote>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="from-standalone-to-cluster"><a class="header" href="#from-standalone-to-cluster">From Standalone to Cluster</a></h1>
 <p class="chapter-lead">
@@ -4910,7 +6122,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <li><code>ops</code> scripts must treat the migration CLI as source of truth and stay stricter.</li>
 <li><code>lib</code> is where shared rules live, so shell semantics do not drift across scripts.</li>
 </ul>
-<h2 id="development-scripts"><a class="header" href="#development-scripts">Development Scripts</a></h2>
+<h2 id="bootstrap--local-launch"><a class="header" href="#bootstrap--local-launch">Bootstrap &amp; Local Launch</a></h2>
 <h3 id="scriptsdevclustersh"><a class="header" href="#scriptsdevclustersh"><code>scripts/dev/cluster.sh</code></a></h3>
 <ul>
 <li>Purpose: build <code>nokv</code> and <code>nokv-config</code>, read <code>raft_config.json</code>, seed local peer catalogs, start Coordinator, then start the configured stores.</li>
@@ -4931,10 +6143,12 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <li><code>--workdir</code> defaults to <code>./artifacts/cluster</code></li>
 <li>store workdirs are rejected if they contain unexpected files</li>
 <li>logs stream with <code>[coordinator]</code> / <code>[store-&lt;id&gt;]</code> prefixes and are still written to <code>coordinator.log</code> / <code>server.log</code></li>
+<li>this is a bootstrap/dev launcher, not a restart command</li>
+<li>it may seed fresh workdirs from <code>config.regions</code>, so it should not be used against stores that already contain runtime raft/local metadata</li>
 </ul>
 </li>
 </ul>
-<h3 id="scriptsdevbootstrapsh"><a class="header" href="#scriptsdevbootstrapsh"><code>scripts/dev/bootstrap.sh</code></a></h3>
+<h3 id="scriptsopsbootstrapsh"><a class="header" href="#scriptsopsbootstrapsh"><code>scripts/ops/bootstrap.sh</code></a></h3>
 <ul>
 <li>Purpose: seed local peer catalog metadata into a set of store directories derived from a path template.</li>
 <li>Intended for:
@@ -4944,21 +6158,23 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 </ul>
 </li>
 <li>Example:
-<pre><code class="language-bash">./scripts/dev/bootstrap.sh --config /etc/nokv/raft_config.json --path-template /data/store-{id}
+<pre><code class="language-bash">./scripts/ops/bootstrap.sh --config /etc/nokv/raft_config.json --path-template /data/store-{id}
 </code></pre>
 </li>
 <li>Notes:
 <ul>
 <li>skips stores that already contain <code>CURRENT</code></li>
 <li>refuses to seed into dirty directories</li>
+<li>this is bootstrap-only; it does not recover runtime topology</li>
+<li>use <code>nokv serve</code> / <code>scripts/ops/serve-store.sh</code> to restart an existing store from the same workdir</li>
 </ul>
 </li>
 </ul>
-<h3 id="scriptsdevserve-storesh"><a class="header" href="#scriptsdevserve-storesh"><code>scripts/dev/serve-store.sh</code></a></h3>
+<h3 id="scriptsopsserve-storesh"><a class="header" href="#scriptsopsserve-storesh"><code>scripts/ops/serve-store.sh</code></a></h3>
 <ul>
-<li>Purpose: convert <code>raft_config.json</code> into a concrete <code>nokv serve</code> invocation for one store.</li>
+<li>Purpose: thin wrapper around <code>nokv serve</code> for one store.</li>
 <li>Example:
-<pre><code class="language-bash">./scripts/dev/serve-store.sh \
+<pre><code class="language-bash">./scripts/ops/serve-store.sh \
   --config ./raft_config.example.json \
   --store-id 1 \
   --workdir ./artifacts/cluster/store-1 \
@@ -4967,13 +6183,17 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 </li>
 <li>Notes:
 <ul>
-<li>resolves peer transport addresses from config</li>
-<li>resolves Coordinator address from config unless <code>--coordinator-addr</code> overrides it</li>
+<li>resolves store listen/workdir/Coordinator defaults through <code>nokv serve --config</code></li>
+<li>remote peer recovery comes from <code>raftstore/localmeta</code>; config <code>stores</code> only
+provide <code>storeID -&gt; addr</code></li>
+<li>no longer treats <code>config.regions</code> as restart-time topology truth</li>
+<li>if a static transport override is needed, use <code>--store-addr &lt;store-id&gt;=&lt;addr&gt;</code>
+rather than a peer-id keyed mapping</li>
 <li><code>--scope docker</code> selects container-friendly addresses</li>
 </ul>
 </li>
 </ul>
-<h2 id="operator-script"><a class="header" href="#operator-script">Operator Script</a></h2>
+<h2 id="migration-workflow"><a class="header" href="#migration-workflow">Migration Workflow</a></h2>
 <h3 id="scriptsopsmigrate-clustersh"><a class="header" href="#scriptsopsmigrate-clustersh"><code>scripts/ops/migrate-cluster.sh</code></a></h3>
 <ul>
 <li>Purpose: one-shot local operator wrapper for the standalone-to-cluster migration path.</li>
@@ -5060,6 +6280,7 @@ go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedP
 <h2 id="relationship-with-nokv-config"><a class="header" href="#relationship-with-nokv-config">Relationship with <code>nokv-config</code></a></h2>
 <ul>
 <li><code>nokv-config stores</code> / <code>regions</code> / <code>coordinator</code> remain the structured topology source for shell scripts.</li>
+<li><code>config.regions</code> remain bootstrap/deployment metadata, not restart-time peer truth.</li>
 <li><code>nokv-config catalog</code> writes Region metadata into the local peer catalog.</li>
 <li><code>cmd/nokv-redis</code> uses the same <code>raft_config.json</code>, so local scripts and Redis gateway stay aligned.</li>
 <li>Go tools can import <code>github.com/feichai0017/NoKV/config</code> and call <code>config.LoadFile</code> / <code>Validate</code> directly.</li>
@@ -7569,7 +8790,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <ul>
 <li><code>meta/root/event/types.go</code></li>
 <li><code>meta/root/state</code></li>
-<li><code>meta/root/storage/substrate.go</code></li>
+<li><code>meta/root/storage/virtual_log.go</code></li>
 </ul>
 <p><code>meta/root</code> 当前是 NoKV 的最小 metadata truth kernel。</p>
 <p>它负责：</p>
@@ -7700,7 +8921,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <h2 id="11-virtual-log-substrate-是怎么设计的"><a class="header" href="#11-virtual-log-substrate-是怎么设计的">11. Virtual Log substrate 是怎么设计的</a></h2>
 <p>核心在：</p>
 <ul>
-<li><code>meta/root/storage/substrate.go</code></li>
+<li><code>meta/root/storage/virtual_log.go</code></li>
 </ul>
 <p>关键对象：</p>
 <ul>
@@ -7770,7 +8991,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <ul>
 <li>replicated metadata substrate</li>
 <li>当前仍然是 raft 驱动</li>
-<li>但上层已经被 <code>Substrate</code> / <code>ObservedCommitted</code> 解耦</li>
+<li>但上层已经被 <code>VirtualLog</code> / <code>ObservedCommitted</code> 解耦</li>
 </ul>
 <p>当前大致分层：</p>
 <ul>
@@ -7784,12 +9005,12 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>ready drain / protocol persistence / committed decode</li>
 </ul>
 </li>
-<li><code>network_substrate.go</code>
+<li><code>network_virtual_log.go</code>
 <ul>
 <li>substrate-facing methods</li>
 </ul>
 </li>
-<li><code>substrate_adapter.go</code>
+<li><code>virtual_log_adapter.go</code>
 <ul>
 <li>rooted virtual-log adapter</li>
 </ul>

@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b3ee6b57.js";
+            window.path_to_searchindex_js = "searchindex-01a1bb3c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b4bd04d1.js"></script>
+        <script src="toc-b8f8ac3b.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -213,6 +213,27 @@ truth. Durable truth lives in <code>meta/root</code>.</p>
 <li><code>coordinator/client</code>: client wrapper used by store/gateway.</li>
 <li><code>coordinator/adapter</code>: scheduler sink that forwards heartbeats into Coordinator.</li>
 </ul>
+<p>For the next-stage protocol direction on both the control plane and the paired
+execution plane, see <code>docs/control_and_execution_protocols.md</code>.</p>
+<h3 id="control-plane-protocol-status"><a class="header" href="#control-plane-protocol-status">Control-Plane Protocol Status</a></h3>
+<p>Coordinator now uses a <strong>minimal formal control-plane protocol v1</strong> for its key
+route and transition surfaces.</p>
+<p>Already in active use:</p>
+<ul>
+<li>route-read <code>Freshness</code></li>
+<li>rooted token serving metadata</li>
+<li>rooted lag exposure</li>
+<li><code>DegradedMode</code></li>
+<li><code>CatchUpState</code></li>
+<li><code>TransitionID</code></li>
+<li>publish-time lifecycle assessment on <code>PublishRootEvent</code></li>
+</ul>
+<p>This means Coordinator no longer exposes only best-effort implementation
+behavior. It now returns explicit protocol state that callers, tests, and docs
+can rely on.</p>
+<p>The current protocol is intentionally minimal. It does not yet expose the full
+future runtime/operator model such as stalled transitions or richer catch-up
+actions.</p>
 <hr>
 <h2 id="3-mode-model"><a class="header" href="#3-mode-model">3. Mode Model</a></h2>
 <p>NoKV currently has only two supported product modes:</p>
@@ -362,6 +383,42 @@ driven.</p>
 <li><code>--coordinator-addr</code> is required.</li>
 <li>Runtime routing/scheduling control-plane state is sourced from Coordinator.</li>
 </ul>
+<p>For restart and recovery, <code>nokv serve</code> intentionally separates runtime truth from
+deployment metadata:</p>
+<ul>
+<li>hosted region/peer truth comes from <code>raftstore/localmeta</code></li>
+<li>raft durable progress comes from the store workdir (<code>WAL</code>, raft log, local metadata)</li>
+<li><code>raft_config.json</code> is used only to resolve static addresses (<code>Coordinator</code>,
+<code>store listen</code>, <code>store transport</code>)</li>
+</ul>
+<p>This means:</p>
+<ul>
+<li>bootstrap-time <code>config.regions</code> are not replayed during restart</li>
+<li>runtime split/merge/peer-change results continue to come back from local recovery state</li>
+<li><code>--store-addr</code> is an exceptional static address override, not the normal restart path</li>
+<li><code>--store-id</code> must match the durable workdir identity when the workdir was already used</li>
+</ul>
+<p>The recommended restart shape is therefore:</p>
+<pre><code class="language-bash">nokv serve \
+  --config ./raft_config.example.json \
+  --scope host \
+  --store-id 1 \
+  --workdir ./artifacts/cluster/store-1
+</code></pre>
+<p><code>serve</code> will:</p>
+<ol>
+<li>load the local peer catalog from the store workdir</li>
+<li>derive the current remote peer set from local metadata</li>
+<li>use config <code>stores</code> only to map <code>storeID -&gt; addr</code></li>
+</ol>
+<p>If static transport overrides are needed, prefer stable store identities:</p>
+<pre><code class="language-bash">nokv serve \
+  --config ./raft_config.example.json \
+  --scope host \
+  --store-id 1 \
+  --workdir ./artifacts/cluster/store-1 \
+  --store-addr 2=10.0.0.12:20160
+</code></pre>
 <p>Related CLI behavior:</p>
 <ul>
 <li>Inspect control-plane state through Coordinator APIs/metrics.</li>
@@ -398,6 +455,15 @@ clients are expected to retry against another Coordinator endpoint.</p>
 <p>Follower reads are driven by a rooted watch-first tail subscription, with
 explicit refresh/reload as fallback into <code>coordinator/catalog.Cluster</code>. They are expected
 to be shortly stale rather than linearly consistent.</p>
+<p>For <code>GetRegionByKey</code>, that follower-service behavior is now explicit in the
+protocol surface:</p>
+<ul>
+<li>callers can request <code>Freshness</code></li>
+<li>responses include rooted token metadata</li>
+<li>responses disclose <code>DegradedMode</code> and <code>CatchUpState</code></li>
+<li>bounded-freshness reads may be rejected if rooted lag exceeds the requested
+limit</li>
+</ul>
 <h3 id="client-behavior"><a class="header" href="#client-behavior">Client behavior</a></h3>
 <p><code>coordinator/client</code> accepts multiple Coordinator addresses. Write RPCs retry across Coordinator nodes and
 converge on the rooted leader. Read RPCs may use any available Coordinator endpoint.</p>
@@ -492,7 +558,7 @@ keeps the rooted truth surface small.</p>
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="migration.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="control_and_execution_protocols.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -506,7 +572,7 @@ keeps the rooted truth surface small.</p>
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="migration.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="control_and_execution_protocols.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

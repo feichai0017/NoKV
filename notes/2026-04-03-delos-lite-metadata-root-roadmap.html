@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b3ee6b57.js";
+            window.path_to_searchindex_js = "../searchindex-01a1bb3c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b4bd04d1.js"></script>
+        <script src="../toc-b8f8ac3b.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -385,7 +385,7 @@
 <ul>
 <li><code>meta/root/event/types.go</code></li>
 <li><code>meta/root/state</code></li>
-<li><code>meta/root/storage/substrate.go</code></li>
+<li><code>meta/root/storage/virtual_log.go</code></li>
 </ul>
 <p><code>meta/root</code> 当前是 NoKV 的最小 metadata truth kernel。</p>
 <p>它负责：</p>
@@ -516,7 +516,7 @@
 <h2 id="11-virtual-log-substrate-是怎么设计的"><a class="header" href="#11-virtual-log-substrate-是怎么设计的">11. Virtual Log substrate 是怎么设计的</a></h2>
 <p>核心在：</p>
 <ul>
-<li><code>meta/root/storage/substrate.go</code></li>
+<li><code>meta/root/storage/virtual_log.go</code></li>
 </ul>
 <p>关键对象：</p>
 <ul>
@@ -586,7 +586,7 @@
 <ul>
 <li>replicated metadata substrate</li>
 <li>当前仍然是 raft 驱动</li>
-<li>但上层已经被 <code>Substrate</code> / <code>ObservedCommitted</code> 解耦</li>
+<li>但上层已经被 <code>VirtualLog</code> / <code>ObservedCommitted</code> 解耦</li>
 </ul>
 <p>当前大致分层：</p>
 <ul>
@@ -600,12 +600,12 @@
 <li>ready drain / protocol persistence / committed decode</li>
 </ul>
 </li>
-<li><code>network_substrate.go</code>
+<li><code>network_virtual_log.go</code>
 <ul>
 <li>substrate-facing methods</li>
 </ul>
 </li>
-<li><code>substrate_adapter.go</code>
+<li><code>virtual_log_adapter.go</code>
 <ul>
 <li>rooted virtual-log adapter</li>
 </ul>

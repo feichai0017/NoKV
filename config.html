@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b3ee6b57.js";
+            window.path_to_searchindex_js = "searchindex-01a1bb3c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b4bd04d1.js"></script>
+        <script src="toc-b8f8ac3b.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -261,12 +261,13 @@ defer db.Close()
 <p>Notes:</p>
 <ul>
 <li><code>NewDefaultOptions()</code> populates concrete compaction/ingest defaults up front.
-<code>Open()</code> only backfills zero-valued legacy fields for compatibility, then the
-DB and LSM layers consume the resolved values directly.</li>
+<code>Open()</code> resolves constructor-owned defaults once, then the DB and LSM layers
+consume the resolved values directly.</li>
 <li><code>WriteBatchMaxCount</code>, <code>WriteBatchMaxSize</code>, <code>MaxBatchCount</code>, <code>MaxBatchSize</code>,
 <code>WriteThrottleMinRate</code>, <code>WriteThrottleMaxRate</code>, and <code>WALBufferSize</code> now also
-expose concrete defaults through <code>NewDefaultOptions()</code>. Zero remains a legacy
-unset value only for manually constructed configs.</li>
+expose concrete defaults through <code>NewDefaultOptions()</code>. If you construct
+<code>Options</code> manually, leaving these fields at zero lets <code>Open()</code> resolve the
+constructor defaults.</li>
 <li>Batch knobs are split by owner:
 <ul>
 <li><code>WriteBatchMaxCount</code> / <code>WriteBatchMaxSize</code> bound commit-worker request
