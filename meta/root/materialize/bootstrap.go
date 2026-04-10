@@ -30,8 +30,8 @@ func BootstrapFromObserved(observed rootstorage.ObservedCommitted) Bootstrap {
 }
 
 // LoadBootstrap loads one rooted checkpoint and replays retained committed events on top of it.
-func LoadBootstrap(storage rootstorage.Substrate) (Bootstrap, error) {
-	observed, err := rootstorage.ObserveCommitted(storage, 0)
+func LoadBootstrap(log rootstorage.VirtualLog) (Bootstrap, error) {
+	observed, err := rootstorage.ObserveCommitted(log, 0)
 	if err != nil {
 		return Bootstrap{}, err
 	}

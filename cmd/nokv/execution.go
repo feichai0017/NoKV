@@ -221,25 +221,44 @@ func cloneExecutionAdmissionStatus(in *adminpb.ExecutionAdmissionStatus) *adminp
 	if in == nil {
 		return nil
 	}
-	out := *in
-	return &out
+	return &adminpb.ExecutionAdmissionStatus{
+		Observed:   in.GetObserved(),
+		Class:      in.GetClass(),
+		Reason:     in.GetReason(),
+		Accepted:   in.GetAccepted(),
+		RegionId:   in.GetRegionId(),
+		PeerId:     in.GetPeerId(),
+		RequestId:  in.GetRequestId(),
+		Detail:     in.GetDetail(),
+		AtUnixNano: in.GetAtUnixNano(),
+	}
 }
 
 func cloneExecutionRestartStatus(in *adminpb.ExecutionRestartStatus) *adminpb.ExecutionRestartStatus {
 	if in == nil {
 		return nil
 	}
-	out := *in
-	out.MissingRaftPointer = append([]uint64(nil), in.GetMissingRaftPointer()...)
-	return &out
+	return &adminpb.ExecutionRestartStatus{
+		State:              in.GetState(),
+		RegionCount:        in.GetRegionCount(),
+		RaftGroupCount:     in.GetRaftGroupCount(),
+		MissingRaftPointer: append([]uint64(nil), in.GetMissingRaftPointer()...),
+	}
 }
 
 func cloneExecutionTopologyStatus(in *adminpb.ExecutionTopologyStatus) *adminpb.ExecutionTopologyStatus {
 	if in == nil {
 		return nil
 	}
-	out := *in
-	return &out
+	return &adminpb.ExecutionTopologyStatus{
+		TransitionId:      in.GetTransitionId(),
+		RegionId:          in.GetRegionId(),
+		Action:            in.GetAction(),
+		Outcome:           in.GetOutcome(),
+		Publish:           in.GetPublish(),
+		LastError:         in.GetLastError(),
+		UpdatedAtUnixNano: in.GetUpdatedAtUnixNano(),
+	}
 }
 
 func formatUnixNano(unixNano int64) string {
