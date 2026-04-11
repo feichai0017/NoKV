@@ -129,10 +129,7 @@ func (d *NetworkDriver) waitForCommittedCursor(after rootstorage.TailToken, targ
 		if remaining <= 0 {
 			return fmt.Errorf("meta/root/backend/replicated: append wait timed out before committed cursor %v", target)
 		}
-		wait := remaining
-		if wait > 200*time.Millisecond {
-			wait = 200 * time.Millisecond
-		}
+		wait := min(remaining, 200*time.Millisecond)
 		advance, err := d.WaitForTail(after, wait)
 		if err != nil {
 			return err
