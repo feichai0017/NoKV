@@ -28,7 +28,7 @@ Most systems make you choose early:
 NoKV is aiming at a different story:
 
 1. Start with a serious standalone engine.
-2. Keep the same workdir and the same storage substrate as data grows.
+2. Keep the same workdir and the same storage layer as data grows.
 3. Promote that workdir into a distributed seed explicitly.
 4. Expand the seed into a replicated cluster through normal raftstore mechanisms.
 
@@ -365,7 +365,7 @@ The current validation story spans:
   - restart, dehost, and follow-up membership behavior
 - `raftstore/integration/snapshot_interruption_test.go`
   - install interrupted before publish
-- `raftstore/integration/pd_degraded_test.go`
+- `raftstore/integration/coordinator_degraded_test.go`
   - control-plane degradation after startup
 
 That is the right level of seriousness for the feature. Migration is one of the easiest places for a system to look good in a demo and fail under recovery.

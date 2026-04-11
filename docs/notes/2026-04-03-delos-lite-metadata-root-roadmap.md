@@ -1,11 +1,11 @@
-# 2026-04-03 Rooted Metadata、Delos-lite 与 Virtual Log 设计说明
+# 2026-04-03 Rooted Metadata、Delos-lite 与 VirtualLog 设计说明
 
-> 状态：当前 NoKV metadata/control-plane 主线的正式设计说明。本文档用中文完整解释 `meta/root`、`pd`、`raftstore` 三层的职责、调用链、持久化布局、Virtual Log substrate，以及它与 Delos / etcd 风格元数据服务的关系。
+> 状态：当前 NoKV metadata/control-plane 主线的正式设计说明。本文档用中文完整解释 `meta/root`、`coordinator`、`raftstore` 三层的职责、调用链、持久化布局、VirtualLog，以及它与 Delos / etcd 风格元数据服务的关系。
 
 ## 导读
 
-- 🧭 主题：NoKV 当前 `meta/root + pd + raftstore` 控制面为什么是一条 Delos-lite 主线。
-- 🧱 核心对象：`RootEvent`、`ObservedCommitted`、`TailAdvance`、`TailSubscription`、`PendingView`。
+- 🧭 主题：NoKV 当前 `meta/root + coordinator + raftstore` 控制面为什么是一条 Delos-lite 主线。
+- 🧱 核心对象：`RootEvent`、`ObservedCommitted`、`TailAdvance`、`TailSubscription`、`TransitionAssessment`。
 - 🔁 调用链：`planned truth -> execute -> terminal truth` 与 `watch-first catch-up`。
 - 📚 参考对象：Delos、FoundationDB、TiKV/PD+etcd、CockroachDB。
 
@@ -14,13 +14,13 @@
 NoKV 在最近几轮里，已经把 metadata/control-plane 主线收成了一个比较清楚的工程化设计：
 
 - `meta/root` 成为最小 truth kernel
-- `pd` 不再是 authority，而是 rooted view + service + proposal gate
+- `coordinator` 不再是 authority，而是 rooted view + service + proposal gate
 - `raftstore` 越来越接近 target-driven executor
 - `local` 和 `replicated` backend 共享同一个 rooted domain
 
 如果不把这条主线正式写清楚，后面很容易再次回到这些坏形态：
 
-1. `pd` 重新长成“大脑兼数据库”
+1. `coordinator` 重新长成“大脑兼数据库”
 2. 运行时观测和 durable truth 混在一起
 3. `raftstore` 重新承担过多 control-plane 职责
 4. replicated backend 的协议细节反向污染上层领域模型
@@ -39,10 +39,10 @@ NoKV 当前的 metadata/control-plane 可以理解成三层：
 1. `meta/root`
    - 最小 durable truth
    - transition state machine
-   - rooted virtual-log substrate
-2. `pd`
+   - rooted `VirtualLog` contract
+2. `coordinator`
    - rooted route view
-   - rooted pending/operator view
+   - rooted transition view
    - proposal gate + service host
 3. `raftstore`
    - data-plane executor
@@ -54,28 +54,28 @@ NoKV 当前的 metadata/control-plane 可以理解成三层：
 
 ```mermaid
 flowchart LR
-    C["Client / Operator / Store RPC"] --> PD["PD\nview + service + gate"]
-    RS["Raftstore\nexecutor"] --> PD
-    PD --> RV["Route View"]
-    PD --> OV["Pending / Operator View"]
-    PD --> MR["meta/root\ntruth kernel"]
-    MR --> PD
-    MR --> VS["Virtual Log Substrate"]
+    C["Client / Operator / Store RPC"] --> Coordinator["Coordinator\nview + service + gate"]
+    RS["Raftstore\nexecutor"] --> Coordinator
+    Coordinator --> RV["Route View"]
+    Coordinator --> OV["Transition View"]
+    Coordinator --> MR["meta/root\ntruth kernel"]
+    MR --> Coordinator
+    MR --> VS["VirtualLog"]
     VS --> BK["local / replicated backend"]
 ```
 
 这套设计最重要的三个判断是：
 
 1. `meta/root` 不是临时存储，而是真正的最小真相源。
-2. `pd` 不是 authority，而是 rooted view 和服务层。
+2. `coordinator` 不是 authority，而是 rooted view 和服务层。
 3. `raftstore` 不再是半个 control-plane，而是越来越纯的 executor。
 
 ## 3. 当前产品模式
 
 当前正式支持的 metadata/control-plane 模式只有两种：
 
-1. `single pd + local meta`
-2. `3 pd + replicated meta`
+1. `single coordinator + local meta`
+2. `3 coordinator + replicated meta`
 
 这两种模式共享同一个 rooted metadata 领域面：
 
@@ -93,7 +93,7 @@ flowchart LR
 
 - 单机不是另一套 metadata 系统
 - 高可用也不是另一套 metadata 系统
-- 上层 `pd` 和 `raftstore` 不需要为了 local/replicated 分叉设计
+- 上层 `coordinator` 和 `raftstore` 不需要为了 local/replicated 分叉设计
 
 ## 4. 为什么借鉴 Delos，而不是直接做成 etcd-style metadata service
 
@@ -130,8 +130,8 @@ Delos 的关键不是“有个 log”，而是：
 NoKV 当前已经形成：
 
 - truth：`meta/root`
-- view：`pd/catalog`、`pd/view`、`pd/operator`
-- service：`pd/server`
+- view：`coordinator/catalog`、`coordinator/view`
+- service：`coordinator/server`
 
 ### 4.3 virtual log，而不是把上层绑死在协议细节上
 
@@ -178,8 +178,8 @@ NoKV 当前选择的是另一条路：
 
 也就是说：
 
-> etcd 是通用分布式 KV substrate。  
-> NoKV 的 `meta/root` 是专用的 metadata truth substrate。
+> etcd 是通用分布式 KV。
+> NoKV 的 `meta/root` 是专用的 metadata truth kernel。
 
 可以把差异简单看成下面两种路线：
 
@@ -194,7 +194,7 @@ flowchart LR
     subgraph ROOT["NoKV rooted metadata"]
         EVT["RootEvent\n领域写语言"]
         STM["root state machine\nlifecycle / pending / completion"]
-        VLOG["Virtual Log\ncheckpoint + tail + subscription"]
+        VLOG["VirtualLog\ncheckpoint + tail + subscription"]
         EVT --> STM
         STM --> VLOG
     end
@@ -225,14 +225,14 @@ flowchart LR
 - 定义 compact rooted `Snapshot`
 - 定义 transition lifecycle
 - 定义 pending execution state
-- 定义 virtual-log read/install/catch-up/compaction contract
+- 定义 `VirtualLog` read/install/catch-up/compaction contract
 
 它不负责：
 
 - route lookup API
 - heartbeat runtime state
 - scheduler runtime 决策
-- operator runtime 生命周期
+- scheduler/runtime lifecycle
 - store-local recovery
 
 这条边界现在是对的，而且必须继续守住。
@@ -262,7 +262,7 @@ flowchart LR
 角色：
 
 - 跨层共享的 topology object
-- PD route view 的语言
+- Coordinator route view 的语言
 - rooted truth payload 的主要对象
 
 ### `RootEvent`
@@ -282,7 +282,7 @@ flowchart LR
 - `Descriptor` 是共享拓扑对象
 - `RootEvent` 是 durable truth transition
 
-## 8. `meta` 和 `pd` 现在隔离得怎么样
+## 8. `meta` 和 `coordinator` 现在隔离得怎么样
 
 当前这条边界已经比较清楚，而且是当前主线最重要的成果之一。
 
@@ -293,50 +293,48 @@ flowchart LR
 - checkpoint + retained tail
 - catch-up / install / compaction contract
 
-### `pd` 负责
+### `coordinator` 负责
 
 - rooted route view
-- rooted pending/operator view
+- rooted transition view
 - proposal gate
 - liveness service
 - 对外 RPC
 
 ### 已经做到的隔离
 
-1. `pd` 不再维护第二份 authority metadata。
-2. `pd` 写路径是 `persist truth first, reload rooted view later`。
+1. `coordinator` 不再维护第二份 authority metadata。
+2. `coordinator` 写路径是 `persist truth first, reload rooted view later`。
 3. liveness 已经从 truth path 分开。
-4. operator/debug surface 是 rooted projection，而不是 `pd` 自己维护的平行状态机。
+4. transition/debug surface 是 rooted projection，而不是 `coordinator` 自己维护的平行状态机。
 
 这意味着：
 
-- `pd` 可以失效
-- `pd` 可以重建
-- `pd` view 可以被丢弃并重建
+- `coordinator` 可以失效
+- `coordinator` 可以重建
+- `coordinator` view 可以被丢弃并重建
 - truth 仍然稳定留在 `meta/root`
 
-## 9. `pd` 当前到底做什么
+## 9. `coordinator` 当前到底做什么
 
 关键代码：
 
-- `pd/storage/root.go`
-- `pd/catalog/cluster.go`
-- `pd/view/pending_view.go`
-- `pd/operator`
-- `pd/server/service.go`
-- `pd/server/transition_service.go`
+- `coordinator/storage/root.go`
+- `coordinator/catalog/cluster.go`
+- `coordinator/server/service.go`
+- `coordinator/server/transition_service.go`
 
-当前 `pd` 负责：
+当前 `coordinator` 负责：
 
 - rooted snapshot -> runtime route view
-- rooted pending transition -> pending/operator view
+- rooted pending transition -> transition view
 - leader-only proposal gate
 - liveness / allocator / route RPC
 - assessment / inspection RPC
 
 也就是说：
 
-`pd` 不是 metadata DB。`pd` 是 rooted metadata 的服务宿主和 view 宿主。
+`coordinator` 不是 metadata DB。`coordinator` 是 rooted metadata 的服务宿主和 view 宿主。
 
 ## 10. `raftstore` 当前到底做什么
 
@@ -357,7 +355,7 @@ flowchart LR
 
 也就是说，它越来越像一个纯 executor，而不是半个 control-plane。
 
-## 11. Virtual Log substrate 是怎么设计的
+## 11. `VirtualLog` 是怎么设计的
 
 核心在：
 
@@ -410,7 +408,7 @@ flowchart TD
 - `AcknowledgeWindow`
 - `InstallBootstrap`
 
-这使 catch-up 语义正式进入 substrate contract，而不是散落在入口层的 if/else。
+这使 catch-up 语义正式进入 VirtualLog contract，而不是散落在入口层的 if/else。
 
 ## 12. local backend 和 replicated backend
 
@@ -435,7 +433,7 @@ flowchart TD
 
 作用：
 
-- replicated metadata substrate
+- replicated metadata backend
 - 当前仍然是 raft 驱动
 - 但上层已经被 `VirtualLog` / `ObservedCommitted` 解耦
 
@@ -446,7 +444,7 @@ flowchart TD
 - `network_ready.go`
   - ready drain / protocol persistence / committed decode
 - `network_virtual_log.go`
-  - substrate-facing methods
+  - VirtualLog-facing methods
 - `virtual_log_adapter.go`
   - rooted virtual-log adapter
 - `store.go`
@@ -485,22 +483,22 @@ flowchart TD
 sequenceDiagram
     participant OP as Operator/Client
     participant RS as raftstore
-    participant PD as pd
+    participant Coordinator as Coordinator
     participant MR as meta/root
 
     OP->>RS: 构造 peer/split/merge 目标
-    RS->>PD: publish planned RootEvent
-    PD->>MR: lifecycle assessment + append truth
+    RS->>Coordinator: publish planned RootEvent
+    Coordinator->>MR: lifecycle assessment + append truth
     RS->>RS: propose raft/admin command
-    RS->>PD: publish terminal RootEvent
-    PD->>MR: append terminal truth
+    RS->>Coordinator: publish terminal RootEvent
+    Coordinator->>MR: append terminal truth
 ```
 
 ### follower catch-up
 
 ```mermaid
 sequenceDiagram
-    participant F as PD follower
+    participant F as Coordinator follower
     participant SUB as TailSubscription
     participant MR as meta/root
 
@@ -538,7 +536,7 @@ sequenceDiagram
 
 - 最小 truth kernel
 - truth / service 分离
-- virtual log substrate
+- VirtualLog contract
 - backend 可替换
 
 ### FoundationDB
@@ -552,7 +550,7 @@ sequenceDiagram
 
 对比对象：
 
-- 让我们更明确看见，为什么 `pd` 不该重新长成 authority metadata service
+- 让我们更明确看见，为什么 `coordinator` 不该重新长成 authority metadata service
 
 ### CockroachDB
 
@@ -561,22 +559,23 @@ sequenceDiagram
 - 它更偏 in-band metadata
 - NoKV 当前选择的是小型 out-of-band truth kernel
 
-## 17. 当前已经完成的
+## 17. 当前已经落地的边界
 
-- `meta/root` 已成为最小 truth kernel
-- `pd` 已退出 authority 角色
-- `raftstore` 已明显收敛为 executor
-- Virtual Log contract 已经成型
-- local / replicated backend 已共享同一个 rooted domain
-- 持久化布局和命名已经清楚很多
+- `meta/root` 已成为最小 truth kernel。
+- `coordinator` 已退出 authority 角色，主要承担 rooted view、service 和 proposal gate。
+- `raftstore` 已收敛为 executor，并通过 planned / terminal truth 与控制面交互。
+- `VirtualLog` contract 已经成型，并被 local / replicated backend 共享。
+- route freshness、root lag、catch-up state、transition assessment 已进入 Coordinator RPC。
+- execution-plane v1 已有 admission / outcome / publish / restart 状态和 admin diagnostics。
 
-## 18. 当前还没做完的
+## 18. 当前没有实现的能力
 
-- 更成熟的 scheduler/operator runtime
-- replicated substrate 的进一步研究
-- Virtual Log 更强的 push/stream 模型
-- `raftstore` 进一步纯 executor 化
-- 更系统的性能基准与策略研究
+- 还没有自动 scheduler/control-plane runtime policy。
+- 还没有 richer transition phases，例如 `Published` / `Stalled`。
+- 还没有让客户端完整消费所有 freshness / degraded / catch-up 字段的策略层。
+- `VirtualLog` 还没有更强的 push/stream API。
+- replicated backend 还可以继续研究更强的 commit / compaction / install 策略。
+- `raftstore` 仍有进一步纯 executor 化空间，但 v1 边界已经可用。
 
 ## 19. 这套设计为什么适合作为研究平台
 
@@ -585,14 +584,14 @@ sequenceDiagram
 1. 足够清楚的 truth kernel
 2. 足够稳定的 view/service 边界
 3. 足够清楚的 executor 面
-4. 足够独立的 replicated substrate
+4. 足够独立的 replicated backend
 
 所以你可以分别研究：
 
 - metadata truth model
-- operator runtime
+- scheduler/runtime policy
 - scheduler/orchestrator
-- replicated protocol/substrate
+- replicated protocol/backend
 - catch-up / compaction / install 策略
 
 而不需要先推翻整个系统。
@@ -602,8 +601,8 @@ sequenceDiagram
 NoKV 当前的 metadata/control-plane 设计，真正值钱的不是“实现了一个新的元数据存储”，而是：
 
 - 它把最小 truth、view、runtime、executor 明确拆开了
-- 它把 `meta/root` 做成了一个专用的 rooted metadata substrate，而不是通用 KV
+- 它把 `meta/root` 做成了一个专用的 rooted metadata truth kernel，而不是通用 KV
 - 它借鉴 Delos 的地方是结构原则，而不是协议照搬
 - 它让 local / replicated、单机 / 分布式、truth / view 都进入了同一个稳定框架
 
-这也是为什么这条主线现在已经不仅能支撑代码实现，还能支撑后续继续做 control-plane、scheduler、Virtual Log 和 protocol 方向的研究。
+这也是为什么这条主线现在已经不仅能支撑代码实现，还能支撑后续继续做 control-plane、scheduler、VirtualLog 和 protocol 方向的研究。
