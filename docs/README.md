@@ -40,7 +40,7 @@
   <div class="hero-summary">
     <div class="hero-stat">
       <strong>Standalone to Cluster</strong>
-      <span>Seed a distributed region from an existing workdir and keep the same storage substrate.</span>
+      <span>Seed a distributed region from an existing workdir and keep the same storage layer.</span>
     </div>
     <div class="hero-stat">
       <strong>Correctness First</strong>
@@ -105,7 +105,7 @@
     <span class="masthead-kicker">What To Look For</span>
     <h3>What makes this project worth reading</h3>
     <ul>
-      <li>One storage substrate instead of separate standalone and distributed engines.</li>
+      <li>One storage layer instead of separate standalone and distributed engines.</li>
       <li>Formal lifecycle and migration protocol instead of dump/import glue.</li>
       <li>System-level verification under restart, degraded Coordinator, chaos, and failpoints.</li>
     </ul>
@@ -122,7 +122,7 @@
     <h3>NoKV is not trying to be a feature checklist.</h3>
     <p>It is trying to answer a narrower and harder question well: can one storage core grow from an embedded engine into a distributed multi-Raft KV without turning migration, metadata, and recovery into glue code?</p>
     <ul class="why-points">
-      <li>One storage substrate across standalone and distributed modes.</li>
+      <li>One storage layer across standalone and distributed modes.</li>
       <li>Explicit lifecycle and migration semantics instead of hidden bootstrap magic.</li>
       <li>Verification aimed at restart, degraded control plane, and publish-boundary correctness.</li>
     </ul>

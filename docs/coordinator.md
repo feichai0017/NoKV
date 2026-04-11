@@ -1,6 +1,6 @@
 # Coordinator
 
-`Coordinator` is NoKV's control-plane service for distributed mode.  
+`Coordinator` is NoKV's control-plane service for distributed mode.
 It exposes a gRPC API (`pb.Coordinator`) and is started by:
 
 ```bash
@@ -161,8 +161,7 @@ Startup flow:
 4. Materialize the rooted region snapshot into `coordinator/catalog.Cluster`.
 
 For replicated mode, followers periodically refresh rooted state and rebuild the
-service-side view. This avoids allocator rollback and removes the old parallel
-`PD_STATE.json` truth table.
+service-side view. This avoids allocator rollback and removes the old parallel coordinator-state JSON truth table.
 
 ### Region Truth Hierarchy
 
