@@ -4,6 +4,7 @@ import (
 	"maps"
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 )
 
 const (
@@ -89,5 +90,32 @@ func CloneRaftPointers(src map[uint64]RaftLogPointer) map[uint64]RaftLogPointer 
 	}
 	out := make(map[uint64]RaftLogPointer, len(src))
 	maps.Copy(out, src)
+	return out
+}
+
+// PendingRootEvent captures one store-local rooted event that has been applied
+// locally but not yet durably acknowledged as published to the coordinator.
+type PendingRootEvent struct {
+	Sequence uint64          `json:"sequence"`
+	Event    rootevent.Event `json:"event"`
+}
+
+// ClonePendingRootEvent returns a deep copy of one pending rooted event.
+func ClonePendingRootEvent(event PendingRootEvent) PendingRootEvent {
+	cp := event
+	cp.Event = rootevent.CloneEvent(event.Event)
+	return cp
+}
+
+// ClonePendingRootEvents returns a detached copy of the provided pending rooted
+// event map.
+func ClonePendingRootEvents(src map[uint64]PendingRootEvent) map[uint64]PendingRootEvent {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[uint64]PendingRootEvent, len(src))
+	for seq, event := range src {
+		out[seq] = ClonePendingRootEvent(event)
+	}
 	return out
 }

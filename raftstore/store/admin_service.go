@@ -3,7 +3,6 @@ package store
 import (
 	"bytes"
 	"fmt"
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -194,6 +193,6 @@ func regionMetaFromDescriptorProto(pbMeta *metapb.RegionDescriptor) localmeta.Re
 	if pbMeta == nil {
 		return localmeta.RegionMeta{}
 	}
-	meta, _ := metacodec.LocalRegionMetaFromDescriptorProto(pbMeta)
+	meta, _ := localmeta.FromDescriptorProto(pbMeta)
 	return meta
 }

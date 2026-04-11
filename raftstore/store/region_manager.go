@@ -2,7 +2,6 @@ package store
 
 import (
 	"fmt"
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	"sync"
@@ -130,6 +129,9 @@ func (rm *regionManager) applyRegionMeta(meta localmeta.RegionMeta, publish bool
 	}
 
 	if rm.localMeta != nil {
+		// Local durable metadata is the restart source of truth. Persist it
+		// before updating the in-memory mirror so crash recovery can always
+		// rebuild the catalog from disk if this process dies in between.
 		if err := rm.localMeta.SaveRegion(metaCopy); err != nil {
 			return err
 		}
@@ -203,7 +205,7 @@ func (rm *regionManager) applyRegionRemoval(regionID uint64, publish bool) error
 }
 
 func catalogApplyRootEvent(meta localmeta.RegionMeta, existed bool) rootevent.Event {
-	desc := metacodec.DescriptorFromLocalRegionMeta(meta, 0)
+	desc := localmeta.Descriptor(meta, 0)
 	if !existed {
 		return rootevent.RegionBootstrapped(desc)
 	}

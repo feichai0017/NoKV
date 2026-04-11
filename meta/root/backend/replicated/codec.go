@@ -4,15 +4,15 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"google.golang.org/protobuf/proto"
 )
 
 func marshalCommittedEvent(rec rootstorage.CommittedEvent) ([]byte, error) {
-	event, err := proto.Marshal(metacodec.RootEventToProto(rec.Event))
+	event, err := proto.Marshal(metawire.RootEventToProto(rec.Event))
 	if err != nil {
 		return nil, err
 	}
@@ -41,6 +41,6 @@ func unmarshalCommittedEvent(data []byte) (rootstorage.CommittedEvent, error) {
 			Term:  binary.LittleEndian.Uint64(data[0:8]),
 			Index: binary.LittleEndian.Uint64(data[8:16]),
 		},
-		Event: metacodec.RootEventFromProto(&pbEvent),
+		Event: metawire.RootEventFromProto(&pbEvent),
 	}, nil
 }

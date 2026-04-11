@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/vfs"
 	"google.golang.org/protobuf/proto"
@@ -24,11 +25,15 @@ const (
 	// store for WAL/apply recovery. The payload is one binary protobuf blob
 	// encoded as metapb.RaftProgressCatalog.
 	RaftProgressFileName = "raft-progress.binpb"
+	// PendingRootEventsFileName stores locally applied rooted events that still
+	// need a successful publish acknowledgement from the coordinator.
+	PendingRootEventsFileName = "pending-root-events.binpb"
 )
 
 type diskState struct {
-	Regions      map[uint64]RegionMeta
-	RaftPointers map[uint64]RaftLogPointer
+	Regions           map[uint64]RegionMeta
+	RaftPointers      map[uint64]RaftLogPointer
+	PendingRootEvents map[uint64]PendingRootEvent
 }
 
 // Store persists store-local region metadata used only for local recovery.
@@ -106,6 +111,25 @@ func (s *Store) RaftPointerSnapshot() map[uint64]RaftLogPointer {
 	return CloneRaftPointers(s.state.RaftPointers)
 }
 
+// PendingRootEvents returns locally durable rooted events that still require a
+// successful publish acknowledgement. Results are sorted by sequence.
+func (s *Store) PendingRootEvents() []PendingRootEvent {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.state.PendingRootEvents) == 0 {
+		return nil
+	}
+	keys := sortedPendingSequences(s.state.PendingRootEvents)
+	out := make([]PendingRootEvent, 0, len(keys))
+	for _, seq := range keys {
+		out = append(out, ClonePendingRootEvent(s.state.PendingRootEvents[seq]))
+	}
+	return out
+}
+
 // Empty reports whether the local peer catalog is empty.
 func (s *Store) Empty() bool {
 	if s == nil {
@@ -161,6 +185,39 @@ func (s *Store) SaveRaftPointer(ptr RaftLogPointer) error {
 	return s.persistLocked()
 }
 
+// SavePendingRootEvent persists one locally applied rooted event until publish
+// acknowledgement succeeds.
+func (s *Store) SavePendingRootEvent(event PendingRootEvent) error {
+	if s == nil {
+		return nil
+	}
+	if event.Sequence == 0 {
+		return fmt.Errorf("raftstore/localmeta: pending rooted event sequence is zero")
+	}
+	if event.Event.Kind == 0 {
+		return fmt.Errorf("raftstore/localmeta: pending rooted event kind is unknown")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.PendingRootEvents == nil {
+		s.state.PendingRootEvents = make(map[uint64]PendingRootEvent)
+	}
+	s.state.PendingRootEvents[event.Sequence] = ClonePendingRootEvent(event)
+	return s.persistLocked()
+}
+
+// DeletePendingRootEvent removes one publish-acknowledged rooted event from the
+// local durable pending catalog.
+func (s *Store) DeletePendingRootEvent(sequence uint64) error {
+	if s == nil || sequence == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.state.PendingRootEvents, sequence)
+	return s.persistLocked()
+}
+
 // Close releases resources associated with the metadata store.
 func (s *Store) Close() error {
 	return nil
@@ -175,9 +232,14 @@ func loadState(fs vfs.FS, workdir string) (diskState, error) {
 	if err != nil {
 		return diskState{}, err
 	}
+	pending, err := loadPendingRootEventCatalog(fs, workdir)
+	if err != nil {
+		return diskState{}, err
+	}
 	return diskState{
-		Regions:      regions,
-		RaftPointers: progress,
+		Regions:           regions,
+		RaftPointers:      progress,
+		PendingRootEvents: pending,
 	}, nil
 }
 
@@ -186,6 +248,9 @@ func (s *Store) persistLocked() error {
 		return err
 	}
 	if err := persistRaftProgressCatalog(s.fs, s.workdir, s.state.RaftPointers); err != nil {
+		return err
+	}
+	if err := persistPendingRootEventCatalog(s.fs, s.workdir, s.state.PendingRootEvents); err != nil {
 		return err
 	}
 	return nil
@@ -243,6 +308,35 @@ func loadRaftProgressCatalog(fs vfs.FS, workdir string) (map[uint64]RaftLogPoint
 	return out, nil
 }
 
+func loadPendingRootEventCatalog(fs vfs.FS, workdir string) (map[uint64]PendingRootEvent, error) {
+	path := filepath.Join(workdir, PendingRootEventsFileName)
+	data, err := fs.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return make(map[uint64]PendingRootEvent), nil
+		}
+		return nil, err
+	}
+	if len(data) == 0 {
+		return make(map[uint64]PendingRootEvent), nil
+	}
+	var pbCatalog metapb.PendingRootEventCatalog
+	if err := proto.Unmarshal(data, &pbCatalog); err != nil {
+		return nil, err
+	}
+	out := make(map[uint64]PendingRootEvent, len(pbCatalog.Entries))
+	for _, item := range pbCatalog.Entries {
+		if item == nil || item.GetSequence() == 0 || item.GetEvent() == nil {
+			continue
+		}
+		out[item.GetSequence()] = PendingRootEvent{
+			Sequence: item.GetSequence(),
+			Event:    metawire.RootEventFromProto(item.GetEvent()),
+		}
+	}
+	return out, nil
+}
+
 func persistReplicaCatalog(fs vfs.FS, workdir string, regions map[uint64]RegionMeta) error {
 	keys := sortedRegionIDs(regions)
 	pbCatalog := &metapb.ReplicaLocalCatalog{
@@ -271,6 +365,25 @@ func persistRaftProgressCatalog(fs vfs.FS, workdir string, progress map[uint64]R
 		return err
 	}
 	return persistProtoFile(fs, workdir, RaftProgressFileName, payload)
+}
+
+func persistPendingRootEventCatalog(fs vfs.FS, workdir string, pending map[uint64]PendingRootEvent) error {
+	keys := sortedPendingSequences(pending)
+	pbCatalog := &metapb.PendingRootEventCatalog{
+		Entries: make([]*metapb.PendingRootEvent, 0, len(keys)),
+	}
+	for _, seq := range keys {
+		item := pending[seq]
+		pbCatalog.Entries = append(pbCatalog.Entries, &metapb.PendingRootEvent{
+			Sequence: item.Sequence,
+			Event:    metawire.RootEventToProto(item.Event),
+		})
+	}
+	payload, err := proto.Marshal(pbCatalog)
+	if err != nil {
+		return err
+	}
+	return persistProtoFile(fs, workdir, PendingRootEventsFileName, payload)
 }
 
 func persistProtoFile(fs vfs.FS, workdir, name string, payload []byte) error {
@@ -434,6 +547,15 @@ func sortedRaftGroupIDs(progress map[uint64]RaftLogPointer) []uint64 {
 	keys := make([]uint64, 0, len(progress))
 	for id := range progress {
 		keys = append(keys, id)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func sortedPendingSequences(pending map[uint64]PendingRootEvent) []uint64 {
+	keys := make([]uint64, 0, len(pending))
+	for seq := range pending {
+		keys = append(keys, seq)
 	}
 	slices.Sort(keys)
 	return keys

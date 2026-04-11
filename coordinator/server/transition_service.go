@@ -3,9 +3,9 @@ package server
 import (
 	"context"
 
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -35,7 +35,7 @@ func (s *Service) AssessRootEvent(_ context.Context, req *coordpb.AssessRootEven
 	if req == nil || req.GetEvent() == nil {
 		return nil, status.Error(codes.InvalidArgument, "assess root event request missing event")
 	}
-	event := metacodec.RootEventFromProto(req.GetEvent())
+	event := metawire.RootEventFromProto(req.GetEvent())
 	if event.Kind == rootevent.KindUnknown {
 		return nil, status.Error(codes.InvalidArgument, "assess root event requires known kind")
 	}
@@ -62,10 +62,10 @@ func transitionEntryToProto(entry rootstate.TransitionEntry) *coordpb.Transition
 		TransitionId: entry.ID,
 	}
 	if entry.PeerChange != nil {
-		out.PendingPeerChange = metacodec.RootPendingPeerChangeToProto(entry.Key, *entry.PeerChange)
+		out.PendingPeerChange = metawire.RootPendingPeerChangeToProto(entry.Key, *entry.PeerChange)
 	}
 	if entry.RangeChange != nil {
-		out.PendingRangeChange = metacodec.RootPendingRangeChangeToProto(entry.Key, *entry.RangeChange)
+		out.PendingRangeChange = metawire.RootPendingRangeChangeToProto(entry.Key, *entry.RangeChange)
 	}
 	return out
 }

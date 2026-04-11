@@ -9,10 +9,10 @@ import (
 	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
 	"github.com/feichai0017/NoKV/coordinator/tso"
 	pdview "github.com/feichai0017/NoKV/coordinator/view"
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"google.golang.org/grpc/codes"
@@ -29,6 +29,7 @@ type Service struct {
 	tso     *tso.Allocator
 	storage coordstorage.Store
 	allocMu sync.Mutex
+	writeMu sync.Mutex
 }
 
 const errNotLeaderPrefix = "coordinator not leader"
@@ -119,7 +120,7 @@ func (s *Service) PublishRootEvent(_ context.Context, req *coordpb.PublishRootEv
 	if req == nil || req.GetEvent() == nil {
 		return nil, status.Error(codes.InvalidArgument, "publish root event request missing event")
 	}
-	event := metacodec.RootEventFromProto(req.GetEvent())
+	event := metawire.RootEventFromProto(req.GetEvent())
 	if event.Kind == rootevent.KindUnknown {
 		return nil, status.Error(codes.InvalidArgument, "publish root event requires known kind")
 	}
@@ -130,6 +131,8 @@ func (s *Service) PublishRootEvent(_ context.Context, req *coordpb.PublishRootEv
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	if err := s.requireExpectedClusterEpoch(req.GetExpectedClusterEpoch()); err != nil {
 		return nil, err
 	}
@@ -204,6 +207,8 @@ func (s *Service) RemoveRegion(_ context.Context, req *coordpb.RemoveRegionReque
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	if err := s.requireExpectedClusterEpoch(req.GetExpectedClusterEpoch()); err != nil {
 		return nil, err
 	}
@@ -293,7 +298,7 @@ func (s *Service) GetRegionByKey(_ context.Context, req *coordpb.GetRegionByKeyR
 		}, nil
 	}
 	return &coordpb.GetRegionByKeyResponse{
-		RegionDescriptor: metacodec.DescriptorToProto(desc),
+		RegionDescriptor: metawire.DescriptorToProto(desc),
 		NotFound:         false,
 		ServedRootToken:  rootTokenToProto(state.servedToken),
 		ServedFreshness:  freshness,

@@ -4,14 +4,15 @@ import (
 	"context"
 	"errors"
 	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -102,12 +103,36 @@ type fakeSyncStorage struct {
 	snapshot coordstorage.Snapshot
 }
 
+type serialAppendStorage struct {
+	fakeStorage
+	inAppend int32
+	entered  chan struct{}
+	release  chan struct{}
+}
+
 func (f *fakeSyncStorage) Load() (coordstorage.Snapshot, error) {
 	return coordstorage.CloneSnapshot(f.snapshot), nil
 }
 
 func (f *fakeSyncStorage) Refresh() error {
 	return nil
+}
+
+func (f *serialAppendStorage) AppendRootEvent(event rootevent.Event) error {
+	if !atomic.CompareAndSwapInt32(&f.inAppend, 0, 1) {
+		return errors.New("concurrent append")
+	}
+	if f.entered != nil {
+		select {
+		case f.entered <- struct{}{}:
+		default:
+		}
+	}
+	if f.release != nil {
+		<-f.release
+	}
+	defer atomic.StoreInt32(&f.inAppend, 0)
+	return f.fakeStorage.AppendRootEvent(event)
 }
 
 func rootCloneDescriptorsForTest(in map[uint64]descriptor.Descriptor) map[uint64]descriptor.Descriptor {
@@ -125,7 +150,7 @@ func publishDescriptorEvent(t *testing.T, svc *Service, desc descriptor.Descript
 		event = rootevent.RegionDescriptorPublished(desc)
 	}
 	_, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event:                metacodec.RootEventToProto(event),
+		Event:                metawire.RootEventToProto(event),
 		ExpectedClusterEpoch: expected,
 	})
 	return err
@@ -527,7 +552,7 @@ func TestServicePublishRootEvent(t *testing.T) {
 		testDescriptor(42, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil),
 	)
 	resp, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(event),
+		Event: metawire.RootEventToProto(event),
 	})
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())
@@ -569,7 +594,7 @@ func TestServicePublishRootEventAppliedPeerChangeMarksPendingApplied(t *testing.
 		return desc
 	}())
 	resp, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(applied),
+		Event: metawire.RootEventToProto(applied),
 	})
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())
@@ -606,7 +631,7 @@ func TestServicePublishRootEventPersistsPeerPlan(t *testing.T) {
 	svc.SetStorage(store)
 
 	resp, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)),
+		Event: metawire.RootEventToProto(rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)),
 	})
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())
@@ -651,7 +676,7 @@ func TestServicePublishRootEventSkipsDuplicatePeerPlan(t *testing.T) {
 	svc.SetStorage(store)
 
 	resp, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)),
+		Event: metawire.RootEventToProto(rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)),
 	})
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())
@@ -685,7 +710,7 @@ func TestServicePublishRootEventSkipsCompletedPeerPlan(t *testing.T) {
 	svc.SetStorage(store)
 
 	resp, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)),
+		Event: metawire.RootEventToProto(rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)),
 	})
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())
@@ -731,7 +756,7 @@ func TestServicePublishRootEventRejectsConflictingPeerPlan(t *testing.T) {
 	svc.SetStorage(store)
 
 	_, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(rootevent.PeerAdditionPlanned(conflicting.RegionID, 3, 301, conflicting)),
+		Event: metawire.RootEventToProto(rootevent.PeerAdditionPlanned(conflicting.RegionID, 3, 301, conflicting)),
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
@@ -773,7 +798,7 @@ func TestServicePublishRootEventRejectsMismatchedPeerApply(t *testing.T) {
 	svc.SetStorage(store)
 
 	_, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(rootevent.PeerAdded(mismatched.RegionID, 3, 301, mismatched)),
+		Event: metawire.RootEventToProto(rootevent.PeerAdded(mismatched.RegionID, 3, 301, mismatched)),
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
@@ -807,7 +832,7 @@ func TestServicePublishRootEventSkipsDuplicateSplitPlan(t *testing.T) {
 	svc.SetStorage(store)
 
 	resp, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(rootevent.RegionSplitPlanned(40, []byte("m"), left, right)),
+		Event: metawire.RootEventToProto(rootevent.RegionSplitPlanned(40, []byte("m"), left, right)),
 	})
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())
@@ -916,7 +941,7 @@ func TestServiceAssessRootEventReturnsConflictAssessment(t *testing.T) {
 
 	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	resp, err := svc.AssessRootEvent(context.Background(), &coordpb.AssessRootEventRequest{
-		Event: metacodec.RootEventToProto(rootevent.PeerAdditionPlanned(conflicting.RegionID, 3, 301, conflicting)),
+		Event: metawire.RootEventToProto(rootevent.PeerAdditionPlanned(conflicting.RegionID, 3, 301, conflicting)),
 	})
 	require.NoError(t, err)
 	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_CONFLICT, resp.GetAssessment().GetStatus())
@@ -946,7 +971,7 @@ func TestServiceAssessRootEventUsesStorageSnapshot(t *testing.T) {
 	svc.SetStorage(store)
 
 	resp, err := svc.AssessRootEvent(context.Background(), &coordpb.AssessRootEventRequest{
-		Event: metacodec.RootEventToProto(rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)),
+		Event: metawire.RootEventToProto(rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)),
 	})
 	require.NoError(t, err)
 	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_COMPLETED, resp.GetAssessment().GetStatus())
@@ -979,7 +1004,7 @@ func TestServicePublishRootEventSkipsCompletedSplitPlan(t *testing.T) {
 	svc.SetStorage(store)
 
 	resp, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(rootevent.RegionSplitPlanned(140, []byte("m"), left, right)),
+		Event: metawire.RootEventToProto(rootevent.RegionSplitPlanned(140, []byte("m"), left, right)),
 	})
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())
@@ -1006,7 +1031,7 @@ func TestServicePublishRootEventSkipsCompletedMergePlan(t *testing.T) {
 	svc.SetStorage(store)
 
 	resp, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(rootevent.RegionMergePlanned(149, 150, merged)),
+		Event: metawire.RootEventToProto(rootevent.RegionMergePlanned(149, 150, merged)),
 	})
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())
@@ -1037,7 +1062,7 @@ func TestServicePublishRootEventRejectsMismatchedMergeApply(t *testing.T) {
 	mismatched.RootEpoch = 0
 	mismatched.EnsureHash()
 	_, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(rootevent.RegionMerged(50, 52, mismatched)),
+		Event: metawire.RootEventToProto(rootevent.RegionMerged(50, 52, mismatched)),
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
@@ -1063,12 +1088,60 @@ func TestServicePublishRootEventValidationAndPersistenceError(t *testing.T) {
 		testDescriptor(10, []byte("a"), []byte("z"), metaregion.Epoch{Version: 3, ConfVersion: 1}, nil),
 	)
 	_, err = svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(event),
+		Event: metawire.RootEventToProto(event),
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.Internal, status.Code(err))
 	_, ok := svc.cluster.GetRegionDescriptorByKey([]byte("m"))
 	require.False(t, ok)
+}
+
+func TestServicePublishRootEventSerializesStorageAppend(t *testing.T) {
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+	store := &serialAppendStorage{
+		fakeStorage: fakeStorage{snapshot: coordstorage.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}},
+		entered:     make(chan struct{}, 1),
+		release:     make(chan struct{}),
+	}
+	svc.SetStorage(store)
+
+	req1 := &coordpb.PublishRootEventRequest{
+		Event: metawire.RootEventToProto(rootevent.RegionBootstrapped(testDescriptor(
+			41, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}},
+		))),
+	}
+	req2 := &coordpb.PublishRootEventRequest{
+		Event: metawire.RootEventToProto(rootevent.RegionBootstrapped(testDescriptor(
+			42, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 102}},
+		))),
+	}
+
+	errCh := make(chan error, 2)
+	go func() {
+		_, err := svc.PublishRootEvent(context.Background(), req1)
+		errCh <- err
+	}()
+	select {
+	case <-store.entered:
+	case <-time.After(time.Second):
+		t.Fatal("first append did not start")
+	}
+
+	go func() {
+		_, err := svc.PublishRootEvent(context.Background(), req2)
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("second publish finished before first append released: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(store.release)
+	require.NoError(t, <-errCh)
+	require.NoError(t, <-errCh)
+	require.Equal(t, 2, store.eventCalls)
 }
 
 func TestServiceRegionCatalogPersistenceErrors(t *testing.T) {
@@ -1150,7 +1223,7 @@ func TestServiceRejectsWritesOnFollower(t *testing.T) {
 	require.True(t, strings.Contains(err.Error(), errNotLeaderPrefix))
 
 	_, err = svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(rootevent.RegionTombstoned(8)),
+		Event: metawire.RootEventToProto(rootevent.RegionTombstoned(8)),
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
@@ -1224,7 +1297,7 @@ func TestServicePublishRootEventAssignsRootEpoch(t *testing.T) {
 	event := rootevent.PeerAdded(1, 2, 201, testDescriptor(1, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 2}, nil))
 	event.PeerChange.Region.RootEpoch = 0
 	_, err = svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(event),
+		Event: metawire.RootEventToProto(event),
 	})
 	require.NoError(t, err)
 	require.Equal(t, rootevent.KindPeerAdded, store.lastEvent.Kind)
@@ -1249,7 +1322,7 @@ func TestServiceMutatingWritesRespectExpectedClusterEpoch(t *testing.T) {
 
 	event := rootevent.PeerAdded(11, 2, 201, testDescriptor(11, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 2}, nil))
 	_, err = svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event:                metacodec.RootEventToProto(event),
+		Event:                metawire.RootEventToProto(event),
 		ExpectedClusterEpoch: 7,
 	})
 	require.Error(t, err)
@@ -1257,7 +1330,7 @@ func TestServiceMutatingWritesRespectExpectedClusterEpoch(t *testing.T) {
 	require.Equal(t, 1, store.eventCalls)
 
 	_, err = svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event:                metacodec.RootEventToProto(event),
+		Event:                metawire.RootEventToProto(event),
 		ExpectedClusterEpoch: 8,
 	})
 	require.NoError(t, err)
