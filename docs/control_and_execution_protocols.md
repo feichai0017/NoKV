@@ -7,11 +7,13 @@ This note defines NoKV's protocol line for:
 
 and the next-stage evolution around them.
 
-The current implementation status is still asymmetric:
+The current implementation status is intentionally minimal but no longer just a
+design sketch:
 
-- `control-plane protocol v1` is already partially implemented and exposed
-- `execution-plane protocol v1` now has a minimal store-local implementation
-  and a minimal admin diagnostics API surface
+- `control-plane protocol v1` is implemented and exposed through Coordinator
+  RPCs plus `meta/root` storage semantics
+- `execution-plane protocol v1` is implemented as a store-local contract with a
+  small admin diagnostics API surface
 
 The point of this document is to keep those two lines coordinated instead of
 letting them drift into separate, implicit rule sets.
@@ -55,7 +57,7 @@ The execution plane is protocolized around four matching ideas:
 
 The control plane now has a **minimal implemented v1**.
 
-Already implemented and exposed through `pb/coordinator/coordinator.proto`,
+Implemented and exposed through `pb/coordinator/coordinator.proto`,
 `coordinator/server`, `coordinator/storage`, and tests:
 
 - route-read `Freshness`
@@ -69,7 +71,7 @@ Already implemented and exposed through `pb/coordinator/coordinator.proto`,
 This means the protocol is no longer only a design direction. It is already the
 formal serving contract for key Coordinator APIs.
 
-What is **not** yet fully protocolized:
+Not implemented in v1:
 
 - richer transition phases such as `Published` / `Stalled`
 - a fuller catch-up action surface exposed through API
@@ -78,8 +80,8 @@ What is **not** yet fully protocolized:
 
 So the right description today is:
 
-> control-plane protocol v1 is implemented and in use, while later runtime and
-> operator semantics remain future work.
+> control-plane protocol v1 is implemented and in use, while richer
+> scheduler/runtime policy is not implemented in v1.
 
 The execution plane is in a different state.
 
@@ -98,14 +100,14 @@ runtime state, and tests:
   drop
 - admin diagnostics exposure through `pb/admin/admin.proto` `ExecutionStatus`
 
-The execution plane still keeps many behaviors as implementation mechanics:
+Not implemented as first-class execution protocol fields yet:
 
 - request validation and routing
-- local leader admission
 - context propagation
-- planned truth -> execute -> terminal truth
-- local restart through `raftstore/localmeta` + raft durable state
-- degraded local scheduler behavior
+- detailed local leader admission diagnostics
+- detailed per-attempt scheduler retry/backoff policy
+- metrics for planned truth -> execute -> terminal truth latency
+- richer degraded local scheduler states
 
 The current landing is still mostly store-local and spread across:
 
@@ -118,7 +120,7 @@ So the right description there is:
 
 > execution-plane protocol v1 now exists as a minimal named runtime contract,
 > with store-local state and admin-visible diagnostics, while broader metrics,
-> policy, and richer executor states remain future work.
+> policy, and richer executor states are not implemented in v1.
 
 ---
 
@@ -132,8 +134,9 @@ NoKV already has the right building blocks:
 - rebuildable `coordinator/catalog`
 - explicit planned and terminal topology events
 
-Today, these pieces mostly exist as implementation mechanics.
-The control plane works, but many important semantics are still implicit:
+Before v1, these pieces mostly existed as implementation mechanics.
+The control plane now has a formal minimum contract, while several policy
+extensions remain intentionally outside v1:
 
 - when a follower read is fresh enough
 - when a follower must reload
@@ -419,7 +422,7 @@ That gives the system a clear, high-value place to prove the model before wider 
 
 ## 6. Rooted Catch-Up Protocol
 
-NoKV already has a good catch-up substrate:
+NoKV already has a good catch-up foundation:
 
 - checkpoint
 - committed tail
@@ -562,7 +565,7 @@ This makes causality explicit:
 #### `Planned`
 
 The rooted lifecycle assessment says the transition exists as an intended
-topology change, but the operator runtime has not yet admitted it for forward
+topology change, but the scheduler/control-plane runtime has not yet admitted it for forward
 progress.
 
 This is the phase used by:
@@ -572,7 +575,7 @@ This is the phase used by:
 
 #### `Admitted`
 
-The rooted transition is currently pending or open, and the operator runtime has
+The rooted transition is currently pending or open, and the scheduler/control-plane runtime has
 admitted it for execution progress.
 
 This is the phase used by:
@@ -614,7 +617,7 @@ A formal lifecycle enables:
 - clear scheduling decisions
 - proper retry/backoff
 - stuck transition recovery
-- operator runtime clarity
+- scheduler/control-plane runtime clarity
 - precise testing around publish boundaries
 
 Without it, the system keeps relying on partial signals scattered across:
@@ -1206,47 +1209,47 @@ protocolize every internal raft detail.
 
 ## 16. Priority and Rollout Order
 
-The next protocol work should favor `execution-plane v1` before broadening
-`control-plane v2`.
+The next protocol work should avoid widening either protocol until the current
+v1 contracts stay small, observable, and well tested.
 
-### 16.1 Why execution comes next
+### 16.1 What is implemented now
 
-The control plane now already has a minimal, externally visible contract:
+The control plane has a minimal, externally visible contract:
 
 - freshness classes
 - rooted token / lag
 - degraded serving state
 - transition identity
 
-By contrast, the execution plane still has important correctness-sensitive
-semantics that are not yet formalized:
+The execution plane now has a minimal internal contract:
 
-- request admission and cancellation
-- queue overflow and degraded scheduler behavior
-- planned truth -> execute -> terminal truth publish boundary
-- restart alignment between local durable state and Coordinator
+- admission class / reason
+- topology outcome
+- publish state
+- restart state
+- admin-visible `ExecutionStatus`
 
-That means the larger current ambiguity sits in `raftstore`, not in
-`coordinator`.
+That is enough for v1. It gives tests and operators names for the important
+boundaries without turning `raftstore` into a policy engine.
 
 ### 16.2 What should not happen next
 
-The wrong next step would be to keep enriching control-plane phases and
-diagnostic fields while the execution plane still lacks a matching lifecycle.
+The wrong next step would be to keep enriching lifecycle phases and diagnostic
+fields before the existing v1 state proves stable under recovery and
+integration tests.
 
 That would create a vocabulary mismatch:
 
-- control plane claims richer transition semantics
-- execution plane still cannot report them precisely
+- control plane claims richer transition semantics than the executor can act on
+- execution plane reports more states than the coordinator can use safely
 
 ### 16.3 Recommended order
 
-1. Finish execution-plane protocol v1 in design form.
-2. Land the first execution-plane states on the `raftstore` request and
-   transition boundaries.
-3. Then tighten control-plane protocol from v1 toward richer operator/runtime
-   phases.
+1. Keep control-plane v1 and execution-plane v1 narrow.
+2. Add tests around the existing publish/restart/admission states before adding
+   new states.
+3. Only then tighten control-plane v1 toward richer scheduler/runtime phases.
 
 In short:
 
-> stabilize the executor contract first, then deepen the coordinator contract.
+> stabilize both v1 contracts first, then deepen scheduler/runtime semantics.

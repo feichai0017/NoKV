@@ -1,11 +1,11 @@
-# 2026-03-30 为什么 PD 和执行面必须分层
+# 2026-03-30 为什么 Coordinator 和执行面必须分层
 
-> 状态：当前这条边界已经进一步收敛。`pd` 负责 rooted view、service 和 proposal gate；`raftstore` 负责 data-plane execute；`meta/root` 负责最小 truth。本文重点解释为什么 `PD` 不能和执行面混成一层。
+> 状态：当前这条边界已经进一步收敛。`coordinator` 负责 rooted view、service 和 proposal gate；`raftstore` 负责 data-plane execute；`meta/root` 负责最小 truth。本文重点解释为什么 `Coordinator` 不能和执行面混成一层。
 
 ## 导读
 
-- 🧭 主题：为什么 `pd` 必须是 view/service 层，而不是半个执行器。
-- 🧱 核心对象：`meta/root`、`pd`、`raftstore`、`RootEvent`。
+- 🧭 主题：为什么 `coordinator` 必须是 view/service 层，而不是半个执行器。
+- 🧱 核心对象：`meta/root`、`coordinator`、`raftstore`、`RootEvent`。
 - 🔁 调用链：`planned truth -> data-plane execute -> terminal truth`。
 - 📚 参考对象：TiKV 的控制面/执行面分离、Delos/FDB 的 truth/service 解耦。
 
@@ -26,14 +26,14 @@
 NoKV 当前选择的是另一条路：
 
 - `meta/root` 作为最小 truth kernel
-- `pd` 作为 rooted view + service
+- `coordinator` 作为 rooted view + service
 - `raftstore` 作为 executor
 
 ## 2. 当前分层
 
 相关代码：
 
-- `pd`
+- `coordinator`
 - `meta/root`
 - `raftstore/store`
 
@@ -41,11 +41,11 @@ NoKV 当前选择的是另一条路：
 
 ```mermaid
 flowchart LR
-    C["Client / Operator"] --> PD["PD\nview + service + gate"]
-    PD --> MR["meta/root\ntruth kernel"]
-    RS["raftstore\nexecutor"] --> PD
+    C["Client / Operator"] --> Coordinator["Coordinator\nview + service + gate"]
+    Coordinator --> MR["meta/root\ntruth kernel"]
+    RS["raftstore\nexecutor"] --> Coordinator
     RS --> DP["data-plane peer runtime"]
-    DP --> PD
+    DP --> Coordinator
 ```
 
 ### 三层职责
@@ -58,12 +58,12 @@ flowchart LR
 - transition state machine
 - checkpoint + retained tail
 
-#### `pd`
+#### `coordinator`
 
 负责：
 
 - route view
-- pending/operator view
+- transition view
 - leader-only write gate
 - assessment / inspection RPC
 - liveness service
@@ -77,16 +77,16 @@ flowchart LR
 - local apply
 - terminal truth publish
 
-## 3. 为什么 `PD` 不能直接做执行面
+## 3. 为什么 `Coordinator` 不能直接做执行面
 
 ### 3.1 control-plane 不等于 execution-plane
 
-`PD` 擅长的是：
+`Coordinator` 擅长的是：
 
 - 看全局视图
 - 做路由和目录服务
 - 做 proposal gate
-- 做 operator/scheduler runtime
+- 做 scheduler decision 和 rooted assessment
 
 但真正执行这些动作的仍然是 leader store：
 
@@ -97,7 +97,7 @@ flowchart LR
 - `Merge`
 - snapshot install
 
-如果让 `PD` 直接改本地 region 运行时，会立刻出现三个问题：
+如果让 `Coordinator` 直接改本地 region 运行时，会立刻出现三个问题：
 
 1. 本地 truth 与 raft apply 路径脱节
 2. 正常执行和恢复路径不一致
@@ -128,18 +128,18 @@ flowchart LR
 ```mermaid
 sequenceDiagram
     participant OP as Operator/Client
-    participant PD as PD
+    participant Coordinator as Coordinator
     participant MR as Meta Root
     participant RS as Raftstore
     participant RP as Region Leader Peer
 
-    OP->>PD: 请求加副本/删副本
-    PD->>MR: rooted lifecycle assessment + append planned event
-    PD-->>RS: target 可执行
+    OP->>Coordinator: 请求加副本/删副本
+    Coordinator->>MR: rooted lifecycle assessment + append planned event
+    Coordinator-->>RS: target 可执行
     RS->>RP: propose conf change
     RP-->>RS: apply 完成
-    RS->>PD: publish terminal event
-    PD->>MR: append applied truth
+    RS->>Coordinator: publish terminal event
+    Coordinator->>MR: append applied truth
 ```
 
 ### 4.2 split / merge
@@ -148,15 +148,13 @@ sequenceDiagram
 
 ## 5. 这条分层的收益
 
-### 5.1 `PD` 不重新长成 authority
+### 5.1 `Coordinator` 不重新长成 authority
 
-当前 `pd` 的主要代码：
+当前 `coordinator` 的主要代码：
 
-- `pd/storage/root.go`
-- `pd/catalog/cluster.go`
-- `pd/view/pending_view.go`
-- `pd/operator`
-- `pd/server`
+- `coordinator/storage/root.go`
+- `coordinator/catalog/cluster.go`
+- `coordinator/server`
 
 可以看出来，它已经不是一个“大 metadata 数据库”了，而是一个 rooted view host。
 
@@ -170,23 +168,15 @@ sequenceDiagram
 
 这为后续继续做纯 executor 化提供了清楚的落点。
 
-### 5.3 后续 scheduler/operator runtime 更容易单独生长
+### 5.3 后续 scheduler/runtime 语义更容易单独生长
 
-你以后可以继续在 `PD` 里做：
-
-- owner
-- attempt
-- admission
-- backoff
-- operator runtime
-
-但这些都不需要倒灌进 `meta/root`。
+你以后可以继续在 `Coordinator` 里做 scheduler policy、admission、backoff 和 debug surface，但这些都不需要倒灌进 `meta/root`。
 
 ## 6. 设计理念
 
 这里的核心理念有两条：
 
-### 6.1 `PD` 是全局视图和服务层，不是本地状态执行器
+### 6.1 `Coordinator` 是全局视图和服务层，不是本地状态执行器
 
 ### 6.2 执行路径必须和恢复路径共享同一条 truth model
 
@@ -202,23 +192,22 @@ sequenceDiagram
 
 ## 8. 当前已经做对的地方
 
-- `PD` 不再维护第二份 authority truth
+- `Coordinator` 不再维护第二份 authority truth
 - `meta/root` 持有 transition state machine
 - `raftstore` 已经更接近 target-driven executor
-- pending/operator view 已经从 rooted truth materialize 出来
+- transition view 已经从 rooted truth materialize 出来
 
 ## 9. 还值得继续做的
 
-- `pd/operator` 真正长出 scheduler/operator runtime
 - `raftstore` 继续纯 executor 化
-- `PD` 对外 operator/debug surface 继续增强
+- `Coordinator` 对外 transition/debug surface 继续增强
 
 ## 10. 总结
 
-`PD` 和执行面不能混成一层，根本原因不是“命名要好看”，而是：
+`Coordinator` 和执行面不能混成一层，根本原因不是“命名要好看”，而是：
 
 - control-plane 不应该篡改本地执行态
 - authority、view、runtime、executor 必须分层
 - 只有这样，系统恢复、测试、调度和演进才不会互相污染
 
-当前 NoKV 这条线已经开始站稳，而且它是后续继续做 scheduler/operator 研究的必要前提。
+当前 NoKV 这条线已经开始站稳，而且它是后续继续做 scheduler/control-plane runtime 研究的必要前提。

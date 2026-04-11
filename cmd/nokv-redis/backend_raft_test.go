@@ -134,7 +134,7 @@ func startStubNoKV(t *testing.T) (addr string, srv *stubNoKVServer, shutdown fun
 	}
 }
 
-type stubPDServer struct {
+type stubCoordinatorServer struct {
 	coordpb.UnimplementedCoordinatorServer
 
 	mu         sync.Mutex
@@ -146,7 +146,7 @@ type stubPDServer struct {
 	routeErr   error
 }
 
-func (s *stubPDServer) Tso(_ context.Context, req *coordpb.TsoRequest) (*coordpb.TsoResponse, error) {
+func (s *stubCoordinatorServer) Tso(_ context.Context, req *coordpb.TsoRequest) (*coordpb.TsoResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tsoCalls++
@@ -168,7 +168,7 @@ func (s *stubPDServer) Tso(_ context.Context, req *coordpb.TsoRequest) (*coordpb
 	}, nil
 }
 
-func (s *stubPDServer) GetRegionByKey(_ context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
+func (s *stubCoordinatorServer) GetRegionByKey(_ context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.routeCalls++
@@ -183,14 +183,14 @@ func (s *stubPDServer) GetRegionByKey(_ context.Context, req *coordpb.GetRegionB
 	}, nil
 }
 
-func startStubPD(t *testing.T, region *metapb.RegionDescriptor) (addr string, srv *stubPDServer, shutdown func()) {
+func startStubCoordinator(t *testing.T, region *metapb.RegionDescriptor) (addr string, srv *stubCoordinatorServer, shutdown func()) {
 	t.Helper()
 
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
 	server := grpc.NewServer()
-	stub := &stubPDServer{
+	stub := &stubCoordinatorServer{
 		region: region,
 		nextTS: 100,
 	}
@@ -214,7 +214,7 @@ func keyInRegion(key, start, end []byte) bool {
 	return true
 }
 
-func defaultPDRegionMeta() *metapb.RegionDescriptor {
+func defaultCoordinatorRegionMeta() *metapb.RegionDescriptor {
 	return &metapb.RegionDescriptor{
 		RegionId: 1,
 		StartKey: nil,
@@ -248,25 +248,25 @@ func TestDecodeKeyVariants(t *testing.T) {
 }
 
 func TestCoordinatorTSOAllocatorReserveMonotonic(t *testing.T) {
-	_, pd, stopCoordinator := startStubPD(t, nil)
+	_, coord, stopCoordinator := startStubCoordinator(t, nil)
 	defer stopCoordinator()
 
-	alloc := newCoordinatorTSOAllocator(context.Background(), pd, time.Second)
+	alloc := newCoordinatorTSOAllocator(context.Background(), coord, time.Second)
 	first, err := alloc.Reserve(3)
 	require.NoError(t, err)
 	second, err := alloc.Reserve(2)
 	require.NoError(t, err)
 	require.Greater(t, second, first)
 
-	pd.mu.Lock()
-	require.Equal(t, 2, pd.tsoCalls)
-	pd.mu.Unlock()
+	coord.mu.Lock()
+	require.Equal(t, 2, coord.tsoCalls)
+	coord.mu.Unlock()
 }
 
 func TestNewRaftBackendUsesDockerScopeAndTSO(t *testing.T) {
 	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
-	coordAddr, pd, stopCoordinator := startStubPD(t, &metapb.RegionDescriptor{
+	coordAddr, coord, stopCoordinator := startStubCoordinator(t, &metapb.RegionDescriptor{
 		RegionId: 1,
 		StartKey: nil,
 		EndKey:   nil,
@@ -322,13 +322,13 @@ func TestNewRaftBackendUsesDockerScopeAndTSO(t *testing.T) {
 		t.Fatalf("expected missing value")
 	}
 
-	pd.mu.Lock()
-	require.GreaterOrEqual(t, pd.tsoCalls, 1)
-	require.GreaterOrEqual(t, pd.routeCalls, 1)
-	pd.mu.Unlock()
+	coord.mu.Lock()
+	require.GreaterOrEqual(t, coord.tsoCalls, 1)
+	require.GreaterOrEqual(t, coord.routeCalls, 1)
+	coord.mu.Unlock()
 }
 
-func TestNewRaftBackendRequiresPDAddr(t *testing.T) {
+func TestNewRaftBackendRequiresCoordinatorAddr(t *testing.T) {
 	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
 
@@ -338,10 +338,10 @@ func TestNewRaftBackendRequiresPDAddr(t *testing.T) {
 	require.Contains(t, err.Error(), "coordinator-addr is required")
 }
 
-func TestNewRaftBackendReadsPDAddrFromConfig(t *testing.T) {
+func TestNewRaftBackendReadsCoordinatorAddrFromConfig(t *testing.T) {
 	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
-	coordAddr, _, stopCoordinator := startStubPD(t, defaultPDRegionMeta())
+	coordAddr, _, stopCoordinator := startStubCoordinator(t, defaultCoordinatorRegionMeta())
 	defer stopCoordinator()
 
 	cfg := config.File{
@@ -383,10 +383,10 @@ func TestNewRaftBackendReadsPDAddrFromConfig(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestNewRaftBackendRoutingUsesPDResolver(t *testing.T) {
+func TestNewRaftBackendRoutingUsesCoordinatorResolver(t *testing.T) {
 	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
-	coordAddr, pd, stopCoordinator := startStubPD(t, defaultPDRegionMeta())
+	coordAddr, coord, stopCoordinator := startStubCoordinator(t, defaultCoordinatorRegionMeta())
 	defer stopCoordinator()
 
 	// Keep a region in config to ensure runtime routing still goes through the Coordinator.
@@ -427,19 +427,19 @@ func TestNewRaftBackendRoutingUsesPDResolver(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = backend.Close() }()
 
-	_, err = backend.Get([]byte("route-via-pd"))
+	_, err = backend.Get([]byte("route-via-coordinator"))
 	require.NoError(t, err)
 
-	pd.mu.Lock()
-	require.GreaterOrEqual(t, pd.routeCalls, 1)
-	pd.mu.Unlock()
+	coord.mu.Lock()
+	require.GreaterOrEqual(t, coord.routeCalls, 1)
+	coord.mu.Unlock()
 }
 
-func TestNewRaftBackendCLIAddrOverridesConfigPD(t *testing.T) {
+func TestNewRaftBackendCLIAddrOverridesConfigCoordinator(t *testing.T) {
 	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
-	validPDAddr, _, stopValidPD := startStubPD(t, defaultPDRegionMeta())
-	defer stopValidPD()
+	validCoordAddr, _, stopValidCoord := startStubCoordinator(t, defaultCoordinatorRegionMeta())
+	defer stopValidCoord()
 
 	cfg := config.File{
 		Coordinator: &config.Coordinator{
@@ -472,7 +472,7 @@ func TestNewRaftBackendCLIAddrOverridesConfigPD(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
 
-	backend, err := newRaftBackend(context.Background(), cfgPath, validPDAddr, "host")
+	backend, err := newRaftBackend(context.Background(), cfgPath, validCoordAddr, "host")
 	require.NoError(t, err)
 	defer func() { _ = backend.Close() }()
 
@@ -483,7 +483,7 @@ func TestNewRaftBackendCLIAddrOverridesConfigPD(t *testing.T) {
 func TestRaftBackendTranslatesRouteUnavailable(t *testing.T) {
 	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
-	coordAddr, pd, stopCoordinator := startStubPD(t, defaultPDRegionMeta())
+	coordAddr, coord, stopCoordinator := startStubCoordinator(t, defaultCoordinatorRegionMeta())
 	defer stopCoordinator()
 
 	cfg := config.File{
@@ -500,9 +500,9 @@ func TestRaftBackendTranslatesRouteUnavailable(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = backend.Close() }()
 
-	pd.mu.Lock()
-	pd.routeErr = status.Error(codes.Unavailable, "pd down")
-	pd.mu.Unlock()
+	coord.mu.Lock()
+	coord.routeErr = status.Error(codes.Unavailable, "coordinator down")
+	coord.mu.Unlock()
 
 	_, err = backend.Get([]byte("route-unavailable"))
 	require.Error(t, err)
@@ -513,7 +513,7 @@ func TestRaftBackendTranslatesRouteUnavailable(t *testing.T) {
 func TestRaftBackendTranslatesRegionNotFound(t *testing.T) {
 	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
-	coordAddr, _, stopCoordinator := startStubPD(t, &metapb.RegionDescriptor{
+	coordAddr, _, stopCoordinator := startStubCoordinator(t, &metapb.RegionDescriptor{
 		RegionId: 1,
 		StartKey: []byte("a"),
 		EndKey:   []byte("m"),
@@ -581,7 +581,7 @@ func TestRaftBackendResolveLockConflict(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	coordAddr, _, stopCoordinator := startStubPD(t, defaultPDRegionMeta())
+	coordAddr, _, stopCoordinator := startStubCoordinator(t, defaultCoordinatorRegionMeta())
 	defer stopCoordinator()
 
 	backend, err := newRaftBackend(context.Background(), cfgPath, coordAddr, "host")
@@ -620,7 +620,7 @@ func TestRaftBackendGetWithTTL(t *testing.T) {
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
-	coordAddr, _, stopCoordinator := startStubPD(t, defaultPDRegionMeta())
+	coordAddr, _, stopCoordinator := startStubCoordinator(t, defaultCoordinatorRegionMeta())
 	defer stopCoordinator()
 	backend, err := newRaftBackend(context.Background(), cfgPath, coordAddr, "host")
 	if err != nil {
@@ -657,7 +657,7 @@ func TestRaftBackendExpireCleanup(t *testing.T) {
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
-	coordAddr, _, stopCoordinator := startStubPD(t, defaultPDRegionMeta())
+	coordAddr, _, stopCoordinator := startStubCoordinator(t, defaultCoordinatorRegionMeta())
 	defer stopCoordinator()
 	backend, err := newRaftBackend(context.Background(), cfgPath, coordAddr, "host")
 	if err != nil {
@@ -698,7 +698,7 @@ func TestRaftBackendIncrByAndErrors(t *testing.T) {
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
-	coordAddr, _, stopCoordinator := startStubPD(t, defaultPDRegionMeta())
+	coordAddr, _, stopCoordinator := startStubCoordinator(t, defaultCoordinatorRegionMeta())
 	defer stopCoordinator()
 	backend, err := newRaftBackend(context.Background(), cfgPath, coordAddr, "host")
 	if err != nil {
@@ -743,7 +743,7 @@ func TestRaftBackendMGetAndExists(t *testing.T) {
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
-	coordAddr, _, stopCoordinator := startStubPD(t, defaultPDRegionMeta())
+	coordAddr, _, stopCoordinator := startStubCoordinator(t, defaultCoordinatorRegionMeta())
 	defer stopCoordinator()
 	backend, err := newRaftBackend(context.Background(), cfgPath, coordAddr, "host")
 	if err != nil {
@@ -805,7 +805,7 @@ func TestRaftBackendMSetAndDel(t *testing.T) {
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
-	coordAddr, _, stopCoordinator := startStubPD(t, defaultPDRegionMeta())
+	coordAddr, _, stopCoordinator := startStubCoordinator(t, defaultCoordinatorRegionMeta())
 	defer stopCoordinator()
 	backend, err := newRaftBackend(context.Background(), cfgPath, coordAddr, "host")
 	if err != nil {
@@ -995,14 +995,14 @@ func TestCoordinatorTSOAllocatorErrors(t *testing.T) {
 	_, err := alloc.Reserve(1)
 	require.Error(t, err)
 
-	_, pd, stopCoordinator := startStubPD(t, nil)
+	_, coord, stopCoordinator := startStubCoordinator(t, nil)
 	defer stopCoordinator()
-	pd.tsoErr = errors.New("boom")
-	alloc = newCoordinatorTSOAllocator(context.Background(), pd, time.Second)
+	coord.tsoErr = errors.New("boom")
+	alloc = newCoordinatorTSOAllocator(context.Background(), coord, time.Second)
 	_, err = alloc.Reserve(1)
 	require.Error(t, err)
 
-	pd.tsoErr = nil
+	coord.tsoErr = nil
 	_, err = alloc.Reserve(0)
 	require.Error(t, err)
 }
@@ -1059,7 +1059,7 @@ func TestNewRaftBackendErrors(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "coordinator-addr is required")
 
-	coordAddr, _, stopCoordinator := startStubPD(t, defaultPDRegionMeta())
+	coordAddr, _, stopCoordinator := startStubCoordinator(t, defaultCoordinatorRegionMeta())
 	defer stopCoordinator()
 
 	backend, err := newRaftBackend(context.Background(), cfgPath, coordAddr, "host")
@@ -1072,7 +1072,7 @@ func TestNewRaftBackendErrors(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestNewRaftBackendInvalidPDAddress(t *testing.T) {
+func TestNewRaftBackendInvalidCoordAddress(t *testing.T) {
 	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
 	cfgPath := writeBackendConfig(t, storeAddr)
@@ -1337,7 +1337,7 @@ func TestResolveSingleLockTranslatesRouteUnavailable(t *testing.T) {
 
 	stub.checkErr = &client.RouteUnavailableError{
 		Key: []byte("k"),
-		Err: errors.New("pd unavailable"),
+		Err: errors.New("coordinator unavailable"),
 	}
 	err := backend.resolveSingleLock(lock)
 	require.Error(t, err)

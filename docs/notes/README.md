@@ -33,8 +33,8 @@
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-03-30</span>
-    <h3><a href="2026-03-30-pd-and-raftadmin-layering.html">PD 与执行面分层</a></h3>
-    <p>解释为什么 control plane、truth kernel 和 data-plane executor 必须分开，以及为什么 PD 不能直接写本地 truth。</p>
+    <h3><a href="2026-03-30-coordinator-and-execution-layering.html">Coordinator 与执行面分层</a></h3>
+    <p>解释为什么 control plane、truth kernel 和 data-plane executor 必须分开，以及为什么 Coordinator 不能直接写本地 truth。</p>
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-03-30</span>
@@ -53,8 +53,8 @@
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-04-03</span>
-    <h3><a href="2026-04-03-delos-lite-metadata-root-roadmap.html">Rooted Metadata、Delos-lite 与 Virtual Log</a></h3>
-    <p>完整说明 NoKV 当前的 metadata truth、PD 隔离、Virtual Log substrate、local/replicated backend，以及为什么这条主线适合作为后续研究平台。</p>
+    <h3><a href="2026-04-03-delos-lite-metadata-root-roadmap.html">Rooted Metadata、Delos-lite 与 VirtualLog</a></h3>
+    <p>完整说明 NoKV 当前的 metadata truth、Coordinator 隔离、VirtualLog contract、local/replicated backend，以及为什么这条主线适合作为后续研究平台。</p>
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-04-05</span>

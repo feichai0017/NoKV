@@ -2,11 +2,11 @@ package integration
 
 import (
 	"context"
-	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"testing"
 	"time"
 
-	pdclient "github.com/feichai0017/NoKV/coordinator/client"
+	coordclient "github.com/feichai0017/NoKV/coordinator/client"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
@@ -17,12 +17,12 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-func TestClusterSurvivesPDUnavailableAfterStartup(t *testing.T) {
+func TestClusterSurvivesCoordinatorUnavailableAfterStartup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 
-	pd := testcluster.StartCoordinator(t)
-	defer pd.Close(t)
+	coord := testcluster.StartCoordinator(t)
+	defer coord.Close(t)
 
 	seedDir := t.TempDir()
 	standalone := testcluster.OpenStandaloneDB(t, seedDir, nil)
@@ -34,11 +34,11 @@ func TestClusterSurvivesPDUnavailableAfterStartup(t *testing.T) {
 	seed := testcluster.StartNodeWithConfig(t, 1, seedDir, testcluster.NodeConfig{
 		AllowedModes:      []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster},
 		StartPeers:        true,
-		Scheduler:         testcluster.NewScheduler(t, pd.Addr(), 100*time.Millisecond),
+		Scheduler:         testcluster.NewScheduler(t, coord.Addr(), 100*time.Millisecond),
 		HeartbeatInterval: 50 * time.Millisecond,
 	})
 	target := testcluster.StartNodeWithConfig(t, 2, t.TempDir(), testcluster.NodeConfig{
-		Scheduler:         testcluster.NewScheduler(t, pd.Addr(), 100*time.Millisecond),
+		Scheduler:         testcluster.NewScheduler(t, coord.Addr(), 100*time.Millisecond),
 		HeartbeatInterval: 50 * time.Millisecond,
 	})
 	defer seed.Close(t)
@@ -59,7 +59,7 @@ func TestClusterSurvivesPDUnavailableAfterStartup(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	resolver, err := pdclient.NewGRPCClient(ctx, pd.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	resolver, err := coordclient.NewGRPCClient(ctx, coord.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	cli, err := client.New(client.Config{
 		Stores: []client.StoreEndpoint{
@@ -72,18 +72,18 @@ func TestClusterSurvivesPDUnavailableAfterStartup(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = cli.Close() }()
 
-	key := []byte("pd-outage-key")
-	value := []byte("pd-outage-value")
+	key := []byte("coordinator-outage-key")
+	value := []byte("coordinator-outage-value")
 	require.NoError(t, cli.Put(ctx, key, value, 10, 11, 3000))
 	getResp, err := cli.Get(ctx, key, 12)
 	require.NoError(t, err)
 	require.Equal(t, value, getResp.GetValue())
 
-	pd.Close(t)
+	coord.Close(t)
 	testcluster.WaitForSchedulerMode(t, seed, storepkg.SchedulerModeUnavailable, true)
 	testcluster.WaitForSchedulerMode(t, target, storepkg.SchedulerModeUnavailable, true)
 
-	updated := []byte("pd-outage-updated")
+	updated := []byte("coordinator-outage-updated")
 	require.NoError(t, cli.Put(ctx, key, updated, 20, 21, 3000))
 	require.Eventually(t, func() bool {
 		entry, err := target.DB.Get(key)
@@ -96,7 +96,7 @@ func TestClusterSurvivesPDUnavailableAfterStartup(t *testing.T) {
 
 	dialCtx, dialCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer dialCancel()
-	newResolver, err := pdclient.NewGRPCClient(dialCtx, pd.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	newResolver, err := coordclient.NewGRPCClient(dialCtx, coord.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.Error(t, err)
 	require.Nil(t, newResolver)
 

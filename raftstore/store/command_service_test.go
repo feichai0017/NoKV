@@ -278,7 +278,7 @@ func TestStoreProposeCommandSurvivesSchedulerUnavailable(t *testing.T) {
 		status: SchedulerStatus{
 			Mode:      SchedulerModeUnavailable,
 			Degraded:  true,
-			LastError: "pd unavailable",
+			LastError: "coordinator unavailable",
 		},
 	}
 	applier := newTestMVCCApplier(db)
@@ -329,7 +329,7 @@ func TestStoreProposeCommandSurvivesSchedulerUnavailable(t *testing.T) {
 	status := st.SchedulerStatus()
 	require.True(t, status.Degraded)
 	require.Equal(t, SchedulerModeUnavailable, status.Mode)
-	require.Contains(t, status.LastError, "pd unavailable")
+	require.Contains(t, status.LastError, "coordinator unavailable")
 
 	reader := percolator.NewReader(db)
 	val, _, err := reader.GetValue([]byte("sched-key"), 90)
