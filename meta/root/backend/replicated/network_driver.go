@@ -15,30 +15,33 @@ import (
 )
 
 const defaultNetworkTickInterval = 100 * time.Millisecond
+const defaultAppendWaitTimeout = 5 * time.Second
 
 // NetworkConfig wires one local raft node to a transport and a fixed peer set.
 type NetworkConfig struct {
-	ID           uint64
-	WorkDir      string
-	PeerIDs      []uint64
-	Transport    Transport
-	TickInterval time.Duration
+	ID                uint64
+	WorkDir           string
+	PeerIDs           []uint64
+	Transport         Transport
+	TickInterval      time.Duration
+	AppendWaitTimeout time.Duration
 }
 
 // NetworkDriver hosts one local raft rawnode and exchanges messages through a
 // transport, which is the first real landing point for multi-process metadata
 // replication.
 type NetworkDriver struct {
-	mu          sync.Mutex
-	closeOnce   sync.Once
-	id          uint64
-	workdir     string
-	adapter     *virtualLogAdapter
-	node        *networkNode
-	transport   Transport
-	ticksPaused bool
-	stopCh      chan struct{}
-	wg          sync.WaitGroup
+	mu                sync.Mutex
+	closeOnce         sync.Once
+	id                uint64
+	workdir           string
+	adapter           *virtualLogAdapter
+	node              *networkNode
+	transport         Transport
+	appendWaitTimeout time.Duration
+	ticksPaused       bool
+	stopCh            chan struct{}
+	wg                sync.WaitGroup
 }
 
 // NewNetworkDriver creates one transport-backed local metadata replication node.
@@ -61,11 +64,15 @@ func NewNetworkDriver(cfg NetworkConfig) (*NetworkDriver, error) {
 	if cfg.TickInterval <= 0 {
 		cfg.TickInterval = defaultNetworkTickInterval
 	}
+	if cfg.AppendWaitTimeout <= 0 {
+		cfg.AppendWaitTimeout = defaultAppendWaitTimeout
+	}
 	driver := &NetworkDriver{
-		id:        cfg.ID,
-		workdir:   cfg.WorkDir,
-		transport: cfg.Transport,
-		stopCh:    make(chan struct{}),
+		id:                cfg.ID,
+		workdir:           cfg.WorkDir,
+		transport:         cfg.Transport,
+		appendWaitTimeout: cfg.AppendWaitTimeout,
+		stopCh:            make(chan struct{}),
 	}
 	if err := os.MkdirAll(cfg.WorkDir, 0o755); err != nil {
 		return nil, err
