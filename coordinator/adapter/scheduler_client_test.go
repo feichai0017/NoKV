@@ -3,8 +3,8 @@ package adapter
 import (
 	"context"
 	"errors"
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"testing"
 
@@ -100,7 +100,7 @@ func TestSchedulerClientPublishRootEvent(t *testing.T) {
 
 	require.Len(t, pd.rootEventReq, 1)
 	require.Equal(t, uint64(1), pd.rootEventReq[0].GetExpectedClusterEpoch())
-	got := metacodec.RootEventFromProto(pd.rootEventReq[0].GetEvent())
+	got := metawire.RootEventFromProto(pd.rootEventReq[0].GetEvent())
 	require.Equal(t, rootevent.KindPeerAdded, got.Kind)
 	require.NotNil(t, got.PeerChange)
 	require.Equal(t, uint64(10), got.PeerChange.RegionID)

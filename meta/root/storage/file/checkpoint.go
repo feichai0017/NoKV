@@ -5,9 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/vfs"
@@ -47,7 +47,7 @@ func (s fileCheckpointStore) LoadCheckpoint() (rootstorage.Checkpoint, error) {
 	if pbCheckpoint.State == nil {
 		return rootstorage.Checkpoint{}, errors.New("root checkpoint missing state")
 	}
-	snapshot, tailOffset := metacodec.RootSnapshotFromProto(&pbCheckpoint)
+	snapshot, tailOffset := metawire.RootSnapshotFromProto(&pbCheckpoint)
 	if snapshot.Descriptors == nil {
 		snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
 	}
@@ -63,7 +63,7 @@ func (s fileCheckpointStore) LoadCheckpoint() (rootstorage.Checkpoint, error) {
 //   - rename over the final path
 //   - fsync parent directory
 func (s fileCheckpointStore) SaveCheckpoint(checkpoint rootstorage.Checkpoint) error {
-	payload, err := proto.Marshal(metacodec.RootSnapshotToProto(checkpoint.Snapshot, uint64(checkpoint.TailOffset)))
+	payload, err := proto.Marshal(metawire.RootSnapshotToProto(checkpoint.Snapshot, uint64(checkpoint.TailOffset)))
 	if err != nil {
 		return err
 	}

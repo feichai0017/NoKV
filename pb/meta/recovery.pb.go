@@ -411,11 +411,107 @@ func (x *RaftProgressCatalog) GetEntries() []*RaftProgress {
 	return nil
 }
 
+type PendingRootEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sequence      uint64                 `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	Event         *RootEvent             `protobuf:"bytes,2,opt,name=event,proto3" json:"event,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PendingRootEvent) Reset() {
+	*x = PendingRootEvent{}
+	mi := &file_meta_recovery_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PendingRootEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PendingRootEvent) ProtoMessage() {}
+
+func (x *PendingRootEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_meta_recovery_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PendingRootEvent.ProtoReflect.Descriptor instead.
+func (*PendingRootEvent) Descriptor() ([]byte, []int) {
+	return file_meta_recovery_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *PendingRootEvent) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *PendingRootEvent) GetEvent() *RootEvent {
+	if x != nil {
+		return x.Event
+	}
+	return nil
+}
+
+type PendingRootEventCatalog struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Entries       []*PendingRootEvent    `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PendingRootEventCatalog) Reset() {
+	*x = PendingRootEventCatalog{}
+	mi := &file_meta_recovery_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PendingRootEventCatalog) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PendingRootEventCatalog) ProtoMessage() {}
+
+func (x *PendingRootEventCatalog) ProtoReflect() protoreflect.Message {
+	mi := &file_meta_recovery_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PendingRootEventCatalog.ProtoReflect.Descriptor instead.
+func (*PendingRootEventCatalog) Descriptor() ([]byte, []int) {
+	return file_meta_recovery_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *PendingRootEventCatalog) GetEntries() []*PendingRootEvent {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
 var File_meta_recovery_proto protoreflect.FileDescriptor
 
 const file_meta_recovery_proto_rawDesc = "" +
 	"\n" +
-	"\x13meta/recovery.proto\x12\fnokv.meta.v1\x1a\x15meta/descriptor.proto\x1a\x11meta/region.proto\"\x8c\x02\n" +
+	"\x13meta/recovery.proto\x12\fnokv.meta.v1\x1a\x15meta/descriptor.proto\x1a\x11meta/region.proto\x1a\x0fmeta/root.proto\"\x8c\x02\n" +
 	"\x11ReplicaLocalState\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12\"\n" +
 	"\rlocal_peer_id\x18\x02 \x01(\x04R\vlocalPeerId\x126\n" +
@@ -449,7 +545,12 @@ const file_meta_recovery_proto_rawDesc = "" +
 	"\rsegment_index\x18\v \x01(\x04R\fsegmentIndex\x12)\n" +
 	"\x10truncated_offset\x18\f \x01(\x04R\x0ftruncatedOffset\"K\n" +
 	"\x13RaftProgressCatalog\x124\n" +
-	"\aentries\x18\x01 \x03(\v2\x1a.nokv.meta.v1.RaftProgressR\aentriesB,Z*github.com/feichai0017/NoKV/pb/meta;metapbb\x06proto3"
+	"\aentries\x18\x01 \x03(\v2\x1a.nokv.meta.v1.RaftProgressR\aentries\"]\n" +
+	"\x10PendingRootEvent\x12\x1a\n" +
+	"\bsequence\x18\x01 \x01(\x04R\bsequence\x12-\n" +
+	"\x05event\x18\x02 \x01(\v2\x17.nokv.meta.v1.RootEventR\x05event\"S\n" +
+	"\x17PendingRootEventCatalog\x128\n" +
+	"\aentries\x18\x01 \x03(\v2\x1e.nokv.meta.v1.PendingRootEventR\aentriesB,Z*github.com/feichai0017/NoKV/pb/meta;metapbb\x06proto3"
 
 var (
 	file_meta_recovery_proto_rawDescOnce sync.Once
@@ -463,31 +564,36 @@ func file_meta_recovery_proto_rawDescGZIP() []byte {
 	return file_meta_recovery_proto_rawDescData
 }
 
-var file_meta_recovery_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_meta_recovery_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_meta_recovery_proto_goTypes = []any{
-	(*ReplicaLocalState)(nil),   // 0: nokv.meta.v1.ReplicaLocalState
-	(*LocalRegionMeta)(nil),     // 1: nokv.meta.v1.LocalRegionMeta
-	(*ReplicaLocalCatalog)(nil), // 2: nokv.meta.v1.ReplicaLocalCatalog
-	(*RaftProgress)(nil),        // 3: nokv.meta.v1.RaftProgress
-	(*RaftProgressCatalog)(nil), // 4: nokv.meta.v1.RaftProgressCatalog
-	(RegionReplicaState)(0),     // 5: nokv.meta.v1.RegionReplicaState
-	(*RegionDescriptor)(nil),    // 6: nokv.meta.v1.RegionDescriptor
-	(*RegionEpoch)(nil),         // 7: nokv.meta.v1.RegionEpoch
-	(*RegionPeer)(nil),          // 8: nokv.meta.v1.RegionPeer
+	(*ReplicaLocalState)(nil),       // 0: nokv.meta.v1.ReplicaLocalState
+	(*LocalRegionMeta)(nil),         // 1: nokv.meta.v1.LocalRegionMeta
+	(*ReplicaLocalCatalog)(nil),     // 2: nokv.meta.v1.ReplicaLocalCatalog
+	(*RaftProgress)(nil),            // 3: nokv.meta.v1.RaftProgress
+	(*RaftProgressCatalog)(nil),     // 4: nokv.meta.v1.RaftProgressCatalog
+	(*PendingRootEvent)(nil),        // 5: nokv.meta.v1.PendingRootEvent
+	(*PendingRootEventCatalog)(nil), // 6: nokv.meta.v1.PendingRootEventCatalog
+	(RegionReplicaState)(0),         // 7: nokv.meta.v1.RegionReplicaState
+	(*RegionDescriptor)(nil),        // 8: nokv.meta.v1.RegionDescriptor
+	(*RegionEpoch)(nil),             // 9: nokv.meta.v1.RegionEpoch
+	(*RegionPeer)(nil),              // 10: nokv.meta.v1.RegionPeer
+	(*RootEvent)(nil),               // 11: nokv.meta.v1.RootEvent
 }
 var file_meta_recovery_proto_depIdxs = []int32{
-	5, // 0: nokv.meta.v1.ReplicaLocalState.state:type_name -> nokv.meta.v1.RegionReplicaState
-	6, // 1: nokv.meta.v1.ReplicaLocalState.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	7, // 2: nokv.meta.v1.LocalRegionMeta.epoch:type_name -> nokv.meta.v1.RegionEpoch
-	8, // 3: nokv.meta.v1.LocalRegionMeta.peers:type_name -> nokv.meta.v1.RegionPeer
-	5, // 4: nokv.meta.v1.LocalRegionMeta.state:type_name -> nokv.meta.v1.RegionReplicaState
-	1, // 5: nokv.meta.v1.ReplicaLocalCatalog.regions:type_name -> nokv.meta.v1.LocalRegionMeta
-	3, // 6: nokv.meta.v1.RaftProgressCatalog.entries:type_name -> nokv.meta.v1.RaftProgress
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	7,  // 0: nokv.meta.v1.ReplicaLocalState.state:type_name -> nokv.meta.v1.RegionReplicaState
+	8,  // 1: nokv.meta.v1.ReplicaLocalState.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	9,  // 2: nokv.meta.v1.LocalRegionMeta.epoch:type_name -> nokv.meta.v1.RegionEpoch
+	10, // 3: nokv.meta.v1.LocalRegionMeta.peers:type_name -> nokv.meta.v1.RegionPeer
+	7,  // 4: nokv.meta.v1.LocalRegionMeta.state:type_name -> nokv.meta.v1.RegionReplicaState
+	1,  // 5: nokv.meta.v1.ReplicaLocalCatalog.regions:type_name -> nokv.meta.v1.LocalRegionMeta
+	3,  // 6: nokv.meta.v1.RaftProgressCatalog.entries:type_name -> nokv.meta.v1.RaftProgress
+	11, // 7: nokv.meta.v1.PendingRootEvent.event:type_name -> nokv.meta.v1.RootEvent
+	5,  // 8: nokv.meta.v1.PendingRootEventCatalog.entries:type_name -> nokv.meta.v1.PendingRootEvent
+	9,  // [9:9] is the sub-list for method output_type
+	9,  // [9:9] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_meta_recovery_proto_init() }
@@ -497,13 +603,14 @@ func file_meta_recovery_proto_init() {
 	}
 	file_meta_descriptor_proto_init()
 	file_meta_region_proto_init()
+	file_meta_root_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_meta_recovery_proto_rawDesc), len(file_meta_recovery_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -52,7 +52,9 @@ func (s *Store) publishPlannedRootEvent(regionID uint64, event rootevent.Event, 
 	if s == nil || s.schedulerClient() == nil || regionID == 0 || event.Kind == rootevent.KindUnknown {
 		return nil
 	}
-	if err := s.schedulerClient().PublishRootEvent(s.runtimeContext(), event); err != nil {
+	ctx, cancel := s.schedulerPublishContext()
+	defer cancel()
+	if err := s.schedulerClient().PublishRootEvent(ctx, event); err != nil {
 		if action == "" {
 			action = "transition"
 		}

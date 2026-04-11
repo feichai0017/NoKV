@@ -88,6 +88,8 @@ type Config struct {
 	WorkDir            string
 	Scheduler          SchedulerClient
 	HeartbeatInterval  time.Duration
+	HeartbeatTimeout   time.Duration
+	PublishTimeout     time.Duration
 	StoreID            uint64
 	OperationQueueSize int
 	OperationCooldown  time.Duration

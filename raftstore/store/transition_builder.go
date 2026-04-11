@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -95,8 +94,8 @@ func (s *Store) buildSplitPlan(parentID uint64, childMeta localmeta.RegionMeta, 
 	if childMeta.State == 0 {
 		childMeta.State = metaregion.ReplicaStateRunning
 	}
-	parentDesc := metacodec.DescriptorFromLocalRegionMeta(newParent, 0)
-	childDesc := metacodec.DescriptorFromLocalRegionMeta(childMeta, 0)
+	parentDesc := localmeta.Descriptor(newParent, 0)
+	childDesc := localmeta.Descriptor(childMeta, 0)
 	parentDesc.Lineage = append(parentDesc.Lineage, descriptor.LineageRef{
 		RegionID: originalParent.ID,
 		Epoch:    originalParent.Epoch,
@@ -136,7 +135,7 @@ func (s *Store) buildMergePlan(targetRegionID, sourceRegionID uint64) (mergePlan
 	if len(sourceMeta.EndKey) == 0 || bytes.Compare(sourceMeta.EndKey, updated.EndKey) > 0 {
 		updated.EndKey = append([]byte(nil), sourceMeta.EndKey...)
 	}
-	mergedDesc := metacodec.DescriptorFromLocalRegionMeta(updated, 0)
+	mergedDesc := localmeta.Descriptor(updated, 0)
 	mergedDesc.Lineage = append(mergedDesc.Lineage, descriptor.LineageRef{
 		RegionID: sourceMeta.ID,
 		Epoch:    sourceMeta.Epoch,
@@ -174,7 +173,7 @@ func (s *Store) buildSplitTarget(parentID uint64, childMeta localmeta.RegionMeta
 		Split: &raftcmdpb.SplitCommand{
 			ParentRegionId: parentID,
 			SplitKey:       append([]byte(nil), splitKey...),
-			Child:          metacodec.LocalRegionMetaToDescriptorProto(plan.child),
+			Child:          localmeta.DescriptorToProto(plan.child),
 		},
 	}
 	event := splitEvent(rootevent.KindRegionSplitPlanned, plan)
@@ -300,7 +299,7 @@ func plannedPeerChangeEvent(meta localmeta.RegionMeta, cc raftpb.ConfChangeV2) (
 	if meta.ID == 0 || len(cc.Changes) != 1 {
 		return rootevent.Event{}, fmt.Errorf("raftstore: invalid peer change event")
 	}
-	desc := metacodec.DescriptorFromLocalRegionMeta(meta, 0)
+	desc := localmeta.Descriptor(meta, 0)
 	change := cc.Changes[0]
 	peerMeta := confChangeTargetPeer(change, cc.Context)
 	switch change.Type {
@@ -343,8 +342,8 @@ func splitAlreadyAppliedLocal(s *Store, parentID uint64, childMeta localmeta.Reg
 	if nextChild.State == 0 {
 		nextChild.State = metaregion.ReplicaStateRunning
 	}
-	got := metacodec.DescriptorFromLocalRegionMeta(currentChild, 0)
-	want := metacodec.DescriptorFromLocalRegionMeta(nextChild, 0)
+	got := localmeta.Descriptor(currentChild, 0)
+	want := localmeta.Descriptor(nextChild, 0)
 	return got.Equal(want)
 }
 

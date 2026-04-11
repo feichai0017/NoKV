@@ -10,8 +10,10 @@ import (
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
@@ -27,19 +29,21 @@ type schedulerRuntime struct {
 
 	regionSignal chan struct{}
 
-	mu            sync.Mutex
-	pending       map[operationKey]struct{}
-	lastApply     map[operationKey]time.Time
-	descriptors   map[uint64]descriptor.Descriptor
-	regionUpdates map[uint64]regionEvent
-	nextRegionSeq uint64
-	dropped       uint64
-	degraded      bool
-	lastError     string
-	lastErrorAt   time.Time
-	heartbeat     time.Duration
-	heartbeatStop chan struct{}
-	heartbeatWG   sync.WaitGroup
+	mu               sync.Mutex
+	pending          map[operationKey]struct{}
+	lastApply        map[operationKey]time.Time
+	descriptors      map[uint64]descriptor.Descriptor
+	regionUpdates    map[uint64]regionEvent
+	nextRegionSeq    uint64
+	dropped          uint64
+	degraded         bool
+	lastError        string
+	lastErrorAt      time.Time
+	heartbeat        time.Duration
+	heartbeatTimeout time.Duration
+	publishTimeout   time.Duration
+	heartbeatStop    chan struct{}
+	heartbeatWG      sync.WaitGroup
 }
 
 type operationKey struct {
@@ -187,14 +191,18 @@ func (s *Store) sendHeartbeats() {
 	if s == nil || s.schedulerClient() == nil {
 		return
 	}
-	ctx := s.runtimeContext()
 	for _, regionID := range s.schedulerRegionIDs() {
+		ctx, cancel := s.schedulerHeartbeatContext()
 		s.schedulerClient().ReportRegionHeartbeat(ctx, regionID)
+		cancel()
 	}
 	if s.storeID == 0 {
 		return
 	}
-	for _, op := range s.schedulerClient().StoreHeartbeat(ctx, s.storeStatsSnapshot()) {
+	ctx, cancel := s.schedulerHeartbeatContext()
+	ops := s.schedulerClient().StoreHeartbeat(ctx, s.storeStatsSnapshot())
+	cancel()
+	for _, op := range ops {
 		s.enqueueOperation(op)
 	}
 }
@@ -211,6 +219,10 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 		return
 	}
 	ev.root = rootevent.CloneEvent(ev.root)
+	if err := s.persistPendingRegionEvent(&ev); err != nil {
+		s.recordLocalSchedulerPublishFailure(ev, err)
+		return
+	}
 	s.sched.mu.Lock()
 	if s.sched.descriptors == nil {
 		s.sched.descriptors = make(map[uint64]descriptor.Descriptor)
@@ -219,9 +231,7 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 		s.sched.regionUpdates = make(map[uint64]regionEvent)
 	}
 	rootmaterialize.ApplyEventToDescriptors(s.sched.descriptors, ev.root)
-	s.sched.nextRegionSeq++
-	ev.seq = s.sched.nextRegionSeq
-	s.sched.regionUpdates[regionID] = ev
+	s.sched.regionUpdates[ev.seq] = ev
 	s.sched.mu.Unlock()
 	s.signalRegionFlush()
 }
@@ -232,8 +242,12 @@ func (s *Store) hasPendingRegionUpdate(regionID uint64) bool {
 	}
 	s.sched.mu.Lock()
 	defer s.sched.mu.Unlock()
-	_, ok := s.sched.regionUpdates[regionID]
-	return ok
+	for _, ev := range s.sched.regionUpdates {
+		if currentRegionID, ok := schedulerRegionEventKey(ev.root); ok && currentRegionID == regionID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) schedulerRegionIDs() []uint64 {
@@ -261,17 +275,28 @@ func (s *Store) flushRegionUpdates() {
 		return
 	}
 	pending := make([]regionEvent, 0, len(s.sched.regionUpdates))
-	for _, ev := range s.sched.regionUpdates {
+	for seq, ev := range s.sched.regionUpdates {
+		if ev.seq == 0 {
+			ev.seq = seq
+		}
 		pending = append(pending, ev)
 	}
 	clear(s.sched.regionUpdates)
 	s.sched.mu.Unlock()
 	sort.Slice(pending, func(i, j int) bool { return pending[i].seq < pending[j].seq })
 
-	ctx := s.runtimeContext()
 	failed := make([]regionEvent, 0)
 	for _, ev := range pending {
+		ctx, cancel := s.schedulerPublishContext()
 		if err := s.schedulerClient().PublishRootEvent(ctx, ev.root); err != nil {
+			cancel()
+			failed = append(failed, ev)
+			s.recordTopologyPublishFailure(rootstateTransitionEvent{transitionID: ev.transitionID}, err)
+			s.recordLocalSchedulerPublishFailure(ev, err)
+			continue
+		}
+		cancel()
+		if err := s.deletePendingRegionEvent(ev.seq); err != nil {
 			failed = append(failed, ev)
 			s.recordTopologyPublishFailure(rootstateTransitionEvent{transitionID: ev.transitionID}, err)
 			s.recordLocalSchedulerPublishFailure(ev, err)
@@ -285,13 +310,7 @@ func (s *Store) flushRegionUpdates() {
 	}
 	s.sched.mu.Lock()
 	for _, ev := range failed {
-		regionID, ok := schedulerRegionEventKey(ev.root)
-		if !ok || regionID == 0 {
-			continue
-		}
-		if current, ok := s.sched.regionUpdates[regionID]; !ok || current.seq < ev.seq {
-			s.sched.regionUpdates[regionID] = ev
-		}
+		s.sched.regionUpdates[ev.seq] = ev
 	}
 	s.sched.mu.Unlock()
 	s.signalRegionFlush()
@@ -322,6 +341,62 @@ func (s *Store) signalRegionFlush() {
 	case s.sched.regionSignal <- struct{}{}:
 	default:
 	}
+}
+
+func (s *Store) persistPendingRegionEvent(ev *regionEvent) error {
+	if s == nil || s.sched == nil || ev == nil {
+		return nil
+	}
+	s.sched.mu.Lock()
+	s.sched.nextRegionSeq++
+	ev.seq = s.sched.nextRegionSeq
+	s.sched.mu.Unlock()
+	if rm := s.regionMgr(); rm != nil && rm.localMeta != nil {
+		if err := rm.localMeta.SavePendingRootEvent(localmeta.PendingRootEvent{
+			Sequence: ev.seq,
+			Event:    ev.root,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) deletePendingRegionEvent(seq uint64) error {
+	if s == nil || seq == 0 {
+		return nil
+	}
+	if rm := s.regionMgr(); rm != nil && rm.localMeta != nil {
+		return rm.localMeta.DeletePendingRootEvent(seq)
+	}
+	return nil
+}
+
+func (s *Store) enqueueRecoveredPendingRegionEvents(events []localmeta.PendingRootEvent) {
+	if s == nil || s.sched == nil || len(events) == 0 {
+		return
+	}
+	s.sched.mu.Lock()
+	if s.sched.descriptors == nil {
+		s.sched.descriptors = make(map[uint64]descriptor.Descriptor)
+	}
+	if s.sched.regionUpdates == nil {
+		s.sched.regionUpdates = make(map[uint64]regionEvent)
+	}
+	for _, item := range events {
+		ev := regionEvent{
+			root:         rootevent.CloneEvent(item.Event),
+			transitionID: rootstate.TransitionIDFromEvent(item.Event),
+			seq:          item.Sequence,
+		}
+		if ev.seq > s.sched.nextRegionSeq {
+			s.sched.nextRegionSeq = ev.seq
+		}
+		rootmaterialize.ApplyEventToDescriptors(s.sched.descriptors, ev.root)
+		s.sched.regionUpdates[ev.seq] = ev
+	}
+	s.sched.mu.Unlock()
+	s.signalRegionFlush()
 }
 
 func (s *Store) stopOperationLoop() {
