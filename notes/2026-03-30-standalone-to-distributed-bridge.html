@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-01a1bb3c.js";
+            window.path_to_searchindex_js = "../searchindex-a947e9d9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b8f8ac3b.js"></script>
+        <script src="../toc-8f631623.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,7 +180,7 @@
                     <main>
                         <h1 id="2026-03-30-从单机到分布式的桥接为什么是-nokv-的主线能力"><a class="header" href="#2026-03-30-从单机到分布式的桥接为什么是-nokv-的主线能力">2026-03-30 从单机到分布式的桥接为什么是 NoKV 的主线能力</a></h1>
 <blockquote>
-<p>状态：当前设计已经落地，相关实现分散在 <code>DB</code>、<code>raftstore</code>、<code>migrate</code>、<code>pd</code> 与 <code>meta/root</code> 中。本文重点不是复述命令，而是解释为什么 NoKV 没有把“单机版”和“分布式版”做成两套系统。</p>
+<p>状态：当前设计已经落地，相关实现分散在 <code>DB</code>、<code>raftstore</code>、<code>migrate</code>、<code>coordinator</code> 与 <code>meta/root</code> 中。本文重点不是复述命令，而是解释为什么 NoKV 没有把“单机版”和“分布式版”做成两套系统。</p>
 </blockquote>
 <h2 id="导读"><a class="header" href="#导读">导读</a></h2>
 <ul>
@@ -208,7 +208,7 @@
 <li><code>raftstore/snapshot</code></li>
 <li><code>raftstore/mode</code></li>
 <li><code>raftstore/migrate</code></li>
-<li><code>pd</code></li>
+<li><code>coordinator</code></li>
 <li><code>meta/root</code></li>
 </ul>
 <p>分层如下：</p>
@@ -219,8 +219,8 @@
     SNAP --&gt; MIG
     LM --&gt; MIG
     MIG --&gt; RS["raftstore\n分布式执行层"]
-    RS --&gt; PD["pd\nview + service"]
-    PD --&gt; MR["meta/root\n最小真相源"]
+    RS --&gt; Coordinator["coordinator\nview + service"]
+    Coordinator --&gt; MR["meta/root\n最小真相源"]
 </pre>
 
 <h3 id="关键判断"><a class="header" href="#关键判断">关键判断</a></h3>
@@ -236,7 +236,7 @@
 <li>单机目录直接被视为“旧格式”，只能整体导出。</li>
 <li>分布式 bootstrap 依赖外部工具，而不是系统自身的生命周期协议。</li>
 <li>恢复、校验、观测、测试路径出现双轨制。</li>
-<li>后面任何关于 snapshot、reshard、operator 的研究都要分别做两遍。</li>
+<li>后面任何关于 snapshot、reshard、scheduler/control-plane 的研究都要分别做两遍。</li>
 </ul>
 <p>对于研究平台来说，这种分裂尤其糟糕。因为你无法回答一个最基本的问题：</p>
 <blockquote>
@@ -294,14 +294,14 @@
     participant MODE as mode gate
     participant MIG as migrate
     participant RS as raftstore
-    participant PD as pd/meta
+    participant Coordinator as coordinator/meta
 
     DB-&gt;&gt;MODE: standalone -&gt; preparing
     MODE-&gt;&gt;MIG: 允许写入 seed 语义
     MIG-&gt;&gt;RS: init 一个 full-range seed region
     RS-&gt;&gt;MODE: preparing -&gt; seeded
     MIG-&gt;&gt;RS: serve / expand
-    RS-&gt;&gt;PD: 加入 cluster control-plane
+    RS-&gt;&gt;Coordinator: 加入 cluster control-plane
     RS-&gt;&gt;MODE: seeded -&gt; cluster
 </pre>
 
@@ -334,7 +334,7 @@
 <ol>
 <li>启动 <code>raftstore</code>。</li>
 <li>恢复本地 <code>replicas.binpb</code> 和 <code>raft-progress.binpb</code>。</li>
-<li>向 <code>pd</code> / <code>meta/root</code> 注册 rooted truth。</li>
+<li>向 <code>coordinator</code> / <code>meta/root</code> 注册 rooted truth。</li>
 <li>开始按 region/peer 身份参与执行面。</li>
 </ol>
 <h3 id="expand"><a class="header" href="#expand"><code>expand</code></a></h3>
@@ -345,7 +345,7 @@
 <p>做的事情大致是：</p>
 <ol>
 <li>生成新的 peer change / split / merge 目标。</li>
-<li>通过 <code>pd</code> proposal gate 进入 <code>meta/root</code>。</li>
+<li>通过 <code>coordinator</code> proposal gate 进入 <code>meta/root</code>。</li>
 <li>由 <code>raftstore</code> 执行真正的 conf change / snapshot install。</li>
 <li>terminal truth 回写 <code>meta/root</code>。</li>
 </ol>
@@ -364,7 +364,7 @@
 <ul>
 <li>restore</li>
 <li>reshard</li>
-<li>operator runtime</li>
+<li>scheduler/control-plane runtime</li>
 <li>snapshot install</li>
 <li>failover</li>
 </ul>
@@ -376,27 +376,28 @@
 <li>FoundationDB / Delos 一类系统里“让小而稳定的控制面成为系统骨架”的思路</li>
 <li>数据库内核里“把生命周期写进协议而不是运维手册”的做法</li>
 </ul>
-<h2 id="8-当前实现已经做到的"><a class="header" href="#8-当前实现已经做到的">8. 当前实现已经做到的</a></h2>
+<h2 id="8-当前已经落地的边界"><a class="header" href="#8-当前已经落地的边界">8. 当前已经落地的边界</a></h2>
 <ul>
-<li>workdir mode 已经进入正式实现</li>
-<li>localmeta 与 engine metadata 已明确分开</li>
-<li>region snapshot 已是单独层</li>
-<li>migration 主线已形成 protocol 化入口</li>
-<li>后续 <code>pd</code> / <code>meta/root</code> 主线能直接承接这条桥</li>
+<li>workdir mode gate 已经进入正式实现。</li>
+<li><code>migrate init</code> / <code>serve</code> / <code>expand</code> 已经是协议入口，不是临时脚本。</li>
+<li><code>localmeta</code> 与 engine metadata 已明确分开。</li>
+<li>region snapshot 已是单独层，并被 migration / install 路径复用。</li>
+<li>当前桥接路径已经能接入 <code>coordinator</code> / <code>meta/root</code> 主线。</li>
 </ul>
-<h2 id="9-还没做完的"><a class="header" href="#9-还没做完的">9. 还没做完的</a></h2>
+<h2 id="9-当前没有实现的能力"><a class="header" href="#9-当前没有实现的能力">9. 当前没有实现的能力</a></h2>
 <ul>
-<li>更成熟的 migration observability</li>
-<li>更系统的 operator runtime 编排</li>
-<li>更完整的 snapshot install 与 reshard 联动</li>
-<li>对超大数据量场景的性能与恢复策略</li>
+<li>promotion 阶段不做自动 split / rebalance。</li>
+<li>snapshot install 还不是 zero-copy table transfer 或 SST ingest 优化路径。</li>
+<li>failed <code>init</code> 后还没有单独的 rollback / repair 命令。</li>
+<li>migration observability 仍然偏基础。</li>
+<li>scheduler/control-plane runtime 还没有自动编排 migration 生命周期。</li>
 </ul>
 <h2 id="10-总结"><a class="header" href="#10-总结">10. 总结</a></h2>
 <p>NoKV 这条“从单机到分布式”的桥接路线，真正值钱的不是多了几条 CLI，而是：</p>
 <ul>
 <li>它没有把单机和分布式做成两套系统</li>
 <li>它把 state promotion 写成了协议</li>
-<li>它让后续关于 control-plane、operator、snapshot、调度的研究，都能建立在同一套系统之上</li>
+<li>它让后续关于 control-plane、snapshot、调度和恢复的研究，都能建立在同一套系统之上</li>
 </ul>
 <p>这比“再做一个分布式 KV 外壳”更重要，因为它决定了 NoKV 后面能不能持续演进，而不是每往前走一步都重造一层。</p>
 
@@ -408,7 +409,7 @@
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../notes/2026-03-30-pd-and-raftadmin-layering.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../notes/2026-03-30-coordinator-and-execution-layering.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -422,7 +423,7 @@
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../notes/2026-03-30-pd-and-raftadmin-layering.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../notes/2026-03-30-coordinator-and-execution-layering.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

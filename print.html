@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-01a1bb3c.js";
+            window.path_to_searchindex_js = "searchindex-a947e9d9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b8f8ac3b.js"></script>
+        <script src="toc-8f631623.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -244,7 +244,7 @@
     
 <div class="hero-stat">
       <strong>Standalone to Cluster</strong>
-      <span>Seed a distributed region from an existing workdir and keep the same storage substrate.</span>
+      <span>Seed a distributed region from an existing workdir and keep the same storage layer.</span>
     </div>
 
     
@@ -341,7 +341,7 @@
     
 <ul>
       
-<li>One storage substrate instead of separate standalone and distributed engines.</li>
+<li>One storage layer instead of separate standalone and distributed engines.</li>
 
       
 <li>Formal lifecycle and migration protocol instead of dump/import glue.</li>
@@ -370,7 +370,7 @@
     
 <ul class="why-points">
       
-<li>One storage substrate across standalone and distributed modes.</li>
+<li>One storage layer across standalone and distributed modes.</li>
 
       
 <li>Explicit lifecycle and migration semantics instead of hidden bootstrap magic.</li>
@@ -3845,7 +3845,8 @@ count, backlog, and scheduling health.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="coordinator"><a class="header" href="#coordinator">Coordinator</a></h1>
-<p><code>Coordinator</code> is NoKV’s control-plane service for distributed mode.<br>It exposes a gRPC API (<code>pb.Coordinator</code>) and is started by:</p>
+<p><code>Coordinator</code> is NoKV’s control-plane service for distributed mode.
+It exposes a gRPC API (<code>pb.Coordinator</code>) and is started by:</p>
 <pre><code class="language-bash">go run ./cmd/nokv coordinator --addr 127.0.0.1:2379
 </code></pre>
 <hr>
@@ -3994,8 +3995,7 @@ replaying rooted truth:</p>
 <li>Materialize the rooted region snapshot into <code>coordinator/catalog.Cluster</code>.</li>
 </ol>
 <p>For replicated mode, followers periodically refresh rooted state and rebuild the
-service-side view. This avoids allocator rollback and removes the old parallel
-<code>PD_STATE.json</code> truth table.</p>
+service-side view. This avoids allocator rollback and removes the old parallel coordinator-state JSON truth table.</p>
 <h3 id="region-truth-hierarchy"><a class="header" href="#region-truth-hierarchy">Region Truth Hierarchy</a></h3>
 <p>NoKV intentionally keeps three region views with different authority:</p>
 <ul>
@@ -4223,11 +4223,13 @@ keeps the rooted truth surface small.</p>
 <li>the <code>execution plane</code></li>
 </ul>
 <p>and the next-stage evolution around them.</p>
-<p>The current implementation status is still asymmetric:</p>
+<p>The current implementation status is intentionally minimal but no longer just a
+design sketch:</p>
 <ul>
-<li><code>control-plane protocol v1</code> is already partially implemented and exposed</li>
-<li><code>execution-plane protocol v1</code> now has a minimal store-local implementation
-and a minimal admin diagnostics API surface</li>
+<li><code>control-plane protocol v1</code> is implemented and exposed through Coordinator
+RPCs plus <code>meta/root</code> storage semantics</li>
+<li><code>execution-plane protocol v1</code> is implemented as a store-local contract with a
+small admin diagnostics API surface</li>
 </ul>
 <p>The point of this document is to keep those two lines coordinated instead of
 letting them drift into separate, implicit rule sets.</p>
@@ -4265,7 +4267,7 @@ clear rollout line.</p>
 <hr>
 <h2 id="0-current-status"><a class="header" href="#0-current-status">0. Current Status</a></h2>
 <p>The control plane now has a <strong>minimal implemented v1</strong>.</p>
-<p>Already implemented and exposed through <code>pb/coordinator/coordinator.proto</code>,
+<p>Implemented and exposed through <code>pb/coordinator/coordinator.proto</code>,
 <code>coordinator/server</code>, <code>coordinator/storage</code>, and tests:</p>
 <ul>
 <li>route-read <code>Freshness</code></li>
@@ -4278,7 +4280,7 @@ clear rollout line.</p>
 </ul>
 <p>This means the protocol is no longer only a design direction. It is already the
 formal serving contract for key Coordinator APIs.</p>
-<p>What is <strong>not</strong> yet fully protocolized:</p>
+<p>Not implemented in v1:</p>
 <ul>
 <li>richer transition phases such as <code>Published</code> / <code>Stalled</code></li>
 <li>a fuller catch-up action surface exposed through API</li>
@@ -4287,8 +4289,8 @@ formal serving contract for key Coordinator APIs.</p>
 </ul>
 <p>So the right description today is:</p>
 <blockquote>
-<p>control-plane protocol v1 is implemented and in use, while later runtime and
-operator semantics remain future work.</p>
+<p>control-plane protocol v1 is implemented and in use, while richer
+scheduler/runtime policy is not implemented in v1.</p>
 </blockquote>
 <p>The execution plane is in a different state.</p>
 <p>Today, <code>raftstore</code> has a <strong>minimal implemented v1</strong> inside <code>raftstore/store</code>.</p>
@@ -4305,14 +4307,14 @@ pointers</li>
 drop</li>
 <li>admin diagnostics exposure through <code>pb/admin/admin.proto</code> <code>ExecutionStatus</code></li>
 </ul>
-<p>The execution plane still keeps many behaviors as implementation mechanics:</p>
+<p>Not implemented as first-class execution protocol fields yet:</p>
 <ul>
 <li>request validation and routing</li>
-<li>local leader admission</li>
 <li>context propagation</li>
-<li>planned truth -&gt; execute -&gt; terminal truth</li>
-<li>local restart through <code>raftstore/localmeta</code> + raft durable state</li>
-<li>degraded local scheduler behavior</li>
+<li>detailed local leader admission diagnostics</li>
+<li>detailed per-attempt scheduler retry/backoff policy</li>
+<li>metrics for planned truth -&gt; execute -&gt; terminal truth latency</li>
+<li>richer degraded local scheduler states</li>
 </ul>
 <p>The current landing is still mostly store-local and spread across:</p>
 <ul>
@@ -4325,7 +4327,7 @@ drop</li>
 <blockquote>
 <p>execution-plane protocol v1 now exists as a minimal named runtime contract,
 with store-local state and admin-visible diagnostics, while broader metrics,
-policy, and richer executor states remain future work.</p>
+policy, and richer executor states are not implemented in v1.</p>
 </blockquote>
 <hr>
 <h2 id="1-intent"><a class="header" href="#1-intent">1. Intent</a></h2>
@@ -4337,8 +4339,9 @@ policy, and richer executor states remain future work.</p>
 <li>rebuildable <code>coordinator/catalog</code></li>
 <li>explicit planned and terminal topology events</li>
 </ul>
-<p>Today, these pieces mostly exist as implementation mechanics.
-The control plane works, but many important semantics are still implicit:</p>
+<p>Before v1, these pieces mostly existed as implementation mechanics.
+The control plane now has a formal minimum contract, while several policy
+extensions remain intentionally outside v1:</p>
 <ul>
 <li>when a follower read is fresh enough</li>
 <li>when a follower must reload</li>
@@ -4616,7 +4619,7 @@ But the protocol should have room for them.</p>
 <p>That gives the system a clear, high-value place to prove the model before wider rollout.</p>
 <hr>
 <h2 id="6-rooted-catch-up-protocol"><a class="header" href="#6-rooted-catch-up-protocol">6. Rooted Catch-Up Protocol</a></h2>
-<p>NoKV already has a good catch-up substrate:</p>
+<p>NoKV already has a good catch-up foundation:</p>
 <ul>
 <li>checkpoint</li>
 <li>committed tail</li>
@@ -4725,7 +4728,7 @@ That is the start of a lifecycle, not yet the full protocol.</p>
 <h3 id="73-phase-definitions"><a class="header" href="#73-phase-definitions">7.3 Phase definitions</a></h3>
 <h4 id="planned"><a class="header" href="#planned"><code>Planned</code></a></h4>
 <p>The rooted lifecycle assessment says the transition exists as an intended
-topology change, but the operator runtime has not yet admitted it for forward
+topology change, but the scheduler/control-plane runtime has not yet admitted it for forward
 progress.</p>
 <p>This is the phase used by:</p>
 <ul>
@@ -4733,7 +4736,7 @@ progress.</p>
 <li><code>PublishRootEventResponse.assessment</code></li>
 </ul>
 <h4 id="admitted"><a class="header" href="#admitted"><code>Admitted</code></a></h4>
-<p>The rooted transition is currently pending or open, and the operator runtime has
+<p>The rooted transition is currently pending or open, and the scheduler/control-plane runtime has
 admitted it for execution progress.</p>
 <p>This is the phase used by:</p>
 <ul>
@@ -4762,7 +4765,7 @@ pending rooted target.</p>
 <li>clear scheduling decisions</li>
 <li>proper retry/backoff</li>
 <li>stuck transition recovery</li>
-<li>operator runtime clarity</li>
+<li>scheduler/control-plane runtime clarity</li>
 <li>precise testing around publish boundaries</li>
 </ul>
 <p>Without it, the system keeps relying on partial signals scattered across:</p>
@@ -5273,45 +5276,45 @@ protocol states or metrics-backed outcomes, not silent local behavior.</p>
 protocolize every internal raft detail.</p>
 <hr>
 <h2 id="16-priority-and-rollout-order"><a class="header" href="#16-priority-and-rollout-order">16. Priority and Rollout Order</a></h2>
-<p>The next protocol work should favor <code>execution-plane v1</code> before broadening
-<code>control-plane v2</code>.</p>
-<h3 id="161-why-execution-comes-next"><a class="header" href="#161-why-execution-comes-next">16.1 Why execution comes next</a></h3>
-<p>The control plane now already has a minimal, externally visible contract:</p>
+<p>The next protocol work should avoid widening either protocol until the current
+v1 contracts stay small, observable, and well tested.</p>
+<h3 id="161-what-is-implemented-now"><a class="header" href="#161-what-is-implemented-now">16.1 What is implemented now</a></h3>
+<p>The control plane has a minimal, externally visible contract:</p>
 <ul>
 <li>freshness classes</li>
 <li>rooted token / lag</li>
 <li>degraded serving state</li>
 <li>transition identity</li>
 </ul>
-<p>By contrast, the execution plane still has important correctness-sensitive
-semantics that are not yet formalized:</p>
+<p>The execution plane now has a minimal internal contract:</p>
 <ul>
-<li>request admission and cancellation</li>
-<li>queue overflow and degraded scheduler behavior</li>
-<li>planned truth -&gt; execute -&gt; terminal truth publish boundary</li>
-<li>restart alignment between local durable state and Coordinator</li>
+<li>admission class / reason</li>
+<li>topology outcome</li>
+<li>publish state</li>
+<li>restart state</li>
+<li>admin-visible <code>ExecutionStatus</code></li>
 </ul>
-<p>That means the larger current ambiguity sits in <code>raftstore</code>, not in
-<code>coordinator</code>.</p>
+<p>That is enough for v1. It gives tests and operators names for the important
+boundaries without turning <code>raftstore</code> into a policy engine.</p>
 <h3 id="162-what-should-not-happen-next"><a class="header" href="#162-what-should-not-happen-next">16.2 What should not happen next</a></h3>
-<p>The wrong next step would be to keep enriching control-plane phases and
-diagnostic fields while the execution plane still lacks a matching lifecycle.</p>
+<p>The wrong next step would be to keep enriching lifecycle phases and diagnostic
+fields before the existing v1 state proves stable under recovery and
+integration tests.</p>
 <p>That would create a vocabulary mismatch:</p>
 <ul>
-<li>control plane claims richer transition semantics</li>
-<li>execution plane still cannot report them precisely</li>
+<li>control plane claims richer transition semantics than the executor can act on</li>
+<li>execution plane reports more states than the coordinator can use safely</li>
 </ul>
 <h3 id="163-recommended-order"><a class="header" href="#163-recommended-order">16.3 Recommended order</a></h3>
 <ol>
-<li>Finish execution-plane protocol v1 in design form.</li>
-<li>Land the first execution-plane states on the <code>raftstore</code> request and
-transition boundaries.</li>
-<li>Then tighten control-plane protocol from v1 toward richer operator/runtime
-phases.</li>
+<li>Keep control-plane v1 and execution-plane v1 narrow.</li>
+<li>Add tests around the existing publish/restart/admission states before adding
+new states.</li>
+<li>Only then tighten control-plane v1 toward richer scheduler/runtime phases.</li>
 </ol>
 <p>In short:</p>
 <blockquote>
-<p>stabilize the executor contract first, then deepen the coordinator contract.</p>
+<p>stabilize both v1 contracts first, then deepen scheduler/runtime semantics.</p>
 </blockquote>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="from-standalone-to-cluster"><a class="header" href="#from-standalone-to-cluster">From Standalone to Cluster</a></h1>
@@ -5357,7 +5360,7 @@ NoKV does not treat standalone and distributed mode as two separate products glu
 <p>NoKV is aiming at a different story:</p>
 <ol>
 <li>Start with a serious standalone engine.</li>
-<li>Keep the same workdir and the same storage substrate as data grows.</li>
+<li>Keep the same workdir and the same storage layer as data grows.</li>
 <li>Promote that workdir into a distributed seed explicitly.</li>
 <li>Expand the seed into a replicated cluster through normal raftstore mechanisms.</li>
 </ol>
@@ -5678,7 +5681,7 @@ needs snapshot-based catch-up instead of regular log replication</li>
 <li>install interrupted before publish</li>
 </ul>
 </li>
-<li><code>raftstore/integration/pd_degraded_test.go</code>
+<li><code>raftstore/integration/coordinator_degraded_test.go</code>
 <ul>
 <li>control-plane degradation after startup</li>
 </ul>
@@ -6036,7 +6039,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <tr><td>Iterator consistency</td><td><code>lsm/iterator_test.go</code></td><td>Snapshot visibility, merging iterators across levels and memtables.</td></tr>
 <tr><td>Throttling / backpressure</td><td><code>lsm/compaction_test.go</code>, <code>db_test.go::TestWriteThrottle</code></td><td>L0 backlog triggers, flush queue growth, metrics observation.</td></tr>
 <tr><td>Distributed NoKV client</td><td><code>raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet</code>, <code>raftstore/transport/grpc_transport_test.go::TestGRPCTransportManualTicksDriveElection</code></td><td>Region-aware routing, NotLeader retries, manual tick-driven elections, cross-region 2PC sequencing.</td></tr>
-<tr><td>Migration &amp; membership orchestration</td><td><code>raftstore/integration/migration_flow_test.go</code>, <code>raftstore/integration/restart_recovery_test.go</code>, <code>raftstore/integration/pd_degraded_test.go</code>, <code>raftstore/integration/snapshot_interruption_test.go</code>, <code>raftstore/integration/context_propagation_test.go</code>, <code>raftstore/integration/transport_chaos_test.go</code></td><td>Seed bootstrap, multi-peer rollout, leader transfer, peer removal, restarted follower recovery, removed-peer dehost after restart, Coordinator outage after startup, quorum-loss read/write timeouts, split-region 2PC deadline propagation, repeated link flap during membership changes, partitioned follower catch-up, transfer-leader retry after partition recovery, and snapshot-install interruption before publish.</td></tr>
+<tr><td>Migration &amp; membership orchestration</td><td><code>raftstore/integration/migration_flow_test.go</code>, <code>raftstore/integration/restart_recovery_test.go</code>, <code>raftstore/integration/coordinator_degraded_test.go</code>, <code>raftstore/integration/snapshot_interruption_test.go</code>, <code>raftstore/integration/context_propagation_test.go</code>, <code>raftstore/integration/transport_chaos_test.go</code></td><td>Seed bootstrap, multi-peer rollout, leader transfer, peer removal, restarted follower recovery, removed-peer dehost after restart, Coordinator outage after startup, quorum-loss read/write timeouts, split-region 2PC deadline propagation, repeated link flap during membership changes, partitioned follower catch-up, transfer-leader retry after partition recovery, and snapshot-install interruption before publish.</td></tr>
 <tr><td>Performance regression</td><td><code>benchmark</code> package</td><td>Compare NoKV vs Badger/Pebble by default (RocksDB optional), produce human-readable reports under <code>benchmark/benchmark_results</code>.</td></tr>
 </tbody>
 </table>
@@ -6062,9 +6065,9 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <li><strong>Protocol unit tests</strong>: package-local tests under <code>raftstore/peer</code>, <code>raftstore/store</code>, <code>raftstore/admin</code>, <code>raftstore/snapshot</code>, and <code>raftstore/migrate</code> validate one protocol surface at a time.</li>
 <li><strong>Node-local integration tests</strong>: store/admin tests verify snapshot install, membership application, and region runtime publication without booting a full cluster.</li>
 <li><strong>Multi-node deterministic data-plane integration tests</strong>: <code>raftstore/integration</code> uses <code>raftstore/testcluster</code> to boot real stores, wire transports, and drive migration/member flows against live runtimes.</li>
-<li><strong>Multi-node deterministic control-plane integration tests</strong>: <code>coordinator/integration/*_test.go</code> uses <code>coordinator/testcluster</code> to boot <code>3 pd + replicated meta</code>, exercise rooted watch/reload propagation, follower write rejection, allocator-fence/remove-region propagation, and control-plane read staleness without mixing those cases into store/data-plane tests.</li>
+<li><strong>Multi-node deterministic control-plane integration tests</strong>: <code>coordinator/integration/*_test.go</code> uses <code>coordinator/testcluster</code> to boot <code>3 coordinator + replicated meta</code>, exercise rooted watch/reload propagation, follower write rejection, allocator-fence/remove-region propagation, and control-plane read staleness without mixing those cases into store/data-plane tests.</li>
 <li><strong>Restart and recovery suites</strong>: <code>raftstore/integration/restart_recovery_test.go</code> covers restarted followers, removed-peer dehost persistence, and leader restart with subsequent membership changes.</li>
-<li><strong>Control-plane degradation and publish-boundary tests</strong>: <code>raftstore/integration/pd_degraded_test.go</code> and <code>raftstore/integration/snapshot_interruption_test.go</code> cover live Coordinator outage after startup and failpoint-driven snapshot interruption before peer publication.</li>
+<li><strong>Control-plane degradation and publish-boundary tests</strong>: <code>raftstore/integration/coordinator_degraded_test.go</code> and <code>raftstore/integration/snapshot_interruption_test.go</code> cover live Coordinator outage after startup and failpoint-driven snapshot interruption before peer publication.</li>
 </ul>
 <p>When adding new distributed tests:</p>
 <ul>
@@ -6084,7 +6087,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <tr><td>Follower restart after snapshot install</td><td>Covered</td><td><code>raftstore/integration/restart_recovery_test.go::TestExpandedPeerRestartPreservesRegionAndData</code></td><td>Ensures installed peer persists region metadata and data after restart.</td></tr>
 <tr><td>Removed peer restart</td><td>Covered</td><td><code>raftstore/integration/restart_recovery_test.go::TestRemovedPeerRestartDoesNotRehost</code></td><td>Ensures dehosted peers do not come back after restart.</td></tr>
 <tr><td>Leader restart with follow-up membership change</td><td>Covered</td><td><code>raftstore/integration/restart_recovery_test.go::TestLeaderRestartStillAllowsMembershipChanges</code></td><td>Exercises leadership churn before a later remove-peer operation.</td></tr>
-<tr><td>Control-plane degraded / Coordinator unavailable</td><td>Covered</td><td><code>coordinator/adapter/scheduler_client_test.go</code>, <code>raftstore/store/command_service_test.go::TestStoreProposeCommandSurvivesSchedulerUnavailable</code>, <code>raftstore/integration/pd_degraded_test.go::TestClusterSurvivesPDUnavailableAfterStartup</code></td><td>Covers both local degraded scheduler semantics and live multi-node Coordinator outage after route cache warmup; new cold-route misses still fail with <code>RouteUnavailable</code> as expected.</td></tr>
+<tr><td>Control-plane degraded / Coordinator unavailable</td><td>Covered</td><td><code>coordinator/adapter/scheduler_client_test.go</code>, <code>raftstore/store/command_service_test.go::TestStoreProposeCommandSurvivesSchedulerUnavailable</code>, <code>raftstore/integration/coordinator_degraded_test.go::TestClusterSurvivesCoordinatorUnavailableAfterStartup</code></td><td>Covers both local degraded scheduler semantics and live multi-node Coordinator outage after route cache warmup; new cold-route misses still fail with <code>RouteUnavailable</code> as expected.</td></tr>
 <tr><td>Scheduler queue overflow / dropped operations</td><td>Covered</td><td><code>raftstore/store/scheduler_runtime_test.go::TestStoreSchedulerStatusTracksQueueDrop</code></td><td>Validates local degraded status and dropped operation accounting.</td></tr>
 <tr><td>Snapshot install interrupted before publish</td><td>Covered</td><td><code>raftstore/integration/snapshot_interruption_test.go::TestExpandSnapshotInstallInterruptedBeforePublish</code>, <code>raftstore/store/peer_lifecycle_test.go::TestStoreInstallRegionSnapshotRejectsCorruptPayload</code></td><td>Uses failpoint injection to verify target install aborts without leaving a hosted peer or polluted region metadata, then retries cleanly after restart.</td></tr>
 <tr><td>Request cancel / deadline propagation</td><td>Covered</td><td><code>raftstore/client/client_test.go::TestClientGetHonorsCanceledContextDuringRouteLookup</code>, <code>raftstore/client/client_test.go::TestClientGetHonorsCanceledContextDuringRPC</code>, <code>raftstore/client/client_test.go::TestClientPutHonorsCanceledContextDuringRouteLookup</code>, <code>raftstore/client/client_test.go::TestClientPutHonorsCanceledContextDuringRPC</code>, <code>raftstore/client/client_test.go::TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRouteLookup</code>, <code>raftstore/client/client_test.go::TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRPC</code>, <code>raftstore/client/client_test.go::TestClientResolveLocksHonorsCanceledContextDuringMultiRegionRPC</code>, <code>raftstore/integration/context_propagation_test.go::TestClientReadWriteHonorContextUnderQuorumLoss</code>, <code>raftstore/integration/context_propagation_test.go::TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLoss</code></td><td>Verifies read/write paths plus multi-region 2PC and resolve-lock flows preserve caller cancellation/deadlines through route lookup, RPC, and live split-region quorum loss instead of collapsing to generic retry exhaustion.</td></tr>
@@ -6435,10 +6438,10 @@ nokv-config regions --config raft_config.json --format json | jq '.[] | {id:.id,
 <div class="blog-card">
     <span class="blog-date">2026-03-30</span>
     
-<h3><a href="#2026-03-30-为什么-pd-和执行面必须分层">PD 与执行面分层</a></h3>
+<h3><a href="#2026-03-30-为什么-coordinator-和执行面必须分层">Coordinator 与执行面分层</a></h3>
 
     
-<p>解释为什么 control plane、truth kernel 和 data-plane executor 必须分开，以及为什么 PD 不能直接写本地 truth。</p>
+<p>解释为什么 control plane、truth kernel 和 data-plane executor 必须分开，以及为什么 Coordinator 不能直接写本地 truth。</p>
 
   </div>
 
@@ -6479,10 +6482,10 @@ nokv-config regions --config raft_config.json --format json | jq '.[] | {id:.id,
 <div class="blog-card">
     <span class="blog-date">2026-04-03</span>
     
-<h3><a href="#2026-04-03-rooted-metadatadelos-lite-与-virtual-log-设计说明">Rooted Metadata、Delos-lite 与 Virtual Log</a></h3>
+<h3><a href="#2026-04-03-rooted-metadatadelos-lite-与-virtuallog-设计说明">Rooted Metadata、Delos-lite 与 VirtualLog</a></h3>
 
     
-<p>完整说明 NoKV 当前的 metadata truth、PD 隔离、Virtual Log substrate、local/replicated backend，以及为什么这条主线适合作为后续研究平台。</p>
+<p>完整说明 NoKV 当前的 metadata truth、Coordinator 隔离、VirtualLog contract、local/replicated backend，以及为什么这条主线适合作为后续研究平台。</p>
 
   </div>
 
@@ -7591,7 +7594,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="2026-03-30-从单机到分布式的桥接为什么是-nokv-的主线能力"><a class="header" href="#2026-03-30-从单机到分布式的桥接为什么是-nokv-的主线能力">2026-03-30 从单机到分布式的桥接为什么是 NoKV 的主线能力</a></h1>
 <blockquote>
-<p>状态：当前设计已经落地，相关实现分散在 <code>DB</code>、<code>raftstore</code>、<code>migrate</code>、<code>pd</code> 与 <code>meta/root</code> 中。本文重点不是复述命令，而是解释为什么 NoKV 没有把“单机版”和“分布式版”做成两套系统。</p>
+<p>状态：当前设计已经落地，相关实现分散在 <code>DB</code>、<code>raftstore</code>、<code>migrate</code>、<code>coordinator</code> 与 <code>meta/root</code> 中。本文重点不是复述命令，而是解释为什么 NoKV 没有把“单机版”和“分布式版”做成两套系统。</p>
 </blockquote>
 <h2 id="导读"><a class="header" href="#导读">导读</a></h2>
 <ul>
@@ -7619,7 +7622,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li><code>raftstore/snapshot</code></li>
 <li><code>raftstore/mode</code></li>
 <li><code>raftstore/migrate</code></li>
-<li><code>pd</code></li>
+<li><code>coordinator</code></li>
 <li><code>meta/root</code></li>
 </ul>
 <p>分层如下：</p>
@@ -7630,8 +7633,8 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
     SNAP --&gt; MIG
     LM --&gt; MIG
     MIG --&gt; RS["raftstore\n分布式执行层"]
-    RS --&gt; PD["pd\nview + service"]
-    PD --&gt; MR["meta/root\n最小真相源"]
+    RS --&gt; Coordinator["coordinator\nview + service"]
+    Coordinator --&gt; MR["meta/root\n最小真相源"]
 </pre>
 
 <h3 id="关键判断"><a class="header" href="#关键判断">关键判断</a></h3>
@@ -7647,7 +7650,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>单机目录直接被视为“旧格式”，只能整体导出。</li>
 <li>分布式 bootstrap 依赖外部工具，而不是系统自身的生命周期协议。</li>
 <li>恢复、校验、观测、测试路径出现双轨制。</li>
-<li>后面任何关于 snapshot、reshard、operator 的研究都要分别做两遍。</li>
+<li>后面任何关于 snapshot、reshard、scheduler/control-plane 的研究都要分别做两遍。</li>
 </ul>
 <p>对于研究平台来说，这种分裂尤其糟糕。因为你无法回答一个最基本的问题：</p>
 <blockquote>
@@ -7705,14 +7708,14 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
     participant MODE as mode gate
     participant MIG as migrate
     participant RS as raftstore
-    participant PD as pd/meta
+    participant Coordinator as coordinator/meta
 
     DB-&gt;&gt;MODE: standalone -&gt; preparing
     MODE-&gt;&gt;MIG: 允许写入 seed 语义
     MIG-&gt;&gt;RS: init 一个 full-range seed region
     RS-&gt;&gt;MODE: preparing -&gt; seeded
     MIG-&gt;&gt;RS: serve / expand
-    RS-&gt;&gt;PD: 加入 cluster control-plane
+    RS-&gt;&gt;Coordinator: 加入 cluster control-plane
     RS-&gt;&gt;MODE: seeded -&gt; cluster
 </pre>
 
@@ -7745,7 +7748,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <ol>
 <li>启动 <code>raftstore</code>。</li>
 <li>恢复本地 <code>replicas.binpb</code> 和 <code>raft-progress.binpb</code>。</li>
-<li>向 <code>pd</code> / <code>meta/root</code> 注册 rooted truth。</li>
+<li>向 <code>coordinator</code> / <code>meta/root</code> 注册 rooted truth。</li>
 <li>开始按 region/peer 身份参与执行面。</li>
 </ol>
 <h3 id="expand"><a class="header" href="#expand"><code>expand</code></a></h3>
@@ -7756,7 +7759,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <p>做的事情大致是：</p>
 <ol>
 <li>生成新的 peer change / split / merge 目标。</li>
-<li>通过 <code>pd</code> proposal gate 进入 <code>meta/root</code>。</li>
+<li>通过 <code>coordinator</code> proposal gate 进入 <code>meta/root</code>。</li>
 <li>由 <code>raftstore</code> 执行真正的 conf change / snapshot install。</li>
 <li>terminal truth 回写 <code>meta/root</code>。</li>
 </ol>
@@ -7775,7 +7778,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <ul>
 <li>restore</li>
 <li>reshard</li>
-<li>operator runtime</li>
+<li>scheduler/control-plane runtime</li>
 <li>snapshot install</li>
 <li>failover</li>
 </ul>
@@ -7787,38 +7790,39 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>FoundationDB / Delos 一类系统里“让小而稳定的控制面成为系统骨架”的思路</li>
 <li>数据库内核里“把生命周期写进协议而不是运维手册”的做法</li>
 </ul>
-<h2 id="8-当前实现已经做到的"><a class="header" href="#8-当前实现已经做到的">8. 当前实现已经做到的</a></h2>
+<h2 id="8-当前已经落地的边界"><a class="header" href="#8-当前已经落地的边界">8. 当前已经落地的边界</a></h2>
 <ul>
-<li>workdir mode 已经进入正式实现</li>
-<li>localmeta 与 engine metadata 已明确分开</li>
-<li>region snapshot 已是单独层</li>
-<li>migration 主线已形成 protocol 化入口</li>
-<li>后续 <code>pd</code> / <code>meta/root</code> 主线能直接承接这条桥</li>
+<li>workdir mode gate 已经进入正式实现。</li>
+<li><code>migrate init</code> / <code>serve</code> / <code>expand</code> 已经是协议入口，不是临时脚本。</li>
+<li><code>localmeta</code> 与 engine metadata 已明确分开。</li>
+<li>region snapshot 已是单独层，并被 migration / install 路径复用。</li>
+<li>当前桥接路径已经能接入 <code>coordinator</code> / <code>meta/root</code> 主线。</li>
 </ul>
-<h2 id="9-还没做完的"><a class="header" href="#9-还没做完的">9. 还没做完的</a></h2>
+<h2 id="9-当前没有实现的能力"><a class="header" href="#9-当前没有实现的能力">9. 当前没有实现的能力</a></h2>
 <ul>
-<li>更成熟的 migration observability</li>
-<li>更系统的 operator runtime 编排</li>
-<li>更完整的 snapshot install 与 reshard 联动</li>
-<li>对超大数据量场景的性能与恢复策略</li>
+<li>promotion 阶段不做自动 split / rebalance。</li>
+<li>snapshot install 还不是 zero-copy table transfer 或 SST ingest 优化路径。</li>
+<li>failed <code>init</code> 后还没有单独的 rollback / repair 命令。</li>
+<li>migration observability 仍然偏基础。</li>
+<li>scheduler/control-plane runtime 还没有自动编排 migration 生命周期。</li>
 </ul>
 <h2 id="10-总结"><a class="header" href="#10-总结">10. 总结</a></h2>
 <p>NoKV 这条“从单机到分布式”的桥接路线，真正值钱的不是多了几条 CLI，而是：</p>
 <ul>
 <li>它没有把单机和分布式做成两套系统</li>
 <li>它把 state promotion 写成了协议</li>
-<li>它让后续关于 control-plane、operator、snapshot、调度的研究，都能建立在同一套系统之上</li>
+<li>它让后续关于 control-plane、snapshot、调度和恢复的研究，都能建立在同一套系统之上</li>
 </ul>
 <p>这比“再做一个分布式 KV 外壳”更重要，因为它决定了 NoKV 后面能不能持续演进，而不是每往前走一步都重造一层。</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="2026-03-30-为什么-pd-和执行面必须分层"><a class="header" href="#2026-03-30-为什么-pd-和执行面必须分层">2026-03-30 为什么 PD 和执行面必须分层</a></h1>
+<h1 id="2026-03-30-为什么-coordinator-和执行面必须分层"><a class="header" href="#2026-03-30-为什么-coordinator-和执行面必须分层">2026-03-30 为什么 Coordinator 和执行面必须分层</a></h1>
 <blockquote>
-<p>状态：当前这条边界已经进一步收敛。<code>pd</code> 负责 rooted view、service 和 proposal gate；<code>raftstore</code> 负责 data-plane execute；<code>meta/root</code> 负责最小 truth。本文重点解释为什么 <code>PD</code> 不能和执行面混成一层。</p>
+<p>状态：当前这条边界已经进一步收敛。<code>coordinator</code> 负责 rooted view、service 和 proposal gate；<code>raftstore</code> 负责 data-plane execute；<code>meta/root</code> 负责最小 truth。本文重点解释为什么 <code>Coordinator</code> 不能和执行面混成一层。</p>
 </blockquote>
 <h2 id="导读-1"><a class="header" href="#导读-1">导读</a></h2>
 <ul>
-<li>🧭 主题：为什么 <code>pd</code> 必须是 view/service 层，而不是半个执行器。</li>
-<li>🧱 核心对象：<code>meta/root</code>、<code>pd</code>、<code>raftstore</code>、<code>RootEvent</code>。</li>
+<li>🧭 主题：为什么 <code>coordinator</code> 必须是 view/service 层，而不是半个执行器。</li>
+<li>🧱 核心对象：<code>meta/root</code>、<code>coordinator</code>、<code>raftstore</code>、<code>RootEvent</code>。</li>
 <li>🔁 调用链：<code>planned truth -&gt; data-plane execute -&gt; terminal truth</code>。</li>
 <li>📚 参考对象：TiKV 的控制面/执行面分离、Delos/FDB 的 truth/service 解耦。</li>
 </ul>
@@ -7838,23 +7842,23 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <p>NoKV 当前选择的是另一条路：</p>
 <ul>
 <li><code>meta/root</code> 作为最小 truth kernel</li>
-<li><code>pd</code> 作为 rooted view + service</li>
+<li><code>coordinator</code> 作为 rooted view + service</li>
 <li><code>raftstore</code> 作为 executor</li>
 </ul>
 <h2 id="2-当前分层"><a class="header" href="#2-当前分层">2. 当前分层</a></h2>
 <p>相关代码：</p>
 <ul>
-<li><code>pd</code></li>
+<li><code>coordinator</code></li>
 <li><code>meta/root</code></li>
 <li><code>raftstore/store</code></li>
 </ul>
 <p>结构如下：</p>
 <pre class="mermaid">flowchart LR
-    C["Client / Operator"] --&gt; PD["PD\nview + service + gate"]
-    PD --&gt; MR["meta/root\ntruth kernel"]
-    RS["raftstore\nexecutor"] --&gt; PD
+    C["Client / Operator"] --&gt; Coordinator["Coordinator\nview + service + gate"]
+    Coordinator --&gt; MR["meta/root\ntruth kernel"]
+    RS["raftstore\nexecutor"] --&gt; Coordinator
     RS --&gt; DP["data-plane peer runtime"]
-    DP --&gt; PD
+    DP --&gt; Coordinator
 </pre>
 
 <h3 id="三层职责"><a class="header" href="#三层职责">三层职责</a></h3>
@@ -7865,11 +7869,11 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>transition state machine</li>
 <li>checkpoint + retained tail</li>
 </ul>
-<h4 id="pd"><a class="header" href="#pd"><code>pd</code></a></h4>
+<h4 id="coordinator-1"><a class="header" href="#coordinator-1"><code>coordinator</code></a></h4>
 <p>负责：</p>
 <ul>
 <li>route view</li>
-<li>pending/operator view</li>
+<li>transition view</li>
 <li>leader-only write gate</li>
 <li>assessment / inspection RPC</li>
 <li>liveness service</li>
@@ -7882,14 +7886,14 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>local apply</li>
 <li>terminal truth publish</li>
 </ul>
-<h2 id="3-为什么-pd-不能直接做执行面"><a class="header" href="#3-为什么-pd-不能直接做执行面">3. 为什么 <code>PD</code> 不能直接做执行面</a></h2>
+<h2 id="3-为什么-coordinator-不能直接做执行面"><a class="header" href="#3-为什么-coordinator-不能直接做执行面">3. 为什么 <code>Coordinator</code> 不能直接做执行面</a></h2>
 <h3 id="31-control-plane-不等于-execution-plane"><a class="header" href="#31-control-plane-不等于-execution-plane">3.1 control-plane 不等于 execution-plane</a></h3>
-<p><code>PD</code> 擅长的是：</p>
+<p><code>Coordinator</code> 擅长的是：</p>
 <ul>
 <li>看全局视图</li>
 <li>做路由和目录服务</li>
 <li>做 proposal gate</li>
-<li>做 operator/scheduler runtime</li>
+<li>做 scheduler decision 和 rooted assessment</li>
 </ul>
 <p>但真正执行这些动作的仍然是 leader store：</p>
 <ul>
@@ -7900,7 +7904,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li><code>Merge</code></li>
 <li>snapshot install</li>
 </ul>
-<p>如果让 <code>PD</code> 直接改本地 region 运行时，会立刻出现三个问题：</p>
+<p>如果让 <code>Coordinator</code> 直接改本地 region 运行时，会立刻出现三个问题：</p>
 <ol>
 <li>本地 truth 与 raft apply 路径脱节</li>
 <li>正常执行和恢复路径不一致</li>
@@ -7926,31 +7930,29 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <h3 id="41-peer-change"><a class="header" href="#41-peer-change">4.1 peer change</a></h3>
 <pre class="mermaid">sequenceDiagram
     participant OP as Operator/Client
-    participant PD as PD
+    participant Coordinator as Coordinator
     participant MR as Meta Root
     participant RS as Raftstore
     participant RP as Region Leader Peer
 
-    OP-&gt;&gt;PD: 请求加副本/删副本
-    PD-&gt;&gt;MR: rooted lifecycle assessment + append planned event
-    PD--&gt;&gt;RS: target 可执行
+    OP-&gt;&gt;Coordinator: 请求加副本/删副本
+    Coordinator-&gt;&gt;MR: rooted lifecycle assessment + append planned event
+    Coordinator--&gt;&gt;RS: target 可执行
     RS-&gt;&gt;RP: propose conf change
     RP--&gt;&gt;RS: apply 完成
-    RS-&gt;&gt;PD: publish terminal event
-    PD-&gt;&gt;MR: append applied truth
+    RS-&gt;&gt;Coordinator: publish terminal event
+    Coordinator-&gt;&gt;MR: append applied truth
 </pre>
 
 <h3 id="42-split--merge"><a class="header" href="#42-split--merge">4.2 split / merge</a></h3>
 <p>路径类似，只是 proposal payload 从 conf change 换成 admin command。</p>
 <h2 id="5-这条分层的收益"><a class="header" href="#5-这条分层的收益">5. 这条分层的收益</a></h2>
-<h3 id="51-pd-不重新长成-authority"><a class="header" href="#51-pd-不重新长成-authority">5.1 <code>PD</code> 不重新长成 authority</a></h3>
-<p>当前 <code>pd</code> 的主要代码：</p>
+<h3 id="51-coordinator-不重新长成-authority"><a class="header" href="#51-coordinator-不重新长成-authority">5.1 <code>Coordinator</code> 不重新长成 authority</a></h3>
+<p>当前 <code>coordinator</code> 的主要代码：</p>
 <ul>
-<li><code>pd/storage/root.go</code></li>
-<li><code>pd/catalog/cluster.go</code></li>
-<li><code>pd/view/pending_view.go</code></li>
-<li><code>pd/operator</code></li>
-<li><code>pd/server</code></li>
+<li><code>coordinator/storage/root.go</code></li>
+<li><code>coordinator/catalog/cluster.go</code></li>
+<li><code>coordinator/server</code></li>
 </ul>
 <p>可以看出来，它已经不是一个“大 metadata 数据库”了，而是一个 rooted view host。</p>
 <h3 id="52-执行面更容易纯化"><a class="header" href="#52-执行面更容易纯化">5.2 执行面更容易纯化</a></h3>
@@ -7961,19 +7963,11 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>outcome</li>
 </ul>
 <p>这为后续继续做纯 executor 化提供了清楚的落点。</p>
-<h3 id="53-后续-scheduleroperator-runtime-更容易单独生长"><a class="header" href="#53-后续-scheduleroperator-runtime-更容易单独生长">5.3 后续 scheduler/operator runtime 更容易单独生长</a></h3>
-<p>你以后可以继续在 <code>PD</code> 里做：</p>
-<ul>
-<li>owner</li>
-<li>attempt</li>
-<li>admission</li>
-<li>backoff</li>
-<li>operator runtime</li>
-</ul>
-<p>但这些都不需要倒灌进 <code>meta/root</code>。</p>
+<h3 id="53-后续-schedulerruntime-语义更容易单独生长"><a class="header" href="#53-后续-schedulerruntime-语义更容易单独生长">5.3 后续 scheduler/runtime 语义更容易单独生长</a></h3>
+<p>你以后可以继续在 <code>Coordinator</code> 里做 scheduler policy、admission、backoff 和 debug surface，但这些都不需要倒灌进 <code>meta/root</code>。</p>
 <h2 id="6-设计理念-1"><a class="header" href="#6-设计理念-1">6. 设计理念</a></h2>
 <p>这里的核心理念有两条：</p>
-<h3 id="61-pd-是全局视图和服务层不是本地状态执行器"><a class="header" href="#61-pd-是全局视图和服务层不是本地状态执行器">6.1 <code>PD</code> 是全局视图和服务层，不是本地状态执行器</a></h3>
+<h3 id="61-coordinator-是全局视图和服务层不是本地状态执行器"><a class="header" href="#61-coordinator-是全局视图和服务层不是本地状态执行器">6.1 <code>Coordinator</code> 是全局视图和服务层，不是本地状态执行器</a></h3>
 <h3 id="62-执行路径必须和恢复路径共享同一条-truth-model"><a class="header" href="#62-执行路径必须和恢复路径共享同一条-truth-model">6.2 执行路径必须和恢复路径共享同一条 truth model</a></h3>
 <p>如果一个动作只能在运行时成立、恢复后解释不出来，那它就是设计上不干净。</p>
 <h2 id="7-参考对象-1"><a class="header" href="#7-参考对象-1">7. 参考对象</a></h2>
@@ -7985,25 +7979,24 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 </ul>
 <h2 id="8-当前已经做对的地方"><a class="header" href="#8-当前已经做对的地方">8. 当前已经做对的地方</a></h2>
 <ul>
-<li><code>PD</code> 不再维护第二份 authority truth</li>
+<li><code>Coordinator</code> 不再维护第二份 authority truth</li>
 <li><code>meta/root</code> 持有 transition state machine</li>
 <li><code>raftstore</code> 已经更接近 target-driven executor</li>
-<li>pending/operator view 已经从 rooted truth materialize 出来</li>
+<li>transition view 已经从 rooted truth materialize 出来</li>
 </ul>
 <h2 id="9-还值得继续做的"><a class="header" href="#9-还值得继续做的">9. 还值得继续做的</a></h2>
 <ul>
-<li><code>pd/operator</code> 真正长出 scheduler/operator runtime</li>
 <li><code>raftstore</code> 继续纯 executor 化</li>
-<li><code>PD</code> 对外 operator/debug surface 继续增强</li>
+<li><code>Coordinator</code> 对外 transition/debug surface 继续增强</li>
 </ul>
 <h2 id="10-总结-1"><a class="header" href="#10-总结-1">10. 总结</a></h2>
-<p><code>PD</code> 和执行面不能混成一层，根本原因不是“命名要好看”，而是：</p>
+<p><code>Coordinator</code> 和执行面不能混成一层，根本原因不是“命名要好看”，而是：</p>
 <ul>
 <li>control-plane 不应该篡改本地执行态</li>
 <li>authority、view、runtime、executor 必须分层</li>
 <li>只有这样，系统恢复、测试、调度和演进才不会互相污染</li>
 </ul>
-<p>当前 NoKV 这条线已经开始站稳，而且它是后续继续做 scheduler/operator 研究的必要前提。</p>
+<p>当前 NoKV 这条线已经开始站稳，而且它是后续继续做 scheduler/control-plane runtime 研究的必要前提。</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="2026-03-30-迁移设计里最关键的不是命令而是-mode-和-snapshot-语义"><a class="header" href="#2026-03-30-迁移设计里最关键的不是命令而是-mode-和-snapshot-语义">2026-03-30 迁移设计里最关键的不是命令，而是 mode 和 snapshot 语义</a></h1>
 <blockquote>
@@ -8122,12 +8115,12 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <pre class="mermaid">sequenceDiagram
     participant CLI as serve/expand
     participant RS as raftstore
-    participant PD as pd
+    participant Coordinator as coordinator
     participant MR as meta/root
 
     CLI-&gt;&gt;RS: 启动 seeded workdir
-    RS-&gt;&gt;PD: 注册 rooted truth / liveness
-    PD-&gt;&gt;MR: append rooted metadata
+    RS-&gt;&gt;Coordinator: 注册 rooted truth / liveness
+    Coordinator-&gt;&gt;MR: append rooted metadata
     CLI-&gt;&gt;RS: expand membership
     RS-&gt;&gt;MR: planned + terminal truth
 </pre>
@@ -8163,18 +8156,20 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>region/shard 系统里逻辑快照与协议快照分层的经验</li>
 <li>Delos/FDB 一类系统对“最小 durable 核心 + 可重建 view”的强调</li>
 </ul>
-<h2 id="9-当前已经做到的"><a class="header" href="#9-当前已经做到的">9. 当前已经做到的</a></h2>
+<h2 id="9-当前已经落地的边界"><a class="header" href="#9-当前已经落地的边界">9. 当前已经落地的边界</a></h2>
 <ul>
-<li>mode gate 已经存在</li>
-<li>localmeta / snapshot / migrate 已经分层</li>
-<li>migration 已经不是 dump/import 风格</li>
-<li>后续可以自然接到 <code>pd</code> / <code>meta/root</code> 主线</li>
+<li>mode gate 已经存在，并能阻止半迁移目录被当成普通 standalone 打开。</li>
+<li><code>localmeta</code> / <code>snapshot</code> / <code>migrate</code> 已经分层。</li>
+<li>migration 已经不是 dump/import 风格，而是 state promotion。</li>
+<li>seed region、snapshot install 和 membership expansion 已经能进入当前分布式主线。</li>
 </ul>
-<h2 id="10-后续还值得继续做的"><a class="header" href="#10-后续还值得继续做的">10. 后续还值得继续做的</a></h2>
+<h2 id="10-当前没有实现的能力"><a class="header" href="#10-当前没有实现的能力">10. 当前没有实现的能力</a></h2>
 <ul>
-<li>更强的 migration observability</li>
-<li>SST-based snapshot install 与 migration 更深整合</li>
-<li>更完整的 operator 编排和故障恢复</li>
+<li>不做在线自动切分已有 standalone 数据。</li>
+<li>不做自动 rebalance。</li>
+<li>不提供 failed migration 的独立 rollback / repair 命令。</li>
+<li>migration observability 仍然偏基础。</li>
+<li>SST ingest / zero-copy snapshot install 仍是后续优化，不是当前语义前提。</li>
 </ul>
 <h2 id="11-总结"><a class="header" href="#11-总结">11. 总结</a></h2>
 <p>NoKV 当前 migration 设计真正成立的关键，不是有多少命令，而是：</p>
@@ -8183,7 +8178,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>snapshot 被做成了分层语义</li>
 <li>standalone 到 distributed 是状态提升，而不是系统切换</li>
 </ul>
-<p>这也是为什么后面的 control-plane、snapshot install、operator runtime 都能继续建立在这条主线上，而不是重做一遍。</p>
+<p>这也是为什么后面的 control-plane、snapshot install、scheduler/control-plane runtime 都能继续建立在这条主线上，而不是重做一遍。</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="2026-03-30-分布式测试为什么不能只靠黑盒以及-failpoint-该怎么克制"><a class="header" href="#2026-03-30-分布式测试为什么不能只靠黑盒以及-failpoint-该怎么克制">2026-03-30 分布式测试为什么不能只靠黑盒，以及 failpoint 该怎么克制</a></h1>
 <blockquote>
@@ -8202,7 +8197,8 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>只有单测，没有系统路径验证。</li>
 <li>只有黑盒集成，没有边界级故障命中能力。</li>
 </ol>
-<p>前者的问题是：证明不了真实系统会跑通。<br>后者的问题是：很难稳定打中 publish、persist、send、install 这些真正危险的生命周期边界。</p>
+<p>前者的问题是：证明不了真实系统会跑通。
+后者的问题是：很难稳定打中 publish、persist、send、install 这些真正危险的生命周期边界。</p>
 <p>NoKV 现在的方向不是选其中之一，而是分层：</p>
 <ul>
 <li>package-level tests</li>
@@ -8219,7 +8215,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li><code>raftstore/failpoints</code></li>
 <li><code>raftstore/integration</code></li>
 <li><code>meta/root/backend/replicated</code></li>
-<li><code>pd/server</code></li>
+<li><code>coordinator/server</code></li>
 </ul>
 <h2 id="3-为什么不能只靠黑盒"><a class="header" href="#3-为什么不能只靠黑盒">3. 为什么不能只靠黑盒</a></h2>
 <p>假设只写黑盒集成：</p>
@@ -8251,7 +8247,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <pre class="mermaid">flowchart TD
     U["unit tests\n窄逻辑与状态机"] --&gt; I["integration\n单节点与局部路径"]
     I --&gt; D["raftstore/testcluster\n数据面 deterministic"]
-    I --&gt; P["pd/testcluster\n控制面 deterministic"]
+    I --&gt; P["coordinator/testcluster\n控制面 deterministic"]
     D --&gt; F["failpoints\n命中高价值边界"]
     D --&gt; X["transport chaos / restart / recovery"]
     P --&gt; F
@@ -8265,12 +8261,12 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <ul>
 <li>起 store</li>
 <li>接 transport</li>
-<li>带单 PD 依赖跑 data-plane 场景</li>
+<li>带单 Coordinator 依赖跑 data-plane 场景</li>
 </ul>
 </li>
-<li><code>pd/testcluster</code>
+<li><code>coordinator/testcluster</code>
 <ul>
-<li>起 <code>3 pd + replicated meta</code></li>
+<li>起 <code>3 coordinator + replicated meta</code></li>
 <li>测 rooted watch/reload、leader/follower propagation</li>
 <li>专门承接 control-plane 场景</li>
 </ul>
@@ -8278,7 +8274,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 </ul>
 <p><code>raftstore/testcluster</code> 负责的能力主要是：</p>
 <ul>
-<li>起 PD</li>
+<li>起 Coordinator</li>
 <li>起多个节点</li>
 <li>block/unblock peer</li>
 <li>restart node</li>
@@ -8304,16 +8300,16 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <pre class="mermaid">sequenceDiagram
     participant T as Test
     participant RS as raftstore
-    participant PD as pd
+    participant Coordinator as coordinator
     participant MR as meta/root
 
     T-&gt;&gt;RS: 触发 peer change / split / merge
-    RS-&gt;&gt;PD: publish planned truth
-    PD-&gt;&gt;MR: append root event
-    Note over PD,MR: failpoint 可命中 persist 边界
+    RS-&gt;&gt;Coordinator: publish planned truth
+    Coordinator-&gt;&gt;MR: append root event
+    Note over Coordinator,MR: failpoint 可命中 persist 边界
     RS-&gt;&gt;RS: apply local admin/conf change
     Note over RS: failpoint 可命中 apply/publish 边界
-    RS-&gt;&gt;PD: publish terminal truth
+    RS-&gt;&gt;Coordinator: publish terminal truth
 </pre>
 
 <p>这里可以看出：</p>
@@ -8342,19 +8338,22 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>failpoint/fault injection 命中高价值边界</li>
 <li>transport/restart/recovery 测真实分布式故障</li>
 </ul>
-<h2 id="9-当前已经做到的-1"><a class="header" href="#9-当前已经做到的-1">9. 当前已经做到的</a></h2>
+<h2 id="9-当前已经落地的覆盖"><a class="header" href="#9-当前已经落地的覆盖">9. 当前已经落地的覆盖</a></h2>
 <ul>
 <li>多层测试已经形成</li>
 <li><code>testcluster</code> 已经是独立 harness</li>
 <li>failpoint 打点开始收敛到高价值边界</li>
-<li>migration / rooted metadata / distributed path 已有较完整覆盖</li>
+<li>migration / rooted metadata / distributed path 已有核心路径覆盖</li>
+<li>Coordinator outage、transport partition、restart recovery、split/merge restart safety 已经进入集成测试矩阵</li>
 </ul>
-<h2 id="10-还应该继续做什么"><a class="header" href="#10-还应该继续做什么">10. 还应该继续做什么</a></h2>
+<h2 id="10-当前没有覆盖充分的部分"><a class="header" href="#10-当前没有覆盖充分的部分">10. 当前没有覆盖充分的部分</a></h2>
 <ul>
-<li>更强的 invariant helper</li>
-<li>更系统的 degraded-mode 测试</li>
-<li>更强的 transport chaos</li>
-<li>更系统的 operator/runtime 侧测试</li>
+<li>长时间 stress / soak 还不是默认测试。</li>
+<li>shell scripts 还没有直接 golden / smoke 测试。</li>
+<li>invariant helper 仍然偏少。</li>
+<li>degraded-mode 已有核心 case，但还没有覆盖所有 publish / reload interleaving。</li>
+<li>transport chaos 已覆盖分区和链路抖动，但还不是大规模 fault matrix。</li>
+<li>scheduler/control-plane runtime 侧测试还没有形成完整策略矩阵。</li>
 </ul>
 <h2 id="11-总结-1"><a class="header" href="#11-总结-1">11. 总结</a></h2>
 <p>NoKV 当前的分布式测试主线已经从“多写几个 case”进化成了“按边界和故障模型分层验证”。</p>
@@ -8583,14 +8582,14 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 </ul>
 <p>这条线让 migration 和 snapshot install 继续保持干净，也为后面做更高性能的 snapshot 路线留出了空间。</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="2026-04-03-rooted-metadatadelos-lite-与-virtual-log-设计说明"><a class="header" href="#2026-04-03-rooted-metadatadelos-lite-与-virtual-log-设计说明">2026-04-03 Rooted Metadata、Delos-lite 与 Virtual Log 设计说明</a></h1>
+<h1 id="2026-04-03-rooted-metadatadelos-lite-与-virtuallog-设计说明"><a class="header" href="#2026-04-03-rooted-metadatadelos-lite-与-virtuallog-设计说明">2026-04-03 Rooted Metadata、Delos-lite 与 VirtualLog 设计说明</a></h1>
 <blockquote>
-<p>状态：当前 NoKV metadata/control-plane 主线的正式设计说明。本文档用中文完整解释 <code>meta/root</code>、<code>pd</code>、<code>raftstore</code> 三层的职责、调用链、持久化布局、Virtual Log substrate，以及它与 Delos / etcd 风格元数据服务的关系。</p>
+<p>状态：当前 NoKV metadata/control-plane 主线的正式设计说明。本文档用中文完整解释 <code>meta/root</code>、<code>coordinator</code>、<code>raftstore</code> 三层的职责、调用链、持久化布局、VirtualLog，以及它与 Delos / etcd 风格元数据服务的关系。</p>
 </blockquote>
 <h2 id="导读-5"><a class="header" href="#导读-5">导读</a></h2>
 <ul>
-<li>🧭 主题：NoKV 当前 <code>meta/root + pd + raftstore</code> 控制面为什么是一条 Delos-lite 主线。</li>
-<li>🧱 核心对象：<code>RootEvent</code>、<code>ObservedCommitted</code>、<code>TailAdvance</code>、<code>TailSubscription</code>、<code>PendingView</code>。</li>
+<li>🧭 主题：NoKV 当前 <code>meta/root + coordinator + raftstore</code> 控制面为什么是一条 Delos-lite 主线。</li>
+<li>🧱 核心对象：<code>RootEvent</code>、<code>ObservedCommitted</code>、<code>TailAdvance</code>、<code>TailSubscription</code>、<code>TransitionAssessment</code>。</li>
 <li>🔁 调用链：<code>planned truth -&gt; execute -&gt; terminal truth</code> 与 <code>watch-first catch-up</code>。</li>
 <li>📚 参考对象：Delos、FoundationDB、TiKV/PD+etcd、CockroachDB。</li>
 </ul>
@@ -8598,13 +8597,13 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <p>NoKV 在最近几轮里，已经把 metadata/control-plane 主线收成了一个比较清楚的工程化设计：</p>
 <ul>
 <li><code>meta/root</code> 成为最小 truth kernel</li>
-<li><code>pd</code> 不再是 authority，而是 rooted view + service + proposal gate</li>
+<li><code>coordinator</code> 不再是 authority，而是 rooted view + service + proposal gate</li>
 <li><code>raftstore</code> 越来越接近 target-driven executor</li>
 <li><code>local</code> 和 <code>replicated</code> backend 共享同一个 rooted domain</li>
 </ul>
 <p>如果不把这条主线正式写清楚，后面很容易再次回到这些坏形态：</p>
 <ol>
-<li><code>pd</code> 重新长成“大脑兼数据库”</li>
+<li><code>coordinator</code> 重新长成“大脑兼数据库”</li>
 <li>运行时观测和 durable truth 混在一起</li>
 <li><code>raftstore</code> 重新承担过多 control-plane 职责</li>
 <li>replicated backend 的协议细节反向污染上层领域模型</li>
@@ -8623,13 +8622,13 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <ul>
 <li>最小 durable truth</li>
 <li>transition state machine</li>
-<li>rooted virtual-log substrate</li>
+<li>rooted <code>VirtualLog</code> contract</li>
 </ul>
 </li>
-<li><code>pd</code>
+<li><code>coordinator</code>
 <ul>
 <li>rooted route view</li>
-<li>rooted pending/operator view</li>
+<li>rooted transition view</li>
 <li>proposal gate + service host</li>
 </ul>
 </li>
@@ -8644,27 +8643,27 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 </ol>
 <p>整体关系如下：</p>
 <pre class="mermaid">flowchart LR
-    C["Client / Operator / Store RPC"] --&gt; PD["PD\nview + service + gate"]
-    RS["Raftstore\nexecutor"] --&gt; PD
-    PD --&gt; RV["Route View"]
-    PD --&gt; OV["Pending / Operator View"]
-    PD --&gt; MR["meta/root\ntruth kernel"]
-    MR --&gt; PD
-    MR --&gt; VS["Virtual Log Substrate"]
+    C["Client / Operator / Store RPC"] --&gt; Coordinator["Coordinator\nview + service + gate"]
+    RS["Raftstore\nexecutor"] --&gt; Coordinator
+    Coordinator --&gt; RV["Route View"]
+    Coordinator --&gt; OV["Transition View"]
+    Coordinator --&gt; MR["meta/root\ntruth kernel"]
+    MR --&gt; Coordinator
+    MR --&gt; VS["VirtualLog"]
     VS --&gt; BK["local / replicated backend"]
 </pre>
 
 <p>这套设计最重要的三个判断是：</p>
 <ol>
 <li><code>meta/root</code> 不是临时存储，而是真正的最小真相源。</li>
-<li><code>pd</code> 不是 authority，而是 rooted view 和服务层。</li>
+<li><code>coordinator</code> 不是 authority，而是 rooted view 和服务层。</li>
 <li><code>raftstore</code> 不再是半个 control-plane，而是越来越纯的 executor。</li>
 </ol>
 <h2 id="3-当前产品模式"><a class="header" href="#3-当前产品模式">3. 当前产品模式</a></h2>
 <p>当前正式支持的 metadata/control-plane 模式只有两种：</p>
 <ol>
-<li><code>single pd + local meta</code></li>
-<li><code>3 pd + replicated meta</code></li>
+<li><code>single coordinator + local meta</code></li>
+<li><code>3 coordinator + replicated meta</code></li>
 </ol>
 <p>这两种模式共享同一个 rooted metadata 领域面：</p>
 <ul>
@@ -8682,7 +8681,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <ul>
 <li>单机不是另一套 metadata 系统</li>
 <li>高可用也不是另一套 metadata 系统</li>
-<li>上层 <code>pd</code> 和 <code>raftstore</code> 不需要为了 local/replicated 分叉设计</li>
+<li>上层 <code>coordinator</code> 和 <code>raftstore</code> 不需要为了 local/replicated 分叉设计</li>
 </ul>
 <h2 id="4-为什么借鉴-delos而不是直接做成-etcd-style-metadata-service"><a class="header" href="#4-为什么借鉴-delos而不是直接做成-etcd-style-metadata-service">4. 为什么借鉴 Delos，而不是直接做成 etcd-style metadata service</a></h2>
 <p>NoKV 参考 Delos，并不是为了照搬某个协议，而是为了借它最值钱的结构原则。</p>
@@ -8714,8 +8713,8 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <p>NoKV 当前已经形成：</p>
 <ul>
 <li>truth：<code>meta/root</code></li>
-<li>view：<code>pd/catalog</code>、<code>pd/view</code>、<code>pd/operator</code></li>
-<li>service：<code>pd/server</code></li>
+<li>view：<code>coordinator/catalog</code>、<code>coordinator/view</code></li>
+<li>service：<code>coordinator/server</code></li>
 </ul>
 <h3 id="43-virtual-log而不是把上层绑死在协议细节上"><a class="header" href="#43-virtual-log而不是把上层绑死在协议细节上">4.3 virtual log，而不是把上层绑死在协议细节上</a></h3>
 <p>上层应该消费：</p>
@@ -8758,7 +8757,8 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 </ul>
 <p>也就是说：</p>
 <blockquote>
-<p>etcd 是通用分布式 KV substrate。<br>NoKV 的 <code>meta/root</code> 是专用的 metadata truth substrate。</p>
+<p>etcd 是通用分布式 KV。
+NoKV 的 <code>meta/root</code> 是专用的 metadata truth kernel。</p>
 </blockquote>
 <p>可以把差异简单看成下面两种路线：</p>
 <pre class="mermaid">flowchart LR
@@ -8771,7 +8771,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
     subgraph ROOT["NoKV rooted metadata"]
         EVT["RootEvent\n领域写语言"]
         STM["root state machine\nlifecycle / pending / completion"]
-        VLOG["Virtual Log\ncheckpoint + tail + subscription"]
+        VLOG["VirtualLog\ncheckpoint + tail + subscription"]
         EVT --&gt; STM
         STM --&gt; VLOG
     end
@@ -8799,14 +8799,14 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>定义 compact rooted <code>Snapshot</code></li>
 <li>定义 transition lifecycle</li>
 <li>定义 pending execution state</li>
-<li>定义 virtual-log read/install/catch-up/compaction contract</li>
+<li>定义 <code>VirtualLog</code> read/install/catch-up/compaction contract</li>
 </ul>
 <p>它不负责：</p>
 <ul>
 <li>route lookup API</li>
 <li>heartbeat runtime state</li>
 <li>scheduler runtime 决策</li>
-<li>operator runtime 生命周期</li>
+<li>scheduler/runtime lifecycle</li>
 <li>store-local recovery</li>
 </ul>
 <p>这条边界现在是对的，而且必须继续守住。</p>
@@ -8831,7 +8831,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <p>角色：</p>
 <ul>
 <li>跨层共享的 topology object</li>
-<li>PD route view 的语言</li>
+<li>Coordinator route view 的语言</li>
 <li>rooted truth payload 的主要对象</li>
 </ul>
 <h3 id="rootevent"><a class="header" href="#rootevent"><code>RootEvent</code></a></h3>
@@ -8850,7 +8850,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li><code>Descriptor</code> 是共享拓扑对象</li>
 <li><code>RootEvent</code> 是 durable truth transition</li>
 </ul>
-<h2 id="8-meta-和-pd-现在隔离得怎么样"><a class="header" href="#8-meta-和-pd-现在隔离得怎么样">8. <code>meta</code> 和 <code>pd</code> 现在隔离得怎么样</a></h2>
+<h2 id="8-meta-和-coordinator-现在隔离得怎么样"><a class="header" href="#8-meta-和-coordinator-现在隔离得怎么样">8. <code>meta</code> 和 <code>coordinator</code> 现在隔离得怎么样</a></h2>
 <p>当前这条边界已经比较清楚，而且是当前主线最重要的成果之一。</p>
 <h3 id="metaroot-负责"><a class="header" href="#metaroot-负责"><code>meta/root</code> 负责</a></h3>
 <ul>
@@ -8859,48 +8859,46 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>checkpoint + retained tail</li>
 <li>catch-up / install / compaction contract</li>
 </ul>
-<h3 id="pd-负责"><a class="header" href="#pd-负责"><code>pd</code> 负责</a></h3>
+<h3 id="coordinator-负责"><a class="header" href="#coordinator-负责"><code>coordinator</code> 负责</a></h3>
 <ul>
 <li>rooted route view</li>
-<li>rooted pending/operator view</li>
+<li>rooted transition view</li>
 <li>proposal gate</li>
 <li>liveness service</li>
 <li>对外 RPC</li>
 </ul>
 <h3 id="已经做到的隔离"><a class="header" href="#已经做到的隔离">已经做到的隔离</a></h3>
 <ol>
-<li><code>pd</code> 不再维护第二份 authority metadata。</li>
-<li><code>pd</code> 写路径是 <code>persist truth first, reload rooted view later</code>。</li>
+<li><code>coordinator</code> 不再维护第二份 authority metadata。</li>
+<li><code>coordinator</code> 写路径是 <code>persist truth first, reload rooted view later</code>。</li>
 <li>liveness 已经从 truth path 分开。</li>
-<li>operator/debug surface 是 rooted projection，而不是 <code>pd</code> 自己维护的平行状态机。</li>
+<li>transition/debug surface 是 rooted projection，而不是 <code>coordinator</code> 自己维护的平行状态机。</li>
 </ol>
 <p>这意味着：</p>
 <ul>
-<li><code>pd</code> 可以失效</li>
-<li><code>pd</code> 可以重建</li>
-<li><code>pd</code> view 可以被丢弃并重建</li>
+<li><code>coordinator</code> 可以失效</li>
+<li><code>coordinator</code> 可以重建</li>
+<li><code>coordinator</code> view 可以被丢弃并重建</li>
 <li>truth 仍然稳定留在 <code>meta/root</code></li>
 </ul>
-<h2 id="9-pd-当前到底做什么"><a class="header" href="#9-pd-当前到底做什么">9. <code>pd</code> 当前到底做什么</a></h2>
+<h2 id="9-coordinator-当前到底做什么"><a class="header" href="#9-coordinator-当前到底做什么">9. <code>coordinator</code> 当前到底做什么</a></h2>
 <p>关键代码：</p>
 <ul>
-<li><code>pd/storage/root.go</code></li>
-<li><code>pd/catalog/cluster.go</code></li>
-<li><code>pd/view/pending_view.go</code></li>
-<li><code>pd/operator</code></li>
-<li><code>pd/server/service.go</code></li>
-<li><code>pd/server/transition_service.go</code></li>
+<li><code>coordinator/storage/root.go</code></li>
+<li><code>coordinator/catalog/cluster.go</code></li>
+<li><code>coordinator/server/service.go</code></li>
+<li><code>coordinator/server/transition_service.go</code></li>
 </ul>
-<p>当前 <code>pd</code> 负责：</p>
+<p>当前 <code>coordinator</code> 负责：</p>
 <ul>
 <li>rooted snapshot -&gt; runtime route view</li>
-<li>rooted pending transition -&gt; pending/operator view</li>
+<li>rooted pending transition -&gt; transition view</li>
 <li>leader-only proposal gate</li>
 <li>liveness / allocator / route RPC</li>
 <li>assessment / inspection RPC</li>
 </ul>
 <p>也就是说：</p>
-<p><code>pd</code> 不是 metadata DB。<code>pd</code> 是 rooted metadata 的服务宿主和 view 宿主。</p>
+<p><code>coordinator</code> 不是 metadata DB。<code>coordinator</code> 是 rooted metadata 的服务宿主和 view 宿主。</p>
 <h2 id="10-raftstore-当前到底做什么"><a class="header" href="#10-raftstore-当前到底做什么">10. <code>raftstore</code> 当前到底做什么</a></h2>
 <p>关键代码：</p>
 <ul>
@@ -8918,7 +8916,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>publish terminal truth</li>
 </ol>
 <p>也就是说，它越来越像一个纯 executor，而不是半个 control-plane。</p>
-<h2 id="11-virtual-log-substrate-是怎么设计的"><a class="header" href="#11-virtual-log-substrate-是怎么设计的">11. Virtual Log substrate 是怎么设计的</a></h2>
+<h2 id="11-virtuallog-是怎么设计的"><a class="header" href="#11-virtuallog-是怎么设计的">11. <code>VirtualLog</code> 是怎么设计的</a></h2>
 <p>核心在：</p>
 <ul>
 <li><code>meta/root/storage/virtual_log.go</code></li>
@@ -8965,7 +8963,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li><code>AcknowledgeWindow</code></li>
 <li><code>InstallBootstrap</code></li>
 </ul>
-<p>这使 catch-up 语义正式进入 substrate contract，而不是散落在入口层的 if/else。</p>
+<p>这使 catch-up 语义正式进入 VirtualLog contract，而不是散落在入口层的 if/else。</p>
 <h2 id="12-local-backend-和-replicated-backend"><a class="header" href="#12-local-backend-和-replicated-backend">12. local backend 和 replicated backend</a></h2>
 <h3 id="backendlocal"><a class="header" href="#backendlocal"><code>backend/local</code></a></h3>
 <p>位置：</p>
@@ -8989,7 +8987,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 </ul>
 <p>作用：</p>
 <ul>
-<li>replicated metadata substrate</li>
+<li>replicated metadata backend</li>
 <li>当前仍然是 raft 驱动</li>
 <li>但上层已经被 <code>VirtualLog</code> / <code>ObservedCommitted</code> 解耦</li>
 </ul>
@@ -9007,7 +9005,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 </li>
 <li><code>network_virtual_log.go</code>
 <ul>
-<li>substrate-facing methods</li>
+<li>VirtualLog-facing methods</li>
 </ul>
 </li>
 <li><code>virtual_log_adapter.go</code>
@@ -9050,20 +9048,20 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <pre class="mermaid">sequenceDiagram
     participant OP as Operator/Client
     participant RS as raftstore
-    participant PD as pd
+    participant Coordinator as Coordinator
     participant MR as meta/root
 
     OP-&gt;&gt;RS: 构造 peer/split/merge 目标
-    RS-&gt;&gt;PD: publish planned RootEvent
-    PD-&gt;&gt;MR: lifecycle assessment + append truth
+    RS-&gt;&gt;Coordinator: publish planned RootEvent
+    Coordinator-&gt;&gt;MR: lifecycle assessment + append truth
     RS-&gt;&gt;RS: propose raft/admin command
-    RS-&gt;&gt;PD: publish terminal RootEvent
-    PD-&gt;&gt;MR: append terminal truth
+    RS-&gt;&gt;Coordinator: publish terminal RootEvent
+    Coordinator-&gt;&gt;MR: append terminal truth
 </pre>
 
 <h3 id="follower-catch-up"><a class="header" href="#follower-catch-up">follower catch-up</a></h3>
 <pre class="mermaid">sequenceDiagram
-    participant F as PD follower
+    participant F as Coordinator follower
     participant SUB as TailSubscription
     participant MR as meta/root
 
@@ -9092,7 +9090,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <ul>
 <li>最小 truth kernel</li>
 <li>truth / service 分离</li>
-<li>virtual log substrate</li>
+<li>VirtualLog contract</li>
 <li>backend 可替换</li>
 </ul>
 <h3 id="foundationdb"><a class="header" href="#foundationdb">FoundationDB</a></h3>
@@ -9104,7 +9102,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <h3 id="tikv--pd--etcd"><a class="header" href="#tikv--pd--etcd">TiKV / PD + etcd</a></h3>
 <p>对比对象：</p>
 <ul>
-<li>让我们更明确看见，为什么 <code>pd</code> 不该重新长成 authority metadata service</li>
+<li>让我们更明确看见，为什么 <code>coordinator</code> 不该重新长成 authority metadata service</li>
 </ul>
 <h3 id="cockroachdb"><a class="header" href="#cockroachdb">CockroachDB</a></h3>
 <p>对比对象：</p>
@@ -9112,22 +9110,23 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>它更偏 in-band metadata</li>
 <li>NoKV 当前选择的是小型 out-of-band truth kernel</li>
 </ul>
-<h2 id="17-当前已经完成的"><a class="header" href="#17-当前已经完成的">17. 当前已经完成的</a></h2>
+<h2 id="17-当前已经落地的边界"><a class="header" href="#17-当前已经落地的边界">17. 当前已经落地的边界</a></h2>
 <ul>
-<li><code>meta/root</code> 已成为最小 truth kernel</li>
-<li><code>pd</code> 已退出 authority 角色</li>
-<li><code>raftstore</code> 已明显收敛为 executor</li>
-<li>Virtual Log contract 已经成型</li>
-<li>local / replicated backend 已共享同一个 rooted domain</li>
-<li>持久化布局和命名已经清楚很多</li>
+<li><code>meta/root</code> 已成为最小 truth kernel。</li>
+<li><code>coordinator</code> 已退出 authority 角色，主要承担 rooted view、service 和 proposal gate。</li>
+<li><code>raftstore</code> 已收敛为 executor，并通过 planned / terminal truth 与控制面交互。</li>
+<li><code>VirtualLog</code> contract 已经成型，并被 local / replicated backend 共享。</li>
+<li>route freshness、root lag、catch-up state、transition assessment 已进入 Coordinator RPC。</li>
+<li>execution-plane v1 已有 admission / outcome / publish / restart 状态和 admin diagnostics。</li>
 </ul>
-<h2 id="18-当前还没做完的"><a class="header" href="#18-当前还没做完的">18. 当前还没做完的</a></h2>
+<h2 id="18-当前没有实现的能力"><a class="header" href="#18-当前没有实现的能力">18. 当前没有实现的能力</a></h2>
 <ul>
-<li>更成熟的 scheduler/operator runtime</li>
-<li>replicated substrate 的进一步研究</li>
-<li>Virtual Log 更强的 push/stream 模型</li>
-<li><code>raftstore</code> 进一步纯 executor 化</li>
-<li>更系统的性能基准与策略研究</li>
+<li>还没有自动 scheduler/control-plane runtime policy。</li>
+<li>还没有 richer transition phases，例如 <code>Published</code> / <code>Stalled</code>。</li>
+<li>还没有让客户端完整消费所有 freshness / degraded / catch-up 字段的策略层。</li>
+<li><code>VirtualLog</code> 还没有更强的 push/stream API。</li>
+<li>replicated backend 还可以继续研究更强的 commit / compaction / install 策略。</li>
+<li><code>raftstore</code> 仍有进一步纯 executor 化空间，但 v1 边界已经可用。</li>
 </ul>
 <h2 id="19-这套设计为什么适合作为研究平台"><a class="header" href="#19-这套设计为什么适合作为研究平台">19. 这套设计为什么适合作为研究平台</a></h2>
 <p>因为它现在已经具备：</p>
@@ -9135,14 +9134,14 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>足够清楚的 truth kernel</li>
 <li>足够稳定的 view/service 边界</li>
 <li>足够清楚的 executor 面</li>
-<li>足够独立的 replicated substrate</li>
+<li>足够独立的 replicated backend</li>
 </ol>
 <p>所以你可以分别研究：</p>
 <ul>
 <li>metadata truth model</li>
-<li>operator runtime</li>
+<li>scheduler/runtime policy</li>
 <li>scheduler/orchestrator</li>
-<li>replicated protocol/substrate</li>
+<li>replicated protocol/backend</li>
 <li>catch-up / compaction / install 策略</li>
 </ul>
 <p>而不需要先推翻整个系统。</p>
@@ -9150,11 +9149,11 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <p>NoKV 当前的 metadata/control-plane 设计，真正值钱的不是“实现了一个新的元数据存储”，而是：</p>
 <ul>
 <li>它把最小 truth、view、runtime、executor 明确拆开了</li>
-<li>它把 <code>meta/root</code> 做成了一个专用的 rooted metadata substrate，而不是通用 KV</li>
+<li>它把 <code>meta/root</code> 做成了一个专用的 rooted metadata truth kernel，而不是通用 KV</li>
 <li>它借鉴 Delos 的地方是结构原则，而不是协议照搬</li>
 <li>它让 local / replicated、单机 / 分布式、truth / view 都进入了同一个稳定框架</li>
 </ul>
-<p>这也是为什么这条主线现在已经不仅能支撑代码实现，还能支撑后续继续做 control-plane、scheduler、Virtual Log 和 protocol 方向的研究。</p>
+<p>这也是为什么这条主线现在已经不仅能支撑代码实现，还能支撑后续继续做 control-plane、scheduler、VirtualLog 和 protocol 方向的研究。</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="2026-04-05-range-filter从-grf-得到启发但不照搬-grf"><a class="header" href="#2026-04-05-range-filter从-grf-得到启发但不照搬-grf">2026-04-05 Range Filter：从 GRF 得到启发，但不照搬 GRF</a></h1>
 <blockquote>

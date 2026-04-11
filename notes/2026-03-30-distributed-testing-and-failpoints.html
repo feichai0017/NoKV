@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-01a1bb3c.js";
+            window.path_to_searchindex_js = "../searchindex-a947e9d9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b8f8ac3b.js"></script>
+        <script src="../toc-8f631623.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -195,7 +195,8 @@
 <li>只有单测，没有系统路径验证。</li>
 <li>只有黑盒集成，没有边界级故障命中能力。</li>
 </ol>
-<p>前者的问题是：证明不了真实系统会跑通。<br>后者的问题是：很难稳定打中 publish、persist、send、install 这些真正危险的生命周期边界。</p>
+<p>前者的问题是：证明不了真实系统会跑通。
+后者的问题是：很难稳定打中 publish、persist、send、install 这些真正危险的生命周期边界。</p>
 <p>NoKV 现在的方向不是选其中之一，而是分层：</p>
 <ul>
 <li>package-level tests</li>
@@ -212,7 +213,7 @@
 <li><code>raftstore/failpoints</code></li>
 <li><code>raftstore/integration</code></li>
 <li><code>meta/root/backend/replicated</code></li>
-<li><code>pd/server</code></li>
+<li><code>coordinator/server</code></li>
 </ul>
 <h2 id="3-为什么不能只靠黑盒"><a class="header" href="#3-为什么不能只靠黑盒">3. 为什么不能只靠黑盒</a></h2>
 <p>假设只写黑盒集成：</p>
@@ -244,7 +245,7 @@
 <pre class="mermaid">flowchart TD
     U["unit tests\n窄逻辑与状态机"] --&gt; I["integration\n单节点与局部路径"]
     I --&gt; D["raftstore/testcluster\n数据面 deterministic"]
-    I --&gt; P["pd/testcluster\n控制面 deterministic"]
+    I --&gt; P["coordinator/testcluster\n控制面 deterministic"]
     D --&gt; F["failpoints\n命中高价值边界"]
     D --&gt; X["transport chaos / restart / recovery"]
     P --&gt; F
@@ -258,12 +259,12 @@
 <ul>
 <li>起 store</li>
 <li>接 transport</li>
-<li>带单 PD 依赖跑 data-plane 场景</li>
+<li>带单 Coordinator 依赖跑 data-plane 场景</li>
 </ul>
 </li>
-<li><code>pd/testcluster</code>
+<li><code>coordinator/testcluster</code>
 <ul>
-<li>起 <code>3 pd + replicated meta</code></li>
+<li>起 <code>3 coordinator + replicated meta</code></li>
 <li>测 rooted watch/reload、leader/follower propagation</li>
 <li>专门承接 control-plane 场景</li>
 </ul>
@@ -271,7 +272,7 @@
 </ul>
 <p><code>raftstore/testcluster</code> 负责的能力主要是：</p>
 <ul>
-<li>起 PD</li>
+<li>起 Coordinator</li>
 <li>起多个节点</li>
 <li>block/unblock peer</li>
 <li>restart node</li>
@@ -297,16 +298,16 @@
 <pre class="mermaid">sequenceDiagram
     participant T as Test
     participant RS as raftstore
-    participant PD as pd
+    participant Coordinator as coordinator
     participant MR as meta/root
 
     T-&gt;&gt;RS: 触发 peer change / split / merge
-    RS-&gt;&gt;PD: publish planned truth
-    PD-&gt;&gt;MR: append root event
-    Note over PD,MR: failpoint 可命中 persist 边界
+    RS-&gt;&gt;Coordinator: publish planned truth
+    Coordinator-&gt;&gt;MR: append root event
+    Note over Coordinator,MR: failpoint 可命中 persist 边界
     RS-&gt;&gt;RS: apply local admin/conf change
     Note over RS: failpoint 可命中 apply/publish 边界
-    RS-&gt;&gt;PD: publish terminal truth
+    RS-&gt;&gt;Coordinator: publish terminal truth
 </pre>
 
 <p>这里可以看出：</p>
@@ -335,19 +336,22 @@
 <li>failpoint/fault injection 命中高价值边界</li>
 <li>transport/restart/recovery 测真实分布式故障</li>
 </ul>
-<h2 id="9-当前已经做到的"><a class="header" href="#9-当前已经做到的">9. 当前已经做到的</a></h2>
+<h2 id="9-当前已经落地的覆盖"><a class="header" href="#9-当前已经落地的覆盖">9. 当前已经落地的覆盖</a></h2>
 <ul>
 <li>多层测试已经形成</li>
 <li><code>testcluster</code> 已经是独立 harness</li>
 <li>failpoint 打点开始收敛到高价值边界</li>
-<li>migration / rooted metadata / distributed path 已有较完整覆盖</li>
+<li>migration / rooted metadata / distributed path 已有核心路径覆盖</li>
+<li>Coordinator outage、transport partition、restart recovery、split/merge restart safety 已经进入集成测试矩阵</li>
 </ul>
-<h2 id="10-还应该继续做什么"><a class="header" href="#10-还应该继续做什么">10. 还应该继续做什么</a></h2>
+<h2 id="10-当前没有覆盖充分的部分"><a class="header" href="#10-当前没有覆盖充分的部分">10. 当前没有覆盖充分的部分</a></h2>
 <ul>
-<li>更强的 invariant helper</li>
-<li>更系统的 degraded-mode 测试</li>
-<li>更强的 transport chaos</li>
-<li>更系统的 operator/runtime 侧测试</li>
+<li>长时间 stress / soak 还不是默认测试。</li>
+<li>shell scripts 还没有直接 golden / smoke 测试。</li>
+<li>invariant helper 仍然偏少。</li>
+<li>degraded-mode 已有核心 case，但还没有覆盖所有 publish / reload interleaving。</li>
+<li>transport chaos 已覆盖分区和链路抖动，但还不是大规模 fault matrix。</li>
+<li>scheduler/control-plane runtime 侧测试还没有形成完整策略矩阵。</li>
 </ul>
 <h2 id="11-总结"><a class="header" href="#11-总结">11. 总结</a></h2>
 <p>NoKV 当前的分布式测试主线已经从“多写几个 case”进化成了“按边界和故障模型分层验证”。</p>

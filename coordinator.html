@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-01a1bb3c.js";
+            window.path_to_searchindex_js = "searchindex-a947e9d9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b8f8ac3b.js"></script>
+        <script src="toc-8f631623.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -179,7 +179,8 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="coordinator"><a class="header" href="#coordinator">Coordinator</a></h1>
-<p><code>Coordinator</code> is NoKV’s control-plane service for distributed mode.<br>It exposes a gRPC API (<code>pb.Coordinator</code>) and is started by:</p>
+<p><code>Coordinator</code> is NoKV’s control-plane service for distributed mode.
+It exposes a gRPC API (<code>pb.Coordinator</code>) and is started by:</p>
 <pre><code class="language-bash">go run ./cmd/nokv coordinator --addr 127.0.0.1:2379
 </code></pre>
 <hr>
@@ -328,8 +329,7 @@ replaying rooted truth:</p>
 <li>Materialize the rooted region snapshot into <code>coordinator/catalog.Cluster</code>.</li>
 </ol>
 <p>For replicated mode, followers periodically refresh rooted state and rebuild the
-service-side view. This avoids allocator rollback and removes the old parallel
-<code>PD_STATE.json</code> truth table.</p>
+service-side view. This avoids allocator rollback and removes the old parallel coordinator-state JSON truth table.</p>
 <h3 id="region-truth-hierarchy"><a class="header" href="#region-truth-hierarchy">Region Truth Hierarchy</a></h3>
 <p>NoKV intentionally keeps three region views with different authority:</p>
 <ul>

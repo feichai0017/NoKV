@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-01a1bb3c.js";
+            window.path_to_searchindex_js = "../searchindex-a947e9d9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b8f8ac3b.js"></script>
+        <script src="../toc-8f631623.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -295,12 +295,12 @@
 <pre class="mermaid">sequenceDiagram
     participant CLI as serve/expand
     participant RS as raftstore
-    participant PD as pd
+    participant Coordinator as coordinator
     participant MR as meta/root
 
     CLI-&gt;&gt;RS: 启动 seeded workdir
-    RS-&gt;&gt;PD: 注册 rooted truth / liveness
-    PD-&gt;&gt;MR: append rooted metadata
+    RS-&gt;&gt;Coordinator: 注册 rooted truth / liveness
+    Coordinator-&gt;&gt;MR: append rooted metadata
     CLI-&gt;&gt;RS: expand membership
     RS-&gt;&gt;MR: planned + terminal truth
 </pre>
@@ -336,18 +336,20 @@
 <li>region/shard 系统里逻辑快照与协议快照分层的经验</li>
 <li>Delos/FDB 一类系统对“最小 durable 核心 + 可重建 view”的强调</li>
 </ul>
-<h2 id="9-当前已经做到的"><a class="header" href="#9-当前已经做到的">9. 当前已经做到的</a></h2>
+<h2 id="9-当前已经落地的边界"><a class="header" href="#9-当前已经落地的边界">9. 当前已经落地的边界</a></h2>
 <ul>
-<li>mode gate 已经存在</li>
-<li>localmeta / snapshot / migrate 已经分层</li>
-<li>migration 已经不是 dump/import 风格</li>
-<li>后续可以自然接到 <code>pd</code> / <code>meta/root</code> 主线</li>
+<li>mode gate 已经存在，并能阻止半迁移目录被当成普通 standalone 打开。</li>
+<li><code>localmeta</code> / <code>snapshot</code> / <code>migrate</code> 已经分层。</li>
+<li>migration 已经不是 dump/import 风格，而是 state promotion。</li>
+<li>seed region、snapshot install 和 membership expansion 已经能进入当前分布式主线。</li>
 </ul>
-<h2 id="10-后续还值得继续做的"><a class="header" href="#10-后续还值得继续做的">10. 后续还值得继续做的</a></h2>
+<h2 id="10-当前没有实现的能力"><a class="header" href="#10-当前没有实现的能力">10. 当前没有实现的能力</a></h2>
 <ul>
-<li>更强的 migration observability</li>
-<li>SST-based snapshot install 与 migration 更深整合</li>
-<li>更完整的 operator 编排和故障恢复</li>
+<li>不做在线自动切分已有 standalone 数据。</li>
+<li>不做自动 rebalance。</li>
+<li>不提供 failed migration 的独立 rollback / repair 命令。</li>
+<li>migration observability 仍然偏基础。</li>
+<li>SST ingest / zero-copy snapshot install 仍是后续优化，不是当前语义前提。</li>
 </ul>
 <h2 id="11-总结"><a class="header" href="#11-总结">11. 总结</a></h2>
 <p>NoKV 当前 migration 设计真正成立的关键，不是有多少命令，而是：</p>
@@ -356,13 +358,13 @@
 <li>snapshot 被做成了分层语义</li>
 <li>standalone 到 distributed 是状态提升，而不是系统切换</li>
 </ul>
-<p>这也是为什么后面的 control-plane、snapshot install、operator runtime 都能继续建立在这条主线上，而不是重做一遍。</p>
+<p>这也是为什么后面的 control-plane、snapshot install、scheduler/control-plane runtime 都能继续建立在这条主线上，而不是重做一遍。</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../notes/2026-03-30-pd-and-raftadmin-layering.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../notes/2026-03-30-coordinator-and-execution-layering.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -376,7 +378,7 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../notes/2026-03-30-pd-and-raftadmin-layering.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../notes/2026-03-30-coordinator-and-execution-layering.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

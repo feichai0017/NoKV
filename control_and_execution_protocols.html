@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-01a1bb3c.js";
+            window.path_to_searchindex_js = "searchindex-a947e9d9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b8f8ac3b.js"></script>
+        <script src="toc-8f631623.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -185,11 +185,13 @@
 <li>the <code>execution plane</code></li>
 </ul>
 <p>and the next-stage evolution around them.</p>
-<p>The current implementation status is still asymmetric:</p>
+<p>The current implementation status is intentionally minimal but no longer just a
+design sketch:</p>
 <ul>
-<li><code>control-plane protocol v1</code> is already partially implemented and exposed</li>
-<li><code>execution-plane protocol v1</code> now has a minimal store-local implementation
-and a minimal admin diagnostics API surface</li>
+<li><code>control-plane protocol v1</code> is implemented and exposed through Coordinator
+RPCs plus <code>meta/root</code> storage semantics</li>
+<li><code>execution-plane protocol v1</code> is implemented as a store-local contract with a
+small admin diagnostics API surface</li>
 </ul>
 <p>The point of this document is to keep those two lines coordinated instead of
 letting them drift into separate, implicit rule sets.</p>
@@ -227,7 +229,7 @@ clear rollout line.</p>
 <hr>
 <h2 id="0-current-status"><a class="header" href="#0-current-status">0. Current Status</a></h2>
 <p>The control plane now has a <strong>minimal implemented v1</strong>.</p>
-<p>Already implemented and exposed through <code>pb/coordinator/coordinator.proto</code>,
+<p>Implemented and exposed through <code>pb/coordinator/coordinator.proto</code>,
 <code>coordinator/server</code>, <code>coordinator/storage</code>, and tests:</p>
 <ul>
 <li>route-read <code>Freshness</code></li>
@@ -240,7 +242,7 @@ clear rollout line.</p>
 </ul>
 <p>This means the protocol is no longer only a design direction. It is already the
 formal serving contract for key Coordinator APIs.</p>
-<p>What is <strong>not</strong> yet fully protocolized:</p>
+<p>Not implemented in v1:</p>
 <ul>
 <li>richer transition phases such as <code>Published</code> / <code>Stalled</code></li>
 <li>a fuller catch-up action surface exposed through API</li>
@@ -249,8 +251,8 @@ formal serving contract for key Coordinator APIs.</p>
 </ul>
 <p>So the right description today is:</p>
 <blockquote>
-<p>control-plane protocol v1 is implemented and in use, while later runtime and
-operator semantics remain future work.</p>
+<p>control-plane protocol v1 is implemented and in use, while richer
+scheduler/runtime policy is not implemented in v1.</p>
 </blockquote>
 <p>The execution plane is in a different state.</p>
 <p>Today, <code>raftstore</code> has a <strong>minimal implemented v1</strong> inside <code>raftstore/store</code>.</p>
@@ -267,14 +269,14 @@ pointers</li>
 drop</li>
 <li>admin diagnostics exposure through <code>pb/admin/admin.proto</code> <code>ExecutionStatus</code></li>
 </ul>
-<p>The execution plane still keeps many behaviors as implementation mechanics:</p>
+<p>Not implemented as first-class execution protocol fields yet:</p>
 <ul>
 <li>request validation and routing</li>
-<li>local leader admission</li>
 <li>context propagation</li>
-<li>planned truth -&gt; execute -&gt; terminal truth</li>
-<li>local restart through <code>raftstore/localmeta</code> + raft durable state</li>
-<li>degraded local scheduler behavior</li>
+<li>detailed local leader admission diagnostics</li>
+<li>detailed per-attempt scheduler retry/backoff policy</li>
+<li>metrics for planned truth -&gt; execute -&gt; terminal truth latency</li>
+<li>richer degraded local scheduler states</li>
 </ul>
 <p>The current landing is still mostly store-local and spread across:</p>
 <ul>
@@ -287,7 +289,7 @@ drop</li>
 <blockquote>
 <p>execution-plane protocol v1 now exists as a minimal named runtime contract,
 with store-local state and admin-visible diagnostics, while broader metrics,
-policy, and richer executor states remain future work.</p>
+policy, and richer executor states are not implemented in v1.</p>
 </blockquote>
 <hr>
 <h2 id="1-intent"><a class="header" href="#1-intent">1. Intent</a></h2>
@@ -299,8 +301,9 @@ policy, and richer executor states remain future work.</p>
 <li>rebuildable <code>coordinator/catalog</code></li>
 <li>explicit planned and terminal topology events</li>
 </ul>
-<p>Today, these pieces mostly exist as implementation mechanics.
-The control plane works, but many important semantics are still implicit:</p>
+<p>Before v1, these pieces mostly existed as implementation mechanics.
+The control plane now has a formal minimum contract, while several policy
+extensions remain intentionally outside v1:</p>
 <ul>
 <li>when a follower read is fresh enough</li>
 <li>when a follower must reload</li>
@@ -578,7 +581,7 @@ But the protocol should have room for them.</p>
 <p>That gives the system a clear, high-value place to prove the model before wider rollout.</p>
 <hr>
 <h2 id="6-rooted-catch-up-protocol"><a class="header" href="#6-rooted-catch-up-protocol">6. Rooted Catch-Up Protocol</a></h2>
-<p>NoKV already has a good catch-up substrate:</p>
+<p>NoKV already has a good catch-up foundation:</p>
 <ul>
 <li>checkpoint</li>
 <li>committed tail</li>
@@ -687,7 +690,7 @@ That is the start of a lifecycle, not yet the full protocol.</p>
 <h3 id="73-phase-definitions"><a class="header" href="#73-phase-definitions">7.3 Phase definitions</a></h3>
 <h4 id="planned"><a class="header" href="#planned"><code>Planned</code></a></h4>
 <p>The rooted lifecycle assessment says the transition exists as an intended
-topology change, but the operator runtime has not yet admitted it for forward
+topology change, but the scheduler/control-plane runtime has not yet admitted it for forward
 progress.</p>
 <p>This is the phase used by:</p>
 <ul>
@@ -695,7 +698,7 @@ progress.</p>
 <li><code>PublishRootEventResponse.assessment</code></li>
 </ul>
 <h4 id="admitted"><a class="header" href="#admitted"><code>Admitted</code></a></h4>
-<p>The rooted transition is currently pending or open, and the operator runtime has
+<p>The rooted transition is currently pending or open, and the scheduler/control-plane runtime has
 admitted it for execution progress.</p>
 <p>This is the phase used by:</p>
 <ul>
@@ -724,7 +727,7 @@ pending rooted target.</p>
 <li>clear scheduling decisions</li>
 <li>proper retry/backoff</li>
 <li>stuck transition recovery</li>
-<li>operator runtime clarity</li>
+<li>scheduler/control-plane runtime clarity</li>
 <li>precise testing around publish boundaries</li>
 </ul>
 <p>Without it, the system keeps relying on partial signals scattered across:</p>
@@ -1235,45 +1238,45 @@ protocol states or metrics-backed outcomes, not silent local behavior.</p>
 protocolize every internal raft detail.</p>
 <hr>
 <h2 id="16-priority-and-rollout-order"><a class="header" href="#16-priority-and-rollout-order">16. Priority and Rollout Order</a></h2>
-<p>The next protocol work should favor <code>execution-plane v1</code> before broadening
-<code>control-plane v2</code>.</p>
-<h3 id="161-why-execution-comes-next"><a class="header" href="#161-why-execution-comes-next">16.1 Why execution comes next</a></h3>
-<p>The control plane now already has a minimal, externally visible contract:</p>
+<p>The next protocol work should avoid widening either protocol until the current
+v1 contracts stay small, observable, and well tested.</p>
+<h3 id="161-what-is-implemented-now"><a class="header" href="#161-what-is-implemented-now">16.1 What is implemented now</a></h3>
+<p>The control plane has a minimal, externally visible contract:</p>
 <ul>
 <li>freshness classes</li>
 <li>rooted token / lag</li>
 <li>degraded serving state</li>
 <li>transition identity</li>
 </ul>
-<p>By contrast, the execution plane still has important correctness-sensitive
-semantics that are not yet formalized:</p>
+<p>The execution plane now has a minimal internal contract:</p>
 <ul>
-<li>request admission and cancellation</li>
-<li>queue overflow and degraded scheduler behavior</li>
-<li>planned truth -&gt; execute -&gt; terminal truth publish boundary</li>
-<li>restart alignment between local durable state and Coordinator</li>
+<li>admission class / reason</li>
+<li>topology outcome</li>
+<li>publish state</li>
+<li>restart state</li>
+<li>admin-visible <code>ExecutionStatus</code></li>
 </ul>
-<p>That means the larger current ambiguity sits in <code>raftstore</code>, not in
-<code>coordinator</code>.</p>
+<p>That is enough for v1. It gives tests and operators names for the important
+boundaries without turning <code>raftstore</code> into a policy engine.</p>
 <h3 id="162-what-should-not-happen-next"><a class="header" href="#162-what-should-not-happen-next">16.2 What should not happen next</a></h3>
-<p>The wrong next step would be to keep enriching control-plane phases and
-diagnostic fields while the execution plane still lacks a matching lifecycle.</p>
+<p>The wrong next step would be to keep enriching lifecycle phases and diagnostic
+fields before the existing v1 state proves stable under recovery and
+integration tests.</p>
 <p>That would create a vocabulary mismatch:</p>
 <ul>
-<li>control plane claims richer transition semantics</li>
-<li>execution plane still cannot report them precisely</li>
+<li>control plane claims richer transition semantics than the executor can act on</li>
+<li>execution plane reports more states than the coordinator can use safely</li>
 </ul>
 <h3 id="163-recommended-order"><a class="header" href="#163-recommended-order">16.3 Recommended order</a></h3>
 <ol>
-<li>Finish execution-plane protocol v1 in design form.</li>
-<li>Land the first execution-plane states on the <code>raftstore</code> request and
-transition boundaries.</li>
-<li>Then tighten control-plane protocol from v1 toward richer operator/runtime
-phases.</li>
+<li>Keep control-plane v1 and execution-plane v1 narrow.</li>
+<li>Add tests around the existing publish/restart/admission states before adding
+new states.</li>
+<li>Only then tighten control-plane v1 toward richer scheduler/runtime phases.</li>
 </ol>
 <p>In short:</p>
 <blockquote>
-<p>stabilize the executor contract first, then deepen the coordinator contract.</p>
+<p>stabilize both v1 contracts first, then deepen scheduler/runtime semantics.</p>
 </blockquote>
 
                     </main>
