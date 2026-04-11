@@ -20,6 +20,12 @@ import (
 type schedulerRuntime struct {
 	client SchedulerClient
 
+	operation operationRuntime
+	publish   publishRuntime
+	health    schedulerHealth
+}
+
+type operationRuntime struct {
 	input    chan Operation
 	stop     chan struct{}
 	wg       sync.WaitGroup
@@ -27,23 +33,32 @@ type schedulerRuntime struct {
 	interval time.Duration
 	burst    int
 
+	mu        sync.Mutex
+	pending   map[operationKey]struct{}
+	lastApply map[operationKey]time.Time
+	dropped   uint64
+}
+
+type publishRuntime struct {
 	regionSignal chan struct{}
 
-	mu               sync.Mutex
-	pending          map[operationKey]struct{}
-	lastApply        map[operationKey]time.Time
-	descriptors      map[uint64]descriptor.Descriptor
-	regionUpdates    map[uint64]regionEvent
-	nextRegionSeq    uint64
-	dropped          uint64
-	degraded         bool
-	lastError        string
-	lastErrorAt      time.Time
+	mu            sync.Mutex
+	descriptors   map[uint64]descriptor.Descriptor
+	regionUpdates map[uint64]regionEvent
+	nextRegionSeq uint64
+
 	heartbeat        time.Duration
 	heartbeatTimeout time.Duration
 	publishTimeout   time.Duration
 	heartbeatStop    chan struct{}
 	heartbeatWG      sync.WaitGroup
+}
+
+type schedulerHealth struct {
+	mu          sync.Mutex
+	degraded    bool
+	lastError   string
+	lastErrorAt time.Time
 }
 
 type operationKey struct {
@@ -84,17 +99,19 @@ func (s *Store) SchedulerStatus() SchedulerStatus {
 	if s.sched == nil {
 		return status
 	}
-	s.sched.mu.Lock()
-	defer s.sched.mu.Unlock()
-	status.DroppedOperations += s.sched.dropped
-	if s.sched.degraded {
+	s.sched.operation.mu.Lock()
+	status.DroppedOperations += s.sched.operation.dropped
+	s.sched.operation.mu.Unlock()
+	s.sched.health.mu.Lock()
+	defer s.sched.health.mu.Unlock()
+	if s.sched.health.degraded {
 		status.Degraded = true
 		if status.Mode != SchedulerModeUnavailable {
 			status.Mode = SchedulerModeDegraded
 		}
-		if status.LastErrorAt.Before(s.sched.lastErrorAt) || status.LastError == "" {
-			status.LastError = s.sched.lastError
-			status.LastErrorAt = s.sched.lastErrorAt
+		if status.LastErrorAt.Before(s.sched.health.lastErrorAt) || status.LastError == "" {
+			status.LastError = s.sched.health.lastError
+			status.LastErrorAt = s.sched.health.lastErrorAt
 		}
 	}
 	return status
@@ -126,62 +143,62 @@ func (s *Store) enqueueOperation(op Operation) {
 	if op.Type == OperationNone || op.Region == 0 {
 		return
 	}
-	if s.sched == nil || s.sched.input == nil {
+	if s.sched == nil || s.sched.operation.input == nil {
 		s.clearLocalSchedulerDegraded()
 		s.applyOperation(op)
 		return
 	}
 	key := operationKey{region: op.Region, typeID: op.Type}
-	s.sched.mu.Lock()
-	if _, exists := s.sched.pending[key]; exists {
-		s.sched.mu.Unlock()
+	s.sched.operation.mu.Lock()
+	if _, exists := s.sched.operation.pending[key]; exists {
+		s.sched.operation.mu.Unlock()
 		return
 	}
-	s.sched.pending[key] = struct{}{}
-	s.sched.mu.Unlock()
+	s.sched.operation.pending[key] = struct{}{}
+	s.sched.operation.mu.Unlock()
 	select {
-	case s.sched.input <- op:
+	case s.sched.operation.input <- op:
 		s.clearLocalSchedulerDegraded()
 	default:
-		s.sched.mu.Lock()
-		delete(s.sched.pending, key)
-		s.sched.mu.Unlock()
+		s.sched.operation.mu.Lock()
+		delete(s.sched.operation.pending, key)
+		s.sched.operation.mu.Unlock()
 		s.recordLocalSchedulerDrop(op)
 	}
 }
 
 func (s *Store) startHeartbeatLoop() {
-	if s == nil || s.schedulerClient() == nil || s.sched == nil || s.sched.heartbeat <= 0 || s.sched.heartbeatStop != nil {
+	if s == nil || s.schedulerClient() == nil || s.sched == nil || s.sched.publish.heartbeat <= 0 || s.sched.publish.heartbeatStop != nil {
 		return
 	}
-	s.sched.heartbeatStop = make(chan struct{})
-	s.sched.regionSignal = make(chan struct{}, 1)
+	s.sched.publish.heartbeatStop = make(chan struct{})
+	s.sched.publish.regionSignal = make(chan struct{}, 1)
 	s.sendHeartbeats()
-	s.sched.heartbeatWG.Add(1)
+	s.sched.publish.heartbeatWG.Add(1)
 	go s.runHeartbeatLoop()
 }
 
 func (s *Store) stopHeartbeatLoop() {
-	if s == nil || s.sched == nil || s.sched.heartbeatStop == nil {
+	if s == nil || s.sched == nil || s.sched.publish.heartbeatStop == nil {
 		return
 	}
-	close(s.sched.heartbeatStop)
-	s.sched.heartbeatWG.Wait()
-	s.sched.heartbeatStop = nil
-	s.sched.regionSignal = nil
+	close(s.sched.publish.heartbeatStop)
+	s.sched.publish.heartbeatWG.Wait()
+	s.sched.publish.heartbeatStop = nil
+	s.sched.publish.regionSignal = nil
 }
 
 func (s *Store) runHeartbeatLoop() {
-	defer s.sched.heartbeatWG.Done()
-	ticker := time.NewTicker(s.sched.heartbeat)
+	defer s.sched.publish.heartbeatWG.Done()
+	ticker := time.NewTicker(s.sched.publish.heartbeat)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
 			s.sendHeartbeats()
-		case <-s.sched.regionSignal:
+		case <-s.sched.publish.regionSignal:
 			s.flushRegionUpdates()
-		case <-s.sched.heartbeatStop:
+		case <-s.sched.publish.heartbeatStop:
 			return
 		}
 	}
@@ -223,16 +240,16 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 		s.recordLocalSchedulerPublishFailure(ev, err)
 		return
 	}
-	s.sched.mu.Lock()
-	if s.sched.descriptors == nil {
-		s.sched.descriptors = make(map[uint64]descriptor.Descriptor)
+	s.sched.publish.mu.Lock()
+	if s.sched.publish.descriptors == nil {
+		s.sched.publish.descriptors = make(map[uint64]descriptor.Descriptor)
 	}
-	if s.sched.regionUpdates == nil {
-		s.sched.regionUpdates = make(map[uint64]regionEvent)
+	if s.sched.publish.regionUpdates == nil {
+		s.sched.publish.regionUpdates = make(map[uint64]regionEvent)
 	}
-	rootmaterialize.ApplyEventToDescriptors(s.sched.descriptors, ev.root)
-	s.sched.regionUpdates[ev.seq] = ev
-	s.sched.mu.Unlock()
+	rootmaterialize.ApplyEventToDescriptors(s.sched.publish.descriptors, ev.root)
+	s.sched.publish.regionUpdates[ev.seq] = ev
+	s.sched.publish.mu.Unlock()
 	s.signalRegionFlush()
 }
 
@@ -240,9 +257,9 @@ func (s *Store) hasPendingRegionUpdate(regionID uint64) bool {
 	if s == nil || s.sched == nil || regionID == 0 {
 		return false
 	}
-	s.sched.mu.Lock()
-	defer s.sched.mu.Unlock()
-	for _, ev := range s.sched.regionUpdates {
+	s.sched.publish.mu.Lock()
+	defer s.sched.publish.mu.Unlock()
+	for _, ev := range s.sched.publish.regionUpdates {
 		if currentRegionID, ok := schedulerRegionEventKey(ev.root); ok && currentRegionID == regionID {
 			return true
 		}
@@ -269,20 +286,20 @@ func (s *Store) flushRegionUpdates() {
 	if s == nil || s.schedulerClient() == nil || s.sched == nil {
 		return
 	}
-	s.sched.mu.Lock()
-	if len(s.sched.regionUpdates) == 0 {
-		s.sched.mu.Unlock()
+	s.sched.publish.mu.Lock()
+	if len(s.sched.publish.regionUpdates) == 0 {
+		s.sched.publish.mu.Unlock()
 		return
 	}
-	pending := make([]regionEvent, 0, len(s.sched.regionUpdates))
-	for seq, ev := range s.sched.regionUpdates {
+	pending := make([]regionEvent, 0, len(s.sched.publish.regionUpdates))
+	for seq, ev := range s.sched.publish.regionUpdates {
 		if ev.seq == 0 {
 			ev.seq = seq
 		}
 		pending = append(pending, ev)
 	}
-	clear(s.sched.regionUpdates)
-	s.sched.mu.Unlock()
+	clear(s.sched.publish.regionUpdates)
+	s.sched.publish.mu.Unlock()
 	sort.Slice(pending, func(i, j int) bool { return pending[i].seq < pending[j].seq })
 
 	failed := make([]regionEvent, 0)
@@ -308,11 +325,11 @@ func (s *Store) flushRegionUpdates() {
 	if len(failed) == 0 {
 		return
 	}
-	s.sched.mu.Lock()
+	s.sched.publish.mu.Lock()
 	for _, ev := range failed {
-		s.sched.regionUpdates[ev.seq] = ev
+		s.sched.publish.regionUpdates[ev.seq] = ev
 	}
-	s.sched.mu.Unlock()
+	s.sched.publish.mu.Unlock()
 	s.signalRegionFlush()
 }
 
@@ -334,11 +351,11 @@ func schedulerRegionEventKey(event rootevent.Event) (uint64, bool) {
 }
 
 func (s *Store) signalRegionFlush() {
-	if s == nil || s.sched == nil || s.sched.regionSignal == nil {
+	if s == nil || s.sched == nil || s.sched.publish.regionSignal == nil {
 		return
 	}
 	select {
-	case s.sched.regionSignal <- struct{}{}:
+	case s.sched.publish.regionSignal <- struct{}{}:
 	default:
 	}
 }
@@ -347,10 +364,10 @@ func (s *Store) persistPendingRegionEvent(ev *regionEvent) error {
 	if s == nil || s.sched == nil || ev == nil {
 		return nil
 	}
-	s.sched.mu.Lock()
-	s.sched.nextRegionSeq++
-	ev.seq = s.sched.nextRegionSeq
-	s.sched.mu.Unlock()
+	s.sched.publish.mu.Lock()
+	s.sched.publish.nextRegionSeq++
+	ev.seq = s.sched.publish.nextRegionSeq
+	s.sched.publish.mu.Unlock()
 	if rm := s.regionMgr(); rm != nil && rm.localMeta != nil {
 		if err := rm.localMeta.SavePendingRootEvent(localmeta.PendingRootEvent{
 			Sequence: ev.seq,
@@ -376,12 +393,12 @@ func (s *Store) enqueueRecoveredPendingRegionEvents(events []localmeta.PendingRo
 	if s == nil || s.sched == nil || len(events) == 0 {
 		return
 	}
-	s.sched.mu.Lock()
-	if s.sched.descriptors == nil {
-		s.sched.descriptors = make(map[uint64]descriptor.Descriptor)
+	s.sched.publish.mu.Lock()
+	if s.sched.publish.descriptors == nil {
+		s.sched.publish.descriptors = make(map[uint64]descriptor.Descriptor)
 	}
-	if s.sched.regionUpdates == nil {
-		s.sched.regionUpdates = make(map[uint64]regionEvent)
+	if s.sched.publish.regionUpdates == nil {
+		s.sched.publish.regionUpdates = make(map[uint64]regionEvent)
 	}
 	for _, item := range events {
 		ev := regionEvent{
@@ -389,28 +406,28 @@ func (s *Store) enqueueRecoveredPendingRegionEvents(events []localmeta.PendingRo
 			transitionID: rootstate.TransitionIDFromEvent(item.Event),
 			seq:          item.Sequence,
 		}
-		if ev.seq > s.sched.nextRegionSeq {
-			s.sched.nextRegionSeq = ev.seq
+		if ev.seq > s.sched.publish.nextRegionSeq {
+			s.sched.publish.nextRegionSeq = ev.seq
 		}
-		rootmaterialize.ApplyEventToDescriptors(s.sched.descriptors, ev.root)
-		s.sched.regionUpdates[ev.seq] = ev
+		rootmaterialize.ApplyEventToDescriptors(s.sched.publish.descriptors, ev.root)
+		s.sched.publish.regionUpdates[ev.seq] = ev
 	}
-	s.sched.mu.Unlock()
+	s.sched.publish.mu.Unlock()
 	s.signalRegionFlush()
 }
 
 func (s *Store) stopOperationLoop() {
-	if s == nil || s.sched == nil || s.sched.stop == nil {
+	if s == nil || s.sched == nil || s.sched.operation.stop == nil {
 		return
 	}
-	close(s.sched.stop)
-	s.sched.wg.Wait()
-	s.sched.stop = nil
+	close(s.sched.operation.stop)
+	s.sched.operation.wg.Wait()
+	s.sched.operation.stop = nil
 }
 
 func (s *Store) runOperationLoop() {
-	defer s.sched.wg.Done()
-	interval := s.sched.interval
+	defer s.sched.operation.wg.Done()
+	interval := s.sched.operation.interval
 	if interval <= 0 {
 		interval = 200 * time.Millisecond
 	}
@@ -423,13 +440,13 @@ func (s *Store) runOperationLoop() {
 	var pending []scheduledOp
 	for {
 		select {
-		case <-s.sched.stop:
+		case <-s.sched.operation.stop:
 			return
-		case op := <-s.sched.input:
+		case op := <-s.sched.operation.input:
 			pending = append(pending, scheduledOp{op: op, ready: s.nextOperationReadyTime(op)})
 		case <-ticker.C:
 			now := time.Now()
-			limit := s.sched.burst
+			limit := s.sched.operation.burst
 			if limit <= 0 {
 				limit = len(pending)
 			}
@@ -457,17 +474,17 @@ func (s *Store) runOperationLoop() {
 }
 
 func (s *Store) nextOperationReadyTime(op Operation) time.Time {
-	if s == nil || s.sched == nil || s.sched.cooldown <= 0 {
+	if s == nil || s.sched == nil || s.sched.operation.cooldown <= 0 {
 		return time.Time{}
 	}
 	key := operationKey{region: op.Region, typeID: op.Type}
-	s.sched.mu.Lock()
-	defer s.sched.mu.Unlock()
-	last := s.sched.lastApply[key]
+	s.sched.operation.mu.Lock()
+	defer s.sched.operation.mu.Unlock()
+	last := s.sched.operation.lastApply[key]
 	if last.IsZero() {
 		return time.Time{}
 	}
-	return last.Add(s.sched.cooldown)
+	return last.Add(s.sched.operation.cooldown)
 }
 
 func (s *Store) markOperationApplied(op Operation, ts time.Time) {
@@ -475,26 +492,26 @@ func (s *Store) markOperationApplied(op Operation, ts time.Time) {
 		return
 	}
 	key := operationKey{region: op.Region, typeID: op.Type}
-	s.sched.mu.Lock()
+	s.sched.operation.mu.Lock()
 	if ts.IsZero() {
-		delete(s.sched.lastApply, key)
+		delete(s.sched.operation.lastApply, key)
 	} else {
-		s.sched.lastApply[key] = ts
+		s.sched.operation.lastApply[key] = ts
 	}
-	delete(s.sched.pending, key)
-	s.sched.mu.Unlock()
+	delete(s.sched.operation.pending, key)
+	s.sched.operation.mu.Unlock()
 }
 
 func (s *Store) clearLocalSchedulerDegraded() {
 	if s == nil {
 		return
 	}
-	s.sched.mu.Lock()
-	s.sched.degraded = false
-	if s.sched.lastError == "" {
-		s.sched.lastErrorAt = time.Time{}
+	s.sched.health.mu.Lock()
+	s.sched.health.degraded = false
+	if s.sched.health.lastError == "" {
+		s.sched.health.lastErrorAt = time.Time{}
 	}
-	s.sched.mu.Unlock()
+	s.sched.health.mu.Unlock()
 }
 
 func (s *Store) recordLocalSchedulerDrop(op Operation) {
@@ -503,12 +520,14 @@ func (s *Store) recordLocalSchedulerDrop(op Operation) {
 	}
 	msg := fmt.Sprintf("scheduler queue full: dropped %s for region %d", op.Type.String(), op.Region)
 	now := time.Now()
-	s.sched.mu.Lock()
-	s.sched.dropped++
-	s.sched.degraded = true
-	s.sched.lastError = msg
-	s.sched.lastErrorAt = now
-	s.sched.mu.Unlock()
+	s.sched.operation.mu.Lock()
+	s.sched.operation.dropped++
+	s.sched.operation.mu.Unlock()
+	s.sched.health.mu.Lock()
+	s.sched.health.degraded = true
+	s.sched.health.lastError = msg
+	s.sched.health.lastErrorAt = now
+	s.sched.health.mu.Unlock()
 	slog.Default().Warn(msg)
 }
 
@@ -519,11 +538,11 @@ func (s *Store) recordLocalSchedulerPublishFailure(ev regionEvent, err error) {
 	regionID, _ := schedulerRegionEventKey(ev.root)
 	msg := fmt.Sprintf("scheduler publish failed: region=%d kind=%d err=%v", regionID, ev.root.Kind, err)
 	now := time.Now()
-	s.sched.mu.Lock()
-	s.sched.degraded = true
-	s.sched.lastError = msg
-	s.sched.lastErrorAt = now
-	s.sched.mu.Unlock()
+	s.sched.health.mu.Lock()
+	s.sched.health.degraded = true
+	s.sched.health.lastError = msg
+	s.sched.health.lastErrorAt = now
+	s.sched.health.mu.Unlock()
 	slog.Default().Warn(msg)
 }
 

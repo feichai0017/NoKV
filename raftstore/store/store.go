@@ -69,16 +69,20 @@ func NewStore(cfg Config) *Store {
 		ctx:         ctx,
 		cancel:      cancel,
 		sched: &schedulerRuntime{
-			client:           cfg.Scheduler,
-			cooldown:         operationCooldown,
-			interval:         operationInterval,
-			burst:            operationBurst,
-			pending:          make(map[operationKey]struct{}),
-			lastApply:        make(map[operationKey]time.Time),
-			descriptors:      make(map[uint64]descriptor.Descriptor),
-			regionUpdates:    make(map[uint64]regionEvent),
-			heartbeatTimeout: heartbeatTimeout,
-			publishTimeout:   publishTimeout,
+			client: cfg.Scheduler,
+			operation: operationRuntime{
+				cooldown:  operationCooldown,
+				interval:  operationInterval,
+				burst:     operationBurst,
+				pending:   make(map[operationKey]struct{}),
+				lastApply: make(map[operationKey]time.Time),
+			},
+			publish: publishRuntime{
+				descriptors:      make(map[uint64]descriptor.Descriptor),
+				regionUpdates:    make(map[uint64]regionEvent),
+				heartbeatTimeout: heartbeatTimeout,
+				publishTimeout:   publishTimeout,
+			},
 		},
 		cmds: &commandRuntime{
 			apply:   cfg.CommandApplier,
@@ -95,9 +99,9 @@ func NewStore(cfg Config) *Store {
 		s.workDir = cfg.LocalMeta.WorkDir()
 	}
 	if queueSize > 0 {
-		s.sched.input = make(chan Operation, queueSize)
-		s.sched.stop = make(chan struct{})
-		s.sched.wg.Add(1)
+		s.sched.operation.input = make(chan Operation, queueSize)
+		s.sched.operation.stop = make(chan struct{})
+		s.sched.operation.wg.Add(1)
 		go s.runOperationLoop()
 	}
 	if cfg.LocalMeta != nil {
@@ -105,9 +109,9 @@ func NewStore(cfg Config) *Store {
 		s.enqueueRecoveredPendingRegionEvents(cfg.LocalMeta.PendingRootEvents())
 	}
 	if s.schedulerClient() != nil {
-		s.sched.heartbeat = cfg.HeartbeatInterval
-		if s.sched.heartbeat <= 0 {
-			s.sched.heartbeat = 3 * time.Second
+		s.sched.publish.heartbeat = cfg.HeartbeatInterval
+		if s.sched.publish.heartbeat <= 0 {
+			s.sched.publish.heartbeat = 3 * time.Second
 		}
 		s.startHeartbeatLoop()
 		s.signalRegionFlush()
@@ -131,15 +135,15 @@ func (s *Store) runtimeContext() context.Context {
 }
 
 func (s *Store) schedulerHeartbeatContext() (context.Context, context.CancelFunc) {
-	if s == nil || s.sched == nil || s.sched.heartbeatTimeout <= 0 {
+	if s == nil || s.sched == nil || s.sched.publish.heartbeatTimeout <= 0 {
 		return context.WithCancel(s.runtimeContext())
 	}
-	return context.WithTimeout(s.runtimeContext(), s.sched.heartbeatTimeout)
+	return context.WithTimeout(s.runtimeContext(), s.sched.publish.heartbeatTimeout)
 }
 
 func (s *Store) schedulerPublishContext() (context.Context, context.CancelFunc) {
-	if s == nil || s.sched == nil || s.sched.publishTimeout <= 0 {
+	if s == nil || s.sched == nil || s.sched.publish.publishTimeout <= 0 {
 		return context.WithCancel(s.runtimeContext())
 	}
-	return context.WithTimeout(s.runtimeContext(), s.sched.publishTimeout)
+	return context.WithTimeout(s.runtimeContext(), s.sched.publish.publishTimeout)
 }
