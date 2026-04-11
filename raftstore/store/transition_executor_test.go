@@ -38,6 +38,12 @@ func TestTransitionExecutorLeaderPeerAndPublishGuards(t *testing.T) {
 	leaderStore, _, leaderRegion := startTransitionExecutorStore(t, errSink, true)
 	err = leaderStore.publishPlannedRootEvent(leaderRegion.ID, rootevent.RegionTombstoned(leaderRegion.ID), "split")
 	require.ErrorContains(t, err, "publish split target")
+
+	slowSink := &slowSchedulerSink{testSchedulerSink: *newTestSchedulerSink(), publishDelay: 80 * time.Millisecond}
+	timeoutStore := NewStore(Config{Scheduler: slowSink, StoreID: 1, PublishTimeout: 10 * time.Millisecond})
+	t.Cleanup(timeoutStore.Close)
+	err = timeoutStore.publishPlannedRootEvent(leaderRegion.ID, rootevent.RegionTombstoned(leaderRegion.ID), "split")
+	require.ErrorContains(t, err, context.DeadlineExceeded.Error())
 }
 
 func TestTransitionExecutorDispatchesConfChangeAndAdminTargets(t *testing.T) {

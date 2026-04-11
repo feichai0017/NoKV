@@ -1,4 +1,4 @@
-package codec
+package wire
 
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"

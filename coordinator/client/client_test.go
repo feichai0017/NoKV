@@ -3,8 +3,8 @@ package client
 import (
 	"context"
 	"errors"
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"net"
 	"testing"
@@ -70,7 +70,7 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.True(t, storeResp.GetAccepted())
 
 	publishResp, err := cli.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(rootevent.RegionBootstrapped(
+		Event: metawire.RootEventToProto(rootevent.RegionBootstrapped(
 			testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{
 				Version:     1,
 				ConfVersion: 1,
@@ -86,7 +86,7 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.True(t, liveResp.GetAccepted())
 
 	publishResp, err = cli.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(rootevent.PeerAdded(
+		Event: metawire.RootEventToProto(rootevent.PeerAdded(
 			11,
 			2,
 			201,

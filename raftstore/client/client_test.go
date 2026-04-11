@@ -21,7 +21,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
@@ -119,13 +119,13 @@ func (mr *mockRegionResolver) GetRegionByKey(_ context.Context, req *coordpb.Get
 	}
 	if len(mr.regions) > 0 {
 		for _, meta := range mr.regions {
-			if meta != nil && containsKey(metacodec.DescriptorFromProto(meta), req.GetKey()) {
+			if meta != nil && containsKey(metawire.DescriptorFromProto(meta), req.GetKey()) {
 				return routeResponse(meta), nil
 			}
 		}
 		return &coordpb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
-	if mr.region == nil || !containsKey(metacodec.DescriptorFromProto(mr.region), req.GetKey()) {
+	if mr.region == nil || !containsKey(metawire.DescriptorFromProto(mr.region), req.GetKey()) {
 		return &coordpb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
 	return routeResponse(mr.region), nil
@@ -164,7 +164,7 @@ func (kr *keyedBlockingResolver) GetRegionByKey(ctx context.Context, req *coordp
 			return nil, ctx.Err()
 		}
 		for _, meta := range kr.regions {
-			if meta != nil && containsKey(metacodec.DescriptorFromProto(meta), req.GetKey()) {
+			if meta != nil && containsKey(metawire.DescriptorFromProto(meta), req.GetKey()) {
 				return routeResponse(meta), nil
 			}
 		}
@@ -1227,7 +1227,7 @@ func TestClientHandleRegionErrorUpdatesIndexedCache(t *testing.T) {
 	cli := &Client{
 		regions: make(map[uint64]*regionState),
 	}
-	cli.upsertRegionLocked(metacodec.DescriptorFromProto(&metapb.RegionDescriptor{
+	cli.upsertRegionLocked(metawire.DescriptorFromProto(&metapb.RegionDescriptor{
 		RegionId: 1,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
@@ -1279,7 +1279,7 @@ func routeResponse(meta *metapb.RegionDescriptor) *coordpb.GetRegionByKeyRespons
 		return &coordpb.GetRegionByKeyResponse{NotFound: true}
 	}
 	return &coordpb.GetRegionByKeyResponse{
-		RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromProto(meta)),
+		RegionDescriptor: metawire.DescriptorToProto(metawire.DescriptorFromProto(meta)),
 	}
 }
 
@@ -1337,7 +1337,7 @@ func TestContainsKeyAndCompare(t *testing.T) {
 		StartKey: []byte("b"),
 		EndKey:   []byte("d"),
 	}
-	desc := metacodec.DescriptorFromProto(meta)
+	desc := metawire.DescriptorFromProto(meta)
 	require.False(t, containsKey(desc, []byte("a")))
 	require.True(t, containsKey(desc, []byte("b")))
 	require.True(t, containsKey(desc, []byte("c")))
@@ -1397,8 +1397,8 @@ func TestNormalizeRPCError(t *testing.T) {
 
 func TestDefaultLeaderStoreID(t *testing.T) {
 	require.Equal(t, uint64(0), defaultLeaderStoreID(descriptor.Descriptor{}))
-	require.Equal(t, uint64(0), defaultLeaderStoreID(metacodec.DescriptorFromProto(&metapb.RegionDescriptor{})))
-	require.Equal(t, uint64(9), defaultLeaderStoreID(metacodec.DescriptorFromProto(&metapb.RegionDescriptor{
+	require.Equal(t, uint64(0), defaultLeaderStoreID(metawire.DescriptorFromProto(&metapb.RegionDescriptor{})))
+	require.Equal(t, uint64(9), defaultLeaderStoreID(metawire.DescriptorFromProto(&metapb.RegionDescriptor{
 		RegionId: 1,
 		Peers: []*metapb.RegionPeer{
 			nil,
@@ -1431,7 +1431,7 @@ func TestRegionForKeyFromResolverDropsStaleCachedLeader(t *testing.T) {
 	defer func() { _ = cli.Close() }()
 
 	cli.mu.Lock()
-	cli.upsertRegionLocked(metacodec.DescriptorFromProto(&metapb.RegionDescriptor{
+	cli.upsertRegionLocked(metawire.DescriptorFromProto(&metapb.RegionDescriptor{
 		RegionId: 1,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),

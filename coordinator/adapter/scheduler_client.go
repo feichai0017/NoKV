@@ -3,8 +3,8 @@ package adapter
 import (
 	"context"
 	"fmt"
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"log/slog"
 	"sync"
@@ -83,7 +83,7 @@ func (s *SchedulerClient) PublishRootEvent(ctx context.Context, event rootevent.
 	ctx, cancel := contextWithTimeout(ctx, s.timeout)
 	defer cancel()
 	_, err = s.coordinator.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
-		Event:                metacodec.RootEventToProto(normalized),
+		Event:                metawire.RootEventToProto(normalized),
 		ExpectedClusterEpoch: expected,
 	})
 	if err != nil {

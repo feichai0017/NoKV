@@ -11,7 +11,7 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
@@ -32,7 +32,7 @@ func (r *staticResolver) GetRegionByKey(ctx context.Context, req *coordpb.GetReg
 	for _, region := range r.regions {
 		if region != nil && containsRegionKey(region, req.GetKey()) {
 			return &coordpb.GetRegionByKeyResponse{
-				RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromProto(region)),
+				RegionDescriptor: metawire.DescriptorToProto(metawire.DescriptorFromProto(region)),
 			}, nil
 		}
 	}

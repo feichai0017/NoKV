@@ -7,10 +7,10 @@ import (
 
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
 	pdtestcluster "github.com/feichai0017/NoKV/coordinator/testcluster"
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
@@ -80,14 +80,14 @@ func TestControlPlaneFollowerRejectsLeaderOnlyWrites(t *testing.T) {
 	follower := cluster.Services[followerID]
 
 	_, err := follower.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(rootevent.RegionBootstrapped(controlPlaneDescriptor(194, []byte("a"), []byte("b")))),
+		Event: metawire.RootEventToProto(rootevent.RegionBootstrapped(controlPlaneDescriptor(194, []byte("a"), []byte("b")))),
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 	require.Contains(t, status.Convert(err).Message(), "coordinator not leader")
 
 	_, err = leader.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(rootevent.RegionBootstrapped(controlPlaneDescriptor(195, []byte("b"), []byte("c")))),
+		Event: metawire.RootEventToProto(rootevent.RegionBootstrapped(controlPlaneDescriptor(195, []byte("b"), []byte("c")))),
 	})
 	require.NoError(t, err)
 }
@@ -124,7 +124,7 @@ func TestControlPlaneLeaderOnlyAllocatorsRejectFollowerWrites(t *testing.T) {
 
 func publishControlPlaneDescriptorEvent(svc *coordserver.Service, desc descriptor.Descriptor) error {
 	_, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metacodec.RootEventToProto(rootevent.RegionBootstrapped(desc)),
+		Event: metawire.RootEventToProto(rootevent.RegionBootstrapped(desc)),
 	})
 	return err
 }

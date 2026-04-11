@@ -49,6 +49,14 @@ func NewStore(cfg Config) *Store {
 	if operationBurst == 0 {
 		operationBurst = 4
 	}
+	heartbeatTimeout := cfg.HeartbeatTimeout
+	if heartbeatTimeout <= 0 {
+		heartbeatTimeout = 2 * time.Second
+	}
+	publishTimeout := cfg.PublishTimeout
+	if publishTimeout <= 0 {
+		publishTimeout = 2 * time.Second
+	}
 	commandTimeout := cfg.CommandTimeout
 	if commandTimeout <= 0 {
 		commandTimeout = 3 * time.Second
@@ -61,14 +69,16 @@ func NewStore(cfg Config) *Store {
 		ctx:         ctx,
 		cancel:      cancel,
 		sched: &schedulerRuntime{
-			client:        cfg.Scheduler,
-			cooldown:      operationCooldown,
-			interval:      operationInterval,
-			burst:         operationBurst,
-			pending:       make(map[operationKey]struct{}),
-			lastApply:     make(map[operationKey]time.Time),
-			descriptors:   make(map[uint64]descriptor.Descriptor),
-			regionUpdates: make(map[uint64]regionEvent),
+			client:           cfg.Scheduler,
+			cooldown:         operationCooldown,
+			interval:         operationInterval,
+			burst:            operationBurst,
+			pending:          make(map[operationKey]struct{}),
+			lastApply:        make(map[operationKey]time.Time),
+			descriptors:      make(map[uint64]descriptor.Descriptor),
+			regionUpdates:    make(map[uint64]regionEvent),
+			heartbeatTimeout: heartbeatTimeout,
+			publishTimeout:   publishTimeout,
 		},
 		cmds: &commandRuntime{
 			apply:   cfg.CommandApplier,
@@ -92,6 +102,7 @@ func NewStore(cfg Config) *Store {
 	}
 	if cfg.LocalMeta != nil {
 		s.regionMgr().loadBootstrapSnapshot(cfg.LocalMeta.Snapshot())
+		s.enqueueRecoveredPendingRegionEvents(cfg.LocalMeta.PendingRootEvents())
 	}
 	if s.schedulerClient() != nil {
 		s.sched.heartbeat = cfg.HeartbeatInterval
@@ -99,6 +110,7 @@ func NewStore(cfg Config) *Store {
 			s.sched.heartbeat = 3 * time.Second
 		}
 		s.startHeartbeatLoop()
+		s.signalRegionFlush()
 	}
 	return s
 }
@@ -116,4 +128,18 @@ func (s *Store) runtimeContext() context.Context {
 		return context.Background()
 	}
 	return s.ctx
+}
+
+func (s *Store) schedulerHeartbeatContext() (context.Context, context.CancelFunc) {
+	if s == nil || s.sched == nil || s.sched.heartbeatTimeout <= 0 {
+		return context.WithCancel(s.runtimeContext())
+	}
+	return context.WithTimeout(s.runtimeContext(), s.sched.heartbeatTimeout)
+}
+
+func (s *Store) schedulerPublishContext() (context.Context, context.CancelFunc) {
+	if s == nil || s.sched == nil || s.sched.publishTimeout <= 0 {
+		return context.WithCancel(s.runtimeContext())
+	}
+	return context.WithTimeout(s.runtimeContext(), s.sched.publishTimeout)
 }

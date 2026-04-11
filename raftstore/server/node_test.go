@@ -9,8 +9,8 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/kv"
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
@@ -338,7 +338,7 @@ func (r *staticRegionResolver) GetRegionByKey(_ context.Context, req *coordpb.Ge
 	for _, region := range r.regions {
 		if regionContainsKey(region, req.GetKey()) {
 			return &coordpb.GetRegionByKeyResponse{
-				RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromProto(cloneRegionMetaPB(region))),
+				RegionDescriptor: metawire.DescriptorToProto(metawire.DescriptorFromProto(cloneRegionMetaPB(region))),
 			}, nil
 		}
 	}

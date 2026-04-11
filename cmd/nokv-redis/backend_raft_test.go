@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/config"
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -179,7 +179,7 @@ func (s *stubPDServer) GetRegionByKey(_ context.Context, req *coordpb.GetRegionB
 		return &coordpb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
 	return &coordpb.GetRegionByKeyResponse{
-		RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromProto(proto.Clone(s.region).(*metapb.RegionDescriptor))),
+		RegionDescriptor: metawire.DescriptorToProto(metawire.DescriptorFromProto(proto.Clone(s.region).(*metapb.RegionDescriptor))),
 	}, nil
 }
 

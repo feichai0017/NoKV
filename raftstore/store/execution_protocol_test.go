@@ -171,6 +171,65 @@ func TestExecutionProtocolReportsRestartStatus(t *testing.T) {
 	require.Empty(t, status.MissingRaftPointer)
 }
 
+func TestExecutionProtocolReplaysPendingRootEventsFromLocalMeta(t *testing.T) {
+	_, localMeta := openStoreDB(t)
+	event := rootevent.RegionTombstoned(77)
+	require.NoError(t, localMeta.SavePendingRootEvent(localmeta.PendingRootEvent{
+		Sequence: 1,
+		Event:    event,
+	}))
+
+	sink := newTestSchedulerSink()
+	rs := NewStore(Config{
+		Scheduler:         sink,
+		LocalMeta:         localMeta,
+		StoreID:           9,
+		HeartbeatInterval: 25 * time.Millisecond,
+		PublishTimeout:    50 * time.Millisecond,
+	})
+	t.Cleanup(rs.Close)
+
+	require.Eventually(t, func() bool {
+		return historyContainsRootKind(sink.EventHistory(), event.Kind)
+	}, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return len(localMeta.PendingRootEvents()) == 0
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestExecutionProtocolRetainsPendingRootEventsUntilPublishAck(t *testing.T) {
+	_, localMeta := openStoreDB(t)
+	event := rootevent.RegionTombstoned(88)
+	require.NoError(t, localMeta.SavePendingRootEvent(localmeta.PendingRootEvent{
+		Sequence: 1,
+		Event:    event,
+	}))
+
+	sink := &slowSchedulerSink{testSchedulerSink: *newTestSchedulerSink(), publishDelay: 80 * time.Millisecond}
+	rs := NewStore(Config{
+		Scheduler:         sink,
+		LocalMeta:         localMeta,
+		StoreID:           9,
+		HeartbeatInterval: 25 * time.Millisecond,
+		PublishTimeout:    10 * time.Millisecond,
+	})
+	t.Cleanup(rs.Close)
+
+	require.Eventually(t, func() bool {
+		return len(localMeta.PendingRootEvents()) == 1
+	}, time.Second, 10*time.Millisecond)
+
+	sink.publishDelay = 0
+	rs.flushRegionUpdates()
+
+	require.Eventually(t, func() bool {
+		return len(localMeta.PendingRootEvents()) == 0
+	}, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return historyContainsRootKind(sink.EventHistory(), event.Kind)
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestExecutionProtocolRetainsRecentTopologyExecutionsOnly(t *testing.T) {
 	rs := NewStore(Config{})
 	t.Cleanup(rs.Close)

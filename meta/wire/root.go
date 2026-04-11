@@ -1,4 +1,4 @@
-package codec
+package wire
 
 import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"

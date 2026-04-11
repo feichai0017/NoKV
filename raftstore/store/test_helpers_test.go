@@ -200,7 +200,7 @@ func (s *slowSchedulerSink) PublishRootEvent(ctx context.Context, event rooteven
 		select {
 		case <-time.After(s.publishDelay):
 		case <-ctx.Done():
-			return nil
+			return ctx.Err()
 		}
 	}
 	return s.testSchedulerSink.PublishRootEvent(ctx, event)

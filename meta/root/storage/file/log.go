@@ -9,9 +9,9 @@ import (
 	"os"
 	"path/filepath"
 
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/vfs"
 	"google.golang.org/protobuf/proto"
@@ -147,7 +147,7 @@ func (l fileEventLog) Size() (int64, error) {
 
 // writeRecord writes one framed committed rooted event to the WAL.
 func writeRecord(w io.Writer, rec rootstorage.CommittedEvent) error {
-	payload, err := proto.Marshal(metacodec.RootEventToProto(rec.Event))
+	payload, err := proto.Marshal(metawire.RootEventToProto(rec.Event))
 	if err != nil {
 		return err
 	}
@@ -196,7 +196,7 @@ func readRecord(r io.Reader) (rootstorage.CommittedEvent, bool, error) {
 			Term:  binary.LittleEndian.Uint64(hdr[0:8]),
 			Index: binary.LittleEndian.Uint64(hdr[8:16]),
 		},
-		Event: metacodec.RootEventFromProto(&pbEvent),
+		Event: metawire.RootEventFromProto(&pbEvent),
 	}, true, nil
 }
 

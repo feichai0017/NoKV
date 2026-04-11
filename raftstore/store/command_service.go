@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
@@ -447,7 +446,7 @@ func epochNotMatchError(meta *localmeta.RegionMeta) *errorpb.RegionError {
 			ConfVersion: meta.Epoch.ConfVersion,
 			Version:     meta.Epoch.Version,
 		}
-		regions = append(regions, metacodec.LocalRegionMetaToDescriptorProto(*meta))
+		regions = append(regions, localmeta.DescriptorToProto(*meta))
 	}
 	return &errorpb.RegionError{
 		EpochNotMatch: &errorpb.EpochNotMatch{

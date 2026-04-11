@@ -5,6 +5,7 @@ package nokv.meta.v1;
 
 import "meta/descriptor.proto";
 import "meta/region.proto";
+import "meta/root.proto";
 
 option go_package = "github.com/feichai0017/NoKV/pb/meta;metapb";
 
@@ -47,4 +48,13 @@ message RaftProgress {
 
 message RaftProgressCatalog {
   repeated RaftProgress entries = 1;
+}
+
+message PendingRootEvent {
+  uint64 sequence = 1;
+  RootEvent event = 2;
+}
+
+message PendingRootEventCatalog {
+  repeated PendingRootEvent entries = 1;
 }

@@ -11,7 +11,7 @@ import (
 	"sort"
 	"time"
 
-	metacodec "github.com/feichai0017/NoKV/meta/codec"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
@@ -110,7 +110,7 @@ func (c *Client) regionForKeyFromResolver(ctx context.Context, key []byte) (regi
 	if resp == nil || resp.GetNotFound() || resp.GetRegionDescriptor() == nil {
 		return regionSnapshot{}, &RegionNotFoundError{Key: append([]byte(nil), key...)}
 	}
-	desc := metacodec.DescriptorFromProto(resp.GetRegionDescriptor())
+	desc := metawire.DescriptorFromProto(resp.GetRegionDescriptor())
 	if desc.RegionID == 0 {
 		return regionSnapshot{}, errors.New("client: resolved region id missing")
 	}
@@ -154,7 +154,7 @@ func (c *Client) handleRegionError(regionID uint64, err *errorpb.RegionError) er
 			if meta == nil {
 				continue
 			}
-			desc := metacodec.DescriptorFromProto(meta)
+			desc := metawire.DescriptorFromProto(meta)
 			c.upsertRegionLocked(desc, defaultLeaderStoreID(desc))
 		}
 		c.mu.Unlock()
