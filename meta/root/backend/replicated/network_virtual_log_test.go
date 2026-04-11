@@ -54,3 +54,32 @@ func TestNetworkDriverCompactCommittedShiftsTailWindow(t *testing.T) {
 	require.Len(t, after.Observed.Tail.Records, 1)
 	require.Equal(t, stream.Records[2].Cursor, after.Observed.Tail.Records[0].Cursor)
 }
+
+func TestNetworkDriverAppendCommittedWaitsForCommittedTail(t *testing.T) {
+	_, drivers, leaderID := openNetworkTestCluster(t, 8)
+	driver := drivers[leaderID]
+
+	before, err := driver.ObserveTail(rootstorage.TailToken{})
+	require.NoError(t, err)
+
+	records := []rootstorage.CommittedEvent{
+		{
+			Cursor: rootstate.Cursor{Term: 1, Index: 1},
+			Event:  rootevent.RegionDescriptorPublished(testDescriptor(301, []byte("a"), []byte("b"))),
+		},
+		{
+			Cursor: rootstate.Cursor{Term: 1, Index: 2},
+			Event:  rootevent.RegionDescriptorPublished(testDescriptor(302, []byte("b"), []byte("c"))),
+		},
+	}
+	logEnd, err := driver.AppendCommitted(records...)
+	require.NoError(t, err)
+	require.Greater(t, logEnd, int64(0))
+
+	after, err := driver.ObserveTail(before.Token)
+	require.NoError(t, err)
+	require.True(t, after.Advanced())
+	require.Equal(t, records[len(records)-1].Cursor, after.LastCursor())
+	require.Len(t, after.Observed.Tail.Records, 2)
+	require.Equal(t, records[len(records)-1].Cursor, after.Observed.Tail.Records[len(after.Observed.Tail.Records)-1].Cursor)
+}

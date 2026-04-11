@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	myraft "github.com/feichai0017/NoKV/raft"
 )
@@ -63,6 +64,14 @@ func (d *NetworkDriver) ReadCommitted(offset int64) (rootstorage.CommittedTail, 
 }
 
 func (d *NetworkDriver) AppendCommitted(records ...rootstorage.CommittedEvent) (int64, error) {
+	if len(records) == 0 {
+		return d.Size()
+	}
+	before, err := d.ObserveTail(rootstorage.TailToken{})
+	if err != nil {
+		return 0, err
+	}
+	target := records[len(records)-1].Cursor
 	d.mu.Lock()
 	if d.node == nil {
 		d.mu.Unlock()
@@ -93,9 +102,52 @@ func (d *NetworkDriver) AppendCommitted(records ...rootstorage.CommittedEvent) (
 		}
 		d.mu.Lock()
 	}
-	size, err := d.adapter.size()
 	d.mu.Unlock()
-	return size, err
+	if err := d.waitForCommittedCursor(before.Token, target, d.appendWaitTimeout); err != nil {
+		return 0, err
+	}
+	return d.adapter.size()
+}
+
+func (d *NetworkDriver) waitForCommittedCursor(after rootstorage.TailToken, target rootstate.Cursor, timeout time.Duration) error {
+	if target == (rootstate.Cursor{}) {
+		return nil
+	}
+	if timeout <= 0 {
+		timeout = defaultAppendWaitTimeout
+	}
+	advance, err := d.ObserveTail(after)
+	if err != nil {
+		return err
+	}
+	if committedCursorReached(advance.LastCursor(), target) {
+		return nil
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("meta/root/backend/replicated: append wait timed out before committed cursor %v", target)
+		}
+		wait := remaining
+		if wait > 200*time.Millisecond {
+			wait = 200 * time.Millisecond
+		}
+		advance, err := d.WaitForTail(after, wait)
+		if err != nil {
+			return err
+		}
+		if committedCursorReached(advance.LastCursor(), target) {
+			return nil
+		}
+		if advance.Advanced() {
+			after = advance.Token
+		}
+	}
+}
+
+func committedCursorReached(current, target rootstate.Cursor) bool {
+	return current == target || rootstate.CursorAfter(current, target)
 }
 
 func (d *NetworkDriver) CompactCommitted(stream rootstorage.CommittedTail) error {
