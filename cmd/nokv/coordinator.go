@@ -92,7 +92,7 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 
 	cluster := catalog.NewCluster()
 	var (
-		store         coordstorage.Store
+		store         coordstorage.RootStorage
 		rootStore     *coordstorage.RootStore
 		workdirPath   string
 		loadedRegions int
@@ -142,10 +142,7 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 
 	ids := idalloc.NewIDAllocator(*idStart)
 	tsAlloc := tso.NewAllocator(*tsStart)
-	svc := coordserver.NewService(cluster, ids, tsAlloc)
-	if store != nil {
-		svc.SetStorage(store)
-	}
+	svc := coordserver.NewService(cluster, ids, tsAlloc, store)
 
 	grpcServer := grpc.NewServer()
 	coordpb.RegisterCoordinatorServer(grpcServer, svc)

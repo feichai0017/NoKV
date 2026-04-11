@@ -57,7 +57,7 @@ func RestoreDescriptors(apply func(descriptor.Descriptor) error, descriptors map
 
 // Bootstrap reconstructs one Coordinator runtime view from rooted durable metadata and
 // resolves allocator starts against persisted fences.
-func Bootstrap(store Store, apply func(descriptor.Descriptor) error, idStart, tsStart uint64) (BootstrapInfo, error) {
+func Bootstrap(store RootStorage, apply func(descriptor.Descriptor) error, idStart, tsStart uint64) (BootstrapInfo, error) {
 	if store == nil {
 		return BootstrapInfo{IDStart: idStart, TSStart: tsStart}, nil
 	}

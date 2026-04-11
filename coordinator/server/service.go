@@ -27,7 +27,7 @@ type Service struct {
 	cluster *catalog.Cluster
 	ids     *idalloc.IDAllocator
 	tso     *tso.Allocator
-	storage coordstorage.Store
+	storage coordstorage.RootStorage
 	allocMu sync.Mutex
 	writeMu sync.Mutex
 }
@@ -35,8 +35,10 @@ type Service struct {
 const errNotLeaderPrefix = "coordinator not leader"
 const errRootUnavailable = "coordinator root unavailable"
 
-// NewService constructs a Coordinator service.
-func NewService(cluster *catalog.Cluster, ids *idalloc.IDAllocator, tsAlloc *tso.Allocator) *Service {
+// NewService constructs a Coordinator service. The optional root storage fixes
+// durable rooted persistence at construction time; omitting it keeps the service
+// in explicit in-memory mode.
+func NewService(cluster *catalog.Cluster, ids *idalloc.IDAllocator, tsAlloc *tso.Allocator, root ...coordstorage.RootStorage) *Service {
 	if cluster == nil {
 		cluster = catalog.NewCluster()
 	}
@@ -46,22 +48,16 @@ func NewService(cluster *catalog.Cluster, ids *idalloc.IDAllocator, tsAlloc *tso
 	if tsAlloc == nil {
 		tsAlloc = tso.NewAllocator(1)
 	}
+	var storage coordstorage.RootStorage
+	if len(root) > 0 {
+		storage = root[0]
+	}
 	return &Service{
 		cluster: cluster,
 		ids:     ids,
 		tso:     tsAlloc,
+		storage: storage,
 	}
-}
-
-// SetStorage configures optional Coordinator persistence.
-//
-// When configured, region metadata and allocator states are persisted through
-// the storage interface.
-func (s *Service) SetStorage(storage coordstorage.Store) {
-	if s == nil {
-		return
-	}
-	s.storage = storage
 }
 
 // RefreshFromStorage refreshes rooted durable state into the in-memory service
@@ -70,6 +66,8 @@ func (s *Service) RefreshFromStorage() error {
 	if s == nil || s.storage == nil {
 		return nil
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return s.reloadAndFenceAllocators(true)
 }
 
@@ -79,6 +77,8 @@ func (s *Service) ReloadFromStorage() error {
 	if s == nil || s.storage == nil {
 		return nil
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return s.reloadAndFenceAllocators(false)
 }
 
@@ -422,15 +422,12 @@ func rootLag(current, served rootstorage.TailToken) uint64 {
 		if current.Revision > served.Revision {
 			return current.Revision - served.Revision
 		}
-		if served.Revision > current.Revision {
-			return served.Revision - current.Revision
-		}
-		if rootstate.CursorAfter(current.Cursor, served.Cursor) || rootstate.CursorAfter(served.Cursor, current.Cursor) {
+		if current.Revision == served.Revision && rootstate.CursorAfter(current.Cursor, served.Cursor) {
 			return 1
 		}
 		return 0
 	}
-	if rootstate.CursorAfter(current.Cursor, served.Cursor) || rootstate.CursorAfter(served.Cursor, current.Cursor) {
+	if rootstate.CursorAfter(current.Cursor, served.Cursor) {
 		return 1
 	}
 	return 0

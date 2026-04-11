@@ -138,8 +138,7 @@ func TestGRPCClientWriteFailoverAcrossPDs(t *testing.T) {
 		_ = leaderListener.Close()
 	})
 
-	followerSvc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100))
-	followerSvc.SetStorage(&followerStorage{})
+	followerSvc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), &followerStorage{})
 	followerGRPC := grpc.NewServer()
 	coordpb.RegisterCoordinatorServer(followerGRPC, followerSvc)
 	go func() { _ = followerGRPC.Serve(followerListener) }()

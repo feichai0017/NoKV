@@ -69,8 +69,7 @@ func OpenReplicatedWithTickIntervals(tb testing.TB, tickIntervals map[uint64]tim
 		cluster := catalog.NewCluster()
 		bootstrap, err := coordstorage.Bootstrap(store, cluster.PublishRegionDescriptor, 1, 1)
 		require.NoError(tb, err)
-		svc := coordserver.NewService(cluster, idalloc.NewIDAllocator(bootstrap.IDStart), tso.NewAllocator(bootstrap.TSStart))
-		svc.SetStorage(store)
+		svc := coordserver.NewService(cluster, idalloc.NewIDAllocator(bootstrap.IDStart), tso.NewAllocator(bootstrap.TSStart), store)
 		c.Services[id] = svc
 	}
 	tb.Cleanup(func() { c.Close() })
