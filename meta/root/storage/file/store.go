@@ -5,6 +5,9 @@ import (
 	"github.com/feichai0017/NoKV/vfs"
 )
 
+// store is a single-owner file-backed VirtualLog. Callers must serialize
+// mutation through the owning backend; this type is not a general concurrent
+// log object.
 type store struct {
 	checkpt fileCheckpointStore
 	log     fileEventLog
