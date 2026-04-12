@@ -6,7 +6,7 @@
 
 ## 摘要
 
-现有分布式 KV 系统的控制面通常把 metadata truth、routing/scheduling service 与 singleton duties 绑在同一个高可用单元里。这样的设计并不错误，也足够常见；但它隐藏了一个关键难点：当控制器承担全局唯一职责，例如 ID 分配、TSO 或 scheduler ownership 时，恢复问题不再只是“把 view 重新加载出来”，而是“如何在没有 service-local durable state 的前提下，从正确的全局下界继续工作”。换句话说，真正困难的不是重建 view，而是把接管所需的关键状态收敛进一个单一、可验证的 authority boundary。
+许多分布式 KV 系统会在同一个 control-plane authority boundary 内同时承载 metadata truth、routing/scheduling service 与 singleton duties。这样的设计并不错误，也足够常见；但它隐藏了一个关键难点：当控制器承担全局唯一职责，例如 ID 分配、TSO 或 scheduler ownership 时，恢复问题不再只是“把 view 重新加载出来”，而是“如何在没有 service-local durable state 的前提下，从正确的全局下界继续工作”。换句话说，真正困难的不是重建 view，而是把接管所需的关键状态收敛进一个单一、可验证的 authority boundary。
 
 本文研究的不是如何再发明一个新的 consensus protocol，而是一个更窄但更可验证的问题：**一个带 singleton duties 的 distributed KV coordinator，能否不依赖 service-local durable recovery state，而从 rooted truth 被安全重建。** NoKV 给出的答案是肯定的，但前提是四个问题被同时回答：durable truth 与 service/view 必须分离；coordinator ownership transfer 与 allocator lower bounds 必须通过同一 rooted metadata transition 原子表达；view staleness 必须通过显式 freshness contract 暴露给调用方；serialized rooted fence writes 必须通过 allocator window 退出稳态热路径。
 
@@ -18,7 +18,7 @@
 
 ### 1.1 问题背景
 
-分布式 KV 系统的数据平面通常已经具有清晰的复制、提交与恢复边界，但控制面未必如此。工业系统里，cluster manager、leader lease、allocator、route service、scheduler 与 metadata persistence 经常被绑定在同一个逻辑整体中。这种设计不是错误，它只是偏向“复制整坨控制器”而不是“复制 truth、重建 service”。
+分布式 KV 系统的数据平面通常已经具有清晰的复制、提交与恢复边界，但控制面未必如此。许多工业系统会在同一个控制器体系里同时承载 cluster manager、leader lease、allocator、route service、scheduler 与 metadata persistence。这种设计不是错误，它只是偏向“复制整坨控制器”而不是“复制 truth、重建 service”。
 
 当控制器只负责路由查询时，这种耦合代价还不算高；但当它承担 singleton duties，例如全局唯一 ID 分配、TSO 或调度所有权时，问题会迅速尖锐。系统不再只是回答“哪个 view 是最新的”，还必须回答：控制器崩溃后，新实例应该从哪里继续发号；旧实例最后一次 rooted allocator 下界是什么；新实例如何证明自己接管的是一份与 ownership 一致的 truth，而不是若干个 loosely coupled 的 side effect。
 
@@ -69,7 +69,7 @@ NoKV 通过四个条件实现这一点：
 
 ### 2.1 复制整个控制器 vs 复制 truth
 
-工业系统常见的控制面思路是复制整个控制器：服务逻辑、持久化元数据、singleton duties 与调度状态一起构成一个需要高可用的整体。这类设计当然可以工作，也确实在工业界被广泛采用。但它默认的恢复模型是：恢复一个“大脑”，而不是重建一个服务层。
+许多工业系统会选择复制整个控制器：服务逻辑、持久化元数据、singleton duties 与调度状态一起构成一个需要高可用的整体。这类设计当然可以工作，也确实在工业界被广泛采用。但它默认的恢复模型是：恢复一个“大脑”，而不是重建一个服务层。
 
 本文不否认这种路径的有效性。相反，我们承认这通常是工程上更直接、也更成熟的方案。本文关心的是另一条路径：**只复制 truth，而把 service 变成可重建层。** 这条路径真正困难的部分，不在于“view 能不能 reload”，而在于“takeover-critical state 能不能不跨边界地恢复”。
 
