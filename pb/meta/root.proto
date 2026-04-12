@@ -139,3 +139,99 @@ message RootEvent {
     RootPeerChange peer_change = 8;
   }
 }
+
+enum RootAllocatorKind {
+  ROOT_ALLOCATOR_KIND_UNSPECIFIED = 0;
+  ROOT_ALLOCATOR_KIND_ID = 1;
+  ROOT_ALLOCATOR_KIND_TSO = 2;
+}
+
+message MetadataRootSnapshotRequest {}
+
+message MetadataRootSnapshotResponse {
+  RootCheckpoint checkpoint = 1;
+}
+
+message MetadataRootAppendRequest {
+  repeated RootEvent events = 1;
+}
+
+message MetadataRootAppendResponse {
+  RootCursor cursor = 1;
+  RootState state = 2;
+}
+
+message MetadataRootFenceAllocatorRequest {
+  RootAllocatorKind kind = 1;
+  uint64 minimum = 2;
+}
+
+message MetadataRootFenceAllocatorResponse {
+  uint64 current = 1;
+}
+
+message MetadataRootStatusRequest {}
+
+message MetadataRootStatusResponse {
+  bool is_leader = 1;
+  uint64 leader_id = 2;
+}
+
+message RootTailToken {
+  RootCursor cursor = 1;
+  uint64 revision = 2;
+}
+
+message RootCommittedEvent {
+  RootCursor cursor = 1;
+  RootEvent event = 2;
+}
+
+message RootCommittedTail {
+  int64 requested_offset = 1;
+  int64 start_offset = 2;
+  int64 end_offset = 3;
+  repeated RootCommittedEvent records = 4;
+}
+
+message MetadataRootObserveCommittedRequest {
+  int64 requested_offset = 1;
+}
+
+message MetadataRootObserveCommittedResponse {
+  RootCheckpoint checkpoint = 1;
+  RootCommittedTail tail = 2;
+}
+
+message MetadataRootObserveTailRequest {
+  RootTailToken after = 1;
+}
+
+message MetadataRootObserveTailResponse {
+  RootTailToken after = 1;
+  RootTailToken token = 2;
+  RootCheckpoint checkpoint = 3;
+  RootCommittedTail tail = 4;
+}
+
+message MetadataRootWaitTailRequest {
+  RootTailToken after = 1;
+  uint64 timeout_millis = 2;
+}
+
+message MetadataRootWaitTailResponse {
+  RootTailToken after = 1;
+  RootTailToken token = 2;
+  RootCheckpoint checkpoint = 3;
+  RootCommittedTail tail = 4;
+}
+
+service MetadataRoot {
+  rpc Snapshot(MetadataRootSnapshotRequest) returns (MetadataRootSnapshotResponse);
+  rpc Append(MetadataRootAppendRequest) returns (MetadataRootAppendResponse);
+  rpc FenceAllocator(MetadataRootFenceAllocatorRequest) returns (MetadataRootFenceAllocatorResponse);
+  rpc Status(MetadataRootStatusRequest) returns (MetadataRootStatusResponse);
+  rpc ObserveCommitted(MetadataRootObserveCommittedRequest) returns (MetadataRootObserveCommittedResponse);
+  rpc ObserveTail(MetadataRootObserveTailRequest) returns (MetadataRootObserveTailResponse);
+  rpc WaitTail(MetadataRootWaitTailRequest) returns (MetadataRootWaitTailResponse);
+}
