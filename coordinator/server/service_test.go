@@ -76,7 +76,16 @@ func (f *fakeStorage) SaveAllocatorState(idCurrent, tsCurrent uint64) error {
 	f.saveCalls++
 	f.lastID = idCurrent
 	f.lastTS = tsCurrent
-	return f.saveErr
+	if f.saveErr != nil {
+		return f.saveErr
+	}
+	if idCurrent > f.snapshot.Allocator.IDCurrent {
+		f.snapshot.Allocator.IDCurrent = idCurrent
+	}
+	if tsCurrent > f.snapshot.Allocator.TSCurrent {
+		f.snapshot.Allocator.TSCurrent = tsCurrent
+	}
+	return nil
 }
 
 func (f *fakeStorage) Close() error {
@@ -1199,15 +1208,113 @@ func TestServicePersistsAllocatorState(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(10), idResp.GetFirstId())
 	require.Equal(t, 1, store.saveCalls)
-	require.Equal(t, uint64(11), store.lastID)
+	require.Equal(t, uint64(10009), store.lastID)
 	require.Equal(t, uint64(99), store.lastTS)
 
 	tsResp, err := svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 3})
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), tsResp.GetTimestamp())
 	require.Equal(t, 2, store.saveCalls)
-	require.Equal(t, uint64(11), store.lastID)
-	require.Equal(t, uint64(102), store.lastTS)
+	require.Equal(t, uint64(10009), store.lastID)
+	require.Equal(t, uint64(10099), store.lastTS)
+}
+
+func TestServiceIDWindowPersistsFenceOncePerWindow(t *testing.T) {
+	store := &fakeStorage{}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.idWindowSize = 5
+
+	first, err := svc.reserveIDs(3)
+	require.NoError(t, err)
+	require.Equal(t, uint64(10), first)
+	require.Equal(t, 1, store.saveCalls)
+	require.Equal(t, uint64(14), store.lastID)
+	require.Equal(t, uint64(99), store.lastTS)
+	require.Equal(t, uint64(12), svc.ids.Current())
+
+	first, err = svc.reserveIDs(2)
+	require.NoError(t, err)
+	require.Equal(t, uint64(13), first)
+	require.Equal(t, 1, store.saveCalls)
+	require.Equal(t, uint64(14), store.lastID)
+	require.Equal(t, uint64(14), svc.ids.Current())
+
+	first, err = svc.reserveIDs(1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(15), first)
+	require.Equal(t, 2, store.saveCalls)
+	require.Equal(t, uint64(19), store.lastID)
+	require.Equal(t, uint64(15), svc.ids.Current())
+}
+
+func TestServiceTSOWindowPersistsFenceOncePerWindow(t *testing.T) {
+	store := &fakeStorage{}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.tsoWindowSize = 5
+
+	first, count, err := svc.reserveTSO(3)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), first)
+	require.Equal(t, uint64(3), count)
+	require.Equal(t, 1, store.saveCalls)
+	require.Equal(t, uint64(104), store.lastTS)
+	require.Equal(t, uint64(102), svc.tso.Current())
+
+	first, count, err = svc.reserveTSO(2)
+	require.NoError(t, err)
+	require.Equal(t, uint64(103), first)
+	require.Equal(t, uint64(2), count)
+	require.Equal(t, 1, store.saveCalls)
+	require.Equal(t, uint64(104), store.lastTS)
+	require.Equal(t, uint64(104), svc.tso.Current())
+
+	first, count, err = svc.reserveTSO(1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(105), first)
+	require.Equal(t, uint64(1), count)
+	require.Equal(t, 2, store.saveCalls)
+	require.Equal(t, uint64(109), store.lastTS)
+	require.Equal(t, uint64(105), svc.tso.Current())
+}
+
+func TestServiceReloadDoesNotConsumeActiveIDWindow(t *testing.T) {
+	store := &fakeStorage{}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.idWindowSize = 5
+
+	first, err := svc.reserveIDs(2)
+	require.NoError(t, err)
+	require.Equal(t, uint64(10), first)
+	require.Equal(t, uint64(14), store.lastID)
+	require.Equal(t, uint64(11), svc.ids.Current())
+
+	require.NoError(t, svc.ReloadFromStorage())
+	require.Equal(t, uint64(11), svc.ids.Current())
+
+	first, err = svc.reserveIDs(1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(12), first)
+	require.Equal(t, 1, store.saveCalls)
+}
+
+func TestServiceReloadDoesNotConsumeActiveTSOWindow(t *testing.T) {
+	store := &fakeStorage{}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.tsoWindowSize = 5
+
+	first, _, err := svc.reserveTSO(2)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), first)
+	require.Equal(t, uint64(104), store.lastTS)
+	require.Equal(t, uint64(101), svc.tso.Current())
+
+	require.NoError(t, svc.ReloadFromStorage())
+	require.Equal(t, uint64(101), svc.tso.Current())
+
+	first, _, err = svc.reserveTSO(1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(102), first)
+	require.Equal(t, 1, store.saveCalls)
 }
 
 func TestServiceAllocatorStatePersistenceError(t *testing.T) {

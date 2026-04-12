@@ -117,6 +117,9 @@ No other product control-plane mode is supported. In particular:
 - there is no `coordinator` cluster larger than three members
 - there is no dynamic metadata membership today
 
+A future separated deployment is discussed in `docs/notes/2026-04-12-coordinator-meta-separation.md`.
+That note is a design proposal only; it is not a currently supported ops mode.
+
 ---
 
 ## 4. Persistence (`--workdir`)
@@ -152,6 +155,11 @@ replaying rooted truth:
 - **allocator fences** rebuild:
   - `id_current`
   - `ts_current`
+
+`id_current` and `ts_current` are durable allocator fences, not necessarily the
+last values served. With allocator window preallocation they may be ahead of the
+last returned ID or timestamp; restart recovery intentionally resumes after the
+fence and skips unused values.
 
 Startup flow:
 

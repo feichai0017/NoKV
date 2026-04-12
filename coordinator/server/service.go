@@ -24,13 +24,19 @@ import (
 type Service struct {
 	coordpb.UnimplementedCoordinatorServer
 
-	cluster *catalog.Cluster
-	ids     *idalloc.IDAllocator
-	tso     *tso.Allocator
-	storage coordstorage.RootStorage
-	allocMu sync.Mutex
-	writeMu sync.Mutex
+	cluster       *catalog.Cluster
+	ids           *idalloc.IDAllocator
+	tso           *tso.Allocator
+	storage       coordstorage.RootStorage
+	idWindowHigh  uint64
+	idWindowSize  uint64
+	tsoWindowHigh uint64
+	tsoWindowSize uint64
+	allocMu       sync.Mutex
+	writeMu       sync.Mutex
 }
+
+const defaultAllocatorWindowSize uint64 = 10_000
 
 const errNotLeaderPrefix = "coordinator not leader"
 const errRootUnavailable = "coordinator root unavailable"
@@ -53,10 +59,12 @@ func NewService(cluster *catalog.Cluster, ids *idalloc.IDAllocator, tsAlloc *tso
 		storage = root[0]
 	}
 	return &Service{
-		cluster: cluster,
-		ids:     ids,
-		tso:     tsAlloc,
-		storage: storage,
+		cluster:       cluster,
+		ids:           ids,
+		tso:           tsAlloc,
+		storage:       storage,
+		idWindowSize:  defaultAllocatorWindowSize,
+		tsoWindowSize: defaultAllocatorWindowSize,
 	}
 }
 
@@ -250,8 +258,10 @@ func (s *Service) reloadAndFenceAllocators(refresh bool) error {
 	if err != nil {
 		return err
 	}
-	s.ids.Fence(snapshot.Allocator.IDCurrent)
-	s.tso.Fence(snapshot.Allocator.TSCurrent)
+	s.allocMu.Lock()
+	defer s.allocMu.Unlock()
+	s.fenceIDFromStorage(snapshot.Allocator.IDCurrent)
+	s.fenceTSOFromStorage(snapshot.Allocator.TSCurrent)
 	return nil
 }
 
@@ -596,11 +606,19 @@ func (s *Service) reserveIDs(count uint64) (uint64, error) {
 	defer s.allocMu.Unlock()
 
 	current := s.ids.Current()
-	next := current + count
-	if s.storage != nil {
-		if err := s.storage.SaveAllocatorState(next, s.tso.Current()); err != nil {
+	next, ok := addUint64(current, count)
+	if !ok {
+		return 0, fmt.Errorf("%w: reserve would overflow", idalloc.ErrInvalidBatch)
+	}
+	if s.storage != nil && next > s.idWindowHigh {
+		windowHigh, ok := addUint64(current, maxUint64(s.effectiveIDWindowSize(), count))
+		if !ok {
+			windowHigh = next
+		}
+		if err := s.storage.SaveAllocatorState(windowHigh, s.currentTSOFenceLocked()); err != nil {
 			return 0, err
 		}
+		s.idWindowHigh = windowHigh
 	}
 	s.ids.Fence(next)
 	return current + 1, nil
@@ -617,14 +635,90 @@ func (s *Service) reserveTSO(count uint64) (uint64, uint64, error) {
 	defer s.allocMu.Unlock()
 
 	current := s.tso.Current()
-	next := current + count
-	if s.storage != nil {
-		if err := s.storage.SaveAllocatorState(s.ids.Current(), next); err != nil {
+	next, ok := addUint64(current, count)
+	if !ok {
+		return 0, 0, fmt.Errorf("%w: tso reserve would overflow", idalloc.ErrInvalidBatch)
+	}
+	if s.storage != nil && next > s.tsoWindowHigh {
+		windowHigh, ok := addUint64(current, maxUint64(s.effectiveTSOWindowSize(), count))
+		if !ok {
+			windowHigh = next
+		}
+		if err := s.storage.SaveAllocatorState(s.currentIDFenceLocked(), windowHigh); err != nil {
 			return 0, 0, err
 		}
+		s.tsoWindowHigh = windowHigh
 	}
 	s.tso.Fence(next)
 	return current + 1, count, nil
+}
+
+func (s *Service) effectiveIDWindowSize() uint64 {
+	if s == nil || s.idWindowSize == 0 {
+		return defaultAllocatorWindowSize
+	}
+	return s.idWindowSize
+}
+
+func (s *Service) effectiveTSOWindowSize() uint64 {
+	if s == nil || s.tsoWindowSize == 0 {
+		return defaultAllocatorWindowSize
+	}
+	return s.tsoWindowSize
+}
+
+func (s *Service) currentIDFenceLocked() uint64 {
+	if s == nil {
+		return 0
+	}
+	return maxUint64(s.ids.Current(), s.idWindowHigh)
+}
+
+func (s *Service) currentTSOFenceLocked() uint64 {
+	if s == nil {
+		return 0
+	}
+	return maxUint64(s.tso.Current(), s.tsoWindowHigh)
+}
+
+func (s *Service) fenceIDFromStorage(fence uint64) {
+	if s == nil {
+		return
+	}
+	if s.idWindowHigh != 0 && fence <= s.idWindowHigh {
+		return
+	}
+	s.ids.Fence(fence)
+	if fence > s.idWindowHigh {
+		s.idWindowHigh = fence
+	}
+}
+
+func (s *Service) fenceTSOFromStorage(fence uint64) {
+	if s == nil {
+		return
+	}
+	if s.tsoWindowHigh != 0 && fence <= s.tsoWindowHigh {
+		return
+	}
+	s.tso.Fence(fence)
+	if fence > s.tsoWindowHigh {
+		s.tsoWindowHigh = fence
+	}
+}
+
+func addUint64(a, b uint64) (uint64, bool) {
+	if ^uint64(0)-a < b {
+		return 0, false
+	}
+	return a + b, true
+}
+
+func maxUint64(a, b uint64) uint64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (s *Service) requireLeaderForWrite() error {
