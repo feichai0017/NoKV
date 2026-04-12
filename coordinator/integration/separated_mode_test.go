@@ -100,6 +100,50 @@ func TestSeparatedModeCoordinatorRecoveryLatency(t *testing.T) {
 		len(durations), avg, p50, p95, p99)
 }
 
+func TestSeparatedModeCoordinatorContestedFailoverPreservesAllocatorFence(t *testing.T) {
+	rootCluster := pdtestcluster.OpenReplicated(t)
+	targets := exposeRemoteRoots(t, rootCluster)
+	rootCluster.WaitLeader()
+
+	leaseTTL := 150 * time.Millisecond
+	renewIn := 40 * time.Millisecond
+
+	first, firstStore := openSeparatedCoordinatorWithLease(t, targets, "c1", leaseTTL, renewIn)
+	alloc, err := first.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 8})
+	require.NoError(t, err)
+	lastID := alloc.GetFirstId() + alloc.GetCount() - 1
+	require.NoError(t, firstStore.Close())
+
+	second, secondStore := openSeparatedCoordinatorWithLease(t, targets, "c2", leaseTTL, renewIn)
+	t.Cleanup(func() { require.NoError(t, secondStore.Close()) })
+
+	_, err = second.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "coordinator lease not held")
+
+	var next *coordpb.AllocIDResponse
+	require.Eventually(t, func() bool {
+		resp, allocErr := second.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+		if allocErr != nil {
+			return false
+		}
+		next = resp
+		return true
+	}, 3*time.Second, 20*time.Millisecond)
+	require.NotNil(t, next)
+	require.Greater(t, next.GetFirstId(), lastID)
+
+	require.Eventually(t, func() bool {
+		state, currentErr := rootCluster.Roots[rootCluster.WaitLeader()].Current()
+		if currentErr != nil {
+			return false
+		}
+		return state.CoordinatorLease.HolderID == "c2" &&
+			state.CoordinatorLease.IDFence >= lastID &&
+			state.IDFence >= next.GetFirstId()
+	}, 8*time.Second, 50*time.Millisecond)
+}
+
 func TestSeparatedModeCoordinatorChaosMonotonicAllocID(t *testing.T) {
 	rootCluster := pdtestcluster.OpenReplicated(t)
 	targets := exposeRemoteRoots(t, rootCluster)
@@ -210,6 +254,10 @@ func exposeRemoteRoots(t *testing.T, cluster *pdtestcluster.Cluster) map[uint64]
 }
 
 func openSeparatedCoordinator(t *testing.T, targets map[uint64]string, coordinatorID string) (*coordserver.Service, *coordstorage.RootStore) {
+	return openSeparatedCoordinatorWithLease(t, targets, coordinatorID, 10*time.Second, 3*time.Second)
+}
+
+func openSeparatedCoordinatorWithLease(t *testing.T, targets map[uint64]string, coordinatorID string, leaseTTL, renewIn time.Duration) (*coordserver.Service, *coordstorage.RootStore) {
 	t.Helper()
 	store, err := coordstorage.OpenRootRemoteStore(coordstorage.RemoteRootConfig{
 		Targets: targets,
@@ -226,6 +274,6 @@ func openSeparatedCoordinator(t *testing.T, targets map[uint64]string, coordinat
 		tso.NewAllocator(bootstrap.TSStart),
 		store,
 	)
-	svc.ConfigureCoordinatorLease(coordinatorID, 10*time.Second, 3*time.Second)
+	svc.ConfigureCoordinatorLease(coordinatorID, leaseTTL, renewIn)
 	return svc, store
 }
