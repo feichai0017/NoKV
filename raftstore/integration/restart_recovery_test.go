@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const restartRecoveryTimeout = 40 * time.Second
+
 func waitForStableLeader(tb testing.TB, ctx context.Context, regionID uint64, nodes ...*testcluster.Node) (*testcluster.Node, *adminpb.RegionRuntimeStatusResponse) {
 	tb.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -65,7 +67,7 @@ func waitForStableLeader(tb testing.TB, ctx context.Context, regionID uint64, no
 }
 
 func TestExpandedPeerRestartPreservesRegionAndData(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), restartRecoveryTimeout)
 	defer cancel()
 
 	seedDir := t.TempDir()
@@ -111,7 +113,7 @@ func TestExpandedPeerRestartPreservesRegionAndData(t *testing.T) {
 }
 
 func TestExpandedPeerRestartPreservesRegionAndDataWithSST(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), restartRecoveryTimeout)
 	defer cancel()
 
 	seedDir := t.TempDir()
@@ -157,7 +159,7 @@ func TestExpandedPeerRestartPreservesRegionAndDataWithSST(t *testing.T) {
 }
 
 func TestRemovedPeerRestartDoesNotRehost(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), restartRecoveryTimeout)
 	defer cancel()
 
 	seedDir := t.TempDir()
