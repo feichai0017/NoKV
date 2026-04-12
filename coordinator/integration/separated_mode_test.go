@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"net"
+	"sort"
 	"testing"
 	"time"
 
@@ -51,6 +52,77 @@ func TestSeparatedModeCoordinatorCrashAndRecoveryPreservesAllocatorFence(t *test
 			state.CoordinatorLease.HolderID == "c1" &&
 			state.CoordinatorLease.IDFence >= lastID
 	}, 8*time.Second, 50*time.Millisecond)
+}
+
+func TestSeparatedModeCoordinatorRecoveryLatency(t *testing.T) {
+	rootCluster := pdtestcluster.OpenReplicated(t)
+	targets := exposeRemoteRoots(t, rootCluster)
+	rootCluster.WaitLeader()
+
+	iterations := 8
+	if testing.Short() {
+		iterations = 3
+	}
+	durations := make([]time.Duration, 0, iterations)
+
+	var lastID uint64
+	for i := 0; i < iterations; i++ {
+		oldSvc, oldStore := openSeparatedCoordinator(t, targets, "c1")
+		alloc, err := oldSvc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+		require.NoError(t, err)
+		if alloc.GetFirstId() <= lastID {
+			t.Fatalf("expected alloc id to advance, got %d after %d", alloc.GetFirstId(), lastID)
+		}
+		lastID = alloc.GetFirstId()
+		require.NoError(t, oldStore.Close())
+
+		start := time.Now()
+		newSvc, newStore := openSeparatedCoordinator(t, targets, "c1")
+		alloc, err = newSvc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+		require.NoError(t, err)
+		elapsed := time.Since(start)
+		require.NoError(t, newStore.Close())
+
+		if alloc.GetFirstId() <= lastID {
+			t.Fatalf("expected recovery alloc id to advance, got %d after %d", alloc.GetFirstId(), lastID)
+		}
+		lastID = alloc.GetFirstId()
+		durations = append(durations, elapsed)
+	}
+
+	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
+	p50 := percentileDuration(durations, 0.50)
+	p95 := percentileDuration(durations, 0.95)
+	p99 := percentileDuration(durations, 0.99)
+	avg := averageDuration(durations)
+
+	t.Logf("separated coordinator recovery latency: n=%d avg=%s p50=%s p95=%s p99=%s",
+		len(durations), avg, p50, p95, p99)
+}
+
+func percentileDuration(samples []time.Duration, p float64) time.Duration {
+	if len(samples) == 0 {
+		return 0
+	}
+	if p <= 0 {
+		return samples[0]
+	}
+	if p >= 1 {
+		return samples[len(samples)-1]
+	}
+	idx := int(float64(len(samples)-1) * p)
+	return samples[idx]
+}
+
+func averageDuration(samples []time.Duration) time.Duration {
+	if len(samples) == 0 {
+		return 0
+	}
+	var total time.Duration
+	for _, d := range samples {
+		total += d
+	}
+	return total / time.Duration(len(samples))
 }
 
 func exposeRemoteRoots(t *testing.T, cluster *pdtestcluster.Cluster) map[uint64]string {
