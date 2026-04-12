@@ -550,21 +550,32 @@ Coordinator lease + TSO/ID window
 
 ### Phase 2：定义 root remote API，但只做 client/server harness
 
-改动：
+状态：最小 harness 已实现；没有开放 ops mode。
 
-- `meta/root/server`
-- `meta/root/client`
-- `coordinator/storage/root_remote.go`
+已经落地：
 
-只要求功能等价，不开放生产脚本。
+- `pb/meta/root.proto` 增加 `MetadataRoot` 服务。
+- `meta/root/remote` 提供 gRPC service/client。
+- remote client 实现 `Snapshot`、`Append`、`FenceAllocator`、`IsLeader`、`LeaderID`。
+- remote client 实现 unary `ObserveCommitted`、`ObserveTail`、`WaitForTail`，可驱动 `RootStore` catch-up。
+- remote client 支持多 endpoint，并在写请求收到 `leader_id` hint 后重试 leader。
+- coordinator 可以通过现有 `RootStore` contract 包装 remote client。
+- follower 写请求返回 `FailedPrecondition`，错误文本携带 `leader_id` hint。
+
+仍未落地：
+
+- `--root-mode=remote`。
+- watch push / streaming notification；当前只有 unary observe/wait。
+- remote deployment scripts。
 
 测试：
 
-- remote root append / observe / wait tail。
-- remote root follower read。
+- remote root append / snapshot through `RootStore`。
+- remote allocator fence through `RootStore`。
 - remote root write on follower returns `NOT_LEADER + leader_hint`。
 - remote root client follows leader redirect and retries write。
-- remote RootStore catch-up state。
+- remote RootStore subscription can observe tail advance through unary observe/wait。
+- invalid allocator kind returns `InvalidArgument`。
 
 ### Phase 3：Coordinator lease
 
