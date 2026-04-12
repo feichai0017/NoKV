@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
 )
@@ -124,7 +125,13 @@ func (s bootstrapTestStore) Load() (Snapshot, error) {
 
 func (bootstrapTestStore) AppendRootEvent(rootevent.Event) error   { return nil }
 func (bootstrapTestStore) SaveAllocatorState(uint64, uint64) error { return nil }
-func (bootstrapTestStore) Refresh() error                          { return nil }
-func (bootstrapTestStore) IsLeader() bool                          { return true }
-func (bootstrapTestStore) LeaderID() uint64                        { return 0 }
-func (bootstrapTestStore) Close() error                            { return nil }
+func (bootstrapTestStore) CampaignCoordinatorLease(string, int64, int64, uint64, uint64) (rootstate.CoordinatorLease, error) {
+	return rootstate.CoordinatorLease{}, nil
+}
+func (bootstrapTestStore) ReleaseCoordinatorLease(string, int64, uint64, uint64) (rootstate.CoordinatorLease, error) {
+	return rootstate.CoordinatorLease{}, nil
+}
+func (bootstrapTestStore) Refresh() error   { return nil }
+func (bootstrapTestStore) IsLeader() bool   { return true }
+func (bootstrapTestStore) LeaderID() uint64 { return 0 }
+func (bootstrapTestStore) Close() error     { return nil }

@@ -32,6 +32,7 @@ type Snapshot struct {
 	PendingPeerChanges  map[uint64]rootstate.PendingPeerChange
 	PendingRangeChanges map[uint64]rootstate.PendingRangeChange
 	Allocator           AllocatorState
+	CoordinatorLease    rootstate.CoordinatorLease
 }
 
 func CloneSnapshot(snapshot Snapshot) Snapshot {
@@ -43,6 +44,7 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),
 		Allocator:           snapshot.Allocator,
+		CoordinatorLease:    snapshot.CoordinatorLease,
 	}
 }
 
@@ -61,6 +63,7 @@ func SnapshotFromRoot(snapshot rootstate.Snapshot) Snapshot {
 			IDCurrent: snapshot.State.IDFence,
 			TSCurrent: snapshot.State.TSOFence,
 		},
+		CoordinatorLease: snapshot.State.CoordinatorLease,
 	}
 }
 

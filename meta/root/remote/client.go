@@ -177,6 +177,41 @@ func (c *Client) LeaderID() uint64 {
 	return status.GetLeaderId()
 }
 
+func (c *Client) CampaignCoordinatorLease(holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
+	resp, err := invokeWrite(c, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootCampaignResponse, error) {
+		return rpc.Campaign(ctx, &metapb.MetadataRootCampaignRequest{
+			HolderId:        holderID,
+			ExpiresUnixNano: expiresUnixNano,
+			NowUnixNano:     nowUnixNano,
+			IdFence:         idFence,
+			TsoFence:        tsoFence,
+		})
+	})
+	if err != nil {
+		return rootstate.CoordinatorLease{}, err
+	}
+	lease := metawire.RootCoordinatorLeaseFromProto(resp.GetLease())
+	if !resp.GetGranted() {
+		return lease, rootstate.ErrCoordinatorLeaseHeld
+	}
+	return lease, nil
+}
+
+func (c *Client) ReleaseCoordinatorLease(holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
+	resp, err := invokeWrite(c, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootReleaseResponse, error) {
+		return rpc.Release(ctx, &metapb.MetadataRootReleaseRequest{
+			HolderId:    holderID,
+			NowUnixNano: nowUnixNano,
+			IdFence:     idFence,
+			TsoFence:    tsoFence,
+		})
+	})
+	if err != nil {
+		return rootstate.CoordinatorLease{}, err
+	}
+	return metawire.RootCoordinatorLeaseFromProto(resp.GetLease()), nil
+}
+
 func (c *Client) ObserveCommitted() (rootstorage.ObservedCommitted, error) {
 	resp, err := invokeRead(c, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootObserveCommittedResponse, error) {
 		return rpc.ObserveCommitted(ctx, &metapb.MetadataRootObserveCommittedRequest{})

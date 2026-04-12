@@ -22,6 +22,7 @@ import (
 type Cluster struct {
 	tb         testing.TB
 	Drivers    map[uint64]*rootreplicated.NetworkDriver
+	Roots      map[uint64]*rootreplicated.Store
 	RootStores map[uint64]*coordstorage.RootStore
 	Services   map[uint64]*coordserver.Service
 }
@@ -38,6 +39,7 @@ func OpenReplicatedWithTickIntervals(tb testing.TB, tickIntervals map[uint64]tim
 	c := &Cluster{
 		tb:         tb,
 		Drivers:    make(map[uint64]*rootreplicated.NetworkDriver, 3),
+		Roots:      make(map[uint64]*rootreplicated.Store, 3),
 		RootStores: make(map[uint64]*coordstorage.RootStore, 3),
 		Services:   make(map[uint64]*coordserver.Service, 3),
 	}
@@ -62,6 +64,7 @@ func OpenReplicatedWithTickIntervals(tb testing.TB, tickIntervals map[uint64]tim
 
 		root, err := rootreplicated.Open(rootreplicated.Config{Driver: driver})
 		require.NoError(tb, err)
+		c.Roots[id] = root
 		store, err := coordstorage.OpenRootStore(root)
 		require.NoError(tb, err)
 		c.RootStores[id] = store
@@ -97,6 +100,7 @@ func (c *Cluster) CloseNode(nodeID uint64) {
 	delete(c.RootStores, nodeID)
 	delete(c.Services, nodeID)
 	delete(c.Drivers, nodeID)
+	delete(c.Roots, nodeID)
 }
 
 func (c *Cluster) WaitLeader(excluded ...uint64) uint64 {

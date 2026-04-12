@@ -33,10 +33,13 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 	addr := fs.String("addr", "127.0.0.1:2379", "listen address for coordinator gRPC service")
 	idStart := fs.Uint64("id-start", 1, "initial ID allocator value")
 	tsStart := fs.Uint64("ts-start", 1, "initial TSO value")
-	rootMode := fs.String("root-mode", "local", "metadata root mode: local|replicated")
+	rootMode := fs.String("root-mode", "local", "metadata root mode: local|replicated|remote")
 	rootNodeID := fs.Uint64("root-node-id", 1, "metadata root node id for replicated mode")
 	rootTransportAddr := fs.String("root-transport-addr", "", "metadata root raft transport address for replicated mode")
 	rootRefresh := fs.Duration("root-refresh", 200*time.Millisecond, "refresh interval for replicated rooted coordinator state")
+	coordinatorID := fs.String("coordinator-id", "", "stable coordinator owner id for lease-gated control plane")
+	leaseTTL := fs.Duration("lease-ttl", 10*time.Second, "coordinator lease ttl when --coordinator-id is set")
+	leaseRenewBefore := fs.Duration("lease-renew-before", 3*time.Second, "renew/campaign before lease expiry when --coordinator-id is set")
 	workdir := fs.String("workdir", "", "optional coordinator local state directory for persisting allocator and region catalog")
 	configPath := fs.String("config", "", "optional raft configuration file used to resolve coordinator workdir")
 	scope := fs.String("scope", "host", "scope for config-resolved coordinator workdir: host|docker")
@@ -79,9 +82,16 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 	}
 	rootModeValue := strings.ToLower(strings.TrimSpace(*rootMode))
 	switch rootModeValue {
-	case "", "local", "replicated":
+	case "", "local", "replicated", "remote":
 	default:
-		return fmt.Errorf("invalid root mode %q (expected local|replicated)", *rootMode)
+		return fmt.Errorf("invalid root mode %q (expected local|replicated|remote)", *rootMode)
+	}
+	coordinatorIDValue := strings.TrimSpace(*coordinatorID)
+	if rootModeValue == "remote" && coordinatorIDValue == "" {
+		return fmt.Errorf("coordinator remote root mode requires --coordinator-id")
+	}
+	if coordinatorIDValue == "" && (flagPassed(fs, "lease-ttl") || flagPassed(fs, "lease-renew-before")) {
+		return fmt.Errorf("coordinator lease flags require --coordinator-id")
 	}
 
 	lis, err := coordinatorListen("tcp", *addr)
@@ -138,11 +148,37 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 		*idStart, *tsStart = bootstrap.IDStart, bootstrap.TSStart
 		loadedRegions = bootstrap.LoadedRegions
 		store = rootStore
+	case "remote":
+		rootPeers, err := parseReplicatedRootPeers(rootPeerFlags)
+		if err != nil {
+			return err
+		}
+		rootStore, err = coordstorage.OpenRootRemoteStore(coordstorage.RemoteRootConfig{
+			Targets: rootPeers,
+		})
+		if err != nil {
+			return fmt.Errorf("coordinator open remote metadata root: %w", err)
+		}
+		defer func() { _ = rootStore.Close() }()
+		bootstrap, err := coordstorage.Bootstrap(rootStore, cluster.PublishRegionDescriptor, *idStart, *tsStart)
+		if err != nil {
+			return fmt.Errorf("coordinator bootstrap from remote metadata root: %w", err)
+		}
+		*idStart, *tsStart = bootstrap.IDStart, bootstrap.TSStart
+		loadedRegions = bootstrap.LoadedRegions
+		store = rootStore
 	}
 
 	ids := idalloc.NewIDAllocator(*idStart)
 	tsAlloc := tso.NewAllocator(*tsStart)
 	svc := coordserver.NewService(cluster, ids, tsAlloc, store)
+	if coordinatorIDValue != "" {
+		if store == nil {
+			return fmt.Errorf("coordinator --coordinator-id requires rooted storage")
+		}
+		svc.ConfigureCoordinatorLease(coordinatorIDValue, *leaseTTL, *leaseRenewBefore)
+	}
+	installCoordinatorExpvar(rootModeValue, svc)
 
 	grpcServer := grpc.NewServer()
 	coordpb.RegisterCoordinatorServer(grpcServer, svc)
@@ -162,11 +198,16 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 	if store != nil {
 		if rootModeValue == "replicated" {
 			_, _ = fmt.Fprintf(w, "Coordinator restored %d region(s) from replicated metadata root\n", loadedRegions)
+		} else if rootModeValue == "remote" {
+			_, _ = fmt.Fprintf(w, "Coordinator restored %d region(s) from remote metadata root\n", loadedRegions)
 		} else {
 			_, _ = fmt.Fprintf(w, "Coordinator restored %d region(s) from metadata root: %s\n", loadedRegions, workdirPath)
 		}
 		_, _ = fmt.Fprintf(w, "Coordinator allocator starts: id=%d ts=%d\n", *idStart, *tsStart)
 		_, _ = fmt.Fprintf(w, "Coordinator metadata root mode: %s\n", rootModeValue)
+		if coordinatorIDValue != "" {
+			_, _ = fmt.Fprintf(w, "Coordinator lease owner: id=%s ttl=%s renew_before=%s\n", coordinatorIDValue, leaseTTL.String(), leaseRenewBefore.String())
+		}
 	}
 	_, _ = fmt.Fprintf(w, "Coordinator service listening on %s\n", lis.Addr().String())
 	if metricsLn != nil {
@@ -174,7 +215,10 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 	}
 	ctx, cancel := coordinatorNotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	if rootModeValue == "replicated" && rootStore != nil {
+	if coordinatorIDValue != "" {
+		go svc.RunCoordinatorLeaseLoop(ctx)
+	}
+	if (rootModeValue == "replicated" || rootModeValue == "remote") && rootStore != nil {
 		go func() {
 			subscription := rootStore.SubscribeTail(rootstorage.TailToken{})
 			if subscription == nil {
@@ -208,6 +252,9 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 		}
 		return nil
 	case <-ctx.Done():
+		if coordinatorIDValue != "" {
+			_ = svc.ReleaseCoordinatorLease()
+		}
 		grpcServer.GracefulStop()
 		serveErr := <-serveErrCh
 		if serveErr != nil && !errors.Is(serveErr, grpc.ErrServerStopped) {

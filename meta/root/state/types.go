@@ -13,11 +13,26 @@ type Cursor struct {
 
 // State is the compact checkpointed state of the metadata root.
 type State struct {
-	ClusterEpoch    uint64
-	MembershipEpoch uint64
-	LastCommitted   Cursor
+	ClusterEpoch     uint64
+	MembershipEpoch  uint64
+	LastCommitted    Cursor
+	IDFence          uint64
+	TSOFence         uint64
+	CoordinatorLease CoordinatorLease
+}
+
+// CoordinatorLease is the compact control-plane owner lease stored in root
+// truth. It is separate from raft leadership: it gates coordinator-only duties
+// such as TSO, ID allocation, and scheduler ownership in separated deployments.
+type CoordinatorLease struct {
+	HolderID        string
+	ExpiresUnixNano int64
 	IDFence         uint64
 	TSOFence        uint64
+}
+
+func (l CoordinatorLease) ActiveAt(nowUnixNano int64) bool {
+	return l.HolderID != "" && l.ExpiresUnixNano > nowUnixNano
 }
 
 type PendingPeerChangeKind uint8
@@ -147,6 +162,8 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		if event.AllocatorFence != nil && event.AllocatorFence.Minimum > state.TSOFence {
 			state.TSOFence = event.AllocatorFence.Minimum
 		}
+	case rootevent.KindCoordinatorLease:
+		applyCoordinatorLeaseToState(state, event)
 	case rootevent.KindRegionBootstrap,
 		rootevent.KindRegionDescriptorPublished,
 		rootevent.KindRegionTombstoned,
@@ -165,6 +182,25 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		state.ClusterEpoch++
 	}
 	state.LastCommitted = cursor
+}
+
+func applyCoordinatorLeaseToState(state *State, event rootevent.Event) {
+	if state == nil || event.CoordinatorLease == nil {
+		return
+	}
+	lease := event.CoordinatorLease
+	state.CoordinatorLease = CoordinatorLease{
+		HolderID:        lease.HolderID,
+		ExpiresUnixNano: lease.ExpiresUnixNano,
+		IDFence:         lease.IDFence,
+		TSOFence:        lease.TSOFence,
+	}
+	if lease.IDFence > state.IDFence {
+		state.IDFence = lease.IDFence
+	}
+	if lease.TSOFence > state.TSOFence {
+		state.TSOFence = lease.TSOFence
+	}
 }
 
 // NextCursor returns the next ordered root cursor.
