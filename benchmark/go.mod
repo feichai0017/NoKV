@@ -1,6 +1,6 @@
 module github.com/feichai0017/NoKV/benchmark
 
-go 1.26.0
+go 1.26.2
 
 require (
 	github.com/cockroachdb/pebble v1.1.5
