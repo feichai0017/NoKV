@@ -11,7 +11,6 @@ Usage: scripts/ops/serve-meta-root.sh [options]
 Options:
   --addr <addr>              Metadata root gRPC listen address (default: 127.0.0.1:2380)
   --mode <local|replicated>  Metadata root mode (default: local)
-  --metrics-addr <addr>      Optional expvar endpoint for metadata root
   --workdir <dir>            Metadata root workdir (required)
   --node-id <id>             Replicated mode local node id
   --transport-addr <addr>    Replicated mode raft transport address
@@ -22,7 +21,6 @@ USAGE
 
 ADDR="127.0.0.1:2380"
 MODE="local"
-METRICS_ADDR=""
 WORKDIR=""
 NODE_ID=""
 TRANSPORT_ADDR=""
@@ -37,10 +35,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --mode)
       MODE=$2
-      shift 2
-      ;;
-    --metrics-addr)
-      METRICS_ADDR=$2
       shift 2
       ;;
     --workdir)
@@ -94,10 +88,6 @@ cmd=(nokv meta-root
   --mode "$MODE"
   --workdir "$WORKDIR"
 )
-
-if [[ -n "$METRICS_ADDR" ]]; then
-  cmd+=(--metrics-addr "$METRICS_ADDR")
-fi
 
 if [[ "$MODE" == "replicated" ]]; then
   if [[ -z "$NODE_ID" || -z "$TRANSPORT_ADDR" ]]; then

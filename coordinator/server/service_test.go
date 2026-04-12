@@ -29,6 +29,7 @@ import (
 type fakeStorage struct {
 	eventCalls    int
 	saveCalls     int
+	loadCalls     int
 	campaignCalls int
 	releaseCalls  int
 	eventErr      error
@@ -45,6 +46,7 @@ type fakeStorage struct {
 }
 
 func (f *fakeStorage) Load() (coordstorage.Snapshot, error) {
+	f.loadCalls++
 	if f.loadErr != nil {
 		return coordstorage.Snapshot{}, f.loadErr
 	}
@@ -1478,6 +1480,25 @@ func TestServiceCoordinatorLeaseRenewsInsideRenewWindow(t *testing.T) {
 	require.Equal(t, 2, store.campaignCalls)
 }
 
+func TestServiceCoordinatorLeaseRenewDoesNotReloadAllocators(t *testing.T) {
+	store := &fakeStorage{leader: true}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureCoordinatorLease("c1", 100*time.Millisecond, 20*time.Millisecond)
+
+	now := time.Unix(0, 0)
+	svc.now = func() time.Time { return now }
+
+	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.NoError(t, err)
+	require.Equal(t, 0, store.loadCalls)
+
+	now = now.Add(85 * time.Millisecond)
+	_, err = svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
+	require.NoError(t, err)
+	require.Equal(t, 0, store.loadCalls)
+	require.Equal(t, 2, store.campaignCalls)
+}
+
 func TestServiceCoordinatorLeaseStopsBeforeExpiryByClockSkew(t *testing.T) {
 	store := &fakeStorage{leader: true}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
@@ -1502,8 +1523,7 @@ func TestServiceCoordinatorLeaseLoopRenewsInBackground(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
 	svc.ConfigureCoordinatorLease("c1", 80*time.Millisecond, 30*time.Millisecond)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go svc.RunCoordinatorLeaseLoop(ctx)
 
 	require.Eventually(t, func() bool {
@@ -1516,8 +1536,7 @@ func TestServiceCoordinatorLeaseLoopSkipsFollower(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
 	svc.ConfigureCoordinatorLease("c1", 80*time.Millisecond, 30*time.Millisecond)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go svc.RunCoordinatorLeaseLoop(ctx)
 
 	time.Sleep(80 * time.Millisecond)
@@ -1538,6 +1557,22 @@ func TestServiceReleaseCoordinatorLease(t *testing.T) {
 	require.Equal(t, 1, store.releaseCalls)
 	require.Equal(t, int64(200), store.snapshot.CoordinatorLease.ExpiresUnixNano)
 	require.False(t, store.snapshot.CoordinatorLease.ActiveAt(200))
+}
+
+func TestServiceReleaseCoordinatorLeaseDoesNotReloadAllocators(t *testing.T) {
+	store := &fakeStorage{leader: true}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.now = func() time.Time { return time.Unix(0, 100) }
+
+	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.NoError(t, err)
+	require.Equal(t, 0, store.loadCalls)
+
+	svc.now = func() time.Time { return time.Unix(0, 200) }
+	require.NoError(t, svc.ReleaseCoordinatorLease())
+	require.Equal(t, 0, store.loadCalls)
+	require.Equal(t, 1, store.releaseCalls)
 }
 
 func TestServiceCoordinatorLeaseRejectsOtherHolder(t *testing.T) {

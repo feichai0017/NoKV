@@ -22,7 +22,6 @@ func TestRunMetaRootCmdStartsAndStopsLocal(t *testing.T) {
 		"-addr", "127.0.0.1:0",
 		"-mode", "local",
 		"-workdir", t.TempDir(),
-		"-metrics-addr", "127.0.0.1:0",
 	}); err != nil {
 		t.Fatalf("runMetaRootCmd(local): %v", err)
 	}
@@ -32,9 +31,6 @@ func TestRunMetaRootCmdStartsAndStopsLocal(t *testing.T) {
 	}
 	if !strings.Contains(out, "Metadata root mode: local") {
 		t.Fatalf("expected local mode line, got %q", out)
-	}
-	if !strings.Contains(out, "Metadata root metrics endpoint listening on http://") {
-		t.Fatalf("expected metrics line, got %q", out)
 	}
 }
 
@@ -74,26 +70,5 @@ func TestRunMetaRootCmdRejectsInvalidMode(t *testing.T) {
 	err := runMetaRootCmd(&buf, []string{"-mode", "bad"})
 	if err == nil || !strings.Contains(err.Error(), "invalid meta-root mode") {
 		t.Fatalf("expected invalid mode error, got %v", err)
-	}
-}
-
-func TestRunMetaRootCmdRejectsInvalidMetricsAddr(t *testing.T) {
-	origNotify := metaRootNotifyContext
-	metaRootNotifyContext = func(parent context.Context, _ ...os.Signal) (context.Context, context.CancelFunc) {
-		ctx, cancel := context.WithCancel(parent)
-		cancel()
-		return ctx, cancel
-	}
-	t.Cleanup(func() { metaRootNotifyContext = origNotify })
-
-	var buf bytes.Buffer
-	err := runMetaRootCmd(&buf, []string{
-		"-addr", "127.0.0.1:0",
-		"-mode", "local",
-		"-workdir", t.TempDir(),
-		"-metrics-addr", "bad",
-	})
-	if err == nil || !strings.Contains(err.Error(), "start meta-root metrics endpoint") {
-		t.Fatalf("expected invalid metrics addr error, got %v", err)
 	}
 }

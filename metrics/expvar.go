@@ -1,18 +1,15 @@
-package main
+package metrics
 
 import (
-	"errors"
 	"expvar"
 	"log"
 	"net"
 	"net/http"
-	"strings"
 )
 
-// startExpvarServer starts an optional HTTP endpoint exposing /debug/vars.
-// It returns nil,nil when addr is empty.
-func startExpvarServer(addr string) (net.Listener, error) {
-	addr = strings.TrimSpace(addr)
+// StartExpvarServer starts an optional HTTP endpoint exposing /debug/vars.
+// An empty address disables the server and returns nil.
+func StartExpvarServer(addr string) (net.Listener, error) {
 	if addr == "" {
 		return nil, nil
 	}
@@ -23,7 +20,7 @@ func startExpvarServer(addr string) (net.Listener, error) {
 	mux := http.NewServeMux()
 	mux.Handle("/debug/vars", expvar.Handler())
 	go func() {
-		if err := http.Serve(ln, mux); err != nil && !errors.Is(err, net.ErrClosed) {
+		if err := http.Serve(ln, mux); err != nil && err != http.ErrServerClosed {
 			log.Printf("expvar metrics server error: %v", err)
 		}
 	}()

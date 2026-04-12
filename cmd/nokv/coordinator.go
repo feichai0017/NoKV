@@ -196,11 +196,12 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 	}
 
 	if store != nil {
-		if rootModeValue == "replicated" {
+		switch rootModeValue {
+		case "replicated":
 			_, _ = fmt.Fprintf(w, "Coordinator restored %d region(s) from replicated metadata root\n", loadedRegions)
-		} else if rootModeValue == "remote" {
+		case "remote":
 			_, _ = fmt.Fprintf(w, "Coordinator restored %d region(s) from remote metadata root\n", loadedRegions)
-		} else {
+		default:
 			_, _ = fmt.Fprintf(w, "Coordinator restored %d region(s) from metadata root: %s\n", loadedRegions, workdirPath)
 		}
 		_, _ = fmt.Fprintf(w, "Coordinator allocator starts: id=%d ts=%d\n", *idStart, *tsStart)

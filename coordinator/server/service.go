@@ -122,6 +122,20 @@ func (s *Service) ConfigureCoordinatorLease(holderID string, ttl, renewIn time.D
 	s.leaseClockSkew = clockSkew
 }
 
+// ConfigureAllocatorWindows overrides the rooted allocator refill window sizes.
+// Zero values keep the default window behavior.
+func (s *Service) ConfigureAllocatorWindows(idWindowSize, tsoWindowSize uint64) {
+	if s == nil {
+		return
+	}
+	if idWindowSize != 0 {
+		s.idWindowSize = idWindowSize
+	}
+	if tsoWindowSize != 0 {
+		s.tsoWindowSize = tsoWindowSize
+	}
+}
+
 // RefreshFromStorage refreshes rooted durable state into the in-memory service
 // view and fences allocator state so a future leader cannot allocate stale ids.
 func (s *Service) RefreshFromStorage() error {
@@ -883,20 +897,25 @@ func (s *Service) ReleaseCoordinatorLease() error {
 	s.leaseMu.Lock()
 	s.lease = lease
 	s.leaseMu.Unlock()
-	return s.reloadAndFenceAllocators(false)
+	s.allocMu.Lock()
+	s.fenceIDFromStorage(lease.IDFence)
+	s.fenceTSOFromStorage(lease.TSOFence)
+	s.allocMu.Unlock()
+	return nil
 }
 
 func (s *Service) ensureCoordinatorLease() error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
+	nowUnixNano, expiresUnixNano, holderID, renewIn, clockSkew := s.leaseCampaignBounds()
+	if s.coordinatorLeaseStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
+		return nil
+	}
+
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	nowUnixNano, expiresUnixNano, holderID, renewIn, clockSkew := s.leaseCampaignBounds()
-	current := s.currentCoordinatorLease()
-	if current.HolderID == holderID &&
-		current.ExpiresUnixNano > nowUnixNano+renewIn.Nanoseconds() &&
-		current.ExpiresUnixNano > nowUnixNano+clockSkew.Nanoseconds() {
+	if s.coordinatorLeaseStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
 		return nil
 	}
 
@@ -912,7 +931,23 @@ func (s *Service) ensureCoordinatorLease() error {
 	s.leaseMu.Lock()
 	s.lease = lease
 	s.leaseMu.Unlock()
-	return s.reloadAndFenceAllocators(false)
+	s.allocMu.Lock()
+	s.fenceIDFromStorage(lease.IDFence)
+	s.fenceTSOFromStorage(lease.TSOFence)
+	s.allocMu.Unlock()
+	return nil
+}
+
+func (s *Service) coordinatorLeaseStillValid(holderID string, nowUnixNano int64, renewIn, clockSkew time.Duration) bool {
+	if s == nil {
+		return false
+	}
+	s.leaseMu.RLock()
+	current := s.lease
+	s.leaseMu.RUnlock()
+	return current.HolderID == holderID &&
+		current.ExpiresUnixNano > nowUnixNano+renewIn.Nanoseconds() &&
+		current.ExpiresUnixNano > nowUnixNano+clockSkew.Nanoseconds()
 }
 
 func (s *Service) coordinatorLeaseLoopInterval() time.Duration {

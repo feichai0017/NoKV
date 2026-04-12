@@ -2,17 +2,16 @@ package main
 
 import (
 	"context"
-	"expvar"
 	"flag"
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
 	NoKV "github.com/feichai0017/NoKV"
+	metricspkg "github.com/feichai0017/NoKV/metrics"
 )
 
 var exit = os.Exit
@@ -86,14 +85,16 @@ func main() {
 	}()
 
 	if *metricsAddr != "" {
-		mux := http.NewServeMux()
-		mux.Handle("/debug/vars", expvar.Handler())
-		go func() {
-			log.Printf("expvar metrics listening on http://%s/debug/vars", *metricsAddr)
-			if err := http.ListenAndServe(*metricsAddr, mux); err != nil {
-				log.Printf("metrics server error: %v", err)
+		metricsLn, err := metricspkg.StartExpvarServer(*metricsAddr)
+		if err != nil {
+			fatalf("start metrics endpoint: %v", err)
+		}
+		defer func() {
+			if metricsLn != nil {
+				_ = metricsLn.Close()
 			}
 		}()
+		log.Printf("expvar metrics listening on http://%s/debug/vars", metricsLn.Addr().String())
 	}
 
 	log.Printf("NoKV Redis gateway listening on %s (workdir=%s)", *addr, *workDir)
