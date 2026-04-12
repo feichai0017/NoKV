@@ -198,7 +198,6 @@ nokv coordinator \
   - `--mode local|replicated` (`local` by default)
   - `--workdir` (required)
   - `--node-id`, `--transport-addr`, `--peer nodeID=addr` (replicated mode)
-  - `--metrics-addr` (optional expvar endpoint, exposes `/debug/vars`)
 
 Examples:
 
@@ -206,8 +205,7 @@ Examples:
 nokv meta-root \
   --addr 127.0.0.1:2380 \
   --mode local \
-  --workdir ./artifacts/meta-root \
-  --metrics-addr 127.0.0.1:2389
+  --workdir ./artifacts/meta-root
 ```
 
 ```bash
@@ -248,12 +246,6 @@ nokv meta-root \
     - rooted read-state summary
     - lease state
     - allocator window state
-- `nokv_meta_root`
-  - Published by `nokv meta-root --metrics-addr ...`
-  - Includes:
-    - `mode`
-    - leader view
-    - compact rooted state summary
 
 ---
 

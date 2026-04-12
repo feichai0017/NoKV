@@ -2,11 +2,12 @@ package main
 
 import (
 	"expvar"
+	"net"
 	"sync"
 	"sync/atomic"
 
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
-	rootremote "github.com/feichai0017/NoKV/meta/root/remote"
+	metricspkg "github.com/feichai0017/NoKV/metrics"
 )
 
 type debugSnapshotFunc func() any
@@ -14,8 +15,6 @@ type debugSnapshotFunc func() any
 var (
 	coordinatorExpvarOnce     sync.Once
 	coordinatorExpvarProvider atomic.Value
-	metaRootExpvarOnce        sync.Once
-	metaRootExpvarProvider    atomic.Value
 )
 
 func installCoordinatorExpvar(mode string, svc *coordserver.Service) {
@@ -39,23 +38,8 @@ func installCoordinatorExpvar(mode string, svc *coordserver.Service) {
 	})
 }
 
-func installMetaRootExpvar(mode string, backend rootremote.Backend) {
-	if backend == nil {
-		return
-	}
-	metaRootExpvarProvider.Store(debugSnapshotFunc(func() any {
-		return map[string]any{
-			"mode":  mode,
-			"state": metaRootDiagnosticsSnapshot(backend),
-		}
-	}))
-	metaRootExpvarOnce.Do(func() {
-		expvar.Publish("nokv_meta_root", expvar.Func(func() any {
-			provider, _ := metaRootExpvarProvider.Load().(debugSnapshotFunc)
-			if provider == nil {
-				return map[string]any{}
-			}
-			return provider()
-		}))
-	})
+// startExpvarServer starts an optional HTTP endpoint exposing /debug/vars.
+// An empty address disables the server and returns nil.
+func startExpvarServer(addr string) (net.Listener, error) {
+	return metricspkg.StartExpvarServer(addr)
 }

@@ -57,7 +57,7 @@ func TestMainSignalBranch(t *testing.T) {
 		"nokv-redis",
 		"-workdir", t.TempDir(),
 		"-addr", "127.0.0.1:0",
-		"-metrics-addr", "bad",
+		"-metrics-addr", "127.0.0.1:0",
 	}, func() {
 		origNotify := signalNotify
 		defer func() { signalNotify = origNotify }()
