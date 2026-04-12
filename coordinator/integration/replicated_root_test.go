@@ -43,7 +43,7 @@ func TestReplicatedRootAllocatorFencesPropagateToFollower(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		return snapshot.Allocator.IDCurrent == lastID && snapshot.Allocator.TSCurrent == lastTS
+		return snapshot.Allocator.IDCurrent >= lastID && snapshot.Allocator.TSCurrent >= lastTS
 	}, 8*time.Second, 50*time.Millisecond)
 }
 

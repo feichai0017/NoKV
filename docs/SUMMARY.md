@@ -45,3 +45,4 @@
   - [2026-03-31 基于 SST 的 Snapshot Install](notes/2026-03-31-sst-snapshot-install.md)
   - [2026-04-03 Rooted Metadata、Delos-lite 与 VirtualLog](notes/2026-04-03-delos-lite-metadata-root-roadmap.md)
   - [2026-04-05 Range Filter：从 GRF 得到启发，但不照搬 GRF](notes/2026-04-05-range-filter-from-grf.md)
+  - [2026-04-12 Coordinator 和 meta/root 分离部署设计](notes/2026-04-12-coordinator-meta-separation.md)
