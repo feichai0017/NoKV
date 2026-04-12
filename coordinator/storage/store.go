@@ -11,7 +11,8 @@ type RootStorage interface {
 	Load() (Snapshot, error)
 	// AppendRootEvent persists one explicit rooted truth event.
 	AppendRootEvent(event rootevent.Event) error
-	// SaveAllocatorState persists latest allocator counters.
+	// SaveAllocatorState persists allocator fences. A fence may be ahead of the
+	// latest value served when Coordinator uses a preallocated window.
 	SaveAllocatorState(idCurrent, tsCurrent uint64) error
 	// Refresh reloads the reconstructed rooted snapshot from the underlying root.
 	Refresh() error

@@ -61,6 +61,11 @@
     <h3><a href="2026-04-05-range-filter-from-grf.html">Range Filter：从 GRF 得到启发，但不照搬 GRF</a></h3>
     <p>解释 NoKV 为什么需要 read-path pruning、GRF 到底提供了什么启发、为什么当前实现选择更保守的 in-memory advisory 方案，以及它与 LSM 读路径的关系。</p>
   </div>
+  <div class="blog-card">
+    <span class="blog-date">2026-04-12</span>
+    <h3><a href="2026-04-12-coordinator-meta-separation.html">Coordinator 和 meta/root 分离部署设计</a></h3>
+    <p>讨论 co-located 与 separated control-plane deployment 的边界、TSO/ID window、Coordinator lease、freshness 语义和落地顺序。</p>
+  </div>
 </div>
 
 ## 这里应该写什么
