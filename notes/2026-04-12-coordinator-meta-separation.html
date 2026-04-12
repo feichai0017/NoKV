@@ -1,0 +1,888 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>2026-04-12 Coordinator 和 meta/root 分离部署设计 - NoKV Docs</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="NoKV design, architecture, migration, and testing documentation.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-2459343d.css">
+        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../docs/custom-a69f6233.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-dc6edf3c.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-c05f2810.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">NoKV Docs</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="2026-04-12-coordinator-和-metaroot-分离部署设计"><a class="header" href="#2026-04-12-coordinator-和-metaroot-分离部署设计">2026-04-12 Coordinator 和 meta/root 分离部署设计</a></h1>
+<blockquote>
+<p>状态：implemented experimental mode。当前默认正式模式仍然是 <code>single coordinator + local meta</code> 和 <code>3 coordinator + replicated meta</code>；<code>remote meta/root</code>、Coordinator lease gate、allocator window、remote root harness、基本 correctness tests 和最小运维脚本都已落地，但 separated deployment 还不是默认运维路径，也还没有完成真实网络与 baseline 级别的评估。本文说明为什么拆、什么时候不该拆，以及拆分前后哪些协议边界必须明确。</p>
+</blockquote>
+<h2 id="导读"><a class="header" href="#导读">导读</a></h2>
+<ul>
+<li>🧭 主题：<code>coordinator</code> 和 <code>meta/root</code> 是否应该从 co-located replicated mode 演进到 separated deployment。</li>
+<li>🧱 核心对象：<code>RootStore</code>、<code>VirtualLog</code>、<code>RootToken</code>、Coordinator lease、TSO/ID window、scheduler owner。</li>
+<li>🔁 调用链：<code>coordinator view -&gt; remote meta/root VirtualLog -&gt; tail catch-up -&gt; freshness-aware routing</code>。</li>
+<li>📚 参考对象：Delos 的 VirtualLog 分层、TiKV/PD+etcd 的 co-located control-plane 经验、FoundationDB 的控制面角色拆分。</li>
+</ul>
+<h2 id="1-当前实际部署是什么"><a class="header" href="#1-当前实际部署是什么">1. 当前实际部署是什么</a></h2>
+<p>NoKV 当前不是只有一个模式，而是两个正式模式：</p>
+<pre class="mermaid">flowchart TD
+    subgraph A["Mode A: single coordinator + local meta"]
+        C1["coordinator"] --&gt; L1["meta/root local backend\nfile checkpoint + tail"]
+    end
+
+    subgraph B["Mode B: 3 coordinator + replicated meta"]
+        C2["coordinator-1\n+ meta/root peer-1"]
+        C3["coordinator-2\n+ meta/root peer-2"]
+        C4["coordinator-3\n+ meta/root peer-3"]
+        C2 &lt;--&gt; C3
+        C3 &lt;--&gt; C4
+        C4 &lt;--&gt; C2
+    end
+</pre>
+
+<p>Mode B 已经是多进程 HA，只是每个 <code>coordinator</code> 进程内同时托管一个 <code>meta/root</code> raft peer。</p>
+<p>这意味着当前系统已经具备：</p>
+<ul>
+<li><code>meta/root</code> 的三副本 replicated truth。</li>
+<li><code>coordinator</code> 从 rooted truth 重建 view。</li>
+<li><code>RootStore</code> 作为 <code>coordinator</code> 和 <code>meta/root</code> 的适配边界。</li>
+<li>TSO/ID fence 写入 <code>meta/root</code>，避免 leader 切换后回退。</li>
+<li>非 rooted leader 的 Coordinator 拒绝 <code>AllocID</code>、<code>Tso</code> 和 <code>PublishRootEvent</code>。</li>
+</ul>
+<p>当前已经实现：</p>
+<ul>
+<li>独立 <code>meta/root</code> 服务进程：<code>nokv meta-root</code>。</li>
+<li><code>coordinator --root-mode=remote</code>。</li>
+<li><code>meta/root</code> 对外 gRPC API 和 remote client。</li>
+<li>独立 Coordinator 集群的 lease / owner 最小机制。</li>
+<li>ID / TSO window 预分配。</li>
+</ul>
+<p>当前仍未完成：</p>
+<ul>
+<li>更完整的 ops 脚本和稳定运维说明。</li>
+<li>更系统化的 failure / recovery 演练。</li>
+</ul>
+<p>当前已经补齐的 observability：</p>
+<ul>
+<li><code>nokv coordinator --metrics-addr ...</code> 会发布 <code>nokv_coordinator</code> expvar key。</li>
+<li><code>nokv_coordinator</code> 当前包含：
+<ul>
+<li><code>root_mode</code></li>
+<li>rooted read-state summary</li>
+<li>lease state</li>
+<li>allocator window state</li>
+</ul>
+</li>
+</ul>
+<p>当前已经补齐的 correctness coverage：</p>
+<ul>
+<li><code>coordinator/integration</code> 覆盖 Mode C coordinator crash/recovery：
+<ul>
+<li>old Coordinator 分配 ID 后不 release lease，模拟崩溃</li>
+<li>remote <code>meta/root</code> 独立存活</li>
+<li>new Coordinator 使用同一 stable <code>coordinator-id</code> 连接 remote root</li>
+<li>new <code>AllocID</code> 严格大于 crash 前最后返回 ID</li>
+<li>rooted allocator fence 和 lease fence 不回退</li>
+</ul>
+</li>
+<li><code>meta/root/backend/replicated</code> 覆盖 root leader change：
+<ul>
+<li>old root leader 写入 <code>CoordinatorLease</code> 和 allocator fences</li>
+<li>new root leader 继续 renew 同一 holder</li>
+<li>ID / TSO fences 在所有 root peers 上保持单调不回退</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-分离部署长什么样"><a class="header" href="#2-分离部署长什么样">2. 分离部署长什么样</a></h2>
+<p>未来 separated mode 应该是：</p>
+<pre class="mermaid">flowchart LR
+    subgraph MR["meta/root cluster"]
+        M1["meta-1\nVirtualLog raft peer"]
+        M2["meta-2\nVirtualLog raft peer"]
+        M3["meta-3\nVirtualLog raft peer"]
+        M1 &lt;--&gt; M2
+        M2 &lt;--&gt; M3
+        M3 &lt;--&gt; M1
+    end
+
+    subgraph COORD["coordinator cluster"]
+        C1["coordinator-a\nroute view"]
+        C2["coordinator-b\nroute view"]
+        C3["coordinator-c\nroute view"]
+        C4["coordinator-n\nroute view"]
+    end
+
+    C1 --&gt;|"Append / Fence / Observe / Subscribe"| MR
+    C2 --&gt;|"Append / Fence / Observe / Subscribe"| MR
+    C3 --&gt;|"Append / Fence / Observe / Subscribe"| MR
+    C4 --&gt;|"Append / Fence / Observe / Subscribe"| MR
+</pre>
+
+<p>这里 <code>meta/root</code> 是 durable truth cluster，<code>coordinator</code> 是可水平扩展的 service/view layer。</p>
+<p>关键原则：</p>
+<ol>
+<li><code>meta/root</code> 仍然只做 truth kernel，不变成完整 Coordinator。</li>
+<li><code>coordinator</code> 仍然只持有 rebuildable view，不拥有 durable topology truth。</li>
+<li>separated mode 不能破坏现有 co-located mode；它必须复用同一个 <code>RootStore</code> / <code>VirtualLog</code> contract。</li>
+<li>separated mode 不是默认模式，它是当 routing / Coordinator 运维成为瓶颈时才打开的部署形态。</li>
+</ol>
+<h2 id="3-为什么要分离部署"><a class="header" href="#3-为什么要分离部署">3. 为什么要分离部署</a></h2>
+<h3 id="31-独立失败域"><a class="header" href="#31-独立失败域">3.1 独立失败域</a></h3>
+<p>当前 Mode B 中，一个进程崩溃会同时带走：</p>
+<ul>
+<li>一个 <code>coordinator</code> service instance。</li>
+<li>一个 <code>meta/root</code> raft peer。</li>
+</ul>
+<p>这在三节点内是可接受的，但失败域仍然绑定。</p>
+<p>分离后：</p>
+<ul>
+<li><code>coordinator</code> 崩溃不会带走 <code>meta/root</code> peer。</li>
+<li><code>meta/root</code> 少数节点故障不影响已有 <code>coordinator</code> 继续用 cached view 服务 best-effort / bounded read。</li>
+<li><code>coordinator</code> 可以滚动升级，不触发 <code>meta/root</code> raft peer 重启。</li>
+</ul>
+<p>这对生产运维有真实价值，但不是项目早期必须承受的复杂度。</p>
+<h3 id="32-coordinator-水平扩展"><a class="header" href="#32-coordinator-水平扩展">3.2 Coordinator 水平扩展</a></h3>
+<p><code>meta/root</code> 是共识系统，不应该通过加很多节点来扩展读服务。Raft group 节点越多，写路径越重。</p>
+<p><code>coordinator</code> 是 view/service 层，可以通过更多实例扩展：</p>
+<ul>
+<li><code>GetRegionByKey</code></li>
+<li>route freshness check</li>
+<li>gateway route lookup</li>
+<li>control-plane read/debug surface</li>
+</ul>
+<p>分离后可以是：</p>
+<pre><code class="language-text">3 meta/root nodes + N coordinator nodes
+</code></pre>
+<p>这比把 <code>3 coordinator + replicated meta</code> 扩成 <code>7 coordinator + 7 meta peers</code> 更合理。</p>
+<h3 id="33-版本演进更干净"><a class="header" href="#33-版本演进更干净">3.3 版本演进更干净</a></h3>
+<p>如果 <code>coordinator</code> 和 <code>meta/root</code> 进程分开：</p>
+<ul>
+<li><code>coordinator</code> 可以更频繁升级 route / scheduler policy。</li>
+<li><code>meta/root</code> 可以保持小而稳定。</li>
+<li><code>VirtualLog</code> wire API 成为明确兼容边界。</li>
+</ul>
+<p>这适合长期系统演进，也适合把 NoKV 的控制面设计作为 research / workshop case study 来讲。</p>
+<h2 id="4-为什么现在不应该直接实现"><a class="header" href="#4-为什么现在不应该直接实现">4. 为什么现在不应该直接实现</a></h2>
+<p>分离部署不是把函数调用换成 RPC 那么简单。</p>
+<p>如果直接做 remote <code>RootStore</code>，会立刻出现三个问题。</p>
+<h3 id="41-tsoid-热路径会被打穿"><a class="header" href="#41-tsoid-热路径会被打穿">4.1 TSO/ID 热路径会被打穿</a></h3>
+<p>在没有 window 的设计里，<code>reserveTSO</code> 和 <code>reserveIDs</code> 每次分配都会调用 <code>SaveAllocatorState</code>，也就是推进 <code>meta/root</code> 中的 allocator fence。</p>
+<p>当前代码已经先实现 co-located 模式下的 allocator window，所以 <code>Tso</code> 和 <code>AllocID</code> 热路径都不会在窗口内重复推进 root fence。<code>AllocID</code> 目前还没有生产拓扑消费者，但它和 TSO 使用同一套 durable fence 语义。</p>
+<p>分离后，每次 TSO 都变成 remote <code>FenceAllocator</code> RPC。如果每个事务要 <code>start_ts</code> 和 <code>commit_ts</code>，那么：</p>
+<pre><code class="language-text">10k txn/s -&gt; 20k TSO/s -&gt; 20k remote fence writes/s
+</code></pre>
+<p>这会把 <code>meta/root</code> 写路径变成事务热路径，不能接受。</p>
+<h3 id="42-写后读会出现-view-staleness-窗口"><a class="header" href="#42-写后读会出现-view-staleness-窗口">4.2 写后读会出现 view staleness 窗口</a></h3>
+<p>当前 co-located 模式中：</p>
+<pre><code class="language-text">AppendRootEvent -&gt; reload RootStore -&gt; ReplaceRootSnapshot
+</code></pre>
+<p>写入和 view 更新在一个进程里同步完成。</p>
+<p>分离后：</p>
+<pre><code class="language-text">coordinator AppendRootEvent RPC -&gt; meta/root commit -&gt; tail stream -&gt; coordinator catch-up
+</code></pre>
+<p>在 commit 和 catch-up 之间，Coordinator view 可能落后。</p>
+<p>所以 freshness contract 不是一个附加诊断字段，而是让 separated mode 成立的必要机制：</p>
+<ul>
+<li>没有 separated mode 时，它让 staleness 可观测。</li>
+<li>有 separated mode 时，它决定路由读能不能被安全返回。</li>
+</ul>
+<p>Separated mode 必须严格依赖：</p>
+<ul>
+<li><code>RootToken</code></li>
+<li><code>CatchUpState</code></li>
+<li><code>DegradedMode</code></li>
+<li><code>Freshness</code></li>
+</ul>
+<p>否则客户端会拿到刚被 split / merge 过期的旧路由。</p>
+<h3 id="43-调度-owner-需要明确"><a class="header" href="#43-调度-owner-需要明确">4.3 调度 owner 需要明确</a></h3>
+<p><code>StoreHeartbeat</code> 当前能返回 lightweight scheduler operation，例如 leader transfer hint。</p>
+<p>如果 N 个 Coordinator 都接收 heartbeat 并各自做调度，可能产生重复或冲突操作。</p>
+<p>因此 separated mode 必须定义：</p>
+<ul>
+<li>所有 Coordinator 都可以接收 heartbeat 并更新本地 store stats。</li>
+<li>只有 lease holder 可以返回 scheduler operations。</li>
+<li>非 lease holder 返回空 operation，或者返回 redirect hint。</li>
+</ul>
+<h2 id="5-核心设计remote-root--coordinator-lease--allocator-window"><a class="header" href="#5-核心设计remote-root--coordinator-lease--allocator-window">5. 核心设计：remote root + coordinator lease + allocator window</a></h2>
+<p>Separated mode 需要三个机制一起出现。</p>
+<h3 id="51-remote-metaroot-api"><a class="header" href="#51-remote-metaroot-api">5.1 Remote <code>meta/root</code> API</a></h3>
+<p>新增一个独立 <code>meta/root</code> service，暴露 <code>VirtualLog</code> 能力，而不是暴露完整 Coordinator 语义。</p>
+<p>最小 API：</p>
+<pre><code class="language-proto">service MetadataRoot {
+  rpc Append(AppendRequest) returns (AppendResponse);
+  rpc FenceAllocator(FenceAllocatorRequest) returns (FenceAllocatorResponse);
+  rpc Observe(ObserveRequest) returns (ObserveResponse);
+  rpc WaitTail(WaitTailRequest) returns (WaitTailResponse);
+  rpc SubscribeTail(SubscribeTailRequest) returns (stream TailAdvance);
+  rpc Campaign(CampaignRequest) returns (CampaignResponse);
+  rpc Status(StatusRequest) returns (StatusResponse);
+}
+</code></pre>
+<p>这层 API 的原则：</p>
+<ul>
+<li>只表达 root log / checkpoint / tail / fence。</li>
+<li>不暴露 <code>GetRegionByKey</code>。</li>
+<li>不暴露 scheduler policy。</li>
+<li>不把 <code>meta/root</code> 做成第二个 Coordinator。</li>
+</ul>
+<p>写 RPC 必须有明确 leader redirect 语义：</p>
+<ul>
+<li><code>Append</code>、<code>FenceAllocator</code>、<code>Campaign</code> 只能由 <code>meta/root</code> leader 接受。</li>
+<li>follower 返回 <code>NOT_LEADER</code>，并尽量携带 <code>leader_id</code> / <code>leader_addr</code>。</li>
+<li><code>meta/root/client</code> 负责自动刷新 leader hint 并重试 retryable write。</li>
+<li>这和 raftstore 的 <code>NotLeader</code> 路由模型一致，不能让上层 Coordinator 猜测哪个 root peer 是 leader。</li>
+</ul>
+<p>对应代码落点：</p>
+<ul>
+<li><code>meta/root/server</code></li>
+<li><code>meta/root/client</code></li>
+<li><code>coordinator/storage/root_remote.go</code></li>
+</ul>
+<p><code>coordinator/storage/root_open.go</code> 里的 <code>rootBackend</code> 已经是天然分离点。</p>
+<h3 id="52-coordinator-lease"><a class="header" href="#52-coordinator-lease">5.2 Coordinator lease</a></h3>
+<p>分离后，Coordinator 不再天然跟 <code>meta/root</code> raft leader co-located，所以必须定义谁拥有 singleton service 权限。</p>
+<p>需要 singleton owner 的能力：</p>
+<ul>
+<li><code>Tso</code></li>
+<li><code>AllocID</code></li>
+<li>scheduler operation planning</li>
+</ul>
+<p>不需要 singleton owner 的能力：</p>
+<ul>
+<li><code>GetRegionByKey</code></li>
+<li><code>RegionLiveness</code></li>
+<li>local <code>StoreHeartbeat</code> stats recording</li>
+<li><code>PublishRootEvent</code> 的最终串行化，因为它本身由 <code>meta/root</code> raft append 串行化</li>
+</ul>
+<p>但是 <code>PublishRootEvent</code> 的 pre-assessment 依赖 Coordinator view，所以 separated mode 下它必须带明确的 root precondition：</p>
+<ul>
+<li>request 带 <code>ExpectedClusterEpoch</code> 或 <code>ExpectedRootToken</code>。</li>
+<li>Coordinator 必须先 catch up 到该 token，再做 assessment。</li>
+<li>Append 成功后，Coordinator 要么 wait 到 returned token，要么在 response 中返回 committed root token，要求 caller 后续用 freshness 检查。</li>
+</ul>
+<p>Lease 事件可以作为 rooted truth 的一部分：</p>
+<pre><code class="language-go">type CoordinatorLease struct {
+    HolderID     string
+    Term         uint64
+    ExpiresUnixNano int64
+    IDFence      uint64
+    TSOFence     uint64
+}
+</code></pre>
+<p><code>Campaign</code> 的语义必须明确：</p>
+<ol>
+<li>Coordinator 向 <code>meta/root</code> leader 提交 <code>KindCoordinatorLease</code> campaign。</li>
+<li><code>meta/root</code> 状态机检查当前 lease 是否仍 active。</li>
+<li>如果已有 active holder，返回失败并携带 current holder / expiry / leader hint。</li>
+<li>如果没有 active holder，写入新 lease，返回 success、lease term、expiry、ID fence、TSO fence。</li>
+<li>获胜 Coordinator 必须先根据 returned fences 初始化本地 allocator window，然后才能开放 <code>Tso</code>、<code>AllocID</code> 和 scheduler operation。</li>
+</ol>
+<p>约束：</p>
+<ul>
+<li>同一时间最多一个 active holder。</li>
+<li>Lease renew 必须通过 <code>meta/root</code> append 或 compare-and-fence 完成。</li>
+<li>Holder 失去 lease 后必须拒绝 <code>Tso</code>、<code>AllocID</code> 和 scheduler operation。</li>
+<li>Follower Coordinator 可以继续服务 best-effort / bounded route read。</li>
+</ul>
+<h3 id="53-tsoid-window"><a class="header" href="#53-tsoid-window">5.3 TSO/ID window</a></h3>
+<p>直接每次 <code>Tso</code> / <code>AllocID</code> 写 root fence 不可接受。</p>
+<p>需要窗口预分配：</p>
+<pre><code class="language-text">root fence = durable upper bound
+local current = in-memory next value
+window high = already fenced high watermark
+</code></pre>
+<p>TSO 分配流程：</p>
+<pre><code class="language-text">if current + count &lt;= window_high:
+    return from memory
+else:
+    require active coordinator lease
+    FenceAllocator(TSO, current + window_size)
+    window_high = returned fence
+    return from memory
+</code></pre>
+<p>ID 也应该支持同样机制，但优先级不同。</p>
+<p>当前代码里 <code>AllocID</code> 已经实现并持久化 fence，但生产拓扑路径还没有真正调用它：<code>store_id</code>、<code>region_id</code>、<code>peer_id</code> 仍然主要来自静态配置或调用方显式传入。也就是说：</p>
+<ul>
+<li>TSO window 是 separated mode 的必要前置条件。</li>
+<li>ID window 是边界统一和未来动态 topology 的准备，不是近期性能瓶颈。</li>
+</ul>
+<p>区别只是频率：</p>
+<ul>
+<li>TSO 是事务热路径，必须 window。</li>
+<li>ID 当前频率低，但最好复用同一套 window 机制，避免未来 <code>AddStore</code>、split、peer add 高频时重新设计。</li>
+</ul>
+<p>崩溃恢复语义：</p>
+<ul>
+<li>已 fence 但未使用的窗口可以跳过。</li>
+<li>新 holder 从 durable fence 之后继续分配。</li>
+<li>ID / TSO 要求唯一和单调，不要求连续。</li>
+</ul>
+<p>这和 TiKV TSO 以及多数工业 allocator 的做法一致。</p>
+<h2 id="6-性能分析"><a class="header" href="#6-性能分析">6. 性能分析</a></h2>
+<h3 id="61-数据平面"><a class="header" href="#61-数据平面">6.1 数据平面</a></h3>
+<p>无影响。</p>
+<p>KV 读写仍然是：</p>
+<pre><code class="language-text">client -&gt; raftstore leader peer
+</code></pre>
+<p>不经过 <code>coordinator</code> 或 <code>meta/root</code>。</p>
+<h3 id="62-路由读"><a class="header" href="#62-路由读">6.2 路由读</a></h3>
+<p>正常情况下无明显影响。</p>
+<p><code>GetRegionByKey</code> 仍然读 Coordinator in-memory view。</p>
+<p>区别在于 separated mode 的 view catch-up 更容易落后，所以强 freshness 请求可能等待 tail：</p>
+<pre><code class="language-text">FRESHNESS_BEST_EFFORT -&gt; 直接返回当前 view
+FRESHNESS_BOUNDED     -&gt; lag 在 bound 内才返回
+FRESHNESS_STRONG      -&gt; 必须 catch up 到 current root token
+</code></pre>
+<p>这不是吞吐问题，而是语义选择。</p>
+<h3 id="63-tsoid"><a class="header" href="#63-tsoid">6.3 TSO/ID</a></h3>
+<p>不做 window：不可接受。</p>
+<p>做 window：可接受。</p>
+<p>假设：</p>
+<pre><code class="language-text">TSO request = 100k/s
+window size = 10k
+remote fence latency = 1ms
+</code></pre>
+<p>则 root fence 写频率约为：</p>
+<pre><code class="language-text">100k / 10k = 10 writes/s
+</code></pre>
+<p>热路径是内存 atomic / mutex，不再是 remote raft write。</p>
+<h3 id="64-topology-change"><a class="header" href="#64-topology-change">6.4 Topology change</a></h3>
+<p><code>split</code>、<code>merge</code>、<code>peer change</code> 本来就不是高频数据路径。</p>
+<p>Separated mode 多一次 root RPC 和 tail catch-up，通常是毫秒级，不影响整体系统吞吐。</p>
+<p>真正要守住的是 correctness：append 成功后，caller 不能假设所有 Coordinator 立刻看见新 topology。</p>
+<h2 id="7-正确性边界"><a class="header" href="#7-正确性边界">7. 正确性边界</a></h2>
+<h3 id="71-lease-safety"><a class="header" href="#71-lease-safety">7.1 Lease safety</a></h3>
+<p>不变量：</p>
+<pre><code class="language-text">At most one Coordinator may allocate TSO/ID or emit scheduler operations at a time.
+</code></pre>
+<p>实现要求：</p>
+<ul>
+<li>Lease 写入必须走 <code>meta/root</code> 串行化。</li>
+<li>Lease holder 每次发号前都必须检查本地 <code>lease_active</code> 标志，不能只在 window refill 时检查。</li>
+<li>Lease holder 必须有独立的 expiry monitor，定期检查本地 lease deadline。</li>
+<li>Expiry monitor 必须在 <code>ExpiresUnixNano - clock_skew_buffer</code> 时主动停止发号，把本地 <code>lease_active</code> 置为 false。</li>
+<li>Lease 到期前无法 renew 时，holder 必须停止发号，而不是继续靠本地窗口服务。</li>
+</ul>
+<p>不能把 safety 建立在 <code>window_exhaust_time &lt; lease_ttl / 2</code> 上。低流量时窗口可能很久都不会耗尽，如果只在 refill 时检查 lease，旧 holder 会在 lease 过期后继续用旧 window 发号。</p>
+<p>正确的安全条件是：</p>
+<pre><code class="language-text">Tso / AllocID fast path = require lease_active &amp;&amp; now &lt; lease_deadline - clock_skew_buffer
+</code></pre>
+<p>Lease TTL 必须覆盖物理时钟和运行时抖动：</p>
+<pre><code class="language-text">lease_ttl &gt; max_clock_skew + max_gc_pause + max_network_jitter + renew_margin
+</code></pre>
+<p>工程默认值应该保守，例如 TTL &gt;= 10s，再通过测试和 benchmark 调整。窗口大小只影响 refill 频率和最多跳过多少 ID / TSO，不应该决定 lease safety。</p>
+<h3 id="72-allocator-monotonicity"><a class="header" href="#72-allocator-monotonicity">7.2 Allocator monotonicity</a></h3>
+<p>不变量：</p>
+<pre><code class="language-text">new_holder_start &gt; max(old_holder_fenced_high)
+</code></pre>
+<p>因此 lease state 必须携带或能读取：</p>
+<ul>
+<li>latest ID fence</li>
+<li>latest TSO fence</li>
+</ul>
+<p>新 holder 获得 lease 后必须先 fence allocator，再开放 <code>Tso</code> / <code>AllocID</code>。</p>
+<h3 id="73-view-freshness"><a class="header" href="#73-view-freshness">7.3 View freshness</a></h3>
+<p>不变量：</p>
+<pre><code class="language-text">Coordinator may serve stale routes only when the requested freshness permits it.
+</code></pre>
+<p>Separated mode 必须严格使用：</p>
+<ul>
+<li><code>RootToken</code></li>
+<li><code>root_lag</code></li>
+<li><code>CatchUpState</code></li>
+<li><code>DegradedMode</code></li>
+</ul>
+<p>对于 <code>FRESHNESS_STRONG</code>：</p>
+<ul>
+<li>如果 Coordinator 没有 catch up 到 root current token，必须等待或失败。</li>
+<li>不能返回 best-effort route。</li>
+</ul>
+<p>对于 <code>FRESHNESS_BEST_EFFORT</code>：</p>
+<ul>
+<li>可以返回当前 view。</li>
+<li>必须携带 degraded / lag 信息，让 caller 知道风险。</li>
+</ul>
+<h3 id="74-publishrootevent-write-after-read"><a class="header" href="#74-publishrootevent-write-after-read">7.4 PublishRootEvent write-after-read</a></h3>
+<p>Separated mode 中，<code>PublishRootEvent</code> 的正确流程应该是：</p>
+<pre class="mermaid">sequenceDiagram
+    participant Store as raftstore executor
+    participant Coord as coordinator
+    participant Root as meta/root service
+
+    Store-&gt;&gt;Coord: PublishRootEvent(expected_root_token / epoch)
+    Coord-&gt;&gt;Root: Observe / catch up if needed
+    Coord-&gt;&gt;Coord: Assess lifecycle on rooted snapshot
+    Coord-&gt;&gt;Root: Append RootEvent
+    Root--&gt;&gt;Coord: committed root token
+    Coord-&gt;&gt;Root: WaitTail(committed token) or return token
+    Coord--&gt;&gt;Store: accepted + committed root token
+</pre>
+
+<p>这个流程避免 stale Coordinator 基于旧 view 做错误 assessment。</p>
+<h2 id="8-为什么不是让-metaroot-直接发-tso"><a class="header" href="#8-为什么不是让-metaroot-直接发-tso">8. 为什么不是让 meta/root 直接发 TSO</a></h2>
+<p>可以，但不推荐作为第一方案。</p>
+<p>方案对比：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>方案</th><th>优点</th><th>问题</th></tr>
+</thead>
+<tbody>
+<tr><td>TSO 下沉到 <code>meta/root</code></td><td>leader 唯一性最直接</td><td><code>meta/root</code> 从 truth kernel 变成 service；热路径压到 root leader</td></tr>
+<tr><td>Coordinator lease + window</td><td>保持 <code>meta/root</code> 小；TSO 热路径在 Coordinator 内存</td><td>需要 lease 正确性和 window refill</td></tr>
+<tr><td>Coordinator 自己 raft</td><td>语义独立</td><td>引入第三个 consensus 层，不值得</td></tr>
+</tbody>
+</table>
+</div>
+<p>推荐选择：</p>
+<pre><code class="language-text">Coordinator lease + TSO/ID window
+</code></pre>
+<p>原因：它保留 NoKV 当前最重要的边界：</p>
+<ul>
+<li><code>meta/root</code> 是 durable truth kernel。</li>
+<li><code>coordinator</code> 是 service/view/runtime host。</li>
+<li><code>raftstore</code> 是 executor。</li>
+</ul>
+<h2 id="9-实现路线"><a class="header" href="#9-实现路线">9. 实现路线</a></h2>
+<h3 id="phase-0不开放-separated-mode"><a class="header" href="#phase-0不开放-separated-mode">Phase 0：不开放 separated mode</a></h3>
+<p>保持当前正式模式：</p>
+<ul>
+<li>local co-located</li>
+<li>replicated co-located</li>
+</ul>
+<p>这个阶段的约束已经完成；后续实现虽然已经开放 <code>--root-mode=remote</code>，但它仍然不是默认推荐模式。</p>
+<h3 id="phase-1先做-allocator-window"><a class="header" href="#phase-1先做-allocator-window">Phase 1：先做 allocator window</a></h3>
+<p>状态：TSO window 和 ID window 已实现。</p>
+<p>已经落地：</p>
+<ul>
+<li><code>coordinator/server</code> 增加 allocator window state。</li>
+<li><code>SaveAllocatorState</code> 只在 ID / TSO window refill 时调用。</li>
+<li>当前 co-located 模式也使用 window。</li>
+<li>reload rooted allocator fence 时，不会消耗本地仍然 active 的 allocator window。</li>
+<li><code>AllocID</code> 仍然没有生产拓扑消费者；ID window 主要是边界统一和 future dynamic topology 的准备。</li>
+</ul>
+<p>测试：</p>
+<ul>
+<li>ID / TSO 单调性。</li>
+<li>ID / TSO window 内不会重复持久化 fence。</li>
+<li>reload 不会消耗 active allocator window。</li>
+<li>leader 切换后从 fence 继续。</li>
+<li>window refill 失败后不得继续服务 allocator 请求。</li>
+</ul>
+<h3 id="phase-2定义-root-remote-api但只做-clientserver-harness"><a class="header" href="#phase-2定义-root-remote-api但只做-clientserver-harness">Phase 2：定义 root remote API，但只做 client/server harness</a></h3>
+<p>状态：最小 harness 已实现；remote ops path 已有最小 CLI/脚本入口。</p>
+<p>已经落地：</p>
+<ul>
+<li><code>pb/meta/root.proto</code> 增加 <code>MetadataRoot</code> 服务。</li>
+<li><code>meta/root/remote</code> 提供 gRPC service/client。</li>
+<li>remote client 实现 <code>Snapshot</code>、<code>Append</code>、<code>FenceAllocator</code>、<code>IsLeader</code>、<code>LeaderID</code>。</li>
+<li>remote client 实现 unary <code>ObserveCommitted</code>、<code>ObserveTail</code>、<code>WaitForTail</code>，可驱动 <code>RootStore</code> catch-up。</li>
+<li>remote client 支持多 endpoint，并在写请求收到 <code>leader_id</code> hint 后重试 leader。</li>
+<li>coordinator 可以通过现有 <code>RootStore</code> contract 包装 remote client。</li>
+<li>follower 写请求返回 <code>FailedPrecondition</code>，错误文本携带 <code>leader_id</code> hint。</li>
+</ul>
+<p>仍未落地：</p>
+<ul>
+<li>watch push / streaming notification；当前只有 unary observe/wait。</li>
+<li>更完整的 remote deployment observability。</li>
+</ul>
+<p>测试：</p>
+<ul>
+<li>remote root append / snapshot through <code>RootStore</code>。</li>
+<li>remote allocator fence through <code>RootStore</code>。</li>
+<li>remote root write on follower returns <code>NOT_LEADER + leader_hint</code>。</li>
+<li>remote root client follows leader redirect and retries write。</li>
+<li>remote RootStore subscription can observe tail advance through unary observe/wait。</li>
+<li>invalid allocator kind returns <code>InvalidArgument</code>。</li>
+</ul>
+<h3 id="phase-3coordinator-lease"><a class="header" href="#phase-3coordinator-lease">Phase 3：Coordinator lease</a></h3>
+<p>状态：root truth 层和 coordinator runtime 最小 gate 已实现；默认仍未启用 separated deployment。</p>
+<p>已经落地：</p>
+<ul>
+<li><code>meta/root/event</code> 增加 <code>CoordinatorLeaseGranted</code> rooted event。</li>
+<li><code>meta/root/state</code> checkpoint state 增加 <code>CoordinatorLease</code>。</li>
+<li>local / replicated root backend 增加 <code>CampaignCoordinatorLease</code>。</li>
+<li>remote root RPC 增加 <code>Campaign</code>。</li>
+<li>active holder 未过期时，新 holder campaign 返回 current holder。</li>
+<li>holder 自己可以 renew，过期后新 holder 可以接管。</li>
+<li>campaign event 同时推进 ID / TSO durable fences。</li>
+<li><code>coordinator/server.Service</code> 增加显式 <code>ConfigureCoordinatorLease(...)</code>。</li>
+<li>开启 lease gate 后，<code>Tso</code> / <code>AllocID</code> / scheduler operation 都要求当前 holder 持有 lease。</li>
+<li><code>StoreHeartbeat</code> 仍然接受统计上报，但在无 lease 或 follower 时不返回 scheduler operations。</li>
+<li>runtime 在 <code>ExpiresUnixNano - clock_skew_buffer</code> 前停止继续使用本地 lease，并要求先 renew/campaign。</li>
+<li><code>RunCoordinatorLeaseLoop(ctx)</code> 已落地；启用 <code>--coordinator-id</code> 的 coordinator 会后台续租。</li>
+<li>rooted <code>ReleaseCoordinatorLease()</code> 已落地；graceful shutdown 会显式 release 当前 holder lease。</li>
+</ul>
+<p>仍未落地：</p>
+<ul>
+<li>更丰富的 release observability / metrics。</li>
+<li>真实网络下的 lease / recovery 评估。</li>
+<li>external authority baseline allocator 对比。</li>
+</ul>
+<p>测试：</p>
+<ul>
+<li>active holder 存在时，<code>Campaign</code> 返回失败和 current holder。</li>
+<li>lease 过期后，新 holder 接管。</li>
+<li>lease event replay 后恢复 holder 和 allocator fences。</li>
+<li>replicated follower refresh 后能看到 lease 和 fences。</li>
+<li>remote campaign round-trip。</li>
+</ul>
+<h3 id="phase-4开放-separated-deployment"><a class="header" href="#phase-4开放-separated-deployment">Phase 4：开放 separated deployment</a></h3>
+<p>新增 CLI：</p>
+<pre><code class="language-bash">nokv meta-root \
+  --addr 127.0.0.1:2380 \
+  --mode replicated \
+  --transport-addr 127.0.0.1:3380 \
+  --node-id 1 \
+  --peer 1=127.0.0.1:3380 \
+  --peer 2=127.0.0.1:3381 \
+  --peer 3=127.0.0.1:3382 \
+  --workdir ./artifacts/meta-1
+
+nokv coordinator \
+  --addr 127.0.0.1:2379 \
+  --root-mode remote \
+  --root-peer 1=127.0.0.1:2380 \
+  --root-peer 2=127.0.0.1:2381 \
+  --root-peer 3=127.0.0.1:2382
+</code></pre>
+<p>当前状态：</p>
+<ul>
+<li><code>nokv meta-root</code> 已落地，支持 <code>local|replicated</code>。</li>
+<li><code>nokv coordinator --root-mode=remote</code> 已落地，可连接 remote <code>meta/root</code>。</li>
+<li><code>--coordinator-id</code>、<code>--lease-ttl</code>、<code>--lease-renew-before</code> 已接入 <code>nokv coordinator</code> CLI。</li>
+<li><code>remote</code> 模式现在要求显式提供稳定 <code>--coordinator-id</code>。</li>
+<li><code>scripts/ops/serve-meta-root.sh</code> 已落地，可独立控制单个 <code>meta/root</code> 进程。</li>
+<li><code>scripts/dev/separated-cluster.sh</code> 已落地，可直接启动 <code>3 meta-root + 1 coordinator(remote) + stores</code> 的本地编排。</li>
+<li>仍未补齐稳定运维说明和更完整的 observability。</li>
+</ul>
+<p><code>--coordinator-id</code> 必须是稳定配置 ID，不应该每次启动生成 UUID。</p>
+<p>原因：</p>
+<ul>
+<li>lease holder 身份需要可观测、可审计。</li>
+<li>重启后的同一 Coordinator 可以用同一身份重新 campaign。</li>
+<li>随机 UUID 会让运维日志和 lease ownership 难以追踪。</li>
+</ul>
+<p>稳定 ID 不表示自动续租旧 lease；重启后仍必须重新 campaign，并根据 <code>meta/root</code> 返回的 fences 初始化 allocator window。</p>
+<p>默认仍然不应该是 separated mode。</p>
+<h2 id="10-什么时候值得启用-separated-mode"><a class="header" href="#10-什么时候值得启用-separated-mode">10. 什么时候值得启用 separated mode</a></h2>
+<p>值得启用：</p>
+<ul>
+<li><code>GetRegionByKey</code> / route lookup QPS 成为瓶颈。</li>
+<li>需要 Coordinator 独立滚动升级。</li>
+<li>需要把 <code>meta/root</code> 失败域和 service layer 失败域分开。</li>
+<li>要做控制面研究，需要展示 co-located 与 separated 的明确 tradeoff。</li>
+</ul>
+<p>不值得启用：</p>
+<ul>
+<li>小集群。</li>
+<li>单机 / 本地实验。</li>
+<li>Coordinator QPS 远低于 raftstore 数据面 QPS。</li>
+<li>还没有真实网络验证、baseline 对比和成熟运维手册。</li>
+</ul>
+<p>当前项目阶段推荐：</p>
+<pre><code class="language-text">继续使用 Mode B: 3 coordinator + replicated meta
+</code></pre>
+<p>原因很简单：它已经提供 HA，TSO 语义简单，部署也更少。</p>
+<h2 id="11-workshop--研究定位"><a class="header" href="#11-workshop--研究定位">11. Workshop / 研究定位</a></h2>
+<p>这个设计的研究价值不是“发明了 Delos”。</p>
+<p>诚实定位应该是：</p>
+<blockquote>
+<p>NoKV 把 Delos 的 VirtualLog 思路应用到分布式 KV 控制面，并进一步把 durable truth、service view、data-plane executor、freshness contract 和 optional separated deployment 放进同一个可实现系统里。</p>
+</blockquote>
+<p>可 defend 的贡献点：</p>
+<ul>
+<li>在 KV 控制面里把 authority / service / executor 分开。</li>
+<li>把 route freshness 做成显式 API，而不是依赖 NotLeader / EpochNotMatch 反推。</li>
+<li>展示 co-located 和 separated deployment 可以共享同一个 <code>VirtualLog</code> / <code>RootStore</code> contract。</li>
+<li>分析 TSO/ID allocator 在 separated deployment 下必须用 lease + window，否则会变成 root 写瓶颈。</li>
+</ul>
+<p>不应该声称：</p>
+<ul>
+<li>新共识协议。</li>
+<li>新 VirtualLog 理论。</li>
+<li>性能一定优于 TiKV/PD。</li>
+</ul>
+<p>更合理的 paper 类型：</p>
+<ul>
+<li>workshop experience paper</li>
+<li>systems design note</li>
+<li>research platform paper</li>
+</ul>
+<p>当前更诚实的分层是：</p>
+<ul>
+<li>HotStorage / systems workshop：证据已经基本够用。</li>
+<li>CHEOPS 这类 systems workshop：再补真实网络实验会更稳。</li>
+<li>CIDR：还需要多机或 <code>tc netem</code> 级别实验、baseline 对比，以及更收敛的论文叙事。</li>
+</ul>
+<p>需要补的实验：</p>
+<ul>
+<li>co-located vs separated route lookup QPS。</li>
+<li>TSO no-window vs window 的吞吐和 tail latency。</li>
+<li>root catch-up lag 对 <code>FRESHNESS_STRONG</code> / <code>BOUNDED</code> / <code>BEST_EFFORT</code> 的影响。</li>
+<li>Coordinator crash / root leader switch 下 allocator monotonicity。</li>
+</ul>
+<h2 id="12-当前证据的边界"><a class="header" href="#12-当前证据的边界">12. 当前证据的边界</a></h2>
+<p>这部分需要明确写死，否则很容易在论文里说过头。</p>
+<p>当前已经有的证据：</p>
+<ul>
+<li>separated deployment 的 correctness path 已经跑通。</li>
+<li>allocator window 的必要性已经能通过 benchmark 入口和退化对照组说明。</li>
+<li>coordinator crash / recovery 和 root leader change 都有直接测试覆盖。</li>
+</ul>
+<p>当前还不该声称的内容：</p>
+<ul>
+<li><code>remote</code> benchmark 的绝对延迟代表真实多机部署。当前 benchmark 使用的是进程内 <code>bufconn</code>，它只说明 API stack 成本，不说明真实网络 RTT。</li>
+<li>separated deployment 在生产环境里已经成熟。当前它是 implemented experimental mode，不是默认 ops path。</li>
+<li>性能优于 TiKV/PD、etcd 或其他工业控制面。当前没有可比的 baseline 数据。</li>
+</ul>
+<p>下一步真正该补的是：</p>
+<ol>
+<li>把 <code>BenchmarkControlPlaneAllocID*</code> 扩到真实 TCP。</li>
+<li>在 <code>tc netem</code> 或三进程跨 host 条件下重跑 B1/B2/B3。</li>
+<li>加一个 external authority baseline，例如 etcd 每次 <code>put</code> 一次 fence 的 allocator。</li>
+<li>把 restart / recovery recipe 写成可重复的 ops 文档。</li>
+</ol>
+<h2 id="13-总结"><a class="header" href="#13-总结">13. 总结</a></h2>
+<p><code>coordinator</code> 和 <code>meta/root</code> 分离部署有价值，但不是当前默认路线。</p>
+<p>它解决的是：</p>
+<ul>
+<li>Coordinator 水平扩展。</li>
+<li>独立失败域。</li>
+<li>独立升级和研究可观测性。</li>
+</ul>
+<p>它带来的代价是：</p>
+<ul>
+<li>TSO/ID 必须做 lease + window。</li>
+<li>scheduler owner 必须明确。</li>
+<li>route freshness 必须严格执行。</li>
+<li>运维从一套集群变成两套角色。</li>
+</ul>
+<p>所以当前正确路线不是继续堆功能，而是把证据补完整：</p>
+<ol>
+<li>保持 co-located mode 作为默认运维路径。</li>
+<li>把 separated mode 的真实网络实验和 baseline 对比补齐。</li>
+<li>把 restart / recovery / observability 文档补到可重复执行。</li>
+<li>再决定是把它定位为实验部署，还是更正式的 ops 选项。</li>
+</ol>
+<p>这样做符合 NoKV 的主线：先守住 correctness 和边界，再谈部署扩展性。</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../notes/2026-04-05-range-filter-from-grf.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../notes/2026-04-05-range-filter-from-grf.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-c2a407aa.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../docs/custom-732fa610.js"></script>
+        <script src="../docs/mermaid-init-8a66ee6c.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

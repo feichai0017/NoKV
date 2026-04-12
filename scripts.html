@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a947e9d9.js";
+            window.path_to_searchindex_js = "searchindex-dc6edf3c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-8f631623.js"></script>
+        <script src="toc-c05f2810.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -226,6 +226,34 @@
 </ul>
 </li>
 </ul>
+<h3 id="scriptsdevseparated-clustersh"><a class="header" href="#scriptsdevseparated-clustersh"><code>scripts/dev/separated-cluster.sh</code></a></h3>
+<ul>
+<li>Purpose: build <code>nokv</code> and <code>nokv-config</code>, start a local separated control
+plane, seed fresh store workdirs, then start stores from <code>raft_config.json</code>.</li>
+<li>Starts:
+<ul>
+<li>three <code>nokv meta-root --mode replicated</code> processes</li>
+<li>one <code>nokv coordinator --root-mode remote</code></li>
+<li>all configured stores</li>
+</ul>
+</li>
+<li>Example:
+<pre><code class="language-bash">./scripts/dev/separated-cluster.sh --config ./raft_config.example.json --workdir ./artifacts/separated-cluster
+</code></pre>
+</li>
+<li>Notes:
+<ul>
+<li>uses fixed local metadata-root gRPC endpoints <code>127.0.0.1:2380/2381/2382</code></li>
+<li>uses fixed local metadata-root raft transport endpoints <code>127.0.0.1:3380/3381/3382</code></li>
+<li>uses an isolated <code>--workdir</code> tree and does not reuse config-defined store
+workdirs</li>
+<li>this is a bootstrap/dev launcher, not a restart command</li>
+<li>production-style restarts should run <code>nokv meta-root</code>,
+<code>nokv coordinator --root-mode remote</code>, and <code>scripts/ops/serve-store.sh</code>
+directly against the same durable workdirs</li>
+</ul>
+</li>
+</ul>
 <h3 id="scriptsopsbootstrapsh"><a class="header" href="#scriptsopsbootstrapsh"><code>scripts/ops/bootstrap.sh</code></a></h3>
 <ul>
 <li>Purpose: seed local peer catalog metadata into a set of store directories derived from a path template.</li>
@@ -268,6 +296,29 @@ provide <code>storeID -&gt; addr</code></li>
 <li>if a static transport override is needed, use <code>--store-addr &lt;store-id&gt;=&lt;addr&gt;</code>
 rather than a peer-id keyed mapping</li>
 <li><code>--scope docker</code> selects container-friendly addresses</li>
+</ul>
+</li>
+</ul>
+<h3 id="scriptsopsserve-meta-rootsh"><a class="header" href="#scriptsopsserve-meta-rootsh"><code>scripts/ops/serve-meta-root.sh</code></a></h3>
+<ul>
+<li>Purpose: thin wrapper around <code>nokv meta-root</code> for one metadata-root process.</li>
+<li>Example:
+<pre><code class="language-bash">./scripts/ops/serve-meta-root.sh \
+  --addr 127.0.0.1:2380 \
+  --mode replicated \
+  --workdir ./artifacts/separated-cluster/meta-root-1 \
+  --node-id 1 \
+  --transport-addr 127.0.0.1:3380 \
+  --peer 1=127.0.0.1:3380 \
+  --peer 2=127.0.0.1:3381 \
+  --peer 3=127.0.0.1:3382
+</code></pre>
+</li>
+<li>Notes:
+<ul>
+<li><code>--peer</code> values are metadata-root raft transport addresses, not gRPC
+service addresses</li>
+<li>forwards shutdown signals to <code>nokv meta-root</code></li>
 </ul>
 </li>
 </ul>

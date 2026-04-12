@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a947e9d9.js";
+            window.path_to_searchindex_js = "searchindex-dc6edf3c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-8f631623.js"></script>
+        <script src="toc-c05f2810.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -2003,6 +2003,11 @@ raft peers:
 <ul>
 <li><code>--addr</code> (default <code>127.0.0.1:2379</code>)</li>
 <li><code>--workdir</code> (optional persistence directory for region catalog + allocator state)</li>
+<li><code>--root-mode local|replicated|remote</code> (<code>local</code> by default)</li>
+<li><code>--root-peer nodeID=addr</code> (repeatable; used by <code>replicated</code> and <code>remote</code> rooted modes)</li>
+<li><code>--root-node-id</code>, <code>--root-transport-addr</code> (replicated rooted mode only)</li>
+<li><code>--coordinator-id</code> (stable lease owner id for rooted control-plane writes in separated mode)</li>
+<li><code>--lease-ttl</code>, <code>--lease-renew-before</code> (only used when <code>--coordinator-id</code> is set)</li>
 <li><code>--config</code> + <code>--scope host|docker</code> (resolve defaults from <code>raft_config.json</code>)</li>
 <li><code>--id-start</code>, <code>--ts-start</code> (allocator start values)</li>
 <li><code>--metrics-addr</code> (optional expvar endpoint, exposes <code>/debug/vars</code>)</li>
@@ -2015,6 +2020,94 @@ raft peers:
   --scope host \
   --metrics-addr 127.0.0.1:23790
 </code></pre>
+<p>Separated deployment example:</p>
+<pre><code class="language-bash">nokv coordinator \
+  --addr 127.0.0.1:2379 \
+  --root-mode remote \
+  --coordinator-id c1 \
+  --root-peer 1=127.0.0.1:2380 \
+  --root-peer 2=127.0.0.1:2381 \
+  --root-peer 3=127.0.0.1:2382
+</code></pre>
+<h3 id="nokv-meta-root"><a class="header" href="#nokv-meta-root"><code>nokv meta-root</code></a></h3>
+<ul>
+<li>Starts the metadata-root gRPC authority service.</li>
+<li>Common flags:
+<ul>
+<li><code>--addr</code> (default <code>127.0.0.1:2380</code>)</li>
+<li><code>--mode local|replicated</code> (<code>local</code> by default)</li>
+<li><code>--workdir</code> (required)</li>
+<li><code>--node-id</code>, <code>--transport-addr</code>, <code>--peer nodeID=addr</code> (replicated mode)</li>
+</ul>
+</li>
+</ul>
+<p>Examples:</p>
+<pre><code class="language-bash">nokv meta-root \
+  --addr 127.0.0.1:2380 \
+  --mode local \
+  --workdir ./artifacts/meta-root
+</code></pre>
+<pre><code class="language-bash">nokv meta-root \
+  --addr 127.0.0.1:2380 \
+  --mode replicated \
+  --workdir ./artifacts/meta-root-1 \
+  --node-id 1 \
+  --transport-addr 127.0.0.1:3380 \
+  --peer 1=127.0.0.1:3380 \
+  --peer 2=127.0.0.1:3381 \
+  --peer 3=127.0.0.1:3382
+</code></pre>
+<h3 id="script-helpers"><a class="header" href="#script-helpers">Script Helpers</a></h3>
+<ul>
+<li><code>scripts/ops/serve-meta-root.sh</code>
+<ul>
+<li>Starts one <code>meta-root</code> instance and forwards shutdown signals.</li>
+<li>Use this for explicit local/replicated <code>meta/root</code> process control.</li>
+</ul>
+</li>
+<li><code>scripts/ops/serve-store.sh</code>
+<ul>
+<li>Starts one <code>nokv serve</code> store against an existing durable workdir.</li>
+</ul>
+</li>
+<li><code>scripts/ops/bootstrap.sh</code>
+<ul>
+<li>Seeds fresh store workdirs from <code>config.regions</code>; not a restart tool.</li>
+</ul>
+</li>
+<li><code>scripts/dev/cluster.sh</code>
+<ul>
+<li>Dev bootstrap for co-located control plane.</li>
+</ul>
+</li>
+<li><code>scripts/dev/separated-cluster.sh</code>
+<ul>
+<li>Dev bootstrap for <code>3 meta-root + 1 coordinator(remote) + stores</code>.</li>
+<li>Uses fixed local root endpoints:
+<ul>
+<li>gRPC: <code>127.0.0.1:2380/2381/2382</code></li>
+<li>raft transport: <code>127.0.0.1:3380/3381/3382</code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="expvar-keys"><a class="header" href="#expvar-keys">Expvar Keys</a></h3>
+<ul>
+<li><code>nokv_coordinator</code>
+<ul>
+<li>Published by <code>nokv coordinator --metrics-addr ...</code></li>
+<li>Includes:
+<ul>
+<li><code>root_mode</code></li>
+<li>rooted read-state summary</li>
+<li>lease state</li>
+<li>allocator window state</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
 <hr>
 <h2 id="integration-tips"><a class="header" href="#integration-tips">Integration Tips</a></h2>
 <ul>
@@ -3903,7 +3996,8 @@ future runtime/operator model such as stalled transitions or richer catch-up
 actions.</p>
 <hr>
 <h2 id="3-mode-model"><a class="header" href="#3-mode-model">3. Mode Model</a></h2>
-<p>NoKV currently has only two supported product modes:</p>
+<p>NoKV currently has one standalone shape and three distributed control-plane
+deployment shapes.</p>
 <h3 id="standalone"><a class="header" href="#standalone"><code>standalone</code></a></h3>
 <ul>
 <li>no <code>coordinator</code></li>
@@ -3914,10 +4008,11 @@ actions.</p>
 <p>This is the default local engine shape. Standalone is not a degraded control
 plane deployment; it simply has no control plane.</p>
 <h3 id="distributed"><a class="header" href="#distributed"><code>distributed</code></a></h3>
-<p><code>distributed</code> has two formal control-plane deployments:</p>
+<p><code>distributed</code> has three control-plane deployments:</p>
 <ol>
 <li><code>single coordinator + local meta</code></li>
 <li><code>3 coordinator + replicated meta</code></li>
+<li><code>separated meta-root + remote coordinator</code></li>
 </ol>
 <p>Both deployments keep the same logical split:</p>
 <ul>
@@ -3942,13 +4037,28 @@ plane deployment; it simply has no control plane.</p>
 <li>one rooted leader accepts truth writes, followers refresh rooted state and serve read/view traffic</li>
 </ul>
 </li>
+<li><code>separated meta-root + remote coordinator</code>
+<ul>
+<li>three independent <code>nokv meta-root --mode replicated</code> processes own durable
+rooted truth</li>
+<li>one or more <code>nokv coordinator --root-mode remote</code> processes connect through
+the remote metadata-root API</li>
+<li><code>CoordinatorLease</code> gates singleton Coordinator duties: <code>AllocID</code>, <code>Tso</code>,
+and scheduler operation planning</li>
+<li>route reads still come from Coordinator’s rebuildable in-memory view and
+expose <code>Freshness</code>, <code>RootToken</code>, <code>CatchUpState</code>, and <code>DegradedMode</code></li>
+</ul>
+</li>
 </ul>
 <p>No other product control-plane mode is supported. In particular:</p>
 <ul>
-<li>there is no separate <code>meta</code> cluster</li>
-<li>there is no <code>coordinator</code> cluster larger than three members</li>
 <li>there is no dynamic metadata membership today</li>
+<li>separated mode is experimental and not the default ops path</li>
+<li>there is no production-grade dynamic <code>coordinator</code> membership manager today</li>
 </ul>
+<p>Separated deployment design and tradeoffs are discussed in
+<code>docs/notes/2026-04-12-coordinator-meta-separation.md</code>. That note is now an
+implemented experimental design note, not just a proposal.</p>
 <hr>
 <h2 id="4-persistence---workdir"><a class="header" href="#4-persistence---workdir">4. Persistence (<code>--workdir</code>)</a></h2>
 <p><code>--workdir</code> is required for every formal Coordinator deployment that hosts rooted truth.</p>
@@ -3975,6 +4085,21 @@ plane deployment; it simply has no control plane.</p>
 </li>
 </ol>
 <p>Each node must have an isolated workdir. Workdirs are not shared.</p>
+<h3 id="separated-meta-root--remote-coordinator"><a class="header" href="#separated-meta-root--remote-coordinator"><code>separated meta-root + remote coordinator</code></a></h3>
+<p>Each <code>meta-root</code> process has its own rooted workdir and raft transport address.
+The <code>coordinator</code> process does not host rooted truth; it only connects to the
+remote root endpoints through <code>--root-peer nodeID=grpc_addr</code>.</p>
+<p>Persistence ownership:</p>
+<ol>
+<li><code>meta-root</code> workdirs own durable rooted truth and replicated metadata-root
+raft state.</li>
+<li><code>coordinator</code> runtime view is rebuildable from remote <code>meta/root</code>.</li>
+<li>allocator fences and <code>CoordinatorLease</code> are rooted events, not local
+coordinator files.</li>
+</ol>
+<p><code>--coordinator-id</code> must be a stable configured identity. It is used for lease
+ownership and operator debugging; it should not be generated randomly on each
+restart.</p>
 <h3 id="rooted-bootstrap-flow"><a class="header" href="#rooted-bootstrap-flow">Rooted bootstrap flow</a></h3>
 <p>The Coordinator storage layer rebuilds its region snapshot and allocator checkpoints by
 replaying rooted truth:</p>
@@ -3987,6 +4112,10 @@ replaying rooted truth:</p>
 </ul>
 </li>
 </ul>
+<p><code>id_current</code> and <code>ts_current</code> are durable allocator fences, not necessarily the
+last values served. With allocator window preallocation they may be ahead of the
+last returned ID or timestamp; restart recovery intentionally resumes after the
+fence and skips unused values.</p>
 <p>Startup flow:</p>
 <ol>
 <li>Open rooted <code>coordinator/storage</code> from <code>--workdir</code>.</li>
@@ -4101,6 +4230,13 @@ service surface.</p>
 <li>only the rooted leader may commit truth writes</li>
 <li>followers refresh rooted state and serve read/view traffic</li>
 </ul>
+<p>In separated mode:</p>
+<ul>
+<li><code>meta-root</code> leadership determines which root endpoint accepts truth writes</li>
+<li><code>CoordinatorLease</code> determines which Coordinator may serve singleton duties</li>
+<li>non-holder Coordinators may still serve route reads if their rooted view
+satisfies the caller’s freshness contract</li>
+</ul>
 <h3 id="leader-only-writes"><a class="header" href="#leader-only-writes">Leader-only writes</a></h3>
 <p>These RPCs require rooted leadership:</p>
 <ul>
@@ -4112,6 +4248,8 @@ service surface.</p>
 </ul>
 <p>Followers return <code>FailedPrecondition</code> with <code>coordinator not leader</code> semantics, and
 clients are expected to retry against another Coordinator endpoint.</p>
+<p>In separated mode, <code>AllocID</code>, <code>Tso</code>, and scheduler operation planning also
+require the local Coordinator to hold <code>CoordinatorLease</code>.</p>
 <h3 id="any-node-reads"><a class="header" href="#any-node-reads">Any-node reads</a></h3>
 <p>These RPCs may be served by any Coordinator node:</p>
 <ul>
@@ -4166,6 +4304,37 @@ converge on the rooted leader. Read RPCs may use any available Coordinator endpo
 <li>one transport address per Coordinator node</li>
 <li>no dynamic membership</li>
 </ul>
+<h3 id="separated-meta-root--remote-coordinator-1"><a class="header" href="#separated-meta-root--remote-coordinator-1"><code>separated meta-root + remote coordinator</code></a></h3>
+<p>Start three metadata-root peers:</p>
+<pre><code class="language-bash">go run ./cmd/nokv meta-root \
+  -addr 127.0.0.1:2380 \
+  -mode replicated \
+  -workdir ./artifacts/separated/meta-root-1 \
+  -node-id 1 \
+  -transport-addr 127.0.0.1:3380 \
+  -peer 1=127.0.0.1:3380 \
+  -peer 2=127.0.0.1:3381 \
+  -peer 3=127.0.0.1:3382
+</code></pre>
+<p>Nodes 2 and 3 use the same peer map but change:</p>
+<ul>
+<li><code>-addr</code></li>
+<li><code>-workdir</code></li>
+<li><code>-node-id</code></li>
+<li><code>-transport-addr</code></li>
+</ul>
+<p>Start one remote-root Coordinator:</p>
+<pre><code class="language-bash">go run ./cmd/nokv coordinator \
+  -addr 127.0.0.1:2379 \
+  -root-mode remote \
+  -coordinator-id c1 \
+  -root-peer 1=127.0.0.1:2380 \
+  -root-peer 2=127.0.0.1:2381 \
+  -root-peer 3=127.0.0.1:2382
+</code></pre>
+<p>For local bootstrap, use:</p>
+<pre><code class="language-bash">./scripts/dev/separated-cluster.sh --config ./raft_config.example.json
+</code></pre>
 <hr>
 <h2 id="10-comparison-tinykv--tikv"><a class="header" href="#10-comparison-tinykv--tikv">10. Comparison: TinyKV / TiKV</a></h2>
 <h3 id="tinykv-teaching-stack"><a class="header" href="#tinykv-teaching-stack">TinyKV (teaching stack)</a></h3>
@@ -4183,15 +4352,19 @@ converge on the rooted leader. Read RPCs may use any available Coordinator endpo
 <h3 id="nokv-coordinator-current"><a class="header" href="#nokv-coordinator-current">NoKV Coordinator (current)</a></h3>
 <ul>
 <li>Standalone mode has no Coordinator and no metadata-root service.</li>
-<li>Distributed mode has two formal control-plane deployments:</li>
+<li>Distributed mode has three control-plane deployments:</li>
 <li><code>single coordinator + local meta</code></li>
 <li><code>3 coordinator + replicated meta</code></li>
-<li>In both deployments, each <code>coordinator</code> process hosts a same-process rooted backend
-and rebuilds its service-side view from rooted truth.</li>
+<li><code>separated meta-root + remote coordinator</code></li>
+<li>In co-located deployments, each <code>coordinator</code> process hosts a same-process
+rooted backend and rebuilds its service-side view from rooted truth.</li>
+<li>In separated deployment, <code>meta-root</code> is the durable truth service and
+<code>coordinator</code> is a remote rooted view/service layer.</li>
 <li>Coordinator persistence is intentionally limited to rooted control-plane truth:
 <ul>
 <li>region descriptor publish/tombstone events</li>
 <li>allocator durability (<code>AllocID</code>, <code>TSO</code>)</li>
+<li><code>CoordinatorLease</code> ownership for separated singleton duties</li>
 </ul>
 </li>
 <li>Coordinator is not the durable owner of a store’s local raft/region truth. Store
@@ -4208,6 +4381,14 @@ deliberately small HA surface:
 <li>fixed three replicas</li>
 <li>no dynamic metadata membership</li>
 <li>follower convergence uses watch-first tailing with refresh/reload fallback</li>
+</ul>
+</li>
+<li><code>separated meta-root + remote coordinator</code> is implemented but experimental:
+<ul>
+<li>use it for control-plane research and failure-domain experiments</li>
+<li>do not treat it as the default production path yet</li>
+<li>failure/recovery E2E tests and control-plane benchmarks still need to be
+expanded before stronger claims are made</li>
 </ul>
 </li>
 <li>Scheduler policy is intentionally small (leader transfer focused).</li>
@@ -6151,6 +6332,34 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 </ul>
 </li>
 </ul>
+<h3 id="scriptsdevseparated-clustersh"><a class="header" href="#scriptsdevseparated-clustersh"><code>scripts/dev/separated-cluster.sh</code></a></h3>
+<ul>
+<li>Purpose: build <code>nokv</code> and <code>nokv-config</code>, start a local separated control
+plane, seed fresh store workdirs, then start stores from <code>raft_config.json</code>.</li>
+<li>Starts:
+<ul>
+<li>three <code>nokv meta-root --mode replicated</code> processes</li>
+<li>one <code>nokv coordinator --root-mode remote</code></li>
+<li>all configured stores</li>
+</ul>
+</li>
+<li>Example:
+<pre><code class="language-bash">./scripts/dev/separated-cluster.sh --config ./raft_config.example.json --workdir ./artifacts/separated-cluster
+</code></pre>
+</li>
+<li>Notes:
+<ul>
+<li>uses fixed local metadata-root gRPC endpoints <code>127.0.0.1:2380/2381/2382</code></li>
+<li>uses fixed local metadata-root raft transport endpoints <code>127.0.0.1:3380/3381/3382</code></li>
+<li>uses an isolated <code>--workdir</code> tree and does not reuse config-defined store
+workdirs</li>
+<li>this is a bootstrap/dev launcher, not a restart command</li>
+<li>production-style restarts should run <code>nokv meta-root</code>,
+<code>nokv coordinator --root-mode remote</code>, and <code>scripts/ops/serve-store.sh</code>
+directly against the same durable workdirs</li>
+</ul>
+</li>
+</ul>
 <h3 id="scriptsopsbootstrapsh"><a class="header" href="#scriptsopsbootstrapsh"><code>scripts/ops/bootstrap.sh</code></a></h3>
 <ul>
 <li>Purpose: seed local peer catalog metadata into a set of store directories derived from a path template.</li>
@@ -6193,6 +6402,29 @@ provide <code>storeID -&gt; addr</code></li>
 <li>if a static transport override is needed, use <code>--store-addr &lt;store-id&gt;=&lt;addr&gt;</code>
 rather than a peer-id keyed mapping</li>
 <li><code>--scope docker</code> selects container-friendly addresses</li>
+</ul>
+</li>
+</ul>
+<h3 id="scriptsopsserve-meta-rootsh"><a class="header" href="#scriptsopsserve-meta-rootsh"><code>scripts/ops/serve-meta-root.sh</code></a></h3>
+<ul>
+<li>Purpose: thin wrapper around <code>nokv meta-root</code> for one metadata-root process.</li>
+<li>Example:
+<pre><code class="language-bash">./scripts/ops/serve-meta-root.sh \
+  --addr 127.0.0.1:2380 \
+  --mode replicated \
+  --workdir ./artifacts/separated-cluster/meta-root-1 \
+  --node-id 1 \
+  --transport-addr 127.0.0.1:3380 \
+  --peer 1=127.0.0.1:3380 \
+  --peer 2=127.0.0.1:3381 \
+  --peer 3=127.0.0.1:3382
+</code></pre>
+</li>
+<li>Notes:
+<ul>
+<li><code>--peer</code> values are metadata-root raft transport addresses, not gRPC
+service addresses</li>
+<li>forwards shutdown signals to <code>nokv meta-root</code></li>
 </ul>
 </li>
 </ul>
@@ -6497,6 +6729,17 @@ nokv-config regions --config raft_config.json --format json | jq '.[] | {id:.id,
 
     
 <p>解释 NoKV 为什么需要 read-path pruning、GRF 到底提供了什么启发、为什么当前实现选择更保守的 in-memory advisory 方案，以及它与 LSM 读路径的关系。</p>
+
+  </div>
+
+  
+<div class="blog-card">
+    <span class="blog-date">2026-04-12</span>
+    
+<h3><a href="#2026-04-12-coordinator-和-metaroot-分离部署设计">Coordinator 和 meta/root 分离部署设计</a></h3>
+
+    
+<p>讨论 co-located 与 separated control-plane deployment 的边界、TSO/ID window、Coordinator lease、freshness 语义和落地顺序。</p>
 
   </div>
 
@@ -9408,6 +9651,661 @@ NoKV 的 <code>meta/root</code> 是专用的 metadata truth kernel。</p>
 <blockquote>
 <p>当前版本已经拿到了最稳妥的一段收益，<br>但仍然给后续更强的 range-aware 设计保留了空间。</p>
 </blockquote>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="2026-04-12-coordinator-和-metaroot-分离部署设计"><a class="header" href="#2026-04-12-coordinator-和-metaroot-分离部署设计">2026-04-12 Coordinator 和 meta/root 分离部署设计</a></h1>
+<blockquote>
+<p>状态：implemented experimental mode。当前默认正式模式仍然是 <code>single coordinator + local meta</code> 和 <code>3 coordinator + replicated meta</code>；<code>remote meta/root</code>、Coordinator lease gate、allocator window、remote root harness、基本 correctness tests 和最小运维脚本都已落地，但 separated deployment 还不是默认运维路径，也还没有完成真实网络与 baseline 级别的评估。本文说明为什么拆、什么时候不该拆，以及拆分前后哪些协议边界必须明确。</p>
+</blockquote>
+<h2 id="导读-7"><a class="header" href="#导读-7">导读</a></h2>
+<ul>
+<li>🧭 主题：<code>coordinator</code> 和 <code>meta/root</code> 是否应该从 co-located replicated mode 演进到 separated deployment。</li>
+<li>🧱 核心对象：<code>RootStore</code>、<code>VirtualLog</code>、<code>RootToken</code>、Coordinator lease、TSO/ID window、scheduler owner。</li>
+<li>🔁 调用链：<code>coordinator view -&gt; remote meta/root VirtualLog -&gt; tail catch-up -&gt; freshness-aware routing</code>。</li>
+<li>📚 参考对象：Delos 的 VirtualLog 分层、TiKV/PD+etcd 的 co-located control-plane 经验、FoundationDB 的控制面角色拆分。</li>
+</ul>
+<h2 id="1-当前实际部署是什么"><a class="header" href="#1-当前实际部署是什么">1. 当前实际部署是什么</a></h2>
+<p>NoKV 当前不是只有一个模式，而是两个正式模式：</p>
+<pre class="mermaid">flowchart TD
+    subgraph A["Mode A: single coordinator + local meta"]
+        C1["coordinator"] --&gt; L1["meta/root local backend\nfile checkpoint + tail"]
+    end
+
+    subgraph B["Mode B: 3 coordinator + replicated meta"]
+        C2["coordinator-1\n+ meta/root peer-1"]
+        C3["coordinator-2\n+ meta/root peer-2"]
+        C4["coordinator-3\n+ meta/root peer-3"]
+        C2 &lt;--&gt; C3
+        C3 &lt;--&gt; C4
+        C4 &lt;--&gt; C2
+    end
+</pre>
+
+<p>Mode B 已经是多进程 HA，只是每个 <code>coordinator</code> 进程内同时托管一个 <code>meta/root</code> raft peer。</p>
+<p>这意味着当前系统已经具备：</p>
+<ul>
+<li><code>meta/root</code> 的三副本 replicated truth。</li>
+<li><code>coordinator</code> 从 rooted truth 重建 view。</li>
+<li><code>RootStore</code> 作为 <code>coordinator</code> 和 <code>meta/root</code> 的适配边界。</li>
+<li>TSO/ID fence 写入 <code>meta/root</code>，避免 leader 切换后回退。</li>
+<li>非 rooted leader 的 Coordinator 拒绝 <code>AllocID</code>、<code>Tso</code> 和 <code>PublishRootEvent</code>。</li>
+</ul>
+<p>当前已经实现：</p>
+<ul>
+<li>独立 <code>meta/root</code> 服务进程：<code>nokv meta-root</code>。</li>
+<li><code>coordinator --root-mode=remote</code>。</li>
+<li><code>meta/root</code> 对外 gRPC API 和 remote client。</li>
+<li>独立 Coordinator 集群的 lease / owner 最小机制。</li>
+<li>ID / TSO window 预分配。</li>
+</ul>
+<p>当前仍未完成：</p>
+<ul>
+<li>更完整的 ops 脚本和稳定运维说明。</li>
+<li>更系统化的 failure / recovery 演练。</li>
+</ul>
+<p>当前已经补齐的 observability：</p>
+<ul>
+<li><code>nokv coordinator --metrics-addr ...</code> 会发布 <code>nokv_coordinator</code> expvar key。</li>
+<li><code>nokv_coordinator</code> 当前包含：
+<ul>
+<li><code>root_mode</code></li>
+<li>rooted read-state summary</li>
+<li>lease state</li>
+<li>allocator window state</li>
+</ul>
+</li>
+</ul>
+<p>当前已经补齐的 correctness coverage：</p>
+<ul>
+<li><code>coordinator/integration</code> 覆盖 Mode C coordinator crash/recovery：
+<ul>
+<li>old Coordinator 分配 ID 后不 release lease，模拟崩溃</li>
+<li>remote <code>meta/root</code> 独立存活</li>
+<li>new Coordinator 使用同一 stable <code>coordinator-id</code> 连接 remote root</li>
+<li>new <code>AllocID</code> 严格大于 crash 前最后返回 ID</li>
+<li>rooted allocator fence 和 lease fence 不回退</li>
+</ul>
+</li>
+<li><code>meta/root/backend/replicated</code> 覆盖 root leader change：
+<ul>
+<li>old root leader 写入 <code>CoordinatorLease</code> 和 allocator fences</li>
+<li>new root leader 继续 renew 同一 holder</li>
+<li>ID / TSO fences 在所有 root peers 上保持单调不回退</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-分离部署长什么样"><a class="header" href="#2-分离部署长什么样">2. 分离部署长什么样</a></h2>
+<p>未来 separated mode 应该是：</p>
+<pre class="mermaid">flowchart LR
+    subgraph MR["meta/root cluster"]
+        M1["meta-1\nVirtualLog raft peer"]
+        M2["meta-2\nVirtualLog raft peer"]
+        M3["meta-3\nVirtualLog raft peer"]
+        M1 &lt;--&gt; M2
+        M2 &lt;--&gt; M3
+        M3 &lt;--&gt; M1
+    end
+
+    subgraph COORD["coordinator cluster"]
+        C1["coordinator-a\nroute view"]
+        C2["coordinator-b\nroute view"]
+        C3["coordinator-c\nroute view"]
+        C4["coordinator-n\nroute view"]
+    end
+
+    C1 --&gt;|"Append / Fence / Observe / Subscribe"| MR
+    C2 --&gt;|"Append / Fence / Observe / Subscribe"| MR
+    C3 --&gt;|"Append / Fence / Observe / Subscribe"| MR
+    C4 --&gt;|"Append / Fence / Observe / Subscribe"| MR
+</pre>
+
+<p>这里 <code>meta/root</code> 是 durable truth cluster，<code>coordinator</code> 是可水平扩展的 service/view layer。</p>
+<p>关键原则：</p>
+<ol>
+<li><code>meta/root</code> 仍然只做 truth kernel，不变成完整 Coordinator。</li>
+<li><code>coordinator</code> 仍然只持有 rebuildable view，不拥有 durable topology truth。</li>
+<li>separated mode 不能破坏现有 co-located mode；它必须复用同一个 <code>RootStore</code> / <code>VirtualLog</code> contract。</li>
+<li>separated mode 不是默认模式，它是当 routing / Coordinator 运维成为瓶颈时才打开的部署形态。</li>
+</ol>
+<h2 id="3-为什么要分离部署"><a class="header" href="#3-为什么要分离部署">3. 为什么要分离部署</a></h2>
+<h3 id="31-独立失败域"><a class="header" href="#31-独立失败域">3.1 独立失败域</a></h3>
+<p>当前 Mode B 中，一个进程崩溃会同时带走：</p>
+<ul>
+<li>一个 <code>coordinator</code> service instance。</li>
+<li>一个 <code>meta/root</code> raft peer。</li>
+</ul>
+<p>这在三节点内是可接受的，但失败域仍然绑定。</p>
+<p>分离后：</p>
+<ul>
+<li><code>coordinator</code> 崩溃不会带走 <code>meta/root</code> peer。</li>
+<li><code>meta/root</code> 少数节点故障不影响已有 <code>coordinator</code> 继续用 cached view 服务 best-effort / bounded read。</li>
+<li><code>coordinator</code> 可以滚动升级，不触发 <code>meta/root</code> raft peer 重启。</li>
+</ul>
+<p>这对生产运维有真实价值，但不是项目早期必须承受的复杂度。</p>
+<h3 id="32-coordinator-水平扩展"><a class="header" href="#32-coordinator-水平扩展">3.2 Coordinator 水平扩展</a></h3>
+<p><code>meta/root</code> 是共识系统，不应该通过加很多节点来扩展读服务。Raft group 节点越多，写路径越重。</p>
+<p><code>coordinator</code> 是 view/service 层，可以通过更多实例扩展：</p>
+<ul>
+<li><code>GetRegionByKey</code></li>
+<li>route freshness check</li>
+<li>gateway route lookup</li>
+<li>control-plane read/debug surface</li>
+</ul>
+<p>分离后可以是：</p>
+<pre><code class="language-text">3 meta/root nodes + N coordinator nodes
+</code></pre>
+<p>这比把 <code>3 coordinator + replicated meta</code> 扩成 <code>7 coordinator + 7 meta peers</code> 更合理。</p>
+<h3 id="33-版本演进更干净"><a class="header" href="#33-版本演进更干净">3.3 版本演进更干净</a></h3>
+<p>如果 <code>coordinator</code> 和 <code>meta/root</code> 进程分开：</p>
+<ul>
+<li><code>coordinator</code> 可以更频繁升级 route / scheduler policy。</li>
+<li><code>meta/root</code> 可以保持小而稳定。</li>
+<li><code>VirtualLog</code> wire API 成为明确兼容边界。</li>
+</ul>
+<p>这适合长期系统演进，也适合把 NoKV 的控制面设计作为 research / workshop case study 来讲。</p>
+<h2 id="4-为什么现在不应该直接实现"><a class="header" href="#4-为什么现在不应该直接实现">4. 为什么现在不应该直接实现</a></h2>
+<p>分离部署不是把函数调用换成 RPC 那么简单。</p>
+<p>如果直接做 remote <code>RootStore</code>，会立刻出现三个问题。</p>
+<h3 id="41-tsoid-热路径会被打穿"><a class="header" href="#41-tsoid-热路径会被打穿">4.1 TSO/ID 热路径会被打穿</a></h3>
+<p>在没有 window 的设计里，<code>reserveTSO</code> 和 <code>reserveIDs</code> 每次分配都会调用 <code>SaveAllocatorState</code>，也就是推进 <code>meta/root</code> 中的 allocator fence。</p>
+<p>当前代码已经先实现 co-located 模式下的 allocator window，所以 <code>Tso</code> 和 <code>AllocID</code> 热路径都不会在窗口内重复推进 root fence。<code>AllocID</code> 目前还没有生产拓扑消费者，但它和 TSO 使用同一套 durable fence 语义。</p>
+<p>分离后，每次 TSO 都变成 remote <code>FenceAllocator</code> RPC。如果每个事务要 <code>start_ts</code> 和 <code>commit_ts</code>，那么：</p>
+<pre><code class="language-text">10k txn/s -&gt; 20k TSO/s -&gt; 20k remote fence writes/s
+</code></pre>
+<p>这会把 <code>meta/root</code> 写路径变成事务热路径，不能接受。</p>
+<h3 id="42-写后读会出现-view-staleness-窗口"><a class="header" href="#42-写后读会出现-view-staleness-窗口">4.2 写后读会出现 view staleness 窗口</a></h3>
+<p>当前 co-located 模式中：</p>
+<pre><code class="language-text">AppendRootEvent -&gt; reload RootStore -&gt; ReplaceRootSnapshot
+</code></pre>
+<p>写入和 view 更新在一个进程里同步完成。</p>
+<p>分离后：</p>
+<pre><code class="language-text">coordinator AppendRootEvent RPC -&gt; meta/root commit -&gt; tail stream -&gt; coordinator catch-up
+</code></pre>
+<p>在 commit 和 catch-up 之间，Coordinator view 可能落后。</p>
+<p>所以 freshness contract 不是一个附加诊断字段，而是让 separated mode 成立的必要机制：</p>
+<ul>
+<li>没有 separated mode 时，它让 staleness 可观测。</li>
+<li>有 separated mode 时，它决定路由读能不能被安全返回。</li>
+</ul>
+<p>Separated mode 必须严格依赖：</p>
+<ul>
+<li><code>RootToken</code></li>
+<li><code>CatchUpState</code></li>
+<li><code>DegradedMode</code></li>
+<li><code>Freshness</code></li>
+</ul>
+<p>否则客户端会拿到刚被 split / merge 过期的旧路由。</p>
+<h3 id="43-调度-owner-需要明确"><a class="header" href="#43-调度-owner-需要明确">4.3 调度 owner 需要明确</a></h3>
+<p><code>StoreHeartbeat</code> 当前能返回 lightweight scheduler operation，例如 leader transfer hint。</p>
+<p>如果 N 个 Coordinator 都接收 heartbeat 并各自做调度，可能产生重复或冲突操作。</p>
+<p>因此 separated mode 必须定义：</p>
+<ul>
+<li>所有 Coordinator 都可以接收 heartbeat 并更新本地 store stats。</li>
+<li>只有 lease holder 可以返回 scheduler operations。</li>
+<li>非 lease holder 返回空 operation，或者返回 redirect hint。</li>
+</ul>
+<h2 id="5-核心设计remote-root--coordinator-lease--allocator-window"><a class="header" href="#5-核心设计remote-root--coordinator-lease--allocator-window">5. 核心设计：remote root + coordinator lease + allocator window</a></h2>
+<p>Separated mode 需要三个机制一起出现。</p>
+<h3 id="51-remote-metaroot-api"><a class="header" href="#51-remote-metaroot-api">5.1 Remote <code>meta/root</code> API</a></h3>
+<p>新增一个独立 <code>meta/root</code> service，暴露 <code>VirtualLog</code> 能力，而不是暴露完整 Coordinator 语义。</p>
+<p>最小 API：</p>
+<pre><code class="language-proto">service MetadataRoot {
+  rpc Append(AppendRequest) returns (AppendResponse);
+  rpc FenceAllocator(FenceAllocatorRequest) returns (FenceAllocatorResponse);
+  rpc Observe(ObserveRequest) returns (ObserveResponse);
+  rpc WaitTail(WaitTailRequest) returns (WaitTailResponse);
+  rpc SubscribeTail(SubscribeTailRequest) returns (stream TailAdvance);
+  rpc Campaign(CampaignRequest) returns (CampaignResponse);
+  rpc Status(StatusRequest) returns (StatusResponse);
+}
+</code></pre>
+<p>这层 API 的原则：</p>
+<ul>
+<li>只表达 root log / checkpoint / tail / fence。</li>
+<li>不暴露 <code>GetRegionByKey</code>。</li>
+<li>不暴露 scheduler policy。</li>
+<li>不把 <code>meta/root</code> 做成第二个 Coordinator。</li>
+</ul>
+<p>写 RPC 必须有明确 leader redirect 语义：</p>
+<ul>
+<li><code>Append</code>、<code>FenceAllocator</code>、<code>Campaign</code> 只能由 <code>meta/root</code> leader 接受。</li>
+<li>follower 返回 <code>NOT_LEADER</code>，并尽量携带 <code>leader_id</code> / <code>leader_addr</code>。</li>
+<li><code>meta/root/client</code> 负责自动刷新 leader hint 并重试 retryable write。</li>
+<li>这和 raftstore 的 <code>NotLeader</code> 路由模型一致，不能让上层 Coordinator 猜测哪个 root peer 是 leader。</li>
+</ul>
+<p>对应代码落点：</p>
+<ul>
+<li><code>meta/root/server</code></li>
+<li><code>meta/root/client</code></li>
+<li><code>coordinator/storage/root_remote.go</code></li>
+</ul>
+<p><code>coordinator/storage/root_open.go</code> 里的 <code>rootBackend</code> 已经是天然分离点。</p>
+<h3 id="52-coordinator-lease"><a class="header" href="#52-coordinator-lease">5.2 Coordinator lease</a></h3>
+<p>分离后，Coordinator 不再天然跟 <code>meta/root</code> raft leader co-located，所以必须定义谁拥有 singleton service 权限。</p>
+<p>需要 singleton owner 的能力：</p>
+<ul>
+<li><code>Tso</code></li>
+<li><code>AllocID</code></li>
+<li>scheduler operation planning</li>
+</ul>
+<p>不需要 singleton owner 的能力：</p>
+<ul>
+<li><code>GetRegionByKey</code></li>
+<li><code>RegionLiveness</code></li>
+<li>local <code>StoreHeartbeat</code> stats recording</li>
+<li><code>PublishRootEvent</code> 的最终串行化，因为它本身由 <code>meta/root</code> raft append 串行化</li>
+</ul>
+<p>但是 <code>PublishRootEvent</code> 的 pre-assessment 依赖 Coordinator view，所以 separated mode 下它必须带明确的 root precondition：</p>
+<ul>
+<li>request 带 <code>ExpectedClusterEpoch</code> 或 <code>ExpectedRootToken</code>。</li>
+<li>Coordinator 必须先 catch up 到该 token，再做 assessment。</li>
+<li>Append 成功后，Coordinator 要么 wait 到 returned token，要么在 response 中返回 committed root token，要求 caller 后续用 freshness 检查。</li>
+</ul>
+<p>Lease 事件可以作为 rooted truth 的一部分：</p>
+<pre><code class="language-go">type CoordinatorLease struct {
+    HolderID     string
+    Term         uint64
+    ExpiresUnixNano int64
+    IDFence      uint64
+    TSOFence     uint64
+}
+</code></pre>
+<p><code>Campaign</code> 的语义必须明确：</p>
+<ol>
+<li>Coordinator 向 <code>meta/root</code> leader 提交 <code>KindCoordinatorLease</code> campaign。</li>
+<li><code>meta/root</code> 状态机检查当前 lease 是否仍 active。</li>
+<li>如果已有 active holder，返回失败并携带 current holder / expiry / leader hint。</li>
+<li>如果没有 active holder，写入新 lease，返回 success、lease term、expiry、ID fence、TSO fence。</li>
+<li>获胜 Coordinator 必须先根据 returned fences 初始化本地 allocator window，然后才能开放 <code>Tso</code>、<code>AllocID</code> 和 scheduler operation。</li>
+</ol>
+<p>约束：</p>
+<ul>
+<li>同一时间最多一个 active holder。</li>
+<li>Lease renew 必须通过 <code>meta/root</code> append 或 compare-and-fence 完成。</li>
+<li>Holder 失去 lease 后必须拒绝 <code>Tso</code>、<code>AllocID</code> 和 scheduler operation。</li>
+<li>Follower Coordinator 可以继续服务 best-effort / bounded route read。</li>
+</ul>
+<h3 id="53-tsoid-window"><a class="header" href="#53-tsoid-window">5.3 TSO/ID window</a></h3>
+<p>直接每次 <code>Tso</code> / <code>AllocID</code> 写 root fence 不可接受。</p>
+<p>需要窗口预分配：</p>
+<pre><code class="language-text">root fence = durable upper bound
+local current = in-memory next value
+window high = already fenced high watermark
+</code></pre>
+<p>TSO 分配流程：</p>
+<pre><code class="language-text">if current + count &lt;= window_high:
+    return from memory
+else:
+    require active coordinator lease
+    FenceAllocator(TSO, current + window_size)
+    window_high = returned fence
+    return from memory
+</code></pre>
+<p>ID 也应该支持同样机制，但优先级不同。</p>
+<p>当前代码里 <code>AllocID</code> 已经实现并持久化 fence，但生产拓扑路径还没有真正调用它：<code>store_id</code>、<code>region_id</code>、<code>peer_id</code> 仍然主要来自静态配置或调用方显式传入。也就是说：</p>
+<ul>
+<li>TSO window 是 separated mode 的必要前置条件。</li>
+<li>ID window 是边界统一和未来动态 topology 的准备，不是近期性能瓶颈。</li>
+</ul>
+<p>区别只是频率：</p>
+<ul>
+<li>TSO 是事务热路径，必须 window。</li>
+<li>ID 当前频率低，但最好复用同一套 window 机制，避免未来 <code>AddStore</code>、split、peer add 高频时重新设计。</li>
+</ul>
+<p>崩溃恢复语义：</p>
+<ul>
+<li>已 fence 但未使用的窗口可以跳过。</li>
+<li>新 holder 从 durable fence 之后继续分配。</li>
+<li>ID / TSO 要求唯一和单调，不要求连续。</li>
+</ul>
+<p>这和 TiKV TSO 以及多数工业 allocator 的做法一致。</p>
+<h2 id="6-性能分析"><a class="header" href="#6-性能分析">6. 性能分析</a></h2>
+<h3 id="61-数据平面"><a class="header" href="#61-数据平面">6.1 数据平面</a></h3>
+<p>无影响。</p>
+<p>KV 读写仍然是：</p>
+<pre><code class="language-text">client -&gt; raftstore leader peer
+</code></pre>
+<p>不经过 <code>coordinator</code> 或 <code>meta/root</code>。</p>
+<h3 id="62-路由读"><a class="header" href="#62-路由读">6.2 路由读</a></h3>
+<p>正常情况下无明显影响。</p>
+<p><code>GetRegionByKey</code> 仍然读 Coordinator in-memory view。</p>
+<p>区别在于 separated mode 的 view catch-up 更容易落后，所以强 freshness 请求可能等待 tail：</p>
+<pre><code class="language-text">FRESHNESS_BEST_EFFORT -&gt; 直接返回当前 view
+FRESHNESS_BOUNDED     -&gt; lag 在 bound 内才返回
+FRESHNESS_STRONG      -&gt; 必须 catch up 到 current root token
+</code></pre>
+<p>这不是吞吐问题，而是语义选择。</p>
+<h3 id="63-tsoid"><a class="header" href="#63-tsoid">6.3 TSO/ID</a></h3>
+<p>不做 window：不可接受。</p>
+<p>做 window：可接受。</p>
+<p>假设：</p>
+<pre><code class="language-text">TSO request = 100k/s
+window size = 10k
+remote fence latency = 1ms
+</code></pre>
+<p>则 root fence 写频率约为：</p>
+<pre><code class="language-text">100k / 10k = 10 writes/s
+</code></pre>
+<p>热路径是内存 atomic / mutex，不再是 remote raft write。</p>
+<h3 id="64-topology-change"><a class="header" href="#64-topology-change">6.4 Topology change</a></h3>
+<p><code>split</code>、<code>merge</code>、<code>peer change</code> 本来就不是高频数据路径。</p>
+<p>Separated mode 多一次 root RPC 和 tail catch-up，通常是毫秒级，不影响整体系统吞吐。</p>
+<p>真正要守住的是 correctness：append 成功后，caller 不能假设所有 Coordinator 立刻看见新 topology。</p>
+<h2 id="7-正确性边界"><a class="header" href="#7-正确性边界">7. 正确性边界</a></h2>
+<h3 id="71-lease-safety"><a class="header" href="#71-lease-safety">7.1 Lease safety</a></h3>
+<p>不变量：</p>
+<pre><code class="language-text">At most one Coordinator may allocate TSO/ID or emit scheduler operations at a time.
+</code></pre>
+<p>实现要求：</p>
+<ul>
+<li>Lease 写入必须走 <code>meta/root</code> 串行化。</li>
+<li>Lease holder 每次发号前都必须检查本地 <code>lease_active</code> 标志，不能只在 window refill 时检查。</li>
+<li>Lease holder 必须有独立的 expiry monitor，定期检查本地 lease deadline。</li>
+<li>Expiry monitor 必须在 <code>ExpiresUnixNano - clock_skew_buffer</code> 时主动停止发号，把本地 <code>lease_active</code> 置为 false。</li>
+<li>Lease 到期前无法 renew 时，holder 必须停止发号，而不是继续靠本地窗口服务。</li>
+</ul>
+<p>不能把 safety 建立在 <code>window_exhaust_time &lt; lease_ttl / 2</code> 上。低流量时窗口可能很久都不会耗尽，如果只在 refill 时检查 lease，旧 holder 会在 lease 过期后继续用旧 window 发号。</p>
+<p>正确的安全条件是：</p>
+<pre><code class="language-text">Tso / AllocID fast path = require lease_active &amp;&amp; now &lt; lease_deadline - clock_skew_buffer
+</code></pre>
+<p>Lease TTL 必须覆盖物理时钟和运行时抖动：</p>
+<pre><code class="language-text">lease_ttl &gt; max_clock_skew + max_gc_pause + max_network_jitter + renew_margin
+</code></pre>
+<p>工程默认值应该保守，例如 TTL &gt;= 10s，再通过测试和 benchmark 调整。窗口大小只影响 refill 频率和最多跳过多少 ID / TSO，不应该决定 lease safety。</p>
+<h3 id="72-allocator-monotonicity"><a class="header" href="#72-allocator-monotonicity">7.2 Allocator monotonicity</a></h3>
+<p>不变量：</p>
+<pre><code class="language-text">new_holder_start &gt; max(old_holder_fenced_high)
+</code></pre>
+<p>因此 lease state 必须携带或能读取：</p>
+<ul>
+<li>latest ID fence</li>
+<li>latest TSO fence</li>
+</ul>
+<p>新 holder 获得 lease 后必须先 fence allocator，再开放 <code>Tso</code> / <code>AllocID</code>。</p>
+<h3 id="73-view-freshness"><a class="header" href="#73-view-freshness">7.3 View freshness</a></h3>
+<p>不变量：</p>
+<pre><code class="language-text">Coordinator may serve stale routes only when the requested freshness permits it.
+</code></pre>
+<p>Separated mode 必须严格使用：</p>
+<ul>
+<li><code>RootToken</code></li>
+<li><code>root_lag</code></li>
+<li><code>CatchUpState</code></li>
+<li><code>DegradedMode</code></li>
+</ul>
+<p>对于 <code>FRESHNESS_STRONG</code>：</p>
+<ul>
+<li>如果 Coordinator 没有 catch up 到 root current token，必须等待或失败。</li>
+<li>不能返回 best-effort route。</li>
+</ul>
+<p>对于 <code>FRESHNESS_BEST_EFFORT</code>：</p>
+<ul>
+<li>可以返回当前 view。</li>
+<li>必须携带 degraded / lag 信息，让 caller 知道风险。</li>
+</ul>
+<h3 id="74-publishrootevent-write-after-read"><a class="header" href="#74-publishrootevent-write-after-read">7.4 PublishRootEvent write-after-read</a></h3>
+<p>Separated mode 中，<code>PublishRootEvent</code> 的正确流程应该是：</p>
+<pre class="mermaid">sequenceDiagram
+    participant Store as raftstore executor
+    participant Coord as coordinator
+    participant Root as meta/root service
+
+    Store-&gt;&gt;Coord: PublishRootEvent(expected_root_token / epoch)
+    Coord-&gt;&gt;Root: Observe / catch up if needed
+    Coord-&gt;&gt;Coord: Assess lifecycle on rooted snapshot
+    Coord-&gt;&gt;Root: Append RootEvent
+    Root--&gt;&gt;Coord: committed root token
+    Coord-&gt;&gt;Root: WaitTail(committed token) or return token
+    Coord--&gt;&gt;Store: accepted + committed root token
+</pre>
+
+<p>这个流程避免 stale Coordinator 基于旧 view 做错误 assessment。</p>
+<h2 id="8-为什么不是让-metaroot-直接发-tso"><a class="header" href="#8-为什么不是让-metaroot-直接发-tso">8. 为什么不是让 meta/root 直接发 TSO</a></h2>
+<p>可以，但不推荐作为第一方案。</p>
+<p>方案对比：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>方案</th><th>优点</th><th>问题</th></tr>
+</thead>
+<tbody>
+<tr><td>TSO 下沉到 <code>meta/root</code></td><td>leader 唯一性最直接</td><td><code>meta/root</code> 从 truth kernel 变成 service；热路径压到 root leader</td></tr>
+<tr><td>Coordinator lease + window</td><td>保持 <code>meta/root</code> 小；TSO 热路径在 Coordinator 内存</td><td>需要 lease 正确性和 window refill</td></tr>
+<tr><td>Coordinator 自己 raft</td><td>语义独立</td><td>引入第三个 consensus 层，不值得</td></tr>
+</tbody>
+</table>
+</div>
+<p>推荐选择：</p>
+<pre><code class="language-text">Coordinator lease + TSO/ID window
+</code></pre>
+<p>原因：它保留 NoKV 当前最重要的边界：</p>
+<ul>
+<li><code>meta/root</code> 是 durable truth kernel。</li>
+<li><code>coordinator</code> 是 service/view/runtime host。</li>
+<li><code>raftstore</code> 是 executor。</li>
+</ul>
+<h2 id="9-实现路线"><a class="header" href="#9-实现路线">9. 实现路线</a></h2>
+<h3 id="phase-0不开放-separated-mode"><a class="header" href="#phase-0不开放-separated-mode">Phase 0：不开放 separated mode</a></h3>
+<p>保持当前正式模式：</p>
+<ul>
+<li>local co-located</li>
+<li>replicated co-located</li>
+</ul>
+<p>这个阶段的约束已经完成；后续实现虽然已经开放 <code>--root-mode=remote</code>，但它仍然不是默认推荐模式。</p>
+<h3 id="phase-1先做-allocator-window"><a class="header" href="#phase-1先做-allocator-window">Phase 1：先做 allocator window</a></h3>
+<p>状态：TSO window 和 ID window 已实现。</p>
+<p>已经落地：</p>
+<ul>
+<li><code>coordinator/server</code> 增加 allocator window state。</li>
+<li><code>SaveAllocatorState</code> 只在 ID / TSO window refill 时调用。</li>
+<li>当前 co-located 模式也使用 window。</li>
+<li>reload rooted allocator fence 时，不会消耗本地仍然 active 的 allocator window。</li>
+<li><code>AllocID</code> 仍然没有生产拓扑消费者；ID window 主要是边界统一和 future dynamic topology 的准备。</li>
+</ul>
+<p>测试：</p>
+<ul>
+<li>ID / TSO 单调性。</li>
+<li>ID / TSO window 内不会重复持久化 fence。</li>
+<li>reload 不会消耗 active allocator window。</li>
+<li>leader 切换后从 fence 继续。</li>
+<li>window refill 失败后不得继续服务 allocator 请求。</li>
+</ul>
+<h3 id="phase-2定义-root-remote-api但只做-clientserver-harness"><a class="header" href="#phase-2定义-root-remote-api但只做-clientserver-harness">Phase 2：定义 root remote API，但只做 client/server harness</a></h3>
+<p>状态：最小 harness 已实现；remote ops path 已有最小 CLI/脚本入口。</p>
+<p>已经落地：</p>
+<ul>
+<li><code>pb/meta/root.proto</code> 增加 <code>MetadataRoot</code> 服务。</li>
+<li><code>meta/root/remote</code> 提供 gRPC service/client。</li>
+<li>remote client 实现 <code>Snapshot</code>、<code>Append</code>、<code>FenceAllocator</code>、<code>IsLeader</code>、<code>LeaderID</code>。</li>
+<li>remote client 实现 unary <code>ObserveCommitted</code>、<code>ObserveTail</code>、<code>WaitForTail</code>，可驱动 <code>RootStore</code> catch-up。</li>
+<li>remote client 支持多 endpoint，并在写请求收到 <code>leader_id</code> hint 后重试 leader。</li>
+<li>coordinator 可以通过现有 <code>RootStore</code> contract 包装 remote client。</li>
+<li>follower 写请求返回 <code>FailedPrecondition</code>，错误文本携带 <code>leader_id</code> hint。</li>
+</ul>
+<p>仍未落地：</p>
+<ul>
+<li>watch push / streaming notification；当前只有 unary observe/wait。</li>
+<li>更完整的 remote deployment observability。</li>
+</ul>
+<p>测试：</p>
+<ul>
+<li>remote root append / snapshot through <code>RootStore</code>。</li>
+<li>remote allocator fence through <code>RootStore</code>。</li>
+<li>remote root write on follower returns <code>NOT_LEADER + leader_hint</code>。</li>
+<li>remote root client follows leader redirect and retries write。</li>
+<li>remote RootStore subscription can observe tail advance through unary observe/wait。</li>
+<li>invalid allocator kind returns <code>InvalidArgument</code>。</li>
+</ul>
+<h3 id="phase-3coordinator-lease"><a class="header" href="#phase-3coordinator-lease">Phase 3：Coordinator lease</a></h3>
+<p>状态：root truth 层和 coordinator runtime 最小 gate 已实现；默认仍未启用 separated deployment。</p>
+<p>已经落地：</p>
+<ul>
+<li><code>meta/root/event</code> 增加 <code>CoordinatorLeaseGranted</code> rooted event。</li>
+<li><code>meta/root/state</code> checkpoint state 增加 <code>CoordinatorLease</code>。</li>
+<li>local / replicated root backend 增加 <code>CampaignCoordinatorLease</code>。</li>
+<li>remote root RPC 增加 <code>Campaign</code>。</li>
+<li>active holder 未过期时，新 holder campaign 返回 current holder。</li>
+<li>holder 自己可以 renew，过期后新 holder 可以接管。</li>
+<li>campaign event 同时推进 ID / TSO durable fences。</li>
+<li><code>coordinator/server.Service</code> 增加显式 <code>ConfigureCoordinatorLease(...)</code>。</li>
+<li>开启 lease gate 后，<code>Tso</code> / <code>AllocID</code> / scheduler operation 都要求当前 holder 持有 lease。</li>
+<li><code>StoreHeartbeat</code> 仍然接受统计上报，但在无 lease 或 follower 时不返回 scheduler operations。</li>
+<li>runtime 在 <code>ExpiresUnixNano - clock_skew_buffer</code> 前停止继续使用本地 lease，并要求先 renew/campaign。</li>
+<li><code>RunCoordinatorLeaseLoop(ctx)</code> 已落地；启用 <code>--coordinator-id</code> 的 coordinator 会后台续租。</li>
+<li>rooted <code>ReleaseCoordinatorLease()</code> 已落地；graceful shutdown 会显式 release 当前 holder lease。</li>
+</ul>
+<p>仍未落地：</p>
+<ul>
+<li>更丰富的 release observability / metrics。</li>
+<li>真实网络下的 lease / recovery 评估。</li>
+<li>external authority baseline allocator 对比。</li>
+</ul>
+<p>测试：</p>
+<ul>
+<li>active holder 存在时，<code>Campaign</code> 返回失败和 current holder。</li>
+<li>lease 过期后，新 holder 接管。</li>
+<li>lease event replay 后恢复 holder 和 allocator fences。</li>
+<li>replicated follower refresh 后能看到 lease 和 fences。</li>
+<li>remote campaign round-trip。</li>
+</ul>
+<h3 id="phase-4开放-separated-deployment"><a class="header" href="#phase-4开放-separated-deployment">Phase 4：开放 separated deployment</a></h3>
+<p>新增 CLI：</p>
+<pre><code class="language-bash">nokv meta-root \
+  --addr 127.0.0.1:2380 \
+  --mode replicated \
+  --transport-addr 127.0.0.1:3380 \
+  --node-id 1 \
+  --peer 1=127.0.0.1:3380 \
+  --peer 2=127.0.0.1:3381 \
+  --peer 3=127.0.0.1:3382 \
+  --workdir ./artifacts/meta-1
+
+nokv coordinator \
+  --addr 127.0.0.1:2379 \
+  --root-mode remote \
+  --root-peer 1=127.0.0.1:2380 \
+  --root-peer 2=127.0.0.1:2381 \
+  --root-peer 3=127.0.0.1:2382
+</code></pre>
+<p>当前状态：</p>
+<ul>
+<li><code>nokv meta-root</code> 已落地，支持 <code>local|replicated</code>。</li>
+<li><code>nokv coordinator --root-mode=remote</code> 已落地，可连接 remote <code>meta/root</code>。</li>
+<li><code>--coordinator-id</code>、<code>--lease-ttl</code>、<code>--lease-renew-before</code> 已接入 <code>nokv coordinator</code> CLI。</li>
+<li><code>remote</code> 模式现在要求显式提供稳定 <code>--coordinator-id</code>。</li>
+<li><code>scripts/ops/serve-meta-root.sh</code> 已落地，可独立控制单个 <code>meta/root</code> 进程。</li>
+<li><code>scripts/dev/separated-cluster.sh</code> 已落地，可直接启动 <code>3 meta-root + 1 coordinator(remote) + stores</code> 的本地编排。</li>
+<li>仍未补齐稳定运维说明和更完整的 observability。</li>
+</ul>
+<p><code>--coordinator-id</code> 必须是稳定配置 ID，不应该每次启动生成 UUID。</p>
+<p>原因：</p>
+<ul>
+<li>lease holder 身份需要可观测、可审计。</li>
+<li>重启后的同一 Coordinator 可以用同一身份重新 campaign。</li>
+<li>随机 UUID 会让运维日志和 lease ownership 难以追踪。</li>
+</ul>
+<p>稳定 ID 不表示自动续租旧 lease；重启后仍必须重新 campaign，并根据 <code>meta/root</code> 返回的 fences 初始化 allocator window。</p>
+<p>默认仍然不应该是 separated mode。</p>
+<h2 id="10-什么时候值得启用-separated-mode"><a class="header" href="#10-什么时候值得启用-separated-mode">10. 什么时候值得启用 separated mode</a></h2>
+<p>值得启用：</p>
+<ul>
+<li><code>GetRegionByKey</code> / route lookup QPS 成为瓶颈。</li>
+<li>需要 Coordinator 独立滚动升级。</li>
+<li>需要把 <code>meta/root</code> 失败域和 service layer 失败域分开。</li>
+<li>要做控制面研究，需要展示 co-located 与 separated 的明确 tradeoff。</li>
+</ul>
+<p>不值得启用：</p>
+<ul>
+<li>小集群。</li>
+<li>单机 / 本地实验。</li>
+<li>Coordinator QPS 远低于 raftstore 数据面 QPS。</li>
+<li>还没有真实网络验证、baseline 对比和成熟运维手册。</li>
+</ul>
+<p>当前项目阶段推荐：</p>
+<pre><code class="language-text">继续使用 Mode B: 3 coordinator + replicated meta
+</code></pre>
+<p>原因很简单：它已经提供 HA，TSO 语义简单，部署也更少。</p>
+<h2 id="11-workshop--研究定位"><a class="header" href="#11-workshop--研究定位">11. Workshop / 研究定位</a></h2>
+<p>这个设计的研究价值不是“发明了 Delos”。</p>
+<p>诚实定位应该是：</p>
+<blockquote>
+<p>NoKV 把 Delos 的 VirtualLog 思路应用到分布式 KV 控制面，并进一步把 durable truth、service view、data-plane executor、freshness contract 和 optional separated deployment 放进同一个可实现系统里。</p>
+</blockquote>
+<p>可 defend 的贡献点：</p>
+<ul>
+<li>在 KV 控制面里把 authority / service / executor 分开。</li>
+<li>把 route freshness 做成显式 API，而不是依赖 NotLeader / EpochNotMatch 反推。</li>
+<li>展示 co-located 和 separated deployment 可以共享同一个 <code>VirtualLog</code> / <code>RootStore</code> contract。</li>
+<li>分析 TSO/ID allocator 在 separated deployment 下必须用 lease + window，否则会变成 root 写瓶颈。</li>
+</ul>
+<p>不应该声称：</p>
+<ul>
+<li>新共识协议。</li>
+<li>新 VirtualLog 理论。</li>
+<li>性能一定优于 TiKV/PD。</li>
+</ul>
+<p>更合理的 paper 类型：</p>
+<ul>
+<li>workshop experience paper</li>
+<li>systems design note</li>
+<li>research platform paper</li>
+</ul>
+<p>当前更诚实的分层是：</p>
+<ul>
+<li>HotStorage / systems workshop：证据已经基本够用。</li>
+<li>CHEOPS 这类 systems workshop：再补真实网络实验会更稳。</li>
+<li>CIDR：还需要多机或 <code>tc netem</code> 级别实验、baseline 对比，以及更收敛的论文叙事。</li>
+</ul>
+<p>需要补的实验：</p>
+<ul>
+<li>co-located vs separated route lookup QPS。</li>
+<li>TSO no-window vs window 的吞吐和 tail latency。</li>
+<li>root catch-up lag 对 <code>FRESHNESS_STRONG</code> / <code>BOUNDED</code> / <code>BEST_EFFORT</code> 的影响。</li>
+<li>Coordinator crash / root leader switch 下 allocator monotonicity。</li>
+</ul>
+<h2 id="12-当前证据的边界"><a class="header" href="#12-当前证据的边界">12. 当前证据的边界</a></h2>
+<p>这部分需要明确写死，否则很容易在论文里说过头。</p>
+<p>当前已经有的证据：</p>
+<ul>
+<li>separated deployment 的 correctness path 已经跑通。</li>
+<li>allocator window 的必要性已经能通过 benchmark 入口和退化对照组说明。</li>
+<li>coordinator crash / recovery 和 root leader change 都有直接测试覆盖。</li>
+</ul>
+<p>当前还不该声称的内容：</p>
+<ul>
+<li><code>remote</code> benchmark 的绝对延迟代表真实多机部署。当前 benchmark 使用的是进程内 <code>bufconn</code>，它只说明 API stack 成本，不说明真实网络 RTT。</li>
+<li>separated deployment 在生产环境里已经成熟。当前它是 implemented experimental mode，不是默认 ops path。</li>
+<li>性能优于 TiKV/PD、etcd 或其他工业控制面。当前没有可比的 baseline 数据。</li>
+</ul>
+<p>下一步真正该补的是：</p>
+<ol>
+<li>把 <code>BenchmarkControlPlaneAllocID*</code> 扩到真实 TCP。</li>
+<li>在 <code>tc netem</code> 或三进程跨 host 条件下重跑 B1/B2/B3。</li>
+<li>加一个 external authority baseline，例如 etcd 每次 <code>put</code> 一次 fence 的 allocator。</li>
+<li>把 restart / recovery recipe 写成可重复的 ops 文档。</li>
+</ol>
+<h2 id="13-总结-1"><a class="header" href="#13-总结-1">13. 总结</a></h2>
+<p><code>coordinator</code> 和 <code>meta/root</code> 分离部署有价值，但不是当前默认路线。</p>
+<p>它解决的是：</p>
+<ul>
+<li>Coordinator 水平扩展。</li>
+<li>独立失败域。</li>
+<li>独立升级和研究可观测性。</li>
+</ul>
+<p>它带来的代价是：</p>
+<ul>
+<li>TSO/ID 必须做 lease + window。</li>
+<li>scheduler owner 必须明确。</li>
+<li>route freshness 必须严格执行。</li>
+<li>运维从一套集群变成两套角色。</li>
+</ul>
+<p>所以当前正确路线不是继续堆功能，而是把证据补完整：</p>
+<ol>
+<li>保持 co-located mode 作为默认运维路径。</li>
+<li>把 separated mode 的真实网络实验和 baseline 对比补齐。</li>
+<li>把 restart / recovery / observability 文档补到可重复执行。</li>
+<li>再决定是把它定位为实验部署，还是更正式的 ops 选项。</li>
+</ol>
+<p>这样做符合 NoKV 的主线：先守住 correctness 和边界，再谈部署扩展性。</p>
 
                     </main>
 

@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a947e9d9.js";
+            window.path_to_searchindex_js = "searchindex-dc6edf3c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-8f631623.js"></script>
+        <script src="toc-c05f2810.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -344,6 +344,11 @@ raft peers:
 <ul>
 <li><code>--addr</code> (default <code>127.0.0.1:2379</code>)</li>
 <li><code>--workdir</code> (optional persistence directory for region catalog + allocator state)</li>
+<li><code>--root-mode local|replicated|remote</code> (<code>local</code> by default)</li>
+<li><code>--root-peer nodeID=addr</code> (repeatable; used by <code>replicated</code> and <code>remote</code> rooted modes)</li>
+<li><code>--root-node-id</code>, <code>--root-transport-addr</code> (replicated rooted mode only)</li>
+<li><code>--coordinator-id</code> (stable lease owner id for rooted control-plane writes in separated mode)</li>
+<li><code>--lease-ttl</code>, <code>--lease-renew-before</code> (only used when <code>--coordinator-id</code> is set)</li>
 <li><code>--config</code> + <code>--scope host|docker</code> (resolve defaults from <code>raft_config.json</code>)</li>
 <li><code>--id-start</code>, <code>--ts-start</code> (allocator start values)</li>
 <li><code>--metrics-addr</code> (optional expvar endpoint, exposes <code>/debug/vars</code>)</li>
@@ -356,6 +361,94 @@ raft peers:
   --scope host \
   --metrics-addr 127.0.0.1:23790
 </code></pre>
+<p>Separated deployment example:</p>
+<pre><code class="language-bash">nokv coordinator \
+  --addr 127.0.0.1:2379 \
+  --root-mode remote \
+  --coordinator-id c1 \
+  --root-peer 1=127.0.0.1:2380 \
+  --root-peer 2=127.0.0.1:2381 \
+  --root-peer 3=127.0.0.1:2382
+</code></pre>
+<h3 id="nokv-meta-root"><a class="header" href="#nokv-meta-root"><code>nokv meta-root</code></a></h3>
+<ul>
+<li>Starts the metadata-root gRPC authority service.</li>
+<li>Common flags:
+<ul>
+<li><code>--addr</code> (default <code>127.0.0.1:2380</code>)</li>
+<li><code>--mode local|replicated</code> (<code>local</code> by default)</li>
+<li><code>--workdir</code> (required)</li>
+<li><code>--node-id</code>, <code>--transport-addr</code>, <code>--peer nodeID=addr</code> (replicated mode)</li>
+</ul>
+</li>
+</ul>
+<p>Examples:</p>
+<pre><code class="language-bash">nokv meta-root \
+  --addr 127.0.0.1:2380 \
+  --mode local \
+  --workdir ./artifacts/meta-root
+</code></pre>
+<pre><code class="language-bash">nokv meta-root \
+  --addr 127.0.0.1:2380 \
+  --mode replicated \
+  --workdir ./artifacts/meta-root-1 \
+  --node-id 1 \
+  --transport-addr 127.0.0.1:3380 \
+  --peer 1=127.0.0.1:3380 \
+  --peer 2=127.0.0.1:3381 \
+  --peer 3=127.0.0.1:3382
+</code></pre>
+<h3 id="script-helpers"><a class="header" href="#script-helpers">Script Helpers</a></h3>
+<ul>
+<li><code>scripts/ops/serve-meta-root.sh</code>
+<ul>
+<li>Starts one <code>meta-root</code> instance and forwards shutdown signals.</li>
+<li>Use this for explicit local/replicated <code>meta/root</code> process control.</li>
+</ul>
+</li>
+<li><code>scripts/ops/serve-store.sh</code>
+<ul>
+<li>Starts one <code>nokv serve</code> store against an existing durable workdir.</li>
+</ul>
+</li>
+<li><code>scripts/ops/bootstrap.sh</code>
+<ul>
+<li>Seeds fresh store workdirs from <code>config.regions</code>; not a restart tool.</li>
+</ul>
+</li>
+<li><code>scripts/dev/cluster.sh</code>
+<ul>
+<li>Dev bootstrap for co-located control plane.</li>
+</ul>
+</li>
+<li><code>scripts/dev/separated-cluster.sh</code>
+<ul>
+<li>Dev bootstrap for <code>3 meta-root + 1 coordinator(remote) + stores</code>.</li>
+<li>Uses fixed local root endpoints:
+<ul>
+<li>gRPC: <code>127.0.0.1:2380/2381/2382</code></li>
+<li>raft transport: <code>127.0.0.1:3380/3381/3382</code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="expvar-keys"><a class="header" href="#expvar-keys">Expvar Keys</a></h3>
+<ul>
+<li><code>nokv_coordinator</code>
+<ul>
+<li>Published by <code>nokv coordinator --metrics-addr ...</code></li>
+<li>Includes:
+<ul>
+<li><code>root_mode</code></li>
+<li>rooted read-state summary</li>
+<li>lease state</li>
+<li>allocator window state</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
 <hr>
 <h2 id="integration-tips"><a class="header" href="#integration-tips">Integration Tips</a></h2>
 <ul>
