@@ -185,8 +185,10 @@ func (s *Store) SaveRaftPointer(ptr RaftLogPointer) error {
 	return s.persistLocked()
 }
 
-// SavePendingRootEvent persists one locally applied rooted event until publish
-// acknowledgement succeeds.
+// SavePendingRootEvent persists one locally applied rooted event until
+// Coordinator publish acknowledgement succeeds. The caller must invoke this
+// before enqueueing the event for publish so a process crash cannot drop
+// already-applied topology truth.
 func (s *Store) SavePendingRootEvent(event PendingRootEvent) error {
 	if s == nil {
 		return nil
@@ -207,7 +209,8 @@ func (s *Store) SavePendingRootEvent(event PendingRootEvent) error {
 }
 
 // DeletePendingRootEvent removes one publish-acknowledged rooted event from the
-// local durable pending catalog.
+// local durable pending catalog. Until this returns successfully, restart must
+// treat the event as needing republish.
 func (s *Store) DeletePendingRootEvent(sequence uint64) error {
 	if s == nil || sequence == 0 {
 		return nil

@@ -43,6 +43,18 @@ func TestCloneEventDetachesPayload(t *testing.T) {
 	require.Equal(t, byte('a'), cloned.RegionDescriptor.Descriptor.StartKey[0])
 }
 
+func TestCoordinatorLeaseEvent(t *testing.T) {
+	event := rootevent.CoordinatorLeaseGranted("c1", 1_000, 10, 20)
+	cloned := rootevent.CloneEvent(event)
+
+	event.CoordinatorLease.HolderID = "c2"
+	require.Equal(t, rootevent.KindCoordinatorLease, cloned.Kind)
+	require.Equal(t, "c1", cloned.CoordinatorLease.HolderID)
+	require.Equal(t, int64(1_000), cloned.CoordinatorLease.ExpiresUnixNano)
+	require.Equal(t, uint64(10), cloned.CoordinatorLease.IDFence)
+	require.Equal(t, uint64(20), cloned.CoordinatorLease.TSOFence)
+}
+
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
 	desc := descriptor.Descriptor{
 		RegionID:  id,

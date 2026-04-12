@@ -160,6 +160,11 @@ Restart semantics:
 - Common flags:
   - `--addr` (default `127.0.0.1:2379`)
   - `--workdir` (optional persistence directory for region catalog + allocator state)
+  - `--root-mode local|replicated|remote` (`local` by default)
+  - `--root-peer nodeID=addr` (repeatable; used by `replicated` and `remote` rooted modes)
+  - `--root-node-id`, `--root-transport-addr` (replicated rooted mode only)
+  - `--coordinator-id` (stable lease owner id for rooted control-plane writes in separated mode)
+  - `--lease-ttl`, `--lease-renew-before` (only used when `--coordinator-id` is set)
   - `--config` + `--scope host|docker` (resolve defaults from `raft_config.json`)
   - `--id-start`, `--ts-start` (allocator start values)
   - `--metrics-addr` (optional expvar endpoint, exposes `/debug/vars`)
@@ -172,6 +177,83 @@ nokv coordinator \
   --scope host \
   --metrics-addr 127.0.0.1:23790
 ```
+
+Separated deployment example:
+
+```bash
+nokv coordinator \
+  --addr 127.0.0.1:2379 \
+  --root-mode remote \
+  --coordinator-id c1 \
+  --root-peer 1=127.0.0.1:2380 \
+  --root-peer 2=127.0.0.1:2381 \
+  --root-peer 3=127.0.0.1:2382
+```
+
+### `nokv meta-root`
+
+- Starts the metadata-root gRPC authority service.
+- Common flags:
+  - `--addr` (default `127.0.0.1:2380`)
+  - `--mode local|replicated` (`local` by default)
+  - `--workdir` (required)
+  - `--node-id`, `--transport-addr`, `--peer nodeID=addr` (replicated mode)
+  - `--metrics-addr` (optional expvar endpoint, exposes `/debug/vars`)
+
+Examples:
+
+```bash
+nokv meta-root \
+  --addr 127.0.0.1:2380 \
+  --mode local \
+  --workdir ./artifacts/meta-root \
+  --metrics-addr 127.0.0.1:2389
+```
+
+```bash
+nokv meta-root \
+  --addr 127.0.0.1:2380 \
+  --mode replicated \
+  --workdir ./artifacts/meta-root-1 \
+  --node-id 1 \
+  --transport-addr 127.0.0.1:3380 \
+  --peer 1=127.0.0.1:3380 \
+  --peer 2=127.0.0.1:3381 \
+  --peer 3=127.0.0.1:3382
+```
+
+### Script Helpers
+
+- `scripts/ops/serve-meta-root.sh`
+  - Starts one `meta-root` instance and forwards shutdown signals.
+  - Use this for explicit local/replicated `meta/root` process control.
+- `scripts/ops/serve-store.sh`
+  - Starts one `nokv serve` store against an existing durable workdir.
+- `scripts/ops/bootstrap.sh`
+  - Seeds fresh store workdirs from `config.regions`; not a restart tool.
+- `scripts/dev/cluster.sh`
+  - Dev bootstrap for co-located control plane.
+- `scripts/dev/separated-cluster.sh`
+  - Dev bootstrap for `3 meta-root + 1 coordinator(remote) + stores`.
+  - Uses fixed local root endpoints:
+    - gRPC: `127.0.0.1:2380/2381/2382`
+    - raft transport: `127.0.0.1:3380/3381/3382`
+
+### Expvar Keys
+
+- `nokv_coordinator`
+  - Published by `nokv coordinator --metrics-addr ...`
+  - Includes:
+    - `root_mode`
+    - rooted read-state summary
+    - lease state
+    - allocator window state
+- `nokv_meta_root`
+  - Published by `nokv meta-root --metrics-addr ...`
+  - Includes:
+    - `mode`
+    - leader view
+    - compact rooted state summary
 
 ---
 

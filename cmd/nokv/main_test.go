@@ -352,6 +352,9 @@ func TestPrintUsage(t *testing.T) {
 	if !strings.Contains(out, "serve") {
 		t.Fatalf("expected serve command in usage, got %q", out)
 	}
+	if !strings.Contains(out, "meta-root") {
+		t.Fatalf("expected meta-root command in usage, got %q", out)
+	}
 }
 
 func TestEnsureManifestExists(t *testing.T) {

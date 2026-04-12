@@ -27,17 +27,21 @@ import (
 )
 
 type fakeStorage struct {
-	eventCalls int
-	saveCalls  int
-	eventErr   error
-	saveErr    error
-	loadErr    error
-	lastID     uint64
-	lastTS     uint64
-	leader     bool
-	leaderID   uint64
-	lastEvent  rootevent.Event
-	snapshot   coordstorage.Snapshot
+	eventCalls    int
+	saveCalls     int
+	campaignCalls int
+	releaseCalls  int
+	eventErr      error
+	saveErr       error
+	loadErr       error
+	campaignErr   error
+	releaseErr    error
+	lastID        uint64
+	lastTS        uint64
+	leader        bool
+	leaderID      uint64
+	lastEvent     rootevent.Event
+	snapshot      coordstorage.Snapshot
 }
 
 func (f *fakeStorage) Load() (coordstorage.Snapshot, error) {
@@ -58,10 +62,11 @@ func (f *fakeStorage) AppendRootEvent(event rootevent.Event) error {
 	}
 	snapshot := rootstate.Snapshot{
 		State: rootstate.State{
-			ClusterEpoch:  f.snapshot.ClusterEpoch,
-			IDFence:       f.snapshot.Allocator.IDCurrent,
-			TSOFence:      f.snapshot.Allocator.TSCurrent,
-			LastCommitted: rootstate.Cursor{Term: 1, Index: uint64(f.eventCalls)},
+			ClusterEpoch:     f.snapshot.ClusterEpoch,
+			IDFence:          f.snapshot.Allocator.IDCurrent,
+			TSOFence:         f.snapshot.Allocator.TSCurrent,
+			CoordinatorLease: f.snapshot.CoordinatorLease,
+			LastCommitted:    rootstate.Cursor{Term: 1, Index: uint64(f.eventCalls)},
 		},
 		Descriptors:         rootCloneDescriptorsForTest(f.snapshot.Descriptors),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(f.snapshot.PendingPeerChanges),
@@ -86,6 +91,52 @@ func (f *fakeStorage) SaveAllocatorState(idCurrent, tsCurrent uint64) error {
 		f.snapshot.Allocator.TSCurrent = tsCurrent
 	}
 	return nil
+}
+
+func (f *fakeStorage) CampaignCoordinatorLease(holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
+	f.campaignCalls++
+	if f.campaignErr != nil {
+		return rootstate.CoordinatorLease{}, f.campaignErr
+	}
+	if err := rootstate.ValidateCoordinatorLeaseCampaign(f.snapshot.CoordinatorLease, holderID, expiresUnixNano, nowUnixNano); err != nil {
+		return f.snapshot.CoordinatorLease, err
+	}
+	f.snapshot.CoordinatorLease = rootstate.CoordinatorLease{
+		HolderID:        holderID,
+		ExpiresUnixNano: expiresUnixNano,
+		IDFence:         idFence,
+		TSOFence:        tsoFence,
+	}
+	if idFence > f.snapshot.Allocator.IDCurrent {
+		f.snapshot.Allocator.IDCurrent = idFence
+	}
+	if tsoFence > f.snapshot.Allocator.TSCurrent {
+		f.snapshot.Allocator.TSCurrent = tsoFence
+	}
+	return f.snapshot.CoordinatorLease, nil
+}
+
+func (f *fakeStorage) ReleaseCoordinatorLease(holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
+	f.releaseCalls++
+	if f.releaseErr != nil {
+		return rootstate.CoordinatorLease{}, f.releaseErr
+	}
+	if err := rootstate.ValidateCoordinatorLeaseRelease(f.snapshot.CoordinatorLease, holderID, nowUnixNano); err != nil {
+		return f.snapshot.CoordinatorLease, err
+	}
+	f.snapshot.CoordinatorLease = rootstate.CoordinatorLease{
+		HolderID:        holderID,
+		ExpiresUnixNano: nowUnixNano,
+		IDFence:         idFence,
+		TSOFence:        tsoFence,
+	}
+	if idFence > f.snapshot.Allocator.IDCurrent {
+		f.snapshot.Allocator.IDCurrent = idFence
+	}
+	if tsoFence > f.snapshot.Allocator.TSCurrent {
+		f.snapshot.Allocator.TSCurrent = tsoFence
+	}
+	return f.snapshot.CoordinatorLease, nil
 }
 
 func (f *fakeStorage) Close() error {
@@ -191,6 +242,56 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 	require.Equal(t, coordpb.CatchUpState_CATCH_UP_STATE_FRESH, getResp.GetCatchUpState())
 	require.True(t, getResp.GetServedByLeader())
 	require.Zero(t, getResp.GetRootLag())
+}
+
+func TestServiceDiagnosticsSnapshot(t *testing.T) {
+	now := time.Unix(100, 0)
+	storage := &fakeStorage{
+		leader:   true,
+		leaderID: 7,
+		snapshot: coordstorage.Snapshot{
+			RootToken: rootstorage.TailToken{
+				Cursor:   rootstate.Cursor{Term: 2, Index: 9},
+				Revision: 4,
+			},
+			CatchUpState: coordstorage.CatchUpStateLagging,
+			Allocator: coordstorage.AllocatorState{
+				IDCurrent: 55,
+				TSCurrent: 88,
+			},
+			CoordinatorLease: rootstate.CoordinatorLease{
+				HolderID:        "c1",
+				ExpiresUnixNano: now.Add(5 * time.Second).UnixNano(),
+				IDFence:         60,
+				TSOFence:        90,
+			},
+			Descriptors: map[uint64]descriptor.Descriptor{
+				11: testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}}),
+			},
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(50), tso.NewAllocator(80), storage)
+	svc.now = func() time.Time { return now }
+	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	require.NoError(t, svc.ReloadFromStorage())
+
+	snapshot := svc.DiagnosticsSnapshot()
+	allocator := snapshot["allocator"].(map[string]any)
+	root := snapshot["root"].(map[string]any)
+	lease := snapshot["lease"].(map[string]any)
+
+	require.Equal(t, uint64(55), allocator["id_current"])
+	require.Equal(t, uint64(88), allocator["tso_current"])
+	require.Equal(t, true, root["configured"])
+	require.Equal(t, "CATCH_UP_STATE_FRESH", root["catch_up_state"])
+	require.Equal(t, "DEGRADED_MODE_HEALTHY", root["degraded_mode"])
+	require.Equal(t, uint64(7), root["storage_leader_id"])
+	require.NotZero(t, root["last_reload_unix_nano"])
+	require.Equal(t, true, lease["enabled"])
+	require.Equal(t, "c1", lease["holder_id"])
+	require.Equal(t, true, lease["active"])
+	require.Equal(t, true, lease["held_by_self"])
+	require.Equal(t, true, lease["usable_by_self"])
 }
 
 func TestServiceGetRegionByKeyStrongReadRejectsFollower(t *testing.T) {
@@ -1339,6 +1440,163 @@ func TestServiceAllocatorStatePersistenceError(t *testing.T) {
 	tsResp, err := svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), tsResp.GetTimestamp())
+}
+
+func TestServiceCoordinatorLeaseReusedAcrossAllocatorRequests(t *testing.T) {
+	store := &fakeStorage{leader: true}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.now = func() time.Time { return time.Unix(0, 100) }
+
+	idResp, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.NoError(t, err)
+	require.Equal(t, uint64(10), idResp.GetFirstId())
+	require.Equal(t, 1, store.campaignCalls)
+	require.Equal(t, "c1", store.snapshot.CoordinatorLease.HolderID)
+
+	tsResp, err := svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), tsResp.GetTimestamp())
+	require.Equal(t, 1, store.campaignCalls)
+}
+
+func TestServiceCoordinatorLeaseRenewsInsideRenewWindow(t *testing.T) {
+	store := &fakeStorage{leader: true}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureCoordinatorLease("c1", 100*time.Millisecond, 20*time.Millisecond)
+
+	now := time.Unix(0, 0)
+	svc.now = func() time.Time { return now }
+
+	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.NoError(t, err)
+	require.Equal(t, 1, store.campaignCalls)
+
+	now = now.Add(85 * time.Millisecond)
+	_, err = svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
+	require.NoError(t, err)
+	require.Equal(t, 2, store.campaignCalls)
+}
+
+func TestServiceCoordinatorLeaseStopsBeforeExpiryByClockSkew(t *testing.T) {
+	store := &fakeStorage{leader: true}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureCoordinatorLease("c1", 100*time.Millisecond, 20*time.Millisecond)
+	svc.leaseClockSkew = 40 * time.Millisecond
+
+	now := time.Unix(0, 0)
+	svc.now = func() time.Time { return now }
+
+	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.NoError(t, err)
+	require.Equal(t, 1, store.campaignCalls)
+
+	now = now.Add(65 * time.Millisecond)
+	_, err = svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.NoError(t, err)
+	require.Equal(t, 2, store.campaignCalls)
+}
+
+func TestServiceCoordinatorLeaseLoopRenewsInBackground(t *testing.T) {
+	store := &fakeStorage{leader: true}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureCoordinatorLease("c1", 80*time.Millisecond, 30*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go svc.RunCoordinatorLeaseLoop(ctx)
+
+	require.Eventually(t, func() bool {
+		return store.campaignCalls >= 2
+	}, 300*time.Millisecond, 10*time.Millisecond)
+}
+
+func TestServiceCoordinatorLeaseLoopSkipsFollower(t *testing.T) {
+	store := &fakeStorage{leader: false, leaderID: 2}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureCoordinatorLease("c1", 80*time.Millisecond, 30*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go svc.RunCoordinatorLeaseLoop(ctx)
+
+	time.Sleep(80 * time.Millisecond)
+	require.Equal(t, 0, store.campaignCalls)
+}
+
+func TestServiceReleaseCoordinatorLease(t *testing.T) {
+	store := &fakeStorage{leader: true}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.now = func() time.Time { return time.Unix(0, 100) }
+
+	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.NoError(t, err)
+
+	svc.now = func() time.Time { return time.Unix(0, 200) }
+	require.NoError(t, svc.ReleaseCoordinatorLease())
+	require.Equal(t, 1, store.releaseCalls)
+	require.Equal(t, int64(200), store.snapshot.CoordinatorLease.ExpiresUnixNano)
+	require.False(t, store.snapshot.CoordinatorLease.ActiveAt(200))
+}
+
+func TestServiceCoordinatorLeaseRejectsOtherHolder(t *testing.T) {
+	store := &fakeStorage{
+		leader: true,
+		snapshot: coordstorage.Snapshot{
+			CoordinatorLease: rootstate.CoordinatorLease{
+				HolderID:        "c2",
+				ExpiresUnixNano: 10_000,
+			},
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.now = func() time.Time { return time.Unix(0, 100) }
+
+	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, err.Error(), errCoordinatorLeasePrefix)
+
+	_, err = svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, err.Error(), errCoordinatorLeasePrefix)
+}
+
+func TestServiceStoreHeartbeatSuppressesOperationsWithoutCoordinatorLease(t *testing.T) {
+	store := &fakeStorage{
+		leader: true,
+		snapshot: coordstorage.Snapshot{
+			CoordinatorLease: rootstate.CoordinatorLease{
+				HolderID:        "other",
+				ExpiresUnixNano: 10_000,
+			},
+		},
+	}
+	svc := NewService(catalog.NewCluster(), nil, nil, store)
+	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.now = func() time.Time { return time.Unix(0, 100) }
+
+	err := publishDescriptorEvent(t, svc, testDescriptor(100, []byte(""), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}}), 0)
+	require.NoError(t, err)
+
+	_, err = svc.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
+		StoreId:   2,
+		LeaderNum: 1,
+		RegionNum: 1,
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
+		StoreId:   1,
+		LeaderNum: 10,
+		RegionNum: 1,
+	})
+	require.NoError(t, err)
+	require.True(t, resp.GetAccepted())
+	require.Empty(t, resp.GetOperations())
 }
 
 func TestServiceRejectsWritesOnFollower(t *testing.T) {

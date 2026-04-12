@@ -28,6 +28,7 @@ enum RootEventKind {
   ROOT_EVENT_KIND_PEER_REMOVED = 15;
   ROOT_EVENT_KIND_PEER_ADDITION_CANCELLED = 18;
   ROOT_EVENT_KIND_PEER_REMOVAL_CANCELLED = 19;
+  ROOT_EVENT_KIND_COORDINATOR_LEASE = 20;
 }
 
 message RootCursor {
@@ -41,6 +42,7 @@ message RootState {
   RootCursor last_committed = 4;
   uint64 id_fence = 5;
   uint64 tso_fence = 6;
+  RootCoordinatorLease coordinator_lease = 7;
 }
 
 message RootCheckpoint {
@@ -58,6 +60,13 @@ message RootStoreMembership {
 
 message RootAllocatorFence {
   uint64 minimum = 1;
+}
+
+message RootCoordinatorLease {
+  string holder_id = 1;
+  int64 expires_unix_nano = 2;
+  uint64 id_fence = 3;
+  uint64 tso_fence = 4;
 }
 
 message RootRegionDescriptor {
@@ -137,6 +146,7 @@ message RootEvent {
     RootRangeSplit range_split = 6;
     RootRangeMerge range_merge = 7;
     RootPeerChange peer_change = 8;
+    RootCoordinatorLease coordinator_lease = 9;
   }
 }
 
@@ -175,6 +185,30 @@ message MetadataRootStatusRequest {}
 message MetadataRootStatusResponse {
   bool is_leader = 1;
   uint64 leader_id = 2;
+}
+
+message MetadataRootCampaignRequest {
+  string holder_id = 1;
+  int64 expires_unix_nano = 2;
+  int64 now_unix_nano = 3;
+  uint64 id_fence = 4;
+  uint64 tso_fence = 5;
+}
+
+message MetadataRootCampaignResponse {
+  bool granted = 1;
+  RootCoordinatorLease lease = 2;
+}
+
+message MetadataRootReleaseRequest {
+  string holder_id = 1;
+  int64 now_unix_nano = 2;
+  uint64 id_fence = 3;
+  uint64 tso_fence = 4;
+}
+
+message MetadataRootReleaseResponse {
+  RootCoordinatorLease lease = 1;
 }
 
 message RootTailToken {
@@ -231,6 +265,8 @@ service MetadataRoot {
   rpc Append(MetadataRootAppendRequest) returns (MetadataRootAppendResponse);
   rpc FenceAllocator(MetadataRootFenceAllocatorRequest) returns (MetadataRootFenceAllocatorResponse);
   rpc Status(MetadataRootStatusRequest) returns (MetadataRootStatusResponse);
+  rpc Campaign(MetadataRootCampaignRequest) returns (MetadataRootCampaignResponse);
+  rpc Release(MetadataRootReleaseRequest) returns (MetadataRootReleaseResponse);
   rpc ObserveCommitted(MetadataRootObserveCommittedRequest) returns (MetadataRootObserveCommittedResponse);
   rpc ObserveTail(MetadataRootObserveTailRequest) returns (MetadataRootObserveTailResponse);
   rpc WaitTail(MetadataRootWaitTailRequest) returns (MetadataRootWaitTailResponse);

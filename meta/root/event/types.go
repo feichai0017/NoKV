@@ -26,6 +26,7 @@ const (
 	KindPeerRemoved
 	KindPeerAdditionCancelled
 	KindPeerRemovalCancelled
+	KindCoordinatorLease
 )
 
 // StoreMembership describes one store membership change carried by a root event.
@@ -37,6 +38,14 @@ type StoreMembership struct {
 // AllocatorFence raises one rooted allocator floor monotonically.
 type AllocatorFence struct {
 	Minimum uint64
+}
+
+// CoordinatorLease records the current control-plane owner lease.
+type CoordinatorLease struct {
+	HolderID        string
+	ExpiresUnixNano int64
+	IDFence         uint64
+	TSOFence        uint64
 }
 
 // RegionDescriptorRecord carries one descriptor snapshot into the root log.
@@ -82,6 +91,7 @@ type Event struct {
 
 	StoreMembership  *StoreMembership
 	AllocatorFence   *AllocatorFence
+	CoordinatorLease *CoordinatorLease
 	RegionDescriptor *RegionDescriptorRecord
 	RegionRemoval    *RegionRemoval
 	RangeSplit       *RangeSplit
@@ -103,6 +113,30 @@ func IDAllocatorFenced(min uint64) Event {
 
 func TSOAllocatorFenced(min uint64) Event {
 	return Event{Kind: KindTSOAllocatorFenced, AllocatorFence: &AllocatorFence{Minimum: min}}
+}
+
+func CoordinatorLeaseGranted(holderID string, expiresUnixNano int64, idFence, tsoFence uint64) Event {
+	return Event{
+		Kind: KindCoordinatorLease,
+		CoordinatorLease: &CoordinatorLease{
+			HolderID:        holderID,
+			ExpiresUnixNano: expiresUnixNano,
+			IDFence:         idFence,
+			TSOFence:        tsoFence,
+		},
+	}
+}
+
+func CoordinatorLeaseReleased(holderID string, releasedUnixNano int64, idFence, tsoFence uint64) Event {
+	return Event{
+		Kind: KindCoordinatorLease,
+		CoordinatorLease: &CoordinatorLease{
+			HolderID:        holderID,
+			ExpiresUnixNano: releasedUnixNano,
+			IDFence:         idFence,
+			TSOFence:        tsoFence,
+		},
+	}
 }
 
 func RegionBootstrapped(desc descriptor.Descriptor) Event {

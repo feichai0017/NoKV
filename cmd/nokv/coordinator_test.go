@@ -5,8 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootremote "github.com/feichai0017/NoKV/meta/root/remote"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,6 +20,7 @@ import (
 	pdstorage "github.com/feichai0017/NoKV/coordinator/storage"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 func TestRunCoordinatorCmdParseError(t *testing.T) {
@@ -63,6 +68,47 @@ func TestRunCoordinatorCmdStartsAndStopsWithReplicatedRoot(t *testing.T) {
 	require.Contains(t, buf.String(), "Coordinator metadata root mode: replicated")
 }
 
+func TestRunCoordinatorCmdStartsAndStopsWithRemoteRoot(t *testing.T) {
+	origNotify := coordinatorNotifyContext
+	coordinatorNotifyContext = func(parent context.Context, _ ...os.Signal) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(parent)
+		cancel()
+		return ctx, cancel
+	}
+	t.Cleanup(func() { coordinatorNotifyContext = origNotify })
+
+	backend, err := rootlocal.Open(t.TempDir(), nil)
+	require.NoError(t, err)
+	_, err = backend.Append(rootevent.RegionBootstrapped(testDescriptor(41, []byte("a"), []byte("z"), metaregion.Epoch{
+		Version:     1,
+		ConfVersion: 1,
+	})))
+	require.NoError(t, err)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lis.Close() })
+
+	server := grpc.NewServer()
+	metapb.RegisterMetadataRootServer(server, rootremote.NewService(backend))
+	go func() { _ = server.Serve(lis) }()
+	t.Cleanup(server.GracefulStop)
+
+	var buf bytes.Buffer
+	require.NoError(t, runCoordinatorCmd(&buf, []string{
+		"-addr", "127.0.0.1:0",
+		"-root-mode", "remote",
+		"-root-peer", "1=" + lis.Addr().String(),
+		"-coordinator-id", "c1",
+		"-lease-ttl", "15s",
+		"-lease-renew-before", "5s",
+	}))
+	require.Contains(t, buf.String(), "Coordinator service listening on")
+	require.Contains(t, buf.String(), "Coordinator metadata root mode: remote")
+	require.Contains(t, buf.String(), "Coordinator restored 1 region(s) from remote metadata root")
+	require.Contains(t, buf.String(), "Coordinator lease owner: id=c1 ttl=15s renew_before=5s")
+}
+
 func TestRunCoordinatorCmdInvalidMetricsAddr(t *testing.T) {
 	origNotify := coordinatorNotifyContext
 	coordinatorNotifyContext = func(parent context.Context, _ ...os.Signal) (context.Context, context.CancelFunc) {
@@ -94,6 +140,44 @@ func TestRunCoordinatorCmdReplicatedRootRequiresTransportAddress(t *testing.T) {
 		"-root-peer", "3=127.0.0.1:7003",
 	})
 	require.ErrorContains(t, err, "requires transport address")
+}
+
+func TestRunCoordinatorCmdRemoteRootRequiresPeers(t *testing.T) {
+	var buf bytes.Buffer
+	err := runCoordinatorCmd(&buf, []string{
+		"-addr", "127.0.0.1:0",
+		"-root-mode", "remote",
+		"-coordinator-id", "c1",
+	})
+	require.ErrorContains(t, err, "requires at least one target")
+}
+
+func TestRunCoordinatorCmdRemoteRootRequiresCoordinatorID(t *testing.T) {
+	var buf bytes.Buffer
+	err := runCoordinatorCmd(&buf, []string{
+		"-addr", "127.0.0.1:0",
+		"-root-mode", "remote",
+		"-root-peer", "1=127.0.0.1:2380",
+	})
+	require.ErrorContains(t, err, "requires --coordinator-id")
+}
+
+func TestRunCoordinatorCmdLeaseFlagsRequireCoordinatorID(t *testing.T) {
+	var buf bytes.Buffer
+	err := runCoordinatorCmd(&buf, []string{
+		"-addr", "127.0.0.1:0",
+		"-lease-ttl", "12s",
+	})
+	require.ErrorContains(t, err, "lease flags require --coordinator-id")
+}
+
+func TestRunCoordinatorCmdCoordinatorIDRequiresRootedStorage(t *testing.T) {
+	var buf bytes.Buffer
+	err := runCoordinatorCmd(&buf, []string{
+		"-addr", "127.0.0.1:0",
+		"-coordinator-id", "c1",
+	})
+	require.ErrorContains(t, err, "requires rooted storage")
 }
 
 func TestRunCoordinatorCmdReplicatedRootRequiresThreePeers(t *testing.T) {

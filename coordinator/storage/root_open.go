@@ -48,6 +48,16 @@ func OpenRootStore(root rootBackend) (*RootStore, error) {
 	if campaigner, ok := root.(interface{ Campaign() error }); ok {
 		store.campaign = campaigner.Campaign
 	}
+	if leaseCampaigner, ok := root.(interface {
+		CampaignCoordinatorLease(holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error)
+	}); ok {
+		store.campaignCoordinatorLease = leaseCampaigner.CampaignCoordinatorLease
+	}
+	if leaseReleaser, ok := root.(interface {
+		ReleaseCoordinatorLease(holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error)
+	}); ok {
+		store.releaseCoordinatorLease = leaseReleaser.ReleaseCoordinatorLease
+	}
 	if err := store.reload(); err != nil {
 		return nil, err
 	}

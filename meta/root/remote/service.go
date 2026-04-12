@@ -2,6 +2,7 @@ package remote
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
@@ -34,6 +35,11 @@ type observedBackend interface {
 type tailBackend interface {
 	ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
 	WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
+}
+
+type leaseBackend interface {
+	CampaignCoordinatorLease(holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error)
+	ReleaseCoordinatorLease(holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error)
 }
 
 // Service exposes one metadata-root backend through the MetadataRoot RPC API.
@@ -115,6 +121,62 @@ func (s *Service) Status(context.Context, *metapb.MetadataRootStatusRequest) (*m
 		return &metapb.MetadataRootStatusResponse{IsLeader: leader.IsLeader(), LeaderId: leader.LeaderID()}, nil
 	}
 	return &metapb.MetadataRootStatusResponse{IsLeader: true}, nil
+}
+
+func (s *Service) Campaign(_ context.Context, req *metapb.MetadataRootCampaignRequest) (*metapb.MetadataRootCampaignResponse, error) {
+	if s == nil || s.backend == nil {
+		return &metapb.MetadataRootCampaignResponse{}, nil
+	}
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
+	campaigner, ok := s.backend.(leaseBackend)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "metadata root coordinator lease campaign is not supported")
+	}
+	lease, err := campaigner.CampaignCoordinatorLease(
+		req.GetHolderId(),
+		req.GetExpiresUnixNano(),
+		req.GetNowUnixNano(),
+		req.GetIdFence(),
+		req.GetTsoFence(),
+	)
+	if err != nil {
+		if errors.Is(err, rootstate.ErrCoordinatorLeaseHeld) {
+			return &metapb.MetadataRootCampaignResponse{Granted: false, Lease: metawire.RootCoordinatorLeaseToProto(lease)}, nil
+		}
+		if errors.Is(err, rootstate.ErrInvalidCoordinatorLease) {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &metapb.MetadataRootCampaignResponse{Granted: true, Lease: metawire.RootCoordinatorLeaseToProto(lease)}, nil
+}
+
+func (s *Service) Release(_ context.Context, req *metapb.MetadataRootReleaseRequest) (*metapb.MetadataRootReleaseResponse, error) {
+	if s == nil || s.backend == nil {
+		return &metapb.MetadataRootReleaseResponse{}, nil
+	}
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
+	releaser, ok := s.backend.(leaseBackend)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "metadata root coordinator lease release is not supported")
+	}
+	lease, err := releaser.ReleaseCoordinatorLease(
+		req.GetHolderId(),
+		req.GetNowUnixNano(),
+		req.GetIdFence(),
+		req.GetTsoFence(),
+	)
+	if err != nil {
+		if errors.Is(err, rootstate.ErrCoordinatorLeaseOwner) || errors.Is(err, rootstate.ErrInvalidCoordinatorLease) {
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &metapb.MetadataRootReleaseResponse{Lease: metawire.RootCoordinatorLeaseToProto(lease)}, nil
 }
 
 func (s *Service) ObserveCommitted(context.Context, *metapb.MetadataRootObserveCommittedRequest) (*metapb.MetadataRootObserveCommittedResponse, error) {

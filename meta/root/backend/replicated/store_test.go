@@ -2,6 +2,7 @@ package replicated
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -227,6 +228,101 @@ func TestReplicatedStoreFenceAllocator(t *testing.T) {
 		}
 		return current.IDFence == 123 && current.TSOFence == 456
 	}, 5*time.Second, 50*time.Millisecond)
+}
+
+func TestReplicatedStoreCampaignCoordinatorLease(t *testing.T) {
+	stores, _, leaderID := openNetworkTestCluster(t, 4)
+	followerID := uint64(1)
+	if followerID == leaderID {
+		followerID = 2
+	}
+
+	lease, err := stores[leaderID].CampaignCoordinatorLease("c1", 1_000, 100, 123, 456)
+	require.NoError(t, err)
+	require.Equal(t, "c1", lease.HolderID)
+	require.Equal(t, uint64(123), lease.IDFence)
+	require.Equal(t, uint64(456), lease.TSOFence)
+
+	_, err = stores[leaderID].CampaignCoordinatorLease("c2", 1_500, 200, 200, 500)
+	require.Error(t, err)
+
+	require.Eventually(t, func() bool {
+		if err := stores[followerID].Refresh(); err != nil {
+			return false
+		}
+		current, err := stores[followerID].Current()
+		if err != nil {
+			return false
+		}
+		return current.CoordinatorLease.HolderID == "c1" && current.IDFence == 123 && current.TSOFence == 456
+	}, 5*time.Second, 50*time.Millisecond)
+}
+
+func TestReplicatedStoreCoordinatorLeaseFenceSurvivesLeaderChange(t *testing.T) {
+	stores, drivers, leaderID := openNetworkTestCluster(t, 8)
+	followerID := uint64(1)
+	if followerID == leaderID {
+		followerID = 2
+	}
+
+	lease, err := stores[leaderID].CampaignCoordinatorLease("c1", 1_000, 100, 123, 456)
+	require.NoError(t, err)
+	require.Equal(t, "c1", lease.HolderID)
+	require.Equal(t, uint64(123), lease.IDFence)
+	require.Equal(t, uint64(456), lease.TSOFence)
+
+	require.Eventually(t, func() bool {
+		if err := stores[followerID].Refresh(); err != nil {
+			return false
+		}
+		current, err := stores[followerID].Current()
+		return err == nil &&
+			current.CoordinatorLease.HolderID == "c1" &&
+			current.IDFence == 123 &&
+			current.TSOFence == 456
+	}, 5*time.Second, 50*time.Millisecond)
+
+	require.NoError(t, drivers[followerID].Campaign())
+	require.Eventually(t, func() bool {
+		return drivers[followerID].IsLeader()
+	}, 5*time.Second, 50*time.Millisecond)
+
+	renewed, err := stores[followerID].CampaignCoordinatorLease("c1", 2_000, 500, 200, 600)
+	require.NoError(t, err)
+	require.Equal(t, "c1", renewed.HolderID)
+	require.Equal(t, uint64(200), renewed.IDFence)
+	require.Equal(t, uint64(600), renewed.TSOFence)
+
+	for _, id := range []uint64{1, 2, 3} {
+		require.Eventually(t, func() bool {
+			if err := stores[id].Refresh(); err != nil {
+				return false
+			}
+			current, err := stores[id].Current()
+			return err == nil &&
+				current.CoordinatorLease.HolderID == "c1" &&
+				current.IDFence == 200 &&
+				current.TSOFence == 600
+		}, 5*time.Second, 50*time.Millisecond)
+	}
+}
+
+func TestReplicatedStoreReleaseCoordinatorLease(t *testing.T) {
+	stores, _, leaderID := openNetworkTestCluster(t, 4)
+
+	_, err := stores[leaderID].CampaignCoordinatorLease("c1", 1_000, 100, 123, 456)
+	require.NoError(t, err)
+
+	lease, err := stores[leaderID].ReleaseCoordinatorLease("c1", 200, 300, 500)
+	require.NoError(t, err)
+	require.Equal(t, "c1", lease.HolderID)
+	require.Equal(t, int64(200), lease.ExpiresUnixNano)
+	require.Equal(t, uint64(300), lease.IDFence)
+	require.Equal(t, uint64(500), lease.TSOFence)
+
+	_, err = stores[leaderID].ReleaseCoordinatorLease("c2", 250, 300, 500)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, rootstate.ErrCoordinatorLeaseOwner))
 }
 
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {

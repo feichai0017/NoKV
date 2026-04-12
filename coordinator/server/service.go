@@ -17,29 +17,45 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"strings"
 	"sync"
+	"time"
 )
 
 // Service implements the Coordinator gRPC API.
 type Service struct {
 	coordpb.UnimplementedCoordinatorServer
 
-	cluster       *catalog.Cluster
-	ids           *idalloc.IDAllocator
-	tso           *tso.Allocator
-	storage       coordstorage.RootStorage
-	idWindowHigh  uint64
-	idWindowSize  uint64
-	tsoWindowHigh uint64
-	tsoWindowSize uint64
-	allocMu       sync.Mutex
-	writeMu       sync.Mutex
+	cluster        *catalog.Cluster
+	ids            *idalloc.IDAllocator
+	tso            *tso.Allocator
+	storage        coordstorage.RootStorage
+	idWindowHigh   uint64
+	idWindowSize   uint64
+	tsoWindowHigh  uint64
+	tsoWindowSize  uint64
+	allocMu        sync.Mutex
+	writeMu        sync.Mutex
+	leaseMu        sync.RWMutex
+	coordinatorID  string
+	leaseTTL       time.Duration
+	leaseRenewIn   time.Duration
+	leaseClockSkew time.Duration
+	now            func() time.Time
+	lease          rootstate.CoordinatorLease
+	statusMu       sync.RWMutex
+	lastRootReload int64
+	lastRootError  string
 }
 
 const defaultAllocatorWindowSize uint64 = 10_000
+const defaultCoordinatorLeaseTTL = 10 * time.Second
+const defaultCoordinatorLeaseRenewIn = 3 * time.Second
+const defaultCoordinatorLeaseClockSkew = 500 * time.Millisecond
 
 const errNotLeaderPrefix = "coordinator not leader"
 const errRootUnavailable = "coordinator root unavailable"
+const errCoordinatorLeasePrefix = "coordinator lease not held"
 
 // NewService constructs a Coordinator service. The optional root storage fixes
 // durable rooted persistence at construction time; omitting it keeps the service
@@ -65,7 +81,45 @@ func NewService(cluster *catalog.Cluster, ids *idalloc.IDAllocator, tsAlloc *tso
 		storage:       storage,
 		idWindowSize:  defaultAllocatorWindowSize,
 		tsoWindowSize: defaultAllocatorWindowSize,
+		now:           time.Now,
 	}
+}
+
+// ConfigureCoordinatorLease enables the explicit coordinator owner lease gate.
+// Empty holderID disables the gate and keeps the current in-memory-only behavior.
+func (s *Service) ConfigureCoordinatorLease(holderID string, ttl, renewIn time.Duration) {
+	if s == nil {
+		return
+	}
+	s.leaseMu.Lock()
+	defer s.leaseMu.Unlock()
+	s.coordinatorID = holderID
+	if holderID == "" {
+		s.leaseTTL = 0
+		s.leaseRenewIn = 0
+		s.leaseClockSkew = 0
+		s.lease = rootstate.CoordinatorLease{}
+		return
+	}
+	if ttl <= 0 {
+		ttl = defaultCoordinatorLeaseTTL
+	}
+	if renewIn <= 0 || renewIn >= ttl {
+		renewIn = defaultCoordinatorLeaseRenewIn
+		if renewIn >= ttl {
+			renewIn = ttl / 2
+		}
+	}
+	clockSkew := defaultCoordinatorLeaseClockSkew
+	if clockSkew >= renewIn && renewIn > 0 {
+		clockSkew = renewIn / 2
+	}
+	if clockSkew <= 0 {
+		clockSkew = time.Millisecond
+	}
+	s.leaseTTL = ttl
+	s.leaseRenewIn = renewIn
+	s.leaseClockSkew = clockSkew
 }
 
 // RefreshFromStorage refreshes rooted durable state into the in-memory service
@@ -108,9 +162,10 @@ func (s *Service) StoreHeartbeat(_ context.Context, req *coordpb.StoreHeartbeatR
 		}
 		return nil, status.Error(codes.Internal, err.Error())
 	}
+	operations := s.leaseScopedStoreOperations(req.GetStoreId())
 	return &coordpb.StoreHeartbeatResponse{
 		Accepted:   true,
-		Operations: s.planStoreOperations(req.GetStoreId()),
+		Operations: operations,
 	}, nil
 }
 
@@ -256,12 +311,17 @@ func (s *Service) reloadRootedView(refresh bool) (coordstorage.Snapshot, error) 
 func (s *Service) reloadAndFenceAllocators(refresh bool) error {
 	snapshot, err := s.reloadRootedView(refresh)
 	if err != nil {
+		s.setLastRootReload(err)
 		return err
 	}
 	s.allocMu.Lock()
 	defer s.allocMu.Unlock()
 	s.fenceIDFromStorage(snapshot.Allocator.IDCurrent)
 	s.fenceTSOFromStorage(snapshot.Allocator.TSCurrent)
+	s.leaseMu.Lock()
+	s.lease = snapshot.CoordinatorLease
+	s.leaseMu.Unlock()
+	s.setLastRootReload(nil)
 	return nil
 }
 
@@ -474,6 +534,9 @@ func (s *Service) AllocID(_ context.Context, req *coordpb.AllocIDRequest) (*coor
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
+	if err := s.requireCoordinatorLease(); err != nil {
+		return nil, err
+	}
 	first, err := s.reserveIDs(count)
 	if err != nil {
 		if errors.Is(err, idalloc.ErrInvalidBatch) {
@@ -497,6 +560,9 @@ func (s *Service) Tso(_ context.Context, req *coordpb.TsoRequest) (*coordpb.TsoR
 		count = 1
 	}
 	if err := s.requireLeaderForWrite(); err != nil {
+		return nil, err
+	}
+	if err := s.requireCoordinatorLease(); err != nil {
 		return nil, err
 	}
 	first, got, err := s.reserveTSO(count)
@@ -733,6 +799,196 @@ func (s *Service) requireLeaderForWrite() error {
 		return status.Error(codes.FailedPrecondition, fmt.Sprintf("%s (leader_id=%d)", errNotLeaderPrefix, leaderID))
 	}
 	return status.Error(codes.FailedPrecondition, errNotLeaderPrefix)
+}
+
+func (s *Service) leaseScopedStoreOperations(storeID uint64) []*coordpb.SchedulerOperation {
+	if s == nil || !s.coordinatorLeaseEnabled() {
+		return s.planStoreOperations(storeID)
+	}
+	if s.storage != nil && !s.storage.IsLeader() {
+		return nil
+	}
+	if err := s.ensureCoordinatorLease(); err != nil {
+		return nil
+	}
+	return s.planStoreOperations(storeID)
+}
+
+func (s *Service) requireCoordinatorLease() error {
+	if s == nil || !s.coordinatorLeaseEnabled() {
+		return nil
+	}
+	if err := s.ensureCoordinatorLease(); err != nil {
+		return translateCoordinatorLeaseError(err)
+	}
+	return nil
+}
+
+// RunCoordinatorLeaseLoop keeps the local coordinator lease renewed while ctx
+// remains alive. The loop is explicit so callers can decide lifecycle and avoid
+// hidden background goroutines in constructors.
+func (s *Service) RunCoordinatorLeaseLoop(ctx context.Context) {
+	if s == nil || ctx == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
+		return
+	}
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			if s.storage.IsLeader() {
+				_ = s.ensureCoordinatorLease()
+			}
+			timer.Reset(s.coordinatorLeaseLoopInterval())
+		}
+	}
+}
+
+// ReleaseCoordinatorLease explicitly releases the current rooted coordinator
+// lease for the configured holder. It is intended for graceful shutdown.
+func (s *Service) ReleaseCoordinatorLease() error {
+	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
+		return nil
+	}
+	if !s.storage.IsLeader() {
+		return nil
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	nowFn := s.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	nowUnixNano := nowFn().UnixNano()
+
+	s.leaseMu.RLock()
+	holderID := s.coordinatorID
+	s.leaseMu.RUnlock()
+	if strings.TrimSpace(holderID) == "" {
+		return nil
+	}
+
+	s.allocMu.Lock()
+	idFence := s.currentIDFenceLocked()
+	tsoFence := s.currentTSOFenceLocked()
+	s.allocMu.Unlock()
+
+	lease, err := s.storage.ReleaseCoordinatorLease(holderID, nowUnixNano, idFence, tsoFence)
+	if err != nil {
+		return err
+	}
+	s.leaseMu.Lock()
+	s.lease = lease
+	s.leaseMu.Unlock()
+	return s.reloadAndFenceAllocators(false)
+}
+
+func (s *Service) ensureCoordinatorLease() error {
+	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
+		return nil
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	nowUnixNano, expiresUnixNano, holderID, renewIn, clockSkew := s.leaseCampaignBounds()
+	current := s.currentCoordinatorLease()
+	if current.HolderID == holderID &&
+		current.ExpiresUnixNano > nowUnixNano+renewIn.Nanoseconds() &&
+		current.ExpiresUnixNano > nowUnixNano+clockSkew.Nanoseconds() {
+		return nil
+	}
+
+	s.allocMu.Lock()
+	idFence := s.currentIDFenceLocked()
+	tsoFence := s.currentTSOFenceLocked()
+	s.allocMu.Unlock()
+
+	lease, err := s.storage.CampaignCoordinatorLease(holderID, expiresUnixNano, nowUnixNano, idFence, tsoFence)
+	if err != nil {
+		return err
+	}
+	s.leaseMu.Lock()
+	s.lease = lease
+	s.leaseMu.Unlock()
+	return s.reloadAndFenceAllocators(false)
+}
+
+func (s *Service) coordinatorLeaseLoopInterval() time.Duration {
+	if s == nil {
+		return time.Second
+	}
+	s.leaseMu.RLock()
+	defer s.leaseMu.RUnlock()
+	interval := s.leaseRenewIn / 2
+	if interval <= 0 {
+		interval = time.Second
+	}
+	if interval < 10*time.Millisecond {
+		interval = 10 * time.Millisecond
+	}
+	return interval
+}
+
+func (s *Service) coordinatorLeaseEnabled() bool {
+	if s == nil {
+		return false
+	}
+	s.leaseMu.RLock()
+	defer s.leaseMu.RUnlock()
+	return s.coordinatorID != "" && s.leaseTTL > 0
+}
+
+func (s *Service) currentCoordinatorLease() rootstate.CoordinatorLease {
+	if s == nil {
+		return rootstate.CoordinatorLease{}
+	}
+	s.leaseMu.RLock()
+	defer s.leaseMu.RUnlock()
+	return s.lease
+}
+
+func (s *Service) leaseCampaignBounds() (nowUnixNano, expiresUnixNano int64, holderID string, renewIn, clockSkew time.Duration) {
+	if s == nil {
+		return 0, 0, "", 0, 0
+	}
+	s.leaseMu.RLock()
+	defer s.leaseMu.RUnlock()
+	nowFn := s.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	now := nowFn()
+	return now.UnixNano(), now.Add(s.leaseTTL).UnixNano(), s.coordinatorID, s.leaseRenewIn, s.leaseClockSkew
+}
+
+func translateCoordinatorLeaseError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, rootstate.ErrCoordinatorLeaseHeld) {
+		return status.Error(codes.FailedPrecondition, fmt.Sprintf("%s: %v", errCoordinatorLeasePrefix, err))
+	}
+	return status.Error(codes.Internal, "campaign coordinator lease: "+err.Error())
+}
+
+func (s *Service) setLastRootReload(err error) {
+	if s == nil {
+		return
+	}
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	if err != nil {
+		s.lastRootError = err.Error()
+		return
+	}
+	nowFn := s.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	s.lastRootReload = nowFn().UnixNano()
+	s.lastRootError = ""
 }
 
 func (s *Service) requireExpectedClusterEpoch(expected uint64) error {

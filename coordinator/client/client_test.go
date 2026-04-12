@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"net"
@@ -188,10 +189,16 @@ func (f *followerStorage) Load() (coordstorage.Snapshot, error) {
 }
 func (f *followerStorage) AppendRootEvent(rootevent.Event) error   { return nil }
 func (f *followerStorage) SaveAllocatorState(uint64, uint64) error { return nil }
-func (f *followerStorage) Refresh() error                          { return nil }
-func (f *followerStorage) Close() error                            { return nil }
-func (f *followerStorage) IsLeader() bool                          { return false }
-func (f *followerStorage) LeaderID() uint64                        { return 2 }
+func (f *followerStorage) CampaignCoordinatorLease(string, int64, int64, uint64, uint64) (rootstate.CoordinatorLease, error) {
+	return rootstate.CoordinatorLease{}, nil
+}
+func (f *followerStorage) ReleaseCoordinatorLease(string, int64, uint64, uint64) (rootstate.CoordinatorLease, error) {
+	return rootstate.CoordinatorLease{}, nil
+}
+func (f *followerStorage) Refresh() error   { return nil }
+func (f *followerStorage) Close() error     { return nil }
+func (f *followerStorage) IsLeader() bool   { return false }
+func (f *followerStorage) LeaderID() uint64 { return 2 }
 
 func TestGRPCClientDoesNotRetryReadOnNotLeaderWriteError(t *testing.T) {
 	err := status.Error(codes.FailedPrecondition, errNotLeaderPrefix+" (leader_id=2)")

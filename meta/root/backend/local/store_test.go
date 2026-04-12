@@ -1,6 +1,7 @@
 package local
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -79,6 +80,55 @@ func TestStoreFenceAllocatorPersistsWithoutEvents(t *testing.T) {
 	require.Equal(t, uint64(10), state.IDFence)
 	require.Equal(t, uint64(22), state.TSOFence)
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 2}, state.LastCommitted)
+}
+
+func TestStoreCampaignCoordinatorLease(t *testing.T) {
+	store, err := Open(t.TempDir(), nil)
+	require.NoError(t, err)
+
+	lease, err := store.CampaignCoordinatorLease("c1", 1_000, 100, 10, 20)
+	require.NoError(t, err)
+	require.Equal(t, "c1", lease.HolderID)
+	require.Equal(t, int64(1_000), lease.ExpiresUnixNano)
+	require.Equal(t, uint64(10), lease.IDFence)
+	require.Equal(t, uint64(20), lease.TSOFence)
+
+	state, err := store.Current()
+	require.NoError(t, err)
+	require.Equal(t, lease, state.CoordinatorLease)
+	require.Equal(t, uint64(10), state.IDFence)
+	require.Equal(t, uint64(20), state.TSOFence)
+
+	held, err := store.CampaignCoordinatorLease("c2", 1_500, 200, 30, 40)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, rootstate.ErrCoordinatorLeaseHeld))
+	require.Equal(t, lease, held)
+
+	lease, err = store.CampaignCoordinatorLease("c2", 2_000, 1_001, 30, 40)
+	require.NoError(t, err)
+	require.Equal(t, "c2", lease.HolderID)
+	require.Equal(t, uint64(30), lease.IDFence)
+	require.Equal(t, uint64(40), lease.TSOFence)
+}
+
+func TestStoreReleaseCoordinatorLease(t *testing.T) {
+	store, err := Open(t.TempDir(), nil)
+	require.NoError(t, err)
+
+	_, err = store.CampaignCoordinatorLease("c1", 1_000, 100, 10, 20)
+	require.NoError(t, err)
+
+	lease, err := store.ReleaseCoordinatorLease("c1", 200, 30, 40)
+	require.NoError(t, err)
+	require.Equal(t, "c1", lease.HolderID)
+	require.Equal(t, int64(200), lease.ExpiresUnixNano)
+	require.Equal(t, uint64(30), lease.IDFence)
+	require.Equal(t, uint64(40), lease.TSOFence)
+	require.False(t, lease.ActiveAt(200))
+
+	_, err = store.ReleaseCoordinatorLease("c2", 250, 30, 40)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, rootstate.ErrCoordinatorLeaseOwner))
 }
 
 func TestStoreIgnoresTruncatedLogTail(t *testing.T) {

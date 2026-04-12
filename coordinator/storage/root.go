@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -13,15 +14,17 @@ import (
 // RootStore persists Coordinator truth on top of the metadata root and reconstructs the
 // region catalog by replaying committed root events.
 type RootStore struct {
-	root        rootBackend
-	refresh     func() error
-	observeTail func(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
-	waitForTail func(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
-	tailNotify  func() <-chan struct{}
-	observe     func() (rootstorage.ObservedCommitted, error)
-	isLeader    func() bool
-	leaderID    func() uint64
-	campaign    func() error
+	root                     rootBackend
+	refresh                  func() error
+	observeTail              func(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
+	waitForTail              func(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
+	tailNotify               func() <-chan struct{}
+	observe                  func() (rootstorage.ObservedCommitted, error)
+	isLeader                 func() bool
+	leaderID                 func() uint64
+	campaign                 func() error
+	campaignCoordinatorLease func(holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error)
+	releaseCoordinatorLease  func(holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error)
 
 	mu       sync.RWMutex
 	snapshot Snapshot
@@ -131,6 +134,9 @@ func (s *RootStore) Campaign() error {
 	return s.campaign()
 }
 
+var errCoordinatorLeaseUnsupported = errors.New("coordinator/storage: coordinator lease campaign unsupported")
+var errCoordinatorLeaseReleaseUnsupported = errors.New("coordinator/storage: coordinator lease release unsupported")
+
 // AppendRootEvent persists one explicit rooted metadata event.
 func (s *RootStore) AppendRootEvent(event rootevent.Event) error {
 	if s == nil || s.root == nil || event.Kind == rootevent.KindUnknown {
@@ -154,6 +160,34 @@ func (s *RootStore) SaveAllocatorState(idCurrent, tsCurrent uint64) error {
 		return err
 	}
 	return s.reload()
+}
+
+func (s *RootStore) CampaignCoordinatorLease(holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
+	if s == nil || s.root == nil {
+		return rootstate.CoordinatorLease{}, nil
+	}
+	if s.campaignCoordinatorLease == nil {
+		return rootstate.CoordinatorLease{}, errCoordinatorLeaseUnsupported
+	}
+	lease, err := s.campaignCoordinatorLease(holderID, expiresUnixNano, nowUnixNano, idFence, tsoFence)
+	if err != nil {
+		return lease, err
+	}
+	return lease, s.reload()
+}
+
+func (s *RootStore) ReleaseCoordinatorLease(holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
+	if s == nil || s.root == nil {
+		return rootstate.CoordinatorLease{}, nil
+	}
+	if s.releaseCoordinatorLease == nil {
+		return rootstate.CoordinatorLease{}, errCoordinatorLeaseReleaseUnsupported
+	}
+	lease, err := s.releaseCoordinatorLease(holderID, nowUnixNano, idFence, tsoFence)
+	if err != nil {
+		return lease, err
+	}
+	return lease, s.reload()
 }
 
 // Close releases storage resources.

@@ -36,6 +36,27 @@ This split is deliberate:
   - this is a bootstrap/dev launcher, not a restart command
   - it may seed fresh workdirs from `config.regions`, so it should not be used against stores that already contain runtime raft/local metadata
 
+### `scripts/dev/separated-cluster.sh`
+- Purpose: build `nokv` and `nokv-config`, start a local separated control
+  plane, seed fresh store workdirs, then start stores from `raft_config.json`.
+- Starts:
+  - three `nokv meta-root --mode replicated` processes
+  - one `nokv coordinator --root-mode remote`
+  - all configured stores
+- Example:
+  ```bash
+  ./scripts/dev/separated-cluster.sh --config ./raft_config.example.json --workdir ./artifacts/separated-cluster
+  ```
+- Notes:
+  - uses fixed local metadata-root gRPC endpoints `127.0.0.1:2380/2381/2382`
+  - uses fixed local metadata-root raft transport endpoints `127.0.0.1:3380/3381/3382`
+  - uses an isolated `--workdir` tree and does not reuse config-defined store
+    workdirs
+  - this is a bootstrap/dev launcher, not a restart command
+  - production-style restarts should run `nokv meta-root`,
+    `nokv coordinator --root-mode remote`, and `scripts/ops/serve-store.sh`
+    directly against the same durable workdirs
+
 ### `scripts/ops/bootstrap.sh`
 - Purpose: seed local peer catalog metadata into a set of store directories derived from a path template.
 - Intended for:
@@ -69,6 +90,26 @@ This split is deliberate:
   - if a static transport override is needed, use `--store-addr <store-id>=<addr>`
     rather than a peer-id keyed mapping
   - `--scope docker` selects container-friendly addresses
+
+### `scripts/ops/serve-meta-root.sh`
+- Purpose: thin wrapper around `nokv meta-root` for one metadata-root process.
+- Example:
+  ```bash
+  ./scripts/ops/serve-meta-root.sh \
+    --addr 127.0.0.1:2380 \
+    --mode replicated \
+    --workdir ./artifacts/separated-cluster/meta-root-1 \
+    --node-id 1 \
+    --transport-addr 127.0.0.1:3380 \
+    --peer 1=127.0.0.1:3380 \
+    --peer 2=127.0.0.1:3381 \
+    --peer 3=127.0.0.1:3382
+  ```
+- Notes:
+  - `--peer` values are metadata-root raft transport addresses, not gRPC
+    service addresses
+  - forwards shutdown signals to `nokv meta-root`
+  - accepts `--metrics-addr` to expose `nokv_meta_root` through expvar
 
 ## Migration Workflow
 
