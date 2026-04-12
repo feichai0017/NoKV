@@ -11,6 +11,10 @@ func CloneEvent(in Event) Event {
 		cp := *in.AllocatorFence
 		out.AllocatorFence = &cp
 	}
+	if in.CoordinatorLease != nil {
+		cp := *in.CoordinatorLease
+		out.CoordinatorLease = &cp
+	}
 	if in.RegionDescriptor != nil {
 		cp := *in.RegionDescriptor
 		cp.Descriptor = in.RegionDescriptor.Descriptor.Clone()

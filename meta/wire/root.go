@@ -20,11 +20,12 @@ func RootCursorFromProto(pbCursor *metapb.RootCursor) rootstate.Cursor {
 
 func RootStateToProto(state rootstate.State) *metapb.RootState {
 	return &metapb.RootState{
-		ClusterEpoch:    state.ClusterEpoch,
-		MembershipEpoch: state.MembershipEpoch,
-		LastCommitted:   RootCursorToProto(state.LastCommitted),
-		IdFence:         state.IDFence,
-		TsoFence:        state.TSOFence,
+		ClusterEpoch:     state.ClusterEpoch,
+		MembershipEpoch:  state.MembershipEpoch,
+		LastCommitted:    RootCursorToProto(state.LastCommitted),
+		IdFence:          state.IDFence,
+		TsoFence:         state.TSOFence,
+		CoordinatorLease: RootCoordinatorLeaseToProto(state.CoordinatorLease),
 	}
 }
 
@@ -33,11 +34,36 @@ func RootStateFromProto(pbState *metapb.RootState) rootstate.State {
 		return rootstate.State{}
 	}
 	return rootstate.State{
-		ClusterEpoch:    pbState.ClusterEpoch,
-		MembershipEpoch: pbState.MembershipEpoch,
-		LastCommitted:   RootCursorFromProto(pbState.LastCommitted),
-		IDFence:         pbState.IdFence,
-		TSOFence:        pbState.TsoFence,
+		ClusterEpoch:     pbState.ClusterEpoch,
+		MembershipEpoch:  pbState.MembershipEpoch,
+		LastCommitted:    RootCursorFromProto(pbState.LastCommitted),
+		IDFence:          pbState.IdFence,
+		TSOFence:         pbState.TsoFence,
+		CoordinatorLease: RootCoordinatorLeaseFromProto(pbState.GetCoordinatorLease()),
+	}
+}
+
+func RootCoordinatorLeaseToProto(lease rootstate.CoordinatorLease) *metapb.RootCoordinatorLease {
+	if lease.HolderID == "" && lease.ExpiresUnixNano == 0 && lease.IDFence == 0 && lease.TSOFence == 0 {
+		return nil
+	}
+	return &metapb.RootCoordinatorLease{
+		HolderId:        lease.HolderID,
+		ExpiresUnixNano: lease.ExpiresUnixNano,
+		IdFence:         lease.IDFence,
+		TsoFence:        lease.TSOFence,
+	}
+}
+
+func RootCoordinatorLeaseFromProto(lease *metapb.RootCoordinatorLease) rootstate.CoordinatorLease {
+	if lease == nil {
+		return rootstate.CoordinatorLease{}
+	}
+	return rootstate.CoordinatorLease{
+		HolderID:        lease.GetHolderId(),
+		ExpiresUnixNano: lease.GetExpiresUnixNano(),
+		IDFence:         lease.GetIdFence(),
+		TSOFence:        lease.GetTsoFence(),
 	}
 }
 
@@ -206,6 +232,13 @@ func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 		pbEvent.Payload = &metapb.RootEvent_StoreMembership{StoreMembership: &metapb.RootStoreMembership{StoreId: event.StoreMembership.StoreID, Address: event.StoreMembership.Address}}
 	case event.AllocatorFence != nil:
 		pbEvent.Payload = &metapb.RootEvent_AllocatorFence{AllocatorFence: &metapb.RootAllocatorFence{Minimum: event.AllocatorFence.Minimum}}
+	case event.CoordinatorLease != nil:
+		pbEvent.Payload = &metapb.RootEvent_CoordinatorLease{CoordinatorLease: &metapb.RootCoordinatorLease{
+			HolderId:        event.CoordinatorLease.HolderID,
+			ExpiresUnixNano: event.CoordinatorLease.ExpiresUnixNano,
+			IdFence:         event.CoordinatorLease.IDFence,
+			TsoFence:        event.CoordinatorLease.TSOFence,
+		}}
 	case event.RegionDescriptor != nil:
 		pbEvent.Payload = &metapb.RootEvent_RegionDescriptor{RegionDescriptor: &metapb.RootRegionDescriptor{Descriptor_: DescriptorToProto(event.RegionDescriptor.Descriptor)}}
 	case event.RegionRemoval != nil:
@@ -248,6 +281,14 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 	}
 	if body := pbEvent.GetAllocatorFence(); body != nil {
 		event.AllocatorFence = &rootevent.AllocatorFence{Minimum: body.Minimum}
+	}
+	if body := pbEvent.GetCoordinatorLease(); body != nil {
+		event.CoordinatorLease = &rootevent.CoordinatorLease{
+			HolderID:        body.GetHolderId(),
+			ExpiresUnixNano: body.GetExpiresUnixNano(),
+			IDFence:         body.GetIdFence(),
+			TSOFence:        body.GetTsoFence(),
+		}
 	}
 	if body := pbEvent.GetRegionDescriptor(); body != nil {
 		event.RegionDescriptor = &rootevent.RegionDescriptorRecord{Descriptor: DescriptorFromProto(body.GetDescriptor_())}
@@ -325,6 +366,8 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_ADDITION_CANCELLED
 	case rootevent.KindPeerRemovalCancelled:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVAL_CANCELLED
+	case rootevent.KindCoordinatorLease:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_COORDINATOR_LEASE
 	default:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_UNSPECIFIED
 	}
@@ -370,6 +413,8 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindPeerAdditionCancelled
 	case metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVAL_CANCELLED:
 		return rootevent.KindPeerRemovalCancelled
+	case metapb.RootEventKind_ROOT_EVENT_KIND_COORDINATOR_LEASE:
+		return rootevent.KindCoordinatorLease
 	default:
 		return rootevent.KindUnknown
 	}

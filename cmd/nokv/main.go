@@ -52,6 +52,8 @@ func main() {
 		err = runServeCmd(os.Stdout, args)
 	case "coordinator":
 		err = runCoordinatorCmd(os.Stdout, args)
+	case "meta-root":
+		err = runMetaRootCmd(os.Stdout, args)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -76,6 +78,7 @@ func printUsage(w io.Writer) {
 	  migrate   Inspect or convert a standalone workdir for distributed mode
 	  serve     Start NoKV gRPC service backed by a local raftstore
 	  coordinator Start coordinator gRPC service (control plane)
+	  meta-root Start metadata root gRPC service
 
 Run "nokv <command> -h" for command-specific flags.`)
 }

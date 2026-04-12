@@ -93,8 +93,16 @@ func CloneRaftPointers(src map[uint64]RaftLogPointer) map[uint64]RaftLogPointer 
 	return out
 }
 
-// PendingRootEvent captures one store-local rooted event that has been applied
-// locally but not yet durably acknowledged as published to the coordinator.
+// PendingRootEvent captures one store-local rooted event that has already been
+// applied by raftstore but has not yet been acknowledged by Coordinator as
+// published into meta/root.
+//
+// This is the execution-plane to control-plane durability bridge. If a store
+// crashes after local raft apply but before Coordinator publish succeeds, the
+// recovered store replays these entries and retries publish instead of losing
+// terminal topology truth. CoordinatorLease controls which Coordinator may
+// accept singleton duties, but the store still persists these events locally
+// until publish acknowledgement removes them.
 type PendingRootEvent struct {
 	Sequence uint64          `json:"sequence"`
 	Event    rootevent.Event `json:"event"`

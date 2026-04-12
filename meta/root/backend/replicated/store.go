@@ -188,7 +188,10 @@ func (s *Store) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.appendLocked(events...)
+}
 
+func (s *Store) appendLocked(events ...rootevent.Event) (rootstate.CommitInfo, error) {
 	var next rootstate.Cursor
 	snapshot := rootstate.Snapshot{
 		State:               s.state,
@@ -220,6 +223,40 @@ func (s *Store) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) 
 	s.retainFrom = (rootstorage.CommittedTail{Records: s.records}).RetainFrom(snapshot.State.LastCommitted)
 	s.maybeCompactLocked()
 	return rootstate.CommitInfo{Cursor: snapshot.State.LastCommitted, State: snapshot.State}, nil
+}
+
+func (s *Store) CampaignCoordinatorLease(holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
+	if s == nil {
+		return rootstate.CoordinatorLease{}, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := rootstate.ValidateCoordinatorLeaseCampaign(s.state.CoordinatorLease, holderID, expiresUnixNano, nowUnixNano); err != nil {
+		return s.state.CoordinatorLease, err
+	}
+	event := rootevent.CoordinatorLeaseGranted(holderID, expiresUnixNano, idFence, tsoFence)
+	commit, err := s.appendLocked(event)
+	if err != nil {
+		return rootstate.CoordinatorLease{}, err
+	}
+	return commit.State.CoordinatorLease, nil
+}
+
+func (s *Store) ReleaseCoordinatorLease(holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
+	if s == nil {
+		return rootstate.CoordinatorLease{}, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := rootstate.ValidateCoordinatorLeaseRelease(s.state.CoordinatorLease, holderID, nowUnixNano); err != nil {
+		return s.state.CoordinatorLease, err
+	}
+	event := rootevent.CoordinatorLeaseReleased(holderID, nowUnixNano, idFence, tsoFence)
+	commit, err := s.appendLocked(event)
+	if err != nil {
+		return rootstate.CoordinatorLease{}, err
+	}
+	return commit.State.CoordinatorLease, nil
 }
 
 func (s *Store) FenceAllocator(kind rootstate.AllocatorKind, min uint64) (uint64, error) {

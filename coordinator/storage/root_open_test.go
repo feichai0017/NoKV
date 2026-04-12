@@ -194,6 +194,52 @@ func TestRootStoreCampaignDelegation(t *testing.T) {
 	require.Equal(t, 1, backend.campaignCalls)
 }
 
+func TestRootStoreCampaignCoordinatorLeaseDelegation(t *testing.T) {
+	backend := &stubRootBackend{
+		observed: observedDescriptorsSnapshot(
+			testDescriptor(124, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil),
+			rootstate.Cursor{Term: 1, Index: 1},
+		),
+		lease: rootstate.CoordinatorLease{
+			HolderID:        "c1",
+			ExpiresUnixNano: 1_000,
+			IDFence:         12,
+			TSOFence:        34,
+		},
+	}
+
+	store, err := OpenRootStore(backend)
+	require.NoError(t, err)
+
+	lease, err := store.CampaignCoordinatorLease("c1", 1_000, 100, 12, 34)
+	require.NoError(t, err)
+	require.Equal(t, backend.lease, lease)
+	require.Equal(t, 1, backend.leaseCampaignCalls)
+}
+
+func TestRootStoreReleaseCoordinatorLeaseDelegation(t *testing.T) {
+	backend := &stubRootBackend{
+		observed: observedDescriptorsSnapshot(
+			testDescriptor(125, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil),
+			rootstate.Cursor{Term: 1, Index: 1},
+		),
+		lease: rootstate.CoordinatorLease{
+			HolderID:        "c1",
+			ExpiresUnixNano: 200,
+			IDFence:         12,
+			TSOFence:        34,
+		},
+	}
+
+	store, err := OpenRootStore(backend)
+	require.NoError(t, err)
+
+	lease, err := store.ReleaseCoordinatorLease("c1", 200, 12, 34)
+	require.NoError(t, err)
+	require.Equal(t, backend.lease, lease)
+	require.Equal(t, 1, backend.leaseReleaseCalls)
+}
+
 func TestRootStoreClosePropagatesCloserError(t *testing.T) {
 	backend := &stubRootBackend{
 		observed: observedDescriptorsSnapshot(
@@ -209,17 +255,22 @@ func TestRootStoreClosePropagatesCloserError(t *testing.T) {
 }
 
 type stubRootBackend struct {
-	snapshot      rootstate.Snapshot
-	observed      rootstorage.ObservedCommitted
-	observeTailFn func(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
-	waitForTailFn func(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
-	tailNotifyCh  <-chan struct{}
-	isLeaderValue bool
-	leaderIDValue uint64
-	closeErr      error
-	closeCalls    int
-	campaignErr   error
-	campaignCalls int
+	snapshot           rootstate.Snapshot
+	observed           rootstorage.ObservedCommitted
+	observeTailFn      func(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
+	waitForTailFn      func(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
+	tailNotifyCh       <-chan struct{}
+	isLeaderValue      bool
+	leaderIDValue      uint64
+	closeErr           error
+	closeCalls         int
+	campaignErr        error
+	campaignCalls      int
+	lease              rootstate.CoordinatorLease
+	leaseCampaignErr   error
+	leaseCampaignCalls int
+	leaseReleaseErr    error
+	leaseReleaseCalls  int
 }
 
 func (s *stubRootBackend) Snapshot() (rootstate.Snapshot, error) {
@@ -267,6 +318,22 @@ func (s *stubRootBackend) LeaderID() uint64 {
 func (s *stubRootBackend) Campaign() error {
 	s.campaignCalls++
 	return s.campaignErr
+}
+
+func (s *stubRootBackend) CampaignCoordinatorLease(holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
+	s.leaseCampaignCalls++
+	if s.leaseCampaignErr != nil {
+		return rootstate.CoordinatorLease{}, s.leaseCampaignErr
+	}
+	return s.lease, nil
+}
+
+func (s *stubRootBackend) ReleaseCoordinatorLease(holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
+	s.leaseReleaseCalls++
+	if s.leaseReleaseErr != nil {
+		return rootstate.CoordinatorLease{}, s.leaseReleaseErr
+	}
+	return s.lease, nil
 }
 
 func (s *stubRootBackend) Close() error {

@@ -26,6 +26,21 @@ func TestApplyEventToStateAdvancesEpochsAndCursor(t *testing.T) {
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 3}, st.LastCommitted)
 }
 
+func TestApplyCoordinatorLeaseToState(t *testing.T) {
+	var st rootstate.State
+	event := rootevent.CoordinatorLeaseGranted("c1", 1_000, 10, 20)
+
+	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 1}, event)
+
+	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, st.LastCommitted)
+	require.Equal(t, "c1", st.CoordinatorLease.HolderID)
+	require.Equal(t, int64(1_000), st.CoordinatorLease.ExpiresUnixNano)
+	require.Equal(t, uint64(10), st.IDFence)
+	require.Equal(t, uint64(20), st.TSOFence)
+	require.True(t, st.CoordinatorLease.ActiveAt(999))
+	require.False(t, st.CoordinatorLease.ActiveAt(1_000))
+}
+
 func TestPendingPeerChangeMatchesEvent(t *testing.T) {
 	desc := testDescriptor(10, []byte("a"), []byte("z"))
 	change, ok := rootstate.PendingPeerChangeFromEvent(rootevent.PeerAdditionPlanned(10, 2, 201, desc))

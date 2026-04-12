@@ -128,6 +128,43 @@ func TestClientRetriesWriteOnLeaderHint(t *testing.T) {
 	require.True(t, desc.Equal(got))
 }
 
+func TestClientCampaignCoordinatorLease(t *testing.T) {
+	backend, err := rootlocal.Open(t.TempDir(), nil)
+	require.NoError(t, err)
+	client := openBufconnClient(t, backend)
+
+	lease, err := client.CampaignCoordinatorLease("c1", 1_000, 100, 10, 20)
+	require.NoError(t, err)
+	require.Equal(t, "c1", lease.HolderID)
+	require.Equal(t, uint64(10), lease.IDFence)
+	require.Equal(t, uint64(20), lease.TSOFence)
+
+	held, err := client.CampaignCoordinatorLease("c2", 1_500, 200, 30, 40)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, rootstate.ErrCoordinatorLeaseHeld))
+	require.Equal(t, "c1", held.HolderID)
+
+	lease, err = client.CampaignCoordinatorLease("c2", 2_000, 1_001, 30, 40)
+	require.NoError(t, err)
+	require.Equal(t, "c2", lease.HolderID)
+}
+
+func TestClientReleaseCoordinatorLease(t *testing.T) {
+	backend, err := rootlocal.Open(t.TempDir(), nil)
+	require.NoError(t, err)
+	client := openBufconnClient(t, backend)
+
+	_, err = client.CampaignCoordinatorLease("c1", 1_000, 100, 10, 20)
+	require.NoError(t, err)
+
+	lease, err := client.ReleaseCoordinatorLease("c1", 200, 30, 40)
+	require.NoError(t, err)
+	require.Equal(t, "c1", lease.HolderID)
+	require.Equal(t, int64(200), lease.ExpiresUnixNano)
+	require.Equal(t, uint64(30), lease.IDFence)
+	require.Equal(t, uint64(40), lease.TSOFence)
+}
+
 func TestServiceRejectsInvalidAllocatorKind(t *testing.T) {
 	backend, err := rootlocal.Open(t.TempDir(), nil)
 	require.NoError(t, err)

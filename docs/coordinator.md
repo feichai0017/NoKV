@@ -74,7 +74,8 @@ actions.
 
 ## 3. Mode Model
 
-NoKV currently has only two supported product modes:
+NoKV currently has one standalone shape and three distributed control-plane
+deployment shapes.
 
 ### `standalone`
 
@@ -88,10 +89,11 @@ plane deployment; it simply has no control plane.
 
 ### `distributed`
 
-`distributed` has two formal control-plane deployments:
+`distributed` has three control-plane deployments:
 
 1. `single coordinator + local meta`
 2. `3 coordinator + replicated meta`
+3. `separated meta-root + remote coordinator`
 
 Both deployments keep the same logical split:
 
@@ -110,15 +112,25 @@ The difference is only the rooted backend:
   - each process hosts one same-process `meta/root/backend/replicated`
   - fixed three-replica rooted truth
   - one rooted leader accepts truth writes, followers refresh rooted state and serve read/view traffic
+- `separated meta-root + remote coordinator`
+  - three independent `nokv meta-root --mode replicated` processes own durable
+    rooted truth
+  - one or more `nokv coordinator --root-mode remote` processes connect through
+    the remote metadata-root API
+  - `CoordinatorLease` gates singleton Coordinator duties: `AllocID`, `Tso`,
+    and scheduler operation planning
+  - route reads still come from Coordinator's rebuildable in-memory view and
+    expose `Freshness`, `RootToken`, `CatchUpState`, and `DegradedMode`
 
 No other product control-plane mode is supported. In particular:
 
-- there is no separate `meta` cluster
-- there is no `coordinator` cluster larger than three members
 - there is no dynamic metadata membership today
+- separated mode is experimental and not the default ops path
+- there is no production-grade dynamic `coordinator` membership manager today
 
-A future separated deployment is discussed in `docs/notes/2026-04-12-coordinator-meta-separation.md`.
-That note is a design proposal only; it is not a currently supported ops mode.
+Separated deployment design and tradeoffs are discussed in
+`docs/notes/2026-04-12-coordinator-meta-separation.md`. That note is now an
+implemented experimental design note, not just a proposal.
 
 ---
 
@@ -145,6 +157,24 @@ Each Coordinator node has its own workdir and persists two layers of state:
    - contains raft hard state, raft snapshot, and retained raft entries
 
 Each node must have an isolated workdir. Workdirs are not shared.
+
+### `separated meta-root + remote coordinator`
+
+Each `meta-root` process has its own rooted workdir and raft transport address.
+The `coordinator` process does not host rooted truth; it only connects to the
+remote root endpoints through `--root-peer nodeID=grpc_addr`.
+
+Persistence ownership:
+
+1. `meta-root` workdirs own durable rooted truth and replicated metadata-root
+   raft state.
+2. `coordinator` runtime view is rebuildable from remote `meta/root`.
+3. allocator fences and `CoordinatorLease` are rooted events, not local
+   coordinator files.
+
+`--coordinator-id` must be a stable configured identity. It is used for lease
+ownership and operator debugging; it should not be generated randomly on each
+restart.
 
 ### Rooted bootstrap flow
 
@@ -298,6 +328,13 @@ In `3 coordinator + replicated meta`:
 - only the rooted leader may commit truth writes
 - followers refresh rooted state and serve read/view traffic
 
+In separated mode:
+
+- `meta-root` leadership determines which root endpoint accepts truth writes
+- `CoordinatorLease` determines which Coordinator may serve singleton duties
+- non-holder Coordinators may still serve route reads if their rooted view
+  satisfies the caller's freshness contract
+
 ### Leader-only writes
 
 These RPCs require rooted leadership:
@@ -310,6 +347,9 @@ These RPCs require rooted leadership:
 
 Followers return `FailedPrecondition` with `coordinator not leader` semantics, and
 clients are expected to retry against another Coordinator endpoint.
+
+In separated mode, `AllocID`, `Tso`, and scheduler operation planning also
+require the local Coordinator to hold `CoordinatorLease`.
 
 ### Any-node reads
 
@@ -378,6 +418,47 @@ Current product assumptions:
 - one transport address per Coordinator node
 - no dynamic membership
 
+### `separated meta-root + remote coordinator`
+
+Start three metadata-root peers:
+
+```bash
+go run ./cmd/nokv meta-root \
+  -addr 127.0.0.1:2380 \
+  -mode replicated \
+  -workdir ./artifacts/separated/meta-root-1 \
+  -node-id 1 \
+  -transport-addr 127.0.0.1:3380 \
+  -peer 1=127.0.0.1:3380 \
+  -peer 2=127.0.0.1:3381 \
+  -peer 3=127.0.0.1:3382
+```
+
+Nodes 2 and 3 use the same peer map but change:
+
+- `-addr`
+- `-workdir`
+- `-node-id`
+- `-transport-addr`
+
+Start one remote-root Coordinator:
+
+```bash
+go run ./cmd/nokv coordinator \
+  -addr 127.0.0.1:2379 \
+  -root-mode remote \
+  -coordinator-id c1 \
+  -root-peer 1=127.0.0.1:2380 \
+  -root-peer 2=127.0.0.1:2381 \
+  -root-peer 3=127.0.0.1:2382
+```
+
+For local bootstrap, use:
+
+```bash
+./scripts/dev/separated-cluster.sh --config ./raft_config.example.json
+```
+
 ---
 
 ## 10. Comparison: TinyKV / TiKV
@@ -397,14 +478,18 @@ Current product assumptions:
 ### NoKV Coordinator (current)
 
 - Standalone mode has no Coordinator and no metadata-root service.
-- Distributed mode has two formal control-plane deployments:
+- Distributed mode has three control-plane deployments:
 - `single coordinator + local meta`
 - `3 coordinator + replicated meta`
-- In both deployments, each `coordinator` process hosts a same-process rooted backend
-  and rebuilds its service-side view from rooted truth.
+- `separated meta-root + remote coordinator`
+- In co-located deployments, each `coordinator` process hosts a same-process
+  rooted backend and rebuilds its service-side view from rooted truth.
+- In separated deployment, `meta-root` is the durable truth service and
+  `coordinator` is a remote rooted view/service layer.
 - Coordinator persistence is intentionally limited to rooted control-plane truth:
   - region descriptor publish/tombstone events
   - allocator durability (`AllocID`, `TSO`)
+  - `CoordinatorLease` ownership for separated singleton duties
 - Coordinator is not the durable owner of a store's local raft/region truth. Store
   restart truth remains in `raftstore/localmeta`, while Coordinator keeps routing and
   scheduling state rebuilt from `meta/root`.
@@ -419,6 +504,11 @@ Current product assumptions:
   - fixed three replicas
   - no dynamic metadata membership
   - follower convergence uses watch-first tailing with refresh/reload fallback
+- `separated meta-root + remote coordinator` is implemented but experimental:
+  - use it for control-plane research and failure-domain experiments
+  - do not treat it as the default production path yet
+  - failure/recovery E2E tests and control-plane benchmarks still need to be
+    expanded before stronger claims are made
 - Scheduler policy is intentionally small (leader transfer focused).
 - No advanced placement constraints yet.
 
