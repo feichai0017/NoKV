@@ -3,7 +3,7 @@ package remote
 import (
 	"context"
 	"errors"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -78,7 +78,7 @@ func DialCluster(ctx context.Context, targets map[uint64]string, opts ...grpc.Di
 	if len(ids) == 0 {
 		return nil, errors.New("meta/root/remote: empty target set")
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	client := &Client{
 		endpoints:   make([]clientEndpoint, 0, len(ids)),
 		byID:        make(map[uint64]int, len(ids)),

@@ -3,7 +3,7 @@ package integration_test
 import (
 	"context"
 	"net"
-	"sort"
+	"slices"
 	"testing"
 	"time"
 
@@ -90,7 +90,7 @@ func TestSeparatedModeCoordinatorRecoveryLatency(t *testing.T) {
 		durations = append(durations, elapsed)
 	}
 
-	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
+	slices.Sort(durations)
 	p50 := percentileDuration(durations, 0.50)
 	p95 := percentileDuration(durations, 0.95)
 	p99 := percentileDuration(durations, 0.99)
@@ -98,6 +98,74 @@ func TestSeparatedModeCoordinatorRecoveryLatency(t *testing.T) {
 
 	t.Logf("separated coordinator recovery latency: n=%d avg=%s p50=%s p95=%s p99=%s",
 		len(durations), avg, p50, p95, p99)
+}
+
+func TestSeparatedModeCoordinatorChaosMonotonicAllocID(t *testing.T) {
+	rootCluster := pdtestcluster.OpenReplicated(t)
+	targets := exposeRemoteRoots(t, rootCluster)
+	rootCluster.WaitLeader()
+
+	iterations := 24
+	batch := uint64(256)
+	if testing.Short() {
+		iterations = 8
+		batch = 64
+	}
+
+	var (
+		lastID        uint64
+		recoveryGaps  []time.Duration
+		firstIssuedID uint64
+	)
+
+	for i := 0; i < iterations; i++ {
+		prevLastID := lastID
+		svc, store := openSeparatedCoordinator(t, targets, "c1")
+
+		start := time.Now()
+		alloc, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: batch})
+		require.NoError(t, err)
+		recoveryGaps = append(recoveryGaps, time.Since(start))
+
+		firstID := alloc.GetFirstId()
+		lastIssued := firstID + alloc.GetCount() - 1
+		if i == 0 {
+			firstIssuedID = firstID
+		} else {
+			require.Greater(t, firstID, lastID, "iteration %d restarted below previous allocator high watermark", i)
+		}
+		require.GreaterOrEqual(t, lastIssued, firstID, "iteration %d returned invalid allocation range", i)
+		lastID = lastIssued
+
+		require.NoError(t, store.Close(), "iteration %d close failed", i)
+
+		leaderID := rootCluster.WaitLeader()
+		require.Eventually(t, func() bool {
+			state, err := rootCluster.Roots[leaderID].Current()
+			return err == nil &&
+				state.IDFence >= lastID
+		}, 8*time.Second, 50*time.Millisecond, "iteration %d rooted allocator state did not retain monotonic fence", i)
+
+		if i > 0 {
+			require.Eventually(t, func() bool {
+				state, err := rootCluster.Roots[leaderID].Current()
+				return err == nil &&
+					state.CoordinatorLease.HolderID == "c1" &&
+					state.CoordinatorLease.IDFence >= prevLastID
+			}, 8*time.Second, 50*time.Millisecond, "iteration %d lease campaign did not inherit previous allocator fence", i)
+		}
+	}
+
+	slices.Sort(recoveryGaps)
+	t.Logf("separated coordinator chaos alloc monotonicity: iterations=%d batch=%d first=%d last=%d avg_recovery=%s p50=%s p95=%s",
+		iterations,
+		batch,
+		firstIssuedID,
+		lastID,
+		averageDuration(recoveryGaps),
+		percentileDuration(recoveryGaps, 0.50),
+		percentileDuration(recoveryGaps, 0.95),
+	)
 }
 
 func percentileDuration(samples []time.Duration, p float64) time.Duration {

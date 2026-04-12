@@ -109,7 +109,6 @@ This split is deliberate:
   - `--peer` values are metadata-root raft transport addresses, not gRPC
     service addresses
   - forwards shutdown signals to `nokv meta-root`
-  - accepts `--metrics-addr` to expose `nokv_meta_root` through expvar
 
 ## Migration Workflow
 

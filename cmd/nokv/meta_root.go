@@ -31,7 +31,6 @@ func runMetaRootCmd(w io.Writer, args []string) error {
 	nodeID := fs.Uint64("node-id", 1, "metadata root node id for replicated mode")
 	transportAddr := fs.String("transport-addr", "", "metadata root raft transport address for replicated mode")
 	tickInterval := fs.Duration("tick-interval", 100*time.Millisecond, "replicated root raft tick interval")
-	metricsAddr := fs.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
 	var peerFlags []string
 	fs.Func("peer", "replicated metadata root peer mapping in the form nodeID=address (repeatable, exactly 3)", func(value string) error {
 		value = strings.TrimSpace(value)
@@ -60,8 +59,6 @@ func runMetaRootCmd(w io.Writer, args []string) error {
 	if closer, ok := backend.(interface{ Close() error }); ok {
 		defer func() { _ = closer.Close() }()
 	}
-	installMetaRootExpvar(modeValue, backend)
-
 	lis, err := metaRootListen("tcp", *addr)
 	if err != nil {
 		return fmt.Errorf("meta-root listen on %s: %w", *addr, err)
@@ -75,19 +72,9 @@ func runMetaRootCmd(w io.Writer, args []string) error {
 	go func() {
 		serveErrCh <- grpcServer.Serve(lis)
 	}()
-	metricsLn, err := startExpvarServer(*metricsAddr)
-	if err != nil {
-		return fmt.Errorf("start meta-root metrics endpoint: %w", err)
-	}
-	if metricsLn != nil {
-		defer func() { _ = metricsLn.Close() }()
-	}
 
 	_, _ = fmt.Fprintf(w, "Metadata root service listening on %s\n", lis.Addr().String())
 	_, _ = fmt.Fprintf(w, "Metadata root mode: %s\n", modeValue)
-	if metricsLn != nil {
-		_, _ = fmt.Fprintf(w, "Metadata root metrics endpoint listening on http://%s/debug/vars\n", metricsLn.Addr().String())
-	}
 
 	ctx, cancel := metaRootNotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
