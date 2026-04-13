@@ -1,7 +1,6 @@
 package store
 
 import (
-	"fmt"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"time"
@@ -15,10 +14,10 @@ type commandRuntime struct {
 
 func (s *Store) applyEntries(entries []myraft.Entry) error {
 	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
+		return errNilStore
 	}
 	if s.cmds == nil || s.cmds.pipe == nil {
-		return fmt.Errorf("raftstore: command apply without handler")
+		return errCommandApplyWithoutHandler
 	}
 	return s.cmds.pipe.applyEntries(entries)
 }
