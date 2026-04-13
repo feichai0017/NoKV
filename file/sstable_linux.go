@@ -95,7 +95,7 @@ func (ss *SSTable) initTable() (bo *storagepb.BlockOffset, err error) {
 	readPos -= ss.idxLen
 	ss.idxStart = readPos
 	data := ss.readCheckError(readPos, ss.idxLen)
-	if err := utils.VerifyChecksum(data, expectedChk); err != nil {
+	if err := kv.VerifyChecksum(data, expectedChk); err != nil {
 		return nil, errors.Wrapf(err, "failed to verify checksum for table: %s", ss.f.File.Name())
 	}
 	indexTable := &storagepb.TableIndex{}

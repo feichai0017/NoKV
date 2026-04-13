@@ -329,12 +329,12 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 	// Some planning paths may preserve selection order but not strict key order.
 	if len(topTables) > 1 {
 		sort.Slice(topTables, func(i, j int) bool {
-			return utils.CompareInternalKeys(topTables[i].MinKey(), topTables[j].MinKey()) < 0
+			return kv.CompareInternalKeys(topTables[i].MinKey(), topTables[j].MinKey()) < 0
 		})
 	}
 	if len(botTables) > 1 {
 		sort.Slice(botTables, func(i, j int) bool {
-			return utils.CompareInternalKeys(botTables[i].MinKey(), botTables[j].MinKey()) < 0
+			return kv.CompareInternalKeys(botTables[i].MinKey(), botTables[j].MinKey()) < 0
 		})
 	}
 	iterOpt := &index.Options{
@@ -407,7 +407,7 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 	}
 
 	sort.Slice(newTables, func(i, j int) bool {
-		return utils.CompareInternalKeys(newTables[i].MaxKey(), newTables[j].MaxKey()) < 0
+		return kv.CompareInternalKeys(newTables[i].MaxKey(), newTables[j].MaxKey()) < 0
 	})
 	return newTables, func() error { return decrRefs(newTables) }, nil
 }
@@ -437,7 +437,7 @@ func tablesStrictlyOrdered(tables []*table) bool {
 			return false
 		}
 		// Non-overlap requires prev.max base key < cur.min base key.
-		if utils.CompareBaseKeys(prev.MaxKey(), cur.MinKey()) >= 0 {
+		if kv.CompareBaseKeys(prev.MaxKey(), cur.MinKey()) >= 0 {
 			return false
 		}
 		prev = cur
@@ -513,7 +513,7 @@ func (lm *levelManager) subcompact(it index.Iterator, kr KeyRange, cd compactDef
 				rtTracker.Add(rt)
 			}
 			if !kv.SameBaseKey(key, lastKey) {
-				if len(kr.Right) > 0 && utils.CompareInternalKeys(key, kr.Right) >= 0 {
+				if len(kr.Right) > 0 && kv.CompareInternalKeys(key, kr.Right) >= 0 {
 					break
 				}
 				if builder.ReachedCapacity() {
@@ -558,7 +558,7 @@ func (lm *levelManager) subcompact(it index.Iterator, kr KeyRange, cd compactDef
 	}
 	for it.Valid() {
 		key := it.Item().Entry().Key
-		if len(kr.Right) > 0 && utils.CompareInternalKeys(key, kr.Right) >= 0 {
+		if len(kr.Right) > 0 && kv.CompareInternalKeys(key, kr.Right) >= 0 {
 			break
 		}
 		// Copy Options so background tuning does not affect the active compaction.
@@ -581,7 +581,7 @@ func (lm *levelManager) subcompact(it index.Iterator, kr KeyRange, cd compactDef
 		if err := inflightBuilders.Go(func() error {
 			defer b.Close()
 			newFID := lm.maxFID.Add(1) // Compaction does not allocate memtables; advance maxFID.
-			sstName := utils.FileNameSSTable(lm.opt.WorkDir, newFID)
+			sstName := vfs.FileNameSSTable(lm.opt.WorkDir, newFID)
 			tbl, err := openTable(lm, sstName, b)
 			if err != nil || tbl == nil {
 				slog.Default().Error("open compacted table", "path", sstName, "error", err)

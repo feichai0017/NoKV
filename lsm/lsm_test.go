@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
@@ -39,7 +40,25 @@ var (
 )
 
 func buildInternalTestEntry() *kv.Entry {
-	return utils.BuildEntry()
+	return newRandomTestEntry()
+}
+
+func newRandomTestEntry() *kv.Entry {
+	const charset = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ~=+%^*/()[]{}/!@#$?|NoKV"
+	randStr := func(length int) string {
+		if length <= 0 {
+			return ""
+		}
+		out := make([]byte, length)
+		for i := range out {
+			out[i] = charset[rand.Intn(len(charset))]
+		}
+		return string(out)
+	}
+	key := []byte(randStr(16))
+	value := []byte(randStr(128))
+	expiresAt := uint64(time.Now().Add(12 * time.Hour).Unix())
+	return kv.NewInternalEntry(kv.CFDefault, key, kv.MaxVersion, value, 0, expiresAt)
 }
 
 func newTestLSMOptions(workDir string, fs vfs.FS) *Options {
@@ -164,8 +183,8 @@ func TestCloseBestEffortAggregatesErrors(t *testing.T) {
 	if len(l0Tables) < 2 {
 		t.Fatalf("expected at least 2 L0 tables, got %d", len(l0Tables))
 	}
-	path1 := utils.FileNameSSTable(dir, l0Tables[0].fid)
-	path2 := utils.FileNameSSTable(dir, l0Tables[1].fid)
+	path1 := vfs.FileNameSSTable(dir, l0Tables[0].fid)
+	path2 := vfs.FileNameSSTable(dir, l0Tables[1].fid)
 	closeErr1 := errors.New("close table 1 injected")
 	closeErr2 := errors.New("close table 2 injected")
 	policy.AddRule(vfs.FailOnceRule(vfs.OpFileClose, path1, closeErr1))
@@ -406,7 +425,7 @@ func TestTableIteratorSeekAndIteratorPrefetch(t *testing.T) {
 		builder.AddKey(kv.NewEntry(key, value))
 	}
 
-	tableName := utils.FileNameSSTable(lsm.option.WorkDir, 1)
+	tableName := vfs.FileNameSSTable(lsm.option.WorkDir, 1)
 	tbl, err := openTable(lsm.levels, tableName, builder)
 	if err != nil {
 		t.Fatalf("openTable: %v", err)
@@ -787,7 +806,7 @@ func buildTestTable(t *testing.T, lsm *LSM, fid uint64) *table {
 		builder.AddKey(kv.NewEntry(key, []byte("val-"+k)))
 	}
 
-	tableName := utils.FileNameSSTable(lsm.option.WorkDir, fid)
+	tableName := vfs.FileNameSSTable(lsm.option.WorkDir, fid)
 	tbl, err := openTable(lsm.levels, tableName, builder)
 	if err != nil {
 		t.Fatalf("openTable: %v", err)
@@ -808,7 +827,7 @@ func buildTableWithEntry(t *testing.T, lsm *LSM, fid uint64, key string, ver uin
 	ikey := kv.InternalKey(kv.CFDefault, []byte(key), ver)
 	builder.AddKey(kv.NewEntry(ikey, []byte(val)))
 
-	tableName := utils.FileNameSSTable(lsm.option.WorkDir, fid)
+	tableName := vfs.FileNameSSTable(lsm.option.WorkDir, fid)
 	tbl, err := openTable(lsm.levels, tableName, builder)
 	if err != nil {
 		t.Fatalf("openTable: %v", err)
@@ -830,7 +849,7 @@ func buildTableWithEntries(t *testing.T, lsm *LSM, fid uint64, entries ...*kv.En
 		builder.AddKey(e)
 	}
 
-	tableName := utils.FileNameSSTable(lsm.option.WorkDir, fid)
+	tableName := vfs.FileNameSSTable(lsm.option.WorkDir, fid)
 	tbl, err := openTable(lsm.levels, tableName, builder)
 	if err != nil {
 		t.Fatalf("openTable failed: %v", err)
@@ -2015,7 +2034,7 @@ func TestImportExternalSSTAtomicityOnManifestWriteFailure(t *testing.T) {
 
 	// Verify no temporary SST file was left behind
 	tempFID := lsm1.levels.maxFID.Load()
-	tempSSTPath := utils.FileNameSSTable(workDir, tempFID)
+	tempSSTPath := vfs.FileNameSSTable(workDir, tempFID)
 	_, err = os.Stat(tempSSTPath)
 	require.True(t, os.IsNotExist(err))
 
@@ -2091,7 +2110,7 @@ func TestImportExternalSSTIdempotency(t *testing.T) {
 
 	// Test 3: Importing duplicate SST (same content) should fail due to key overlap
 	dupSSTPath := workDir + "/99998.sst"
-	importedSSTPath := utils.FileNameSSTable(workDir, lsm.levels.maxFID.Load())
+	importedSSTPath := vfs.FileNameSSTable(workDir, lsm.levels.maxFID.Load())
 	content, err := os.ReadFile(importedSSTPath)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(dupSSTPath, content, 0644))

@@ -10,6 +10,7 @@ import (
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
 )
@@ -54,7 +55,7 @@ func TestTableReverseIteration(t *testing.T) {
 		builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, key, 1), []byte("value")))
 	}
 
-	tableName := utils.FileNameSSTable(dir, 1)
+	tableName := vfs.FileNameSSTable(dir, 1)
 	tbl, err := openTable(lsm.levels, tableName, builder)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
@@ -143,7 +144,7 @@ func TestTableReverseIterationMultiBlock(t *testing.T) {
 		builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, key, 1), []byte("value-with-more-data")))
 	}
 
-	tableName := utils.FileNameSSTable(dir, 2)
+	tableName := vfs.FileNameSSTable(dir, 2)
 	tbl, err := openTable(lsm.levels, tableName, builder)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
@@ -207,7 +208,7 @@ func TestTableSearchMaxVersionAcrossBlocks(t *testing.T) {
 		))
 	}
 
-	tableName := utils.FileNameSSTable(dir, 3)
+	tableName := vfs.FileNameSSTable(dir, 3)
 	tbl, err := openTable(lsm.levels, tableName, builder)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
@@ -250,7 +251,7 @@ func TestTableIteratorBoundsAcrossBlocks(t *testing.T) {
 		))
 	}
 
-	tableName := utils.FileNameSSTable(dir, 4)
+	tableName := vfs.FileNameSSTable(dir, 4)
 	tbl, err := openTable(lsm.levels, tableName, builder)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
@@ -332,7 +333,7 @@ func TestTableIteratorSingleKeyRespectsForwardBounds(t *testing.T) {
 		[]byte("value"),
 	))
 
-	tableName := utils.FileNameSSTable(dir, 40)
+	tableName := vfs.FileNameSSTable(dir, 40)
 	tbl, err := openTable(lsm.levels, tableName, builder)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
@@ -376,7 +377,7 @@ func TestLevelGetHandlesOverlappingRanges(t *testing.T) {
 				[]byte("v-"+k),
 			))
 		}
-		name := utils.FileNameSSTable(dir, fid)
+		name := vfs.FileNameSSTable(dir, fid)
 		tbl, err := openTable(lsm.levels, name, builder)
 		require.NoError(t, err)
 		require.NotNil(t, tbl)

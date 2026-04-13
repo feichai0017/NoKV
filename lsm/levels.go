@@ -207,7 +207,7 @@ func (lm *levelManager) build() error {
 }
 
 func (lm *levelManager) openManifestTable(fs vfs.FS, level int, meta manifest.FileMeta) (*table, error) {
-	fileName := utils.FileNameSSTable(lm.opt.WorkDir, meta.FileID)
+	fileName := vfs.FileNameSSTable(lm.opt.WorkDir, meta.FileID)
 	if _, err := fs.Stat(fileName); err != nil {
 		return nil, fmt.Errorf("lsm startup: manifest references missing sstable L%d F%d (%s): %w", level, meta.FileID, fileName, err)
 	}
@@ -225,7 +225,7 @@ func (lm *levelManager) openManifestTable(fs vfs.FS, level int, meta manifest.Fi
 func (lm *levelManager) flush(immutable *memTable) (err error) {
 	// allocate a fid
 	fid := uint64(immutable.segmentID)
-	sstName := utils.FileNameSSTable(lm.opt.WorkDir, fid)
+	sstName := vfs.FileNameSSTable(lm.opt.WorkDir, fid)
 
 	iter := immutable.NewIterator(&index.Options{IsAsc: true})
 	if iter == nil {

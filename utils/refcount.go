@@ -1,4 +1,4 @@
-package kv
+package utils
 
 import (
 	"fmt"
@@ -18,13 +18,6 @@ import (
 //	        x.cleanup()
 //	    }
 //	}
-//
-// Why CAS instead of atomic.Add?
-// Both detect underflow, but Add temporarily mutates the counter to -1
-// before the panic fires. If the panic is recovered, the value stays
-// corrupted. CAS checks first, so the counter remains at its last valid
-// value regardless of recovery. In a storage engine where data integrity
-// is non-negotiable, this property matters.
 type RefCount struct {
 	ref atomic.Int32
 }
