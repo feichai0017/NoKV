@@ -2,7 +2,6 @@ package replicated
 
 import (
 	"encoding/binary"
-	"fmt"
 
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
@@ -19,7 +18,7 @@ func marshalCommittedEvent(rec rootstorage.CommittedEvent) ([]byte, error) {
 	const headerSize = 16
 	maxInt := int(^uint(0) >> 1)
 	if len(event) > maxInt-headerSize {
-		return nil, fmt.Errorf("meta/root/backend/replicated: committed event payload too large")
+		return nil, errCommittedEventPayloadTooLarge
 	}
 	out := make([]byte, headerSize+len(event))
 	binary.LittleEndian.PutUint64(out[0:8], rec.Cursor.Term)
@@ -30,7 +29,7 @@ func marshalCommittedEvent(rec rootstorage.CommittedEvent) ([]byte, error) {
 
 func unmarshalCommittedEvent(data []byte) (rootstorage.CommittedEvent, error) {
 	if len(data) < 16 {
-		return rootstorage.CommittedEvent{}, fmt.Errorf("meta/root/backend/replicated: invalid committed entry payload")
+		return rootstorage.CommittedEvent{}, errInvalidCommittedEntryPayload
 	}
 	var pbEvent metapb.RootEvent
 	if err := proto.Unmarshal(data[16:], &pbEvent); err != nil {

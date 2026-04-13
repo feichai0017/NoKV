@@ -3,7 +3,6 @@ package engine
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"os"
@@ -36,7 +35,7 @@ type DiskStorage struct {
 // Nil fs defaults to OSFS.
 func OpenDiskStorage(dir string, fs vfs.FS) (*DiskStorage, error) {
 	if dir == "" {
-		return nil, fmt.Errorf("raftstore: storage dir required")
+		return nil, errStorageDirRequired
 	}
 	fs = vfs.Ensure(fs)
 	if err := fs.MkdirAll(dir, 0o755); err != nil {
@@ -77,7 +76,7 @@ func (ds *DiskStorage) loadSnapshot() error {
 	}
 	var snap myraft.Snapshot
 	if err := snap.Unmarshal(data); err != nil {
-		return fmt.Errorf("raftstore: decode snapshot: %w", err)
+		return errDecodeSnapshot(err)
 	}
 	if myraft.IsEmptySnap(snap) {
 		return nil
@@ -107,15 +106,15 @@ func (ds *DiskStorage) loadEntries() error {
 			if err == io.EOF {
 				break
 			}
-			return fmt.Errorf("raftstore: read log length: %w", err)
+			return errReadLogLength(err)
 		}
 		buf := make([]byte, length)
 		if _, err := io.ReadFull(f, buf); err != nil {
-			return fmt.Errorf("raftstore: read log payload: %w", err)
+			return errReadLogPayload(err)
 		}
 		var entry myraft.Entry
 		if err := entry.Unmarshal(buf); err != nil {
-			return fmt.Errorf("raftstore: decode entry: %w", err)
+			return errDecodeEntry(err)
 		}
 		entries = append(entries, entry)
 	}
@@ -139,7 +138,7 @@ func (ds *DiskStorage) loadHardState() error {
 	}
 	var st myraft.HardState
 	if err := st.Unmarshal(data); err != nil {
-		return fmt.Errorf("raftstore: decode hard state: %w", err)
+		return errDecodeHardState(err)
 	}
 	if err := ds.mem.SetHardState(st); err != nil {
 		return err
