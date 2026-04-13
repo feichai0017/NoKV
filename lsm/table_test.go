@@ -404,13 +404,13 @@ func TestLevelGetHandlesOverlappingRanges(t *testing.T) {
 
 func TestTableDecrRefUnderflow(t *testing.T) {
 	tbl := &table{fid: 1}
-	tbl.ref.Store(2)
+	tbl.Init(2)
 	require.NoError(t, tbl.DecrRef())
-	require.Equal(t, int32(1), tbl.ref.Load())
+	require.Equal(t, int32(1), tbl.Load())
 
 	// Avoid the 1->0 path in this unit test (which requires a real table handle).
-	tbl.ref.Store(0)
-	require.PanicsWithError(t, fmt.Errorf("table refcount underflow: fid %d, current_ref %d", tbl.fid, int32(0)).Error(), func() {
+	tbl.Reset()
+	require.Panics(t, func() {
 		_ = tbl.DecrRef()
 	})
 }

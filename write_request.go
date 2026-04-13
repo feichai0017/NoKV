@@ -2,7 +2,6 @@ package NoKV
 
 import (
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -14,9 +13,9 @@ type request struct {
 	ptrIdxs    []int
 	ptrBuckets []uint32
 	Err        error
-	ref        atomic.Int32
-	enqueueAt  time.Time
-	wg         sync.WaitGroup
+	kv.RefCount
+	enqueueAt time.Time
+	wg        sync.WaitGroup
 }
 
 var requestPool = sync.Pool{
@@ -29,15 +28,11 @@ func (req *request) reset() {
 	req.ptrIdxs = req.ptrIdxs[:0]
 	req.ptrBuckets = req.ptrBuckets[:0]
 	req.Err = nil
-	req.ref.Store(0)
+	req.RefCount.Reset()
 	req.enqueueAt = time.Time{}
 	req.wg = sync.WaitGroup{}
 }
 
-// IncrRef increments the lifecycle reference count for this batched write request.
-func (req *request) IncrRef() {
-	req.ref.Add(1)
-}
 
 func (req *request) loadEntries(entries []*kv.Entry) {
 	if cap(req.Entries) < len(entries) {
@@ -48,17 +43,16 @@ func (req *request) loadEntries(entries []*kv.Entry) {
 	copy(req.Entries, entries)
 }
 
+// IncrRef adds one lifecycle reference.
+func (req *request) IncrRef() { req.Incr() }
+
 // DecrRef releases one lifecycle reference and returns the request to pool at zero.
 // It panics on refcount underflow to surface lifecycle bugs early.
 func (req *request) DecrRef() {
-	nRef := req.ref.Add(-1)
-	if nRef > 0 {
+	if req.Decr() > 0 {
 		return
 	}
-	if nRef < 0 {
-		panic("request.DecrRef: refcount underflow")
-	}
-	// nRef == 0: last reference removed, release entries and return to pool.
+	// ref == 0: last reference removed, release entries and return to pool.
 	for _, e := range req.Entries {
 		e.DecrRef()
 	}

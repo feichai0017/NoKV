@@ -189,7 +189,7 @@ func TestNewInternalEntry(t *testing.T) {
 
 func TestEntryDecrRefUnderflowPanics(t *testing.T) {
 	e := &Entry{Key: []byte("k"), Value: []byte("v")}
-	require.PanicsWithValue(t, "kv.Entry.DecrRef: refcount underflow (current_ref=0)", func() {
+	require.Panics(t, func() {
 		e.DecrRef()
 	})
 }
