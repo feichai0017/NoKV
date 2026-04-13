@@ -44,12 +44,7 @@ func (s *Store) startPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer, publis
 	}
 	cfgCopy := *cfg
 	cfgCopy.ConfChange = s.handlePeerConfChange
-	if cfgCopy.AdminApply == nil {
-		cfgCopy.AdminApply = s.handleAdminCommand
-	}
-	cfgCopy.Apply = func(entries []myraft.Entry) error {
-		return s.applyEntries(entries)
-	}
+	cfgCopy = s.wirePeerConfig(cfgCopy, false)
 	p, err := peer.NewPeer(&cfgCopy)
 	if err != nil {
 		return nil, err
@@ -264,12 +259,7 @@ func (s *Store) InstallRegionSnapshot(snap myraft.Snapshot) (localmeta.RegionMet
 	cfgCopy := *cfg
 	cfgCopy.ConfChange = s.handlePeerConfChange
 	cfgCopy.AllowSnapshotInstallRetry = true
-	if cfgCopy.AdminApply == nil {
-		cfgCopy.AdminApply = s.handleAdminCommand
-	}
-	cfgCopy.Apply = func(entries []myraft.Entry) error {
-		return s.applyEntries(entries)
-	}
+	cfgCopy = s.wirePeerConfig(cfgCopy, false)
 	p, err := peer.NewPeer(&cfgCopy)
 	if err != nil {
 		return localmeta.RegionMeta{}, fmt.Errorf("raftstore: new install peer %d for region %d: %w", localPeer.PeerID, meta.ID, err)
@@ -342,12 +332,7 @@ func (s *Store) InstallRegionSSTSnapshot(snap myraft.Snapshot, meta localmeta.Re
 	cfgCopy := *cfg
 	cfgCopy.ConfChange = s.handlePeerConfChange
 	cfgCopy.AllowSnapshotInstallRetry = true
-	if cfgCopy.AdminApply == nil {
-		cfgCopy.AdminApply = s.handleAdminCommand
-	}
-	cfgCopy.Apply = func(entries []myraft.Entry) error {
-		return s.applyEntries(entries)
-	}
+	cfgCopy = s.wirePeerConfig(cfgCopy, false)
 	p, err := peer.NewPeer(&cfgCopy)
 	if err != nil {
 		return localmeta.RegionMeta{}, fmt.Errorf("raftstore: new sst install peer %d for region %d: %w", localPeer.PeerID, meta.ID, err)
@@ -406,4 +391,16 @@ func (s *Store) Peers() []PeerHandle {
 		})
 	}
 	return handles
+}
+
+func (s *Store) wirePeerConfig(cfg peer.Config, allowSnapshotInstallRetry bool) peer.Config {
+	cfg.ConfChange = s.handlePeerConfChange
+	cfg.AllowSnapshotInstallRetry = allowSnapshotInstallRetry
+	if cfg.AdminApply == nil {
+		cfg.AdminApply = s.handleAdminCommand
+	}
+	cfg.Apply = func(entries []myraft.Entry) error {
+		return s.applyEntries(entries)
+	}
+	return cfg
 }
