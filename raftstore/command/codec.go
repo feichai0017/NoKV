@@ -1,7 +1,6 @@
 package command
 
 import (
-	"fmt"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 
 	proto "google.golang.org/protobuf/proto"
@@ -22,18 +21,18 @@ const (
 // command marker so peers can reject unframed payloads explicitly.
 func Encode(req *raftcmdpb.RaftCmdRequest) ([]byte, error) {
 	if req == nil {
-		return nil, fmt.Errorf("raftstore: nil raft command")
+		return nil, errNilRaftCommand
 	}
 	data, err := proto.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
 	if len(data) > maxRaftCmdRequestSize {
-		return nil, fmt.Errorf("raftstore: raft command too large (%d bytes)", len(data))
+		return nil, errRaftCommandTooLarge(len(data))
 	}
 	// Guard against integer overflow in len(data)+1 on all platforms.
 	if len(data) == int(^uint(0)>>1) {
-		return nil, fmt.Errorf("raftstore: raft command size causes overflow")
+		return nil, errRaftCommandSizeOverflow
 	}
 	buf := make([]byte, len(data)+1)
 	buf[0] = PayloadPrefix

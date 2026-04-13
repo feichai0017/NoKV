@@ -1,7 +1,6 @@
 package replicated
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -40,7 +39,7 @@ type Store struct {
 
 func Open(cfg Config) (*Store, error) {
 	if cfg.Driver == nil {
-		return nil, fmt.Errorf("meta/root/backend/replicated: driver is required")
+		return nil, errDriverRequired
 	}
 	if cfg.MaxRetainedRecords <= 0 {
 		cfg.MaxRetainedRecords = defaultRetainedRecords
@@ -286,7 +285,7 @@ func (s *Store) FenceAllocator(kind rootstate.AllocatorKind, min uint64) (uint64
 		}
 		return commit.State.TSOFence, nil
 	default:
-		return 0, fmt.Errorf("meta/root/backend/replicated: unknown allocator kind %d", kind)
+		return 0, errUnknownAllocatorKind(uint32(kind))
 	}
 }
 

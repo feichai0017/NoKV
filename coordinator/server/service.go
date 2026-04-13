@@ -53,10 +53,6 @@ const defaultCoordinatorLeaseTTL = 10 * time.Second
 const defaultCoordinatorLeaseRenewIn = 3 * time.Second
 const defaultCoordinatorLeaseClockSkew = 500 * time.Millisecond
 
-const errNotLeaderPrefix = "coordinator not leader"
-const errRootUnavailable = "coordinator root unavailable"
-const errCoordinatorLeasePrefix = "coordinator lease not held"
-
 // NewService constructs a Coordinator service. The optional root storage fixes
 // durable rooted persistence at construction time; omitting it keeps the service
 // in explicit in-memory mode.
@@ -356,17 +352,17 @@ func (s *Service) GetRegionByKey(_ context.Context, req *coordpb.GetRegionByKeyR
 		return nil, s.notLeaderError()
 	}
 	if freshness == coordpb.Freshness_FRESHNESS_STRONG && state.rootLag > 0 {
-		return nil, status.Error(codes.FailedPrecondition, "root lag exceeds strong freshness")
+		return nil, status.Error(codes.FailedPrecondition, errRootLagExceedsStrongFreshness)
 	}
 	if freshness == coordpb.Freshness_FRESHNESS_BOUNDED && state.catchUpState == coordstorage.CatchUpStateBootstrapRequired {
-		return nil, status.Error(codes.FailedPrecondition, "bootstrap required before bounded freshness")
+		return nil, status.Error(codes.FailedPrecondition, errBootstrapRequiredBeforeBounded)
 	}
 	required := rootTokenFromProto(req.GetRequiredRootToken())
 	if !rootTokenSatisfied(state.servedToken, required) {
-		return nil, status.Error(codes.FailedPrecondition, "required rooted token not satisfied")
+		return nil, status.Error(codes.FailedPrecondition, errRequiredRootedTokenNotSatisfied)
 	}
 	if freshness == coordpb.Freshness_FRESHNESS_BOUNDED && req.MaxRootLag != nil && !boundedLagSatisfied(state.rootLag, req.GetMaxRootLag()) {
-		return nil, status.Error(codes.FailedPrecondition, "root lag exceeds bound")
+		return nil, status.Error(codes.FailedPrecondition, errRootLagExceedsBound)
 	}
 	desc, ok := s.cluster.GetRegionDescriptorByKey(req.GetKey())
 	if !ok {
@@ -450,13 +446,13 @@ func (s *Service) currentReadState() (readState, error) {
 
 func (s *Service) notLeaderError() error {
 	if s == nil || s.storage == nil {
-		return status.Error(codes.FailedPrecondition, errNotLeaderPrefix)
+		return statusNotLeader(0)
 	}
 	leaderID := s.storage.LeaderID()
 	if leaderID == 0 {
-		return status.Error(codes.FailedPrecondition, errNotLeaderPrefix)
+		return statusNotLeader(0)
 	}
-	return status.Error(codes.FailedPrecondition, fmt.Sprintf("%s (leader_id=%d)", errNotLeaderPrefix, leaderID))
+	return statusNotLeader(leaderID)
 }
 
 func normalizeFreshness(f coordpb.Freshness) coordpb.Freshness {
@@ -810,9 +806,9 @@ func (s *Service) requireLeaderForWrite() error {
 	}
 	leaderID := s.storage.LeaderID()
 	if leaderID != 0 {
-		return status.Error(codes.FailedPrecondition, fmt.Sprintf("%s (leader_id=%d)", errNotLeaderPrefix, leaderID))
+		return statusNotLeader(leaderID)
 	}
-	return status.Error(codes.FailedPrecondition, errNotLeaderPrefix)
+	return statusNotLeader(0)
 }
 
 func (s *Service) leaseScopedStoreOperations(storeID uint64) []*coordpb.SchedulerOperation {
@@ -1003,7 +999,7 @@ func translateCoordinatorLeaseError(err error) error {
 		return nil
 	}
 	if errors.Is(err, rootstate.ErrCoordinatorLeaseHeld) {
-		return status.Error(codes.FailedPrecondition, fmt.Sprintf("%s: %v", errCoordinatorLeasePrefix, err))
+		return statusCoordinatorLease(err)
 	}
 	return status.Error(codes.Internal, "campaign coordinator lease: "+err.Error())
 }

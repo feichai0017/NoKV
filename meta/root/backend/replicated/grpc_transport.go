@@ -3,7 +3,6 @@ package replicated
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -113,7 +112,7 @@ type GRPCTransport struct {
 // NewGRPCTransport starts one gRPC transport endpoint for one metadata root node.
 func NewGRPCTransport(localID uint64, listenAddr string) (*GRPCTransport, error) {
 	if localID == 0 {
-		return nil, errors.New("meta/root/backend/replicated: gRPC transport requires non-zero local id")
+		return nil, errTransportRequiresLocalID
 	}
 	if listenAddr == "" {
 		listenAddr = "127.0.0.1:0"
@@ -206,14 +205,14 @@ func (t *GRPCTransport) clientFor(id uint64) (*rootTransportClientImpl, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
-		return nil, errors.New("meta/root/backend/replicated: transport closed")
+		return nil, errTransportClosed
 	}
 	if client, ok := t.clients[id]; ok {
 		return client, nil
 	}
 	addr, ok := t.peers[id]
 	if !ok || addr == "" {
-		return nil, fmt.Errorf("meta/root/backend/replicated: peer %d address unknown", id)
+		return nil, errPeerAddressUnknown(id)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), t.dialTimeout)
 	defer cancel()
@@ -269,7 +268,7 @@ func waitForTransportReady(ctx context.Context, conn *grpc.ClientConn) error {
 		case connectivity.Ready:
 			return nil
 		case connectivity.Shutdown:
-			return errors.New("meta/root/backend/replicated: transport connection shutdown")
+			return errTransportConnectionShutdown
 		}
 		if !conn.WaitForStateChange(ctx, state) {
 			return ctx.Err()

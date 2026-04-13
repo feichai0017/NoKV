@@ -48,10 +48,10 @@ type WALStorage struct {
 // OpenWALStorage constructs a WAL-backed raft storage.
 func OpenWALStorage(cfg WALStorageConfig) (*WALStorage, error) {
 	if cfg.GroupID == 0 {
-		return nil, fmt.Errorf("raftstore: wal storage requires group id")
+		return nil, errWALStorageRequiresGroupID
 	}
 	if cfg.WAL == nil {
-		return nil, fmt.Errorf("raftstore: wal storage requires WAL manager")
+		return nil, errWALStorageRequiresManager
 	}
 	ws := &WALStorage{
 		groupID:    cfg.GroupID,
@@ -186,7 +186,7 @@ func (ws *WALStorage) Append(entries []myraft.Entry) error {
 		return err
 	}
 	if len(infos) != 1 {
-		return fmt.Errorf("raftstore: expected single entry record, got %d", len(infos))
+		return errExpectedSingleEntryRecord(len(infos))
 	}
 	if err := ws.mem.Append(entries); err != nil {
 		return err
@@ -223,7 +223,7 @@ func (ws *WALStorage) ApplySnapshot(snap myraft.Snapshot) error {
 		return err
 	}
 	if len(infos) != 1 {
-		return fmt.Errorf("raftstore: expected single snapshot record, got %d", len(infos))
+		return errExpectedSingleSnapshotRecord(len(infos))
 	}
 	if err := ws.mem.ApplySnapshot(snap); err != nil {
 		return err
@@ -289,7 +289,7 @@ func (ws *WALStorage) SetHardState(st myraft.HardState) error {
 		return err
 	}
 	if len(infos) != 1 {
-		return fmt.Errorf("raftstore: expected single hard state record, got %d", len(infos))
+		return errExpectedSingleHardStateRecord(len(infos))
 	}
 	if err := ws.mem.SetHardState(st); err != nil {
 		return err
