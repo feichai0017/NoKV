@@ -343,8 +343,8 @@ func TestARTDecrRefUnderflow(t *testing.T) {
 	art.DecrRef() // ref = 1
 	art.DecrRef() // ref = 0, normal release
 
-	require.PanicsWithValue(t, "ART.DecrRef: refcount underflow (double release)", func() {
-		art.DecrRef() // ref = -1, should panic
+	require.Panics(t, func() {
+		art.DecrRef() // ref already 0, should panic
 	})
 }
 
@@ -354,7 +354,7 @@ func TestARTIteratorCloseIdempotent(t *testing.T) {
 	require.NotNil(t, it)
 	require.NoError(t, it.Close()) // ref = 1
 	require.NoError(t, it.Close()) // still ref = 1
-	require.Equal(t, int32(1), art.ref.Load())
+	require.Equal(t, int32(1), art.Load())
 	art.DecrRef() // ref = 0
 }
 

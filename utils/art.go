@@ -586,13 +586,13 @@ func payloadReplace(kind uint8, payload *nodePayload, key byte, oldOff, newOff u
 // and observe immutable nodes.
 type ART struct {
 	tree *artTree
-	ref  atomic.Int32
+	kv.RefCount
 }
 
 // NewART creates a new adaptive radix tree with a default arena size.
 func NewART(arenaSize int64) *ART {
 	art := &ART{tree: newARTree(arenaSize)}
-	art.ref.Store(1)
+	art.Init(1)
 	return art
 }
 
@@ -650,11 +650,12 @@ func (a *ART) MemSize() int64 {
 }
 
 // IncrRef increments the reference counter.
+// It shadows RefCount.Incr to add nil-receiver safety.
 func (a *ART) IncrRef() {
 	if a == nil {
 		return
 	}
-	a.ref.Add(1)
+	a.RefCount.Incr()
 }
 
 // DecrRef decrements the reference counter and releases the tree when it
@@ -664,14 +665,10 @@ func (a *ART) DecrRef() {
 	if a == nil {
 		return
 	}
-	n := a.ref.Add(-1)
-	if n > 0 {
+	if a.Decr() > 0 {
 		return
 	}
-	if n < 0 {
-		panic("ART.DecrRef: refcount underflow (double release)")
-	}
-	// n == 0: last reference dropped — release the tree.
+	// ref == 0: last reference dropped — release the tree.
 	if a.tree != nil {
 		a.tree.release()
 	}

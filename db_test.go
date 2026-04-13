@@ -486,7 +486,7 @@ func TestGetEntryIsDetachedFromPool(t *testing.T) {
 	require.Equal(t, []byte("value-1"), entry.Value)
 
 	// Public read APIs return detached entries; DecrRef misuse should fail fast.
-	require.PanicsWithValue(t, "kv.Entry.DecrRef: refcount underflow (current_ref=0)", func() {
+	require.Panics(t, func() {
 		entry.DecrRef()
 	})
 	require.Equal(t, []byte("value-1"), entry.Value)
