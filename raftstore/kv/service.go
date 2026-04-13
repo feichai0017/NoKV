@@ -262,14 +262,14 @@ func (s *Service) KvCheckTxnStatus(ctx context.Context, req *kvrpcpb.KvCheckTxnS
 
 func (s *Service) read(ctx context.Context, req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 	if s.store == nil {
-		return nil, fmt.Errorf("raftstore: store not initialized")
+		return nil, errStoreNotInitialized
 	}
 	return s.store.ReadCommand(ctx, req)
 }
 
 func (s *Service) propose(ctx context.Context, req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 	if s.store == nil {
-		return nil, fmt.Errorf("raftstore: store not initialized")
+		return nil, errStoreNotInitialized
 	}
 	return s.store.ProposeCommand(ctx, req)
 }

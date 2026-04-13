@@ -1,7 +1,6 @@
 package replicated
 
 import (
-	"fmt"
 	"time"
 
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -35,9 +34,9 @@ func (d *NetworkDriver) WaitForTail(after rootstorage.TailToken, timeout time.Du
 	case <-d.stopCh:
 		advance, tailErr := d.adapter.observe(after)
 		if tailErr != nil {
-			return d.adapter.closedAdvance(after), fmt.Errorf("meta/root/backend/replicated: network driver is closed")
+			return d.adapter.closedAdvance(after), errNetworkDriverClosed
 		}
-		return advance, fmt.Errorf("meta/root/backend/replicated: network driver is closed")
+		return advance, errNetworkDriverClosed
 	case <-notify:
 		return d.ObserveTail(after)
 	case <-timer.C:
@@ -75,11 +74,11 @@ func (d *NetworkDriver) AppendCommitted(records ...rootstorage.CommittedEvent) (
 	d.mu.Lock()
 	if d.node == nil {
 		d.mu.Unlock()
-		return 0, fmt.Errorf("meta/root/backend/replicated: network driver is closed")
+		return 0, errNetworkDriverClosed
 	}
 	if d.node.raw.Status().RaftState != myraft.StateLeader {
 		d.mu.Unlock()
-		return 0, fmt.Errorf("meta/root/backend/replicated: node %d is not leader", d.id)
+		return 0, errNodeNotLeader(d.id)
 	}
 	for _, rec := range records {
 		payload, err := marshalCommittedEvent(rec)
@@ -127,7 +126,7 @@ func (d *NetworkDriver) waitForCommittedCursor(after rootstorage.TailToken, targ
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return fmt.Errorf("meta/root/backend/replicated: append wait timed out before committed cursor %v", target)
+			return errAppendWaitTimedOut(target)
 		}
 		wait := min(remaining, 200*time.Millisecond)
 		advance, err := d.WaitForTail(after, wait)

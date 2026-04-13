@@ -1,7 +1,6 @@
 package replicated
 
 import (
-	"fmt"
 	"math"
 	"os"
 	"slices"
@@ -47,19 +46,19 @@ type NetworkDriver struct {
 // NewNetworkDriver creates one transport-backed local metadata replication node.
 func NewNetworkDriver(cfg NetworkConfig) (*NetworkDriver, error) {
 	if cfg.ID == 0 {
-		return nil, fmt.Errorf("meta/root/backend/replicated: network driver id must be non-zero")
+		return nil, errNetworkDriverRequiresID
 	}
 	if cfg.WorkDir == "" {
-		return nil, fmt.Errorf("meta/root/backend/replicated: network driver workdir is required")
+		return nil, errNetworkDriverRequiresWorkDir
 	}
 	if cfg.Transport == nil {
-		return nil, fmt.Errorf("meta/root/backend/replicated: network driver transport is required")
+		return nil, errNetworkDriverRequiresTransport
 	}
 	if len(cfg.PeerIDs) == 0 {
 		cfg.PeerIDs = []uint64{cfg.ID}
 	}
 	if !slices.Contains(cfg.PeerIDs, cfg.ID) {
-		return nil, fmt.Errorf("meta/root/backend/replicated: local node %d missing from peer set %v", cfg.ID, cfg.PeerIDs)
+		return nil, errLocalNodeMissingFromPeerSet(cfg.ID, cfg.PeerIDs)
 	}
 	if cfg.TickInterval <= 0 {
 		cfg.TickInterval = defaultNetworkTickInterval
@@ -125,7 +124,7 @@ func (d *NetworkDriver) Campaign() error {
 	d.mu.Lock()
 	if d.node == nil {
 		d.mu.Unlock()
-		return fmt.Errorf("meta/root/backend/replicated: network driver is closed")
+		return errNetworkDriverClosed
 	}
 	if err := d.node.raw.Campaign(); err != nil {
 		d.mu.Unlock()
@@ -155,7 +154,7 @@ func (d *NetworkDriver) Tick() error {
 	d.mu.Lock()
 	if d.node == nil {
 		d.mu.Unlock()
-		return fmt.Errorf("meta/root/backend/replicated: network driver is closed")
+		return errNetworkDriverClosed
 	}
 	d.node.raw.Tick()
 	_, outbound, err := d.drainLocked()
@@ -210,7 +209,7 @@ func (d *NetworkDriver) handleTransportMessage(msg myraft.Message) error {
 	d.mu.Lock()
 	if d.node == nil {
 		d.mu.Unlock()
-		return fmt.Errorf("meta/root/backend/replicated: network driver is closed")
+		return errNetworkDriverClosed
 	}
 	if err := d.node.raw.Step(msg); err != nil {
 		d.mu.Unlock()
