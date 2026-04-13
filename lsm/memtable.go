@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm/tombstone"
 	"github.com/feichai0017/NoKV/utils"
@@ -21,7 +22,7 @@ import (
 type memIndex interface {
 	Add(*kv.Entry)
 	Search([]byte) ([]byte, kv.ValueStruct)
-	NewIterator(*utils.Options) utils.Iterator
+	NewIterator(*index.Options) index.Iterator
 	MemSize() int64
 	IncrRef()
 	DecrRef()
@@ -51,10 +52,10 @@ type memTable struct {
 func arenaSizeFor(memTableSize int64) int64 {
 	base := memTableSize
 	if base <= 0 {
-		base = utils.DefaultArenaSize
+		base = index.DefaultArenaSize
 	}
-	if base < utils.DefaultArenaSize {
-		base = utils.DefaultArenaSize
+	if base < index.DefaultArenaSize {
+		base = index.DefaultArenaSize
 	}
 	if base > math.MaxInt64/2 {
 		return math.MaxInt64
@@ -410,14 +411,14 @@ func (m *memTable) trackRangeTombstone(entry *kv.Entry) {
 
 func newMemIndex(opt *Options) memIndex {
 	if opt == nil {
-		return utils.NewART(arenaSizeFor(0))
+		return index.NewART(arenaSizeFor(0))
 	}
 	switch opt.MemTableEngine {
 	case "skiplist":
-		return utils.NewSkiplist(arenaSizeFor(opt.MemTableSize))
+		return index.NewSkiplist(arenaSizeFor(opt.MemTableSize))
 	case "", "art":
 		fallthrough
 	default:
-		return utils.NewART(arenaSizeFor(opt.MemTableSize))
+		return index.NewART(arenaSizeFor(opt.MemTableSize))
 	}
 }

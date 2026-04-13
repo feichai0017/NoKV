@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
@@ -60,7 +61,7 @@ func TestTableReverseIteration(t *testing.T) {
 	defer func() { _ = tbl.DecrRef() }()
 
 	t.Run("reverse iteration with Rewind", func(t *testing.T) {
-		it := tbl.NewIterator(&utils.Options{IsAsc: false})
+		it := tbl.NewIterator(&index.Options{IsAsc: false})
 		defer func() { _ = it.Close() }()
 
 		it.Rewind()
@@ -72,7 +73,7 @@ func TestTableReverseIteration(t *testing.T) {
 	})
 
 	t.Run("reverse iteration with Seek", func(t *testing.T) {
-		it := tbl.NewIterator(&utils.Options{IsAsc: false})
+		it := tbl.NewIterator(&index.Options{IsAsc: false})
 		defer func() { _ = it.Close() }()
 
 		it.Seek(kv.InternalKey(kv.CFDefault, []byte("f"), 1))
@@ -87,7 +88,7 @@ func TestTableReverseIteration(t *testing.T) {
 	})
 
 	t.Run("forward iteration for comparison", func(t *testing.T) {
-		it := tbl.NewIterator(&utils.Options{IsAsc: true})
+		it := tbl.NewIterator(&index.Options{IsAsc: true})
 		defer func() { _ = it.Close() }()
 
 		it.Rewind()
@@ -99,7 +100,7 @@ func TestTableReverseIteration(t *testing.T) {
 	})
 
 	t.Run("reverse seek to first key", func(t *testing.T) {
-		it := tbl.NewIterator(&utils.Options{IsAsc: false})
+		it := tbl.NewIterator(&index.Options{IsAsc: false})
 		defer func() { _ = it.Close() }()
 
 		it.Seek(kv.InternalKey(kv.CFDefault, []byte("a"), 1))
@@ -110,7 +111,7 @@ func TestTableReverseIteration(t *testing.T) {
 	})
 
 	t.Run("reverse seek to last key", func(t *testing.T) {
-		it := tbl.NewIterator(&utils.Options{IsAsc: false})
+		it := tbl.NewIterator(&index.Options{IsAsc: false})
 		defer func() { _ = it.Close() }()
 
 		it.Seek(kv.InternalKey(kv.CFDefault, []byte("j"), 1))
@@ -149,7 +150,7 @@ func TestTableReverseIterationMultiBlock(t *testing.T) {
 	defer func() { _ = tbl.DecrRef() }()
 
 	t.Run("reverse across multiple blocks", func(t *testing.T) {
-		it := tbl.NewIterator(&utils.Options{IsAsc: false})
+		it := tbl.NewIterator(&index.Options{IsAsc: false})
 		defer func() { _ = it.Close() }()
 
 		it.Rewind()
@@ -168,7 +169,7 @@ func TestTableReverseIterationMultiBlock(t *testing.T) {
 	})
 
 	t.Run("forward across multiple blocks", func(t *testing.T) {
-		it := tbl.NewIterator(&utils.Options{IsAsc: true})
+		it := tbl.NewIterator(&index.Options{IsAsc: true})
 		defer func() { _ = it.Close() }()
 
 		it.Rewind()
@@ -256,7 +257,7 @@ func TestTableIteratorBoundsAcrossBlocks(t *testing.T) {
 	defer func() { _ = tbl.DecrRef() }()
 
 	t.Run("forward bounded range", func(t *testing.T) {
-		it := tbl.NewIterator(&utils.Options{
+		it := tbl.NewIterator(&index.Options{
 			IsAsc:      true,
 			LowerBound: []byte("k050"),
 			UpperBound: []byte("k060"),
@@ -273,7 +274,7 @@ func TestTableIteratorBoundsAcrossBlocks(t *testing.T) {
 	})
 
 	t.Run("reverse bounded range", func(t *testing.T) {
-		it := tbl.NewIterator(&utils.Options{
+		it := tbl.NewIterator(&index.Options{
 			IsAsc:      false,
 			LowerBound: []byte("k050"),
 			UpperBound: []byte("k060"),
@@ -337,7 +338,7 @@ func TestTableIteratorSingleKeyRespectsForwardBounds(t *testing.T) {
 	require.NotNil(t, tbl)
 	defer func() { _ = tbl.DecrRef() }()
 
-	it := tbl.NewIterator(&utils.Options{
+	it := tbl.NewIterator(&index.Options{
 		IsAsc:      true,
 		LowerBound: []byte("k00000010"),
 		UpperBound: []byte("k00000011"),

@@ -4,11 +4,11 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/index"
 )
 
 type iteratorContext struct {
-	iters []utils.Iterator
+	iters []index.Iterator
 }
 
 type iteratorPool struct {
@@ -24,7 +24,7 @@ func newIteratorPool() *iteratorPool {
 
 func (p *iteratorPool) get() *iteratorContext {
 	if p == nil {
-		return &iteratorContext{iters: make([]utils.Iterator, 0, 8)}
+		return &iteratorContext{iters: make([]index.Iterator, 0, 8)}
 	}
 	if v := p.pool.Get(); v != nil {
 		if ctx, ok := v.(*iteratorContext); ok {
@@ -33,7 +33,7 @@ func (p *iteratorPool) get() *iteratorContext {
 			return ctx
 		}
 	}
-	return &iteratorContext{iters: make([]utils.Iterator, 0, 8)}
+	return &iteratorContext{iters: make([]index.Iterator, 0, 8)}
 }
 
 func (p *iteratorPool) put(ctx *iteratorContext) {

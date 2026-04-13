@@ -17,13 +17,13 @@ import (
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/client"
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
-	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -295,7 +295,7 @@ func (fakeMVCCStore) ApplyInternalEntries(entries []*entrykv.Entry) error { retu
 func (fakeMVCCStore) GetInternalEntry(cf entrykv.ColumnFamily, key []byte, version uint64) (*entrykv.Entry, error) {
 	return nil, fmt.Errorf("not implemented")
 }
-func (fakeMVCCStore) NewInternalIterator(opt *utils.Options) utils.Iterator { return nil }
+func (fakeMVCCStore) NewInternalIterator(opt *index.Options) index.Iterator { return nil }
 
 type fakeRaftLog struct{}
 

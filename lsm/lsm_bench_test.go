@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
@@ -202,7 +203,7 @@ func BenchmarkLSMMemtableIterSeek(b *testing.B) {
 					b.Fatalf("seed memtable: %v", err)
 				}
 			}
-			it := lsm.memTable.NewIterator(&utils.Options{IsAsc: true})
+			it := lsm.memTable.NewIterator(&index.Options{IsAsc: true})
 			defer func() { _ = it.Close() }()
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -446,7 +447,7 @@ func BenchmarkLevelIteratorBoundsPruning(b *testing.B) {
 						lh.filter = rangeFilter{}
 						lh.Unlock()
 					}
-					opt := &utils.Options{
+					opt := &index.Options{
 						IsAsc:      true,
 						LowerBound: lower,
 						UpperBound: upper,
@@ -511,16 +512,16 @@ func BenchmarkTableIteratorBlockBounds(b *testing.B) {
 					b.ReportAllocs()
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {
-						var it utils.Iterator
+						var it index.Iterator
 						if bounded {
-							it = tbl.NewIterator(&utils.Options{
+							it = tbl.NewIterator(&index.Options{
 								IsAsc:      true,
 								LowerBound: lower,
 								UpperBound: upper,
 							})
 							it.Rewind()
 						} else {
-							it = tbl.NewIterator(&utils.Options{IsAsc: true})
+							it = tbl.NewIterator(&index.Options{IsAsc: true})
 							it.Seek(kv.InternalKey(kv.CFDefault, lower, kv.MaxVersion))
 						}
 
@@ -774,7 +775,7 @@ func BenchmarkLSMMultiLevelIteratorBoundsPruning(b *testing.B) {
 					if !useFilter {
 						disableBenchRangeFilter(l1, l2, l3)
 					}
-					opt := &utils.Options{
+					opt := &index.Options{
 						IsAsc:      true,
 						LowerBound: tc.lower,
 						UpperBound: tc.upper,

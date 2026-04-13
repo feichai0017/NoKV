@@ -12,6 +12,7 @@ import (
 	"unsafe"
 
 	"github.com/feichai0017/NoKV/file"
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
@@ -497,7 +498,7 @@ type blockIterator struct {
 	valStruct kv.ValueStruct
 	item      entryItem
 
-	it    utils.Item
+	it    index.Item
 	isAsc bool
 }
 
@@ -653,8 +654,8 @@ func (itr *blockIterator) Rewind() bool {
 	return true
 }
 
-// Item returns the current block entry as a utils.Item.
-func (itr *blockIterator) Item() utils.Item {
+// Item returns the current block entry as an index.Item.
+func (itr *blockIterator) Item() index.Item {
 	return itr.it
 }
 

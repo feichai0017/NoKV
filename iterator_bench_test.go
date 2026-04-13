@@ -3,14 +3,14 @@ package NoKV
 import (
 	"testing"
 
-	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/index"
 )
 
 func BenchmarkDBIteratorScan(b *testing.B) {
 	db := newBenchDB(b, nil)
 	value := make([]byte, 128)
 	_ = loadBenchKeys(b, db, 20_000, value)
-	it := db.NewIterator(&utils.Options{IsAsc: true})
+	it := db.NewIterator(&index.Options{IsAsc: true})
 	defer func() { _ = it.Close() }()
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -26,7 +26,7 @@ func BenchmarkDBIteratorSeek(b *testing.B) {
 	db := newBenchDB(b, nil)
 	value := make([]byte, 128)
 	keys := loadBenchKeys(b, db, 20_000, value)
-	it := db.NewIterator(&utils.Options{IsAsc: true})
+	it := db.NewIterator(&index.Options{IsAsc: true})
 	defer func() { _ = it.Close() }()
 	b.ReportAllocs()
 	b.ResetTimer()

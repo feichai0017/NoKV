@@ -16,6 +16,7 @@ import (
 
 	stderrors "errors"
 	"github.com/feichai0017/NoKV/file"
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
@@ -118,7 +119,7 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) (out *
 	t.minKey = kv.SafeCopy(nil, t.ss.MinKey())
 
 	// get the max key of sst, need to use iterator
-	itr := t.NewIterator(&utils.Options{}) // default is descending
+	itr := t.NewIterator(&index.Options{}) // default is descending
 	defer func() { _ = itr.Close() }()
 	// locate to the initial position is the max key
 	itr.Rewind()
@@ -436,8 +437,8 @@ func (t *table) blockCacheKey(idx int) uint64 {
 }
 
 type tableIterator struct {
-	it           utils.Item
-	opt          *utils.Options
+	it           index.Item
+	opt          *index.Options
 	t            *table
 	blockPos     int
 	blockStart   int
@@ -495,10 +496,10 @@ func (it *tableIterator) prefetchNext(idx int) {
 }
 
 // NewIterator opens a table iterator with optional prefetch behavior.
-func (t *table) NewIterator(options *utils.Options) utils.Iterator {
+func (t *table) NewIterator(options *index.Options) index.Iterator {
 	t.IncrRef()
 	if options == nil {
-		options = &utils.Options{IsAsc: true}
+		options = &index.Options{IsAsc: true}
 	}
 	index := t.index()
 	blockStart, blockEnd := blockRangeForBounds(index, options.LowerBound, options.UpperBound)
@@ -564,7 +565,7 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 }
 
 // adviseIterator is an optional helper to issue madvise hints for long scans.
-func (t *table) adviseIterator(options *utils.Options) {
+func (t *table) adviseIterator(options *index.Options) {
 	if options == nil {
 		return
 	}
@@ -619,7 +620,7 @@ func (it *tableIterator) Rewind() {
 }
 
 // Item returns the current table iterator item.
-func (it *tableIterator) Item() utils.Item {
+func (it *tableIterator) Item() index.Item {
 	return it.it
 }
 

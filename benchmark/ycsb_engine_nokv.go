@@ -9,6 +9,7 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -112,7 +113,7 @@ func (e *nokvEngine) Update(key, value []byte) error {
 func (e *nokvEngine) Scan(startKey []byte, count int) (int, error) {
 	var read int
 	var lastKey []byte
-	it := e.db.NewIterator(&utils.Options{IsAsc: true})
+	it := e.db.NewIterator(&index.Options{IsAsc: true})
 	defer func() { _ = it.Close() }()
 	it.Seek(startKey)
 	for ; it.Valid() && read < count; it.Next() {

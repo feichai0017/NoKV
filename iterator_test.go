@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/index"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,7 +20,7 @@ func TestDBIteratorVLogReadError(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	// Create iterator
-	iter := db.NewIterator(&utils.Options{IsAsc: true})
+	iter := db.NewIterator(&index.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
 
 	// First key might work (depending on truncation point)
@@ -50,7 +50,7 @@ func TestDBIteratorErrorClearedOnRewind(t *testing.T) {
 	db = corruptVLogByTruncation(t, db, opt, 10) // Truncate heavily to 1/10
 	defer func() { _ = db.Close() }()
 
-	iter := db.NewIterator(&utils.Options{IsAsc: true})
+	iter := db.NewIterator(&index.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
 	dbIter := iter.(*DBIterator)
 
@@ -90,7 +90,7 @@ func TestDBIteratorLegitimateFilteringNoError(t *testing.T) {
 	require.NoError(t, db.SetWithTTL([]byte("key2"), []byte("val2"), 1*time.Millisecond))
 	time.Sleep(10 * time.Millisecond)
 
-	iter := db.NewIterator(&utils.Options{IsAsc: true})
+	iter := db.NewIterator(&index.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
 	dbIter := iter.(*DBIterator)
 
@@ -108,7 +108,7 @@ func TestDBIteratorSeekClearsError(t *testing.T) {
 	db = corruptVLogByTruncation(t, db, opt, 10) // Truncate to 1/10
 	defer func() { _ = db.Close() }()
 
-	iter := db.NewIterator(&utils.Options{IsAsc: true})
+	iter := db.NewIterator(&index.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
 	dbIter := iter.(*DBIterator)
 
@@ -136,7 +136,7 @@ func TestDBIteratorEmptyDatabaseNoError(t *testing.T) {
 	require.NotNil(t, db)
 	defer func() { _ = db.Close() }()
 
-	iter := db.NewIterator(&utils.Options{IsAsc: true})
+	iter := db.NewIterator(&index.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
 	dbIter := iter.(*DBIterator)
 
@@ -214,7 +214,7 @@ func corruptVLogByTruncation(t *testing.T, db *DB, opt *Options, truncateDivisor
 
 // iterateUntilEnd iterates through all entries until the iterator is exhausted.
 // Returns the error encountered (if any).
-func iterateUntilEnd(iter utils.Iterator) error {
+func iterateUntilEnd(iter index.Iterator) error {
 	iter.Rewind()
 	for iter.Valid() {
 		iter.Next()

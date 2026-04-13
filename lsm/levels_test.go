@@ -5,8 +5,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -148,7 +148,7 @@ func TestLevelHandlerL0BoundedMetricsRecordFallback(t *testing.T) {
 	lh.tables = []*table{tblA, tblD}
 	lh.Sort()
 
-	iters := lh.iterators(&utils.Options{
+	iters := lh.iterators(&index.Options{
 		IsAsc:      true,
 		LowerBound: []byte("b"),
 		UpperBound: []byte("e"),
@@ -184,7 +184,7 @@ func TestLevelHandlerIteratorsRespectBoundsWithIngest(t *testing.T) {
 	lh.ingest.addBatch([]*table{ingestB, ingestE})
 	lh.Sort()
 
-	iters := lh.iterators(&utils.Options{
+	iters := lh.iterators(&index.Options{
 		IsAsc:      true,
 		LowerBound: []byte("c"),
 		UpperBound: []byte("f"),
@@ -226,7 +226,7 @@ func TestLevelHandlerIteratorsSkipLeadingEmptyBoundedTables(t *testing.T) {
 	lh.tables = []*table{tblA, tblB, tblC, tblD}
 	lh.Sort()
 
-	iters := lh.iterators(&utils.Options{
+	iters := lh.iterators(&index.Options{
 		IsAsc:      true,
 		LowerBound: []byte("c"),
 		UpperBound: []byte("e"),

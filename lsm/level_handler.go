@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -557,8 +558,8 @@ func (lh *levelHandler) recordIngestMetrics(merge bool, duration time.Duration, 
 	}
 }
 
-func (lh *levelHandler) iterators(opt *utils.Options) []utils.Iterator {
-	topt := &utils.Options{}
+func (lh *levelHandler) iterators(opt *index.Options) []index.Iterator {
+	topt := &index.Options{}
 	if opt != nil {
 		*topt = *opt
 	}
@@ -573,7 +574,7 @@ func (lh *levelHandler) iterators(opt *utils.Options) []utils.Iterator {
 		return iteratorsReversed(mainTables, topt)
 	}
 
-	var itrs []utils.Iterator
+	var itrs []index.Iterator
 	ingestTables := lh.ingest.tablesWithinBounds(topt.LowerBound, topt.UpperBound)
 	itrs = append(itrs, iteratorsReversed(ingestTables, topt)...)
 	if len(mainTables) == 1 {

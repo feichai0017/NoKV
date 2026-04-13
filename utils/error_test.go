@@ -21,7 +21,3 @@ func TestErrorHelpers(t *testing.T) {
 		CondPanicFunc(false, func() error { return err })
 	})
 }
-
-func TestAssertTruefNoop(t *testing.T) {
-	AssertTruef(true, "should not fail")
-}

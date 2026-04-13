@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
@@ -445,7 +446,7 @@ func TestTableIteratorSeekAndIteratorPrefetch(t *testing.T) {
 		t.Fatalf("expected block offset lookup to succeed")
 	}
 
-	it := tbl.NewIterator(&utils.Options{IsAsc: true, PrefetchBlocks: 1, PrefetchWorkers: 1})
+	it := tbl.NewIterator(&index.Options{IsAsc: true, PrefetchBlocks: 1, PrefetchWorkers: 1})
 	tblIter, ok := it.(*tableIterator)
 	if !ok {
 		t.Fatalf("expected table iterator, got %T", it)
@@ -468,7 +469,7 @@ func TestTableIteratorSeekAndIteratorPrefetch(t *testing.T) {
 		t.Fatalf("iterator close: %v", err)
 	}
 
-	it = tbl.NewIterator(&utils.Options{IsAsc: false})
+	it = tbl.NewIterator(&index.Options{IsAsc: false})
 	tblIter = it.(*tableIterator)
 	tblIter.Rewind()
 	if tblIter.Valid() {
@@ -844,7 +845,7 @@ func tableContainsRangeDelete(tbl *table) bool {
 	if tbl == nil {
 		return false
 	}
-	it := tbl.NewIterator(&utils.Options{IsAsc: true})
+	it := tbl.NewIterator(&index.Options{IsAsc: true})
 	if it == nil {
 		return false
 	}
@@ -1170,7 +1171,7 @@ func TestLSMBatchAndMemHelpers(t *testing.T) {
 	if lsm.MemSize() <= 0 {
 		t.Fatalf("expected memtable size to be positive")
 	}
-	if _, ok := lsm.memTable.index.(*utils.ART); !ok {
+	if _, ok := lsm.memTable.index.(*index.ART); !ok {
 		t.Fatalf("expected ART-backed memtable")
 	}
 
@@ -1690,7 +1691,7 @@ func baseTest(t *testing.T, lsm *LSM, n int) {
 	//retList := make([]*kv.Entry, 0)
 	// testRange := func(isAsc bool) {
 	// 	// Range ensures every written LSM entry is readable.
-	// 	iter := lsm.NewIterator(&utils.Options{IsAsc: true})
+	// 	iter := lsm.NewIterator(&index.Options{IsAsc: true})
 	// 	for iter.Rewind(); iter.Valid(); iter.Next() {
 	// 		e := iter.Item().Entry()
 	// 		retList = append(retList, e)

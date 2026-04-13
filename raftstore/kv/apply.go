@@ -9,6 +9,7 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/percolator"
 	"github.com/feichai0017/NoKV/percolator/latch"
@@ -126,7 +127,7 @@ func handleScan(db NoKV.MVCCStore, req *kvrpcpb.ScanRequest) (*kvrpcpb.ScanRespo
 	if readTs == 0 {
 		readTs = kv.MaxVersion
 	}
-	iter := db.NewInternalIterator(&utils.Options{IsAsc: true})
+	iter := db.NewInternalIterator(&index.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
 
 	startKey := append([]byte(nil), req.GetStartKey()...)
@@ -194,7 +195,7 @@ func handleScan(db NoKV.MVCCStore, req *kvrpcpb.ScanRequest) (*kvrpcpb.ScanRespo
 	return resp, nil
 }
 
-func advanceToNextUserKey(iter utils.Iterator, current []byte) {
+func advanceToNextUserKey(iter index.Iterator, current []byte) {
 	if iter == nil {
 		return
 	}
@@ -220,7 +221,7 @@ func advanceToNextUserKey(iter utils.Iterator, current []byte) {
 	}
 }
 
-func collectVisibleValue(db NoKV.MVCCStore, iter utils.Iterator, key []byte, readTs uint64) ([]byte, uint64, bool, error) {
+func collectVisibleValue(db NoKV.MVCCStore, iter index.Iterator, key []byte, readTs uint64) ([]byte, uint64, bool, error) {
 	for iter.Valid() {
 		item := iter.Item()
 		if item == nil {
