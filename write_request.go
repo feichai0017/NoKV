@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/utils"
 )
 
 type request struct {
@@ -13,7 +14,7 @@ type request struct {
 	ptrIdxs    []int
 	ptrBuckets []uint32
 	Err        error
-	kv.RefCount
+	utils.RefCount
 	enqueueAt time.Time
 	wg        sync.WaitGroup
 }
@@ -28,11 +29,10 @@ func (req *request) reset() {
 	req.ptrIdxs = req.ptrIdxs[:0]
 	req.ptrBuckets = req.ptrBuckets[:0]
 	req.Err = nil
-	req.RefCount.Reset()
+	req.Reset()
 	req.enqueueAt = time.Time{}
 	req.wg = sync.WaitGroup{}
 }
-
 
 func (req *request) loadEntries(entries []*kv.Entry) {
 	if cap(req.Entries) < len(entries) {

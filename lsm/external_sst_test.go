@@ -24,7 +24,7 @@ func TestExportExternalSSTRoundTripImport(t *testing.T) {
 		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("beta"), 2), largeValue),
 	}
 	sort.Slice(entries, func(i, j int) bool {
-		return utils.CompareInternalKeys(entries[i].Key, entries[j].Key) < 0
+		return kv.CompareInternalKeys(entries[i].Key, entries[j].Key) < 0
 	})
 
 	sstPath := filepath.Join(t.TempDir(), "external.sst")
@@ -70,7 +70,7 @@ func TestImportExternalSSTRollback(t *testing.T) {
 		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("beta"), 2), []byte("b")),
 	}
 	sort.Slice(entries, func(i, j int) bool {
-		return utils.CompareInternalKeys(entries[i].Key, entries[j].Key) < 0
+		return kv.CompareInternalKeys(entries[i].Key, entries[j].Key) < 0
 	})
 
 	sstPath := filepath.Join(t.TempDir(), "external.sst")

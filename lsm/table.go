@@ -19,6 +19,7 @@ import (
 	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 	"github.com/pkg/errors"
 )
 
@@ -29,10 +30,10 @@ var (
 )
 
 type table struct {
-	lm  *levelManager
-	fid uint64
-	kv.RefCount // For file garbage collection. Atomic.
-	lvl atomic.Int32
+	lm             *levelManager
+	fid            uint64
+	utils.RefCount // For file garbage collection. Atomic.
+	lvl            atomic.Int32
 
 	minKey []byte
 	maxKey []byte
@@ -68,7 +69,7 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) (out *
 		t       *table
 		openErr error
 	)
-	fid := utils.FID(tableName)
+	fid := vfs.FID(tableName)
 	// if builder is not nil, flush the buffer to disk
 	if builder != nil {
 		if t, openErr = builder.flush(lm, tableName); openErr != nil {
@@ -700,7 +701,7 @@ func searchFirstBlockWithBaseKeyGT(offsets []*storagepb.BlockOffset, key []byte)
 	lo, hi := 0, len(offsets)
 	for lo < hi {
 		mid := lo + (hi-lo)/2
-		if utils.CompareInternalKeys(offsets[mid].GetKey(), key) > 0 {
+		if kv.CompareInternalKeys(offsets[mid].GetKey(), key) > 0 {
 			hi = mid
 		} else {
 			lo = mid + 1
@@ -956,7 +957,7 @@ func (t *table) openSSTableLocked(loadIndex bool) error {
 		return nil
 	}
 	opt := &file.Options{
-		FileName: utils.FileNameSSTable(t.lm.opt.WorkDir, t.fid),
+		FileName: vfs.FileNameSSTable(t.lm.opt.WorkDir, t.fid),
 		Dir:      t.lm.opt.WorkDir,
 		Flag:     os.O_RDONLY,
 		MaxSz:    int(t.size),
