@@ -45,7 +45,7 @@ func (s fileCheckpointStore) LoadCheckpoint() (rootstorage.Checkpoint, error) {
 		return rootstorage.Checkpoint{}, err
 	}
 	if pbCheckpoint.State == nil {
-		return rootstorage.Checkpoint{}, errors.New("root checkpoint missing state")
+		return rootstorage.Checkpoint{}, errCheckpointMissingState
 	}
 	snapshot, tailOffset := metawire.RootSnapshotFromProto(&pbCheckpoint)
 	if snapshot.Descriptors == nil {

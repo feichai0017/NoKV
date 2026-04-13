@@ -24,6 +24,20 @@ var (
 	errInvalidScanLimit = errors.New("client: scan limit must be > 0")
 )
 
+func IsMissingStoreEndpoints(err error) bool { return errors.Is(err, errMissingStoreEndpoints) }
+
+func IsMissingRegionResolver(err error) bool { return errors.Is(err, errMissingRegionResolver) }
+
+func IsStoreIDNotSet(err error) bool { return errors.Is(err, errStoreIDNotSet) }
+
+func IsResolvedRegionIDMissing(err error) bool { return errors.Is(err, errResolvedRegionIDMissing) }
+
+func IsRegionMetaMissing(err error) bool { return errors.Is(err, errRegionMetaMissing) }
+
+func IsLeaderUnknown(err error) bool { return errors.Is(err, errLeaderUnknown) }
+
+func IsInvalidScanLimit(err error) bool { return errors.Is(err, errInvalidScanLimit) }
+
 // KeyConflictError represents prewrite-time key conflicts surfaced by the raft
 // service. Callers can inspect the KeyErrors to resolve locks before retrying.
 type KeyConflictError struct {
