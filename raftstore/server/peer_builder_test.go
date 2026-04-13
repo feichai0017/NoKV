@@ -8,9 +8,9 @@ import (
 	entrykv "github.com/feichai0017/NoKV/kv"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,7 +20,7 @@ func (fakeBuilderMVCCStore) ApplyInternalEntries(entries []*entrykv.Entry) error
 func (fakeBuilderMVCCStore) GetInternalEntry(cf entrykv.ColumnFamily, key []byte, version uint64) (*entrykv.Entry, error) {
 	return nil, fmt.Errorf("not implemented")
 }
-func (fakeBuilderMVCCStore) NewInternalIterator(opt *utils.Options) utils.Iterator { return nil }
+func (fakeBuilderMVCCStore) NewInternalIterator(opt *index.Options) index.Iterator { return nil }
 
 type fakeBuilderRaftLog struct{}
 

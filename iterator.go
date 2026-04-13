@@ -3,6 +3,7 @@ package NoKV
 import (
 	"bytes"
 
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/utils"
@@ -11,7 +12,7 @@ import (
 
 // DBIterator wraps the merged LSM iterators and optionally resolves value-log pointers.
 type DBIterator struct {
-	iitr utils.Iterator
+	iitr index.Iterator
 	vlog *valueLog
 	pool *iteratorPool
 	ctx  *iteratorContext
@@ -94,9 +95,9 @@ func (it *Item) ValueCopy(dst []byte) ([]byte, error) {
 }
 
 // NewIterator creates a DB-level iterator over user keys in the default column family.
-func (db *DB) NewIterator(opt *utils.Options) utils.Iterator {
+func (db *DB) NewIterator(opt *index.Options) index.Iterator {
 	if opt == nil {
-		opt = &utils.Options{}
+		opt = &index.Options{}
 	}
 	keyOnly := opt.OnlyUseKey
 	ctx := db.iterPool.get()
@@ -126,9 +127,9 @@ func (db *DB) NewIterator(opt *utils.Options) utils.Iterator {
 
 // NewInternalIterator returns an iterator over internal keys (CF marker + user key + timestamp).
 // Callers should decode kv.Entry.Key via kv.SplitInternalKey and handle ok=false.
-func (db *DB) NewInternalIterator(opt *utils.Options) utils.Iterator {
+func (db *DB) NewInternalIterator(opt *index.Options) index.Iterator {
 	if opt == nil {
-		opt = &utils.Options{}
+		opt = &index.Options{}
 	}
 	iters := db.lsm.NewIterators(opt)
 	return lsm.NewMergeIterator(iters, !opt.IsAsc)
@@ -206,7 +207,7 @@ func (iter *DBIterator) Seek(key []byte) {
 }
 
 // Item returns the currently materialized item, or nil when iterator is invalid.
-func (iter *DBIterator) Item() utils.Item {
+func (iter *DBIterator) Item() index.Item {
 	if iter == nil || !iter.valid {
 		return nil
 	}

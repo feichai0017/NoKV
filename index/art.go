@@ -11,7 +11,7 @@ Key design points:
 - Arena allocation ties node lifetime to the memtable lifetime, avoiding per-node GC.
 */
 
-package utils
+package index
 
 import (
 	"bytes"

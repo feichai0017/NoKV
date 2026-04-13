@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/hotring"
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -55,7 +56,7 @@ func TestAPI(t *testing.T) {
 	}
 
 	// Iterator scan.
-	iter := db.NewIterator(&utils.Options{
+	iter := db.NewIterator(&index.Options{
 		Prefix: []byte("hello"),
 		IsAsc:  false,
 	})
@@ -537,7 +538,7 @@ func TestDBIteratorSeekAndValueCopy(t *testing.T) {
 		require.NoError(t, db.Set([]byte("b"), []byte("vb")))
 		require.NoError(t, db.Set([]byte("c"), []byte("vc")))
 
-		it := db.NewIterator(&utils.Options{IsAsc: true})
+		it := db.NewIterator(&index.Options{IsAsc: true})
 		defer func() { _ = it.Close() }()
 		it.Seek([]byte("b"))
 		require.True(t, it.Valid())
@@ -557,7 +558,7 @@ func TestDBIteratorSeekAndValueCopy(t *testing.T) {
 		value := bytes.Repeat([]byte("p"), 64)
 		require.NoError(t, db.Set([]byte("k"), value))
 
-		it := db.NewIterator(&utils.Options{IsAsc: true, OnlyUseKey: true})
+		it := db.NewIterator(&index.Options{IsAsc: true, OnlyUseKey: true})
 		defer func() { _ = it.Close() }()
 		it.Seek([]byte("k"))
 		require.True(t, it.Valid())
@@ -579,7 +580,7 @@ func TestDBIteratorUserView(t *testing.T) {
 		applyVersionedEntryForTest(t, db, kv.CFLock, []byte("k2"), nonTxnMaxVersion, []byte("lock"), 0)
 		applyVersionedEntryForTest(t, db, kv.CFWrite, []byte("k3"), nonTxnMaxVersion, []byte("write"), 0)
 
-		it := db.NewIterator(&utils.Options{IsAsc: true})
+		it := db.NewIterator(&index.Options{IsAsc: true})
 		defer func() { _ = it.Close() }()
 
 		var keys []string
@@ -602,7 +603,7 @@ func TestDBIteratorUserView(t *testing.T) {
 		applyVersionedEntryForTest(t, db, kv.CFDefault, key, 1, []byte("v1"), 0)
 		applyVersionedEntryForTest(t, db, kv.CFDefault, key, 2, []byte("v2"), 0)
 
-		it := db.NewIterator(&utils.Options{IsAsc: true})
+		it := db.NewIterator(&index.Options{IsAsc: true})
 		defer func() { _ = it.Close() }()
 
 		var versions []uint64
@@ -627,7 +628,7 @@ func TestDBIteratorReverseWithARTMemtable(t *testing.T) {
 		require.NoError(t, db.Set([]byte(k), []byte("v_"+k)))
 	}
 
-	it := db.NewIterator(&utils.Options{IsAsc: false})
+	it := db.NewIterator(&index.Options{IsAsc: false})
 	defer func() { require.NoError(t, it.Close()) }()
 
 	var keys []string
@@ -646,7 +647,7 @@ func TestDBIteratorReverseLatestVersion(t *testing.T) {
 	applyVersionedEntryForTest(t, db, kv.CFDefault, []byte("k"), 1, []byte("v1"), 0)
 	applyVersionedEntryForTest(t, db, kv.CFDefault, []byte("k"), 2, []byte("v2"), 0)
 
-	it := db.NewIterator(&utils.Options{IsAsc: false})
+	it := db.NewIterator(&index.Options{IsAsc: false})
 	defer func() { require.NoError(t, it.Close()) }()
 
 	var keys []string
@@ -671,7 +672,7 @@ func TestDBIteratorCloseIdempotentAcrossMemtableEngines(t *testing.T) {
 		defer func() { _ = db.Close() }()
 
 		require.NoError(t, db.Set([]byte("k"), []byte("v")))
-		it := db.NewIterator(&utils.Options{IsAsc: true})
+		it := db.NewIterator(&index.Options{IsAsc: true})
 		it.Rewind()
 		require.NoError(t, it.Close())
 		require.NoError(t, it.Close())
@@ -1921,7 +1922,7 @@ func TestDBIteratorBoundsAndOutOfRangeSeekContract(t *testing.T) {
 		}
 
 		t.Run("forward", func(t *testing.T) {
-			it := db.NewIterator(&utils.Options{
+			it := db.NewIterator(&index.Options{
 				IsAsc:      true,
 				LowerBound: []byte("b"),
 				UpperBound: []byte("d"),
@@ -1949,7 +1950,7 @@ func TestDBIteratorBoundsAndOutOfRangeSeekContract(t *testing.T) {
 		})
 
 		t.Run("reverse", func(t *testing.T) {
-			it := db.NewIterator(&utils.Options{
+			it := db.NewIterator(&index.Options{
 				IsAsc:      false,
 				LowerBound: []byte("b"),
 				UpperBound: []byte("d"),
@@ -2140,7 +2141,7 @@ func TestRecoveryVlogPointerRoundTripAfterReopen(t *testing.T) {
 		drRequireValue(t, db, []byte("vp-1"), v1)
 		drRequireValue(t, db, []byte("vp-2"), v2)
 
-		it := db.NewIterator(&utils.Options{IsAsc: true, OnlyUseKey: true})
+		it := db.NewIterator(&index.Options{IsAsc: true, OnlyUseKey: true})
 		defer func() { _ = it.Close() }()
 		it.Seek([]byte("vp-1"))
 		require.True(t, it.Valid())

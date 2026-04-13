@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
@@ -111,7 +112,7 @@ func TestCompactBuildTablesOverlappingBotTablesKeepsOrder(t *testing.T) {
 	}
 
 	for _, tbl := range newTables {
-		it := tbl.NewIterator(&utils.Options{IsAsc: true})
+		it := tbl.NewIterator(&index.Options{IsAsc: true})
 		if it == nil {
 			t.Fatalf("nil iterator for output table")
 		}

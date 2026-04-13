@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/hotring"
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/manifest"
@@ -49,7 +50,7 @@ type (
 		// entry.Key remains in internal encoding (cf+user_key+ts). Callers must
 		// DecrRef exactly once.
 		GetInternalEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error)
-		NewInternalIterator(opt *utils.Options) utils.Iterator
+		NewInternalIterator(opt *index.Options) index.Iterator
 	}
 
 	// RaftLog opens raft peer storage without exposing the underlying WAL manager.

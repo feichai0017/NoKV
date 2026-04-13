@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/percolator/latch"
 	"github.com/feichai0017/NoKV/utils"
@@ -62,7 +63,7 @@ func truncateTail(t *testing.T, path string, trim int64) {
 type rollbackTestStore struct {
 	applyInternalEntries func(entries []*kv.Entry) error
 	getInternalEntry     func(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error)
-	newInternalIterator  func(opt *utils.Options) utils.Iterator
+	newInternalIterator  func(opt *index.Options) index.Iterator
 }
 
 func (s rollbackTestStore) ApplyInternalEntries(entries []*kv.Entry) error {
@@ -79,7 +80,7 @@ func (s rollbackTestStore) GetInternalEntry(cf kv.ColumnFamily, key []byte, vers
 	return nil, utils.ErrKeyNotFound
 }
 
-func (s rollbackTestStore) NewInternalIterator(opt *utils.Options) utils.Iterator {
+func (s rollbackTestStore) NewInternalIterator(opt *index.Options) index.Iterator {
 	if s.newInternalIterator != nil {
 		return s.newInternalIterator(opt)
 	}
@@ -87,7 +88,7 @@ func (s rollbackTestStore) NewInternalIterator(opt *utils.Options) utils.Iterato
 }
 
 type testIterator struct {
-	items []utils.Item
+	items []index.Item
 	idx   int
 }
 
@@ -103,7 +104,7 @@ func (it *testIterator) Rewind() {
 	it.idx = 0
 }
 
-func (it *testIterator) Item() utils.Item {
+func (it *testIterator) Item() index.Item {
 	if !it.Valid() {
 		return nil
 	}
@@ -308,8 +309,8 @@ func TestCommitReturnsRetryableOnWriteLookupErrorWhenLockMissing(t *testing.T) {
 
 	latches := latch.NewManager(32)
 	store := rollbackTestStore{
-		newInternalIterator: func(opt *utils.Options) utils.Iterator {
-			return &testIterator{items: []utils.Item{badEntry}}
+		newInternalIterator: func(opt *index.Options) index.Iterator {
+			return &testIterator{items: []index.Item{badEntry}}
 		},
 	}
 
@@ -1028,8 +1029,8 @@ func TestRollbackKeyReturnsRetryableWhenWriteLookupFails(t *testing.T) {
 	t.Cleanup(badEntry.DecrRef)
 
 	store := rollbackTestStore{
-		newInternalIterator: func(opt *utils.Options) utils.Iterator {
-			return &testIterator{items: []utils.Item{badEntry}}
+		newInternalIterator: func(opt *index.Options) index.Iterator {
+			return &testIterator{items: []index.Item{badEntry}}
 		},
 	}
 

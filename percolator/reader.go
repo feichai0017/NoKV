@@ -7,6 +7,7 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -137,7 +138,7 @@ func (r *Reader) getWriteForRead(key []byte, readTs uint64) (*Write, uint64, err
 }
 
 func (r *Reader) scanWrites(key []byte, fn func(Write, uint64) bool) error {
-	iter := r.db.NewInternalIterator(&utils.Options{IsAsc: true})
+	iter := r.db.NewInternalIterator(&index.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
 	if iter == nil {
 		return nil

@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
 )
 
@@ -20,7 +20,7 @@ import (
 // 2. materialize separated values back into inline values, and
 // 3. reuse the live engine's external-SST-compatible table options.
 type exportSource interface {
-	NewInternalIterator(opt *utils.Options) utils.Iterator
+	NewInternalIterator(opt *index.Options) index.Iterator
 	MaterializeInternalEntry(src *kv.Entry) (*kv.Entry, error)
 	ExternalSSTOptions() *lsm.Options
 }
@@ -191,7 +191,7 @@ func (r *ImportResult) Rollback() error {
 
 func collectMaterializedEntries(src exportSource, region localmeta.RegionMeta) ([]*kv.Entry, error) {
 	bounds := localmeta.CloneRegionMeta(region)
-	iter := src.NewInternalIterator(&utils.Options{
+	iter := src.NewInternalIterator(&index.Options{
 		IsAsc:      true,
 		LowerBound: bounds.StartKey,
 		UpperBound: bounds.EndKey,

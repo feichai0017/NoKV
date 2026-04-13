@@ -1,6 +1,9 @@
-package utils
+package index
 
-import "github.com/feichai0017/NoKV/kv"
+import (
+	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/utils"
+)
 
 // Iterator abstracts key/value iteration.
 type Iterator interface {
@@ -27,7 +30,7 @@ type Options struct {
 	OnlyUseKey bool
 	// AccessPattern lets callers hint expected IO behaviour (sequential scans,
 	// random point lookups, etc.) so the file layer can tune madvise settings.
-	AccessPattern AccessPattern
+	AccessPattern utils.AccessPattern
 	// PrefetchBlocks controls how many blocks ahead to prefetch eagerly. Zero
 	// disables prefetch.
 	PrefetchBlocks int

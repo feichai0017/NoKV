@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm/tombstone"
 	"github.com/feichai0017/NoKV/manifest"
@@ -336,16 +337,16 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 			return utils.CompareInternalKeys(botTables[i].MinKey(), botTables[j].MinKey()) < 0
 		})
 	}
-	iterOpt := &utils.Options{
+	iterOpt := &index.Options{
 		IsAsc:          true,
 		AccessPattern:  utils.AccessPatternSequential,
 		PrefetchBlocks: 1,
 	}
 	botCanConcat := tablesStrictlyOrdered(botTables)
 	//numTables := int64(len(topTables) + len(botTables))
-	newIterator := func() []utils.Iterator {
+	newIterator := func() []index.Iterator {
 		// Create iterators across all the tables involved first.
-		var iters []utils.Iterator
+		var iters []index.Iterator
 		switch {
 		case lev == 0:
 			iters = append(iters, iteratorsReversed(topTables, iterOpt)...)
@@ -411,8 +412,8 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 	return newTables, func() error { return decrRefs(newTables) }, nil
 }
 
-func iteratorsReversed(th []*table, opt *utils.Options) []utils.Iterator {
-	out := make([]utils.Iterator, 0, len(th))
+func iteratorsReversed(th []*table, opt *index.Options) []index.Iterator {
+	out := make([]index.Iterator, 0, len(th))
 	for i := len(th) - 1; i >= 0; i-- {
 		// This will increment the reference of the table handler.
 		out = append(out, th[i].NewIterator(opt))
@@ -459,7 +460,7 @@ func (lm *levelManager) updateDiscardStats(discardStats map[manifest.ValueLogID]
 }
 
 // subcompact runs a single parallel compaction over a key range.
-func (lm *levelManager) subcompact(it utils.Iterator, kr KeyRange, cd compactDef,
+func (lm *levelManager) subcompact(it index.Iterator, kr KeyRange, cd compactDef,
 	inflightBuilders *utils.Throttle, res chan<- *table) {
 	var lastKey []byte
 	// Track discardStats for value log GC.
