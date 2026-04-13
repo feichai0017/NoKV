@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
 	"github.com/stretchr/testify/require"
 	proto "google.golang.org/protobuf/proto"
@@ -63,7 +62,7 @@ func TestTableBuilderFinishAndEntryValueLen(t *testing.T) {
 
 func TestTableBuilderFlushRenameFailureCleansTempFile(t *testing.T) {
 	dir := t.TempDir()
-	tableName := utils.FileNameSSTable(dir, 1)
+	tableName := vfs.FileNameSSTable(dir, 1)
 	injected := errors.New("rename injected")
 	policy := vfs.NewFaultPolicy(vfs.FailOnceRenameRule("", tableName, injected))
 	fs := vfs.NewFaultFSWithPolicy(nil, policy)
@@ -90,7 +89,7 @@ func TestTableBuilderFlushRenameFailureCleansTempFile(t *testing.T) {
 
 func TestTableBuilderFlushStrictPathDoesNotReopenFinalSST(t *testing.T) {
 	dir := t.TempDir()
-	tableName := utils.FileNameSSTable(dir, 2)
+	tableName := vfs.FileNameSSTable(dir, 2)
 	injected := errors.New("open final injected")
 	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpOpenFile, tableName, injected))
 	fs := vfs.NewFaultFSWithPolicy(nil, policy)
@@ -116,7 +115,7 @@ func TestTableBuilderFlushStrictPathDoesNotReopenFinalSST(t *testing.T) {
 
 func TestTableBuilderFlushFastPathSkipsPreStat(t *testing.T) {
 	dir := t.TempDir()
-	tableName := utils.FileNameSSTable(dir, 3)
+	tableName := vfs.FileNameSSTable(dir, 3)
 	injected := errors.New("stat injected")
 	policy := vfs.NewFaultPolicy(vfs.FailAfterNthRule(vfs.OpStat, tableName, 1, injected))
 	fs := vfs.NewFaultFSWithPolicy(nil, policy)
@@ -144,7 +143,7 @@ func TestTableBuilderFlushFastPathSkipsPreStat(t *testing.T) {
 
 func TestTableBuilderFlushStrictPathSkipsPreStat(t *testing.T) {
 	dir := t.TempDir()
-	tableName := utils.FileNameSSTable(dir, 4)
+	tableName := vfs.FileNameSSTable(dir, 4)
 	injected := errors.New("stat injected")
 	policy := vfs.NewFaultPolicy(vfs.FailAfterNthRule(vfs.OpStat, tableName, 1, injected))
 	fs := vfs.NewFaultFSWithPolicy(nil, policy)

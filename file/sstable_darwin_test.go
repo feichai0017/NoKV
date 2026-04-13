@@ -29,7 +29,7 @@ func writeTestSSTable(t *testing.T, path string) ([]byte, []byte) {
 	}
 	indexData, err := proto.Marshal(index)
 	require.NoError(t, err)
-	checksum := utils.CalculateChecksum(indexData)
+	checksum := kv.CalculateChecksum(indexData)
 
 	var buf bytes.Buffer
 	buf.Write(dataBlock)

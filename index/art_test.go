@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -73,7 +72,7 @@ func TestARTIteratorOrder(t *testing.T) {
 		if entry == nil {
 			t.Fatalf("nil entry")
 		}
-		if last != nil && utils.CompareInternalKeys(last, entry.Key) > 0 {
+		if last != nil && kv.CompareInternalKeys(last, entry.Key) > 0 {
 			t.Fatalf("iterator out of order: %q before %q", last, entry.Key)
 		}
 		last = entry.Key
@@ -168,7 +167,7 @@ func TestARTPrefixAdjacentInternalKeys(t *testing.T) {
 		entry := it.Item().Entry()
 		require.NotNil(t, entry)
 		if last != nil {
-			require.LessOrEqual(t, utils.CompareInternalKeys(last, entry.Key), 0)
+			require.LessOrEqual(t, kv.CompareInternalKeys(last, entry.Key), 0)
 		}
 		last = entry.Key
 	}

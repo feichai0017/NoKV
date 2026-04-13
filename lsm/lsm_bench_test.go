@@ -10,6 +10,7 @@ import (
 	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 	"github.com/feichai0017/NoKV/wal"
 )
 
@@ -239,7 +240,7 @@ func buildBenchLevelTablesAtOffset(b *testing.B, lsm *LSM, levelNum int, start i
 			kv.InternalKey(kv.CFDefault, userKey, 1),
 			[]byte("value"),
 		))
-		tableName := utils.FileNameSSTable(lsm.option.WorkDir, fidBase+uint64(i))
+		tableName := vfs.FileNameSSTable(lsm.option.WorkDir, fidBase+uint64(i))
 		tbl, err := openTable(lsm.levels, tableName, builder)
 		if err != nil {
 			b.Fatalf("open bench table: %v", err)
@@ -276,7 +277,7 @@ func buildBenchLevelTablesWithInRangeGapAtOffset(b *testing.B, lsm *LSM, levelNu
 			kv.InternalKey(kv.CFDefault, right, 1),
 			[]byte("value-right"),
 		))
-		tableName := utils.FileNameSSTable(lsm.option.WorkDir, fidBase+uint64(i))
+		tableName := vfs.FileNameSSTable(lsm.option.WorkDir, fidBase+uint64(i))
 		tbl, err := openTable(lsm.levels, tableName, builder)
 		if err != nil {
 			b.Fatalf("open bench table with gap: %v", err)
@@ -308,7 +309,7 @@ func buildBenchL0OverlapTables(b *testing.B, lsm *LSM, tableCount int) *levelHan
 			kv.InternalKey(kv.CFDefault, right, 1),
 			[]byte("value-right"),
 		))
-		tableName := utils.FileNameSSTable(lsm.option.WorkDir, uint64(30000+i))
+		tableName := vfs.FileNameSSTable(lsm.option.WorkDir, uint64(30000+i))
 		tbl, err := openTable(lsm.levels, tableName, builder)
 		if err != nil {
 			b.Fatalf("open overlapping L0 table: %v", err)
@@ -499,7 +500,7 @@ func BenchmarkTableIteratorBlockBounds(b *testing.B) {
 							[]byte("value-with-more-data"),
 						))
 					}
-					tableName := utils.FileNameSSTable(lsm.option.WorkDir, uint64(90000+width))
+					tableName := vfs.FileNameSSTable(lsm.option.WorkDir, uint64(90000+width))
 					tbl, err := openTable(lsm.levels, tableName, builder)
 					if err != nil {
 						b.Fatalf("open bench multi-block table: %v", err)

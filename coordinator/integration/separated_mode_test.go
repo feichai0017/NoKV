@@ -105,8 +105,8 @@ func TestSeparatedModeCoordinatorContestedFailoverPreservesAllocatorFence(t *tes
 	targets := exposeRemoteRoots(t, rootCluster)
 	rootCluster.WaitLeader()
 
-	leaseTTL := 150 * time.Millisecond
-	renewIn := 40 * time.Millisecond
+	leaseTTL := time.Second
+	renewIn := 200 * time.Millisecond
 
 	first, firstStore := openSeparatedCoordinatorWithLease(t, targets, "c1", leaseTTL, renewIn)
 	alloc, err := first.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 8})

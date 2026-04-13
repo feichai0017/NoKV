@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -650,10 +651,10 @@ func (r *KeyRange) Extend(kr KeyRange) {
 	if r.IsEmpty() {
 		*r = kr
 	}
-	if len(r.Left) == 0 || utils.CompareInternalKeys(kr.Left, r.Left) < 0 {
+	if len(r.Left) == 0 || kv.CompareInternalKeys(kr.Left, r.Left) < 0 {
 		r.Left = kr.Left
 	}
-	if len(r.Right) == 0 || utils.CompareInternalKeys(kr.Right, r.Right) > 0 {
+	if len(r.Right) == 0 || kv.CompareInternalKeys(kr.Right, r.Right) > 0 {
 		r.Right = kr.Right
 	}
 	if kr.Inf {
@@ -675,11 +676,11 @@ func (r KeyRange) OverlapsWith(dst KeyRange) bool {
 	}
 
 	// [dst.left, dst.right] ... [r.left, r.right]
-	if utils.CompareInternalKeys(r.Left, dst.Right) > 0 {
+	if kv.CompareInternalKeys(r.Left, dst.Right) > 0 {
 		return false
 	}
 	// [r.left, r.right] ... [dst.left, dst.right]
-	if utils.CompareInternalKeys(r.Right, dst.Left) < 0 {
+	if kv.CompareInternalKeys(r.Right, dst.Left) < 0 {
 		return false
 	}
 	return true

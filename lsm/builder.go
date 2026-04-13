@@ -277,7 +277,7 @@ func (tb *tableBuilder) allocate(need int) []byte {
 }
 
 func (tb *tableBuilder) calculateChecksum(data []byte) []byte {
-	checkSum := utils.CalculateChecksum(data)
+	checkSum := kv.CalculateChecksum(data)
 	return kv.U64ToBytes(checkSum)
 }
 
@@ -310,7 +310,7 @@ func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err
 	if err != nil {
 		return nil, err
 	}
-	t = &table{lm: lm, fid: utils.FID(tableName)}
+	t = &table{lm: lm, fid: vfs.FID(tableName)}
 	// Throughput-first mode: write directly to final SST when manifest sync is disabled.
 	if lm != nil && lm.opt != nil && !lm.opt.ManifestSync {
 		t.ss = file.OpenSStable(&file.Options{
@@ -478,7 +478,7 @@ func (b *tableBuilder) ReachedCapacity() bool {
 }
 
 func (b block) verifyCheckSum() error {
-	return utils.VerifyChecksum(b.data, b.checksum)
+	return kv.VerifyChecksum(b.data, b.checksum)
 }
 
 type blockIterator struct {
@@ -553,7 +553,7 @@ func (itr *blockIterator) seek(key []byte) {
 		for lo < hi {
 			mid := lo + (hi-lo)/2
 			itr.setIdx(mid)
-			if utils.CompareInternalKeys(itr.key, key) >= 0 {
+			if kv.CompareInternalKeys(itr.key, key) >= 0 {
 				hi = mid
 			} else {
 				lo = mid + 1
@@ -567,7 +567,7 @@ func (itr *blockIterator) seek(key []byte) {
 	for lo < hi {
 		mid := lo + (hi-lo)/2
 		itr.setIdx(mid)
-		if utils.CompareInternalKeys(itr.key, key) > 0 {
+		if kv.CompareInternalKeys(itr.key, key) > 0 {
 			hi = mid
 		} else {
 			lo = mid + 1

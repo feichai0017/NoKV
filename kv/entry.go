@@ -3,6 +3,8 @@ package kv
 import (
 	"sync"
 	"time"
+
+	"github.com/feichai0017/NoKV/utils"
 )
 
 var entryPool = sync.Pool{
@@ -45,7 +47,7 @@ type Entry struct {
 	Hlen         int // Length of the header.
 	ValThreshold int64
 
-	RefCount
+	utils.RefCount
 }
 
 // IncrRef increments the entry reference count.
@@ -54,7 +56,7 @@ func (e *Entry) IncrRef() {
 	if e == nil {
 		return
 	}
-	e.RefCount.Incr()
+	e.Incr()
 }
 
 // DecrRef decrements the entry reference count and releases it to the pool when it reaches zero.
@@ -80,7 +82,7 @@ func (e *Entry) reset() {
 	e.Offset = 0
 	e.Hlen = 0
 	e.ValThreshold = 0
-	e.RefCount.Reset()
+	e.Reset()
 }
 
 func acquireEntry() *Entry {

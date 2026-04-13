@@ -11,7 +11,6 @@ import (
 	"github.com/feichai0017/NoKV/file"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
-	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
 )
 
@@ -82,7 +81,7 @@ func ExportExternalSST(path string, entries []*kv.Entry, opt *Options) (_ *Exter
 		if len(entry.Key) == 0 {
 			return nil, fmt.Errorf("lsm: empty external sst entry key at index %d", i)
 		}
-		if i > 0 && utils.CompareInternalKeys(entries[i-1].Key, entry.Key) >= 0 {
+		if i > 0 && kv.CompareInternalKeys(entries[i-1].Key, entry.Key) >= 0 {
 			return nil, fmt.Errorf("lsm: external sst entries not strictly increasing at index %d", i)
 		}
 		vlen := entryValueLen(entry)
@@ -198,13 +197,13 @@ func checkTablesOverlap(tables []*table) error {
 	copy(sorted, tables)
 
 	sort.Slice(sorted, func(i, j int) bool {
-		return utils.CompareBaseKeys(sorted[i].MinKey(), sorted[j].MinKey()) < 0
+		return kv.CompareBaseKeys(sorted[i].MinKey(), sorted[j].MinKey()) < 0
 	})
 
 	for i := 1; i < len(sorted); i++ {
 		prev := sorted[i-1]
 		curr := sorted[i]
-		if utils.CompareBaseKeys(prev.MaxKey(), curr.MinKey()) >= 0 {
+		if kv.CompareBaseKeys(prev.MaxKey(), curr.MinKey()) >= 0 {
 			return fmt.Errorf("imported SSTs have key range overlap: fid=%d <-> fid=%d",
 				prev.fid, curr.fid)
 		}
@@ -222,8 +221,8 @@ func (lm *levelManager) checkTablesOverlapWithL0Locked(tables []*table) error {
 			if existing == nil {
 				continue
 			}
-			if utils.CompareBaseKeys(tbl.MinKey(), existing.MaxKey()) <= 0 &&
-				utils.CompareBaseKeys(tbl.MaxKey(), existing.MinKey()) >= 0 {
+			if kv.CompareBaseKeys(tbl.MinKey(), existing.MaxKey()) <= 0 &&
+				kv.CompareBaseKeys(tbl.MaxKey(), existing.MinKey()) >= 0 {
 				return fmt.Errorf("SST(fid=%d) overlaps with L0 existing table(fid=%d)",
 					tbl.fid, existing.fid)
 			}
@@ -256,7 +255,7 @@ func (lm *levelManager) importExternalSST(paths []string) (*ExternalSSTImportRes
 			}
 		}
 		for _, fid := range tempFIDs {
-			sstPath := utils.FileNameSSTable(workDir, fid)
+			sstPath := vfs.FileNameSSTable(workDir, fid)
 			if _, err := fs.Stat(sstPath); err == nil {
 				_ = fs.Remove(sstPath)
 			}
@@ -297,7 +296,7 @@ func (lm *levelManager) importExternalSST(paths []string) (*ExternalSSTImportRes
 
 		tempFID := lm.maxFID.Add(1)
 		tempFIDs = append(tempFIDs, tempFID)
-		targetPath := utils.FileNameSSTable(workDir, tempFID)
+		targetPath := vfs.FileNameSSTable(workDir, tempFID)
 
 		if _, err := fs.Stat(targetPath); err == nil {
 			rollback()

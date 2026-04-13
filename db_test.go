@@ -953,7 +953,7 @@ func TestRecoveryFailsOnMissingSST(t *testing.T) {
 
 	removed := files[0]
 	require.NoError(t, os.Remove(removed))
-	removedFID := utils.FID(removed)
+	removedFID := vfs.FID(removed)
 
 	db2, openErr := Open(opt)
 	require.Error(t, openErr)
@@ -1011,7 +1011,7 @@ func TestRecoveryFailsOnCorruptSST(t *testing.T) {
 	require.NotEmpty(t, files)
 
 	corruptPath := files[0]
-	corruptFID := utils.FID(corruptPath)
+	corruptFID := vfs.FID(corruptPath)
 	require.NoError(t, os.WriteFile(corruptPath, []byte("bad-sst"), 0o666))
 
 	db2, openErr := Open(opt)

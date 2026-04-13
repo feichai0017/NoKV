@@ -1,6 +1,10 @@
 package kv
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestKeyHelpers(t *testing.T) {
 	key := []byte("alpha")
@@ -79,4 +83,21 @@ func TestBaseKeySplitInternalKeyAndSafeCopy(t *testing.T) {
 	if string(out) != "copy" {
 		t.Fatalf("expected SafeCopy to detach from source")
 	}
+}
+
+func TestCompareBaseAndUserKeys(t *testing.T) {
+	k1 := InternalKey(CFDefault, []byte("a"), 1)
+	k2 := InternalKey(CFDefault, []byte("b"), 1)
+	k3 := InternalKey(CFWrite, []byte("a"), 1)
+	require.Less(t, CompareBaseKeys(k1, k2), 0)
+	require.Less(t, CompareBaseKeys(k1, k3), 0)
+	require.Equal(t, 0, CompareBaseKeys(
+		InternalKey(CFDefault, []byte("c"), 10),
+		InternalKey(CFDefault, []byte("c"), 1),
+	))
+	require.Less(t, CompareUserKeys(k1, k2), 0)
+	require.Equal(t, 0, CompareUserKeys(
+		InternalKey(CFDefault, []byte("c"), 10),
+		InternalKey(CFDefault, []byte("c"), 1),
+	))
 }

@@ -227,7 +227,7 @@ func (lh *levelHandler) sortTablesLocked() {
 	}
 	// L1+ tables are non-overlapping by key range.
 	sort.Slice(lh.tables, func(i, j int) bool {
-		return utils.CompareInternalKeys(lh.tables[i].MinKey(), lh.tables[j].MinKey()) < 0
+		return kv.CompareInternalKeys(lh.tables[i].MinKey(), lh.tables[j].MinKey()) < 0
 	})
 }
 
@@ -240,8 +240,8 @@ func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
 		if table == nil {
 			continue
 		}
-		if utils.CompareBaseKeys(key, table.MinKey()) < 0 ||
-			utils.CompareBaseKeys(key, table.MaxKey()) > 0 {
+		if kv.CompareBaseKeys(key, table.MinKey()) < 0 ||
+			kv.CompareBaseKeys(key, table.MaxKey()) > 0 {
 			continue
 		}
 		if table.MaxVersionVal() <= version {
@@ -363,7 +363,7 @@ func (lh *levelHandler) getTablesForKeyLinear(key []byte) []*table {
 	if len(lh.tables) == 0 {
 		return nil
 	}
-	if lh.levelNum > 0 && utils.CompareBaseKeys(key, lh.tables[0].MinKey()) < 0 {
+	if lh.levelNum > 0 && kv.CompareBaseKeys(key, lh.tables[0].MinKey()) < 0 {
 		return nil
 	}
 	out := make([]*table, 0, 1)
@@ -371,11 +371,11 @@ func (lh *levelHandler) getTablesForKeyLinear(key []byte) []*table {
 		if t == nil {
 			continue
 		}
-		if lh.levelNum > 0 && utils.CompareBaseKeys(t.MinKey(), key) > 0 {
+		if lh.levelNum > 0 && kv.CompareBaseKeys(t.MinKey(), key) > 0 {
 			break
 		}
-		if utils.CompareBaseKeys(key, t.MaxKey()) <= 0 &&
-			utils.CompareBaseKeys(key, t.MinKey()) >= 0 {
+		if kv.CompareBaseKeys(key, t.MaxKey()) <= 0 &&
+			kv.CompareBaseKeys(key, t.MinKey()) >= 0 {
 			out = append(out, t)
 		}
 	}

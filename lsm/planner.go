@@ -459,10 +459,10 @@ func getKeyRange(tables ...*table) KeyRange {
 	minKey := tables[0].MinKey()
 	maxKey := tables[0].MaxKey()
 	for i := 1; i < len(tables); i++ {
-		if utils.CompareInternalKeys(tables[i].MinKey(), minKey) < 0 {
+		if kv.CompareInternalKeys(tables[i].MinKey(), minKey) < 0 {
 			minKey = tables[i].MinKey()
 		}
-		if utils.CompareInternalKeys(tables[i].MaxKey(), maxKey) > 0 {
+		if kv.CompareInternalKeys(tables[i].MaxKey(), maxKey) > 0 {
 			maxKey = tables[i].MaxKey()
 		}
 	}
@@ -535,10 +535,10 @@ func RangeForTables(tables []TableMeta) KeyRange {
 	minKey := tables[0].MinKey
 	maxKey := tables[0].MaxKey
 	for i := 1; i < len(tables); i++ {
-		if utils.CompareInternalKeys(tables[i].MinKey, minKey) < 0 {
+		if kv.CompareInternalKeys(tables[i].MinKey, minKey) < 0 {
 			minKey = tables[i].MinKey
 		}
-		if utils.CompareInternalKeys(tables[i].MaxKey, maxKey) > 0 {
+		if kv.CompareInternalKeys(tables[i].MaxKey, maxKey) > 0 {
 			maxKey = tables[i].MaxKey
 		}
 	}
@@ -562,10 +562,10 @@ func OverlappingTables(tables []TableMeta, kr KeyRange) (int, int) {
 		return 0, 0
 	}
 	left := sort.Search(len(tables), func(i int) bool {
-		return utils.CompareInternalKeys(kr.Left, tables[i].MaxKey) <= 0
+		return kv.CompareInternalKeys(kr.Left, tables[i].MaxKey) <= 0
 	})
 	right := sort.Search(len(tables), func(i int) bool {
-		return utils.CompareInternalKeys(kr.Right, tables[i].MaxKey) < 0
+		return kv.CompareInternalKeys(kr.Right, tables[i].MaxKey) < 0
 	})
 	return left, right
 }
@@ -791,7 +791,7 @@ func tableIDsFromMeta(tables []TableMeta) []uint64 {
 
 func collectBotTables(seed TableMeta, tables []TableMeta, needSz int64) []TableMeta {
 	j := sort.Search(len(tables), func(i int) bool {
-		return utils.CompareInternalKeys(tables[i].MinKey, seed.MinKey) >= 0
+		return kv.CompareInternalKeys(tables[i].MinKey, seed.MinKey) >= 0
 	})
 	if j >= len(tables) || tables[j].ID != seed.ID {
 		return nil

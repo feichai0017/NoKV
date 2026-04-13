@@ -22,6 +22,7 @@ import (
 	"unsafe"
 
 	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/utils"
 )
 
 const (
@@ -586,7 +587,7 @@ func payloadReplace(kind uint8, payload *nodePayload, key byte, oldOff, newOff u
 // and observe immutable nodes.
 type ART struct {
 	tree *artTree
-	kv.RefCount
+	utils.RefCount
 }
 
 // NewART creates a new adaptive radix tree with a default arena size.
@@ -655,7 +656,7 @@ func (a *ART) IncrRef() {
 	if a == nil {
 		return
 	}
-	a.RefCount.Incr()
+	a.Incr()
 }
 
 // DecrRef decrements the reference counter and releases the tree when it
