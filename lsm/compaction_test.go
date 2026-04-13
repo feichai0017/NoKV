@@ -7,7 +7,6 @@ import (
 
 	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -124,7 +123,7 @@ func TestCompactBuildTablesOverlappingBotTablesKeepsOrder(t *testing.T) {
 				continue
 			}
 			cur := item.Entry().Key
-			if prev != nil && utils.CompareInternalKeys(prev, cur) > 0 {
+			if prev != nil && kv.CompareInternalKeys(prev, cur) > 0 {
 				_ = it.Close()
 				t.Fatalf("output table out of order: prev=%q cur=%q", prev, cur)
 			}
