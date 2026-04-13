@@ -3,9 +3,9 @@ package lsm
 import (
 	"bytes"
 
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm/tombstone"
-	"github.com/feichai0017/NoKV/utils"
 )
 
 // RangeTombstoneView captures a stable read-view for range tombstone checks.
@@ -86,7 +86,7 @@ func (lm *levelManager) rebuildRangeTombstones() {
 		return
 	}
 	var ranges []tombstone.Range
-	opt := &utils.Options{IsAsc: true}
+	opt := &index.Options{IsAsc: true}
 	// Only scan SST levels — memtable tombstones are tracked separately
 	// in memTable.rangeTombstones and must not be duplicated here.
 	iters := lm.iterators(opt)

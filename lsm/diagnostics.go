@@ -1,10 +1,10 @@
 package lsm
 
 import (
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
-	"github.com/feichai0017/NoKV/utils"
 )
 
 // CompactionDiagnostics groups compaction runtime counters for diagnostics and
@@ -129,7 +129,7 @@ func countMemIndexEntries(idx memIndex) int64 {
 	if idx == nil {
 		return 0
 	}
-	itr := idx.NewIterator(&utils.Options{IsAsc: true})
+	itr := idx.NewIterator(&index.Options{IsAsc: true})
 	if itr == nil {
 		return 0
 	}

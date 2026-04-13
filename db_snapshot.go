@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
-	"github.com/feichai0017/NoKV/utils"
 )
 
 type snapshotSource struct {
@@ -16,7 +16,7 @@ type snapshotSource struct {
 	lsm *lsm.LSM
 }
 
-func (src snapshotSource) NewInternalIterator(opt *utils.Options) utils.Iterator {
+func (src snapshotSource) NewInternalIterator(opt *index.Options) index.Iterator {
 	return src.db.NewInternalIterator(opt)
 }
 

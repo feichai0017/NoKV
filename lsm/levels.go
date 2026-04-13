@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm/tombstone"
 	"github.com/feichai0017/NoKV/manifest"
@@ -131,8 +132,8 @@ func (lm *levelManager) getLogger() *slog.Logger {
 	return lm.lsm.getLogger()
 }
 
-func (lm *levelManager) iterators(opt *utils.Options) []utils.Iterator {
-	itrs := make([]utils.Iterator, 0, len(lm.levels))
+func (lm *levelManager) iterators(opt *index.Options) []index.Iterator {
+	itrs := make([]index.Iterator, 0, len(lm.levels))
 	for _, level := range lm.levels {
 		itrs = append(itrs, level.iterators(opt)...)
 	}
@@ -226,7 +227,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	fid := uint64(immutable.segmentID)
 	sstName := utils.FileNameSSTable(lm.opt.WorkDir, fid)
 
-	iter := immutable.NewIterator(&utils.Options{IsAsc: true})
+	iter := immutable.NewIterator(&index.Options{IsAsc: true})
 	if iter == nil {
 		return nil
 	}

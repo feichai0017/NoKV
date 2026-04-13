@@ -1,7 +1,8 @@
-package utils
+package index
 
 import (
 	"fmt"
+	"math/rand"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,7 +16,7 @@ import (
 func RandString(len int) string {
 	bytes := make([]byte, len)
 	for i := range len {
-		b := r.Intn(26) + 65
+		b := rand.Intn(26) + 65
 		bytes[i] = byte(b)
 	}
 	return string(bytes)
@@ -57,7 +58,7 @@ func TestDrawList(t *testing.T) {
 	list := NewSkiplist(1000)
 	n := 12
 	for range n {
-		index := strconv.Itoa(r.Intn(90) + 10)
+		index := strconv.Itoa(rand.Intn(90) + 10)
 		key := index + RandString(8)
 		entryRand := kv.NewEntry([]byte(key), []byte(index))
 		list.Add(entryRand)

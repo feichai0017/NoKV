@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -18,12 +19,12 @@ func (*emptyIterator) Next()            {}
 func (*emptyIterator) Rewind()          {}
 func (*emptyIterator) Seek([]byte)      {}
 func (*emptyIterator) Valid() bool      { return false }
-func (*emptyIterator) Item() utils.Item { return nil }
+func (*emptyIterator) Item() index.Item { return nil }
 func (*emptyIterator) Close() error     { return nil }
 
 // NewIterators builds iterators over mutable/immutable memtables and SST levels.
-func (lsm *LSM) NewIterators(opt *utils.Options) []utils.Iterator {
-	iters := make([]utils.Iterator, 0)
+func (lsm *LSM) NewIterators(opt *index.Options) []index.Iterator {
+	iters := make([]index.Iterator, 0)
 	lsm.lock.RLock()
 	mem := lsm.memTable
 	immutables := append([]*memTable(nil), lsm.immutables...)
@@ -43,11 +44,11 @@ func (lsm *LSM) NewIterators(opt *utils.Options) []utils.Iterator {
 
 // memtable iterator
 type memIterator struct {
-	innerIter utils.Iterator
+	innerIter index.Iterator
 }
 
 // NewIterator creates an iterator over entries stored in this memtable.
-func (m *memTable) NewIterator(opt *utils.Options) utils.Iterator {
+func (m *memTable) NewIterator(opt *index.Options) index.Iterator {
 	if m == nil || m.index == nil {
 		return nil
 	}
@@ -83,7 +84,7 @@ func (iter *memIterator) Rewind() {
 }
 
 // Item returns the current memtable item.
-func (iter *memIterator) Item() utils.Item {
+func (iter *memIterator) Item() index.Item {
 	if iter.innerIter == nil {
 		return nil
 	}
@@ -109,13 +110,13 @@ func (iter *memIterator) Seek(key []byte) {
 // ConcatIterator merge multiple iterators into one
 type ConcatIterator struct {
 	idx     int // Which iterator is active now.
-	cur     utils.Iterator
-	tables  []*table       // Disregarding reversed, this is in ascending order.
-	options *utils.Options // Valid options are REVERSED and NOCACHE.
+	cur     index.Iterator
+	tables  []*table        // Disregarding reversed, this is in ascending order.
+	options *index.Options // Valid options are REVERSED and NOCACHE.
 }
 
 // NewConcatIterator creates a new concatenated iterator
-func NewConcatIterator(tbls []*table, opt *utils.Options) *ConcatIterator {
+func NewConcatIterator(tbls []*table, opt *index.Options) *ConcatIterator {
 	return &ConcatIterator{
 		options: opt,
 		tables:  tbls,
@@ -168,7 +169,7 @@ func (s *ConcatIterator) Valid() bool {
 }
 
 // Item _
-func (s *ConcatIterator) Item() utils.Item {
+func (s *ConcatIterator) Item() index.Item {
 	return s.cur.Item()
 }
 
@@ -279,7 +280,7 @@ type MergeIterator struct {
 type node struct {
 	valid bool
 	entry *kv.Entry
-	iter  utils.Iterator
+	iter  index.Iterator
 
 	// The two iterators are type asserted from `y.Iterator`, used to inline more function calls.
 	// Calling functions on concrete types is much faster (about 25-30%) than calling the
@@ -330,7 +331,7 @@ func (n *node) setFromIter() {
 	n.entry = entry
 }
 
-func (n *node) setIterator(iter utils.Iterator) {
+func (n *node) setIterator(iter index.Iterator) {
 	n.iter = iter
 	// It's okay if the type assertion below fails and n.merge/n.concat are set to nil.
 	// We handle the nil values of merge and concat in all the methods.
@@ -489,7 +490,7 @@ func (mi *MergeIterator) Valid() bool {
 }
 
 // Key returns the key associated with the current iterator.
-func (mi *MergeIterator) Item() utils.Item {
+func (mi *MergeIterator) Item() index.Item {
 	return mi.small.iter.Item()
 }
 
@@ -507,7 +508,7 @@ func (mi *MergeIterator) Close() error {
 }
 
 // NewMergeIterator creates a merge iterator.
-func NewMergeIterator(iters []utils.Iterator, reverse bool) utils.Iterator {
+func NewMergeIterator(iters []index.Iterator, reverse bool) index.Iterator {
 	filtered := iters[:0]
 	for _, it := range iters {
 		if it != nil {
@@ -517,7 +518,7 @@ func NewMergeIterator(iters []utils.Iterator, reverse bool) utils.Iterator {
 	return newMergeIterator(filtered, reverse)
 }
 
-func newMergeIterator(iters []utils.Iterator, reverse bool) utils.Iterator {
+func newMergeIterator(iters []index.Iterator, reverse bool) index.Iterator {
 	switch len(iters) {
 	case 0:
 		return &emptyIterator{}

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
@@ -56,7 +57,7 @@ func (it *sliceIterator) Rewind() {
 	it.idx = 0
 }
 
-func (it *sliceIterator) Item() utils.Item {
+func (it *sliceIterator) Item() index.Item {
 	if !it.Valid() {
 		return nil
 	}
@@ -93,7 +94,7 @@ func TestMergeIteratorForwardAndReverse(t *testing.T) {
 		{Key: kv.InternalKey(kv.CFDefault, []byte("c"), 1)},
 	}}
 
-	mi := NewMergeIterator([]utils.Iterator{left, right}, false)
+	mi := NewMergeIterator([]index.Iterator{left, right}, false)
 	var keys []string
 	mi.Rewind()
 	for mi.Valid() {
@@ -104,7 +105,7 @@ func TestMergeIteratorForwardAndReverse(t *testing.T) {
 
 	revLeft := &sliceIterator{entries: left.entries, reverse: true}
 	revRight := &sliceIterator{entries: right.entries, reverse: true}
-	rev := NewMergeIterator([]utils.Iterator{revLeft, revRight}, true)
+	rev := NewMergeIterator([]index.Iterator{revLeft, revRight}, true)
 	keys = keys[:0]
 	rev.Rewind()
 	for rev.Valid() {
@@ -124,7 +125,7 @@ func TestMergeIteratorSeekAndClose(t *testing.T) {
 		{Key: kv.InternalKey(kv.CFDefault, []byte("c"), 1)},
 	}}
 
-	mi := NewMergeIterator([]utils.Iterator{left, right}, false)
+	mi := NewMergeIterator([]index.Iterator{left, right}, false)
 	mi.Seek(kv.InternalKey(kv.CFDefault, []byte("c"), 1))
 	require.True(t, mi.Valid())
 	require.Equal(t, "c", string(splitIterUserKey(t, mi.Item().Entry().Key)))
@@ -150,10 +151,10 @@ func TestLSMNewIterators(t *testing.T) {
 	entry := utils.BuildEntry()
 	require.NoError(t, lsm.Set(entry))
 
-	iters := lsm.NewIterators(&utils.Options{IsAsc: true})
+	iters := lsm.NewIterators(&index.Options{IsAsc: true})
 	require.NotEmpty(t, iters)
 
-	levelIters := lsm.levels.iterators(&utils.Options{IsAsc: true})
+	levelIters := lsm.levels.iterators(&index.Options{IsAsc: true})
 	for _, it := range levelIters {
 		if it == nil {
 			continue
@@ -197,7 +198,7 @@ func TestConcatIteratorSeekAndNext(t *testing.T) {
 	require.NotNil(t, tbl)
 	defer func() { _ = tbl.DecrRef() }()
 
-	ci := NewConcatIterator([]*table{tbl}, &utils.Options{IsAsc: true})
+	ci := NewConcatIterator([]*table{tbl}, &index.Options{IsAsc: true})
 
 	ci.Rewind()
 	if !ci.Valid() {
@@ -245,7 +246,7 @@ func TestBlockIteratorReverse(t *testing.T) {
 	defer func() { _ = tbl.DecrRef() }()
 
 	// Test forward iteration
-	forwardIter := tbl.NewIterator(&utils.Options{IsAsc: true})
+	forwardIter := tbl.NewIterator(&index.Options{IsAsc: true})
 	defer func() { require.NoError(t, forwardIter.Close()) }()
 
 	var forwardKeys []byte
@@ -258,7 +259,7 @@ func TestBlockIteratorReverse(t *testing.T) {
 	require.Equal(t, "abcdefghij", string(forwardKeys))
 
 	// Test reverse iteration
-	reverseIter := tbl.NewIterator(&utils.Options{IsAsc: false})
+	reverseIter := tbl.NewIterator(&index.Options{IsAsc: false})
 	defer func() { require.NoError(t, reverseIter.Close()) }()
 
 	var reverseKeys []byte
@@ -294,7 +295,7 @@ func TestTableIteratorReverseSeek(t *testing.T) {
 	defer func() { _ = tbl.DecrRef() }()
 
 	// Test forward seek
-	forwardIter := tbl.NewIterator(&utils.Options{IsAsc: true})
+	forwardIter := tbl.NewIterator(&index.Options{IsAsc: true})
 	defer func() { require.NoError(t, forwardIter.Close()) }()
 
 	forwardIter.Seek(kv.InternalKey(kv.CFDefault, []byte{'e'}, 1))
@@ -303,7 +304,7 @@ func TestTableIteratorReverseSeek(t *testing.T) {
 	require.Equal(t, byte('e'), splitIterUserKey(t, e.Key)[0])
 
 	// Test reverse seek
-	reverseIter := tbl.NewIterator(&utils.Options{IsAsc: false})
+	reverseIter := tbl.NewIterator(&index.Options{IsAsc: false})
 	defer func() { require.NoError(t, reverseIter.Close()) }()
 
 	reverseIter.Seek(kv.InternalKey(kv.CFDefault, []byte{'e'}, 1))
@@ -344,7 +345,7 @@ func TestTableIteratorReverseMultiBlock(t *testing.T) {
 	defer func() { _ = tbl.DecrRef() }()
 
 	// Test reverse iteration across multiple blocks
-	reverseIter := tbl.NewIterator(&utils.Options{IsAsc: false})
+	reverseIter := tbl.NewIterator(&index.Options{IsAsc: false})
 	defer func() { require.NoError(t, reverseIter.Close()) }()
 
 	reverseIter.Rewind()

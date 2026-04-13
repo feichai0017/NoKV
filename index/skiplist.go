@@ -13,7 +13,7 @@ Key differences:
 - We combine the findLessThan, findGreaterOrEqual, etc into one function.
 */
 
-package utils
+package index
 
 import (
 	"fmt"
@@ -25,6 +25,7 @@ import (
 	"unsafe"
 
 	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
 )
 
@@ -190,7 +191,7 @@ func (n *node) getVs(arena *Arena) kv.ValueStruct {
 // If n is nil, this is an "end" marker and we return false.
 //func (s *Skiplist) keyIsAfterNode(key []byte, n *node) bool {
 //	AssertTrue(n != s.head)
-//	return n != nil && CompareInternalKeys(key, n.key) > 0
+//	return n != nil && utils.CompareInternalKeys(key, n.key) > 0
 //}
 
 func (s *Skiplist) randomHeight() int {
@@ -240,7 +241,7 @@ func (s *Skiplist) findNear(key []byte, less bool, allowEqual bool) (*node, bool
 		}
 
 		nextKey := next.key(s.arena)
-		cmp := CompareInternalKeys(key, nextKey)
+		cmp := utils.CompareInternalKeys(key, nextKey)
 		if cmp > 0 {
 			// x.key < next.key < key. We can continue to move right.
 			x = next
@@ -297,7 +298,7 @@ func (s *Skiplist) findSpliceForLevel(key []byte, before uint32, level int) (uin
 			return before, next
 		}
 		nextKey := nextNode.key(s.arena)
-		cmp := CompareInternalKeys(key, nextKey)
+		cmp := utils.CompareInternalKeys(key, nextKey)
 		if cmp == 0 {
 			// Equality case.
 			return next, next
@@ -322,7 +323,7 @@ func (s *Skiplist) updateMaxPerLevel(level int, newNodeOffset uint32, key []byte
 			oldMaxNode := arenaGetNode(s.arena, oldMaxOffset)
 			if oldMaxNode != nil {
 				oldMaxKey := oldMaxNode.key(s.arena)
-				if CompareInternalKeys(key, oldMaxKey) <= 0 {
+				if utils.CompareInternalKeys(key, oldMaxKey) <= 0 {
 					return
 				}
 			}
@@ -358,7 +359,7 @@ func (s *Skiplist) Add(e *kv.Entry) {
 			maxNode := arenaGetNode(s.arena, maxOffset)
 			if maxNode != nil {
 				maxKey := maxNode.key(s.arena)
-				if CompareInternalKeys(key, maxKey) > 0 {
+				if utils.CompareInternalKeys(key, maxKey) > 0 {
 					// key > maxKey: use maxNode as search start for O(1) best-case append
 					searchFrom = maxOffset
 				}
