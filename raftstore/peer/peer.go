@@ -73,7 +73,7 @@ func isAdminEntry(data []byte) bool {
 
 func decodeAdminCommand(data []byte) (*raftcmdpb.AdminCommand, error) {
 	if len(data) <= 1 {
-		return nil, fmt.Errorf("raftstore: admin command payload too short")
+		return nil, errAdminCommandPayloadTooShort()
 	}
 	var cmd raftcmdpb.AdminCommand
 	if err := proto.Unmarshal(data[1:], &cmd); err != nil {
@@ -251,7 +251,7 @@ func (p *Peer) ProposeCommand(req *raftcmdpb.RaftCmdRequest) error {
 // ProposeAdmin submits an admin command encoded as raftcmdpb.AdminCommand payload.
 func (p *Peer) ProposeAdmin(cmdData []byte) error {
 	if len(cmdData) == 0 {
-		return fmt.Errorf("raftstore: empty admin command")
+		return errEmptyAdminCommand
 	}
 	if err := p.waitForApplyBacklog(); err != nil {
 		return err
@@ -283,7 +283,7 @@ func (p *Peer) ProposeConfChange(cc raftpb.ConfChangeV2) error {
 // TransferLeader requests leadership transfer to the provided peer ID.
 func (p *Peer) TransferLeader(target uint64) error {
 	if target == 0 {
-		return fmt.Errorf("raftstore: transfer target must be non-zero")
+		return errZeroTransferTarget
 	}
 	if err := p.waitForApplyBacklog(); err != nil {
 		return err
@@ -324,7 +324,7 @@ func (p *Peer) Status() myraft.Status {
 // snapshot payload when snapshot export is configured.
 func (p *Peer) Snapshot() (myraft.Snapshot, error) {
 	if p == nil || p.storage == nil {
-		return myraft.Snapshot{}, fmt.Errorf("raftstore: peer snapshot requires storage")
+		return myraft.Snapshot{}, errSnapshotRequiresStorage
 	}
 	snap, err := p.storage.Snapshot()
 	if err != nil {
@@ -350,11 +350,11 @@ func (p *Peer) Snapshot() (myraft.Snapshot, error) {
 		return snap, nil
 	}
 	if meta == nil {
-		return myraft.Snapshot{}, fmt.Errorf("raftstore: snapshot export requires region metadata")
+		return myraft.Snapshot{}, errSnapshotExportRequiresRegionMeta
 	}
 	payload, err := p.snapshotExport(*meta)
 	if err != nil {
-		return myraft.Snapshot{}, fmt.Errorf("raftstore: export snapshot payload: %w", err)
+		return myraft.Snapshot{}, errExportSnapshotPayload(err)
 	}
 	snap.Data = payload
 	return snap, nil
@@ -540,14 +540,14 @@ func (p *Peer) ensureEmptySnapshotPayloadTarget() error {
 		return fmt.Errorf("raftstore: inspect snapshot target state: %w", err)
 	}
 	if !myraft.IsEmptyHardState(hs) || len(cs.Voters) > 0 || len(cs.Learners) > 0 {
-		return fmt.Errorf("raftstore: snapshot payload install requires empty peer state")
+		return errSnapshotPayloadInstallRequiresEmptyPeerState
 	}
 	last, err := p.storage.LastIndex()
 	if err != nil {
 		return fmt.Errorf("raftstore: inspect snapshot target log: %w", err)
 	}
 	if last > 0 {
-		return fmt.Errorf("raftstore: snapshot payload install requires empty peer log")
+		return errSnapshotPayloadInstallRequiresEmptyPeerLog
 	}
 	return nil
 }
@@ -563,11 +563,11 @@ func (p *Peer) prepareMessages(msgs []myraft.Message) error {
 		}
 		meta := p.RegionMeta()
 		if meta == nil {
-			return fmt.Errorf("raftstore: snapshot payload export requires region metadata")
+			return errSnapshotPayloadExportRequiresRegionMeta
 		}
 		payload, err := p.snapshotExport(*meta)
 		if err != nil {
-			return fmt.Errorf("raftstore: export snapshot payload: %w", err)
+			return errExportSnapshotPayload(err)
 		}
 		msg.Snapshot.Data = payload
 	}
@@ -723,7 +723,7 @@ func (p *Peer) finishApply(entries []myraft.Entry) {
 // should subsequently wait for that index to be applied before reading state.
 func (p *Peer) LinearizableRead(ctx context.Context) (uint64, error) {
 	if p == nil {
-		return 0, fmt.Errorf("raftstore: peer is nil")
+		return 0, errNilPeer
 	}
 	if ctx == nil {
 		ctx = p.stopCtx

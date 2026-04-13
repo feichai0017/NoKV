@@ -19,13 +19,13 @@ func (s *Store) validateCommandClass(class AdmissionClass, req *raftcmdpb.RaftCm
 		if class != AdmissionClassUnknown {
 			s.recordAdmission(Admission{Class: class, Reason: AdmissionReasonInvalid, Detail: "store is nil"})
 		}
-		return nil, localmeta.RegionMeta{}, nil, fmt.Errorf("raftstore: store is nil")
+		return nil, localmeta.RegionMeta{}, nil, errNilStore
 	}
 	if req == nil {
 		if class != AdmissionClassUnknown {
 			s.recordAdmission(Admission{Class: class, Reason: AdmissionReasonInvalid, Detail: "command is nil"})
 		}
-		return nil, localmeta.RegionMeta{}, nil, fmt.Errorf("raftstore: command is nil")
+		return nil, localmeta.RegionMeta{}, nil, errNilCommand
 	}
 	if req.Header == nil {
 		req.Header = &raftcmdpb.CmdHeader{}
@@ -40,7 +40,7 @@ func (s *Store) validateCommandClass(class AdmissionClass, req *raftcmdpb.RaftCm
 				Detail:    "region id missing",
 			})
 		}
-		return nil, localmeta.RegionMeta{}, nil, fmt.Errorf("raftstore: region id missing")
+		return nil, localmeta.RegionMeta{}, nil, errRegionIDMissing
 	}
 	if requestStoreID := req.Header.GetStoreId(); requestStoreID != 0 && s.storeID != 0 && requestStoreID != s.storeID {
 		resp := &raftcmdpb.RaftCmdResponse{Header: req.Header, RegionError: storeNotMatchError(requestStoreID, s.storeID)}
@@ -178,7 +178,7 @@ func (s *Store) ProposeCommand(ctx context.Context, req *raftcmdpb.RaftCmdReques
 			RequestID: id,
 			Detail:    "command pipeline unavailable",
 		})
-		return nil, fmt.Errorf("raftstore: command pipeline unavailable")
+		return nil, errCommandPipelineUnavailable
 	}
 	if err := s.router.SendCommand(peer.ID(), req); err != nil {
 		s.cmds.pipe.removeProposal(id)
@@ -237,15 +237,15 @@ func (s *Store) ReadCommand(ctx context.Context, req *raftcmdpb.RaftCmdRequest) 
 	}
 	if len(req.GetRequests()) == 0 {
 		s.recordAdmission(Admission{Class: AdmissionClassRead, Reason: AdmissionReasonInvalid, RegionID: req.Header.GetRegionId(), Detail: "read command missing requests"})
-		return nil, fmt.Errorf("raftstore: read command missing requests")
+		return nil, errReadCommandMissingRequests
 	}
 	if !isReadOnlyRequest(req) {
 		s.recordAdmission(Admission{Class: AdmissionClassRead, Reason: AdmissionReasonInvalid, RegionID: req.Header.GetRegionId(), Detail: "read command must be read-only"})
-		return nil, fmt.Errorf("raftstore: read command must be read-only")
+		return nil, errReadCommandNotReadOnly
 	}
 	if s == nil || s.cmds == nil || s.cmds.apply == nil {
 		s.recordAdmission(Admission{Class: AdmissionClassRead, Reason: AdmissionReasonInvalid, RegionID: req.Header.GetRegionId(), Detail: "command apply without handler"})
-		return nil, fmt.Errorf("raftstore: command apply without handler")
+		return nil, errCommandApplyWithoutHandler
 	}
 	if req.Header == nil {
 		req.Header = &raftcmdpb.CmdHeader{}
