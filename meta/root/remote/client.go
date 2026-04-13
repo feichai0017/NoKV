@@ -2,7 +2,6 @@ package remote
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -53,7 +52,7 @@ func NewClient(conn grpc.ClientConnInterface) *Client {
 // Dial opens a metadata-root client connection.
 func Dial(ctx context.Context, target string, opts ...grpc.DialOption) (*Client, error) {
 	if strings.TrimSpace(target) == "" {
-		return nil, errors.New("meta/root/remote: empty target")
+		return nil, errEmptyTarget
 	}
 	conn, err := dialEndpoint(ctx, target, opts...)
 	if err != nil {
@@ -76,7 +75,7 @@ func DialCluster(ctx context.Context, targets map[uint64]string, opts ...grpc.Di
 		ids = append(ids, id)
 	}
 	if len(ids) == 0 {
-		return nil, errors.New("meta/root/remote: empty target set")
+		return nil, errEmptyTargetSet
 	}
 	slices.Sort(ids)
 	client := &Client{
@@ -262,11 +261,11 @@ func invokeWrite[T any](c *Client, call func(context.Context, metapb.MetadataRoo
 func invoke[T any](c *Client, write bool, call func(context.Context, metapb.MetadataRootClient) (T, error)) (T, error) {
 	var zero T
 	if c == nil {
-		return zero, errors.New("meta/root/remote: nil client")
+		return zero, errNilClient
 	}
 	endpoints := c.orderedEndpoints()
 	if len(endpoints) == 0 {
-		return zero, errors.New("meta/root/remote: no endpoints")
+		return zero, errNoEndpoints
 	}
 	var lastErr error
 	tried := make(map[uint64]struct{}, len(endpoints))
@@ -301,7 +300,7 @@ func invoke[T any](c *Client, write bool, call func(context.Context, metapb.Meta
 		}
 	}
 	if lastErr == nil {
-		lastErr = errors.New("meta/root/remote: no reachable endpoint")
+		lastErr = errNoReachableEndpoint
 	}
 	return zero, lastErr
 }

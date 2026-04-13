@@ -86,8 +86,6 @@ func (s *redisServer) Wait() {
 	s.wg.Wait()
 }
 
-var errQuit = errors.New("client quit")
-
 func isRetryableAcceptError(err error) bool {
 	if err == nil {
 		return false
@@ -384,13 +382,6 @@ func (s *redisServer) execMSet(w *bufio.Writer, args [][]byte) error {
 	}
 	return writeSimpleString(w, "OK")
 }
-
-var (
-	errNotInteger    = errors.New("value is not an integer or out of range")
-	errOverflow      = errors.New("increment or decrement would overflow")
-	errNotIntegerMsg = "ERR value is not an integer or out of range"
-	errOverflowMsg   = "ERR increment or decrement would overflow"
-)
 
 func (s *redisServer) execIncrBy(w *bufio.Writer, key []byte, delta int64) error {
 	result, err := s.backend.IncrBy(key, delta)

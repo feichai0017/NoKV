@@ -5,9 +5,6 @@ import (
 	"sync/atomic"
 )
 
-// ErrInvalidBatch indicates a requested allocation batch is invalid.
-var ErrInvalidBatch = fmt.Errorf("coordinator/idalloc: invalid batch")
-
 // IDAllocator allocates globally unique increasing IDs.
 type IDAllocator struct {
 	next atomic.Uint64

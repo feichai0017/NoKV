@@ -702,6 +702,9 @@ func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 
 	errStr := (&KeyConflictError{Errors: []*kvrpcpb.KeyError{{Abort: "boom"}}}).Error()
 	require.Contains(t, errStr, "client: prewrite key errors")
+	conflict, ok := AsKeyConflict(&KeyConflictError{Errors: []*kvrpcpb.KeyError{{Abort: "boom"}}})
+	require.True(t, ok)
+	require.Len(t, conflict.Errors, 1)
 }
 
 func TestNewRequiresRegionResolver(t *testing.T) {
@@ -887,18 +890,19 @@ func TestClientRegionResolverLookupErrors(t *testing.T) {
 		cli := makeClient(&mockRegionResolver{})
 		_, err := cli.Get(context.Background(), []byte("zulu"), 1)
 		require.Error(t, err)
-		var notFound *RegionNotFoundError
-		require.ErrorAs(t, err, &notFound)
+		notFound, ok := AsRegionNotFound(err)
+		require.True(t, ok)
 		require.True(t, IsRegionNotFound(err))
 		require.False(t, IsRouteUnavailable(err))
+		require.NotNil(t, notFound)
 	})
 
 	t.Run("resolver unavailable", func(t *testing.T) {
 		cli := makeClient(&mockRegionResolver{err: status.Error(codes.Unavailable, "pd down")})
 		_, err := cli.Get(context.Background(), []byte("alfa"), 1)
 		require.Error(t, err)
-		var routeErr *RouteUnavailableError
-		require.ErrorAs(t, err, &routeErr)
+		routeErr, ok := AsRouteUnavailable(err)
+		require.True(t, ok)
 		require.True(t, IsRouteUnavailable(err))
 		require.False(t, IsRegionNotFound(err))
 		require.Equal(t, codes.Unavailable, status.Code(routeErr.Err))

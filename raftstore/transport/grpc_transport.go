@@ -132,11 +132,6 @@ var raftServiceDesc = grpc.ServiceDesc{
 	Metadata: "",
 }
 
-var (
-	errPeerBlocked = errors.New("raftstore: peer blocked")
-	errPeerUnknown = errors.New("raftstore: peer address unknown")
-)
-
 func raftStepHandler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(raftpb.Message)
 	if err := dec(in); err != nil {
@@ -198,7 +193,7 @@ type GRPCTransport struct {
 // service registered, but does not start serving yet.
 func NewUnstartedGRPCTransport(localID uint64, listenAddr string, opts ...GRPCOption) (*GRPCTransport, error) {
 	if localID == 0 {
-		return nil, errors.New("raftstore: gRPC transport requires non-zero local ID")
+		return nil, errInvalidLocalID
 	}
 	if listenAddr == "" {
 		listenAddr = "127.0.0.1:0"
@@ -269,10 +264,10 @@ func (t *GRPCTransport) RegisterServer(register func(grpc.ServiceRegistrar)) err
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
-		return errors.New("raftstore: transport closed")
+		return errTransportClosed
 	}
 	if t.started {
-		return errors.New("raftstore: cannot register service after transport start")
+		return errRegisterAfterStart
 	}
 	register(t.server)
 	return nil
@@ -281,12 +276,12 @@ func (t *GRPCTransport) RegisterServer(register func(grpc.ServiceRegistrar)) err
 // Start begins serving inbound raft and RPC traffic.
 func (t *GRPCTransport) Start() error {
 	if t == nil {
-		return errors.New("raftstore: transport is nil")
+		return errNilTransport
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
-		return errors.New("raftstore: transport closed")
+		return errTransportClosed
 	}
 	if t.started {
 		return nil

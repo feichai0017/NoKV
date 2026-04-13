@@ -24,8 +24,6 @@ type WALStorageConfig struct {
 	LocalMeta *localmeta.Store
 }
 
-var errStopPointerValidation = errors.New("raftstore: stop pointer validation")
-
 type entrySpan struct {
 	firstIndex uint64
 	lastIndex  uint64

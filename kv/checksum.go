@@ -6,9 +6,6 @@ import (
 	"github.com/pkg/errors"
 )
 
-// ErrChecksumMismatch is returned at checksum mismatch.
-var ErrChecksumMismatch = errors.New("checksum mismatch")
-
 // VerifyChecksum crc32
 func VerifyChecksum(data []byte, expected []byte) error {
 	if len(expected) < 8 {

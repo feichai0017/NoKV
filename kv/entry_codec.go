@@ -12,15 +12,6 @@ import (
 	"sync"
 )
 
-var (
-	// ErrBadChecksum indicates a mismatch between the stored CRC32 and the computed checksum.
-	ErrBadChecksum = errors.New("bad check sum")
-	// ErrPartialEntry indicates that an entry could not be fully read because the
-	// underlying stream ended unexpectedly. Callers can treat this as a signal that
-	// the value log should be truncated at the last known-good offset.
-	ErrPartialEntry = errors.New("kv: partial entry")
-)
-
 var crc32Pool = sync.Pool{
 	New: func() any {
 		return crc32.New(CastagnoliCrcTable)
