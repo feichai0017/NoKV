@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"errors"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -133,9 +132,6 @@ func (s *RootStore) Campaign() error {
 	}
 	return s.campaign()
 }
-
-var errCoordinatorLeaseUnsupported = errors.New("coordinator/storage: coordinator lease campaign unsupported")
-var errCoordinatorLeaseReleaseUnsupported = errors.New("coordinator/storage: coordinator lease release unsupported")
 
 // AppendRootEvent persists one explicit rooted metadata event.
 func (s *RootStore) AppendRootEvent(event rootevent.Event) error {

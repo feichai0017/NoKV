@@ -5,11 +5,6 @@ import (
 	"time"
 )
 
-var (
-	errConditionNotMet = errors.New("redis condition not met")
-	errUnsupported     = errors.New("redis feature unsupported for current backend")
-)
-
 type temporaryBackendError struct {
 	msg string
 	err error

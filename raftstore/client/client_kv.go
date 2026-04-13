@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
@@ -197,7 +196,7 @@ func (c *Client) callBatchGet(ctx context.Context, region regionSnapshot, keys [
 // Scan issues a forward KvScan starting at startKey, reading up to limit keys.
 func (c *Client) Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]*kvrpcpb.KV, error) {
 	if limit == 0 {
-		return nil, errors.New("client: scan limit must be > 0")
+		return nil, errInvalidScanLimit
 	}
 	collected := make([]*kvrpcpb.KV, 0, limit)
 	currentKey := append([]byte(nil), startKey...)

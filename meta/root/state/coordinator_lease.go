@@ -1,15 +1,8 @@
 package state
 
 import (
-	"errors"
 	"fmt"
 	"strings"
-)
-
-var (
-	ErrCoordinatorLeaseHeld    = errors.New("meta/root/state: coordinator lease held")
-	ErrInvalidCoordinatorLease = errors.New("meta/root/state: invalid coordinator lease")
-	ErrCoordinatorLeaseOwner   = errors.New("meta/root/state: coordinator lease owner mismatch")
 )
 
 // ValidateCoordinatorLeaseCampaign verifies whether holder can install a new
