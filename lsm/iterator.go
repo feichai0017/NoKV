@@ -111,7 +111,7 @@ func (iter *memIterator) Seek(key []byte) {
 type ConcatIterator struct {
 	idx     int // Which iterator is active now.
 	cur     index.Iterator
-	tables  []*table        // Disregarding reversed, this is in ascending order.
+	tables  []*table       // Disregarding reversed, this is in ascending order.
 	options *index.Options // Valid options are REVERSED and NOCACHE.
 }
 
@@ -186,7 +186,7 @@ func (s *ConcatIterator) Seek(key []byte) {
 		lo, hi := 0, n
 		for lo < hi {
 			mid := lo + (hi-lo)/2
-			if utils.CompareInternalKeys(s.tables[mid].MaxKey(), key) >= 0 {
+			if kv.CompareInternalKeys(s.tables[mid].MaxKey(), key) >= 0 {
 				hi = mid
 			} else {
 				lo = mid + 1
@@ -198,7 +198,7 @@ func (s *ConcatIterator) Seek(key []byte) {
 		lo, hi := 0, n
 		for lo < hi {
 			mid := lo + (hi-lo)/2
-			if utils.CompareInternalKeys(s.tables[mid].MinKey(), key) > 0 {
+			if kv.CompareInternalKeys(s.tables[mid].MinKey(), key) > 0 {
 				hi = mid
 			} else {
 				lo = mid + 1
@@ -402,7 +402,7 @@ func (mi *MergeIterator) fix() {
 		mi.swapSmall()
 		return
 	}
-	cmp := utils.CompareInternalKeys(mi.small.entry.Key, mi.bigger().entry.Key)
+	cmp := kv.CompareInternalKeys(mi.small.entry.Key, mi.bigger().entry.Key)
 	switch {
 	case cmp == 0: // Both the keys are equal.
 		// In case of same keys, move the right iterator ahead.

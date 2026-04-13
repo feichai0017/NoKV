@@ -7,7 +7,7 @@ import (
 
 	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -148,7 +148,7 @@ func TestLSMNewIterators(t *testing.T) {
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
 
-	entry := utils.BuildEntry()
+	entry := newRandomTestEntry()
 	require.NoError(t, lsm.Set(entry))
 
 	iters := lsm.NewIterators(&index.Options{IsAsc: true})
@@ -193,7 +193,7 @@ func TestConcatIteratorSeekAndNext(t *testing.T) {
 	builder := newTableBuiler(opt)
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("b"), 1), []byte("vb")))
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("d"), 1), []byte("vd")))
-	tbl, err := openTable(lsm.levels, utils.FileNameSSTable(dir, 100), builder)
+	tbl, err := openTable(lsm.levels, vfs.FileNameSSTable(dir, 100), builder)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
 	defer func() { _ = tbl.DecrRef() }()
@@ -239,7 +239,7 @@ func TestBlockIteratorReverse(t *testing.T) {
 		builder.AddKey(kv.NewEntry(key, value))
 	}
 
-	tableName := utils.FileNameSSTable(lsm.option.WorkDir, 1)
+	tableName := vfs.FileNameSSTable(lsm.option.WorkDir, 1)
 	tbl, err := openTable(lsm.levels, tableName, builder)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
@@ -288,7 +288,7 @@ func TestTableIteratorReverseSeek(t *testing.T) {
 		builder.AddKey(kv.NewEntry(key, value))
 	}
 
-	tableName := utils.FileNameSSTable(lsm.option.WorkDir, 2)
+	tableName := vfs.FileNameSSTable(lsm.option.WorkDir, 2)
 	tbl, err := openTable(lsm.levels, tableName, builder)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
@@ -338,7 +338,7 @@ func TestTableIteratorReverseMultiBlock(t *testing.T) {
 		builder.AddKey(kv.NewEntry(key, value))
 	}
 
-	tableName := utils.FileNameSSTable(lsm.option.WorkDir, 3)
+	tableName := vfs.FileNameSSTable(lsm.option.WorkDir, 3)
 	tbl, err := openTable(lsm.levels, tableName, builder)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)

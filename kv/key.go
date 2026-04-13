@@ -3,6 +3,7 @@ package kv
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"math"
 	"unsafe"
@@ -76,6 +77,36 @@ func Timestamp(internalKey []byte) uint64 {
 // SameBaseKey checks for key equality ignoring the MVCC timestamp suffix.
 func SameBaseKey(src, dst []byte) bool {
 	return bytes.Equal(InternalToBaseKey(src), InternalToBaseKey(dst))
+}
+
+// CompareInternalKeys compares two canonical internal keys.
+func CompareInternalKeys(key1, key2 []byte) int {
+	if len(key1) <= 8 || len(key2) <= 8 {
+		panic(fmt.Sprintf("%s,%s < 8", string(key1), string(key2)))
+	}
+	if cmp := bytes.Compare(key1[:len(key1)-8], key2[:len(key2)-8]); cmp != 0 {
+		return cmp
+	}
+	return bytes.Compare(key1[len(key1)-8:], key2[len(key2)-8:])
+}
+
+// CompareBaseKeys compares the CF+user-key portions of two keys, ignoring MVCC timestamp.
+func CompareBaseKeys(key1, key2 []byte) int {
+	return bytes.Compare(InternalToBaseKey(key1), InternalToBaseKey(key2))
+}
+
+// CompareUserKeys compares pure user-key portions of two internal keys.
+// Both inputs must use the InternalKey layout.
+func CompareUserKeys(key1, key2 []byte) int {
+	if len(key1) == 0 || len(key2) == 0 {
+		return bytes.Compare(key1, key2)
+	}
+	_, uk1, _, ok1 := SplitInternalKey(key1)
+	_, uk2, _, ok2 := SplitInternalKey(key2)
+	if !ok1 || !ok2 {
+		panic(fmt.Sprintf("CompareUserKeys requires internal keys (ok1=%t ok2=%t)", ok1, ok2))
+	}
+	return bytes.Compare(uk1, uk2)
 }
 
 // InternalKey encodes (column family, user key, version) into the canonical
