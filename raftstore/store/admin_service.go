@@ -2,7 +2,6 @@ package store
 
 import (
 	"bytes"
-	"fmt"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -18,21 +17,21 @@ import (
 // package so callers cannot bypass raft and mutate region layout directly.
 func (s *Store) splitRegionLocal(parentID uint64, childMeta localmeta.RegionMeta) (*peer.Peer, error) {
 	if s == nil {
-		return nil, fmt.Errorf("raftstore: store is nil")
+		return nil, errNilStore
 	}
 	if parentID == 0 {
-		return nil, fmt.Errorf("raftstore: parent region id is zero")
+		return nil, errParentRegionIDZero
 	}
 	childMeta = localmeta.CloneRegionMeta(childMeta)
 	if childMeta.ID == 0 {
-		return nil, fmt.Errorf("raftstore: child region id is zero")
+		return nil, errChildRegionIDZero
 	}
 	if len(childMeta.StartKey) == 0 {
-		return nil, fmt.Errorf("raftstore: child region start key required")
+		return nil, errChildRegionStartKeyRequired
 	}
 	parentMeta, ok := s.RegionMetaByID(parentID)
 	if !ok {
-		return nil, fmt.Errorf("raftstore: parent region %d not found", parentID)
+		return nil, errParentRegionNotFound(parentID)
 	}
 	originalParent := localmeta.CloneRegionMeta(parentMeta)
 	plan, err := s.buildSplitPlan(parentID, childMeta, childMeta.StartKey)
@@ -105,7 +104,7 @@ func (s *Store) handleAdminCommand(cmd *raftcmdpb.AdminCommand) error {
 
 func (s *Store) handleSplitCommand(split *raftcmdpb.SplitCommand) error {
 	if split == nil {
-		return fmt.Errorf("raftstore: split command missing payload")
+		return errSplitCommandMissingPayload
 	}
 	childMeta := regionMetaFromDescriptorProto(split.GetChild())
 	childMeta.State = metaregion.ReplicaStateRunning
@@ -121,7 +120,7 @@ func (s *Store) handleSplitCommand(split *raftcmdpb.SplitCommand) error {
 
 func (s *Store) handleMergeCommand(merge *raftcmdpb.MergeCommand) error {
 	if merge == nil {
-		return fmt.Errorf("raftstore: merge command missing payload")
+		return errMergeCommandMissingPayload
 	}
 	plan, err := s.buildMergePlan(merge.GetTargetRegionId(), merge.GetSourceRegionId())
 	if err != nil {

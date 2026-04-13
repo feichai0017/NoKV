@@ -1,7 +1,6 @@
 package store
 
 import (
-	"fmt"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"sync"
 
@@ -26,13 +25,13 @@ func NewRouter() *Router {
 
 func (r *Router) add(p *peer.Peer) error {
 	if r == nil || p == nil {
-		return fmt.Errorf("raftstore: router cannot register nil peer")
+		return errRouterRegisterNilPeer
 	}
 	id := p.ID()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.peers[id]; ok {
-		return fmt.Errorf("raftstore: peer %d already registered", id)
+		return errPeerAlreadyRegistered(id)
 	}
 	r.peers[id] = p
 	return nil
@@ -108,7 +107,7 @@ func (r *Router) Peer(id uint64) (*peer.Peer, bool) {
 func (r *Router) SendRaft(id uint64, msg myraft.Message) error {
 	p, ok := r.Peer(id)
 	if !ok {
-		return fmt.Errorf("raftstore: peer %d not found", id)
+		return errPeerNotFound(id)
 	}
 	return p.Step(msg)
 }
@@ -117,7 +116,7 @@ func (r *Router) SendRaft(id uint64, msg myraft.Message) error {
 func (r *Router) SendPropose(id uint64, data []byte) error {
 	p, ok := r.Peer(id)
 	if !ok {
-		return fmt.Errorf("raftstore: peer %d not found", id)
+		return errPeerNotFound(id)
 	}
 	return p.Propose(data)
 }
@@ -125,11 +124,11 @@ func (r *Router) SendPropose(id uint64, data []byte) error {
 // SendCommand encodes the provided raft command and submits it to the peer.
 func (r *Router) SendCommand(id uint64, req *raftcmdpb.RaftCmdRequest) error {
 	if req == nil {
-		return fmt.Errorf("raftstore: nil raft command request")
+		return errNilRaftCommandRequest
 	}
 	p, ok := r.Peer(id)
 	if !ok {
-		return fmt.Errorf("raftstore: peer %d not found", id)
+		return errPeerNotFound(id)
 	}
 	return p.ProposeCommand(req)
 }
@@ -138,7 +137,7 @@ func (r *Router) SendCommand(id uint64, req *raftcmdpb.RaftCmdRequest) error {
 func (r *Router) SendTick(id uint64) error {
 	p, ok := r.Peer(id)
 	if !ok {
-		return fmt.Errorf("raftstore: peer %d not found", id)
+		return errPeerNotFound(id)
 	}
 	return p.Tick()
 }

@@ -33,10 +33,10 @@ type terminalOutcome struct {
 
 func (s *Store) leaderPeer(regionID uint64) (*peer.Peer, error) {
 	if s == nil {
-		return nil, fmt.Errorf("raftstore: store is nil")
+		return nil, errNilStore
 	}
 	if regionID == 0 {
-		return nil, fmt.Errorf("raftstore: region id is zero")
+		return nil, errZeroRegionID
 	}
 	peerRef := s.regionMgr().peer(regionID)
 	if peerRef == nil {
@@ -65,13 +65,13 @@ func (s *Store) publishPlannedRootEvent(regionID uint64, event rootevent.Event, 
 
 func (s *Store) proposeTransition(target transitionTarget) error {
 	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
+		return errNilStore
 	}
 	if target.RegionID == 0 {
-		return fmt.Errorf("raftstore: transition region id is zero")
+		return errTransitionRegionIDZero
 	}
 	if target.ConfChange == nil && target.Admin == nil {
-		return fmt.Errorf("raftstore: transition proposal is empty")
+		return errTransitionProposalEmpty
 	}
 	peerRef, err := s.leaderPeer(target.RegionID)
 	if err != nil {
@@ -87,26 +87,26 @@ func (s *Store) proposeTransition(target transitionTarget) error {
 		}
 		return peerRef.ProposeAdmin(payload)
 	default:
-		return fmt.Errorf("raftstore: transition proposal is empty")
+		return errTransitionProposalEmpty
 	}
 }
 
 func (s *Store) executeTransitionTarget(target transitionTarget) error {
 	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
+		return errNilStore
 	}
 	if target.Noop {
 		return nil
 	}
 	if target.RegionID == 0 {
 		s.recordAdmission(Admission{Class: AdmissionClassTopology, Reason: AdmissionReasonInvalid, Detail: "transition region id is zero"})
-		s.recordTopologyRejected(target, fmt.Errorf("raftstore: transition region id is zero"))
-		return fmt.Errorf("raftstore: transition region id is zero")
+		s.recordTopologyRejected(target, errTransitionRegionIDZero)
+		return errTransitionRegionIDZero
 	}
 	if target.ConfChange == nil && target.Admin == nil {
 		s.recordAdmission(Admission{Class: AdmissionClassTopology, Reason: AdmissionReasonInvalid, RegionID: target.RegionID, Detail: "transition proposal is empty"})
-		s.recordTopologyRejected(target, fmt.Errorf("raftstore: transition proposal is empty"))
-		return fmt.Errorf("raftstore: transition proposal is empty")
+		s.recordTopologyRejected(target, errTransitionProposalEmpty)
+		return errTransitionProposalEmpty
 	}
 	s.recordAdmission(Admission{
 		Class:    AdmissionClassTopology,
@@ -140,7 +140,7 @@ func (s *Store) enqueueAppliedRootEvent(event rootevent.Event) {
 
 func (s *Store) applyTerminalOutcome(term terminalOutcome) error {
 	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
+		return errNilStore
 	}
 	if term.Noop {
 		return nil

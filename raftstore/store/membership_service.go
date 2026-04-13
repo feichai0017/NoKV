@@ -1,7 +1,6 @@
 package store
 
 import (
-	"fmt"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -72,13 +71,13 @@ func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 // proposes the matching data-plane raft configuration change.
 func (s *Store) AddPeer(regionID uint64, meta metaregion.Peer) error {
 	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
+		return errNilStore
 	}
 	if regionID == 0 {
-		return fmt.Errorf("raftstore: region id is zero")
+		return errZeroRegionID
 	}
 	if meta.PeerID == 0 {
-		return fmt.Errorf("raftstore: peer id is zero")
+		return errZeroPeerID
 	}
 	cc := raftpb.ConfChangeV2{
 		Changes: []raftpb.ConfChangeSingle{
@@ -100,10 +99,10 @@ func (s *Store) AddPeer(regionID uint64, meta metaregion.Peer) error {
 // proposes the matching data-plane raft configuration change.
 func (s *Store) RemovePeer(regionID, peerID uint64) error {
 	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
+		return errNilStore
 	}
 	if regionID == 0 || peerID == 0 {
-		return fmt.Errorf("raftstore: invalid region (%d) or peer (%d) id", regionID, peerID)
+		return errInvalidRegionPeerID(regionID, peerID)
 	}
 	ctxMeta := metaregion.Peer{StoreID: peerID, PeerID: peerID}
 	if meta, ok := s.RegionMetaByID(regionID); ok {
@@ -131,10 +130,10 @@ func (s *Store) RemovePeer(regionID, peerID uint64) error {
 // provided peer ID.
 func (s *Store) TransferLeader(regionID, targetPeerID uint64) error {
 	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
+		return errNilStore
 	}
 	if regionID == 0 || targetPeerID == 0 {
-		return fmt.Errorf("raftstore: invalid region (%d) or peer (%d) id", regionID, targetPeerID)
+		return errInvalidRegionPeerID(regionID, targetPeerID)
 	}
 	peerRef, err := s.leaderPeer(regionID)
 	if err != nil {

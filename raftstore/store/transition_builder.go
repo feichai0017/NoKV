@@ -35,14 +35,14 @@ type mergePlan struct {
 
 func (s *Store) buildPeerChangeTarget(regionID uint64, cc raftpb.ConfChangeV2) (transitionTarget, error) {
 	if s == nil {
-		return transitionTarget{}, fmt.Errorf("raftstore: store is nil")
+		return transitionTarget{}, errNilStore
 	}
 	if regionID == 0 || len(cc.Changes) != 1 {
-		return transitionTarget{}, fmt.Errorf("raftstore: invalid peer change target")
+		return transitionTarget{}, errInvalidPeerChangeTarget
 	}
 	meta, ok := s.RegionMetaByID(regionID)
 	if !ok {
-		return transitionTarget{}, fmt.Errorf("raftstore: region %d metadata not found", regionID)
+		return transitionTarget{}, errRegionMetadataNotFound(regionID)
 	}
 	next := localmeta.CloneRegionMeta(meta)
 	changed, err := applyConfChangeToMeta(&next, cc)
@@ -68,14 +68,14 @@ func (s *Store) buildPeerChangeTarget(regionID uint64, cc raftpb.ConfChangeV2) (
 
 func (s *Store) buildSplitPlan(parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) (splitPlan, error) {
 	if s == nil {
-		return splitPlan{}, fmt.Errorf("raftstore: store is nil")
+		return splitPlan{}, errNilStore
 	}
 	if parentID == 0 || childMeta.ID == 0 {
-		return splitPlan{}, fmt.Errorf("raftstore: invalid region identifiers")
+		return splitPlan{}, errInvalidRegionIdentifiers
 	}
 	parentMeta, ok := s.RegionMetaByID(parentID)
 	if !ok {
-		return splitPlan{}, fmt.Errorf("raftstore: parent region %d not found", parentID)
+		return splitPlan{}, errParentRegionNotFound(parentID)
 	}
 	if len(parentMeta.EndKey) > 0 && bytes.Compare(splitKey, parentMeta.EndKey) >= 0 {
 		return splitPlan{}, fmt.Errorf("raftstore: split key >= parent end key")
@@ -117,18 +117,18 @@ func (s *Store) buildSplitPlan(parentID uint64, childMeta localmeta.RegionMeta, 
 
 func (s *Store) buildMergePlan(targetRegionID, sourceRegionID uint64) (mergePlan, error) {
 	if s == nil {
-		return mergePlan{}, fmt.Errorf("raftstore: store is nil")
+		return mergePlan{}, errNilStore
 	}
 	if targetRegionID == 0 || sourceRegionID == 0 {
-		return mergePlan{}, fmt.Errorf("raftstore: invalid region identifiers")
+		return mergePlan{}, errInvalidRegionIdentifiers
 	}
 	parentMeta, ok := s.RegionMetaByID(targetRegionID)
 	if !ok {
-		return mergePlan{}, fmt.Errorf("raftstore: target region %d not found", targetRegionID)
+		return mergePlan{}, errTargetRegionNotFound(targetRegionID)
 	}
 	sourceMeta, ok := s.RegionMetaByID(sourceRegionID)
 	if !ok {
-		return mergePlan{}, fmt.Errorf("raftstore: source region %d not found", sourceRegionID)
+		return mergePlan{}, errSourceRegionNotFound(sourceRegionID)
 	}
 	updated := parentMeta
 	updated.Epoch.Version++
@@ -156,10 +156,10 @@ func (s *Store) buildMergePlan(targetRegionID, sourceRegionID uint64) (mergePlan
 
 func (s *Store) buildSplitTarget(parentID uint64, childMeta localmeta.RegionMeta, splitKey []byte) (transitionTarget, error) {
 	if s == nil {
-		return transitionTarget{}, fmt.Errorf("raftstore: store is nil")
+		return transitionTarget{}, errNilStore
 	}
 	if parentID == 0 || childMeta.ID == 0 {
-		return transitionTarget{}, fmt.Errorf("raftstore: invalid region identifiers")
+		return transitionTarget{}, errInvalidRegionIdentifiers
 	}
 	if splitAlreadyAppliedLocal(s, parentID, childMeta, splitKey) {
 		return transitionTarget{RegionID: parentID, Noop: true}, nil
@@ -188,10 +188,10 @@ func (s *Store) buildSplitTarget(parentID uint64, childMeta localmeta.RegionMeta
 
 func (s *Store) buildMergeTarget(targetRegionID, sourceRegionID uint64) (transitionTarget, error) {
 	if s == nil {
-		return transitionTarget{}, fmt.Errorf("raftstore: store is nil")
+		return transitionTarget{}, errNilStore
 	}
 	if targetRegionID == 0 || sourceRegionID == 0 {
-		return transitionTarget{}, fmt.Errorf("raftstore: invalid region identifiers")
+		return transitionTarget{}, errInvalidRegionIdentifiers
 	}
 	plan, err := s.buildMergePlan(targetRegionID, sourceRegionID)
 	if err != nil {
@@ -216,7 +216,7 @@ func (s *Store) buildMergeTarget(targetRegionID, sourceRegionID uint64) (transit
 
 func applyConfChangeToMeta(meta *localmeta.RegionMeta, cc raftpb.ConfChangeV2) (bool, error) {
 	if meta == nil {
-		return false, fmt.Errorf("raftstore: region meta is nil")
+		return false, errRegionMetaNil
 	}
 	changed := false
 	ctxPeers, err := decodeConfChangeContext(cc.Context)
@@ -273,12 +273,12 @@ func decodeConfChangeContext(ctx []byte) ([]metaregion.Peer, error) {
 	for len(ctx) > 0 {
 		storeID, n := binary.Uvarint(ctx)
 		if n <= 0 {
-			return nil, fmt.Errorf("raftstore: invalid conf change context")
+			return nil, errInvalidConfChangeContext
 		}
 		ctx = ctx[n:]
 		peerID, m := binary.Uvarint(ctx)
 		if m <= 0 {
-			return nil, fmt.Errorf("raftstore: invalid conf change context")
+			return nil, errInvalidConfChangeContext
 		}
 		ctx = ctx[m:]
 		peers = append(peers, metaregion.Peer{StoreID: storeID, PeerID: peerID})

@@ -1,7 +1,6 @@
 package store
 
 import (
-	"fmt"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -42,35 +41,35 @@ type RegionRuntimeStatus struct {
 
 func (s *Store) applyRegionMeta(meta localmeta.RegionMeta) error {
 	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
+		return errNilStore
 	}
 	return s.regionMgr().applyRegionMeta(meta, true)
 }
 
 func (s *Store) applyRegionMetaSilent(meta localmeta.RegionMeta) error {
 	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
+		return errNilStore
 	}
 	return s.regionMgr().applyRegionMeta(meta, false)
 }
 
 func (s *Store) applyRegionRemoval(regionID uint64) error {
 	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
+		return errNilStore
 	}
 	return s.regionMgr().applyRegionRemoval(regionID, true)
 }
 
 func (s *Store) applyRegionRemovalSilent(regionID uint64) error {
 	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
+		return errNilStore
 	}
 	return s.regionMgr().applyRegionRemoval(regionID, false)
 }
 
 func (s *Store) applyRegionState(regionID uint64, state metaregion.ReplicaState) error {
 	if s == nil {
-		return fmt.Errorf("raftstore: store is nil")
+		return errNilStore
 	}
 	return s.regionMgr().applyRegionState(regionID, state)
 }
