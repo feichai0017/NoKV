@@ -8,6 +8,7 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/index"
 	entrykv "github.com/feichai0017/NoKV/kv"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -17,7 +18,6 @@ import (
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/client"
-	"github.com/feichai0017/NoKV/index"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"

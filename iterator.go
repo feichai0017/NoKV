@@ -485,7 +485,17 @@ func (iter *DBIterator) materializeDecoded(src *kv.Entry, cf kv.ColumnFamily, us
 	if src.IsRangeDelete() {
 		return false, nil
 	}
-	iter.entry = *src
+	iter.entry = kv.Entry{
+		Key:          src.Key,
+		Value:        src.Value,
+		ExpiresAt:    src.ExpiresAt,
+		CF:           src.CF,
+		Meta:         src.Meta,
+		Version:      src.Version,
+		Offset:       src.Offset,
+		Hlen:         src.Hlen,
+		ValThreshold: src.ValThreshold,
+	}
 	// Check if this key is covered by a range tombstone.
 	if iter.rtCheck && iter.rtv != nil && iter.rtv.IsKeyCovered(cf, userKey, ts) {
 		return false, nil

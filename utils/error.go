@@ -8,8 +8,6 @@ import (
 var (
 	// ErrKeyNotFound is returned when key isn't found on a txn.Get.
 	ErrKeyNotFound = errors.New("Key not found")
-	// ErrChecksumMismatch is returned at checksum mismatch.
-	ErrChecksumMismatch = errors.New("checksum mismatch")
 
 	ErrTruncate = errors.New("Do truncate")
 	ErrStop     = errors.New("Stop")
