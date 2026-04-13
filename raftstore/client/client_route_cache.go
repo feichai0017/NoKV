@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
@@ -112,7 +111,7 @@ func (c *Client) regionForKeyFromResolver(ctx context.Context, key []byte) (regi
 	}
 	desc := metawire.DescriptorFromProto(resp.GetRegionDescriptor())
 	if desc.RegionID == 0 {
-		return regionSnapshot{}, errors.New("client: resolved region id missing")
+		return regionSnapshot{}, errResolvedRegionIDMissing
 	}
 	if len(desc.Peers) == 0 {
 		return regionSnapshot{}, fmt.Errorf("client: resolved region %d missing peers", desc.RegionID)
@@ -253,14 +252,14 @@ func contextWithTimeout(parent context.Context, timeout time.Duration) (context.
 
 func buildContext(region regionSnapshot) (*kvrpcpb.Context, error) {
 	if region.desc.RegionID == 0 {
-		return nil, errors.New("client: region meta missing")
+		return nil, errRegionMetaMissing
 	}
 	leaderStoreID := region.leader
 	if leaderStoreID == 0 {
 		leaderStoreID = defaultLeaderStoreID(region.desc)
 	}
 	if leaderStoreID == 0 {
-		return nil, errors.New("client: leader unknown")
+		return nil, errLeaderUnknown
 	}
 	var peerMeta *metapb.RegionPeer
 	for _, peer := range region.desc.Peers {

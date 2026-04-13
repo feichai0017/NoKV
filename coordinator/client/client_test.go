@@ -204,6 +204,19 @@ func TestGRPCClientDoesNotRetryReadOnNotLeaderWriteError(t *testing.T) {
 	err := status.Error(codes.FailedPrecondition, errNotLeaderPrefix+" (leader_id=2)")
 	require.True(t, retryableWrite(err))
 	require.False(t, retryableRead(err))
+	require.True(t, IsNotLeader(err))
+	leaderID, ok := LeaderHint(err)
+	require.True(t, ok)
+	require.Equal(t, uint64(2), leaderID)
+}
+
+func TestCoordinatorClientErrorHelpers(t *testing.T) {
+	require.True(t, IsEmptyAddress(errEmptyAddress))
+	require.True(t, IsNoReachableAddress(errNoReachableAddress))
+	require.True(t, IsConnectionShutdown(errConnectionShutdown))
+	require.False(t, IsNotLeader(errEmptyAddress))
+	_, ok := LeaderHint(errEmptyAddress)
+	require.False(t, ok)
 }
 
 func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descriptor.Descriptor {

@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"errors"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"strings"
 	"sync"
@@ -14,11 +13,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
-
-var errEmptyAddress = errors.New("coordinator client: empty address")
-var errNoReachableAddress = errors.New("coordinator client: no reachable address")
-
-const errNotLeaderPrefix = "coordinator not leader"
 
 // Client defines the Coordinator control-plane RPC contract consumed by stores.
 type Client interface {
@@ -182,7 +176,7 @@ func waitForReady(ctx context.Context, conn *grpc.ClientConn) error {
 		case connectivity.Ready:
 			return nil
 		case connectivity.Shutdown:
-			return errors.New("coordinator client: grpc connection shutdown")
+			return errConnectionShutdown
 		}
 		if !conn.WaitForStateChange(ctx, state) {
 			return ctx.Err()
@@ -281,5 +275,5 @@ func retryableWrite(err error) bool {
 	if retryableRead(err) {
 		return true
 	}
-	return status.Code(err) == codes.FailedPrecondition && strings.Contains(err.Error(), errNotLeaderPrefix)
+	return IsNotLeader(err)
 }

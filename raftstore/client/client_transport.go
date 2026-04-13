@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"sync"
@@ -54,7 +53,7 @@ func (c *Client) storeClient(ctx context.Context, storeID uint64) (kvrpcpb.NoKVC
 	c.mu.RLock()
 	if storeID == 0 {
 		c.mu.RUnlock()
-		return nil, errors.New("client: store id not set")
+		return nil, errStoreIDNotSet
 	}
 	st, ok := c.stores[storeID]
 	c.mu.RUnlock()

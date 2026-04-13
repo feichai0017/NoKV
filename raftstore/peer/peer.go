@@ -65,8 +65,6 @@ type Peer struct {
 
 const defaultMaxInFlightApply = 8192
 
-var errPeerStopped = errors.New("raftstore: peer stopped")
-
 const adminCommandPrefix byte = 0xAD
 
 func isAdminEntry(data []byte) bool {
@@ -88,13 +86,13 @@ func decodeAdminCommand(data []byte) (*raftcmdpb.AdminCommand, error) {
 // register the peer with the transport before invoking Bootstrap.
 func NewPeer(cfg *Config) (*Peer, error) {
 	if cfg == nil {
-		return nil, errors.New("raftstore: config is nil")
+		return nil, errNilConfig
 	}
 	if cfg.Transport == nil {
-		return nil, errors.New("raftstore: transport must be provided")
+		return nil, errNilTransport
 	}
 	if cfg.Apply == nil {
-		return nil, errors.New("raftstore: apply function must be provided")
+		return nil, errNilApplyFunc
 	}
 	storage, err := ResolveStorage(cfg)
 	if err != nil {
@@ -102,7 +100,7 @@ func NewPeer(cfg *Config) (*Peer, error) {
 	}
 	raftCfg := cfg.RaftConfig
 	if raftCfg.ID == 0 {
-		return nil, errors.New("raftstore: raft config must specify ID")
+		return nil, errZeroRaftID
 	}
 	raftCfg.Storage = storage
 	node, err := myraft.NewRawNode(&raftCfg)
