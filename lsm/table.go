@@ -30,7 +30,7 @@ var (
 type table struct {
 	lm  *levelManager
 	fid uint64
-	ref atomic.Int32 // For file garbage collection. Atomic.
+	kv.RefCount // For file garbage collection. Atomic.
 	lvl atomic.Int32
 
 	minKey []byte
@@ -1065,30 +1065,15 @@ func (t *table) Delete() error {
 	return nil
 }
 
-// DecrRef decrements the refcount and possibly deletes the table
+// DecrRef decrements the refcount and possibly deletes the table.
+// It panics on refcount underflow to surface lifecycle bugs early.
+func (t *table) IncrRef() { t.Incr() }
+
 func (t *table) DecrRef() error {
-	for {
-		current := t.ref.Load()
-		// 1. Guard check
-		utils.CondPanicFunc(current <= 0, func() error {
-			return fmt.Errorf("table refcount underflow: fid %d, current_ref %d", t.fid, current)
-		})
-
-		newRef := current - 1
-		// 2. Atomic transition
-		if t.ref.CompareAndSwap(current, newRef) {
-			if newRef == 0 {
-				return t.Delete()
-			}
-			return nil
-		}
-		// 3. If CAS failed , the loop will retry
+	if t.Decr() == 0 {
+		return t.Delete()
 	}
-}
-
-// IncrRef increments the table reference count.
-func (t *table) IncrRef() {
-	t.ref.Add(1)
+	return nil
 }
 func decrRefs(tables []*table) error {
 	var decrRefsErr error

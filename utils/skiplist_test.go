@@ -197,7 +197,7 @@ func TestSkiplistDecrRefConcurrent(t *testing.T) {
 	}
 
 	wg.Wait()
-	assert.Equal(t, int32(0), sl.ref.Load())
+	assert.Equal(t, int32(0), sl.Load())
 }
 
 func TestSkipListReverseIteration(t *testing.T) {
@@ -326,7 +326,7 @@ func TestSkiplistIteratorCloseIdempotent(t *testing.T) {
 	it := sl.NewIterator(nil)      // ref = 2
 	require.NoError(t, it.Close()) // ref = 1
 	require.NoError(t, it.Close()) // still ref = 1
-	assert.Equal(t, int32(1), sl.ref.Load())
+	assert.Equal(t, int32(1), sl.Load())
 	sl.DecrRef() // ref = 0
 }
 

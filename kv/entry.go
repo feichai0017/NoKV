@@ -1,9 +1,7 @@
 package kv
 
 import (
-	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -47,15 +45,16 @@ type Entry struct {
 	Hlen         int // Length of the header.
 	ValThreshold int64
 
-	ref int32
+	RefCount
 }
 
 // IncrRef increments the entry reference count.
+// It wraps RefCount.Incr to add nil-receiver safety.
 func (e *Entry) IncrRef() {
 	if e == nil {
 		return
 	}
-	atomic.AddInt32(&e.ref, 1)
+	e.RefCount.Incr()
 }
 
 // DecrRef decrements the entry reference count and releases it to the pool when it reaches zero.
@@ -65,19 +64,9 @@ func (e *Entry) DecrRef() {
 	if e == nil {
 		return
 	}
-	for {
-		current := atomic.LoadInt32(&e.ref)
-		if current <= 0 {
-			panic(fmt.Sprintf("kv.Entry.DecrRef: refcount underflow (current_ref=%d)", current))
-		}
-		if !atomic.CompareAndSwapInt32(&e.ref, current, current-1) {
-			continue
-		}
-		if current == 1 {
-			e.reset()
-			entryPool.Put(e)
-		}
-		return
+	if e.Decr() == 0 {
+		e.reset()
+		entryPool.Put(e)
 	}
 }
 
@@ -91,7 +80,7 @@ func (e *Entry) reset() {
 	e.Offset = 0
 	e.Hlen = 0
 	e.ValThreshold = 0
-	e.ref = 0
+	e.RefCount.Reset()
 }
 
 func acquireEntry() *Entry {

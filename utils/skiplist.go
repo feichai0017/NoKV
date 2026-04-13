@@ -92,9 +92,9 @@ type node struct {
 type Skiplist struct {
 	height     int32 // Current height. 1 <= height <= kMaxHeight. CAS.
 	headOffset uint32
-	ref        atomic.Int32
-	arena      *Arena
-	OnClose    func()
+	kv.RefCount
+	arena   *Arena
+	OnClose func()
 
 	// maxKeyPerLevel stores the offset of the rightmost node at each level.
 	// This enables O(1) append at any level during sequential inserts.
@@ -102,23 +102,15 @@ type Skiplist struct {
 	maxKeyPerLevel [maxHeight]uint32
 }
 
-// IncrRef increases the refcount
-func (s *Skiplist) IncrRef() {
-	s.ref.Add(1)
-}
+// IncrRef increments the refcount, satisfying the memIndex interface.
+func (s *Skiplist) IncrRef() { s.Incr() }
 
-// DecrRef decrements the refcount, deallocating the Skiplist when done using it
+// DecrRef decrements the refcount, deallocating the Skiplist when done using it.
 func (s *Skiplist) DecrRef() {
-	newRef := s.ref.Add(-1)
-	if newRef > 0 {
+	if s.Decr() > 0 {
 		return
 	}
-	if newRef < 0 {
-		// Refcount underflow: more DecrRef() calls than IncrRef() calls.
-		// This is a lifecycle bug that should fail fast.
-		panic(fmt.Sprintf("Skiplist.DecrRef: refcount underflow (newRef=%d)", newRef))
-	}
-	// newRef == 0: safe to release
+	// ref == 0: safe to release.
 	if s.OnClose != nil {
 		s.OnClose()
 	}
@@ -163,7 +155,7 @@ func NewSkiplist(arenaSize int64) *Skiplist {
 		headOffset: ho,
 		arena:      arena,
 	}
-	list.ref.Store(1)
+	list.Init(1)
 	return list
 }
 
