@@ -520,7 +520,28 @@ NoKV 当前支持三种 rooted authority 形态：
 
 这些数字说明的不是“NoKV 比 etcd 快”或“更慢”，而是：**serialized remote fence write 才是主要代价，windowing 才是让 rebuildable coordinator 可用的工程条件。** NoKV 的单次 remote rooted write 更重，因为它承载的是 typed rooted semantics、rooted state apply 与 checkpoint/compaction 相关开销，而 etcd CAS baseline 只是在更新单个 key。本文因此把 etcd baseline 用作“代价形状对照组”，而不是用来宣称绝对性能优势。
 
-### 5.9 小结
+### 5.9 Routing scale-out boundary
+
+truth/service split 的另一个实际收益，是把 coordinator 中的 `view/service` 路径与 rooted authority 解耦出来。为了避免把这个收益写成空泛的“可水平扩展”，本文单独测量了 separated mode 下的 routing read：
+
+- `BenchmarkControlPlaneGetRegionByKeyRemoteTCPOneCoordinator`
+- `BenchmarkControlPlaneGetRegionByKeyRemoteTCPThreeCoordinators`
+
+在当前 Apple M3 Pro localhost 环境中，`GetRegionByKey` 的平均结果约为：
+
+- `1 coordinator ≈ 276.4ns/op`
+- `3 coordinators ≈ 262.3ns/op`
+
+这个提升幅度并不巨大，本文也**不**把它解读为“控制面写路径被水平扩展了”。它只说明：当 rooted truth 被独立出来后，region routing 这类 `view/service` 读路径可以由多个 coordinator 副本并行承载，而不会再把 truth kernel 一起复制进去。对应的 integration test `TestSeparatedModeRoutingServesAcrossMultipleCoordinatorsWhileAllocatorStaysSingleton` 进一步验证：多个 separated coordinators 都能服务 `GetRegionByKey`，但 `AllocID` 仍然只能由当前 lease holder 提供。
+
+与之相对，`AllocID` / `Tso` 这类 singleton-duty 路径仍然必须由当前 lease holder 服务。本文因此把 split 后的 coordinator 明确区分成两类能力：
+
+- **可扩展路径**：`GetRegionByKey`、freshness/degraded 查询、runtime/service 级 read paths
+- **不可扩展路径**：`AllocID`、`Tso`、以及任何需要唯一 owner 的 control-plane write path
+
+这个边界比“coordinator 整体水平扩展”更准确，也更符合当前实现与实验结果。
+
+### 5.10 小结
 
 当前证据支持以下结论：
 
@@ -529,6 +550,7 @@ NoKV 当前支持三种 rooted authority 形态：
 - contested failover 证明不同 holder 的接管也沿着同一 rooted authority 边界完成。
 - chaos monotonicity 证明这不是一次性的恢复技巧，而是可重复的系统性质。
 - windowing 使 remote rooted truth 在稳态下退出热路径，从而让该设计具备工程可用性。
+- truth/service split 还带来了更清楚的扩展边界：routing/view 读路径可以横向承载，而 singleton-duty 路径仍保持单 owner 约束。
 
 ## 6. 讨论
 

@@ -102,6 +102,12 @@ Outputs:
 
 - raw benchmark logs under `benchmark/benchmark_results/control_plane/<stamp>/`
 - a paper-friendly markdown summary at `summary.md`
+- routing scale-out benchmark logs comparing `1` vs `3` separated coordinators for `GetRegionByKey`
+
+The current control-plane suite therefore distinguishes two classes of paths:
+
+- horizontally replicable service/view paths such as `GetRegionByKey`, which can be served by multiple coordinators reading the same rooted truth
+- singleton-duty paths such as `AllocID` / `Tso`, which remain lease-owner-only even after the split
 
 Linux netem wrapper via Docker:
 
