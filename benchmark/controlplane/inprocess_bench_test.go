@@ -165,20 +165,27 @@ func openBenchmarkRemoteRootStoreBufconn(b *testing.B, backend rootremote.Backen
 
 func openBenchmarkRemoteRootStoreTCP(b *testing.B, backend rootremote.Backend) (*coordstorage.RootStore, func()) {
 	b.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(b, err)
-	server := grpc.NewServer()
-	metapb.RegisterMetadataRootServer(server, rootremote.NewService(backend))
-	go func() { _ = server.Serve(listener) }()
-
+	addr, stop := openBenchmarkRemoteRootServerTCP(b, backend)
 	store, err := coordstorage.OpenRootRemoteStore(coordstorage.RemoteRootConfig{
-		Targets: map[uint64]string{1: listener.Addr().String()},
+		Targets: map[uint64]string{1: addr},
 	})
 	require.NoError(b, err)
 
 	cleanup := func() {
 		require.NoError(b, store.Close())
-		server.GracefulStop()
+		stop()
 	}
 	return store, cleanup
+}
+
+func openBenchmarkRemoteRootServerTCP(b *testing.B, backend rootremote.Backend) (string, func()) {
+	b.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(b, err)
+	server := grpc.NewServer()
+	metapb.RegisterMetadataRootServer(server, rootremote.NewService(backend))
+	go func() { _ = server.Serve(listener) }()
+	return listener.Addr().String(), func() {
+		server.GracefulStop()
+	}
 }
