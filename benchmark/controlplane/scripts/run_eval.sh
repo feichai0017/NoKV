@@ -23,6 +23,7 @@ echo "benchtime=$BENCHTIME inproc_count=$INPROC_COUNT process_count=$PROCESS_COU
 inproc_raw="$result_dir/inprocess_raw.txt"
 process_raw="$result_dir/process_raw.txt"
 recovery_raw="$result_dir/recovery_raw.txt"
+routing_raw="$result_dir/routing_raw.txt"
 summary_md="$result_dir/summary.md"
 
 (
@@ -53,6 +54,16 @@ summary_md="$result_dir/summary.md"
 		-v
 ) | tee "$recovery_raw"
 
+(
+	cd "$BENCH_DIR"
+	go test ./controlplane \
+		-run '^$' \
+		-bench 'BenchmarkControlPlaneGetRegionByKeyRemoteTCP(OneCoordinator|ThreeCoordinators)$' \
+		-benchmem \
+		-count "$INPROC_COUNT" \
+		-benchtime "$BENCHTIME"
+) | tee "$routing_raw"
+
 {
 	echo "# Control-Plane Evaluation"
 	echo
@@ -82,11 +93,18 @@ summary_md="$result_dir/summary.md"
 	grep 'separated coordinator recovery latency:' "$recovery_raw" || true
 	echo '```'
 	echo
+	echo "## Routing Scale-Out Logs"
+	echo
+	echo '```text'
+	grep 'BenchmarkControlPlaneGetRegionByKeyRemoteTCP' "$routing_raw" || true
+	echo '```'
+	echo
 	echo "## Raw Files"
 	echo
 	echo "- $inproc_raw"
 	echo "- $process_raw"
 	echo "- $recovery_raw"
+	echo "- $routing_raw"
 } > "$summary_md"
 
 echo "summary -> $summary_md"

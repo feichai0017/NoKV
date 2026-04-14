@@ -13,8 +13,12 @@ import (
 	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
 	pdtestcluster "github.com/feichai0017/NoKV/coordinator/testcluster"
 	"github.com/feichai0017/NoKV/coordinator/tso"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootremote "github.com/feichai0017/NoKV/meta/root/remote"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
@@ -98,6 +102,62 @@ func TestSeparatedModeCoordinatorRecoveryLatency(t *testing.T) {
 
 	t.Logf("separated coordinator recovery latency: n=%d avg=%s p50=%s p95=%s p99=%s",
 		len(durations), avg, p50, p95, p99)
+}
+
+func TestSeparatedModeRoutingServesAcrossMultipleCoordinatorsWhileAllocatorStaysSingleton(t *testing.T) {
+	rootCluster := pdtestcluster.OpenReplicated(t)
+	targets := exposeRemoteRoots(t, rootCluster)
+	rootCluster.WaitLeader()
+
+	owner, ownerStore := openSeparatedCoordinator(t, targets, "c1")
+	t.Cleanup(func() { require.NoError(t, ownerStore.Close()) })
+	readOnlyA, readOnlyAStore := openSeparatedCoordinator(t, targets, "c2")
+	t.Cleanup(func() { require.NoError(t, readOnlyAStore.Close()) })
+	readOnlyB, readOnlyBStore := openSeparatedCoordinator(t, targets, "c3")
+	t.Cleanup(func() { require.NoError(t, readOnlyBStore.Close()) })
+
+	_, err := owner.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.NoError(t, err)
+
+	_, err = owner.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
+		Event: metawire.RootEventToProto(rootevent.RegionBootstrapped(separatedModeDescriptor(731, []byte("a"), []byte("z")))),
+	})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		resp, getErr := owner.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("m")})
+		return getErr == nil && !resp.GetNotFound() && resp.GetRegionDescriptor().GetRegionId() == 731
+	}, 8*time.Second, 50*time.Millisecond)
+
+	for _, svc := range []*coordserver.Service{readOnlyA, readOnlyB} {
+		require.Eventually(t, func() bool {
+			if err := svc.RefreshFromStorage(); err != nil {
+				return false
+			}
+			resp, getErr := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("m")})
+			return getErr == nil && !resp.GetNotFound() && resp.GetRegionDescriptor().GetRegionId() == 731
+		}, 8*time.Second, 50*time.Millisecond)
+	}
+
+	_, err = readOnlyA.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "coordinator lease not held")
+
+	_, err = readOnlyB.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "coordinator lease not held")
+}
+
+func separatedModeDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
+	desc := descriptor.Descriptor{
+		RegionID: id,
+		StartKey: append([]byte(nil), start...),
+		EndKey:   append([]byte(nil), end...),
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		State:    metaregion.ReplicaStateRunning,
+	}
+	desc.EnsureHash()
+	return desc
 }
 
 func TestSeparatedModeCoordinatorContestedFailoverPreservesAllocatorFence(t *testing.T) {
