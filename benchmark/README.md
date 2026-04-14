@@ -125,3 +125,26 @@ Current scope limits:
 - `run_netem_docker.sh` applies `tc netem` inside a Linux Docker
   container on loopback; it is still a single-host impairment setup, not a
   multi-host cluster benchmark
+
+## Namespace Listing Research Skeleton
+
+The `benchmark/namespace` package is a separate research scaffold for the
+hierarchical metadata direction. It is intentionally narrower than the YCSB and
+control-plane suites:
+
+- it does **not** exercise the production NoKV metadata path yet
+- it fixes a synthetic namespace workload generator and baseline taxonomy
+- it compares:
+  - flat full-path scan
+  - naive secondary index
+  - paged namespace-aware listing index
+
+The current goal is to stabilize the workload story before any intrusive engine
+integration work lands.
+
+Run:
+
+```bash
+cd benchmark
+go test ./namespace -bench . -benchmem
+```
