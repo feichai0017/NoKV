@@ -4,6 +4,15 @@ NoKV delivers a hybrid storage engine that can operate as a standalone embedded 
 
 > Read this page if you want the shortest route from “what is NoKV” to “which package owns which part of the system”.
 
+This architecture is also meant to support NoKV as a **maintainable and extensible distributed storage research platform**. The point is not only to describe how the current system runs, but to make the package boundaries, lifecycle ownership, and experiment surfaces explicit enough that new storage-engine, metadata, control-plane, and distributed-runtime ideas can be added without rebuilding the repository around each new topic.
+
+At a high level, the codebase is organized around four long-lived layers:
+
+- **Root facade and runtime surface** – the top-level `DB` APIs and thin system entrypoints.
+- **Single-node engine substrate** – `engine/*` owns WAL, LSM, manifest, value log, file, and VFS mechanics.
+- **Distributed execution and control plane** – `raftstore/*`, `meta/*`, and `coordinator/*` host replicated execution, rooted metadata, and cluster control logic.
+- **Experiment and evidence layer** – `benchmark/*`, scripts, and docs keep evaluation and design claims attached to the implementation.
+
 ## Reader Map
 
 - If you care about the embedded engine, focus on sections 2 and 5.

@@ -7,7 +7,7 @@
         <img src="assets/logo.svg" alt="NoKV logo">
       </div>
       <div>
-        <p class="hero-kicker">Distributed KV, Built As One System</p>
+        <p class="hero-kicker">Distributed Storage Research Platform, Built As One System</p>
         <h1>NoKV</h1>
       </div>
     </div>
@@ -37,6 +37,13 @@
     not a pile of loosely connected features.
   </p>
 
+  <p class="hero-lead">
+    The project is also intended to be a maintainable and extensible research platform:
+    one repository where engine internals, distributed runtime, control-plane logic,
+    experiments, and system papers can evolve together without collapsing into ad-hoc
+    prototypes.
+  </p>
+
   <div class="hero-summary">
     <div class="hero-stat">
       <strong>Standalone to Cluster</strong>
@@ -49,6 +56,10 @@
     <div class="hero-stat">
       <strong>Tested as a System</strong>
       <span>Migration flow, restart recovery, Coordinator degradation, transport chaos, and publish-boundary failpoints.</span>
+    </div>
+    <div class="hero-stat">
+      <strong>Built To Evolve</strong>
+      <span>Clear package layering, experiment tooling, and architecture docs make the repo usable as a long-lived systems research base.</span>
     </div>
   </div>
 
@@ -108,6 +119,7 @@
       <li>One storage layer instead of separate standalone and distributed engines.</li>
       <li>Formal lifecycle and migration protocol instead of dump/import glue.</li>
       <li>System-level verification under restart, degraded Coordinator, chaos, and failpoints.</li>
+      <li>A package structure designed to keep the codebase maintainable as a research platform, not just a one-off prototype.</li>
     </ul>
   </div>
 </div>
@@ -125,6 +137,7 @@
       <li>One storage layer across standalone and distributed modes.</li>
       <li>Explicit lifecycle and migration semantics instead of hidden bootstrap magic.</li>
       <li>Verification aimed at restart, degraded control plane, and publish-boundary correctness.</li>
+      <li>Code, benchmarks, and documentation are organized so new research directions can be added without re-deriving the whole system.</li>
     </ul>
   </div>
 
@@ -153,8 +166,32 @@
       <p>The project is tested beyond unit semantics: migration flow, restart safety, degraded Coordinator behavior, transport chaos, and context propagation are all exercised.</p>
       <small>The goal is to verify lifecycle and recovery behavior, not just happy-path RPCs.</small>
     </div>
+    <div class="feature-card">
+      <span class="feature-eyebrow">Research Substrate</span>
+      <h3>A codebase meant to keep growing</h3>
+      <p>The repository separates engine substrate, distributed runtime, control-plane components, benchmark tooling, and design documentation so new systems ideas can be implemented without turning the tree into a disposable artifact.</p>
+      <small>This is a platform for iterative storage research, not only a fixed implementation snapshot.</small>
+    </div>
   </div>
 </div>
+
+<span class="section-kicker">Platform Goal</span>
+
+## NoKV As A Research Platform
+
+NoKV is intended to serve as a long-lived platform for storage and distributed-systems research.
+
+- `engine/*` holds the single-node storage substrate: WAL, LSM, manifest, value log, file/VFS primitives.
+- `raftstore/*`, `meta/*`, and `coordinator/*` hold distributed execution and control-plane components.
+- `benchmark/*` holds experiment code and result-generation paths so evaluations stay close to implementation changes.
+- The docs tree is part of the platform contract: architecture, migration, recovery, testing, and benchmarking expectations are documented alongside code.
+
+The point is not only to run NoKV as a system today, but to make it practical to:
+
+- test new storage-engine mechanisms,
+- evolve metadata and control-plane designs,
+- compare distributed execution protocols,
+- and publish repeatable systems experiments from the same repository.
 
 <div class="benchmark-note">
   Benchmark methodology and result snapshots live in <a href="../benchmark/README.md"><code>../benchmark/README.md</code></a>. The docs site keeps architecture and operating guidance separate from benchmark storytelling.
