@@ -15,11 +15,11 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/engine/manifest"
+	vlogpkg "github.com/feichai0017/NoKV/engine/vlog"
 	"github.com/feichai0017/NoKV/metrics"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
-	vlogpkg "github.com/feichai0017/NoKV/vlog"
 )
 
 var exit = os.Exit

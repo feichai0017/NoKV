@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/index"
+	"github.com/feichai0017/NoKV/engine/index"
 	ns "github.com/feichai0017/NoKV/namespace"
 )
 

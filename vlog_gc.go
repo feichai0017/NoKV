@@ -1,31 +1,18 @@
 package NoKV
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sort"
-	"strconv"
-	"strings"
-	"sync"
 	"time"
 
-	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/manifest"
+	vlogpkg "github.com/feichai0017/NoKV/engine/vlog"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
-	vlogpkg "github.com/feichai0017/NoKV/vlog"
 	"github.com/pkg/errors"
 )
-
-type lfDiscardStats struct {
-	sync.RWMutex
-	m                 map[manifest.ValueLogID]int64
-	flushChan         chan map[manifest.ValueLogID]int64
-	closer            *utils.Closer
-	updatesSinceFlush int
-	flushThreshold    int
-}
 
 func (vlog *valueLog) flushDiscardStats() {
 	defer vlog.lfDiscardStats.closer.Done()
@@ -39,9 +26,6 @@ func (vlog *valueLog) flushDiscardStats() {
 		}
 
 		threshold := vlog.lfDiscardStats.flushThreshold
-		if threshold <= 0 {
-			threshold = defaultDiscardStatsFlushThreshold
-		}
 
 		if !force && vlog.lfDiscardStats.updatesSinceFlush < threshold {
 			return nil, nil
@@ -64,7 +48,7 @@ func (vlog *valueLog) flushDiscardStats() {
 			return err
 		}
 
-		entry := kv.NewInternalEntry(kv.CFDefault, lfDiscardStatsKey, 1, encodedDS, 0, 0)
+		entry := kv.NewInternalEntry(kv.CFDefault, valueLogDiscardStatsKey, 1, encodedDS, 0, 0)
 		entries := []*kv.Entry{entry}
 		req, err := vlog.db.sendToWriteCh(entries, false)
 		if err != nil {
@@ -476,16 +460,6 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 	return nil
 }
 
-func shouldSkipValueLogRewrite(e *kv.Entry) bool {
-	if e == nil {
-		return true
-	}
-	if e.IsDeletedOrExpired() {
-		return true
-	}
-	return !kv.IsValuePtr(e)
-}
-
 func (vlog *valueLog) iteratorCount() int {
 	return int(vlog.numActiveIterators.Load())
 }
@@ -637,7 +611,7 @@ func (vlog *valueLog) pickLogs(heads map[uint32]kv.ValuePtr, limit int) (files [
 
 func (vlog *valueLog) populateDiscardStats() error {
 	var statsMap map[manifest.ValueLogID]int64
-	vs, err := vlog.db.GetInternalEntry(kv.CFDefault, lfDiscardStatsKey, nonTxnMaxVersion)
+	vs, err := vlog.db.GetInternalEntry(kv.CFDefault, valueLogDiscardStatsKey, nonTxnMaxVersion)
 	if err != nil {
 		return err
 	}
@@ -684,40 +658,4 @@ func (vlog *valueLog) gcSampleCountRatio() float64 {
 		return 0.01
 	}
 	return r
-}
-
-func encodeDiscardStats(stats map[manifest.ValueLogID]int64) ([]byte, error) {
-	wire := make(map[string]int64, len(stats))
-	for id, count := range stats {
-		key := fmt.Sprintf("%d:%d", id.Bucket, id.FileID)
-		wire[key] = count
-	}
-	return json.Marshal(wire)
-}
-
-func decodeDiscardStats(data []byte) (map[manifest.ValueLogID]int64, error) {
-	if len(data) == 0 {
-		return nil, nil
-	}
-	wire := make(map[string]int64)
-	if err := json.Unmarshal(data, &wire); err != nil {
-		return nil, err
-	}
-	out := make(map[manifest.ValueLogID]int64, len(wire))
-	for key, count := range wire {
-		parts := strings.Split(key, ":")
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid discard stat key: %s", key)
-		}
-		bucket, err := strconv.ParseUint(parts[0], 10, 32)
-		if err != nil {
-			return nil, fmt.Errorf("invalid discard stat bucket: %w", err)
-		}
-		fid, err := strconv.ParseUint(parts[1], 10, 32)
-		if err != nil {
-			return nil, fmt.Errorf("invalid discard stat fid: %w", err)
-		}
-		out[manifest.ValueLogID{Bucket: uint32(bucket), FileID: uint32(fid)}] = count
-	}
-	return out, nil
 }

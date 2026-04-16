@@ -9,10 +9,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/wal"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	"github.com/feichai0017/NoKV/wal"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 

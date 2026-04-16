@@ -6,8 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/feichai0017/NoKV/index"
-	entrykv "github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/engine/index"
+	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/utils"
 )
 

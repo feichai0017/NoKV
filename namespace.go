@@ -44,7 +44,7 @@ func (db *DB) Namespace(opt NamespaceOptions) *NamespaceHandle {
 		store: ns.NewStore(ns.NewNoKVStore(db), opt.Shards),
 		db:    db,
 	}
-	db.registerNamespaceHandle(h)
+	db.runtimeModules.Register(h)
 	return h
 }
 
@@ -157,7 +157,7 @@ func (h *NamespaceHandle) Close() {
 	}
 	h.closeOnce.Do(func() {
 		if h.db != nil {
-			h.db.unregisterNamespaceHandle(h)
+			h.db.runtimeModules.Unregister(h)
 		}
 	})
 }

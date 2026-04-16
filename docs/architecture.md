@@ -106,9 +106,8 @@ fmt.Println(string(entry.Value))
 Then read:
 
 - `db.go`
-- `db_write.go`
-- `lsm/`
-- `wal/`
+- `engine/lsm/`
+- `engine/wal/`
 - `vlog.go`
 
 ### 2.1 WAL & MemTable
@@ -150,7 +149,7 @@ flowchart TD
 - Watermarks (`utils.WaterMark`) are used in durability/visibility coordination; they have no background goroutine and advance via mutex + atomics.
 
 ### 2.6 Write Pipeline & Backpressure
-- Writes enqueue into a commit queue (`db_write.go`) where requests are coalesced into batches before a commit worker drains them.
+- Writes enqueue into a commit queue inside `db.go` where requests are coalesced into batches before a commit worker drains them.
 - The commit worker always writes the value log first (when needed), then applies WAL/LSM updates; `SyncWrites` adds a WAL fsync step.
 - Batch sizing adapts to backlog through `WriteBatchMaxCount`, `WriteBatchMaxSize`, and `WriteBatchWait`.
 - Backpressure is enforced in two places: LSM throttling toggles `db.blockWrites` when L0 backlog grows, and HotRing can reject hot keys via `WriteHotKeyLimit`.

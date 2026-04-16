@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
-	entrykv "github.com/feichai0017/NoKV/kv"
+	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"

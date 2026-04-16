@@ -5,13 +5,13 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/feichai0017/NoKV/engine/vfs"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	rootfile "github.com/feichai0017/NoKV/meta/root/storage/file"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	"github.com/feichai0017/NoKV/vfs"
 )
 
 const maxRetainedRecords = 64

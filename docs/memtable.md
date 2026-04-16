@@ -1,6 +1,6 @@
 # Memtable Design & Lifecycle
 
-NoKV's write path mirrors RocksDB: every write lands in the **WAL** and an in-memory **memtable** backed by a selectable in-memory index (skiplist or ART). The implementation lives in [`lsm/memtable.go`](../lsm/memtable.go) and ties directly into the concrete flush queue in [`lsm/flush_runtime.go`](../lsm/flush_runtime.go).
+NoKV's write path mirrors RocksDB: every write lands in the **WAL** and an in-memory **memtable** backed by a selectable in-memory index (skiplist or ART). The implementation lives in [`engine/lsm/memtable.go`](../engine/lsm/memtable.go) and ties directly into the concrete flush queue in [`engine/lsm/flush_runtime.go`](../engine/lsm/flush_runtime.go).
 
 ---
 
@@ -76,7 +76,7 @@ Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas
 | --- | --- |
 | Distributed 2PC | `kv.Apply` + `percolator` write committed MVCC versions through the same WAL/memtable pipeline in raft mode. |
 | Manifest | Flush completion logs `EditLogPointer(segmentID)` so restart can discard WAL files already persisted into SSTs. |
-| Stats | `Stats.Snapshot` pulls `FlushPending/Active/Queue` counters via [`lsm.FlushMetrics`](../lsm/lsm.go#L120-L128), exposing how many immutables are waiting. |
+| Stats | `Stats.Snapshot` pulls `FlushPending/Active/Queue` counters via [`lsm.FlushMetrics`](../engine/lsm/lsm.go#L120-L128), exposing how many immutables are waiting. |
 | Value Log | `lsm.flush` emits discard stats keyed by `segmentID`, letting the value log GC know when entries become obsolete. |
 
 ---

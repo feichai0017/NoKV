@@ -25,7 +25,7 @@ Planning now happens via `Plan`: LSM snapshots table metadata into `TableMeta`, 
 
 ## 2. Ingest Buffer
 
-`moveToIngest` (see `lsm/executor.go`) performs a metadata-only migration:
+`moveToIngest` (see `engine/lsm/executor.go`) performs a metadata-only migration:
 
 1. Records a `manifest.EditDeleteFile` for the source level.
 2. Logs a new `manifest.EditAddFile` targeting the destination level.
@@ -33,7 +33,7 @@ Planning now happens via `Plan`: LSM snapshots table metadata into `TableMeta`, 
 
 This keeps write amplification low when many small L0 tables arrive at once. Reads still see the newest data because `levelHandler.searchLNSST` checks the ingest buffer before consulting the canonical level tables.
 
-Compaction tests (`lsm/compaction_test.go`) assert that after calling `moveToIngest` the table disappears from the source level and shows up in the ingest buffer.
+Compaction tests (`engine/lsm/compaction_test.go`) assert that after calling `moveToIngest` the table disappears from the source level and shows up in the ingest buffer.
 
 ---
 
@@ -51,7 +51,7 @@ This mechanism is intentionally simple—just a mutex‐protected slice—yet ef
 
 ## 4. Cache Telemetry
 
-NoKV’s cache strategy has two explicit user-space caches plus direct bloom probing from decoded table indexes (`lsm/cache.go`):
+NoKV’s cache strategy has two explicit user-space caches plus direct bloom probing from decoded table indexes (`engine/lsm/cache.go`):
 
 | Component | Purpose | Metrics hook |
 | --- | --- | --- |
@@ -79,12 +79,12 @@ This tight coupling keeps the value log from growing indefinitely after heavy ov
 
 Relevant tests to keep compaction healthy:
 
-- `lsm/compaction_test.go`
+- `engine/lsm/compaction_test.go`
   - `TestCompactionMoveToIngest` – ensures metadata migration works and the ingest buffer grows.
   - `TestCompactStatusGuards` – checks overlap detection.
-- `lsm/cache_test.go`
+- `engine/lsm/cache_test.go`
   - `TestCacheHotColdMetrics` – validates cache hit accounting.
-- `lsm/lsm_test.go`
+- `engine/lsm/lsm_test.go`
   - `TestCompact` / `TestHitStorage` – end‑to‑end verification that data remains queryable across memtable flushes and compactions.
 
 When adding new compaction heuristics or cache behaviour, extend these tests (or introduce new ones) so the behaviour stays observable.

@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/index"
-	entrykv "github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/engine/index"
+	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"

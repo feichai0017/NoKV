@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
-	entrykv "github.com/feichai0017/NoKV/kv"
+	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"

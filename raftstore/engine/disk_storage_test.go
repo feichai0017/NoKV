@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/feichai0017/NoKV/engine/vfs"
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/vfs"
 	"github.com/stretchr/testify/require"
 )
 

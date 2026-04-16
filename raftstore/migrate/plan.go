@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/engine/manifest"
+	vlogpkg "github.com/feichai0017/NoKV/engine/vlog"
+	"github.com/feichai0017/NoKV/engine/wal"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/utils"
-	vlogpkg "github.com/feichai0017/NoKV/vlog"
-	"github.com/feichai0017/NoKV/wal"
 )
 
 // PlanResult is the read-only migration preflight result for one workdir.
