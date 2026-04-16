@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-9b1bc94a.js";
+            window.path_to_searchindex_js = "searchindex-f783c9ff.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c05f2810.js"></script>
@@ -183,6 +183,14 @@
 <blockquote>
 <p>Read this page if you want the shortest route from “what is NoKV” to “which package owns which part of the system”.</p>
 </blockquote>
+<p>This architecture is also meant to support NoKV as a <strong>maintainable and extensible distributed storage research platform</strong>. The point is not only to describe how the current system runs, but to make the package boundaries, lifecycle ownership, and experiment surfaces explicit enough that new storage-engine, metadata, control-plane, and distributed-runtime ideas can be added without rebuilding the repository around each new topic.</p>
+<p>At a high level, the codebase is organized around four long-lived layers:</p>
+<ul>
+<li><strong>Root facade and runtime surface</strong> – the top-level <code>DB</code> APIs and thin system entrypoints.</li>
+<li><strong>Single-node engine substrate</strong> – <code>engine/*</code> owns WAL, LSM, manifest, value log, file, and VFS mechanics.</li>
+<li><strong>Distributed execution and control plane</strong> – <code>raftstore/*</code>, <code>meta/*</code>, and <code>coordinator/*</code> host replicated execution, rooted metadata, and cluster control logic.</li>
+<li><strong>Experiment and evidence layer</strong> – <code>benchmark/*</code>, scripts, and docs keep evaluation and design claims attached to the implementation.</li>
+</ul>
 <h2 id="reader-map"><a class="header" href="#reader-map">Reader Map</a></h2>
 <ul>
 <li>If you care about the embedded engine, focus on sections 2 and 5.</li>
