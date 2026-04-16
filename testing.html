@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-7154c2cb.js";
+            window.path_to_searchindex_js = "searchindex-9b1bc94a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c05f2810.js"></script>
@@ -279,7 +279,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <li><strong>RECOVERY_METRIC logs</strong> – produced when <code>RECOVERY_TRACE_METRICS=1</code>; helpful when triaging targeted recovery suites and CI failures.</li>
 <li><strong>TRANSPORT_METRIC logs</strong> – emitted by transport chaos tests when <code>CHAOS_TRACE_METRICS=1</code>, capturing gRPC watchdog counters during network partitions and retries.</li>
 <li><strong>Stats snapshots</strong> – <code>stats_test.go</code> verifies JSON structure so CLI output remains backwards compatible.</li>
-<li><strong>Benchmark artefacts</strong> – stored under <code>benchmark/benchmark_results/*.txt</code> for historical comparison. Aligns with README instructions.</li>
+<li><strong>Benchmark artefacts</strong> – stored under <code>benchmark/results/</code> with per-suite subdirectories such as <code>benchmark/results/ycsb/</code> and <code>benchmark/results/controlplane/</code>.</li>
 </ul>
 <hr>
 <h2 id="5-extending-coverage"><a class="header" href="#5-extending-coverage">5. Extending Coverage</a></h2>
