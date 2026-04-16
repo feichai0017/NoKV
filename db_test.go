@@ -1223,7 +1223,7 @@ func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
-	walMgr := db.WAL()
+	walMgr := db.wal
 
 	appendRaft := func(data string) {
 		_, err := walMgr.AppendRecords(wal.Record{Type: wal.RecordTypeRaftEntry, Payload: []byte(data)})
@@ -1541,7 +1541,7 @@ func drForEachMemTableEngine(t *testing.T, fn func(t *testing.T, engine MemTable
 
 func drSimulateCrash(t *testing.T, db *DB) {
 	t.Helper()
-	_ = db.statsCollector().close()
+	_ = db.Info().close()
 	for _, mgr := range db.vlog.managers {
 		if mgr != nil {
 			_ = mgr.Close()

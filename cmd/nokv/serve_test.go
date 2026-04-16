@@ -111,14 +111,15 @@ func TestStartStorePeersManifestMissing(t *testing.T) {
 }
 
 func TestStartStorePeersEmpty(t *testing.T) {
-	db := newTestDB(t)
+	dir := t.TempDir()
+	db := newTestDBWithDir(t, dir)
 	server := newTestServer(t, db, 1)
 	defer func() {
 		_ = server.Close()
 		_ = db.Close()
 	}()
 
-	localMeta := openLocalMetaStore(t, db.WorkDir())
+	localMeta := openLocalMetaStore(t, dir)
 	started, total, err := startStorePeers(server, testStorage(db), localMeta, 1, 10, 1, 1, 1)
 	require.NoError(t, err)
 	require.Equal(t, 0, total)
@@ -126,8 +127,9 @@ func TestStartStorePeersEmpty(t *testing.T) {
 }
 
 func TestStartStorePeersSkipsMissing(t *testing.T) {
-	db := newTestDB(t)
-	localMeta := openLocalMetaStore(t, db.WorkDir())
+	dir := t.TempDir()
+	db := newTestDBWithDir(t, dir)
+	localMeta := openLocalMetaStore(t, dir)
 	server := newTestServerWithMeta(t, db, 1, localMeta)
 	defer func() {
 		_ = server.Close()
@@ -149,8 +151,9 @@ func TestStartStorePeersSkipsMissing(t *testing.T) {
 }
 
 func TestStartStorePeersStartsPeer(t *testing.T) {
-	db := newTestDB(t)
-	localMeta := openLocalMetaStore(t, db.WorkDir())
+	dir := t.TempDir()
+	db := newTestDBWithDir(t, dir)
+	localMeta := openLocalMetaStore(t, dir)
 	server := newTestServerWithMeta(t, db, 1, localMeta)
 	defer func() {
 		_ = server.Close()

@@ -302,12 +302,12 @@ func TestDBNamespaceFacadeCreateWritesTruthAndDeltaInOneWALEntryBatch(t *testing
 	parent := []byte("/bucket/hot")
 	path := joinNamespacePath(parent, "file1")
 	require.NoError(t, h.Create(path, ns.EntryKindFile, []byte("m1")))
-	require.NoError(t, db.WAL().Sync())
+	require.NoError(t, db.SyncWAL())
 
 	truthKey := []byte("M|/bucket/hot/file1")
 	deltaPrefix := []byte("LD|/bucket/hot|")
 	var matched bool
-	err := db.WAL().Replay(func(info wal.EntryInfo, payload []byte) error {
+	err := db.ReplayWAL(func(info wal.EntryInfo, payload []byte) error {
 		if info.Type != wal.RecordTypeEntryBatch {
 			return nil
 		}
