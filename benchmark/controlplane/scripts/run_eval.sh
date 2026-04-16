@@ -14,7 +14,7 @@ RECOVERY_COUNT=${CONTROL_PLANE_RECOVERY_COUNT:-5}
 SUFFIX=${CONTROL_PLANE_RESULT_SUFFIX:-}
 
 stamp=$(date +"%Y%m%d_%H%M%S")
-result_dir="$BENCH_DIR/benchmark_results/control_plane/${stamp}${SUFFIX}"
+result_dir="$BENCH_DIR/results/controlplane/${stamp}${SUFFIX}"
 mkdir -p "$result_dir"
 
 echo "control-plane benchmark results -> $result_dir"

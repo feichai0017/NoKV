@@ -102,12 +102,12 @@ func latencyFromNS(ns float64) time.Duration {
 
 // WriteResults writes benchmark results to a timestamped text report for convenience.
 func WriteResults(results []BenchmarkResult) error {
-	resultsDir := "benchmark_results"
+	resultsDir := filepath.Join("results", "ycsb")
 	if err := os.MkdirAll(resultsDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create results directory: %w", err)
 	}
 
-	filename := fmt.Sprintf("benchmark_results_%s.txt", time.Now().Format("20060102_150405"))
+	filename := fmt.Sprintf("ycsb_results_%s.txt", time.Now().Format("20060102_150405"))
 	filepath := filepath.Join(resultsDir, filename)
 
 	file, err := os.Create(filepath)

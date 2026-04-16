@@ -43,7 +43,7 @@ ycsb_sync="${YCSB_SYNC_WRITES:-false}"
 ycsb_badger_comp="${YCSB_BADGER_COMPRESSION:-none}"
 ycsb_pebble_comp="${YCSB_PEBBLE_COMPRESSION:-none}"
 ycsb_rocks_comp="${YCSB_ROCKS_COMPRESSION:-none}"
-benchdir="${YCSB_BENCHDIR:-benchmark_data}"
+benchdir="${YCSB_BENCHDIR:-data}"
 ycsb_warm_ops="${YCSB_WARM_OPS:-0}"
 ycsb_timeout="${YCSB_GO_TEST_TIMEOUT:-}"
 

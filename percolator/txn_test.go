@@ -711,7 +711,7 @@ func TestPrewriteRecoveryDropsCorruptedBatch(t *testing.T) {
 		LockTtl:      1000,
 	}
 	require.Empty(t, Prewrite(db, latches, pre))
-	require.NoError(t, db.WAL().Sync())
+	require.NoError(t, db.SyncWAL())
 	require.NoError(t, db.Close())
 
 	walPath := latestWALPath(t, workDir)
@@ -750,14 +750,14 @@ func TestCommitRecoveryDropsCorruptedCommitBatch(t *testing.T) {
 		LockTtl:      1000,
 	}
 	require.Empty(t, Prewrite(db, latches, pre))
-	require.NoError(t, db.WAL().Sync())
+	require.NoError(t, db.SyncWAL())
 
 	require.Nil(t, Commit(db, latches, &kvrpcpb.CommitRequest{
 		Keys:          [][]byte{key},
 		StartVersion:  startTs,
 		CommitVersion: commitTs,
 	}))
-	require.NoError(t, db.WAL().Sync())
+	require.NoError(t, db.SyncWAL())
 	require.NoError(t, db.Close())
 
 	walPath := latestWALPath(t, workDir)
