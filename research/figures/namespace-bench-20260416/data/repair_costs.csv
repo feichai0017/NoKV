@@ -1,0 +1,7 @@
+category,series,value
+cold-bootstrap,read-plane,1602.500
+hot-page-fold,read-plane,318.083
+hot-page-split,read-plane,310.167
+verify,read-plane,9448.208
+materialize,read-plane,503505.791
+rebuild,read-plane,522604.667
