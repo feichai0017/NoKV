@@ -62,17 +62,6 @@ That means the repository is organized so new storage and distributed-systems id
 - **Extensibility matters as much as features**  
   The goal is to make it practical to explore new metadata models, control-plane designs, benchmarking setups, and eventually different replication designs on top of a stable codebase.
 
-## ✨ Why NoKV
-
-- **Standalone to Cluster**  
-  Start with an embedded engine, keep the same workdir, then migrate into a distributed seed and expand into a replicated region.
-
-- **Correctness First**  
-  Mode gates, logical region snapshots, local recovery metadata, and a clean split between execution plane and control plane keep lifecycle semantics explicit.
-
-- **Tested as a System**  
-  The project is validated with migration flow tests, restart recovery, Coordinator degradation, transport chaos, context propagation, and publish-boundary failpoints.
-
 ## 🚦 Quick Start
 
 Start an end-to-end playground with either the local script or Docker Compose. Both spin up a three-node Raft cluster with a Coordinator service and expose the Redis-compatible gateway.
