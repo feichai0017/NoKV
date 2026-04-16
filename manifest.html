@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-dc6edf3c.js";
+            window.path_to_searchindex_js = "searchindex-7154c2cb.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c05f2810.js"></script>
@@ -185,7 +185,7 @@
 <li>WAL checkpoint (<code>EditLogPointer</code>)</li>
 <li>value-log metadata (<code>EditValueLogHead</code>, <code>EditDeleteValueLog</code>, <code>EditUpdateValueLog</code>)</li>
 </ul>
-<p>Implementation: <a href="../manifest/manager.go"><code>manifest/manager.go</code></a>, <a href="../manifest/codec.go"><code>manifest/codec.go</code></a>, <a href="../manifest/types.go"><code>manifest/types.go</code></a>.</p>
+<p>Implementation: <a href="../engine/manifest/manager.go"><code>engine/manifest/manager.go</code></a>, <a href="../engine/manifest/codec.go"><code>engine/manifest/codec.go</code></a>, <a href="../engine/manifest/types.go"><code>engine/manifest/types.go</code></a>.</p>
 <hr>
 <h2 id="1-files-on-disk"><a class="header" href="#1-files-on-disk">1. Files on Disk</a></h2>
 <pre><code class="language-text">WorkDir/
@@ -248,8 +248,8 @@
 <tr><th>Module</th><th>Manifest usage</th></tr>
 </thead>
 <tbody>
-<tr><td><code>lsm/levels.go::flush</code></td><td>Logs <code>EditAddFile</code> + <code>EditLogPointer</code> after SST install; compaction logs add/delete edits.</td></tr>
-<tr><td><code>lsm/levels.go::build</code></td><td>During startup, missing/corrupt SST entries are marked stale and cleaned via <code>EditDeleteFile</code>.</td></tr>
+<tr><td><code>engine/lsm/levels.go::flush</code></td><td>Logs <code>EditAddFile</code> + <code>EditLogPointer</code> after SST install; compaction logs add/delete edits.</td></tr>
+<tr><td><code>engine/lsm/levels.go::build</code></td><td>During startup, missing/corrupt SST entries are marked stale and cleaned via <code>EditDeleteFile</code>.</td></tr>
 <tr><td><code>wal</code></td><td>Replays from manifest checkpoint (<code>LogSegment</code>, <code>LogOffset</code>).</td></tr>
 <tr><td><code>vlog</code></td><td>Persists head/update/delete metadata and uses manifest state for stale/orphan cleanup on startup.</td></tr>
 <tr><td><code>raftstore</code></td><td>Does not own manifest state. Store-local region catalogs and raft WAL replay checkpoints live in <code>raftstore/localmeta</code>; runtime routing state lives in Coordinator storage.</td></tr>

@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-dc6edf3c.js";
+            window.path_to_searchindex_js = "searchindex-7154c2cb.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c05f2810.js"></script>
@@ -272,9 +272,8 @@ fmt.Println(string(entry.Value))
 <p>Then read:</p>
 <ul>
 <li><code>db.go</code></li>
-<li><code>db_write.go</code></li>
-<li><code>lsm/</code></li>
-<li><code>wal/</code></li>
+<li><code>engine/lsm/</code></li>
+<li><code>engine/wal/</code></li>
 <li><code>vlog.go</code></li>
 </ul>
 <h3 id="21-wal--memtable"><a class="header" href="#21-wal--memtable">2.1 WAL &amp; MemTable</a></h3>
@@ -321,7 +320,7 @@ fmt.Println(string(entry.Value))
 </ul>
 <h3 id="26-write-pipeline--backpressure"><a class="header" href="#26-write-pipeline--backpressure">2.6 Write Pipeline &amp; Backpressure</a></h3>
 <ul>
-<li>Writes enqueue into a commit queue (<code>db_write.go</code>) where requests are coalesced into batches before a commit worker drains them.</li>
+<li>Writes enqueue into a commit queue inside <code>db.go</code> where requests are coalesced into batches before a commit worker drains them.</li>
 <li>The commit worker always writes the value log first (when needed), then applies WAL/LSM updates; <code>SyncWrites</code> adds a WAL fsync step.</li>
 <li>Batch sizing adapts to backlog through <code>WriteBatchMaxCount</code>, <code>WriteBatchMaxSize</code>, and <code>WriteBatchWait</code>.</li>
 <li>Backpressure is enforced in two places: LSM throttling toggles <code>db.blockWrites</code> when L0 backlog grows, and HotRing can reject hot keys via <code>WriteHotKeyLimit</code>.</li>

@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-dc6edf3c.js";
+            window.path_to_searchindex_js = "searchindex-7154c2cb.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c05f2810.js"></script>
@@ -217,13 +217,13 @@ key/value validation errors, throttling, and lifecycle guards.</li>
 </ul>
 <h3 id="domain-specific-sentinels"><a class="header" href="#domain-specific-sentinels">Domain-specific sentinels</a></h3>
 <ul>
-<li><code>kv/entry_codec.go</code>: <code>ErrBadChecksum</code>, <code>ErrPartialEntry</code></li>
-<li><code>vfs/vfs.go</code>: <code>ErrRenameNoReplaceUnsupported</code></li>
-<li><code>lsm/compaction.go</code>: compaction planner/runtime domain errors</li>
+<li><code>engine/kv/entry_codec.go</code>: <code>ErrBadChecksum</code>, <code>ErrPartialEntry</code></li>
+<li><code>engine/vfs/vfs.go</code>: <code>ErrRenameNoReplaceUnsupported</code></li>
+<li><code>engine/lsm/compaction.go</code>: compaction planner/runtime domain errors</li>
 <li><code>raftstore/peer/errors.go</code>: peer lifecycle/state errors</li>
 <li><code>pb/errorpb.proto</code>: region/store routing protobuf errors (<code>RegionError</code>,
 <code>StoreNotMatch</code>, <code>RegionNotFound</code>, <code>KeyNotInRegion</code>, …)</li>
-<li><code>wal/errors.go</code>: WAL encode/decode and segment errors</li>
+<li><code>engine/wal/errors.go</code>: WAL encode/decode and segment errors</li>
 <li><code>coordinator/catalog/errors.go</code>: Coordinator metadata and range validation errors</li>
 </ul>
 <hr>

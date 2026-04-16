@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-dc6edf3c.js";
+            window.path_to_searchindex_js = "searchindex-7154c2cb.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c05f2810.js"></script>
@@ -191,7 +191,7 @@ WAL/value-log codecs, memtable indexes, SST blocks, and iterators.</p>
 </ol>
 <hr>
 <h2 id="1-structure-overview"><a class="header" href="#1-structure-overview">1. Structure Overview</a></h2>
-<p>Source: <a href="../kv/entry.go"><code>kv/entry.go</code></a>, <a href="../kv/key.go"><code>kv/key.go</code></a>, <a href="../kv/value.go"><code>kv/value.go</code></a></p>
+<p>Source: <a href="../engine/kv/entry.go"><code>engine/kv/entry.go</code></a>, <a href="../engine/kv/key.go"><code>engine/kv/key.go</code></a>, <a href="../engine/kv/value.go"><code>engine/kv/value.go</code></a></p>
 <pre><code class="language-go">type Entry struct {
     Key       []byte
     Value     []byte
@@ -219,7 +219,7 @@ WAL/value-log codecs, memtable indexes, SST blocks, and iterators.</p>
 <hr>
 <h2 id="2-encoding-layers"><a class="header" href="#2-encoding-layers">2. Encoding Layers</a></h2>
 <h3 id="21-internal-key-encoding"><a class="header" href="#21-internal-key-encoding">2.1 Internal Key Encoding</a></h3>
-<p>Source: <a href="../kv/key.go"><code>kv/key.go</code></a></p>
+<p>Source: <a href="../engine/kv/key.go"><code>engine/kv/key.go</code></a></p>
 <p><code>InternalKey(cf, userKey, ts)</code> layout:</p>
 <ul>
 <li>4-byte CF header: <code>0xFF 'C' 'F' &lt;cf-byte&gt;</code></li>
@@ -233,7 +233,7 @@ WAL/value-log codecs, memtable indexes, SST blocks, and iterators.</p>
 <li><code>Timestamp(key)</code> / <code>InternalToBaseKey(internal)</code> / <code>BaseKey(cf, userKey)</code> / <code>SameBaseKey(a, b)</code></li>
 </ul>
 <h3 id="22-valuestruct-encoding"><a class="header" href="#22-valuestruct-encoding">2.2 ValueStruct Encoding</a></h3>
-<p>Source: <a href="../kv/value.go"><code>kv/value.go</code></a></p>
+<p>Source: <a href="../engine/kv/value.go"><code>engine/kv/value.go</code></a></p>
 <p><code>ValueStruct</code> layout:</p>
 <ul>
 <li><code>Meta</code> (1B)</li>
@@ -242,7 +242,7 @@ WAL/value-log codecs, memtable indexes, SST blocks, and iterators.</p>
 </ul>
 <p><code>ValueStruct</code> does not store <code>Version</code>; version is always taken from internal key.</p>
 <h3 id="23-entry-record-encoding-wal--vlog-record-payload"><a class="header" href="#23-entry-record-encoding-wal--vlog-record-payload">2.3 Entry Record Encoding (WAL / Vlog record payload)</a></h3>
-<p>Source: <a href="../kv/entry_codec.go"><code>kv/entry_codec.go</code></a></p>
+<p>Source: <a href="../engine/kv/entry_codec.go"><code>engine/kv/entry_codec.go</code></a></p>
 <p>Entry codec layout:</p>
 <ul>
 <li>header (uvarints: keyLen/valueLen/meta/expiresAt)</li>
@@ -267,7 +267,7 @@ records get consistent <code>CF/Version</code> immediately.</p>
 from key before entering write pipeline.</li>
 </ul>
 <h3 id="32-commit-worker-vlog-then-lsm-apply"><a class="header" href="#32-commit-worker-vlog-then-lsm-apply">3.2 Commit worker: vlog then LSM apply</a></h3>
-<p>Source: <a href="../db_write.go"><code>db_write.go</code></a>, <a href="../vlog.go"><code>vlog.go</code></a></p>
+<p>Source: <a href="../db.go"><code>db.go</code></a>, <a href="../vlog.go"><code>vlog.go</code></a></p>
 <ul>
 <li>Before <code>LSM.SetBatch</code>, large values are replaced by <code>ValuePtr.Encode()</code> bytes and
 <code>BitValuePointer</code> is set.</li>
@@ -275,21 +275,21 @@ from key before entering write pipeline.</li>
 <li><code>Key</code> remains internal key throughout.</li>
 </ul>
 <h3 id="33-wal-replay--vlog-iteration-decode"><a class="header" href="#33-wal-replay--vlog-iteration-decode">3.3 WAL replay / vlog iteration decode</a></h3>
-<p>Source: <a href="../kv/entry_codec.go"><code>kv/entry_codec.go</code></a>, <a href="../lsm/memtable.go"><code>lsm/memtable.go</code></a></p>
+<p>Source: <a href="../engine/kv/entry_codec.go"><code>engine/kv/entry_codec.go</code></a>, <a href="../engine/lsm/memtable.go"><code>engine/lsm/memtable.go</code></a></p>
 <ul>
 <li>Decoded records carry internal key bytes in <code>Key</code>.</li>
 <li><code>Value</code> is record payload bytes (inline value or pointer bytes).</li>
 <li><code>CF/Version</code> are derived from key via <code>PopulateInternalMeta</code>.</li>
 </ul>
 <h3 id="34-memtable-index-lookup"><a class="header" href="#34-memtable-index-lookup">3.4 Memtable index lookup</a></h3>
-<p>Source: <a href="../lsm/memtable.go"><code>lsm/memtable.go</code></a>, <a href="../utils/skiplist.go"><code>utils/skiplist.go</code></a>, <a href="../utils/art.go"><code>utils/art.go</code></a></p>
+<p>Source: <a href="../engine/lsm/memtable.go"><code>engine/lsm/memtable.go</code></a>, <a href="../engine/index/skiplist.go"><code>engine/index/skiplist.go</code></a>, <a href="../engine/index/art.go"><code>engine/index/art.go</code></a></p>
 <ul>
 <li><code>memIndex.Search(...)</code> returns <code>(matchedInternalKey, ValueStruct)</code>.</li>
 <li><code>memTable.Get</code> assembles pooled <code>Entry</code> from this and calls <code>PopulateInternalMeta</code>.</li>
 <li>For miss, <code>Key=nil</code> and zero value struct (sentinel, not a valid record).</li>
 </ul>
 <h3 id="35-sst--iterator-decode"><a class="header" href="#35-sst--iterator-decode">3.5 SST / iterator decode</a></h3>
-<p>Source: <a href="../lsm/builder.go"><code>lsm/builder.go</code></a>, <a href="../lsm/table.go"><code>lsm/table.go</code></a></p>
+<p>Source: <a href="../engine/lsm/builder.go"><code>engine/lsm/builder.go</code></a>, <a href="../engine/lsm/table.go"><code>engine/lsm/table.go</code></a></p>
 <ul>
 <li>Block iterator reconstructs internal key + value struct.</li>
 <li>It calls <code>PopulateInternalMeta</code> before exposing item entry.</li>
@@ -355,7 +355,7 @@ from key before entering write pipeline.</li>
 </ul>
 <hr>
 <h2 id="5-populateinternalmeta-semantics"><a class="header" href="#5-populateinternalmeta-semantics">5. <code>PopulateInternalMeta</code> Semantics</a></h2>
-<p>Source: <a href="../kv/entry.go"><code>kv/entry.go</code></a></p>
+<p>Source: <a href="../engine/kv/entry.go"><code>engine/kv/entry.go</code></a></p>
 <pre><code class="language-go">func (e *Entry) PopulateInternalMeta() bool
 </code></pre>
 <p>Behavior:</p>
@@ -383,7 +383,7 @@ from key before entering write pipeline.</li>
 </ul>
 <hr>
 <h2 id="6-ownership-and-refcount-states"><a class="header" href="#6-ownership-and-refcount-states">6. Ownership and Refcount States</a></h2>
-<p>Source: <a href="../kv/entry.go"><code>kv/entry.go</code></a>, <a href="architecture.html"><code>docs/architecture.md</code></a></p>
+<p>Source: <a href="../engine/kv/entry.go"><code>engine/kv/entry.go</code></a>, <a href="architecture.html"><code>docs/architecture.md</code></a></p>
 <h3 id="borrowed-entry-internal"><a class="header" href="#borrowed-entry-internal">Borrowed entry (internal)</a></h3>
 <p>Returned by:</p>
 <ul>

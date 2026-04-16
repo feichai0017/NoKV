@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-dc6edf3c.js";
+            window.path_to_searchindex_js = "searchindex-7154c2cb.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c05f2810.js"></script>
@@ -877,9 +877,8 @@ fmt.Println(string(entry.Value))
 <p>Then read:</p>
 <ul>
 <li><code>db.go</code></li>
-<li><code>db_write.go</code></li>
-<li><code>lsm/</code></li>
-<li><code>wal/</code></li>
+<li><code>engine/lsm/</code></li>
+<li><code>engine/wal/</code></li>
 <li><code>vlog.go</code></li>
 </ul>
 <h3 id="21-wal--memtable"><a class="header" href="#21-wal--memtable">2.1 WAL &amp; MemTable</a></h3>
@@ -926,7 +925,7 @@ fmt.Println(string(entry.Value))
 </ul>
 <h3 id="26-write-pipeline--backpressure"><a class="header" href="#26-write-pipeline--backpressure">2.6 Write Pipeline &amp; Backpressure</a></h3>
 <ul>
-<li>Writes enqueue into a commit queue (<code>db_write.go</code>) where requests are coalesced into batches before a commit worker drains them.</li>
+<li>Writes enqueue into a commit queue inside <code>db.go</code> where requests are coalesced into batches before a commit worker drains them.</li>
 <li>The commit worker always writes the value log first (when needed), then applies WAL/LSM updates; <code>SyncWrites</code> adds a WAL fsync step.</li>
 <li>Batch sizing adapts to backlog through <code>WriteBatchMaxCount</code>, <code>WriteBatchMaxSize</code>, and <code>WriteBatchWait</code>.</li>
 <li>Backpressure is enforced in two places: LSM throttling toggles <code>db.blockWrites</code> when L0 backlog grows, and HotRing can reject hot keys via <code>WriteHotKeyLimit</code>.</li>
@@ -1094,7 +1093,7 @@ to concrete functions in the codebase.</p>
 </div>
 <p>Core entry points:</p>
 <ul>
-<li>Embedded DB: <a href="../db.go"><code>db.go</code></a>, <a href="../db_write.go"><code>db_write.go</code></a>, <a href="../iterator.go"><code>iterator.go</code></a></li>
+<li>Embedded DB: <a href="../db.go"><code>db.go</code></a>, <a href="../iterator.go"><code>iterator.go</code></a></li>
 <li>Distributed RPC: <a href="../raftstore/kv/service.go"><code>raftstore/kv/service.go</code></a></li>
 <li>Raft read/propose bridge: <a href="../raftstore/store/command_service.go"><code>raftstore/store/command_service.go</code></a></li>
 <li>MVCC logic: <a href="../percolator/txn.go"><code>percolator/txn.go</code></a>, <a href="../percolator/reader.go"><code>percolator/reader.go</code></a></li>
@@ -1361,13 +1360,13 @@ key/value validation errors, throttling, and lifecycle guards.</li>
 </ul>
 <h3 id="domain-specific-sentinels"><a class="header" href="#domain-specific-sentinels">Domain-specific sentinels</a></h3>
 <ul>
-<li><code>kv/entry_codec.go</code>: <code>ErrBadChecksum</code>, <code>ErrPartialEntry</code></li>
-<li><code>vfs/vfs.go</code>: <code>ErrRenameNoReplaceUnsupported</code></li>
-<li><code>lsm/compaction.go</code>: compaction planner/runtime domain errors</li>
+<li><code>engine/kv/entry_codec.go</code>: <code>ErrBadChecksum</code>, <code>ErrPartialEntry</code></li>
+<li><code>engine/vfs/vfs.go</code>: <code>ErrRenameNoReplaceUnsupported</code></li>
+<li><code>engine/lsm/compaction.go</code>: compaction planner/runtime domain errors</li>
 <li><code>raftstore/peer/errors.go</code>: peer lifecycle/state errors</li>
 <li><code>pb/errorpb.proto</code>: region/store routing protobuf errors (<code>RegionError</code>,
 <code>StoreNotMatch</code>, <code>RegionNotFound</code>, <code>KeyNotInRegion</code>, …)</li>
-<li><code>wal/errors.go</code>: WAL encode/decode and segment errors</li>
+<li><code>engine/wal/errors.go</code>: WAL encode/decode and segment errors</li>
 <li><code>coordinator/catalog/errors.go</code>: Coordinator metadata and range validation errors</li>
 </ul>
 <hr>
@@ -1406,7 +1405,7 @@ WAL/value-log codecs, memtable indexes, SST blocks, and iterators.</p>
 </ol>
 <hr>
 <h2 id="1-structure-overview"><a class="header" href="#1-structure-overview">1. Structure Overview</a></h2>
-<p>Source: <a href="../kv/entry.go"><code>kv/entry.go</code></a>, <a href="../kv/key.go"><code>kv/key.go</code></a>, <a href="../kv/value.go"><code>kv/value.go</code></a></p>
+<p>Source: <a href="../engine/kv/entry.go"><code>engine/kv/entry.go</code></a>, <a href="../engine/kv/key.go"><code>engine/kv/key.go</code></a>, <a href="../engine/kv/value.go"><code>engine/kv/value.go</code></a></p>
 <pre><code class="language-go">type Entry struct {
     Key       []byte
     Value     []byte
@@ -1434,7 +1433,7 @@ WAL/value-log codecs, memtable indexes, SST blocks, and iterators.</p>
 <hr>
 <h2 id="2-encoding-layers"><a class="header" href="#2-encoding-layers">2. Encoding Layers</a></h2>
 <h3 id="21-internal-key-encoding"><a class="header" href="#21-internal-key-encoding">2.1 Internal Key Encoding</a></h3>
-<p>Source: <a href="../kv/key.go"><code>kv/key.go</code></a></p>
+<p>Source: <a href="../engine/kv/key.go"><code>engine/kv/key.go</code></a></p>
 <p><code>InternalKey(cf, userKey, ts)</code> layout:</p>
 <ul>
 <li>4-byte CF header: <code>0xFF 'C' 'F' &lt;cf-byte&gt;</code></li>
@@ -1448,7 +1447,7 @@ WAL/value-log codecs, memtable indexes, SST blocks, and iterators.</p>
 <li><code>Timestamp(key)</code> / <code>InternalToBaseKey(internal)</code> / <code>BaseKey(cf, userKey)</code> / <code>SameBaseKey(a, b)</code></li>
 </ul>
 <h3 id="22-valuestruct-encoding"><a class="header" href="#22-valuestruct-encoding">2.2 ValueStruct Encoding</a></h3>
-<p>Source: <a href="../kv/value.go"><code>kv/value.go</code></a></p>
+<p>Source: <a href="../engine/kv/value.go"><code>engine/kv/value.go</code></a></p>
 <p><code>ValueStruct</code> layout:</p>
 <ul>
 <li><code>Meta</code> (1B)</li>
@@ -1457,7 +1456,7 @@ WAL/value-log codecs, memtable indexes, SST blocks, and iterators.</p>
 </ul>
 <p><code>ValueStruct</code> does not store <code>Version</code>; version is always taken from internal key.</p>
 <h3 id="23-entry-record-encoding-wal--vlog-record-payload"><a class="header" href="#23-entry-record-encoding-wal--vlog-record-payload">2.3 Entry Record Encoding (WAL / Vlog record payload)</a></h3>
-<p>Source: <a href="../kv/entry_codec.go"><code>kv/entry_codec.go</code></a></p>
+<p>Source: <a href="../engine/kv/entry_codec.go"><code>engine/kv/entry_codec.go</code></a></p>
 <p>Entry codec layout:</p>
 <ul>
 <li>header (uvarints: keyLen/valueLen/meta/expiresAt)</li>
@@ -1482,7 +1481,7 @@ records get consistent <code>CF/Version</code> immediately.</p>
 from key before entering write pipeline.</li>
 </ul>
 <h3 id="32-commit-worker-vlog-then-lsm-apply"><a class="header" href="#32-commit-worker-vlog-then-lsm-apply">3.2 Commit worker: vlog then LSM apply</a></h3>
-<p>Source: <a href="../db_write.go"><code>db_write.go</code></a>, <a href="../vlog.go"><code>vlog.go</code></a></p>
+<p>Source: <a href="../db.go"><code>db.go</code></a>, <a href="../vlog.go"><code>vlog.go</code></a></p>
 <ul>
 <li>Before <code>LSM.SetBatch</code>, large values are replaced by <code>ValuePtr.Encode()</code> bytes and
 <code>BitValuePointer</code> is set.</li>
@@ -1490,21 +1489,21 @@ from key before entering write pipeline.</li>
 <li><code>Key</code> remains internal key throughout.</li>
 </ul>
 <h3 id="33-wal-replay--vlog-iteration-decode"><a class="header" href="#33-wal-replay--vlog-iteration-decode">3.3 WAL replay / vlog iteration decode</a></h3>
-<p>Source: <a href="../kv/entry_codec.go"><code>kv/entry_codec.go</code></a>, <a href="../lsm/memtable.go"><code>lsm/memtable.go</code></a></p>
+<p>Source: <a href="../engine/kv/entry_codec.go"><code>engine/kv/entry_codec.go</code></a>, <a href="../engine/lsm/memtable.go"><code>engine/lsm/memtable.go</code></a></p>
 <ul>
 <li>Decoded records carry internal key bytes in <code>Key</code>.</li>
 <li><code>Value</code> is record payload bytes (inline value or pointer bytes).</li>
 <li><code>CF/Version</code> are derived from key via <code>PopulateInternalMeta</code>.</li>
 </ul>
 <h3 id="34-memtable-index-lookup"><a class="header" href="#34-memtable-index-lookup">3.4 Memtable index lookup</a></h3>
-<p>Source: <a href="../lsm/memtable.go"><code>lsm/memtable.go</code></a>, <a href="../utils/skiplist.go"><code>utils/skiplist.go</code></a>, <a href="../utils/art.go"><code>utils/art.go</code></a></p>
+<p>Source: <a href="../engine/lsm/memtable.go"><code>engine/lsm/memtable.go</code></a>, <a href="../engine/index/skiplist.go"><code>engine/index/skiplist.go</code></a>, <a href="../engine/index/art.go"><code>engine/index/art.go</code></a></p>
 <ul>
 <li><code>memIndex.Search(...)</code> returns <code>(matchedInternalKey, ValueStruct)</code>.</li>
 <li><code>memTable.Get</code> assembles pooled <code>Entry</code> from this and calls <code>PopulateInternalMeta</code>.</li>
 <li>For miss, <code>Key=nil</code> and zero value struct (sentinel, not a valid record).</li>
 </ul>
 <h3 id="35-sst--iterator-decode"><a class="header" href="#35-sst--iterator-decode">3.5 SST / iterator decode</a></h3>
-<p>Source: <a href="../lsm/builder.go"><code>lsm/builder.go</code></a>, <a href="../lsm/table.go"><code>lsm/table.go</code></a></p>
+<p>Source: <a href="../engine/lsm/builder.go"><code>engine/lsm/builder.go</code></a>, <a href="../engine/lsm/table.go"><code>engine/lsm/table.go</code></a></p>
 <ul>
 <li>Block iterator reconstructs internal key + value struct.</li>
 <li>It calls <code>PopulateInternalMeta</code> before exposing item entry.</li>
@@ -1570,7 +1569,7 @@ from key before entering write pipeline.</li>
 </ul>
 <hr>
 <h2 id="5-populateinternalmeta-semantics"><a class="header" href="#5-populateinternalmeta-semantics">5. <code>PopulateInternalMeta</code> Semantics</a></h2>
-<p>Source: <a href="../kv/entry.go"><code>kv/entry.go</code></a></p>
+<p>Source: <a href="../engine/kv/entry.go"><code>engine/kv/entry.go</code></a></p>
 <pre><code class="language-go">func (e *Entry) PopulateInternalMeta() bool
 </code></pre>
 <p>Behavior:</p>
@@ -1598,7 +1597,7 @@ from key before entering write pipeline.</li>
 </ul>
 <hr>
 <h2 id="6-ownership-and-refcount-states"><a class="header" href="#6-ownership-and-refcount-states">6. Ownership and Refcount States</a></h2>
-<p>Source: <a href="../kv/entry.go"><code>kv/entry.go</code></a>, <a href="#nokv-architecture-overview"><code>docs/architecture.md</code></a></p>
+<p>Source: <a href="../engine/kv/entry.go"><code>engine/kv/entry.go</code></a>, <a href="#nokv-architecture-overview"><code>docs/architecture.md</code></a></p>
 <h3 id="borrowed-entry-internal"><a class="header" href="#borrowed-entry-internal">Borrowed entry (internal)</a></h3>
 <p>Returned by:</p>
 <ul>
@@ -2117,7 +2116,7 @@ raft peers:
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="memtable-design--lifecycle"><a class="header" href="#memtable-design--lifecycle">Memtable Design &amp; Lifecycle</a></h1>
-<p>NoKV’s write path mirrors RocksDB: every write lands in the <strong>WAL</strong> and an in-memory <strong>memtable</strong> backed by a selectable in-memory index (skiplist or ART). The implementation lives in <a href="../lsm/memtable.go"><code>lsm/memtable.go</code></a> and ties directly into the concrete flush queue in <a href="../lsm/flush_runtime.go"><code>lsm/flush_runtime.go</code></a>.</p>
+<p>NoKV’s write path mirrors RocksDB: every write lands in the <strong>WAL</strong> and an in-memory <strong>memtable</strong> backed by a selectable in-memory index (skiplist or ART). The implementation lives in <a href="../engine/lsm/memtable.go"><code>engine/lsm/memtable.go</code></a> and ties directly into the concrete flush queue in <a href="../engine/lsm/flush_runtime.go"><code>engine/lsm/flush_runtime.go</code></a>.</p>
 <hr>
 <h2 id="1-structure"><a class="header" href="#1-structure">1. Structure</a></h2>
 <pre><code class="language-go">type memTable struct {
@@ -2184,7 +2183,7 @@ raft peers:
 <tbody>
 <tr><td>Distributed 2PC</td><td><code>kv.Apply</code> + <code>percolator</code> write committed MVCC versions through the same WAL/memtable pipeline in raft mode.</td></tr>
 <tr><td>Manifest</td><td>Flush completion logs <code>EditLogPointer(segmentID)</code> so restart can discard WAL files already persisted into SSTs.</td></tr>
-<tr><td>Stats</td><td><code>Stats.Snapshot</code> pulls <code>FlushPending/Active/Queue</code> counters via <a href="../lsm/lsm.go#L120-L128"><code>lsm.FlushMetrics</code></a>, exposing how many immutables are waiting.</td></tr>
+<tr><td>Stats</td><td><code>Stats.Snapshot</code> pulls <code>FlushPending/Active/Queue</code> counters via <a href="../engine/lsm/lsm.go#L120-L128"><code>lsm.FlushMetrics</code></a>, exposing how many immutables are waiting.</td></tr>
 <tr><td>Value Log</td><td><code>lsm.flush</code> emits discard stats keyed by <code>segmentID</code>, letting the value log GC know when entries become obsolete.</td></tr>
 </tbody>
 </table>
@@ -2215,7 +2214,7 @@ raft peers:
 <p>See <a href="#memtable-flush-pipeline"><code>docs/flush.md</code></a> for the end-to-end flush scheduler and <code>[docs/architecture.md](architecture.md#3-end-to-end-write-flow)</code> for where memtables sit in the write pipeline.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="memtable-flush-pipeline"><a class="header" href="#memtable-flush-pipeline">MemTable Flush Pipeline</a></h1>
-<p>NoKV’s flush path converts immutable memtables into L0 SST files, then advances the manifest WAL checkpoint and reclaims obsolete WAL segments. The queue and timing bookkeeping live directly in <a href="../lsm/flush_runtime.go"><code>lsm/flush_runtime.go</code></a>; SST persistence and manifest install are in <a href="../lsm/builder.go"><code>lsm/builder.go</code></a> and <a href="../lsm/levels.go"><code>lsm/levels.go</code></a>.</p>
+<p>NoKV’s flush path converts immutable memtables into L0 SST files, then advances the manifest WAL checkpoint and reclaims obsolete WAL segments. The queue and timing bookkeeping live directly in <a href="../engine/lsm/flush_runtime.go"><code>engine/lsm/flush_runtime.go</code></a>; SST persistence and manifest install are in <a href="../engine/lsm/builder.go"><code>engine/lsm/builder.go</code></a> and <a href="../engine/lsm/levels.go"><code>engine/lsm/levels.go</code></a>.</p>
 <hr>
 <h2 id="1-responsibilities"><a class="header" href="#1-responsibilities">1. Responsibilities</a></h2>
 <ol>
@@ -2304,7 +2303,7 @@ raft peers:
 <hr>
 <h2 id="7-related-tests"><a class="header" href="#7-related-tests">7. Related Tests</a></h2>
 <ul>
-<li><code>lsm/flush_runtime_test.go</code>: queue lifecycle and timing counters.</li>
+<li><code>engine/lsm/flush_runtime_test.go</code>: queue lifecycle and timing counters.</li>
 <li><code>db_test.go::TestRecoveryWALReplayRestoresData</code>: replay still restores data after crash before flush completion.</li>
 <li><code>db_test.go::TestRecoveryFailsOnMissingSST</code> and <code>db_test.go::TestRecoveryFailsOnCorruptSST</code>: startup fails when manifest SSTs are missing or corrupt.</li>
 </ul>
@@ -2331,14 +2330,14 @@ raft peers:
 <p>Planning now happens via <code>Plan</code>: LSM snapshots table metadata into <code>TableMeta</code>, <code>PlanFor*</code> selects table IDs + key ranges, and LSM resolves the plan back to <code>*table</code> before executing.</p>
 <hr>
 <h2 id="2-ingest-buffer"><a class="header" href="#2-ingest-buffer">2. Ingest Buffer</a></h2>
-<p><code>moveToIngest</code> (see <code>lsm/executor.go</code>) performs a metadata-only migration:</p>
+<p><code>moveToIngest</code> (see <code>engine/lsm/executor.go</code>) performs a metadata-only migration:</p>
 <ol>
 <li>Records a <code>manifest.EditDeleteFile</code> for the source level.</li>
 <li>Logs a new <code>manifest.EditAddFile</code> targeting the destination level.</li>
 <li>Removes the table from <code>thisLevel.tables</code> and appends it to <code>nextLevel.ingest</code>.</li>
 </ol>
 <p>This keeps write amplification low when many small L0 tables arrive at once. Reads still see the newest data because <code>levelHandler.searchLNSST</code> checks the ingest buffer before consulting the canonical level tables.</p>
-<p>Compaction tests (<code>lsm/compaction_test.go</code>) assert that after calling <code>moveToIngest</code> the table disappears from the source level and shows up in the ingest buffer.</p>
+<p>Compaction tests (<code>engine/lsm/compaction_test.go</code>) assert that after calling <code>moveToIngest</code> the table disappears from the source level and shows up in the ingest buffer.</p>
 <hr>
 <h2 id="3-concurrency-guards"><a class="header" href="#3-concurrency-guards">3. Concurrency Guards</a></h2>
 <p>To prevent overlapping compactions:</p>
@@ -2350,7 +2349,7 @@ raft peers:
 <p>This mechanism is intentionally simple—just a mutex‐protected slice—yet effective in tests (<code>TestCompactStatusGuards</code>) that simulate back‑to‑back registrations on the same key range.</p>
 <hr>
 <h2 id="4-cache-telemetry"><a class="header" href="#4-cache-telemetry">4. Cache Telemetry</a></h2>
-<p>NoKV’s cache strategy has two explicit user-space caches plus direct bloom probing from decoded table indexes (<code>lsm/cache.go</code>):</p>
+<p>NoKV’s cache strategy has two explicit user-space caches plus direct bloom probing from decoded table indexes (<code>engine/lsm/cache.go</code>):</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -2377,18 +2376,18 @@ raft peers:
 <h2 id="6-testing-checklist"><a class="header" href="#6-testing-checklist">6. Testing Checklist</a></h2>
 <p>Relevant tests to keep compaction healthy:</p>
 <ul>
-<li><code>lsm/compaction_test.go</code>
+<li><code>engine/lsm/compaction_test.go</code>
 <ul>
 <li><code>TestCompactionMoveToIngest</code> – ensures metadata migration works and the ingest buffer grows.</li>
 <li><code>TestCompactStatusGuards</code> – checks overlap detection.</li>
 </ul>
 </li>
-<li><code>lsm/cache_test.go</code>
+<li><code>engine/lsm/cache_test.go</code>
 <ul>
 <li><code>TestCacheHotColdMetrics</code> – validates cache hit accounting.</li>
 </ul>
 </li>
-<li><code>lsm/lsm_test.go</code>
+<li><code>engine/lsm/lsm_test.go</code>
 <ul>
 <li><code>TestCompact</code> / <code>TestHitStorage</code> – end‑to‑end verification that data remains queryable across memtable flushes and compactions.</li>
 </ul>
@@ -2474,10 +2473,10 @@ uint8  type
 uint32 checksum (CRC32 Castagnoli over type + payload)
 </code></pre>
 <ul>
-<li>Checksums use <code>kv.CastagnoliCrcTable</code>, the same polynomial used by RocksDB (Castagnoli). Record encoding/decoding lives in <code>wal/record.go</code>.</li>
+<li>Checksums use <code>kv.CastagnoliCrcTable</code>, the same polynomial used by RocksDB (Castagnoli). Record encoding/decoding lives in <code>engine/wal/record.go</code>.</li>
 <li>The type byte allows mixing LSM mutations with raft log/state/snapshot records in the same WAL segment.</li>
 <li>Appends are buffered by <code>bufio.Writer</code> so batches become single system calls.</li>
-<li>Replay stops cleanly at truncated tails; tests simulate torn writes by truncating the final bytes and verifying replay remains idempotent (<code>wal/manager_test.go::TestManagerReplayHandlesTruncate</code>).</li>
+<li>Replay stops cleanly at truncated tails; tests simulate torn writes by truncating the final bytes and verifying replay remains idempotent (<code>engine/wal/manager_test.go::TestManagerReplayHandlesTruncate</code>).</li>
 </ul>
 <hr>
 <h2 id="3-public-api-go"><a class="header" href="#3-public-api-go">3. Public API (Go)</a></h2>
@@ -2515,8 +2514,8 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 <tr><td><code>lsm.memTable.setBatch</code></td><td>Encodes each entry (<code>kv.EncodeEntry</code>) and appends to WAL before inserting into the active memtable index (<code>ART</code> by default, <code>skiplist</code> when explicitly selected).</td></tr>
 <tr><td><code>DB.commitWorker</code></td><td>Commit worker applies batched writes via <code>writeToLSM</code>, which calls <code>lsm.SetBatch</code> and appends one WAL entry-batch record per request batch.</td></tr>
 <tr><td><code>DB.Set</code> / <code>DB.SetBatch</code> / <code>DB.SetWithTTL</code> / <code>DB.Del</code> / <code>DB.DeleteRange</code> / <code>DB.ApplyInternalEntries</code></td><td>User/internal writes all flow through the same commit queue and eventually reach <code>lsm.SetBatch</code> + WAL append.</td></tr>
-<tr><td><code>lsm/levels.go::flush</code></td><td>Persists WAL checkpoint via <code>manifest.LogEdits(EditAddFile, EditLogPointer)</code> during flush install.</td></tr>
-<tr><td><code>lsm/levels.go::flush</code> + <code>lsm/levelManager.canRemoveWalSegment</code></td><td>Removes obsolete WAL segments after storage checkpoint and <code>raftstore/localmeta</code> replay constraints are satisfied.</td></tr>
+<tr><td><code>engine/lsm/levels.go::flush</code></td><td>Persists WAL checkpoint via <code>manifest.LogEdits(EditAddFile, EditLogPointer)</code> during flush install.</td></tr>
+<tr><td><code>engine/lsm/levels.go::flush</code> + <code>engine/lsm/levelManager.canRemoveWalSegment</code></td><td>Removes obsolete WAL segments after storage checkpoint and <code>raftstore/localmeta</code> replay constraints are satisfied.</td></tr>
 <tr><td><code>db.runRecoveryChecks</code></td><td>Ensures WAL directory invariants before manifest replay, similar to Badger’s directory bootstrap.</td></tr>
 </tbody>
 </table>
@@ -2571,15 +2570,15 @@ surface warnings when raft-typed records dominate the log. It:</p>
 <ul>
 <li><code>raftstore/engine/wal_storage</code> keeps a per-group index of <code>[firstIndex,lastIndex]</code> spans for each WAL record so it can map raft log indices back to the segment that stored them.</li>
 <li>When a log is truncated (either via snapshot or future compaction hooks), the store-local metadata in <code>raftstore/localmeta</code> is updated with the index/term, segment ID (<code>RaftLogPointer.SegmentIndex</code>), and byte offset (<code>RaftLogPointer.TruncatedOffset</code>) that delimit the remaining WAL data.</li>
-<li><code>lsm/levelManager.canRemoveWalSegment</code> blocks garbage collection whenever any raft group still references a segment through that store-local truncation metadata, preventing slow followers from losing required WAL history while letting aggressively compacted groups release older segments earlier.</li>
+<li><code>engine/lsm/levelManager.canRemoveWalSegment</code> blocks garbage collection whenever any raft group still references a segment through that store-local truncation metadata, preventing slow followers from losing required WAL history while letting aggressively compacted groups release older segments earlier.</li>
 </ul>
 <p>For broader context, read the <a href="#nokv-architecture-overview">architecture overview</a> and <a href="#memtable-flush-pipeline">flush pipeline</a> documents.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="value-log-vlog-design"><a class="header" href="#value-log-vlog-design">Value Log (vlog) Design</a></h1>
 <p>NoKV keeps the LSM tree lean by separating large values into sequential <strong>value log</strong> (vlog) files. The module is split between</p>
 <ul>
-<li><a href="../vlog/manager.go"><code>vlog/manager.go</code></a> – owns the open file set, rotation, and segment lifecycle helpers.</li>
-<li><a href="../vlog/io.go"><code>vlog/io.go</code></a> – append/read/iterate/verify/sample IO paths.</li>
+<li><a href="../engine/vlog/manager.go"><code>engine/vlog/manager.go</code></a> – owns the open file set, rotation, and segment lifecycle helpers.</li>
+<li><a href="../engine/vlog/io.go"><code>engine/vlog/io.go</code></a> – append/read/iterate/verify/sample IO paths.</li>
 <li><a href="../vlog.go"><code>vlog.go</code></a> – integrates the manager with the DB write path, discard statistics, and garbage collection (GC).</li>
 </ul>
 <p>The design echoes BadgerDB’s value log while remaining manifest-driven like RocksDB’s <code>blob_db</code>: vlog metadata (head pointer, pending deletions) is persisted inside the manifest so recovery can reconstruct the exact state without scanning the filesystem.</p>
@@ -2591,10 +2590,10 @@ policy lives in the core package:</p>
 <li><strong>DB policy layer (<code>vlog.go</code>, <code>vlog_gc.go</code>)</strong> – integrates the manager with
 the DB write path, persists vlog metadata in the manifest, and drives GC
 scheduling based on discard stats.</li>
-<li><strong>Value-log manager (<code>vlog/</code>)</strong> – owns segment lifecycle (open/rotate/remove),
+<li><strong>Value-log manager (<code>engine/vlog/</code>)</strong> – owns segment lifecycle (open/rotate/remove),
 encodes/decodes entries, and exposes append/read/sample APIs without touching
 MVCC or LSM policy.</li>
-<li><strong>File IO (<code>file/</code>)</strong> – mmap-backed <code>LogFile</code> primitives (open/close/truncate,
+<li><strong>File IO (<code>engine/file/</code>)</strong> – mmap-backed <code>LogFile</code> primitives (open/close/truncate,
 read/write, read-only remap) shared by WAL/vlog/SST. Vlog currently uses
 <code>LogFile</code> directly instead of an intermediate store abstraction.</li>
 </ul>
@@ -2611,8 +2610,8 @@ read/write, read-only remap) shared by WAL/vlog/SST. Vlog currently uses
     ...
 </code></pre>
 <ul>
-<li>Files are named <code>%05d.vlog</code> and live under <code>workdir/vlog/bucket-XXX/</code> when <code>Options.ValueLogBucketCount &gt; 1</code>. <a href="../vlog/manager.go"><code>Manager.populate</code></a> discovers existing segments at open.</li>
-<li><code>Manager</code> tracks the active file ID (<code>activeID</code>) and byte offset; <a href="../vlog/manager.go"><code>Manager.Head</code></a> exposes these so the manifest can checkpoint them (<code>manifest.EditValueLogHead</code>).</li>
+<li>Files are named <code>%05d.vlog</code> and live under <code>workdir/vlog/bucket-XXX/</code> when <code>Options.ValueLogBucketCount &gt; 1</code>. <a href="../engine/vlog/manager.go"><code>Manager.populate</code></a> discovers existing segments at open.</li>
+<li><code>Manager</code> tracks the active file ID (<code>activeID</code>) and byte offset; <a href="../engine/vlog/manager.go"><code>Manager.Head</code></a> exposes these so the manifest can checkpoint them (<code>manifest.EditValueLogHead</code>).</li>
 <li>Files created after a crash but never linked in the manifest are removed during <a href="../vlog.go"><code>valueLog.reconcileManifest</code></a>.</li>
 <li>Production defaults keep ordinary hash bucketization enabled (<code>ValueLogBucketCount=16</code>). Bucket selection is plain hash routing; it no longer depends on HotRing-based hot/cold classification.</li>
 </ul>
@@ -2628,7 +2627,7 @@ read/write, read-only remap) shared by WAL/vlog/SST. Vlog currently uses
 <li>Header fields are varint-encoded (<code>kv.EntryHeader</code>).</li>
 <li>The first 20 bytes of every segment are reserved (<code>kv.ValueLogHeaderSize</code>) for future metadata; iteration always skips this fixed header.</li>
 <li><code>kv.EncodeEntry</code> and the entry iterator (<code>kv.EntryIterator</code>) perform the layout work, and each append finishes with a CRC32 to detect torn writes.</li>
-<li><code>vlog.VerifyDir</code> scans all segments with <a href="../vlog/io.go"><code>sanitizeValueLog</code></a> to trim corrupted tails after crashes, mirroring RocksDB’s <code>blob_file::Sanitize</code>. Badger performs a similar truncation pass at startup.</li>
+<li><code>vlog.VerifyDir</code> scans all segments with <a href="../engine/vlog/io.go"><code>sanitizeValueLog</code></a> to trim corrupted tails after crashes, mirroring RocksDB’s <code>blob_file::Sanitize</code>. Badger performs a similar truncation pass at startup.</li>
 </ul>
 <hr>
 <h2 id="4-manager-api-surface"><a class="header" href="#4-manager-api-surface">4. Manager API Surface</a></h2>
@@ -2642,10 +2641,10 @@ _ = mgr.Remove(fid)  // close + delete file
 </code></pre>
 <p>Key behaviours:</p>
 <ol>
-<li><strong>Append + Rotate</strong> – <a href="../vlog/io.go"><code>Manager.AppendEntry</code></a> encodes and appends into the active file. The reservation path handles rotation when the active segment would exceed <code>MaxSize</code>; manual rotation is rare.</li>
-<li><strong>Crash recovery</strong> – <a href="../vlog/manager.go"><code>Manager.Rewind</code></a> truncates the active file and removes newer files when a write batch fails mid-flight. <code>valueLog.write</code> uses this to guarantee idempotent WAL/value log ordering.</li>
-<li><strong>Safe reads</strong> – <a href="../vlog/io.go"><code>Manager.Read</code></a> returns an mmap-backed slice plus an unlock callback. Active segments take a per-file <code>RWMutex</code>, while sealed segments use a pin/unpin path to avoid long-held locks; callers that need ownership should copy the bytes before releasing the lock.</li>
-<li><strong>Verification</strong> – <a href="../vlog/io.go"><code>VerifyDir</code></a> validates entire directories (used by CLI and recovery) by parsing headers and CRCs.</li>
+<li><strong>Append + Rotate</strong> – <a href="../engine/vlog/io.go"><code>Manager.AppendEntry</code></a> encodes and appends into the active file. The reservation path handles rotation when the active segment would exceed <code>MaxSize</code>; manual rotation is rare.</li>
+<li><strong>Crash recovery</strong> – <a href="../engine/vlog/manager.go"><code>Manager.Rewind</code></a> truncates the active file and removes newer files when a write batch fails mid-flight. <code>valueLog.write</code> uses this to guarantee idempotent WAL/value log ordering.</li>
+<li><strong>Safe reads</strong> – <a href="../engine/vlog/io.go"><code>Manager.Read</code></a> returns an mmap-backed slice plus an unlock callback. Active segments take a per-file <code>RWMutex</code>, while sealed segments use a pin/unpin path to avoid long-held locks; callers that need ownership should copy the bytes before releasing the lock.</li>
+<li><strong>Verification</strong> – <a href="../engine/vlog/io.go"><code>VerifyDir</code></a> validates entire directories (used by CLI and recovery) by parsing headers and CRCs.</li>
 </ol>
 <p>Compared with RocksDB’s blob manager the surface is intentionally small—NoKV treats the manager as an append-only log with rewind semantics, while RocksDB maintains index structures inside the blob file metadata.</p>
 <hr>
@@ -2662,7 +2661,7 @@ _ = mgr.Remove(fid)  // close + delete file
 </pre>
 
 <ol>
-<li><a href="../vlog.go"><code>valueLog.write</code></a> builds a write mask for each batch, then delegates to <a href="../vlog/io.go"><code>Manager.AppendEntries</code></a>. Entries staying in LSM (<code>shouldWriteValueToLSM</code>) receive zero-value pointers.</li>
+<li><a href="../vlog.go"><code>valueLog.write</code></a> builds a write mask for each batch, then delegates to <a href="../engine/vlog/io.go"><code>Manager.AppendEntries</code></a>. Entries staying in LSM (<code>shouldWriteValueToLSM</code>) receive zero-value pointers.</li>
 <li>Rotation is handled inside the manager when the reserved bytes would exceed <code>MaxSize</code>. The WAL append happens <strong>after</strong> the value log append so crash replay observes consistent pointers.</li>
 <li>Any error triggers <code>Manager.Rewind</code> back to the saved head pointer, removing new files and truncating partial bytes. <a href="../vlog_test.go"><code>vlog_test.go</code></a> exercises both append- and rotate-failure paths.</li>
 <li>All batched writes share the same pipeline: the commit worker always writes the value log first, then applies to WAL/memtable, keeping ordering and durability consistent.</li>
@@ -2680,9 +2679,9 @@ _ = mgr.Remove(fid)  // close + delete file
 </pre>
 
 <ul>
-<li><code>lfDiscardStats</code> aggregates per-file discard counts from LSM compaction workers (<code>lsm/executor.go</code>, <code>subcompact</code> -&gt; <code>updateDiscardStats</code>). Once the in-memory counter crosses <a href="../vlog.go#L27"><code>discardStatsFlushThreshold</code></a>, it marshals the map into JSON and writes it back through the DB pipeline under the special key <code>!NoKV!discard</code>.</li>
+<li><code>lfDiscardStats</code> aggregates per-file discard counts from LSM compaction workers (<code>engine/lsm/executor.go</code>, <code>subcompact</code> -&gt; <code>updateDiscardStats</code>). Once the in-memory counter crosses <a href="../vlog.go#L27"><code>discardStatsFlushThreshold</code></a>, it marshals the map into JSON and writes it back through the DB pipeline under the special key <code>!NoKV!discard</code>.</li>
 <li><code>valueLog.flushDiscardStats</code> consumes those stats, ensuring they are persisted even across crashes. During recovery <code>valueLog.populateDiscardStats</code> replays the JSON payload to repopulate the in-memory map.</li>
-<li>GC uses <code>discardRatio = discardedBytes/totalBytes</code> derived from <a href="../vlog/io.go"><code>Manager.Sample</code></a>, which applies windowed iteration based on configurable ratios. If a file exceeds the configured threshold, <a href="../vlog_gc.go"><code>valueLog.doRunGC</code></a> rewrites live entries into the current head via <code>db.batchSet</code> (the normal commit pipeline) and then <a href="../vlog_gc.go"><code>valueLog.rewrite</code></a> triggers manifest delete edits through <code>removeValueLogFile</code>.
+<li>GC uses <code>discardRatio = discardedBytes/totalBytes</code> derived from <a href="../engine/vlog/io.go"><code>Manager.Sample</code></a>, which applies windowed iteration based on configurable ratios. If a file exceeds the configured threshold, <a href="../vlog_gc.go"><code>valueLog.doRunGC</code></a> rewrites live entries into the current head via <code>db.batchSet</code> (the normal commit pipeline) and then <a href="../vlog_gc.go"><code>valueLog.rewrite</code></a> triggers manifest delete edits through <code>removeValueLogFile</code>.
 <ul>
 <li>Sampling behaviour is controlled by <code>Options.ValueLogGCSampleSizeRatio</code> (default 0.10 of the file) and <code>Options.ValueLogGCSampleCountRatio</code> (default 1% of the configured entry limit). Setting either to <code>&lt;=0</code> keeps the default heuristics. <code>Options.ValueLogGCSampleFromHead</code> starts sampling from the beginning instead of a random window.</li>
 </ul>
@@ -2720,7 +2719,7 @@ _ = mgr.Remove(fid)  // close + delete file
 <ul>
 <li>Metrics in <a href="../stats.go"><code>stats.go</code></a> report segment counts, pending deletions, discard queue depth, and GC head pointer via <code>expvar</code>.</li>
 <li>GC scheduling exposes <code>NoKV.Stats.value_log.gc</code> (including <code>gc_parallelism</code>, <code>gc_active</code>, <code>gc_scheduled</code>, <code>gc_throttled</code>, <code>gc_skipped</code>, <code>gc_rejected</code>) for diagnostics.</li>
-<li><code>nokv vlog --workdir &lt;dir&gt;</code> loads a manager in read-only mode and prints current head plus file status (valid, gc candidate). It invokes <a href="../vlog/io.go"><code>vlog.VerifyDir</code></a> before describing segments.</li>
+<li><code>nokv vlog --workdir &lt;dir&gt;</code> loads a manager in read-only mode and prints current head plus file status (valid, gc candidate). It invokes <a href="../engine/vlog/io.go"><code>vlog.VerifyDir</code></a> before describing segments.</li>
 <li>Recovery traces controlled by <code>RECOVERY_TRACE_METRICS</code> log every head movement and file removal, aiding pressure testing of GC edge cases. For ad-hoc diagnostics, enable <code>Options.ValueLogVerbose</code> to emit replay/GC messages through the process <code>slog</code> logger.</li>
 </ul>
 <hr>
@@ -2754,7 +2753,7 @@ _ = mgr.Remove(fid)  // close + delete file
 <li>WAL checkpoint (<code>EditLogPointer</code>)</li>
 <li>value-log metadata (<code>EditValueLogHead</code>, <code>EditDeleteValueLog</code>, <code>EditUpdateValueLog</code>)</li>
 </ul>
-<p>Implementation: <a href="../manifest/manager.go"><code>manifest/manager.go</code></a>, <a href="../manifest/codec.go"><code>manifest/codec.go</code></a>, <a href="../manifest/types.go"><code>manifest/types.go</code></a>.</p>
+<p>Implementation: <a href="../engine/manifest/manager.go"><code>engine/manifest/manager.go</code></a>, <a href="../engine/manifest/codec.go"><code>engine/manifest/codec.go</code></a>, <a href="../engine/manifest/types.go"><code>engine/manifest/types.go</code></a>.</p>
 <hr>
 <h2 id="1-files-on-disk"><a class="header" href="#1-files-on-disk">1. Files on Disk</a></h2>
 <pre><code class="language-text">WorkDir/
@@ -2817,8 +2816,8 @@ _ = mgr.Remove(fid)  // close + delete file
 <tr><th>Module</th><th>Manifest usage</th></tr>
 </thead>
 <tbody>
-<tr><td><code>lsm/levels.go::flush</code></td><td>Logs <code>EditAddFile</code> + <code>EditLogPointer</code> after SST install; compaction logs add/delete edits.</td></tr>
-<tr><td><code>lsm/levels.go::build</code></td><td>During startup, missing/corrupt SST entries are marked stale and cleaned via <code>EditDeleteFile</code>.</td></tr>
+<tr><td><code>engine/lsm/levels.go::flush</code></td><td>Logs <code>EditAddFile</code> + <code>EditLogPointer</code> after SST install; compaction logs add/delete edits.</td></tr>
+<tr><td><code>engine/lsm/levels.go::build</code></td><td>During startup, missing/corrupt SST entries are marked stale and cleaned via <code>EditDeleteFile</code>.</td></tr>
 <tr><td><code>wal</code></td><td>Replays from manifest checkpoint (<code>LogSegment</code>, <code>LogOffset</code>).</td></tr>
 <tr><td><code>vlog</code></td><td>Persists head/update/delete metadata and uses manifest state for stale/orphan cleanup on startup.</td></tr>
 <tr><td><code>raftstore</code></td><td>Does not own manifest state. Store-local region catalogs and raft WAL replay checkpoints live in <code>raftstore/localmeta</code>; runtime routing state lives in Coordinator storage.</td></tr>
@@ -2910,7 +2909,7 @@ _ = mgr.Remove(fid)  // close + delete file
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="file-abstractions"><a class="header" href="#file-abstractions">File Abstractions</a></h1>
-<p>The <code>file</code> package encapsulates direct file-system interaction for WAL, SST, and value-log files. It provides portable mmap helpers, allocation primitives, and log file wrappers.</p>
+<p>The <code>engine/file</code> package encapsulates direct file-system interaction for WAL, SST, and value-log files. It provides portable mmap helpers, allocation primitives, and log file wrappers.</p>
 <hr>
 <h2 id="1-core-types"><a class="header" href="#1-core-types">1. Core Types</a></h2>
 <div class="table-wrapper">
@@ -2919,9 +2918,9 @@ _ = mgr.Remove(fid)  // close + delete file
 <tr><th>Type</th><th>Purpose</th><th>Key Methods</th></tr>
 </thead>
 <tbody>
-<tr><td><a href="../file/file.go#L5-L16"><code>Options</code></a></td><td>Parameter bag for opening files (FID, path, size).</td><td>Used by WAL/vlog managers.</td></tr>
-<tr><td><a href="../file/mmap_linux.go#L12-L98"><code>MmapFile</code></a></td><td>Cross-platform mmap wrapper.</td><td><code>OpenMmapFile</code>, <code>AppendBuffer</code>, <code>Truncate</code>, <code>Sync</code>.</td></tr>
-<tr><td><a href="../file/vlog.go#L17-L223"><code>LogFile</code></a></td><td>Value-log specific helper built on <code>MmapFile</code>.</td><td><code>Open</code>, <code>Write</code>, <code>Read</code>, <code>DoneWriting</code>, <code>Truncate</code>, <code>Bootstrap</code>.</td></tr>
+<tr><td><a href="../engine/file/file.go#L5-L16"><code>Options</code></a></td><td>Parameter bag for opening files (FID, path, size).</td><td>Used by WAL/vlog managers.</td></tr>
+<tr><td><a href="../engine/file/mmap_linux.go#L12-L98"><code>MmapFile</code></a></td><td>Cross-platform mmap wrapper.</td><td><code>OpenMmapFile</code>, <code>AppendBuffer</code>, <code>Truncate</code>, <code>Sync</code>.</td></tr>
+<tr><td><a href="../engine/file/vlog.go#L17-L223"><code>LogFile</code></a></td><td>Value-log specific helper built on <code>MmapFile</code>.</td><td><code>Open</code>, <code>Write</code>, <code>Read</code>, <code>DoneWriting</code>, <code>Truncate</code>, <code>Bootstrap</code>.</td></tr>
 </tbody>
 </table>
 </div>
@@ -2959,7 +2958,7 @@ _ = lf.DoneWriting(offset + uint32(len(payload)))
 </ul>
 <hr>
 <h2 id="4-sst-helpers"><a class="header" href="#4-sst-helpers">4. SST Helpers</a></h2>
-<p>While SSTable builders/readers live under <code>lsm/table.go</code>, they rely on <code>file</code> helpers to map index/data blocks efficiently. The build tags (<code>sstable_linux.go</code>, <code>sstable_darwin.go</code>) provide OS-specific tuning for direct I/O hints or mmap flags.</p>
+<p>While SSTable builders/readers live under <code>engine/lsm/table.go</code>, they rely on <code>engine/file</code> helpers to map index/data blocks efficiently. The build tags (<code>sstable_linux.go</code>, <code>sstable_darwin.go</code>) provide OS-specific tuning for direct I/O hints or mmap flags.</p>
 <hr>
 <h2 id="5-comparison-1"><a class="header" href="#5-comparison-1">5. Comparison</a></h2>
 <div class="table-wrapper">
@@ -2974,7 +2973,7 @@ _ = lf.DoneWriting(offset + uint32(len(payload)))
 </tbody>
 </table>
 </div>
-<p>By keeping all filesystem primitives in one package, NoKV ensures WAL, vlog, and SST layers share consistent behaviour (sync semantics, truncation rules) and simplifies testing (<code>file/mmap_linux_test.go</code>).</p>
+<p>By keeping all filesystem primitives in one package, NoKV ensures WAL, vlog, and SST layers share consistent behaviour (sync semantics, truncation rules) and simplifies testing (<code>engine/file/mmap_linux_test.go</code>).</p>
 <hr>
 <h2 id="6-operational-notes-1"><a class="header" href="#6-operational-notes-1">6. Operational Notes</a></h2>
 <ul>
@@ -2986,7 +2985,7 @@ _ = lf.DoneWriting(offset + uint32(len(payload)))
 <p>For more on how these primitives plug into higher layers, see <a href="#wal-subsystem"><code>docs/wal.md</code></a> and <a href="#value-log-vlog-design"><code>docs/vlog.md</code></a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="cache--bloom-filters"><a class="header" href="#cache--bloom-filters">Cache &amp; Bloom Filters</a></h1>
-<p>NoKV’s LSM tier layers a multi-level block cache with decoded index caching to accelerate lookups. Bloom filters remain embedded in SST indexes and are probed directly from <code>pb.TableIndex</code>. The implementation is in <a href="../lsm/cache.go"><code>lsm/cache.go</code></a>.</p>
+<p>NoKV’s LSM tier layers a multi-level block cache with decoded index caching to accelerate lookups. Bloom filters remain embedded in SST indexes and are probed directly from <code>pb.TableIndex</code>. The implementation is in <a href="../engine/lsm/cache.go"><code>engine/lsm/cache.go</code></a>.</p>
 <hr>
 <h2 id="1-components"><a class="header" href="#1-components">1. Components</a></h2>
 <div class="table-wrapper">
@@ -2996,8 +2995,8 @@ _ = lf.DoneWriting(offset + uint32(len(payload)))
 </thead>
 <tbody>
 <tr><td><code>cache.indexes</code></td><td>Byte-budgeted W-TinyLFU cache for decoded table indexes (<code>fid</code> → <code>*pb.TableIndex</code>).</td><td><a href="../utils/cache"><code>utils/cache</code></a></td></tr>
-<tr><td><code>blockCache</code></td><td>Ristretto-based block cache (L0/L1 only) with per-table direct slots.</td><td><a href="../lsm/cache.go"><code>lsm/cache.go</code></a></td></tr>
-<tr><td><code>cacheMetrics</code></td><td>Atomic hit/miss counters for L0/L1 blocks and indexes.</td><td><a href="../lsm/cache.go#L30-L110"><code>lsm/cache.go#L30-L110</code></a></td></tr>
+<tr><td><code>blockCache</code></td><td>Ristretto-based block cache (L0/L1 only) with per-table direct slots.</td><td><a href="../engine/lsm/cache.go"><code>engine/lsm/cache.go</code></a></td></tr>
+<tr><td><code>cacheMetrics</code></td><td>Atomic hit/miss counters for L0/L1 blocks and indexes.</td><td><a href="../engine/lsm/cache.go#L30-L110"><code>engine/lsm/cache.go#L30-L110</code></a></td></tr>
 </tbody>
 </table>
 </div>
@@ -3081,7 +3080,7 @@ Deeper levels rely on OS page cache + mmap readahead
 <li>Track <code>nokv stats --json</code> cache metrics over time; drops often indicate iterator misuse or working-set shifts.</li>
 <li>Benchmark tooling accepts cache sizes in MB and converts them into these byte-budget fields before opening the engine.</li>
 </ul>
-<p>More on SST layout lives in <a href="#manifest--version-management"><code>docs/manifest.md</code></a> and <a href="#4-read-path--iterators"><code>docs/architecture.md</code></a>.</p>
+<p>More on SST layout lives in <a href="#manifest--version-management"><code>docs/manifest.md</code></a> and <a href="#2-embedded-engine"><code>docs/architecture.md</code></a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="range-filter"><a class="header" href="#range-filter">Range Filter</a></h1>
 <p>NoKV’s range filter is a read-path pruning layer for the LSM tree. It is inspired by the paper <a href="https://people.iiis.tsinghua.edu.cn/~huanchen/publications/grf-sigmod24.pdf">GRF: A Global Range Filter for LSM-Trees with Shape Encoding</a>, but it is deliberately more conservative and much simpler.</p>
@@ -3131,8 +3130,8 @@ Deeper levels rely on OS page cache + mmap readahead
 <h3 id="31-per-level-table-spans"><a class="header" href="#31-per-level-table-spans">3.1 Per-level table spans</a></h3>
 <p>Each <code>levelHandler</code> maintains a <code>rangeFilter</code> built from its current table set:</p>
 <ul>
-<li>source: <a href="../lsm/range_filter.go"><code>lsm/range_filter.go</code></a></li>
-<li>owner: <a href="../lsm/level_handler.go"><code>lsm/level_handler.go</code></a></li>
+<li>source: <a href="../engine/lsm/range_filter.go"><code>engine/lsm/range_filter.go</code></a></li>
+<li>owner: <a href="../engine/lsm/level_handler.go"><code>engine/lsm/level_handler.go</code></a></li>
 </ul>
 <p>Each span records:</p>
 <ul>
@@ -3147,21 +3146,21 @@ same pruning range.</p>
 <h3 id="32-point-read-pruning"><a class="header" href="#32-point-read-pruning">3.2 Point-read pruning</a></h3>
 <p>Point lookups first prune candidate tables:</p>
 <ul>
-<li><a href="../lsm/level_handler.go"><code>lsm/level_handler.go</code></a></li>
+<li><a href="../engine/lsm/level_handler.go"><code>engine/lsm/level_handler.go</code></a></li>
 </ul>
 <p>If a non-overlapping level collapses to a single exact candidate, NoKV uses a thinner point-read path:</p>
 <ul>
-<li><a href="../lsm/table.go"><code>lsm/table.go</code></a></li>
+<li><a href="../engine/lsm/table.go"><code>engine/lsm/table.go</code></a></li>
 </ul>
 <p>This avoids the heavier generic iterator-style path for the common “one table could contain this key” case.</p>
 <h3 id="33-bounded-iterator-pruning"><a class="header" href="#33-bounded-iterator-pruning">3.3 Bounded iterator pruning</a></h3>
 <p>Bounded iterators use the same per-level filter to prune whole tables before iterator assembly:</p>
 <ul>
-<li><a href="../lsm/level_handler.go"><code>lsm/level_handler.go</code></a></li>
+<li><a href="../engine/lsm/level_handler.go"><code>engine/lsm/level_handler.go</code></a></li>
 </ul>
 <p>Inside a table, NoKV then uses SST block base keys from the decoded table index to shrink the block range that the iterator needs to touch:</p>
 <ul>
-<li><a href="../lsm/table.go"><code>lsm/table.go</code></a></li>
+<li><a href="../engine/lsm/table.go"><code>engine/lsm/table.go</code></a></li>
 </ul>
 <p>This is the current “table-internal” stage of the design.</p>
 <h3 id="34-rebuild-behavior"><a class="header" href="#34-rebuild-behavior">3.4 Rebuild behavior</a></h3>
@@ -3205,7 +3204,7 @@ same pruning range.</p>
 <h2 id="6-observability"><a class="header" href="#6-observability">6. Observability</a></h2>
 <p>Range-filter behavior is exported through LSM diagnostics and top-level stats:</p>
 <ul>
-<li><a href="../lsm/diagnostics.go"><code>lsm/diagnostics.go</code></a></li>
+<li><a href="../engine/lsm/diagnostics.go"><code>engine/lsm/diagnostics.go</code></a></li>
 <li><a href="../stats.go"><code>stats.go</code></a></li>
 </ul>
 <p>Current counters include:</p>
@@ -3257,15 +3256,15 @@ same pruning range.</p>
 <h2 id="9-source-map"><a class="header" href="#9-source-map">9. Source Map</a></h2>
 <p>Primary implementation files:</p>
 <ul>
-<li><a href="../lsm/range_filter.go"><code>lsm/range_filter.go</code></a></li>
-<li><a href="../lsm/level_handler.go"><code>lsm/level_handler.go</code></a></li>
-<li><a href="../lsm/table.go"><code>lsm/table.go</code></a></li>
-<li><a href="../lsm/diagnostics.go"><code>lsm/diagnostics.go</code></a></li>
+<li><a href="../engine/lsm/range_filter.go"><code>engine/lsm/range_filter.go</code></a></li>
+<li><a href="../engine/lsm/level_handler.go"><code>engine/lsm/level_handler.go</code></a></li>
+<li><a href="../engine/lsm/table.go"><code>engine/lsm/table.go</code></a></li>
+<li><a href="../engine/lsm/diagnostics.go"><code>engine/lsm/diagnostics.go</code></a></li>
 <li><a href="../stats.go"><code>stats.go</code></a></li>
 </ul>
 <p>Related benchmark coverage:</p>
 <ul>
-<li><a href="../lsm/lsm_bench_test.go"><code>lsm/lsm_bench_test.go</code></a></li>
+<li><a href="../engine/lsm/lsm_bench_test.go"><code>engine/lsm/lsm_bench_test.go</code></a></li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="hotring"><a class="header" href="#hotring">HotRing</a></h1>
@@ -5950,7 +5949,7 @@ needs snapshot-based catch-up instead of regular log replication</li>
 <tr><th>Failure Point</th><th>Expected Recovery Behaviour</th><th>Tests</th></tr>
 </thead>
 <tbody>
-<tr><td>WAL tail truncated</td><td>Replay stops safely at truncated tail, preserving valid prefix records</td><td><code>wal/manager_test.go::TestManagerReplayHandlesTruncate</code></td></tr>
+<tr><td>WAL tail truncated</td><td>Replay stops safely at truncated tail, preserving valid prefix records</td><td><code>engine/wal/manager_test.go::TestManagerReplayHandlesTruncate</code></td></tr>
 <tr><td>Crash before memtable flush install</td><td>WAL replay restores user data not yet flushed to SST</td><td><code>db_test.go::TestRecoveryWALReplayRestoresData</code></td></tr>
 <tr><td>Manifest references missing SST</td><td>Startup removes stale manifest entry and continues</td><td><code>db_test.go::TestRecoveryCleansMissingSSTFromManifest</code></td></tr>
 <tr><td>Manifest references corrupt/unreadable SST</td><td>Startup removes stale entry and continues</td><td><code>db_test.go::TestRecoveryCleansCorruptSSTFromManifest</code></td></tr>
@@ -6191,17 +6190,17 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <tr><th>Module</th><th>Tests</th><th>Coverage Highlights</th><th>Gaps / Next Steps</th></tr>
 </thead>
 <tbody>
-<tr><td>WAL</td><td><code>wal/manager_test.go</code></td><td>Segment rotation, sync semantics, replay tolerance for truncation, directory bootstrap.</td><td>Add IO fault injection, concurrent append stress.</td></tr>
-<tr><td>LSM / Flush / Compaction</td><td><code>lsm/lsm_test.go</code>, <code>lsm/picker_test.go</code>, <code>lsm/planner_test.go</code>, <code>lsm/compaction_test.go</code>, <code>lsm/flush_runtime_test.go</code></td><td>Memtable correctness, iterator merging, flush pipeline metrics, compaction scheduling.</td><td>Extend backpressure assertions and workload-shape coverage.</td></tr>
-<tr><td>Manifest</td><td><code>manifest/manager_test.go</code>, <code>lsm/manifest_test.go</code></td><td>CURRENT swap safety, rewrite crash handling, vlog metadata persistence.</td><td>Simulate partial edit corruption, column family extensions.</td></tr>
-<tr><td>ValueLog</td><td><code>vlog/manager_test.go</code>, <code>vlog/io_test.go</code>, <code>vlog_test.go</code></td><td>ValuePtr encoding/decoding, GC rewrite/rewind, concurrent iterator safety.</td><td>Long-running GC, discard-ratio edge cases.</td></tr>
+<tr><td>WAL</td><td><code>engine/wal/manager_test.go</code></td><td>Segment rotation, sync semantics, replay tolerance for truncation, directory bootstrap.</td><td>Add IO fault injection, concurrent append stress.</td></tr>
+<tr><td>LSM / Flush / Compaction</td><td><code>engine/lsm/lsm_test.go</code>, <code>engine/lsm/picker_test.go</code>, <code>engine/lsm/planner_test.go</code>, <code>engine/lsm/compaction_test.go</code>, <code>engine/lsm/flush_runtime_test.go</code></td><td>Memtable correctness, iterator merging, flush pipeline metrics, compaction scheduling.</td><td>Extend backpressure assertions and workload-shape coverage.</td></tr>
+<tr><td>Manifest</td><td><code>engine/manifest/manager_test.go</code>, <code>engine/lsm/manifest_test.go</code></td><td>CURRENT swap safety, rewrite crash handling, vlog metadata persistence.</td><td>Simulate partial edit corruption, column family extensions.</td></tr>
+<tr><td>ValueLog</td><td><code>engine/vlog/manager_test.go</code>, <code>engine/vlog/io_test.go</code>, <code>vlog_test.go</code></td><td>ValuePtr encoding/decoding, GC rewrite/rewind, concurrent iterator safety.</td><td>Long-running GC, discard-ratio edge cases.</td></tr>
 <tr><td>Percolator / Distributed Txn</td><td><code>percolator/*_test.go</code>, <code>raftstore/client/client_test.go</code>, <code>stats_test.go</code></td><td>Prewrite/Commit/ResolveLock flows, 2PC retries, timestamp-driven MVCC behaviour, metrics accounting.</td><td>Mixed multi-region fuzzing with lock TTL and leader churn.</td></tr>
-<tr><td>DB Integration</td><td><code>db_test.go</code>, <code>db_write_bench_test.go</code></td><td>End-to-end writes, recovery, and throttle behaviour.</td><td>Combine ValueLog GC + compaction stress, multi-DB interference.</td></tr>
+<tr><td>DB Integration</td><td><code>db_test.go</code>, <code>db_bench_test.go</code></td><td>End-to-end writes, recovery, and throttle behaviour.</td><td>Combine ValueLog GC + compaction stress, multi-DB interference.</td></tr>
 <tr><td>CLI &amp; Stats</td><td><code>cmd/nokv/main_test.go</code>, <code>stats_test.go</code></td><td>Golden JSON output, stats snapshot correctness, hot key ranking.</td><td>CLI error handling, expvar HTTP integration tests.</td></tr>
 <tr><td>Redis Gateway</td><td><code>cmd/nokv-redis/backend_embedded_test.go</code>, <code>cmd/nokv-redis/server_test.go</code>, <code>cmd/nokv-redis/backend_raft_test.go</code></td><td>Embedded backend semantics (NX/XX, TTL, counters), RESP parser, raft backend config wiring, and Coordinator-backed routing/TSO discovery.</td><td>End-to-end multi-region CRUD with raft backend, TTL lock cleanup under failures.</td></tr>
 <tr><td>Scripts &amp; Tooling</td><td><code>cmd/nokv-config/main_test.go</code>, <code>cmd/nokv/serve_test.go</code></td><td><code>nokv-config</code> JSON/simple formats, catalog bootstrap CLI, serve bootstrap behavior.</td><td>Add direct shell-script golden tests (currently not present) and failure-path diagnostics for <code>cluster.sh</code>.</td></tr>
 <tr><td>Distributed Migration &amp; Membership</td><td><code>raftstore/integration/*_test.go</code>, <code>raftstore/migrate/*_test.go</code>, <code>raftstore/admin/service_test.go</code></td><td>Standalone -&gt; seeded -&gt; cluster flow, snapshot install, add/remove peer, leader transfer, restart/dehost recovery, Coordinator outage after startup, quorum-loss context propagation, multi-region 2PC deadline propagation, repeated link flap during membership changes, partitioned follower catch-up, and snapshot-install interruption before publish.</td><td>Keep expanding publish-boundary coverage and larger fault matrices around runtime/transport interleavings.</td></tr>
-<tr><td>Benchmark</td><td><code>benchmark/ycsb_test.go</code>, <code>benchmark/ycsb_runner.go</code></td><td>YCSB throughput/latency comparisons across engines (A-F) with detailed percentile + operation mix reporting.</td><td>Automate multi-node deployments and add longer-running, multi-GB stability baselines.</td></tr>
+<tr><td>Benchmark</td><td><code>benchmark/ycsb/ycsb_test.go</code>, <code>benchmark/ycsb/ycsb_runner.go</code></td><td>YCSB throughput/latency comparisons across engines (A-F) with detailed percentile + operation mix reporting.</td><td>Automate multi-node deployments and add longer-running, multi-GB stability baselines.</td></tr>
 </tbody>
 </table>
 </div>
@@ -6216,9 +6215,9 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <tr><td>Crash recovery</td><td><code>db_test.go</code></td><td>WAL replay, missing SST cleanup, vlog GC restart, manifest rewrite safety.</td></tr>
 <tr><td>WAL pointer desync</td><td><code>raftstore/engine/wal_storage_test.go::TestWALStorageDetectsTruncatedSegment</code></td><td>Detects store-local raft pointer offsets beyond truncated WAL tails to avoid silent corruption.</td></tr>
 <tr><td>Distributed transaction contention</td><td><code>raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet</code>, <code>percolator/*_test.go</code></td><td>Lock conflicts, retries, and 2PC sequencing under region routing.</td></tr>
-<tr><td>Value separation + GC</td><td><code>vlog/manager_test.go</code>, <code>db_test.go::TestRecoveryRemovesStaleValueLogSegment</code></td><td>GC correctness, manifest integration, iterator stability.</td></tr>
-<tr><td>Iterator consistency</td><td><code>lsm/iterator_test.go</code></td><td>Snapshot visibility, merging iterators across levels and memtables.</td></tr>
-<tr><td>Throttling / backpressure</td><td><code>lsm/compaction_test.go</code>, <code>db_test.go::TestWriteThrottle</code></td><td>L0 backlog triggers, flush queue growth, metrics observation.</td></tr>
+<tr><td>Value separation + GC</td><td><code>engine/vlog/manager_test.go</code>, <code>db_test.go::TestRecoveryRemovesStaleValueLogSegment</code></td><td>GC correctness, manifest integration, iterator stability.</td></tr>
+<tr><td>Iterator consistency</td><td><code>engine/lsm/iterator_test.go</code></td><td>Snapshot visibility, merging iterators across levels and memtables.</td></tr>
+<tr><td>Throttling / backpressure</td><td><code>engine/lsm/compaction_test.go</code>, <code>db_test.go::TestWriteThrottle</code></td><td>L0 backlog triggers, flush queue growth, metrics observation.</td></tr>
 <tr><td>Distributed NoKV client</td><td><code>raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet</code>, <code>raftstore/transport/grpc_transport_test.go::TestGRPCTransportManualTicksDriveElection</code></td><td>Region-aware routing, NotLeader retries, manual tick-driven elections, cross-region 2PC sequencing.</td></tr>
 <tr><td>Migration &amp; membership orchestration</td><td><code>raftstore/integration/migration_flow_test.go</code>, <code>raftstore/integration/restart_recovery_test.go</code>, <code>raftstore/integration/coordinator_degraded_test.go</code>, <code>raftstore/integration/snapshot_interruption_test.go</code>, <code>raftstore/integration/context_propagation_test.go</code>, <code>raftstore/integration/transport_chaos_test.go</code></td><td>Seed bootstrap, multi-peer rollout, leader transfer, peer removal, restarted follower recovery, removed-peer dehost after restart, Coordinator outage after startup, quorum-loss read/write timeouts, split-region 2PC deadline propagation, repeated link flap during membership changes, partitioned follower catch-up, transfer-leader retry after partition recovery, and snapshot-install interruption before publish.</td></tr>
 <tr><td>Performance regression</td><td><code>benchmark</code> package</td><td>Compare NoKV vs Badger/Pebble by default (RocksDB optional), produce human-readable reports under <code>benchmark/benchmark_results</code>.</td></tr>

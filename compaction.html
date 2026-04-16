@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-dc6edf3c.js";
+            window.path_to_searchindex_js = "searchindex-7154c2cb.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c05f2810.js"></script>
@@ -199,14 +199,14 @@
 <p>Planning now happens via <code>Plan</code>: LSM snapshots table metadata into <code>TableMeta</code>, <code>PlanFor*</code> selects table IDs + key ranges, and LSM resolves the plan back to <code>*table</code> before executing.</p>
 <hr>
 <h2 id="2-ingest-buffer"><a class="header" href="#2-ingest-buffer">2. Ingest Buffer</a></h2>
-<p><code>moveToIngest</code> (see <code>lsm/executor.go</code>) performs a metadata-only migration:</p>
+<p><code>moveToIngest</code> (see <code>engine/lsm/executor.go</code>) performs a metadata-only migration:</p>
 <ol>
 <li>Records a <code>manifest.EditDeleteFile</code> for the source level.</li>
 <li>Logs a new <code>manifest.EditAddFile</code> targeting the destination level.</li>
 <li>Removes the table from <code>thisLevel.tables</code> and appends it to <code>nextLevel.ingest</code>.</li>
 </ol>
 <p>This keeps write amplification low when many small L0 tables arrive at once. Reads still see the newest data because <code>levelHandler.searchLNSST</code> checks the ingest buffer before consulting the canonical level tables.</p>
-<p>Compaction tests (<code>lsm/compaction_test.go</code>) assert that after calling <code>moveToIngest</code> the table disappears from the source level and shows up in the ingest buffer.</p>
+<p>Compaction tests (<code>engine/lsm/compaction_test.go</code>) assert that after calling <code>moveToIngest</code> the table disappears from the source level and shows up in the ingest buffer.</p>
 <hr>
 <h2 id="3-concurrency-guards"><a class="header" href="#3-concurrency-guards">3. Concurrency Guards</a></h2>
 <p>To prevent overlapping compactions:</p>
@@ -218,7 +218,7 @@
 <p>This mechanism is intentionally simple—just a mutex‐protected slice—yet effective in tests (<code>TestCompactStatusGuards</code>) that simulate back‑to‑back registrations on the same key range.</p>
 <hr>
 <h2 id="4-cache-telemetry"><a class="header" href="#4-cache-telemetry">4. Cache Telemetry</a></h2>
-<p>NoKV’s cache strategy has two explicit user-space caches plus direct bloom probing from decoded table indexes (<code>lsm/cache.go</code>):</p>
+<p>NoKV’s cache strategy has two explicit user-space caches plus direct bloom probing from decoded table indexes (<code>engine/lsm/cache.go</code>):</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -245,18 +245,18 @@
 <h2 id="6-testing-checklist"><a class="header" href="#6-testing-checklist">6. Testing Checklist</a></h2>
 <p>Relevant tests to keep compaction healthy:</p>
 <ul>
-<li><code>lsm/compaction_test.go</code>
+<li><code>engine/lsm/compaction_test.go</code>
 <ul>
 <li><code>TestCompactionMoveToIngest</code> – ensures metadata migration works and the ingest buffer grows.</li>
 <li><code>TestCompactStatusGuards</code> – checks overlap detection.</li>
 </ul>
 </li>
-<li><code>lsm/cache_test.go</code>
+<li><code>engine/lsm/cache_test.go</code>
 <ul>
 <li><code>TestCacheHotColdMetrics</code> – validates cache hit accounting.</li>
 </ul>
 </li>
-<li><code>lsm/lsm_test.go</code>
+<li><code>engine/lsm/lsm_test.go</code>
 <ul>
 <li><code>TestCompact</code> / <code>TestHitStorage</code> – end‑to‑end verification that data remains queryable across memtable flushes and compactions.</li>
 </ul>

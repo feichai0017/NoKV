@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-dc6edf3c.js";
+            window.path_to_searchindex_js = "searchindex-7154c2cb.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c05f2810.js"></script>
@@ -179,7 +179,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="memtable-design--lifecycle"><a class="header" href="#memtable-design--lifecycle">Memtable Design &amp; Lifecycle</a></h1>
-<p>NoKV’s write path mirrors RocksDB: every write lands in the <strong>WAL</strong> and an in-memory <strong>memtable</strong> backed by a selectable in-memory index (skiplist or ART). The implementation lives in <a href="../lsm/memtable.go"><code>lsm/memtable.go</code></a> and ties directly into the concrete flush queue in <a href="../lsm/flush_runtime.go"><code>lsm/flush_runtime.go</code></a>.</p>
+<p>NoKV’s write path mirrors RocksDB: every write lands in the <strong>WAL</strong> and an in-memory <strong>memtable</strong> backed by a selectable in-memory index (skiplist or ART). The implementation lives in <a href="../engine/lsm/memtable.go"><code>engine/lsm/memtable.go</code></a> and ties directly into the concrete flush queue in <a href="../engine/lsm/flush_runtime.go"><code>engine/lsm/flush_runtime.go</code></a>.</p>
 <hr>
 <h2 id="1-structure"><a class="header" href="#1-structure">1. Structure</a></h2>
 <pre><code class="language-go">type memTable struct {
@@ -246,7 +246,7 @@
 <tbody>
 <tr><td>Distributed 2PC</td><td><code>kv.Apply</code> + <code>percolator</code> write committed MVCC versions through the same WAL/memtable pipeline in raft mode.</td></tr>
 <tr><td>Manifest</td><td>Flush completion logs <code>EditLogPointer(segmentID)</code> so restart can discard WAL files already persisted into SSTs.</td></tr>
-<tr><td>Stats</td><td><code>Stats.Snapshot</code> pulls <code>FlushPending/Active/Queue</code> counters via <a href="../lsm/lsm.go#L120-L128"><code>lsm.FlushMetrics</code></a>, exposing how many immutables are waiting.</td></tr>
+<tr><td>Stats</td><td><code>Stats.Snapshot</code> pulls <code>FlushPending/Active/Queue</code> counters via <a href="../engine/lsm/lsm.go#L120-L128"><code>lsm.FlushMetrics</code></a>, exposing how many immutables are waiting.</td></tr>
 <tr><td>Value Log</td><td><code>lsm.flush</code> emits discard stats keyed by <code>segmentID</code>, letting the value log GC know when entries become obsolete.</td></tr>
 </tbody>
 </table>

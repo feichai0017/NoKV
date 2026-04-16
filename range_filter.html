@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-dc6edf3c.js";
+            window.path_to_searchindex_js = "searchindex-7154c2cb.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c05f2810.js"></script>
@@ -226,8 +226,8 @@
 <h3 id="31-per-level-table-spans"><a class="header" href="#31-per-level-table-spans">3.1 Per-level table spans</a></h3>
 <p>Each <code>levelHandler</code> maintains a <code>rangeFilter</code> built from its current table set:</p>
 <ul>
-<li>source: <a href="../lsm/range_filter.go"><code>lsm/range_filter.go</code></a></li>
-<li>owner: <a href="../lsm/level_handler.go"><code>lsm/level_handler.go</code></a></li>
+<li>source: <a href="../engine/lsm/range_filter.go"><code>engine/lsm/range_filter.go</code></a></li>
+<li>owner: <a href="../engine/lsm/level_handler.go"><code>engine/lsm/level_handler.go</code></a></li>
 </ul>
 <p>Each span records:</p>
 <ul>
@@ -242,21 +242,21 @@ same pruning range.</p>
 <h3 id="32-point-read-pruning"><a class="header" href="#32-point-read-pruning">3.2 Point-read pruning</a></h3>
 <p>Point lookups first prune candidate tables:</p>
 <ul>
-<li><a href="../lsm/level_handler.go"><code>lsm/level_handler.go</code></a></li>
+<li><a href="../engine/lsm/level_handler.go"><code>engine/lsm/level_handler.go</code></a></li>
 </ul>
 <p>If a non-overlapping level collapses to a single exact candidate, NoKV uses a thinner point-read path:</p>
 <ul>
-<li><a href="../lsm/table.go"><code>lsm/table.go</code></a></li>
+<li><a href="../engine/lsm/table.go"><code>engine/lsm/table.go</code></a></li>
 </ul>
 <p>This avoids the heavier generic iterator-style path for the common “one table could contain this key” case.</p>
 <h3 id="33-bounded-iterator-pruning"><a class="header" href="#33-bounded-iterator-pruning">3.3 Bounded iterator pruning</a></h3>
 <p>Bounded iterators use the same per-level filter to prune whole tables before iterator assembly:</p>
 <ul>
-<li><a href="../lsm/level_handler.go"><code>lsm/level_handler.go</code></a></li>
+<li><a href="../engine/lsm/level_handler.go"><code>engine/lsm/level_handler.go</code></a></li>
 </ul>
 <p>Inside a table, NoKV then uses SST block base keys from the decoded table index to shrink the block range that the iterator needs to touch:</p>
 <ul>
-<li><a href="../lsm/table.go"><code>lsm/table.go</code></a></li>
+<li><a href="../engine/lsm/table.go"><code>engine/lsm/table.go</code></a></li>
 </ul>
 <p>This is the current “table-internal” stage of the design.</p>
 <h3 id="34-rebuild-behavior"><a class="header" href="#34-rebuild-behavior">3.4 Rebuild behavior</a></h3>
@@ -300,7 +300,7 @@ same pruning range.</p>
 <h2 id="6-observability"><a class="header" href="#6-observability">6. Observability</a></h2>
 <p>Range-filter behavior is exported through LSM diagnostics and top-level stats:</p>
 <ul>
-<li><a href="../lsm/diagnostics.go"><code>lsm/diagnostics.go</code></a></li>
+<li><a href="../engine/lsm/diagnostics.go"><code>engine/lsm/diagnostics.go</code></a></li>
 <li><a href="../stats.go"><code>stats.go</code></a></li>
 </ul>
 <p>Current counters include:</p>
@@ -352,15 +352,15 @@ same pruning range.</p>
 <h2 id="9-source-map"><a class="header" href="#9-source-map">9. Source Map</a></h2>
 <p>Primary implementation files:</p>
 <ul>
-<li><a href="../lsm/range_filter.go"><code>lsm/range_filter.go</code></a></li>
-<li><a href="../lsm/level_handler.go"><code>lsm/level_handler.go</code></a></li>
-<li><a href="../lsm/table.go"><code>lsm/table.go</code></a></li>
-<li><a href="../lsm/diagnostics.go"><code>lsm/diagnostics.go</code></a></li>
+<li><a href="../engine/lsm/range_filter.go"><code>engine/lsm/range_filter.go</code></a></li>
+<li><a href="../engine/lsm/level_handler.go"><code>engine/lsm/level_handler.go</code></a></li>
+<li><a href="../engine/lsm/table.go"><code>engine/lsm/table.go</code></a></li>
+<li><a href="../engine/lsm/diagnostics.go"><code>engine/lsm/diagnostics.go</code></a></li>
 <li><a href="../stats.go"><code>stats.go</code></a></li>
 </ul>
 <p>Related benchmark coverage:</p>
 <ul>
-<li><a href="../lsm/lsm_bench_test.go"><code>lsm/lsm_bench_test.go</code></a></li>
+<li><a href="../engine/lsm/lsm_bench_test.go"><code>engine/lsm/lsm_bench_test.go</code></a></li>
 </ul>
 
                     </main>

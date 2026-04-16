@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-dc6edf3c.js";
+            window.path_to_searchindex_js = "searchindex-7154c2cb.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c05f2810.js"></script>
@@ -181,8 +181,8 @@
                         <h1 id="value-log-vlog-design"><a class="header" href="#value-log-vlog-design">Value Log (vlog) Design</a></h1>
 <p>NoKV keeps the LSM tree lean by separating large values into sequential <strong>value log</strong> (vlog) files. The module is split between</p>
 <ul>
-<li><a href="../vlog/manager.go"><code>vlog/manager.go</code></a> – owns the open file set, rotation, and segment lifecycle helpers.</li>
-<li><a href="../vlog/io.go"><code>vlog/io.go</code></a> – append/read/iterate/verify/sample IO paths.</li>
+<li><a href="../engine/vlog/manager.go"><code>engine/vlog/manager.go</code></a> – owns the open file set, rotation, and segment lifecycle helpers.</li>
+<li><a href="../engine/vlog/io.go"><code>engine/vlog/io.go</code></a> – append/read/iterate/verify/sample IO paths.</li>
 <li><a href="../vlog.go"><code>vlog.go</code></a> – integrates the manager with the DB write path, discard statistics, and garbage collection (GC).</li>
 </ul>
 <p>The design echoes BadgerDB’s value log while remaining manifest-driven like RocksDB’s <code>blob_db</code>: vlog metadata (head pointer, pending deletions) is persisted inside the manifest so recovery can reconstruct the exact state without scanning the filesystem.</p>
@@ -194,10 +194,10 @@ policy lives in the core package:</p>
 <li><strong>DB policy layer (<code>vlog.go</code>, <code>vlog_gc.go</code>)</strong> – integrates the manager with
 the DB write path, persists vlog metadata in the manifest, and drives GC
 scheduling based on discard stats.</li>
-<li><strong>Value-log manager (<code>vlog/</code>)</strong> – owns segment lifecycle (open/rotate/remove),
+<li><strong>Value-log manager (<code>engine/vlog/</code>)</strong> – owns segment lifecycle (open/rotate/remove),
 encodes/decodes entries, and exposes append/read/sample APIs without touching
 MVCC or LSM policy.</li>
-<li><strong>File IO (<code>file/</code>)</strong> – mmap-backed <code>LogFile</code> primitives (open/close/truncate,
+<li><strong>File IO (<code>engine/file/</code>)</strong> – mmap-backed <code>LogFile</code> primitives (open/close/truncate,
 read/write, read-only remap) shared by WAL/vlog/SST. Vlog currently uses
 <code>LogFile</code> directly instead of an intermediate store abstraction.</li>
 </ul>
@@ -214,8 +214,8 @@ read/write, read-only remap) shared by WAL/vlog/SST. Vlog currently uses
     ...
 </code></pre>
 <ul>
-<li>Files are named <code>%05d.vlog</code> and live under <code>workdir/vlog/bucket-XXX/</code> when <code>Options.ValueLogBucketCount &gt; 1</code>. <a href="../vlog/manager.go"><code>Manager.populate</code></a> discovers existing segments at open.</li>
-<li><code>Manager</code> tracks the active file ID (<code>activeID</code>) and byte offset; <a href="../vlog/manager.go"><code>Manager.Head</code></a> exposes these so the manifest can checkpoint them (<code>manifest.EditValueLogHead</code>).</li>
+<li>Files are named <code>%05d.vlog</code> and live under <code>workdir/vlog/bucket-XXX/</code> when <code>Options.ValueLogBucketCount &gt; 1</code>. <a href="../engine/vlog/manager.go"><code>Manager.populate</code></a> discovers existing segments at open.</li>
+<li><code>Manager</code> tracks the active file ID (<code>activeID</code>) and byte offset; <a href="../engine/vlog/manager.go"><code>Manager.Head</code></a> exposes these so the manifest can checkpoint them (<code>manifest.EditValueLogHead</code>).</li>
 <li>Files created after a crash but never linked in the manifest are removed during <a href="../vlog.go"><code>valueLog.reconcileManifest</code></a>.</li>
 <li>Production defaults keep ordinary hash bucketization enabled (<code>ValueLogBucketCount=16</code>). Bucket selection is plain hash routing; it no longer depends on HotRing-based hot/cold classification.</li>
 </ul>
@@ -231,7 +231,7 @@ read/write, read-only remap) shared by WAL/vlog/SST. Vlog currently uses
 <li>Header fields are varint-encoded (<code>kv.EntryHeader</code>).</li>
 <li>The first 20 bytes of every segment are reserved (<code>kv.ValueLogHeaderSize</code>) for future metadata; iteration always skips this fixed header.</li>
 <li><code>kv.EncodeEntry</code> and the entry iterator (<code>kv.EntryIterator</code>) perform the layout work, and each append finishes with a CRC32 to detect torn writes.</li>
-<li><code>vlog.VerifyDir</code> scans all segments with <a href="../vlog/io.go"><code>sanitizeValueLog</code></a> to trim corrupted tails after crashes, mirroring RocksDB’s <code>blob_file::Sanitize</code>. Badger performs a similar truncation pass at startup.</li>
+<li><code>vlog.VerifyDir</code> scans all segments with <a href="../engine/vlog/io.go"><code>sanitizeValueLog</code></a> to trim corrupted tails after crashes, mirroring RocksDB’s <code>blob_file::Sanitize</code>. Badger performs a similar truncation pass at startup.</li>
 </ul>
 <hr>
 <h2 id="4-manager-api-surface"><a class="header" href="#4-manager-api-surface">4. Manager API Surface</a></h2>
@@ -245,10 +245,10 @@ _ = mgr.Remove(fid)  // close + delete file
 </code></pre>
 <p>Key behaviours:</p>
 <ol>
-<li><strong>Append + Rotate</strong> – <a href="../vlog/io.go"><code>Manager.AppendEntry</code></a> encodes and appends into the active file. The reservation path handles rotation when the active segment would exceed <code>MaxSize</code>; manual rotation is rare.</li>
-<li><strong>Crash recovery</strong> – <a href="../vlog/manager.go"><code>Manager.Rewind</code></a> truncates the active file and removes newer files when a write batch fails mid-flight. <code>valueLog.write</code> uses this to guarantee idempotent WAL/value log ordering.</li>
-<li><strong>Safe reads</strong> – <a href="../vlog/io.go"><code>Manager.Read</code></a> returns an mmap-backed slice plus an unlock callback. Active segments take a per-file <code>RWMutex</code>, while sealed segments use a pin/unpin path to avoid long-held locks; callers that need ownership should copy the bytes before releasing the lock.</li>
-<li><strong>Verification</strong> – <a href="../vlog/io.go"><code>VerifyDir</code></a> validates entire directories (used by CLI and recovery) by parsing headers and CRCs.</li>
+<li><strong>Append + Rotate</strong> – <a href="../engine/vlog/io.go"><code>Manager.AppendEntry</code></a> encodes and appends into the active file. The reservation path handles rotation when the active segment would exceed <code>MaxSize</code>; manual rotation is rare.</li>
+<li><strong>Crash recovery</strong> – <a href="../engine/vlog/manager.go"><code>Manager.Rewind</code></a> truncates the active file and removes newer files when a write batch fails mid-flight. <code>valueLog.write</code> uses this to guarantee idempotent WAL/value log ordering.</li>
+<li><strong>Safe reads</strong> – <a href="../engine/vlog/io.go"><code>Manager.Read</code></a> returns an mmap-backed slice plus an unlock callback. Active segments take a per-file <code>RWMutex</code>, while sealed segments use a pin/unpin path to avoid long-held locks; callers that need ownership should copy the bytes before releasing the lock.</li>
+<li><strong>Verification</strong> – <a href="../engine/vlog/io.go"><code>VerifyDir</code></a> validates entire directories (used by CLI and recovery) by parsing headers and CRCs.</li>
 </ol>
 <p>Compared with RocksDB’s blob manager the surface is intentionally small—NoKV treats the manager as an append-only log with rewind semantics, while RocksDB maintains index structures inside the blob file metadata.</p>
 <hr>
@@ -265,7 +265,7 @@ _ = mgr.Remove(fid)  // close + delete file
 </pre>
 
 <ol>
-<li><a href="../vlog.go"><code>valueLog.write</code></a> builds a write mask for each batch, then delegates to <a href="../vlog/io.go"><code>Manager.AppendEntries</code></a>. Entries staying in LSM (<code>shouldWriteValueToLSM</code>) receive zero-value pointers.</li>
+<li><a href="../vlog.go"><code>valueLog.write</code></a> builds a write mask for each batch, then delegates to <a href="../engine/vlog/io.go"><code>Manager.AppendEntries</code></a>. Entries staying in LSM (<code>shouldWriteValueToLSM</code>) receive zero-value pointers.</li>
 <li>Rotation is handled inside the manager when the reserved bytes would exceed <code>MaxSize</code>. The WAL append happens <strong>after</strong> the value log append so crash replay observes consistent pointers.</li>
 <li>Any error triggers <code>Manager.Rewind</code> back to the saved head pointer, removing new files and truncating partial bytes. <a href="../vlog_test.go"><code>vlog_test.go</code></a> exercises both append- and rotate-failure paths.</li>
 <li>All batched writes share the same pipeline: the commit worker always writes the value log first, then applies to WAL/memtable, keeping ordering and durability consistent.</li>
@@ -283,9 +283,9 @@ _ = mgr.Remove(fid)  // close + delete file
 </pre>
 
 <ul>
-<li><code>lfDiscardStats</code> aggregates per-file discard counts from LSM compaction workers (<code>lsm/executor.go</code>, <code>subcompact</code> -&gt; <code>updateDiscardStats</code>). Once the in-memory counter crosses <a href="../vlog.go#L27"><code>discardStatsFlushThreshold</code></a>, it marshals the map into JSON and writes it back through the DB pipeline under the special key <code>!NoKV!discard</code>.</li>
+<li><code>lfDiscardStats</code> aggregates per-file discard counts from LSM compaction workers (<code>engine/lsm/executor.go</code>, <code>subcompact</code> -&gt; <code>updateDiscardStats</code>). Once the in-memory counter crosses <a href="../vlog.go#L27"><code>discardStatsFlushThreshold</code></a>, it marshals the map into JSON and writes it back through the DB pipeline under the special key <code>!NoKV!discard</code>.</li>
 <li><code>valueLog.flushDiscardStats</code> consumes those stats, ensuring they are persisted even across crashes. During recovery <code>valueLog.populateDiscardStats</code> replays the JSON payload to repopulate the in-memory map.</li>
-<li>GC uses <code>discardRatio = discardedBytes/totalBytes</code> derived from <a href="../vlog/io.go"><code>Manager.Sample</code></a>, which applies windowed iteration based on configurable ratios. If a file exceeds the configured threshold, <a href="../vlog_gc.go"><code>valueLog.doRunGC</code></a> rewrites live entries into the current head via <code>db.batchSet</code> (the normal commit pipeline) and then <a href="../vlog_gc.go"><code>valueLog.rewrite</code></a> triggers manifest delete edits through <code>removeValueLogFile</code>.
+<li>GC uses <code>discardRatio = discardedBytes/totalBytes</code> derived from <a href="../engine/vlog/io.go"><code>Manager.Sample</code></a>, which applies windowed iteration based on configurable ratios. If a file exceeds the configured threshold, <a href="../vlog_gc.go"><code>valueLog.doRunGC</code></a> rewrites live entries into the current head via <code>db.batchSet</code> (the normal commit pipeline) and then <a href="../vlog_gc.go"><code>valueLog.rewrite</code></a> triggers manifest delete edits through <code>removeValueLogFile</code>.
 <ul>
 <li>Sampling behaviour is controlled by <code>Options.ValueLogGCSampleSizeRatio</code> (default 0.10 of the file) and <code>Options.ValueLogGCSampleCountRatio</code> (default 1% of the configured entry limit). Setting either to <code>&lt;=0</code> keeps the default heuristics. <code>Options.ValueLogGCSampleFromHead</code> starts sampling from the beginning instead of a random window.</li>
 </ul>
@@ -323,7 +323,7 @@ _ = mgr.Remove(fid)  // close + delete file
 <ul>
 <li>Metrics in <a href="../stats.go"><code>stats.go</code></a> report segment counts, pending deletions, discard queue depth, and GC head pointer via <code>expvar</code>.</li>
 <li>GC scheduling exposes <code>NoKV.Stats.value_log.gc</code> (including <code>gc_parallelism</code>, <code>gc_active</code>, <code>gc_scheduled</code>, <code>gc_throttled</code>, <code>gc_skipped</code>, <code>gc_rejected</code>) for diagnostics.</li>
-<li><code>nokv vlog --workdir &lt;dir&gt;</code> loads a manager in read-only mode and prints current head plus file status (valid, gc candidate). It invokes <a href="../vlog/io.go"><code>vlog.VerifyDir</code></a> before describing segments.</li>
+<li><code>nokv vlog --workdir &lt;dir&gt;</code> loads a manager in read-only mode and prints current head plus file status (valid, gc candidate). It invokes <a href="../engine/vlog/io.go"><code>vlog.VerifyDir</code></a> before describing segments.</li>
 <li>Recovery traces controlled by <code>RECOVERY_TRACE_METRICS</code> log every head movement and file removal, aiding pressure testing of GC edge cases. For ad-hoc diagnostics, enable <code>Options.ValueLogVerbose</code> to emit replay/GC messages through the process <code>slog</code> logger.</li>
 </ul>
 <hr>

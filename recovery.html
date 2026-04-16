@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-dc6edf3c.js";
+            window.path_to_searchindex_js = "searchindex-7154c2cb.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c05f2810.js"></script>
@@ -214,7 +214,7 @@
 <tr><th>Failure Point</th><th>Expected Recovery Behaviour</th><th>Tests</th></tr>
 </thead>
 <tbody>
-<tr><td>WAL tail truncated</td><td>Replay stops safely at truncated tail, preserving valid prefix records</td><td><code>wal/manager_test.go::TestManagerReplayHandlesTruncate</code></td></tr>
+<tr><td>WAL tail truncated</td><td>Replay stops safely at truncated tail, preserving valid prefix records</td><td><code>engine/wal/manager_test.go::TestManagerReplayHandlesTruncate</code></td></tr>
 <tr><td>Crash before memtable flush install</td><td>WAL replay restores user data not yet flushed to SST</td><td><code>db_test.go::TestRecoveryWALReplayRestoresData</code></td></tr>
 <tr><td>Manifest references missing SST</td><td>Startup removes stale manifest entry and continues</td><td><code>db_test.go::TestRecoveryCleansMissingSSTFromManifest</code></td></tr>
 <tr><td>Manifest references corrupt/unreadable SST</td><td>Startup removes stale entry and continues</td><td><code>db_test.go::TestRecoveryCleansCorruptSSTFromManifest</code></td></tr>
