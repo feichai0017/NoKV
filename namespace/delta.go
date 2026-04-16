@@ -13,10 +13,10 @@ const (
 // updates. The long shared prefix in its companion key is what makes the
 // existing ART-backed memtable a natural staging area.
 type ListingDelta struct {
-	Parent  []byte
-	PageID  []byte
-	Name    []byte
-	Kind    EntryKind
-	MetaKey []byte
-	Op      DeltaOp
+	Parent []byte
+	PageID []byte
+	Name   []byte
+	Kind   EntryKind
+	Op     DeltaOp
+	Seq    uint64
 }

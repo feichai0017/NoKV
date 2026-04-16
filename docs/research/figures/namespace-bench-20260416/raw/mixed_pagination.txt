@@ -1,0 +1,12 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/feichai0017/NoKV/benchmark/namespace
+cpu: Apple M3 Pro
+BenchmarkNamespaceMixedCreatePaginatedListSecondaryIndex-12                    	    1824	    575908 ns/op	  321363 B/op	    4060 allocs/op
+BenchmarkNamespaceMixedCreatePaginatedListSecondaryIndex-12                    	    2119	    602884 ns/op	  337151 B/op	    4260 allocs/op
+BenchmarkNamespaceSteadyStateMixedCreatePaginatedListReadPlaneNoKV-12          	     796	   1631238 ns/op	         0 deltas/op	        38.73 pages/op	 1591028 B/op	   21024 allocs/op
+BenchmarkNamespaceSteadyStateMixedCreatePaginatedListReadPlaneNoKV-12          	     910	   1630343 ns/op	         0 deltas/op	        39.62 pages/op	 1632401 B/op	   21620 allocs/op
+BenchmarkNamespaceSteadyStateMixedCreatePaginatedRepairThenCertifiedNoKV-12    	     782	   1840561 ns/op	         2.000 repair-pages/op	 2458771 B/op	   31156 allocs/op
+BenchmarkNamespaceSteadyStateMixedCreatePaginatedRepairThenCertifiedNoKV-12    	     775	   1843535 ns/op	         2.000 repair-pages/op	 2455109 B/op	   31101 allocs/op
+PASS
+ok  	github.com/feichai0017/NoKV/benchmark/namespace	18.760s

@@ -1,0 +1,7 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/feichai0017/NoKV/benchmark/namespace
+cpu: Apple M3 Pro
+BenchmarkNamespaceListReadPlaneColdStartDeepDescendants-12    	       1	   1602500 ns/op	         2.000 pages/op	 2813480 B/op	   33073 allocs/op
+PASS
+ok  	github.com/feichai0017/NoKV/benchmark/namespace	1.547s

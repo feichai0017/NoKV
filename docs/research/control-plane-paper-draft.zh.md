@@ -12,7 +12,7 @@
 
 本文研究的不是如何再发明一个新的 consensus protocol，而是一个更窄但更可验证的问题：**一个带 singleton duties 的 distributed KV coordinator，能否不依赖 service-local durable recovery state，而从 rooted truth 被安全重建。** NoKV 给出的答案是肯定的，但前提是四个问题被同时回答：durable truth 与 service/view 必须分离；coordinator ownership transfer 与 allocator lower bounds 必须通过同一 rooted metadata transition 原子表达；view staleness 必须通过显式 freshness contract 暴露给调用方；serialized rooted fence writes 必须通过 allocator window 退出稳态热路径。
 
-本文的核心安全机制是 atomic lease-fence transition。`CoordinatorLeaseGranted(holder, expires, idFence, tsoFence)` 被编码为单条 rooted metadata event，在一次 durable append 中同时记录当前 coordinator holder 与 allocator lower bounds。新 coordinator 在接管时无需额外 RPC 即可继承 `IDFence` 与 `TSOFence`，从而消除 lease transfer 与 allocator 恢复之间的 cross-authority TOCTOU 窗口。围绕这一机制，NoKV 将 `meta/root` 组织为 durable truth kernel，将 `coordinator` 组织为 rebuildable service/view layer，并通过 `RootToken`、`CatchUpState`、`DegradedMode` 与 `TailCatchUpAction` 将控制面 freshness 提升为显式契约。
+本文的核心安全机制是 atomic lease-fence transition。`CoordinatorLeaseGranted(holder, expires, idFence, tsoFence)` 被编码为单条 rooted metadata event，在一次 durable append 中同时记录当前 coordinator holder 与 allocator lower bounds。新 coordinator 在接管时无需额外 RPC 即可继承 `IDFence` 与 `TSOFence`，从而消除 lease transfer 与 allocator 恢复之间的 cross-authority TOCTOU 窗口。围绕这一机制，NoKV 将 `meta/root` 组织为 durable truth kernel，将 `coordinator` 组织为 rebuildable service/view layer，并通过 `RootToken`、`CatchUpState`、`DegradedMode` 与 `TailCatchUpAction` 将控制面 freshness 提升为显式契约。更准确地说，当前 prototype 已经给出一个 **rooted takeover certificate 的最小雏形**：ownership 与 allocator lower bounds 已经进入同一 rooted transition，但尚未被完全对象化为独立 protocol artifact。
 
 当前实现已经覆盖 local、replicated 与 remote 三种 rooted authority 形态，并通过集成测试验证 separated deployment 下的 crash/recovery 语义。在 localhost 的 Apple M3 Pro 环境中，coordinator crash 后的新实例能够在约 `98.1ms` 平均、`103.0ms` P95 的时间内恢复发号；24 轮 chaos-style crash/reopen 测试保持 `AllocID` 全程严格单调，无重复、无回退；不同 holder 的 contested failover 测试验证了 lease 过期后的安全接管与 fence 继承。本文的贡献不在于一个“更快的控制器”，而在于一个可验证的系统性质：**对于承担 singleton duties 的 control-plane service，只要接管关键状态被根植于同一份 rooted truth，就可以把 coordinator 从难以恢复的 durable controller，收缩为 rooted truth 之上的可重建层。**
 
@@ -40,6 +40,8 @@
 
 NoKV 的主张是：让这件事不再依赖一串 loosely coupled 的恢复动作，而依赖一条 rooted transition。
 
+如果把这个观察再压缩一层，真正值得研究的不是“lease 存在哪里”，而是：**接管关键状态能否被压缩成一个单一 rooted object 所表达的边界。** 当前实现已经让 ownership transfer 与 allocator lower bounds 进入同一 transition；下一步最强的升级方向，则是把这条 transition 明确提升成一个 takeover certificate，而不是继续停留在若干字段的工程组合上。
+
 ### 1.3 论文主张
 
 本文主张如下系统性质：
@@ -53,7 +55,7 @@ NoKV 通过四个条件实现这一点：
 - explicit freshness contract
 - hot-path windowing
 
-更精确地说，前两个条件定义 correctness boundary，后两个条件定义 usability boundary。truth/service 不分离，则可重建性没有清晰含义；没有 atomic lease-fence transition，则 singleton duties 的接管不安全；没有 freshness contract，则分离后的 stale view 无法显式表达；没有 windowing，则 remote rooted authority 虽然仍然正确，但会被逐次 fence write 打进热路径而失去工程可用性。本文因此不再使用“缺一不可”的笼统表述，而明确区分 correctness 条件与可用性条件。
+更精确地说，前两个条件定义 correctness boundary，后两个条件定义 usability boundary。truth/service 不分离，则可重建性没有清晰含义；没有 atomic lease-fence transition，则 singleton duties 的接管不安全；没有 freshness contract，则分离后的 stale view 无法显式表达；没有 windowing，则 remote rooted authority 虽然仍然正确，但会被逐次 fence write 打进热路径而失去工程可用性。本文因此不再使用“缺一不可”的笼统表述，而明确区分 correctness 条件与可用性条件。与此同时，本文也主动收窄 claim：当前已完成的是 rooted transition、freshness contract 与 windowed serving 的最小闭环；更强的 `takeover certificate`、`lease-backed allocation budget` 与 typed degraded-state protocol 仍属于下一步可升级方向，而不是本文已经完成的贡献。
 
 ### 1.4 贡献
 
@@ -61,7 +63,7 @@ NoKV 通过四个条件实现这一点：
 
 第一，本文把 distributed KV control plane 的一个常被隐式处理的问题显式化：**带 singleton duties 的 coordinator 是否能从 rooted truth 重建，而不是依赖本地 durable 恢复状态。**
 
-第二，本文提出 atomic lease-fence transition。`CoordinatorLeaseGranted(holder, expires, idFence, tsoFence)` 作为单条 rooted metadata event，在一次 durable append 中同时表达 ownership transfer 与 allocator lower bounds，从而把接管起点收敛成一个单一的 rooted truth 边界。
+第二，本文提出 atomic lease-fence transition。`CoordinatorLeaseGranted(holder, expires, idFence, tsoFence)` 作为单条 rooted metadata event，在一次 durable append 中同时表达 ownership transfer 与 allocator lower bounds，从而把接管起点收敛成一个单一的 rooted truth 边界。当前稿件只主张这是一条 **minimal rooted takeover substrate**，而不把它过度包装成已经完整对象化的 certificate protocol。
 
 第三，本文实现并验证一套完整的 rooted control plane。`meta/root` 作为 durable truth kernel，`coordinator` 作为 rebuildable service/view layer，freshness 通过 `RootToken`、`CatchUpState`、`DegradedMode` 与 `TailCatchUpAction` 显式暴露。系统支持 local、replicated 与 remote 三种 rooted authority 接入方式。
 
@@ -140,6 +142,8 @@ NoKV 将控制面拆成三层：
 
 系统不再需要“拿到 lease 之后，再跨另一个 authority 或另一组键单独去找 allocator 下界”。ownership transfer 与 allocator lower bound 出自同一条 rooted truth，这就是 TOCTOU 窗口被结构性消除的原因。本文因此不把 recovery 描述成字面意义上的 “O(1) step”，而把它描述成：**recovery 所需的 takeover-critical information 来自同一份 rooted authority，无需跨多个独立 authority 组合恢复。**
 
+从研究边界上看，这条 rooted transition 也可以被理解为 **takeover certificate 的最小形式**：它已经足以绑定 holder、expiry 与 allocator lower bounds，并为 same-holder rebuild 与 contested failover 提供共同起点。本文当前还没有把 certificate 完全对象化，例如显式 root version、issued term、budget epoch 等字段仍未进入统一协议对象；但这正是当前实现最自然、也最值得继续深挖的升级方向。
+
 ### 3.4 从协议视角看 takeover
 
 为了更具体地说明本文的协议边界，可以把一次 takeover 分成三种场景：
@@ -178,7 +182,7 @@ NoKV 将控制面拆成三层：
 - `AcknowledgeWindow`
 - `InstallBootstrap`
 
-这不是主创新点，但它让 freshness contract 与 rebuildable coordinator 站在同一套 rooted protocol 之上，而不是分散在若干 package-local 判断中。对 workshop 论文来说，这一点的价值不在 novelty，而在可审查性：reader 能明确看到 coordinator 的 catch-up 行为由哪个协议边界驱动。
+这不是主创新点，但它让 freshness contract 与 rebuildable coordinator 站在同一套 rooted protocol 之上，而不是分散在若干 package-local 判断中。对 workshop 论文来说，这一点的价值不在 novelty，而在可审查性：reader 能明确看到 coordinator 的 catch-up 行为由哪个协议边界驱动。进一步说，本文把 freshness 当成 **serving contract** 的一部分，而不是单纯的内部 health bit；当前实现已具备这个 contract 的骨架，但还没有把 `AUTHORITATIVE / BOUNDED_STALE / DEGRADED` 这类更强的 client-visible serving classes 完全对象化。
 
 ### 3.7 Allocator windowing
 
@@ -189,7 +193,7 @@ NoKV 将控制面拆成三层：
 
 allocator window 不是论文主创新点。它不提供新的 correctness 保证，但它决定 remote rooted truth 能否退出稳态热路径，因此是这套体系具备工程可行性的必要条件。
 
-更具体地说，windowing 的作用不是改变安全边界，而是改变代价形状：从“每次分配都命中 rooted write path”变成“多数分配只在本地 allocator 上前进”。这也是本文将它归类为 usability condition 而非 correctness condition 的原因。
+更具体地说，windowing 的作用不是改变安全边界，而是改变代价形状：从“每次分配都命中 rooted write path”变成“多数分配只在本地 allocator 上前进”。这也是本文将它归类为 usability condition 而非 correctness condition 的原因。下一步更强的表达方式，则是把 window 从“工程优化”进一步上升为 **lease-backed allocation budget**：也就是把当前 holder 在当前 rooted lease 下被授权消耗的一段 allocator 预算显式协议化。
 
 ### 3.8 协议伪代码
 
@@ -570,6 +574,26 @@ NoKV 当前支持三种 rooted authority 形态：
 - freshness contract 的“减少无效 stale-route round trip”价值还缺专门对照实验
 - `SaveAllocatorState` 在当前实现里仍然是 `IDFence` 与 `TSOFence` 的顺序推进，而不是单条复合 rooted event
 - 本文展示的是 workshop 级别的系统性质与工程验证，而不是 full-paper 级别的大规模性能结论
+
+### 6.6 当前最值得继续深挖的创新点
+
+如果继续沿这条路线往前推，本文最值得投入的不是“再做一个更快的 coordinator”，而是把当前已经出现的协议边界继续对象化。按价值排序，当前最强的三个升级方向如下。
+
+第一，**把 atomic lease-fence transition 升级成显式 rooted takeover certificate**。当前实现已经把 holder、expiry 与 allocator lower bounds 放进同一 rooted transition，但尚未把它们对象化为独立协议 artifact。若继续推进，这个 certificate 还应显式携带 root version、issued term 或等价 generation，从而把 “谁有权接管” 与 “从哪里安全继续” 绑定成一个更可审计的对象。
+
+第二，**把 freshness 从内部状态字段升级成更硬的 serving contract**。当前 `RootToken`、`CatchUpState` 与 `DegradedMode` 已经把 staleness 暴露给调用方，但仍然更像实现上的可观测状态。更强的方向是把 serving state 明确收成 `AUTHORITATIVE / BOUNDED_STALE / DEGRADED` 之类的 client-visible classes，并为每一类定义 route lookup、allocator 与 takeover 后的可服务边界。
+
+第三，**把 allocator window 升级成 lease-backed allocation budget**。当前 windowing 主要被写成工程上的热路径优化；更强的表述则是：当前 holder 在当前 rooted lease 下被授权消耗一段 allocator 预算，这段预算本身也属于 authority boundary 的一部分。这样一来，windowing 不再只是 amortization，而变成 authority-preserving delegation。
+
+### 6.7 当前最合理的推进方式
+
+基于当前 artifact，本工作最合理的推进方式不是继续扩大系统范围，而是沿着上面的协议对象逐步加硬：
+
+- 先把当前 rooted transition 明确重命名为 minimal takeover substrate；
+- 再把 takeover certificate 与 serving contract 明确外化；
+- 最后再决定是否值得把 budget epoch、typed degraded states 与更完整的 publication-style verifier 纳入同一 protocol。
+
+这一路线的价值在于：它不会把题目炸成新的 consensus 或 metadata-kernel 论文，但能把当前已经成立的 workshop 级主张继续推向更强、也更可审查的系统边界。
 
 ## 7. 相关工作
 
