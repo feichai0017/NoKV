@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	fBenchDir   = flag.String("benchdir", "benchmark_data", "benchmark working directory")
+	fBenchDir   = flag.String("benchdir", "data", "benchmark working directory root")
 	fSeed       = flag.Int64("seed", 42, "random seed for data generation")
 	fSyncWrites = flag.Bool("sync", false, "force fsync on every write")
 

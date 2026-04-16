@@ -70,8 +70,8 @@ Key components:
 - Workload isolation: each workload reopens and reloads the engine to avoid
   cross-workload state pollution (compaction debt/history carry-over).
 - Results pipeline: summaries are printed to stdout, written as CSV under
-  `benchmark_data/ycsb/results`, and a text report is saved under
-  `benchmark_results/benchmark_results_*.txt`.
+  `data/ycsb/results`, and a text report is saved under
+  `results/ycsb/ycsb_results_*.txt`.
 
 ## Control-Plane Evaluation
 
@@ -100,7 +100,7 @@ Default parameters:
 
 Outputs:
 
-- raw benchmark logs under `benchmark/benchmark_results/control_plane/<stamp>/`
+- raw benchmark logs under `benchmark/results/controlplane/<stamp>/`
 - a paper-friendly markdown summary at `summary.md`
 - routing scale-out benchmark logs comparing `1` vs `3` separated coordinators for `GetRegionByKey`
 
@@ -256,7 +256,7 @@ console visualization:
 - colorblind-safe palette
 - grouped bar charts for engine/workload comparison
 - direct support for `[]BenchmarkResult`
-- direct parsing of `benchmark_data/ycsb/results/*.csv`
+- direct parsing of `data/ycsb/results/*.csv`
 - vector output (`.svg`, `.pdf`) as well as bitmap output (`.png`)
 
 Minimal example:
@@ -283,7 +283,7 @@ func render(results []bench.BenchmarkResult) error {
 If the results already exist as CSV:
 
 ```go
-results, err := benchplot.ReadYCSBResultsCSV("benchmark_data/ycsb/results/ycsb_results_20260416_120000.csv")
+results, err := benchplot.ReadYCSBResultsCSV("data/ycsb/results/ycsb_results_20260416_120000.csv")
 if err != nil {
     return err
 }
@@ -301,7 +301,7 @@ There is also a small CLI entrypoint for repeatable figure generation:
 ```bash
 go run ./cmd/plotbench \
   -format ycsb \
-  -input benchmark_data/ycsb/results/ycsb_results_20260416_120000.csv \
+  -input data/ycsb/results/ycsb_results_20260416_120000.csv \
   -metric p95_latency_us \
   -title "YCSB P95 Latency" \
   -output figures/ycsb_p95.svg

@@ -201,7 +201,7 @@ func (db *DB) startWriteRuntime() {
 	go db.commitWorker()
 }
 
-func (db *DB) levelSizes() (int64, int64) {
+func (db *DB) runtimeLSMOptions() *lsm.Options {
 	baseTableSize := db.opt.MemTableSize
 	if baseTableSize <= 0 {
 		baseTableSize = 8 << 20
@@ -213,11 +213,6 @@ func (db *DB) levelSizes() (int64, int64) {
 		baseTableSize = db.opt.SSTableMaxSz
 	}
 	baseLevelSize := max(baseTableSize*4, 32<<20)
-	return baseTableSize, baseLevelSize
-}
-
-func (db *DB) runtimeLSMOptions() *lsm.Options {
-	baseTableSize, baseLevelSize := db.levelSizes()
 	cfg := &lsm.Options{
 		FS:                       db.fs,
 		WorkDir:                  db.opt.WorkDir,
@@ -593,20 +588,32 @@ func (db *DB) MaterializeInternalEntry(src *kv.Entry) (*kv.Entry, error) {
 	if src == nil {
 		return nil, utils.ErrKeyNotFound
 	}
+	value, meta, err := db.resolveDetachedValue(src)
+	if err != nil {
+		return nil, err
+	}
+	buf := make([]byte, len(src.Key)+len(value))
+	keyCopy := buf[:len(src.Key)]
+	copy(keyCopy, src.Key)
+	valueCopy := buf[len(src.Key):]
+	copy(valueCopy, value)
+	return &kv.Entry{
+		Key:          keyCopy,
+		Value:        valueCopy,
+		ExpiresAt:    src.ExpiresAt,
+		CF:           src.CF,
+		Meta:         meta,
+		Version:      src.Version,
+		Offset:       src.Offset,
+		Hlen:         src.Hlen,
+		ValThreshold: src.ValThreshold,
+	}, nil
+}
+
+func (db *DB) resolveDetachedValue(src *kv.Entry) ([]byte, byte, error) {
+	meta := src.Meta
 	if !kv.IsValuePtr(src) {
-		keyCopy := kv.SafeCopy(nil, src.Key)
-		valueCopy := kv.SafeCopy(nil, src.Value)
-		return &kv.Entry{
-			Key:          keyCopy,
-			Value:        valueCopy,
-			ExpiresAt:    src.ExpiresAt,
-			CF:           src.CF,
-			Meta:         src.Meta,
-			Version:      src.Version,
-			Offset:       src.Offset,
-			Hlen:         src.Hlen,
-			ValThreshold: src.ValThreshold,
-		}, nil
+		return src.Value, meta, nil
 	}
 	var vp kv.ValuePtr
 	vp.Decode(src.Value)
@@ -615,21 +622,9 @@ func (db *DB) MaterializeInternalEntry(src *kv.Entry) (*kv.Entry, error) {
 		defer cb()
 	}
 	if err != nil {
-		return nil, err
+		return nil, meta, err
 	}
-	keyCopy := kv.SafeCopy(nil, src.Key)
-	valueCopy := kv.SafeCopy(nil, result)
-	return &kv.Entry{
-		Key:          keyCopy,
-		Value:        valueCopy,
-		ExpiresAt:    src.ExpiresAt,
-		CF:           src.CF,
-		Meta:         src.Meta &^ kv.BitValuePointer,
-		Version:      src.Version,
-		Offset:       src.Offset,
-		Hlen:         src.Hlen,
-		ValThreshold: src.ValThreshold,
-	}, nil
+	return result, meta &^ kv.BitValuePointer, nil
 }
 
 // Get reads the latest visible value for key from the default column family.
@@ -653,16 +648,34 @@ func (db *DB) Get(key []byte) (*kv.Entry, error) {
 	if entry.IsDeletedOrExpired() {
 		return nil, utils.ErrKeyNotFound
 	}
-	var out *kv.Entry
-	if kv.IsValuePtr(entry) {
-		out, err = db.detachValuePointerEntry(entry)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		out = cloneEntry(entry)
+	cf, userKey, ts, ok := kv.SplitInternalKey(entry.Key)
+	if !ok {
+		return nil, utils.ErrInvalidRequest
 	}
-	return out, nil
+	version := entry.Version
+	if ts != 0 {
+		version = ts
+	}
+	value, meta, err := db.resolveDetachedValue(entry)
+	if err != nil {
+		return nil, err
+	}
+	buf := make([]byte, len(userKey)+len(value))
+	keyCopy := buf[:len(userKey)]
+	copy(keyCopy, userKey)
+	valueCopy := buf[len(userKey):]
+	copy(valueCopy, value)
+	return &kv.Entry{
+		Key:          keyCopy,
+		Value:        valueCopy,
+		ExpiresAt:    entry.ExpiresAt,
+		CF:           cf,
+		Meta:         meta,
+		Version:      version,
+		Offset:       entry.Offset,
+		Hlen:         entry.Hlen,
+		ValThreshold: entry.ValThreshold,
+	}, nil
 }
 
 // loadBorrowedEntry fetches one internal-key record from LSM and resolves value-log
@@ -717,92 +730,13 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 	return entry, nil
 }
 
-// cloneEntry converts an internal/buffered entry into a detached public value object.
-//
-// It deep-copies key/value bytes so the returned entry is independent from pooled
-// memory, parses internal key layout (CF/user-key/version), and fills external-facing
-// metadata. The returned entry does not participate in internal ref-count lifecycle;
-// API callers must not call DecrRef on it.
-func cloneEntry(src *kv.Entry) *kv.Entry {
-	if src == nil {
-		return nil
-	}
-	cf, userKeySrc, ts, ok := kv.SplitInternalKey(src.Key)
-	utils.CondPanicFunc(!ok, func() error {
-		return fmt.Errorf("cloneEntry expects internal key: %x", src.Key)
-	})
-	version := src.Version
-	if ts != 0 {
-		version = ts
-	}
-	buf := make([]byte, len(userKeySrc)+len(src.Value))
-	keyCopy := buf[:len(userKeySrc)]
-	copy(keyCopy, userKeySrc)
-	valueCopy := buf[len(userKeySrc):]
-	copy(valueCopy, src.Value)
-	return &kv.Entry{
-		Key:          keyCopy,
-		Value:        valueCopy,
-		ExpiresAt:    src.ExpiresAt,
-		CF:           cf,
-		Meta:         src.Meta,
-		Version:      version,
-		Offset:       src.Offset,
-		Hlen:         src.Hlen,
-		ValThreshold: src.ValThreshold,
-	}
-}
-
-func (db *DB) detachValuePointerEntry(src *kv.Entry) (*kv.Entry, error) {
-	if src == nil {
-		return nil, utils.ErrKeyNotFound
-	}
-	if !kv.IsValuePtr(src) {
-		return cloneEntry(src), nil
-	}
-	cf, userKeySrc, ts, ok := kv.SplitInternalKey(src.Key)
-	if !ok {
-		return nil, utils.ErrInvalidRequest
-	}
-	version := src.Version
-	if ts != 0 {
-		version = ts
-	}
-	var vp kv.ValuePtr
-	vp.Decode(src.Value)
-	result, cb, err := db.vlog.read(&vp)
-	if cb != nil {
-		defer cb()
-	}
-	if err != nil {
-		return nil, err
-	}
-	keyCopy := kv.SafeCopy(nil, userKeySrc)
-	value := result
-	if cb != nil {
-		buf := make([]byte, len(userKeySrc)+len(result))
-		keyCopy = buf[:len(userKeySrc)]
-		copy(keyCopy, userKeySrc)
-		value = buf[len(userKeySrc):]
-		copy(value, result)
-	}
-	return &kv.Entry{
-		Key:          keyCopy,
-		Value:        value,
-		ExpiresAt:    src.ExpiresAt,
-		CF:           cf,
-		Meta:         src.Meta &^ kv.BitValuePointer,
-		Version:      version,
-		Offset:       src.Offset,
-		Hlen:         src.Hlen,
-		ValThreshold: src.ValThreshold,
-	}, nil
-}
-
 // Info returns the live stats collector for snapshot/diagnostic access.
 func (db *DB) Info() *Stats {
-	// Return the current stats snapshot.
-	return db.statsCollector()
+	if db == nil {
+		return nil
+	}
+	stats, _ := db.background.StatsCollector().(*Stats)
+	return stats
 }
 
 // RunValueLogGC triggers a value log garbage collection.
@@ -908,48 +842,23 @@ func (db *DB) SetRegionMetrics(rm *metrics.RegionMetrics) {
 	db.background.SetRegionMetrics(rm)
 }
 
-func (db *DB) statsCollector() *Stats {
-	if db == nil {
-		return nil
+func (db *DB) SyncWAL() error {
+	if db == nil || db.wal == nil {
+		return fmt.Errorf("db: wal is unavailable")
 	}
-	stats, _ := db.background.StatsCollector().(*Stats)
-	return stats
+	return db.wal.Sync()
 }
 
-// WAL exposes the underlying WAL manager.
-func (db *DB) WAL() *wal.Manager {
-	if db == nil {
-		return nil
+func (db *DB) ReplayWAL(fn func(info wal.EntryInfo, payload []byte) error) error {
+	if db == nil || db.wal == nil {
+		return fmt.Errorf("db: wal is unavailable")
 	}
-	return db.wal
-}
-
-// WorkDir returns the database working directory.
-func (db *DB) WorkDir() string {
-	if db == nil || db.opt == nil {
-		return ""
-	}
-	return db.opt.WorkDir
+	return db.wal.Replay(fn)
 }
 
 // IsClosed reports whether Close has finished and the DB no longer accepts work.
 func (db *DB) IsClosed() bool {
 	return db.isClosed.Load() == 1
-}
-
-func (db *DB) throttleSignal() <-chan struct{} {
-	db.throttleMu.Lock()
-	ch := db.throttleCh
-	db.throttleMu.Unlock()
-	return ch
-}
-
-func (db *DB) notifyThrottleWaiters() {
-	db.throttleMu.Lock()
-	ch := db.throttleCh
-	db.throttleCh = make(chan struct{})
-	db.throttleMu.Unlock()
-	close(ch)
 }
 
 func (db *DB) applyThrottle(state lsm.WriteThrottleState) {
@@ -967,7 +876,11 @@ func (db *DB) applyThrottle(state lsm.WriteThrottleState) {
 	if prevStop == stop && prevSlow == slow {
 		return
 	}
-	db.notifyThrottleWaiters()
+	db.throttleMu.Lock()
+	ch := db.throttleCh
+	db.throttleCh = make(chan struct{})
+	db.throttleMu.Unlock()
+	close(ch)
 	switch state {
 	case lsm.WriteThrottleStop:
 		slog.Default().Warn("write stop enabled due to compaction backlog")
@@ -989,8 +902,10 @@ func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*dbruntim
 		return nil, utils.ErrTxnTooBig
 	}
 	if db.slowWrites.Load() == 1 {
-		if d := db.currentSlowdownDelay(size); d > 0 {
-			time.Sleep(d)
+		if db.lsm != nil {
+			if d := dbruntime.SlowdownDelay(size, db.lsm.ThrottleRateBytesPerSec()); d > 0 {
+				time.Sleep(d)
+			}
 		}
 	}
 	for db.blockWrites.Load() == 1 {
@@ -1000,7 +915,9 @@ func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*dbruntim
 		if db.isClosed.Load() == 1 || db.commitQueue.Closed() {
 			return nil, utils.ErrBlockedWrites
 		}
-		ch := db.throttleSignal()
+		db.throttleMu.Lock()
+		ch := db.throttleCh
+		db.throttleMu.Unlock()
 		if db.blockWrites.Load() == 0 {
 			break
 		}
@@ -1034,13 +951,6 @@ func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*dbruntim
 	}
 
 	return req, nil
-}
-
-func (db *DB) currentSlowdownDelay(batchSize int64) time.Duration {
-	if batchSize <= 0 || db.lsm == nil {
-		return 0
-	}
-	return dbruntime.SlowdownDelay(batchSize, db.lsm.ThrottleRateBytesPerSec())
 }
 
 func (db *DB) maybeThrottleWrite(cf kv.ColumnFamily, key []byte) error {
@@ -1378,107 +1288,76 @@ func (db *DB) writeToLSM(b *dbruntime.Request) error {
 	return nil
 }
 
-type snapshotSource struct {
-	db  *DB
-	lsm *lsm.LSM
-}
-
-func (src snapshotSource) NewInternalIterator(opt *index.Options) index.Iterator {
-	return src.db.NewInternalIterator(opt)
-}
-
-func (src snapshotSource) MaterializeInternalEntry(entry *kv.Entry) (*kv.Entry, error) {
-	return src.db.MaterializeInternalEntry(entry)
-}
-
-func (src snapshotSource) ExternalSSTOptions() *lsm.Options {
-	return src.lsm.ExternalSSTOptions()
-}
-
-type snapshotTarget struct {
-	lsm *lsm.LSM
-}
-
-func (dst snapshotTarget) ImportExternalSST(paths []string) (*lsm.ExternalSSTImportResult, error) {
-	return dst.lsm.ImportExternalSST(paths)
-}
-
-func (dst snapshotTarget) ExternalSSTOptions() *lsm.Options {
-	return dst.lsm.ExternalSSTOptions()
-}
-
-func (dst snapshotTarget) RollbackExternalSST(fileIDs []uint64) error {
-	return dst.lsm.RollbackExternalSST(fileIDs)
-}
-
-func (db *DB) openLSM() (*lsm.LSM, error) {
+func (db *DB) requireOpenLSM() (*lsm.LSM, error) {
 	if db == nil || db.IsClosed() || db.lsm == nil {
 		return nil, fmt.Errorf("db: snapshot bridge requires open db")
 	}
 	return db.lsm, nil
 }
 
-func (db *DB) snapshotSource() (snapshotSource, error) {
-	lsmCore, err := db.openLSM()
+func (db *DB) ExternalSSTOptions() *lsm.Options {
+	lsmCore, err := db.requireOpenLSM()
 	if err != nil {
-		return snapshotSource{}, err
+		return nil
 	}
-	return snapshotSource{db: db, lsm: lsmCore}, nil
+	return lsmCore.ExternalSSTOptions()
 }
 
-func (db *DB) snapshotTarget() (snapshotTarget, error) {
-	lsmCore, err := db.openLSM()
+func (db *DB) ImportExternalSST(paths []string) (*lsm.ExternalSSTImportResult, error) {
+	lsmCore, err := db.requireOpenLSM()
 	if err != nil {
-		return snapshotTarget{}, err
+		return nil, err
 	}
-	return snapshotTarget{lsm: lsmCore}, nil
+	return lsmCore.ImportExternalSST(paths)
+}
+
+func (db *DB) RollbackExternalSST(fileIDs []uint64) error {
+	lsmCore, err := db.requireOpenLSM()
+	if err != nil {
+		return err
+	}
+	return lsmCore.RollbackExternalSST(fileIDs)
 }
 
 func (db *DB) ExportSnapshotDir(dir string, region localmeta.RegionMeta) (*snapshotpkg.ExportResult, error) {
-	src, err := db.snapshotSource()
-	if err != nil {
+	if _, err := db.requireOpenLSM(); err != nil {
 		return nil, err
 	}
-	return snapshotpkg.ExportDir(src, dir, region, nil)
+	return snapshotpkg.ExportDir(db, dir, region, nil)
 }
 
 func (db *DB) ImportSnapshotDir(dir string) (*snapshotpkg.ImportResult, error) {
-	dst, err := db.snapshotTarget()
-	if err != nil {
+	if _, err := db.requireOpenLSM(); err != nil {
 		return nil, err
 	}
-	return snapshotpkg.ImportDir(dst, dir, nil)
+	return snapshotpkg.ImportDir(db, dir, nil)
 }
 
 func (db *DB) ExportSnapshot(region localmeta.RegionMeta) ([]byte, error) {
-	src, err := db.snapshotSource()
-	if err != nil {
+	if _, err := db.requireOpenLSM(); err != nil {
 		return nil, err
 	}
-	payload, _, err := snapshotpkg.ExportPayload(src, db.WorkDir(), region, nil)
+	payload, _, err := snapshotpkg.ExportPayload(db, db.opt.WorkDir, region, nil)
 	return payload, err
 }
 
 func (db *DB) ExportSnapshotTo(w io.Writer, region localmeta.RegionMeta) (snapshotpkg.Meta, error) {
-	src, err := db.snapshotSource()
-	if err != nil {
+	if _, err := db.requireOpenLSM(); err != nil {
 		return snapshotpkg.Meta{}, err
 	}
-	return snapshotpkg.ExportPayloadTo(w, src, db.WorkDir(), region, nil)
+	return snapshotpkg.ExportPayloadTo(w, db, db.opt.WorkDir, region, nil)
 }
 
 func (db *DB) ImportSnapshot(payload []byte) (*snapshotpkg.ImportResult, error) {
-	dst, err := db.snapshotTarget()
-	if err != nil {
+	if _, err := db.requireOpenLSM(); err != nil {
 		return nil, err
 	}
-	return snapshotpkg.ImportPayload(dst, db.WorkDir(), payload, nil)
+	return snapshotpkg.ImportPayload(db, db.opt.WorkDir, payload, nil)
 }
 
 func (db *DB) ImportSnapshotFrom(r io.Reader) (*snapshotpkg.ImportResult, error) {
-	dst, err := db.snapshotTarget()
-	if err != nil {
+	if _, err := db.requireOpenLSM(); err != nil {
 		return nil, err
 	}
-	return snapshotpkg.ImportPayloadFrom(dst, db.WorkDir(), r, nil)
+	return snapshotpkg.ImportPayloadFrom(db, db.opt.WorkDir, r, nil)
 }

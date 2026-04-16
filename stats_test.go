@@ -46,7 +46,7 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	require.Equal(t, int64(1), snap.Region.Running)
 	require.Equal(t, int64(1), snap.Region.Removing)
 
-	db.statsCollector().collect()
+	db.Info().collect()
 	exported := loadExpvarStatsSnapshot(t)
 	require.Equal(t, snap.Entries, exported.Entries)
 	require.Equal(t, snap.Flush.Pending, exported.Flush.Pending)
@@ -92,7 +92,7 @@ func TestStatsSnapshotTracksThrottleAndWalRemovals(t *testing.T) {
 	require.Greater(t, snap.WAL.SegmentsRemoved, uint64(0))
 	require.Greater(t, snap.WAL.SegmentCount, int64(0))
 
-	db.statsCollector().collect()
+	db.Info().collect()
 	exported := loadExpvarStatsSnapshot(t)
 	require.Equal(t, snap.WAL.SegmentsRemoved, exported.WAL.SegmentsRemoved)
 	require.True(t, exported.Write.ThrottleActive)
@@ -107,7 +107,7 @@ func TestStatsSnapshotTracksThrottleAndWalRemovals(t *testing.T) {
 	require.Equal(t, uint32(0), snapAfter.Write.ThrottlePressure)
 	require.Equal(t, uint64(0), snapAfter.Write.ThrottleRate)
 
-	db.statsCollector().collect()
+	db.Info().collect()
 	exportedAfter := loadExpvarStatsSnapshot(t)
 	require.False(t, exportedAfter.Write.ThrottleActive)
 

@@ -62,11 +62,12 @@ func TestWriteResultsCreatesReport(t *testing.T) {
 
 	require.NoError(t, WriteResults(results))
 
-	files, err := os.ReadDir("benchmark_results")
+	resultsDir := filepath.Join("results", "ycsb")
+	files, err := os.ReadDir(resultsDir)
 	require.NoError(t, err)
 	require.Len(t, files, 1)
 
-	reportPath := filepath.Join("benchmark_results", files[0].Name())
+	reportPath := filepath.Join(resultsDir, files[0].Name())
 	content, err := os.ReadFile(reportPath)
 	require.NoError(t, err)
 
@@ -75,7 +76,7 @@ func TestWriteResultsCreatesReport(t *testing.T) {
 	require.Contains(t, body, "nokv")
 	require.Contains(t, body, "sample-run")
 	require.Contains(t, body, "Throughput")
-	require.True(t, strings.HasPrefix(files[0].Name(), "benchmark_results_"))
+	require.True(t, strings.HasPrefix(files[0].Name(), "ycsb_results_"))
 }
 
 func TestEnsureCleanDir(t *testing.T) {
