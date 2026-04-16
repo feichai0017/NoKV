@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1776335302450,
+  "lastUpdate": 1776335373092,
   "repoUrl": "https://github.com/feichai0017/NoKV",
   "entries": {
     "Benchmark": [
@@ -3792,6 +3792,1902 @@ window.BENCHMARK_DATA = {
             "value": 40016,
             "unit": "allocs/op",
             "extra": "42 times\n4 procs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "songguocheng348@gmail.com",
+            "name": "Guocheng Song",
+            "username": "feichai0017"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3f391ed2ca9a039099d173e52a4642b3903e37a9",
+          "message": "Merge pull request #147 from feichai0017/dependabot/github_actions/actions/github-script-9\n\nci: bump actions/github-script from 8 to 9",
+          "timestamp": "2026-04-16T20:25:18+10:00",
+          "tree_id": "5c814e01ea04c561c01ec30533e55ed6f8a10ef6",
+          "url": "https://github.com/feichai0017/NoKV/commit/3f391ed2ca9a039099d173e52a4642b3903e37a9"
+        },
+        "date": 1776335370442,
+        "tool": "go",
+        "benches": [
+          {
+            "name": "BenchmarkDBSetSmall (github.com/feichai0017/NoKV)",
+            "value": 5036,
+            "unit": "ns/op\t   6.35 MB/s\t     425 B/op\t      13 allocs/op",
+            "extra": "22867 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBSetSmall (github.com/feichai0017/NoKV) - ns/op",
+            "value": 5036,
+            "unit": "ns/op",
+            "extra": "22867 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBSetSmall (github.com/feichai0017/NoKV) - MB/s",
+            "value": 6.35,
+            "unit": "MB/s",
+            "extra": "22867 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBSetSmall (github.com/feichai0017/NoKV) - B/op",
+            "value": 425,
+            "unit": "B/op",
+            "extra": "22867 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBSetSmall (github.com/feichai0017/NoKV) - allocs/op",
+            "value": 13,
+            "unit": "allocs/op",
+            "extra": "22867 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBSetLarge (github.com/feichai0017/NoKV)",
+            "value": 15638,
+            "unit": "ns/op\t 261.92 MB/s\t     399 B/op\t      20 allocs/op",
+            "extra": "6991 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBSetLarge (github.com/feichai0017/NoKV) - ns/op",
+            "value": 15638,
+            "unit": "ns/op",
+            "extra": "6991 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBSetLarge (github.com/feichai0017/NoKV) - MB/s",
+            "value": 261.92,
+            "unit": "MB/s",
+            "extra": "6991 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBSetLarge (github.com/feichai0017/NoKV) - B/op",
+            "value": 399,
+            "unit": "B/op",
+            "extra": "6991 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBSetLarge (github.com/feichai0017/NoKV) - allocs/op",
+            "value": 20,
+            "unit": "allocs/op",
+            "extra": "6991 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBGetSmall (github.com/feichai0017/NoKV)",
+            "value": 1275,
+            "unit": "ns/op\t  50.21 MB/s\t     264 B/op\t       5 allocs/op",
+            "extra": "88158 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBGetSmall (github.com/feichai0017/NoKV) - ns/op",
+            "value": 1275,
+            "unit": "ns/op",
+            "extra": "88158 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBGetSmall (github.com/feichai0017/NoKV) - MB/s",
+            "value": 50.21,
+            "unit": "MB/s",
+            "extra": "88158 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBGetSmall (github.com/feichai0017/NoKV) - B/op",
+            "value": 264,
+            "unit": "B/op",
+            "extra": "88158 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBGetSmall (github.com/feichai0017/NoKV) - allocs/op",
+            "value": 5,
+            "unit": "allocs/op",
+            "extra": "88158 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBGetLarge (github.com/feichai0017/NoKV)",
+            "value": 3793,
+            "unit": "ns/op\t1079.85 MB/s\t    4312 B/op\t       7 allocs/op",
+            "extra": "34540 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBGetLarge (github.com/feichai0017/NoKV) - ns/op",
+            "value": 3793,
+            "unit": "ns/op",
+            "extra": "34540 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBGetLarge (github.com/feichai0017/NoKV) - MB/s",
+            "value": 1079.85,
+            "unit": "MB/s",
+            "extra": "34540 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBGetLarge (github.com/feichai0017/NoKV) - B/op",
+            "value": 4312,
+            "unit": "B/op",
+            "extra": "34540 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBGetLarge (github.com/feichai0017/NoKV) - allocs/op",
+            "value": 7,
+            "unit": "allocs/op",
+            "extra": "34540 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBBatchSet/NoSync (github.com/feichai0017/NoKV)",
+            "value": 124172,
+            "unit": "ns/op\t 131.95 MB/s\t  178806 B/op\t     147 allocs/op",
+            "extra": "1014 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBBatchSet/NoSync (github.com/feichai0017/NoKV) - ns/op",
+            "value": 124172,
+            "unit": "ns/op",
+            "extra": "1014 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBBatchSet/NoSync (github.com/feichai0017/NoKV) - MB/s",
+            "value": 131.95,
+            "unit": "MB/s",
+            "extra": "1014 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBBatchSet/NoSync (github.com/feichai0017/NoKV) - B/op",
+            "value": 178806,
+            "unit": "B/op",
+            "extra": "1014 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBBatchSet/NoSync (github.com/feichai0017/NoKV) - allocs/op",
+            "value": 147,
+            "unit": "allocs/op",
+            "extra": "1014 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBBatchSet/SyncInline (github.com/feichai0017/NoKV)",
+            "value": 1111967,
+            "unit": "ns/op\t  14.73 MB/s\t   46706 B/op\t     148 allocs/op",
+            "extra": "100 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBBatchSet/SyncInline (github.com/feichai0017/NoKV) - ns/op",
+            "value": 1111967,
+            "unit": "ns/op",
+            "extra": "100 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBBatchSet/SyncInline (github.com/feichai0017/NoKV) - MB/s",
+            "value": 14.73,
+            "unit": "MB/s",
+            "extra": "100 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBBatchSet/SyncInline (github.com/feichai0017/NoKV) - B/op",
+            "value": 46706,
+            "unit": "B/op",
+            "extra": "100 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBBatchSet/SyncInline (github.com/feichai0017/NoKV) - allocs/op",
+            "value": 148,
+            "unit": "allocs/op",
+            "extra": "100 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBBatchSet/SyncPipeline (github.com/feichai0017/NoKV)",
+            "value": 754816,
+            "unit": "ns/op\t  21.71 MB/s\t   46710 B/op\t     149 allocs/op",
+            "extra": "136 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBBatchSet/SyncPipeline (github.com/feichai0017/NoKV) - ns/op",
+            "value": 754816,
+            "unit": "ns/op",
+            "extra": "136 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBBatchSet/SyncPipeline (github.com/feichai0017/NoKV) - MB/s",
+            "value": 21.71,
+            "unit": "MB/s",
+            "extra": "136 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBBatchSet/SyncPipeline (github.com/feichai0017/NoKV) - B/op",
+            "value": 46710,
+            "unit": "B/op",
+            "extra": "136 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBBatchSet/SyncPipeline (github.com/feichai0017/NoKV) - allocs/op",
+            "value": 149,
+            "unit": "allocs/op",
+            "extra": "136 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBIteratorScan (github.com/feichai0017/NoKV)",
+            "value": 1717630,
+            "unit": "ns/op\t       1 B/op\t       0 allocs/op",
+            "extra": "68 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBIteratorScan (github.com/feichai0017/NoKV) - ns/op",
+            "value": 1717630,
+            "unit": "ns/op",
+            "extra": "68 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBIteratorScan (github.com/feichai0017/NoKV) - B/op",
+            "value": 1,
+            "unit": "B/op",
+            "extra": "68 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBIteratorScan (github.com/feichai0017/NoKV) - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "68 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBIteratorSeek (github.com/feichai0017/NoKV)",
+            "value": 236.6,
+            "unit": "ns/op\t      32 B/op\t       1 allocs/op",
+            "extra": "456224 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBIteratorSeek (github.com/feichai0017/NoKV) - ns/op",
+            "value": 236.6,
+            "unit": "ns/op",
+            "extra": "456224 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBIteratorSeek (github.com/feichai0017/NoKV) - B/op",
+            "value": 32,
+            "unit": "B/op",
+            "extra": "456224 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDBIteratorSeek (github.com/feichai0017/NoKV) - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "456224 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTouch (github.com/feichai0017/NoKV/hotring)",
+            "value": 23.67,
+            "unit": "ns/op",
+            "extra": "4954183 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTouchParallel (github.com/feichai0017/NoKV/hotring)",
+            "value": 58.02,
+            "unit": "ns/op",
+            "extra": "2108842 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTouchAndClamp (github.com/feichai0017/NoKV/hotring)",
+            "value": 20.04,
+            "unit": "ns/op",
+            "extra": "5985322 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkFrequency (github.com/feichai0017/NoKV/hotring)",
+            "value": 16.74,
+            "unit": "ns/op",
+            "extra": "7153404 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTopN (github.com/feichai0017/NoKV/hotring)",
+            "value": 20949478,
+            "unit": "ns/op",
+            "extra": "6 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSlidingWindow (github.com/feichai0017/NoKV/hotring)",
+            "value": 76.91,
+            "unit": "ns/op",
+            "extra": "1570390 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDecay (github.com/feichai0017/NoKV/hotring)",
+            "value": 53819,
+            "unit": "ns/op",
+            "extra": "2002 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkARTInsert (github.com/feichai0017/NoKV/index)",
+            "value": 503.9,
+            "unit": "ns/op\t 127.00 MB/s\t    1542 B/op\t       0 allocs/op",
+            "extra": "235039 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkARTInsert (github.com/feichai0017/NoKV/index) - ns/op",
+            "value": 503.9,
+            "unit": "ns/op",
+            "extra": "235039 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkARTInsert (github.com/feichai0017/NoKV/index) - MB/s",
+            "value": 127,
+            "unit": "MB/s",
+            "extra": "235039 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkARTInsert (github.com/feichai0017/NoKV/index) - B/op",
+            "value": 1542,
+            "unit": "B/op",
+            "extra": "235039 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkARTInsert (github.com/feichai0017/NoKV/index) - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "235039 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkARTGet (github.com/feichai0017/NoKV/index)",
+            "value": 159.2,
+            "unit": "ns/op\t       0 B/op\t       0 allocs/op",
+            "extra": "788893 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkARTGet (github.com/feichai0017/NoKV/index) - ns/op",
+            "value": 159.2,
+            "unit": "ns/op",
+            "extra": "788893 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkARTGet (github.com/feichai0017/NoKV/index) - B/op",
+            "value": 0,
+            "unit": "B/op",
+            "extra": "788893 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkARTGet (github.com/feichai0017/NoKV/index) - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "788893 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkARTSeek (github.com/feichai0017/NoKV/index)",
+            "value": 130.5,
+            "unit": "ns/op\t       0 B/op\t       0 allocs/op",
+            "extra": "889339 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkARTSeek (github.com/feichai0017/NoKV/index) - ns/op",
+            "value": 130.5,
+            "unit": "ns/op",
+            "extra": "889339 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkARTSeek (github.com/feichai0017/NoKV/index) - B/op",
+            "value": 0,
+            "unit": "B/op",
+            "extra": "889339 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkARTSeek (github.com/feichai0017/NoKV/index) - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "889339 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkARTIteratorNext (github.com/feichai0017/NoKV/index)",
+            "value": 56.18,
+            "unit": "ns/op\t       0 B/op\t       0 allocs/op",
+            "extra": "2074540 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkARTIteratorNext (github.com/feichai0017/NoKV/index) - ns/op",
+            "value": 56.18,
+            "unit": "ns/op",
+            "extra": "2074540 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkARTIteratorNext (github.com/feichai0017/NoKV/index) - B/op",
+            "value": 0,
+            "unit": "B/op",
+            "extra": "2074540 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkARTIteratorNext (github.com/feichai0017/NoKV/index) - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "2074540 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistInsert (github.com/feichai0017/NoKV/index)",
+            "value": 970,
+            "unit": "ns/op\t  65.98 MB/s\t     157 B/op\t       1 allocs/op",
+            "extra": "175189 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistInsert (github.com/feichai0017/NoKV/index) - ns/op",
+            "value": 970,
+            "unit": "ns/op",
+            "extra": "175189 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistInsert (github.com/feichai0017/NoKV/index) - MB/s",
+            "value": 65.98,
+            "unit": "MB/s",
+            "extra": "175189 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistInsert (github.com/feichai0017/NoKV/index) - B/op",
+            "value": 157,
+            "unit": "B/op",
+            "extra": "175189 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistInsert (github.com/feichai0017/NoKV/index) - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "175189 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistGet (github.com/feichai0017/NoKV/index)",
+            "value": 432.8,
+            "unit": "ns/op\t       0 B/op\t       0 allocs/op",
+            "extra": "291657 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistGet (github.com/feichai0017/NoKV/index) - ns/op",
+            "value": 432.8,
+            "unit": "ns/op",
+            "extra": "291657 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistGet (github.com/feichai0017/NoKV/index) - B/op",
+            "value": 0,
+            "unit": "B/op",
+            "extra": "291657 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistGet (github.com/feichai0017/NoKV/index) - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "291657 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistSeek (github.com/feichai0017/NoKV/index)",
+            "value": 424.7,
+            "unit": "ns/op\t       0 B/op\t       0 allocs/op",
+            "extra": "273056 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistSeek (github.com/feichai0017/NoKV/index) - ns/op",
+            "value": 424.7,
+            "unit": "ns/op",
+            "extra": "273056 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistSeek (github.com/feichai0017/NoKV/index) - B/op",
+            "value": 0,
+            "unit": "B/op",
+            "extra": "273056 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistSeek (github.com/feichai0017/NoKV/index) - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "273056 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistIteratorNext (github.com/feichai0017/NoKV/index)",
+            "value": 44.4,
+            "unit": "ns/op\t       0 B/op\t       0 allocs/op",
+            "extra": "2649822 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistIteratorNext (github.com/feichai0017/NoKV/index) - ns/op",
+            "value": 44.4,
+            "unit": "ns/op",
+            "extra": "2649822 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistIteratorNext (github.com/feichai0017/NoKV/index) - B/op",
+            "value": 0,
+            "unit": "B/op",
+            "extra": "2649822 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistIteratorNext (github.com/feichai0017/NoKV/index) - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "2649822 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistInsertSequential (github.com/feichai0017/NoKV/index)",
+            "value": 414.4,
+            "unit": "ns/op\t 154.45 MB/s\t     160 B/op\t       1 allocs/op",
+            "extra": "366469 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistInsertSequential (github.com/feichai0017/NoKV/index) - ns/op",
+            "value": 414.4,
+            "unit": "ns/op",
+            "extra": "366469 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistInsertSequential (github.com/feichai0017/NoKV/index) - MB/s",
+            "value": 154.45,
+            "unit": "MB/s",
+            "extra": "366469 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistInsertSequential (github.com/feichai0017/NoKV/index) - B/op",
+            "value": 160,
+            "unit": "B/op",
+            "extra": "366469 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistInsertSequential (github.com/feichai0017/NoKV/index) - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "366469 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistInsertRandom (github.com/feichai0017/NoKV/index)",
+            "value": 969.8,
+            "unit": "ns/op\t  65.99 MB/s\t     160 B/op\t       1 allocs/op",
+            "extra": "335538 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistInsertRandom (github.com/feichai0017/NoKV/index) - ns/op",
+            "value": 969.8,
+            "unit": "ns/op",
+            "extra": "335538 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistInsertRandom (github.com/feichai0017/NoKV/index) - MB/s",
+            "value": 65.99,
+            "unit": "MB/s",
+            "extra": "335538 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistInsertRandom (github.com/feichai0017/NoKV/index) - B/op",
+            "value": 160,
+            "unit": "B/op",
+            "extra": "335538 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSkiplistInsertRandom (github.com/feichai0017/NoKV/index) - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "335538 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMSetBatch/art (github.com/feichai0017/NoKV/lsm)",
+            "value": 26513,
+            "unit": "ns/op\t 308.98 MB/s\t   34644 B/op\t     210 allocs/op",
+            "extra": "4572 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMSetBatch/art (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 26513,
+            "unit": "ns/op",
+            "extra": "4572 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMSetBatch/art (github.com/feichai0017/NoKV/lsm) - MB/s",
+            "value": 308.98,
+            "unit": "MB/s",
+            "extra": "4572 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMSetBatch/art (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 34644,
+            "unit": "B/op",
+            "extra": "4572 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMSetBatch/art (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 210,
+            "unit": "allocs/op",
+            "extra": "4572 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMSetBatch/skiplist (github.com/feichai0017/NoKV/lsm)",
+            "value": 36644,
+            "unit": "ns/op\t 223.56 MB/s\t   34644 B/op\t     210 allocs/op",
+            "extra": "2737 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMSetBatch/skiplist (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 36644,
+            "unit": "ns/op",
+            "extra": "2737 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMSetBatch/skiplist (github.com/feichai0017/NoKV/lsm) - MB/s",
+            "value": 223.56,
+            "unit": "MB/s",
+            "extra": "2737 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMSetBatch/skiplist (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 34644,
+            "unit": "B/op",
+            "extra": "2737 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMSetBatch/skiplist (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 210,
+            "unit": "allocs/op",
+            "extra": "2737 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMRotateFlush/art (github.com/feichai0017/NoKV/lsm)",
+            "value": 6864578,
+            "unit": "ns/op\t71593442 B/op\t     476 allocs/op",
+            "extra": "33 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMRotateFlush/art (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 6864578,
+            "unit": "ns/op",
+            "extra": "33 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMRotateFlush/art (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 71593442,
+            "unit": "B/op",
+            "extra": "33 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMRotateFlush/art (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 476,
+            "unit": "allocs/op",
+            "extra": "33 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMRotateFlush/skiplist (github.com/feichai0017/NoKV/lsm)",
+            "value": 6840962,
+            "unit": "ns/op\t71593372 B/op\t     475 allocs/op",
+            "extra": "16 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMRotateFlush/skiplist (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 6840962,
+            "unit": "ns/op",
+            "extra": "16 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMRotateFlush/skiplist (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 71593372,
+            "unit": "B/op",
+            "extra": "16 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMRotateFlush/skiplist (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 475,
+            "unit": "allocs/op",
+            "extra": "16 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMGetMemtableHit/art (github.com/feichai0017/NoKV/lsm)",
+            "value": 329.9,
+            "unit": "ns/op\t      40 B/op\t       2 allocs/op",
+            "extra": "317976 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMGetMemtableHit/art (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 329.9,
+            "unit": "ns/op",
+            "extra": "317976 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMGetMemtableHit/art (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 40,
+            "unit": "B/op",
+            "extra": "317976 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMGetMemtableHit/art (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 2,
+            "unit": "allocs/op",
+            "extra": "317976 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMGetMemtableHit/skiplist (github.com/feichai0017/NoKV/lsm)",
+            "value": 556,
+            "unit": "ns/op\t      40 B/op\t       2 allocs/op",
+            "extra": "224172 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMGetMemtableHit/skiplist (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 556,
+            "unit": "ns/op",
+            "extra": "224172 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMGetMemtableHit/skiplist (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 40,
+            "unit": "B/op",
+            "extra": "224172 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMGetMemtableHit/skiplist (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 2,
+            "unit": "allocs/op",
+            "extra": "224172 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMemtableIterSeek/art (github.com/feichai0017/NoKV/lsm)",
+            "value": 160.5,
+            "unit": "ns/op\t       0 B/op\t       0 allocs/op",
+            "extra": "698014 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMemtableIterSeek/art (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 160.5,
+            "unit": "ns/op",
+            "extra": "698014 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMemtableIterSeek/art (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 0,
+            "unit": "B/op",
+            "extra": "698014 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMemtableIterSeek/art (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "698014 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMemtableIterSeek/skiplist (github.com/feichai0017/NoKV/lsm)",
+            "value": 354.2,
+            "unit": "ns/op\t       0 B/op\t       0 allocs/op",
+            "extra": "345829 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMemtableIterSeek/skiplist (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 354.2,
+            "unit": "ns/op",
+            "extra": "345829 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMemtableIterSeek/skiplist (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 0,
+            "unit": "B/op",
+            "extra": "345829 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMemtableIterSeek/skiplist (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "345829 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointMissPruning/linear (github.com/feichai0017/NoKV/lsm)",
+            "value": 35970,
+            "unit": "ns/op\t       8 B/op\t       1 allocs/op",
+            "extra": "3268 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointMissPruning/linear (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 35970,
+            "unit": "ns/op",
+            "extra": "3268 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointMissPruning/linear (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 8,
+            "unit": "B/op",
+            "extra": "3268 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointMissPruning/linear (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "3268 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointMissPruning/range_filter (github.com/feichai0017/NoKV/lsm)",
+            "value": 92.42,
+            "unit": "ns/op\t       0 B/op\t       0 allocs/op",
+            "extra": "1296585 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointMissPruning/range_filter (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 92.42,
+            "unit": "ns/op",
+            "extra": "1296585 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointMissPruning/range_filter (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 0,
+            "unit": "B/op",
+            "extra": "1296585 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointMissPruning/range_filter (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "1296585 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointHitPruning/linear (github.com/feichai0017/NoKV/lsm)",
+            "value": 18254,
+            "unit": "ns/op\t     240 B/op\t       5 allocs/op",
+            "extra": "6518 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointHitPruning/linear (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 18254,
+            "unit": "ns/op",
+            "extra": "6518 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointHitPruning/linear (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 240,
+            "unit": "B/op",
+            "extra": "6518 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointHitPruning/linear (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 5,
+            "unit": "allocs/op",
+            "extra": "6518 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointHitPruning/range_filter (github.com/feichai0017/NoKV/lsm)",
+            "value": 520.7,
+            "unit": "ns/op\t     232 B/op\t       4 allocs/op",
+            "extra": "201969 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointHitPruning/range_filter (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 520.7,
+            "unit": "ns/op",
+            "extra": "201969 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointHitPruning/range_filter (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 232,
+            "unit": "B/op",
+            "extra": "201969 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointHitPruning/range_filter (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 4,
+            "unit": "allocs/op",
+            "extra": "201969 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointInRangeMissPruning/linear (github.com/feichai0017/NoKV/lsm)",
+            "value": 17146,
+            "unit": "ns/op\t       8 B/op\t       1 allocs/op",
+            "extra": "6723 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointInRangeMissPruning/linear (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 17146,
+            "unit": "ns/op",
+            "extra": "6723 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointInRangeMissPruning/linear (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 8,
+            "unit": "B/op",
+            "extra": "6723 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointInRangeMissPruning/linear (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "6723 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointInRangeMissPruning/range_filter (github.com/feichai0017/NoKV/lsm)",
+            "value": 470.6,
+            "unit": "ns/op\t     200 B/op\t       3 allocs/op",
+            "extra": "258303 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointInRangeMissPruning/range_filter (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 470.6,
+            "unit": "ns/op",
+            "extra": "258303 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointInRangeMissPruning/range_filter (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 200,
+            "unit": "B/op",
+            "extra": "258303 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelPointInRangeMissPruning/range_filter (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "258303 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_1/linear (github.com/feichai0017/NoKV/lsm)",
+            "value": 54176,
+            "unit": "ns/op\t   19032 B/op\t      11 allocs/op",
+            "extra": "2148 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_1/linear (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 54176,
+            "unit": "ns/op",
+            "extra": "2148 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_1/linear (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 19032,
+            "unit": "B/op",
+            "extra": "2148 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_1/linear (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 11,
+            "unit": "allocs/op",
+            "extra": "2148 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_1/range_filter (github.com/feichai0017/NoKV/lsm)",
+            "value": 853.3,
+            "unit": "ns/op\t     608 B/op\t      11 allocs/op",
+            "extra": "135566 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_1/range_filter (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 853.3,
+            "unit": "ns/op",
+            "extra": "135566 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_1/range_filter (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 608,
+            "unit": "B/op",
+            "extra": "135566 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_1/range_filter (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 11,
+            "unit": "allocs/op",
+            "extra": "135566 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_8/linear (github.com/feichai0017/NoKV/lsm)",
+            "value": 58581,
+            "unit": "ns/op\t   22064 B/op\t      54 allocs/op",
+            "extra": "1972 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_8/linear (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 58581,
+            "unit": "ns/op",
+            "extra": "1972 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_8/linear (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 22064,
+            "unit": "B/op",
+            "extra": "1972 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_8/linear (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 54,
+            "unit": "allocs/op",
+            "extra": "1972 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_8/range_filter (github.com/feichai0017/NoKV/lsm)",
+            "value": 4739,
+            "unit": "ns/op\t    3696 B/op\t      54 allocs/op",
+            "extra": "24474 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_8/range_filter (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 4739,
+            "unit": "ns/op",
+            "extra": "24474 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_8/range_filter (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 3696,
+            "unit": "B/op",
+            "extra": "24474 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_8/range_filter (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 54,
+            "unit": "allocs/op",
+            "extra": "24474 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_64/linear (github.com/feichai0017/NoKV/lsm)",
+            "value": 89971,
+            "unit": "ns/op\t   45808 B/op\t     390 allocs/op",
+            "extra": "1192 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_64/linear (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 89971,
+            "unit": "ns/op",
+            "extra": "1192 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_64/linear (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 45808,
+            "unit": "B/op",
+            "extra": "1192 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_64/linear (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 390,
+            "unit": "allocs/op",
+            "extra": "1192 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_64/range_filter (github.com/feichai0017/NoKV/lsm)",
+            "value": 34356,
+            "unit": "ns/op\t   27888 B/op\t     390 allocs/op",
+            "extra": "3444 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_64/range_filter (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 34356,
+            "unit": "ns/op",
+            "extra": "3444 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_64/range_filter (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 27888,
+            "unit": "B/op",
+            "extra": "3444 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelIteratorBoundsPruning/width_64/range_filter (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 390,
+            "unit": "allocs/op",
+            "extra": "3444 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_8/manual_seek_break (github.com/feichai0017/NoKV/lsm)",
+            "value": 1946,
+            "unit": "ns/op\t    1544 B/op\t      21 allocs/op",
+            "extra": "55544 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_8/manual_seek_break (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 1946,
+            "unit": "ns/op",
+            "extra": "55544 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_8/manual_seek_break (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 1544,
+            "unit": "B/op",
+            "extra": "55544 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_8/manual_seek_break (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 21,
+            "unit": "allocs/op",
+            "extra": "55544 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_8/block_range (github.com/feichai0017/NoKV/lsm)",
+            "value": 1726,
+            "unit": "ns/op\t    1152 B/op\t      16 allocs/op",
+            "extra": "68857 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_8/block_range (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 1726,
+            "unit": "ns/op",
+            "extra": "68857 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_8/block_range (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 1152,
+            "unit": "B/op",
+            "extra": "68857 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_8/block_range (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 16,
+            "unit": "allocs/op",
+            "extra": "68857 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_64/manual_seek_break (github.com/feichai0017/NoKV/lsm)",
+            "value": 10431,
+            "unit": "ns/op\t    7144 B/op\t     105 allocs/op",
+            "extra": "10000 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_64/manual_seek_break (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 10431,
+            "unit": "ns/op",
+            "extra": "10000 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_64/manual_seek_break (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 7144,
+            "unit": "B/op",
+            "extra": "10000 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_64/manual_seek_break (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 105,
+            "unit": "allocs/op",
+            "extra": "10000 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_64/block_range (github.com/feichai0017/NoKV/lsm)",
+            "value": 10854,
+            "unit": "ns/op\t    6752 B/op\t     100 allocs/op",
+            "extra": "10000 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_64/block_range (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 10854,
+            "unit": "ns/op",
+            "extra": "10000 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_64/block_range (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 6752,
+            "unit": "B/op",
+            "extra": "10000 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_64/block_range (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 100,
+            "unit": "allocs/op",
+            "extra": "10000 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_256/manual_seek_break (github.com/feichai0017/NoKV/lsm)",
+            "value": 38079,
+            "unit": "ns/op\t   26344 B/op\t     393 allocs/op",
+            "extra": "3193 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_256/manual_seek_break (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 38079,
+            "unit": "ns/op",
+            "extra": "3193 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_256/manual_seek_break (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 26344,
+            "unit": "B/op",
+            "extra": "3193 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_256/manual_seek_break (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 393,
+            "unit": "allocs/op",
+            "extra": "3193 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_256/block_range (github.com/feichai0017/NoKV/lsm)",
+            "value": 41079,
+            "unit": "ns/op\t   25952 B/op\t     388 allocs/op",
+            "extra": "2955 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_256/block_range (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 41079,
+            "unit": "ns/op",
+            "extra": "2955 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_256/block_range (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 25952,
+            "unit": "B/op",
+            "extra": "2955 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkTableIteratorBlockBounds/width_256/block_range (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 388,
+            "unit": "allocs/op",
+            "extra": "2955 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelPointPruning/deep_hit/linear (github.com/feichai0017/NoKV/lsm)",
+            "value": 45120,
+            "unit": "ns/op\t     296 B/op\t       9 allocs/op",
+            "extra": "2535 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelPointPruning/deep_hit/linear (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 45120,
+            "unit": "ns/op",
+            "extra": "2535 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelPointPruning/deep_hit/linear (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 296,
+            "unit": "B/op",
+            "extra": "2535 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelPointPruning/deep_hit/linear (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 9,
+            "unit": "allocs/op",
+            "extra": "2535 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelPointPruning/deep_hit/range_filter (github.com/feichai0017/NoKV/lsm)",
+            "value": 970.5,
+            "unit": "ns/op\t     272 B/op\t       6 allocs/op",
+            "extra": "120938 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelPointPruning/deep_hit/range_filter (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 970.5,
+            "unit": "ns/op",
+            "extra": "120938 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelPointPruning/deep_hit/range_filter (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 272,
+            "unit": "B/op",
+            "extra": "120938 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelPointPruning/deep_hit/range_filter (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 6,
+            "unit": "allocs/op",
+            "extra": "120938 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelPointPruning/miss/linear (github.com/feichai0017/NoKV/lsm)",
+            "value": 53141,
+            "unit": "ns/op\t      64 B/op\t       5 allocs/op",
+            "extra": "2188 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelPointPruning/miss/linear (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 53141,
+            "unit": "ns/op",
+            "extra": "2188 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelPointPruning/miss/linear (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 64,
+            "unit": "B/op",
+            "extra": "2188 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelPointPruning/miss/linear (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 5,
+            "unit": "allocs/op",
+            "extra": "2188 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelPointPruning/miss/range_filter (github.com/feichai0017/NoKV/lsm)",
+            "value": 513.6,
+            "unit": "ns/op\t      40 B/op\t       2 allocs/op",
+            "extra": "226208 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelPointPruning/miss/range_filter (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 513.6,
+            "unit": "ns/op",
+            "extra": "226208 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelPointPruning/miss/range_filter (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 40,
+            "unit": "B/op",
+            "extra": "226208 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelPointPruning/miss/range_filter (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 2,
+            "unit": "allocs/op",
+            "extra": "226208 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelL0OverlapFallback/hit/linear (github.com/feichai0017/NoKV/lsm)",
+            "value": 21806,
+            "unit": "ns/op\t    4704 B/op\t      13 allocs/op",
+            "extra": "5658 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelL0OverlapFallback/hit/linear (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 21806,
+            "unit": "ns/op",
+            "extra": "5658 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelL0OverlapFallback/hit/linear (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 4704,
+            "unit": "B/op",
+            "extra": "5658 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelL0OverlapFallback/hit/linear (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 13,
+            "unit": "allocs/op",
+            "extra": "5658 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelL0OverlapFallback/hit/range_filter (github.com/feichai0017/NoKV/lsm)",
+            "value": 21850,
+            "unit": "ns/op\t    4704 B/op\t      13 allocs/op",
+            "extra": "5209 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelL0OverlapFallback/hit/range_filter (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 21850,
+            "unit": "ns/op",
+            "extra": "5209 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelL0OverlapFallback/hit/range_filter (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 4704,
+            "unit": "B/op",
+            "extra": "5209 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelL0OverlapFallback/hit/range_filter (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 13,
+            "unit": "allocs/op",
+            "extra": "5209 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelL0OverlapFallback/in_range_miss/linear (github.com/feichai0017/NoKV/lsm)",
+            "value": 20628,
+            "unit": "ns/op\t    4472 B/op\t       9 allocs/op",
+            "extra": "5350 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelL0OverlapFallback/in_range_miss/linear (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 20628,
+            "unit": "ns/op",
+            "extra": "5350 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelL0OverlapFallback/in_range_miss/linear (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 4472,
+            "unit": "B/op",
+            "extra": "5350 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelL0OverlapFallback/in_range_miss/linear (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 9,
+            "unit": "allocs/op",
+            "extra": "5350 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelL0OverlapFallback/in_range_miss/range_filter (github.com/feichai0017/NoKV/lsm)",
+            "value": 20626,
+            "unit": "ns/op\t    4472 B/op\t       9 allocs/op",
+            "extra": "5524 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelL0OverlapFallback/in_range_miss/range_filter (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 20626,
+            "unit": "ns/op",
+            "extra": "5524 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelL0OverlapFallback/in_range_miss/range_filter (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 4472,
+            "unit": "B/op",
+            "extra": "5524 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLevelL0OverlapFallback/in_range_miss/range_filter (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 9,
+            "unit": "allocs/op",
+            "extra": "5524 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMixedPointPruning/hit_50_miss_50/linear (github.com/feichai0017/NoKV/lsm)",
+            "value": 32654,
+            "unit": "ns/op\t     232 B/op\t       7 allocs/op",
+            "extra": "3418 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMixedPointPruning/hit_50_miss_50/linear (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 32654,
+            "unit": "ns/op",
+            "extra": "3418 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMixedPointPruning/hit_50_miss_50/linear (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 232,
+            "unit": "B/op",
+            "extra": "3418 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMixedPointPruning/hit_50_miss_50/linear (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 7,
+            "unit": "allocs/op",
+            "extra": "3418 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMixedPointPruning/hit_50_miss_50/range_filter (github.com/feichai0017/NoKV/lsm)",
+            "value": 803,
+            "unit": "ns/op\t     214 B/op\t       5 allocs/op",
+            "extra": "136992 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMixedPointPruning/hit_50_miss_50/range_filter (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 803,
+            "unit": "ns/op",
+            "extra": "136992 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMixedPointPruning/hit_50_miss_50/range_filter (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 214,
+            "unit": "B/op",
+            "extra": "136992 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMixedPointPruning/hit_50_miss_50/range_filter (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 5,
+            "unit": "allocs/op",
+            "extra": "136992 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMixedPointPruning/hit_90_miss_10/linear (github.com/feichai0017/NoKV/lsm)",
+            "value": 29965,
+            "unit": "ns/op\t     265 B/op\t       7 allocs/op",
+            "extra": "3722 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMixedPointPruning/hit_90_miss_10/linear (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 29965,
+            "unit": "ns/op",
+            "extra": "3722 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMixedPointPruning/hit_90_miss_10/linear (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 265,
+            "unit": "B/op",
+            "extra": "3722 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMixedPointPruning/hit_90_miss_10/linear (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 7,
+            "unit": "allocs/op",
+            "extra": "3722 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMixedPointPruning/hit_90_miss_10/range_filter (github.com/feichai0017/NoKV/lsm)",
+            "value": 866.3,
+            "unit": "ns/op\t     248 B/op\t       5 allocs/op",
+            "extra": "124260 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMixedPointPruning/hit_90_miss_10/range_filter (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 866.3,
+            "unit": "ns/op",
+            "extra": "124260 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMixedPointPruning/hit_90_miss_10/range_filter (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 248,
+            "unit": "B/op",
+            "extra": "124260 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMixedPointPruning/hit_90_miss_10/range_filter (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 5,
+            "unit": "allocs/op",
+            "extra": "124260 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/narrow/linear (github.com/feichai0017/NoKV/lsm)",
+            "value": 87473,
+            "unit": "ns/op\t   30368 B/op\t      30 allocs/op",
+            "extra": "1291 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/narrow/linear (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 87473,
+            "unit": "ns/op",
+            "extra": "1291 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/narrow/linear (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 30368,
+            "unit": "B/op",
+            "extra": "1291 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/narrow/linear (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 30,
+            "unit": "allocs/op",
+            "extra": "1291 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/narrow/range_filter (github.com/feichai0017/NoKV/lsm)",
+            "value": 2263,
+            "unit": "ns/op\t    1960 B/op\t      28 allocs/op",
+            "extra": "55072 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/narrow/range_filter (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 2263,
+            "unit": "ns/op",
+            "extra": "55072 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/narrow/range_filter (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 1960,
+            "unit": "B/op",
+            "extra": "55072 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/narrow/range_filter (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 28,
+            "unit": "allocs/op",
+            "extra": "55072 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/medium/linear (github.com/feichai0017/NoKV/lsm)",
+            "value": 90555,
+            "unit": "ns/op\t   33400 B/op\t      73 allocs/op",
+            "extra": "1232 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/medium/linear (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 90555,
+            "unit": "ns/op",
+            "extra": "1232 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/medium/linear (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 33400,
+            "unit": "B/op",
+            "extra": "1232 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/medium/linear (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 73,
+            "unit": "allocs/op",
+            "extra": "1232 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/medium/range_filter (github.com/feichai0017/NoKV/lsm)",
+            "value": 6225,
+            "unit": "ns/op\t    5048 B/op\t      71 allocs/op",
+            "extra": "18124 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/medium/range_filter (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 6225,
+            "unit": "ns/op",
+            "extra": "18124 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/medium/range_filter (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 5048,
+            "unit": "B/op",
+            "extra": "18124 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/medium/range_filter (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 71,
+            "unit": "allocs/op",
+            "extra": "18124 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/wide/linear (github.com/feichai0017/NoKV/lsm)",
+            "value": 122845,
+            "unit": "ns/op\t   57145 B/op\t     409 allocs/op",
+            "extra": "874 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/wide/linear (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 122845,
+            "unit": "ns/op",
+            "extra": "874 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/wide/linear (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 57145,
+            "unit": "B/op",
+            "extra": "874 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/wide/linear (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 409,
+            "unit": "allocs/op",
+            "extra": "874 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/wide/range_filter (github.com/feichai0017/NoKV/lsm)",
+            "value": 39312,
+            "unit": "ns/op\t   29240 B/op\t     407 allocs/op",
+            "extra": "2588 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/wide/range_filter (github.com/feichai0017/NoKV/lsm) - ns/op",
+            "value": 39312,
+            "unit": "ns/op",
+            "extra": "2588 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/wide/range_filter (github.com/feichai0017/NoKV/lsm) - B/op",
+            "value": 29240,
+            "unit": "B/op",
+            "extra": "2588 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkLSMMultiLevelIteratorBoundsPruning/wide/range_filter (github.com/feichai0017/NoKV/lsm) - allocs/op",
+            "value": 407,
+            "unit": "allocs/op",
+            "extra": "2588 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkMPSCQueuePushPop/producers=1 (github.com/feichai0017/NoKV/utils)",
+            "value": 59.59,
+            "unit": "ns/op",
+            "extra": "2056593 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkMPSCQueuePushPop/producers=4 (github.com/feichai0017/NoKV/utils)",
+            "value": 152.8,
+            "unit": "ns/op",
+            "extra": "845042 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkMPSCQueuePushPop/producers=8 (github.com/feichai0017/NoKV/utils)",
+            "value": 162.8,
+            "unit": "ns/op",
+            "extra": "784644 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkMPSCQueuePushPop/producers=16 (github.com/feichai0017/NoKV/utils)",
+            "value": 176,
+            "unit": "ns/op",
+            "extra": "693498 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkMPSCQueueConsumerSessionPushPop/producers=1 (github.com/feichai0017/NoKV/utils)",
+            "value": 40.92,
+            "unit": "ns/op",
+            "extra": "2957604 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkMPSCQueueConsumerSessionPushPop/producers=4 (github.com/feichai0017/NoKV/utils)",
+            "value": 105.9,
+            "unit": "ns/op",
+            "extra": "1000000 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkMPSCQueueConsumerSessionPushPop/producers=8 (github.com/feichai0017/NoKV/utils)",
+            "value": 130.6,
+            "unit": "ns/op",
+            "extra": "1000000 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkMPSCQueueConsumerSessionPushPop/producers=16 (github.com/feichai0017/NoKV/utils)",
+            "value": 155.1,
+            "unit": "ns/op",
+            "extra": "1000000 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkMPSCQueuePushOnlyContention/producers=1 (github.com/feichai0017/NoKV/utils)",
+            "value": 64.07,
+            "unit": "ns/op",
+            "extra": "1822513 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkMPSCQueuePushOnlyContention/producers=4 (github.com/feichai0017/NoKV/utils)",
+            "value": 163.1,
+            "unit": "ns/op",
+            "extra": "821520 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkMPSCQueuePushOnlyContention/producers=8 (github.com/feichai0017/NoKV/utils)",
+            "value": 171.3,
+            "unit": "ns/op",
+            "extra": "928335 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkMPSCQueuePushOnlyContention/producers=16 (github.com/feichai0017/NoKV/utils)",
+            "value": 192.1,
+            "unit": "ns/op",
+            "extra": "765230 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkMPSCQueuePopOnlyReady (github.com/feichai0017/NoKV/utils)",
+            "value": 28.58,
+            "unit": "ns/op",
+            "extra": "4193912 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkMPSCQueueFullQueueWake (github.com/feichai0017/NoKV/utils)",
+            "value": 267.7,
+            "unit": "ns/op",
+            "extra": "432844 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkMPSCQueueCloseDrain/producers=4 (github.com/feichai0017/NoKV/utils)",
+            "value": 4612,
+            "unit": "ns/op",
+            "extra": "26241 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkMPSCQueueCloseDrain/producers=16 (github.com/feichai0017/NoKV/utils)",
+            "value": 7736,
+            "unit": "ns/op",
+            "extra": "14968 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkRingPushPop/producers=1 (github.com/feichai0017/NoKV/utils)",
+            "value": 51.31,
+            "unit": "ns/op",
+            "extra": "2763674 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkRingPushPop/producers=4 (github.com/feichai0017/NoKV/utils)",
+            "value": 70.27,
+            "unit": "ns/op",
+            "extra": "1707022 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkRingPushPop/producers=8 (github.com/feichai0017/NoKV/utils)",
+            "value": 68.81,
+            "unit": "ns/op",
+            "extra": "1746043 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkRingPushPop/producers=16 (github.com/feichai0017/NoKV/utils)",
+            "value": 68.05,
+            "unit": "ns/op",
+            "extra": "1762058 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkRingPopBurst (github.com/feichai0017/NoKV/utils)",
+            "value": 9.968,
+            "unit": "ns/op",
+            "extra": "12018722 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkVLogAppendEntries (github.com/feichai0017/NoKV/vlog)",
+            "value": 10406,
+            "unit": "ns/op\t 787.27 MB/s\t    1795 B/op\t      35 allocs/op",
+            "extra": "11124 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkVLogAppendEntries (github.com/feichai0017/NoKV/vlog) - ns/op",
+            "value": 10406,
+            "unit": "ns/op",
+            "extra": "11124 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkVLogAppendEntries (github.com/feichai0017/NoKV/vlog) - MB/s",
+            "value": 787.27,
+            "unit": "MB/s",
+            "extra": "11124 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkVLogAppendEntries (github.com/feichai0017/NoKV/vlog) - B/op",
+            "value": 1795,
+            "unit": "B/op",
+            "extra": "11124 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkVLogAppendEntries (github.com/feichai0017/NoKV/vlog) - allocs/op",
+            "value": 35,
+            "unit": "allocs/op",
+            "extra": "11124 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkVLogReadValue (github.com/feichai0017/NoKV/vlog)",
+            "value": 183.1,
+            "unit": "ns/op\t1398.33 MB/s\t     272 B/op\t       2 allocs/op",
+            "extra": "635516 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkVLogReadValue (github.com/feichai0017/NoKV/vlog) - ns/op",
+            "value": 183.1,
+            "unit": "ns/op",
+            "extra": "635516 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkVLogReadValue (github.com/feichai0017/NoKV/vlog) - MB/s",
+            "value": 1398.33,
+            "unit": "MB/s",
+            "extra": "635516 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkVLogReadValue (github.com/feichai0017/NoKV/vlog) - B/op",
+            "value": 272,
+            "unit": "B/op",
+            "extra": "635516 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkVLogReadValue (github.com/feichai0017/NoKV/vlog) - allocs/op",
+            "value": 2,
+            "unit": "allocs/op",
+            "extra": "635516 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWALAppend (github.com/feichai0017/NoKV/wal)",
+            "value": 567,
+            "unit": "ns/op\t 451.52 MB/s\t     440 B/op\t       9 allocs/op",
+            "extra": "202774 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWALAppend (github.com/feichai0017/NoKV/wal) - ns/op",
+            "value": 567,
+            "unit": "ns/op",
+            "extra": "202774 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWALAppend (github.com/feichai0017/NoKV/wal) - MB/s",
+            "value": 451.52,
+            "unit": "MB/s",
+            "extra": "202774 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWALAppend (github.com/feichai0017/NoKV/wal) - B/op",
+            "value": 440,
+            "unit": "B/op",
+            "extra": "202774 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWALAppend (github.com/feichai0017/NoKV/wal) - allocs/op",
+            "value": 9,
+            "unit": "allocs/op",
+            "extra": "202774 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWALReplay (github.com/feichai0017/NoKV/wal)",
+            "value": 2437401,
+            "unit": "ns/op\t 7475974 B/op\t   40015 allocs/op",
+            "extra": "48 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWALReplay (github.com/feichai0017/NoKV/wal) - ns/op",
+            "value": 2437401,
+            "unit": "ns/op",
+            "extra": "48 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWALReplay (github.com/feichai0017/NoKV/wal) - B/op",
+            "value": 7475974,
+            "unit": "B/op",
+            "extra": "48 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWALReplay (github.com/feichai0017/NoKV/wal) - allocs/op",
+            "value": 40015,
+            "unit": "allocs/op",
+            "extra": "48 times\n4 procs"
           }
         ]
       }
