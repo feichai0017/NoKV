@@ -110,6 +110,6 @@ Export the following variables before running the benchmark with RocksDB support
 
 Then run:
 
-  go test -tags benchmark_rocksdb ./benchmark -run TestBenchmarkYCSB -count=1
+  go -C benchmark test -tags benchmark_rocksdb ./ycsb -run TestBenchmarkYCSB -count=1
 
 EOF

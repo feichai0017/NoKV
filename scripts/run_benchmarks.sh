@@ -145,7 +145,7 @@ cmd+=(-v)
 if [[ -n "${ycsb_timeout}" ]]; then
   cmd+=(-timeout "${ycsb_timeout}")
 fi
-cmd+=(. -run TestBenchmarkYCSB -count=1 -args)
+cmd+=(./ycsb -run TestBenchmarkYCSB -count=1 -args)
 cmd+=("${args[@]}")
 
 printf 'Running YCSB benchmark command: %s\n' "${cmd[*]}"
