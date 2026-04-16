@@ -34,7 +34,7 @@
     </a>
   </p>
 
-  <p><strong>Not Only KV Store • LSM Tree • ValueLog • MVCC • Multi-Raft Regions • Redis-Compatible</strong></p>
+  <p><strong>Not Only KV Store • Distributed Storage Research Platform • LSM Tree • ValueLog • MVCC • Multi-Raft Regions</strong></p>
 </div>
 
 
@@ -43,6 +43,24 @@ NoKV stands for <strong>Not Only KV Store</strong>. It is a Go-native storage sy
 The interesting part is not just that it has WAL, LSM, MVCC, Redis compatibility, or Raft. The interesting part is that these pieces are built as one system: a single storage substrate that can be embedded locally, migrated into a seeded distributed node, and then expanded into a replicated cluster with an explicit protocol.
 
 > NoKV is not trying to be "yet another KV". It is trying to make the path from standalone storage to distributed replication coherent, inspectable, and testable.
+
+## 🎯 Project Positioning
+
+NoKV is intended to be a **maintainable and extensible distributed storage research platform**, not just a feature demo.
+
+That means the repository is organized so new storage and distributed-systems ideas can land without rewriting the whole system each time:
+
+- **One storage core, multiple system shapes**  
+  Embedded mode, seeded migration, and distributed raft mode all reuse the same underlying engine instead of forking into separate prototypes.
+
+- **Explicit boundaries for long-term maintenance**  
+  `engine/*` contains single-node storage substrate, `raftstore/*` and `coordinator/*` contain distributed runtime/control-plane logic, and `internal/runtime` is reserved for DB runtime support instead of subsystem-specific glue.
+
+- **Research workflows live in the repo, not outside it**  
+  `benchmark/*`, plotting tools, scripts, and design docs are part of the system so papers, experiments, and implementation evolve together.
+
+- **Extensibility matters as much as features**  
+  The goal is to make it practical to explore new metadata models, control-plane designs, benchmarking setups, and eventually different replication designs on top of a stable codebase.
 
 ## ✨ Why NoKV
 
@@ -241,6 +259,22 @@ What makes this layout distinctive:
 - **Migration is a protocol, not a dump/import hack** – `plan → init → seeded → expand` turns an existing standalone workdir into a replicated cluster path with explicit lifecycle state.
 - **Execution plane and control plane are split on purpose** – `RaftAdmin` executes leader-side membership changes, while `Coordinator` stays responsible for routing, allocation, timestamps, and cluster view.
 - **Recovery metadata is not mixed with engine metadata** – manifest, local recovery catalog, raft durable state, and logical region snapshots each have distinct ownership.
+
+## 🧪 Why This Works As A Research Platform
+
+The repository is meant to support multiple storage and distributed-systems research lines without turning into a one-off paper artifact.
+
+- **Maintainable layering**  
+  Root `DB` APIs stay thin, engine internals live under `engine/*`, distributed runtime lives under `raftstore/*`, and experiments live under `benchmark/*`.
+
+- **Extensible control/data-plane split**  
+  The architecture already separates storage substrate, distributed execution, metadata root, and coordinator services, which makes it much easier to evolve one area without destabilizing the whole system.
+
+- **Evidence-oriented development**  
+  Benchmarks, failure injection, restart recovery tests, and design docs are treated as first-class project assets rather than after-the-fact appendices.
+
+- **Good fit for exploratory systems work**  
+  NoKV is structured to support questions about storage-engine internals, metadata/control-plane design, migration protocols, namespace services, and evaluation methodology in the same repository.
 
 Key ideas:
 - **Durability path** – WAL first, memtable second. ValueLog writes occur before WAL append so crash replay can fully rebuild state.
