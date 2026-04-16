@@ -91,6 +91,8 @@ type (
 		iterPool        *iteratorPool
 		hotWriteLimited atomic.Uint64
 		policyMatcher   atomic.Pointer[kv.ValueSeparationPolicyMatcher]
+		namespaceMu     sync.Mutex
+		namespaces      map[*NamespaceHandle]struct{}
 	}
 
 	commitQueue struct {
@@ -366,6 +368,45 @@ func (db *DB) Close() error {
 	return db.closeErr
 }
 
+func (db *DB) registerNamespaceHandle(h *NamespaceHandle) {
+	if db == nil || h == nil {
+		return
+	}
+	db.namespaceMu.Lock()
+	if db.namespaces == nil {
+		db.namespaces = make(map[*NamespaceHandle]struct{})
+	}
+	db.namespaces[h] = struct{}{}
+	db.namespaceMu.Unlock()
+}
+
+func (db *DB) unregisterNamespaceHandle(h *NamespaceHandle) {
+	if db == nil || h == nil {
+		return
+	}
+	db.namespaceMu.Lock()
+	delete(db.namespaces, h)
+	db.namespaceMu.Unlock()
+}
+
+func (db *DB) closeNamespaceHandles() {
+	if db == nil {
+		return
+	}
+	db.namespaceMu.Lock()
+	handles := make([]*NamespaceHandle, 0, len(db.namespaces))
+	for h := range db.namespaces {
+		handles = append(handles, h)
+	}
+	db.namespaces = nil
+	db.namespaceMu.Unlock()
+	for _, h := range handles {
+		if h != nil {
+			h.Close()
+		}
+	}
+}
+
 // closeInternal executes DB shutdown exactly once and aggregates non-fatal
 // close failures so callers can observe every resource teardown error.
 func (db *DB) closeInternal() error {
@@ -382,6 +423,7 @@ func (db *DB) closeInternal() error {
 	}
 
 	db.stopCommitWorkers()
+	db.closeNamespaceHandles()
 
 	var errs []error
 	if db.stats != nil {

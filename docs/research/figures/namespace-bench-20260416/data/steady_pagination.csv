@@ -1,0 +1,4 @@
+category,series,value
+steady-paginated,secondary-index,231.145
+steady-paginated,repairing-read-plane,35.881
+steady-paginated,strict-read-plane,35.414
