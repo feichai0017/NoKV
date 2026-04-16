@@ -14,17 +14,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/feichai0017/NoKV/engine/index"
+	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm"
+	"github.com/feichai0017/NoKV/engine/manifest"
+	"github.com/feichai0017/NoKV/engine/vfs"
+	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/hotring"
-	"github.com/feichai0017/NoKV/index"
-	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/manifest"
+	dbruntime "github.com/feichai0017/NoKV/internal/runtime"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/utils"
-	"github.com/feichai0017/NoKV/vfs"
-	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
@@ -84,6 +86,13 @@ func TestAPI(t *testing.T) {
 			t.Logf("db.Get key=%s, value=%s, expiresAt=%d", entry.Key, entry.Value, entry.ExpiresAt)
 		}
 	}
+}
+
+func openTestDB(t testing.TB, opt *Options) *DB {
+	t.Helper()
+	db, err := Open(opt)
+	require.NoError(t, err)
+	return db
 }
 
 func TestColumnFamilies(t *testing.T) {
@@ -679,30 +688,19 @@ func TestDBIteratorCloseIdempotentAcrossMemtableEngines(t *testing.T) {
 	})
 }
 
-func TestCFHotKeyEncoding(t *testing.T) {
-	key := []byte("hot-key")
-	require.Equal(t, string(key), cfHotKey(kv.CFDefault, key))
-	require.Equal(t, string(key), cfHotKey(kv.ColumnFamily(0), key))
-
-	encoded := cfHotKey(kv.CFLock, key)
-	require.Len(t, encoded, len(key)+1)
-	require.Equal(t, byte(kv.CFLock), encoded[0])
-	require.Equal(t, string(key), encoded[1:])
-}
-
 func TestRequestLoadEntriesCopiesSlice(t *testing.T) {
-	req := requestPool.Get().(*request)
-	req.reset()
+	req := dbruntime.RequestPool.Get().(*dbruntime.Request)
+	req.Reset()
 	defer func() {
 		req.Entries = nil
 		req.Ptrs = nil
-		requestPool.Put(req)
+		dbruntime.RequestPool.Put(req)
 	}()
 
 	e1 := &kv.Entry{Key: []byte("a")}
 	e2 := &kv.Entry{Key: []byte("b")}
 	src := []*kv.Entry{e1, e2}
-	req.loadEntries(src)
+	req.LoadEntries(src)
 
 	if len(req.Entries) != len(src) {
 		t.Fatalf("expected %d entries, got %d", len(src), len(req.Entries))
@@ -1323,15 +1321,6 @@ func TestWriteHotKeyThrottleBlocksSet(t *testing.T) {
 	require.Equal(t, uint64(1), db.hotWriteLimited.Load())
 }
 
-func TestCFHotKey(t *testing.T) {
-	key := []byte("k")
-	require.Equal(t, "k", cfHotKey(kv.CFDefault, key))
-	require.Equal(t, string(key), cfHotKey(kv.ColumnFamily(0), key))
-
-	expected := append([]byte{byte(kv.CFWrite)}, key...)
-	require.Equal(t, string(expected), cfHotKey(kv.CFWrite, key))
-}
-
 func TestHotWriteAndThrottle(t *testing.T) {
 	db := &DB{
 		opt: &Options{
@@ -1361,7 +1350,7 @@ func TestApplyRequestsFailureIndex(t *testing.T) {
 	defer good.DecrRef()
 	defer bad.DecrRef()
 
-	reqs := []*request{
+	reqs := []*dbruntime.Request{
 		{
 			Entries: []*kv.Entry{good},
 			Ptrs:    []kv.ValuePtr{{}},
@@ -1396,7 +1385,7 @@ func TestApplyRequestsInlineRequestWithoutPtrs(t *testing.T) {
 	entry := kv.NewInternalEntry(kv.CFDefault, []byte("inline-fast-path"), nonTxnMaxVersion, []byte("v1"), 0, 0)
 	defer entry.DecrRef()
 
-	reqs := []*request{
+	reqs := []*dbruntime.Request{
 		{
 			Entries: []*kv.Entry{entry},
 		},
@@ -1414,23 +1403,23 @@ func TestApplyRequestsInlineRequestWithoutPtrs(t *testing.T) {
 
 func TestFinishCommitRequestsPerRequestErrors(t *testing.T) {
 	db := &DB{}
-	req1 := &request{}
-	req2 := &request{}
-	req1.wg.Add(1)
-	req2.wg.Add(1)
+	req1 := &dbruntime.Request{}
+	req2 := &dbruntime.Request{}
+	req1.WG.Add(1)
+	req2.WG.Add(1)
 	reqErr := errors.New("request failed")
 
-	batch := []*commitRequest{
-		{req: req1},
-		{req: req2},
+	batch := []*dbruntime.CommitRequest{
+		{Req: req1},
+		{Req: req2},
 	}
-	perReq := map[*request]error{
+	perReq := map[*dbruntime.Request]error{
 		req2: reqErr,
 	}
 
 	db.finishCommitRequests(batch, nil, perReq)
-	req1.wg.Wait()
-	req2.wg.Wait()
+	req1.WG.Wait()
+	req2.WG.Wait()
 
 	require.NoError(t, req1.Err)
 	require.ErrorIs(t, req2.Err, reqErr)
@@ -1552,7 +1541,7 @@ func drForEachMemTableEngine(t *testing.T, fn func(t *testing.T, engine MemTable
 
 func drSimulateCrash(t *testing.T, db *DB) {
 	t.Helper()
-	_ = db.stats.close()
+	_ = db.statsCollector().close()
 	for _, mgr := range db.vlog.managers {
 		if mgr != nil {
 			_ = mgr.Close()
@@ -2374,4 +2363,126 @@ func TestValueSeparationPolicyDecisionLogic(t *testing.T) {
 	entry = kv.NewInternalEntry(kv.CFDefault, []byte("regular_test2"), nonTxnMaxVersion, largeValue, 0, 0)
 	require.False(t, db.shouldWriteValueToLSM(entry))
 	entry.DecrRef()
+}
+
+// TestSyncPipelineWALConsistency opens two DBs (one with SyncPipeline off, one
+// with SyncPipeline on), writes the same keys, closes them, then compares the
+// raw WAL file bytes to make sure they are identical.
+func TestSyncPipelineWALConsistency(t *testing.T) {
+	const numKeys = 10
+	value := []byte("hello-sync-pipeline")
+
+	readWALFiles := func(dir string) []byte {
+		matches, err := filepath.Glob(filepath.Join(dir, "*.wal"))
+		require.NoError(t, err)
+		var all []byte
+		for _, f := range matches {
+			data, err := os.ReadFile(f)
+			require.NoError(t, err)
+			all = append(all, data...)
+		}
+		return all
+	}
+
+	writeAndClose := func(dir string, pipeline bool) {
+		opts := NewDefaultOptions()
+		opts.WorkDir = dir
+		opts.SyncWrites = true
+		opts.SyncPipeline = pipeline
+		opts.EnableWALWatchdog = false
+		opts.ValueLogGCInterval = 0
+		opts.ManifestSync = false
+		opts.ValueThreshold = 1 << 20
+		opts.WriteBatchWait = 0
+
+		db := openTestDB(t, opts)
+		for i := range numKeys {
+			key := fmt.Appendf(nil, "key-%04d", i)
+			require.NoError(t, db.Set(key, value))
+		}
+		require.NoError(t, db.Close())
+	}
+
+	dirInline := t.TempDir()
+	dirPipeline := t.TempDir()
+
+	writeAndClose(dirInline, false)
+	writeAndClose(dirPipeline, true)
+
+	walInline := readWALFiles(dirInline)
+	walPipeline := readWALFiles(dirPipeline)
+
+	require.NotEmpty(t, walInline, "inline WAL should not be empty")
+	require.NotEmpty(t, walPipeline, "pipeline WAL should not be empty")
+	require.Equal(t, walInline, walPipeline, "WAL file contents should be identical between SyncPipeline=false and SyncPipeline=true")
+}
+
+func TestSendToWriteChWaitsForThrottleClear(t *testing.T) {
+	opts := newTestOptions(t)
+	opts.WriteBatchWait = 0
+	db := openTestDB(t, opts)
+	defer func() { _ = db.Close() }()
+
+	db.applyThrottle(lsm.WriteThrottleStop)
+	defer db.applyThrottle(lsm.WriteThrottleNone)
+
+	done := make(chan error, 1)
+	go func() {
+		entry := kv.NewInternalEntry(kv.CFDefault, []byte("throttle-clear"), 1, []byte("value"), 0, 0)
+		req, err := db.sendToWriteCh([]*kv.Entry{entry}, true)
+		if err != nil {
+			entry.DecrRef()
+			done <- err
+			return
+		}
+		done <- req.Wait()
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("write finished before throttle cleared: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	db.applyThrottle(lsm.WriteThrottleNone)
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("write did not resume after throttle cleared")
+	}
+}
+
+func TestSendToWriteChReturnsBlockedWritesWhenClosedWhileThrottled(t *testing.T) {
+	opts := newTestOptions(t)
+	opts.WriteBatchWait = 0
+	db := openTestDB(t, opts)
+
+	db.applyThrottle(lsm.WriteThrottleStop)
+
+	done := make(chan error, 1)
+	go func() {
+		entry := kv.NewInternalEntry(kv.CFDefault, []byte("throttle-close"), 1, []byte("value"), 0, 0)
+		_, err := db.sendToWriteCh([]*kv.Entry{entry}, true)
+		if err != nil {
+			entry.DecrRef()
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("write finished before db close: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	require.NoError(t, db.Close())
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, utils.ErrBlockedWrites)
+	case <-time.After(2 * time.Second):
+		t.Fatal("throttled write did not return after db close")
+	}
 }

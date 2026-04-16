@@ -7,13 +7,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/hotring"
-	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/metrics"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	transportpkg "github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/utils"
-	"github.com/feichai0017/NoKV/wal"
 )
 
 // Stats owns periodic runtime metric collection and snapshot publication.
@@ -256,6 +256,11 @@ func (s *Stats) StartStats() {
 		s.closer.Add(1)
 		go s.run()
 	})
+}
+
+// Close stops the stats loop.
+func (s *Stats) Close() error {
+	return s.close()
 }
 
 // SetRegionMetrics attaches region metrics recorder used in snapshots.
@@ -537,7 +542,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	}
 
 	warning, reason := metrics.WALTypedWarning(snap.WAL.TypedRecordRatio, analysis.SegmentsWithRaft, s.db.opt.WALTypedRecordWarnRatio, s.db.opt.WALTypedRecordWarnSegments)
-	if watchdog := s.db.walWatchdog; watchdog != nil {
+	if watchdog := s.db.background.WALWatchdog(); watchdog != nil {
 		wsnap := watchdog.Snapshot()
 		snap.WAL.AutoGCRuns = wsnap.AutoRuns
 		snap.WAL.AutoGCRemoved = wsnap.SegmentsRemoved
@@ -570,7 +575,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Hot.WriteRing = &hotStats
 	}
 	if s.db != nil && s.db.iterPool != nil {
-		snap.Cache.IteratorReused = s.db.iterPool.reused()
+		snap.Cache.IteratorReused = s.db.iterPool.Reused()
 	}
 	snap.ValueLog.GC = metrics.DefaultValueLogGCCollector().Snapshot()
 	snap.Transport = transportpkg.GRPCMetricsSnapshot()
@@ -578,7 +583,6 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	return snap
 }
 
-// close stops the stats loop.
 func (s *Stats) close() error {
 	if s == nil {
 		return nil

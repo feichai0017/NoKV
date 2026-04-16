@@ -44,13 +44,13 @@ Examples:
 
 ### Domain-specific sentinels
 
-- `kv/entry_codec.go`: `ErrBadChecksum`, `ErrPartialEntry`
-- `vfs/vfs.go`: `ErrRenameNoReplaceUnsupported`
-- `lsm/compaction.go`: compaction planner/runtime domain errors
+- `engine/kv/entry_codec.go`: `ErrBadChecksum`, `ErrPartialEntry`
+- `engine/vfs/vfs.go`: `ErrRenameNoReplaceUnsupported`
+- `engine/lsm/compaction.go`: compaction planner/runtime domain errors
 - `raftstore/peer/errors.go`: peer lifecycle/state errors
 - `pb/errorpb.proto`: region/store routing protobuf errors (`RegionError`,
   `StoreNotMatch`, `RegionNotFound`, `KeyNotInRegion`, ...)
-- `wal/errors.go`: WAL encode/decode and segment errors
+- `engine/wal/errors.go`: WAL encode/decode and segment errors
 - `coordinator/catalog/errors.go`: Coordinator metadata and range validation errors
 
 ---

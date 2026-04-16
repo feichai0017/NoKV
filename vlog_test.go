@@ -10,13 +10,14 @@ import (
 	"testing"
 	"time"
 
-	kvpkg "github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/lsm"
-	"github.com/feichai0017/NoKV/manifest"
+	kvpkg "github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm"
+	"github.com/feichai0017/NoKV/engine/manifest"
+	"github.com/feichai0017/NoKV/engine/vfs"
+	vlogpkg "github.com/feichai0017/NoKV/engine/vlog"
+	dbruntime "github.com/feichai0017/NoKV/internal/runtime"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
-	"github.com/feichai0017/NoKV/vfs"
-	vlogpkg "github.com/feichai0017/NoKV/vlog"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
@@ -59,11 +60,11 @@ func TestVlogBase(t *testing.T) {
 	e2 := newPointerEntry([]byte("samplekeyb"), []byte(val2))
 
 	// Build a batched request.
-	b := new(request)
+	b := new(dbruntime.Request)
 	b.Entries = []*kvpkg.Entry{e1, e2}
 
 	// Write directly into the value log.
-	require.NoError(t, log.write([]*request{b}))
+	require.NoError(t, log.write([]*dbruntime.Request{b}))
 	e1.DecrRef()
 	e2.DecrRef()
 	require.Len(t, b.Ptrs, 2)
@@ -160,9 +161,9 @@ func TestVlogSyncWritesCoversAllSegments(t *testing.T) {
 	payload := bytes.Repeat([]byte("v"), 180)
 	e1 := newPointerEntry([]byte("sync-key-1"), payload)
 	e2 := newPointerEntry([]byte("sync-key-2"), payload)
-	req := &request{Entries: []*kvpkg.Entry{e1, e2}}
+	req := &dbruntime.Request{Entries: []*kvpkg.Entry{e1, e2}}
 
-	require.NoError(t, log.write([]*request{req}))
+	require.NoError(t, log.write([]*dbruntime.Request{req}))
 	e1.DecrRef()
 	e2.DecrRef()
 
@@ -356,17 +357,17 @@ func TestValueLogWriteAppendFailureRewinds(t *testing.T) {
 
 	head := db.vlog.managers[0].Head()
 
-	req := requestPool.Get().(*request)
-	req.reset()
+	req := dbruntime.RequestPool.Get().(*dbruntime.Request)
+	req.Reset()
 	entries := []*kvpkg.Entry{
 		newPointerEntry([]byte("afail"), bytes.Repeat([]byte("a"), 512)),
 		newPointerEntry([]byte("bfail"), bytes.Repeat([]byte("b"), 512)),
 	}
-	req.loadEntries(entries)
+	req.LoadEntries(entries)
 	req.IncrRef()
 	defer req.DecrRef()
 
-	err := db.vlog.write([]*request{req})
+	err := db.vlog.write([]*dbruntime.Request{req})
 	require.Error(t, err)
 	require.ErrorIs(t, err, injected)
 	require.Equal(t, head, db.vlog.managers[0].Head())
@@ -387,17 +388,17 @@ func TestValueLogWriteRotateFailureRewinds(t *testing.T) {
 
 	head := db.vlog.managers[0].Head()
 
-	req := requestPool.Get().(*request)
-	req.reset()
+	req := dbruntime.RequestPool.Get().(*dbruntime.Request)
+	req.Reset()
 	entries := []*kvpkg.Entry{
 		newPointerEntry([]byte("rfail1"), bytes.Repeat([]byte("x"), 512)),
 		newPointerEntry([]byte("rfail2"), bytes.Repeat([]byte("y"), 512)),
 	}
-	req.loadEntries(entries)
+	req.LoadEntries(entries)
 	req.IncrRef()
 	defer req.DecrRef()
 
-	err := db.vlog.write([]*request{req})
+	err := db.vlog.write([]*dbruntime.Request{req})
 	require.Error(t, err)
 	require.ErrorIs(t, err, injected)
 	require.Equal(t, head, db.vlog.managers[0].Head())
@@ -413,17 +414,17 @@ func TestValueLogWriteInlineRequestSkipsPtrs(t *testing.T) {
 	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
-	req := requestPool.Get().(*request)
-	req.reset()
+	req := dbruntime.RequestPool.Get().(*dbruntime.Request)
+	req.Reset()
 	entry := kvpkg.NewInternalEntry(kvpkg.CFDefault, []byte("inline-vlog"), nonTxnMaxVersion, []byte("v"), 0, 0)
-	req.loadEntries([]*kvpkg.Entry{entry})
+	req.LoadEntries([]*kvpkg.Entry{entry})
 	req.IncrRef()
 	defer req.DecrRef()
 
-	require.NoError(t, db.vlog.write([]*request{req}))
+	require.NoError(t, db.vlog.write([]*dbruntime.Request{req}))
 	require.Len(t, req.Ptrs, 0)
-	require.Len(t, req.ptrIdxs, 0)
-	require.Len(t, req.ptrBuckets, 0)
+	require.Len(t, req.PtrIdxs, 0)
+	require.Len(t, req.PtrBuckets, 0)
 }
 
 func TestValueLogReadCopiesSmallValue(t *testing.T) {

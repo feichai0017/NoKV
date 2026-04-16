@@ -57,8 +57,8 @@ NoKV does **not** implement full GRF or Shape Encoding. The current design only 
 
 Each `levelHandler` maintains a `rangeFilter` built from its current table set:
 
-- source: [`lsm/range_filter.go`](../lsm/range_filter.go)
-- owner: [`lsm/level_handler.go`](../lsm/level_handler.go)
+- source: [`engine/lsm/range_filter.go`](../engine/lsm/range_filter.go)
+- owner: [`engine/lsm/level_handler.go`](../engine/lsm/level_handler.go)
 
 Each span records:
 
@@ -76,11 +76,11 @@ same pruning range.
 
 Point lookups first prune candidate tables:
 
-- [`lsm/level_handler.go`](../lsm/level_handler.go)
+- [`engine/lsm/level_handler.go`](../engine/lsm/level_handler.go)
 
 If a non-overlapping level collapses to a single exact candidate, NoKV uses a thinner point-read path:
 
-- [`lsm/table.go`](../lsm/table.go)
+- [`engine/lsm/table.go`](../engine/lsm/table.go)
 
 This avoids the heavier generic iterator-style path for the common "one table could contain this key" case.
 
@@ -88,11 +88,11 @@ This avoids the heavier generic iterator-style path for the common "one table co
 
 Bounded iterators use the same per-level filter to prune whole tables before iterator assembly:
 
-- [`lsm/level_handler.go`](../lsm/level_handler.go)
+- [`engine/lsm/level_handler.go`](../engine/lsm/level_handler.go)
 
 Inside a table, NoKV then uses SST block base keys from the decoded table index to shrink the block range that the iterator needs to touch:
 
-- [`lsm/table.go`](../lsm/table.go)
+- [`engine/lsm/table.go`](../engine/lsm/table.go)
 
 This is the current "table-internal" stage of the design.
 
@@ -150,7 +150,7 @@ This is deliberate. Those features would couple the filter much more tightly to 
 
 Range-filter behavior is exported through LSM diagnostics and top-level stats:
 
-- [`lsm/diagnostics.go`](../lsm/diagnostics.go)
+- [`engine/lsm/diagnostics.go`](../engine/lsm/diagnostics.go)
 - [`stats.go`](../stats.go)
 
 Current counters include:
@@ -206,12 +206,12 @@ For NoKV, this simpler design is a better engineering tradeoff today.
 
 Primary implementation files:
 
-- [`lsm/range_filter.go`](../lsm/range_filter.go)
-- [`lsm/level_handler.go`](../lsm/level_handler.go)
-- [`lsm/table.go`](../lsm/table.go)
-- [`lsm/diagnostics.go`](../lsm/diagnostics.go)
+- [`engine/lsm/range_filter.go`](../engine/lsm/range_filter.go)
+- [`engine/lsm/level_handler.go`](../engine/lsm/level_handler.go)
+- [`engine/lsm/table.go`](../engine/lsm/table.go)
+- [`engine/lsm/diagnostics.go`](../engine/lsm/diagnostics.go)
 - [`stats.go`](../stats.go)
 
 Related benchmark coverage:
 
-- [`lsm/lsm_bench_test.go`](../lsm/lsm_bench_test.go)
+- [`engine/lsm/lsm_bench_test.go`](../engine/lsm/lsm_bench_test.go)

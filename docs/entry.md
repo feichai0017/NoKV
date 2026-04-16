@@ -15,7 +15,7 @@ This document explains:
 
 ## 1. Structure Overview
 
-Source: [`kv/entry.go`](../kv/entry.go), [`kv/key.go`](../kv/key.go), [`kv/value.go`](../kv/value.go)
+Source: [`engine/kv/entry.go`](../engine/kv/entry.go), [`engine/kv/key.go`](../engine/kv/key.go), [`engine/kv/value.go`](../engine/kv/value.go)
 
 ```go
 type Entry struct {
@@ -46,7 +46,7 @@ Important interpretation:
 
 ### 2.1 Internal Key Encoding
 
-Source: [`kv/key.go`](../kv/key.go)
+Source: [`engine/kv/key.go`](../engine/kv/key.go)
 
 `InternalKey(cf, userKey, ts)` layout:
 
@@ -62,7 +62,7 @@ Helpers:
 
 ### 2.2 ValueStruct Encoding
 
-Source: [`kv/value.go`](../kv/value.go)
+Source: [`engine/kv/value.go`](../engine/kv/value.go)
 
 `ValueStruct` layout:
 
@@ -74,7 +74,7 @@ Source: [`kv/value.go`](../kv/value.go)
 
 ### 2.3 Entry Record Encoding (WAL / Vlog record payload)
 
-Source: [`kv/entry_codec.go`](../kv/entry_codec.go)
+Source: [`engine/kv/entry_codec.go`](../engine/kv/entry_codec.go)
 
 Entry codec layout:
 
@@ -102,7 +102,7 @@ Source: [`db.go`](../db.go)
 
 ### 3.2 Commit worker: vlog then LSM apply
 
-Source: [`db_write.go`](../db_write.go), [`vlog.go`](../vlog.go)
+Source: [`db.go`](../db.go), [`vlog.go`](../vlog.go)
 
 * Before `LSM.SetBatch`, large values are replaced by `ValuePtr.Encode()` bytes and
   `BitValuePointer` is set.
@@ -111,7 +111,7 @@ Source: [`db_write.go`](../db_write.go), [`vlog.go`](../vlog.go)
 
 ### 3.3 WAL replay / vlog iteration decode
 
-Source: [`kv/entry_codec.go`](../kv/entry_codec.go), [`lsm/memtable.go`](../lsm/memtable.go)
+Source: [`engine/kv/entry_codec.go`](../engine/kv/entry_codec.go), [`engine/lsm/memtable.go`](../engine/lsm/memtable.go)
 
 * Decoded records carry internal key bytes in `Key`.
 * `Value` is record payload bytes (inline value or pointer bytes).
@@ -119,7 +119,7 @@ Source: [`kv/entry_codec.go`](../kv/entry_codec.go), [`lsm/memtable.go`](../lsm/
 
 ### 3.4 Memtable index lookup
 
-Source: [`lsm/memtable.go`](../lsm/memtable.go), [`utils/skiplist.go`](../utils/skiplist.go), [`utils/art.go`](../utils/art.go)
+Source: [`engine/lsm/memtable.go`](../engine/lsm/memtable.go), [`engine/index/skiplist.go`](../engine/index/skiplist.go), [`engine/index/art.go`](../engine/index/art.go)
 
 * `memIndex.Search(...)` returns `(matchedInternalKey, ValueStruct)`.
 * `memTable.Get` assembles pooled `Entry` from this and calls `PopulateInternalMeta`.
@@ -127,7 +127,7 @@ Source: [`lsm/memtable.go`](../lsm/memtable.go), [`utils/skiplist.go`](../utils/
 
 ### 3.5 SST / iterator decode
 
-Source: [`lsm/builder.go`](../lsm/builder.go), [`lsm/table.go`](../lsm/table.go)
+Source: [`engine/lsm/builder.go`](../engine/lsm/builder.go), [`engine/lsm/table.go`](../engine/lsm/table.go)
 
 * Block iterator reconstructs internal key + value struct.
 * It calls `PopulateInternalMeta` before exposing item entry.
@@ -192,7 +192,7 @@ Rule of thumb:
 
 ## 5. `PopulateInternalMeta` Semantics
 
-Source: [`kv/entry.go`](../kv/entry.go)
+Source: [`engine/kv/entry.go`](../engine/kv/entry.go)
 
 ```go
 func (e *Entry) PopulateInternalMeta() bool
@@ -219,7 +219,7 @@ Why it exists:
 
 ## 6. Ownership and Refcount States
 
-Source: [`kv/entry.go`](../kv/entry.go), [`docs/architecture.md`](architecture.md)
+Source: [`engine/kv/entry.go`](../engine/kv/entry.go), [`docs/architecture.md`](architecture.md)
 
 ### Borrowed entry (internal)
 

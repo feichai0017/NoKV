@@ -159,7 +159,7 @@ Everything hangs off a single file: [`raft_config.example.json`](./raft_config.e
 
 | Layer | Tech/Package | Why it matters |
 | --- | --- | --- |
-| Storage Core | `lsm/`, `wal/`, `vlog/` | Hybrid log-structured design with manifest-backed durability and value separation. |
+| Storage Core | `engine/lsm/`, `engine/wal/`, `engine/vlog/` | Hybrid log-structured design with manifest-backed durability and value separation. |
 | Concurrency | `percolator/`, `raftstore/client` | Distributed 2PC, lock management, and MVCC version semantics in raft mode. |
 | Replication | `raftstore/*` + `coordinator/*` | Multi-Raft data plane plus Coordinator-backed control plane (routing, TSO, heartbeats). |
 | Tooling | `cmd/nokv`, `cmd/nokv-config`, `cmd/nokv-redis` | CLI, config helper, Redis-compatible gateway share the same topology file. |
@@ -292,15 +292,15 @@ Methodology and harness details live in [`benchmark/README.md`](./benchmark/READ
 
 | Module | Responsibilities | Source | Docs |
 | --- | --- | --- | --- |
-| WAL | Append-only segments with CRC, rotation, replay (`wal.Manager`). | [`wal/`](./wal) | [WAL internals](docs/wal.md) |
-| LSM | MemTable, flush pipeline, leveled compactions, iterator merging. | [`lsm/`](./lsm) | [Memtable](docs/memtable.md)<br>[Flush pipeline](docs/flush.md)<br>[Cache](docs/cache.md)<br>[Range filter](docs/range_filter.md) |
-| Manifest | VersionEdit log + CURRENT handling, WAL/vlog checkpoints, value-log metadata. | [`manifest/`](./manifest) | [Manifest semantics](docs/manifest.md) |
-| ValueLog | Large value storage, GC, discard stats integration. | [`vlog.go`](./vlog.go), [`vlog/`](./vlog) | [Value log design](docs/vlog.md) |
+| WAL | Append-only segments with CRC, rotation, replay (`wal.Manager`). | [`engine/wal/`](./engine/wal) | [WAL internals](docs/wal.md) |
+| LSM | MemTable, flush pipeline, leveled compactions, iterator merging. | [`engine/lsm/`](./engine/lsm) | [Memtable](docs/memtable.md)<br>[Flush pipeline](docs/flush.md)<br>[Cache](docs/cache.md)<br>[Range filter](docs/range_filter.md) |
+| Manifest | VersionEdit log + CURRENT handling, WAL/vlog checkpoints, value-log metadata. | [`engine/manifest/`](./engine/manifest) | [Manifest semantics](docs/manifest.md) |
+| ValueLog | Large value storage, GC, discard stats integration. | [`vlog.go`](./vlog.go), [`engine/vlog/`](./engine/vlog) | [Value log design](docs/vlog.md) |
 | Percolator | Distributed MVCC 2PC primitives (prewrite/commit/rollback/resolve/status). | [`percolator/`](./percolator) | [Percolator transactions](docs/percolator.md) |
 | RaftStore | Multi-Raft Region management, hooks, metrics, transport. | [`raftstore/`](./raftstore) | [RaftStore overview](docs/raftstore.md) |
 | HotRing | Hot key tracking, throttling helpers. | [`hotring/`](./hotring) | [HotRing overview](docs/hotring.md) |
 | Observability | Periodic stats, hot key tracking, CLI integration. | [`stats.go`](./stats.go), [`cmd/nokv`](./cmd/nokv) | [Stats & observability](docs/stats.md)<br>[CLI reference](docs/cli.md) |
-| Filesystem | Pebble-inspired `vfs` abstraction + mmap-backed file helpers shared by SST/vlog, WAL, and manifest. | [`vfs/`](./vfs), [`file/`](./file) | [VFS](docs/vfs.md)<br>[File abstractions](docs/file.md) |
+| Filesystem | Pebble-inspired `vfs` abstraction + mmap-backed file helpers shared by SST/vlog, WAL, and manifest. | [`engine/vfs/`](./engine/vfs), [`engine/file/`](./engine/file) | [VFS](docs/vfs.md)<br>[File abstractions](docs/file.md) |
 
 Each module has a dedicated document under `docs/` describing APIs, diagrams, and recovery notes.
 

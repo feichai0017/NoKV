@@ -3,13 +3,13 @@ package NoKV
 import (
 	"time"
 
-	"github.com/feichai0017/NoKV/kv"
-	lsmpkg "github.com/feichai0017/NoKV/lsm"
+	"github.com/feichai0017/NoKV/engine/kv"
+	lsmpkg "github.com/feichai0017/NoKV/engine/lsm"
+	"github.com/feichai0017/NoKV/engine/vfs"
+	"github.com/feichai0017/NoKV/engine/wal"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/utils"
-	"github.com/feichai0017/NoKV/vfs"
-	"github.com/feichai0017/NoKV/wal"
 )
 
 const (

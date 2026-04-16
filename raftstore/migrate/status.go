@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/feichai0017/NoKV/engine/vfs"
 	adminclient "github.com/feichai0017/NoKV/raftstore/admin"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	"github.com/feichai0017/NoKV/vfs"
 )
 
 const defaultStatusDialTimeout = 3 * time.Second

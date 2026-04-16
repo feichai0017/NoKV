@@ -5,7 +5,7 @@ import (
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/percolator/latch"
 )
 

@@ -36,7 +36,7 @@ flowchart TD
 
 | Failure Point | Expected Recovery Behaviour | Tests |
 | --- | --- | --- |
-| WAL tail truncated | Replay stops safely at truncated tail, preserving valid prefix records | `wal/manager_test.go::TestManagerReplayHandlesTruncate` |
+| WAL tail truncated | Replay stops safely at truncated tail, preserving valid prefix records | `engine/wal/manager_test.go::TestManagerReplayHandlesTruncate` |
 | Crash before memtable flush install | WAL replay restores user data not yet flushed to SST | `db_test.go::TestRecoveryWALReplayRestoresData` |
 | Manifest references missing SST | Startup removes stale manifest entry and continues | `db_test.go::TestRecoveryCleansMissingSSTFromManifest` |
 | Manifest references corrupt/unreadable SST | Startup removes stale entry and continues | `db_test.go::TestRecoveryCleansCorruptSSTFromManifest` |

@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/feichai0017/NoKV/index"
-	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/lsm"
+	"github.com/feichai0017/NoKV/engine/index"
+	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm"
+	"github.com/feichai0017/NoKV/engine/vfs"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	"github.com/feichai0017/NoKV/vfs"
 )
 
 // exportSource is the minimal data-source view needed to build one region

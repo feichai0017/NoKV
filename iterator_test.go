@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/feichai0017/NoKV/index"
+	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/stretchr/testify/require"
 )
 

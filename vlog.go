@@ -1,29 +1,100 @@
 package NoKV
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"maps"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/manifest"
+	vlogpkg "github.com/feichai0017/NoKV/engine/vlog"
+	dbruntime "github.com/feichai0017/NoKV/internal/runtime"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
-	vlogpkg "github.com/feichai0017/NoKV/vlog"
 	"github.com/pkg/errors"
 )
 
 const (
-	defaultDiscardStatsFlushThreshold = 100
 	valueLogHeadLogInterval           = uint32(1 << 20) // 1 MiB persistence interval for value-log head.
 	valueLogSmallCopyThreshold        = 4 << 10         // copy small values to reduce read lock hold.
+	defaultDiscardStatsFlushThreshold = 100
+	valueLogDiscardStatsKeyString     = "!NoKV!discard"
 )
 
-var lfDiscardStatsKey = []byte("!NoKV!discard") // For storing lfDiscardStats
+var valueLogDiscardStatsKey = []byte(valueLogDiscardStatsKeyString)
+
+type valueLogDiscardStats struct {
+	sync.RWMutex
+	m                 map[manifest.ValueLogID]int64
+	flushChan         chan map[manifest.ValueLogID]int64
+	closer            *utils.Closer
+	updatesSinceFlush int
+	flushThreshold    int
+}
+
+func newValueLogDiscardStats(flushChan chan map[manifest.ValueLogID]int64, flushThreshold int) *valueLogDiscardStats {
+	if flushThreshold <= 0 {
+		flushThreshold = defaultDiscardStatsFlushThreshold
+	}
+	return &valueLogDiscardStats{
+		m:              make(map[manifest.ValueLogID]int64),
+		flushChan:      flushChan,
+		closer:         utils.NewCloser(),
+		flushThreshold: flushThreshold,
+	}
+}
+
+func encodeDiscardStats(stats map[manifest.ValueLogID]int64) ([]byte, error) {
+	wire := make(map[string]int64, len(stats))
+	for id, count := range stats {
+		wire[fmt.Sprintf("%d:%d", id.Bucket, id.FileID)] = count
+	}
+	return json.Marshal(wire)
+}
+
+func decodeDiscardStats(data []byte) (map[manifest.ValueLogID]int64, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+	wire := make(map[string]int64)
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return nil, err
+	}
+	out := make(map[manifest.ValueLogID]int64, len(wire))
+	for key, count := range wire {
+		parts := strings.Split(key, ":")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid discard stat key: %s", key)
+		}
+		bucket, err := strconv.ParseUint(parts[0], 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("invalid discard stat bucket: %w", err)
+		}
+		fid, err := strconv.ParseUint(parts[1], 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("invalid discard stat fid: %w", err)
+		}
+		out[manifest.ValueLogID{Bucket: uint32(bucket), FileID: uint32(fid)}] = count
+	}
+	return out, nil
+}
+
+func shouldSkipValueLogRewrite(e *kv.Entry) bool {
+	if e == nil {
+		return true
+	}
+	if e.IsDeletedOrExpired() {
+		return true
+	}
+	return !kv.IsValuePtr(e)
+}
 
 type valueLog struct {
 	dirPath            string
@@ -39,7 +110,7 @@ type valueLog struct {
 	gcBucketBusy       []atomic.Uint32
 	gcPickSeed         atomic.Uint64
 	garbageCh          chan struct{}
-	lfDiscardStats     *lfDiscardStats
+	lfDiscardStats     *valueLogDiscardStats
 }
 
 func (vlog *valueLog) setValueLogFileSize(sz int) {
@@ -209,8 +280,8 @@ func (vlog *valueLog) removeValueLogFile(bucket uint32, fid uint32) error {
 }
 
 func (vlog *valueLog) newValuePtr(e *kv.Entry) (*kv.ValuePtr, error) {
-	req := requestPool.Get().(*request)
-	req.reset()
+	req := dbruntime.RequestPool.Get().(*dbruntime.Request)
+	req.Reset()
 	req.Entries = []*kv.Entry{e}
 	req.IncrRef()
 	defer func() {
@@ -218,7 +289,7 @@ func (vlog *valueLog) newValuePtr(e *kv.Entry) (*kv.ValuePtr, error) {
 		req.DecrRef()
 	}()
 
-	if err := vlog.write([]*request{req}); err != nil {
+	if err := vlog.write([]*dbruntime.Request{req}); err != nil {
 		return nil, err
 	}
 	if len(req.Ptrs) == 0 {
@@ -306,14 +377,14 @@ func (vlog *valueLog) read(vp *kv.ValuePtr) ([]byte, func(), error) {
 	})
 }
 
-func (vlog *valueLog) write(reqs []*request) error {
+func (vlog *valueLog) write(reqs []*dbruntime.Request) error {
 	heads := make(map[uint32]kv.ValuePtr)
 	touched := make(map[uint32]struct{})
 	fail := func(err error, context string) error {
 		for _, req := range reqs {
 			req.Ptrs = req.Ptrs[:0]
-			req.ptrIdxs = req.ptrIdxs[:0]
-			req.ptrBuckets = req.ptrBuckets[:0]
+			req.PtrIdxs = req.PtrIdxs[:0]
+			req.PtrBuckets = req.PtrBuckets[:0]
 		}
 		for bucket := range touched {
 			mgr, mgrErr := vlog.managerFor(bucket)
@@ -334,8 +405,8 @@ func (vlog *valueLog) write(reqs []*request) error {
 			continue
 		}
 		req.Ptrs = req.Ptrs[:0]
-		req.ptrIdxs = req.ptrIdxs[:0]
-		req.ptrBuckets = req.ptrBuckets[:0]
+		req.PtrIdxs = req.PtrIdxs[:0]
+		req.PtrBuckets = req.PtrBuckets[:0]
 		bucketEntries := make(map[uint32][]int)
 		for i, e := range req.Entries {
 			if !vlog.db.shouldWriteValueToLSM(e) {
@@ -374,15 +445,15 @@ func (vlog *valueLog) write(reqs []*request) error {
 			for i, idx := range idxs {
 				req.Ptrs[idx] = ptrs[i]
 			}
-			req.ptrIdxs = append(req.ptrIdxs, idxs...)
-			req.ptrBuckets = append(req.ptrBuckets, bucket)
+			req.PtrIdxs = append(req.PtrIdxs, idxs...)
+			req.PtrBuckets = append(req.PtrBuckets, bucket)
 			touched[bucket] = struct{}{}
 		}
 	}
 	if wrote && vlog.db != nil && vlog.db.opt.SyncWrites {
 		byBucket := make(map[uint32]map[uint32]struct{})
 		for _, req := range reqs {
-			if len(req.ptrBuckets) == 0 {
+			if len(req.PtrBuckets) == 0 {
 				continue
 			}
 			for _, ptr := range req.Ptrs {
@@ -462,27 +533,19 @@ func (db *DB) initVLog() {
 	status := db.lsm.ValueLogStatusSnapshot()
 
 	threshold := db.opt.DiscardStatsFlushThreshold
-	if threshold <= 0 {
-		threshold = defaultDiscardStatsFlushThreshold
-	}
 
 	vlog := &valueLog{
 		dirPath:          vlogDir,
 		bucketCount:      uint32(bucketCount),
 		managers:         managers,
 		filesToBeDeleted: make([]manifest.ValueLogID, 0),
-		lfDiscardStats: &lfDiscardStats{
-			m:              make(map[manifest.ValueLogID]int64),
-			closer:         utils.NewCloser(),
-			flushChan:      db.discardStatsCh,
-			flushThreshold: threshold,
-		},
-		db:            db,
-		opt:           *db.opt,
-		gcTokens:      make(chan struct{}, gcParallelism),
-		gcParallelism: gcParallelism,
-		gcBucketBusy:  make([]atomic.Uint32, bucketCount),
-		garbageCh:     make(chan struct{}, 1),
+		lfDiscardStats:   newValueLogDiscardStats(db.discardStatsCh, threshold),
+		db:               db,
+		opt:              *db.opt,
+		gcTokens:         make(chan struct{}, gcParallelism),
+		gcParallelism:    gcParallelism,
+		gcBucketBusy:     make([]atomic.Uint32, bucketCount),
+		garbageCh:        make(chan struct{}, 1),
 	}
 	metrics.DefaultValueLogGCCollector().SetParallelism(gcParallelism)
 	vlog.setValueLogFileSize(db.opt.ValueLogFileSize)

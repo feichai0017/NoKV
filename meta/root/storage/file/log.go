@@ -9,11 +9,11 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/feichai0017/NoKV/engine/vfs"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
-	"github.com/feichai0017/NoKV/vfs"
 	"google.golang.org/protobuf/proto"
 )
 

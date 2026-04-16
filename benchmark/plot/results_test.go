@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	bench "github.com/feichai0017/NoKV/benchmark"
+	bench "github.com/feichai0017/NoKV/benchmark/ycsb"
 	"github.com/stretchr/testify/require"
 )
 

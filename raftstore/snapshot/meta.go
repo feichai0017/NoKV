@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/feichai0017/NoKV/engine/vfs"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	"github.com/feichai0017/NoKV/vfs"
 )
 
 const (

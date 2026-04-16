@@ -7,8 +7,8 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/index"
-	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/engine/index"
+	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/utils"
 )
 
