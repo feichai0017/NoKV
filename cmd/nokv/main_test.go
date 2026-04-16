@@ -15,14 +15,14 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/manifest"
+	"github.com/feichai0017/NoKV/engine/wal"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	migratepkg "github.com/feichai0017/NoKV/raftstore/migrate"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
-	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
 )
 

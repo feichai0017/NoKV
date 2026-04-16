@@ -1,6 +1,6 @@
 # Cache & Bloom Filters
 
-NoKV's LSM tier layers a multi-level block cache with decoded index caching to accelerate lookups. Bloom filters remain embedded in SST indexes and are probed directly from `pb.TableIndex`. The implementation is in [`lsm/cache.go`](../lsm/cache.go).
+NoKV's LSM tier layers a multi-level block cache with decoded index caching to accelerate lookups. Bloom filters remain embedded in SST indexes and are probed directly from `pb.TableIndex`. The implementation is in [`engine/lsm/cache.go`](../engine/lsm/cache.go).
 
 ---
 
@@ -9,8 +9,8 @@ NoKV's LSM tier layers a multi-level block cache with decoded index caching to a
 | Component | Purpose | Source |
 | --- | --- | --- |
 | `cache.indexes` | Byte-budgeted W-TinyLFU cache for decoded table indexes (`fid` → `*pb.TableIndex`). | [`utils/cache`](../utils/cache) |
-| `blockCache` | Ristretto-based block cache (L0/L1 only) with per-table direct slots. | [`lsm/cache.go`](../lsm/cache.go) |
-| `cacheMetrics` | Atomic hit/miss counters for L0/L1 blocks and indexes. | [`lsm/cache.go#L30-L110`](../lsm/cache.go#L30-L110) |
+| `blockCache` | Ristretto-based block cache (L0/L1 only) with per-table direct slots. | [`engine/lsm/cache.go`](../engine/lsm/cache.go) |
+| `cacheMetrics` | Atomic hit/miss counters for L0/L1 blocks and indexes. | [`engine/lsm/cache.go#L30-L110`](../engine/lsm/cache.go#L30-L110) |
 
 Badger exposes separate block/index cache budgets while Pebble uses a unified cache budget. NoKV keeps block and index caches explicit; bloom filters piggyback on the decoded table index already held by each live SST.
 
@@ -107,4 +107,4 @@ The only remaining HotRing integration is optional write throttling.
 * Track `nokv stats --json` cache metrics over time; drops often indicate iterator misuse or working-set shifts.
 * Benchmark tooling accepts cache sizes in MB and converts them into these byte-budget fields before opening the engine.
 
-More on SST layout lives in [`docs/manifest.md`](manifest.md) and [`docs/architecture.md`](architecture.md#4-read-path--iterators).
+More on SST layout lives in [`docs/manifest.md`](manifest.md) and [`docs/architecture.md`](architecture.md#2-embedded-engine).

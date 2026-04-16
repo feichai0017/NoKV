@@ -3,39 +3,10 @@ package NoKV
 import (
 	"testing"
 
-	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/stretchr/testify/require"
 )
-
-func TestDiscardStatsEncodeDecodeRoundTrip(t *testing.T) {
-	stats := map[manifest.ValueLogID]int64{
-		{Bucket: 0, FileID: 1}: 12,
-		{Bucket: 2, FileID: 9}: 44,
-	}
-
-	encoded, err := encodeDiscardStats(stats)
-	require.NoError(t, err)
-
-	decoded, err := decodeDiscardStats(encoded)
-	require.NoError(t, err)
-	require.Equal(t, stats, decoded)
-
-	empty, err := decodeDiscardStats(nil)
-	require.NoError(t, err)
-	require.Nil(t, empty)
-}
-
-func TestDecodeDiscardStatsRejectsInvalidKeys(t *testing.T) {
-	_, err := decodeDiscardStats([]byte(`{"broken":1}`))
-	require.Error(t, err)
-
-	_, err = decodeDiscardStats([]byte(`{"x:1":1}`))
-	require.Error(t, err)
-
-	_, err = decodeDiscardStats([]byte(`{"1:y":1}`))
-	require.Error(t, err)
-}
 
 func TestValueLogPopulateDiscardStatsLoadsPersistedEntry(t *testing.T) {
 	opt := newTestOptions(t)
@@ -49,15 +20,13 @@ func TestValueLogPopulateDiscardStatsLoadsPersistedEntry(t *testing.T) {
 	encoded, err := encodeDiscardStats(stats)
 	require.NoError(t, err)
 
-	entry := kv.NewInternalEntry(kv.CFDefault, lfDiscardStatsKey, nonTxnMaxVersion, encoded, 0, 0)
+	entry := kv.NewInternalEntry(kv.CFDefault, valueLogDiscardStatsKey, nonTxnMaxVersion, encoded, 0, 0)
 	defer entry.DecrRef()
 	require.NoError(t, db.ApplyInternalEntries([]*kv.Entry{entry}))
 
 	testVlog := &valueLog{
-		db: db,
-		lfDiscardStats: &lfDiscardStats{
-			flushChan: make(chan map[manifest.ValueLogID]int64, 1),
-		},
+		db:             db,
+		lfDiscardStats: newValueLogDiscardStats(make(chan map[manifest.ValueLogID]int64, 1), 1),
 	}
 
 	require.NoError(t, testVlog.populateDiscardStats())
@@ -101,4 +70,33 @@ func TestValueLogGCSampleRatiosDefaultAndConfigured(t *testing.T) {
 	vlog.opt.ValueLogGCSampleCountRatio = 0.15
 	require.Equal(t, 0.25, vlog.gcSampleSizeRatio())
 	require.Equal(t, 0.15, vlog.gcSampleCountRatio())
+}
+
+func TestDiscardStatsEncodeDecodeRoundTrip(t *testing.T) {
+	stats := map[manifest.ValueLogID]int64{
+		{Bucket: 0, FileID: 1}: 12,
+		{Bucket: 2, FileID: 9}: 44,
+	}
+
+	encoded, err := encodeDiscardStats(stats)
+	require.NoError(t, err)
+
+	decoded, err := decodeDiscardStats(encoded)
+	require.NoError(t, err)
+	require.Equal(t, stats, decoded)
+
+	empty, err := decodeDiscardStats(nil)
+	require.NoError(t, err)
+	require.Nil(t, empty)
+}
+
+func TestDecodeDiscardStatsRejectsInvalidKeys(t *testing.T) {
+	_, err := decodeDiscardStats([]byte(`{"broken":1}`))
+	require.Error(t, err)
+
+	_, err = decodeDiscardStats([]byte(`{"x:1":1}`))
+	require.Error(t, err)
+
+	_, err = decodeDiscardStats([]byte(`{"1:y":1}`))
+	require.Error(t, err)
 }

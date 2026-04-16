@@ -31,9 +31,9 @@ Flow:
 
 ```mermaid
 flowchart TD
-    A["scripts/run_benchmarks.sh"] --> B["go test ./benchmark -run TestBenchmarkYCSB -args <flags>"]
-    B --> C["TestBenchmarkYCSB (benchmark/ycsb_test.go)"]
-    C --> D["runYCSBBenchmarks (benchmark/ycsb_runner.go)"]
+    A["scripts/run_benchmarks.sh"] --> B["go test ./ycsb -run TestBenchmarkYCSB -args <flags>"]
+    B --> C["TestBenchmarkYCSB (benchmark/ycsb/ycsb_test.go)"]
+    C --> D["runYCSBBenchmarks (benchmark/ycsb/ycsb_runner.go)"]
     D --> E["engine.Open(clean)"]
     D --> F["ycsbLoad (parallel preload)"]
     D --> G["optional warm-up"]
@@ -43,11 +43,11 @@ flowchart TD
 
 Key components:
 
-- Engine interface: `benchmark/ycsb_engine.go` defines `Read/Insert/Update/Scan`
-  and per-engine implementations live in `benchmark/ycsb_engine_*` (including
+- Engine interface: `benchmark/ycsb/ycsb_engine.go` defines `Read/Insert/Update/Scan`
+  and per-engine implementations live in `benchmark/ycsb/ycsb_engine_*` (including
   `nokv-skiplist` / `nokv-art` for memtable-only comparisons).
 - Engine profiles: each engine is constructed from an explicit benchmark
-  profile in `benchmark/ycsb_profiles.go`; the harness does not inherit
+  profile in `benchmark/ycsb/ycsb_profiles.go`; the harness does not inherit
   `NoKV.NewDefaultOptions()` or `badger.DefaultOptions()` implicitly, which
   keeps benchmark semantics stable across runtime default changes. The default
   profile uses a 512MB total cache budget and splits it explicitly per engine:
@@ -57,7 +57,7 @@ Key components:
   through `YCSB_VALUE_THRESHOLD`; `ycsb_value_size` remains `1000` by default,
   so the stock CI run still measures inline values unless the value size or
   threshold is changed explicitly.
-- Workload model: `benchmark/ycsb_runner.go` defines YCSB A/B/C/D/E/F mixes,
+- Workload model: `benchmark/ycsb/ycsb_runner.go` defines YCSB A/B/C/D/E/F mixes,
   request ratios, and key distributions (zipfian/uniform/latest).
 - Official-aligned defaults: insert order uses `hashed`, workload E uses
   `maxscanlength` + `uniform` scan length distribution, warm-up is disabled
@@ -265,7 +265,7 @@ Minimal example:
 package main
 
 import (
-    bench "github.com/feichai0017/NoKV/benchmark"
+    bench "github.com/feichai0017/NoKV/benchmark/ycsb"
     benchplot "github.com/feichai0017/NoKV/benchmark/plot"
 )
 

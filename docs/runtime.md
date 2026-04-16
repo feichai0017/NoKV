@@ -16,7 +16,7 @@ It intentionally describes only what is running today.
 
 Core entry points:
 
-- Embedded DB: [`db.go`](../db.go), [`db_write.go`](../db_write.go), [`iterator.go`](../iterator.go)
+- Embedded DB: [`db.go`](../db.go), [`iterator.go`](../iterator.go)
 - Distributed RPC: [`raftstore/kv/service.go`](../raftstore/kv/service.go)
 - Raft read/propose bridge: [`raftstore/store/command_service.go`](../raftstore/store/command_service.go)
 - MVCC logic: [`percolator/txn.go`](../percolator/txn.go), [`percolator/reader.go`](../percolator/reader.go)

@@ -14,19 +14,22 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/NoKV/engine/index"
+	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm"
+	"github.com/feichai0017/NoKV/engine/manifest"
+	"github.com/feichai0017/NoKV/engine/vfs"
+	vlogpkg "github.com/feichai0017/NoKV/engine/vlog"
+	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/hotring"
-	"github.com/feichai0017/NoKV/index"
-	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/lsm"
-	"github.com/feichai0017/NoKV/manifest"
+	dbruntime "github.com/feichai0017/NoKV/internal/runtime"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
+	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/utils"
-	"github.com/feichai0017/NoKV/vfs"
-	vlogpkg "github.com/feichai0017/NoKV/vlog"
-	"github.com/feichai0017/NoKV/wal"
+	pkgerrors "github.com/pkg/errors"
 )
 
 // nonTxnMaxVersion is the read upper-bound sentinel used by non-transactional APIs.
@@ -66,9 +69,7 @@ type (
 		dirLock         io.Closer
 		lsm             *lsm.LSM
 		wal             *wal.Manager
-		walWatchdog     *wal.Watchdog
 		vlog            *valueLog
-		stats           *Stats
 		nonTxnVersion   atomic.Uint64
 		blockWrites     atomic.Int32
 		slowWrites      atomic.Int32
@@ -83,47 +84,16 @@ type (
 		throttleCh      chan struct{}
 		hotWrite        *hotring.RotatingHotRing
 		writeMetrics    *metrics.WriteMetrics
-		commitQueue     commitQueue
+		commitQueue     dbruntime.CommitQueue
 		commitWG        sync.WaitGroup
 		commitBatchPool sync.Pool
-		syncQueue       chan *syncBatch
+		syncQueue       chan *dbruntime.SyncBatch
 		syncWG          sync.WaitGroup
-		iterPool        *iteratorPool
+		iterPool        *dbruntime.IteratorPool
 		hotWriteLimited atomic.Uint64
 		policyMatcher   atomic.Pointer[kv.ValueSeparationPolicyMatcher]
-		namespaceMu     sync.Mutex
-		namespaces      map[*NamespaceHandle]struct{}
-	}
-
-	commitQueue struct {
-		q              *utils.MPSCQueue[*commitRequest]
-		pendingBytes   atomic.Int64
-		pendingEntries atomic.Int64
-	}
-
-	commitRequest struct {
-		req        *request
-		entryCount int
-		size       int64
-	}
-
-	commitBatch struct {
-		reqs        []*commitRequest
-		pool        *[]*commitRequest
-		requests    []*request
-		batchStart  time.Time
-		valueLogDur time.Duration
-	}
-
-	// syncBatch carries committed-but-unsynced requests from commitWorker to
-	// syncWorker. The syncWorker calls wal.Sync() once per batch of syncBatch
-	// items before ack-ing the enclosed requests.
-	syncBatch struct {
-		reqs      []*commitRequest
-		pool      *[]*commitRequest
-		requests  []*request // apply-order slice for perReqErr
-		failedAt  int
-		applyDone time.Time // timestamp after apply, for metrics
+		background      dbruntime.BackgroundServices
+		runtimeModules  dbruntime.Registry
 	}
 )
 
@@ -132,14 +102,28 @@ type dbRaftLog struct {
 }
 
 func newDB(opt *Options) *DB {
-	db := &DB{opt: opt, writeMetrics: metrics.NewWriteMetrics()}
-	db.fs = vfs.Ensure(opt.FS)
+	cfg := opt
+	if cfg == nil {
+		cfg = &Options{}
+	}
+	db := &DB{opt: cfg, writeMetrics: metrics.NewWriteMetrics()}
+	db.fs = vfs.Ensure(cfg.FS)
 	db.headLogDelta = valueLogHeadLogInterval
 	db.throttleCh = make(chan struct{})
-	db.hotWrite = newHotWriteRing(opt)
+	db.hotWrite = dbruntime.NewHotWriteRing(dbruntime.HotWriteConfig{
+		Enabled:          cfg.HotRingEnabled && cfg.WriteHotKeyLimit > 0,
+		Bits:             cfg.HotRingBits,
+		WindowSlots:      cfg.HotRingWindowSlots,
+		WindowSlotPeriod: cfg.HotRingWindowSlotDuration,
+		DecayInterval:    cfg.HotRingDecayInterval,
+		DecayShift:       cfg.HotRingDecayShift,
+		NodeCap:          cfg.HotRingNodeCap,
+		NodeSampleBits:   cfg.HotRingNodeSampleBits,
+		RotationInterval: cfg.HotRingRotationInterval,
+	})
 	db.discardStatsCh = make(chan map[manifest.ValueLogID]int64, 16)
 	db.commitBatchPool.New = func() any {
-		batch := make([]*commitRequest, 0, db.opt.WriteBatchMaxCount)
+		batch := make([]*dbruntime.CommitRequest, 0, db.opt.WriteBatchMaxCount)
 		return &batch
 	}
 	return db
@@ -196,9 +180,9 @@ func (db *DB) openEngine() error {
 	}
 	db.lsm = lsmCore
 	db.nonTxnVersion.Store(db.lsm.Diagnostics().MaxVersion)
-	db.iterPool = newIteratorPool()
+	db.iterPool = dbruntime.NewIteratorPool()
 	db.initVLog()
-	db.stats = newStats(db)
+	db.background.Init(newStats(db))
 	if len(db.opt.ValueSeparationPolicies) > 0 {
 		db.policyMatcher.Store(kv.NewValueSeparationPolicyMatcher(db.opt.ValueSeparationPolicies))
 	}
@@ -207,39 +191,14 @@ func (db *DB) openEngine() error {
 
 func (db *DB) startWriteRuntime() {
 	queueCap := max(db.opt.WriteBatchMaxCount*8, 1024)
-	db.commitQueue.init(queueCap)
+	db.commitQueue.Init(queueCap)
 	if db.opt.SyncWrites && db.opt.SyncPipeline {
-		db.syncQueue = make(chan *syncBatch, 128)
+		db.syncQueue = make(chan *dbruntime.SyncBatch, 128)
 		db.syncWG.Add(1)
 		go db.syncWorker()
 	}
 	db.commitWG.Add(1)
 	go db.commitWorker()
-}
-
-func (db *DB) startServices() {
-	db.lsm.StartCompacter()
-	if db.opt.EnableWALWatchdog {
-		db.walWatchdog = wal.NewWatchdog(wal.WatchdogConfig{
-			Manager:      db.wal,
-			Interval:     db.opt.WALAutoGCInterval,
-			MinRemovable: db.opt.WALAutoGCMinRemovable,
-			MaxBatch:     db.opt.WALAutoGCMaxBatch,
-			WarnRatio:    db.opt.WALTypedRecordWarnRatio,
-			WarnSegments: db.opt.WALTypedRecordWarnSegments,
-			RaftPointers: db.opt.RaftPointerSnapshot,
-		})
-		if db.walWatchdog != nil {
-			db.walWatchdog.Start()
-		}
-	}
-	db.stats.StartStats()
-	if db.opt.ValueLogGCInterval > 0 {
-		if db.vlog != nil && db.vlog.lfDiscardStats != nil && db.vlog.lfDiscardStats.closer != nil {
-			db.vlog.lfDiscardStats.closer.Add(1)
-			go db.runValueLogGCPeriodically()
-		}
-	}
 }
 
 func (db *DB) levelSizes() (int64, int64) {
@@ -276,8 +235,19 @@ func (db *DB) runtimeLSMOptions() *lsm.Options {
 		DiscardStatsCh:           &db.discardStatsCh,
 		ManifestSync:             db.opt.ManifestSync,
 		ManifestRewriteThreshold: db.opt.ManifestRewriteThreshold,
-		WALGCPolicy:              newDBWALGCPolicy(db),
-		ThrottleCallback:         db.applyThrottle,
+		WALGCPolicy: dbruntime.NewWALGCPolicy(dbruntime.WALGCPolicyConfig{
+			RaftPointers: db.opt.RaftPointerSnapshot,
+			SegmentMetrics: func(segmentID uint32) wal.RecordMetrics {
+				if db.wal == nil {
+					return wal.RecordMetrics{}
+				}
+				return db.wal.SegmentRecordMetrics(segmentID)
+			},
+			Warn: func(msg string, args ...any) {
+				slog.Default().Warn(msg, args...)
+			},
+		}),
+		ThrottleCallback: db.applyThrottle,
 	}
 	db.opt.applyLSMSharedOptions(cfg)
 	return cfg
@@ -322,7 +292,27 @@ func Open(opt *Options) (_ *DB, err error) {
 		return nil, err
 	}
 	db.startWriteRuntime()
-	db.startServices()
+	db.background.Start(dbruntime.BackgroundConfig{
+		StartCompacter:    db.lsm.StartCompacter,
+		EnableWALWatchdog: db.opt.EnableWALWatchdog,
+		WALWatchdogConfig: wal.WatchdogConfig{
+			Manager:      db.wal,
+			Interval:     db.opt.WALAutoGCInterval,
+			MinRemovable: db.opt.WALAutoGCMinRemovable,
+			MaxBatch:     db.opt.WALAutoGCMaxBatch,
+			WarnRatio:    db.opt.WALTypedRecordWarnRatio,
+			WarnSegments: db.opt.WALTypedRecordWarnSegments,
+			RaftPointers: db.opt.RaftPointerSnapshot,
+		},
+		StartValueLogGC: func() {
+			if db.opt.ValueLogGCInterval > 0 {
+				if db.vlog != nil && db.vlog.lfDiscardStats != nil && db.vlog.lfDiscardStats.closer != nil {
+					db.vlog.lfDiscardStats.closer.Add(1)
+					go db.runValueLogGCPeriodically()
+				}
+			}
+		},
+	})
 	return db, nil
 }
 
@@ -368,45 +358,6 @@ func (db *DB) Close() error {
 	return db.closeErr
 }
 
-func (db *DB) registerNamespaceHandle(h *NamespaceHandle) {
-	if db == nil || h == nil {
-		return
-	}
-	db.namespaceMu.Lock()
-	if db.namespaces == nil {
-		db.namespaces = make(map[*NamespaceHandle]struct{})
-	}
-	db.namespaces[h] = struct{}{}
-	db.namespaceMu.Unlock()
-}
-
-func (db *DB) unregisterNamespaceHandle(h *NamespaceHandle) {
-	if db == nil || h == nil {
-		return
-	}
-	db.namespaceMu.Lock()
-	delete(db.namespaces, h)
-	db.namespaceMu.Unlock()
-}
-
-func (db *DB) closeNamespaceHandles() {
-	if db == nil {
-		return
-	}
-	db.namespaceMu.Lock()
-	handles := make([]*NamespaceHandle, 0, len(db.namespaces))
-	for h := range db.namespaces {
-		handles = append(handles, h)
-	}
-	db.namespaces = nil
-	db.namespaceMu.Unlock()
-	for _, h := range handles {
-		if h != nil {
-			h.Close()
-		}
-	}
-}
-
 // closeInternal executes DB shutdown exactly once and aggregates non-fatal
 // close failures so callers can observe every resource teardown error.
 func (db *DB) closeInternal() error {
@@ -423,19 +374,11 @@ func (db *DB) closeInternal() error {
 	}
 
 	db.stopCommitWorkers()
-	db.closeNamespaceHandles()
+	db.runtimeModules.CloseAll()
 
 	var errs []error
-	if db.stats != nil {
-		if err := db.stats.close(); err != nil {
-			errs = append(errs, fmt.Errorf("stats close: %w", err))
-		}
-		db.stats = nil
-	}
-
-	if db.walWatchdog != nil {
-		db.walWatchdog.Stop()
-		db.walWatchdog = nil
+	if err := db.background.Close(); err != nil {
+		errs = append(errs, err)
 	}
 
 	if db.hotWrite != nil {
@@ -859,7 +802,7 @@ func (db *DB) detachValuePointerEntry(src *kv.Entry) (*kv.Entry, error) {
 // Info returns the live stats collector for snapshot/diagnostic access.
 func (db *DB) Info() *Stats {
 	// Return the current stats snapshot.
-	return db.stats
+	return db.statsCollector()
 }
 
 // RunValueLogGC triggers a value log garbage collection.
@@ -962,9 +905,15 @@ func (db *DB) SetRegionMetrics(rm *metrics.RegionMetrics) {
 	if db == nil {
 		return
 	}
-	if db.stats != nil {
-		db.stats.SetRegionMetrics(rm)
+	db.background.SetRegionMetrics(rm)
+}
+
+func (db *DB) statsCollector() *Stats {
+	if db == nil {
+		return nil
 	}
+	stats, _ := db.background.StatsCollector().(*Stats)
+	return stats
 }
 
 // WAL exposes the underlying WAL manager.
@@ -986,4 +935,550 @@ func (db *DB) WorkDir() string {
 // IsClosed reports whether Close has finished and the DB no longer accepts work.
 func (db *DB) IsClosed() bool {
 	return db.isClosed.Load() == 1
+}
+
+func (db *DB) throttleSignal() <-chan struct{} {
+	db.throttleMu.Lock()
+	ch := db.throttleCh
+	db.throttleMu.Unlock()
+	return ch
+}
+
+func (db *DB) notifyThrottleWaiters() {
+	db.throttleMu.Lock()
+	ch := db.throttleCh
+	db.throttleCh = make(chan struct{})
+	db.throttleMu.Unlock()
+	close(ch)
+}
+
+func (db *DB) applyThrottle(state lsm.WriteThrottleState) {
+	state = dbruntime.NormalizeWriteThrottleState(state)
+	stop := int32(0)
+	slow := int32(0)
+	switch state {
+	case lsm.WriteThrottleStop:
+		stop = 1
+	case lsm.WriteThrottleSlowdown:
+		slow = 1
+	}
+	prevStop := db.blockWrites.Swap(stop)
+	prevSlow := db.slowWrites.Swap(slow)
+	if prevStop == stop && prevSlow == slow {
+		return
+	}
+	db.notifyThrottleWaiters()
+	switch state {
+	case lsm.WriteThrottleStop:
+		slog.Default().Warn("write stop enabled due to compaction backlog")
+	case lsm.WriteThrottleSlowdown:
+		slog.Default().Info("write slowdown enabled due to compaction backlog")
+	default:
+		slog.Default().Info("write throttling cleared")
+	}
+}
+
+func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*dbruntime.Request, error) {
+	var size int64
+	count := int64(len(entries))
+	for _, e := range entries {
+		size += int64(e.EstimateSize(int(db.opt.ValueThreshold)))
+	}
+	limitCount, limitSize := db.opt.MaxBatchCount, db.opt.MaxBatchSize
+	if count >= limitCount || size >= limitSize {
+		return nil, utils.ErrTxnTooBig
+	}
+	if db.slowWrites.Load() == 1 {
+		if d := db.currentSlowdownDelay(size); d > 0 {
+			time.Sleep(d)
+		}
+	}
+	for db.blockWrites.Load() == 1 {
+		if !waitOnThrottle {
+			return nil, utils.ErrBlockedWrites
+		}
+		if db.isClosed.Load() == 1 || db.commitQueue.Closed() {
+			return nil, utils.ErrBlockedWrites
+		}
+		ch := db.throttleSignal()
+		if db.blockWrites.Load() == 0 {
+			break
+		}
+		select {
+		case <-ch:
+		case <-db.commitQueue.CloseCh():
+			return nil, utils.ErrBlockedWrites
+		}
+	}
+
+	req := dbruntime.RequestPool.Get().(*dbruntime.Request)
+	req.Reset()
+	req.Entries = entries
+	if db.writeMetrics != nil {
+		req.EnqueueAt = time.Now()
+	}
+	req.WG.Add(1)
+	req.IncrRef()
+
+	cr := dbruntime.CommitRequestPool.Get().(*dbruntime.CommitRequest)
+	cr.Req = req
+	cr.EntryCount = int(count)
+	cr.Size = size
+
+	if err := db.enqueueCommitRequest(cr); err != nil {
+		req.WG.Done()
+		req.Entries = nil
+		req.DecrRef()
+		dbruntime.CommitRequestPool.Put(cr)
+		return nil, err
+	}
+
+	return req, nil
+}
+
+func (db *DB) currentSlowdownDelay(batchSize int64) time.Duration {
+	if batchSize <= 0 || db.lsm == nil {
+		return 0
+	}
+	return dbruntime.SlowdownDelay(batchSize, db.lsm.ThrottleRateBytesPerSec())
+}
+
+func (db *DB) maybeThrottleWrite(cf kv.ColumnFamily, key []byte) error {
+	if db == nil || db.opt == nil {
+		return nil
+	}
+	if !dbruntime.ShouldThrottleHotWrite(db.hotWrite, db.opt.WriteHotKeyLimit, cf, key) {
+		return nil
+	}
+	db.hotWriteLimited.Add(1)
+	return utils.ErrHotKeyWriteThrottle
+}
+
+func (db *DB) batchSet(entries []*kv.Entry) error {
+	req, err := db.sendToWriteCh(entries, true)
+	if err != nil {
+		for _, entry := range entries {
+			if entry != nil {
+				entry.DecrRef()
+			}
+		}
+		return err
+	}
+	return req.Wait()
+}
+
+func (db *DB) enqueueCommitRequest(cr *dbruntime.CommitRequest) error {
+	if cr == nil {
+		return nil
+	}
+	cq := &db.commitQueue
+	if cq.Closed() && cq.CloseCh() == nil {
+		return utils.ErrBlockedWrites
+	}
+	if cq.Closed() {
+		return utils.ErrBlockedWrites
+	}
+	cq.AddPending(int64(cr.EntryCount), cr.Size)
+	queued := false
+	defer func() {
+		if !queued {
+			cq.AddPending(-int64(cr.EntryCount), -cr.Size)
+		}
+	}()
+	if !cq.Push(cr) {
+		return utils.ErrBlockedWrites
+	}
+	queued = true
+	qLen := cq.Len()
+	qEntries := cq.PendingEntries()
+	qBytes := cq.PendingBytes()
+	db.writeMetrics.UpdateQueue(qLen, int(qEntries), qBytes)
+	return nil
+}
+
+func (db *DB) nextCommitBatch(consumer *utils.MPSCConsumer[*dbruntime.CommitRequest]) *dbruntime.CommitBatch {
+	cq := &db.commitQueue
+	first := cq.Pop(consumer)
+	if first == nil {
+		return nil
+	}
+
+	batchPtr := db.commitBatchPool.Get().(*[]*dbruntime.CommitRequest)
+	batch := (*batchPtr)[:0]
+	pendingEntries := int64(0)
+	pendingBytes := int64(0)
+	coalesceWait := db.opt.WriteBatchWait
+
+	limitCount, limitSize := db.opt.WriteBatchMaxCount, db.opt.WriteBatchMaxSize
+	backlog := cq.Len()
+	if backlog > limitCount && limitCount > 0 {
+		factor := min(max(backlog/limitCount, 1), 4)
+		if scaled := limitCount * factor; scaled > 0 {
+			limitCount = min(scaled, backlog)
+		}
+		if scaled := limitSize * int64(factor); scaled > 0 {
+			limitSize = scaled
+		}
+	}
+
+	addToBatch := func(cr *dbruntime.CommitRequest) {
+		batch = append(batch, cr)
+		pendingEntries += int64(cr.EntryCount)
+		pendingBytes += cr.Size
+	}
+
+	addToBatch(first)
+	if coalesceWait > 0 && cq.Len() == 0 && len(batch) < limitCount && pendingBytes < limitSize {
+		time.Sleep(coalesceWait)
+	}
+	remaining := limitCount - len(batch)
+	if remaining > 0 && pendingBytes < limitSize {
+		cq.DrainReady(consumer, remaining, func(cr *dbruntime.CommitRequest) bool {
+			addToBatch(cr)
+			return pendingBytes < limitSize
+		})
+	}
+
+	cq.AddPending(-pendingEntries, -pendingBytes)
+	qLen := cq.Len()
+	qEntries := cq.PendingEntries()
+	qBytes := cq.PendingBytes()
+	db.writeMetrics.UpdateQueue(qLen, int(qEntries), qBytes)
+	return &dbruntime.CommitBatch{Reqs: batch, Pool: batchPtr}
+}
+
+func (db *DB) commitWorker() {
+	defer db.commitWG.Done()
+	consumer := db.commitQueue.Consumer()
+	if consumer == nil {
+		return
+	}
+	defer consumer.Close()
+	for {
+		batch := db.nextCommitBatch(consumer)
+		if batch == nil {
+			return
+		}
+		batch.BatchStart = time.Now()
+		requests, totalEntries, totalSize, waitSum := db.collectCommitRequests(batch.Reqs, batch.BatchStart)
+		if len(requests) == 0 {
+			db.ackCommitBatch(batch.Reqs, batch.Pool, nil, -1, nil)
+			continue
+		}
+		batch.Requests = requests
+		if db.writeMetrics != nil {
+			db.writeMetrics.RecordBatch(len(requests), totalEntries, totalSize, waitSum)
+		}
+
+		err := db.vlog.write(requests)
+		if err != nil {
+			db.ackCommitBatch(batch.Reqs, batch.Pool, requests, -1, err)
+			continue
+		}
+		if db.writeMetrics != nil {
+			batch.ValueLogDur = max(time.Since(batch.BatchStart), 0)
+			if batch.ValueLogDur > 0 {
+				db.writeMetrics.RecordValueLog(batch.ValueLogDur)
+			}
+		}
+
+		failedAt, err := db.applyRequests(batch.Requests)
+		if err == nil && db.syncQueue != nil {
+			sb := &dbruntime.SyncBatch{
+				Reqs:      batch.Reqs,
+				Pool:      batch.Pool,
+				Requests:  batch.Requests,
+				FailedAt:  failedAt,
+				ApplyDone: time.Now(),
+			}
+			batch.Reqs = nil
+			batch.Pool = nil
+			db.releaseCommitBatch(batch)
+			db.syncQueue <- sb
+			continue
+		}
+
+		if err == nil && db.opt.SyncWrites {
+			syncStart := time.Now()
+			err = db.wal.Sync()
+			if db.writeMetrics != nil {
+				db.writeMetrics.RecordSync(time.Since(syncStart), 1)
+			}
+		}
+
+		if db.writeMetrics != nil {
+			totalDur := max(time.Since(batch.BatchStart), 0)
+			applyDur := max(totalDur-batch.ValueLogDur, 0)
+			if applyDur > 0 {
+				db.writeMetrics.RecordApply(applyDur)
+			}
+		}
+
+		db.ackCommitBatch(batch.Reqs, batch.Pool, batch.Requests, failedAt, err)
+	}
+}
+
+func (db *DB) syncWorker() {
+	defer db.syncWG.Done()
+	pending := make([]*dbruntime.SyncBatch, 0, 64)
+	for first := range db.syncQueue {
+		pending = append(pending, first)
+	drain:
+		for {
+			select {
+			case sb, ok := <-db.syncQueue:
+				if !ok {
+					break drain
+				}
+				pending = append(pending, sb)
+			default:
+				break drain
+			}
+		}
+
+		syncStart := time.Now()
+		syncErr := db.wal.Sync()
+		if db.writeMetrics != nil {
+			db.writeMetrics.RecordSync(time.Since(syncStart), len(pending))
+		}
+		for _, sb := range pending {
+			db.ackCommitBatch(sb.Reqs, sb.Pool, sb.Requests, sb.FailedAt, syncErr)
+		}
+		pending = pending[:0]
+	}
+}
+
+func (db *DB) ackCommitBatch(reqs []*dbruntime.CommitRequest, pool *[]*dbruntime.CommitRequest, requests []*dbruntime.Request, failedAt int, defaultErr error) {
+	if defaultErr != nil && failedAt >= 0 && failedAt < len(requests) {
+		perReqErr := make(map[*dbruntime.Request]error, len(requests)-failedAt)
+		for i := failedAt; i < len(requests); i++ {
+			if requests[i] != nil {
+				perReqErr[requests[i]] = defaultErr
+			}
+		}
+		db.finishCommitRequests(reqs, nil, perReqErr)
+	} else {
+		db.finishCommitRequests(reqs, defaultErr, nil)
+	}
+	if pool != nil {
+		for i := range reqs {
+			reqs[i] = nil
+		}
+		*pool = reqs[:0]
+		db.commitBatchPool.Put(pool)
+	}
+}
+
+func (db *DB) stopCommitWorkers() {
+	db.commitQueue.Close()
+	db.commitWG.Wait()
+	if db.syncQueue != nil {
+		close(db.syncQueue)
+		db.syncWG.Wait()
+	}
+}
+
+func (db *DB) collectCommitRequests(reqs []*dbruntime.CommitRequest, now time.Time) ([]*dbruntime.Request, int, int64, int64) {
+	requests := make([]*dbruntime.Request, 0, len(reqs))
+	var (
+		totalEntries int
+		totalSize    int64
+		waitSum      int64
+	)
+	for _, cr := range reqs {
+		if cr == nil || cr.Req == nil {
+			continue
+		}
+		r := cr.Req
+		requests = append(requests, r)
+		totalEntries += len(r.Entries)
+		totalSize += cr.Size
+		if !r.EnqueueAt.IsZero() {
+			waitSum += now.Sub(r.EnqueueAt).Nanoseconds()
+			r.EnqueueAt = time.Time{}
+		}
+	}
+	return requests, totalEntries, totalSize, waitSum
+}
+
+func (db *DB) releaseCommitBatch(batch *dbruntime.CommitBatch) {
+	if batch == nil || batch.Pool == nil {
+		return
+	}
+	batch.Requests = nil
+	batch.BatchStart = time.Time{}
+	batch.ValueLogDur = 0
+	reqs := batch.Reqs
+	for i := range reqs {
+		reqs[i] = nil
+	}
+	*batch.Pool = reqs[:0]
+	db.commitBatchPool.Put(batch.Pool)
+}
+
+func (db *DB) applyRequests(reqs []*dbruntime.Request) (int, error) {
+	for i, r := range reqs {
+		if r == nil || len(r.Entries) == 0 {
+			continue
+		}
+		if err := db.writeToLSM(r); err != nil {
+			return i, pkgerrors.Wrap(err, "writeRequests")
+		}
+		if len(r.PtrBuckets) == 0 {
+			continue
+		}
+		db.Lock()
+		db.updateHeadBuckets(r.PtrBuckets)
+		db.Unlock()
+	}
+	return -1, nil
+}
+
+func (db *DB) finishCommitRequests(reqs []*dbruntime.CommitRequest, defaultErr error, perReqErr map[*dbruntime.Request]error) {
+	for _, cr := range reqs {
+		if cr == nil || cr.Req == nil {
+			continue
+		}
+		if perReqErr != nil {
+			if reqErr, ok := perReqErr[cr.Req]; ok {
+				cr.Req.Err = reqErr
+			} else {
+				cr.Req.Err = defaultErr
+			}
+		} else {
+			cr.Req.Err = defaultErr
+		}
+		cr.Req.WG.Done()
+		cr.Req = nil
+		cr.EntryCount = 0
+		cr.Size = 0
+		dbruntime.CommitRequestPool.Put(cr)
+	}
+}
+
+func (db *DB) writeToLSM(b *dbruntime.Request) error {
+	if len(b.PtrIdxs) == 0 {
+		if len(b.Ptrs) != 0 && len(b.Ptrs) != len(b.Entries) {
+			return pkgerrors.Errorf("Ptrs and Entries don't match: %+v", b)
+		}
+		return db.lsm.SetBatch(b.Entries)
+	}
+	if len(b.Ptrs) != len(b.Entries) {
+		return pkgerrors.Errorf("Ptrs and Entries don't match: %+v", b)
+	}
+
+	for _, idx := range b.PtrIdxs {
+		entry := b.Entries[idx]
+		entry.Meta = entry.Meta | kv.BitValuePointer
+		entry.Value = b.Ptrs[idx].Encode()
+	}
+	if err := db.lsm.SetBatch(b.Entries); err != nil {
+		return err
+	}
+	return nil
+}
+
+type snapshotSource struct {
+	db  *DB
+	lsm *lsm.LSM
+}
+
+func (src snapshotSource) NewInternalIterator(opt *index.Options) index.Iterator {
+	return src.db.NewInternalIterator(opt)
+}
+
+func (src snapshotSource) MaterializeInternalEntry(entry *kv.Entry) (*kv.Entry, error) {
+	return src.db.MaterializeInternalEntry(entry)
+}
+
+func (src snapshotSource) ExternalSSTOptions() *lsm.Options {
+	return src.lsm.ExternalSSTOptions()
+}
+
+type snapshotTarget struct {
+	lsm *lsm.LSM
+}
+
+func (dst snapshotTarget) ImportExternalSST(paths []string) (*lsm.ExternalSSTImportResult, error) {
+	return dst.lsm.ImportExternalSST(paths)
+}
+
+func (dst snapshotTarget) ExternalSSTOptions() *lsm.Options {
+	return dst.lsm.ExternalSSTOptions()
+}
+
+func (dst snapshotTarget) RollbackExternalSST(fileIDs []uint64) error {
+	return dst.lsm.RollbackExternalSST(fileIDs)
+}
+
+func (db *DB) openLSM() (*lsm.LSM, error) {
+	if db == nil || db.IsClosed() || db.lsm == nil {
+		return nil, fmt.Errorf("db: snapshot bridge requires open db")
+	}
+	return db.lsm, nil
+}
+
+func (db *DB) snapshotSource() (snapshotSource, error) {
+	lsmCore, err := db.openLSM()
+	if err != nil {
+		return snapshotSource{}, err
+	}
+	return snapshotSource{db: db, lsm: lsmCore}, nil
+}
+
+func (db *DB) snapshotTarget() (snapshotTarget, error) {
+	lsmCore, err := db.openLSM()
+	if err != nil {
+		return snapshotTarget{}, err
+	}
+	return snapshotTarget{lsm: lsmCore}, nil
+}
+
+func (db *DB) ExportSnapshotDir(dir string, region localmeta.RegionMeta) (*snapshotpkg.ExportResult, error) {
+	src, err := db.snapshotSource()
+	if err != nil {
+		return nil, err
+	}
+	return snapshotpkg.ExportDir(src, dir, region, nil)
+}
+
+func (db *DB) ImportSnapshotDir(dir string) (*snapshotpkg.ImportResult, error) {
+	dst, err := db.snapshotTarget()
+	if err != nil {
+		return nil, err
+	}
+	return snapshotpkg.ImportDir(dst, dir, nil)
+}
+
+func (db *DB) ExportSnapshot(region localmeta.RegionMeta) ([]byte, error) {
+	src, err := db.snapshotSource()
+	if err != nil {
+		return nil, err
+	}
+	payload, _, err := snapshotpkg.ExportPayload(src, db.WorkDir(), region, nil)
+	return payload, err
+}
+
+func (db *DB) ExportSnapshotTo(w io.Writer, region localmeta.RegionMeta) (snapshotpkg.Meta, error) {
+	src, err := db.snapshotSource()
+	if err != nil {
+		return snapshotpkg.Meta{}, err
+	}
+	return snapshotpkg.ExportPayloadTo(w, src, db.WorkDir(), region, nil)
+}
+
+func (db *DB) ImportSnapshot(payload []byte) (*snapshotpkg.ImportResult, error) {
+	dst, err := db.snapshotTarget()
+	if err != nil {
+		return nil, err
+	}
+	return snapshotpkg.ImportPayload(dst, db.WorkDir(), payload, nil)
+}
+
+func (db *DB) ImportSnapshotFrom(r io.Reader) (*snapshotpkg.ImportResult, error) {
+	dst, err := db.snapshotTarget()
+	if err != nil {
+		return nil, err
+	}
+	return snapshotpkg.ImportPayloadFrom(dst, db.WorkDir(), r, nil)
 }

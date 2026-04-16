@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/feichai0017/NoKV/engine/vfs"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	"github.com/feichai0017/NoKV/vfs"
 )
 
 // ExportPayload materializes one SST snapshot and bundles it into

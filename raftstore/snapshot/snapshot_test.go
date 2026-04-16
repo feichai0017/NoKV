@@ -9,12 +9,12 @@ import (
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/lsm"
+	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm"
+	"github.com/feichai0017/NoKV/engine/wal"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/utils"
-	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
 )
 

@@ -8,8 +8,8 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/index"
-	entrykv "github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/engine/index"
+	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"

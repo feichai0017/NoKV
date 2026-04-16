@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/engine/vfs"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
-	"github.com/feichai0017/NoKV/vfs"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 

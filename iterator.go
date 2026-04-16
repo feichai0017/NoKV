@@ -3,9 +3,10 @@ package NoKV
 import (
 	"bytes"
 
-	"github.com/feichai0017/NoKV/index"
-	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/lsm"
+	"github.com/feichai0017/NoKV/engine/index"
+	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm"
+	dbruntime "github.com/feichai0017/NoKV/internal/runtime"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
 )
@@ -14,8 +15,8 @@ import (
 type DBIterator struct {
 	iitr index.Iterator
 	vlog *valueLog
-	pool *iteratorPool
-	ctx  *iteratorContext
+	pool *dbruntime.IteratorPool
+	ctx  *dbruntime.IteratorContext
 	rtv  *lsm.RangeTombstoneView
 	// rtCheck indicates whether this iterator snapshot needs tombstone
 	// coverage checks.
@@ -100,8 +101,8 @@ func (db *DB) NewIterator(opt *index.Options) index.Iterator {
 		opt = &index.Options{}
 	}
 	keyOnly := opt.OnlyUseKey
-	ctx := db.iterPool.get()
-	ctx.iters = append(ctx.iters, db.lsm.NewIterators(opt)...)
+	ctx := db.iterPool.Get()
+	ctx.Append(db.lsm.NewIterators(opt)...)
 	itr := &DBIterator{
 		vlog:       db.vlog,
 		pool:       db.iterPool,
@@ -115,7 +116,7 @@ func (db *DB) NewIterator(opt *index.Options) index.Iterator {
 	}
 	itr.item.vlog = db.vlog
 	itr.item.e = &itr.entry
-	itr.iitr = lsm.NewMergeIterator(ctx.iters, !opt.IsAsc)
+	itr.iitr = lsm.NewMergeIterator(ctx.Iterators(), !opt.IsAsc)
 	if db.lsm != nil {
 		itr.rtCheck = db.lsm.HasAnyRangeTombstone()
 	}
@@ -229,7 +230,7 @@ func (iter *DBIterator) Close() error {
 	iter.valueBuf = iter.valueBuf[:0]
 	iter.resetIterationState()
 	if iter.pool != nil && iter.ctx != nil {
-		iter.pool.put(iter.ctx)
+		iter.pool.Put(iter.ctx)
 	}
 	if iter.rtv != nil {
 		iter.rtv.Close()

@@ -1,6 +1,6 @@
 # File Abstractions
 
-The `file` package encapsulates direct file-system interaction for WAL, SST, and value-log files. It provides portable mmap helpers, allocation primitives, and log file wrappers.
+The `engine/file` package encapsulates direct file-system interaction for WAL, SST, and value-log files. It provides portable mmap helpers, allocation primitives, and log file wrappers.
 
 ---
 
@@ -8,9 +8,9 @@ The `file` package encapsulates direct file-system interaction for WAL, SST, and
 
 | Type | Purpose | Key Methods |
 | --- | --- | --- |
-| [`Options`](../file/file.go#L5-L16) | Parameter bag for opening files (FID, path, size). | Used by WAL/vlog managers. |
-| [`MmapFile`](../file/mmap_linux.go#L12-L98) | Cross-platform mmap wrapper. | `OpenMmapFile`, `AppendBuffer`, `Truncate`, `Sync`. |
-| [`LogFile`](../file/vlog.go#L17-L223) | Value-log specific helper built on `MmapFile`. | `Open`, `Write`, `Read`, `DoneWriting`, `Truncate`, `Bootstrap`. |
+| [`Options`](../engine/file/file.go#L5-L16) | Parameter bag for opening files (FID, path, size). | Used by WAL/vlog managers. |
+| [`MmapFile`](../engine/file/mmap_linux.go#L12-L98) | Cross-platform mmap wrapper. | `OpenMmapFile`, `AppendBuffer`, `Truncate`, `Sync`. |
+| [`LogFile`](../engine/file/vlog.go#L17-L223) | Value-log specific helper built on `MmapFile`. | `Open`, `Write`, `Read`, `DoneWriting`, `Truncate`, `Bootstrap`. |
 
 Darwin-specific builds live alongside (`mmap_darwin.go`, `sstable_darwin.go`) ensuring the package compiles on macOS without manual tuning.
 
@@ -52,7 +52,7 @@ _ = lf.DoneWriting(offset + uint32(len(payload)))
 
 ## 4. SST Helpers
 
-While SSTable builders/readers live under `lsm/table.go`, they rely on `file` helpers to map index/data blocks efficiently. The build tags (`sstable_linux.go`, `sstable_darwin.go`) provide OS-specific tuning for direct I/O hints or mmap flags.
+While SSTable builders/readers live under `engine/lsm/table.go`, they rely on `engine/file` helpers to map index/data blocks efficiently. The build tags (`sstable_linux.go`, `sstable_darwin.go`) provide OS-specific tuning for direct I/O hints or mmap flags.
 
 ---
 
@@ -64,7 +64,7 @@ While SSTable builders/readers live under `lsm/table.go`, they rely on `file` he
 | Badger | `y.File` abstraction with mmap. |
 | NoKV | Go-native mmap wrappers with explicit log helpers. |
 
-By keeping all filesystem primitives in one package, NoKV ensures WAL, vlog, and SST layers share consistent behaviour (sync semantics, truncation rules) and simplifies testing (`file/mmap_linux_test.go`).
+By keeping all filesystem primitives in one package, NoKV ensures WAL, vlog, and SST layers share consistent behaviour (sync semantics, truncation rules) and simplifies testing (`engine/file/mmap_linux_test.go`).
 
 ---
 

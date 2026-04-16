@@ -3,7 +3,7 @@ package metrics
 import (
 	"sync/atomic"
 
-	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/engine/kv"
 )
 
 // ValueLogMetrics captures backlog counters for the value log.

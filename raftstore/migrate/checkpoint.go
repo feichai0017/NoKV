@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/feichai0017/NoKV/vfs"
+	"github.com/feichai0017/NoKV/engine/vfs"
 )
 
 const CheckpointFileName = "MIGRATION_PROGRESS.json"

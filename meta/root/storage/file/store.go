@@ -1,8 +1,8 @@
 package file
 
 import (
+	"github.com/feichai0017/NoKV/engine/vfs"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
-	"github.com/feichai0017/NoKV/vfs"
 )
 
 // store is a single-owner file-backed VirtualLog. Callers must serialize

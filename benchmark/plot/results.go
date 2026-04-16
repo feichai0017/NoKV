@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	bench "github.com/feichai0017/NoKV/benchmark"
+	bench "github.com/feichai0017/NoKV/benchmark/ycsb"
 )
 
 // ResultMetric names a commonly plotted benchmark metric.

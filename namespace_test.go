@@ -8,10 +8,10 @@ import (
 	"sort"
 	"testing"
 
-	entrykv "github.com/feichai0017/NoKV/kv"
+	entrykv "github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/vfs"
+	"github.com/feichai0017/NoKV/engine/wal"
 	ns "github.com/feichai0017/NoKV/namespace"
-	"github.com/feichai0017/NoKV/vfs"
-	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
 )
 
@@ -515,4 +515,21 @@ func TestDBNamespaceFacadeFaultInjectedWALWriteFailsWithoutPartialNamespaceCommi
 	require.NoError(t, err)
 	require.Empty(t, entries)
 	require.Equal(t, 0, stats.DeltasRead)
+}
+
+func TestDBCloseClearsRuntimeModuleRegistry(t *testing.T) {
+	db := openNamespaceFacadeTestDB(t)
+	h1 := db.Namespace(NamespaceOptions{Shards: 2})
+	h2 := db.Namespace(NamespaceOptions{Shards: 4})
+	require.NotNil(t, h1)
+	require.NotNil(t, h2)
+
+	require.Equal(t, 2, db.runtimeModules.Count())
+
+	require.NoError(t, db.Close())
+
+	require.True(t, db.runtimeModules.Cleared())
+
+	h1.Close()
+	h2.Close()
 }

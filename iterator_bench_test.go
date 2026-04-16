@@ -3,7 +3,7 @@ package NoKV
 import (
 	"testing"
 
-	"github.com/feichai0017/NoKV/index"
+	"github.com/feichai0017/NoKV/engine/index"
 )
 
 func BenchmarkDBIteratorScan(b *testing.B) {
