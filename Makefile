@@ -6,7 +6,7 @@
 
 GOLANGCI_LINT_VERSION ?= v2.9.0
 BUF_VERSION ?= 1.66.0
-PROJECT_GO_VERSION ?= 1.6.2
+PROJECT_GO_VERSION ?= 1.26.2
 
 # Default target
 help:
