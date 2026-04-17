@@ -30,6 +30,7 @@
 - [Testing](testing.md)
 - [Scripts](scripts.md)
 - [NoKV Redis](nokv-redis.md)
+- [研究草稿](research/thermos-bounded-memory-early-skew-contract.zh.md)
 - [设计笔记与实现记录](notes/README.md)
   - [2026-01-16 mmap 选择](notes/2026-01-16-mmap-choice.md)
   - [2026-01-16 Hotring 设计](notes/2026-01-16-hotring-design.md)
