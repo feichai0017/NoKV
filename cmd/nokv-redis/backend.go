@@ -14,6 +14,9 @@ func (e *temporaryBackendError) Error() string {
 	if e == nil {
 		return "TRYAGAIN backend unavailable"
 	}
+	if e.err != nil {
+		return e.msg + ": " + e.err.Error()
+	}
 	return e.msg
 }
 

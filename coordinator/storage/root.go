@@ -13,17 +13,16 @@ import (
 // RootStore persists Coordinator truth on top of the metadata root and reconstructs the
 // region catalog by replaying committed root events.
 type RootStore struct {
-	root                     rootBackend
-	refresh                  func() error
-	observeTail              func(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
-	waitForTail              func(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
-	tailNotify               func() <-chan struct{}
-	observe                  func() (rootstorage.ObservedCommitted, error)
-	isLeader                 func() bool
-	leaderID                 func() uint64
-	campaign                 func() error
-	campaignCoordinatorLease func(holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error)
-	releaseCoordinatorLease  func(holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error)
+	root                    rootBackend
+	refresh                 func() error
+	observeTail             func(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
+	waitForTail             func(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
+	tailNotify              func() <-chan struct{}
+	observeCommitted        func() (rootstorage.ObservedCommitted, error)
+	isLeader                func() bool
+	leaderID                func() uint64
+	applyCoordinatorLease   func(cmd rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
+	applyCoordinatorClosure func(cmd rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
 
 	mu       sync.RWMutex
 	snapshot Snapshot
@@ -126,13 +125,6 @@ func (s *RootStore) LeaderID() uint64 {
 	return 0
 }
 
-func (s *RootStore) Campaign() error {
-	if s == nil || s.root == nil || s.campaign == nil {
-		return nil
-	}
-	return s.campaign()
-}
-
 // AppendRootEvent persists one explicit rooted metadata event.
 func (s *RootStore) AppendRootEvent(event rootevent.Event) error {
 	if s == nil || s.root == nil || event.Kind == rootevent.KindUnknown {
@@ -158,32 +150,32 @@ func (s *RootStore) SaveAllocatorState(idCurrent, tsCurrent uint64) error {
 	return s.reload()
 }
 
-func (s *RootStore) CampaignCoordinatorLease(holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
+func (s *RootStore) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
 	if s == nil || s.root == nil {
-		return rootstate.CoordinatorLease{}, nil
+		return rootstate.CoordinatorProtocolState{}, nil
 	}
-	if s.campaignCoordinatorLease == nil {
-		return rootstate.CoordinatorLease{}, errCoordinatorLeaseUnsupported
+	if s.applyCoordinatorLease == nil {
+		return rootstate.CoordinatorProtocolState{}, errCoordinatorLeaseCommandUnsupported
 	}
-	lease, err := s.campaignCoordinatorLease(holderID, expiresUnixNano, nowUnixNano, idFence, tsoFence)
+	protocolState, err := s.applyCoordinatorLease(cmd)
 	if err != nil {
-		return lease, err
+		return protocolState, err
 	}
-	return lease, s.reload()
+	return protocolState, s.reload()
 }
 
-func (s *RootStore) ReleaseCoordinatorLease(holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
+func (s *RootStore) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
 	if s == nil || s.root == nil {
-		return rootstate.CoordinatorLease{}, nil
+		return rootstate.CoordinatorProtocolState{}, nil
 	}
-	if s.releaseCoordinatorLease == nil {
-		return rootstate.CoordinatorLease{}, errCoordinatorLeaseReleaseUnsupported
+	if s.applyCoordinatorClosure == nil {
+		return rootstate.CoordinatorProtocolState{}, errCoordinatorClosureCommandUnsupported
 	}
-	lease, err := s.releaseCoordinatorLease(holderID, nowUnixNano, idFence, tsoFence)
+	protocolState, err := s.applyCoordinatorClosure(cmd)
 	if err != nil {
-		return lease, err
+		return protocolState, err
 	}
-	return lease, s.reload()
+	return protocolState, s.reload()
 }
 
 // Close releases storage resources.
@@ -201,8 +193,8 @@ func (s *RootStore) reload() error {
 	if s == nil || s.root == nil {
 		return nil
 	}
-	if s.observe != nil {
-		observed, err := s.observe()
+	if s.observeCommitted != nil {
+		observed, err := s.observeCommitted()
 		if err != nil {
 			return err
 		}

@@ -125,11 +125,11 @@ func (s bootstrapTestStore) Load() (Snapshot, error) {
 
 func (bootstrapTestStore) AppendRootEvent(rootevent.Event) error   { return nil }
 func (bootstrapTestStore) SaveAllocatorState(uint64, uint64) error { return nil }
-func (bootstrapTestStore) CampaignCoordinatorLease(string, int64, int64, uint64, uint64) (rootstate.CoordinatorLease, error) {
-	return rootstate.CoordinatorLease{}, nil
+func (bootstrapTestStore) ApplyCoordinatorLease(rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+	return rootstate.CoordinatorProtocolState{}, nil
 }
-func (bootstrapTestStore) ReleaseCoordinatorLease(string, int64, uint64, uint64) (rootstate.CoordinatorLease, error) {
-	return rootstate.CoordinatorLease{}, nil
+func (bootstrapTestStore) ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+	return rootstate.CoordinatorProtocolState{}, nil
 }
 func (bootstrapTestStore) Refresh() error   { return nil }
 func (bootstrapTestStore) IsLeader() bool   { return true }

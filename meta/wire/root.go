@@ -2,30 +2,33 @@ package wire
 
 import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
-func RootCursorToProto(cursor rootstate.Cursor) *metapb.RootCursor {
+func RootCursorToProto(cursor rootproto.Cursor) *metapb.RootCursor {
 	return &metapb.RootCursor{Term: cursor.Term, Index: cursor.Index}
 }
 
-func RootCursorFromProto(pbCursor *metapb.RootCursor) rootstate.Cursor {
+func RootCursorFromProto(pbCursor *metapb.RootCursor) rootproto.Cursor {
 	if pbCursor == nil {
-		return rootstate.Cursor{}
+		return rootproto.Cursor{}
 	}
-	return rootstate.Cursor{Term: pbCursor.Term, Index: pbCursor.Index}
+	return rootproto.Cursor{Term: pbCursor.Term, Index: pbCursor.Index}
 }
 
 func RootStateToProto(state rootstate.State) *metapb.RootState {
 	return &metapb.RootState{
-		ClusterEpoch:     state.ClusterEpoch,
-		MembershipEpoch:  state.MembershipEpoch,
-		LastCommitted:    RootCursorToProto(state.LastCommitted),
-		IdFence:          state.IDFence,
-		TsoFence:         state.TSOFence,
-		CoordinatorLease: RootCoordinatorLeaseToProto(state.CoordinatorLease),
+		ClusterEpoch:       state.ClusterEpoch,
+		MembershipEpoch:    state.MembershipEpoch,
+		LastCommitted:      RootCursorToProto(state.LastCommitted),
+		IdFence:            state.IDFence,
+		TsoFence:           state.TSOFence,
+		CoordinatorLease:   RootCoordinatorLeaseToProto(state.CoordinatorLease),
+		CoordinatorSeal:    RootCoordinatorSealToProto(state.CoordinatorSeal),
+		CoordinatorClosure: RootCoordinatorClosureToProto(state.CoordinatorClosure),
 	}
 }
 
@@ -34,24 +37,28 @@ func RootStateFromProto(pbState *metapb.RootState) rootstate.State {
 		return rootstate.State{}
 	}
 	return rootstate.State{
-		ClusterEpoch:     pbState.ClusterEpoch,
-		MembershipEpoch:  pbState.MembershipEpoch,
-		LastCommitted:    RootCursorFromProto(pbState.LastCommitted),
-		IDFence:          pbState.IdFence,
-		TSOFence:         pbState.TsoFence,
-		CoordinatorLease: RootCoordinatorLeaseFromProto(pbState.GetCoordinatorLease()),
+		ClusterEpoch:       pbState.ClusterEpoch,
+		MembershipEpoch:    pbState.MembershipEpoch,
+		LastCommitted:      RootCursorFromProto(pbState.LastCommitted),
+		IDFence:            pbState.IdFence,
+		TSOFence:           pbState.TsoFence,
+		CoordinatorLease:   RootCoordinatorLeaseFromProto(pbState.GetCoordinatorLease()),
+		CoordinatorSeal:    RootCoordinatorSealFromProto(pbState.GetCoordinatorSeal()),
+		CoordinatorClosure: RootCoordinatorClosureFromProto(pbState.GetCoordinatorClosure()),
 	}
 }
 
 func RootCoordinatorLeaseToProto(lease rootstate.CoordinatorLease) *metapb.RootCoordinatorLease {
-	if lease.HolderID == "" && lease.ExpiresUnixNano == 0 && lease.IDFence == 0 && lease.TSOFence == 0 {
+	if lease.Empty() {
 		return nil
 	}
 	return &metapb.RootCoordinatorLease{
-		HolderId:        lease.HolderID,
-		ExpiresUnixNano: lease.ExpiresUnixNano,
-		IdFence:         lease.IDFence,
-		TsoFence:        lease.TSOFence,
+		HolderId:          lease.HolderID,
+		ExpiresUnixNano:   lease.ExpiresUnixNano,
+		CertGeneration:    lease.CertGeneration,
+		IssuedCursor:      RootCursorToProto(lease.IssuedCursor),
+		DutyMask:          lease.DutyMask,
+		PredecessorDigest: lease.PredecessorDigest,
 	}
 }
 
@@ -60,10 +67,328 @@ func RootCoordinatorLeaseFromProto(lease *metapb.RootCoordinatorLease) rootstate
 		return rootstate.CoordinatorLease{}
 	}
 	return rootstate.CoordinatorLease{
-		HolderID:        lease.GetHolderId(),
-		ExpiresUnixNano: lease.GetExpiresUnixNano(),
-		IDFence:         lease.GetIdFence(),
-		TSOFence:        lease.GetTsoFence(),
+		HolderID:          lease.GetHolderId(),
+		ExpiresUnixNano:   lease.GetExpiresUnixNano(),
+		CertGeneration:    lease.GetCertGeneration(),
+		IssuedCursor:      RootCursorFromProto(lease.GetIssuedCursor()),
+		DutyMask:          lease.GetDutyMask(),
+		PredecessorDigest: lease.GetPredecessorDigest(),
+	}
+}
+
+func RootCoordinatorSealToProto(seal rootstate.CoordinatorSeal) *metapb.RootCoordinatorSeal {
+	if !seal.Present() {
+		return nil
+	}
+	return &metapb.RootCoordinatorSeal{
+		HolderId:          seal.HolderID,
+		CertGeneration:    seal.CertGeneration,
+		DutyMask:          seal.DutyMask,
+		ConsumedFrontiers: RootDutyFrontiersToProto(seal.Frontiers),
+		SealedAtCursor:    RootCursorToProto(seal.SealedAtCursor),
+	}
+}
+
+func RootCoordinatorSealFromProto(seal *metapb.RootCoordinatorSeal) rootstate.CoordinatorSeal {
+	if seal == nil {
+		return rootstate.CoordinatorSeal{}
+	}
+	return rootstate.CoordinatorSeal{
+		HolderID:       seal.GetHolderId(),
+		CertGeneration: seal.GetCertGeneration(),
+		DutyMask:       seal.GetDutyMask(),
+		Frontiers:      RootDutyFrontiersFromProto(seal.GetConsumedFrontiers()),
+		SealedAtCursor: RootCursorFromProto(seal.GetSealedAtCursor()),
+	}
+}
+
+func RootCoordinatorClosureToProto(closure rootstate.CoordinatorClosure) *metapb.RootCoordinatorClosure {
+	if closure.Empty() {
+		return nil
+	}
+	return &metapb.RootCoordinatorClosure{
+		HolderId:            closure.HolderID,
+		SealGeneration:      closure.SealGeneration,
+		SuccessorGeneration: closure.SuccessorGeneration,
+		SealDigest:          closure.SealDigest,
+		Stage:               rootCoordinatorClosureStageToProto(closure.Stage),
+		ConfirmedAtCursor:   RootCursorToProto(closure.ConfirmedAtCursor),
+		ClosedAtCursor:      RootCursorToProto(closure.ClosedAtCursor),
+		ReattachedAtCursor:  RootCursorToProto(closure.ReattachedAtCursor),
+	}
+}
+
+func RootCoordinatorClosureFromProto(closure *metapb.RootCoordinatorClosure) rootstate.CoordinatorClosure {
+	if closure == nil {
+		return rootstate.CoordinatorClosure{}
+	}
+	return rootstate.CoordinatorClosure{
+		HolderID:            closure.GetHolderId(),
+		SealGeneration:      closure.GetSealGeneration(),
+		SuccessorGeneration: closure.GetSuccessorGeneration(),
+		SealDigest:          closure.GetSealDigest(),
+		Stage:               rootCoordinatorClosureStageFromProto(closure.GetStage()),
+		ConfirmedAtCursor:   RootCursorFromProto(closure.GetConfirmedAtCursor()),
+		ClosedAtCursor:      RootCursorFromProto(closure.GetClosedAtCursor()),
+		ReattachedAtCursor:  RootCursorFromProto(closure.GetReattachedAtCursor()),
+	}
+}
+
+func RootDutyFrontiersToProto(frontiers rootstate.CoordinatorDutyFrontiers) []*metapb.RootDutyFrontier {
+	if frontiers.Len() == 0 {
+		return nil
+	}
+	entries := frontiers.Entries()
+	out := make([]*metapb.RootDutyFrontier, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, &metapb.RootDutyFrontier{DutyMask: entry.DutyMask, Frontier: entry.Frontier})
+	}
+	return out
+}
+
+func RootDutyFrontiersFromProto(frontiers []*metapb.RootDutyFrontier) rootstate.CoordinatorDutyFrontiers {
+	entries := make([]rootstate.CoordinatorDutyFrontier, 0, len(frontiers))
+	for _, entry := range frontiers {
+		if entry == nil || entry.GetDutyMask() == 0 {
+			continue
+		}
+		entries = append(entries, rootstate.CoordinatorDutyFrontier{
+			DutyMask: entry.GetDutyMask(),
+			DutyName: rootstate.CoordinatorDutyName(entry.GetDutyMask()),
+			Frontier: entry.GetFrontier(),
+		})
+	}
+	return rootstate.NewCoordinatorDutyFrontiers(entries...)
+}
+
+func RootCoordinatorProtocolStateToProto(state rootstate.CoordinatorProtocolState) *metapb.RootCoordinatorProtocolState {
+	return &metapb.RootCoordinatorProtocolState{
+		Lease:   RootCoordinatorLeaseToProto(state.Lease),
+		Seal:    RootCoordinatorSealToProto(state.Seal),
+		Closure: RootCoordinatorClosureToProto(state.Closure),
+	}
+}
+
+func RootCoordinatorProtocolStateFromProto(state *metapb.RootCoordinatorProtocolState) rootstate.CoordinatorProtocolState {
+	if state == nil {
+		return rootstate.CoordinatorProtocolState{}
+	}
+	return rootstate.CoordinatorProtocolState{
+		Lease:   RootCoordinatorLeaseFromProto(state.GetLease()),
+		Seal:    RootCoordinatorSealFromProto(state.GetSeal()),
+		Closure: RootCoordinatorClosureFromProto(state.GetClosure()),
+	}
+}
+
+func RootCoordinatorLeaseCommandToProto(cmd rootstate.CoordinatorLeaseCommand) *metapb.RootCoordinatorLeaseCommand {
+	return &metapb.RootCoordinatorLeaseCommand{
+		Kind:              rootCoordinatorLeaseCommandKindToProto(cmd.Kind),
+		HolderId:          cmd.HolderID,
+		ExpiresUnixNano:   cmd.ExpiresUnixNano,
+		NowUnixNano:       cmd.NowUnixNano,
+		PredecessorDigest: cmd.PredecessorDigest,
+		HandoffFrontiers:  RootDutyFrontiersToProto(cmd.HandoffFrontiers),
+	}
+}
+
+func RootCoordinatorLeaseCommandFromProto(cmd *metapb.RootCoordinatorLeaseCommand) rootstate.CoordinatorLeaseCommand {
+	if cmd == nil {
+		return rootstate.CoordinatorLeaseCommand{}
+	}
+	return rootstate.CoordinatorLeaseCommand{
+		Kind:              rootCoordinatorLeaseCommandKindFromProto(cmd.GetKind()),
+		HolderID:          cmd.GetHolderId(),
+		ExpiresUnixNano:   cmd.GetExpiresUnixNano(),
+		NowUnixNano:       cmd.GetNowUnixNano(),
+		PredecessorDigest: cmd.GetPredecessorDigest(),
+		HandoffFrontiers:  RootDutyFrontiersFromProto(cmd.GetHandoffFrontiers()),
+	}
+}
+
+func RootCoordinatorClosureCommandToProto(cmd rootstate.CoordinatorClosureCommand) *metapb.RootCoordinatorClosureCommand {
+	return &metapb.RootCoordinatorClosureCommand{
+		Kind:        rootCoordinatorClosureCommandKindToProto(cmd.Kind),
+		HolderId:    cmd.HolderID,
+		NowUnixNano: cmd.NowUnixNano,
+		Frontiers:   RootDutyFrontiersToProto(cmd.Frontiers),
+	}
+}
+
+func RootCoordinatorClosureCommandFromProto(cmd *metapb.RootCoordinatorClosureCommand) rootstate.CoordinatorClosureCommand {
+	if cmd == nil {
+		return rootstate.CoordinatorClosureCommand{}
+	}
+	return rootstate.CoordinatorClosureCommand{
+		Kind:        rootCoordinatorClosureCommandKindFromProto(cmd.GetKind()),
+		HolderID:    cmd.GetHolderId(),
+		NowUnixNano: cmd.GetNowUnixNano(),
+		Frontiers:   RootDutyFrontiersFromProto(cmd.GetFrontiers()),
+	}
+}
+
+func rootEventCoordinatorLeaseToProto(lease *rootevent.CoordinatorLease) *metapb.RootCoordinatorLease {
+	if lease == nil {
+		return nil
+	}
+	return &metapb.RootCoordinatorLease{
+		HolderId:          lease.HolderID,
+		ExpiresUnixNano:   lease.ExpiresUnixNano,
+		CertGeneration:    lease.CertGeneration,
+		IssuedCursor:      RootCursorToProto(lease.IssuedCursor),
+		DutyMask:          lease.DutyMask,
+		PredecessorDigest: lease.PredecessorDigest,
+		HandoffFrontiers:  RootDutyFrontiersToProto(lease.Frontiers),
+	}
+}
+
+func rootEventCoordinatorLeaseFromProto(lease *metapb.RootCoordinatorLease) *rootevent.CoordinatorLease {
+	if lease == nil {
+		return nil
+	}
+	return &rootevent.CoordinatorLease{
+		HolderID:          lease.GetHolderId(),
+		ExpiresUnixNano:   lease.GetExpiresUnixNano(),
+		CertGeneration:    lease.GetCertGeneration(),
+		IssuedCursor:      RootCursorFromProto(lease.GetIssuedCursor()),
+		DutyMask:          lease.GetDutyMask(),
+		PredecessorDigest: lease.GetPredecessorDigest(),
+		Frontiers:         RootDutyFrontiersFromProto(lease.GetHandoffFrontiers()),
+	}
+}
+
+func rootEventCoordinatorSealToProto(seal *rootevent.CoordinatorSeal) *metapb.RootCoordinatorSeal {
+	if seal == nil {
+		return nil
+	}
+	return &metapb.RootCoordinatorSeal{
+		HolderId:          seal.HolderID,
+		CertGeneration:    seal.CertGeneration,
+		DutyMask:          seal.DutyMask,
+		ConsumedFrontiers: RootDutyFrontiersToProto(seal.Frontiers),
+		SealedAtCursor:    RootCursorToProto(seal.SealedAtCursor),
+	}
+}
+
+func rootEventCoordinatorSealFromProto(seal *metapb.RootCoordinatorSeal) *rootevent.CoordinatorSeal {
+	if seal == nil {
+		return nil
+	}
+	return &rootevent.CoordinatorSeal{
+		HolderID:       seal.GetHolderId(),
+		CertGeneration: seal.GetCertGeneration(),
+		DutyMask:       seal.GetDutyMask(),
+		Frontiers:      RootDutyFrontiersFromProto(seal.GetConsumedFrontiers()),
+		SealedAtCursor: RootCursorFromProto(seal.GetSealedAtCursor()),
+	}
+}
+
+func rootEventCoordinatorClosureToProto(closure *rootevent.CoordinatorClosure) *metapb.RootCoordinatorClosure {
+	if closure == nil {
+		return nil
+	}
+	return &metapb.RootCoordinatorClosure{
+		HolderId:            closure.HolderID,
+		SealGeneration:      closure.SealGeneration,
+		SuccessorGeneration: closure.SuccessorGeneration,
+		SealDigest:          closure.SealDigest,
+		Stage:               rootCoordinatorClosureStageToProto(closure.Stage),
+		ConfirmedAtCursor:   RootCursorToProto(closure.ConfirmedAtCursor),
+		ClosedAtCursor:      RootCursorToProto(closure.ClosedAtCursor),
+		ReattachedAtCursor:  RootCursorToProto(closure.ReattachedAtCursor),
+	}
+}
+
+func rootEventCoordinatorClosureFromProto(closure *metapb.RootCoordinatorClosure) *rootevent.CoordinatorClosure {
+	if closure == nil {
+		return nil
+	}
+	return &rootevent.CoordinatorClosure{
+		HolderID:            closure.GetHolderId(),
+		SealGeneration:      closure.GetSealGeneration(),
+		SuccessorGeneration: closure.GetSuccessorGeneration(),
+		SealDigest:          closure.GetSealDigest(),
+		Stage:               rootCoordinatorClosureStageFromProto(closure.GetStage()),
+		ConfirmedAtCursor:   RootCursorFromProto(closure.GetConfirmedAtCursor()),
+		ClosedAtCursor:      RootCursorFromProto(closure.GetClosedAtCursor()),
+		ReattachedAtCursor:  RootCursorFromProto(closure.GetReattachedAtCursor()),
+	}
+}
+
+func rootCoordinatorClosureStageToProto(stage rootproto.CoordinatorClosureStage) metapb.RootCoordinatorClosureStage {
+	switch stage {
+	case rootproto.CoordinatorClosureStageConfirmed:
+		return metapb.RootCoordinatorClosureStage_ROOT_COORDINATOR_CLOSURE_STAGE_CONFIRMED
+	case rootproto.CoordinatorClosureStageClosed:
+		return metapb.RootCoordinatorClosureStage_ROOT_COORDINATOR_CLOSURE_STAGE_CLOSED
+	case rootproto.CoordinatorClosureStageReattached:
+		return metapb.RootCoordinatorClosureStage_ROOT_COORDINATOR_CLOSURE_STAGE_REATTACHED
+	default:
+		return metapb.RootCoordinatorClosureStage_ROOT_COORDINATOR_CLOSURE_STAGE_PENDING_CONFIRM
+	}
+}
+
+func rootCoordinatorLeaseCommandKindToProto(kind rootproto.CoordinatorLeaseCommandKind) metapb.RootCoordinatorLeaseCommandKind {
+	switch kind {
+	case rootproto.CoordinatorLeaseCommandIssue:
+		return metapb.RootCoordinatorLeaseCommandKind_ROOT_COORDINATOR_LEASE_COMMAND_KIND_ISSUE
+	case rootproto.CoordinatorLeaseCommandRelease:
+		return metapb.RootCoordinatorLeaseCommandKind_ROOT_COORDINATOR_LEASE_COMMAND_KIND_RELEASE
+	default:
+		return metapb.RootCoordinatorLeaseCommandKind_ROOT_COORDINATOR_LEASE_COMMAND_KIND_UNSPECIFIED
+	}
+}
+
+func rootCoordinatorLeaseCommandKindFromProto(kind metapb.RootCoordinatorLeaseCommandKind) rootproto.CoordinatorLeaseCommandKind {
+	switch kind {
+	case metapb.RootCoordinatorLeaseCommandKind_ROOT_COORDINATOR_LEASE_COMMAND_KIND_ISSUE:
+		return rootproto.CoordinatorLeaseCommandIssue
+	case metapb.RootCoordinatorLeaseCommandKind_ROOT_COORDINATOR_LEASE_COMMAND_KIND_RELEASE:
+		return rootproto.CoordinatorLeaseCommandRelease
+	default:
+		return rootproto.CoordinatorLeaseCommandUnknown
+	}
+}
+
+func rootCoordinatorClosureCommandKindToProto(kind rootproto.CoordinatorClosureCommandKind) metapb.RootCoordinatorClosureCommandKind {
+	switch kind {
+	case rootproto.CoordinatorClosureCommandSeal:
+		return metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_SEAL
+	case rootproto.CoordinatorClosureCommandConfirm:
+		return metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_CONFIRM
+	case rootproto.CoordinatorClosureCommandClose:
+		return metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_CLOSE
+	case rootproto.CoordinatorClosureCommandReattach:
+		return metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_REATTACH
+	default:
+		return metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_UNSPECIFIED
+	}
+}
+
+func rootCoordinatorClosureCommandKindFromProto(kind metapb.RootCoordinatorClosureCommandKind) rootproto.CoordinatorClosureCommandKind {
+	switch kind {
+	case metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_SEAL:
+		return rootproto.CoordinatorClosureCommandSeal
+	case metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_CONFIRM:
+		return rootproto.CoordinatorClosureCommandConfirm
+	case metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_CLOSE:
+		return rootproto.CoordinatorClosureCommandClose
+	case metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_REATTACH:
+		return rootproto.CoordinatorClosureCommandReattach
+	default:
+		return rootproto.CoordinatorClosureCommandUnknown
+	}
+}
+
+func rootCoordinatorClosureStageFromProto(stage metapb.RootCoordinatorClosureStage) rootproto.CoordinatorClosureStage {
+	switch stage {
+	case metapb.RootCoordinatorClosureStage_ROOT_COORDINATOR_CLOSURE_STAGE_CONFIRMED:
+		return rootproto.CoordinatorClosureStageConfirmed
+	case metapb.RootCoordinatorClosureStage_ROOT_COORDINATOR_CLOSURE_STAGE_CLOSED:
+		return rootproto.CoordinatorClosureStageClosed
+	case metapb.RootCoordinatorClosureStage_ROOT_COORDINATOR_CLOSURE_STAGE_REATTACHED:
+		return rootproto.CoordinatorClosureStageReattached
+	default:
+		return rootproto.CoordinatorClosureStagePendingConfirm
 	}
 }
 
@@ -233,12 +558,11 @@ func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 	case event.AllocatorFence != nil:
 		pbEvent.Payload = &metapb.RootEvent_AllocatorFence{AllocatorFence: &metapb.RootAllocatorFence{Minimum: event.AllocatorFence.Minimum}}
 	case event.CoordinatorLease != nil:
-		pbEvent.Payload = &metapb.RootEvent_CoordinatorLease{CoordinatorLease: &metapb.RootCoordinatorLease{
-			HolderId:        event.CoordinatorLease.HolderID,
-			ExpiresUnixNano: event.CoordinatorLease.ExpiresUnixNano,
-			IdFence:         event.CoordinatorLease.IDFence,
-			TsoFence:        event.CoordinatorLease.TSOFence,
-		}}
+		pbEvent.Payload = &metapb.RootEvent_CoordinatorLease{CoordinatorLease: rootEventCoordinatorLeaseToProto(event.CoordinatorLease)}
+	case event.CoordinatorSeal != nil:
+		pbEvent.Payload = &metapb.RootEvent_CoordinatorSeal{CoordinatorSeal: rootEventCoordinatorSealToProto(event.CoordinatorSeal)}
+	case event.CoordinatorClosure != nil:
+		pbEvent.Payload = &metapb.RootEvent_CoordinatorClosure{CoordinatorClosure: rootEventCoordinatorClosureToProto(event.CoordinatorClosure)}
 	case event.RegionDescriptor != nil:
 		pbEvent.Payload = &metapb.RootEvent_RegionDescriptor{RegionDescriptor: &metapb.RootRegionDescriptor{Descriptor_: DescriptorToProto(event.RegionDescriptor.Descriptor)}}
 	case event.RegionRemoval != nil:
@@ -283,12 +607,13 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 		event.AllocatorFence = &rootevent.AllocatorFence{Minimum: body.Minimum}
 	}
 	if body := pbEvent.GetCoordinatorLease(); body != nil {
-		event.CoordinatorLease = &rootevent.CoordinatorLease{
-			HolderID:        body.GetHolderId(),
-			ExpiresUnixNano: body.GetExpiresUnixNano(),
-			IDFence:         body.GetIdFence(),
-			TSOFence:        body.GetTsoFence(),
-		}
+		event.CoordinatorLease = rootEventCoordinatorLeaseFromProto(body)
+	}
+	if body := pbEvent.GetCoordinatorSeal(); body != nil {
+		event.CoordinatorSeal = rootEventCoordinatorSealFromProto(body)
+	}
+	if body := pbEvent.GetCoordinatorClosure(); body != nil {
+		event.CoordinatorClosure = rootEventCoordinatorClosureFromProto(body)
 	}
 	if body := pbEvent.GetRegionDescriptor(); body != nil {
 		event.RegionDescriptor = &rootevent.RegionDescriptorRecord{Descriptor: DescriptorFromProto(body.GetDescriptor_())}
@@ -368,6 +693,10 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVAL_CANCELLED
 	case rootevent.KindCoordinatorLease:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_COORDINATOR_LEASE
+	case rootevent.KindCoordinatorSeal:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_COORDINATOR_SEAL
+	case rootevent.KindCoordinatorClosure:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_COORDINATOR_CLOSURE
 	default:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_UNSPECIFIED
 	}
@@ -415,6 +744,10 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindPeerRemovalCancelled
 	case metapb.RootEventKind_ROOT_EVENT_KIND_COORDINATOR_LEASE:
 		return rootevent.KindCoordinatorLease
+	case metapb.RootEventKind_ROOT_EVENT_KIND_COORDINATOR_SEAL:
+		return rootevent.KindCoordinatorSeal
+	case metapb.RootEventKind_ROOT_EVENT_KIND_COORDINATOR_CLOSURE:
+		return rootevent.KindCoordinatorClosure
 	default:
 		return rootevent.KindUnknown
 	}

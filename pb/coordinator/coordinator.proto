@@ -189,6 +189,27 @@ enum CatchUpState {
   CATCH_UP_STATE_UNAVAILABLE = 4;
 }
 
+enum ServingClass {
+  SERVING_CLASS_UNSPECIFIED = 0;
+  // Authoritative means the response was served from the current rooted view on
+  // the rooted write leader.
+  SERVING_CLASS_AUTHORITATIVE = 1;
+  // BoundedStale means the response was served within an explicitly bounded
+  // rooted lag / descriptor frontier.
+  SERVING_CLASS_BOUNDED_STALE = 2;
+  // Degraded means rooted truth could not currently support a stronger serving
+  // contract and the reply is operating under degraded constraints.
+  SERVING_CLASS_DEGRADED = 3;
+}
+
+enum SyncHealth {
+  SYNC_HEALTH_UNSPECIFIED = 0;
+  SYNC_HEALTH_HEALTHY = 1;
+  SYNC_HEALTH_LAGGING = 2;
+  SYNC_HEALTH_BOOTSTRAP_REQUIRED = 3;
+  SYNC_HEALTH_ROOT_UNAVAILABLE = 4;
+}
+
 message GetRegionByKeyRequest {
   bytes key = 1;
   // freshness declares the requested serving contract.
@@ -197,6 +218,9 @@ message GetRegionByKeyRequest {
   RootToken required_root_token = 3;
   // max_root_lag bounds the allowed rooted revision gap for bounded reads.
   optional uint64 max_root_lag = 4;
+  // required_descriptor_revision optionally requires the returned descriptor to
+  // incorporate at least this rooted descriptor publication epoch.
+  uint64 required_descriptor_revision = 5;
 }
 
 message GetRegionByKeyResponse {
@@ -216,6 +240,19 @@ message GetRegionByKeyResponse {
   uint64 root_lag = 8;
   // catch_up_state reports the node's current rooted catch-up state.
   CatchUpState catch_up_state = 9;
+  // descriptor_revision is the rooted descriptor publication epoch of the
+  // returned region descriptor, when present.
+  uint64 descriptor_revision = 10;
+  // required_descriptor_revision echoes the minimum descriptor revision the
+  // caller required for this answer.
+  uint64 required_descriptor_revision = 11;
+  // cert_generation identifies the detached/rooted authority instance that
+  // served this reply when coordinator lease evidence is available.
+  uint64 cert_generation = 12;
+  // serving_class reports the client-visible serving contract used for this reply.
+  ServingClass serving_class = 13;
+  // sync_health reports the rooted catch-up health that justified this reply.
+  SyncHealth sync_health = 14;
 }
 
 message AllocIDRequest {
@@ -225,6 +262,10 @@ message AllocIDRequest {
 message AllocIDResponse {
   uint64 first_id = 1;
   uint64 count = 2;
+  // cert_generation and consumed_frontier together form the protocol-level
+  // legality witness for monotone detached replies.
+  uint64 cert_generation = 3;
+  uint64 consumed_frontier = 4;
 }
 
 message TsoRequest {
@@ -234,6 +275,10 @@ message TsoRequest {
 message TsoResponse {
   uint64 timestamp = 1;
   uint64 count = 2;
+  // cert_generation and consumed_frontier together form the protocol-level
+  // legality witness for monotone detached replies.
+  uint64 cert_generation = 3;
+  uint64 consumed_frontier = 4;
 }
 
 service Coordinator {

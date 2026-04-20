@@ -16,6 +16,12 @@ var (
 	errNoReachableAddress = errors.New("coordinator client: no reachable address")
 	// errConnectionShutdown indicates that the underlying gRPC connection shut down before becoming ready.
 	errConnectionShutdown = errors.New("coordinator client: grpc connection shutdown")
+	// errStaleWitnessGeneration indicates that a reply was self-consistent but
+	// carried a generation older than one already accepted by this client.
+	errStaleWitnessGeneration = errors.New("coordinator client: stale witness generation")
+	// errInvalidWitness indicates that a reply carried malformed monotone-duty
+	// witness fields and cannot be admitted as a legal continuation reply.
+	errInvalidWitness = errors.New("coordinator client: invalid witness")
 )
 
 const errNotLeaderPrefix = "coordinator not leader"
@@ -33,6 +39,18 @@ func IsNoReachableAddress(err error) bool {
 // IsConnectionShutdown reports whether err represents a gRPC connection entering shutdown during client dial.
 func IsConnectionShutdown(err error) bool {
 	return errors.Is(err, errConnectionShutdown)
+}
+
+// IsStaleWitnessGeneration reports whether err represents a stale reply whose
+// witness generation regressed behind one already accepted by this client.
+func IsStaleWitnessGeneration(err error) bool {
+	return errors.Is(err, errStaleWitnessGeneration)
+}
+
+// IsInvalidWitness reports whether err represents malformed reply witness
+// metadata that failed local client verification.
+func IsInvalidWitness(err error) bool {
+	return errors.Is(err, errInvalidWitness)
 }
 
 // IsNotLeader reports whether err is a coordinator not-leader write rejection.

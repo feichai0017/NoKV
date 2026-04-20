@@ -163,8 +163,9 @@ func (s *stubCoordinatorServer) Tso(_ context.Context, req *coordpb.TsoRequest) 
 	first := s.nextTS
 	s.nextTS += count
 	return &coordpb.TsoResponse{
-		Timestamp: first,
-		Count:     count,
+		Timestamp:        first,
+		Count:            count,
+		ConsumedFrontier: first + count - 1,
 	}, nil
 }
 
@@ -175,12 +176,26 @@ func (s *stubCoordinatorServer) GetRegionByKey(_ context.Context, req *coordpb.G
 	if s.routeErr != nil {
 		return nil, s.routeErr
 	}
-	if req == nil || s.region == nil || !keyInRegion(req.GetKey(), s.region.GetStartKey(), s.region.GetEndKey()) {
-		return &coordpb.GetRegionByKeyResponse{NotFound: true}, nil
+	requestedFreshness := req.GetFreshness()
+	if requestedFreshness == coordpb.Freshness_FRESHNESS_UNSPECIFIED {
+		requestedFreshness = coordpb.Freshness_FRESHNESS_BEST_EFFORT
 	}
-	return &coordpb.GetRegionByKeyResponse{
-		RegionDescriptor: metawire.DescriptorToProto(metawire.DescriptorFromProto(proto.Clone(s.region).(*metapb.RegionDescriptor))),
-	}, nil
+	resp := &coordpb.GetRegionByKeyResponse{
+		ServingClass:               coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE,
+		SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_HEALTHY,
+		CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_FRESH,
+		ServedByLeader:             true,
+		ServedFreshness:            requestedFreshness,
+		RequiredDescriptorRevision: req.GetRequiredDescriptorRevision(),
+	}
+	if req == nil || s.region == nil || !keyInRegion(req.GetKey(), s.region.GetStartKey(), s.region.GetEndKey()) {
+		resp.NotFound = true
+		return resp, nil
+	}
+	desc := metawire.DescriptorToProto(metawire.DescriptorFromProto(proto.Clone(s.region).(*metapb.RegionDescriptor)))
+	resp.RegionDescriptor = desc
+	resp.DescriptorRevision = desc.GetRootEpoch()
+	return resp, nil
 }
 
 func startStubCoordinator(t *testing.T, region *metapb.RegionDescriptor) (addr string, srv *stubCoordinatorServer, shutdown func()) {
