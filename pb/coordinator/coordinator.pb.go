@@ -1558,8 +1558,9 @@ type GetRegionByKeyRequest struct {
 	RequiredRootToken *RootToken `protobuf:"bytes,3,opt,name=required_root_token,json=requiredRootToken,proto3" json:"required_root_token,omitempty"`
 	// max_root_lag bounds the allowed rooted revision gap for bounded reads.
 	MaxRootLag *uint64 `protobuf:"varint,4,opt,name=max_root_lag,json=maxRootLag,proto3,oneof" json:"max_root_lag,omitempty"`
-	// required_descriptor_revision optionally requires the returned descriptor to
+	// required_descriptor_revision requires the returned descriptor to
 	// incorporate at least this rooted descriptor publication epoch.
+	// 0 means unspecified.
 	RequiredDescriptorRevision uint64 `protobuf:"varint,5,opt,name=required_descriptor_revision,json=requiredDescriptorRevision,proto3" json:"required_descriptor_revision,omitempty"`
 	unknownFields              protoimpl.UnknownFields
 	sizeCache                  protoimpl.SizeCache
@@ -1649,10 +1650,10 @@ type GetRegionByKeyResponse struct {
 	// catch_up_state reports the node's current rooted catch-up state.
 	CatchUpState CatchUpState `protobuf:"varint,9,opt,name=catch_up_state,json=catchUpState,proto3,enum=nokv.coordinator.v1.CatchUpState" json:"catch_up_state,omitempty"`
 	// descriptor_revision is the rooted descriptor publication epoch of the
-	// returned region descriptor, when present.
+	// returned region descriptor. 0 means the reply did not carry one.
 	DescriptorRevision uint64 `protobuf:"varint,10,opt,name=descriptor_revision,json=descriptorRevision,proto3" json:"descriptor_revision,omitempty"`
 	// required_descriptor_revision echoes the minimum descriptor revision the
-	// caller required for this answer.
+	// caller required for this answer. 0 means unspecified.
 	RequiredDescriptorRevision uint64 `protobuf:"varint,11,opt,name=required_descriptor_revision,json=requiredDescriptorRevision,proto3" json:"required_descriptor_revision,omitempty"`
 	// cert_generation identifies the detached/rooted authority instance that
 	// served this reply when coordinator lease evidence is available.

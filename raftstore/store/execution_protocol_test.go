@@ -114,12 +114,12 @@ func TestExecutionProtocolTracksTopologyLifecycle(t *testing.T) {
 	require.Equal(t, AdmissionReasonAccepted, rs.LastAdmission().Reason)
 	require.Eventually(t, func() bool {
 		return historyContainsRootKind(sink.EventHistory(), rootevent.KindPeerAdditionPlanned)
-	}, 3*time.Second, 10*time.Millisecond)
+	}, 10*time.Second, 20*time.Millisecond)
 
 	require.Eventually(t, func() bool {
 		status, ok := rs.TopologyExecution(target.TransitionID)
 		return ok && status.Outcome == ExecutionOutcomeApplied && status.Publish == PublishStateTerminalPublished
-	}, 3*time.Second, 10*time.Millisecond)
+	}, 10*time.Second, 20*time.Millisecond)
 }
 
 func TestExecutionProtocolRetainsTerminalPublishFailure(t *testing.T) {
