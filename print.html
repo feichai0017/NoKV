@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-4f5aed8f.js";
+            window.path_to_searchindex_js = "searchindex-4591fa27.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-2a4b9280.js"></script>
+        <script src="toc-281d831b.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -6286,7 +6286,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <li><strong>RECOVERY_METRIC logs</strong> – produced when <code>RECOVERY_TRACE_METRICS=1</code>; helpful when triaging targeted recovery suites and CI failures.</li>
 <li><strong>TRANSPORT_METRIC logs</strong> – emitted by transport chaos tests when <code>CHAOS_TRACE_METRICS=1</code>, capturing gRPC watchdog counters during network partitions and retries.</li>
 <li><strong>Stats snapshots</strong> – <code>stats_test.go</code> verifies JSON structure so CLI output remains backwards compatible.</li>
-<li><strong>Benchmark artefacts</strong> – stored under <code>benchmark/results/</code> with per-suite subdirectories such as <code>benchmark/results/ycsb/</code> and <code>benchmark/results/controlplane/</code>.</li>
+<li><strong>Benchmark artefacts</strong> – stored under <code>benchmark/results/</code> for shared suites and under suite-local result directories where applicable, for example <code>benchmark/results/ycsb/</code> and <code>benchmark/controlplane/results/</code>.</li>
 </ul>
 <hr>
 <h2 id="5-extending-coverage"><a class="header" href="#5-extending-coverage">5. Extending Coverage</a></h2>
@@ -7105,6 +7105,8 @@ nokv-config regions --config raft_config.json --format json | jq '.[] | {id:.id,
 </ol>
 <h2 id="14-一句话总结"><a class="header" href="#14-一句话总结">14. 一句话总结</a></h2>
 <p><code>Thermos</code> 最合理的研究边界不是“做一个更聪明的热点层”，而是：<strong>在 persistent KV 中，把局部 skew 的响应从隐式 heuristic 与全局 backlog fallback，提升为一套 bounded-memory、object-aligned、local-first 的 early-skew degradation contract。</strong></p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="control-plane-crdb-66562-复现"><a class="header" href="#control-plane-crdb-66562-复现">Control-Plane CRDB #66562 复现</a></h1>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="设计笔记与实现记录"><a class="header" href="#设计笔记与实现记录">设计笔记与实现记录</a></h1>
 <p>这一节是 NoKV 的长文档区域。</p>
