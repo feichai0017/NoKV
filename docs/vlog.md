@@ -124,7 +124,7 @@ flowchart LR
 
 ```
 
-* `lfDiscardStats` aggregates per-file discard counts from LSM compaction workers (`engine/lsm/executor.go`, `subcompact` -> `updateDiscardStats`). Once the in-memory counter crosses [`discardStatsFlushThreshold`](../vlog.go#L27), it marshals the map into JSON and writes it back through the DB pipeline under the special key `!NoKV!discard`.
+* `lfDiscardStats` aggregates per-file discard counts from LSM compaction workers (`engine/lsm/compaction_executor.go`, `subcompact` -> `updateDiscardStats`). Once the in-memory counter crosses [`discardStatsFlushThreshold`](../vlog.go#L27), it marshals the map into JSON and writes it back through the DB pipeline under the special key `!NoKV!discard`.
 * `valueLog.flushDiscardStats` consumes those stats, ensuring they are persisted even across crashes. During recovery `valueLog.populateDiscardStats` replays the JSON payload to repopulate the in-memory map.
 * GC uses `discardRatio = discardedBytes/totalBytes` derived from [`Manager.Sample`](../engine/vlog/io.go), which applies windowed iteration based on configurable ratios. If a file exceeds the configured threshold, [`valueLog.doRunGC`](../vlog_gc.go) rewrites live entries into the current head via `db.batchSet` (the normal commit pipeline) and then [`valueLog.rewrite`](../vlog_gc.go) triggers manifest delete edits through `removeValueLogFile`.
   * Sampling behaviour is controlled by `Options.ValueLogGCSampleSizeRatio` (default 0.10 of the file) and `Options.ValueLogGCSampleCountRatio` (default 1% of the configured entry limit). Setting either to `<=0` keeps the default heuristics. `Options.ValueLogGCSampleFromHead` starts sampling from the beginning instead of a random window.
