@@ -12,19 +12,25 @@
   </p>
 
   <p>
-    <a href="https://github.com/feichai0017/NoKV/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/feichai0017/NoKV/go.yml?branch=main&style=flat-square&label=CI&logo=github" /></a>
-    <a href="https://codecov.io/gh/feichai0017/NoKV"><img alt="Coverage" src="https://img.shields.io/codecov/c/gh/feichai0017/NoKV?style=flat-square&logo=codecov" /></a>
-    <a href="https://pkg.go.dev/github.com/feichai0017/NoKV"><img alt="Go Reference" src="https://img.shields.io/badge/go.dev-reference-007d9c?style=flat-square&logo=go&logoColor=white" /></a>
-    <img alt="Go" src="https://img.shields.io/badge/go-1.26+-00ADD8?style=flat-square&logo=go&logoColor=white" />
-    <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square" />
-    <a href="https://deepwiki.com/feichai0017/NoKV"><img alt="DeepWiki" src="https://img.shields.io/badge/DeepWiki-Ask-6f42c1?style=flat-square" /></a>
+    <a href="https://github.com/feichai0017/NoKV/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/feichai0017/NoKV/go.yml?branch=main" /></a>
+    <a href="https://codecov.io/gh/feichai0017/NoKV"><img alt="Coverage" src="https://img.shields.io/codecov/c/gh/feichai0017/NoKV" /></a>
+    <a href="https://goreportcard.com/report/github.com/feichai0017/NoKV"><img alt="Go Report Card" src="https://img.shields.io/badge/go%20report-A+-brightgreen" /></a>
+    <a href="https://pkg.go.dev/github.com/feichai0017/NoKV"><img alt="Go Reference" src="https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&logoColor=white" /></a>
+    <a href="https://github.com/avelino/awesome-go#databases-implemented-in-go"><img alt="Mentioned in Awesome" src="https://awesome.re/mentioned-badge.svg" /></a>
+    <a href="https://dbdb.io/db/nokv"><img alt="DBDB.io" src="https://img.shields.io/badge/dbdb.io-listed-2f80ed" /></a>
   </p>
 
   <p>
-    <img alt="LOC" src="https://img.shields.io/badge/core_LOC-50k+-informational?style=flat-square" />
-    <img alt="TLA+" src="https://img.shields.io/badge/formally_specified-TLA%2B-blueviolet?style=flat-square" />
-    <img alt="Fault Injection" src="https://img.shields.io/badge/fault_injection-18_ops_%2B_8_phases-orange?style=flat-square" />
-    <img alt="Self-contained" src="https://img.shields.io/badge/external_deps-none-brightgreen?style=flat-square" />
+    <img alt="Go Version" src="https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go&logoColor=white" />
+    <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-yellow" />
+    <a href="https://deepwiki.com/feichai0017/NoKV"><img alt="DeepWiki" src="https://img.shields.io/badge/DeepWiki-Ask-6f42c1" /></a>
+  </p>
+
+  <p>
+    <img alt="LOC" src="https://img.shields.io/badge/core_LOC-50k+-informational" />
+    <img alt="TLA+" src="https://img.shields.io/badge/formally_specified-TLA%2B-blueviolet" />
+    <img alt="Fault Injection" src="https://img.shields.io/badge/fault_injection-18_ops_%2B_8_phases-orange" />
+    <img alt="Self-contained" src="https://img.shields.io/badge/external_deps-none-brightgreen" />
   </p>
 </div>
 
