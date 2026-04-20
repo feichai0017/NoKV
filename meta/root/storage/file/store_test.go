@@ -1,6 +1,7 @@
 package file
 
 import (
+	"context"
 	"testing"
 
 	"github.com/feichai0017/NoKV/engine/vfs"
@@ -27,9 +28,9 @@ func TestStoreReadCommittedReportsFellBehindCompaction(t *testing.T) {
 		Event:  rootevent.StoreJoined(3, "s3"),
 	}
 
-	offsetAfterFirst, err := store.AppendCommitted(rec1)
+	offsetAfterFirst, err := store.AppendCommitted(context.Background(), rec1)
 	require.NoError(t, err)
-	_, err = store.AppendCommitted(rec2, rec3)
+	_, err = store.AppendCommitted(context.Background(), rec2, rec3)
 	require.NoError(t, err)
 
 	require.NoError(t, store.SaveCheckpoint(rootstorage.Checkpoint{

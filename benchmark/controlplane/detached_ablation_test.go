@@ -498,9 +498,14 @@ func (s *detachedScenarioStorage) Load() (coordstorage.Snapshot, error) {
 	return coordstorage.CloneSnapshot(s.snapshot), nil
 }
 
-func (s *detachedScenarioStorage) AppendRootEvent(rootevent.Event) error { return nil }
+func (s *detachedScenarioStorage) AppendRootEvent(ctx context.Context, event rootevent.Event) error {
+	_ = ctx
+	_ = event
+	return nil
+}
 
-func (s *detachedScenarioStorage) SaveAllocatorState(idCurrent, tsCurrent uint64) error {
+func (s *detachedScenarioStorage) SaveAllocatorState(ctx context.Context, idCurrent, tsCurrent uint64) error {
+	_ = ctx
 	s.saveCalls++
 	if s.saveErr != nil && s.saveCalls > s.saveErrAfter {
 		return s.saveErr
@@ -514,7 +519,9 @@ func (s *detachedScenarioStorage) SaveAllocatorState(idCurrent, tsCurrent uint64
 	return nil
 }
 
-func (s *detachedScenarioStorage) ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *detachedScenarioStorage) ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+	_ = ctx
+	_ = cmd
 	return rootstate.CoordinatorProtocolState{
 		Lease:   s.snapshot.CoordinatorLease,
 		Seal:    s.snapshot.CoordinatorSeal,
@@ -522,7 +529,9 @@ func (s *detachedScenarioStorage) ApplyCoordinatorLease(rootproto.CoordinatorLea
 	}, nil
 }
 
-func (s *detachedScenarioStorage) ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *detachedScenarioStorage) ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+	_ = ctx
+	_ = cmd
 	return rootstate.CoordinatorProtocolState{
 		Lease:   s.snapshot.CoordinatorLease,
 		Seal:    s.snapshot.CoordinatorSeal,

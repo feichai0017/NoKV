@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
@@ -20,7 +21,7 @@ func TestRootStoreRefreshFromReplicatedFollower(t *testing.T) {
 	follower := followerRoot
 
 	desc := testDescriptor(71, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
-	require.NoError(t, leader.AppendRootEvent(rootevent.RegionBootstrapped(desc)))
+	require.NoError(t, leader.AppendRootEvent(context.Background(), rootevent.RegionBootstrapped(desc)))
 
 	snapshot, err := follower.Load()
 	require.NoError(t, err)
@@ -49,7 +50,7 @@ func TestOpenRootReplicatedStoreSharesThreeNodeCluster(t *testing.T) {
 	follower := rootStores[followerID(leaderID)]
 
 	desc := testDescriptor(81, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
-	require.NoError(t, leader.AppendRootEvent(rootevent.RegionBootstrapped(desc)))
+	require.NoError(t, leader.AppendRootEvent(context.Background(), rootevent.RegionBootstrapped(desc)))
 
 	require.Eventually(t, func() bool {
 		if err := follower.Refresh(); err != nil {
@@ -71,7 +72,7 @@ func TestRootStoreWaitForTailTracksAllocatorFenceCheckpoint(t *testing.T) {
 	subscription := follower.SubscribeTail(rootstorage.TailToken{})
 	require.NotNil(t, subscription)
 
-	require.NoError(t, leader.SaveAllocatorState(123, 456))
+	require.NoError(t, leader.SaveAllocatorState(context.Background(), 123, 456))
 	require.Eventually(t, func() bool {
 		advance, err := subscription.Wait(500 * time.Millisecond)
 		if err != nil {

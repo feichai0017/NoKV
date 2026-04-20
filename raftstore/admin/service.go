@@ -75,7 +75,9 @@ func (s *Service) RemovePeer(_ context.Context, req *adminpb.RemovePeerRequest) 
 
 // TransferLeader requests leader transfer on the specified region.
 func (s *Service) TransferLeader(ctx context.Context, req *adminpb.TransferLeaderRequest) (*adminpb.TransferLeaderResponse, error) {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
 	if s == nil || s.store == nil {
 		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
 	}
@@ -95,8 +97,10 @@ func (s *Service) TransferLeader(ctx context.Context, req *adminpb.TransferLeade
 // ExportRegionSnapshot returns the current region snapshot from the leader,
 // encoded as one migration-only SST snapshot payload.
 func (s *Service) ExportRegionSnapshot(ctx context.Context, req *adminpb.ExportRegionSnapshotRequest) (*adminpb.ExportRegionSnapshotResponse, error) {
-	_ = ctx
-	region, header, reader, waitExport, err := s.startExportRegionSnapshot(req.GetRegionId())
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
+	region, header, reader, waitExport, err := s.startExportRegionSnapshot(ctx, req.GetRegionId())
 	if err != nil {
 		return nil, err
 	}
@@ -104,6 +108,9 @@ func (s *Service) ExportRegionSnapshot(ctx context.Context, req *adminpb.ExportR
 	payload, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "export region snapshot payload: %v", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
 	}
 	if err := waitExport(); err != nil {
 		return nil, status.Errorf(codes.Internal, "export sst region snapshot: %v", err)
@@ -123,7 +130,11 @@ func (s *Service) ExportRegionSnapshot(ctx context.Context, req *adminpb.ExportR
 // ExportRegionSnapshotStream streams one migration-only SST snapshot payload.
 // The first message carries the raft snapshot header and region metadata.
 func (s *Service) ExportRegionSnapshotStream(req *adminpb.ExportRegionSnapshotStreamRequest, stream adminpb.RaftAdmin_ExportRegionSnapshotStreamServer) error {
-	region, header, reader, waitExport, err := s.startExportRegionSnapshot(req.GetRegionId())
+	ctx := stream.Context()
+	if err := ctx.Err(); err != nil {
+		return status.Error(codes.Canceled, err.Error())
+	}
+	region, header, reader, waitExport, err := s.startExportRegionSnapshot(ctx, req.GetRegionId())
 	if err != nil {
 		return err
 	}
@@ -131,6 +142,9 @@ func (s *Service) ExportRegionSnapshotStream(req *adminpb.ExportRegionSnapshotSt
 	buf := make([]byte, snapshotStreamChunkSize)
 	first := true
 	for {
+		if err := ctx.Err(); err != nil {
+			return status.Error(codes.Canceled, err.Error())
+		}
 		n, readErr := reader.Read(buf)
 		if n > 0 || first {
 			resp := &adminpb.ExportRegionSnapshotStreamResponse{Chunk: append([]byte(nil), buf[:n]...)}
@@ -159,7 +173,9 @@ func (s *Service) ExportRegionSnapshotStream(req *adminpb.ExportRegionSnapshotSt
 // ImportRegionSnapshot imports one leader-exported region snapshot on the local
 // store. The local peer is bootstrapped on demand from the payload.
 func (s *Service) ImportRegionSnapshot(ctx context.Context, req *adminpb.ImportRegionSnapshotRequest) (*adminpb.ImportRegionSnapshotResponse, error) {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
 	if s == nil || s.store == nil {
 		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
 	}
@@ -170,7 +186,7 @@ func (s *Service) ImportRegionSnapshot(ctx context.Context, req *adminpb.ImportR
 	if err := snap.Unmarshal(req.GetSnapshot()); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "unmarshal region snapshot: %v", err)
 	}
-	meta, err := s.importRegionSnapshot(snap, nil)
+	meta, err := s.importRegionSnapshot(ctx, snap, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -181,6 +197,10 @@ func (s *Service) ImportRegionSnapshot(ctx context.Context, req *adminpb.ImportR
 // streamed payload. The first chunk must carry the raft snapshot header and
 // region metadata.
 func (s *Service) ImportRegionSnapshotStream(stream adminpb.RaftAdmin_ImportRegionSnapshotStreamServer) error {
+	ctx := stream.Context()
+	if err := ctx.Err(); err != nil {
+		return status.Error(codes.Canceled, err.Error())
+	}
 	if s == nil || s.store == nil {
 		return status.Error(codes.FailedPrecondition, "raft admin service not configured")
 	}
@@ -214,7 +234,7 @@ func (s *Service) ImportRegionSnapshotStream(stream adminpb.RaftAdmin_ImportRegi
 		err  error
 	}, 1)
 	go func() {
-		installed, importErr := s.importRegionSnapshot(snap, &streamedImport{meta: meta, reader: pr})
+		installed, importErr := s.importRegionSnapshot(ctx, snap, &streamedImport{meta: meta, reader: pr})
 		resultCh <- struct {
 			meta localmeta.RegionMeta
 			err  error
@@ -236,6 +256,11 @@ func (s *Service) ImportRegionSnapshotStream(stream adminpb.RaftAdmin_ImportRegi
 		return status.Errorf(codes.Internal, "write region snapshot stream: %v", err)
 	}
 	for {
+		if err := ctx.Err(); err != nil {
+			_ = pw.CloseWithError(err)
+			<-resultCh
+			return status.Error(codes.Canceled, err.Error())
+		}
 		req, recvErr := stream.Recv()
 		if recvErr == io.EOF {
 			_ = pw.Close()
@@ -273,7 +298,9 @@ func (s *Service) ImportRegionSnapshotStream(stream adminpb.RaftAdmin_ImportRegi
 
 // RegionRuntimeStatus returns store-local runtime information for one region.
 func (s *Service) RegionRuntimeStatus(ctx context.Context, req *adminpb.RegionRuntimeStatusRequest) (*adminpb.RegionRuntimeStatusResponse, error) {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
 	if s == nil || s.store == nil {
 		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
 	}
@@ -299,7 +326,9 @@ func (s *Service) RegionRuntimeStatus(ctx context.Context, req *adminpb.RegionRu
 // ExecutionStatus returns store-local execution-plane diagnostics derived from
 // the store's admission, topology, and restart runtime state.
 func (s *Service) ExecutionStatus(ctx context.Context, req *adminpb.ExecutionStatusRequest) (*adminpb.ExecutionStatusResponse, error) {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
 	_ = req
 	if s == nil || s.store == nil {
 		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
@@ -484,7 +513,7 @@ func (s *Service) prepareExportRegionSnapshot(regionID uint64) (localmeta.Region
 	return runtime.Meta, header, nil
 }
 
-func (s *Service) startExportRegionSnapshot(regionID uint64) (localmeta.RegionMeta, []byte, io.ReadCloser, func() error, error) {
+func (s *Service) startExportRegionSnapshot(ctx context.Context, regionID uint64) (localmeta.RegionMeta, []byte, io.ReadCloser, func() error, error) {
 	region, header, err := s.prepareExportRegionSnapshot(regionID)
 	if err != nil {
 		return localmeta.RegionMeta{}, nil, nil, nil, err
@@ -495,6 +524,10 @@ func (s *Service) startExportRegionSnapshot(regionID uint64) (localmeta.RegionMe
 		_, writeErr := s.snapshot.ExportSnapshotTo(pw, region)
 		_ = pw.CloseWithError(writeErr)
 		errCh <- writeErr
+	}()
+	go func() {
+		<-ctx.Done()
+		_ = pw.CloseWithError(ctx.Err())
 	}()
 	wait := func() error { return <-errCh }
 	return region, header, pr, wait, nil
@@ -533,7 +566,35 @@ type streamedImport struct {
 	reader io.Reader
 }
 
-func (s *Service) importRegionSnapshot(snap raftpb.Snapshot, streamed *streamedImport) (localmeta.RegionMeta, error) {
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *contextReader) Read(p []byte) (int, error) {
+	if r == nil || r.reader == nil {
+		return 0, io.EOF
+	}
+	if r.ctx == nil {
+		return r.reader.Read(p)
+	}
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	n, err := r.reader.Read(p)
+	if err == nil && r.ctx.Err() != nil {
+		return n, r.ctx.Err()
+	}
+	return n, err
+}
+
+func (s *Service) importRegionSnapshot(ctx context.Context, snap raftpb.Snapshot, streamed *streamedImport) (localmeta.RegionMeta, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return localmeta.RegionMeta{}, status.Error(codes.Canceled, err.Error())
+	}
 	if s.snapshot == nil {
 		return localmeta.RegionMeta{}, status.Error(codes.FailedPrecondition, "sst snapshot import is not configured")
 	}
@@ -549,11 +610,11 @@ func (s *Service) importRegionSnapshot(snap raftpb.Snapshot, streamed *streamedI
 	}
 	installImport := func() (*snapshotpkg.ImportResult, error) {
 		if streamed != nil {
-			return s.snapshot.ImportSnapshotFrom(streamed.reader)
+			return s.snapshot.ImportSnapshotFrom(&contextReader{ctx: ctx, reader: streamed.reader})
 		}
 		return s.snapshot.ImportSnapshot(snap.Data)
 	}
-	installed, err := s.store.InstallRegionSSTSnapshot(raftpb.Snapshot(snap), meta, func() (func() error, error) {
+	installed, err := s.store.InstallRegionSSTSnapshot(ctx, raftpb.Snapshot(snap), meta, func() (func() error, error) {
 		result, importErr := installImport()
 		if importErr != nil {
 			return nil, importErr

@@ -22,7 +22,7 @@ import (
 func TestOpenRootRemoteStoreLoadsSnapshot(t *testing.T) {
 	backend, err := rootlocal.Open(t.TempDir(), nil)
 	require.NoError(t, err)
-	_, err = backend.Append(rootevent.RegionBootstrapped(remoteTestDescriptor(11)))
+	_, err = backend.Append(context.Background(), rootevent.RegionBootstrapped(remoteTestDescriptor(11)))
 	require.NoError(t, err)
 
 	const bufSize = 1 << 20
@@ -75,7 +75,7 @@ func TestOpenRootRemoteStoreDoesNotGateWritesOnPreferredEndpointLeadership(t *te
 
 	require.True(t, store.IsLeader())
 	require.Equal(t, uint64(2), store.LeaderID())
-	require.Error(t, store.SaveAllocatorState(10, 20))
+	require.Error(t, store.SaveAllocatorState(context.Background(), 10, 20))
 }
 
 func TestRemoteRootConfigValidate(t *testing.T) {
@@ -108,11 +108,11 @@ func (f remoteFollowerBackend) Snapshot() (rootstate.Snapshot, error) {
 	return rootstate.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
 }
 
-func (f remoteFollowerBackend) Append(...rootevent.Event) (rootstate.CommitInfo, error) {
+func (f remoteFollowerBackend) Append(context.Context, ...rootevent.Event) (rootstate.CommitInfo, error) {
 	return rootstate.CommitInfo{}, errors.New("unexpected append")
 }
 
-func (f remoteFollowerBackend) FenceAllocator(rootstate.AllocatorKind, uint64) (uint64, error) {
+func (f remoteFollowerBackend) FenceAllocator(context.Context, rootstate.AllocatorKind, uint64) (uint64, error) {
 	return 0, errors.New("unexpected fence")
 }
 

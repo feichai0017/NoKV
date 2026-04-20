@@ -20,8 +20,8 @@ import (
 // Backend is the metadata-root authority surface exported over gRPC.
 type Backend interface {
 	Snapshot() (rootstate.Snapshot, error)
-	Append(events ...rootevent.Event) (rootstate.CommitInfo, error)
-	FenceAllocator(kind rootstate.AllocatorKind, min uint64) (uint64, error)
+	Append(ctx context.Context, events ...rootevent.Event) (rootstate.CommitInfo, error)
+	FenceAllocator(ctx context.Context, kind rootstate.AllocatorKind, min uint64) (uint64, error)
 }
 
 type leaderBackend interface {
@@ -39,8 +39,8 @@ type tailBackend interface {
 }
 
 type leaseBackend interface {
-	ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
-	ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
+	ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
+	ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
 }
 
 // Service exposes one metadata-root backend through the MetadataRoot RPC API.
@@ -71,7 +71,7 @@ func (s *Service) Snapshot(context.Context, *metapb.MetadataRootSnapshotRequest)
 	return &metapb.MetadataRootSnapshotResponse{Checkpoint: metawire.RootSnapshotToProto(snapshot, 0)}, nil
 }
 
-func (s *Service) Append(_ context.Context, req *metapb.MetadataRootAppendRequest) (*metapb.MetadataRootAppendResponse, error) {
+func (s *Service) Append(ctx context.Context, req *metapb.MetadataRootAppendRequest) (*metapb.MetadataRootAppendResponse, error) {
 	if s == nil || s.backend == nil {
 		return &metapb.MetadataRootAppendResponse{}, nil
 	}
@@ -86,7 +86,7 @@ func (s *Service) Append(_ context.Context, req *metapb.MetadataRootAppendReques
 		}
 		events = append(events, event)
 	}
-	commit, err := s.backend.Append(events...)
+	commit, err := s.backend.Append(ctx, events...)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -96,7 +96,7 @@ func (s *Service) Append(_ context.Context, req *metapb.MetadataRootAppendReques
 	}, nil
 }
 
-func (s *Service) FenceAllocator(_ context.Context, req *metapb.MetadataRootFenceAllocatorRequest) (*metapb.MetadataRootFenceAllocatorResponse, error) {
+func (s *Service) FenceAllocator(ctx context.Context, req *metapb.MetadataRootFenceAllocatorRequest) (*metapb.MetadataRootFenceAllocatorResponse, error) {
 	if s == nil || s.backend == nil {
 		return &metapb.MetadataRootFenceAllocatorResponse{}, nil
 	}
@@ -107,7 +107,7 @@ func (s *Service) FenceAllocator(_ context.Context, req *metapb.MetadataRootFenc
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	current, err := s.backend.FenceAllocator(kind, req.GetMinimum())
+	current, err := s.backend.FenceAllocator(ctx, kind, req.GetMinimum())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -124,7 +124,7 @@ func (s *Service) Status(context.Context, *metapb.MetadataRootStatusRequest) (*m
 	return &metapb.MetadataRootStatusResponse{IsLeader: true}, nil
 }
 
-func (s *Service) ApplyCoordinatorLease(_ context.Context, req *metapb.MetadataRootApplyCoordinatorLeaseRequest) (*metapb.MetadataRootApplyCoordinatorLeaseResponse, error) {
+func (s *Service) ApplyCoordinatorLease(ctx context.Context, req *metapb.MetadataRootApplyCoordinatorLeaseRequest) (*metapb.MetadataRootApplyCoordinatorLeaseResponse, error) {
 	if s == nil || s.backend == nil {
 		return &metapb.MetadataRootApplyCoordinatorLeaseResponse{}, nil
 	}
@@ -133,7 +133,7 @@ func (s *Service) ApplyCoordinatorLease(_ context.Context, req *metapb.MetadataR
 		return nil, err
 	}
 	cmd := metawire.RootCoordinatorLeaseCommandFromProto(req.GetCommand())
-	protocolState, err := backend.ApplyCoordinatorLease(cmd)
+	protocolState, err := backend.ApplyCoordinatorLease(ctx, cmd)
 	if err != nil {
 		if errors.Is(err, rootstate.ErrCoordinatorLeaseHeld) {
 			return &metapb.MetadataRootApplyCoordinatorLeaseResponse{
@@ -149,7 +149,7 @@ func (s *Service) ApplyCoordinatorLease(_ context.Context, req *metapb.MetadataR
 	}, nil
 }
 
-func (s *Service) ApplyCoordinatorClosure(_ context.Context, req *metapb.MetadataRootApplyCoordinatorClosureRequest) (*metapb.MetadataRootApplyCoordinatorClosureResponse, error) {
+func (s *Service) ApplyCoordinatorClosure(ctx context.Context, req *metapb.MetadataRootApplyCoordinatorClosureRequest) (*metapb.MetadataRootApplyCoordinatorClosureResponse, error) {
 	if s == nil || s.backend == nil {
 		return &metapb.MetadataRootApplyCoordinatorClosureResponse{}, nil
 	}
@@ -158,7 +158,7 @@ func (s *Service) ApplyCoordinatorClosure(_ context.Context, req *metapb.Metadat
 		return nil, err
 	}
 	cmd := metawire.RootCoordinatorClosureCommandFromProto(req.GetCommand())
-	protocolState, err := backend.ApplyCoordinatorClosure(cmd)
+	protocolState, err := backend.ApplyCoordinatorClosure(ctx, cmd)
 	if err != nil {
 		return nil, coordinatorClosureApplyRPCError(cmd.Kind, err)
 	}

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"math"
 	"testing"
@@ -124,12 +125,14 @@ func (s bootstrapTestStore) Load() (Snapshot, error) {
 	return CloneSnapshot(s.snapshot), nil
 }
 
-func (bootstrapTestStore) AppendRootEvent(rootevent.Event) error   { return nil }
-func (bootstrapTestStore) SaveAllocatorState(uint64, uint64) error { return nil }
-func (bootstrapTestStore) ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (bootstrapTestStore) AppendRootEvent(context.Context, rootevent.Event) error { return nil }
+func (bootstrapTestStore) SaveAllocatorState(context.Context, uint64, uint64) error {
+	return nil
+}
+func (bootstrapTestStore) ApplyCoordinatorLease(context.Context, rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
 	return rootstate.CoordinatorProtocolState{}, nil
 }
-func (bootstrapTestStore) ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (bootstrapTestStore) ApplyCoordinatorClosure(context.Context, rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
 	return rootstate.CoordinatorProtocolState{}, nil
 }
 func (bootstrapTestStore) Refresh() error   { return nil }

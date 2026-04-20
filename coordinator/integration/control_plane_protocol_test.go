@@ -56,11 +56,11 @@ func (s *protocolMatrixStorage) Load() (coordstorage.Snapshot, error) {
 	return coordstorage.CloneSnapshot(s.snapshot), nil
 }
 
-func (s *protocolMatrixStorage) AppendRootEvent(rootevent.Event) error {
+func (s *protocolMatrixStorage) AppendRootEvent(context.Context, rootevent.Event) error {
 	return nil
 }
 
-func (s *protocolMatrixStorage) SaveAllocatorState(idCurrent, tsCurrent uint64) error {
+func (s *protocolMatrixStorage) SaveAllocatorState(_ context.Context, idCurrent, tsCurrent uint64) error {
 	if idCurrent > s.snapshot.Allocator.IDCurrent {
 		s.snapshot.Allocator.IDCurrent = idCurrent
 	}
@@ -70,7 +70,7 @@ func (s *protocolMatrixStorage) SaveAllocatorState(idCurrent, tsCurrent uint64) 
 	return nil
 }
 
-func (s *protocolMatrixStorage) ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *protocolMatrixStorage) ApplyCoordinatorLease(_ context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
 	switch cmd.Kind {
 	case rootproto.CoordinatorLeaseCommandIssue:
 		s.campaigns++
@@ -121,7 +121,7 @@ func (s *protocolMatrixStorage) ApplyCoordinatorLease(cmd rootproto.CoordinatorL
 	return s.protocolState(), nil
 }
 
-func (s *protocolMatrixStorage) ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *protocolMatrixStorage) ApplyCoordinatorClosure(_ context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
 	switch cmd.Kind {
 	case rootproto.CoordinatorClosureCommandSeal:
 		if err := rootstate.ValidateCoordinatorLeaseSeal(s.snapshot.CoordinatorLease, cmd.HolderID); err != nil {
