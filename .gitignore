@@ -9,6 +9,7 @@ benchmark/benchmark_data/*
 benchmark/benchmark_data_policy_*/
 benchmark/benchmark_results.txt
 benchmark/benchmark_results/
+benchmark/controlplane/results/
 
 .gocache
 .gomodcache
@@ -28,5 +29,7 @@ artifacts/
 work_redis
 
 third_party/
+.tlc-states/
+_apalache-out/
 
 coverage.out
