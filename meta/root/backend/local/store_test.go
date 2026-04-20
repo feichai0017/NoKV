@@ -10,8 +10,10 @@ import (
 	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	rootfile "github.com/feichai0017/NoKV/meta/root/storage/file"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -363,6 +365,69 @@ func TestStoreReplaysLogAfterStaleCheckpoint(t *testing.T) {
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, state.LastCommitted)
 }
 
+type failingCheckpointLog struct {
+	checkpoint rootstorage.Checkpoint
+	tail       rootstorage.CommittedTail
+	saveErr    error
+}
+
+func (l *failingCheckpointLog) LoadCheckpoint() (rootstorage.Checkpoint, error) {
+	return rootstorage.CloneCheckpoint(l.checkpoint), nil
+}
+
+func (l *failingCheckpointLog) SaveCheckpoint(checkpoint rootstorage.Checkpoint) error {
+	if l.saveErr != nil {
+		return l.saveErr
+	}
+	l.checkpoint = rootstorage.CloneCheckpoint(checkpoint)
+	return nil
+}
+
+func (l *failingCheckpointLog) ReadCommitted(requestedOffset int64) (rootstorage.CommittedTail, error) {
+	tail := rootstorage.CloneCommittedTail(l.tail)
+	tail.RequestedOffset = requestedOffset
+	return tail, nil
+}
+
+func (l *failingCheckpointLog) AppendCommitted(ctx context.Context, records ...rootstorage.CommittedEvent) (int64, error) {
+	if ctx != nil && ctx.Err() != nil {
+		return 0, ctx.Err()
+	}
+	l.tail.Records = append(l.tail.Records, rootstorage.CloneCommittedEvents(records)...)
+	l.tail.StartOffset = 0
+	l.tail.EndOffset = int64(len(l.tail.Records))
+	return l.tail.EndOffset, nil
+}
+
+func (l *failingCheckpointLog) CompactCommitted(stream rootstorage.CommittedTail) error {
+	l.tail = rootstorage.CloneCommittedTail(stream)
+	return nil
+}
+
+func (l *failingCheckpointLog) InstallBootstrap(observed rootstorage.ObservedCommitted) error {
+	l.checkpoint = rootstorage.CloneCheckpoint(observed.Checkpoint)
+	l.tail = rootstorage.CloneCommittedTail(observed.Tail)
+	return nil
+}
+
+func (l *failingCheckpointLog) Size() (int64, error) {
+	return int64(len(l.tail.Records)), nil
+}
+
+func TestStoreAppendCheckpointFailureStillLeavesReplayableCommittedTail(t *testing.T) {
+	checkpointErr := errors.New("checkpoint write failed")
+	log := &failingCheckpointLog{saveErr: checkpointErr}
+	store := &Store{log: log}
+
+	_, err := store.Append(context.Background(), rootevent.StoreJoined(1, "s1"))
+	require.ErrorIs(t, err, checkpointErr)
+
+	bootstrap, err := rootmaterialize.LoadBootstrap(log)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), bootstrap.Snapshot.State.MembershipEpoch)
+	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, bootstrap.Snapshot.State.LastCommitted)
+}
+
 func TestStoreRejectsLegacyRootStateCheckpoint(t *testing.T) {
 	dir := t.TempDir()
 	payload, err := proto.Marshal(&metapb.RootState{
@@ -389,6 +454,7 @@ func TestStoreCompactsPhysicalLogAndKeepsRecentTail(t *testing.T) {
 		_, err := store.Append(context.Background(), rootevent.RegionDescriptorPublished(testDescriptor(uint64(100+i), []byte{byte('a' + i%26)}, []byte{byte('b' + i%26)})))
 		require.NoError(t, err)
 	}
+	require.NoError(t, store.Close())
 
 	reopened, err := Open(dir, nil)
 	require.NoError(t, err)

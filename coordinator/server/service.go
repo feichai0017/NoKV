@@ -98,6 +98,9 @@ const ablationUnlimitedWindowSize uint64 = 1 << 20
 const defaultCoordinatorLeaseTTL = 10 * time.Second
 const defaultCoordinatorLeaseRenewIn = 3 * time.Second
 const defaultCoordinatorLeaseClockSkew = 500 * time.Millisecond
+const defaultCoordinatorLeaseRetryMin = 200 * time.Millisecond
+const maxCoordinatorLeaseRetry = 60 * time.Second
+const defaultCoordinatorLeaseReleaseTimeout = 2 * time.Second
 
 // NewService constructs a Coordinator service. The optional root storage fixes
 // durable rooted persistence at construction time; omitting it keeps the service
@@ -222,11 +225,12 @@ func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbea
 		return nil, status.Error(codes.InvalidArgument, "store heartbeat request is nil")
 	}
 	err := s.cluster.UpsertStoreHeartbeat(pdview.StoreStats{
-		StoreID:   req.GetStoreId(),
-		RegionNum: req.GetRegionNum(),
-		LeaderNum: req.GetLeaderNum(),
-		Capacity:  req.GetCapacity(),
-		Available: req.GetAvailable(),
+		StoreID:           req.GetStoreId(),
+		RegionNum:         req.GetRegionNum(),
+		LeaderNum:         req.GetLeaderNum(),
+		Capacity:          req.GetCapacity(),
+		Available:         req.GetAvailable(),
+		DroppedOperations: req.GetDroppedOperations(),
 	})
 	if err != nil {
 		if errors.Is(err, catalog.ErrInvalidStoreID) {
@@ -1036,15 +1040,31 @@ func (s *Service) RunCoordinatorLeaseLoop(ctx context.Context) {
 	}
 	timer := time.NewTimer(0)
 	defer timer.Stop()
+	failures := 0
 	for {
 		select {
 		case <-ctx.Done():
+			if s.storage.IsLeader() {
+				releaseCtx, cancel := context.WithTimeout(context.Background(), defaultCoordinatorLeaseReleaseTimeout)
+				_ = s.releaseCoordinatorLease(releaseCtx)
+				cancel()
+			}
 			return
 		case <-timer.C:
+			next := s.coordinatorLeaseLoopInterval()
 			if s.storage.IsLeader() {
-				_ = s.ensureCoordinatorLease(ctx)
+				if err := s.ensureCoordinatorLease(ctx); err != nil {
+					failures++
+					next = s.coordinatorLeaseRetryDelay(failures)
+				} else {
+					failures = 0
+					next = s.jitterDuration(next, 20)
+				}
+			} else {
+				failures = 0
+				next = s.jitterDuration(next, 20)
 			}
-			timer.Reset(s.coordinatorLeaseLoopInterval())
+			timer.Reset(next)
 		}
 	}
 }
@@ -1271,6 +1291,41 @@ func (s *Service) coordinatorLeaseLoopInterval() time.Duration {
 		interval = 10 * time.Millisecond
 	}
 	return interval
+}
+
+func (s *Service) coordinatorLeaseRetryDelay(failures int) time.Duration {
+	if failures <= 0 {
+		return s.jitterDuration(s.coordinatorLeaseLoopInterval(), 20)
+	}
+	delay := defaultCoordinatorLeaseRetryMin
+	for i := 1; i < failures; i++ {
+		if delay >= maxCoordinatorLeaseRetry/2 {
+			delay = maxCoordinatorLeaseRetry
+			break
+		}
+		delay *= 2
+	}
+	if delay > maxCoordinatorLeaseRetry {
+		delay = maxCoordinatorLeaseRetry
+	}
+	return s.jitterDuration(delay, 20)
+}
+
+func (s *Service) jitterDuration(base time.Duration, percent int64) time.Duration {
+	if base <= 0 || percent <= 0 {
+		return base
+	}
+	nowFn := s.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	window := percent*2 + 1
+	offsetPercent := (nowFn().UnixNano() % window) - percent
+	jittered := base + time.Duration(int64(base)*offsetPercent/100)
+	if jittered < 10*time.Millisecond {
+		return 10 * time.Millisecond
+	}
+	return jittered
 }
 
 func (s *Service) coordinatorLeaseEnabled() bool {
