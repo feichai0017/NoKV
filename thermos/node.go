@@ -1,4 +1,4 @@
-package hotring
+package thermos
 
 import (
 	"runtime"

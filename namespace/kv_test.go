@@ -49,7 +49,7 @@ func openTestNoKVDB(t *testing.T) *NoKV.DB {
 	opt.WorkDir = filepath.Join(t.TempDir(), "nokv")
 	opt.EnableWALWatchdog = false
 	opt.ValueLogGCInterval = 0
-	opt.HotRingEnabled = false
+	opt.ThermosEnabled = false
 	db, err := NoKV.Open(opt)
 	require.NoError(t, err)
 	return db

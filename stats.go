@@ -9,10 +9,10 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/wal"
-	"github.com/feichai0017/NoKV/hotring"
 	"github.com/feichai0017/NoKV/metrics"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	transportpkg "github.com/feichai0017/NoKV/raftstore/transport"
+	"github.com/feichai0017/NoKV/thermos"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -201,7 +201,7 @@ type RegionStatsSnapshot struct {
 // HotStatsSnapshot contains write-hot keys and optional ring internals.
 type HotStatsSnapshot struct {
 	WriteKeys []HotKeyStat   `json:"write_keys,omitempty"`
-	WriteRing *hotring.Stats `json:"write_ring,omitempty"`
+	WriteRing *thermos.Stats `json:"write_ring,omitempty"`
 }
 
 // CacheStatsSnapshot captures block/index/bloom hit-rate indicators.
@@ -568,7 +568,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.ValueLog.Heads = stats.Heads
 	}
 	if s.db != nil && s.db.hotWrite != nil {
-		for _, item := range s.db.hotWrite.TopN(s.db.opt.HotRingTopK) {
+		for _, item := range s.db.hotWrite.TopN(s.db.opt.ThermosTopK) {
 			snap.Hot.WriteKeys = append(snap.Hot.WriteKeys, HotKeyStat{Key: item.Key, Count: item.Count})
 		}
 		hotStats := s.db.hotWrite.Stats()

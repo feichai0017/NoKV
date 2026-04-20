@@ -77,7 +77,7 @@ The single-node substrate — WAL, MemTable, flush, compaction, value log, manif
 | Range filter | [range_filter.md](range_filter.md) |
 | Block / row cache | [cache.md](cache.md) |
 | VFS abstraction + FaultFS | [vfs.md](vfs.md) · [file.md](file.md) |
-| Hot-key observer (HotRing) | [hotring.md](hotring.md) |
+| Hot-key observer (Thermos) | [thermos.md](thermos.md) |
 | Entry / error model | [entry.md](entry.md) · [errors.md](errors.md) |
 
 ### Distributed runtime

@@ -166,16 +166,16 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 	_, _ = fmt.Fprintf(w, "Write.HotKeyThrottled  %d\n", snap.Write.HotKeyLimited)
 	if snap.Hot.WriteRing != nil {
 		hs := snap.Hot.WriteRing
-		_, _ = fmt.Fprintf(w, "HotRing.Buckets        %d\n", hs.Buckets)
-		_, _ = fmt.Fprintf(w, "HotRing.Nodes          %d (load=%.2f)\n", hs.Nodes, hs.LoadFactor)
-		_, _ = fmt.Fprintf(w, "HotRing.Touches        %d (clamps=%d inserts=%d removes=%d)\n",
+		_, _ = fmt.Fprintf(w, "Thermos.Buckets        %d\n", hs.Buckets)
+		_, _ = fmt.Fprintf(w, "Thermos.Nodes          %d (load=%.2f)\n", hs.Nodes, hs.LoadFactor)
+		_, _ = fmt.Fprintf(w, "Thermos.Touches        %d (clamps=%d inserts=%d removes=%d)\n",
 			hs.Touches, hs.Clamps, hs.Inserts, hs.Removes)
 		if hs.WindowSlots > 0 && hs.WindowSlotDuration > 0 {
-			_, _ = fmt.Fprintf(w, "HotRing.Window         slots=%d dur=%s\n",
+			_, _ = fmt.Fprintf(w, "Thermos.Window         slots=%d dur=%s\n",
 				hs.WindowSlots, hs.WindowSlotDuration.String())
 		}
 		if hs.DecayInterval > 0 && hs.DecayShift > 0 {
-			_, _ = fmt.Fprintf(w, "HotRing.Decay          every=%s shift=%d\n",
+			_, _ = fmt.Fprintf(w, "Thermos.Decay          every=%s shift=%d\n",
 				hs.DecayInterval.String(), hs.DecayShift)
 		}
 	}

@@ -7,8 +7,8 @@ import (
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/engine/wal"
-	"github.com/feichai0017/NoKV/hotring"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	"github.com/feichai0017/NoKV/thermos"
 )
 
 // HotWriteConfig captures the runtime hot-key tracking knobs consumed by the
@@ -27,11 +27,11 @@ type HotWriteConfig struct {
 
 // NewHotWriteRing builds the optional hot-key tracker used by the DB write
 // runtime. A nil ring means the feature is disabled.
-func NewHotWriteRing(cfg HotWriteConfig) *hotring.RotatingHotRing {
+func NewHotWriteRing(cfg HotWriteConfig) *thermos.RotatingThermos {
 	if !cfg.Enabled {
 		return nil
 	}
-	ring := hotring.NewRotatingHotRing(cfg.Bits, nil)
+	ring := thermos.NewRotatingThermos(cfg.Bits, nil)
 	if cfg.WindowSlots > 0 && cfg.WindowSlotPeriod > 0 {
 		ring.EnableSlidingWindow(cfg.WindowSlots, cfg.WindowSlotPeriod)
 	}
@@ -60,7 +60,7 @@ func CFHotKey(cf kv.ColumnFamily, key []byte) string {
 
 // ShouldThrottleHotWrite reports whether the next write should be rejected due
 // to repeated writes against the same hot key.
-func ShouldThrottleHotWrite(ring *hotring.RotatingHotRing, limit int32, cf kv.ColumnFamily, key []byte) bool {
+func ShouldThrottleHotWrite(ring *thermos.RotatingThermos, limit int32, cf kv.ColumnFamily, key []byte) bool {
 	if ring == nil || len(key) == 0 || limit <= 0 {
 		return false
 	}

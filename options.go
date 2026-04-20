@@ -15,7 +15,7 @@ import (
 const (
 	defaultWriteBatchMaxCount       = 64
 	defaultWriteBatchMaxSize  int64 = 1 << 20
-	defaultHotRingTopK              = 16
+	defaultThermosTopK              = 16
 )
 
 // Options holds the top-level database configuration.
@@ -89,27 +89,27 @@ type Options struct {
 	WriteBatchMaxSize int64
 
 	DetectConflicts bool
-	HotRingEnabled  bool
-	HotRingBits     uint8
-	HotRingTopK     int
-	// HotRingRotationInterval enables dual-ring rotation for hotness tracking.
+	ThermosEnabled  bool
+	ThermosBits     uint8
+	ThermosTopK     int
+	// ThermosRotationInterval enables dual-ring rotation for hotness tracking.
 	// Zero disables rotation.
-	HotRingRotationInterval time.Duration
-	// HotRingNodeCap caps the number of tracked keys per ring. Zero disables the cap.
-	HotRingNodeCap uint64
-	// HotRingNodeSampleBits controls stable sampling once the cap is reached.
+	ThermosRotationInterval time.Duration
+	// ThermosNodeCap caps the number of tracked keys per ring. Zero disables the cap.
+	ThermosNodeCap uint64
+	// ThermosNodeSampleBits controls stable sampling once the cap is reached.
 	// A value of 0 enforces a strict cap; larger values sample 1/2^N keys.
-	HotRingNodeSampleBits uint8
-	// HotRingDecayInterval controls how often HotRing halves its global counters.
+	ThermosNodeSampleBits uint8
+	// ThermosDecayInterval controls how often Thermos halves its global counters.
 	// Zero disables periodic decay.
-	HotRingDecayInterval time.Duration
-	// HotRingDecayShift determines how aggressively counters decay (count >>= shift).
-	HotRingDecayShift uint32
-	// HotRingWindowSlots controls the number of sliding-window buckets tracked per key.
+	ThermosDecayInterval time.Duration
+	// ThermosDecayShift determines how aggressively counters decay (count >>= shift).
+	ThermosDecayShift uint32
+	// ThermosWindowSlots controls the number of sliding-window buckets tracked per key.
 	// Zero disables the sliding window.
-	HotRingWindowSlots int
-	// HotRingWindowSlotDuration sets the duration of each sliding-window bucket.
-	HotRingWindowSlotDuration time.Duration
+	ThermosWindowSlots int
+	// ThermosWindowSlotDuration sets the duration of each sliding-window bucket.
+	ThermosWindowSlotDuration time.Duration
 	SyncWrites                bool
 	// SyncPipeline enables a dedicated sync worker goroutine that decouples
 	// WAL fsync from the commit pipeline. When false (the default), the commit
@@ -264,16 +264,16 @@ func NewDefaultOptions() *Options {
 		MemTableSize:              64 << 20,
 		MemTableEngine:            MemTableEngineART,
 		SSTableMaxSz:              256 << 20,
-		HotRingEnabled:            false,
-		HotRingBits:               12,
-		HotRingTopK:               defaultHotRingTopK,
-		HotRingRotationInterval:   30 * time.Minute,
-		HotRingNodeCap:            250_000,
-		HotRingNodeSampleBits:     0,
-		HotRingDecayInterval:      0,
-		HotRingDecayShift:         0,
-		HotRingWindowSlots:        8,
-		HotRingWindowSlotDuration: 250 * time.Millisecond,
+		ThermosEnabled:            false,
+		ThermosBits:               12,
+		ThermosTopK:               defaultThermosTopK,
+		ThermosRotationInterval:   30 * time.Minute,
+		ThermosNodeCap:            250_000,
+		ThermosNodeSampleBits:     0,
+		ThermosDecayInterval:      0,
+		ThermosDecayShift:         0,
+		ThermosWindowSlots:        8,
+		ThermosWindowSlotDuration: 250 * time.Millisecond,
 		// Conservative defaults to avoid long batch-induced pauses.
 		WriteBatchMaxCount:            defaultWriteBatchMaxCount,
 		WriteBatchMaxSize:             defaultWriteBatchMaxSize,
@@ -341,8 +341,8 @@ func (opt *Options) resolveOpenDefaults() {
 	if opt.CompactionPolicy == "" {
 		opt.CompactionPolicy = CompactionPolicyLeveled
 	}
-	if opt.HotRingTopK <= 0 {
-		opt.HotRingTopK = defaultHotRingTopK
+	if opt.ThermosTopK <= 0 {
+		opt.ThermosTopK = defaultThermosTopK
 	}
 	if opt.WriteBatchMaxCount <= 0 {
 		opt.WriteBatchMaxCount = defaultWriteBatchMaxCount

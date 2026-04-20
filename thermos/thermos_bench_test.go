@@ -1,4 +1,4 @@
-package hotring
+package thermos
 
 import (
 	"fmt"
@@ -7,7 +7,7 @@ import (
 )
 
 func BenchmarkTouch(b *testing.B) {
-	ring := NewHotRing(12, nil)
+	ring := NewThermos(12, nil)
 	keys := make([]string, 1024)
 	for i := range keys {
 		keys[i] = fmt.Sprintf("key-%d", i)
@@ -20,7 +20,7 @@ func BenchmarkTouch(b *testing.B) {
 }
 
 func BenchmarkTouchParallel(b *testing.B) {
-	ring := NewHotRing(12, nil)
+	ring := NewThermos(12, nil)
 	b.SetParallelism(4)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -33,7 +33,7 @@ func BenchmarkTouchParallel(b *testing.B) {
 }
 
 func BenchmarkTouchAndClamp(b *testing.B) {
-	ring := NewHotRing(12, nil)
+	ring := NewThermos(12, nil)
 	limit := int32(64)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -42,7 +42,7 @@ func BenchmarkTouchAndClamp(b *testing.B) {
 }
 
 func BenchmarkFrequency(b *testing.B) {
-	ring := NewHotRing(12, nil)
+	ring := NewThermos(12, nil)
 	for i := range 10000 {
 		ring.Touch(fmt.Sprintf("key-%d", i))
 	}
@@ -53,7 +53,7 @@ func BenchmarkFrequency(b *testing.B) {
 }
 
 func BenchmarkTopN(b *testing.B) {
-	ring := NewHotRing(12, nil)
+	ring := NewThermos(12, nil)
 	for i := range 50000 {
 		ring.Touch(fmt.Sprintf("key-%d", i))
 		if i%7 == 0 {
@@ -67,7 +67,7 @@ func BenchmarkTopN(b *testing.B) {
 }
 
 func BenchmarkSlidingWindow(b *testing.B) {
-	ring := NewHotRing(12, nil)
+	ring := NewThermos(12, nil)
 	ring.EnableSlidingWindow(8, 10*time.Millisecond)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -76,7 +76,7 @@ func BenchmarkSlidingWindow(b *testing.B) {
 }
 
 func BenchmarkDecay(b *testing.B) {
-	ring := NewHotRing(12, nil)
+	ring := NewThermos(12, nil)
 	for i := range 10000 {
 		ring.Touch(fmt.Sprintf("key-%d", i))
 	}

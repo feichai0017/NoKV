@@ -91,7 +91,7 @@ func TestBuildNoKVBenchmarkOptions(t *testing.T) {
 	}, NoKV.MemTableEngineART)
 
 	require.Equal(t, NoKV.MemTableEngineART, opts.MemTableEngine)
-	require.False(t, opts.HotRingEnabled)
+	require.False(t, opts.ThermosEnabled)
 	require.Equal(t, 16, opts.ValueLogBucketCount)
 	require.Zero(t, opts.WriteBatchWait)
 	require.Zero(t, opts.WriteHotKeyLimit)

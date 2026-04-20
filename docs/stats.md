@@ -18,7 +18,7 @@ flowchart TD
         LSM["lsm.* metrics"]
         WAL["wal metrics"]
         VLOG["value log metrics"]
-        HOT["hotring"]
+        HOT["thermos"]
         REGION["region metrics"]
         TRANSPORT["grpc transport metrics"]
         REDIS["redis gateway metrics"]

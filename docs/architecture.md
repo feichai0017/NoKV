@@ -161,7 +161,7 @@ flowchart TD
 - Writes enqueue into a commit queue inside `db.go` where requests are coalesced into batches before a commit worker drains them.
 - The commit worker always writes the value log first (when needed), then applies WAL/LSM updates; `SyncWrites` adds a WAL fsync step.
 - Batch sizing adapts to backlog through `WriteBatchMaxCount`, `WriteBatchMaxSize`, and `WriteBatchWait`.
-- Backpressure is enforced in two places: LSM throttling toggles `db.blockWrites` when L0 backlog grows, and HotRing can reject hot keys via `WriteHotKeyLimit`.
+- Backpressure is enforced in two places: LSM throttling toggles `db.blockWrites` when L0 backlog grows, and Thermos can reject hot keys via `WriteHotKeyLimit`.
 
 ### 2.7 Ref-Count Lifecycle Contracts
 

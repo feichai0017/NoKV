@@ -33,9 +33,9 @@ var (
 		ValueLogBucketCount: 1,
 		MaxBatchCount:       10,
 		MaxBatchSize:        1 << 20,
-		HotRingEnabled:      true,
-		HotRingBits:         8,
-		HotRingTopK:         8,
+		ThermosEnabled:      true,
+		ThermosBits:         8,
+		ThermosTopK:         8,
 	}
 )
 

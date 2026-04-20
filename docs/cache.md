@@ -72,15 +72,15 @@ type CacheMetrics struct {
 
 ---
 
-## 5. HotRing Integration
+## 5. Thermos Integration
 
-HotRing is no longer part of cache warmup or read-path prefetch. Cache behavior is now independent of HotRing and driven only by:
+Thermos is no longer part of cache warmup or read-path prefetch. Cache behavior is now independent of Thermos and driven only by:
 
 * iterator/table prefetch settings
 * block/index cache budgets
 * normal read traffic
 
-The only remaining HotRing integration is optional write throttling.
+The only remaining Thermos integration is optional write throttling.
 
 ---
 

@@ -1,4 +1,4 @@
-package hotring
+package thermos
 
 import (
 	"math"
@@ -19,18 +19,18 @@ type ringConfig struct {
 	nodeSampleBits uint8
 }
 
-// RotationStats reports rotation activity for a RotatingHotRing.
+// RotationStats reports rotation activity for a RotatingThermos.
 type RotationStats struct {
 	Interval       time.Duration `json:"interval"`
 	Rotations      uint64        `json:"rotations"`
 	LastRotateUnix int64         `json:"last_rotate_unix"`
 }
 
-// RotatingHotRing wraps HotRing with dual-ring time-based rotation.
+// RotatingThermos wraps Thermos with dual-ring time-based rotation.
 // Rotation swaps in a fresh active ring and keeps the previous generation warm.
-type RotatingHotRing struct {
-	active atomic.Pointer[HotRing]
-	warm   atomic.Pointer[HotRing]
+type RotatingThermos struct {
+	active atomic.Pointer[Thermos]
+	warm   atomic.Pointer[Thermos]
 
 	cfgMu sync.Mutex
 	cfg   ringConfig
@@ -46,17 +46,17 @@ type RotatingHotRing struct {
 	rotateWG   sync.WaitGroup
 }
 
-// NewRotatingHotRing builds a rotating ring with 2^bits buckets.
-func NewRotatingHotRing(bits uint8, fn HashFn) *RotatingHotRing {
-	r := &RotatingHotRing{}
+// NewRotatingThermos builds a rotating ring with 2^bits buckets.
+func NewRotatingThermos(bits uint8, fn HashFn) *RotatingThermos {
+	r := &RotatingThermos{}
 	r.cfg = ringConfig{bits: bits, hashFn: fn}
-	ring := NewHotRing(bits, fn)
+	ring := NewThermos(bits, fn)
 	r.active.Store(ring)
 	return r
 }
 
 // EnableRotation starts or stops time-based rotation. interval <= 0 disables rotation.
-func (r *RotatingHotRing) EnableRotation(interval time.Duration) {
+func (r *RotatingThermos) EnableRotation(interval time.Duration) {
 	if r == nil {
 		return
 	}
@@ -76,7 +76,7 @@ func (r *RotatingHotRing) EnableRotation(interval time.Duration) {
 }
 
 // Rotate swaps in a fresh ring and releases background resources of the old ring.
-func (r *RotatingHotRing) Rotate() {
+func (r *RotatingThermos) Rotate() {
 	if r == nil {
 		return
 	}
@@ -94,7 +94,7 @@ func (r *RotatingHotRing) Rotate() {
 }
 
 // Close releases background resources attached to the rotating ring.
-func (r *RotatingHotRing) Close() {
+func (r *RotatingThermos) Close() {
 	if r == nil {
 		return
 	}
@@ -108,7 +108,7 @@ func (r *RotatingHotRing) Close() {
 }
 
 // RotationStats returns rotation counters and configuration.
-func (r *RotatingHotRing) RotationStats() RotationStats {
+func (r *RotatingThermos) RotationStats() RotationStats {
 	if r == nil {
 		return RotationStats{}
 	}
@@ -120,7 +120,7 @@ func (r *RotatingHotRing) RotationStats() RotationStats {
 }
 
 // Touch records a key access and returns the updated counter.
-func (r *RotatingHotRing) Touch(key string) int32 {
+func (r *RotatingThermos) Touch(key string) int32 {
 	active := r.active.Load()
 	if active == nil {
 		return 0
@@ -134,7 +134,7 @@ func (r *RotatingHotRing) Touch(key string) int32 {
 }
 
 // Frequency returns the current access counter for key without mutating state.
-func (r *RotatingHotRing) Frequency(key string) int32 {
+func (r *RotatingThermos) Frequency(key string) int32 {
 	active := r.active.Load()
 	if active == nil {
 		return 0
@@ -148,7 +148,7 @@ func (r *RotatingHotRing) Frequency(key string) int32 {
 }
 
 // TouchAndClamp increments the counter if below the provided limit.
-func (r *RotatingHotRing) TouchAndClamp(key string, limit int32) (int32, bool) {
+func (r *RotatingThermos) TouchAndClamp(key string, limit int32) (int32, bool) {
 	if limit <= 0 {
 		return r.Touch(key), false
 	}
@@ -169,7 +169,7 @@ func (r *RotatingHotRing) TouchAndClamp(key string, limit int32) (int32, bool) {
 }
 
 // Remove deletes a key from the active ring.
-func (r *RotatingHotRing) Remove(key string) {
+func (r *RotatingThermos) Remove(key string) {
 	if ring := r.active.Load(); ring != nil {
 		ring.Remove(key)
 	}
@@ -179,7 +179,7 @@ func (r *RotatingHotRing) Remove(key string) {
 }
 
 // TopN returns at most n hot keys ordered by access count (descending).
-func (r *RotatingHotRing) TopN(n int) []Item {
+func (r *RotatingThermos) TopN(n int) []Item {
 	if n <= 0 {
 		return nil
 	}
@@ -202,7 +202,7 @@ func (r *RotatingHotRing) TopN(n int) []Item {
 }
 
 // KeysAbove returns all keys whose counters are at least threshold.
-func (r *RotatingHotRing) KeysAbove(threshold int32) []Item {
+func (r *RotatingThermos) KeysAbove(threshold int32) []Item {
 	if threshold <= 0 {
 		return nil
 	}
@@ -226,7 +226,7 @@ func (r *RotatingHotRing) KeysAbove(threshold int32) []Item {
 }
 
 // Stats returns a lightweight view of ring configuration and counters.
-func (r *RotatingHotRing) Stats() Stats {
+func (r *RotatingThermos) Stats() Stats {
 	if ring := r.active.Load(); ring != nil {
 		return ring.Stats()
 	}
@@ -234,7 +234,7 @@ func (r *RotatingHotRing) Stats() Stats {
 }
 
 // WarmStats returns stats for the warm ring.
-func (r *RotatingHotRing) WarmStats() Stats {
+func (r *RotatingThermos) WarmStats() Stats {
 	if ring := r.warm.Load(); ring != nil {
 		return ring.Stats()
 	}
@@ -242,7 +242,7 @@ func (r *RotatingHotRing) WarmStats() Stats {
 }
 
 // ActiveStats returns stats for the active ring.
-func (r *RotatingHotRing) ActiveStats() Stats {
+func (r *RotatingThermos) ActiveStats() Stats {
 	if ring := r.active.Load(); ring != nil {
 		return ring.Stats()
 	}
@@ -250,27 +250,27 @@ func (r *RotatingHotRing) ActiveStats() Stats {
 }
 
 // SnapshotTopN captures a Top-N snapshot with a timestamp.
-func (r *RotatingHotRing) SnapshotTopN(n int) Snapshot {
+func (r *RotatingThermos) SnapshotTopN(n int) Snapshot {
 	return Snapshot{TakenAt: time.Now(), Items: r.TopN(n)}
 }
 
 // SnapshotKeysAbove captures a threshold snapshot with a timestamp.
-func (r *RotatingHotRing) SnapshotKeysAbove(threshold int32) Snapshot {
+func (r *RotatingThermos) SnapshotKeysAbove(threshold int32) Snapshot {
 	return Snapshot{TakenAt: time.Now(), Items: r.KeysAbove(threshold)}
 }
 
 // SnapshotTopNMax captures a Top-N snapshot using max merge semantics.
-func (r *RotatingHotRing) SnapshotTopNMax(n int) Snapshot {
+func (r *RotatingThermos) SnapshotTopNMax(n int) Snapshot {
 	return Snapshot{TakenAt: time.Now(), Items: r.TopNMax(n)}
 }
 
 // SnapshotKeysAboveMax captures a threshold snapshot using max merge semantics.
-func (r *RotatingHotRing) SnapshotKeysAboveMax(threshold int32) Snapshot {
+func (r *RotatingThermos) SnapshotKeysAboveMax(threshold int32) Snapshot {
 	return Snapshot{TakenAt: time.Now(), Items: r.KeysAboveMax(threshold)}
 }
 
 // TopNMax returns at most n hot keys ordered by access count (descending) using max merge.
-func (r *RotatingHotRing) TopNMax(n int) []Item {
+func (r *RotatingThermos) TopNMax(n int) []Item {
 	if n <= 0 {
 		return nil
 	}
@@ -293,7 +293,7 @@ func (r *RotatingHotRing) TopNMax(n int) []Item {
 }
 
 // KeysAboveMax returns all keys whose counters are at least threshold using max merge.
-func (r *RotatingHotRing) KeysAboveMax(threshold int32) []Item {
+func (r *RotatingThermos) KeysAboveMax(threshold int32) []Item {
 	if threshold <= 0 {
 		return nil
 	}
@@ -317,7 +317,7 @@ func (r *RotatingHotRing) KeysAboveMax(threshold int32) []Item {
 }
 
 // EnableSlidingWindow configures the ring to maintain a time-based sliding window.
-func (r *RotatingHotRing) EnableSlidingWindow(slots int, slotDuration time.Duration) {
+func (r *RotatingThermos) EnableSlidingWindow(slots int, slotDuration time.Duration) {
 	if r == nil {
 		return
 	}
@@ -335,7 +335,7 @@ func (r *RotatingHotRing) EnableSlidingWindow(slots int, slotDuration time.Durat
 }
 
 // EnableDecay applies periodic right-shift decay to the raw counters.
-func (r *RotatingHotRing) EnableDecay(interval time.Duration, shift uint32) {
+func (r *RotatingThermos) EnableDecay(interval time.Duration, shift uint32) {
 	if r == nil {
 		return
 	}
@@ -353,7 +353,7 @@ func (r *RotatingHotRing) EnableDecay(interval time.Duration, shift uint32) {
 }
 
 // EnableNodeSampling caps node growth and applies stable sampling once the cap is reached.
-func (r *RotatingHotRing) EnableNodeSampling(cap uint64, sampleBits uint8) {
+func (r *RotatingThermos) EnableNodeSampling(cap uint64, sampleBits uint8) {
 	if r == nil {
 		return
 	}
@@ -371,7 +371,7 @@ func (r *RotatingHotRing) EnableNodeSampling(cap uint64, sampleBits uint8) {
 }
 
 // SetObserver registers an optional observer hook.
-func (r *RotatingHotRing) SetObserver(obs Observer) {
+func (r *RotatingThermos) SetObserver(obs Observer) {
 	if r == nil {
 		return
 	}
@@ -394,7 +394,7 @@ func (r *RotatingHotRing) SetObserver(obs Observer) {
 	}
 }
 
-func (r *RotatingHotRing) getObserver() Observer {
+func (r *RotatingThermos) getObserver() Observer {
 	if r == nil {
 		return nil
 	}
@@ -405,9 +405,9 @@ func (r *RotatingHotRing) getObserver() Observer {
 	return holder.obs
 }
 
-func (r *RotatingHotRing) newRingLocked() *HotRing {
+func (r *RotatingThermos) newRingLocked() *Thermos {
 	cfg := r.cfg
-	ring := NewHotRing(cfg.bits, cfg.hashFn)
+	ring := NewThermos(cfg.bits, cfg.hashFn)
 	if cfg.windowSlots > 0 && cfg.windowSlotDur > 0 {
 		ring.EnableSlidingWindow(cfg.windowSlots, cfg.windowSlotDur)
 	}
@@ -423,7 +423,7 @@ func (r *RotatingHotRing) newRingLocked() *HotRing {
 	return ring
 }
 
-func (r *RotatingHotRing) mergeItems(merge func(int32, int32) int32) []Item {
+func (r *RotatingThermos) mergeItems(merge func(int32, int32) int32) []Item {
 	counts := make(map[string]int32)
 	r.addRingCounts(r.active.Load(), counts, merge)
 	r.addRingCounts(r.warm.Load(), counts, merge)
@@ -437,7 +437,7 @@ func (r *RotatingHotRing) mergeItems(merge func(int32, int32) int32) []Item {
 	return items
 }
 
-func (r *RotatingHotRing) addRingCounts(ring *HotRing, counts map[string]int32, merge func(int32, int32) int32) {
+func (r *RotatingThermos) addRingCounts(ring *Thermos, counts map[string]int32, merge func(int32, int32) int32) {
 	if ring == nil {
 		return
 	}
@@ -472,7 +472,7 @@ func sumCounts(a, b int32) int32 {
 	return int32(sum)
 }
 
-func (r *RotatingHotRing) rotateLoop(stop <-chan struct{}, interval time.Duration) {
+func (r *RotatingThermos) rotateLoop(stop <-chan struct{}, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer func() {
 		ticker.Stop()
@@ -488,7 +488,7 @@ func (r *RotatingHotRing) rotateLoop(stop <-chan struct{}, interval time.Duratio
 	}
 }
 
-func (r *RotatingHotRing) stopRotation() {
+func (r *RotatingThermos) stopRotation() {
 	r.rotateMu.Lock()
 	stop := r.rotateStop
 	if stop != nil {
