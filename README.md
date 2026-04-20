@@ -47,7 +47,7 @@ The interesting part isn't that NoKV has "WAL, LSM, MVCC, Raft". The interesting
 
 ## 📊 Benchmarks
 
-Performance-first YCSB on a single node, **NoKV vs industrial-grade embedded KVs** (Badger, Pebble). Apple M3 Pro, `records=1M`, `ops=1M`, `value_size=1000`, `conc=16`. Snapshot from CI [run #23701742757](https://github.com/feichai0017/NoKV/actions/runs/23701742757).
+Performance-first YCSB on a single node, **NoKV vs industrial-grade embedded KVs** (Badger, Pebble). Apple M3 Pro, `records=1M`, `ops=1M`, `value_size=1000`, `conc=16`.
 
 | Workload | Description | **NoKV** | Badger | Pebble |
 |---|---|---:|---:|---:|
