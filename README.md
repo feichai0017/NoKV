@@ -1,360 +1,302 @@
-# 🚀 NoKV — Not Only KV Store
-
 <div align="center">
-  <img src="./img/logo.svg" width="220" alt="NoKV Logo" />
+  <img src="./img/logo.svg" width="200" alt="NoKV" />
+
+  <h1>NoKV</h1>
 
   <p>
-    <!-- Build / Quality -->
-    <a href="https://github.com/feichai0017/NoKV/actions">
-      <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/feichai0017/NoKV/go.yml?branch=main" />
-    </a>
-    <a href="https://codecov.io/gh/feichai0017/NoKV">
-      <img alt="Coverage" src="https://img.shields.io/codecov/c/gh/feichai0017/NoKV" />
-    </a>
-    <a href="https://goreportcard.com/report/github.com/feichai0017/NoKV">
-      <img alt="Go Report Card" src="https://img.shields.io/badge/go%20report-A+-brightgreen" />
-    </a>
-    <a href="https://pkg.go.dev/github.com/feichai0017/NoKV">
-      <img alt="Go Reference" src="https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&logoColor=white" />
-    </a>
-    <a href="https://github.com/avelino/awesome-go#databases-implemented-in-go">
-      <img alt="Mentioned in Awesome" src="https://awesome.re/mentioned-badge.svg" />
-    </a>
-    <a href="https://dbdb.io/db/nokv">
-      <img alt="DBDB.io" src="https://img.shields.io/badge/dbdb.io-listed-2f80ed" />
-    </a>
+    <strong>A full-stack, formally-specified, distributed storage platform — built as one coherent system.</strong>
   </p>
 
   <p>
-    <!-- Meta -->
-    <img alt="Go Version" src="https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go&logoColor=white" />
-    <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-yellow" />
-    <a href="https://deepwiki.com/feichai0017/NoKV">
-      <img alt="DeepWiki" src="https://img.shields.io/badge/DeepWiki-Ask-6f42c1" />
-    </a>
+    <em>Own LSM engine · Own Raft · Own control plane · Own MVCC · Own Redis frontend</em>
   </p>
 
-  <p><strong>Not Only KV Store • Distributed Storage Research Platform • LSM Tree • ValueLog • MVCC • Multi-Raft Regions</strong></p>
+  <p>
+    <a href="https://github.com/feichai0017/NoKV/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/feichai0017/NoKV/go.yml?branch=main&style=flat-square&label=CI&logo=github" /></a>
+    <a href="https://codecov.io/gh/feichai0017/NoKV"><img alt="Coverage" src="https://img.shields.io/codecov/c/gh/feichai0017/NoKV?style=flat-square&logo=codecov" /></a>
+    <a href="https://pkg.go.dev/github.com/feichai0017/NoKV"><img alt="Go Reference" src="https://img.shields.io/badge/go.dev-reference-007d9c?style=flat-square&logo=go&logoColor=white" /></a>
+    <img alt="Go" src="https://img.shields.io/badge/go-1.26+-00ADD8?style=flat-square&logo=go&logoColor=white" />
+    <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square" />
+    <a href="https://deepwiki.com/feichai0017/NoKV"><img alt="DeepWiki" src="https://img.shields.io/badge/DeepWiki-Ask-6f42c1?style=flat-square" /></a>
+  </p>
+
+  <p>
+    <img alt="LOC" src="https://img.shields.io/badge/core_LOC-50k+-informational?style=flat-square" />
+    <img alt="TLA+" src="https://img.shields.io/badge/formally_specified-TLA%2B-blueviolet?style=flat-square" />
+    <img alt="Fault Injection" src="https://img.shields.io/badge/fault_injection-18_ops_%2B_8_phases-orange?style=flat-square" />
+    <img alt="Self-contained" src="https://img.shields.io/badge/external_deps-none-brightgreen?style=flat-square" />
+  </p>
 </div>
 
+<br/>
 
-NoKV stands for <strong>Not Only KV Store</strong>. It is a Go-native storage system that starts as a serious standalone engine and grows into a multi-Raft distributed KV cluster without changing its underlying data plane.
+## What is NoKV?
 
-The interesting part is not just that it has WAL, LSM, MVCC, Redis compatibility, or Raft. The interesting part is that these pieces are built as one system: a single storage substrate that can be embedded locally, migrated into a seeded distributed node, and then expanded into a replicated cluster with an explicit protocol.
+NoKV is a distributed key-value storage platform written from the ground up in Go. **Nothing is borrowed from another database** — the LSM engine, the Raft implementation, the control plane, the MVCC layer, and the Redis-compatible frontend are all native to this repository and share a single storage substrate.
 
-> NoKV is not trying to be "yet another KV". It is trying to make the path from standalone storage to distributed replication coherent, inspectable, and testable.
+The interesting part isn't that NoKV has "WAL, LSM, MVCC, Raft". The interesting part is that **these pieces are built as one system**:
 
-## 🎯 Project Positioning
+- **One storage core, three deployment shapes.** The same `DB` substrate runs embedded in a Go program, seeded as the first node of a cluster, or replicated across a multi-Raft mesh. You don't migrate data — you migrate shape.
+- **Execution plane and control plane are separate on purpose.** `raftstore/` executes writes. `coordinator/` answers "who holds authority, and for how long". `meta/root/` is the rooted truth they both consume.
+- **Correctness is formally specified.** Six TLA+ specifications under [`spec/`](./spec/) model control-plane authority handoff, with machine-checked contrast models showing why weaker designs break.
+- **Fault injection is a first-class primitive.** 18 operation-level VFS hooks, 8 Raft protocol-phase failpoints, and a shared `FaultFS` interface let any write path be stress-tested under crash-consistent failure schedules.
 
-NoKV is intended to be a **maintainable and extensible distributed storage research platform**, not just a feature demo.
+> NoKV is structured so new storage, replication, and control-plane ideas can land without rewriting the system each time. Treat it as a **serious engineering base** for exploring distributed storage internals, not as a production database.
 
-That means the repository is organized so new storage and distributed-systems ideas can land without rewriting the whole system each time:
+<br/>
 
-- **One storage core, multiple system shapes**  
-  Embedded mode, seeded migration, and distributed raft mode all reuse the same underlying engine instead of forking into separate prototypes.
+## 📊 Benchmarks
 
-- **Explicit boundaries for long-term maintenance**  
-  `engine/*` contains single-node storage substrate, `raftstore/*` and `coordinator/*` contain distributed runtime/control-plane logic, and `internal/runtime` is reserved for DB runtime support instead of subsystem-specific glue.
+Performance-first YCSB on a single node, **NoKV vs industrial-grade embedded KVs** (Badger, Pebble). Apple M3 Pro, `records=1M`, `ops=1M`, `value_size=1000`, `conc=16`. Snapshot from CI [run #23701742757](https://github.com/feichai0017/NoKV/actions/runs/23701742757).
 
-- **Research workflows live in the repo, not outside it**  
-  `benchmark/*`, plotting tools, scripts, and design docs are part of the system so papers, experiments, and implementation evolve together.
+| Workload | Description | **NoKV** | Badger | Pebble |
+|---|---|---:|---:|---:|
+| **YCSB-A** | 50/50 read/update | **175,905** | 108,232 | 169,792 |
+| **YCSB-B** | 95/5 read/update | **525,631** | 188,893 | 137,483 |
+| **YCSB-C** | 100% read | **409,136** | 242,463 | 90,474 |
+| **YCSB-D** | 95% read, 5% insert (latest) | **632,031** | 284,205 | 198,139 |
+| **YCSB-E** | 95% scan, 5% insert | **45,620** | 15,027 | 40,793 |
+| **YCSB-F** | read-modify-write | **157,732** | 84,601 | 122,192 |
 
-- **Extensibility matters as much as features**  
-  The goal is to make it practical to explore new metadata models, control-plane designs, benchmarking setups, and eventually different replication designs on top of a stable codebase.
+> Units: **operations per second** (higher is better). Full latency distribution and methodology in [`benchmark/README.md`](./benchmark/README.md).
+
+Representative latency snapshot (NoKV):
+
+| Workload | Avg | P95 | P99 |
+|---|---:|---:|---:|
+| YCSB-A | 5.68 µs | 204 µs | 308 µs |
+| YCSB-B | 1.90 µs | 24 µs | 750 µs |
+| YCSB-C | 2.44 µs | 15 µs | 26 µs |
+| YCSB-D | 1.58 µs | 22 µs | 638 µs |
+| YCSB-F | 6.34 µs | 233 µs | 371 µs |
+
+**Caveat**: single-node, localhost, read-heavy profile favors NoKV's flush/compaction design. These numbers are honest but not representative of multi-tenant production stress.
+
+<br/>
+
+## 🧭 Why NoKV vs X?
+
+| If you need… | You should probably use… | Why NoKV exists |
+|---|---|---|
+| Production distributed SQL | **CockroachDB**, TiDB | Different scope — NoKV is a research-grade KV layer |
+| Production distributed KV | **TiKV** | NoKV is not yet battle-tested at scale |
+| Just an embedded LSM library | **Pebble**, **Badger** | NoKV ships its own engine, but is not trying to be a drop-in library |
+| A Raft library | **etcd/raft**, dragonboat | NoKV has its own Raft integrated with the storage substrate |
+| **A self-contained platform to study how LSM, Raft, MVCC, and control-plane design interact** | — | **This is what NoKV is for.** |
+
+The project's value comes from **owning the entire vertical**. If you want to change how compaction interacts with Raft log GC, or how control-plane lease renewal affects write latency, no external dependency gets in the way.
+
+<br/>
+
+## 🏗️ Architecture
+
+<p align="center">
+  <img src="./img/architecture.svg" alt="NoKV Architecture" width="100%" />
+</p>
+
+Four boundaries that set NoKV apart from typical single-purpose KV prototypes:
+
+- **One storage core, two deployment shapes.** Embedded and distributed modes sit on the same `DB` substrate. No data dump/reimport when you grow from local to clustered.
+- **Migration is a protocol, not a hack.** `plan → init → seeded → expand` has explicit lifecycle state, failpoint coverage, and restart semantics at every stage.
+- **Execution plane / control plane split.** `RaftAdmin` runs membership changes leader-side; `Coordinator` owns routing, TSO, heartbeats, and cluster view. They never share mutable state.
+- **Recovery metadata is partitioned.** Manifest (storage engine), local recovery catalog (Raft), raft durable log, and logical region snapshots each have distinct ownership — no single corrupt file blocks all recovery paths.
+
+Deep-dive: [`docs/architecture.md`](docs/architecture.md) · [`docs/runtime.md`](docs/runtime.md) · [`docs/control_and_execution_protocols.md`](docs/control_and_execution_protocols.md)
+
+<br/>
+
+## ✨ Notable Design Points
+
+Selected features that are genuinely non-obvious — and have design notes explaining *why* they're the way they are:
+
+| | Feature | Reference |
+|---|---|---|
+| 🌡️ | **Ingest Buffer for anti-stall LSM** — "catch first, sort later" absorbs L0 pressure without blocking writes | [`engine/lsm/`](./engine/lsm) · [design note](docs/notes/2026-02-01-compaction-and-ingest.md) |
+| 🪣 | **Value Log with KV separation + hash buckets + parallel GC** — WiscKey + HashKV merged into a single pragmatic design | [`engine/vlog/`](./engine/vlog) · [design note](docs/notes/2026-02-05-vlog-design-and-gc.md) |
+| 🧠 | **Adaptive memtable index (SkipList ↔ ART)** over arena-managed memory — no Go GC pressure on hot writes | [`engine/lsm/memtable.go`](./engine/lsm/memtable.go) · [design note](docs/notes/2026-02-09-memory-kernel-arena-and-adaptive-index.md) |
+| 🚦 | **MPSC write pipeline with adaptive coalescing** — thousands of concurrent producers, one long-lived consumer, backlog-aware batching | [`db_write.go`](./db_write.go) · [design note](docs/notes/2026-02-09-write-pipeline-mpsc-and-adaptive-batching.md) |
+| 🔍 | **GRF-inspired range filter** for cheap bounded-scan pruning at block granularity | [`engine/lsm/range_filter.go`](./engine/lsm/range_filter.go) · [design note](docs/notes/2026-04-05-range-filter-from-grf.md) |
+| 🎯 | **HotRing as a side-channel observer** — hot-key detection without putting it on the main read path | [`hotring/`](./hotring) · [design note](docs/notes/2026-01-16-hotring-design.md) |
+| 🧰 | **VFS abstraction with 18-op fault injection** — cross-platform atomic rename semantics, FaultFS for testing any syscall failure | [`engine/vfs/`](./engine/vfs) · [design note](docs/notes/2026-02-15-vfs-abstraction-and-deterministic-reliability.md) |
+| 📦 | **SST-based Raft snapshot install** — snapshots ship materialized SST files, target node ingests directly | [`raftstore/snapshot/`](./raftstore/snapshot) · [design note](docs/notes/2026-03-31-sst-snapshot-install.md) |
+| 🏛️ | **Delos-lite rooted truth kernel** — minimal typed event log is the single source of truth; Coordinator and raftstore are consumers | [`meta/root/`](./meta/root) · [design note](docs/notes/2026-04-03-delos-lite-metadata-root-roadmap.md) |
+
+All design notes under [`docs/notes/`](./docs/notes/) are dated decision records — read them to understand *why* something is the way it is, not just what it does.
+
+<br/>
+
+## 🔬 Formally Specified
+
+Control-plane correctness is modeled in TLA+ under [`spec/`](./spec/), with a **contrast family** that machine-checks why weaker designs fail:
+
+| Spec | Role | TLC outcome |
+|---|---|---|
+| [`CCC.tla`](./spec/CCC.tla) | Positive model — repeated authority handoff with closure lifecycle | ✅ 3924 distinct states, depth 20, invariants hold |
+| [`CCCMultiDim.tla`](./spec/CCCMultiDim.tla) | Multi-dimensional frontier coverage | ✅ 326 distinct states, invariants hold |
+| [`LeaseOnly.tla`](./spec/LeaseOnly.tla) | Contrast — no reply-side guard, no rooted closure | ❌ counterexample: old-generation reply delivered after successor |
+| [`TokenOnly.tla`](./spec/TokenOnly.tla) | Contrast — bounded-freshness token only | ❌ counterexample: freshness ≠ authority lineage |
+| [`ChubbyFencedLease.tla`](./spec/ChubbyFencedLease.tla) | Contrast — per-reply sequencer fencing | ❌ counterexample: stale-reject holds, but successor coverage fails |
+| [`LeaseStartOnly.tla`](./spec/LeaseStartOnly.tla) | Contrast — no lease-start coverage | ❌ counterexample: write accepted behind predecessor's served read |
+
+Run `make tlc-ccc` / `make tlc-leaseonly-counterexample` / etc. to reproduce. Artifact outputs are checked in under [`spec/artifacts/`](./spec/artifacts/).
+
+<br/>
 
 ## 🚦 Quick Start
 
-Start an end-to-end playground with either the local script or Docker Compose. Both spin up a three-node Raft cluster with a Coordinator service and expose the Redis-compatible gateway.
+Spin up a full three-node Raft cluster with Coordinator and Redis gateway in one command:
 
 ![NoKV demo](./img/nokv-demo.gif)
 
 ```bash
-# Option A: local processes
+# Local processes
 ./scripts/dev/cluster.sh --config ./raft_config.example.json
-# In another shell: launch the Redis gateway on top of the running cluster
+
+# In another terminal: Redis gateway on top of the running cluster
 go run ./cmd/nokv-redis \
   --addr 127.0.0.1:6380 \
   --raft-config ./raft_config.example.json \
   --metrics-addr 127.0.0.1:9100
 
-# Option B: Docker Compose (cluster + gateway + Coordinator)
+# Or: Docker Compose (cluster + gateway + Coordinator in one stack)
 docker compose up --build
-# Tear down
-docker compose down -v
 ```
 
-Once the cluster is running you can point any Redis client at `127.0.0.1:6380` (or the address exposed by Compose).
-
-For quick CLI checks:
+Point any Redis client at `127.0.0.1:6380`. Inspect runtime state:
 
 ```bash
-# Online stats from a running node
+# Online — via expvar
 go run ./cmd/nokv stats --expvar http://127.0.0.1:9100
 
-# Offline forensics from a stopped node workdir
+# Offline forensics — from a stopped node's workdir
 go run ./cmd/nokv stats --workdir ./artifacts/cluster/store-1
+go run ./cmd/nokv manifest --workdir ./artifacts/cluster/store-1
+go run ./cmd/nokv regions --workdir ./artifacts/cluster/store-1 --json
 ```
 
-Minimal embedded snippet:
+### Embedded mode
 
 ```go
 package main
 
 import (
-	"fmt"
-	"log"
+    "fmt"
+    "log"
 
-	NoKV "github.com/feichai0017/NoKV"
+    NoKV "github.com/feichai0017/NoKV"
 )
 
 func main() {
-	opt := NoKV.NewDefaultOptions()
-	opt.WorkDir = "./workdir-demo"
+    opt := NoKV.NewDefaultOptions()
+    opt.WorkDir = "./workdir-demo"
 
-	db, err := NoKV.Open(opt)
-	if err != nil {
-		log.Fatalf("open failed: %v", err)
-	}
-	defer db.Close()
+    db, err := NoKV.Open(opt)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
 
-	key := []byte("hello")
-	if err := db.Set(key, []byte("world")); err != nil {
-		log.Fatalf("set failed: %v", err)
-	}
+    _ = db.Set([]byte("hello"), []byte("world"))
 
-	entry, err := db.Get(key)
-	if err != nil {
-		log.Fatalf("get failed: %v", err)
-	}
-	fmt.Printf("value=%s\n", entry.Value)
+    entry, _ := db.Get([]byte("hello"))
+    fmt.Printf("value=%s\n", entry.Value)
 }
 ```
 
-> Note:
-> - `DB.Get` returns detached entries (do not call `DecrRef`).
-> - `DB.GetInternalEntry` returns borrowed entries and callers must call `DecrRef` exactly once.
-> - `DB.SetWithTTL` accepts `time.Duration` (relative TTL). `DB.Set`/`DB.SetBatch`/`DB.SetWithTTL` reject `nil` values; use `DB.Del` or `DB.DeleteRange(start,end)` for deletes.
-> - `DB.NewIterator` exposes user-facing entries, while `DB.NewInternalIterator` scans raw internal keys (`cf+user_key+ts`).
+> API notes:
+> - `DB.Get` returns **detached** entries — caller owns the bytes, do not `DecrRef`.
+> - `DB.GetInternalEntry` returns **borrowed** entries — caller must `DecrRef` exactly once.
+> - `DB.Set`/`DB.SetBatch`/`DB.SetWithTTL` reject `nil` values; use `DB.Del` or `DB.DeleteRange(start, end)` for deletes.
+> - `DB.NewIterator` exposes user-facing entries; `DB.NewInternalIterator` scans raw internal keys.
 
-> ℹ️ `scripts/dev/cluster.sh` rebuilds `nokv` and `nokv-config`, seeds local peer catalogs via `nokv-config catalog`, starts Coordinator (`nokv coordinator`), streams Coordinator/store logs to the current terminal, and also writes them under `artifacts/cluster/store-<id>/server.log` and `artifacts/cluster/coordinator.log`. Use `Ctrl+C` to exit cleanly; if the process crashes, wipe the workdir (`rm -rf ./artifacts/cluster`) before restarting to avoid WAL replay errors.
+Full guide: [`docs/getting_started.md`](docs/getting_started.md)
 
----
+<br/>
 
 ## 🧭 Topology & Configuration
 
-Everything hangs off a single file: [`raft_config.example.json`](./raft_config.example.json).
+All deployment shapes share one configuration file: [`raft_config.example.json`](./raft_config.example.json).
 
 ```jsonc
-"coordinator": { "addr": "127.0.0.1:2379", "docker_addr": "nokv-coordinator:2379" },
-"stores": [
-  { "store_id": 1, "listen_addr": "127.0.0.1:20170", ... },
-  { "store_id": 2, "listen_addr": "127.0.0.1:20171", ... },
-  { "store_id": 3, "listen_addr": "127.0.0.1:20172", ... }
-],
-"regions": [
-  { "id": 1, "range": [-inf,"m"), peers: 101/201/301, leader: store 1 },
-  { "id": 2, "range": ["m",+inf), peers: 102/202/302, leader: store 2 }
-]
+{
+  "coordinator": { "addr": "127.0.0.1:2379", ... },
+  "stores": [
+    { "store_id": 1, "listen_addr": "127.0.0.1:20170", ... },
+    { "store_id": 2, "listen_addr": "127.0.0.1:20171", ... },
+    { "store_id": 3, "listen_addr": "127.0.0.1:20172", ... }
+  ],
+  "regions": [
+    { "id": 1, "range": [-inf, "m"), "leader": 1, ... },
+    { "id": 2, "range": ["m", +inf), "leader": 2, ... }
+  ]
+}
 ```
 
-- **Local scripts** (`scripts/dev/cluster.sh`, `scripts/ops/serve-store.sh`, `scripts/ops/bootstrap.sh`) ingest the same JSON, so local runs match production layouts.
-- **Docker Compose** mounts the file into each container; manifests, transports, and Redis gateway all stay in sync.
-- Need more stores or regions? Update the JSON and re-run the script/Compose—no code changes required.
-- Programmatic access: import `github.com/feichai0017/NoKV/config` and call `config.LoadFile` / `Validate` for a single source of truth across tools.
+Local scripts, Docker Compose, and all CLI tools consume the same file. Need more stores or regions? Edit the JSON and re-run — no code changes.
 
-### 🧬 Tech Stack Snapshot
+Programmatic access: `import "github.com/feichai0017/NoKV/config"` and call `config.LoadFile` / `Validate`.
 
-| Layer | Tech/Package | Why it matters |
-| --- | --- | --- |
-| Storage Core | `engine/lsm/`, `engine/wal/`, `engine/vlog/` | Hybrid log-structured design with manifest-backed durability and value separation. |
-| Concurrency | `percolator/`, `raftstore/client` | Distributed 2PC, lock management, and MVCC version semantics in raft mode. |
-| Replication | `raftstore/*` + `coordinator/*` | Multi-Raft data plane plus Coordinator-backed control plane (routing, TSO, heartbeats). |
-| Tooling | `cmd/nokv`, `cmd/nokv-config`, `cmd/nokv-redis` | CLI, config helper, Redis-compatible gateway share the same topology file. |
-| Observability | `stats`, `hotring`, expvar | Built-in metrics, hot-key analytics, and crash recovery traces. |
+<br/>
 
----
+## 🧩 Modules
 
-## 🧱 Architecture Overview
+| Module | Responsibility | Docs |
+|---|---|---|
+| [`engine/lsm/`](./engine/lsm) | MemTable, flush pipeline, leveled compaction, SST | [LSM](docs/memtable.md) · [flush](docs/flush.md) · [compaction](docs/compaction.md) |
+| [`engine/wal/`](./engine/wal) | WAL segments, CRC, rotation, replay, watchdog | [WAL](docs/wal.md) |
+| [`engine/vlog/`](./engine/vlog) | KV-separated value log, hash buckets, parallel GC | [ValueLog](docs/vlog.md) |
+| [`engine/manifest/`](./engine/manifest) | VersionEdit log, atomic `CURRENT` handling | [Manifest](docs/manifest.md) |
+| [`engine/vfs/`](./engine/vfs) | VFS abstraction, FaultFS, cross-platform atomic rename | [VFS](docs/vfs.md) |
+| [`percolator/`](./percolator) | Distributed MVCC 2PC (prewrite/commit/rollback/resolve) | [Percolator](docs/percolator.md) |
+| [`raftstore/`](./raftstore) | Multi-Raft region management, transport, membership, snapshot install | [RaftStore](docs/raftstore.md) |
+| [`coordinator/`](./coordinator) | Control plane: routing, TSO, heartbeats, lease management | [Coordinator](docs/coordinator.md) |
+| [`meta/root/`](./meta/root) | Typed rooted truth kernel (Delos-lite), replicated/local backends | [Rooted Truth](docs/rooted_truth.md) |
+| [`namespace/`](./namespace) | Hierarchical listing infrastructure on top of LSM | [Namespace](docs/namespace.md) |
+| [`hotring/`](./hotring) | Hot-key detection and throttling | [HotRing](docs/hotring.md) |
+| [`spec/`](./spec) | TLA+ specifications and contrast models | [spec/README.md](./spec/README.md) |
+| [`cmd/nokv/`](./cmd/nokv) | CLI: stats, manifest, regions, vlog, migrate, coordinator | [CLI](docs/cli.md) |
+| [`cmd/nokv-redis/`](./cmd/nokv-redis) | Redis-compatible gateway | [Redis](docs/nokv-redis.md) |
 
-```mermaid
-%%{init: {
-  "themeVariables": { "fontSize": "17px" },
-  "flowchart": { "nodeSpacing": 42, "rankSpacing": 58, "curve": "basis" }
-}}%%
-flowchart TD
-    App["App / CLI / Redis Client"]
+<br/>
 
-    subgraph Standalone["Standalone Shape"]
-        Embedded["Embedded NoKV DB API"]
-    end
+## 📡 Observability
 
-    subgraph Distributed["Distributed Shape"]
-        Gateway["NoKV RPC / Redis Gateway"]
-        Client["raftstore/client"]
-        Coordinator["Coordinator<br/>route / tso / heartbeats"]
-        Server["Node Server"]
-        Store["Store runtime root"]
-        Peer["Peer runtime"]
-        Admin["RaftAdmin<br/>execution plane"]
-        Meta["raftstore/localmeta<br/>local recovery metadata"]
-        RaftEngine["raftstore/engine<br/>raft durable state"]
-        Snap["logical region snapshot"]
-    end
+- **expvar metrics** via `Stats.StartStats` — flush backlog, WAL segments, value-log GC stats, region/cache/hot metrics
+- **CLI inspection** from either live endpoint (`--expvar`) or stopped workdir (`--workdir`)
+- **Structured logs** streamed from Coordinator and each store, also written under `artifacts/cluster/<name>/server.log`
 
-    subgraph DataPlane["Shared Storage Core"]
-        DB["NoKV DB"]
-        WAL["WAL"]
-        LSM["LSM + SST"]
-        VLog["ValueLog"]
-        MVCC["Percolator / MVCC"]
-        Manifest["Manifest"]
-    end
+More in [`docs/stats.md`](docs/stats.md) · [`docs/cli.md`](docs/cli.md) · [`docs/testing.md`](docs/testing.md).
 
-    subgraph Migration["Standalone → Cluster Bridge"]
-        Plan["migrate plan"]
-        Init["migrate init"]
-        Seed["seeded workdir"]
-        Expand["expand / remove-peer / transfer-leader"]
-    end
-
-    App --> Embedded
-    App --> Gateway
-    Gateway --> Client
-    Client --> Coordinator
-    Client --> Server
-    Server --> Store
-    Store --> Peer
-    Store --> Admin
-    Store --> Meta
-    Peer --> RaftEngine
-    Peer --> Snap
-    Embedded --> DB
-    Peer --> DB
-    Snap --> DB
-    DB --> WAL
-    DB --> LSM
-    DB --> VLog
-    DB --> MVCC
-    DB --> Manifest
-    Embedded -.same data plane.- DB
-    Plan --> Init
-    Init --> Seed
-    Seed --> Server
-    Seed --> Expand
-```
-
-What makes this layout distinctive:
-- **One storage core, two deployment shapes** – embedded mode and raft mode both sit on the same `DB` substrate instead of splitting into separate engines.
-- **Migration is a protocol, not a dump/import hack** – `plan → init → seeded → expand` turns an existing standalone workdir into a replicated cluster path with explicit lifecycle state.
-- **Execution plane and control plane are split on purpose** – `RaftAdmin` executes leader-side membership changes, while `Coordinator` stays responsible for routing, allocation, timestamps, and cluster view.
-- **Recovery metadata is not mixed with engine metadata** – manifest, local recovery catalog, raft durable state, and logical region snapshots each have distinct ownership.
-
-## 🧪 Why This Works As A Research Platform
-
-The repository is meant to support multiple storage and distributed-systems research lines without turning into a one-off paper artifact.
-
-- **Maintainable layering**  
-  Root `DB` APIs stay thin, engine internals live under `engine/*`, distributed runtime lives under `raftstore/*`, and experiments live under `benchmark/*`.
-
-- **Extensible control/data-plane split**  
-  The architecture already separates storage substrate, distributed execution, metadata root, and coordinator services, which makes it much easier to evolve one area without destabilizing the whole system.
-
-- **Evidence-oriented development**  
-  Benchmarks, failure injection, restart recovery tests, and design docs are treated as first-class project assets rather than after-the-fact appendices.
-
-- **Good fit for exploratory systems work**  
-  NoKV is structured to support questions about storage-engine internals, metadata/control-plane design, migration protocols, namespace services, and evaluation methodology in the same repository.
-
-Key ideas:
-- **Durability path** – WAL first, memtable second. ValueLog writes occur before WAL append so crash replay can fully rebuild state.
-- **Metadata** – manifest stores SST topology, WAL checkpoints, and vlog head/deletion metadata.
-- **Background workers** – flush manager handles `Prepare → Build → Install → Release`, compaction reduces level overlap, and value log GC rewrites segments based on discard stats.
-- **Distributed transactions** – Percolator 2PC runs in raft mode; embedded mode exposes non-transactional DB APIs.
-
-Dive deeper in [docs/architecture.md](docs/architecture.md).
-
----
-
-## 📊 CI Benchmark Snapshot
-
-Benchmarks matter here, but they are not the whole story. NoKV is trying to be fast **and** structurally coherent: durability, migration, control-plane separation, and recovery semantics come first.
-
-Latest public benchmark snapshot currently checked into the repository, taken
-from the latest successful `main` CI YCSB run available at the time of update
-([run #23701742757](https://github.com/feichai0017/NoKV/actions/runs/23701742757)).
-This snapshot used the then-current benchmark profile:
-`A-F`, `records=1,000,000`, `ops=1,000,000`, `value_size=1000`,
-`value_threshold=2048`, `conc=16`.
-
-Methodology and harness details live in [`benchmark/README.md`](./benchmark/README.md).
-
-| Engine | Workload | Mode | Ops/s | Avg Latency | P95 | P99 |
-| --- | --- | --- | ---: | ---: | ---: | ---: |
-| NoKV | YCSB-A | 50/50 read/update | 175,905 | 5.684µs | 204.039µs | 307.851µs |
-| NoKV | YCSB-B | 95/5 read/update | 525,631 | 1.902µs | 24.115µs | 750.413µs |
-| NoKV | YCSB-C | 100% read | 409,136 | 2.444µs | 15.077µs | 25.658µs |
-| NoKV | YCSB-D | 95% read, 5% insert (latest) | 632,031 | 1.582µs | 21.811µs | 638.457µs |
-| NoKV | YCSB-E | 95% scan, 5% insert | 45,620 | 21.92µs | 139.449µs | 9.203945ms |
-| NoKV | YCSB-F | read-modify-write | 157,732 | 6.339µs | 232.743µs | 371.209µs |
-| Badger | YCSB-A | 50/50 read/update | 108,232 | 9.239µs | 285.74µs | 483.139µs |
-| Badger | YCSB-B | 95/5 read/update | 188,893 | 5.294µs | 274.549µs | 566.042µs |
-| Badger | YCSB-C | 100% read | 242,463 | 4.124µs | 36.549µs | 1.862803ms |
-| Badger | YCSB-D | 95% read, 5% insert (latest) | 284,205 | 3.518µs | 233.414µs | 479.801µs |
-| Badger | YCSB-E | 95% scan, 5% insert | 15,027 | 66.547µs | 4.064653ms | 7.534558ms |
-| Badger | YCSB-F | read-modify-write | 84,601 | 11.82µs | 407.624µs | 645.491µs |
-| Pebble | YCSB-A | 50/50 read/update | 169,792 | 5.889µs | 491.322µs | 1.65907ms |
-| Pebble | YCSB-B | 95/5 read/update | 137,483 | 7.273µs | 658.763µs | 1.415039ms |
-| Pebble | YCSB-C | 100% read | 90,474 | 11.052µs | 878.733µs | 1.817526ms |
-| Pebble | YCSB-D | 95% read, 5% insert (latest) | 198,139 | 5.046µs | 491.515µs | 1.282231ms |
-| Pebble | YCSB-E | 95% scan, 5% insert | 40,793 | 24.513µs | 1.332974ms | 2.301008ms |
-| Pebble | YCSB-F | read-modify-write | 122,192 | 8.183µs | 760.934µs | 1.71655ms |
-
----
-
-## 🧩 Module Breakdown
-
-| Module | Responsibilities | Source | Docs |
-| --- | --- | --- | --- |
-| WAL | Append-only segments with CRC, rotation, replay (`wal.Manager`). | [`engine/wal/`](./engine/wal) | [WAL internals](docs/wal.md) |
-| LSM | MemTable, flush pipeline, leveled compactions, iterator merging. | [`engine/lsm/`](./engine/lsm) | [Memtable](docs/memtable.md)<br>[Flush pipeline](docs/flush.md)<br>[Cache](docs/cache.md)<br>[Range filter](docs/range_filter.md) |
-| Manifest | VersionEdit log + CURRENT handling, WAL/vlog checkpoints, value-log metadata. | [`engine/manifest/`](./engine/manifest) | [Manifest semantics](docs/manifest.md) |
-| ValueLog | Large value storage, GC, discard stats integration. | [`vlog.go`](./vlog.go), [`engine/vlog/`](./engine/vlog) | [Value log design](docs/vlog.md) |
-| Percolator | Distributed MVCC 2PC primitives (prewrite/commit/rollback/resolve/status). | [`percolator/`](./percolator) | [Percolator transactions](docs/percolator.md) |
-| RaftStore | Multi-Raft Region management, hooks, metrics, transport. | [`raftstore/`](./raftstore) | [RaftStore overview](docs/raftstore.md) |
-| HotRing | Hot key tracking, throttling helpers. | [`hotring/`](./hotring) | [HotRing overview](docs/hotring.md) |
-| Observability | Periodic stats, hot key tracking, CLI integration. | [`stats.go`](./stats.go), [`cmd/nokv`](./cmd/nokv) | [Stats & observability](docs/stats.md)<br>[CLI reference](docs/cli.md) |
-| Filesystem | Pebble-inspired `vfs` abstraction + mmap-backed file helpers shared by SST/vlog, WAL, and manifest. | [`engine/vfs/`](./engine/vfs), [`engine/file/`](./engine/file) | [VFS](docs/vfs.md)<br>[File abstractions](docs/file.md) |
-
-Each module has a dedicated document under `docs/` describing APIs, diagrams, and recovery notes.
-
----
-
-
-## 📡 Observability & CLI
-
-- `Stats.StartStats` publishes metrics via `expvar` (flush backlog, WAL segments, value log GC stats, raft/region/cache/hot metrics).
-- `cmd/nokv` gives you:
-  - `nokv stats --workdir <dir> [--json] [--no-region-metrics]`
-  - `nokv manifest --workdir <dir>`
-  - `nokv regions --workdir <dir> [--json]`
-  - `nokv vlog --workdir <dir>`
-- `hotring` continuously surfaces hot keys in stats + CLI so you can pre-warm caches or debug skewed workloads.
-
-More in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-observability-in-tests).
-
----
+<br/>
 
 ## 🔌 Redis Gateway
 
-- `cmd/nokv-redis` exposes a RESP-compatible endpoint. In embedded mode (`--workdir`) commands execute through regular DB APIs; in distributed mode (`--raft-config`) calls are routed through `raftstore/client` and committed with TwoPhaseCommit.
-- In raft mode, TTL is persisted directly in each value entry (`expires_at`) through the same 2PC write path as the value payload.
-- `--metrics-addr` exposes Redis gateway metrics under `NoKV.Stats.redis` via expvar. In raft mode, `--coordinator-addr` can override `config.coordinator` when you need a non-default Coordinator endpoint.
-- A ready-to-use cluster configuration is available at `raft_config.example.json`, matching both `scripts/dev/cluster.sh` and the Docker Compose setup.
+`cmd/nokv-redis` exposes a RESP-compatible endpoint. In embedded mode (`--workdir`) commands execute through `DB` APIs; in distributed mode (`--raft-config`) calls are routed through `raftstore/client` and committed via Percolator 2PC.
 
-> For the complete command matrix, configuration and deployment guides, see [docs/nokv-redis.md](docs/nokv-redis.md).
+- TTL is persisted in the value entry (`expires_at`) through the same 2PC write path
+- `--metrics-addr` exposes Redis-gateway metrics under `NoKV.Stats.redis` via expvar
+- `--coordinator-addr` overrides the coordinator endpoint when you don't want the default
 
----
+Full command matrix: [`docs/nokv-redis.md`](docs/nokv-redis.md).
+
+<br/>
+
+## 📖 Further Reading
+
+- [`docs/architecture.md`](docs/architecture.md) — shortest path from "what is NoKV" to "which package owns what"
+- [`docs/runtime.md`](docs/runtime.md) — function-level call chains for embedded and distributed read/write paths
+- [`docs/control_and_execution_protocols.md`](docs/control_and_execution_protocols.md) — control-plane / execution-plane contract
+- [`docs/notes/`](docs/notes/) — dated design decision records
+- [`docs/SUMMARY.md`](docs/SUMMARY.md) — full table of contents (mdbook index)
+
+<br/>
 
 ## 📄 License
 
-Apache-2.0. See [LICENSE](LICENSE).
+[Apache-2.0](./LICENSE)
+
+---
+
+<div align="center">
+<sub>Built from scratch — no external storage engine, no external Raft library, no external coordinator.</sub>
+</div>
