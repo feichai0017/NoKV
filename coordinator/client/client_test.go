@@ -783,6 +783,7 @@ func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descri
 	return desc
 }
 
+//go:fix inline
 func uint64Ptr(v uint64) *uint64 {
-	return &v
+	return new(v)
 }

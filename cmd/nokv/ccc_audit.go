@@ -142,8 +142,8 @@ func renderCCCAudit(
 	_, _ = fmt.Fprintf(w, "RootDescriptorRevision   %d\n", report.RootDescriptorRevision)
 	_, _ = fmt.Fprintf(w, "CurrentHolder            %s\n", emptyDash(report.CurrentHolderID))
 	_, _ = fmt.Fprintf(w, "CurrentGeneration        %d\n", report.CurrentGeneration)
-	_, _ = fmt.Fprintf(w, "SealGeneration           %d\n", report.ClosureAudit.SealGeneration)
-	_, _ = fmt.Fprintf(w, "ClosureSatisfied         %t\n", report.ClosureAudit.ClosureSatisfied())
+	_, _ = fmt.Fprintf(w, "SealGeneration           %d\n", report.ClosureWitness.SealGeneration)
+	_, _ = fmt.Fprintf(w, "ClosureSatisfied         %t\n", report.ClosureWitness.ClosureSatisfied())
 	_, _ = fmt.Fprintf(w, "ClosureStage             %s\n", report.Closure.Stage)
 	names := cccAuditAnomalyNames(report.Anomalies)
 	if len(names) == 0 {

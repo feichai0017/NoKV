@@ -87,17 +87,17 @@ func EvaluateReplyTrace(report Report, records []ReplyTraceRecord) []ReplyTraceA
 			})
 			continue
 		}
-		if report.ClosureAudit.SealGeneration != 0 && record.CertGeneration == report.ClosureAudit.SealGeneration {
+		if report.ClosureWitness.SealGeneration != 0 && record.CertGeneration == report.ClosureWitness.SealGeneration {
 			anomalies = append(anomalies, ReplyTraceAnomaly{
 				Index:          idx,
 				Kind:           "post_seal_accepted_reply",
 				Duty:           record.Duty,
 				CertGeneration: record.CertGeneration,
-				Reason:         fmt.Sprintf("accepted reply at sealed generation %d after rooted seal", report.ClosureAudit.SealGeneration),
+				Reason:         fmt.Sprintf("accepted reply at sealed generation %d after rooted seal", report.ClosureWitness.SealGeneration),
 			})
 			continue
 		}
-		if !report.ClosureAudit.ReplyGenerationLegal(record.CertGeneration) {
+		if !report.ClosureWitness.ReplyGenerationLegal(record.CertGeneration) {
 			anomalies = append(anomalies, ReplyTraceAnomaly{
 				Index:          idx,
 				Kind:           "illegal_reply_generation",

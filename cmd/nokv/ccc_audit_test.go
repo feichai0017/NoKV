@@ -33,7 +33,7 @@ func TestRunCCCAuditCmdJSON(t *testing.T) {
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
 	require.Equal(t, "c1", payload.Report.HolderID)
 	require.Equal(t, uint64(2), payload.Report.CurrentGeneration)
-	require.True(t, payload.Report.ClosureAudit.ClosureSatisfied())
+	require.True(t, payload.Report.ClosureWitness.ClosureSatisfied())
 	require.Equal(t, rootstate.CoordinatorClosureStageReattached, payload.Report.Closure.Stage)
 	require.False(t, payload.Report.Anomalies.ClosureIncomplete)
 }

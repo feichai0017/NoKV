@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEvaluateSnapshot(t *testing.T) {
+func TestBuildReport(t *testing.T) {
 	seal := rootstate.CoordinatorSeal{
 		HolderID:       "c1",
 		CertGeneration: 2,
@@ -46,15 +46,12 @@ func TestEvaluateSnapshot(t *testing.T) {
 		},
 	}
 
-	status := coordaudit.EvaluateSnapshot(snapshot, "c1", 1_000)
-	require.Equal(t, uint64(7), status.RootDescriptorRevision)
-	require.True(t, status.ClosureAudit.ClosureSatisfied())
-	require.Equal(t, rootstate.CoordinatorClosureStageReattached, status.Closure.Stage)
-
 	report := coordaudit.BuildReport(snapshot, "c1", 1_000)
+	require.Equal(t, uint64(7), report.RootDescriptorRevision)
 	require.Equal(t, "fresh", report.CatchUpState)
 	require.Equal(t, "c1", report.CurrentHolderID)
 	require.Equal(t, uint64(3), report.CurrentGeneration)
+	require.True(t, report.ClosureWitness.ClosureSatisfied())
 	require.Equal(t, rootstate.CoordinatorClosureStageReattached, report.Closure.Stage)
 	require.False(t, report.Anomalies.ClosureIncomplete)
 	require.False(t, report.Anomalies.MissingClose)
