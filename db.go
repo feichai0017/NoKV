@@ -23,9 +23,9 @@ import (
 	"github.com/feichai0017/NoKV/engine/wal"
 	dbruntime "github.com/feichai0017/NoKV/internal/runtime"
 	"github.com/feichai0017/NoKV/metrics"
-	"github.com/feichai0017/NoKV/raftstore/engine"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
+	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/thermos"
 	"github.com/feichai0017/NoKV/utils"
@@ -58,7 +58,7 @@ type (
 
 	// RaftLog opens raft peer storage without exposing the underlying WAL manager.
 	RaftLog interface {
-		Open(groupID uint64, meta *localmeta.Store) (engine.PeerStorage, error)
+		Open(groupID uint64, meta *localmeta.Store) (raftlog.PeerStorage, error)
 	}
 
 	// DB is the global handle for the engine and owns shared resources.
@@ -248,8 +248,8 @@ func (db *DB) runtimeLSMOptions() *lsm.Options {
 	return cfg
 }
 
-func (l dbRaftLog) Open(groupID uint64, meta *localmeta.Store) (engine.PeerStorage, error) {
-	return engine.OpenWALStorage(engine.WALStorageConfig{
+func (l dbRaftLog) Open(groupID uint64, meta *localmeta.Store) (raftlog.PeerStorage, error) {
+	return raftlog.OpenWALStorage(raftlog.WALStorageConfig{
 		GroupID:   groupID,
 		WAL:       l.db.wal,
 		LocalMeta: meta,

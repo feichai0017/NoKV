@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/raftstore/engine"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	"github.com/feichai0017/NoKV/raftstore/transport"
 )
 
@@ -23,7 +23,7 @@ type Config struct {
 	ConfChange       ConfChangeHandler
 	SnapshotExport   SnapshotExportFunc
 	SnapshotApply    SnapshotApplyFunc
-	Storage          engine.PeerStorage
+	Storage          raftlog.PeerStorage
 	StorageDir       string
 	GroupID          uint64
 	Region           *localmeta.RegionMeta
@@ -36,7 +36,7 @@ type Config struct {
 }
 
 // ResolveStorage chooses the backing log engine (in-memory, on-disk, or WAL).
-func ResolveStorage(cfg *Config) (engine.PeerStorage, error) {
+func ResolveStorage(cfg *Config) (raftlog.PeerStorage, error) {
 	if cfg == nil {
 		return nil, nil
 	}
@@ -44,7 +44,7 @@ func ResolveStorage(cfg *Config) (engine.PeerStorage, error) {
 		return cfg.Storage, nil
 	}
 	if cfg.StorageDir != "" {
-		return engine.OpenDiskStorage(filepath.Clean(cfg.StorageDir), nil)
+		return raftlog.OpenDiskStorage(filepath.Clean(cfg.StorageDir), nil)
 	}
 	return myraft.NewMemoryStorage(), nil
 }

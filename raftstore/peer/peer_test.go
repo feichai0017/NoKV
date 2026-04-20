@@ -7,8 +7,8 @@ import (
 	"time"
 
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/raftstore/engine"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	"github.com/stretchr/testify/require"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
@@ -37,7 +37,7 @@ func (s *payloadTestStorage) SetHardState(st myraft.HardState) error {
 	return s.MemoryStorage.SetHardState(st)
 }
 
-func newTestPeer(t *testing.T, storage engine.PeerStorage, apply ApplyFunc) *Peer {
+func newTestPeer(t *testing.T, storage raftlog.PeerStorage, apply ApplyFunc) *Peer {
 	t.Helper()
 	if apply == nil {
 		apply = func([]myraft.Entry) error { return nil }

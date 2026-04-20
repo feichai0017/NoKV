@@ -11,9 +11,9 @@ import (
 
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
-	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	"github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/utils"
 	raftpb "go.etcd.io/raft/v3/raftpb"
@@ -41,7 +41,7 @@ type Peer struct {
 	readyMu                   sync.Mutex
 	id                        uint64
 	node                      *myraft.RawNode
-	storage                   engine.PeerStorage
+	storage                   raftlog.PeerStorage
 	transport                 transport.Transport
 	apply                     ApplyFunc
 	adminApply                AdminApplyFunc
@@ -606,7 +606,7 @@ func (p *Peer) maybeCompact(applied uint64) error {
 	if applied == 0 {
 		return nil
 	}
-	ws, ok := p.storage.(*engine.WALStorage)
+	ws, ok := p.storage.(*raftlog.WALStorage)
 	if !ok {
 		return nil
 	}

@@ -22,9 +22,9 @@ import (
 	"github.com/feichai0017/NoKV/engine/wal"
 	dbruntime "github.com/feichai0017/NoKV/internal/runtime"
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/raftstore/engine"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
+	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	"github.com/feichai0017/NoKV/thermos"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
@@ -1106,7 +1106,7 @@ func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = localMeta.Close() }()
 
-	ws, err := engine.OpenWALStorage(engine.WALStorageConfig{
+	ws, err := raftlog.OpenWALStorage(raftlog.WALStorageConfig{
 		GroupID:   1,
 		WAL:       walMgr,
 		LocalMeta: localMeta,
@@ -1124,7 +1124,7 @@ func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
 	require.NoError(t, ws.ApplySnapshot(snapshot))
 
 	exportPath := filepath.Join(dir, "raft.snapshot")
-	require.NoError(t, engine.ExportSnapshot(ws, exportPath, nil))
+	require.NoError(t, raftlog.ExportSnapshot(ws, exportPath, nil))
 	logRecoveryMetric(t, "raft_snapshot_export", map[string]any{
 		"group_id":        1,
 		"snapshot_index":  snapshot.Metadata.Index,
@@ -1145,14 +1145,14 @@ func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = localMetaRestore.Close() }()
 
-	wsRestore, err := engine.OpenWALStorage(engine.WALStorageConfig{
+	wsRestore, err := raftlog.OpenWALStorage(raftlog.WALStorageConfig{
 		GroupID:   1,
 		WAL:       walMgrRestore,
 		LocalMeta: localMetaRestore,
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, engine.ImportSnapshot(wsRestore, exportPath, nil))
+	require.NoError(t, raftlog.ImportSnapshot(wsRestore, exportPath, nil))
 
 	ptr, ok := localMetaRestore.RaftPointer(1)
 	require.True(t, ok)
