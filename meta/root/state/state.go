@@ -8,6 +8,16 @@ import (
 
 type Cursor = rootproto.Cursor
 
+// AllocatorKind identifies one globally fenced allocator domain inside rooted
+// metadata state.
+type AllocatorKind uint8
+
+const (
+	AllocatorKindUnknown AllocatorKind = iota
+	AllocatorKindID
+	AllocatorKindTSO
+)
+
 // State is the compact checkpointed state of the metadata root.
 type State struct {
 	ClusterEpoch       uint64
@@ -67,6 +77,15 @@ type CoordinatorSuccessorCoverageStatus = rootproto.CoordinatorSuccessorCoverage
 type AuthorityHandoffRecord = rootproto.AuthorityHandoffRecord
 type ContinuationWitness = rootproto.ContinuationWitness
 type ClosureWitness = rootproto.ClosureWitness
+type CoordinatorClosureStage = rootproto.CoordinatorClosureStage
+type CoordinatorClosureStatus = rootproto.CoordinatorClosureStatus
+
+const (
+	CoordinatorClosureStagePendingConfirm = rootproto.CoordinatorClosureStagePendingConfirm
+	CoordinatorClosureStageConfirmed      = rootproto.CoordinatorClosureStageConfirmed
+	CoordinatorClosureStageClosed         = rootproto.CoordinatorClosureStageClosed
+	CoordinatorClosureStageReattached     = rootproto.CoordinatorClosureStageReattached
+)
 
 func (l CoordinatorLease) ActiveAt(nowUnixNano int64) bool {
 	return l.HolderID != "" && l.ExpiresUnixNano > nowUnixNano

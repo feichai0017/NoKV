@@ -10,6 +10,66 @@ func CoordinatorDutyName(dutyMask uint32) string {
 	return rootproto.CoordinatorDutyName(dutyMask)
 }
 
+type CoordinatorLeaseCommandKind = rootproto.CoordinatorLeaseCommandKind
+
+const (
+	CoordinatorLeaseCommandUnknown = rootproto.CoordinatorLeaseCommandUnknown
+	CoordinatorLeaseCommandIssue   = rootproto.CoordinatorLeaseCommandIssue
+	CoordinatorLeaseCommandRelease = rootproto.CoordinatorLeaseCommandRelease
+)
+
+type CoordinatorLeaseCommand = rootproto.CoordinatorLeaseCommand
+
+type CoordinatorClosureCommandKind = rootproto.CoordinatorClosureCommandKind
+
+const (
+	CoordinatorClosureCommandUnknown  = rootproto.CoordinatorClosureCommandUnknown
+	CoordinatorClosureCommandSeal     = rootproto.CoordinatorClosureCommandSeal
+	CoordinatorClosureCommandConfirm  = rootproto.CoordinatorClosureCommandConfirm
+	CoordinatorClosureCommandClose    = rootproto.CoordinatorClosureCommandClose
+	CoordinatorClosureCommandReattach = rootproto.CoordinatorClosureCommandReattach
+)
+
+type CoordinatorClosureCommand = rootproto.CoordinatorClosureCommand
+
+type CoordinatorProtocolState struct {
+	Lease   CoordinatorLease
+	Seal    CoordinatorSeal
+	Closure CoordinatorClosure
+}
+
+func (s State) CoordinatorProtocol() CoordinatorProtocolState {
+	return CoordinatorProtocolState{
+		Lease:   s.CoordinatorLease,
+		Seal:    s.CoordinatorSeal,
+		Closure: s.CoordinatorClosure,
+	}
+}
+
+func (l CoordinatorLease) Empty() bool {
+	return strings.TrimSpace(l.HolderID) == "" &&
+		l.ExpiresUnixNano == 0 &&
+		l.CertGeneration == 0 &&
+		l.IssuedCursor == (Cursor{}) &&
+		l.DutyMask == 0 &&
+		strings.TrimSpace(l.PredecessorDigest) == ""
+}
+
+func (s CoordinatorSeal) Present() bool {
+	return s.CertGeneration != 0 && strings.TrimSpace(s.HolderID) != ""
+}
+
+func (c CoordinatorClosure) Empty() bool {
+	return strings.TrimSpace(c.HolderID) == "" &&
+		c.SealGeneration == 0 &&
+		c.SuccessorGeneration == 0 &&
+		strings.TrimSpace(c.SealDigest) == "" &&
+		c.Stage == CoordinatorClosureStagePendingConfirm &&
+		c.ConfirmedAtCursor == (Cursor{}) &&
+		c.ClosedAtCursor == (Cursor{}) &&
+		c.ReattachedAtCursor == (Cursor{})
+}
+
 func CoordinatorSealDigest(seal CoordinatorSeal) string {
 	if !seal.Present() {
 		return ""
@@ -206,4 +266,40 @@ func CoordinatorLeaseContinuable(current CoordinatorLease, seal CoordinatorSeal,
 		return false
 	}
 	return !CoordinatorGenerationSealed(current, seal)
+}
+
+// ValidateCoordinatorLeaseStartCoverage is the rooted gate for any ordered
+// served-summary frontier carried under CoordinatorDutyLeaseStart. It rejects
+// a successor candidate whose lease_start does not strictly exceed the sealed
+// predecessor's persisted served frontier.
+func ValidateCoordinatorLeaseStartCoverage(seal CoordinatorSeal, successorLeaseStart uint64) error {
+	if !seal.Present() {
+		return nil
+	}
+	frontier := seal.Frontiers.Frontier(CoordinatorDutyLeaseStart)
+	if frontier == 0 {
+		return nil
+	}
+	if successorLeaseStart > frontier {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w: duty=%s successor_lease_start=%d served_frontier=%d",
+		ErrCoordinatorLeaseCoverage,
+		CoordinatorDutyName(CoordinatorDutyLeaseStart),
+		successorLeaseStart,
+		frontier,
+	)
+}
+
+// CoordinatorSealWithServedFrontier returns seal with the lease-start frontier
+// bumped to at least servedTimestamp. Existing frontier values are never
+// lowered.
+func CoordinatorSealWithServedFrontier(seal CoordinatorSeal, servedTimestamp uint64) CoordinatorSeal {
+	existing := seal.Frontiers.Frontier(CoordinatorDutyLeaseStart)
+	if servedTimestamp <= existing {
+		return seal
+	}
+	seal.Frontiers = seal.Frontiers.WithFrontier(CoordinatorDutyLeaseStart, servedTimestamp)
+	return seal
 }

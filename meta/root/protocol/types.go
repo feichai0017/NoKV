@@ -2,7 +2,8 @@ package protocol
 
 import (
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 )
 
 // Cursor identifies one committed position in the metadata-root log.
@@ -206,17 +207,13 @@ func (f CoordinatorDutyFrontiers) AsMap() map[uint32]uint64 {
 		return map[uint32]uint64{}
 	}
 	out := make(map[uint32]uint64, len(f.values))
-	for dutyMask, frontier := range f.values {
-		out[dutyMask] = frontier
-	}
+	maps.Copy(out, f.values)
 	return out
 }
 
 func (f CoordinatorDutyFrontiers) WithFrontier(dutyMask uint32, frontier uint64) CoordinatorDutyFrontiers {
 	values := make(map[uint32]uint64, len(f.values)+1)
-	for mask, current := range f.values {
-		values[mask] = current
-	}
+	maps.Copy(values, f.values)
 	if validCoordinatorDutyFrontierMask(dutyMask) {
 		values[dutyMask] = frontier
 	}
@@ -228,9 +225,7 @@ func CloneDutyFrontiers(frontiers CoordinatorDutyFrontiers) CoordinatorDutyFront
 		return CoordinatorDutyFrontiers{values: map[uint32]uint64{}}
 	}
 	values := make(map[uint32]uint64, len(frontiers.values))
-	for dutyMask, frontier := range frontiers.values {
-		values[dutyMask] = frontier
-	}
+	maps.Copy(values, frontiers.values)
 	return CoordinatorDutyFrontiers{values: values}
 }
 
@@ -251,7 +246,7 @@ func OrderedCoordinatorDutyMasks(dutyMask uint32, frontiers CoordinatorDutyFront
 	for mask := range seen {
 		out = append(out, mask)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out
 }
 
@@ -332,6 +327,11 @@ func (w ClosureWitness) ReplyGenerationLegal(certGeneration uint64) bool {
 		return false
 	}
 	return w.ClosureSatisfied()
+}
+
+func (w ClosureWitness) WithStage(stage CoordinatorClosureStage) ClosureWitness {
+	w.Stage = stage
+	return w
 }
 
 func validCoordinatorDutyFrontierMask(dutyMask uint32) bool {

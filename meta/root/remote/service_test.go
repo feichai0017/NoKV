@@ -135,10 +135,10 @@ func TestClientCampaignCoordinatorLease(t *testing.T) {
 	client := openBufconnClient(t, backend)
 
 	leaseState, err := client.ApplyCoordinatorLease(rootstate.CoordinatorLeaseCommand{
-		Kind:            rootstate.CoordinatorLeaseCommandIssue,
-		HolderID:        "c1",
-		ExpiresUnixNano: 1_000,
-		NowUnixNano:     100,
+		Kind:             rootstate.CoordinatorLeaseCommandIssue,
+		HolderID:         "c1",
+		ExpiresUnixNano:  1_000,
+		NowUnixNano:      100,
 		HandoffFrontiers: controlplane.Frontiers(10, 20, 30),
 	})
 	require.NoError(t, err)
@@ -149,10 +149,10 @@ func TestClientCampaignCoordinatorLease(t *testing.T) {
 	require.NotEqual(t, rootstate.Cursor{}, lease.IssuedCursor)
 
 	heldState, err := client.ApplyCoordinatorLease(rootstate.CoordinatorLeaseCommand{
-		Kind:            rootstate.CoordinatorLeaseCommandIssue,
-		HolderID:        "c2",
-		ExpiresUnixNano: 1_500,
-		NowUnixNano:     200,
+		Kind:             rootstate.CoordinatorLeaseCommandIssue,
+		HolderID:         "c2",
+		ExpiresUnixNano:  1_500,
+		NowUnixNano:      200,
 		HandoffFrontiers: controlplane.Frontiers(30, 40, 30),
 	})
 	require.Error(t, err)
@@ -161,10 +161,10 @@ func TestClientCampaignCoordinatorLease(t *testing.T) {
 	require.Equal(t, "c1", held.HolderID)
 
 	leaseState, err = client.ApplyCoordinatorLease(rootstate.CoordinatorLeaseCommand{
-		Kind:            rootstate.CoordinatorLeaseCommandIssue,
-		HolderID:        "c2",
-		ExpiresUnixNano: 2_000,
-		NowUnixNano:     1_001,
+		Kind:             rootstate.CoordinatorLeaseCommandIssue,
+		HolderID:         "c2",
+		ExpiresUnixNano:  2_000,
+		NowUnixNano:      1_001,
 		HandoffFrontiers: controlplane.Frontiers(30, 40, 30),
 	})
 	require.NoError(t, err)
