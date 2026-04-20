@@ -1,4 +1,4 @@
-package hotring
+package thermos
 
 import (
 	"sync"
@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-func TestHotRingTouchAndTopN(t *testing.T) {
-	r := NewHotRing(4, nil)
+func TestThermosTouchAndTopN(t *testing.T) {
+	r := NewThermos(4, nil)
 
 	if count := r.Touch("alpha"); count != 1 {
 		t.Fatalf("expected initial count 1, got %d", count)
@@ -37,8 +37,8 @@ func TestHotRingTouchAndTopN(t *testing.T) {
 	}
 }
 
-func TestHotRingConcurrentTouch(t *testing.T) {
-	r := NewHotRing(4, nil)
+func TestThermosConcurrentTouch(t *testing.T) {
+	r := NewThermos(4, nil)
 	const goroutines = 8
 	const perG = 500
 
@@ -57,8 +57,8 @@ func TestHotRingConcurrentTouch(t *testing.T) {
 	}
 }
 
-func TestHotRingFrequencyAndClamp(t *testing.T) {
-	r := NewHotRing(4, nil)
+func TestThermosFrequencyAndClamp(t *testing.T) {
+	r := NewThermos(4, nil)
 	if freq := r.Frequency("missing"); freq != 0 {
 		t.Fatalf("expected zero frequency for missing key, got %d", freq)
 	}
@@ -98,8 +98,8 @@ func TestHotRingFrequencyAndClamp(t *testing.T) {
 	}
 }
 
-func TestHotRingSlidingWindow(t *testing.T) {
-	r := NewHotRing(4, nil)
+func TestThermosSlidingWindow(t *testing.T) {
+	r := NewThermos(4, nil)
 	r.EnableSlidingWindow(4, 10*time.Millisecond)
 	defer r.Close()
 
@@ -115,8 +115,8 @@ func TestHotRingSlidingWindow(t *testing.T) {
 	}
 }
 
-func TestHotRingDecayLoop(t *testing.T) {
-	r := NewHotRing(4, nil)
+func TestThermosDecayLoop(t *testing.T) {
+	r := NewThermos(4, nil)
 	r.EnableDecay(10*time.Millisecond, 1)
 	defer r.Close()
 
@@ -129,7 +129,7 @@ func TestHotRingDecayLoop(t *testing.T) {
 	}
 }
 
-func TestHotRingNodeCapSampling(t *testing.T) {
+func TestThermosNodeCapSampling(t *testing.T) {
 	hash := func(key string) uint32 {
 		switch key {
 		case "base":
@@ -143,7 +143,7 @@ func TestHotRingNodeCapSampling(t *testing.T) {
 		}
 	}
 
-	r := NewHotRing(2, hash)
+	r := NewThermos(2, hash)
 	r.EnableNodeSampling(1, 1) // cap=1, allow only even hashes once capped
 
 	if count := r.Touch("base"); count != 1 {

@@ -116,7 +116,7 @@ Selected features that are genuinely non-obvious — and have design notes expla
 | 🧠 | **Adaptive memtable index (SkipList ↔ ART)** over arena-managed memory — no Go GC pressure on hot writes | [`engine/lsm/memtable.go`](./engine/lsm/memtable.go) · [design note](docs/notes/2026-02-09-memory-kernel-arena-and-adaptive-index.md) |
 | 🚦 | **MPSC write pipeline with adaptive coalescing** — thousands of concurrent producers, one long-lived consumer, backlog-aware batching | [`db_write.go`](./db_write.go) · [design note](docs/notes/2026-02-09-write-pipeline-mpsc-and-adaptive-batching.md) |
 | 🔍 | **GRF-inspired range filter** for cheap bounded-scan pruning at block granularity | [`engine/lsm/range_filter.go`](./engine/lsm/range_filter.go) · [design note](docs/notes/2026-04-05-range-filter-from-grf.md) |
-| 🎯 | **HotRing as a side-channel observer** — hot-key detection without putting it on the main read path | [`hotring/`](./hotring) · [design note](docs/notes/2026-01-16-hotring-design.md) |
+| 🎯 | **Thermos as a side-channel observer** — hot-key detection without putting it on the main read path | [`thermos/`](./thermos) · [design note](docs/notes/2026-01-16-thermos-design.md) |
 | 🧰 | **VFS abstraction with 18-op fault injection** — cross-platform atomic rename semantics, FaultFS for testing any syscall failure | [`engine/vfs/`](./engine/vfs) · [design note](docs/notes/2026-02-15-vfs-abstraction-and-deterministic-reliability.md) |
 | 📦 | **SST-based Raft snapshot install** — snapshots ship materialized SST files, target node ingests directly | [`raftstore/snapshot/`](./raftstore/snapshot) · [design note](docs/notes/2026-03-31-sst-snapshot-install.md) |
 | 🏛️ | **Delos-lite rooted truth kernel** — minimal typed event log is the single source of truth; Coordinator and raftstore are consumers | [`meta/root/`](./meta/root) · [design note](docs/notes/2026-04-03-delos-lite-metadata-root-roadmap.md) |
@@ -252,7 +252,7 @@ Programmatic access: `import "github.com/feichai0017/NoKV/config"` and call `con
 | [`coordinator/`](./coordinator) | Control plane: routing, TSO, heartbeats, lease management | [Coordinator](docs/coordinator.md) |
 | [`meta/root/`](./meta/root) | Typed rooted truth kernel (Delos-lite), replicated/local backends | [Rooted Truth](docs/rooted_truth.md) |
 | [`namespace/`](./namespace) | Hierarchical listing infrastructure on top of LSM | [Namespace](docs/namespace.md) |
-| [`hotring/`](./hotring) | Hot-key detection and throttling | [HotRing](docs/hotring.md) |
+| [`thermos/`](./thermos) | Hot-key detection and throttling | [Thermos](docs/thermos.md) |
 | [`spec/`](./spec) | TLA+ specifications and contrast models | [spec/README.md](./spec/README.md) |
 | [`cmd/nokv/`](./cmd/nokv) | CLI: stats, manifest, regions, vlog, migrate, coordinator | [CLI](docs/cli.md) |
 | [`cmd/nokv-redis/`](./cmd/nokv-redis) | Redis-compatible gateway | [Redis](docs/nokv-redis.md) |

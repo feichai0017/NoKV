@@ -8,8 +8,8 @@ import (
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/engine/wal"
-	"github.com/feichai0017/NoKV/hotring"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	"github.com/feichai0017/NoKV/thermos"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +25,7 @@ func TestCFHotKey(t *testing.T) {
 }
 
 func TestShouldThrottleHotWrite(t *testing.T) {
-	ring := hotring.NewRotatingHotRing(8, nil)
+	ring := thermos.NewRotatingThermos(8, nil)
 	key := []byte("hot")
 
 	require.True(t, ShouldThrottleHotWrite(ring, 1, kv.CFDefault, key))

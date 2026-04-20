@@ -37,8 +37,8 @@ Key option groups (see `options.go` for the full list):
   - `BlockCacheBytes`, `IndexCacheBytes`
 - **Hot key throttling**
   - `WriteHotKeyLimit`
-  - `HotRingEnabled`, `HotRingTopK`, decay/window settings
-  - `HotRingNodeCap`, `HotRingNodeSampleBits`, `HotRingRotationInterval`
+  - `ThermosEnabled`, `ThermosTopK`, decay/window settings
+  - `ThermosNodeCap`, `ThermosNodeSampleBits`, `ThermosRotationInterval`
 - **WAL watchdog**
   - `EnableWALWatchdog`, `WALAutoGCInterval`
   - `WALAutoGCMinRemovable`, `WALAutoGCMaxBatch`

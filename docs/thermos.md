@@ -1,0 +1,74 @@
+# Thermos
+
+`thermos` is NoKV's optional internal hotspot detector. The package lives in [`thermos/`](../thermos) and is no longer part of the default read path, LSM compaction planning, or value-log bucket routing.
+
+## Current Role
+
+The production role is deliberately narrow:
+
+- detect write-hot keys when `Options.ThermosEnabled` is enabled
+- enforce `Options.WriteHotKeyLimit` via `Thermos.TouchAndClamp`
+- publish write-hot snapshots through `StatsSnapshot.Hot.WriteKeys` and `StatsSnapshot.Hot.WriteRing`
+
+If `ThermosEnabled=false`, the DB runs without Thermos tracking on the hot path.
+
+## What Thermos Does Not Control Anymore
+
+These integrations were intentionally removed from the default engine path:
+
+- read-path hot tracking and asynchronous read prefetch
+- LSM compaction scoring based on hot-key overlap
+- value-log hot/cold bucket routing
+- hot-write batch enlargement heuristics
+
+The default value-log configuration keeps ordinary hash bucketization enabled through `ValueLogBucketCount`, but bucket selection no longer depends on Thermos.
+
+## Data Structure
+
+Thermos remains a concurrent in-memory frequency tracker with:
+
+- sharded hash buckets
+- lock-free bucket lists for lookup/insert
+- atomic counters per node
+- optional sliding-window and rotation support
+
+These capabilities are still useful for optional write throttling and operational diagnostics, even though they are no longer wired into unrelated subsystems.
+
+## Relevant Options
+
+| Option | Meaning |
+| --- | --- |
+| `ThermosEnabled` | Master switch for write-hot tracking. |
+| `WriteHotKeyLimit` | Reject writes once a single key exceeds the configured threshold. |
+| `ThermosBits` | Bucket count (`2^bits`) for the tracker. |
+| `ThermosTopK` | Number of hot keys exported in stats. |
+| `ThermosRotationInterval` | Optional dual-ring rotation. |
+| `ThermosWindowSlots` / `ThermosWindowSlotDuration` | Optional sliding-window tracking. |
+| `ThermosNodeCap` / `ThermosNodeSampleBits` | Bound in-memory growth. |
+
+## Write Throttling
+
+When both `ThermosEnabled` and `WriteHotKeyLimit > 0` are set, NoKV records write frequency by `CF + UserKey` and returns `utils.ErrHotKeyWriteThrottle` once the limit is reached.
+
+This path exists to protect the engine from pathological skew. It is intentionally independent from cache warming, compaction, and value-log routing.
+
+## Stats
+
+Thermos contributes only write-side observability:
+
+- `StatsSnapshot.Hot.WriteKeys`
+- `StatsSnapshot.Hot.WriteRing`
+- `StatsSnapshot.Write.HotKeyLimited`
+
+The CLI surfaces the same data under `nokv stats`.
+
+## Design Position
+
+Thermos should be understood as:
+
+- an optional internal detector
+- an optional write throttling tool
+- not a required performance feature
+- not a default read-path or value-log optimization
+
+That narrower scope keeps the core engine path simpler and makes Thermos easier to reason about.

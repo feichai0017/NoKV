@@ -845,7 +845,7 @@ func openNoKVBenchmarkDBAt(b *testing.B, workdir string) (*NoKV.DB, ns.KV) {
 	opt.WorkDir = workdir
 	opt.EnableWALWatchdog = false
 	opt.ValueLogGCInterval = 0
-	opt.HotRingEnabled = false
+	opt.ThermosEnabled = false
 	opt.WriteBatchMaxCount = 8192
 	opt.MaxBatchCount = 8192
 	opt.WriteBatchMaxSize = 64 << 20

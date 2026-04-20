@@ -22,7 +22,7 @@
 - [File](file.md)
 - [Cache](cache.md)
 - [Range Filter](range_filter.md)
-- [Hotring](hotring.md)
+- [Thermos](thermos.md)
 - [Entry](entry.md)
 - [Error Handling](errors.md)
 
@@ -50,7 +50,7 @@
 
 - [设计笔记与实现记录](notes/README.md)
   - [2026-01-16 mmap 选择](notes/2026-01-16-mmap-choice.md)
-  - [2026-01-16 Hotring 设计](notes/2026-01-16-hotring-design.md)
+  - [2026-01-16 Thermos 设计](notes/2026-01-16-thermos-design.md)
   - [2026-02-01 Compaction 与 Ingest](notes/2026-02-01-compaction-and-ingest.md)
   - [2026-02-05 Value Log 设计与 GC](notes/2026-02-05-vlog-design-and-gc.md)
   - [2026-02-09 Memory Kernel：Arena 与 Adaptive Index](notes/2026-02-09-memory-kernel-arena-and-adaptive-index.md)

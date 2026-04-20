@@ -20,12 +20,12 @@ import (
 	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
-	"github.com/feichai0017/NoKV/hotring"
 	dbruntime "github.com/feichai0017/NoKV/internal/runtime"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
+	"github.com/feichai0017/NoKV/thermos"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 	raftpb "go.etcd.io/raft/v3/raftpb"
@@ -207,7 +207,7 @@ func TestOpenNormalizesLegacyUnsetFieldsWithoutMutatingCaller(t *testing.T) {
 	opt.IngestShardParallelism = 0
 	opt.CompactionValueWeight = 0
 	opt.CompactionValueAlertThreshold = 0
-	opt.HotRingTopK = 0
+	opt.ThermosTopK = 0
 
 	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
@@ -217,7 +217,7 @@ func TestOpenNormalizesLegacyUnsetFieldsWithoutMutatingCaller(t *testing.T) {
 	require.Zero(t, opt.NumCompactors)
 	require.Zero(t, opt.L0StopWritesTrigger)
 	require.Zero(t, opt.CompactionStopTrigger)
-	require.Zero(t, opt.HotRingTopK)
+	require.Zero(t, opt.ThermosTopK)
 
 	require.Greater(t, db.opt.WriteBatchMaxCount, 0)
 	require.Greater(t, db.opt.WriteBatchMaxSize, int64(0))
@@ -239,7 +239,7 @@ func TestOpenNormalizesLegacyUnsetFieldsWithoutMutatingCaller(t *testing.T) {
 	require.Greater(t, db.opt.IngestShardParallelism, 0)
 	require.Greater(t, db.opt.CompactionValueWeight, 0.0)
 	require.Greater(t, db.opt.CompactionValueAlertThreshold, 0.0)
-	require.Greater(t, db.opt.HotRingTopK, 0)
+	require.Greater(t, db.opt.ThermosTopK, 0)
 }
 
 func TestNewDefaultOptionsExposeConcreteCompactionDefaults(t *testing.T) {
@@ -1326,7 +1326,7 @@ func TestHotWriteAndThrottle(t *testing.T) {
 		opt: &Options{
 			WriteHotKeyLimit: 1,
 		},
-		hotWrite: hotring.NewRotatingHotRing(8, nil),
+		hotWrite: thermos.NewRotatingThermos(8, nil),
 	}
 
 	userKey := []byte("hot")
