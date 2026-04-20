@@ -54,6 +54,9 @@ type Service struct {
 	leaseClockSkew time.Duration
 	now            func() time.Time
 	leaseView      coordinatorLeaseView
+	rootViewMu     sync.RWMutex
+	rootView       coordinatorRootSnapshotView
+	rootViewTTL    time.Duration
 	statusMu       sync.RWMutex
 	lastRootReload int64
 	lastRootError  string
@@ -63,6 +66,13 @@ type Service struct {
 type coordinatorLeaseView struct {
 	lease rootstate.CoordinatorLease
 	seal  rootstate.CoordinatorSeal
+}
+
+type coordinatorRootSnapshotView struct {
+	snapshot    coordstorage.Snapshot
+	loaded      bool
+	refreshing  bool
+	refreshedAt time.Time
 }
 
 func (v *coordinatorLeaseView) Reset() {
@@ -101,6 +111,7 @@ const defaultCoordinatorLeaseClockSkew = 500 * time.Millisecond
 const defaultCoordinatorLeaseRetryMin = 200 * time.Millisecond
 const maxCoordinatorLeaseRetry = 60 * time.Second
 const defaultCoordinatorLeaseReleaseTimeout = 2 * time.Second
+const defaultRootSnapshotRefreshInterval = 250 * time.Millisecond
 
 // NewService constructs a Coordinator service. The optional root storage fixes
 // durable rooted persistence at construction time; omitting it keeps the service
@@ -192,6 +203,15 @@ func (s *Service) ConfigureAblation(cfg coordablation.Config) error {
 	}
 	s.ablation = cfg
 	return nil
+}
+
+// ConfigureRootSnapshotRefresh controls how long GetRegionByKey keeps one
+// cached rooted snapshot before refreshing it asynchronously.
+func (s *Service) ConfigureRootSnapshotRefresh(interval time.Duration) {
+	if s == nil {
+		return
+	}
+	s.rootViewTTL = interval
 }
 
 // RefreshFromStorage refreshes rooted durable state into the in-memory service
@@ -382,7 +402,7 @@ func (s *Service) reloadRootedView(refresh bool) (coordstorage.Snapshot, error) 
 	if err != nil {
 		return coordstorage.Snapshot{}, err
 	}
-	s.cluster.ReplaceRootSnapshot(snapshot.Descriptors, snapshot.PendingPeerChanges, snapshot.PendingRangeChanges, snapshot.RootToken)
+	s.publishRootSnapshot(snapshot)
 	return snapshot, nil
 }
 
@@ -396,7 +416,6 @@ func (s *Service) reloadAndFenceAllocators(refresh bool) error {
 	defer s.allocMu.Unlock()
 	s.fenceIDFromStorage(snapshot.Allocator.IDCurrent)
 	s.fenceTSOFromStorage(snapshot.Allocator.TSCurrent)
-	s.refreshLeaseMirror(snapshot)
 	s.setLastRootReload(nil)
 	return nil
 }
@@ -408,6 +427,150 @@ func (s *Service) refreshLeaseMirror(snapshot coordstorage.Snapshot) {
 	s.leaseMu.Lock()
 	s.leaseView.Refresh(snapshot)
 	s.leaseMu.Unlock()
+}
+
+func (s *Service) rootSnapshotRefreshWindow() time.Duration {
+	if s == nil || s.rootViewTTL <= 0 {
+		return defaultRootSnapshotRefreshInterval
+	}
+	return s.rootViewTTL
+}
+
+func (s *Service) shouldReplaceRootSnapshotLocked(snapshot coordstorage.Snapshot) bool {
+	if !s.rootView.loaded {
+		return true
+	}
+	current := s.rootView.snapshot.RootToken
+	return !current.AdvancedSince(snapshot.RootToken)
+}
+
+func (s *Service) cacheRootSnapshot(snapshot coordstorage.Snapshot, refreshedAt time.Time) bool {
+	if s == nil {
+		return false
+	}
+	if refreshedAt.IsZero() {
+		nowFn := s.now
+		if nowFn == nil {
+			nowFn = time.Now
+		}
+		refreshedAt = nowFn()
+	}
+	s.rootViewMu.Lock()
+	updated := false
+	if s.shouldReplaceRootSnapshotLocked(snapshot) {
+		s.rootView.snapshot = coordstorage.CloneSnapshot(snapshot)
+		s.rootView.loaded = true
+		s.rootView.refreshedAt = refreshedAt
+		updated = true
+	}
+	s.rootViewMu.Unlock()
+	return updated
+}
+
+func (s *Service) refreshCurrentRootSnapshot(snapshot coordstorage.Snapshot) bool {
+	if s == nil {
+		return false
+	}
+	if !s.cacheRootSnapshot(snapshot, time.Time{}) {
+		return false
+	}
+	s.refreshLeaseMirror(snapshot)
+	s.setLastRootReload(nil)
+	return true
+}
+
+func (s *Service) publishRootSnapshot(snapshot coordstorage.Snapshot) {
+	if s == nil {
+		return
+	}
+	if !s.refreshCurrentRootSnapshot(snapshot) {
+		return
+	}
+	if s.cluster != nil {
+		s.cluster.ReplaceRootSnapshot(snapshot.Descriptors, snapshot.PendingPeerChanges, snapshot.PendingRangeChanges, snapshot.RootToken)
+	}
+}
+
+func (s *Service) currentRootSnapshot() (coordstorage.Snapshot, error) {
+	if s == nil || s.storage == nil {
+		return coordstorage.Snapshot{}, nil
+	}
+	nowFn := s.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	now := nowFn()
+	s.rootViewMu.RLock()
+	if s.rootView.loaded {
+		snapshot := coordstorage.CloneSnapshot(s.rootView.snapshot)
+		stale := now.Sub(s.rootView.refreshedAt) > s.rootSnapshotRefreshWindow()
+		s.rootViewMu.RUnlock()
+		if stale {
+			s.maybeRefreshRootSnapshotAsync()
+		}
+		return snapshot, nil
+	}
+	s.rootViewMu.RUnlock()
+
+	snapshot, err := s.storage.Load()
+	if err != nil {
+		s.setLastRootReload(err)
+		return coordstorage.Snapshot{}, err
+	}
+	s.refreshCurrentRootSnapshot(snapshot)
+	return coordstorage.CloneSnapshot(snapshot), nil
+}
+
+func (s *Service) maybeRefreshRootSnapshotAsync() {
+	if s == nil || s.storage == nil {
+		return
+	}
+	s.rootViewMu.Lock()
+	if s.rootView.refreshing {
+		s.rootViewMu.Unlock()
+		return
+	}
+	s.rootView.refreshing = true
+	s.rootViewMu.Unlock()
+	go func() {
+		defer func() {
+			s.rootViewMu.Lock()
+			s.rootView.refreshing = false
+			s.rootViewMu.Unlock()
+		}()
+		snapshot, err := s.storage.Load()
+		if err != nil {
+			s.setLastRootReload(err)
+			return
+		}
+		s.refreshCurrentRootSnapshot(snapshot)
+	}()
+}
+
+func (s *Service) cachedRootSnapshotStale() bool {
+	if s == nil {
+		return false
+	}
+	nowFn := s.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	now := nowFn()
+	s.rootViewMu.RLock()
+	defer s.rootViewMu.RUnlock()
+	if !s.rootView.loaded {
+		return false
+	}
+	return now.Sub(s.rootView.refreshedAt) > s.rootSnapshotRefreshWindow()
+}
+
+func (s *Service) lastRootReloadError() string {
+	if s == nil {
+		return ""
+	}
+	s.statusMu.RLock()
+	defer s.statusMu.RUnlock()
+	return s.lastRootError
 }
 
 // GetRegionByKey returns region metadata for the specified key.
@@ -575,7 +738,7 @@ func (s *Service) currentReadState() (readState, error) {
 		nowFn = time.Now
 	}
 	nowUnixNano := nowFn().UnixNano()
-	snapshot, err := s.storage.Load()
+	snapshot, err := s.currentRootSnapshot()
 	if err != nil {
 		state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE
 		state.catchUpState = coordstorage.CatchUpStateUnavailable
@@ -594,6 +757,13 @@ func (s *Service) currentReadState() (readState, error) {
 	state.rootLag = rootLag(state.currentToken, state.servedToken)
 	state.catchUpState = snapshot.CatchUpState
 	state.certGeneration = s.metadataReplyGeneration(snapshot.CoordinatorLease.CertGeneration)
+	if s.cachedRootSnapshotStale() {
+		if errText := s.lastRootReloadError(); strings.TrimSpace(errText) != "" {
+			state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE
+			state.catchUpState = coordstorage.CatchUpStateUnavailable
+			return state, errors.New(errText)
+		}
+	}
 	if state.rootLag == 0 {
 		state.catchUpState = coordstorage.CatchUpStateFresh
 		return state, nil

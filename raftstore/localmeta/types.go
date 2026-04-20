@@ -147,6 +147,7 @@ type PendingSchedulerOperation struct {
 	RegionID     uint64                        `json:"region_id"`
 	SourcePeerID uint64                        `json:"source_peer_id,omitempty"`
 	TargetPeerID uint64                        `json:"target_peer_id,omitempty"`
+	Attempts     uint32                        `json:"attempts,omitempty"`
 }
 
 func ClonePendingSchedulerOperation(op PendingSchedulerOperation) PendingSchedulerOperation {
