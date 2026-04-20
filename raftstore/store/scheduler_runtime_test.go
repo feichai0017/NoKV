@@ -80,3 +80,22 @@ func TestStoreSchedulerStatusTracksQueueDrop(t *testing.T) {
 	require.Equal(t, SchedulerModeHealthy, status.Mode)
 	require.Equal(t, uint64(1), status.DroppedOperations)
 }
+
+func TestStoreCloseReportsDroppedOperationsToScheduler(t *testing.T) {
+	sink := newTestSchedulerSink()
+	st := NewStore(Config{
+		Scheduler:          sink,
+		StoreID:            9,
+		HeartbeatInterval:  time.Hour,
+		OperationQueueSize: 8,
+		OperationInterval:  time.Hour,
+	})
+
+	st.enqueueOperation(Operation{Type: OperationLeaderTransfer, Region: 11, Source: 1, Target: 2})
+	st.Close()
+
+	stores := sink.StoreSnapshot()
+	require.Len(t, stores, 1)
+	require.Equal(t, uint64(9), stores[0].StoreID)
+	require.Equal(t, uint64(1), stores[0].DroppedOperations)
+}

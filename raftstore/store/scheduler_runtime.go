@@ -17,6 +17,9 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
+const defaultPublishRetryBackoff = 200 * time.Millisecond
+const maxPublishRetryBackoff = 5 * time.Second
+
 type schedulerRuntime struct {
 	client SchedulerClient
 
@@ -52,6 +55,8 @@ type publishRuntime struct {
 	publishTimeout   time.Duration
 	heartbeatStop    chan struct{}
 	heartbeatWG      sync.WaitGroup
+	retryBackoff     time.Duration
+	retryScheduled   bool
 }
 
 type schedulerHealth struct {
@@ -70,6 +75,11 @@ type regionEvent struct {
 	root         rootevent.Event
 	transitionID string
 	seq          uint64
+}
+
+type scheduledOp struct {
+	op    Operation
+	ready time.Time
 }
 
 func (s *Store) schedulerClient() SchedulerClient {
@@ -160,9 +170,6 @@ func (s *Store) enqueueOperation(op Operation) {
 	case s.sched.operation.input <- op:
 		s.clearLocalSchedulerDegraded()
 	default:
-		s.sched.operation.mu.Lock()
-		delete(s.sched.operation.pending, key)
-		s.sched.operation.mu.Unlock()
 		s.recordLocalSchedulerDrop(op)
 	}
 }
@@ -216,12 +223,20 @@ func (s *Store) sendHeartbeats() {
 	if s.storeID == 0 {
 		return
 	}
-	ctx, cancel := s.schedulerHeartbeatContext()
-	ops := s.schedulerClient().StoreHeartbeat(ctx, s.storeStatsSnapshot())
-	cancel()
+	ops := s.reportStoreHeartbeat()
 	for _, op := range ops {
 		s.enqueueOperation(op)
 	}
+}
+
+func (s *Store) reportStoreHeartbeat() []Operation {
+	if s == nil || s.schedulerClient() == nil || s.storeID == 0 {
+		return nil
+	}
+	ctx, cancel := s.schedulerHeartbeatContext()
+	ops := s.schedulerClient().StoreHeartbeat(ctx, s.storeStatsSnapshot())
+	cancel()
+	return ops
 }
 
 func (s *Store) enqueueRegionEvent(ev regionEvent) {
@@ -323,14 +338,23 @@ func (s *Store) flushRegionUpdates() {
 		s.clearLocalSchedulerDegraded()
 	}
 	if len(failed) == 0 {
+		s.sched.publish.mu.Lock()
+		s.sched.publish.retryBackoff = 0
+		s.sched.publish.retryScheduled = false
+		s.sched.publish.mu.Unlock()
 		return
 	}
 	s.sched.publish.mu.Lock()
 	for _, ev := range failed {
 		s.sched.publish.regionUpdates[ev.seq] = ev
 	}
+	delay := s.nextRegionFlushRetryLocked()
+	shouldSchedule := !s.sched.publish.retryScheduled
+	s.sched.publish.retryScheduled = true
 	s.sched.publish.mu.Unlock()
-	s.signalRegionFlush()
+	if shouldSchedule {
+		s.scheduleRegionFlushRetry(delay)
+	}
 }
 
 func schedulerRegionEventKey(event rootevent.Event) (uint64, bool) {
@@ -423,6 +447,7 @@ func (s *Store) stopOperationLoop() {
 	close(s.sched.operation.stop)
 	s.sched.operation.wg.Wait()
 	s.sched.operation.stop = nil
+	s.sched.operation.input = nil
 }
 
 func (s *Store) runOperationLoop() {
@@ -433,14 +458,12 @@ func (s *Store) runOperationLoop() {
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	type scheduledOp struct {
-		op    Operation
-		ready time.Time
-	}
 	var pending []scheduledOp
 	for {
 		select {
 		case <-s.sched.operation.stop:
+			s.dropQueuedOperations(flattenScheduledOps(pending), "store closing")
+			s.dropQueuedOperations(s.drainBufferedOperations(), "store closing")
 			return
 		case op := <-s.sched.operation.input:
 			pending = append(pending, scheduledOp{op: op, ready: s.nextOperationReadyTime(op)})
@@ -515,14 +538,28 @@ func (s *Store) clearLocalSchedulerDegraded() {
 }
 
 func (s *Store) recordLocalSchedulerDrop(op Operation) {
-	if s == nil {
+	s.dropQueuedOperations([]Operation{op}, "queue full")
+}
+
+func (s *Store) dropQueuedOperations(ops []Operation, reason string) {
+	if s == nil || s.sched == nil {
 		return
 	}
-	msg := fmt.Sprintf("scheduler queue full: dropped %s for region %d", op.Type.String(), op.Region)
+	if len(ops) == 0 {
+		return
+	}
 	now := time.Now()
 	s.sched.operation.mu.Lock()
-	s.sched.operation.dropped++
+	s.sched.operation.dropped += uint64(len(ops))
+	for _, op := range ops {
+		key := operationKey{region: op.Region, typeID: op.Type}
+		delete(s.sched.operation.pending, key)
+	}
 	s.sched.operation.mu.Unlock()
+	msg := fmt.Sprintf("scheduler %s: dropped %d operation(s)", reason, len(ops))
+	if len(ops) == 1 {
+		msg = fmt.Sprintf("scheduler %s: dropped %s for region %d", reason, ops[0].Type.String(), ops[0].Region)
+	}
 	s.sched.health.mu.Lock()
 	s.sched.health.degraded = true
 	s.sched.health.lastError = msg
@@ -547,16 +584,100 @@ func (s *Store) recordLocalSchedulerPublishFailure(ev regionEvent, err error) {
 }
 
 func (s *Store) storeStatsSnapshot() StoreStats {
+	if s == nil {
+		return StoreStats{}
+	}
 	stats := StoreStats{
 		StoreID:   s.storeID,
 		RegionNum: uint64(len(s.RegionMetas())),
 		LeaderNum: s.countLeaders(),
+	}
+	if s.sched != nil {
+		s.sched.operation.mu.Lock()
+		stats.DroppedOperations = s.sched.operation.dropped
+		s.sched.operation.mu.Unlock()
 	}
 	if capacity, available, ok := s.diskStats(); ok {
 		stats.Capacity = capacity
 		stats.Available = available
 	}
 	return stats
+}
+
+func flattenScheduledOps(pending []scheduledOp) []Operation {
+	if len(pending) == 0 {
+		return nil
+	}
+	out := make([]Operation, 0, len(pending))
+	for _, item := range pending {
+		out = append(out, item.op)
+	}
+	return out
+}
+
+func (s *Store) drainBufferedOperations() []Operation {
+	if s == nil || s.sched == nil || s.sched.operation.input == nil {
+		return nil
+	}
+	var drained []Operation
+	for {
+		select {
+		case op := <-s.sched.operation.input:
+			drained = append(drained, op)
+		default:
+			return drained
+		}
+	}
+}
+
+func (s *Store) nextRegionFlushRetryLocked() time.Duration {
+	if s == nil || s.sched == nil {
+		return defaultPublishRetryBackoff
+	}
+	if s.sched.publish.retryBackoff <= 0 {
+		s.sched.publish.retryBackoff = defaultPublishRetryBackoff
+		return jitterDuration(defaultPublishRetryBackoff, 20)
+	}
+	next := min(s.sched.publish.retryBackoff*2, maxPublishRetryBackoff)
+	s.sched.publish.retryBackoff = next
+	return jitterDuration(next, 20)
+}
+
+func (s *Store) scheduleRegionFlushRetry(delay time.Duration) {
+	if s == nil || s.sched == nil {
+		return
+	}
+	stop := s.sched.publish.heartbeatStop
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		if stop == nil {
+			<-timer.C
+		} else {
+			select {
+			case <-timer.C:
+			case <-stop:
+				return
+			}
+		}
+		s.sched.publish.mu.Lock()
+		s.sched.publish.retryScheduled = false
+		s.sched.publish.mu.Unlock()
+		s.signalRegionFlush()
+	}()
+}
+
+func jitterDuration(base time.Duration, percent int64) time.Duration {
+	if base <= 0 || percent <= 0 {
+		return base
+	}
+	window := percent*2 + 1
+	offsetPercent := (time.Now().UnixNano() % window) - percent
+	jittered := base + time.Duration(int64(base)*offsetPercent/100)
+	if jittered < 10*time.Millisecond {
+		return 10 * time.Millisecond
+	}
+	return jittered
 }
 
 func (s *Store) countLeaders() uint64 {

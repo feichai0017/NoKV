@@ -623,14 +623,15 @@ func (SyncHealth) EnumDescriptor() ([]byte, []int) {
 }
 
 type StoreHeartbeatRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	StoreId       uint64                 `protobuf:"varint,1,opt,name=store_id,json=storeId,proto3" json:"store_id,omitempty"`
-	RegionNum     uint64                 `protobuf:"varint,2,opt,name=region_num,json=regionNum,proto3" json:"region_num,omitempty"`
-	LeaderNum     uint64                 `protobuf:"varint,3,opt,name=leader_num,json=leaderNum,proto3" json:"leader_num,omitempty"`
-	Capacity      uint64                 `protobuf:"varint,4,opt,name=capacity,proto3" json:"capacity,omitempty"`
-	Available     uint64                 `protobuf:"varint,5,opt,name=available,proto3" json:"available,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	StoreId           uint64                 `protobuf:"varint,1,opt,name=store_id,json=storeId,proto3" json:"store_id,omitempty"`
+	RegionNum         uint64                 `protobuf:"varint,2,opt,name=region_num,json=regionNum,proto3" json:"region_num,omitempty"`
+	LeaderNum         uint64                 `protobuf:"varint,3,opt,name=leader_num,json=leaderNum,proto3" json:"leader_num,omitempty"`
+	Capacity          uint64                 `protobuf:"varint,4,opt,name=capacity,proto3" json:"capacity,omitempty"`
+	Available         uint64                 `protobuf:"varint,5,opt,name=available,proto3" json:"available,omitempty"`
+	DroppedOperations uint64                 `protobuf:"varint,6,opt,name=dropped_operations,json=droppedOperations,proto3" json:"dropped_operations,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *StoreHeartbeatRequest) Reset() {
@@ -694,6 +695,13 @@ func (x *StoreHeartbeatRequest) GetCapacity() uint64 {
 func (x *StoreHeartbeatRequest) GetAvailable() uint64 {
 	if x != nil {
 		return x.Available
+	}
+	return 0
+}
+
+func (x *StoreHeartbeatRequest) GetDroppedOperations() uint64 {
+	if x != nil {
+		return x.DroppedOperations
 	}
 	return 0
 }
@@ -2043,7 +2051,7 @@ var File_coordinator_coordinator_proto protoreflect.FileDescriptor
 
 const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\n" +
-	"\x1dcoordinator/coordinator.proto\x12\x13nokv.coordinator.v1\x1a\x15meta/descriptor.proto\x1a\x0fmeta/root.proto\"\xaa\x01\n" +
+	"\x1dcoordinator/coordinator.proto\x12\x13nokv.coordinator.v1\x1a\x15meta/descriptor.proto\x1a\x0fmeta/root.proto\"\xd9\x01\n" +
 	"\x15StoreHeartbeatRequest\x12\x19\n" +
 	"\bstore_id\x18\x01 \x01(\x04R\astoreId\x12\x1d\n" +
 	"\n" +
@@ -2051,7 +2059,8 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\n" +
 	"leader_num\x18\x03 \x01(\x04R\tleaderNum\x12\x1a\n" +
 	"\bcapacity\x18\x04 \x01(\x04R\bcapacity\x12\x1c\n" +
-	"\tavailable\x18\x05 \x01(\x04R\tavailable\"\xbe\x01\n" +
+	"\tavailable\x18\x05 \x01(\x04R\tavailable\x12-\n" +
+	"\x12dropped_operations\x18\x06 \x01(\x04R\x11droppedOperations\"\xbe\x01\n" +
 	"\x12SchedulerOperation\x12?\n" +
 	"\x04type\x18\x01 \x01(\x0e2+.nokv.coordinator.v1.SchedulerOperationTypeR\x04type\x12\x1b\n" +
 	"\tregion_id\x18\x02 \x01(\x04R\bregionId\x12$\n" +

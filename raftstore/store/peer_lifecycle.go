@@ -112,13 +112,17 @@ func (s *Store) Close() {
 	if s == nil {
 		return
 	}
-	if s.cancel != nil {
-		s.cancel()
+	if s.schedulerClient() != nil {
+		s.flushRegionUpdates()
+		s.stopHeartbeatLoop()
 	}
-	s.stopHeartbeatLoop()
 	s.stopOperationLoop()
 	if s.schedulerClient() != nil {
+		_ = s.reportStoreHeartbeat()
 		_ = s.schedulerClient().Close()
+	}
+	if s.cancel != nil {
+		s.cancel()
 	}
 }
 

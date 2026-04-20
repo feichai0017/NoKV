@@ -320,14 +320,18 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 
 	storeResp, err := svc.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
-		StoreId:   1,
-		RegionNum: 3,
-		LeaderNum: 1,
-		Capacity:  1000,
-		Available: 800,
+		StoreId:           1,
+		RegionNum:         3,
+		LeaderNum:         1,
+		Capacity:          1000,
+		Available:         800,
+		DroppedOperations: 5,
 	})
 	require.NoError(t, err)
 	require.True(t, storeResp.GetAccepted())
+	stores := svc.cluster.StoreSnapshot()
+	require.Len(t, stores, 1)
+	require.Equal(t, uint64(5), stores[0].DroppedOperations)
 
 	desc := testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
 	desc.RootEpoch = 1
@@ -1778,6 +1782,45 @@ func TestServiceCoordinatorLeaseLoopSkipsFollower(t *testing.T) {
 
 	time.Sleep(80 * time.Millisecond)
 	require.Equal(t, 0, store.campaignCalls)
+}
+
+func TestServiceCoordinatorLeaseLoopReleasesOnContextCancel(t *testing.T) {
+	store := &fakeStorage{leader: true}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureCoordinatorLease("c1", 80*time.Millisecond, 30*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		svc.RunCoordinatorLeaseLoop(ctx)
+	}()
+
+	require.Eventually(t, func() bool {
+		return store.campaignCalls >= 1
+	}, 300*time.Millisecond, 10*time.Millisecond)
+
+	cancel()
+	require.Eventually(t, func() bool {
+		return store.releaseCalls >= 1
+	}, time.Second, 10*time.Millisecond)
+	<-done
+}
+
+func TestServiceCoordinatorLeaseRetryDelayBacksOff(t *testing.T) {
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100))
+	svc.now = func() time.Time { return time.Unix(0, 123456789) }
+
+	first := svc.coordinatorLeaseRetryDelay(1)
+	fourth := svc.coordinatorLeaseRetryDelay(4)
+	sixteenth := svc.coordinatorLeaseRetryDelay(16)
+
+	require.GreaterOrEqual(t, first, 160*time.Millisecond)
+	require.LessOrEqual(t, first, 240*time.Millisecond)
+	require.GreaterOrEqual(t, fourth, 1280*time.Millisecond)
+	require.LessOrEqual(t, fourth, 1920*time.Millisecond)
+	require.GreaterOrEqual(t, sixteenth, 48*time.Second)
+	require.LessOrEqual(t, sixteenth, 60*time.Second)
 }
 
 func TestServiceReleaseCoordinatorLease(t *testing.T) {

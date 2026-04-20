@@ -16,6 +16,7 @@ message StoreHeartbeatRequest {
   uint64 leader_num = 3;
   uint64 capacity = 4;
   uint64 available = 5;
+  uint64 dropped_operations = 6;
 }
 
 enum SchedulerOperationType {
