@@ -1276,6 +1276,34 @@ func TestClientHandleRegionErrorUpdatesIndexedCache(t *testing.T) {
 	require.Equal(t, uint64(12), got.desc.RegionID)
 }
 
+func TestClientHandleRegionErrorDropsIndexedCacheWhenLeaderUnknown(t *testing.T) {
+	cli := &Client{
+		regions: make(map[uint64]*regionState),
+	}
+	cli.upsertRegionLocked(metawire.DescriptorFromProto(&metapb.RegionDescriptor{
+		RegionId: 1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers: []*metapb.RegionPeer{
+			{StoreId: 1, PeerId: 101},
+			{StoreId: 2, PeerId: 201},
+		},
+	}), 1)
+
+	err := cli.handleRegionError(1, &errorpb.RegionError{
+		NotLeader: &errorpb.NotLeader{
+			RegionId: 1,
+			Leader:   nil,
+		},
+	})
+	require.NoError(t, err)
+	require.NotContains(t, cli.regions, uint64(1))
+	require.Empty(t, cli.regionIndex)
+	_, ok := cli.regionForKeyFromCache([]byte("bravo"))
+	require.False(t, ok)
+}
+
 // Utility helpers
 
 func routeResponse(meta *metapb.RegionDescriptor) *coordpb.GetRegionByKeyResponse {

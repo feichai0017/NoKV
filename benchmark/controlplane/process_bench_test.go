@@ -66,7 +66,7 @@ func (a *rootFenceAllocator) Reserve(ctx context.Context, count uint64) (uint64,
 	next := a.current + count - 1
 	if next > a.windowHigh {
 		windowHigh := a.current + maxUint64(a.windowSize, count) - 1
-		if err := a.store.SaveAllocatorState(windowHigh, a.tsFence); err != nil {
+		if err := a.store.SaveAllocatorState(ctx, windowHigh, a.tsFence); err != nil {
 			return 0, err
 		}
 		a.windowHigh = windowHigh

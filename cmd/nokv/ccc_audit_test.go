@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"testing"
@@ -235,7 +236,7 @@ type cccAuditSeedOptions struct {
 
 func applyCCCAuditLeaseIssue(t *testing.T, store *pdstorage.RootStore, holderID string, expiresUnixNano, nowUnixNano int64, handoffFrontiers rootproto.CoordinatorDutyFrontiers, predecessorDigest string) rootstate.CoordinatorLease {
 	t.Helper()
-	state, err := store.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{
+	state, err := store.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{
 		Kind:              rootproto.CoordinatorLeaseCommandIssue,
 		HolderID:          holderID,
 		ExpiresUnixNano:   expiresUnixNano,
@@ -249,7 +250,7 @@ func applyCCCAuditLeaseIssue(t *testing.T, store *pdstorage.RootStore, holderID 
 
 func applyCCCAuditClosure(t *testing.T, store *pdstorage.RootStore, kind rootproto.CoordinatorClosureCommandKind, holderID string, nowUnixNano int64, frontiers rootproto.CoordinatorDutyFrontiers) rootstate.CoordinatorClosure {
 	t.Helper()
-	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+	state, err := store.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{
 		Kind:        kind,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
@@ -261,7 +262,7 @@ func applyCCCAuditClosure(t *testing.T, store *pdstorage.RootStore, kind rootpro
 
 func applyCCCAuditSeal(t *testing.T, store *pdstorage.RootStore, holderID string, nowUnixNano int64, frontiers rootproto.CoordinatorDutyFrontiers) rootstate.CoordinatorSeal {
 	t.Helper()
-	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+	state, err := store.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{
 		Kind:        rootproto.CoordinatorClosureCommandSeal,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
@@ -279,7 +280,7 @@ func seedCCCAuditWorkdir(t *testing.T, opts cccAuditSeedOptions) string {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, store.Close()) }()
 
-	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(testDescriptor(10, []byte("a"), []byte("z"), metaregion.Epoch{
+	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.RegionBootstrapped(testDescriptor(10, []byte("a"), []byte("z"), metaregion.Epoch{
 		Version:     1,
 		ConfVersion: 1,
 	}))))

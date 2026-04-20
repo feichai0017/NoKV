@@ -30,6 +30,12 @@ const (
 	PendingRootEventsFileName = "pending-root-events.binpb"
 )
 
+var (
+	// maxPendingRootEvents bounds the locally durable rooted-event backlog so a
+	// disconnected coordinator cannot grow restart recovery state without limit.
+	maxPendingRootEvents = 10_000
+)
+
 type diskState struct {
 	Regions           map[uint64]RegionMeta
 	RaftPointers      map[uint64]RaftLogPointer
@@ -204,6 +210,9 @@ func (s *Store) SavePendingRootEvent(event PendingRootEvent) error {
 	if s.state.PendingRootEvents == nil {
 		s.state.PendingRootEvents = make(map[uint64]PendingRootEvent)
 	}
+	if _, exists := s.state.PendingRootEvents[event.Sequence]; !exists && len(s.state.PendingRootEvents) >= maxPendingRootEvents {
+		return fmt.Errorf("raftstore/localmeta: pending rooted event limit exceeded (max=%d)", maxPendingRootEvents)
+	}
 	s.state.PendingRootEvents[event.Sequence] = ClonePendingRootEvent(event)
 	return s.persistLocked()
 }
@@ -336,6 +345,9 @@ func loadPendingRootEventCatalog(fs vfs.FS, workdir string) (map[uint64]PendingR
 			Sequence: item.GetSequence(),
 			Event:    metawire.RootEventFromProto(item.GetEvent()),
 		}
+	}
+	if len(out) > maxPendingRootEvents {
+		return nil, fmt.Errorf("raftstore/localmeta: pending rooted event catalog exceeds limit (entries=%d max=%d)", len(out), maxPendingRootEvents)
 	}
 	return out, nil
 }

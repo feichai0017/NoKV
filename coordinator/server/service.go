@@ -214,7 +214,10 @@ func (s *Service) ReloadFromStorage() error {
 }
 
 // StoreHeartbeat records store-level stats.
-func (s *Service) StoreHeartbeat(_ context.Context, req *coordpb.StoreHeartbeatRequest) (*coordpb.StoreHeartbeatResponse, error) {
+func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbeatRequest) (*coordpb.StoreHeartbeatResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "store heartbeat request is nil")
 	}
@@ -231,7 +234,7 @@ func (s *Service) StoreHeartbeat(_ context.Context, req *coordpb.StoreHeartbeatR
 		}
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	operations := s.leaseScopedStoreOperations(req.GetStoreId())
+	operations := s.leaseScopedStoreOperations(ctx, req.GetStoreId())
 	return &coordpb.StoreHeartbeatResponse{
 		Accepted:   true,
 		Operations: operations,
@@ -239,7 +242,10 @@ func (s *Service) StoreHeartbeat(_ context.Context, req *coordpb.StoreHeartbeatR
 }
 
 // RegionLiveness records one runtime heartbeat without mutating rooted truth.
-func (s *Service) RegionLiveness(_ context.Context, req *coordpb.RegionLivenessRequest) (*coordpb.RegionLivenessResponse, error) {
+func (s *Service) RegionLiveness(ctx context.Context, req *coordpb.RegionLivenessRequest) (*coordpb.RegionLivenessResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
 	if req == nil || req.GetRegionId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, "region liveness request missing region_id")
 	}
@@ -248,7 +254,10 @@ func (s *Service) RegionLiveness(_ context.Context, req *coordpb.RegionLivenessR
 }
 
 // PublishRootEvent records one explicit rooted topology truth event.
-func (s *Service) PublishRootEvent(_ context.Context, req *coordpb.PublishRootEventRequest) (*coordpb.PublishRootEventResponse, error) {
+func (s *Service) PublishRootEvent(ctx context.Context, req *coordpb.PublishRootEventRequest) (*coordpb.PublishRootEventResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
 	if req == nil || req.GetEvent() == nil {
 		return nil, status.Error(codes.InvalidArgument, "publish root event request missing event")
 	}
@@ -290,7 +299,7 @@ func (s *Service) PublishRootEvent(_ context.Context, req *coordpb.PublishRootEv
 		}
 	}
 	if s.storage != nil {
-		if err := s.storage.AppendRootEvent(event); err != nil {
+		if err := s.storage.AppendRootEvent(ctx, event); err != nil {
 			return nil, status.Error(codes.Internal, "persist root event: "+err.Error())
 		}
 		if _, err := s.reloadRootedView(false); err != nil {
@@ -328,7 +337,10 @@ func (s *Service) assessRootEventLifecycle(event rootevent.Event) (rootstate.Tra
 }
 
 // RemoveRegion deletes region metadata from the Coordinator in-memory catalog.
-func (s *Service) RemoveRegion(_ context.Context, req *coordpb.RemoveRegionRequest) (*coordpb.RemoveRegionResponse, error) {
+func (s *Service) RemoveRegion(ctx context.Context, req *coordpb.RemoveRegionRequest) (*coordpb.RemoveRegionResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "remove region request is nil")
 	}
@@ -343,7 +355,7 @@ func (s *Service) RemoveRegion(_ context.Context, req *coordpb.RemoveRegionReque
 	if !removed {
 		return &coordpb.RemoveRegionResponse{Removed: false}, nil
 	}
-	_, err := s.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
+	_, err := s.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
 		Event:                metawire.RootEventToProto(rootevent.RegionTombstoned(regionID)),
 		ExpectedClusterEpoch: req.GetExpectedClusterEpoch(),
 	})
@@ -395,7 +407,10 @@ func (s *Service) refreshLeaseMirror(snapshot coordstorage.Snapshot) {
 }
 
 // GetRegionByKey returns region metadata for the specified key.
-func (s *Service) GetRegionByKey(_ context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
+func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "get region by key request is nil")
 	}
@@ -682,7 +697,10 @@ func (s *Service) admitReadServing(freshness coordpb.Freshness, state readState)
 }
 
 // AllocID allocates one or more globally unique ids.
-func (s *Service) AllocID(_ context.Context, req *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error) {
+func (s *Service) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "alloc id request is nil")
 	}
@@ -693,10 +711,10 @@ func (s *Service) AllocID(_ context.Context, req *coordpb.AllocIDRequest) (*coor
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
-	if err := s.requireDutyAdmission(rootproto.CoordinatorDutyAllocID); err != nil {
+	if err := s.requireDutyAdmission(ctx, rootproto.CoordinatorDutyAllocID); err != nil {
 		return nil, err
 	}
-	first, err := s.reserveIDs(count)
+	first, err := s.reserveIDs(ctx, count)
 	if err != nil {
 		if errors.Is(err, idalloc.ErrInvalidBatch) {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -715,7 +733,10 @@ func (s *Service) AllocID(_ context.Context, req *coordpb.AllocIDRequest) (*coor
 }
 
 // Tso allocates one or more timestamps.
-func (s *Service) Tso(_ context.Context, req *coordpb.TsoRequest) (*coordpb.TsoResponse, error) {
+func (s *Service) Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.TsoResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "tso request is nil")
 	}
@@ -726,10 +747,10 @@ func (s *Service) Tso(_ context.Context, req *coordpb.TsoRequest) (*coordpb.TsoR
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
-	if err := s.requireDutyAdmission(rootproto.CoordinatorDutyTSO); err != nil {
+	if err := s.requireDutyAdmission(ctx, rootproto.CoordinatorDutyTSO); err != nil {
 		return nil, err
 	}
-	first, got, err := s.reserveTSO(count)
+	first, got, err := s.reserveTSO(ctx, count)
 	if err != nil {
 		if errors.Is(err, idalloc.ErrInvalidBatch) {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -826,7 +847,7 @@ func (s *Service) nextRootEpoch() (uint64, error) {
 	return maxEpoch, nil
 }
 
-func (s *Service) reserveIDs(count uint64) (uint64, error) {
+func (s *Service) reserveIDs(ctx context.Context, count uint64) (uint64, error) {
 	if s == nil {
 		return 0, nil
 	}
@@ -846,7 +867,7 @@ func (s *Service) reserveIDs(count uint64) (uint64, error) {
 		if !ok {
 			windowHigh = next
 		}
-		if err := s.storage.SaveAllocatorState(windowHigh, s.currentTSOFenceLocked()); err != nil {
+		if err := s.storage.SaveAllocatorState(ctx, windowHigh, s.currentTSOFenceLocked()); err != nil {
 			return 0, err
 		}
 		s.idWindowHigh = windowHigh
@@ -855,7 +876,7 @@ func (s *Service) reserveIDs(count uint64) (uint64, error) {
 	return current + 1, nil
 }
 
-func (s *Service) reserveTSO(count uint64) (uint64, uint64, error) {
+func (s *Service) reserveTSO(ctx context.Context, count uint64) (uint64, uint64, error) {
 	if s == nil {
 		return 0, 0, nil
 	}
@@ -875,7 +896,7 @@ func (s *Service) reserveTSO(count uint64) (uint64, uint64, error) {
 		if !ok {
 			windowHigh = next
 		}
-		if err := s.storage.SaveAllocatorState(s.currentIDFenceLocked(), windowHigh); err != nil {
+		if err := s.storage.SaveAllocatorState(ctx, s.currentIDFenceLocked(), windowHigh); err != nil {
 			return 0, 0, err
 		}
 		s.tsoWindowHigh = windowHigh
@@ -983,24 +1004,24 @@ func (s *Service) requireLeaderForWrite() error {
 	return statusNotLeader(0)
 }
 
-func (s *Service) leaseScopedStoreOperations(storeID uint64) []*coordpb.SchedulerOperation {
+func (s *Service) leaseScopedStoreOperations(ctx context.Context, storeID uint64) []*coordpb.SchedulerOperation {
 	if s == nil || !s.coordinatorLeaseEnabled() {
 		return s.planStoreOperations(storeID)
 	}
 	if s.storage != nil && !s.storage.IsLeader() {
 		return nil
 	}
-	if err := s.ensureCoordinatorLease(); err != nil {
+	if err := s.ensureCoordinatorLease(ctx); err != nil {
 		return nil
 	}
 	return s.planStoreOperations(storeID)
 }
 
-func (s *Service) requireDutyAdmission(dutyMask uint32) error {
+func (s *Service) requireDutyAdmission(ctx context.Context, dutyMask uint32) error {
 	if s == nil || !s.coordinatorLeaseEnabled() {
 		return nil
 	}
-	if err := s.ensureCoordinatorLease(); err != nil {
+	if err := s.ensureCoordinatorLease(ctx); err != nil {
 		return translateCoordinatorLeaseError(err)
 	}
 	return s.preActionGate(preActionDutyAdmission, dutyMask)
@@ -1021,7 +1042,7 @@ func (s *Service) RunCoordinatorLeaseLoop(ctx context.Context) {
 			return
 		case <-timer.C:
 			if s.storage.IsLeader() {
-				_ = s.ensureCoordinatorLease()
+				_ = s.ensureCoordinatorLease(ctx)
 			}
 			timer.Reset(s.coordinatorLeaseLoopInterval())
 		}
@@ -1031,6 +1052,10 @@ func (s *Service) RunCoordinatorLeaseLoop(ctx context.Context) {
 // ReleaseCoordinatorLease explicitly releases the current rooted coordinator
 // lease for the configured holder. It is intended for graceful shutdown.
 func (s *Service) ReleaseCoordinatorLease() error {
+	return s.releaseCoordinatorLease(context.Background())
+}
+
+func (s *Service) releaseCoordinatorLease(ctx context.Context) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
@@ -1060,7 +1085,7 @@ func (s *Service) ReleaseCoordinatorLease() error {
 	}, s.currentDescriptorRevision())
 	s.allocMu.Unlock()
 
-	if _, err := s.storage.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{
+	if _, err := s.storage.ApplyCoordinatorLease(ctx, rootproto.CoordinatorLeaseCommand{
 		Kind:             rootproto.CoordinatorLeaseCommandRelease,
 		HolderID:         holderID,
 		NowUnixNano:      nowUnixNano,
@@ -1074,6 +1099,10 @@ func (s *Service) ReleaseCoordinatorLease() error {
 // SealCoordinatorLease records one rooted closure point for the current
 // authority generation using the frontiers already consumed by this service.
 func (s *Service) SealCoordinatorLease() error {
+	return s.sealCoordinatorLease(context.Background())
+}
+
+func (s *Service) sealCoordinatorLease(ctx context.Context) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
@@ -1088,6 +1117,7 @@ func (s *Service) SealCoordinatorLease() error {
 	consumedTSOFrontier := s.tso.Current()
 	s.allocMu.Unlock()
 	return s.applyClosureCommand(
+		ctx,
 		rootproto.CoordinatorClosureCommandSeal,
 		preActionSealCurrentGeneration,
 		controlplane.Frontiers(rootstate.State{
@@ -1100,30 +1130,42 @@ func (s *Service) SealCoordinatorLease() error {
 // ConfirmCoordinatorClosure explicitly records one rooted audit confirmation
 // after a sealed generation has been covered by a successor authority instance.
 func (s *Service) ConfirmCoordinatorClosure() error {
+	return s.confirmCoordinatorClosure(context.Background())
+}
+
+func (s *Service) confirmCoordinatorClosure(ctx context.Context) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
 	if !s.storage.IsLeader() {
 		return nil
 	}
-	return s.applyClosureCommand(rootproto.CoordinatorClosureCommandConfirm, preActionLifecycleMutation, rootproto.NewCoordinatorDutyFrontiers())
+	return s.applyClosureCommand(ctx, rootproto.CoordinatorClosureCommandConfirm, preActionLifecycleMutation, rootproto.NewCoordinatorDutyFrontiers())
 }
 
 // CloseCoordinatorClosure explicitly records that the current successor
 // generation has been explicitly closed after rooted closure confirmation.
 func (s *Service) CloseCoordinatorClosure() error {
+	return s.closeCoordinatorClosure(context.Background())
+}
+
+func (s *Service) closeCoordinatorClosure(ctx context.Context) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
 	if !s.storage.IsLeader() {
 		return nil
 	}
-	return s.applyClosureCommand(rootproto.CoordinatorClosureCommandClose, preActionLifecycleMutation, rootproto.NewCoordinatorDutyFrontiers())
+	return s.applyClosureCommand(ctx, rootproto.CoordinatorClosureCommandClose, preActionLifecycleMutation, rootproto.NewCoordinatorDutyFrontiers())
 }
 
 // ReattachCoordinatorClosure explicitly records that the current successor
 // generation has been reattached after rooted close has already landed.
 func (s *Service) ReattachCoordinatorClosure() error {
+	return s.reattachCoordinatorClosure(context.Background())
+}
+
+func (s *Service) reattachCoordinatorClosure(ctx context.Context) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
@@ -1133,10 +1175,10 @@ func (s *Service) ReattachCoordinatorClosure() error {
 	if !s.storage.IsLeader() {
 		return nil
 	}
-	return s.applyClosureCommand(rootproto.CoordinatorClosureCommandReattach, preActionLifecycleMutation, rootproto.NewCoordinatorDutyFrontiers())
+	return s.applyClosureCommand(ctx, rootproto.CoordinatorClosureCommandReattach, preActionLifecycleMutation, rootproto.NewCoordinatorDutyFrontiers())
 }
 
-func (s *Service) applyClosureCommand(kind rootproto.CoordinatorClosureCommandKind, gate preActionKind, frontiers rootproto.CoordinatorDutyFrontiers) error {
+func (s *Service) applyClosureCommand(ctx context.Context, kind rootproto.CoordinatorClosureCommandKind, gate preActionKind, frontiers rootproto.CoordinatorDutyFrontiers) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
@@ -1158,7 +1200,7 @@ func (s *Service) applyClosureCommand(kind rootproto.CoordinatorClosureCommandKi
 	if err := s.preActionGate(gate, 0); err != nil {
 		return err
 	}
-	if _, err := s.storage.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+	if _, err := s.storage.ApplyCoordinatorClosure(ctx, rootproto.CoordinatorClosureCommand{
 		Kind:        kind,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
@@ -1169,7 +1211,7 @@ func (s *Service) applyClosureCommand(kind rootproto.CoordinatorClosureCommandKi
 	return s.reloadAndFenceAllocators(true)
 }
 
-func (s *Service) ensureCoordinatorLease() error {
+func (s *Service) ensureCoordinatorLease(ctx context.Context) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
@@ -1190,7 +1232,7 @@ func (s *Service) ensureCoordinatorLease() error {
 	current, seal := s.currentCoordinatorLeaseView()
 	predecessorDigest := rootstate.ResolveCoordinatorLeasePredecessorDigest(current, seal, holderID, nowUnixNano)
 
-	if _, err := s.storage.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{
+	if _, err := s.storage.ApplyCoordinatorLease(ctx, rootproto.CoordinatorLeaseCommand{
 		Kind:              rootproto.CoordinatorLeaseCommandIssue,
 		HolderID:          holderID,
 		ExpiresUnixNano:   expiresUnixNano,

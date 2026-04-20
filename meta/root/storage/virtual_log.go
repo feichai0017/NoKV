@@ -494,7 +494,7 @@ type VirtualLog interface {
 	LoadCheckpoint() (checkpoint Checkpoint, err error)
 	SaveCheckpoint(checkpoint Checkpoint) error
 	ReadCommitted(requestedOffset int64) (CommittedTail, error)
-	AppendCommitted(records ...CommittedEvent) (logEnd int64, err error)
+	AppendCommitted(ctx context.Context, records ...CommittedEvent) (logEnd int64, err error)
 	CompactCommitted(stream CommittedTail) error
 	InstallBootstrap(observed ObservedCommitted) error
 	Size() (int64, error)

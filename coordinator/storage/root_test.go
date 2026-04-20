@@ -28,8 +28,8 @@ func TestRootStorePersistsRegionsAndAllocator(t *testing.T) {
 	require.NoError(t, err)
 
 	desc := testDescriptor(11, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}})
-	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(desc)))
-	require.NoError(t, store.SaveAllocatorState(123, 456))
+	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.RegionBootstrapped(desc)))
+	require.NoError(t, store.SaveAllocatorState(context.Background(), 123, 456))
 
 	snapshot, err := store.Load()
 	require.NoError(t, err)
@@ -58,7 +58,7 @@ func TestRootStoreLoadReturnsDetachedSnapshot(t *testing.T) {
 	require.NoError(t, err)
 
 	desc := testDescriptor(12, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
-	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(desc)))
+	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.RegionBootstrapped(desc)))
 
 	snapshot, err := store.Load()
 	require.NoError(t, err)
@@ -77,8 +77,8 @@ func TestRootStoreDeleteRegion(t *testing.T) {
 	store, err := OpenRootStore(root)
 	require.NoError(t, err)
 
-	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(testDescriptor(7, []byte("x"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil))))
-	require.NoError(t, store.AppendRootEvent(rootevent.RegionTombstoned(7)))
+	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.RegionBootstrapped(testDescriptor(7, []byte("x"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil))))
+	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.RegionTombstoned(7)))
 
 	snapshot, err := store.Load()
 	require.NoError(t, err)
@@ -100,12 +100,12 @@ func TestRootStoreAppendRootEventPeerAdded(t *testing.T) {
 	require.NoError(t, err)
 
 	desc := testDescriptor(31, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
-	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(desc)))
+	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.RegionBootstrapped(desc)))
 	desc.Peers = append(desc.Peers, metaregion.Peer{StoreID: 2, PeerID: 201})
 	desc.Epoch.ConfVersion = 2
 	desc.Hash = nil
 	desc.EnsureHash()
-	require.NoError(t, store.AppendRootEvent(rootevent.PeerAdded(desc.RegionID, 2, 201, desc)))
+	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.PeerAdded(desc.RegionID, 2, 201, desc)))
 
 	events, _, err := root.ReadSince(rootstate.Cursor{})
 	require.NoError(t, err)
@@ -124,12 +124,12 @@ func TestRootStoreAppendRootEventPeerRemoved(t *testing.T) {
 	require.NoError(t, err)
 
 	desc := testDescriptor(41, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 2}, []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}})
-	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(desc)))
+	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.RegionBootstrapped(desc)))
 	desc.Peers = desc.Peers[:1]
 	desc.Epoch.ConfVersion = 3
 	desc.Hash = nil
 	desc.EnsureHash()
-	require.NoError(t, store.AppendRootEvent(rootevent.PeerRemoved(desc.RegionID, 2, 201, desc)))
+	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.PeerRemoved(desc.RegionID, 2, 201, desc)))
 
 	events, _, err := root.ReadSince(rootstate.Cursor{})
 	require.NoError(t, err)
@@ -147,14 +147,14 @@ func TestRootStoreAppendRootEventSplitCommitted(t *testing.T) {
 	require.NoError(t, err)
 
 	parent := testDescriptor(51, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
-	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(parent)))
+	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.RegionBootstrapped(parent)))
 
 	childDesc := testDescriptor(52, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 102}})
 	parent.EndKey = []byte("m")
 	parent.Epoch.Version = 2
 	parent.Hash = nil
 	parent.EnsureHash()
-	require.NoError(t, store.AppendRootEvent(rootevent.RegionSplitCommitted(51, []byte("m"), parent, childDesc)))
+	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.RegionSplitCommitted(51, []byte("m"), parent, childDesc)))
 
 	events, _, err := root.ReadSince(rootstate.Cursor{})
 	require.NoError(t, err)
@@ -174,15 +174,15 @@ func TestRootStoreAppendRootEventRegionMerged(t *testing.T) {
 
 	left := testDescriptor(61, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}})
 	right := testDescriptor(62, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 102}})
-	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(left)))
-	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(right)))
+	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.RegionBootstrapped(left)))
+	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.RegionBootstrapped(right)))
 
 	left.EndKey = []byte("z")
 	left.Epoch.Version = 2
 	left.Hash = nil
 	left.EnsureHash()
 	mergedDesc := left
-	require.NoError(t, store.AppendRootEvent(rootevent.RegionMerged(61, 62, mergedDesc)))
+	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.RegionMerged(61, 62, mergedDesc)))
 
 	events, _, err := root.ReadSince(rootstate.Cursor{})
 	require.NoError(t, err)
@@ -199,7 +199,7 @@ func TestOpenRootLocalStoreCreatesMetadataRootFiles(t *testing.T) {
 	store, err := OpenRootLocalStore(dir)
 	require.NoError(t, err)
 
-	require.NoError(t, store.SaveAllocatorState(9, 17))
+	require.NoError(t, store.SaveAllocatorState(context.Background(), 9, 17))
 
 	snapshot, err := store.Load()
 	require.NoError(t, err)
@@ -521,7 +521,7 @@ func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch, peers 
 }
 
 func campaignLease(store *RootStore, holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence, descriptorRevision uint64, predecessorDigest string) (rootstate.CoordinatorLease, error) {
-	state, err := store.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{
+	state, err := store.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{
 		Kind:              rootproto.CoordinatorLeaseCommandIssue,
 		HolderID:          holderID,
 		ExpiresUnixNano:   expiresUnixNano,
@@ -533,7 +533,7 @@ func campaignLease(store *RootStore, holderID string, expiresUnixNano, nowUnixNa
 }
 
 func releaseLease(store *RootStore, holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
-	state, err := store.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{
+	state, err := store.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{
 		Kind:             rootproto.CoordinatorLeaseCommandRelease,
 		HolderID:         holderID,
 		NowUnixNano:      nowUnixNano,
@@ -543,7 +543,7 @@ func releaseLease(store *RootStore, holderID string, nowUnixNano int64, idFence,
 }
 
 func sealLease(store *RootStore, holderID string, nowUnixNano int64, frontiers rootproto.CoordinatorDutyFrontiers) (rootstate.CoordinatorSeal, error) {
-	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+	state, err := store.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{
 		Kind:        rootproto.CoordinatorClosureCommandSeal,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
@@ -553,7 +553,7 @@ func sealLease(store *RootStore, holderID string, nowUnixNano int64, frontiers r
 }
 
 func confirmClosure(store *RootStore, holderID string, nowUnixNano int64) (rootstate.CoordinatorClosure, error) {
-	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+	state, err := store.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{
 		Kind:        rootproto.CoordinatorClosureCommandConfirm,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
@@ -562,7 +562,7 @@ func confirmClosure(store *RootStore, holderID string, nowUnixNano int64) (roots
 }
 
 func closeClosure(store *RootStore, holderID string, nowUnixNano int64) (rootstate.CoordinatorClosure, error) {
-	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+	state, err := store.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{
 		Kind:        rootproto.CoordinatorClosureCommandClose,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
@@ -571,7 +571,7 @@ func closeClosure(store *RootStore, holderID string, nowUnixNano int64) (rootsta
 }
 
 func reattachClosure(store *RootStore, holderID string, nowUnixNano int64) (rootstate.CoordinatorClosure, error) {
-	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+	state, err := store.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{
 		Kind:        rootproto.CoordinatorClosureCommandReattach,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
@@ -610,11 +610,11 @@ func (s *stubRootBackend) Snapshot() (rootstate.Snapshot, error) {
 	return rootstate.CloneSnapshot(s.snapshot), nil
 }
 
-func (*stubRootBackend) Append(...rootevent.Event) (rootstate.CommitInfo, error) {
+func (*stubRootBackend) Append(context.Context, ...rootevent.Event) (rootstate.CommitInfo, error) {
 	return rootstate.CommitInfo{}, nil
 }
 
-func (*stubRootBackend) FenceAllocator(rootstate.AllocatorKind, uint64) (uint64, error) {
+func (*stubRootBackend) FenceAllocator(context.Context, rootstate.AllocatorKind, uint64) (uint64, error) {
 	return 0, nil
 }
 
@@ -648,7 +648,7 @@ func (s *stubRootBackend) LeaderID() uint64 {
 	return s.leaderIDValue
 }
 
-func (s *stubRootBackend) ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *stubRootBackend) ApplyCoordinatorLease(_ context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
 	switch cmd.Kind {
 	case rootproto.CoordinatorLeaseCommandIssue:
 		s.leaseCampaignCalls++
@@ -664,7 +664,7 @@ func (s *stubRootBackend) ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseCo
 	return rootstate.CoordinatorProtocolState{Lease: s.lease}, nil
 }
 
-func (s *stubRootBackend) ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *stubRootBackend) ApplyCoordinatorClosure(_ context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
 	switch cmd.Kind {
 	case rootproto.CoordinatorClosureCommandSeal:
 		s.leaseSealCalls++

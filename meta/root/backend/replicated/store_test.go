@@ -18,7 +18,7 @@ import (
 )
 
 func campaignLease(store *Store, holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence, descriptorRevision uint64, predecessorDigest string) (rootstate.CoordinatorLease, error) {
-	state, err := store.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{
+	state, err := store.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{
 		Kind:              rootproto.CoordinatorLeaseCommandIssue,
 		HolderID:          holderID,
 		ExpiresUnixNano:   expiresUnixNano,
@@ -30,7 +30,7 @@ func campaignLease(store *Store, holderID string, expiresUnixNano, nowUnixNano i
 }
 
 func releaseLease(store *Store, holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
-	state, err := store.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{
+	state, err := store.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{
 		Kind:             rootproto.CoordinatorLeaseCommandRelease,
 		HolderID:         holderID,
 		NowUnixNano:      nowUnixNano,
@@ -40,7 +40,7 @@ func releaseLease(store *Store, holderID string, nowUnixNano int64, idFence, tso
 }
 
 func sealLease(store *Store, holderID string, nowUnixNano int64, frontiers rootproto.CoordinatorDutyFrontiers) (rootstate.CoordinatorSeal, error) {
-	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+	state, err := store.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{
 		Kind:        rootproto.CoordinatorClosureCommandSeal,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
@@ -50,7 +50,7 @@ func sealLease(store *Store, holderID string, nowUnixNano int64, frontiers rootp
 }
 
 func confirmClosure(store *Store, holderID string, nowUnixNano int64) (rootstate.CoordinatorClosure, error) {
-	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+	state, err := store.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{
 		Kind:        rootproto.CoordinatorClosureCommandConfirm,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
@@ -59,7 +59,7 @@ func confirmClosure(store *Store, holderID string, nowUnixNano int64) (rootstate
 }
 
 func closeClosure(store *Store, holderID string, nowUnixNano int64) (rootstate.CoordinatorClosure, error) {
-	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+	state, err := store.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{
 		Kind:        rootproto.CoordinatorClosureCommandClose,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
@@ -68,7 +68,7 @@ func closeClosure(store *Store, holderID string, nowUnixNano int64) (rootstate.C
 }
 
 func reattachClosure(store *Store, holderID string, nowUnixNano int64) (rootstate.CoordinatorClosure, error) {
-	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+	state, err := store.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{
 		Kind:        rootproto.CoordinatorClosureCommandReattach,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
@@ -79,7 +79,7 @@ func reattachClosure(store *Store, holderID string, nowUnixNano int64) (rootstat
 func TestReplicatedStoreAppendAndReopen(t *testing.T) {
 	stores, drivers, leaderID := openNetworkTestCluster(t, 4)
 
-	commit, err := stores[leaderID].Append(
+	commit, err := stores[leaderID].Append(context.Background(),
 		rootevent.StoreJoined(1, "s1"),
 		rootevent.RegionDescriptorPublished(testDescriptor(10, []byte("a"), []byte("z"))),
 	)
@@ -107,7 +107,7 @@ func TestReplicatedStoreRequiresLogAndCheckpoint(t *testing.T) {
 func TestReplicatedStoreInstallBootstrapReplacesState(t *testing.T) {
 	stores, drivers, leaderID := openNetworkTestCluster(t, 4)
 
-	_, err := stores[leaderID].Append(
+	_, err := stores[leaderID].Append(context.Background(),
 		rootevent.RegionDescriptorPublished(testDescriptor(10, []byte("a"), []byte("b"))),
 	)
 	require.NoError(t, err)
@@ -176,7 +176,7 @@ func TestReplicatedStoreWaitForTailTracksFollowerAdvance(t *testing.T) {
 		waitDone <- advance
 	}()
 
-	commit, err := stores[leaderID].Append(
+	commit, err := stores[leaderID].Append(context.Background(),
 		rootevent.RegionDescriptorPublished(testDescriptor(77, []byte("a"), []byte("z"))),
 	)
 	require.NoError(t, err)
@@ -202,7 +202,7 @@ func TestNetworkDriverWaitForTailReturnsObservedStateOnClose(t *testing.T) {
 		followerID = 2
 	}
 
-	commit, err := stores[leaderID].Append(
+	commit, err := stores[leaderID].Append(context.Background(),
 		rootevent.RegionDescriptorPublished(testDescriptor(91, []byte("a"), []byte("z"))),
 	)
 	require.NoError(t, err)
@@ -242,7 +242,7 @@ func TestReplicatedStoreLeaderAndTailWrappers(t *testing.T) {
 	subscription := stores[followerID].SubscribeTail(rootstorage.TailToken{})
 	require.NotNil(t, subscription)
 
-	commit, err := stores[leaderID].Append(
+	commit, err := stores[leaderID].Append(context.Background(),
 		rootevent.RegionDescriptorPublished(testDescriptor(101, []byte("a"), []byte("z"))),
 	)
 	require.NoError(t, err)
@@ -265,19 +265,19 @@ func TestReplicatedStoreFenceAllocator(t *testing.T) {
 		followerID = 2
 	}
 
-	idFence, err := stores[leaderID].FenceAllocator(rootstate.AllocatorKindID, 123)
+	idFence, err := stores[leaderID].FenceAllocator(context.Background(), rootstate.AllocatorKindID, 123)
 	require.NoError(t, err)
 	require.Equal(t, uint64(123), idFence)
 
-	tsoFence, err := stores[leaderID].FenceAllocator(rootstate.AllocatorKindTSO, 456)
+	tsoFence, err := stores[leaderID].FenceAllocator(context.Background(), rootstate.AllocatorKindTSO, 456)
 	require.NoError(t, err)
 	require.Equal(t, uint64(456), tsoFence)
 
-	idFence, err = stores[leaderID].FenceAllocator(rootstate.AllocatorKindID, 120)
+	idFence, err = stores[leaderID].FenceAllocator(context.Background(), rootstate.AllocatorKindID, 120)
 	require.NoError(t, err)
 	require.Equal(t, uint64(123), idFence)
 
-	_, err = stores[leaderID].FenceAllocator(rootstate.AllocatorKind(99), 1)
+	_, err = stores[leaderID].FenceAllocator(context.Background(), rootstate.AllocatorKind(99), 1)
 	require.Error(t, err)
 
 	require.Eventually(t, func() bool {
@@ -328,7 +328,7 @@ func TestReplicatedStoreConfirmCoordinatorClosure(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 	desc := testDescriptor(1, []byte("a"), []byte("z"))
 	desc.RootEpoch = 56
-	_, err := stores[leaderID].Append(rootevent.RegionDescriptorPublished(desc))
+	_, err := stores[leaderID].Append(context.Background(), rootevent.RegionDescriptorPublished(desc))
 	require.NoError(t, err)
 
 	_, err = campaignLease(stores[leaderID], "c1", 1_000, 100, 10, 20, 56, "")
@@ -353,7 +353,7 @@ func TestReplicatedStoreReattachCoordinatorClosure(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 	desc := testDescriptor(1, []byte("a"), []byte("z"))
 	desc.RootEpoch = 56
-	_, err := stores[leaderID].Append(rootevent.RegionDescriptorPublished(desc))
+	_, err := stores[leaderID].Append(context.Background(), rootevent.RegionDescriptorPublished(desc))
 	require.NoError(t, err)
 
 	_, err = campaignLease(stores[leaderID], "c1", 1_000, 100, 10, 20, 56, "")

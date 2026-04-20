@@ -39,8 +39,8 @@ func TestClientRoundTripThroughCoordinatorRootStore(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 
 	desc := testDescriptor(11, []byte("a"), []byte("z"))
-	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(desc)))
-	require.NoError(t, store.SaveAllocatorState(100, 200))
+	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.RegionBootstrapped(desc)))
+	require.NoError(t, store.SaveAllocatorState(context.Background(), 100, 200))
 
 	snapshot, err := store.Load()
 	require.NoError(t, err)
@@ -62,12 +62,12 @@ func TestServiceRejectsFollowerWritesWithLeaderHint(t *testing.T) {
 	backend := &followerBackend{leaderID: 7}
 	client := openBufconnClient(t, backend)
 
-	_, err := client.Append(rootevent.IDAllocatorFenced(10))
+	_, err := client.Append(context.Background(), rootevent.IDAllocatorFenced(10))
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 	require.True(t, strings.Contains(err.Error(), "leader_id=7"))
 
-	_, err = client.FenceAllocator(rootstate.AllocatorKindID, 10)
+	_, err = client.FenceAllocator(context.Background(), rootstate.AllocatorKindID, 10)
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 	require.True(t, strings.Contains(err.Error(), "leader_id=7"))
@@ -116,9 +116,9 @@ func TestClientRetriesWriteOnLeaderHint(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, client.Close()) })
 
 	desc := testDescriptor(21, []byte("a"), []byte("z"))
-	_, err = client.Append(rootevent.RegionBootstrapped(desc))
+	_, err = client.Append(context.Background(), rootevent.RegionBootstrapped(desc))
 	require.NoError(t, err)
-	current, err := client.FenceAllocator(rootstate.AllocatorKindID, 77)
+	current, err := client.FenceAllocator(context.Background(), rootstate.AllocatorKindID, 77)
 	require.NoError(t, err)
 	require.Equal(t, uint64(77), current)
 
@@ -135,7 +135,7 @@ func TestClientCampaignCoordinatorLease(t *testing.T) {
 	require.NoError(t, err)
 	client := openBufconnClient(t, backend)
 
-	leaseState, err := client.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{
+	leaseState, err := client.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{
 		Kind:             rootproto.CoordinatorLeaseCommandIssue,
 		HolderID:         "c1",
 		ExpiresUnixNano:  1_000,
@@ -149,7 +149,7 @@ func TestClientCampaignCoordinatorLease(t *testing.T) {
 	require.Equal(t, uint32(rootproto.CoordinatorDutyMaskDefault), lease.DutyMask)
 	require.NotEqual(t, rootstate.Cursor{}, lease.IssuedCursor)
 
-	heldState, err := client.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{
+	heldState, err := client.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{
 		Kind:             rootproto.CoordinatorLeaseCommandIssue,
 		HolderID:         "c2",
 		ExpiresUnixNano:  1_500,
@@ -161,7 +161,7 @@ func TestClientCampaignCoordinatorLease(t *testing.T) {
 	held := heldState.Lease
 	require.Equal(t, "c1", held.HolderID)
 
-	leaseState, err = client.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{
+	leaseState, err = client.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{
 		Kind:             rootproto.CoordinatorLeaseCommandIssue,
 		HolderID:         "c2",
 		ExpiresUnixNano:  2_000,
@@ -179,10 +179,10 @@ func TestClientReleaseCoordinatorLease(t *testing.T) {
 	require.NoError(t, err)
 	client := openBufconnClient(t, backend)
 
-	_, err = client.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{Kind: rootproto.CoordinatorLeaseCommandIssue, HolderID: "c1", ExpiresUnixNano: 1_000, NowUnixNano: 100, HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 30)})
+	_, err = client.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{Kind: rootproto.CoordinatorLeaseCommandIssue, HolderID: "c1", ExpiresUnixNano: 1_000, NowUnixNano: 100, HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 30)})
 	require.NoError(t, err)
 
-	leaseState, err := client.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{Kind: rootproto.CoordinatorLeaseCommandRelease, HolderID: "c1", NowUnixNano: 200, HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: 30, TSOFence: 40}, 0)})
+	leaseState, err := client.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{Kind: rootproto.CoordinatorLeaseCommandRelease, HolderID: "c1", NowUnixNano: 200, HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: 30, TSOFence: 40}, 0)})
 	require.NoError(t, err)
 	lease := leaseState.Lease
 	require.Equal(t, "c1", lease.HolderID)
@@ -195,10 +195,10 @@ func TestClientSealCoordinatorLease(t *testing.T) {
 	require.NoError(t, err)
 	client := openBufconnClient(t, backend)
 
-	_, err = client.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{Kind: rootproto.CoordinatorLeaseCommandIssue, HolderID: "c1", ExpiresUnixNano: 1_000, NowUnixNano: 100, HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 30)})
+	_, err = client.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{Kind: rootproto.CoordinatorLeaseCommandIssue, HolderID: "c1", ExpiresUnixNano: 1_000, NowUnixNano: 100, HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 30)})
 	require.NoError(t, err)
 
-	sealState, err := client.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{Kind: rootproto.CoordinatorClosureCommandSeal, HolderID: "c1", NowUnixNano: 200, Frontiers: controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56)})
+	sealState, err := client.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{Kind: rootproto.CoordinatorClosureCommandSeal, HolderID: "c1", NowUnixNano: 200, Frontiers: controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56)})
 	require.NoError(t, err)
 	seal := sealState.Seal
 	require.Equal(t, "c1", seal.HolderID)
@@ -215,20 +215,20 @@ func TestClientConfirmCoordinatorClosure(t *testing.T) {
 	require.NoError(t, err)
 	desc := testDescriptor(1, []byte("a"), []byte("z"))
 	desc.RootEpoch = 56
-	_, err = backend.Append(rootevent.RegionDescriptorPublished(desc))
+	_, err = backend.Append(context.Background(), rootevent.RegionDescriptorPublished(desc))
 	require.NoError(t, err)
 	client := openBufconnClient(t, backend)
 
-	_, err = client.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{Kind: rootproto.CoordinatorLeaseCommandIssue, HolderID: "c1", ExpiresUnixNano: 1_000, NowUnixNano: 100, HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 56)})
+	_, err = client.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{Kind: rootproto.CoordinatorLeaseCommandIssue, HolderID: "c1", ExpiresUnixNano: 1_000, NowUnixNano: 100, HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 56)})
 	require.NoError(t, err)
-	sealState, err := client.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{Kind: rootproto.CoordinatorClosureCommandSeal, HolderID: "c1", NowUnixNano: 200, Frontiers: controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56)})
+	sealState, err := client.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{Kind: rootproto.CoordinatorClosureCommandSeal, HolderID: "c1", NowUnixNano: 200, Frontiers: controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56)})
 	require.NoError(t, err)
 	seal := sealState.Seal
-	leaseState, err := client.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{Kind: rootproto.CoordinatorLeaseCommandIssue, HolderID: "c1", ExpiresUnixNano: 1_200, NowUnixNano: 250, PredecessorDigest: rootstate.CoordinatorSealDigest(seal), HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56)})
+	leaseState, err := client.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{Kind: rootproto.CoordinatorLeaseCommandIssue, HolderID: "c1", ExpiresUnixNano: 1_200, NowUnixNano: 250, PredecessorDigest: rootstate.CoordinatorSealDigest(seal), HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56)})
 	require.NoError(t, err)
 	lease := leaseState.Lease
 
-	closureState, err := client.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{Kind: rootproto.CoordinatorClosureCommandConfirm, HolderID: "c1", NowUnixNano: 260})
+	closureState, err := client.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{Kind: rootproto.CoordinatorClosureCommandConfirm, HolderID: "c1", NowUnixNano: 260})
 	require.NoError(t, err)
 	audit := closureState.Closure
 	require.Equal(t, "c1", audit.HolderID)
@@ -243,28 +243,28 @@ func TestClientReattachCoordinatorClosure(t *testing.T) {
 	require.NoError(t, err)
 	desc := testDescriptor(1, []byte("a"), []byte("z"))
 	desc.RootEpoch = 56
-	_, err = backend.Append(rootevent.RegionDescriptorPublished(desc))
+	_, err = backend.Append(context.Background(), rootevent.RegionDescriptorPublished(desc))
 	require.NoError(t, err)
 	client := openBufconnClient(t, backend)
 
-	_, err = client.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{Kind: rootproto.CoordinatorLeaseCommandIssue, HolderID: "c1", ExpiresUnixNano: 1_000, NowUnixNano: 100, HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 56)})
+	_, err = client.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{Kind: rootproto.CoordinatorLeaseCommandIssue, HolderID: "c1", ExpiresUnixNano: 1_000, NowUnixNano: 100, HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 56)})
 	require.NoError(t, err)
-	sealState, err := client.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{Kind: rootproto.CoordinatorClosureCommandSeal, HolderID: "c1", NowUnixNano: 200, Frontiers: controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56)})
+	sealState, err := client.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{Kind: rootproto.CoordinatorClosureCommandSeal, HolderID: "c1", NowUnixNano: 200, Frontiers: controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56)})
 	require.NoError(t, err)
 	seal := sealState.Seal
-	leaseState, err := client.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{Kind: rootproto.CoordinatorLeaseCommandIssue, HolderID: "c1", ExpiresUnixNano: 1_200, NowUnixNano: 250, PredecessorDigest: rootstate.CoordinatorSealDigest(seal), HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56)})
+	leaseState, err := client.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{Kind: rootproto.CoordinatorLeaseCommandIssue, HolderID: "c1", ExpiresUnixNano: 1_200, NowUnixNano: 250, PredecessorDigest: rootstate.CoordinatorSealDigest(seal), HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56)})
 	require.NoError(t, err)
 	lease := leaseState.Lease
 
-	_, err = client.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{Kind: rootproto.CoordinatorClosureCommandReattach, HolderID: "c1", NowUnixNano: 255})
+	_, err = client.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{Kind: rootproto.CoordinatorClosureCommandReattach, HolderID: "c1", NowUnixNano: 255})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 
-	auditState, err := client.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{Kind: rootproto.CoordinatorClosureCommandConfirm, HolderID: "c1", NowUnixNano: 260})
+	auditState, err := client.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{Kind: rootproto.CoordinatorClosureCommandConfirm, HolderID: "c1", NowUnixNano: 260})
 	require.NoError(t, err)
-	closeState, err := client.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{Kind: rootproto.CoordinatorClosureCommandClose, HolderID: "c1", NowUnixNano: 265})
+	closeState, err := client.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{Kind: rootproto.CoordinatorClosureCommandClose, HolderID: "c1", NowUnixNano: 265})
 	require.NoError(t, err)
-	reattachState, err := client.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{Kind: rootproto.CoordinatorClosureCommandReattach, HolderID: "c1", NowUnixNano: 270})
+	reattachState, err := client.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{Kind: rootproto.CoordinatorClosureCommandReattach, HolderID: "c1", NowUnixNano: 270})
 	require.NoError(t, err)
 	audit := auditState.Closure
 	closeRecord := closeState.Closure
@@ -350,11 +350,11 @@ func (f *followerBackend) Snapshot() (rootstate.Snapshot, error) {
 	return rootstate.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
 }
 
-func (f *followerBackend) Append(...rootevent.Event) (rootstate.CommitInfo, error) {
+func (f *followerBackend) Append(context.Context, ...rootevent.Event) (rootstate.CommitInfo, error) {
 	return rootstate.CommitInfo{}, nil
 }
 
-func (f *followerBackend) FenceAllocator(rootstate.AllocatorKind, uint64) (uint64, error) {
+func (f *followerBackend) FenceAllocator(context.Context, rootstate.AllocatorKind, uint64) (uint64, error) {
 	return 0, nil
 }
 

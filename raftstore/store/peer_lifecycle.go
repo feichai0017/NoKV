@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 
@@ -290,9 +291,15 @@ func (s *Store) InstallRegionSnapshot(snap myraft.Snapshot) (localmeta.RegionMet
 // InstallRegionSSTSnapshot installs one migration-only SST snapshot payload on
 // the local store. The raft snapshot metadata is applied to the peer storage
 // first, then SST files are ingested before the peer is published.
-func (s *Store) InstallRegionSSTSnapshot(snap myraft.Snapshot, meta localmeta.RegionMeta, install func() (func() error, error)) (localmeta.RegionMeta, error) {
+func (s *Store) InstallRegionSSTSnapshot(ctx context.Context, snap myraft.Snapshot, meta localmeta.RegionMeta, install func() (func() error, error)) (localmeta.RegionMeta, error) {
 	if s == nil {
 		return localmeta.RegionMeta{}, errNilStore
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return localmeta.RegionMeta{}, err
 	}
 	if myraft.IsEmptySnap(snap) {
 		return localmeta.RegionMeta{}, errInstallRegionSSTRequiresSnapshot
@@ -344,6 +351,10 @@ func (s *Store) InstallRegionSSTSnapshot(snap myraft.Snapshot, meta localmeta.Re
 		_ = p.Close()
 		return localmeta.RegionMeta{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		_ = p.Close()
+		return localmeta.RegionMeta{}, err
+	}
 	rollback, err := install()
 	if err != nil {
 		_ = p.Close()
@@ -355,6 +366,11 @@ func (s *Store) InstallRegionSSTSnapshot(snap myraft.Snapshot, meta localmeta.Re
 		}
 	}
 	p.ApplyRegionMetaMirror(meta)
+	if err := ctx.Err(); err != nil {
+		cleanup()
+		_ = p.Close()
+		return localmeta.RegionMeta{}, err
+	}
 	if failpoints.ShouldFailAfterSnapshotApplyBeforePublish() {
 		cleanup()
 		_ = p.Close()
