@@ -177,7 +177,7 @@ func newCoordinatorLeaseEvent(holderID string, expiresUnixNano int64, certGenera
 			CertGeneration:    certGeneration,
 			DutyMask:          dutyMask,
 			PredecessorDigest: predecessorDigest,
-			Frontiers:         rootproto.CloneDutyFrontiers(frontiers),
+			Frontiers:         frontiers,
 		},
 	}
 }
@@ -189,7 +189,7 @@ func CoordinatorLeaseSealed(holderID string, certGeneration uint64, dutyMask uin
 			HolderID:       holderID,
 			CertGeneration: certGeneration,
 			DutyMask:       dutyMask,
-			Frontiers:      rootproto.CloneDutyFrontiers(frontiers),
+			Frontiers:      frontiers,
 		},
 	}
 }

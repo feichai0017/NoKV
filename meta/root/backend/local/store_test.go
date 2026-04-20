@@ -19,8 +19,8 @@ import (
 )
 
 func campaignLease(store *Store, holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence, descriptorRevision uint64, predecessorDigest string) (rootstate.CoordinatorLease, error) {
-	state, err := store.ApplyCoordinatorLease(rootstate.CoordinatorLeaseCommand{
-		Kind:              rootstate.CoordinatorLeaseCommandIssue,
+	state, err := store.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{
+		Kind:              rootproto.CoordinatorLeaseCommandIssue,
 		HolderID:          holderID,
 		ExpiresUnixNano:   expiresUnixNano,
 		NowUnixNano:       nowUnixNano,
@@ -31,8 +31,8 @@ func campaignLease(store *Store, holderID string, expiresUnixNano, nowUnixNano i
 }
 
 func releaseLease(store *Store, holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
-	state, err := store.ApplyCoordinatorLease(rootstate.CoordinatorLeaseCommand{
-		Kind:             rootstate.CoordinatorLeaseCommandRelease,
+	state, err := store.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{
+		Kind:             rootproto.CoordinatorLeaseCommandRelease,
 		HolderID:         holderID,
 		NowUnixNano:      nowUnixNano,
 		HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, 0),
@@ -41,8 +41,8 @@ func releaseLease(store *Store, holderID string, nowUnixNano int64, idFence, tso
 }
 
 func sealLease(store *Store, holderID string, nowUnixNano int64, frontiers rootproto.CoordinatorDutyFrontiers) (rootstate.CoordinatorSeal, error) {
-	state, err := store.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
-		Kind:        rootstate.CoordinatorClosureCommandSeal,
+	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+		Kind:        rootproto.CoordinatorClosureCommandSeal,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 		Frontiers:   frontiers,
@@ -51,8 +51,8 @@ func sealLease(store *Store, holderID string, nowUnixNano int64, frontiers rootp
 }
 
 func confirmClosure(store *Store, holderID string, nowUnixNano int64) (rootstate.CoordinatorClosure, error) {
-	state, err := store.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
-		Kind:        rootstate.CoordinatorClosureCommandConfirm,
+	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+		Kind:        rootproto.CoordinatorClosureCommandConfirm,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 	})
@@ -60,8 +60,8 @@ func confirmClosure(store *Store, holderID string, nowUnixNano int64) (rootstate
 }
 
 func closeClosure(store *Store, holderID string, nowUnixNano int64) (rootstate.CoordinatorClosure, error) {
-	state, err := store.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
-		Kind:        rootstate.CoordinatorClosureCommandClose,
+	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+		Kind:        rootproto.CoordinatorClosureCommandClose,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 	})
@@ -69,8 +69,8 @@ func closeClosure(store *Store, holderID string, nowUnixNano int64) (rootstate.C
 }
 
 func reattachClosure(store *Store, holderID string, nowUnixNano int64) (rootstate.CoordinatorClosure, error) {
-	state, err := store.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
-		Kind:        rootstate.CoordinatorClosureCommandReattach,
+	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+		Kind:        rootproto.CoordinatorClosureCommandReattach,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 	})

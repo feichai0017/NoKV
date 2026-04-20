@@ -9,6 +9,7 @@ import (
 	"time"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -176,7 +177,7 @@ func (c *Client) LeaderID() uint64 {
 	return status.GetLeaderId()
 }
 
-func (c *Client) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (c *Client) ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
 	if !validCoordinatorLeaseCommandKind(cmd.Kind) {
 		return rootstate.CoordinatorProtocolState{}, rootstate.ErrInvalidCoordinatorLease
 	}
@@ -189,14 +190,14 @@ func (c *Client) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (r
 		return rootstate.CoordinatorProtocolState{}, err
 	}
 	protocolState := metawire.RootCoordinatorProtocolStateFromProto(resp.GetState())
-	if cmd.Kind == rootstate.CoordinatorLeaseCommandIssue &&
+	if cmd.Kind == rootproto.CoordinatorLeaseCommandIssue &&
 		resp.GetStatus() == metapb.RootCoordinatorLeaseApplyStatus_ROOT_COORDINATOR_LEASE_APPLY_STATUS_HELD {
 		return protocolState, rootstate.ErrCoordinatorLeaseHeld
 	}
 	return protocolState, nil
 }
 
-func (c *Client) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (c *Client) ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
 	if !validCoordinatorClosureCommandKind(cmd.Kind) {
 		return rootstate.CoordinatorProtocolState{}, rootstate.ErrCoordinatorLeaseAudit
 	}
@@ -369,21 +370,21 @@ func dialEndpoint(ctx context.Context, target string, opts ...grpc.DialOption) (
 	return conn, nil
 }
 
-func validCoordinatorLeaseCommandKind(kind rootstate.CoordinatorLeaseCommandKind) bool {
+func validCoordinatorLeaseCommandKind(kind rootproto.CoordinatorLeaseCommandKind) bool {
 	switch kind {
-	case rootstate.CoordinatorLeaseCommandIssue, rootstate.CoordinatorLeaseCommandRelease:
+	case rootproto.CoordinatorLeaseCommandIssue, rootproto.CoordinatorLeaseCommandRelease:
 		return true
 	default:
 		return false
 	}
 }
 
-func validCoordinatorClosureCommandKind(kind rootstate.CoordinatorClosureCommandKind) bool {
+func validCoordinatorClosureCommandKind(kind rootproto.CoordinatorClosureCommandKind) bool {
 	switch kind {
-	case rootstate.CoordinatorClosureCommandSeal,
-		rootstate.CoordinatorClosureCommandConfirm,
-		rootstate.CoordinatorClosureCommandClose,
-		rootstate.CoordinatorClosureCommandReattach:
+	case rootproto.CoordinatorClosureCommandSeal,
+		rootproto.CoordinatorClosureCommandConfirm,
+		rootproto.CoordinatorClosureCommandClose,
+		rootproto.CoordinatorClosureCommandReattach:
 		return true
 	default:
 		return false

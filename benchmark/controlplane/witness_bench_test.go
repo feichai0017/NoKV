@@ -97,13 +97,21 @@ func BenchmarkControlPlaneMetadataWitnessTax(b *testing.B) {
 
 func witnessBenchmarkVariants() []witnessBenchmarkVariant {
 	return []witnessBenchmarkVariant{
-		{name: string(coordablation.PresetFull), ablation: coordablation.PresetFull.Config()},
-		{name: string(coordablation.PresetClientBlind), ablation: coordablation.PresetClientBlind.Config()},
+		{name: string(coordablation.PresetFull), ablation: mustWitnessPresetConfig(coordablation.PresetFull)},
+		{name: string(coordablation.PresetClientBlind), ablation: mustWitnessPresetConfig(coordablation.PresetClientBlind)},
 		{
 			name:     string(coordablation.PresetReplyBlindClientBlind),
-			ablation: coordablation.PresetReplyBlindClientBlind.Config(),
+			ablation: mustWitnessPresetConfig(coordablation.PresetReplyBlindClientBlind),
 		},
 	}
+}
+
+func mustWitnessPresetConfig(preset coordablation.Preset) coordablation.Config {
+	cfg, err := preset.Config()
+	if err != nil {
+		panic(err)
+	}
+	return cfg
 }
 
 func openWitnessBenchmarkHarness(b *testing.B, cfg coordablation.Config) *witnessBenchmarkHarness {

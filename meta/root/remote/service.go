@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -38,8 +39,8 @@ type tailBackend interface {
 }
 
 type leaseBackend interface {
-	ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
-	ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
+	ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
+	ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
 }
 
 // Service exposes one metadata-root backend through the MetadataRoot RPC API.
@@ -293,18 +294,18 @@ func (s *Service) coordinatorProtocolBackend() (leaseBackend, error) {
 	return backend, nil
 }
 
-func coordinatorLeaseApplyRPCError(kind rootstate.CoordinatorLeaseCommandKind, err error) error {
+func coordinatorLeaseApplyRPCError(kind rootproto.CoordinatorLeaseCommandKind, err error) error {
 	if errors.Is(err, rootstate.ErrInvalidCoordinatorLease) {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
 	switch kind {
-	case rootstate.CoordinatorLeaseCommandIssue:
+	case rootproto.CoordinatorLeaseCommandIssue:
 		switch {
 		case errors.Is(err, rootstate.ErrCoordinatorLeaseCoverage),
 			errors.Is(err, rootstate.ErrCoordinatorLeaseLineage):
 			return status.Error(codes.FailedPrecondition, err.Error())
 		}
-	case rootstate.CoordinatorLeaseCommandRelease:
+	case rootproto.CoordinatorLeaseCommandRelease:
 		switch {
 		case errors.Is(err, rootstate.ErrCoordinatorLeaseOwner),
 			errors.Is(err, rootstate.ErrInvalidCoordinatorLease):
@@ -314,25 +315,25 @@ func coordinatorLeaseApplyRPCError(kind rootstate.CoordinatorLeaseCommandKind, e
 	return status.Error(codes.Internal, err.Error())
 }
 
-func coordinatorClosureApplyRPCError(kind rootstate.CoordinatorClosureCommandKind, err error) error {
+func coordinatorClosureApplyRPCError(kind rootproto.CoordinatorClosureCommandKind, err error) error {
 	if errors.Is(err, rootstate.ErrInvalidCoordinatorLease) || errors.Is(err, rootstate.ErrCoordinatorLeaseAudit) {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
 	switch kind {
-	case rootstate.CoordinatorClosureCommandSeal:
+	case rootproto.CoordinatorClosureCommandSeal:
 		if errors.Is(err, rootstate.ErrCoordinatorLeaseOwner) {
 			return status.Error(codes.FailedPrecondition, err.Error())
 		}
-	case rootstate.CoordinatorClosureCommandConfirm:
+	case rootproto.CoordinatorClosureCommandConfirm:
 		if errors.Is(err, rootstate.ErrCoordinatorLeaseOwner) {
 			return status.Error(codes.FailedPrecondition, err.Error())
 		}
-	case rootstate.CoordinatorClosureCommandClose:
+	case rootproto.CoordinatorClosureCommandClose:
 		if errors.Is(err, rootstate.ErrCoordinatorLeaseOwner) ||
 			errors.Is(err, rootstate.ErrCoordinatorLeaseClose) {
 			return status.Error(codes.FailedPrecondition, err.Error())
 		}
-	case rootstate.CoordinatorClosureCommandReattach:
+	case rootproto.CoordinatorClosureCommandReattach:
 		if errors.Is(err, rootstate.ErrCoordinatorLeaseOwner) ||
 			errors.Is(err, rootstate.ErrCoordinatorLeaseReattach) {
 			return status.Error(codes.FailedPrecondition, err.Error())

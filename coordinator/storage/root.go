@@ -5,6 +5,7 @@ import (
 	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -23,8 +24,8 @@ type RootStorage interface {
 	Load() (Snapshot, error)
 	AppendRootEvent(event rootevent.Event) error
 	SaveAllocatorState(idCurrent, tsCurrent uint64) error
-	ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
-	ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
+	ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
+	ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
 	Refresh() error
 	IsLeader() bool
 	LeaderID() uint64
@@ -46,8 +47,8 @@ type rootOptionalBackend interface {
 	ObserveCommitted() (rootstorage.ObservedCommitted, error)
 	IsLeader() bool
 	LeaderID() uint64
-	ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
-	ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
+	ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
+	ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
 }
 
 // OpenRootStore opens a Coordinator storage backend backed by the metadata root.
@@ -93,12 +94,12 @@ func OpenRootStore(root rootBackend) (*RootStore, error) {
 			store.leaderID = leader.LeaderID
 		}
 		if leaseApplier, ok := root.(interface {
-			ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
+			ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
 		}); ok {
 			store.applyCoordinatorLease = leaseApplier.ApplyCoordinatorLease
 		}
 		if closureApplier, ok := root.(interface {
-			ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
+			ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
 		}); ok {
 			store.applyCoordinatorClosure = closureApplier.ApplyCoordinatorClosure
 		}
@@ -130,8 +131,8 @@ type RootStore struct {
 	observeCommitted        func() (rootstorage.ObservedCommitted, error)
 	isLeader                func() bool
 	leaderID                func() uint64
-	applyCoordinatorLease   func(cmd rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
-	applyCoordinatorClosure func(cmd rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
+	applyCoordinatorLease   func(cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
+	applyCoordinatorClosure func(cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
 
 	mu       sync.RWMutex
 	snapshot Snapshot
@@ -256,7 +257,7 @@ func (s *RootStore) SaveAllocatorState(idCurrent, tsCurrent uint64) error {
 	})
 }
 
-func (s *RootStore) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *RootStore) ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
 	if s == nil || s.root == nil {
 		return rootstate.CoordinatorProtocolState{}, nil
 	}
@@ -268,7 +269,7 @@ func (s *RootStore) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand)
 	})
 }
 
-func (s *RootStore) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *RootStore) ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
 	if s == nil || s.root == nil {
 		return rootstate.CoordinatorProtocolState{}, nil
 	}
