@@ -11,6 +11,7 @@ import (
 	pdstorage "github.com/feichai0017/NoKV/coordinator/storage"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/stretchr/testify/require"
 )
@@ -34,8 +35,8 @@ func TestRunCCCAuditCmdJSON(t *testing.T) {
 	require.Equal(t, "c1", payload.Report.HolderID)
 	require.Equal(t, uint64(2), payload.Report.CurrentGeneration)
 	require.True(t, payload.Report.ClosureWitness.ClosureSatisfied())
-	require.Equal(t, rootstate.CoordinatorClosureStageReattached, payload.Report.Closure.Stage)
-	require.False(t, payload.Report.Anomalies.ClosureIncomplete)
+	require.Equal(t, rootproto.CoordinatorClosureStageReattached, payload.Report.Closure.Stage)
+	require.Equal(t, coordaudit.ClosureDefectNone, payload.Report.Anomalies.ClosureDefect)
 }
 
 func TestRunCCCAuditCmdPlainShowsAnomalies(t *testing.T) {
@@ -51,7 +52,7 @@ func TestRunCCCAuditCmdPlainShowsAnomalies(t *testing.T) {
 
 	out := buf.String()
 	require.Contains(t, out, "ClosureSatisfied         true")
-	require.Contains(t, out, "ClosureStage             pending_confirm")
+	require.Contains(t, out, "ClosureStage             unspecified")
 	require.Contains(t, out, "Anomalies                missing_confirm")
 }
 
@@ -232,7 +233,7 @@ type cccAuditSeedOptions struct {
 	reattach bool
 }
 
-func applyCCCAuditLeaseIssue(t *testing.T, store *pdstorage.RootStore, holderID string, expiresUnixNano, nowUnixNano int64, handoffFrontiers rootstate.CoordinatorDutyFrontiers, predecessorDigest string) rootstate.CoordinatorLease {
+func applyCCCAuditLeaseIssue(t *testing.T, store *pdstorage.RootStore, holderID string, expiresUnixNano, nowUnixNano int64, handoffFrontiers rootproto.CoordinatorDutyFrontiers, predecessorDigest string) rootstate.CoordinatorLease {
 	t.Helper()
 	state, err := store.ApplyCoordinatorLease(rootstate.CoordinatorLeaseCommand{
 		Kind:              rootstate.CoordinatorLeaseCommandIssue,
@@ -246,7 +247,7 @@ func applyCCCAuditLeaseIssue(t *testing.T, store *pdstorage.RootStore, holderID 
 	return state.Lease
 }
 
-func applyCCCAuditClosure(t *testing.T, store *pdstorage.RootStore, kind rootstate.CoordinatorClosureCommandKind, holderID string, nowUnixNano int64, frontiers rootstate.CoordinatorDutyFrontiers) rootstate.CoordinatorClosure {
+func applyCCCAuditClosure(t *testing.T, store *pdstorage.RootStore, kind rootstate.CoordinatorClosureCommandKind, holderID string, nowUnixNano int64, frontiers rootproto.CoordinatorDutyFrontiers) rootstate.CoordinatorClosure {
 	t.Helper()
 	state, err := store.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
 		Kind:        kind,
@@ -258,7 +259,7 @@ func applyCCCAuditClosure(t *testing.T, store *pdstorage.RootStore, kind rootsta
 	return state.Closure
 }
 
-func applyCCCAuditSeal(t *testing.T, store *pdstorage.RootStore, holderID string, nowUnixNano int64, frontiers rootstate.CoordinatorDutyFrontiers) rootstate.CoordinatorSeal {
+func applyCCCAuditSeal(t *testing.T, store *pdstorage.RootStore, holderID string, nowUnixNano int64, frontiers rootproto.CoordinatorDutyFrontiers) rootstate.CoordinatorSeal {
 	t.Helper()
 	state, err := store.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
 		Kind:        rootstate.CoordinatorClosureCommandSeal,
@@ -283,23 +284,23 @@ func seedCCCAuditWorkdir(t *testing.T, opts cccAuditSeedOptions) string {
 		ConfVersion: 1,
 	}))))
 
-	lease := applyCCCAuditLeaseIssue(t, store, "c1", 1_000, 100, controlplane.Frontiers(12, 34, 1), "")
+	lease := applyCCCAuditLeaseIssue(t, store, "c1", 1_000, 100, controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 1), "")
 	require.Equal(t, uint64(1), lease.CertGeneration)
 
-	seal := applyCCCAuditSeal(t, store, "c1", 200, controlplane.Frontiers(12, 34, 1))
+	seal := applyCCCAuditSeal(t, store, "c1", 200, controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 1))
 	sealDigest := rootstate.CoordinatorSealDigest(seal)
 
-	lease = applyCCCAuditLeaseIssue(t, store, "c1", 1_300, 300, controlplane.Frontiers(12, 34, 1), sealDigest)
+	lease = applyCCCAuditLeaseIssue(t, store, "c1", 1_300, 300, controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 1), sealDigest)
 	require.Equal(t, uint64(2), lease.CertGeneration)
 
 	if opts.confirm {
-		applyCCCAuditClosure(t, store, rootstate.CoordinatorClosureCommandConfirm, "c1", 400, rootstate.CoordinatorDutyFrontiers{})
+		applyCCCAuditClosure(t, store, rootstate.CoordinatorClosureCommandConfirm, "c1", 400, rootproto.CoordinatorDutyFrontiers{})
 	}
 	if opts.close {
-		applyCCCAuditClosure(t, store, rootstate.CoordinatorClosureCommandClose, "c1", 450, rootstate.CoordinatorDutyFrontiers{})
+		applyCCCAuditClosure(t, store, rootstate.CoordinatorClosureCommandClose, "c1", 450, rootproto.CoordinatorDutyFrontiers{})
 	}
 	if opts.reattach {
-		applyCCCAuditClosure(t, store, rootstate.CoordinatorClosureCommandReattach, "c1", 500, rootstate.CoordinatorDutyFrontiers{})
+		applyCCCAuditClosure(t, store, rootstate.CoordinatorClosureCommandReattach, "c1", 500, rootproto.CoordinatorDutyFrontiers{})
 	}
 	return dir
 }

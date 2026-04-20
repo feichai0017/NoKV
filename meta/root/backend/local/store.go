@@ -9,6 +9,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/vfs"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	rootfile "github.com/feichai0017/NoKV/meta/root/storage/file"
@@ -173,9 +174,9 @@ func (s *Store) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (ro
 			cmd.HolderID,
 			cmd.ExpiresUnixNano,
 			generation,
-			rootstate.CoordinatorDutyMaskDefault,
+			rootproto.CoordinatorDutyMaskDefault,
 			cmd.PredecessorDigest,
-			rootstate.CloneDutyFrontiers(cmd.HandoffFrontiers),
+			rootproto.CloneDutyFrontiers(cmd.HandoffFrontiers),
 		)
 		commit, err := s.appendLocked(event)
 		if err != nil {
@@ -189,7 +190,7 @@ func (s *Store) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (ro
 		current := s.state.CoordinatorLease
 		dutyMask := current.DutyMask
 		if dutyMask == 0 {
-			dutyMask = rootstate.CoordinatorDutyMaskDefault
+			dutyMask = rootproto.CoordinatorDutyMaskDefault
 		}
 		event := rootevent.CoordinatorLeaseReleased(
 			cmd.HolderID,
@@ -197,7 +198,7 @@ func (s *Store) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (ro
 			current.CertGeneration,
 			dutyMask,
 			current.PredecessorDigest,
-			rootstate.CloneDutyFrontiers(cmd.HandoffFrontiers),
+			rootproto.CloneDutyFrontiers(cmd.HandoffFrontiers),
 		)
 		commit, err := s.appendLocked(event)
 		if err != nil {
@@ -229,13 +230,13 @@ func (s *Store) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand)
 		}
 		dutyMask := current.DutyMask
 		if dutyMask == 0 {
-			dutyMask = rootstate.CoordinatorDutyMaskDefault
+			dutyMask = rootproto.CoordinatorDutyMaskDefault
 		}
 		commit, err := s.appendLocked(rootevent.CoordinatorLeaseSealed(
 			cmd.HolderID,
 			current.CertGeneration,
 			dutyMask,
-			rootstate.CloneDutyFrontiers(cmd.Frontiers),
+			rootproto.CloneDutyFrontiers(cmd.Frontiers),
 		))
 		if err != nil {
 			return rootstate.CoordinatorProtocolState{}, err
@@ -247,14 +248,14 @@ func (s *Store) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand)
 		}
 		auditStatus, err := controlplane.ValidateClosureConfirmation(
 			s.state.CoordinatorLease,
-			controlplane.FrontiersFromState(s.state, rootstate.MaxDescriptorRevision(s.descs)),
+			controlplane.Frontiers(s.state, rootstate.MaxDescriptorRevision(s.descs)),
 			s.state.CoordinatorSeal,
 			cmd.NowUnixNano,
 		)
 		if err != nil {
 			return s.state.CoordinatorProtocol(), err
 		}
-		if rootstate.ClosureStageAtLeast(s.state.CoordinatorClosure.Stage, rootstate.CoordinatorClosureStageConfirmed) &&
+		if rootproto.ClosureStageAtLeast(s.state.CoordinatorClosure.Stage, rootproto.CoordinatorClosureStageConfirmed) &&
 			s.state.CoordinatorClosure.SealGeneration == auditStatus.SealGeneration &&
 			s.state.CoordinatorClosure.SuccessorGeneration == s.state.CoordinatorLease.CertGeneration &&
 			s.state.CoordinatorClosure.SealDigest == auditStatus.SealDigest {
@@ -269,7 +270,7 @@ func (s *Store) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand)
 		if err := controlplane.ValidateClosureClose(s.state.CoordinatorLease, s.state.CoordinatorClosure, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return s.state.CoordinatorProtocol(), err
 		}
-		if rootstate.ClosureStageAtLeast(s.state.CoordinatorClosure.Stage, rootstate.CoordinatorClosureStageClosed) {
+		if rootproto.ClosureStageAtLeast(s.state.CoordinatorClosure.Stage, rootproto.CoordinatorClosureStageClosed) {
 			return s.state.CoordinatorProtocol(), nil
 		}
 		commit, err := s.appendLocked(rootevent.CoordinatorClosureClosed(
@@ -286,7 +287,7 @@ func (s *Store) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand)
 		if err := controlplane.ValidateClosureReattach(s.state.CoordinatorLease, s.state.CoordinatorClosure, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return s.state.CoordinatorProtocol(), err
 		}
-		if rootstate.ClosureStageAtLeast(s.state.CoordinatorClosure.Stage, rootstate.CoordinatorClosureStageReattached) {
+		if rootproto.ClosureStageAtLeast(s.state.CoordinatorClosure.Stage, rootproto.CoordinatorClosureStageReattached) {
 			return s.state.CoordinatorProtocol(), nil
 		}
 		commit, err := s.appendLocked(rootevent.CoordinatorClosureReattached(

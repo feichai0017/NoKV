@@ -8,6 +8,7 @@ import (
 
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
 	protocol "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/stretchr/testify/require"
 )
@@ -133,11 +134,11 @@ func TestControlPlaneCRDB66562RootedGate(t *testing.T) {
 	seal := rootstate.CoordinatorSeal{
 		HolderID:       "n2",
 		CertGeneration: 1,
-		DutyMask:       rootstate.CoordinatorDutyMaskDefault,
+		DutyMask:       rootproto.CoordinatorDutyMaskDefault,
 	}
 	seal = rootstate.CoordinatorSealWithServedFrontier(seal, servedFrontier)
 
-	require.Equal(t, servedFrontier, seal.Frontiers.Frontier(rootstate.CoordinatorDutyLeaseStart))
+	require.Equal(t, servedFrontier, seal.Frontiers.Frontier(rootproto.CoordinatorDutyLeaseStart))
 
 	rejectErr := rootstate.ValidateCoordinatorLeaseStartCoverage(seal, 8)
 	require.ErrorIs(t, rejectErr, rootstate.ErrCoordinatorLeaseCoverage)

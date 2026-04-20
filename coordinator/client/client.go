@@ -5,7 +5,7 @@ import (
 	"fmt"
 	coordablation "github.com/feichai0017/NoKV/coordinator/ablation"
 	coordprotocol "github.com/feichai0017/NoKV/coordinator/protocol"
-	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"strings"
 	"sync"
@@ -412,7 +412,7 @@ func (c *GRPCClient) validateTSOResponse(req *coordpb.TsoRequest, resp *coordpb.
 }
 
 func (c *GRPCClient) validateMonotoneWitness(kind string, requestedCount, first, gotCount, certGeneration, consumedFrontier, observedSealGeneration uint64, generation *witnessGenerationFloor) error {
-	if certGeneration == rootstate.ContinuationWitnessGenerationSuppressed {
+	if certGeneration == rootproto.ContinuationWitnessGenerationSuppressed {
 		return fmt.Errorf("%w: %s reply evidence suppressed", errInvalidWitness, kind)
 	}
 	if gotCount != requestedCount {
@@ -430,10 +430,10 @@ func (c *GRPCClient) validateMonotoneWitness(kind string, requestedCount, first,
 
 func (c *GRPCClient) validateMetadataWitnessGeneration(resp *coordpb.GetRegionByKeyResponse) error {
 	certGeneration := resp.GetCertGeneration()
-	if certGeneration == rootstate.ContinuationWitnessGenerationSuppressed {
+	if certGeneration == rootproto.ContinuationWitnessGenerationSuppressed {
 		return fmt.Errorf("%w: get_region_by_key reply evidence suppressed", errInvalidWitness)
 	}
-	if certGeneration == rootstate.ContinuationWitnessGenerationAttached {
+	if certGeneration == rootproto.ContinuationWitnessGenerationAttached {
 		if resp.GetServingClass() != coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE ||
 			resp.GetSyncHealth() != coordpb.SyncHealth_SYNC_HEALTH_HEALTHY ||
 			!resp.GetServedByLeader() ||
@@ -489,7 +489,7 @@ func (c *GRPCClient) advanceAttachedMetadataFloor(resp *coordpb.GetRegionByKeyRe
 func (c *GRPCClient) advanceWitnessGenerationFloor(kind string, certGeneration, observedSealGeneration uint64, floor *witnessGenerationFloor) error {
 	c.verifyMu.Lock()
 	defer c.verifyMu.Unlock()
-	if certGeneration == rootstate.ContinuationWitnessGenerationSuppressed {
+	if certGeneration == rootproto.ContinuationWitnessGenerationSuppressed {
 		return fmt.Errorf("%w: %s cert_generation suppressed", errInvalidWitness, kind)
 	}
 	if observedSealGeneration > floor.sealedSeen {

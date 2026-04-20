@@ -7,6 +7,7 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	rootfile "github.com/feichai0017/NoKV/meta/root/storage/file"
@@ -406,15 +407,15 @@ func TestRootStoreSealCoordinatorLeaseDelegation(t *testing.T) {
 		seal: rootstate.CoordinatorSeal{
 			HolderID:       "c1",
 			CertGeneration: 2,
-			DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-			Frontiers:      controlplane.Frontiers(12, 34, 56),
+			DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+			Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56),
 		},
 	}
 
 	store, err := OpenRootStore(backend)
 	require.NoError(t, err)
 
-	seal, err := sealLease(store, "c1", 200, controlplane.Frontiers(12, 34, 56))
+	seal, err := sealLease(store, "c1", 200, controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
 	require.NoError(t, err)
 	require.Equal(t, backend.seal, seal)
 	require.Equal(t, 1, backend.leaseSealCalls)
@@ -431,7 +432,7 @@ func TestRootStoreConfirmCoordinatorClosureDelegation(t *testing.T) {
 			SealGeneration:      2,
 			SuccessorGeneration: 3,
 			SealDigest:          "seal-digest",
-			Stage:               rootstate.CoordinatorClosureStageConfirmed,
+			Stage:               rootproto.CoordinatorClosureStageConfirmed,
 		},
 	}
 
@@ -455,7 +456,7 @@ func TestRootStoreCloseCoordinatorClosureDelegation(t *testing.T) {
 			SealGeneration:      2,
 			SuccessorGeneration: 3,
 			SealDigest:          "seal-digest",
-			Stage:               rootstate.CoordinatorClosureStageClosed,
+			Stage:               rootproto.CoordinatorClosureStageClosed,
 		},
 	}
 
@@ -479,7 +480,7 @@ func TestRootStoreReattachCoordinatorClosureDelegation(t *testing.T) {
 			SealGeneration:      2,
 			SuccessorGeneration: 3,
 			SealDigest:          "seal-digest",
-			Stage:               rootstate.CoordinatorClosureStageReattached,
+			Stage:               rootproto.CoordinatorClosureStageReattached,
 		},
 	}
 
@@ -526,7 +527,7 @@ func campaignLease(store *RootStore, holderID string, expiresUnixNano, nowUnixNa
 		ExpiresUnixNano:   expiresUnixNano,
 		NowUnixNano:       nowUnixNano,
 		PredecessorDigest: predecessorDigest,
-		HandoffFrontiers:  controlplane.Frontiers(idFence, tsoFence, descriptorRevision),
+		HandoffFrontiers:  controlplane.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, descriptorRevision),
 	})
 	return state.Lease, err
 }
@@ -536,12 +537,12 @@ func releaseLease(store *RootStore, holderID string, nowUnixNano int64, idFence,
 		Kind:             rootstate.CoordinatorLeaseCommandRelease,
 		HolderID:         holderID,
 		NowUnixNano:      nowUnixNano,
-		HandoffFrontiers: controlplane.Frontiers(idFence, tsoFence, 0),
+		HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, 0),
 	})
 	return state.Lease, err
 }
 
-func sealLease(store *RootStore, holderID string, nowUnixNano int64, frontiers rootstate.CoordinatorDutyFrontiers) (rootstate.CoordinatorSeal, error) {
+func sealLease(store *RootStore, holderID string, nowUnixNano int64, frontiers rootproto.CoordinatorDutyFrontiers) (rootstate.CoordinatorSeal, error) {
 	state, err := store.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
 		Kind:        rootstate.CoordinatorClosureCommandSeal,
 		HolderID:    holderID,

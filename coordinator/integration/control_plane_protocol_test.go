@@ -17,6 +17,7 @@ import (
 	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
 	"github.com/feichai0017/NoKV/coordinator/tso"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -87,13 +88,13 @@ func (s *protocolMatrixStorage) ApplyCoordinatorLease(cmd rootstate.CoordinatorL
 			HolderID:          cmd.HolderID,
 			ExpiresUnixNano:   cmd.ExpiresUnixNano,
 			CertGeneration:    generation,
-			DutyMask:          rootstate.CoordinatorDutyMaskDefault,
+			DutyMask:          rootproto.CoordinatorDutyMaskDefault,
 			PredecessorDigest: cmd.PredecessorDigest,
 		}
-		if idFence := cmd.HandoffFrontiers.Frontier(rootstate.CoordinatorDutyAllocID); idFence > s.snapshot.Allocator.IDCurrent {
+		if idFence := cmd.HandoffFrontiers.Frontier(rootproto.CoordinatorDutyAllocID); idFence > s.snapshot.Allocator.IDCurrent {
 			s.snapshot.Allocator.IDCurrent = idFence
 		}
-		if tsoFence := cmd.HandoffFrontiers.Frontier(rootstate.CoordinatorDutyTSO); tsoFence > s.snapshot.Allocator.TSCurrent {
+		if tsoFence := cmd.HandoffFrontiers.Frontier(rootproto.CoordinatorDutyTSO); tsoFence > s.snapshot.Allocator.TSCurrent {
 			s.snapshot.Allocator.TSCurrent = tsoFence
 		}
 	case rootstate.CoordinatorLeaseCommandRelease:
@@ -108,10 +109,10 @@ func (s *protocolMatrixStorage) ApplyCoordinatorLease(cmd rootstate.CoordinatorL
 			DutyMask:          s.snapshot.CoordinatorLease.DutyMask,
 			PredecessorDigest: s.snapshot.CoordinatorLease.PredecessorDigest,
 		}
-		if idFence := cmd.HandoffFrontiers.Frontier(rootstate.CoordinatorDutyAllocID); idFence > s.snapshot.Allocator.IDCurrent {
+		if idFence := cmd.HandoffFrontiers.Frontier(rootproto.CoordinatorDutyAllocID); idFence > s.snapshot.Allocator.IDCurrent {
 			s.snapshot.Allocator.IDCurrent = idFence
 		}
-		if tsoFence := cmd.HandoffFrontiers.Frontier(rootstate.CoordinatorDutyTSO); tsoFence > s.snapshot.Allocator.TSCurrent {
+		if tsoFence := cmd.HandoffFrontiers.Frontier(rootproto.CoordinatorDutyTSO); tsoFence > s.snapshot.Allocator.TSCurrent {
 			s.snapshot.Allocator.TSCurrent = tsoFence
 		}
 	default:
@@ -128,13 +129,13 @@ func (s *protocolMatrixStorage) ApplyCoordinatorClosure(cmd rootstate.Coordinato
 		}
 		dutyMask := s.snapshot.CoordinatorLease.DutyMask
 		if dutyMask == 0 {
-			dutyMask = rootstate.CoordinatorDutyMaskDefault
+			dutyMask = rootproto.CoordinatorDutyMaskDefault
 		}
 		s.snapshot.CoordinatorSeal = rootstate.CoordinatorSeal{
 			HolderID:       cmd.HolderID,
 			CertGeneration: s.snapshot.CoordinatorLease.CertGeneration,
 			DutyMask:       dutyMask,
-			Frontiers:      rootstate.CloneDutyFrontiers(cmd.Frontiers),
+			Frontiers:      rootproto.CloneDutyFrontiers(cmd.Frontiers),
 		}
 	case rootstate.CoordinatorClosureCommandConfirm:
 		s.confirms++
@@ -146,11 +147,10 @@ func (s *protocolMatrixStorage) ApplyCoordinatorClosure(cmd rootstate.Coordinato
 		}
 		auditStatus, err := controlplane.ValidateClosureConfirmation(
 			s.snapshot.CoordinatorLease,
-			controlplane.Frontiers(
-				s.snapshot.Allocator.IDCurrent,
-				s.snapshot.Allocator.TSCurrent,
-				rootstate.MaxDescriptorRevision(s.snapshot.Descriptors),
-			),
+			controlplane.Frontiers(rootstate.State{
+				IDFence:  s.snapshot.Allocator.IDCurrent,
+				TSOFence: s.snapshot.Allocator.TSCurrent,
+			}, rootstate.MaxDescriptorRevision(s.snapshot.Descriptors)),
 			s.snapshot.CoordinatorSeal,
 			cmd.NowUnixNano,
 		)
@@ -162,7 +162,7 @@ func (s *protocolMatrixStorage) ApplyCoordinatorClosure(cmd rootstate.Coordinato
 			SealGeneration:      auditStatus.SealGeneration,
 			SuccessorGeneration: s.snapshot.CoordinatorLease.CertGeneration,
 			SealDigest:          auditStatus.SealDigest,
-			Stage:               rootstate.CoordinatorClosureStageConfirmed,
+			Stage:               rootproto.CoordinatorClosureStageConfirmed,
 		}
 	case rootstate.CoordinatorClosureCommandClose:
 		s.closes++
@@ -172,7 +172,7 @@ func (s *protocolMatrixStorage) ApplyCoordinatorClosure(cmd rootstate.Coordinato
 		if err := controlplane.ValidateClosureClose(s.snapshot.CoordinatorLease, s.snapshot.CoordinatorClosure, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return s.protocolState(), err
 		}
-		s.snapshot.CoordinatorClosure.Stage = rootstate.CoordinatorClosureStageClosed
+		s.snapshot.CoordinatorClosure.Stage = rootproto.CoordinatorClosureStageClosed
 	case rootstate.CoordinatorClosureCommandReattach:
 		s.reattaches++
 		if s.reattachErr != nil {
@@ -181,7 +181,7 @@ func (s *protocolMatrixStorage) ApplyCoordinatorClosure(cmd rootstate.Coordinato
 		if err := controlplane.ValidateClosureReattach(s.snapshot.CoordinatorLease, s.snapshot.CoordinatorClosure, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return s.protocolState(), err
 		}
-		s.snapshot.CoordinatorClosure.Stage = rootstate.CoordinatorClosureStageReattached
+		s.snapshot.CoordinatorClosure.Stage = rootproto.CoordinatorClosureStageReattached
 	default:
 		return rootstate.CoordinatorProtocolState{}, rootstate.ErrCoordinatorLeaseAudit
 	}
@@ -300,15 +300,15 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 	sealWithDescriptor7 := rootstate.CoordinatorSeal{
 		HolderID:       "c1",
 		CertGeneration: 2,
-		DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-		Frontiers:      controlplane.Frontiers(12, 34, 7),
+		DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+		Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 	}
 	sealWithDescriptor7Digest := rootstate.CoordinatorSealDigest(sealWithDescriptor7)
 	sealWithDescriptor9 := rootstate.CoordinatorSeal{
 		HolderID:       "c1",
 		CertGeneration: 2,
-		DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-		Frontiers:      controlplane.Frontiers(12, 34, 9),
+		DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+		Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 9),
 	}
 	sealWithDescriptor9Digest := rootstate.CoordinatorSealDigest(sealWithDescriptor9)
 
@@ -326,9 +326,9 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 						HolderID:        "c1",
 						ExpiresUnixNano: activeLeaseExpiry,
 						CertGeneration:  2,
-						DutyMask:        rootstate.CoordinatorDutyMaskDefault,
+						DutyMask:        rootproto.CoordinatorDutyMaskDefault,
 					},
-					CoordinatorSeal: rootstate.CoordinatorSeal{HolderID: "c1", CertGeneration: 2, DutyMask: rootstate.CoordinatorDutyMaskDefault},
+					CoordinatorSeal: rootstate.CoordinatorSeal{HolderID: "c1", CertGeneration: 2, DutyMask: rootproto.CoordinatorDutyMaskDefault},
 				},
 			},
 			run: func(t *testing.T, svc *coordserver.Service) {
@@ -353,9 +353,9 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 						HolderID:        "c1",
 						ExpiresUnixNano: activeLeaseExpiry,
 						CertGeneration:  2,
-						DutyMask:        rootstate.CoordinatorDutyMaskDefault,
+						DutyMask:        rootproto.CoordinatorDutyMaskDefault,
 					},
-					CoordinatorSeal: rootstate.CoordinatorSeal{HolderID: "c1", CertGeneration: 2, DutyMask: rootstate.CoordinatorDutyMaskDefault, Frontiers: controlplane.Frontiers(0, 0, 7)},
+					CoordinatorSeal: rootstate.CoordinatorSeal{HolderID: "c1", CertGeneration: 2, DutyMask: rootproto.CoordinatorDutyMaskDefault, Frontiers: controlplane.Frontiers(rootstate.State{IDFence: 0, TSOFence: 0}, 7)},
 					Descriptors:     baseDescriptors,
 				},
 			},
@@ -381,7 +381,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 						HolderID:          "c1",
 						ExpiresUnixNano:   activeLeaseExpiry,
 						CertGeneration:    3,
-						DutyMask:          rootstate.CoordinatorDutyMaskDefault,
+						DutyMask:          rootproto.CoordinatorDutyMaskDefault,
 						PredecessorDigest: sealWithDescriptor7Digest,
 					},
 					CoordinatorSeal: sealWithDescriptor7,
@@ -416,7 +416,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 						HolderID:          "c1",
 						ExpiresUnixNano:   activeLeaseExpiry,
 						CertGeneration:    3,
-						DutyMask:          rootstate.CoordinatorDutyMaskDefault,
+						DutyMask:          rootproto.CoordinatorDutyMaskDefault,
 						PredecessorDigest: sealWithDescriptor9Digest,
 					},
 					CoordinatorSeal: sealWithDescriptor9,
@@ -450,7 +450,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 						HolderID:          "c1",
 						ExpiresUnixNano:   activeLeaseExpiry,
 						CertGeneration:    3,
-						DutyMask:          rootstate.CoordinatorDutyMaskDefault,
+						DutyMask:          rootproto.CoordinatorDutyMaskDefault,
 						PredecessorDigest: sealWithDescriptor7Digest,
 					},
 					CoordinatorSeal: sealWithDescriptor7,
@@ -480,7 +480,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 						HolderID:          "c1",
 						ExpiresUnixNano:   activeLeaseExpiry,
 						CertGeneration:    3,
-						DutyMask:          rootstate.CoordinatorDutyMaskDefault,
+						DutyMask:          rootproto.CoordinatorDutyMaskDefault,
 						PredecessorDigest: "other-digest",
 					},
 					CoordinatorSeal: sealWithDescriptor7,
@@ -493,7 +493,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 						SealGeneration:      2,
 						SuccessorGeneration: 3,
 						SealDigest:          sealWithDescriptor7Digest,
-						Stage:               rootstate.CoordinatorClosureStageClosed,
+						Stage:               rootproto.CoordinatorClosureStageClosed,
 					},
 					Descriptors: baseDescriptors,
 				},
@@ -518,7 +518,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 						HolderID:          "c1",
 						ExpiresUnixNano:   activeLeaseExpiry,
 						CertGeneration:    3,
-						DutyMask:          rootstate.CoordinatorDutyMaskDefault,
+						DutyMask:          rootproto.CoordinatorDutyMaskDefault,
 						PredecessorDigest: sealWithDescriptor7Digest,
 					},
 					CoordinatorSeal: sealWithDescriptor7,
@@ -571,7 +571,7 @@ func TestDetachedLateReplyAfterSealRejectedByClientVerifier(t *testing.T) {
 				HolderID:        "c1",
 				ExpiresUnixNano: activeLeaseExpiry,
 				CertGeneration:  1,
-				DutyMask:        rootstate.CoordinatorDutyMaskDefault,
+				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
 			},
 		},
 	}
@@ -594,17 +594,17 @@ func TestDetachedLateReplyAfterSealRejectedByClientVerifier(t *testing.T) {
 				HolderID:          "c2",
 				ExpiresUnixNano:   activeLeaseExpiry,
 				CertGeneration:    2,
-				DutyMask:          rootstate.CoordinatorDutyMaskDefault,
+				DutyMask:          rootproto.CoordinatorDutyMaskDefault,
 				PredecessorDigest: sealDigest,
 			},
 			CoordinatorSeal: seal,
 			Allocator: coordstorage.AllocatorState{
-				IDCurrent: seal.Frontiers.Frontier(rootstate.CoordinatorDutyAllocID),
-				TSCurrent: seal.Frontiers.Frontier(rootstate.CoordinatorDutyTSO),
+				IDCurrent: seal.Frontiers.Frontier(rootproto.CoordinatorDutyAllocID),
+				TSCurrent: seal.Frontiers.Frontier(rootproto.CoordinatorDutyTSO),
 			},
 		},
 	}
-	successorSvc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(seal.Frontiers.Frontier(rootstate.CoordinatorDutyAllocID)+1), tso.NewAllocator(100), successorStore)
+	successorSvc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(seal.Frontiers.Frontier(rootproto.CoordinatorDutyAllocID)+1), tso.NewAllocator(100), successorStore)
 	successorSvc.ConfigureCoordinatorLease("c2", 10*time.Second, 3*time.Second)
 	require.NoError(t, successorSvc.ReloadFromStorage())
 	require.NoError(t, successorSvc.ConfirmCoordinatorClosure())

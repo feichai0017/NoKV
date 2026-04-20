@@ -23,7 +23,6 @@ const CoordinatorDutyMaskDefault = CoordinatorDutyAllocID | CoordinatorDutyTSO |
 
 type CoordinatorDutyFrontier struct {
 	DutyMask uint32
-	DutyName string
 	Frontier uint64
 }
 
@@ -45,7 +44,6 @@ type CoordinatorDutyFrontiers struct {
 
 type CoordinatorFrontierCoverage struct {
 	DutyMask         uint32
-	DutyName         string
 	RequiredFrontier uint64
 	ActualFrontier   uint64
 	Covered          bool
@@ -56,18 +54,17 @@ type CoordinatorSuccessorCoverageStatus struct {
 }
 
 type AuthorityHandoffRecord struct {
-	holderID          string
-	expiresUnixNano   int64
-	certGeneration    uint64
-	issuedCursor      Cursor
-	dutyMask          uint32
-	predecessorDigest string
-	frontiers         CoordinatorDutyFrontiers
+	HolderID          string
+	ExpiresUnixNano   int64
+	CertGeneration    uint64
+	IssuedCursor      Cursor
+	DutyMask          uint32
+	PredecessorDigest string
+	Frontiers         CoordinatorDutyFrontiers
 }
 
 type ContinuationWitness struct {
 	DutyMask         uint32
-	DutyName         string
 	CertGeneration   uint64
 	ConsumedFrontier uint64
 }
@@ -203,7 +200,6 @@ func (f CoordinatorDutyFrontiers) Entries() []CoordinatorDutyFrontier {
 	for _, dutyMask := range OrderedCoordinatorDutyMasks(0, f) {
 		out = append(out, CoordinatorDutyFrontier{
 			DutyMask: dutyMask,
-			DutyName: CoordinatorDutyName(dutyMask),
 			Frontier: f.Frontier(dutyMask),
 		})
 	}
@@ -250,7 +246,6 @@ func OrderedCoordinatorDutyMasks(dutyMask uint32, frontiers CoordinatorDutyFront
 func NewContinuationWitness(dutyMask uint32, certGeneration, consumedFrontier uint64) ContinuationWitness {
 	return ContinuationWitness{
 		DutyMask:         dutyMask,
-		DutyName:         CoordinatorDutyName(dutyMask),
 		CertGeneration:   certGeneration,
 		ConsumedFrontier: consumedFrontier,
 	}
@@ -259,7 +254,6 @@ func NewContinuationWitness(dutyMask uint32, certGeneration, consumedFrontier ui
 func NewSuppressedContinuationWitness(dutyMask uint32) ContinuationWitness {
 	return ContinuationWitness{
 		DutyMask:         dutyMask,
-		DutyName:         CoordinatorDutyName(dutyMask),
 		CertGeneration:   ContinuationWitnessGenerationSuppressed,
 		ConsumedFrontier: 0,
 	}
@@ -285,13 +279,13 @@ func NewAuthorityHandoffRecord(holderID string, expiresUnixNano int64, certGener
 		return AuthorityHandoffRecord{}, fmt.Errorf("authority handoff record: frontiers must cover all duty mask bits")
 	}
 	return AuthorityHandoffRecord{
-		holderID:          holderID,
-		expiresUnixNano:   expiresUnixNano,
-		certGeneration:    certGeneration,
-		issuedCursor:      issuedCursor,
-		dutyMask:          resolvedDutyMask,
-		predecessorDigest: predecessorDigest,
-		frontiers:         CloneDutyFrontiers(frontiers),
+		HolderID:          holderID,
+		ExpiresUnixNano:   expiresUnixNano,
+		CertGeneration:    certGeneration,
+		IssuedCursor:      issuedCursor,
+		DutyMask:          resolvedDutyMask,
+		PredecessorDigest: predecessorDigest,
+		Frontiers:         CloneDutyFrontiers(frontiers),
 	}, nil
 }
 
@@ -307,15 +301,6 @@ func (s CoordinatorSuccessorCoverageStatus) Covered() bool {
 	for _, check := range s.Checks {
 		if !check.Covered {
 			return false
-		}
-	}
-	return true
-}
-
-func (s CoordinatorSuccessorCoverageStatus) CoveredDuty(dutyMask uint32) bool {
-	for _, check := range s.Checks {
-		if check.DutyMask == dutyMask {
-			return check.Covered
 		}
 	}
 	return true
@@ -382,43 +367,7 @@ func (w ClosureWitness) WithStage(stage CoordinatorClosureStage) ClosureWitness 
 }
 
 func (r AuthorityHandoffRecord) Present() bool {
-	return r.holderID != ""
-}
-
-func (r AuthorityHandoffRecord) HolderID() string {
-	return r.holderID
-}
-
-func (r AuthorityHandoffRecord) ExpiresUnixNano() int64 {
-	return r.expiresUnixNano
-}
-
-func (r AuthorityHandoffRecord) CertGeneration() uint64 {
-	return r.certGeneration
-}
-
-func (r AuthorityHandoffRecord) IssuedCursor() Cursor {
-	return r.issuedCursor
-}
-
-func (r AuthorityHandoffRecord) DutyMask() uint32 {
-	return r.dutyMask
-}
-
-func (r AuthorityHandoffRecord) PredecessorDigest() string {
-	return r.predecessorDigest
-}
-
-func (r AuthorityHandoffRecord) Frontiers() CoordinatorDutyFrontiers {
-	return CloneDutyFrontiers(r.frontiers)
-}
-
-func (w ContinuationWitness) Attached() bool {
-	return w.CertGeneration == ContinuationWitnessGenerationAttached
-}
-
-func (w ContinuationWitness) Suppressed() bool {
-	return w.CertGeneration == ContinuationWitnessGenerationSuppressed
+	return r.HolderID != ""
 }
 
 func ClosureStageAtLeast(stage, target CoordinatorClosureStage) bool {

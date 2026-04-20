@@ -49,7 +49,7 @@ func RootStateFromProto(pbState *metapb.RootState) rootstate.State {
 }
 
 func RootCoordinatorLeaseToProto(lease rootstate.CoordinatorLease) *metapb.RootCoordinatorLease {
-	if lease.Empty() {
+	if !lease.Present() {
 		return nil
 	}
 	return &metapb.RootCoordinatorLease{
@@ -103,7 +103,7 @@ func RootCoordinatorSealFromProto(seal *metapb.RootCoordinatorSeal) rootstate.Co
 }
 
 func RootCoordinatorClosureToProto(closure rootstate.CoordinatorClosure) *metapb.RootCoordinatorClosure {
-	if closure.Empty() {
+	if !closure.Present() {
 		return nil
 	}
 	return &metapb.RootCoordinatorClosure{
@@ -134,7 +134,7 @@ func RootCoordinatorClosureFromProto(closure *metapb.RootCoordinatorClosure) roo
 	}
 }
 
-func RootDutyFrontiersToProto(frontiers rootstate.CoordinatorDutyFrontiers) []*metapb.RootDutyFrontier {
+func RootDutyFrontiersToProto(frontiers rootproto.CoordinatorDutyFrontiers) []*metapb.RootDutyFrontier {
 	if frontiers.Len() == 0 {
 		return nil
 	}
@@ -146,19 +146,18 @@ func RootDutyFrontiersToProto(frontiers rootstate.CoordinatorDutyFrontiers) []*m
 	return out
 }
 
-func RootDutyFrontiersFromProto(frontiers []*metapb.RootDutyFrontier) rootstate.CoordinatorDutyFrontiers {
-	entries := make([]rootstate.CoordinatorDutyFrontier, 0, len(frontiers))
+func RootDutyFrontiersFromProto(frontiers []*metapb.RootDutyFrontier) rootproto.CoordinatorDutyFrontiers {
+	entries := make([]rootproto.CoordinatorDutyFrontier, 0, len(frontiers))
 	for _, entry := range frontiers {
 		if entry == nil || entry.GetDutyMask() == 0 {
 			continue
 		}
-		entries = append(entries, rootstate.CoordinatorDutyFrontier{
+		entries = append(entries, rootproto.CoordinatorDutyFrontier{
 			DutyMask: entry.GetDutyMask(),
-			DutyName: rootstate.CoordinatorDutyName(entry.GetDutyMask()),
 			Frontier: entry.GetFrontier(),
 		})
 	}
-	return rootstate.NewCoordinatorDutyFrontiers(entries...)
+	return rootproto.NewCoordinatorDutyFrontiers(entries...)
 }
 
 func RootCoordinatorProtocolStateToProto(state rootstate.CoordinatorProtocolState) *metapb.RootCoordinatorProtocolState {
