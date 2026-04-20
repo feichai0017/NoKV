@@ -176,19 +176,24 @@ func (s *stubCoordinatorServer) GetRegionByKey(_ context.Context, req *coordpb.G
 	if s.routeErr != nil {
 		return nil, s.routeErr
 	}
+	resp := &coordpb.GetRegionByKeyResponse{
+		ServingClass:    coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE,
+		SyncHealth:      coordpb.SyncHealth_SYNC_HEALTH_HEALTHY,
+		CatchUpState:    coordpb.CatchUpState_CATCH_UP_STATE_FRESH,
+		ServedByLeader:  true,
+		ServedFreshness: coordpb.Freshness_FRESHNESS_BEST_EFFORT,
+	}
+	if req == nil {
+		resp.NotFound = true
+		return resp, nil
+	}
 	requestedFreshness := req.GetFreshness()
 	if requestedFreshness == coordpb.Freshness_FRESHNESS_UNSPECIFIED {
 		requestedFreshness = coordpb.Freshness_FRESHNESS_BEST_EFFORT
 	}
-	resp := &coordpb.GetRegionByKeyResponse{
-		ServingClass:               coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE,
-		SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_HEALTHY,
-		CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_FRESH,
-		ServedByLeader:             true,
-		ServedFreshness:            requestedFreshness,
-		RequiredDescriptorRevision: req.GetRequiredDescriptorRevision(),
-	}
-	if req == nil || s.region == nil || !keyInRegion(req.GetKey(), s.region.GetStartKey(), s.region.GetEndKey()) {
+	resp.ServedFreshness = requestedFreshness
+	resp.RequiredDescriptorRevision = req.GetRequiredDescriptorRevision()
+	if s.region == nil || !keyInRegion(req.GetKey(), s.region.GetStartKey(), s.region.GetEndKey()) {
 		resp.NotFound = true
 		return resp, nil
 	}

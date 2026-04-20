@@ -295,12 +295,11 @@ func (s *Service) coordinatorProtocolBackend() (leaseBackend, error) {
 }
 
 func coordinatorLeaseApplyRPCError(kind rootproto.CoordinatorLeaseCommandKind, err error) error {
-	if errors.Is(err, rootstate.ErrInvalidCoordinatorLease) {
-		return status.Error(codes.InvalidArgument, err.Error())
-	}
 	switch kind {
 	case rootproto.CoordinatorLeaseCommandIssue:
 		switch {
+		case errors.Is(err, rootstate.ErrInvalidCoordinatorLease):
+			return status.Error(codes.InvalidArgument, err.Error())
 		case errors.Is(err, rootstate.ErrCoordinatorLeaseCoverage),
 			errors.Is(err, rootstate.ErrCoordinatorLeaseLineage):
 			return status.Error(codes.FailedPrecondition, err.Error())
