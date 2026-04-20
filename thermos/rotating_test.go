@@ -1,12 +1,12 @@
-package hotring
+package thermos
 
 import (
 	"testing"
 	"time"
 )
 
-func TestRotatingHotRingRotate(t *testing.T) {
-	r := NewRotatingHotRing(4, nil)
+func TestRotatingThermosRotate(t *testing.T) {
+	r := NewRotatingThermos(4, nil)
 	r.EnableNodeSampling(1, 0)
 	defer r.Close()
 
@@ -44,8 +44,8 @@ func TestRotatingHotRingRotate(t *testing.T) {
 	}
 }
 
-func TestRotatingHotRingEnableRotation(t *testing.T) {
-	r := NewRotatingHotRing(4, nil)
+func TestRotatingThermosEnableRotation(t *testing.T) {
+	r := NewRotatingThermos(4, nil)
 	defer r.Close()
 
 	r.EnableRotation(10 * time.Millisecond)
@@ -57,8 +57,8 @@ func TestRotatingHotRingEnableRotation(t *testing.T) {
 	}
 }
 
-func TestRotatingHotRingClampMax(t *testing.T) {
-	r := NewRotatingHotRing(4, nil)
+func TestRotatingThermosClampMax(t *testing.T) {
+	r := NewRotatingThermos(4, nil)
 	defer r.Close()
 
 	r.Touch("hot")

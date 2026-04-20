@@ -1,4 +1,4 @@
-package hotring
+package thermos
 
 import (
 	"sort"
@@ -17,8 +17,8 @@ type Item struct {
 	Count int32
 }
 
-// HotRing keeps track of frequently accessed keys using lock-free bucketed lists.
-type HotRing struct {
+// Thermos keeps track of frequently accessed keys using lock-free bucketed lists.
+type Thermos struct {
 	hashFn   HashFn
 	hashMask uint32
 	buckets  []atomic.Pointer[Node]
@@ -50,8 +50,8 @@ type HotRing struct {
 
 const defaultTableBits = 12 // 4096 buckets by default
 
-// NewHotRing builds a ring with 2^bits buckets. When fn is nil a fast xxhash-based hash is used.
-func NewHotRing(bits uint8, fn HashFn) *HotRing {
+// NewThermos builds a ring with 2^bits buckets. When fn is nil a fast xxhash-based hash is used.
+func NewThermos(bits uint8, fn HashFn) *Thermos {
 	if bits == 0 || bits > 20 {
 		bits = defaultTableBits
 	}
@@ -60,7 +60,7 @@ func NewHotRing(bits uint8, fn HashFn) *HotRing {
 	}
 	size := 1 << bits
 	mask := uint32(size - 1)
-	return &HotRing{
+	return &Thermos{
 		hashFn:   fn,
 		hashMask: mask,
 		buckets:  make([]atomic.Pointer[Node], size),
@@ -70,7 +70,7 @@ func NewHotRing(bits uint8, fn HashFn) *HotRing {
 // EnableSlidingWindow configures the ring to maintain a time-based sliding window.
 // slots specifies how many buckets to retain, while slotDuration controls how long
 // each bucket remains active. Passing non-positive values disables the window.
-func (h *HotRing) EnableSlidingWindow(slots int, slotDuration time.Duration) {
+func (h *Thermos) EnableSlidingWindow(slots int, slotDuration time.Duration) {
 	if slots <= 0 || slotDuration <= 0 {
 		h.windowSlots.Store(0)
 		h.windowSlotDur.Store(0)
@@ -82,7 +82,7 @@ func (h *HotRing) EnableSlidingWindow(slots int, slotDuration time.Duration) {
 
 // EnableDecay applies periodic right-shift decay to the raw counters.
 // interval <= 0 or shift == 0 disables background decay.
-func (h *HotRing) EnableDecay(interval time.Duration, shift uint32) {
+func (h *Thermos) EnableDecay(interval time.Duration, shift uint32) {
 	h.stopDecay()
 	if interval <= 0 || shift == 0 {
 		h.decayInterval.Store(0)
@@ -103,7 +103,7 @@ func (h *HotRing) EnableDecay(interval time.Duration, shift uint32) {
 // EnableNodeSampling caps node growth and applies stable sampling once the cap is reached.
 // cap <= 0 disables the cap. sampleBits controls the sampling rate (1/2^sampleBits).
 // sampleBits == 0 means no sampling when the cap is exceeded (strict cap).
-func (h *HotRing) EnableNodeSampling(cap uint64, sampleBits uint8) {
+func (h *Thermos) EnableNodeSampling(cap uint64, sampleBits uint8) {
 	if h == nil {
 		return
 	}
@@ -124,7 +124,7 @@ func (h *HotRing) EnableNodeSampling(cap uint64, sampleBits uint8) {
 }
 
 // Close releases background resources attached to the ring.
-func (h *HotRing) Close() {
+func (h *Thermos) Close() {
 	h.stopDecay()
 }
 
@@ -132,7 +132,7 @@ func defaultHash(key string) uint32 {
 	return uint32(xxhash.Sum64String(key))
 }
 
-func (h *HotRing) stopDecay() {
+func (h *Thermos) stopDecay() {
 	h.decayMu.Lock()
 	stop := h.decayStop
 	if stop != nil {
@@ -145,7 +145,7 @@ func (h *HotRing) stopDecay() {
 	}
 }
 
-func (h *HotRing) decayLoop(stop <-chan struct{}, interval time.Duration, shift uint32) {
+func (h *Thermos) decayLoop(stop <-chan struct{}, interval time.Duration, shift uint32) {
 	ticker := time.NewTicker(interval)
 	defer func() {
 		ticker.Stop()
@@ -161,7 +161,7 @@ func (h *HotRing) decayLoop(stop <-chan struct{}, interval time.Duration, shift 
 	}
 }
 
-func (h *HotRing) applyDecay(shift uint32) {
+func (h *Thermos) applyDecay(shift uint32) {
 	if shift == 0 {
 		return
 	}
@@ -177,7 +177,7 @@ func (h *HotRing) applyDecay(shift uint32) {
 	}
 }
 
-func (h *HotRing) slotState() (slot int64, slots int) {
+func (h *Thermos) slotState() (slot int64, slots int) {
 	slots = int(h.windowSlots.Load())
 	slotDur := h.windowSlotDur.Load()
 	if slots <= 0 || slotDur <= 0 {
@@ -186,7 +186,7 @@ func (h *HotRing) slotState() (slot int64, slots int) {
 	return time.Now().UnixNano() / slotDur, slots
 }
 
-func (h *HotRing) nodeCount(node *Node, slots int, slot int64) int32 {
+func (h *Thermos) nodeCount(node *Node, slots int, slot int64) int32 {
 	if node == nil {
 		return 0
 	}
@@ -196,7 +196,7 @@ func (h *HotRing) nodeCount(node *Node, slots int, slot int64) int32 {
 	return node.GetCounter()
 }
 
-func (h *HotRing) incrementNode(node *Node, slots int, slot int64) int32 {
+func (h *Thermos) incrementNode(node *Node, slots int, slot int64) int32 {
 	if node == nil {
 		return 0
 	}
@@ -208,7 +208,7 @@ func (h *HotRing) incrementNode(node *Node, slots int, slot int64) int32 {
 }
 
 // Touch records a key access and returns the updated counter.
-func (h *HotRing) Touch(key string) int32 {
+func (h *Thermos) Touch(key string) int32 {
 	if h == nil || key == "" {
 		return 0
 	}
@@ -235,7 +235,7 @@ func (h *HotRing) Touch(key string) int32 {
 }
 
 // Frequency returns the current access counter for key without mutating state.
-func (h *HotRing) Frequency(key string) int32 {
+func (h *Thermos) Frequency(key string) int32 {
 	if h == nil || key == "" {
 		return 0
 	}
@@ -247,7 +247,7 @@ func (h *HotRing) Frequency(key string) int32 {
 
 // TouchAndClamp increments the counter if below the provided limit and reports
 // whether the key should be considered throttled.
-func (h *HotRing) TouchAndClamp(key string, limit int32) (count int32, limited bool) {
+func (h *Thermos) TouchAndClamp(key string, limit int32) (count int32, limited bool) {
 	if h == nil || key == "" {
 		return 0, false
 	}
@@ -290,7 +290,7 @@ func (h *HotRing) TouchAndClamp(key string, limit int32) (count int32, limited b
 	return count, limited
 }
 
-func (h *HotRing) Remove(key string) {
+func (h *Thermos) Remove(key string) {
 	if h == nil || key == "" {
 		return
 	}
@@ -329,7 +329,7 @@ func (h *HotRing) Remove(key string) {
 }
 
 // TopN returns at most n hot keys ordered by access count (descending).
-func (h *HotRing) TopN(n int) []Item {
+func (h *Thermos) TopN(n int) []Item {
 	if h == nil || n <= 0 {
 		return nil
 	}
@@ -362,7 +362,7 @@ func (h *HotRing) TopN(n int) []Item {
 }
 
 // KeysAbove returns all keys whose counters are at least threshold.
-func (h *HotRing) KeysAbove(threshold int32) []Item {
+func (h *Thermos) KeysAbove(threshold int32) []Item {
 	if h == nil || threshold <= 0 {
 		return nil
 	}
@@ -384,12 +384,12 @@ func (h *HotRing) KeysAbove(threshold int32) []Item {
 	return items
 }
 
-func (h *HotRing) hashParts(key string) (hashVal uint32, index uint32, tag uint32) {
+func (h *Thermos) hashParts(key string) (hashVal uint32, index uint32, tag uint32) {
 	hashVal = h.hashFn(key)
 	return hashVal, hashVal & h.hashMask, hashVal & (^h.hashMask)
 }
 
-func (h *HotRing) search(index uint32, compareItem *Node) *Node {
+func (h *Thermos) search(index uint32, compareItem *Node) *Node {
 	for node := h.buckets[index].Load(); node != nil; node = node.Next() {
 		if compareItem.Equal(node) {
 			return node
@@ -402,7 +402,7 @@ func (h *HotRing) search(index uint32, compareItem *Node) *Node {
 }
 
 // findOrInsert keeps the bucket sorted by (tag,key) using CAS on the head or predecessor.
-func (h *HotRing) findOrInsert(index uint32, compareItem *Node, slots int, slot int64, hashVal uint32) (*Node, bool) {
+func (h *Thermos) findOrInsert(index uint32, compareItem *Node, slots int, slot int64, hashVal uint32) (*Node, bool) {
 	bucket := &h.buckets[index]
 	for {
 		head := bucket.Load()
@@ -440,7 +440,7 @@ func (h *HotRing) findOrInsert(index uint32, compareItem *Node, slots int, slot 
 	}
 }
 
-func (h *HotRing) allowInsert(hashVal uint32) bool {
+func (h *Thermos) allowInsert(hashVal uint32) bool {
 	cap := h.nodeCap.Load()
 	if cap == 0 {
 		return true

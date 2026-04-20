@@ -354,7 +354,7 @@ func openNamespaceFacadeTestDBAt(t *testing.T, workdir string) *DB {
 	opt.WorkDir = workdir
 	opt.EnableWALWatchdog = false
 	opt.ValueLogGCInterval = 0
-	opt.HotRingEnabled = false
+	opt.ThermosEnabled = false
 	db, err := Open(opt)
 	require.NoError(t, err)
 	h := db.Namespace(NamespaceOptions{Shards: 4})
@@ -478,7 +478,7 @@ func TestDBNamespaceFacadeFaultInjectedWALWriteFailsWithoutPartialNamespaceCommi
 	opt.WorkDir = workdir
 	opt.EnableWALWatchdog = false
 	opt.ValueLogGCInterval = 0
-	opt.HotRingEnabled = false
+	opt.ThermosEnabled = false
 	db, err := Open(opt)
 	require.NoError(t, err)
 

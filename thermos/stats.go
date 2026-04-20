@@ -1,8 +1,8 @@
-package hotring
+package thermos
 
 import "time"
 
-// Stats exposes lightweight observability data for a HotRing instance.
+// Stats exposes lightweight observability data for a Thermos instance.
 type Stats struct {
 	Buckets            int           `json:"buckets"`
 	Nodes              uint64        `json:"nodes"`
@@ -40,7 +40,7 @@ type observerHolder struct {
 }
 
 // Stats returns a lightweight view of ring configuration and counters.
-func (h *HotRing) Stats() Stats {
+func (h *Thermos) Stats() Stats {
 	if h == nil {
 		return Stats{}
 	}
@@ -68,17 +68,17 @@ func (h *HotRing) Stats() Stats {
 }
 
 // SnapshotTopN captures a Top-N snapshot with a timestamp.
-func (h *HotRing) SnapshotTopN(n int) Snapshot {
+func (h *Thermos) SnapshotTopN(n int) Snapshot {
 	return Snapshot{TakenAt: time.Now(), Items: h.TopN(n)}
 }
 
 // SnapshotKeysAbove captures a threshold snapshot with a timestamp.
-func (h *HotRing) SnapshotKeysAbove(threshold int32) Snapshot {
+func (h *Thermos) SnapshotKeysAbove(threshold int32) Snapshot {
 	return Snapshot{TakenAt: time.Now(), Items: h.KeysAbove(threshold)}
 }
 
 // SetObserver registers an optional observer hook.
-func (h *HotRing) SetObserver(obs Observer) {
+func (h *Thermos) SetObserver(obs Observer) {
 	if h == nil {
 		return
 	}
@@ -89,7 +89,7 @@ func (h *HotRing) SetObserver(obs Observer) {
 	h.observer.Store(&observerHolder{obs: obs})
 }
 
-func (h *HotRing) getObserver() Observer {
+func (h *Thermos) getObserver() Observer {
 	if h == nil {
 		return nil
 	}

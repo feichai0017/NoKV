@@ -21,13 +21,13 @@ import (
 	"github.com/feichai0017/NoKV/engine/vfs"
 	vlogpkg "github.com/feichai0017/NoKV/engine/vlog"
 	"github.com/feichai0017/NoKV/engine/wal"
-	"github.com/feichai0017/NoKV/hotring"
 	dbruntime "github.com/feichai0017/NoKV/internal/runtime"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
+	"github.com/feichai0017/NoKV/thermos"
 	"github.com/feichai0017/NoKV/utils"
 	pkgerrors "github.com/pkg/errors"
 )
@@ -82,7 +82,7 @@ type (
 		closeErr        error
 		throttleMu      sync.Mutex
 		throttleCh      chan struct{}
-		hotWrite        *hotring.RotatingHotRing
+		hotWrite        *thermos.RotatingThermos
 		writeMetrics    *metrics.WriteMetrics
 		commitQueue     dbruntime.CommitQueue
 		commitWG        sync.WaitGroup
@@ -111,15 +111,15 @@ func newDB(opt *Options) *DB {
 	db.headLogDelta = valueLogHeadLogInterval
 	db.throttleCh = make(chan struct{})
 	db.hotWrite = dbruntime.NewHotWriteRing(dbruntime.HotWriteConfig{
-		Enabled:          cfg.HotRingEnabled && cfg.WriteHotKeyLimit > 0,
-		Bits:             cfg.HotRingBits,
-		WindowSlots:      cfg.HotRingWindowSlots,
-		WindowSlotPeriod: cfg.HotRingWindowSlotDuration,
-		DecayInterval:    cfg.HotRingDecayInterval,
-		DecayShift:       cfg.HotRingDecayShift,
-		NodeCap:          cfg.HotRingNodeCap,
-		NodeSampleBits:   cfg.HotRingNodeSampleBits,
-		RotationInterval: cfg.HotRingRotationInterval,
+		Enabled:          cfg.ThermosEnabled && cfg.WriteHotKeyLimit > 0,
+		Bits:             cfg.ThermosBits,
+		WindowSlots:      cfg.ThermosWindowSlots,
+		WindowSlotPeriod: cfg.ThermosWindowSlotDuration,
+		DecayInterval:    cfg.ThermosDecayInterval,
+		DecayShift:       cfg.ThermosDecayShift,
+		NodeCap:          cfg.ThermosNodeCap,
+		NodeSampleBits:   cfg.ThermosNodeSampleBits,
+		RotationInterval: cfg.ThermosRotationInterval,
 	})
 	db.discardStatsCh = make(chan map[manifest.ValueLogID]int64, 16)
 	db.commitBatchPool.New = func() any {

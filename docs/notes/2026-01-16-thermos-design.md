@@ -1,8 +1,8 @@
-# 2026-01-16 HotRing 设计说明
+# 2026-01-16 Thermos 设计说明
 
-本文档记录 `hotring` 的原始设计思路。需要注意：当前生产实现已经收口，HotRing 只保留为可选的内部热点检测器和写热点限流工具；文中关于读预取、compaction hint 和 value-log 热冷路由的设想不再代表当前默认实现。
+本文档记录 `thermos` 的原始设计思路。需要注意：当前生产实现已经收口，Thermos 只保留为可选的内部热点检测器和写热点限流工具；文中关于读预取、compaction hint 和 value-log 热冷路由的设想不再代表当前默认实现。
 
-当前实现已并入 NoKV 仓库，位于 `hotring/` 包。
+当前实现已并入 NoKV 仓库，位于 `thermos/` 包。
 
 ---
 
@@ -25,7 +25,7 @@ NoKV 并没有照搬论文作为主索引（因为主索引是 LSM Tree），而
 
 ## 2. 核心架构：反馈驱动设计 (Feedback-Driven)
 
-NoKV 的 HotRing 不仅仅是一个统计工具，它是整个系统“自适应优化”的大脑。
+NoKV 的 Thermos 不仅仅是一个统计工具，它是整个系统“自适应优化”的大脑。
 
 ### 2.1 架构全景图
 
@@ -33,7 +33,7 @@ NoKV 的 HotRing 不仅仅是一个统计工具，它是整个系统“自适应
 graph TD
     Client[Client Request] --> DB[DB Layer]
     
-    subgraph "HotRing Subsystem (The Brain)"
+    subgraph "Thermos Subsystem (The Brain)"
         Tracker[Hot Key Tracker]
         Window[Sliding Window]
         Decay[Decay Loop]
@@ -58,10 +58,10 @@ graph TD
 1.  **探测 (Probe)**：
     *   **读路径**：每次 `Get` 命中时调用 `Touch`。
     *   **写路径**：只有当启用了限流（`WriteHotKeyLimit`）或突发检测时，才会调用 `TouchAndClamp`。
-2.  **计算 (Compute)**：HotRing 内部利用**滑动窗口**算法计算实时 QPS。
+2.  **计算 (Compute)**：Thermos 内部利用**滑动窗口**算法计算实时 QPS。
 3.  **反馈 (Feedback)**：
-    *   **Compaction 评分**：`lsm/picker.go` 在选择压缩层级时，会参考 `HotRing.TopN`。如果某一层包含大量热点 Key，会优先压缩该层（Hot Overlap Score），减少热点数据的读放大。
-    *   **缓存预取 (Prefetch)**：DB 层会根据 TopN 结果触发预取逻辑。虽然 HotRing 不直接控制 Cache，但它提供的热点名单是预取策略的重要输入。
+    *   **Compaction 评分**：`lsm/picker.go` 在选择压缩层级时，会参考 `Thermos.TopN`。如果某一层包含大量热点 Key，会优先压缩该层（Hot Overlap Score），减少热点数据的读放大。
+    *   **缓存预取 (Prefetch)**：DB 层会根据 TopN 结果触发预取逻辑。虽然 Thermos 不直接控制 Cache，但它提供的热点名单是预取策略的重要输入。
     *   **写入限流**：对于写频率过高的 Key，`TouchAndClamp` 会触发限流保护。
 
 ---
@@ -69,7 +69,7 @@ graph TD
 ## 3. 实现细节深度解析
 
 ### 3.1 并发控制：Lock-Free 与 Spin-Lock
-为了支撑高并发，HotRing 采用了混合并发策略：
+为了支撑高并发，Thermos 采用了混合并发策略：
 
 *   **主链表 (Buckets & List)**：采用 **Lock-Free** 的 CAS 操作进行节点插入。
     *   **Ordered List**：链表节点按 `(Tag, Key)` 排序，查找失败可提前终止。
@@ -92,7 +92,7 @@ graph TD
 
 ## 3.3 与论文/算法的关键差异（工程化改动）
 
-| 对比点 | 论文 / 经典算法 | NoKV HotRing |
+| 对比点 | 论文 / 经典算法 | NoKV Thermos |
 | :-- | :-- | :-- |
 | 目标 | 作为索引或严格频率估计 | **作为系统级热点反馈信号** |
 | 数据结构 | 环形链表/Sketch | **哈希分桶 + 有序链表** |
@@ -100,7 +100,7 @@ graph TD
 | 并发 | 复杂锁或全局结构 | **Lock-Free + 轻量自旋锁** |
 | 时间维度 | 常态累计 | **滑动窗口 + 衰减** |
 
-结论：NoKV HotRing 是“**工程可用**”优先的实现，而不是“**数学最优**”优先。
+结论：NoKV Thermos 是“**工程可用**”优先的实现，而不是“**数学最优**”优先。
 
 ---
 
@@ -119,13 +119,13 @@ Hot Keys:
 
 ### 4.2 缓存与性能 (Performance)
 *   **VIP 缓存区 (Hot Tier)**：LSM Cache 内部维护了一个小型的 `Clock-Pro` 缓存（Hot Tier）。虽然它不是绝对的“免死金牌”（仍可能被更热的数据挤出），但它为热点 Block 提供了比普通 LRU 更强的保护。
-*   **热点压缩优先**：通过 HotRing 的反馈，系统能主动将热点数据所在的重叠 SSTable 进行合并，将热点数据的查询路径压缩到最短。
+*   **热点压缩优先**：通过 Thermos 的反馈，系统能主动将热点数据所在的重叠 SSTable 进行合并，将热点数据的查询路径压缩到最短。
 
 ---
 
 ## 5. 未来展望
 
-基于目前的 HotRing 基础，NoKV 未来可以实现更高级的特性：
+基于目前的 Thermos 基础，NoKV 未来可以实现更高级的特性：
 
 1.  **写吸收 (Write Absorption)**：
     *   对于超高频写入的热点（如计数器），可以在内存中聚合 100 次更新为 1 次 VLog 写入，大幅降低 LSM 写放大。
@@ -134,4 +134,4 @@ Hot Keys:
 
 ## 6. 总结
 
-NoKV 的 `hotring` 是一个 **“学术灵感 + 工程务实”** 的典范。它没有追求理论上完美的环形索引结构，而是抓住了“热点感知”这一核心价值，用混合并发结构（Lock-Free + SpinLock）解决了工程中最头疼的**监控盲区**问题，并成功反哺了 Compaction 调度。
+NoKV 的 `thermos` 是一个 **“学术灵感 + 工程务实”** 的典范。它没有追求理论上完美的环形索引结构，而是抓住了“热点感知”这一核心价值，用混合并发结构（Lock-Free + SpinLock）解决了工程中最头疼的**监控盲区**问题，并成功反哺了 Compaction 调度。
