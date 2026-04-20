@@ -8,43 +8,23 @@ BENCH_DIR=$(cd -- "$CONTROLPLANE_DIR/.." && pwd)
 REPO_ROOT=$(cd -- "$BENCH_DIR/.." && pwd)
 
 BENCHTIME=${CONTROL_PLANE_BENCHTIME:-500ms}
-INPROC_COUNT=${CONTROL_PLANE_INPROC_COUNT:-5}
-PROCESS_COUNT=${CONTROL_PLANE_PROCESS_COUNT:-5}
+PERF_COUNT=${CONTROL_PLANE_PERF_COUNT:-5}
 RECOVERY_COUNT=${CONTROL_PLANE_RECOVERY_COUNT:-5}
 SUFFIX=${CONTROL_PLANE_RESULT_SUFFIX:-}
 
 stamp=$(date +"%Y%m%d_%H%M%S")
-result_dir="$BENCH_DIR/results/controlplane/${stamp}${SUFFIX}"
+result_dir="$CONTROLPLANE_DIR/results/${stamp}${SUFFIX}"
 mkdir -p "$result_dir"
 
 echo "control-plane benchmark results -> $result_dir"
-echo "benchtime=$BENCHTIME inproc_count=$INPROC_COUNT process_count=$PROCESS_COUNT recovery_count=$RECOVERY_COUNT"
+echo "benchtime=$BENCHTIME perf_count=$PERF_COUNT recovery_count=$RECOVERY_COUNT"
 
-inproc_raw="$result_dir/inprocess_raw.txt"
-process_raw="$result_dir/process_raw.txt"
 recovery_raw="$result_dir/recovery_raw.txt"
-routing_raw="$result_dir/routing_raw.txt"
+witness_raw="$result_dir/witness_raw.txt"
+ablation_raw="$result_dir/ablation_raw.txt"
+etcd_raw="$result_dir/etcd_raw.txt"
+crdb_raw="$result_dir/crdb_66562_raw.txt"
 summary_md="$result_dir/summary.md"
-
-(
-	cd "$BENCH_DIR"
-	go test ./controlplane \
-		-run '^$' \
-		-bench 'BenchmarkControlPlaneAllocID(Local|Remote|RemoteTCP)Window(Default|One)$' \
-		-benchmem \
-		-count "$INPROC_COUNT" \
-		-benchtime "$BENCHTIME"
-) | tee "$inproc_raw"
-
-(
-	cd "$BENCH_DIR"
-	go test ./controlplane \
-		-run '^$' \
-		-bench 'BenchmarkControlPlaneProcess(NoKVRemoteTCP|EtcdCAS)Window(Default|One)$' \
-		-benchmem \
-		-count "$PROCESS_COUNT" \
-		-benchtime "$BENCHTIME"
-) | tee "$process_raw"
 
 (
 	cd "$REPO_ROOT"
@@ -58,34 +38,51 @@ summary_md="$result_dir/summary.md"
 	cd "$BENCH_DIR"
 	go test ./controlplane \
 		-run '^$' \
-		-bench 'BenchmarkControlPlaneGetRegionByKeyRemoteTCP(OneCoordinator|ThreeCoordinators)$' \
+		-bench 'BenchmarkControlPlane(AllocID|TSO|Metadata)WitnessTax$' \
 		-benchmem \
-		-count "$INPROC_COUNT" \
+		-count "$PERF_COUNT" \
 		-benchtime "$BENCHTIME"
-) | tee "$routing_raw"
+) | tee "$witness_raw"
+
+(
+	cd "$BENCH_DIR"
+	go test ./controlplane \
+		-run TestControlPlaneDetachedAblationRunner \
+		-count 1 \
+		-v
+) | tee "$ablation_raw"
+
+(
+	cd "$BENCH_DIR"
+	go test ./controlplane/crdb \
+		-run 'TestControlPlaneCRDB66562(IssueSchedule|RootedGate)' \
+		-count 1 \
+		-v
+) | tee "$crdb_raw"
+
+(
+	cd "$BENCH_DIR"
+	go test ./controlplane/etcd \
+		-run 'TestControlPlaneEtcd(ReadIndex(Pilot|RealDelayedInFlightReply)|LeaseKeepAliveBufferedSuccessAfterRevoke(WithWitnessGate)?)' \
+		-count 1 \
+		-v
+) | tee "$etcd_raw"
+
+(
+	cd "$BENCH_DIR"
+	go test ./controlplane \
+		-run 'TestControlPlaneNoKVLateReplyControl' \
+		-count 1 \
+		-v
+) | tee -a "$etcd_raw"
 
 {
 	echo "# Control-Plane Evaluation"
 	echo
 	echo "- Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
-	echo "- In-process count: $INPROC_COUNT"
-	echo "- Process count: $PROCESS_COUNT"
+	echo "- Perf count: $PERF_COUNT"
 	echo "- Recovery count: $RECOVERY_COUNT"
 	echo "- Benchtime: $BENCHTIME"
-	echo
-	echo "## In-Process Allocator Table"
-	echo
-	(
-		cd "$BENCH_DIR"
-		go run ./controlplane/cmd/controlplane_table -input "$inproc_raw" -suite inprocess
-	)
-	echo
-	echo "## Process-Separated Allocator Table"
-	echo
-	(
-		cd "$BENCH_DIR"
-		go run ./controlplane/cmd/controlplane_table -input "$process_raw" -suite process
-	)
 	echo
 	echo "## Recovery Logs"
 	echo
@@ -93,18 +90,37 @@ summary_md="$result_dir/summary.md"
 	grep 'separated coordinator recovery latency:' "$recovery_raw" || true
 	echo '```'
 	echo
-	echo "## Routing Scale-Out Logs"
+	echo "## Witness Tax Logs"
 	echo
 	echo '```text'
-	grep 'BenchmarkControlPlaneGetRegionByKeyRemoteTCP' "$routing_raw" || true
+	grep 'BenchmarkControlPlane.*WitnessTax' "$witness_raw" || true
+	echo '```'
+	echo
+	echo "## Detached Ablation Logs"
+	echo
+	echo '```text'
+	grep 'detached_ablation' "$ablation_raw" || true
+	echo '```'
+	echo
+	echo "## CRDB Issue Logs"
+	echo
+	echo '```text'
+	grep 'crdb_66562' "$crdb_raw" || true
+	echo '```'
+	echo
+	echo "## Etcd Issue Logs"
+	echo
+	echo '```text'
+	grep -E 'etcd_pilot|etcd_delayed_capture|etcd_lease_buffered|etcd_lease_buffered_with_gate|etcd_wal|control_late_reply' "$etcd_raw" || true
 	echo '```'
 	echo
 	echo "## Raw Files"
 	echo
-	echo "- $inproc_raw"
-	echo "- $process_raw"
 	echo "- $recovery_raw"
-	echo "- $routing_raw"
+	echo "- $witness_raw"
+	echo "- $ablation_raw"
+	echo "- $crdb_raw"
+	echo "- $etcd_raw"
 } > "$summary_md"
 
 echo "summary -> $summary_md"
