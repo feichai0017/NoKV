@@ -3,6 +3,7 @@ package audit
 import (
 	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
 	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 )
 
@@ -30,15 +31,6 @@ type SnapshotAnomalies struct {
 	LeaseStartCoverageViolation bool
 	SealedGenerationStillLive   bool
 	ClosureDefect               ClosureDefect
-	ClosureIncomplete           bool
-	MissingConfirm              bool
-	MissingClose                bool
-	CloseWithoutConfirm         bool
-	CloseLineageMismatch        bool
-	ReattachWithoutConfirm      bool
-	ReattachWithoutClose        bool
-	ReattachLineageMismatch     bool
-	ReattachIncomplete          bool
 }
 
 // Report is the standalone ccc-audit projection for one rooted snapshot.
@@ -49,15 +41,15 @@ type Report struct {
 	CatchUpState           string
 	CurrentHolderID        string
 	CurrentGeneration      uint64
-	Handoff                rootstate.AuthorityHandoffRecord
-	ClosureWitness         rootstate.ClosureWitness
-	Closure                rootstate.CoordinatorClosureStatus
+	Handoff                rootproto.AuthorityHandoffRecord
+	ClosureWitness         rootproto.ClosureWitness
+	Closure                rootproto.CoordinatorClosureStatus
 	Anomalies              SnapshotAnomalies
 }
 
 func evaluateSnapshot(snapshot coordstorage.Snapshot, holderID string, nowUnixNano int64) Report {
 	descriptorRevision := rootstate.MaxDescriptorRevision(snapshot.Descriptors)
-	currentFrontiers := controlplane.FrontiersFromState(rootstate.State{
+	currentFrontiers := controlplane.Frontiers(rootstate.State{
 		IDFence:  snapshot.Allocator.IDCurrent,
 		TSOFence: snapshot.Allocator.TSCurrent,
 	}, descriptorRevision)
@@ -81,7 +73,7 @@ func evaluateSnapshot(snapshot coordstorage.Snapshot, holderID string, nowUnixNa
 	}
 }
 
-func evaluateClosureDefect(snapshot coordstorage.Snapshot, holderID string, nowUnixNano int64, witness rootstate.ClosureWitness, status rootstate.CoordinatorClosureStatus) ClosureDefect {
+func evaluateClosureDefect(snapshot coordstorage.Snapshot, holderID string, nowUnixNano int64, witness rootproto.ClosureWitness, status rootproto.CoordinatorClosureStatus) ClosureDefect {
 	current := snapshot.CoordinatorLease
 	closure := snapshot.CoordinatorClosure
 	if holderID == "" || holderID != current.HolderID || !current.ActiveAt(nowUnixNano) {
@@ -92,16 +84,16 @@ func evaluateClosureDefect(snapshot coordstorage.Snapshot, holderID string, nowU
 	}
 	confirmPresent := closure.Present() && closure.HolderID == holderID
 	if !confirmPresent {
-		if status.Stage == rootstate.CoordinatorClosureStageUnspecified {
+		if status.Stage == rootproto.CoordinatorClosureStageUnspecified {
 			if witness.ClosureSatisfied() {
 				return ClosureDefectMissingConfirm
 			}
 			return ClosureDefectNone
 		}
-		if rootstate.ClosureStageAtLeast(status.Stage, rootstate.CoordinatorClosureStageReattached) {
+		if rootproto.ClosureStageAtLeast(status.Stage, rootproto.CoordinatorClosureStageReattached) {
 			return ClosureDefectReattachWithoutConfirm
 		}
-		if rootstate.ClosureStageAtLeast(status.Stage, rootstate.CoordinatorClosureStageClosed) {
+		if rootproto.ClosureStageAtLeast(status.Stage, rootproto.CoordinatorClosureStageClosed) {
 			return ClosureDefectCloseWithoutConfirm
 		}
 		return ClosureDefectMissingConfirm
@@ -111,8 +103,8 @@ func evaluateClosureDefect(snapshot coordstorage.Snapshot, holderID string, nowU
 		closure.SuccessorGeneration == current.CertGeneration
 	lineageSatisfied := confirmMatchesCurrent &&
 		current.PredecessorDigest == closure.SealDigest
-	closePresent := confirmPresent && rootstate.ClosureStageAtLeast(closure.Stage, rootstate.CoordinatorClosureStageClosed)
-	reattachPresent := confirmPresent && rootstate.ClosureStageAtLeast(closure.Stage, rootstate.CoordinatorClosureStageReattached)
+	closePresent := confirmPresent && rootproto.ClosureStageAtLeast(closure.Stage, rootproto.CoordinatorClosureStageClosed)
+	reattachPresent := confirmPresent && rootproto.ClosureStageAtLeast(closure.Stage, rootproto.CoordinatorClosureStageReattached)
 
 	if reattachPresent {
 		if !closePresent {
@@ -121,7 +113,7 @@ func evaluateClosureDefect(snapshot coordstorage.Snapshot, holderID string, nowU
 		if !lineageSatisfied {
 			return ClosureDefectReattachLineageMismatch
 		}
-		if status.Stage != rootstate.CoordinatorClosureStageReattached {
+		if status.Stage != rootproto.CoordinatorClosureStageReattached {
 			return ClosureDefectReattachIncomplete
 		}
 		return ClosureDefectNone
@@ -149,15 +141,6 @@ func BuildReport(snapshot coordstorage.Snapshot, holderID string, nowUnixNano in
 		UncoveredDescriptorRevision: report.ClosureWitness.SuccessorPresent && !report.ClosureWitness.SuccessorDescriptorCovered(),
 		SealedGenerationStillLive:   report.ClosureWitness.SealGeneration != 0 && !report.ClosureWitness.SealedGenerationRetired,
 		ClosureDefect:               closureDefect,
-		ClosureIncomplete:           closureDefect == ClosureDefectSuccessorIncomplete,
-		MissingConfirm:              closureDefect == ClosureDefectMissingConfirm,
-		MissingClose:                closureDefect == ClosureDefectMissingClose,
-		CloseWithoutConfirm:         closureDefect == ClosureDefectCloseWithoutConfirm,
-		CloseLineageMismatch:        closureDefect == ClosureDefectCloseLineageMismatch,
-		ReattachWithoutConfirm:      closureDefect == ClosureDefectReattachWithoutConfirm,
-		ReattachWithoutClose:        closureDefect == ClosureDefectReattachWithoutClose,
-		ReattachLineageMismatch:     closureDefect == ClosureDefectReattachLineageMismatch,
-		ReattachIncomplete:          closureDefect == ClosureDefectReattachIncomplete,
 	}
 	report.Anomalies = anomalies
 	return report

@@ -6,6 +6,7 @@ import (
 	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
@@ -29,7 +30,7 @@ func TestApplyEventToStateAdvancesEpochsAndCursor(t *testing.T) {
 
 func TestApplyCoordinatorLeaseToState(t *testing.T) {
 	var st rootstate.State
-	event := rootevent.CoordinatorLeaseGranted("c1", 1_000, 1, rootstate.CoordinatorDutyMaskDefault, "pred", controlplane.Frontiers(10, 20, 0))
+	event := rootevent.CoordinatorLeaseGranted("c1", 1_000, 1, rootproto.CoordinatorDutyMaskDefault, "pred", controlplane.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0))
 
 	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 1}, event)
 
@@ -38,7 +39,7 @@ func TestApplyCoordinatorLeaseToState(t *testing.T) {
 	require.Equal(t, int64(1_000), st.CoordinatorLease.ExpiresUnixNano)
 	require.Equal(t, uint64(1), st.CoordinatorLease.CertGeneration)
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, st.CoordinatorLease.IssuedCursor)
-	require.Equal(t, uint32(rootstate.CoordinatorDutyMaskDefault), st.CoordinatorLease.DutyMask)
+	require.Equal(t, uint32(rootproto.CoordinatorDutyMaskDefault), st.CoordinatorLease.DutyMask)
 	require.Equal(t, "pred", st.CoordinatorLease.PredecessorDigest)
 	require.Equal(t, uint64(10), st.IDFence)
 	require.Equal(t, uint64(20), st.TSOFence)
@@ -57,7 +58,7 @@ func TestApplyCoordinatorClosureConfirmedToState(t *testing.T) {
 	require.Equal(t, uint64(7), st.CoordinatorClosure.SealGeneration)
 	require.Equal(t, uint64(8), st.CoordinatorClosure.SuccessorGeneration)
 	require.Equal(t, "seal-digest", st.CoordinatorClosure.SealDigest)
-	require.Equal(t, rootstate.CoordinatorClosureStageConfirmed, st.CoordinatorClosure.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageConfirmed, st.CoordinatorClosure.Stage)
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 9}, st.CoordinatorClosure.ConfirmedAtCursor)
 }
 
@@ -72,7 +73,7 @@ func TestApplyCoordinatorClosureClosedToState(t *testing.T) {
 	require.Equal(t, uint64(8), st.CoordinatorClosure.SuccessorGeneration)
 	require.Equal(t, uint64(7), st.CoordinatorClosure.SealGeneration)
 	require.Equal(t, "seal-digest", st.CoordinatorClosure.SealDigest)
-	require.Equal(t, rootstate.CoordinatorClosureStageClosed, st.CoordinatorClosure.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageClosed, st.CoordinatorClosure.Stage)
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.CoordinatorClosure.ClosedAtCursor)
 }
 
@@ -87,14 +88,14 @@ func TestApplyCoordinatorClosureReattachToState(t *testing.T) {
 	require.Equal(t, uint64(8), st.CoordinatorClosure.SuccessorGeneration)
 	require.Equal(t, uint64(7), st.CoordinatorClosure.SealGeneration)
 	require.Equal(t, "seal-digest", st.CoordinatorClosure.SealDigest)
-	require.Equal(t, rootstate.CoordinatorClosureStageReattached, st.CoordinatorClosure.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageReattached, st.CoordinatorClosure.Stage)
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.CoordinatorClosure.ReattachedAtCursor)
 }
 
 func TestApplyCoordinatorLeasePreservesIssuedCursorForSameGeneration(t *testing.T) {
 	var st rootstate.State
-	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 1}, rootevent.CoordinatorLeaseGranted("c1", 1_000, 1, rootstate.CoordinatorDutyMaskDefault, "pred", controlplane.Frontiers(10, 20, 0)))
-	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 2}, rootevent.CoordinatorLeaseGranted("c1", 2_000, 1, rootstate.CoordinatorDutyMaskDefault, "", controlplane.Frontiers(20, 30, 0)))
+	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 1}, rootevent.CoordinatorLeaseGranted("c1", 1_000, 1, rootproto.CoordinatorDutyMaskDefault, "pred", controlplane.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0)))
+	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 2}, rootevent.CoordinatorLeaseGranted("c1", 2_000, 1, rootproto.CoordinatorDutyMaskDefault, "", controlplane.Frontiers(rootstate.State{IDFence: 20, TSOFence: 30}, 0)))
 
 	require.Equal(t, uint64(1), st.CoordinatorLease.CertGeneration)
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, st.CoordinatorLease.IssuedCursor)
@@ -104,22 +105,20 @@ func TestApplyCoordinatorLeasePreservesIssuedCursorForSameGeneration(t *testing.
 }
 
 func TestStateProtocolHelpers(t *testing.T) {
-	witness := rootstate.NewContinuationWitness(rootstate.CoordinatorDutyTSO, 8, 51)
-	require.Equal(t, rootstate.CoordinatorDutyTSO, witness.DutyMask)
-	require.Equal(t, "tso", witness.DutyName)
+	witness := rootproto.NewContinuationWitness(rootproto.CoordinatorDutyTSO, 8, 51)
+	require.Equal(t, rootproto.CoordinatorDutyTSO, witness.DutyMask)
 	require.Equal(t, uint64(8), witness.CertGeneration)
 	require.Equal(t, uint64(51), witness.ConsumedFrontier)
 
 	seal := rootstate.CoordinatorSeal{
 		HolderID:       "c1",
 		CertGeneration: 7,
-		DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-		Frontiers:      controlplane.Frontiers(20, 40, 60),
+		DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+		Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
 	}
-	required := rootstate.CoordinatorSealRequiredFrontiers(seal)
-	require.Equal(t, uint64(20), required.Frontier(rootstate.CoordinatorDutyAllocID))
-	require.Equal(t, uint64(40), required.Frontier(rootstate.CoordinatorDutyTSO))
-	require.Equal(t, uint64(60), required.Frontier(rootstate.CoordinatorDutyGetRegionByKey))
+	require.Equal(t, uint64(20), seal.Frontiers.Frontier(rootproto.CoordinatorDutyAllocID))
+	require.Equal(t, uint64(40), seal.Frontiers.Frontier(rootproto.CoordinatorDutyTSO))
+	require.Equal(t, uint64(60), seal.Frontiers.Frontier(rootproto.CoordinatorDutyGetRegionByKey))
 }
 
 func TestCursorHelpers(t *testing.T) {

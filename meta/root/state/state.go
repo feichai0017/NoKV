@@ -46,7 +46,7 @@ type CoordinatorSeal struct {
 	HolderID       string
 	CertGeneration uint64
 	DutyMask       uint32
-	Frontiers      CoordinatorDutyFrontiers
+	Frontiers      rootproto.CoordinatorDutyFrontiers
 	SealedAtCursor Cursor
 }
 
@@ -55,89 +55,14 @@ type CoordinatorClosure struct {
 	SealGeneration      uint64
 	SuccessorGeneration uint64
 	SealDigest          string
-	Stage               CoordinatorClosureStage
+	Stage               rootproto.CoordinatorClosureStage
 	ConfirmedAtCursor   Cursor
 	ClosedAtCursor      Cursor
 	ReattachedAtCursor  Cursor
 }
 
-const (
-	CoordinatorDutyAllocID        = rootproto.CoordinatorDutyAllocID
-	CoordinatorDutyTSO            = rootproto.CoordinatorDutyTSO
-	CoordinatorDutyGetRegionByKey = rootproto.CoordinatorDutyGetRegionByKey
-	CoordinatorDutyLeaseStart     = rootproto.CoordinatorDutyLeaseStart
-)
-
-const CoordinatorDutyMaskDefault = rootproto.CoordinatorDutyMaskDefault
-
-type CoordinatorDutyFrontier = rootproto.CoordinatorDutyFrontier
-type CoordinatorDutyFrontiers = rootproto.CoordinatorDutyFrontiers
-type CoordinatorFrontierCoverage = rootproto.CoordinatorFrontierCoverage
-type CoordinatorSuccessorCoverageStatus = rootproto.CoordinatorSuccessorCoverageStatus
-type AuthorityHandoffRecord = rootproto.AuthorityHandoffRecord
-type ContinuationWitness = rootproto.ContinuationWitness
-type ClosureWitness = rootproto.ClosureWitness
-type CoordinatorClosureStage = rootproto.CoordinatorClosureStage
-type CoordinatorClosureStatus = rootproto.CoordinatorClosureStatus
-
-const (
-	CoordinatorClosureStageUnspecified    = rootproto.CoordinatorClosureStageUnspecified
-	CoordinatorClosureStagePendingConfirm = rootproto.CoordinatorClosureStagePendingConfirm
-	CoordinatorClosureStageConfirmed      = rootproto.CoordinatorClosureStageConfirmed
-	CoordinatorClosureStageClosed         = rootproto.CoordinatorClosureStageClosed
-	CoordinatorClosureStageReattached     = rootproto.CoordinatorClosureStageReattached
-)
-
-const (
-	ContinuationWitnessGenerationAttached   = rootproto.ContinuationWitnessGenerationAttached
-	ContinuationWitnessGenerationSuppressed = rootproto.ContinuationWitnessGenerationSuppressed
-)
-
 func (l CoordinatorLease) ActiveAt(nowUnixNano int64) bool {
 	return l.HolderID != "" && l.ExpiresUnixNano > nowUnixNano
-}
-
-func NewCoordinatorDutyFrontiers(entries ...CoordinatorDutyFrontier) CoordinatorDutyFrontiers {
-	return rootproto.NewCoordinatorDutyFrontiers(entries...)
-}
-
-func CoordinatorDutyFrontiersFromMap(values map[uint32]uint64) CoordinatorDutyFrontiers {
-	return rootproto.CoordinatorDutyFrontiersFromMap(values)
-}
-
-func CloneDutyFrontiers(frontiers CoordinatorDutyFrontiers) CoordinatorDutyFrontiers {
-	return rootproto.CloneDutyFrontiers(frontiers)
-}
-
-func OrderedCoordinatorDutyMasks(dutyMask uint32, frontiers CoordinatorDutyFrontiers) []uint32 {
-	return rootproto.OrderedCoordinatorDutyMasks(dutyMask, frontiers)
-}
-
-func CoordinatorSealRequiredFrontiers(seal CoordinatorSeal) CoordinatorDutyFrontiers {
-	if seal.Frontiers.Len() == 0 {
-		return rootproto.NewCoordinatorDutyFrontiers()
-	}
-	return seal.Frontiers
-}
-
-func NewContinuationWitness(dutyMask uint32, certGeneration, consumedFrontier uint64) ContinuationWitness {
-	return rootproto.NewContinuationWitness(dutyMask, certGeneration, consumedFrontier)
-}
-
-func NewSuppressedContinuationWitness(dutyMask uint32) ContinuationWitness {
-	return rootproto.NewSuppressedContinuationWitness(dutyMask)
-}
-
-func NewAuthorityHandoffRecord(holderID string, expiresUnixNano int64, certGeneration uint64, issuedCursor Cursor, dutyMask uint32, predecessorDigest string, frontiers CoordinatorDutyFrontiers) (AuthorityHandoffRecord, error) {
-	return rootproto.NewAuthorityHandoffRecord(holderID, expiresUnixNano, certGeneration, issuedCursor, dutyMask, predecessorDigest, frontiers)
-}
-
-func MustNewAuthorityHandoffRecord(holderID string, expiresUnixNano int64, certGeneration uint64, issuedCursor Cursor, dutyMask uint32, predecessorDigest string, frontiers CoordinatorDutyFrontiers) AuthorityHandoffRecord {
-	return rootproto.MustNewAuthorityHandoffRecord(holderID, expiresUnixNano, certGeneration, issuedCursor, dutyMask, predecessorDigest, frontiers)
-}
-
-func ClosureStageAtLeast(stage, target CoordinatorClosureStage) bool {
-	return rootproto.ClosureStageAtLeast(stage, target)
 }
 
 type PendingPeerChangeKind uint8
@@ -193,7 +118,7 @@ type CommitInfo struct {
 
 func CloneSnapshot(snapshot Snapshot) Snapshot {
 	state := snapshot.State
-	state.CoordinatorSeal.Frontiers = CloneDutyFrontiers(state.CoordinatorSeal.Frontiers)
+	state.CoordinatorSeal.Frontiers = rootproto.CloneDutyFrontiers(state.CoordinatorSeal.Frontiers)
 	out := Snapshot{
 		State:               state,
 		Descriptors:         CloneDescriptors(snapshot.Descriptors),
@@ -310,22 +235,19 @@ func applyCoordinatorSealToState(state *State, cursor Cursor, event rootevent.Ev
 		return
 	}
 	seal := event.CoordinatorSeal
-	sealedAt := cursor
-	if seal.SealedAtCursor.Term != 0 || seal.SealedAtCursor.Index != 0 {
-		sealedAt = Cursor{Term: seal.SealedAtCursor.Term, Index: seal.SealedAtCursor.Index}
-	}
+	sealedAt := coalesceCursor(seal.SealedAtCursor, cursor)
 	dutyMask := seal.DutyMask
 	if dutyMask == 0 {
 		dutyMask = state.CoordinatorLease.DutyMask
 		if dutyMask == 0 {
-			dutyMask = CoordinatorDutyMaskDefault
+			dutyMask = rootproto.CoordinatorDutyMaskDefault
 		}
 	}
 	state.CoordinatorSeal = CoordinatorSeal{
 		HolderID:       seal.HolderID,
 		CertGeneration: seal.CertGeneration,
 		DutyMask:       dutyMask,
-		Frontiers:      CloneDutyFrontiers(seal.Frontiers),
+		Frontiers:      rootproto.CloneDutyFrontiers(seal.Frontiers),
 		SealedAtCursor: sealedAt,
 	}
 	state.CoordinatorClosure = CoordinatorClosure{}
@@ -336,18 +258,9 @@ func applyCoordinatorClosureToState(state *State, cursor Cursor, event rootevent
 		return
 	}
 	closure := event.CoordinatorClosure
-	confirmedAt := cursor
-	if closure.ConfirmedAtCursor.Term != 0 || closure.ConfirmedAtCursor.Index != 0 {
-		confirmedAt = Cursor{Term: closure.ConfirmedAtCursor.Term, Index: closure.ConfirmedAtCursor.Index}
-	}
-	closedAt := cursor
-	if closure.ClosedAtCursor.Term != 0 || closure.ClosedAtCursor.Index != 0 {
-		closedAt = Cursor{Term: closure.ClosedAtCursor.Term, Index: closure.ClosedAtCursor.Index}
-	}
-	reattachedAt := cursor
-	if closure.ReattachedAtCursor.Term != 0 || closure.ReattachedAtCursor.Index != 0 {
-		reattachedAt = Cursor{Term: closure.ReattachedAtCursor.Term, Index: closure.ReattachedAtCursor.Index}
-	}
+	confirmedAt := coalesceCursor(closure.ConfirmedAtCursor, cursor)
+	closedAt := coalesceCursor(closure.ClosedAtCursor, cursor)
+	reattachedAt := coalesceCursor(closure.ReattachedAtCursor, cursor)
 	state.CoordinatorClosure = CoordinatorClosure{
 		HolderID:            closure.HolderID,
 		SealGeneration:      closure.SealGeneration,
@@ -366,9 +279,7 @@ func applyCoordinatorLeaseToState(state *State, cursor Cursor, event rootevent.E
 	}
 	lease := event.CoordinatorLease
 	issuedCursor := state.CoordinatorLease.IssuedCursor
-	if lease.IssuedCursor.Term != 0 || lease.IssuedCursor.Index != 0 {
-		issuedCursor = Cursor{Term: lease.IssuedCursor.Term, Index: lease.IssuedCursor.Index}
-	}
+	issuedCursor = coalesceCursor(lease.IssuedCursor, issuedCursor)
 	if issuedCursor.Term == 0 && issuedCursor.Index == 0 {
 		issuedCursor = cursor
 	}
@@ -377,7 +288,7 @@ func applyCoordinatorLeaseToState(state *State, cursor Cursor, event rootevent.E
 	}
 	dutyMask := lease.DutyMask
 	if dutyMask == 0 {
-		dutyMask = CoordinatorDutyMaskDefault
+		dutyMask = rootproto.CoordinatorDutyMaskDefault
 	}
 	predecessorDigest := lease.PredecessorDigest
 	if predecessorDigest == "" && lease.CertGeneration == state.CoordinatorLease.CertGeneration {
@@ -391,13 +302,20 @@ func applyCoordinatorLeaseToState(state *State, cursor Cursor, event rootevent.E
 		DutyMask:          dutyMask,
 		PredecessorDigest: predecessorDigest,
 	}
-	frontiers := CloneDutyFrontiers(lease.Frontiers)
-	if frontier := frontiers.Frontier(CoordinatorDutyAllocID); frontier > state.IDFence {
+	frontiers := rootproto.CloneDutyFrontiers(lease.Frontiers)
+	if frontier := frontiers.Frontier(rootproto.CoordinatorDutyAllocID); frontier > state.IDFence {
 		state.IDFence = frontier
 	}
-	if frontier := frontiers.Frontier(CoordinatorDutyTSO); frontier > state.TSOFence {
+	if frontier := frontiers.Frontier(rootproto.CoordinatorDutyTSO); frontier > state.TSOFence {
 		state.TSOFence = frontier
 	}
+}
+
+func coalesceCursor(eventCursor, fallback Cursor) Cursor {
+	if eventCursor.Term != 0 || eventCursor.Index != 0 {
+		return Cursor{Term: eventCursor.Term, Index: eventCursor.Index}
+	}
+	return fallback
 }
 
 // NextCursor returns the next ordered root cursor.

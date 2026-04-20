@@ -19,6 +19,7 @@ import (
 	"github.com/feichai0017/NoKV/coordinator/tso"
 	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"github.com/stretchr/testify/require"
@@ -301,9 +302,9 @@ func runDetachedSealScenario(t *testing.T, variant detachedAblationVariant) deta
 
 	snapshot, err = h.successorStore.Load()
 	require.NoError(t, err)
-	result.confirmSucceeded = snapshot.CoordinatorClosure.Stage >= rootstate.CoordinatorClosureStageConfirmed
-	result.closeSucceeded = snapshot.CoordinatorClosure.Stage >= rootstate.CoordinatorClosureStageClosed
-	result.reattachRecorded = snapshot.CoordinatorClosure.Stage >= rootstate.CoordinatorClosureStageReattached
+	result.confirmSucceeded = rootproto.ClosureStageAtLeast(snapshot.CoordinatorClosure.Stage, rootproto.CoordinatorClosureStageConfirmed)
+	result.closeSucceeded = rootproto.ClosureStageAtLeast(snapshot.CoordinatorClosure.Stage, rootproto.CoordinatorClosureStageClosed)
+	result.reattachRecorded = rootproto.ClosureStageAtLeast(snapshot.CoordinatorClosure.Stage, rootproto.CoordinatorClosureStageReattached)
 	return result
 }
 
@@ -376,7 +377,7 @@ func runDetachedBudgetScenario(t *testing.T, variant detachedAblationVariant) de
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Now().Add(20 * time.Second).UnixNano(),
 				CertGeneration:  1,
-				DutyMask:        rootstate.CoordinatorDutyMaskDefault,
+				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
 			},
 		},
 	}

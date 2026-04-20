@@ -12,6 +12,7 @@ import (
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
 	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
 	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 )
 
@@ -112,7 +113,7 @@ func renderCCCAudit(
 	asJSON bool,
 ) error {
 	if asJSON {
-		leaseFrontiers := cccAuditFrontierSummaries(controlplane.FrontiersFromState(rootstate.State{
+		leaseFrontiers := cccAuditFrontierSummaries(controlplane.Frontiers(rootstate.State{
 			IDFence:  snapshot.Allocator.IDCurrent,
 			TSOFence: snapshot.Allocator.TSCurrent,
 		}, report.RootDescriptorRevision))
@@ -181,32 +182,8 @@ func cccAuditAnomalyNames(anomalies coordaudit.SnapshotAnomalies) []string {
 	if anomalies.SealedGenerationStillLive {
 		names = append(names, "sealed_generation_still_live")
 	}
-	if anomalies.ClosureIncomplete {
-		names = append(names, "closure_incomplete")
-	}
-	if anomalies.MissingConfirm {
-		names = append(names, "missing_confirm")
-	}
-	if anomalies.MissingClose {
-		names = append(names, "missing_close")
-	}
-	if anomalies.CloseWithoutConfirm {
-		names = append(names, "close_without_confirm")
-	}
-	if anomalies.CloseLineageMismatch {
-		names = append(names, "close_lineage_mismatch")
-	}
-	if anomalies.ReattachWithoutConfirm {
-		names = append(names, "reattach_without_confirm")
-	}
-	if anomalies.ReattachWithoutClose {
-		names = append(names, "reattach_without_close")
-	}
-	if anomalies.ReattachLineageMismatch {
-		names = append(names, "reattach_lineage_mismatch")
-	}
-	if anomalies.ReattachIncomplete {
-		names = append(names, "reattach_incomplete")
+	if anomalies.ClosureDefect != coordaudit.ClosureDefectNone {
+		names = append(names, string(anomalies.ClosureDefect))
 	}
 	return names
 }
@@ -257,7 +234,7 @@ func cccAuditReplyTraceAnomalyNames(anomalies []coordaudit.ReplyTraceAnomaly) []
 	return names
 }
 
-func cccAuditFrontierSummaries(frontiers rootstate.CoordinatorDutyFrontiers) []cccAuditFrontierSummary {
+func cccAuditFrontierSummaries(frontiers rootproto.CoordinatorDutyFrontiers) []cccAuditFrontierSummary {
 	if frontiers.Len() == 0 {
 		return nil
 	}
@@ -266,7 +243,7 @@ func cccAuditFrontierSummaries(frontiers rootstate.CoordinatorDutyFrontiers) []c
 	for _, entry := range entries {
 		out = append(out, cccAuditFrontierSummary{
 			DutyMask: entry.DutyMask,
-			DutyName: entry.DutyName,
+			DutyName: rootproto.CoordinatorDutyName(entry.DutyMask),
 			Frontier: entry.Frontier,
 		})
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	coordablation "github.com/feichai0017/NoKV/coordinator/ablation"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -624,7 +625,7 @@ func TestGRPCClientRejectsSuppressedReplyEvidence(t *testing.T) {
 				{
 					FirstId:          100,
 					Count:            1,
-					CertGeneration:   rootstate.ContinuationWitnessGenerationSuppressed,
+					CertGeneration:   rootproto.ContinuationWitnessGenerationSuppressed,
 					ConsumedFrontier: 0,
 				},
 			},
@@ -638,7 +639,7 @@ func TestGRPCClientRejectsSuppressedReplyEvidence(t *testing.T) {
 					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_FRESH,
 					DescriptorRevision:         10,
 					RequiredDescriptorRevision: 8,
-					CertGeneration:             rootstate.ContinuationWitnessGenerationSuppressed,
+					CertGeneration:             rootproto.ContinuationWitnessGenerationSuppressed,
 					ServingClass:               coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE,
 					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_HEALTHY,
 					ServedByLeader:             true,

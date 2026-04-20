@@ -9,10 +9,6 @@ import (
 	"strings"
 )
 
-func CoordinatorDutyName(dutyMask uint32) string {
-	return rootproto.CoordinatorDutyName(dutyMask)
-}
-
 type CoordinatorLeaseCommandKind = rootproto.CoordinatorLeaseCommandKind
 
 const (
@@ -49,24 +45,12 @@ func (s State) CoordinatorProtocol() CoordinatorProtocolState {
 	}
 }
 
-func (l CoordinatorLease) Empty() bool {
-	return strings.TrimSpace(l.HolderID) == "" &&
-		l.ExpiresUnixNano == 0 &&
-		l.CertGeneration == 0 &&
-		l.IssuedCursor == (Cursor{}) &&
-		l.DutyMask == 0 &&
-		strings.TrimSpace(l.PredecessorDigest) == ""
+func (l CoordinatorLease) Present() bool {
+	return strings.TrimSpace(l.HolderID) != "" && l.CertGeneration != 0
 }
 
 func (s CoordinatorSeal) Present() bool {
 	return s.CertGeneration != 0 && strings.TrimSpace(s.HolderID) != ""
-}
-
-func (c CoordinatorClosure) Empty() bool {
-	return !c.Present() &&
-		c.ConfirmedAtCursor == (Cursor{}) &&
-		c.ClosedAtCursor == (Cursor{}) &&
-		c.ReattachedAtCursor == (Cursor{})
 }
 
 func (c CoordinatorClosure) Present() bool {
@@ -74,7 +58,7 @@ func (c CoordinatorClosure) Present() bool {
 		c.SealGeneration != 0 &&
 		c.SuccessorGeneration != 0 &&
 		strings.TrimSpace(c.SealDigest) != "" &&
-		c.Stage != CoordinatorClosureStageUnspecified
+		c.Stage != rootproto.CoordinatorClosureStageUnspecified
 }
 
 func CoordinatorSealDigest(seal CoordinatorSeal) string {
@@ -102,7 +86,7 @@ func CoordinatorSealDigest(seal CoordinatorSeal) string {
 	writeString(holderID)
 	writeUint64(seal.CertGeneration)
 	writeUint32(dutyMask)
-	for _, mask := range OrderedCoordinatorDutyMasks(dutyMask, seal.Frontiers) {
+	for _, mask := range rootproto.OrderedCoordinatorDutyMasks(dutyMask, seal.Frontiers) {
 		frontier := seal.Frontiers.Frontier(mask)
 		if frontier == 0 && dutyMask&mask == 0 {
 			continue
@@ -144,21 +128,9 @@ func CoordinatorGenerationSealed(current CoordinatorLease, seal CoordinatorSeal)
 
 func ResolvedCoordinatorDutyMask(mask uint32) uint32 {
 	if mask == 0 {
-		return CoordinatorDutyMaskDefault
+		return rootproto.CoordinatorDutyMaskDefault
 	}
 	return mask
-}
-
-func CoordinatorLeaseAllowsDuty(current CoordinatorLease, seal CoordinatorSeal, holderID string, nowUnixNano int64, dutyMask uint32) bool {
-	if !CoordinatorLeaseContinuable(current, seal, holderID, nowUnixNano) {
-		return false
-	}
-	dutyMask = ResolvedCoordinatorDutyMask(dutyMask)
-	if dutyMask == 0 {
-		return true
-	}
-	currentMask := ResolvedCoordinatorDutyMask(current.DutyMask)
-	return currentMask&dutyMask == dutyMask
 }
 
 // ValidateCoordinatorLeaseCampaign verifies whether holder can install a new
@@ -191,22 +163,21 @@ func ValidateCoordinatorLeaseCampaign(current CoordinatorLease, seal Coordinator
 	return nil
 }
 
-func EvaluateCoordinatorLeaseSuccessorCoverage(current CoordinatorLease, seal CoordinatorSeal, frontiers CoordinatorDutyFrontiers) CoordinatorSuccessorCoverageStatus {
+func EvaluateCoordinatorLeaseSuccessorCoverage(current CoordinatorLease, seal CoordinatorSeal, frontiers rootproto.CoordinatorDutyFrontiers) rootproto.CoordinatorSuccessorCoverageStatus {
 	if !seal.Present() {
-		return CoordinatorSuccessorCoverageStatus{}
+		return rootproto.CoordinatorSuccessorCoverageStatus{}
 	}
 	dutyMask := ResolvedCoordinatorDutyMask(seal.DutyMask)
-	requiredFrontiers := CoordinatorSealRequiredFrontiers(seal)
-	activeDutyMasks := OrderedCoordinatorDutyMasks(dutyMask, CoordinatorDutyFrontiers{})
-	status := CoordinatorSuccessorCoverageStatus{
-		Checks: make([]CoordinatorFrontierCoverage, 0, len(activeDutyMasks)),
+	requiredFrontiers := seal.Frontiers
+	activeDutyMasks := rootproto.OrderedCoordinatorDutyMasks(dutyMask, rootproto.CoordinatorDutyFrontiers{})
+	status := rootproto.CoordinatorSuccessorCoverageStatus{
+		Checks: make([]rootproto.CoordinatorFrontierCoverage, 0, len(activeDutyMasks)),
 	}
 	for _, mask := range activeDutyMasks {
 		required := requiredFrontiers.Frontier(mask)
 		actual := frontiers.Frontier(mask)
-		status.Checks = append(status.Checks, CoordinatorFrontierCoverage{
+		status.Checks = append(status.Checks, rootproto.CoordinatorFrontierCoverage{
 			DutyMask:         mask,
-			DutyName:         CoordinatorDutyName(mask),
 			RequiredFrontier: required,
 			ActualFrontier:   actual,
 			Covered:          actual >= required,
@@ -215,7 +186,7 @@ func EvaluateCoordinatorLeaseSuccessorCoverage(current CoordinatorLease, seal Co
 	return status
 }
 
-func ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current CoordinatorLease, seal CoordinatorSeal, frontiers CoordinatorDutyFrontiers) error {
+func ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current CoordinatorLease, seal CoordinatorSeal, frontiers rootproto.CoordinatorDutyFrontiers) error {
 	if !CoordinatorGenerationSealed(current, seal) {
 		return nil
 	}
@@ -224,7 +195,7 @@ func ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current CoordinatorLease
 		return fmt.Errorf(
 			"%w: duty=%s actual=%d required=%d",
 			ErrCoordinatorLeaseCoverage,
-			gap.DutyName,
+			rootproto.CoordinatorDutyName(gap.DutyMask),
 			gap.ActualFrontier,
 			gap.RequiredFrontier,
 		)
@@ -309,7 +280,7 @@ func ValidateCoordinatorLeaseStartCoverage(seal CoordinatorSeal, successorLeaseS
 	if !seal.Present() {
 		return nil
 	}
-	frontier := seal.Frontiers.Frontier(CoordinatorDutyLeaseStart)
+	frontier := seal.Frontiers.Frontier(rootproto.CoordinatorDutyLeaseStart)
 	if frontier == 0 {
 		return nil
 	}
@@ -319,7 +290,7 @@ func ValidateCoordinatorLeaseStartCoverage(seal CoordinatorSeal, successorLeaseS
 	return fmt.Errorf(
 		"%w: duty=%s successor_lease_start=%d served_frontier=%d",
 		ErrCoordinatorLeaseCoverage,
-		CoordinatorDutyName(CoordinatorDutyLeaseStart),
+		rootproto.CoordinatorDutyName(rootproto.CoordinatorDutyLeaseStart),
 		successorLeaseStart,
 		frontier,
 	)
@@ -329,10 +300,10 @@ func ValidateCoordinatorLeaseStartCoverage(seal CoordinatorSeal, successorLeaseS
 // bumped to at least servedTimestamp. Existing frontier values are never
 // lowered.
 func CoordinatorSealWithServedFrontier(seal CoordinatorSeal, servedTimestamp uint64) CoordinatorSeal {
-	existing := seal.Frontiers.Frontier(CoordinatorDutyLeaseStart)
+	existing := seal.Frontiers.Frontier(rootproto.CoordinatorDutyLeaseStart)
 	if servedTimestamp <= existing {
 		return seal
 	}
-	seal.Frontiers = seal.Frontiers.WithFrontier(CoordinatorDutyLeaseStart, servedTimestamp)
+	seal.Frontiers = seal.Frontiers.WithFrontier(rootproto.CoordinatorDutyLeaseStart, servedTimestamp)
 	return seal
 }

@@ -6,6 +6,7 @@ import (
 	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
 )
@@ -45,7 +46,8 @@ func TestCloneEventDetachesPayload(t *testing.T) {
 }
 
 func TestCoordinatorLeaseEvent(t *testing.T) {
-	event := rootevent.CoordinatorLeaseGranted("c1", 1_000, 1, 7, "pred", controlplane.Frontiers(10, 20, 0))
+	frontiers := controlplane.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0)
+	event := rootevent.CoordinatorLeaseGranted("c1", 1_000, 1, 7, "pred", frontiers)
 	cloned := rootevent.CloneEvent(event)
 
 	event.CoordinatorLease.HolderID = "c2"
@@ -54,7 +56,7 @@ func TestCoordinatorLeaseEvent(t *testing.T) {
 	require.Equal(t, int64(1_000), cloned.CoordinatorLease.ExpiresUnixNano)
 	require.Equal(t, uint64(1), cloned.CoordinatorLease.CertGeneration)
 	require.Equal(t, uint32(7), cloned.CoordinatorLease.DutyMask)
-	require.Equal(t, controlplane.Frontiers(10, 20, 0), cloned.CoordinatorLease.Frontiers)
+	require.Equal(t, frontiers, cloned.CoordinatorLease.Frontiers)
 	require.Equal(t, "pred", cloned.CoordinatorLease.PredecessorDigest)
 }
 

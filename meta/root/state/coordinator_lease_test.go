@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 )
 
@@ -12,9 +13,9 @@ func TestValidateCoordinatorLeaseStartCoverageRejectsBelowFrontier(t *testing.T)
 	seal := rootstate.CoordinatorSeal{
 		HolderID:       "n1",
 		CertGeneration: 1,
-		DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-		Frontiers: rootstate.NewCoordinatorDutyFrontiers(
-			rootstate.CoordinatorDutyFrontier{DutyMask: rootstate.CoordinatorDutyLeaseStart, Frontier: 15},
+		DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+		Frontiers: rootproto.NewCoordinatorDutyFrontiers(
+			rootproto.CoordinatorDutyFrontier{DutyMask: rootproto.CoordinatorDutyLeaseStart, Frontier: 15},
 		),
 	}
 
@@ -46,17 +47,17 @@ func TestCoordinatorSealWithServedFrontierMonotonic(t *testing.T) {
 	seal := rootstate.CoordinatorSeal{HolderID: "n1", CertGeneration: 1}
 
 	updated := rootstate.CoordinatorSealWithServedFrontier(seal, 10)
-	if got := updated.Frontiers.Frontier(rootstate.CoordinatorDutyLeaseStart); got != 10 {
+	if got := updated.Frontiers.Frontier(rootproto.CoordinatorDutyLeaseStart); got != 10 {
 		t.Fatalf("frontier must be 10, got %d", got)
 	}
 
 	bumped := rootstate.CoordinatorSealWithServedFrontier(updated, 15)
-	if got := bumped.Frontiers.Frontier(rootstate.CoordinatorDutyLeaseStart); got != 15 {
+	if got := bumped.Frontiers.Frontier(rootproto.CoordinatorDutyLeaseStart); got != 15 {
 		t.Fatalf("frontier must be 15, got %d", got)
 	}
 
 	lowered := rootstate.CoordinatorSealWithServedFrontier(bumped, 5)
-	if got := lowered.Frontiers.Frontier(rootstate.CoordinatorDutyLeaseStart); got != 15 {
+	if got := lowered.Frontiers.Frontier(rootproto.CoordinatorDutyLeaseStart); got != 15 {
 		t.Fatalf("frontier must stay at 15 after attempting to lower, got %d", got)
 	}
 }
@@ -117,47 +118,47 @@ func TestValidateCoordinatorLeaseSuccessorCoverageFrontiers(t *testing.T) {
 	seal := rootstate.CoordinatorSeal{
 		HolderID:       "c1",
 		CertGeneration: 7,
-		DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-		Frontiers:      controlplane.Frontiers(20, 40, 60),
+		DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+		Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
 	}
 
-	if err := rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current, rootstate.CoordinatorSeal{}, rootstate.CoordinatorDutyFrontiers{}); err != nil {
+	if err := rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current, rootstate.CoordinatorSeal{}, rootproto.CoordinatorDutyFrontiers{}); err != nil {
 		t.Fatalf("empty seal must not require coverage, got err=%v", err)
 	}
-	if err := rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current, seal, controlplane.Frontiers(19, 40, 60)); !errors.Is(err, rootstate.ErrCoordinatorLeaseCoverage) {
+	if err := rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current, seal, controlplane.Frontiers(rootstate.State{IDFence: 19, TSOFence: 40}, 60)); !errors.Is(err, rootstate.ErrCoordinatorLeaseCoverage) {
 		t.Fatalf("alloc_id gap must be rejected, got err=%v", err)
 	}
-	if err := rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current, seal, controlplane.Frontiers(20, 39, 60)); !errors.Is(err, rootstate.ErrCoordinatorLeaseCoverage) {
+	if err := rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current, seal, controlplane.Frontiers(rootstate.State{IDFence: 20, TSOFence: 39}, 60)); !errors.Is(err, rootstate.ErrCoordinatorLeaseCoverage) {
 		t.Fatalf("tso gap must be rejected, got err=%v", err)
 	}
-	if err := rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current, seal, controlplane.Frontiers(20, 40, 59)); !errors.Is(err, rootstate.ErrCoordinatorLeaseCoverage) {
+	if err := rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current, seal, controlplane.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 59)); !errors.Is(err, rootstate.ErrCoordinatorLeaseCoverage) {
 		t.Fatalf("descriptor gap must be rejected, got err=%v", err)
 	}
-	if err := rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current, seal, controlplane.Frontiers(20, 40, 60)); err != nil {
+	if err := rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current, seal, controlplane.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60)); err != nil {
 		t.Fatalf("exact coverage must be accepted, got err=%v", err)
 	}
-	if err := rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current, seal, controlplane.Frontiers(25, 45, 65)); err != nil {
+	if err := rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current, seal, controlplane.Frontiers(rootstate.State{IDFence: 25, TSOFence: 45}, 65)); err != nil {
 		t.Fatalf("higher coverage must be accepted, got err=%v", err)
 	}
 
-	coverage := rootstate.EvaluateCoordinatorLeaseSuccessorCoverage(current, seal, controlplane.Frontiers(25, 45, 65))
+	coverage := rootstate.EvaluateCoordinatorLeaseSuccessorCoverage(current, seal, controlplane.Frontiers(rootstate.State{IDFence: 25, TSOFence: 45}, 65))
 	if len(coverage.Checks) != 3 {
 		t.Fatalf("expected 3 coverage checks, got %d", len(coverage.Checks))
 	}
 	if !coverage.Covered() {
 		t.Fatalf("coverage should be satisfied")
 	}
-	if coverage.Checks[0].DutyName != "alloc_id" || coverage.Checks[0].RequiredFrontier != 20 || coverage.Checks[0].ActualFrontier != 25 {
+	if coverage.Checks[0].DutyMask != rootproto.CoordinatorDutyAllocID || coverage.Checks[0].RequiredFrontier != 20 || coverage.Checks[0].ActualFrontier != 25 {
 		t.Fatalf("unexpected alloc_id coverage check: %+v", coverage.Checks[0])
 	}
 
 	maskedSeal := seal
-	maskedSeal.DutyMask = rootstate.CoordinatorDutyAllocID | rootstate.CoordinatorDutyTSO
-	maskedCoverage := rootstate.EvaluateCoordinatorLeaseSuccessorCoverage(current, maskedSeal, controlplane.Frontiers(20, 40, 1))
+	maskedSeal.DutyMask = rootproto.CoordinatorDutyAllocID | rootproto.CoordinatorDutyTSO
+	maskedCoverage := rootstate.EvaluateCoordinatorLeaseSuccessorCoverage(current, maskedSeal, controlplane.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 1))
 	if len(maskedCoverage.Checks) != 2 {
 		t.Fatalf("expected 2 masked checks, got %d", len(maskedCoverage.Checks))
 	}
-	if !maskedCoverage.CoveredDuty(rootstate.CoordinatorDutyGetRegionByKey) {
+	if !maskedCoverage.CoveredDutyMask(rootproto.CoordinatorDutyGetRegionByKey) {
 		t.Fatalf("masked-out duty should be treated as covered")
 	}
 }
@@ -172,8 +173,8 @@ func TestValidateCoordinatorLeaseCampaignLineage(t *testing.T) {
 	seal := rootstate.CoordinatorSeal{
 		HolderID:       "c1",
 		CertGeneration: 7,
-		DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-		Frontiers:      controlplane.Frontiers(20, 40, 60),
+		DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+		Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
 		SealedAtCursor: rootstate.Cursor{Term: 1, Index: 9},
 	}
 
@@ -197,12 +198,12 @@ func TestCoordinatorSealDigestIncludesNonMaskedLeaseStartFrontier(t *testing.T) 
 	base := rootstate.CoordinatorSeal{
 		HolderID:       "c1",
 		CertGeneration: 7,
-		DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-		Frontiers:      controlplane.Frontiers(20, 40, 60),
+		DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+		Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
 		SealedAtCursor: rootstate.Cursor{Term: 1, Index: 9},
 	}
 	withLeaseStart := base
-	withLeaseStart.Frontiers = withLeaseStart.Frontiers.WithFrontier(rootstate.CoordinatorDutyLeaseStart, 105)
+	withLeaseStart.Frontiers = withLeaseStart.Frontiers.WithFrontier(rootproto.CoordinatorDutyLeaseStart, 105)
 
 	baseDigest := rootstate.CoordinatorSealDigest(base)
 	leaseStartDigest := rootstate.CoordinatorSealDigest(withLeaseStart)
