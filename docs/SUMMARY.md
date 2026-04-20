@@ -2,17 +2,20 @@
 
 - [Overview](README.md)
 - [Getting Started](getting_started.md)
+
+# Architecture
+
 - [Architecture](architecture.md)
 - [Runtime Call Chains](runtime.md)
-- [Error Handling](errors.md)
-- [Entry](entry.md)
-- [Configuration](config.md)
-- [CLI](cli.md)
+- [Control and Execution Plane Protocols](control_and_execution_protocols.md)
+
+# Storage Engine
+
+- [WAL](wal.md)
 - [Memtable](memtable.md)
 - [Flush](flush.md)
 - [Compaction](compaction.md)
 - [Ingest Buffer](ingest_buffer.md)
-- [WAL](wal.md)
 - [Value Log](vlog.md)
 - [Manifest](manifest.md)
 - [VFS](vfs.md)
@@ -20,16 +23,31 @@
 - [Cache](cache.md)
 - [Range Filter](range_filter.md)
 - [Hotring](hotring.md)
-- [Percolator](percolator.md)
+- [Entry](entry.md)
+- [Error Handling](errors.md)
+
+# Distributed Runtime
+
 - [Raftstore](raftstore.md)
 - [Coordinator](coordinator.md)
-- [Control and Execution Plane Protocols](control_and_execution_protocols.md)
+- [Rooted Truth (meta/root)](rooted_truth.md)
+- [Namespace](namespace.md)
+- [Percolator](percolator.md)
 - [Migration](migration.md)
 - [Recovery](recovery.md)
-- [Stats](stats.md)
-- [Testing](testing.md)
+
+# Operations & Tooling
+
+- [Configuration](config.md)
+- [CLI](cli.md)
+- [ccc-audit](ccc-audit.md)
 - [Scripts](scripts.md)
 - [NoKV Redis](nokv-redis.md)
+- [Stats & Observability](stats.md)
+- [Testing](testing.md)
+
+# Design Notes
+
 - [设计笔记与实现记录](notes/README.md)
   - [2026-01-16 mmap 选择](notes/2026-01-16-mmap-choice.md)
   - [2026-01-16 Hotring 设计](notes/2026-01-16-hotring-design.md)
