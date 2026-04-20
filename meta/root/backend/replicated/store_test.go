@@ -10,6 +10,7 @@ import (
 	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -23,7 +24,7 @@ func campaignLease(store *Store, holderID string, expiresUnixNano, nowUnixNano i
 		ExpiresUnixNano:   expiresUnixNano,
 		NowUnixNano:       nowUnixNano,
 		PredecessorDigest: predecessorDigest,
-		HandoffFrontiers:  controlplane.Frontiers(idFence, tsoFence, descriptorRevision),
+		HandoffFrontiers:  controlplane.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, descriptorRevision),
 	})
 	return state.Lease, err
 }
@@ -33,12 +34,12 @@ func releaseLease(store *Store, holderID string, nowUnixNano int64, idFence, tso
 		Kind:             rootstate.CoordinatorLeaseCommandRelease,
 		HolderID:         holderID,
 		NowUnixNano:      nowUnixNano,
-		HandoffFrontiers: controlplane.Frontiers(idFence, tsoFence, 0),
+		HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, 0),
 	})
 	return state.Lease, err
 }
 
-func sealLease(store *Store, holderID string, nowUnixNano int64, frontiers rootstate.CoordinatorDutyFrontiers) (rootstate.CoordinatorSeal, error) {
+func sealLease(store *Store, holderID string, nowUnixNano int64, frontiers rootproto.CoordinatorDutyFrontiers) (rootstate.CoordinatorSeal, error) {
 	state, err := store.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
 		Kind:        rootstate.CoordinatorClosureCommandSeal,
 		HolderID:    holderID,
@@ -302,7 +303,7 @@ func TestReplicatedStoreCampaignCoordinatorLease(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "c1", lease.HolderID)
 	require.Equal(t, uint64(1), lease.CertGeneration)
-	require.Equal(t, uint32(rootstate.CoordinatorDutyMaskDefault), lease.DutyMask)
+	require.Equal(t, uint32(rootproto.CoordinatorDutyMaskDefault), lease.DutyMask)
 	require.NotEqual(t, rootstate.Cursor{}, lease.IssuedCursor)
 
 	_, err = campaignLease(stores[leaderID], "c2", 1_500, 200, 200, 500, 1, "")
@@ -332,7 +333,7 @@ func TestReplicatedStoreConfirmCoordinatorClosure(t *testing.T) {
 
 	_, err = campaignLease(stores[leaderID], "c1", 1_000, 100, 10, 20, 56, "")
 	require.NoError(t, err)
-	seal, err := sealLease(stores[leaderID], "c1", 200, controlplane.Frontiers(12, 34, 56))
+	seal, err := sealLease(stores[leaderID], "c1", 200, controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
 	require.NoError(t, err)
 	lease, err := campaignLease(stores[leaderID], "c1", 1_200, 250, 12, 34, 56, rootstate.CoordinatorSealDigest(seal))
 	require.NoError(t, err)
@@ -342,7 +343,7 @@ func TestReplicatedStoreConfirmCoordinatorClosure(t *testing.T) {
 	require.Equal(t, seal.CertGeneration, closure.SealGeneration)
 	require.Equal(t, lease.CertGeneration, closure.SuccessorGeneration)
 	require.Equal(t, rootstate.CoordinatorSealDigest(seal), closure.SealDigest)
-	require.Equal(t, rootstate.CoordinatorClosureStageConfirmed, closure.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageConfirmed, closure.Stage)
 	current, err := stores[leaderID].Current()
 	require.NoError(t, err)
 	require.Equal(t, closure, current.CoordinatorClosure)
@@ -357,7 +358,7 @@ func TestReplicatedStoreReattachCoordinatorClosure(t *testing.T) {
 
 	_, err = campaignLease(stores[leaderID], "c1", 1_000, 100, 10, 20, 56, "")
 	require.NoError(t, err)
-	seal, err := sealLease(stores[leaderID], "c1", 200, controlplane.Frontiers(12, 34, 56))
+	seal, err := sealLease(stores[leaderID], "c1", 200, controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
 	require.NoError(t, err)
 	_, err = campaignLease(stores[leaderID], "c1", 1_200, 250, 12, 34, 56, rootstate.CoordinatorSealDigest(seal))
 	require.NoError(t, err)
@@ -374,12 +375,12 @@ func TestReplicatedStoreReattachCoordinatorClosure(t *testing.T) {
 	require.Equal(t, closed.SuccessorGeneration, reattached.SuccessorGeneration)
 	require.Equal(t, closed.SealGeneration, reattached.SealGeneration)
 	require.Equal(t, closed.SealDigest, reattached.SealDigest)
-	require.Equal(t, rootstate.CoordinatorClosureStageReattached, reattached.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageReattached, reattached.Stage)
 
 	current, err := stores[leaderID].Current()
 	require.NoError(t, err)
 	require.Equal(t, reattached, current.CoordinatorClosure)
-	require.Equal(t, rootstate.CoordinatorClosureStageConfirmed, confirmed.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageConfirmed, confirmed.Stage)
 }
 
 func TestReplicatedStoreCoordinatorLeaseFenceSurvivesLeaderChange(t *testing.T) {

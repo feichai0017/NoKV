@@ -7,6 +7,7 @@ import (
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
 	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
 	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
@@ -16,8 +17,8 @@ func TestEvaluateReplyTrace(t *testing.T) {
 	seal := rootstate.CoordinatorSeal{
 		HolderID:       "c1",
 		CertGeneration: 2,
-		DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-		Frontiers:      controlplane.Frontiers(12, 34, 7),
+		DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+		Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 		SealedAtCursor: rootstate.Cursor{Term: 1, Index: 9},
 	}
 	sealDigest := rootstate.CoordinatorSealDigest(seal)
@@ -31,7 +32,7 @@ func TestEvaluateReplyTrace(t *testing.T) {
 			HolderID:          "c1",
 			ExpiresUnixNano:   2_000,
 			CertGeneration:    3,
-			DutyMask:          rootstate.CoordinatorDutyMaskDefault,
+			DutyMask:          rootproto.CoordinatorDutyMaskDefault,
 			PredecessorDigest: sealDigest,
 		},
 		CoordinatorSeal: seal,
@@ -40,7 +41,7 @@ func TestEvaluateReplyTrace(t *testing.T) {
 			SealGeneration:      2,
 			SuccessorGeneration: 3,
 			SealDigest:          sealDigest,
-			Stage:               rootstate.CoordinatorClosureStageReattached,
+			Stage:               rootproto.CoordinatorClosureStageReattached,
 		},
 		Descriptors: map[uint64]descriptor.Descriptor{
 			1: {RegionID: 1, RootEpoch: 7},

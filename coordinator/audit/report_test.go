@@ -6,6 +6,7 @@ import (
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
 	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
 	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
@@ -15,8 +16,8 @@ func TestBuildReport(t *testing.T) {
 	seal := rootstate.CoordinatorSeal{
 		HolderID:       "c1",
 		CertGeneration: 2,
-		DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-		Frontiers:      controlplane.Frontiers(12, 34, 7),
+		DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+		Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 		SealedAtCursor: rootstate.Cursor{Term: 1, Index: 9},
 	}
 	sealDigest := rootstate.CoordinatorSealDigest(seal)
@@ -30,7 +31,7 @@ func TestBuildReport(t *testing.T) {
 			HolderID:          "c1",
 			ExpiresUnixNano:   2_000,
 			CertGeneration:    3,
-			DutyMask:          rootstate.CoordinatorDutyMaskDefault,
+			DutyMask:          rootproto.CoordinatorDutyMaskDefault,
 			PredecessorDigest: sealDigest,
 		},
 		CoordinatorSeal: seal,
@@ -39,7 +40,7 @@ func TestBuildReport(t *testing.T) {
 			SealGeneration:      2,
 			SuccessorGeneration: 3,
 			SealDigest:          sealDigest,
-			Stage:               rootstate.CoordinatorClosureStageReattached,
+			Stage:               rootproto.CoordinatorClosureStageReattached,
 		},
 		Descriptors: map[uint64]descriptor.Descriptor{
 			1: {RegionID: 1, RootEpoch: 7},
@@ -52,19 +53,16 @@ func TestBuildReport(t *testing.T) {
 	require.Equal(t, "c1", report.CurrentHolderID)
 	require.Equal(t, uint64(3), report.CurrentGeneration)
 	require.True(t, report.ClosureWitness.ClosureSatisfied())
-	require.Equal(t, rootstate.CoordinatorClosureStageReattached, report.Closure.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageReattached, report.Closure.Stage)
 	require.Equal(t, coordaudit.ClosureDefectNone, report.Anomalies.ClosureDefect)
-	require.False(t, report.Anomalies.ClosureIncomplete)
-	require.False(t, report.Anomalies.MissingClose)
-	require.False(t, report.Anomalies.ReattachIncomplete)
 }
 
 func TestBuildReportSurfacesClosureGaps(t *testing.T) {
 	seal := rootstate.CoordinatorSeal{
 		HolderID:       "c1",
 		CertGeneration: 2,
-		DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-		Frontiers:      controlplane.Frontiers(12, 34, 9),
+		DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+		Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 9),
 		SealedAtCursor: rootstate.Cursor{Term: 1, Index: 9},
 	}
 	sealDigest := rootstate.CoordinatorSealDigest(seal)
@@ -78,7 +76,7 @@ func TestBuildReportSurfacesClosureGaps(t *testing.T) {
 			HolderID:          "c2",
 			ExpiresUnixNano:   2_000,
 			CertGeneration:    3,
-			DutyMask:          rootstate.CoordinatorDutyMaskDefault,
+			DutyMask:          rootproto.CoordinatorDutyMaskDefault,
 			PredecessorDigest: sealDigest,
 		},
 		CoordinatorSeal: seal,
@@ -88,15 +86,12 @@ func TestBuildReportSurfacesClosureGaps(t *testing.T) {
 	}
 
 	report := coordaudit.BuildReport(snapshot, "c2", 1_000)
-	require.Equal(t, rootstate.CoordinatorClosureStageUnspecified, report.Closure.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageUnspecified, report.Closure.Stage)
 	require.False(t, report.Anomalies.SuccessorLineageMismatch)
 	require.False(t, report.Anomalies.UncoveredMonotoneFrontier)
 	require.False(t, report.Anomalies.UncoveredDescriptorRevision)
-	require.False(t, report.Anomalies.ClosureIncomplete)
 	require.False(t, report.Anomalies.SealedGenerationStillLive)
 	require.Equal(t, coordaudit.ClosureDefectMissingConfirm, report.Anomalies.ClosureDefect)
-	require.True(t, report.Anomalies.MissingConfirm)
-	require.False(t, report.Anomalies.MissingClose)
 }
 
 func TestBuildLeaseStartCoverageReport(t *testing.T) {

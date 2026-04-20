@@ -9,6 +9,7 @@ import (
 	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootfile "github.com/feichai0017/NoKV/meta/root/storage/file"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
@@ -24,7 +25,7 @@ func campaignLease(store *Store, holderID string, expiresUnixNano, nowUnixNano i
 		ExpiresUnixNano:   expiresUnixNano,
 		NowUnixNano:       nowUnixNano,
 		PredecessorDigest: predecessorDigest,
-		HandoffFrontiers:  controlplane.Frontiers(idFence, tsoFence, descriptorRevision),
+		HandoffFrontiers:  controlplane.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, descriptorRevision),
 	})
 	return state.Lease, err
 }
@@ -34,12 +35,12 @@ func releaseLease(store *Store, holderID string, nowUnixNano int64, idFence, tso
 		Kind:             rootstate.CoordinatorLeaseCommandRelease,
 		HolderID:         holderID,
 		NowUnixNano:      nowUnixNano,
-		HandoffFrontiers: controlplane.Frontiers(idFence, tsoFence, 0),
+		HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, 0),
 	})
 	return state.Lease, err
 }
 
-func sealLease(store *Store, holderID string, nowUnixNano int64, frontiers rootstate.CoordinatorDutyFrontiers) (rootstate.CoordinatorSeal, error) {
+func sealLease(store *Store, holderID string, nowUnixNano int64, frontiers rootproto.CoordinatorDutyFrontiers) (rootstate.CoordinatorSeal, error) {
 	state, err := store.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
 		Kind:        rootstate.CoordinatorClosureCommandSeal,
 		HolderID:    holderID,
@@ -192,21 +193,21 @@ func TestStoreSealCoordinatorLease(t *testing.T) {
 	_, err = campaignLease(store, "c1", 1_000, 100, 10, 20, 30, "")
 	require.NoError(t, err)
 
-	seal, err := sealLease(store, "c1", 200, controlplane.Frontiers(12, 34, 56))
+	seal, err := sealLease(store, "c1", 200, controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
 	require.NoError(t, err)
 	require.Equal(t, "c1", seal.HolderID)
 	require.Equal(t, uint64(1), seal.CertGeneration)
-	require.Equal(t, uint32(rootstate.CoordinatorDutyMaskDefault), seal.DutyMask)
-	require.Equal(t, uint64(12), seal.Frontiers.Frontier(rootstate.CoordinatorDutyAllocID))
-	require.Equal(t, uint64(34), seal.Frontiers.Frontier(rootstate.CoordinatorDutyTSO))
-	require.Equal(t, uint64(56), seal.Frontiers.Frontier(rootstate.CoordinatorDutyGetRegionByKey))
+	require.Equal(t, uint32(rootproto.CoordinatorDutyMaskDefault), seal.DutyMask)
+	require.Equal(t, uint64(12), seal.Frontiers.Frontier(rootproto.CoordinatorDutyAllocID))
+	require.Equal(t, uint64(34), seal.Frontiers.Frontier(rootproto.CoordinatorDutyTSO))
+	require.Equal(t, uint64(56), seal.Frontiers.Frontier(rootproto.CoordinatorDutyGetRegionByKey))
 	require.NotEqual(t, rootstate.Cursor{}, seal.SealedAtCursor)
 
 	state, err := store.Current()
 	require.NoError(t, err)
 	require.Equal(t, seal, state.CoordinatorSeal)
 
-	sealedAgain, err := sealLease(store, "c1", 250, controlplane.Frontiers(99, 99, 99))
+	sealedAgain, err := sealLease(store, "c1", 250, controlplane.Frontiers(rootstate.State{IDFence: 99, TSOFence: 99}, 99))
 	require.NoError(t, err)
 	require.Equal(t, seal, sealedAgain)
 
@@ -231,7 +232,7 @@ func TestStoreCampaignCoordinatorLeaseRequiresCoverageAfterSeal(t *testing.T) {
 
 	_, err = campaignLease(store, "c1", 1_000, 100, 10, 20, 30, "")
 	require.NoError(t, err)
-	seal, err := sealLease(store, "c1", 200, controlplane.Frontiers(12, 34, 56))
+	seal, err := sealLease(store, "c1", 200, controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
 	require.NoError(t, err)
 
 	held, err := campaignLease(store, "c1", 1_200, 250, 11, 34, 56, rootstate.CoordinatorSealDigest(seal))
@@ -262,7 +263,7 @@ func TestStoreConfirmCoordinatorClosure(t *testing.T) {
 
 	_, err = campaignLease(store, "c1", 1_000, 100, 10, 20, 30, "")
 	require.NoError(t, err)
-	seal, err := sealLease(store, "c1", 200, controlplane.Frontiers(12, 34, 56))
+	seal, err := sealLease(store, "c1", 200, controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
 	require.NoError(t, err)
 
 	_, err = confirmClosure(store, "c1", 250)
@@ -277,7 +278,7 @@ func TestStoreConfirmCoordinatorClosure(t *testing.T) {
 	require.Equal(t, seal.CertGeneration, closure.SealGeneration)
 	require.Equal(t, lease.CertGeneration, closure.SuccessorGeneration)
 	require.Equal(t, rootstate.CoordinatorSealDigest(seal), closure.SealDigest)
-	require.Equal(t, rootstate.CoordinatorClosureStageConfirmed, closure.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageConfirmed, closure.Stage)
 
 	state, err := store.Current()
 	require.NoError(t, err)
@@ -294,7 +295,7 @@ func TestStoreReattachCoordinatorClosure(t *testing.T) {
 
 	_, err = campaignLease(store, "c1", 1_000, 100, 10, 20, 56, "")
 	require.NoError(t, err)
-	seal, err := sealLease(store, "c1", 200, controlplane.Frontiers(12, 34, 56))
+	seal, err := sealLease(store, "c1", 200, controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
 	require.NoError(t, err)
 	_, err = campaignLease(store, "c1", 1_200, 250, 12, 34, 56, rootstate.CoordinatorSealDigest(seal))
 	require.NoError(t, err)
@@ -312,12 +313,12 @@ func TestStoreReattachCoordinatorClosure(t *testing.T) {
 	require.Equal(t, closed.SuccessorGeneration, reattached.SuccessorGeneration)
 	require.Equal(t, closed.SealGeneration, reattached.SealGeneration)
 	require.Equal(t, closed.SealDigest, reattached.SealDigest)
-	require.Equal(t, rootstate.CoordinatorClosureStageReattached, reattached.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageReattached, reattached.Stage)
 
 	state, err := store.Current()
 	require.NoError(t, err)
 	require.Equal(t, reattached, state.CoordinatorClosure)
-	require.Equal(t, rootstate.CoordinatorClosureStageConfirmed, confirmed.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageConfirmed, confirmed.Stage)
 }
 
 func TestStoreIgnoresTruncatedLogTail(t *testing.T) {

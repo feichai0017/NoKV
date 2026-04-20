@@ -8,6 +8,7 @@ import (
 	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -131,13 +132,13 @@ func (f *fakeStorage) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseComman
 			HolderID:          cmd.HolderID,
 			ExpiresUnixNano:   cmd.ExpiresUnixNano,
 			CertGeneration:    generation,
-			DutyMask:          rootstate.CoordinatorDutyMaskDefault,
+			DutyMask:          rootproto.CoordinatorDutyMaskDefault,
 			PredecessorDigest: cmd.PredecessorDigest,
 		}
-		if idFence := cmd.HandoffFrontiers.Frontier(rootstate.CoordinatorDutyAllocID); idFence > f.snapshot.Allocator.IDCurrent {
+		if idFence := cmd.HandoffFrontiers.Frontier(rootproto.CoordinatorDutyAllocID); idFence > f.snapshot.Allocator.IDCurrent {
 			f.snapshot.Allocator.IDCurrent = idFence
 		}
-		if tsoFence := cmd.HandoffFrontiers.Frontier(rootstate.CoordinatorDutyTSO); tsoFence > f.snapshot.Allocator.TSCurrent {
+		if tsoFence := cmd.HandoffFrontiers.Frontier(rootproto.CoordinatorDutyTSO); tsoFence > f.snapshot.Allocator.TSCurrent {
 			f.snapshot.Allocator.TSCurrent = tsoFence
 		}
 	case rootstate.CoordinatorLeaseCommandRelease:
@@ -155,10 +156,10 @@ func (f *fakeStorage) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseComman
 			IssuedCursor:    f.snapshot.CoordinatorLease.IssuedCursor,
 			DutyMask:        f.snapshot.CoordinatorLease.DutyMask,
 		}
-		if idFence := cmd.HandoffFrontiers.Frontier(rootstate.CoordinatorDutyAllocID); idFence > f.snapshot.Allocator.IDCurrent {
+		if idFence := cmd.HandoffFrontiers.Frontier(rootproto.CoordinatorDutyAllocID); idFence > f.snapshot.Allocator.IDCurrent {
 			f.snapshot.Allocator.IDCurrent = idFence
 		}
-		if tsoFence := cmd.HandoffFrontiers.Frontier(rootstate.CoordinatorDutyTSO); tsoFence > f.snapshot.Allocator.TSCurrent {
+		if tsoFence := cmd.HandoffFrontiers.Frontier(rootproto.CoordinatorDutyTSO); tsoFence > f.snapshot.Allocator.TSCurrent {
 			f.snapshot.Allocator.TSCurrent = tsoFence
 		}
 	default:
@@ -179,13 +180,13 @@ func (f *fakeStorage) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCo
 		}
 		dutyMask := f.snapshot.CoordinatorLease.DutyMask
 		if dutyMask == 0 {
-			dutyMask = rootstate.CoordinatorDutyMaskDefault
+			dutyMask = rootproto.CoordinatorDutyMaskDefault
 		}
 		f.snapshot.CoordinatorSeal = rootstate.CoordinatorSeal{
 			HolderID:       cmd.HolderID,
 			CertGeneration: f.snapshot.CoordinatorLease.CertGeneration,
 			DutyMask:       dutyMask,
-			Frontiers:      rootstate.CloneDutyFrontiers(cmd.Frontiers),
+			Frontiers:      rootproto.CloneDutyFrontiers(cmd.Frontiers),
 		}
 	case rootstate.CoordinatorClosureCommandConfirm:
 		f.confirmCalls++
@@ -197,7 +198,10 @@ func (f *fakeStorage) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCo
 		}
 		auditStatus, err := controlplane.ValidateClosureConfirmation(
 			f.snapshot.CoordinatorLease,
-			controlplane.Frontiers(f.snapshot.Allocator.IDCurrent, f.snapshot.Allocator.TSCurrent, rootstate.MaxDescriptorRevision(f.snapshot.Descriptors)),
+			controlplane.Frontiers(rootstate.State{
+				IDFence:  f.snapshot.Allocator.IDCurrent,
+				TSOFence: f.snapshot.Allocator.TSCurrent,
+			}, rootstate.MaxDescriptorRevision(f.snapshot.Descriptors)),
 			f.snapshot.CoordinatorSeal,
 			cmd.NowUnixNano,
 		)
@@ -209,7 +213,7 @@ func (f *fakeStorage) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCo
 			SealGeneration:      auditStatus.SealGeneration,
 			SuccessorGeneration: f.snapshot.CoordinatorLease.CertGeneration,
 			SealDigest:          auditStatus.SealDigest,
-			Stage:               rootstate.CoordinatorClosureStageConfirmed,
+			Stage:               rootproto.CoordinatorClosureStageConfirmed,
 		}
 	case rootstate.CoordinatorClosureCommandClose:
 		f.closeCalls++
@@ -219,7 +223,7 @@ func (f *fakeStorage) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCo
 		if err := controlplane.ValidateClosureClose(f.snapshot.CoordinatorLease, f.snapshot.CoordinatorClosure, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return f.protocolState(), err
 		}
-		f.snapshot.CoordinatorClosure.Stage = rootstate.CoordinatorClosureStageClosed
+		f.snapshot.CoordinatorClosure.Stage = rootproto.CoordinatorClosureStageClosed
 	case rootstate.CoordinatorClosureCommandReattach:
 		f.reattachCalls++
 		if f.reattachErr != nil {
@@ -228,7 +232,7 @@ func (f *fakeStorage) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCo
 		if err := controlplane.ValidateClosureReattach(f.snapshot.CoordinatorLease, f.snapshot.CoordinatorClosure, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return f.protocolState(), err
 		}
-		f.snapshot.CoordinatorClosure.Stage = rootstate.CoordinatorClosureStageReattached
+		f.snapshot.CoordinatorClosure.Stage = rootproto.CoordinatorClosureStageReattached
 	default:
 		return rootstate.CoordinatorProtocolState{}, rootstate.ErrCoordinatorLeaseAudit
 	}
@@ -364,13 +368,13 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 				ExpiresUnixNano: now.Add(5 * time.Second).UnixNano(),
 				CertGeneration:  3,
 				IssuedCursor:    rootstate.Cursor{Term: 2, Index: 9},
-				DutyMask:        rootstate.CoordinatorDutyMaskDefault,
+				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
 			},
 			CoordinatorSeal: rootstate.CoordinatorSeal{
 				HolderID:       "c1",
 				CertGeneration: 2,
-				DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-				Frontiers:      controlplane.Frontiers(44, 77, 5),
+				DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+				Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 44, TSOFence: 77}, 5),
 				SealedAtCursor: rootstate.Cursor{Term: 2, Index: 8},
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
@@ -404,14 +408,14 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 	require.Equal(t, true, lease["held_by_self"])
 	require.Equal(t, true, lease["usable_by_self"])
 	require.Equal(t, uint64(3), lease["cert_generation"])
-	require.Equal(t, uint32(rootstate.CoordinatorDutyMaskDefault), lease["duty_mask"])
+	require.Equal(t, uint32(rootproto.CoordinatorDutyMaskDefault), lease["duty_mask"])
 	require.Equal(t, map[string]any{"term": uint64(2), "index": uint64(9)}, lease["issued_cursor"])
 	require.Equal(t, "c1", seal["holder_id"])
 	require.Equal(t, uint64(2), seal["cert_generation"])
 	require.Equal(t, []map[string]any{
-		{"duty_mask": rootstate.CoordinatorDutyAllocID, "duty_name": "alloc_id", "frontier": uint64(44)},
-		{"duty_mask": rootstate.CoordinatorDutyTSO, "duty_name": "tso", "frontier": uint64(77)},
-		{"duty_mask": rootstate.CoordinatorDutyGetRegionByKey, "duty_name": "get_region_by_key", "frontier": uint64(5)},
+		{"duty_mask": rootproto.CoordinatorDutyAllocID, "duty_name": "alloc_id", "frontier": uint64(44)},
+		{"duty_mask": rootproto.CoordinatorDutyTSO, "duty_name": "tso", "frontier": uint64(77)},
+		{"duty_mask": rootproto.CoordinatorDutyGetRegionByKey, "duty_name": "get_region_by_key", "frontier": uint64(5)},
 	}, seal["consumed_frontiers"])
 	require.Equal(t, map[string]any{"term": uint64(2), "index": uint64(8)}, seal["sealed_at_cursor"])
 	require.Equal(t, uint64(2), audit["seal_generation"])
@@ -1817,7 +1821,7 @@ func TestServiceSealCoordinatorLease(t *testing.T) {
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
 				CertGeneration:  2,
-				DutyMask:        rootstate.CoordinatorDutyMaskDefault,
+				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
 			},
 		},
 	}
@@ -1844,9 +1848,9 @@ func TestServiceSealCoordinatorLease(t *testing.T) {
 	require.Equal(t, 1, store.sealCalls)
 	require.Equal(t, "c1", store.snapshot.CoordinatorSeal.HolderID)
 	require.Equal(t, uint64(2), store.snapshot.CoordinatorSeal.CertGeneration)
-	require.Equal(t, uint64(11), store.snapshot.CoordinatorSeal.Frontiers.Frontier(rootstate.CoordinatorDutyAllocID))
-	require.Equal(t, uint64(102), store.snapshot.CoordinatorSeal.Frontiers.Frontier(rootstate.CoordinatorDutyTSO))
-	require.Equal(t, uint64(7), store.snapshot.CoordinatorSeal.Frontiers.Frontier(rootstate.CoordinatorDutyGetRegionByKey))
+	require.Equal(t, uint64(11), store.snapshot.CoordinatorSeal.Frontiers.Frontier(rootproto.CoordinatorDutyAllocID))
+	require.Equal(t, uint64(102), store.snapshot.CoordinatorSeal.Frontiers.Frontier(rootproto.CoordinatorDutyTSO))
+	require.Equal(t, uint64(7), store.snapshot.CoordinatorSeal.Frontiers.Frontier(rootproto.CoordinatorDutyGetRegionByKey))
 
 	nextID, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
@@ -1867,7 +1871,7 @@ func TestServiceSealCoordinatorLeasePreActionGateRejectsStaleHolder(t *testing.T
 				HolderID:        "c2",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
 				CertGeneration:  2,
-				DutyMask:        rootstate.CoordinatorDutyMaskDefault,
+				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
 			},
 		},
 	}
@@ -1891,7 +1895,7 @@ func TestServiceSealCoordinatorLeaseAblationNoop(t *testing.T) {
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
 				CertGeneration:  2,
-				DutyMask:        rootstate.CoordinatorDutyMaskDefault,
+				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
 			},
 		},
 	}
@@ -1933,12 +1937,12 @@ func TestServiceMonotoneDutyFailsWhenGenerationSealedAndCannotRenew(t *testing.T
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
 				CertGeneration:  2,
-				DutyMask:        rootstate.CoordinatorDutyMaskDefault,
+				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
 			},
 			CoordinatorSeal: rootstate.CoordinatorSeal{
 				HolderID:       "c1",
 				CertGeneration: 2,
-				DutyMask:       rootstate.CoordinatorDutyMaskDefault,
+				DutyMask:       rootproto.CoordinatorDutyMaskDefault,
 			},
 		},
 	}
@@ -1961,7 +1965,7 @@ func TestServiceAblationDisableReplyEvidenceMarksWitnessSuppressed(t *testing.T)
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
 				CertGeneration:  2,
-				DutyMask:        rootstate.CoordinatorDutyMaskDefault,
+				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
 				1: {RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
@@ -1976,17 +1980,17 @@ func TestServiceAblationDisableReplyEvidenceMarksWitnessSuppressed(t *testing.T)
 
 	allocResp, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
-	require.Equal(t, rootstate.ContinuationWitnessGenerationSuppressed, allocResp.GetCertGeneration())
+	require.Equal(t, rootproto.ContinuationWitnessGenerationSuppressed, allocResp.GetCertGeneration())
 	require.Zero(t, allocResp.GetConsumedFrontier())
 
 	tsoResp, err := svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
 	require.NoError(t, err)
-	require.Equal(t, rootstate.ContinuationWitnessGenerationSuppressed, tsoResp.GetCertGeneration())
+	require.Equal(t, rootproto.ContinuationWitnessGenerationSuppressed, tsoResp.GetCertGeneration())
 	require.Zero(t, tsoResp.GetConsumedFrontier())
 
 	getResp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
 	require.NoError(t, err)
-	require.Equal(t, rootstate.ContinuationWitnessGenerationSuppressed, getResp.GetCertGeneration())
+	require.Equal(t, rootproto.ContinuationWitnessGenerationSuppressed, getResp.GetCertGeneration())
 }
 
 func TestServiceAblationFailStopOnRootUnreachRejectsBestEffortMetadata(t *testing.T) {
@@ -2015,13 +2019,13 @@ func TestServiceMetadataAnswerFailsWhenGenerationSealedAndCannotRenew(t *testing
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
 				CertGeneration:  2,
-				DutyMask:        rootstate.CoordinatorDutyMaskDefault,
+				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
 			},
 			CoordinatorSeal: rootstate.CoordinatorSeal{
 				HolderID:       "c1",
 				CertGeneration: 2,
-				DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-				Frontiers:      controlplane.Frontiers(0, 0, 7),
+				DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+				Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 0, TSOFence: 0}, 7),
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
 				1: {RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
@@ -2051,14 +2055,14 @@ func TestServiceConfirmCoordinatorClosure(t *testing.T) {
 				HolderID:          "c1",
 				ExpiresUnixNano:   time.Unix(0, 20_000).UnixNano(),
 				CertGeneration:    3,
-				DutyMask:          rootstate.CoordinatorDutyMaskDefault,
+				DutyMask:          rootproto.CoordinatorDutyMaskDefault,
 				PredecessorDigest: "seal-digest",
 			},
 			CoordinatorSeal: rootstate.CoordinatorSeal{
 				HolderID:       "c1",
 				CertGeneration: 2,
-				DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-				Frontiers:      controlplane.Frontiers(12, 34, 7),
+				DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+				Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 				SealedAtCursor: rootstate.Cursor{Term: 1, Index: 9},
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
@@ -2078,7 +2082,7 @@ func TestServiceConfirmCoordinatorClosure(t *testing.T) {
 	require.Equal(t, uint64(2), store.snapshot.CoordinatorClosure.SealGeneration)
 	require.Equal(t, uint64(3), store.snapshot.CoordinatorClosure.SuccessorGeneration)
 	require.Equal(t, rootstate.CoordinatorSealDigest(store.snapshot.CoordinatorSeal), store.snapshot.CoordinatorClosure.SealDigest)
-	require.Equal(t, rootstate.CoordinatorClosureStageConfirmed, store.snapshot.CoordinatorClosure.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageConfirmed, store.snapshot.CoordinatorClosure.Stage)
 }
 
 func TestServiceCloseCoordinatorClosure(t *testing.T) {
@@ -2089,7 +2093,7 @@ func TestServiceCloseCoordinatorClosure(t *testing.T) {
 				HolderID:          "c1",
 				ExpiresUnixNano:   time.Unix(0, 20_000).UnixNano(),
 				CertGeneration:    3,
-				DutyMask:          rootstate.CoordinatorDutyMaskDefault,
+				DutyMask:          rootproto.CoordinatorDutyMaskDefault,
 				PredecessorDigest: "seal-digest",
 			},
 			CoordinatorClosure: rootstate.CoordinatorClosure{
@@ -2097,7 +2101,7 @@ func TestServiceCloseCoordinatorClosure(t *testing.T) {
 				SealGeneration:      2,
 				SuccessorGeneration: 3,
 				SealDigest:          "seal-digest",
-				Stage:               rootstate.CoordinatorClosureStageConfirmed,
+				Stage:               rootproto.CoordinatorClosureStageConfirmed,
 			},
 		},
 	}
@@ -2112,7 +2116,7 @@ func TestServiceCloseCoordinatorClosure(t *testing.T) {
 	require.Equal(t, uint64(3), store.snapshot.CoordinatorClosure.SuccessorGeneration)
 	require.Equal(t, uint64(2), store.snapshot.CoordinatorClosure.SealGeneration)
 	require.Equal(t, "seal-digest", store.snapshot.CoordinatorClosure.SealDigest)
-	require.Equal(t, rootstate.CoordinatorClosureStageClosed, store.snapshot.CoordinatorClosure.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageClosed, store.snapshot.CoordinatorClosure.Stage)
 }
 
 func TestServiceReattachCoordinatorClosure(t *testing.T) {
@@ -2123,20 +2127,20 @@ func TestServiceReattachCoordinatorClosure(t *testing.T) {
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 20_000).UnixNano(),
 				CertGeneration:  3,
-				DutyMask:        rootstate.CoordinatorDutyMaskDefault,
+				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
 			},
 			CoordinatorSeal: rootstate.CoordinatorSeal{
 				HolderID:       "c1",
 				CertGeneration: 2,
-				DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-				Frontiers:      controlplane.Frontiers(12, 34, 7),
+				DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+				Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 			},
 			CoordinatorClosure: rootstate.CoordinatorClosure{
 				HolderID:            "c1",
 				SealGeneration:      2,
 				SuccessorGeneration: 3,
 				SealDigest:          "seal-digest",
-				Stage:               rootstate.CoordinatorClosureStageClosed,
+				Stage:               rootproto.CoordinatorClosureStageClosed,
 			},
 		},
 	}
@@ -2152,7 +2156,7 @@ func TestServiceReattachCoordinatorClosure(t *testing.T) {
 	require.Equal(t, uint64(3), store.snapshot.CoordinatorClosure.SuccessorGeneration)
 	require.Equal(t, uint64(2), store.snapshot.CoordinatorClosure.SealGeneration)
 	require.Equal(t, "seal-digest", store.snapshot.CoordinatorClosure.SealDigest)
-	require.Equal(t, rootstate.CoordinatorClosureStageReattached, store.snapshot.CoordinatorClosure.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageReattached, store.snapshot.CoordinatorClosure.Stage)
 }
 
 func TestServiceAblationDisableReattachNoop(t *testing.T) {
@@ -2163,20 +2167,20 @@ func TestServiceAblationDisableReattachNoop(t *testing.T) {
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 20_000).UnixNano(),
 				CertGeneration:  3,
-				DutyMask:        rootstate.CoordinatorDutyMaskDefault,
+				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
 			},
 			CoordinatorSeal: rootstate.CoordinatorSeal{
 				HolderID:       "c1",
 				CertGeneration: 2,
-				DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-				Frontiers:      controlplane.Frontiers(12, 34, 7),
+				DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+				Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 			},
 			CoordinatorClosure: rootstate.CoordinatorClosure{
 				HolderID:            "c1",
 				SealGeneration:      2,
 				SuccessorGeneration: 3,
 				SealDigest:          "seal-digest",
-				Stage:               rootstate.CoordinatorClosureStageClosed,
+				Stage:               rootproto.CoordinatorClosureStageClosed,
 			},
 		},
 	}
@@ -2190,7 +2194,7 @@ func TestServiceAblationDisableReattachNoop(t *testing.T) {
 
 	require.NoError(t, svc.ReattachCoordinatorClosure())
 	require.Equal(t, 0, store.reattachCalls)
-	require.Equal(t, rootstate.CoordinatorClosureStageClosed, store.snapshot.CoordinatorClosure.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageClosed, store.snapshot.CoordinatorClosure.Stage)
 }
 
 func TestServiceReattachCoordinatorClosureRejectsLineageMismatch(t *testing.T) {
@@ -2201,21 +2205,21 @@ func TestServiceReattachCoordinatorClosureRejectsLineageMismatch(t *testing.T) {
 				HolderID:          "c1",
 				ExpiresUnixNano:   time.Unix(0, 20_000).UnixNano(),
 				CertGeneration:    3,
-				DutyMask:          rootstate.CoordinatorDutyMaskDefault,
+				DutyMask:          rootproto.CoordinatorDutyMaskDefault,
 				PredecessorDigest: "other-digest",
 			},
 			CoordinatorSeal: rootstate.CoordinatorSeal{
 				HolderID:       "c1",
 				CertGeneration: 2,
-				DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-				Frontiers:      controlplane.Frontiers(12, 34, 7),
+				DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+				Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 			},
 			CoordinatorClosure: rootstate.CoordinatorClosure{
 				HolderID:            "c1",
 				SealGeneration:      2,
 				SuccessorGeneration: 3,
 				SealDigest:          "seal-digest",
-				Stage:               rootstate.CoordinatorClosureStageClosed,
+				Stage:               rootproto.CoordinatorClosureStageClosed,
 			},
 		},
 	}
@@ -2228,7 +2232,7 @@ func TestServiceReattachCoordinatorClosureRejectsLineageMismatch(t *testing.T) {
 	err := svc.ReattachCoordinatorClosure()
 	require.ErrorIs(t, err, rootstate.ErrCoordinatorLeaseReattach)
 	require.Equal(t, 1, store.reattachCalls)
-	require.Equal(t, rootstate.CoordinatorClosureStageClosed, store.snapshot.CoordinatorClosure.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageClosed, store.snapshot.CoordinatorClosure.Stage)
 }
 
 func TestServiceMonotoneDutyFailsWhenSuccessorCoverageNotMet(t *testing.T) {
@@ -2239,13 +2243,13 @@ func TestServiceMonotoneDutyFailsWhenSuccessorCoverageNotMet(t *testing.T) {
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
 				CertGeneration:  2,
-				DutyMask:        rootstate.CoordinatorDutyMaskDefault,
+				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
 			},
 			CoordinatorSeal: rootstate.CoordinatorSeal{
 				HolderID:       "c1",
 				CertGeneration: 2,
-				DutyMask:       rootstate.CoordinatorDutyAllocID | rootstate.CoordinatorDutyTSO,
-				Frontiers:      controlplane.Frontiers(50, 150, 0),
+				DutyMask:       rootproto.CoordinatorDutyAllocID | rootproto.CoordinatorDutyTSO,
+				Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 50, TSOFence: 150}, 0),
 			},
 		},
 	}
@@ -2268,13 +2272,13 @@ func TestServiceMonotoneDutyFailsWhenDescriptorCoverageNotMet(t *testing.T) {
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
 				CertGeneration:  2,
-				DutyMask:        rootstate.CoordinatorDutyMaskDefault,
+				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
 			},
 			CoordinatorSeal: rootstate.CoordinatorSeal{
 				HolderID:       "c1",
 				CertGeneration: 2,
-				DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-				Frontiers:      controlplane.Frontiers(10, 100, 8),
+				DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+				Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 10, TSOFence: 100}, 8),
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
 				1: {RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
@@ -2300,7 +2304,7 @@ func TestServiceAllocIDFailsWhenDutyNotAdmitted(t *testing.T) {
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(10, 0).UnixNano(),
 				CertGeneration:  2,
-				DutyMask:        rootstate.CoordinatorDutyTSO | rootstate.CoordinatorDutyGetRegionByKey,
+				DutyMask:        rootproto.CoordinatorDutyTSO | rootproto.CoordinatorDutyGetRegionByKey,
 			},
 		},
 	}
@@ -2308,10 +2312,10 @@ func TestServiceAllocIDFailsWhenDutyNotAdmitted(t *testing.T) {
 	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
-	require.Equal(t, uint32(rootstate.CoordinatorDutyTSO|rootstate.CoordinatorDutyGetRegionByKey), store.snapshot.CoordinatorLease.DutyMask)
-	require.Equal(t, uint32(rootstate.CoordinatorDutyTSO|rootstate.CoordinatorDutyGetRegionByKey), svc.currentCoordinatorLease().DutyMask)
+	require.Equal(t, uint32(rootproto.CoordinatorDutyTSO|rootproto.CoordinatorDutyGetRegionByKey), store.snapshot.CoordinatorLease.DutyMask)
+	require.Equal(t, uint32(rootproto.CoordinatorDutyTSO|rootproto.CoordinatorDutyGetRegionByKey), svc.currentCoordinatorLease().DutyMask)
 
-	err := svc.preActionGate(preActionDutyAdmission, rootstate.CoordinatorDutyAllocID)
+	err := svc.preActionGate(preActionDutyAdmission, rootproto.CoordinatorDutyAllocID)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "coordinator lease duty mismatch")
 
@@ -2329,7 +2333,7 @@ func TestServiceGetRegionByKeyFailsWhenDutyNotAdmitted(t *testing.T) {
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(10, 0).UnixNano(),
 				CertGeneration:  2,
-				DutyMask:        rootstate.CoordinatorDutyAllocID | rootstate.CoordinatorDutyTSO,
+				DutyMask:        rootproto.CoordinatorDutyAllocID | rootproto.CoordinatorDutyTSO,
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
 				11: {RegionID: 11, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
@@ -2340,8 +2344,8 @@ func TestServiceGetRegionByKeyFailsWhenDutyNotAdmitted(t *testing.T) {
 	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
-	require.Equal(t, uint32(rootstate.CoordinatorDutyAllocID|rootstate.CoordinatorDutyTSO), store.snapshot.CoordinatorLease.DutyMask)
-	require.Equal(t, uint32(rootstate.CoordinatorDutyAllocID|rootstate.CoordinatorDutyTSO), svc.currentCoordinatorLease().DutyMask)
+	require.Equal(t, uint32(rootproto.CoordinatorDutyAllocID|rootproto.CoordinatorDutyTSO), store.snapshot.CoordinatorLease.DutyMask)
+	require.Equal(t, uint32(rootproto.CoordinatorDutyAllocID|rootproto.CoordinatorDutyTSO), svc.currentCoordinatorLease().DutyMask)
 
 	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
 		Key:       []byte("m"),
@@ -2360,7 +2364,7 @@ func TestServiceGetRegionByKeyAllowsReadOnlyServingFromCurrentRootedGeneration(t
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(10, 0).UnixNano(),
 				CertGeneration:  2,
-				DutyMask:        rootstate.CoordinatorDutyMaskDefault,
+				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
 				11: {RegionID: 11, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},

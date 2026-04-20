@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/stretchr/testify/require"
 )
@@ -14,16 +15,16 @@ func TestHandoffRecordProjectsLeaseFrontiers(t *testing.T) {
 		ExpiresUnixNano:   2_000,
 		CertGeneration:    8,
 		IssuedCursor:      rootstate.Cursor{Term: 2, Index: 9},
-		DutyMask:          rootstate.CoordinatorDutyMaskDefault,
+		DutyMask:          rootproto.CoordinatorDutyMaskDefault,
 		PredecessorDigest: "seal-digest",
 	}
 
-	handoff := controlplane.HandoffRecord(lease, controlplane.Frontiers(30, 50, 65))
-	require.Equal(t, "c1", handoff.HolderID())
-	require.Equal(t, uint64(8), handoff.CertGeneration())
-	require.Equal(t, uint64(30), handoff.Frontiers().Frontier(rootstate.CoordinatorDutyAllocID))
-	require.Equal(t, uint64(50), handoff.Frontiers().Frontier(rootstate.CoordinatorDutyTSO))
-	require.Equal(t, uint64(65), handoff.Frontiers().Frontier(rootstate.CoordinatorDutyGetRegionByKey))
+	handoff := controlplane.HandoffRecord(lease, controlplane.Frontiers(rootstate.State{IDFence: 30, TSOFence: 50}, 65))
+	require.Equal(t, "c1", handoff.HolderID)
+	require.Equal(t, uint64(8), handoff.CertGeneration)
+	require.Equal(t, uint64(30), handoff.Frontiers.Frontier(rootproto.CoordinatorDutyAllocID))
+	require.Equal(t, uint64(50), handoff.Frontiers.Frontier(rootproto.CoordinatorDutyTSO))
+	require.Equal(t, uint64(65), handoff.Frontiers.Frontier(rootproto.CoordinatorDutyGetRegionByKey))
 }
 
 func TestBuildClosureWitness(t *testing.T) {
@@ -36,14 +37,14 @@ func TestBuildClosureWitness(t *testing.T) {
 	seal := rootstate.CoordinatorSeal{
 		HolderID:       "c1",
 		CertGeneration: 7,
-		DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-		Frontiers:      controlplane.Frontiers(20, 40, 60),
+		DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+		Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
 		SealedAtCursor: rootstate.Cursor{Term: 1, Index: 9},
 	}
 	expectedDigest := rootstate.CoordinatorSealDigest(seal)
 	current.PredecessorDigest = expectedDigest
 
-	witness := controlplane.BuildClosureWitness(current, controlplane.Frontiers(30, 50, 65), seal, 1_000)
+	witness := controlplane.BuildClosureWitness(current, controlplane.Frontiers(rootstate.State{IDFence: 30, TSOFence: 50}, 65), seal, 1_000)
 	require.Equal(t, uint64(7), witness.SealGeneration)
 	require.Equal(t, expectedDigest, witness.SealDigest)
 	require.True(t, witness.SuccessorPresent)
@@ -56,14 +57,14 @@ func TestBuildClosureWitness(t *testing.T) {
 	require.True(t, witness.ClosureSatisfied())
 	require.False(t, witness.ReplyGenerationLegal(7))
 	require.True(t, witness.ReplyGenerationLegal(8))
-	require.False(t, witness.ReplyGenerationLegal(rootstate.ContinuationWitnessGenerationSuppressed))
+	require.False(t, witness.ReplyGenerationLegal(rootproto.ContinuationWitnessGenerationSuppressed))
 
 	currentSameGen := rootstate.CoordinatorLease{
 		HolderID:        "c1",
 		ExpiresUnixNano: 2_000,
 		CertGeneration:  7,
 	}
-	witness = controlplane.BuildClosureWitness(currentSameGen, controlplane.Frontiers(20, 40, 60), seal, 1_000)
+	witness = controlplane.BuildClosureWitness(currentSameGen, controlplane.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60), seal, 1_000)
 	require.False(t, witness.SuccessorPresent)
 	require.False(t, witness.ClosureSatisfied())
 	require.False(t, witness.ReplyGenerationLegal(7))
@@ -79,8 +80,8 @@ func TestBuildClosureWitnessForClosure(t *testing.T) {
 	seal := rootstate.CoordinatorSeal{
 		HolderID:       "c1",
 		CertGeneration: 7,
-		DutyMask:       rootstate.CoordinatorDutyMaskDefault,
-		Frontiers:      controlplane.Frontiers(20, 40, 60),
+		DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+		Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
 	}
 	sealDigest := rootstate.CoordinatorSealDigest(seal)
 	current.PredecessorDigest = sealDigest
@@ -89,14 +90,14 @@ func TestBuildClosureWitnessForClosure(t *testing.T) {
 		SealGeneration:      7,
 		SuccessorGeneration: 8,
 		SealDigest:          sealDigest,
-		Stage:               rootstate.CoordinatorClosureStageReattached,
+		Stage:               rootproto.CoordinatorClosureStageReattached,
 	}
 
-	witness := controlplane.BuildClosureWitnessForClosure(current, controlplane.Frontiers(30, 50, 65), seal, closure, "c1", 1_000)
-	require.Equal(t, rootstate.CoordinatorClosureStageReattached, witness.Stage)
+	witness := controlplane.BuildClosureWitnessForClosure(current, controlplane.Frontiers(rootstate.State{IDFence: 30, TSOFence: 50}, 65), seal, closure, "c1", 1_000)
+	require.Equal(t, rootproto.CoordinatorClosureStageReattached, witness.Stage)
 	require.True(t, witness.SuccessorCoverage.Covered())
-	require.True(t, witness.SuccessorCoverage.CoveredDutyMask(rootstate.CoordinatorDutyAllocID|rootstate.CoordinatorDutyTSO))
-	require.True(t, witness.SuccessorCoverage.CoveredDutyMask(rootstate.CoordinatorDutyGetRegionByKey))
+	require.True(t, witness.SuccessorCoverage.CoveredDutyMask(rootproto.CoordinatorDutyAllocID|rootproto.CoordinatorDutyTSO))
+	require.True(t, witness.SuccessorCoverage.CoveredDutyMask(rootproto.CoordinatorDutyGetRegionByKey))
 	require.True(t, witness.ClosureSatisfied())
 }
 
@@ -112,10 +113,10 @@ func TestValidateClosureTransitions(t *testing.T) {
 		SealGeneration:      7,
 		SuccessorGeneration: 8,
 		SealDigest:          "seal-digest",
-		Stage:               rootstate.CoordinatorClosureStageConfirmed,
+		Stage:               rootproto.CoordinatorClosureStageConfirmed,
 	}
 	closed := confirmed
-	closed.Stage = rootstate.CoordinatorClosureStageClosed
+	closed.Stage = rootproto.CoordinatorClosureStageClosed
 
 	require.NoError(t, controlplane.ValidateClosureClose(current, confirmed, "c1", 1_000))
 	require.ErrorIs(t, controlplane.ValidateClosureClose(current, rootstate.CoordinatorClosure{}, "c1", 1_000), rootstate.ErrCoordinatorLeaseClose)
@@ -133,7 +134,7 @@ func TestValidateClosureTransitions(t *testing.T) {
 		SealGeneration:      8,
 		SuccessorGeneration: 8,
 		SealDigest:          "seal-digest",
-		Stage:               rootstate.CoordinatorClosureStageClosed,
+		Stage:               rootproto.CoordinatorClosureStageClosed,
 	}, "c1", 1_000), rootstate.ErrCoordinatorLeaseReattach)
 	require.ErrorIs(t, controlplane.ValidateClosureReattach(current, closed, "c2", 1_000), rootstate.ErrCoordinatorLeaseOwner)
 	require.ErrorIs(t, controlplane.ValidateClosureReattach(rootstate.CoordinatorLease{
@@ -155,21 +156,21 @@ func TestEvaluateClosureStage(t *testing.T) {
 		SealGeneration:      7,
 		SuccessorGeneration: 8,
 		SealDigest:          "seal-digest",
-		Stage:               rootstate.CoordinatorClosureStageConfirmed,
+		Stage:               rootproto.CoordinatorClosureStageConfirmed,
 	}
 	status := controlplane.EvaluateClosureStage(current, confirmed, "c1", 1_000)
-	require.Equal(t, rootstate.CoordinatorClosureStageConfirmed, status.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageConfirmed, status.Stage)
 
 	closed := confirmed
-	closed.Stage = rootstate.CoordinatorClosureStageClosed
+	closed.Stage = rootproto.CoordinatorClosureStageClosed
 	status = controlplane.EvaluateClosureStage(current, closed, "c1", 1_000)
-	require.Equal(t, rootstate.CoordinatorClosureStageClosed, status.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageClosed, status.Stage)
 
 	reattached := closed
-	reattached.Stage = rootstate.CoordinatorClosureStageReattached
+	reattached.Stage = rootproto.CoordinatorClosureStageReattached
 	status = controlplane.EvaluateClosureStage(current, reattached, "c1", 1_000)
-	require.Equal(t, rootstate.CoordinatorClosureStageReattached, status.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageReattached, status.Stage)
 
 	status = controlplane.EvaluateClosureStage(current, rootstate.CoordinatorClosure{}, "c1", 1_000)
-	require.Equal(t, rootstate.CoordinatorClosureStageUnspecified, status.Stage)
+	require.Equal(t, rootproto.CoordinatorClosureStageUnspecified, status.Stage)
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/feichai0017/NoKV/coordinator/tso"
 	pdview "github.com/feichai0017/NoKV/coordinator/view"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -486,8 +487,8 @@ func (s *Service) admitMetadataAnswerability(req *coordpb.GetRegionByKeyRequest,
 		admission.state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE
 	}
 	if loadErr == nil && s != nil && s.coordinatorLeaseEnabled() && admission.state.leasePresent {
-		if admission.state.leaseDutyMask&rootstate.CoordinatorDutyGetRegionByKey == 0 {
-			return metadataAnswerability{}, statusCoordinatorLease(fmt.Errorf("%w: required_duty_mask=%d rooted_duty_mask=%d generation=%d", rootstate.ErrCoordinatorLeaseDuty, rootstate.CoordinatorDutyGetRegionByKey, admission.state.leaseDutyMask, admission.state.certGeneration))
+		if admission.state.leaseDutyMask&rootproto.CoordinatorDutyGetRegionByKey == 0 {
+			return metadataAnswerability{}, statusCoordinatorLease(fmt.Errorf("%w: required_duty_mask=%d rooted_duty_mask=%d generation=%d", rootstate.ErrCoordinatorLeaseDuty, rootproto.CoordinatorDutyGetRegionByKey, admission.state.leaseDutyMask, admission.state.certGeneration))
 		}
 		if !admission.state.leaseActive {
 			return metadataAnswerability{}, statusCoordinatorLease(fmt.Errorf("%w: rooted lease expired generation=%d", rootstate.ErrInvalidCoordinatorLease, admission.state.certGeneration))
@@ -692,7 +693,7 @@ func (s *Service) AllocID(_ context.Context, req *coordpb.AllocIDRequest) (*coor
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
-	if err := s.requireDutyAdmission(rootstate.CoordinatorDutyAllocID); err != nil {
+	if err := s.requireDutyAdmission(rootproto.CoordinatorDutyAllocID); err != nil {
 		return nil, err
 	}
 	first, err := s.reserveIDs(count)
@@ -703,7 +704,7 @@ func (s *Service) AllocID(_ context.Context, req *coordpb.AllocIDRequest) (*coor
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
 	lease, seal := s.currentCoordinatorLeaseView()
-	witness := s.monotoneReplyEvidence(rootstate.CoordinatorDutyAllocID, lease, allocationConsumedFrontier(first, count))
+	witness := s.monotoneReplyEvidence(rootproto.CoordinatorDutyAllocID, lease, allocationConsumedFrontier(first, count))
 	return &coordpb.AllocIDResponse{
 		FirstId:                first,
 		Count:                  count,
@@ -725,7 +726,7 @@ func (s *Service) Tso(_ context.Context, req *coordpb.TsoRequest) (*coordpb.TsoR
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
-	if err := s.requireDutyAdmission(rootstate.CoordinatorDutyTSO); err != nil {
+	if err := s.requireDutyAdmission(rootproto.CoordinatorDutyTSO); err != nil {
 		return nil, err
 	}
 	first, got, err := s.reserveTSO(count)
@@ -736,7 +737,7 @@ func (s *Service) Tso(_ context.Context, req *coordpb.TsoRequest) (*coordpb.TsoR
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
 	lease, seal := s.currentCoordinatorLeaseView()
-	witness := s.monotoneReplyEvidence(rootstate.CoordinatorDutyTSO, lease, allocationConsumedFrontier(first, got))
+	witness := s.monotoneReplyEvidence(rootproto.CoordinatorDutyTSO, lease, allocationConsumedFrontier(first, got))
 	return &coordpb.TsoResponse{
 		Timestamp:              first,
 		Count:                  got,
@@ -1053,7 +1054,10 @@ func (s *Service) ReleaseCoordinatorLease() error {
 	}
 
 	s.allocMu.Lock()
-	handoffFrontiers := controlplane.Frontiers(s.currentIDFenceLocked(), s.currentTSOFenceLocked(), s.currentDescriptorRevision())
+	handoffFrontiers := controlplane.Frontiers(rootstate.State{
+		IDFence:  s.currentIDFenceLocked(),
+		TSOFence: s.currentTSOFenceLocked(),
+	}, s.currentDescriptorRevision())
 	s.allocMu.Unlock()
 
 	if _, err := s.storage.ApplyCoordinatorLease(rootstate.CoordinatorLeaseCommand{
@@ -1086,7 +1090,10 @@ func (s *Service) SealCoordinatorLease() error {
 	return s.applyClosureCommand(
 		rootstate.CoordinatorClosureCommandSeal,
 		preActionSealCurrentGeneration,
-		controlplane.Frontiers(consumedIDFrontier, consumedTSOFrontier, s.currentDescriptorRevision()),
+		controlplane.Frontiers(rootstate.State{
+			IDFence:  consumedIDFrontier,
+			TSOFence: consumedTSOFrontier,
+		}, s.currentDescriptorRevision()),
 	)
 }
 
@@ -1099,7 +1106,7 @@ func (s *Service) ConfirmCoordinatorClosure() error {
 	if !s.storage.IsLeader() {
 		return nil
 	}
-	return s.applyClosureCommand(rootstate.CoordinatorClosureCommandConfirm, preActionLifecycleMutation, rootstate.NewCoordinatorDutyFrontiers())
+	return s.applyClosureCommand(rootstate.CoordinatorClosureCommandConfirm, preActionLifecycleMutation, rootproto.NewCoordinatorDutyFrontiers())
 }
 
 // CloseCoordinatorClosure explicitly records that the current successor
@@ -1111,7 +1118,7 @@ func (s *Service) CloseCoordinatorClosure() error {
 	if !s.storage.IsLeader() {
 		return nil
 	}
-	return s.applyClosureCommand(rootstate.CoordinatorClosureCommandClose, preActionLifecycleMutation, rootstate.NewCoordinatorDutyFrontiers())
+	return s.applyClosureCommand(rootstate.CoordinatorClosureCommandClose, preActionLifecycleMutation, rootproto.NewCoordinatorDutyFrontiers())
 }
 
 // ReattachCoordinatorClosure explicitly records that the current successor
@@ -1126,10 +1133,10 @@ func (s *Service) ReattachCoordinatorClosure() error {
 	if !s.storage.IsLeader() {
 		return nil
 	}
-	return s.applyClosureCommand(rootstate.CoordinatorClosureCommandReattach, preActionLifecycleMutation, rootstate.NewCoordinatorDutyFrontiers())
+	return s.applyClosureCommand(rootstate.CoordinatorClosureCommandReattach, preActionLifecycleMutation, rootproto.NewCoordinatorDutyFrontiers())
 }
 
-func (s *Service) applyClosureCommand(kind rootstate.CoordinatorClosureCommandKind, gate preActionKind, frontiers rootstate.CoordinatorDutyFrontiers) error {
+func (s *Service) applyClosureCommand(kind rootstate.CoordinatorClosureCommandKind, gate preActionKind, frontiers rootproto.CoordinatorDutyFrontiers) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
@@ -1178,7 +1185,7 @@ func (s *Service) ensureCoordinatorLease() error {
 	}
 
 	s.allocMu.Lock()
-	handoffFrontiers := controlplane.Frontiers(s.currentIDFenceLocked(), s.currentTSOFenceLocked(), s.currentDescriptorRevision())
+	handoffFrontiers := controlplane.Frontiers(rootstate.State{IDFence: s.currentIDFenceLocked(), TSOFence: s.currentTSOFenceLocked()}, s.currentDescriptorRevision())
 	s.allocMu.Unlock()
 	current, seal := s.currentCoordinatorLeaseView()
 	predecessorDigest := rootstate.ResolveCoordinatorLeasePredecessorDigest(current, seal, holderID, nowUnixNano)
@@ -1432,16 +1439,16 @@ func (s *Service) validatePreActionLease(kind preActionKind, dutyMask uint32, cu
 	return nil
 }
 
-func (s *Service) monotoneReplyEvidence(dutyMask uint32, lease rootstate.CoordinatorLease, consumedFrontier uint64) rootstate.ContinuationWitness {
+func (s *Service) monotoneReplyEvidence(dutyMask uint32, lease rootstate.CoordinatorLease, consumedFrontier uint64) rootproto.ContinuationWitness {
 	if s != nil && s.ablation.DisableReplyEvidence {
-		return rootstate.NewSuppressedContinuationWitness(dutyMask)
+		return rootproto.NewSuppressedContinuationWitness(dutyMask)
 	}
-	return rootstate.NewContinuationWitness(dutyMask, lease.CertGeneration, consumedFrontier)
+	return rootproto.NewContinuationWitness(dutyMask, lease.CertGeneration, consumedFrontier)
 }
 
 func (s *Service) metadataReplyGeneration(certGeneration uint64) uint64 {
 	if s != nil && s.ablation.DisableReplyEvidence {
-		return rootstate.ContinuationWitnessGenerationSuppressed
+		return rootproto.ContinuationWitnessGenerationSuppressed
 	}
 	return certGeneration
 }

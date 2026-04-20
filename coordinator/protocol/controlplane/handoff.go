@@ -1,32 +1,27 @@
 package controlplane
 
 import (
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 )
 
 // Frontiers materializes the built-in duty-frontier projection from the rooted
 // allocator and descriptor state.
-func Frontiers(idFence, tsoFence, descriptorRevision uint64) rootstate.CoordinatorDutyFrontiers {
-	return rootstate.NewCoordinatorDutyFrontiers(
-		rootstate.CoordinatorDutyFrontier{DutyMask: rootstate.CoordinatorDutyAllocID, DutyName: rootstate.CoordinatorDutyName(rootstate.CoordinatorDutyAllocID), Frontier: idFence},
-		rootstate.CoordinatorDutyFrontier{DutyMask: rootstate.CoordinatorDutyTSO, DutyName: rootstate.CoordinatorDutyName(rootstate.CoordinatorDutyTSO), Frontier: tsoFence},
-		rootstate.CoordinatorDutyFrontier{DutyMask: rootstate.CoordinatorDutyGetRegionByKey, DutyName: rootstate.CoordinatorDutyName(rootstate.CoordinatorDutyGetRegionByKey), Frontier: descriptorRevision},
+func Frontiers(state rootstate.State, descriptorRevision uint64) rootproto.CoordinatorDutyFrontiers {
+	return rootproto.NewCoordinatorDutyFrontiers(
+		rootproto.CoordinatorDutyFrontier{DutyMask: rootproto.CoordinatorDutyAllocID, Frontier: state.IDFence},
+		rootproto.CoordinatorDutyFrontier{DutyMask: rootproto.CoordinatorDutyTSO, Frontier: state.TSOFence},
+		rootproto.CoordinatorDutyFrontier{DutyMask: rootproto.CoordinatorDutyGetRegionByKey, Frontier: descriptorRevision},
 	)
-}
-
-// FrontiersFromState projects the current rooted allocator and descriptor state
-// into the generic duty-frontier protocol object.
-func FrontiersFromState(state rootstate.State, descriptorRevision uint64) rootstate.CoordinatorDutyFrontiers {
-	return Frontiers(state.IDFence, state.TSOFence, descriptorRevision)
 }
 
 // HandoffRecord projects the current rooted lease plus handoff frontier view into the portable
 // handoff record used by checker and diagnostics code.
-func HandoffRecord(current rootstate.CoordinatorLease, frontiers rootstate.CoordinatorDutyFrontiers) rootstate.AuthorityHandoffRecord {
+func HandoffRecord(current rootstate.CoordinatorLease, frontiers rootproto.CoordinatorDutyFrontiers) rootproto.AuthorityHandoffRecord {
 	if current.HolderID == "" || current.CertGeneration == 0 {
-		return rootstate.AuthorityHandoffRecord{}
+		return rootproto.AuthorityHandoffRecord{}
 	}
-	return rootstate.MustNewAuthorityHandoffRecord(
+	return rootproto.MustNewAuthorityHandoffRecord(
 		current.HolderID,
 		current.ExpiresUnixNano,
 		current.CertGeneration,
@@ -39,14 +34,14 @@ func HandoffRecord(current rootstate.CoordinatorLease, frontiers rootstate.Coord
 
 // BuildClosureWitness derives the base successor-coverage witness from the
 // current rooted lease, seal, and duty frontiers.
-func BuildClosureWitness(current rootstate.CoordinatorLease, currentFrontiers rootstate.CoordinatorDutyFrontiers, seal rootstate.CoordinatorSeal, nowUnixNano int64) rootstate.ClosureWitness {
+func BuildClosureWitness(current rootstate.CoordinatorLease, currentFrontiers rootproto.CoordinatorDutyFrontiers, seal rootstate.CoordinatorSeal, nowUnixNano int64) rootproto.ClosureWitness {
 	if !seal.Present() {
-		return rootstate.ClosureWitness{}
+		return rootproto.ClosureWitness{}
 	}
-	witness := rootstate.ClosureWitness{
+	witness := rootproto.ClosureWitness{
 		SealGeneration: seal.CertGeneration,
 		SealDigest:     rootstate.CoordinatorSealDigest(seal),
-		Stage:          rootstate.CoordinatorClosureStageUnspecified,
+		Stage:          rootproto.CoordinatorClosureStageUnspecified,
 	}
 	witness.SuccessorPresent = current.CertGeneration > seal.CertGeneration
 	witness.SuccessorCoverage = rootstate.EvaluateCoordinatorLeaseSuccessorCoverage(current, seal, currentFrontiers)
@@ -55,7 +50,7 @@ func BuildClosureWitness(current rootstate.CoordinatorLease, currentFrontiers ro
 	return witness
 }
 
-func ValidateClosureConfirmation(current rootstate.CoordinatorLease, currentFrontiers rootstate.CoordinatorDutyFrontiers, seal rootstate.CoordinatorSeal, nowUnixNano int64) (rootstate.ClosureWitness, error) {
+func ValidateClosureConfirmation(current rootstate.CoordinatorLease, currentFrontiers rootproto.CoordinatorDutyFrontiers, seal rootstate.CoordinatorSeal, nowUnixNano int64) (rootproto.ClosureWitness, error) {
 	witness := BuildClosureWitness(current, currentFrontiers, seal, nowUnixNano)
 	if !witness.ClosureSatisfied() {
 		return witness, rootstate.ErrCoordinatorLeaseAudit
@@ -63,30 +58,30 @@ func ValidateClosureConfirmation(current rootstate.CoordinatorLease, currentFron
 	return witness, nil
 }
 
-func EvaluateClosureStage(current rootstate.CoordinatorLease, closure rootstate.CoordinatorClosure, holderID string, nowUnixNano int64) rootstate.CoordinatorClosureStatus {
+func EvaluateClosureStage(current rootstate.CoordinatorLease, closure rootstate.CoordinatorClosure, holderID string, nowUnixNano int64) rootproto.CoordinatorClosureStatus {
 	if holderID == "" || holderID != current.HolderID || !current.ActiveAt(nowUnixNano) {
-		return rootstate.CoordinatorClosureStatus{}
+		return rootproto.CoordinatorClosureStatus{}
 	}
 	if !closure.Present() || closure.HolderID != holderID {
-		return rootstate.CoordinatorClosureStatus{}
+		return rootproto.CoordinatorClosureStatus{}
 	}
 	if closure.SuccessorGeneration <= closure.SealGeneration ||
 		closure.SuccessorGeneration != current.CertGeneration ||
 		current.PredecessorDigest != closure.SealDigest {
-		return rootstate.CoordinatorClosureStatus{}
+		return rootproto.CoordinatorClosureStatus{}
 	}
-	return rootstate.CoordinatorClosureStatus{Stage: closure.Stage}
+	return rootproto.CoordinatorClosureStatus{Stage: closure.Stage}
 }
 
-func BuildClosureWitnessForClosure(current rootstate.CoordinatorLease, currentFrontiers rootstate.CoordinatorDutyFrontiers, seal rootstate.CoordinatorSeal, closure rootstate.CoordinatorClosure, holderID string, nowUnixNano int64) rootstate.ClosureWitness {
+func BuildClosureWitnessForClosure(current rootstate.CoordinatorLease, currentFrontiers rootproto.CoordinatorDutyFrontiers, seal rootstate.CoordinatorSeal, closure rootstate.CoordinatorClosure, holderID string, nowUnixNano int64) rootproto.ClosureWitness {
 	witness := BuildClosureWitness(current, currentFrontiers, seal, nowUnixNano)
 	closureStatus := EvaluateClosureStage(current, closure, holderID, nowUnixNano)
 	return witness.WithStage(closureStatus.Stage)
 }
 
-func AdvanceClosure(current rootstate.CoordinatorLease, existing rootstate.CoordinatorClosure, stage rootstate.CoordinatorClosureStage, holderID string, sealGeneration uint64, sealDigest string, cursor rootstate.Cursor) rootstate.CoordinatorClosure {
+func AdvanceClosure(current rootstate.CoordinatorLease, existing rootstate.CoordinatorClosure, stage rootproto.CoordinatorClosureStage, holderID string, sealGeneration uint64, sealDigest string, cursor rootstate.Cursor) rootstate.CoordinatorClosure {
 	closure := existing
-	if closure.HolderID == "" || stage == rootstate.CoordinatorClosureStageConfirmed {
+	if closure.HolderID == "" || stage == rootproto.CoordinatorClosureStageConfirmed {
 		closure = rootstate.CoordinatorClosure{
 			HolderID:            holderID,
 			SealGeneration:      sealGeneration,
@@ -96,14 +91,14 @@ func AdvanceClosure(current rootstate.CoordinatorLease, existing rootstate.Coord
 	}
 	closure.Stage = stage
 	switch stage {
-	case rootstate.CoordinatorClosureStageConfirmed:
+	case rootproto.CoordinatorClosureStageConfirmed:
 		closure.ConfirmedAtCursor = cursor
 		closure.ClosedAtCursor = rootstate.Cursor{}
 		closure.ReattachedAtCursor = rootstate.Cursor{}
-	case rootstate.CoordinatorClosureStageClosed:
+	case rootproto.CoordinatorClosureStageClosed:
 		closure.ClosedAtCursor = cursor
 		closure.ReattachedAtCursor = rootstate.Cursor{}
-	case rootstate.CoordinatorClosureStageReattached:
+	case rootproto.CoordinatorClosureStageReattached:
 		closure.ReattachedAtCursor = cursor
 	}
 	return closure
@@ -117,7 +112,7 @@ func ValidateClosureClose(current rootstate.CoordinatorLease, closure rootstate.
 		return rootstate.ErrInvalidCoordinatorLease
 	}
 	status := EvaluateClosureStage(current, closure, holderID, nowUnixNano)
-	if !rootstate.ClosureStageAtLeast(status.Stage, rootstate.CoordinatorClosureStageConfirmed) {
+	if !rootproto.ClosureStageAtLeast(status.Stage, rootproto.CoordinatorClosureStageConfirmed) {
 		return rootstate.ErrCoordinatorLeaseClose
 	}
 	return nil
@@ -131,7 +126,7 @@ func ValidateClosureReattach(current rootstate.CoordinatorLease, closure rootsta
 		return rootstate.ErrInvalidCoordinatorLease
 	}
 	status := EvaluateClosureStage(current, closure, holderID, nowUnixNano)
-	if !rootstate.ClosureStageAtLeast(status.Stage, rootstate.CoordinatorClosureStageClosed) {
+	if !rootproto.ClosureStageAtLeast(status.Stage, rootproto.CoordinatorClosureStageClosed) {
 		return rootstate.ErrCoordinatorLeaseReattach
 	}
 	return nil

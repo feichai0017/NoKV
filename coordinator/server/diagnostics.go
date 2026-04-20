@@ -4,6 +4,7 @@ import (
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
 	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
 	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 )
@@ -30,7 +31,7 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 	nowUnixNano, _, holderID, renewIn, clockSkew := s.leaseCampaignBounds()
 	lease, _ := s.currentCoordinatorLeaseView()
 	report := coordaudit.BuildReport(rootSnapshot, holderID, nowUnixNano)
-	leaseFrontiers := controlplane.FrontiersFromState(rootstate.State{
+	leaseFrontiers := controlplane.Frontiers(rootstate.State{
 		IDFence:  rootSnapshot.Allocator.IDCurrent,
 		TSOFence: rootSnapshot.Allocator.TSCurrent,
 	}, report.RootDescriptorRevision)
@@ -142,7 +143,7 @@ func diagnosticsLeaderID(storage coordstorage.RootStorage) uint64 {
 	return storage.LeaderID()
 }
 
-func diagnosticsCoordinatorCoverage(status rootstate.CoordinatorSuccessorCoverageStatus) []map[string]any {
+func diagnosticsCoordinatorCoverage(status rootproto.CoordinatorSuccessorCoverageStatus) []map[string]any {
 	if len(status.Checks) == 0 {
 		return []map[string]any{}
 	}
@@ -150,7 +151,7 @@ func diagnosticsCoordinatorCoverage(status rootstate.CoordinatorSuccessorCoverag
 	for _, check := range status.Checks {
 		out = append(out, map[string]any{
 			"duty_mask":         check.DutyMask,
-			"duty_name":         check.DutyName,
+			"duty_name":         rootproto.CoordinatorDutyName(check.DutyMask),
 			"required_frontier": check.RequiredFrontier,
 			"actual_frontier":   check.ActualFrontier,
 			"covered":           check.Covered,
@@ -159,22 +160,22 @@ func diagnosticsCoordinatorCoverage(status rootstate.CoordinatorSuccessorCoverag
 	return out
 }
 
-func diagnosticsAuthorityHandoff(record rootstate.AuthorityHandoffRecord) map[string]any {
+func diagnosticsAuthorityHandoff(record rootproto.AuthorityHandoffRecord) map[string]any {
 	return map[string]any{
-		"holder_id":          record.HolderID(),
-		"expires_unix_nano":  record.ExpiresUnixNano(),
-		"cert_generation":    record.CertGeneration(),
-		"duty_mask":          record.DutyMask(),
-		"predecessor_digest": record.PredecessorDigest(),
+		"holder_id":          record.HolderID,
+		"expires_unix_nano":  record.ExpiresUnixNano,
+		"cert_generation":    record.CertGeneration,
+		"duty_mask":          record.DutyMask,
+		"predecessor_digest": record.PredecessorDigest,
 		"issued_cursor": map[string]any{
-			"term":  record.IssuedCursor().Term,
-			"index": record.IssuedCursor().Index,
+			"term":  record.IssuedCursor.Term,
+			"index": record.IssuedCursor.Index,
 		},
-		"frontiers": diagnosticsCoordinatorFrontiers(record.Frontiers()),
+		"frontiers": diagnosticsCoordinatorFrontiers(record.Frontiers),
 	}
 }
 
-func diagnosticsCoordinatorFrontiers(frontiers rootstate.CoordinatorDutyFrontiers) []map[string]any {
+func diagnosticsCoordinatorFrontiers(frontiers rootproto.CoordinatorDutyFrontiers) []map[string]any {
 	if frontiers.Len() == 0 {
 		return []map[string]any{}
 	}
@@ -183,14 +184,14 @@ func diagnosticsCoordinatorFrontiers(frontiers rootstate.CoordinatorDutyFrontier
 	for _, entry := range entries {
 		out = append(out, map[string]any{
 			"duty_mask": entry.DutyMask,
-			"duty_name": entry.DutyName,
+			"duty_name": rootproto.CoordinatorDutyName(entry.DutyMask),
 			"frontier":  entry.Frontier,
 		})
 	}
 	return out
 }
 
-func diagnosticsClosureWitness(witness rootstate.ClosureWitness) map[string]any {
+func diagnosticsClosureWitness(witness rootproto.ClosureWitness) map[string]any {
 	return map[string]any{
 		"seal_generation":             witness.SealGeneration,
 		"seal_digest":                 witness.SealDigest,
