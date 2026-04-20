@@ -125,7 +125,7 @@ Relevant options (see `options.go` for defaults):
 
 ## 9. Truncation Metadata
 
-- `raftstore/engine/wal_storage` keeps a per-group index of `[firstIndex,lastIndex]` spans for each WAL record so it can map raft log indices back to the segment that stored them.
+- `raftstore/raftlog/wal_storage` keeps a per-group index of `[firstIndex,lastIndex]` spans for each WAL record so it can map raft log indices back to the segment that stored them.
 - When a log is truncated (either via snapshot or future compaction hooks), the store-local metadata in `raftstore/localmeta` is updated with the index/term, segment ID (`RaftLogPointer.SegmentIndex`), and byte offset (`RaftLogPointer.TruncatedOffset`) that delimit the remaining WAL data.
 - `engine/lsm/levelManager.canRemoveWalSegment` blocks garbage collection whenever any raft group still references a segment through that store-local truncation metadata, preventing slow followers from losing required WAL history while letting aggressively compacted groups release older segments earlier.
 

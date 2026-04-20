@@ -27,11 +27,11 @@ import (
 	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
-	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	peerpkg "github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	transportpkg "github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/utils"
 
@@ -70,7 +70,7 @@ func mustEncodePutCommand(t *testing.T, key, value []byte, startVersion uint64) 
 	return payload
 }
 
-func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *localmeta.Store, groupID uint64) engine.PeerStorage {
+func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *localmeta.Store, groupID uint64) raftlog.PeerStorage {
 	t.Helper()
 	storage, err := db.RaftLog().Open(groupID, localMeta)
 	require.NoError(t, err)

@@ -4,10 +4,17 @@ import (
 	"fmt"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"sync"
+	"time"
 
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 )
+
+type commandRuntime struct {
+	apply   func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error)
+	pipe    *commandPipeline
+	timeout time.Duration
+}
 
 type commandProposal struct {
 	ch chan proposalResult
@@ -110,4 +117,14 @@ func (cp *commandPipeline) applyEntries(entries []myraft.Entry) error {
 		cp.completeProposal(req.GetHeader().GetRequestId(), resp, nil)
 	}
 	return nil
+}
+
+func (s *Store) applyEntries(entries []myraft.Entry) error {
+	if s == nil {
+		return errNilStore
+	}
+	if s.cmds == nil || s.cmds.pipe == nil {
+		return errCommandApplyWithoutHandler
+	}
+	return s.cmds.pipe.applyEntries(entries)
 }

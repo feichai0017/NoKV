@@ -108,8 +108,8 @@ flowchart LR
 相关代码：
 
 - `raftstore/store/transition_executor.go`
-- `raftstore/store/membership_service.go`
-- `raftstore/store/admin_service.go`
+- `raftstore/store/membership_ops.go`
+- `raftstore/store/admin_ops.go`
 
 真正执行时必须经过：
 

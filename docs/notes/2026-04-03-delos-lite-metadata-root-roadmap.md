@@ -343,8 +343,8 @@ flowchart LR
 - `raftstore/store/transition_builder.go`
 - `raftstore/store/transition_executor.go`
 - `raftstore/store/transition_outcome.go`
-- `raftstore/store/membership_service.go`
-- `raftstore/store/admin_service.go`
+- `raftstore/store/membership_ops.go`
+- `raftstore/store/admin_ops.go`
 
 当前 `raftstore` 越来越接近这样的形态：
 

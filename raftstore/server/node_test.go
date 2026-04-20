@@ -18,10 +18,10 @@ import (
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/client"
-	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/stretchr/testify/require"
@@ -299,7 +299,7 @@ func (fakeMVCCStore) NewInternalIterator(opt *index.Options) index.Iterator { re
 
 type fakeRaftLog struct{}
 
-func (fakeRaftLog) Open(groupID uint64, meta *localmeta.Store) (engine.PeerStorage, error) {
+func (fakeRaftLog) Open(groupID uint64, meta *localmeta.Store) (raftlog.PeerStorage, error) {
 	return nil, nil
 }
 

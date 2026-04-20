@@ -20,11 +20,11 @@ import (
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
 	"github.com/feichai0017/NoKV/coordinator/tso"
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/raftstore/engine"
 	raftkv "github.com/feichai0017/NoKV/raftstore/kv"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
@@ -364,7 +364,7 @@ func AssertValue(tb testing.TB, db *NoKV.DB, key, value []byte) {
 	}
 }
 
-func peerConfig(node *Node, meta localmeta.RegionMeta, peerID uint64, storage engine.PeerStorage) *peer.Config {
+func peerConfig(node *Node, meta localmeta.RegionMeta, peerID uint64, storage raftlog.PeerStorage) *peer.Config {
 	var snapshotExport peer.SnapshotExportFunc
 	if snapshotBridge, ok := any(node.DB).(snapshotpkg.SnapshotStore); ok {
 		snapshotExport = snapshotBridge.ExportSnapshot

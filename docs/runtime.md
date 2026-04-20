@@ -18,7 +18,7 @@ Core entry points:
 
 - Embedded DB: [`db.go`](../db.go), [`iterator.go`](../iterator.go)
 - Distributed RPC: [`raftstore/kv/service.go`](../raftstore/kv/service.go)
-- Raft read/propose bridge: [`raftstore/store/command_service.go`](../raftstore/store/command_service.go)
+- Raft read/propose bridge: [`raftstore/store/command_ops.go`](../raftstore/store/command_ops.go)
 - MVCC logic: [`percolator/txn.go`](../percolator/txn.go), [`percolator/reader.go`](../percolator/reader.go)
 
 ---
