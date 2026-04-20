@@ -114,9 +114,9 @@ func (f *fakeStorage) SaveAllocatorState(idCurrent, tsCurrent uint64) error {
 	return nil
 }
 
-func (f *fakeStorage) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (f *fakeStorage) ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
 	switch cmd.Kind {
-	case rootstate.CoordinatorLeaseCommandIssue:
+	case rootproto.CoordinatorLeaseCommandIssue:
 		f.campaignCalls++
 		if f.campaignErr != nil {
 			return rootstate.CoordinatorProtocolState{}, f.campaignErr
@@ -141,7 +141,7 @@ func (f *fakeStorage) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseComman
 		if tsoFence := cmd.HandoffFrontiers.Frontier(rootproto.CoordinatorDutyTSO); tsoFence > f.snapshot.Allocator.TSCurrent {
 			f.snapshot.Allocator.TSCurrent = tsoFence
 		}
-	case rootstate.CoordinatorLeaseCommandRelease:
+	case rootproto.CoordinatorLeaseCommandRelease:
 		f.releaseCalls++
 		if f.releaseErr != nil {
 			return rootstate.CoordinatorProtocolState{}, f.releaseErr
@@ -168,9 +168,9 @@ func (f *fakeStorage) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseComman
 	return f.protocolState(), nil
 }
 
-func (f *fakeStorage) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (f *fakeStorage) ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
 	switch cmd.Kind {
-	case rootstate.CoordinatorClosureCommandSeal:
+	case rootproto.CoordinatorClosureCommandSeal:
 		f.sealCalls++
 		if f.sealErr != nil {
 			return rootstate.CoordinatorProtocolState{}, f.sealErr
@@ -186,9 +186,9 @@ func (f *fakeStorage) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCo
 			HolderID:       cmd.HolderID,
 			CertGeneration: f.snapshot.CoordinatorLease.CertGeneration,
 			DutyMask:       dutyMask,
-			Frontiers:      rootproto.CloneDutyFrontiers(cmd.Frontiers),
+			Frontiers:      cmd.Frontiers,
 		}
-	case rootstate.CoordinatorClosureCommandConfirm:
+	case rootproto.CoordinatorClosureCommandConfirm:
 		f.confirmCalls++
 		if f.confirmErr != nil {
 			return rootstate.CoordinatorProtocolState{}, f.confirmErr
@@ -215,7 +215,7 @@ func (f *fakeStorage) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCo
 			SealDigest:          auditStatus.SealDigest,
 			Stage:               rootproto.CoordinatorClosureStageConfirmed,
 		}
-	case rootstate.CoordinatorClosureCommandClose:
+	case rootproto.CoordinatorClosureCommandClose:
 		f.closeCalls++
 		if f.closeErr != nil {
 			return rootstate.CoordinatorProtocolState{}, f.closeErr
@@ -224,7 +224,7 @@ func (f *fakeStorage) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCo
 			return f.protocolState(), err
 		}
 		f.snapshot.CoordinatorClosure.Stage = rootproto.CoordinatorClosureStageClosed
-	case rootstate.CoordinatorClosureCommandReattach:
+	case rootproto.CoordinatorClosureCommandReattach:
 		f.reattachCalls++
 		if f.reattachErr != nil {
 			return rootstate.CoordinatorProtocolState{}, f.reattachErr

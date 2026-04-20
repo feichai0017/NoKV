@@ -40,27 +40,27 @@ type Config struct {
 }
 
 // Config returns the concrete switch set for one named ablation preset.
-func (p Preset) Config() Config {
+func (p Preset) Config() (Config, error) {
 	switch p {
 	case PresetFull:
-		return Config{}
+		return Config{}, nil
 	case PresetNoSeal:
-		return Config{DisableSeal: true}
+		return Config{DisableSeal: true}, nil
 	case PresetNoBudget:
-		return Config{DisableBudget: true}
+		return Config{DisableBudget: true}, nil
 	case PresetClientBlind:
-		return Config{DisableClientVerify: true}
+		return Config{DisableClientVerify: true}, nil
 	case PresetReplyBlindClientBlind:
 		return Config{
 			DisableReplyEvidence: true,
 			DisableClientVerify:  true,
-		}
+		}, nil
 	case PresetNoReattach:
-		return Config{DisableReattach: true}
+		return Config{DisableReattach: true}, nil
 	case PresetFailStopOnRootUnreach:
-		return Config{FailStopOnRootUnreach: true}
+		return Config{FailStopOnRootUnreach: true}, nil
 	default:
-		panic(fmt.Sprintf("unknown control-plane ablation preset %q", p))
+		return Config{}, fmt.Errorf("unknown control-plane ablation preset %q", p)
 	}
 }
 

@@ -118,7 +118,6 @@ type CommitInfo struct {
 
 func CloneSnapshot(snapshot Snapshot) Snapshot {
 	state := snapshot.State
-	state.CoordinatorSeal.Frontiers = rootproto.CloneDutyFrontiers(state.CoordinatorSeal.Frontiers)
 	out := Snapshot{
 		State:               state,
 		Descriptors:         CloneDescriptors(snapshot.Descriptors),
@@ -247,7 +246,7 @@ func applyCoordinatorSealToState(state *State, cursor Cursor, event rootevent.Ev
 		HolderID:       seal.HolderID,
 		CertGeneration: seal.CertGeneration,
 		DutyMask:       dutyMask,
-		Frontiers:      rootproto.CloneDutyFrontiers(seal.Frontiers),
+		Frontiers:      seal.Frontiers,
 		SealedAtCursor: sealedAt,
 	}
 	state.CoordinatorClosure = CoordinatorClosure{}
@@ -302,7 +301,7 @@ func applyCoordinatorLeaseToState(state *State, cursor Cursor, event rootevent.E
 		DutyMask:          dutyMask,
 		PredecessorDigest: predecessorDigest,
 	}
-	frontiers := rootproto.CloneDutyFrontiers(lease.Frontiers)
+	frontiers := lease.Frontiers
 	if frontier := frontiers.Frontier(rootproto.CoordinatorDutyAllocID); frontier > state.IDFence {
 		state.IDFence = frontier
 	}

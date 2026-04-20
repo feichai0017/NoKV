@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
@@ -125,10 +126,10 @@ func (s bootstrapTestStore) Load() (Snapshot, error) {
 
 func (bootstrapTestStore) AppendRootEvent(rootevent.Event) error   { return nil }
 func (bootstrapTestStore) SaveAllocatorState(uint64, uint64) error { return nil }
-func (bootstrapTestStore) ApplyCoordinatorLease(rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (bootstrapTestStore) ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
 	return rootstate.CoordinatorProtocolState{}, nil
 }
-func (bootstrapTestStore) ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (bootstrapTestStore) ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
 	return rootstate.CoordinatorProtocolState{}, nil
 }
 func (bootstrapTestStore) Refresh() error   { return nil }

@@ -69,6 +69,14 @@ type detachedAblationHarness struct {
 	stopRemote       func()
 }
 
+func mustDetachedPresetConfig(preset coordablation.Preset) coordablation.Config {
+	cfg, err := preset.Config()
+	if err != nil {
+		panic(err)
+	}
+	return cfg
+}
+
 func TestControlPlaneDetachedAblationRunner(t *testing.T) {
 	t.Run("seal_path", func(t *testing.T) {
 		cases := []struct {
@@ -91,7 +99,7 @@ func TestControlPlaneDetachedAblationRunner(t *testing.T) {
 				name: "disable_seal",
 				variant: detachedAblationVariant{
 					name:              "disable_seal",
-					predecessorConfig: coordablation.PresetNoSeal.Config(),
+					predecessorConfig: mustDetachedPresetConfig(coordablation.PresetNoSeal),
 				},
 				wantResult: detachedSealResult{
 					sealRecorded:      false,
@@ -105,7 +113,7 @@ func TestControlPlaneDetachedAblationRunner(t *testing.T) {
 				name: "disable_reattach",
 				variant: detachedAblationVariant{
 					name:            "disable_reattach",
-					successorConfig: coordablation.PresetNoReattach.Config(),
+					successorConfig: mustDetachedPresetConfig(coordablation.PresetNoReattach),
 				},
 				wantResult: detachedSealResult{
 					sealRecorded:      true,
@@ -149,7 +157,7 @@ func TestControlPlaneDetachedAblationRunner(t *testing.T) {
 				name: "disable_client_verify",
 				variant: detachedAblationVariant{
 					name:         "disable_client_verify",
-					clientConfig: coordablation.PresetClientBlind.Config(),
+					clientConfig: mustDetachedPresetConfig(coordablation.PresetClientBlind),
 				},
 				wantRejected: false,
 			},
@@ -159,7 +167,7 @@ func TestControlPlaneDetachedAblationRunner(t *testing.T) {
 					name:              "disable_reply_evidence_disable_client_verify",
 					predecessorConfig: coordablation.Config{DisableReplyEvidence: true},
 					successorConfig:   coordablation.Config{DisableReplyEvidence: true},
-					clientConfig:      coordablation.PresetReplyBlindClientBlind.Config(),
+					clientConfig:      mustDetachedPresetConfig(coordablation.PresetReplyBlindClientBlind),
 				},
 				wantRejected: false,
 			},
@@ -198,7 +206,7 @@ func TestControlPlaneDetachedAblationRunner(t *testing.T) {
 				name: "disable_budget",
 				variant: detachedAblationVariant{
 					name:              "disable_budget",
-					predecessorConfig: coordablation.PresetNoBudget.Config(),
+					predecessorConfig: mustDetachedPresetConfig(coordablation.PresetNoBudget),
 				},
 				wantResult: detachedBudgetResult{
 					secondAllocSucceeded: true,
@@ -238,7 +246,7 @@ func TestControlPlaneDetachedAblationRunner(t *testing.T) {
 				name: "fail_stop_on_root_unreach",
 				variant: detachedAblationVariant{
 					name:              "fail_stop_on_root_unreach",
-					predecessorConfig: coordablation.PresetFailStopOnRootUnreach.Config(),
+					predecessorConfig: mustDetachedPresetConfig(coordablation.PresetFailStopOnRootUnreach),
 				},
 				wantResult: detachedRootUnreachResult{
 					bestEffortAllowed: false,
@@ -506,7 +514,7 @@ func (s *detachedScenarioStorage) SaveAllocatorState(idCurrent, tsCurrent uint64
 	return nil
 }
 
-func (s *detachedScenarioStorage) ApplyCoordinatorLease(rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *detachedScenarioStorage) ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
 	return rootstate.CoordinatorProtocolState{
 		Lease:   s.snapshot.CoordinatorLease,
 		Seal:    s.snapshot.CoordinatorSeal,
@@ -514,7 +522,7 @@ func (s *detachedScenarioStorage) ApplyCoordinatorLease(rootstate.CoordinatorLea
 	}, nil
 }
 
-func (s *detachedScenarioStorage) ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *detachedScenarioStorage) ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
 	return rootstate.CoordinatorProtocolState{
 		Lease:   s.snapshot.CoordinatorLease,
 		Seal:    s.snapshot.CoordinatorSeal,

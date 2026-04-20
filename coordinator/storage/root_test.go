@@ -521,8 +521,8 @@ func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch, peers 
 }
 
 func campaignLease(store *RootStore, holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence, descriptorRevision uint64, predecessorDigest string) (rootstate.CoordinatorLease, error) {
-	state, err := store.ApplyCoordinatorLease(rootstate.CoordinatorLeaseCommand{
-		Kind:              rootstate.CoordinatorLeaseCommandIssue,
+	state, err := store.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{
+		Kind:              rootproto.CoordinatorLeaseCommandIssue,
 		HolderID:          holderID,
 		ExpiresUnixNano:   expiresUnixNano,
 		NowUnixNano:       nowUnixNano,
@@ -533,8 +533,8 @@ func campaignLease(store *RootStore, holderID string, expiresUnixNano, nowUnixNa
 }
 
 func releaseLease(store *RootStore, holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
-	state, err := store.ApplyCoordinatorLease(rootstate.CoordinatorLeaseCommand{
-		Kind:             rootstate.CoordinatorLeaseCommandRelease,
+	state, err := store.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{
+		Kind:             rootproto.CoordinatorLeaseCommandRelease,
 		HolderID:         holderID,
 		NowUnixNano:      nowUnixNano,
 		HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, 0),
@@ -543,8 +543,8 @@ func releaseLease(store *RootStore, holderID string, nowUnixNano int64, idFence,
 }
 
 func sealLease(store *RootStore, holderID string, nowUnixNano int64, frontiers rootproto.CoordinatorDutyFrontiers) (rootstate.CoordinatorSeal, error) {
-	state, err := store.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
-		Kind:        rootstate.CoordinatorClosureCommandSeal,
+	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+		Kind:        rootproto.CoordinatorClosureCommandSeal,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 		Frontiers:   frontiers,
@@ -553,8 +553,8 @@ func sealLease(store *RootStore, holderID string, nowUnixNano int64, frontiers r
 }
 
 func confirmClosure(store *RootStore, holderID string, nowUnixNano int64) (rootstate.CoordinatorClosure, error) {
-	state, err := store.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
-		Kind:        rootstate.CoordinatorClosureCommandConfirm,
+	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+		Kind:        rootproto.CoordinatorClosureCommandConfirm,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 	})
@@ -562,8 +562,8 @@ func confirmClosure(store *RootStore, holderID string, nowUnixNano int64) (roots
 }
 
 func closeClosure(store *RootStore, holderID string, nowUnixNano int64) (rootstate.CoordinatorClosure, error) {
-	state, err := store.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
-		Kind:        rootstate.CoordinatorClosureCommandClose,
+	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+		Kind:        rootproto.CoordinatorClosureCommandClose,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 	})
@@ -571,8 +571,8 @@ func closeClosure(store *RootStore, holderID string, nowUnixNano int64) (rootsta
 }
 
 func reattachClosure(store *RootStore, holderID string, nowUnixNano int64) (rootstate.CoordinatorClosure, error) {
-	state, err := store.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
-		Kind:        rootstate.CoordinatorClosureCommandReattach,
+	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+		Kind:        rootproto.CoordinatorClosureCommandReattach,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 	})
@@ -648,14 +648,14 @@ func (s *stubRootBackend) LeaderID() uint64 {
 	return s.leaderIDValue
 }
 
-func (s *stubRootBackend) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *stubRootBackend) ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
 	switch cmd.Kind {
-	case rootstate.CoordinatorLeaseCommandIssue:
+	case rootproto.CoordinatorLeaseCommandIssue:
 		s.leaseCampaignCalls++
 		if s.leaseCampaignErr != nil {
 			return rootstate.CoordinatorProtocolState{}, s.leaseCampaignErr
 		}
-	case rootstate.CoordinatorLeaseCommandRelease:
+	case rootproto.CoordinatorLeaseCommandRelease:
 		s.leaseReleaseCalls++
 		if s.leaseReleaseErr != nil {
 			return rootstate.CoordinatorProtocolState{}, s.leaseReleaseErr
@@ -664,25 +664,25 @@ func (s *stubRootBackend) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCo
 	return rootstate.CoordinatorProtocolState{Lease: s.lease}, nil
 }
 
-func (s *stubRootBackend) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *stubRootBackend) ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
 	switch cmd.Kind {
-	case rootstate.CoordinatorClosureCommandSeal:
+	case rootproto.CoordinatorClosureCommandSeal:
 		s.leaseSealCalls++
 		if s.leaseSealErr != nil {
 			return rootstate.CoordinatorProtocolState{}, s.leaseSealErr
 		}
 		return rootstate.CoordinatorProtocolState{Seal: s.seal}, nil
-	case rootstate.CoordinatorClosureCommandConfirm:
+	case rootproto.CoordinatorClosureCommandConfirm:
 		s.leaseAuditCalls++
 		if s.leaseAuditErr != nil {
 			return rootstate.CoordinatorProtocolState{}, s.leaseAuditErr
 		}
-	case rootstate.CoordinatorClosureCommandClose:
+	case rootproto.CoordinatorClosureCommandClose:
 		s.leaseCloseCalls++
 		if s.leaseCloseErr != nil {
 			return rootstate.CoordinatorProtocolState{}, s.leaseCloseErr
 		}
-	case rootstate.CoordinatorClosureCommandReattach:
+	case rootproto.CoordinatorClosureCommandReattach:
 		s.leaseReattachCalls++
 		if s.leaseReattachErr != nil {
 			return rootstate.CoordinatorProtocolState{}, s.leaseReattachErr

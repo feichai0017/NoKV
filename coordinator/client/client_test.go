@@ -194,10 +194,10 @@ func (f *followerStorage) Load() (coordstorage.Snapshot, error) {
 }
 func (f *followerStorage) AppendRootEvent(rootevent.Event) error   { return nil }
 func (f *followerStorage) SaveAllocatorState(uint64, uint64) error { return nil }
-func (f *followerStorage) ApplyCoordinatorLease(rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (f *followerStorage) ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
 	return rootstate.CoordinatorProtocolState{}, nil
 }
-func (f *followerStorage) ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (f *followerStorage) ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
 	return rootstate.CoordinatorProtocolState{}, nil
 }
 func (f *followerStorage) Refresh() error   { return nil }

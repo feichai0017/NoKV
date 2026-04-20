@@ -227,10 +227,6 @@ func (f CoordinatorDutyFrontiers) WithFrontier(dutyMask uint32, frontier uint64)
 	return f
 }
 
-func CloneDutyFrontiers(frontiers CoordinatorDutyFrontiers) CoordinatorDutyFrontiers {
-	return frontiers
-}
-
 func OrderedCoordinatorDutyMasks(dutyMask uint32, frontiers CoordinatorDutyFrontiers) []uint32 {
 	seen := (frontiers.present | dutyMask) & coordinatorDutyFrontierMaskAll
 	out := make([]uint32, 0, bits.OnesCount32(seen))
@@ -285,7 +281,7 @@ func NewAuthorityHandoffRecord(holderID string, expiresUnixNano int64, certGener
 		IssuedCursor:      issuedCursor,
 		DutyMask:          resolvedDutyMask,
 		PredecessorDigest: predecessorDigest,
-		Frontiers:         CloneDutyFrontiers(frontiers),
+		Frontiers:         frontiers,
 	}, nil
 }
 

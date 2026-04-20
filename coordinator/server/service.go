@@ -1060,8 +1060,8 @@ func (s *Service) ReleaseCoordinatorLease() error {
 	}, s.currentDescriptorRevision())
 	s.allocMu.Unlock()
 
-	if _, err := s.storage.ApplyCoordinatorLease(rootstate.CoordinatorLeaseCommand{
-		Kind:             rootstate.CoordinatorLeaseCommandRelease,
+	if _, err := s.storage.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{
+		Kind:             rootproto.CoordinatorLeaseCommandRelease,
 		HolderID:         holderID,
 		NowUnixNano:      nowUnixNano,
 		HandoffFrontiers: handoffFrontiers,
@@ -1088,7 +1088,7 @@ func (s *Service) SealCoordinatorLease() error {
 	consumedTSOFrontier := s.tso.Current()
 	s.allocMu.Unlock()
 	return s.applyClosureCommand(
-		rootstate.CoordinatorClosureCommandSeal,
+		rootproto.CoordinatorClosureCommandSeal,
 		preActionSealCurrentGeneration,
 		controlplane.Frontiers(rootstate.State{
 			IDFence:  consumedIDFrontier,
@@ -1106,7 +1106,7 @@ func (s *Service) ConfirmCoordinatorClosure() error {
 	if !s.storage.IsLeader() {
 		return nil
 	}
-	return s.applyClosureCommand(rootstate.CoordinatorClosureCommandConfirm, preActionLifecycleMutation, rootproto.NewCoordinatorDutyFrontiers())
+	return s.applyClosureCommand(rootproto.CoordinatorClosureCommandConfirm, preActionLifecycleMutation, rootproto.NewCoordinatorDutyFrontiers())
 }
 
 // CloseCoordinatorClosure explicitly records that the current successor
@@ -1118,7 +1118,7 @@ func (s *Service) CloseCoordinatorClosure() error {
 	if !s.storage.IsLeader() {
 		return nil
 	}
-	return s.applyClosureCommand(rootstate.CoordinatorClosureCommandClose, preActionLifecycleMutation, rootproto.NewCoordinatorDutyFrontiers())
+	return s.applyClosureCommand(rootproto.CoordinatorClosureCommandClose, preActionLifecycleMutation, rootproto.NewCoordinatorDutyFrontiers())
 }
 
 // ReattachCoordinatorClosure explicitly records that the current successor
@@ -1133,10 +1133,10 @@ func (s *Service) ReattachCoordinatorClosure() error {
 	if !s.storage.IsLeader() {
 		return nil
 	}
-	return s.applyClosureCommand(rootstate.CoordinatorClosureCommandReattach, preActionLifecycleMutation, rootproto.NewCoordinatorDutyFrontiers())
+	return s.applyClosureCommand(rootproto.CoordinatorClosureCommandReattach, preActionLifecycleMutation, rootproto.NewCoordinatorDutyFrontiers())
 }
 
-func (s *Service) applyClosureCommand(kind rootstate.CoordinatorClosureCommandKind, gate preActionKind, frontiers rootproto.CoordinatorDutyFrontiers) error {
+func (s *Service) applyClosureCommand(kind rootproto.CoordinatorClosureCommandKind, gate preActionKind, frontiers rootproto.CoordinatorDutyFrontiers) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
@@ -1158,7 +1158,7 @@ func (s *Service) applyClosureCommand(kind rootstate.CoordinatorClosureCommandKi
 	if err := s.preActionGate(gate, 0); err != nil {
 		return err
 	}
-	if _, err := s.storage.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
+	if _, err := s.storage.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
 		Kind:        kind,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
@@ -1190,8 +1190,8 @@ func (s *Service) ensureCoordinatorLease() error {
 	current, seal := s.currentCoordinatorLeaseView()
 	predecessorDigest := rootstate.ResolveCoordinatorLeasePredecessorDigest(current, seal, holderID, nowUnixNano)
 
-	if _, err := s.storage.ApplyCoordinatorLease(rootstate.CoordinatorLeaseCommand{
-		Kind:              rootstate.CoordinatorLeaseCommandIssue,
+	if _, err := s.storage.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{
+		Kind:              rootproto.CoordinatorLeaseCommandIssue,
 		HolderID:          holderID,
 		ExpiresUnixNano:   expiresUnixNano,
 		NowUnixNano:       nowUnixNano,
