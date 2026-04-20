@@ -149,7 +149,7 @@ func (s *protocolMatrixStorage) ApplyCoordinatorClosure(cmd rootstate.Coordinato
 			controlplane.Frontiers(
 				s.snapshot.Allocator.IDCurrent,
 				s.snapshot.Allocator.TSCurrent,
-				controlplane.MaxDescriptorRevision(s.snapshot.Descriptors),
+				rootstate.MaxDescriptorRevision(s.snapshot.Descriptors),
 			),
 			s.snapshot.CoordinatorSeal,
 			cmd.NowUnixNano,
@@ -338,7 +338,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 			},
 			diagKeys: map[string]any{
 				"closure_satisfied": false,
-				"closure_stage":     "pending_confirm",
+				"closure_stage":     "unspecified",
 			},
 		},
 		// F.root_unreach — metadata answers must also fail-stop once the rooted
@@ -366,7 +366,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 			},
 			diagKeys: map[string]any{
 				"closure_satisfied": false,
-				"closure_stage":     "pending_confirm",
+				"closure_stage":     "unspecified",
 			},
 		},
 		// F.successor_campaign + F.budget_exhaustion — a successor generation may
@@ -402,7 +402,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 				"successor_monotone_covered":   false,
 				"successor_descriptor_covered": true,
 				"closure_satisfied":            false,
-				"closure_stage":                "pending_confirm",
+				"closure_stage":                "unspecified",
 			},
 		},
 		// F.successor_campaign + F.descriptor_publish_race — successor coverage is
@@ -436,7 +436,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 				"successor_monotone_covered":   true,
 				"successor_descriptor_covered": false,
 				"closure_satisfied":            false,
-				"closure_stage":                "pending_confirm",
+				"closure_stage":                "unspecified",
 			},
 		},
 		// F.lease_expiry + F.successor_campaign — even with a successor lease in
@@ -466,7 +466,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 				require.ErrorIs(t, err, rootstate.ErrCoordinatorLeaseReattach)
 			},
 			diagKeys: map[string]any{
-				"closure_stage": "pending_confirm",
+				"closure_stage": "unspecified",
 			},
 		},
 		// F.revived_holder + F.successor_campaign — a successor whose lineage no
@@ -503,7 +503,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 				require.ErrorIs(t, err, rootstate.ErrCoordinatorLeaseReattach)
 			},
 			diagKeys: map[string]any{
-				"closure_stage":               "pending_confirm",
+				"closure_stage":               "unspecified",
 				"successor_lineage_satisfied": false,
 			},
 		},

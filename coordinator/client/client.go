@@ -5,6 +5,7 @@ import (
 	"fmt"
 	coordablation "github.com/feichai0017/NoKV/coordinator/ablation"
 	coordprotocol "github.com/feichai0017/NoKV/coordinator/protocol"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"strings"
 	"sync"
@@ -103,11 +104,15 @@ func (c *GRPCClient) Close() error {
 
 // ConfigureAblation installs first-cut client-side ablation switches for
 // verifier experiments. It should be set once during benchmark/test setup.
-func (c *GRPCClient) ConfigureAblation(cfg coordablation.Config) {
+func (c *GRPCClient) ConfigureAblation(cfg coordablation.Config) error {
 	if c == nil {
-		return
+		return nil
 	}
-	c.ablation = cfg.MustValid()
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	c.ablation = cfg
+	return nil
 }
 
 // StoreHeartbeat forwards store heartbeat RPC.
@@ -315,7 +320,8 @@ func retryableWrite(err error) bool {
 }
 
 type witnessGenerationFloor struct {
-	maxSeen uint64
+	maxSeen    uint64
+	sealedSeen uint64
 }
 
 type metadataAttachedFloor struct {
@@ -335,7 +341,7 @@ func (c *GRPCClient) validateAllocIDResponse(req *coordpb.AllocIDRequest, resp *
 	if resp == nil {
 		return fmt.Errorf("%w: alloc id response is nil", errInvalidWitness)
 	}
-	return c.validateMonotoneWitness("alloc_id", normalizedCount(requestedAllocIDCount(req)), resp.GetFirstId(), resp.GetCount(), resp.GetCertGeneration(), resp.GetConsumedFrontier(), &c.allocGen)
+	return c.validateMonotoneWitness("alloc_id", normalizedCount(requestedAllocIDCount(req)), resp.GetFirstId(), resp.GetCount(), resp.GetCertGeneration(), resp.GetConsumedFrontier(), resp.GetObservedSealGeneration(), &c.allocGen)
 }
 
 func (c *GRPCClient) validateGetRegionByKeyResponse(req *coordpb.GetRegionByKeyRequest, resp *coordpb.GetRegionByKeyResponse) error {
@@ -402,10 +408,13 @@ func (c *GRPCClient) validateTSOResponse(req *coordpb.TsoRequest, resp *coordpb.
 	if resp == nil {
 		return fmt.Errorf("%w: tso response is nil", errInvalidWitness)
 	}
-	return c.validateMonotoneWitness("tso", normalizedCount(requestedTSOCount(req)), resp.GetTimestamp(), resp.GetCount(), resp.GetCertGeneration(), resp.GetConsumedFrontier(), &c.tsoGen)
+	return c.validateMonotoneWitness("tso", normalizedCount(requestedTSOCount(req)), resp.GetTimestamp(), resp.GetCount(), resp.GetCertGeneration(), resp.GetConsumedFrontier(), resp.GetObservedSealGeneration(), &c.tsoGen)
 }
 
-func (c *GRPCClient) validateMonotoneWitness(kind string, requestedCount, first, gotCount, certGeneration, consumedFrontier uint64, generation *witnessGenerationFloor) error {
+func (c *GRPCClient) validateMonotoneWitness(kind string, requestedCount, first, gotCount, certGeneration, consumedFrontier, observedSealGeneration uint64, generation *witnessGenerationFloor) error {
+	if certGeneration == rootstate.ContinuationWitnessGenerationSuppressed {
+		return fmt.Errorf("%w: %s reply evidence suppressed", errInvalidWitness, kind)
+	}
 	if gotCount != requestedCount {
 		return fmt.Errorf("%w: %s count=%d requested=%d", errInvalidWitness, kind, gotCount, requestedCount)
 	}
@@ -416,12 +425,15 @@ func (c *GRPCClient) validateMonotoneWitness(kind string, requestedCount, first,
 	if consumedFrontier != expectedFrontier {
 		return fmt.Errorf("%w: %s consumed_frontier=%d expected=%d", errInvalidWitness, kind, consumedFrontier, expectedFrontier)
 	}
-	return c.advanceWitnessGenerationFloor(kind, certGeneration, generation)
+	return c.advanceWitnessGenerationFloor(kind, certGeneration, observedSealGeneration, generation)
 }
 
 func (c *GRPCClient) validateMetadataWitnessGeneration(resp *coordpb.GetRegionByKeyResponse) error {
 	certGeneration := resp.GetCertGeneration()
-	if certGeneration == 0 {
+	if certGeneration == rootstate.ContinuationWitnessGenerationSuppressed {
+		return fmt.Errorf("%w: get_region_by_key reply evidence suppressed", errInvalidWitness)
+	}
+	if certGeneration == rootstate.ContinuationWitnessGenerationAttached {
 		if resp.GetServingClass() != coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE ||
 			resp.GetSyncHealth() != coordpb.SyncHealth_SYNC_HEALTH_HEALTHY ||
 			!resp.GetServedByLeader() ||
@@ -439,7 +451,7 @@ func (c *GRPCClient) validateMetadataWitnessGeneration(resp *coordpb.GetRegionBy
 		}
 		return c.advanceAttachedMetadataFloor(resp)
 	}
-	return c.advanceWitnessGenerationFloor("get_region_by_key", certGeneration, &c.metadataGen)
+	return c.advanceWitnessGenerationFloor("get_region_by_key", certGeneration, resp.GetObservedSealGeneration(), &c.metadataGen)
 }
 
 func (c *GRPCClient) advanceAttachedMetadataFloor(resp *coordpb.GetRegionByKeyResponse) error {
@@ -474,9 +486,18 @@ func (c *GRPCClient) advanceAttachedMetadataFloor(resp *coordpb.GetRegionByKeyRe
 	return nil
 }
 
-func (c *GRPCClient) advanceWitnessGenerationFloor(kind string, certGeneration uint64, floor *witnessGenerationFloor) error {
+func (c *GRPCClient) advanceWitnessGenerationFloor(kind string, certGeneration, observedSealGeneration uint64, floor *witnessGenerationFloor) error {
 	c.verifyMu.Lock()
 	defer c.verifyMu.Unlock()
+	if certGeneration == rootstate.ContinuationWitnessGenerationSuppressed {
+		return fmt.Errorf("%w: %s cert_generation suppressed", errInvalidWitness, kind)
+	}
+	if observedSealGeneration > floor.sealedSeen {
+		floor.sealedSeen = observedSealGeneration
+	}
+	if floor.sealedSeen != 0 && certGeneration <= floor.sealedSeen {
+		return fmt.Errorf("%w: %s cert_generation=%d sealed_floor=%d", errStaleWitnessGeneration, kind, certGeneration, floor.sealedSeen)
+	}
 	if certGeneration < floor.maxSeen {
 		return fmt.Errorf("%w: %s cert_generation=%d max_seen=%d", errStaleWitnessGeneration, kind, certGeneration, floor.maxSeen)
 	}

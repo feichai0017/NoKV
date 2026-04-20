@@ -81,10 +81,16 @@ type CoordinatorClosureStage = rootproto.CoordinatorClosureStage
 type CoordinatorClosureStatus = rootproto.CoordinatorClosureStatus
 
 const (
+	CoordinatorClosureStageUnspecified    = rootproto.CoordinatorClosureStageUnspecified
 	CoordinatorClosureStagePendingConfirm = rootproto.CoordinatorClosureStagePendingConfirm
 	CoordinatorClosureStageConfirmed      = rootproto.CoordinatorClosureStageConfirmed
 	CoordinatorClosureStageClosed         = rootproto.CoordinatorClosureStageClosed
 	CoordinatorClosureStageReattached     = rootproto.CoordinatorClosureStageReattached
+)
+
+const (
+	ContinuationWitnessGenerationAttached   = rootproto.ContinuationWitnessGenerationAttached
+	ContinuationWitnessGenerationSuppressed = rootproto.ContinuationWitnessGenerationSuppressed
 )
 
 func (l CoordinatorLease) ActiveAt(nowUnixNano int64) bool {
@@ -116,6 +122,22 @@ func CoordinatorSealRequiredFrontiers(seal CoordinatorSeal) CoordinatorDutyFront
 
 func NewContinuationWitness(dutyMask uint32, certGeneration, consumedFrontier uint64) ContinuationWitness {
 	return rootproto.NewContinuationWitness(dutyMask, certGeneration, consumedFrontier)
+}
+
+func NewSuppressedContinuationWitness(dutyMask uint32) ContinuationWitness {
+	return rootproto.NewSuppressedContinuationWitness(dutyMask)
+}
+
+func NewAuthorityHandoffRecord(holderID string, expiresUnixNano int64, certGeneration uint64, issuedCursor Cursor, dutyMask uint32, predecessorDigest string, frontiers CoordinatorDutyFrontiers) (AuthorityHandoffRecord, error) {
+	return rootproto.NewAuthorityHandoffRecord(holderID, expiresUnixNano, certGeneration, issuedCursor, dutyMask, predecessorDigest, frontiers)
+}
+
+func MustNewAuthorityHandoffRecord(holderID string, expiresUnixNano int64, certGeneration uint64, issuedCursor Cursor, dutyMask uint32, predecessorDigest string, frontiers CoordinatorDutyFrontiers) AuthorityHandoffRecord {
+	return rootproto.MustNewAuthorityHandoffRecord(holderID, expiresUnixNano, certGeneration, issuedCursor, dutyMask, predecessorDigest, frontiers)
+}
+
+func ClosureStageAtLeast(stage, target CoordinatorClosureStage) bool {
+	return rootproto.ClosureStageAtLeast(stage, target)
 }
 
 type PendingPeerChangeKind uint8
@@ -190,6 +212,16 @@ func CloneDescriptors(in map[uint64]descriptor.Descriptor) map[uint64]descriptor
 		out[id] = desc.Clone()
 	}
 	return out
+}
+
+func MaxDescriptorRevision(descriptors map[uint64]descriptor.Descriptor) uint64 {
+	var maxEpoch uint64
+	for _, desc := range descriptors {
+		if desc.RootEpoch > maxEpoch {
+			maxEpoch = desc.RootEpoch
+		}
+	}
+	return maxEpoch
 }
 
 func ClonePendingPeerChanges(in map[uint64]PendingPeerChange) map[uint64]PendingPeerChange {

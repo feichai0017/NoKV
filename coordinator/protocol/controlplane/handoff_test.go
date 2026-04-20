@@ -19,11 +19,11 @@ func TestHandoffRecordProjectsLeaseFrontiers(t *testing.T) {
 	}
 
 	handoff := controlplane.HandoffRecord(lease, controlplane.Frontiers(30, 50, 65))
-	require.Equal(t, "c1", handoff.HolderID)
-	require.Equal(t, uint64(8), handoff.CertGeneration)
-	require.Equal(t, uint64(30), handoff.Frontiers.Frontier(rootstate.CoordinatorDutyAllocID))
-	require.Equal(t, uint64(50), handoff.Frontiers.Frontier(rootstate.CoordinatorDutyTSO))
-	require.Equal(t, uint64(65), handoff.Frontiers.Frontier(rootstate.CoordinatorDutyGetRegionByKey))
+	require.Equal(t, "c1", handoff.HolderID())
+	require.Equal(t, uint64(8), handoff.CertGeneration())
+	require.Equal(t, uint64(30), handoff.Frontiers().Frontier(rootstate.CoordinatorDutyAllocID))
+	require.Equal(t, uint64(50), handoff.Frontiers().Frontier(rootstate.CoordinatorDutyTSO))
+	require.Equal(t, uint64(65), handoff.Frontiers().Frontier(rootstate.CoordinatorDutyGetRegionByKey))
 }
 
 func TestBuildClosureWitness(t *testing.T) {
@@ -56,6 +56,7 @@ func TestBuildClosureWitness(t *testing.T) {
 	require.True(t, witness.ClosureSatisfied())
 	require.False(t, witness.ReplyGenerationLegal(7))
 	require.True(t, witness.ReplyGenerationLegal(8))
+	require.False(t, witness.ReplyGenerationLegal(rootstate.ContinuationWitnessGenerationSuppressed))
 
 	currentSameGen := rootstate.CoordinatorLease{
 		HolderID:        "c1",
@@ -168,4 +169,7 @@ func TestEvaluateClosureStage(t *testing.T) {
 	reattached.Stage = rootstate.CoordinatorClosureStageReattached
 	status = controlplane.EvaluateClosureStage(current, reattached, "c1", 1_000)
 	require.Equal(t, rootstate.CoordinatorClosureStageReattached, status.Stage)
+
+	status = controlplane.EvaluateClosureStage(current, rootstate.CoordinatorClosure{}, "c1", 1_000)
+	require.Equal(t, rootstate.CoordinatorClosureStageUnspecified, status.Stage)
 }

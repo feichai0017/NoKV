@@ -197,7 +197,7 @@ func (f *fakeStorage) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCo
 		}
 		auditStatus, err := controlplane.ValidateClosureConfirmation(
 			f.snapshot.CoordinatorLease,
-			controlplane.Frontiers(f.snapshot.Allocator.IDCurrent, f.snapshot.Allocator.TSCurrent, controlplane.MaxDescriptorRevision(f.snapshot.Descriptors)),
+			controlplane.Frontiers(f.snapshot.Allocator.IDCurrent, f.snapshot.Allocator.TSCurrent, rootstate.MaxDescriptorRevision(f.snapshot.Descriptors)),
 			f.snapshot.CoordinatorSeal,
 			cmd.NowUnixNano,
 		)
@@ -421,7 +421,7 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 	require.Equal(t, false, audit["successor_descriptor_covered"])
 	require.Equal(t, true, audit["sealed_generation_retired"])
 	require.Equal(t, false, audit["closure_satisfied"])
-	require.Equal(t, "pending_confirm", audit["closure_stage"])
+	require.Equal(t, "unspecified", audit["closure_stage"])
 }
 
 func TestServiceGetRegionByKeyStrongReadRejectsFollower(t *testing.T) {
@@ -1897,7 +1897,7 @@ func TestServiceSealCoordinatorLeaseAblationNoop(t *testing.T) {
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
 	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
-	svc.ConfigureAblation(coordablation.Config{DisableSeal: true})
+	require.NoError(t, svc.ConfigureAblation(coordablation.Config{DisableSeal: true}))
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
@@ -1910,7 +1910,7 @@ func TestServiceAblationDisableBudgetUsesLargeRunway(t *testing.T) {
 	store := &fakeStorage{}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
 	svc.idWindowSize = 1
-	svc.ConfigureAblation(coordablation.Config{DisableBudget: true})
+	require.NoError(t, svc.ConfigureAblation(coordablation.Config{DisableBudget: true}))
 
 	first, err := svc.reserveIDs(1)
 	require.NoError(t, err)
@@ -1953,7 +1953,7 @@ func TestServiceMonotoneDutyFailsWhenGenerationSealedAndCannotRenew(t *testing.T
 	require.Contains(t, err.Error(), errCoordinatorLeasePrefix)
 }
 
-func TestServiceAblationDisableReplyEvidenceZeroesWitness(t *testing.T) {
+func TestServiceAblationDisableReplyEvidenceMarksWitnessSuppressed(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: coordstorage.Snapshot{
@@ -1970,23 +1970,23 @@ func TestServiceAblationDisableReplyEvidenceZeroesWitness(t *testing.T) {
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
 	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
-	svc.ConfigureAblation(coordablation.Config{DisableReplyEvidence: true})
+	require.NoError(t, svc.ConfigureAblation(coordablation.Config{DisableReplyEvidence: true}))
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
 	allocResp, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
-	require.Zero(t, allocResp.GetCertGeneration())
+	require.Equal(t, rootstate.ContinuationWitnessGenerationSuppressed, allocResp.GetCertGeneration())
 	require.Zero(t, allocResp.GetConsumedFrontier())
 
 	tsoResp, err := svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
 	require.NoError(t, err)
-	require.Zero(t, tsoResp.GetCertGeneration())
+	require.Equal(t, rootstate.ContinuationWitnessGenerationSuppressed, tsoResp.GetCertGeneration())
 	require.Zero(t, tsoResp.GetConsumedFrontier())
 
 	getResp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
 	require.NoError(t, err)
-	require.Zero(t, getResp.GetCertGeneration())
+	require.Equal(t, rootstate.ContinuationWitnessGenerationSuppressed, getResp.GetCertGeneration())
 }
 
 func TestServiceAblationFailStopOnRootUnreachRejectsBestEffortMetadata(t *testing.T) {
@@ -1995,7 +1995,7 @@ func TestServiceAblationFailStopOnRootUnreachRejectsBestEffortMetadata(t *testin
 		snapshot: coordstorage.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1), storage)
-	svc.ConfigureAblation(coordablation.Config{FailStopOnRootUnreach: true})
+	require.NoError(t, svc.ConfigureAblation(coordablation.Config{FailStopOnRootUnreach: true}))
 	err := publishDescriptorEvent(t, svc, testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 0)
 	require.NoError(t, err)
 	storage.loadErr = errors.New("root unavailable")
@@ -2184,7 +2184,7 @@ func TestServiceAblationDisableReattachNoop(t *testing.T) {
 
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
 	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
-	svc.ConfigureAblation(coordablation.Config{DisableReattach: true})
+	require.NoError(t, svc.ConfigureAblation(coordablation.Config{DisableReattach: true}))
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 

@@ -1649,6 +1649,9 @@ type GetRegionByKeyResponse struct {
 	// cert_generation identifies the detached/rooted authority instance that
 	// served this reply when coordinator lease evidence is available.
 	CertGeneration uint64 `protobuf:"varint,12,opt,name=cert_generation,json=certGeneration,proto3" json:"cert_generation,omitempty"`
+	// observed_seal_generation carries the latest rooted sealed generation
+	// observed by the serving coordinator when it constructed this reply.
+	ObservedSealGeneration uint64 `protobuf:"varint,15,opt,name=observed_seal_generation,json=observedSealGeneration,proto3" json:"observed_seal_generation,omitempty"`
 	// serving_class reports the client-visible serving contract used for this reply.
 	ServingClass ServingClass `protobuf:"varint,13,opt,name=serving_class,json=servingClass,proto3,enum=nokv.coordinator.v1.ServingClass" json:"serving_class,omitempty"`
 	// sync_health reports the rooted catch-up health that justified this reply.
@@ -1771,6 +1774,13 @@ func (x *GetRegionByKeyResponse) GetCertGeneration() uint64 {
 	return 0
 }
 
+func (x *GetRegionByKeyResponse) GetObservedSealGeneration() uint64 {
+	if x != nil {
+		return x.ObservedSealGeneration
+	}
+	return 0
+}
+
 func (x *GetRegionByKeyResponse) GetServingClass() ServingClass {
 	if x != nil {
 		return x.ServingClass
@@ -1835,10 +1845,11 @@ type AllocIDResponse struct {
 	Count   uint64                 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
 	// cert_generation and consumed_frontier together form the protocol-level
 	// legality witness for monotone detached replies.
-	CertGeneration   uint64 `protobuf:"varint,3,opt,name=cert_generation,json=certGeneration,proto3" json:"cert_generation,omitempty"`
-	ConsumedFrontier uint64 `protobuf:"varint,4,opt,name=consumed_frontier,json=consumedFrontier,proto3" json:"consumed_frontier,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	CertGeneration         uint64 `protobuf:"varint,3,opt,name=cert_generation,json=certGeneration,proto3" json:"cert_generation,omitempty"`
+	ConsumedFrontier       uint64 `protobuf:"varint,4,opt,name=consumed_frontier,json=consumedFrontier,proto3" json:"consumed_frontier,omitempty"`
+	ObservedSealGeneration uint64 `protobuf:"varint,5,opt,name=observed_seal_generation,json=observedSealGeneration,proto3" json:"observed_seal_generation,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *AllocIDResponse) Reset() {
@@ -1899,6 +1910,13 @@ func (x *AllocIDResponse) GetConsumedFrontier() uint64 {
 	return 0
 }
 
+func (x *AllocIDResponse) GetObservedSealGeneration() uint64 {
+	if x != nil {
+		return x.ObservedSealGeneration
+	}
+	return 0
+}
+
 type TsoRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Count         uint64                 `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`
@@ -1949,10 +1967,11 @@ type TsoResponse struct {
 	Count     uint64                 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
 	// cert_generation and consumed_frontier together form the protocol-level
 	// legality witness for monotone detached replies.
-	CertGeneration   uint64 `protobuf:"varint,3,opt,name=cert_generation,json=certGeneration,proto3" json:"cert_generation,omitempty"`
-	ConsumedFrontier uint64 `protobuf:"varint,4,opt,name=consumed_frontier,json=consumedFrontier,proto3" json:"consumed_frontier,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	CertGeneration         uint64 `protobuf:"varint,3,opt,name=cert_generation,json=certGeneration,proto3" json:"cert_generation,omitempty"`
+	ConsumedFrontier       uint64 `protobuf:"varint,4,opt,name=consumed_frontier,json=consumedFrontier,proto3" json:"consumed_frontier,omitempty"`
+	ObservedSealGeneration uint64 `protobuf:"varint,5,opt,name=observed_seal_generation,json=observedSealGeneration,proto3" json:"observed_seal_generation,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *TsoResponse) Reset() {
@@ -2009,6 +2028,13 @@ func (x *TsoResponse) GetCertGeneration() uint64 {
 func (x *TsoResponse) GetConsumedFrontier() uint64 {
 	if x != nil {
 		return x.ConsumedFrontier
+	}
+	return 0
+}
+
+func (x *TsoResponse) GetObservedSealGeneration() uint64 {
+	if x != nil {
+		return x.ObservedSealGeneration
 	}
 	return 0
 }
@@ -2092,7 +2118,7 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\fmax_root_lag\x18\x04 \x01(\x04H\x00R\n" +
 	"maxRootLag\x88\x01\x01\x12@\n" +
 	"\x1crequired_descriptor_revision\x18\x05 \x01(\x04R\x1arequiredDescriptorRevisionB\x0f\n" +
-	"\r_max_root_lag\"\xe3\x06\n" +
+	"\r_max_root_lag\"\x9d\a\n" +
 	"\x16GetRegionByKeyResponse\x12K\n" +
 	"\x11region_descriptor\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x10regionDescriptor\x12\x1b\n" +
 	"\tnot_found\x18\x02 \x01(\bR\bnotFound\x12J\n" +
@@ -2106,25 +2132,28 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\x13descriptor_revision\x18\n" +
 	" \x01(\x04R\x12descriptorRevision\x12@\n" +
 	"\x1crequired_descriptor_revision\x18\v \x01(\x04R\x1arequiredDescriptorRevision\x12'\n" +
-	"\x0fcert_generation\x18\f \x01(\x04R\x0ecertGeneration\x12F\n" +
+	"\x0fcert_generation\x18\f \x01(\x04R\x0ecertGeneration\x128\n" +
+	"\x18observed_seal_generation\x18\x0f \x01(\x04R\x16observedSealGeneration\x12F\n" +
 	"\rserving_class\x18\r \x01(\x0e2!.nokv.coordinator.v1.ServingClassR\fservingClass\x12@\n" +
 	"\vsync_health\x18\x0e \x01(\x0e2\x1f.nokv.coordinator.v1.SyncHealthR\n" +
 	"syncHealth\"&\n" +
 	"\x0eAllocIDRequest\x12\x14\n" +
-	"\x05count\x18\x01 \x01(\x04R\x05count\"\x98\x01\n" +
+	"\x05count\x18\x01 \x01(\x04R\x05count\"\xd2\x01\n" +
 	"\x0fAllocIDResponse\x12\x19\n" +
 	"\bfirst_id\x18\x01 \x01(\x04R\afirstId\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x04R\x05count\x12'\n" +
 	"\x0fcert_generation\x18\x03 \x01(\x04R\x0ecertGeneration\x12+\n" +
-	"\x11consumed_frontier\x18\x04 \x01(\x04R\x10consumedFrontier\"\"\n" +
+	"\x11consumed_frontier\x18\x04 \x01(\x04R\x10consumedFrontier\x128\n" +
+	"\x18observed_seal_generation\x18\x05 \x01(\x04R\x16observedSealGeneration\"\"\n" +
 	"\n" +
 	"TsoRequest\x12\x14\n" +
-	"\x05count\x18\x01 \x01(\x04R\x05count\"\x97\x01\n" +
+	"\x05count\x18\x01 \x01(\x04R\x05count\"\xd1\x01\n" +
 	"\vTsoResponse\x12\x1c\n" +
 	"\ttimestamp\x18\x01 \x01(\x04R\ttimestamp\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x04R\x05count\x12'\n" +
 	"\x0fcert_generation\x18\x03 \x01(\x04R\x0ecertGeneration\x12+\n" +
-	"\x11consumed_frontier\x18\x04 \x01(\x04R\x10consumedFrontier*i\n" +
+	"\x11consumed_frontier\x18\x04 \x01(\x04R\x10consumedFrontier\x128\n" +
+	"\x18observed_seal_generation\x18\x05 \x01(\x04R\x16observedSealGeneration*i\n" +
 	"\x16SchedulerOperationType\x12!\n" +
 	"\x1dSCHEDULER_OPERATION_TYPE_NONE\x10\x00\x12,\n" +
 	"(SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER\x10\x01*t\n" +

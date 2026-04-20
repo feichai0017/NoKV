@@ -26,6 +26,13 @@ import (
 )
 
 // Service implements the Coordinator gRPC API.
+//
+// Lock order:
+//  1. writeMu
+//  2. allocMu
+//  3. leaseMu
+//
+// Never acquire these locks in reverse order.
 type Service struct {
 	coordpb.UnimplementedCoordinatorServer
 
@@ -45,12 +52,44 @@ type Service struct {
 	leaseRenewIn   time.Duration
 	leaseClockSkew time.Duration
 	now            func() time.Time
-	lease          rootstate.CoordinatorLease
-	seal           rootstate.CoordinatorSeal
+	leaseView      coordinatorLeaseView
 	statusMu       sync.RWMutex
 	lastRootReload int64
 	lastRootError  string
 	ablation       coordablation.Config
+}
+
+type coordinatorLeaseView struct {
+	lease rootstate.CoordinatorLease
+	seal  rootstate.CoordinatorSeal
+}
+
+func (v *coordinatorLeaseView) Reset() {
+	if v == nil {
+		return
+	}
+	v.lease = rootstate.CoordinatorLease{}
+	v.seal = rootstate.CoordinatorSeal{}
+}
+
+func (v *coordinatorLeaseView) Refresh(snapshot coordstorage.Snapshot) {
+	if v == nil {
+		return
+	}
+	v.lease = snapshot.CoordinatorLease
+	v.seal = snapshot.CoordinatorSeal
+}
+
+func (v coordinatorLeaseView) Current() (rootstate.CoordinatorLease, rootstate.CoordinatorSeal) {
+	return v.lease, v.seal
+}
+
+func (v coordinatorLeaseView) Lease() rootstate.CoordinatorLease {
+	return v.lease
+}
+
+func (v coordinatorLeaseView) Seal() rootstate.CoordinatorSeal {
+	return v.seal
 }
 
 const defaultAllocatorWindowSize uint64 = 10_000
@@ -100,8 +139,7 @@ func (s *Service) ConfigureCoordinatorLease(holderID string, ttl, renewIn time.D
 		s.leaseTTL = 0
 		s.leaseRenewIn = 0
 		s.leaseClockSkew = 0
-		s.lease = rootstate.CoordinatorLease{}
-		s.seal = rootstate.CoordinatorSeal{}
+		s.leaseView.Reset()
 		return
 	}
 	if ttl <= 0 {
@@ -141,11 +179,15 @@ func (s *Service) ConfigureAllocatorWindows(idWindowSize, tsoWindowSize uint64) 
 
 // ConfigureAblation installs first-cut experimental switches used by the
 // control-plane ablation runner.
-func (s *Service) ConfigureAblation(cfg coordablation.Config) {
+func (s *Service) ConfigureAblation(cfg coordablation.Config) error {
 	if s == nil {
-		return
+		return nil
 	}
-	s.ablation = cfg.MustValid()
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	s.ablation = cfg
+	return nil
 }
 
 // RefreshFromStorage refreshes rooted durable state into the in-memory service
@@ -296,25 +338,18 @@ func (s *Service) RemoveRegion(_ context.Context, req *coordpb.RemoveRegionReque
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	if err := s.requireExpectedClusterEpoch(req.GetExpectedClusterEpoch()); err != nil {
+	removed := s.cluster.HasRegion(regionID)
+	if !removed {
+		return &coordpb.RemoveRegionResponse{Removed: false}, nil
+	}
+	_, err := s.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
+		Event:                metawire.RootEventToProto(rootevent.RegionTombstoned(regionID)),
+		ExpectedClusterEpoch: req.GetExpectedClusterEpoch(),
+	})
+	if err != nil {
 		return nil, err
 	}
-	removed := s.cluster.HasRegion(regionID)
-	if removed && s.storage != nil {
-		if err := s.storage.AppendRootEvent(rootevent.RegionTombstoned(regionID)); err != nil {
-			return nil, status.Error(codes.Internal, "persist region tombstone: "+err.Error())
-		}
-		if _, err := s.reloadRootedView(false); err != nil {
-			return nil, status.Error(codes.Internal, "reload rooted view: "+err.Error())
-		}
-		return &coordpb.RemoveRegionResponse{Removed: true}, nil
-	}
-	if removed {
-		s.cluster.RemoveRegion(regionID)
-	}
-	return &coordpb.RemoveRegionResponse{Removed: removed}, nil
+	return &coordpb.RemoveRegionResponse{Removed: true}, nil
 }
 
 func (s *Service) reloadRootedView(refresh bool) (coordstorage.Snapshot, error) {
@@ -344,12 +379,18 @@ func (s *Service) reloadAndFenceAllocators(refresh bool) error {
 	defer s.allocMu.Unlock()
 	s.fenceIDFromStorage(snapshot.Allocator.IDCurrent)
 	s.fenceTSOFromStorage(snapshot.Allocator.TSCurrent)
-	s.leaseMu.Lock()
-	s.lease = snapshot.CoordinatorLease
-	s.seal = snapshot.CoordinatorSeal
-	s.leaseMu.Unlock()
+	s.refreshLeaseMirror(snapshot)
 	s.setLastRootReload(nil)
 	return nil
+}
+
+func (s *Service) refreshLeaseMirror(snapshot coordstorage.Snapshot) {
+	if s == nil {
+		return
+	}
+	s.leaseMu.Lock()
+	s.leaseView.Refresh(snapshot)
+	s.leaseMu.Unlock()
 }
 
 // GetRegionByKey returns region metadata for the specified key.
@@ -385,6 +426,7 @@ type readState struct {
 	degraded       coordpb.DegradedMode
 	servedByLeader bool
 	certGeneration uint64
+	sealGeneration uint64
 	leasePresent   bool
 	leaseActive    bool
 	leaseSealed    bool
@@ -420,6 +462,7 @@ func (a metadataAnswerability) responseBase() *coordpb.GetRegionByKeyResponse {
 		CatchUpState:               catchUpStateToProto(a.state.catchUpState),
 		RequiredDescriptorRevision: a.requiredDescriptorRevision,
 		CertGeneration:             a.state.certGeneration,
+		ObservedSealGeneration:     a.state.sealGeneration,
 		ServingClass:               a.servingClass,
 		SyncHealth:                 a.syncHealth,
 	}
@@ -509,6 +552,9 @@ func (s *Service) currentReadState() (readState, error) {
 		state.leaseActive = snapshot.CoordinatorLease.ActiveAt(nowUnixNano)
 		state.leaseSealed = rootstate.CoordinatorGenerationSealed(snapshot.CoordinatorLease, snapshot.CoordinatorSeal)
 		state.leaseDutyMask = rootstate.ResolvedCoordinatorDutyMask(snapshot.CoordinatorLease.DutyMask)
+	}
+	if snapshot.CoordinatorSeal.Present() {
+		state.sealGeneration = snapshot.CoordinatorSeal.CertGeneration
 	}
 	state.currentToken = snapshot.RootToken
 	state.rootLag = rootLag(state.currentToken, state.servedToken)
@@ -656,13 +702,14 @@ func (s *Service) AllocID(_ context.Context, req *coordpb.AllocIDRequest) (*coor
 		}
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
-	lease := s.currentCoordinatorLease()
+	lease, seal := s.currentCoordinatorLeaseView()
 	witness := s.monotoneReplyEvidence(rootstate.CoordinatorDutyAllocID, lease, allocationConsumedFrontier(first, count))
 	return &coordpb.AllocIDResponse{
-		FirstId:          first,
-		Count:            count,
-		CertGeneration:   witness.CertGeneration,
-		ConsumedFrontier: witness.ConsumedFrontier,
+		FirstId:                first,
+		Count:                  count,
+		CertGeneration:         witness.CertGeneration,
+		ConsumedFrontier:       witness.ConsumedFrontier,
+		ObservedSealGeneration: seal.CertGeneration,
 	}, nil
 }
 
@@ -688,13 +735,14 @@ func (s *Service) Tso(_ context.Context, req *coordpb.TsoRequest) (*coordpb.TsoR
 		}
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
-	lease := s.currentCoordinatorLease()
+	lease, seal := s.currentCoordinatorLeaseView()
 	witness := s.monotoneReplyEvidence(rootstate.CoordinatorDutyTSO, lease, allocationConsumedFrontier(first, got))
 	return &coordpb.TsoResponse{
-		Timestamp:        first,
-		Count:            got,
-		CertGeneration:   witness.CertGeneration,
-		ConsumedFrontier: witness.ConsumedFrontier,
+		Timestamp:              first,
+		Count:                  got,
+		CertGeneration:         witness.CertGeneration,
+		ConsumedFrontier:       witness.ConsumedFrontier,
+		ObservedSealGeneration: seal.CertGeneration,
 	}, nil
 }
 
@@ -769,11 +817,7 @@ func (s *Service) nextRootEpoch() (uint64, error) {
 	}
 	var maxEpoch uint64
 	if s != nil && s.cluster != nil {
-		for _, region := range s.cluster.RegionSnapshot() {
-			if region.Descriptor.RootEpoch > maxEpoch {
-				maxEpoch = region.Descriptor.RootEpoch
-			}
-		}
+		maxEpoch = maxRegionRootEpoch(s.cluster.RegionSnapshot())
 	}
 	if maxEpoch < ^uint64(0) {
 		return maxEpoch + 1, nil
@@ -1035,39 +1079,15 @@ func (s *Service) SealCoordinatorLease() error {
 	if !s.storage.IsLeader() {
 		return nil
 	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-
-	nowFn := s.now
-	if nowFn == nil {
-		nowFn = time.Now
-	}
-	nowUnixNano := nowFn().UnixNano()
-
-	s.leaseMu.RLock()
-	holderID := s.coordinatorID
-	s.leaseMu.RUnlock()
-	if strings.TrimSpace(holderID) == "" {
-		return nil
-	}
-	if err := s.preActionGate(preActionSealCurrentGeneration, 0); err != nil {
-		return err
-	}
-
 	s.allocMu.Lock()
 	consumedIDFrontier := s.ids.Current()
 	consumedTSOFrontier := s.tso.Current()
 	s.allocMu.Unlock()
-
-	if _, err := s.storage.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
-		Kind:        rootstate.CoordinatorClosureCommandSeal,
-		HolderID:    holderID,
-		NowUnixNano: nowUnixNano,
-		Frontiers:   controlplane.Frontiers(consumedIDFrontier, consumedTSOFrontier, s.currentDescriptorRevision()),
-	}); err != nil {
-		return err
-	}
-	return s.reloadAndFenceAllocators(true)
+	return s.applyClosureCommand(
+		rootstate.CoordinatorClosureCommandSeal,
+		preActionSealCurrentGeneration,
+		controlplane.Frontiers(consumedIDFrontier, consumedTSOFrontier, s.currentDescriptorRevision()),
+	)
 }
 
 // ConfirmCoordinatorClosure explicitly records one rooted audit confirmation
@@ -1079,35 +1099,10 @@ func (s *Service) ConfirmCoordinatorClosure() error {
 	if !s.storage.IsLeader() {
 		return nil
 	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-
-	nowFn := s.now
-	if nowFn == nil {
-		nowFn = time.Now
-	}
-	nowUnixNano := nowFn().UnixNano()
-
-	s.leaseMu.RLock()
-	holderID := s.coordinatorID
-	s.leaseMu.RUnlock()
-	if strings.TrimSpace(holderID) == "" {
-		return nil
-	}
-	if err := s.preActionGate(preActionLifecycleMutation, 0); err != nil {
-		return err
-	}
-	if _, err := s.storage.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
-		Kind:        rootstate.CoordinatorClosureCommandConfirm,
-		HolderID:    holderID,
-		NowUnixNano: nowUnixNano,
-	}); err != nil {
-		return err
-	}
-	return s.reloadAndFenceAllocators(true)
+	return s.applyClosureCommand(rootstate.CoordinatorClosureCommandConfirm, preActionLifecycleMutation, rootstate.NewCoordinatorDutyFrontiers())
 }
 
-// ReattachCoordinatorClosure explicitly records that the current successor
+// CloseCoordinatorClosure explicitly records that the current successor
 // generation has been explicitly closed after rooted closure confirmation.
 func (s *Service) CloseCoordinatorClosure() error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
@@ -1116,32 +1111,7 @@ func (s *Service) CloseCoordinatorClosure() error {
 	if !s.storage.IsLeader() {
 		return nil
 	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-
-	nowFn := s.now
-	if nowFn == nil {
-		nowFn = time.Now
-	}
-	nowUnixNano := nowFn().UnixNano()
-
-	s.leaseMu.RLock()
-	holderID := s.coordinatorID
-	s.leaseMu.RUnlock()
-	if strings.TrimSpace(holderID) == "" {
-		return nil
-	}
-	if err := s.preActionGate(preActionLifecycleMutation, 0); err != nil {
-		return err
-	}
-	if _, err := s.storage.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
-		Kind:        rootstate.CoordinatorClosureCommandClose,
-		HolderID:    holderID,
-		NowUnixNano: nowUnixNano,
-	}); err != nil {
-		return err
-	}
-	return s.reloadAndFenceAllocators(true)
+	return s.applyClosureCommand(rootstate.CoordinatorClosureCommandClose, preActionLifecycleMutation, rootstate.NewCoordinatorDutyFrontiers())
 }
 
 // ReattachCoordinatorClosure explicitly records that the current successor
@@ -1150,7 +1120,17 @@ func (s *Service) ReattachCoordinatorClosure() error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
+	if s.ablation.DisableReattach {
+		return nil
+	}
 	if !s.storage.IsLeader() {
+		return nil
+	}
+	return s.applyClosureCommand(rootstate.CoordinatorClosureCommandReattach, preActionLifecycleMutation, rootstate.NewCoordinatorDutyFrontiers())
+}
+
+func (s *Service) applyClosureCommand(kind rootstate.CoordinatorClosureCommandKind, gate preActionKind, frontiers rootstate.CoordinatorDutyFrontiers) error {
+	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
 	s.writeMu.Lock()
@@ -1163,21 +1143,19 @@ func (s *Service) ReattachCoordinatorClosure() error {
 	nowUnixNano := nowFn().UnixNano()
 
 	s.leaseMu.RLock()
-	holderID := s.coordinatorID
+	holderID := strings.TrimSpace(s.coordinatorID)
 	s.leaseMu.RUnlock()
-	if strings.TrimSpace(holderID) == "" {
+	if holderID == "" {
 		return nil
 	}
-	if err := s.preActionGate(preActionLifecycleMutation, 0); err != nil {
+	if err := s.preActionGate(gate, 0); err != nil {
 		return err
 	}
-	if s.ablation.DisableReattach {
-		return nil
-	}
 	if _, err := s.storage.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
-		Kind:        rootstate.CoordinatorClosureCommandReattach,
+		Kind:        kind,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
+		Frontiers:   frontiers,
 	}); err != nil {
 		return err
 	}
@@ -1202,7 +1180,8 @@ func (s *Service) ensureCoordinatorLease() error {
 	s.allocMu.Lock()
 	handoffFrontiers := controlplane.Frontiers(s.currentIDFenceLocked(), s.currentTSOFenceLocked(), s.currentDescriptorRevision())
 	s.allocMu.Unlock()
-	predecessorDigest := rootstate.ResolveCoordinatorLeasePredecessorDigest(s.currentCoordinatorLease(), s.currentCoordinatorSeal(), holderID, nowUnixNano)
+	current, seal := s.currentCoordinatorLeaseView()
+	predecessorDigest := rootstate.ResolveCoordinatorLeasePredecessorDigest(current, seal, holderID, nowUnixNano)
 
 	if _, err := s.storage.ApplyCoordinatorLease(rootstate.CoordinatorLeaseCommand{
 		Kind:              rootstate.CoordinatorLeaseCommandIssue,
@@ -1221,10 +1200,7 @@ func (s *Service) coordinatorLeaseStillValid(holderID string, nowUnixNano int64,
 	if s == nil {
 		return false
 	}
-	s.leaseMu.RLock()
-	current := s.lease
-	seal := s.seal
-	s.leaseMu.RUnlock()
+	current, seal := s.currentCoordinatorLeaseView()
 	if !rootstate.CoordinatorLeaseContinuable(current, seal, holderID, nowUnixNano) {
 		return false
 	}
@@ -1263,16 +1239,16 @@ func (s *Service) currentCoordinatorLease() rootstate.CoordinatorLease {
 	}
 	s.leaseMu.RLock()
 	defer s.leaseMu.RUnlock()
-	return s.lease
+	return s.leaseView.Lease()
 }
 
-func (s *Service) currentCoordinatorSeal() rootstate.CoordinatorSeal {
+func (s *Service) currentCoordinatorLeaseView() (rootstate.CoordinatorLease, rootstate.CoordinatorSeal) {
 	if s == nil {
-		return rootstate.CoordinatorSeal{}
+		return rootstate.CoordinatorLease{}, rootstate.CoordinatorSeal{}
 	}
 	s.leaseMu.RLock()
 	defer s.leaseMu.RUnlock()
-	return s.seal
+	return s.leaseView.Current()
 }
 
 func (s *Service) leaseCampaignBounds() (nowUnixNano, expiresUnixNano int64, holderID string, renewIn, clockSkew time.Duration) {
@@ -1341,11 +1317,7 @@ func (s *Service) currentClusterEpoch() (uint64, error) {
 	}
 	var maxEpoch uint64
 	if s != nil && s.cluster != nil {
-		for _, region := range s.cluster.RegionSnapshot() {
-			if region.Descriptor.RootEpoch > maxEpoch {
-				maxEpoch = region.Descriptor.RootEpoch
-			}
-		}
+		maxEpoch = maxRegionRootEpoch(s.cluster.RegionSnapshot())
 	}
 	return maxEpoch, nil
 }
@@ -1354,8 +1326,12 @@ func (s *Service) currentDescriptorRevision() uint64 {
 	if s == nil || s.cluster == nil {
 		return 0
 	}
+	return maxRegionRootEpoch(s.cluster.RegionSnapshot())
+}
+
+func maxRegionRootEpoch(regions []pdview.RegionInfo) uint64 {
 	var maxEpoch uint64
-	for _, region := range s.cluster.RegionSnapshot() {
+	for _, region := range regions {
 		if region.Descriptor.RootEpoch > maxEpoch {
 			maxEpoch = region.Descriptor.RootEpoch
 		}
@@ -1375,6 +1351,43 @@ func (s *Service) preActionGate(kind preActionKind, dutyMask uint32) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
+	switch kind {
+	case preActionDutyAdmission:
+		return s.preActionGateCached(kind, dutyMask)
+	default:
+		return s.preActionGateStorage(kind, dutyMask)
+	}
+}
+
+func (s *Service) preActionGateCached(kind preActionKind, dutyMask uint32) error {
+	current, seal := s.currentCoordinatorLeaseView()
+	return s.validatePreActionLease(kind, dutyMask, current, seal)
+}
+
+func (s *Service) preActionGateStorage(kind preActionKind, dutyMask uint32) error {
+	current, seal, err := s.currentCoordinatorLeaseViewFromStorage()
+	if err != nil {
+		return status.Error(codes.Internal, "load rooted snapshot: "+err.Error())
+	}
+	return s.validatePreActionLease(kind, dutyMask, current, seal)
+}
+
+func (s *Service) currentCoordinatorLeaseViewFromStorage() (rootstate.CoordinatorLease, rootstate.CoordinatorSeal, error) {
+	if s == nil || s.storage == nil {
+		return rootstate.CoordinatorLease{}, rootstate.CoordinatorSeal{}, nil
+	}
+	snapshot, err := s.storage.Load()
+	if err != nil {
+		return rootstate.CoordinatorLease{}, rootstate.CoordinatorSeal{}, err
+	}
+	s.refreshLeaseMirror(snapshot)
+	return snapshot.CoordinatorLease, snapshot.CoordinatorSeal, nil
+}
+
+func (s *Service) validatePreActionLease(kind preActionKind, dutyMask uint32, current rootstate.CoordinatorLease, seal rootstate.CoordinatorSeal) error {
+	if s == nil {
+		return nil
+	}
 	nowFn := s.now
 	if nowFn == nil {
 		nowFn = time.Now
@@ -1386,24 +1399,6 @@ func (s *Service) preActionGate(kind preActionKind, dutyMask uint32) error {
 	s.leaseMu.RUnlock()
 	if holderID == "" {
 		return nil
-	}
-
-	var current rootstate.CoordinatorLease
-	var seal rootstate.CoordinatorSeal
-	if kind == preActionDutyAdmission {
-		current = s.currentCoordinatorLease()
-		seal = s.currentCoordinatorSeal()
-	} else {
-		snapshot, err := s.storage.Load()
-		if err != nil {
-			return status.Error(codes.Internal, "load rooted snapshot: "+err.Error())
-		}
-		s.leaseMu.Lock()
-		s.lease = snapshot.CoordinatorLease
-		s.seal = snapshot.CoordinatorSeal
-		s.leaseMu.Unlock()
-		current = snapshot.CoordinatorLease
-		seal = snapshot.CoordinatorSeal
 	}
 
 	if current.HolderID == "" {
@@ -1439,14 +1434,14 @@ func (s *Service) preActionGate(kind preActionKind, dutyMask uint32) error {
 
 func (s *Service) monotoneReplyEvidence(dutyMask uint32, lease rootstate.CoordinatorLease, consumedFrontier uint64) rootstate.ContinuationWitness {
 	if s != nil && s.ablation.DisableReplyEvidence {
-		return rootstate.NewContinuationWitness(dutyMask, 0, 0)
+		return rootstate.NewSuppressedContinuationWitness(dutyMask)
 	}
 	return rootstate.NewContinuationWitness(dutyMask, lease.CertGeneration, consumedFrontier)
 }
 
 func (s *Service) metadataReplyGeneration(certGeneration uint64) uint64 {
 	if s != nil && s.ablation.DisableReplyEvidence {
-		return 0
+		return rootstate.ContinuationWitnessGenerationSuppressed
 	}
 	return certGeneration
 }
