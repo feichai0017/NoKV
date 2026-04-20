@@ -113,7 +113,7 @@ The current landing is still mostly store-local and spread across:
 
 - `raftstore/store`
 - `raftstore/peer`
-- `raftstore/engine`
+- `raftstore/raftlog`
 - `raftstore/localmeta`
 
 So the right description there is:
@@ -1146,7 +1146,7 @@ This is the boundary that should align:
 Execution-plane protocol v1 landed first in the places that already carried
 the boundary implicitly:
 
-- `raftstore/store/command_service.go`
+- `raftstore/store/command_ops.go`
   - request admission and context semantics
 - `raftstore/store/command_pipeline.go`
   - request lifecycle states visible to callers

@@ -164,7 +164,7 @@ ReplyTraceAnomalies      accepted_read_index_behind_successor
 
 ### JSON (`--json`)
 
-Full dump of `Report`, `Lease`, `Seal`, reply trace records, and reply-trace anomalies. Schema is the `cccAuditOutput` struct in `cmd/nokv/ccc_audit.go`.
+Full dump of `Report`, `Lease`, `Seal`, reply trace records, and reply-trace anomalies. Schema is the `cccAuditOutput` struct in `cmd/nokv/cmd_ccc_audit.go`.
 
 ---
 
@@ -242,7 +242,7 @@ for _, a := range traceAnomalies {
 
 | File | Role |
 |---|---|
-| [`cmd/nokv/ccc_audit.go`](../cmd/nokv/ccc_audit.go) | CLI entry point, flag parsing, text/JSON renderer |
+| [`cmd/nokv/cmd_ccc_audit.go`](../cmd/nokv/cmd_ccc_audit.go) | CLI entry point, flag parsing, text/JSON renderer |
 | [`coordinator/audit/report.go`](../coordinator/audit/report.go) | `BuildReport`, `SnapshotAnomalies`, `ClosureDefect` |
 | [`coordinator/audit/trace.go`](../coordinator/audit/trace.go) | `EvaluateReplyTrace`, `ReplyTraceAnomaly` |
 | [`coordinator/audit/trace_adapter.go`](../coordinator/audit/trace_adapter.go) | Format parsing + projection into `ReplyTraceRecord` |

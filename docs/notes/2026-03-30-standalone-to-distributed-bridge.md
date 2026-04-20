@@ -96,7 +96,7 @@ NoKV 现在的做法是明确回答前者。
 
 相关代码：
 
-- `raftstore/engine/snapshot.go`
+- `raftstore/raftlog/snapshot.go`
 - `raftstore/snapshot`
 
 当前有两层 snapshot：

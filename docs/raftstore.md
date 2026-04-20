@@ -23,7 +23,7 @@ admission, transition execution, publish boundaries, and restart state, read
 | --- | --- |
 | [`store`](../raftstore/store) | Orchestrates peer set, command pipeline, region manager, scheduler/heartbeat loops; exposes helpers such as `StartPeer`, `ProposeCommand`, `SplitRegion`. |
 | [`peer`](../raftstore/peer) | Wraps etcd/raft `RawNode`, drives Ready processing (persist to WAL, send messages, apply entries), tracks snapshot resend/backlog. |
-| [`engine`](../raftstore/engine) | WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while tracking store-local raft replay metadata. |
+| [`engine`](../raftstore/raftlog) | WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while tracking store-local raft replay metadata. |
 | [`meta`](../raftstore/localmeta) | Store-local durable metadata: peer catalog for restart and raft WAL replay checkpoints for replay/GC. |
 | [`transport`](../raftstore/transport) | gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (NoKV). |
 | [`kv`](../raftstore/kv) | NoKV RPC implementation, bridging Raft commands to MVCC operations via `kv.Apply`. |
@@ -44,7 +44,7 @@ flowchart TD
         Store --> Scheduler["scheduler runtime"]
         Store --> Admin["admin service"]
         Store --> Meta["raftstore/localmeta"]
-        Peer --> Engine["raftstore/engine"]
+        Peer --> Engine["raftstore/raftlog"]
         Peer --> Apply["kv.Apply"]
     end
 
@@ -215,9 +215,9 @@ parallel truth path.
 | --- | --- | --- |
 | Store facade | [`store.go`](../raftstore/store/store.go) | Store construction/wiring and shared component ownership (router, region manager, command pipeline, scheduler runtime). |
 | Peer lifecycle | [`peer_lifecycle.go`](../raftstore/store/peer_lifecycle.go) | Start/stop peers, router registration, lifecycle hooks, and store shutdown sequencing. |
-| Command service | [`command_service.go`](../raftstore/store/command_service.go) | Region/epoch/key-range validation and read/propose request handling. |
-| Admin service | [`admin_service.go`](../raftstore/store/admin_service.go) | Split/merge proposal handling and applied admin command side effects. |
-| Membership service | [`membership_service.go`](../raftstore/store/membership_service.go) | Conf-change proposal helpers and local region metadata updates after membership changes. |
+| Command ops | [`command_ops.go`](../raftstore/store/command_ops.go) | Region/epoch/key-range validation and read/propose request handling. |
+| Admin ops | [`admin_ops.go`](../raftstore/store/admin_ops.go) | Split/merge proposal handling and applied admin command side effects. |
+| Membership ops | [`membership_ops.go`](../raftstore/store/membership_ops.go) | Conf-change proposal helpers and local region metadata updates after membership changes. |
 | Region catalog | [`region_catalog.go`](../raftstore/store/region_catalog.go) | Public region catalog accessors and region metadata lifecycle operations. |
 | Router | [`router.go`](../raftstore/store/router.go) | Tracks active peers and dispatches requests/messages to the owning peer. |
 | Command pipeline | [`command_pipeline.go`](../raftstore/store/command_pipeline.go) | Assigns request IDs, records proposals, matches apply results, returns responses/errors to callers. |

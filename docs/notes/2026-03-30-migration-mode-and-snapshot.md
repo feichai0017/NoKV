@@ -29,7 +29,7 @@
 
 - `raftstore/mode`
 - `raftstore/migrate`
-- `raftstore/engine/snapshot.go`
+- `raftstore/raftlog/snapshot.go`
 - `raftstore/snapshot`
 
 当前主线可以概括成：
@@ -72,7 +72,7 @@ flowchart TD
 
 相关代码：
 
-- `raftstore/engine/snapshot.go`
+- `raftstore/raftlog/snapshot.go`
 - `raftstore/snapshot`
 
 当前最重要的分层是：

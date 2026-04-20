@@ -9,8 +9,8 @@ import (
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/raftstore/engine"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,7 +24,7 @@ func (fakeBuilderMVCCStore) NewInternalIterator(opt *index.Options) index.Iterat
 
 type fakeBuilderRaftLog struct{}
 
-func (fakeBuilderRaftLog) Open(groupID uint64, meta *localmeta.Store) (engine.PeerStorage, error) {
+func (fakeBuilderRaftLog) Open(groupID uint64, meta *localmeta.Store) (raftlog.PeerStorage, error) {
 	return nil, nil
 }
 
