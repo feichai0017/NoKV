@@ -1,6 +1,9 @@
 package state
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"strings"
@@ -60,26 +63,56 @@ func (s CoordinatorSeal) Present() bool {
 }
 
 func (c CoordinatorClosure) Empty() bool {
-	return strings.TrimSpace(c.HolderID) == "" &&
-		c.SealGeneration == 0 &&
-		c.SuccessorGeneration == 0 &&
-		strings.TrimSpace(c.SealDigest) == "" &&
-		c.Stage == CoordinatorClosureStagePendingConfirm &&
+	return !c.Present() &&
 		c.ConfirmedAtCursor == (Cursor{}) &&
 		c.ClosedAtCursor == (Cursor{}) &&
 		c.ReattachedAtCursor == (Cursor{})
+}
+
+func (c CoordinatorClosure) Present() bool {
+	return strings.TrimSpace(c.HolderID) != "" &&
+		c.SealGeneration != 0 &&
+		c.SuccessorGeneration != 0 &&
+		strings.TrimSpace(c.SealDigest) != "" &&
+		c.Stage != CoordinatorClosureStageUnspecified
 }
 
 func CoordinatorSealDigest(seal CoordinatorSeal) string {
 	if !seal.Present() {
 		return ""
 	}
-	holderID := strings.TrimSpace(seal.HolderID)
-	digest := fmt.Sprintf("%s/%d/%d", holderID, seal.CertGeneration, seal.DutyMask)
-	for _, dutyMask := range OrderedCoordinatorDutyMasks(ResolvedCoordinatorDutyMask(seal.DutyMask), CoordinatorDutyFrontiers{}) {
-		digest = fmt.Sprintf("%s/%d/%d", digest, dutyMask, seal.Frontiers.Frontier(dutyMask))
+	hasher := sha256.New()
+	writeUint32 := func(value uint32) {
+		var buf [4]byte
+		binary.BigEndian.PutUint32(buf[:], value)
+		_, _ = hasher.Write(buf[:])
 	}
-	return fmt.Sprintf("%s/%d/%d", digest, seal.SealedAtCursor.Term, seal.SealedAtCursor.Index)
+	writeUint64 := func(value uint64) {
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], value)
+		_, _ = hasher.Write(buf[:])
+	}
+	writeString := func(value string) {
+		writeUint32(uint32(len(value)))
+		_, _ = hasher.Write([]byte(value))
+	}
+
+	holderID := strings.TrimSpace(seal.HolderID)
+	dutyMask := ResolvedCoordinatorDutyMask(seal.DutyMask)
+	writeString(holderID)
+	writeUint64(seal.CertGeneration)
+	writeUint32(dutyMask)
+	for _, mask := range OrderedCoordinatorDutyMasks(dutyMask, seal.Frontiers) {
+		frontier := seal.Frontiers.Frontier(mask)
+		if frontier == 0 && dutyMask&mask == 0 {
+			continue
+		}
+		writeUint32(mask)
+		writeUint64(frontier)
+	}
+	writeUint64(seal.SealedAtCursor.Term)
+	writeUint64(seal.SealedAtCursor.Index)
+	return hex.EncodeToString(hasher.Sum(nil))
 }
 
 func ResolveCoordinatorLeasePredecessorDigest(current CoordinatorLease, seal CoordinatorSeal, holderID string, nowUnixNano int64) string {

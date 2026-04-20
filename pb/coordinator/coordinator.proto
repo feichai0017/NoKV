@@ -249,6 +249,9 @@ message GetRegionByKeyResponse {
   // cert_generation identifies the detached/rooted authority instance that
   // served this reply when coordinator lease evidence is available.
   uint64 cert_generation = 12;
+  // observed_seal_generation carries the latest rooted sealed generation
+  // observed by the serving coordinator when it constructed this reply.
+  uint64 observed_seal_generation = 15;
   // serving_class reports the client-visible serving contract used for this reply.
   ServingClass serving_class = 13;
   // sync_health reports the rooted catch-up health that justified this reply.
@@ -266,6 +269,7 @@ message AllocIDResponse {
   // legality witness for monotone detached replies.
   uint64 cert_generation = 3;
   uint64 consumed_frontier = 4;
+  uint64 observed_seal_generation = 5;
 }
 
 message TsoRequest {
@@ -279,6 +283,7 @@ message TsoResponse {
   // legality witness for monotone detached replies.
   uint64 cert_generation = 3;
   uint64 consumed_frontier = 4;
+  uint64 observed_seal_generation = 5;
 }
 
 service Coordinator {

@@ -53,6 +53,7 @@ func TestBuildReport(t *testing.T) {
 	require.Equal(t, uint64(3), report.CurrentGeneration)
 	require.True(t, report.ClosureWitness.ClosureSatisfied())
 	require.Equal(t, rootstate.CoordinatorClosureStageReattached, report.Closure.Stage)
+	require.Equal(t, coordaudit.ClosureDefectNone, report.Anomalies.ClosureDefect)
 	require.False(t, report.Anomalies.ClosureIncomplete)
 	require.False(t, report.Anomalies.MissingClose)
 	require.False(t, report.Anomalies.ReattachIncomplete)
@@ -87,12 +88,13 @@ func TestBuildReportSurfacesClosureGaps(t *testing.T) {
 	}
 
 	report := coordaudit.BuildReport(snapshot, "c2", 1_000)
-	require.Equal(t, rootstate.CoordinatorClosureStagePendingConfirm, report.Closure.Stage)
+	require.Equal(t, rootstate.CoordinatorClosureStageUnspecified, report.Closure.Stage)
 	require.False(t, report.Anomalies.SuccessorLineageMismatch)
 	require.False(t, report.Anomalies.UncoveredMonotoneFrontier)
 	require.False(t, report.Anomalies.UncoveredDescriptorRevision)
 	require.False(t, report.Anomalies.ClosureIncomplete)
 	require.False(t, report.Anomalies.SealedGenerationStillLive)
+	require.Equal(t, coordaudit.ClosureDefectMissingConfirm, report.Anomalies.ClosureDefect)
 	require.True(t, report.Anomalies.MissingConfirm)
 	require.False(t, report.Anomalies.MissingClose)
 }
