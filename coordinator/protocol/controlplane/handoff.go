@@ -26,7 +26,7 @@ func HandoffRecord(current rootstate.CoordinatorLease, frontiers rootproto.Coord
 		current.ExpiresUnixNano,
 		current.CertGeneration,
 		current.IssuedCursor,
-		rootstate.ResolvedCoordinatorDutyMask(current.DutyMask),
+		current.DutyMask,
 		current.PredecessorDigest,
 		frontiers,
 	)

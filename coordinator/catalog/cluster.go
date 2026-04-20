@@ -209,6 +209,15 @@ func (c *Cluster) RegionSnapshot() []pdview.RegionInfo {
 	return c.regions.Snapshot()
 }
 
+// MaxDescriptorRevision returns the highest rooted descriptor publication epoch
+// currently reflected in the in-memory region directory.
+func (c *Cluster) MaxDescriptorRevision() uint64 {
+	if c == nil {
+		return 0
+	}
+	return rootstate.MaxDescriptorRevision(c.regions.DescriptorsSnapshot())
+}
+
 // ReplaceRegionSnapshot replaces the region directory view from one rooted
 // snapshot while preserving store-health runtime observations.
 func (c *Cluster) ReplaceRegionSnapshot(descriptors map[uint64]descriptor.Descriptor) {
