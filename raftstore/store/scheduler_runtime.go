@@ -21,6 +21,9 @@ import (
 
 const defaultPublishRetryBackoff = 200 * time.Millisecond
 const maxPublishRetryBackoff = 5 * time.Second
+const defaultSchedulerOperationRetryBackoff = 200 * time.Millisecond
+const maxSchedulerOperationRetryBackoff = 5 * time.Second
+const maxSchedulerOperationAttempts = 8
 
 type schedulerRuntime struct {
 	client SchedulerClient
@@ -31,7 +34,7 @@ type schedulerRuntime struct {
 }
 
 type operationRuntime struct {
-	input    chan Operation
+	input    chan scheduledOp
 	stop     chan struct{}
 	wg       sync.WaitGroup
 	cooldown time.Duration
@@ -80,8 +83,9 @@ type regionEvent struct {
 }
 
 type scheduledOp struct {
-	op    Operation
-	ready time.Time
+	op       Operation
+	ready    time.Time
+	attempts uint32
 }
 
 func (s *Store) schedulerClient() SchedulerClient {
@@ -168,19 +172,20 @@ func (s *Store) enqueueOperation(op Operation) {
 	}
 	s.sched.operation.pending[key] = false
 	s.sched.operation.mu.Unlock()
+	item := scheduledOp{op: op}
 	if !s.hasDurableSchedulerQueue() {
-		if s.dispatchPendingSchedulerOperation(op) {
+		if s.dispatchPendingSchedulerOperation(item) {
 			s.clearLocalSchedulerDegraded()
 			return
 		}
 		s.recordLocalSchedulerDrop(op)
 		return
 	}
-	if err := s.persistPendingSchedulerOperation(op); err != nil {
+	if err := s.persistPendingSchedulerOperation(item); err != nil {
 		s.dropQueuedOperations([]Operation{op}, fmt.Sprintf("persist failed: %v", err))
 		return
 	}
-	if s.dispatchPendingSchedulerOperation(op) {
+	if s.dispatchPendingSchedulerOperation(item) {
 		s.clearLocalSchedulerDegraded()
 		return
 	}
@@ -462,16 +467,16 @@ func (s *Store) deletePendingRegionEvent(seq uint64) error {
 	return nil
 }
 
-func (s *Store) persistPendingSchedulerOperation(op Operation) error {
+func (s *Store) persistPendingSchedulerOperation(item scheduledOp) error {
 	if s == nil {
 		return nil
 	}
-	item, ok := localmetaSchedulerOperation(op)
+	op, ok := localmetaSchedulerOperation(item)
 	if !ok {
 		return nil
 	}
 	if rm := s.regionMgr(); rm != nil && rm.localMeta != nil {
-		return rm.localMeta.SavePendingSchedulerOperation(item)
+		return rm.localMeta.SavePendingSchedulerOperation(op)
 	}
 	return nil
 }
@@ -480,7 +485,7 @@ func (s *Store) deletePendingSchedulerOperation(op Operation) error {
 	if s == nil {
 		return nil
 	}
-	item, ok := localmetaSchedulerOperation(op)
+	item, ok := localmetaSchedulerOperation(scheduledOp{op: op})
 	if !ok {
 		return nil
 	}
@@ -490,14 +495,15 @@ func (s *Store) deletePendingSchedulerOperation(op Operation) error {
 	return nil
 }
 
-func localmetaSchedulerOperation(op Operation) (localmeta.PendingSchedulerOperation, bool) {
-	switch op.Type {
+func localmetaSchedulerOperation(item scheduledOp) (localmeta.PendingSchedulerOperation, bool) {
+	switch item.op.Type {
 	case OperationLeaderTransfer:
 		return localmeta.PendingSchedulerOperation{
 			Kind:         localmeta.PendingSchedulerOperationLeaderTransfer,
-			RegionID:     op.Region,
-			SourcePeerID: op.Source,
-			TargetPeerID: op.Target,
+			RegionID:     item.op.Region,
+			SourcePeerID: item.op.Source,
+			TargetPeerID: item.op.Target,
+			Attempts:     item.attempts,
 		}, true
 	default:
 		return localmeta.PendingSchedulerOperation{}, false
@@ -518,11 +524,11 @@ func storeOperationFromLocalMeta(op localmeta.PendingSchedulerOperation) (Operat
 	}
 }
 
-func (s *Store) dispatchPendingSchedulerOperation(op Operation) bool {
+func (s *Store) dispatchPendingSchedulerOperation(item scheduledOp) bool {
 	if s == nil || s.sched == nil || s.sched.operation.input == nil {
 		return false
 	}
-	key := operationKey{region: op.Region, typeID: op.Type}
+	key := operationKey{region: item.op.Region, typeID: item.op.Type}
 	s.sched.operation.mu.Lock()
 	if queued, exists := s.sched.operation.pending[key]; exists && queued {
 		s.sched.operation.mu.Unlock()
@@ -530,7 +536,7 @@ func (s *Store) dispatchPendingSchedulerOperation(op Operation) bool {
 	}
 	s.sched.operation.mu.Unlock()
 	select {
-	case s.sched.operation.input <- op:
+	case s.sched.operation.input <- item:
 		s.sched.operation.mu.Lock()
 		if _, exists := s.sched.operation.pending[key]; exists {
 			s.sched.operation.pending[key] = true
@@ -578,11 +584,15 @@ func (s *Store) enqueueRecoveredPendingSchedulerOperations(ops []localmeta.Pendi
 		if !ok {
 			continue
 		}
+		if item.Attempts >= maxSchedulerOperationAttempts {
+			s.abandonScheduledOperation(scheduledOp{op: op, attempts: item.Attempts}, "attempt limit reached")
+			continue
+		}
 		key := operationKey{region: op.Region, typeID: op.Type}
 		s.sched.operation.mu.Lock()
 		s.sched.operation.pending[key] = false
 		s.sched.operation.mu.Unlock()
-		if s.dispatchPendingSchedulerOperation(op) {
+		if s.dispatchPendingSchedulerOperation(scheduledOp{op: op, attempts: item.Attempts}) {
 			s.clearLocalSchedulerDegraded()
 			continue
 		}
@@ -603,7 +613,11 @@ func (s *Store) retryPendingSchedulerOperations() {
 		if !ok {
 			continue
 		}
-		if s.dispatchPendingSchedulerOperation(op) {
+		if item.Attempts >= maxSchedulerOperationAttempts {
+			s.abandonScheduledOperation(scheduledOp{op: op, attempts: item.Attempts}, "attempt limit reached")
+			continue
+		}
+		if s.dispatchPendingSchedulerOperation(scheduledOp{op: op, attempts: item.Attempts}) {
 			s.clearLocalSchedulerDegraded()
 			continue
 		}
@@ -639,8 +653,11 @@ func (s *Store) runOperationLoop() {
 				s.dropQueuedOperations(s.drainBufferedOperations(), "store closing")
 			}
 			return
-		case op := <-s.sched.operation.input:
-			pending = append(pending, scheduledOp{op: op, ready: s.nextOperationReadyTime(op)})
+		case item := <-s.sched.operation.input:
+			if item.ready.IsZero() {
+				item.ready = s.nextOperationReadyTime(item.op)
+			}
+			pending = append(pending, item)
 		case <-ticker.C:
 			now := time.Now()
 			limit := s.sched.operation.burst
@@ -664,6 +681,16 @@ func (s *Store) runOperationLoop() {
 						continue
 					}
 				}
+				item.attempts++
+				if item.attempts >= maxSchedulerOperationAttempts {
+					s.abandonScheduledOperation(item, "attempt limit reached")
+					continue
+				}
+				if err := s.persistPendingSchedulerOperation(item); err != nil {
+					s.abandonScheduledOperation(item, fmt.Sprintf("persist retry failed: %v", err))
+					continue
+				}
+				item.ready = now.Add(s.nextOperationRetryDelay(item.attempts))
 				remaining = append(remaining, item)
 			}
 			pending = remaining
@@ -683,6 +710,23 @@ func (s *Store) nextOperationReadyTime(op Operation) time.Time {
 		return time.Time{}
 	}
 	return last.Add(s.sched.operation.cooldown)
+}
+
+func (s *Store) nextOperationRetryDelay(attempts uint32) time.Duration {
+	if attempts == 0 {
+		return 0
+	}
+	delay := defaultSchedulerOperationRetryBackoff
+	for i := uint32(1); i < attempts; i++ {
+		if delay >= maxSchedulerOperationRetryBackoff/2 {
+			return maxSchedulerOperationRetryBackoff
+		}
+		delay *= 2
+	}
+	if delay > maxSchedulerOperationRetryBackoff {
+		return maxSchedulerOperationRetryBackoff
+	}
+	return delay
 }
 
 func (s *Store) markOperationApplied(op Operation, ts time.Time) bool {
@@ -738,6 +782,14 @@ func (s *Store) recordLocalSchedulerBacklog(op Operation, reason string) {
 	s.sched.health.lastError = msg
 	s.sched.health.lastErrorAt = now
 	s.sched.health.mu.Unlock()
+}
+
+func (s *Store) abandonScheduledOperation(item scheduledOp, reason string) {
+	if s == nil {
+		return
+	}
+	_ = s.deletePendingSchedulerOperation(item.op)
+	s.dropQueuedOperations([]Operation{item.op}, reason)
 }
 
 func (s *Store) dropQueuedOperations(ops []Operation, reason string) {
@@ -837,8 +889,8 @@ func (s *Store) drainBufferedOperations() []Operation {
 	var drained []Operation
 	for {
 		select {
-		case op := <-s.sched.operation.input:
-			drained = append(drained, op)
+		case item := <-s.sched.operation.input:
+			drained = append(drained, item.op)
 		default:
 			return drained
 		}

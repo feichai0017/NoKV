@@ -37,7 +37,6 @@ type Store struct {
 
 	compactionRunning bool
 	compactionQueued  bool
-	compactionPending rootstorage.ObservedCommitted
 	compactionWG      sync.WaitGroup
 }
 
@@ -170,7 +169,7 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 	s.pendingRange = snapshot.PendingRangeChanges
 	s.records = append(s.records, records...)
 	s.retainFrom = (rootstorage.CommittedTail{Records: s.records}).RetainFrom(snapshot.State.LastCommitted)
-	s.maybeCompactLocked(snapshot)
+	s.maybeCompactLocked()
 	return rootstate.CommitInfo{Cursor: snapshot.State.LastCommitted, State: snapshot.State}, nil
 }
 
@@ -387,17 +386,10 @@ func (s *Store) Close() error {
 	return nil
 }
 
-func (s *Store) maybeCompactLocked(snapshot rootstate.Snapshot) {
+func (s *Store) maybeCompactLocked() {
 	if s == nil || len(s.records) <= maxRetainedRecords {
 		return
 	}
-	plan := rootstorage.PlanTailCompaction(s.records, s.state.LastCommitted, maxRetainedRecords)
-	s.records = plan.Tail.Records
-	s.retainFrom = plan.RetainFrom
-	if !plan.Compacted {
-		return
-	}
-	s.compactionPending = plan.Observed(snapshot)
 	s.compactionQueued = true
 	if s.compactionRunning {
 		return
@@ -416,12 +408,22 @@ func (s *Store) runCompaction() {
 			s.mu.Unlock()
 			return
 		}
-		observed := rootstorage.CloneObservedCommitted(s.compactionPending)
-		s.compactionPending = rootstorage.ObservedCommitted{}
 		s.compactionQueued = false
+		snapshot := rootstate.CloneSnapshot(rootstate.Snapshot{
+			State:               s.state,
+			Descriptors:         s.descs,
+			PendingPeerChanges:  s.pending,
+			PendingRangeChanges: s.pendingRange,
+		})
+		plan := rootstorage.PlanTailCompaction(s.records, s.state.LastCommitted, maxRetainedRecords)
+		if plan.Compacted {
+			s.records = plan.Tail.Records
+			s.retainFrom = plan.RetainFrom
+			observed := plan.Observed(snapshot)
+			s.logMu.Lock()
+			_ = s.log.InstallBootstrap(observed)
+			s.logMu.Unlock()
+		}
 		s.mu.Unlock()
-		s.logMu.Lock()
-		_ = s.log.InstallBootstrap(observed)
-		s.logMu.Unlock()
 	}
 }

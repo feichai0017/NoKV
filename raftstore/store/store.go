@@ -99,7 +99,7 @@ func NewStore(cfg Config) *Store {
 		s.workDir = cfg.LocalMeta.WorkDir()
 	}
 	if queueSize > 0 {
-		s.sched.operation.input = make(chan Operation, queueSize)
+		s.sched.operation.input = make(chan scheduledOp, queueSize)
 		s.sched.operation.stop = make(chan struct{})
 		s.sched.operation.wg.Add(1)
 		go s.runOperationLoop()

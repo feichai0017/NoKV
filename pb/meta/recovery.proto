@@ -64,6 +64,7 @@ message PendingSchedulerOperation {
   uint64 region_id = 2;
   uint64 source_peer_id = 3;
   uint64 target_peer_id = 4;
+  uint32 attempts = 5;
 }
 
 message PendingSchedulerOperationCatalog {

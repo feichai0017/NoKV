@@ -513,6 +513,7 @@ type PendingSchedulerOperation struct {
 	RegionId      uint64                 `protobuf:"varint,2,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
 	SourcePeerId  uint64                 `protobuf:"varint,3,opt,name=source_peer_id,json=sourcePeerId,proto3" json:"source_peer_id,omitempty"`
 	TargetPeerId  uint64                 `protobuf:"varint,4,opt,name=target_peer_id,json=targetPeerId,proto3" json:"target_peer_id,omitempty"`
+	Attempts      uint32                 `protobuf:"varint,5,opt,name=attempts,proto3" json:"attempts,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -571,6 +572,13 @@ func (x *PendingSchedulerOperation) GetSourcePeerId() uint64 {
 func (x *PendingSchedulerOperation) GetTargetPeerId() uint64 {
 	if x != nil {
 		return x.TargetPeerId
+	}
+	return 0
+}
+
+func (x *PendingSchedulerOperation) GetAttempts() uint32 {
+	if x != nil {
+		return x.Attempts
 	}
 	return 0
 }
@@ -774,12 +782,13 @@ const file_meta_recovery_proto_rawDesc = "" +
 	"\bsequence\x18\x01 \x01(\x04R\bsequence\x12-\n" +
 	"\x05event\x18\x02 \x01(\v2\x17.nokv.meta.v1.RootEventR\x05event\"S\n" +
 	"\x17PendingRootEventCatalog\x128\n" +
-	"\aentries\x18\x01 \x03(\v2\x1e.nokv.meta.v1.PendingRootEventR\aentries\"\xab\x01\n" +
+	"\aentries\x18\x01 \x03(\v2\x1e.nokv.meta.v1.PendingRootEventR\aentries\"\xc7\x01\n" +
 	"\x19PendingSchedulerOperation\x12%\n" +
 	"\x0eoperation_type\x18\x01 \x01(\rR\roperationType\x12\x1b\n" +
 	"\tregion_id\x18\x02 \x01(\x04R\bregionId\x12$\n" +
 	"\x0esource_peer_id\x18\x03 \x01(\x04R\fsourcePeerId\x12$\n" +
-	"\x0etarget_peer_id\x18\x04 \x01(\x04R\ftargetPeerId\"e\n" +
+	"\x0etarget_peer_id\x18\x04 \x01(\x04R\ftargetPeerId\x12\x1a\n" +
+	"\battempts\x18\x05 \x01(\rR\battempts\"e\n" +
 	" PendingSchedulerOperationCatalog\x12A\n" +
 	"\aentries\x18\x01 \x03(\v2'.nokv.meta.v1.PendingSchedulerOperationR\aentries\"\xa1\x01\n" +
 	"\x10BlockedRootEvent\x12\x1a\n" +
