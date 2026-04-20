@@ -17,12 +17,13 @@ type PeerBuilder func(meta localmeta.RegionMeta) (*peer.Config, error)
 
 // StoreStats captures minimal store-level heartbeat information.
 type StoreStats struct {
-	StoreID   uint64    `json:"store_id"`
-	RegionNum uint64    `json:"region_num"`
-	LeaderNum uint64    `json:"leader_num"`
-	Capacity  uint64    `json:"capacity"`
-	Available uint64    `json:"available"`
-	UpdatedAt time.Time `json:"updated_at"`
+	StoreID           uint64    `json:"store_id"`
+	RegionNum         uint64    `json:"region_num"`
+	LeaderNum         uint64    `json:"leader_num"`
+	Capacity          uint64    `json:"capacity"`
+	Available         uint64    `json:"available"`
+	DroppedOperations uint64    `json:"dropped_operations"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // Operation represents a scheduling decision to be executed by store runtime.

@@ -26,6 +26,7 @@ const maxRetainedRecords = 64
 type Store struct {
 	log rootstorage.VirtualLog
 
+	logMu        sync.Mutex
 	mu           sync.RWMutex
 	state        rootstate.State
 	descs        map[uint64]descriptor.Descriptor
@@ -33,6 +34,11 @@ type Store struct {
 	pendingRange map[uint64]rootstate.PendingRangeChange
 	records      []rootstorage.CommittedEvent
 	retainFrom   rootstate.Cursor
+
+	compactionRunning bool
+	compactionQueued  bool
+	compactionPending rootstorage.ObservedCommitted
+	compactionWG      sync.WaitGroup
 }
 
 // Open opens or creates a local metadata-root store in workdir.
@@ -137,26 +143,34 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 		rootstate.ApplyEventToSnapshot(&snapshot, next, evt)
 		records = append(records, rootstorage.CommittedEvent{Cursor: next, Event: rootevent.CloneEvent(evt)})
 	}
+	s.logMu.Lock()
 	logEnd, err := s.log.AppendCommitted(ctx, records...)
 	if err != nil {
+		s.logMu.Unlock()
 		return rootstate.CommitInfo{}, err
 	}
 	if err := ctx.Err(); err != nil {
+		s.logMu.Unlock()
 		return rootstate.CommitInfo{}, err
 	}
+	// Durability is anchored at AppendCommitted. If SaveCheckpoint fails after
+	// the log append succeeds, reopen still replays the committed tail on top of
+	// the older checkpoint, so the error only prevents checkpoint advancement.
 	if err := s.log.SaveCheckpoint(rootstorage.Checkpoint{
 		Snapshot:   rootstate.CloneSnapshot(snapshot),
 		TailOffset: logEnd,
 	}); err != nil {
+		s.logMu.Unlock()
 		return rootstate.CommitInfo{}, err
 	}
+	s.logMu.Unlock()
 	s.state = snapshot.State
 	s.descs = snapshot.Descriptors
 	s.pending = snapshot.PendingPeerChanges
 	s.pendingRange = snapshot.PendingRangeChanges
 	s.records = append(s.records, records...)
 	s.retainFrom = (rootstorage.CommittedTail{Records: s.records}).RetainFrom(snapshot.State.LastCommitted)
-	s.maybeCompactLocked()
+	s.maybeCompactLocked(snapshot)
 	return rootstate.CommitInfo{Cursor: snapshot.State.LastCommitted, State: snapshot.State}, nil
 }
 
@@ -365,27 +379,49 @@ func (s *Store) FenceAllocator(ctx context.Context, kind rootstate.AllocatorKind
 	}
 }
 
-func (s *Store) Close() error { return nil }
+func (s *Store) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.compactionWG.Wait()
+	return nil
+}
 
-func (s *Store) maybeCompactLocked() {
+func (s *Store) maybeCompactLocked(snapshot rootstate.Snapshot) {
 	if s == nil || len(s.records) <= maxRetainedRecords {
 		return
 	}
-	snapshot := rootstate.Snapshot{
-		State:               s.state,
-		Descriptors:         rootstate.CloneDescriptors(s.descs),
-		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.pending),
-		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.pendingRange),
-	}
 	plan := rootstorage.PlanTailCompaction(s.records, s.state.LastCommitted, maxRetainedRecords)
-	if !plan.Compacted {
-		s.records = plan.Tail.Records
-		s.retainFrom = plan.RetainFrom
-		return
-	}
-	if err := s.log.InstallBootstrap(plan.Observed(snapshot)); err != nil {
-		return
-	}
 	s.records = plan.Tail.Records
 	s.retainFrom = plan.RetainFrom
+	if !plan.Compacted {
+		return
+	}
+	s.compactionPending = plan.Observed(snapshot)
+	s.compactionQueued = true
+	if s.compactionRunning {
+		return
+	}
+	s.compactionRunning = true
+	s.compactionWG.Add(1)
+	go s.runCompaction()
+}
+
+func (s *Store) runCompaction() {
+	defer s.compactionWG.Done()
+	for {
+		s.mu.Lock()
+		if !s.compactionQueued {
+			s.compactionRunning = false
+			s.mu.Unlock()
+			return
+		}
+		observed := rootstorage.CloneObservedCommitted(s.compactionPending)
+		s.compactionPending = rootstorage.ObservedCommitted{}
+		s.compactionQueued = false
+		s.mu.Unlock()
+		s.logMu.Lock()
+		_ = s.log.InstallBootstrap(observed)
+		s.logMu.Unlock()
+	}
 }
