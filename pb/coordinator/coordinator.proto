@@ -219,8 +219,9 @@ message GetRegionByKeyRequest {
   RootToken required_root_token = 3;
   // max_root_lag bounds the allowed rooted revision gap for bounded reads.
   optional uint64 max_root_lag = 4;
-  // required_descriptor_revision optionally requires the returned descriptor to
+  // required_descriptor_revision requires the returned descriptor to
   // incorporate at least this rooted descriptor publication epoch.
+  // 0 means unspecified.
   uint64 required_descriptor_revision = 5;
 }
 
@@ -242,10 +243,10 @@ message GetRegionByKeyResponse {
   // catch_up_state reports the node's current rooted catch-up state.
   CatchUpState catch_up_state = 9;
   // descriptor_revision is the rooted descriptor publication epoch of the
-  // returned region descriptor, when present.
+  // returned region descriptor. 0 means the reply did not carry one.
   uint64 descriptor_revision = 10;
   // required_descriptor_revision echoes the minimum descriptor revision the
-  // caller required for this answer.
+  // caller required for this answer. 0 means unspecified.
   uint64 required_descriptor_revision = 11;
   // cert_generation identifies the detached/rooted authority instance that
   // served this reply when coordinator lease evidence is available.
