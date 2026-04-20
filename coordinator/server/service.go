@@ -552,7 +552,7 @@ func (s *Service) currentReadState() (readState, error) {
 		state.leasePresent = true
 		state.leaseActive = snapshot.CoordinatorLease.ActiveAt(nowUnixNano)
 		state.leaseSealed = rootstate.CoordinatorGenerationSealed(snapshot.CoordinatorLease, snapshot.CoordinatorSeal)
-		state.leaseDutyMask = rootstate.ResolvedCoordinatorDutyMask(snapshot.CoordinatorLease.DutyMask)
+		state.leaseDutyMask = snapshot.CoordinatorLease.DutyMask
 	}
 	if snapshot.CoordinatorSeal.Present() {
 		state.sealGeneration = snapshot.CoordinatorSeal.CertGeneration
@@ -818,7 +818,7 @@ func (s *Service) nextRootEpoch() (uint64, error) {
 	}
 	var maxEpoch uint64
 	if s != nil && s.cluster != nil {
-		maxEpoch = maxRegionRootEpoch(s.cluster.RegionSnapshot())
+		maxEpoch = s.cluster.MaxDescriptorRevision()
 	}
 	if maxEpoch < ^uint64(0) {
 		return maxEpoch + 1, nil
@@ -1324,7 +1324,7 @@ func (s *Service) currentClusterEpoch() (uint64, error) {
 	}
 	var maxEpoch uint64
 	if s != nil && s.cluster != nil {
-		maxEpoch = maxRegionRootEpoch(s.cluster.RegionSnapshot())
+		maxEpoch = s.cluster.MaxDescriptorRevision()
 	}
 	return maxEpoch, nil
 }
@@ -1333,17 +1333,7 @@ func (s *Service) currentDescriptorRevision() uint64 {
 	if s == nil || s.cluster == nil {
 		return 0
 	}
-	return maxRegionRootEpoch(s.cluster.RegionSnapshot())
-}
-
-func maxRegionRootEpoch(regions []pdview.RegionInfo) uint64 {
-	var maxEpoch uint64
-	for _, region := range regions {
-		if region.Descriptor.RootEpoch > maxEpoch {
-			maxEpoch = region.Descriptor.RootEpoch
-		}
-	}
-	return maxEpoch
+	return s.cluster.MaxDescriptorRevision()
 }
 
 type preActionKind uint8
@@ -1428,7 +1418,7 @@ func (s *Service) validatePreActionLease(kind preActionKind, dutyMask uint32, cu
 			return statusCoordinatorLease(fmt.Errorf("%w: generation=%d sealed_generation=%d", rootstate.ErrCoordinatorLeaseHeld, current.CertGeneration, seal.CertGeneration))
 		}
 	case preActionDutyAdmission:
-		currentDutyMask := rootstate.ResolvedCoordinatorDutyMask(current.DutyMask)
+		currentDutyMask := current.DutyMask
 		if dutyMask != 0 && currentDutyMask&dutyMask != dutyMask {
 			return statusCoordinatorLease(fmt.Errorf("%w: required_duty_mask=%d rooted_duty_mask=%d generation=%d", rootstate.ErrCoordinatorLeaseDuty, dutyMask, currentDutyMask, current.CertGeneration))
 		}

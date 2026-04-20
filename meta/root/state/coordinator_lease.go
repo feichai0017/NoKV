@@ -60,7 +60,7 @@ func CoordinatorSealDigest(seal CoordinatorSeal) string {
 	}
 
 	holderID := strings.TrimSpace(seal.HolderID)
-	dutyMask := ResolvedCoordinatorDutyMask(seal.DutyMask)
+	dutyMask := seal.DutyMask
 	writeString(holderID)
 	writeUint64(seal.CertGeneration)
 	writeUint32(dutyMask)
@@ -104,13 +104,6 @@ func CoordinatorGenerationSealed(current CoordinatorLease, seal CoordinatorSeal)
 	return current.HolderID == seal.HolderID
 }
 
-func ResolvedCoordinatorDutyMask(mask uint32) uint32 {
-	if mask == 0 {
-		return rootproto.CoordinatorDutyMaskDefault
-	}
-	return mask
-}
-
 // ValidateCoordinatorLeaseCampaign verifies whether holder can install a new
 // coordinator lease over current at nowUnixNano.
 func ValidateCoordinatorLeaseCampaign(current CoordinatorLease, seal CoordinatorSeal, holderID, predecessorDigest string, expiresUnixNano, nowUnixNano int64) error {
@@ -145,7 +138,7 @@ func EvaluateCoordinatorLeaseSuccessorCoverage(current CoordinatorLease, seal Co
 	if !seal.Present() {
 		return rootproto.CoordinatorSuccessorCoverageStatus{}
 	}
-	dutyMask := ResolvedCoordinatorDutyMask(seal.DutyMask)
+	dutyMask := seal.DutyMask
 	requiredFrontiers := seal.Frontiers
 	activeDutyMasks := rootproto.OrderedCoordinatorDutyMasks(dutyMask, rootproto.CoordinatorDutyFrontiers{})
 	status := rootproto.CoordinatorSuccessorCoverageStatus{
