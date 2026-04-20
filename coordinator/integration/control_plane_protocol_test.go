@@ -70,9 +70,9 @@ func (s *protocolMatrixStorage) SaveAllocatorState(idCurrent, tsCurrent uint64) 
 	return nil
 }
 
-func (s *protocolMatrixStorage) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *protocolMatrixStorage) ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
 	switch cmd.Kind {
-	case rootstate.CoordinatorLeaseCommandIssue:
+	case rootproto.CoordinatorLeaseCommandIssue:
 		s.campaigns++
 		if s.campaignErr != nil {
 			return rootstate.CoordinatorProtocolState{}, s.campaignErr
@@ -97,7 +97,7 @@ func (s *protocolMatrixStorage) ApplyCoordinatorLease(cmd rootstate.CoordinatorL
 		if tsoFence := cmd.HandoffFrontiers.Frontier(rootproto.CoordinatorDutyTSO); tsoFence > s.snapshot.Allocator.TSCurrent {
 			s.snapshot.Allocator.TSCurrent = tsoFence
 		}
-	case rootstate.CoordinatorLeaseCommandRelease:
+	case rootproto.CoordinatorLeaseCommandRelease:
 		if err := rootstate.ValidateCoordinatorLeaseRelease(s.snapshot.CoordinatorLease, cmd.HolderID, cmd.NowUnixNano); err != nil {
 			return s.protocolState(), err
 		}
@@ -121,9 +121,9 @@ func (s *protocolMatrixStorage) ApplyCoordinatorLease(cmd rootstate.CoordinatorL
 	return s.protocolState(), nil
 }
 
-func (s *protocolMatrixStorage) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *protocolMatrixStorage) ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
 	switch cmd.Kind {
-	case rootstate.CoordinatorClosureCommandSeal:
+	case rootproto.CoordinatorClosureCommandSeal:
 		if err := rootstate.ValidateCoordinatorLeaseSeal(s.snapshot.CoordinatorLease, cmd.HolderID); err != nil {
 			return s.protocolState(), err
 		}
@@ -135,9 +135,9 @@ func (s *protocolMatrixStorage) ApplyCoordinatorClosure(cmd rootstate.Coordinato
 			HolderID:       cmd.HolderID,
 			CertGeneration: s.snapshot.CoordinatorLease.CertGeneration,
 			DutyMask:       dutyMask,
-			Frontiers:      rootproto.CloneDutyFrontiers(cmd.Frontiers),
+			Frontiers:      cmd.Frontiers,
 		}
-	case rootstate.CoordinatorClosureCommandConfirm:
+	case rootproto.CoordinatorClosureCommandConfirm:
 		s.confirms++
 		if s.confirmErr != nil {
 			return rootstate.CoordinatorProtocolState{}, s.confirmErr
@@ -164,7 +164,7 @@ func (s *protocolMatrixStorage) ApplyCoordinatorClosure(cmd rootstate.Coordinato
 			SealDigest:          auditStatus.SealDigest,
 			Stage:               rootproto.CoordinatorClosureStageConfirmed,
 		}
-	case rootstate.CoordinatorClosureCommandClose:
+	case rootproto.CoordinatorClosureCommandClose:
 		s.closes++
 		if s.closeErr != nil {
 			return rootstate.CoordinatorProtocolState{}, s.closeErr
@@ -173,7 +173,7 @@ func (s *protocolMatrixStorage) ApplyCoordinatorClosure(cmd rootstate.Coordinato
 			return s.protocolState(), err
 		}
 		s.snapshot.CoordinatorClosure.Stage = rootproto.CoordinatorClosureStageClosed
-	case rootstate.CoordinatorClosureCommandReattach:
+	case rootproto.CoordinatorClosureCommandReattach:
 		s.reattaches++
 		if s.reattachErr != nil {
 			return rootstate.CoordinatorProtocolState{}, s.reattachErr

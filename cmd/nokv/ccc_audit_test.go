@@ -235,8 +235,8 @@ type cccAuditSeedOptions struct {
 
 func applyCCCAuditLeaseIssue(t *testing.T, store *pdstorage.RootStore, holderID string, expiresUnixNano, nowUnixNano int64, handoffFrontiers rootproto.CoordinatorDutyFrontiers, predecessorDigest string) rootstate.CoordinatorLease {
 	t.Helper()
-	state, err := store.ApplyCoordinatorLease(rootstate.CoordinatorLeaseCommand{
-		Kind:              rootstate.CoordinatorLeaseCommandIssue,
+	state, err := store.ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand{
+		Kind:              rootproto.CoordinatorLeaseCommandIssue,
 		HolderID:          holderID,
 		ExpiresUnixNano:   expiresUnixNano,
 		NowUnixNano:       nowUnixNano,
@@ -247,9 +247,9 @@ func applyCCCAuditLeaseIssue(t *testing.T, store *pdstorage.RootStore, holderID 
 	return state.Lease
 }
 
-func applyCCCAuditClosure(t *testing.T, store *pdstorage.RootStore, kind rootstate.CoordinatorClosureCommandKind, holderID string, nowUnixNano int64, frontiers rootproto.CoordinatorDutyFrontiers) rootstate.CoordinatorClosure {
+func applyCCCAuditClosure(t *testing.T, store *pdstorage.RootStore, kind rootproto.CoordinatorClosureCommandKind, holderID string, nowUnixNano int64, frontiers rootproto.CoordinatorDutyFrontiers) rootstate.CoordinatorClosure {
 	t.Helper()
-	state, err := store.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
+	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
 		Kind:        kind,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
@@ -261,8 +261,8 @@ func applyCCCAuditClosure(t *testing.T, store *pdstorage.RootStore, kind rootsta
 
 func applyCCCAuditSeal(t *testing.T, store *pdstorage.RootStore, holderID string, nowUnixNano int64, frontiers rootproto.CoordinatorDutyFrontiers) rootstate.CoordinatorSeal {
 	t.Helper()
-	state, err := store.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
-		Kind:        rootstate.CoordinatorClosureCommandSeal,
+	state, err := store.ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand{
+		Kind:        rootproto.CoordinatorClosureCommandSeal,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 		Frontiers:   frontiers,
@@ -294,13 +294,13 @@ func seedCCCAuditWorkdir(t *testing.T, opts cccAuditSeedOptions) string {
 	require.Equal(t, uint64(2), lease.CertGeneration)
 
 	if opts.confirm {
-		applyCCCAuditClosure(t, store, rootstate.CoordinatorClosureCommandConfirm, "c1", 400, rootproto.CoordinatorDutyFrontiers{})
+		applyCCCAuditClosure(t, store, rootproto.CoordinatorClosureCommandConfirm, "c1", 400, rootproto.CoordinatorDutyFrontiers{})
 	}
 	if opts.close {
-		applyCCCAuditClosure(t, store, rootstate.CoordinatorClosureCommandClose, "c1", 450, rootproto.CoordinatorDutyFrontiers{})
+		applyCCCAuditClosure(t, store, rootproto.CoordinatorClosureCommandClose, "c1", 450, rootproto.CoordinatorDutyFrontiers{})
 	}
 	if opts.reattach {
-		applyCCCAuditClosure(t, store, rootstate.CoordinatorClosureCommandReattach, "c1", 500, rootproto.CoordinatorDutyFrontiers{})
+		applyCCCAuditClosure(t, store, rootproto.CoordinatorClosureCommandReattach, "c1", 500, rootproto.CoordinatorDutyFrontiers{})
 	}
 	return dir
 }

@@ -227,7 +227,7 @@ func (s *Store) appendLocked(events ...rootevent.Event) (rootstate.CommitInfo, e
 	return rootstate.CommitInfo{Cursor: snapshot.State.LastCommitted, State: snapshot.State}, nil
 }
 
-func (s *Store) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *Store) ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
 	if s == nil {
 		return rootstate.CoordinatorProtocolState{}, nil
 	}
@@ -235,7 +235,7 @@ func (s *Store) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (ro
 	defer s.mu.Unlock()
 
 	switch cmd.Kind {
-	case rootstate.CoordinatorLeaseCommandIssue:
+	case rootproto.CoordinatorLeaseCommandIssue:
 		if err := rootstate.ValidateCoordinatorLeaseCampaign(s.state.CoordinatorLease, s.state.CoordinatorSeal, cmd.HolderID, cmd.PredecessorDigest, cmd.ExpiresUnixNano, cmd.NowUnixNano); err != nil {
 			return s.state.CoordinatorProtocol(), err
 		}
@@ -253,13 +253,13 @@ func (s *Store) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (ro
 			generation,
 			rootproto.CoordinatorDutyMaskDefault,
 			cmd.PredecessorDigest,
-			rootproto.CloneDutyFrontiers(cmd.HandoffFrontiers),
+			cmd.HandoffFrontiers,
 		))
 		if err != nil {
 			return rootstate.CoordinatorProtocolState{}, err
 		}
 		return commit.State.CoordinatorProtocol(), nil
-	case rootstate.CoordinatorLeaseCommandRelease:
+	case rootproto.CoordinatorLeaseCommandRelease:
 		if err := rootstate.ValidateCoordinatorLeaseRelease(s.state.CoordinatorLease, cmd.HolderID, cmd.NowUnixNano); err != nil {
 			return s.state.CoordinatorProtocol(), err
 		}
@@ -274,7 +274,7 @@ func (s *Store) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (ro
 			current.CertGeneration,
 			dutyMask,
 			current.PredecessorDigest,
-			rootproto.CloneDutyFrontiers(cmd.HandoffFrontiers),
+			cmd.HandoffFrontiers,
 		))
 		if err != nil {
 			return rootstate.CoordinatorProtocolState{}, err
@@ -285,7 +285,7 @@ func (s *Store) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (ro
 	}
 }
 
-func (s *Store) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *Store) ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
 	if s == nil {
 		return rootstate.CoordinatorProtocolState{}, nil
 	}
@@ -293,7 +293,7 @@ func (s *Store) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand)
 	defer s.mu.Unlock()
 
 	switch cmd.Kind {
-	case rootstate.CoordinatorClosureCommandSeal:
+	case rootproto.CoordinatorClosureCommandSeal:
 		current := s.state.CoordinatorLease
 		if s.state.CoordinatorSeal.CertGeneration != 0 &&
 			s.state.CoordinatorSeal.CertGeneration == current.CertGeneration &&
@@ -311,13 +311,13 @@ func (s *Store) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand)
 			cmd.HolderID,
 			current.CertGeneration,
 			dutyMask,
-			rootproto.CloneDutyFrontiers(cmd.Frontiers),
+			cmd.Frontiers,
 		))
 		if err != nil {
 			return rootstate.CoordinatorProtocolState{}, err
 		}
 		return commit.State.CoordinatorProtocol(), nil
-	case rootstate.CoordinatorClosureCommandConfirm:
+	case rootproto.CoordinatorClosureCommandConfirm:
 		if strings.TrimSpace(cmd.HolderID) == "" || strings.TrimSpace(cmd.HolderID) != s.state.CoordinatorLease.HolderID {
 			return s.state.CoordinatorProtocol(), rootstate.ErrCoordinatorLeaseOwner
 		}
@@ -346,7 +346,7 @@ func (s *Store) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand)
 			return rootstate.CoordinatorProtocolState{}, err
 		}
 		return commit.State.CoordinatorProtocol(), nil
-	case rootstate.CoordinatorClosureCommandClose:
+	case rootproto.CoordinatorClosureCommandClose:
 		if err := controlplane.ValidateClosureClose(s.state.CoordinatorLease, s.state.CoordinatorClosure, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return s.state.CoordinatorProtocol(), err
 		}
@@ -363,7 +363,7 @@ func (s *Store) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand)
 			return rootstate.CoordinatorProtocolState{}, err
 		}
 		return commit.State.CoordinatorProtocol(), nil
-	case rootstate.CoordinatorClosureCommandReattach:
+	case rootproto.CoordinatorClosureCommandReattach:
 		if err := controlplane.ValidateClosureReattach(s.state.CoordinatorLease, s.state.CoordinatorClosure, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return s.state.CoordinatorProtocol(), err
 		}

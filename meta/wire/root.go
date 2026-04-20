@@ -179,7 +179,7 @@ func RootCoordinatorProtocolStateFromProto(state *metapb.RootCoordinatorProtocol
 	}
 }
 
-func RootCoordinatorLeaseCommandToProto(cmd rootstate.CoordinatorLeaseCommand) *metapb.RootCoordinatorLeaseCommand {
+func RootCoordinatorLeaseCommandToProto(cmd rootproto.CoordinatorLeaseCommand) *metapb.RootCoordinatorLeaseCommand {
 	return &metapb.RootCoordinatorLeaseCommand{
 		Kind:              rootCoordinatorLeaseCommandKindToProto(cmd.Kind),
 		HolderId:          cmd.HolderID,
@@ -190,11 +190,11 @@ func RootCoordinatorLeaseCommandToProto(cmd rootstate.CoordinatorLeaseCommand) *
 	}
 }
 
-func RootCoordinatorLeaseCommandFromProto(cmd *metapb.RootCoordinatorLeaseCommand) rootstate.CoordinatorLeaseCommand {
+func RootCoordinatorLeaseCommandFromProto(cmd *metapb.RootCoordinatorLeaseCommand) rootproto.CoordinatorLeaseCommand {
 	if cmd == nil {
-		return rootstate.CoordinatorLeaseCommand{}
+		return rootproto.CoordinatorLeaseCommand{}
 	}
-	return rootstate.CoordinatorLeaseCommand{
+	return rootproto.CoordinatorLeaseCommand{
 		Kind:              rootCoordinatorLeaseCommandKindFromProto(cmd.GetKind()),
 		HolderID:          cmd.GetHolderId(),
 		ExpiresUnixNano:   cmd.GetExpiresUnixNano(),
@@ -204,7 +204,7 @@ func RootCoordinatorLeaseCommandFromProto(cmd *metapb.RootCoordinatorLeaseComman
 	}
 }
 
-func RootCoordinatorClosureCommandToProto(cmd rootstate.CoordinatorClosureCommand) *metapb.RootCoordinatorClosureCommand {
+func RootCoordinatorClosureCommandToProto(cmd rootproto.CoordinatorClosureCommand) *metapb.RootCoordinatorClosureCommand {
 	return &metapb.RootCoordinatorClosureCommand{
 		Kind:        rootCoordinatorClosureCommandKindToProto(cmd.Kind),
 		HolderId:    cmd.HolderID,
@@ -213,11 +213,11 @@ func RootCoordinatorClosureCommandToProto(cmd rootstate.CoordinatorClosureComman
 	}
 }
 
-func RootCoordinatorClosureCommandFromProto(cmd *metapb.RootCoordinatorClosureCommand) rootstate.CoordinatorClosureCommand {
+func RootCoordinatorClosureCommandFromProto(cmd *metapb.RootCoordinatorClosureCommand) rootproto.CoordinatorClosureCommand {
 	if cmd == nil {
-		return rootstate.CoordinatorClosureCommand{}
+		return rootproto.CoordinatorClosureCommand{}
 	}
-	return rootstate.CoordinatorClosureCommand{
+	return rootproto.CoordinatorClosureCommand{
 		Kind:        rootCoordinatorClosureCommandKindFromProto(cmd.GetKind()),
 		HolderID:    cmd.GetHolderId(),
 		NowUnixNano: cmd.GetNowUnixNano(),

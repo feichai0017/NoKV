@@ -1,7 +1,5 @@
 package event
 
-import rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-
 // CloneEvent returns a detached rooted metadata event copy.
 func CloneEvent(in Event) Event {
 	out := in
@@ -15,12 +13,12 @@ func CloneEvent(in Event) Event {
 	}
 	if in.CoordinatorLease != nil {
 		cp := *in.CoordinatorLease
-		cp.Frontiers = rootproto.CloneDutyFrontiers(in.CoordinatorLease.Frontiers)
+		cp.Frontiers = in.CoordinatorLease.Frontiers
 		out.CoordinatorLease = &cp
 	}
 	if in.CoordinatorSeal != nil {
 		cp := *in.CoordinatorSeal
-		cp.Frontiers = rootproto.CloneDutyFrontiers(in.CoordinatorSeal.Frontiers)
+		cp.Frontiers = in.CoordinatorSeal.Frontiers
 		out.CoordinatorSeal = &cp
 	}
 	if in.CoordinatorClosure != nil {
