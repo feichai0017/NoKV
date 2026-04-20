@@ -6,16 +6,6 @@ import (
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 )
 
-// SnapshotStatus captures the rooted closure and reattach status that can be
-// derived from one storage snapshot without consulting live service internals.
-type SnapshotStatus struct {
-	RootDescriptorRevision uint64
-	Handoff                rootstate.AuthorityHandoffRecord
-	ClosureAudit           rootstate.CoordinatorClosureAudit
-	Closure                rootstate.CoordinatorClosureStatus
-	ClosureWitness         rootstate.ClosureWitness
-}
-
 // SnapshotAnomalies surfaces the most important closure/audit gaps in a form
 // suitable for CLI or standalone checker consumption.
 type SnapshotAnomalies struct {
@@ -45,7 +35,6 @@ type Report struct {
 	CurrentGeneration      uint64
 	Handoff                rootstate.AuthorityHandoffRecord
 	ClosureWitness         rootstate.ClosureWitness
-	ClosureAudit           rootstate.CoordinatorClosureAudit
 	Closure                rootstate.CoordinatorClosureStatus
 	Anomalies              SnapshotAnomalies
 }
@@ -58,27 +47,29 @@ type closureEvidence struct {
 	reattachPresent       bool
 }
 
-// EvaluateSnapshot projects one rooted storage snapshot into closure-oriented
-// audit status. It is the minimal reusable seed for standalone ccc-audit.
-func EvaluateSnapshot(snapshot coordstorage.Snapshot, holderID string, nowUnixNano int64) SnapshotStatus {
+func evaluateSnapshot(snapshot coordstorage.Snapshot, holderID string, nowUnixNano int64) Report {
 	descriptorRevision := controlplane.MaxDescriptorRevision(snapshot.Descriptors)
 	currentFrontiers := controlplane.FrontiersFromState(rootstate.State{
 		IDFence:  snapshot.Allocator.IDCurrent,
 		TSOFence: snapshot.Allocator.TSCurrent,
 	}, descriptorRevision)
-	closureAudit := controlplane.EvaluateClosureAudit(snapshot.CoordinatorLease, currentFrontiers, snapshot.CoordinatorSeal, nowUnixNano)
-	closure := controlplane.EvaluateClosure(
+	closureWitness := controlplane.BuildClosureWitness(snapshot.CoordinatorLease, currentFrontiers, snapshot.CoordinatorSeal, nowUnixNano)
+	closure := controlplane.EvaluateClosureStage(
 		snapshot.CoordinatorLease,
 		snapshot.CoordinatorClosure,
 		holderID,
 		nowUnixNano,
 	)
-	return SnapshotStatus{
+	return Report{
+		HolderID:               holderID,
+		NowUnixNano:            nowUnixNano,
 		RootDescriptorRevision: descriptorRevision,
+		CatchUpState:           snapshot.CatchUpState.String(),
+		CurrentHolderID:        snapshot.CoordinatorLease.HolderID,
+		CurrentGeneration:      snapshot.CoordinatorLease.CertGeneration,
 		Handoff:                controlplane.HandoffRecord(snapshot.CoordinatorLease, currentFrontiers),
-		ClosureAudit:           closureAudit,
+		ClosureWitness:         closureWitness.WithStage(closure.Stage),
 		Closure:                closure,
-		ClosureWitness:         closureAudit.AsClosureWitness(closure.Stage),
 	}
 }
 
@@ -106,34 +97,23 @@ func evaluateClosureEvidence(snapshot coordstorage.Snapshot, holderID string, no
 // BuildReport materializes one rooted snapshot into a standalone audit report
 // that callers can serialize or render without duplicating anomaly logic.
 func BuildReport(snapshot coordstorage.Snapshot, holderID string, nowUnixNano int64) Report {
-	status := EvaluateSnapshot(snapshot, holderID, nowUnixNano)
+	report := evaluateSnapshot(snapshot, holderID, nowUnixNano)
 	closure := evaluateClosureEvidence(snapshot, holderID, nowUnixNano)
 	anomalies := SnapshotAnomalies{
-		SuccessorLineageMismatch:    status.ClosureAudit.SuccessorPresent && !status.ClosureAudit.SuccessorLineageSatisfied,
-		UncoveredMonotoneFrontier:   status.ClosureAudit.SuccessorPresent && !status.ClosureAudit.SuccessorMonotoneCovered(),
-		UncoveredDescriptorRevision: status.ClosureAudit.SuccessorPresent && !status.ClosureAudit.SuccessorDescriptorCovered(),
-		SealedGenerationStillLive:   status.ClosureAudit.SealGeneration != 0 && !status.ClosureAudit.SealedGenerationRetired,
-		ClosureIncomplete:           status.ClosureAudit.SealGeneration != 0 && !status.ClosureAudit.ClosureSatisfied(),
-		MissingConfirm:              status.ClosureAudit.ClosureSatisfied() && !closure.confirmPresent,
+		SuccessorLineageMismatch:    report.ClosureWitness.SuccessorPresent && !report.ClosureWitness.SuccessorLineageSatisfied,
+		UncoveredMonotoneFrontier:   report.ClosureWitness.SuccessorPresent && !report.ClosureWitness.SuccessorMonotoneCovered(),
+		UncoveredDescriptorRevision: report.ClosureWitness.SuccessorPresent && !report.ClosureWitness.SuccessorDescriptorCovered(),
+		SealedGenerationStillLive:   report.ClosureWitness.SealGeneration != 0 && !report.ClosureWitness.SealedGenerationRetired,
+		ClosureIncomplete:           report.ClosureWitness.SealGeneration != 0 && !report.ClosureWitness.ClosureSatisfied(),
+		MissingConfirm:              report.ClosureWitness.ClosureSatisfied() && !closure.confirmPresent,
 		MissingClose:                closure.confirmPresent && !closure.closePresent,
 		CloseWithoutConfirm:         closure.closePresent && !closure.confirmPresent,
 		CloseLineageMismatch:        closure.confirmPresent && !closure.lineageSatisfied,
 		ReattachWithoutConfirm:      closure.reattachPresent && !closure.confirmPresent,
 		ReattachWithoutClose:        closure.reattachPresent && !closure.closePresent,
 		ReattachLineageMismatch:     closure.confirmPresent && !closure.lineageSatisfied,
-		ReattachIncomplete:          closure.reattachPresent && status.Closure.Stage != rootstate.CoordinatorClosureStageReattached,
+		ReattachIncomplete:          closure.reattachPresent && report.Closure.Stage != rootstate.CoordinatorClosureStageReattached,
 	}
-	return Report{
-		HolderID:               holderID,
-		NowUnixNano:            nowUnixNano,
-		RootDescriptorRevision: status.RootDescriptorRevision,
-		CatchUpState:           snapshot.CatchUpState.String(),
-		CurrentHolderID:        snapshot.CoordinatorLease.HolderID,
-		CurrentGeneration:      snapshot.CoordinatorLease.CertGeneration,
-		Handoff:                status.Handoff,
-		ClosureWitness:         status.ClosureWitness,
-		ClosureAudit:           status.ClosureAudit,
-		Closure:                status.Closure,
-		Anomalies:              anomalies,
-	}
+	report.Anomalies = anomalies
+	return report
 }

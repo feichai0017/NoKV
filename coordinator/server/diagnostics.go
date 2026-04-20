@@ -29,11 +29,11 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 
 	nowUnixNano, _, holderID, renewIn, clockSkew := s.leaseCampaignBounds()
 	lease := s.currentCoordinatorLease()
-	snapshotStatus := coordaudit.EvaluateSnapshot(rootSnapshot, holderID, nowUnixNano)
+	report := coordaudit.BuildReport(rootSnapshot, holderID, nowUnixNano)
 	leaseFrontiers := controlplane.FrontiersFromState(rootstate.State{
 		IDFence:  rootSnapshot.Allocator.IDCurrent,
 		TSOFence: rootSnapshot.Allocator.TSCurrent,
-	}, snapshotStatus.RootDescriptorRevision)
+	}, report.RootDescriptorRevision)
 
 	s.allocMu.Lock()
 	idCurrent := s.ids.Current()
@@ -93,7 +93,7 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 			"duty_mask": lease.DutyMask,
 			"frontiers": diagnosticsCoordinatorFrontiers(leaseFrontiers),
 		},
-		"handoff": diagnosticsAuthorityHandoff(snapshotStatus.Handoff),
+		"handoff": diagnosticsAuthorityHandoff(report.Handoff),
 		"seal": map[string]any{
 			"holder_id":          rootSnapshot.CoordinatorSeal.HolderID,
 			"cert_generation":    rootSnapshot.CoordinatorSeal.CertGeneration,
@@ -105,16 +105,16 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 			},
 		},
 		"audit": map[string]any{
-			"seal_generation":              snapshotStatus.ClosureAudit.SealGeneration,
-			"seal_digest":                  snapshotStatus.ClosureAudit.SealDigest,
-			"successor_present":            snapshotStatus.ClosureAudit.SuccessorPresent,
-			"successor_frontier_coverage":  diagnosticsCoordinatorCoverage(snapshotStatus.ClosureAudit.SuccessorCoverage),
-			"successor_lineage_satisfied":  snapshotStatus.ClosureAudit.SuccessorLineageSatisfied,
-			"successor_monotone_covered":   snapshotStatus.ClosureAudit.SuccessorMonotoneCovered(),
-			"successor_descriptor_covered": snapshotStatus.ClosureAudit.SuccessorDescriptorCovered(),
-			"sealed_generation_retired":    snapshotStatus.ClosureAudit.SealedGenerationRetired,
-			"closure_satisfied":            snapshotStatus.ClosureAudit.ClosureSatisfied(),
-			"closure_stage":                snapshotStatus.Closure.Stage.String(),
+			"seal_generation":              report.ClosureWitness.SealGeneration,
+			"seal_digest":                  report.ClosureWitness.SealDigest,
+			"successor_present":            report.ClosureWitness.SuccessorPresent,
+			"successor_frontier_coverage":  diagnosticsCoordinatorCoverage(report.ClosureWitness.SuccessorCoverage),
+			"successor_lineage_satisfied":  report.ClosureWitness.SuccessorLineageSatisfied,
+			"successor_monotone_covered":   report.ClosureWitness.SuccessorMonotoneCovered(),
+			"successor_descriptor_covered": report.ClosureWitness.SuccessorDescriptorCovered(),
+			"sealed_generation_retired":    report.ClosureWitness.SealedGenerationRetired,
+			"closure_satisfied":            report.ClosureWitness.ClosureSatisfied(),
+			"closure_stage":                report.Closure.Stage.String(),
 			"closure_recorded": map[string]any{
 				"holder_id":            rootSnapshot.CoordinatorClosure.HolderID,
 				"seal_generation":      rootSnapshot.CoordinatorClosure.SealGeneration,
@@ -122,7 +122,7 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 				"seal_digest":          rootSnapshot.CoordinatorClosure.SealDigest,
 			},
 		},
-		"closure_witness": diagnosticsClosureWitness(snapshotStatus.ClosureWitness),
+		"closure_witness": diagnosticsClosureWitness(report.ClosureWitness),
 	}
 }
 
