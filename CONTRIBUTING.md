@@ -6,7 +6,7 @@ Thanks for contributing. This file is the authoritative contribution guide for t
 
 - Repository: `github.com/feichai0017/NoKV`
 - Main branch: `main`
-- Go version: `1.26.x` (see `go.mod`)
+- Go version: `1.26.2`
 
 ## Development Setup
 

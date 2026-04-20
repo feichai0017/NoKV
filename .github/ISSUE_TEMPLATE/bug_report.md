@@ -7,6 +7,8 @@ assignees: ''
 
 ---
 
+> Security vulnerabilities should not be reported through a public bug issue. Please follow [`SECURITY.md`](../../SECURITY.md) instead.
+
 ## 🐛 Bug Description
 A clear and concise description of what the bug is.
 
