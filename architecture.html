@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-4496f612.js";
+            window.path_to_searchindex_js = "searchindex-36d46b39.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-7c224925.js"></script>
+        <script src="toc-6a4e4767.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -331,7 +331,7 @@ fmt.Println(string(entry.Value))
 <li>Writes enqueue into a commit queue inside <code>db.go</code> where requests are coalesced into batches before a commit worker drains them.</li>
 <li>The commit worker always writes the value log first (when needed), then applies WAL/LSM updates; <code>SyncWrites</code> adds a WAL fsync step.</li>
 <li>Batch sizing adapts to backlog through <code>WriteBatchMaxCount</code>, <code>WriteBatchMaxSize</code>, and <code>WriteBatchWait</code>.</li>
-<li>Backpressure is enforced in two places: LSM throttling toggles <code>db.blockWrites</code> when L0 backlog grows, and HotRing can reject hot keys via <code>WriteHotKeyLimit</code>.</li>
+<li>Backpressure is enforced in two places: LSM throttling toggles <code>db.blockWrites</code> when L0 backlog grows, and Thermos can reject hot keys via <code>WriteHotKeyLimit</code>.</li>
 </ul>
 <h3 id="27-ref-count-lifecycle-contracts"><a class="header" href="#27-ref-count-lifecycle-contracts">2.7 Ref-Count Lifecycle Contracts</a></h3>
 <p>NoKV uses fail-fast reference counting for internal pooled/owned objects. <code>DecrRef</code> underflow is treated as a lifecycle bug and panics.</p>

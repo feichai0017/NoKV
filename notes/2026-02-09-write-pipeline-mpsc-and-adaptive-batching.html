@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-4496f612.js";
+            window.path_to_searchindex_js = "../searchindex-36d46b39.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7c224925.js"></script>
+        <script src="../toc-6a4e4767.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -218,7 +218,7 @@ if backlog &gt; limitCount {
 </code></pre>
 <p><strong>设计价值</strong>：这利用了批处理的规模效应。压力越大，聚合度越高，单次磁盘 I/O 摊薄的成本就越低，从而在高压下实现吞吐量的“逆增长”。</p>
 <h3 id="22-现状"><a class="header" href="#22-现状">2.2 现状</a></h3>
-<p>当前实现不再基于 HotRing 放大写批次。批处理大小只由队列压力和显式批次限制决定。</p>
+<p>当前实现不再基于 Thermos 放大写批次。批处理大小只由队列压力和显式批次限制决定。</p>
 <h3 id="23-coalesce-等待机制"><a class="header" href="#23-coalesce-等待机制">2.3 Coalesce 等待机制</a></h3>
 <p>在队列瞬时为空时，Worker 不会立即触发提交，而是会短暂等待一个 <code>WriteBatchWait</code>（默认 200us）。这个微小的停顿是低延迟与高吞吐之间的微妙平衡点，它能让微量的突发流量共享一次 <code>fsync</code> 成本。</p>
 <hr>

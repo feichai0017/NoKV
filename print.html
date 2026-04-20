@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-4496f612.js";
+            window.path_to_searchindex_js = "searchindex-36d46b39.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-7c224925.js"></script>
+        <script src="toc-6a4e4767.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -260,7 +260,7 @@
 <tr><td>Range filter</td><td><a href="#range-filter">range_filter.md</a></td></tr>
 <tr><td>Block / row cache</td><td><a href="#cache--bloom-filters">cache.md</a></td></tr>
 <tr><td>VFS abstraction + FaultFS</td><td><a href="#vfs">vfs.md</a> · <a href="#file-abstractions">file.md</a></td></tr>
-<tr><td>Hot-key observer (HotRing)</td><td><a href="#hotring">hotring.md</a></td></tr>
+<tr><td>Hot-key observer (Thermos)</td><td><a href="#thermos">thermos.md</a></td></tr>
 <tr><td>Entry / error model</td><td><a href="#entry-lifecycle-encoding-and-field-semantics">entry.md</a> · <a href="#error-handling-guide">errors.md</a></td></tr>
 </tbody>
 </table>
@@ -643,7 +643,7 @@ fmt.Println(string(entry.Value))
 <li>Writes enqueue into a commit queue inside <code>db.go</code> where requests are coalesced into batches before a commit worker drains them.</li>
 <li>The commit worker always writes the value log first (when needed), then applies WAL/LSM updates; <code>SyncWrites</code> adds a WAL fsync step.</li>
 <li>Batch sizing adapts to backlog through <code>WriteBatchMaxCount</code>, <code>WriteBatchMaxSize</code>, and <code>WriteBatchWait</code>.</li>
-<li>Backpressure is enforced in two places: LSM throttling toggles <code>db.blockWrites</code> when L0 backlog grows, and HotRing can reject hot keys via <code>WriteHotKeyLimit</code>.</li>
+<li>Backpressure is enforced in two places: LSM throttling toggles <code>db.blockWrites</code> when L0 backlog grows, and Thermos can reject hot keys via <code>WriteHotKeyLimit</code>.</li>
 </ul>
 <h3 id="27-ref-count-lifecycle-contracts"><a class="header" href="#27-ref-count-lifecycle-contracts">2.7 Ref-Count Lifecycle Contracts</a></h3>
 <p>NoKV uses fail-fast reference counting for internal pooled/owned objects. <code>DecrRef</code> underflow is treated as a lifecycle bug and panics.</p>
@@ -2635,7 +2635,7 @@ read/write, read-only remap) shared by WAL/vlog/SST. Vlog currently uses
 <li>Files are named <code>%05d.vlog</code> and live under <code>workdir/vlog/bucket-XXX/</code> when <code>Options.ValueLogBucketCount &gt; 1</code>. <a href="../engine/vlog/manager.go"><code>Manager.populate</code></a> discovers existing segments at open.</li>
 <li><code>Manager</code> tracks the active file ID (<code>activeID</code>) and byte offset; <a href="../engine/vlog/manager.go"><code>Manager.Head</code></a> exposes these so the manifest can checkpoint them (<code>manifest.EditValueLogHead</code>).</li>
 <li>Files created after a crash but never linked in the manifest are removed during <a href="../vlog.go"><code>valueLog.reconcileManifest</code></a>.</li>
-<li>Production defaults keep ordinary hash bucketization enabled (<code>ValueLogBucketCount=16</code>). Bucket selection is plain hash routing; it no longer depends on HotRing-based hot/cold classification.</li>
+<li>Production defaults keep ordinary hash bucketization enabled (<code>ValueLogBucketCount=16</code>). Bucket selection is plain hash routing; it no longer depends on Thermos-based hot/cold classification.</li>
 </ul>
 <hr>
 <h2 id="3-record-format"><a class="header" href="#3-record-format">3. Record Format</a></h2>
@@ -3067,14 +3067,14 @@ Deeper levels rely on OS page cache + mmap readahead
 </code></pre>
 <p><code>Stats.Snapshot</code> converts these into hit rates. Monitor them alongside the block cache sizes to decide when to scale memory.</p>
 <hr>
-<h2 id="5-hotring-integration"><a class="header" href="#5-hotring-integration">5. HotRing Integration</a></h2>
-<p>HotRing is no longer part of cache warmup or read-path prefetch. Cache behavior is now independent of HotRing and driven only by:</p>
+<h2 id="5-thermos-integration"><a class="header" href="#5-thermos-integration">5. Thermos Integration</a></h2>
+<p>Thermos is no longer part of cache warmup or read-path prefetch. Cache behavior is now independent of Thermos and driven only by:</p>
 <ul>
 <li>iterator/table prefetch settings</li>
 <li>block/index cache budgets</li>
 <li>normal read traffic</li>
 </ul>
-<p>The only remaining HotRing integration is optional write throttling.</p>
+<p>The only remaining Thermos integration is optional write throttling.</p>
 <hr>
 <h2 id="6-interaction-with-value-log"><a class="header" href="#6-interaction-with-value-log">6. Interaction with Value Log</a></h2>
 <ul>
@@ -3289,17 +3289,17 @@ same pruning range.</p>
 <li><a href="../engine/lsm/lsm_bench_test.go"><code>engine/lsm/lsm_bench_test.go</code></a></li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="hotring"><a class="header" href="#hotring">HotRing</a></h1>
-<p><code>hotring</code> is NoKV’s optional internal hotspot detector. The package lives in <a href="../hotring"><code>hotring/</code></a> and is no longer part of the default read path, LSM compaction planning, or value-log bucket routing.</p>
+<h1 id="thermos"><a class="header" href="#thermos">Thermos</a></h1>
+<p><code>thermos</code> is NoKV’s optional internal hotspot detector. The package lives in <a href="../thermos"><code>thermos/</code></a> and is no longer part of the default read path, LSM compaction planning, or value-log bucket routing.</p>
 <h2 id="current-role"><a class="header" href="#current-role">Current Role</a></h2>
 <p>The production role is deliberately narrow:</p>
 <ul>
-<li>detect write-hot keys when <code>Options.HotRingEnabled</code> is enabled</li>
-<li>enforce <code>Options.WriteHotKeyLimit</code> via <code>HotRing.TouchAndClamp</code></li>
+<li>detect write-hot keys when <code>Options.ThermosEnabled</code> is enabled</li>
+<li>enforce <code>Options.WriteHotKeyLimit</code> via <code>Thermos.TouchAndClamp</code></li>
 <li>publish write-hot snapshots through <code>StatsSnapshot.Hot.WriteKeys</code> and <code>StatsSnapshot.Hot.WriteRing</code></li>
 </ul>
-<p>If <code>HotRingEnabled=false</code>, the DB runs without HotRing tracking on the hot path.</p>
-<h2 id="what-hotring-does-not-control-anymore"><a class="header" href="#what-hotring-does-not-control-anymore">What HotRing Does Not Control Anymore</a></h2>
+<p>If <code>ThermosEnabled=false</code>, the DB runs without Thermos tracking on the hot path.</p>
+<h2 id="what-thermos-does-not-control-anymore"><a class="header" href="#what-thermos-does-not-control-anymore">What Thermos Does Not Control Anymore</a></h2>
 <p>These integrations were intentionally removed from the default engine path:</p>
 <ul>
 <li>read-path hot tracking and asynchronous read prefetch</li>
@@ -3307,9 +3307,9 @@ same pruning range.</p>
 <li>value-log hot/cold bucket routing</li>
 <li>hot-write batch enlargement heuristics</li>
 </ul>
-<p>The default value-log configuration keeps ordinary hash bucketization enabled through <code>ValueLogBucketCount</code>, but bucket selection no longer depends on HotRing.</p>
+<p>The default value-log configuration keeps ordinary hash bucketization enabled through <code>ValueLogBucketCount</code>, but bucket selection no longer depends on Thermos.</p>
 <h2 id="data-structure"><a class="header" href="#data-structure">Data Structure</a></h2>
-<p>HotRing remains a concurrent in-memory frequency tracker with:</p>
+<p>Thermos remains a concurrent in-memory frequency tracker with:</p>
 <ul>
 <li>sharded hash buckets</li>
 <li>lock-free bucket lists for lookup/insert</li>
@@ -3324,21 +3324,21 @@ same pruning range.</p>
 <tr><th>Option</th><th>Meaning</th></tr>
 </thead>
 <tbody>
-<tr><td><code>HotRingEnabled</code></td><td>Master switch for write-hot tracking.</td></tr>
+<tr><td><code>ThermosEnabled</code></td><td>Master switch for write-hot tracking.</td></tr>
 <tr><td><code>WriteHotKeyLimit</code></td><td>Reject writes once a single key exceeds the configured threshold.</td></tr>
-<tr><td><code>HotRingBits</code></td><td>Bucket count (<code>2^bits</code>) for the tracker.</td></tr>
-<tr><td><code>HotRingTopK</code></td><td>Number of hot keys exported in stats.</td></tr>
-<tr><td><code>HotRingRotationInterval</code></td><td>Optional dual-ring rotation.</td></tr>
-<tr><td><code>HotRingWindowSlots</code> / <code>HotRingWindowSlotDuration</code></td><td>Optional sliding-window tracking.</td></tr>
-<tr><td><code>HotRingNodeCap</code> / <code>HotRingNodeSampleBits</code></td><td>Bound in-memory growth.</td></tr>
+<tr><td><code>ThermosBits</code></td><td>Bucket count (<code>2^bits</code>) for the tracker.</td></tr>
+<tr><td><code>ThermosTopK</code></td><td>Number of hot keys exported in stats.</td></tr>
+<tr><td><code>ThermosRotationInterval</code></td><td>Optional dual-ring rotation.</td></tr>
+<tr><td><code>ThermosWindowSlots</code> / <code>ThermosWindowSlotDuration</code></td><td>Optional sliding-window tracking.</td></tr>
+<tr><td><code>ThermosNodeCap</code> / <code>ThermosNodeSampleBits</code></td><td>Bound in-memory growth.</td></tr>
 </tbody>
 </table>
 </div>
 <h2 id="write-throttling"><a class="header" href="#write-throttling">Write Throttling</a></h2>
-<p>When both <code>HotRingEnabled</code> and <code>WriteHotKeyLimit &gt; 0</code> are set, NoKV records write frequency by <code>CF + UserKey</code> and returns <code>utils.ErrHotKeyWriteThrottle</code> once the limit is reached.</p>
+<p>When both <code>ThermosEnabled</code> and <code>WriteHotKeyLimit &gt; 0</code> are set, NoKV records write frequency by <code>CF + UserKey</code> and returns <code>utils.ErrHotKeyWriteThrottle</code> once the limit is reached.</p>
 <p>This path exists to protect the engine from pathological skew. It is intentionally independent from cache warming, compaction, and value-log routing.</p>
 <h2 id="stats"><a class="header" href="#stats">Stats</a></h2>
-<p>HotRing contributes only write-side observability:</p>
+<p>Thermos contributes only write-side observability:</p>
 <ul>
 <li><code>StatsSnapshot.Hot.WriteKeys</code></li>
 <li><code>StatsSnapshot.Hot.WriteRing</code></li>
@@ -3346,14 +3346,14 @@ same pruning range.</p>
 </ul>
 <p>The CLI surfaces the same data under <code>nokv stats</code>.</p>
 <h2 id="design-position"><a class="header" href="#design-position">Design Position</a></h2>
-<p>HotRing should be understood as:</p>
+<p>Thermos should be understood as:</p>
 <ul>
 <li>an optional internal detector</li>
 <li>an optional write throttling tool</li>
 <li>not a required performance feature</li>
 <li>not a default read-path or value-log optimization</li>
 </ul>
-<p>That narrower scope keeps the core engine path simpler and makes HotRing easier to reason about.</p>
+<p>That narrower scope keeps the core engine path simpler and makes Thermos easier to reason about.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="entry-lifecycle-encoding-and-field-semantics"><a class="header" href="#entry-lifecycle-encoding-and-field-semantics">Entry Lifecycle, Encoding, and Field Semantics</a></h1>
 <p><code>kv.Entry</code> is the core record container that flows through user APIs, commit batching,
@@ -5622,8 +5622,8 @@ calling <code>NoKV.Open(opt)</code>, which now returns <code>(*DB, error)</code>
 <li><strong>Hot key throttling</strong>
 <ul>
 <li><code>WriteHotKeyLimit</code></li>
-<li><code>HotRingEnabled</code>, <code>HotRingTopK</code>, decay/window settings</li>
-<li><code>HotRingNodeCap</code>, <code>HotRingNodeSampleBits</code>, <code>HotRingRotationInterval</code></li>
+<li><code>ThermosEnabled</code>, <code>ThermosTopK</code>, decay/window settings</li>
+<li><code>ThermosNodeCap</code>, <code>ThermosNodeSampleBits</code>, <code>ThermosRotationInterval</code></li>
 </ul>
 </li>
 <li><strong>WAL watchdog</strong>
@@ -6603,7 +6603,7 @@ nokv-config regions --config raft_config.json --format json | jq '.[] | {id:.id,
         LSM["lsm.* metrics"]
         WAL["wal metrics"]
         VLOG["value log metrics"]
-        HOT["hotring"]
+        HOT["thermos"]
         REGION["region metrics"]
         TRANSPORT["grpc transport metrics"]
         REDIS["redis gateway metrics"]
@@ -7175,9 +7175,9 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 </ol>
 <p>理解这些权衡，是掌握存储引擎底层性能优化的关键。</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="2026-01-16-hotring-设计说明"><a class="header" href="#2026-01-16-hotring-设计说明">2026-01-16 HotRing 设计说明</a></h1>
-<p>本文档记录 <code>hotring</code> 的原始设计思路。需要注意：当前生产实现已经收口，HotRing 只保留为可选的内部热点检测器和写热点限流工具；文中关于读预取、compaction hint 和 value-log 热冷路由的设想不再代表当前默认实现。</p>
-<p>当前实现已并入 NoKV 仓库，位于 <code>hotring/</code> 包。</p>
+<h1 id="2026-01-16-thermos-设计说明"><a class="header" href="#2026-01-16-thermos-设计说明">2026-01-16 Thermos 设计说明</a></h1>
+<p>本文档记录 <code>thermos</code> 的原始设计思路。需要注意：当前生产实现已经收口，Thermos 只保留为可选的内部热点检测器和写热点限流工具；文中关于读预取、compaction hint 和 value-log 热冷路由的设想不再代表当前默认实现。</p>
+<p>当前实现已并入 NoKV 仓库，位于 <code>thermos/</code> 包。</p>
 <hr>
 <h2 id="1-设计灵感取其神而弃其形"><a class="header" href="#1-设计灵感取其神而弃其形">1. 设计灵感：取其神而弃其形</a></h2>
 <p><strong>来源</strong>：<a href="https://www.usenix.org/conference/fast20/presentation/chen-jiqiang">HotRing: A Hotspot-Aware In-Memory Key-Value Store (FAST ’20)</a></p>
@@ -7196,12 +7196,12 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 </ul>
 <hr>
 <h2 id="2-核心架构反馈驱动设计-feedback-driven"><a class="header" href="#2-核心架构反馈驱动设计-feedback-driven">2. 核心架构：反馈驱动设计 (Feedback-Driven)</a></h2>
-<p>NoKV 的 HotRing 不仅仅是一个统计工具，它是整个系统“自适应优化”的大脑。</p>
+<p>NoKV 的 Thermos 不仅仅是一个统计工具，它是整个系统“自适应优化”的大脑。</p>
 <h3 id="21-架构全景图"><a class="header" href="#21-架构全景图">2.1 架构全景图</a></h3>
 <pre class="mermaid">graph TD
     Client[Client Request] --&gt; DB[DB Layer]
     
-    subgraph "HotRing Subsystem (The Brain)"
+    subgraph "Thermos Subsystem (The Brain)"
         Tracker[Hot Key Tracker]
         Window[Sliding Window]
         Decay[Decay Loop]
@@ -7230,11 +7230,11 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <li><strong>写路径</strong>：只有当启用了限流（<code>WriteHotKeyLimit</code>）或突发检测时，才会调用 <code>TouchAndClamp</code>。</li>
 </ul>
 </li>
-<li><strong>计算 (Compute)</strong>：HotRing 内部利用<strong>滑动窗口</strong>算法计算实时 QPS。</li>
+<li><strong>计算 (Compute)</strong>：Thermos 内部利用<strong>滑动窗口</strong>算法计算实时 QPS。</li>
 <li><strong>反馈 (Feedback)</strong>：
 <ul>
-<li><strong>Compaction 评分</strong>：<code>lsm/picker.go</code> 在选择压缩层级时，会参考 <code>HotRing.TopN</code>。如果某一层包含大量热点 Key，会优先压缩该层（Hot Overlap Score），减少热点数据的读放大。</li>
-<li><strong>缓存预取 (Prefetch)</strong>：DB 层会根据 TopN 结果触发预取逻辑。虽然 HotRing 不直接控制 Cache，但它提供的热点名单是预取策略的重要输入。</li>
+<li><strong>Compaction 评分</strong>：<code>lsm/picker.go</code> 在选择压缩层级时，会参考 <code>Thermos.TopN</code>。如果某一层包含大量热点 Key，会优先压缩该层（Hot Overlap Score），减少热点数据的读放大。</li>
+<li><strong>缓存预取 (Prefetch)</strong>：DB 层会根据 TopN 结果触发预取逻辑。虽然 Thermos 不直接控制 Cache，但它提供的热点名单是预取策略的重要输入。</li>
 <li><strong>写入限流</strong>：对于写频率过高的 Key，<code>TouchAndClamp</code> 会触发限流保护。</li>
 </ul>
 </li>
@@ -7242,7 +7242,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <hr>
 <h2 id="3-实现细节深度解析"><a class="header" href="#3-实现细节深度解析">3. 实现细节深度解析</a></h2>
 <h3 id="31-并发控制lock-free-与-spin-lock"><a class="header" href="#31-并发控制lock-free-与-spin-lock">3.1 并发控制：Lock-Free 与 Spin-Lock</a></h3>
-<p>为了支撑高并发，HotRing 采用了混合并发策略：</p>
+<p>为了支撑高并发，Thermos 采用了混合并发策略：</p>
 <ul>
 <li><strong>主链表 (Buckets &amp; List)</strong>：采用 <strong>Lock-Free</strong> 的 CAS 操作进行节点插入。
 <ul>
@@ -7278,7 +7278,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th style="text-align: left">对比点</th><th style="text-align: left">论文 / 经典算法</th><th style="text-align: left">NoKV HotRing</th></tr>
+<tr><th style="text-align: left">对比点</th><th style="text-align: left">论文 / 经典算法</th><th style="text-align: left">NoKV Thermos</th></tr>
 </thead>
 <tbody>
 <tr><td style="text-align: left">目标</td><td style="text-align: left">作为索引或严格频率估计</td><td style="text-align: left"><strong>作为系统级热点反馈信号</strong></td></tr>
@@ -7289,7 +7289,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 </tbody>
 </table>
 </div>
-<p>结论：NoKV HotRing 是“<strong>工程可用</strong>”优先的实现，而不是“<strong>数学最优</strong>”优先。</p>
+<p>结论：NoKV Thermos 是“<strong>工程可用</strong>”优先的实现，而不是“<strong>数学最优</strong>”优先。</p>
 <hr>
 <h2 id="4-实际应用场景"><a class="header" href="#4-实际应用场景">4. 实际应用场景</a></h2>
 <h3 id="41-可观测性-observability"><a class="header" href="#41-可观测性-observability">4.1 可观测性 (Observability)</a></h3>
@@ -7304,11 +7304,11 @@ Hot Keys:
 <h3 id="42-缓存与性能-performance"><a class="header" href="#42-缓存与性能-performance">4.2 缓存与性能 (Performance)</a></h3>
 <ul>
 <li><strong>VIP 缓存区 (Hot Tier)</strong>：LSM Cache 内部维护了一个小型的 <code>Clock-Pro</code> 缓存（Hot Tier）。虽然它不是绝对的“免死金牌”（仍可能被更热的数据挤出），但它为热点 Block 提供了比普通 LRU 更强的保护。</li>
-<li><strong>热点压缩优先</strong>：通过 HotRing 的反馈，系统能主动将热点数据所在的重叠 SSTable 进行合并，将热点数据的查询路径压缩到最短。</li>
+<li><strong>热点压缩优先</strong>：通过 Thermos 的反馈，系统能主动将热点数据所在的重叠 SSTable 进行合并，将热点数据的查询路径压缩到最短。</li>
 </ul>
 <hr>
 <h2 id="5-未来展望"><a class="header" href="#5-未来展望">5. 未来展望</a></h2>
-<p>基于目前的 HotRing 基础，NoKV 未来可以实现更高级的特性：</p>
+<p>基于目前的 Thermos 基础，NoKV 未来可以实现更高级的特性：</p>
 <ol>
 <li><strong>写吸收 (Write Absorption)</strong>：
 <ul>
@@ -7322,7 +7322,7 @@ Hot Keys:
 </li>
 </ol>
 <h2 id="6-总结"><a class="header" href="#6-总结">6. 总结</a></h2>
-<p>NoKV 的 <code>hotring</code> 是一个 <strong>“学术灵感 + 工程务实”</strong> 的典范。它没有追求理论上完美的环形索引结构，而是抓住了“热点感知”这一核心价值，用混合并发结构（Lock-Free + SpinLock）解决了工程中最头疼的<strong>监控盲区</strong>问题，并成功反哺了 Compaction 调度。</p>
+<p>NoKV 的 <code>thermos</code> 是一个 <strong>“学术灵感 + 工程务实”</strong> 的典范。它没有追求理论上完美的环形索引结构，而是抓住了“热点感知”这一核心价值，用混合并发结构（Lock-Free + SpinLock）解决了工程中最头疼的<strong>监控盲区</strong>问题，并成功反哺了 Compaction 调度。</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="2026-02-01-compaction-与-ingest-buffer-设计"><a class="header" href="#2026-02-01-compaction-与-ingest-buffer-设计">2026-02-01 Compaction 与 Ingest Buffer 设计</a></h1>
 <p>本文档深入解析 NoKV 的 <strong>Compaction（压缩）</strong> 机制与 <strong>Ingest Buffer（导入缓冲）</strong> 的协同设计。这是 NoKV 解决 LSM Tree 经典的“写停顿（Write Stall）”问题的核心武器，也是体现其工业级稳定性的关键设计。</p>
@@ -7958,7 +7958,7 @@ if backlog &gt; limitCount {
 </code></pre>
 <p><strong>设计价值</strong>：这利用了批处理的规模效应。压力越大，聚合度越高，单次磁盘 I/O 摊薄的成本就越低，从而在高压下实现吞吐量的“逆增长”。</p>
 <h3 id="22-现状"><a class="header" href="#22-现状">2.2 现状</a></h3>
-<p>当前实现不再基于 HotRing 放大写批次。批处理大小只由队列压力和显式批次限制决定。</p>
+<p>当前实现不再基于 Thermos 放大写批次。批处理大小只由队列压力和显式批次限制决定。</p>
 <h3 id="23-coalesce-等待机制"><a class="header" href="#23-coalesce-等待机制">2.3 Coalesce 等待机制</a></h3>
 <p>在队列瞬时为空时，Worker 不会立即触发提交，而是会短暂等待一个 <code>WriteBatchWait</code>（默认 200us）。这个微小的停顿是低延迟与高吞吐之间的微妙平衡点，它能让微量的突发流量共享一次 <code>fsync</code> 成本。</p>
 <hr>

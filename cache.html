@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-4496f612.js";
+            window.path_to_searchindex_js = "searchindex-36d46b39.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-7c224925.js"></script>
+        <script src="toc-6a4e4767.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -239,14 +239,14 @@ Deeper levels rely on OS page cache + mmap readahead
 </code></pre>
 <p><code>Stats.Snapshot</code> converts these into hit rates. Monitor them alongside the block cache sizes to decide when to scale memory.</p>
 <hr>
-<h2 id="5-hotring-integration"><a class="header" href="#5-hotring-integration">5. HotRing Integration</a></h2>
-<p>HotRing is no longer part of cache warmup or read-path prefetch. Cache behavior is now independent of HotRing and driven only by:</p>
+<h2 id="5-thermos-integration"><a class="header" href="#5-thermos-integration">5. Thermos Integration</a></h2>
+<p>Thermos is no longer part of cache warmup or read-path prefetch. Cache behavior is now independent of Thermos and driven only by:</p>
 <ul>
 <li>iterator/table prefetch settings</li>
 <li>block/index cache budgets</li>
 <li>normal read traffic</li>
 </ul>
-<p>The only remaining HotRing integration is optional write throttling.</p>
+<p>The only remaining Thermos integration is optional write throttling.</p>
 <hr>
 <h2 id="6-interaction-with-value-log"><a class="header" href="#6-interaction-with-value-log">6. Interaction with Value Log</a></h2>
 <ul>
