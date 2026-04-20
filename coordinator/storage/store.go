@@ -15,11 +15,10 @@ type RootStorage interface {
 	// SaveAllocatorState persists allocator fences. A fence may be ahead of the
 	// latest value served when Coordinator uses a preallocated window.
 	SaveAllocatorState(idCurrent, tsCurrent uint64) error
-	// CampaignCoordinatorLease tries to install or renew the control-plane owner
-	// lease for one coordinator instance.
-	CampaignCoordinatorLease(holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error)
-	// ReleaseCoordinatorLease explicitly drops the current holder lease.
-	ReleaseCoordinatorLease(holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error)
+	// ApplyCoordinatorLease applies one rooted coordinator lease command.
+	ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
+	// ApplyCoordinatorClosure applies one rooted coordinator closure command.
+	ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
 	// Refresh reloads the reconstructed rooted snapshot from the underlying root.
 	Refresh() error
 	// IsLeader reports whether the current rooted storage instance is writable.

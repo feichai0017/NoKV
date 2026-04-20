@@ -32,7 +32,11 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 			snapshot.State.TSOFence = event.AllocatorFence.Minimum
 		}
 	case rootevent.KindCoordinatorLease:
-		applyCoordinatorLeaseToState(&snapshot.State, event)
+		applyCoordinatorLeaseToState(&snapshot.State, cursor, event)
+	case rootevent.KindCoordinatorSeal:
+		applyCoordinatorSealToState(&snapshot.State, cursor, event)
+	case rootevent.KindCoordinatorClosure:
+		applyCoordinatorClosureToState(&snapshot.State, cursor, event)
 	case rootevent.KindRegionBootstrap, rootevent.KindRegionDescriptorPublished:
 		snapshot.State.ClusterEpoch++
 		desc := event.RegionDescriptor.Descriptor.Clone()

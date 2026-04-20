@@ -3,6 +3,7 @@ package state_test
 import (
 	"testing"
 
+	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -28,17 +29,367 @@ func TestApplyEventToStateAdvancesEpochsAndCursor(t *testing.T) {
 
 func TestApplyCoordinatorLeaseToState(t *testing.T) {
 	var st rootstate.State
-	event := rootevent.CoordinatorLeaseGranted("c1", 1_000, 10, 20)
+	event := rootevent.CoordinatorLeaseGranted("c1", 1_000, 1, rootstate.CoordinatorDutyMaskDefault, "pred", controlplane.Frontiers(10, 20, 0))
 
 	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 1}, event)
 
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, st.LastCommitted)
 	require.Equal(t, "c1", st.CoordinatorLease.HolderID)
 	require.Equal(t, int64(1_000), st.CoordinatorLease.ExpiresUnixNano)
+	require.Equal(t, uint64(1), st.CoordinatorLease.CertGeneration)
+	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, st.CoordinatorLease.IssuedCursor)
+	require.Equal(t, uint32(rootstate.CoordinatorDutyMaskDefault), st.CoordinatorLease.DutyMask)
+	require.Equal(t, "pred", st.CoordinatorLease.PredecessorDigest)
 	require.Equal(t, uint64(10), st.IDFence)
 	require.Equal(t, uint64(20), st.TSOFence)
 	require.True(t, st.CoordinatorLease.ActiveAt(999))
 	require.False(t, st.CoordinatorLease.ActiveAt(1_000))
+}
+
+func TestNextCoordinatorLeaseGeneration(t *testing.T) {
+	current := rootstate.CoordinatorLease{
+		HolderID:        "c1",
+		ExpiresUnixNano: 1_000,
+		CertGeneration:  7,
+	}
+	seal := rootstate.CoordinatorSeal{HolderID: "c1", CertGeneration: 7}
+
+	require.Equal(t, uint64(1), rootstate.NextCoordinatorLeaseGeneration(rootstate.CoordinatorLease{}, rootstate.CoordinatorSeal{}, "c1", 100))
+	require.Equal(t, uint64(7), rootstate.NextCoordinatorLeaseGeneration(current, rootstate.CoordinatorSeal{}, "c1", 500))
+	require.Equal(t, uint64(8), rootstate.NextCoordinatorLeaseGeneration(current, rootstate.CoordinatorSeal{}, "c2", 500))
+	require.Equal(t, uint64(8), rootstate.NextCoordinatorLeaseGeneration(current, rootstate.CoordinatorSeal{}, "c1", 1_000))
+	require.Equal(t, uint64(8), rootstate.NextCoordinatorLeaseGeneration(current, seal, "c1", 500))
+}
+
+func TestCoordinatorLeaseContinuableAndSealedGeneration(t *testing.T) {
+	current := rootstate.CoordinatorLease{
+		HolderID:        "c1",
+		ExpiresUnixNano: 1_000,
+		CertGeneration:  7,
+	}
+	seal := rootstate.CoordinatorSeal{HolderID: "c1", CertGeneration: 7}
+
+	require.False(t, rootstate.CoordinatorGenerationSealed(current, rootstate.CoordinatorSeal{}))
+	require.True(t, rootstate.CoordinatorGenerationSealed(current, seal))
+	require.True(t, rootstate.CoordinatorLeaseContinuable(current, rootstate.CoordinatorSeal{}, "c1", 500))
+	require.False(t, rootstate.CoordinatorLeaseContinuable(current, seal, "c1", 500))
+}
+
+func TestValidateCoordinatorLeaseSuccessorCoverageFrontiers(t *testing.T) {
+	current := rootstate.CoordinatorLease{
+		HolderID:        "c1",
+		ExpiresUnixNano: 1_000,
+		CertGeneration:  7,
+	}
+	seal := rootstate.CoordinatorSeal{
+		HolderID:       "c1",
+		CertGeneration: 7,
+		DutyMask:       rootstate.CoordinatorDutyMaskDefault,
+		Frontiers:      controlplane.Frontiers(20, 40, 60),
+	}
+
+	require.NoError(t, rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current, rootstate.CoordinatorSeal{}, rootstate.CoordinatorDutyFrontiers{}))
+	require.ErrorIs(t, rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current, seal, controlplane.Frontiers(19, 40, 60)), rootstate.ErrCoordinatorLeaseCoverage)
+	require.ErrorIs(t, rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current, seal, controlplane.Frontiers(20, 39, 60)), rootstate.ErrCoordinatorLeaseCoverage)
+	require.ErrorIs(t, rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current, seal, controlplane.Frontiers(20, 40, 59)), rootstate.ErrCoordinatorLeaseCoverage)
+	require.NoError(t, rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current, seal, controlplane.Frontiers(20, 40, 60)))
+	require.NoError(t, rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(current, seal, controlplane.Frontiers(25, 45, 65)))
+
+	coverage := rootstate.EvaluateCoordinatorLeaseSuccessorCoverage(current, seal, controlplane.Frontiers(25, 45, 65))
+	require.Len(t, coverage.Checks, 3)
+	require.True(t, coverage.Covered())
+	require.Equal(t, "alloc_id", coverage.Checks[0].DutyName)
+	require.Equal(t, uint64(20), coverage.Checks[0].RequiredFrontier)
+	require.Equal(t, uint64(25), coverage.Checks[0].ActualFrontier)
+
+	maskedSeal := seal
+	maskedSeal.DutyMask = rootstate.CoordinatorDutyAllocID | rootstate.CoordinatorDutyTSO
+	maskedCoverage := rootstate.EvaluateCoordinatorLeaseSuccessorCoverage(current, maskedSeal, controlplane.Frontiers(20, 40, 1))
+	require.Len(t, maskedCoverage.Checks, 2)
+	require.True(t, maskedCoverage.CoveredDuty(rootstate.CoordinatorDutyGetRegionByKey))
+}
+
+func TestValidateCoordinatorLeaseCampaignLineage(t *testing.T) {
+	current := rootstate.CoordinatorLease{
+		HolderID:          "c1",
+		ExpiresUnixNano:   1_000,
+		CertGeneration:    7,
+		PredecessorDigest: "prev",
+	}
+	seal := rootstate.CoordinatorSeal{
+		HolderID:       "c1",
+		CertGeneration: 7,
+		DutyMask:       rootstate.CoordinatorDutyMaskDefault,
+		Frontiers:      controlplane.Frontiers(20, 40, 60),
+		SealedAtCursor: rootstate.Cursor{Term: 1, Index: 9},
+	}
+
+	require.NoError(t, rootstate.ValidateCoordinatorLeaseCampaign(current, rootstate.CoordinatorSeal{}, "c1", "prev", 1_100, 500))
+	require.ErrorIs(t, rootstate.ValidateCoordinatorLeaseCampaign(current, rootstate.CoordinatorSeal{}, "c1", "", 1_100, 500), rootstate.ErrCoordinatorLeaseLineage)
+
+	expected := rootstate.CoordinatorSealDigest(seal)
+	require.NoError(t, rootstate.ValidateCoordinatorLeaseCampaign(current, seal, "c1", expected, 1_100, 500))
+	require.ErrorIs(t, rootstate.ValidateCoordinatorLeaseCampaign(current, seal, "c1", "", 1_100, 500), rootstate.ErrCoordinatorLeaseLineage)
+}
+
+func TestProtocolObjectProjections(t *testing.T) {
+	lease := rootstate.CoordinatorLease{
+		HolderID:          "c1",
+		ExpiresUnixNano:   2_000,
+		CertGeneration:    8,
+		IssuedCursor:      rootstate.Cursor{Term: 2, Index: 9},
+		DutyMask:          rootstate.CoordinatorDutyMaskDefault,
+		PredecessorDigest: "seal-digest",
+	}
+	handoff := controlplane.HandoffRecord(lease, controlplane.Frontiers(30, 50, 65))
+	require.Equal(t, "c1", handoff.HolderID)
+	require.Equal(t, uint64(8), handoff.CertGeneration)
+	require.Equal(t, uint64(30), handoff.Frontiers.Frontier(rootstate.CoordinatorDutyAllocID))
+	require.Equal(t, uint64(50), handoff.Frontiers.Frontier(rootstate.CoordinatorDutyTSO))
+	require.Equal(t, uint64(65), handoff.Frontiers.Frontier(rootstate.CoordinatorDutyGetRegionByKey))
+
+	witness := rootstate.NewContinuationWitness(rootstate.CoordinatorDutyTSO, 8, 51)
+	require.Equal(t, rootstate.CoordinatorDutyTSO, witness.DutyMask)
+	require.Equal(t, "tso", witness.DutyName)
+	require.Equal(t, uint64(8), witness.CertGeneration)
+	require.Equal(t, uint64(51), witness.ConsumedFrontier)
+
+	seal := rootstate.CoordinatorSeal{
+		HolderID:       "c1",
+		CertGeneration: 7,
+		DutyMask:       rootstate.CoordinatorDutyMaskDefault,
+		Frontiers:      controlplane.Frontiers(20, 40, 60),
+	}
+	required := rootstate.CoordinatorSealRequiredFrontiers(seal)
+	require.Equal(t, uint64(20), required.Frontier(rootstate.CoordinatorDutyAllocID))
+	require.Equal(t, uint64(40), required.Frontier(rootstate.CoordinatorDutyTSO))
+	require.Equal(t, uint64(60), required.Frontier(rootstate.CoordinatorDutyGetRegionByKey))
+}
+
+func TestEvaluateClosureAudit(t *testing.T) {
+	current := rootstate.CoordinatorLease{
+		HolderID:          "c1",
+		ExpiresUnixNano:   2_000,
+		CertGeneration:    8,
+		PredecessorDigest: "seal-digest",
+	}
+	seal := rootstate.CoordinatorSeal{
+		HolderID:       "c1",
+		CertGeneration: 7,
+		DutyMask:       rootstate.CoordinatorDutyMaskDefault,
+		Frontiers:      controlplane.Frontiers(20, 40, 60),
+		SealedAtCursor: rootstate.Cursor{Term: 1, Index: 9},
+	}
+	expectedDigest := rootstate.CoordinatorSealDigest(seal)
+	current.PredecessorDigest = expectedDigest
+
+	audit := controlplane.EvaluateClosureAudit(current, controlplane.Frontiers(30, 50, 65), seal, 1_000)
+	require.NotZero(t, audit.SealGeneration)
+	require.Equal(t, uint64(7), audit.SealGeneration)
+	require.Equal(t, expectedDigest, audit.SealDigest)
+	require.True(t, audit.SuccessorPresent)
+	require.Len(t, audit.SuccessorCoverage.Checks, 3)
+	require.True(t, audit.SuccessorCoverage.Covered())
+	require.True(t, audit.SuccessorLineageSatisfied)
+	require.True(t, audit.SuccessorMonotoneCovered())
+	require.True(t, audit.SuccessorDescriptorCovered())
+	require.True(t, audit.SealedGenerationRetired)
+	require.True(t, audit.ClosureSatisfied())
+	require.False(t, audit.ReplyGenerationLegal(7))
+	require.True(t, audit.ReplyGenerationLegal(8))
+
+	currentSameGen := rootstate.CoordinatorLease{
+		HolderID:        "c1",
+		ExpiresUnixNano: 2_000,
+		CertGeneration:  7,
+	}
+	audit = controlplane.EvaluateClosureAudit(currentSameGen, controlplane.Frontiers(20, 40, 60), seal, 1_000)
+	require.False(t, audit.SuccessorPresent)
+	require.False(t, audit.ClosureSatisfied())
+	require.False(t, audit.ReplyGenerationLegal(7))
+}
+
+func TestEvaluateClosureWitness(t *testing.T) {
+	current := rootstate.CoordinatorLease{
+		HolderID:          "c1",
+		ExpiresUnixNano:   2_000,
+		CertGeneration:    8,
+		PredecessorDigest: "seal-digest",
+	}
+	seal := rootstate.CoordinatorSeal{
+		HolderID:       "c1",
+		CertGeneration: 7,
+		DutyMask:       rootstate.CoordinatorDutyMaskDefault,
+		Frontiers:      controlplane.Frontiers(20, 40, 60),
+	}
+	sealDigest := rootstate.CoordinatorSealDigest(seal)
+	current.PredecessorDigest = sealDigest
+	closure := rootstate.CoordinatorClosure{
+		HolderID:            "c1",
+		SealGeneration:      7,
+		SuccessorGeneration: 8,
+		SealDigest:          sealDigest,
+		Stage:               rootstate.CoordinatorClosureStageReattached,
+	}
+
+	witness := controlplane.EvaluateClosureWitness(current, controlplane.Frontiers(30, 50, 65), seal, closure, "c1", 1_000)
+	require.Equal(t, rootstate.CoordinatorClosureStageReattached, witness.Stage)
+	require.True(t, witness.SuccessorCoverage.Covered())
+	require.True(t, witness.SuccessorCoverage.CoveredDutyMask(rootstate.CoordinatorDutyAllocID|rootstate.CoordinatorDutyTSO))
+	require.True(t, witness.SuccessorCoverage.CoveredDutyMask(rootstate.CoordinatorDutyGetRegionByKey))
+	require.True(t, witness.ClosureSatisfied())
+}
+
+func TestApplyCoordinatorClosureConfirmedToState(t *testing.T) {
+	var st rootstate.State
+	event := rootevent.CoordinatorClosureConfirmed("c1", 7, 8, "seal-digest")
+
+	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 2, Index: 9}, event)
+
+	require.Equal(t, rootstate.Cursor{Term: 2, Index: 9}, st.LastCommitted)
+	require.Equal(t, "c1", st.CoordinatorClosure.HolderID)
+	require.Equal(t, uint64(7), st.CoordinatorClosure.SealGeneration)
+	require.Equal(t, uint64(8), st.CoordinatorClosure.SuccessorGeneration)
+	require.Equal(t, "seal-digest", st.CoordinatorClosure.SealDigest)
+	require.Equal(t, rootstate.CoordinatorClosureStageConfirmed, st.CoordinatorClosure.Stage)
+	require.Equal(t, rootstate.Cursor{Term: 2, Index: 9}, st.CoordinatorClosure.ConfirmedAtCursor)
+}
+
+func TestValidateClosureTransitions(t *testing.T) {
+	current := rootstate.CoordinatorLease{
+		HolderID:          "c1",
+		ExpiresUnixNano:   2_000,
+		CertGeneration:    8,
+		PredecessorDigest: "seal-digest",
+	}
+	confirmed := rootstate.CoordinatorClosure{
+		HolderID:            "c1",
+		SealGeneration:      7,
+		SuccessorGeneration: 8,
+		SealDigest:          "seal-digest",
+		Stage:               rootstate.CoordinatorClosureStageConfirmed,
+	}
+	closed := confirmed
+	closed.Stage = rootstate.CoordinatorClosureStageClosed
+
+	require.NoError(t, controlplane.ValidateClosureClose(current, confirmed, "c1", 1_000))
+	require.ErrorIs(t, controlplane.ValidateClosureClose(current, rootstate.CoordinatorClosure{}, "c1", 1_000), rootstate.ErrCoordinatorLeaseClose)
+	require.NoError(t, controlplane.ValidateClosureReattach(current, closed, "c1", 1_000))
+	require.ErrorIs(t, controlplane.ValidateClosureReattach(current, rootstate.CoordinatorClosure{}, "c1", 1_000), rootstate.ErrCoordinatorLeaseReattach)
+	require.ErrorIs(t, controlplane.ValidateClosureReattach(current, confirmed, "c1", 1_000), rootstate.ErrCoordinatorLeaseReattach)
+	require.ErrorIs(t, controlplane.ValidateClosureReattach(rootstate.CoordinatorLease{
+		HolderID:          "c1",
+		ExpiresUnixNano:   2_000,
+		CertGeneration:    8,
+		PredecessorDigest: "other-digest",
+	}, closed, "c1", 1_000), rootstate.ErrCoordinatorLeaseReattach)
+	require.ErrorIs(t, controlplane.ValidateClosureReattach(current, rootstate.CoordinatorClosure{
+		HolderID:            "c1",
+		SealGeneration:      8,
+		SuccessorGeneration: 8,
+		SealDigest:          "seal-digest",
+		Stage:               rootstate.CoordinatorClosureStageClosed,
+	}, "c1", 1_000), rootstate.ErrCoordinatorLeaseReattach)
+	require.ErrorIs(t, controlplane.ValidateClosureReattach(current, closed, "c2", 1_000), rootstate.ErrCoordinatorLeaseOwner)
+	require.ErrorIs(t, controlplane.ValidateClosureReattach(rootstate.CoordinatorLease{
+		HolderID:        "c1",
+		ExpiresUnixNano: 1_000,
+		CertGeneration:  8,
+	}, closed, "c1", 1_000), rootstate.ErrInvalidCoordinatorLease)
+}
+
+func TestEvaluateClosureStatus(t *testing.T) {
+	current := rootstate.CoordinatorLease{
+		HolderID:          "c1",
+		ExpiresUnixNano:   2_000,
+		CertGeneration:    8,
+		PredecessorDigest: "seal-digest",
+	}
+	reattached := rootstate.CoordinatorClosure{
+		HolderID:            "c1",
+		SealGeneration:      7,
+		SuccessorGeneration: 8,
+		SealDigest:          "seal-digest",
+		Stage:               rootstate.CoordinatorClosureStageReattached,
+	}
+
+	status := controlplane.EvaluateClosure(current, reattached, "c1", 1_000)
+	require.Equal(t, rootstate.CoordinatorClosureStageReattached, status.Stage)
+
+	closed := reattached
+	closed.Stage = rootstate.CoordinatorClosureStageClosed
+	status = controlplane.EvaluateClosure(current, closed, "c1", 1_000)
+	require.Equal(t, rootstate.CoordinatorClosureStageClosed, status.Stage)
+}
+
+func TestEvaluateCoordinatorClosureStage(t *testing.T) {
+	current := rootstate.CoordinatorLease{
+		HolderID:          "c1",
+		ExpiresUnixNano:   2_000,
+		CertGeneration:    8,
+		PredecessorDigest: "seal-digest",
+	}
+	confirmed := rootstate.CoordinatorClosure{
+		HolderID:            "c1",
+		SealGeneration:      7,
+		SuccessorGeneration: 8,
+		SealDigest:          "seal-digest",
+		Stage:               rootstate.CoordinatorClosureStageConfirmed,
+	}
+	status := controlplane.EvaluateClosure(current, confirmed, "c1", 1_000)
+	require.Equal(t, rootstate.CoordinatorClosureStageConfirmed, status.Stage)
+
+	closed := confirmed
+	closed.Stage = rootstate.CoordinatorClosureStageClosed
+	status = controlplane.EvaluateClosure(current, closed, "c1", 1_000)
+	require.Equal(t, rootstate.CoordinatorClosureStageClosed, status.Stage)
+
+	reattached := closed
+	reattached.Stage = rootstate.CoordinatorClosureStageReattached
+	status = controlplane.EvaluateClosure(current, reattached, "c1", 1_000)
+	require.Equal(t, rootstate.CoordinatorClosureStageReattached, status.Stage)
+}
+
+func TestApplyCoordinatorClosureClosedToState(t *testing.T) {
+	var st rootstate.State
+	event := rootevent.CoordinatorClosureClosed("c1", 7, 8, "seal-digest")
+
+	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 2, Index: 10}, event)
+
+	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.LastCommitted)
+	require.Equal(t, "c1", st.CoordinatorClosure.HolderID)
+	require.Equal(t, uint64(8), st.CoordinatorClosure.SuccessorGeneration)
+	require.Equal(t, uint64(7), st.CoordinatorClosure.SealGeneration)
+	require.Equal(t, "seal-digest", st.CoordinatorClosure.SealDigest)
+	require.Equal(t, rootstate.CoordinatorClosureStageClosed, st.CoordinatorClosure.Stage)
+	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.CoordinatorClosure.ClosedAtCursor)
+}
+
+func TestApplyCoordinatorClosureReattachToState(t *testing.T) {
+	var st rootstate.State
+	event := rootevent.CoordinatorClosureReattached("c1", 7, 8, "seal-digest")
+
+	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 2, Index: 10}, event)
+
+	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.LastCommitted)
+	require.Equal(t, "c1", st.CoordinatorClosure.HolderID)
+	require.Equal(t, uint64(8), st.CoordinatorClosure.SuccessorGeneration)
+	require.Equal(t, uint64(7), st.CoordinatorClosure.SealGeneration)
+	require.Equal(t, "seal-digest", st.CoordinatorClosure.SealDigest)
+	require.Equal(t, rootstate.CoordinatorClosureStageReattached, st.CoordinatorClosure.Stage)
+	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.CoordinatorClosure.ReattachedAtCursor)
+}
+
+func TestApplyCoordinatorLeasePreservesIssuedCursorForSameGeneration(t *testing.T) {
+	var st rootstate.State
+	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 1}, rootevent.CoordinatorLeaseGranted("c1", 1_000, 1, rootstate.CoordinatorDutyMaskDefault, "pred", controlplane.Frontiers(10, 20, 0)))
+	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 2}, rootevent.CoordinatorLeaseGranted("c1", 2_000, 1, rootstate.CoordinatorDutyMaskDefault, "", controlplane.Frontiers(20, 30, 0)))
+
+	require.Equal(t, uint64(1), st.CoordinatorLease.CertGeneration)
+	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, st.CoordinatorLease.IssuedCursor)
+	require.Equal(t, uint64(20), st.IDFence)
+	require.Equal(t, uint64(30), st.TSOFence)
+	require.Equal(t, "pred", st.CoordinatorLease.PredecessorDigest)
 }
 
 func TestPendingPeerChangeMatchesEvent(t *testing.T) {

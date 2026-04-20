@@ -29,6 +29,8 @@ enum RootEventKind {
   ROOT_EVENT_KIND_PEER_ADDITION_CANCELLED = 18;
   ROOT_EVENT_KIND_PEER_REMOVAL_CANCELLED = 19;
   ROOT_EVENT_KIND_COORDINATOR_LEASE = 20;
+  ROOT_EVENT_KIND_COORDINATOR_SEAL = 21;
+  ROOT_EVENT_KIND_COORDINATOR_CLOSURE = 22;
 }
 
 message RootCursor {
@@ -43,6 +45,8 @@ message RootState {
   uint64 id_fence = 5;
   uint64 tso_fence = 6;
   RootCoordinatorLease coordinator_lease = 7;
+  RootCoordinatorSeal coordinator_seal = 8;
+  RootCoordinatorClosure coordinator_closure = 9;
 }
 
 message RootCheckpoint {
@@ -65,8 +69,42 @@ message RootAllocatorFence {
 message RootCoordinatorLease {
   string holder_id = 1;
   int64 expires_unix_nano = 2;
-  uint64 id_fence = 3;
-  uint64 tso_fence = 4;
+  uint64 cert_generation = 3;
+  RootCursor issued_cursor = 4;
+  uint32 duty_mask = 5;
+  string predecessor_digest = 6;
+  repeated RootDutyFrontier handoff_frontiers = 7;
+}
+
+message RootDutyFrontier {
+  uint32 duty_mask = 1;
+  uint64 frontier = 2;
+}
+
+message RootCoordinatorSeal {
+  string holder_id = 1;
+  uint64 cert_generation = 2;
+  uint32 duty_mask = 3;
+  repeated RootDutyFrontier consumed_frontiers = 4;
+  RootCursor sealed_at_cursor = 8;
+}
+
+enum RootCoordinatorClosureStage {
+  ROOT_COORDINATOR_CLOSURE_STAGE_PENDING_CONFIRM = 0;
+  ROOT_COORDINATOR_CLOSURE_STAGE_CONFIRMED = 1;
+  ROOT_COORDINATOR_CLOSURE_STAGE_CLOSED = 2;
+  ROOT_COORDINATOR_CLOSURE_STAGE_REATTACHED = 3;
+}
+
+message RootCoordinatorClosure {
+  string holder_id = 1;
+  uint64 seal_generation = 2;
+  uint64 successor_generation = 3;
+  string seal_digest = 4;
+  RootCoordinatorClosureStage stage = 5;
+  RootCursor confirmed_at_cursor = 6;
+  RootCursor closed_at_cursor = 7;
+  RootCursor reattached_at_cursor = 8;
 }
 
 message RootRegionDescriptor {
@@ -147,6 +185,8 @@ message RootEvent {
     RootRangeMerge range_merge = 7;
     RootPeerChange peer_change = 8;
     RootCoordinatorLease coordinator_lease = 9;
+    RootCoordinatorSeal coordinator_seal = 10;
+    RootCoordinatorClosure coordinator_closure = 11;
   }
 }
 
@@ -187,28 +227,63 @@ message MetadataRootStatusResponse {
   uint64 leader_id = 2;
 }
 
-message MetadataRootCampaignRequest {
-  string holder_id = 1;
-  int64 expires_unix_nano = 2;
+enum RootCoordinatorLeaseCommandKind {
+  ROOT_COORDINATOR_LEASE_COMMAND_KIND_UNSPECIFIED = 0;
+  ROOT_COORDINATOR_LEASE_COMMAND_KIND_ISSUE = 1;
+  ROOT_COORDINATOR_LEASE_COMMAND_KIND_RELEASE = 2;
+}
+
+message RootCoordinatorLeaseCommand {
+  RootCoordinatorLeaseCommandKind kind = 1;
+  string holder_id = 2;
+  int64 expires_unix_nano = 3;
+  int64 now_unix_nano = 4;
+  string predecessor_digest = 5;
+  repeated RootDutyFrontier handoff_frontiers = 6;
+}
+
+enum RootCoordinatorClosureCommandKind {
+  ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_UNSPECIFIED = 0;
+  ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_SEAL = 1;
+  ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_CONFIRM = 2;
+  ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_CLOSE = 3;
+  ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_REATTACH = 4;
+}
+
+message RootCoordinatorClosureCommand {
+  RootCoordinatorClosureCommandKind kind = 1;
+  string holder_id = 2;
   int64 now_unix_nano = 3;
-  uint64 id_fence = 4;
-  uint64 tso_fence = 5;
+  repeated RootDutyFrontier frontiers = 4;
 }
 
-message MetadataRootCampaignResponse {
-  bool granted = 1;
-  RootCoordinatorLease lease = 2;
-}
-
-message MetadataRootReleaseRequest {
-  string holder_id = 1;
-  int64 now_unix_nano = 2;
-  uint64 id_fence = 3;
-  uint64 tso_fence = 4;
-}
-
-message MetadataRootReleaseResponse {
+message RootCoordinatorProtocolState {
   RootCoordinatorLease lease = 1;
+  RootCoordinatorSeal seal = 2;
+  RootCoordinatorClosure closure = 3;
+}
+
+enum RootCoordinatorLeaseApplyStatus {
+  ROOT_COORDINATOR_LEASE_APPLY_STATUS_UNSPECIFIED = 0;
+  ROOT_COORDINATOR_LEASE_APPLY_STATUS_GRANTED = 1;
+  ROOT_COORDINATOR_LEASE_APPLY_STATUS_HELD = 2;
+}
+
+message MetadataRootApplyCoordinatorLeaseRequest {
+  RootCoordinatorLeaseCommand command = 1;
+}
+
+message MetadataRootApplyCoordinatorLeaseResponse {
+  RootCoordinatorProtocolState state = 1;
+  RootCoordinatorLeaseApplyStatus status = 2;
+}
+
+message MetadataRootApplyCoordinatorClosureRequest {
+  RootCoordinatorClosureCommand command = 1;
+}
+
+message MetadataRootApplyCoordinatorClosureResponse {
+  RootCoordinatorProtocolState state = 1;
 }
 
 message RootTailToken {
@@ -265,8 +340,8 @@ service MetadataRoot {
   rpc Append(MetadataRootAppendRequest) returns (MetadataRootAppendResponse);
   rpc FenceAllocator(MetadataRootFenceAllocatorRequest) returns (MetadataRootFenceAllocatorResponse);
   rpc Status(MetadataRootStatusRequest) returns (MetadataRootStatusResponse);
-  rpc Campaign(MetadataRootCampaignRequest) returns (MetadataRootCampaignResponse);
-  rpc Release(MetadataRootReleaseRequest) returns (MetadataRootReleaseResponse);
+  rpc ApplyCoordinatorLease(MetadataRootApplyCoordinatorLeaseRequest) returns (MetadataRootApplyCoordinatorLeaseResponse);
+  rpc ApplyCoordinatorClosure(MetadataRootApplyCoordinatorClosureRequest) returns (MetadataRootApplyCoordinatorClosureResponse);
   rpc ObserveCommitted(MetadataRootObserveCommittedRequest) returns (MetadataRootObserveCommittedResponse);
   rpc ObserveTail(MetadataRootObserveTailRequest) returns (MetadataRootObserveTailResponse);
   rpc WaitTail(MetadataRootWaitTailRequest) returns (MetadataRootWaitTailResponse);

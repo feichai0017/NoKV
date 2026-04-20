@@ -22,6 +22,21 @@ const (
 	CatchUpStateUnavailable
 )
 
+func (s CatchUpState) String() string {
+	switch s {
+	case CatchUpStateFresh:
+		return "fresh"
+	case CatchUpStateLagging:
+		return "lagging"
+	case CatchUpStateBootstrapRequired:
+		return "bootstrap_required"
+	case CatchUpStateUnavailable:
+		return "unavailable"
+	default:
+		return "unspecified"
+	}
+}
+
 // Snapshot is the reconstructed Coordinator bootstrap catalog derived from durable
 // metadata-root truth.
 type Snapshot struct {
@@ -33,6 +48,8 @@ type Snapshot struct {
 	PendingRangeChanges map[uint64]rootstate.PendingRangeChange
 	Allocator           AllocatorState
 	CoordinatorLease    rootstate.CoordinatorLease
+	CoordinatorSeal     rootstate.CoordinatorSeal
+	CoordinatorClosure  rootstate.CoordinatorClosure
 }
 
 func CloneSnapshot(snapshot Snapshot) Snapshot {
@@ -45,6 +62,8 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),
 		Allocator:           snapshot.Allocator,
 		CoordinatorLease:    snapshot.CoordinatorLease,
+		CoordinatorSeal:     snapshot.CoordinatorSeal,
+		CoordinatorClosure:  snapshot.CoordinatorClosure,
 	}
 }
 
@@ -63,7 +82,9 @@ func SnapshotFromRoot(snapshot rootstate.Snapshot) Snapshot {
 			IDCurrent: snapshot.State.IDFence,
 			TSCurrent: snapshot.State.TSOFence,
 		},
-		CoordinatorLease: snapshot.State.CoordinatorLease,
+		CoordinatorLease:   snapshot.State.CoordinatorLease,
+		CoordinatorSeal:    snapshot.State.CoordinatorSeal,
+		CoordinatorClosure: snapshot.State.CoordinatorClosure,
 	}
 }
 
