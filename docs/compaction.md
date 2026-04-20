@@ -25,7 +25,7 @@ Planning now happens via `Plan`: LSM snapshots table metadata into `TableMeta`, 
 
 ## 2. Ingest Buffer
 
-`moveToIngest` (see `engine/lsm/executor.go`) performs a metadata-only migration:
+`moveToIngest` (see `engine/lsm/compaction_executor.go`) performs a metadata-only migration:
 
 1. Records a `manifest.EditDeleteFile` for the source level.
 2. Logs a new `manifest.EditAddFile` targeting the destination level.

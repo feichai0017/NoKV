@@ -127,7 +127,7 @@ Source: [`engine/lsm/memtable.go`](../engine/lsm/memtable.go), [`engine/index/sk
 
 ### 3.5 SST / iterator decode
 
-Source: [`engine/lsm/builder.go`](../engine/lsm/builder.go), [`engine/lsm/table.go`](../engine/lsm/table.go)
+Source: [`engine/lsm/table_builder.go`](../engine/lsm/table_builder.go), [`engine/lsm/table.go`](../engine/lsm/table.go)
 
 * Block iterator reconstructs internal key + value struct.
 * It calls `PopulateInternalMeta` before exposing item entry.
