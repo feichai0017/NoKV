@@ -607,15 +607,76 @@ func TestServiceGetRegionByKeyRejectsMergePendingDescriptor(t *testing.T) {
 	require.Contains(t, err.Error(), "merge")
 }
 
+func TestServiceGetRegionByKeyUsesCachedRootSnapshot(t *testing.T) {
+	desc := descriptor.Descriptor{
+		RegionID:  10,
+		StartKey:  []byte("a"),
+		EndKey:    []byte("z"),
+		RootEpoch: 7,
+	}
+	desc.EnsureHash()
+	store := &fakeStorage{
+		snapshot: coordstorage.Snapshot{
+			Descriptors: map[uint64]descriptor.Descriptor{10: desc},
+			RootToken:   rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 3},
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	require.NoError(t, svc.ReloadFromStorage())
+	store.loadCalls = 0
+
+	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("b")})
+	require.NoError(t, err)
+	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("c")})
+	require.NoError(t, err)
+	require.Equal(t, 0, store.loadCalls)
+}
+
+func TestServiceGetRegionByKeyRefreshesCachedRootSnapshotAsync(t *testing.T) {
+	desc := descriptor.Descriptor{
+		RegionID:  10,
+		StartKey:  []byte("a"),
+		EndKey:    []byte("z"),
+		RootEpoch: 7,
+	}
+	desc.EnsureHash()
+	store := &fakeStorage{
+		snapshot: coordstorage.Snapshot{
+			Descriptors: map[uint64]descriptor.Descriptor{10: desc},
+			RootToken:   rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 3},
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureRootSnapshotRefresh(10 * time.Millisecond)
+	require.NoError(t, svc.ReloadFromStorage())
+	store.loadCalls = 0
+
+	time.Sleep(20 * time.Millisecond)
+	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("b")})
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return store.loadCalls >= 1
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestServiceGetRegionByKeyBestEffortWithUnavailableRoot(t *testing.T) {
 	storage := &fakeStorage{
 		leader:   true,
 		snapshot: coordstorage.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1), storage)
+	svc.ConfigureRootSnapshotRefresh(10 * time.Millisecond)
 	err := publishDescriptorEvent(t, svc, testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 0)
 	require.NoError(t, err)
+	storage.loadCalls = 0
 	storage.loadErr = errors.New("root unavailable")
+
+	time.Sleep(20 * time.Millisecond)
+	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return storage.loadCalls >= 1
+	}, time.Second, 10*time.Millisecond)
 
 	resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
 	require.NoError(t, err)
@@ -2103,10 +2164,19 @@ func TestServiceAblationFailStopOnRootUnreachRejectsBestEffortMetadata(t *testin
 		snapshot: coordstorage.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1), storage)
+	svc.ConfigureRootSnapshotRefresh(10 * time.Millisecond)
 	require.NoError(t, svc.ConfigureAblation(coordablation.Config{FailStopOnRootUnreach: true}))
 	err := publishDescriptorEvent(t, svc, testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 0)
 	require.NoError(t, err)
+	storage.loadCalls = 0
 	storage.loadErr = errors.New("root unavailable")
+
+	time.Sleep(20 * time.Millisecond)
+	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return storage.loadCalls >= 1
+	}, time.Second, 10*time.Millisecond)
 
 	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
 	require.Error(t, err)

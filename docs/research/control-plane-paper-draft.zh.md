@@ -1,191 +1,128 @@
-# Authority-Gap Anomalies in Distributed Control Planes：一种 Closure-Complete Continuation 协议与参考实现
+# Authority-Gap Anomalies in Distributed Control Planes：Closure-Complete Continuation 的语义、实现与跨系统证据
 
 ## 摘要
 
-我们观察到一类跨系统复发的分布式系统 bug：**rooted authority 仍然正确存在，但 service layer 持有 stale、partial 或未完成 closure 的 authority view，回复因此穿越 authority-transition 边界却未被机械拒绝**。我们把它命名为 **authority-gap anomalies**。对 7 个独立工业系统（etcd、Kafka KRaft、TiKV、CockroachDB、YugabyteDB、MongoDB、FoundationDB）的一手 issue 与 maintainer 讨论严格核查后，我们整理出 14 个跨 trigger、跨 duty 的 strict-hit 样本；其中 CRDB `#66562` 已开放 5 年，`KAFKA-15911` 至今 unresolved，etcd maintainer 公开承认已合并 fix（`#15247/#20418`）仍未触及 root cause。更本质的是，MongoDB `readConcern:linearizable`、Kafka KIP-320 与 CockroachDB read-summary 都**碎片化地重新发明了 CCC 原语**（rooted seal、per-reply generation fencing、successor coverage），但没有任何系统同时实现三类并叠加 closure 完整性；同一系统的 fix 在不同 RPC 或不同 trigger 上持续复发。
+分布式控制面里长期存在一类容易被误判成“局部实现 bug”的错误：rooted authority 其实已经正确切换，但 service layer 仍持有 stale、partial 或未完成 closure 的 authority 视图，于是旧 reply 或不完整 successor continuation 穿过 authority transition 边界并被系统继续接受。我们把这类错误命名为 **authority-gap anomalies**。对 etcd、Kafka KRaft、CockroachDB、TiKV、YugabyteDB、MongoDB 与 FoundationDB 的公开 issue、修复讨论和 maintainer 说明进行核查后，我们发现现有系统通常只在单条 path 上分别补 `seal`、generation fencing 或 successor coverage，例如 Chubby 式 sequencer、Kafka KIP-320、CockroachDB 的 read-summary 路径和 MongoDB 的 `readConcern: linearizable` 都覆盖了其中一部分，但没有任何系统把这些义务统一成一个完整的 service-level correctness class（参见 [Chubby](https://www.usenix.org/conference/osdi-06/presentation/chubby-lock-service-loosely-coupled-distributed-systems)、[KAFKA-6880](https://issues.apache.org/jira/browse/KAFKA-6880)、[CockroachDB #66562](https://github.com/cockroachdb/cockroach/issues/66562)、[MongoDB SERVER-17975](https://jira.mongodb.org/browse/SERVER-17975)）。
 
-本文提出 **Closure-Complete Continuation (CCC)** 作为 detached-mode 单点 duty control plane 的 service-level correctness class。CCC 由 **4 条 Authority Lineage Invariants**（authority uniqueness、successor coverage、post-seal inadmissibility、closure completeness）、一个 **5 阶段概念 lifecycle**（Attached→Active→Seal→Cover→Close→Reattach；当前 rooted artifact 将 closure 物化为 `PendingConfirm→Confirmed→Closed→Reattached`）与 **3 层 defense-in-depth**（server pre-action gate、client-side witness verifier、offline audit checker）构成。TLA+ 正模型现在已经从单次 closure 扩成 **repeated handoff model**：在 `MaxGeneration=3` 下，TLC 对 `22876` 个 generated / `3924` 个 distinct states、深度 `20` 通过 `G1/G2/G3`，并额外 machine-check 一个更强的 `G2_AuthorityUniquenessInductive` 形状不变量；三个非 straw 对照模型——`LeaseOnly`、`TokenOnly`、`ChubbyFencedLease`——分别产出机器验证反例，`CCCMultiDim / LeaseStartOnly` 则形成正/反对照，说明 multi-dim successor coverage 也能被同一 formal line 消费。
+本文提出 **Closure-Complete Continuation (CCC)**，把 authority handoff 后“继续服务是否合法”定义成一个 service-level correctness class。CCC 由四条 **Authority Lineage Invariants (ALI)** 组成：authority uniqueness、successor coverage、post-seal inadmissibility 与 closure completeness；并通过 rooted `Lease / Seal / Closure`、reply witness verifier 与离线审计器共同落地。我们在 NoKV 中实现了第一个可执行的 CCC rooted skeleton，并给出独立的 `ccc-audit` 工具；形式化方面，`CCC.tla` 已扩展为 repeated handoff model，在 `MaxGeneration=3` 下通过 `3924` 个 distinct states、深度 `20` 的 TLC 检查，同时 `LeaseOnly`、`TokenOnly`、`ChubbyFencedLease` 与 `LeaseStartOnly` 给出对照反例；系统证据方面，我们在 etcd `v3.6.10` 上捕获了真实 delayed reply 轨迹，并对 `etcd-io/etcd#21638` 给出 client-visible stale-success 证据，同时在 NoKV 中精确复现了 CockroachDB `#66562` 的 issue schedule。
 
-NoKV 是 CCC 的第一个 executable rooted skeleton，包含 typed rooted truth kernel、monotone 与 metadata-answer duty 的 client-side verifier、独立 `ccc-audit` CLI（当前支持 `nokv`、`etcd-read-index`、`etcd-lease-renew`、`crdb-lease-start` 四种 trace 格式）以及按 issue line 组织的 benchmark harness。当前 witness-tax benchmark 显示 steady-state verifier tax 约为 20–26%，AllocID 基准比 etcd CAS 快 15%。Cross-system 证据当前由两条主线构成：**etcd 侧**，我们在 3-node `v3.6.10` cluster 上用 `SIGSTOP/SIGCONT` 注入 process pause，捕获真实 delayed unary `RangeResponse` in-flight reply 并与 raft WAL 摘要一起投影成 `etcd-read-index` trace，`ccc-audit` 稳定检出 `accepted_read_index_behind_successor`；同时我们在未修改的 upstream etcd `v3.6.10` 上仅用公开 `Grant/KeepAlive/Revoke` API 复现了一个 client-visible buffered stale-success scenario（**已作为 upstream 正式 issue `etcd-io/etcd#21638` 公开 file，2026-04-19 提交，当前 OPEN**），`ccc-audit` 将其判成 `accepted_keepalive_success_after_revoke`，一个 Layer-6 witness floor gate 会把同一 schedule 的 anomaly 降为 0。**CRDB 侧**，我们针对 5 年未修的 `#66562` 提供了 **NoKV-native exact issue-schedule reproduction**：按 issue body 直接跑 `n1 future read -> n1→n2 cooperative transfer -> n2 early expiry -> n3 brand-new lease -> write@8`，关闭 coverage 时 bug 可复现，打开 coverage 时 rooted check 机械拒绝；同一 violation 同时被 rooted snapshot、`crdb-lease-start` trace adapter 与 `CCCMultiDim / LeaseStartOnly` formal pair 消费。**本文不把前者写成当前 upstream regression proof，也不把后者写成 live CRDB race replay**；它们分别是一个 client API semantic gap 和一个 unresolved issue 的 exact-schedule defense artifact。自然迟到 reply 的无代理 transport 抓取与 live CRDB adapter / state projection 仍是明确的下一步。
-
-本文贡献：(i) 命名并形式化一类跨系统 bug class；(ii) 给出该类的 4 条 ALI 与 3 层 defense-in-depth；(iii) 提供第一个 ship-able reference implementation 与独立的跨系统审计工具；(iv) 建立 TLA+ 正/反对照模型作为 correctness 论证基础；(v) 用工业界碎片化重新发明 CCC primitive 的经验观察定位本文的 prior-art 差异。
+本文的目标不是提出新的 consensus，也不是声称 NoKV 在整体性能上优于工业系统。本文要证明的是：对 authority-bound continuations 而言，工业系统缺的不是更多 path-specific patch，而是一个统一的 handoff legality 语义；CCC 使这件事第一次能够被实现、被审计、被形式化，并被同一套词汇跨系统消费。
 
 ## 1. 引言
 
-### 1.1 一个真实的生产 bug
+### 1.1 问题：authority 已切换，错误为什么还会继续发生
 
-考虑 etcd `#15247`（2023）描述的生产事故。在压力下，etcd leader 的 `fdatasync` 变慢，raft 层完成 leader 切换，但旧 leader 的 lessor goroutine 仍以 primary 身份处理 lease keep-alive，判定某 lease 已过期并提交 revoke。**真实客户端的活跃 lease 由此被错误 revoke，其绑定的 key 被删除**。etcd maintainer 公开承认这是 "a major design issue"：rooted authority（raft committed state）始终正确，但 service layer（lessor）持有 stale authority view，并在此 view 下生成的 revoke reply 穿越 authority-transition 边界、未被任何机械检查拒绝就被 apply。合并的 fix（PR `#16822`）在 revoke 前加了 `ReadIndex`，但同一位 maintainer 在 post-merge 讨论中明确表示 fix 仍有 "rare corner case"，因为 goroutine 调度可能在 leader-check 与 RPC emit 之间卡住。两年后同一 class 以 process pause 为 trigger 在 `#20418` 再次出现，maintainer 在 fix PR 中自述："I still can't quite convince myself that the PR fixes the root cause."
+考虑 etcd 的两个公开问题：在 [`#15247`](https://github.com/etcd-io/etcd/issues/15247) 中，raft 层已经完成 leader 切换，但旧 leader 上的 lessor goroutine 仍在以过时的 authority 视图执行 revoke；在 [`#20418`](https://github.com/etcd-io/etcd/issues/20418) 中，进程 pause 恢复后同类 delayed reply 又以另一种触发条件出现。两次问题的共同点很直接：**truth layer 是对的，service layer 还是错的**。CockroachDB [`#66562`](https://github.com/cockroachdb/cockroach/issues/66562) 则展示了另一种形态：新的 range lease 虽然已经拿到，但它的起点没有覆盖旧 lease 已服务过的 future-time read frontier，于是 successor 从协议上并不具备继续服务的资格。Kafka KRaft 的 [`KAFKA-15489`](https://issues.apache.org/jira/browse/KAFKA-15489) 以及后续的 [`KAFKA-14154`](https://issues.apache.org/jira/browse/KAFKA-14154)、[`KAFKA-15911`](https://issues.apache.org/jira/browse/KAFKA-15911) 也反复暴露了同一种结构：authority transition 已经发生，但旧 reply、旧 controller view 或未完成 closure 的 successor 仍在系统里活动。
 
-这不是 etcd 独有。通过对 7 个独立工业系统的公开 issue 与 maintainer 讨论严格核查，我们整理出 14 个共享同一 signature 的 strict-hit 样本——**rooted authority 正确 + service layer stale view + reply 穿越 authority-transition 边界未被机械拒绝**。我们把这类 bug 命名为 **authority-gap anomalies**。
+这类问题不等于“leader 切换处理得不够快”，也不等于“某条 RPC 少了一个 if”。它们暴露的是一个更基础的问题：**authority handoff 之后，系统缺少统一的服务合法性语义。** 现有系统通常只证明“谁是当前 authority”，却没有统一证明“旧 reply 何时必须失效、successor 必须覆盖 predecessor 到哪里、以及这次 handoff 何时才算真正结束”。经典正确性条件如 linearizability 适合描述并发对象语义 [Herlihy and Wing 1990](https://dl.acm.org/doi/10.1145/78969.78972)，而 Chubby、Delos 这类系统则主要提供 authority substrate 与 handoff 载体（[Chubby](https://www.usenix.org/conference/osdi-06/presentation/chubby-lock-service-loosely-coupled-distributed-systems), [Delos](https://www.usenix.org/system/files/osdi20-balakrishnan.pdf)）；它们都没有把“handoff 后继续服务是否合法”单独上升成一个 service-level correctness class。
 
-### 1.2 这是一类跨系统 bug class
+### 1.2 差距：现有修复为什么总是局部有效
 
-Kafka KRaft（`KAFKA-15489`）在分区期间出现两个 epoch 不同的 controller 并存，各自向客户端返回 stale metadata；该 fix 上线后 6 个月内同一 class 以不同 RPC 为 trigger 在 `KAFKA-14154` 与 `KAFKA-16248` 中复发，其配套 residual `KAFKA-15911` 至今 unresolved。CockroachDB `#66562` 中，新 range lease 没有覆盖旧 lease 已服务过的 future-time read frontier——该 issue 已开放 5 年，maintainer 在 2023 年明确表态 "This issue should stay open"。YugabyteDB `#20124` 通过 workaround 缓解后，10 个月后 `#24575` 以 replication factor 变更为新 trigger 复发。TiKV `PR #6343/#9240` 分别在 follower read 与 transfer-leader 两条路径上补同类 stale read bug。MongoDB `SERVER-17975` 记录 stale primary 继续 serve read 的 signature；完整 14 个样本清单与 fix-grade 表见表 1 与附录 A。
+我们核查的公开证据表明，工业界并不缺修复 authority-gap 的技巧，而是缺一个统一的语义对象。Kafka 的 KIP-320 在 fetch 路径上用 generation fencing 避免 zombie replica 继续服务；CockroachDB 在部分 read-summary 路径上引入 successor coverage；MongoDB 的 `readConcern: linearizable` 通过 rooted election metadata 强化 read path；TiKV 和 YugabyteDB 也分别在 follower read、leader transfer 或 metadata cache 路径上补过类似约束（参见 [KAFKA-6880](https://issues.apache.org/jira/browse/KAFKA-6880), [CockroachDB #36431](https://github.com/cockroachdb/cockroach/issues/36431), [TiKV PR #6343](https://github.com/tikv/tikv/pull/6343), [YugabyteDB #20124](https://github.com/yugabyte/yugabyte-db/issues/20124)）。这些修复能消掉单条 path 上的触发器，但它们通常不同时提供：
 
-更本质的观察是：**每个工业 fix 都只覆盖 CCC primitive 的一部分，同一系统的 bug 在未覆盖的 primitive 上持续复发**。MongoDB `readConcern:linearizable + electionId` 在 read path 上实现 opt-in **rooted seal**；Kafka KIP-320 在 fetch RPC 上实现 **per-RPC generation fencing**；CockroachDB LocalTimestamp 在 observed-timestamp path 上实现 **per-path successor coverage**。没有任何单一系统同时实现三类 primitive 并叠加 **closure completeness**；因此每个系统的 "authority-gap class" 都在工程师未想到的 path 上反复发作。
+1. predecessor 退休后的 rooted seal；
+2. old reply 的 generation-based inadmissibility；
+3. successor 对 predecessor 历史 frontier 的覆盖义务；
+4. handoff 最终完成的 closure 条件。
 
-### 1.3 核心观察
+这就是 recurrence 反复出现的原因。一个系统可以补 generation fence，但仍然漏 successor coverage；也可以补 read-summary coverage，但仍然没有明确 closure。最近两年的 verification 工作，例如 [CCF](https://www.microsoft.com/en-us/research/wp-content/uploads/2024/07/nsdi25spring-final392.pdf)、[RPRC](https://www.usenix.org/system/files/nsdi25-ding.pdf)、[Remix](https://marshtompsxd.github.io/pub/eurosys25_remix.pdf) 与 [T2C](https://www.usenix.org/system/files/osdi25-lou.pdf)，已经展示了 trace validation、protocol refinement checking 和 checker synthesis 的力量；但它们大多验证已有协议或实现，而不是定义一个新的 handoff legality 语义。本文要补的不是又一个 patch，也不是又一个 checker，而是两者共同缺失的那个 correctness object。
 
-工业界的修复模式不是"大家没意识到 authority-gap 问题"，而是**按 path / 按 RPC / 按 trigger 局部修复**。这样每修掉一个 trigger，下一个 trigger 就以不同形式复发。系统社区缺的不是修复技巧，而是**一个可被同时机械 check 的 class-level safety property**——让"这次继续服务是否合法"成为可判定问题，而不是依赖每个实现工程师在该 path 上是否恰好想到对应原语。这类似 linearizability 对并发正确性、serializability 对事务正确性的历史角色：不发明新机制，而是把"正确"从 ad-hoc 工程直觉升到可机器验证的语义类。
+### 1.3 核心思想：把 handoff legality 定义成一个 correctness class
 
-### 1.4 CCC：一个 service-level correctness class
+本文提出 **Closure-Complete Continuation (CCC)**。CCC 关注的不是“谁当前持有 authority”，而是**authority 从 predecessor 切到 successor 之后，什么样的 continuation 仍然合法**。它用四条 **Authority Lineage Invariants (ALI)** 把这个问题固定下来：
 
-我们提出 **Closure-Complete Continuation (CCC)** 作为 detached-mode 单点 duty control plane 的 service-level correctness class。CCC 不发明新机制；它把工业界已经碎片化实现的原语收进一个可同时机器检查的 safety property：
+- **ALI-1: authority uniqueness**。任一时刻只能有一条 live authority lineage。
+- **ALI-2: successor coverage**。successor 不只是新的，还必须覆盖 predecessor 已经服务到的 frontier。
+- **ALI-3: post-seal inadmissibility**。一旦 predecessor 被 seal，该代 reply 之后必须机械失效。
+- **ALI-4: closure completeness**。一次 handoff 不能停在半开状态，必须显式走完 close / reattach。
 
-- **4 条 Authority Lineage Invariants (ALI)**：`authority uniqueness`、`successor coverage`、`post-seal inadmissibility`、`closure completeness`。每段 continuation 必须同时满足 4 条，否则 reply 可能穿越 authority-transition 边界。
-- **5 阶段概念 lifecycle**：`Attached → Active → Seal → Cover → Close → Reattach`。当前 artifact 中，`Attached/Active/Seal/Cover` 主要由 lease/seal/coverage 关系推导，真正持久化的 closure stage 收敛成 `PendingConfirm → Confirmed → Closed → Reattached`。
-- **3 层 defense-in-depth**：Layer 5 server-side `preActionGate`（action 前查 rooted state）、Layer 6 client-side witness verifier（reply 到达后 generation floor 单调 check）、Layer 7 独立 `ccc-audit` CLI（offline 消费 trace 审计 closure）。
+CCC 不发明新的 consensus，也不要求所有控制面都采用相同实现。它只要求 authority-bound continuation duties 在 handoff 时提供一组最小而统一的协议对象：rooted `Lease / Seal / Closure`，以及可由 reply、trace 或 snapshot 消费的 witness。NoKV 里的 rooted truth kernel、`ccc-audit`、以及 `CCC.tla` / `CCCMultiDim.tla` 正是围绕这组语义对象构建的。
 
-TLA+ 正模型现在已经不是单次 detach/closure toy cycle：`CCC.tla` 会在 `Reattach` 后回到 `Active`，从而在同一个有界 run 里反复经历 `Issue -> Seal -> Issue(successor) -> Cover -> Close -> Reattach -> Active`。在当前 `MaxGeneration=3 / MaxFrontier=2` 的配置下，TLC 对 `22876` 个 generated / `3924` 个 distinct states、深度 `20` machine-check `G1/G2/G3` 成立；同时 `G2_AuthorityUniquenessInductive` 直接约束“除当前 `activeGen` 外的所有 issued generation 都必须已经 sealed”，并在 spec 内给出它蕴含原始 `AuthorityUniqueness` 的 lemma。三个非 straw 对照模型——`LeaseOnly`（无 seal）、`TokenOnly`（仅 freshness token）、`ChubbyFencedLease`（Chubby-style sequencer 但无 closure）——分别产出 machine-checked 反例，证明缺任一条 ALI 都无法在同一 fault vocabulary 下保持 CCC。特别地，`ChubbyFencedLease` 直接反驳了 "CCC 不就是 Chubby fencing" 的攻击。
+### 1.4 贡献
 
-### 1.5 实现与证据边界
+本文的贡献可以概括为四点。
 
-NoKV 是 CCC 的第一个 executable rooted skeleton。当前 artifact 跨 rooted state kernel、server service、client SDK、audit primitive、独立 CLI、coordinator ablation 与 formal spec；benchmark harness 已按 `etcd_*` 与 `crdb_*` issue line 收口。当前 witness-tax benchmark 显示 steady-state verifier tax 约为 20–26%。
+1. **问题定义。** 我们把一类长期散落在 etcd、Kafka、CockroachDB、TiKV、YugabyteDB、MongoDB 与 FoundationDB 中的错误，统一命名为 **authority-gap anomalies**，并将其与一般 stale read、一般 leader failover 或一般 cache inconsistency 区分开来。
+2. **语义贡献。** 我们提出 **CCC + ALI**，把 authority handoff 后的 continuation legality 定义为一个独立的 service-level correctness class，而不是若干 patch primitive 的松散组合。
+3. **系统与工具。** 我们在 NoKV 中实现了第一个可执行的 rooted skeleton，并提供独立的 `ccc-audit`，使 NoKV trace 与外部系统 trace 可以落到同一 anomaly vocabulary 上。
+4. **证据链。** 我们给出 repeated handoff 的 TLA+ 正反模型、etcd 的 live delayed-reply 证据、以及 CockroachDB `#66562` 的 exact issue-schedule reproduction，用同一套 ALI 词汇解释这些表面不同的问题。
 
-**Cross-system 证据当前已经从纯 schedule fixture 扩展到两类 live evidence**。第一类是 read-index path 上的 fault-injected live demonstration：基于 schedule-driven synthetic fixtures，`ccc-audit` 可以 retrospectively 检出 etcd `#15247`、`#20418` 类型的 authority-gap signature；进一步地，当前 artifact 已经有一个 3-node etcd `v3.6.10` live harness，会在真实 cluster 上通过 `SIGSTOP/SIGCONT` 注入 leader process pause，捕获一条真实 delayed unary `RangeResponse` in-flight reply，同时抓取 raft WAL 摘要，再把 live reply 与 observed successor revision 投影成统一 `etcd-read-index` trace。该 live trace 会被 `ccc-audit` 稳定判成 `accepted_read_index_behind_successor`；而同一 fault schedule 下的 NoKV control experiment 产出 0 anomaly。第二类是 lease path 上的 client-visible live finding：在未修改的 upstream etcd `v3.6.10` 上，仅用公开 `Grant/KeepAlive/Revoke` API，就可以让调用方在 `Revoke` 已返回更高 revision 之后，从 `clientv3.KeepAlive` 的 buffered channel 里读到更早的 `TTL>0` keepalive success；`ccc-audit` 将其判成 `accepted_keepalive_success_after_revoke`，而一个 Layer-6 风格的 witness floor gate 会把同一 schedule 的 anomaly 降为 0。**本文仍然明确不把前者写成当前 upstream regression proof，也不把后者写成新的 server-side lessor race**：前者是 fault-injected live demonstration，后者是 client-visible API semantic gap。自然迟到 reply 的无代理 transport 捕获、历史 vulnerable replay 与第二外部系统 pilot 仍是下一步，需要额外的 live adapter 与 fault injector 才能继续补强外部证据。
+### 1.5 本文声明什么，不声明什么
 
-除了对历史 bug 的 post-hoc 覆盖，CCC 的 structural lens 还能 **事前**指出哪条 authority transition 需要机械 gate。当前 artifact 已经给出两条互补证据：一条是 **truly new client-visible finding**（F1）——etcd `v3.6.10` `clientv3.KeepAlive` buffered stale-success after `Revoke`（§5.5.2），**已作为 `etcd-io/etcd#21638` 公开 filed（2026-04-19 提交，当前 OPEN）**；另一条是 **unresolved issue exact-schedule reproduction** —— CockroachDB `#66562` 在 NoKV 中被按 issue body 原样复现，并被同一组 successor-coverage primitive 机械关闭。当前版本不再扩写 CRDB 旁支探索；那些属于下一轮外部系统扩展，而不是当前 artifact 的核心闭环。
+为了避免把问题定义、设计语义、实验结果和未来路线混在一起，本文把 claim 收得很窄。
 
-本文不处理 partition-local stale replies——CCC 保证的是 post-reconciliation inadmissibility、successor coverage 与 auditable closure，而不是在分区期间魔法般消除所有局部过时回复（见 §2.4 N5）。本文也不提出新 consensus，不声称整体性能超越工业系统。
+**本文声明：**
 
-### 1.6 Claim Budget
+- authority-gap anomalies 是一类可跨系统复发的 bug class；
+- CCC 为这类 bug class 提供最小 service-level semantics；
+- NoKV 和 `ccc-audit` 证明这组语义可以被实现、被审计、被形式化；
+- multi-dimensional frontier duties 可以被同一组 handoff semantics 消费。
 
-为了避免把已证明性质、测量结果、设计假设和未来路线混写，本文把 claim budget 显式分成四桶。
+**本文不声明：**
 
-**Guaranteed property**
+- 我们提出了新的 consensus protocol；
+- NoKV 在整体吞吐或延迟上优于工业系统；
+- 当前 artifact 已经给出完整的 unbounded proof；
+- 当前 etcd / CRDB 证据已经等价于 upstream regression proof 或 live race replay；
+- CCC 能在网络分区期间魔法般消除所有 partition-local stale reply。
 
-- `G1`：`Closure-Complete Continuation (CCC)` 是本文的中心性质。对当前 scope，合法 continuation 必须最终满足 `No overlap`、`Successor coverage`、`Post-seal inadmissibility` 与 rooted `Close/Reattach`。
-- `G2`：`Authority Lineage Invariants (ALI)` 给出 detached authority-bound continuation duties 的最小 service-level safety semantics：每个合法 reply 都必须向后可追到唯一 handoff issue，向前可收口到 seal / cover / close。
-- `G3`：NoKV 当前 artifact 已经提供第一版 rooted skeleton：`meta/root` 中 materialize 的 `Lease / Seal / Closure` 及其 monotone reply evidence 共同形成当前最强可 defend 的 closure substrate。
+这组边界对 OSDI 级别的写作很重要。本文的目标不是把所有 control-plane correctness 一口吃掉，而是把 authority-bound continuation 的 handoff legality 单独占住。
 
-**Measured effect**
+## 2. 背景、问题模型与设计目标
 
-- `M1`：root partition / root unreachability 下 `AllocID/Tso` 的 utility preserved 相对 fail-stop baseline。
-- `M2`：`ContinuationWitness + client-side verifier` 带来的 steady-state tax，并与总吞吐结果分开测量。
-- `M3`：`CCC/ALI` 在外部系统上的最小 violation schedule 与 checker evidence。
+### 2.1 适用系统与 authority scope
 
-**Design hypothesis**
+CCC 不针对所有 distributed control plane，只针对**authority-bound continuation duties**。一个 duty 只有在满足以下四个条件时，才属于本文范围：
 
-- `H1`：`authority-gap anomalies` 不只是 NoKV 的局部设计问题，而是承担 authority-bound continuations 的分布式控制面共同暴露的一类 bug class。
-- `H2`：对 **multi-dimensional frontier duties** 而言，只拥有 `per-RPC generation check`、`rooted seal` 或 `successor coverage` 这三类 primitive 中的任意一部分，仍无法在同一 fault vocabulary 下机械保证 `ALI-1/2/3/4` 联合成立。
-- `H3`：`ccc-audit` 这类 checker / audit surface 应当可以同时消费 NoKV trace 与外部系统 trace，而不只是服务于一个实现。
-- `H4`：工业界已经在 MongoDB / Kafka / CockroachDB 等系统中碎片化地重新发明 CCC primitive，但没有任何单一系统把 rooted seal、generation-based inadmissibility 与 successor coverage 统一进同一 closure-complete protocol。
+1. 它存在由单个 authority holder 持续推进的一段 continuation；
+2. holder transition 时，这段 continuation 必须被显式 retirement，而不是天然允许多方并发读取；
+3. transition 之后，old reply 是否还能被接受，构成一个明确的合法性问题；
+4. detached segment 结束时，需要一个显式 closure 才能把这段 continuation 合法收口。
 
-**Non-claim**
+按这个定义，authority scope 不只包括 raft leader。etcd [`#21638`](https://github.com/etcd-io/etcd/issues/21638) 在单节点嵌入式 etcd 上就能触发 authority-gap anomaly，这说明 authority 也可以是一个对象级 lease，而不必是 node-level leader。本文关心的 authority 至少覆盖五层：
 
-- `N1`：本文不提出新的 consensus protocol。
-- `N2`：本文不在 detached 模式下保留一般 control-plane write duties。
-- `N3`：本文不声称 NoKV 的整体性能优于工业系统。
-- `N4`：本文不处理 Byzantine adversary，也不把 localhost 结果包装成 production readiness。
-- `N5`：本文不防 **partition-local stale replies**；CCC 保证的是 post-reconciliation inadmissibility、successor coverage 与 auditable closure，而不是在网络分区期间魔法般消除所有局部过时回复。
+- **node-level**：如 raft leader、Kafka controller；
+- **object-level**：如 etcd lease、ZooKeeper session；
+- **range-level**：如 CockroachDB range leaseholder、TiKV region leader；
+- **session-level**：如 MongoDB primary election session；
+- **transaction-level**：如 2PC coordinator decision object。
 
-## 2. 问题设定与设计目标
+NoKV 当前最自然的 duty 是 `AllocID`、`TSO` 和 `GetRegionByKey`。本文的主轴是前两类 monotone duties；`GetRegionByKey` 只作为次轴，因为它在 NoKV 当前实现里仍然绑定在 coordinator lease 上。反过来，像 PD APF 或 smart client 那种 freely replicated、每次都只做 bounded-freshness answer 的 metadata lookup，不在 CCC 当前最稳的 scope 里。
 
-### 2.1 系统类型
+### 2.2 失败模型与 fault vocabulary
 
-本文关心的是一类特定系统，而不是所有 distributed control plane：
+本文假设 rooted authority 自身仍然提供复制与持久化语义。我们关注的 failure envelope 是：**rooted authority 仍然正确，但 service layer 暂时拿不到完整 truth，或者仍在按旧 truth 继续服务。** 在这个前提下，本文主要覆盖下面几类 fault：
 
-- 有显式 metadata authority；
-- service layer 与 truth layer 可以逻辑分离；
-- 至少存在一类 authority-bound continuation duty；
-- 有现实的“部分服务”价值，而不是 root 不可达时全盘停摆。
+- `delayed_reply`：旧 reply 在 handoff 之后才到达调用方；
+- `revived_holder`：旧 holder 恢复后继续输出旧代 reply；
+- `root_unreach`：service layer 暂时无法访问 rooted truth；
+- `lease_expiry`：authority 自然过期后 successor 接手；
+- `successor_campaign`：successor 通过 fresh acquire 或 transfer 接手；
+- `budget_exhaustion`：detached 期间 local budget 或 frontier 用尽；
+- `descriptor_publish_race`：metadata publish 与 answerability 之间发生竞态。
 
-这里的 scope 需要再说得更精确一些。**CCC 不讨论所有 control-plane duty，只讨论 authority-bound continuation duties**。一个 duty 只有在同时满足下面四个条件时，才属于本文范围：
-
-1. 它存在一段由单个 authority holder 持续推进的 continuation；
-2. holder transition 时，这段 continuation 必须被 seal，而不是天然可并发多读；
-3. transition 之后，old reply / stale success 是否还能被接受会变成一个合法性问题；
-4. detached segment 结束时，需要一个显式的 closure 才能把这段 continuation 合法收口。
-
-天然 multi-reader、stateless 的查询不属于这个范围。它们如果能通过 freshness contract 正确服务，就不需要 CCC；CCC 也不应对它们 claim 覆盖。
-
-NoKV 中最自然的两类 duty 是：
-
-1. `monotone duties`
-   - `AllocID`
-   - `Tso`
-2. `metadata-answer duty`（次轴）
-   - `GetRegionByKey`
-
-本文刻意把主轴收窄到 monotone duties，并把 `GetRegionByKey` 保留为次轴。原因不是它"天然属于 CCC"，而是 **NoKV 当前把 `GetRegionByKey` 绑定在 coordinator lease 上**，因此它在本实现里确实具有 authority-bound continuation 的形态。相反，像 PD APF / smart client 那种 freely-replicated multi-reader route lookup，如果每次查询都只是独立的 freshness-bounded answer，就**不在** CCC 范围内。scheduler ownership、placement publication 与更一般的 control-plane write duties 仍是重要扩展方向，但不属于当前主 artifact 的最稳 scope。
-
-#### 2.1.1 Authority 不止是 raft leader：关于 authority scope 的分层说明
-
-一个常见的误读是把"authority transition"等同于"raft leader change"。F1（`etcd-io/etcd#21638`，§5.5.2）在**单 node 嵌入式 etcd** 上就能稳定触发这个 authority-gap anomaly，正好证明 CCC 的 authority 概念**比 raft leader 更广**：它是任何**有显式 retirement 事件**的 scoped authority。下表把本文关心的 authority scope 分 5 层：
-
-| Authority scope | 具体对象 | Retirement 事件 | Leader 切换是否必要 |
-|---|---|---|:-:|
-| **Node-level** | raft leader / Kafka controller | view change / controller election | ✓ |
-| **Object-level** | etcd lease / zookeeper session | `Revoke` / session expiry | **✗** |
-| **Range-level** | CRDB range leaseholder / TiKV region leader | lease transfer / relocate | partial (不要求 node leader 换) |
-| **Session-level** | MongoDB primary electionId / sqlliveness session | election 或 heartbeat timeout | partial |
-| **Transaction-level** | 2PC coord state (prepare → commit/abort) | 显式 decision | ✗ |
-
-etcd `#15247` 发生在 node-level；CRDB `#66562` 发生在 range-level；F1 (`etcd#21638`) 发生在 **object-level**（lease 自身 granted → revoked）。**所有 5 层共享同一个 CCC signature**：rooted authority 正确（服务端在 R3 正确完成 revoke）、service layer 持 stale view（客户端 buffered channel 仍有 R2 的 success）、reply 跨 transition 边界未被机械拒绝。
-
-这个分层也解释了 F1 为什么在单 node 就能触发：**buffered Go channel between etcd server-side stream goroutine and client-side user code** 提供了 race 的场地，**lease 的 granted → revoked** 提供了 authority transition，**用户 drain 时机 vs revoke 完成时机** 提供了 race 本身 —— 三要素齐了，leader 切不切都无关。
-
-因此 paper 后续所有"authority transition"都应按**上面 5 层的任意一层**理解，而不是隐式 default 到 raft leader。同一 service-level correctness class（ALI）在 5 层上都适用；CCC 的贡献就是**把"authority retirement 合法收口"这件事从 node-scope 扩展到所有这 5 层**。
-
-### 2.2 失败模型
-
-本文假设 rooted authority 本身仍提供持久化与复制语义；本文关心的核心 failure envelope 是：**rooted authority 仍然正确，但暂时不可达于 service layer**。在这一前提下，service layer 与 root 之间可能出现：
-
-- 短暂不可达；
-- WAN latency / jitter；
-- delayed old reply；
-- old holder crash 后又复活；
-- root leader change；
-- detached 期间 budget 耗尽。
-
-本文不处理 Byzantine adversary，不提出新的 quorum protocol，也不试图在 detached 期间维持任意 control-plane write 的全功能可用性。
-
-### 2.2.1 最小 fault vocabulary
-
-为了把本文从“一个协议设计”继续推进到“一个 anomaly class + audit framework”，本文把 fault vocabulary 明确冻结为下面七元组：
-
-```text
-F = (
-    delayed_reply,
-    revived_holder,
-    root_unreach,
-    lease_expiry,
-    successor_campaign,
-    budget_exhaustion,
-    descriptor_publish_race
-)
-```
-
-当前 draft 先把它当作 **working fault vocabulary**，而不是过早承诺“最小充分性定理”。它的作用是统一：
-
-- NoKV integration tests 的 fault schedule；
-- `CCC/ALI` 的 formal target；
-- `ccc-audit` 的 anomaly vocabulary；
-- 外部系统 pilot 的最小复现脚本。
-
-当前 repo 已开始把这层对应关系显式落到 artifact：`TestDetachedProtocolFaultMatrix` 里的 rooted fault subcases 已按工作版 `F` 七元组加标签整理，而 `F.delayed_reply` 也已经有了独立命名的端到端 adversarial test，用来把 TLA+ 里的 late-delivery counterexample 对齐到真实 client verifier 路径。
+这不是本文声称的“最小充分 fault set”，而是当前 artifact 的工作 vocabulary。它的作用是统一 NoKV integration tests、TLA+ model、`ccc-audit` 的 anomaly kinds，以及 etcd / CRDB 两条外部证据线。
 
 ### 2.3 设计目标
 
-本文有五个设计目标。
+本文的设计目标有四个。
 
-1. control plane 在 root authority 暂时不可达时，仍可安全地继续一部分有用服务；
-2. 每种可继续的服务都必须有显式 budget / frontier；
-3. 每个回复都应携带足够协议证据，使下游能够验证“为什么此刻还能答”；
-4. 超出 handoff frontier 的服务必须 fail-stop，而不是 silent fallback；
-5. detached period 必须能够在重连后被 seal / reattach / audit。
+1. **让部分服务继续可用。** 当 root 暂时不可达时，系统仍能在明确边界内继续一部分有价值的 authority-bound duties，而不是一律 fail-stop。
+2. **让 continuation legality 可判定。** 每条 reply 都必须附着足够证据，让调用方或审计器判断它为什么仍然合法。
+3. **让 successor 覆盖义务显式化。** successor 的合法性不能只来自“我更年轻”，还必须来自它对 predecessor frontier 的覆盖。
+4. **让 handoff 可收口。** detached period 不能永远停留在“看起来没炸”的半开状态，必须最终走到 rooted close / reattach，并可被离线审计。
 
 ### 2.4 非目标
 
 本文不试图：
 
-- 在 detached 模式下保留全部 control-plane write 能力；
-- 替代 PD、KRaft、FDB 或 Cockroach 的整个设计空间；
-- 证明任意 route lookup 都是一般意义上的 linearizable；
+- 在 detached 模式下维持全部 control-plane write；
+- 取代 Chubby、Delos、PD、KRaft、CockroachDB 或 FoundationDB 的整体设计；
+- 重新定义一般意义上的 linearizability、serializability 或 session guarantees；
 - 在网络分区期间阻止所有 partition-local stale reply；
-- 用少量 localhost 数据支撑全局性能优越性。
+- 用少量 localhost 数据支撑“比工业系统更快”的泛化结论。
 
-更准确地说，CCC 保证的是：一旦 rooted authority 重新可见，旧 generation reply 必须变成 inadmissible，successor 必须覆盖 predecessor frontier，而且整段 detached period 必须可以被 seal / cover / close / reattach 审计收口。它不声称在网络分区期间，所有局部 actor 都不会短暂产出 partition-local stale reply。
+更准确地说，CCC 要保证的是：一旦 rooted authority 重新可见，旧 generation reply 必须变成 inadmissible，successor 必须覆盖 predecessor frontier，而且整段 detached period 必须能被 seal、close、reattach 和 audit 收口。它保证的是 **post-transition legality**，不是“任何时候都绝不短暂出错”的魔法语义。
 
 ## 3. 协议抽象：Auditable Authority Handoff
 
@@ -709,16 +646,18 @@ NoKV 现在还没有完整兑现 `CCC`，但它已经不再是 paper-only design
 
 这一组实验必须至少和以下基线比较：
 
-- `no-detach`
-- `lease-only`
-- `token-only`
-- `cache-only`
-- `window-only`
-- `follower-serving / dissemination-only`
+当前 artifact 真正支持的不是 6 个外部系统 baseline，而是 **同一协议骨架内部的 ablation variants**。更准确地说，当前 `benchmark/controlplane` 测的是：
 
-要回答的问题不是“谁 TPS 更高”，而是：**在同一 fault vocabulary 下，谁能在不越权的前提下保住更多有用 duty。**
+- fault scenario：`seal_path`、`late_reply`、`budget_exhaustion`、`root_unreach`
+- protocol switch：`DisableSeal / DisableBudget / DisableClientVerify / DisableReplyEvidence / DisableReattach / FailStopOnRootUnreach`
 
-当前 repo 已经开始把这层实验骨架对象化：`DisableSeal / DisableBudget / DisableClientVerify / DisableReplyEvidence / DisableReattach / FailStopOnRootUnreach` 这组 first-cut ablation switches 已进入实现，而且当前代码也已经开始补 **named preset + legality check**，避免 benchmark/test 继续用任意 bool 组合描述 paper model。`benchmark/controlplane` 已经有 detached ablation runner 去实际驱动 `seal_path / late_reply / budget_exhaustion / root_unreach` 这些故障路径。因此后续 `M1` 不必再从零重构 protocol path，而是可以直接围绕同一套 service/client switches 扩 fault matrix 与 detached utility measurement。
+因此 `M1` 当前回答的问题应写成：
+
+> **在同一 rooted truth、同一 fault vocabulary、同一 client/runtime implementation 下，去掉哪一类 CCC primitive 会先丢失 utility，或者先越过 legality boundary。**
+
+这比“拿 6 个外部 baseline 做一张统一柱状图”弱，但它和 repo 内实际 artifact 是一致的。`lease-only`、`token-only`、`cache-only`、`window-only`、`follower-serving / dissemination-only` 这些更宽泛的系统对照，目前只能作为 qualitative contrast 或 formal contrast 出现在讨论与 related-work 里，不能在 `§5.4.1` 里写成已经由当前 benchmark artifact 完整支撑的 baseline set。
+
+也正因为 current artifact 已经把 `DisableSeal / DisableBudget / DisableClientVerify / DisableReplyEvidence / DisableReattach / FailStopOnRootUnreach` 这组 ablation switch 对象化，后续 `M1` 不需要再从零重构 protocol path；它要做的是沿着同一套 service/client switch，把 fault matrix 和 detached utility measurement 做完整，而不是继续扩大 baseline 名单。
 
 #### 5.4.2 `M2`：steady-state tax of witness + verifier
 

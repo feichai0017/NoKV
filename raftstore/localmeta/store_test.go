@@ -191,6 +191,7 @@ func TestLocalStorePersistsPendingSchedulerOperations(t *testing.T) {
 		RegionID:     17,
 		SourcePeerID: 101,
 		TargetPeerID: 202,
+		Attempts:     3,
 	}))
 	require.NoError(t, store.Close())
 
@@ -204,6 +205,7 @@ func TestLocalStorePersistsPendingSchedulerOperations(t *testing.T) {
 	require.Equal(t, uint64(17), ops[0].RegionID)
 	require.Equal(t, uint64(101), ops[0].SourcePeerID)
 	require.Equal(t, uint64(202), ops[0].TargetPeerID)
+	require.Equal(t, uint32(3), ops[0].Attempts)
 	require.FileExists(t, filepath.Join(dir, PendingSchedulerOperationsFileName))
 }
 

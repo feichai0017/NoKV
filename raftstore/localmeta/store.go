@@ -509,6 +509,7 @@ func loadPendingSchedulerOperationCatalog(fs vfs.FS, workdir string) (map[string
 			RegionID:     item.GetRegionId(),
 			SourcePeerID: item.GetSourcePeerId(),
 			TargetPeerID: item.GetTargetPeerId(),
+			Attempts:     item.GetAttempts(),
 		}
 		if op.Kind == PendingSchedulerOperationUnknown {
 			continue
@@ -616,6 +617,7 @@ func persistPendingSchedulerOperationCatalog(fs vfs.FS, workdir string, ops map[
 			RegionId:      op.RegionID,
 			SourcePeerId:  op.SourcePeerID,
 			TargetPeerId:  op.TargetPeerID,
+			Attempts:      op.Attempts,
 		})
 	}
 	payload, err := proto.Marshal(pbCatalog)
