@@ -1,6 +1,6 @@
 # MemTable Flush Pipeline
 
-NoKV's flush path converts immutable memtables into L0 SST files, then advances the manifest WAL checkpoint and reclaims obsolete WAL segments. The queue and timing bookkeeping live directly in [`engine/lsm/flush_runtime.go`](../engine/lsm/flush_runtime.go); SST persistence and manifest install are in [`engine/lsm/builder.go`](../engine/lsm/builder.go) and [`engine/lsm/levels.go`](../engine/lsm/levels.go).
+NoKV's flush path converts immutable memtables into L0 SST files, then advances the manifest WAL checkpoint and reclaims obsolete WAL segments. The queue and timing bookkeeping live directly in [`engine/lsm/flush_runtime.go`](../engine/lsm/flush_runtime.go); SST persistence and manifest install are in [`engine/lsm/table_builder.go`](../engine/lsm/table_builder.go) and [`engine/lsm/level_manager.go`](../engine/lsm/level_manager.go).
 
 ---
 
