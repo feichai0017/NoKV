@@ -26,12 +26,6 @@
     <a href="https://deepwiki.com/feichai0017/NoKV"><img alt="DeepWiki" src="https://img.shields.io/badge/DeepWiki-Ask-6f42c1" /></a>
   </p>
 
-  <p>
-    <img alt="LOC" src="https://img.shields.io/badge/core_LOC-50k+-informational" />
-    <img alt="TLA+" src="https://img.shields.io/badge/formally_specified-TLA%2B-blueviolet" />
-    <img alt="Fault Injection" src="https://img.shields.io/badge/fault_injection-18_ops_%2B_8_phases-orange" />
-    <img alt="Self-contained" src="https://img.shields.io/badge/external_deps-none-brightgreen" />
-  </p>
 </div>
 
 <br/>
