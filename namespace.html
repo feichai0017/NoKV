@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>2026-03-30 从单机到分布式的桥接 - NoKV Docs</title>
+        <title>Namespace - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -12,34 +12,34 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="../favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
-        <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
-        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-2459343d.css">
+        <link rel="stylesheet" href="css/chrome-ae938929.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="../docs/custom-a69f6233.css">
+        <link rel="stylesheet" href="docs/custom-a69f6233.css">
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "../";
+            const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-4496f612.js";
+            window.path_to_searchindex_js = "searchindex-4496f612.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7c224925.js"></script>
+        <script src="toc-7c224925.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -106,7 +106,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -141,7 +141,7 @@
                     <h1 class="menu-title">NoKV Docs</h1>
 
                     <div class="right-buttons">
-                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
@@ -178,238 +178,176 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="2026-03-30-从单机到分布式的桥接为什么是-nokv-的主线能力"><a class="header" href="#2026-03-30-从单机到分布式的桥接为什么是-nokv-的主线能力">2026-03-30 从单机到分布式的桥接为什么是 NoKV 的主线能力</a></h1>
+                        <h1 id="namespace"><a class="header" href="#namespace">Namespace</a></h1>
+<p>The <code>namespace/</code> package provides <strong>hierarchical, paginated listing</strong> on top of the NoKV KV substrate. It is exposed at the top level as <code>DB.Namespace(...)</code> which returns a <code>NamespaceHandle</code>.</p>
 <blockquote>
-<p>状态：当前设计已经落地，相关实现分散在 <code>DB</code>、<code>raftstore</code>、<code>migrate</code>、<code>coordinator</code> 与 <code>meta/root</code> 中。本文重点不是复述命令，而是解释为什么 NoKV 没有把“单机版”和“分布式版”做成两套系统。</p>
+<p>This layer is optional. The core <code>DB</code> still uses flat keys; <code>namespace</code> only adds a path-aware listing surface for applications that need <code>Create</code> / <code>Lookup</code> / <code>List(parent)</code> semantics.</p>
 </blockquote>
-<h2 id="导读"><a class="header" href="#导读">导读</a></h2>
+<hr>
+<h2 id="1-what-it-is-in-one-paragraph"><a class="header" href="#1-what-it-is-in-one-paragraph">1. What it is, in one paragraph</a></h2>
+<p>Many workloads store data under path-like keys (<code>/a/b/c</code>, <code>bucket/object</code>, <code>run/epoch_N/shard_k</code>). A plain prefix scan over <code>M|full_path</code> answers <code>List(parent)</code> correctly, but pays for all descendants rather than just direct children, and offers no notion of “this page is complete vs in-flight”. The namespace layer keeps <code>M|full_path</code> as the only source of truth and builds a <strong>fence-paged read plane</strong> alongside it, together with a tiny coverage state machine. Listing hits the read plane when the interval is certified; otherwise callers get an explicit <code>ErrCoverageIncomplete</code> and must run <code>RepairAndList</code>.</p>
+<hr>
+<h2 id="2-key-layout"><a class="header" href="#2-key-layout">2. Key layout</a></h2>
+<p>Five key families live in the underlying KV:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Family</th><th>Role</th></tr>
+</thead>
+<tbody>
+<tr><td><code>M|full_path</code></td><td>Authoritative metadata (the only truth)</td></tr>
+<tr><td><code>LR|parent</code></td><td>Read-plane root: page directory + per-interval coverage state</td></tr>
+<tr><td><code>LP|parent|fence</code></td><td>Ordered micro-pages (children in fence interval)</td></tr>
+<tr><td><code>LD|parent|shard|child</code></td><td>Bootstrap delta log (for not-yet-materialized parents)</td></tr>
+<tr><td><code>LDP|parent|page|#seq</code></td><td>Page-local delta log (for recent mutations on materialized parents)</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>M</code> is read on every <code>Lookup</code>. <code>LR/LP</code> are read on every strict <code>List</code>. <code>LD/LDP</code> are consumed by <code>RepairAndList</code> / <code>MaterializeDeltaPages</code>.</p>
+<p>Encoding lives in <a href="../namespace/codec.go"><code>namespace/codec.go</code></a>.</p>
+<hr>
+<h2 id="3-three-state-coverage-model"><a class="header" href="#3-three-state-coverage-model">3. Three-state coverage model</a></h2>
+<p>Each page interval in <code>LR</code> carries a <code>PageCoverageState</code> (<code>coordinator/protocol/controlplane</code> terminology doesn’t apply here — this is namespace-local):</p>
 <ul>
-<li>🧭 主题：单机 workdir 如何通过协议提升成分布式 store，而不是走 dump/import 外挂工具路线。</li>
-<li>🧱 核心对象：<code>mode</code>、<code>snapshot</code>、<code>localmeta</code>、<code>seed region</code>。</li>
-<li>🔁 调用链：<code>standalone -&gt; preparing -&gt; seeded -&gt; cluster</code>。</li>
-<li>📚 参考对象：range/shard 系统的身份提升、Delos/FDB 一类的小控制面骨架。</li>
+<li><strong>Covered</strong> — the interval has a published page, no pending delta, and generation matches <code>LR</code>’s root generation. Strict <code>List</code> is allowed.</li>
+<li><strong>Uncovered</strong> — no page published yet, or publish is incomplete. Strict <code>List</code> returns <code>ErrCoverageIncomplete</code>.</li>
+<li><strong>Dirty</strong> — a page exists but a page-local <code>LDP</code> entry has landed after publication. Must be folded before strict <code>List</code> can answer again.</li>
 </ul>
-<h2 id="1-为什么这件事重要"><a class="header" href="#1-为什么这件事重要">1. 为什么这件事重要</a></h2>
-<p>很多 KV 项目在早期会先把单机版做出来，等到需要分布式能力时，再额外补一套新的元数据、恢复、运维和数据导入逻辑。这样做短期上手快，但长期会带来三个问题：</p>
-<ol>
-<li>单机数据和分布式数据不是同一个世界，后续只能 dump/import。</li>
-<li>运维和恢复心智要分两套，项目复杂度成倍增长。</li>
-<li>很多设计在单机阶段看起来成立，进入分布式后全部重做。</li>
-</ol>
-<p>NoKV 不希望走这条路。NoKV 的目标不是“先做一个单机 KV，再做一个分布式 KV”，而是：</p>
-<blockquote>
-<p>同一套数据面先以单机形态运行，再通过协议和恢复层逐步提升为分布式形态。</p>
-</blockquote>
-<h2 id="2-当前系统边界"><a class="header" href="#2-当前系统边界">2. 当前系统边界</a></h2>
-<p>当前相关实现主要分布在：</p>
-<ul>
-<li><code>db.go</code></li>
-<li><code>raftstore/localmeta</code></li>
-<li><code>raftstore/snapshot</code></li>
-<li><code>raftstore/mode</code></li>
-<li><code>raftstore/migrate</code></li>
-<li><code>coordinator</code></li>
-<li><code>meta/root</code></li>
-</ul>
-<p>分层如下：</p>
-<pre class="mermaid">flowchart TD
-    DB["DB / 单机数据面"] --&gt; LM["raftstore/localmeta\n本地恢复元数据"]
-    DB --&gt; SNAP["raftstore/snapshot\n逻辑 Region 快照"]
-    MODE["raftstore/mode\nworkdir 生命周期门"] --&gt; MIG["raftstore/migrate\n桥接协议"]
-    SNAP --&gt; MIG
-    LM --&gt; MIG
-    MIG --&gt; RS["raftstore\n分布式执行层"]
-    RS --&gt; Coordinator["coordinator\nview + service"]
-    Coordinator --&gt; MR["meta/root\n最小真相源"]
-</pre>
+<p>Strict <code>List</code> only reads covered pages. Anything else forces the caller to choose between fail-stop and explicit <code>RepairAndList</code>.</p>
+<hr>
+<h2 id="4-api-surface"><a class="header" href="#4-api-surface">4. API surface</a></h2>
+<p>All methods are on <code>DB.Namespace(...)</code> which wraps <a href="../namespace/store.go"><code>namespace.Store</code></a>.</p>
+<h3 id="writes"><a class="header" href="#writes">Writes</a></h3>
+<pre><code class="language-go">h := db.Namespace(NamespaceOptions{Shards: 16})
+defer h.Close()
 
-<h3 id="关键判断"><a class="header" href="#关键判断">关键判断</a></h3>
-<ol>
-<li><code>DB</code> 仍然是底层共享数据面，不是导出后再导入另一种格式。</li>
-<li><code>raftstore/localmeta</code> 只负责 store-local 恢复，不是 cluster authority。</li>
-<li><code>raftstore/snapshot</code> 是逻辑 region 快照，不等于 raft durable snapshot metadata。</li>
-<li><code>migrate</code> 是协议，不是脚本集合。</li>
-</ol>
-<h2 id="3-如果不这样做会发生什么"><a class="header" href="#3-如果不这样做会发生什么">3. 如果不这样做，会发生什么</a></h2>
-<p>如果单机和分布式是两套系统，典型结果会是：</p>
+h.Create([]byte("/a/b/file"), namespace.EntryKindFile, metaBytes)
+h.Delete([]byte("/a/b/file"))
+</code></pre>
+<p><code>Create</code> / <code>Delete</code> update <code>M</code> first, then append to the appropriate delta family:</p>
 <ul>
-<li>单机目录直接被视为“旧格式”，只能整体导出。</li>
-<li>分布式 bootstrap 依赖外部工具，而不是系统自身的生命周期协议。</li>
-<li>恢复、校验、观测、测试路径出现双轨制。</li>
-<li>后面任何关于 snapshot、reshard、scheduler/control-plane 的研究都要分别做两遍。</li>
+<li>If parent is <strong>not yet materialized</strong>: write goes to <code>LD|parent|shard|child</code> (bootstrap delta)</li>
+<li>If parent <strong>is materialized</strong>: write goes to <code>LDP|parent|page|#seq</code> (page-local delta) and marks the affected page as <code>Dirty</code></li>
 </ul>
-<p>对于研究平台来说，这种分裂尤其糟糕。因为你无法回答一个最基本的问题：</p>
-<blockquote>
-<p>你研究的是同一个系统的扩展，还是两套系统之间的迁移工具？</p>
-</blockquote>
-<p>NoKV 现在的做法是明确回答前者。</p>
-<h2 id="4-当前设计怎么把桥接做成协议"><a class="header" href="#4-当前设计怎么把桥接做成协议">4. 当前设计怎么把桥接做成协议</a></h2>
-<p>核心不是 CLI 名字，而是状态边界。</p>
-<h3 id="41-workdir-mode-是正式协议"><a class="header" href="#41-workdir-mode-是正式协议">4.1 workdir mode 是正式协议</a></h3>
-<p>相关代码：</p>
-<ul>
-<li><code>raftstore/mode</code></li>
-</ul>
-<p>当前生命周期至少包括：</p>
-<ul>
-<li><code>standalone</code></li>
-<li><code>preparing</code></li>
-<li><code>seeded</code></li>
-<li><code>cluster</code></li>
-</ul>
-<p>这意味着：</p>
-<ul>
-<li>一个 workdir 不再永远被假设成普通本地 DB。</li>
-<li>一旦目录进入 <code>preparing/seeded/cluster</code>，普通单机打开路径就必须被 gate 住。</li>
-<li>生命周期不再靠“运维同学记住别手抖”，而是靠库级约束。</li>
-</ul>
-<h3 id="42-snapshot-被分层而不是一个模糊大概念"><a class="header" href="#42-snapshot-被分层而不是一个模糊大概念">4.2 snapshot 被分层，而不是一个模糊大概念</a></h3>
-<p>相关代码：</p>
-<ul>
-<li><code>raftstore/engine/snapshot.go</code></li>
-<li><code>raftstore/snapshot</code></li>
-</ul>
-<p>当前有两层 snapshot：</p>
-<ol>
-<li>raft durable metadata snapshot</li>
-<li>region logical state snapshot</li>
-</ol>
-<p>这条分层很重要，因为单机提升到分布式，真正需要提升的是：</p>
-<ul>
-<li>key range 对应的数据状态</li>
-<li>region identity</li>
-<li>peer identity</li>
-<li>local recovery metadata</li>
-</ul>
-<p>而不是只搬一份 term/index/confstate。</p>
-<h3 id="43-migrate-是状态提升协议不是命令拼接"><a class="header" href="#43-migrate-是状态提升协议不是命令拼接">4.3 migrate 是状态提升协议，不是命令拼接</a></h3>
-<p>相关代码：</p>
-<ul>
-<li><code>raftstore/migrate/init.go</code></li>
-<li><code>raftstore/migrate/expand.go</code></li>
-</ul>
-<p>当前主线可以概括成：</p>
-<pre class="mermaid">sequenceDiagram
-    participant DB as 单机 workdir
-    participant MODE as mode gate
-    participant MIG as migrate
-    participant RS as raftstore
-    participant Coordinator as coordinator/meta
+<h3 id="point-reads"><a class="header" href="#point-reads">Point reads</a></h3>
+<pre><code class="language-go">meta, err := h.Lookup([]byte("/a/b/file"))
+</code></pre>
+<p><code>Lookup</code> is a direct <code>M|full_path</code> read. It never touches the read plane.</p>
+<h3 id="listing"><a class="header" href="#listing">Listing</a></h3>
+<pre><code class="language-go">// Strict — fails if interval is uncovered/dirty
+entries, next, stats, err := h.List(parent, cursor, limit)
 
-    DB-&gt;&gt;MODE: standalone -&gt; preparing
-    MODE-&gt;&gt;MIG: 允许写入 seed 语义
-    MIG-&gt;&gt;RS: init 一个 full-range seed region
-    RS-&gt;&gt;MODE: preparing -&gt; seeded
-    MIG-&gt;&gt;RS: serve / expand
-    RS-&gt;&gt;Coordinator: 加入 cluster control-plane
-    RS-&gt;&gt;MODE: seeded -&gt; cluster
-</pre>
+// Explicit repair then list — allowed to consult M + deltas to fix the interval
+entries, next, stats, err := h.RepairAndList(parent, cursor, limit)
+</code></pre>
+<p><code>stats</code> reports whether the result came from the strict read plane or from repair, and how many pages/deltas were touched.</p>
+<h3 id="maintenance"><a class="header" href="#maintenance">Maintenance</a></h3>
+<pre><code class="language-go">// Fold all page-local deltas back into pages (global)
+stats, err := h.Materialize(parent)
 
-<p>这里真正值钱的是：</p>
+// Fold up to N dirty pages (bounded work)
+stats, err := h.MaterializeDeltaPages(parent, maxDeltaPages)
+
+// Rebuild entire read plane from M (expensive, rare)
+stats, err := h.Rebuild(parent)
+
+// Return internal read plane view for diagnostics
+view, ok, err := h.LoadReadPlaneView(parent)
+
+// Runtime stats for observability
+ls, err := h.Stats(parent)
+</code></pre>
+<h3 id="verification"><a class="header" href="#verification">Verification</a></h3>
+<pre><code class="language-go">vs, err := h.Verify(parent)
+</code></pre>
+<p><code>Verify</code> walks <code>M</code>, <code>LR</code>, <code>LP</code>, <code>LD</code>, <code>LDP</code> and reports:</p>
 <ul>
-<li>state promotion 有明确边界</li>
-<li>snapshot 有明确边界</li>
-<li>恢复和正常执行走同一套语义</li>
+<li><strong>Membership drift</strong> — children in <code>M</code> that are missing from pages, or vice versa</li>
+<li><strong>Certificate inconsistency</strong> — page generation mismatch, wrong fence keys, wrong counts</li>
+<li><strong>Publication mismatch</strong> — root generation inconsistent with pages’ generations, frontier rollback, root-page cohort mismatch</li>
 </ul>
-<h2 id="5-调用逻辑"><a class="header" href="#5-调用逻辑">5. 调用逻辑</a></h2>
-<h3 id="migrate-init"><a class="header" href="#migrate-init"><code>migrate init</code></a></h3>
-<p>目标：</p>
-<ul>
-<li>给原 standalone workdir 写入 seed region 语义</li>
-<li>让它不再只是“一个 DB 目录”</li>
-</ul>
-<p>做的事情大致是：</p>
+<p>These three reports live under <code>VerifyStats.Membership</code> / <code>.Certificate</code> / <code>.Publication</code>.</p>
+<hr>
+<h2 id="5-why-not-just-prefix-scan-m"><a class="header" href="#5-why-not-just-prefix-scan-m">5. Why not just prefix scan <code>M|</code>?</a></h2>
+<p>Prefix scan on <code>M|parent/...</code> works correctly but has two cost issues:</p>
 <ol>
-<li>检查当前 mode 是否允许提升。</li>
-<li>为 workdir 生成初始 region / peer / localmeta。</li>
-<li>导出逻辑 region snapshot 或建立 seed state。</li>
-<li>把目录推进到 <code>seeded</code>。</li>
+<li><strong>It reads all descendants.</strong> If <code>parent</code> has 1K direct children but each has 100 grandchildren, the scan touches 100K keys to answer a 1K-item <code>List</code>.</li>
+<li><strong>It has no answerability state.</strong> There is no way to express “we currently have a complete, consistent page ready to serve” vs “we’re mid-rewrite”. Callers have to trust whatever comes back.</li>
 </ol>
-<h3 id="serve"><a class="header" href="#serve"><code>serve</code></a></h3>
-<p>目标：</p>
+<p>The read plane costs extra writes (dual-writing <code>M</code> + <code>LDP</code>/<code>LD</code>) and extra maintenance (<code>Materialize</code> / repair). In exchange, <code>List</code> becomes page-granular, and the coverage state machine gives you a clean place to fail-stop.</p>
+<hr>
+<h2 id="6-cost-vs-a-durable-parent-child-secondary-index"><a class="header" href="#6-cost-vs-a-durable-parent-child-secondary-index">6. Cost vs. a durable parent-child secondary index</a></h2>
+<p>A simpler alternative is a plain durable index: <code>S|parent|child -&gt; {}</code> updated on every <code>Create</code>/<code>Delete</code>. That gives you fast <code>List</code> without fences, pages, or coverage state — but every <code>List</code> is best-effort: if the index is slightly stale or mid-rebuild, the caller either gets partial data silently or has to re-derive from <code>M</code>.</p>
+<p><code>namespace/</code> pays more maintenance cost in exchange for:</p>
 <ul>
-<li>让 seeded workdir 进入真正的 cluster 语义</li>
+<li><strong>Page granularity</strong> — deltas and repairs are scoped to one fence interval, not the whole parent</li>
+<li><strong>Explicit coverage</strong> — strict <code>List</code> never silently falls back; the caller decides whether to repair</li>
 </ul>
-<p>做的事情大致是：</p>
-<ol>
-<li>启动 <code>raftstore</code>。</li>
-<li>恢复本地 <code>replicas.binpb</code> 和 <code>raft-progress.binpb</code>。</li>
-<li>向 <code>coordinator</code> / <code>meta/root</code> 注册 rooted truth。</li>
-<li>开始按 region/peer 身份参与执行面。</li>
-</ol>
-<h3 id="expand"><a class="header" href="#expand"><code>expand</code></a></h3>
-<p>目标：</p>
-<ul>
-<li>把 seed region 扩成 replicated region</li>
-</ul>
-<p>做的事情大致是：</p>
-<ol>
-<li>生成新的 peer change / split / merge 目标。</li>
-<li>通过 <code>coordinator</code> proposal gate 进入 <code>meta/root</code>。</li>
-<li>由 <code>raftstore</code> 执行真正的 conf change / snapshot install。</li>
-<li>terminal truth 回写 <code>meta/root</code>。</li>
-</ol>
-<h2 id="6-设计理念"><a class="header" href="#6-设计理念">6. 设计理念</a></h2>
-<p>这条桥接路线背后的理念有三条：</p>
-<h3 id="61-不重复造两套数据面"><a class="header" href="#61-不重复造两套数据面">6.1 不重复造两套数据面</a></h3>
-<p>单机和分布式共享底层 DB / LSM / WAL / VLog。</p>
-<h3 id="62-身份提升比数据搬运更重要"><a class="header" href="#62-身份提升比数据搬运更重要">6.2 身份提升比数据搬运更重要</a></h3>
-<p>困难不在于“把字节拷过去”，而在于：</p>
-<ul>
-<li>让原本匿名的本地状态变成带 region/peer 身份的状态</li>
-<li>让它进入可恢复、可验证、可编排的 cluster 生命周期</li>
-</ul>
-<h3 id="63-迁移必须走协议"><a class="header" href="#63-迁移必须走协议">6.3 迁移必须走协议</a></h3>
-<p>如果桥接只是一个脚本，后面所有关于：</p>
-<ul>
-<li>restore</li>
-<li>reshard</li>
-<li>scheduler/control-plane runtime</li>
-<li>snapshot install</li>
-<li>failover</li>
-</ul>
-<p>的研究都会变得含糊不清。</p>
-<h2 id="7-参考对象"><a class="header" href="#7-参考对象">7. 参考对象</a></h2>
-<p>这一块没有直接照搬某一个系统，但思路上接近几类工业实践：</p>
-<ul>
-<li>TiKV / Cockroach 里关于 range/shard 身份与复制元数据分层的经验</li>
-<li>FoundationDB / Delos 一类系统里“让小而稳定的控制面成为系统骨架”的思路</li>
-<li>数据库内核里“把生命周期写进协议而不是运维手册”的做法</li>
-</ul>
-<h2 id="8-当前已经落地的边界"><a class="header" href="#8-当前已经落地的边界">8. 当前已经落地的边界</a></h2>
-<ul>
-<li>workdir mode gate 已经进入正式实现。</li>
-<li><code>migrate init</code> / <code>serve</code> / <code>expand</code> 已经是协议入口，不是临时脚本。</li>
-<li><code>localmeta</code> 与 engine metadata 已明确分开。</li>
-<li>region snapshot 已是单独层，并被 migration / install 路径复用。</li>
-<li>当前桥接路径已经能接入 <code>coordinator</code> / <code>meta/root</code> 主线。</li>
-</ul>
-<h2 id="9-当前没有实现的能力"><a class="header" href="#9-当前没有实现的能力">9. 当前没有实现的能力</a></h2>
-<ul>
-<li>promotion 阶段不做自动 split / rebalance。</li>
-<li>snapshot install 还不是 zero-copy table transfer 或 SST ingest 优化路径。</li>
-<li>failed <code>init</code> 后还没有单独的 rollback / repair 命令。</li>
-<li>migration observability 仍然偏基础。</li>
-<li>scheduler/control-plane runtime 还没有自动编排 migration 生命周期。</li>
-</ul>
-<h2 id="10-总结"><a class="header" href="#10-总结">10. 总结</a></h2>
-<p>NoKV 这条“从单机到分布式”的桥接路线，真正值钱的不是多了几条 CLI，而是：</p>
-<ul>
-<li>它没有把单机和分布式做成两套系统</li>
-<li>它把 state promotion 写成了协议</li>
-<li>它让后续关于 control-plane、snapshot、调度和恢复的研究，都能建立在同一套系统之上</li>
-</ul>
-<p>这比“再做一个分布式 KV 外壳”更重要，因为它决定了 NoKV 后面能不能持续演进，而不是每往前走一步都重造一层。</p>
+<p>If you don’t need that distinction, a flat secondary index is simpler and probably faster.</p>
+<hr>
+<h2 id="7-example"><a class="header" href="#7-example">7. Example</a></h2>
+<pre><code class="language-go">package main
+
+import (
+    "fmt"
+
+    NoKV "github.com/feichai0017/NoKV"
+    ns "github.com/feichai0017/NoKV/namespace"
+)
+
+func main() {
+    opt := NoKV.NewDefaultOptions()
+    opt.WorkDir = "./ns-demo"
+    db, _ := NoKV.Open(opt)
+    defer db.Close()
+
+    h := db.Namespace(NoKV.NamespaceOptions{Shards: 16})
+    defer h.Close()
+
+    h.Create([]byte("/a/b/c"), ns.EntryKindFile, []byte(`{"kind":"file"}`))
+    h.Create([]byte("/a/b/d"), ns.EntryKindFile, nil)
+
+    // Materialize the parent so strict List becomes possible.
+    _, _ = h.Materialize([]byte("/a/b"))
+
+    entries, next, stats, err := h.List([]byte("/a/b"), ns.Cursor{}, 100)
+    if err != nil {
+        fmt.Println("list err:", err)
+        return
+    }
+    fmt.Printf("got %d entries, read_pages=%d, next=%+v\n",
+        len(entries), stats.ReadPlanePages, next)
+}
+</code></pre>
+<hr>
+<h2 id="8-source-map"><a class="header" href="#8-source-map">8. Source map</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>File</th><th>Responsibility</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="../namespace/store.go"><code>namespace/store.go</code></a></td><td>Main <code>Store</code> with <code>Create</code>/<code>Delete</code>/<code>Lookup</code>/<code>List</code>/<code>RepairAndList</code>/<code>Materialize</code></td></tr>
+<tr><td><a href="../namespace/readplane.go"><code>namespace/readplane.go</code></a></td><td><code>ReadRoot</code>, <code>ReadPage</code>, <code>PageCertificate</code>, strict-read evaluator</td></tr>
+<tr><td><a href="../namespace/delta.go"><code>namespace/delta.go</code></a>, <a href="../namespace/delta_state.go"><code>namespace/delta_state.go</code></a></td><td><code>LD</code> / <code>LDP</code> encoding + per-page delta state</td></tr>
+<tr><td><a href="../namespace/page_merge.go"><code>namespace/page_merge.go</code></a></td><td>Fold page-local deltas into pages; split/merge fences</td></tr>
+<tr><td><a href="../namespace/codec.go"><code>namespace/codec.go</code></a></td><td>Key + value encoding for all five families</td></tr>
+<tr><td><a href="../namespace/types.go"><code>namespace/types.go</code></a></td><td><code>Entry</code>, <code>Cursor</code>, <code>*Stats</code> public types</td></tr>
+<tr><td><a href="../namespace.go"><code>namespace.go</code></a> (root)</td><td>Thin <code>DB.Namespace</code> wrapper exposing the module as a first-class handle</td></tr>
+</tbody>
+</table>
+</div>
+<p>Tests: <code>namespace/*_test.go</code> cover create/delete/list, repair transitions, dirty-page handling, bootstrap, materialize, rebuild, and verification.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../notes/2026-02-15-vfs-abstraction-and-deterministic-reliability.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="rooted_truth.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../notes/2026-03-30-coordinator-and-execution-layering.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="percolator.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -419,11 +357,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../notes/2026-02-15-vfs-abstraction-and-deterministic-reliability.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="rooted_truth.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../notes/2026-03-30-coordinator-and-execution-layering.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="percolator.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -443,17 +381,17 @@
         </script>
 
 
-        <script src="../elasticlunr-ef4e11c1.min.js"></script>
-        <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-c2a407aa.js"></script>
 
-        <script src="../clipboard-1626706a.min.js"></script>
-        <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="../docs/custom-732fa610.js"></script>
-        <script src="../docs/mermaid-init-8a66ee6c.js"></script>
+        <script src="docs/custom-732fa610.js"></script>
+        <script src="docs/mermaid-init-8a66ee6c.js"></script>
 
 
 

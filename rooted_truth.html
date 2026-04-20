@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>2026-03-30 从单机到分布式的桥接 - NoKV Docs</title>
+        <title>Rooted Truth (meta/root) - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -12,34 +12,34 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="../favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
-        <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
-        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-2459343d.css">
+        <link rel="stylesheet" href="css/chrome-ae938929.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="../docs/custom-a69f6233.css">
+        <link rel="stylesheet" href="docs/custom-a69f6233.css">
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "../";
+            const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-4496f612.js";
+            window.path_to_searchindex_js = "searchindex-4496f612.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7c224925.js"></script>
+        <script src="toc-7c224925.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -106,7 +106,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -141,7 +141,7 @@
                     <h1 class="menu-title">NoKV Docs</h1>
 
                     <div class="right-buttons">
-                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
@@ -178,238 +178,194 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="2026-03-30-从单机到分布式的桥接为什么是-nokv-的主线能力"><a class="header" href="#2026-03-30-从单机到分布式的桥接为什么是-nokv-的主线能力">2026-03-30 从单机到分布式的桥接为什么是 NoKV 的主线能力</a></h1>
+                        <h1 id="rooted-truth--metaroot"><a class="header" href="#rooted-truth--metaroot">Rooted Truth — <code>meta/root</code></a></h1>
+<p>The <code>meta/root/</code> tree implements NoKV’s <strong>rooted truth kernel</strong>: a typed, append-only event log whose committed tail is the single source of truth for cluster-level metadata (coordinator leases, allocator fences, region lifecycle, pending peer/range changes).</p>
 <blockquote>
-<p>状态：当前设计已经落地，相关实现分散在 <code>DB</code>、<code>raftstore</code>、<code>migrate</code>、<code>coordinator</code> 与 <code>meta/root</code> 中。本文重点不是复述命令，而是解释为什么 NoKV 没有把“单机版”和“分布式版”做成两套系统。</p>
+<p>If the distributed system has a “brain”, it does <strong>not</strong> live in the coordinator. It lives here. The coordinator is a service+view on top of this log.</p>
 </blockquote>
-<h2 id="导读"><a class="header" href="#导读">导读</a></h2>
-<ul>
-<li>🧭 主题：单机 workdir 如何通过协议提升成分布式 store，而不是走 dump/import 外挂工具路线。</li>
-<li>🧱 核心对象：<code>mode</code>、<code>snapshot</code>、<code>localmeta</code>、<code>seed region</code>。</li>
-<li>🔁 调用链：<code>standalone -&gt; preparing -&gt; seeded -&gt; cluster</code>。</li>
-<li>📚 参考对象：range/shard 系统的身份提升、Delos/FDB 一类的小控制面骨架。</li>
-</ul>
-<h2 id="1-为什么这件事重要"><a class="header" href="#1-为什么这件事重要">1. 为什么这件事重要</a></h2>
-<p>很多 KV 项目在早期会先把单机版做出来，等到需要分布式能力时，再额外补一套新的元数据、恢复、运维和数据导入逻辑。这样做短期上手快，但长期会带来三个问题：</p>
+<hr>
+<h2 id="1-why-a-separate-truth-layer"><a class="header" href="#1-why-a-separate-truth-layer">1. Why a separate truth layer</a></h2>
+<p>In a typical multi-raft system, the metadata used by the control plane (routes, TSO, leases, scheduling decisions) is either:</p>
 <ol>
-<li>单机数据和分布式数据不是同一个世界，后续只能 dump/import。</li>
-<li>运维和恢复心智要分两套，项目复杂度成倍增长。</li>
-<li>很多设计在单机阶段看起来成立，进入分布式后全部重做。</li>
+<li>Stored inside one of the raft groups (mixed with user data)</li>
+<li>Owned by a single coordinator node (coordinator becomes the bottleneck)</li>
+<li>Split across ad-hoc persistence files</li>
 </ol>
-<p>NoKV 不希望走这条路。NoKV 的目标不是“先做一个单机 KV，再做一个分布式 KV”，而是：</p>
-<blockquote>
-<p>同一套数据面先以单机形态运行，再通过协议和恢复层逐步提升为分布式形态。</p>
-</blockquote>
-<h2 id="2-当前系统边界"><a class="header" href="#2-当前系统边界">2. 当前系统边界</a></h2>
-<p>当前相关实现主要分布在：</p>
+<p>NoKV makes it <strong>explicit</strong>: there is a small, typed metadata log with its own durability and replication shape, and everything control-plane-related goes through it. This matches the “virtual consensus” pattern (Delos-lite): the log is the truth; services above are views that can be rebuilt.</p>
+<p>The benefits are concrete:</p>
 <ul>
-<li><code>db.go</code></li>
-<li><code>raftstore/localmeta</code></li>
-<li><code>raftstore/snapshot</code></li>
-<li><code>raftstore/mode</code></li>
-<li><code>raftstore/migrate</code></li>
-<li><code>coordinator</code></li>
-<li><code>meta/root</code></li>
+<li><strong>Coordinator is stateless at restart</strong> — the only persistent thing about a coordinator is its configured holder ID; everything else is rebuilt from <code>meta/root</code> on boot</li>
+<li><strong>The log can be swapped</strong> between local (single-node) and replicated (embedded-raft) backends without changing coordinator code</li>
+<li><strong>Authority handoff is auditable</strong> — every lease grant / seal / closure event is a committed log record with a cursor</li>
 </ul>
-<p>分层如下：</p>
-<pre class="mermaid">flowchart TD
-    DB["DB / 单机数据面"] --&gt; LM["raftstore/localmeta\n本地恢复元数据"]
-    DB --&gt; SNAP["raftstore/snapshot\n逻辑 Region 快照"]
-    MODE["raftstore/mode\nworkdir 生命周期门"] --&gt; MIG["raftstore/migrate\n桥接协议"]
-    SNAP --&gt; MIG
-    LM --&gt; MIG
-    MIG --&gt; RS["raftstore\n分布式执行层"]
-    RS --&gt; Coordinator["coordinator\nview + service"]
-    Coordinator --&gt; MR["meta/root\n最小真相源"]
-</pre>
+<hr>
+<h2 id="2-package-layout"><a class="header" href="#2-package-layout">2. Package layout</a></h2>
+<pre><code>meta/
+├── root/
+│   ├── protocol/       # Pure protocol types (Cursor, Frontiers, Handoff, Witness, ...)
+│   ├── event/          # Typed events (KindStoreJoined, KindCoordinatorLease, ...)
+│   ├── state/          # Compact applied state (State, Snapshot, ApplyEventToSnapshot)
+│   ├── materialize/    # Helpers that build Snapshot from raw events
+│   ├── storage/        # Virtual log file layout + checkpoint format
+│   │   └── file/       # Actual on-disk file operations
+│   ├── backend/
+│   │   ├── local/      # Single-node file-backed log
+│   │   └── replicated/ # Embedded raft-backed log (quorum durability)
+│   └── remote/         # gRPC service + client for remote rooted access
+└── wire/               # proto &lt;-&gt; Go conversions (Event, Snapshot, Cursor)
+</code></pre>
+<hr>
+<h2 id="3-what-lives-in-rooted-state"><a class="header" href="#3-what-lives-in-rooted-state">3. What lives in rooted state</a></h2>
+<p><a href="../meta/root/state/state.go"><code>meta/root/state/state.go</code></a> defines <code>State</code>, the applied snapshot. Everything the control plane cares about is here:</p>
+<pre><code class="language-go">type State struct {
+    ClusterEpoch       uint64         // bumped on topology event
+    MembershipEpoch    uint64         // bumped on store join/leave
+    LastCommitted      Cursor         // highest committed (term, index)
+    IDFence            uint64         // globally fenced ID allocator floor
+    TSOFence           uint64         // globally fenced TSO allocator floor
+    CoordinatorLease   CoordinatorLease
+    CoordinatorSeal    CoordinatorSeal
+    CoordinatorClosure CoordinatorClosure
+}
+</code></pre>
+<p><code>Snapshot</code> wraps <code>State</code> together with descriptors and pending peer/range changes:</p>
+<pre><code class="language-go">type Snapshot struct {
+    State               State
+    Descriptors         map[uint64]descriptor.Descriptor
+    PendingPeerChanges  map[uint64]PendingPeerChange
+    PendingRangeChanges map[uint64]PendingRangeChange
+}
+</code></pre>
+<p>Every event kind has a deterministic effect on <code>Snapshot</code>. See <a href="../meta/root/state/snapshot_apply.go"><code>meta/root/state/snapshot_apply.go</code></a> and <a href="../meta/root/state/state.go"><code>meta/root/state/state.go:ApplyEventToState</code></a>.</p>
+<hr>
+<h2 id="4-the-append-protocol"><a class="header" href="#4-the-append-protocol">4. The Append protocol</a></h2>
+<p>The core interface any backend must satisfy:</p>
+<pre><code class="language-go">type Backend interface {
+    Snapshot() (rootstate.Snapshot, error)
+    Append(ctx context.Context, events ...rootevent.Event) (rootstate.CommitInfo, error)
+    FenceAllocator(ctx context.Context, kind AllocatorKind, min uint64) (uint64, error)
+}
+</code></pre>
+<p><code>Append</code> does five things atomically:</p>
+<ol>
+<li>Validate events against the current <code>Snapshot</code> (reject duplicate region IDs, invalid transitions, stale epochs)</li>
+<li>Assign each event a committed cursor <code>(Term, Index)</code></li>
+<li>Persist the batch to the backing log</li>
+<li>Persist an updated compact <code>Checkpoint</code></li>
+<li>Advance in-memory <code>State</code> + <code>Descriptors</code> + pending maps</li>
+</ol>
+<p>After <code>Append</code> returns successfully, callers can observe the new state via <code>Snapshot()</code>. The <code>CommitInfo.Cursor</code> they get back is the globally ordered cursor for the <strong>last</strong> event in the batch.</p>
+<p><code>FenceAllocator</code> is separate because it’s an <strong>authoritative minimum</strong> — backends may promote the fence further (e.g., to account for outstanding windows) but must never return a value below <code>min</code>.</p>
+<hr>
+<h2 id="5-two-backends-same-interface"><a class="header" href="#5-two-backends-same-interface">5. Two backends, same interface</a></h2>
+<h3 id="local-single-node"><a class="header" href="#local-single-node">Local (single-node)</a></h3>
+<p><a href="../meta/root/backend/local/store.go"><code>meta/root/backend/local/store.go</code></a> — file-backed log with an in-memory mirror.</p>
+<ul>
+<li>One file per workdir, append-only segments + compact checkpoint</li>
+<li><code>mu</code> protects in-memory state; <code>logMu</code> protects the on-disk segments</li>
+<li>Compaction is background (kicked by <code>appendLocked</code>, runs in its own goroutine)</li>
+<li>Designed for embedded mode and single-coordinator deployments</li>
+</ul>
+<h3 id="replicated-multi-node"><a class="header" href="#replicated-multi-node">Replicated (multi-node)</a></h3>
+<p><a href="../meta/root/backend/replicated/store.go"><code>meta/root/backend/replicated/store.go</code></a> — embedded raft library, quorum-durable commits.</p>
+<ul>
+<li>3 replicas typical, one leader</li>
+<li><code>Append</code> proposes a raft log entry; returns after it’s committed to quorum</li>
+<li>Non-leader nodes reject <code>Append</code> with <code>codes.FailedPrecondition</code></li>
+<li>Leader changes trigger <code>IsLeader()</code> / <code>LeaderID()</code> state updates that coordinator consumes</li>
+</ul>
+<hr>
+<h2 id="6-coordinator-commands--how-leasesealclosure-flow-in"><a class="header" href="#6-coordinator-commands--how-leasesealclosure-flow-in">6. Coordinator commands — how lease/seal/closure flow in</a></h2>
+<p>In addition to “raw” events, backends expose command APIs for control-plane-specific operations:</p>
+<pre><code class="language-go">ApplyCoordinatorLease(ctx, cmd CoordinatorLeaseCommand)
+    (CoordinatorProtocolState, error)
 
-<h3 id="关键判断"><a class="header" href="#关键判断">关键判断</a></h3>
+ApplyCoordinatorClosure(ctx, cmd CoordinatorClosureCommand)
+    (CoordinatorProtocolState, error)
+</code></pre>
+<p>These are <strong>validated, typed writes</strong> that internally:</p>
 <ol>
-<li><code>DB</code> 仍然是底层共享数据面，不是导出后再导入另一种格式。</li>
-<li><code>raftstore/localmeta</code> 只负责 store-local 恢复，不是 cluster authority。</li>
-<li><code>raftstore/snapshot</code> 是逻辑 region 快照，不等于 raft durable snapshot metadata。</li>
-<li><code>migrate</code> 是协议，不是脚本集合。</li>
+<li>Validate the command against current state (e.g., seal requires active lease, confirm requires prior seal)</li>
+<li>Emit the appropriate <code>KindCoordinatorLease</code> / <code>KindCoordinatorSeal</code> / <code>KindCoordinatorClosure</code> event</li>
+<li>Append through the normal log path</li>
+<li>Return the new <code>CoordinatorProtocolState = { Lease, Seal, Closure }</code></li>
 </ol>
-<h2 id="3-如果不这样做会发生什么"><a class="header" href="#3-如果不这样做会发生什么">3. 如果不这样做，会发生什么</a></h2>
-<p>如果单机和分布式是两套系统，典型结果会是：</p>
+<p>Command-level validation lives in <a href="../meta/root/state/coordinator_lease.go"><code>meta/root/state/coordinator_lease.go</code></a>.</p>
+<hr>
+<h2 id="7-tail-subscription--how-coordinator-consumes"><a class="header" href="#7-tail-subscription--how-coordinator-consumes">7. Tail subscription — how coordinator consumes</a></h2>
+<p>Coordinators don’t poll <code>Snapshot()</code> — they subscribe:</p>
+<pre><code class="language-go">sub := rootstorage.NewTailSubscription(afterToken, waitFn)
+advance, err := sub.Next(ctx, fallback)
+if advance.Action == rootstorage.TailCatchUpAction_Reload {
+    // backend advanced far; reload snapshot
+} else if advance.Action == rootstorage.TailCatchUpAction_Bootstrap {
+    // backend advanced past our retention window; install from compact state
+}
+sub.Acknowledge(advance)
+</code></pre>
+<p><a href="../meta/root/storage/virtual_log.go"><code>meta/root/storage/virtual_log.go</code></a> defines:</p>
 <ul>
-<li>单机目录直接被视为“旧格式”，只能整体导出。</li>
-<li>分布式 bootstrap 依赖外部工具，而不是系统自身的生命周期协议。</li>
-<li>恢复、校验、观测、测试路径出现双轨制。</li>
-<li>后面任何关于 snapshot、reshard、scheduler/control-plane 的研究都要分别做两遍。</li>
+<li><code>TailToken</code> — opaque position in the log</li>
+<li><code>TailAdvance</code> — either new events, a reload signal, or a bootstrap install</li>
+<li><code>TailSubscription</code> — stateful iterator that survives across reloads</li>
 </ul>
-<p>对于研究平台来说，这种分裂尤其糟糕。因为你无法回答一个最基本的问题：</p>
-<blockquote>
-<p>你研究的是同一个系统的扩展，还是两套系统之间的迁移工具？</p>
-</blockquote>
-<p>NoKV 现在的做法是明确回答前者。</p>
-<h2 id="4-当前设计怎么把桥接做成协议"><a class="header" href="#4-当前设计怎么把桥接做成协议">4. 当前设计怎么把桥接做成协议</a></h2>
-<p>核心不是 CLI 名字，而是状态边界。</p>
-<h3 id="41-workdir-mode-是正式协议"><a class="header" href="#41-workdir-mode-是正式协议">4.1 workdir mode 是正式协议</a></h3>
-<p>相关代码：</p>
-<ul>
-<li><code>raftstore/mode</code></li>
-</ul>
-<p>当前生命周期至少包括：</p>
-<ul>
-<li><code>standalone</code></li>
-<li><code>preparing</code></li>
-<li><code>seeded</code></li>
-<li><code>cluster</code></li>
-</ul>
-<p>这意味着：</p>
-<ul>
-<li>一个 workdir 不再永远被假设成普通本地 DB。</li>
-<li>一旦目录进入 <code>preparing/seeded/cluster</code>，普通单机打开路径就必须被 gate 住。</li>
-<li>生命周期不再靠“运维同学记住别手抖”，而是靠库级约束。</li>
-</ul>
-<h3 id="42-snapshot-被分层而不是一个模糊大概念"><a class="header" href="#42-snapshot-被分层而不是一个模糊大概念">4.2 snapshot 被分层，而不是一个模糊大概念</a></h3>
-<p>相关代码：</p>
-<ul>
-<li><code>raftstore/engine/snapshot.go</code></li>
-<li><code>raftstore/snapshot</code></li>
-</ul>
-<p>当前有两层 snapshot：</p>
+<p>This is what lets <code>coordinator/</code> run as a thin service without duplicating rooted storage.</p>
+<hr>
+<h2 id="8-recovery-model"><a class="header" href="#8-recovery-model">8. Recovery model</a></h2>
+<p>On coordinator boot:</p>
 <ol>
-<li>raft durable metadata snapshot</li>
-<li>region logical state snapshot</li>
+<li>Open the backend (<code>rootlocal.Open(workdir)</code> or connect to replicated cluster)</li>
+<li>Call <code>Snapshot()</code> — backend replays/bootstraps internally</li>
+<li>Build a <code>TailSubscription</code> from the snapshot’s <code>LastCommitted</code></li>
+<li>Start the lease campaign loop, which will eventually <code>ApplyCoordinatorLease(Issue)</code> when it’s leader</li>
 </ol>
-<p>这条分层很重要，因为单机提升到分布式，真正需要提升的是：</p>
+<p>If the backend file is corrupted, the coordinator fails fast — it does <strong>not</strong> try to reconstruct rooted state from raftstore local metadata. The two are deliberately partitioned.</p>
+<hr>
+<h2 id="9-remote-access"><a class="header" href="#9-remote-access">9. Remote access</a></h2>
+<p><code>meta/root/remote/</code> provides a gRPC service + client. This exists so a raftstore store can read rooted state without being colocated with the replicated backend:</p>
 <ul>
-<li>key range 对应的数据状态</li>
-<li>region identity</li>
-<li>peer identity</li>
-<li>local recovery metadata</li>
+<li><code>RemoteRootService</code> serves <code>Snapshot</code>, <code>Append</code>, <code>WaitForTail</code>, <code>ObserveTail</code>, etc.</li>
+<li><code>RemoteRootClient</code> implements the same <code>rootBackend</code> interface by calling over gRPC</li>
+<li>Leader redirect is automatic: if the target returns <code>NotLeader</code>, client re-dials the returned leader</li>
 </ul>
-<p>而不是只搬一份 term/index/confstate。</p>
-<h3 id="43-migrate-是状态提升协议不是命令拼接"><a class="header" href="#43-migrate-是状态提升协议不是命令拼接">4.3 migrate 是状态提升协议，不是命令拼接</a></h3>
-<p>相关代码：</p>
+<p>This is what keeps <code>coordinator/</code> deployable separately from the rooted log, if you ever want to.</p>
+<hr>
+<h2 id="10-source-map"><a class="header" href="#10-source-map">10. Source map</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>File</th><th>Responsibility</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="../meta/root/protocol/types.go"><code>meta/root/protocol/types.go</code></a></td><td>Pure protocol types (no persistence logic)</td></tr>
+<tr><td><a href="../meta/root/event/types.go"><code>meta/root/event/types.go</code></a></td><td>Typed event constructors</td></tr>
+<tr><td><a href="../meta/root/state/state.go"><code>meta/root/state/state.go</code></a></td><td><code>State</code>, <code>Snapshot</code>, <code>ApplyEventToSnapshot</code></td></tr>
+<tr><td><a href="../meta/root/state/coordinator_lease.go"><code>meta/root/state/coordinator_lease.go</code></a></td><td>Lease/Seal/Closure validation + digest</td></tr>
+<tr><td><a href="../meta/root/state/transition.go"><code>meta/root/state/transition.go</code></a></td><td>Cross-event transition rules</td></tr>
+<tr><td><a href="../meta/root/storage/virtual_log.go"><code>meta/root/storage/virtual_log.go</code></a></td><td>Tail subscription + checkpoint primitives</td></tr>
+<tr><td><a href="../meta/root/backend/local/store.go"><code>meta/root/backend/local/store.go</code></a></td><td>Single-node backend</td></tr>
+<tr><td><a href="../meta/root/backend/replicated/store.go"><code>meta/root/backend/replicated/store.go</code></a></td><td>Raft-replicated backend</td></tr>
+<tr><td><a href="../meta/root/remote/service.go"><code>meta/root/remote/service.go</code></a></td><td>gRPC wrapping of either backend</td></tr>
+<tr><td><a href="../meta/wire/root.go"><code>meta/wire/root.go</code></a></td><td>proto ↔ Go conversions</td></tr>
+</tbody>
+</table>
+</div>
+<p>Related docs:</p>
 <ul>
-<li><code>raftstore/migrate/init.go</code></li>
-<li><code>raftstore/migrate/expand.go</code></li>
+<li><a href="coordinator.html">Coordinator</a> — how the control plane consumes rooted state</li>
+<li><a href="control_and_execution_protocols.html">Control and Execution Plane Protocols</a> — the full contract between <code>meta/root</code>, <code>coordinator/</code>, and <code>raftstore/</code></li>
+<li><a href="migration.html">Migration</a> — how the seeded→distributed flow bootstraps rooted state</li>
 </ul>
-<p>当前主线可以概括成：</p>
-<pre class="mermaid">sequenceDiagram
-    participant DB as 单机 workdir
-    participant MODE as mode gate
-    participant MIG as migrate
-    participant RS as raftstore
-    participant Coordinator as coordinator/meta
-
-    DB-&gt;&gt;MODE: standalone -&gt; preparing
-    MODE-&gt;&gt;MIG: 允许写入 seed 语义
-    MIG-&gt;&gt;RS: init 一个 full-range seed region
-    RS-&gt;&gt;MODE: preparing -&gt; seeded
-    MIG-&gt;&gt;RS: serve / expand
-    RS-&gt;&gt;Coordinator: 加入 cluster control-plane
-    RS-&gt;&gt;MODE: seeded -&gt; cluster
-</pre>
-
-<p>这里真正值钱的是：</p>
-<ul>
-<li>state promotion 有明确边界</li>
-<li>snapshot 有明确边界</li>
-<li>恢复和正常执行走同一套语义</li>
-</ul>
-<h2 id="5-调用逻辑"><a class="header" href="#5-调用逻辑">5. 调用逻辑</a></h2>
-<h3 id="migrate-init"><a class="header" href="#migrate-init"><code>migrate init</code></a></h3>
-<p>目标：</p>
-<ul>
-<li>给原 standalone workdir 写入 seed region 语义</li>
-<li>让它不再只是“一个 DB 目录”</li>
-</ul>
-<p>做的事情大致是：</p>
-<ol>
-<li>检查当前 mode 是否允许提升。</li>
-<li>为 workdir 生成初始 region / peer / localmeta。</li>
-<li>导出逻辑 region snapshot 或建立 seed state。</li>
-<li>把目录推进到 <code>seeded</code>。</li>
-</ol>
-<h3 id="serve"><a class="header" href="#serve"><code>serve</code></a></h3>
-<p>目标：</p>
-<ul>
-<li>让 seeded workdir 进入真正的 cluster 语义</li>
-</ul>
-<p>做的事情大致是：</p>
-<ol>
-<li>启动 <code>raftstore</code>。</li>
-<li>恢复本地 <code>replicas.binpb</code> 和 <code>raft-progress.binpb</code>。</li>
-<li>向 <code>coordinator</code> / <code>meta/root</code> 注册 rooted truth。</li>
-<li>开始按 region/peer 身份参与执行面。</li>
-</ol>
-<h3 id="expand"><a class="header" href="#expand"><code>expand</code></a></h3>
-<p>目标：</p>
-<ul>
-<li>把 seed region 扩成 replicated region</li>
-</ul>
-<p>做的事情大致是：</p>
-<ol>
-<li>生成新的 peer change / split / merge 目标。</li>
-<li>通过 <code>coordinator</code> proposal gate 进入 <code>meta/root</code>。</li>
-<li>由 <code>raftstore</code> 执行真正的 conf change / snapshot install。</li>
-<li>terminal truth 回写 <code>meta/root</code>。</li>
-</ol>
-<h2 id="6-设计理念"><a class="header" href="#6-设计理念">6. 设计理念</a></h2>
-<p>这条桥接路线背后的理念有三条：</p>
-<h3 id="61-不重复造两套数据面"><a class="header" href="#61-不重复造两套数据面">6.1 不重复造两套数据面</a></h3>
-<p>单机和分布式共享底层 DB / LSM / WAL / VLog。</p>
-<h3 id="62-身份提升比数据搬运更重要"><a class="header" href="#62-身份提升比数据搬运更重要">6.2 身份提升比数据搬运更重要</a></h3>
-<p>困难不在于“把字节拷过去”，而在于：</p>
-<ul>
-<li>让原本匿名的本地状态变成带 region/peer 身份的状态</li>
-<li>让它进入可恢复、可验证、可编排的 cluster 生命周期</li>
-</ul>
-<h3 id="63-迁移必须走协议"><a class="header" href="#63-迁移必须走协议">6.3 迁移必须走协议</a></h3>
-<p>如果桥接只是一个脚本，后面所有关于：</p>
-<ul>
-<li>restore</li>
-<li>reshard</li>
-<li>scheduler/control-plane runtime</li>
-<li>snapshot install</li>
-<li>failover</li>
-</ul>
-<p>的研究都会变得含糊不清。</p>
-<h2 id="7-参考对象"><a class="header" href="#7-参考对象">7. 参考对象</a></h2>
-<p>这一块没有直接照搬某一个系统，但思路上接近几类工业实践：</p>
-<ul>
-<li>TiKV / Cockroach 里关于 range/shard 身份与复制元数据分层的经验</li>
-<li>FoundationDB / Delos 一类系统里“让小而稳定的控制面成为系统骨架”的思路</li>
-<li>数据库内核里“把生命周期写进协议而不是运维手册”的做法</li>
-</ul>
-<h2 id="8-当前已经落地的边界"><a class="header" href="#8-当前已经落地的边界">8. 当前已经落地的边界</a></h2>
-<ul>
-<li>workdir mode gate 已经进入正式实现。</li>
-<li><code>migrate init</code> / <code>serve</code> / <code>expand</code> 已经是协议入口，不是临时脚本。</li>
-<li><code>localmeta</code> 与 engine metadata 已明确分开。</li>
-<li>region snapshot 已是单独层，并被 migration / install 路径复用。</li>
-<li>当前桥接路径已经能接入 <code>coordinator</code> / <code>meta/root</code> 主线。</li>
-</ul>
-<h2 id="9-当前没有实现的能力"><a class="header" href="#9-当前没有实现的能力">9. 当前没有实现的能力</a></h2>
-<ul>
-<li>promotion 阶段不做自动 split / rebalance。</li>
-<li>snapshot install 还不是 zero-copy table transfer 或 SST ingest 优化路径。</li>
-<li>failed <code>init</code> 后还没有单独的 rollback / repair 命令。</li>
-<li>migration observability 仍然偏基础。</li>
-<li>scheduler/control-plane runtime 还没有自动编排 migration 生命周期。</li>
-</ul>
-<h2 id="10-总结"><a class="header" href="#10-总结">10. 总结</a></h2>
-<p>NoKV 这条“从单机到分布式”的桥接路线，真正值钱的不是多了几条 CLI，而是：</p>
-<ul>
-<li>它没有把单机和分布式做成两套系统</li>
-<li>它把 state promotion 写成了协议</li>
-<li>它让后续关于 control-plane、snapshot、调度和恢复的研究，都能建立在同一套系统之上</li>
-</ul>
-<p>这比“再做一个分布式 KV 外壳”更重要，因为它决定了 NoKV 后面能不能持续演进，而不是每往前走一步都重造一层。</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../notes/2026-02-15-vfs-abstraction-and-deterministic-reliability.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="coordinator.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../notes/2026-03-30-coordinator-and-execution-layering.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="namespace.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -419,11 +375,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../notes/2026-02-15-vfs-abstraction-and-deterministic-reliability.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="coordinator.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../notes/2026-03-30-coordinator-and-execution-layering.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="namespace.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -443,17 +399,17 @@
         </script>
 
 
-        <script src="../elasticlunr-ef4e11c1.min.js"></script>
-        <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-c2a407aa.js"></script>
 
-        <script src="../clipboard-1626706a.min.js"></script>
-        <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="../docs/custom-732fa610.js"></script>
-        <script src="../docs/mermaid-init-8a66ee6c.js"></script>
+        <script src="docs/custom-732fa610.js"></script>
+        <script src="docs/mermaid-init-8a66ee6c.js"></script>
 
 
 

@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b9719071.js";
+            window.path_to_searchindex_js = "searchindex-4496f612.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c05f2810.js"></script>
+        <script src="toc-7c224925.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,550 +178,202 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="overview"><a class="header" href="#overview">Overview</a></h1>
-<div class="hero">
+                        <h1 id="nokv--documentation"><a class="header" href="#nokv--documentation">NoKV — Documentation</a></h1>
+<div align="center">
+  <img src="assets/logo.svg" width="160" alt="NoKV" />
   
-<div class="hero-top">
-    
-<div class="hero-brand">
-      
-<div class="hero-logo">
-        <img src="assets/logo.svg" alt="NoKV logo">
-      </div>
-
-      
-<div>
-        
-<p class="hero-kicker">Distributed Storage Research Platform, Built As One System</p>
-
-        
-<h1>NoKV</h1>
-
-      </div>
-
-    </div>
-
-    
-<div class="hero-signal-panel">
-      <span class="hero-panel-kicker">Launch View</span>
-      
-<div class="hero-panel-grid">
-        
-<div class="hero-panel-metric">
-          <strong>Embedded</strong>
-          <span>Use <code>NoKV.Open</code> as a serious local engine.</span>
-        </div>
-
-        
-<div class="hero-panel-metric">
-          <strong>Seeded</strong>
-          <span>Promote an existing workdir into a distributed seed.</span>
-        </div>
-
-        
-<div class="hero-panel-metric">
-          <strong>Replicated</strong>
-          <span>Roll out peers, move leaders, and verify recovery.</span>
-        </div>
-
-      </div>
-
-    </div>
-
-  </div>
+<p><strong>A full-stack, formally-specified, distributed storage platform — built as one coherent system.</strong></p>
 
   
-<p class="hero-lead">
-    NoKV starts as a serious standalone engine and grows into a multi-Raft distributed
-    KV database without swapping out its storage core. That is the hook: WAL, LSM,
-    MVCC, migration, replication, and control-plane behavior are treated as one system,
-    not a pile of loosely connected features.
+<p>
+    <em>Own LSM engine · Own Raft · Own control plane · Own MVCC · Own Redis frontend</em>
   </p>
 
   
-<p class="hero-lead">
-    The project is also intended to be a maintainable and extensible research platform:
-    one repository where engine internals, distributed runtime, control-plane logic,
-    experiments, and system papers can evolve together without collapsing into ad-hoc
-    prototypes.
-  </p>
-
-  
-<div class="hero-summary">
-    
-<div class="hero-stat">
-      <strong>Standalone to Cluster</strong>
-      <span>Seed a distributed region from an existing workdir and keep the same storage layer.</span>
-    </div>
-
-    
-<div class="hero-stat">
-      <strong>Correctness First</strong>
-      <span>Mode gates, logical region snapshots, recovery metadata, and execution/control-plane split.</span>
-    </div>
-
-    
-<div class="hero-stat">
-      <strong>Tested as a System</strong>
-      <span>Migration flow, restart recovery, Coordinator degradation, transport chaos, and publish-boundary failpoints.</span>
-    </div>
-
-    
-<div class="hero-stat">
-      <strong>Built To Evolve</strong>
-      <span>Clear package layering, experiment tooling, and architecture docs make the repo usable as a long-lived systems research base.</span>
-    </div>
-
-  </div>
-
-  
-<div class="badge-row">
-    <a href="https://github.com/feichai0017/NoKV/actions">
-      <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/feichai0017/NoKV/go.yml?branch=main" />
-    </a>
-    <a href="https://codecov.io/gh/feichai0017/NoKV">
-      <img alt="Coverage" src="https://img.shields.io/codecov/c/gh/feichai0017/NoKV" />
-    </a>
-    <a href="https://goreportcard.com/report/github.com/feichai0017/NoKV">
-      <img alt="Go Report Card" src="https://img.shields.io/badge/go%20report-A+-brightgreen" />
-    </a>
-    <a href="https://pkg.go.dev/github.com/feichai0017/NoKV">
-      <img alt="Go Reference" src="https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&amp;logoColor=white" />
-    </a>
-    <a href="https://dbdb.io/db/nokv">
-      <img alt="DBDB.io" src="https://img.shields.io/badge/dbdb.io-listed-2f80ed" />
-    </a>
-    <a href="https://deepwiki.com/feichai0017/NoKV">
-      <img alt="DeepWiki" src="https://img.shields.io/badge/DeepWiki-Ask-6f42c1" />
-    </a>
-  </div>
-
-  
-<div class="cta-zone">
-    
-<div class="cta-copy">
-      <span class="cta-kicker">Start Here</span>
-      
-<p>Run a local cluster first, then follow the standalone → seeded → cluster path.</p>
-
-    </div>
-
-    
-<div class="cta-row">
-      <a class="cta-button primary" href="getting_started.html">Quick Start</a>
-      <a class="cta-button secondary" href="architecture.html">Architecture</a>
-      <a class="cta-button secondary" href="migration.html">Migration</a>
-    </div>
-
-  </div>
-
-  
-<p class="hero-footer">
-    Built around Go, WAL + LSM storage, Percolator-style MVCC, multi-Raft replication,
-    Coordinator control plane, and a formal standalone-to-cluster migration path.
+<p>
+    <a href="https://github.com/feichai0017/NoKV/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/feichai0017/NoKV/go.yml?branch=main&amp;style=flat-square&amp;logo=github" /></a>
+    <a href="https://codecov.io/gh/feichai0017/NoKV"><img alt="Coverage" src="https://img.shields.io/codecov/c/gh/feichai0017/NoKV?style=flat-square&amp;logo=codecov" /></a>
+    <a href="https://pkg.go.dev/github.com/feichai0017/NoKV"><img alt="Go Reference" src="https://img.shields.io/badge/go.dev-reference-007d9c?style=flat-square&amp;logo=go&amp;logoColor=white" /></a>
+    <img alt="Go" src="https://img.shields.io/badge/go-1.26+-00ADD8?style=flat-square&amp;logo=go&amp;logoColor=white" />
+    <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square" />
+    <a href="https://deepwiki.com/feichai0017/NoKV"><img alt="DeepWiki" src="https://img.shields.io/badge/DeepWiki-Ask-6f42c1?style=flat-square" /></a>
   </p>
 
 </div>
 
-<div class="project-masthead">
-  
-<div class="masthead-panel">
-    <span class="masthead-kicker">What You Can Actually Do</span>
-    
-<h3>Use NoKV in three different ways</h3>
-
-    
-<ul>
-      
-<li>Embed it locally through <code>NoKV.Open</code>.</li>
-
-      
-<li>Start a multi-node cluster with <code>scripts/dev/cluster.sh</code>.</li>
-
-      
-<li>Take an existing standalone workdir and migrate it into a replicated region.</li>
-
-    </ul>
-
-  </div>
-
-  
-<div class="masthead-panel">
-    <span class="masthead-kicker">What To Look For</span>
-    
-<h3>What makes this project worth reading</h3>
-
-    
-<ul>
-      
-<li>One storage layer instead of separate standalone and distributed engines.</li>
-
-      
-<li>Formal lifecycle and migration protocol instead of dump/import glue.</li>
-
-      
-<li>System-level verification under restart, degraded Coordinator, chaos, and failpoints.</li>
-
-      
-<li>A package structure designed to keep the codebase maintainable as a research platform, not just a one-off prototype.</li>
-
-    </ul>
-
-  </div>
-
+<p>NoKV is a distributed key-value storage platform written from scratch in Go. Nothing is borrowed from another database — the LSM engine, the Raft implementation, the control plane, the MVCC layer, and the Redis-compatible frontend all live in this repository and share a single storage substrate.</p>
+<p>The interesting part isn’t the feature list. The interesting part is that <strong>these pieces are built as one system</strong> — embedded mode, seeded migration, and replicated Raft mode all sit on the same <code>DB</code> core, and the distinction between execution plane, control plane, and rooted truth is enforced in code, not just in documentation.</p>
+<blockquote>
+<p>This site is the <strong>technical docs hub</strong>. For a project overview, landing page, and benchmark headline, see the <a href="../README.html">root README</a>.</p>
+</blockquote>
+<hr>
+<h2 id="-three-modes-one-core"><a class="header" href="#-three-modes-one-core">🧭 Three Modes, One Core</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th>Embedded</th><th>Seeded</th><th>Distributed</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Use case</strong></td><td>Library in a Go program</td><td>First node of a future cluster</td><td>Multi-Raft replicated cluster</td></tr>
+<tr><td><strong>Entry point</strong></td><td><code>NoKV.Open(opt)</code></td><td><code>migrate init</code> → <code>migrate plan</code></td><td><code>scripts/dev/cluster.sh</code> / <code>docker compose up</code></td></tr>
+<tr><td><strong>Data plane</strong></td><td><code>DB</code> substrate</td><td>Same <code>DB</code>, plus seeded lifecycle state</td><td>Same <code>DB</code>, plus Raft apply, plus snapshots</td></tr>
+<tr><td><strong>Metadata shape</strong></td><td>Manifest only</td><td>Manifest + local catalog + seeded mode</td><td>Manifest + local catalog + rooted truth (<code>meta/root</code>)</td></tr>
+<tr><td><strong>Deep dive</strong></td><td><a href="getting_started.html">getting_started.md</a></td><td><a href="migration.html">migration.md</a></td><td><a href="raftstore.html">raftstore.md</a></td></tr>
+</tbody>
+</table>
 </div>
-
-<p><span class="section-kicker">What Matters</span></p>
-<h2 id="why-nokv"><a class="header" href="#why-nokv">Why NoKV</a></h2>
-<div class="why-layout">
-  
-<div class="why-intro">
-    <span class="why-kicker">Three reasons this project is interesting</span>
-    
-<h3>NoKV is not trying to be a feature checklist.</h3>
-
-    
-<p>It is trying to answer a narrower and harder question well: can one storage core grow from an embedded engine into a distributed multi-Raft KV without turning migration, metadata, and recovery into glue code?</p>
-
-    
-<ul class="why-points">
-      
-<li>One storage layer across standalone and distributed modes.</li>
-
-      
-<li>Explicit lifecycle and migration semantics instead of hidden bootstrap magic.</li>
-
-      
-<li>Verification aimed at restart, degraded control plane, and publish-boundary correctness.</li>
-
-      
-<li>Code, benchmarks, and documentation are organized so new research directions can be added without re-deriving the whole system.</li>
-
-    </ul>
-
-  </div>
-
-  
-<div class="feature-grid">
-    
-<div class="feature-card">
-      <span class="feature-eyebrow">Storage Story</span>
-      
-<h3>One data plane, two deployment shapes</h3>
-
-      
-<p>NoKV does not fork into separate standalone and distributed engines. The distributed layer grows on top of the same underlying DB workdir.</p>
-
-      <small>That is why migration can be a protocol instead of a dump/import afterthought.</small>
-    </div>
-
-    
-<div class="feature-card">
-      <span class="feature-eyebrow">Runtime Ownership</span>
-      
-<h3>Replication with clear ownership</h3>
-
-      
-<p><code>Store</code> owns the node runtime, <code>Peer</code> owns a region replica runtime, <code>RaftAdmin</code> is the execution plane, and Coordinator stays in the control plane.</p>
-
-      <small>The system avoids mixing local truth, local recovery metadata, and cluster control metadata.</small>
-    </div>
-
-    
-<div class="feature-card">
-      <span class="feature-eyebrow">Migration Primitive</span>
-      
-<h3>Logical region snapshots</h3>
-
-      
-<p>Raft durable snapshot metadata is split from logical region state snapshots, which keeps migration, add-peer install, and recovery semantics clean.</p>
-
-      <small>This is a correctness-first design, not a one-shot performance shortcut.</small>
-    </div>
-
-    
-<div class="feature-card">
-      <span class="feature-eyebrow">Validation Surface</span>
-      
-<h3>System-level validation</h3>
-
-      
-<p>The project is tested beyond unit semantics: migration flow, restart safety, degraded Coordinator behavior, transport chaos, and context propagation are all exercised.</p>
-
-      <small>The goal is to verify lifecycle and recovery behavior, not just happy-path RPCs.</small>
-    </div>
-
-    
-<div class="feature-card">
-      <span class="feature-eyebrow">Research Substrate</span>
-      
-<h3>A codebase meant to keep growing</h3>
-
-      
-<p>The repository separates engine substrate, distributed runtime, control-plane components, benchmark tooling, and design documentation so new systems ideas can be implemented without turning the tree into a disposable artifact.</p>
-
-      <small>This is a platform for iterative storage research, not only a fixed implementation snapshot.</small>
-    </div>
-
-  </div>
-
+<p>The promotion path <code>Embedded → Seeded → Distributed</code> has explicit lifecycle state and failpoint coverage at every stage. You don’t dump/reimport data when you grow the cluster — you migrate shape.</p>
+<hr>
+<h2 id="-if-you-read-only-three-pages"><a class="header" href="#-if-you-read-only-three-pages">📑 If You Read Only Three Pages</a></h2>
+<p>Start here:</p>
+<ol>
+<li><strong><a href="architecture.html">architecture.md</a></strong> — shortest path from “what is NoKV” to “which package owns what”</li>
+<li><strong><a href="runtime.html">runtime.md</a></strong> — function-level call chains for embedded and distributed read/write paths, with sequence diagrams</li>
+<li><strong><a href="control_and_execution_protocols.html">control_and_execution_protocols.md</a></strong> — the contract between the control plane (<code>coordinator/</code>), the execution plane (<code>raftstore/</code>), and rooted truth (<code>meta/root/</code>)</li>
+</ol>
+<p>These three together give you the whole system’s mental model.</p>
+<hr>
+<h2 id="-read-by-interest"><a class="header" href="#-read-by-interest">🗺️ Read By Interest</a></h2>
+<h3 id="storage-engine-internals"><a class="header" href="#storage-engine-internals">Storage engine internals</a></h3>
+<p>The single-node substrate — WAL, MemTable, flush, compaction, value log, manifest, VFS.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Topic</th><th>Doc</th></tr>
+</thead>
+<tbody>
+<tr><td>High-level architecture</td><td><a href="architecture.html">architecture.md</a></td></tr>
+<tr><td>WAL discipline and replay</td><td><a href="wal.html">wal.md</a></td></tr>
+<tr><td>MemTable + ART/SkipList</td><td><a href="memtable.html">memtable.md</a></td></tr>
+<tr><td>Flush pipeline</td><td><a href="flush.html">flush.md</a></td></tr>
+<tr><td>Leveled compaction + ingest buffer</td><td><a href="compaction.html">compaction.md</a> · <a href="ingest_buffer.html">ingest_buffer.md</a></td></tr>
+<tr><td>Value log (KV separation + GC)</td><td><a href="vlog.html">vlog.md</a></td></tr>
+<tr><td>Manifest semantics</td><td><a href="manifest.html">manifest.md</a></td></tr>
+<tr><td>Range filter</td><td><a href="range_filter.html">range_filter.md</a></td></tr>
+<tr><td>Block / row cache</td><td><a href="cache.html">cache.md</a></td></tr>
+<tr><td>VFS abstraction + FaultFS</td><td><a href="vfs.html">vfs.md</a> · <a href="file.html">file.md</a></td></tr>
+<tr><td>Hot-key observer (HotRing)</td><td><a href="hotring.html">hotring.md</a></td></tr>
+<tr><td>Entry / error model</td><td><a href="entry.html">entry.md</a> · <a href="errors.html">errors.md</a></td></tr>
+</tbody>
+</table>
 </div>
-
-<p><span class="section-kicker">Platform Goal</span></p>
-<h2 id="nokv-as-a-research-platform"><a class="header" href="#nokv-as-a-research-platform">NoKV As A Research Platform</a></h2>
-<p>NoKV is intended to serve as a long-lived platform for storage and distributed-systems research.</p>
+<h3 id="distributed-runtime"><a class="header" href="#distributed-runtime">Distributed runtime</a></h3>
+<p>Raftstore, coordinator, rooted truth, migration — the distributed layer.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Topic</th><th>Doc</th></tr>
+</thead>
+<tbody>
+<tr><td>Raftstore overview (store/peer/admin)</td><td><a href="raftstore.html">raftstore.md</a></td></tr>
+<tr><td>Coordinator (route / TSO / heartbeats)</td><td><a href="coordinator.html">coordinator.md</a></td></tr>
+<tr><td><strong>Rooted truth kernel</strong> (<code>meta/root</code>)</td><td><a href="rooted_truth.html">rooted_truth.md</a></td></tr>
+<tr><td><strong>Namespace</strong> (hierarchical listing)</td><td><a href="namespace.html">namespace.md</a></td></tr>
+<tr><td>Control-plane ↔ execution-plane contract</td><td><a href="control_and_execution_protocols.html">control_and_execution_protocols.md</a></td></tr>
+<tr><td>Standalone → distributed migration</td><td><a href="migration.html">migration.md</a></td></tr>
+<tr><td>Recovery model</td><td><a href="recovery.html">recovery.md</a></td></tr>
+<tr><td>Percolator MVCC 2PC</td><td><a href="percolator.html">percolator.md</a></td></tr>
+<tr><td>Runtime call chains</td><td><a href="runtime.html">runtime.md</a></td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="operations-and-tooling"><a class="header" href="#operations-and-tooling">Operations and tooling</a></h3>
+<p>Binaries, scripts, configuration, observability.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Topic</th><th>Doc</th></tr>
+</thead>
+<tbody>
+<tr><td>CLI reference (<code>nokv</code>)</td><td><a href="cli.html">cli.md</a></td></tr>
+<tr><td><strong>ccc-audit</strong> (rooted state + reply-trace audit)</td><td><a href="ccc-audit.html">ccc-audit.md</a></td></tr>
+<tr><td>Redis gateway (<code>nokv-redis</code>)</td><td><a href="nokv-redis.html">nokv-redis.md</a></td></tr>
+<tr><td>Configuration</td><td><a href="config.html">config.md</a></td></tr>
+<tr><td>Scripts layout</td><td><a href="scripts.html">scripts.md</a></td></tr>
+<tr><td>Stats / expvar / metrics</td><td><a href="stats.html">stats.md</a></td></tr>
+<tr><td>Testing strategy</td><td><a href="testing.html">testing.md</a></td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="research-direction"><a class="header" href="#research-direction">Research direction</a></h3>
+<p>Formal specifications and design decision records.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Topic</th><th>Location</th></tr>
+</thead>
+<tbody>
+<tr><td>TLA+ specifications + contrast family</td><td><a href="../spec"><code>spec/</code></a> · <a href="../spec/README.html">spec/README.md</a></td></tr>
+<tr><td>Dated design decision records</td><td><a href="notes/README.html">notes/README.md</a></td></tr>
+</tbody>
+</table>
+</div>
+<p>Notable design notes:</p>
 <ul>
-<li><code>engine/*</code> holds the single-node storage substrate: WAL, LSM, manifest, value log, file/VFS primitives.</li>
-<li><code>raftstore/*</code>, <code>meta/*</code>, and <code>coordinator/*</code> hold distributed execution and control-plane components.</li>
-<li><code>benchmark/*</code> holds experiment code and result-generation paths so evaluations stay close to implementation changes.</li>
-<li>The docs tree is part of the platform contract: architecture, migration, recovery, testing, and benchmarking expectations are documented alongside code.</li>
+<li><a href="notes/2026-01-16-mmap-choice.html">Why WAL is stdio and vlog/SST are mmap</a></li>
+<li><a href="notes/2026-02-01-compaction-and-ingest.html">Compaction and ingest buffer design</a></li>
+<li><a href="notes/2026-02-05-vlog-design-and-gc.html">Value log KV separation + HashKV buckets</a></li>
+<li><a href="notes/2026-02-09-memory-kernel-arena-and-adaptive-index.html">Arena memory kernel + adaptive index (SkipList ↔ ART)</a></li>
+<li><a href="notes/2026-02-09-write-pipeline-mpsc-and-adaptive-batching.html">MPSC write pipeline with adaptive coalescing</a></li>
+<li><a href="notes/2026-02-15-vfs-abstraction-and-deterministic-reliability.html">VFS abstraction + deterministic reliability testing</a></li>
+<li><a href="notes/2026-03-30-coordinator-and-execution-layering.html">Coordinator ↔ execution layering</a></li>
+<li><a href="notes/2026-03-31-sst-snapshot-install.html">SST-based snapshot install</a></li>
+<li><a href="notes/2026-04-03-delos-lite-metadata-root-roadmap.html">Delos-lite rooted-truth roadmap</a></li>
+<li><a href="notes/2026-04-05-range-filter-from-grf.html">Range filter — from GRF, but not quite</a></li>
 </ul>
-<p>The point is not only to run NoKV as a system today, but to make it practical to:</p>
+<hr>
+<h2 id="-architecture-at-a-glance"><a class="header" href="#-architecture-at-a-glance">🏗️ Architecture at a Glance</a></h2>
+<p align="center">
+  <img src="../img/architecture.svg" alt="NoKV Architecture" width="100%" />
+</p>
+
+<p><strong>Four boundaries that set NoKV apart from typical single-purpose KV prototypes:</strong></p>
 <ul>
-<li>test new storage-engine mechanisms,</li>
-<li>evolve metadata and control-plane designs,</li>
-<li>compare distributed execution protocols,</li>
-<li>and publish repeatable systems experiments from the same repository.</li>
+<li><strong>One storage core, two deployment shapes.</strong> Embedded and distributed modes sit on the same <code>DB</code> substrate.</li>
+<li><strong>Migration is a protocol, not a hack.</strong> <code>plan → init → seeded → expand</code> has explicit lifecycle state and failpoint coverage.</li>
+<li><strong>Execution plane / control plane split.</strong> <code>raftstore/</code> executes writes; <code>coordinator/</code> owns routing, TSO, heartbeats; <code>meta/root/</code> is the rooted truth both consume. They never share mutable state.</li>
+<li><strong>Recovery metadata is partitioned.</strong> Manifest (storage), local catalog (Raft), raft durable log, logical region snapshots — each owns a distinct slice of durable state.</li>
 </ul>
-<div class="benchmark-note">
-  Benchmark methodology and result snapshots live in <a href="../benchmark/README.html"><code>../benchmark/README.md</code></a>. The docs site keeps architecture and operating guidance separate from benchmark storytelling.
-</div>
+<hr>
+<h2 id="-quick-start"><a class="header" href="#-quick-start">⚡ Quick Start</a></h2>
+<p>Everything hangs off one topology file: <a href="../raft_config.example.json"><code>raft_config.example.json</code></a>.</p>
+<pre><code class="language-bash"># 1. Build binaries
+make build
 
-<p><span class="section-kicker">Fastest Path</span></p>
-<h2 id="try-nokv-in-five-minutes"><a class="header" href="#try-nokv-in-five-minutes">Try NoKV In Five Minutes</a></h2>
-<div class="launchpad">
-  
-<div class="launchpad-copy">
-    <span class="launchpad-kicker">Fastest Demo Loop</span>
-    
-<h3>Boot a cluster, front it with Redis, inspect the runtime.</h3>
-
-    
-<p>If you only want one practical path, this is the shortest route from clone to “I can see the system running”. It uses the local cluster helper, the Redis-compatible gateway, and the built-in runtime inspection commands.</p>
-
-    
-<div class="launchpad-tags">
-      <span class="tag-pill">local cluster</span>
-      <span class="tag-pill">redis gateway</span>
-      <span class="tag-pill">runtime inspect</span>
-    </div>
-
-  </div>
-
-  
-<div class="launchpad-steps">
-    
-<div class="launch-step">
-      <strong>01</strong>
-      
-<div>
-        
-<h4>Start the cluster</h4>
-
-        
-<p>Use the shared topology file and bring up the local Coordinator + store layout.</p>
-
-      </div>
-
-    </div>
-
-    
-<div class="launch-step">
-      <strong>02</strong>
-      
-<div>
-        
-<h4>Expose a familiar interface</h4>
-
-        
-<p>Run the Redis-compatible gateway so you can talk to NoKV with an off-the-shelf client.</p>
-
-      </div>
-
-    </div>
-
-    
-<div class="launch-step">
-      <strong>03</strong>
-      
-<div>
-        
-<h4>Inspect the system</h4>
-
-        
-<p>Query stats and region ownership so the demo ends with visibility instead of blind writes.</p>
-
-      </div>
-
-    </div>
-
-  </div>
-
-</div>
-
-<pre><code class="language-bash"># 1. Start a local cluster from the shared topology file
+# 2. Launch a three-node cluster with Coordinator + Redis gateway
 ./scripts/dev/cluster.sh --config ./raft_config.example.json
 
-# 2. In another terminal, front it with the Redis-compatible gateway
-go run ./cmd/nokv-redis \
-  --addr 127.0.0.1:6380 \
-  --raft-config ./raft_config.example.json
-
-# 3. Talk to NoKV with any Redis client
+# 3. Point a Redis client at the gateway
 redis-cli -p 6380 set hello world
 redis-cli -p 6380 get hello
 
-# 4. Inspect the running cluster
+# 4. Inspect live runtime
 go run ./cmd/nokv stats --expvar http://127.0.0.1:9100
-go run ./cmd/nokv regions --workdir ./artifacts/cluster/store-1
+go run ./cmd/nokv regions --workdir ./artifacts/cluster/store-1 --json
 </code></pre>
-<p><span class="section-kicker">Read This Next</span></p>
-<h2 id="documentation-guide"><a class="header" href="#documentation-guide">Documentation Guide</a></h2>
-<p>If you only read three pages, read these first:</p>
-<ol>
-<li><a href="getting_started.html"><strong>Getting Started</strong></a> for the shortest path to a running cluster.</li>
-<li><a href="raftstore.html"><strong>Raftstore</strong></a> for runtime ownership and distributed boundaries.</li>
-<li><a href="migration.html"><strong>Migration</strong></a> for the standalone → cluster bridge that makes NoKV distinct.</li>
-</ol>
-<div class="doc-grid">
-  
-<div class="doc-card">
-    
-<h3><a href="getting_started.html">Getting Started</a></h3>
-
-    
-<p>Run NoKV locally, understand the topology file, and boot your first store or local cluster.</p>
-
-  </div>
-
-  
-<div class="doc-card">
-    
-<h3><a href="raftstore.html">Raftstore</a></h3>
-
-    
-<p>Read the distributed runtime layout: server wiring, store ownership, peer lifecycle, snapshots, and recovery surfaces.</p>
-
-  </div>
-
-  
-<div class="doc-card">
-    
-<h3><a href="migration.html">Migration</a></h3>
-
-    
-<p>Follow the standalone → seeded → cluster path, including SST snapshot install and membership rollout.</p>
-
-  </div>
-
-  
-<div class="doc-card">
-    
-<h3><a href="testing.html">Testing</a></h3>
-
-    
-<p>See how deterministic integration, failpoints, restart recovery, and distributed fault matrix coverage are organized.</p>
-
-  </div>
-
+<p>Full walkthrough: <a href="getting_started.html">getting_started.md</a>.</p>
+<hr>
+<h2 id="-jump-points"><a class="header" href="#-jump-points">🔗 Jump Points</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th></th></tr>
+</thead>
+<tbody>
+<tr><td><strong><a href="cli.html">CLI surface</a></strong></td><td>Commands for stats, manifest, regions, vlog, migrate</td></tr>
+<tr><td><strong><a href="config.html">Topology config</a></strong></td><td>One JSON file shared by scripts, Docker, and CLI</td></tr>
+<tr><td><strong><a href="scripts.html">Scripts layout</a></strong></td><td>Local cluster, bootstrap, ops helpers</td></tr>
+<tr><td><strong><a href="coordinator.html">Coordinator</a></strong></td><td>Route / TSO / heartbeat service</td></tr>
+<tr><td><strong><a href="percolator.html">Percolator / MVCC</a></strong></td><td>2PC primitives in distributed mode</td></tr>
+<tr><td><strong><a href="runtime.html">Runtime call chains</a></strong></td><td>Function-level sequence diagrams</td></tr>
+<tr><td><strong><a href="testing.html">Testing</a></strong></td><td>Failpoints, chaos, restart, migration matrix</td></tr>
+<tr><td><strong><a href="SUMMARY.html">SUMMARY.md</a></strong></td><td>Full mdbook table of contents</td></tr>
+</tbody>
+</table>
 </div>
-
-<p><span class="section-kicker">Choose Your Route</span></p>
-<h2 id="read-by-interest"><a class="header" href="#read-by-interest">Read By Interest</a></h2>
-<div class="path-grid">
-  
-<div class="path-card">
-    
-<h3>Storage Engine</h3>
-
-    
-<p>Read this route if you care about WAL discipline, MemTable/flush, manifest semantics, and ValueLog GC.</p>
-
-    
-<p><a href="architecture.html">Architecture</a> · <a href="wal.html">WAL</a> · <a href="flush.html">Flush</a> · <a href="vlog.html">Value Log</a></p>
-
-  </div>
-
-  
-<div class="path-card">
-    
-<h3>Distributed Runtime</h3>
-
-    
-<p>Read this route if Store/Peer ownership, transport, snapshots, and Coordinator are the parts you want to reason about.</p>
-
-    
-<p><a href="raftstore.html">Raftstore</a> · <a href="coordinator.html">Coordinator</a> · <a href="runtime.html">Runtime</a></p>
-
-  </div>
-
-  
-<div class="path-card">
-    
-<h3>Migration &amp; Operations</h3>
-
-    
-<p>Read this route if the bridge from standalone workdir to replicated region is the part you want to demo or operate.</p>
-
-    
-<p><a href="migration.html">Migration</a> · <a href="scripts.html">Scripts</a> · <a href="cli.html">CLI</a></p>
-
-  </div>
-
-  
-<div class="path-card">
-    
-<h3>Testing &amp; Validation</h3>
-
-    
-<p>Read this route if you want to see how NoKV verifies correctness under restart, degraded Coordinator, chaos, and failpoint boundaries.</p>
-
-    
-<p><a href="testing.html">Testing</a> · <a href="notes/README.html">Notes</a></p>
-
-  </div>
-
-</div>
-
-<p><span class="section-kicker">Common Paths</span></p>
-<h2 id="jump-points"><a class="header" href="#jump-points">Jump Points</a></h2>
-<div class="quicklink-grid">
-  <a class="quicklink" href="cli.html">CLI surface</a>
-  <a class="quicklink" href="config.html">Topology config</a>
-  <a class="quicklink" href="scripts.html">Scripts layout</a>
-  <a class="quicklink" href="coordinator.html">Coordinator</a>
-  <a class="quicklink" href="percolator.html">Percolator / MVCC</a>
-  <a class="quicklink" href="runtime.html">Runtime call chains</a>
-</div>
-
-<p><span class="section-kicker">Layer View</span></p>
-<h2 id="architecture-sketch"><a class="header" href="#architecture-sketch">Architecture Sketch</a></h2>
-<pre class="mermaid">%%{init: {
-  "themeVariables": { "fontSize": "18px" },
-  "flowchart": { "nodeSpacing": 45, "rankSpacing": 62, "curve": "basis" }
-}}%%
-graph TD
-    Client["Client / App / Redis"] --&gt;|RPC / RESP| Server["Node Server"]
-    Client --&gt;|Route / TSO / control queries| Coordinator["Coordinator"]
-
-    subgraph "Distributed Runtime"
-        Server --&gt; Store["Store runtime root"]
-        Store --&gt; Peer["Peer runtime"]
-        Store --&gt; Admin["RaftAdmin"]
-        Store --&gt; Meta["Local recovery metadata"]
-        Peer --&gt; Raft["Raft durable state"]
-        Peer --&gt; Snap["Logical region snapshot"]
-    end
-
-    subgraph "Shared Data Plane"
-        Peer --&gt; DB["NoKV DB"]
-        Snap --&gt; DB
-        DB --&gt; LSM["LSM / WAL / VLog / MVCC"]
-    end
-</pre>
-
-<div class="arch-callout">
-  The central design choice is simple: NoKV is not a separate standalone engine and distributed product glued together later. The distributed system is built over the same storage core, with migration and snapshot semantics made explicit instead of implicit.
+<hr>
+<div align="center">
+  <sub>Built from scratch — no external storage engine, no external Raft library, no external coordinator.</sub>
 </div>
 
 

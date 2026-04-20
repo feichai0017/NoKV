@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>2026-03-30 从单机到分布式的桥接 - NoKV Docs</title>
+        <title>ccc-audit - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -12,34 +12,34 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="../favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
-        <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
-        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-2459343d.css">
+        <link rel="stylesheet" href="css/chrome-ae938929.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="../docs/custom-a69f6233.css">
+        <link rel="stylesheet" href="docs/custom-a69f6233.css">
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "../";
+            const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-4496f612.js";
+            window.path_to_searchindex_js = "searchindex-4496f612.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7c224925.js"></script>
+        <script src="toc-7c224925.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -106,7 +106,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -141,7 +141,7 @@
                     <h1 class="menu-title">NoKV Docs</h1>
 
                     <div class="right-buttons">
-                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
@@ -178,238 +178,221 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="2026-03-30-从单机到分布式的桥接为什么是-nokv-的主线能力"><a class="header" href="#2026-03-30-从单机到分布式的桥接为什么是-nokv-的主线能力">2026-03-30 从单机到分布式的桥接为什么是 NoKV 的主线能力</a></h1>
-<blockquote>
-<p>状态：当前设计已经落地，相关实现分散在 <code>DB</code>、<code>raftstore</code>、<code>migrate</code>、<code>coordinator</code> 与 <code>meta/root</code> 中。本文重点不是复述命令，而是解释为什么 NoKV 没有把“单机版”和“分布式版”做成两套系统。</p>
-</blockquote>
-<h2 id="导读"><a class="header" href="#导读">导读</a></h2>
-<ul>
-<li>🧭 主题：单机 workdir 如何通过协议提升成分布式 store，而不是走 dump/import 外挂工具路线。</li>
-<li>🧱 核心对象：<code>mode</code>、<code>snapshot</code>、<code>localmeta</code>、<code>seed region</code>。</li>
-<li>🔁 调用链：<code>standalone -&gt; preparing -&gt; seeded -&gt; cluster</code>。</li>
-<li>📚 参考对象：range/shard 系统的身份提升、Delos/FDB 一类的小控制面骨架。</li>
-</ul>
-<h2 id="1-为什么这件事重要"><a class="header" href="#1-为什么这件事重要">1. 为什么这件事重要</a></h2>
-<p>很多 KV 项目在早期会先把单机版做出来，等到需要分布式能力时，再额外补一套新的元数据、恢复、运维和数据导入逻辑。这样做短期上手快，但长期会带来三个问题：</p>
+                        <h1 id="ccc-audit"><a class="header" href="#ccc-audit">ccc-audit</a></h1>
+<p><code>nokv ccc-audit</code> is an offline diagnostic CLI that inspects <strong>coordinator authority-handoff state</strong> and <strong>reply traces</strong> for legality violations.</p>
+<p>It consumes two kinds of input:</p>
 <ol>
-<li>单机数据和分布式数据不是同一个世界，后续只能 dump/import。</li>
-<li>运维和恢复心智要分两套，项目复杂度成倍增长。</li>
-<li>很多设计在单机阶段看起来成立，进入分布式后全部重做。</li>
+<li>A coordinator rooted snapshot (read from a workdir) — snapshot-level audit</li>
+<li>A JSON reply trace (NoKV or external system) — reply-level audit</li>
 </ol>
-<p>NoKV 不希望走这条路。NoKV 的目标不是“先做一个单机 KV，再做一个分布式 KV”，而是：</p>
-<blockquote>
-<p>同一套数据面先以单机形态运行，再通过协议和恢复层逐步提升为分布式形态。</p>
-</blockquote>
-<h2 id="2-当前系统边界"><a class="header" href="#2-当前系统边界">2. 当前系统边界</a></h2>
-<p>当前相关实现主要分布在：</p>
+<p>Either or both can be provided. The tool produces a structured report of detected anomalies and is safe to run against stopped nodes or trace files archived for post-mortem review.</p>
+<hr>
+<h2 id="1-when-to-use-it"><a class="header" href="#1-when-to-use-it">1. When to use it</a></h2>
 <ul>
-<li><code>db.go</code></li>
-<li><code>raftstore/localmeta</code></li>
-<li><code>raftstore/snapshot</code></li>
-<li><code>raftstore/mode</code></li>
-<li><code>raftstore/migrate</code></li>
-<li><code>coordinator</code></li>
-<li><code>meta/root</code></li>
+<li><strong>Post-mortem</strong>: a coordinator crashed mid-handoff, and you want to know whether the rooted lease/seal/closure state is consistent before restarting</li>
+<li><strong>Pre-restart sanity check</strong>: before bringing a store back up, verify its rooted metadata has no dangling successor coverage / missing confirms / missing closures</li>
+<li><strong>Trace audit</strong>: given a dumped reply trace from an external system, check whether any accepted reply crossed an authority-transition boundary</li>
+<li><strong>CI</strong>: compile a reply-trace fixture from a regression scenario, run <code>ccc-audit</code>, and fail the build if the anomaly count is non-zero</li>
 </ul>
-<p>分层如下：</p>
-<pre class="mermaid">flowchart TD
-    DB["DB / 单机数据面"] --&gt; LM["raftstore/localmeta\n本地恢复元数据"]
-    DB --&gt; SNAP["raftstore/snapshot\n逻辑 Region 快照"]
-    MODE["raftstore/mode\nworkdir 生命周期门"] --&gt; MIG["raftstore/migrate\n桥接协议"]
-    SNAP --&gt; MIG
-    LM --&gt; MIG
-    MIG --&gt; RS["raftstore\n分布式执行层"]
-    RS --&gt; Coordinator["coordinator\nview + service"]
-    Coordinator --&gt; MR["meta/root\n最小真相源"]
-</pre>
+<p>The tool reads only. It does not modify the workdir or publish any rooted events.</p>
+<hr>
+<h2 id="2-cli-flags"><a class="header" href="#2-cli-flags">2. CLI flags</a></h2>
+<pre><code>nokv ccc-audit
+  --workdir &lt;path&gt;                    Coordinator work directory containing rooted metadata
+  --holder &lt;string&gt;                   Holder id to evaluate (default: current rooted holder)
+  --now-unix-nano &lt;int64&gt;             Override audit time (default: real time)
+  --reply-trace &lt;path&gt;                Optional JSON reply trace to evaluate
+  --reply-trace-format &lt;format&gt;       nokv | etcd-read-index | etcd-lease-renew | crdb-lease-start
+  --json                              Emit JSON report instead of the text table
+</code></pre>
+<p>At least one of <code>--workdir</code> or <code>--reply-trace</code> must be provided.</p>
+<p>When only <code>--reply-trace</code> is given, snapshot-level anomalies are skipped (there is no snapshot to audit), but reply-trace anomalies are still evaluated against whatever <code>Report</code> can be constructed from the provided context.</p>
+<hr>
+<h2 id="3-snapshot-anomalies-from---workdir"><a class="header" href="#3-snapshot-anomalies-from---workdir">3. Snapshot anomalies (from <code>--workdir</code>)</a></h2>
+<p>Lifted directly from <a href="../coordinator/audit/report.go"><code>coordinator/audit/report.go</code></a> — when a rooted snapshot is loaded, the tool reports the following boolean/enum fields:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>What triggers it</th></tr>
+</thead>
+<tbody>
+<tr><td><code>SuccessorLineageMismatch</code></td><td>Successor lease exists but its <code>PredecessorDigest</code> doesn’t match the sealed predecessor</td></tr>
+<tr><td><code>UncoveredMonotoneFrontier</code></td><td>Successor present but monotone frontier (ID/TSO) not covered</td></tr>
+<tr><td><code>UncoveredDescriptorRevision</code></td><td>Successor present but descriptor revision frontier not covered</td></tr>
+<tr><td><code>LeaseStartCoverageViolation</code></td><td>Successor <code>lease_start</code> is below the sealed served-read frontier</td></tr>
+<tr><td><code>SealedGenerationStillLive</code></td><td>A sealed generation is still marked as live-able</td></tr>
+<tr><td><code>ClosureDefect</code></td><td>Enum: <code>successor_incomplete</code> / <code>missing_confirm</code> / <code>missing_close</code> / <code>close_without_confirm</code> / <code>close_lineage_mismatch</code> / <code>reattach_without_confirm</code> / <code>reattach_without_close</code> / <code>reattach_lineage_mismatch</code> / <code>reattach_incomplete</code></td></tr>
+</tbody>
+</table>
+</div>
+<p><code>ClosureDefect</code> is the canonical enum field. The legacy boolean fields (<code>MissingConfirm</code>, <code>MissingClose</code>, etc.) are kept in the struct for backward-compatible test consumption only; new code should read <code>ClosureDefect</code> directly.</p>
+<hr>
+<h2 id="4-reply-trace-anomalies-from---reply-trace"><a class="header" href="#4-reply-trace-anomalies-from---reply-trace">4. Reply-trace anomalies (from <code>--reply-trace</code>)</a></h2>
+<p>The reply trace evaluator is in <a href="../coordinator/audit/trace.go"><code>coordinator/audit/trace.go</code></a>. Each accepted record is checked against the snapshot’s closure state plus its own successor-generation evidence.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Kind</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>post_seal_accepted_reply</code></td><td>Reply accepted at a generation that is already sealed in rooted state</td></tr>
+<tr><td><code>accepted_reply_behind_successor</code></td><td>Generic — accepted reply’s generation is below an observed successor generation</td></tr>
+<tr><td><code>accepted_read_index_behind_successor</code></td><td>etcd-read-index specialization of the above</td></tr>
+<tr><td><code>accepted_keepalive_success_after_revoke</code></td><td>etcd-lease-renew specialization — keepalive success observed after a revoke revision</td></tr>
+<tr><td><code>lease_start_coverage_violation</code></td><td>crdb-lease-start specialization — accepted successor <code>lease_start</code> below carried served timestamp</td></tr>
+<tr><td><code>illegal_reply_generation</code></td><td>Accepted reply whose generation cannot be legal under current closure state</td></tr>
+</tbody>
+</table>
+</div>
+<p>Anomaly kinds are stable; adapters for new external systems add more specializations to the <code>accepted_reply_behind_successor</code> family.</p>
+<hr>
+<h2 id="5-trace-formats"><a class="header" href="#5-trace-formats">5. Trace formats</a></h2>
+<p>The tool’s trace adapter normalizes several formats into a shared <code>ReplyTraceRecord</code> schema. See <a href="../coordinator/audit/trace_adapter.go"><code>coordinator/audit/trace_adapter.go</code></a>.</p>
+<h3 id="nokv-default"><a class="header" href="#nokv-default"><code>nokv</code> (default)</a></h3>
+<p>Native format, already in <code>ReplyTraceRecord</code> shape:</p>
+<pre><code class="language-json">[
+  {
+    "source": "nokv",
+    "duty": "alloc_id",
+    "cert_generation": 5,
+    "observed_successor_generation": 0,
+    "accepted": true
+  }
+]
+</code></pre>
+<p>Also accepts <code>{"records": [...]}</code> envelope.</p>
+<h3 id="etcd-read-index"><a class="header" href="#etcd-read-index"><code>etcd-read-index</code></a></h3>
+<pre><code class="language-json">[
+  {
+    "member_id": "n1",
+    "read_state_generation": 12,
+    "successor_generation": 13,
+    "accepted": true
+  }
+]
+</code></pre>
+<p>Projected into <code>duty: "read_index"</code> with <code>cert_generation = read_state_generation</code>, <code>observed_successor_generation = successor_generation</code>.</p>
+<h3 id="etcd-lease-renew"><a class="header" href="#etcd-lease-renew"><code>etcd-lease-renew</code></a></h3>
+<pre><code class="language-json">[
+  {
+    "member_id": "n1",
+    "response_revision": 42,
+    "revoke_revision": 45,
+    "accepted": true
+  }
+]
+</code></pre>
+<p>Projected into <code>duty: "lease_renew"</code> with <code>cert_generation = response_revision</code>, <code>observed_successor_generation = revoke_revision</code>.</p>
+<h3 id="crdb-lease-start"><a class="header" href="#crdb-lease-start"><code>crdb-lease-start</code></a></h3>
+<pre><code class="language-json">[
+  {
+    "key": "k",
+    "successor_lease_start": 8,
+    "served_timestamp": 9,
+    "accepted": true
+  }
+]
+</code></pre>
+<p>Projected into <code>duty: "lease_start_coverage"</code>. Triggers <code>lease_start_coverage_violation</code> when <code>successor_lease_start &lt;= served_timestamp</code> and <code>accepted=true</code>.</p>
+<hr>
+<h2 id="6-output"><a class="header" href="#6-output">6. Output</a></h2>
+<h3 id="text-default"><a class="header" href="#text-default">Text (default)</a></h3>
+<pre><code>HolderID                 c1
+NowUnixNano              1745158800000000000
+CatchUpState             fresh
+RootDescriptorRevision   128
+CurrentHolder            c1
+CurrentGeneration        5
+SealGeneration           4
+ClosureSatisfied         true
+ClosureStage             closed
+Anomalies                none
+ReplyTraceRecords        3
+ReplyTraceAnomalies      accepted_read_index_behind_successor
+</code></pre>
+<h3 id="json---json"><a class="header" href="#json---json">JSON (<code>--json</code>)</a></h3>
+<p>Full dump of <code>Report</code>, <code>Lease</code>, <code>Seal</code>, reply trace records, and reply-trace anomalies. Schema is the <code>cccAuditOutput</code> struct in <code>cmd/nokv/ccc_audit.go</code>.</p>
+<hr>
+<h2 id="7-examples"><a class="header" href="#7-examples">7. Examples</a></h2>
+<h3 id="workdir-only-audit"><a class="header" href="#workdir-only-audit">Workdir-only audit</a></h3>
+<pre><code class="language-bash">nokv ccc-audit --workdir ./artifacts/cluster/store-1 --json
+</code></pre>
+<p>Loads the rooted snapshot, evaluates closure defects, prints JSON.</p>
+<h3 id="reply-trace-only-audit"><a class="header" href="#reply-trace-only-audit">Reply-trace-only audit</a></h3>
+<pre><code class="language-bash">nokv ccc-audit \
+  --reply-trace ./traces/etcd-read-index-sample.json \
+  --reply-trace-format etcd-read-index
+</code></pre>
+<p>Evaluates the trace against an empty snapshot — useful when all you have is the trace file.</p>
+<h3 id="combined-audit-with-holder-override"><a class="header" href="#combined-audit-with-holder-override">Combined audit with holder override</a></h3>
+<pre><code class="language-bash">nokv ccc-audit \
+  --workdir ./artifacts/cluster/store-1 \
+  --holder c1 \
+  --now-unix-nano 1745158800000000000 \
+  --reply-trace ./traces/failover.json \
+  --json
+</code></pre>
+<p>Produces the full report: snapshot-level anomalies + reply-trace anomalies evaluated under the same closure context.</p>
+<hr>
+<h2 id="8-programmatic-api"><a class="header" href="#8-programmatic-api">8. Programmatic API</a></h2>
+<p>Everything the CLI does is available as a Go package. From <code>coordinator/audit</code>:</p>
+<pre><code class="language-go">import (
+    coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
+    coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
+)
 
-<h3 id="关键判断"><a class="header" href="#关键判断">关键判断</a></h3>
-<ol>
-<li><code>DB</code> 仍然是底层共享数据面，不是导出后再导入另一种格式。</li>
-<li><code>raftstore/localmeta</code> 只负责 store-local 恢复，不是 cluster authority。</li>
-<li><code>raftstore/snapshot</code> 是逻辑 region 快照，不等于 raft durable snapshot metadata。</li>
-<li><code>migrate</code> 是协议，不是脚本集合。</li>
-</ol>
-<h2 id="3-如果不这样做会发生什么"><a class="header" href="#3-如果不这样做会发生什么">3. 如果不这样做，会发生什么</a></h2>
-<p>如果单机和分布式是两套系统，典型结果会是：</p>
-<ul>
-<li>单机目录直接被视为“旧格式”，只能整体导出。</li>
-<li>分布式 bootstrap 依赖外部工具，而不是系统自身的生命周期协议。</li>
-<li>恢复、校验、观测、测试路径出现双轨制。</li>
-<li>后面任何关于 snapshot、reshard、scheduler/control-plane 的研究都要分别做两遍。</li>
-</ul>
-<p>对于研究平台来说，这种分裂尤其糟糕。因为你无法回答一个最基本的问题：</p>
-<blockquote>
-<p>你研究的是同一个系统的扩展，还是两套系统之间的迁移工具？</p>
-</blockquote>
-<p>NoKV 现在的做法是明确回答前者。</p>
-<h2 id="4-当前设计怎么把桥接做成协议"><a class="header" href="#4-当前设计怎么把桥接做成协议">4. 当前设计怎么把桥接做成协议</a></h2>
-<p>核心不是 CLI 名字，而是状态边界。</p>
-<h3 id="41-workdir-mode-是正式协议"><a class="header" href="#41-workdir-mode-是正式协议">4.1 workdir mode 是正式协议</a></h3>
-<p>相关代码：</p>
-<ul>
-<li><code>raftstore/mode</code></li>
-</ul>
-<p>当前生命周期至少包括：</p>
-<ul>
-<li><code>standalone</code></li>
-<li><code>preparing</code></li>
-<li><code>seeded</code></li>
-<li><code>cluster</code></li>
-</ul>
-<p>这意味着：</p>
-<ul>
-<li>一个 workdir 不再永远被假设成普通本地 DB。</li>
-<li>一旦目录进入 <code>preparing/seeded/cluster</code>，普通单机打开路径就必须被 gate 住。</li>
-<li>生命周期不再靠“运维同学记住别手抖”，而是靠库级约束。</li>
-</ul>
-<h3 id="42-snapshot-被分层而不是一个模糊大概念"><a class="header" href="#42-snapshot-被分层而不是一个模糊大概念">4.2 snapshot 被分层，而不是一个模糊大概念</a></h3>
-<p>相关代码：</p>
-<ul>
-<li><code>raftstore/engine/snapshot.go</code></li>
-<li><code>raftstore/snapshot</code></li>
-</ul>
-<p>当前有两层 snapshot：</p>
-<ol>
-<li>raft durable metadata snapshot</li>
-<li>region logical state snapshot</li>
-</ol>
-<p>这条分层很重要，因为单机提升到分布式，真正需要提升的是：</p>
-<ul>
-<li>key range 对应的数据状态</li>
-<li>region identity</li>
-<li>peer identity</li>
-<li>local recovery metadata</li>
-</ul>
-<p>而不是只搬一份 term/index/confstate。</p>
-<h3 id="43-migrate-是状态提升协议不是命令拼接"><a class="header" href="#43-migrate-是状态提升协议不是命令拼接">4.3 migrate 是状态提升协议，不是命令拼接</a></h3>
-<p>相关代码：</p>
-<ul>
-<li><code>raftstore/migrate/init.go</code></li>
-<li><code>raftstore/migrate/expand.go</code></li>
-</ul>
-<p>当前主线可以概括成：</p>
-<pre class="mermaid">sequenceDiagram
-    participant DB as 单机 workdir
-    participant MODE as mode gate
-    participant MIG as migrate
-    participant RS as raftstore
-    participant Coordinator as coordinator/meta
+store, _ := coordstorage.OpenRootLocalStore("./workdir")
+defer store.Close()
+snapshot, _ := store.Load()
 
-    DB-&gt;&gt;MODE: standalone -&gt; preparing
-    MODE-&gt;&gt;MIG: 允许写入 seed 语义
-    MIG-&gt;&gt;RS: init 一个 full-range seed region
-    RS-&gt;&gt;MODE: preparing -&gt; seeded
-    MIG-&gt;&gt;RS: serve / expand
-    RS-&gt;&gt;Coordinator: 加入 cluster control-plane
-    RS-&gt;&gt;MODE: seeded -&gt; cluster
-</pre>
+report := coordaudit.BuildReport(snapshot, "c1", time.Now().UnixNano())
 
-<p>这里真正值钱的是：</p>
+records, _ := coordaudit.DecodeReplyTrace(traceBytes, coordaudit.ReplyTraceFormatNoKV)
+traceAnomalies := coordaudit.EvaluateReplyTrace(report, records)
+
+for _, a := range traceAnomalies {
+    fmt.Printf("%s at index %d: %s\n", a.Kind, a.Index, a.Reason)
+}
+</code></pre>
+<hr>
+<h2 id="9-exit-codes"><a class="header" href="#9-exit-codes">9. Exit codes</a></h2>
 <ul>
-<li>state promotion 有明确边界</li>
-<li>snapshot 有明确边界</li>
-<li>恢复和正常执行走同一套语义</li>
+<li><code>0</code> — tool ran successfully; anomalies (if any) are in the report but are <strong>not</strong> promoted to a non-zero exit code</li>
+<li><code>1</code> — tool failed to run (bad flags, missing workdir, malformed trace)</li>
 </ul>
-<h2 id="5-调用逻辑"><a class="header" href="#5-调用逻辑">5. 调用逻辑</a></h2>
-<h3 id="migrate-init"><a class="header" href="#migrate-init"><code>migrate init</code></a></h3>
-<p>目标：</p>
+<p><strong>Note</strong>: the tool intentionally does not exit non-zero on detected anomalies. Consuming scripts should parse the JSON output and decide themselves how to react. This makes it safe to run inside broader CI pipelines without accidentally failing them.</p>
+<hr>
+<h2 id="10-source-map"><a class="header" href="#10-source-map">10. Source map</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>File</th><th>Role</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="../cmd/nokv/ccc_audit.go"><code>cmd/nokv/ccc_audit.go</code></a></td><td>CLI entry point, flag parsing, text/JSON renderer</td></tr>
+<tr><td><a href="../coordinator/audit/report.go"><code>coordinator/audit/report.go</code></a></td><td><code>BuildReport</code>, <code>SnapshotAnomalies</code>, <code>ClosureDefect</code></td></tr>
+<tr><td><a href="../coordinator/audit/trace.go"><code>coordinator/audit/trace.go</code></a></td><td><code>EvaluateReplyTrace</code>, <code>ReplyTraceAnomaly</code></td></tr>
+<tr><td><a href="../coordinator/audit/trace_adapter.go"><code>coordinator/audit/trace_adapter.go</code></a></td><td>Format parsing + projection into <code>ReplyTraceRecord</code></td></tr>
+<tr><td><a href="../coordinator/audit/lease_start_coverage.go"><code>coordinator/audit/lease_start_coverage.go</code></a></td><td>CRDB-style lease-start coverage helper</td></tr>
+</tbody>
+</table>
+</div>
+<p>Related docs:</p>
 <ul>
-<li>给原 standalone workdir 写入 seed region 语义</li>
-<li>让它不再只是“一个 DB 目录”</li>
+<li><a href="rooted_truth.html">Rooted Truth</a> — what’s in the snapshot this tool audits</li>
+<li><a href="coordinator.html">Coordinator</a> — the service that mutates the rooted state</li>
+<li><a href="control_and_execution_protocols.html">Control and Execution Plane Protocols</a> — the full contract being checked</li>
 </ul>
-<p>做的事情大致是：</p>
-<ol>
-<li>检查当前 mode 是否允许提升。</li>
-<li>为 workdir 生成初始 region / peer / localmeta。</li>
-<li>导出逻辑 region snapshot 或建立 seed state。</li>
-<li>把目录推进到 <code>seeded</code>。</li>
-</ol>
-<h3 id="serve"><a class="header" href="#serve"><code>serve</code></a></h3>
-<p>目标：</p>
-<ul>
-<li>让 seeded workdir 进入真正的 cluster 语义</li>
-</ul>
-<p>做的事情大致是：</p>
-<ol>
-<li>启动 <code>raftstore</code>。</li>
-<li>恢复本地 <code>replicas.binpb</code> 和 <code>raft-progress.binpb</code>。</li>
-<li>向 <code>coordinator</code> / <code>meta/root</code> 注册 rooted truth。</li>
-<li>开始按 region/peer 身份参与执行面。</li>
-</ol>
-<h3 id="expand"><a class="header" href="#expand"><code>expand</code></a></h3>
-<p>目标：</p>
-<ul>
-<li>把 seed region 扩成 replicated region</li>
-</ul>
-<p>做的事情大致是：</p>
-<ol>
-<li>生成新的 peer change / split / merge 目标。</li>
-<li>通过 <code>coordinator</code> proposal gate 进入 <code>meta/root</code>。</li>
-<li>由 <code>raftstore</code> 执行真正的 conf change / snapshot install。</li>
-<li>terminal truth 回写 <code>meta/root</code>。</li>
-</ol>
-<h2 id="6-设计理念"><a class="header" href="#6-设计理念">6. 设计理念</a></h2>
-<p>这条桥接路线背后的理念有三条：</p>
-<h3 id="61-不重复造两套数据面"><a class="header" href="#61-不重复造两套数据面">6.1 不重复造两套数据面</a></h3>
-<p>单机和分布式共享底层 DB / LSM / WAL / VLog。</p>
-<h3 id="62-身份提升比数据搬运更重要"><a class="header" href="#62-身份提升比数据搬运更重要">6.2 身份提升比数据搬运更重要</a></h3>
-<p>困难不在于“把字节拷过去”，而在于：</p>
-<ul>
-<li>让原本匿名的本地状态变成带 region/peer 身份的状态</li>
-<li>让它进入可恢复、可验证、可编排的 cluster 生命周期</li>
-</ul>
-<h3 id="63-迁移必须走协议"><a class="header" href="#63-迁移必须走协议">6.3 迁移必须走协议</a></h3>
-<p>如果桥接只是一个脚本，后面所有关于：</p>
-<ul>
-<li>restore</li>
-<li>reshard</li>
-<li>scheduler/control-plane runtime</li>
-<li>snapshot install</li>
-<li>failover</li>
-</ul>
-<p>的研究都会变得含糊不清。</p>
-<h2 id="7-参考对象"><a class="header" href="#7-参考对象">7. 参考对象</a></h2>
-<p>这一块没有直接照搬某一个系统，但思路上接近几类工业实践：</p>
-<ul>
-<li>TiKV / Cockroach 里关于 range/shard 身份与复制元数据分层的经验</li>
-<li>FoundationDB / Delos 一类系统里“让小而稳定的控制面成为系统骨架”的思路</li>
-<li>数据库内核里“把生命周期写进协议而不是运维手册”的做法</li>
-</ul>
-<h2 id="8-当前已经落地的边界"><a class="header" href="#8-当前已经落地的边界">8. 当前已经落地的边界</a></h2>
-<ul>
-<li>workdir mode gate 已经进入正式实现。</li>
-<li><code>migrate init</code> / <code>serve</code> / <code>expand</code> 已经是协议入口，不是临时脚本。</li>
-<li><code>localmeta</code> 与 engine metadata 已明确分开。</li>
-<li>region snapshot 已是单独层，并被 migration / install 路径复用。</li>
-<li>当前桥接路径已经能接入 <code>coordinator</code> / <code>meta/root</code> 主线。</li>
-</ul>
-<h2 id="9-当前没有实现的能力"><a class="header" href="#9-当前没有实现的能力">9. 当前没有实现的能力</a></h2>
-<ul>
-<li>promotion 阶段不做自动 split / rebalance。</li>
-<li>snapshot install 还不是 zero-copy table transfer 或 SST ingest 优化路径。</li>
-<li>failed <code>init</code> 后还没有单独的 rollback / repair 命令。</li>
-<li>migration observability 仍然偏基础。</li>
-<li>scheduler/control-plane runtime 还没有自动编排 migration 生命周期。</li>
-</ul>
-<h2 id="10-总结"><a class="header" href="#10-总结">10. 总结</a></h2>
-<p>NoKV 这条“从单机到分布式”的桥接路线，真正值钱的不是多了几条 CLI，而是：</p>
-<ul>
-<li>它没有把单机和分布式做成两套系统</li>
-<li>它把 state promotion 写成了协议</li>
-<li>它让后续关于 control-plane、snapshot、调度和恢复的研究，都能建立在同一套系统之上</li>
-</ul>
-<p>这比“再做一个分布式 KV 外壳”更重要，因为它决定了 NoKV 后面能不能持续演进，而不是每往前走一步都重造一层。</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../notes/2026-02-15-vfs-abstraction-and-deterministic-reliability.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="cli.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../notes/2026-03-30-coordinator-and-execution-layering.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="scripts.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -419,11 +402,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../notes/2026-02-15-vfs-abstraction-and-deterministic-reliability.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="cli.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../notes/2026-03-30-coordinator-and-execution-layering.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="scripts.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -443,17 +426,17 @@
         </script>
 
 
-        <script src="../elasticlunr-ef4e11c1.min.js"></script>
-        <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-c2a407aa.js"></script>
 
-        <script src="../clipboard-1626706a.min.js"></script>
-        <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="../docs/custom-732fa610.js"></script>
-        <script src="../docs/mermaid-init-8a66ee6c.js"></script>
+        <script src="docs/custom-732fa610.js"></script>
+        <script src="docs/mermaid-init-8a66ee6c.js"></script>
 
 
 
