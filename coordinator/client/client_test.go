@@ -192,12 +192,14 @@ type followerStorage struct{}
 func (f *followerStorage) Load() (coordstorage.Snapshot, error) {
 	return coordstorage.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
 }
-func (f *followerStorage) AppendRootEvent(rootevent.Event) error   { return nil }
-func (f *followerStorage) SaveAllocatorState(uint64, uint64) error { return nil }
-func (f *followerStorage) ApplyCoordinatorLease(rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (f *followerStorage) AppendRootEvent(context.Context, rootevent.Event) error { return nil }
+func (f *followerStorage) SaveAllocatorState(context.Context, uint64, uint64) error {
+	return nil
+}
+func (f *followerStorage) ApplyCoordinatorLease(context.Context, rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
 	return rootstate.CoordinatorProtocolState{}, nil
 }
-func (f *followerStorage) ApplyCoordinatorClosure(rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (f *followerStorage) ApplyCoordinatorClosure(context.Context, rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
 	return rootstate.CoordinatorProtocolState{}, nil
 }
 func (f *followerStorage) Refresh() error   { return nil }

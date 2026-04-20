@@ -1,6 +1,7 @@
 package file
 
 import (
+	"context"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 )
@@ -43,7 +44,7 @@ func (s store) ReadCommitted(requestedOffset int64) (rootstorage.CommittedTail, 
 	return tail, nil
 }
 
-func (s store) AppendCommitted(records ...rootstorage.CommittedEvent) (int64, error) {
+func (s store) AppendCommitted(_ context.Context, records ...rootstorage.CommittedEvent) (int64, error) {
 	return s.log.AppendCommitted(records...)
 }
 

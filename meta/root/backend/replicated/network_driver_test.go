@@ -1,6 +1,7 @@
 package replicated
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -16,7 +17,7 @@ import (
 func TestNetworkDriverReplicatesAcrossThreeNodes(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 
-	commit, err := stores[leaderID].Append(
+	commit, err := stores[leaderID].Append(context.Background(),
 		rootevent.StoreJoined(1, "s1"),
 		rootevent.RegionDescriptorPublished(testDescriptor(60, []byte("a"), []byte("z"))),
 	)
@@ -92,7 +93,7 @@ func TestNetworkDriverRestartsFromPersistedState(t *testing.T) {
 	}
 
 	stores, drivers, leaderID := openCluster()
-	commit1, err := stores[leaderID].Append(rootevent.StoreJoined(1, "s1"))
+	commit1, err := stores[leaderID].Append(context.Background(), rootevent.StoreJoined(1, "s1"))
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		for _, id := range []uint64{1, 2, 3} {
@@ -122,7 +123,7 @@ func TestNetworkDriverRestartsFromPersistedState(t *testing.T) {
 		}
 	}()
 
-	commit2, err := stores[leaderID].Append(rootevent.RegionDescriptorPublished(testDescriptor(88, []byte("a"), []byte("z"))))
+	commit2, err := stores[leaderID].Append(context.Background(), rootevent.RegionDescriptorPublished(testDescriptor(88, []byte("a"), []byte("z"))))
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		for _, id := range []uint64{1, 2, 3} {

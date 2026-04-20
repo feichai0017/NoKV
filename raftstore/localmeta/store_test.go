@@ -11,6 +11,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func withPendingRootEventLimit(t *testing.T, limit int, fn func()) {
+	t.Helper()
+	prev := maxPendingRootEvents
+	maxPendingRootEvents = limit
+	t.Cleanup(func() {
+		maxPendingRootEvents = prev
+	})
+	fn()
+}
+
 func TestLocalStorePersistsRegions(t *testing.T) {
 	dir := t.TempDir()
 	store, err := OpenLocalStore(dir, nil)
@@ -124,4 +134,49 @@ func TestLocalStoreDeletesPendingRootEvents(t *testing.T) {
 	}))
 	require.NoError(t, store.DeletePendingRootEvent(3))
 	require.Empty(t, store.PendingRootEvents())
+}
+
+func TestLocalStoreRejectsPendingRootEventOverflow(t *testing.T) {
+	withPendingRootEventLimit(t, 8, func() {
+		dir := t.TempDir()
+		store, err := OpenLocalStore(dir, nil)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, store.Close()) }()
+
+		for seq := uint64(1); seq <= uint64(maxPendingRootEvents); seq++ {
+			require.NoError(t, store.SavePendingRootEvent(PendingRootEvent{
+				Sequence: seq,
+				Event:    rootevent.RegionTombstoned(seq),
+			}))
+		}
+		err = store.SavePendingRootEvent(PendingRootEvent{
+			Sequence: uint64(maxPendingRootEvents + 1),
+			Event:    rootevent.RegionTombstoned(uint64(maxPendingRootEvents + 1)),
+		})
+		require.ErrorContains(t, err, "pending rooted event limit exceeded")
+		require.Len(t, store.PendingRootEvents(), maxPendingRootEvents)
+	})
+}
+
+func TestLocalStoreAllowsPendingRootEventOverwriteAtLimit(t *testing.T) {
+	withPendingRootEventLimit(t, 8, func() {
+		dir := t.TempDir()
+		store, err := OpenLocalStore(dir, nil)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, store.Close()) }()
+
+		for seq := uint64(1); seq <= uint64(maxPendingRootEvents); seq++ {
+			require.NoError(t, store.SavePendingRootEvent(PendingRootEvent{
+				Sequence: seq,
+				Event:    rootevent.RegionTombstoned(seq),
+			}))
+		}
+		require.NoError(t, store.SavePendingRootEvent(PendingRootEvent{
+			Sequence: uint64(maxPendingRootEvents),
+			Event:    rootevent.StoreJoined(uint64(maxPendingRootEvents), "store-replaced"),
+		}))
+		pending := store.PendingRootEvents()
+		require.Len(t, pending, maxPendingRootEvents)
+		require.Equal(t, rootevent.KindStoreJoined, pending[len(pending)-1].Event.Kind)
+	})
 }

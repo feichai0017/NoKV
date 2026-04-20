@@ -137,13 +137,15 @@ func (c *Client) handleRegionError(regionID uint64, err *errorpb.RegionError) er
 		return nil
 	}
 	if notLeader := err.GetNotLeader(); notLeader != nil {
+		c.mu.Lock()
 		if leader := notLeader.GetLeader(); leader != nil {
-			c.mu.Lock()
 			if region, ok := c.regions[regionID]; ok && region != nil {
 				region.leader = leader.GetStoreId()
 			}
-			c.mu.Unlock()
+		} else {
+			c.removeRegionLocked(regionID)
 		}
+		c.mu.Unlock()
 		return nil
 	}
 	if epochMismatch := err.GetEpochNotMatch(); epochMismatch != nil {

@@ -72,7 +72,7 @@ func (f *fakeStorage) Load() (coordstorage.Snapshot, error) {
 	return coordstorage.CloneSnapshot(f.snapshot), nil
 }
 
-func (f *fakeStorage) AppendRootEvent(event rootevent.Event) error {
+func (f *fakeStorage) AppendRootEvent(_ context.Context, event rootevent.Event) error {
 	f.eventCalls++
 	f.lastEvent = event
 	if f.eventErr != nil {
@@ -98,7 +98,7 @@ func (f *fakeStorage) AppendRootEvent(event rootevent.Event) error {
 	return nil
 }
 
-func (f *fakeStorage) SaveAllocatorState(idCurrent, tsCurrent uint64) error {
+func (f *fakeStorage) SaveAllocatorState(_ context.Context, idCurrent, tsCurrent uint64) error {
 	f.saveCalls++
 	f.lastID = idCurrent
 	f.lastTS = tsCurrent
@@ -114,7 +114,7 @@ func (f *fakeStorage) SaveAllocatorState(idCurrent, tsCurrent uint64) error {
 	return nil
 }
 
-func (f *fakeStorage) ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (f *fakeStorage) ApplyCoordinatorLease(_ context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
 	switch cmd.Kind {
 	case rootproto.CoordinatorLeaseCommandIssue:
 		f.campaignCalls++
@@ -168,7 +168,7 @@ func (f *fakeStorage) ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseComman
 	return f.protocolState(), nil
 }
 
-func (f *fakeStorage) ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (f *fakeStorage) ApplyCoordinatorClosure(_ context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
 	switch cmd.Kind {
 	case rootproto.CoordinatorClosureCommandSeal:
 		f.sealCalls++
@@ -278,7 +278,7 @@ func (f *fakeSyncStorage) Refresh() error {
 	return nil
 }
 
-func (f *serialAppendStorage) AppendRootEvent(event rootevent.Event) error {
+func (f *serialAppendStorage) AppendRootEvent(ctx context.Context, event rootevent.Event) error {
 	if !atomic.CompareAndSwapInt32(&f.inAppend, 0, 1) {
 		return errors.New("concurrent append")
 	}
@@ -292,7 +292,7 @@ func (f *serialAppendStorage) AppendRootEvent(event rootevent.Event) error {
 		<-f.release
 	}
 	defer atomic.StoreInt32(&f.inAppend, 0)
-	return f.fakeStorage.AppendRootEvent(event)
+	return f.fakeStorage.AppendRootEvent(ctx, event)
 }
 
 func rootCloneDescriptorsForTest(in map[uint64]descriptor.Descriptor) map[uint64]descriptor.Descriptor {
@@ -1541,7 +1541,7 @@ func TestServiceIDWindowPersistsFenceOncePerWindow(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
 	svc.idWindowSize = 5
 
-	first, err := svc.reserveIDs(3)
+	first, err := svc.reserveIDs(context.Background(), 3)
 	require.NoError(t, err)
 	require.Equal(t, uint64(10), first)
 	require.Equal(t, 1, store.saveCalls)
@@ -1549,14 +1549,14 @@ func TestServiceIDWindowPersistsFenceOncePerWindow(t *testing.T) {
 	require.Equal(t, uint64(99), store.lastTS)
 	require.Equal(t, uint64(12), svc.ids.Current())
 
-	first, err = svc.reserveIDs(2)
+	first, err = svc.reserveIDs(context.Background(), 2)
 	require.NoError(t, err)
 	require.Equal(t, uint64(13), first)
 	require.Equal(t, 1, store.saveCalls)
 	require.Equal(t, uint64(14), store.lastID)
 	require.Equal(t, uint64(14), svc.ids.Current())
 
-	first, err = svc.reserveIDs(1)
+	first, err = svc.reserveIDs(context.Background(), 1)
 	require.NoError(t, err)
 	require.Equal(t, uint64(15), first)
 	require.Equal(t, 2, store.saveCalls)
@@ -1569,7 +1569,7 @@ func TestServiceTSOWindowPersistsFenceOncePerWindow(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
 	svc.tsoWindowSize = 5
 
-	first, count, err := svc.reserveTSO(3)
+	first, count, err := svc.reserveTSO(context.Background(), 3)
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), first)
 	require.Equal(t, uint64(3), count)
@@ -1577,7 +1577,7 @@ func TestServiceTSOWindowPersistsFenceOncePerWindow(t *testing.T) {
 	require.Equal(t, uint64(104), store.lastTS)
 	require.Equal(t, uint64(102), svc.tso.Current())
 
-	first, count, err = svc.reserveTSO(2)
+	first, count, err = svc.reserveTSO(context.Background(), 2)
 	require.NoError(t, err)
 	require.Equal(t, uint64(103), first)
 	require.Equal(t, uint64(2), count)
@@ -1585,7 +1585,7 @@ func TestServiceTSOWindowPersistsFenceOncePerWindow(t *testing.T) {
 	require.Equal(t, uint64(104), store.lastTS)
 	require.Equal(t, uint64(104), svc.tso.Current())
 
-	first, count, err = svc.reserveTSO(1)
+	first, count, err = svc.reserveTSO(context.Background(), 1)
 	require.NoError(t, err)
 	require.Equal(t, uint64(105), first)
 	require.Equal(t, uint64(1), count)
@@ -1599,7 +1599,7 @@ func TestServiceReloadDoesNotConsumeActiveIDWindow(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
 	svc.idWindowSize = 5
 
-	first, err := svc.reserveIDs(2)
+	first, err := svc.reserveIDs(context.Background(), 2)
 	require.NoError(t, err)
 	require.Equal(t, uint64(10), first)
 	require.Equal(t, uint64(14), store.lastID)
@@ -1608,7 +1608,7 @@ func TestServiceReloadDoesNotConsumeActiveIDWindow(t *testing.T) {
 	require.NoError(t, svc.ReloadFromStorage())
 	require.Equal(t, uint64(11), svc.ids.Current())
 
-	first, err = svc.reserveIDs(1)
+	first, err = svc.reserveIDs(context.Background(), 1)
 	require.NoError(t, err)
 	require.Equal(t, uint64(12), first)
 	require.Equal(t, 1, store.saveCalls)
@@ -1619,7 +1619,7 @@ func TestServiceReloadDoesNotConsumeActiveTSOWindow(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
 	svc.tsoWindowSize = 5
 
-	first, _, err := svc.reserveTSO(2)
+	first, _, err := svc.reserveTSO(context.Background(), 2)
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), first)
 	require.Equal(t, uint64(104), store.lastTS)
@@ -1628,7 +1628,7 @@ func TestServiceReloadDoesNotConsumeActiveTSOWindow(t *testing.T) {
 	require.NoError(t, svc.ReloadFromStorage())
 	require.Equal(t, uint64(101), svc.tso.Current())
 
-	first, _, err = svc.reserveTSO(1)
+	first, _, err = svc.reserveTSO(context.Background(), 1)
 	require.NoError(t, err)
 	require.Equal(t, uint64(102), first)
 	require.Equal(t, 1, store.saveCalls)
@@ -1916,12 +1916,12 @@ func TestServiceAblationDisableBudgetUsesLargeRunway(t *testing.T) {
 	svc.idWindowSize = 1
 	require.NoError(t, svc.ConfigureAblation(coordablation.Config{DisableBudget: true}))
 
-	first, err := svc.reserveIDs(1)
+	first, err := svc.reserveIDs(context.Background(), 1)
 	require.NoError(t, err)
 	require.Equal(t, uint64(10), first)
 	require.Equal(t, 1, store.saveCalls)
 
-	first, err = svc.reserveIDs(1)
+	first, err = svc.reserveIDs(context.Background(), 1)
 	require.NoError(t, err)
 	require.Equal(t, uint64(11), first)
 	require.Equal(t, 1, store.saveCalls)

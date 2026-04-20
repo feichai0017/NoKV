@@ -1,6 +1,7 @@
 package local
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -105,17 +106,23 @@ func (s *Store) ReadSince(cursor rootstate.Cursor) ([]rootevent.Event, rootstate
 }
 
 // Append appends ordered metadata events and advances the compact root state.
-func (s *Store) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) {
+func (s *Store) Append(ctx context.Context, events ...rootevent.Event) (rootstate.CommitInfo, error) {
 	if s == nil || len(events) == 0 {
 		state, _ := s.Current()
 		return rootstate.CommitInfo{Cursor: state.LastCommitted, State: state}, nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return rootstate.CommitInfo{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.appendLocked(events...)
+	return s.appendLocked(ctx, events...)
 }
 
-func (s *Store) appendLocked(events ...rootevent.Event) (rootstate.CommitInfo, error) {
+func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (rootstate.CommitInfo, error) {
 	var next rootstate.Cursor
 	state := s.state
 	snapshot := rootstate.Snapshot{
@@ -130,8 +137,11 @@ func (s *Store) appendLocked(events ...rootevent.Event) (rootstate.CommitInfo, e
 		rootstate.ApplyEventToSnapshot(&snapshot, next, evt)
 		records = append(records, rootstorage.CommittedEvent{Cursor: next, Event: rootevent.CloneEvent(evt)})
 	}
-	logEnd, err := s.log.AppendCommitted(records...)
+	logEnd, err := s.log.AppendCommitted(ctx, records...)
 	if err != nil {
+		return rootstate.CommitInfo{}, err
+	}
+	if err := ctx.Err(); err != nil {
 		return rootstate.CommitInfo{}, err
 	}
 	if err := s.log.SaveCheckpoint(rootstorage.Checkpoint{
@@ -150,9 +160,15 @@ func (s *Store) appendLocked(events ...rootevent.Event) (rootstate.CommitInfo, e
 	return rootstate.CommitInfo{Cursor: snapshot.State.LastCommitted, State: snapshot.State}, nil
 }
 
-func (s *Store) ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *Store) ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
 	if s == nil {
 		return rootstate.CoordinatorProtocolState{}, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return rootstate.CoordinatorProtocolState{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -178,7 +194,7 @@ func (s *Store) ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseCommand) (ro
 			cmd.PredecessorDigest,
 			cmd.HandoffFrontiers,
 		)
-		commit, err := s.appendLocked(event)
+		commit, err := s.appendLocked(ctx, event)
 		if err != nil {
 			return rootstate.CoordinatorProtocolState{}, err
 		}
@@ -200,7 +216,7 @@ func (s *Store) ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseCommand) (ro
 			current.PredecessorDigest,
 			cmd.HandoffFrontiers,
 		)
-		commit, err := s.appendLocked(event)
+		commit, err := s.appendLocked(ctx, event)
 		if err != nil {
 			return rootstate.CoordinatorProtocolState{}, err
 		}
@@ -210,9 +226,15 @@ func (s *Store) ApplyCoordinatorLease(cmd rootproto.CoordinatorLeaseCommand) (ro
 	}
 }
 
-func (s *Store) ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *Store) ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
 	if s == nil {
 		return rootstate.CoordinatorProtocolState{}, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return rootstate.CoordinatorProtocolState{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -232,7 +254,7 @@ func (s *Store) ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand)
 		if dutyMask == 0 {
 			dutyMask = rootproto.CoordinatorDutyMaskDefault
 		}
-		commit, err := s.appendLocked(rootevent.CoordinatorLeaseSealed(
+		commit, err := s.appendLocked(ctx, rootevent.CoordinatorLeaseSealed(
 			cmd.HolderID,
 			current.CertGeneration,
 			dutyMask,
@@ -261,7 +283,7 @@ func (s *Store) ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand)
 			s.state.CoordinatorClosure.SealDigest == auditStatus.SealDigest {
 			return s.state.CoordinatorProtocol(), nil
 		}
-		commit, err := s.appendLocked(rootevent.CoordinatorClosureConfirmed(cmd.HolderID, auditStatus.SealGeneration, s.state.CoordinatorLease.CertGeneration, auditStatus.SealDigest))
+		commit, err := s.appendLocked(ctx, rootevent.CoordinatorClosureConfirmed(cmd.HolderID, auditStatus.SealGeneration, s.state.CoordinatorLease.CertGeneration, auditStatus.SealDigest))
 		if err != nil {
 			return rootstate.CoordinatorProtocolState{}, err
 		}
@@ -273,7 +295,7 @@ func (s *Store) ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand)
 		if rootproto.ClosureStageAtLeast(s.state.CoordinatorClosure.Stage, rootproto.CoordinatorClosureStageClosed) {
 			return s.state.CoordinatorProtocol(), nil
 		}
-		commit, err := s.appendLocked(rootevent.CoordinatorClosureClosed(
+		commit, err := s.appendLocked(ctx, rootevent.CoordinatorClosureClosed(
 			cmd.HolderID,
 			s.state.CoordinatorClosure.SealGeneration,
 			s.state.CoordinatorClosure.SuccessorGeneration,
@@ -290,7 +312,7 @@ func (s *Store) ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand)
 		if rootproto.ClosureStageAtLeast(s.state.CoordinatorClosure.Stage, rootproto.CoordinatorClosureStageReattached) {
 			return s.state.CoordinatorProtocol(), nil
 		}
-		commit, err := s.appendLocked(rootevent.CoordinatorClosureReattached(
+		commit, err := s.appendLocked(ctx, rootevent.CoordinatorClosureReattached(
 			cmd.HolderID,
 			s.state.CoordinatorClosure.SealGeneration,
 			s.state.CoordinatorClosure.SuccessorGeneration,
@@ -306,9 +328,15 @@ func (s *Store) ApplyCoordinatorClosure(cmd rootproto.CoordinatorClosureCommand)
 }
 
 // FenceAllocator advances one global allocator fence monotonically.
-func (s *Store) FenceAllocator(kind rootstate.AllocatorKind, min uint64) (uint64, error) {
+func (s *Store) FenceAllocator(ctx context.Context, kind rootstate.AllocatorKind, min uint64) (uint64, error) {
 	if s == nil {
 		return 0, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
 	s.mu.RLock()
 	state := s.state
@@ -318,7 +346,7 @@ func (s *Store) FenceAllocator(kind rootstate.AllocatorKind, min uint64) (uint64
 		if state.IDFence >= min {
 			return state.IDFence, nil
 		}
-		commit, err := s.Append(rootevent.IDAllocatorFenced(min))
+		commit, err := s.Append(ctx, rootevent.IDAllocatorFenced(min))
 		if err != nil {
 			return 0, err
 		}
@@ -327,7 +355,7 @@ func (s *Store) FenceAllocator(kind rootstate.AllocatorKind, min uint64) (uint64
 		if state.TSOFence >= min {
 			return state.TSOFence, nil
 		}
-		commit, err := s.Append(rootevent.TSOAllocatorFenced(min))
+		commit, err := s.Append(ctx, rootevent.TSOAllocatorFenced(min))
 		if err != nil {
 			return 0, err
 		}
