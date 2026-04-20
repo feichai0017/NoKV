@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -16,6 +17,65 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func campaignLease(store *RootStore, holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence, descriptorRevision uint64, predecessorDigest string) (rootstate.CoordinatorLease, error) {
+	state, err := store.ApplyCoordinatorLease(rootstate.CoordinatorLeaseCommand{
+		Kind:              rootstate.CoordinatorLeaseCommandIssue,
+		HolderID:          holderID,
+		ExpiresUnixNano:   expiresUnixNano,
+		NowUnixNano:       nowUnixNano,
+		PredecessorDigest: predecessorDigest,
+		HandoffFrontiers:  controlplane.Frontiers(idFence, tsoFence, descriptorRevision),
+	})
+	return state.Lease, err
+}
+
+func releaseLease(store *RootStore, holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
+	state, err := store.ApplyCoordinatorLease(rootstate.CoordinatorLeaseCommand{
+		Kind:             rootstate.CoordinatorLeaseCommandRelease,
+		HolderID:         holderID,
+		NowUnixNano:      nowUnixNano,
+		HandoffFrontiers: controlplane.Frontiers(idFence, tsoFence, 0),
+	})
+	return state.Lease, err
+}
+
+func sealLease(store *RootStore, holderID string, nowUnixNano int64, frontiers rootstate.CoordinatorDutyFrontiers) (rootstate.CoordinatorSeal, error) {
+	state, err := store.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
+		Kind:        rootstate.CoordinatorClosureCommandSeal,
+		HolderID:    holderID,
+		NowUnixNano: nowUnixNano,
+		Frontiers:   frontiers,
+	})
+	return state.Seal, err
+}
+
+func confirmClosure(store *RootStore, holderID string, nowUnixNano int64) (rootstate.CoordinatorClosure, error) {
+	state, err := store.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
+		Kind:        rootstate.CoordinatorClosureCommandConfirm,
+		HolderID:    holderID,
+		NowUnixNano: nowUnixNano,
+	})
+	return state.Closure, err
+}
+
+func closeClosure(store *RootStore, holderID string, nowUnixNano int64) (rootstate.CoordinatorClosure, error) {
+	state, err := store.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
+		Kind:        rootstate.CoordinatorClosureCommandClose,
+		HolderID:    holderID,
+		NowUnixNano: nowUnixNano,
+	})
+	return state.Closure, err
+}
+
+func reattachClosure(store *RootStore, holderID string, nowUnixNano int64) (rootstate.CoordinatorClosure, error) {
+	state, err := store.ApplyCoordinatorClosure(rootstate.CoordinatorClosureCommand{
+		Kind:        rootstate.CoordinatorClosureCommandReattach,
+		HolderID:    holderID,
+		NowUnixNano: nowUnixNano,
+	})
+	return state.Closure, err
+}
 
 func TestOpenRootLocalStoreCreatesMetadataRootFiles(t *testing.T) {
 	dir := t.TempDir()
@@ -179,21 +239,6 @@ func TestRootStoreLeadershipAndCloseDelegation(t *testing.T) {
 	require.Equal(t, 1, backend.closeCalls)
 }
 
-func TestRootStoreCampaignDelegation(t *testing.T) {
-	backend := &stubRootBackend{
-		observed: observedDescriptorsSnapshot(
-			testDescriptor(123, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil),
-			rootstate.Cursor{Term: 1, Index: 1},
-		),
-		campaignErr: errors.New("campaign failed"),
-	}
-
-	store, err := OpenRootStore(backend)
-	require.NoError(t, err)
-	require.ErrorIs(t, store.Campaign(), backend.campaignErr)
-	require.Equal(t, 1, backend.campaignCalls)
-}
-
 func TestRootStoreCampaignCoordinatorLeaseDelegation(t *testing.T) {
 	backend := &stubRootBackend{
 		observed: observedDescriptorsSnapshot(
@@ -203,15 +248,13 @@ func TestRootStoreCampaignCoordinatorLeaseDelegation(t *testing.T) {
 		lease: rootstate.CoordinatorLease{
 			HolderID:        "c1",
 			ExpiresUnixNano: 1_000,
-			IDFence:         12,
-			TSOFence:        34,
 		},
 	}
 
 	store, err := OpenRootStore(backend)
 	require.NoError(t, err)
 
-	lease, err := store.CampaignCoordinatorLease("c1", 1_000, 100, 12, 34)
+	lease, err := campaignLease(store, "c1", 1_000, 100, 12, 34, 56, "")
 	require.NoError(t, err)
 	require.Equal(t, backend.lease, lease)
 	require.Equal(t, 1, backend.leaseCampaignCalls)
@@ -226,18 +269,111 @@ func TestRootStoreReleaseCoordinatorLeaseDelegation(t *testing.T) {
 		lease: rootstate.CoordinatorLease{
 			HolderID:        "c1",
 			ExpiresUnixNano: 200,
-			IDFence:         12,
-			TSOFence:        34,
 		},
 	}
 
 	store, err := OpenRootStore(backend)
 	require.NoError(t, err)
 
-	lease, err := store.ReleaseCoordinatorLease("c1", 200, 12, 34)
+	lease, err := releaseLease(store, "c1", 200, 12, 34)
 	require.NoError(t, err)
 	require.Equal(t, backend.lease, lease)
 	require.Equal(t, 1, backend.leaseReleaseCalls)
+}
+
+func TestRootStoreSealCoordinatorLeaseDelegation(t *testing.T) {
+	backend := &stubRootBackend{
+		observed: observedDescriptorsSnapshot(
+			testDescriptor(126, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil),
+			rootstate.Cursor{Term: 1, Index: 1},
+		),
+		seal: rootstate.CoordinatorSeal{
+			HolderID:       "c1",
+			CertGeneration: 2,
+			DutyMask:       rootstate.CoordinatorDutyMaskDefault,
+			Frontiers:      controlplane.Frontiers(12, 34, 56),
+		},
+	}
+
+	store, err := OpenRootStore(backend)
+	require.NoError(t, err)
+
+	seal, err := sealLease(store, "c1", 200, controlplane.Frontiers(12, 34, 56))
+	require.NoError(t, err)
+	require.Equal(t, backend.seal, seal)
+	require.Equal(t, 1, backend.leaseSealCalls)
+}
+
+func TestRootStoreConfirmCoordinatorClosureDelegation(t *testing.T) {
+	backend := &stubRootBackend{
+		observed: observedDescriptorsSnapshot(
+			testDescriptor(127, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil),
+			rootstate.Cursor{Term: 1, Index: 1},
+		),
+		closure: rootstate.CoordinatorClosure{
+			HolderID:            "c1",
+			SealGeneration:      2,
+			SuccessorGeneration: 3,
+			SealDigest:          "seal-digest",
+			Stage:               rootstate.CoordinatorClosureStageConfirmed,
+		},
+	}
+
+	store, err := OpenRootStore(backend)
+	require.NoError(t, err)
+
+	closure, err := confirmClosure(store, "c1", 200)
+	require.NoError(t, err)
+	require.Equal(t, backend.closure, closure)
+	require.Equal(t, 1, backend.leaseAuditCalls)
+}
+
+func TestRootStoreCloseCoordinatorClosureDelegation(t *testing.T) {
+	backend := &stubRootBackend{
+		observed: observedDescriptorsSnapshot(
+			testDescriptor(127, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil),
+			rootstate.Cursor{Term: 1, Index: 1},
+		),
+		closure: rootstate.CoordinatorClosure{
+			HolderID:            "c1",
+			SealGeneration:      2,
+			SuccessorGeneration: 3,
+			SealDigest:          "seal-digest",
+			Stage:               rootstate.CoordinatorClosureStageClosed,
+		},
+	}
+
+	store, err := OpenRootStore(backend)
+	require.NoError(t, err)
+
+	closure, err := closeClosure(store, "c1", 200)
+	require.NoError(t, err)
+	require.Equal(t, backend.closure, closure)
+	require.Equal(t, 1, backend.leaseCloseCalls)
+}
+
+func TestRootStoreReattachCoordinatorClosureDelegation(t *testing.T) {
+	backend := &stubRootBackend{
+		observed: observedDescriptorsSnapshot(
+			testDescriptor(127, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil),
+			rootstate.Cursor{Term: 1, Index: 1},
+		),
+		closure: rootstate.CoordinatorClosure{
+			HolderID:            "c1",
+			SealGeneration:      2,
+			SuccessorGeneration: 3,
+			SealDigest:          "seal-digest",
+			Stage:               rootstate.CoordinatorClosureStageReattached,
+		},
+	}
+
+	store, err := OpenRootStore(backend)
+	require.NoError(t, err)
+
+	closure, err := reattachClosure(store, "c1", 200)
+	require.NoError(t, err)
+	require.Equal(t, backend.closure, closure)
+	require.Equal(t, 1, backend.leaseReattachCalls)
 }
 
 func TestRootStoreClosePropagatesCloserError(t *testing.T) {
@@ -264,13 +400,21 @@ type stubRootBackend struct {
 	leaderIDValue      uint64
 	closeErr           error
 	closeCalls         int
-	campaignErr        error
-	campaignCalls      int
 	lease              rootstate.CoordinatorLease
 	leaseCampaignErr   error
 	leaseCampaignCalls int
 	leaseReleaseErr    error
 	leaseReleaseCalls  int
+	seal               rootstate.CoordinatorSeal
+	leaseSealErr       error
+	leaseSealCalls     int
+	closure            rootstate.CoordinatorClosure
+	leaseAuditErr      error
+	leaseAuditCalls    int
+	leaseCloseErr      error
+	leaseCloseCalls    int
+	leaseReattachErr   error
+	leaseReattachCalls int
 }
 
 func (s *stubRootBackend) Snapshot() (rootstate.Snapshot, error) {
@@ -315,25 +459,47 @@ func (s *stubRootBackend) LeaderID() uint64 {
 	return s.leaderIDValue
 }
 
-func (s *stubRootBackend) Campaign() error {
-	s.campaignCalls++
-	return s.campaignErr
+func (s *stubRootBackend) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+	switch cmd.Kind {
+	case rootstate.CoordinatorLeaseCommandIssue:
+		s.leaseCampaignCalls++
+		if s.leaseCampaignErr != nil {
+			return rootstate.CoordinatorProtocolState{}, s.leaseCampaignErr
+		}
+	case rootstate.CoordinatorLeaseCommandRelease:
+		s.leaseReleaseCalls++
+		if s.leaseReleaseErr != nil {
+			return rootstate.CoordinatorProtocolState{}, s.leaseReleaseErr
+		}
+	}
+	return rootstate.CoordinatorProtocolState{Lease: s.lease}, nil
 }
 
-func (s *stubRootBackend) CampaignCoordinatorLease(holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
-	s.leaseCampaignCalls++
-	if s.leaseCampaignErr != nil {
-		return rootstate.CoordinatorLease{}, s.leaseCampaignErr
+func (s *stubRootBackend) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+	switch cmd.Kind {
+	case rootstate.CoordinatorClosureCommandSeal:
+		s.leaseSealCalls++
+		if s.leaseSealErr != nil {
+			return rootstate.CoordinatorProtocolState{}, s.leaseSealErr
+		}
+		return rootstate.CoordinatorProtocolState{Seal: s.seal}, nil
+	case rootstate.CoordinatorClosureCommandConfirm:
+		s.leaseAuditCalls++
+		if s.leaseAuditErr != nil {
+			return rootstate.CoordinatorProtocolState{}, s.leaseAuditErr
+		}
+	case rootstate.CoordinatorClosureCommandClose:
+		s.leaseCloseCalls++
+		if s.leaseCloseErr != nil {
+			return rootstate.CoordinatorProtocolState{}, s.leaseCloseErr
+		}
+	case rootstate.CoordinatorClosureCommandReattach:
+		s.leaseReattachCalls++
+		if s.leaseReattachErr != nil {
+			return rootstate.CoordinatorProtocolState{}, s.leaseReattachErr
+		}
 	}
-	return s.lease, nil
-}
-
-func (s *stubRootBackend) ReleaseCoordinatorLease(holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
-	s.leaseReleaseCalls++
-	if s.leaseReleaseErr != nil {
-		return rootstate.CoordinatorLease{}, s.leaseReleaseErr
-	}
-	return s.lease, nil
+	return rootstate.CoordinatorProtocolState{Closure: s.closure}, nil
 }
 
 func (s *stubRootBackend) Close() error {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -25,7 +26,7 @@ func TestNetworkDriverReplicatesAcrossThreeNodes(t *testing.T) {
 		for _, id := range []uint64{2, 3} {
 			_ = stores[id].Refresh()
 			current, err := stores[id].Current()
-			if err != nil || current != commit.State {
+			if err != nil || !reflect.DeepEqual(current, commit.State) {
 				return false
 			}
 		}
@@ -97,7 +98,7 @@ func TestNetworkDriverRestartsFromPersistedState(t *testing.T) {
 		for _, id := range []uint64{1, 2, 3} {
 			_ = stores[id].Refresh()
 			current, err := stores[id].Current()
-			if err != nil || current != commit1.State {
+			if err != nil || !reflect.DeepEqual(current, commit1.State) {
 				return false
 			}
 		}
@@ -127,7 +128,7 @@ func TestNetworkDriverRestartsFromPersistedState(t *testing.T) {
 		for _, id := range []uint64{1, 2, 3} {
 			_ = stores[id].Refresh()
 			current, err := stores[id].Current()
-			if err != nil || current != commit2.State {
+			if err != nil || !reflect.DeepEqual(current, commit2.State) {
 				return false
 			}
 		}

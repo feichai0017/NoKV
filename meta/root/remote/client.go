@@ -176,39 +176,39 @@ func (c *Client) LeaderID() uint64 {
 	return status.GetLeaderId()
 }
 
-func (c *Client) CampaignCoordinatorLease(holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
-	resp, err := invokeWrite(c, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootCampaignResponse, error) {
-		return rpc.Campaign(ctx, &metapb.MetadataRootCampaignRequest{
-			HolderId:        holderID,
-			ExpiresUnixNano: expiresUnixNano,
-			NowUnixNano:     nowUnixNano,
-			IdFence:         idFence,
-			TsoFence:        tsoFence,
+func (c *Client) ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+	if !validCoordinatorLeaseCommandKind(cmd.Kind) {
+		return rootstate.CoordinatorProtocolState{}, rootstate.ErrInvalidCoordinatorLease
+	}
+	resp, err := invokeWrite(c, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyCoordinatorLeaseResponse, error) {
+		return rpc.ApplyCoordinatorLease(ctx, &metapb.MetadataRootApplyCoordinatorLeaseRequest{
+			Command: metawire.RootCoordinatorLeaseCommandToProto(cmd),
 		})
 	})
 	if err != nil {
-		return rootstate.CoordinatorLease{}, err
+		return rootstate.CoordinatorProtocolState{}, err
 	}
-	lease := metawire.RootCoordinatorLeaseFromProto(resp.GetLease())
-	if !resp.GetGranted() {
-		return lease, rootstate.ErrCoordinatorLeaseHeld
+	protocolState := metawire.RootCoordinatorProtocolStateFromProto(resp.GetState())
+	if cmd.Kind == rootstate.CoordinatorLeaseCommandIssue &&
+		resp.GetStatus() == metapb.RootCoordinatorLeaseApplyStatus_ROOT_COORDINATOR_LEASE_APPLY_STATUS_HELD {
+		return protocolState, rootstate.ErrCoordinatorLeaseHeld
 	}
-	return lease, nil
+	return protocolState, nil
 }
 
-func (c *Client) ReleaseCoordinatorLease(holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
-	resp, err := invokeWrite(c, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootReleaseResponse, error) {
-		return rpc.Release(ctx, &metapb.MetadataRootReleaseRequest{
-			HolderId:    holderID,
-			NowUnixNano: nowUnixNano,
-			IdFence:     idFence,
-			TsoFence:    tsoFence,
+func (c *Client) ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+	if !validCoordinatorClosureCommandKind(cmd.Kind) {
+		return rootstate.CoordinatorProtocolState{}, rootstate.ErrCoordinatorLeaseAudit
+	}
+	resp, err := invokeWrite(c, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyCoordinatorClosureResponse, error) {
+		return rpc.ApplyCoordinatorClosure(ctx, &metapb.MetadataRootApplyCoordinatorClosureRequest{
+			Command: metawire.RootCoordinatorClosureCommandToProto(cmd),
 		})
 	})
 	if err != nil {
-		return rootstate.CoordinatorLease{}, err
+		return rootstate.CoordinatorProtocolState{}, err
 	}
-	return metawire.RootCoordinatorLeaseFromProto(resp.GetLease()), nil
+	return metawire.RootCoordinatorProtocolStateFromProto(resp.GetState()), nil
 }
 
 func (c *Client) ObserveCommitted() (rootstorage.ObservedCommitted, error) {
@@ -367,6 +367,27 @@ func dialEndpoint(ctx context.Context, target string, opts ...grpc.DialOption) (
 		return nil, err
 	}
 	return conn, nil
+}
+
+func validCoordinatorLeaseCommandKind(kind rootstate.CoordinatorLeaseCommandKind) bool {
+	switch kind {
+	case rootstate.CoordinatorLeaseCommandIssue, rootstate.CoordinatorLeaseCommandRelease:
+		return true
+	default:
+		return false
+	}
+}
+
+func validCoordinatorClosureCommandKind(kind rootstate.CoordinatorClosureCommandKind) bool {
+	switch kind {
+	case rootstate.CoordinatorClosureCommandSeal,
+		rootstate.CoordinatorClosureCommandConfirm,
+		rootstate.CoordinatorClosureCommandClose,
+		rootstate.CoordinatorClosureCommandReattach:
+		return true
+	default:
+		return false
+	}
 }
 
 func waitForReady(ctx context.Context, conn *grpc.ClientConn) error {

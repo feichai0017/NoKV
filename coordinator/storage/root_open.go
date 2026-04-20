@@ -14,49 +14,62 @@ type rootBackend interface {
 	FenceAllocator(kind rootstate.AllocatorKind, min uint64) (uint64, error)
 }
 
+type rootRefresher interface{ Refresh() error }
+
+type rootTailWaiter interface {
+	WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
+}
+
+type rootTailObserver interface {
+	ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
+}
+
+type rootTailNotifier interface{ TailNotify() <-chan struct{} }
+
+type rootObservedReader interface {
+	ObserveCommitted() (rootstorage.ObservedCommitted, error)
+}
+
+type rootLeaderReader interface {
+	IsLeader() bool
+	LeaderID() uint64
+}
+
+type rootLeaseApplier interface {
+	ApplyCoordinatorLease(cmd rootstate.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
+}
+
+type rootClosureApplier interface {
+	ApplyCoordinatorClosure(cmd rootstate.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
+}
+
 // OpenRootStore opens a Coordinator storage backend backed by the metadata root.
 func OpenRootStore(root rootBackend) (*RootStore, error) {
 	store := &RootStore{root: root}
-	if refresher, ok := root.(interface{ Refresh() error }); ok {
+	if refresher, ok := root.(rootRefresher); ok {
 		store.refresh = refresher.Refresh
 	}
-	if waiter, ok := root.(interface {
-		WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
-	}); ok {
+	if waiter, ok := root.(rootTailWaiter); ok {
 		store.waitForTail = waiter.WaitForTail
 	}
-	if observer, ok := root.(interface {
-		ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
-	}); ok {
+	if observer, ok := root.(rootTailObserver); ok {
 		store.observeTail = observer.ObserveTail
 	}
-	if notifier, ok := root.(interface{ TailNotify() <-chan struct{} }); ok {
+	if notifier, ok := root.(rootTailNotifier); ok {
 		store.tailNotify = notifier.TailNotify
 	}
-	if observer, ok := root.(interface {
-		ObserveCommitted() (rootstorage.ObservedCommitted, error)
-	}); ok {
-		store.observe = observer.ObserveCommitted
+	if observer, ok := root.(rootObservedReader); ok {
+		store.observeCommitted = observer.ObserveCommitted
 	}
-	if leader, ok := root.(interface {
-		IsLeader() bool
-		LeaderID() uint64
-	}); ok {
+	if leader, ok := root.(rootLeaderReader); ok {
 		store.isLeader = leader.IsLeader
 		store.leaderID = leader.LeaderID
 	}
-	if campaigner, ok := root.(interface{ Campaign() error }); ok {
-		store.campaign = campaigner.Campaign
+	if leaseApplier, ok := root.(rootLeaseApplier); ok {
+		store.applyCoordinatorLease = leaseApplier.ApplyCoordinatorLease
 	}
-	if leaseCampaigner, ok := root.(interface {
-		CampaignCoordinatorLease(holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error)
-	}); ok {
-		store.campaignCoordinatorLease = leaseCampaigner.CampaignCoordinatorLease
-	}
-	if leaseReleaser, ok := root.(interface {
-		ReleaseCoordinatorLease(holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error)
-	}); ok {
-		store.releaseCoordinatorLease = leaseReleaser.ReleaseCoordinatorLease
+	if closureApplier, ok := root.(rootClosureApplier); ok {
+		store.applyCoordinatorClosure = closureApplier.ApplyCoordinatorClosure
 	}
 	if err := store.reload(); err != nil {
 		return nil, err
