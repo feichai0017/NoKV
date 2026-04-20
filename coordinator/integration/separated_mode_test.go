@@ -54,7 +54,7 @@ func TestSeparatedModeCoordinatorCrashAndRecoveryPreservesAllocatorFence(t *test
 		}
 		return state.IDFence >= next.GetFirstId() &&
 			state.CoordinatorLease.HolderID == "c1" &&
-			state.CoordinatorLease.IDFence >= lastID
+			state.IDFence >= lastID
 	}, 8*time.Second, 50*time.Millisecond)
 }
 
@@ -199,7 +199,7 @@ func TestSeparatedModeCoordinatorContestedFailoverPreservesAllocatorFence(t *tes
 			return false
 		}
 		return state.CoordinatorLease.HolderID == "c2" &&
-			state.CoordinatorLease.IDFence >= lastID &&
+			state.IDFence >= lastID &&
 			state.IDFence >= next.GetFirstId()
 	}, 8*time.Second, 50*time.Millisecond)
 }
@@ -255,7 +255,7 @@ func TestSeparatedModeCoordinatorChaosMonotonicAllocID(t *testing.T) {
 				state, err := rootCluster.Roots[leaderID].Current()
 				return err == nil &&
 					state.CoordinatorLease.HolderID == "c1" &&
-					state.CoordinatorLease.IDFence >= prevLastID
+					state.IDFence >= prevLastID
 			}, 8*time.Second, 50*time.Millisecond, "iteration %d lease campaign did not inherit previous allocator fence", i)
 		}
 	}

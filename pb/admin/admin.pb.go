@@ -213,6 +213,7 @@ const (
 	ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_PENDING   ExecutionPublishState = 3
 	ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_PUBLISHED ExecutionPublishState = 4
 	ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_FAILED    ExecutionPublishState = 5
+	ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_BLOCKED   ExecutionPublishState = 6
 )
 
 // Enum value maps for ExecutionPublishState.
@@ -224,6 +225,7 @@ var (
 		3: "EXECUTION_PUBLISH_STATE_TERMINAL_PENDING",
 		4: "EXECUTION_PUBLISH_STATE_TERMINAL_PUBLISHED",
 		5: "EXECUTION_PUBLISH_STATE_TERMINAL_FAILED",
+		6: "EXECUTION_PUBLISH_STATE_TERMINAL_BLOCKED",
 	}
 	ExecutionPublishState_value = map[string]int32{
 		"EXECUTION_PUBLISH_STATE_UNSPECIFIED":        0,
@@ -232,6 +234,7 @@ var (
 		"EXECUTION_PUBLISH_STATE_TERMINAL_PENDING":   3,
 		"EXECUTION_PUBLISH_STATE_TERMINAL_PUBLISHED": 4,
 		"EXECUTION_PUBLISH_STATE_TERMINAL_FAILED":    5,
+		"EXECUTION_PUBLISH_STATE_TERMINAL_BLOCKED":   6,
 	}
 )
 
@@ -1336,13 +1339,16 @@ func (x *ExecutionTopologyStatus) GetUpdatedAtUnixNano() int64 {
 }
 
 type ExecutionRestartStatus struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	State              ExecutionRestartState  `protobuf:"varint,1,opt,name=state,proto3,enum=nokv.admin.v1.ExecutionRestartState" json:"state,omitempty"`
-	RegionCount        uint64                 `protobuf:"varint,2,opt,name=region_count,json=regionCount,proto3" json:"region_count,omitempty"`
-	RaftGroupCount     uint64                 `protobuf:"varint,3,opt,name=raft_group_count,json=raftGroupCount,proto3" json:"raft_group_count,omitempty"`
-	MissingRaftPointer []uint64               `protobuf:"varint,4,rep,packed,name=missing_raft_pointer,json=missingRaftPointer,proto3" json:"missing_raft_pointer,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	state                          protoimpl.MessageState `protogen:"open.v1"`
+	State                          ExecutionRestartState  `protobuf:"varint,1,opt,name=state,proto3,enum=nokv.admin.v1.ExecutionRestartState" json:"state,omitempty"`
+	RegionCount                    uint64                 `protobuf:"varint,2,opt,name=region_count,json=regionCount,proto3" json:"region_count,omitempty"`
+	RaftGroupCount                 uint64                 `protobuf:"varint,3,opt,name=raft_group_count,json=raftGroupCount,proto3" json:"raft_group_count,omitempty"`
+	MissingRaftPointer             []uint64               `protobuf:"varint,4,rep,packed,name=missing_raft_pointer,json=missingRaftPointer,proto3" json:"missing_raft_pointer,omitempty"`
+	PendingRootEventCount          uint64                 `protobuf:"varint,5,opt,name=pending_root_event_count,json=pendingRootEventCount,proto3" json:"pending_root_event_count,omitempty"`
+	BlockedRootEventCount          uint64                 `protobuf:"varint,6,opt,name=blocked_root_event_count,json=blockedRootEventCount,proto3" json:"blocked_root_event_count,omitempty"`
+	PendingSchedulerOperationCount uint64                 `protobuf:"varint,7,opt,name=pending_scheduler_operation_count,json=pendingSchedulerOperationCount,proto3" json:"pending_scheduler_operation_count,omitempty"`
+	unknownFields                  protoimpl.UnknownFields
+	sizeCache                      protoimpl.SizeCache
 }
 
 func (x *ExecutionRestartStatus) Reset() {
@@ -1401,6 +1407,27 @@ func (x *ExecutionRestartStatus) GetMissingRaftPointer() []uint64 {
 		return x.MissingRaftPointer
 	}
 	return nil
+}
+
+func (x *ExecutionRestartStatus) GetPendingRootEventCount() uint64 {
+	if x != nil {
+		return x.PendingRootEventCount
+	}
+	return 0
+}
+
+func (x *ExecutionRestartStatus) GetBlockedRootEventCount() uint64 {
+	if x != nil {
+		return x.BlockedRootEventCount
+	}
+	return 0
+}
+
+func (x *ExecutionRestartStatus) GetPendingSchedulerOperationCount() uint64 {
+	if x != nil {
+		return x.PendingSchedulerOperationCount
+	}
+	return 0
 }
 
 type ExecutionStatusResponse struct {
@@ -1535,12 +1562,15 @@ const file_admin_admin_proto_rawDesc = "" +
 	"\apublish\x18\x05 \x01(\x0e2$.nokv.admin.v1.ExecutionPublishStateR\apublish\x12\x1d\n" +
 	"\n" +
 	"last_error\x18\x06 \x01(\tR\tlastError\x12/\n" +
-	"\x14updated_at_unix_nano\x18\a \x01(\x03R\x11updatedAtUnixNano\"\xd3\x01\n" +
+	"\x14updated_at_unix_nano\x18\a \x01(\x03R\x11updatedAtUnixNano\"\x90\x03\n" +
 	"\x16ExecutionRestartStatus\x12:\n" +
 	"\x05state\x18\x01 \x01(\x0e2$.nokv.admin.v1.ExecutionRestartStateR\x05state\x12!\n" +
 	"\fregion_count\x18\x02 \x01(\x04R\vregionCount\x12(\n" +
 	"\x10raft_group_count\x18\x03 \x01(\x04R\x0eraftGroupCount\x120\n" +
-	"\x14missing_raft_pointer\x18\x04 \x03(\x04R\x12missingRaftPointer\"\xee\x01\n" +
+	"\x14missing_raft_pointer\x18\x04 \x03(\x04R\x12missingRaftPointer\x127\n" +
+	"\x18pending_root_event_count\x18\x05 \x01(\x04R\x15pendingRootEventCount\x127\n" +
+	"\x18blocked_root_event_count\x18\x06 \x01(\x04R\x15blockedRootEventCount\x12I\n" +
+	"!pending_scheduler_operation_count\x18\a \x01(\x04R\x1ependingSchedulerOperationCount\"\xee\x01\n" +
 	"\x17ExecutionStatusResponse\x12N\n" +
 	"\x0elast_admission\x18\x01 \x01(\v2'.nokv.admin.v1.ExecutionAdmissionStatusR\rlastAdmission\x12?\n" +
 	"\arestart\x18\x02 \x01(\v2%.nokv.admin.v1.ExecutionRestartStatusR\arestart\x12B\n" +
@@ -1567,14 +1597,15 @@ const file_admin_admin_proto_rawDesc = "" +
 	"!EXECUTION_TOPOLOGY_OUTCOME_QUEUED\x10\x02\x12'\n" +
 	"#EXECUTION_TOPOLOGY_OUTCOME_PROPOSED\x10\x03\x12&\n" +
 	"\"EXECUTION_TOPOLOGY_OUTCOME_APPLIED\x10\x04\x12%\n" +
-	"!EXECUTION_TOPOLOGY_OUTCOME_FAILED\x10\x05*\xa4\x02\n" +
+	"!EXECUTION_TOPOLOGY_OUTCOME_FAILED\x10\x05*\xd2\x02\n" +
 	"\x15ExecutionPublishState\x12'\n" +
 	"#EXECUTION_PUBLISH_STATE_UNSPECIFIED\x10\x00\x12(\n" +
 	"$EXECUTION_PUBLISH_STATE_NOT_REQUIRED\x10\x01\x12-\n" +
 	")EXECUTION_PUBLISH_STATE_PLANNED_PUBLISHED\x10\x02\x12,\n" +
 	"(EXECUTION_PUBLISH_STATE_TERMINAL_PENDING\x10\x03\x12.\n" +
 	"*EXECUTION_PUBLISH_STATE_TERMINAL_PUBLISHED\x10\x04\x12+\n" +
-	"'EXECUTION_PUBLISH_STATE_TERMINAL_FAILED\x10\x05*\x89\x01\n" +
+	"'EXECUTION_PUBLISH_STATE_TERMINAL_FAILED\x10\x05\x12,\n" +
+	"(EXECUTION_PUBLISH_STATE_TERMINAL_BLOCKED\x10\x06*\x89\x01\n" +
 	"\x15ExecutionRestartState\x12'\n" +
 	"#EXECUTION_RESTART_STATE_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dEXECUTION_RESTART_STATE_READY\x10\x01\x12$\n" +

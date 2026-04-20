@@ -103,11 +103,12 @@ func (s *SchedulerClient) StoreHeartbeat(ctx context.Context, stats storepkg.Sto
 	ctx, cancel := contextWithTimeout(ctx, s.timeout)
 	defer cancel()
 	resp, err := s.coordinator.StoreHeartbeat(ctx, &coordpb.StoreHeartbeatRequest{
-		StoreId:   stats.StoreID,
-		RegionNum: stats.RegionNum,
-		LeaderNum: stats.LeaderNum,
-		Capacity:  stats.Capacity,
-		Available: stats.Available,
+		StoreId:           stats.StoreID,
+		RegionNum:         stats.RegionNum,
+		LeaderNum:         stats.LeaderNum,
+		Capacity:          stats.Capacity,
+		Available:         stats.Available,
+		DroppedOperations: stats.DroppedOperations,
 	})
 	if err != nil {
 		s.recordError("StoreHeartbeat", err)

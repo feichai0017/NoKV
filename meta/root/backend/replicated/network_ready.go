@@ -1,6 +1,7 @@
 package replicated
 
 import (
+	"context"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	myraft "github.com/feichai0017/NoKV/raft"
 )
@@ -22,7 +23,7 @@ func (d *NetworkDriver) drainLocked() ([]rootstorage.CommittedEvent, []myraft.Me
 		d.node.raw.Advance(rd)
 	}
 	if len(committed) > 0 {
-		if err := d.adapter.appendCommitted(committed); err != nil {
+		if err := d.adapter.appendCommitted(context.Background(), committed); err != nil {
 			return nil, nil, err
 		}
 	}

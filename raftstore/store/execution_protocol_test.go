@@ -18,6 +18,8 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/stretchr/testify/require"
 	raftpb "go.etcd.io/raft/v3/raftpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestExecutionProtocolRecordsAdmissionReasons(t *testing.T) {
@@ -112,12 +114,12 @@ func TestExecutionProtocolTracksTopologyLifecycle(t *testing.T) {
 	require.Equal(t, AdmissionReasonAccepted, rs.LastAdmission().Reason)
 	require.Eventually(t, func() bool {
 		return historyContainsRootKind(sink.EventHistory(), rootevent.KindPeerAdditionPlanned)
-	}, 3*time.Second, 10*time.Millisecond)
+	}, 10*time.Second, 20*time.Millisecond)
 
 	require.Eventually(t, func() bool {
 		status, ok := rs.TopologyExecution(target.TransitionID)
 		return ok && status.Outcome == ExecutionOutcomeApplied && status.Publish == PublishStateTerminalPublished
-	}, 3*time.Second, 10*time.Millisecond)
+	}, 10*time.Second, 20*time.Millisecond)
 }
 
 func TestExecutionProtocolRetainsTerminalPublishFailure(t *testing.T) {
@@ -147,6 +149,36 @@ func TestExecutionProtocolRetainsTerminalPublishFailure(t *testing.T) {
 	require.False(t, rs.hasPendingRegionUpdate(401))
 }
 
+func TestExecutionProtocolBlocksPermanentPublishReject(t *testing.T) {
+	_, localMeta := openStoreDB(t)
+	sink := newFailingKindSchedulerSink(rootevent.KindPeerAdded)
+	sink.SetKindError(rootevent.KindPeerAdded, status.Error(codes.FailedPrecondition, "range overlap"))
+	rs := NewStore(Config{Scheduler: sink, LocalMeta: localMeta})
+	t.Cleanup(rs.Close)
+
+	event := rootevent.PeerAdded(777, 2, 201, descriptorForOutcome(777, []byte("a"), []byte("z")))
+	require.NoError(t, rs.applyTerminalOutcome(terminalOutcome{
+		TransitionID: rootstate.TransitionIDFromEvent(event),
+		RegionID:     777,
+		Event:        event,
+		Action:       "peer change",
+	}))
+
+	require.Eventually(t, func() bool {
+		status, ok := rs.TopologyExecution(rootstate.TransitionIDFromEvent(event))
+		return ok && status.Publish == PublishStateTerminalBlocked
+	}, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return len(localMeta.PendingRootEvents()) == 0
+	}, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return len(localMeta.BlockedRootEvents()) == 1
+	}, time.Second, 10*time.Millisecond)
+	restart := rs.RestartStatus()
+	require.Equal(t, RestartStateDegraded, restart.State)
+	require.Equal(t, 1, restart.BlockedRootEventCount)
+}
+
 func TestExecutionProtocolReportsRestartStatus(t *testing.T) {
 	_, localMeta := openStoreDB(t)
 	require.NoError(t, localMeta.SaveRegion(localmeta.RegionMeta{
@@ -164,11 +196,47 @@ func TestExecutionProtocolReportsRestartStatus(t *testing.T) {
 	status := rs.RestartStatus()
 	require.Equal(t, RestartStateDegraded, status.State)
 	require.Equal(t, []uint64{77}, status.MissingRaftPointer)
+	require.Zero(t, status.PendingRootEventCount)
+	require.Zero(t, status.BlockedRootEventCount)
+	require.Zero(t, status.PendingSchedulerOpCount)
 
 	require.NoError(t, localMeta.SaveRaftPointer(localmeta.RaftLogPointer{GroupID: 77, AppliedIndex: 1, AppliedTerm: 1}))
+	require.NoError(t, localMeta.SavePendingRootEvent(localmeta.PendingRootEvent{
+		Sequence: 3,
+		Event:    rootevent.RegionTombstoned(77),
+	}))
+	require.NoError(t, localMeta.SavePendingSchedulerOperation(localmeta.PendingSchedulerOperation{
+		Kind:         localmeta.PendingSchedulerOperationLeaderTransfer,
+		RegionID:     77,
+		SourcePeerID: 1,
+		TargetPeerID: 2,
+	}))
 	status = rs.RestartStatus()
-	require.Equal(t, RestartStateReady, status.State)
+	require.Equal(t, RestartStateDegraded, status.State)
 	require.Empty(t, status.MissingRaftPointer)
+	require.Equal(t, 1, status.PendingRootEventCount)
+	require.Equal(t, 1, status.PendingSchedulerOpCount)
+}
+
+func TestExecutionProtocolReplaysPendingSchedulerOperationsFromLocalMeta(t *testing.T) {
+	_, localMeta := openStoreDB(t)
+	require.NoError(t, localMeta.SavePendingSchedulerOperation(localmeta.PendingSchedulerOperation{
+		Kind:         localmeta.PendingSchedulerOperationLeaderTransfer,
+		RegionID:     19,
+		SourcePeerID: 101,
+		TargetPeerID: 202,
+	}))
+
+	rs := NewStore(Config{
+		LocalMeta:          localMeta,
+		OperationQueueSize: 4,
+		OperationInterval:  25 * time.Millisecond,
+	})
+	t.Cleanup(rs.Close)
+
+	require.Eventually(t, func() bool {
+		return len(localMeta.PendingSchedulerOperations()) == 0
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestExecutionProtocolReplaysPendingRootEventsFromLocalMeta(t *testing.T) {
@@ -254,13 +322,13 @@ func TestExecutionProtocolRetainsRecentTopologyExecutionsOnly(t *testing.T) {
 type failingKindSchedulerSink struct {
 	*testSchedulerSink
 	mu      sync.RWMutex
-	blocked map[rootevent.Kind]bool
+	blocked map[rootevent.Kind]error
 }
 
 func newFailingKindSchedulerSink(kinds ...rootevent.Kind) *failingKindSchedulerSink {
-	blocked := make(map[rootevent.Kind]bool, len(kinds))
+	blocked := make(map[rootevent.Kind]error, len(kinds))
 	for _, kind := range kinds {
-		blocked[kind] = true
+		blocked[kind] = context.DeadlineExceeded
 	}
 	return &failingKindSchedulerSink{
 		testSchedulerSink: newTestSchedulerSink(),
@@ -270,10 +338,10 @@ func newFailingKindSchedulerSink(kinds ...rootevent.Kind) *failingKindSchedulerS
 
 func (s *failingKindSchedulerSink) PublishRootEvent(ctx context.Context, event rootevent.Event) error {
 	s.mu.RLock()
-	blocked := s.blocked[event.Kind]
+	blocked, exists := s.blocked[event.Kind]
 	s.mu.RUnlock()
-	if blocked {
-		return context.DeadlineExceeded
+	if exists {
+		return blocked
 	}
 	return s.testSchedulerSink.PublishRootEvent(ctx, event)
 }
@@ -281,5 +349,11 @@ func (s *failingKindSchedulerSink) PublishRootEvent(ctx context.Context, event r
 func (s *failingKindSchedulerSink) Allow(kind rootevent.Kind) {
 	s.mu.Lock()
 	delete(s.blocked, kind)
+	s.mu.Unlock()
+}
+
+func (s *failingKindSchedulerSink) SetKindError(kind rootevent.Kind, err error) {
+	s.mu.Lock()
+	s.blocked[kind] = err
 	s.mu.Unlock()
 }

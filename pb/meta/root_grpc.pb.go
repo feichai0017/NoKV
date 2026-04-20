@@ -21,15 +21,15 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	MetadataRoot_Snapshot_FullMethodName         = "/nokv.meta.v1.MetadataRoot/Snapshot"
-	MetadataRoot_Append_FullMethodName           = "/nokv.meta.v1.MetadataRoot/Append"
-	MetadataRoot_FenceAllocator_FullMethodName   = "/nokv.meta.v1.MetadataRoot/FenceAllocator"
-	MetadataRoot_Status_FullMethodName           = "/nokv.meta.v1.MetadataRoot/Status"
-	MetadataRoot_Campaign_FullMethodName         = "/nokv.meta.v1.MetadataRoot/Campaign"
-	MetadataRoot_Release_FullMethodName          = "/nokv.meta.v1.MetadataRoot/Release"
-	MetadataRoot_ObserveCommitted_FullMethodName = "/nokv.meta.v1.MetadataRoot/ObserveCommitted"
-	MetadataRoot_ObserveTail_FullMethodName      = "/nokv.meta.v1.MetadataRoot/ObserveTail"
-	MetadataRoot_WaitTail_FullMethodName         = "/nokv.meta.v1.MetadataRoot/WaitTail"
+	MetadataRoot_Snapshot_FullMethodName                = "/nokv.meta.v1.MetadataRoot/Snapshot"
+	MetadataRoot_Append_FullMethodName                  = "/nokv.meta.v1.MetadataRoot/Append"
+	MetadataRoot_FenceAllocator_FullMethodName          = "/nokv.meta.v1.MetadataRoot/FenceAllocator"
+	MetadataRoot_Status_FullMethodName                  = "/nokv.meta.v1.MetadataRoot/Status"
+	MetadataRoot_ApplyCoordinatorLease_FullMethodName   = "/nokv.meta.v1.MetadataRoot/ApplyCoordinatorLease"
+	MetadataRoot_ApplyCoordinatorClosure_FullMethodName = "/nokv.meta.v1.MetadataRoot/ApplyCoordinatorClosure"
+	MetadataRoot_ObserveCommitted_FullMethodName        = "/nokv.meta.v1.MetadataRoot/ObserveCommitted"
+	MetadataRoot_ObserveTail_FullMethodName             = "/nokv.meta.v1.MetadataRoot/ObserveTail"
+	MetadataRoot_WaitTail_FullMethodName                = "/nokv.meta.v1.MetadataRoot/WaitTail"
 )
 
 // MetadataRootClient is the client API for MetadataRoot service.
@@ -40,8 +40,8 @@ type MetadataRootClient interface {
 	Append(ctx context.Context, in *MetadataRootAppendRequest, opts ...grpc.CallOption) (*MetadataRootAppendResponse, error)
 	FenceAllocator(ctx context.Context, in *MetadataRootFenceAllocatorRequest, opts ...grpc.CallOption) (*MetadataRootFenceAllocatorResponse, error)
 	Status(ctx context.Context, in *MetadataRootStatusRequest, opts ...grpc.CallOption) (*MetadataRootStatusResponse, error)
-	Campaign(ctx context.Context, in *MetadataRootCampaignRequest, opts ...grpc.CallOption) (*MetadataRootCampaignResponse, error)
-	Release(ctx context.Context, in *MetadataRootReleaseRequest, opts ...grpc.CallOption) (*MetadataRootReleaseResponse, error)
+	ApplyCoordinatorLease(ctx context.Context, in *MetadataRootApplyCoordinatorLeaseRequest, opts ...grpc.CallOption) (*MetadataRootApplyCoordinatorLeaseResponse, error)
+	ApplyCoordinatorClosure(ctx context.Context, in *MetadataRootApplyCoordinatorClosureRequest, opts ...grpc.CallOption) (*MetadataRootApplyCoordinatorClosureResponse, error)
 	ObserveCommitted(ctx context.Context, in *MetadataRootObserveCommittedRequest, opts ...grpc.CallOption) (*MetadataRootObserveCommittedResponse, error)
 	ObserveTail(ctx context.Context, in *MetadataRootObserveTailRequest, opts ...grpc.CallOption) (*MetadataRootObserveTailResponse, error)
 	WaitTail(ctx context.Context, in *MetadataRootWaitTailRequest, opts ...grpc.CallOption) (*MetadataRootWaitTailResponse, error)
@@ -95,20 +95,20 @@ func (c *metadataRootClient) Status(ctx context.Context, in *MetadataRootStatusR
 	return out, nil
 }
 
-func (c *metadataRootClient) Campaign(ctx context.Context, in *MetadataRootCampaignRequest, opts ...grpc.CallOption) (*MetadataRootCampaignResponse, error) {
+func (c *metadataRootClient) ApplyCoordinatorLease(ctx context.Context, in *MetadataRootApplyCoordinatorLeaseRequest, opts ...grpc.CallOption) (*MetadataRootApplyCoordinatorLeaseResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MetadataRootCampaignResponse)
-	err := c.cc.Invoke(ctx, MetadataRoot_Campaign_FullMethodName, in, out, cOpts...)
+	out := new(MetadataRootApplyCoordinatorLeaseResponse)
+	err := c.cc.Invoke(ctx, MetadataRoot_ApplyCoordinatorLease_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *metadataRootClient) Release(ctx context.Context, in *MetadataRootReleaseRequest, opts ...grpc.CallOption) (*MetadataRootReleaseResponse, error) {
+func (c *metadataRootClient) ApplyCoordinatorClosure(ctx context.Context, in *MetadataRootApplyCoordinatorClosureRequest, opts ...grpc.CallOption) (*MetadataRootApplyCoordinatorClosureResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MetadataRootReleaseResponse)
-	err := c.cc.Invoke(ctx, MetadataRoot_Release_FullMethodName, in, out, cOpts...)
+	out := new(MetadataRootApplyCoordinatorClosureResponse)
+	err := c.cc.Invoke(ctx, MetadataRoot_ApplyCoordinatorClosure_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -153,8 +153,8 @@ type MetadataRootServer interface {
 	Append(context.Context, *MetadataRootAppendRequest) (*MetadataRootAppendResponse, error)
 	FenceAllocator(context.Context, *MetadataRootFenceAllocatorRequest) (*MetadataRootFenceAllocatorResponse, error)
 	Status(context.Context, *MetadataRootStatusRequest) (*MetadataRootStatusResponse, error)
-	Campaign(context.Context, *MetadataRootCampaignRequest) (*MetadataRootCampaignResponse, error)
-	Release(context.Context, *MetadataRootReleaseRequest) (*MetadataRootReleaseResponse, error)
+	ApplyCoordinatorLease(context.Context, *MetadataRootApplyCoordinatorLeaseRequest) (*MetadataRootApplyCoordinatorLeaseResponse, error)
+	ApplyCoordinatorClosure(context.Context, *MetadataRootApplyCoordinatorClosureRequest) (*MetadataRootApplyCoordinatorClosureResponse, error)
 	ObserveCommitted(context.Context, *MetadataRootObserveCommittedRequest) (*MetadataRootObserveCommittedResponse, error)
 	ObserveTail(context.Context, *MetadataRootObserveTailRequest) (*MetadataRootObserveTailResponse, error)
 	WaitTail(context.Context, *MetadataRootWaitTailRequest) (*MetadataRootWaitTailResponse, error)
@@ -179,11 +179,11 @@ func (UnimplementedMetadataRootServer) FenceAllocator(context.Context, *Metadata
 func (UnimplementedMetadataRootServer) Status(context.Context, *MetadataRootStatusRequest) (*MetadataRootStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Status not implemented")
 }
-func (UnimplementedMetadataRootServer) Campaign(context.Context, *MetadataRootCampaignRequest) (*MetadataRootCampaignResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method Campaign not implemented")
+func (UnimplementedMetadataRootServer) ApplyCoordinatorLease(context.Context, *MetadataRootApplyCoordinatorLeaseRequest) (*MetadataRootApplyCoordinatorLeaseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyCoordinatorLease not implemented")
 }
-func (UnimplementedMetadataRootServer) Release(context.Context, *MetadataRootReleaseRequest) (*MetadataRootReleaseResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method Release not implemented")
+func (UnimplementedMetadataRootServer) ApplyCoordinatorClosure(context.Context, *MetadataRootApplyCoordinatorClosureRequest) (*MetadataRootApplyCoordinatorClosureResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyCoordinatorClosure not implemented")
 }
 func (UnimplementedMetadataRootServer) ObserveCommitted(context.Context, *MetadataRootObserveCommittedRequest) (*MetadataRootObserveCommittedResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ObserveCommitted not implemented")
@@ -286,38 +286,38 @@ func _MetadataRoot_Status_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
-func _MetadataRoot_Campaign_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MetadataRootCampaignRequest)
+func _MetadataRoot_ApplyCoordinatorLease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MetadataRootApplyCoordinatorLeaseRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(MetadataRootServer).Campaign(ctx, in)
+		return srv.(MetadataRootServer).ApplyCoordinatorLease(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: MetadataRoot_Campaign_FullMethodName,
+		FullMethod: MetadataRoot_ApplyCoordinatorLease_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MetadataRootServer).Campaign(ctx, req.(*MetadataRootCampaignRequest))
+		return srv.(MetadataRootServer).ApplyCoordinatorLease(ctx, req.(*MetadataRootApplyCoordinatorLeaseRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _MetadataRoot_Release_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MetadataRootReleaseRequest)
+func _MetadataRoot_ApplyCoordinatorClosure_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MetadataRootApplyCoordinatorClosureRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(MetadataRootServer).Release(ctx, in)
+		return srv.(MetadataRootServer).ApplyCoordinatorClosure(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: MetadataRoot_Release_FullMethodName,
+		FullMethod: MetadataRoot_ApplyCoordinatorClosure_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MetadataRootServer).Release(ctx, req.(*MetadataRootReleaseRequest))
+		return srv.(MetadataRootServer).ApplyCoordinatorClosure(ctx, req.(*MetadataRootApplyCoordinatorClosureRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -400,12 +400,12 @@ var MetadataRoot_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _MetadataRoot_Status_Handler,
 		},
 		{
-			MethodName: "Campaign",
-			Handler:    _MetadataRoot_Campaign_Handler,
+			MethodName: "ApplyCoordinatorLease",
+			Handler:    _MetadataRoot_ApplyCoordinatorLease_Handler,
 		},
 		{
-			MethodName: "Release",
-			Handler:    _MetadataRoot_Release_Handler,
+			MethodName: "ApplyCoordinatorClosure",
+			Handler:    _MetadataRoot_ApplyCoordinatorClosure_Handler,
 		},
 		{
 			MethodName: "ObserveCommitted",

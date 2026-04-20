@@ -79,8 +79,11 @@ The `benchmark/` submodule also owns the repeatable control-plane evaluation
 artifacts used by the separated `meta/root` work. The split is deliberate:
 
 - the main module keeps only control-plane implementation code
-- `benchmark/controlplane` owns all control-plane benchmarks, helper processes,
-  and external-authority baselines
+- `benchmark/controlplane` keeps only NoKV-native control-plane artifact code:
+  witness tax, detached ablation, helper-process infrastructure, and NoKV-side
+  control experiments
+- `benchmark/controlplane/etcd` owns upstream etcd issue evidence
+- `benchmark/controlplane/crdb` owns CockroachDB `#66562` issue evidence
 - `benchmark/controlplane/scripts` owns repeatable runners and netem wrappers
 - benchmark-only dependencies such as embedded etcd do not leak into the main
   module
@@ -93,21 +96,16 @@ Fixed-parameter localhost evaluation:
 
 Default parameters:
 
-- in-process benchmark count: `5`
-- process-separated benchmark count: `5`
+- witness-tax benchmark count: `5`
 - recovery test count: `5`
 - benchmark benchtime: `500ms`
 
 Outputs:
 
-- raw benchmark logs under `benchmark/results/controlplane/<stamp>/`
+- raw benchmark logs under `benchmark/controlplane/results/<stamp>/`
 - a paper-friendly markdown summary at `summary.md`
-- routing scale-out benchmark logs comparing `1` vs `3` separated coordinators for `GetRegionByKey`
-
-The current control-plane suite therefore distinguishes two classes of paths:
-
-- horizontally replicable service/view paths such as `GetRegionByKey`, which can be served by multiple coordinators reading the same rooted truth
-- singleton-duty paths such as `AllocID` / `Tso`, which remain lease-owner-only even after the split
+- witness-tax logs comparing `baseline` vs `disable_client_verify` (and `disable_reply_evidence_disable_client_verify`) for `AllocID` / `Tso` / `GetRegionByKey`
+- CRDB `#66562` logs showing `without_ccc_coverage` vs `with_ccc_coverage`, replaying the original `n1 -> n2 transfer -> n2 expiry -> n3 fresh lease` schedule with both snapshot and trace-level `lease_start_coverage_violation` evidence
 
 Linux netem wrapper via Docker:
 
@@ -121,8 +119,7 @@ Environment overrides:
 - `CONTROL_PLANE_NETEM_JITTER` default `0ms`
 - `CONTROL_PLANE_NETEM_LOSS` default `0%`
 - `CONTROL_PLANE_BENCHTIME` default `500ms`
-- `CONTROL_PLANE_INPROC_COUNT` default `5`
-- `CONTROL_PLANE_PROCESS_COUNT` default `5`
+- `CONTROL_PLANE_PERF_COUNT` default `5`
 - `CONTROL_PLANE_RECOVERY_COUNT` default `5`
 
 Current scope limits:

@@ -126,6 +126,7 @@ const (
 	PublishStateTerminalPending
 	PublishStateTerminalPublished
 	PublishStateTerminalFailed
+	PublishStateTerminalBlocked
 )
 
 func (s PublishState) String() string {
@@ -140,6 +141,8 @@ func (s PublishState) String() string {
 		return "terminal-published"
 	case PublishStateTerminalFailed:
 		return "terminal-failed"
+	case PublishStateTerminalBlocked:
+		return "terminal-blocked"
 	default:
 		return "unknown"
 	}
@@ -182,10 +185,13 @@ func (s RestartState) String() string {
 const executionTransitionRetention = 256
 
 type RestartStatus struct {
-	State              RestartState `json:"state"`
-	RegionCount        int          `json:"region_count"`
-	RaftGroupCount     int          `json:"raft_group_count"`
-	MissingRaftPointer []uint64     `json:"missing_raft_pointer,omitempty"`
+	State                   RestartState `json:"state"`
+	RegionCount             int          `json:"region_count"`
+	RaftGroupCount          int          `json:"raft_group_count"`
+	MissingRaftPointer      []uint64     `json:"missing_raft_pointer,omitempty"`
+	PendingRootEventCount   int          `json:"pending_root_event_count,omitempty"`
+	BlockedRootEventCount   int          `json:"blocked_root_event_count,omitempty"`
+	PendingSchedulerOpCount int          `json:"pending_scheduler_operation_count,omitempty"`
 }
 
 type executionRuntime struct {
@@ -363,6 +369,17 @@ func (s *Store) recordTopologyPublishFailure(event rootstateTransitionEvent, err
 	})
 }
 
+func (s *Store) recordTopologyPublishBlocked(event rootstateTransitionEvent, err error) {
+	if event.transitionID == "" {
+		return
+	}
+	s.updateTopologyExecution(event.transitionID, func(entry *TopologyExecution) {
+		entry.Outcome = ExecutionOutcomeApplied
+		entry.Publish = PublishStateTerminalBlocked
+		entry.LastError = errorString(err)
+	})
+}
+
 // TopologyExecution returns the tracked execution state for one transition id.
 func (s *Store) TopologyExecution(transitionID string) (TopologyExecution, bool) {
 	if s == nil || s.exec == nil || transitionID == "" {
@@ -417,22 +434,27 @@ func (s *Store) RestartStatus() RestartStatus {
 		RegionCount:    len(regions),
 		RaftGroupCount: len(pointers),
 	}
-	if len(regions) == 0 {
-		return out
-	}
-	missing := make([]uint64, 0)
-	for id, meta := range regions {
-		if meta.State == metaregion.ReplicaStateTombstone {
-			continue
+	if len(regions) > 0 {
+		missing := make([]uint64, 0)
+		for id, meta := range regions {
+			if meta.State == metaregion.ReplicaStateTombstone {
+				continue
+			}
+			if _, ok := pointers[id]; !ok {
+				missing = append(missing, id)
+			}
 		}
-		if _, ok := pointers[id]; !ok {
-			missing = append(missing, id)
+		if len(missing) > 0 {
+			slices.Sort(missing)
+			out.State = RestartStateDegraded
+			out.MissingRaftPointer = missing
 		}
 	}
-	if len(missing) > 0 {
-		slices.Sort(missing)
+	out.PendingRootEventCount = len(s.regionMgr().localMeta.PendingRootEvents())
+	out.BlockedRootEventCount = len(s.regionMgr().localMeta.BlockedRootEvents())
+	out.PendingSchedulerOpCount = len(s.regionMgr().localMeta.PendingSchedulerOperations())
+	if out.PendingRootEventCount > 0 || out.BlockedRootEventCount > 0 || out.PendingSchedulerOpCount > 0 {
 		out.State = RestartStateDegraded
-		out.MissingRaftPointer = missing
 	}
 	return out
 }

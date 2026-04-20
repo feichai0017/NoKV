@@ -14,7 +14,9 @@ const (
 	errRootLagExceedsStrongFreshness   = "root lag exceeds strong freshness"
 	errBootstrapRequiredBeforeBounded  = "bootstrap required before bounded freshness"
 	errRequiredRootedTokenNotSatisfied = "required rooted token not satisfied"
+	errRequiredDescriptorNotSatisfied  = "required descriptor revision not satisfied"
 	errRootLagExceedsBound             = "root lag exceeds bound"
+	errRangeChangePending              = "rooted range change still pending"
 )
 
 func statusNotLeader(leaderID uint64) error {

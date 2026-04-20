@@ -13,7 +13,17 @@ func CloneEvent(in Event) Event {
 	}
 	if in.CoordinatorLease != nil {
 		cp := *in.CoordinatorLease
+		cp.Frontiers = in.CoordinatorLease.Frontiers
 		out.CoordinatorLease = &cp
+	}
+	if in.CoordinatorSeal != nil {
+		cp := *in.CoordinatorSeal
+		cp.Frontiers = in.CoordinatorSeal.Frontiers
+		out.CoordinatorSeal = &cp
+	}
+	if in.CoordinatorClosure != nil {
+		cp := *in.CoordinatorClosure
+		out.CoordinatorClosure = &cp
 	}
 	if in.RegionDescriptor != nil {
 		cp := *in.RegionDescriptor

@@ -2,33 +2,63 @@ package state
 
 import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
-// Cursor identifies one committed position in the metadata-root log.
-type Cursor struct {
-	Term  uint64
-	Index uint64
-}
+type Cursor = rootproto.Cursor
+
+// AllocatorKind identifies one globally fenced allocator domain inside rooted
+// metadata state.
+type AllocatorKind uint8
+
+const (
+	AllocatorKindUnknown AllocatorKind = iota
+	AllocatorKindID
+	AllocatorKindTSO
+)
 
 // State is the compact checkpointed state of the metadata root.
 type State struct {
-	ClusterEpoch     uint64
-	MembershipEpoch  uint64
-	LastCommitted    Cursor
-	IDFence          uint64
-	TSOFence         uint64
-	CoordinatorLease CoordinatorLease
+	ClusterEpoch       uint64
+	MembershipEpoch    uint64
+	LastCommitted      Cursor
+	IDFence            uint64
+	TSOFence           uint64
+	CoordinatorLease   CoordinatorLease
+	CoordinatorSeal    CoordinatorSeal
+	CoordinatorClosure CoordinatorClosure
 }
 
 // CoordinatorLease is the compact control-plane owner lease stored in root
 // truth. It is separate from raft leadership: it gates coordinator-only duties
 // such as TSO, ID allocation, and scheduler ownership in separated deployments.
 type CoordinatorLease struct {
-	HolderID        string
-	ExpiresUnixNano int64
-	IDFence         uint64
-	TSOFence        uint64
+	HolderID          string
+	ExpiresUnixNano   int64
+	CertGeneration    uint64
+	IssuedCursor      Cursor
+	DutyMask          uint32
+	PredecessorDigest string
+}
+
+type CoordinatorSeal struct {
+	HolderID       string
+	CertGeneration uint64
+	DutyMask       uint32
+	Frontiers      rootproto.CoordinatorDutyFrontiers
+	SealedAtCursor Cursor
+}
+
+type CoordinatorClosure struct {
+	HolderID            string
+	SealGeneration      uint64
+	SuccessorGeneration uint64
+	SealDigest          string
+	Stage               rootproto.CoordinatorClosureStage
+	ConfirmedAtCursor   Cursor
+	ClosedAtCursor      Cursor
+	ReattachedAtCursor  Cursor
 }
 
 func (l CoordinatorLease) ActiveAt(nowUnixNano int64) bool {
@@ -87,8 +117,9 @@ type CommitInfo struct {
 }
 
 func CloneSnapshot(snapshot Snapshot) Snapshot {
+	state := snapshot.State
 	out := Snapshot{
-		State:               snapshot.State,
+		State:               state,
 		Descriptors:         CloneDescriptors(snapshot.Descriptors),
 		PendingPeerChanges:  ClonePendingPeerChanges(snapshot.PendingPeerChanges),
 		PendingRangeChanges: ClonePendingRangeChanges(snapshot.PendingRangeChanges),
@@ -105,6 +136,16 @@ func CloneDescriptors(in map[uint64]descriptor.Descriptor) map[uint64]descriptor
 		out[id] = desc.Clone()
 	}
 	return out
+}
+
+func MaxDescriptorRevision(descriptors map[uint64]descriptor.Descriptor) uint64 {
+	var maxEpoch uint64
+	for _, desc := range descriptors {
+		if desc.RootEpoch > maxEpoch {
+			maxEpoch = desc.RootEpoch
+		}
+	}
+	return maxEpoch
 }
 
 func ClonePendingPeerChanges(in map[uint64]PendingPeerChange) map[uint64]PendingPeerChange {
@@ -163,7 +204,11 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 			state.TSOFence = event.AllocatorFence.Minimum
 		}
 	case rootevent.KindCoordinatorLease:
-		applyCoordinatorLeaseToState(state, event)
+		applyCoordinatorLeaseToState(state, cursor, event)
+	case rootevent.KindCoordinatorSeal:
+		applyCoordinatorSealToState(state, cursor, event)
+	case rootevent.KindCoordinatorClosure:
+		applyCoordinatorClosureToState(state, cursor, event)
 	case rootevent.KindRegionBootstrap,
 		rootevent.KindRegionDescriptorPublished,
 		rootevent.KindRegionTombstoned,
@@ -184,23 +229,92 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 	state.LastCommitted = cursor
 }
 
-func applyCoordinatorLeaseToState(state *State, event rootevent.Event) {
+func applyCoordinatorSealToState(state *State, cursor Cursor, event rootevent.Event) {
+	if state == nil || event.CoordinatorSeal == nil {
+		return
+	}
+	seal := event.CoordinatorSeal
+	sealedAt := coalesceCursor(seal.SealedAtCursor, cursor)
+	dutyMask := seal.DutyMask
+	if dutyMask == 0 {
+		dutyMask = state.CoordinatorLease.DutyMask
+		if dutyMask == 0 {
+			dutyMask = rootproto.CoordinatorDutyMaskDefault
+		}
+	}
+	state.CoordinatorSeal = CoordinatorSeal{
+		HolderID:       seal.HolderID,
+		CertGeneration: seal.CertGeneration,
+		DutyMask:       dutyMask,
+		Frontiers:      seal.Frontiers,
+		SealedAtCursor: sealedAt,
+	}
+	state.CoordinatorClosure = CoordinatorClosure{}
+}
+
+func applyCoordinatorClosureToState(state *State, cursor Cursor, event rootevent.Event) {
+	if state == nil || event.CoordinatorClosure == nil {
+		return
+	}
+	closure := event.CoordinatorClosure
+	confirmedAt := coalesceCursor(closure.ConfirmedAtCursor, cursor)
+	closedAt := coalesceCursor(closure.ClosedAtCursor, cursor)
+	reattachedAt := coalesceCursor(closure.ReattachedAtCursor, cursor)
+	state.CoordinatorClosure = CoordinatorClosure{
+		HolderID:            closure.HolderID,
+		SealGeneration:      closure.SealGeneration,
+		SuccessorGeneration: closure.SuccessorGeneration,
+		SealDigest:          closure.SealDigest,
+		Stage:               closure.Stage,
+		ConfirmedAtCursor:   confirmedAt,
+		ClosedAtCursor:      closedAt,
+		ReattachedAtCursor:  reattachedAt,
+	}
+}
+
+func applyCoordinatorLeaseToState(state *State, cursor Cursor, event rootevent.Event) {
 	if state == nil || event.CoordinatorLease == nil {
 		return
 	}
 	lease := event.CoordinatorLease
+	issuedCursor := state.CoordinatorLease.IssuedCursor
+	issuedCursor = coalesceCursor(lease.IssuedCursor, issuedCursor)
+	if issuedCursor.Term == 0 && issuedCursor.Index == 0 {
+		issuedCursor = cursor
+	}
+	if lease.CertGeneration == 0 || lease.CertGeneration != state.CoordinatorLease.CertGeneration {
+		issuedCursor = cursor
+	}
+	dutyMask := lease.DutyMask
+	if dutyMask == 0 {
+		dutyMask = rootproto.CoordinatorDutyMaskDefault
+	}
+	predecessorDigest := lease.PredecessorDigest
+	if predecessorDigest == "" && lease.CertGeneration == state.CoordinatorLease.CertGeneration {
+		predecessorDigest = state.CoordinatorLease.PredecessorDigest
+	}
 	state.CoordinatorLease = CoordinatorLease{
-		HolderID:        lease.HolderID,
-		ExpiresUnixNano: lease.ExpiresUnixNano,
-		IDFence:         lease.IDFence,
-		TSOFence:        lease.TSOFence,
+		HolderID:          lease.HolderID,
+		ExpiresUnixNano:   lease.ExpiresUnixNano,
+		CertGeneration:    lease.CertGeneration,
+		IssuedCursor:      issuedCursor,
+		DutyMask:          dutyMask,
+		PredecessorDigest: predecessorDigest,
 	}
-	if lease.IDFence > state.IDFence {
-		state.IDFence = lease.IDFence
+	frontiers := lease.Frontiers
+	if frontier := frontiers.Frontier(rootproto.CoordinatorDutyAllocID); frontier > state.IDFence {
+		state.IDFence = frontier
 	}
-	if lease.TSOFence > state.TSOFence {
-		state.TSOFence = lease.TSOFence
+	if frontier := frontiers.Frontier(rootproto.CoordinatorDutyTSO); frontier > state.TSOFence {
+		state.TSOFence = frontier
 	}
+}
+
+func coalesceCursor(eventCursor, fallback Cursor) Cursor {
+	if eventCursor.Term != 0 || eventCursor.Index != 0 {
+		return Cursor{Term: eventCursor.Term, Index: eventCursor.Index}
+	}
+	return fallback
 }
 
 // NextCursor returns the next ordered root cursor.

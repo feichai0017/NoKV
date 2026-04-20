@@ -2,6 +2,7 @@ package localmeta
 
 import (
 	"maps"
+	"strconv"
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
@@ -124,6 +125,89 @@ func ClonePendingRootEvents(src map[uint64]PendingRootEvent) map[uint64]PendingR
 	out := make(map[uint64]PendingRootEvent, len(src))
 	for seq, event := range src {
 		out[seq] = ClonePendingRootEvent(event)
+	}
+	return out
+}
+
+type PendingSchedulerOperationKind uint8
+
+const (
+	PendingSchedulerOperationUnknown PendingSchedulerOperationKind = iota
+	PendingSchedulerOperationLeaderTransfer
+)
+
+// PendingSchedulerOperation captures one store-local scheduler decision that
+// must survive shutdown and restart until the local executor applies it.
+//
+// This is not cluster authority. It is a durability bridge for control-plane
+// decisions that have been accepted by the store runtime but not yet consumed
+// by the local execution loop.
+type PendingSchedulerOperation struct {
+	Kind         PendingSchedulerOperationKind `json:"kind"`
+	RegionID     uint64                        `json:"region_id"`
+	SourcePeerID uint64                        `json:"source_peer_id,omitempty"`
+	TargetPeerID uint64                        `json:"target_peer_id,omitempty"`
+	Attempts     uint32                        `json:"attempts,omitempty"`
+}
+
+func ClonePendingSchedulerOperation(op PendingSchedulerOperation) PendingSchedulerOperation {
+	return op
+}
+
+func ClonePendingSchedulerOperations(src map[string]PendingSchedulerOperation) map[string]PendingSchedulerOperation {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]PendingSchedulerOperation, len(src))
+	for key, op := range src {
+		out[key] = ClonePendingSchedulerOperation(op)
+	}
+	return out
+}
+
+func PendingSchedulerOperationKey(op PendingSchedulerOperation) string {
+	return pendingSchedulerOperationKey(op.Kind, op.RegionID)
+}
+
+func pendingSchedulerOperationKey(kind PendingSchedulerOperationKind, regionID uint64) string {
+	return kind.String() + ":" + strconv.FormatUint(regionID, 10)
+}
+
+func (k PendingSchedulerOperationKind) String() string {
+	switch k {
+	case PendingSchedulerOperationLeaderTransfer:
+		return "leader-transfer"
+	default:
+		return "unknown"
+	}
+}
+
+// BlockedRootEvent captures one locally applied rooted event that must not be
+// retried automatically because the coordinator rejected it permanently.
+//
+// The event remains durable so restart recovery and operator diagnostics can
+// detect the local-vs-rooted divergence explicitly instead of retrying
+// forever.
+type BlockedRootEvent struct {
+	Sequence     uint64          `json:"sequence"`
+	Event        rootevent.Event `json:"event"`
+	TransitionID string          `json:"transition_id,omitempty"`
+	LastError    string          `json:"last_error,omitempty"`
+}
+
+func CloneBlockedRootEvent(event BlockedRootEvent) BlockedRootEvent {
+	cp := event
+	cp.Event = rootevent.CloneEvent(event.Event)
+	return cp
+}
+
+func CloneBlockedRootEvents(src map[uint64]BlockedRootEvent) map[uint64]BlockedRootEvent {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[uint64]BlockedRootEvent, len(src))
+	for seq, event := range src {
+		out[seq] = CloneBlockedRootEvent(event)
 	}
 	return out
 }

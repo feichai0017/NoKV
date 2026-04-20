@@ -1,11 +1,13 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"math"
 	"testing"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
@@ -123,13 +125,15 @@ func (s bootstrapTestStore) Load() (Snapshot, error) {
 	return CloneSnapshot(s.snapshot), nil
 }
 
-func (bootstrapTestStore) AppendRootEvent(rootevent.Event) error   { return nil }
-func (bootstrapTestStore) SaveAllocatorState(uint64, uint64) error { return nil }
-func (bootstrapTestStore) CampaignCoordinatorLease(string, int64, int64, uint64, uint64) (rootstate.CoordinatorLease, error) {
-	return rootstate.CoordinatorLease{}, nil
+func (bootstrapTestStore) AppendRootEvent(context.Context, rootevent.Event) error { return nil }
+func (bootstrapTestStore) SaveAllocatorState(context.Context, uint64, uint64) error {
+	return nil
 }
-func (bootstrapTestStore) ReleaseCoordinatorLease(string, int64, uint64, uint64) (rootstate.CoordinatorLease, error) {
-	return rootstate.CoordinatorLease{}, nil
+func (bootstrapTestStore) ApplyCoordinatorLease(context.Context, rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+	return rootstate.CoordinatorProtocolState{}, nil
+}
+func (bootstrapTestStore) ApplyCoordinatorClosure(context.Context, rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+	return rootstate.CoordinatorProtocolState{}, nil
 }
 func (bootstrapTestStore) Refresh() error   { return nil }
 func (bootstrapTestStore) IsLeader() bool   { return true }

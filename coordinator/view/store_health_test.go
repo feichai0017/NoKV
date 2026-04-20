@@ -10,13 +10,14 @@ import (
 func TestStoreHealthViewSnapshot(t *testing.T) {
 	v := NewStoreHealthView()
 	ts := time.Unix(100, 0)
-	require.NoError(t, v.UpsertAt(StoreStats{StoreID: 2, RegionNum: 5}, ts))
+	require.NoError(t, v.UpsertAt(StoreStats{StoreID: 2, RegionNum: 5, DroppedOperations: 2}, ts))
 	require.NoError(t, v.UpsertAt(StoreStats{StoreID: 1, RegionNum: 3}, ts))
 
 	snap := v.Snapshot()
 	require.Len(t, snap, 2)
 	require.Equal(t, uint64(1), snap[0].StoreID)
 	require.Equal(t, ts, snap[0].UpdatedAt)
+	require.Equal(t, uint64(2), snap[1].DroppedOperations)
 
 	v.Remove(1)
 	snap = v.Snapshot()

@@ -128,17 +128,19 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 
 	sink.ReportRegionHeartbeat(context.Background(), 10)
 	ops := sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{
-		StoreID:   1,
-		RegionNum: 3,
-		LeaderNum: 1,
-		Capacity:  1000,
-		Available: 800,
+		StoreID:           1,
+		RegionNum:         3,
+		LeaderNum:         1,
+		Capacity:          1000,
+		Available:         800,
+		DroppedOperations: 7,
 	})
 
 	require.Len(t, pd.livenessReqs, 1)
 	require.Equal(t, uint64(10), pd.livenessReqs[0].GetRegionId())
 	require.Len(t, pd.storeReqs, 1)
 	require.Equal(t, uint64(1), pd.storeReqs[0].GetStoreId())
+	require.Equal(t, uint64(7), pd.storeReqs[0].GetDroppedOperations())
 
 	require.Len(t, ops, 1)
 	require.Equal(t, storepkg.OperationLeaderTransfer, ops[0].Type)

@@ -1,9 +1,11 @@
 package replicated
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -15,7 +17,7 @@ import (
 func TestNetworkDriverReplicatesAcrossThreeNodes(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 
-	commit, err := stores[leaderID].Append(
+	commit, err := stores[leaderID].Append(context.Background(),
 		rootevent.StoreJoined(1, "s1"),
 		rootevent.RegionDescriptorPublished(testDescriptor(60, []byte("a"), []byte("z"))),
 	)
@@ -25,7 +27,7 @@ func TestNetworkDriverReplicatesAcrossThreeNodes(t *testing.T) {
 		for _, id := range []uint64{2, 3} {
 			_ = stores[id].Refresh()
 			current, err := stores[id].Current()
-			if err != nil || current != commit.State {
+			if err != nil || !reflect.DeepEqual(current, commit.State) {
 				return false
 			}
 		}
@@ -91,13 +93,13 @@ func TestNetworkDriverRestartsFromPersistedState(t *testing.T) {
 	}
 
 	stores, drivers, leaderID := openCluster()
-	commit1, err := stores[leaderID].Append(rootevent.StoreJoined(1, "s1"))
+	commit1, err := stores[leaderID].Append(context.Background(), rootevent.StoreJoined(1, "s1"))
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		for _, id := range []uint64{1, 2, 3} {
 			_ = stores[id].Refresh()
 			current, err := stores[id].Current()
-			if err != nil || current != commit1.State {
+			if err != nil || !reflect.DeepEqual(current, commit1.State) {
 				return false
 			}
 		}
@@ -121,13 +123,13 @@ func TestNetworkDriverRestartsFromPersistedState(t *testing.T) {
 		}
 	}()
 
-	commit2, err := stores[leaderID].Append(rootevent.RegionDescriptorPublished(testDescriptor(88, []byte("a"), []byte("z"))))
+	commit2, err := stores[leaderID].Append(context.Background(), rootevent.RegionDescriptorPublished(testDescriptor(88, []byte("a"), []byte("z"))))
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		for _, id := range []uint64{1, 2, 3} {
 			_ = stores[id].Refresh()
 			current, err := stores[id].Current()
-			if err != nil || current != commit2.State {
+			if err != nil || !reflect.DeepEqual(current, commit2.State) {
 				return false
 			}
 		}

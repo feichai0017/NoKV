@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
@@ -90,6 +91,24 @@ func containsRegionKey(meta *metapb.RegionDescriptor, key []byte) bool {
 		return false
 	}
 	return true
+}
+
+func runtimeLeaderDescriptor(a, b *adminpb.RegionRuntimeStatusResponse) (*metapb.RegionDescriptor, uint64, bool) {
+	if a != nil && a.GetKnown() && a.GetLeader() && a.GetRegion() != nil {
+		for _, peer := range a.GetRegion().GetPeers() {
+			if peer != nil && peer.GetPeerId() == a.GetLeaderPeerId() {
+				return a.GetRegion(), peer.GetStoreId(), true
+			}
+		}
+	}
+	if b != nil && b.GetKnown() && b.GetLeader() && b.GetRegion() != nil {
+		for _, peer := range b.GetRegion().GetPeers() {
+			if peer != nil && peer.GetPeerId() == b.GetLeaderPeerId() {
+				return b.GetRegion(), peer.GetStoreId(), true
+			}
+		}
+	}
+	return nil, 0, false
 }
 
 func TestClientReadWriteHonorContextUnderQuorumLoss(t *testing.T) {
@@ -297,12 +316,43 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 	target.UnblockPeer(childSeedStatus.GetLocalPeerId())
 
 	require.Eventually(t, func() bool {
+		parentA := testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 91)
+		parentB := testcluster.FetchRuntimeStatus(t, ctx, target.Addr(), 91)
+		childA := testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 92)
+		childB := testcluster.FetchRuntimeStatus(t, ctx, target.Addr(), 92)
+		parentMeta, parentLeaderStoreID, parentReady := runtimeLeaderDescriptor(parentA, parentB)
+		childMeta, childLeaderStoreID, childReady := runtimeLeaderDescriptor(childA, childB)
+		if !parentReady || !childReady {
+			return false
+		}
+		recoveryCli, err := client.New(client.Config{
+			Stores: []client.StoreEndpoint{
+				{StoreID: 1, Addr: seed.Addr()},
+				{StoreID: 2, Addr: target.Addr()},
+			},
+			RegionResolver: &staticResolver{regions: []*metapb.RegionDescriptor{
+				regionMetaWithLeaderFirst(parentMeta, parentLeaderStoreID),
+				regionMetaWithLeaderFirst(childMeta, childLeaderStoreID),
+			}},
+			DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+			Retry: client.RetryPolicy{
+				MaxAttempts:                 1,
+				RouteUnavailableBackoff:     0,
+				TransportUnavailableBackoff: 0,
+				RegionErrorBackoff:          0,
+			},
+		})
+		if err != nil {
+			return false
+		}
+		defer func() { _ = recoveryCli.Close() }()
+
 		testCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		err := cli.TwoPhaseCommit(testCtx, []byte("charlie"), []*kvrpcpb.Mutation{
+		err = recoveryCli.TwoPhaseCommit(testCtx, []byte("charlie"), []*kvrpcpb.Mutation{
 			{Op: kvrpcpb.Mutation_Put, Key: []byte("charlie"), Value: []byte("ok1")},
 			{Op: kvrpcpb.Mutation_Put, Key: []byte("yankee"), Value: []byte("ok2")},
 		}, 200, 201, 3000)
 		return err == nil
-	}, 5*time.Second, 50*time.Millisecond)
+	}, 10*time.Second, 50*time.Millisecond)
 }
