@@ -17,7 +17,7 @@ const (
 	ClosureDefectMissingConfirm          ClosureDefect = "missing_confirm"
 	ClosureDefectMissingClose            ClosureDefect = "missing_close"
 	ClosureDefectCloseWithoutConfirm     ClosureDefect = "close_without_confirm"
-	ClosureDefectCloseLineageMismatch    ClosureDefect = "close_lineage_mismatch"
+	ClosureDefectLineageMismatch         ClosureDefect = "lineage_mismatch"
 	ClosureDefectReattachWithoutConfirm  ClosureDefect = "reattach_without_confirm"
 	ClosureDefectReattachWithoutClose    ClosureDefect = "reattach_without_close"
 	ClosureDefectReattachLineageMismatch ClosureDefect = "reattach_lineage_mismatch"
@@ -120,12 +120,12 @@ func evaluateClosureDefect(snapshot coordstorage.Snapshot, holderID string, nowU
 	}
 	if closePresent {
 		if !lineageSatisfied {
-			return ClosureDefectCloseLineageMismatch
+			return ClosureDefectLineageMismatch
 		}
 		return ClosureDefectNone
 	}
 	if !lineageSatisfied {
-		return ClosureDefectCloseLineageMismatch
+		return ClosureDefectLineageMismatch
 	}
 	return ClosureDefectMissingClose
 }
