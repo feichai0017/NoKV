@@ -28,7 +28,7 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 	}
 
 	nowUnixNano, _, holderID, renewIn, clockSkew := s.leaseCampaignBounds()
-	lease := s.currentCoordinatorLease()
+	lease, _ := s.currentCoordinatorLeaseView()
 	report := coordaudit.BuildReport(rootSnapshot, holderID, nowUnixNano)
 	leaseFrontiers := controlplane.FrontiersFromState(rootstate.State{
 		IDFence:  rootSnapshot.Allocator.IDCurrent,
@@ -115,6 +115,7 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 			"sealed_generation_retired":    report.ClosureWitness.SealedGenerationRetired,
 			"closure_satisfied":            report.ClosureWitness.ClosureSatisfied(),
 			"closure_stage":                report.Closure.Stage.String(),
+			"closure_defect":               string(report.Anomalies.ClosureDefect),
 			"closure_recorded": map[string]any{
 				"holder_id":            rootSnapshot.CoordinatorClosure.HolderID,
 				"seal_generation":      rootSnapshot.CoordinatorClosure.SealGeneration,
@@ -160,16 +161,16 @@ func diagnosticsCoordinatorCoverage(status rootstate.CoordinatorSuccessorCoverag
 
 func diagnosticsAuthorityHandoff(record rootstate.AuthorityHandoffRecord) map[string]any {
 	return map[string]any{
-		"holder_id":          record.HolderID,
-		"expires_unix_nano":  record.ExpiresUnixNano,
-		"cert_generation":    record.CertGeneration,
-		"duty_mask":          record.DutyMask,
-		"predecessor_digest": record.PredecessorDigest,
+		"holder_id":          record.HolderID(),
+		"expires_unix_nano":  record.ExpiresUnixNano(),
+		"cert_generation":    record.CertGeneration(),
+		"duty_mask":          record.DutyMask(),
+		"predecessor_digest": record.PredecessorDigest(),
 		"issued_cursor": map[string]any{
-			"term":  record.IssuedCursor.Term,
-			"index": record.IssuedCursor.Index,
+			"term":  record.IssuedCursor().Term,
+			"index": record.IssuedCursor().Index,
 		},
-		"frontiers": diagnosticsCoordinatorFrontiers(record.Frontiers),
+		"frontiers": diagnosticsCoordinatorFrontiers(record.Frontiers()),
 	}
 }
 

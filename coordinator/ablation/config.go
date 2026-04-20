@@ -73,13 +73,3 @@ func (c Config) Validate() error {
 	}
 	return nil
 }
-
-// MustValid returns cfg after validation and panics on invalid experimental
-// combinations. This keeps misuse visible in benchmark/test setup instead of
-// silently normalizing the protocol artifact.
-func (c Config) MustValid() Config {
-	if err := c.Validate(); err != nil {
-		panic(err)
-	}
-	return c
-}

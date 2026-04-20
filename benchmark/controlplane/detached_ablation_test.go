@@ -349,7 +349,7 @@ func runDetachedLateReplyScenario(t *testing.T, variant detachedAblationVariant)
 		"late-reply":      lateReply,
 		"fresh-secondary": freshSecondary,
 	})
-	client.ConfigureAblation(variant.clientConfig)
+	require.NoError(t, client.ConfigureAblation(variant.clientConfig))
 
 	resp, err := client.AllocID(ctx, &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
@@ -383,7 +383,7 @@ func runDetachedBudgetScenario(t *testing.T, variant detachedAblationVariant) de
 	svc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
 	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
 	svc.ConfigureAllocatorWindows(1, 1)
-	svc.ConfigureAblation(variant.predecessorConfig)
+	require.NoError(t, svc.ConfigureAblation(variant.predecessorConfig))
 	require.NoError(t, svc.ReloadFromStorage())
 
 	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
@@ -408,7 +408,7 @@ func runDetachedRootUnreachScenario(t *testing.T, variant detachedAblationVarian
 		loadErr: errors.New("root unavailable"),
 	}
 	svc := coordserver.NewService(cluster, idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureAblation(variant.predecessorConfig)
+	require.NoError(t, svc.ConfigureAblation(variant.predecessorConfig))
 
 	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
 		Key:       []byte("m"),
@@ -450,7 +450,7 @@ func openDetachedAblationHarness(t *testing.T, predecessorCfg, successorCfg coor
 		predecessorStore,
 	)
 	predecessor.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
-	predecessor.ConfigureAblation(predecessorCfg)
+	require.NoError(t, predecessor.ConfigureAblation(predecessorCfg))
 	require.NoError(t, predecessor.ReloadFromStorage())
 
 	successor := coordserver.NewService(
@@ -460,7 +460,7 @@ func openDetachedAblationHarness(t *testing.T, predecessorCfg, successorCfg coor
 		successorStore,
 	)
 	successor.ConfigureCoordinatorLease("c2", 10*time.Second, 3*time.Second)
-	successor.ConfigureAblation(successorCfg)
+	require.NoError(t, successor.ConfigureAblation(successorCfg))
 	require.NoError(t, successor.ReloadFromStorage())
 
 	return &detachedAblationHarness{

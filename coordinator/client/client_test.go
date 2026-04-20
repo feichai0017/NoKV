@@ -335,7 +335,7 @@ func TestGRPCClientRejectsInvalidMetadataWitness(t *testing.T) {
 		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
 		RequiredRootToken:          &coordpb.RootToken{Term: 1, Index: 5, Revision: 5},
 		RequiredDescriptorRevision: 7,
-		MaxRootLag:                 uint64Ptr(2),
+		MaxRootLag:                 new(uint64(2)),
 	})
 	require.Error(t, err)
 	require.True(t, IsInvalidWitness(err))
@@ -368,7 +368,7 @@ func TestGRPCClientAcceptsValidMetadataWitness(t *testing.T) {
 		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
 		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 8, Revision: 9},
 		RequiredDescriptorRevision: 8,
-		MaxRootLag:                 uint64Ptr(2),
+		MaxRootLag:                 new(uint64(2)),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
@@ -432,7 +432,7 @@ func TestGRPCClientRetriesStaleMetadataWitnessGenerationAcrossEndpoints(t *testi
 		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
 		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 8, Revision: 9},
 		RequiredDescriptorRevision: 8,
-		MaxRootLag:                 uint64Ptr(2),
+		MaxRootLag:                 new(uint64(2)),
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(11), resp.GetRegionDescriptor().GetRegionId())
@@ -444,7 +444,7 @@ func TestGRPCClientRetriesStaleMetadataWitnessGenerationAcrossEndpoints(t *testi
 		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
 		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 8, Revision: 9},
 		RequiredDescriptorRevision: 8,
-		MaxRootLag:                 uint64Ptr(2),
+		MaxRootLag:                 new(uint64(2)),
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(12), resp.GetRegionDescriptor().GetRegionId())
@@ -492,7 +492,7 @@ func TestGRPCClientAcceptsZeroGenerationMetadataWitnessAfterDetachedGeneration(t
 		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
 		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 8, Revision: 9},
 		RequiredDescriptorRevision: 8,
-		MaxRootLag:                 uint64Ptr(2),
+		MaxRootLag:                 new(uint64(2)),
 	})
 	require.NoError(t, err)
 
@@ -602,7 +602,7 @@ func TestGRPCClientRejectsZeroGenerationMetadataWitnessWithoutAuthoritativeAttac
 		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
 		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 8, Revision: 9},
 		RequiredDescriptorRevision: 8,
-		MaxRootLag:                 uint64Ptr(2),
+		MaxRootLag:                 new(uint64(2)),
 	})
 	require.NoError(t, err)
 
@@ -615,6 +615,73 @@ func TestGRPCClientRejectsZeroGenerationMetadataWitnessWithoutAuthoritativeAttac
 	require.Error(t, err)
 	require.True(t, IsInvalidWitness(err))
 	require.Contains(t, err.Error(), "cert_generation=0 requires authoritative attached")
+}
+
+func TestGRPCClientRejectsSuppressedReplyEvidence(t *testing.T) {
+	cli := newScriptedCoordinatorClient(t, []string{"mixed"}, map[string]*scriptedCoordinatorServer{
+		"mixed": {
+			allocResponses: []*coordpb.AllocIDResponse{
+				{
+					FirstId:          100,
+					Count:            1,
+					CertGeneration:   rootstate.ContinuationWitnessGenerationSuppressed,
+					ConsumedFrontier: 0,
+				},
+			},
+			getResponses: []*coordpb.GetRegionByKeyResponse{
+				{
+					RegionDescriptor:           &metapb.RegionDescriptor{RegionId: 12, RootEpoch: 10},
+					ServedRootToken:            &coordpb.RootToken{Term: 2, Index: 10, Revision: 10},
+					CurrentRootToken:           &coordpb.RootToken{Term: 2, Index: 10, Revision: 10},
+					ServedFreshness:            coordpb.Freshness_FRESHNESS_STRONG,
+					RootLag:                    0,
+					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_FRESH,
+					DescriptorRevision:         10,
+					RequiredDescriptorRevision: 8,
+					CertGeneration:             rootstate.ContinuationWitnessGenerationSuppressed,
+					ServingClass:               coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE,
+					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_HEALTHY,
+					ServedByLeader:             true,
+				},
+			},
+		},
+	})
+
+	_, err := cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.Error(t, err)
+	require.True(t, IsInvalidWitness(err))
+	require.Contains(t, err.Error(), "reply evidence suppressed")
+
+	_, err = cli.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:                        []byte("m"),
+		Freshness:                  coordpb.Freshness_FRESHNESS_STRONG,
+		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 10, Revision: 10},
+		RequiredDescriptorRevision: 8,
+	})
+	require.Error(t, err)
+	require.True(t, IsInvalidWitness(err))
+	require.Contains(t, err.Error(), "reply evidence suppressed")
+}
+
+func TestGRPCClientRejectsReplyAtObservedSealFloor(t *testing.T) {
+	cli := newScriptedCoordinatorClient(t, []string{"mixed"}, map[string]*scriptedCoordinatorServer{
+		"mixed": {
+			allocResponses: []*coordpb.AllocIDResponse{
+				{
+					FirstId:                100,
+					Count:                  1,
+					CertGeneration:         2,
+					ConsumedFrontier:       100,
+					ObservedSealGeneration: 2,
+				},
+			},
+		},
+	})
+
+	_, err := cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.Error(t, err)
+	require.True(t, IsStaleWitnessGeneration(err))
+	require.Contains(t, err.Error(), "sealed_floor=2")
 }
 
 func TestGRPCClientAblationDisableClientVerifyAcceptsStaleGeneration(t *testing.T) {
@@ -641,7 +708,7 @@ func TestGRPCClientAblationDisableClientVerifyAcceptsStaleGeneration(t *testing.
 		},
 	}
 	cli := newScriptedCoordinatorClient(t, []string{"fresh", "stale"}, servers)
-	cli.ConfigureAblation(coordablation.Config{DisableClientVerify: true})
+	require.NoError(t, cli.ConfigureAblation(coordablation.Config{DisableClientVerify: true}))
 
 	resp, err := cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
@@ -781,9 +848,4 @@ func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descri
 	}
 	desc.EnsureHash()
 	return desc
-}
-
-//go:fix inline
-func uint64Ptr(v uint64) *uint64 {
-	return new(v)
 }

@@ -71,6 +71,7 @@ type CoordinatorSeal struct {
 type CoordinatorClosureStage = rootproto.CoordinatorClosureStage
 
 const (
+	CoordinatorClosureStageUnspecified    = rootproto.CoordinatorClosureStageUnspecified
 	CoordinatorClosureStagePendingConfirm = rootproto.CoordinatorClosureStagePendingConfirm
 	CoordinatorClosureStageConfirmed      = rootproto.CoordinatorClosureStageConfirmed
 	CoordinatorClosureStageClosed         = rootproto.CoordinatorClosureStageClosed

@@ -192,3 +192,21 @@ func TestValidateCoordinatorLeaseCampaignLineage(t *testing.T) {
 		t.Fatalf("missing seal digest must be rejected, got err=%v", err)
 	}
 }
+
+func TestCoordinatorSealDigestIncludesNonMaskedLeaseStartFrontier(t *testing.T) {
+	base := rootstate.CoordinatorSeal{
+		HolderID:       "c1",
+		CertGeneration: 7,
+		DutyMask:       rootstate.CoordinatorDutyMaskDefault,
+		Frontiers:      controlplane.Frontiers(20, 40, 60),
+		SealedAtCursor: rootstate.Cursor{Term: 1, Index: 9},
+	}
+	withLeaseStart := base
+	withLeaseStart.Frontiers = withLeaseStart.Frontiers.WithFrontier(rootstate.CoordinatorDutyLeaseStart, 105)
+
+	baseDigest := rootstate.CoordinatorSealDigest(base)
+	leaseStartDigest := rootstate.CoordinatorSealDigest(withLeaseStart)
+	if baseDigest == leaseStartDigest {
+		t.Fatalf("lease_start frontier must affect seal digest")
+	}
+}

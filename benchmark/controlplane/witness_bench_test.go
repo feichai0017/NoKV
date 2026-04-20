@@ -120,7 +120,9 @@ func openWitnessBenchmarkHarness(b *testing.B, cfg coordablation.Config) *witnes
 	}
 
 	svc := coordserver.NewService(cluster, idalloc.NewIDAllocator(10), tso.NewAllocator(100))
-	svc.ConfigureAblation(cfg)
+	if err := svc.ConfigureAblation(cfg); err != nil {
+		b.Fatalf("configure server ablation: %v", err)
+	}
 
 	server := grpc.NewServer()
 	coordpb.RegisterCoordinatorServer(server, svc)
@@ -142,7 +144,9 @@ func openWitnessBenchmarkHarness(b *testing.B, cfg coordablation.Config) *witnes
 	if err != nil {
 		b.Fatalf("new grpc client: %v", err)
 	}
-	client.ConfigureAblation(cfg)
+	if err := client.ConfigureAblation(cfg); err != nil {
+		b.Fatalf("configure client ablation: %v", err)
+	}
 
 	h := &witnessBenchmarkHarness{
 		client:   client,

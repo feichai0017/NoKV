@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
 // Frontiers materializes the built-in duty-frontier projection from the rooted
@@ -24,27 +23,18 @@ func FrontiersFromState(state rootstate.State, descriptorRevision uint64) rootst
 // HandoffRecord projects the current rooted lease plus handoff frontier view into the portable
 // handoff record used by checker and diagnostics code.
 func HandoffRecord(current rootstate.CoordinatorLease, frontiers rootstate.CoordinatorDutyFrontiers) rootstate.AuthorityHandoffRecord {
-	return rootstate.AuthorityHandoffRecord{
-		HolderID:          current.HolderID,
-		ExpiresUnixNano:   current.ExpiresUnixNano,
-		CertGeneration:    current.CertGeneration,
-		IssuedCursor:      current.IssuedCursor,
-		DutyMask:          rootstate.ResolvedCoordinatorDutyMask(current.DutyMask),
-		PredecessorDigest: current.PredecessorDigest,
-		Frontiers:         frontiers,
+	if current.HolderID == "" || current.CertGeneration == 0 {
+		return rootstate.AuthorityHandoffRecord{}
 	}
-}
-
-// MaxDescriptorRevision returns the maximum rooted descriptor epoch currently
-// materialized in descriptors.
-func MaxDescriptorRevision(descriptors map[uint64]descriptor.Descriptor) uint64 {
-	var maxEpoch uint64
-	for _, desc := range descriptors {
-		if desc.RootEpoch > maxEpoch {
-			maxEpoch = desc.RootEpoch
-		}
-	}
-	return maxEpoch
+	return rootstate.MustNewAuthorityHandoffRecord(
+		current.HolderID,
+		current.ExpiresUnixNano,
+		current.CertGeneration,
+		current.IssuedCursor,
+		rootstate.ResolvedCoordinatorDutyMask(current.DutyMask),
+		current.PredecessorDigest,
+		frontiers,
+	)
 }
 
 // BuildClosureWitness derives the base successor-coverage witness from the
@@ -56,7 +46,7 @@ func BuildClosureWitness(current rootstate.CoordinatorLease, currentFrontiers ro
 	witness := rootstate.ClosureWitness{
 		SealGeneration: seal.CertGeneration,
 		SealDigest:     rootstate.CoordinatorSealDigest(seal),
-		Stage:          rootstate.CoordinatorClosureStagePendingConfirm,
+		Stage:          rootstate.CoordinatorClosureStageUnspecified,
 	}
 	witness.SuccessorPresent = current.CertGeneration > seal.CertGeneration
 	witness.SuccessorCoverage = rootstate.EvaluateCoordinatorLeaseSuccessorCoverage(current, seal, currentFrontiers)
@@ -77,16 +67,13 @@ func EvaluateClosureStage(current rootstate.CoordinatorLease, closure rootstate.
 	if holderID == "" || holderID != current.HolderID || !current.ActiveAt(nowUnixNano) {
 		return rootstate.CoordinatorClosureStatus{}
 	}
-	if closure.HolderID != holderID ||
-		closure.SealGeneration == 0 ||
-		closure.SuccessorGeneration == 0 ||
-		closure.SealDigest == "" {
-		return rootstate.CoordinatorClosureStatus{Stage: rootstate.CoordinatorClosureStagePendingConfirm}
+	if !closure.Present() || closure.HolderID != holderID {
+		return rootstate.CoordinatorClosureStatus{}
 	}
 	if closure.SuccessorGeneration <= closure.SealGeneration ||
 		closure.SuccessorGeneration != current.CertGeneration ||
 		current.PredecessorDigest != closure.SealDigest {
-		return rootstate.CoordinatorClosureStatus{Stage: rootstate.CoordinatorClosureStagePendingConfirm}
+		return rootstate.CoordinatorClosureStatus{}
 	}
 	return rootstate.CoordinatorClosureStatus{Stage: closure.Stage}
 }
@@ -130,7 +117,7 @@ func ValidateClosureClose(current rootstate.CoordinatorLease, closure rootstate.
 		return rootstate.ErrInvalidCoordinatorLease
 	}
 	status := EvaluateClosureStage(current, closure, holderID, nowUnixNano)
-	if status.Stage < rootstate.CoordinatorClosureStageConfirmed {
+	if !rootstate.ClosureStageAtLeast(status.Stage, rootstate.CoordinatorClosureStageConfirmed) {
 		return rootstate.ErrCoordinatorLeaseClose
 	}
 	return nil
@@ -144,7 +131,7 @@ func ValidateClosureReattach(current rootstate.CoordinatorLease, closure rootsta
 		return rootstate.ErrInvalidCoordinatorLease
 	}
 	status := EvaluateClosureStage(current, closure, holderID, nowUnixNano)
-	if status.Stage < rootstate.CoordinatorClosureStageClosed {
+	if !rootstate.ClosureStageAtLeast(status.Stage, rootstate.CoordinatorClosureStageClosed) {
 		return rootstate.ErrCoordinatorLeaseReattach
 	}
 	return nil
