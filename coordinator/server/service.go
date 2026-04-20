@@ -429,6 +429,9 @@ func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKe
 		resp.NotFound = true
 		return resp, nil
 	}
+	if pending, ok := s.cluster.PendingRangeChangeForDescriptor(desc.RegionID); ok {
+		return nil, status.Error(codes.FailedPrecondition, pendingRangeChangeError(pending))
+	}
 	if err := admission.admitDescriptorRevision(desc.RootEpoch); err != nil {
 		return nil, err
 	}
@@ -436,6 +439,17 @@ func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKe
 	resp.RegionDescriptor = metawire.DescriptorToProto(desc)
 	resp.DescriptorRevision = desc.RootEpoch
 	return resp, nil
+}
+
+func pendingRangeChangeError(change rootstate.PendingRangeChange) string {
+	switch change.Kind {
+	case rootstate.PendingRangeChangeSplit:
+		return fmt.Sprintf("%s: split parent=%d left=%d right=%d", errRangeChangePending, change.ParentRegionID, change.LeftRegionID, change.RightRegionID)
+	case rootstate.PendingRangeChangeMerge:
+		return fmt.Sprintf("%s: merge left=%d right=%d merged=%d", errRangeChangePending, change.LeftRegionID, change.RightRegionID, change.Merged.RegionID)
+	default:
+		return errRangeChangePending
+	}
 }
 
 type readState struct {

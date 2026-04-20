@@ -16,7 +16,7 @@ func TestStoreOperationCooldown(t *testing.T) {
 				interval:  20 * time.Millisecond,
 				cooldown:  80 * time.Millisecond,
 				burst:     1,
-				pending:   make(map[operationKey]struct{}),
+				pending:   make(map[operationKey]bool),
 				lastApply: make(map[operationKey]time.Time),
 			},
 		},
@@ -57,7 +57,7 @@ func TestStoreSchedulerStatusTracksQueueDrop(t *testing.T) {
 		sched: &schedulerRuntime{
 			operation: operationRuntime{
 				input:     make(chan Operation, 1),
-				pending:   make(map[operationKey]struct{}),
+				pending:   make(map[operationKey]bool),
 				lastApply: make(map[operationKey]time.Time),
 			},
 		},
@@ -98,4 +98,21 @@ func TestStoreCloseReportsDroppedOperationsToScheduler(t *testing.T) {
 	require.Len(t, stores, 1)
 	require.Equal(t, uint64(9), stores[0].StoreID)
 	require.Equal(t, uint64(1), stores[0].DroppedOperations)
+}
+
+func TestStoreCloseKeepsDurableSchedulerOperations(t *testing.T) {
+	_, localMeta := openStoreDB(t)
+	st := NewStore(Config{
+		LocalMeta:          localMeta,
+		OperationQueueSize: 8,
+		OperationInterval:  time.Hour,
+	})
+
+	st.enqueueOperation(Operation{Type: OperationLeaderTransfer, Region: 11, Source: 1, Target: 2})
+	require.Eventually(t, func() bool {
+		return len(localMeta.PendingSchedulerOperations()) == 1
+	}, time.Second, 10*time.Millisecond)
+	st.Close()
+
+	require.Len(t, localMeta.PendingSchedulerOperations(), 1)
 }

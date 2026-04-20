@@ -16,6 +16,7 @@ const (
 	errRequiredRootedTokenNotSatisfied = "required rooted token not satisfied"
 	errRequiredDescriptorNotSatisfied  = "required descriptor revision not satisfied"
 	errRootLagExceedsBound             = "root lag exceeds bound"
+	errRangeChangePending              = "rooted range change still pending"
 )
 
 func statusNotLeader(leaderID uint64) error {
