@@ -269,6 +269,14 @@ More in [`docs/stats.md`](docs/stats.md) · [`docs/cli.md`](docs/cli.md) · [`do
 
 <br/>
 
+## 🤝 Community
+
+- [Contributing Guide](./CONTRIBUTING.md)
+- [Code of Conduct](./CODE_OF_CONDUCT.md)
+- [Security Policy](./SECURITY.md)
+
+<br/>
+
 ## 🔌 Redis Gateway
 
 `cmd/nokv-redis` exposes a RESP-compatible endpoint. In embedded mode (`--workdir`) commands execute through `DB` APIs; in distributed mode (`--raft-config`) calls are routed through `raftstore/client` and committed via Percolator 2PC.
