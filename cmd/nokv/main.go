@@ -54,6 +54,8 @@ func main() {
 		err = runCoordinatorCmd(os.Stdout, args)
 	case "meta-root":
 		err = runMetaRootCmd(os.Stdout, args)
+	case "ccc-audit":
+		err = runCCCAuditCmd(os.Stdout, args)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -79,6 +81,7 @@ func printUsage(w io.Writer) {
 	  serve     Start NoKV gRPC service backed by a local raftstore
 	  coordinator Start coordinator gRPC service (control plane)
 	  meta-root Start metadata root gRPC service
+	  ccc-audit Offline closure-complete continuation audit from rooted metadata
 
 Run "nokv <command> -h" for command-specific flags.`)
 }
