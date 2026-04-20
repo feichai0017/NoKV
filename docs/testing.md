@@ -97,7 +97,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 - **RECOVERY_METRIC logs** – produced when `RECOVERY_TRACE_METRICS=1`; helpful when triaging targeted recovery suites and CI failures.
 - **TRANSPORT_METRIC logs** – emitted by transport chaos tests when `CHAOS_TRACE_METRICS=1`, capturing gRPC watchdog counters during network partitions and retries.
 - **Stats snapshots** – `stats_test.go` verifies JSON structure so CLI output remains backwards compatible.
-- **Benchmark artefacts** – stored under `benchmark/results/` with per-suite subdirectories such as `benchmark/results/ycsb/` and `benchmark/results/controlplane/`.
+- **Benchmark artefacts** – stored under `benchmark/results/` for shared suites and under suite-local result directories where applicable, for example `benchmark/results/ycsb/` and `benchmark/controlplane/results/`.
 
 ---
 
