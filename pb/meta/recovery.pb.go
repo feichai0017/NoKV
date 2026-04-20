@@ -507,6 +507,238 @@ func (x *PendingRootEventCatalog) GetEntries() []*PendingRootEvent {
 	return nil
 }
 
+type PendingSchedulerOperation struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OperationType uint32                 `protobuf:"varint,1,opt,name=operation_type,json=operationType,proto3" json:"operation_type,omitempty"`
+	RegionId      uint64                 `protobuf:"varint,2,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	SourcePeerId  uint64                 `protobuf:"varint,3,opt,name=source_peer_id,json=sourcePeerId,proto3" json:"source_peer_id,omitempty"`
+	TargetPeerId  uint64                 `protobuf:"varint,4,opt,name=target_peer_id,json=targetPeerId,proto3" json:"target_peer_id,omitempty"`
+	Attempts      uint32                 `protobuf:"varint,5,opt,name=attempts,proto3" json:"attempts,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PendingSchedulerOperation) Reset() {
+	*x = PendingSchedulerOperation{}
+	mi := &file_meta_recovery_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PendingSchedulerOperation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PendingSchedulerOperation) ProtoMessage() {}
+
+func (x *PendingSchedulerOperation) ProtoReflect() protoreflect.Message {
+	mi := &file_meta_recovery_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PendingSchedulerOperation.ProtoReflect.Descriptor instead.
+func (*PendingSchedulerOperation) Descriptor() ([]byte, []int) {
+	return file_meta_recovery_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *PendingSchedulerOperation) GetOperationType() uint32 {
+	if x != nil {
+		return x.OperationType
+	}
+	return 0
+}
+
+func (x *PendingSchedulerOperation) GetRegionId() uint64 {
+	if x != nil {
+		return x.RegionId
+	}
+	return 0
+}
+
+func (x *PendingSchedulerOperation) GetSourcePeerId() uint64 {
+	if x != nil {
+		return x.SourcePeerId
+	}
+	return 0
+}
+
+func (x *PendingSchedulerOperation) GetTargetPeerId() uint64 {
+	if x != nil {
+		return x.TargetPeerId
+	}
+	return 0
+}
+
+func (x *PendingSchedulerOperation) GetAttempts() uint32 {
+	if x != nil {
+		return x.Attempts
+	}
+	return 0
+}
+
+type PendingSchedulerOperationCatalog struct {
+	state         protoimpl.MessageState       `protogen:"open.v1"`
+	Entries       []*PendingSchedulerOperation `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PendingSchedulerOperationCatalog) Reset() {
+	*x = PendingSchedulerOperationCatalog{}
+	mi := &file_meta_recovery_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PendingSchedulerOperationCatalog) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PendingSchedulerOperationCatalog) ProtoMessage() {}
+
+func (x *PendingSchedulerOperationCatalog) ProtoReflect() protoreflect.Message {
+	mi := &file_meta_recovery_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PendingSchedulerOperationCatalog.ProtoReflect.Descriptor instead.
+func (*PendingSchedulerOperationCatalog) Descriptor() ([]byte, []int) {
+	return file_meta_recovery_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *PendingSchedulerOperationCatalog) GetEntries() []*PendingSchedulerOperation {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+type BlockedRootEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sequence      uint64                 `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	Event         *RootEvent             `protobuf:"bytes,2,opt,name=event,proto3" json:"event,omitempty"`
+	TransitionId  string                 `protobuf:"bytes,3,opt,name=transition_id,json=transitionId,proto3" json:"transition_id,omitempty"`
+	LastError     string                 `protobuf:"bytes,4,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BlockedRootEvent) Reset() {
+	*x = BlockedRootEvent{}
+	mi := &file_meta_recovery_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BlockedRootEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BlockedRootEvent) ProtoMessage() {}
+
+func (x *BlockedRootEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_meta_recovery_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BlockedRootEvent.ProtoReflect.Descriptor instead.
+func (*BlockedRootEvent) Descriptor() ([]byte, []int) {
+	return file_meta_recovery_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *BlockedRootEvent) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *BlockedRootEvent) GetEvent() *RootEvent {
+	if x != nil {
+		return x.Event
+	}
+	return nil
+}
+
+func (x *BlockedRootEvent) GetTransitionId() string {
+	if x != nil {
+		return x.TransitionId
+	}
+	return ""
+}
+
+func (x *BlockedRootEvent) GetLastError() string {
+	if x != nil {
+		return x.LastError
+	}
+	return ""
+}
+
+type BlockedRootEventCatalog struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Entries       []*BlockedRootEvent    `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BlockedRootEventCatalog) Reset() {
+	*x = BlockedRootEventCatalog{}
+	mi := &file_meta_recovery_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BlockedRootEventCatalog) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BlockedRootEventCatalog) ProtoMessage() {}
+
+func (x *BlockedRootEventCatalog) ProtoReflect() protoreflect.Message {
+	mi := &file_meta_recovery_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BlockedRootEventCatalog.ProtoReflect.Descriptor instead.
+func (*BlockedRootEventCatalog) Descriptor() ([]byte, []int) {
+	return file_meta_recovery_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *BlockedRootEventCatalog) GetEntries() []*BlockedRootEvent {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
 var File_meta_recovery_proto protoreflect.FileDescriptor
 
 const file_meta_recovery_proto_rawDesc = "" +
@@ -550,7 +782,23 @@ const file_meta_recovery_proto_rawDesc = "" +
 	"\bsequence\x18\x01 \x01(\x04R\bsequence\x12-\n" +
 	"\x05event\x18\x02 \x01(\v2\x17.nokv.meta.v1.RootEventR\x05event\"S\n" +
 	"\x17PendingRootEventCatalog\x128\n" +
-	"\aentries\x18\x01 \x03(\v2\x1e.nokv.meta.v1.PendingRootEventR\aentriesB,Z*github.com/feichai0017/NoKV/pb/meta;metapbb\x06proto3"
+	"\aentries\x18\x01 \x03(\v2\x1e.nokv.meta.v1.PendingRootEventR\aentries\"\xc7\x01\n" +
+	"\x19PendingSchedulerOperation\x12%\n" +
+	"\x0eoperation_type\x18\x01 \x01(\rR\roperationType\x12\x1b\n" +
+	"\tregion_id\x18\x02 \x01(\x04R\bregionId\x12$\n" +
+	"\x0esource_peer_id\x18\x03 \x01(\x04R\fsourcePeerId\x12$\n" +
+	"\x0etarget_peer_id\x18\x04 \x01(\x04R\ftargetPeerId\x12\x1a\n" +
+	"\battempts\x18\x05 \x01(\rR\battempts\"e\n" +
+	" PendingSchedulerOperationCatalog\x12A\n" +
+	"\aentries\x18\x01 \x03(\v2'.nokv.meta.v1.PendingSchedulerOperationR\aentries\"\xa1\x01\n" +
+	"\x10BlockedRootEvent\x12\x1a\n" +
+	"\bsequence\x18\x01 \x01(\x04R\bsequence\x12-\n" +
+	"\x05event\x18\x02 \x01(\v2\x17.nokv.meta.v1.RootEventR\x05event\x12#\n" +
+	"\rtransition_id\x18\x03 \x01(\tR\ftransitionId\x12\x1d\n" +
+	"\n" +
+	"last_error\x18\x04 \x01(\tR\tlastError\"S\n" +
+	"\x17BlockedRootEventCatalog\x128\n" +
+	"\aentries\x18\x01 \x03(\v2\x1e.nokv.meta.v1.BlockedRootEventR\aentriesB,Z*github.com/feichai0017/NoKV/pb/meta;metapbb\x06proto3"
 
 var (
 	file_meta_recovery_proto_rawDescOnce sync.Once
@@ -564,36 +812,43 @@ func file_meta_recovery_proto_rawDescGZIP() []byte {
 	return file_meta_recovery_proto_rawDescData
 }
 
-var file_meta_recovery_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_meta_recovery_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_meta_recovery_proto_goTypes = []any{
-	(*ReplicaLocalState)(nil),       // 0: nokv.meta.v1.ReplicaLocalState
-	(*LocalRegionMeta)(nil),         // 1: nokv.meta.v1.LocalRegionMeta
-	(*ReplicaLocalCatalog)(nil),     // 2: nokv.meta.v1.ReplicaLocalCatalog
-	(*RaftProgress)(nil),            // 3: nokv.meta.v1.RaftProgress
-	(*RaftProgressCatalog)(nil),     // 4: nokv.meta.v1.RaftProgressCatalog
-	(*PendingRootEvent)(nil),        // 5: nokv.meta.v1.PendingRootEvent
-	(*PendingRootEventCatalog)(nil), // 6: nokv.meta.v1.PendingRootEventCatalog
-	(RegionReplicaState)(0),         // 7: nokv.meta.v1.RegionReplicaState
-	(*RegionDescriptor)(nil),        // 8: nokv.meta.v1.RegionDescriptor
-	(*RegionEpoch)(nil),             // 9: nokv.meta.v1.RegionEpoch
-	(*RegionPeer)(nil),              // 10: nokv.meta.v1.RegionPeer
-	(*RootEvent)(nil),               // 11: nokv.meta.v1.RootEvent
+	(*ReplicaLocalState)(nil),                // 0: nokv.meta.v1.ReplicaLocalState
+	(*LocalRegionMeta)(nil),                  // 1: nokv.meta.v1.LocalRegionMeta
+	(*ReplicaLocalCatalog)(nil),              // 2: nokv.meta.v1.ReplicaLocalCatalog
+	(*RaftProgress)(nil),                     // 3: nokv.meta.v1.RaftProgress
+	(*RaftProgressCatalog)(nil),              // 4: nokv.meta.v1.RaftProgressCatalog
+	(*PendingRootEvent)(nil),                 // 5: nokv.meta.v1.PendingRootEvent
+	(*PendingRootEventCatalog)(nil),          // 6: nokv.meta.v1.PendingRootEventCatalog
+	(*PendingSchedulerOperation)(nil),        // 7: nokv.meta.v1.PendingSchedulerOperation
+	(*PendingSchedulerOperationCatalog)(nil), // 8: nokv.meta.v1.PendingSchedulerOperationCatalog
+	(*BlockedRootEvent)(nil),                 // 9: nokv.meta.v1.BlockedRootEvent
+	(*BlockedRootEventCatalog)(nil),          // 10: nokv.meta.v1.BlockedRootEventCatalog
+	(RegionReplicaState)(0),                  // 11: nokv.meta.v1.RegionReplicaState
+	(*RegionDescriptor)(nil),                 // 12: nokv.meta.v1.RegionDescriptor
+	(*RegionEpoch)(nil),                      // 13: nokv.meta.v1.RegionEpoch
+	(*RegionPeer)(nil),                       // 14: nokv.meta.v1.RegionPeer
+	(*RootEvent)(nil),                        // 15: nokv.meta.v1.RootEvent
 }
 var file_meta_recovery_proto_depIdxs = []int32{
-	7,  // 0: nokv.meta.v1.ReplicaLocalState.state:type_name -> nokv.meta.v1.RegionReplicaState
-	8,  // 1: nokv.meta.v1.ReplicaLocalState.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	9,  // 2: nokv.meta.v1.LocalRegionMeta.epoch:type_name -> nokv.meta.v1.RegionEpoch
-	10, // 3: nokv.meta.v1.LocalRegionMeta.peers:type_name -> nokv.meta.v1.RegionPeer
-	7,  // 4: nokv.meta.v1.LocalRegionMeta.state:type_name -> nokv.meta.v1.RegionReplicaState
+	11, // 0: nokv.meta.v1.ReplicaLocalState.state:type_name -> nokv.meta.v1.RegionReplicaState
+	12, // 1: nokv.meta.v1.ReplicaLocalState.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	13, // 2: nokv.meta.v1.LocalRegionMeta.epoch:type_name -> nokv.meta.v1.RegionEpoch
+	14, // 3: nokv.meta.v1.LocalRegionMeta.peers:type_name -> nokv.meta.v1.RegionPeer
+	11, // 4: nokv.meta.v1.LocalRegionMeta.state:type_name -> nokv.meta.v1.RegionReplicaState
 	1,  // 5: nokv.meta.v1.ReplicaLocalCatalog.regions:type_name -> nokv.meta.v1.LocalRegionMeta
 	3,  // 6: nokv.meta.v1.RaftProgressCatalog.entries:type_name -> nokv.meta.v1.RaftProgress
-	11, // 7: nokv.meta.v1.PendingRootEvent.event:type_name -> nokv.meta.v1.RootEvent
+	15, // 7: nokv.meta.v1.PendingRootEvent.event:type_name -> nokv.meta.v1.RootEvent
 	5,  // 8: nokv.meta.v1.PendingRootEventCatalog.entries:type_name -> nokv.meta.v1.PendingRootEvent
-	9,  // [9:9] is the sub-list for method output_type
-	9,  // [9:9] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	7,  // 9: nokv.meta.v1.PendingSchedulerOperationCatalog.entries:type_name -> nokv.meta.v1.PendingSchedulerOperation
+	15, // 10: nokv.meta.v1.BlockedRootEvent.event:type_name -> nokv.meta.v1.RootEvent
+	9,  // 11: nokv.meta.v1.BlockedRootEventCatalog.entries:type_name -> nokv.meta.v1.BlockedRootEvent
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_meta_recovery_proto_init() }
@@ -610,7 +865,7 @@ func file_meta_recovery_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_meta_recovery_proto_rawDesc), len(file_meta_recovery_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

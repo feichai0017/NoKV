@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	coordablation "github.com/feichai0017/NoKV/coordinator/ablation"
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
+	coordprotocol "github.com/feichai0017/NoKV/coordinator/protocol"
+	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
 	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
 	"github.com/feichai0017/NoKV/coordinator/tso"
 	pdview "github.com/feichai0017/NoKV/coordinator/view"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -23,6 +27,13 @@ import (
 )
 
 // Service implements the Coordinator gRPC API.
+//
+// Lock order:
+//  1. writeMu
+//  2. allocMu
+//  3. leaseMu
+//
+// Never acquire these locks in reverse order.
 type Service struct {
 	coordpb.UnimplementedCoordinatorServer
 
@@ -42,16 +53,65 @@ type Service struct {
 	leaseRenewIn   time.Duration
 	leaseClockSkew time.Duration
 	now            func() time.Time
-	lease          rootstate.CoordinatorLease
+	leaseView      coordinatorLeaseView
+	rootViewMu     sync.RWMutex
+	rootView       coordinatorRootSnapshotView
+	rootViewTTL    time.Duration
 	statusMu       sync.RWMutex
 	lastRootReload int64
 	lastRootError  string
+	ablation       coordablation.Config
+}
+
+type coordinatorLeaseView struct {
+	lease rootstate.CoordinatorLease
+	seal  rootstate.CoordinatorSeal
+}
+
+type coordinatorRootSnapshotView struct {
+	snapshot    coordstorage.Snapshot
+	loaded      bool
+	refreshing  bool
+	refreshedAt time.Time
+}
+
+func (v *coordinatorLeaseView) Reset() {
+	if v == nil {
+		return
+	}
+	v.lease = rootstate.CoordinatorLease{}
+	v.seal = rootstate.CoordinatorSeal{}
+}
+
+func (v *coordinatorLeaseView) Refresh(snapshot coordstorage.Snapshot) {
+	if v == nil {
+		return
+	}
+	v.lease = snapshot.CoordinatorLease
+	v.seal = snapshot.CoordinatorSeal
+}
+
+func (v coordinatorLeaseView) Current() (rootstate.CoordinatorLease, rootstate.CoordinatorSeal) {
+	return v.lease, v.seal
+}
+
+func (v coordinatorLeaseView) Lease() rootstate.CoordinatorLease {
+	return v.lease
+}
+
+func (v coordinatorLeaseView) Seal() rootstate.CoordinatorSeal {
+	return v.seal
 }
 
 const defaultAllocatorWindowSize uint64 = 10_000
+const ablationUnlimitedWindowSize uint64 = 1 << 20
 const defaultCoordinatorLeaseTTL = 10 * time.Second
 const defaultCoordinatorLeaseRenewIn = 3 * time.Second
 const defaultCoordinatorLeaseClockSkew = 500 * time.Millisecond
+const defaultCoordinatorLeaseRetryMin = 200 * time.Millisecond
+const maxCoordinatorLeaseRetry = 60 * time.Second
+const defaultCoordinatorLeaseReleaseTimeout = 2 * time.Second
+const defaultRootSnapshotRefreshInterval = 250 * time.Millisecond
 
 // NewService constructs a Coordinator service. The optional root storage fixes
 // durable rooted persistence at construction time; omitting it keeps the service
@@ -94,7 +154,7 @@ func (s *Service) ConfigureCoordinatorLease(holderID string, ttl, renewIn time.D
 		s.leaseTTL = 0
 		s.leaseRenewIn = 0
 		s.leaseClockSkew = 0
-		s.lease = rootstate.CoordinatorLease{}
+		s.leaseView.Reset()
 		return
 	}
 	if ttl <= 0 {
@@ -132,6 +192,28 @@ func (s *Service) ConfigureAllocatorWindows(idWindowSize, tsoWindowSize uint64) 
 	}
 }
 
+// ConfigureAblation installs first-cut experimental switches used by the
+// control-plane ablation runner.
+func (s *Service) ConfigureAblation(cfg coordablation.Config) error {
+	if s == nil {
+		return nil
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	s.ablation = cfg
+	return nil
+}
+
+// ConfigureRootSnapshotRefresh controls how long GetRegionByKey keeps one
+// cached rooted snapshot before refreshing it asynchronously.
+func (s *Service) ConfigureRootSnapshotRefresh(interval time.Duration) {
+	if s == nil {
+		return
+	}
+	s.rootViewTTL = interval
+}
+
 // RefreshFromStorage refreshes rooted durable state into the in-memory service
 // view and fences allocator state so a future leader cannot allocate stale ids.
 func (s *Service) RefreshFromStorage() error {
@@ -155,16 +237,20 @@ func (s *Service) ReloadFromStorage() error {
 }
 
 // StoreHeartbeat records store-level stats.
-func (s *Service) StoreHeartbeat(_ context.Context, req *coordpb.StoreHeartbeatRequest) (*coordpb.StoreHeartbeatResponse, error) {
+func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbeatRequest) (*coordpb.StoreHeartbeatResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "store heartbeat request is nil")
 	}
 	err := s.cluster.UpsertStoreHeartbeat(pdview.StoreStats{
-		StoreID:   req.GetStoreId(),
-		RegionNum: req.GetRegionNum(),
-		LeaderNum: req.GetLeaderNum(),
-		Capacity:  req.GetCapacity(),
-		Available: req.GetAvailable(),
+		StoreID:           req.GetStoreId(),
+		RegionNum:         req.GetRegionNum(),
+		LeaderNum:         req.GetLeaderNum(),
+		Capacity:          req.GetCapacity(),
+		Available:         req.GetAvailable(),
+		DroppedOperations: req.GetDroppedOperations(),
 	})
 	if err != nil {
 		if errors.Is(err, catalog.ErrInvalidStoreID) {
@@ -172,7 +258,7 @@ func (s *Service) StoreHeartbeat(_ context.Context, req *coordpb.StoreHeartbeatR
 		}
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	operations := s.leaseScopedStoreOperations(req.GetStoreId())
+	operations := s.leaseScopedStoreOperations(ctx, req.GetStoreId())
 	return &coordpb.StoreHeartbeatResponse{
 		Accepted:   true,
 		Operations: operations,
@@ -180,7 +266,10 @@ func (s *Service) StoreHeartbeat(_ context.Context, req *coordpb.StoreHeartbeatR
 }
 
 // RegionLiveness records one runtime heartbeat without mutating rooted truth.
-func (s *Service) RegionLiveness(_ context.Context, req *coordpb.RegionLivenessRequest) (*coordpb.RegionLivenessResponse, error) {
+func (s *Service) RegionLiveness(ctx context.Context, req *coordpb.RegionLivenessRequest) (*coordpb.RegionLivenessResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
 	if req == nil || req.GetRegionId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, "region liveness request missing region_id")
 	}
@@ -189,7 +278,10 @@ func (s *Service) RegionLiveness(_ context.Context, req *coordpb.RegionLivenessR
 }
 
 // PublishRootEvent records one explicit rooted topology truth event.
-func (s *Service) PublishRootEvent(_ context.Context, req *coordpb.PublishRootEventRequest) (*coordpb.PublishRootEventResponse, error) {
+func (s *Service) PublishRootEvent(ctx context.Context, req *coordpb.PublishRootEventRequest) (*coordpb.PublishRootEventResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
 	if req == nil || req.GetEvent() == nil {
 		return nil, status.Error(codes.InvalidArgument, "publish root event request missing event")
 	}
@@ -231,7 +323,7 @@ func (s *Service) PublishRootEvent(_ context.Context, req *coordpb.PublishRootEv
 		}
 	}
 	if s.storage != nil {
-		if err := s.storage.AppendRootEvent(event); err != nil {
+		if err := s.storage.AppendRootEvent(ctx, event); err != nil {
 			return nil, status.Error(codes.Internal, "persist root event: "+err.Error())
 		}
 		if _, err := s.reloadRootedView(false); err != nil {
@@ -269,7 +361,10 @@ func (s *Service) assessRootEventLifecycle(event rootevent.Event) (rootstate.Tra
 }
 
 // RemoveRegion deletes region metadata from the Coordinator in-memory catalog.
-func (s *Service) RemoveRegion(_ context.Context, req *coordpb.RemoveRegionRequest) (*coordpb.RemoveRegionResponse, error) {
+func (s *Service) RemoveRegion(ctx context.Context, req *coordpb.RemoveRegionRequest) (*coordpb.RemoveRegionResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "remove region request is nil")
 	}
@@ -280,25 +375,18 @@ func (s *Service) RemoveRegion(_ context.Context, req *coordpb.RemoveRegionReque
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	if err := s.requireExpectedClusterEpoch(req.GetExpectedClusterEpoch()); err != nil {
+	removed := s.cluster.HasRegion(regionID)
+	if !removed {
+		return &coordpb.RemoveRegionResponse{Removed: false}, nil
+	}
+	_, err := s.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
+		Event:                metawire.RootEventToProto(rootevent.RegionTombstoned(regionID)),
+		ExpectedClusterEpoch: req.GetExpectedClusterEpoch(),
+	})
+	if err != nil {
 		return nil, err
 	}
-	removed := s.cluster.HasRegion(regionID)
-	if removed && s.storage != nil {
-		if err := s.storage.AppendRootEvent(rootevent.RegionTombstoned(regionID)); err != nil {
-			return nil, status.Error(codes.Internal, "persist region tombstone: "+err.Error())
-		}
-		if _, err := s.reloadRootedView(false); err != nil {
-			return nil, status.Error(codes.Internal, "reload rooted view: "+err.Error())
-		}
-		return &coordpb.RemoveRegionResponse{Removed: true}, nil
-	}
-	if removed {
-		s.cluster.RemoveRegion(regionID)
-	}
-	return &coordpb.RemoveRegionResponse{Removed: removed}, nil
+	return &coordpb.RemoveRegionResponse{Removed: true}, nil
 }
 
 func (s *Service) reloadRootedView(refresh bool) (coordstorage.Snapshot, error) {
@@ -314,7 +402,7 @@ func (s *Service) reloadRootedView(refresh bool) (coordstorage.Snapshot, error) 
 	if err != nil {
 		return coordstorage.Snapshot{}, err
 	}
-	s.cluster.ReplaceRootSnapshot(snapshot.Descriptors, snapshot.PendingPeerChanges, snapshot.PendingRangeChanges, snapshot.RootToken)
+	s.publishRootSnapshot(snapshot)
 	return snapshot, nil
 }
 
@@ -328,66 +416,203 @@ func (s *Service) reloadAndFenceAllocators(refresh bool) error {
 	defer s.allocMu.Unlock()
 	s.fenceIDFromStorage(snapshot.Allocator.IDCurrent)
 	s.fenceTSOFromStorage(snapshot.Allocator.TSCurrent)
-	s.leaseMu.Lock()
-	s.lease = snapshot.CoordinatorLease
-	s.leaseMu.Unlock()
 	s.setLastRootReload(nil)
 	return nil
 }
 
+func (s *Service) refreshLeaseMirror(snapshot coordstorage.Snapshot) {
+	if s == nil {
+		return
+	}
+	s.leaseMu.Lock()
+	s.leaseView.Refresh(snapshot)
+	s.leaseMu.Unlock()
+}
+
+func (s *Service) rootSnapshotRefreshWindow() time.Duration {
+	if s == nil || s.rootViewTTL <= 0 {
+		return defaultRootSnapshotRefreshInterval
+	}
+	return s.rootViewTTL
+}
+
+func (s *Service) shouldReplaceRootSnapshotLocked(snapshot coordstorage.Snapshot) bool {
+	if !s.rootView.loaded {
+		return true
+	}
+	current := s.rootView.snapshot.RootToken
+	return !current.AdvancedSince(snapshot.RootToken)
+}
+
+func (s *Service) cacheRootSnapshot(snapshot coordstorage.Snapshot, refreshedAt time.Time) bool {
+	if s == nil {
+		return false
+	}
+	if refreshedAt.IsZero() {
+		nowFn := s.now
+		if nowFn == nil {
+			nowFn = time.Now
+		}
+		refreshedAt = nowFn()
+	}
+	s.rootViewMu.Lock()
+	updated := false
+	if s.shouldReplaceRootSnapshotLocked(snapshot) {
+		s.rootView.snapshot = coordstorage.CloneSnapshot(snapshot)
+		s.rootView.loaded = true
+		s.rootView.refreshedAt = refreshedAt
+		updated = true
+	}
+	s.rootViewMu.Unlock()
+	return updated
+}
+
+func (s *Service) refreshCurrentRootSnapshot(snapshot coordstorage.Snapshot) bool {
+	if s == nil {
+		return false
+	}
+	if !s.cacheRootSnapshot(snapshot, time.Time{}) {
+		return false
+	}
+	s.refreshLeaseMirror(snapshot)
+	s.setLastRootReload(nil)
+	return true
+}
+
+func (s *Service) publishRootSnapshot(snapshot coordstorage.Snapshot) {
+	if s == nil {
+		return
+	}
+	if !s.refreshCurrentRootSnapshot(snapshot) {
+		return
+	}
+	if s.cluster != nil {
+		s.cluster.ReplaceRootSnapshot(snapshot.Descriptors, snapshot.PendingPeerChanges, snapshot.PendingRangeChanges, snapshot.RootToken)
+	}
+}
+
+func (s *Service) currentRootSnapshot() (coordstorage.Snapshot, error) {
+	if s == nil || s.storage == nil {
+		return coordstorage.Snapshot{}, nil
+	}
+	nowFn := s.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	now := nowFn()
+	s.rootViewMu.RLock()
+	if s.rootView.loaded {
+		snapshot := coordstorage.CloneSnapshot(s.rootView.snapshot)
+		stale := now.Sub(s.rootView.refreshedAt) > s.rootSnapshotRefreshWindow()
+		s.rootViewMu.RUnlock()
+		if stale {
+			s.maybeRefreshRootSnapshotAsync()
+		}
+		return snapshot, nil
+	}
+	s.rootViewMu.RUnlock()
+
+	snapshot, err := s.storage.Load()
+	if err != nil {
+		s.setLastRootReload(err)
+		return coordstorage.Snapshot{}, err
+	}
+	s.refreshCurrentRootSnapshot(snapshot)
+	return coordstorage.CloneSnapshot(snapshot), nil
+}
+
+func (s *Service) maybeRefreshRootSnapshotAsync() {
+	if s == nil || s.storage == nil {
+		return
+	}
+	s.rootViewMu.Lock()
+	if s.rootView.refreshing {
+		s.rootViewMu.Unlock()
+		return
+	}
+	s.rootView.refreshing = true
+	s.rootViewMu.Unlock()
+	go func() {
+		defer func() {
+			s.rootViewMu.Lock()
+			s.rootView.refreshing = false
+			s.rootViewMu.Unlock()
+		}()
+		snapshot, err := s.storage.Load()
+		if err != nil {
+			s.setLastRootReload(err)
+			return
+		}
+		s.refreshCurrentRootSnapshot(snapshot)
+	}()
+}
+
+func (s *Service) cachedRootSnapshotStale() bool {
+	if s == nil {
+		return false
+	}
+	nowFn := s.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	now := nowFn()
+	s.rootViewMu.RLock()
+	defer s.rootViewMu.RUnlock()
+	if !s.rootView.loaded {
+		return false
+	}
+	return now.Sub(s.rootView.refreshedAt) > s.rootSnapshotRefreshWindow()
+}
+
+func (s *Service) lastRootReloadError() string {
+	if s == nil {
+		return ""
+	}
+	s.statusMu.RLock()
+	defer s.statusMu.RUnlock()
+	return s.lastRootError
+}
+
 // GetRegionByKey returns region metadata for the specified key.
-func (s *Service) GetRegionByKey(_ context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
+func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "get region by key request is nil")
 	}
-	freshness := normalizeFreshness(req.GetFreshness())
 	state, err := s.currentReadState()
+	admission, err := s.admitMetadataAnswerability(req, state, err)
 	if err != nil {
-		if freshness == coordpb.Freshness_FRESHNESS_STRONG || freshness == coordpb.Freshness_FRESHNESS_BOUNDED {
-			return nil, status.Error(codes.FailedPrecondition, errRootUnavailable)
-		}
-		state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE
-	}
-	if freshness == coordpb.Freshness_FRESHNESS_STRONG && !state.servedByLeader {
-		return nil, s.notLeaderError()
-	}
-	if freshness == coordpb.Freshness_FRESHNESS_STRONG && state.rootLag > 0 {
-		return nil, status.Error(codes.FailedPrecondition, errRootLagExceedsStrongFreshness)
-	}
-	if freshness == coordpb.Freshness_FRESHNESS_BOUNDED && state.catchUpState == coordstorage.CatchUpStateBootstrapRequired {
-		return nil, status.Error(codes.FailedPrecondition, errBootstrapRequiredBeforeBounded)
-	}
-	required := rootTokenFromProto(req.GetRequiredRootToken())
-	if !rootTokenSatisfied(state.servedToken, required) {
-		return nil, status.Error(codes.FailedPrecondition, errRequiredRootedTokenNotSatisfied)
-	}
-	if freshness == coordpb.Freshness_FRESHNESS_BOUNDED && req.MaxRootLag != nil && !boundedLagSatisfied(state.rootLag, req.GetMaxRootLag()) {
-		return nil, status.Error(codes.FailedPrecondition, errRootLagExceedsBound)
+		return nil, err
 	}
 	desc, ok := s.cluster.GetRegionDescriptorByKey(req.GetKey())
 	if !ok {
-		return &coordpb.GetRegionByKeyResponse{
-			NotFound:         true,
-			ServedRootToken:  rootTokenToProto(state.servedToken),
-			ServedFreshness:  freshness,
-			DegradedMode:     state.degraded,
-			ServedByLeader:   state.servedByLeader,
-			CurrentRootToken: rootTokenToProto(state.currentToken),
-			RootLag:          state.rootLag,
-			CatchUpState:     catchUpStateToProto(state.catchUpState),
-		}, nil
+		resp := admission.responseBase()
+		resp.NotFound = true
+		return resp, nil
 	}
-	return &coordpb.GetRegionByKeyResponse{
-		RegionDescriptor: metawire.DescriptorToProto(desc),
-		NotFound:         false,
-		ServedRootToken:  rootTokenToProto(state.servedToken),
-		ServedFreshness:  freshness,
-		DegradedMode:     state.degraded,
-		ServedByLeader:   state.servedByLeader,
-		CurrentRootToken: rootTokenToProto(state.currentToken),
-		RootLag:          state.rootLag,
-		CatchUpState:     catchUpStateToProto(state.catchUpState),
-	}, nil
+	if pending, ok := s.cluster.PendingRangeChangeForDescriptor(desc.RegionID); ok {
+		return nil, status.Error(codes.FailedPrecondition, pendingRangeChangeError(pending))
+	}
+	if err := admission.admitDescriptorRevision(desc.RootEpoch); err != nil {
+		return nil, err
+	}
+	resp := admission.responseBase()
+	resp.RegionDescriptor = metawire.DescriptorToProto(desc)
+	resp.DescriptorRevision = desc.RootEpoch
+	return resp, nil
+}
+
+func pendingRangeChangeError(change rootstate.PendingRangeChange) string {
+	switch change.Kind {
+	case rootstate.PendingRangeChangeSplit:
+		return fmt.Sprintf("%s: split parent=%d left=%d right=%d", errRangeChangePending, change.ParentRegionID, change.LeftRegionID, change.RightRegionID)
+	case rootstate.PendingRangeChangeMerge:
+		return fmt.Sprintf("%s: merge left=%d right=%d merged=%d", errRangeChangePending, change.LeftRegionID, change.RightRegionID, change.Merged.RegionID)
+	default:
+		return errRangeChangePending
+	}
 }
 
 type readState struct {
@@ -397,6 +622,92 @@ type readState struct {
 	catchUpState   coordstorage.CatchUpState
 	degraded       coordpb.DegradedMode
 	servedByLeader bool
+	certGeneration uint64
+	sealGeneration uint64
+	leasePresent   bool
+	leaseActive    bool
+	leaseSealed    bool
+	leaseDutyMask  uint32
+}
+
+type metadataAnswerability struct {
+	state                      readState
+	freshness                  coordpb.Freshness
+	requiredRootToken          rootstorage.TailToken
+	requiredDescriptorRevision uint64
+	maxRootLag                 *uint64
+	servingClass               coordpb.ServingClass
+	syncHealth                 coordpb.SyncHealth
+}
+
+func (a metadataAnswerability) admitDescriptorRevision(revision uint64) error {
+	if revision < a.requiredDescriptorRevision {
+		return status.Error(codes.FailedPrecondition, errRequiredDescriptorNotSatisfied)
+	}
+	return nil
+}
+
+func (a metadataAnswerability) responseBase() *coordpb.GetRegionByKeyResponse {
+	return &coordpb.GetRegionByKeyResponse{
+		NotFound:                   false,
+		ServedRootToken:            rootTokenToProto(a.state.servedToken),
+		ServedFreshness:            a.freshness,
+		DegradedMode:               a.state.degraded,
+		ServedByLeader:             a.state.servedByLeader,
+		CurrentRootToken:           rootTokenToProto(a.state.currentToken),
+		RootLag:                    a.state.rootLag,
+		CatchUpState:               catchUpStateToProto(a.state.catchUpState),
+		RequiredDescriptorRevision: a.requiredDescriptorRevision,
+		CertGeneration:             a.state.certGeneration,
+		ObservedSealGeneration:     a.state.sealGeneration,
+		ServingClass:               a.servingClass,
+		SyncHealth:                 a.syncHealth,
+	}
+}
+
+func (s *Service) admitMetadataAnswerability(req *coordpb.GetRegionByKeyRequest, state readState, loadErr error) (metadataAnswerability, error) {
+	admission := metadataAnswerability{
+		state:                      state,
+		freshness:                  coordprotocol.NormalizeFreshness(req.GetFreshness()),
+		requiredRootToken:          rootTokenFromProto(req.GetRequiredRootToken()),
+		requiredDescriptorRevision: req.GetRequiredDescriptorRevision(),
+		maxRootLag:                 req.MaxRootLag,
+	}
+	if loadErr != nil {
+		if s != nil && s.ablation.FailStopOnRootUnreach {
+			return metadataAnswerability{}, status.Error(codes.FailedPrecondition, errRootUnavailable)
+		}
+		if admission.freshness == coordpb.Freshness_FRESHNESS_STRONG || admission.freshness == coordpb.Freshness_FRESHNESS_BOUNDED {
+			return metadataAnswerability{}, status.Error(codes.FailedPrecondition, errRootUnavailable)
+		}
+		admission.state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE
+	}
+	if loadErr == nil && s != nil && s.coordinatorLeaseEnabled() && admission.state.leasePresent {
+		if admission.state.leaseDutyMask&rootproto.CoordinatorDutyGetRegionByKey == 0 {
+			return metadataAnswerability{}, statusCoordinatorLease(fmt.Errorf("%w: required_duty_mask=%d rooted_duty_mask=%d generation=%d", rootstate.ErrCoordinatorLeaseDuty, rootproto.CoordinatorDutyGetRegionByKey, admission.state.leaseDutyMask, admission.state.certGeneration))
+		}
+		if !admission.state.leaseActive {
+			return metadataAnswerability{}, statusCoordinatorLease(fmt.Errorf("%w: rooted lease expired generation=%d", rootstate.ErrInvalidCoordinatorLease, admission.state.certGeneration))
+		}
+		if admission.state.leaseSealed {
+			return metadataAnswerability{}, statusCoordinatorLease(fmt.Errorf("%w: generation=%d sealed_generation=%d", rootstate.ErrCoordinatorLeaseHeld, admission.state.certGeneration, admission.state.certGeneration))
+		}
+	}
+	if !rootTokenSatisfied(admission.state.servedToken, admission.requiredRootToken) {
+		return metadataAnswerability{}, status.Error(codes.FailedPrecondition, errRequiredRootedTokenNotSatisfied)
+	}
+	if admission.freshness == coordpb.Freshness_FRESHNESS_BOUNDED &&
+		admission.maxRootLag != nil &&
+		!boundedLagSatisfied(admission.state.rootLag, *admission.maxRootLag) {
+		return metadataAnswerability{}, status.Error(codes.FailedPrecondition, errRootLagExceedsBound)
+	}
+	servingClass, syncHealth, err := s.admitReadServing(admission.freshness, admission.state)
+	if err != nil {
+		return metadataAnswerability{}, err
+	}
+	admission.servingClass = servingClass
+	admission.syncHealth = syncHealth
+	return admission, nil
 }
 
 func (s *Service) currentReadState() (readState, error) {
@@ -422,15 +733,37 @@ func (s *Service) currentReadState() (readState, error) {
 		state.rootLag = rootLag(state.currentToken, state.servedToken)
 		return state, nil
 	}
-	snapshot, err := s.storage.Load()
+	nowFn := s.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	nowUnixNano := nowFn().UnixNano()
+	snapshot, err := s.currentRootSnapshot()
 	if err != nil {
 		state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE
 		state.catchUpState = coordstorage.CatchUpStateUnavailable
 		return state, err
 	}
+	if snapshot.CoordinatorLease.CertGeneration != 0 && strings.TrimSpace(snapshot.CoordinatorLease.HolderID) != "" {
+		state.leasePresent = true
+		state.leaseActive = snapshot.CoordinatorLease.ActiveAt(nowUnixNano)
+		state.leaseSealed = rootstate.CoordinatorGenerationSealed(snapshot.CoordinatorLease, snapshot.CoordinatorSeal)
+		state.leaseDutyMask = snapshot.CoordinatorLease.DutyMask
+	}
+	if snapshot.CoordinatorSeal.Present() {
+		state.sealGeneration = snapshot.CoordinatorSeal.CertGeneration
+	}
 	state.currentToken = snapshot.RootToken
 	state.rootLag = rootLag(state.currentToken, state.servedToken)
 	state.catchUpState = snapshot.CatchUpState
+	state.certGeneration = s.metadataReplyGeneration(snapshot.CoordinatorLease.CertGeneration)
+	if s.cachedRootSnapshotStale() {
+		if errText := s.lastRootReloadError(); strings.TrimSpace(errText) != "" {
+			state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE
+			state.catchUpState = coordstorage.CatchUpStateUnavailable
+			return state, errors.New(errText)
+		}
+	}
 	if state.rootLag == 0 {
 		state.catchUpState = coordstorage.CatchUpStateFresh
 		return state, nil
@@ -453,17 +786,6 @@ func (s *Service) notLeaderError() error {
 		return statusNotLeader(0)
 	}
 	return statusNotLeader(leaderID)
-}
-
-func normalizeFreshness(f coordpb.Freshness) coordpb.Freshness {
-	switch f {
-	case coordpb.Freshness_FRESHNESS_STRONG,
-		coordpb.Freshness_FRESHNESS_BOUNDED,
-		coordpb.Freshness_FRESHNESS_BEST_EFFORT:
-		return f
-	default:
-		return coordpb.Freshness_FRESHNESS_BEST_EFFORT
-	}
 }
 
 func rootTokenToProto(token rootstorage.TailToken) *coordpb.RootToken {
@@ -532,8 +854,41 @@ func catchUpStateToProto(state coordstorage.CatchUpState) coordpb.CatchUpState {
 	}
 }
 
+func (s *Service) admitReadServing(freshness coordpb.Freshness, state readState) (coordpb.ServingClass, coordpb.SyncHealth, error) {
+	servingClass, syncHealth := coordprotocol.MetadataServingContract(
+		state.degraded,
+		catchUpStateToProto(state.catchUpState),
+		state.rootLag,
+		state.servedByLeader,
+	)
+
+	switch freshness {
+	case coordpb.Freshness_FRESHNESS_STRONG:
+		if servingClass != coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE {
+			if !state.servedByLeader {
+				return servingClass, syncHealth, s.notLeaderError()
+			}
+			return servingClass, syncHealth, status.Error(codes.FailedPrecondition, errRootLagExceedsStrongFreshness)
+		}
+	case coordpb.Freshness_FRESHNESS_BOUNDED:
+		if servingClass == coordpb.ServingClass_SERVING_CLASS_DEGRADED {
+			switch syncHealth {
+			case coordpb.SyncHealth_SYNC_HEALTH_ROOT_UNAVAILABLE:
+				return servingClass, syncHealth, status.Error(codes.FailedPrecondition, errRootUnavailable)
+			case coordpb.SyncHealth_SYNC_HEALTH_BOOTSTRAP_REQUIRED:
+				return servingClass, syncHealth, status.Error(codes.FailedPrecondition, errBootstrapRequiredBeforeBounded)
+			}
+		}
+	}
+
+	return servingClass, syncHealth, nil
+}
+
 // AllocID allocates one or more globally unique ids.
-func (s *Service) AllocID(_ context.Context, req *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error) {
+func (s *Service) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "alloc id request is nil")
 	}
@@ -544,24 +899,32 @@ func (s *Service) AllocID(_ context.Context, req *coordpb.AllocIDRequest) (*coor
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
-	if err := s.requireCoordinatorLease(); err != nil {
+	if err := s.requireDutyAdmission(ctx, rootproto.CoordinatorDutyAllocID); err != nil {
 		return nil, err
 	}
-	first, err := s.reserveIDs(count)
+	first, err := s.reserveIDs(ctx, count)
 	if err != nil {
 		if errors.Is(err, idalloc.ErrInvalidBatch) {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
+	lease, seal := s.currentCoordinatorLeaseView()
+	witness := s.monotoneReplyEvidence(rootproto.CoordinatorDutyAllocID, lease, allocationConsumedFrontier(first, count))
 	return &coordpb.AllocIDResponse{
-		FirstId: first,
-		Count:   count,
+		FirstId:                first,
+		Count:                  count,
+		CertGeneration:         witness.CertGeneration,
+		ConsumedFrontier:       witness.ConsumedFrontier,
+		ObservedSealGeneration: seal.CertGeneration,
 	}, nil
 }
 
 // Tso allocates one or more timestamps.
-func (s *Service) Tso(_ context.Context, req *coordpb.TsoRequest) (*coordpb.TsoResponse, error) {
+func (s *Service) Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.TsoResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "tso request is nil")
 	}
@@ -572,19 +935,24 @@ func (s *Service) Tso(_ context.Context, req *coordpb.TsoRequest) (*coordpb.TsoR
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
-	if err := s.requireCoordinatorLease(); err != nil {
+	if err := s.requireDutyAdmission(ctx, rootproto.CoordinatorDutyTSO); err != nil {
 		return nil, err
 	}
-	first, got, err := s.reserveTSO(count)
+	first, got, err := s.reserveTSO(ctx, count)
 	if err != nil {
 		if errors.Is(err, idalloc.ErrInvalidBatch) {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
+	lease, seal := s.currentCoordinatorLeaseView()
+	witness := s.monotoneReplyEvidence(rootproto.CoordinatorDutyTSO, lease, allocationConsumedFrontier(first, got))
 	return &coordpb.TsoResponse{
-		Timestamp: first,
-		Count:     got,
+		Timestamp:              first,
+		Count:                  got,
+		CertGeneration:         witness.CertGeneration,
+		ConsumedFrontier:       witness.ConsumedFrontier,
+		ObservedSealGeneration: seal.CertGeneration,
 	}, nil
 }
 
@@ -659,11 +1027,7 @@ func (s *Service) nextRootEpoch() (uint64, error) {
 	}
 	var maxEpoch uint64
 	if s != nil && s.cluster != nil {
-		for _, region := range s.cluster.RegionSnapshot() {
-			if region.Descriptor.RootEpoch > maxEpoch {
-				maxEpoch = region.Descriptor.RootEpoch
-			}
-		}
+		maxEpoch = s.cluster.MaxDescriptorRevision()
 	}
 	if maxEpoch < ^uint64(0) {
 		return maxEpoch + 1, nil
@@ -671,7 +1035,7 @@ func (s *Service) nextRootEpoch() (uint64, error) {
 	return maxEpoch, nil
 }
 
-func (s *Service) reserveIDs(count uint64) (uint64, error) {
+func (s *Service) reserveIDs(ctx context.Context, count uint64) (uint64, error) {
 	if s == nil {
 		return 0, nil
 	}
@@ -691,7 +1055,7 @@ func (s *Service) reserveIDs(count uint64) (uint64, error) {
 		if !ok {
 			windowHigh = next
 		}
-		if err := s.storage.SaveAllocatorState(windowHigh, s.currentTSOFenceLocked()); err != nil {
+		if err := s.storage.SaveAllocatorState(ctx, windowHigh, s.currentTSOFenceLocked()); err != nil {
 			return 0, err
 		}
 		s.idWindowHigh = windowHigh
@@ -700,7 +1064,7 @@ func (s *Service) reserveIDs(count uint64) (uint64, error) {
 	return current + 1, nil
 }
 
-func (s *Service) reserveTSO(count uint64) (uint64, uint64, error) {
+func (s *Service) reserveTSO(ctx context.Context, count uint64) (uint64, uint64, error) {
 	if s == nil {
 		return 0, 0, nil
 	}
@@ -720,7 +1084,7 @@ func (s *Service) reserveTSO(count uint64) (uint64, uint64, error) {
 		if !ok {
 			windowHigh = next
 		}
-		if err := s.storage.SaveAllocatorState(s.currentIDFenceLocked(), windowHigh); err != nil {
+		if err := s.storage.SaveAllocatorState(ctx, s.currentIDFenceLocked(), windowHigh); err != nil {
 			return 0, 0, err
 		}
 		s.tsoWindowHigh = windowHigh
@@ -730,6 +1094,9 @@ func (s *Service) reserveTSO(count uint64) (uint64, uint64, error) {
 }
 
 func (s *Service) effectiveIDWindowSize() uint64 {
+	if s != nil && s.ablation.DisableBudget {
+		return ablationUnlimitedWindowSize
+	}
 	if s == nil || s.idWindowSize == 0 {
 		return defaultAllocatorWindowSize
 	}
@@ -737,6 +1104,9 @@ func (s *Service) effectiveIDWindowSize() uint64 {
 }
 
 func (s *Service) effectiveTSOWindowSize() uint64 {
+	if s != nil && s.ablation.DisableBudget {
+		return ablationUnlimitedWindowSize
+	}
 	if s == nil || s.tsoWindowSize == 0 {
 		return defaultAllocatorWindowSize
 	}
@@ -790,6 +1160,17 @@ func addUint64(a, b uint64) (uint64, bool) {
 	return a + b, true
 }
 
+func allocationConsumedFrontier(first, count uint64) uint64 {
+	if first == 0 || count == 0 {
+		return 0
+	}
+	last, ok := addUint64(first, count-1)
+	if !ok {
+		return 0
+	}
+	return last
+}
+
 func maxUint64(a, b uint64) uint64 {
 	if a > b {
 		return a
@@ -811,27 +1192,27 @@ func (s *Service) requireLeaderForWrite() error {
 	return statusNotLeader(0)
 }
 
-func (s *Service) leaseScopedStoreOperations(storeID uint64) []*coordpb.SchedulerOperation {
+func (s *Service) leaseScopedStoreOperations(ctx context.Context, storeID uint64) []*coordpb.SchedulerOperation {
 	if s == nil || !s.coordinatorLeaseEnabled() {
 		return s.planStoreOperations(storeID)
 	}
 	if s.storage != nil && !s.storage.IsLeader() {
 		return nil
 	}
-	if err := s.ensureCoordinatorLease(); err != nil {
+	if err := s.ensureCoordinatorLease(ctx); err != nil {
 		return nil
 	}
 	return s.planStoreOperations(storeID)
 }
 
-func (s *Service) requireCoordinatorLease() error {
+func (s *Service) requireDutyAdmission(ctx context.Context, dutyMask uint32) error {
 	if s == nil || !s.coordinatorLeaseEnabled() {
 		return nil
 	}
-	if err := s.ensureCoordinatorLease(); err != nil {
+	if err := s.ensureCoordinatorLease(ctx); err != nil {
 		return translateCoordinatorLeaseError(err)
 	}
-	return nil
+	return s.preActionGate(preActionDutyAdmission, dutyMask)
 }
 
 // RunCoordinatorLeaseLoop keeps the local coordinator lease renewed while ctx
@@ -843,15 +1224,31 @@ func (s *Service) RunCoordinatorLeaseLoop(ctx context.Context) {
 	}
 	timer := time.NewTimer(0)
 	defer timer.Stop()
+	failures := 0
 	for {
 		select {
 		case <-ctx.Done():
+			if s.storage.IsLeader() {
+				releaseCtx, cancel := context.WithTimeout(context.Background(), defaultCoordinatorLeaseReleaseTimeout)
+				_ = s.releaseCoordinatorLease(releaseCtx)
+				cancel()
+			}
 			return
 		case <-timer.C:
+			next := s.coordinatorLeaseLoopInterval()
 			if s.storage.IsLeader() {
-				_ = s.ensureCoordinatorLease()
+				if err := s.ensureCoordinatorLease(ctx); err != nil {
+					failures++
+					next = s.coordinatorLeaseRetryDelay(failures)
+				} else {
+					failures = 0
+					next = s.jitterDuration(next, 20)
+				}
+			} else {
+				failures = 0
+				next = s.jitterDuration(next, 20)
 			}
-			timer.Reset(s.coordinatorLeaseLoopInterval())
+			timer.Reset(next)
 		}
 	}
 }
@@ -859,6 +1256,10 @@ func (s *Service) RunCoordinatorLeaseLoop(ctx context.Context) {
 // ReleaseCoordinatorLease explicitly releases the current rooted coordinator
 // lease for the configured holder. It is intended for graceful shutdown.
 func (s *Service) ReleaseCoordinatorLease() error {
+	return s.releaseCoordinatorLease(context.Background())
+}
+
+func (s *Service) releaseCoordinatorLease(ctx context.Context) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
@@ -882,25 +1283,139 @@ func (s *Service) ReleaseCoordinatorLease() error {
 	}
 
 	s.allocMu.Lock()
-	idFence := s.currentIDFenceLocked()
-	tsoFence := s.currentTSOFenceLocked()
+	handoffFrontiers := controlplane.Frontiers(rootstate.State{
+		IDFence:  s.currentIDFenceLocked(),
+		TSOFence: s.currentTSOFenceLocked(),
+	}, s.currentDescriptorRevision())
 	s.allocMu.Unlock()
 
-	lease, err := s.storage.ReleaseCoordinatorLease(holderID, nowUnixNano, idFence, tsoFence)
-	if err != nil {
+	if _, err := s.storage.ApplyCoordinatorLease(ctx, rootproto.CoordinatorLeaseCommand{
+		Kind:             rootproto.CoordinatorLeaseCommandRelease,
+		HolderID:         holderID,
+		NowUnixNano:      nowUnixNano,
+		HandoffFrontiers: handoffFrontiers,
+	}); err != nil {
 		return err
 	}
-	s.leaseMu.Lock()
-	s.lease = lease
-	s.leaseMu.Unlock()
-	s.allocMu.Lock()
-	s.fenceIDFromStorage(lease.IDFence)
-	s.fenceTSOFromStorage(lease.TSOFence)
-	s.allocMu.Unlock()
-	return nil
+	return s.reloadAndFenceAllocators(true)
 }
 
-func (s *Service) ensureCoordinatorLease() error {
+// SealCoordinatorLease records one rooted closure point for the current
+// authority generation using the frontiers already consumed by this service.
+func (s *Service) SealCoordinatorLease() error {
+	return s.sealCoordinatorLease(context.Background())
+}
+
+func (s *Service) sealCoordinatorLease(ctx context.Context) error {
+	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
+		return nil
+	}
+	if s.ablation.DisableSeal {
+		return nil
+	}
+	if !s.storage.IsLeader() {
+		return nil
+	}
+	s.allocMu.Lock()
+	consumedIDFrontier := s.ids.Current()
+	consumedTSOFrontier := s.tso.Current()
+	s.allocMu.Unlock()
+	return s.applyClosureCommand(
+		ctx,
+		rootproto.CoordinatorClosureCommandSeal,
+		preActionSealCurrentGeneration,
+		controlplane.Frontiers(rootstate.State{
+			IDFence:  consumedIDFrontier,
+			TSOFence: consumedTSOFrontier,
+		}, s.currentDescriptorRevision()),
+	)
+}
+
+// ConfirmCoordinatorClosure explicitly records one rooted audit confirmation
+// after a sealed generation has been covered by a successor authority instance.
+func (s *Service) ConfirmCoordinatorClosure() error {
+	return s.confirmCoordinatorClosure(context.Background())
+}
+
+func (s *Service) confirmCoordinatorClosure(ctx context.Context) error {
+	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
+		return nil
+	}
+	if !s.storage.IsLeader() {
+		return nil
+	}
+	return s.applyClosureCommand(ctx, rootproto.CoordinatorClosureCommandConfirm, preActionLifecycleMutation, rootproto.NewCoordinatorDutyFrontiers())
+}
+
+// CloseCoordinatorClosure explicitly records that the current successor
+// generation has been explicitly closed after rooted closure confirmation.
+func (s *Service) CloseCoordinatorClosure() error {
+	return s.closeCoordinatorClosure(context.Background())
+}
+
+func (s *Service) closeCoordinatorClosure(ctx context.Context) error {
+	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
+		return nil
+	}
+	if !s.storage.IsLeader() {
+		return nil
+	}
+	return s.applyClosureCommand(ctx, rootproto.CoordinatorClosureCommandClose, preActionLifecycleMutation, rootproto.NewCoordinatorDutyFrontiers())
+}
+
+// ReattachCoordinatorClosure explicitly records that the current successor
+// generation has been reattached after rooted close has already landed.
+func (s *Service) ReattachCoordinatorClosure() error {
+	return s.reattachCoordinatorClosure(context.Background())
+}
+
+func (s *Service) reattachCoordinatorClosure(ctx context.Context) error {
+	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
+		return nil
+	}
+	if s.ablation.DisableReattach {
+		return nil
+	}
+	if !s.storage.IsLeader() {
+		return nil
+	}
+	return s.applyClosureCommand(ctx, rootproto.CoordinatorClosureCommandReattach, preActionLifecycleMutation, rootproto.NewCoordinatorDutyFrontiers())
+}
+
+func (s *Service) applyClosureCommand(ctx context.Context, kind rootproto.CoordinatorClosureCommandKind, gate preActionKind, frontiers rootproto.CoordinatorDutyFrontiers) error {
+	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
+		return nil
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	nowFn := s.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	nowUnixNano := nowFn().UnixNano()
+
+	s.leaseMu.RLock()
+	holderID := strings.TrimSpace(s.coordinatorID)
+	s.leaseMu.RUnlock()
+	if holderID == "" {
+		return nil
+	}
+	if err := s.preActionGate(gate, 0); err != nil {
+		return err
+	}
+	if _, err := s.storage.ApplyCoordinatorClosure(ctx, rootproto.CoordinatorClosureCommand{
+		Kind:        kind,
+		HolderID:    holderID,
+		NowUnixNano: nowUnixNano,
+		Frontiers:   frontiers,
+	}); err != nil {
+		return err
+	}
+	return s.reloadAndFenceAllocators(true)
+}
+
+func (s *Service) ensureCoordinatorLease(ctx context.Context) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
@@ -916,33 +1431,33 @@ func (s *Service) ensureCoordinatorLease() error {
 	}
 
 	s.allocMu.Lock()
-	idFence := s.currentIDFenceLocked()
-	tsoFence := s.currentTSOFenceLocked()
+	handoffFrontiers := controlplane.Frontiers(rootstate.State{IDFence: s.currentIDFenceLocked(), TSOFence: s.currentTSOFenceLocked()}, s.currentDescriptorRevision())
 	s.allocMu.Unlock()
+	current, seal := s.currentCoordinatorLeaseView()
+	predecessorDigest := rootstate.ResolveCoordinatorLeasePredecessorDigest(current, seal, holderID, nowUnixNano)
 
-	lease, err := s.storage.CampaignCoordinatorLease(holderID, expiresUnixNano, nowUnixNano, idFence, tsoFence)
-	if err != nil {
+	if _, err := s.storage.ApplyCoordinatorLease(ctx, rootproto.CoordinatorLeaseCommand{
+		Kind:              rootproto.CoordinatorLeaseCommandIssue,
+		HolderID:          holderID,
+		ExpiresUnixNano:   expiresUnixNano,
+		NowUnixNano:       nowUnixNano,
+		PredecessorDigest: predecessorDigest,
+		HandoffFrontiers:  handoffFrontiers,
+	}); err != nil {
 		return err
 	}
-	s.leaseMu.Lock()
-	s.lease = lease
-	s.leaseMu.Unlock()
-	s.allocMu.Lock()
-	s.fenceIDFromStorage(lease.IDFence)
-	s.fenceTSOFromStorage(lease.TSOFence)
-	s.allocMu.Unlock()
-	return nil
+	return s.reloadAndFenceAllocators(true)
 }
 
 func (s *Service) coordinatorLeaseStillValid(holderID string, nowUnixNano int64, renewIn, clockSkew time.Duration) bool {
 	if s == nil {
 		return false
 	}
-	s.leaseMu.RLock()
-	current := s.lease
-	s.leaseMu.RUnlock()
-	return current.HolderID == holderID &&
-		current.ExpiresUnixNano > nowUnixNano+renewIn.Nanoseconds() &&
+	current, seal := s.currentCoordinatorLeaseView()
+	if !rootstate.CoordinatorLeaseContinuable(current, seal, holderID, nowUnixNano) {
+		return false
+	}
+	return current.ExpiresUnixNano > nowUnixNano+renewIn.Nanoseconds() &&
 		current.ExpiresUnixNano > nowUnixNano+clockSkew.Nanoseconds()
 }
 
@@ -962,6 +1477,41 @@ func (s *Service) coordinatorLeaseLoopInterval() time.Duration {
 	return interval
 }
 
+func (s *Service) coordinatorLeaseRetryDelay(failures int) time.Duration {
+	if failures <= 0 {
+		return s.jitterDuration(s.coordinatorLeaseLoopInterval(), 20)
+	}
+	delay := defaultCoordinatorLeaseRetryMin
+	for i := 1; i < failures; i++ {
+		if delay >= maxCoordinatorLeaseRetry/2 {
+			delay = maxCoordinatorLeaseRetry
+			break
+		}
+		delay *= 2
+	}
+	if delay > maxCoordinatorLeaseRetry {
+		delay = maxCoordinatorLeaseRetry
+	}
+	return s.jitterDuration(delay, 20)
+}
+
+func (s *Service) jitterDuration(base time.Duration, percent int64) time.Duration {
+	if base <= 0 || percent <= 0 {
+		return base
+	}
+	nowFn := s.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	window := percent*2 + 1
+	offsetPercent := (nowFn().UnixNano() % window) - percent
+	jittered := base + time.Duration(int64(base)*offsetPercent/100)
+	if jittered < 10*time.Millisecond {
+		return 10 * time.Millisecond
+	}
+	return jittered
+}
+
 func (s *Service) coordinatorLeaseEnabled() bool {
 	if s == nil {
 		return false
@@ -977,7 +1527,16 @@ func (s *Service) currentCoordinatorLease() rootstate.CoordinatorLease {
 	}
 	s.leaseMu.RLock()
 	defer s.leaseMu.RUnlock()
-	return s.lease
+	return s.leaseView.Lease()
+}
+
+func (s *Service) currentCoordinatorLeaseView() (rootstate.CoordinatorLease, rootstate.CoordinatorSeal) {
+	if s == nil {
+		return rootstate.CoordinatorLease{}, rootstate.CoordinatorSeal{}
+	}
+	s.leaseMu.RLock()
+	defer s.leaseMu.RUnlock()
+	return s.leaseView.Current()
 }
 
 func (s *Service) leaseCampaignBounds() (nowUnixNano, expiresUnixNano int64, holderID string, renewIn, clockSkew time.Duration) {
@@ -998,7 +1557,7 @@ func translateCoordinatorLeaseError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, rootstate.ErrCoordinatorLeaseHeld) {
+	if errors.Is(err, rootstate.ErrCoordinatorLeaseHeld) || errors.Is(err, rootstate.ErrCoordinatorLeaseCoverage) || errors.Is(err, rootstate.ErrCoordinatorLeaseLineage) {
 		return statusCoordinatorLease(err)
 	}
 	return status.Error(codes.Internal, "campaign coordinator lease: "+err.Error())
@@ -1046,11 +1605,121 @@ func (s *Service) currentClusterEpoch() (uint64, error) {
 	}
 	var maxEpoch uint64
 	if s != nil && s.cluster != nil {
-		for _, region := range s.cluster.RegionSnapshot() {
-			if region.Descriptor.RootEpoch > maxEpoch {
-				maxEpoch = region.Descriptor.RootEpoch
-			}
-		}
+		maxEpoch = s.cluster.MaxDescriptorRevision()
 	}
 	return maxEpoch, nil
+}
+
+func (s *Service) currentDescriptorRevision() uint64 {
+	if s == nil || s.cluster == nil {
+		return 0
+	}
+	return s.cluster.MaxDescriptorRevision()
+}
+
+type preActionKind uint8
+
+const (
+	preActionSealCurrentGeneration preActionKind = iota
+	preActionLifecycleMutation
+	preActionDutyAdmission
+)
+
+func (s *Service) preActionGate(kind preActionKind, dutyMask uint32) error {
+	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
+		return nil
+	}
+	switch kind {
+	case preActionDutyAdmission:
+		return s.preActionGateCached(kind, dutyMask)
+	default:
+		return s.preActionGateStorage(kind, dutyMask)
+	}
+}
+
+func (s *Service) preActionGateCached(kind preActionKind, dutyMask uint32) error {
+	current, seal := s.currentCoordinatorLeaseView()
+	return s.validatePreActionLease(kind, dutyMask, current, seal)
+}
+
+func (s *Service) preActionGateStorage(kind preActionKind, dutyMask uint32) error {
+	current, seal, err := s.currentCoordinatorLeaseViewFromStorage()
+	if err != nil {
+		return status.Error(codes.Internal, "load rooted snapshot: "+err.Error())
+	}
+	return s.validatePreActionLease(kind, dutyMask, current, seal)
+}
+
+func (s *Service) currentCoordinatorLeaseViewFromStorage() (rootstate.CoordinatorLease, rootstate.CoordinatorSeal, error) {
+	if s == nil || s.storage == nil {
+		return rootstate.CoordinatorLease{}, rootstate.CoordinatorSeal{}, nil
+	}
+	snapshot, err := s.storage.Load()
+	if err != nil {
+		return rootstate.CoordinatorLease{}, rootstate.CoordinatorSeal{}, err
+	}
+	s.refreshLeaseMirror(snapshot)
+	return snapshot.CoordinatorLease, snapshot.CoordinatorSeal, nil
+}
+
+func (s *Service) validatePreActionLease(kind preActionKind, dutyMask uint32, current rootstate.CoordinatorLease, seal rootstate.CoordinatorSeal) error {
+	if s == nil {
+		return nil
+	}
+	nowFn := s.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	nowUnixNano := nowFn().UnixNano()
+
+	s.leaseMu.RLock()
+	holderID := strings.TrimSpace(s.coordinatorID)
+	s.leaseMu.RUnlock()
+	if holderID == "" {
+		return nil
+	}
+
+	if current.HolderID == "" {
+		return statusCoordinatorLease(fmt.Errorf("%w: no rooted coordinator lease", rootstate.ErrCoordinatorLeaseHeld))
+	}
+	if current.HolderID != holderID {
+		return statusCoordinatorLease(fmt.Errorf("%w: rooted holder=%s local_holder=%s", rootstate.ErrCoordinatorLeaseOwner, current.HolderID, holderID))
+	}
+	if !current.ActiveAt(nowUnixNano) {
+		return statusCoordinatorLease(fmt.Errorf("%w: rooted lease expired generation=%d", rootstate.ErrInvalidCoordinatorLease, current.CertGeneration))
+	}
+
+	switch kind {
+	case preActionSealCurrentGeneration:
+		if rootstate.CoordinatorGenerationSealed(current, seal) {
+			return statusCoordinatorLease(fmt.Errorf("%w: generation=%d already sealed", rootstate.ErrCoordinatorLeaseHeld, current.CertGeneration))
+		}
+	case preActionLifecycleMutation:
+		if rootstate.CoordinatorGenerationSealed(current, seal) {
+			return statusCoordinatorLease(fmt.Errorf("%w: generation=%d sealed_generation=%d", rootstate.ErrCoordinatorLeaseHeld, current.CertGeneration, seal.CertGeneration))
+		}
+	case preActionDutyAdmission:
+		currentDutyMask := current.DutyMask
+		if dutyMask != 0 && currentDutyMask&dutyMask != dutyMask {
+			return statusCoordinatorLease(fmt.Errorf("%w: required_duty_mask=%d rooted_duty_mask=%d generation=%d", rootstate.ErrCoordinatorLeaseDuty, dutyMask, currentDutyMask, current.CertGeneration))
+		}
+		if rootstate.CoordinatorGenerationSealed(current, seal) {
+			return statusCoordinatorLease(fmt.Errorf("%w: generation=%d sealed_generation=%d", rootstate.ErrCoordinatorLeaseHeld, current.CertGeneration, seal.CertGeneration))
+		}
+	}
+	return nil
+}
+
+func (s *Service) monotoneReplyEvidence(dutyMask uint32, lease rootstate.CoordinatorLease, consumedFrontier uint64) rootproto.ContinuationWitness {
+	if s != nil && s.ablation.DisableReplyEvidence {
+		return rootproto.NewSuppressedContinuationWitness(dutyMask)
+	}
+	return rootproto.NewContinuationWitness(dutyMask, lease.CertGeneration, consumedFrontier)
+}
+
+func (s *Service) metadataReplyGeneration(certGeneration uint64) uint64 {
+	if s != nil && s.ablation.DisableReplyEvidence {
+		return rootproto.ContinuationWitnessGenerationSuppressed
+	}
+	return certGeneration
 }

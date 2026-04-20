@@ -79,7 +79,7 @@ func TestRunCoordinatorCmdStartsAndStopsWithRemoteRoot(t *testing.T) {
 
 	backend, err := rootlocal.Open(t.TempDir(), nil)
 	require.NoError(t, err)
-	_, err = backend.Append(rootevent.RegionBootstrapped(testDescriptor(41, []byte("a"), []byte("z"), metaregion.Epoch{
+	_, err = backend.Append(context.Background(), rootevent.RegionBootstrapped(testDescriptor(41, []byte("a"), []byte("z"), metaregion.Epoch{
 		Version:     1,
 		ConfVersion: 1,
 	})))
@@ -228,11 +228,11 @@ func TestRestoreCoordinatorRegionsFromLocalSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	store, err := pdstorage.OpenRootLocalStore(dir)
 	require.NoError(t, err)
-	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(testDescriptor(10, []byte("a"), []byte("m"), metaregion.Epoch{
+	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.RegionBootstrapped(testDescriptor(10, []byte("a"), []byte("m"), metaregion.Epoch{
 		Version:     1,
 		ConfVersion: 1,
 	}))))
-	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(testDescriptor(20, []byte("m"), nil, metaregion.Epoch{
+	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.RegionBootstrapped(testDescriptor(20, []byte("m"), nil, metaregion.Epoch{
 		Version:     1,
 		ConfVersion: 1,
 	}))))
@@ -265,8 +265,8 @@ func TestRunCoordinatorCmdReloadsPersistedRegionCatalog(t *testing.T) {
 	dir := t.TempDir()
 	store, err := pdstorage.OpenRootLocalStore(dir)
 	require.NoError(t, err)
-	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(testDescriptor(31, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}))))
-	require.NoError(t, store.AppendRootEvent(rootevent.RegionBootstrapped(testDescriptor(32, []byte("m"), nil, metaregion.Epoch{Version: 3, ConfVersion: 2}))))
+	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.RegionBootstrapped(testDescriptor(31, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}))))
+	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.RegionBootstrapped(testDescriptor(32, []byte("m"), nil, metaregion.Epoch{Version: 3, ConfVersion: 2}))))
 	require.NoError(t, store.Close())
 
 	var buf bytes.Buffer
@@ -316,7 +316,7 @@ func TestPDRootStoreSaveAndLoadAllocatorState(t *testing.T) {
 	require.Equal(t, uint64(0), snapshot.Allocator.IDCurrent)
 	require.Equal(t, uint64(0), snapshot.Allocator.TSCurrent)
 
-	require.NoError(t, store.SaveAllocatorState(123, 456))
+	require.NoError(t, store.SaveAllocatorState(context.Background(), 123, 456))
 	snapshot, err = store.Load()
 	require.NoError(t, err)
 	require.Equal(t, uint64(123), snapshot.Allocator.IDCurrent)

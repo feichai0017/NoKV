@@ -209,6 +209,15 @@ func (c *Cluster) RegionSnapshot() []pdview.RegionInfo {
 	return c.regions.Snapshot()
 }
 
+// MaxDescriptorRevision returns the highest rooted descriptor publication epoch
+// currently reflected in the in-memory region directory.
+func (c *Cluster) MaxDescriptorRevision() uint64 {
+	if c == nil {
+		return 0
+	}
+	return rootstate.MaxDescriptorRevision(c.regions.DescriptorsSnapshot())
+}
+
 // ReplaceRegionSnapshot replaces the region directory view from one rooted
 // snapshot while preserving store-health runtime observations.
 func (c *Cluster) ReplaceRegionSnapshot(descriptors map[uint64]descriptor.Descriptor) {
@@ -281,6 +290,29 @@ func (c *Cluster) GetRegionDescriptorByKey(key []byte) (descriptor.Descriptor, b
 		return descriptor.Descriptor{}, false
 	}
 	return desc, true
+}
+
+// PendingRangeChangeForDescriptor reports whether the served descriptor is only
+// visible because a rooted split/merge is still in its planned state.
+func (c *Cluster) PendingRangeChangeForDescriptor(regionID uint64) (rootstate.PendingRangeChange, bool) {
+	if c == nil || regionID == 0 {
+		return rootstate.PendingRangeChange{}, false
+	}
+	c.pendingMu.RLock()
+	defer c.pendingMu.RUnlock()
+	for _, change := range c.pendingRangeChanges {
+		switch change.Kind {
+		case rootstate.PendingRangeChangeSplit:
+			if change.LeftRegionID == regionID || change.RightRegionID == regionID {
+				return change, true
+			}
+		case rootstate.PendingRangeChangeMerge:
+			if change.Merged.RegionID == regionID {
+				return change, true
+			}
+		}
+	}
+	return rootstate.PendingRangeChange{}, false
 }
 
 // RegionLastHeartbeat returns the latest heartbeat timestamp for regionID.

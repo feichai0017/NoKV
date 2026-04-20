@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -19,8 +20,8 @@ import (
 // Backend is the metadata-root authority surface exported over gRPC.
 type Backend interface {
 	Snapshot() (rootstate.Snapshot, error)
-	Append(events ...rootevent.Event) (rootstate.CommitInfo, error)
-	FenceAllocator(kind rootstate.AllocatorKind, min uint64) (uint64, error)
+	Append(ctx context.Context, events ...rootevent.Event) (rootstate.CommitInfo, error)
+	FenceAllocator(ctx context.Context, kind rootstate.AllocatorKind, min uint64) (uint64, error)
 }
 
 type leaderBackend interface {
@@ -38,8 +39,8 @@ type tailBackend interface {
 }
 
 type leaseBackend interface {
-	CampaignCoordinatorLease(holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error)
-	ReleaseCoordinatorLease(holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error)
+	ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
+	ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
 }
 
 // Service exposes one metadata-root backend through the MetadataRoot RPC API.
@@ -70,7 +71,7 @@ func (s *Service) Snapshot(context.Context, *metapb.MetadataRootSnapshotRequest)
 	return &metapb.MetadataRootSnapshotResponse{Checkpoint: metawire.RootSnapshotToProto(snapshot, 0)}, nil
 }
 
-func (s *Service) Append(_ context.Context, req *metapb.MetadataRootAppendRequest) (*metapb.MetadataRootAppendResponse, error) {
+func (s *Service) Append(ctx context.Context, req *metapb.MetadataRootAppendRequest) (*metapb.MetadataRootAppendResponse, error) {
 	if s == nil || s.backend == nil {
 		return &metapb.MetadataRootAppendResponse{}, nil
 	}
@@ -85,7 +86,7 @@ func (s *Service) Append(_ context.Context, req *metapb.MetadataRootAppendReques
 		}
 		events = append(events, event)
 	}
-	commit, err := s.backend.Append(events...)
+	commit, err := s.backend.Append(ctx, events...)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -95,7 +96,7 @@ func (s *Service) Append(_ context.Context, req *metapb.MetadataRootAppendReques
 	}, nil
 }
 
-func (s *Service) FenceAllocator(_ context.Context, req *metapb.MetadataRootFenceAllocatorRequest) (*metapb.MetadataRootFenceAllocatorResponse, error) {
+func (s *Service) FenceAllocator(ctx context.Context, req *metapb.MetadataRootFenceAllocatorRequest) (*metapb.MetadataRootFenceAllocatorResponse, error) {
 	if s == nil || s.backend == nil {
 		return &metapb.MetadataRootFenceAllocatorResponse{}, nil
 	}
@@ -106,7 +107,7 @@ func (s *Service) FenceAllocator(_ context.Context, req *metapb.MetadataRootFenc
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	current, err := s.backend.FenceAllocator(kind, req.GetMinimum())
+	current, err := s.backend.FenceAllocator(ctx, kind, req.GetMinimum())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -123,60 +124,47 @@ func (s *Service) Status(context.Context, *metapb.MetadataRootStatusRequest) (*m
 	return &metapb.MetadataRootStatusResponse{IsLeader: true}, nil
 }
 
-func (s *Service) Campaign(_ context.Context, req *metapb.MetadataRootCampaignRequest) (*metapb.MetadataRootCampaignResponse, error) {
+func (s *Service) ApplyCoordinatorLease(ctx context.Context, req *metapb.MetadataRootApplyCoordinatorLeaseRequest) (*metapb.MetadataRootApplyCoordinatorLeaseResponse, error) {
 	if s == nil || s.backend == nil {
-		return &metapb.MetadataRootCampaignResponse{}, nil
+		return &metapb.MetadataRootApplyCoordinatorLeaseResponse{}, nil
 	}
-	if err := s.requireLeader(); err != nil {
+	backend, err := s.coordinatorProtocolBackend()
+	if err != nil {
 		return nil, err
 	}
-	campaigner, ok := s.backend.(leaseBackend)
-	if !ok {
-		return nil, status.Error(codes.Unimplemented, "metadata root coordinator lease campaign is not supported")
-	}
-	lease, err := campaigner.CampaignCoordinatorLease(
-		req.GetHolderId(),
-		req.GetExpiresUnixNano(),
-		req.GetNowUnixNano(),
-		req.GetIdFence(),
-		req.GetTsoFence(),
-	)
+	cmd := metawire.RootCoordinatorLeaseCommandFromProto(req.GetCommand())
+	protocolState, err := backend.ApplyCoordinatorLease(ctx, cmd)
 	if err != nil {
 		if errors.Is(err, rootstate.ErrCoordinatorLeaseHeld) {
-			return &metapb.MetadataRootCampaignResponse{Granted: false, Lease: metawire.RootCoordinatorLeaseToProto(lease)}, nil
+			return &metapb.MetadataRootApplyCoordinatorLeaseResponse{
+				State:  metawire.RootCoordinatorProtocolStateToProto(protocolState),
+				Status: metapb.RootCoordinatorLeaseApplyStatus_ROOT_COORDINATOR_LEASE_APPLY_STATUS_HELD,
+			}, nil
 		}
-		if errors.Is(err, rootstate.ErrInvalidCoordinatorLease) {
-			return nil, status.Error(codes.InvalidArgument, err.Error())
-		}
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, coordinatorLeaseApplyRPCError(cmd.Kind, err)
 	}
-	return &metapb.MetadataRootCampaignResponse{Granted: true, Lease: metawire.RootCoordinatorLeaseToProto(lease)}, nil
+	return &metapb.MetadataRootApplyCoordinatorLeaseResponse{
+		State:  metawire.RootCoordinatorProtocolStateToProto(protocolState),
+		Status: metapb.RootCoordinatorLeaseApplyStatus_ROOT_COORDINATOR_LEASE_APPLY_STATUS_GRANTED,
+	}, nil
 }
 
-func (s *Service) Release(_ context.Context, req *metapb.MetadataRootReleaseRequest) (*metapb.MetadataRootReleaseResponse, error) {
+func (s *Service) ApplyCoordinatorClosure(ctx context.Context, req *metapb.MetadataRootApplyCoordinatorClosureRequest) (*metapb.MetadataRootApplyCoordinatorClosureResponse, error) {
 	if s == nil || s.backend == nil {
-		return &metapb.MetadataRootReleaseResponse{}, nil
+		return &metapb.MetadataRootApplyCoordinatorClosureResponse{}, nil
 	}
-	if err := s.requireLeader(); err != nil {
+	backend, err := s.coordinatorProtocolBackend()
+	if err != nil {
 		return nil, err
 	}
-	releaser, ok := s.backend.(leaseBackend)
-	if !ok {
-		return nil, status.Error(codes.Unimplemented, "metadata root coordinator lease release is not supported")
-	}
-	lease, err := releaser.ReleaseCoordinatorLease(
-		req.GetHolderId(),
-		req.GetNowUnixNano(),
-		req.GetIdFence(),
-		req.GetTsoFence(),
-	)
+	cmd := metawire.RootCoordinatorClosureCommandFromProto(req.GetCommand())
+	protocolState, err := backend.ApplyCoordinatorClosure(ctx, cmd)
 	if err != nil {
-		if errors.Is(err, rootstate.ErrCoordinatorLeaseOwner) || errors.Is(err, rootstate.ErrInvalidCoordinatorLease) {
-			return nil, status.Error(codes.FailedPrecondition, err.Error())
-		}
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, coordinatorClosureApplyRPCError(cmd.Kind, err)
 	}
-	return &metapb.MetadataRootReleaseResponse{Lease: metawire.RootCoordinatorLeaseToProto(lease)}, nil
+	return &metapb.MetadataRootApplyCoordinatorClosureResponse{
+		State: metawire.RootCoordinatorProtocolStateToProto(protocolState),
+	}, nil
 }
 
 func (s *Service) ObserveCommitted(context.Context, *metapb.MetadataRootObserveCommittedRequest) (*metapb.MetadataRootObserveCommittedResponse, error) {
@@ -293,4 +281,62 @@ func allocatorKindFromProto(kind metapb.RootAllocatorKind) (rootstate.AllocatorK
 	default:
 		return rootstate.AllocatorKindUnknown, fmt.Errorf("metadata root allocator kind is required")
 	}
+}
+
+func (s *Service) coordinatorProtocolBackend() (leaseBackend, error) {
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
+	backend, ok := s.backend.(leaseBackend)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "metadata root coordinator protocol is not supported")
+	}
+	return backend, nil
+}
+
+func coordinatorLeaseApplyRPCError(kind rootproto.CoordinatorLeaseCommandKind, err error) error {
+	switch kind {
+	case rootproto.CoordinatorLeaseCommandIssue:
+		switch {
+		case errors.Is(err, rootstate.ErrInvalidCoordinatorLease):
+			return status.Error(codes.InvalidArgument, err.Error())
+		case errors.Is(err, rootstate.ErrCoordinatorLeaseCoverage),
+			errors.Is(err, rootstate.ErrCoordinatorLeaseLineage):
+			return status.Error(codes.FailedPrecondition, err.Error())
+		}
+	case rootproto.CoordinatorLeaseCommandRelease:
+		switch {
+		case errors.Is(err, rootstate.ErrCoordinatorLeaseOwner),
+			errors.Is(err, rootstate.ErrInvalidCoordinatorLease):
+			return status.Error(codes.FailedPrecondition, err.Error())
+		}
+	}
+	return status.Error(codes.Internal, err.Error())
+}
+
+func coordinatorClosureApplyRPCError(kind rootproto.CoordinatorClosureCommandKind, err error) error {
+	if errors.Is(err, rootstate.ErrInvalidCoordinatorLease) || errors.Is(err, rootstate.ErrCoordinatorLeaseAudit) {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	switch kind {
+	case rootproto.CoordinatorClosureCommandSeal:
+		if errors.Is(err, rootstate.ErrCoordinatorLeaseOwner) {
+			return status.Error(codes.FailedPrecondition, err.Error())
+		}
+	case rootproto.CoordinatorClosureCommandConfirm:
+		if errors.Is(err, rootstate.ErrCoordinatorLeaseOwner) {
+			return status.Error(codes.FailedPrecondition, err.Error())
+		}
+	case rootproto.CoordinatorClosureCommandClose:
+		if errors.Is(err, rootstate.ErrCoordinatorLeaseOwner) ||
+			errors.Is(err, rootstate.ErrCoordinatorLeaseClose) {
+			return status.Error(codes.FailedPrecondition, err.Error())
+		}
+	case rootproto.CoordinatorClosureCommandReattach:
+		if errors.Is(err, rootstate.ErrCoordinatorLeaseOwner) ||
+			errors.Is(err, rootstate.ErrCoordinatorLeaseReattach) {
+			return status.Error(codes.FailedPrecondition, err.Error())
+		}
+	}
+	return status.Error(codes.Internal, err.Error())
 }

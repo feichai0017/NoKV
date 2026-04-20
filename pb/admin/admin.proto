@@ -133,6 +133,7 @@ enum ExecutionPublishState {
   EXECUTION_PUBLISH_STATE_TERMINAL_PENDING = 3;
   EXECUTION_PUBLISH_STATE_TERMINAL_PUBLISHED = 4;
   EXECUTION_PUBLISH_STATE_TERMINAL_FAILED = 5;
+  EXECUTION_PUBLISH_STATE_TERMINAL_BLOCKED = 6;
 }
 
 message ExecutionTopologyStatus {
@@ -156,6 +157,9 @@ message ExecutionRestartStatus {
   uint64 region_count = 2;
   uint64 raft_group_count = 3;
   repeated uint64 missing_raft_pointer = 4;
+  uint64 pending_root_event_count = 5;
+  uint64 blocked_root_event_count = 6;
+  uint64 pending_scheduler_operation_count = 7;
 }
 
 message ExecutionStatusResponse {

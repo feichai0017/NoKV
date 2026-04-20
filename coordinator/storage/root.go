@@ -1,8 +1,12 @@
 package storage
 
 import (
+	"context"
+	"errors"
+	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -10,20 +14,126 @@ import (
 	"time"
 )
 
+var (
+	errCoordinatorLeaseCommandUnsupported   = errors.New("coordinator/storage: coordinator lease command unsupported")
+	errCoordinatorClosureCommandUnsupported = errors.New("coordinator/storage: coordinator closure command unsupported")
+)
+
+// RootStorage persists control-plane mutations into durable metadata truth and
+// exposes the reconstructed rooted snapshot back to Coordinator.
+type RootStorage interface {
+	Load() (Snapshot, error)
+	AppendRootEvent(ctx context.Context, event rootevent.Event) error
+	SaveAllocatorState(ctx context.Context, idCurrent, tsCurrent uint64) error
+	ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
+	ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
+	Refresh() error
+	IsLeader() bool
+	LeaderID() uint64
+	Close() error
+}
+
+type rootBackend interface {
+	Snapshot() (rootstate.Snapshot, error)
+	Append(ctx context.Context, events ...rootevent.Event) (rootstate.CommitInfo, error)
+	FenceAllocator(ctx context.Context, kind rootstate.AllocatorKind, min uint64) (uint64, error)
+}
+
+type rootOptionalBackend interface {
+	rootBackend
+	Refresh() error
+	WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
+	ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
+	TailNotify() <-chan struct{}
+	ObserveCommitted() (rootstorage.ObservedCommitted, error)
+	IsLeader() bool
+	LeaderID() uint64
+	ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
+	ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
+}
+
+// OpenRootStore opens a Coordinator storage backend backed by the metadata root.
+func OpenRootStore(root rootBackend) (*RootStore, error) {
+	store := &RootStore{root: root}
+	if optional, ok := root.(rootOptionalBackend); ok {
+		store.refresh = optional.Refresh
+		store.waitForTail = optional.WaitForTail
+		store.observeTail = optional.ObserveTail
+		store.tailNotify = optional.TailNotify
+		store.observeCommitted = optional.ObserveCommitted
+		store.isLeader = optional.IsLeader
+		store.leaderID = optional.LeaderID
+		store.applyCoordinatorLease = optional.ApplyCoordinatorLease
+		store.applyCoordinatorClosure = optional.ApplyCoordinatorClosure
+	} else {
+		if refresher, ok := root.(interface{ Refresh() error }); ok {
+			store.refresh = refresher.Refresh
+		}
+		if waiter, ok := root.(interface {
+			WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
+		}); ok {
+			store.waitForTail = waiter.WaitForTail
+		}
+		if observer, ok := root.(interface {
+			ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
+		}); ok {
+			store.observeTail = observer.ObserveTail
+		}
+		if notifier, ok := root.(interface{ TailNotify() <-chan struct{} }); ok {
+			store.tailNotify = notifier.TailNotify
+		}
+		if observer, ok := root.(interface {
+			ObserveCommitted() (rootstorage.ObservedCommitted, error)
+		}); ok {
+			store.observeCommitted = observer.ObserveCommitted
+		}
+		if leader, ok := root.(interface {
+			IsLeader() bool
+			LeaderID() uint64
+		}); ok {
+			store.isLeader = leader.IsLeader
+			store.leaderID = leader.LeaderID
+		}
+		if leaseApplier, ok := root.(interface {
+			ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
+		}); ok {
+			store.applyCoordinatorLease = leaseApplier.ApplyCoordinatorLease
+		}
+		if closureApplier, ok := root.(interface {
+			ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
+		}); ok {
+			store.applyCoordinatorClosure = closureApplier.ApplyCoordinatorClosure
+		}
+	}
+	if err := store.reload(); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+// OpenRootLocalStore opens a Coordinator storage backend backed by the local metadata
+// root files in workdir.
+func OpenRootLocalStore(workdir string) (*RootStore, error) {
+	root, err := rootlocal.Open(workdir, nil)
+	if err != nil {
+		return nil, err
+	}
+	return OpenRootStore(root)
+}
+
 // RootStore persists Coordinator truth on top of the metadata root and reconstructs the
 // region catalog by replaying committed root events.
 type RootStore struct {
-	root                     rootBackend
-	refresh                  func() error
-	observeTail              func(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
-	waitForTail              func(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
-	tailNotify               func() <-chan struct{}
-	observe                  func() (rootstorage.ObservedCommitted, error)
-	isLeader                 func() bool
-	leaderID                 func() uint64
-	campaign                 func() error
-	campaignCoordinatorLease func(holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error)
-	releaseCoordinatorLease  func(holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error)
+	root                    rootBackend
+	refresh                 func() error
+	observeTail             func(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
+	waitForTail             func(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
+	tailNotify              func() <-chan struct{}
+	observeCommitted        func() (rootstorage.ObservedCommitted, error)
+	isLeader                func() bool
+	leaderID                func() uint64
+	applyCoordinatorLease   func(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
+	applyCoordinatorClosure func(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
 
 	mu       sync.RWMutex
 	snapshot Snapshot
@@ -44,12 +154,7 @@ func (s *RootStore) Refresh() error {
 	if s == nil {
 		return nil
 	}
-	if s.refresh != nil {
-		if err := s.refresh(); err != nil {
-			return err
-		}
-	}
-	return s.reload()
+	return s.runAndReload(s.refresh)
 }
 
 func (s *RootStore) WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error) {
@@ -126,64 +231,55 @@ func (s *RootStore) LeaderID() uint64 {
 	return 0
 }
 
-func (s *RootStore) Campaign() error {
-	if s == nil || s.root == nil || s.campaign == nil {
-		return nil
-	}
-	return s.campaign()
-}
-
 // AppendRootEvent persists one explicit rooted metadata event.
-func (s *RootStore) AppendRootEvent(event rootevent.Event) error {
+func (s *RootStore) AppendRootEvent(ctx context.Context, event rootevent.Event) error {
 	if s == nil || s.root == nil || event.Kind == rootevent.KindUnknown {
 		return nil
 	}
-	if _, err := s.root.Append(event); err != nil {
+	return s.runAndReload(func() error {
+		_, err := s.root.Append(ctx, event)
 		return err
-	}
-	return s.reload()
+	})
 }
 
 // SaveAllocatorState raises allocator fences in the metadata root.
-func (s *RootStore) SaveAllocatorState(idCurrent, tsCurrent uint64) error {
+func (s *RootStore) SaveAllocatorState(ctx context.Context, idCurrent, tsCurrent uint64) error {
 	if s == nil {
 		return nil
 	}
-	if _, err := s.root.FenceAllocator(rootstate.AllocatorKindID, idCurrent); err != nil {
-		return err
-	}
-	if _, err := s.root.FenceAllocator(rootstate.AllocatorKindTSO, tsCurrent); err != nil {
-		return err
-	}
-	return s.reload()
+	return s.runAndReload(func() error {
+		if _, err := s.root.FenceAllocator(ctx, rootstate.AllocatorKindID, idCurrent); err != nil {
+			return err
+		}
+		if _, err := s.root.FenceAllocator(ctx, rootstate.AllocatorKindTSO, tsCurrent); err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
-func (s *RootStore) CampaignCoordinatorLease(holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
+func (s *RootStore) ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
 	if s == nil || s.root == nil {
-		return rootstate.CoordinatorLease{}, nil
+		return rootstate.CoordinatorProtocolState{}, nil
 	}
-	if s.campaignCoordinatorLease == nil {
-		return rootstate.CoordinatorLease{}, errCoordinatorLeaseUnsupported
+	if s.applyCoordinatorLease == nil {
+		return rootstate.CoordinatorProtocolState{}, errCoordinatorLeaseCommandUnsupported
 	}
-	lease, err := s.campaignCoordinatorLease(holderID, expiresUnixNano, nowUnixNano, idFence, tsoFence)
-	if err != nil {
-		return lease, err
-	}
-	return lease, s.reload()
+	return s.applyAndReload(func() (rootstate.CoordinatorProtocolState, error) {
+		return s.applyCoordinatorLease(ctx, cmd)
+	})
 }
 
-func (s *RootStore) ReleaseCoordinatorLease(holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
+func (s *RootStore) ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
 	if s == nil || s.root == nil {
-		return rootstate.CoordinatorLease{}, nil
+		return rootstate.CoordinatorProtocolState{}, nil
 	}
-	if s.releaseCoordinatorLease == nil {
-		return rootstate.CoordinatorLease{}, errCoordinatorLeaseReleaseUnsupported
+	if s.applyCoordinatorClosure == nil {
+		return rootstate.CoordinatorProtocolState{}, errCoordinatorClosureCommandUnsupported
 	}
-	lease, err := s.releaseCoordinatorLease(holderID, nowUnixNano, idFence, tsoFence)
-	if err != nil {
-		return lease, err
-	}
-	return lease, s.reload()
+	return s.applyAndReload(func() (rootstate.CoordinatorProtocolState, error) {
+		return s.applyCoordinatorClosure(ctx, cmd)
+	})
 }
 
 // Close releases storage resources.
@@ -201,8 +297,8 @@ func (s *RootStore) reload() error {
 	if s == nil || s.root == nil {
 		return nil
 	}
-	if s.observe != nil {
-		observed, err := s.observe()
+	if s.observeCommitted != nil {
+		observed, err := s.observeCommitted()
 		if err != nil {
 			return err
 		}
@@ -219,6 +315,32 @@ func (s *RootStore) reload() error {
 	s.snapshot = out
 	s.mu.Unlock()
 	return nil
+}
+
+func (s *RootStore) runAndReload(run func() error) error {
+	if s == nil {
+		return nil
+	}
+	if run != nil {
+		if err := run(); err != nil {
+			return err
+		}
+	}
+	return s.reload()
+}
+
+func (s *RootStore) applyAndReload(run func() (rootstate.CoordinatorProtocolState, error)) (rootstate.CoordinatorProtocolState, error) {
+	if s == nil {
+		return rootstate.CoordinatorProtocolState{}, nil
+	}
+	if run == nil {
+		return rootstate.CoordinatorProtocolState{}, nil
+	}
+	protocolState, err := run()
+	if err != nil {
+		return protocolState, err
+	}
+	return protocolState, s.reload()
 }
 
 func (s *RootStore) replaceObserved(observed rootstorage.ObservedCommitted, token rootstorage.TailToken) {

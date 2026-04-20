@@ -1,6 +1,7 @@
 package replicated
 
 import (
+	"context"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"sync"
@@ -83,13 +84,13 @@ func (a *virtualLogAdapter) installBootstrap(observed rootstorage.ObservedCommit
 	return nil
 }
 
-func (a *virtualLogAdapter) appendCommitted(records []rootstorage.CommittedEvent) error {
+func (a *virtualLogAdapter) appendCommitted(ctx context.Context, records []rootstorage.CommittedEvent) error {
 	if a == nil || len(records) == 0 {
 		return nil
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if _, err := a.log.AppendCommitted(records...); err != nil {
+	if _, err := a.log.AppendCommitted(ctx, records...); err != nil {
 		return err
 	}
 	a.bump(records[len(records)-1].Cursor)

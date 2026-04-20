@@ -509,15 +509,129 @@ func (CatchUpState) EnumDescriptor() ([]byte, []int) {
 	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{8}
 }
 
+type ServingClass int32
+
+const (
+	ServingClass_SERVING_CLASS_UNSPECIFIED ServingClass = 0
+	// Authoritative means the response was served from the current rooted view on
+	// the rooted write leader.
+	ServingClass_SERVING_CLASS_AUTHORITATIVE ServingClass = 1
+	// BoundedStale means the response was served within an explicitly bounded
+	// rooted lag / descriptor frontier.
+	ServingClass_SERVING_CLASS_BOUNDED_STALE ServingClass = 2
+	// Degraded means rooted truth could not currently support a stronger serving
+	// contract and the reply is operating under degraded constraints.
+	ServingClass_SERVING_CLASS_DEGRADED ServingClass = 3
+)
+
+// Enum value maps for ServingClass.
+var (
+	ServingClass_name = map[int32]string{
+		0: "SERVING_CLASS_UNSPECIFIED",
+		1: "SERVING_CLASS_AUTHORITATIVE",
+		2: "SERVING_CLASS_BOUNDED_STALE",
+		3: "SERVING_CLASS_DEGRADED",
+	}
+	ServingClass_value = map[string]int32{
+		"SERVING_CLASS_UNSPECIFIED":   0,
+		"SERVING_CLASS_AUTHORITATIVE": 1,
+		"SERVING_CLASS_BOUNDED_STALE": 2,
+		"SERVING_CLASS_DEGRADED":      3,
+	}
+)
+
+func (x ServingClass) Enum() *ServingClass {
+	p := new(ServingClass)
+	*p = x
+	return p
+}
+
+func (x ServingClass) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ServingClass) Descriptor() protoreflect.EnumDescriptor {
+	return file_coordinator_coordinator_proto_enumTypes[9].Descriptor()
+}
+
+func (ServingClass) Type() protoreflect.EnumType {
+	return &file_coordinator_coordinator_proto_enumTypes[9]
+}
+
+func (x ServingClass) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ServingClass.Descriptor instead.
+func (ServingClass) EnumDescriptor() ([]byte, []int) {
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{9}
+}
+
+type SyncHealth int32
+
+const (
+	SyncHealth_SYNC_HEALTH_UNSPECIFIED        SyncHealth = 0
+	SyncHealth_SYNC_HEALTH_HEALTHY            SyncHealth = 1
+	SyncHealth_SYNC_HEALTH_LAGGING            SyncHealth = 2
+	SyncHealth_SYNC_HEALTH_BOOTSTRAP_REQUIRED SyncHealth = 3
+	SyncHealth_SYNC_HEALTH_ROOT_UNAVAILABLE   SyncHealth = 4
+)
+
+// Enum value maps for SyncHealth.
+var (
+	SyncHealth_name = map[int32]string{
+		0: "SYNC_HEALTH_UNSPECIFIED",
+		1: "SYNC_HEALTH_HEALTHY",
+		2: "SYNC_HEALTH_LAGGING",
+		3: "SYNC_HEALTH_BOOTSTRAP_REQUIRED",
+		4: "SYNC_HEALTH_ROOT_UNAVAILABLE",
+	}
+	SyncHealth_value = map[string]int32{
+		"SYNC_HEALTH_UNSPECIFIED":        0,
+		"SYNC_HEALTH_HEALTHY":            1,
+		"SYNC_HEALTH_LAGGING":            2,
+		"SYNC_HEALTH_BOOTSTRAP_REQUIRED": 3,
+		"SYNC_HEALTH_ROOT_UNAVAILABLE":   4,
+	}
+)
+
+func (x SyncHealth) Enum() *SyncHealth {
+	p := new(SyncHealth)
+	*p = x
+	return p
+}
+
+func (x SyncHealth) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SyncHealth) Descriptor() protoreflect.EnumDescriptor {
+	return file_coordinator_coordinator_proto_enumTypes[10].Descriptor()
+}
+
+func (SyncHealth) Type() protoreflect.EnumType {
+	return &file_coordinator_coordinator_proto_enumTypes[10]
+}
+
+func (x SyncHealth) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SyncHealth.Descriptor instead.
+func (SyncHealth) EnumDescriptor() ([]byte, []int) {
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{10}
+}
+
 type StoreHeartbeatRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	StoreId       uint64                 `protobuf:"varint,1,opt,name=store_id,json=storeId,proto3" json:"store_id,omitempty"`
-	RegionNum     uint64                 `protobuf:"varint,2,opt,name=region_num,json=regionNum,proto3" json:"region_num,omitempty"`
-	LeaderNum     uint64                 `protobuf:"varint,3,opt,name=leader_num,json=leaderNum,proto3" json:"leader_num,omitempty"`
-	Capacity      uint64                 `protobuf:"varint,4,opt,name=capacity,proto3" json:"capacity,omitempty"`
-	Available     uint64                 `protobuf:"varint,5,opt,name=available,proto3" json:"available,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	StoreId           uint64                 `protobuf:"varint,1,opt,name=store_id,json=storeId,proto3" json:"store_id,omitempty"`
+	RegionNum         uint64                 `protobuf:"varint,2,opt,name=region_num,json=regionNum,proto3" json:"region_num,omitempty"`
+	LeaderNum         uint64                 `protobuf:"varint,3,opt,name=leader_num,json=leaderNum,proto3" json:"leader_num,omitempty"`
+	Capacity          uint64                 `protobuf:"varint,4,opt,name=capacity,proto3" json:"capacity,omitempty"`
+	Available         uint64                 `protobuf:"varint,5,opt,name=available,proto3" json:"available,omitempty"`
+	DroppedOperations uint64                 `protobuf:"varint,6,opt,name=dropped_operations,json=droppedOperations,proto3" json:"dropped_operations,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *StoreHeartbeatRequest) Reset() {
@@ -581,6 +695,13 @@ func (x *StoreHeartbeatRequest) GetCapacity() uint64 {
 func (x *StoreHeartbeatRequest) GetAvailable() uint64 {
 	if x != nil {
 		return x.Available
+	}
+	return 0
+}
+
+func (x *StoreHeartbeatRequest) GetDroppedOperations() uint64 {
+	if x != nil {
+		return x.DroppedOperations
 	}
 	return 0
 }
@@ -1436,9 +1557,13 @@ type GetRegionByKeyRequest struct {
 	// required_root_token optionally requires the result to include at least this rooted truth.
 	RequiredRootToken *RootToken `protobuf:"bytes,3,opt,name=required_root_token,json=requiredRootToken,proto3" json:"required_root_token,omitempty"`
 	// max_root_lag bounds the allowed rooted revision gap for bounded reads.
-	MaxRootLag    *uint64 `protobuf:"varint,4,opt,name=max_root_lag,json=maxRootLag,proto3,oneof" json:"max_root_lag,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	MaxRootLag *uint64 `protobuf:"varint,4,opt,name=max_root_lag,json=maxRootLag,proto3,oneof" json:"max_root_lag,omitempty"`
+	// required_descriptor_revision requires the returned descriptor to
+	// incorporate at least this rooted descriptor publication epoch.
+	// 0 means unspecified.
+	RequiredDescriptorRevision uint64 `protobuf:"varint,5,opt,name=required_descriptor_revision,json=requiredDescriptorRevision,proto3" json:"required_descriptor_revision,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
 }
 
 func (x *GetRegionByKeyRequest) Reset() {
@@ -1499,6 +1624,13 @@ func (x *GetRegionByKeyRequest) GetMaxRootLag() uint64 {
 	return 0
 }
 
+func (x *GetRegionByKeyRequest) GetRequiredDescriptorRevision() uint64 {
+	if x != nil {
+		return x.RequiredDescriptorRevision
+	}
+	return 0
+}
+
 type GetRegionByKeyResponse struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	RegionDescriptor *meta.RegionDescriptor `protobuf:"bytes,1,opt,name=region_descriptor,json=regionDescriptor,proto3" json:"region_descriptor,omitempty"`
@@ -1516,7 +1648,23 @@ type GetRegionByKeyResponse struct {
 	// root_lag is the revision distance between current_root_token and served_root_token.
 	RootLag uint64 `protobuf:"varint,8,opt,name=root_lag,json=rootLag,proto3" json:"root_lag,omitempty"`
 	// catch_up_state reports the node's current rooted catch-up state.
-	CatchUpState  CatchUpState `protobuf:"varint,9,opt,name=catch_up_state,json=catchUpState,proto3,enum=nokv.coordinator.v1.CatchUpState" json:"catch_up_state,omitempty"`
+	CatchUpState CatchUpState `protobuf:"varint,9,opt,name=catch_up_state,json=catchUpState,proto3,enum=nokv.coordinator.v1.CatchUpState" json:"catch_up_state,omitempty"`
+	// descriptor_revision is the rooted descriptor publication epoch of the
+	// returned region descriptor. 0 means the reply did not carry one.
+	DescriptorRevision uint64 `protobuf:"varint,10,opt,name=descriptor_revision,json=descriptorRevision,proto3" json:"descriptor_revision,omitempty"`
+	// required_descriptor_revision echoes the minimum descriptor revision the
+	// caller required for this answer. 0 means unspecified.
+	RequiredDescriptorRevision uint64 `protobuf:"varint,11,opt,name=required_descriptor_revision,json=requiredDescriptorRevision,proto3" json:"required_descriptor_revision,omitempty"`
+	// cert_generation identifies the detached/rooted authority instance that
+	// served this reply when coordinator lease evidence is available.
+	CertGeneration uint64 `protobuf:"varint,12,opt,name=cert_generation,json=certGeneration,proto3" json:"cert_generation,omitempty"`
+	// observed_seal_generation carries the latest rooted sealed generation
+	// observed by the serving coordinator when it constructed this reply.
+	ObservedSealGeneration uint64 `protobuf:"varint,15,opt,name=observed_seal_generation,json=observedSealGeneration,proto3" json:"observed_seal_generation,omitempty"`
+	// serving_class reports the client-visible serving contract used for this reply.
+	ServingClass ServingClass `protobuf:"varint,13,opt,name=serving_class,json=servingClass,proto3,enum=nokv.coordinator.v1.ServingClass" json:"serving_class,omitempty"`
+	// sync_health reports the rooted catch-up health that justified this reply.
+	SyncHealth    SyncHealth `protobuf:"varint,14,opt,name=sync_health,json=syncHealth,proto3,enum=nokv.coordinator.v1.SyncHealth" json:"sync_health,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1614,6 +1762,48 @@ func (x *GetRegionByKeyResponse) GetCatchUpState() CatchUpState {
 	return CatchUpState_CATCH_UP_STATE_UNSPECIFIED
 }
 
+func (x *GetRegionByKeyResponse) GetDescriptorRevision() uint64 {
+	if x != nil {
+		return x.DescriptorRevision
+	}
+	return 0
+}
+
+func (x *GetRegionByKeyResponse) GetRequiredDescriptorRevision() uint64 {
+	if x != nil {
+		return x.RequiredDescriptorRevision
+	}
+	return 0
+}
+
+func (x *GetRegionByKeyResponse) GetCertGeneration() uint64 {
+	if x != nil {
+		return x.CertGeneration
+	}
+	return 0
+}
+
+func (x *GetRegionByKeyResponse) GetObservedSealGeneration() uint64 {
+	if x != nil {
+		return x.ObservedSealGeneration
+	}
+	return 0
+}
+
+func (x *GetRegionByKeyResponse) GetServingClass() ServingClass {
+	if x != nil {
+		return x.ServingClass
+	}
+	return ServingClass_SERVING_CLASS_UNSPECIFIED
+}
+
+func (x *GetRegionByKeyResponse) GetSyncHealth() SyncHealth {
+	if x != nil {
+		return x.SyncHealth
+	}
+	return SyncHealth_SYNC_HEALTH_UNSPECIFIED
+}
+
 type AllocIDRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Count         uint64                 `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`
@@ -1659,11 +1849,16 @@ func (x *AllocIDRequest) GetCount() uint64 {
 }
 
 type AllocIDResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	FirstId       uint64                 `protobuf:"varint,1,opt,name=first_id,json=firstId,proto3" json:"first_id,omitempty"`
-	Count         uint64                 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	FirstId uint64                 `protobuf:"varint,1,opt,name=first_id,json=firstId,proto3" json:"first_id,omitempty"`
+	Count   uint64                 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
+	// cert_generation and consumed_frontier together form the protocol-level
+	// legality witness for monotone detached replies.
+	CertGeneration         uint64 `protobuf:"varint,3,opt,name=cert_generation,json=certGeneration,proto3" json:"cert_generation,omitempty"`
+	ConsumedFrontier       uint64 `protobuf:"varint,4,opt,name=consumed_frontier,json=consumedFrontier,proto3" json:"consumed_frontier,omitempty"`
+	ObservedSealGeneration uint64 `protobuf:"varint,5,opt,name=observed_seal_generation,json=observedSealGeneration,proto3" json:"observed_seal_generation,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *AllocIDResponse) Reset() {
@@ -1706,6 +1901,27 @@ func (x *AllocIDResponse) GetFirstId() uint64 {
 func (x *AllocIDResponse) GetCount() uint64 {
 	if x != nil {
 		return x.Count
+	}
+	return 0
+}
+
+func (x *AllocIDResponse) GetCertGeneration() uint64 {
+	if x != nil {
+		return x.CertGeneration
+	}
+	return 0
+}
+
+func (x *AllocIDResponse) GetConsumedFrontier() uint64 {
+	if x != nil {
+		return x.ConsumedFrontier
+	}
+	return 0
+}
+
+func (x *AllocIDResponse) GetObservedSealGeneration() uint64 {
+	if x != nil {
+		return x.ObservedSealGeneration
 	}
 	return 0
 }
@@ -1755,11 +1971,16 @@ func (x *TsoRequest) GetCount() uint64 {
 }
 
 type TsoResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Timestamp     uint64                 `protobuf:"varint,1,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	Count         uint64                 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Timestamp uint64                 `protobuf:"varint,1,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	Count     uint64                 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
+	// cert_generation and consumed_frontier together form the protocol-level
+	// legality witness for monotone detached replies.
+	CertGeneration         uint64 `protobuf:"varint,3,opt,name=cert_generation,json=certGeneration,proto3" json:"cert_generation,omitempty"`
+	ConsumedFrontier       uint64 `protobuf:"varint,4,opt,name=consumed_frontier,json=consumedFrontier,proto3" json:"consumed_frontier,omitempty"`
+	ObservedSealGeneration uint64 `protobuf:"varint,5,opt,name=observed_seal_generation,json=observedSealGeneration,proto3" json:"observed_seal_generation,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *TsoResponse) Reset() {
@@ -1806,11 +2027,32 @@ func (x *TsoResponse) GetCount() uint64 {
 	return 0
 }
 
+func (x *TsoResponse) GetCertGeneration() uint64 {
+	if x != nil {
+		return x.CertGeneration
+	}
+	return 0
+}
+
+func (x *TsoResponse) GetConsumedFrontier() uint64 {
+	if x != nil {
+		return x.ConsumedFrontier
+	}
+	return 0
+}
+
+func (x *TsoResponse) GetObservedSealGeneration() uint64 {
+	if x != nil {
+		return x.ObservedSealGeneration
+	}
+	return 0
+}
+
 var File_coordinator_coordinator_proto protoreflect.FileDescriptor
 
 const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\n" +
-	"\x1dcoordinator/coordinator.proto\x12\x13nokv.coordinator.v1\x1a\x15meta/descriptor.proto\x1a\x0fmeta/root.proto\"\xaa\x01\n" +
+	"\x1dcoordinator/coordinator.proto\x12\x13nokv.coordinator.v1\x1a\x15meta/descriptor.proto\x1a\x0fmeta/root.proto\"\xd9\x01\n" +
 	"\x15StoreHeartbeatRequest\x12\x19\n" +
 	"\bstore_id\x18\x01 \x01(\x04R\astoreId\x12\x1d\n" +
 	"\n" +
@@ -1818,7 +2060,8 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\n" +
 	"leader_num\x18\x03 \x01(\x04R\tleaderNum\x12\x1a\n" +
 	"\bcapacity\x18\x04 \x01(\x04R\bcapacity\x12\x1c\n" +
-	"\tavailable\x18\x05 \x01(\x04R\tavailable\"\xbe\x01\n" +
+	"\tavailable\x18\x05 \x01(\x04R\tavailable\x12-\n" +
+	"\x12dropped_operations\x18\x06 \x01(\x04R\x11droppedOperations\"\xbe\x01\n" +
 	"\x12SchedulerOperation\x12?\n" +
 	"\x04type\x18\x01 \x01(\x0e2+.nokv.coordinator.v1.SchedulerOperationTypeR\x04type\x12\x1b\n" +
 	"\tregion_id\x18\x02 \x01(\x04R\bregionId\x12$\n" +
@@ -1877,14 +2120,15 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\tRootToken\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x04R\x04term\x12\x14\n" +
 	"\x05index\x18\x02 \x01(\x04R\x05index\x12\x1a\n" +
-	"\brevision\x18\x03 \x01(\x04R\brevision\"\xef\x01\n" +
+	"\brevision\x18\x03 \x01(\x04R\brevision\"\xb1\x02\n" +
 	"\x15GetRegionByKeyRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12<\n" +
 	"\tfreshness\x18\x02 \x01(\x0e2\x1e.nokv.coordinator.v1.FreshnessR\tfreshness\x12N\n" +
 	"\x13required_root_token\x18\x03 \x01(\v2\x1e.nokv.coordinator.v1.RootTokenR\x11requiredRootToken\x12%\n" +
 	"\fmax_root_lag\x18\x04 \x01(\x04H\x00R\n" +
-	"maxRootLag\x88\x01\x01B\x0f\n" +
-	"\r_max_root_lag\"\xbd\x04\n" +
+	"maxRootLag\x88\x01\x01\x12@\n" +
+	"\x1crequired_descriptor_revision\x18\x05 \x01(\x04R\x1arequiredDescriptorRevisionB\x0f\n" +
+	"\r_max_root_lag\"\x9d\a\n" +
 	"\x16GetRegionByKeyResponse\x12K\n" +
 	"\x11region_descriptor\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x10regionDescriptor\x12\x1b\n" +
 	"\tnot_found\x18\x02 \x01(\bR\bnotFound\x12J\n" +
@@ -1894,18 +2138,32 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\x10served_by_leader\x18\x06 \x01(\bR\x0eservedByLeader\x12L\n" +
 	"\x12current_root_token\x18\a \x01(\v2\x1e.nokv.coordinator.v1.RootTokenR\x10currentRootToken\x12\x19\n" +
 	"\broot_lag\x18\b \x01(\x04R\arootLag\x12G\n" +
-	"\x0ecatch_up_state\x18\t \x01(\x0e2!.nokv.coordinator.v1.CatchUpStateR\fcatchUpState\"&\n" +
+	"\x0ecatch_up_state\x18\t \x01(\x0e2!.nokv.coordinator.v1.CatchUpStateR\fcatchUpState\x12/\n" +
+	"\x13descriptor_revision\x18\n" +
+	" \x01(\x04R\x12descriptorRevision\x12@\n" +
+	"\x1crequired_descriptor_revision\x18\v \x01(\x04R\x1arequiredDescriptorRevision\x12'\n" +
+	"\x0fcert_generation\x18\f \x01(\x04R\x0ecertGeneration\x128\n" +
+	"\x18observed_seal_generation\x18\x0f \x01(\x04R\x16observedSealGeneration\x12F\n" +
+	"\rserving_class\x18\r \x01(\x0e2!.nokv.coordinator.v1.ServingClassR\fservingClass\x12@\n" +
+	"\vsync_health\x18\x0e \x01(\x0e2\x1f.nokv.coordinator.v1.SyncHealthR\n" +
+	"syncHealth\"&\n" +
 	"\x0eAllocIDRequest\x12\x14\n" +
-	"\x05count\x18\x01 \x01(\x04R\x05count\"B\n" +
+	"\x05count\x18\x01 \x01(\x04R\x05count\"\xd2\x01\n" +
 	"\x0fAllocIDResponse\x12\x19\n" +
 	"\bfirst_id\x18\x01 \x01(\x04R\afirstId\x12\x14\n" +
-	"\x05count\x18\x02 \x01(\x04R\x05count\"\"\n" +
+	"\x05count\x18\x02 \x01(\x04R\x05count\x12'\n" +
+	"\x0fcert_generation\x18\x03 \x01(\x04R\x0ecertGeneration\x12+\n" +
+	"\x11consumed_frontier\x18\x04 \x01(\x04R\x10consumedFrontier\x128\n" +
+	"\x18observed_seal_generation\x18\x05 \x01(\x04R\x16observedSealGeneration\"\"\n" +
 	"\n" +
 	"TsoRequest\x12\x14\n" +
-	"\x05count\x18\x01 \x01(\x04R\x05count\"A\n" +
+	"\x05count\x18\x01 \x01(\x04R\x05count\"\xd1\x01\n" +
 	"\vTsoResponse\x12\x1c\n" +
 	"\ttimestamp\x18\x01 \x01(\x04R\ttimestamp\x12\x14\n" +
-	"\x05count\x18\x02 \x01(\x04R\x05count*i\n" +
+	"\x05count\x18\x02 \x01(\x04R\x05count\x12'\n" +
+	"\x0fcert_generation\x18\x03 \x01(\x04R\x0ecertGeneration\x12+\n" +
+	"\x11consumed_frontier\x18\x04 \x01(\x04R\x10consumedFrontier\x128\n" +
+	"\x18observed_seal_generation\x18\x05 \x01(\x04R\x16observedSealGeneration*i\n" +
 	"\x16SchedulerOperationType\x12!\n" +
 	"\x1dSCHEDULER_OPERATION_TYPE_NONE\x10\x00\x12,\n" +
 	"(SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER\x10\x01*t\n" +
@@ -1952,7 +2210,19 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\x14CATCH_UP_STATE_FRESH\x10\x01\x12\x1a\n" +
 	"\x16CATCH_UP_STATE_LAGGING\x10\x02\x12%\n" +
 	"!CATCH_UP_STATE_BOOTSTRAP_REQUIRED\x10\x03\x12\x1e\n" +
-	"\x1aCATCH_UP_STATE_UNAVAILABLE\x10\x042\xa0\a\n" +
+	"\x1aCATCH_UP_STATE_UNAVAILABLE\x10\x04*\x8b\x01\n" +
+	"\fServingClass\x12\x1d\n" +
+	"\x19SERVING_CLASS_UNSPECIFIED\x10\x00\x12\x1f\n" +
+	"\x1bSERVING_CLASS_AUTHORITATIVE\x10\x01\x12\x1f\n" +
+	"\x1bSERVING_CLASS_BOUNDED_STALE\x10\x02\x12\x1a\n" +
+	"\x16SERVING_CLASS_DEGRADED\x10\x03*\xa1\x01\n" +
+	"\n" +
+	"SyncHealth\x12\x1b\n" +
+	"\x17SYNC_HEALTH_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13SYNC_HEALTH_HEALTHY\x10\x01\x12\x17\n" +
+	"\x13SYNC_HEALTH_LAGGING\x10\x02\x12\"\n" +
+	"\x1eSYNC_HEALTH_BOOTSTRAP_REQUIRED\x10\x03\x12 \n" +
+	"\x1cSYNC_HEALTH_ROOT_UNAVAILABLE\x10\x042\xa0\a\n" +
 	"\vCoordinator\x12i\n" +
 	"\x0eStoreHeartbeat\x12*.nokv.coordinator.v1.StoreHeartbeatRequest\x1a+.nokv.coordinator.v1.StoreHeartbeatResponse\x12i\n" +
 	"\x0eRegionLiveness\x12*.nokv.coordinator.v1.RegionLivenessRequest\x1a+.nokv.coordinator.v1.RegionLivenessResponse\x12o\n" +
@@ -1976,7 +2246,7 @@ func file_coordinator_coordinator_proto_rawDescGZIP() []byte {
 	return file_coordinator_coordinator_proto_rawDescData
 }
 
-var file_coordinator_coordinator_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
+var file_coordinator_coordinator_proto_enumTypes = make([]protoimpl.EnumInfo, 11)
 var file_coordinator_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_coordinator_coordinator_proto_goTypes = []any{
 	(SchedulerOperationType)(0),         // 0: nokv.coordinator.v1.SchedulerOperationType
@@ -1988,83 +2258,87 @@ var file_coordinator_coordinator_proto_goTypes = []any{
 	(Freshness)(0),                      // 6: nokv.coordinator.v1.Freshness
 	(DegradedMode)(0),                   // 7: nokv.coordinator.v1.DegradedMode
 	(CatchUpState)(0),                   // 8: nokv.coordinator.v1.CatchUpState
-	(*StoreHeartbeatRequest)(nil),       // 9: nokv.coordinator.v1.StoreHeartbeatRequest
-	(*SchedulerOperation)(nil),          // 10: nokv.coordinator.v1.SchedulerOperation
-	(*StoreHeartbeatResponse)(nil),      // 11: nokv.coordinator.v1.StoreHeartbeatResponse
-	(*RegionLivenessRequest)(nil),       // 12: nokv.coordinator.v1.RegionLivenessRequest
-	(*RegionLivenessResponse)(nil),      // 13: nokv.coordinator.v1.RegionLivenessResponse
-	(*PublishRootEventRequest)(nil),     // 14: nokv.coordinator.v1.PublishRootEventRequest
-	(*PublishRootEventResponse)(nil),    // 15: nokv.coordinator.v1.PublishRootEventResponse
-	(*TransitionEntry)(nil),             // 16: nokv.coordinator.v1.TransitionEntry
-	(*TransitionAssessment)(nil),        // 17: nokv.coordinator.v1.TransitionAssessment
-	(*ListTransitionsRequest)(nil),      // 18: nokv.coordinator.v1.ListTransitionsRequest
-	(*ListTransitionsResponse)(nil),     // 19: nokv.coordinator.v1.ListTransitionsResponse
-	(*AssessRootEventRequest)(nil),      // 20: nokv.coordinator.v1.AssessRootEventRequest
-	(*AssessRootEventResponse)(nil),     // 21: nokv.coordinator.v1.AssessRootEventResponse
-	(*RemoveRegionRequest)(nil),         // 22: nokv.coordinator.v1.RemoveRegionRequest
-	(*RemoveRegionResponse)(nil),        // 23: nokv.coordinator.v1.RemoveRegionResponse
-	(*RootToken)(nil),                   // 24: nokv.coordinator.v1.RootToken
-	(*GetRegionByKeyRequest)(nil),       // 25: nokv.coordinator.v1.GetRegionByKeyRequest
-	(*GetRegionByKeyResponse)(nil),      // 26: nokv.coordinator.v1.GetRegionByKeyResponse
-	(*AllocIDRequest)(nil),              // 27: nokv.coordinator.v1.AllocIDRequest
-	(*AllocIDResponse)(nil),             // 28: nokv.coordinator.v1.AllocIDResponse
-	(*TsoRequest)(nil),                  // 29: nokv.coordinator.v1.TsoRequest
-	(*TsoResponse)(nil),                 // 30: nokv.coordinator.v1.TsoResponse
-	(*meta.RootEvent)(nil),              // 31: nokv.meta.v1.RootEvent
-	(*meta.RootPendingPeerChange)(nil),  // 32: nokv.meta.v1.RootPendingPeerChange
-	(*meta.RootPendingRangeChange)(nil), // 33: nokv.meta.v1.RootPendingRangeChange
-	(*meta.RegionDescriptor)(nil),       // 34: nokv.meta.v1.RegionDescriptor
+	(ServingClass)(0),                   // 9: nokv.coordinator.v1.ServingClass
+	(SyncHealth)(0),                     // 10: nokv.coordinator.v1.SyncHealth
+	(*StoreHeartbeatRequest)(nil),       // 11: nokv.coordinator.v1.StoreHeartbeatRequest
+	(*SchedulerOperation)(nil),          // 12: nokv.coordinator.v1.SchedulerOperation
+	(*StoreHeartbeatResponse)(nil),      // 13: nokv.coordinator.v1.StoreHeartbeatResponse
+	(*RegionLivenessRequest)(nil),       // 14: nokv.coordinator.v1.RegionLivenessRequest
+	(*RegionLivenessResponse)(nil),      // 15: nokv.coordinator.v1.RegionLivenessResponse
+	(*PublishRootEventRequest)(nil),     // 16: nokv.coordinator.v1.PublishRootEventRequest
+	(*PublishRootEventResponse)(nil),    // 17: nokv.coordinator.v1.PublishRootEventResponse
+	(*TransitionEntry)(nil),             // 18: nokv.coordinator.v1.TransitionEntry
+	(*TransitionAssessment)(nil),        // 19: nokv.coordinator.v1.TransitionAssessment
+	(*ListTransitionsRequest)(nil),      // 20: nokv.coordinator.v1.ListTransitionsRequest
+	(*ListTransitionsResponse)(nil),     // 21: nokv.coordinator.v1.ListTransitionsResponse
+	(*AssessRootEventRequest)(nil),      // 22: nokv.coordinator.v1.AssessRootEventRequest
+	(*AssessRootEventResponse)(nil),     // 23: nokv.coordinator.v1.AssessRootEventResponse
+	(*RemoveRegionRequest)(nil),         // 24: nokv.coordinator.v1.RemoveRegionRequest
+	(*RemoveRegionResponse)(nil),        // 25: nokv.coordinator.v1.RemoveRegionResponse
+	(*RootToken)(nil),                   // 26: nokv.coordinator.v1.RootToken
+	(*GetRegionByKeyRequest)(nil),       // 27: nokv.coordinator.v1.GetRegionByKeyRequest
+	(*GetRegionByKeyResponse)(nil),      // 28: nokv.coordinator.v1.GetRegionByKeyResponse
+	(*AllocIDRequest)(nil),              // 29: nokv.coordinator.v1.AllocIDRequest
+	(*AllocIDResponse)(nil),             // 30: nokv.coordinator.v1.AllocIDResponse
+	(*TsoRequest)(nil),                  // 31: nokv.coordinator.v1.TsoRequest
+	(*TsoResponse)(nil),                 // 32: nokv.coordinator.v1.TsoResponse
+	(*meta.RootEvent)(nil),              // 33: nokv.meta.v1.RootEvent
+	(*meta.RootPendingPeerChange)(nil),  // 34: nokv.meta.v1.RootPendingPeerChange
+	(*meta.RootPendingRangeChange)(nil), // 35: nokv.meta.v1.RootPendingRangeChange
+	(*meta.RegionDescriptor)(nil),       // 36: nokv.meta.v1.RegionDescriptor
 }
 var file_coordinator_coordinator_proto_depIdxs = []int32{
 	0,  // 0: nokv.coordinator.v1.SchedulerOperation.type:type_name -> nokv.coordinator.v1.SchedulerOperationType
-	10, // 1: nokv.coordinator.v1.StoreHeartbeatResponse.operations:type_name -> nokv.coordinator.v1.SchedulerOperation
-	31, // 2: nokv.coordinator.v1.PublishRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
-	17, // 3: nokv.coordinator.v1.PublishRootEventResponse.assessment:type_name -> nokv.coordinator.v1.TransitionAssessment
+	12, // 1: nokv.coordinator.v1.StoreHeartbeatResponse.operations:type_name -> nokv.coordinator.v1.SchedulerOperation
+	33, // 2: nokv.coordinator.v1.PublishRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
+	19, // 3: nokv.coordinator.v1.PublishRootEventResponse.assessment:type_name -> nokv.coordinator.v1.TransitionAssessment
 	1,  // 4: nokv.coordinator.v1.TransitionEntry.kind:type_name -> nokv.coordinator.v1.TransitionKind
 	2,  // 5: nokv.coordinator.v1.TransitionEntry.status:type_name -> nokv.coordinator.v1.TransitionStatus
 	3,  // 6: nokv.coordinator.v1.TransitionEntry.retry_class:type_name -> nokv.coordinator.v1.TransitionRetryClass
 	4,  // 7: nokv.coordinator.v1.TransitionEntry.reason:type_name -> nokv.coordinator.v1.TransitionReason
-	32, // 8: nokv.coordinator.v1.TransitionEntry.pending_peer_change:type_name -> nokv.meta.v1.RootPendingPeerChange
-	33, // 9: nokv.coordinator.v1.TransitionEntry.pending_range_change:type_name -> nokv.meta.v1.RootPendingRangeChange
+	34, // 8: nokv.coordinator.v1.TransitionEntry.pending_peer_change:type_name -> nokv.meta.v1.RootPendingPeerChange
+	35, // 9: nokv.coordinator.v1.TransitionEntry.pending_range_change:type_name -> nokv.meta.v1.RootPendingRangeChange
 	1,  // 10: nokv.coordinator.v1.TransitionAssessment.kind:type_name -> nokv.coordinator.v1.TransitionKind
 	2,  // 11: nokv.coordinator.v1.TransitionAssessment.status:type_name -> nokv.coordinator.v1.TransitionStatus
 	3,  // 12: nokv.coordinator.v1.TransitionAssessment.retry_class:type_name -> nokv.coordinator.v1.TransitionRetryClass
 	4,  // 13: nokv.coordinator.v1.TransitionAssessment.reason:type_name -> nokv.coordinator.v1.TransitionReason
 	5,  // 14: nokv.coordinator.v1.TransitionAssessment.decision:type_name -> nokv.coordinator.v1.TransitionDecision
-	16, // 15: nokv.coordinator.v1.ListTransitionsResponse.entries:type_name -> nokv.coordinator.v1.TransitionEntry
-	31, // 16: nokv.coordinator.v1.AssessRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
-	17, // 17: nokv.coordinator.v1.AssessRootEventResponse.assessment:type_name -> nokv.coordinator.v1.TransitionAssessment
+	18, // 15: nokv.coordinator.v1.ListTransitionsResponse.entries:type_name -> nokv.coordinator.v1.TransitionEntry
+	33, // 16: nokv.coordinator.v1.AssessRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
+	19, // 17: nokv.coordinator.v1.AssessRootEventResponse.assessment:type_name -> nokv.coordinator.v1.TransitionAssessment
 	6,  // 18: nokv.coordinator.v1.GetRegionByKeyRequest.freshness:type_name -> nokv.coordinator.v1.Freshness
-	24, // 19: nokv.coordinator.v1.GetRegionByKeyRequest.required_root_token:type_name -> nokv.coordinator.v1.RootToken
-	34, // 20: nokv.coordinator.v1.GetRegionByKeyResponse.region_descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	24, // 21: nokv.coordinator.v1.GetRegionByKeyResponse.served_root_token:type_name -> nokv.coordinator.v1.RootToken
+	26, // 19: nokv.coordinator.v1.GetRegionByKeyRequest.required_root_token:type_name -> nokv.coordinator.v1.RootToken
+	36, // 20: nokv.coordinator.v1.GetRegionByKeyResponse.region_descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	26, // 21: nokv.coordinator.v1.GetRegionByKeyResponse.served_root_token:type_name -> nokv.coordinator.v1.RootToken
 	6,  // 22: nokv.coordinator.v1.GetRegionByKeyResponse.served_freshness:type_name -> nokv.coordinator.v1.Freshness
 	7,  // 23: nokv.coordinator.v1.GetRegionByKeyResponse.degraded_mode:type_name -> nokv.coordinator.v1.DegradedMode
-	24, // 24: nokv.coordinator.v1.GetRegionByKeyResponse.current_root_token:type_name -> nokv.coordinator.v1.RootToken
+	26, // 24: nokv.coordinator.v1.GetRegionByKeyResponse.current_root_token:type_name -> nokv.coordinator.v1.RootToken
 	8,  // 25: nokv.coordinator.v1.GetRegionByKeyResponse.catch_up_state:type_name -> nokv.coordinator.v1.CatchUpState
-	9,  // 26: nokv.coordinator.v1.Coordinator.StoreHeartbeat:input_type -> nokv.coordinator.v1.StoreHeartbeatRequest
-	12, // 27: nokv.coordinator.v1.Coordinator.RegionLiveness:input_type -> nokv.coordinator.v1.RegionLivenessRequest
-	14, // 28: nokv.coordinator.v1.Coordinator.PublishRootEvent:input_type -> nokv.coordinator.v1.PublishRootEventRequest
-	18, // 29: nokv.coordinator.v1.Coordinator.ListTransitions:input_type -> nokv.coordinator.v1.ListTransitionsRequest
-	20, // 30: nokv.coordinator.v1.Coordinator.AssessRootEvent:input_type -> nokv.coordinator.v1.AssessRootEventRequest
-	22, // 31: nokv.coordinator.v1.Coordinator.RemoveRegion:input_type -> nokv.coordinator.v1.RemoveRegionRequest
-	25, // 32: nokv.coordinator.v1.Coordinator.GetRegionByKey:input_type -> nokv.coordinator.v1.GetRegionByKeyRequest
-	27, // 33: nokv.coordinator.v1.Coordinator.AllocID:input_type -> nokv.coordinator.v1.AllocIDRequest
-	29, // 34: nokv.coordinator.v1.Coordinator.Tso:input_type -> nokv.coordinator.v1.TsoRequest
-	11, // 35: nokv.coordinator.v1.Coordinator.StoreHeartbeat:output_type -> nokv.coordinator.v1.StoreHeartbeatResponse
-	13, // 36: nokv.coordinator.v1.Coordinator.RegionLiveness:output_type -> nokv.coordinator.v1.RegionLivenessResponse
-	15, // 37: nokv.coordinator.v1.Coordinator.PublishRootEvent:output_type -> nokv.coordinator.v1.PublishRootEventResponse
-	19, // 38: nokv.coordinator.v1.Coordinator.ListTransitions:output_type -> nokv.coordinator.v1.ListTransitionsResponse
-	21, // 39: nokv.coordinator.v1.Coordinator.AssessRootEvent:output_type -> nokv.coordinator.v1.AssessRootEventResponse
-	23, // 40: nokv.coordinator.v1.Coordinator.RemoveRegion:output_type -> nokv.coordinator.v1.RemoveRegionResponse
-	26, // 41: nokv.coordinator.v1.Coordinator.GetRegionByKey:output_type -> nokv.coordinator.v1.GetRegionByKeyResponse
-	28, // 42: nokv.coordinator.v1.Coordinator.AllocID:output_type -> nokv.coordinator.v1.AllocIDResponse
-	30, // 43: nokv.coordinator.v1.Coordinator.Tso:output_type -> nokv.coordinator.v1.TsoResponse
-	35, // [35:44] is the sub-list for method output_type
-	26, // [26:35] is the sub-list for method input_type
-	26, // [26:26] is the sub-list for extension type_name
-	26, // [26:26] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	9,  // 26: nokv.coordinator.v1.GetRegionByKeyResponse.serving_class:type_name -> nokv.coordinator.v1.ServingClass
+	10, // 27: nokv.coordinator.v1.GetRegionByKeyResponse.sync_health:type_name -> nokv.coordinator.v1.SyncHealth
+	11, // 28: nokv.coordinator.v1.Coordinator.StoreHeartbeat:input_type -> nokv.coordinator.v1.StoreHeartbeatRequest
+	14, // 29: nokv.coordinator.v1.Coordinator.RegionLiveness:input_type -> nokv.coordinator.v1.RegionLivenessRequest
+	16, // 30: nokv.coordinator.v1.Coordinator.PublishRootEvent:input_type -> nokv.coordinator.v1.PublishRootEventRequest
+	20, // 31: nokv.coordinator.v1.Coordinator.ListTransitions:input_type -> nokv.coordinator.v1.ListTransitionsRequest
+	22, // 32: nokv.coordinator.v1.Coordinator.AssessRootEvent:input_type -> nokv.coordinator.v1.AssessRootEventRequest
+	24, // 33: nokv.coordinator.v1.Coordinator.RemoveRegion:input_type -> nokv.coordinator.v1.RemoveRegionRequest
+	27, // 34: nokv.coordinator.v1.Coordinator.GetRegionByKey:input_type -> nokv.coordinator.v1.GetRegionByKeyRequest
+	29, // 35: nokv.coordinator.v1.Coordinator.AllocID:input_type -> nokv.coordinator.v1.AllocIDRequest
+	31, // 36: nokv.coordinator.v1.Coordinator.Tso:input_type -> nokv.coordinator.v1.TsoRequest
+	13, // 37: nokv.coordinator.v1.Coordinator.StoreHeartbeat:output_type -> nokv.coordinator.v1.StoreHeartbeatResponse
+	15, // 38: nokv.coordinator.v1.Coordinator.RegionLiveness:output_type -> nokv.coordinator.v1.RegionLivenessResponse
+	17, // 39: nokv.coordinator.v1.Coordinator.PublishRootEvent:output_type -> nokv.coordinator.v1.PublishRootEventResponse
+	21, // 40: nokv.coordinator.v1.Coordinator.ListTransitions:output_type -> nokv.coordinator.v1.ListTransitionsResponse
+	23, // 41: nokv.coordinator.v1.Coordinator.AssessRootEvent:output_type -> nokv.coordinator.v1.AssessRootEventResponse
+	25, // 42: nokv.coordinator.v1.Coordinator.RemoveRegion:output_type -> nokv.coordinator.v1.RemoveRegionResponse
+	28, // 43: nokv.coordinator.v1.Coordinator.GetRegionByKey:output_type -> nokv.coordinator.v1.GetRegionByKeyResponse
+	30, // 44: nokv.coordinator.v1.Coordinator.AllocID:output_type -> nokv.coordinator.v1.AllocIDResponse
+	32, // 45: nokv.coordinator.v1.Coordinator.Tso:output_type -> nokv.coordinator.v1.TsoResponse
+	37, // [37:46] is the sub-list for method output_type
+	28, // [28:37] is the sub-list for method input_type
+	28, // [28:28] is the sub-list for extension type_name
+	28, // [28:28] is the sub-list for extension extendee
+	0,  // [0:28] is the sub-list for field type_name
 }
 
 func init() { file_coordinator_coordinator_proto_init() }
@@ -2078,7 +2352,7 @@ func file_coordinator_coordinator_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_coordinator_coordinator_proto_rawDesc), len(file_coordinator_coordinator_proto_rawDesc)),
-			NumEnums:      9,
+			NumEnums:      11,
 			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,

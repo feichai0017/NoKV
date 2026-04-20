@@ -1,6 +1,7 @@
 package replicated
 
 import (
+	"context"
 	"time"
 
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -62,9 +63,15 @@ func (d *NetworkDriver) ReadCommitted(offset int64) (rootstorage.CommittedTail, 
 	return d.adapter.readCommitted(offset)
 }
 
-func (d *NetworkDriver) AppendCommitted(records ...rootstorage.CommittedEvent) (int64, error) {
+func (d *NetworkDriver) AppendCommitted(ctx context.Context, records ...rootstorage.CommittedEvent) (int64, error) {
 	if len(records) == 0 {
 		return d.Size()
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
 	before, err := d.ObserveTail(rootstorage.TailToken{})
 	if err != nil {
@@ -102,15 +109,21 @@ func (d *NetworkDriver) AppendCommitted(records ...rootstorage.CommittedEvent) (
 		d.mu.Lock()
 	}
 	d.mu.Unlock()
-	if err := d.waitForCommittedCursor(before.Token, target, d.appendWaitTimeout); err != nil {
+	if err := d.waitForCommittedCursor(ctx, before.Token, target, d.appendWaitTimeout); err != nil {
 		return 0, err
 	}
 	return d.adapter.size()
 }
 
-func (d *NetworkDriver) waitForCommittedCursor(after rootstorage.TailToken, target rootstate.Cursor, timeout time.Duration) error {
+func (d *NetworkDriver) waitForCommittedCursor(ctx context.Context, after rootstorage.TailToken, target rootstate.Cursor, timeout time.Duration) error {
 	if target == (rootstate.Cursor{}) {
 		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if timeout <= 0 {
 		timeout = defaultAppendWaitTimeout
@@ -124,6 +137,9 @@ func (d *NetworkDriver) waitForCommittedCursor(after rootstorage.TailToken, targ
 	}
 	deadline := time.Now().Add(timeout)
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return errAppendWaitTimedOut(target)

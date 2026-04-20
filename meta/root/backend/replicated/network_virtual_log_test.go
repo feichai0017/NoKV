@@ -1,6 +1,7 @@
 package replicated
 
 import (
+	"context"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
@@ -23,7 +24,7 @@ func TestNetworkDriverCompactCommittedShiftsTailWindow(t *testing.T) {
 			)),
 		})
 	}
-	_, err := driver.AppendCommitted(records...)
+	_, err := driver.AppendCommitted(context.Background(), records...)
 	require.NoError(t, err)
 
 	before, err := driver.ObserveTail(rootstorage.TailToken{})
@@ -72,7 +73,7 @@ func TestNetworkDriverAppendCommittedWaitsForCommittedTail(t *testing.T) {
 			Event:  rootevent.RegionDescriptorPublished(testDescriptor(302, []byte("b"), []byte("c"))),
 		},
 	}
-	logEnd, err := driver.AppendCommitted(records...)
+	logEnd, err := driver.AppendCommitted(context.Background(), records...)
 	require.NoError(t, err)
 	require.Greater(t, logEnd, int64(0))
 

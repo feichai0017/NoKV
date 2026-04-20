@@ -3,8 +3,10 @@ package event_test
 import (
 	"testing"
 
+	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
 )
@@ -44,15 +46,57 @@ func TestCloneEventDetachesPayload(t *testing.T) {
 }
 
 func TestCoordinatorLeaseEvent(t *testing.T) {
-	event := rootevent.CoordinatorLeaseGranted("c1", 1_000, 10, 20)
+	frontiers := controlplane.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0)
+	event := rootevent.CoordinatorLeaseGranted("c1", 1_000, 1, 7, "pred", frontiers)
 	cloned := rootevent.CloneEvent(event)
 
 	event.CoordinatorLease.HolderID = "c2"
 	require.Equal(t, rootevent.KindCoordinatorLease, cloned.Kind)
 	require.Equal(t, "c1", cloned.CoordinatorLease.HolderID)
 	require.Equal(t, int64(1_000), cloned.CoordinatorLease.ExpiresUnixNano)
-	require.Equal(t, uint64(10), cloned.CoordinatorLease.IDFence)
-	require.Equal(t, uint64(20), cloned.CoordinatorLease.TSOFence)
+	require.Equal(t, uint64(1), cloned.CoordinatorLease.CertGeneration)
+	require.Equal(t, uint32(7), cloned.CoordinatorLease.DutyMask)
+	require.Equal(t, frontiers, cloned.CoordinatorLease.Frontiers)
+	require.Equal(t, "pred", cloned.CoordinatorLease.PredecessorDigest)
+}
+
+func TestCoordinatorClosureConfirmedEvent(t *testing.T) {
+	event := rootevent.CoordinatorClosureConfirmed("c1", 7, 8, "seal-digest")
+	cloned := rootevent.CloneEvent(event)
+
+	event.CoordinatorClosure.HolderID = "c2"
+	require.Equal(t, rootevent.KindCoordinatorClosure, cloned.Kind)
+	require.Equal(t, "c1", cloned.CoordinatorClosure.HolderID)
+	require.Equal(t, uint64(7), cloned.CoordinatorClosure.SealGeneration)
+	require.Equal(t, uint64(8), cloned.CoordinatorClosure.SuccessorGeneration)
+	require.Equal(t, "seal-digest", cloned.CoordinatorClosure.SealDigest)
+	require.Equal(t, rootevent.CoordinatorClosureStageConfirmed, cloned.CoordinatorClosure.Stage)
+}
+
+func TestCoordinatorClosureClosedEvent(t *testing.T) {
+	event := rootevent.CoordinatorClosureClosed("c1", 7, 8, "seal-digest")
+	cloned := rootevent.CloneEvent(event)
+
+	event.CoordinatorClosure.HolderID = "c2"
+	require.Equal(t, rootevent.KindCoordinatorClosure, cloned.Kind)
+	require.Equal(t, "c1", cloned.CoordinatorClosure.HolderID)
+	require.Equal(t, uint64(7), cloned.CoordinatorClosure.SealGeneration)
+	require.Equal(t, uint64(8), cloned.CoordinatorClosure.SuccessorGeneration)
+	require.Equal(t, "seal-digest", cloned.CoordinatorClosure.SealDigest)
+	require.Equal(t, rootevent.CoordinatorClosureStageClosed, cloned.CoordinatorClosure.Stage)
+}
+
+func TestCoordinatorClosureReattachedEvent(t *testing.T) {
+	event := rootevent.CoordinatorClosureReattached("c1", 7, 8, "seal-digest")
+	cloned := rootevent.CloneEvent(event)
+
+	event.CoordinatorClosure.HolderID = "c2"
+	require.Equal(t, rootevent.KindCoordinatorClosure, cloned.Kind)
+	require.Equal(t, "c1", cloned.CoordinatorClosure.HolderID)
+	require.Equal(t, uint64(7), cloned.CoordinatorClosure.SealGeneration)
+	require.Equal(t, uint64(8), cloned.CoordinatorClosure.SuccessorGeneration)
+	require.Equal(t, "seal-digest", cloned.CoordinatorClosure.SealDigest)
+	require.Equal(t, rootevent.CoordinatorClosureStageReattached, cloned.CoordinatorClosure.Stage)
 }
 
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {

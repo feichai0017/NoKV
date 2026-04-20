@@ -27,27 +27,10 @@ import (
 )
 
 const (
-	processAllocatorWindowDefault uint64 = 10_000
-	benchHelperEnv                       = "NOKV_CONTROL_PLANE_BENCH_HELPER"
-	benchHelperRootMode                  = "root-server"
-	benchHelperEtcdMode                  = "etcd-server"
+	benchHelperEnv      = "NOKV_CONTROL_PLANE_BENCH_HELPER"
+	benchHelperRootMode = "root-server"
+	benchHelperEtcdMode = "etcd-server"
 )
-
-func BenchmarkControlPlaneProcessNoKVRemoteTCPWindowDefault(b *testing.B) {
-	benchmarkProcessAllocator(b, openProcessBenchmarkNoKVFenceAllocator, processAllocatorWindowDefault)
-}
-
-func BenchmarkControlPlaneProcessNoKVRemoteTCPWindowOne(b *testing.B) {
-	benchmarkProcessAllocator(b, openProcessBenchmarkNoKVFenceAllocator, 1)
-}
-
-func BenchmarkControlPlaneProcessEtcdCASWindowDefault(b *testing.B) {
-	benchmarkProcessAllocator(b, openProcessBenchmarkEtcdFenceAllocator, processAllocatorWindowDefault)
-}
-
-func BenchmarkControlPlaneProcessEtcdCASWindowOne(b *testing.B) {
-	benchmarkProcessAllocator(b, openProcessBenchmarkEtcdFenceAllocator, 1)
-}
 
 func TestControlPlaneBenchHelperProcess(t *testing.T) {
 	if os.Getenv(benchHelperEnv) != "1" {
@@ -68,92 +51,6 @@ func TestControlPlaneBenchHelperProcess(t *testing.T) {
 	}
 }
 
-type processFenceAllocator interface {
-	Reserve(context.Context, uint64) (uint64, error)
-}
-
-type processAllocatorOpener func(*testing.B, uint64) (processFenceAllocator, func())
-
-func benchmarkProcessAllocator(b *testing.B, open processAllocatorOpener, windowSize uint64) {
-	b.Helper()
-	allocator, cleanup := open(b, windowSize)
-
-	if _, err := allocator.Reserve(context.Background(), 1); err != nil {
-		cleanup()
-		b.Fatalf("warmup process reserve: %v", err)
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		if _, err := allocator.Reserve(context.Background(), 1); err != nil {
-			b.StopTimer()
-			cleanup()
-			b.Fatalf("process reserve: %v", err)
-		}
-	}
-	b.StopTimer()
-	cleanup()
-}
-
-func openProcessBenchmarkNoKVFenceAllocator(b *testing.B, windowSize uint64) (processFenceAllocator, func()) {
-	b.Helper()
-	addr := mustFreeAddr(b)
-	workdir := b.TempDir()
-	proc := startBenchHelperProcess(b, benchHelperRootMode, addr, workdir)
-	waitForGRPCReady(b, addr)
-
-	store, err := coordstorage.OpenRootRemoteStore(coordstorage.RemoteRootConfig{
-		Targets: map[uint64]string{1: addr},
-	})
-	require.NoError(b, err)
-
-	snapshot, err := store.Load()
-	require.NoError(b, err)
-	allocator := &rootFenceAllocator{
-		store:      store,
-		current:    snapshot.Allocator.IDCurrent + 1,
-		windowHigh: snapshot.Allocator.IDCurrent,
-		tsFence:    snapshot.Allocator.TSCurrent,
-		windowSize: windowSize,
-	}
-
-	cleanup := func() {
-		require.NoError(b, store.Close())
-		stopBenchHelperProcess(proc)
-	}
-	return allocator, cleanup
-}
-
-func openProcessBenchmarkEtcdFenceAllocator(b *testing.B, windowSize uint64) (processFenceAllocator, func()) {
-	b.Helper()
-	clientURL := mustFreeURL(b, "http")
-	peerURL := mustFreeURL(b, "http")
-	workdir := b.TempDir()
-	proc := startBenchHelperProcess(b, benchHelperEtcdMode, clientURL.String(), peerURL.String(), workdir)
-	waitForEtcdReady(b, clientURL.String())
-
-	client, err := clientv3.New(clientv3.Config{
-		Endpoints:   []string{clientURL.String()},
-		DialTimeout: 5 * time.Second,
-		Logger:      zap.NewNop(),
-	})
-	require.NoError(b, err)
-
-	allocator := &etcdCASAllocator{
-		client:     client,
-		key:        "/nokv/bench/allocator/id",
-		current:    1,
-		windowHigh: 0,
-		windowSize: windowSize,
-	}
-	cleanup := func() {
-		require.NoError(b, client.Close())
-		stopBenchHelperProcess(proc)
-	}
-	return allocator, cleanup
-}
-
 type rootFenceAllocator struct {
 	store      *coordstorage.RootStore
 	current    uint64
@@ -169,7 +66,7 @@ func (a *rootFenceAllocator) Reserve(ctx context.Context, count uint64) (uint64,
 	next := a.current + count - 1
 	if next > a.windowHigh {
 		windowHigh := a.current + maxUint64(a.windowSize, count) - 1
-		if err := a.store.SaveAllocatorState(windowHigh, a.tsFence); err != nil {
+		if err := a.store.SaveAllocatorState(ctx, windowHigh, a.tsFence); err != nil {
 			return 0, err
 		}
 		a.windowHigh = windowHigh
@@ -177,62 +74,6 @@ func (a *rootFenceAllocator) Reserve(ctx context.Context, count uint64) (uint64,
 	first := a.current
 	a.current += count
 	return first, nil
-}
-
-type etcdCASAllocator struct {
-	client     *clientv3.Client
-	key        string
-	current    uint64
-	windowHigh uint64
-	windowSize uint64
-}
-
-func (a *etcdCASAllocator) Reserve(ctx context.Context, count uint64) (uint64, error) {
-	if count == 0 {
-		return 0, fmt.Errorf("reserve count must be >= 1")
-	}
-	next := a.current + count - 1
-	if next > a.windowHigh {
-		windowHigh := a.current + maxUint64(a.windowSize, count) - 1
-		persisted, err := a.persistFence(ctx, windowHigh)
-		if err != nil {
-			return 0, err
-		}
-		a.windowHigh = persisted
-		if a.current > a.windowHigh {
-			a.current = a.windowHigh + 1
-		}
-	}
-	first := a.current
-	a.current += count
-	return first, nil
-}
-
-func (a *etcdCASAllocator) persistFence(ctx context.Context, min uint64) (uint64, error) {
-	for {
-		resp, err := a.client.Get(ctx, a.key)
-		if err != nil {
-			return 0, err
-		}
-		current, modRev := etcdCurrentFence(resp)
-		if current >= min {
-			return current, nil
-		}
-		next := strconv.FormatUint(min, 10)
-		txn := a.client.Txn(ctx)
-		if modRev == 0 {
-			txn = txn.If(clientv3.Compare(clientv3.Version(a.key), "=", 0))
-		} else {
-			txn = txn.If(clientv3.Compare(clientv3.ModRevision(a.key), "=", modRev))
-		}
-		commit, err := txn.Then(clientv3.OpPut(a.key, next)).Commit()
-		if err != nil {
-			return 0, err
-		}
-		if commit.Succeeded {
-			return min, nil
-		}
-	}
 }
 
 func etcdCurrentFence(resp *clientv3.GetResponse) (uint64, int64) {
@@ -431,4 +272,76 @@ func maxUint64(a, b uint64) uint64 {
 		return a
 	}
 	return b
+}
+
+func TestRootFenceAllocatorReserveAdvancesWindow(t *testing.T) {
+	backend, err := rootlocal.Open(t.TempDir(), nil)
+	require.NoError(t, err)
+
+	store, err := coordstorage.OpenRootStore(backend)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+	a := &rootFenceAllocator{
+		store:      store,
+		current:    1,
+		windowHigh: 0,
+		tsFence:    0,
+		windowSize: 4,
+	}
+
+	first, err := a.Reserve(context.Background(), 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), first)
+
+	snapshot, err := store.Load()
+	require.NoError(t, err)
+	require.Equal(t, uint64(4), snapshot.Allocator.IDCurrent)
+
+	first, err = a.Reserve(context.Background(), 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), first)
+
+	snapshot, err = store.Load()
+	require.NoError(t, err)
+	require.Equal(t, uint64(4), snapshot.Allocator.IDCurrent)
+
+	first, err = a.Reserve(context.Background(), 3)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), first)
+
+	snapshot, err = store.Load()
+	require.NoError(t, err)
+	require.Equal(t, uint64(6), snapshot.Allocator.IDCurrent)
+}
+
+func TestRootFenceAllocatorReserveUsesBatchWhenBatchExceedsWindow(t *testing.T) {
+	backend, err := rootlocal.Open(t.TempDir(), nil)
+	require.NoError(t, err)
+
+	store, err := coordstorage.OpenRootStore(backend)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+	a := &rootFenceAllocator{
+		store:      store,
+		current:    1,
+		windowHigh: 0,
+		tsFence:    0,
+		windowSize: 2,
+	}
+
+	first, err := a.Reserve(context.Background(), 5)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), first)
+
+	snapshot, err := store.Load()
+	require.NoError(t, err)
+	require.Equal(t, uint64(5), snapshot.Allocator.IDCurrent)
+}
+
+func TestEtcdCurrentFenceParsesValue(t *testing.T) {
+	current, modRev := etcdCurrentFence(&clientv3.GetResponse{})
+	require.Equal(t, uint64(0), current)
+	require.Equal(t, int64(0), modRev)
 }

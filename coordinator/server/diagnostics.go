@@ -1,7 +1,10 @@
 package server
 
 import (
+	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
+	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
 	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 )
@@ -18,9 +21,20 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 	if err != nil {
 		loadErr = err.Error()
 	}
+	rootSnapshot := coordstorage.Snapshot{}
+	if s.storage != nil {
+		if snapshot, snapErr := s.storage.Load(); snapErr == nil {
+			rootSnapshot = snapshot
+		}
+	}
 
 	nowUnixNano, _, holderID, renewIn, clockSkew := s.leaseCampaignBounds()
-	lease := s.currentCoordinatorLease()
+	lease, _ := s.currentCoordinatorLeaseView()
+	report := coordaudit.BuildReport(rootSnapshot, holderID, nowUnixNano)
+	leaseFrontiers := controlplane.Frontiers(rootstate.State{
+		IDFence:  rootSnapshot.Allocator.IDCurrent,
+		TSOFence: rootSnapshot.Allocator.TSCurrent,
+	}, report.RootDescriptorRevision)
 
 	s.allocMu.Lock()
 	idCurrent := s.ids.Current()
@@ -72,9 +86,45 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 			"active":             lease.ActiveAt(nowUnixNano),
 			"held_by_self":       lease.HolderID != "" && lease.HolderID == holderID,
 			"usable_by_self":     leaseUsableBy(lease, holderID, nowUnixNano, clockSkew.Nanoseconds()),
-			"id_fence":           lease.IDFence,
-			"tso_fence":          lease.TSOFence,
+			"cert_generation":    lease.CertGeneration,
+			"issued_cursor": map[string]any{
+				"term":  lease.IssuedCursor.Term,
+				"index": lease.IssuedCursor.Index,
+			},
+			"duty_mask": lease.DutyMask,
+			"frontiers": diagnosticsCoordinatorFrontiers(leaseFrontiers),
 		},
+		"handoff": diagnosticsAuthorityHandoff(report.Handoff),
+		"seal": map[string]any{
+			"holder_id":          rootSnapshot.CoordinatorSeal.HolderID,
+			"cert_generation":    rootSnapshot.CoordinatorSeal.CertGeneration,
+			"duty_mask":          rootSnapshot.CoordinatorSeal.DutyMask,
+			"consumed_frontiers": diagnosticsCoordinatorFrontiers(rootSnapshot.CoordinatorSeal.Frontiers),
+			"sealed_at_cursor": map[string]any{
+				"term":  rootSnapshot.CoordinatorSeal.SealedAtCursor.Term,
+				"index": rootSnapshot.CoordinatorSeal.SealedAtCursor.Index,
+			},
+		},
+		"audit": map[string]any{
+			"seal_generation":              report.ClosureWitness.SealGeneration,
+			"seal_digest":                  report.ClosureWitness.SealDigest,
+			"successor_present":            report.ClosureWitness.SuccessorPresent,
+			"successor_frontier_coverage":  diagnosticsCoordinatorCoverage(report.ClosureWitness.SuccessorCoverage),
+			"successor_lineage_satisfied":  report.ClosureWitness.SuccessorLineageSatisfied,
+			"successor_monotone_covered":   report.ClosureWitness.SuccessorMonotoneCovered(),
+			"successor_descriptor_covered": report.ClosureWitness.SuccessorDescriptorCovered(),
+			"sealed_generation_retired":    report.ClosureWitness.SealedGenerationRetired,
+			"closure_satisfied":            report.ClosureWitness.ClosureSatisfied(),
+			"closure_stage":                report.Closure.Stage.String(),
+			"closure_defect":               string(report.Anomalies.ClosureDefect),
+			"closure_recorded": map[string]any{
+				"holder_id":            rootSnapshot.CoordinatorClosure.HolderID,
+				"seal_generation":      rootSnapshot.CoordinatorClosure.SealGeneration,
+				"successor_generation": rootSnapshot.CoordinatorClosure.SuccessorGeneration,
+				"seal_digest":          rootSnapshot.CoordinatorClosure.SealDigest,
+			},
+		},
+		"closure_witness": diagnosticsClosureWitness(report.ClosureWitness),
 	}
 }
 
@@ -91,6 +141,67 @@ func diagnosticsLeaderID(storage coordstorage.RootStorage) uint64 {
 		return 0
 	}
 	return storage.LeaderID()
+}
+
+func diagnosticsCoordinatorCoverage(status rootproto.CoordinatorSuccessorCoverageStatus) []map[string]any {
+	if len(status.Checks) == 0 {
+		return []map[string]any{}
+	}
+	out := make([]map[string]any, 0, len(status.Checks))
+	for _, check := range status.Checks {
+		out = append(out, map[string]any{
+			"duty_mask":         check.DutyMask,
+			"duty_name":         rootproto.CoordinatorDutyName(check.DutyMask),
+			"required_frontier": check.RequiredFrontier,
+			"actual_frontier":   check.ActualFrontier,
+			"covered":           check.Covered,
+		})
+	}
+	return out
+}
+
+func diagnosticsAuthorityHandoff(record rootproto.AuthorityHandoffRecord) map[string]any {
+	return map[string]any{
+		"holder_id":          record.HolderID,
+		"expires_unix_nano":  record.ExpiresUnixNano,
+		"cert_generation":    record.CertGeneration,
+		"duty_mask":          record.DutyMask,
+		"predecessor_digest": record.PredecessorDigest,
+		"issued_cursor": map[string]any{
+			"term":  record.IssuedCursor.Term,
+			"index": record.IssuedCursor.Index,
+		},
+		"frontiers": diagnosticsCoordinatorFrontiers(record.Frontiers),
+	}
+}
+
+func diagnosticsCoordinatorFrontiers(frontiers rootproto.CoordinatorDutyFrontiers) []map[string]any {
+	if frontiers.Len() == 0 {
+		return []map[string]any{}
+	}
+	entries := frontiers.Entries()
+	out := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, map[string]any{
+			"duty_mask": entry.DutyMask,
+			"duty_name": rootproto.CoordinatorDutyName(entry.DutyMask),
+			"frontier":  entry.Frontier,
+		})
+	}
+	return out
+}
+
+func diagnosticsClosureWitness(witness rootproto.ClosureWitness) map[string]any {
+	return map[string]any{
+		"seal_generation":             witness.SealGeneration,
+		"seal_digest":                 witness.SealDigest,
+		"successor_present":           witness.SuccessorPresent,
+		"successor_frontier_coverage": diagnosticsCoordinatorCoverage(witness.SuccessorCoverage),
+		"successor_lineage_satisfied": witness.SuccessorLineageSatisfied,
+		"sealed_generation_retired":   witness.SealedGenerationRetired,
+		"closure_stage":               witness.Stage.String(),
+		"closure_satisfied":           witness.ClosureSatisfied(),
+	}
 }
 
 func leaseUsableBy(lease rootstate.CoordinatorLease, holderID string, nowUnixNano int64, clockSkewNanos int64) bool {

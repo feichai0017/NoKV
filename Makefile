@@ -1,8 +1,9 @@
 # NoKV Makefile
 # Provides standardized commands for development workflow
 
-.PHONY: help build test test-short test-race test-coverage lint fmt clean docker-up docker-down bench install-tools
+.PHONY: help build test test-short test-race test-coverage lint fmt clean docker-up docker-down bench install-tools install-tla-tools
 .PHONY: proto proto-check proto-breaking-check
+.PHONY: tlc-ccc tlc-cccmultidim tlc-leaseonly-counterexample tlc-leasestart-counterexample apalache-typecheck apalache-check-ccc apalache-check-cccmultidim
 
 GOLANGCI_LINT_VERSION ?= v2.9.0
 BUF_VERSION ?= 1.66.0
@@ -24,6 +25,14 @@ help:
 	@echo "  make proto-breaking-check - Run Buf breaking checks against main"
 	@echo "  make bench              - Run benchmarks"
 	@echo "  make install-tools      - Install development tools"
+	@echo "  make install-tla-tools  - Install pinned TLC and Apalache locally under third_party/"
+	@echo "  make tlc-ccc            - Run TLC on spec/CCC.tla"
+	@echo "  make tlc-cccmultidim    - Run TLC on spec/CCCMultiDim.tla"
+	@echo "  make tlc-leaseonly-counterexample - Run TLC and expect a counterexample for spec/LeaseOnly.tla"
+	@echo "  make tlc-leasestart-counterexample - Run TLC and expect a counterexample for spec/LeaseStartOnly.tla"
+	@echo "  make apalache-typecheck - Run Apalache typecheck on current specs"
+	@echo "  make apalache-check-ccc - Run bounded Apalache check on CCC invariants"
+	@echo "  make apalache-check-cccmultidim - Run bounded Apalache check on CCCMultiDim invariants"
 	@echo "  make docker-up          - Start Docker Compose cluster"
 	@echo "  make docker-down        - Stop Docker Compose cluster"
 	@echo "  make clean              - Remove build artifacts and test data"
@@ -116,6 +125,139 @@ install-tools:
 	GOTOOLCHAIN=go$(PROJECT_GO_VERSION) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	go install github.com/bufbuild/buf/cmd/buf@v$(BUF_VERSION)
 	@echo "✓ Tools installed"
+
+install-tla-tools:
+	@echo "Installing pinned TLA+ tools locally..."
+	./scripts/tla/setup.sh
+
+tlc-ccc:
+	@echo "Running TLC on spec/CCC.tla..."
+	./scripts/tla/tlc.sh spec/CCC.tla
+
+tlc-cccmultidim:
+	@echo "Running TLC on spec/CCCMultiDim.tla..."
+	./scripts/tla/tlc.sh spec/CCCMultiDim.tla
+
+tlc-leaseonly-counterexample:
+	@echo "Running TLC on spec/LeaseOnly.tla (expecting counterexample)..."
+	@if ./scripts/tla/tlc.sh spec/LeaseOnly.tla; then \
+		echo "expected TLC to find a counterexample for LeaseOnly, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ TLC found the expected counterexample for LeaseOnly"; \
+	fi
+
+tlc-leasestart-counterexample:
+	@echo "Running TLC on spec/LeaseStartOnly.tla (expecting counterexample)..."
+	@if ./scripts/tla/tlc.sh spec/LeaseStartOnly.tla; then \
+		echo "expected TLC to find a counterexample for LeaseStartOnly, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ TLC found the expected counterexample for LeaseStartOnly"; \
+	fi
+
+tlc-chubbyfenced-counterexample:
+	@echo "Running TLC on spec/ChubbyFencedLease.tla (expecting coverage counterexample)..."
+	@if ./scripts/tla/tlc.sh spec/ChubbyFencedLease.tla; then \
+		echo "expected TLC to find a counterexample for ChubbyFencedLease, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ TLC found the expected counterexample for ChubbyFencedLease"; \
+	fi
+
+tlc-tokenonly-counterexample:
+	@echo "Running TLC on spec/TokenOnly.tla (expecting stale-delivery counterexample)..."
+	@if ./scripts/tla/tlc.sh spec/TokenOnly.tla; then \
+		echo "expected TLC to find a counterexample for TokenOnly, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ TLC found the expected counterexample for TokenOnly"; \
+	fi
+
+tlc-contrast-models: tlc-leaseonly-counterexample tlc-tokenonly-counterexample tlc-chubbyfenced-counterexample tlc-leasestart-counterexample
+
+record-tlc-ccc:
+	@echo "Recording TLC output for CCC..."
+	@if ./scripts/tla/record_tlc.sh spec/CCC.tla spec/artifacts/tlc-ccc.out; then \
+		echo "✓ Recorded TLC output for CCC"; \
+	else \
+		echo "expected CCC to succeed under TLC, but recording failed"; \
+		exit 1; \
+	fi
+
+record-tlc-cccmultidim:
+	@echo "Recording TLC output for CCCMultiDim..."
+	@if ./scripts/tla/record_tlc.sh spec/CCCMultiDim.tla spec/artifacts/tlc-cccmultidim.out; then \
+		echo "✓ Recorded TLC output for CCCMultiDim"; \
+	else \
+		echo "expected CCCMultiDim to succeed under TLC, but recording failed"; \
+		exit 1; \
+	fi
+
+record-tlc-leaseonly:
+	@echo "Recording TLC counterexample for LeaseOnly..."
+	@if ./scripts/tla/record_tlc.sh spec/LeaseOnly.tla spec/artifacts/tlc-leaseonly.out; then \
+		echo "expected LeaseOnly recording to fail with counterexample, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ Recorded TLC counterexample for LeaseOnly"; \
+	fi
+
+record-tlc-tokenonly:
+	@echo "Recording TLC counterexample for TokenOnly..."
+	@if ./scripts/tla/record_tlc.sh spec/TokenOnly.tla spec/artifacts/tlc-tokenonly.out; then \
+		echo "expected TokenOnly recording to fail with counterexample, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ Recorded TLC counterexample for TokenOnly"; \
+	fi
+
+record-tlc-chubbyfenced:
+	@echo "Recording TLC counterexample for ChubbyFencedLease..."
+	@if ./scripts/tla/record_tlc.sh spec/ChubbyFencedLease.tla spec/artifacts/tlc-chubbyfenced.out; then \
+		echo "expected ChubbyFencedLease recording to fail with counterexample, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ Recorded TLC counterexample for ChubbyFencedLease"; \
+	fi
+
+record-tlc-leasestart:
+	@echo "Recording TLC counterexample for LeaseStartOnly..."
+	@if ./scripts/tla/record_tlc.sh spec/LeaseStartOnly.tla spec/artifacts/tlc-leasestart.out; then \
+		echo "expected LeaseStartOnly recording to fail with counterexample, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ Recorded TLC counterexample for LeaseStartOnly"; \
+	fi
+
+record-apalache-ccc:
+	@echo "Recording Apalache bounded-check output for CCC..."
+	./scripts/tla/record_apalache_check.sh spec/CCC.tla spec/CCC.cfg G1_ClosureCompleteContinuation,G2_AuthorityUniqueness,G2_AuthorityUniquenessInductive,G3_PostSealInadmissibility 8 spec/artifacts/apalache-ccc.out
+	@echo "✓ Recorded Apalache output for CCC"
+
+record-apalache-cccmultidim:
+	@echo "Recording Apalache bounded-check output for CCCMultiDim..."
+	./scripts/tla/record_apalache_check.sh spec/CCCMultiDim.tla spec/CCCMultiDim.cfg NoWriteBehindServedRead 6 spec/artifacts/apalache-cccmultidim.out
+	@echo "✓ Recorded Apalache output for CCCMultiDim"
+
+record-formal-artifacts: record-tlc-ccc record-tlc-cccmultidim record-tlc-leaseonly record-tlc-tokenonly record-tlc-chubbyfenced record-tlc-leasestart record-apalache-ccc record-apalache-cccmultidim
+
+apalache-typecheck:
+	@echo "Running Apalache typecheck on current specs..."
+	./scripts/tla/apalache.sh typecheck --features=no-rows spec/CCC.tla
+	./scripts/tla/apalache.sh typecheck --features=no-rows spec/CCCMultiDim.tla
+	./scripts/tla/apalache.sh typecheck --features=no-rows spec/LeaseOnly.tla
+	./scripts/tla/apalache.sh typecheck --features=no-rows spec/LeaseStartOnly.tla
+	./scripts/tla/apalache.sh typecheck --features=no-rows spec/ChubbyFencedLease.tla
+	./scripts/tla/apalache.sh typecheck --features=no-rows spec/TokenOnly.tla
+
+apalache-check-ccc:
+	@echo "Running bounded Apalache check on CCC..."
+	./scripts/tla/apalache.sh --features=no-rows check --config=spec/CCC.cfg --no-deadlock --length=8 --inv=G1_ClosureCompleteContinuation,G2_AuthorityUniqueness,G2_AuthorityUniquenessInductive,G3_PostSealInadmissibility spec/CCC.tla
+
+apalache-check-cccmultidim:
+	@echo "Running bounded Apalache check on CCCMultiDim..."
+	./scripts/tla/apalache.sh --features=no-rows check --config=spec/CCCMultiDim.cfg --no-deadlock --length=6 --inv=NoWriteBehindServedRead spec/CCCMultiDim.tla
 
 # Start Docker Compose cluster
 docker-up:

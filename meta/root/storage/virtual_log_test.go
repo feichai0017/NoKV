@@ -25,7 +25,9 @@ func (f fakeVirtualLog) ReadCommitted(int64) (CommittedTail, error) {
 	return CloneCommittedTail(f.tail), nil
 }
 
-func (f fakeVirtualLog) AppendCommitted(...CommittedEvent) (int64, error) { return 0, nil }
+func (f fakeVirtualLog) AppendCommitted(context.Context, ...CommittedEvent) (int64, error) {
+	return 0, nil
+}
 
 func (f fakeVirtualLog) CompactCommitted(CommittedTail) error { return nil }
 

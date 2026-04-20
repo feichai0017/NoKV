@@ -9,6 +9,7 @@ import (
 	"time"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -119,7 +120,7 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) Snapshot() (rootstate.Snapshot, error) {
-	resp, err := invokeRead(c, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootSnapshotResponse, error) {
+	resp, err := invokeRead(c, context.Background(), func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootSnapshotResponse, error) {
 		return rpc.Snapshot(ctx, &metapb.MetadataRootSnapshotRequest{})
 	})
 	if err != nil {
@@ -129,7 +130,7 @@ func (c *Client) Snapshot() (rootstate.Snapshot, error) {
 	return snapshot, nil
 }
 
-func (c *Client) Append(events ...rootevent.Event) (rootstate.CommitInfo, error) {
+func (c *Client) Append(ctx context.Context, events ...rootevent.Event) (rootstate.CommitInfo, error) {
 	if c == nil || len(events) == 0 {
 		snapshot, err := c.Snapshot()
 		return rootstate.CommitInfo{Cursor: snapshot.State.LastCommitted, State: snapshot.State}, err
@@ -138,7 +139,7 @@ func (c *Client) Append(events ...rootevent.Event) (rootstate.CommitInfo, error)
 	for _, event := range events {
 		pbEvents = append(pbEvents, metawire.RootEventToProto(event))
 	}
-	resp, err := invokeWrite(c, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootAppendResponse, error) {
+	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootAppendResponse, error) {
 		return rpc.Append(ctx, &metapb.MetadataRootAppendRequest{Events: pbEvents})
 	})
 	if err != nil {
@@ -150,8 +151,8 @@ func (c *Client) Append(events ...rootevent.Event) (rootstate.CommitInfo, error)
 	}, nil
 }
 
-func (c *Client) FenceAllocator(kind rootstate.AllocatorKind, min uint64) (uint64, error) {
-	resp, err := invokeWrite(c, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootFenceAllocatorResponse, error) {
+func (c *Client) FenceAllocator(ctx context.Context, kind rootstate.AllocatorKind, min uint64) (uint64, error) {
+	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootFenceAllocatorResponse, error) {
 		return rpc.FenceAllocator(ctx, &metapb.MetadataRootFenceAllocatorRequest{
 			Kind:    allocatorKindToProto(kind),
 			Minimum: min,
@@ -176,43 +177,43 @@ func (c *Client) LeaderID() uint64 {
 	return status.GetLeaderId()
 }
 
-func (c *Client) CampaignCoordinatorLease(holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
-	resp, err := invokeWrite(c, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootCampaignResponse, error) {
-		return rpc.Campaign(ctx, &metapb.MetadataRootCampaignRequest{
-			HolderId:        holderID,
-			ExpiresUnixNano: expiresUnixNano,
-			NowUnixNano:     nowUnixNano,
-			IdFence:         idFence,
-			TsoFence:        tsoFence,
+func (c *Client) ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+	if !validCoordinatorLeaseCommandKind(cmd.Kind) {
+		return rootstate.CoordinatorProtocolState{}, rootstate.ErrInvalidCoordinatorLease
+	}
+	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyCoordinatorLeaseResponse, error) {
+		return rpc.ApplyCoordinatorLease(ctx, &metapb.MetadataRootApplyCoordinatorLeaseRequest{
+			Command: metawire.RootCoordinatorLeaseCommandToProto(cmd),
 		})
 	})
 	if err != nil {
-		return rootstate.CoordinatorLease{}, err
+		return rootstate.CoordinatorProtocolState{}, err
 	}
-	lease := metawire.RootCoordinatorLeaseFromProto(resp.GetLease())
-	if !resp.GetGranted() {
-		return lease, rootstate.ErrCoordinatorLeaseHeld
+	protocolState := metawire.RootCoordinatorProtocolStateFromProto(resp.GetState())
+	if cmd.Kind == rootproto.CoordinatorLeaseCommandIssue &&
+		resp.GetStatus() == metapb.RootCoordinatorLeaseApplyStatus_ROOT_COORDINATOR_LEASE_APPLY_STATUS_HELD {
+		return protocolState, rootstate.ErrCoordinatorLeaseHeld
 	}
-	return lease, nil
+	return protocolState, nil
 }
 
-func (c *Client) ReleaseCoordinatorLease(holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
-	resp, err := invokeWrite(c, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootReleaseResponse, error) {
-		return rpc.Release(ctx, &metapb.MetadataRootReleaseRequest{
-			HolderId:    holderID,
-			NowUnixNano: nowUnixNano,
-			IdFence:     idFence,
-			TsoFence:    tsoFence,
+func (c *Client) ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+	if !validCoordinatorClosureCommandKind(cmd.Kind) {
+		return rootstate.CoordinatorProtocolState{}, rootstate.ErrCoordinatorLeaseAudit
+	}
+	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyCoordinatorClosureResponse, error) {
+		return rpc.ApplyCoordinatorClosure(ctx, &metapb.MetadataRootApplyCoordinatorClosureRequest{
+			Command: metawire.RootCoordinatorClosureCommandToProto(cmd),
 		})
 	})
 	if err != nil {
-		return rootstate.CoordinatorLease{}, err
+		return rootstate.CoordinatorProtocolState{}, err
 	}
-	return metawire.RootCoordinatorLeaseFromProto(resp.GetLease()), nil
+	return metawire.RootCoordinatorProtocolStateFromProto(resp.GetState()), nil
 }
 
 func (c *Client) ObserveCommitted() (rootstorage.ObservedCommitted, error) {
-	resp, err := invokeRead(c, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootObserveCommittedResponse, error) {
+	resp, err := invokeRead(c, context.Background(), func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootObserveCommittedResponse, error) {
 		return rpc.ObserveCommitted(ctx, &metapb.MetadataRootObserveCommittedRequest{})
 	})
 	if err != nil {
@@ -222,7 +223,7 @@ func (c *Client) ObserveCommitted() (rootstorage.ObservedCommitted, error) {
 }
 
 func (c *Client) ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error) {
-	resp, err := invokeRead(c, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootObserveTailResponse, error) {
+	resp, err := invokeRead(c, context.Background(), func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootObserveTailResponse, error) {
 		return rpc.ObserveTail(ctx, &metapb.MetadataRootObserveTailRequest{After: tailTokenToProto(after)})
 	})
 	if err != nil {
@@ -232,7 +233,7 @@ func (c *Client) ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvan
 }
 
 func (c *Client) WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error) {
-	resp, err := invokeRead(c, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootWaitTailResponse, error) {
+	resp, err := invokeRead(c, context.Background(), func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootWaitTailResponse, error) {
 		return rpc.WaitTail(ctx, &metapb.MetadataRootWaitTailRequest{
 			After:         tailTokenToProto(after),
 			TimeoutMillis: uint64(timeout / time.Millisecond),
@@ -245,23 +246,29 @@ func (c *Client) WaitForTail(after rootstorage.TailToken, timeout time.Duration)
 }
 
 func (c *Client) status() (*metapb.MetadataRootStatusResponse, error) {
-	return invokeRead(c, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootStatusResponse, error) {
+	return invokeRead(c, context.Background(), func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootStatusResponse, error) {
 		return rpc.Status(ctx, &metapb.MetadataRootStatusRequest{})
 	})
 }
 
-func invokeRead[T any](c *Client, call func(context.Context, metapb.MetadataRootClient) (T, error)) (T, error) {
-	return invoke(c, false, call)
+func invokeRead[T any](c *Client, ctx context.Context, call func(context.Context, metapb.MetadataRootClient) (T, error)) (T, error) {
+	return invoke(c, ctx, false, call)
 }
 
-func invokeWrite[T any](c *Client, call func(context.Context, metapb.MetadataRootClient) (T, error)) (T, error) {
-	return invoke(c, true, call)
+func invokeWrite[T any](c *Client, ctx context.Context, call func(context.Context, metapb.MetadataRootClient) (T, error)) (T, error) {
+	return invoke(c, ctx, true, call)
 }
 
-func invoke[T any](c *Client, write bool, call func(context.Context, metapb.MetadataRootClient) (T, error)) (T, error) {
+func invoke[T any](c *Client, parent context.Context, write bool, call func(context.Context, metapb.MetadataRootClient) (T, error)) (T, error) {
 	var zero T
 	if c == nil {
 		return zero, errNilClient
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	if err := parent.Err(); err != nil {
+		return zero, err
 	}
 	endpoints := c.orderedEndpoints()
 	if len(endpoints) == 0 {
@@ -280,7 +287,7 @@ func invoke[T any](c *Client, write bool, call func(context.Context, metapb.Meta
 			tried[endpoint.id] = struct{}{}
 		}
 		attempts++
-		ctx, cancel := c.context()
+		ctx, cancel := c.context(parent)
 		resp, err := call(ctx, endpoint.rpc)
 		cancel()
 		if err == nil {
@@ -343,12 +350,15 @@ func (c *Client) markPreferred(id uint64) {
 	}
 }
 
-func (c *Client) context() (context.Context, context.CancelFunc) {
+func (c *Client) context(parent context.Context) (context.Context, context.CancelFunc) {
 	timeout := defaultCallTimeout
 	if c != nil && c.callTimeout > 0 {
 		timeout = c.callTimeout
 	}
-	return context.WithTimeout(context.Background(), timeout)
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, timeout)
 }
 
 func dialEndpoint(ctx context.Context, target string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
@@ -367,6 +377,27 @@ func dialEndpoint(ctx context.Context, target string, opts ...grpc.DialOption) (
 		return nil, err
 	}
 	return conn, nil
+}
+
+func validCoordinatorLeaseCommandKind(kind rootproto.CoordinatorLeaseCommandKind) bool {
+	switch kind {
+	case rootproto.CoordinatorLeaseCommandIssue, rootproto.CoordinatorLeaseCommandRelease:
+		return true
+	default:
+		return false
+	}
+}
+
+func validCoordinatorClosureCommandKind(kind rootproto.CoordinatorClosureCommandKind) bool {
+	switch kind {
+	case rootproto.CoordinatorClosureCommandSeal,
+		rootproto.CoordinatorClosureCommandConfirm,
+		rootproto.CoordinatorClosureCommandClose,
+		rootproto.CoordinatorClosureCommandReattach:
+		return true
+	default:
+		return false
+	}
 }
 
 func waitForReady(ctx context.Context, conn *grpc.ClientConn) error {
