@@ -546,6 +546,67 @@ func TestServiceGetRegionByKeyRequiredDescriptorRevision(t *testing.T) {
 	require.Equal(t, coordpb.SyncHealth_SYNC_HEALTH_HEALTHY, resp.GetSyncHealth())
 }
 
+func TestServiceGetRegionByKeyRejectsSplitPendingDescriptor(t *testing.T) {
+	cluster := catalog.NewCluster()
+	left := testDescriptor(41, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)
+	right := testDescriptor(42, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
+	left.RootEpoch = 6
+	right.RootEpoch = 6
+	cluster.ReplaceRootSnapshot(
+		map[uint64]descriptor.Descriptor{
+			left.RegionID:  left,
+			right.RegionID: right,
+		},
+		nil,
+		map[uint64]rootstate.PendingRangeChange{
+			40: {
+				Kind:           rootstate.PendingRangeChangeSplit,
+				ParentRegionID: 40,
+				LeftRegionID:   left.RegionID,
+				RightRegionID:  right.RegionID,
+				Left:           left,
+				Right:          right,
+			},
+		},
+		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 6},
+	)
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+
+	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("b")})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, err.Error(), errRangeChangePending)
+	require.Contains(t, err.Error(), "split")
+}
+
+func TestServiceGetRegionByKeyRejectsMergePendingDescriptor(t *testing.T) {
+	cluster := catalog.NewCluster()
+	merged := testDescriptor(51, []byte("a"), []byte("z"), metaregion.Epoch{Version: 3, ConfVersion: 2}, nil)
+	merged.RootEpoch = 9
+	cluster.ReplaceRootSnapshot(
+		map[uint64]descriptor.Descriptor{
+			merged.RegionID: merged,
+		},
+		nil,
+		map[uint64]rootstate.PendingRangeChange{
+			merged.RegionID: {
+				Kind:          rootstate.PendingRangeChangeMerge,
+				LeftRegionID:  49,
+				RightRegionID: 50,
+				Merged:        merged,
+			},
+		},
+		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 9},
+	)
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+
+	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("b")})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, err.Error(), errRangeChangePending)
+	require.Contains(t, err.Error(), "merge")
+}
+
 func TestServiceGetRegionByKeyBestEffortWithUnavailableRoot(t *testing.T) {
 	storage := &fakeStorage{
 		leader:   true,

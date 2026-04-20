@@ -450,6 +450,8 @@ func executionPublishStateProto(state store.PublishState) adminpb.ExecutionPubli
 		return adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_PUBLISHED
 	case store.PublishStateTerminalFailed:
 		return adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_FAILED
+	case store.PublishStateTerminalBlocked:
+		return adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_BLOCKED
 	default:
 		return adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_UNSPECIFIED
 	}
@@ -457,10 +459,13 @@ func executionPublishStateProto(state store.PublishState) adminpb.ExecutionPubli
 
 func buildExecutionRestartStatus(restart store.RestartStatus) *adminpb.ExecutionRestartStatus {
 	return &adminpb.ExecutionRestartStatus{
-		State:              executionRestartStateProto(restart.State),
-		RegionCount:        uint64(restart.RegionCount),
-		RaftGroupCount:     uint64(restart.RaftGroupCount),
-		MissingRaftPointer: append([]uint64(nil), restart.MissingRaftPointer...),
+		State:                          executionRestartStateProto(restart.State),
+		RegionCount:                    uint64(restart.RegionCount),
+		RaftGroupCount:                 uint64(restart.RaftGroupCount),
+		MissingRaftPointer:             append([]uint64(nil), restart.MissingRaftPointer...),
+		PendingRootEventCount:          uint64(restart.PendingRootEventCount),
+		BlockedRootEventCount:          uint64(restart.BlockedRootEventCount),
+		PendingSchedulerOperationCount: uint64(restart.PendingSchedulerOpCount),
 	}
 }
 

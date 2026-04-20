@@ -292,6 +292,29 @@ func (c *Cluster) GetRegionDescriptorByKey(key []byte) (descriptor.Descriptor, b
 	return desc, true
 }
 
+// PendingRangeChangeForDescriptor reports whether the served descriptor is only
+// visible because a rooted split/merge is still in its planned state.
+func (c *Cluster) PendingRangeChangeForDescriptor(regionID uint64) (rootstate.PendingRangeChange, bool) {
+	if c == nil || regionID == 0 {
+		return rootstate.PendingRangeChange{}, false
+	}
+	c.pendingMu.RLock()
+	defer c.pendingMu.RUnlock()
+	for _, change := range c.pendingRangeChanges {
+		switch change.Kind {
+		case rootstate.PendingRangeChangeSplit:
+			if change.LeftRegionID == regionID || change.RightRegionID == regionID {
+				return change, true
+			}
+		case rootstate.PendingRangeChangeMerge:
+			if change.Merged.RegionID == regionID {
+				return change, true
+			}
+		}
+	}
+	return rootstate.PendingRangeChange{}, false
+}
+
 // RegionLastHeartbeat returns the latest heartbeat timestamp for regionID.
 func (c *Cluster) RegionLastHeartbeat(regionID uint64) (time.Time, bool) {
 	if c == nil {
