@@ -28,18 +28,33 @@ const (
 	// PendingRootEventsFileName stores locally applied rooted events that still
 	// need a successful publish acknowledgement from the coordinator.
 	PendingRootEventsFileName = "pending-root-events.binpb"
+	// PendingSchedulerOperationsFileName stores scheduler decisions that must
+	// survive restart until the local executor applies them.
+	PendingSchedulerOperationsFileName = "pending-scheduler-operations.binpb"
+	// BlockedRootEventsFileName stores locally applied rooted events that were
+	// permanently rejected by the coordinator and therefore require repair
+	// instead of automatic retry.
+	BlockedRootEventsFileName = "blocked-root-events.binpb"
 )
 
 var (
 	// maxPendingRootEvents bounds the locally durable rooted-event backlog so a
 	// disconnected coordinator cannot grow restart recovery state without limit.
 	maxPendingRootEvents = 10_000
+	// maxBlockedRootEvents bounds the durable reconciliation backlog after
+	// permanent rooted publish rejection.
+	maxBlockedRootEvents = 10_000
+	// maxPendingSchedulerOperations bounds the locally durable scheduler
+	// decision backlog.
+	maxPendingSchedulerOperations = 10_000
 )
 
 type diskState struct {
-	Regions           map[uint64]RegionMeta
-	RaftPointers      map[uint64]RaftLogPointer
-	PendingRootEvents map[uint64]PendingRootEvent
+	Regions                    map[uint64]RegionMeta
+	RaftPointers               map[uint64]RaftLogPointer
+	PendingRootEvents          map[uint64]PendingRootEvent
+	PendingSchedulerOperations map[string]PendingSchedulerOperation
+	BlockedRootEvents          map[uint64]BlockedRootEvent
 }
 
 // Store persists store-local region metadata used only for local recovery.
@@ -132,6 +147,44 @@ func (s *Store) PendingRootEvents() []PendingRootEvent {
 	out := make([]PendingRootEvent, 0, len(keys))
 	for _, seq := range keys {
 		out = append(out, ClonePendingRootEvent(s.state.PendingRootEvents[seq]))
+	}
+	return out
+}
+
+// PendingSchedulerOperations returns locally durable scheduler decisions that
+// still need to be applied by the store runtime.
+func (s *Store) PendingSchedulerOperations() []PendingSchedulerOperation {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.state.PendingSchedulerOperations) == 0 {
+		return nil
+	}
+	keys := sortedPendingSchedulerOperationKeys(s.state.PendingSchedulerOperations)
+	out := make([]PendingSchedulerOperation, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, ClonePendingSchedulerOperation(s.state.PendingSchedulerOperations[key]))
+	}
+	return out
+}
+
+// BlockedRootEvents returns the durable rooted publish backlog that requires
+// explicit repair instead of automatic retry.
+func (s *Store) BlockedRootEvents() []BlockedRootEvent {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.state.BlockedRootEvents) == 0 {
+		return nil
+	}
+	keys := sortedBlockedSequences(s.state.BlockedRootEvents)
+	out := make([]BlockedRootEvent, 0, len(keys))
+	for _, seq := range keys {
+		out = append(out, CloneBlockedRootEvent(s.state.BlockedRootEvents[seq]))
 	}
 	return out
 }
@@ -230,6 +283,68 @@ func (s *Store) DeletePendingRootEvent(sequence uint64) error {
 	return s.persistLocked()
 }
 
+// SavePendingSchedulerOperation persists one scheduler decision until local
+// execution successfully consumes it.
+func (s *Store) SavePendingSchedulerOperation(op PendingSchedulerOperation) error {
+	if s == nil {
+		return nil
+	}
+	if op.Kind == PendingSchedulerOperationUnknown {
+		return fmt.Errorf("raftstore/localmeta: pending scheduler operation kind is unknown")
+	}
+	if op.RegionID == 0 {
+		return fmt.Errorf("raftstore/localmeta: pending scheduler operation region id is zero")
+	}
+	key := PendingSchedulerOperationKey(op)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.PendingSchedulerOperations == nil {
+		s.state.PendingSchedulerOperations = make(map[string]PendingSchedulerOperation)
+	}
+	if _, exists := s.state.PendingSchedulerOperations[key]; !exists && len(s.state.PendingSchedulerOperations) >= maxPendingSchedulerOperations {
+		return fmt.Errorf("raftstore/localmeta: pending scheduler operation limit exceeded (max=%d)", maxPendingSchedulerOperations)
+	}
+	s.state.PendingSchedulerOperations[key] = ClonePendingSchedulerOperation(op)
+	return s.persistLocked()
+}
+
+// DeletePendingSchedulerOperation removes one scheduler decision after local
+// execution finishes applying it.
+func (s *Store) DeletePendingSchedulerOperation(kind PendingSchedulerOperationKind, regionID uint64) error {
+	if s == nil || kind == PendingSchedulerOperationUnknown || regionID == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.state.PendingSchedulerOperations, pendingSchedulerOperationKey(kind, regionID))
+	return s.persistLocked()
+}
+
+// MovePendingRootEventToBlocked atomically removes one retryable rooted event
+// from the pending catalog and records it as a blocked reconciliation item.
+func (s *Store) MovePendingRootEventToBlocked(sequence uint64, blocked BlockedRootEvent) error {
+	if s == nil {
+		return nil
+	}
+	if sequence == 0 || blocked.Sequence == 0 {
+		return fmt.Errorf("raftstore/localmeta: blocked rooted event sequence is zero")
+	}
+	if blocked.Event.Kind == 0 {
+		return fmt.Errorf("raftstore/localmeta: blocked rooted event kind is unknown")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.state.PendingRootEvents, sequence)
+	if s.state.BlockedRootEvents == nil {
+		s.state.BlockedRootEvents = make(map[uint64]BlockedRootEvent)
+	}
+	if _, exists := s.state.BlockedRootEvents[blocked.Sequence]; !exists && len(s.state.BlockedRootEvents) >= maxBlockedRootEvents {
+		return fmt.Errorf("raftstore/localmeta: blocked rooted event limit exceeded (max=%d)", maxBlockedRootEvents)
+	}
+	s.state.BlockedRootEvents[blocked.Sequence] = CloneBlockedRootEvent(blocked)
+	return s.persistLocked()
+}
+
 // Close releases resources associated with the metadata store.
 func (s *Store) Close() error {
 	return nil
@@ -248,10 +363,20 @@ func loadState(fs vfs.FS, workdir string) (diskState, error) {
 	if err != nil {
 		return diskState{}, err
 	}
+	schedulerOps, err := loadPendingSchedulerOperationCatalog(fs, workdir)
+	if err != nil {
+		return diskState{}, err
+	}
+	blocked, err := loadBlockedRootEventCatalog(fs, workdir)
+	if err != nil {
+		return diskState{}, err
+	}
 	return diskState{
-		Regions:           regions,
-		RaftPointers:      progress,
-		PendingRootEvents: pending,
+		Regions:                    regions,
+		RaftPointers:               progress,
+		PendingRootEvents:          pending,
+		PendingSchedulerOperations: schedulerOps,
+		BlockedRootEvents:          blocked,
 	}, nil
 }
 
@@ -263,6 +388,12 @@ func (s *Store) persistLocked() error {
 		return err
 	}
 	if err := persistPendingRootEventCatalog(s.fs, s.workdir, s.state.PendingRootEvents); err != nil {
+		return err
+	}
+	if err := persistPendingSchedulerOperationCatalog(s.fs, s.workdir, s.state.PendingSchedulerOperations); err != nil {
+		return err
+	}
+	if err := persistBlockedRootEventCatalog(s.fs, s.workdir, s.state.BlockedRootEvents); err != nil {
 		return err
 	}
 	return nil
@@ -352,6 +483,78 @@ func loadPendingRootEventCatalog(fs vfs.FS, workdir string) (map[uint64]PendingR
 	return out, nil
 }
 
+func loadPendingSchedulerOperationCatalog(fs vfs.FS, workdir string) (map[string]PendingSchedulerOperation, error) {
+	path := filepath.Join(workdir, PendingSchedulerOperationsFileName)
+	data, err := fs.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return make(map[string]PendingSchedulerOperation), nil
+		}
+		return nil, err
+	}
+	if len(data) == 0 {
+		return make(map[string]PendingSchedulerOperation), nil
+	}
+	var pbCatalog metapb.PendingSchedulerOperationCatalog
+	if err := proto.Unmarshal(data, &pbCatalog); err != nil {
+		return nil, err
+	}
+	out := make(map[string]PendingSchedulerOperation, len(pbCatalog.Entries))
+	for _, item := range pbCatalog.Entries {
+		if item == nil || item.GetRegionId() == 0 {
+			continue
+		}
+		op := PendingSchedulerOperation{
+			Kind:         pendingSchedulerOperationKindFromPB(item.GetOperationType()),
+			RegionID:     item.GetRegionId(),
+			SourcePeerID: item.GetSourcePeerId(),
+			TargetPeerID: item.GetTargetPeerId(),
+		}
+		if op.Kind == PendingSchedulerOperationUnknown {
+			continue
+		}
+		out[PendingSchedulerOperationKey(op)] = op
+	}
+	if len(out) > maxPendingSchedulerOperations {
+		return nil, fmt.Errorf("raftstore/localmeta: pending scheduler operation catalog exceeds limit (entries=%d max=%d)", len(out), maxPendingSchedulerOperations)
+	}
+	return out, nil
+}
+
+func loadBlockedRootEventCatalog(fs vfs.FS, workdir string) (map[uint64]BlockedRootEvent, error) {
+	path := filepath.Join(workdir, BlockedRootEventsFileName)
+	data, err := fs.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return make(map[uint64]BlockedRootEvent), nil
+		}
+		return nil, err
+	}
+	if len(data) == 0 {
+		return make(map[uint64]BlockedRootEvent), nil
+	}
+	var pbCatalog metapb.BlockedRootEventCatalog
+	if err := proto.Unmarshal(data, &pbCatalog); err != nil {
+		return nil, err
+	}
+	out := make(map[uint64]BlockedRootEvent, len(pbCatalog.Entries))
+	for _, item := range pbCatalog.Entries {
+		if item == nil || item.GetSequence() == 0 || item.GetEvent() == nil {
+			continue
+		}
+		out[item.GetSequence()] = BlockedRootEvent{
+			Sequence:     item.GetSequence(),
+			Event:        metawire.RootEventFromProto(item.GetEvent()),
+			TransitionID: item.GetTransitionId(),
+			LastError:    item.GetLastError(),
+		}
+	}
+	if len(out) > maxBlockedRootEvents {
+		return nil, fmt.Errorf("raftstore/localmeta: blocked rooted event catalog exceeds limit (entries=%d max=%d)", len(out), maxBlockedRootEvents)
+	}
+	return out, nil
+}
+
 func persistReplicaCatalog(fs vfs.FS, workdir string, regions map[uint64]RegionMeta) error {
 	keys := sortedRegionIDs(regions)
 	pbCatalog := &metapb.ReplicaLocalCatalog{
@@ -399,6 +602,48 @@ func persistPendingRootEventCatalog(fs vfs.FS, workdir string, pending map[uint6
 		return err
 	}
 	return persistProtoFile(fs, workdir, PendingRootEventsFileName, payload)
+}
+
+func persistPendingSchedulerOperationCatalog(fs vfs.FS, workdir string, ops map[string]PendingSchedulerOperation) error {
+	keys := sortedPendingSchedulerOperationKeys(ops)
+	pbCatalog := &metapb.PendingSchedulerOperationCatalog{
+		Entries: make([]*metapb.PendingSchedulerOperation, 0, len(keys)),
+	}
+	for _, key := range keys {
+		op := ops[key]
+		pbCatalog.Entries = append(pbCatalog.Entries, &metapb.PendingSchedulerOperation{
+			OperationType: pendingSchedulerOperationKindToPB(op.Kind),
+			RegionId:      op.RegionID,
+			SourcePeerId:  op.SourcePeerID,
+			TargetPeerId:  op.TargetPeerID,
+		})
+	}
+	payload, err := proto.Marshal(pbCatalog)
+	if err != nil {
+		return err
+	}
+	return persistProtoFile(fs, workdir, PendingSchedulerOperationsFileName, payload)
+}
+
+func persistBlockedRootEventCatalog(fs vfs.FS, workdir string, blocked map[uint64]BlockedRootEvent) error {
+	keys := sortedBlockedSequences(blocked)
+	pbCatalog := &metapb.BlockedRootEventCatalog{
+		Entries: make([]*metapb.BlockedRootEvent, 0, len(keys)),
+	}
+	for _, seq := range keys {
+		item := blocked[seq]
+		pbCatalog.Entries = append(pbCatalog.Entries, &metapb.BlockedRootEvent{
+			Sequence:     item.Sequence,
+			Event:        metawire.RootEventToProto(item.Event),
+			TransitionId: item.TransitionID,
+			LastError:    item.LastError,
+		})
+	}
+	payload, err := proto.Marshal(pbCatalog)
+	if err != nil {
+		return err
+	}
+	return persistProtoFile(fs, workdir, BlockedRootEventsFileName, payload)
 }
 
 func persistProtoFile(fs vfs.FS, workdir, name string, payload []byte) error {
@@ -549,6 +794,19 @@ func regionStateFromPB(state metapb.RegionReplicaState) metaregion.ReplicaState 
 	}
 }
 
+func pendingSchedulerOperationKindToPB(kind PendingSchedulerOperationKind) uint32 {
+	return uint32(kind)
+}
+
+func pendingSchedulerOperationKindFromPB(kind uint32) PendingSchedulerOperationKind {
+	switch PendingSchedulerOperationKind(kind) {
+	case PendingSchedulerOperationLeaderTransfer:
+		return PendingSchedulerOperationLeaderTransfer
+	default:
+		return PendingSchedulerOperationUnknown
+	}
+}
+
 func sortedRegionIDs(regions map[uint64]RegionMeta) []uint64 {
 	keys := make([]uint64, 0, len(regions))
 	for id := range regions {
@@ -570,6 +828,24 @@ func sortedRaftGroupIDs(progress map[uint64]RaftLogPointer) []uint64 {
 func sortedPendingSequences(pending map[uint64]PendingRootEvent) []uint64 {
 	keys := make([]uint64, 0, len(pending))
 	for seq := range pending {
+		keys = append(keys, seq)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func sortedPendingSchedulerOperationKeys(ops map[string]PendingSchedulerOperation) []string {
+	keys := make([]string, 0, len(ops))
+	for key := range ops {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func sortedBlockedSequences(blocked map[uint64]BlockedRootEvent) []uint64 {
+	keys := make([]uint64, 0, len(blocked))
+	for seq := range blocked {
 		keys = append(keys, seq)
 	}
 	slices.Sort(keys)

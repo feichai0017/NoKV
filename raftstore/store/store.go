@@ -74,7 +74,7 @@ func NewStore(cfg Config) *Store {
 				cooldown:  operationCooldown,
 				interval:  operationInterval,
 				burst:     operationBurst,
-				pending:   make(map[operationKey]struct{}),
+				pending:   make(map[operationKey]bool),
 				lastApply: make(map[operationKey]time.Time),
 			},
 			publish: publishRuntime{
@@ -107,6 +107,7 @@ func NewStore(cfg Config) *Store {
 	if cfg.LocalMeta != nil {
 		s.regionMgr().loadBootstrapSnapshot(cfg.LocalMeta.Snapshot())
 		s.enqueueRecoveredPendingRegionEvents(cfg.LocalMeta.PendingRootEvents())
+		s.enqueueRecoveredPendingSchedulerOperations(cfg.LocalMeta.PendingSchedulerOperations())
 	}
 	if s.schedulerClient() != nil {
 		s.sched.publish.heartbeat = cfg.HeartbeatInterval

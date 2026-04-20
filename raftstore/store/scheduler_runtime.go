@@ -15,6 +15,8 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const defaultPublishRetryBackoff = 200 * time.Millisecond
@@ -37,7 +39,7 @@ type operationRuntime struct {
 	burst    int
 
 	mu        sync.Mutex
-	pending   map[operationKey]struct{}
+	pending   map[operationKey]bool
 	lastApply map[operationKey]time.Time
 	dropped   uint64
 }
@@ -164,14 +166,33 @@ func (s *Store) enqueueOperation(op Operation) {
 		s.sched.operation.mu.Unlock()
 		return
 	}
-	s.sched.operation.pending[key] = struct{}{}
+	s.sched.operation.pending[key] = false
 	s.sched.operation.mu.Unlock()
-	select {
-	case s.sched.operation.input <- op:
-		s.clearLocalSchedulerDegraded()
-	default:
+	if !s.hasDurableSchedulerQueue() {
+		if s.dispatchPendingSchedulerOperation(op) {
+			s.clearLocalSchedulerDegraded()
+			return
+		}
 		s.recordLocalSchedulerDrop(op)
+		return
 	}
+	if err := s.persistPendingSchedulerOperation(op); err != nil {
+		s.dropQueuedOperations([]Operation{op}, fmt.Sprintf("persist failed: %v", err))
+		return
+	}
+	if s.dispatchPendingSchedulerOperation(op) {
+		s.clearLocalSchedulerDegraded()
+		return
+	}
+	s.recordLocalSchedulerBacklog(op, "queue full")
+}
+
+func (s *Store) hasDurableSchedulerQueue() bool {
+	if s == nil {
+		return false
+	}
+	rm := s.regionMgr()
+	return rm != nil && rm.localMeta != nil
 }
 
 func (s *Store) startHeartbeatLoop() {
@@ -202,6 +223,7 @@ func (s *Store) runHeartbeatLoop() {
 	for {
 		select {
 		case <-ticker.C:
+			s.retryPendingSchedulerOperations()
 			s.sendHeartbeats()
 		case <-s.sched.publish.regionSignal:
 			s.flushRegionUpdates()
@@ -322,6 +344,17 @@ func (s *Store) flushRegionUpdates() {
 		ctx, cancel := s.schedulerPublishContext()
 		if err := s.schedulerClient().PublishRootEvent(ctx, ev.root); err != nil {
 			cancel()
+			if isPermanentSchedulerPublishError(err) {
+				if moveErr := s.blockPendingRegionEvent(ev, err); moveErr != nil {
+					failed = append(failed, ev)
+					s.recordTopologyPublishFailure(rootstateTransitionEvent{transitionID: ev.transitionID}, moveErr)
+					s.recordLocalSchedulerPublishFailure(ev, moveErr)
+					continue
+				}
+				s.recordTopologyPublishBlocked(rootstateTransitionEvent{transitionID: ev.transitionID}, err)
+				s.recordLocalSchedulerPublishFailure(ev, err)
+				continue
+			}
 			failed = append(failed, ev)
 			s.recordTopologyPublishFailure(rootstateTransitionEvent{transitionID: ev.transitionID}, err)
 			s.recordLocalSchedulerPublishFailure(ev, err)
@@ -403,6 +436,22 @@ func (s *Store) persistPendingRegionEvent(ev *regionEvent) error {
 	return nil
 }
 
+func (s *Store) blockPendingRegionEvent(ev regionEvent, cause error) error {
+	if s == nil || ev.seq == 0 {
+		return nil
+	}
+	rm := s.regionMgr()
+	if rm == nil || rm.localMeta == nil {
+		return nil
+	}
+	return rm.localMeta.MovePendingRootEventToBlocked(ev.seq, localmeta.BlockedRootEvent{
+		Sequence:     ev.seq,
+		Event:        ev.root,
+		TransitionID: ev.transitionID,
+		LastError:    errorString(cause),
+	})
+}
+
 func (s *Store) deletePendingRegionEvent(seq uint64) error {
 	if s == nil || seq == 0 {
 		return nil
@@ -411,6 +460,86 @@ func (s *Store) deletePendingRegionEvent(seq uint64) error {
 		return rm.localMeta.DeletePendingRootEvent(seq)
 	}
 	return nil
+}
+
+func (s *Store) persistPendingSchedulerOperation(op Operation) error {
+	if s == nil {
+		return nil
+	}
+	item, ok := localmetaSchedulerOperation(op)
+	if !ok {
+		return nil
+	}
+	if rm := s.regionMgr(); rm != nil && rm.localMeta != nil {
+		return rm.localMeta.SavePendingSchedulerOperation(item)
+	}
+	return nil
+}
+
+func (s *Store) deletePendingSchedulerOperation(op Operation) error {
+	if s == nil {
+		return nil
+	}
+	item, ok := localmetaSchedulerOperation(op)
+	if !ok {
+		return nil
+	}
+	if rm := s.regionMgr(); rm != nil && rm.localMeta != nil {
+		return rm.localMeta.DeletePendingSchedulerOperation(item.Kind, item.RegionID)
+	}
+	return nil
+}
+
+func localmetaSchedulerOperation(op Operation) (localmeta.PendingSchedulerOperation, bool) {
+	switch op.Type {
+	case OperationLeaderTransfer:
+		return localmeta.PendingSchedulerOperation{
+			Kind:         localmeta.PendingSchedulerOperationLeaderTransfer,
+			RegionID:     op.Region,
+			SourcePeerID: op.Source,
+			TargetPeerID: op.Target,
+		}, true
+	default:
+		return localmeta.PendingSchedulerOperation{}, false
+	}
+}
+
+func storeOperationFromLocalMeta(op localmeta.PendingSchedulerOperation) (Operation, bool) {
+	switch op.Kind {
+	case localmeta.PendingSchedulerOperationLeaderTransfer:
+		return Operation{
+			Type:   OperationLeaderTransfer,
+			Region: op.RegionID,
+			Source: op.SourcePeerID,
+			Target: op.TargetPeerID,
+		}, true
+	default:
+		return Operation{}, false
+	}
+}
+
+func (s *Store) dispatchPendingSchedulerOperation(op Operation) bool {
+	if s == nil || s.sched == nil || s.sched.operation.input == nil {
+		return false
+	}
+	key := operationKey{region: op.Region, typeID: op.Type}
+	s.sched.operation.mu.Lock()
+	if queued, exists := s.sched.operation.pending[key]; exists && queued {
+		s.sched.operation.mu.Unlock()
+		return true
+	}
+	s.sched.operation.mu.Unlock()
+	select {
+	case s.sched.operation.input <- op:
+		s.sched.operation.mu.Lock()
+		if _, exists := s.sched.operation.pending[key]; exists {
+			s.sched.operation.pending[key] = true
+		}
+		s.sched.operation.mu.Unlock()
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Store) enqueueRecoveredPendingRegionEvents(events []localmeta.PendingRootEvent) {
@@ -440,6 +569,49 @@ func (s *Store) enqueueRecoveredPendingRegionEvents(events []localmeta.PendingRo
 	s.signalRegionFlush()
 }
 
+func (s *Store) enqueueRecoveredPendingSchedulerOperations(ops []localmeta.PendingSchedulerOperation) {
+	if s == nil || s.sched == nil || len(ops) == 0 {
+		return
+	}
+	for _, item := range ops {
+		op, ok := storeOperationFromLocalMeta(item)
+		if !ok {
+			continue
+		}
+		key := operationKey{region: op.Region, typeID: op.Type}
+		s.sched.operation.mu.Lock()
+		s.sched.operation.pending[key] = false
+		s.sched.operation.mu.Unlock()
+		if s.dispatchPendingSchedulerOperation(op) {
+			s.clearLocalSchedulerDegraded()
+			continue
+		}
+		s.recordLocalSchedulerBacklog(op, "queue full")
+	}
+}
+
+func (s *Store) retryPendingSchedulerOperations() {
+	if s == nil || s.sched == nil || s.sched.operation.input == nil {
+		return
+	}
+	rm := s.regionMgr()
+	if rm == nil || rm.localMeta == nil {
+		return
+	}
+	for _, item := range rm.localMeta.PendingSchedulerOperations() {
+		op, ok := storeOperationFromLocalMeta(item)
+		if !ok {
+			continue
+		}
+		if s.dispatchPendingSchedulerOperation(op) {
+			s.clearLocalSchedulerDegraded()
+			continue
+		}
+		s.recordLocalSchedulerBacklog(op, "queue full")
+		return
+	}
+}
+
 func (s *Store) stopOperationLoop() {
 	if s == nil || s.sched == nil || s.sched.operation.stop == nil {
 		return
@@ -462,8 +634,10 @@ func (s *Store) runOperationLoop() {
 	for {
 		select {
 		case <-s.sched.operation.stop:
-			s.dropQueuedOperations(flattenScheduledOps(pending), "store closing")
-			s.dropQueuedOperations(s.drainBufferedOperations(), "store closing")
+			if !s.hasDurableSchedulerQueue() {
+				s.dropQueuedOperations(flattenScheduledOps(pending), "store closing")
+				s.dropQueuedOperations(s.drainBufferedOperations(), "store closing")
+			}
 			return
 		case op := <-s.sched.operation.input:
 			pending = append(pending, scheduledOp{op: op, ready: s.nextOperationReadyTime(op)})
@@ -485,9 +659,10 @@ func (s *Store) runOperationLoop() {
 					continue
 				}
 				if s.applyOperation(item.op) {
-					s.markOperationApplied(item.op, now)
-					applied++
-					continue
+					if s.markOperationApplied(item.op, now) {
+						applied++
+						continue
+					}
 				}
 				remaining = append(remaining, item)
 			}
@@ -510,9 +685,19 @@ func (s *Store) nextOperationReadyTime(op Operation) time.Time {
 	return last.Add(s.sched.operation.cooldown)
 }
 
-func (s *Store) markOperationApplied(op Operation, ts time.Time) {
+func (s *Store) markOperationApplied(op Operation, ts time.Time) bool {
 	if s == nil {
-		return
+		return false
+	}
+	if err := s.deletePendingSchedulerOperation(op); err != nil {
+		key := operationKey{region: op.Region, typeID: op.Type}
+		s.sched.operation.mu.Lock()
+		if _, exists := s.sched.operation.pending[key]; exists {
+			s.sched.operation.pending[key] = false
+		}
+		s.sched.operation.mu.Unlock()
+		s.recordLocalSchedulerBacklog(op, fmt.Sprintf("persist delete failed: %v", err))
+		return false
 	}
 	key := operationKey{region: op.Region, typeID: op.Type}
 	s.sched.operation.mu.Lock()
@@ -523,6 +708,7 @@ func (s *Store) markOperationApplied(op Operation, ts time.Time) {
 	}
 	delete(s.sched.operation.pending, key)
 	s.sched.operation.mu.Unlock()
+	return true
 }
 
 func (s *Store) clearLocalSchedulerDegraded() {
@@ -539,6 +725,19 @@ func (s *Store) clearLocalSchedulerDegraded() {
 
 func (s *Store) recordLocalSchedulerDrop(op Operation) {
 	s.dropQueuedOperations([]Operation{op}, "queue full")
+}
+
+func (s *Store) recordLocalSchedulerBacklog(op Operation, reason string) {
+	if s == nil || s.sched == nil {
+		return
+	}
+	now := time.Now()
+	msg := fmt.Sprintf("scheduler %s: pending %s for region %d", reason, op.Type.String(), op.Region)
+	s.sched.health.mu.Lock()
+	s.sched.health.degraded = true
+	s.sched.health.lastError = msg
+	s.sched.health.lastErrorAt = now
+	s.sched.health.mu.Unlock()
 }
 
 func (s *Store) dropQueuedOperations(ops []Operation, reason string) {
@@ -581,6 +780,22 @@ func (s *Store) recordLocalSchedulerPublishFailure(ev regionEvent, err error) {
 	s.sched.health.lastErrorAt = now
 	s.sched.health.mu.Unlock()
 	slog.Default().Warn(msg)
+}
+
+func isPermanentSchedulerPublishError(err error) bool {
+	if err == nil {
+		return false
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	switch st.Code() {
+	case codes.InvalidArgument, codes.FailedPrecondition, codes.AlreadyExists, codes.PermissionDenied, codes.Unimplemented:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Store) storeStatsSnapshot() StoreStats {
