@@ -628,6 +628,12 @@ func (db *DB) resolveDetachedValue(src *kv.Entry) ([]byte, byte, error) {
 }
 
 // Get reads the latest visible value for key from the default column family.
+//
+// The returned Entry is DETACHED: caller owns Entry.Value bytes and must
+// NOT call DecrRef. This differs from GetInternalEntry, which returns
+// a BORROWED entry that must be released with DecrRef exactly once.
+// Mixing the two contracts typically surfaces as a crash far from the
+// bug site.
 func (db *DB) Get(key []byte) (*kv.Entry, error) {
 	if len(key) == 0 {
 		return nil, utils.ErrEmptyKey

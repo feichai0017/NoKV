@@ -1,3 +1,20 @@
+// Package server implements the Coordinator gRPC service — the control-plane
+// entry point for route lookup, TSO, ID allocation, lease management, and
+// rooted topology mutations.
+//
+// This package owns the SERVICE layer. It consumes rooted truth from
+// meta/root/ but never owns durable cluster state. The execution plane
+// (raftstore/) applies and publishes, and coordinator reconstructs its
+// view by tailing rooted commits. Contracts between the planes are
+// specified in TLA+ under spec/CCC.tla.
+//
+// Heavy logic is deliberately split into sibling packages:
+// catalog (region/event validation), view (directory + store health),
+// protocol/controlplane (authority handoff primitives), storage
+// (rooted adapter), audit (snapshot + trace audit).
+//
+// Design references: docs/coordinator.md, docs/control_and_execution_protocols.md,
+// docs/rooted_truth.md, docs/ccc-audit.md.
 package server
 
 import (

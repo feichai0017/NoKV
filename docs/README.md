@@ -137,7 +137,7 @@ Notable design notes:
 ## 🏗️ Architecture at a Glance
 
 <p align="center">
-  <img src="../img/architecture.svg" alt="NoKV Architecture" width="100%" />
+  <img src="assets/architecture.svg" alt="NoKV Architecture" width="100%" />
 </p>
 
 **Four boundaries that set NoKV apart from typical single-purpose KV prototypes:**

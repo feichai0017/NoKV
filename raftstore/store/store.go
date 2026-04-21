@@ -1,3 +1,17 @@
+// Package store is the multi-region execution runtime of NoKV's raft
+// side. Each Store hosts a Router, a set of Peers, a region runtime,
+// a command runtime, an execution runtime, and a scheduler runtime.
+//
+// Authority boundary: this package is an EXECUTOR. It applies committed
+// raft commands and publishes terminal truth back to the coordinator;
+// it never fabricates cluster-wide metadata. Any durable state owned
+// here lives in raftstore/localmeta/ as a store-local recovery mirror.
+//
+// Transitions (peer add/remove, region split/merge, descriptor publish)
+// are expressed as typed events through transition_builder.go and
+// transition_executor.go, then published to coordinator via PublishRootEvent.
+//
+// See docs/raftstore.md and docs/control_and_execution_protocols.md.
 package store
 
 import (
