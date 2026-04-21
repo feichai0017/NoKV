@@ -89,7 +89,6 @@ Raftstore, coordinator, rooted truth, migration — the distributed layer.
 | Raftstore overview (store/peer/admin) | [raftstore.md](raftstore.md) |
 | Coordinator (route / TSO / heartbeats) | [coordinator.md](coordinator.md) |
 | **Rooted truth kernel** (`meta/root`) | [rooted_truth.md](rooted_truth.md) |
-| **Namespace** (hierarchical listing) | [namespace.md](namespace.md) |
 | Control-plane ↔ execution-plane contract | [control_and_execution_protocols.md](control_and_execution_protocols.md) |
 | Standalone → distributed migration | [migration.md](migration.md) |
 | Recovery model | [recovery.md](recovery.md) |

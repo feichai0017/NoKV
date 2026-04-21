@@ -31,7 +31,6 @@
 - [Raftstore](raftstore.md)
 - [Coordinator](coordinator.md)
 - [Rooted Truth (meta/root)](rooted_truth.md)
-- [Namespace](namespace.md)
 - [Percolator](percolator.md)
 - [Migration](migration.md)
 - [Recovery](recovery.md)
