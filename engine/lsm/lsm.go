@@ -7,7 +7,7 @@
 //
 // Durability ordering (enforced end-to-end):
 //
-//   vlog append → WAL append → memtable apply → flush SST → manifest edit
+//	vlog append → WAL append → memtable apply → flush SST → manifest edit
 //
 // Crash at any point leaves a consistent state; the manifest publication
 // is atomic via the CURRENT symlink plus varint edit log, and replay
