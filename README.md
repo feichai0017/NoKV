@@ -251,7 +251,6 @@ Programmatic access: `import "github.com/feichai0017/NoKV/config"` and call `con
 | [`raftstore/`](./raftstore) | Multi-Raft region management, transport, membership, snapshot install | [RaftStore](docs/raftstore.md) |
 | [`coordinator/`](./coordinator) | Control plane: routing, TSO, heartbeats, lease management | [Coordinator](docs/coordinator.md) |
 | [`meta/root/`](./meta/root) | Typed rooted truth kernel (Delos-lite), replicated/local backends | [Rooted Truth](docs/rooted_truth.md) |
-| [`namespace/`](./namespace) | Hierarchical listing infrastructure on top of LSM | [Namespace](docs/namespace.md) |
 | [`thermos/`](./thermos) | Hot-key detection and throttling | [Thermos](docs/thermos.md) |
 | [`spec/`](./spec) | TLA+ specifications and contrast models | [spec/README.md](./spec/README.md) |
 | [`cmd/nokv/`](./cmd/nokv) | CLI: stats, manifest, regions, vlog, migrate, coordinator | [CLI](docs/cli.md) |
