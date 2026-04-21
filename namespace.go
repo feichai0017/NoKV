@@ -4,26 +4,18 @@ import (
 	"sync"
 )
 
-const defaultNamespaceShards = 16
-
 // NamespaceOptions reserves construction-time knobs for future namespace
 // experiments. The current handle only registers a DB-scoped lifecycle module.
 type NamespaceOptions struct {
+	// Shards is reserved for future namespace experiments. It is intentionally
+	// ignored while only the registration shell remains.
 	Shards int
-}
-
-func (o NamespaceOptions) withDefaults() NamespaceOptions {
-	if o.Shards <= 0 {
-		o.Shards = defaultNamespaceShards
-	}
-	return o
 }
 
 // NamespaceHandle is the minimal registration shell kept at the DB boundary
 // while the previous namespace listing prototype has been retired.
 type NamespaceHandle struct {
-	db  *DB
-	opt NamespaceOptions
+	db *DB
 
 	closeOnce sync.Once
 }
@@ -38,10 +30,8 @@ func (db *DB) Namespace(opt NamespaceOptions) *NamespaceHandle {
 	if db == nil {
 		return nil
 	}
-	opt = opt.withDefaults()
 	h := &NamespaceHandle{
-		db:  db,
-		opt: opt,
+		db: db,
 	}
 	db.runtimeModules.Register(h)
 	return h
