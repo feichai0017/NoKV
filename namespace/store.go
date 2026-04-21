@@ -3,11 +3,12 @@
 // directory-style workloads.
 //
 // Layout:
-//   M|full_path           authoritative truth
-//   LR|parent             read-plane root + per-interval coverage state
-//   LP|parent|fence       certified ordered micro-page
-//   LD|parent|shard|child bootstrap delta for cold parents
-//   LDP|parent|page|#seq  append-only page-local delta log
+//
+//	M|full_path           authoritative truth
+//	LR|parent             read-plane root + per-interval coverage state
+//	LP|parent|fence       certified ordered micro-page
+//	LD|parent|shard|child bootstrap delta for cold parents
+//	LDP|parent|page|#seq  append-only page-local delta log
 //
 // Contract: strict List never silently falls back to truth scan.
 // Uncovered intervals must be explicitly repaired via RepairAndList.
