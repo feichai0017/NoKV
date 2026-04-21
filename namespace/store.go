@@ -1,3 +1,22 @@
+// Package namespace implements a hierarchical listing layer on top of
+// NoKV's LSM substrate — a proof-gated paginated-list service for
+// directory-style workloads.
+//
+// Layout:
+//   M|full_path           authoritative truth
+//   LR|parent             read-plane root + per-interval coverage state
+//   LP|parent|fence       certified ordered micro-page
+//   LD|parent|shard|child bootstrap delta for cold parents
+//   LDP|parent|page|#seq  append-only page-local delta log
+//
+// Contract: strict List never silently falls back to truth scan.
+// Uncovered intervals must be explicitly repaired via RepairAndList.
+// Recent writes are page-local and don't invalidate the whole read
+// plane for a parent.
+//
+// See docs/namespace.md for the full design, cost tradeoffs, and
+// repair state machine. The root-level NamespaceHandle in
+// namespace.go wraps a Store with DB lifecycle hooks.
 package namespace
 
 import (

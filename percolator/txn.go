@@ -1,3 +1,15 @@
+// Package percolator implements Google-Percolator-style distributed
+// MVCC two-phase commit over NoKV's key/value substrate.
+//
+// Protocol ops: Prewrite, Commit, Rollback, ResolveLock, CheckTxnStatus.
+// Concurrency is controlled by a striped-mutex latch manager
+// (percolator/latch) shared per raftstore/kv service instance.
+// The timestamp oracle is provided by coordinator/tso.
+//
+// This package is used in distributed mode only. Embedded DB APIs
+// go straight through the engine substrate without percolator's 2PC.
+//
+// See docs/percolator.md for the protocol walkthrough.
 package percolator
 
 import (
