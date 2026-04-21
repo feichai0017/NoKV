@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-36d46b39.js";
+            window.path_to_searchindex_js = "searchindex-d55e5e8e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-6a4e4767.js"></script>
@@ -370,7 +370,7 @@ defer srv.Close()
 <li><code>raftstore/server/node.go</code></li>
 <li><code>raftstore/store/store.go</code></li>
 <li><code>raftstore/peer/peer.go</code></li>
-<li><code>raftstore/engine/wal_storage.go</code></li>
+<li><code>raftstore/raftlog/wal_storage.go</code></li>
 <li><code>raftstore/localmeta/store.go</code></li>
 </ul>
 <div class="table-wrapper">
@@ -381,7 +381,7 @@ defer srv.Close()
 <tbody>
 <tr><td><a href="../raftstore/store"><code>store</code></a></td><td>Region catalog/runtime root, router, RegionMetrics, scheduler + command runtimes, helpers such as <code>StartPeer</code> / <code>SplitRegion</code>.</td></tr>
 <tr><td><a href="../raftstore/peer"><code>peer</code></a></td><td>Wraps etcd/raft <code>RawNode</code>, handles Ready pipeline, snapshot resend queue, backlog instrumentation.</td></tr>
-<tr><td><a href="../raftstore/engine"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage, reusing the DB’s WAL while keeping store-local raft replay metadata in sync.</td></tr>
+<tr><td><a href="../raftstore/raftlog"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage, reusing the DB’s WAL while keeping store-local raft replay metadata in sync.</td></tr>
 <tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport for Raft Step messages, connection management, retries/blocks/TLS. Also acts as the host for NoKV RPC.</td></tr>
 <tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>NoKV RPC handler plus <code>kv.Apply</code> bridging Raft commands to MVCC logic.</td></tr>
 <tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>Config</code> + <code>NewNode</code> combine DB, Store, transport, and NoKV service into a reusable node instance.</td></tr>

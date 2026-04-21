@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-36d46b39.js";
+            window.path_to_searchindex_js = "searchindex-d55e5e8e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-6a4e4767.js"></script>
@@ -282,7 +282,7 @@ drop</li>
 <ul>
 <li><code>raftstore/store</code></li>
 <li><code>raftstore/peer</code></li>
-<li><code>raftstore/engine</code></li>
+<li><code>raftstore/raftlog</code></li>
 <li><code>raftstore/localmeta</code></li>
 </ul>
 <p>So the right description there is:</p>
@@ -1170,7 +1170,7 @@ terminal truth is durably published.</p>
 <p>Execution-plane protocol v1 landed first in the places that already carried
 the boundary implicitly:</p>
 <ul>
-<li><code>raftstore/store/command_service.go</code>
+<li><code>raftstore/store/command_ops.go</code>
 <ul>
 <li>request admission and context semantics</li>
 </ul>

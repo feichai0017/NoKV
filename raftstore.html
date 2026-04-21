@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-36d46b39.js";
+            window.path_to_searchindex_js = "searchindex-d55e5e8e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-6a4e4767.js"></script>
@@ -203,7 +203,7 @@ admission, transition execution, publish boundaries, and restart state, read
 <tbody>
 <tr><td><a href="../raftstore/store"><code>store</code></a></td><td>Orchestrates peer set, command pipeline, region manager, scheduler/heartbeat loops; exposes helpers such as <code>StartPeer</code>, <code>ProposeCommand</code>, <code>SplitRegion</code>.</td></tr>
 <tr><td><a href="../raftstore/peer"><code>peer</code></a></td><td>Wraps etcd/raft <code>RawNode</code>, drives Ready processing (persist to WAL, send messages, apply entries), tracks snapshot resend/backlog.</td></tr>
-<tr><td><a href="../raftstore/engine"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while tracking store-local raft replay metadata.</td></tr>
+<tr><td><a href="../raftstore/raftlog"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while tracking store-local raft replay metadata.</td></tr>
 <tr><td><a href="../raftstore/localmeta"><code>meta</code></a></td><td>Store-local durable metadata: peer catalog for restart and raft WAL replay checkpoints for replay/GC.</td></tr>
 <tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (NoKV).</td></tr>
 <tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>NoKV RPC implementation, bridging Raft commands to MVCC operations via <code>kv.Apply</code>.</td></tr>
@@ -224,7 +224,7 @@ admission, transition execution, publish boundaries, and restart state, read
         Store --&gt; Scheduler["scheduler runtime"]
         Store --&gt; Admin["admin service"]
         Store --&gt; Meta["raftstore/localmeta"]
-        Peer --&gt; Engine["raftstore/engine"]
+        Peer --&gt; Engine["raftstore/raftlog"]
         Peer --&gt; Apply["kv.Apply"]
     end
 
@@ -401,9 +401,9 @@ size/traffic heuristics.</li>
 <tbody>
 <tr><td>Store facade</td><td><a href="../raftstore/store/store.go"><code>store.go</code></a></td><td>Store construction/wiring and shared component ownership (router, region manager, command pipeline, scheduler runtime).</td></tr>
 <tr><td>Peer lifecycle</td><td><a href="../raftstore/store/peer_lifecycle.go"><code>peer_lifecycle.go</code></a></td><td>Start/stop peers, router registration, lifecycle hooks, and store shutdown sequencing.</td></tr>
-<tr><td>Command service</td><td><a href="../raftstore/store/command_service.go"><code>command_service.go</code></a></td><td>Region/epoch/key-range validation and read/propose request handling.</td></tr>
-<tr><td>Admin service</td><td><a href="../raftstore/store/admin_service.go"><code>admin_service.go</code></a></td><td>Split/merge proposal handling and applied admin command side effects.</td></tr>
-<tr><td>Membership service</td><td><a href="../raftstore/store/membership_service.go"><code>membership_service.go</code></a></td><td>Conf-change proposal helpers and local region metadata updates after membership changes.</td></tr>
+<tr><td>Command ops</td><td><a href="../raftstore/store/command_ops.go"><code>command_ops.go</code></a></td><td>Region/epoch/key-range validation and read/propose request handling.</td></tr>
+<tr><td>Admin ops</td><td><a href="../raftstore/store/admin_ops.go"><code>admin_ops.go</code></a></td><td>Split/merge proposal handling and applied admin command side effects.</td></tr>
+<tr><td>Membership ops</td><td><a href="../raftstore/store/membership_ops.go"><code>membership_ops.go</code></a></td><td>Conf-change proposal helpers and local region metadata updates after membership changes.</td></tr>
 <tr><td>Region catalog</td><td><a href="../raftstore/store/region_catalog.go"><code>region_catalog.go</code></a></td><td>Public region catalog accessors and region metadata lifecycle operations.</td></tr>
 <tr><td>Router</td><td><a href="../raftstore/store/router.go"><code>router.go</code></a></td><td>Tracks active peers and dispatches requests/messages to the owning peer.</td></tr>
 <tr><td>Command pipeline</td><td><a href="../raftstore/store/command_pipeline.go"><code>command_pipeline.go</code></a></td><td>Assigns request IDs, records proposals, matches apply results, returns responses/errors to callers.</td></tr>

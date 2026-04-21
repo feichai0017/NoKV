@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-36d46b39.js";
+            window.path_to_searchindex_js = "searchindex-d55e5e8e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-6a4e4767.js"></script>
@@ -332,7 +332,7 @@
 <hr>
 <h2 id="-architecture-at-a-glance"><a class="header" href="#-architecture-at-a-glance">🏗️ Architecture at a Glance</a></h2>
 <p align="center">
-  <img src="../img/architecture.svg" alt="NoKV Architecture" width="100%" />
+  <img src="assets/architecture.svg" alt="NoKV Architecture" width="100%" />
 </p>
 
 <p><strong>Four boundaries that set NoKV apart from typical single-purpose KV prototypes:</strong></p>
@@ -682,7 +682,7 @@ defer srv.Close()
 <li><code>raftstore/server/node.go</code></li>
 <li><code>raftstore/store/store.go</code></li>
 <li><code>raftstore/peer/peer.go</code></li>
-<li><code>raftstore/engine/wal_storage.go</code></li>
+<li><code>raftstore/raftlog/wal_storage.go</code></li>
 <li><code>raftstore/localmeta/store.go</code></li>
 </ul>
 <div class="table-wrapper">
@@ -693,7 +693,7 @@ defer srv.Close()
 <tbody>
 <tr><td><a href="../raftstore/store"><code>store</code></a></td><td>Region catalog/runtime root, router, RegionMetrics, scheduler + command runtimes, helpers such as <code>StartPeer</code> / <code>SplitRegion</code>.</td></tr>
 <tr><td><a href="../raftstore/peer"><code>peer</code></a></td><td>Wraps etcd/raft <code>RawNode</code>, handles Ready pipeline, snapshot resend queue, backlog instrumentation.</td></tr>
-<tr><td><a href="../raftstore/engine"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage, reusing the DB’s WAL while keeping store-local raft replay metadata in sync.</td></tr>
+<tr><td><a href="../raftstore/raftlog"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage, reusing the DB’s WAL while keeping store-local raft replay metadata in sync.</td></tr>
 <tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport for Raft Step messages, connection management, retries/blocks/TLS. Also acts as the host for NoKV RPC.</td></tr>
 <tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>NoKV RPC handler plus <code>kv.Apply</code> bridging Raft commands to MVCC logic.</td></tr>
 <tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>Config</code> + <code>NewNode</code> combine DB, Store, transport, and NoKV service into a reusable node instance.</td></tr>
@@ -810,7 +810,7 @@ to concrete functions in the codebase.</p>
 <ul>
 <li>Embedded DB: <a href="../db.go"><code>db.go</code></a>, <a href="../iterator.go"><code>iterator.go</code></a></li>
 <li>Distributed RPC: <a href="../raftstore/kv/service.go"><code>raftstore/kv/service.go</code></a></li>
-<li>Raft read/propose bridge: <a href="../raftstore/store/command_service.go"><code>raftstore/store/command_service.go</code></a></li>
+<li>Raft read/propose bridge: <a href="../raftstore/store/command_ops.go"><code>raftstore/store/command_ops.go</code></a></li>
 <li>MVCC logic: <a href="../percolator/txn.go"><code>percolator/txn.go</code></a>, <a href="../percolator/reader.go"><code>percolator/reader.go</code></a></li>
 </ul>
 <hr>
@@ -1140,7 +1140,7 @@ drop</li>
 <ul>
 <li><code>raftstore/store</code></li>
 <li><code>raftstore/peer</code></li>
-<li><code>raftstore/engine</code></li>
+<li><code>raftstore/raftlog</code></li>
 <li><code>raftstore/localmeta</code></li>
 </ul>
 <p>So the right description there is:</p>
@@ -2028,7 +2028,7 @@ terminal truth is durably published.</p>
 <p>Execution-plane protocol v1 landed first in the places that already carried
 the boundary implicitly:</p>
 <ul>
-<li><code>raftstore/store/command_service.go</code>
+<li><code>raftstore/store/command_ops.go</code>
 <ul>
 <li>request admission and context semantics</li>
 </ul>
@@ -2197,8 +2197,8 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 <tr><td><code>lsm.memTable.setBatch</code></td><td>Encodes each entry (<code>kv.EncodeEntry</code>) and appends to WAL before inserting into the active memtable index (<code>ART</code> by default, <code>skiplist</code> when explicitly selected).</td></tr>
 <tr><td><code>DB.commitWorker</code></td><td>Commit worker applies batched writes via <code>writeToLSM</code>, which calls <code>lsm.SetBatch</code> and appends one WAL entry-batch record per request batch.</td></tr>
 <tr><td><code>DB.Set</code> / <code>DB.SetBatch</code> / <code>DB.SetWithTTL</code> / <code>DB.Del</code> / <code>DB.DeleteRange</code> / <code>DB.ApplyInternalEntries</code></td><td>User/internal writes all flow through the same commit queue and eventually reach <code>lsm.SetBatch</code> + WAL append.</td></tr>
-<tr><td><code>engine/lsm/levels.go::flush</code></td><td>Persists WAL checkpoint via <code>manifest.LogEdits(EditAddFile, EditLogPointer)</code> during flush install.</td></tr>
-<tr><td><code>engine/lsm/levels.go::flush</code> + <code>engine/lsm/levelManager.canRemoveWalSegment</code></td><td>Removes obsolete WAL segments after storage checkpoint and <code>raftstore/localmeta</code> replay constraints are satisfied.</td></tr>
+<tr><td><code>engine/lsm/level_manager.go::flush</code></td><td>Persists WAL checkpoint via <code>manifest.LogEdits(EditAddFile, EditLogPointer)</code> during flush install.</td></tr>
+<tr><td><code>engine/lsm/level_manager.go::flush</code> + <code>engine/lsm/levelManager.canRemoveWalSegment</code></td><td>Removes obsolete WAL segments after storage checkpoint and <code>raftstore/localmeta</code> replay constraints are satisfied.</td></tr>
 <tr><td><code>db.runRecoveryChecks</code></td><td>Ensures WAL directory invariants before manifest replay, similar to Badger’s directory bootstrap.</td></tr>
 </tbody>
 </table>
@@ -2251,7 +2251,7 @@ surface warnings when raft-typed records dominate the log. It:</p>
 <hr>
 <h2 id="9-truncation-metadata"><a class="header" href="#9-truncation-metadata">9. Truncation Metadata</a></h2>
 <ul>
-<li><code>raftstore/engine/wal_storage</code> keeps a per-group index of <code>[firstIndex,lastIndex]</code> spans for each WAL record so it can map raft log indices back to the segment that stored them.</li>
+<li><code>raftstore/raftlog/wal_storage</code> keeps a per-group index of <code>[firstIndex,lastIndex]</code> spans for each WAL record so it can map raft log indices back to the segment that stored them.</li>
 <li>When a log is truncated (either via snapshot or future compaction hooks), the store-local metadata in <code>raftstore/localmeta</code> is updated with the index/term, segment ID (<code>RaftLogPointer.SegmentIndex</code>), and byte offset (<code>RaftLogPointer.TruncatedOffset</code>) that delimit the remaining WAL data.</li>
 <li><code>engine/lsm/levelManager.canRemoveWalSegment</code> blocks garbage collection whenever any raft group still references a segment through that store-local truncation metadata, preventing slow followers from losing required WAL history while letting aggressively compacted groups release older segments earlier.</li>
 </ul>
@@ -2356,7 +2356,7 @@ surface warnings when raft-typed records dominate the log. It:</p>
 <p>See <a href="#memtable-flush-pipeline"><code>docs/flush.md</code></a> for the end-to-end flush scheduler and <code>[docs/architecture.md](architecture.md#3-end-to-end-write-flow)</code> for where memtables sit in the write pipeline.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="memtable-flush-pipeline"><a class="header" href="#memtable-flush-pipeline">MemTable Flush Pipeline</a></h1>
-<p>NoKV’s flush path converts immutable memtables into L0 SST files, then advances the manifest WAL checkpoint and reclaims obsolete WAL segments. The queue and timing bookkeeping live directly in <a href="../engine/lsm/flush_runtime.go"><code>engine/lsm/flush_runtime.go</code></a>; SST persistence and manifest install are in <a href="../engine/lsm/builder.go"><code>engine/lsm/builder.go</code></a> and <a href="../engine/lsm/levels.go"><code>engine/lsm/levels.go</code></a>.</p>
+<p>NoKV’s flush path converts immutable memtables into L0 SST files, then advances the manifest WAL checkpoint and reclaims obsolete WAL segments. The queue and timing bookkeeping live directly in <a href="../engine/lsm/flush_runtime.go"><code>engine/lsm/flush_runtime.go</code></a>; SST persistence and manifest install are in <a href="../engine/lsm/table_builder.go"><code>engine/lsm/table_builder.go</code></a> and <a href="../engine/lsm/level_manager.go"><code>engine/lsm/level_manager.go</code></a>.</p>
 <hr>
 <h2 id="1-responsibilities"><a class="header" href="#1-responsibilities">1. Responsibilities</a></h2>
 <ol>
@@ -2472,7 +2472,7 @@ surface warnings when raft-typed records dominate the log. It:</p>
 <p>Planning now happens via <code>Plan</code>: LSM snapshots table metadata into <code>TableMeta</code>, <code>PlanFor*</code> selects table IDs + key ranges, and LSM resolves the plan back to <code>*table</code> before executing.</p>
 <hr>
 <h2 id="2-ingest-buffer"><a class="header" href="#2-ingest-buffer">2. Ingest Buffer</a></h2>
-<p><code>moveToIngest</code> (see <code>engine/lsm/executor.go</code>) performs a metadata-only migration:</p>
+<p><code>moveToIngest</code> (see <code>engine/lsm/compaction_executor.go</code>) performs a metadata-only migration:</p>
 <ol>
 <li>Records a <code>manifest.EditDeleteFile</code> for the source level.</li>
 <li>Logs a new <code>manifest.EditAddFile</code> targeting the destination level.</li>
@@ -2701,7 +2701,7 @@ _ = mgr.Remove(fid)  // close + delete file
 </pre>
 
 <ul>
-<li><code>lfDiscardStats</code> aggregates per-file discard counts from LSM compaction workers (<code>engine/lsm/executor.go</code>, <code>subcompact</code> -&gt; <code>updateDiscardStats</code>). Once the in-memory counter crosses <a href="../vlog.go#L27"><code>discardStatsFlushThreshold</code></a>, it marshals the map into JSON and writes it back through the DB pipeline under the special key <code>!NoKV!discard</code>.</li>
+<li><code>lfDiscardStats</code> aggregates per-file discard counts from LSM compaction workers (<code>engine/lsm/compaction_executor.go</code>, <code>subcompact</code> -&gt; <code>updateDiscardStats</code>). Once the in-memory counter crosses <a href="../vlog.go#L27"><code>discardStatsFlushThreshold</code></a>, it marshals the map into JSON and writes it back through the DB pipeline under the special key <code>!NoKV!discard</code>.</li>
 <li><code>valueLog.flushDiscardStats</code> consumes those stats, ensuring they are persisted even across crashes. During recovery <code>valueLog.populateDiscardStats</code> replays the JSON payload to repopulate the in-memory map.</li>
 <li>GC uses <code>discardRatio = discardedBytes/totalBytes</code> derived from <a href="../engine/vlog/io.go"><code>Manager.Sample</code></a>, which applies windowed iteration based on configurable ratios. If a file exceeds the configured threshold, <a href="../vlog_gc.go"><code>valueLog.doRunGC</code></a> rewrites live entries into the current head via <code>db.batchSet</code> (the normal commit pipeline) and then <a href="../vlog_gc.go"><code>valueLog.rewrite</code></a> triggers manifest delete edits through <code>removeValueLogFile</code>.
 <ul>
@@ -2838,8 +2838,8 @@ _ = mgr.Remove(fid)  // close + delete file
 <tr><th>Module</th><th>Manifest usage</th></tr>
 </thead>
 <tbody>
-<tr><td><code>engine/lsm/levels.go::flush</code></td><td>Logs <code>EditAddFile</code> + <code>EditLogPointer</code> after SST install; compaction logs add/delete edits.</td></tr>
-<tr><td><code>engine/lsm/levels.go::build</code></td><td>During startup, missing/corrupt SST entries are marked stale and cleaned via <code>EditDeleteFile</code>.</td></tr>
+<tr><td><code>engine/lsm/level_manager.go::flush</code></td><td>Logs <code>EditAddFile</code> + <code>EditLogPointer</code> after SST install; compaction logs add/delete edits.</td></tr>
+<tr><td><code>engine/lsm/level_manager.go::build</code></td><td>During startup, missing/corrupt SST entries are marked stale and cleaned via <code>EditDeleteFile</code>.</td></tr>
 <tr><td><code>wal</code></td><td>Replays from manifest checkpoint (<code>LogSegment</code>, <code>LogOffset</code>).</td></tr>
 <tr><td><code>vlog</code></td><td>Persists head/update/delete metadata and uses manifest state for stale/orphan cleanup on startup.</td></tr>
 <tr><td><code>raftstore</code></td><td>Does not own manifest state. Store-local region catalogs and raft WAL replay checkpoints live in <code>raftstore/localmeta</code>; runtime routing state lives in Coordinator storage.</td></tr>
@@ -3466,7 +3466,7 @@ from key before entering write pipeline.</li>
 <li>For miss, <code>Key=nil</code> and zero value struct (sentinel, not a valid record).</li>
 </ul>
 <h3 id="35-sst--iterator-decode"><a class="header" href="#35-sst--iterator-decode">3.5 SST / iterator decode</a></h3>
-<p>Source: <a href="../engine/lsm/builder.go"><code>engine/lsm/builder.go</code></a>, <a href="../engine/lsm/table.go"><code>engine/lsm/table.go</code></a></p>
+<p>Source: <a href="../engine/lsm/table_builder.go"><code>engine/lsm/table_builder.go</code></a>, <a href="../engine/lsm/table.go"><code>engine/lsm/table.go</code></a></p>
 <ul>
 <li>Block iterator reconstructs internal key + value struct.</li>
 <li>It calls <code>PopulateInternalMeta</code> before exposing item entry.</li>
@@ -3693,7 +3693,7 @@ admission, transition execution, publish boundaries, and restart state, read
 <tbody>
 <tr><td><a href="../raftstore/store"><code>store</code></a></td><td>Orchestrates peer set, command pipeline, region manager, scheduler/heartbeat loops; exposes helpers such as <code>StartPeer</code>, <code>ProposeCommand</code>, <code>SplitRegion</code>.</td></tr>
 <tr><td><a href="../raftstore/peer"><code>peer</code></a></td><td>Wraps etcd/raft <code>RawNode</code>, drives Ready processing (persist to WAL, send messages, apply entries), tracks snapshot resend/backlog.</td></tr>
-<tr><td><a href="../raftstore/engine"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while tracking store-local raft replay metadata.</td></tr>
+<tr><td><a href="../raftstore/raftlog"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while tracking store-local raft replay metadata.</td></tr>
 <tr><td><a href="../raftstore/localmeta"><code>meta</code></a></td><td>Store-local durable metadata: peer catalog for restart and raft WAL replay checkpoints for replay/GC.</td></tr>
 <tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (NoKV).</td></tr>
 <tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>NoKV RPC implementation, bridging Raft commands to MVCC operations via <code>kv.Apply</code>.</td></tr>
@@ -3714,7 +3714,7 @@ admission, transition execution, publish boundaries, and restart state, read
         Store --&gt; Scheduler["scheduler runtime"]
         Store --&gt; Admin["admin service"]
         Store --&gt; Meta["raftstore/localmeta"]
-        Peer --&gt; Engine["raftstore/engine"]
+        Peer --&gt; Engine["raftstore/raftlog"]
         Peer --&gt; Apply["kv.Apply"]
     end
 
@@ -3891,9 +3891,9 @@ size/traffic heuristics.</li>
 <tbody>
 <tr><td>Store facade</td><td><a href="../raftstore/store/store.go"><code>store.go</code></a></td><td>Store construction/wiring and shared component ownership (router, region manager, command pipeline, scheduler runtime).</td></tr>
 <tr><td>Peer lifecycle</td><td><a href="../raftstore/store/peer_lifecycle.go"><code>peer_lifecycle.go</code></a></td><td>Start/stop peers, router registration, lifecycle hooks, and store shutdown sequencing.</td></tr>
-<tr><td>Command service</td><td><a href="../raftstore/store/command_service.go"><code>command_service.go</code></a></td><td>Region/epoch/key-range validation and read/propose request handling.</td></tr>
-<tr><td>Admin service</td><td><a href="../raftstore/store/admin_service.go"><code>admin_service.go</code></a></td><td>Split/merge proposal handling and applied admin command side effects.</td></tr>
-<tr><td>Membership service</td><td><a href="../raftstore/store/membership_service.go"><code>membership_service.go</code></a></td><td>Conf-change proposal helpers and local region metadata updates after membership changes.</td></tr>
+<tr><td>Command ops</td><td><a href="../raftstore/store/command_ops.go"><code>command_ops.go</code></a></td><td>Region/epoch/key-range validation and read/propose request handling.</td></tr>
+<tr><td>Admin ops</td><td><a href="../raftstore/store/admin_ops.go"><code>admin_ops.go</code></a></td><td>Split/merge proposal handling and applied admin command side effects.</td></tr>
+<tr><td>Membership ops</td><td><a href="../raftstore/store/membership_ops.go"><code>membership_ops.go</code></a></td><td>Conf-change proposal helpers and local region metadata updates after membership changes.</td></tr>
 <tr><td>Region catalog</td><td><a href="../raftstore/store/region_catalog.go"><code>region_catalog.go</code></a></td><td>Public region catalog accessors and region metadata lifecycle operations.</td></tr>
 <tr><td>Router</td><td><a href="../raftstore/store/router.go"><code>router.go</code></a></td><td>Tracks active peers and dispatches requests/messages to the owning peer.</td></tr>
 <tr><td>Command pipeline</td><td><a href="../raftstore/store/command_pipeline.go"><code>command_pipeline.go</code></a></td><td>Assigns request IDs, records proposals, matches apply results, returns responses/errors to callers.</td></tr>
@@ -6185,7 +6185,7 @@ ReplyTraceRecords        3
 ReplyTraceAnomalies      accepted_read_index_behind_successor
 </code></pre>
 <h3 id="json---json"><a class="header" href="#json---json">JSON (<code>--json</code>)</a></h3>
-<p>Full dump of <code>Report</code>, <code>Lease</code>, <code>Seal</code>, reply trace records, and reply-trace anomalies. Schema is the <code>cccAuditOutput</code> struct in <code>cmd/nokv/ccc_audit.go</code>.</p>
+<p>Full dump of <code>Report</code>, <code>Lease</code>, <code>Seal</code>, reply trace records, and reply-trace anomalies. Schema is the <code>cccAuditOutput</code> struct in <code>cmd/nokv/cmd_ccc_audit.go</code>.</p>
 <hr>
 <h2 id="7-examples"><a class="header" href="#7-examples">7. Examples</a></h2>
 <h3 id="workdir-only-audit"><a class="header" href="#workdir-only-audit">Workdir-only audit</a></h3>
@@ -6243,7 +6243,7 @@ for _, a := range traceAnomalies {
 <tr><th>File</th><th>Role</th></tr>
 </thead>
 <tbody>
-<tr><td><a href="../cmd/nokv/ccc_audit.go"><code>cmd/nokv/ccc_audit.go</code></a></td><td>CLI entry point, flag parsing, text/JSON renderer</td></tr>
+<tr><td><a href="../cmd/nokv/cmd_ccc_audit.go"><code>cmd/nokv/cmd_ccc_audit.go</code></a></td><td>CLI entry point, flag parsing, text/JSON renderer</td></tr>
 <tr><td><a href="../coordinator/audit/report.go"><code>coordinator/audit/report.go</code></a></td><td><code>BuildReport</code>, <code>SnapshotAnomalies</code>, <code>ClosureDefect</code></td></tr>
 <tr><td><a href="../coordinator/audit/trace.go"><code>coordinator/audit/trace.go</code></a></td><td><code>EvaluateReplyTrace</code>, <code>ReplyTraceAnomaly</code></td></tr>
 <tr><td><a href="../coordinator/audit/trace_adapter.go"><code>coordinator/audit/trace_adapter.go</code></a></td><td>Format parsing + projection into <code>ReplyTraceRecord</code></td></tr>
@@ -6804,7 +6804,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 </thead>
 <tbody>
 <tr><td>Crash recovery</td><td><code>db_test.go</code></td><td>WAL replay, missing SST cleanup, vlog GC restart, manifest rewrite safety.</td></tr>
-<tr><td>WAL pointer desync</td><td><code>raftstore/engine/wal_storage_test.go::TestWALStorageDetectsTruncatedSegment</code></td><td>Detects store-local raft pointer offsets beyond truncated WAL tails to avoid silent corruption.</td></tr>
+<tr><td>WAL pointer desync</td><td><code>raftstore/raftlog/wal_storage_test.go::TestWALStorageDetectsTruncatedSegment</code></td><td>Detects store-local raft pointer offsets beyond truncated WAL tails to avoid silent corruption.</td></tr>
 <tr><td>Distributed transaction contention</td><td><code>raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet</code>, <code>percolator/*_test.go</code></td><td>Lock conflicts, retries, and 2PC sequencing under region routing.</td></tr>
 <tr><td>Value separation + GC</td><td><code>engine/vlog/manager_test.go</code>, <code>db_test.go::TestRecoveryRemovesStaleValueLogSegment</code></td><td>GC correctness, manifest integration, iterator stability.</td></tr>
 <tr><td>Iterator consistency</td><td><code>engine/lsm/iterator_test.go</code></td><td>Snapshot visibility, merging iterators across levels and memtables.</td></tr>
@@ -6858,7 +6858,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <tr><td>Follower restart after snapshot install</td><td>Covered</td><td><code>raftstore/integration/restart_recovery_test.go::TestExpandedPeerRestartPreservesRegionAndData</code></td><td>Ensures installed peer persists region metadata and data after restart.</td></tr>
 <tr><td>Removed peer restart</td><td>Covered</td><td><code>raftstore/integration/restart_recovery_test.go::TestRemovedPeerRestartDoesNotRehost</code></td><td>Ensures dehosted peers do not come back after restart.</td></tr>
 <tr><td>Leader restart with follow-up membership change</td><td>Covered</td><td><code>raftstore/integration/restart_recovery_test.go::TestLeaderRestartStillAllowsMembershipChanges</code></td><td>Exercises leadership churn before a later remove-peer operation.</td></tr>
-<tr><td>Control-plane degraded / Coordinator unavailable</td><td>Covered</td><td><code>coordinator/adapter/scheduler_client_test.go</code>, <code>raftstore/store/command_service_test.go::TestStoreProposeCommandSurvivesSchedulerUnavailable</code>, <code>raftstore/integration/coordinator_degraded_test.go::TestClusterSurvivesCoordinatorUnavailableAfterStartup</code></td><td>Covers both local degraded scheduler semantics and live multi-node Coordinator outage after route cache warmup; new cold-route misses still fail with <code>RouteUnavailable</code> as expected.</td></tr>
+<tr><td>Control-plane degraded / Coordinator unavailable</td><td>Covered</td><td><code>coordinator/adapter/scheduler_client_test.go</code>, <code>raftstore/store/command_ops_test.go::TestStoreProposeCommandSurvivesSchedulerUnavailable</code>, <code>raftstore/integration/coordinator_degraded_test.go::TestClusterSurvivesCoordinatorUnavailableAfterStartup</code></td><td>Covers both local degraded scheduler semantics and live multi-node Coordinator outage after route cache warmup; new cold-route misses still fail with <code>RouteUnavailable</code> as expected.</td></tr>
 <tr><td>Scheduler queue overflow / dropped operations</td><td>Covered</td><td><code>raftstore/store/scheduler_runtime_test.go::TestStoreSchedulerStatusTracksQueueDrop</code></td><td>Validates local degraded status and dropped operation accounting.</td></tr>
 <tr><td>Snapshot install interrupted before publish</td><td>Covered</td><td><code>raftstore/integration/snapshot_interruption_test.go::TestExpandSnapshotInstallInterruptedBeforePublish</code>, <code>raftstore/store/peer_lifecycle_test.go::TestStoreInstallRegionSnapshotRejectsCorruptPayload</code></td><td>Uses failpoint injection to verify target install aborts without leaving a hosted peer or polluted region metadata, then retries cleanly after restart.</td></tr>
 <tr><td>Request cancel / deadline propagation</td><td>Covered</td><td><code>raftstore/client/client_test.go::TestClientGetHonorsCanceledContextDuringRouteLookup</code>, <code>raftstore/client/client_test.go::TestClientGetHonorsCanceledContextDuringRPC</code>, <code>raftstore/client/client_test.go::TestClientPutHonorsCanceledContextDuringRouteLookup</code>, <code>raftstore/client/client_test.go::TestClientPutHonorsCanceledContextDuringRPC</code>, <code>raftstore/client/client_test.go::TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRouteLookup</code>, <code>raftstore/client/client_test.go::TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRPC</code>, <code>raftstore/client/client_test.go::TestClientResolveLocksHonorsCanceledContextDuringMultiRegionRPC</code>, <code>raftstore/integration/context_propagation_test.go::TestClientReadWriteHonorContextUnderQuorumLoss</code>, <code>raftstore/integration/context_propagation_test.go::TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLoss</code></td><td>Verifies read/write paths plus multi-region 2PC and resolve-lock flows preserve caller cancellation/deadlines through route lookup, RPC, and live split-region quorum loss instead of collapsing to generic retry exhaustion.</td></tr>
@@ -8183,7 +8183,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <h3 id="42-snapshot-被分层而不是一个模糊大概念"><a class="header" href="#42-snapshot-被分层而不是一个模糊大概念">4.2 snapshot 被分层，而不是一个模糊大概念</a></h3>
 <p>相关代码：</p>
 <ul>
-<li><code>raftstore/engine/snapshot.go</code></li>
+<li><code>raftstore/raftlog/snapshot.go</code></li>
 <li><code>raftstore/snapshot</code></li>
 </ul>
 <p>当前有两层 snapshot：</p>
@@ -8417,8 +8417,8 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <p>相关代码：</p>
 <ul>
 <li><code>raftstore/store/transition_executor.go</code></li>
-<li><code>raftstore/store/membership_service.go</code></li>
-<li><code>raftstore/store/admin_service.go</code></li>
+<li><code>raftstore/store/membership_ops.go</code></li>
+<li><code>raftstore/store/admin_ops.go</code></li>
 </ul>
 <p>真正执行时必须经过：</p>
 <ol>
@@ -8530,7 +8530,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <ul>
 <li><code>raftstore/mode</code></li>
 <li><code>raftstore/migrate</code></li>
-<li><code>raftstore/engine/snapshot.go</code></li>
+<li><code>raftstore/raftlog/snapshot.go</code></li>
 <li><code>raftstore/snapshot</code></li>
 </ul>
 <p>当前主线可以概括成：</p>
@@ -8566,7 +8566,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <h2 id="4-snapshot-为什么必须分层"><a class="header" href="#4-snapshot-为什么必须分层">4. snapshot 为什么必须分层</a></h2>
 <p>相关代码：</p>
 <ul>
-<li><code>raftstore/engine/snapshot.go</code></li>
+<li><code>raftstore/raftlog/snapshot.go</code></li>
 <li><code>raftstore/snapshot</code></li>
 </ul>
 <p>当前最重要的分层是：</p>
@@ -9408,8 +9408,8 @@ NoKV 的 <code>meta/root</code> 是专用的 metadata truth kernel。</p>
 <li><code>raftstore/store/transition_builder.go</code></li>
 <li><code>raftstore/store/transition_executor.go</code></li>
 <li><code>raftstore/store/transition_outcome.go</code></li>
-<li><code>raftstore/store/membership_service.go</code></li>
-<li><code>raftstore/store/admin_service.go</code></li>
+<li><code>raftstore/store/membership_ops.go</code></li>
+<li><code>raftstore/store/admin_ops.go</code></li>
 </ul>
 <p>当前 <code>raftstore</code> 越来越接近这样的形态：</p>
 <ol>

@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-36d46b39.js";
+            window.path_to_searchindex_js = "searchindex-d55e5e8e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-6a4e4767.js"></script>
@@ -311,7 +311,7 @@ ReplyTraceRecords        3
 ReplyTraceAnomalies      accepted_read_index_behind_successor
 </code></pre>
 <h3 id="json---json"><a class="header" href="#json---json">JSON (<code>--json</code>)</a></h3>
-<p>Full dump of <code>Report</code>, <code>Lease</code>, <code>Seal</code>, reply trace records, and reply-trace anomalies. Schema is the <code>cccAuditOutput</code> struct in <code>cmd/nokv/ccc_audit.go</code>.</p>
+<p>Full dump of <code>Report</code>, <code>Lease</code>, <code>Seal</code>, reply trace records, and reply-trace anomalies. Schema is the <code>cccAuditOutput</code> struct in <code>cmd/nokv/cmd_ccc_audit.go</code>.</p>
 <hr>
 <h2 id="7-examples"><a class="header" href="#7-examples">7. Examples</a></h2>
 <h3 id="workdir-only-audit"><a class="header" href="#workdir-only-audit">Workdir-only audit</a></h3>
@@ -369,7 +369,7 @@ for _, a := range traceAnomalies {
 <tr><th>File</th><th>Role</th></tr>
 </thead>
 <tbody>
-<tr><td><a href="../cmd/nokv/ccc_audit.go"><code>cmd/nokv/ccc_audit.go</code></a></td><td>CLI entry point, flag parsing, text/JSON renderer</td></tr>
+<tr><td><a href="../cmd/nokv/cmd_ccc_audit.go"><code>cmd/nokv/cmd_ccc_audit.go</code></a></td><td>CLI entry point, flag parsing, text/JSON renderer</td></tr>
 <tr><td><a href="../coordinator/audit/report.go"><code>coordinator/audit/report.go</code></a></td><td><code>BuildReport</code>, <code>SnapshotAnomalies</code>, <code>ClosureDefect</code></td></tr>
 <tr><td><a href="../coordinator/audit/trace.go"><code>coordinator/audit/trace.go</code></a></td><td><code>EvaluateReplyTrace</code>, <code>ReplyTraceAnomaly</code></td></tr>
 <tr><td><a href="../coordinator/audit/trace_adapter.go"><code>coordinator/audit/trace_adapter.go</code></a></td><td>Format parsing + projection into <code>ReplyTraceRecord</code></td></tr>

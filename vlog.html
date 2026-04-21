@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-36d46b39.js";
+            window.path_to_searchindex_js = "searchindex-d55e5e8e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-6a4e4767.js"></script>
@@ -283,7 +283,7 @@ _ = mgr.Remove(fid)  // close + delete file
 </pre>
 
 <ul>
-<li><code>lfDiscardStats</code> aggregates per-file discard counts from LSM compaction workers (<code>engine/lsm/executor.go</code>, <code>subcompact</code> -&gt; <code>updateDiscardStats</code>). Once the in-memory counter crosses <a href="../vlog.go#L27"><code>discardStatsFlushThreshold</code></a>, it marshals the map into JSON and writes it back through the DB pipeline under the special key <code>!NoKV!discard</code>.</li>
+<li><code>lfDiscardStats</code> aggregates per-file discard counts from LSM compaction workers (<code>engine/lsm/compaction_executor.go</code>, <code>subcompact</code> -&gt; <code>updateDiscardStats</code>). Once the in-memory counter crosses <a href="../vlog.go#L27"><code>discardStatsFlushThreshold</code></a>, it marshals the map into JSON and writes it back through the DB pipeline under the special key <code>!NoKV!discard</code>.</li>
 <li><code>valueLog.flushDiscardStats</code> consumes those stats, ensuring they are persisted even across crashes. During recovery <code>valueLog.populateDiscardStats</code> replays the JSON payload to repopulate the in-memory map.</li>
 <li>GC uses <code>discardRatio = discardedBytes/totalBytes</code> derived from <a href="../engine/vlog/io.go"><code>Manager.Sample</code></a>, which applies windowed iteration based on configurable ratios. If a file exceeds the configured threshold, <a href="../vlog_gc.go"><code>valueLog.doRunGC</code></a> rewrites live entries into the current head via <code>db.batchSet</code> (the normal commit pipeline) and then <a href="../vlog_gc.go"><code>valueLog.rewrite</code></a> triggers manifest delete edits through <code>removeValueLogFile</code>.
 <ul>

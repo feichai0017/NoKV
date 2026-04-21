@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-36d46b39.js";
+            window.path_to_searchindex_js = "searchindex-d55e5e8e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-6a4e4767.js"></script>
@@ -238,8 +238,8 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 <tr><td><code>lsm.memTable.setBatch</code></td><td>Encodes each entry (<code>kv.EncodeEntry</code>) and appends to WAL before inserting into the active memtable index (<code>ART</code> by default, <code>skiplist</code> when explicitly selected).</td></tr>
 <tr><td><code>DB.commitWorker</code></td><td>Commit worker applies batched writes via <code>writeToLSM</code>, which calls <code>lsm.SetBatch</code> and appends one WAL entry-batch record per request batch.</td></tr>
 <tr><td><code>DB.Set</code> / <code>DB.SetBatch</code> / <code>DB.SetWithTTL</code> / <code>DB.Del</code> / <code>DB.DeleteRange</code> / <code>DB.ApplyInternalEntries</code></td><td>User/internal writes all flow through the same commit queue and eventually reach <code>lsm.SetBatch</code> + WAL append.</td></tr>
-<tr><td><code>engine/lsm/levels.go::flush</code></td><td>Persists WAL checkpoint via <code>manifest.LogEdits(EditAddFile, EditLogPointer)</code> during flush install.</td></tr>
-<tr><td><code>engine/lsm/levels.go::flush</code> + <code>engine/lsm/levelManager.canRemoveWalSegment</code></td><td>Removes obsolete WAL segments after storage checkpoint and <code>raftstore/localmeta</code> replay constraints are satisfied.</td></tr>
+<tr><td><code>engine/lsm/level_manager.go::flush</code></td><td>Persists WAL checkpoint via <code>manifest.LogEdits(EditAddFile, EditLogPointer)</code> during flush install.</td></tr>
+<tr><td><code>engine/lsm/level_manager.go::flush</code> + <code>engine/lsm/levelManager.canRemoveWalSegment</code></td><td>Removes obsolete WAL segments after storage checkpoint and <code>raftstore/localmeta</code> replay constraints are satisfied.</td></tr>
 <tr><td><code>db.runRecoveryChecks</code></td><td>Ensures WAL directory invariants before manifest replay, similar to Badger’s directory bootstrap.</td></tr>
 </tbody>
 </table>
@@ -292,7 +292,7 @@ surface warnings when raft-typed records dominate the log. It:</p>
 <hr>
 <h2 id="9-truncation-metadata"><a class="header" href="#9-truncation-metadata">9. Truncation Metadata</a></h2>
 <ul>
-<li><code>raftstore/engine/wal_storage</code> keeps a per-group index of <code>[firstIndex,lastIndex]</code> spans for each WAL record so it can map raft log indices back to the segment that stored them.</li>
+<li><code>raftstore/raftlog/wal_storage</code> keeps a per-group index of <code>[firstIndex,lastIndex]</code> spans for each WAL record so it can map raft log indices back to the segment that stored them.</li>
 <li>When a log is truncated (either via snapshot or future compaction hooks), the store-local metadata in <code>raftstore/localmeta</code> is updated with the index/term, segment ID (<code>RaftLogPointer.SegmentIndex</code>), and byte offset (<code>RaftLogPointer.TruncatedOffset</code>) that delimit the remaining WAL data.</li>
 <li><code>engine/lsm/levelManager.canRemoveWalSegment</code> blocks garbage collection whenever any raft group still references a segment through that store-local truncation metadata, preventing slow followers from losing required WAL history while letting aggressively compacted groups release older segments earlier.</li>
 </ul>
