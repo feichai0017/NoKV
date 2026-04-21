@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d55e5e8e.js";
+            window.path_to_searchindex_js = "searchindex-36a95623.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-6a4e4767.js"></script>
+        <script src="toc-15a84097.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -276,7 +276,6 @@
 <tr><td>Raftstore overview (store/peer/admin)</td><td><a href="#raftstore-deep-dive">raftstore.md</a></td></tr>
 <tr><td>Coordinator (route / TSO / heartbeats)</td><td><a href="#coordinator">coordinator.md</a></td></tr>
 <tr><td><strong>Rooted truth kernel</strong> (<code>meta/root</code>)</td><td><a href="#rooted-truth--metaroot">rooted_truth.md</a></td></tr>
-<tr><td><strong>Namespace</strong> (hierarchical listing)</td><td><a href="#namespace">namespace.md</a></td></tr>
 <tr><td>Control-plane ↔ execution-plane contract</td><td><a href="#control-plane-and-execution-plane-protocols">control_and_execution_protocols.md</a></td></tr>
 <tr><td>Standalone → distributed migration</td><td><a href="#from-standalone-to-cluster">migration.md</a></td></tr>
 <tr><td>Recovery model</td><td><a href="#crash-recovery-playbook">recovery.md</a></td></tr>
@@ -4626,167 +4625,6 @@ sub.Acknowledge(advance)
 <li><a href="#control-plane-and-execution-plane-protocols">Control and Execution Plane Protocols</a> — the full contract between <code>meta/root</code>, <code>coordinator/</code>, and <code>raftstore/</code></li>
 <li><a href="#from-standalone-to-cluster">Migration</a> — how the seeded→distributed flow bootstraps rooted state</li>
 </ul>
-<div style="break-before: page; page-break-before: always;"></div>
-<h1 id="namespace"><a class="header" href="#namespace">Namespace</a></h1>
-<p>The <code>namespace/</code> package provides <strong>hierarchical, paginated listing</strong> on top of the NoKV KV substrate. It is exposed at the top level as <code>DB.Namespace(...)</code> which returns a <code>NamespaceHandle</code>.</p>
-<blockquote>
-<p>This layer is optional. The core <code>DB</code> still uses flat keys; <code>namespace</code> only adds a path-aware listing surface for applications that need <code>Create</code> / <code>Lookup</code> / <code>List(parent)</code> semantics.</p>
-</blockquote>
-<hr>
-<h2 id="1-what-it-is-in-one-paragraph"><a class="header" href="#1-what-it-is-in-one-paragraph">1. What it is, in one paragraph</a></h2>
-<p>Many workloads store data under path-like keys (<code>/a/b/c</code>, <code>bucket/object</code>, <code>run/epoch_N/shard_k</code>). A plain prefix scan over <code>M|full_path</code> answers <code>List(parent)</code> correctly, but pays for all descendants rather than just direct children, and offers no notion of “this page is complete vs in-flight”. The namespace layer keeps <code>M|full_path</code> as the only source of truth and builds a <strong>fence-paged read plane</strong> alongside it, together with a tiny coverage state machine. Listing hits the read plane when the interval is certified; otherwise callers get an explicit <code>ErrCoverageIncomplete</code> and must run <code>RepairAndList</code>.</p>
-<hr>
-<h2 id="2-key-layout"><a class="header" href="#2-key-layout">2. Key layout</a></h2>
-<p>Five key families live in the underlying KV:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Family</th><th>Role</th></tr>
-</thead>
-<tbody>
-<tr><td><code>M|full_path</code></td><td>Authoritative metadata (the only truth)</td></tr>
-<tr><td><code>LR|parent</code></td><td>Read-plane root: page directory + per-interval coverage state</td></tr>
-<tr><td><code>LP|parent|fence</code></td><td>Ordered micro-pages (children in fence interval)</td></tr>
-<tr><td><code>LD|parent|shard|child</code></td><td>Bootstrap delta log (for not-yet-materialized parents)</td></tr>
-<tr><td><code>LDP|parent|page|#seq</code></td><td>Page-local delta log (for recent mutations on materialized parents)</td></tr>
-</tbody>
-</table>
-</div>
-<p><code>M</code> is read on every <code>Lookup</code>. <code>LR/LP</code> are read on every strict <code>List</code>. <code>LD/LDP</code> are consumed by <code>RepairAndList</code> / <code>MaterializeDeltaPages</code>.</p>
-<p>Encoding lives in <a href="../namespace/codec.go"><code>namespace/codec.go</code></a>.</p>
-<hr>
-<h2 id="3-three-state-coverage-model"><a class="header" href="#3-three-state-coverage-model">3. Three-state coverage model</a></h2>
-<p>Each page interval in <code>LR</code> carries a <code>PageCoverageState</code> (<code>coordinator/protocol/controlplane</code> terminology doesn’t apply here — this is namespace-local):</p>
-<ul>
-<li><strong>Covered</strong> — the interval has a published page, no pending delta, and generation matches <code>LR</code>’s root generation. Strict <code>List</code> is allowed.</li>
-<li><strong>Uncovered</strong> — no page published yet, or publish is incomplete. Strict <code>List</code> returns <code>ErrCoverageIncomplete</code>.</li>
-<li><strong>Dirty</strong> — a page exists but a page-local <code>LDP</code> entry has landed after publication. Must be folded before strict <code>List</code> can answer again.</li>
-</ul>
-<p>Strict <code>List</code> only reads covered pages. Anything else forces the caller to choose between fail-stop and explicit <code>RepairAndList</code>.</p>
-<hr>
-<h2 id="4-api-surface"><a class="header" href="#4-api-surface">4. API surface</a></h2>
-<p>All methods are on <code>DB.Namespace(...)</code> which wraps <a href="../namespace/store.go"><code>namespace.Store</code></a>.</p>
-<h3 id="writes"><a class="header" href="#writes">Writes</a></h3>
-<pre><code class="language-go">h := db.Namespace(NamespaceOptions{Shards: 16})
-defer h.Close()
-
-h.Create([]byte("/a/b/file"), namespace.EntryKindFile, metaBytes)
-h.Delete([]byte("/a/b/file"))
-</code></pre>
-<p><code>Create</code> / <code>Delete</code> update <code>M</code> first, then append to the appropriate delta family:</p>
-<ul>
-<li>If parent is <strong>not yet materialized</strong>: write goes to <code>LD|parent|shard|child</code> (bootstrap delta)</li>
-<li>If parent <strong>is materialized</strong>: write goes to <code>LDP|parent|page|#seq</code> (page-local delta) and marks the affected page as <code>Dirty</code></li>
-</ul>
-<h3 id="point-reads"><a class="header" href="#point-reads">Point reads</a></h3>
-<pre><code class="language-go">meta, err := h.Lookup([]byte("/a/b/file"))
-</code></pre>
-<p><code>Lookup</code> is a direct <code>M|full_path</code> read. It never touches the read plane.</p>
-<h3 id="listing"><a class="header" href="#listing">Listing</a></h3>
-<pre><code class="language-go">// Strict — fails if interval is uncovered/dirty
-entries, next, stats, err := h.List(parent, cursor, limit)
-
-// Explicit repair then list — allowed to consult M + deltas to fix the interval
-entries, next, stats, err := h.RepairAndList(parent, cursor, limit)
-</code></pre>
-<p><code>stats</code> reports whether the result came from the strict read plane or from repair, and how many pages/deltas were touched.</p>
-<h3 id="maintenance"><a class="header" href="#maintenance">Maintenance</a></h3>
-<pre><code class="language-go">// Fold all page-local deltas back into pages (global)
-stats, err := h.Materialize(parent)
-
-// Fold up to N dirty pages (bounded work)
-stats, err := h.MaterializeDeltaPages(parent, maxDeltaPages)
-
-// Rebuild entire read plane from M (expensive, rare)
-stats, err := h.Rebuild(parent)
-
-// Return internal read plane view for diagnostics
-view, ok, err := h.LoadReadPlaneView(parent)
-
-// Runtime stats for observability
-ls, err := h.Stats(parent)
-</code></pre>
-<h3 id="verification"><a class="header" href="#verification">Verification</a></h3>
-<pre><code class="language-go">vs, err := h.Verify(parent)
-</code></pre>
-<p><code>Verify</code> walks <code>M</code>, <code>LR</code>, <code>LP</code>, <code>LD</code>, <code>LDP</code> and reports:</p>
-<ul>
-<li><strong>Membership drift</strong> — children in <code>M</code> that are missing from pages, or vice versa</li>
-<li><strong>Certificate inconsistency</strong> — page generation mismatch, wrong fence keys, wrong counts</li>
-<li><strong>Publication mismatch</strong> — root generation inconsistent with pages’ generations, frontier rollback, root-page cohort mismatch</li>
-</ul>
-<p>These three reports live under <code>VerifyStats.Membership</code> / <code>.Certificate</code> / <code>.Publication</code>.</p>
-<hr>
-<h2 id="5-why-not-just-prefix-scan-m"><a class="header" href="#5-why-not-just-prefix-scan-m">5. Why not just prefix scan <code>M|</code>?</a></h2>
-<p>Prefix scan on <code>M|parent/...</code> works correctly but has two cost issues:</p>
-<ol>
-<li><strong>It reads all descendants.</strong> If <code>parent</code> has 1K direct children but each has 100 grandchildren, the scan touches 100K keys to answer a 1K-item <code>List</code>.</li>
-<li><strong>It has no answerability state.</strong> There is no way to express “we currently have a complete, consistent page ready to serve” vs “we’re mid-rewrite”. Callers have to trust whatever comes back.</li>
-</ol>
-<p>The read plane costs extra writes (dual-writing <code>M</code> + <code>LDP</code>/<code>LD</code>) and extra maintenance (<code>Materialize</code> / repair). In exchange, <code>List</code> becomes page-granular, and the coverage state machine gives you a clean place to fail-stop.</p>
-<hr>
-<h2 id="6-cost-vs-a-durable-parent-child-secondary-index"><a class="header" href="#6-cost-vs-a-durable-parent-child-secondary-index">6. Cost vs. a durable parent-child secondary index</a></h2>
-<p>A simpler alternative is a plain durable index: <code>S|parent|child -&gt; {}</code> updated on every <code>Create</code>/<code>Delete</code>. That gives you fast <code>List</code> without fences, pages, or coverage state — but every <code>List</code> is best-effort: if the index is slightly stale or mid-rebuild, the caller either gets partial data silently or has to re-derive from <code>M</code>.</p>
-<p><code>namespace/</code> pays more maintenance cost in exchange for:</p>
-<ul>
-<li><strong>Page granularity</strong> — deltas and repairs are scoped to one fence interval, not the whole parent</li>
-<li><strong>Explicit coverage</strong> — strict <code>List</code> never silently falls back; the caller decides whether to repair</li>
-</ul>
-<p>If you don’t need that distinction, a flat secondary index is simpler and probably faster.</p>
-<hr>
-<h2 id="7-example"><a class="header" href="#7-example">7. Example</a></h2>
-<pre><code class="language-go">package main
-
-import (
-    "fmt"
-
-    NoKV "github.com/feichai0017/NoKV"
-    ns "github.com/feichai0017/NoKV/namespace"
-)
-
-func main() {
-    opt := NoKV.NewDefaultOptions()
-    opt.WorkDir = "./ns-demo"
-    db, _ := NoKV.Open(opt)
-    defer db.Close()
-
-    h := db.Namespace(NoKV.NamespaceOptions{Shards: 16})
-    defer h.Close()
-
-    h.Create([]byte("/a/b/c"), ns.EntryKindFile, []byte(`{"kind":"file"}`))
-    h.Create([]byte("/a/b/d"), ns.EntryKindFile, nil)
-
-    // Materialize the parent so strict List becomes possible.
-    _, _ = h.Materialize([]byte("/a/b"))
-
-    entries, next, stats, err := h.List([]byte("/a/b"), ns.Cursor{}, 100)
-    if err != nil {
-        fmt.Println("list err:", err)
-        return
-    }
-    fmt.Printf("got %d entries, read_pages=%d, next=%+v\n",
-        len(entries), stats.ReadPlanePages, next)
-}
-</code></pre>
-<hr>
-<h2 id="8-source-map"><a class="header" href="#8-source-map">8. Source map</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>File</th><th>Responsibility</th></tr>
-</thead>
-<tbody>
-<tr><td><a href="../namespace/store.go"><code>namespace/store.go</code></a></td><td>Main <code>Store</code> with <code>Create</code>/<code>Delete</code>/<code>Lookup</code>/<code>List</code>/<code>RepairAndList</code>/<code>Materialize</code></td></tr>
-<tr><td><a href="../namespace/readplane.go"><code>namespace/readplane.go</code></a></td><td><code>ReadRoot</code>, <code>ReadPage</code>, <code>PageCertificate</code>, strict-read evaluator</td></tr>
-<tr><td><a href="../namespace/delta.go"><code>namespace/delta.go</code></a>, <a href="../namespace/delta_state.go"><code>namespace/delta_state.go</code></a></td><td><code>LD</code> / <code>LDP</code> encoding + per-page delta state</td></tr>
-<tr><td><a href="../namespace/page_merge.go"><code>namespace/page_merge.go</code></a></td><td>Fold page-local deltas into pages; split/merge fences</td></tr>
-<tr><td><a href="../namespace/codec.go"><code>namespace/codec.go</code></a></td><td>Key + value encoding for all five families</td></tr>
-<tr><td><a href="../namespace/types.go"><code>namespace/types.go</code></a></td><td><code>Entry</code>, <code>Cursor</code>, <code>*Stats</code> public types</td></tr>
-<tr><td><a href="../namespace.go"><code>namespace.go</code></a> (root)</td><td>Thin <code>DB.Namespace</code> wrapper exposing the module as a first-class handle</td></tr>
-</tbody>
-</table>
-</div>
-<p>Tests: <code>namespace/*_test.go</code> cover create/delete/list, repair transitions, dirty-page handling, bootstrap, materialize, rebuild, and verification.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="percolator-distributed-transaction-design"><a class="header" href="#percolator-distributed-transaction-design">Percolator Distributed Transaction Design</a></h1>
 <p>This document explains NoKV’s distributed transaction path implemented by <code>percolator/</code> and executed through <code>raftstore</code>.</p>
