@@ -1,3 +1,15 @@
+// Package state holds the compact applied root state of the metadata
+// kernel (State, CoordinatorLease/Seal/Closure, pending peer/range
+// changes) and the ApplyEventToState / ApplyEventToSnapshot functions
+// that drive a rooted event log into that state.
+//
+// This package is the only place where the meaning of a typed rooted
+// event is codified. Backends under meta/root/backend/* persist the
+// events; callers under meta/root/remote, coordinator/, and raftstore/
+// consume the resulting State as truth.
+//
+// See docs/rooted_truth.md for the overall kernel design and
+// spec/CCC.tla for the formal authority-handoff model.
 package state
 
 import (

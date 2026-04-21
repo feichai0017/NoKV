@@ -1,3 +1,18 @@
+// Package thermos implements a lightweight bounded-memory hot-key
+// detector + early-skew observer for NoKV's write path.
+//
+// Design lineage: the original HotRing paper (FAST '20) inspired the
+// hot-aware data-structure idea, but this package is deliberately a
+// side-channel observer rather than a primary index. It uses bucketed
+// atomic lists + rotating time windows to maintain bounded-memory
+// statistics with no allocation in the hot path.
+//
+// Consumers: stats reporting (expvar), write-path admission (via
+// ErrHotKeyWriteThrottle), and benchmarking ablations. The decision of
+// what to do with a detected hot key (throttle / reject / reroute) is
+// a caller-side policy, not something this package imposes.
+//
+// See docs/thermos.md and docs/notes/2026-01-16-thermos-design.md.
 package thermos
 
 import (

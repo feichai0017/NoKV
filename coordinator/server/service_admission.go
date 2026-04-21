@@ -54,6 +54,16 @@ const (
 	preActionDutyAdmission
 )
 
+// preActionGate picks the lease-view source based on kind.
+//
+// Duty-admission (hot path, once per AllocID/TSO/GetRegionByKey) uses the
+// cached mirror: it must be cheap. The cache is kept honest by the rooted
+// refresh loop and by publish paths that overwrite it on every committed
+// rooted event.
+//
+// Lifecycle mutations (seal, close, reattach) are infrequent and safety
+// critical, so they re-read from storage to avoid a tiny window where
+// the cached mirror has not yet absorbed a concurrent publish.
 func (s *Service) preActionGate(kind preActionKind, dutyMask uint32) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
@@ -66,11 +76,17 @@ func (s *Service) preActionGate(kind preActionKind, dutyMask uint32) error {
 	}
 }
 
+// preActionGateCached validates against the in-memory mirror. Cheap but
+// can race with a just-landed rooted publish; only safe for read-path
+// duty admission where a one-tick staleness is tolerable.
 func (s *Service) preActionGateCached(kind preActionKind, dutyMask uint32) error {
 	current, seal := s.currentCoordinatorLeaseView()
 	return s.validatePreActionLease(kind, dutyMask, current, seal)
 }
 
+// preActionGateStorage validates against a freshly loaded rooted
+// snapshot. Used for control-plane mutations where stale-read would
+// violate closure completeness.
 func (s *Service) preActionGateStorage(kind preActionKind, dutyMask uint32) error {
 	current, seal, err := s.currentCoordinatorLeaseViewFromStorage()
 	if err != nil {

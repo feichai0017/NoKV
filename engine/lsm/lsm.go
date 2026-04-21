@@ -1,3 +1,25 @@
+// Package lsm implements NoKV's log-structured merge-tree engine.
+// It owns the MemTable (with adaptive ART/SkipList index over arena),
+// the flush pipeline (Prepare → Build → Install → Release), leveled
+// compaction (planner + picker + executor), iterators, caches, range
+// tombstones, range filter, and external SST ingest (with an ingest
+// buffer that avoids write stalls on L0 pressure).
+//
+// Durability ordering (enforced end-to-end):
+//
+//   vlog append → WAL append → memtable apply → flush SST → manifest edit
+//
+// Crash at any point leaves a consistent state; the manifest publication
+// is atomic via the CURRENT symlink plus varint edit log, and replay
+// walks the WAL checkpoint stored in the manifest.
+//
+// WAL and value log segment managers live in sibling packages
+// (engine/wal, engine/vlog). This package does not own their durable
+// bytes — it only consumes their APIs.
+//
+// Design references: docs/memtable.md, docs/flush.md, docs/compaction.md,
+// docs/ingest_buffer.md, docs/range_filter.md, docs/cache.md, and the
+// dated notes under docs/notes/ beginning with 2026-02-01 through 2026-04-05.
 package lsm
 
 import (
@@ -13,7 +35,10 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
-// LSM _
+// LSM is the log-structured merge-tree engine. It wires a single
+// active memtable, a queue of immutable memtables, the level manager,
+// the flush runtime, and the shared WAL into one coherent storage core.
+// See the package docstring for the durability ordering invariant.
 type LSM struct {
 	lock       sync.RWMutex
 	memTable   *memTable
