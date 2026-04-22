@@ -74,6 +74,15 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 				*addr = resolved
 			}
 		}
+		// Resolve --root-peer from meta_root.peers when not supplied
+		// explicitly. This keeps the meta-root cluster address list in one
+		// place (the config) instead of duplicated across docker-compose,
+		// systemd units, and coord CLI invocations.
+		if !flagPassed(fs, "root-peer") && cfg.MetaRoot != nil {
+			for id, paddr := range cfg.MetaRootServicePeers(scopeNorm) {
+				rootPeerFlags = append(rootPeerFlags, fmt.Sprintf("%d=%s", id, paddr))
+			}
+		}
 	}
 
 	coordinatorIDValue := strings.TrimSpace(*coordinatorID)
