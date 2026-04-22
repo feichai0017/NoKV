@@ -293,6 +293,100 @@ func TestServiceExecutionStatusReportsProtocolState(t *testing.T) {
 	require.NotEmpty(t, resp.GetTopology()[0].GetTransitionId())
 }
 
+func TestServiceValidationAndHelperMappings(t *testing.T) {
+	var nilSvc *Service
+	_, err := nilSvc.AddPeer(context.Background(), &adminpb.AddPeerRequest{})
+	require.ErrorContains(t, err, "raft admin service not configured")
+	_, err = nilSvc.RemovePeer(context.Background(), &adminpb.RemovePeerRequest{})
+	require.ErrorContains(t, err, "raft admin service not configured")
+
+	svc := &Service{store: new(store.Store)}
+	_, err = svc.AddPeer(context.Background(), &adminpb.AddPeerRequest{})
+	require.ErrorContains(t, err, "region_id, store_id, and peer_id are required")
+	_, err = svc.RemovePeer(context.Background(), &adminpb.RemovePeerRequest{})
+	require.ErrorContains(t, err, "region_id and peer_id are required")
+	_, err = svc.TransferLeader(context.Background(), &adminpb.TransferLeaderRequest{})
+	require.ErrorContains(t, err, "region_id and peer_id are required")
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = svc.TransferLeader(canceled, &adminpb.TransferLeaderRequest{RegionId: 1, PeerId: 2})
+	require.ErrorContains(t, err, context.Canceled.Error())
+	_, err = svc.RegionRuntimeStatus(canceled, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+	require.ErrorContains(t, err, context.Canceled.Error())
+	_, err = svc.ExecutionStatus(canceled, &adminpb.ExecutionStatusRequest{})
+	require.ErrorContains(t, err, context.Canceled.Error())
+
+	_, err = svc.RegionRuntimeStatus(context.Background(), &adminpb.RegionRuntimeStatusRequest{})
+	require.ErrorContains(t, err, "region_id is required")
+
+	resp, err := svc.RegionRuntimeStatus(context.Background(), &adminpb.RegionRuntimeStatusRequest{RegionId: 99})
+	require.NoError(t, err)
+	require.False(t, resp.GetKnown())
+
+	require.Equal(t, adminpb.ExecutionAdmissionClass_EXECUTION_ADMISSION_CLASS_UNSPECIFIED, executionAdmissionClassProto(store.AdmissionClassUnknown))
+	require.Equal(t, adminpb.ExecutionAdmissionClass_EXECUTION_ADMISSION_CLASS_READ, executionAdmissionClassProto(store.AdmissionClassRead))
+	require.Equal(t, adminpb.ExecutionAdmissionClass_EXECUTION_ADMISSION_CLASS_WRITE, executionAdmissionClassProto(store.AdmissionClassWrite))
+	require.Equal(t, adminpb.ExecutionAdmissionClass_EXECUTION_ADMISSION_CLASS_TOPOLOGY, executionAdmissionClassProto(store.AdmissionClassTopology))
+
+	reasons := map[store.AdmissionReason]adminpb.ExecutionAdmissionReason{
+		store.AdmissionReasonUnknown:        adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_UNSPECIFIED,
+		store.AdmissionReasonAccepted:       adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_ACCEPTED,
+		store.AdmissionReasonInvalid:        adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_INVALID,
+		store.AdmissionReasonStoreNotMatch:  adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_STORE_NOT_MATCH,
+		store.AdmissionReasonNotHosted:      adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_NOT_HOSTED,
+		store.AdmissionReasonEpochMismatch:  adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_EPOCH_MISMATCH,
+		store.AdmissionReasonKeyNotInRegion: adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_KEY_NOT_IN_REGION,
+		store.AdmissionReasonNotLeader:      adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_NOT_LEADER,
+		store.AdmissionReasonCanceled:       adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_CANCELED,
+		store.AdmissionReasonTimedOut:       adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_TIMED_OUT,
+	}
+	for reason, expected := range reasons {
+		require.Equal(t, expected, executionAdmissionReasonProto(reason))
+	}
+
+	outcomes := map[store.ExecutionOutcome]adminpb.ExecutionTopologyOutcome{
+		store.ExecutionOutcomeUnknown:  adminpb.ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_UNSPECIFIED,
+		store.ExecutionOutcomeRejected: adminpb.ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_REJECTED,
+		store.ExecutionOutcomeQueued:   adminpb.ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_QUEUED,
+		store.ExecutionOutcomeProposed: adminpb.ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_PROPOSED,
+		store.ExecutionOutcomeApplied:  adminpb.ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_APPLIED,
+		store.ExecutionOutcomeFailed:   adminpb.ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_FAILED,
+	}
+	for outcome, expected := range outcomes {
+		require.Equal(t, expected, executionTopologyOutcomeProto(outcome))
+	}
+
+	publishStates := map[store.PublishState]adminpb.ExecutionPublishState{
+		store.PublishStateUnknown:           adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_UNSPECIFIED,
+		store.PublishStateNotRequired:       adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_NOT_REQUIRED,
+		store.PublishStatePlannedPublished:  adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_PLANNED_PUBLISHED,
+		store.PublishStateTerminalPending:   adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_PENDING,
+		store.PublishStateTerminalPublished: adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_PUBLISHED,
+		store.PublishStateTerminalFailed:    adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_FAILED,
+		store.PublishStateTerminalBlocked:   adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_BLOCKED,
+	}
+	for state, expected := range publishStates {
+		require.Equal(t, expected, executionPublishStateProto(state))
+	}
+
+	require.Equal(t, adminpb.ExecutionRestartState_EXECUTION_RESTART_STATE_UNSPECIFIED, executionRestartStateProto(store.RestartStateUnknown))
+	require.Equal(t, adminpb.ExecutionRestartState_EXECUTION_RESTART_STATE_READY, executionRestartStateProto(store.RestartStateReady))
+	require.Equal(t, adminpb.ExecutionRestartState_EXECUTION_RESTART_STATE_DEGRADED, executionRestartStateProto(store.RestartStateDegraded))
+
+	header := localmeta.RegionMeta{
+		ID:       1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("m"),
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 2},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 101}},
+	}
+	payload := localmeta.CloneRegionMeta(header)
+	require.True(t, matchesSnapshotRegion(header, payload))
+	payload.Peers[0].PeerID = 202
+	require.False(t, matchesSnapshotRegion(header, payload))
+}
+
 func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 	sourceDir := t.TempDir()
 	sourceDB, sourceMeta := openAdminTestDBWithTweak(t, sourceDir, func(opt *NoKV.Options) {

@@ -384,3 +384,57 @@ func TestARTIteratorOutOfRangeDoesNotResurrect(t *testing.T) {
 	rit.Next()
 	require.False(t, rit.Valid())
 }
+
+func TestARTHelperIndicesAndPanics(t *testing.T) {
+	keys := []byte{1, 3, 5, 7}
+
+	idx, exact := node16LowerBoundIndex(keys, len(keys), 0)
+	require.Equal(t, 0, idx)
+	require.False(t, exact)
+
+	idx, exact = node16LowerBoundIndex(keys, len(keys), 5)
+	require.Equal(t, 2, idx)
+	require.True(t, exact)
+
+	idx, exact = node16LowerBoundIndex(keys, len(keys), 8)
+	require.Equal(t, -1, idx)
+	require.False(t, exact)
+
+	idx, exact = node16LowerBoundIndex(keys, 0, 3)
+	require.Equal(t, -1, idx)
+	require.False(t, exact)
+
+	require.PanicsWithValue(t, "ART requires internal keys", func() {
+		artRequireInternalKey([]byte("short"))
+	})
+}
+
+func TestARTPayloadReplaceVariants(t *testing.T) {
+	arena := NewArena(DefaultArenaSize)
+
+	node4 := initPayloadForKind(arena, artNode4Kind)
+	node4.count = 1
+	node4.keys[0] = 9
+	node4.children[0] = 11
+	require.True(t, payloadReplace(artNode4Kind, node4, 9, 11, 22))
+	require.Equal(t, uint32(22), node4.children[0])
+	require.False(t, payloadReplace(artNode4Kind, node4, 9, 11, 33))
+
+	node48 := initPayloadForKind(arena, artNode48Kind)
+	node48.count = 1
+	node48.idx[7] = 1
+	node48.children[0] = 44
+	require.True(t, payloadReplace(artNode48Kind, node48, 7, 44, 55))
+	require.Equal(t, uint32(55), node48.children[0])
+	require.False(t, payloadReplace(artNode48Kind, node48, 7, 44, 66))
+
+	node256 := initPayloadForKind(arena, artNode256Kind)
+	node256.count = 1
+	node256.children[12] = 77
+	require.True(t, payloadReplace(artNode256Kind, node256, 12, 77, 88))
+	require.Equal(t, uint32(88), node256.children[12])
+	require.False(t, payloadReplace(artNode256Kind, node256, 12, 77, 99))
+
+	require.False(t, payloadReplace(artNode16Kind, &nodePayload{count: 1}, 1, 2, 3))
+	require.False(t, payloadReplace(0xff, node4, 9, 22, 33))
+}

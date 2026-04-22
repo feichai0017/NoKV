@@ -334,6 +334,48 @@ func TestClusterPublishRootEventCoversTopologyLifecycleBranches(t *testing.T) {
 	})
 }
 
+func TestClusterLeaderClaimsAndPendingRangeHelpers(t *testing.T) {
+	c := NewCluster()
+	left := testDescriptor(70, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1})
+	right := testDescriptor(71, []byte("m"), []byte(""), metaregion.Epoch{Version: 2, ConfVersion: 1})
+	require.NoError(t, c.PublishRegionDescriptor(left))
+	require.NoError(t, c.PublishRegionDescriptor(right))
+
+	c.RecordRegionLeaders(9, []uint64{left.RegionID, right.RegionID})
+	snap := c.RegionSnapshot()
+	require.Len(t, snap, 2)
+	require.Equal(t, uint64(9), snap[0].LeaderStoreID)
+	require.Equal(t, uint64(9), snap[1].LeaderStoreID)
+
+	c.RecordRegionLeaders(9, []uint64{right.RegionID})
+	snap = c.RegionSnapshot()
+	require.Zero(t, snap[0].LeaderStoreID)
+	require.Equal(t, uint64(9), snap[1].LeaderStoreID)
+
+	require.Equal(t, right.RootEpoch, c.MaxDescriptorRevision())
+
+	merged := testDescriptor(72, []byte(""), []byte(""), metaregion.Epoch{Version: 3, ConfVersion: 1})
+	c.ReplaceRootSnapshot(
+		map[uint64]descriptor.Descriptor{merged.RegionID: merged},
+		nil,
+		map[uint64]rootstate.PendingRangeChange{
+			merged.RegionID: {
+				Kind:          rootstate.PendingRangeChangeMerge,
+				LeftRegionID:  left.RegionID,
+				RightRegionID: right.RegionID,
+				Merged:        merged,
+			},
+		},
+		rootstorage.TailToken{},
+	)
+
+	change, ok := c.PendingRangeChangeForDescriptor(merged.RegionID)
+	require.True(t, ok)
+	require.Equal(t, rootstate.PendingRangeChangeMerge, change.Kind)
+	_, ok = c.PendingRangeChangeForDescriptor(999)
+	require.False(t, ok)
+}
+
 func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descriptor.Descriptor {
 	desc := descriptor.Descriptor{
 		RegionID: id,

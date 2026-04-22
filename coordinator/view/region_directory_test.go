@@ -102,6 +102,36 @@ func TestRegionDirectoryViewRejectsInvalidRegionID(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidRegionID)
 }
 
+func TestRegionDirectoryViewValidateDescriptorsSnapshotAndLeaderCleanup(t *testing.T) {
+	v := NewRegionDirectoryView()
+	now := time.Unix(700, 0)
+	left := testViewDescriptor(1, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1})
+	right := testViewDescriptor(2, []byte("m"), []byte(""), metaregion.Epoch{Version: 1, ConfVersion: 1})
+
+	require.NoError(t, v.Upsert(left))
+	require.NoError(t, v.UpsertAt(right, now))
+
+	require.NoError(t, v.Validate(testViewDescriptor(2, []byte("m"), []byte(""), metaregion.Epoch{Version: 2, ConfVersion: 1})))
+	require.ErrorIs(t, v.Validate(testViewDescriptor(3, []byte("l"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})), ErrRegionRangeOverlap)
+
+	snapshot := v.DescriptorsSnapshot()
+	require.Len(t, snapshot, 2)
+	snapshot[1] = testViewDescriptor(9, []byte("x"), []byte("y"), metaregion.Epoch{Version: 1, ConfVersion: 1})
+
+	desc, ok := v.Descriptor(1)
+	require.True(t, ok)
+	require.Equal(t, uint64(1), desc.RegionID)
+
+	v.RecordLeader(1, 3, now)
+	v.RecordLeader(2, 3, now)
+	v.ClearLeadersFromStore(3, map[uint64]struct{}{2: {}})
+
+	snap := v.Snapshot()
+	require.Len(t, snap, 2)
+	require.Zero(t, snap[0].LeaderStoreID)
+	require.Equal(t, uint64(3), snap[1].LeaderStoreID)
+}
+
 func testViewDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descriptor.Descriptor {
 	desc := descriptor.Descriptor{
 		RegionID: id,
