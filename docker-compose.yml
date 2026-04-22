@@ -125,7 +125,7 @@ services:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
     expose: ["2379", "9100"]
     ports:
-      - "2379:2379"   # coordinator gRPC
+      - "2390:2379"   # coordinator gRPC
       - "9100:9100"   # expvar
     depends_on:
       meta-root-1: { condition: service_started }
@@ -147,7 +147,7 @@ services:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
     expose: ["2379", "9100"]
     ports:
-      - "2390:2379"
+      - "2391:2379"
       - "9101:9100"
     depends_on:
       meta-root-1: { condition: service_started }
@@ -169,7 +169,7 @@ services:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
     expose: ["2379", "9100"]
     ports:
-      - "2391:2379"
+      - "2392:2379"
       - "9102:9100"
     depends_on:
       meta-root-1: { condition: service_started }
