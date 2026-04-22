@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ff4c3be9.js";
+            window.path_to_searchindex_js = "searchindex-2c0f4017.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-87c44e77.js"></script>
@@ -6067,7 +6067,7 @@ generation, root lag, degraded mode, active vs standby tag on every coord.</li>
 <pre><code class="language-bash">scripts/demo/serve-dashboard.sh    # → http://localhost:18080/dashboard.html
 </code></pre>
 <p>Under the hood this runs <code>scripts/demo/dashboard_server.py</code>, a small Python
-HTTP server with three routes:</p>
+HTTP server with four routes:</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -6075,17 +6075,21 @@ HTTP server with three routes:</p>
 </thead>
 <tbody>
 <tr><td><code>GET /dashboard.html</code></td><td>the static page</td></tr>
+<tr><td><code>GET /api/expvar/&lt;port&gt;</code></td><td>proxies <code>localhost:&lt;port&gt;/debug/vars</code> for the dashboard</td></tr>
 <tr><td><code>POST /api/redis</code></td><td><code>{"cmd": "..."}</code> → runs <code>redis-cli -p 6380 &lt;cmd&gt;</code> and returns <code>{stdout, stderr, returncode}</code></td></tr>
 <tr><td><code>POST /api/docker/&lt;stop|start|restart&gt;/&lt;nokv-*&gt;</code></td><td>wraps <code>docker &lt;action&gt; &lt;container&gt;</code> for the failover buttons</td></tr>
 </tbody>
 </table>
 </div>
-<p>The expvar endpoints themselves now send <code>Access-Control-Allow-Origin: *</code>
-so the dashboard page can fetch them cross-origin without any proxying.</p>
+<p>The dashboard now fetches <strong>everything</strong> through the dashboard server itself,
+so the browser only needs one origin: <code>http://localhost:18080</code> locally, or
+whatever authenticated tunnel / reverse-proxy hostname points at that local
+port.</p>
 <p><strong>Security</strong>: bound to <code>127.0.0.1</code> only. <code>/api/redis</code> runs arbitrary Redis
-commands and <code>/api/docker</code> stops/starts containers whose name starts with
-<code>nokv-</code>. Do not expose this dashboard port publicly without an
-authenticated tunnel (Cloudflare Access, nginx + basic auth).</p>
+commands, <code>/api/docker</code> stops/starts containers whose name starts with
+<code>nokv-</code>, and <code>/api/expvar</code> proxies local debug state. Do not expose this
+port publicly without an authenticated tunnel (Cloudflare Access, nginx +
+basic auth).</p>
 <h3 id="what-you-see-on-the-page"><a class="header" href="#what-you-see-on-the-page">What you see on the page</a></h3>
 <ul>
 <li><strong>Top:</strong> cluster-wide status pill (“10/10 reachable · HH:MM:SS”)</li>
@@ -6152,17 +6156,23 @@ loop in your service process.</p>
 </code></pre>
 <p><code>21600</code> is 6 hours in seconds.</p>
 <h2 id="public-demo-via-cloudflare-tunnel"><a class="header" href="#public-demo-via-cloudflare-tunnel">Public demo via Cloudflare Tunnel</a></h2>
-<p>The tunnel config in <code>docker-compose.yml</code> (commented) points cloudflared at
-the redis port + expvar ports. To go live publicly:</p>
+<p>The clean deployment shape is:</p>
+<ul>
+<li>keep Redis / expvar / gRPC bound to <code>127.0.0.1</code></li>
+<li>run the dashboard server on <code>127.0.0.1:18080</code></li>
+<li>point <code>cloudflared</code> at <strong>only</strong> <code>http://localhost:18080</code></li>
+</ul>
+<p>Because the browser now talks only to the dashboard origin, you do <strong>not</strong>
+need to publish raw expvar ports to the outside world.</p>
+<p>To go live publicly:</p>
 <ol>
 <li><code>cloudflared tunnel create nokv-demo</code></li>
 <li><code>export CLOUDFLARE_TUNNEL_TOKEN=$(cloudflared tunnel token ...)</code></li>
-<li>Uncomment the <code>cloudflared</code> service block</li>
+<li>Configure ingress to <code>http://localhost:18080</code></li>
 <li><code>docker compose up -d cloudflared</code></li>
 </ol>
-<p>Remember: exposing raw <code>/debug/vars</code> leaks internal state. For public access
-put an nginx proxy in front that whitelists specific fields, or gate access
-behind Cloudflare Access.</p>
+<p>Gate access behind Cloudflare Access (or equivalent auth) before sharing
+publicly.</p>
 <h2 id="related-docs"><a class="header" href="#related-docs">Related docs</a></h2>
 <ul>
 <li><a href="#configuration--options">docs/config.md</a> — <code>raft_config.example.json</code> schema (two-layer
