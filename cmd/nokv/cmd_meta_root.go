@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/feichai0017/NoKV/config"
 	rootreplicated "github.com/feichai0017/NoKV/meta/root/replicated"
 	rootserver "github.com/feichai0017/NoKV/meta/root/server"
 	"google.golang.org/grpc"
@@ -27,14 +28,16 @@ var metaRootListen = net.Listen
 // quorum. Single-process/local mode has been removed from the CLI.
 func runMetaRootCmd(w io.Writer, args []string) error {
 	fs := flag.NewFlagSet("meta-root", flag.ContinueOnError)
-	addr := fs.String("addr", "127.0.0.1:2380", "listen address for metadata root gRPC service")
-	workdir := fs.String("workdir", "", "metadata root work directory (required)")
+	addr := fs.String("addr", "127.0.0.1:2380", "listen address for metadata root gRPC service (resolved from --config if present)")
+	workdir := fs.String("workdir", "", "metadata root work directory (resolved from --config if present)")
 	nodeID := fs.Uint64("node-id", 0, "metadata root node id (required, must be > 0)")
-	transportAddr := fs.String("transport-addr", "", "metadata root raft transport address (required)")
+	transportAddr := fs.String("transport-addr", "", "metadata root raft transport address (resolved from --config if present)")
 	tickInterval := fs.Duration("tick-interval", 100*time.Millisecond, "replicated root raft tick interval")
 	metricsAddr := fs.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
+	configPath := fs.String("config", "", "optional raft configuration file (meta_root.peers drives --peer/--transport-addr/--workdir)")
+	scope := fs.String("scope", "host", "scope for config-resolved addresses: host|docker")
 	var peerFlags []string
-	fs.Func("peer", "metadata root peer mapping in the form nodeID=address (repeatable, exactly 3)", func(value string) error {
+	fs.Func("peer", "metadata root peer mapping in the form nodeID=address (repeatable, exactly 3; resolved from --config if present)", func(value string) error {
 		value = strings.TrimSpace(value)
 		if value == "" {
 			return fmt.Errorf("peer value cannot be empty")
@@ -45,6 +48,46 @@ func runMetaRootCmd(w io.Writer, args []string) error {
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	// Resolve --peer / --transport-addr / --addr / --workdir from the config
+	// file when present. Explicit CLI flags always win.
+	if strings.TrimSpace(*configPath) != "" {
+		scopeNorm := strings.ToLower(strings.TrimSpace(*scope))
+		if scopeNorm != "host" && scopeNorm != "docker" {
+			return fmt.Errorf("invalid meta-root scope %q (expected host|docker)", *scope)
+		}
+		cfg, err := config.LoadFile(strings.TrimSpace(*configPath))
+		if err != nil {
+			return fmt.Errorf("meta-root load config %q: %w", strings.TrimSpace(*configPath), err)
+		}
+		if err := cfg.Validate(); err != nil {
+			return fmt.Errorf("meta-root validate config %q: %w", strings.TrimSpace(*configPath), err)
+		}
+		if cfg.MetaRoot != nil {
+			if !flagPassed(fs, "peer") {
+				for id, paddr := range cfg.MetaRootTransportPeers(scopeNorm) {
+					peerFlags = append(peerFlags, fmt.Sprintf("%d=%s", id, paddr))
+				}
+			}
+			if *nodeID != 0 {
+				if !flagPassed(fs, "addr") {
+					if resolved := cfg.ResolveMetaRootServiceAddr(*nodeID, scopeNorm); resolved != "" {
+						*addr = resolved
+					}
+				}
+				if !flagPassed(fs, "transport-addr") {
+					if resolved := cfg.ResolveMetaRootTransportAddr(*nodeID, scopeNorm); resolved != "" {
+						*transportAddr = resolved
+					}
+				}
+				if !flagPassed(fs, "workdir") {
+					if resolved := cfg.ResolveMetaRootWorkDir(*nodeID, scopeNorm); resolved != "" {
+						*workdir = resolved
+					}
+				}
+			}
+		}
 	}
 
 	cfg := replicatedMetaRootConfig{

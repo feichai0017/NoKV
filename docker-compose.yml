@@ -58,15 +58,13 @@ services:
     entrypoint: ["/usr/local/bin/nokv"]
     command:
       - "meta-root"
+      - "--config=/etc/nokv/raft_config.json"
+      - "--scope=docker"
+      - "--node-id=1"
       - "--addr=0.0.0.0:2380"
       - "--metrics-addr=0.0.0.0:9380"
-      - "--node-id=1"
-      - "--transport-addr=nokv-meta-root-1:2480"
-      - "--peer=1=nokv-meta-root-1:2480"
-      - "--peer=2=nokv-meta-root-2:2480"
-      - "--peer=3=nokv-meta-root-3:2480"
-      - "--workdir=/var/lib/nokv-meta-root"
     volumes:
+      - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
       - meta-root-1-data:/var/lib/nokv-meta-root
     expose: ["2380", "2480", "9380"]
 
@@ -76,15 +74,13 @@ services:
     entrypoint: ["/usr/local/bin/nokv"]
     command:
       - "meta-root"
+      - "--config=/etc/nokv/raft_config.json"
+      - "--scope=docker"
+      - "--node-id=2"
       - "--addr=0.0.0.0:2380"
       - "--metrics-addr=0.0.0.0:9380"
-      - "--node-id=2"
-      - "--transport-addr=nokv-meta-root-2:2480"
-      - "--peer=1=nokv-meta-root-1:2480"
-      - "--peer=2=nokv-meta-root-2:2480"
-      - "--peer=3=nokv-meta-root-3:2480"
-      - "--workdir=/var/lib/nokv-meta-root"
     volumes:
+      - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
       - meta-root-2-data:/var/lib/nokv-meta-root
     expose: ["2380", "2480", "9380"]
 
@@ -94,15 +90,13 @@ services:
     entrypoint: ["/usr/local/bin/nokv"]
     command:
       - "meta-root"
+      - "--config=/etc/nokv/raft_config.json"
+      - "--scope=docker"
+      - "--node-id=3"
       - "--addr=0.0.0.0:2380"
       - "--metrics-addr=0.0.0.0:9380"
-      - "--node-id=3"
-      - "--transport-addr=nokv-meta-root-3:2480"
-      - "--peer=1=nokv-meta-root-1:2480"
-      - "--peer=2=nokv-meta-root-2:2480"
-      - "--peer=3=nokv-meta-root-3:2480"
-      - "--workdir=/var/lib/nokv-meta-root"
     volumes:
+      - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
       - meta-root-3-data:/var/lib/nokv-meta-root
     expose: ["2380", "2480", "9380"]
 
@@ -113,12 +107,13 @@ services:
     entrypoint: ["/usr/local/bin/nokv"]
     command:
       - "coordinator"
+      - "--config=/etc/nokv/raft_config.json"
+      - "--scope=docker"
       - "--addr=0.0.0.0:2379"
       - "--metrics-addr=0.0.0.0:9100"
       - "--coordinator-id=coord-1"
-      - "--root-peer=1=nokv-meta-root-1:2380"
-      - "--root-peer=2=nokv-meta-root-2:2380"
-      - "--root-peer=3=nokv-meta-root-3:2380"
+    volumes:
+      - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
     expose: ["2379", "9100"]
     depends_on:
       meta-root-1: { condition: service_started }
@@ -131,12 +126,13 @@ services:
     entrypoint: ["/usr/local/bin/nokv"]
     command:
       - "coordinator"
+      - "--config=/etc/nokv/raft_config.json"
+      - "--scope=docker"
       - "--addr=0.0.0.0:2379"
       - "--metrics-addr=0.0.0.0:9100"
       - "--coordinator-id=coord-2"
-      - "--root-peer=1=nokv-meta-root-1:2380"
-      - "--root-peer=2=nokv-meta-root-2:2380"
-      - "--root-peer=3=nokv-meta-root-3:2380"
+    volumes:
+      - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
     expose: ["2379", "9100"]
     depends_on:
       meta-root-1: { condition: service_started }
@@ -149,12 +145,13 @@ services:
     entrypoint: ["/usr/local/bin/nokv"]
     command:
       - "coordinator"
+      - "--config=/etc/nokv/raft_config.json"
+      - "--scope=docker"
       - "--addr=0.0.0.0:2379"
       - "--metrics-addr=0.0.0.0:9100"
       - "--coordinator-id=coord-3"
-      - "--root-peer=1=nokv-meta-root-1:2380"
-      - "--root-peer=2=nokv-meta-root-2:2380"
-      - "--root-peer=3=nokv-meta-root-3:2380"
+    volumes:
+      - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
     expose: ["2379", "9100"]
     depends_on:
       meta-root-1: { condition: service_started }
