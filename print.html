@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-6a6b2d85.js";
+            window.path_to_searchindex_js = "searchindex-ff4c3be9.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-87c44e77.js"></script>
@@ -6128,6 +6128,29 @@ churn through one generation before settling (~17 s total recovery).</li>
 <li><strong>Start the stopped container</strong> → it rejoins quietly as a standby.</li>
 </ul>
 <p>The same drills run from the terminal if you prefer: <code>docker stop nokv-coordinator-1</code>, <code>docker stop nokv-meta-root-1</code>, etc.</p>
+<h2 id="periodic-reset-for-a-public-demo-server"><a class="header" href="#periodic-reset-for-a-public-demo-server">Periodic reset for a public demo server</a></h2>
+<p>If you want the demo to stay fresh and avoid keeping state forever, the clean
+way is to <strong>recreate the stack from scratch on a schedule</strong>:</p>
+<pre><code class="language-bash">scripts/demo/recycle-demo.sh --dashboard
+</code></pre>
+<p>That script does one full reset:</p>
+<ol>
+<li><code>docker compose down -v --remove-orphans</code></li>
+<li><code>docker compose up -d --build</code></li>
+<li>wait until <code>redis-cli -p 6380 ping</code> succeeds</li>
+<li>optionally restart the local dashboard proxy on <code>:18080</code></li>
+</ol>
+<p>For a server, schedule the script externally instead of embedding an infinite
+loop in your service process.</p>
+<h3 id="cron-example"><a class="header" href="#cron-example">Cron example</a></h3>
+<p>Reset every 6 hours:</p>
+<pre><code class="language-bash">0 */6 * * * cd /path/to/NoKV &amp;&amp; scripts/demo/recycle-demo.sh --dashboard &gt;&gt; /var/log/nokv-demo-reset.log 2&gt;&amp;1
+</code></pre>
+<h3 id="long-running-loop-example"><a class="header" href="#long-running-loop-example">Long-running loop example</a></h3>
+<p>If you really want the script itself to loop:</p>
+<pre><code class="language-bash">scripts/demo/recycle-demo.sh --interval 21600 --dashboard
+</code></pre>
+<p><code>21600</code> is 6 hours in seconds.</p>
 <h2 id="public-demo-via-cloudflare-tunnel"><a class="header" href="#public-demo-via-cloudflare-tunnel">Public demo via Cloudflare Tunnel</a></h2>
 <p>The tunnel config in <code>docker-compose.yml</code> (commented) points cloudflared at
 the redis port + expvar ports. To go live publicly:</p>
