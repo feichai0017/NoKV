@@ -156,6 +156,43 @@ meta-root and coordinator container directly. Click one, watch:
 The same drills run from the terminal if you prefer: `docker stop
 nokv-coordinator-1`, `docker stop nokv-meta-root-1`, etc.
 
+## Periodic reset for a public demo server
+
+If you want the demo to stay fresh and avoid keeping state forever, the clean
+way is to **recreate the stack from scratch on a schedule**:
+
+```bash
+scripts/demo/recycle-demo.sh --dashboard
+```
+
+That script does one full reset:
+
+1. `docker compose down -v --remove-orphans`
+2. `docker compose up -d --build`
+3. wait until `redis-cli -p 6380 ping` succeeds
+4. optionally restart the local dashboard proxy on `:18080`
+
+For a server, schedule the script externally instead of embedding an infinite
+loop in your service process.
+
+### Cron example
+
+Reset every 6 hours:
+
+```bash
+0 */6 * * * cd /path/to/NoKV && scripts/demo/recycle-demo.sh --dashboard >> /var/log/nokv-demo-reset.log 2>&1
+```
+
+### Long-running loop example
+
+If you really want the script itself to loop:
+
+```bash
+scripts/demo/recycle-demo.sh --interval 21600 --dashboard
+```
+
+`21600` is 6 hours in seconds.
+
 ## Public demo via Cloudflare Tunnel
 
 The tunnel config in `docker-compose.yml` (commented) points cloudflared at
