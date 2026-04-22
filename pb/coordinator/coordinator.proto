@@ -17,6 +17,12 @@ message StoreHeartbeatRequest {
   uint64 capacity = 4;
   uint64 available = 5;
   uint64 dropped_operations = 6;
+  // leader_region_ids lists the regions for which this store currently
+  // reports itself as the raft leader. The coordinator treats the most
+  // recent report per region as authoritative; during a raft transition
+  // the reports will briefly disagree and converge within one heartbeat
+  // tick.
+  repeated uint64 leader_region_ids = 7;
 }
 
 enum SchedulerOperationType {

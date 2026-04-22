@@ -14,6 +14,11 @@ import (
 type RegionInfo struct {
 	Descriptor    descriptor.Descriptor `json:"descriptor"`
 	LastHeartbeat time.Time             `json:"last_heartbeat"`
+	// LeaderStoreID is the store that most recently reported itself as the
+	// raft leader of this region via StoreHeartbeat. Zero means no store
+	// has claimed leadership yet (or all claims are stale).
+	LeaderStoreID    uint64    `json:"leader_store_id,omitempty"`
+	LeaderReportedAt time.Time `json:"leader_reported_at"`
 }
 
 type regionIndexEntry struct {
@@ -22,19 +27,26 @@ type regionIndexEntry struct {
 	end   []byte
 }
 
+type regionLeader struct {
+	storeID    uint64
+	reportedAt time.Time
+}
+
 // RegionDirectoryView is the disposable control-plane directory view used for
 // route lookup and operator inspection.
 type RegionDirectoryView struct {
-	mu           sync.RWMutex
-	regions      map[uint64]descriptor.Descriptor
-	regionLastHB map[uint64]time.Time
-	regionIndex  []regionIndexEntry
+	mu            sync.RWMutex
+	regions       map[uint64]descriptor.Descriptor
+	regionLastHB  map[uint64]time.Time
+	regionLeaders map[uint64]regionLeader
+	regionIndex   []regionIndexEntry
 }
 
 func NewRegionDirectoryView() *RegionDirectoryView {
 	return &RegionDirectoryView{
-		regions:      make(map[uint64]descriptor.Descriptor),
-		regionLastHB: make(map[uint64]time.Time),
+		regions:       make(map[uint64]descriptor.Descriptor),
+		regionLastHB:  make(map[uint64]time.Time),
+		regionLeaders: make(map[uint64]regionLeader),
 	}
 }
 
@@ -123,6 +135,7 @@ func (v *RegionDirectoryView) Remove(regionID uint64) bool {
 	_, existed := v.regions[regionID]
 	delete(v.regions, regionID)
 	delete(v.regionLastHB, regionID)
+	delete(v.regionLeaders, regionID)
 	v.removeIndexByRegionIDLocked(regionID)
 	v.mu.Unlock()
 	return existed
@@ -135,11 +148,48 @@ func (v *RegionDirectoryView) Snapshot() []RegionInfo {
 	v.mu.RLock()
 	out := make([]RegionInfo, 0, len(v.regions))
 	for id, desc := range v.regions {
-		out = append(out, RegionInfo{Descriptor: desc.Clone(), LastHeartbeat: v.regionLastHB[id]})
+		info := RegionInfo{Descriptor: desc.Clone(), LastHeartbeat: v.regionLastHB[id]}
+		if leader, ok := v.regionLeaders[id]; ok {
+			info.LeaderStoreID = leader.storeID
+			info.LeaderReportedAt = leader.reportedAt
+		}
+		out = append(out, info)
 	}
 	v.mu.RUnlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].Descriptor.RegionID < out[j].Descriptor.RegionID })
 	return out
+}
+
+// RecordLeader updates the most-recent per-region leader claim observed
+// via StoreHeartbeat. Latest report wins; during a raft transition the
+// two claims will converge within one heartbeat tick.
+func (v *RegionDirectoryView) RecordLeader(regionID, storeID uint64, at time.Time) {
+	if v == nil || regionID == 0 || storeID == 0 {
+		return
+	}
+	v.mu.Lock()
+	v.regionLeaders[regionID] = regionLeader{storeID: storeID, reportedAt: at}
+	v.mu.Unlock()
+}
+
+// ClearLeadersFromStore removes any leadership claim owned by storeID.
+// Used on StoreHeartbeat from a store that no longer claims leadership
+// over a previously-owned region (the store stopped being leader).
+func (v *RegionDirectoryView) ClearLeadersFromStore(storeID uint64, keep map[uint64]struct{}) {
+	if v == nil || storeID == 0 {
+		return
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for regionID, leader := range v.regionLeaders {
+		if leader.storeID != storeID {
+			continue
+		}
+		if _, keepIt := keep[regionID]; keepIt {
+			continue
+		}
+		delete(v.regionLeaders, regionID)
+	}
 }
 
 func (v *RegionDirectoryView) DescriptorsSnapshot() map[uint64]descriptor.Descriptor {
@@ -172,6 +222,13 @@ func (v *RegionDirectoryView) Replace(descriptors map[uint64]descriptor.Descript
 	v.mu.Lock()
 	v.regions = regions
 	v.regionLastHB = heartbeats
+	prunedLeaders := make(map[uint64]regionLeader, len(regions))
+	for id, leader := range v.regionLeaders {
+		if _, ok := regions[id]; ok {
+			prunedLeaders[id] = leader
+		}
+	}
+	v.regionLeaders = prunedLeaders
 	v.regionIndex = buildRegionIndex(regions)
 	v.mu.Unlock()
 }

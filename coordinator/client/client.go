@@ -115,11 +115,60 @@ func (c *GRPCClient) ConfigureAblation(cfg coordablation.Config) error {
 	return nil
 }
 
-// StoreHeartbeat forwards store heartbeat RPC.
+// StoreHeartbeat fans one heartbeat out to every known coordinator endpoint.
+// The control plane treats store stats and region-leader claims as runtime
+// telemetry rather than rooted truth, so all coordinators need to observe
+// them directly. If any endpoint produces scheduling operations, that response
+// wins; otherwise the first successful response is returned.
 func (c *GRPCClient) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbeatRequest) (*coordpb.StoreHeartbeatResponse, error) {
-	return invokeRPC(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.StoreHeartbeatResponse, error) {
-		return coord.StoreHeartbeat(ctx, req)
-	})
+	if c == nil {
+		return nil, errNoReachableAddress
+	}
+	endpoints := c.orderedEndpoints()
+	if len(endpoints) == 0 {
+		return nil, errNoReachableAddress
+	}
+
+	var (
+		firstResp     *coordpb.StoreHeartbeatResponse
+		firstRespAddr string
+		opsResp       *coordpb.StoreHeartbeatResponse
+		opsRespAddr   string
+		lastErr       error
+	)
+	for _, endpoint := range endpoints {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				lastErr = err
+				break
+			}
+		}
+		resp, err := endpoint.coord.StoreHeartbeat(ctx, req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if firstResp == nil {
+			firstResp = resp
+			firstRespAddr = endpoint.addr
+		}
+		if opsResp == nil && len(resp.GetOperations()) > 0 {
+			opsResp = resp
+			opsRespAddr = endpoint.addr
+		}
+	}
+	if opsResp != nil {
+		c.markPreferred(opsRespAddr)
+		return opsResp, nil
+	}
+	if firstResp != nil {
+		c.markPreferred(firstRespAddr)
+		return firstResp, nil
+	}
+	if lastErr == nil {
+		lastErr = errNoReachableAddress
+	}
+	return nil, lastErr
 }
 
 // RegionLiveness forwards region liveness heartbeat RPC.

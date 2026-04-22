@@ -72,7 +72,7 @@
     padding: 20px 24px;
     margin-bottom: 18px;
   }
-  .topology svg { width: 100%; height: 280px; display: block; }
+  .topology svg { width: 100%; height: 250px; display: block; }
   .topo-node circle { fill: var(--bg-elev2); stroke: var(--border-strong); stroke-width: 1.5; transition: all 0.3s ease; }
   .topo-node.leader  circle { stroke: var(--accent-truth);   stroke-width: 2.5; filter: drop-shadow(0 0 6px var(--accent-truth)); }
   .topo-node.holder  circle { stroke: var(--accent-control); stroke-width: 2.5; filter: drop-shadow(0 0 6px var(--accent-control)); }
@@ -294,7 +294,7 @@
 </header>
 
 <div class="topology">
-  <svg viewBox="0 0 900 260" preserveAspectRatio="xMidYMid meet">
+  <svg viewBox="0 0 900 230" preserveAspectRatio="xMidYMid meet">
     <defs>
       <marker id="arrow-truth" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
         <path d="M0,0 L6,3 L0,6" fill="none" stroke="currentColor" stroke-width="1.2"/>
@@ -312,11 +312,9 @@
     <!-- Nodes (will be filled by JS) -->
     <g id="nodes"></g>
 
-    <!-- Gateway box -->
-    <g id="gateway-node">
-      <rect x="30" y="225" width="140" height="25" rx="4" fill="#111822" stroke="#1f2a3b" stroke-width="1"/>
-      <text x="100" y="241" fill="#ffa657" font-size="10" font-weight="600" text-anchor="middle" font-family="SF Mono, monospace">nokv-redis :6380</text>
-    </g>
+    <!-- Gateway lives in its own card section below; not rendered in the
+         topology graph to keep the 3-plane layout clean. -->
+
   </svg>
 
   <div class="topo-legend">
@@ -350,6 +348,14 @@
     <h2>3× store — per-region raft, LSM engine</h2>
   </div>
   <div class="grid" id="store-grid"></div>
+</div>
+
+<div class="plane">
+  <div class="plane-head">
+    <span class="badge exec">Regions</span>
+    <h2>Rooted region catalog (from coordinator)</h2>
+  </div>
+  <div class="grid" id="region-grid"></div>
 </div>
 
 <div class="plane">
@@ -399,6 +405,15 @@ const TARGETS = {
   gateway: [{id:'gateway',port:9300}],
 };
 
+// The dashboard Python server is always at 127.0.0.1:18080. Hardcoding the
+// base here rather than using location.origin means the page works
+// identically whether you opened it from http://localhost:18080, file://,
+// or an IDE preview panel that rewrites the origin to something else.
+// CORS is permissive on the proxy + every expvar port, so cross-origin
+// fetches all go through.
+const API_BASE = 'http://127.0.0.1:18080';
+const EXPVAR_HOST = '127.0.0.1';
+
 /* =========================================================
  * Expvar fetch (with CORS now fixed server-side)
  * ========================================================= */
@@ -406,7 +421,7 @@ async function fetchJSON(port) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 1200);
   try {
-    const r = await fetch(`http://${location.hostname || 'localhost'}:${port}/debug/vars`, {signal: ctl.signal});
+    const r = await fetch(`http://${EXPVAR_HOST}:${port}/debug/vars`, {signal: ctl.signal});
     clearTimeout(t);
     if (!r.ok) return null;
     return await r.json();
@@ -483,7 +498,7 @@ function renderCoord(info, peer) {
   return el;
 }
 
-function renderStore(info, peer) {
+function renderStore(info, peer, regionList) {
   const el = document.createElement('div');
   el.className = 'card';
   if (!info) {
@@ -491,15 +506,65 @@ function renderStore(info, peer) {
     el.innerHTML = `<div class="card-head"><span class="card-name">store-${peer.id}</span><span class="tag error">unreachable</span></div>${row('port', `:${peer.port}`)}`;
     return el;
   }
-  const mem = info.memstats || {};
+  const mem   = info.memstats || {};
+  const stats = info['NoKV.Stats'] || {};
+  const raft  = stats.raft || {};
+  const wal   = stats.wal  || {};
+  const vlog  = stats.value_log || {};
+
+  // Which regions does this store host (peer set) and which does it lead?
+  const hosted = (regionList || [])
+    .filter(r => (r.peers || []).some(p => p.store_id === peer.id))
+    .map(r => r.region_id);
+  const leads = (regionList || [])
+    .filter(r => r.leader_store_id === peer.id)
+    .map(r => r.region_id);
+
+  if (leads.length) el.classList.add('region-leader');
+
   el.innerHTML = `
-    <div class="card-head"><span class="card-name">store-${peer.id}</span><span class="tag live">live</span></div>
-    ${row('heap alloc',     bytes(mem.Alloc))}
-    ${row('heap sys',       bytes(mem.Sys))}
-    ${row('gc cycles',      mem.NumGC || 0)}
-    ${row('goroutines',     info['cmd.goroutines'] || '—')}
-    ${row('madvise ok',     info['NoKV.Mmap.Madvise'] || 0)}
-    ${row('prefetch done',  info['NoKV.Prefetch.Completed'] || 0)}
+    <div class="card-head">
+      <span class="card-name">store-${peer.id}</span>
+      <span class="tag ${leads.length ? 'region' : 'live'}">
+        ${leads.length ? `leader of ${leads.length}` : `${raft.group_count || 0} groups`}
+      </span>
+    </div>
+    ${row('leader of',    leads.length ? leads.map(id => `r${id}`).join(', ') : '—',
+           leads.length ? 'good' : '')}
+    ${row('hosts',        hosted.length ? hosted.map(id => `r${id}`).join(', ') : '—')}
+    ${row('raft groups',  raft.group_count || 0)}
+    ${row('lagging',      raft.lagging_groups || 0,
+           (raft.lagging_groups || 0) > 0 ? 'warn' : 'good')}
+    ${row('log segs',     `${raft.min_log_segment || 0}…${raft.max_log_segment || 0}`)}
+    ${row('wal / vlog',   `${wal.segment_count || 0} / ${vlog.segments || 0}`)}
+    ${row('heap / gc',    `${bytes(mem.Alloc)} · gc ${mem.NumGC || 0}`)}
+  `;
+  return el;
+}
+
+function renderRegion(desc) {
+  const el = document.createElement('div');
+  el.className = 'card';
+  const start = desc.start_key === '' ? '-∞' : JSON.stringify(desc.start_key);
+  const end   = desc.end_key   === '' ? '+∞' : JSON.stringify(desc.end_key);
+  const leaderStore = desc.leader_store_id || 0;
+  // Highlight the leader peer inside the peer list.
+  const peers = (desc.peers || []).map(p => {
+    const marker = p.store_id === leaderStore ? '★' : '·';
+    return `s${p.store_id}${marker}p${p.peer_id}`;
+  }).join(', ');
+  const stateClass = desc.state === 'running' ? 'good'
+                    : (desc.state === 'tombstone' || desc.state === 'removing') ? 'bad' : 'warn';
+  el.classList.add('region-leader'); // every region card gets the green accent
+  el.innerHTML = `
+    <div class="card-head">
+      <span class="card-name">region-${desc.region_id}</span>
+      <span class="tag region">${desc.state}</span>
+    </div>
+    ${row('leader',    leaderStore ? `store-${leaderStore} ★` : '(no report yet)', leaderStore ? 'good' : 'warn')}
+    ${row('key range', `${start} → ${end}`)}
+    ${row('peers',     peers || '—')}
+    ${row('epoch',     `v${desc.epoch_ver}/c${desc.conf_ver}  (root ${desc.root_epoch || 0})`)}
   `;
   return el;
 }
@@ -533,7 +598,7 @@ const TOPO_POS = {
   store: [ {x:720, y:60}, {x:720, y:130}, {x:720, y:200} ],
 };
 
-function renderTopology(state) {
+function renderTopology(state, regionList) {
   const nodesG = document.getElementById('nodes');
   const linksG = document.getElementById('links');
   nodesG.innerHTML = '';
@@ -545,9 +610,17 @@ function renderTopology(state) {
     const l = c && c.nokv_coordinator && c.nokv_coordinator.state && c.nokv_coordinator.state.lease;
     return l && l.held_by_self && l.active;
   });
+  // Map store_id → list of regions this store currently leads, from the
+  // coord's rooted view (populated via StoreHeartbeat.leader_region_ids).
+  const storeLeaderRegions = new Map();
+  (regionList || []).forEach(r => {
+    if (!r.leader_store_id) return;
+    if (!storeLeaderRegions.has(r.leader_store_id)) storeLeaderRegions.set(r.leader_store_id, []);
+    storeLeaderRegions.get(r.leader_store_id).push(r.region_id);
+  });
 
-  // Links: every coord ↔ every meta (control → truth)
-  // Plus the active holder sends pulsing flow to the raft leader
+  // Links: coord ↔ meta mesh. Highlight the "coord holder → raft leader"
+  // pair as the active truth-plane write path.
   state.coord.forEach((c, ci) => {
     state.meta.forEach((m, mi) => {
       const from = TOPO_POS.coord[ci];
@@ -559,24 +632,25 @@ function renderTopology(state) {
     });
   });
 
-  // Links: coord holder → stores (exec plane)
+  // Links: coord holder → stores. Pulse only to stores that currently lead
+  // at least one region (the actual control-plane write targets); the
+  // other stores get a faint dashed line to show they're still replicas.
   state.store.forEach((s, si) => {
-    const from = TOPO_POS.coord[coordHolder >= 0 ? coordHolder : 0];
+    if (coordHolder < 0 || s === null) {
+      const from = TOPO_POS.coord[0];
+      const to   = TOPO_POS.store[si];
+      linksG.insertAdjacentHTML('beforeend',
+        `<line class="topo-link exec-flow"
+               x1="${from.x+24}" y1="${from.y}" x2="${to.x-24}" y2="${to.y}"/>`);
+      return;
+    }
+    const from = TOPO_POS.coord[coordHolder];
     const to   = TOPO_POS.store[si];
-    const active = (coordHolder >= 0) && s !== null;
+    const isLeaderStore = storeLeaderRegions.has(si + 1);
     linksG.insertAdjacentHTML('beforeend',
-      `<line class="topo-link exec-flow ${active ? 'active' : ''}"
+      `<line class="topo-link exec-flow ${isLeaderStore ? 'active' : ''}"
              x1="${from.x+24}" y1="${from.y}" x2="${to.x-24}" y2="${to.y}"/>`);
   });
-
-  // Gateway → coord holder
-  if (coordHolder >= 0) {
-    const from = {x:100, y:225};
-    const to = TOPO_POS.coord[coordHolder];
-    linksG.insertAdjacentHTML('beforeend',
-      `<path class="topo-link control-flow active"
-             d="M ${from.x} ${from.y} C ${from.x} ${from.y-40}, ${to.x} ${to.y+40}, ${to.x} ${to.y+24}"/>`);
-  }
 
   // Nodes
   const addNode = (pos, label, sublabel, klass) => {
@@ -606,7 +680,11 @@ function renderTopology(state) {
   state.store.forEach((s, i) => {
     const pos = TOPO_POS.store[i];
     if (!s) return addNode(pos, `st-${i+1}`, 'down', 'dead');
-    addNode(pos, `st-${i+1}`, 'live', '');
+    const leads = storeLeaderRegions.get(i + 1) || [];
+    const sub = leads.length
+      ? `leader of r${leads.join(', r')}`
+      : 'follower';
+    addNode(pos, `st-${i+1}`, sub, leads.length ? 'region-leader' : '');
   });
 }
 
@@ -720,7 +798,7 @@ async function runDrill(action, container, btn) {
   btn.disabled = true;
   btn.textContent = `${action}ing…`;
   try {
-    const r = await fetch(`/api/docker/${action}/${container}`, {method: 'POST'});
+    const r = await fetch(`${API_BASE}/api/docker/${action}/${container}`, {method: 'POST'});
     const data = await r.json();
     if (data.returncode === 0) {
       pushEvent('node', `docker ${action} ${container} → ok`);
@@ -756,7 +834,7 @@ async function runRedis() {
   termInput.value = '';
   redisStatus.textContent = 'running…';
   try {
-    const r = await fetch('/api/redis', {
+    const r = await fetch(`${API_BASE}/api/redis`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({cmd}),
@@ -796,6 +874,16 @@ async function tick() {
   ]);
   const state = {meta, coord, store, gateway};
 
+  const holderCoord = coord.find(c => {
+    const lease = c?.nokv_coordinator?.state?.lease;
+    return lease?.held_by_self && lease?.active;
+  });
+  const regionSource = holderCoord
+    || coord.find(c => Array.isArray(c?.nokv_coordinator?.state?.region_descriptors));
+  const regionList = (regionSource?.nokv_coordinator?.state?.region_descriptors || [])
+    .slice()
+    .sort((a, b) => a.region_id - b.region_id);
+
   // cards
   const fill = (id, peers, results, renderer) => {
     const el = document.getElementById(id);
@@ -804,10 +892,29 @@ async function tick() {
   };
   fill('meta-grid',    TARGETS.meta,    meta,    renderMeta);
   fill('coord-grid',   TARGETS.coord,   coord,   renderCoord);
-  fill('store-grid',   TARGETS.store,   store,   renderStore);
+  TARGETS.store.forEach((p, i) => {}); // no-op placeholder for readability
+  (function fillStores() {
+    const el = document.getElementById('store-grid');
+    el.innerHTML = '';
+    TARGETS.store.forEach((p, i) => el.appendChild(renderStore(store[i], p, regionList)));
+  })();
   fill('gateway-grid', TARGETS.gateway, gateway, renderGateway);
 
-  renderTopology(state);
+  // Regions panel
+  (function fillRegions() {
+    const el = document.getElementById('region-grid');
+    el.innerHTML = '';
+    if (!regionList.length) {
+      const empty = document.createElement('div');
+      empty.className = 'card dead';
+      empty.innerHTML = `<div class="card-head"><span class="card-name">no regions</span><span class="tag error">empty</span></div>${row('status', 'rooted catalog has no descriptors yet')}`;
+      el.appendChild(empty);
+      return;
+    }
+    regionList.forEach(desc => el.appendChild(renderRegion(desc)));
+  })();
+
+  renderTopology(state, regionList);
   renderDrills(state);
 
   // status pill

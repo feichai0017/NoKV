@@ -134,6 +134,7 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 		Capacity:          1000,
 		Available:         800,
 		DroppedOperations: 7,
+		LeaderRegionIDs:   []uint64{10, 12},
 	})
 
 	require.Len(t, pd.livenessReqs, 1)
@@ -141,6 +142,7 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 	require.Len(t, pd.storeReqs, 1)
 	require.Equal(t, uint64(1), pd.storeReqs[0].GetStoreId())
 	require.Equal(t, uint64(7), pd.storeReqs[0].GetDroppedOperations())
+	require.Equal(t, []uint64{10, 12}, pd.storeReqs[0].GetLeaderRegionIds())
 
 	require.Len(t, ops, 1)
 	require.Equal(t, storepkg.OperationLeaderTransfer, ops[0].Type)

@@ -739,6 +739,10 @@ type scriptedCoordinatorServer struct {
 
 	mu sync.Mutex
 
+	storeResponses []*coordpb.StoreHeartbeatResponse
+	storeErrors    []error
+	storeCalls     int
+
 	allocResponses []*coordpb.AllocIDResponse
 	allocErrors    []error
 	allocCalls     int
@@ -750,6 +754,23 @@ type scriptedCoordinatorServer struct {
 	getResponses []*coordpb.GetRegionByKeyResponse
 	getErrors    []error
 	getCalls     int
+}
+
+func (s *scriptedCoordinatorServer) StoreHeartbeat(_ context.Context, _ *coordpb.StoreHeartbeatRequest) (*coordpb.StoreHeartbeatResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.storeCalls++
+	var err error
+	if len(s.storeErrors) > 0 {
+		err = s.storeErrors[0]
+		s.storeErrors = s.storeErrors[1:]
+	}
+	if len(s.storeResponses) == 0 {
+		return nil, err
+	}
+	resp := s.storeResponses[0]
+	s.storeResponses = s.storeResponses[1:]
+	return resp, err
 }
 
 func (s *scriptedCoordinatorServer) AllocID(_ context.Context, _ *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error) {
@@ -847,6 +868,45 @@ func newScriptedCoordinatorClient(t *testing.T, order []string, servers map[stri
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = cli.Close() })
 	return cli
+}
+
+func TestGRPCClientStoreHeartbeatBroadcastsAndPrefersOperationalResponse(t *testing.T) {
+	servers := map[string]*scriptedCoordinatorServer{
+		"standby": {
+			storeResponses: []*coordpb.StoreHeartbeatResponse{
+				{Accepted: true},
+			},
+		},
+		"holder": {
+			storeResponses: []*coordpb.StoreHeartbeatResponse{
+				{
+					Accepted: true,
+					Operations: []*coordpb.SchedulerOperation{
+						{
+							Type:         coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER,
+							RegionId:     9,
+							SourcePeerId: 101,
+							TargetPeerId: 201,
+						},
+					},
+				},
+			},
+		},
+	}
+	cli := newScriptedCoordinatorClient(t, []string{"standby", "holder"}, servers)
+
+	resp, err := cli.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
+		StoreId:         2,
+		RegionNum:       2,
+		LeaderNum:       1,
+		LeaderRegionIds: []uint64{9},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetOperations(), 1)
+	require.Equal(t, uint64(9), resp.GetOperations()[0].GetRegionId())
+	require.Equal(t, 1, servers["standby"].storeCalls)
+	require.Equal(t, 1, servers["holder"].storeCalls)
+	require.Equal(t, "passthrough:///holder", cli.orderedEndpoints()[0].addr)
 }
 
 func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descriptor.Descriptor {
