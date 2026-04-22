@@ -94,39 +94,67 @@ three planes:
 scripts/demo/serve-dashboard.sh    # → http://localhost:8080/dashboard.html
 ```
 
-Opens a tiny Python static server at `http://localhost:8080`. The dashboard
-page fetches the 10 expvar endpoints directly on localhost. If your browser
-aggressively blocks cross-port localhost fetches, use a Chromium-based
-browser or launch Chrome with `--disable-web-security` for the demo.
+Under the hood this runs `scripts/demo/dashboard_server.py`, a small Python
+HTTP server with three routes:
 
-Alternative: open `scripts/demo/dashboard.html` directly via `file://` —
-works on Safari and most browsers for `localhost:*` targets.
+| Route | Purpose |
+|---|---|
+| `GET /dashboard.html` | the static page |
+| `POST /api/redis`    | `{"cmd": "..."}` → runs `redis-cli -p 6380 <cmd>` and returns `{stdout, stderr, returncode}` |
+| `POST /api/docker/<stop\|start\|restart>/<nokv-*>` | wraps `docker <action> <container>` for the failover buttons |
 
-### What a healthy cluster looks like
+The expvar endpoints themselves now send `Access-Control-Allow-Origin: *`
+so the dashboard page can fetch them cross-origin without any proxying.
 
-- exactly one meta-root card shows the green **raft leader** badge
-- exactly one coordinator card shows the purple **lease holder** badge and a
-  cert_generation that stays stable unless you kill it
-- the status line at the top reads "all 10 services reachable"
-- all stores / gateway show non-zero uptime
+**Security**: bound to `127.0.0.1` only. `/api/redis` runs arbitrary Redis
+commands and `/api/docker` stops/starts containers whose name starts with
+`nokv-`. Do not expose this dashboard port publicly without an
+authenticated tunnel (Cloudflare Access, nginx + basic auth).
 
-### Failure drills
+### What you see on the page
 
-Demo-friendly things to try while the dashboard is open:
+- **Top:** cluster-wide status pill ("10/10 reachable · HH:MM:SS")
+- **Topology diagram:** 3 truth-plane meta-root peers ↔ 3 control-plane
+  coordinators ↔ 3 execution-plane stores, with the raft leader highlighted
+  in blue, the CCC lease holder in purple, and pulsing lines showing the
+  active control-flow edge (lease holder → raft leader, holder → stores,
+  gateway → holder).
+- **Per-service cards:** one card per service showing leader state, lease
+  generation, committed index, allocator fences, heap stats.
+- **Event timeline:** auto-populated from expvar diffs — lease handoffs,
+  raft elections, descriptor-count changes, node up/down transitions. Use
+  this to watch the CCC lifecycle live.
+- **Failure drills:** one button per meta-root / coordinator container to
+  stop or start it without leaving the browser.
+- **Redis terminal:** type commands like `SET demo "hello"`, `GET demo`,
+  `MGET a b c`, `DBSIZE` and see the raw `redis-cli` output. Each command
+  also lands in the event timeline.
 
-```bash
-# Coordinator failover (lease takeover in ~1-3s)
-docker stop nokv-coordinator-1
-# Watch a different coordinator grab the lease, cert_generation increment
+### Healthy cluster invariants
 
-docker start nokv-coordinator-1
-# Returning coord re-joins as standby
+- exactly one meta-root card shows the blue **raft leader** badge
+- exactly one coordinator card shows the purple **lease holder** badge and
+  a `cert_generation` that stays stable unless you kill something
+- topology diagram: one blue circle on the left column, one purple on
+  the middle column
+- event timeline scrolls slowly with committed-index bumps under load
 
-# Meta-root leader failover (raft election + lease takeover, ~17s)
-docker stop nokv-meta-root-1
-# Watch the raft leader badge move to another peer,
-# then lease churn briefly, then settle.
-```
+### Failure drills — interactive
+
+The dashboard's **Failure drills** panel has buttons to stop/start each
+meta-root and coordinator container directly. Click one, watch:
+
+- **Stop the active coordinator** → lease held-by-self flag flips off at
+  the killed peer, a different coord picks up the lease in 1–3 s, the
+  purple ring in the topology diagram moves, and the event timeline logs
+  the handoff.
+- **Stop the raft leader meta-root** → raft election visible as the blue
+  ring disappears briefly and lands on a surviving peer; coord lease may
+  churn through one generation before settling (~17 s total recovery).
+- **Start the stopped container** → it rejoins quietly as a standby.
+
+The same drills run from the terminal if you prefer: `docker stop
+nokv-coordinator-1`, `docker stop nokv-meta-root-1`, etc.
 
 ## Public demo via Cloudflare Tunnel
 
