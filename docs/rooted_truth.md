@@ -102,25 +102,19 @@ After `Append` returns successfully, callers can observe the new state via `Snap
 
 ---
 
-## 5. Two backends, same interface
+## 5. Single backend: replicated
 
-### Local (single-node)
+NoKV ships one meta-root backend: the 3-peer raft-replicated cluster.
+Historical single-process "local" backend has been removed.
 
-[`meta/root/backend/local/store.go`](../meta/root/backend/local/store.go) — file-backed log with an in-memory mirror.
+[`meta/root/replicated/store.go`](../meta/root/replicated/store.go) — embedded raft library, quorum-durable commits.
 
-- One file per workdir, append-only segments + compact checkpoint
-- `mu` protects in-memory state; `logMu` protects the on-disk segments
-- Compaction is background (kicked by `appendLocked`, runs in its own goroutine)
-- Designed for embedded mode and single-coordinator deployments
-
-### Replicated (multi-node)
-
-[`meta/root/backend/replicated/store.go`](../meta/root/backend/replicated/store.go) — embedded raft library, quorum-durable commits.
-
-- 3 replicas typical, one leader
+- exactly 3 replicas, one leader
 - `Append` proposes a raft log entry; returns after it's committed to quorum
 - Non-leader nodes reject `Append` with `codes.FailedPrecondition`
 - Leader changes trigger `IsLeader()` / `LeaderID()` state updates that coordinator consumes
+- On-disk state per peer: `root.events.wal`, `root.checkpoint.binpb`, `root.raft.bin`
+  (raft hard state + snapshot + retained entries)
 
 ---
 
@@ -176,7 +170,7 @@ This is what lets `coordinator/` run as a thin service without duplicating roote
 
 On coordinator boot:
 
-1. Open the backend (`rootlocal.Open(workdir)` or connect to replicated cluster)
+1. Open the replicated backend (each peer via `rootreplicated.Open`, or connect through `coordinator/rootview` for the client side)
 2. Call `Snapshot()` — backend replays/bootstraps internally
 3. Build a `TailSubscription` from the snapshot's `LastCommitted`
 4. Start the lease campaign loop, which will eventually `ApplyCoordinatorLease(Issue)` when it's leader
@@ -207,9 +201,8 @@ This is what keeps `coordinator/` deployable separately from the rooted log, if 
 | [`meta/root/state/coordinator_lease.go`](../meta/root/state/coordinator_lease.go) | Lease/Seal/Closure validation + digest |
 | [`meta/root/state/transition.go`](../meta/root/state/transition.go) | Cross-event transition rules |
 | [`meta/root/storage/virtual_log.go`](../meta/root/storage/virtual_log.go) | Tail subscription + checkpoint primitives |
-| [`meta/root/backend/local/store.go`](../meta/root/backend/local/store.go) | Single-node backend |
-| [`meta/root/backend/replicated/store.go`](../meta/root/backend/replicated/store.go) | Raft-replicated backend |
-| [`meta/root/remote/service.go`](../meta/root/remote/service.go) | gRPC wrapping of either backend |
+| [`meta/root/replicated/store.go`](../meta/root/replicated/store.go) | The only backend: 3-peer raft-replicated meta-root |
+| [`meta/root/remote/service.go`](../meta/root/remote/service.go) | gRPC service + client for meta-root |
 | [`meta/wire/root.go`](../meta/wire/root.go) | proto ↔ Go conversions |
 
 Related docs:

@@ -1,9 +1,9 @@
-package storage
+package rootview
 
 import (
 	"context"
 	"fmt"
-	rootremote "github.com/feichai0017/NoKV/meta/root/remote"
+	rootclient "github.com/feichai0017/NoKV/meta/root/client"
 	"google.golang.org/grpc"
 	"strings"
 	"time"
@@ -32,7 +32,7 @@ func OpenRootRemoteStore(cfg RemoteRootConfig) (*RootStore, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	client, err := rootremote.DialCluster(ctx, cfg.Targets, cfg.DialOptions...)
+	client, err := rootclient.DialCluster(ctx, cfg.Targets, cfg.DialOptions...)
 	if err != nil {
 		return nil, err
 	}
@@ -46,21 +46,21 @@ func OpenRootRemoteStore(cfg RemoteRootConfig) (*RootStore, error) {
 
 func (cfg RemoteRootConfig) Validate() error {
 	if len(cfg.Targets) == 0 {
-		return fmt.Errorf("coordinator/storage: remote root mode requires at least one target")
+		return fmt.Errorf("coordinator/rootview: remote root mode requires at least one target")
 	}
 	for id, addr := range cfg.Targets {
 		if id == 0 {
-			return fmt.Errorf("coordinator/storage: remote root target ids must be > 0")
+			return fmt.Errorf("coordinator/rootview: remote root target ids must be > 0")
 		}
 		if strings.TrimSpace(addr) == "" {
-			return fmt.Errorf("coordinator/storage: missing remote root address for node %d", id)
+			return fmt.Errorf("coordinator/rootview: missing remote root address for node %d", id)
 		}
 	}
 	return nil
 }
 
 type remoteRootBackend struct {
-	*rootremote.Client
+	*rootclient.Client
 }
 
 func (b remoteRootBackend) IsLeader() bool {

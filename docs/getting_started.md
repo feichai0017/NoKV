@@ -8,13 +8,14 @@ This guide gets you from zero to a running NoKV cluster (or an embedded DB) in a
 - (Optional) Docker + Docker Compose for containerized runs
 
 ## Option A: Local Cluster (recommended for dev)
-This launches a 3-node Raft cluster plus a Coordinator service.
+This launches the 333 separated layout: 3 replicated meta-root peers (Truth plane),
+1 coordinator (Service plane), and the stores declared in the config (Execution plane).
 
 ```bash
 ./scripts/dev/cluster.sh --config ./raft_config.example.json
 ```
 
-The launcher stays attached, streams Coordinator/store logs to the terminal, and also writes them under `./artifacts/cluster/`.
+The launcher stays attached, streams meta-root/Coordinator/store logs to the terminal, and also writes them under `./artifacts/cluster/`.
 
 If you stop one store and want to restart it later, restart it against the same
 workdir:

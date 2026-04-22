@@ -249,7 +249,7 @@ equal authority:
      authority and must not be treated as consensus truth outside the store.
 
 3. **Coordinator control-plane view**
-   - Owned by Coordinator and persisted through [`coordinator/storage`](../coordinator/storage).
+   - Owned by Coordinator and persisted through [`coordinator/rootview`](../coordinator/rootview).
    - Built from region/store heartbeats and allocator durability checkpoints.
    - Used for:
      - route lookup

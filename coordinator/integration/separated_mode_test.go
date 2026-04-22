@@ -9,13 +9,13 @@ import (
 
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
+	"github.com/feichai0017/NoKV/coordinator/rootview"
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
-	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
 	pdtestcluster "github.com/feichai0017/NoKV/coordinator/testcluster"
 	"github.com/feichai0017/NoKV/coordinator/tso"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	rootremote "github.com/feichai0017/NoKV/meta/root/remote"
+	rootserver "github.com/feichai0017/NoKV/meta/root/server"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -304,7 +304,7 @@ func exposeRemoteRoots(t *testing.T, cluster *pdtestcluster.Cluster) map[uint64]
 		lis, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
 		server := grpc.NewServer()
-		rootremote.Register(server, root)
+		rootserver.Register(server, root)
 		go func() { _ = server.Serve(lis) }()
 		t.Cleanup(server.GracefulStop)
 		t.Cleanup(func() { require.NoError(t, lis.Close()) })
@@ -313,19 +313,19 @@ func exposeRemoteRoots(t *testing.T, cluster *pdtestcluster.Cluster) map[uint64]
 	return targets
 }
 
-func openSeparatedCoordinator(t *testing.T, targets map[uint64]string, coordinatorID string) (*coordserver.Service, *coordstorage.RootStore) {
+func openSeparatedCoordinator(t *testing.T, targets map[uint64]string, coordinatorID string) (*coordserver.Service, *rootview.RootStore) {
 	return openSeparatedCoordinatorWithLease(t, targets, coordinatorID, 10*time.Second, 3*time.Second)
 }
 
-func openSeparatedCoordinatorWithLease(t *testing.T, targets map[uint64]string, coordinatorID string, leaseTTL, renewIn time.Duration) (*coordserver.Service, *coordstorage.RootStore) {
+func openSeparatedCoordinatorWithLease(t *testing.T, targets map[uint64]string, coordinatorID string, leaseTTL, renewIn time.Duration) (*coordserver.Service, *rootview.RootStore) {
 	t.Helper()
-	store, err := coordstorage.OpenRootRemoteStore(coordstorage.RemoteRootConfig{
+	store, err := rootview.OpenRootRemoteStore(rootview.RemoteRootConfig{
 		Targets: targets,
 	})
 	require.NoError(t, err)
 
 	cluster := catalog.NewCluster()
-	bootstrap, err := coordstorage.Bootstrap(store, cluster.PublishRegionDescriptor, 1, 1)
+	bootstrap, err := rootview.Bootstrap(store, cluster.PublishRegionDescriptor, 1, 1)
 	require.NoError(t, err)
 
 	svc := coordserver.NewService(

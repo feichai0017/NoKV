@@ -2,7 +2,7 @@ package audit
 
 import (
 	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
-	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
+	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 )
@@ -47,7 +47,7 @@ type Report struct {
 	Anomalies              SnapshotAnomalies
 }
 
-func evaluateSnapshot(snapshot coordstorage.Snapshot, holderID string, nowUnixNano int64) Report {
+func evaluateSnapshot(snapshot rootview.Snapshot, holderID string, nowUnixNano int64) Report {
 	descriptorRevision := rootstate.MaxDescriptorRevision(snapshot.Descriptors)
 	currentFrontiers := controlplane.Frontiers(rootstate.State{
 		IDFence:  snapshot.Allocator.IDCurrent,
@@ -73,7 +73,7 @@ func evaluateSnapshot(snapshot coordstorage.Snapshot, holderID string, nowUnixNa
 	}
 }
 
-func evaluateClosureDefect(snapshot coordstorage.Snapshot, holderID string, nowUnixNano int64, witness rootproto.ClosureWitness, status rootproto.CoordinatorClosureStatus) ClosureDefect {
+func evaluateClosureDefect(snapshot rootview.Snapshot, holderID string, nowUnixNano int64, witness rootproto.ClosureWitness, status rootproto.CoordinatorClosureStatus) ClosureDefect {
 	current := snapshot.CoordinatorLease
 	closure := snapshot.CoordinatorClosure
 	if holderID == "" || holderID != current.HolderID || !current.ActiveAt(nowUnixNano) {
@@ -132,7 +132,7 @@ func evaluateClosureDefect(snapshot coordstorage.Snapshot, holderID string, nowU
 
 // BuildReport materializes one rooted snapshot into a standalone audit report
 // that callers can serialize or render without duplicating anomaly logic.
-func BuildReport(snapshot coordstorage.Snapshot, holderID string, nowUnixNano int64) Report {
+func BuildReport(snapshot rootview.Snapshot, holderID string, nowUnixNano int64) Report {
 	report := evaluateSnapshot(snapshot, holderID, nowUnixNano)
 	closureDefect := evaluateClosureDefect(snapshot, holderID, nowUnixNano, report.ClosureWitness, report.Closure)
 	anomalies := SnapshotAnomalies{

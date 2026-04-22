@@ -13,7 +13,7 @@ import (
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
 	"github.com/feichai0017/NoKV/coordinator/tso"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	rootremote "github.com/feichai0017/NoKV/meta/root/remote"
+	rootserver "github.com/feichai0017/NoKV/meta/root/server"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -169,12 +169,12 @@ func openWitnessBenchmarkHarness(b *testing.B, cfg coordablation.Config) *witnes
 	return h
 }
 
-func openBenchmarkRemoteRootServerTCP(tb testing.TB, backend rootremote.Backend) (string, func()) {
+func openBenchmarkRemoteRootServerTCP(tb testing.TB, backend rootserver.Backend) (string, func()) {
 	tb.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(tb, err)
 	server := grpc.NewServer()
-	metapb.RegisterMetadataRootServer(server, rootremote.NewService(backend))
+	metapb.RegisterMetadataRootServer(server, rootserver.NewService(backend))
 	go func() { _ = server.Serve(listener) }()
 	return listener.Addr().String(), func() {
 		server.GracefulStop()

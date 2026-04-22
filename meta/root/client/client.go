@@ -1,4 +1,10 @@
-package remote
+// Package client is the coordinator-side gRPC client for the meta-root
+// service. It mirrors the layout used by raftstore/client and
+// coordinator/client: callers dial the Service registered by meta/root/server
+// via Dial/DialCluster and get back a Client that implements the same
+// authority surface (Snapshot/Append/FenceAllocator/ObserveTail/...) used by
+// coordinator/rootview.
+package client
 
 import (
 	"context"
@@ -26,7 +32,7 @@ const defaultCallTimeout = 3 * time.Second
 const errMetadataRootNotLeader = "metadata root not leader"
 
 // Client is a remote metadata-root backend client. It implements the same
-// authority surface consumed by coordinator/storage.OpenRootStore.
+// authority surface consumed by coordinator/rootview.OpenRootRemoteStore.
 type Client struct {
 	mu          sync.Mutex
 	endpoints   []clientEndpoint
@@ -154,7 +160,7 @@ func (c *Client) Append(ctx context.Context, events ...rootevent.Event) (rootsta
 func (c *Client) FenceAllocator(ctx context.Context, kind rootstate.AllocatorKind, min uint64) (uint64, error) {
 	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootFenceAllocatorResponse, error) {
 		return rpc.FenceAllocator(ctx, &metapb.MetadataRootFenceAllocatorRequest{
-			Kind:    allocatorKindToProto(kind),
+			Kind:    metawire.RootAllocatorKindToProto(kind),
 			Minimum: min,
 		})
 	})
@@ -165,16 +171,16 @@ func (c *Client) FenceAllocator(ctx context.Context, kind rootstate.AllocatorKin
 }
 
 func (c *Client) IsLeader() bool {
-	status, err := c.status()
-	return err == nil && status.GetIsLeader()
+	statusResp, err := c.status()
+	return err == nil && statusResp.GetIsLeader()
 }
 
 func (c *Client) LeaderID() uint64 {
-	status, err := c.status()
+	statusResp, err := c.status()
 	if err != nil {
 		return 0
 	}
-	return status.GetLeaderId()
+	return statusResp.GetLeaderId()
 }
 
 func (c *Client) ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
@@ -219,30 +225,30 @@ func (c *Client) ObserveCommitted() (rootstorage.ObservedCommitted, error) {
 	if err != nil {
 		return rootstorage.ObservedCommitted{}, err
 	}
-	return observedFromProto(resp.GetCheckpoint(), resp.GetTail()), nil
+	return metawire.RootObservedFromProto(resp.GetCheckpoint(), resp.GetTail()), nil
 }
 
 func (c *Client) ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error) {
 	resp, err := invokeRead(c, context.Background(), func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootObserveTailResponse, error) {
-		return rpc.ObserveTail(ctx, &metapb.MetadataRootObserveTailRequest{After: tailTokenToProto(after)})
+		return rpc.ObserveTail(ctx, &metapb.MetadataRootObserveTailRequest{After: metawire.RootTailTokenToProto(after)})
 	})
 	if err != nil {
 		return rootstorage.TailAdvance{}, err
 	}
-	return tailAdvanceFromProto(resp.GetAfter(), resp.GetToken(), resp.GetCheckpoint(), resp.GetTail()), nil
+	return metawire.RootTailAdvanceFromProto(resp.GetAfter(), resp.GetToken(), resp.GetCheckpoint(), resp.GetTail()), nil
 }
 
 func (c *Client) WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error) {
 	resp, err := invokeRead(c, context.Background(), func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootWaitTailResponse, error) {
 		return rpc.WaitTail(ctx, &metapb.MetadataRootWaitTailRequest{
-			After:         tailTokenToProto(after),
+			After:         metawire.RootTailTokenToProto(after),
 			TimeoutMillis: uint64(timeout / time.Millisecond),
 		})
 	})
 	if err != nil {
 		return rootstorage.TailAdvance{}, err
 	}
-	return tailAdvanceFromProto(resp.GetAfter(), resp.GetToken(), resp.GetCheckpoint(), resp.GetTail()), nil
+	return metawire.RootTailAdvanceFromProto(resp.GetAfter(), resp.GetToken(), resp.GetCheckpoint(), resp.GetTail()), nil
 }
 
 func (c *Client) status() (*metapb.MetadataRootStatusResponse, error) {

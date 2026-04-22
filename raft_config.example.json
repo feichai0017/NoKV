@@ -2,9 +2,7 @@
   "max_retries": 5,
   "coordinator": {
     "addr": "127.0.0.1:2379",
-    "docker_addr": "nokv-coordinator:2379",
-    "work_dir": "./artifacts/cluster/coordinator",
-    "docker_work_dir": "/var/lib/nokv-coordinator"
+    "docker_addr": "nokv-coordinator-1:2379"
   },
   "store_work_dir_template": "./artifacts/cluster/store-{id}",
   "store_docker_work_dir_template": "/var/lib/nokv/store-{id}",
@@ -14,21 +12,21 @@
       "listen_addr": "127.0.0.1:20170",
       "addr": "127.0.0.1:20170",
       "docker_listen_addr": "0.0.0.0:20160",
-      "docker_addr": "nokv-node1:20160"
+      "docker_addr": "nokv-store-1:20160"
     },
     {
       "store_id": 2,
       "listen_addr": "127.0.0.1:20171",
       "addr": "127.0.0.1:20171",
       "docker_listen_addr": "0.0.0.0:20160",
-      "docker_addr": "nokv-node2:20160"
+      "docker_addr": "nokv-store-2:20160"
     },
     {
       "store_id": 3,
       "listen_addr": "127.0.0.1:20172",
       "addr": "127.0.0.1:20172",
       "docker_listen_addr": "0.0.0.0:20160",
-      "docker_addr": "nokv-node3:20160"
+      "docker_addr": "nokv-store-3:20160"
     }
   ],
   "regions": [

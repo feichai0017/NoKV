@@ -24,7 +24,7 @@ import (
 	coordablation "github.com/feichai0017/NoKV/coordinator/ablation"
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
-	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
+	"github.com/feichai0017/NoKV/coordinator/rootview"
 	"github.com/feichai0017/NoKV/coordinator/tso"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -44,7 +44,7 @@ type Service struct {
 	cluster        *catalog.Cluster
 	ids            *idalloc.IDAllocator
 	tso            *tso.Allocator
-	storage        coordstorage.RootStorage
+	storage        rootview.RootStorage
 	idWindowHigh   uint64
 	idWindowSize   uint64
 	tsoWindowHigh  uint64
@@ -73,7 +73,7 @@ type coordinatorLeaseView struct {
 }
 
 type coordinatorRootSnapshotView struct {
-	snapshot    coordstorage.Snapshot
+	snapshot    rootview.Snapshot
 	loaded      bool
 	refreshing  bool
 	refreshedAt time.Time
@@ -87,7 +87,7 @@ func (v *coordinatorLeaseView) Reset() {
 	v.seal = rootstate.CoordinatorSeal{}
 }
 
-func (v *coordinatorLeaseView) Refresh(snapshot coordstorage.Snapshot) {
+func (v *coordinatorLeaseView) Refresh(snapshot rootview.Snapshot) {
 	if v == nil {
 		return
 	}
@@ -120,7 +120,7 @@ const defaultRootSnapshotRefreshInterval = 250 * time.Millisecond
 // NewService constructs a Coordinator service. The optional root storage fixes
 // durable rooted persistence at construction time; omitting it keeps the service
 // in explicit in-memory mode.
-func NewService(cluster *catalog.Cluster, ids *idalloc.IDAllocator, tsAlloc *tso.Allocator, root ...coordstorage.RootStorage) *Service {
+func NewService(cluster *catalog.Cluster, ids *idalloc.IDAllocator, tsAlloc *tso.Allocator, root ...rootview.RootStorage) *Service {
 	if cluster == nil {
 		cluster = catalog.NewCluster()
 	}
@@ -130,7 +130,7 @@ func NewService(cluster *catalog.Cluster, ids *idalloc.IDAllocator, tsAlloc *tso
 	if tsAlloc == nil {
 		tsAlloc = tso.NewAllocator(1)
 	}
-	var storage coordstorage.RootStorage
+	var storage rootview.RootStorage
 	if len(root) > 0 {
 		storage = root[0]
 	}

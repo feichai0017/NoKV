@@ -102,7 +102,7 @@ Binaries, scripts, configuration, observability.
 | Topic | Doc |
 |---|---|
 | CLI reference (`nokv`) | [cli.md](cli.md) |
-| **ccc-audit** (rooted state + reply-trace audit) | [ccc-audit.md](ccc-audit.md) |
+| **ccc-audit** (read-only remote audit against meta-root) | [ccc-audit.md](ccc-audit.md) |
 | Redis gateway (`nokv-redis`) | [nokv-redis.md](nokv-redis.md) |
 | Configuration | [config.md](config.md) |
 | Scripts layout | [scripts.md](scripts.md) |

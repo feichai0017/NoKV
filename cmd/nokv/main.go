@@ -64,7 +64,7 @@ func printUsage(w io.Writer) {
 	  serve     Start NoKV gRPC service backed by a local raftstore
 	  coordinator Start coordinator gRPC service (control plane)
 	  meta-root Start metadata root gRPC service
-	  ccc-audit Offline closure-complete continuation audit from rooted metadata
+	  ccc-audit Read-only closure-complete-continuation audit against a live meta-root cluster
 
 Run "nokv <command> -h" for command-specific flags.`)
 }

@@ -19,7 +19,7 @@ type PendingSnapshot struct {
 //
 // NOTE: Cluster intentionally keeps only the in-memory metadata/state model.
 // Coordinator RPC wiring and persistence are handled by higher layers
-// (coordinator/server and coordinator/storage).
+// (coordinator/server and coordinator/rootview).
 type Cluster struct {
 	stores              *pdview.StoreHealthView
 	regions             *pdview.RegionDirectoryView

@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
+	"github.com/feichai0017/NoKV/coordinator/rootview"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -189,8 +189,8 @@ func TestGRPCClientWriteFailoverAcrossPDs(t *testing.T) {
 
 type followerStorage struct{}
 
-func (f *followerStorage) Load() (coordstorage.Snapshot, error) {
-	return coordstorage.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
+func (f *followerStorage) Load() (rootview.Snapshot, error) {
+	return rootview.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
 }
 func (f *followerStorage) AppendRootEvent(context.Context, rootevent.Event) error { return nil }
 func (f *followerStorage) SaveAllocatorState(context.Context, uint64, uint64) error {

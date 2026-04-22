@@ -3,22 +3,22 @@ package server
 import (
 	"time"
 
-	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
+	"github.com/feichai0017/NoKV/coordinator/rootview"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
-func (s *Service) reloadRootedView(refresh bool) (coordstorage.Snapshot, error) {
+func (s *Service) reloadRootedView(refresh bool) (rootview.Snapshot, error) {
 	if s == nil || s.storage == nil {
-		return coordstorage.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
+		return rootview.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
 	}
 	if refresh {
 		if err := s.storage.Refresh(); err != nil {
-			return coordstorage.Snapshot{}, err
+			return rootview.Snapshot{}, err
 		}
 	}
 	snapshot, err := s.storage.Load()
 	if err != nil {
-		return coordstorage.Snapshot{}, err
+		return rootview.Snapshot{}, err
 	}
 	s.publishRootSnapshot(snapshot)
 	return snapshot, nil
@@ -38,7 +38,7 @@ func (s *Service) reloadAndFenceAllocators(refresh bool) error {
 	return nil
 }
 
-func (s *Service) refreshLeaseMirror(snapshot coordstorage.Snapshot) {
+func (s *Service) refreshLeaseMirror(snapshot rootview.Snapshot) {
 	if s == nil {
 		return
 	}
@@ -54,7 +54,7 @@ func (s *Service) rootSnapshotRefreshWindow() time.Duration {
 	return s.rootViewTTL
 }
 
-func (s *Service) shouldReplaceRootSnapshotLocked(snapshot coordstorage.Snapshot) bool {
+func (s *Service) shouldReplaceRootSnapshotLocked(snapshot rootview.Snapshot) bool {
 	if !s.rootView.loaded {
 		return true
 	}
@@ -62,7 +62,7 @@ func (s *Service) shouldReplaceRootSnapshotLocked(snapshot coordstorage.Snapshot
 	return !current.AdvancedSince(snapshot.RootToken)
 }
 
-func (s *Service) cacheRootSnapshot(snapshot coordstorage.Snapshot, refreshedAt time.Time) bool {
+func (s *Service) cacheRootSnapshot(snapshot rootview.Snapshot, refreshedAt time.Time) bool {
 	if s == nil {
 		return false
 	}
@@ -76,7 +76,7 @@ func (s *Service) cacheRootSnapshot(snapshot coordstorage.Snapshot, refreshedAt 
 	s.rootViewMu.Lock()
 	updated := false
 	if s.shouldReplaceRootSnapshotLocked(snapshot) {
-		s.rootView.snapshot = coordstorage.CloneSnapshot(snapshot)
+		s.rootView.snapshot = rootview.CloneSnapshot(snapshot)
 		s.rootView.loaded = true
 		s.rootView.refreshedAt = refreshedAt
 		updated = true
@@ -85,7 +85,7 @@ func (s *Service) cacheRootSnapshot(snapshot coordstorage.Snapshot, refreshedAt 
 	return updated
 }
 
-func (s *Service) refreshCurrentRootSnapshot(snapshot coordstorage.Snapshot) bool {
+func (s *Service) refreshCurrentRootSnapshot(snapshot rootview.Snapshot) bool {
 	if s == nil {
 		return false
 	}
@@ -97,7 +97,7 @@ func (s *Service) refreshCurrentRootSnapshot(snapshot coordstorage.Snapshot) boo
 	return true
 }
 
-func (s *Service) publishRootSnapshot(snapshot coordstorage.Snapshot) {
+func (s *Service) publishRootSnapshot(snapshot rootview.Snapshot) {
 	if s == nil {
 		return
 	}
@@ -109,9 +109,9 @@ func (s *Service) publishRootSnapshot(snapshot coordstorage.Snapshot) {
 	}
 }
 
-func (s *Service) currentRootSnapshot() (coordstorage.Snapshot, error) {
+func (s *Service) currentRootSnapshot() (rootview.Snapshot, error) {
 	if s == nil || s.storage == nil {
-		return coordstorage.Snapshot{}, nil
+		return rootview.Snapshot{}, nil
 	}
 	nowFn := s.now
 	if nowFn == nil {
@@ -120,7 +120,7 @@ func (s *Service) currentRootSnapshot() (coordstorage.Snapshot, error) {
 	now := nowFn()
 	s.rootViewMu.RLock()
 	if s.rootView.loaded {
-		snapshot := coordstorage.CloneSnapshot(s.rootView.snapshot)
+		snapshot := rootview.CloneSnapshot(s.rootView.snapshot)
 		stale := now.Sub(s.rootView.refreshedAt) > s.rootSnapshotRefreshWindow()
 		s.rootViewMu.RUnlock()
 		if stale {
@@ -133,10 +133,10 @@ func (s *Service) currentRootSnapshot() (coordstorage.Snapshot, error) {
 	snapshot, err := s.storage.Load()
 	if err != nil {
 		s.setLastRootReload(err)
-		return coordstorage.Snapshot{}, err
+		return rootview.Snapshot{}, err
 	}
 	s.refreshCurrentRootSnapshot(snapshot)
-	return coordstorage.CloneSnapshot(snapshot), nil
+	return rootview.CloneSnapshot(snapshot), nil
 }
 
 func (s *Service) maybeRefreshRootSnapshotAsync() {
