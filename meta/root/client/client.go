@@ -30,6 +30,7 @@ import (
 const defaultCallTimeout = 3 * time.Second
 
 const errMetadataRootNotLeader = "metadata root not leader"
+const errClientConnectionClosing = "grpc: the client connection is closing"
 
 // Client is a remote metadata-root backend client. It implements the same
 // authority surface consumed by coordinator/rootview.OpenRootRemoteStore.
@@ -454,11 +455,18 @@ func waitForReady(ctx context.Context, conn *grpc.ClientConn) error {
 }
 
 func retryableRemoteError(err error, write bool) bool {
+	if transientConnectionClosing(err) {
+		return true
+	}
 	code := status.Code(err)
 	if code == codes.Unavailable || code == codes.DeadlineExceeded {
 		return true
 	}
 	return write && code == codes.FailedPrecondition && strings.Contains(err.Error(), errMetadataRootNotLeader)
+}
+
+func transientConnectionClosing(err error) bool {
+	return err != nil && strings.Contains(err.Error(), errClientConnectionClosing)
 }
 
 func leaderHint(err error) (uint64, bool) {
