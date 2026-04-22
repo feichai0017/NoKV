@@ -209,7 +209,7 @@ Then read:
 | --- | --- |
 | [`store`](../raftstore/store) | Region catalog/runtime root, router, RegionMetrics, scheduler + command runtimes, helpers such as `StartPeer` / `SplitRegion`. |
 | [`peer`](../raftstore/peer) | Wraps etcd/raft `RawNode`, handles Ready pipeline, snapshot resend queue, backlog instrumentation. |
-| [`engine`](../raftstore/raftlog) | WALStorage/DiskStorage/MemoryStorage, reusing the DB's WAL while keeping store-local raft replay metadata in sync. |
+| [`raftlog`](../raftstore/raftlog) | WALStorage/DiskStorage/MemoryStorage, reusing the DB's WAL while keeping store-local raft replay metadata in sync. |
 | [`transport`](../raftstore/transport) | gRPC transport for Raft Step messages, connection management, retries/blocks/TLS. Also acts as the host for NoKV RPC. |
 | [`kv`](../raftstore/kv) | NoKV RPC handler plus `kv.Apply` bridging Raft commands to MVCC logic. |
 | [`server`](../raftstore/server) | `Config` + `NewNode` combine DB, Store, transport, and NoKV service into a reusable node instance. |
