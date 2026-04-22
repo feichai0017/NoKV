@@ -72,14 +72,14 @@
     padding: 20px 24px;
     margin-bottom: 18px;
   }
-  .topology svg { width: 100%; height: 250px; display: block; }
+  .topology svg { width: 100%; height: 272px; display: block; }
   .topo-node circle { fill: var(--bg-elev2); stroke: var(--border-strong); stroke-width: 1.5; transition: all 0.3s ease; }
   .topo-node.leader  circle { stroke: var(--accent-truth);   stroke-width: 2.5; filter: drop-shadow(0 0 6px var(--accent-truth)); }
   .topo-node.holder  circle { stroke: var(--accent-control); stroke-width: 2.5; filter: drop-shadow(0 0 6px var(--accent-control)); }
   .topo-node.region-leader circle { stroke: var(--accent-exec); stroke-width: 2.5; filter: drop-shadow(0 0 5px var(--accent-exec)); }
   .topo-node.dead    circle { stroke: var(--bad); stroke-dasharray: 4 2; opacity: 0.45; }
   .topo-node text.label { fill: var(--text); font-size: 11px; font-family: var(--font-mono); text-anchor: middle; dominant-baseline: central; }
-  .topo-node text.tag   { fill: var(--text-dim); font-size: 9px; text-anchor: middle; }
+  .topo-node text.tag   { fill: var(--text-dim); font-size: 9px; text-anchor: middle; dominant-baseline: hanging; }
   .topo-link {
     stroke: var(--border-strong); stroke-width: 1.5; fill: none;
     stroke-dasharray: 3 3; opacity: 0.35;
@@ -294,7 +294,7 @@
 </header>
 
 <div class="topology">
-  <svg viewBox="0 0 900 230" preserveAspectRatio="xMidYMid meet">
+  <svg viewBox="0 0 900 252" preserveAspectRatio="xMidYMid meet">
     <defs>
       <marker id="arrow-truth" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
         <path d="M0,0 L6,3 L0,6" fill="none" stroke="currentColor" stroke-width="1.2"/>
@@ -302,9 +302,9 @@
     </defs>
 
     <!-- Column labels -->
-    <text x="130"  y="20"  fill="#79c0ff" font-size="10" font-weight="700" text-anchor="middle" font-family="SF Mono, monospace">TRUTH PLANE</text>
-    <text x="450"  y="20"  fill="#d2a8ff" font-size="10" font-weight="700" text-anchor="middle" font-family="SF Mono, monospace">CONTROL PLANE</text>
-    <text x="770"  y="20"  fill="#7ee787" font-size="10" font-weight="700" text-anchor="middle" font-family="SF Mono, monospace">EXECUTION PLANE</text>
+    <text x="70"   y="20"  fill="#79c0ff" font-size="10" font-weight="700" text-anchor="middle" font-family="SF Mono, monospace">TRUTH PLANE</text>
+    <text x="400"  y="20"  fill="#d2a8ff" font-size="10" font-weight="700" text-anchor="middle" font-family="SF Mono, monospace">CONTROL PLANE</text>
+    <text x="720"  y="20"  fill="#7ee787" font-size="10" font-weight="700" text-anchor="middle" font-family="SF Mono, monospace">EXECUTION PLANE</text>
 
     <!-- Links (drawn first, under nodes) -->
     <g id="links"></g>
