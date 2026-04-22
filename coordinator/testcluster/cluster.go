@@ -4,10 +4,10 @@ import (
 	"context"
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
+	"github.com/feichai0017/NoKV/coordinator/rootview"
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
-	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
 	"github.com/feichai0017/NoKV/coordinator/tso"
-	rootreplicated "github.com/feichai0017/NoKV/meta/root/backend/replicated"
+	rootreplicated "github.com/feichai0017/NoKV/meta/root/replicated"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"net"
@@ -23,7 +23,7 @@ type Cluster struct {
 	tb         testing.TB
 	Drivers    map[uint64]*rootreplicated.NetworkDriver
 	Roots      map[uint64]*rootreplicated.Store
-	RootStores map[uint64]*coordstorage.RootStore
+	RootStores map[uint64]*rootview.RootStore
 	Services   map[uint64]*coordserver.Service
 }
 
@@ -40,7 +40,7 @@ func OpenReplicatedWithTickIntervals(tb testing.TB, tickIntervals map[uint64]tim
 		tb:         tb,
 		Drivers:    make(map[uint64]*rootreplicated.NetworkDriver, 3),
 		Roots:      make(map[uint64]*rootreplicated.Store, 3),
-		RootStores: make(map[uint64]*coordstorage.RootStore, 3),
+		RootStores: make(map[uint64]*rootview.RootStore, 3),
 		Services:   make(map[uint64]*coordserver.Service, 3),
 	}
 	for _, id := range []uint64{1, 2, 3} {
@@ -65,12 +65,12 @@ func OpenReplicatedWithTickIntervals(tb testing.TB, tickIntervals map[uint64]tim
 		root, err := rootreplicated.Open(rootreplicated.Config{Driver: driver})
 		require.NoError(tb, err)
 		c.Roots[id] = root
-		store, err := coordstorage.OpenRootStore(root)
+		store, err := rootview.OpenRootStore(root)
 		require.NoError(tb, err)
 		c.RootStores[id] = store
 
 		cluster := catalog.NewCluster()
-		bootstrap, err := coordstorage.Bootstrap(store, cluster.PublishRegionDescriptor, 1, 1)
+		bootstrap, err := rootview.Bootstrap(store, cluster.PublishRegionDescriptor, 1, 1)
 		require.NoError(tb, err)
 		svc := coordserver.NewService(cluster, idalloc.NewIDAllocator(bootstrap.IDStart), tso.NewAllocator(bootstrap.TSStart), store)
 		c.Services[id] = svc

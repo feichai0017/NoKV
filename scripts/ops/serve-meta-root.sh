@@ -8,19 +8,20 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/ops/serve-meta-root.sh [options]
 
+Launches one meta-root peer. NoKV only ships the replicated 3-peer topology,
+so --node-id, --transport-addr, and exactly 3 --peer values are required.
+
 Options:
   --addr <addr>              Metadata root gRPC listen address (default: 127.0.0.1:2380)
-  --mode <local|replicated>  Metadata root mode (default: local)
   --workdir <dir>            Metadata root workdir (required)
-  --node-id <id>             Replicated mode local node id
-  --transport-addr <addr>    Replicated mode raft transport address
-  --peer <id=addr>           Replicated mode peer mapping; may be repeated
+  --node-id <id>             Local node id (required, must be > 0)
+  --transport-addr <addr>    Raft transport address (required)
+  --peer <id=addr>           Peer mapping; repeatable (exactly 3)
   --extra <args...>          Additional arguments passed to "nokv meta-root"
 USAGE
 }
 
 ADDR="127.0.0.1:2380"
-MODE="local"
 WORKDIR=""
 NODE_ID=""
 TRANSPORT_ADDR=""
@@ -31,10 +32,6 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --addr)
       ADDR=$2
-      shift 2
-      ;;
-    --mode)
-      MODE=$2
       shift 2
       ;;
     --workdir)
@@ -77,30 +74,25 @@ done
 if [[ -z "$WORKDIR" ]]; then
   nokv_die "serve-meta-root.sh: --workdir is required"
 fi
-
-MODE=$(echo "$MODE" | tr '[:upper:]' '[:lower:]')
-if [[ "$MODE" != "local" && "$MODE" != "replicated" ]]; then
-  nokv_die "serve-meta-root.sh: --mode must be local or replicated"
+if [[ -z "$NODE_ID" ]]; then
+  nokv_die "serve-meta-root.sh: --node-id is required"
+fi
+if [[ -z "$TRANSPORT_ADDR" ]]; then
+  nokv_die "serve-meta-root.sh: --transport-addr is required"
+fi
+if [[ "${#PEERS[@]}" -ne 3 ]]; then
+  nokv_die "serve-meta-root.sh: requires exactly 3 --peer values"
 fi
 
 cmd=(nokv meta-root
   --addr "$ADDR"
-  --mode "$MODE"
   --workdir "$WORKDIR"
+  --node-id "$NODE_ID"
+  --transport-addr "$TRANSPORT_ADDR"
 )
-
-if [[ "$MODE" == "replicated" ]]; then
-  if [[ -z "$NODE_ID" || -z "$TRANSPORT_ADDR" ]]; then
-    nokv_die "serve-meta-root.sh: replicated mode requires --node-id and --transport-addr"
-  fi
-  if [[ "${#PEERS[@]}" -ne 3 ]]; then
-    nokv_die "serve-meta-root.sh: replicated mode requires exactly 3 --peer values"
-  fi
-  cmd+=(--node-id "$NODE_ID" --transport-addr "$TRANSPORT_ADDR")
-  for peer in "${PEERS[@]}"; do
-    cmd+=(--peer "$peer")
-  done
-fi
+for peer in "${PEERS[@]}"; do
+  cmd+=(--peer "$peer")
+done
 
 cmd+=("${EXTRA_ARGS[@]}")
 

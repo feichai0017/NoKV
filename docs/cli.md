@@ -177,34 +177,25 @@ Restart semantics:
 
 ### `nokv coordinator`
 
-- Starts the Coordinator gRPC service used by distributed mode.
+- Starts the Coordinator gRPC service. NoKV only supports the separated
+  topology: coordinator always connects to an external 3-peer meta-root
+  cluster via gRPC.
+- Required flags:
+  - `--coordinator-id` (stable lease owner id)
+  - `--root-peer nodeID=addr` (exactly 3 meta-root gRPC endpoints)
 - Common flags:
   - `--addr` (default `127.0.0.1:2379`)
-  - `--workdir` (optional persistence directory for region catalog + allocator state)
-  - `--root-mode local|replicated|remote` (`local` by default)
-  - `--root-peer nodeID=addr` (repeatable; used by `replicated` and `remote` rooted modes)
-  - `--root-node-id`, `--root-transport-addr` (replicated rooted mode only)
-  - `--coordinator-id` (stable lease owner id for rooted control-plane writes in separated mode)
-  - `--lease-ttl`, `--lease-renew-before` (only used when `--coordinator-id` is set)
-  - `--config` + `--scope host|docker` (resolve defaults from `raft_config.json`)
-  - `--id-start`, `--ts-start` (allocator start values)
+  - `--lease-ttl`, `--lease-renew-before` (default `10s` / `3s`)
+  - `--root-refresh` (default `200ms`)
+  - `--id-start`, `--ts-start` (allocator seeds; only used when the meta-root cluster has no allocator state yet)
+  - `--config` + `--scope host|docker` (resolves `--addr` from `raft_config.json`)
   - `--metrics-addr` (optional expvar endpoint, exposes `/debug/vars`)
 
 Example:
 
 ```bash
 nokv coordinator \
-  --config ./raft_config.example.json \
-  --scope host \
-  --metrics-addr 127.0.0.1:23790
-```
-
-Separated deployment example:
-
-```bash
-nokv coordinator \
   --addr 127.0.0.1:2379 \
-  --root-mode remote \
   --coordinator-id c1 \
   --root-peer 1=127.0.0.1:2380 \
   --root-peer 2=127.0.0.1:2381 \
@@ -213,26 +204,22 @@ nokv coordinator \
 
 ### `nokv meta-root`
 
-- Starts the metadata-root gRPC authority service.
+- Starts one peer of the 3-peer replicated metadata-root cluster. NoKV only
+  supports the replicated topology; single-process local mode has been
+  removed from the CLI.
+- Required flags:
+  - `--workdir`, `--node-id`, `--transport-addr`
+  - `--peer nodeID=addr` (repeatable, exactly 3)
 - Common flags:
-  - `--addr` (default `127.0.0.1:2380`)
-  - `--mode local|replicated` (`local` by default)
-  - `--workdir` (required)
-  - `--node-id`, `--transport-addr`, `--peer nodeID=addr` (replicated mode)
+  - `--addr` (default `127.0.0.1:2380`, gRPC listen)
+  - `--tick-interval` (default `100ms`)
+  - `--metrics-addr` (optional expvar endpoint)
 
-Examples:
-
-```bash
-nokv meta-root \
-  --addr 127.0.0.1:2380 \
-  --mode local \
-  --workdir ./artifacts/meta-root
-```
+Example:
 
 ```bash
 nokv meta-root \
   --addr 127.0.0.1:2380 \
-  --mode replicated \
   --workdir ./artifacts/meta-root-1 \
   --node-id 1 \
   --transport-addr 127.0.0.1:3380 \
@@ -244,16 +231,17 @@ nokv meta-root \
 ### Script Helpers
 
 - `scripts/ops/serve-meta-root.sh`
-  - Starts one `meta-root` instance and forwards shutdown signals.
-  - Use this for explicit local/replicated `meta/root` process control.
+  - Starts one replicated `meta-root` peer and forwards shutdown signals.
+  - Requires `--workdir`, `--node-id`, `--transport-addr`, and 3 `--peer` values.
+- `scripts/ops/serve-coordinator.sh`
+  - Starts one `nokv coordinator` against an external meta-root cluster.
+  - Requires `--coordinator-id` and 3 `--root-peer` values (meta-root gRPC endpoints).
 - `scripts/ops/serve-store.sh`
   - Starts one `nokv serve` store against an existing durable workdir.
 - `scripts/ops/bootstrap.sh`
   - Seeds fresh store workdirs from `config.regions`; not a restart tool.
 - `scripts/dev/cluster.sh`
-  - Dev bootstrap for co-located control plane.
-- `scripts/dev/separated-cluster.sh`
-  - Dev bootstrap for `3 meta-root + 1 coordinator(remote) + stores`.
+  - Dev bootstrap for the 333 separated layout: `3 meta-root + 1 coordinator(remote) + stores`.
   - Uses fixed local root endpoints:
     - gRPC: `127.0.0.1:2380/2381/2382`
     - raft transport: `127.0.0.1:3380/3381/3382`

@@ -13,8 +13,8 @@ import (
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
 	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
+	"github.com/feichai0017/NoKV/coordinator/rootview"
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
-	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
 	"github.com/feichai0017/NoKV/coordinator/tso"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
@@ -37,7 +37,7 @@ type protocolMatrixStorage struct {
 	reattachErr error
 	leader      bool
 	leaderID    uint64
-	snapshot    coordstorage.Snapshot
+	snapshot    rootview.Snapshot
 	campaigns   int
 	confirms    int
 	closes      int
@@ -52,8 +52,8 @@ func (s *protocolMatrixStorage) protocolState() rootstate.CoordinatorProtocolSta
 	}
 }
 
-func (s *protocolMatrixStorage) Load() (coordstorage.Snapshot, error) {
-	return coordstorage.CloneSnapshot(s.snapshot), nil
+func (s *protocolMatrixStorage) Load() (rootview.Snapshot, error) {
+	return rootview.CloneSnapshot(s.snapshot), nil
 }
 
 func (s *protocolMatrixStorage) AppendRootEvent(context.Context, rootevent.Event) error {
@@ -321,7 +321,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 			store: &protocolMatrixStorage{
 				leader:      true,
 				campaignErr: rootstate.ErrCoordinatorLeaseHeld,
-				snapshot: coordstorage.Snapshot{
+				snapshot: rootview.Snapshot{
 					CoordinatorLease: rootstate.CoordinatorLease{
 						HolderID:        "c1",
 						ExpiresUnixNano: activeLeaseExpiry,
@@ -348,7 +348,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 			store: &protocolMatrixStorage{
 				leader:      true,
 				campaignErr: rootstate.ErrCoordinatorLeaseHeld,
-				snapshot: coordstorage.Snapshot{
+				snapshot: rootview.Snapshot{
 					CoordinatorLease: rootstate.CoordinatorLease{
 						HolderID:        "c1",
 						ExpiresUnixNano: activeLeaseExpiry,
@@ -376,7 +376,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 			name: "confirm_rejected_before_monotone_coverage",
 			store: &protocolMatrixStorage{
 				leader: true,
-				snapshot: coordstorage.Snapshot{
+				snapshot: rootview.Snapshot{
 					CoordinatorLease: rootstate.CoordinatorLease{
 						HolderID:          "c1",
 						ExpiresUnixNano:   activeLeaseExpiry,
@@ -385,7 +385,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 						PredecessorDigest: sealWithDescriptor7Digest,
 					},
 					CoordinatorSeal: sealWithDescriptor7,
-					Allocator: coordstorage.AllocatorState{
+					Allocator: rootview.AllocatorState{
 						IDCurrent: 11,
 						TSCurrent: 34,
 					},
@@ -411,7 +411,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 			name: "confirm_rejected_before_descriptor_coverage",
 			store: &protocolMatrixStorage{
 				leader: true,
-				snapshot: coordstorage.Snapshot{
+				snapshot: rootview.Snapshot{
 					CoordinatorLease: rootstate.CoordinatorLease{
 						HolderID:          "c1",
 						ExpiresUnixNano:   activeLeaseExpiry,
@@ -420,7 +420,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 						PredecessorDigest: sealWithDescriptor9Digest,
 					},
 					CoordinatorSeal: sealWithDescriptor9,
-					Allocator: coordstorage.AllocatorState{
+					Allocator: rootview.AllocatorState{
 						IDCurrent: 12,
 						TSCurrent: 34,
 					},
@@ -445,7 +445,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 			name: "reattach_rejected_before_close",
 			store: &protocolMatrixStorage{
 				leader: true,
-				snapshot: coordstorage.Snapshot{
+				snapshot: rootview.Snapshot{
 					CoordinatorLease: rootstate.CoordinatorLease{
 						HolderID:          "c1",
 						ExpiresUnixNano:   activeLeaseExpiry,
@@ -454,7 +454,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 						PredecessorDigest: sealWithDescriptor7Digest,
 					},
 					CoordinatorSeal: sealWithDescriptor7,
-					Allocator: coordstorage.AllocatorState{
+					Allocator: rootview.AllocatorState{
 						IDCurrent: 12,
 						TSCurrent: 34,
 					},
@@ -475,7 +475,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 			name: "reattach_rejected_on_lineage_mismatch",
 			store: &protocolMatrixStorage{
 				leader: true,
-				snapshot: coordstorage.Snapshot{
+				snapshot: rootview.Snapshot{
 					CoordinatorLease: rootstate.CoordinatorLease{
 						HolderID:          "c1",
 						ExpiresUnixNano:   activeLeaseExpiry,
@@ -484,7 +484,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 						PredecessorDigest: "other-digest",
 					},
 					CoordinatorSeal: sealWithDescriptor7,
-					Allocator: coordstorage.AllocatorState{
+					Allocator: rootview.AllocatorState{
 						IDCurrent: 12,
 						TSCurrent: 34,
 					},
@@ -513,7 +513,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 			name: "successor_can_confirm_and_reattach_end_to_end",
 			store: &protocolMatrixStorage{
 				leader: true,
-				snapshot: coordstorage.Snapshot{
+				snapshot: rootview.Snapshot{
 					CoordinatorLease: rootstate.CoordinatorLease{
 						HolderID:          "c1",
 						ExpiresUnixNano:   activeLeaseExpiry,
@@ -522,7 +522,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 						PredecessorDigest: sealWithDescriptor7Digest,
 					},
 					CoordinatorSeal: sealWithDescriptor7,
-					Allocator: coordstorage.AllocatorState{
+					Allocator: rootview.AllocatorState{
 						IDCurrent: 12,
 						TSCurrent: 34,
 					},
@@ -566,7 +566,7 @@ func TestDetachedLateReplyAfterSealRejectedByClientVerifier(t *testing.T) {
 
 	staleStore := &protocolMatrixStorage{
 		leader: true,
-		snapshot: coordstorage.Snapshot{
+		snapshot: rootview.Snapshot{
 			CoordinatorLease: rootstate.CoordinatorLease{
 				HolderID:        "c1",
 				ExpiresUnixNano: activeLeaseExpiry,
@@ -589,7 +589,7 @@ func TestDetachedLateReplyAfterSealRejectedByClientVerifier(t *testing.T) {
 
 	successorStore := &protocolMatrixStorage{
 		leader: true,
-		snapshot: coordstorage.Snapshot{
+		snapshot: rootview.Snapshot{
 			CoordinatorLease: rootstate.CoordinatorLease{
 				HolderID:          "c2",
 				ExpiresUnixNano:   activeLeaseExpiry,
@@ -598,7 +598,7 @@ func TestDetachedLateReplyAfterSealRejectedByClientVerifier(t *testing.T) {
 				PredecessorDigest: sealDigest,
 			},
 			CoordinatorSeal: seal,
-			Allocator: coordstorage.AllocatorState{
+			Allocator: rootview.AllocatorState{
 				IDCurrent: seal.Frontiers.Frontier(rootproto.CoordinatorDutyAllocID),
 				TSCurrent: seal.Frontiers.Frontier(rootproto.CoordinatorDutyTSO),
 			},

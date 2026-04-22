@@ -14,25 +14,27 @@ import (
 	"syscall"
 	"time"
 
-	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
-	rootreplicated "github.com/feichai0017/NoKV/meta/root/backend/replicated"
-	rootremote "github.com/feichai0017/NoKV/meta/root/remote"
+	rootreplicated "github.com/feichai0017/NoKV/meta/root/replicated"
+	rootserver "github.com/feichai0017/NoKV/meta/root/server"
 	"google.golang.org/grpc"
 )
 
 var metaRootNotifyContext = signal.NotifyContext
 var metaRootListen = net.Listen
 
+// runMetaRootCmd launches one replicated metadata-root peer. NoKV only ships
+// the separated-truth-plane topology: meta-root is always a 3-peer raft
+// quorum. Single-process/local mode has been removed from the CLI.
 func runMetaRootCmd(w io.Writer, args []string) error {
 	fs := flag.NewFlagSet("meta-root", flag.ContinueOnError)
 	addr := fs.String("addr", "127.0.0.1:2380", "listen address for metadata root gRPC service")
-	mode := fs.String("mode", "local", "metadata root mode: local|replicated")
-	workdir := fs.String("workdir", "", "metadata root work directory")
-	nodeID := fs.Uint64("node-id", 1, "metadata root node id for replicated mode")
-	transportAddr := fs.String("transport-addr", "", "metadata root raft transport address for replicated mode")
+	workdir := fs.String("workdir", "", "metadata root work directory (required)")
+	nodeID := fs.Uint64("node-id", 0, "metadata root node id (required, must be > 0)")
+	transportAddr := fs.String("transport-addr", "", "metadata root raft transport address (required)")
 	tickInterval := fs.Duration("tick-interval", 100*time.Millisecond, "replicated root raft tick interval")
+	metricsAddr := fs.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
 	var peerFlags []string
-	fs.Func("peer", "replicated metadata root peer mapping in the form nodeID=address (repeatable, exactly 3)", func(value string) error {
+	fs.Func("peer", "metadata root peer mapping in the form nodeID=address (repeatable, exactly 3)", func(value string) error {
 		value = strings.TrimSpace(value)
 		if value == "" {
 			return fmt.Errorf("peer value cannot be empty")
@@ -45,20 +47,24 @@ func runMetaRootCmd(w io.Writer, args []string) error {
 		return err
 	}
 
-	modeValue := strings.ToLower(strings.TrimSpace(*mode))
-	switch modeValue {
-	case "", "local", "replicated":
-	default:
-		return fmt.Errorf("invalid meta-root mode %q (expected local|replicated)", *mode)
+	cfg := replicatedMetaRootConfig{
+		workdir:       strings.TrimSpace(*workdir),
+		nodeID:        *nodeID,
+		transportAddr: strings.TrimSpace(*transportAddr),
+		tickInterval:  *tickInterval,
 	}
-
-	backend, err := openMetaRootBackend(modeValue, strings.TrimSpace(*workdir), *nodeID, strings.TrimSpace(*transportAddr), *tickInterval, peerFlags)
+	peers, err := parseReplicatedRootPeers(peerFlags)
 	if err != nil {
 		return err
 	}
-	if closer, ok := backend.(interface{ Close() error }); ok {
-		defer func() { _ = closer.Close() }()
+	cfg.peerAddrs = peers
+
+	backend, err := openReplicatedMetaRoot(cfg)
+	if err != nil {
+		return err
 	}
+	defer func() { _ = backend.Close() }()
+
 	lis, err := metaRootListen("tcp", *addr)
 	if err != nil {
 		return fmt.Errorf("meta-root listen on %s: %w", *addr, err)
@@ -66,15 +72,32 @@ func runMetaRootCmd(w io.Writer, args []string) error {
 	defer func() { _ = lis.Close() }()
 
 	grpcServer := grpc.NewServer()
-	rootremote.Register(grpcServer, backend)
+	rootserver.Register(grpcServer, backend)
+
+	installMetaRootExpvar(metaRootExpvarContext{
+		addr:    lis.Addr().String(),
+		nodeID:  *nodeID,
+		backend: backend,
+	})
 
 	serveErrCh := make(chan error, 1)
 	go func() {
 		serveErrCh <- grpcServer.Serve(lis)
 	}()
 
+	metricsLn, err := startExpvarServer(*metricsAddr)
+	if err != nil {
+		return fmt.Errorf("start meta-root metrics endpoint: %w", err)
+	}
+	if metricsLn != nil {
+		defer func() { _ = metricsLn.Close() }()
+	}
+
 	_, _ = fmt.Fprintf(w, "Metadata root service listening on %s\n", lis.Addr().String())
-	_, _ = fmt.Fprintf(w, "Metadata root mode: %s\n", modeValue)
+	_, _ = fmt.Fprintf(w, "Metadata root node id: %d\n", *nodeID)
+	if metricsLn != nil {
+		_, _ = fmt.Fprintf(w, "Metadata root metrics endpoint listening on http://%s/debug/vars\n", metricsLn.Addr().String())
+	}
 
 	ctx, cancel := metaRootNotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -95,28 +118,6 @@ func runMetaRootCmd(w io.Writer, args []string) error {
 	}
 }
 
-func openMetaRootBackend(modeValue, workdir string, nodeID uint64, transportAddr string, tickInterval time.Duration, peerFlags []string) (rootremote.Backend, error) {
-	switch modeValue {
-	case "", "local":
-		return rootlocal.Open(workdir, nil)
-	case "replicated":
-		peers, err := parseReplicatedRootPeers(peerFlags)
-		if err != nil {
-			return nil, err
-		}
-		cfg := replicatedMetaRootConfig{
-			workdir:       workdir,
-			nodeID:        nodeID,
-			transportAddr: transportAddr,
-			peerAddrs:     peers,
-			tickInterval:  tickInterval,
-		}
-		return openReplicatedMetaRoot(cfg)
-	default:
-		return nil, fmt.Errorf("invalid meta-root mode %q (expected local|replicated)", modeValue)
-	}
-}
-
 type replicatedMetaRootConfig struct {
 	workdir       string
 	nodeID        uint64
@@ -126,17 +127,17 @@ type replicatedMetaRootConfig struct {
 }
 
 func openReplicatedMetaRoot(cfg replicatedMetaRootConfig) (*rootreplicated.Store, error) {
-	if strings.TrimSpace(cfg.workdir) == "" {
-		return nil, fmt.Errorf("meta-root: replicated mode requires workdir")
+	if cfg.workdir == "" {
+		return nil, fmt.Errorf("meta-root: --workdir is required")
 	}
 	if cfg.nodeID == 0 {
-		return nil, fmt.Errorf("meta-root: replicated mode requires node id > 0")
+		return nil, fmt.Errorf("meta-root: --node-id is required and must be > 0")
 	}
-	if strings.TrimSpace(cfg.transportAddr) == "" {
-		return nil, fmt.Errorf("meta-root: replicated mode requires transport address")
+	if cfg.transportAddr == "" {
+		return nil, fmt.Errorf("meta-root: --transport-addr is required")
 	}
 	if len(cfg.peerAddrs) != 3 {
-		return nil, fmt.Errorf("meta-root: replicated mode requires exactly 3 peer addresses")
+		return nil, fmt.Errorf("meta-root: requires exactly 3 --peer values")
 	}
 	transport, err := rootreplicated.NewGRPCTransport(cfg.nodeID, cfg.transportAddr)
 	if err != nil {

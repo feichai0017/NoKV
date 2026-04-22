@@ -1,22 +1,27 @@
-package storage
+// Package rootview is the coordinator-side view onto the remote metadata-root
+// cluster. It wraps the gRPC remote client with snapshot caching, rooted-tail
+// subscriptions, and bootstrap helpers so that coordinator/server can treat
+// the 3-peer replicated meta-root as a single source of truth. This package
+// never opens a local backend — the only supported topology is remote.
+package rootview
 
 import (
 	"context"
 	"errors"
-	rootlocal "github.com/feichai0017/NoKV/meta/root/backend/local"
+	"sync"
+	"time"
+
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	"sync"
-	"time"
 )
 
 var (
-	errCoordinatorLeaseCommandUnsupported   = errors.New("coordinator/storage: coordinator lease command unsupported")
-	errCoordinatorClosureCommandUnsupported = errors.New("coordinator/storage: coordinator closure command unsupported")
+	errCoordinatorLeaseCommandUnsupported   = errors.New("coordinator/rootview: coordinator lease command unsupported")
+	errCoordinatorClosureCommandUnsupported = errors.New("coordinator/rootview: coordinator closure command unsupported")
 )
 
 // RootStorage persists control-plane mutations into durable metadata truth and
@@ -109,16 +114,6 @@ func OpenRootStore(root rootBackend) (*RootStore, error) {
 		return nil, err
 	}
 	return store, nil
-}
-
-// OpenRootLocalStore opens a Coordinator storage backend backed by the local metadata
-// root files in workdir.
-func OpenRootLocalStore(workdir string) (*RootStore, error) {
-	root, err := rootlocal.Open(workdir, nil)
-	if err != nil {
-		return nil, err
-	}
-	return OpenRootStore(root)
 }
 
 // RootStore persists Coordinator truth on top of the metadata root and reconstructs the

@@ -1,255 +1,109 @@
 # ccc-audit
 
-`nokv ccc-audit` is an offline diagnostic CLI that inspects **coordinator authority-handoff state** and **reply traces** for legality violations.
+`nokv ccc-audit` is a read-only operator tool that projects a live 3-peer
+meta-root cluster's current rooted state into the `coordinator/audit`
+closure-complete-continuation (CCC) vocabulary. It is the operator
+counterpart to the TLA+ CCC model and the `coordinator/audit` library that
+coordinator/server consults at runtime.
 
-It consumes two kinds of input:
+Because NoKV only ships the separated topology (3 meta-root + N coordinator),
+the audit tool speaks only remote gRPC — it does not read meta-root workdirs
+directly.
 
-1. A coordinator rooted snapshot (read from a workdir) — snapshot-level audit
-2. A JSON reply trace (NoKV or external system) — reply-level audit
+## What it does
 
-Either or both can be provided. The tool produces a structured report of detected anomalies and is safe to run against stopped nodes or trace files archived for post-mortem review.
+1. Dial the 3 meta-root peers through `meta/root/client` (the same client
+   coordinators use) wrapped by `coordinator/rootview.OpenRootRemoteStore`.
+2. Load one rooted `Snapshot` — current descriptors, allocator fences,
+   `CoordinatorLease`, `CoordinatorSeal`, `CoordinatorClosure`.
+3. Project the snapshot through `coordinator/audit.BuildReport(snapshot,
+   holderID, nowUnixNano)` to produce a `Report` containing `SnapshotAnomalies`
+   and a `ClosureDefect` enum.
+4. Optionally load a reply-trace JSON (from stdin or a file) and call
+   `coordinator/audit.EvaluateReplyTrace(report, records)` to flag any
+   accepted replies that are illegal under the current closure witness.
+5. Render the combined result as human-readable text or JSON.
 
----
+The audit is read-only: it never writes to meta-root, never advances fences,
+and never mutates coordinator state. It can run while the cluster is live and
+healthy, or attached to a quiesced cluster during post-incident analysis.
 
-## 1. When to use it
-
-- **Post-mortem**: a coordinator crashed mid-handoff, and you want to know whether the rooted lease/seal/closure state is consistent before restarting
-- **Pre-restart sanity check**: before bringing a store back up, verify its rooted metadata has no dangling successor coverage / missing confirms / missing closures
-- **Trace audit**: given a dumped reply trace from an external system, check whether any accepted reply crossed an authority-transition boundary
-- **CI**: compile a reply-trace fixture from a regression scenario, run `ccc-audit`, and fail the build if the anomaly count is non-zero
-
-The tool reads only. It does not modify the workdir or publish any rooted events.
-
----
-
-## 2. CLI flags
-
-```
-nokv ccc-audit
-  --workdir <path>                    Coordinator work directory containing rooted metadata
-  --holder <string>                   Holder id to evaluate (default: current rooted holder)
-  --now-unix-nano <int64>             Override audit time (default: real time)
-  --reply-trace <path>                Optional JSON reply trace to evaluate
-  --reply-trace-format <format>       nokv | etcd-read-index | etcd-lease-renew | crdb-lease-start
-  --json                              Emit JSON report instead of the text table
-```
-
-At least one of `--workdir` or `--reply-trace` must be provided.
-
-When only `--reply-trace` is given, snapshot-level anomalies are skipped (there is no snapshot to audit), but reply-trace anomalies are still evaluated against whatever `Report` can be constructed from the provided context.
-
----
-
-## 3. Snapshot anomalies (from `--workdir`)
-
-Lifted directly from [`coordinator/audit/report.go`](../coordinator/audit/report.go) — when a rooted snapshot is loaded, the tool reports the following boolean/enum fields:
-
-| Field | What triggers it |
-|---|---|
-| `SuccessorLineageMismatch` | Successor lease exists but its `PredecessorDigest` doesn't match the sealed predecessor |
-| `UncoveredMonotoneFrontier` | Successor present but monotone frontier (ID/TSO) not covered |
-| `UncoveredDescriptorRevision` | Successor present but descriptor revision frontier not covered |
-| `LeaseStartCoverageViolation` | Successor `lease_start` is below the sealed served-read frontier |
-| `SealedGenerationStillLive` | A sealed generation is still marked as live-able |
-| `ClosureDefect` | Enum: `successor_incomplete` / `missing_confirm` / `missing_close` / `close_without_confirm` / `close_lineage_mismatch` / `reattach_without_confirm` / `reattach_without_close` / `reattach_lineage_mismatch` / `reattach_incomplete` |
-
-`ClosureDefect` is the canonical enum field. The legacy boolean fields (`MissingConfirm`, `MissingClose`, etc.) are kept in the struct for backward-compatible test consumption only; new code should read `ClosureDefect` directly.
-
----
-
-## 4. Reply-trace anomalies (from `--reply-trace`)
-
-The reply trace evaluator is in [`coordinator/audit/trace.go`](../coordinator/audit/trace.go). Each accepted record is checked against the snapshot's closure state plus its own successor-generation evidence.
-
-| Kind | Meaning |
-|---|---|
-| `post_seal_accepted_reply` | Reply accepted at a generation that is already sealed in rooted state |
-| `accepted_reply_behind_successor` | Generic — accepted reply's generation is below an observed successor generation |
-| `accepted_read_index_behind_successor` | etcd-read-index specialization of the above |
-| `accepted_keepalive_success_after_revoke` | etcd-lease-renew specialization — keepalive success observed after a revoke revision |
-| `lease_start_coverage_violation` | crdb-lease-start specialization — accepted successor `lease_start` below carried served timestamp |
-| `illegal_reply_generation` | Accepted reply whose generation cannot be legal under current closure state |
-
-Anomaly kinds are stable; adapters for new external systems add more specializations to the `accepted_reply_behind_successor` family.
-
----
-
-## 5. Trace formats
-
-The tool's trace adapter normalizes several formats into a shared `ReplyTraceRecord` schema. See [`coordinator/audit/trace_adapter.go`](../coordinator/audit/trace_adapter.go).
-
-### `nokv` (default)
-
-Native format, already in `ReplyTraceRecord` shape:
-
-```json
-[
-  {
-    "source": "nokv",
-    "duty": "alloc_id",
-    "cert_generation": 5,
-    "observed_successor_generation": 0,
-    "accepted": true
-  }
-]
-```
-
-Also accepts `{"records": [...]}` envelope.
-
-### `etcd-read-index`
-
-```json
-[
-  {
-    "member_id": "n1",
-    "read_state_generation": 12,
-    "successor_generation": 13,
-    "accepted": true
-  }
-]
-```
-
-Projected into `duty: "read_index"` with `cert_generation = read_state_generation`, `observed_successor_generation = successor_generation`.
-
-### `etcd-lease-renew`
-
-```json
-[
-  {
-    "member_id": "n1",
-    "response_revision": 42,
-    "revoke_revision": 45,
-    "accepted": true
-  }
-]
-```
-
-Projected into `duty: "lease_renew"` with `cert_generation = response_revision`, `observed_successor_generation = revoke_revision`.
-
-### `crdb-lease-start`
-
-```json
-[
-  {
-    "key": "k",
-    "successor_lease_start": 8,
-    "served_timestamp": 9,
-    "accepted": true
-  }
-]
-```
-
-Projected into `duty: "lease_start_coverage"`. Triggers `lease_start_coverage_violation` when `successor_lease_start <= served_timestamp` and `accepted=true`.
-
----
-
-## 6. Output
-
-### Text (default)
-
-```
-HolderID                 c1
-NowUnixNano              1745158800000000000
-CatchUpState             fresh
-RootDescriptorRevision   128
-CurrentHolder            c1
-CurrentGeneration        5
-SealGeneration           4
-ClosureSatisfied         true
-ClosureStage             closed
-Anomalies                none
-ReplyTraceRecords        3
-ReplyTraceAnomalies      accepted_read_index_behind_successor
-```
-
-### JSON (`--json`)
-
-Full dump of `Report`, `Lease`, `Seal`, reply trace records, and reply-trace anomalies. Schema is the `cccAuditOutput` struct in `cmd/nokv/cmd_ccc_audit.go`.
-
----
-
-## 7. Examples
-
-### Workdir-only audit
-
-```bash
-nokv ccc-audit --workdir ./artifacts/cluster/store-1 --json
-```
-
-Loads the rooted snapshot, evaluates closure defects, prints JSON.
-
-### Reply-trace-only audit
+## Usage
 
 ```bash
 nokv ccc-audit \
-  --reply-trace ./traces/etcd-read-index-sample.json \
-  --reply-trace-format etcd-read-index
+  --root-peer 1=127.0.0.1:2380 \
+  --root-peer 2=127.0.0.1:2381 \
+  --root-peer 3=127.0.0.1:2382
 ```
 
-Evaluates the trace against an empty snapshot — useful when all you have is the trace file.
+Required:
 
-### Combined audit with holder override
+- `--root-peer nodeID=addr` — repeat exactly 3 times. Same gRPC endpoints
+  that `nokv coordinator --root-peer ...` uses.
 
-```bash
-nokv ccc-audit \
-  --workdir ./artifacts/cluster/store-1 \
-  --holder c1 \
-  --now-unix-nano 1745158800000000000 \
-  --reply-trace ./traces/failover.json \
-  --json
+Optional:
+
+- `--holder <id>` — override the holder id used for reattach checks.
+  Defaults to `snapshot.CoordinatorLease.HolderID`.
+- `--now-unix-nano <ns>` — override the audit clock. Defaults to
+  `time.Now().UnixNano()`. Useful for deterministic regression runs.
+- `--reply-trace <path>` — path to a reply-trace JSON file (`-` for stdin).
+  When omitted, only the snapshot-level audit runs.
+- `--reply-trace-format <format>` — one of `nokv`, `etcd-read-index`,
+  `etcd-lease-renew`, `crdb-lease-start`. Defaults to `nokv`.
+- `--json` — emit JSON instead of the default human-readable text.
+
+## Sample output
+
+```text
+CCC audit report
+----------------
+holder             : coord-1
+now_unix_nano      : 1714857600000000000
+root_desc_revision : 42
+catch_up_state     : fresh
+current_holder     : coord-1
+current_generation : 7
+closure            : stage=confirmed
+closure_witness    : stage=confirmed seal_gen=6 successor_present=true successor_coverage=covered lineage_satisfied=true sealed_gen_retired=true
+
+snapshot anomalies:
+  successor_lineage_mismatch     : false
+  uncovered_monotone_frontier    : false
+  uncovered_descriptor_revision  : false
+  lease_start_coverage_violation : false
+  sealed_generation_still_live   : false
+  closure_defect                 : none
 ```
 
-Produces the full report: snapshot-level anomalies + reply-trace anomalies evaluated under the same closure context.
+When `--reply-trace` is provided, each accepted reply that violates the
+closure witness prints as a trailing line:
 
----
-
-## 8. Programmatic API
-
-Everything the CLI does is available as a Go package. From `coordinator/audit`:
-
-```go
-import (
-    coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
-    coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
-)
-
-store, _ := coordstorage.OpenRootLocalStore("./workdir")
-defer store.Close()
-snapshot, _ := store.Load()
-
-report := coordaudit.BuildReport(snapshot, "c1", time.Now().UnixNano())
-
-records, _ := coordaudit.DecodeReplyTrace(traceBytes, coordaudit.ReplyTraceFormatNoKV)
-traceAnomalies := coordaudit.EvaluateReplyTrace(report, records)
-
-for _, a := range traceAnomalies {
-    fmt.Printf("%s at index %d: %s\n", a.Kind, a.Index, a.Reason)
-}
+```text
+reply-trace anomalies (1):
+  [3] kind=accepted_reply_behind_successor duty=lease_start cert_gen=5 reason="accepted reply generation 5 behind observed successor generation 7"
 ```
 
----
+## Anomaly vocabulary
 
-## 9. Exit codes
+See [coordinator/audit/report.go](../coordinator/audit/report.go) for the full
+enum:
 
-- `0` — tool ran successfully; anomalies (if any) are in the report but are **not** promoted to a non-zero exit code
-- `1` — tool failed to run (bad flags, missing workdir, malformed trace)
+- `successor_incomplete` / `missing_confirm` / `missing_close`
+- `close_without_confirm`
+- `lineage_mismatch`
+- `reattach_without_confirm` / `reattach_without_close` /
+  `reattach_lineage_mismatch` / `reattach_incomplete`
 
-**Note**: the tool intentionally does not exit non-zero on detected anomalies. Consuming scripts should parse the JSON output and decide themselves how to react. This makes it safe to run inside broader CI pipelines without accidentally failing them.
+Any non-empty `closure_defect` or any `true` flag under `snapshot anomalies`
+indicates that the rooted closure state has drifted from the expected
+`Attached → Active → Seal → Cover → Close → Reattach` lifecycle — which is
+exactly the property CCC.tla proves meta-root must preserve.
 
----
+## Related
 
-## 10. Source map
-
-| File | Role |
-|---|---|
-| [`cmd/nokv/cmd_ccc_audit.go`](../cmd/nokv/cmd_ccc_audit.go) | CLI entry point, flag parsing, text/JSON renderer |
-| [`coordinator/audit/report.go`](../coordinator/audit/report.go) | `BuildReport`, `SnapshotAnomalies`, `ClosureDefect` |
-| [`coordinator/audit/trace.go`](../coordinator/audit/trace.go) | `EvaluateReplyTrace`, `ReplyTraceAnomaly` |
-| [`coordinator/audit/trace_adapter.go`](../coordinator/audit/trace_adapter.go) | Format parsing + projection into `ReplyTraceRecord` |
-| [`coordinator/audit/lease_start_coverage.go`](../coordinator/audit/lease_start_coverage.go) | CRDB-style lease-start coverage helper |
-
-Related docs:
-
-- [Rooted Truth](rooted_truth.md) — what's in the snapshot this tool audits
-- [Coordinator](coordinator.md) — the service that mutates the rooted state
-- [Control and Execution Plane Protocols](control_and_execution_protocols.md) — the full contract being checked
+- [Rooted truth](rooted_truth.md) — lifecycle semantics audited by this tool
+- [Coordinator](coordinator.md) — the runtime consumer of the same audit
+  library
+- [`coordinator/audit`](../coordinator/audit/) — the library this CLI wraps

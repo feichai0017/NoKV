@@ -10,242 +10,159 @@ import (
 	"time"
 
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
-	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
-	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
-	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	"github.com/feichai0017/NoKV/coordinator/rootview"
 )
 
-type cccAuditOutput struct {
-	Report              coordaudit.Report              `json:"report"`
-	Lease               cccAuditLeaseSummary           `json:"lease"`
-	Seal                cccAuditSealSummary            `json:"seal"`
-	ReplyTraceRecords   int                            `json:"reply_trace_records,omitempty"`
-	ReplyTraceAnomalies []coordaudit.ReplyTraceAnomaly `json:"reply_trace_anomalies,omitempty"`
-}
-
-type cccAuditLeaseSummary struct {
-	HolderID          string                    `json:"holder_id"`
-	CertGeneration    uint64                    `json:"cert_generation"`
-	Frontiers         []cccAuditFrontierSummary `json:"frontiers,omitempty"`
-	PredecessorDigest string                    `json:"predecessor_digest,omitempty"`
-}
-
-type cccAuditSealSummary struct {
-	HolderID       string                    `json:"holder_id"`
-	CertGeneration uint64                    `json:"cert_generation"`
-	Frontiers      []cccAuditFrontierSummary `json:"frontiers,omitempty"`
-}
-
-type cccAuditFrontierSummary struct {
-	DutyMask uint32 `json:"duty_mask"`
-	DutyName string `json:"duty_name"`
-	Frontier uint64 `json:"frontier"`
-}
-
+// runCCCAuditCmd runs one read-only closure-complete-continuation audit pass
+// against a live 3-peer meta-root cluster. It connects via the same remote
+// gRPC client coordinators use (coordinator/rootview.OpenRootRemoteStore),
+// loads the rooted snapshot, and projects it into coordinator/audit's
+// SnapshotAnomalies / ClosureDefect vocabulary.
+//
+// Inputs the tool accepts:
+//   - --root-peer nodeID=addr (repeatable, exactly 3): meta-root gRPC endpoints
+//   - --holder: explicit holder id for the audit; defaults to snapshot's
+//     current lease holder
+//   - --now-unix-nano: audit timestamp; defaults to current time
+//   - --reply-trace: optional path to reply-trace JSON; "-" reads stdin
+//   - --reply-trace-format: projection vocabulary (nokv/etcd-read-index/
+//     etcd-lease-renew/crdb-lease-start)
+//   - --json: emit JSON instead of human-readable text
 func runCCCAuditCmd(w io.Writer, args []string) error {
 	fs := flag.NewFlagSet("ccc-audit", flag.ContinueOnError)
-	workdir := fs.String("workdir", "", "coordinator work directory containing rooted metadata")
-	holderID := fs.String("holder", "", "holder id to evaluate for reattach checks (defaults to current rooted holder)")
-	nowUnixNano := fs.Int64("now-unix-nano", 0, "override audit time in unix nanos")
-	replyTracePath := fs.String("reply-trace", "", "optional JSON reply trace projected into ccc-audit anomaly vocabulary")
-	replyTraceFormatRaw := fs.String("reply-trace-format", string(coordaudit.ReplyTraceFormatNoKV), "reply trace format: nokv, etcd-read-index, or etcd-lease-renew")
-	asJSON := fs.Bool("json", false, "output JSON instead of plain text")
+	holder := fs.String("holder", "", "override holder id used for audit reattach checks")
+	nowUnixNano := fs.Int64("now-unix-nano", 0, "override audit timestamp (unix nano); defaults to current time")
+	replyTracePath := fs.String("reply-trace", "", "path to reply-trace JSON (\"-\" for stdin); optional")
+	replyTraceFormat := fs.String("reply-trace-format", "nokv", "reply-trace projection: nokv|etcd-read-index|etcd-lease-renew|crdb-lease-start")
+	asJSON := fs.Bool("json", false, "emit JSON output instead of human-readable text")
+	var rootPeerFlags []string
+	fs.Func("root-peer", "meta-root gRPC peer mapping in the form nodeID=address (repeatable, exactly 3)", func(value string) error {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return fmt.Errorf("root-peer value cannot be empty")
+		}
+		rootPeerFlags = append(rootPeerFlags, value)
+		return nil
+	})
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	replyTraceFormat, err := coordaudit.ParseReplyTraceFormat(*replyTraceFormatRaw)
+
+	peers, err := parseReplicatedRootPeers(rootPeerFlags)
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(*workdir) == "" && strings.TrimSpace(*replyTracePath) == "" {
-		return fmt.Errorf("ccc-audit requires --workdir or --reply-trace")
+	if len(peers) != 3 {
+		return fmt.Errorf("ccc-audit requires exactly 3 --root-peer values")
 	}
 
-	var snapshot coordstorage.Snapshot
-	if strings.TrimSpace(*workdir) != "" {
-		store, err := coordstorage.OpenRootLocalStore(strings.TrimSpace(*workdir))
-		if err != nil {
-			return err
-		}
-		defer func() { _ = store.Close() }()
-
-		snapshot, err = store.Load()
-		if err != nil {
-			return err
-		}
-	}
-
-	effectiveHolder := resolveCCCAuditHolder(snapshot, *holderID)
-	effectiveNow := *nowUnixNano
-	if effectiveNow == 0 {
-		effectiveNow = time.Now().UnixNano()
-	}
-	report := coordaudit.BuildReport(snapshot, effectiveHolder, effectiveNow)
-	replyTrace, err := loadCCCAuditReplyTrace(*replyTracePath, replyTraceFormat)
+	rootStore, err := rootview.OpenRootRemoteStore(rootview.RemoteRootConfig{
+		Targets: peers,
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("ccc-audit open remote metadata root: %w", err)
 	}
-	replyTraceAnomalies := coordaudit.EvaluateReplyTrace(report, replyTrace)
-	return renderCCCAudit(w, snapshot, report, replyTrace, replyTraceAnomalies, *asJSON)
+	defer func() { _ = rootStore.Close() }()
+
+	snapshot, err := rootStore.Load()
+	if err != nil {
+		return fmt.Errorf("ccc-audit load rooted snapshot: %w", err)
+	}
+
+	holderID := strings.TrimSpace(*holder)
+	if holderID == "" {
+		holderID = snapshot.CoordinatorLease.HolderID
+	}
+	auditTime := *nowUnixNano
+	if auditTime == 0 {
+		auditTime = time.Now().UnixNano()
+	}
+
+	report := coordaudit.BuildReport(snapshot, holderID, auditTime)
+
+	var traceAnomalies []coordaudit.ReplyTraceAnomaly
+	if strings.TrimSpace(*replyTracePath) != "" {
+		format, ferr := coordaudit.ParseReplyTraceFormat(*replyTraceFormat)
+		if ferr != nil {
+			return fmt.Errorf("ccc-audit reply-trace-format: %w", ferr)
+		}
+		data, rerr := readReplyTrace(*replyTracePath)
+		if rerr != nil {
+			return fmt.Errorf("ccc-audit read reply-trace: %w", rerr)
+		}
+		records, derr := coordaudit.DecodeReplyTrace(data, format)
+		if derr != nil {
+			return fmt.Errorf("ccc-audit decode reply-trace: %w", derr)
+		}
+		traceAnomalies = coordaudit.EvaluateReplyTrace(report, records)
+	}
+
+	if *asJSON {
+		return renderCCCAuditJSON(w, report, traceAnomalies)
+	}
+	return renderCCCAuditText(w, report, traceAnomalies)
 }
 
-func resolveCCCAuditHolder(snapshot coordstorage.Snapshot, requested string) string {
-	if holder := strings.TrimSpace(requested); holder != "" {
-		return holder
+func readReplyTrace(path string) ([]byte, error) {
+	if path == "-" {
+		return io.ReadAll(os.Stdin)
 	}
-	if holder := strings.TrimSpace(snapshot.CoordinatorLease.HolderID); holder != "" {
-		return holder
-	}
-	if holder := strings.TrimSpace(snapshot.CoordinatorClosure.HolderID); holder != "" {
-		return holder
-	}
-	return ""
+	return os.ReadFile(path)
 }
 
-func renderCCCAudit(
-	w io.Writer,
-	snapshot coordstorage.Snapshot,
-	report coordaudit.Report,
-	replyTrace []coordaudit.ReplyTraceRecord,
-	replyTraceAnomalies []coordaudit.ReplyTraceAnomaly,
-	asJSON bool,
-) error {
-	if asJSON {
-		leaseFrontiers := cccAuditFrontierSummaries(controlplane.Frontiers(rootstate.State{
-			IDFence:  snapshot.Allocator.IDCurrent,
-			TSOFence: snapshot.Allocator.TSCurrent,
-		}, report.RootDescriptorRevision))
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(cccAuditOutput{
-			Report: report,
-			Lease: cccAuditLeaseSummary{
-				HolderID:          snapshot.CoordinatorLease.HolderID,
-				CertGeneration:    snapshot.CoordinatorLease.CertGeneration,
-				Frontiers:         leaseFrontiers,
-				PredecessorDigest: snapshot.CoordinatorLease.PredecessorDigest,
-			},
-			Seal: cccAuditSealSummary{
-				HolderID:       snapshot.CoordinatorSeal.HolderID,
-				CertGeneration: snapshot.CoordinatorSeal.CertGeneration,
-				Frontiers:      cccAuditFrontierSummaries(snapshot.CoordinatorSeal.Frontiers),
-			},
-			ReplyTraceRecords:   len(replyTrace),
-			ReplyTraceAnomalies: replyTraceAnomalies,
-		})
-	}
+type cccAuditJSON struct {
+	Report         coordaudit.Report              `json:"report"`
+	TraceAnomalies []coordaudit.ReplyTraceAnomaly `json:"trace_anomalies,omitempty"`
+}
 
-	_, _ = fmt.Fprintf(w, "HolderID                 %s\n", emptyDash(report.HolderID))
-	_, _ = fmt.Fprintf(w, "NowUnixNano              %d\n", report.NowUnixNano)
-	_, _ = fmt.Fprintf(w, "CatchUpState             %s\n", report.CatchUpState)
-	_, _ = fmt.Fprintf(w, "RootDescriptorRevision   %d\n", report.RootDescriptorRevision)
-	_, _ = fmt.Fprintf(w, "CurrentHolder            %s\n", emptyDash(report.CurrentHolderID))
-	_, _ = fmt.Fprintf(w, "CurrentGeneration        %d\n", report.CurrentGeneration)
-	_, _ = fmt.Fprintf(w, "SealGeneration           %d\n", report.ClosureWitness.SealGeneration)
-	_, _ = fmt.Fprintf(w, "ClosureSatisfied         %t\n", report.ClosureWitness.ClosureSatisfied())
-	_, _ = fmt.Fprintf(w, "ClosureStage             %s\n", report.Closure.Stage)
-	names := cccAuditAnomalyNames(report.Anomalies)
-	if len(names) == 0 {
-		_, _ = fmt.Fprintln(w, "Anomalies                none")
-	} else {
-		_, _ = fmt.Fprintf(w, "Anomalies                %s\n", strings.Join(names, ", "))
+func renderCCCAuditJSON(w io.Writer, report coordaudit.Report, anomalies []coordaudit.ReplyTraceAnomaly) error {
+	out := cccAuditJSON{Report: report, TraceAnomalies: anomalies}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
+}
+
+func renderCCCAuditText(w io.Writer, report coordaudit.Report, anomalies []coordaudit.ReplyTraceAnomaly) error {
+	_, _ = fmt.Fprintln(w, "CCC audit report")
+	_, _ = fmt.Fprintln(w, "----------------")
+	_, _ = fmt.Fprintf(w, "holder             : %s\n", report.HolderID)
+	_, _ = fmt.Fprintf(w, "now_unix_nano      : %d\n", report.NowUnixNano)
+	_, _ = fmt.Fprintf(w, "root_desc_revision : %d\n", report.RootDescriptorRevision)
+	_, _ = fmt.Fprintf(w, "catch_up_state     : %s\n", report.CatchUpState)
+	_, _ = fmt.Fprintf(w, "current_holder     : %s\n", report.CurrentHolderID)
+	_, _ = fmt.Fprintf(w, "current_generation : %d\n", report.CurrentGeneration)
+	_, _ = fmt.Fprintf(w, "closure            : stage=%s\n", report.Closure.Stage)
+	_, _ = fmt.Fprintf(w, "closure_witness    : stage=%s seal_gen=%d successor_present=%v successor_coverage=%v lineage_satisfied=%v sealed_gen_retired=%v\n",
+		report.ClosureWitness.Stage,
+		report.ClosureWitness.SealGeneration,
+		report.ClosureWitness.SuccessorPresent,
+		report.ClosureWitness.SuccessorCoverage,
+		report.ClosureWitness.SuccessorLineageSatisfied,
+		report.ClosureWitness.SealedGenerationRetired)
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "snapshot anomalies:")
+	_, _ = fmt.Fprintf(w, "  successor_lineage_mismatch     : %v\n", report.Anomalies.SuccessorLineageMismatch)
+	_, _ = fmt.Fprintf(w, "  uncovered_monotone_frontier    : %v\n", report.Anomalies.UncoveredMonotoneFrontier)
+	_, _ = fmt.Fprintf(w, "  uncovered_descriptor_revision  : %v\n", report.Anomalies.UncoveredDescriptorRevision)
+	_, _ = fmt.Fprintf(w, "  lease_start_coverage_violation : %v\n", report.Anomalies.LeaseStartCoverageViolation)
+	_, _ = fmt.Fprintf(w, "  sealed_generation_still_live   : %v\n", report.Anomalies.SealedGenerationStillLive)
+	_, _ = fmt.Fprintf(w, "  closure_defect                 : %s\n", defectOrNone(report.Anomalies.ClosureDefect))
+
+	if len(anomalies) > 0 {
+		_, _ = fmt.Fprintln(w)
+		_, _ = fmt.Fprintf(w, "reply-trace anomalies (%d):\n", len(anomalies))
+		for _, a := range anomalies {
+			_, _ = fmt.Fprintf(w, "  [%d] kind=%s duty=%s cert_gen=%d reason=%q\n",
+				a.Index, a.Kind, a.Duty, a.CertGeneration, a.Reason)
+		}
 	}
-	if len(replyTrace) == 0 {
-		return nil
-	}
-	_, _ = fmt.Fprintf(w, "ReplyTraceRecords        %d\n", len(replyTrace))
-	traceNames := cccAuditReplyTraceAnomalyNames(replyTraceAnomalies)
-	if len(traceNames) == 0 {
-		_, _ = fmt.Fprintln(w, "ReplyTraceAnomalies      none")
-		return nil
-	}
-	_, _ = fmt.Fprintf(w, "ReplyTraceAnomalies      %s\n", strings.Join(traceNames, ", "))
 	return nil
 }
 
-func cccAuditAnomalyNames(anomalies coordaudit.SnapshotAnomalies) []string {
-	names := make([]string, 0, 8)
-	if anomalies.SuccessorLineageMismatch {
-		names = append(names, "successor_lineage_mismatch")
+func defectOrNone(d coordaudit.ClosureDefect) string {
+	if d == "" {
+		return "none"
 	}
-	if anomalies.UncoveredMonotoneFrontier {
-		names = append(names, "uncovered_monotone_frontier")
-	}
-	if anomalies.UncoveredDescriptorRevision {
-		names = append(names, "uncovered_descriptor_revision")
-	}
-	if anomalies.LeaseStartCoverageViolation {
-		names = append(names, "lease_start_coverage_violation")
-	}
-	if anomalies.SealedGenerationStillLive {
-		names = append(names, "sealed_generation_still_live")
-	}
-	if anomalies.ClosureDefect != coordaudit.ClosureDefectNone {
-		names = append(names, string(anomalies.ClosureDefect))
-	}
-	return names
-}
-
-func emptyDash(v string) string {
-	if strings.TrimSpace(v) == "" {
-		return "-"
-	}
-	return v
-}
-
-func loadCCCAuditReplyTrace(path string, format coordaudit.ReplyTraceFormat) ([]coordaudit.ReplyTraceRecord, error) {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
-		return nil, nil
-	}
-	var (
-		data []byte
-		err  error
-	)
-	if trimmed == "-" {
-		data, err = io.ReadAll(os.Stdin)
-	} else {
-		data, err = os.ReadFile(trimmed)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("load reply trace: %w", err)
-	}
-	records, err := coordaudit.DecodeReplyTrace(data, format)
-	if err != nil {
-		return nil, fmt.Errorf("parse reply trace: %w", err)
-	}
-	return records, nil
-}
-
-func cccAuditReplyTraceAnomalyNames(anomalies []coordaudit.ReplyTraceAnomaly) []string {
-	if len(anomalies) == 0 {
-		return nil
-	}
-	names := make([]string, 0, len(anomalies))
-	for _, anomaly := range anomalies {
-		name := anomaly.Kind
-		if strings.TrimSpace(anomaly.Duty) != "" {
-			name = fmt.Sprintf("%s[%s]", name, anomaly.Duty)
-		}
-		names = append(names, name)
-	}
-	return names
-}
-
-func cccAuditFrontierSummaries(frontiers rootproto.CoordinatorDutyFrontiers) []cccAuditFrontierSummary {
-	if frontiers.Len() == 0 {
-		return nil
-	}
-	entries := frontiers.Entries()
-	out := make([]cccAuditFrontierSummary, 0, len(entries))
-	for _, entry := range entries {
-		out = append(out, cccAuditFrontierSummary{
-			DutyMask: entry.DutyMask,
-			DutyName: rootproto.CoordinatorDutyName(entry.DutyMask),
-			Frontier: entry.Frontier,
-		})
-	}
-	return out
+	return string(d)
 }
