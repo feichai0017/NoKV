@@ -1,0 +1,330 @@
+package wire
+
+import (
+	"testing"
+
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/stretchr/testify/require"
+)
+
+func TestDescriptorRoundTripPreservesAndDetachesData(t *testing.T) {
+	desc := testWireDescriptor(11, []byte("a"), []byte("m"))
+	desc.Lineage = []descriptor.LineageRef{{
+		RegionID: 7,
+		Epoch:    metaregion.Epoch{Version: 2, ConfVersion: 3},
+		Hash:     []byte("lineage"),
+		Kind:     descriptor.LineageKindSplitParent,
+	}}
+	original := desc.Clone()
+
+	pb := DescriptorToProto(desc)
+	desc.StartKey[0] = 'x'
+	desc.Peers[0].StoreID = 99
+	desc.Lineage[0].Hash[0] = 'X'
+
+	require.Equal(t, original.StartKey, pb.StartKey)
+	require.Equal(t, original.Peers[0].StoreID, pb.Peers[0].StoreId)
+	require.Equal(t, original.Lineage[0].Hash, pb.Lineage[0].Hash)
+
+	roundTrip := DescriptorFromProto(pb)
+	require.True(t, original.Equal(roundTrip))
+	require.Equal(t, descriptor.Descriptor{}, DescriptorFromProto(nil))
+
+	pb.StartKey[0] = 'z'
+	require.Equal(t, byte('a'), roundTrip.StartKey[0])
+}
+
+func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
+	frontiers := rootproto.NewCoordinatorDutyFrontiers(
+		rootproto.CoordinatorDutyFrontier{DutyMask: rootproto.CoordinatorDutyAllocID, Frontier: 10},
+		rootproto.CoordinatorDutyFrontier{DutyMask: rootproto.CoordinatorDutyTSO, Frontier: 20},
+	)
+	state := rootstate.State{
+		ClusterEpoch:    7,
+		MembershipEpoch: 3,
+		LastCommitted:   rootproto.Cursor{Term: 2, Index: 9},
+		IDFence:         100,
+		TSOFence:        200,
+		CoordinatorLease: rootstate.CoordinatorLease{
+			HolderID:          "coord-1",
+			ExpiresUnixNano:   12345,
+			CertGeneration:    5,
+			IssuedCursor:      rootproto.Cursor{Term: 2, Index: 8},
+			DutyMask:          rootproto.CoordinatorDutyMaskDefault,
+			PredecessorDigest: "pred",
+		},
+		CoordinatorSeal: rootstate.CoordinatorSeal{
+			HolderID:       "coord-1",
+			CertGeneration: 5,
+			DutyMask:       rootproto.CoordinatorDutyAllocID | rootproto.CoordinatorDutyTSO,
+			Frontiers:      frontiers,
+			SealedAtCursor: rootproto.Cursor{Term: 2, Index: 9},
+		},
+		CoordinatorClosure: rootstate.CoordinatorClosure{
+			HolderID:            "coord-1",
+			SealGeneration:      5,
+			SuccessorGeneration: 6,
+			SealDigest:          "seal",
+			Stage:               rootproto.CoordinatorClosureStageClosed,
+			ConfirmedAtCursor:   rootproto.Cursor{Term: 2, Index: 10},
+			ClosedAtCursor:      rootproto.Cursor{Term: 2, Index: 11},
+			ReattachedAtCursor:  rootproto.Cursor{Term: 2, Index: 12},
+		},
+	}
+
+	require.Equal(t, state.LastCommitted, RootCursorFromProto(RootCursorToProto(state.LastCommitted)))
+	require.Equal(t, rootproto.Cursor{}, RootCursorFromProto(nil))
+	require.Equal(t, state, RootStateFromProto(RootStateToProto(state)))
+	require.Equal(t, rootstate.State{}, RootStateFromProto(nil))
+
+	require.Nil(t, RootCoordinatorLeaseToProto(rootstate.CoordinatorLease{}))
+	require.Nil(t, RootCoordinatorSealToProto(rootstate.CoordinatorSeal{}))
+	require.Nil(t, RootCoordinatorClosureToProto(rootstate.CoordinatorClosure{}))
+	require.Equal(t, state.CoordinatorLease, RootCoordinatorLeaseFromProto(RootCoordinatorLeaseToProto(state.CoordinatorLease)))
+	require.Equal(t, state.CoordinatorSeal, RootCoordinatorSealFromProto(RootCoordinatorSealToProto(state.CoordinatorSeal)))
+	require.Equal(t, state.CoordinatorClosure, RootCoordinatorClosureFromProto(RootCoordinatorClosureToProto(state.CoordinatorClosure)))
+
+	require.Nil(t, RootDutyFrontiersToProto(rootproto.CoordinatorDutyFrontiers{}))
+	filtered := RootDutyFrontiersFromProto([]*metapb.RootDutyFrontier{
+		nil,
+		{DutyMask: 0, Frontier: 1},
+		{DutyMask: rootproto.CoordinatorDutyAllocID, Frontier: 10},
+		{DutyMask: rootproto.CoordinatorDutyTSO, Frontier: 20},
+	})
+	require.Equal(t, frontiers, filtered)
+
+	protocolState := rootstate.CoordinatorProtocolState{
+		Lease:   state.CoordinatorLease,
+		Seal:    state.CoordinatorSeal,
+		Closure: state.CoordinatorClosure,
+	}
+	require.Equal(t, protocolState, RootCoordinatorProtocolStateFromProto(RootCoordinatorProtocolStateToProto(protocolState)))
+	require.Equal(t, rootstate.CoordinatorProtocolState{}, RootCoordinatorProtocolStateFromProto(nil))
+
+	leaseCmd := rootproto.CoordinatorLeaseCommand{
+		Kind:              rootproto.CoordinatorLeaseCommandRelease,
+		HolderID:          "coord-1",
+		ExpiresUnixNano:   23456,
+		NowUnixNano:       12345,
+		PredecessorDigest: "pred",
+		HandoffFrontiers:  frontiers,
+	}
+	require.Equal(t, leaseCmd, RootCoordinatorLeaseCommandFromProto(RootCoordinatorLeaseCommandToProto(leaseCmd)))
+	require.Equal(t, rootproto.CoordinatorLeaseCommand{}, RootCoordinatorLeaseCommandFromProto(nil))
+
+	closureCmd := rootproto.CoordinatorClosureCommand{
+		Kind:        rootproto.CoordinatorClosureCommandReattach,
+		HolderID:    "coord-1",
+		NowUnixNano: 999,
+		Frontiers:   frontiers,
+	}
+	require.Equal(t, closureCmd, RootCoordinatorClosureCommandFromProto(RootCoordinatorClosureCommandToProto(closureCmd)))
+	require.Equal(t, rootproto.CoordinatorClosureCommand{}, RootCoordinatorClosureCommandFromProto(nil))
+
+	require.Equal(t, metapb.RootCoordinatorClosureStage_ROOT_COORDINATOR_CLOSURE_STAGE_PENDING_CONFIRM, rootCoordinatorClosureStageToProto(rootproto.CoordinatorClosureStageUnspecified))
+	require.Equal(t, rootproto.CoordinatorClosureStagePendingConfirm, rootCoordinatorClosureStageFromProto(metapb.RootCoordinatorClosureStage_ROOT_COORDINATOR_CLOSURE_STAGE_PENDING_CONFIRM))
+	require.Equal(t, metapb.RootCoordinatorLeaseCommandKind_ROOT_COORDINATOR_LEASE_COMMAND_KIND_UNSPECIFIED, rootCoordinatorLeaseCommandKindToProto(rootproto.CoordinatorLeaseCommandUnknown))
+	require.Equal(t, rootproto.CoordinatorLeaseCommandUnknown, rootCoordinatorLeaseCommandKindFromProto(metapb.RootCoordinatorLeaseCommandKind_ROOT_COORDINATOR_LEASE_COMMAND_KIND_UNSPECIFIED))
+	require.Equal(t, metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_UNSPECIFIED, rootCoordinatorClosureCommandKindToProto(rootproto.CoordinatorClosureCommandUnknown))
+	require.Equal(t, rootproto.CoordinatorClosureCommandUnknown, rootCoordinatorClosureCommandKindFromProto(metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_UNSPECIFIED))
+}
+
+func TestRootSnapshotTailAndAllocatorRoundTrip(t *testing.T) {
+	desc := testWireDescriptor(21, []byte("a"), []byte("m"))
+	target := desc.Clone()
+	target.Peers = append(target.Peers, metaregion.Peer{StoreID: 2, PeerID: 201})
+	target.Epoch.ConfVersion++
+	target.RootEpoch++
+	target.EnsureHash()
+
+	left := testWireDescriptor(21, []byte("a"), []byte("f"))
+	right := testWireDescriptor(22, []byte("f"), []byte("m"))
+	snapshot := rootstate.Snapshot{
+		State: rootstate.State{
+			LastCommitted: rootproto.Cursor{Term: 3, Index: 9},
+			IDFence:       50,
+			TSOFence:      60,
+		},
+		Descriptors: map[uint64]descriptor.Descriptor{
+			desc.RegionID: desc,
+		},
+		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
+			desc.RegionID: {
+				Kind:    rootstate.PendingPeerChangeAddition,
+				StoreID: 2,
+				PeerID:  201,
+				Base:    desc,
+				Target:  target,
+			},
+		},
+		PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
+			left.RegionID: {
+				Kind:           rootstate.PendingRangeChangeSplit,
+				ParentRegionID: desc.RegionID,
+				LeftRegionID:   left.RegionID,
+				RightRegionID:  right.RegionID,
+				BaseParent:     desc,
+				Left:           left,
+				Right:          right,
+			},
+		},
+	}
+
+	pbSnapshot := RootSnapshotToProto(snapshot, 77)
+	roundTrip, tailOffset := RootSnapshotFromProto(pbSnapshot)
+	require.Equal(t, uint64(77), tailOffset)
+	require.Equal(t, snapshot, roundTrip)
+
+	nilSnapshot, offset := RootSnapshotFromProto(nil)
+	require.Empty(t, nilSnapshot.Descriptors)
+	require.Zero(t, offset)
+
+	observed := rootstorage.ObservedCommitted{
+		Checkpoint: rootstorage.Checkpoint{Snapshot: snapshot, TailOffset: 77},
+		Tail: rootstorage.CommittedTail{
+			RequestedOffset: 77,
+			StartOffset:     78,
+			EndOffset:       79,
+			Records: []rootstorage.CommittedEvent{
+				{
+					Cursor: rootproto.Cursor{Term: 3, Index: 10},
+					Event:  rootevent.RegionDescriptorPublished(target),
+				},
+			},
+		},
+	}
+	checkpoint, tail := RootObservedToProto(observed)
+	require.Equal(t, observed, RootObservedFromProto(checkpoint, tail))
+
+	token := rootstorage.TailToken{Cursor: rootproto.Cursor{Term: 3, Index: 10}, Revision: 9}
+	require.Equal(t, token, RootTailTokenFromProto(RootTailTokenToProto(token)))
+	require.Equal(t, rootstorage.TailToken{}, RootTailTokenFromProto(nil))
+
+	advance := observed.Advance(
+		rootstorage.TailToken{Cursor: rootproto.Cursor{Term: 3, Index: 9}, Revision: 8},
+		token,
+	)
+	after, current, pbCheckpoint, pbTail := RootTailAdvanceToObservedResponse(advance)
+	require.Equal(t, advance, RootTailAdvanceFromProto(after, current, pbCheckpoint, pbTail))
+
+	pbTail.Records = append(pbTail.Records, &metapb.RootCommittedEvent{
+		Cursor: RootCursorToProto(rootproto.Cursor{Term: 3, Index: 11}),
+		Event:  &metapb.RootEvent{Kind: metapb.RootEventKind_ROOT_EVENT_KIND_UNSPECIFIED},
+	})
+	decodedTail := RootCommittedTailFromProto(pbTail)
+	require.Len(t, decodedTail.Records, 1)
+
+	fallback := RootFallbackObservedFromSnapshot(snapshot)
+	require.Equal(t, snapshot, fallback.Checkpoint.Snapshot)
+	require.Zero(t, fallback.Tail.StartOffset)
+	require.Zero(t, fallback.Tail.EndOffset)
+
+	require.Equal(t, metapb.RootAllocatorKind_ROOT_ALLOCATOR_KIND_ID, RootAllocatorKindToProto(rootstate.AllocatorKindID))
+	kind, ok := RootAllocatorKindFromProto(metapb.RootAllocatorKind_ROOT_ALLOCATOR_KIND_TSO)
+	require.True(t, ok)
+	require.Equal(t, rootstate.AllocatorKindTSO, kind)
+	kind, ok = RootAllocatorKindFromProto(metapb.RootAllocatorKind_ROOT_ALLOCATOR_KIND_UNSPECIFIED)
+	require.False(t, ok)
+	require.Equal(t, rootstate.AllocatorKindUnknown, kind)
+}
+
+func TestRootEventRoundTripAndKindMappings(t *testing.T) {
+	desc := testWireDescriptor(31, []byte("a"), []byte("m"))
+	left := testWireDescriptor(31, []byte("a"), []byte("f"))
+	right := testWireDescriptor(32, []byte("f"), []byte("m"))
+	merged := testWireDescriptor(33, []byte("a"), []byte("m"))
+	base := desc.Clone()
+	frontiers := rootproto.NewCoordinatorDutyFrontiers(
+		rootproto.CoordinatorDutyFrontier{DutyMask: rootproto.CoordinatorDutyAllocID, Frontier: 10},
+	)
+
+	events := []rootevent.Event{
+		rootevent.StoreJoined(1, "s1"),
+		rootevent.IDAllocatorFenced(10),
+		rootevent.CoordinatorLeaseGranted("coord", 123, 7, rootproto.CoordinatorDutyAllocID, "pred", frontiers),
+		rootevent.CoordinatorLeaseSealed("coord", 7, rootproto.CoordinatorDutyAllocID, frontiers),
+		rootevent.CoordinatorClosureClosed("coord", 7, 8, "seal"),
+		rootevent.RegionDescriptorPublished(desc),
+		rootevent.RegionTombstoned(desc.RegionID),
+		rootevent.RegionSplitCancelled(desc.RegionID, []byte("f"), left, right, base),
+		rootevent.RegionMergeCancelled(left.RegionID, right.RegionID, merged, left, right),
+		rootevent.PeerAdditionCancelled(desc.RegionID, 2, 201, desc, base),
+	}
+
+	for _, event := range events {
+		pb := RootEventToProto(event)
+		got := RootEventFromProto(pb)
+		require.Equal(t, event, got)
+	}
+	require.Equal(t, rootevent.Event{}, RootEventFromProto(nil))
+
+	splitKey := []byte("f")
+	event := rootevent.RegionSplitCommitted(desc.RegionID, splitKey, left, right)
+	pb := RootEventToProto(event)
+	splitKey[0] = 'x'
+	event.RangeSplit.SplitKey[0] = 'x'
+	got := RootEventFromProto(pb)
+	require.Equal(t, []byte("f"), got.RangeSplit.SplitKey)
+
+	require.Nil(t, rootEventCoordinatorLeaseToProto(nil))
+	require.Nil(t, rootEventCoordinatorSealToProto(nil))
+	require.Nil(t, rootEventCoordinatorClosureToProto(nil))
+	require.Nil(t, rootEventCoordinatorLeaseFromProto(nil))
+	require.Nil(t, rootEventCoordinatorSealFromProto(nil))
+	require.Nil(t, rootEventCoordinatorClosureFromProto(nil))
+
+	kinds := []rootevent.Kind{
+		rootevent.KindStoreJoined,
+		rootevent.KindStoreLeft,
+		rootevent.KindIDAllocatorFenced,
+		rootevent.KindTSOAllocatorFenced,
+		rootevent.KindRegionBootstrap,
+		rootevent.KindRegionDescriptorPublished,
+		rootevent.KindRegionTombstoned,
+		rootevent.KindRegionSplitPlanned,
+		rootevent.KindRegionSplitCommitted,
+		rootevent.KindRegionSplitCancelled,
+		rootevent.KindRegionMergePlanned,
+		rootevent.KindRegionMerged,
+		rootevent.KindRegionMergeCancelled,
+		rootevent.KindPeerAdditionPlanned,
+		rootevent.KindPeerRemovalPlanned,
+		rootevent.KindPeerAdded,
+		rootevent.KindPeerRemoved,
+		rootevent.KindPeerAdditionCancelled,
+		rootevent.KindPeerRemovalCancelled,
+		rootevent.KindCoordinatorLease,
+		rootevent.KindCoordinatorSeal,
+		rootevent.KindCoordinatorClosure,
+	}
+	for _, kind := range kinds {
+		require.Equal(t, kind, rootEventKindFromProto(rootEventKindToProto(kind)))
+	}
+	require.Equal(t, metapb.RootEventKind_ROOT_EVENT_KIND_UNSPECIFIED, rootEventKindToProto(rootevent.KindUnknown))
+	require.Equal(t, rootevent.KindUnknown, rootEventKindFromProto(metapb.RootEventKind_ROOT_EVENT_KIND_UNSPECIFIED))
+
+	require.Equal(t, rootstate.PendingPeerChangeAddition, rootPendingPeerChangeKindFromProto(rootPendingPeerChangeKindToProto(rootstate.PendingPeerChangeAddition)))
+	require.Equal(t, rootstate.PendingPeerChangeUnknown, rootPendingPeerChangeKindFromProto(metapb.RootPendingPeerChangeKind_ROOT_PENDING_PEER_CHANGE_KIND_UNSPECIFIED))
+	require.Equal(t, rootstate.PendingRangeChangeMerge, rootPendingRangeChangeKindFromProto(rootPendingRangeChangeKindToProto(rootstate.PendingRangeChangeMerge)))
+	require.Equal(t, rootstate.PendingRangeChangeUnknown, rootPendingRangeChangeKindFromProto(metapb.RootPendingRangeChangeKind_ROOT_PENDING_RANGE_CHANGE_KIND_UNSPECIFIED))
+}
+
+func testWireDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
+	desc := descriptor.Descriptor{
+		RegionID:  id,
+		StartKey:  append([]byte(nil), start...),
+		EndKey:    append([]byte(nil), end...),
+		Epoch:     metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:     []metaregion.Peer{{StoreID: 1, PeerID: id*10 + 1}},
+		State:     metaregion.ReplicaStateRunning,
+		RootEpoch: 1,
+	}
+	desc.EnsureHash()
+	return desc
+}
