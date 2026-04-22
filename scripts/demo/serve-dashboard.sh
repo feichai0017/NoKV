@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Serves scripts/demo/dashboard.html on http://localhost:8080 with
+# Serves scripts/demo/dashboard.html on http://localhost:18080 with
 # small proxy endpoints so the page can issue redis-cli commands and
 # trigger docker stop/start for failover drills.
 #
@@ -8,7 +8,7 @@
 # auth, etc.) — /api/redis and /api/docker run commands against the host.
 set -euo pipefail
 
-PORT="${1:-8080}"
+PORT="${1:-18080}"
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 cat <<EOF

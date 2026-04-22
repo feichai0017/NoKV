@@ -91,7 +91,7 @@ three planes:
 ### Run it
 
 ```bash
-scripts/demo/serve-dashboard.sh    # → http://localhost:8080/dashboard.html
+scripts/demo/serve-dashboard.sh    # → http://localhost:18080/dashboard.html
 ```
 
 Under the hood this runs `scripts/demo/dashboard_server.py`, a small Python

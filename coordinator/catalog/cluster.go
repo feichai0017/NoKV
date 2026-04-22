@@ -201,6 +201,26 @@ func (c *Cluster) TouchRegionHeartbeat(regionID uint64) bool {
 	return c.regions.Touch(regionID, time.Now())
 }
 
+// RecordRegionLeaders applies one store's claim of raft leadership over a
+// set of regions. Any regions for which this store previously claimed
+// leadership but is no longer reporting are cleared so the next store to
+// report leadership for them wins.
+func (c *Cluster) RecordRegionLeaders(storeID uint64, regionIDs []uint64) {
+	if c == nil || storeID == 0 {
+		return
+	}
+	now := time.Now()
+	keep := make(map[uint64]struct{}, len(regionIDs))
+	for _, id := range regionIDs {
+		if id == 0 {
+			continue
+		}
+		keep[id] = struct{}{}
+		c.regions.RecordLeader(id, storeID, now)
+	}
+	c.regions.ClearLeadersFromStore(storeID, keep)
+}
+
 // RegionSnapshot returns a stable copy of tracked region metadata.
 func (c *Cluster) RegionSnapshot() []pdview.RegionInfo {
 	if c == nil {

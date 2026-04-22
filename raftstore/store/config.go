@@ -17,9 +17,13 @@ type PeerBuilder func(meta localmeta.RegionMeta) (*peer.Config, error)
 
 // StoreStats captures minimal store-level heartbeat information.
 type StoreStats struct {
-	StoreID           uint64    `json:"store_id"`
-	RegionNum         uint64    `json:"region_num"`
-	LeaderNum         uint64    `json:"leader_num"`
+	StoreID   uint64 `json:"store_id"`
+	RegionNum uint64 `json:"region_num"`
+	LeaderNum uint64 `json:"leader_num"`
+	// LeaderRegionIDs enumerates the regions for which this store is the
+	// local raft leader at snapshot time. The coordinator uses this to
+	// populate its region directory view with per-region leadership.
+	LeaderRegionIDs   []uint64  `json:"leader_region_ids,omitempty"`
 	Capacity          uint64    `json:"capacity"`
 	Available         uint64    `json:"available"`
 	DroppedOperations uint64    `json:"dropped_operations"`

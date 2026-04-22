@@ -109,6 +109,7 @@ func (s *SchedulerClient) StoreHeartbeat(ctx context.Context, stats storepkg.Sto
 		Capacity:          stats.Capacity,
 		Available:         stats.Available,
 		DroppedOperations: stats.DroppedOperations,
+		LeaderRegionIds:   stats.LeaderRegionIDs,
 	})
 	if err != nil {
 		s.recordError("StoreHeartbeat", err)

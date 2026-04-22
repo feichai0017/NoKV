@@ -391,6 +391,13 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 	svc.now = func() time.Time { return now }
 	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
 	require.NoError(t, svc.ReloadFromStorage())
+	_, err := svc.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
+		StoreId:         1,
+		RegionNum:       1,
+		LeaderNum:       1,
+		LeaderRegionIds: []uint64{11},
+	})
+	require.NoError(t, err)
 
 	snapshot := svc.DiagnosticsSnapshot()
 	allocator := snapshot["allocator"].(map[string]any)
@@ -398,6 +405,7 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 	lease := snapshot["lease"].(map[string]any)
 	seal := snapshot["seal"].(map[string]any)
 	audit := snapshot["audit"].(map[string]any)
+	regions := snapshot["region_descriptors"].([]map[string]any)
 
 	require.Equal(t, uint64(55), allocator["id_current"])
 	require.Equal(t, uint64(88), allocator["tso_current"])
@@ -430,6 +438,10 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 	require.Equal(t, true, audit["sealed_generation_retired"])
 	require.Equal(t, false, audit["closure_satisfied"])
 	require.Equal(t, "unspecified", audit["closure_stage"])
+	require.Len(t, regions, 1)
+	require.Equal(t, uint64(11), regions[0]["region_id"])
+	require.Equal(t, uint64(1), regions[0]["leader_store_id"])
+	require.NotZero(t, regions[0]["leader_reported_unix"])
 }
 
 func TestServiceGetRegionByKeyStrongReadRejectsFollower(t *testing.T) {

@@ -630,8 +630,14 @@ type StoreHeartbeatRequest struct {
 	Capacity          uint64                 `protobuf:"varint,4,opt,name=capacity,proto3" json:"capacity,omitempty"`
 	Available         uint64                 `protobuf:"varint,5,opt,name=available,proto3" json:"available,omitempty"`
 	DroppedOperations uint64                 `protobuf:"varint,6,opt,name=dropped_operations,json=droppedOperations,proto3" json:"dropped_operations,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// leader_region_ids lists the regions for which this store currently
+	// reports itself as the raft leader. The coordinator treats the most
+	// recent report per region as authoritative; during a raft transition
+	// the reports will briefly disagree and converge within one heartbeat
+	// tick.
+	LeaderRegionIds []uint64 `protobuf:"varint,7,rep,packed,name=leader_region_ids,json=leaderRegionIds,proto3" json:"leader_region_ids,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *StoreHeartbeatRequest) Reset() {
@@ -704,6 +710,13 @@ func (x *StoreHeartbeatRequest) GetDroppedOperations() uint64 {
 		return x.DroppedOperations
 	}
 	return 0
+}
+
+func (x *StoreHeartbeatRequest) GetLeaderRegionIds() []uint64 {
+	if x != nil {
+		return x.LeaderRegionIds
+	}
+	return nil
 }
 
 type SchedulerOperation struct {
@@ -2052,7 +2065,7 @@ var File_coordinator_coordinator_proto protoreflect.FileDescriptor
 
 const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\n" +
-	"\x1dcoordinator/coordinator.proto\x12\x13nokv.coordinator.v1\x1a\x15meta/descriptor.proto\x1a\x0fmeta/root.proto\"\xd9\x01\n" +
+	"\x1dcoordinator/coordinator.proto\x12\x13nokv.coordinator.v1\x1a\x15meta/descriptor.proto\x1a\x0fmeta/root.proto\"\x85\x02\n" +
 	"\x15StoreHeartbeatRequest\x12\x19\n" +
 	"\bstore_id\x18\x01 \x01(\x04R\astoreId\x12\x1d\n" +
 	"\n" +
@@ -2061,7 +2074,8 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"leader_num\x18\x03 \x01(\x04R\tleaderNum\x12\x1a\n" +
 	"\bcapacity\x18\x04 \x01(\x04R\bcapacity\x12\x1c\n" +
 	"\tavailable\x18\x05 \x01(\x04R\tavailable\x12-\n" +
-	"\x12dropped_operations\x18\x06 \x01(\x04R\x11droppedOperations\"\xbe\x01\n" +
+	"\x12dropped_operations\x18\x06 \x01(\x04R\x11droppedOperations\x12*\n" +
+	"\x11leader_region_ids\x18\a \x03(\x04R\x0fleaderRegionIds\"\xbe\x01\n" +
 	"\x12SchedulerOperation\x12?\n" +
 	"\x04type\x18\x01 \x01(\x0e2+.nokv.coordinator.v1.SchedulerOperationTypeR\x04type\x12\x1b\n" +
 	"\tregion_id\x18\x02 \x01(\x04R\bregionId\x12$\n" +
