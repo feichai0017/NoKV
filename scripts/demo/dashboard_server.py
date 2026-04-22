@@ -42,9 +42,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path in ("", "/", "/dashboard"):
+            return self._redirect("/dashboard.html")
         if parsed.path.startswith("/api/expvar/"):
             return self._handle_expvar(parsed.path)
         return super().do_GET()
+
+    def do_HEAD(self):
+        parsed = urlparse(self.path)
+        if parsed.path in ("", "/", "/dashboard"):
+            self.send_response(302)
+            self.send_header("Location", "/dashboard.html")
+            self.end_headers()
+            return
+        return super().do_HEAD()
 
     def do_POST(self):
         parsed = urlparse(self.path)
@@ -79,6 +90,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _redirect(self, location):
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.end_headers()
 
     def _handle_redis(self):
         body = self._read_body()
