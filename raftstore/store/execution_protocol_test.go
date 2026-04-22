@@ -121,16 +121,19 @@ func TestExecutionProtocolTracksTopologyLifecycle(t *testing.T) {
 		if !ok || status.Outcome != ExecutionOutcomeApplied {
 			return false
 		}
-		if status.Publish == PublishStateTerminalPublished {
-			return true
-		}
-		// The topology execution record is updated by the apply path, but the
-		// terminal publish acknowledgement may still be sitting in the scheduler
-		// queue waiting for the heartbeat loop. Drive one flush here so the test
-		// validates lifecycle tracking instead of loop scheduling latency.
-		rs.flushRegionUpdates()
-		status, ok = rs.TopologyExecution(target.TransitionID)
-		return ok && status.Publish == PublishStateTerminalPublished
+		// Applied status is recorded just before the terminal root event is
+		// enqueued. Wait until the pending publish is visible, or it was already
+		// published by the background runtime, before forcing an explicit flush.
+		return status.Publish == PublishStateTerminalPublished || rs.hasPendingRegionUpdate(region.ID)
+	}, 20*time.Second, 20*time.Millisecond)
+
+	rs.flushRegionUpdates()
+
+	require.Eventually(t, func() bool {
+		status, ok := rs.TopologyExecution(target.TransitionID)
+		return ok &&
+			status.Publish == PublishStateTerminalPublished &&
+			historyContainsRootKind(sink.EventHistory(), rootevent.KindPeerAdded)
 	}, 20*time.Second, 20*time.Millisecond)
 }
 
