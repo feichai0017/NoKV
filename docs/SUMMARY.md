@@ -40,6 +40,7 @@
 - [Configuration](config.md)
 - [CLI](cli.md)
 - [ccc-audit](ccc-audit.md)
+- [Cluster Demo & Dashboard](demo.md)
 - [Scripts](scripts.md)
 - [NoKV Redis](nokv-redis.md)
 - [Stats & Observability](stats.md)
