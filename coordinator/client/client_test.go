@@ -20,6 +20,7 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
@@ -743,6 +744,14 @@ type scriptedCoordinatorServer struct {
 	storeErrors    []error
 	storeCalls     int
 
+	listResponses []*coordpb.ListTransitionsResponse
+	listErrors    []error
+	listCalls     int
+
+	assessResponses []*coordpb.AssessRootEventResponse
+	assessErrors    []error
+	assessCalls     int
+
 	allocResponses []*coordpb.AllocIDResponse
 	allocErrors    []error
 	allocCalls     int
@@ -770,6 +779,40 @@ func (s *scriptedCoordinatorServer) StoreHeartbeat(_ context.Context, _ *coordpb
 	}
 	resp := s.storeResponses[0]
 	s.storeResponses = s.storeResponses[1:]
+	return resp, err
+}
+
+func (s *scriptedCoordinatorServer) ListTransitions(_ context.Context, _ *coordpb.ListTransitionsRequest) (*coordpb.ListTransitionsResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.listCalls++
+	var err error
+	if len(s.listErrors) > 0 {
+		err = s.listErrors[0]
+		s.listErrors = s.listErrors[1:]
+	}
+	if len(s.listResponses) == 0 {
+		return nil, err
+	}
+	resp := s.listResponses[0]
+	s.listResponses = s.listResponses[1:]
+	return resp, err
+}
+
+func (s *scriptedCoordinatorServer) AssessRootEvent(_ context.Context, _ *coordpb.AssessRootEventRequest) (*coordpb.AssessRootEventResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.assessCalls++
+	var err error
+	if len(s.assessErrors) > 0 {
+		err = s.assessErrors[0]
+		s.assessErrors = s.assessErrors[1:]
+	}
+	if len(s.assessResponses) == 0 {
+		return nil, err
+	}
+	resp := s.assessResponses[0]
+	s.assessResponses = s.assessResponses[1:]
 	return resp, err
 }
 
@@ -907,6 +950,78 @@ func TestGRPCClientStoreHeartbeatBroadcastsAndPrefersOperationalResponse(t *test
 	require.Equal(t, 1, servers["standby"].storeCalls)
 	require.Equal(t, 1, servers["holder"].storeCalls)
 	require.Equal(t, "passthrough:///holder", cli.orderedEndpoints()[0].addr)
+}
+
+func TestGRPCClientListTransitionsAndAssessRootEvent(t *testing.T) {
+	servers := map[string]*scriptedCoordinatorServer{
+		"holder": {
+			listResponses: []*coordpb.ListTransitionsResponse{{
+				Entries: []*coordpb.TransitionEntry{{
+					Key:          7,
+					TransitionId: "peer:7:add:2:201",
+				}},
+			}},
+			assessResponses: []*coordpb.AssessRootEventResponse{{
+				Assessment: &coordpb.TransitionAssessment{
+					Key:          7,
+					Decision:     coordpb.TransitionDecision_TRANSITION_DECISION_APPLY,
+					TransitionId: "peer:7:add:2:201",
+				},
+			}},
+		},
+	}
+	cli := newScriptedCoordinatorClient(t, []string{"holder"}, servers)
+
+	listResp, err := cli.ListTransitions(context.Background(), &coordpb.ListTransitionsRequest{})
+	require.NoError(t, err)
+	require.Len(t, listResp.GetEntries(), 1)
+	require.Equal(t, "peer:7:add:2:201", listResp.GetEntries()[0].GetTransitionId())
+
+	assessResp, err := cli.AssessRootEvent(context.Background(), &coordpb.AssessRootEventRequest{
+		Event: metawire.RootEventToProto(rootevent.RegionTombstoned(7)),
+	})
+	require.NoError(t, err)
+	require.Equal(t, coordpb.TransitionDecision_TRANSITION_DECISION_APPLY, assessResp.GetAssessment().GetDecision())
+	require.Equal(t, 1, servers["holder"].listCalls)
+	require.Equal(t, 1, servers["holder"].assessCalls)
+}
+
+func TestClientHelperFunctions(t *testing.T) {
+	addrs, err := splitAddresses("  a , b ,, c ")
+	require.NoError(t, err)
+	require.Equal(t, []string{"a", "b", "c"}, addrs)
+	_, err = splitAddresses(" , ")
+	require.ErrorIs(t, err, errEmptyAddress)
+
+	defaultOpts := normalizeDialOptions(nil)
+	require.NotEmpty(t, defaultOpts)
+
+	custom := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	require.Equal(t, custom, normalizeDialOptions(custom))
+
+	const bufSize = 1 << 20
+	listener := bufconn.Listen(bufSize)
+	t.Cleanup(func() {
+		_ = listener.Close()
+	})
+	grpcServer := grpc.NewServer()
+	go func() { _ = grpcServer.Serve(listener) }()
+	t.Cleanup(grpcServer.GracefulStop)
+
+	dialer := func(context.Context, string) (net.Conn, error) { return listener.Dial() }
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(dialer),
+	)
+	require.NoError(t, err)
+	require.NoError(t, waitForReady(ctx, conn))
+
+	closeAllEndpoints([]grpcEndpoint{{addr: "passthrough:///bufnet", conn: conn}})
+	require.Eventually(t, func() bool {
+		return conn.GetState() == connectivity.Shutdown
+	}, time.Second, 10*time.Millisecond)
 }
 
 func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descriptor.Descriptor {
