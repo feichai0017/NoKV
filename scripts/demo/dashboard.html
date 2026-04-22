@@ -2,171 +2,452 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>NoKV Cluster Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>NoKV · Live Cluster Dashboard</title>
 <style>
+  :root {
+    --bg: #0a0e14;
+    --bg-elev: #111822;
+    --bg-elev2: #1a2331;
+    --border: #1f2a3b;
+    --border-strong: #2a3a52;
+    --text: #e6edf3;
+    --text-dim: #7d8a9c;
+    --text-faint: #4a5568;
+    --accent-truth:   #79c0ff;
+    --accent-control: #d2a8ff;
+    --accent-exec:    #7ee787;
+    --accent-gateway: #ffa657;
+    --good: #56d364;
+    --warn: #e3b341;
+    --bad:  #ff7b72;
+    --font-mono: "SF Mono", "JetBrains Mono", Monaco, Consolas, monospace;
+  }
+
   * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif;
-    margin: 0;
-    padding: 20px;
-    background: #0d1117;
-    color: #e6edf3;
+    font-family: -apple-system, "Segoe UI", "Helvetica Neue", sans-serif;
+    background: radial-gradient(ellipse at top, #131a25 0%, var(--bg) 60%);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 24px 28px 40px;
   }
-  h1 { font-size: 20px; margin: 0 0 8px; color: #f0f6fc; }
-  h2 { font-size: 13px; font-weight: 600; margin: 0; color: #7d8590; text-transform: uppercase; letter-spacing: 0.5px; }
-  .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid #30363d; }
-  .status { font-size: 12px; color: #7d8590; }
-  .status.error { color: #f85149; }
-  .tick { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #238636; margin-right: 6px; }
-  .tick.stale { background: #d29922; }
-  .tick.dead { background: #da3633; }
 
-  .plane { margin-bottom: 28px; }
-  .plane-title { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-  .plane-badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-  .plane-badge.truth { background: #1f2d5c; color: #79c0ff; }
-  .plane-badge.control { background: #3c1e5c; color: #d2a8ff; }
-  .plane-badge.exec { background: #1f4d2f; color: #7ee787; }
-  .plane-badge.gateway { background: #5c3a1e; color: #ffa657; }
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 {
+    font-size: 19px; font-weight: 600; margin: 0;
+    letter-spacing: -0.01em;
+  }
+  header h1 .accent {
+    background: linear-gradient(90deg, var(--accent-truth), var(--accent-control), var(--accent-exec));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .status-pill {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--text-dim);
+    background: var(--bg-elev); border: 1px solid var(--border);
+    padding: 5px 10px; border-radius: 20px; font-family: var(--font-mono);
+  }
+  .status-pill .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--good);
+    box-shadow: 0 0 6px var(--good);
+  }
+  .status-pill .dot.warn { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+  .status-pill .dot.bad  { background: var(--bad);  box-shadow: 0 0 6px var(--bad); }
 
-  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  /* ===== Topology SVG ===== */
+  .topology {
+    background: linear-gradient(135deg, var(--bg-elev) 0%, #141c29 100%);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin-bottom: 18px;
+  }
+  .topology svg { width: 100%; height: 280px; display: block; }
+  .topo-node circle { fill: var(--bg-elev2); stroke: var(--border-strong); stroke-width: 1.5; transition: all 0.3s ease; }
+  .topo-node.leader  circle { stroke: var(--accent-truth);   stroke-width: 2.5; filter: drop-shadow(0 0 6px var(--accent-truth)); }
+  .topo-node.holder  circle { stroke: var(--accent-control); stroke-width: 2.5; filter: drop-shadow(0 0 6px var(--accent-control)); }
+  .topo-node.region-leader circle { stroke: var(--accent-exec); stroke-width: 2.5; filter: drop-shadow(0 0 5px var(--accent-exec)); }
+  .topo-node.dead    circle { stroke: var(--bad); stroke-dasharray: 4 2; opacity: 0.45; }
+  .topo-node text.label { fill: var(--text); font-size: 11px; font-family: var(--font-mono); text-anchor: middle; dominant-baseline: central; }
+  .topo-node text.tag   { fill: var(--text-dim); font-size: 9px; text-anchor: middle; }
+  .topo-link {
+    stroke: var(--border-strong); stroke-width: 1.5; fill: none;
+    stroke-dasharray: 3 3; opacity: 0.35;
+  }
+  .topo-link.active {
+    stroke: var(--accent-truth); stroke-width: 2; opacity: 0.7;
+    stroke-dasharray: none;
+    animation: flow 2.5s linear infinite;
+  }
+  .topo-link.control-flow { stroke: var(--accent-control); }
+  .topo-link.exec-flow { stroke: var(--accent-exec); }
+  @keyframes flow {
+    0%   { stroke-dashoffset: 20; }
+    100% { stroke-dashoffset: 0; }
+  }
+
+  .topo-legend {
+    display: flex; gap: 18px; margin-top: 14px; font-size: 11px;
+    color: var(--text-dim); flex-wrap: wrap; font-family: var(--font-mono);
+  }
+  .topo-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .topo-legend .chip { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid; }
+  .topo-legend .chip.leader { border-color: var(--accent-truth); box-shadow: 0 0 3px var(--accent-truth); }
+  .topo-legend .chip.holder { border-color: var(--accent-control); box-shadow: 0 0 3px var(--accent-control); }
+  .topo-legend .chip.region { border-color: var(--accent-exec); box-shadow: 0 0 3px var(--accent-exec); }
+  .topo-legend .chip.dead   { border-color: var(--bad); border-style: dashed; }
+
+  /* ===== Plane sections ===== */
+  .plane { margin-bottom: 20px; }
+  .plane-head {
+    display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px;
+  }
+  .plane-head .badge {
+    font-size: 10px; padding: 3px 9px; border-radius: 3px;
+    font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase;
+  }
+  .plane-head .badge.truth   { background: rgba(121,192,255,0.14);  color: var(--accent-truth); }
+  .plane-head .badge.control { background: rgba(210,168,255,0.14); color: var(--accent-control); }
+  .plane-head .badge.exec    { background: rgba(126,231,135,0.14); color: var(--accent-exec); }
+  .plane-head .badge.gateway { background: rgba(255,166,87,0.14);  color: var(--accent-gateway); }
+  .plane-head h2 {
+    margin: 0; font-size: 12px; font-weight: 500; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+
+  .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+
   .card {
-    background: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    padding: 14px;
-    font-size: 13px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-size: 12px;
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
   }
-  .card.leader { border-color: #238636; box-shadow: 0 0 0 1px #23863680; }
-  .card.active-holder { border-color: #8957e5; box-shadow: 0 0 0 1px #8957e580; }
-  .card.error { border-color: #da3633; box-shadow: 0 0 0 1px #da363380; }
-  .card-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
-  .card-name { font-family: "SF Mono", Monaco, Consolas, monospace; font-weight: 600; font-size: 13px; color: #f0f6fc; }
-  .tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
-  .tag.leader { background: #1f4d2f; color: #7ee787; }
-  .tag.holder { background: #3c1e5c; color: #d2a8ff; }
-  .tag.follower { background: #30363d; color: #8b949e; }
-  .tag.standby { background: #30363d; color: #8b949e; }
-  .tag.error { background: #5c1e1e; color: #ff7b72; }
+  .card.leader  { border-color: var(--accent-truth);   box-shadow: 0 0 0 1px rgba(121,192,255,0.18); }
+  .card.holder  { border-color: var(--accent-control); box-shadow: 0 0 0 1px rgba(210,168,255,0.20); }
+  .card.region-leader { border-color: var(--accent-exec); box-shadow: 0 0 0 1px rgba(126,231,135,0.18); }
+  .card.dead    { border-color: rgba(255,123,114,0.5); opacity: 0.7; }
 
-  .row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12px; line-height: 1.5; }
-  .label { color: #7d8590; }
-  .value { color: #e6edf3; font-family: "SF Mono", Monaco, Consolas, monospace; }
-  .value.good { color: #7ee787; }
-  .value.warn { color: #d29922; }
-  .value.bad  { color: #ff7b72; }
-  .dim { color: #6e7681; }
+  .card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .card-name { font-family: var(--font-mono); font-weight: 600; color: var(--text); font-size: 12.5px; }
+  .tag {
+    font-size: 9.5px; padding: 2px 7px; border-radius: 3px;
+    font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;
+    font-family: var(--font-mono);
+  }
+  .tag.leader  { background: rgba(121,192,255,0.15); color: var(--accent-truth); }
+  .tag.holder  { background: rgba(210,168,255,0.15); color: var(--accent-control); }
+  .tag.region  { background: rgba(126,231,135,0.15); color: var(--accent-exec); }
+  .tag.standby { background: rgba(125,138,156,0.15); color: var(--text-dim); }
+  .tag.follower { background: rgba(125,138,156,0.15); color: var(--text-dim); }
+  .tag.live    { background: rgba(126,231,135,0.15); color: var(--accent-exec); }
+  .tag.error   { background: rgba(255,123,114,0.18); color: var(--bad); }
 
-  .hint { color: #6e7681; font-size: 11px; margin-top: 24px; padding: 12px; background: #161b22; border-radius: 6px; border: 1px solid #30363d; }
-  code { font-family: "SF Mono", Monaco, Consolas, monospace; color: #79c0ff; }
+  .row {
+    display: flex; justify-content: space-between; padding: 2.5px 0;
+    font-size: 11.5px; line-height: 1.55;
+  }
+  .label { color: var(--text-dim); }
+  .value { color: var(--text); font-family: var(--font-mono); }
+  .value.good { color: var(--good); }
+  .value.warn { color: var(--warn); }
+  .value.bad  { color: var(--bad); }
+
+  /* ===== Events timeline ===== */
+  .events {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-top: 22px;
+  }
+  .events h3 { margin: 0 0 10px; font-size: 12px; color: var(--text-dim); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+  .events .list {
+    max-height: 200px; overflow-y: auto; font-family: var(--font-mono); font-size: 11.5px;
+    padding-right: 4px;
+  }
+  .events .list::-webkit-scrollbar { width: 6px; }
+  .events .list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+  .events .entry {
+    display: grid; grid-template-columns: 75px 80px 1fr; gap: 8px; padding: 3px 0;
+    border-bottom: 1px solid rgba(31,42,59,0.5);
+  }
+  .events .entry:last-child { border-bottom: none; }
+  .events .entry .ts { color: var(--text-faint); }
+  .events .entry .kind {
+    font-weight: 700; letter-spacing: 0.3px; text-transform: uppercase; font-size: 10px;
+    padding: 1px 5px; border-radius: 2px; align-self: center; text-align: center;
+  }
+  .events .entry .kind.lease  { background: rgba(210,168,255,0.15); color: var(--accent-control); }
+  .events .entry .kind.raft   { background: rgba(121,192,255,0.15); color: var(--accent-truth); }
+  .events .entry .kind.region { background: rgba(126,231,135,0.15); color: var(--accent-exec); }
+  .events .entry .kind.node   { background: rgba(255,123,114,0.15); color: var(--bad); }
+  .events .entry .kind.redis  { background: rgba(255,166,87,0.15); color: var(--accent-gateway); }
+  .events .entry .body { color: var(--text); }
+  .events .empty { color: var(--text-faint); font-style: italic; padding: 12px 0; }
+
+  /* ===== Controls / failure drills ===== */
+  .panel {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-top: 14px;
+  }
+  .panel h3 { margin: 0 0 12px; font-size: 12px; color: var(--text-dim); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+  .drill-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 6px;
+  }
+  .drill-btn {
+    background: var(--bg-elev2);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    padding: 7px 10px; border-radius: 5px; cursor: pointer;
+    font-family: var(--font-mono); font-size: 11px;
+    transition: all 0.15s ease; text-align: left;
+  }
+  .drill-btn:hover { background: #222d3f; border-color: var(--text-faint); }
+  .drill-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .drill-btn.stop  { border-left: 3px solid var(--bad); }
+  .drill-btn.start { border-left: 3px solid var(--good); }
+
+  /* ===== Redis terminal ===== */
+  .terminal {
+    background: #0d1420;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-top: 14px;
+    font-family: var(--font-mono);
+    overflow: hidden;
+  }
+  .terminal .title {
+    background: linear-gradient(90deg, var(--bg-elev) 0%, #1a2331 100%);
+    padding: 8px 14px; font-size: 11px; color: var(--text-dim);
+    border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .terminal .title .target { color: var(--accent-gateway); }
+  .terminal .output {
+    padding: 12px 14px; font-size: 12px; line-height: 1.6;
+    max-height: 260px; overflow-y: auto;
+  }
+  .terminal .output::-webkit-scrollbar { width: 6px; }
+  .terminal .output::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+  .terminal .line { white-space: pre-wrap; word-break: break-all; }
+  .terminal .line.prompt  { color: var(--accent-gateway); }
+  .terminal .line.stdout  { color: var(--text); }
+  .terminal .line.stderr  { color: var(--bad); }
+  .terminal .line.meta    { color: var(--text-faint); font-style: italic; }
+  .terminal .inputbar {
+    display: flex; padding: 10px 14px;
+    border-top: 1px solid var(--border);
+    background: #09101a;
+  }
+  .terminal .inputbar .prefix {
+    color: var(--accent-gateway); font-weight: 600;
+    padding-right: 8px; align-self: center; font-size: 12px;
+  }
+  .terminal .inputbar input {
+    flex: 1; background: transparent; color: var(--text);
+    border: none; outline: none;
+    font-family: var(--font-mono); font-size: 12.5px;
+  }
+  .terminal .inputbar input::placeholder { color: var(--text-faint); }
+  .terminal .inputbar button {
+    margin-left: 8px; background: var(--bg-elev2);
+    border: 1px solid var(--border-strong);
+    color: var(--accent-gateway); font-family: var(--font-mono); font-size: 11px;
+    padding: 4px 12px; border-radius: 4px; cursor: pointer;
+  }
+  .terminal .inputbar button:hover { background: #263245; }
+
+  /* ===== small footer ===== */
+  footer {
+    margin-top: 24px; padding-top: 14px;
+    border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--text-faint);
+    font-family: var(--font-mono);
+  }
+  footer code { color: var(--accent-truth); }
 </style>
 </head>
 <body>
 
-<div class="top-bar">
-  <h1>NoKV Cluster Dashboard</h1>
-  <div class="status" id="status">
-    <span class="tick" id="tick"></span>
+<header>
+  <h1>NoKV · <span class="accent">Live Cluster Dashboard</span></h1>
+  <div class="status-pill">
+    <span class="dot" id="status-dot"></span>
     <span id="status-text">loading…</span>
+  </div>
+</header>
+
+<div class="topology">
+  <svg viewBox="0 0 900 260" preserveAspectRatio="xMidYMid meet">
+    <defs>
+      <marker id="arrow-truth" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+        <path d="M0,0 L6,3 L0,6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      </marker>
+    </defs>
+
+    <!-- Column labels -->
+    <text x="130"  y="20"  fill="#79c0ff" font-size="10" font-weight="700" text-anchor="middle" font-family="SF Mono, monospace">TRUTH PLANE</text>
+    <text x="450"  y="20"  fill="#d2a8ff" font-size="10" font-weight="700" text-anchor="middle" font-family="SF Mono, monospace">CONTROL PLANE</text>
+    <text x="770"  y="20"  fill="#7ee787" font-size="10" font-weight="700" text-anchor="middle" font-family="SF Mono, monospace">EXECUTION PLANE</text>
+
+    <!-- Links (drawn first, under nodes) -->
+    <g id="links"></g>
+
+    <!-- Nodes (will be filled by JS) -->
+    <g id="nodes"></g>
+
+    <!-- Gateway box -->
+    <g id="gateway-node">
+      <rect x="30" y="225" width="140" height="25" rx="4" fill="#111822" stroke="#1f2a3b" stroke-width="1"/>
+      <text x="100" y="241" fill="#ffa657" font-size="10" font-weight="600" text-anchor="middle" font-family="SF Mono, monospace">nokv-redis :6380</text>
+    </g>
+  </svg>
+
+  <div class="topo-legend">
+    <span><span class="chip leader"></span> raft leader</span>
+    <span><span class="chip holder"></span> CCC lease holder</span>
+    <span><span class="chip region"></span> region raft leader</span>
+    <span><span class="chip dead"></span> unreachable</span>
+    <span style="margin-left:auto;">pulsing line = active flow</span>
   </div>
 </div>
 
 <div class="plane">
-  <div class="plane-title">
-    <span class="plane-badge truth">Truth plane</span>
+  <div class="plane-head">
+    <span class="badge truth">Truth plane</span>
     <h2>3× meta-root — raft-replicated rooted truth</h2>
   </div>
   <div class="grid" id="meta-grid"></div>
 </div>
 
 <div class="plane">
-  <div class="plane-title">
-    <span class="plane-badge control">Control plane</span>
+  <div class="plane-head">
+    <span class="badge control">Control plane</span>
     <h2>3× coordinator — CCC lease-gated singleton</h2>
   </div>
   <div class="grid" id="coord-grid"></div>
 </div>
 
 <div class="plane">
-  <div class="plane-title">
-    <span class="plane-badge exec">Execution plane</span>
-    <h2>3× store — per-region raft</h2>
+  <div class="plane-head">
+    <span class="badge exec">Execution plane</span>
+    <h2>3× store — per-region raft, LSM engine</h2>
   </div>
   <div class="grid" id="store-grid"></div>
 </div>
 
 <div class="plane">
-  <div class="plane-title">
-    <span class="plane-badge gateway">Gateway</span>
-    <h2>Redis-compatible RESP (port 6380)</h2>
+  <div class="plane-head">
+    <span class="badge gateway">Gateway</span>
+    <h2>Redis-compatible RESP — port 6380</h2>
   </div>
   <div class="grid" id="gateway-grid"></div>
 </div>
 
-<div class="hint">
-  Polling <code>/debug/vars</code> on each service every 1.5s. Endpoints:
-  meta-root <code>9380/9381/9382</code>,
-  coord <code>9100/9101/9102</code>,
-  store <code>9200/9201/9202</code>,
-  redis <code>9300</code>.
-  Try <code>redis-cli -p 6380 set k v</code> to drive activity, or
-  <code>docker stop nokv-coordinator-N</code> to watch failover.
+<div class="events">
+  <h3>Event timeline — inferred from expvar diffs</h3>
+  <div class="list" id="event-list"><div class="empty">listening…</div></div>
 </div>
 
+<div class="panel">
+  <h3>Failure drills</h3>
+  <div class="drill-grid" id="drills"></div>
+</div>
+
+<div class="terminal">
+  <div class="title">
+    <span>redis-cli terminal — <span class="target">127.0.0.1:6380</span></span>
+    <span id="redis-status">idle</span>
+  </div>
+  <div class="output" id="term-out"></div>
+  <div class="inputbar">
+    <span class="prefix">&gt;</span>
+    <input type="text" id="term-input" placeholder='e.g. SET demo "hello"  ·  GET demo  ·  MGET a b c' autocomplete="off" spellcheck="false" />
+    <button id="term-submit">run</button>
+  </div>
+</div>
+
+<footer>
+  Dashboard runs on <code>scripts/demo/dashboard_server.py</code>. Every card polls
+  <code>/debug/vars</code> every 1.5 s. Redis commands go through <code>POST /api/redis</code>; failure drills through <code>POST /api/docker/&lt;stop|start&gt;/&lt;nokv-*&gt;</code>.
+</footer>
+
 <script>
-const targets = {
-  meta:  [{id: 1, port: 9380}, {id: 2, port: 9381}, {id: 3, port: 9382}],
-  coord: [{id: 1, port: 9100}, {id: 2, port: 9101}, {id: 3, port: 9102}],
-  store: [{id: 1, port: 9200}, {id: 2, port: 9201}, {id: 3, port: 9202}],
-  redis: [{id: 'gateway', port: 9300}],
+/* =========================================================
+ * Endpoints
+ * ========================================================= */
+const TARGETS = {
+  meta:    [{id:1,port:9380},{id:2,port:9381},{id:3,port:9382}],
+  coord:   [{id:1,port:9100},{id:2,port:9101},{id:3,port:9102}],
+  store:   [{id:1,port:9200},{id:2,port:9201},{id:3,port:9202}],
+  gateway: [{id:'gateway',port:9300}],
 };
 
+/* =========================================================
+ * Expvar fetch (with CORS now fixed server-side)
+ * ========================================================= */
 async function fetchJSON(port) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 1200);
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 1200);
   try {
-    const r = await fetch(`http://${location.hostname || 'localhost'}:${port}/debug/vars`, { signal: ctrl.signal });
+    const r = await fetch(`http://${location.hostname || 'localhost'}:${port}/debug/vars`, {signal: ctl.signal});
     clearTimeout(t);
-    if (!r.ok) throw new Error('bad status ' + r.status);
+    if (!r.ok) return null;
     return await r.json();
-  } catch (e) {
+  } catch {
     clearTimeout(t);
     return null;
   }
 }
 
-function row(label, value, cls = '') {
-  const v = value === undefined || value === null || value === '' ? '—' : value;
-  return `<div class="row"><span class="label">${label}</span><span class="value ${cls}">${v}</span></div>`;
-}
+/* =========================================================
+ * Rendering helpers
+ * ========================================================= */
+const row  = (label, v, cls='') => {
+  const val = v === undefined || v === null || v === '' ? '—' : v;
+  return `<div class="row"><span class="label">${label}</span><span class="value ${cls}">${val}</span></div>`;
+};
+const bytes = n => n == null ? '—' : `${Math.round((n||0) / 1048576)} MiB`;
 
 function renderMeta(info, peer) {
   const m = info && info.nokv_meta_root;
   const el = document.createElement('div');
   el.className = 'card';
   if (!m) {
-    el.classList.add('error');
-    el.innerHTML = `
-      <div class="card-header"><span class="card-name">meta-root-${peer.id}</span><span class="tag error">unreachable</span></div>
-      <div class="row"><span class="label">status</span><span class="value bad">no response on :${peer.port}</span></div>`;
+    el.classList.add('dead');
+    el.innerHTML = `<div class="card-head"><span class="card-name">meta-root-${peer.id}</span><span class="tag error">unreachable</span></div>${row('port', `:${peer.port}`)}`;
     return el;
   }
   const isLeader = !!m.is_leader;
-  const committed = m.last_committed || {};
   if (isLeader) el.classList.add('leader');
+  const committed = m.last_committed || {};
   el.innerHTML = `
-    <div class="card-header">
+    <div class="card-head">
       <span class="card-name">meta-root-${peer.id}</span>
       <span class="tag ${isLeader ? 'leader' : 'follower'}">${isLeader ? 'raft leader' : 'follower'}</span>
     </div>
-    ${row('node_id',          m.node_id)}
-    ${row('leader_id',        m.leader_id)}
-    ${row('last_committed',   `term=${committed.term || 0} idx=${committed.index || 0}`)}
-    ${row('cluster_epoch',    m.cluster_epoch)}
-    ${row('id_fence / tso',   `${m.id_fence || 0} / ${m.tso_fence || 0}`)}
-    ${row('descriptors',      m.descriptor_count || 0)}
-    ${row('pending peer Δ',   m.pending_peer_changes || 0)}
-    ${row('pending range Δ',  m.pending_range_changes || 0)}
+    ${row('leader_id',     m.leader_id)}
+    ${row('committed',     `t${committed.term||0} i${committed.index||0}`)}
+    ${row('cluster_epoch', m.cluster_epoch)}
+    ${row('id/tso fence',  `${m.id_fence||0} / ${m.tso_fence||0}`)}
+    ${row('descriptors',   m.descriptor_count||0)}
+    ${row('pending Δ',     `peer=${m.pending_peer_changes||0} range=${m.pending_range_changes||0}`)}
   `;
   return el;
 }
@@ -176,34 +457,28 @@ function renderCoord(info, peer) {
   const el = document.createElement('div');
   el.className = 'card';
   if (!c) {
-    el.classList.add('error');
-    el.innerHTML = `
-      <div class="card-header"><span class="card-name">coord-${peer.id}</span><span class="tag error">unreachable</span></div>
-      <div class="row"><span class="label">status</span><span class="value bad">no response on :${peer.port}</span></div>`;
+    el.classList.add('dead');
+    el.innerHTML = `<div class="card-head"><span class="card-name">coord-${peer.id}</span><span class="tag error">unreachable</span></div>${row('port', `:${peer.port}`)}`;
     return el;
   }
   const lease = c.lease || {};
   const root  = c.root  || {};
   const alloc = c.allocator || {};
-  const held  = !!lease.held_by_self;
-  const active = !!lease.active;
-  if (held && active) el.classList.add('active-holder');
+  const held  = !!lease.held_by_self && !!lease.active;
+  if (held) el.classList.add('holder');
   el.innerHTML = `
-    <div class="card-header">
+    <div class="card-head">
       <span class="card-name">coord-${peer.id}</span>
-      <span class="tag ${held && active ? 'holder' : 'standby'}">
-        ${held && active ? 'lease holder' : 'standby (read-only)'}
-      </span>
+      <span class="tag ${held ? 'holder' : 'standby'}">${held ? 'lease holder' : 'standby'}</span>
     </div>
-    ${row('rooted holder',   lease.holder_id || '(none)')}
-    ${row('generation',      lease.cert_generation || 0)}
-    ${row('active',          active ? '✓' : '✗', active ? 'good' : 'bad')}
-    ${row('held by self',    held ? '✓' : '—', held ? 'good' : 'dim')}
+    ${row('rooted holder',   lease.holder_id || '(none)', held ? 'good' : '')}
+    ${row('cert generation', lease.cert_generation || 0)}
+    ${row('active',          lease.active ? '✓' : '✗', lease.active ? 'good' : 'bad')}
     ${row('regions',         c.regions || 0)}
-    ${row('id / tso current',`${alloc.id_current || 0} / ${alloc.tso_current || 0}`)}
-    ${row('root_lag',        root.root_lag || 0)}
-    ${row('catch_up_state',  (root.catch_up_state || '').replace('CATCH_UP_STATE_',''))}
-    ${row('degraded_mode',   (root.degraded_mode || '').replace('DEGRADED_MODE_',''))}
+    ${row('id / tso cur',    `${alloc.id_current||0} / ${alloc.tso_current||0}`)}
+    ${row('root_lag',        root.root_lag ?? '—')}
+    ${row('catchup',         (root.catch_up_state||'').replace('CATCH_UP_STATE_',''))}
+    ${row('degraded',        (root.degraded_mode||'').replace('DEGRADED_MODE_',''))}
   `;
   return el;
 }
@@ -212,80 +487,348 @@ function renderStore(info, peer) {
   const el = document.createElement('div');
   el.className = 'card';
   if (!info) {
-    el.classList.add('error');
-    el.innerHTML = `
-      <div class="card-header"><span class="card-name">store-${peer.id}</span><span class="tag error">unreachable</span></div>
-      <div class="row"><span class="label">status</span><span class="value bad">no response on :${peer.port}</span></div>`;
+    el.classList.add('dead');
+    el.innerHTML = `<div class="card-head"><span class="card-name">store-${peer.id}</span><span class="tag error">unreachable</span></div>${row('port', `:${peer.port}`)}`;
     return el;
   }
   const mem = info.memstats || {};
   el.innerHTML = `
-    <div class="card-header"><span class="card-name">store-${peer.id}</span><span class="tag follower">live</span></div>
-    ${row('alloc',         `${Math.round((mem.Alloc || 0) / 1024 / 1024)} MiB`)}
-    ${row('sys',           `${Math.round((mem.Sys || 0) / 1024 / 1024)} MiB`)}
-    ${row('gc count',      mem.NumGC || 0)}
-    ${row('goroutines',    info['cmd.goroutines'] || '—')}
+    <div class="card-head"><span class="card-name">store-${peer.id}</span><span class="tag live">live</span></div>
+    ${row('heap alloc',     bytes(mem.Alloc))}
+    ${row('heap sys',       bytes(mem.Sys))}
+    ${row('gc cycles',      mem.NumGC || 0)}
+    ${row('goroutines',     info['cmd.goroutines'] || '—')}
+    ${row('madvise ok',     info['NoKV.Mmap.Madvise'] || 0)}
+    ${row('prefetch done',  info['NoKV.Prefetch.Completed'] || 0)}
   `;
   return el;
 }
 
-function renderRedis(info, peer) {
+function renderGateway(info, peer) {
   const el = document.createElement('div');
   el.className = 'card';
   if (!info) {
-    el.classList.add('error');
-    el.innerHTML = `
-      <div class="card-header"><span class="card-name">nokv-redis</span><span class="tag error">unreachable</span></div>
-      <div class="row"><span class="label">status</span><span class="value bad">no response on :${peer.port}</span></div>`;
+    el.classList.add('dead');
+    el.innerHTML = `<div class="card-head"><span class="card-name">nokv-redis</span><span class="tag error">unreachable</span></div>${row('port', `:${peer.port}`)}`;
     return el;
   }
   const mem = info.memstats || {};
   el.innerHTML = `
-    <div class="card-header"><span class="card-name">nokv-redis</span><span class="tag follower">listening :6380</span></div>
-    ${row('alloc',      `${Math.round((mem.Alloc || 0) / 1024 / 1024)} MiB`)}
-    ${row('sys',        `${Math.round((mem.Sys || 0) / 1024 / 1024)} MiB`)}
-    ${row('madvise ok', info['NoKV.Mmap.Madvise'] || 0)}
-    ${row('prefetch done', info['NoKV.Prefetch.Completed'] || 0)}
+    <div class="card-head"><span class="card-name">nokv-redis</span><span class="tag live">listening :6380</span></div>
+    ${row('heap alloc',     bytes(mem.Alloc))}
+    ${row('heap sys',       bytes(mem.Sys))}
+    ${row('gc cycles',      mem.NumGC || 0)}
+    ${row('madvise ok',     info['NoKV.Mmap.Madvise'] || 0)}
+    ${row('prefetch done',  info['NoKV.Prefetch.Completed'] || 0)}
   `;
   return el;
 }
 
-async function tick() {
-  const statusEl = document.getElementById('status-text');
-  const tickEl = document.getElementById('tick');
+/* =========================================================
+ * Topology SVG
+ * ========================================================= */
+const TOPO_POS = {
+  meta:  [ {x:70,  y:60}, {x:70,  y:130}, {x:70,  y:200} ],
+  coord: [ {x:400, y:60}, {x:400, y:130}, {x:400, y:200} ],
+  store: [ {x:720, y:60}, {x:720, y:130}, {x:720, y:200} ],
+};
+
+function renderTopology(state) {
+  const nodesG = document.getElementById('nodes');
+  const linksG = document.getElementById('links');
+  nodesG.innerHTML = '';
+  linksG.innerHTML = '';
+
+  // Identify leaders / holders
+  const metaLeader  = state.meta.findIndex(m => m && m.nokv_meta_root && m.nokv_meta_root.is_leader);
+  const coordHolder = state.coord.findIndex(c => {
+    const l = c && c.nokv_coordinator && c.nokv_coordinator.state && c.nokv_coordinator.state.lease;
+    return l && l.held_by_self && l.active;
+  });
+
+  // Links: every coord ↔ every meta (control → truth)
+  // Plus the active holder sends pulsing flow to the raft leader
+  state.coord.forEach((c, ci) => {
+    state.meta.forEach((m, mi) => {
+      const from = TOPO_POS.coord[ci];
+      const to   = TOPO_POS.meta[mi];
+      const isActiveLink = (ci === coordHolder) && (mi === metaLeader) && c !== null && m !== null;
+      linksG.insertAdjacentHTML('beforeend',
+        `<line class="topo-link control-flow ${isActiveLink ? 'active' : ''}"
+               x1="${to.x+24}" y1="${to.y}" x2="${from.x-24}" y2="${from.y}"/>`);
+    });
+  });
+
+  // Links: coord holder → stores (exec plane)
+  state.store.forEach((s, si) => {
+    const from = TOPO_POS.coord[coordHolder >= 0 ? coordHolder : 0];
+    const to   = TOPO_POS.store[si];
+    const active = (coordHolder >= 0) && s !== null;
+    linksG.insertAdjacentHTML('beforeend',
+      `<line class="topo-link exec-flow ${active ? 'active' : ''}"
+             x1="${from.x+24}" y1="${from.y}" x2="${to.x-24}" y2="${to.y}"/>`);
+  });
+
+  // Gateway → coord holder
+  if (coordHolder >= 0) {
+    const from = {x:100, y:225};
+    const to = TOPO_POS.coord[coordHolder];
+    linksG.insertAdjacentHTML('beforeend',
+      `<path class="topo-link control-flow active"
+             d="M ${from.x} ${from.y} C ${from.x} ${from.y-40}, ${to.x} ${to.y+40}, ${to.x} ${to.y+24}"/>`);
+  }
+
+  // Nodes
+  const addNode = (pos, label, sublabel, klass) => {
+    nodesG.insertAdjacentHTML('beforeend',
+      `<g class="topo-node ${klass}">
+         <circle cx="${pos.x}" cy="${pos.y}" r="24"/>
+         <text class="label" x="${pos.x}" y="${pos.y-1}">${label}</text>
+         <text class="tag"   x="${pos.x}" y="${pos.y+36}">${sublabel}</text>
+       </g>`);
+  };
+
+  state.meta.forEach((m, i) => {
+    const pos = TOPO_POS.meta[i];
+    if (!m) return addNode(pos, `mr-${i+1}`, 'down', 'dead');
+    const isLeader = m.nokv_meta_root.is_leader;
+    const sub = isLeader ? 'leader' : `idx ${m.nokv_meta_root.last_committed?.index || 0}`;
+    addNode(pos, `mr-${i+1}`, sub, isLeader ? 'leader' : '');
+  });
+  state.coord.forEach((c, i) => {
+    const pos = TOPO_POS.coord[i];
+    if (!c) return addNode(pos, `co-${i+1}`, 'down', 'dead');
+    const l = c.nokv_coordinator?.state?.lease;
+    const isHolder = l && l.held_by_self && l.active;
+    const sub = isHolder ? `holder gen=${l.cert_generation}` : 'standby';
+    addNode(pos, `co-${i+1}`, sub, isHolder ? 'holder' : '');
+  });
+  state.store.forEach((s, i) => {
+    const pos = TOPO_POS.store[i];
+    if (!s) return addNode(pos, `st-${i+1}`, 'down', 'dead');
+    addNode(pos, `st-${i+1}`, 'live', '');
+  });
+}
+
+/* =========================================================
+ * Event timeline (inferred from expvar diffs)
+ * ========================================================= */
+const events = []; // most recent at end
+let lastSnap = null;
+
+function pushEvent(kind, body) {
+  const now = new Date();
+  events.push({ts: now.toLocaleTimeString(), kind, body});
+  if (events.length > 200) events.shift();
+  renderEvents();
+}
+
+function renderEvents() {
+  const el = document.getElementById('event-list');
+  if (!events.length) {
+    el.innerHTML = `<div class="empty">listening…</div>`;
+    return;
+  }
+  el.innerHTML = events.slice().reverse().map(e =>
+    `<div class="entry"><span class="ts">${e.ts}</span><span class="kind ${e.kind}">${e.kind}</span><span class="body">${e.body}</span></div>`
+  ).join('');
+}
+
+function diffForEvents(prev, curr) {
+  if (!prev) return;
+
+  // raft leader change
+  const prevL = prev.meta.findIndex(m => m?.nokv_meta_root?.is_leader);
+  const currL = curr.meta.findIndex(m => m?.nokv_meta_root?.is_leader);
+  if (prevL !== currL && currL >= 0) {
+    pushEvent('raft', `meta-root raft leader → meta-root-${currL+1}`);
+  } else if (prevL !== currL && currL < 0) {
+    pushEvent('raft', 'meta-root has no leader (election in progress)');
+  }
+
+  // Lease handoff / generation bump
+  const prevLease = prev.coord.map(c => c?.nokv_coordinator?.state?.lease || {});
+  const currLease = curr.coord.map(c => c?.nokv_coordinator?.state?.lease || {});
+  const prevHolder = prevLease[0]?.holder_id;
+  const currHolder = currLease[0]?.holder_id;
+  if (prevHolder !== currHolder && currHolder) {
+    pushEvent('lease', `CCC lease holder → ${currHolder}`);
+  }
+  currLease.forEach((l, i) => {
+    const p = prevLease[i] || {};
+    if (l.cert_generation && p.cert_generation && l.cert_generation !== p.cert_generation) {
+      pushEvent('lease', `gen ${p.cert_generation}→${l.cert_generation} observed at coord-${i+1}`);
+    }
+  });
+
+  // descriptor_count change → region creation/tombstone
+  const prevDesc = prev.meta[Math.max(prevL,0)]?.nokv_meta_root?.descriptor_count;
+  const currDesc = curr.meta[Math.max(currL,0)]?.nokv_meta_root?.descriptor_count;
+  if (prevDesc != null && currDesc != null && prevDesc !== currDesc) {
+    pushEvent('region', `descriptor_count ${prevDesc} → ${currDesc}`);
+  }
+
+  // committed idx jumps
+  const prevIdx = prev.meta[Math.max(prevL,0)]?.nokv_meta_root?.last_committed?.index || 0;
+  const currIdx = curr.meta[Math.max(currL,0)]?.nokv_meta_root?.last_committed?.index || 0;
+  const jump = currIdx - prevIdx;
+  if (jump >= 5) {
+    pushEvent('raft', `meta-root committed +${jump} entries (idx ${prevIdx}→${currIdx})`);
+  }
+
+  // Node flaps
+  ['meta','coord','store'].forEach(kind => {
+    curr[kind].forEach((x, i) => {
+      const was = !!prev[kind][i];
+      const is  = !!x;
+      if (was && !is) pushEvent('node', `${kind}-${i+1} went unreachable`);
+      if (!was && is) pushEvent('node', `${kind}-${i+1} came back`);
+    });
+  });
+}
+
+/* =========================================================
+ * Failure-drill buttons
+ * ========================================================= */
+function renderDrills(state) {
+  const drills = document.getElementById('drills');
+  const buttons = [];
+  // For each coord: offer stop/start depending on current reach state
+  state.coord.forEach((c, i) => {
+    const container = `nokv-coordinator-${i+1}`;
+    const reachable = !!c;
+    buttons.push(`<button class="drill-btn ${reachable ? 'stop' : 'start'}"
+                          data-action="${reachable ? 'stop' : 'start'}"
+                          data-container="${container}">
+                  ${reachable ? 'stop' : 'start'} coord-${i+1}</button>`);
+  });
+  state.meta.forEach((m, i) => {
+    const container = `nokv-meta-root-${i+1}`;
+    const reachable = !!m;
+    buttons.push(`<button class="drill-btn ${reachable ? 'stop' : 'start'}"
+                          data-action="${reachable ? 'stop' : 'start'}"
+                          data-container="${container}">
+                  ${reachable ? 'stop' : 'start'} meta-root-${i+1}</button>`);
+  });
+  drills.innerHTML = buttons.join('');
+  drills.querySelectorAll('.drill-btn').forEach(b => {
+    b.addEventListener('click', () => runDrill(b.dataset.action, b.dataset.container, b));
+  });
+}
+
+async function runDrill(action, container, btn) {
+  btn.disabled = true;
+  btn.textContent = `${action}ing…`;
   try {
-    const [metaR, coordR, storeR, redisR] = await Promise.all([
-      Promise.all(targets.meta.map(p => fetchJSON(p.port))),
-      Promise.all(targets.coord.map(p => fetchJSON(p.port))),
-      Promise.all(targets.store.map(p => fetchJSON(p.port))),
-      Promise.all(targets.redis.map(p => fetchJSON(p.port))),
-    ]);
-
-    const replaceGrid = (id, peers, results, renderer) => {
-      const grid = document.getElementById(id);
-      grid.innerHTML = '';
-      peers.forEach((p, idx) => grid.appendChild(renderer(results[idx], p)));
-    };
-    replaceGrid('meta-grid',   targets.meta,  metaR,  renderMeta);
-    replaceGrid('coord-grid',  targets.coord, coordR, renderCoord);
-    replaceGrid('store-grid',  targets.store, storeR, renderStore);
-    replaceGrid('gateway-grid',targets.redis, redisR, renderRedis);
-
-    const unreached = [...metaR, ...coordR, ...storeR, ...redisR].filter(x => x === null).length;
-    if (unreached === 0) {
-      tickEl.className = 'tick';
-      statusEl.textContent = `all 10 services reachable · updated ${new Date().toLocaleTimeString()}`;
-    } else if (unreached < 4) {
-      tickEl.className = 'tick stale';
-      statusEl.textContent = `${10 - unreached}/10 reachable · ${new Date().toLocaleTimeString()}`;
+    const r = await fetch(`/api/docker/${action}/${container}`, {method: 'POST'});
+    const data = await r.json();
+    if (data.returncode === 0) {
+      pushEvent('node', `docker ${action} ${container} → ok`);
     } else {
-      tickEl.className = 'tick dead';
-      statusEl.textContent = `${10 - unreached}/10 reachable — cluster looks down · ${new Date().toLocaleTimeString()}`;
+      pushEvent('node', `docker ${action} ${container} → rc=${data.returncode}: ${(data.stderr||data.error||'').trim()}`);
     }
   } catch (e) {
-    tickEl.className = 'tick dead';
-    statusEl.textContent = 'poll error: ' + e.message;
+    pushEvent('node', `docker ${action} ${container} → network error: ${e.message}`);
   }
+  // UI refresh comes via the polling loop
+}
+
+/* =========================================================
+ * Redis terminal
+ * ========================================================= */
+const termOut = document.getElementById('term-out');
+const termInput = document.getElementById('term-input');
+const termSubmit = document.getElementById('term-submit');
+const redisStatus = document.getElementById('redis-status');
+
+function termLine(cls, text) {
+  const div = document.createElement('div');
+  div.className = `line ${cls}`;
+  div.textContent = text;
+  termOut.appendChild(div);
+  termOut.scrollTop = termOut.scrollHeight;
+}
+
+async function runRedis() {
+  const cmd = termInput.value.trim();
+  if (!cmd) return;
+  termLine('prompt', `> ${cmd}`);
+  termInput.value = '';
+  redisStatus.textContent = 'running…';
+  try {
+    const r = await fetch('/api/redis', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({cmd}),
+    });
+    const data = await r.json();
+    if (data.error) {
+      termLine('stderr', `proxy error: ${data.error}`);
+    } else {
+      if (data.stdout) termLine('stdout', data.stdout.replace(/\n$/, ''));
+      if (data.stderr) termLine('stderr', data.stderr.replace(/\n$/, ''));
+      if (data.returncode !== 0 && !data.stdout && !data.stderr) {
+        termLine('meta', `rc=${data.returncode}`);
+      }
+      pushEvent('redis', `cli ${cmd}  →  ${(data.stdout||'').trim().slice(0,60) || 'ok'}`);
+    }
+  } catch (e) {
+    termLine('stderr', `network error: ${e.message}`);
+  }
+  redisStatus.textContent = 'idle';
+  termInput.focus();
+}
+
+termSubmit.addEventListener('click', runRedis);
+termInput.addEventListener('keydown', e => { if (e.key === 'Enter') runRedis(); });
+// seed help
+termLine('meta', 'NoKV gateway terminal. Examples:  PING  ·  SET demo hello  ·  GET demo  ·  MGET a b  ·  DBSIZE');
+
+/* =========================================================
+ * Main poll loop
+ * ========================================================= */
+async function tick() {
+  const [meta, coord, store, gateway] = await Promise.all([
+    Promise.all(TARGETS.meta.map(p => fetchJSON(p.port))),
+    Promise.all(TARGETS.coord.map(p => fetchJSON(p.port))),
+    Promise.all(TARGETS.store.map(p => fetchJSON(p.port))),
+    Promise.all(TARGETS.gateway.map(p => fetchJSON(p.port))),
+  ]);
+  const state = {meta, coord, store, gateway};
+
+  // cards
+  const fill = (id, peers, results, renderer) => {
+    const el = document.getElementById(id);
+    el.innerHTML = '';
+    peers.forEach((p, i) => el.appendChild(renderer(results[i], p)));
+  };
+  fill('meta-grid',    TARGETS.meta,    meta,    renderMeta);
+  fill('coord-grid',   TARGETS.coord,   coord,   renderCoord);
+  fill('store-grid',   TARGETS.store,   store,   renderStore);
+  fill('gateway-grid', TARGETS.gateway, gateway, renderGateway);
+
+  renderTopology(state);
+  renderDrills(state);
+
+  // status pill
+  const all   = [...meta, ...coord, ...store, ...gateway];
+  const alive = all.filter(Boolean).length;
+  const dot = document.getElementById('status-dot');
+  const txt = document.getElementById('status-text');
+  if (alive === all.length) {
+    dot.className = 'dot';
+    txt.textContent = `${alive}/${all.length} reachable · ${new Date().toLocaleTimeString()}`;
+  } else if (alive >= all.length - 2) {
+    dot.className = 'dot warn';
+    txt.textContent = `${alive}/${all.length} reachable`;
+  } else {
+    dot.className = 'dot bad';
+    txt.textContent = `${alive}/${all.length} reachable — cluster degraded`;
+  }
+
+  // events
+  diffForEvents(lastSnap, state);
+  lastSnap = state;
 }
 
 tick();
