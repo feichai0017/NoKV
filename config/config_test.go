@@ -273,6 +273,96 @@ func TestResolveStoreWorkDir(t *testing.T) {
 	}
 }
 
+func TestMetaRootValidationAndHelpers(t *testing.T) {
+	cfg := &File{
+		MetaRoot: &MetaRoot{
+			Peers: []MetaRootPeer{
+				{
+					NodeID:              2,
+					Addr:                "127.0.0.1:2381",
+					DockerAddr:          "nokv-meta-root-2:2380",
+					TransportAddr:       "127.0.0.1:2481",
+					DockerTransportAddr: "nokv-meta-root-2:2480",
+					WorkDir:             "/tmp/root2",
+					DockerWorkDir:       "/data/root2",
+				},
+				{
+					NodeID:              1,
+					Addr:                "127.0.0.1:2380",
+					DockerAddr:          "nokv-meta-root-1:2380",
+					TransportAddr:       "127.0.0.1:2480",
+					DockerTransportAddr: "nokv-meta-root-1:2480",
+					WorkDir:             "/tmp/root1",
+					DockerWorkDir:       "/data/root1",
+				},
+				{
+					NodeID:              3,
+					Addr:                "127.0.0.1:2382",
+					DockerAddr:          "nokv-meta-root-3:2380",
+					TransportAddr:       "127.0.0.1:2482",
+					DockerTransportAddr: "nokv-meta-root-3:2480",
+					WorkDir:             "/tmp/root3",
+					DockerWorkDir:       "/data/root3",
+				},
+			},
+		},
+		Stores: []Store{{StoreID: 1, Addr: "x"}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("validate meta root: %v", err)
+	}
+
+	peers := cfg.MetaRootPeers()
+	if len(peers) != 3 || peers[0].NodeID != 1 || peers[2].NodeID != 3 {
+		t.Fatalf("meta-root peers should be sorted by node id: %+v", peers)
+	}
+
+	peer := cfg.ResolveMetaRootPeer(2)
+	if peer == nil || peer.NodeID != 2 {
+		t.Fatalf("expected peer 2, got %+v", peer)
+	}
+	if got := cfg.ResolveMetaRootPeer(99); got != nil {
+		t.Fatalf("expected missing peer, got %+v", got)
+	}
+	if got := cfg.ResolveMetaRootTransportAddr(2, "docker"); got != "nokv-meta-root-2:2480" {
+		t.Fatalf("docker transport addr mismatch: %q", got)
+	}
+	if got := cfg.ResolveMetaRootTransportAddr(2, "host"); got != "127.0.0.1:2481" {
+		t.Fatalf("host transport addr mismatch: %q", got)
+	}
+	if got := cfg.ResolveMetaRootServiceAddr(1, "docker"); got != "nokv-meta-root-1:2380" {
+		t.Fatalf("docker service addr mismatch: %q", got)
+	}
+	if got := cfg.ResolveMetaRootWorkDir(3, "docker"); got != "/data/root3" {
+		t.Fatalf("docker work dir mismatch: %q", got)
+	}
+
+	transportPeers := cfg.MetaRootTransportPeers("docker")
+	if len(transportPeers) != 3 || transportPeers[1] != "nokv-meta-root-1:2480" {
+		t.Fatalf("unexpected transport peers: %+v", transportPeers)
+	}
+	servicePeers := cfg.MetaRootServicePeers("host")
+	if len(servicePeers) != 3 || servicePeers[3] != "127.0.0.1:2382" {
+		t.Fatalf("unexpected service peers: %+v", servicePeers)
+	}
+}
+
+func TestValidateMetaRootFailures(t *testing.T) {
+	cases := []File{
+		{MetaRoot: &MetaRoot{Peers: []MetaRootPeer{{NodeID: 1, Addr: "a", TransportAddr: "ta"}}}},
+		{MetaRoot: &MetaRoot{Peers: []MetaRootPeer{{NodeID: 1, Addr: "a", TransportAddr: "ta"}, {NodeID: 1, Addr: "b", TransportAddr: "tb"}, {NodeID: 3, Addr: "c", TransportAddr: "tc"}}}},
+		{MetaRoot: &MetaRoot{Peers: []MetaRootPeer{{NodeID: 0, Addr: "a", TransportAddr: "ta"}, {NodeID: 2, Addr: "b", TransportAddr: "tb"}, {NodeID: 3, Addr: "c", TransportAddr: "tc"}}}},
+		{MetaRoot: &MetaRoot{Peers: []MetaRootPeer{{NodeID: 1, TransportAddr: "ta"}, {NodeID: 2, Addr: "b", TransportAddr: "tb"}, {NodeID: 3, Addr: "c", TransportAddr: "tc"}}}},
+		{MetaRoot: &MetaRoot{Peers: []MetaRootPeer{{NodeID: 1, Addr: "a"}, {NodeID: 2, Addr: "b", TransportAddr: "tb"}, {NodeID: 3, Addr: "c", TransportAddr: "tc"}}}},
+	}
+	for _, cfg := range cases {
+		cfg.Stores = []Store{{StoreID: 1, Addr: "x"}}
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("expected meta-root validation failure for %+v", cfg.MetaRoot)
+		}
+	}
+}
+
 func TestResolveStoreWorkDirFallbackAndNil(t *testing.T) {
 	var nilCfg *File
 	if got := nilCfg.ResolveStoreWorkDir(1, "host"); got != "" {

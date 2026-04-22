@@ -2486,3 +2486,50 @@ func TestSendToWriteChReturnsBlockedWritesWhenClosedWhileThrottled(t *testing.T)
 		t.Fatal("throttled write did not return after db close")
 	}
 }
+
+func TestDBWrapperNilAndOpenGuards(t *testing.T) {
+	var nilDB *DB
+
+	require.Nil(t, nilDB.ExternalSSTOptions())
+	_, err := nilDB.ImportExternalSST([]string{"x.sst"})
+	require.ErrorContains(t, err, "snapshot bridge requires open db")
+	require.ErrorContains(t, nilDB.RollbackExternalSST([]uint64{1}), "snapshot bridge requires open db")
+	_, err = nilDB.ExportSnapshotDir(t.TempDir(), localmeta.RegionMeta{})
+	require.ErrorContains(t, err, "snapshot bridge requires open db")
+	_, err = nilDB.ImportSnapshotDir(t.TempDir())
+	require.ErrorContains(t, err, "snapshot bridge requires open db")
+	_, err = nilDB.ExportSnapshot(localmeta.RegionMeta{})
+	require.ErrorContains(t, err, "snapshot bridge requires open db")
+	_, err = nilDB.ExportSnapshotTo(bytes.NewBuffer(nil), localmeta.RegionMeta{})
+	require.ErrorContains(t, err, "snapshot bridge requires open db")
+	_, err = nilDB.ImportSnapshot([]byte("payload"))
+	require.ErrorContains(t, err, "snapshot bridge requires open db")
+	_, err = nilDB.ImportSnapshotFrom(bytes.NewReader(nil))
+	require.ErrorContains(t, err, "snapshot bridge requires open db")
+
+	require.Nil(t, nilDB.RaftLog())
+	require.ErrorContains(t, nilDB.SyncWAL(), "wal is unavailable")
+	require.ErrorContains(t, nilDB.ReplayWAL(nil), "wal is unavailable")
+
+	_, err = nilDB.MaterializeInternalEntry(nil)
+	require.EqualError(t, err, "db is nil")
+
+	clearDir()
+	db := openTestDB(t, opt)
+	defer func() { _ = db.Close() }()
+
+	require.NotNil(t, db.ExternalSSTOptions())
+	require.NotNil(t, db.RaftLog())
+	require.Nil(t, db.GetValueSeparationPolicyStats())
+
+	_, err = db.MaterializeInternalEntry(nil)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+
+	db.isClosed.Store(1)
+	require.Nil(t, db.ExternalSSTOptions())
+	_, err = db.ImportExternalSST([]string{"x.sst"})
+	require.ErrorContains(t, err, "snapshot bridge requires open db")
+	require.ErrorContains(t, db.RollbackExternalSST([]uint64{1}), "snapshot bridge requires open db")
+	_, err = db.ExportSnapshot(localmeta.RegionMeta{})
+	require.ErrorContains(t, err, "snapshot bridge requires open db")
+}
