@@ -67,6 +67,9 @@ services:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
       - meta-root-1-data:/var/lib/nokv-meta-root
     expose: ["2380", "2480", "9380"]
+    ports:
+      - "2380:2380"   # gRPC service (coord / ccc-audit from host dial here)
+      - "9380:9380"   # expvar dashboard
 
   meta-root-2:
     <<: *common
@@ -83,6 +86,9 @@ services:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
       - meta-root-2-data:/var/lib/nokv-meta-root
     expose: ["2380", "2480", "9380"]
+    ports:
+      - "2381:2380"
+      - "9381:9380"
 
   meta-root-3:
     <<: *common
@@ -99,6 +105,9 @@ services:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
       - meta-root-3-data:/var/lib/nokv-meta-root
     expose: ["2380", "2480", "9380"]
+    ports:
+      - "2382:2380"
+      - "9382:9380"
 
   # ============= CONTROL PLANE: 3× coordinator (CCC lease HA) =============
   coordinator-1:
@@ -115,6 +124,9 @@ services:
     volumes:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
     expose: ["2379", "9100"]
+    ports:
+      - "2379:2379"   # coordinator gRPC
+      - "9100:9100"   # expvar
     depends_on:
       meta-root-1: { condition: service_started }
       meta-root-2: { condition: service_started }
@@ -134,6 +146,9 @@ services:
     volumes:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
     expose: ["2379", "9100"]
+    ports:
+      - "2390:2379"
+      - "9101:9100"
     depends_on:
       meta-root-1: { condition: service_started }
       meta-root-2: { condition: service_started }
@@ -153,6 +168,9 @@ services:
     volumes:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
     expose: ["2379", "9100"]
+    ports:
+      - "2391:2379"
+      - "9102:9100"
     depends_on:
       meta-root-1: { condition: service_started }
       meta-root-2: { condition: service_started }
@@ -180,6 +198,8 @@ services:
       - store1-data:/var/lib/nokv/store
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
     expose: ["20160", "9200"]
+    ports:
+      - "9200:9200"   # expvar
     depends_on:
       bootstrap: { condition: service_completed_successfully }
       coordinator-1: { condition: service_started }
@@ -205,6 +225,8 @@ services:
       - store2-data:/var/lib/nokv/store
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
     expose: ["20160", "9200"]
+    ports:
+      - "9201:9200"
     depends_on:
       bootstrap: { condition: service_completed_successfully }
       coordinator-1: { condition: service_started }
@@ -230,6 +252,8 @@ services:
       - store3-data:/var/lib/nokv/store
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
     expose: ["20160", "9200"]
+    ports:
+      - "9202:9200"
     depends_on:
       bootstrap: { condition: service_completed_successfully }
       coordinator-1: { condition: service_started }
@@ -248,7 +272,8 @@ services:
     volumes:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
     ports:
-      - "6380:6380"
+      - "6380:6380"   # RESP gateway — redis-cli -p 6380
+      - "9300:9300"   # expvar
     expose: ["9300"]
     depends_on:
       store-1: { condition: service_started }
