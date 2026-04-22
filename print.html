@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-7818636c.js";
+            window.path_to_searchindex_js = "searchindex-6a6b2d85.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-15a84097.js"></script>
+        <script src="toc-87c44e77.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -5982,6 +5982,172 @@ exactly the property CCC.tla proves meta-root must preserve.</p>
 <li><a href="#coordinator">Coordinator</a> — the runtime consumer of the same audit
 library</li>
 <li><a href="../coordinator/audit"><code>coordinator/audit</code></a> — the library this CLI wraps</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="cluster-demo--live-dashboard"><a class="header" href="#cluster-demo--live-dashboard">Cluster Demo &amp; Live Dashboard</a></h1>
+<p>One-command demo of the full 333 HA topology (3 meta-root + 3 coordinator +
+3 store + 1 Redis gateway) with a live browser dashboard.</p>
+<h2 id="one-shot-startup"><a class="header" href="#one-shot-startup">One-shot startup</a></h2>
+<pre><code class="language-bash"># Build images + start every service + run bootstrap once
+docker compose up -d --build
+
+# Wait a few seconds, then verify
+redis-cli -p 6380 ping                    # → PONG
+redis-cli -p 6380 set demo hello
+redis-cli -p 6380 get demo                # → hello
+</code></pre>
+<p>That’s it. <code>docker compose down -v</code> wipes data volumes too.</p>
+<h2 id="exposed-ports-all-bound-to-127001"><a class="header" href="#exposed-ports-all-bound-to-127001">Exposed ports (all bound to 127.0.0.1)</a></h2>
+<p>Using symmetric port blocks so the three replicas of each role land on three
+consecutive numbers — easy to remember, easy to script against.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Service</th><th>Port</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td>Redis gateway</td><td><code>6380</code></td><td>RESP protocol — <code>redis-cli -p 6380 ...</code></td></tr>
+<tr><td>Redis expvar</td><td><code>9300</code></td><td><code>/debug/vars</code> JSON</td></tr>
+<tr><td>Meta-root-1 gRPC</td><td><code>2380</code></td><td><code>nokv ccc-audit --root-peer 1=127.0.0.1:2380 ...</code></td></tr>
+<tr><td>Meta-root-2 gRPC</td><td><code>2381</code></td><td></td></tr>
+<tr><td>Meta-root-3 gRPC</td><td><code>2382</code></td><td></td></tr>
+<tr><td>Meta-root-1 expvar</td><td><code>9380</code></td><td><code>/debug/vars</code> JSON</td></tr>
+<tr><td>Meta-root-2 expvar</td><td><code>9381</code></td><td></td></tr>
+<tr><td>Meta-root-3 expvar</td><td><code>9382</code></td><td></td></tr>
+<tr><td>Coordinator-1 gRPC</td><td><code>2390</code></td><td></td></tr>
+<tr><td>Coordinator-2 gRPC</td><td><code>2391</code></td><td></td></tr>
+<tr><td>Coordinator-3 gRPC</td><td><code>2392</code></td><td></td></tr>
+<tr><td>Coordinator-1 expvar</td><td><code>9100</code></td><td></td></tr>
+<tr><td>Coordinator-2 expvar</td><td><code>9101</code></td><td></td></tr>
+<tr><td>Coordinator-3 expvar</td><td><code>9102</code></td><td></td></tr>
+<tr><td>Store-1 expvar</td><td><code>9200</code></td><td></td></tr>
+<tr><td>Store-2 expvar</td><td><code>9201</code></td><td></td></tr>
+<tr><td>Store-3 expvar</td><td><code>9202</code></td><td></td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="why-are-meta-root-grpc-ports-exposed"><a class="header" href="#why-are-meta-root-grpc-ports-exposed">Why are meta-root gRPC ports exposed?</a></h3>
+<p>Meta-root (<code>2380/2381/2382</code>) is exposed so host-side tools like
+<code>nokv ccc-audit</code> and <code>nokv-config</code> can query rooted state directly for
+debugging. All <code>/debug/vars</code> endpoints also expose the meta-root’s state
+summary (leader, committed index, generation) for the dashboard.</p>
+<p><strong>For production, don’t expose meta-root publicly.</strong> The gRPC API accepts
+<code>ApplyCoordinatorLease</code> and <code>ApplyCoordinatorClosure</code> which are
+lease-gated but still structurally sensitive. To opt out, delete the
+<code>ports:</code> block under <code>meta-root-1</code>, <code>meta-root-2</code>, <code>meta-root-3</code> in
+<code>docker-compose.yml</code> — the dashboard loses the “Truth plane” cards (they
+become “unreachable”) but the cluster keeps working since coordinator and
+<code>nokv-redis</code> dial meta-root over the docker network, not through host
+ports.</p>
+<p>Same applies to coordinator gRPC (<code>2390/2391/2392</code>): convenient for
+host-side client experiments, don’t expose publicly.</p>
+<h3 id="live-audit-from-the-host"><a class="header" href="#live-audit-from-the-host">Live audit from the host</a></h3>
+<pre><code class="language-bash"># Project rooted state through the CCC audit vocabulary
+nokv ccc-audit \
+  --root-peer 1=127.0.0.1:2380 \
+  --root-peer 2=127.0.0.1:2381 \
+  --root-peer 3=127.0.0.1:2382
+</code></pre>
+<p>Or point any tool using <code>raft_config.example.json</code> at <code>--scope host</code>
+to pick up <code>127.0.0.1:2379,2390,2391</code> and <code>2380/2381/2382</code> from the
+config file automatically — no extra flags.</p>
+<h2 id="live-dashboard"><a class="header" href="#live-dashboard">Live dashboard</a></h2>
+<p>There is a single-page dashboard at <code>scripts/demo/dashboard.html</code> that polls
+every expvar endpoint (10 total) every 1.5 s and renders a live view of the
+three planes:</p>
+<ul>
+<li><strong>Truth plane</strong> — which meta-root is raft leader, committed index, allocator
+fences, descriptor / pending-change counts.</li>
+<li><strong>Control plane</strong> — which coordinator currently holds the CCC lease, lease
+generation, root lag, degraded mode, active vs standby tag on every coord.</li>
+<li><strong>Execution plane</strong> — stores heap usage, goroutine count.</li>
+<li><strong>Gateway</strong> — Redis expvar counters.</li>
+</ul>
+<h3 id="run-it"><a class="header" href="#run-it">Run it</a></h3>
+<pre><code class="language-bash">scripts/demo/serve-dashboard.sh    # → http://localhost:18080/dashboard.html
+</code></pre>
+<p>Under the hood this runs <code>scripts/demo/dashboard_server.py</code>, a small Python
+HTTP server with three routes:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Route</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>GET /dashboard.html</code></td><td>the static page</td></tr>
+<tr><td><code>POST /api/redis</code></td><td><code>{"cmd": "..."}</code> → runs <code>redis-cli -p 6380 &lt;cmd&gt;</code> and returns <code>{stdout, stderr, returncode}</code></td></tr>
+<tr><td><code>POST /api/docker/&lt;stop|start|restart&gt;/&lt;nokv-*&gt;</code></td><td>wraps <code>docker &lt;action&gt; &lt;container&gt;</code> for the failover buttons</td></tr>
+</tbody>
+</table>
+</div>
+<p>The expvar endpoints themselves now send <code>Access-Control-Allow-Origin: *</code>
+so the dashboard page can fetch them cross-origin without any proxying.</p>
+<p><strong>Security</strong>: bound to <code>127.0.0.1</code> only. <code>/api/redis</code> runs arbitrary Redis
+commands and <code>/api/docker</code> stops/starts containers whose name starts with
+<code>nokv-</code>. Do not expose this dashboard port publicly without an
+authenticated tunnel (Cloudflare Access, nginx + basic auth).</p>
+<h3 id="what-you-see-on-the-page"><a class="header" href="#what-you-see-on-the-page">What you see on the page</a></h3>
+<ul>
+<li><strong>Top:</strong> cluster-wide status pill (“10/10 reachable · HH:MM:SS”)</li>
+<li><strong>Topology diagram:</strong> 3 truth-plane meta-root peers ↔ 3 control-plane
+coordinators ↔ 3 execution-plane stores, with the raft leader highlighted
+in blue, the CCC lease holder in purple, and pulsing lines showing the
+active control-flow edge (lease holder → raft leader, holder → stores,
+gateway → holder).</li>
+<li><strong>Per-service cards:</strong> one card per service showing leader state, lease
+generation, committed index, allocator fences, heap stats.</li>
+<li><strong>Event timeline:</strong> auto-populated from expvar diffs — lease handoffs,
+raft elections, descriptor-count changes, node up/down transitions. Use
+this to watch the CCC lifecycle live.</li>
+<li><strong>Failure drills:</strong> one button per meta-root / coordinator container to
+stop or start it without leaving the browser.</li>
+<li><strong>Redis terminal:</strong> type commands like <code>SET demo "hello"</code>, <code>GET demo</code>,
+<code>MGET a b c</code>, <code>DBSIZE</code> and see the raw <code>redis-cli</code> output. Each command
+also lands in the event timeline.</li>
+</ul>
+<h3 id="healthy-cluster-invariants"><a class="header" href="#healthy-cluster-invariants">Healthy cluster invariants</a></h3>
+<ul>
+<li>exactly one meta-root card shows the blue <strong>raft leader</strong> badge</li>
+<li>exactly one coordinator card shows the purple <strong>lease holder</strong> badge and
+a <code>cert_generation</code> that stays stable unless you kill something</li>
+<li>topology diagram: one blue circle on the left column, one purple on
+the middle column</li>
+<li>event timeline scrolls slowly with committed-index bumps under load</li>
+</ul>
+<h3 id="failure-drills--interactive"><a class="header" href="#failure-drills--interactive">Failure drills — interactive</a></h3>
+<p>The dashboard’s <strong>Failure drills</strong> panel has buttons to stop/start each
+meta-root and coordinator container directly. Click one, watch:</p>
+<ul>
+<li><strong>Stop the active coordinator</strong> → lease held-by-self flag flips off at
+the killed peer, a different coord picks up the lease in 1–3 s, the
+purple ring in the topology diagram moves, and the event timeline logs
+the handoff.</li>
+<li><strong>Stop the raft leader meta-root</strong> → raft election visible as the blue
+ring disappears briefly and lands on a surviving peer; coord lease may
+churn through one generation before settling (~17 s total recovery).</li>
+<li><strong>Start the stopped container</strong> → it rejoins quietly as a standby.</li>
+</ul>
+<p>The same drills run from the terminal if you prefer: <code>docker stop nokv-coordinator-1</code>, <code>docker stop nokv-meta-root-1</code>, etc.</p>
+<h2 id="public-demo-via-cloudflare-tunnel"><a class="header" href="#public-demo-via-cloudflare-tunnel">Public demo via Cloudflare Tunnel</a></h2>
+<p>The tunnel config in <code>docker-compose.yml</code> (commented) points cloudflared at
+the redis port + expvar ports. To go live publicly:</p>
+<ol>
+<li><code>cloudflared tunnel create nokv-demo</code></li>
+<li><code>export CLOUDFLARE_TUNNEL_TOKEN=$(cloudflared tunnel token ...)</code></li>
+<li>Uncomment the <code>cloudflared</code> service block</li>
+<li><code>docker compose up -d cloudflared</code></li>
+</ol>
+<p>Remember: exposing raw <code>/debug/vars</code> leaks internal state. For public access
+put an nginx proxy in front that whitelists specific fields, or gate access
+behind Cloudflare Access.</p>
+<h2 id="related-docs"><a class="header" href="#related-docs">Related docs</a></h2>
+<ul>
+<li><a href="#configuration--options">docs/config.md</a> — <code>raft_config.example.json</code> schema (two-layer
+model: address directory vs bootstrap seed)</li>
+<li><a href="#ccc-audit">docs/ccc-audit.md</a> — the CCC audit tool behind the dashboard’s
+“closure witness” row</li>
+<li><a href="#coordinator">docs/coordinator.md</a> — CCC lease lifecycle</li>
+<li><a href="#rooted-truth--metaroot">docs/rooted_truth.md</a> — meta-root internals</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="scripts-overview"><a class="header" href="#scripts-overview">Scripts Overview</a></h1>
