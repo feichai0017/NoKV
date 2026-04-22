@@ -1,4 +1,4 @@
-# NoKV HA deployment: 3 meta-root + 1 coordinator + 3 stores + 1 Redis gateway.
+# NoKV HA deployment: 3 meta-root + 3 coordinators + 3 stores + 1 Redis gateway.
 # Every running service exposes a /debug/vars expvar endpoint for dashboards.
 #
 # Usage:
@@ -8,17 +8,16 @@
 #
 # Architecture:
 #   Truth plane:     3× meta-root  (replicated raft, quorum of 2 — tolerates 1 peer loss)
-#   Control plane:   1× coordinator (CCC lease-gated singleton; see note below)
+#   Control plane:   3× coordinator (CCC lease-gated singleton; one active holder, two standby)
 #   Execution plane: 3× store      (per-region raft, quorum of 2)
-#   Gateway:         1× nokv-redis (RESP-compatible)
+#   Gateway:         1× nokv-redis (RESP-compatible; multi-endpoint failover client-side)
 #
-# Single coordinator is intentional: NoKV's coordinator is designed to be HA
-# via CoordinatorLease, but today nokv-redis --coordinator-addr accepts only
-# one endpoint. Scaling coordinators > 1 makes writes bounce between
-# lease-held and lease-not-held coordinators. To run multiple coordinators
-# once the gateway supports multi-endpoint failover, duplicate the coordinator
-# block with distinct --coordinator-id values and pass all addresses to the
-# gateway.
+# Clients (stores, gateway) dial all three coordinators as a comma-separated
+# --coordinator-addr list. coordinator/client.GRPCClient parses that list,
+# keeps a preferred endpoint, and transparently fails over to another
+# coordinator on FailedPrecondition "coordinator lease not held" / "coordinator
+# not leader" errors. If the active CoordinatorLease holder dies, the next
+# write retries and lands on whichever standby has grabbed the lease.
 #
 # Every runtime binary (coordinator, store, redis, meta-root) exposes expvar
 # at /debug/vars via its own --metrics-addr flag; ports 9380-9382 belong to
@@ -126,6 +125,42 @@ services:
       meta-root-2: { condition: service_started }
       meta-root-3: { condition: service_started }
 
+  coordinator-2:
+    <<: *common
+    container_name: nokv-coordinator-2
+    entrypoint: ["/usr/local/bin/nokv"]
+    command:
+      - "coordinator"
+      - "--addr=0.0.0.0:2379"
+      - "--metrics-addr=0.0.0.0:9100"
+      - "--coordinator-id=coord-2"
+      - "--root-peer=1=nokv-meta-root-1:2380"
+      - "--root-peer=2=nokv-meta-root-2:2380"
+      - "--root-peer=3=nokv-meta-root-3:2380"
+    expose: ["2379", "9100"]
+    depends_on:
+      meta-root-1: { condition: service_started }
+      meta-root-2: { condition: service_started }
+      meta-root-3: { condition: service_started }
+
+  coordinator-3:
+    <<: *common
+    container_name: nokv-coordinator-3
+    entrypoint: ["/usr/local/bin/nokv"]
+    command:
+      - "coordinator"
+      - "--addr=0.0.0.0:2379"
+      - "--metrics-addr=0.0.0.0:9100"
+      - "--coordinator-id=coord-3"
+      - "--root-peer=1=nokv-meta-root-1:2380"
+      - "--root-peer=2=nokv-meta-root-2:2380"
+      - "--root-peer=3=nokv-meta-root-3:2380"
+    expose: ["2379", "9100"]
+    depends_on:
+      meta-root-1: { condition: service_started }
+      meta-root-2: { condition: service_started }
+      meta-root-3: { condition: service_started }
+
   # ============= EXECUTION PLANE: 3× store =============
   store-1:
     <<: *common
@@ -141,7 +176,7 @@ services:
       - "--scope"
       - "docker"
       - "--coordinator-addr"
-      - "nokv-coordinator-1:2379"
+      - "nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379"
       - "--extra"
       - "--metrics-addr=0.0.0.0:9200"
     volumes:
@@ -166,7 +201,7 @@ services:
       - "--scope"
       - "docker"
       - "--coordinator-addr"
-      - "nokv-coordinator-1:2379"
+      - "nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379"
       - "--extra"
       - "--metrics-addr=0.0.0.0:9200"
     volumes:
@@ -191,7 +226,7 @@ services:
       - "--scope"
       - "docker"
       - "--coordinator-addr"
-      - "nokv-coordinator-1:2379"
+      - "nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379"
       - "--extra"
       - "--metrics-addr=0.0.0.0:9200"
     volumes:
@@ -211,7 +246,7 @@ services:
       - "--addr=0.0.0.0:6380"
       - "--raft-config=/etc/nokv/raft_config.json"
       - "--addr-scope=docker"
-      - "--coordinator-addr=nokv-coordinator-1:2379"
+      - "--coordinator-addr=nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379"
       - "--metrics-addr=0.0.0.0:9300"
     volumes:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro

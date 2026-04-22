@@ -316,7 +316,7 @@ func retryableWrite(err error) bool {
 	if retryableRead(err) {
 		return true
 	}
-	return IsNotLeader(err)
+	return IsNotLeader(err) || IsLeaseNotHeld(err)
 }
 
 type witnessGenerationFloor struct {
