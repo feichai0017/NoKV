@@ -47,6 +47,27 @@ Example:
 nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
 ```
 
+### `nokv execution`
+
+- Queries execution-plane diagnostics from a running raftstore admin endpoint
+- Exposes:
+  - last admission decision observed by the store
+  - restart-status summary (`state`, hosted region count, raft-group count, missing raft pointers)
+  - current topology transition status as seen by the execution plane
+- Supports plain-text or `--json` output
+- Common flags:
+  - `--addr` raftstore admin address (required)
+  - `--region` optional region filter
+  - `--transition` optional transition id filter
+  - `--timeout`
+  - `--json`
+
+Example:
+
+```bash
+nokv execution --addr 127.0.0.1:20161 --json
+```
+
 ### `nokv manifest`
 
 - Reads manifest version state
