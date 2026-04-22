@@ -4,10 +4,28 @@ import (
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
 	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 )
+
+// replicaStateName renders a ReplicaState enum into a short human label
+// for expvar / dashboard consumers.
+func replicaStateName(s metaregion.ReplicaState) string {
+	switch s {
+	case metaregion.ReplicaStateNew:
+		return "new"
+	case metaregion.ReplicaStateRunning:
+		return "running"
+	case metaregion.ReplicaStateRemoving:
+		return "removing"
+	case metaregion.ReplicaStateTombstone:
+		return "tombstone"
+	default:
+		return "other"
+	}
+}
 
 // DiagnosticsSnapshot exposes a structured control-plane runtime snapshot for expvar
 // and diagnostics. It intentionally reports observable state only.
@@ -48,13 +66,39 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 	lastReloadErr := s.lastRootError
 	s.statusMu.RUnlock()
 
-	regions := 0
+	regionCount := 0
+	regionDetails := []map[string]any{}
 	if s.cluster != nil {
-		regions = len(s.cluster.RegionSnapshot())
+		snap := s.cluster.RegionSnapshot()
+		regionCount = len(snap)
+		regionDetails = make([]map[string]any, 0, len(snap))
+		for _, r := range snap {
+			peers := make([]map[string]any, 0, len(r.Descriptor.Peers))
+			for _, p := range r.Descriptor.Peers {
+				peers = append(peers, map[string]any{
+					"store_id": p.StoreID,
+					"peer_id":  p.PeerID,
+				})
+			}
+			regionDetails = append(regionDetails, map[string]any{
+				"region_id":            r.Descriptor.RegionID,
+				"start_key":            string(r.Descriptor.StartKey),
+				"end_key":              string(r.Descriptor.EndKey),
+				"epoch_ver":            r.Descriptor.Epoch.Version,
+				"conf_ver":             r.Descriptor.Epoch.ConfVersion,
+				"root_epoch":           r.Descriptor.RootEpoch,
+				"state":                replicaStateName(r.Descriptor.State),
+				"peers":                peers,
+				"last_hb_unix":         r.LastHeartbeat.UnixNano(),
+				"leader_store_id":      r.LeaderStoreID,
+				"leader_reported_unix": r.LeaderReportedAt.UnixNano(),
+			})
+		}
 	}
 
 	return map[string]any{
-		"regions": regions,
+		"regions":            regionCount,
+		"region_descriptors": regionDetails,
 		"allocator": map[string]any{
 			"id_current":      idCurrent,
 			"id_window_high":  idWindowHigh,

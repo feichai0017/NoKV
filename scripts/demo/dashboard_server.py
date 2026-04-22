@@ -134,7 +134,7 @@ class ThreadingServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 def main():
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 18080
     bind = sys.argv[2] if len(sys.argv) > 2 else "127.0.0.1"
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
     print(f"NoKV dashboard server listening on http://{bind}:{port}/dashboard.html", flush=True)

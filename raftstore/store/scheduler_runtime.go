@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"sync"
 	"syscall"
@@ -854,10 +855,12 @@ func (s *Store) storeStatsSnapshot() StoreStats {
 	if s == nil {
 		return StoreStats{}
 	}
+	leaderRegions := s.leaderRegionIDs()
 	stats := StoreStats{
-		StoreID:   s.storeID,
-		RegionNum: uint64(len(s.RegionMetas())),
-		LeaderNum: s.countLeaders(),
+		StoreID:         s.storeID,
+		RegionNum:       uint64(len(s.RegionMetas())),
+		LeaderNum:       uint64(len(leaderRegions)),
+		LeaderRegionIDs: leaderRegions,
 	}
 	if s.sched != nil {
 		s.sched.operation.mu.Lock()
@@ -947,17 +950,28 @@ func jitterDuration(base time.Duration, percent int64) time.Duration {
 	return jittered
 }
 
-func (s *Store) countLeaders() uint64 {
+// leaderRegionIDs returns the sorted list of region ids for which this
+// store's peer is the raft leader at call time. The store reports this in
+// StoreHeartbeat so the coordinator can populate its rooted region
+// directory with authoritative per-region leadership without needing a
+// separate RegionHeartbeat RPC per region.
+func (s *Store) leaderRegionIDs() []uint64 {
 	if s == nil {
-		return 0
+		return nil
 	}
-	var leaders uint64
+	var ids []uint64
 	s.VisitPeers(func(p *peer.Peer) {
-		if p.Status().RaftState == myraft.StateLeader {
-			leaders++
+		if p.Status().RaftState != myraft.StateLeader {
+			return
 		}
+		meta := p.RegionMeta()
+		if meta == nil {
+			return
+		}
+		ids = append(ids, meta.ID)
 	})
-	return leaders
+	slices.Sort(ids)
+	return ids
 }
 
 func (s *Store) diskStats() (uint64, uint64, bool) {

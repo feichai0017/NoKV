@@ -37,6 +37,11 @@ func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbea
 		}
 		return nil, status.Error(codes.Internal, err.Error())
 	}
+	// Record which regions this store claims raft leadership of. If the
+	// store previously claimed leaders it no longer owns (e.g. raft
+	// transferred leadership), clear the stale claims so another store's
+	// subsequent report wins.
+	s.cluster.RecordRegionLeaders(req.GetStoreId(), req.GetLeaderRegionIds())
 	operations := s.leaseScopedStoreOperations(ctx, req.GetStoreId())
 	return &coordpb.StoreHeartbeatResponse{
 		Accepted:   true,
