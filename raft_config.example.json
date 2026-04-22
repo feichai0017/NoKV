@@ -1,8 +1,39 @@
 {
   "max_retries": 5,
+  "meta_root": {
+    "peers": [
+      {
+        "node_id": 1,
+        "addr": "127.0.0.1:2380",
+        "docker_addr": "nokv-meta-root-1:2380",
+        "transport_addr": "127.0.0.1:3380",
+        "docker_transport_addr": "nokv-meta-root-1:2480",
+        "work_dir": "./artifacts/cluster/meta-root-1",
+        "docker_work_dir": "/var/lib/nokv-meta-root"
+      },
+      {
+        "node_id": 2,
+        "addr": "127.0.0.1:2381",
+        "docker_addr": "nokv-meta-root-2:2380",
+        "transport_addr": "127.0.0.1:3381",
+        "docker_transport_addr": "nokv-meta-root-2:2480",
+        "work_dir": "./artifacts/cluster/meta-root-2",
+        "docker_work_dir": "/var/lib/nokv-meta-root"
+      },
+      {
+        "node_id": 3,
+        "addr": "127.0.0.1:2382",
+        "docker_addr": "nokv-meta-root-3:2380",
+        "transport_addr": "127.0.0.1:3382",
+        "docker_transport_addr": "nokv-meta-root-3:2480",
+        "work_dir": "./artifacts/cluster/meta-root-3",
+        "docker_work_dir": "/var/lib/nokv-meta-root"
+      }
+    ]
+  },
   "coordinator": {
     "addr": "127.0.0.1:2379",
-    "docker_addr": "nokv-coordinator-1:2379"
+    "docker_addr": "nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379"
   },
   "store_work_dir_template": "./artifacts/cluster/store-{id}",
   "store_docker_work_dir_template": "/var/lib/nokv/store-{id}",

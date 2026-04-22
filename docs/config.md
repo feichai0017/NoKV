@@ -118,73 +118,118 @@ Notes:
 
 ## 2. Raft Topology File
 
-`raft_config.example.json` is the single source of truth for distributed
-topology. It is consumed by scripts, `cmd/nokv-redis`, and the `config` package.
+`raft_config.example.json` is consumed by every CLI in distributed mode plus
+`cmd/nokv-redis`.
 
-Precedence rule: when a value can be provided by both CLI flags and config
-file, CLI flags take precedence; config acts as startup defaults.
+### Two-layer semantics
 
-Minimal shape:
+The file has **two independent layers** with different lifecycles. Confusing
+them is a common deployment mistake, so be explicit:
+
+| Layer | Keys | Lifecycle | Source of truth |
+|---|---|---|---|
+| **Address directory** | `meta_root.peers`, `coordinator`, `stores`, `store_work_dir_template`, `max_retries` | Read on **every** CLI invocation. Keep in sync with deployed containers/hosts. | **This file is the source of truth.** Nothing else knows where to dial. |
+| **Bootstrap seed** | `regions` | Read **only** on first startup by `scripts/ops/bootstrap.sh`. Once a store has `CURRENT`, bootstrap skips it. | After first bootstrap, **meta-root** owns the runtime region topology. Inspect with `nokv-config regions` or `nokv ccc-audit`. |
+
+Consequence: editing `regions` after bootstrap is a no-op for running
+clusters. Editing addresses is effective on the next CLI invocation
+(restart / docker compose up).
+
+### Precedence
+
+When a value can come from both CLI and config file, **CLI wins**. Config is
+a source of defaults:
+
+```
+--root-peer=1=host:2380   → explicit, used
+(absent)                  → fall back to meta_root.peers[0].addr
+```
+
+### Minimal shape
 
 ```jsonc
 {
   "max_retries": 8,
+  "meta_root": {
+    "peers": [
+      { "node_id": 1,
+        "addr": "127.0.0.1:2380",         // coordinator/ccc-audit dial here
+        "docker_addr": "nokv-meta-root-1:2380",
+        "transport_addr": "127.0.0.1:3380", // sibling meta-root peers dial here for raft
+        "docker_transport_addr": "nokv-meta-root-1:2480",
+        "work_dir": "./artifacts/cluster/meta-root-1",
+        "docker_work_dir": "/var/lib/nokv-meta-root" },
+      { "node_id": 2, "...": "..." },
+      { "node_id": 3, "...": "..." }
+    ]
+  },
   "coordinator": {
     "addr": "127.0.0.1:2379",
-    "docker_addr": "nokv-coordinator:2379",
-    "work_dir": "./artifacts/cluster/coordinator",
-    "docker_work_dir": "/var/lib/nokv-coordinator"
+    "docker_addr": "nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379"
   },
   "store_work_dir_template": "./artifacts/cluster/store-{id}",
   "store_docker_work_dir_template": "/var/lib/nokv/store-{id}",
   "stores": [
-    {
-      "store_id": 1,
+    { "store_id": 1,
       "listen_addr": "127.0.0.1:20170",
       "addr": "127.0.0.1:20170",
-      "work_dir": "./artifacts/cluster/store-1",
-      "docker_work_dir": "/var/lib/nokv/store-1"
-    }
+      "docker_listen_addr": "0.0.0.0:20160",
+      "docker_addr": "nokv-store-1:20160" }
   ],
   "regions": [
-    {
-      "id": 1,
-      "start_key": "-",
-      "end_key": "-",
+    { "id": 1, "start_key": "", "end_key": "m",
       "epoch": { "version": 1, "conf_version": 1 },
       "peers": [{ "store_id": 1, "peer_id": 101 }],
-      "leader_store_id": 1
-    }
+      "leader_store_id": 1 }
   ]
 }
 ```
 
-Notes:
-- `start_key` / `end_key` accept plain strings, `hex:<bytes>`, or base64. Use
-  `"-"` or empty for unbounded ranges.
-- `stores` define both host and docker addresses for local runs vs containers.
-- Store workdir can be configured per store (`stores[i].work_dir` / `docker_work_dir`)
-  or via global templates (`store_work_dir_template` /
-  `store_docker_work_dir_template`, both must include `{id}`).
-- `coordinator.addr` is the default Coordinator endpoint for host scope; `coordinator.docker_addr` is used
-  when tools run in docker scope.
-- `coordinator.work_dir` / `coordinator.docker_work_dir` are optional Coordinator persistence directories
-  used by bootstrap tooling and `nokv coordinator --config ...` when `--workdir` is not
-  set explicitly.
-- Store workdir resolution order (`ResolveStoreWorkDir`):
-  1. store-scoped override
-  2. global template
-  3. empty (caller falls back to its own default)
-- `leader_store_id` is optional bootstrap metadata. Runtime routing in cluster
-  mode is resolved through Coordinator (`GetRegionByKey`), not static leader hints.
+### Field notes
+
+- **`meta_root.peers`**: exactly 3 entries. `addr` is the gRPC service port
+  (coordinators/ccc-audit dial it). `transport_addr` is the raft transport
+  port (sibling meta-root peers dial it for raft messages). They MUST be
+  different ports on the same host.
+- **`coordinator.addr` / `docker_addr`**: may be a single endpoint or
+  comma-separated for multi-coord HA (`coord1:2379,coord2:2379,coord3:2379`).
+  Gateways and stores use this list to failover on lease-not-held errors.
+- **`stores[i]`**: `addr` is what other processes dial; `listen_addr` is what
+  the store binds locally. Usually the same on host scope; different on
+  docker scope (`0.0.0.0:20160` vs `nokv-store-1:20160`).
+- **Store workdir resolution** (`ResolveStoreWorkDir`):
+  1. store-scoped override (`stores[i].work_dir` / `docker_work_dir`)
+  2. global template (must contain `{id}`)
+  3. empty — caller falls back to its own default
+- **`start_key` / `end_key`** accept plain strings, `hex:<bytes>`, or base64.
+  Empty or `"-"` means unbounded.
+- **`leader_store_id`** is bootstrap metadata only. Runtime routing comes
+  from coordinator (`GetRegionByKey`), never from this field.
+
+### CLI integration
+
+`nokv meta-root --config <file> --node-id N` resolves `--peer`,
+`--transport-addr`, `--workdir` from the meta_root section. Explicit flags
+still override.
+
+`nokv coordinator --config <file>` resolves `--addr` from `coordinator.addr`
+and `--root-peer` from `meta_root.peers`. This is how docker-compose keeps
+meta-root addresses in a single file.
 
 Programmatic loading:
 
 ```go
 cfg, _ := config.LoadFile("raft_config.example.json")
 if err := cfg.Validate(); err != nil { /* handle */ }
+peers := cfg.MetaRootServicePeers("docker") // id → gRPC addr
 ```
 
-Related tools:
+### Related tools
+
 - `scripts/dev/cluster.sh --config raft_config.example.json`
+- `scripts/ops/serve-meta-root.sh --config ... --node-id 1`
+- `scripts/ops/serve-coordinator.sh --config ... --coordinator-id c1`
 - `go run ./cmd/nokv-redis --raft-config raft_config.example.json`
+- `nokv-config stores` / `nokv-config regions` — query current rooted
+  topology (not the JSON). Use these to diff against the deployment manifest
+  after scheduler operations.

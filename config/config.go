@@ -13,13 +13,48 @@ const (
 )
 
 // File models the raft topology configuration shared by CLIs and gateways.
+//
+// The file has two kinds of content, with different lifecycles:
+//
+//   - Address/topology layer (MetaRoot, Coordinator, Stores): live address
+//     directory consumed at every CLI invocation. Keep this in sync with what
+//     you have actually deployed; otherwise coordinators and gateways cannot
+//     dial.
+//   - Bootstrap-only layer (Regions): consumed by `scripts/ops/bootstrap.sh`
+//     on first startup to seed fresh store workdirs. Once a store has a
+//     `CURRENT` manifest, bootstrap skips it and the `Regions` section is
+//     ignored. Runtime topology (splits, merges, peer changes) lives in
+//     meta-root, not here; use `nokv-config regions` or ccc-audit to inspect
+//     current state.
 type File struct {
 	MaxRetries                 int          `json:"max_retries"`
+	MetaRoot                   *MetaRoot    `json:"meta_root,omitempty"`
 	Coordinator                *Coordinator `json:"coordinator,omitempty"`
 	StoreWorkDirTemplate       string       `json:"store_work_dir_template,omitempty"`
 	StoreDockerWorkDirTemplate string       `json:"store_docker_work_dir_template,omitempty"`
 	Stores                     []Store      `json:"stores"`
 	Regions                    []Region     `json:"regions"`
+}
+
+// MetaRoot describes the 3-peer replicated meta-root cluster. NoKV only
+// supports the replicated topology, so the peer count is fixed at 3 at
+// validation time.
+type MetaRoot struct {
+	Peers []MetaRootPeer `json:"peers"`
+}
+
+// MetaRootPeer binds one meta-root peer's identity to its gRPC service
+// address (dialed by coordinator and ccc-audit), raft transport address
+// (dialed by sibling meta-root peers), and on-disk workdir. Each field has
+// host / docker variants resolved by the --scope flag.
+type MetaRootPeer struct {
+	NodeID              uint64 `json:"node_id"`
+	Addr                string `json:"addr"`
+	DockerAddr          string `json:"docker_addr,omitempty"`
+	TransportAddr       string `json:"transport_addr"`
+	DockerTransportAddr string `json:"docker_transport_addr,omitempty"`
+	WorkDir             string `json:"work_dir,omitempty"`
+	DockerWorkDir       string `json:"docker_work_dir,omitempty"`
 }
 
 // Coordinator describes coordinator endpoints for host and docker scopes.
@@ -93,6 +128,9 @@ func (f *File) Validate() error {
 	if f == nil {
 		return fmt.Errorf("config: nil file")
 	}
+	if err := f.validateMetaRoot(); err != nil {
+		return err
+	}
 	if v := strings.TrimSpace(f.StoreWorkDirTemplate); v != "" && !strings.Contains(v, "{id}") {
 		return fmt.Errorf("config: store_work_dir_template must contain {id}")
 	}
@@ -128,6 +166,128 @@ func (f *File) Validate() error {
 		}
 	}
 	return nil
+}
+
+// validateMetaRoot ensures the meta_root section, if present, describes a
+// well-formed 3-peer replicated cluster. Callers that do not need meta-root
+// resolution (like standalone tools) can leave the section unset.
+func (f *File) validateMetaRoot() error {
+	if f == nil || f.MetaRoot == nil {
+		return nil
+	}
+	peers := f.MetaRoot.Peers
+	if len(peers) != 3 {
+		return fmt.Errorf("config: meta_root.peers must have exactly 3 entries, got %d", len(peers))
+	}
+	seen := make(map[uint64]struct{}, 3)
+	for _, p := range peers {
+		if p.NodeID == 0 {
+			return fmt.Errorf("config: meta_root peer node_id must be > 0")
+		}
+		if _, dup := seen[p.NodeID]; dup {
+			return fmt.Errorf("config: duplicate meta_root peer node_id %d", p.NodeID)
+		}
+		seen[p.NodeID] = struct{}{}
+		if strings.TrimSpace(p.Addr) == "" {
+			return fmt.Errorf("config: meta_root peer %d addr is required", p.NodeID)
+		}
+		if strings.TrimSpace(p.TransportAddr) == "" {
+			return fmt.Errorf("config: meta_root peer %d transport_addr is required", p.NodeID)
+		}
+	}
+	return nil
+}
+
+// MetaRootPeers returns the meta-root peers sorted by node_id. Empty if no
+// meta_root section is configured.
+func (f *File) MetaRootPeers() []MetaRootPeer {
+	if f == nil || f.MetaRoot == nil {
+		return nil
+	}
+	out := make([]MetaRootPeer, len(f.MetaRoot.Peers))
+	copy(out, f.MetaRoot.Peers)
+	// Sort by NodeID so callers get a stable order.
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j].NodeID < out[j-1].NodeID; j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out
+}
+
+// ResolveMetaRootPeer returns the configured peer for nodeID, or nil.
+func (f *File) ResolveMetaRootPeer(nodeID uint64) *MetaRootPeer {
+	if f == nil || f.MetaRoot == nil || nodeID == 0 {
+		return nil
+	}
+	for i := range f.MetaRoot.Peers {
+		if f.MetaRoot.Peers[i].NodeID == nodeID {
+			return &f.MetaRoot.Peers[i]
+		}
+	}
+	return nil
+}
+
+// ResolveMetaRootTransportAddr returns the raft transport address (the
+// address sibling meta-root peers dial for raft traffic) for nodeID and
+// scope.
+func (f *File) ResolveMetaRootTransportAddr(nodeID uint64, scope string) string {
+	peer := f.ResolveMetaRootPeer(nodeID)
+	if peer == nil {
+		return ""
+	}
+	return resolveScopedValue(peer.TransportAddr, peer.DockerTransportAddr, scope)
+}
+
+// ResolveMetaRootServiceAddr returns the gRPC service address (the address
+// coordinator and external tooling dial) for nodeID and scope.
+func (f *File) ResolveMetaRootServiceAddr(nodeID uint64, scope string) string {
+	peer := f.ResolveMetaRootPeer(nodeID)
+	if peer == nil {
+		return ""
+	}
+	return resolveScopedValue(peer.Addr, peer.DockerAddr, scope)
+}
+
+// ResolveMetaRootWorkDir returns the workdir path for a meta-root peer.
+func (f *File) ResolveMetaRootWorkDir(nodeID uint64, scope string) string {
+	peer := f.ResolveMetaRootPeer(nodeID)
+	if peer == nil {
+		return ""
+	}
+	return resolveScopedValue(peer.WorkDir, peer.DockerWorkDir, scope)
+}
+
+// MetaRootTransportPeers returns nodeID → transport address map for the
+// given scope. Used to fill the meta-root CLI's repeated --peer flag.
+func (f *File) MetaRootTransportPeers(scope string) map[uint64]string {
+	if f == nil || f.MetaRoot == nil {
+		return nil
+	}
+	out := make(map[uint64]string, len(f.MetaRoot.Peers))
+	for _, p := range f.MetaRoot.Peers {
+		addr := resolveScopedValue(p.TransportAddr, p.DockerTransportAddr, scope)
+		if addr != "" {
+			out[p.NodeID] = addr
+		}
+	}
+	return out
+}
+
+// MetaRootServicePeers returns nodeID → gRPC service address map for the
+// given scope. Used to fill the coordinator CLI's repeated --root-peer flag.
+func (f *File) MetaRootServicePeers(scope string) map[uint64]string {
+	if f == nil || f.MetaRoot == nil {
+		return nil
+	}
+	out := make(map[uint64]string, len(f.MetaRoot.Peers))
+	for _, p := range f.MetaRoot.Peers {
+		addr := resolveScopedValue(p.Addr, p.DockerAddr, scope)
+		if addr != "" {
+			out[p.NodeID] = addr
+		}
+	}
+	return out
 }
 
 // ResolveCoordinatorAddr resolves the coordinator endpoint for the provided scope.
