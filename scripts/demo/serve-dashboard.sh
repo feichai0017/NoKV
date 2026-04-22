@@ -19,6 +19,7 @@ Make sure the cluster is running first:
 
 Dashboard endpoints served by this process:
   GET  /dashboard.html                       static page
+  GET  /api/expvar/<port>                   localhost:<port>/debug/vars proxy
   POST /api/redis   { "cmd": "...", "port": 6380 }
   POST /api/docker/<stop|start|restart>/<nokv-*>
 

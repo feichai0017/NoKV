@@ -95,21 +95,25 @@ scripts/demo/serve-dashboard.sh    # → http://localhost:18080/dashboard.html
 ```
 
 Under the hood this runs `scripts/demo/dashboard_server.py`, a small Python
-HTTP server with three routes:
+HTTP server with four routes:
 
 | Route | Purpose |
 |---|---|
 | `GET /dashboard.html` | the static page |
+| `GET /api/expvar/<port>` | proxies `localhost:<port>/debug/vars` for the dashboard |
 | `POST /api/redis`    | `{"cmd": "..."}` → runs `redis-cli -p 6380 <cmd>` and returns `{stdout, stderr, returncode}` |
 | `POST /api/docker/<stop\|start\|restart>/<nokv-*>` | wraps `docker <action> <container>` for the failover buttons |
 
-The expvar endpoints themselves now send `Access-Control-Allow-Origin: *`
-so the dashboard page can fetch them cross-origin without any proxying.
+The dashboard now fetches **everything** through the dashboard server itself,
+so the browser only needs one origin: `http://localhost:18080` locally, or
+whatever authenticated tunnel / reverse-proxy hostname points at that local
+port.
 
 **Security**: bound to `127.0.0.1` only. `/api/redis` runs arbitrary Redis
-commands and `/api/docker` stops/starts containers whose name starts with
-`nokv-`. Do not expose this dashboard port publicly without an
-authenticated tunnel (Cloudflare Access, nginx + basic auth).
+commands, `/api/docker` stops/starts containers whose name starts with
+`nokv-`, and `/api/expvar` proxies local debug state. Do not expose this
+port publicly without an authenticated tunnel (Cloudflare Access, nginx +
+basic auth).
 
 ### What you see on the page
 
@@ -195,17 +199,24 @@ scripts/demo/recycle-demo.sh --interval 21600 --dashboard
 
 ## Public demo via Cloudflare Tunnel
 
-The tunnel config in `docker-compose.yml` (commented) points cloudflared at
-the redis port + expvar ports. To go live publicly:
+The clean deployment shape is:
+
+- keep Redis / expvar / gRPC bound to `127.0.0.1`
+- run the dashboard server on `127.0.0.1:18080`
+- point `cloudflared` at **only** `http://localhost:18080`
+
+Because the browser now talks only to the dashboard origin, you do **not**
+need to publish raw expvar ports to the outside world.
+
+To go live publicly:
 
 1. `cloudflared tunnel create nokv-demo`
 2. `export CLOUDFLARE_TUNNEL_TOKEN=$(cloudflared tunnel token ...)`
-3. Uncomment the `cloudflared` service block
+3. Configure ingress to `http://localhost:18080`
 4. `docker compose up -d cloudflared`
 
-Remember: exposing raw `/debug/vars` leaks internal state. For public access
-put an nginx proxy in front that whitelists specific fields, or gate access
-behind Cloudflare Access.
+Gate access behind Cloudflare Access (or equivalent auth) before sharing
+publicly.
 
 ## Related docs
 

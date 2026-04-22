@@ -406,22 +406,21 @@ const TARGETS = {
 };
 
 // The dashboard Python server is always at 127.0.0.1:18080. Hardcoding the
-// base here rather than using location.origin means the page works
-// identically whether you opened it from http://localhost:18080, file://,
-// or an IDE preview panel that rewrites the origin to something else.
-// CORS is permissive on the proxy + every expvar port, so cross-origin
-// fetches all go through.
-const API_BASE = 'http://127.0.0.1:18080';
-const EXPVAR_HOST = '127.0.0.1';
+// base to location.origin keeps the dashboard same-origin when served via
+// localhost, a reverse proxy, or cloudflared. Only file:// / IDE previews
+// fall back to the local development port.
+const API_BASE = (location.protocol === 'http:' || location.protocol === 'https:')
+  ? location.origin
+  : 'http://127.0.0.1:18080';
 
 /* =========================================================
- * Expvar fetch (with CORS now fixed server-side)
+ * Expvar fetch through the dashboard proxy
  * ========================================================= */
 async function fetchJSON(port) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 1200);
   try {
-    const r = await fetch(`http://${EXPVAR_HOST}:${port}/debug/vars`, {signal: ctl.signal});
+    const r = await fetch(`${API_BASE}/api/expvar/${port}`, {signal: ctl.signal});
     clearTimeout(t);
     if (!r.ok) return null;
     return await r.json();

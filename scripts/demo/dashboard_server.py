@@ -19,10 +19,14 @@ import shlex
 import socketserver
 import subprocess
 import sys
+import urllib.error
+import urllib.request
+from urllib.parse import urlparse
 
 
 REDIS_DEFAULT_PORT = "6380"
 ALLOWED_CONTAINER_PREFIX = "nokv-"
+ALLOWED_EXPVAR_PORTS = {9100, 9101, 9102, 9200, 9201, 9202, 9300, 9380, 9381, 9382}
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -36,12 +40,45 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_response(204)
         self.end_headers()
 
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/expvar/"):
+            return self._handle_expvar(parsed.path)
+        return super().do_GET()
+
     def do_POST(self):
-        if self.path == "/api/redis":
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/redis":
             return self._handle_redis()
-        if self.path.startswith("/api/docker/"):
-            return self._handle_docker()
-        self._send_json(404, {"error": "not found: " + self.path})
+        if parsed.path.startswith("/api/docker/"):
+            return self._handle_docker(parsed.path)
+        self._send_json(404, {"error": "not found: " + parsed.path})
+
+    def _handle_expvar(self, path):
+        parts = path.split("/")
+        if len(parts) != 4:
+            return self._send_json(400, {"error": "path is /api/expvar/<port>"})
+        try:
+            port = int(parts[3])
+        except ValueError:
+            return self._send_json(400, {"error": f"invalid port: {parts[3]}"})
+        if port not in ALLOWED_EXPVAR_PORTS:
+            return self._send_json(400, {"error": f"port {port} is not an allowed expvar target"})
+        target = f"http://127.0.0.1:{port}/debug/vars"
+        try:
+            with urllib.request.urlopen(target, timeout=1.5) as resp:
+                body = resp.read()
+                status = resp.status
+                content_type = resp.headers.get("Content-Type", "application/json")
+        except urllib.error.HTTPError as exc:
+            return self._send_json(exc.code, {"error": f"upstream HTTP {exc.code}", "target": target})
+        except urllib.error.URLError as exc:
+            return self._send_json(502, {"error": f"upstream unavailable: {exc.reason}", "target": target})
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _handle_redis(self):
         body = self._read_body()
@@ -77,11 +114,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             "argv": argv,
         })
 
-    def _handle_docker(self):
+    def _handle_docker(self, path):
         # path shapes:
         #   /api/docker/stop/nokv-coordinator-1
         #   /api/docker/start/nokv-meta-root-2
-        parts = self.path.split("/")
+        parts = path.split("/")
         if len(parts) != 5:
             return self._send_json(400, {"error": "path is /api/docker/<stop|start>/<container>"})
         action = parts[3]
@@ -144,6 +181,10 @@ def main():
     )
     print(
         "  /api/docker/<stop|start|restart>/<container>        → docker wrapper (nokv-* only)",
+        flush=True,
+    )
+    print(
+        "  /api/expvar/<port>                                  → localhost:<port>/debug/vars proxy",
         flush=True,
     )
     print("Press Ctrl-C to stop.\n", flush=True)

@@ -140,8 +140,12 @@ wait_for_gateway() {
 
 restart_dashboard() {
   log "restarting local dashboard on :$DASHBOARD_PORT"
-  run pkill -f "dashboard_server.py $DASHBOARD_PORT"
-  run pkill -f "serve-dashboard.sh $DASHBOARD_PORT"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    log "would stop any existing dashboard server on :$DASHBOARD_PORT"
+  else
+    pkill -f "dashboard_server.py $DASHBOARD_PORT" >/dev/null 2>&1 || true
+    pkill -f "serve-dashboard.sh $DASHBOARD_PORT" >/dev/null 2>&1 || true
+  fi
   if [[ "$DRY_RUN" == "1" ]]; then
     log "would start scripts/demo/dashboard_server.py $DASHBOARD_PORT"
     return 0
