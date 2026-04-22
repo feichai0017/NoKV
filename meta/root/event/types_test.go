@@ -99,6 +99,113 @@ func TestCoordinatorClosureReattachedEvent(t *testing.T) {
 	require.Equal(t, rootevent.CoordinatorClosureStageReattached, cloned.CoordinatorClosure.Stage)
 }
 
+func TestMembershipAndAllocatorConstructors(t *testing.T) {
+	joined := rootevent.StoreJoined(7, "store-7")
+	left := rootevent.StoreLeft(7, "store-7")
+	idFence := rootevent.IDAllocatorFenced(11)
+	tsoFence := rootevent.TSOAllocatorFenced(29)
+
+	require.Equal(t, rootevent.KindStoreJoined, joined.Kind)
+	require.Equal(t, uint64(7), joined.StoreMembership.StoreID)
+	require.Equal(t, "store-7", joined.StoreMembership.Address)
+
+	require.Equal(t, rootevent.KindStoreLeft, left.Kind)
+	require.Equal(t, uint64(7), left.StoreMembership.StoreID)
+	require.Equal(t, "store-7", left.StoreMembership.Address)
+
+	require.Equal(t, rootevent.KindIDAllocatorFenced, idFence.Kind)
+	require.Equal(t, uint64(11), idFence.AllocatorFence.Minimum)
+
+	require.Equal(t, rootevent.KindTSOAllocatorFenced, tsoFence.Kind)
+	require.Equal(t, uint64(29), tsoFence.AllocatorFence.Minimum)
+}
+
+func TestCoordinatorLeaseReleasedAndSealed(t *testing.T) {
+	frontiers := controlplane.Frontiers(rootstate.State{IDFence: 5, TSOFence: 9}, 0)
+	released := rootevent.CoordinatorLeaseReleased("c1", 2_000, 3, 5, "digest", frontiers)
+	sealed := rootevent.CoordinatorLeaseSealed("c1", 3, 5, frontiers)
+
+	require.Equal(t, rootevent.KindCoordinatorLease, released.Kind)
+	require.Equal(t, "c1", released.CoordinatorLease.HolderID)
+	require.Equal(t, int64(2_000), released.CoordinatorLease.ExpiresUnixNano)
+	require.Equal(t, uint64(3), released.CoordinatorLease.CertGeneration)
+	require.Equal(t, uint32(5), released.CoordinatorLease.DutyMask)
+	require.Equal(t, "digest", released.CoordinatorLease.PredecessorDigest)
+	require.Equal(t, frontiers, released.CoordinatorLease.Frontiers)
+
+	require.Equal(t, rootevent.KindCoordinatorSeal, sealed.Kind)
+	require.Equal(t, "c1", sealed.CoordinatorSeal.HolderID)
+	require.Equal(t, uint64(3), sealed.CoordinatorSeal.CertGeneration)
+	require.Equal(t, uint32(5), sealed.CoordinatorSeal.DutyMask)
+	require.Equal(t, frontiers, sealed.CoordinatorSeal.Frontiers)
+}
+
+func TestRegionLifecycleConstructors(t *testing.T) {
+	parent := testDescriptor(1, []byte("a"), []byte("z"))
+	left := testDescriptor(1, []byte("a"), []byte("m"))
+	right := testDescriptor(2, []byte("m"), []byte("z"))
+
+	bootstrapped := rootevent.RegionBootstrapped(parent)
+	tombstoned := rootevent.RegionTombstoned(9)
+	cancelledSplit := rootevent.RegionSplitCancelled(1, []byte("m"), left, right, parent)
+	plannedMerge := rootevent.RegionMergePlanned(1, 2, parent)
+	merged := rootevent.RegionMerged(1, 2, parent)
+	cancelledMerge := rootevent.RegionMergeCancelled(1, 2, parent, left, right)
+
+	require.Equal(t, rootevent.KindRegionBootstrap, bootstrapped.Kind)
+	require.Equal(t, parent.RegionID, bootstrapped.RegionDescriptor.Descriptor.RegionID)
+
+	require.Equal(t, rootevent.KindRegionTombstoned, tombstoned.Kind)
+	require.Equal(t, uint64(9), tombstoned.RegionRemoval.RegionID)
+
+	require.Equal(t, rootevent.KindRegionSplitCancelled, cancelledSplit.Kind)
+	require.Equal(t, []byte("m"), cancelledSplit.RangeSplit.SplitKey)
+	require.Equal(t, parent.RegionID, cancelledSplit.RangeSplit.BaseParent.RegionID)
+
+	require.Equal(t, rootevent.KindRegionMergePlanned, plannedMerge.Kind)
+	require.Equal(t, uint64(1), plannedMerge.RangeMerge.LeftRegionID)
+	require.Equal(t, uint64(2), plannedMerge.RangeMerge.RightRegionID)
+
+	require.Equal(t, rootevent.KindRegionMerged, merged.Kind)
+	require.Equal(t, parent.RegionID, merged.RangeMerge.Merged.RegionID)
+
+	require.Equal(t, rootevent.KindRegionMergeCancelled, cancelledMerge.Kind)
+	require.Equal(t, left.RegionID, cancelledMerge.RangeMerge.BaseLeft.RegionID)
+	require.Equal(t, right.RegionID, cancelledMerge.RangeMerge.BaseRight.RegionID)
+}
+
+func TestPeerChangeConstructors(t *testing.T) {
+	region := testDescriptor(11, []byte("a"), []byte("z"))
+	base := testDescriptor(11, []byte("a"), []byte("z"))
+
+	added := rootevent.PeerAdded(11, 2, 201, region)
+	addPlanned := rootevent.PeerAdditionPlanned(11, 2, 201, region)
+	addCancelled := rootevent.PeerAdditionCancelled(11, 2, 201, region, base)
+	removePlanned := rootevent.PeerRemovalPlanned(11, 2, 201, region)
+	removeCancelled := rootevent.PeerRemovalCancelled(11, 2, 201, region, base)
+	removed := rootevent.PeerRemoved(11, 2, 201, region)
+
+	require.Equal(t, rootevent.KindPeerAdded, added.Kind)
+	require.Equal(t, uint64(11), added.PeerChange.RegionID)
+	require.Equal(t, uint64(2), added.PeerChange.StoreID)
+	require.Equal(t, uint64(201), added.PeerChange.PeerID)
+
+	require.Equal(t, rootevent.KindPeerAdditionPlanned, addPlanned.Kind)
+	require.Equal(t, region.RegionID, addPlanned.PeerChange.Region.RegionID)
+
+	require.Equal(t, rootevent.KindPeerAdditionCancelled, addCancelled.Kind)
+	require.Equal(t, base.RegionID, addCancelled.PeerChange.Base.RegionID)
+
+	require.Equal(t, rootevent.KindPeerRemovalPlanned, removePlanned.Kind)
+	require.Equal(t, region.RegionID, removePlanned.PeerChange.Region.RegionID)
+
+	require.Equal(t, rootevent.KindPeerRemovalCancelled, removeCancelled.Kind)
+	require.Equal(t, base.RegionID, removeCancelled.PeerChange.Base.RegionID)
+
+	require.Equal(t, rootevent.KindPeerRemoved, removed.Kind)
+	require.Equal(t, region.RegionID, removed.PeerChange.Region.RegionID)
+}
+
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
 	desc := descriptor.Descriptor{
 		RegionID:  id,

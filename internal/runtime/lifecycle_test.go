@@ -1,8 +1,10 @@
 package runtime
 
 import (
+	"errors"
 	"testing"
 
+	"github.com/feichai0017/NoKV/metrics"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,4 +38,84 @@ func TestRegistryRegisterCountAndClear(t *testing.T) {
 	require.Equal(t, 1, count2)
 	require.Equal(t, 0, r.Count())
 	require.True(t, r.Cleared())
+}
+
+func TestRegistryUnregister(t *testing.T) {
+	var r Registry
+	count := 0
+	module := &testModule{closed: &count}
+
+	r.Register(module)
+	require.Equal(t, 1, r.Count())
+
+	r.Unregister(module)
+	require.Equal(t, 0, r.Count())
+
+	r.CloseAll()
+	require.Equal(t, 0, count)
+}
+
+type testStatsCollector struct {
+	started      int
+	closeErr     error
+	closed       int
+	regionMetric *metrics.RegionMetrics
+}
+
+func (s *testStatsCollector) StartStats() {
+	s.started++
+}
+
+func (s *testStatsCollector) SetRegionMetrics(rm *metrics.RegionMetrics) {
+	s.regionMetric = rm
+}
+
+func (s *testStatsCollector) Close() error {
+	s.closed++
+	return s.closeErr
+}
+
+func TestBackgroundServicesLifecycle(t *testing.T) {
+	stats := &testStatsCollector{}
+	var services BackgroundServices
+	services.Init(stats)
+
+	compacterStarts := 0
+	valueLogGCStarts := 0
+	services.Start(BackgroundConfig{
+		StartCompacter: func() {
+			compacterStarts++
+		},
+		StartValueLogGC: func() {
+			valueLogGCStarts++
+		},
+		EnableWALWatchdog: true,
+	})
+
+	require.Equal(t, 1, compacterStarts)
+	require.Equal(t, 1, valueLogGCStarts)
+	require.Equal(t, 1, stats.started)
+	require.Same(t, stats, services.StatsCollector())
+	require.Nil(t, services.WALWatchdog())
+
+	rm := metrics.NewRegionMetrics()
+	services.SetRegionMetrics(rm)
+	require.Same(t, rm, stats.regionMetric)
+
+	require.NoError(t, services.Close())
+	require.Equal(t, 1, stats.closed)
+	require.Nil(t, services.StatsCollector())
+	require.Nil(t, services.WALWatchdog())
+}
+
+func TestBackgroundServicesClosePropagatesStatsError(t *testing.T) {
+	stats := &testStatsCollector{closeErr: errors.New("close failed")}
+	services := &BackgroundServices{}
+	services.Init(stats)
+
+	err := services.Close()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "stats close: close failed")
+	require.Equal(t, 1, stats.closed)
+	require.Nil(t, services.StatsCollector())
 }
