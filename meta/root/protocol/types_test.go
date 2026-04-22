@@ -23,7 +23,7 @@ func TestCoordinatorDutyFrontiersHelpers(t *testing.T) {
 		frontiers.Entries(),
 	)
 	require.Equal(t, map[uint32]uint64{
-		CoordinatorDutyAllocID:       10,
+		CoordinatorDutyAllocID:        10,
 		CoordinatorDutyGetRegionByKey: 30,
 	}, frontiers.AsMap())
 
@@ -37,9 +37,9 @@ func TestCoordinatorDutyFrontiersHelpers(t *testing.T) {
 	require.Equal(t, frontiers, unchanged)
 
 	fromMap := CoordinatorDutyFrontiersFromMap(map[uint32]uint64{
-		CoordinatorDutyTSO:             20,
-		CoordinatorDutyGetRegionByKey:  30,
-		CoordinatorDutyLeaseStart:      40,
+		CoordinatorDutyTSO:            20,
+		CoordinatorDutyGetRegionByKey: 30,
+		CoordinatorDutyLeaseStart:     40,
 	})
 	require.Equal(t, uint64(20), fromMap.Frontier(CoordinatorDutyTSO))
 	require.Equal(t, 3, fromMap.Len())

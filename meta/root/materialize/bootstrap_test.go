@@ -40,9 +40,9 @@ func (f fakeVirtualLog) ReadCommitted(requestedOffset int64) (rootstorage.Commit
 func (f fakeVirtualLog) AppendCommitted(context.Context, ...rootstorage.CommittedEvent) (int64, error) {
 	return 0, nil
 }
-func (f fakeVirtualLog) CompactCommitted(rootstorage.CommittedTail) error { return nil }
+func (f fakeVirtualLog) CompactCommitted(rootstorage.CommittedTail) error     { return nil }
 func (f fakeVirtualLog) InstallBootstrap(rootstorage.ObservedCommitted) error { return nil }
-func (f fakeVirtualLog) Size() (int64, error) { return 0, nil }
+func (f fakeVirtualLog) Size() (int64, error)                                 { return 0, nil }
 
 func TestBootstrapFromObservedReplaysTail(t *testing.T) {
 	base := testMaterializeDescriptor(1, []byte("a"), []byte("m"))

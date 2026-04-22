@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootclient "github.com/feichai0017/NoKV/meta/root/client"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
-	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
 )
@@ -21,8 +21,8 @@ type fakeLoadStore struct {
 	err      error
 }
 
-func (f fakeLoadStore) Load() (Snapshot, error) { return CloneSnapshot(f.snapshot), f.err }
-func (f fakeLoadStore) AppendRootEvent(context.Context, rootevent.Event) error { return nil }
+func (f fakeLoadStore) Load() (Snapshot, error)                                  { return CloneSnapshot(f.snapshot), f.err }
+func (f fakeLoadStore) AppendRootEvent(context.Context, rootevent.Event) error   { return nil }
 func (f fakeLoadStore) SaveAllocatorState(context.Context, uint64, uint64) error { return nil }
 func (f fakeLoadStore) ApplyCoordinatorLease(context.Context, rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
 	return rootstate.CoordinatorProtocolState{}, nil
@@ -30,35 +30,35 @@ func (f fakeLoadStore) ApplyCoordinatorLease(context.Context, rootproto.Coordina
 func (f fakeLoadStore) ApplyCoordinatorClosure(context.Context, rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
 	return rootstate.CoordinatorProtocolState{}, nil
 }
-func (f fakeLoadStore) Refresh() error  { return nil }
-func (f fakeLoadStore) IsLeader() bool  { return true }
+func (f fakeLoadStore) Refresh() error   { return nil }
+func (f fakeLoadStore) IsLeader() bool   { return true }
 func (f fakeLoadStore) LeaderID() uint64 { return 1 }
-func (f fakeLoadStore) Close() error    { return nil }
+func (f fakeLoadStore) Close() error     { return nil }
 
 type fakeRootBackend struct {
-	snapshot             rootstate.Snapshot
-	observed             rootstorage.ObservedCommitted
-	useObserved          bool
-	tailAdvance          rootstorage.TailAdvance
-	waitAdvance          rootstorage.TailAdvance
-	appendErr            error
-	fenceErr             error
-	refreshErr           error
-	observeErr           error
-	waitErr              error
-	observeCommittedErr  error
-	applyLeaseErr        error
-	applyClosureErr      error
-	snapshotErr          error
-	refreshCount         int
-	appendCalls          int
-	fenceCalls           []rootstate.AllocatorKind
-	closeCalled          bool
-	isLeader             bool
-	leaderID             uint64
-	tailNotifyCh         chan struct{}
-	applyLeaseResult     rootstate.CoordinatorProtocolState
-	applyClosureResult   rootstate.CoordinatorProtocolState
+	snapshot            rootstate.Snapshot
+	observed            rootstorage.ObservedCommitted
+	useObserved         bool
+	tailAdvance         rootstorage.TailAdvance
+	waitAdvance         rootstorage.TailAdvance
+	appendErr           error
+	fenceErr            error
+	refreshErr          error
+	observeErr          error
+	waitErr             error
+	observeCommittedErr error
+	applyLeaseErr       error
+	applyClosureErr     error
+	snapshotErr         error
+	refreshCount        int
+	appendCalls         int
+	fenceCalls          []rootstate.AllocatorKind
+	closeCalled         bool
+	isLeader            bool
+	leaderID            uint64
+	tailNotifyCh        chan struct{}
+	applyLeaseResult    rootstate.CoordinatorProtocolState
+	applyClosureResult  rootstate.CoordinatorProtocolState
 }
 
 func (f *fakeRootBackend) Snapshot() (rootstate.Snapshot, error) {
@@ -148,7 +148,7 @@ func (f *fakeRootBackend) ObserveCommitted() (rootstorage.ObservedCommitted, err
 	return rootstorage.CloneObservedCommitted(f.observed), nil
 }
 
-func (f *fakeRootBackend) IsLeader() bool { return f.isLeader }
+func (f *fakeRootBackend) IsLeader() bool   { return f.isLeader }
 func (f *fakeRootBackend) LeaderID() uint64 { return f.leaderID }
 
 func (f *fakeRootBackend) ApplyCoordinatorLease(_ context.Context, _ rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
