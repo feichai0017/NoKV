@@ -195,10 +195,31 @@ func (t *GRPCTransport) Send(msgs ...myraft.Message) error {
 		_, err = client.Step(ctx, (*raftpb.Message)(&msg))
 		cancel()
 		if err != nil {
+			// Drop the cached connection so the next Send attempts a fresh
+			// dial. Without this, a peer that restarted (new container IP, or
+			// a gRPC conn stuck in TRANSIENT_FAILURE) is permanently
+			// unreachable because clientFor returns the stale cached client.
+			t.invalidatePeer(msg.To)
 			return err
 		}
 	}
 	return nil
+}
+
+// invalidatePeer tears down the cached gRPC client for id so the next Send
+// re-dials. Safe to call even if there is no cached client.
+func (t *GRPCTransport) invalidatePeer(id uint64) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	conn := t.conns[id]
+	delete(t.conns, id)
+	delete(t.clients, id)
+	t.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
 }
 
 func (t *GRPCTransport) clientFor(id uint64) (*rootTransportClientImpl, error) {

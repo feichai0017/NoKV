@@ -335,7 +335,31 @@ func (s *RootStore) applyAndReload(run func() (rootstate.CoordinatorProtocolStat
 	if err != nil {
 		return protocolState, err
 	}
+	// The Apply response carries the authoritative post-apply
+	// Lease/Seal/Closure from the meta-root leader. Merge it into the cached
+	// snapshot BEFORE the reload roundtrip so subsequent calls never race
+	// against a follower that has not yet replicated the event. Without this,
+	// a coordinator that writes to the meta-root leader and then reads back
+	// from a lagging follower observes a state regression and treats its own
+	// fresh lease as stale, which triggers churn (lease lineage mismatches,
+	// "lease held" retries) in multi-coordinator deployments.
+	s.mergeCoordinatorProtocolState(protocolState)
 	return protocolState, s.reload()
+}
+
+// mergeCoordinatorProtocolState overlays the Lease/Seal/Closure from an
+// authoritative Apply response onto the cached snapshot. Other fields
+// (descriptors, allocator fences) are left untouched — the subsequent reload
+// or a later tail advance refreshes them.
+func (s *RootStore) mergeCoordinatorProtocolState(state rootstate.CoordinatorProtocolState) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.snapshot.CoordinatorLease = state.Lease
+	s.snapshot.CoordinatorSeal = state.Seal
+	s.snapshot.CoordinatorClosure = state.Closure
+	s.mu.Unlock()
 }
 
 func (s *RootStore) replaceObserved(observed rootstorage.ObservedCommitted, token rootstorage.TailToken) {

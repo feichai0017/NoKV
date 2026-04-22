@@ -103,7 +103,38 @@ func DialCluster(ctx context.Context, targets map[uint64]string, opts ...grpc.Di
 			conn: conn,
 		})
 	}
+	// Probe each endpoint for the raft leader so reads land on the leader from
+	// the first call and the cached cursor/lease state stays fresh. Without
+	// this, the first reads (catch-up, ObserveCommitted) go to whichever
+	// endpoint has index 0 — typically a follower — and a lagging follower
+	// can surface state that regressed behind what the local coordinator has
+	// already observed on writes, which causes visible thrash in multi-peer
+	// deployments.
+	client.pinLeaderPreferred(ctx)
 	return client, nil
+}
+
+// pinLeaderPreferred asks each endpoint for its current Status view and
+// switches the preferred index to the raft leader if any peer reports one.
+// Best-effort: failures leave preferred at its sorted-order default.
+func (c *Client) pinLeaderPreferred(ctx context.Context) {
+	if c == nil || len(c.endpoints) == 0 {
+		return
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	for _, endpoint := range c.endpoints {
+		resp, err := endpoint.rpc.Status(probeCtx, &metapb.MetadataRootStatusRequest{})
+		if err != nil {
+			continue
+		}
+		leaderID := resp.GetLeaderId()
+		if leaderID == 0 {
+			continue
+		}
+		c.markPreferred(leaderID)
+		return
+	}
 }
 
 // Close closes the underlying connections owned by this client.
