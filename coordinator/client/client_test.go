@@ -224,8 +224,17 @@ func TestCoordinatorClientErrorHelpers(t *testing.T) {
 	require.True(t, IsStaleWitnessGeneration(errStaleWitnessGeneration))
 	require.True(t, IsInvalidWitness(errInvalidWitness))
 	require.False(t, IsNotLeader(errEmptyAddress))
+	require.False(t, IsLeaseNotHeld(errEmptyAddress))
 	_, ok := LeaderHint(errEmptyAddress)
 	require.False(t, ok)
+}
+
+func TestGRPCClientRetriesWriteOnLeaseNotHeld(t *testing.T) {
+	err := status.Error(codes.FailedPrecondition, errLeaseNotHeldPrefix+": meta/root/state: coordinator lease held")
+	require.True(t, IsLeaseNotHeld(err))
+	require.True(t, retryableWrite(err))
+	require.False(t, retryableRead(err))
+	require.False(t, IsNotLeader(err))
 }
 
 func TestGRPCClientRejectsInvalidAllocWitness(t *testing.T) {
