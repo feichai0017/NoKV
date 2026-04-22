@@ -183,27 +183,55 @@ func (t *GRPCTransport) Send(msgs ...myraft.Message) error {
 	if t == nil || len(msgs) == 0 {
 		return nil
 	}
+	// etcd/raft batches outbound messages per tick. We MUST try every message
+	// even when one fails — otherwise an unreachable peer (dead leader, or a
+	// peer with a stale cached gRPC conn) silently drops MsgPreVote /
+	// MsgVote / MsgHeartbeat to the live peers, and the cluster never
+	// converges on a new leader.
+	//
+	// Sends fan out concurrently so one dead peer's sendTimeout does not
+	// serialize the others. First error wins for observability.
+	var wg sync.WaitGroup
+	var firstErrMu sync.Mutex
+	var firstErr error
+	recordErr := func(err error) {
+		if err == nil {
+			return
+		}
+		firstErrMu.Lock()
+		if firstErr == nil {
+			firstErr = err
+		}
+		firstErrMu.Unlock()
+	}
 	for _, msg := range msgs {
 		if msg.To == 0 || msg.To == t.localID {
 			continue
 		}
-		client, err := t.clientFor(msg.To)
-		if err != nil {
-			return err
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), t.sendTimeout)
-		_, err = client.Step(ctx, (*raftpb.Message)(&msg))
-		cancel()
-		if err != nil {
-			// Drop the cached connection so the next Send attempts a fresh
-			// dial. Without this, a peer that restarted (new container IP, or
-			// a gRPC conn stuck in TRANSIENT_FAILURE) is permanently
-			// unreachable because clientFor returns the stale cached client.
-			t.invalidatePeer(msg.To)
-			return err
-		}
+		wg.Add(1)
+		go func(m myraft.Message) {
+			defer wg.Done()
+			client, err := t.clientFor(m.To)
+			if err != nil {
+				recordErr(err)
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), t.sendTimeout)
+			_, err = client.Step(ctx, (*raftpb.Message)(&m))
+			cancel()
+			if err != nil {
+				// Drop the cached connection so the next Send re-dials. A
+				// peer that restarted (new container IP, or a conn stuck
+				// in TRANSIENT_FAILURE) is otherwise permanently
+				// unreachable through the stale cached client.
+				t.invalidatePeer(m.To)
+				recordErr(err)
+				return
+			}
+		}(msg)
 	}
-	return nil
+	wg.Wait()
+	return firstErr
 }
 
 // invalidatePeer tears down the cached gRPC client for id so the next Send
