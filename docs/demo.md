@@ -19,6 +19,9 @@ That's it. `docker compose down -v` wipes data volumes too.
 
 ## Exposed ports (all bound to 127.0.0.1)
 
+Using symmetric port blocks so the three replicas of each role land on three
+consecutive numbers — easy to remember, easy to script against.
+
 | Service | Port | Purpose |
 |---|---|---|
 | Redis gateway | `6380` | RESP protocol — `redis-cli -p 6380 ...` |
@@ -29,15 +32,34 @@ That's it. `docker compose down -v` wipes data volumes too.
 | Meta-root-1 expvar | `9380` | `/debug/vars` JSON |
 | Meta-root-2 expvar | `9381` | |
 | Meta-root-3 expvar | `9382` | |
-| Coordinator-1 gRPC | `2379` | |
-| Coordinator-2 gRPC | `2390` | |
-| Coordinator-3 gRPC | `2391` | |
+| Coordinator-1 gRPC | `2390` | |
+| Coordinator-2 gRPC | `2391` | |
+| Coordinator-3 gRPC | `2392` | |
 | Coordinator-1 expvar | `9100` | |
 | Coordinator-2 expvar | `9101` | |
 | Coordinator-3 expvar | `9102` | |
 | Store-1 expvar | `9200` | |
 | Store-2 expvar | `9201` | |
 | Store-3 expvar | `9202` | |
+
+### Why are meta-root gRPC ports exposed?
+
+Meta-root (`2380/2381/2382`) is exposed so host-side tools like
+`nokv ccc-audit` and `nokv-config` can query rooted state directly for
+debugging. All `/debug/vars` endpoints also expose the meta-root's state
+summary (leader, committed index, generation) for the dashboard.
+
+**For production, don't expose meta-root publicly.** The gRPC API accepts
+`ApplyCoordinatorLease` and `ApplyCoordinatorClosure` which are
+lease-gated but still structurally sensitive. To opt out, delete the
+`ports:` block under `meta-root-1`, `meta-root-2`, `meta-root-3` in
+`docker-compose.yml` — the dashboard loses the "Truth plane" cards (they
+become "unreachable") but the cluster keeps working since coordinator and
+`nokv-redis` dial meta-root over the docker network, not through host
+ports.
+
+Same applies to coordinator gRPC (`2390/2391/2392`): convenient for
+host-side client experiments, don't expose publicly.
 
 ### Live audit from the host
 
