@@ -97,7 +97,7 @@ func TestClientHelpersAndOrdering(t *testing.T) {
 	c.markPreferred(1)
 	require.Equal(t, uint64(1), c.orderedEndpoints()[0].id)
 
-	ctx, cancel := c.context(nil)
+	ctx, cancel := c.context(context.TODO())
 	defer cancel()
 	deadline, ok := ctx.Deadline()
 	require.True(t, ok)

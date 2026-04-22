@@ -26,7 +26,7 @@ func TestRequestResetAndLoadEntries(t *testing.T) {
 		Err:        errors.New("boom"),
 		EnqueueAt:  time.Now(),
 	}
-	req.RefCount.Init(3)
+	req.Init(3)
 	req.WG.Add(1)
 
 	newEntries := []*kv.Entry{
@@ -46,7 +46,7 @@ func TestRequestResetAndLoadEntries(t *testing.T) {
 	require.Empty(t, req.PtrBuckets)
 	require.NoError(t, req.Err)
 	require.True(t, req.EnqueueAt.IsZero())
-	require.EqualValues(t, 0, req.RefCount.Load())
+	require.EqualValues(t, 0, req.Load())
 
 	for _, entry := range append([]*kv.Entry{oldEntry}, newEntries...) {
 		entry.DecrRef()
