@@ -322,10 +322,7 @@ func keyErrorCommitTsExpired(key []byte, commitTs, minCommitTs uint64) *kvrpcpb.
 }
 
 func commitKey(db NoKV.MVCCStore, reader *Reader, key []byte, lock *Lock, commitVersion uint64) *kvrpcpb.KeyError {
-	if lock.MinCommitTs > commitVersion {
-		return keyErrorCommitTsExpired(key, commitVersion, lock.MinCommitTs)
-	}
-	write, commitTs, err := reader.GetWriteByStartTs(key, lock.Ts)
+	write, _, err := reader.GetWriteByStartTs(key, lock.Ts)
 	if err != nil {
 		return keyErrorRetryable(err)
 	}
@@ -333,19 +330,19 @@ func commitKey(db NoKV.MVCCStore, reader *Reader, key []byte, lock *Lock, commit
 		if write.Kind == kvrpcpb.Mutation_Rollback {
 			return keyErrorAbort("transaction already rolled back")
 		}
-		if commitTs != commitVersion {
-			// Already committed with a different commit version; treat as success.
-			if err := applyVersionedOps(db, versionedOp{
-				cf:      kv.CFLock,
-				key:     key,
-				version: lockColumnTs,
-				meta:    kv.BitDelete,
-			}); err != nil {
-				return keyErrorRetryable(err)
-			}
-			return nil
+		if err := applyVersionedOps(db, versionedOp{
+			cf:      kv.CFLock,
+			key:     key,
+			version: lockColumnTs,
+			meta:    kv.BitDelete,
+		}); err != nil {
+			return keyErrorRetryable(err)
 		}
 		return nil
+	}
+
+	if lock.MinCommitTs > commitVersion {
+		return keyErrorCommitTsExpired(key, commitVersion, lock.MinCommitTs)
 	}
 
 	entry := EncodeWrite(Write{Kind: lock.Kind, StartTs: lock.Ts})
