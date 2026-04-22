@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>NoKV Cluster Dashboard</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif;
+    margin: 0;
+    padding: 20px;
+    background: #0d1117;
+    color: #e6edf3;
+  }
+  h1 { font-size: 20px; margin: 0 0 8px; color: #f0f6fc; }
+  h2 { font-size: 13px; font-weight: 600; margin: 0; color: #7d8590; text-transform: uppercase; letter-spacing: 0.5px; }
+  .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid #30363d; }
+  .status { font-size: 12px; color: #7d8590; }
+  .status.error { color: #f85149; }
+  .tick { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #238636; margin-right: 6px; }
+  .tick.stale { background: #d29922; }
+  .tick.dead { background: #da3633; }
+
+  .plane { margin-bottom: 28px; }
+  .plane-title { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .plane-badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .plane-badge.truth { background: #1f2d5c; color: #79c0ff; }
+  .plane-badge.control { background: #3c1e5c; color: #d2a8ff; }
+  .plane-badge.exec { background: #1f4d2f; color: #7ee787; }
+  .plane-badge.gateway { background: #5c3a1e; color: #ffa657; }
+
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 14px;
+    font-size: 13px;
+  }
+  .card.leader { border-color: #238636; box-shadow: 0 0 0 1px #23863680; }
+  .card.active-holder { border-color: #8957e5; box-shadow: 0 0 0 1px #8957e580; }
+  .card.error { border-color: #da3633; box-shadow: 0 0 0 1px #da363380; }
+  .card-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .card-name { font-family: "SF Mono", Monaco, Consolas, monospace; font-weight: 600; font-size: 13px; color: #f0f6fc; }
+  .tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
+  .tag.leader { background: #1f4d2f; color: #7ee787; }
+  .tag.holder { background: #3c1e5c; color: #d2a8ff; }
+  .tag.follower { background: #30363d; color: #8b949e; }
+  .tag.standby { background: #30363d; color: #8b949e; }
+  .tag.error { background: #5c1e1e; color: #ff7b72; }
+
+  .row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12px; line-height: 1.5; }
+  .label { color: #7d8590; }
+  .value { color: #e6edf3; font-family: "SF Mono", Monaco, Consolas, monospace; }
+  .value.good { color: #7ee787; }
+  .value.warn { color: #d29922; }
+  .value.bad  { color: #ff7b72; }
+  .dim { color: #6e7681; }
+
+  .hint { color: #6e7681; font-size: 11px; margin-top: 24px; padding: 12px; background: #161b22; border-radius: 6px; border: 1px solid #30363d; }
+  code { font-family: "SF Mono", Monaco, Consolas, monospace; color: #79c0ff; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <h1>NoKV Cluster Dashboard</h1>
+  <div class="status" id="status">
+    <span class="tick" id="tick"></span>
+    <span id="status-text">loading…</span>
+  </div>
+</div>
+
+<div class="plane">
+  <div class="plane-title">
+    <span class="plane-badge truth">Truth plane</span>
+    <h2>3× meta-root — raft-replicated rooted truth</h2>
+  </div>
+  <div class="grid" id="meta-grid"></div>
+</div>
+
+<div class="plane">
+  <div class="plane-title">
+    <span class="plane-badge control">Control plane</span>
+    <h2>3× coordinator — CCC lease-gated singleton</h2>
+  </div>
+  <div class="grid" id="coord-grid"></div>
+</div>
+
+<div class="plane">
+  <div class="plane-title">
+    <span class="plane-badge exec">Execution plane</span>
+    <h2>3× store — per-region raft</h2>
+  </div>
+  <div class="grid" id="store-grid"></div>
+</div>
+
+<div class="plane">
+  <div class="plane-title">
+    <span class="plane-badge gateway">Gateway</span>
+    <h2>Redis-compatible RESP (port 6380)</h2>
+  </div>
+  <div class="grid" id="gateway-grid"></div>
+</div>
+
+<div class="hint">
+  Polling <code>/debug/vars</code> on each service every 1.5s. Endpoints:
+  meta-root <code>9380/9381/9382</code>,
+  coord <code>9100/9101/9102</code>,
+  store <code>9200/9201/9202</code>,
+  redis <code>9300</code>.
+  Try <code>redis-cli -p 6380 set k v</code> to drive activity, or
+  <code>docker stop nokv-coordinator-N</code> to watch failover.
+</div>
+
+<script>
+const targets = {
+  meta:  [{id: 1, port: 9380}, {id: 2, port: 9381}, {id: 3, port: 9382}],
+  coord: [{id: 1, port: 9100}, {id: 2, port: 9101}, {id: 3, port: 9102}],
+  store: [{id: 1, port: 9200}, {id: 2, port: 9201}, {id: 3, port: 9202}],
+  redis: [{id: 'gateway', port: 9300}],
+};
+
+async function fetchJSON(port) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 1200);
+  try {
+    const r = await fetch(`http://${location.hostname || 'localhost'}:${port}/debug/vars`, { signal: ctrl.signal });
+    clearTimeout(t);
+    if (!r.ok) throw new Error('bad status ' + r.status);
+    return await r.json();
+  } catch (e) {
+    clearTimeout(t);
+    return null;
+  }
+}
+
+function row(label, value, cls = '') {
+  const v = value === undefined || value === null || value === '' ? '—' : value;
+  return `<div class="row"><span class="label">${label}</span><span class="value ${cls}">${v}</span></div>`;
+}
+
+function renderMeta(info, peer) {
+  const m = info && info.nokv_meta_root;
+  const el = document.createElement('div');
+  el.className = 'card';
+  if (!m) {
+    el.classList.add('error');
+    el.innerHTML = `
+      <div class="card-header"><span class="card-name">meta-root-${peer.id}</span><span class="tag error">unreachable</span></div>
+      <div class="row"><span class="label">status</span><span class="value bad">no response on :${peer.port}</span></div>`;
+    return el;
+  }
+  const isLeader = !!m.is_leader;
+  const committed = m.last_committed || {};
+  if (isLeader) el.classList.add('leader');
+  el.innerHTML = `
+    <div class="card-header">
+      <span class="card-name">meta-root-${peer.id}</span>
+      <span class="tag ${isLeader ? 'leader' : 'follower'}">${isLeader ? 'raft leader' : 'follower'}</span>
+    </div>
+    ${row('node_id',          m.node_id)}
+    ${row('leader_id',        m.leader_id)}
+    ${row('last_committed',   `term=${committed.term || 0} idx=${committed.index || 0}`)}
+    ${row('cluster_epoch',    m.cluster_epoch)}
+    ${row('id_fence / tso',   `${m.id_fence || 0} / ${m.tso_fence || 0}`)}
+    ${row('descriptors',      m.descriptor_count || 0)}
+    ${row('pending peer Δ',   m.pending_peer_changes || 0)}
+    ${row('pending range Δ',  m.pending_range_changes || 0)}
+  `;
+  return el;
+}
+
+function renderCoord(info, peer) {
+  const c = info && info.nokv_coordinator && info.nokv_coordinator.state;
+  const el = document.createElement('div');
+  el.className = 'card';
+  if (!c) {
+    el.classList.add('error');
+    el.innerHTML = `
+      <div class="card-header"><span class="card-name">coord-${peer.id}</span><span class="tag error">unreachable</span></div>
+      <div class="row"><span class="label">status</span><span class="value bad">no response on :${peer.port}</span></div>`;
+    return el;
+  }
+  const lease = c.lease || {};
+  const root  = c.root  || {};
+  const alloc = c.allocator || {};
+  const held  = !!lease.held_by_self;
+  const active = !!lease.active;
+  if (held && active) el.classList.add('active-holder');
+  el.innerHTML = `
+    <div class="card-header">
+      <span class="card-name">coord-${peer.id}</span>
+      <span class="tag ${held && active ? 'holder' : 'standby'}">
+        ${held && active ? 'lease holder' : 'standby (read-only)'}
+      </span>
+    </div>
+    ${row('rooted holder',   lease.holder_id || '(none)')}
+    ${row('generation',      lease.cert_generation || 0)}
+    ${row('active',          active ? '✓' : '✗', active ? 'good' : 'bad')}
+    ${row('held by self',    held ? '✓' : '—', held ? 'good' : 'dim')}
+    ${row('regions',         c.regions || 0)}
+    ${row('id / tso current',`${alloc.id_current || 0} / ${alloc.tso_current || 0}`)}
+    ${row('root_lag',        root.root_lag || 0)}
+    ${row('catch_up_state',  (root.catch_up_state || '').replace('CATCH_UP_STATE_',''))}
+    ${row('degraded_mode',   (root.degraded_mode || '').replace('DEGRADED_MODE_',''))}
+  `;
+  return el;
+}
+
+function renderStore(info, peer) {
+  const el = document.createElement('div');
+  el.className = 'card';
+  if (!info) {
+    el.classList.add('error');
+    el.innerHTML = `
+      <div class="card-header"><span class="card-name">store-${peer.id}</span><span class="tag error">unreachable</span></div>
+      <div class="row"><span class="label">status</span><span class="value bad">no response on :${peer.port}</span></div>`;
+    return el;
+  }
+  const mem = info.memstats || {};
+  el.innerHTML = `
+    <div class="card-header"><span class="card-name">store-${peer.id}</span><span class="tag follower">live</span></div>
+    ${row('alloc',         `${Math.round((mem.Alloc || 0) / 1024 / 1024)} MiB`)}
+    ${row('sys',           `${Math.round((mem.Sys || 0) / 1024 / 1024)} MiB`)}
+    ${row('gc count',      mem.NumGC || 0)}
+    ${row('goroutines',    info['cmd.goroutines'] || '—')}
+  `;
+  return el;
+}
+
+function renderRedis(info, peer) {
+  const el = document.createElement('div');
+  el.className = 'card';
+  if (!info) {
+    el.classList.add('error');
+    el.innerHTML = `
+      <div class="card-header"><span class="card-name">nokv-redis</span><span class="tag error">unreachable</span></div>
+      <div class="row"><span class="label">status</span><span class="value bad">no response on :${peer.port}</span></div>`;
+    return el;
+  }
+  const mem = info.memstats || {};
+  el.innerHTML = `
+    <div class="card-header"><span class="card-name">nokv-redis</span><span class="tag follower">listening :6380</span></div>
+    ${row('alloc',      `${Math.round((mem.Alloc || 0) / 1024 / 1024)} MiB`)}
+    ${row('sys',        `${Math.round((mem.Sys || 0) / 1024 / 1024)} MiB`)}
+    ${row('madvise ok', info['NoKV.Mmap.Madvise'] || 0)}
+    ${row('prefetch done', info['NoKV.Prefetch.Completed'] || 0)}
+  `;
+  return el;
+}
+
+async function tick() {
+  const statusEl = document.getElementById('status-text');
+  const tickEl = document.getElementById('tick');
+  try {
+    const [metaR, coordR, storeR, redisR] = await Promise.all([
+      Promise.all(targets.meta.map(p => fetchJSON(p.port))),
+      Promise.all(targets.coord.map(p => fetchJSON(p.port))),
+      Promise.all(targets.store.map(p => fetchJSON(p.port))),
+      Promise.all(targets.redis.map(p => fetchJSON(p.port))),
+    ]);
+
+    const replaceGrid = (id, peers, results, renderer) => {
+      const grid = document.getElementById(id);
+      grid.innerHTML = '';
+      peers.forEach((p, idx) => grid.appendChild(renderer(results[idx], p)));
+    };
+    replaceGrid('meta-grid',   targets.meta,  metaR,  renderMeta);
+    replaceGrid('coord-grid',  targets.coord, coordR, renderCoord);
+    replaceGrid('store-grid',  targets.store, storeR, renderStore);
+    replaceGrid('gateway-grid',targets.redis, redisR, renderRedis);
+
+    const unreached = [...metaR, ...coordR, ...storeR, ...redisR].filter(x => x === null).length;
+    if (unreached === 0) {
+      tickEl.className = 'tick';
+      statusEl.textContent = `all 10 services reachable · updated ${new Date().toLocaleTimeString()}`;
+    } else if (unreached < 4) {
+      tickEl.className = 'tick stale';
+      statusEl.textContent = `${10 - unreached}/10 reachable · ${new Date().toLocaleTimeString()}`;
+    } else {
+      tickEl.className = 'tick dead';
+      statusEl.textContent = `${10 - unreached}/10 reachable — cluster looks down · ${new Date().toLocaleTimeString()}`;
+    }
+  } catch (e) {
+    tickEl.className = 'tick dead';
+    statusEl.textContent = 'poll error: ' + e.message;
+  }
+}
+
+tick();
+setInterval(tick, 1500);
+</script>
+</body>
+</html>
