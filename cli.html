@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-36a95623.js";
+            window.path_to_searchindex_js = "searchindex-570277fc.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-15a84097.js"></script>
@@ -214,6 +214,30 @@
 </ul>
 <p>Example:</p>
 <pre><code class="language-bash">nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
+</code></pre>
+<h3 id="nokv-execution"><a class="header" href="#nokv-execution"><code>nokv execution</code></a></h3>
+<ul>
+<li>Queries execution-plane diagnostics from a running raftstore admin endpoint</li>
+<li>Exposes:
+<ul>
+<li>last admission decision observed by the store</li>
+<li>restart-status summary (<code>state</code>, hosted region count, raft-group count, missing raft pointers)</li>
+<li>current topology transition status as seen by the execution plane</li>
+</ul>
+</li>
+<li>Supports plain-text or <code>--json</code> output</li>
+<li>Common flags:
+<ul>
+<li><code>--addr</code> raftstore admin address (required)</li>
+<li><code>--region</code> optional region filter</li>
+<li><code>--transition</code> optional transition id filter</li>
+<li><code>--timeout</code></li>
+<li><code>--json</code></li>
+</ul>
+</li>
+</ul>
+<p>Example:</p>
+<pre><code class="language-bash">nokv execution --addr 127.0.0.1:20161 --json
 </code></pre>
 <h3 id="nokv-manifest"><a class="header" href="#nokv-manifest"><code>nokv manifest</code></a></h3>
 <ul>

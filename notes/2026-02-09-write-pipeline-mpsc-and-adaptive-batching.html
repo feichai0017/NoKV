@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-36a95623.js";
+            window.path_to_searchindex_js = "../searchindex-570277fc.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-15a84097.js"></script>
@@ -187,7 +187,7 @@
 <p>在 LSM 引擎中，WAL (预写日志) 的写入必须是严格顺序的。如果让 1000 个用户协程并发地调用 <code>write()</code> 系统调用，内核态的上下文切换和文件锁竞争会瞬间压垮系统。
 NoKV 通过 MPSC 模型，将数千个前台并发压力汇聚到一个后台 <code>commitWorker</code> 中，将随机小写入转化为大块的顺序磁盘 IO。</p>
 <h3 id="12-核心组件commitqueue"><a class="header" href="#12-核心组件commitqueue">1.2 核心组件：commitQueue</a></h3>
-<p><code>commitQueue</code>（位于 <code>db_write.go</code>）现在是一个围绕
+<p><code>commitQueue</code>（位于 <code>internal/runtime/write_pipeline.go</code>）现在是一个围绕
 <code>utils.MPSCQueue[*commitRequest]</code> 封装的专用写入队列，而不是旧的
 RingBuffer + 双 channel 协议。当前实现由三部分组成：</p>
 <ul>

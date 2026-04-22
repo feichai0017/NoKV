@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-36a95623.js";
+            window.path_to_searchindex_js = "searchindex-570277fc.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-15a84097.js"></script>
@@ -692,7 +692,7 @@ defer srv.Close()
 <tbody>
 <tr><td><a href="../raftstore/store"><code>store</code></a></td><td>Region catalog/runtime root, router, RegionMetrics, scheduler + command runtimes, helpers such as <code>StartPeer</code> / <code>SplitRegion</code>.</td></tr>
 <tr><td><a href="../raftstore/peer"><code>peer</code></a></td><td>Wraps etcd/raft <code>RawNode</code>, handles Ready pipeline, snapshot resend queue, backlog instrumentation.</td></tr>
-<tr><td><a href="../raftstore/raftlog"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage, reusing the DB’s WAL while keeping store-local raft replay metadata in sync.</td></tr>
+<tr><td><a href="../raftstore/raftlog"><code>raftlog</code></a></td><td>WALStorage/DiskStorage/MemoryStorage, reusing the DB’s WAL while keeping store-local raft replay metadata in sync.</td></tr>
 <tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport for Raft Step messages, connection management, retries/blocks/TLS. Also acts as the host for NoKV RPC.</td></tr>
 <tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>NoKV RPC handler plus <code>kv.Apply</code> bridging Raft commands to MVCC logic.</td></tr>
 <tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>Config</code> + <code>NewNode</code> combine DB, Store, transport, and NoKV service into a reusable node instance.</td></tr>
@@ -3692,7 +3692,7 @@ admission, transition execution, publish boundaries, and restart state, read
 <tbody>
 <tr><td><a href="../raftstore/store"><code>store</code></a></td><td>Orchestrates peer set, command pipeline, region manager, scheduler/heartbeat loops; exposes helpers such as <code>StartPeer</code>, <code>ProposeCommand</code>, <code>SplitRegion</code>.</td></tr>
 <tr><td><a href="../raftstore/peer"><code>peer</code></a></td><td>Wraps etcd/raft <code>RawNode</code>, drives Ready processing (persist to WAL, send messages, apply entries), tracks snapshot resend/backlog.</td></tr>
-<tr><td><a href="../raftstore/raftlog"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while tracking store-local raft replay metadata.</td></tr>
+<tr><td><a href="../raftstore/raftlog"><code>raftlog</code></a></td><td>WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while tracking store-local raft replay metadata.</td></tr>
 <tr><td><a href="../raftstore/localmeta"><code>meta</code></a></td><td>Store-local durable metadata: peer catalog for restart and raft WAL replay checkpoints for replay/GC.</td></tr>
 <tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (NoKV).</td></tr>
 <tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>NoKV RPC implementation, bridging Raft commands to MVCC operations via <code>kv.Apply</code>.</td></tr>
@@ -5647,6 +5647,30 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 </ul>
 <p>Example:</p>
 <pre><code class="language-bash">nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
+</code></pre>
+<h3 id="nokv-execution"><a class="header" href="#nokv-execution"><code>nokv execution</code></a></h3>
+<ul>
+<li>Queries execution-plane diagnostics from a running raftstore admin endpoint</li>
+<li>Exposes:
+<ul>
+<li>last admission decision observed by the store</li>
+<li>restart-status summary (<code>state</code>, hosted region count, raft-group count, missing raft pointers)</li>
+<li>current topology transition status as seen by the execution plane</li>
+</ul>
+</li>
+<li>Supports plain-text or <code>--json</code> output</li>
+<li>Common flags:
+<ul>
+<li><code>--addr</code> raftstore admin address (required)</li>
+<li><code>--region</code> optional region filter</li>
+<li><code>--transition</code> optional transition id filter</li>
+<li><code>--timeout</code></li>
+<li><code>--json</code></li>
+</ul>
+</li>
+</ul>
+<p>Example:</p>
+<pre><code class="language-bash">nokv execution --addr 127.0.0.1:20161 --json
 </code></pre>
 <h3 id="nokv-manifest"><a class="header" href="#nokv-manifest"><code>nokv manifest</code></a></h3>
 <ul>
@@ -7765,7 +7789,7 @@ func (a *Arena) AllocAligned(size, align int) uint32 {
 <p>在 LSM 引擎中，WAL (预写日志) 的写入必须是严格顺序的。如果让 1000 个用户协程并发地调用 <code>write()</code> 系统调用，内核态的上下文切换和文件锁竞争会瞬间压垮系统。
 NoKV 通过 MPSC 模型，将数千个前台并发压力汇聚到一个后台 <code>commitWorker</code> 中，将随机小写入转化为大块的顺序磁盘 IO。</p>
 <h3 id="12-核心组件commitqueue"><a class="header" href="#12-核心组件commitqueue">1.2 核心组件：commitQueue</a></h3>
-<p><code>commitQueue</code>（位于 <code>db_write.go</code>）现在是一个围绕
+<p><code>commitQueue</code>（位于 <code>internal/runtime/write_pipeline.go</code>）现在是一个围绕
 <code>utils.MPSCQueue[*commitRequest]</code> 封装的专用写入队列，而不是旧的
 RingBuffer + 双 channel 协议。当前实现由三部分组成：</p>
 <ul>
