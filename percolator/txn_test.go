@@ -1111,3 +1111,64 @@ func TestCommitTsExpired(t *testing.T) {
 	}
 	require.Nil(t, Commit(db, latches, commitReq))
 }
+
+// TestIdempotentCommitCleansUpLock verifies that a duplicate commit with the same startTs and commitVersion deletes the lock.
+func TestIdempotentCommitCleansUpLock(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(32)
+	key := []byte("k")
+
+	lockVal := EncodeLock(Lock{
+		Primary: key,
+		Ts:      11,
+		TTL:     3000,
+		Kind:    kvrpcpb.Mutation_Put,
+	})
+	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, lockVal, 0)
+
+	writeVal := EncodeWrite(Write{Kind: kvrpcpb.Mutation_Put, StartTs: 11})
+	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 22, writeVal, 0)
+
+	commitReq := &kvrpcpb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  11,
+		CommitVersion: 22,
+	}
+	require.Nil(t, Commit(db, latches, commitReq))
+
+	reader := NewReader(db)
+	lock, err := reader.GetLock(key)
+	require.NoError(t, err)
+	require.Nil(t, lock, "idempotent commit must not leave a stale lock")
+}
+
+// TestIdempotentCommitWithPushedMinCommitTs verifies that an idempotent commit cleans up the lock even when MinCommitTs has been pushed past the original commitVersion.
+func TestIdempotentCommitWithPushedMinCommitTs(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(32)
+	key := []byte("k")
+
+	lockVal := EncodeLock(Lock{
+		Primary:     key,
+		Ts:          11,
+		TTL:         3000,
+		Kind:        kvrpcpb.Mutation_Put,
+		MinCommitTs: 30,
+	})
+	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, lockVal, 0)
+
+	writeVal := EncodeWrite(Write{Kind: kvrpcpb.Mutation_Put, StartTs: 11})
+	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 22, writeVal, 0)
+
+	commitReq := &kvrpcpb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  11,
+		CommitVersion: 22,
+	}
+	require.Nil(t, Commit(db, latches, commitReq))
+
+	reader := NewReader(db)
+	lock, err := reader.GetLock(key)
+	require.NoError(t, err)
+	require.Nil(t, lock, "idempotent commit must clean lock even when MinCommitTs was pushed")
+}
