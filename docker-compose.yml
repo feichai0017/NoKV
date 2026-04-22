@@ -1,172 +1,259 @@
+# NoKV HA deployment: 3 meta-root + 3 coordinators + 3 stores + 1 Redis gateway.
+# Every running service exposes a /debug/vars expvar endpoint for dashboards.
+#
+# Usage:
+#   docker compose up -d --build
+#   docker compose logs -f
+#   docker compose down -v    # wipes data volumes too
+#
+# Architecture:
+#   Truth plane:     3× meta-root (replicated raft, quorum of 2)
+#   Control plane:   3× coordinator (CCC lease picks one active)
+#   Execution plane: 3× store (per-region raft, quorum of 2)
+#   Gateway:         1× nokv-redis (RESP-compatible)
+#
+# Every runtime binary (coordinator, store, redis, meta-root) exposes expvar
+# at /debug/vars via its own --metrics-addr flag; ports 9380-9382 belong to
+# the three meta-root peers.
+
 x-nokv-image: &nokv-image
   build: .
   image: nokv:latest
 
+x-common: &common
+  image: nokv:latest
+  restart: unless-stopped
+  stop_signal: SIGINT
+  stop_grace_period: 30s
+
 services:
+  # ---------- bootstrap (seed stores once, then exit) ----------
   bootstrap:
     <<: *nokv-image
     container_name: nokv-bootstrap
     entrypoint: ["/usr/local/bin/bootstrap.sh"]
     command:
-      [
-        "--config",
-        "/etc/nokv/raft_config.json",
-        "--path-template",
-        "/volumes/store-{id}"
-      ]
+      - "--config"
+      - "/etc/nokv/raft_config.json"
+      - "--path-template"
+      - "/volumes/store-{id}"
     volumes:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
-      - node1-data:/volumes/store-1
-      - node2-data:/volumes/store-2
-      - node3-data:/volumes/store-3
+      - store1-data:/volumes/store-1
+      - store2-data:/volumes/store-2
+      - store3-data:/volumes/store-3
     restart: "no"
 
-  coordinator:
-    image: nokv:latest
-    container_name: nokv-coordinator
+  # ============= TRUTH PLANE: 3× meta-root (raft quorum) =============
+  meta-root-1:
+    <<: *common
+    container_name: nokv-meta-root-1
     entrypoint: ["/usr/local/bin/nokv"]
     command:
-      [
-        "coordinator",
-        "--addr",
-        "0.0.0.0:2379",
-        "--id-start",
-        "1",
-        "--ts-start",
-        "100",
-        "--workdir",
-        "/var/lib/nokv-coordinator"
-      ]
-    expose:
-      - "2379"
-    ports:
-      - "2379:2379"
+      - "meta-root"
+      - "--addr=0.0.0.0:2380"
+      - "--metrics-addr=0.0.0.0:9380"
+      - "--node-id=1"
+      - "--transport-addr=nokv-meta-root-1:2480"
+      - "--peer=1=nokv-meta-root-1:2480"
+      - "--peer=2=nokv-meta-root-2:2480"
+      - "--peer=3=nokv-meta-root-3:2480"
+      - "--workdir=/var/lib/nokv-meta-root"
     volumes:
-      - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
-      - coordinator-data:/var/lib/nokv-coordinator
-    restart: "no"
-    stop_signal: SIGINT
-    stop_grace_period: 30s
+      - meta-root-1-data:/var/lib/nokv-meta-root
+    expose: ["2380", "2480", "9380"]
 
-  node1:
-    image: nokv:latest
-    container_name: nokv-node1
+  meta-root-2:
+    <<: *common
+    container_name: nokv-meta-root-2
+    entrypoint: ["/usr/local/bin/nokv"]
+    command:
+      - "meta-root"
+      - "--addr=0.0.0.0:2380"
+      - "--metrics-addr=0.0.0.0:9380"
+      - "--node-id=2"
+      - "--transport-addr=nokv-meta-root-2:2480"
+      - "--peer=1=nokv-meta-root-1:2480"
+      - "--peer=2=nokv-meta-root-2:2480"
+      - "--peer=3=nokv-meta-root-3:2480"
+      - "--workdir=/var/lib/nokv-meta-root"
+    volumes:
+      - meta-root-2-data:/var/lib/nokv-meta-root
+    expose: ["2380", "2480", "9380"]
+
+  meta-root-3:
+    <<: *common
+    container_name: nokv-meta-root-3
+    entrypoint: ["/usr/local/bin/nokv"]
+    command:
+      - "meta-root"
+      - "--addr=0.0.0.0:2380"
+      - "--metrics-addr=0.0.0.0:9380"
+      - "--node-id=3"
+      - "--transport-addr=nokv-meta-root-3:2480"
+      - "--peer=1=nokv-meta-root-1:2480"
+      - "--peer=2=nokv-meta-root-2:2480"
+      - "--peer=3=nokv-meta-root-3:2480"
+      - "--workdir=/var/lib/nokv-meta-root"
+    volumes:
+      - meta-root-3-data:/var/lib/nokv-meta-root
+    expose: ["2380", "2480", "9380"]
+
+  # ============= CONTROL PLANE: 3× coordinator (CCC lease HA) =============
+  coordinator-1:
+    <<: *common
+    container_name: nokv-coordinator-1
+    entrypoint: ["/usr/local/bin/nokv"]
+    command:
+      - "coordinator"
+      - "--addr=0.0.0.0:2379"
+      - "--metrics-addr=0.0.0.0:9100"
+      - "--coordinator-id=coord-1"
+      - "--root-peer=1=nokv-meta-root-1:2380"
+      - "--root-peer=2=nokv-meta-root-2:2380"
+      - "--root-peer=3=nokv-meta-root-3:2380"
+    expose: ["2379", "9100"]
+    depends_on:
+      meta-root-1: { condition: service_started }
+      meta-root-2: { condition: service_started }
+      meta-root-3: { condition: service_started }
+
+  coordinator-2:
+    <<: *common
+    container_name: nokv-coordinator-2
+    entrypoint: ["/usr/local/bin/nokv"]
+    command:
+      - "coordinator"
+      - "--addr=0.0.0.0:2379"
+      - "--metrics-addr=0.0.0.0:9100"
+      - "--coordinator-id=coord-2"
+      - "--root-peer=1=nokv-meta-root-1:2380"
+      - "--root-peer=2=nokv-meta-root-2:2380"
+      - "--root-peer=3=nokv-meta-root-3:2380"
+    expose: ["2379", "9100"]
+    depends_on:
+      meta-root-1: { condition: service_started }
+      meta-root-2: { condition: service_started }
+      meta-root-3: { condition: service_started }
+
+  coordinator-3:
+    <<: *common
+    container_name: nokv-coordinator-3
+    entrypoint: ["/usr/local/bin/nokv"]
+    command:
+      - "coordinator"
+      - "--addr=0.0.0.0:2379"
+      - "--metrics-addr=0.0.0.0:9100"
+      - "--coordinator-id=coord-3"
+      - "--root-peer=1=nokv-meta-root-1:2380"
+      - "--root-peer=2=nokv-meta-root-2:2380"
+      - "--root-peer=3=nokv-meta-root-3:2380"
+    expose: ["2379", "9100"]
+    depends_on:
+      meta-root-1: { condition: service_started }
+      meta-root-2: { condition: service_started }
+      meta-root-3: { condition: service_started }
+
+  # ============= EXECUTION PLANE: 3× store =============
+  store-1:
+    <<: *common
+    container_name: nokv-store-1
     entrypoint: ["/usr/local/bin/serve-store.sh"]
     command:
-      [
-        "--config",
-        "/etc/nokv/raft_config.json",
-        "--store-id",
-        "1",
-        "--workdir",
-        "/var/lib/nokv",
-        "--scope",
-        "docker"
-      ]
+      - "--config=/etc/nokv/raft_config.json"
+      - "--store-id=1"
+      - "--workdir=/var/lib/nokv"
+      - "--scope=docker"
+      - "--coordinator-addr=nokv-coordinator-1:2379"
+      - "--extra"
+      - "--metrics-addr=0.0.0.0:9200"
     volumes:
-      - node1-data:/var/lib/nokv
+      - store1-data:/var/lib/nokv
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
-    ports:
-      - "20160:20160"
+    expose: ["20160", "9200"]
     depends_on:
-      bootstrap:
-        condition: service_completed_successfully
-      coordinator:
-        condition: service_started
-    restart: "no"
-    stop_signal: SIGINT
-    stop_grace_period: 30s
+      bootstrap: { condition: service_completed_successfully }
+      coordinator-1: { condition: service_started }
 
-  node2:
-    image: nokv:latest
-    container_name: nokv-node2
+  store-2:
+    <<: *common
+    container_name: nokv-store-2
     entrypoint: ["/usr/local/bin/serve-store.sh"]
     command:
-      [
-        "--config",
-        "/etc/nokv/raft_config.json",
-        "--store-id",
-        "2",
-        "--workdir",
-        "/var/lib/nokv",
-        "--scope",
-        "docker"
-      ]
+      - "--config=/etc/nokv/raft_config.json"
+      - "--store-id=2"
+      - "--workdir=/var/lib/nokv"
+      - "--scope=docker"
+      - "--coordinator-addr=nokv-coordinator-1:2379"
+      - "--extra"
+      - "--metrics-addr=0.0.0.0:9200"
     volumes:
-      - node2-data:/var/lib/nokv
+      - store2-data:/var/lib/nokv
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
-    ports:
-      - "20161:20160"
+    expose: ["20160", "9200"]
     depends_on:
-      bootstrap:
-        condition: service_completed_successfully
-      coordinator:
-        condition: service_started
-    restart: "no"
-    stop_signal: SIGINT
-    stop_grace_period: 30s
+      bootstrap: { condition: service_completed_successfully }
+      coordinator-1: { condition: service_started }
 
-  node3:
-    image: nokv:latest
-    container_name: nokv-node3
+  store-3:
+    <<: *common
+    container_name: nokv-store-3
     entrypoint: ["/usr/local/bin/serve-store.sh"]
     command:
-      [
-        "--config",
-        "/etc/nokv/raft_config.json",
-        "--store-id",
-        "3",
-        "--workdir",
-        "/var/lib/nokv",
-        "--scope",
-        "docker"
-      ]
+      - "--config=/etc/nokv/raft_config.json"
+      - "--store-id=3"
+      - "--workdir=/var/lib/nokv"
+      - "--scope=docker"
+      - "--coordinator-addr=nokv-coordinator-1:2379"
+      - "--extra"
+      - "--metrics-addr=0.0.0.0:9200"
     volumes:
-      - node3-data:/var/lib/nokv
+      - store3-data:/var/lib/nokv
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
-    ports:
-      - "20162:20160"
+    expose: ["20160", "9200"]
     depends_on:
-      bootstrap:
-        condition: service_completed_successfully
-      coordinator:
-        condition: service_started
-    restart: "no"
-    stop_signal: SIGINT
-    stop_grace_period: 30s
+      bootstrap: { condition: service_completed_successfully }
+      coordinator-1: { condition: service_started }
 
+  # ============= REDIS GATEWAY =============
   redis:
-    image: nokv:latest
+    <<: *common
     container_name: nokv-redis
     entrypoint: ["/usr/local/bin/nokv-redis"]
     command:
-      [
-        "--addr",
-        "0.0.0.0:6380",
-        "--raft-config",
-        "/etc/nokv/raft_config.json",
-        "--addr-scope",
-        "docker"
-      ]
-    ports:
-      - "6380:6380"
+      - "--addr=0.0.0.0:6380"
+      - "--raft-config=/etc/nokv/raft_config.json"
+      - "--addr-scope=docker"
+      - "--coordinator-addr=nokv-coordinator-1:2379"
+      - "--metrics-addr=0.0.0.0:9300"
     volumes:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
+    ports:
+      - "6380:6380"
+    expose: ["9300"]
     depends_on:
-      node1:
-        condition: service_started
-      node2:
-        condition: service_started
-      node3:
-        condition: service_started
-      coordinator:
-        condition: service_started
-    restart: "no"
-    stop_signal: SIGINT
-    stop_grace_period: 30s
+      store-1: { condition: service_started }
+      store-2: { condition: service_started }
+      store-3: { condition: service_started }
+      coordinator-1: { condition: service_started }
+
+  # ============= CLOUDFLARE TUNNEL (optional) =============
+  # Uncomment after `cloudflared tunnel create nokv-demo` and export the token:
+  #   export CLOUDFLARE_TUNNEL_TOKEN=eyJh...
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   container_name: nokv-cloudflared
+  #   restart: unless-stopped
+  #   command: tunnel --no-autoupdate run
+  #   environment:
+  #     - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+  #   depends_on:
+  #     redis: { condition: service_started }
 
 volumes:
-  node1-data:
-  node2-data:
-  node3-data:
-  coordinator-data:
+  meta-root-1-data:
+  meta-root-2-data:
+  meta-root-3-data:
+  store1-data:
+  store2-data:
+  store3-data:

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	coordprotocol "github.com/feichai0017/NoKV/coordinator/protocol"
-	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
+	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
@@ -64,7 +64,7 @@ type readState struct {
 	servedToken    rootstorage.TailToken
 	currentToken   rootstorage.TailToken
 	rootLag        uint64
-	catchUpState   coordstorage.CatchUpState
+	catchUpState   rootview.CatchUpState
 	degraded       coordpb.DegradedMode
 	servedByLeader bool
 	certGeneration uint64
@@ -160,7 +160,7 @@ func (s *Service) currentReadState() (readState, error) {
 		return readState{
 			degraded:       coordpb.DegradedMode_DEGRADED_MODE_HEALTHY,
 			servedByLeader: true,
-			catchUpState:   coordstorage.CatchUpStateFresh,
+			catchUpState:   rootview.CatchUpStateFresh,
 		}, nil
 	}
 	servedToken := rootstorage.TailToken{}
@@ -172,7 +172,7 @@ func (s *Service) currentReadState() (readState, error) {
 		servedByLeader: s.storage == nil || s.storage.IsLeader(),
 		servedToken:    servedToken,
 		currentToken:   servedToken,
-		catchUpState:   coordstorage.CatchUpStateFresh,
+		catchUpState:   rootview.CatchUpStateFresh,
 	}
 	if s.storage == nil {
 		state.rootLag = rootLag(state.currentToken, state.servedToken)
@@ -186,7 +186,7 @@ func (s *Service) currentReadState() (readState, error) {
 	snapshot, err := s.currentRootSnapshot()
 	if err != nil {
 		state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE
-		state.catchUpState = coordstorage.CatchUpStateUnavailable
+		state.catchUpState = rootview.CatchUpStateUnavailable
 		return state, err
 	}
 	if snapshot.CoordinatorLease.CertGeneration != 0 && strings.TrimSpace(snapshot.CoordinatorLease.HolderID) != "" {
@@ -205,16 +205,16 @@ func (s *Service) currentReadState() (readState, error) {
 	if s.cachedRootSnapshotStale() {
 		if errText := s.lastRootReloadError(); strings.TrimSpace(errText) != "" {
 			state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE
-			state.catchUpState = coordstorage.CatchUpStateUnavailable
+			state.catchUpState = rootview.CatchUpStateUnavailable
 			return state, errors.New(errText)
 		}
 	}
 	if state.rootLag == 0 {
-		state.catchUpState = coordstorage.CatchUpStateFresh
+		state.catchUpState = rootview.CatchUpStateFresh
 		return state, nil
 	}
-	if state.catchUpState == coordstorage.CatchUpStateFresh || state.catchUpState == coordstorage.CatchUpStateUnspecified {
-		state.catchUpState = coordstorage.CatchUpStateLagging
+	if state.catchUpState == rootview.CatchUpStateFresh || state.catchUpState == rootview.CatchUpStateUnspecified {
+		state.catchUpState = rootview.CatchUpStateLagging
 	}
 	if state.rootLag > 0 {
 		state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_LAGGING
@@ -284,15 +284,15 @@ func boundedLagSatisfied(lag, bound uint64) bool {
 	return lag <= bound
 }
 
-func catchUpStateToProto(state coordstorage.CatchUpState) coordpb.CatchUpState {
+func catchUpStateToProto(state rootview.CatchUpState) coordpb.CatchUpState {
 	switch state {
-	case coordstorage.CatchUpStateFresh:
+	case rootview.CatchUpStateFresh:
 		return coordpb.CatchUpState_CATCH_UP_STATE_FRESH
-	case coordstorage.CatchUpStateLagging:
+	case rootview.CatchUpStateLagging:
 		return coordpb.CatchUpState_CATCH_UP_STATE_LAGGING
-	case coordstorage.CatchUpStateBootstrapRequired:
+	case rootview.CatchUpStateBootstrapRequired:
 		return coordpb.CatchUpState_CATCH_UP_STATE_BOOTSTRAP_REQUIRED
-	case coordstorage.CatchUpStateUnavailable:
+	case rootview.CatchUpStateUnavailable:
 		return coordpb.CatchUpState_CATCH_UP_STATE_UNAVAILABLE
 	default:
 		return coordpb.CatchUpState_CATCH_UP_STATE_UNSPECIFIED

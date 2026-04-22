@@ -19,7 +19,12 @@ This split is deliberate:
 ## Bootstrap & Local Launch
 
 ### `scripts/dev/cluster.sh`
-- Purpose: build `nokv` and `nokv-config`, read `raft_config.json`, seed local peer catalogs, start Coordinator, then start the configured stores.
+- Purpose: build `nokv` and `nokv-config`, start the canonical 333 separated dev cluster,
+  seed fresh store workdirs, then start stores from `raft_config.json`.
+- Starts:
+  - three `nokv meta-root` processes (Truth plane; replicated is the only mode)
+  - one `nokv coordinator` process (Service plane; always remote-rooted)
+  - all configured stores (Execution plane)
 - Uses shared rules from:
   - `scripts/lib/common.sh`
   - `scripts/lib/config.sh`
@@ -31,30 +36,14 @@ This split is deliberate:
 - Notes:
   - `--config` defaults to `./raft_config.example.json`
   - `--workdir` defaults to `./artifacts/cluster`
-  - store workdirs are rejected if they contain unexpected files
-  - logs stream with `[coordinator]` / `[store-<id>]` prefixes and are still written to `coordinator.log` / `server.log`
-  - this is a bootstrap/dev launcher, not a restart command
-  - it may seed fresh workdirs from `config.regions`, so it should not be used against stores that already contain runtime raft/local metadata
-
-### `scripts/dev/separated-cluster.sh`
-- Purpose: build `nokv` and `nokv-config`, start a local separated control
-  plane, seed fresh store workdirs, then start stores from `raft_config.json`.
-- Starts:
-  - three `nokv meta-root --mode replicated` processes
-  - one `nokv coordinator --root-mode remote`
-  - all configured stores
-- Example:
-  ```bash
-  ./scripts/dev/separated-cluster.sh --config ./raft_config.example.json --workdir ./artifacts/separated-cluster
-  ```
-- Notes:
   - uses fixed local metadata-root gRPC endpoints `127.0.0.1:2380/2381/2382`
   - uses fixed local metadata-root raft transport endpoints `127.0.0.1:3380/3381/3382`
-  - uses an isolated `--workdir` tree and does not reuse config-defined store
-    workdirs
+  - store workdirs are rejected if they contain unexpected files
+  - logs stream with `[meta-root-<id>]` / `[coordinator]` / `[store-<id>]` prefixes
+    and are still written to `root.log` / `coordinator.log` / `server.log`
   - this is a bootstrap/dev launcher, not a restart command
-  - production-style restarts should run `nokv meta-root`,
-    `nokv coordinator --root-mode remote`, and `scripts/ops/serve-store.sh`
+  - production-style restarts should run `scripts/ops/serve-meta-root.sh`,
+    `scripts/ops/serve-coordinator.sh`, and `scripts/ops/serve-store.sh`
     directly against the same durable workdirs
 
 ### `scripts/ops/bootstrap.sh`
@@ -92,13 +81,12 @@ This split is deliberate:
   - `--scope docker` selects container-friendly addresses
 
 ### `scripts/ops/serve-meta-root.sh`
-- Purpose: thin wrapper around `nokv meta-root` for one metadata-root process.
+- Purpose: thin wrapper around `nokv meta-root` for one replicated metadata-root peer.
 - Example:
   ```bash
   ./scripts/ops/serve-meta-root.sh \
     --addr 127.0.0.1:2380 \
-    --mode replicated \
-    --workdir ./artifacts/separated-cluster/meta-root-1 \
+    --workdir ./artifacts/cluster/meta-root-1 \
     --node-id 1 \
     --transport-addr 127.0.0.1:3380 \
     --peer 1=127.0.0.1:3380 \
@@ -108,7 +96,27 @@ This split is deliberate:
 - Notes:
   - `--peer` values are metadata-root raft transport addresses, not gRPC
     service addresses
+  - `--workdir`, `--node-id`, `--transport-addr`, and exactly 3 `--peer`
+    values are required; there is no single-process local mode
   - forwards shutdown signals to `nokv meta-root`
+
+### `scripts/ops/serve-coordinator.sh`
+- Purpose: thin wrapper around `nokv coordinator` for one coordinator process
+  wired to an external 3-peer meta-root cluster.
+- Example:
+  ```bash
+  ./scripts/ops/serve-coordinator.sh \
+    --addr 127.0.0.1:2379 \
+    --coordinator-id c1 \
+    --root-peer 1=127.0.0.1:2380 \
+    --root-peer 2=127.0.0.1:2381 \
+    --root-peer 3=127.0.0.1:2382
+  ```
+- Notes:
+  - `--root-peer` values are metadata-root gRPC service addresses, not raft transport
+  - exactly 3 `--root-peer` values are required (mirrors the Truth-plane quorum)
+  - `--coordinator-id` is required (stable lease owner id)
+  - forwards shutdown signals to `nokv coordinator`
 
 ## Migration Workflow
 

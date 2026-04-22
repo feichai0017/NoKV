@@ -3,7 +3,7 @@ package server
 import (
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
 	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
-	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
+	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
@@ -21,7 +21,7 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 	if err != nil {
 		loadErr = err.Error()
 	}
-	rootSnapshot := coordstorage.Snapshot{}
+	rootSnapshot := rootview.Snapshot{}
 	if s.storage != nil {
 		if snapshot, snapErr := s.storage.Load(); snapErr == nil {
 			rootSnapshot = snapshot
@@ -136,7 +136,7 @@ func diagnosticsTailToken(token rootstorage.TailToken) map[string]any {
 	}
 }
 
-func diagnosticsLeaderID(storage coordstorage.RootStorage) uint64 {
+func diagnosticsLeaderID(storage rootview.RootStorage) uint64 {
 	if storage == nil {
 		return 0
 	}

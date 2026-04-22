@@ -58,7 +58,7 @@ The execution plane is protocolized around four matching ideas:
 The control plane now has a **minimal implemented v1**.
 
 Implemented and exposed through `pb/coordinator/coordinator.proto`,
-`coordinator/server`, `coordinator/storage`, and tests:
+`coordinator/server`, `coordinator/rootview`, and tests:
 
 - route-read `Freshness`
 - `RootToken`

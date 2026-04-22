@@ -5,7 +5,7 @@ import (
 
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
 	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
-	coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
+	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -21,9 +21,9 @@ func TestBuildReport(t *testing.T) {
 		SealedAtCursor: rootstate.Cursor{Term: 1, Index: 9},
 	}
 	sealDigest := rootstate.CoordinatorSealDigest(seal)
-	snapshot := coordstorage.Snapshot{
-		CatchUpState: coordstorage.CatchUpStateFresh,
-		Allocator: coordstorage.AllocatorState{
+	snapshot := rootview.Snapshot{
+		CatchUpState: rootview.CatchUpStateFresh,
+		Allocator: rootview.AllocatorState{
 			IDCurrent: 12,
 			TSCurrent: 34,
 		},
@@ -66,9 +66,9 @@ func TestBuildReportSurfacesClosureGaps(t *testing.T) {
 		SealedAtCursor: rootstate.Cursor{Term: 1, Index: 9},
 	}
 	sealDigest := rootstate.CoordinatorSealDigest(seal)
-	snapshot := coordstorage.Snapshot{
-		CatchUpState: coordstorage.CatchUpStateFresh,
-		Allocator: coordstorage.AllocatorState{
+	snapshot := rootview.Snapshot{
+		CatchUpState: rootview.CatchUpStateFresh,
+		Allocator: rootview.AllocatorState{
 			IDCurrent: 12,
 			TSCurrent: 34,
 		},

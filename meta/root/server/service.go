@@ -1,9 +1,13 @@
-package remote
+// Package server exposes one metadata-root backend as a gRPC service. It
+// mirrors the layout used by raftstore/server and coordinator/server: the
+// companion meta/root/client package dials this service.
+package server
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
@@ -14,7 +18,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"time"
 )
 
 // Backend is the metadata-root authority surface exported over gRPC.
@@ -103,9 +106,9 @@ func (s *Service) FenceAllocator(ctx context.Context, req *metapb.MetadataRootFe
 	if err := s.requireLeader(); err != nil {
 		return nil, err
 	}
-	kind, err := allocatorKindFromProto(req.GetKind())
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+	kind, ok := metawire.RootAllocatorKindFromProto(req.GetKind())
+	if !ok {
+		return nil, status.Error(codes.InvalidArgument, "metadata root allocator kind is required")
 	}
 	current, err := s.backend.FenceAllocator(ctx, kind, req.GetMinimum())
 	if err != nil {
@@ -172,17 +175,17 @@ func (s *Service) ObserveCommitted(context.Context, *metapb.MetadataRootObserveC
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	checkpoint, tail := observedToProto(observed)
+	checkpoint, tail := metawire.RootObservedToProto(observed)
 	return &metapb.MetadataRootObserveCommittedResponse{Checkpoint: checkpoint, Tail: tail}, nil
 }
 
 func (s *Service) ObserveTail(_ context.Context, req *metapb.MetadataRootObserveTailRequest) (*metapb.MetadataRootObserveTailResponse, error) {
-	after := tailTokenFromProto(req.GetAfter())
+	after := metawire.RootTailTokenFromProto(req.GetAfter())
 	advance, err := s.observeTail(after)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	pbAfter, token, checkpoint, tail := tailAdvanceToObservedResponse(advance)
+	pbAfter, token, checkpoint, tail := metawire.RootTailAdvanceToObservedResponse(advance)
 	return &metapb.MetadataRootObserveTailResponse{
 		After:      pbAfter,
 		Token:      token,
@@ -192,13 +195,13 @@ func (s *Service) ObserveTail(_ context.Context, req *metapb.MetadataRootObserve
 }
 
 func (s *Service) WaitTail(_ context.Context, req *metapb.MetadataRootWaitTailRequest) (*metapb.MetadataRootWaitTailResponse, error) {
-	after := tailTokenFromProto(req.GetAfter())
+	after := metawire.RootTailTokenFromProto(req.GetAfter())
 	timeout := time.Duration(req.GetTimeoutMillis()) * time.Millisecond
 	advance, err := s.waitTail(after, timeout)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	pbAfter, token, checkpoint, tail := tailAdvanceToObservedResponse(advance)
+	pbAfter, token, checkpoint, tail := metawire.RootTailAdvanceToObservedResponse(advance)
 	return &metapb.MetadataRootWaitTailResponse{
 		After:      pbAfter,
 		Token:      token,
@@ -218,7 +221,7 @@ func (s *Service) observeCommitted() (rootstorage.ObservedCommitted, error) {
 	if err != nil {
 		return rootstorage.ObservedCommitted{}, err
 	}
-	return fallbackObservedFromSnapshot(snapshot), nil
+	return metawire.RootFallbackObservedFromSnapshot(snapshot), nil
 }
 
 func (s *Service) observeTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error) {
@@ -259,28 +262,6 @@ func (s *Service) requireLeader() error {
 		return status.Error(codes.FailedPrecondition, "metadata root not leader")
 	}
 	return status.Error(codes.FailedPrecondition, fmt.Sprintf("metadata root not leader (leader_id=%d)", leaderID))
-}
-
-func allocatorKindToProto(kind rootstate.AllocatorKind) metapb.RootAllocatorKind {
-	switch kind {
-	case rootstate.AllocatorKindID:
-		return metapb.RootAllocatorKind_ROOT_ALLOCATOR_KIND_ID
-	case rootstate.AllocatorKindTSO:
-		return metapb.RootAllocatorKind_ROOT_ALLOCATOR_KIND_TSO
-	default:
-		return metapb.RootAllocatorKind_ROOT_ALLOCATOR_KIND_UNSPECIFIED
-	}
-}
-
-func allocatorKindFromProto(kind metapb.RootAllocatorKind) (rootstate.AllocatorKind, error) {
-	switch kind {
-	case metapb.RootAllocatorKind_ROOT_ALLOCATOR_KIND_ID:
-		return rootstate.AllocatorKindID, nil
-	case metapb.RootAllocatorKind_ROOT_ALLOCATOR_KIND_TSO:
-		return rootstate.AllocatorKindTSO, nil
-	default:
-		return rootstate.AllocatorKindUnknown, fmt.Errorf("metadata root allocator kind is required")
-	}
 }
 
 func (s *Service) coordinatorProtocolBackend() (leaseBackend, error) {
