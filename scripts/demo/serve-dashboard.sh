@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# Serves scripts/demo/dashboard.html on http://localhost:8080.
-# The dashboard polls expvar endpoints on localhost:9xxx exposed by the
-# docker-compose cluster.
+# Serves scripts/demo/dashboard.html on http://localhost:8080 with
+# small proxy endpoints so the page can issue redis-cli commands and
+# trigger docker stop/start for failover drills.
+#
+# Bound to 127.0.0.1 only. Don't expose this to an untrusted network
+# without an authenticated upstream (cloudflared + Access, nginx + basic
+# auth, etc.) — /api/redis and /api/docker run commands against the host.
 set -euo pipefail
 
 PORT="${1:-8080}"
@@ -13,15 +17,17 @@ NoKV dashboard will be served at http://localhost:${PORT}/dashboard.html
 Make sure the cluster is running first:
   docker compose up -d --build
 
-Then open the URL in your browser. Press Ctrl-C to stop.
+Dashboard endpoints served by this process:
+  GET  /dashboard.html                       static page
+  POST /api/redis   { "cmd": "...", "port": 6380 }
+  POST /api/docker/<stop|start|restart>/<nokv-*>
+
+Press Ctrl-C to stop.
 EOF
 
-cd "$SCRIPT_DIR"
-if command -v python3 >/dev/null 2>&1; then
-  exec python3 -m http.server "$PORT" --bind 127.0.0.1
-elif command -v python >/dev/null 2>&1; then
-  exec python -m SimpleHTTPServer "$PORT"
-else
-  echo "no python found — open scripts/demo/dashboard.html directly in your browser" >&2
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "error: python3 is required" >&2
   exit 1
 fi
+
+exec python3 "$SCRIPT_DIR/dashboard_server.py" "$PORT"
