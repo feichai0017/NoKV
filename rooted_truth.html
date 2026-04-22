@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-570277fc.js";
+            window.path_to_searchindex_js = "searchindex-c14ddfb7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-15a84097.js"></script>
@@ -257,22 +257,17 @@
 <p>After <code>Append</code> returns successfully, callers can observe the new state via <code>Snapshot()</code>. The <code>CommitInfo.Cursor</code> they get back is the globally ordered cursor for the <strong>last</strong> event in the batch.</p>
 <p><code>FenceAllocator</code> is separate because it’s an <strong>authoritative minimum</strong> — backends may promote the fence further (e.g., to account for outstanding windows) but must never return a value below <code>min</code>.</p>
 <hr>
-<h2 id="5-two-backends-same-interface"><a class="header" href="#5-two-backends-same-interface">5. Two backends, same interface</a></h2>
-<h3 id="local-single-node"><a class="header" href="#local-single-node">Local (single-node)</a></h3>
-<p><a href="../meta/root/backend/local/store.go"><code>meta/root/backend/local/store.go</code></a> — file-backed log with an in-memory mirror.</p>
+<h2 id="5-single-backend-replicated"><a class="header" href="#5-single-backend-replicated">5. Single backend: replicated</a></h2>
+<p>NoKV ships one meta-root backend: the 3-peer raft-replicated cluster.
+Historical single-process “local” backend has been removed.</p>
+<p><a href="../meta/root/replicated/store.go"><code>meta/root/replicated/store.go</code></a> — embedded raft library, quorum-durable commits.</p>
 <ul>
-<li>One file per workdir, append-only segments + compact checkpoint</li>
-<li><code>mu</code> protects in-memory state; <code>logMu</code> protects the on-disk segments</li>
-<li>Compaction is background (kicked by <code>appendLocked</code>, runs in its own goroutine)</li>
-<li>Designed for embedded mode and single-coordinator deployments</li>
-</ul>
-<h3 id="replicated-multi-node"><a class="header" href="#replicated-multi-node">Replicated (multi-node)</a></h3>
-<p><a href="../meta/root/backend/replicated/store.go"><code>meta/root/backend/replicated/store.go</code></a> — embedded raft library, quorum-durable commits.</p>
-<ul>
-<li>3 replicas typical, one leader</li>
+<li>exactly 3 replicas, one leader</li>
 <li><code>Append</code> proposes a raft log entry; returns after it’s committed to quorum</li>
 <li>Non-leader nodes reject <code>Append</code> with <code>codes.FailedPrecondition</code></li>
 <li>Leader changes trigger <code>IsLeader()</code> / <code>LeaderID()</code> state updates that coordinator consumes</li>
+<li>On-disk state per peer: <code>root.events.wal</code>, <code>root.checkpoint.binpb</code>, <code>root.raft.bin</code>
+(raft hard state + snapshot + retained entries)</li>
 </ul>
 <hr>
 <h2 id="6-coordinator-commands--how-leasesealclosure-flow-in"><a class="header" href="#6-coordinator-commands--how-leasesealclosure-flow-in">6. Coordinator commands — how lease/seal/closure flow in</a></h2>
@@ -314,7 +309,7 @@ sub.Acknowledge(advance)
 <h2 id="8-recovery-model"><a class="header" href="#8-recovery-model">8. Recovery model</a></h2>
 <p>On coordinator boot:</p>
 <ol>
-<li>Open the backend (<code>rootlocal.Open(workdir)</code> or connect to replicated cluster)</li>
+<li>Open the replicated backend (each peer via <code>rootreplicated.Open</code>, or connect through <code>coordinator/rootview</code> for the client side)</li>
 <li>Call <code>Snapshot()</code> — backend replays/bootstraps internally</li>
 <li>Build a <code>TailSubscription</code> from the snapshot’s <code>LastCommitted</code></li>
 <li>Start the lease campaign loop, which will eventually <code>ApplyCoordinatorLease(Issue)</code> when it’s leader</li>
@@ -343,9 +338,8 @@ sub.Acknowledge(advance)
 <tr><td><a href="../meta/root/state/coordinator_lease.go"><code>meta/root/state/coordinator_lease.go</code></a></td><td>Lease/Seal/Closure validation + digest</td></tr>
 <tr><td><a href="../meta/root/state/transition.go"><code>meta/root/state/transition.go</code></a></td><td>Cross-event transition rules</td></tr>
 <tr><td><a href="../meta/root/storage/virtual_log.go"><code>meta/root/storage/virtual_log.go</code></a></td><td>Tail subscription + checkpoint primitives</td></tr>
-<tr><td><a href="../meta/root/backend/local/store.go"><code>meta/root/backend/local/store.go</code></a></td><td>Single-node backend</td></tr>
-<tr><td><a href="../meta/root/backend/replicated/store.go"><code>meta/root/backend/replicated/store.go</code></a></td><td>Raft-replicated backend</td></tr>
-<tr><td><a href="../meta/root/remote/service.go"><code>meta/root/remote/service.go</code></a></td><td>gRPC wrapping of either backend</td></tr>
+<tr><td><a href="../meta/root/replicated/store.go"><code>meta/root/replicated/store.go</code></a></td><td>The only backend: 3-peer raft-replicated meta-root</td></tr>
+<tr><td><a href="../meta/root/remote/service.go"><code>meta/root/remote/service.go</code></a></td><td>gRPC service + client for meta-root</td></tr>
 <tr><td><a href="../meta/wire/root.go"><code>meta/wire/root.go</code></a></td><td>proto ↔ Go conversions</td></tr>
 </tbody>
 </table>

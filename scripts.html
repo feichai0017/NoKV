@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-570277fc.js";
+            window.path_to_searchindex_js = "searchindex-c14ddfb7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-15a84097.js"></script>
@@ -203,7 +203,15 @@
 <h2 id="bootstrap--local-launch"><a class="header" href="#bootstrap--local-launch">Bootstrap &amp; Local Launch</a></h2>
 <h3 id="scriptsdevclustersh"><a class="header" href="#scriptsdevclustersh"><code>scripts/dev/cluster.sh</code></a></h3>
 <ul>
-<li>Purpose: build <code>nokv</code> and <code>nokv-config</code>, read <code>raft_config.json</code>, seed local peer catalogs, start Coordinator, then start the configured stores.</li>
+<li>Purpose: build <code>nokv</code> and <code>nokv-config</code>, start the canonical 333 separated dev cluster,
+seed fresh store workdirs, then start stores from <code>raft_config.json</code>.</li>
+<li>Starts:
+<ul>
+<li>three <code>nokv meta-root</code> processes (Truth plane; replicated is the only mode)</li>
+<li>one <code>nokv coordinator</code> process (Service plane; always remote-rooted)</li>
+<li>all configured stores (Execution plane)</li>
+</ul>
+</li>
 <li>Uses shared rules from:
 <ul>
 <li><code>scripts/lib/common.sh</code></li>
@@ -219,37 +227,14 @@
 <ul>
 <li><code>--config</code> defaults to <code>./raft_config.example.json</code></li>
 <li><code>--workdir</code> defaults to <code>./artifacts/cluster</code></li>
-<li>store workdirs are rejected if they contain unexpected files</li>
-<li>logs stream with <code>[coordinator]</code> / <code>[store-&lt;id&gt;]</code> prefixes and are still written to <code>coordinator.log</code> / <code>server.log</code></li>
-<li>this is a bootstrap/dev launcher, not a restart command</li>
-<li>it may seed fresh workdirs from <code>config.regions</code>, so it should not be used against stores that already contain runtime raft/local metadata</li>
-</ul>
-</li>
-</ul>
-<h3 id="scriptsdevseparated-clustersh"><a class="header" href="#scriptsdevseparated-clustersh"><code>scripts/dev/separated-cluster.sh</code></a></h3>
-<ul>
-<li>Purpose: build <code>nokv</code> and <code>nokv-config</code>, start a local separated control
-plane, seed fresh store workdirs, then start stores from <code>raft_config.json</code>.</li>
-<li>Starts:
-<ul>
-<li>three <code>nokv meta-root --mode replicated</code> processes</li>
-<li>one <code>nokv coordinator --root-mode remote</code></li>
-<li>all configured stores</li>
-</ul>
-</li>
-<li>Example:
-<pre><code class="language-bash">./scripts/dev/separated-cluster.sh --config ./raft_config.example.json --workdir ./artifacts/separated-cluster
-</code></pre>
-</li>
-<li>Notes:
-<ul>
 <li>uses fixed local metadata-root gRPC endpoints <code>127.0.0.1:2380/2381/2382</code></li>
 <li>uses fixed local metadata-root raft transport endpoints <code>127.0.0.1:3380/3381/3382</code></li>
-<li>uses an isolated <code>--workdir</code> tree and does not reuse config-defined store
-workdirs</li>
+<li>store workdirs are rejected if they contain unexpected files</li>
+<li>logs stream with <code>[meta-root-&lt;id&gt;]</code> / <code>[coordinator]</code> / <code>[store-&lt;id&gt;]</code> prefixes
+and are still written to <code>root.log</code> / <code>coordinator.log</code> / <code>server.log</code></li>
 <li>this is a bootstrap/dev launcher, not a restart command</li>
-<li>production-style restarts should run <code>nokv meta-root</code>,
-<code>nokv coordinator --root-mode remote</code>, and <code>scripts/ops/serve-store.sh</code>
+<li>production-style restarts should run <code>scripts/ops/serve-meta-root.sh</code>,
+<code>scripts/ops/serve-coordinator.sh</code>, and <code>scripts/ops/serve-store.sh</code>
 directly against the same durable workdirs</li>
 </ul>
 </li>
@@ -301,12 +286,11 @@ rather than a peer-id keyed mapping</li>
 </ul>
 <h3 id="scriptsopsserve-meta-rootsh"><a class="header" href="#scriptsopsserve-meta-rootsh"><code>scripts/ops/serve-meta-root.sh</code></a></h3>
 <ul>
-<li>Purpose: thin wrapper around <code>nokv meta-root</code> for one metadata-root process.</li>
+<li>Purpose: thin wrapper around <code>nokv meta-root</code> for one replicated metadata-root peer.</li>
 <li>Example:
 <pre><code class="language-bash">./scripts/ops/serve-meta-root.sh \
   --addr 127.0.0.1:2380 \
-  --mode replicated \
-  --workdir ./artifacts/separated-cluster/meta-root-1 \
+  --workdir ./artifacts/cluster/meta-root-1 \
   --node-id 1 \
   --transport-addr 127.0.0.1:3380 \
   --peer 1=127.0.0.1:3380 \
@@ -318,7 +302,31 @@ rather than a peer-id keyed mapping</li>
 <ul>
 <li><code>--peer</code> values are metadata-root raft transport addresses, not gRPC
 service addresses</li>
+<li><code>--workdir</code>, <code>--node-id</code>, <code>--transport-addr</code>, and exactly 3 <code>--peer</code>
+values are required; there is no single-process local mode</li>
 <li>forwards shutdown signals to <code>nokv meta-root</code></li>
+</ul>
+</li>
+</ul>
+<h3 id="scriptsopsserve-coordinatorsh"><a class="header" href="#scriptsopsserve-coordinatorsh"><code>scripts/ops/serve-coordinator.sh</code></a></h3>
+<ul>
+<li>Purpose: thin wrapper around <code>nokv coordinator</code> for one coordinator process
+wired to an external 3-peer meta-root cluster.</li>
+<li>Example:
+<pre><code class="language-bash">./scripts/ops/serve-coordinator.sh \
+  --addr 127.0.0.1:2379 \
+  --coordinator-id c1 \
+  --root-peer 1=127.0.0.1:2380 \
+  --root-peer 2=127.0.0.1:2381 \
+  --root-peer 3=127.0.0.1:2382
+</code></pre>
+</li>
+<li>Notes:
+<ul>
+<li><code>--root-peer</code> values are metadata-root gRPC service addresses, not raft transport</li>
+<li>exactly 3 <code>--root-peer</code> values are required (mirrors the Truth-plane quorum)</li>
+<li><code>--coordinator-id</code> is required (stable lease owner id)</li>
+<li>forwards shutdown signals to <code>nokv coordinator</code></li>
 </ul>
 </li>
 </ul>

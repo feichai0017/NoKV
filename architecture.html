@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-570277fc.js";
+            window.path_to_searchindex_js = "searchindex-c14ddfb7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-15a84097.js"></script>
@@ -427,7 +427,7 @@ defer srv.Close()
 </tbody>
 </table>
 </div>
-<p><code>nokv serve</code> is the CLI entry point—open the DB, construct <code>server.Node</code>, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). <code>scripts/dev/cluster.sh</code> builds the CLI, writes a minimal local peer catalog, launches multiple <code>nokv serve</code> processes on localhost, and handles cleanup on Ctrl+C.</p>
+<p><code>nokv serve</code> is the CLI entry point—open the DB, construct <code>server.Node</code>, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). <code>scripts/dev/cluster.sh</code> builds the CLI, seeds local peer catalogs, and launches the 333 separated layout (3 meta-root peers + 1 coordinator + all configured stores) on localhost, handling cleanup on Ctrl+C.</p>
 <p>The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC and region semantics remain familiar, but the service name exposed on the wire is <code>pb.NoKV</code>.</p>
 <hr>
 <h2 id="5-client-workflow"><a class="header" href="#5-client-workflow">5. Client Workflow</a></h2>
@@ -437,7 +437,7 @@ defer srv.Close()
 <li><strong>Reads</strong>: <code>Get</code> and <code>Scan</code> pick the leader store for a key range, issue NoKV RPCs, and retry on NotLeader/EpochNotMatch.</li>
 <li><strong>Writes</strong>: <code>Mutate</code> bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); <code>Put</code> and <code>Delete</code> are convenience wrappers using the same 2PC path.</li>
 <li><strong>Timestamps</strong>: clients must supply <code>startVersion</code>/<code>commitVersion</code>. For distributed demos, use Coordinator (<code>nokv coordinator</code>) to obtain globally increasing values before calling <code>TwoPhaseCommit</code>.</li>
-<li><strong>Bootstrap helpers</strong>: <code>scripts/dev/cluster.sh --config raft_config.example.json</code> builds the binaries, seeds local peer catalogs via <code>nokv-config catalog</code>, launches Coordinator, and starts the stores declared in the config.</li>
+<li><strong>Bootstrap helpers</strong>: <code>scripts/dev/cluster.sh --config raft_config.example.json</code> builds the binaries, seeds local peer catalogs via <code>nokv-config catalog</code>, launches the 3 meta-root peers + coordinator, and starts the stores declared in the config.</li>
 </ul>
 <p><strong>Example (two regions)</strong></p>
 <ol>

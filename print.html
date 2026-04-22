@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-570277fc.js";
+            window.path_to_searchindex_js = "searchindex-c14ddfb7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-15a84097.js"></script>
@@ -293,7 +293,7 @@
 </thead>
 <tbody>
 <tr><td>CLI reference (<code>nokv</code>)</td><td><a href="#cli-cmdnokv-reference">cli.md</a></td></tr>
-<tr><td><strong>ccc-audit</strong> (rooted state + reply-trace audit)</td><td><a href="#ccc-audit">ccc-audit.md</a></td></tr>
+<tr><td><strong>ccc-audit</strong> (read-only remote audit against meta-root)</td><td><a href="#ccc-audit">ccc-audit.md</a></td></tr>
 <tr><td>Redis gateway (<code>nokv-redis</code>)</td><td><a href="#redis-gateway">nokv-redis.md</a></td></tr>
 <tr><td>Configuration</td><td><a href="#configuration--options">config.md</a></td></tr>
 <tr><td>Scripts layout</td><td><a href="#scripts-overview">scripts.md</a></td></tr>
@@ -393,10 +393,11 @@ go run ./cmd/nokv regions --workdir ./artifacts/cluster/store-1 --json
 <li>(Optional) Docker + Docker Compose for containerized runs</li>
 </ul>
 <h2 id="option-a-local-cluster-recommended-for-dev"><a class="header" href="#option-a-local-cluster-recommended-for-dev">Option A: Local Cluster (recommended for dev)</a></h2>
-<p>This launches a 3-node Raft cluster plus a Coordinator service.</p>
+<p>This launches the 333 separated layout: 3 replicated meta-root peers (Truth plane),
+1 coordinator (Service plane), and the stores declared in the config (Execution plane).</p>
 <pre><code class="language-bash">./scripts/dev/cluster.sh --config ./raft_config.example.json
 </code></pre>
-<p>The launcher stays attached, streams Coordinator/store logs to the terminal, and also writes them under <code>./artifacts/cluster/</code>.</p>
+<p>The launcher stays attached, streams meta-root/Coordinator/store logs to the terminal, and also writes them under <code>./artifacts/cluster/</code>.</p>
 <p>If you stop one store and want to restart it later, restart it against the same
 workdir:</p>
 <pre><code class="language-bash">./scripts/ops/serve-store.sh \
@@ -738,7 +739,7 @@ defer srv.Close()
 </tbody>
 </table>
 </div>
-<p><code>nokv serve</code> is the CLI entry point—open the DB, construct <code>server.Node</code>, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). <code>scripts/dev/cluster.sh</code> builds the CLI, writes a minimal local peer catalog, launches multiple <code>nokv serve</code> processes on localhost, and handles cleanup on Ctrl+C.</p>
+<p><code>nokv serve</code> is the CLI entry point—open the DB, construct <code>server.Node</code>, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). <code>scripts/dev/cluster.sh</code> builds the CLI, seeds local peer catalogs, and launches the 333 separated layout (3 meta-root peers + 1 coordinator + all configured stores) on localhost, handling cleanup on Ctrl+C.</p>
 <p>The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC and region semantics remain familiar, but the service name exposed on the wire is <code>pb.NoKV</code>.</p>
 <hr>
 <h2 id="5-client-workflow"><a class="header" href="#5-client-workflow">5. Client Workflow</a></h2>
@@ -748,7 +749,7 @@ defer srv.Close()
 <li><strong>Reads</strong>: <code>Get</code> and <code>Scan</code> pick the leader store for a key range, issue NoKV RPCs, and retry on NotLeader/EpochNotMatch.</li>
 <li><strong>Writes</strong>: <code>Mutate</code> bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); <code>Put</code> and <code>Delete</code> are convenience wrappers using the same 2PC path.</li>
 <li><strong>Timestamps</strong>: clients must supply <code>startVersion</code>/<code>commitVersion</code>. For distributed demos, use Coordinator (<code>nokv coordinator</code>) to obtain globally increasing values before calling <code>TwoPhaseCommit</code>.</li>
-<li><strong>Bootstrap helpers</strong>: <code>scripts/dev/cluster.sh --config raft_config.example.json</code> builds the binaries, seeds local peer catalogs via <code>nokv-config catalog</code>, launches Coordinator, and starts the stores declared in the config.</li>
+<li><strong>Bootstrap helpers</strong>: <code>scripts/dev/cluster.sh --config raft_config.example.json</code> builds the binaries, seeds local peer catalogs via <code>nokv-config catalog</code>, launches the 3 meta-root peers + coordinator, and starts the stores declared in the config.</li>
 </ul>
 <p><strong>Example (two regions)</strong></p>
 <ol>
@@ -1087,7 +1088,7 @@ clear rollout line.</p>
 <h2 id="0-current-status"><a class="header" href="#0-current-status">0. Current Status</a></h2>
 <p>The control plane now has a <strong>minimal implemented v1</strong>.</p>
 <p>Implemented and exposed through <code>pb/coordinator/coordinator.proto</code>,
-<code>coordinator/server</code>, <code>coordinator/storage</code>, and tests:</p>
+<code>coordinator/server</code>, <code>coordinator/rootview</code>, and tests:</p>
 <ul>
 <li>route-read <code>Freshness</code></li>
 <li><code>RootToken</code></li>
@@ -3938,7 +3939,7 @@ authority and must not be treated as consensus truth outside the store.</li>
 <li>
 <p><strong>Coordinator control-plane view</strong></p>
 <ul>
-<li>Owned by Coordinator and persisted through <a href="../coordinator/storage"><code>coordinator/storage</code></a>.</li>
+<li>Owned by Coordinator and persisted through <a href="../coordinator/rootview"><code>coordinator/rootview</code></a>.</li>
 <li>Built from region/store heartbeats and allocator durability checkpoints.</li>
 <li>Used for:
 <ul>
@@ -4018,7 +4019,7 @@ truth. Durable truth lives in <code>meta/root</code>.</p>
 <ul>
 <li><code>coordinator/catalog</code>: in-memory cluster metadata model.</li>
 <li><code>coordinator/idalloc</code>: monotonic ID allocator used by Coordinator.</li>
-<li><code>coordinator/storage</code>: persistence abstraction (<code>Store</code>) backed by the metadata root.</li>
+<li><code>coordinator/rootview</code>: persistence abstraction (<code>Store</code>) backed by the metadata root.</li>
 <li><code>coordinator/server</code>: gRPC service + RPC validation/error mapping.</li>
 <li><code>coordinator/client</code>: client wrapper used by store/gateway.</li>
 <li><code>coordinator/adapter</code>: scheduler sink that forwards heartbeats into Coordinator.</li>
@@ -4045,9 +4046,8 @@ can rely on.</p>
 future runtime/operator model such as stalled transitions or richer catch-up
 actions.</p>
 <hr>
-<h2 id="3-mode-model"><a class="header" href="#3-mode-model">3. Mode Model</a></h2>
-<p>NoKV currently has one standalone shape and three distributed control-plane
-deployment shapes.</p>
+<h2 id="3-deployment-model"><a class="header" href="#3-deployment-model">3. Deployment Model</a></h2>
+<p>NoKV ships exactly one distributed topology plus the standalone engine shape.</p>
 <h3 id="standalone"><a class="header" href="#standalone"><code>standalone</code></a></h3>
 <ul>
 <li>no <code>coordinator</code></li>
@@ -4057,69 +4057,43 @@ deployment shapes.</p>
 </ul>
 <p>This is the default local engine shape. Standalone is not a degraded control
 plane deployment; it simply has no control plane.</p>
-<h3 id="distributed"><a class="header" href="#distributed"><code>distributed</code></a></h3>
-<p><code>distributed</code> has three control-plane deployments:</p>
-<ol>
-<li><code>single coordinator + local meta</code></li>
-<li><code>3 coordinator + replicated meta</code></li>
-<li><code>separated meta-root + remote coordinator</code></li>
-</ol>
-<p>Both deployments keep the same logical split:</p>
+<h3 id="separated-meta-root--coordinator"><a class="header" href="#separated-meta-root--coordinator"><code>separated meta-root + coordinator</code></a></h3>
 <ul>
-<li><code>meta/root/*</code>: durable rooted truth</li>
-<li><code>coordinator/view</code> + <code>coordinator/catalog</code>: rebuildable routing/scheduling state</li>
-<li><code>coordinator/server</code>: gRPC API surface</li>
-</ul>
-<p>The difference is only the rooted backend:</p>
-<ul>
-<li><code>single coordinator + local meta</code>
-<ul>
-<li>one <code>coordinator</code> process</li>
-<li>one same-process <code>meta/root/backend/local</code></li>
-<li>single-node durable truth</li>
-</ul>
-</li>
-<li><code>3 coordinator + replicated meta</code>
-<ul>
-<li>three <code>coordinator</code> processes</li>
-<li>each process hosts one same-process <code>meta/root/backend/replicated</code></li>
-<li>fixed three-replica rooted truth</li>
-<li>one rooted leader accepts truth writes, followers refresh rooted state and serve read/view traffic</li>
-</ul>
-</li>
-<li><code>separated meta-root + remote coordinator</code>
-<ul>
-<li>three independent <code>nokv meta-root --mode replicated</code> processes own durable
-rooted truth</li>
-<li>one or more <code>nokv coordinator --root-mode remote</code> processes connect through
-the remote metadata-root API</li>
+<li>three independent <code>nokv meta-root</code> processes own durable rooted truth
+(replicated raft quorum, the only backend NoKV ships)</li>
+<li>one or more <code>nokv coordinator</code> processes connect through the remote
+metadata-root gRPC API</li>
 <li><code>CoordinatorLease</code> gates singleton Coordinator duties: <code>AllocID</code>, <code>Tso</code>,
 and scheduler operation planning</li>
 <li>route reads still come from Coordinator’s rebuildable in-memory view and
 expose <code>Freshness</code>, <code>RootToken</code>, <code>CatchUpState</code>, and <code>DegradedMode</code></li>
 </ul>
-</li>
-</ul>
-<p>No other product control-plane mode is supported. In particular:</p>
+<p>Keep the same logical split inside every deployment:</p>
 <ul>
-<li>there is no dynamic metadata membership today</li>
-<li>separated mode is experimental and not the default ops path</li>
-<li>there is no production-grade dynamic <code>coordinator</code> membership manager today</li>
+<li><code>meta/root/*</code>: durable rooted truth (replicated + gRPC service)</li>
+<li><code>coordinator/view</code> + <code>coordinator/catalog</code>: rebuildable routing/scheduling state</li>
+<li><code>coordinator/rootview</code>: remote view of meta-root consumed by coordinator/server</li>
+<li><code>coordinator/server</code>: gRPC API surface</li>
+</ul>
+<p>Product assumptions:</p>
+<ul>
+<li>exactly three meta-root replicas</li>
+<li>meta-root is the only place durable rooted truth lives</li>
+<li>coordinators are stateless relative to rooted truth; only the
+<code>CoordinatorLease</code> differentiates active vs standby</li>
+<li>no dynamic metadata-root membership</li>
+<li>no production-grade dynamic coordinator membership manager</li>
 </ul>
 <p>Separated deployment design and tradeoffs are discussed in
-<code>docs/notes/2026-04-12-coordinator-meta-separation.md</code>. That note is now an
-implemented experimental design note, not just a proposal.</p>
+<code>docs/notes/2026-04-12-coordinator-meta-separation.md</code>.</p>
 <hr>
 <h2 id="4-persistence---workdir"><a class="header" href="#4-persistence---workdir">4. Persistence (<code>--workdir</code>)</a></h2>
 <p><code>--workdir</code> is required for every formal Coordinator deployment that hosts rooted truth.</p>
-<h3 id="single-coordinator--local-meta"><a class="header" href="#single-coordinator--local-meta"><code>single coordinator + local meta</code></a></h3>
-<p>The rooted backend stores:</p>
-<ul>
-<li><code>root.events.wal</code></li>
-<li><code>root.checkpoint.binpb</code></li>
-</ul>
-<h3 id="3-coordinator--replicated-meta"><a class="header" href="#3-coordinator--replicated-meta"><code>3 coordinator + replicated meta</code></a></h3>
-<p>Each Coordinator node has its own workdir and persists two layers of state:</p>
+<h3 id="separated-meta-root--coordinator-1"><a class="header" href="#separated-meta-root--coordinator-1"><code>separated meta-root + coordinator</code></a></h3>
+<p>Each <code>meta-root</code> process has its own rooted workdir and raft transport address.
+The <code>coordinator</code> process does not host rooted truth; it only connects to the
+remote root endpoints through <code>--root-peer nodeID=grpc_addr</code>.</p>
+<p>Each meta-root workdir persists two layers of state:</p>
 <ol>
 <li>rooted truth state
 <ul>
@@ -4134,11 +4108,7 @@ implemented experimental design note, not just a proposal.</p>
 </ul>
 </li>
 </ol>
-<p>Each node must have an isolated workdir. Workdirs are not shared.</p>
-<h3 id="separated-meta-root--remote-coordinator"><a class="header" href="#separated-meta-root--remote-coordinator"><code>separated meta-root + remote coordinator</code></a></h3>
-<p>Each <code>meta-root</code> process has its own rooted workdir and raft transport address.
-The <code>coordinator</code> process does not host rooted truth; it only connects to the
-remote root endpoints through <code>--root-peer nodeID=grpc_addr</code>.</p>
+<p>Each meta-root node must have an isolated workdir. Workdirs are not shared.</p>
 <p>Persistence ownership:</p>
 <ol>
 <li><code>meta-root</code> workdirs own durable rooted truth and replicated metadata-root
@@ -4168,13 +4138,14 @@ last returned ID or timestamp; restart recovery intentionally resumes after the
 fence and skips unused values.</p>
 <p>Startup flow:</p>
 <ol>
-<li>Open rooted <code>coordinator/storage</code> from <code>--workdir</code>.</li>
+<li>Open rooted <code>coordinator/rootview</code> against the 3 meta-root <code>--root-peer</code> endpoints.</li>
 <li>Reconstruct a rooted Coordinator snapshot (<code>regions</code> + allocator fences).</li>
 <li>Compute starts as <code>max(cli_start, fence+1)</code>.</li>
 <li>Materialize the rooted region snapshot into <code>coordinator/catalog.Cluster</code>.</li>
 </ol>
-<p>For replicated mode, followers periodically refresh rooted state and rebuild the
-service-side view. This avoids allocator rollback and removes the old parallel coordinator-state JSON truth table.</p>
+<p>Coordinator periodically refreshes rooted state via the meta-root tail stream
+and rebuilds the service-side view. This avoids allocator rollback and keeps
+all durable truth inside meta-root.</p>
 <h3 id="region-truth-hierarchy"><a class="header" href="#region-truth-hierarchy">Region Truth Hierarchy</a></h3>
 <p>NoKV intentionally keeps three region views with different authority:</p>
 <ul>
@@ -4322,68 +4293,39 @@ limit</li>
 <p><code>coordinator/client</code> accepts multiple Coordinator addresses. Write RPCs retry across Coordinator nodes and
 converge on the rooted leader. Read RPCs may use any available Coordinator endpoint.</p>
 <hr>
-<h2 id="9-deployment-examples"><a class="header" href="#9-deployment-examples">9. Deployment Examples</a></h2>
-<h3 id="single-coordinator--local-meta-1"><a class="header" href="#single-coordinator--local-meta-1"><code>single coordinator + local meta</code></a></h3>
-<pre><code class="language-bash">go run ./cmd/nokv coordinator \
-  -addr 127.0.0.1:2379 \
-  -workdir ./artifacts/coordinator
-</code></pre>
-<h3 id="3-coordinator--replicated-meta-1"><a class="header" href="#3-coordinator--replicated-meta-1"><code>3 coordinator + replicated meta</code></a></h3>
-<p>Node 1:</p>
-<pre><code class="language-bash">go run ./cmd/nokv coordinator \
-  -addr 127.0.0.1:2379 \
-  -workdir ./artifacts/coordinator1 \
-  -root-mode replicated \
-  -root-node-id 1 \
-  -root-transport-addr 127.0.0.1:2471 \
-  -root-peer 1=127.0.0.1:2471 \
-  -root-peer 2=127.0.0.1:2472 \
-  -root-peer 3=127.0.0.1:2473
-</code></pre>
-<p>Node 2 and node 3 use the same peer map, but change:</p>
-<ul>
-<li><code>-addr</code></li>
-<li><code>-workdir</code></li>
-<li><code>-root-node-id</code></li>
-<li><code>-root-transport-addr</code></li>
-</ul>
-<p>Current product assumptions:</p>
-<ul>
-<li>exactly three rooted replicas</li>
-<li>one workdir per Coordinator node</li>
-<li>one transport address per Coordinator node</li>
-<li>no dynamic membership</li>
-</ul>
-<h3 id="separated-meta-root--remote-coordinator-1"><a class="header" href="#separated-meta-root--remote-coordinator-1"><code>separated meta-root + remote coordinator</code></a></h3>
-<p>Start three metadata-root peers:</p>
+<h2 id="9-deployment-example"><a class="header" href="#9-deployment-example">9. Deployment Example</a></h2>
+<p>NoKV ships exactly one topology: a 3-peer replicated meta-root cluster plus
+one or more coordinator processes that talk to it over gRPC.</p>
+<p>Start three metadata-root peers (peer map is identical on all three; only
+<code>-addr</code>, <code>-workdir</code>, <code>-node-id</code>, <code>-transport-addr</code> differ):</p>
 <pre><code class="language-bash">go run ./cmd/nokv meta-root \
   -addr 127.0.0.1:2380 \
-  -mode replicated \
-  -workdir ./artifacts/separated/meta-root-1 \
+  -workdir ./artifacts/cluster/meta-root-1 \
   -node-id 1 \
   -transport-addr 127.0.0.1:3380 \
   -peer 1=127.0.0.1:3380 \
   -peer 2=127.0.0.1:3381 \
   -peer 3=127.0.0.1:3382
 </code></pre>
-<p>Nodes 2 and 3 use the same peer map but change:</p>
-<ul>
-<li><code>-addr</code></li>
-<li><code>-workdir</code></li>
-<li><code>-node-id</code></li>
-<li><code>-transport-addr</code></li>
-</ul>
-<p>Start one remote-root Coordinator:</p>
+<p>Start one coordinator (add more by giving each a distinct <code>-coordinator-id</code>
+and <code>-addr</code>; they share the same <code>-root-peer</code> set):</p>
 <pre><code class="language-bash">go run ./cmd/nokv coordinator \
   -addr 127.0.0.1:2379 \
-  -root-mode remote \
   -coordinator-id c1 \
   -root-peer 1=127.0.0.1:2380 \
   -root-peer 2=127.0.0.1:2381 \
   -root-peer 3=127.0.0.1:2382
 </code></pre>
+<p>Current product assumptions:</p>
+<ul>
+<li>exactly three meta-root replicas</li>
+<li>meta-root is the only place durable rooted truth lives</li>
+<li>coordinators are stateless relative to rooted truth; only the
+<code>CoordinatorLease</code> differentiates active vs standby</li>
+<li>no dynamic metadata-root membership</li>
+</ul>
 <p>For local bootstrap, use:</p>
-<pre><code class="language-bash">./scripts/dev/separated-cluster.sh --config ./raft_config.example.json
+<pre><code class="language-bash">./scripts/dev/cluster.sh --config ./raft_config.example.json
 </code></pre>
 <hr>
 <h2 id="10-comparison-tinykv--tikv"><a class="header" href="#10-comparison-tinykv--tikv">10. Comparison: TinyKV / TiKV</a></h2>
@@ -4526,22 +4468,17 @@ keeps the rooted truth surface small.</p>
 <p>After <code>Append</code> returns successfully, callers can observe the new state via <code>Snapshot()</code>. The <code>CommitInfo.Cursor</code> they get back is the globally ordered cursor for the <strong>last</strong> event in the batch.</p>
 <p><code>FenceAllocator</code> is separate because it’s an <strong>authoritative minimum</strong> — backends may promote the fence further (e.g., to account for outstanding windows) but must never return a value below <code>min</code>.</p>
 <hr>
-<h2 id="5-two-backends-same-interface"><a class="header" href="#5-two-backends-same-interface">5. Two backends, same interface</a></h2>
-<h3 id="local-single-node"><a class="header" href="#local-single-node">Local (single-node)</a></h3>
-<p><a href="../meta/root/backend/local/store.go"><code>meta/root/backend/local/store.go</code></a> — file-backed log with an in-memory mirror.</p>
+<h2 id="5-single-backend-replicated"><a class="header" href="#5-single-backend-replicated">5. Single backend: replicated</a></h2>
+<p>NoKV ships one meta-root backend: the 3-peer raft-replicated cluster.
+Historical single-process “local” backend has been removed.</p>
+<p><a href="../meta/root/replicated/store.go"><code>meta/root/replicated/store.go</code></a> — embedded raft library, quorum-durable commits.</p>
 <ul>
-<li>One file per workdir, append-only segments + compact checkpoint</li>
-<li><code>mu</code> protects in-memory state; <code>logMu</code> protects the on-disk segments</li>
-<li>Compaction is background (kicked by <code>appendLocked</code>, runs in its own goroutine)</li>
-<li>Designed for embedded mode and single-coordinator deployments</li>
-</ul>
-<h3 id="replicated-multi-node"><a class="header" href="#replicated-multi-node">Replicated (multi-node)</a></h3>
-<p><a href="../meta/root/backend/replicated/store.go"><code>meta/root/backend/replicated/store.go</code></a> — embedded raft library, quorum-durable commits.</p>
-<ul>
-<li>3 replicas typical, one leader</li>
+<li>exactly 3 replicas, one leader</li>
 <li><code>Append</code> proposes a raft log entry; returns after it’s committed to quorum</li>
 <li>Non-leader nodes reject <code>Append</code> with <code>codes.FailedPrecondition</code></li>
 <li>Leader changes trigger <code>IsLeader()</code> / <code>LeaderID()</code> state updates that coordinator consumes</li>
+<li>On-disk state per peer: <code>root.events.wal</code>, <code>root.checkpoint.binpb</code>, <code>root.raft.bin</code>
+(raft hard state + snapshot + retained entries)</li>
 </ul>
 <hr>
 <h2 id="6-coordinator-commands--how-leasesealclosure-flow-in"><a class="header" href="#6-coordinator-commands--how-leasesealclosure-flow-in">6. Coordinator commands — how lease/seal/closure flow in</a></h2>
@@ -4583,7 +4520,7 @@ sub.Acknowledge(advance)
 <h2 id="8-recovery-model"><a class="header" href="#8-recovery-model">8. Recovery model</a></h2>
 <p>On coordinator boot:</p>
 <ol>
-<li>Open the backend (<code>rootlocal.Open(workdir)</code> or connect to replicated cluster)</li>
+<li>Open the replicated backend (each peer via <code>rootreplicated.Open</code>, or connect through <code>coordinator/rootview</code> for the client side)</li>
 <li>Call <code>Snapshot()</code> — backend replays/bootstraps internally</li>
 <li>Build a <code>TailSubscription</code> from the snapshot’s <code>LastCommitted</code></li>
 <li>Start the lease campaign loop, which will eventually <code>ApplyCoordinatorLease(Issue)</code> when it’s leader</li>
@@ -4612,9 +4549,8 @@ sub.Acknowledge(advance)
 <tr><td><a href="../meta/root/state/coordinator_lease.go"><code>meta/root/state/coordinator_lease.go</code></a></td><td>Lease/Seal/Closure validation + digest</td></tr>
 <tr><td><a href="../meta/root/state/transition.go"><code>meta/root/state/transition.go</code></a></td><td>Cross-event transition rules</td></tr>
 <tr><td><a href="../meta/root/storage/virtual_log.go"><code>meta/root/storage/virtual_log.go</code></a></td><td>Tail subscription + checkpoint primitives</td></tr>
-<tr><td><a href="../meta/root/backend/local/store.go"><code>meta/root/backend/local/store.go</code></a></td><td>Single-node backend</td></tr>
-<tr><td><a href="../meta/root/backend/replicated/store.go"><code>meta/root/backend/replicated/store.go</code></a></td><td>Raft-replicated backend</td></tr>
-<tr><td><a href="../meta/root/remote/service.go"><code>meta/root/remote/service.go</code></a></td><td>gRPC wrapping of either backend</td></tr>
+<tr><td><a href="../meta/root/replicated/store.go"><code>meta/root/replicated/store.go</code></a></td><td>The only backend: 3-peer raft-replicated meta-root</td></tr>
+<tr><td><a href="../meta/root/remote/service.go"><code>meta/root/remote/service.go</code></a></td><td>gRPC service + client for meta-root</td></tr>
 <tr><td><a href="../meta/wire/root.go"><code>meta/wire/root.go</code></a></td><td>proto ↔ Go conversions</td></tr>
 </tbody>
 </table>
@@ -5796,32 +5732,29 @@ raft peers:
 </ul>
 <h3 id="nokv-coordinator"><a class="header" href="#nokv-coordinator"><code>nokv coordinator</code></a></h3>
 <ul>
-<li>Starts the Coordinator gRPC service used by distributed mode.</li>
+<li>Starts the Coordinator gRPC service. NoKV only supports the separated
+topology: coordinator always connects to an external 3-peer meta-root
+cluster via gRPC.</li>
+<li>Required flags:
+<ul>
+<li><code>--coordinator-id</code> (stable lease owner id)</li>
+<li><code>--root-peer nodeID=addr</code> (exactly 3 meta-root gRPC endpoints)</li>
+</ul>
+</li>
 <li>Common flags:
 <ul>
 <li><code>--addr</code> (default <code>127.0.0.1:2379</code>)</li>
-<li><code>--workdir</code> (optional persistence directory for region catalog + allocator state)</li>
-<li><code>--root-mode local|replicated|remote</code> (<code>local</code> by default)</li>
-<li><code>--root-peer nodeID=addr</code> (repeatable; used by <code>replicated</code> and <code>remote</code> rooted modes)</li>
-<li><code>--root-node-id</code>, <code>--root-transport-addr</code> (replicated rooted mode only)</li>
-<li><code>--coordinator-id</code> (stable lease owner id for rooted control-plane writes in separated mode)</li>
-<li><code>--lease-ttl</code>, <code>--lease-renew-before</code> (only used when <code>--coordinator-id</code> is set)</li>
-<li><code>--config</code> + <code>--scope host|docker</code> (resolve defaults from <code>raft_config.json</code>)</li>
-<li><code>--id-start</code>, <code>--ts-start</code> (allocator start values)</li>
+<li><code>--lease-ttl</code>, <code>--lease-renew-before</code> (default <code>10s</code> / <code>3s</code>)</li>
+<li><code>--root-refresh</code> (default <code>200ms</code>)</li>
+<li><code>--id-start</code>, <code>--ts-start</code> (allocator seeds; only used when the meta-root cluster has no allocator state yet)</li>
+<li><code>--config</code> + <code>--scope host|docker</code> (resolves <code>--addr</code> from <code>raft_config.json</code>)</li>
 <li><code>--metrics-addr</code> (optional expvar endpoint, exposes <code>/debug/vars</code>)</li>
 </ul>
 </li>
 </ul>
 <p>Example:</p>
 <pre><code class="language-bash">nokv coordinator \
-  --config ./raft_config.example.json \
-  --scope host \
-  --metrics-addr 127.0.0.1:23790
-</code></pre>
-<p>Separated deployment example:</p>
-<pre><code class="language-bash">nokv coordinator \
   --addr 127.0.0.1:2379 \
-  --root-mode remote \
   --coordinator-id c1 \
   --root-peer 1=127.0.0.1:2380 \
   --root-peer 2=127.0.0.1:2381 \
@@ -5829,25 +5762,26 @@ raft peers:
 </code></pre>
 <h3 id="nokv-meta-root"><a class="header" href="#nokv-meta-root"><code>nokv meta-root</code></a></h3>
 <ul>
-<li>Starts the metadata-root gRPC authority service.</li>
+<li>Starts one peer of the 3-peer replicated metadata-root cluster. NoKV only
+supports the replicated topology; single-process local mode has been
+removed from the CLI.</li>
+<li>Required flags:
+<ul>
+<li><code>--workdir</code>, <code>--node-id</code>, <code>--transport-addr</code></li>
+<li><code>--peer nodeID=addr</code> (repeatable, exactly 3)</li>
+</ul>
+</li>
 <li>Common flags:
 <ul>
-<li><code>--addr</code> (default <code>127.0.0.1:2380</code>)</li>
-<li><code>--mode local|replicated</code> (<code>local</code> by default)</li>
-<li><code>--workdir</code> (required)</li>
-<li><code>--node-id</code>, <code>--transport-addr</code>, <code>--peer nodeID=addr</code> (replicated mode)</li>
+<li><code>--addr</code> (default <code>127.0.0.1:2380</code>, gRPC listen)</li>
+<li><code>--tick-interval</code> (default <code>100ms</code>)</li>
+<li><code>--metrics-addr</code> (optional expvar endpoint)</li>
 </ul>
 </li>
 </ul>
-<p>Examples:</p>
+<p>Example:</p>
 <pre><code class="language-bash">nokv meta-root \
   --addr 127.0.0.1:2380 \
-  --mode local \
-  --workdir ./artifacts/meta-root
-</code></pre>
-<pre><code class="language-bash">nokv meta-root \
-  --addr 127.0.0.1:2380 \
-  --mode replicated \
   --workdir ./artifacts/meta-root-1 \
   --node-id 1 \
   --transport-addr 127.0.0.1:3380 \
@@ -5859,8 +5793,14 @@ raft peers:
 <ul>
 <li><code>scripts/ops/serve-meta-root.sh</code>
 <ul>
-<li>Starts one <code>meta-root</code> instance and forwards shutdown signals.</li>
-<li>Use this for explicit local/replicated <code>meta/root</code> process control.</li>
+<li>Starts one replicated <code>meta-root</code> peer and forwards shutdown signals.</li>
+<li>Requires <code>--workdir</code>, <code>--node-id</code>, <code>--transport-addr</code>, and 3 <code>--peer</code> values.</li>
+</ul>
+</li>
+<li><code>scripts/ops/serve-coordinator.sh</code>
+<ul>
+<li>Starts one <code>nokv coordinator</code> against an external meta-root cluster.</li>
+<li>Requires <code>--coordinator-id</code> and 3 <code>--root-peer</code> values (meta-root gRPC endpoints).</li>
 </ul>
 </li>
 <li><code>scripts/ops/serve-store.sh</code>
@@ -5875,12 +5815,7 @@ raft peers:
 </li>
 <li><code>scripts/dev/cluster.sh</code>
 <ul>
-<li>Dev bootstrap for co-located control plane.</li>
-</ul>
-</li>
-<li><code>scripts/dev/separated-cluster.sh</code>
-<ul>
-<li>Dev bootstrap for <code>3 meta-root + 1 coordinator(remote) + stores</code>.</li>
+<li>Dev bootstrap for the 333 separated layout: <code>3 meta-root + 1 coordinator(remote) + stores</code>.</li>
 <li>Uses fixed local root endpoints:
 <ul>
 <li>gRPC: <code>127.0.0.1:2380/2381/2382</code></li>
@@ -5915,209 +5850,98 @@ raft peers:
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="ccc-audit"><a class="header" href="#ccc-audit">ccc-audit</a></h1>
-<p><code>nokv ccc-audit</code> is an offline diagnostic CLI that inspects <strong>coordinator authority-handoff state</strong> and <strong>reply traces</strong> for legality violations.</p>
-<p>It consumes two kinds of input:</p>
+<p><code>nokv ccc-audit</code> is a read-only operator tool that projects a live 3-peer
+meta-root cluster’s current rooted state into the <code>coordinator/audit</code>
+closure-complete-continuation (CCC) vocabulary. It is the operator
+counterpart to the TLA+ CCC model and the <code>coordinator/audit</code> library that
+coordinator/server consults at runtime.</p>
+<p>Because NoKV only ships the separated topology (3 meta-root + N coordinator),
+the audit tool speaks only remote gRPC — it does not read meta-root workdirs
+directly.</p>
+<h2 id="what-it-does"><a class="header" href="#what-it-does">What it does</a></h2>
 <ol>
-<li>A coordinator rooted snapshot (read from a workdir) — snapshot-level audit</li>
-<li>A JSON reply trace (NoKV or external system) — reply-level audit</li>
+<li>Dial the 3 meta-root peers through <code>meta/root/client</code> (the same client
+coordinators use) wrapped by <code>coordinator/rootview.OpenRootRemoteStore</code>.</li>
+<li>Load one rooted <code>Snapshot</code> — current descriptors, allocator fences,
+<code>CoordinatorLease</code>, <code>CoordinatorSeal</code>, <code>CoordinatorClosure</code>.</li>
+<li>Project the snapshot through <code>coordinator/audit.BuildReport(snapshot, holderID, nowUnixNano)</code> to produce a <code>Report</code> containing <code>SnapshotAnomalies</code>
+and a <code>ClosureDefect</code> enum.</li>
+<li>Optionally load a reply-trace JSON (from stdin or a file) and call
+<code>coordinator/audit.EvaluateReplyTrace(report, records)</code> to flag any
+accepted replies that are illegal under the current closure witness.</li>
+<li>Render the combined result as human-readable text or JSON.</li>
 </ol>
-<p>Either or both can be provided. The tool produces a structured report of detected anomalies and is safe to run against stopped nodes or trace files archived for post-mortem review.</p>
-<hr>
-<h2 id="1-when-to-use-it"><a class="header" href="#1-when-to-use-it">1. When to use it</a></h2>
-<ul>
-<li><strong>Post-mortem</strong>: a coordinator crashed mid-handoff, and you want to know whether the rooted lease/seal/closure state is consistent before restarting</li>
-<li><strong>Pre-restart sanity check</strong>: before bringing a store back up, verify its rooted metadata has no dangling successor coverage / missing confirms / missing closures</li>
-<li><strong>Trace audit</strong>: given a dumped reply trace from an external system, check whether any accepted reply crossed an authority-transition boundary</li>
-<li><strong>CI</strong>: compile a reply-trace fixture from a regression scenario, run <code>ccc-audit</code>, and fail the build if the anomaly count is non-zero</li>
-</ul>
-<p>The tool reads only. It does not modify the workdir or publish any rooted events.</p>
-<hr>
-<h2 id="2-cli-flags"><a class="header" href="#2-cli-flags">2. CLI flags</a></h2>
-<pre><code>nokv ccc-audit
-  --workdir &lt;path&gt;                    Coordinator work directory containing rooted metadata
-  --holder &lt;string&gt;                   Holder id to evaluate (default: current rooted holder)
-  --now-unix-nano &lt;int64&gt;             Override audit time (default: real time)
-  --reply-trace &lt;path&gt;                Optional JSON reply trace to evaluate
-  --reply-trace-format &lt;format&gt;       nokv | etcd-read-index | etcd-lease-renew | crdb-lease-start
-  --json                              Emit JSON report instead of the text table
-</code></pre>
-<p>At least one of <code>--workdir</code> or <code>--reply-trace</code> must be provided.</p>
-<p>When only <code>--reply-trace</code> is given, snapshot-level anomalies are skipped (there is no snapshot to audit), but reply-trace anomalies are still evaluated against whatever <code>Report</code> can be constructed from the provided context.</p>
-<hr>
-<h2 id="3-snapshot-anomalies-from---workdir"><a class="header" href="#3-snapshot-anomalies-from---workdir">3. Snapshot anomalies (from <code>--workdir</code>)</a></h2>
-<p>Lifted directly from <a href="../coordinator/audit/report.go"><code>coordinator/audit/report.go</code></a> — when a rooted snapshot is loaded, the tool reports the following boolean/enum fields:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Field</th><th>What triggers it</th></tr>
-</thead>
-<tbody>
-<tr><td><code>SuccessorLineageMismatch</code></td><td>Successor lease exists but its <code>PredecessorDigest</code> doesn’t match the sealed predecessor</td></tr>
-<tr><td><code>UncoveredMonotoneFrontier</code></td><td>Successor present but monotone frontier (ID/TSO) not covered</td></tr>
-<tr><td><code>UncoveredDescriptorRevision</code></td><td>Successor present but descriptor revision frontier not covered</td></tr>
-<tr><td><code>LeaseStartCoverageViolation</code></td><td>Successor <code>lease_start</code> is below the sealed served-read frontier</td></tr>
-<tr><td><code>SealedGenerationStillLive</code></td><td>A sealed generation is still marked as live-able</td></tr>
-<tr><td><code>ClosureDefect</code></td><td>Enum: <code>successor_incomplete</code> / <code>missing_confirm</code> / <code>missing_close</code> / <code>close_without_confirm</code> / <code>close_lineage_mismatch</code> / <code>reattach_without_confirm</code> / <code>reattach_without_close</code> / <code>reattach_lineage_mismatch</code> / <code>reattach_incomplete</code></td></tr>
-</tbody>
-</table>
-</div>
-<p><code>ClosureDefect</code> is the canonical enum field. The legacy boolean fields (<code>MissingConfirm</code>, <code>MissingClose</code>, etc.) are kept in the struct for backward-compatible test consumption only; new code should read <code>ClosureDefect</code> directly.</p>
-<hr>
-<h2 id="4-reply-trace-anomalies-from---reply-trace"><a class="header" href="#4-reply-trace-anomalies-from---reply-trace">4. Reply-trace anomalies (from <code>--reply-trace</code>)</a></h2>
-<p>The reply trace evaluator is in <a href="../coordinator/audit/trace.go"><code>coordinator/audit/trace.go</code></a>. Each accepted record is checked against the snapshot’s closure state plus its own successor-generation evidence.</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Kind</th><th>Meaning</th></tr>
-</thead>
-<tbody>
-<tr><td><code>post_seal_accepted_reply</code></td><td>Reply accepted at a generation that is already sealed in rooted state</td></tr>
-<tr><td><code>accepted_reply_behind_successor</code></td><td>Generic — accepted reply’s generation is below an observed successor generation</td></tr>
-<tr><td><code>accepted_read_index_behind_successor</code></td><td>etcd-read-index specialization of the above</td></tr>
-<tr><td><code>accepted_keepalive_success_after_revoke</code></td><td>etcd-lease-renew specialization — keepalive success observed after a revoke revision</td></tr>
-<tr><td><code>lease_start_coverage_violation</code></td><td>crdb-lease-start specialization — accepted successor <code>lease_start</code> below carried served timestamp</td></tr>
-<tr><td><code>illegal_reply_generation</code></td><td>Accepted reply whose generation cannot be legal under current closure state</td></tr>
-</tbody>
-</table>
-</div>
-<p>Anomaly kinds are stable; adapters for new external systems add more specializations to the <code>accepted_reply_behind_successor</code> family.</p>
-<hr>
-<h2 id="5-trace-formats"><a class="header" href="#5-trace-formats">5. Trace formats</a></h2>
-<p>The tool’s trace adapter normalizes several formats into a shared <code>ReplyTraceRecord</code> schema. See <a href="../coordinator/audit/trace_adapter.go"><code>coordinator/audit/trace_adapter.go</code></a>.</p>
-<h3 id="nokv-default"><a class="header" href="#nokv-default"><code>nokv</code> (default)</a></h3>
-<p>Native format, already in <code>ReplyTraceRecord</code> shape:</p>
-<pre><code class="language-json">[
-  {
-    "source": "nokv",
-    "duty": "alloc_id",
-    "cert_generation": 5,
-    "observed_successor_generation": 0,
-    "accepted": true
-  }
-]
-</code></pre>
-<p>Also accepts <code>{"records": [...]}</code> envelope.</p>
-<h3 id="etcd-read-index"><a class="header" href="#etcd-read-index"><code>etcd-read-index</code></a></h3>
-<pre><code class="language-json">[
-  {
-    "member_id": "n1",
-    "read_state_generation": 12,
-    "successor_generation": 13,
-    "accepted": true
-  }
-]
-</code></pre>
-<p>Projected into <code>duty: "read_index"</code> with <code>cert_generation = read_state_generation</code>, <code>observed_successor_generation = successor_generation</code>.</p>
-<h3 id="etcd-lease-renew"><a class="header" href="#etcd-lease-renew"><code>etcd-lease-renew</code></a></h3>
-<pre><code class="language-json">[
-  {
-    "member_id": "n1",
-    "response_revision": 42,
-    "revoke_revision": 45,
-    "accepted": true
-  }
-]
-</code></pre>
-<p>Projected into <code>duty: "lease_renew"</code> with <code>cert_generation = response_revision</code>, <code>observed_successor_generation = revoke_revision</code>.</p>
-<h3 id="crdb-lease-start"><a class="header" href="#crdb-lease-start"><code>crdb-lease-start</code></a></h3>
-<pre><code class="language-json">[
-  {
-    "key": "k",
-    "successor_lease_start": 8,
-    "served_timestamp": 9,
-    "accepted": true
-  }
-]
-</code></pre>
-<p>Projected into <code>duty: "lease_start_coverage"</code>. Triggers <code>lease_start_coverage_violation</code> when <code>successor_lease_start &lt;= served_timestamp</code> and <code>accepted=true</code>.</p>
-<hr>
-<h2 id="6-output"><a class="header" href="#6-output">6. Output</a></h2>
-<h3 id="text-default"><a class="header" href="#text-default">Text (default)</a></h3>
-<pre><code>HolderID                 c1
-NowUnixNano              1745158800000000000
-CatchUpState             fresh
-RootDescriptorRevision   128
-CurrentHolder            c1
-CurrentGeneration        5
-SealGeneration           4
-ClosureSatisfied         true
-ClosureStage             closed
-Anomalies                none
-ReplyTraceRecords        3
-ReplyTraceAnomalies      accepted_read_index_behind_successor
-</code></pre>
-<h3 id="json---json"><a class="header" href="#json---json">JSON (<code>--json</code>)</a></h3>
-<p>Full dump of <code>Report</code>, <code>Lease</code>, <code>Seal</code>, reply trace records, and reply-trace anomalies. Schema is the <code>cccAuditOutput</code> struct in <code>cmd/nokv/cmd_ccc_audit.go</code>.</p>
-<hr>
-<h2 id="7-examples"><a class="header" href="#7-examples">7. Examples</a></h2>
-<h3 id="workdir-only-audit"><a class="header" href="#workdir-only-audit">Workdir-only audit</a></h3>
-<pre><code class="language-bash">nokv ccc-audit --workdir ./artifacts/cluster/store-1 --json
-</code></pre>
-<p>Loads the rooted snapshot, evaluates closure defects, prints JSON.</p>
-<h3 id="reply-trace-only-audit"><a class="header" href="#reply-trace-only-audit">Reply-trace-only audit</a></h3>
+<p>The audit is read-only: it never writes to meta-root, never advances fences,
+and never mutates coordinator state. It can run while the cluster is live and
+healthy, or attached to a quiesced cluster during post-incident analysis.</p>
+<h2 id="usage"><a class="header" href="#usage">Usage</a></h2>
 <pre><code class="language-bash">nokv ccc-audit \
-  --reply-trace ./traces/etcd-read-index-sample.json \
-  --reply-trace-format etcd-read-index
+  --root-peer 1=127.0.0.1:2380 \
+  --root-peer 2=127.0.0.1:2381 \
+  --root-peer 3=127.0.0.1:2382
 </code></pre>
-<p>Evaluates the trace against an empty snapshot — useful when all you have is the trace file.</p>
-<h3 id="combined-audit-with-holder-override"><a class="header" href="#combined-audit-with-holder-override">Combined audit with holder override</a></h3>
-<pre><code class="language-bash">nokv ccc-audit \
-  --workdir ./artifacts/cluster/store-1 \
-  --holder c1 \
-  --now-unix-nano 1745158800000000000 \
-  --reply-trace ./traces/failover.json \
-  --json
-</code></pre>
-<p>Produces the full report: snapshot-level anomalies + reply-trace anomalies evaluated under the same closure context.</p>
-<hr>
-<h2 id="8-programmatic-api"><a class="header" href="#8-programmatic-api">8. Programmatic API</a></h2>
-<p>Everything the CLI does is available as a Go package. From <code>coordinator/audit</code>:</p>
-<pre><code class="language-go">import (
-    coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
-    coordstorage "github.com/feichai0017/NoKV/coordinator/storage"
-)
-
-store, _ := coordstorage.OpenRootLocalStore("./workdir")
-defer store.Close()
-snapshot, _ := store.Load()
-
-report := coordaudit.BuildReport(snapshot, "c1", time.Now().UnixNano())
-
-records, _ := coordaudit.DecodeReplyTrace(traceBytes, coordaudit.ReplyTraceFormatNoKV)
-traceAnomalies := coordaudit.EvaluateReplyTrace(report, records)
-
-for _, a := range traceAnomalies {
-    fmt.Printf("%s at index %d: %s\n", a.Kind, a.Index, a.Reason)
-}
-</code></pre>
-<hr>
-<h2 id="9-exit-codes"><a class="header" href="#9-exit-codes">9. Exit codes</a></h2>
+<p>Required:</p>
 <ul>
-<li><code>0</code> — tool ran successfully; anomalies (if any) are in the report but are <strong>not</strong> promoted to a non-zero exit code</li>
-<li><code>1</code> — tool failed to run (bad flags, missing workdir, malformed trace)</li>
+<li><code>--root-peer nodeID=addr</code> — repeat exactly 3 times. Same gRPC endpoints
+that <code>nokv coordinator --root-peer ...</code> uses.</li>
 </ul>
-<p><strong>Note</strong>: the tool intentionally does not exit non-zero on detected anomalies. Consuming scripts should parse the JSON output and decide themselves how to react. This makes it safe to run inside broader CI pipelines without accidentally failing them.</p>
-<hr>
-<h2 id="10-source-map-1"><a class="header" href="#10-source-map-1">10. Source map</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>File</th><th>Role</th></tr>
-</thead>
-<tbody>
-<tr><td><a href="../cmd/nokv/cmd_ccc_audit.go"><code>cmd/nokv/cmd_ccc_audit.go</code></a></td><td>CLI entry point, flag parsing, text/JSON renderer</td></tr>
-<tr><td><a href="../coordinator/audit/report.go"><code>coordinator/audit/report.go</code></a></td><td><code>BuildReport</code>, <code>SnapshotAnomalies</code>, <code>ClosureDefect</code></td></tr>
-<tr><td><a href="../coordinator/audit/trace.go"><code>coordinator/audit/trace.go</code></a></td><td><code>EvaluateReplyTrace</code>, <code>ReplyTraceAnomaly</code></td></tr>
-<tr><td><a href="../coordinator/audit/trace_adapter.go"><code>coordinator/audit/trace_adapter.go</code></a></td><td>Format parsing + projection into <code>ReplyTraceRecord</code></td></tr>
-<tr><td><a href="../coordinator/audit/lease_start_coverage.go"><code>coordinator/audit/lease_start_coverage.go</code></a></td><td>CRDB-style lease-start coverage helper</td></tr>
-</tbody>
-</table>
-</div>
-<p>Related docs:</p>
+<p>Optional:</p>
 <ul>
-<li><a href="#rooted-truth--metaroot">Rooted Truth</a> — what’s in the snapshot this tool audits</li>
-<li><a href="#coordinator">Coordinator</a> — the service that mutates the rooted state</li>
-<li><a href="#control-plane-and-execution-plane-protocols">Control and Execution Plane Protocols</a> — the full contract being checked</li>
+<li><code>--holder &lt;id&gt;</code> — override the holder id used for reattach checks.
+Defaults to <code>snapshot.CoordinatorLease.HolderID</code>.</li>
+<li><code>--now-unix-nano &lt;ns&gt;</code> — override the audit clock. Defaults to
+<code>time.Now().UnixNano()</code>. Useful for deterministic regression runs.</li>
+<li><code>--reply-trace &lt;path&gt;</code> — path to a reply-trace JSON file (<code>-</code> for stdin).
+When omitted, only the snapshot-level audit runs.</li>
+<li><code>--reply-trace-format &lt;format&gt;</code> — one of <code>nokv</code>, <code>etcd-read-index</code>,
+<code>etcd-lease-renew</code>, <code>crdb-lease-start</code>. Defaults to <code>nokv</code>.</li>
+<li><code>--json</code> — emit JSON instead of the default human-readable text.</li>
+</ul>
+<h2 id="sample-output"><a class="header" href="#sample-output">Sample output</a></h2>
+<pre><code class="language-text">CCC audit report
+----------------
+holder             : coord-1
+now_unix_nano      : 1714857600000000000
+root_desc_revision : 42
+catch_up_state     : fresh
+current_holder     : coord-1
+current_generation : 7
+closure            : stage=confirmed
+closure_witness    : stage=confirmed seal_gen=6 successor_present=true successor_coverage=covered lineage_satisfied=true sealed_gen_retired=true
+
+snapshot anomalies:
+  successor_lineage_mismatch     : false
+  uncovered_monotone_frontier    : false
+  uncovered_descriptor_revision  : false
+  lease_start_coverage_violation : false
+  sealed_generation_still_live   : false
+  closure_defect                 : none
+</code></pre>
+<p>When <code>--reply-trace</code> is provided, each accepted reply that violates the
+closure witness prints as a trailing line:</p>
+<pre><code class="language-text">reply-trace anomalies (1):
+  [3] kind=accepted_reply_behind_successor duty=lease_start cert_gen=5 reason="accepted reply generation 5 behind observed successor generation 7"
+</code></pre>
+<h2 id="anomaly-vocabulary"><a class="header" href="#anomaly-vocabulary">Anomaly vocabulary</a></h2>
+<p>See <a href="../coordinator/audit/report.go">coordinator/audit/report.go</a> for the full
+enum:</p>
+<ul>
+<li><code>successor_incomplete</code> / <code>missing_confirm</code> / <code>missing_close</code></li>
+<li><code>close_without_confirm</code></li>
+<li><code>lineage_mismatch</code></li>
+<li><code>reattach_without_confirm</code> / <code>reattach_without_close</code> /
+<code>reattach_lineage_mismatch</code> / <code>reattach_incomplete</code></li>
+</ul>
+<p>Any non-empty <code>closure_defect</code> or any <code>true</code> flag under <code>snapshot anomalies</code>
+indicates that the rooted closure state has drifted from the expected
+<code>Attached → Active → Seal → Cover → Close → Reattach</code> lifecycle — which is
+exactly the property CCC.tla proves meta-root must preserve.</p>
+<h2 id="related"><a class="header" href="#related">Related</a></h2>
+<ul>
+<li><a href="#rooted-truth--metaroot">Rooted truth</a> — lifecycle semantics audited by this tool</li>
+<li><a href="#coordinator">Coordinator</a> — the runtime consumer of the same audit
+library</li>
+<li><a href="../coordinator/audit"><code>coordinator/audit</code></a> — the library this CLI wraps</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="scripts-overview"><a class="header" href="#scripts-overview">Scripts Overview</a></h1>
@@ -6145,7 +5969,15 @@ for _, a := range traceAnomalies {
 <h2 id="bootstrap--local-launch"><a class="header" href="#bootstrap--local-launch">Bootstrap &amp; Local Launch</a></h2>
 <h3 id="scriptsdevclustersh"><a class="header" href="#scriptsdevclustersh"><code>scripts/dev/cluster.sh</code></a></h3>
 <ul>
-<li>Purpose: build <code>nokv</code> and <code>nokv-config</code>, read <code>raft_config.json</code>, seed local peer catalogs, start Coordinator, then start the configured stores.</li>
+<li>Purpose: build <code>nokv</code> and <code>nokv-config</code>, start the canonical 333 separated dev cluster,
+seed fresh store workdirs, then start stores from <code>raft_config.json</code>.</li>
+<li>Starts:
+<ul>
+<li>three <code>nokv meta-root</code> processes (Truth plane; replicated is the only mode)</li>
+<li>one <code>nokv coordinator</code> process (Service plane; always remote-rooted)</li>
+<li>all configured stores (Execution plane)</li>
+</ul>
+</li>
 <li>Uses shared rules from:
 <ul>
 <li><code>scripts/lib/common.sh</code></li>
@@ -6161,37 +5993,14 @@ for _, a := range traceAnomalies {
 <ul>
 <li><code>--config</code> defaults to <code>./raft_config.example.json</code></li>
 <li><code>--workdir</code> defaults to <code>./artifacts/cluster</code></li>
-<li>store workdirs are rejected if they contain unexpected files</li>
-<li>logs stream with <code>[coordinator]</code> / <code>[store-&lt;id&gt;]</code> prefixes and are still written to <code>coordinator.log</code> / <code>server.log</code></li>
-<li>this is a bootstrap/dev launcher, not a restart command</li>
-<li>it may seed fresh workdirs from <code>config.regions</code>, so it should not be used against stores that already contain runtime raft/local metadata</li>
-</ul>
-</li>
-</ul>
-<h3 id="scriptsdevseparated-clustersh"><a class="header" href="#scriptsdevseparated-clustersh"><code>scripts/dev/separated-cluster.sh</code></a></h3>
-<ul>
-<li>Purpose: build <code>nokv</code> and <code>nokv-config</code>, start a local separated control
-plane, seed fresh store workdirs, then start stores from <code>raft_config.json</code>.</li>
-<li>Starts:
-<ul>
-<li>three <code>nokv meta-root --mode replicated</code> processes</li>
-<li>one <code>nokv coordinator --root-mode remote</code></li>
-<li>all configured stores</li>
-</ul>
-</li>
-<li>Example:
-<pre><code class="language-bash">./scripts/dev/separated-cluster.sh --config ./raft_config.example.json --workdir ./artifacts/separated-cluster
-</code></pre>
-</li>
-<li>Notes:
-<ul>
 <li>uses fixed local metadata-root gRPC endpoints <code>127.0.0.1:2380/2381/2382</code></li>
 <li>uses fixed local metadata-root raft transport endpoints <code>127.0.0.1:3380/3381/3382</code></li>
-<li>uses an isolated <code>--workdir</code> tree and does not reuse config-defined store
-workdirs</li>
+<li>store workdirs are rejected if they contain unexpected files</li>
+<li>logs stream with <code>[meta-root-&lt;id&gt;]</code> / <code>[coordinator]</code> / <code>[store-&lt;id&gt;]</code> prefixes
+and are still written to <code>root.log</code> / <code>coordinator.log</code> / <code>server.log</code></li>
 <li>this is a bootstrap/dev launcher, not a restart command</li>
-<li>production-style restarts should run <code>nokv meta-root</code>,
-<code>nokv coordinator --root-mode remote</code>, and <code>scripts/ops/serve-store.sh</code>
+<li>production-style restarts should run <code>scripts/ops/serve-meta-root.sh</code>,
+<code>scripts/ops/serve-coordinator.sh</code>, and <code>scripts/ops/serve-store.sh</code>
 directly against the same durable workdirs</li>
 </ul>
 </li>
@@ -6243,12 +6052,11 @@ rather than a peer-id keyed mapping</li>
 </ul>
 <h3 id="scriptsopsserve-meta-rootsh"><a class="header" href="#scriptsopsserve-meta-rootsh"><code>scripts/ops/serve-meta-root.sh</code></a></h3>
 <ul>
-<li>Purpose: thin wrapper around <code>nokv meta-root</code> for one metadata-root process.</li>
+<li>Purpose: thin wrapper around <code>nokv meta-root</code> for one replicated metadata-root peer.</li>
 <li>Example:
 <pre><code class="language-bash">./scripts/ops/serve-meta-root.sh \
   --addr 127.0.0.1:2380 \
-  --mode replicated \
-  --workdir ./artifacts/separated-cluster/meta-root-1 \
+  --workdir ./artifacts/cluster/meta-root-1 \
   --node-id 1 \
   --transport-addr 127.0.0.1:3380 \
   --peer 1=127.0.0.1:3380 \
@@ -6260,7 +6068,31 @@ rather than a peer-id keyed mapping</li>
 <ul>
 <li><code>--peer</code> values are metadata-root raft transport addresses, not gRPC
 service addresses</li>
+<li><code>--workdir</code>, <code>--node-id</code>, <code>--transport-addr</code>, and exactly 3 <code>--peer</code>
+values are required; there is no single-process local mode</li>
 <li>forwards shutdown signals to <code>nokv meta-root</code></li>
+</ul>
+</li>
+</ul>
+<h3 id="scriptsopsserve-coordinatorsh"><a class="header" href="#scriptsopsserve-coordinatorsh"><code>scripts/ops/serve-coordinator.sh</code></a></h3>
+<ul>
+<li>Purpose: thin wrapper around <code>nokv coordinator</code> for one coordinator process
+wired to an external 3-peer meta-root cluster.</li>
+<li>Example:
+<pre><code class="language-bash">./scripts/ops/serve-coordinator.sh \
+  --addr 127.0.0.1:2379 \
+  --coordinator-id c1 \
+  --root-peer 1=127.0.0.1:2380 \
+  --root-peer 2=127.0.0.1:2381 \
+  --root-peer 3=127.0.0.1:2382
+</code></pre>
+</li>
+<li>Notes:
+<ul>
+<li><code>--root-peer</code> values are metadata-root gRPC service addresses, not raft transport</li>
+<li>exactly 3 <code>--root-peer</code> values are required (mirrors the Truth-plane quorum)</li>
+<li><code>--coordinator-id</code> is required (stable lease owner id)</li>
+<li>forwards shutdown signals to <code>nokv coordinator</code></li>
 </ul>
 </li>
 </ul>

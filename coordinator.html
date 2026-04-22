@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-570277fc.js";
+            window.path_to_searchindex_js = "searchindex-c14ddfb7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-15a84097.js"></script>
@@ -209,7 +209,7 @@ truth. Durable truth lives in <code>meta/root</code>.</p>
 <ul>
 <li><code>coordinator/catalog</code>: in-memory cluster metadata model.</li>
 <li><code>coordinator/idalloc</code>: monotonic ID allocator used by Coordinator.</li>
-<li><code>coordinator/storage</code>: persistence abstraction (<code>Store</code>) backed by the metadata root.</li>
+<li><code>coordinator/rootview</code>: persistence abstraction (<code>Store</code>) backed by the metadata root.</li>
 <li><code>coordinator/server</code>: gRPC service + RPC validation/error mapping.</li>
 <li><code>coordinator/client</code>: client wrapper used by store/gateway.</li>
 <li><code>coordinator/adapter</code>: scheduler sink that forwards heartbeats into Coordinator.</li>
@@ -236,9 +236,8 @@ can rely on.</p>
 future runtime/operator model such as stalled transitions or richer catch-up
 actions.</p>
 <hr>
-<h2 id="3-mode-model"><a class="header" href="#3-mode-model">3. Mode Model</a></h2>
-<p>NoKV currently has one standalone shape and three distributed control-plane
-deployment shapes.</p>
+<h2 id="3-deployment-model"><a class="header" href="#3-deployment-model">3. Deployment Model</a></h2>
+<p>NoKV ships exactly one distributed topology plus the standalone engine shape.</p>
 <h3 id="standalone"><a class="header" href="#standalone"><code>standalone</code></a></h3>
 <ul>
 <li>no <code>coordinator</code></li>
@@ -248,69 +247,43 @@ deployment shapes.</p>
 </ul>
 <p>This is the default local engine shape. Standalone is not a degraded control
 plane deployment; it simply has no control plane.</p>
-<h3 id="distributed"><a class="header" href="#distributed"><code>distributed</code></a></h3>
-<p><code>distributed</code> has three control-plane deployments:</p>
-<ol>
-<li><code>single coordinator + local meta</code></li>
-<li><code>3 coordinator + replicated meta</code></li>
-<li><code>separated meta-root + remote coordinator</code></li>
-</ol>
-<p>Both deployments keep the same logical split:</p>
+<h3 id="separated-meta-root--coordinator"><a class="header" href="#separated-meta-root--coordinator"><code>separated meta-root + coordinator</code></a></h3>
 <ul>
-<li><code>meta/root/*</code>: durable rooted truth</li>
-<li><code>coordinator/view</code> + <code>coordinator/catalog</code>: rebuildable routing/scheduling state</li>
-<li><code>coordinator/server</code>: gRPC API surface</li>
-</ul>
-<p>The difference is only the rooted backend:</p>
-<ul>
-<li><code>single coordinator + local meta</code>
-<ul>
-<li>one <code>coordinator</code> process</li>
-<li>one same-process <code>meta/root/backend/local</code></li>
-<li>single-node durable truth</li>
-</ul>
-</li>
-<li><code>3 coordinator + replicated meta</code>
-<ul>
-<li>three <code>coordinator</code> processes</li>
-<li>each process hosts one same-process <code>meta/root/backend/replicated</code></li>
-<li>fixed three-replica rooted truth</li>
-<li>one rooted leader accepts truth writes, followers refresh rooted state and serve read/view traffic</li>
-</ul>
-</li>
-<li><code>separated meta-root + remote coordinator</code>
-<ul>
-<li>three independent <code>nokv meta-root --mode replicated</code> processes own durable
-rooted truth</li>
-<li>one or more <code>nokv coordinator --root-mode remote</code> processes connect through
-the remote metadata-root API</li>
+<li>three independent <code>nokv meta-root</code> processes own durable rooted truth
+(replicated raft quorum, the only backend NoKV ships)</li>
+<li>one or more <code>nokv coordinator</code> processes connect through the remote
+metadata-root gRPC API</li>
 <li><code>CoordinatorLease</code> gates singleton Coordinator duties: <code>AllocID</code>, <code>Tso</code>,
 and scheduler operation planning</li>
 <li>route reads still come from Coordinator’s rebuildable in-memory view and
 expose <code>Freshness</code>, <code>RootToken</code>, <code>CatchUpState</code>, and <code>DegradedMode</code></li>
 </ul>
-</li>
-</ul>
-<p>No other product control-plane mode is supported. In particular:</p>
+<p>Keep the same logical split inside every deployment:</p>
 <ul>
-<li>there is no dynamic metadata membership today</li>
-<li>separated mode is experimental and not the default ops path</li>
-<li>there is no production-grade dynamic <code>coordinator</code> membership manager today</li>
+<li><code>meta/root/*</code>: durable rooted truth (replicated + gRPC service)</li>
+<li><code>coordinator/view</code> + <code>coordinator/catalog</code>: rebuildable routing/scheduling state</li>
+<li><code>coordinator/rootview</code>: remote view of meta-root consumed by coordinator/server</li>
+<li><code>coordinator/server</code>: gRPC API surface</li>
+</ul>
+<p>Product assumptions:</p>
+<ul>
+<li>exactly three meta-root replicas</li>
+<li>meta-root is the only place durable rooted truth lives</li>
+<li>coordinators are stateless relative to rooted truth; only the
+<code>CoordinatorLease</code> differentiates active vs standby</li>
+<li>no dynamic metadata-root membership</li>
+<li>no production-grade dynamic coordinator membership manager</li>
 </ul>
 <p>Separated deployment design and tradeoffs are discussed in
-<code>docs/notes/2026-04-12-coordinator-meta-separation.md</code>. That note is now an
-implemented experimental design note, not just a proposal.</p>
+<code>docs/notes/2026-04-12-coordinator-meta-separation.md</code>.</p>
 <hr>
 <h2 id="4-persistence---workdir"><a class="header" href="#4-persistence---workdir">4. Persistence (<code>--workdir</code>)</a></h2>
 <p><code>--workdir</code> is required for every formal Coordinator deployment that hosts rooted truth.</p>
-<h3 id="single-coordinator--local-meta"><a class="header" href="#single-coordinator--local-meta"><code>single coordinator + local meta</code></a></h3>
-<p>The rooted backend stores:</p>
-<ul>
-<li><code>root.events.wal</code></li>
-<li><code>root.checkpoint.binpb</code></li>
-</ul>
-<h3 id="3-coordinator--replicated-meta"><a class="header" href="#3-coordinator--replicated-meta"><code>3 coordinator + replicated meta</code></a></h3>
-<p>Each Coordinator node has its own workdir and persists two layers of state:</p>
+<h3 id="separated-meta-root--coordinator-1"><a class="header" href="#separated-meta-root--coordinator-1"><code>separated meta-root + coordinator</code></a></h3>
+<p>Each <code>meta-root</code> process has its own rooted workdir and raft transport address.
+The <code>coordinator</code> process does not host rooted truth; it only connects to the
+remote root endpoints through <code>--root-peer nodeID=grpc_addr</code>.</p>
+<p>Each meta-root workdir persists two layers of state:</p>
 <ol>
 <li>rooted truth state
 <ul>
@@ -325,11 +298,7 @@ implemented experimental design note, not just a proposal.</p>
 </ul>
 </li>
 </ol>
-<p>Each node must have an isolated workdir. Workdirs are not shared.</p>
-<h3 id="separated-meta-root--remote-coordinator"><a class="header" href="#separated-meta-root--remote-coordinator"><code>separated meta-root + remote coordinator</code></a></h3>
-<p>Each <code>meta-root</code> process has its own rooted workdir and raft transport address.
-The <code>coordinator</code> process does not host rooted truth; it only connects to the
-remote root endpoints through <code>--root-peer nodeID=grpc_addr</code>.</p>
+<p>Each meta-root node must have an isolated workdir. Workdirs are not shared.</p>
 <p>Persistence ownership:</p>
 <ol>
 <li><code>meta-root</code> workdirs own durable rooted truth and replicated metadata-root
@@ -359,13 +328,14 @@ last returned ID or timestamp; restart recovery intentionally resumes after the
 fence and skips unused values.</p>
 <p>Startup flow:</p>
 <ol>
-<li>Open rooted <code>coordinator/storage</code> from <code>--workdir</code>.</li>
+<li>Open rooted <code>coordinator/rootview</code> against the 3 meta-root <code>--root-peer</code> endpoints.</li>
 <li>Reconstruct a rooted Coordinator snapshot (<code>regions</code> + allocator fences).</li>
 <li>Compute starts as <code>max(cli_start, fence+1)</code>.</li>
 <li>Materialize the rooted region snapshot into <code>coordinator/catalog.Cluster</code>.</li>
 </ol>
-<p>For replicated mode, followers periodically refresh rooted state and rebuild the
-service-side view. This avoids allocator rollback and removes the old parallel coordinator-state JSON truth table.</p>
+<p>Coordinator periodically refreshes rooted state via the meta-root tail stream
+and rebuilds the service-side view. This avoids allocator rollback and keeps
+all durable truth inside meta-root.</p>
 <h3 id="region-truth-hierarchy"><a class="header" href="#region-truth-hierarchy">Region Truth Hierarchy</a></h3>
 <p>NoKV intentionally keeps three region views with different authority:</p>
 <ul>
@@ -513,68 +483,39 @@ limit</li>
 <p><code>coordinator/client</code> accepts multiple Coordinator addresses. Write RPCs retry across Coordinator nodes and
 converge on the rooted leader. Read RPCs may use any available Coordinator endpoint.</p>
 <hr>
-<h2 id="9-deployment-examples"><a class="header" href="#9-deployment-examples">9. Deployment Examples</a></h2>
-<h3 id="single-coordinator--local-meta-1"><a class="header" href="#single-coordinator--local-meta-1"><code>single coordinator + local meta</code></a></h3>
-<pre><code class="language-bash">go run ./cmd/nokv coordinator \
-  -addr 127.0.0.1:2379 \
-  -workdir ./artifacts/coordinator
-</code></pre>
-<h3 id="3-coordinator--replicated-meta-1"><a class="header" href="#3-coordinator--replicated-meta-1"><code>3 coordinator + replicated meta</code></a></h3>
-<p>Node 1:</p>
-<pre><code class="language-bash">go run ./cmd/nokv coordinator \
-  -addr 127.0.0.1:2379 \
-  -workdir ./artifacts/coordinator1 \
-  -root-mode replicated \
-  -root-node-id 1 \
-  -root-transport-addr 127.0.0.1:2471 \
-  -root-peer 1=127.0.0.1:2471 \
-  -root-peer 2=127.0.0.1:2472 \
-  -root-peer 3=127.0.0.1:2473
-</code></pre>
-<p>Node 2 and node 3 use the same peer map, but change:</p>
-<ul>
-<li><code>-addr</code></li>
-<li><code>-workdir</code></li>
-<li><code>-root-node-id</code></li>
-<li><code>-root-transport-addr</code></li>
-</ul>
-<p>Current product assumptions:</p>
-<ul>
-<li>exactly three rooted replicas</li>
-<li>one workdir per Coordinator node</li>
-<li>one transport address per Coordinator node</li>
-<li>no dynamic membership</li>
-</ul>
-<h3 id="separated-meta-root--remote-coordinator-1"><a class="header" href="#separated-meta-root--remote-coordinator-1"><code>separated meta-root + remote coordinator</code></a></h3>
-<p>Start three metadata-root peers:</p>
+<h2 id="9-deployment-example"><a class="header" href="#9-deployment-example">9. Deployment Example</a></h2>
+<p>NoKV ships exactly one topology: a 3-peer replicated meta-root cluster plus
+one or more coordinator processes that talk to it over gRPC.</p>
+<p>Start three metadata-root peers (peer map is identical on all three; only
+<code>-addr</code>, <code>-workdir</code>, <code>-node-id</code>, <code>-transport-addr</code> differ):</p>
 <pre><code class="language-bash">go run ./cmd/nokv meta-root \
   -addr 127.0.0.1:2380 \
-  -mode replicated \
-  -workdir ./artifacts/separated/meta-root-1 \
+  -workdir ./artifacts/cluster/meta-root-1 \
   -node-id 1 \
   -transport-addr 127.0.0.1:3380 \
   -peer 1=127.0.0.1:3380 \
   -peer 2=127.0.0.1:3381 \
   -peer 3=127.0.0.1:3382
 </code></pre>
-<p>Nodes 2 and 3 use the same peer map but change:</p>
-<ul>
-<li><code>-addr</code></li>
-<li><code>-workdir</code></li>
-<li><code>-node-id</code></li>
-<li><code>-transport-addr</code></li>
-</ul>
-<p>Start one remote-root Coordinator:</p>
+<p>Start one coordinator (add more by giving each a distinct <code>-coordinator-id</code>
+and <code>-addr</code>; they share the same <code>-root-peer</code> set):</p>
 <pre><code class="language-bash">go run ./cmd/nokv coordinator \
   -addr 127.0.0.1:2379 \
-  -root-mode remote \
   -coordinator-id c1 \
   -root-peer 1=127.0.0.1:2380 \
   -root-peer 2=127.0.0.1:2381 \
   -root-peer 3=127.0.0.1:2382
 </code></pre>
+<p>Current product assumptions:</p>
+<ul>
+<li>exactly three meta-root replicas</li>
+<li>meta-root is the only place durable rooted truth lives</li>
+<li>coordinators are stateless relative to rooted truth; only the
+<code>CoordinatorLease</code> differentiates active vs standby</li>
+<li>no dynamic metadata-root membership</li>
+</ul>
 <p>For local bootstrap, use:</p>
-<pre><code class="language-bash">./scripts/dev/separated-cluster.sh --config ./raft_config.example.json
+<pre><code class="language-bash">./scripts/dev/cluster.sh --config ./raft_config.example.json
 </code></pre>
 <hr>
 <h2 id="10-comparison-tinykv--tikv"><a class="header" href="#10-comparison-tinykv--tikv">10. Comparison: TinyKV / TiKV</a></h2>

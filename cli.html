@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-570277fc.js";
+            window.path_to_searchindex_js = "searchindex-c14ddfb7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-15a84097.js"></script>
@@ -363,32 +363,29 @@ raft peers:
 </ul>
 <h3 id="nokv-coordinator"><a class="header" href="#nokv-coordinator"><code>nokv coordinator</code></a></h3>
 <ul>
-<li>Starts the Coordinator gRPC service used by distributed mode.</li>
+<li>Starts the Coordinator gRPC service. NoKV only supports the separated
+topology: coordinator always connects to an external 3-peer meta-root
+cluster via gRPC.</li>
+<li>Required flags:
+<ul>
+<li><code>--coordinator-id</code> (stable lease owner id)</li>
+<li><code>--root-peer nodeID=addr</code> (exactly 3 meta-root gRPC endpoints)</li>
+</ul>
+</li>
 <li>Common flags:
 <ul>
 <li><code>--addr</code> (default <code>127.0.0.1:2379</code>)</li>
-<li><code>--workdir</code> (optional persistence directory for region catalog + allocator state)</li>
-<li><code>--root-mode local|replicated|remote</code> (<code>local</code> by default)</li>
-<li><code>--root-peer nodeID=addr</code> (repeatable; used by <code>replicated</code> and <code>remote</code> rooted modes)</li>
-<li><code>--root-node-id</code>, <code>--root-transport-addr</code> (replicated rooted mode only)</li>
-<li><code>--coordinator-id</code> (stable lease owner id for rooted control-plane writes in separated mode)</li>
-<li><code>--lease-ttl</code>, <code>--lease-renew-before</code> (only used when <code>--coordinator-id</code> is set)</li>
-<li><code>--config</code> + <code>--scope host|docker</code> (resolve defaults from <code>raft_config.json</code>)</li>
-<li><code>--id-start</code>, <code>--ts-start</code> (allocator start values)</li>
+<li><code>--lease-ttl</code>, <code>--lease-renew-before</code> (default <code>10s</code> / <code>3s</code>)</li>
+<li><code>--root-refresh</code> (default <code>200ms</code>)</li>
+<li><code>--id-start</code>, <code>--ts-start</code> (allocator seeds; only used when the meta-root cluster has no allocator state yet)</li>
+<li><code>--config</code> + <code>--scope host|docker</code> (resolves <code>--addr</code> from <code>raft_config.json</code>)</li>
 <li><code>--metrics-addr</code> (optional expvar endpoint, exposes <code>/debug/vars</code>)</li>
 </ul>
 </li>
 </ul>
 <p>Example:</p>
 <pre><code class="language-bash">nokv coordinator \
-  --config ./raft_config.example.json \
-  --scope host \
-  --metrics-addr 127.0.0.1:23790
-</code></pre>
-<p>Separated deployment example:</p>
-<pre><code class="language-bash">nokv coordinator \
   --addr 127.0.0.1:2379 \
-  --root-mode remote \
   --coordinator-id c1 \
   --root-peer 1=127.0.0.1:2380 \
   --root-peer 2=127.0.0.1:2381 \
@@ -396,25 +393,26 @@ raft peers:
 </code></pre>
 <h3 id="nokv-meta-root"><a class="header" href="#nokv-meta-root"><code>nokv meta-root</code></a></h3>
 <ul>
-<li>Starts the metadata-root gRPC authority service.</li>
+<li>Starts one peer of the 3-peer replicated metadata-root cluster. NoKV only
+supports the replicated topology; single-process local mode has been
+removed from the CLI.</li>
+<li>Required flags:
+<ul>
+<li><code>--workdir</code>, <code>--node-id</code>, <code>--transport-addr</code></li>
+<li><code>--peer nodeID=addr</code> (repeatable, exactly 3)</li>
+</ul>
+</li>
 <li>Common flags:
 <ul>
-<li><code>--addr</code> (default <code>127.0.0.1:2380</code>)</li>
-<li><code>--mode local|replicated</code> (<code>local</code> by default)</li>
-<li><code>--workdir</code> (required)</li>
-<li><code>--node-id</code>, <code>--transport-addr</code>, <code>--peer nodeID=addr</code> (replicated mode)</li>
+<li><code>--addr</code> (default <code>127.0.0.1:2380</code>, gRPC listen)</li>
+<li><code>--tick-interval</code> (default <code>100ms</code>)</li>
+<li><code>--metrics-addr</code> (optional expvar endpoint)</li>
 </ul>
 </li>
 </ul>
-<p>Examples:</p>
+<p>Example:</p>
 <pre><code class="language-bash">nokv meta-root \
   --addr 127.0.0.1:2380 \
-  --mode local \
-  --workdir ./artifacts/meta-root
-</code></pre>
-<pre><code class="language-bash">nokv meta-root \
-  --addr 127.0.0.1:2380 \
-  --mode replicated \
   --workdir ./artifacts/meta-root-1 \
   --node-id 1 \
   --transport-addr 127.0.0.1:3380 \
@@ -426,8 +424,14 @@ raft peers:
 <ul>
 <li><code>scripts/ops/serve-meta-root.sh</code>
 <ul>
-<li>Starts one <code>meta-root</code> instance and forwards shutdown signals.</li>
-<li>Use this for explicit local/replicated <code>meta/root</code> process control.</li>
+<li>Starts one replicated <code>meta-root</code> peer and forwards shutdown signals.</li>
+<li>Requires <code>--workdir</code>, <code>--node-id</code>, <code>--transport-addr</code>, and 3 <code>--peer</code> values.</li>
+</ul>
+</li>
+<li><code>scripts/ops/serve-coordinator.sh</code>
+<ul>
+<li>Starts one <code>nokv coordinator</code> against an external meta-root cluster.</li>
+<li>Requires <code>--coordinator-id</code> and 3 <code>--root-peer</code> values (meta-root gRPC endpoints).</li>
 </ul>
 </li>
 <li><code>scripts/ops/serve-store.sh</code>
@@ -442,12 +446,7 @@ raft peers:
 </li>
 <li><code>scripts/dev/cluster.sh</code>
 <ul>
-<li>Dev bootstrap for co-located control plane.</li>
-</ul>
-</li>
-<li><code>scripts/dev/separated-cluster.sh</code>
-<ul>
-<li>Dev bootstrap for <code>3 meta-root + 1 coordinator(remote) + stores</code>.</li>
+<li>Dev bootstrap for the 333 separated layout: <code>3 meta-root + 1 coordinator(remote) + stores</code>.</li>
 <li>Uses fixed local root endpoints:
 <ul>
 <li>gRPC: <code>127.0.0.1:2380/2381/2382</code></li>

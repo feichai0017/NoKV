@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-570277fc.js";
+            window.path_to_searchindex_js = "searchindex-c14ddfb7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-15a84097.js"></script>
@@ -187,10 +187,11 @@
 <li>(Optional) Docker + Docker Compose for containerized runs</li>
 </ul>
 <h2 id="option-a-local-cluster-recommended-for-dev"><a class="header" href="#option-a-local-cluster-recommended-for-dev">Option A: Local Cluster (recommended for dev)</a></h2>
-<p>This launches a 3-node Raft cluster plus a Coordinator service.</p>
+<p>This launches the 333 separated layout: 3 replicated meta-root peers (Truth plane),
+1 coordinator (Service plane), and the stores declared in the config (Execution plane).</p>
 <pre><code class="language-bash">./scripts/dev/cluster.sh --config ./raft_config.example.json
 </code></pre>
-<p>The launcher stays attached, streams Coordinator/store logs to the terminal, and also writes them under <code>./artifacts/cluster/</code>.</p>
+<p>The launcher stays attached, streams meta-root/Coordinator/store logs to the terminal, and also writes them under <code>./artifacts/cluster/</code>.</p>
 <p>If you stop one store and want to restart it later, restart it against the same
 workdir:</p>
 <pre><code class="language-bash">./scripts/ops/serve-store.sh \
