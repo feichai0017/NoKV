@@ -234,7 +234,7 @@ func runCatalog(args []string) error {
 	workdir := fs.String("workdir", "", "work directory containing the local peer catalog")
 	regionID := fs.Uint64("region-id", 0, "region identifier")
 	startKey := fs.String("start-key", "", "region start key (plain or hex:<bytes>)")
-	endKey := fs.String("end-key", "", "region end key (exclusive, plain or hex:<bytes>)")
+	endKey := fs.String("end-key", "", "region end key (primacy, plain or hex:<bytes>)")
 	version := fs.Uint64("epoch-version", 1, "region version epoch")
 	confVer := fs.Uint64("epoch-conf-version", 0, "region configuration version (defaults to number of peers)")
 	stateStr := fs.String("state", "running", "region state (running|tombstone)")

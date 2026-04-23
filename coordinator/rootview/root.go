@@ -20,8 +20,8 @@ import (
 )
 
 var (
-	errCoordinatorLeaseCommandUnsupported   = errors.New("coordinator/rootview: coordinator lease command unsupported")
-	errCoordinatorClosureCommandUnsupported = errors.New("coordinator/rootview: coordinator closure command unsupported")
+	errTenureCommandUnsupported  = errors.New("coordinator/rootview: coordinator lease command unsupported")
+	errTransitCommandUnsupported = errors.New("coordinator/rootview: coordinator closure command unsupported")
 )
 
 // RootStorage persists control-plane mutations into durable metadata truth and
@@ -30,8 +30,8 @@ type RootStorage interface {
 	Load() (Snapshot, error)
 	AppendRootEvent(ctx context.Context, event rootevent.Event) error
 	SaveAllocatorState(ctx context.Context, idCurrent, tsCurrent uint64) error
-	ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
-	ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
+	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error)
+	ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error)
 	Refresh() error
 	IsLeader() bool
 	LeaderID() uint64
@@ -53,8 +53,8 @@ type rootRuntimeBackend interface {
 	ObserveCommitted() (rootstorage.ObservedCommitted, error)
 	IsLeader() bool
 	LeaderID() uint64
-	ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
-	ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
+	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error)
+	ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error)
 	Close() error
 }
 
@@ -75,8 +75,8 @@ type rootLeaderBackend interface {
 }
 
 type rootCoordinatorProtocolBackend interface {
-	ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
-	ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
+	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error)
+	ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error)
 }
 
 type rootCloseBackend interface {
@@ -141,18 +141,18 @@ func (a rootBackendAdapter) LeaderID() uint64 {
 	return a.leader.LeaderID()
 }
 
-func (a rootBackendAdapter) ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (a rootBackendAdapter) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error) {
 	if a.protocol == nil {
-		return rootstate.CoordinatorProtocolState{}, errCoordinatorLeaseCommandUnsupported
+		return rootstate.SuccessionState{}, errTenureCommandUnsupported
 	}
-	return a.protocol.ApplyCoordinatorLease(ctx, cmd)
+	return a.protocol.ApplyTenure(ctx, cmd)
 }
 
-func (a rootBackendAdapter) ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (a rootBackendAdapter) ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error) {
 	if a.protocol == nil {
-		return rootstate.CoordinatorProtocolState{}, errCoordinatorClosureCommandUnsupported
+		return rootstate.SuccessionState{}, errTransitCommandUnsupported
 	}
-	return a.protocol.ApplyCoordinatorClosure(ctx, cmd)
+	return a.protocol.ApplyTransit(ctx, cmd)
 }
 
 func (a rootBackendAdapter) Close() error {
@@ -318,27 +318,27 @@ func (s *RootStore) SaveAllocatorState(ctx context.Context, idCurrent, tsCurrent
 	})
 }
 
-func (s *RootStore) ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *RootStore) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error) {
 	if s == nil || s.root == nil {
-		return rootstate.CoordinatorProtocolState{}, nil
+		return rootstate.SuccessionState{}, nil
 	}
 	if !s.supportsProtocol {
-		return rootstate.CoordinatorProtocolState{}, errCoordinatorLeaseCommandUnsupported
+		return rootstate.SuccessionState{}, errTenureCommandUnsupported
 	}
-	return s.applyAndReload(func() (rootstate.CoordinatorProtocolState, error) {
-		return s.root.ApplyCoordinatorLease(ctx, cmd)
+	return s.applyAndReload(func() (rootstate.SuccessionState, error) {
+		return s.root.ApplyTenure(ctx, cmd)
 	})
 }
 
-func (s *RootStore) ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *RootStore) ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error) {
 	if s == nil || s.root == nil {
-		return rootstate.CoordinatorProtocolState{}, nil
+		return rootstate.SuccessionState{}, nil
 	}
 	if !s.supportsProtocol {
-		return rootstate.CoordinatorProtocolState{}, errCoordinatorClosureCommandUnsupported
+		return rootstate.SuccessionState{}, errTransitCommandUnsupported
 	}
-	return s.applyAndReload(func() (rootstate.CoordinatorProtocolState, error) {
-		return s.root.ApplyCoordinatorClosure(ctx, cmd)
+	return s.applyAndReload(func() (rootstate.SuccessionState, error) {
+		return s.root.ApplyTransit(ctx, cmd)
 	})
 }
 
@@ -386,12 +386,12 @@ func (s *RootStore) runAndReload(run func() error) error {
 	return s.reload()
 }
 
-func (s *RootStore) applyAndReload(run func() (rootstate.CoordinatorProtocolState, error)) (rootstate.CoordinatorProtocolState, error) {
+func (s *RootStore) applyAndReload(run func() (rootstate.SuccessionState, error)) (rootstate.SuccessionState, error) {
 	if s == nil {
-		return rootstate.CoordinatorProtocolState{}, nil
+		return rootstate.SuccessionState{}, nil
 	}
 	if run == nil {
-		return rootstate.CoordinatorProtocolState{}, nil
+		return rootstate.SuccessionState{}, nil
 	}
 	protocolState, err := run()
 	if err != nil {
@@ -405,22 +405,22 @@ func (s *RootStore) applyAndReload(run func() (rootstate.CoordinatorProtocolStat
 	// from a lagging follower observes a state regression and treats its own
 	// fresh lease as stale, which triggers churn (lease lineage mismatches,
 	// "lease held" retries) in multi-coordinator deployments.
-	s.mergeCoordinatorProtocolState(protocolState)
+	s.mergeSuccessionState(protocolState)
 	return protocolState, s.reload()
 }
 
-// mergeCoordinatorProtocolState overlays the Lease/Seal/Closure from an
+// mergeSuccessionState overlays the Lease/Seal/Closure from an
 // authoritative Apply response onto the cached snapshot. Other fields
 // (descriptors, allocator fences) are left untouched — the subsequent reload
 // or a later tail advance refreshes them.
-func (s *RootStore) mergeCoordinatorProtocolState(state rootstate.CoordinatorProtocolState) {
+func (s *RootStore) mergeSuccessionState(state rootstate.SuccessionState) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
-	s.snapshot.CoordinatorLease = state.Lease
-	s.snapshot.CoordinatorSeal = state.Seal
-	s.snapshot.CoordinatorClosure = state.Closure
+	s.snapshot.Tenure = state.Tenure
+	s.snapshot.Legacy = state.Legacy
+	s.snapshot.Transit = state.Transit
 	s.mu.Unlock()
 }
 

@@ -215,39 +215,39 @@ func (c *Client) LeaderID() uint64 {
 	return statusResp.GetLeaderId()
 }
 
-func (c *Client) ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
-	if !validCoordinatorLeaseCommandKind(cmd.Kind) {
-		return rootstate.CoordinatorProtocolState{}, rootstate.ErrInvalidCoordinatorLease
+func (c *Client) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error) {
+	if !validTenureAct(cmd.Kind) {
+		return rootstate.SuccessionState{}, rootstate.ErrInvalidTenure
 	}
-	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyCoordinatorLeaseResponse, error) {
-		return rpc.ApplyCoordinatorLease(ctx, &metapb.MetadataRootApplyCoordinatorLeaseRequest{
-			Command: metawire.RootCoordinatorLeaseCommandToProto(cmd),
+	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyTenureResponse, error) {
+		return rpc.ApplyTenure(ctx, &metapb.MetadataRootApplyTenureRequest{
+			Command: metawire.RootTenureCommandToProto(cmd),
 		})
 	})
 	if err != nil {
-		return rootstate.CoordinatorProtocolState{}, err
+		return rootstate.SuccessionState{}, err
 	}
-	protocolState := metawire.RootCoordinatorProtocolStateFromProto(resp.GetState())
-	if cmd.Kind == rootproto.CoordinatorLeaseCommandIssue &&
-		resp.GetStatus() == metapb.RootCoordinatorLeaseApplyStatus_ROOT_COORDINATOR_LEASE_APPLY_STATUS_HELD {
-		return protocolState, rootstate.ErrCoordinatorLeaseHeld
+	protocolState := metawire.RootSuccessionStateFromProto(resp.GetState())
+	if cmd.Kind == rootproto.TenureActIssue &&
+		resp.GetStatus() == metapb.RootTenureApplyStatus_ROOT_TENURE_APPLY_STATUS_HELD {
+		return protocolState, rootstate.ErrPrimacy
 	}
 	return protocolState, nil
 }
 
-func (c *Client) ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
-	if !validCoordinatorClosureCommandKind(cmd.Kind) {
-		return rootstate.CoordinatorProtocolState{}, rootstate.ErrCoordinatorLeaseAudit
+func (c *Client) ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error) {
+	if !validTransitAct(cmd.Kind) {
+		return rootstate.SuccessionState{}, rootstate.ErrClosure
 	}
-	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyCoordinatorClosureResponse, error) {
-		return rpc.ApplyCoordinatorClosure(ctx, &metapb.MetadataRootApplyCoordinatorClosureRequest{
-			Command: metawire.RootCoordinatorClosureCommandToProto(cmd),
+	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyTransitResponse, error) {
+		return rpc.ApplyTransit(ctx, &metapb.MetadataRootApplyTransitRequest{
+			Command: metawire.RootTransitCommandToProto(cmd),
 		})
 	})
 	if err != nil {
-		return rootstate.CoordinatorProtocolState{}, err
+		return rootstate.SuccessionState{}, err
 	}
-	return metawire.RootCoordinatorProtocolStateFromProto(resp.GetState()), nil
+	return metawire.RootSuccessionStateFromProto(resp.GetState()), nil
 }
 
 func (c *Client) ObserveCommitted() (rootstorage.ObservedCommitted, error) {
@@ -417,21 +417,21 @@ func dialEndpoint(ctx context.Context, target string, opts ...grpc.DialOption) (
 	return conn, nil
 }
 
-func validCoordinatorLeaseCommandKind(kind rootproto.CoordinatorLeaseCommandKind) bool {
+func validTenureAct(kind rootproto.TenureAct) bool {
 	switch kind {
-	case rootproto.CoordinatorLeaseCommandIssue, rootproto.CoordinatorLeaseCommandRelease:
+	case rootproto.TenureActIssue, rootproto.TenureActRelease:
 		return true
 	default:
 		return false
 	}
 }
 
-func validCoordinatorClosureCommandKind(kind rootproto.CoordinatorClosureCommandKind) bool {
+func validTransitAct(kind rootproto.TransitAct) bool {
 	switch kind {
-	case rootproto.CoordinatorClosureCommandSeal,
-		rootproto.CoordinatorClosureCommandConfirm,
-		rootproto.CoordinatorClosureCommandClose,
-		rootproto.CoordinatorClosureCommandReattach:
+	case rootproto.TransitActSeal,
+		rootproto.TransitActConfirm,
+		rootproto.TransitActClose,
+		rootproto.TransitActReattach:
 		return true
 	default:
 		return false

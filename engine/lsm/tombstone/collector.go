@@ -13,7 +13,7 @@ import (
 type Range struct {
 	CF      kv.ColumnFamily
 	Start   []byte // inclusive
-	End     []byte // exclusive
+	End     []byte // primacy
 	Version uint64
 }
 

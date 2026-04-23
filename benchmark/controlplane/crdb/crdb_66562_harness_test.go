@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
-	protocol "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
+	protocol "github.com/feichai0017/NoKV/coordinator/protocol/succession"
 	"github.com/stretchr/testify/require"
 )
 

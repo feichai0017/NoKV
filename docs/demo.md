@@ -26,7 +26,7 @@ consecutive numbers — easy to remember, easy to script against.
 |---|---|---|
 | Redis gateway | `6380` | RESP protocol — `redis-cli -p 6380 ...` |
 | Redis expvar | `9300` | `/debug/vars` JSON |
-| Meta-root-1 gRPC | `2380` | `nokv ccc-audit --root-peer 1=127.0.0.1:2380 ...` |
+| Meta-root-1 gRPC | `2380` | `nokv succession-audit --root-peer 1=127.0.0.1:2380 ...` |
 | Meta-root-2 gRPC | `2381` | |
 | Meta-root-3 gRPC | `2382` | |
 | Meta-root-1 expvar | `9380` | `/debug/vars` JSON |
@@ -45,12 +45,12 @@ consecutive numbers — easy to remember, easy to script against.
 ### Why are meta-root gRPC ports exposed?
 
 Meta-root (`2380/2381/2382`) is exposed so host-side tools like
-`nokv ccc-audit` and `nokv-config` can query rooted state directly for
+`nokv succession-audit` and `nokv-config` can query rooted state directly for
 debugging. All `/debug/vars` endpoints also expose the meta-root's state
 summary (leader, committed index, generation) for the dashboard.
 
 **For production, don't expose meta-root publicly.** The gRPC API accepts
-`ApplyCoordinatorLease` and `ApplyCoordinatorClosure` which are
+`ApplyTenure` and `ApplyTransit` which are
 lease-gated but still structurally sensitive. To opt out, delete the
 `ports:` block under `meta-root-1`, `meta-root-2`, `meta-root-3` in
 `docker-compose.yml` — the dashboard loses the "Truth plane" cards (they
@@ -64,8 +64,8 @@ host-side client experiments, don't expose publicly.
 ### Live audit from the host
 
 ```bash
-# Project rooted state through the CCC audit vocabulary
-nokv ccc-audit \
+# Project rooted state through the Succession audit vocabulary
+nokv succession-audit \
   --root-peer 1=127.0.0.1:2380 \
   --root-peer 2=127.0.0.1:2381 \
   --root-peer 3=127.0.0.1:2382
@@ -83,7 +83,7 @@ three planes:
 
 - **Truth plane** — which meta-root is raft leader, committed index, allocator
   fences, descriptor / pending-change counts.
-- **Control plane** — which coordinator currently holds the CCC lease, lease
+- **Control plane** — which coordinator currently holds the Succession lease, lease
   generation, root lag, degraded mode, active vs standby tag on every coord.
 - **Execution plane** — stores heap usage, goroutine count.
 - **Gateway** — Redis expvar counters.
@@ -120,14 +120,14 @@ basic auth).
 - **Top:** cluster-wide status pill ("10/10 reachable · HH:MM:SS")
 - **Topology diagram:** 3 truth-plane meta-root peers ↔ 3 control-plane
   coordinators ↔ 3 execution-plane stores, with the raft leader highlighted
-  in blue, the CCC lease holder in purple, and pulsing lines showing the
+  in blue, the Succession lease holder in purple, and pulsing lines showing the
   active control-flow edge (lease holder → raft leader, holder → stores,
   gateway → holder).
 - **Per-service cards:** one card per service showing leader state, lease
   generation, committed index, allocator fences, heap stats.
 - **Event timeline:** auto-populated from expvar diffs — lease handoffs,
   raft elections, descriptor-count changes, node up/down transitions. Use
-  this to watch the CCC lifecycle live.
+  this to watch the Succession lifecycle live.
 - **Failure drills:** one button per meta-root / coordinator container to
   stop or start it without leaving the browser.
 - **Redis terminal:** type commands like `SET demo "hello"`, `GET demo`,
@@ -138,7 +138,7 @@ basic auth).
 
 - exactly one meta-root card shows the blue **raft leader** badge
 - exactly one coordinator card shows the purple **lease holder** badge and
-  a `cert_generation` that stays stable unless you kill something
+  a `epoch` that stays stable unless you kill something
 - topology diagram: one blue circle on the left column, one purple on
   the middle column
 - event timeline scrolls slowly with committed-index bumps under load
@@ -222,7 +222,7 @@ publicly.
 
 - [docs/config.md](config.md) — `raft_config.example.json` schema (two-layer
   model: address directory vs bootstrap seed)
-- [docs/ccc-audit.md](ccc-audit.md) — the CCC audit tool behind the dashboard's
+- [docs/succession-audit.md](succession-audit.md) — the Succession audit tool behind the dashboard's
   "closure witness" row
-- [docs/coordinator.md](coordinator.md) — CCC lease lifecycle
+- [docs/coordinator.md](coordinator.md) — Succession lease lifecycle
 - [docs/rooted_truth.md](rooted_truth.md) — meta-root internals

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
+	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
@@ -17,63 +17,63 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func campaignLease(store *Store, holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence, descriptorRevision uint64, predecessorDigest string) (rootstate.CoordinatorLease, error) {
-	state, err := store.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{
-		Kind:              rootproto.CoordinatorLeaseCommandIssue,
-		HolderID:          holderID,
-		ExpiresUnixNano:   expiresUnixNano,
-		NowUnixNano:       nowUnixNano,
-		PredecessorDigest: predecessorDigest,
-		HandoffFrontiers:  controlplane.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, descriptorRevision),
+func campaignLease(store *Store, holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence, descriptorRevision uint64, lineageDigest string) (rootstate.Tenure, error) {
+	state, err := store.ApplyTenure(context.Background(), rootproto.TenureCommand{
+		Kind:               rootproto.TenureActIssue,
+		HolderID:           holderID,
+		ExpiresUnixNano:    expiresUnixNano,
+		NowUnixNano:        nowUnixNano,
+		LineageDigest:      lineageDigest,
+		InheritedFrontiers: succession.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, descriptorRevision),
 	})
-	return state.Lease, err
+	return state.Tenure, err
 }
 
-func releaseLease(store *Store, holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.CoordinatorLease, error) {
-	state, err := store.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{
-		Kind:             rootproto.CoordinatorLeaseCommandRelease,
-		HolderID:         holderID,
-		NowUnixNano:      nowUnixNano,
-		HandoffFrontiers: controlplane.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, 0),
+func releaseLease(store *Store, holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.Tenure, error) {
+	state, err := store.ApplyTenure(context.Background(), rootproto.TenureCommand{
+		Kind:               rootproto.TenureActRelease,
+		HolderID:           holderID,
+		NowUnixNano:        nowUnixNano,
+		InheritedFrontiers: succession.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, 0),
 	})
-	return state.Lease, err
+	return state.Tenure, err
 }
 
-func sealLease(store *Store, holderID string, nowUnixNano int64, frontiers rootproto.CoordinatorDutyFrontiers) (rootstate.CoordinatorSeal, error) {
-	state, err := store.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{
-		Kind:        rootproto.CoordinatorClosureCommandSeal,
+func sealLease(store *Store, holderID string, nowUnixNano int64, frontiers rootproto.MandateFrontiers) (rootstate.Legacy, error) {
+	state, err := store.ApplyTransit(context.Background(), rootproto.TransitCommand{
+		Kind:        rootproto.TransitActSeal,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 		Frontiers:   frontiers,
 	})
-	return state.Seal, err
+	return state.Legacy, err
 }
 
-func confirmClosure(store *Store, holderID string, nowUnixNano int64) (rootstate.CoordinatorClosure, error) {
-	state, err := store.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{
-		Kind:        rootproto.CoordinatorClosureCommandConfirm,
+func confirmClosure(store *Store, holderID string, nowUnixNano int64) (rootstate.Transit, error) {
+	state, err := store.ApplyTransit(context.Background(), rootproto.TransitCommand{
+		Kind:        rootproto.TransitActConfirm,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 	})
-	return state.Closure, err
+	return state.Transit, err
 }
 
-func closeClosure(store *Store, holderID string, nowUnixNano int64) (rootstate.CoordinatorClosure, error) {
-	state, err := store.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{
-		Kind:        rootproto.CoordinatorClosureCommandClose,
+func closeClosure(store *Store, holderID string, nowUnixNano int64) (rootstate.Transit, error) {
+	state, err := store.ApplyTransit(context.Background(), rootproto.TransitCommand{
+		Kind:        rootproto.TransitActClose,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 	})
-	return state.Closure, err
+	return state.Transit, err
 }
 
-func reattachClosure(store *Store, holderID string, nowUnixNano int64) (rootstate.CoordinatorClosure, error) {
-	state, err := store.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{
-		Kind:        rootproto.CoordinatorClosureCommandReattach,
+func reattachClosure(store *Store, holderID string, nowUnixNano int64) (rootstate.Transit, error) {
+	state, err := store.ApplyTransit(context.Background(), rootproto.TransitCommand{
+		Kind:        rootproto.TransitActReattach,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 	})
-	return state.Closure, err
+	return state.Transit, err
 }
 
 func TestReplicatedStoreAppendAndReopen(t *testing.T) {
@@ -292,7 +292,7 @@ func TestReplicatedStoreFenceAllocator(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
-func TestReplicatedStoreCampaignCoordinatorLease(t *testing.T) {
+func TestReplicatedStoreCampaignTenure(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 	followerID := uint64(1)
 	if followerID == leaderID {
@@ -302,9 +302,9 @@ func TestReplicatedStoreCampaignCoordinatorLease(t *testing.T) {
 	lease, err := campaignLease(stores[leaderID], "c1", 1_000, 100, 123, 456, 1, "")
 	require.NoError(t, err)
 	require.Equal(t, "c1", lease.HolderID)
-	require.Equal(t, uint64(1), lease.CertGeneration)
-	require.Equal(t, uint32(rootproto.CoordinatorDutyMaskDefault), lease.DutyMask)
-	require.NotEqual(t, rootstate.Cursor{}, lease.IssuedCursor)
+	require.Equal(t, uint64(1), lease.Epoch)
+	require.Equal(t, uint32(rootproto.MandateDefault), lease.Mandate)
+	require.NotEqual(t, rootstate.Cursor{}, lease.IssuedAt)
 
 	_, err = campaignLease(stores[leaderID], "c2", 1_500, 200, 200, 500, 1, "")
 	require.Error(t, err)
@@ -317,14 +317,14 @@ func TestReplicatedStoreCampaignCoordinatorLease(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		return current.CoordinatorLease.HolderID == "c1" &&
-			current.CoordinatorLease.CertGeneration == 1 &&
+		return current.Tenure.HolderID == "c1" &&
+			current.Tenure.Epoch == 1 &&
 			current.IDFence == 123 &&
 			current.TSOFence == 456
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
-func TestReplicatedStoreConfirmCoordinatorClosure(t *testing.T) {
+func TestReplicatedStoreConfirmTransit(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 	desc := testDescriptor(1, []byte("a"), []byte("z"))
 	desc.RootEpoch = 56
@@ -333,23 +333,23 @@ func TestReplicatedStoreConfirmCoordinatorClosure(t *testing.T) {
 
 	_, err = campaignLease(stores[leaderID], "c1", 1_000, 100, 10, 20, 56, "")
 	require.NoError(t, err)
-	seal, err := sealLease(stores[leaderID], "c1", 200, controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
+	seal, err := sealLease(stores[leaderID], "c1", 200, succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
 	require.NoError(t, err)
-	lease, err := campaignLease(stores[leaderID], "c1", 1_200, 250, 12, 34, 56, rootstate.CoordinatorSealDigest(seal))
+	lease, err := campaignLease(stores[leaderID], "c1", 1_200, 250, 12, 34, 56, rootstate.DigestOfLegacy(seal))
 	require.NoError(t, err)
 
 	closure, err := confirmClosure(stores[leaderID], "c1", 260)
 	require.NoError(t, err)
-	require.Equal(t, seal.CertGeneration, closure.SealGeneration)
-	require.Equal(t, lease.CertGeneration, closure.SuccessorGeneration)
-	require.Equal(t, rootstate.CoordinatorSealDigest(seal), closure.SealDigest)
-	require.Equal(t, rootproto.CoordinatorClosureStageConfirmed, closure.Stage)
+	require.Equal(t, seal.Epoch, closure.LegacyEpoch)
+	require.Equal(t, lease.Epoch, closure.SuccessorEpoch)
+	require.Equal(t, rootstate.DigestOfLegacy(seal), closure.LegacyDigest)
+	require.Equal(t, rootproto.TransitStageConfirmed, closure.Stage)
 	current, err := stores[leaderID].Current()
 	require.NoError(t, err)
-	require.Equal(t, closure, current.CoordinatorClosure)
+	require.Equal(t, closure, current.Transit)
 }
 
-func TestReplicatedStoreReattachCoordinatorClosure(t *testing.T) {
+func TestReplicatedStoreReattachTransit(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 	desc := testDescriptor(1, []byte("a"), []byte("z"))
 	desc.RootEpoch = 56
@@ -358,13 +358,13 @@ func TestReplicatedStoreReattachCoordinatorClosure(t *testing.T) {
 
 	_, err = campaignLease(stores[leaderID], "c1", 1_000, 100, 10, 20, 56, "")
 	require.NoError(t, err)
-	seal, err := sealLease(stores[leaderID], "c1", 200, controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
+	seal, err := sealLease(stores[leaderID], "c1", 200, succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
 	require.NoError(t, err)
-	_, err = campaignLease(stores[leaderID], "c1", 1_200, 250, 12, 34, 56, rootstate.CoordinatorSealDigest(seal))
+	_, err = campaignLease(stores[leaderID], "c1", 1_200, 250, 12, 34, 56, rootstate.DigestOfLegacy(seal))
 	require.NoError(t, err)
 
 	_, err = reattachClosure(stores[leaderID], "c1", 255)
-	require.ErrorIs(t, err, rootstate.ErrCoordinatorLeaseReattach)
+	require.ErrorIs(t, err, rootstate.ErrClosure)
 
 	confirmed, err := confirmClosure(stores[leaderID], "c1", 260)
 	require.NoError(t, err)
@@ -372,18 +372,18 @@ func TestReplicatedStoreReattachCoordinatorClosure(t *testing.T) {
 	require.NoError(t, err)
 	reattached, err := reattachClosure(stores[leaderID], "c1", 270)
 	require.NoError(t, err)
-	require.Equal(t, closed.SuccessorGeneration, reattached.SuccessorGeneration)
-	require.Equal(t, closed.SealGeneration, reattached.SealGeneration)
-	require.Equal(t, closed.SealDigest, reattached.SealDigest)
-	require.Equal(t, rootproto.CoordinatorClosureStageReattached, reattached.Stage)
+	require.Equal(t, closed.SuccessorEpoch, reattached.SuccessorEpoch)
+	require.Equal(t, closed.LegacyEpoch, reattached.LegacyEpoch)
+	require.Equal(t, closed.LegacyDigest, reattached.LegacyDigest)
+	require.Equal(t, rootproto.TransitStageReattached, reattached.Stage)
 
 	current, err := stores[leaderID].Current()
 	require.NoError(t, err)
-	require.Equal(t, reattached, current.CoordinatorClosure)
-	require.Equal(t, rootproto.CoordinatorClosureStageConfirmed, confirmed.Stage)
+	require.Equal(t, reattached, current.Transit)
+	require.Equal(t, rootproto.TransitStageConfirmed, confirmed.Stage)
 }
 
-func TestReplicatedStoreCoordinatorLeaseFenceSurvivesLeaderChange(t *testing.T) {
+func TestReplicatedStoreTenureFenceSurvivesLeaderChange(t *testing.T) {
 	stores, drivers, leaderID := openNetworkTestCluster(t, 8)
 	followerID := uint64(1)
 	if followerID == leaderID {
@@ -393,8 +393,8 @@ func TestReplicatedStoreCoordinatorLeaseFenceSurvivesLeaderChange(t *testing.T) 
 	lease, err := campaignLease(stores[leaderID], "c1", 1_000, 100, 123, 456, 1, "")
 	require.NoError(t, err)
 	require.Equal(t, "c1", lease.HolderID)
-	require.Equal(t, uint64(1), lease.CertGeneration)
-	require.NotEqual(t, rootstate.Cursor{}, lease.IssuedCursor)
+	require.Equal(t, uint64(1), lease.Epoch)
+	require.NotEqual(t, rootstate.Cursor{}, lease.IssuedAt)
 
 	require.Eventually(t, func() bool {
 		if err := stores[followerID].Refresh(); err != nil {
@@ -402,13 +402,13 @@ func TestReplicatedStoreCoordinatorLeaseFenceSurvivesLeaderChange(t *testing.T) 
 		}
 		current, err := stores[followerID].Current()
 		return err == nil &&
-			current.CoordinatorLease.HolderID == "c1" &&
-			current.CoordinatorLease.CertGeneration == 1 &&
+			current.Tenure.HolderID == "c1" &&
+			current.Tenure.Epoch == 1 &&
 			current.IDFence == 123 &&
 			current.TSOFence == 456
 	}, 5*time.Second, 50*time.Millisecond)
 
-	initialIssued := lease.IssuedCursor
+	initialIssued := lease.IssuedAt
 
 	require.NoError(t, drivers[followerID].Campaign())
 	require.Eventually(t, func() bool {
@@ -418,8 +418,8 @@ func TestReplicatedStoreCoordinatorLeaseFenceSurvivesLeaderChange(t *testing.T) 
 	renewed, err := campaignLease(stores[followerID], "c1", 2_000, 500, 200, 600, 1, "")
 	require.NoError(t, err)
 	require.Equal(t, "c1", renewed.HolderID)
-	require.Equal(t, uint64(1), renewed.CertGeneration)
-	require.Equal(t, initialIssued, renewed.IssuedCursor)
+	require.Equal(t, uint64(1), renewed.Epoch)
+	require.Equal(t, initialIssued, renewed.IssuedAt)
 
 	for _, id := range []uint64{1, 2, 3} {
 		require.Eventually(t, func() bool {
@@ -428,16 +428,16 @@ func TestReplicatedStoreCoordinatorLeaseFenceSurvivesLeaderChange(t *testing.T) 
 			}
 			current, err := stores[id].Current()
 			return err == nil &&
-				current.CoordinatorLease.HolderID == "c1" &&
-				current.CoordinatorLease.CertGeneration == 1 &&
-				current.CoordinatorLease.IssuedCursor == initialIssued &&
+				current.Tenure.HolderID == "c1" &&
+				current.Tenure.Epoch == 1 &&
+				current.Tenure.IssuedAt == initialIssued &&
 				current.IDFence == 200 &&
 				current.TSOFence == 600
 		}, 5*time.Second, 50*time.Millisecond)
 	}
 }
 
-func TestReplicatedStoreReleaseCoordinatorLease(t *testing.T) {
+func TestReplicatedStoreReleaseTenure(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 
 	_, err := campaignLease(stores[leaderID], "c1", 1_000, 100, 123, 456, 1, "")
@@ -446,12 +446,12 @@ func TestReplicatedStoreReleaseCoordinatorLease(t *testing.T) {
 	lease, err := releaseLease(stores[leaderID], "c1", 200, 300, 500)
 	require.NoError(t, err)
 	require.Equal(t, "c1", lease.HolderID)
-	require.Equal(t, uint64(1), lease.CertGeneration)
+	require.Equal(t, uint64(1), lease.Epoch)
 	require.Equal(t, int64(200), lease.ExpiresUnixNano)
 
 	_, err = releaseLease(stores[leaderID], "c2", 250, 300, 500)
 	require.Error(t, err)
-	require.True(t, errors.Is(err, rootstate.ErrCoordinatorLeaseOwner))
+	require.True(t, errors.Is(err, rootstate.ErrPrimacy))
 }
 
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {

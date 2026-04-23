@@ -70,6 +70,41 @@ The current protocol is intentionally minimal. It does not yet expose the full
 future runtime/operator model such as stalled transitions or richer catch-up
 actions.
 
+### Minimal Succession vocabulary
+
+The rooted handoff protocol is smaller than some of the implementation type
+names suggest. At the doc / operator level, keep just these words:
+
+- `Lease` — the currently active authority record
+- `Seal` — the retired predecessor generation plus the frontier it already
+  consumed
+- `Closure` — the handoff-completion record for the current successor
+- `Generation` — the monotonic authority generation
+- `Witness` — the operator-visible proof bundle that explains whether the
+  current handoff state is safe
+
+The four guarantees discussed by the docs and runtime metrics are:
+
+- `Primacy` — at most one authority generation is active
+- `Inheritance` — the successor must cover the predecessor's published work
+- `Silence` — a sealed predecessor must not keep serving
+- `Closure` — a handoff must not remain permanently half-finished
+
+Implementation names remain more explicit:
+
+| Doc term | Implementation term |
+|---|---|
+| `Lease` | `Tenure` |
+| `Seal` | `Legacy` |
+| `Closure` | `Transit` |
+| `Generation` | `Epoch` / `epoch` |
+| `Witness` | `TransitWitness` / continuation witness fields |
+| `Frontiers` | `MandateFrontiers` / `frontiers` / `consumed_frontiers` |
+
+This split is deliberate: docs describe the protocol in the smallest stable
+vocabulary, while code keeps the more explicit type names that make mutation
+boundaries obvious.
+
 ---
 
 ## 3. Deployment Model
@@ -92,7 +127,7 @@ plane deployment; it simply has no control plane.
   (replicated raft quorum, the only backend NoKV ships)
 - one or more `nokv coordinator` processes connect through the remote
   metadata-root gRPC API
-- `CoordinatorLease` gates singleton Coordinator duties: `AllocID`, `Tso`,
+- `Tenure` gates singleton Coordinator duties: `AllocID`, `Tso`,
   and scheduler operation planning
 - route reads still come from Coordinator's rebuildable in-memory view and
   expose `Freshness`, `RootToken`, `CatchUpState`, and `DegradedMode`
@@ -109,7 +144,7 @@ Product assumptions:
 - exactly three meta-root replicas
 - meta-root is the only place durable rooted truth lives
 - coordinators are stateless relative to rooted truth; only the
-  `CoordinatorLease` differentiates active vs standby
+  `Tenure` differentiates active vs standby
 - no dynamic metadata-root membership
 - no production-grade dynamic coordinator membership manager
 
@@ -144,7 +179,7 @@ Persistence ownership:
 1. `meta-root` workdirs own durable rooted truth and replicated metadata-root
    raft state.
 2. `coordinator` runtime view is rebuildable from remote `meta/root`.
-3. allocator fences and `CoordinatorLease` are rooted events, not local
+3. allocator fences and `Tenure` are rooted events, not local
    coordinator files.
 
 `--coordinator-id` must be a stable configured identity. It is used for lease
@@ -307,7 +342,7 @@ In `3 coordinator + replicated meta`:
 In separated mode:
 
 - `meta-root` leadership determines which root endpoint accepts truth writes
-- `CoordinatorLease` determines which Coordinator may serve singleton duties
+- `Tenure` determines which Coordinator may serve singleton duties
 - non-holder Coordinators may still serve route reads if their rooted view
   satisfies the caller's freshness contract
 
@@ -325,7 +360,7 @@ Followers return `FailedPrecondition` with `coordinator not leader` semantics, a
 clients are expected to retry against another Coordinator endpoint.
 
 In separated mode, `AllocID`, `Tso`, and scheduler operation planning also
-require the local Coordinator to hold `CoordinatorLease`.
+require the local Coordinator to hold `Tenure`.
 
 ### Any-node reads
 
@@ -390,7 +425,7 @@ Current product assumptions:
 - exactly three meta-root replicas
 - meta-root is the only place durable rooted truth lives
 - coordinators are stateless relative to rooted truth; only the
-  `CoordinatorLease` differentiates active vs standby
+  `Tenure` differentiates active vs standby
 - no dynamic metadata-root membership
 
 For local bootstrap, use:
@@ -429,7 +464,7 @@ For local bootstrap, use:
 - Coordinator persistence is intentionally limited to rooted control-plane truth:
   - region descriptor publish/tombstone events
   - allocator durability (`AllocID`, `TSO`)
-  - `CoordinatorLease` ownership for separated singleton duties
+  - `Tenure` ownership for separated singleton duties
 - Coordinator is not the durable owner of a store's local raft/region truth. Store
   restart truth remains in `raftstore/localmeta`, while Coordinator keeps routing and
   scheduling state rebuilt from `meta/root`.

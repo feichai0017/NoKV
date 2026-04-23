@@ -60,11 +60,11 @@ func (f *fakeMetadataRootClient) Status(ctx context.Context, req *metapb.Metadat
 	return nil, status.Error(codes.Unimplemented, "status")
 }
 
-func (f *fakeMetadataRootClient) ApplyCoordinatorLease(context.Context, *metapb.MetadataRootApplyCoordinatorLeaseRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyCoordinatorLeaseResponse, error) {
+func (f *fakeMetadataRootClient) ApplyTenure(context.Context, *metapb.MetadataRootApplyTenureRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyTenureResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "lease")
 }
 
-func (f *fakeMetadataRootClient) ApplyCoordinatorClosure(context.Context, *metapb.MetadataRootApplyCoordinatorClosureRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyCoordinatorClosureResponse, error) {
+func (f *fakeMetadataRootClient) ApplyTransit(context.Context, *metapb.MetadataRootApplyTransitRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyTransitResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "closure")
 }
 
@@ -110,10 +110,10 @@ func TestClientHelpersAndOrdering(t *testing.T) {
 	require.True(t, ok)
 	require.WithinDuration(t, time.Now().Add(25*time.Millisecond), deadline, 150*time.Millisecond)
 
-	require.True(t, validCoordinatorLeaseCommandKind(1))
-	require.False(t, validCoordinatorLeaseCommandKind(99))
-	require.True(t, validCoordinatorClosureCommandKind(1))
-	require.False(t, validCoordinatorClosureCommandKind(99))
+	require.True(t, validTenureAct(1))
+	require.False(t, validTenureAct(99))
+	require.True(t, validTransitAct(1))
+	require.False(t, validTransitAct(99))
 
 	leaderID, ok := leaderHint(status.Error(codes.FailedPrecondition, errMetadataRootNotLeader+" (leader_id=23)"))
 	require.True(t, ok)

@@ -41,9 +41,9 @@ func TestDescriptorRoundTripPreservesAndDetachesData(t *testing.T) {
 }
 
 func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
-	frontiers := rootproto.NewCoordinatorDutyFrontiers(
-		rootproto.CoordinatorDutyFrontier{DutyMask: rootproto.CoordinatorDutyAllocID, Frontier: 10},
-		rootproto.CoordinatorDutyFrontier{DutyMask: rootproto.CoordinatorDutyTSO, Frontier: 20},
+	frontiers := rootproto.NewMandateFrontiers(
+		rootproto.MandateFrontier{Mandate: rootproto.MandateAllocID, Frontier: 10},
+		rootproto.MandateFrontier{Mandate: rootproto.MandateTSO, Frontier: 20},
 	)
 	state := rootstate.State{
 		ClusterEpoch:    7,
@@ -51,30 +51,30 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 		LastCommitted:   rootproto.Cursor{Term: 2, Index: 9},
 		IDFence:         100,
 		TSOFence:        200,
-		CoordinatorLease: rootstate.CoordinatorLease{
-			HolderID:          "coord-1",
-			ExpiresUnixNano:   12345,
-			CertGeneration:    5,
-			IssuedCursor:      rootproto.Cursor{Term: 2, Index: 8},
-			DutyMask:          rootproto.CoordinatorDutyMaskDefault,
-			PredecessorDigest: "pred",
+		Tenure: rootstate.Tenure{
+			HolderID:        "coord-1",
+			ExpiresUnixNano: 12345,
+			Epoch:           5,
+			IssuedAt:        rootproto.Cursor{Term: 2, Index: 8},
+			Mandate:         rootproto.MandateDefault,
+			LineageDigest:   "pred",
 		},
-		CoordinatorSeal: rootstate.CoordinatorSeal{
+		Legacy: rootstate.Legacy{
+			HolderID:  "coord-1",
+			Epoch:     5,
+			Mandate:   rootproto.MandateAllocID | rootproto.MandateTSO,
+			Frontiers: frontiers,
+			SealedAt:  rootproto.Cursor{Term: 2, Index: 9},
+		},
+		Transit: rootstate.Transit{
 			HolderID:       "coord-1",
-			CertGeneration: 5,
-			DutyMask:       rootproto.CoordinatorDutyAllocID | rootproto.CoordinatorDutyTSO,
-			Frontiers:      frontiers,
-			SealedAtCursor: rootproto.Cursor{Term: 2, Index: 9},
-		},
-		CoordinatorClosure: rootstate.CoordinatorClosure{
-			HolderID:            "coord-1",
-			SealGeneration:      5,
-			SuccessorGeneration: 6,
-			SealDigest:          "seal",
-			Stage:               rootproto.CoordinatorClosureStageClosed,
-			ConfirmedAtCursor:   rootproto.Cursor{Term: 2, Index: 10},
-			ClosedAtCursor:      rootproto.Cursor{Term: 2, Index: 11},
-			ReattachedAtCursor:  rootproto.Cursor{Term: 2, Index: 12},
+			LegacyEpoch:    5,
+			SuccessorEpoch: 6,
+			LegacyDigest:   "seal",
+			Stage:          rootproto.TransitStageClosed,
+			ConfirmedAt:    rootproto.Cursor{Term: 2, Index: 10},
+			ClosedAt:       rootproto.Cursor{Term: 2, Index: 11},
+			ReattachedAt:   rootproto.Cursor{Term: 2, Index: 12},
 		},
 	}
 
@@ -83,56 +83,56 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	require.Equal(t, state, RootStateFromProto(RootStateToProto(state)))
 	require.Equal(t, rootstate.State{}, RootStateFromProto(nil))
 
-	require.Nil(t, RootCoordinatorLeaseToProto(rootstate.CoordinatorLease{}))
-	require.Nil(t, RootCoordinatorSealToProto(rootstate.CoordinatorSeal{}))
-	require.Nil(t, RootCoordinatorClosureToProto(rootstate.CoordinatorClosure{}))
-	require.Equal(t, state.CoordinatorLease, RootCoordinatorLeaseFromProto(RootCoordinatorLeaseToProto(state.CoordinatorLease)))
-	require.Equal(t, state.CoordinatorSeal, RootCoordinatorSealFromProto(RootCoordinatorSealToProto(state.CoordinatorSeal)))
-	require.Equal(t, state.CoordinatorClosure, RootCoordinatorClosureFromProto(RootCoordinatorClosureToProto(state.CoordinatorClosure)))
+	require.Nil(t, RootTenureToProto(rootstate.Tenure{}))
+	require.Nil(t, RootLegacyToProto(rootstate.Legacy{}))
+	require.Nil(t, RootTransitToProto(rootstate.Transit{}))
+	require.Equal(t, state.Tenure, RootTenureFromProto(RootTenureToProto(state.Tenure)))
+	require.Equal(t, state.Legacy, RootLegacyFromProto(RootLegacyToProto(state.Legacy)))
+	require.Equal(t, state.Transit, RootTransitFromProto(RootTransitToProto(state.Transit)))
 
-	require.Nil(t, RootDutyFrontiersToProto(rootproto.CoordinatorDutyFrontiers{}))
-	filtered := RootDutyFrontiersFromProto([]*metapb.RootDutyFrontier{
+	require.Nil(t, RootMandateFrontiersToProto(rootproto.MandateFrontiers{}))
+	filtered := RootMandateFrontiersFromProto([]*metapb.RootMandateFrontier{
 		nil,
-		{DutyMask: 0, Frontier: 1},
-		{DutyMask: rootproto.CoordinatorDutyAllocID, Frontier: 10},
-		{DutyMask: rootproto.CoordinatorDutyTSO, Frontier: 20},
+		{Mandate: 0, Frontier: 1},
+		{Mandate: rootproto.MandateAllocID, Frontier: 10},
+		{Mandate: rootproto.MandateTSO, Frontier: 20},
 	})
 	require.Equal(t, frontiers, filtered)
 
-	protocolState := rootstate.CoordinatorProtocolState{
-		Lease:   state.CoordinatorLease,
-		Seal:    state.CoordinatorSeal,
-		Closure: state.CoordinatorClosure,
+	protocolState := rootstate.SuccessionState{
+		Tenure:  state.Tenure,
+		Legacy:  state.Legacy,
+		Transit: state.Transit,
 	}
-	require.Equal(t, protocolState, RootCoordinatorProtocolStateFromProto(RootCoordinatorProtocolStateToProto(protocolState)))
-	require.Equal(t, rootstate.CoordinatorProtocolState{}, RootCoordinatorProtocolStateFromProto(nil))
+	require.Equal(t, protocolState, RootSuccessionStateFromProto(RootSuccessionStateToProto(protocolState)))
+	require.Equal(t, rootstate.SuccessionState{}, RootSuccessionStateFromProto(nil))
 
-	leaseCmd := rootproto.CoordinatorLeaseCommand{
-		Kind:              rootproto.CoordinatorLeaseCommandRelease,
-		HolderID:          "coord-1",
-		ExpiresUnixNano:   23456,
-		NowUnixNano:       12345,
-		PredecessorDigest: "pred",
-		HandoffFrontiers:  frontiers,
+	leaseCmd := rootproto.TenureCommand{
+		Kind:               rootproto.TenureActRelease,
+		HolderID:           "coord-1",
+		ExpiresUnixNano:    23456,
+		NowUnixNano:        12345,
+		LineageDigest:      "pred",
+		InheritedFrontiers: frontiers,
 	}
-	require.Equal(t, leaseCmd, RootCoordinatorLeaseCommandFromProto(RootCoordinatorLeaseCommandToProto(leaseCmd)))
-	require.Equal(t, rootproto.CoordinatorLeaseCommand{}, RootCoordinatorLeaseCommandFromProto(nil))
+	require.Equal(t, leaseCmd, RootTenureCommandFromProto(RootTenureCommandToProto(leaseCmd)))
+	require.Equal(t, rootproto.TenureCommand{}, RootTenureCommandFromProto(nil))
 
-	closureCmd := rootproto.CoordinatorClosureCommand{
-		Kind:        rootproto.CoordinatorClosureCommandReattach,
+	closureCmd := rootproto.TransitCommand{
+		Kind:        rootproto.TransitActReattach,
 		HolderID:    "coord-1",
 		NowUnixNano: 999,
 		Frontiers:   frontiers,
 	}
-	require.Equal(t, closureCmd, RootCoordinatorClosureCommandFromProto(RootCoordinatorClosureCommandToProto(closureCmd)))
-	require.Equal(t, rootproto.CoordinatorClosureCommand{}, RootCoordinatorClosureCommandFromProto(nil))
+	require.Equal(t, closureCmd, RootTransitCommandFromProto(RootTransitCommandToProto(closureCmd)))
+	require.Equal(t, rootproto.TransitCommand{}, RootTransitCommandFromProto(nil))
 
-	require.Equal(t, metapb.RootCoordinatorClosureStage_ROOT_COORDINATOR_CLOSURE_STAGE_PENDING_CONFIRM, rootCoordinatorClosureStageToProto(rootproto.CoordinatorClosureStageUnspecified))
-	require.Equal(t, rootproto.CoordinatorClosureStagePendingConfirm, rootCoordinatorClosureStageFromProto(metapb.RootCoordinatorClosureStage_ROOT_COORDINATOR_CLOSURE_STAGE_PENDING_CONFIRM))
-	require.Equal(t, metapb.RootCoordinatorLeaseCommandKind_ROOT_COORDINATOR_LEASE_COMMAND_KIND_UNSPECIFIED, rootCoordinatorLeaseCommandKindToProto(rootproto.CoordinatorLeaseCommandUnknown))
-	require.Equal(t, rootproto.CoordinatorLeaseCommandUnknown, rootCoordinatorLeaseCommandKindFromProto(metapb.RootCoordinatorLeaseCommandKind_ROOT_COORDINATOR_LEASE_COMMAND_KIND_UNSPECIFIED))
-	require.Equal(t, metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_UNSPECIFIED, rootCoordinatorClosureCommandKindToProto(rootproto.CoordinatorClosureCommandUnknown))
-	require.Equal(t, rootproto.CoordinatorClosureCommandUnknown, rootCoordinatorClosureCommandKindFromProto(metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_UNSPECIFIED))
+	require.Equal(t, metapb.RootTransitStage_ROOT_TRANSIT_STAGE_PENDING_CONFIRM, rootTransitStageToProto(rootproto.TransitStageUnspecified))
+	require.Equal(t, rootproto.TransitStagePendingConfirm, rootTransitStageFromProto(metapb.RootTransitStage_ROOT_TRANSIT_STAGE_PENDING_CONFIRM))
+	require.Equal(t, metapb.RootTenureAct_ROOT_TENURE_ACT_UNSPECIFIED, rootTenureActToProto(rootproto.TenureActUnknown))
+	require.Equal(t, rootproto.TenureActUnknown, rootTenureActFromProto(metapb.RootTenureAct_ROOT_TENURE_ACT_UNSPECIFIED))
+	require.Equal(t, metapb.RootTransitAct_ROOT_TRANSIT_ACT_UNSPECIFIED, rootTransitActToProto(rootproto.TransitActUnknown))
+	require.Equal(t, rootproto.TransitActUnknown, rootTransitActFromProto(metapb.RootTransitAct_ROOT_TRANSIT_ACT_UNSPECIFIED))
 }
 
 func TestRootSnapshotTailAndAllocatorRoundTrip(t *testing.T) {
@@ -240,16 +240,16 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 	right := testWireDescriptor(32, []byte("f"), []byte("m"))
 	merged := testWireDescriptor(33, []byte("a"), []byte("m"))
 	base := desc.Clone()
-	frontiers := rootproto.NewCoordinatorDutyFrontiers(
-		rootproto.CoordinatorDutyFrontier{DutyMask: rootproto.CoordinatorDutyAllocID, Frontier: 10},
+	frontiers := rootproto.NewMandateFrontiers(
+		rootproto.MandateFrontier{Mandate: rootproto.MandateAllocID, Frontier: 10},
 	)
 
 	events := []rootevent.Event{
 		rootevent.StoreJoined(1, "s1"),
 		rootevent.IDAllocatorFenced(10),
-		rootevent.CoordinatorLeaseGranted("coord", 123, 7, rootproto.CoordinatorDutyAllocID, "pred", frontiers),
-		rootevent.CoordinatorLeaseSealed("coord", 7, rootproto.CoordinatorDutyAllocID, frontiers),
-		rootevent.CoordinatorClosureClosed("coord", 7, 8, "seal"),
+		rootevent.TenureGranted("coord", 123, 7, rootproto.MandateAllocID, "pred", frontiers),
+		rootevent.TenureSealed("coord", 7, rootproto.MandateAllocID, frontiers),
+		rootevent.TransitClosed("coord", 7, 8, "seal"),
 		rootevent.RegionDescriptorPublished(desc),
 		rootevent.RegionTombstoned(desc.RegionID),
 		rootevent.RegionSplitCancelled(desc.RegionID, []byte("f"), left, right, base),
@@ -272,12 +272,12 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 	got := RootEventFromProto(pb)
 	require.Equal(t, []byte("f"), got.RangeSplit.SplitKey)
 
-	require.Nil(t, rootEventCoordinatorLeaseToProto(nil))
-	require.Nil(t, rootEventCoordinatorSealToProto(nil))
-	require.Nil(t, rootEventCoordinatorClosureToProto(nil))
-	require.Nil(t, rootEventCoordinatorLeaseFromProto(nil))
-	require.Nil(t, rootEventCoordinatorSealFromProto(nil))
-	require.Nil(t, rootEventCoordinatorClosureFromProto(nil))
+	require.Nil(t, rootEventTenureToProto(nil))
+	require.Nil(t, rootEventLegacyToProto(nil))
+	require.Nil(t, rootEventTransitToProto(nil))
+	require.Nil(t, rootEventTenureFromProto(nil))
+	require.Nil(t, rootEventLegacyFromProto(nil))
+	require.Nil(t, rootEventTransitFromProto(nil))
 
 	kinds := []rootevent.Kind{
 		rootevent.KindStoreJoined,
@@ -299,9 +299,9 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.KindPeerRemoved,
 		rootevent.KindPeerAdditionCancelled,
 		rootevent.KindPeerRemovalCancelled,
-		rootevent.KindCoordinatorLease,
-		rootevent.KindCoordinatorSeal,
-		rootevent.KindCoordinatorClosure,
+		rootevent.KindTenure,
+		rootevent.KindLegacy,
+		rootevent.KindTransit,
 	}
 	for _, kind := range kinds {
 		require.Equal(t, kind, rootEventKindFromProto(rootEventKindToProto(kind)))

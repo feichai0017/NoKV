@@ -1616,7 +1616,7 @@ func TestDeleteRangeCore(t *testing.T) {
 		t.Error("middle key should be deleted")
 	}
 	if e, err := db.Get([]byte("c")); err != nil || !bytes.Equal(e.Value, []byte("3")) {
-		t.Error("end key should not be deleted (exclusive)")
+		t.Error("end key should not be deleted (primacy)")
 	}
 
 	// Test 2: Lexicographic ordering
@@ -1633,7 +1633,7 @@ func TestDeleteRangeCore(t *testing.T) {
 		t.Error("key10 should be deleted (lexicographically between key1 and key2)")
 	}
 	if _, err := db.Get([]byte("key2")); err != nil {
-		t.Error("key2 should exist (exclusive end)")
+		t.Error("key2 should exist (primacy end)")
 	}
 
 	// Test 3: Empty range (no keys in range)

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	coordablation "github.com/feichai0017/NoKV/coordinator/ablation"
-	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
+	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
@@ -56,11 +56,11 @@ type fakeStorage struct {
 	snapshot      rootview.Snapshot
 }
 
-func (f *fakeStorage) protocolState() rootstate.CoordinatorProtocolState {
-	return rootstate.CoordinatorProtocolState{
-		Lease:   f.snapshot.CoordinatorLease,
-		Seal:    f.snapshot.CoordinatorSeal,
-		Closure: f.snapshot.CoordinatorClosure,
+func (f *fakeStorage) protocolState() rootstate.SuccessionState {
+	return rootstate.SuccessionState{
+		Tenure:  f.snapshot.Tenure,
+		Legacy:  f.snapshot.Legacy,
+		Transit: f.snapshot.Transit,
 	}
 }
 
@@ -83,11 +83,11 @@ func (f *fakeStorage) AppendRootEvent(_ context.Context, event rootevent.Event) 
 	}
 	snapshot := rootstate.Snapshot{
 		State: rootstate.State{
-			ClusterEpoch:     f.snapshot.ClusterEpoch,
-			IDFence:          f.snapshot.Allocator.IDCurrent,
-			TSOFence:         f.snapshot.Allocator.TSCurrent,
-			CoordinatorLease: f.snapshot.CoordinatorLease,
-			LastCommitted:    rootstate.Cursor{Term: 1, Index: uint64(f.eventCalls)},
+			ClusterEpoch:  f.snapshot.ClusterEpoch,
+			IDFence:       f.snapshot.Allocator.IDCurrent,
+			TSOFence:      f.snapshot.Allocator.TSCurrent,
+			Tenure:        f.snapshot.Tenure,
+			LastCommitted: rootstate.Cursor{Term: 1, Index: uint64(f.eventCalls)},
 		},
 		Descriptors:         rootCloneDescriptorsForTest(f.snapshot.Descriptors),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(f.snapshot.PendingPeerChanges),
@@ -114,127 +114,127 @@ func (f *fakeStorage) SaveAllocatorState(_ context.Context, idCurrent, tsCurrent
 	return nil
 }
 
-func (f *fakeStorage) ApplyCoordinatorLease(_ context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (f *fakeStorage) ApplyTenure(_ context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error) {
 	switch cmd.Kind {
-	case rootproto.CoordinatorLeaseCommandIssue:
+	case rootproto.TenureActIssue:
 		f.campaignCalls++
 		if f.campaignErr != nil {
-			return rootstate.CoordinatorProtocolState{}, f.campaignErr
+			return rootstate.SuccessionState{}, f.campaignErr
 		}
-		if err := rootstate.ValidateCoordinatorLeaseCampaign(f.snapshot.CoordinatorLease, f.snapshot.CoordinatorSeal, cmd.HolderID, cmd.PredecessorDigest, cmd.ExpiresUnixNano, cmd.NowUnixNano); err != nil {
+		if err := rootstate.ValidateTenureClaim(f.snapshot.Tenure, f.snapshot.Legacy, cmd.HolderID, cmd.LineageDigest, cmd.ExpiresUnixNano, cmd.NowUnixNano); err != nil {
 			return f.protocolState(), err
 		}
-		if err := rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(f.snapshot.CoordinatorLease, f.snapshot.CoordinatorSeal, cmd.HandoffFrontiers); err != nil {
+		if err := rootstate.ValidateInheritance(f.snapshot.Tenure, f.snapshot.Legacy, cmd.InheritedFrontiers); err != nil {
 			return f.protocolState(), err
 		}
-		generation := rootstate.NextCoordinatorLeaseGeneration(f.snapshot.CoordinatorLease, f.snapshot.CoordinatorSeal, cmd.HolderID, cmd.NowUnixNano)
-		f.snapshot.CoordinatorLease = rootstate.CoordinatorLease{
-			HolderID:          cmd.HolderID,
-			ExpiresUnixNano:   cmd.ExpiresUnixNano,
-			CertGeneration:    generation,
-			DutyMask:          rootproto.CoordinatorDutyMaskDefault,
-			PredecessorDigest: cmd.PredecessorDigest,
+		generation := rootstate.NextTenureEpoch(f.snapshot.Tenure, f.snapshot.Legacy, cmd.HolderID, cmd.NowUnixNano)
+		f.snapshot.Tenure = rootstate.Tenure{
+			HolderID:        cmd.HolderID,
+			ExpiresUnixNano: cmd.ExpiresUnixNano,
+			Epoch:           generation,
+			Mandate:         rootproto.MandateDefault,
+			LineageDigest:   cmd.LineageDigest,
 		}
-		if idFence := cmd.HandoffFrontiers.Frontier(rootproto.CoordinatorDutyAllocID); idFence > f.snapshot.Allocator.IDCurrent {
+		if idFence := cmd.InheritedFrontiers.Frontier(rootproto.MandateAllocID); idFence > f.snapshot.Allocator.IDCurrent {
 			f.snapshot.Allocator.IDCurrent = idFence
 		}
-		if tsoFence := cmd.HandoffFrontiers.Frontier(rootproto.CoordinatorDutyTSO); tsoFence > f.snapshot.Allocator.TSCurrent {
+		if tsoFence := cmd.InheritedFrontiers.Frontier(rootproto.MandateTSO); tsoFence > f.snapshot.Allocator.TSCurrent {
 			f.snapshot.Allocator.TSCurrent = tsoFence
 		}
-	case rootproto.CoordinatorLeaseCommandRelease:
+	case rootproto.TenureActRelease:
 		f.releaseCalls++
 		if f.releaseErr != nil {
-			return rootstate.CoordinatorProtocolState{}, f.releaseErr
+			return rootstate.SuccessionState{}, f.releaseErr
 		}
-		if err := rootstate.ValidateCoordinatorLeaseRelease(f.snapshot.CoordinatorLease, cmd.HolderID, cmd.NowUnixNano); err != nil {
+		if err := rootstate.ValidateTenureYield(f.snapshot.Tenure, cmd.HolderID, cmd.NowUnixNano); err != nil {
 			return f.protocolState(), err
 		}
-		f.snapshot.CoordinatorLease = rootstate.CoordinatorLease{
+		f.snapshot.Tenure = rootstate.Tenure{
 			HolderID:        cmd.HolderID,
 			ExpiresUnixNano: cmd.NowUnixNano,
-			CertGeneration:  f.snapshot.CoordinatorLease.CertGeneration,
-			IssuedCursor:    f.snapshot.CoordinatorLease.IssuedCursor,
-			DutyMask:        f.snapshot.CoordinatorLease.DutyMask,
+			Epoch:           f.snapshot.Tenure.Epoch,
+			IssuedAt:        f.snapshot.Tenure.IssuedAt,
+			Mandate:         f.snapshot.Tenure.Mandate,
 		}
-		if idFence := cmd.HandoffFrontiers.Frontier(rootproto.CoordinatorDutyAllocID); idFence > f.snapshot.Allocator.IDCurrent {
+		if idFence := cmd.InheritedFrontiers.Frontier(rootproto.MandateAllocID); idFence > f.snapshot.Allocator.IDCurrent {
 			f.snapshot.Allocator.IDCurrent = idFence
 		}
-		if tsoFence := cmd.HandoffFrontiers.Frontier(rootproto.CoordinatorDutyTSO); tsoFence > f.snapshot.Allocator.TSCurrent {
+		if tsoFence := cmd.InheritedFrontiers.Frontier(rootproto.MandateTSO); tsoFence > f.snapshot.Allocator.TSCurrent {
 			f.snapshot.Allocator.TSCurrent = tsoFence
 		}
 	default:
-		return rootstate.CoordinatorProtocolState{}, rootstate.ErrInvalidCoordinatorLease
+		return rootstate.SuccessionState{}, rootstate.ErrInvalidTenure
 	}
 	return f.protocolState(), nil
 }
 
-func (f *fakeStorage) ApplyCoordinatorClosure(_ context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (f *fakeStorage) ApplyTransit(_ context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error) {
 	switch cmd.Kind {
-	case rootproto.CoordinatorClosureCommandSeal:
+	case rootproto.TransitActSeal:
 		f.sealCalls++
 		if f.sealErr != nil {
-			return rootstate.CoordinatorProtocolState{}, f.sealErr
+			return rootstate.SuccessionState{}, f.sealErr
 		}
-		if err := rootstate.ValidateCoordinatorLeaseSeal(f.snapshot.CoordinatorLease, cmd.HolderID); err != nil {
+		if err := rootstate.ValidateLegacyFormation(f.snapshot.Tenure, cmd.HolderID); err != nil {
 			return f.protocolState(), err
 		}
-		dutyMask := f.snapshot.CoordinatorLease.DutyMask
-		if dutyMask == 0 {
-			dutyMask = rootproto.CoordinatorDutyMaskDefault
+		mandate := f.snapshot.Tenure.Mandate
+		if mandate == 0 {
+			mandate = rootproto.MandateDefault
 		}
-		f.snapshot.CoordinatorSeal = rootstate.CoordinatorSeal{
-			HolderID:       cmd.HolderID,
-			CertGeneration: f.snapshot.CoordinatorLease.CertGeneration,
-			DutyMask:       dutyMask,
-			Frontiers:      cmd.Frontiers,
+		f.snapshot.Legacy = rootstate.Legacy{
+			HolderID:  cmd.HolderID,
+			Epoch:     f.snapshot.Tenure.Epoch,
+			Mandate:   mandate,
+			Frontiers: cmd.Frontiers,
 		}
-	case rootproto.CoordinatorClosureCommandConfirm:
+	case rootproto.TransitActConfirm:
 		f.confirmCalls++
 		if f.confirmErr != nil {
-			return rootstate.CoordinatorProtocolState{}, f.confirmErr
+			return rootstate.SuccessionState{}, f.confirmErr
 		}
-		if strings.TrimSpace(cmd.HolderID) == "" || strings.TrimSpace(cmd.HolderID) != f.snapshot.CoordinatorLease.HolderID {
-			return f.protocolState(), rootstate.ErrCoordinatorLeaseOwner
+		if strings.TrimSpace(cmd.HolderID) == "" || strings.TrimSpace(cmd.HolderID) != f.snapshot.Tenure.HolderID {
+			return f.protocolState(), rootstate.ErrPrimacy
 		}
-		auditStatus, err := controlplane.ValidateClosureConfirmation(
-			f.snapshot.CoordinatorLease,
-			controlplane.Frontiers(rootstate.State{
+		auditStatus, err := succession.ValidateTransitConfirmation(
+			f.snapshot.Tenure,
+			succession.Frontiers(rootstate.State{
 				IDFence:  f.snapshot.Allocator.IDCurrent,
 				TSOFence: f.snapshot.Allocator.TSCurrent,
 			}, rootstate.MaxDescriptorRevision(f.snapshot.Descriptors)),
-			f.snapshot.CoordinatorSeal,
+			f.snapshot.Legacy,
 			cmd.NowUnixNano,
 		)
 		if err != nil {
 			return f.protocolState(), err
 		}
-		f.snapshot.CoordinatorClosure = rootstate.CoordinatorClosure{
-			HolderID:            cmd.HolderID,
-			SealGeneration:      auditStatus.SealGeneration,
-			SuccessorGeneration: f.snapshot.CoordinatorLease.CertGeneration,
-			SealDigest:          auditStatus.SealDigest,
-			Stage:               rootproto.CoordinatorClosureStageConfirmed,
+		f.snapshot.Transit = rootstate.Transit{
+			HolderID:       cmd.HolderID,
+			LegacyEpoch:    auditStatus.LegacyEpoch,
+			SuccessorEpoch: f.snapshot.Tenure.Epoch,
+			LegacyDigest:   auditStatus.LegacyDigest,
+			Stage:          rootproto.TransitStageConfirmed,
 		}
-	case rootproto.CoordinatorClosureCommandClose:
+	case rootproto.TransitActClose:
 		f.closeCalls++
 		if f.closeErr != nil {
-			return rootstate.CoordinatorProtocolState{}, f.closeErr
+			return rootstate.SuccessionState{}, f.closeErr
 		}
-		if err := controlplane.ValidateClosureClose(f.snapshot.CoordinatorLease, f.snapshot.CoordinatorClosure, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+		if err := succession.ValidateTransitClosure(f.snapshot.Tenure, f.snapshot.Transit, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return f.protocolState(), err
 		}
-		f.snapshot.CoordinatorClosure.Stage = rootproto.CoordinatorClosureStageClosed
-	case rootproto.CoordinatorClosureCommandReattach:
+		f.snapshot.Transit.Stage = rootproto.TransitStageClosed
+	case rootproto.TransitActReattach:
 		f.reattachCalls++
 		if f.reattachErr != nil {
-			return rootstate.CoordinatorProtocolState{}, f.reattachErr
+			return rootstate.SuccessionState{}, f.reattachErr
 		}
-		if err := controlplane.ValidateClosureReattach(f.snapshot.CoordinatorLease, f.snapshot.CoordinatorClosure, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+		if err := succession.ValidateTransitReattach(f.snapshot.Tenure, f.snapshot.Transit, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return f.protocolState(), err
 		}
-		f.snapshot.CoordinatorClosure.Stage = rootproto.CoordinatorClosureStageReattached
+		f.snapshot.Transit.Stage = rootproto.TransitStageReattached
 	default:
-		return rootstate.CoordinatorProtocolState{}, rootstate.ErrCoordinatorLeaseAudit
+		return rootstate.SuccessionState{}, rootstate.ErrClosure
 	}
 	return f.protocolState(), nil
 }
@@ -367,29 +367,29 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 				IDCurrent: 55,
 				TSCurrent: 88,
 			},
-			CoordinatorLease: rootstate.CoordinatorLease{
+			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: now.Add(5 * time.Second).UnixNano(),
-				CertGeneration:  3,
-				IssuedCursor:    rootstate.Cursor{Term: 2, Index: 9},
-				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
+				Epoch:           3,
+				IssuedAt:        rootstate.Cursor{Term: 2, Index: 9},
+				Mandate:         rootproto.MandateDefault,
 			},
-			CoordinatorSeal: rootstate.CoordinatorSeal{
-				HolderID:       "c1",
-				CertGeneration: 2,
-				DutyMask:       rootproto.CoordinatorDutyMaskDefault,
-				Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 44, TSOFence: 77}, 5),
-				SealedAtCursor: rootstate.Cursor{Term: 2, Index: 8},
+			Legacy: rootstate.Legacy{
+				HolderID:  "c1",
+				Epoch:     2,
+				Mandate:   rootproto.MandateDefault,
+				Frontiers: succession.Frontiers(rootstate.State{IDFence: 44, TSOFence: 77}, 5),
+				SealedAt:  rootstate.Cursor{Term: 2, Index: 8},
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
 				11: testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}}),
 			},
 		},
 	}
-	storage.snapshot.CoordinatorLease.PredecessorDigest = rootstate.CoordinatorSealDigest(storage.snapshot.CoordinatorSeal)
+	storage.snapshot.Tenure.LineageDigest = rootstate.DigestOfLegacy(storage.snapshot.Legacy)
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(50), tso.NewAllocator(80), storage)
 	svc.now = func() time.Time { return now }
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	require.NoError(t, svc.ReloadFromStorage())
 	_, err := svc.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
 		StoreId:         1,
@@ -419,18 +419,18 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 	require.Equal(t, true, lease["active"])
 	require.Equal(t, true, lease["held_by_self"])
 	require.Equal(t, true, lease["usable_by_self"])
-	require.Equal(t, uint64(3), lease["cert_generation"])
-	require.Equal(t, uint32(rootproto.CoordinatorDutyMaskDefault), lease["duty_mask"])
-	require.Equal(t, map[string]any{"term": uint64(2), "index": uint64(9)}, lease["issued_cursor"])
+	require.Equal(t, uint64(3), lease["epoch"])
+	require.Equal(t, uint32(rootproto.MandateDefault), lease["mandate"])
+	require.Equal(t, map[string]any{"term": uint64(2), "index": uint64(9)}, lease["issued_at"])
 	require.Equal(t, "c1", seal["holder_id"])
-	require.Equal(t, uint64(2), seal["cert_generation"])
+	require.Equal(t, uint64(2), seal["epoch"])
 	require.Equal(t, []map[string]any{
-		{"duty_mask": rootproto.CoordinatorDutyAllocID, "duty_name": "alloc_id", "frontier": uint64(44)},
-		{"duty_mask": rootproto.CoordinatorDutyTSO, "duty_name": "tso", "frontier": uint64(77)},
-		{"duty_mask": rootproto.CoordinatorDutyGetRegionByKey, "duty_name": "get_region_by_key", "frontier": uint64(5)},
+		{"mandate": rootproto.MandateAllocID, "duty_name": "alloc_id", "frontier": uint64(44)},
+		{"mandate": rootproto.MandateTSO, "duty_name": "tso", "frontier": uint64(77)},
+		{"mandate": rootproto.MandateGetRegionByKey, "duty_name": "get_region_by_key", "frontier": uint64(5)},
 	}, seal["consumed_frontiers"])
-	require.Equal(t, map[string]any{"term": uint64(2), "index": uint64(8)}, seal["sealed_at_cursor"])
-	require.Equal(t, uint64(2), audit["seal_generation"])
+	require.Equal(t, map[string]any{"term": uint64(2), "index": uint64(8)}, seal["sealed_at"])
+	require.Equal(t, uint64(2), audit["legacy_epoch"])
 	require.Equal(t, true, audit["successor_present"])
 	require.Equal(t, true, audit["successor_lineage_satisfied"])
 	require.Equal(t, true, audit["successor_monotone_covered"])
@@ -477,10 +477,10 @@ func TestServiceGetRegionByKeyRequiredRootToken(t *testing.T) {
 		snapshot: rootview.Snapshot{
 			RootToken:   rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 5},
 			Descriptors: map[uint64]descriptor.Descriptor{desc.RegionID: desc},
-			CoordinatorLease: rootstate.CoordinatorLease{
+			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: 10_000,
-				CertGeneration:  4,
+				Epoch:           4,
 			},
 		},
 	}
@@ -512,7 +512,7 @@ func TestServiceGetRegionByKeyRequiredRootToken(t *testing.T) {
 	require.Equal(t, uint64(3), resp.GetServedRootToken().GetIndex())
 	require.Equal(t, uint64(5), resp.GetDescriptorRevision())
 	require.Zero(t, resp.GetRequiredDescriptorRevision())
-	require.Equal(t, uint64(4), resp.GetCertGeneration())
+	require.Equal(t, uint64(4), resp.GetEpoch())
 	require.Equal(t, coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE, resp.GetServingClass())
 	require.Equal(t, coordpb.SyncHealth_SYNC_HEALTH_HEALTHY, resp.GetSyncHealth())
 }
@@ -553,7 +553,7 @@ func TestServiceGetRegionByKeyRequiredDescriptorRevision(t *testing.T) {
 	require.Equal(t, uint64(7), resp.GetDescriptorRevision())
 	require.Equal(t, uint64(7), resp.GetRequiredDescriptorRevision())
 	require.Equal(t, uint64(7), resp.GetRegionDescriptor().GetRootEpoch())
-	require.Zero(t, resp.GetCertGeneration())
+	require.Zero(t, resp.GetEpoch())
 	require.Equal(t, coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE, resp.GetServingClass())
 	require.Equal(t, coordpb.SyncHealth_SYNC_HEALTH_HEALTHY, resp.GetSyncHealth())
 }
@@ -877,14 +877,14 @@ func TestServiceAllocIDAndTSO(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), idResp.GetFirstId())
 	require.Equal(t, uint64(3), idResp.GetCount())
-	require.Zero(t, idResp.GetCertGeneration())
+	require.Zero(t, idResp.GetEpoch())
 	require.Equal(t, uint64(102), idResp.GetConsumedFrontier())
 
 	tsResp, err := svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 2})
 	require.NoError(t, err)
 	require.Equal(t, uint64(500), tsResp.GetTimestamp())
 	require.Equal(t, uint64(2), tsResp.GetCount())
-	require.Zero(t, tsResp.GetCertGeneration())
+	require.Zero(t, tsResp.GetEpoch())
 	require.Equal(t, uint64(501), tsResp.GetConsumedFrontier())
 }
 
@@ -1796,25 +1796,25 @@ func TestServiceAllocatorStatePersistenceError(t *testing.T) {
 	require.Equal(t, uint64(1), tsResp.GetTimestamp())
 }
 
-func TestServiceCoordinatorLeaseReusedAcrossAllocatorRequests(t *testing.T) {
+func TestServiceTenureReusedAcrossAllocatorRequests(t *testing.T) {
 	store := &fakeStorage{leader: true}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 100) }
 
 	idResp, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
 	require.Equal(t, uint64(10), idResp.GetFirstId())
-	require.Equal(t, uint64(1), idResp.GetCertGeneration())
+	require.Equal(t, uint64(1), idResp.GetEpoch())
 	require.Equal(t, uint64(10), idResp.GetConsumedFrontier())
 	require.Equal(t, 1, store.campaignCalls)
-	require.Equal(t, "c1", store.snapshot.CoordinatorLease.HolderID)
-	require.Equal(t, uint64(1), store.snapshot.CoordinatorLease.CertGeneration)
+	require.Equal(t, "c1", store.snapshot.Tenure.HolderID)
+	require.Equal(t, uint64(1), store.snapshot.Tenure.Epoch)
 
 	tsResp, err := svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), tsResp.GetTimestamp())
-	require.Equal(t, uint64(1), tsResp.GetCertGeneration())
+	require.Equal(t, uint64(1), tsResp.GetEpoch())
 	require.Equal(t, uint64(100), tsResp.GetConsumedFrontier())
 	require.Equal(t, 1, store.campaignCalls)
 }
@@ -1822,24 +1822,24 @@ func TestServiceCoordinatorLeaseReusedAcrossAllocatorRequests(t *testing.T) {
 func TestServiceMonotoneRepliesCarryLeaseEvidence(t *testing.T) {
 	store := &fakeStorage{leader: true}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(50), tso.NewAllocator(900), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 100) }
 
 	idResp, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 3})
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), idResp.GetCertGeneration())
+	require.Equal(t, uint64(1), idResp.GetEpoch())
 	require.Equal(t, uint64(52), idResp.GetConsumedFrontier())
 
 	tsResp, err := svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 4})
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), tsResp.GetCertGeneration())
+	require.Equal(t, uint64(1), tsResp.GetEpoch())
 	require.Equal(t, uint64(903), tsResp.GetConsumedFrontier())
 }
 
-func TestServiceCoordinatorLeaseRenewsInsideRenewWindow(t *testing.T) {
+func TestServiceTenureRenewsInsideRenewWindow(t *testing.T) {
 	store := &fakeStorage{leader: true}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 100*time.Millisecond, 20*time.Millisecond)
+	svc.ConfigureTenure("c1", 100*time.Millisecond, 20*time.Millisecond)
 
 	now := time.Unix(0, 0)
 	svc.now = func() time.Time { return now }
@@ -1852,13 +1852,13 @@ func TestServiceCoordinatorLeaseRenewsInsideRenewWindow(t *testing.T) {
 	_, err = svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
 	require.NoError(t, err)
 	require.Equal(t, 2, store.campaignCalls)
-	require.Equal(t, uint64(1), store.snapshot.CoordinatorLease.CertGeneration)
+	require.Equal(t, uint64(1), store.snapshot.Tenure.Epoch)
 }
 
-func TestServiceCoordinatorLeaseRenewDoesNotReloadAllocators(t *testing.T) {
+func TestServiceTenureRenewDoesNotReloadAllocators(t *testing.T) {
 	store := &fakeStorage{leader: true}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 100*time.Millisecond, 20*time.Millisecond)
+	svc.ConfigureTenure("c1", 100*time.Millisecond, 20*time.Millisecond)
 
 	now := time.Unix(0, 0)
 	svc.now = func() time.Time { return now }
@@ -1874,10 +1874,10 @@ func TestServiceCoordinatorLeaseRenewDoesNotReloadAllocators(t *testing.T) {
 	require.Equal(t, 2, store.campaignCalls)
 }
 
-func TestServiceCoordinatorLeaseStopsBeforeExpiryByClockSkew(t *testing.T) {
+func TestServiceTenureStopsBeforeExpiryByClockSkew(t *testing.T) {
 	store := &fakeStorage{leader: true}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 100*time.Millisecond, 20*time.Millisecond)
+	svc.ConfigureTenure("c1", 100*time.Millisecond, 20*time.Millisecond)
 	svc.leaseClockSkew = 40 * time.Millisecond
 
 	now := time.Unix(0, 0)
@@ -1893,41 +1893,41 @@ func TestServiceCoordinatorLeaseStopsBeforeExpiryByClockSkew(t *testing.T) {
 	require.Equal(t, 2, store.campaignCalls)
 }
 
-func TestServiceCoordinatorLeaseLoopRenewsInBackground(t *testing.T) {
+func TestServiceTenureLoopRenewsInBackground(t *testing.T) {
 	store := &fakeStorage{leader: true}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 80*time.Millisecond, 30*time.Millisecond)
+	svc.ConfigureTenure("c1", 80*time.Millisecond, 30*time.Millisecond)
 
 	ctx := t.Context()
-	go svc.RunCoordinatorLeaseLoop(ctx)
+	go svc.RunTenureLoop(ctx)
 
 	require.Eventually(t, func() bool {
 		return store.campaignCalls >= 2
 	}, 300*time.Millisecond, 10*time.Millisecond)
 }
 
-func TestServiceCoordinatorLeaseLoopSkipsFollower(t *testing.T) {
+func TestServiceTenureLoopSkipsFollower(t *testing.T) {
 	store := &fakeStorage{leader: false, leaderID: 2}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 80*time.Millisecond, 30*time.Millisecond)
+	svc.ConfigureTenure("c1", 80*time.Millisecond, 30*time.Millisecond)
 
 	ctx := t.Context()
-	go svc.RunCoordinatorLeaseLoop(ctx)
+	go svc.RunTenureLoop(ctx)
 
 	time.Sleep(80 * time.Millisecond)
 	require.Equal(t, 0, store.campaignCalls)
 }
 
-func TestServiceCoordinatorLeaseLoopReleasesOnContextCancel(t *testing.T) {
+func TestServiceTenureLoopReleasesOnContextCancel(t *testing.T) {
 	store := &fakeStorage{leader: true}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 80*time.Millisecond, 30*time.Millisecond)
+	svc.ConfigureTenure("c1", 80*time.Millisecond, 30*time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		svc.RunCoordinatorLeaseLoop(ctx)
+		svc.RunTenureLoop(ctx)
 	}()
 
 	require.Eventually(t, func() bool {
@@ -1941,7 +1941,7 @@ func TestServiceCoordinatorLeaseLoopReleasesOnContextCancel(t *testing.T) {
 	<-done
 }
 
-func TestServiceCoordinatorLeaseRetryDelayBacksOff(t *testing.T) {
+func TestServiceTenureRetryDelayBacksOff(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100))
 	svc.now = func() time.Time { return time.Unix(0, 123456789) }
 
@@ -1957,27 +1957,27 @@ func TestServiceCoordinatorLeaseRetryDelayBacksOff(t *testing.T) {
 	require.LessOrEqual(t, sixteenth, 60*time.Second)
 }
 
-func TestServiceReleaseCoordinatorLease(t *testing.T) {
+func TestServiceReleaseTenure(t *testing.T) {
 	store := &fakeStorage{leader: true}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 100) }
 
 	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
 
 	svc.now = func() time.Time { return time.Unix(0, 200) }
-	require.NoError(t, svc.ReleaseCoordinatorLease())
+	require.NoError(t, svc.ReleaseTenure())
 	require.Equal(t, 1, store.releaseCalls)
-	require.Equal(t, int64(200), store.snapshot.CoordinatorLease.ExpiresUnixNano)
-	require.Equal(t, uint64(1), store.snapshot.CoordinatorLease.CertGeneration)
-	require.False(t, store.snapshot.CoordinatorLease.ActiveAt(200))
+	require.Equal(t, int64(200), store.snapshot.Tenure.ExpiresUnixNano)
+	require.Equal(t, uint64(1), store.snapshot.Tenure.Epoch)
+	require.False(t, store.snapshot.Tenure.ActiveAt(200))
 }
 
-func TestServiceReleaseCoordinatorLeaseDoesNotReloadAllocators(t *testing.T) {
+func TestServiceReleaseTenureDoesNotReloadAllocators(t *testing.T) {
 	store := &fakeStorage{leader: true}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 100) }
 
 	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
@@ -1985,26 +1985,26 @@ func TestServiceReleaseCoordinatorLeaseDoesNotReloadAllocators(t *testing.T) {
 	require.Equal(t, 1, store.loadCalls)
 
 	svc.now = func() time.Time { return time.Unix(0, 200) }
-	require.NoError(t, svc.ReleaseCoordinatorLease())
+	require.NoError(t, svc.ReleaseTenure())
 	require.Equal(t, 2, store.loadCalls)
 	require.Equal(t, 1, store.releaseCalls)
 }
 
-func TestServiceSealCoordinatorLease(t *testing.T) {
+func TestServiceSealTenure(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			CoordinatorLease: rootstate.CoordinatorLease{
+			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				CertGeneration:  2,
-				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
+				Epoch:           2,
+				Mandate:         rootproto.MandateDefault,
 			},
 		},
 	}
 	cluster := catalog.NewCluster()
 	svc := NewService(cluster, idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 	desc := testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
@@ -2021,70 +2021,70 @@ func TestServiceSealCoordinatorLease(t *testing.T) {
 	require.Equal(t, uint64(100), tsoResp.GetTimestamp())
 	campaignCallsBeforeSeal := store.campaignCalls
 
-	require.NoError(t, svc.SealCoordinatorLease())
+	require.NoError(t, svc.SealTenure())
 	require.Equal(t, 1, store.sealCalls)
-	require.Equal(t, "c1", store.snapshot.CoordinatorSeal.HolderID)
-	require.Equal(t, uint64(2), store.snapshot.CoordinatorSeal.CertGeneration)
-	require.Equal(t, uint64(11), store.snapshot.CoordinatorSeal.Frontiers.Frontier(rootproto.CoordinatorDutyAllocID))
-	require.Equal(t, uint64(102), store.snapshot.CoordinatorSeal.Frontiers.Frontier(rootproto.CoordinatorDutyTSO))
-	require.Equal(t, uint64(7), store.snapshot.CoordinatorSeal.Frontiers.Frontier(rootproto.CoordinatorDutyGetRegionByKey))
+	require.Equal(t, "c1", store.snapshot.Legacy.HolderID)
+	require.Equal(t, uint64(2), store.snapshot.Legacy.Epoch)
+	require.Equal(t, uint64(11), store.snapshot.Legacy.Frontiers.Frontier(rootproto.MandateAllocID))
+	require.Equal(t, uint64(102), store.snapshot.Legacy.Frontiers.Frontier(rootproto.MandateTSO))
+	require.Equal(t, uint64(7), store.snapshot.Legacy.Frontiers.Frontier(rootproto.MandateGetRegionByKey))
 
 	nextID, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
-	require.Equal(t, uint64(3), nextID.GetCertGeneration())
-	require.Equal(t, rootstate.CoordinatorSealDigest(store.snapshot.CoordinatorSeal), store.snapshot.CoordinatorLease.PredecessorDigest)
+	require.Equal(t, uint64(3), nextID.GetEpoch())
+	require.Equal(t, rootstate.DigestOfLegacy(store.snapshot.Legacy), store.snapshot.Tenure.LineageDigest)
 	require.Equal(t, campaignCallsBeforeSeal+1, store.campaignCalls)
 
 	routeResp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
 	require.NoError(t, err)
-	require.Equal(t, uint64(3), routeResp.GetCertGeneration())
+	require.Equal(t, uint64(3), routeResp.GetEpoch())
 }
 
-func TestServiceSealCoordinatorLeasePreActionGateRejectsStaleHolder(t *testing.T) {
+func TestServiceSealTenurePreActionGateRejectsStaleHolder(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			CoordinatorLease: rootstate.CoordinatorLease{
+			Tenure: rootstate.Tenure{
 				HolderID:        "c2",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				CertGeneration:  2,
-				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
+				Epoch:           2,
+				Mandate:         rootproto.MandateDefault,
 			},
 		},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
-	err := svc.SealCoordinatorLease()
+	err := svc.SealTenure()
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, err.Error(), errCoordinatorLeasePrefix)
+	require.Contains(t, err.Error(), errTenurePrefix)
 	require.Equal(t, 0, store.sealCalls)
 }
 
-func TestServiceSealCoordinatorLeaseAblationNoop(t *testing.T) {
+func TestServiceSealTenureAblationNoop(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			CoordinatorLease: rootstate.CoordinatorLease{
+			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				CertGeneration:  2,
-				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
+				Epoch:           2,
+				Mandate:         rootproto.MandateDefault,
 			},
 		},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	require.NoError(t, svc.ConfigureAblation(coordablation.Config{DisableSeal: true}))
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
-	require.NoError(t, svc.SealCoordinatorLease())
+	require.NoError(t, svc.SealTenure())
 	require.Equal(t, 0, store.sealCalls)
-	require.Equal(t, rootstate.CoordinatorSeal{}, store.snapshot.CoordinatorSeal)
+	require.Equal(t, rootstate.Legacy{}, store.snapshot.Legacy)
 }
 
 func TestServiceAblationDisableBudgetUsesLargeRunway(t *testing.T) {
@@ -2108,41 +2108,41 @@ func TestServiceAblationDisableBudgetUsesLargeRunway(t *testing.T) {
 func TestServiceMonotoneDutyFailsWhenGenerationSealedAndCannotRenew(t *testing.T) {
 	store := &fakeStorage{
 		leader:      true,
-		campaignErr: rootstate.ErrCoordinatorLeaseHeld,
+		campaignErr: rootstate.ErrPrimacy,
 		snapshot: rootview.Snapshot{
-			CoordinatorLease: rootstate.CoordinatorLease{
+			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				CertGeneration:  2,
-				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
+				Epoch:           2,
+				Mandate:         rootproto.MandateDefault,
 			},
-			CoordinatorSeal: rootstate.CoordinatorSeal{
-				HolderID:       "c1",
-				CertGeneration: 2,
-				DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+			Legacy: rootstate.Legacy{
+				HolderID: "c1",
+				Epoch:    2,
+				Mandate:  rootproto.MandateDefault,
 			},
 		},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
 	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, err.Error(), errCoordinatorLeasePrefix)
+	require.Contains(t, err.Error(), errTenurePrefix)
 }
 
 func TestServiceAblationDisableReplyEvidenceMarksWitnessSuppressed(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			CoordinatorLease: rootstate.CoordinatorLease{
+			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				CertGeneration:  2,
-				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
+				Epoch:           2,
+				Mandate:         rootproto.MandateDefault,
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
 				1: {RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
@@ -2150,24 +2150,24 @@ func TestServiceAblationDisableReplyEvidenceMarksWitnessSuppressed(t *testing.T)
 		},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	require.NoError(t, svc.ConfigureAblation(coordablation.Config{DisableReplyEvidence: true}))
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
 	allocResp, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
-	require.Equal(t, rootproto.ContinuationWitnessGenerationSuppressed, allocResp.GetCertGeneration())
+	require.Equal(t, rootproto.ContinuationWitnessGenerationSuppressed, allocResp.GetEpoch())
 	require.Zero(t, allocResp.GetConsumedFrontier())
 
 	tsoResp, err := svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
 	require.NoError(t, err)
-	require.Equal(t, rootproto.ContinuationWitnessGenerationSuppressed, tsoResp.GetCertGeneration())
+	require.Equal(t, rootproto.ContinuationWitnessGenerationSuppressed, tsoResp.GetEpoch())
 	require.Zero(t, tsoResp.GetConsumedFrontier())
 
 	getResp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
 	require.NoError(t, err)
-	require.Equal(t, rootproto.ContinuationWitnessGenerationSuppressed, getResp.GetCertGeneration())
+	require.Equal(t, rootproto.ContinuationWitnessGenerationSuppressed, getResp.GetEpoch())
 }
 
 func TestServiceAblationFailStopOnRootUnreachRejectsBestEffortMetadata(t *testing.T) {
@@ -2199,19 +2199,19 @@ func TestServiceAblationFailStopOnRootUnreachRejectsBestEffortMetadata(t *testin
 func TestServiceMetadataAnswerFailsWhenGenerationSealedAndCannotRenew(t *testing.T) {
 	store := &fakeStorage{
 		leader:      true,
-		campaignErr: rootstate.ErrCoordinatorLeaseHeld,
+		campaignErr: rootstate.ErrPrimacy,
 		snapshot: rootview.Snapshot{
-			CoordinatorLease: rootstate.CoordinatorLease{
+			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				CertGeneration:  2,
-				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
+				Epoch:           2,
+				Mandate:         rootproto.MandateDefault,
 			},
-			CoordinatorSeal: rootstate.CoordinatorSeal{
-				HolderID:       "c1",
-				CertGeneration: 2,
-				DutyMask:       rootproto.CoordinatorDutyMaskDefault,
-				Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 0, TSOFence: 0}, 7),
+			Legacy: rootstate.Legacy{
+				HolderID:  "c1",
+				Epoch:     2,
+				Mandate:   rootproto.MandateDefault,
+				Frontiers: succession.Frontiers(rootstate.State{IDFence: 0, TSOFence: 0}, 7),
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
 				1: {RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
@@ -2219,17 +2219,17 @@ func TestServiceMetadataAnswerFailsWhenGenerationSealedAndCannotRenew(t *testing
 		},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
 	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, err.Error(), errCoordinatorLeasePrefix)
+	require.Contains(t, err.Error(), errTenurePrefix)
 }
 
-func TestServiceConfirmCoordinatorClosure(t *testing.T) {
+func TestServiceConfirmTransit(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
@@ -2237,234 +2237,234 @@ func TestServiceConfirmCoordinatorClosure(t *testing.T) {
 				IDCurrent: 12,
 				TSCurrent: 34,
 			},
-			CoordinatorLease: rootstate.CoordinatorLease{
-				HolderID:          "c1",
-				ExpiresUnixNano:   time.Unix(0, 20_000).UnixNano(),
-				CertGeneration:    3,
-				DutyMask:          rootproto.CoordinatorDutyMaskDefault,
-				PredecessorDigest: "seal-digest",
+			Tenure: rootstate.Tenure{
+				HolderID:        "c1",
+				ExpiresUnixNano: time.Unix(0, 20_000).UnixNano(),
+				Epoch:           3,
+				Mandate:         rootproto.MandateDefault,
+				LineageDigest:   "seal-digest",
 			},
-			CoordinatorSeal: rootstate.CoordinatorSeal{
-				HolderID:       "c1",
-				CertGeneration: 2,
-				DutyMask:       rootproto.CoordinatorDutyMaskDefault,
-				Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
-				SealedAtCursor: rootstate.Cursor{Term: 1, Index: 9},
+			Legacy: rootstate.Legacy{
+				HolderID:  "c1",
+				Epoch:     2,
+				Mandate:   rootproto.MandateDefault,
+				Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
+				SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
 				1: {RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
 			},
 		},
 	}
-	store.snapshot.CoordinatorLease.PredecessorDigest = rootstate.CoordinatorSealDigest(store.snapshot.CoordinatorSeal)
+	store.snapshot.Tenure.LineageDigest = rootstate.DigestOfLegacy(store.snapshot.Legacy)
 
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
-	require.NoError(t, svc.ConfirmCoordinatorClosure())
+	require.NoError(t, svc.ConfirmTransit())
 	require.Equal(t, 1, store.confirmCalls)
-	require.Equal(t, uint64(2), store.snapshot.CoordinatorClosure.SealGeneration)
-	require.Equal(t, uint64(3), store.snapshot.CoordinatorClosure.SuccessorGeneration)
-	require.Equal(t, rootstate.CoordinatorSealDigest(store.snapshot.CoordinatorSeal), store.snapshot.CoordinatorClosure.SealDigest)
-	require.Equal(t, rootproto.CoordinatorClosureStageConfirmed, store.snapshot.CoordinatorClosure.Stage)
+	require.Equal(t, uint64(2), store.snapshot.Transit.LegacyEpoch)
+	require.Equal(t, uint64(3), store.snapshot.Transit.SuccessorEpoch)
+	require.Equal(t, rootstate.DigestOfLegacy(store.snapshot.Legacy), store.snapshot.Transit.LegacyDigest)
+	require.Equal(t, rootproto.TransitStageConfirmed, store.snapshot.Transit.Stage)
 }
 
-func TestServiceCloseCoordinatorClosure(t *testing.T) {
+func TestServiceCloseTransit(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			CoordinatorLease: rootstate.CoordinatorLease{
-				HolderID:          "c1",
-				ExpiresUnixNano:   time.Unix(0, 20_000).UnixNano(),
-				CertGeneration:    3,
-				DutyMask:          rootproto.CoordinatorDutyMaskDefault,
-				PredecessorDigest: "seal-digest",
-			},
-			CoordinatorClosure: rootstate.CoordinatorClosure{
-				HolderID:            "c1",
-				SealGeneration:      2,
-				SuccessorGeneration: 3,
-				SealDigest:          "seal-digest",
-				Stage:               rootproto.CoordinatorClosureStageConfirmed,
-			},
-		},
-	}
-
-	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
-	svc.now = func() time.Time { return time.Unix(0, 200) }
-	require.NoError(t, svc.ReloadFromStorage())
-
-	require.NoError(t, svc.CloseCoordinatorClosure())
-	require.Equal(t, 1, store.closeCalls)
-	require.Equal(t, uint64(3), store.snapshot.CoordinatorClosure.SuccessorGeneration)
-	require.Equal(t, uint64(2), store.snapshot.CoordinatorClosure.SealGeneration)
-	require.Equal(t, "seal-digest", store.snapshot.CoordinatorClosure.SealDigest)
-	require.Equal(t, rootproto.CoordinatorClosureStageClosed, store.snapshot.CoordinatorClosure.Stage)
-}
-
-func TestServiceReattachCoordinatorClosure(t *testing.T) {
-	store := &fakeStorage{
-		leader: true,
-		snapshot: rootview.Snapshot{
-			CoordinatorLease: rootstate.CoordinatorLease{
+			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 20_000).UnixNano(),
-				CertGeneration:  3,
-				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
+				Epoch:           3,
+				Mandate:         rootproto.MandateDefault,
+				LineageDigest:   "seal-digest",
 			},
-			CoordinatorSeal: rootstate.CoordinatorSeal{
+			Transit: rootstate.Transit{
 				HolderID:       "c1",
-				CertGeneration: 2,
-				DutyMask:       rootproto.CoordinatorDutyMaskDefault,
-				Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
-			},
-			CoordinatorClosure: rootstate.CoordinatorClosure{
-				HolderID:            "c1",
-				SealGeneration:      2,
-				SuccessorGeneration: 3,
-				SealDigest:          "seal-digest",
-				Stage:               rootproto.CoordinatorClosureStageClosed,
+				LegacyEpoch:    2,
+				SuccessorEpoch: 3,
+				LegacyDigest:   "seal-digest",
+				Stage:          rootproto.TransitStageConfirmed,
 			},
 		},
 	}
-	store.snapshot.CoordinatorLease.PredecessorDigest = "seal-digest"
 
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
-	require.NoError(t, svc.ReattachCoordinatorClosure())
+	require.NoError(t, svc.CloseTransit())
+	require.Equal(t, 1, store.closeCalls)
+	require.Equal(t, uint64(3), store.snapshot.Transit.SuccessorEpoch)
+	require.Equal(t, uint64(2), store.snapshot.Transit.LegacyEpoch)
+	require.Equal(t, "seal-digest", store.snapshot.Transit.LegacyDigest)
+	require.Equal(t, rootproto.TransitStageClosed, store.snapshot.Transit.Stage)
+}
+
+func TestServiceReattachTransit(t *testing.T) {
+	store := &fakeStorage{
+		leader: true,
+		snapshot: rootview.Snapshot{
+			Tenure: rootstate.Tenure{
+				HolderID:        "c1",
+				ExpiresUnixNano: time.Unix(0, 20_000).UnixNano(),
+				Epoch:           3,
+				Mandate:         rootproto.MandateDefault,
+			},
+			Legacy: rootstate.Legacy{
+				HolderID:  "c1",
+				Epoch:     2,
+				Mandate:   rootproto.MandateDefault,
+				Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
+			},
+			Transit: rootstate.Transit{
+				HolderID:       "c1",
+				LegacyEpoch:    2,
+				SuccessorEpoch: 3,
+				LegacyDigest:   "seal-digest",
+				Stage:          rootproto.TransitStageClosed,
+			},
+		},
+	}
+	store.snapshot.Tenure.LineageDigest = "seal-digest"
+
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
+	svc.now = func() time.Time { return time.Unix(0, 200) }
+	require.NoError(t, svc.ReloadFromStorage())
+
+	require.NoError(t, svc.ReattachTransit())
 	require.Equal(t, 1, store.reattachCalls)
-	require.Equal(t, uint64(3), store.snapshot.CoordinatorClosure.SuccessorGeneration)
-	require.Equal(t, uint64(2), store.snapshot.CoordinatorClosure.SealGeneration)
-	require.Equal(t, "seal-digest", store.snapshot.CoordinatorClosure.SealDigest)
-	require.Equal(t, rootproto.CoordinatorClosureStageReattached, store.snapshot.CoordinatorClosure.Stage)
+	require.Equal(t, uint64(3), store.snapshot.Transit.SuccessorEpoch)
+	require.Equal(t, uint64(2), store.snapshot.Transit.LegacyEpoch)
+	require.Equal(t, "seal-digest", store.snapshot.Transit.LegacyDigest)
+	require.Equal(t, rootproto.TransitStageReattached, store.snapshot.Transit.Stage)
 }
 
 func TestServiceAblationDisableReattachNoop(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			CoordinatorLease: rootstate.CoordinatorLease{
+			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 20_000).UnixNano(),
-				CertGeneration:  3,
-				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
+				Epoch:           3,
+				Mandate:         rootproto.MandateDefault,
 			},
-			CoordinatorSeal: rootstate.CoordinatorSeal{
+			Legacy: rootstate.Legacy{
+				HolderID:  "c1",
+				Epoch:     2,
+				Mandate:   rootproto.MandateDefault,
+				Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
+			},
+			Transit: rootstate.Transit{
 				HolderID:       "c1",
-				CertGeneration: 2,
-				DutyMask:       rootproto.CoordinatorDutyMaskDefault,
-				Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
-			},
-			CoordinatorClosure: rootstate.CoordinatorClosure{
-				HolderID:            "c1",
-				SealGeneration:      2,
-				SuccessorGeneration: 3,
-				SealDigest:          "seal-digest",
-				Stage:               rootproto.CoordinatorClosureStageClosed,
+				LegacyEpoch:    2,
+				SuccessorEpoch: 3,
+				LegacyDigest:   "seal-digest",
+				Stage:          rootproto.TransitStageClosed,
 			},
 		},
 	}
-	store.snapshot.CoordinatorLease.PredecessorDigest = "seal-digest"
+	store.snapshot.Tenure.LineageDigest = "seal-digest"
 
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	require.NoError(t, svc.ConfigureAblation(coordablation.Config{DisableReattach: true}))
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
-	require.NoError(t, svc.ReattachCoordinatorClosure())
+	require.NoError(t, svc.ReattachTransit())
 	require.Equal(t, 0, store.reattachCalls)
-	require.Equal(t, rootproto.CoordinatorClosureStageClosed, store.snapshot.CoordinatorClosure.Stage)
+	require.Equal(t, rootproto.TransitStageClosed, store.snapshot.Transit.Stage)
 }
 
-func TestServiceReattachCoordinatorClosureRejectsLineageMismatch(t *testing.T) {
+func TestServiceReattachTransitRejectsLineageMismatch(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			CoordinatorLease: rootstate.CoordinatorLease{
-				HolderID:          "c1",
-				ExpiresUnixNano:   time.Unix(0, 20_000).UnixNano(),
-				CertGeneration:    3,
-				DutyMask:          rootproto.CoordinatorDutyMaskDefault,
-				PredecessorDigest: "other-digest",
+			Tenure: rootstate.Tenure{
+				HolderID:        "c1",
+				ExpiresUnixNano: time.Unix(0, 20_000).UnixNano(),
+				Epoch:           3,
+				Mandate:         rootproto.MandateDefault,
+				LineageDigest:   "other-digest",
 			},
-			CoordinatorSeal: rootstate.CoordinatorSeal{
+			Legacy: rootstate.Legacy{
+				HolderID:  "c1",
+				Epoch:     2,
+				Mandate:   rootproto.MandateDefault,
+				Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
+			},
+			Transit: rootstate.Transit{
 				HolderID:       "c1",
-				CertGeneration: 2,
-				DutyMask:       rootproto.CoordinatorDutyMaskDefault,
-				Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
-			},
-			CoordinatorClosure: rootstate.CoordinatorClosure{
-				HolderID:            "c1",
-				SealGeneration:      2,
-				SuccessorGeneration: 3,
-				SealDigest:          "seal-digest",
-				Stage:               rootproto.CoordinatorClosureStageClosed,
+				LegacyEpoch:    2,
+				SuccessorEpoch: 3,
+				LegacyDigest:   "seal-digest",
+				Stage:          rootproto.TransitStageClosed,
 			},
 		},
 	}
 
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
-	err := svc.ReattachCoordinatorClosure()
-	require.ErrorIs(t, err, rootstate.ErrCoordinatorLeaseReattach)
+	err := svc.ReattachTransit()
+	require.ErrorIs(t, err, rootstate.ErrClosure)
 	require.Equal(t, 1, store.reattachCalls)
-	require.Equal(t, rootproto.CoordinatorClosureStageClosed, store.snapshot.CoordinatorClosure.Stage)
+	require.Equal(t, rootproto.TransitStageClosed, store.snapshot.Transit.Stage)
 }
 
-func TestServiceMonotoneDutyFailsWhenSuccessorCoverageNotMet(t *testing.T) {
+func TestServiceMonotoneDutyFailsWhenInheritanceNotMet(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			CoordinatorLease: rootstate.CoordinatorLease{
+			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				CertGeneration:  2,
-				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
+				Epoch:           2,
+				Mandate:         rootproto.MandateDefault,
 			},
-			CoordinatorSeal: rootstate.CoordinatorSeal{
-				HolderID:       "c1",
-				CertGeneration: 2,
-				DutyMask:       rootproto.CoordinatorDutyAllocID | rootproto.CoordinatorDutyTSO,
-				Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 50, TSOFence: 150}, 0),
+			Legacy: rootstate.Legacy{
+				HolderID:  "c1",
+				Epoch:     2,
+				Mandate:   rootproto.MandateAllocID | rootproto.MandateTSO,
+				Frontiers: succession.Frontiers(rootstate.State{IDFence: 50, TSOFence: 150}, 0),
 			},
 		},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
 	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, err.Error(), errCoordinatorLeasePrefix)
+	require.Contains(t, err.Error(), errTenurePrefix)
 }
 
 func TestServiceMonotoneDutyFailsWhenDescriptorCoverageNotMet(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			CoordinatorLease: rootstate.CoordinatorLease{
+			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				CertGeneration:  2,
-				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
+				Epoch:           2,
+				Mandate:         rootproto.MandateDefault,
 			},
-			CoordinatorSeal: rootstate.CoordinatorSeal{
-				HolderID:       "c1",
-				CertGeneration: 2,
-				DutyMask:       rootproto.CoordinatorDutyMaskDefault,
-				Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 10, TSOFence: 100}, 8),
+			Legacy: rootstate.Legacy{
+				HolderID:  "c1",
+				Epoch:     2,
+				Mandate:   rootproto.MandateDefault,
+				Frontiers: succession.Frontiers(rootstate.State{IDFence: 10, TSOFence: 100}, 8),
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
 				1: {RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
@@ -2472,54 +2472,54 @@ func TestServiceMonotoneDutyFailsWhenDescriptorCoverageNotMet(t *testing.T) {
 		},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
 	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, err.Error(), errCoordinatorLeasePrefix)
+	require.Contains(t, err.Error(), errTenurePrefix)
 }
 
 func TestServiceAllocIDFailsWhenDutyNotAdmitted(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			CoordinatorLease: rootstate.CoordinatorLease{
+			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(10, 0).UnixNano(),
-				CertGeneration:  2,
-				DutyMask:        rootproto.CoordinatorDutyTSO | rootproto.CoordinatorDutyGetRegionByKey,
+				Epoch:           2,
+				Mandate:         rootproto.MandateTSO | rootproto.MandateGetRegionByKey,
 			},
 		},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
-	require.Equal(t, uint32(rootproto.CoordinatorDutyTSO|rootproto.CoordinatorDutyGetRegionByKey), store.snapshot.CoordinatorLease.DutyMask)
-	require.Equal(t, uint32(rootproto.CoordinatorDutyTSO|rootproto.CoordinatorDutyGetRegionByKey), svc.currentCoordinatorLease().DutyMask)
+	require.Equal(t, uint32(rootproto.MandateTSO|rootproto.MandateGetRegionByKey), store.snapshot.Tenure.Mandate)
+	require.Equal(t, uint32(rootproto.MandateTSO|rootproto.MandateGetRegionByKey), svc.currentTenure().Mandate)
 
-	err := svc.preActionGate(preActionDutyAdmission, rootproto.CoordinatorDutyAllocID)
+	err := svc.successionGate(gateMandateAdmission, rootproto.MandateAllocID)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "coordinator lease duty mismatch")
+	require.Contains(t, err.Error(), "mandate mismatch")
 
 	_, err = svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, err.Error(), "coordinator lease duty mismatch")
+	require.Contains(t, err.Error(), "mandate mismatch")
 }
 
 func TestServiceGetRegionByKeyFailsWhenDutyNotAdmitted(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			CoordinatorLease: rootstate.CoordinatorLease{
+			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(10, 0).UnixNano(),
-				CertGeneration:  2,
-				DutyMask:        rootproto.CoordinatorDutyAllocID | rootproto.CoordinatorDutyTSO,
+				Epoch:           2,
+				Mandate:         rootproto.MandateAllocID | rootproto.MandateTSO,
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
 				11: {RegionID: 11, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
@@ -2527,11 +2527,11 @@ func TestServiceGetRegionByKeyFailsWhenDutyNotAdmitted(t *testing.T) {
 		},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
-	require.Equal(t, uint32(rootproto.CoordinatorDutyAllocID|rootproto.CoordinatorDutyTSO), store.snapshot.CoordinatorLease.DutyMask)
-	require.Equal(t, uint32(rootproto.CoordinatorDutyAllocID|rootproto.CoordinatorDutyTSO), svc.currentCoordinatorLease().DutyMask)
+	require.Equal(t, uint32(rootproto.MandateAllocID|rootproto.MandateTSO), store.snapshot.Tenure.Mandate)
+	require.Equal(t, uint32(rootproto.MandateAllocID|rootproto.MandateTSO), svc.currentTenure().Mandate)
 
 	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
 		Key:       []byte("m"),
@@ -2539,18 +2539,18 @@ func TestServiceGetRegionByKeyFailsWhenDutyNotAdmitted(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, err.Error(), "coordinator lease duty mismatch")
+	require.Contains(t, err.Error(), "mandate mismatch")
 }
 
 func TestServiceGetRegionByKeyAllowsReadOnlyServingFromCurrentRootedGeneration(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			CoordinatorLease: rootstate.CoordinatorLease{
+			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(10, 0).UnixNano(),
-				CertGeneration:  2,
-				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
+				Epoch:           2,
+				Mandate:         rootproto.MandateDefault,
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
 				11: {RegionID: 11, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
@@ -2558,7 +2558,7 @@ func TestServiceGetRegionByKeyAllowsReadOnlyServingFromCurrentRootedGeneration(t
 		},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c2", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c2", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
@@ -2569,46 +2569,46 @@ func TestServiceGetRegionByKeyAllowsReadOnlyServingFromCurrentRootedGeneration(t
 	require.NoError(t, err)
 	require.False(t, resp.GetNotFound())
 	require.Equal(t, uint64(11), resp.GetRegionDescriptor().GetRegionId())
-	require.Equal(t, uint64(2), resp.GetCertGeneration())
+	require.Equal(t, uint64(2), resp.GetEpoch())
 }
 
-func TestServiceCoordinatorLeaseRejectsOtherHolder(t *testing.T) {
+func TestServiceTenureRejectsOtherHolder(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			CoordinatorLease: rootstate.CoordinatorLease{
+			Tenure: rootstate.Tenure{
 				HolderID:        "c2",
 				ExpiresUnixNano: 10_000,
 			},
 		},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 100) }
 
 	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, err.Error(), errCoordinatorLeasePrefix)
+	require.Contains(t, err.Error(), errTenurePrefix)
 
 	_, err = svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, err.Error(), errCoordinatorLeasePrefix)
+	require.Contains(t, err.Error(), errTenurePrefix)
 }
 
-func TestServiceStoreHeartbeatSuppressesOperationsWithoutCoordinatorLease(t *testing.T) {
+func TestServiceStoreHeartbeatSuppressesOperationsWithoutTenure(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			CoordinatorLease: rootstate.CoordinatorLease{
+			Tenure: rootstate.Tenure{
 				HolderID:        "other",
 				ExpiresUnixNano: 10_000,
 			},
 		},
 	}
 	svc := NewService(catalog.NewCluster(), nil, nil, store)
-	svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 100) }
 
 	err := publishDescriptorEvent(t, svc, testDescriptor(100, []byte(""), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}}), 0)

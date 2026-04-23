@@ -42,7 +42,7 @@ func TestCollectorIsKeyCovered(t *testing.T) {
 		{kv.CFDefault, []byte("a"), 50, false},  // before range
 		{kv.CFDefault, []byte("b"), 50, true},   // start (inclusive)
 		{kv.CFDefault, []byte("c"), 50, true},   // middle
-		{kv.CFDefault, []byte("d"), 50, false},  // end (exclusive)
+		{kv.CFDefault, []byte("d"), 50, false},  // end (primacy)
 		{kv.CFDefault, []byte("e"), 50, false},  // after range
 		{kv.CFDefault, []byte("b"), 100, false}, // version equal (not covered)
 		{kv.CFDefault, []byte("b"), 101, false}, // version newer

@@ -3,7 +3,7 @@ package state_test
 import (
 	"testing"
 
-	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
+	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
@@ -28,97 +28,97 @@ func TestApplyEventToStateAdvancesEpochsAndCursor(t *testing.T) {
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 3}, st.LastCommitted)
 }
 
-func TestApplyCoordinatorLeaseToState(t *testing.T) {
+func TestApplyTenureToState(t *testing.T) {
 	var st rootstate.State
-	event := rootevent.CoordinatorLeaseGranted("c1", 1_000, 1, rootproto.CoordinatorDutyMaskDefault, "pred", controlplane.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0))
+	event := rootevent.TenureGranted("c1", 1_000, 1, rootproto.MandateDefault, "pred", succession.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0))
 
 	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 1}, event)
 
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, st.LastCommitted)
-	require.Equal(t, "c1", st.CoordinatorLease.HolderID)
-	require.Equal(t, int64(1_000), st.CoordinatorLease.ExpiresUnixNano)
-	require.Equal(t, uint64(1), st.CoordinatorLease.CertGeneration)
-	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, st.CoordinatorLease.IssuedCursor)
-	require.Equal(t, uint32(rootproto.CoordinatorDutyMaskDefault), st.CoordinatorLease.DutyMask)
-	require.Equal(t, "pred", st.CoordinatorLease.PredecessorDigest)
+	require.Equal(t, "c1", st.Tenure.HolderID)
+	require.Equal(t, int64(1_000), st.Tenure.ExpiresUnixNano)
+	require.Equal(t, uint64(1), st.Tenure.Epoch)
+	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, st.Tenure.IssuedAt)
+	require.Equal(t, uint32(rootproto.MandateDefault), st.Tenure.Mandate)
+	require.Equal(t, "pred", st.Tenure.LineageDigest)
 	require.Equal(t, uint64(10), st.IDFence)
 	require.Equal(t, uint64(20), st.TSOFence)
-	require.True(t, st.CoordinatorLease.ActiveAt(999))
-	require.False(t, st.CoordinatorLease.ActiveAt(1_000))
+	require.True(t, st.Tenure.ActiveAt(999))
+	require.False(t, st.Tenure.ActiveAt(1_000))
 }
 
-func TestApplyCoordinatorClosureConfirmedToState(t *testing.T) {
+func TestApplyTransitConfirmedToState(t *testing.T) {
 	var st rootstate.State
-	event := rootevent.CoordinatorClosureConfirmed("c1", 7, 8, "seal-digest")
+	event := rootevent.TransitConfirmed("c1", 7, 8, "seal-digest")
 
 	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 2, Index: 9}, event)
 
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 9}, st.LastCommitted)
-	require.Equal(t, "c1", st.CoordinatorClosure.HolderID)
-	require.Equal(t, uint64(7), st.CoordinatorClosure.SealGeneration)
-	require.Equal(t, uint64(8), st.CoordinatorClosure.SuccessorGeneration)
-	require.Equal(t, "seal-digest", st.CoordinatorClosure.SealDigest)
-	require.Equal(t, rootproto.CoordinatorClosureStageConfirmed, st.CoordinatorClosure.Stage)
-	require.Equal(t, rootstate.Cursor{Term: 2, Index: 9}, st.CoordinatorClosure.ConfirmedAtCursor)
+	require.Equal(t, "c1", st.Transit.HolderID)
+	require.Equal(t, uint64(7), st.Transit.LegacyEpoch)
+	require.Equal(t, uint64(8), st.Transit.SuccessorEpoch)
+	require.Equal(t, "seal-digest", st.Transit.LegacyDigest)
+	require.Equal(t, rootproto.TransitStageConfirmed, st.Transit.Stage)
+	require.Equal(t, rootstate.Cursor{Term: 2, Index: 9}, st.Transit.ConfirmedAt)
 }
 
-func TestApplyCoordinatorClosureClosedToState(t *testing.T) {
+func TestApplyTransitClosedToState(t *testing.T) {
 	var st rootstate.State
-	event := rootevent.CoordinatorClosureClosed("c1", 7, 8, "seal-digest")
+	event := rootevent.TransitClosed("c1", 7, 8, "seal-digest")
 
 	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 2, Index: 10}, event)
 
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.LastCommitted)
-	require.Equal(t, "c1", st.CoordinatorClosure.HolderID)
-	require.Equal(t, uint64(8), st.CoordinatorClosure.SuccessorGeneration)
-	require.Equal(t, uint64(7), st.CoordinatorClosure.SealGeneration)
-	require.Equal(t, "seal-digest", st.CoordinatorClosure.SealDigest)
-	require.Equal(t, rootproto.CoordinatorClosureStageClosed, st.CoordinatorClosure.Stage)
-	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.CoordinatorClosure.ClosedAtCursor)
+	require.Equal(t, "c1", st.Transit.HolderID)
+	require.Equal(t, uint64(8), st.Transit.SuccessorEpoch)
+	require.Equal(t, uint64(7), st.Transit.LegacyEpoch)
+	require.Equal(t, "seal-digest", st.Transit.LegacyDigest)
+	require.Equal(t, rootproto.TransitStageClosed, st.Transit.Stage)
+	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.Transit.ClosedAt)
 }
 
-func TestApplyCoordinatorClosureReattachToState(t *testing.T) {
+func TestApplyTransitReattachToState(t *testing.T) {
 	var st rootstate.State
-	event := rootevent.CoordinatorClosureReattached("c1", 7, 8, "seal-digest")
+	event := rootevent.TransitReattached("c1", 7, 8, "seal-digest")
 
 	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 2, Index: 10}, event)
 
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.LastCommitted)
-	require.Equal(t, "c1", st.CoordinatorClosure.HolderID)
-	require.Equal(t, uint64(8), st.CoordinatorClosure.SuccessorGeneration)
-	require.Equal(t, uint64(7), st.CoordinatorClosure.SealGeneration)
-	require.Equal(t, "seal-digest", st.CoordinatorClosure.SealDigest)
-	require.Equal(t, rootproto.CoordinatorClosureStageReattached, st.CoordinatorClosure.Stage)
-	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.CoordinatorClosure.ReattachedAtCursor)
+	require.Equal(t, "c1", st.Transit.HolderID)
+	require.Equal(t, uint64(8), st.Transit.SuccessorEpoch)
+	require.Equal(t, uint64(7), st.Transit.LegacyEpoch)
+	require.Equal(t, "seal-digest", st.Transit.LegacyDigest)
+	require.Equal(t, rootproto.TransitStageReattached, st.Transit.Stage)
+	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.Transit.ReattachedAt)
 }
 
-func TestApplyCoordinatorLeasePreservesIssuedCursorForSameGeneration(t *testing.T) {
+func TestApplyTenurePreservesIssuedAtForSameGeneration(t *testing.T) {
 	var st rootstate.State
-	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 1}, rootevent.CoordinatorLeaseGranted("c1", 1_000, 1, rootproto.CoordinatorDutyMaskDefault, "pred", controlplane.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0)))
-	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 2}, rootevent.CoordinatorLeaseGranted("c1", 2_000, 1, rootproto.CoordinatorDutyMaskDefault, "", controlplane.Frontiers(rootstate.State{IDFence: 20, TSOFence: 30}, 0)))
+	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 1}, rootevent.TenureGranted("c1", 1_000, 1, rootproto.MandateDefault, "pred", succession.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0)))
+	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 2}, rootevent.TenureGranted("c1", 2_000, 1, rootproto.MandateDefault, "", succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 30}, 0)))
 
-	require.Equal(t, uint64(1), st.CoordinatorLease.CertGeneration)
-	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, st.CoordinatorLease.IssuedCursor)
+	require.Equal(t, uint64(1), st.Tenure.Epoch)
+	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, st.Tenure.IssuedAt)
 	require.Equal(t, uint64(20), st.IDFence)
 	require.Equal(t, uint64(30), st.TSOFence)
-	require.Equal(t, "pred", st.CoordinatorLease.PredecessorDigest)
+	require.Equal(t, "pred", st.Tenure.LineageDigest)
 }
 
 func TestStateProtocolHelpers(t *testing.T) {
-	witness := rootproto.NewContinuationWitness(rootproto.CoordinatorDutyTSO, 8, 51)
-	require.Equal(t, rootproto.CoordinatorDutyTSO, witness.DutyMask)
-	require.Equal(t, uint64(8), witness.CertGeneration)
+	witness := rootproto.NewContinuationWitness(rootproto.MandateTSO, 8, 51)
+	require.Equal(t, rootproto.MandateTSO, witness.Mandate)
+	require.Equal(t, uint64(8), witness.Epoch)
 	require.Equal(t, uint64(51), witness.ConsumedFrontier)
 
-	seal := rootstate.CoordinatorSeal{
-		HolderID:       "c1",
-		CertGeneration: 7,
-		DutyMask:       rootproto.CoordinatorDutyMaskDefault,
-		Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
+	seal := rootstate.Legacy{
+		HolderID:  "c1",
+		Epoch:     7,
+		Mandate:   rootproto.MandateDefault,
+		Frontiers: succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
 	}
-	require.Equal(t, uint64(20), seal.Frontiers.Frontier(rootproto.CoordinatorDutyAllocID))
-	require.Equal(t, uint64(40), seal.Frontiers.Frontier(rootproto.CoordinatorDutyTSO))
-	require.Equal(t, uint64(60), seal.Frontiers.Frontier(rootproto.CoordinatorDutyGetRegionByKey))
+	require.Equal(t, uint64(20), seal.Frontiers.Frontier(rootproto.MandateAllocID))
+	require.Equal(t, uint64(40), seal.Frontiers.Frontier(rootproto.MandateTSO))
+	require.Equal(t, uint64(60), seal.Frontiers.Frontier(rootproto.MandateGetRegionByKey))
 }
 
 func TestCursorHelpers(t *testing.T) {

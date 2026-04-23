@@ -6,15 +6,15 @@
 // meta/root/ but never owns durable cluster state. The execution plane
 // (raftstore/) applies and publishes, and coordinator reconstructs its
 // view by tailing rooted commits. Contracts between the planes are
-// specified in TLA+ under spec/CCC.tla.
+// specified in TLA+ under spec/Succession.tla.
 //
 // Heavy logic is deliberately split into sibling packages:
 // catalog (region/event validation), view (directory + store health),
-// protocol/controlplane (authority handoff primitives), storage
+// protocol/succession (authority handoff primitives), storage
 // (rooted adapter), audit (snapshot + trace audit).
 //
 // Design references: docs/coordinator.md, docs/control_and_execution_protocols.md,
-// docs/rooted_truth.md, docs/ccc-audit.md.
+// docs/rooted_truth.md, docs/succession-audit.md.
 package server
 
 import (
@@ -41,37 +41,37 @@ import (
 type Service struct {
 	coordpb.UnimplementedCoordinatorServer
 
-	cluster        *catalog.Cluster
-	ids            *idalloc.IDAllocator
-	tso            *tso.Allocator
-	storage        rootview.RootStorage
-	idWindowHigh   uint64
-	idWindowSize   uint64
-	tsoWindowHigh  uint64
-	tsoWindowSize  uint64
-	allocMu        sync.Mutex
-	writeMu        sync.Mutex
-	leaseMu        sync.RWMutex
-	coordinatorID  string
-	leaseTTL       time.Duration
-	leaseRenewIn   time.Duration
-	leaseClockSkew time.Duration
-	now            func() time.Time
-	leaseView      coordinatorLeaseView
-	rootViewMu     sync.RWMutex
-	rootView       coordinatorRootSnapshotView
-	rootViewTTL    time.Duration
-	statusMu       sync.RWMutex
-	lastRootReload int64
-	lastRootError  string
-	cccMetrics     coordinatorCCCMetrics
-	ablation       coordablation.Config
+	cluster           *catalog.Cluster
+	ids               *idalloc.IDAllocator
+	tso               *tso.Allocator
+	storage           rootview.RootStorage
+	idWindowHigh      uint64
+	idWindowSize      uint64
+	tsoWindowHigh     uint64
+	tsoWindowSize     uint64
+	allocMu           sync.Mutex
+	writeMu           sync.Mutex
+	leaseMu           sync.RWMutex
+	coordinatorID     string
+	leaseTTL          time.Duration
+	leaseRenewIn      time.Duration
+	leaseClockSkew    time.Duration
+	now               func() time.Time
+	leaseView         coordinatorLeaseView
+	rootViewMu        sync.RWMutex
+	rootView          coordinatorRootSnapshotView
+	rootViewTTL       time.Duration
+	statusMu          sync.RWMutex
+	lastRootReload    int64
+	lastRootError     string
+	successionMetrics successionMetrics
+	ablation          coordablation.Config
 }
 
 type coordinatorLeaseView struct {
-	lease   rootstate.CoordinatorLease
-	seal    rootstate.CoordinatorSeal
-	closure rootstate.CoordinatorClosure
+	lease   rootstate.Tenure
+	seal    rootstate.Legacy
+	closure rootstate.Transit
 }
 
 type coordinatorRootSnapshotView struct {
@@ -85,44 +85,44 @@ func (v *coordinatorLeaseView) Reset() {
 	if v == nil {
 		return
 	}
-	v.lease = rootstate.CoordinatorLease{}
-	v.seal = rootstate.CoordinatorSeal{}
-	v.closure = rootstate.CoordinatorClosure{}
+	v.lease = rootstate.Tenure{}
+	v.seal = rootstate.Legacy{}
+	v.closure = rootstate.Transit{}
 }
 
 func (v *coordinatorLeaseView) Refresh(snapshot rootview.Snapshot) {
 	if v == nil {
 		return
 	}
-	v.lease = snapshot.CoordinatorLease
-	v.seal = snapshot.CoordinatorSeal
-	v.closure = snapshot.CoordinatorClosure
+	v.lease = snapshot.Tenure
+	v.seal = snapshot.Legacy
+	v.closure = snapshot.Transit
 }
 
-func (v coordinatorLeaseView) Current() (rootstate.CoordinatorLease, rootstate.CoordinatorSeal) {
+func (v coordinatorLeaseView) Current() (rootstate.Tenure, rootstate.Legacy) {
 	return v.lease, v.seal
 }
 
-func (v coordinatorLeaseView) Lease() rootstate.CoordinatorLease {
+func (v coordinatorLeaseView) Lease() rootstate.Tenure {
 	return v.lease
 }
 
-func (v coordinatorLeaseView) Seal() rootstate.CoordinatorSeal {
+func (v coordinatorLeaseView) Seal() rootstate.Legacy {
 	return v.seal
 }
 
-func (v coordinatorLeaseView) Closure() rootstate.CoordinatorClosure {
+func (v coordinatorLeaseView) Closure() rootstate.Transit {
 	return v.closure
 }
 
 const defaultAllocatorWindowSize uint64 = 10_000
 const ablationUnlimitedWindowSize uint64 = 1 << 20
-const defaultCoordinatorLeaseTTL = 10 * time.Second
-const defaultCoordinatorLeaseRenewIn = 3 * time.Second
-const defaultCoordinatorLeaseClockSkew = 500 * time.Millisecond
-const defaultCoordinatorLeaseRetryMin = 200 * time.Millisecond
-const maxCoordinatorLeaseRetry = 60 * time.Second
-const defaultCoordinatorLeaseReleaseTimeout = 2 * time.Second
+const defaultTenureTTL = 10 * time.Second
+const defaultTenureRenewIn = 3 * time.Second
+const defaultTenureClockSkew = 500 * time.Millisecond
+const defaultTenureRetryMin = 200 * time.Millisecond
+const maxTenureRetry = 60 * time.Second
+const defaultTenureReleaseTimeout = 2 * time.Second
 const defaultRootSnapshotRefreshInterval = 250 * time.Millisecond
 
 // NewService constructs a Coordinator service. The optional root storage fixes
@@ -153,9 +153,9 @@ func NewService(cluster *catalog.Cluster, ids *idalloc.IDAllocator, tsAlloc *tso
 	}
 }
 
-// ConfigureCoordinatorLease enables the explicit coordinator owner lease gate.
+// ConfigureTenure enables the explicit coordinator owner lease gate.
 // Empty holderID disables the gate and keeps the current in-memory-only behavior.
-func (s *Service) ConfigureCoordinatorLease(holderID string, ttl, renewIn time.Duration) {
+func (s *Service) ConfigureTenure(holderID string, ttl, renewIn time.Duration) {
 	if s == nil {
 		return
 	}
@@ -170,15 +170,15 @@ func (s *Service) ConfigureCoordinatorLease(holderID string, ttl, renewIn time.D
 		return
 	}
 	if ttl <= 0 {
-		ttl = defaultCoordinatorLeaseTTL
+		ttl = defaultTenureTTL
 	}
 	if renewIn <= 0 || renewIn >= ttl {
-		renewIn = defaultCoordinatorLeaseRenewIn
+		renewIn = defaultTenureRenewIn
 		if renewIn >= ttl {
 			renewIn = ttl / 2
 		}
 	}
-	clockSkew := defaultCoordinatorLeaseClockSkew
+	clockSkew := defaultTenureClockSkew
 	if clockSkew >= renewIn && renewIn > 0 {
 		clockSkew = renewIn / 2
 	}

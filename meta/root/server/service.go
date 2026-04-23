@@ -42,8 +42,8 @@ type tailBackend interface {
 }
 
 type leaseBackend interface {
-	ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
-	ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
+	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error)
+	ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error)
 }
 
 // Service exposes one metadata-root backend through the MetadataRoot RPC API.
@@ -127,46 +127,46 @@ func (s *Service) Status(context.Context, *metapb.MetadataRootStatusRequest) (*m
 	return &metapb.MetadataRootStatusResponse{IsLeader: true}, nil
 }
 
-func (s *Service) ApplyCoordinatorLease(ctx context.Context, req *metapb.MetadataRootApplyCoordinatorLeaseRequest) (*metapb.MetadataRootApplyCoordinatorLeaseResponse, error) {
+func (s *Service) ApplyTenure(ctx context.Context, req *metapb.MetadataRootApplyTenureRequest) (*metapb.MetadataRootApplyTenureResponse, error) {
 	if s == nil || s.backend == nil {
-		return &metapb.MetadataRootApplyCoordinatorLeaseResponse{}, nil
+		return &metapb.MetadataRootApplyTenureResponse{}, nil
 	}
 	backend, err := s.coordinatorProtocolBackend()
 	if err != nil {
 		return nil, err
 	}
-	cmd := metawire.RootCoordinatorLeaseCommandFromProto(req.GetCommand())
-	protocolState, err := backend.ApplyCoordinatorLease(ctx, cmd)
+	cmd := metawire.RootTenureCommandFromProto(req.GetCommand())
+	protocolState, err := backend.ApplyTenure(ctx, cmd)
 	if err != nil {
-		if errors.Is(err, rootstate.ErrCoordinatorLeaseHeld) {
-			return &metapb.MetadataRootApplyCoordinatorLeaseResponse{
-				State:  metawire.RootCoordinatorProtocolStateToProto(protocolState),
-				Status: metapb.RootCoordinatorLeaseApplyStatus_ROOT_COORDINATOR_LEASE_APPLY_STATUS_HELD,
+		if errors.Is(err, rootstate.ErrPrimacy) {
+			return &metapb.MetadataRootApplyTenureResponse{
+				State:  metawire.RootSuccessionStateToProto(protocolState),
+				Status: metapb.RootTenureApplyStatus_ROOT_TENURE_APPLY_STATUS_HELD,
 			}, nil
 		}
 		return nil, coordinatorLeaseApplyRPCError(cmd.Kind, err)
 	}
-	return &metapb.MetadataRootApplyCoordinatorLeaseResponse{
-		State:  metawire.RootCoordinatorProtocolStateToProto(protocolState),
-		Status: metapb.RootCoordinatorLeaseApplyStatus_ROOT_COORDINATOR_LEASE_APPLY_STATUS_GRANTED,
+	return &metapb.MetadataRootApplyTenureResponse{
+		State:  metawire.RootSuccessionStateToProto(protocolState),
+		Status: metapb.RootTenureApplyStatus_ROOT_TENURE_APPLY_STATUS_GRANTED,
 	}, nil
 }
 
-func (s *Service) ApplyCoordinatorClosure(ctx context.Context, req *metapb.MetadataRootApplyCoordinatorClosureRequest) (*metapb.MetadataRootApplyCoordinatorClosureResponse, error) {
+func (s *Service) ApplyTransit(ctx context.Context, req *metapb.MetadataRootApplyTransitRequest) (*metapb.MetadataRootApplyTransitResponse, error) {
 	if s == nil || s.backend == nil {
-		return &metapb.MetadataRootApplyCoordinatorClosureResponse{}, nil
+		return &metapb.MetadataRootApplyTransitResponse{}, nil
 	}
 	backend, err := s.coordinatorProtocolBackend()
 	if err != nil {
 		return nil, err
 	}
-	cmd := metawire.RootCoordinatorClosureCommandFromProto(req.GetCommand())
-	protocolState, err := backend.ApplyCoordinatorClosure(ctx, cmd)
+	cmd := metawire.RootTransitCommandFromProto(req.GetCommand())
+	protocolState, err := backend.ApplyTransit(ctx, cmd)
 	if err != nil {
 		return nil, coordinatorClosureApplyRPCError(cmd.Kind, err)
 	}
-	return &metapb.MetadataRootApplyCoordinatorClosureResponse{
-		State: metawire.RootCoordinatorProtocolStateToProto(protocolState),
+	return &metapb.MetadataRootApplyTransitResponse{
+		State: metawire.RootSuccessionStateToProto(protocolState),
 	}, nil
 }
 
@@ -275,47 +275,49 @@ func (s *Service) coordinatorProtocolBackend() (leaseBackend, error) {
 	return backend, nil
 }
 
-func coordinatorLeaseApplyRPCError(kind rootproto.CoordinatorLeaseCommandKind, err error) error {
+func coordinatorLeaseApplyRPCError(kind rootproto.TenureAct, err error) error {
 	switch kind {
-	case rootproto.CoordinatorLeaseCommandIssue:
+	case rootproto.TenureActIssue:
 		switch {
-		case errors.Is(err, rootstate.ErrInvalidCoordinatorLease):
+		case errors.Is(err, rootstate.ErrInvalidTenure):
 			return status.Error(codes.InvalidArgument, err.Error())
-		case errors.Is(err, rootstate.ErrCoordinatorLeaseCoverage),
-			errors.Is(err, rootstate.ErrCoordinatorLeaseLineage):
+		case errors.Is(err, rootstate.ErrInheritance):
 			return status.Error(codes.FailedPrecondition, err.Error())
 		}
-	case rootproto.CoordinatorLeaseCommandRelease:
+	case rootproto.TenureActRelease:
 		switch {
-		case errors.Is(err, rootstate.ErrCoordinatorLeaseOwner),
-			errors.Is(err, rootstate.ErrInvalidCoordinatorLease):
+		case errors.Is(err, rootstate.ErrPrimacy),
+			errors.Is(err, rootstate.ErrInvalidTenure):
 			return status.Error(codes.FailedPrecondition, err.Error())
 		}
 	}
 	return status.Error(codes.Internal, err.Error())
 }
 
-func coordinatorClosureApplyRPCError(kind rootproto.CoordinatorClosureCommandKind, err error) error {
-	if errors.Is(err, rootstate.ErrInvalidCoordinatorLease) || errors.Is(err, rootstate.ErrCoordinatorLeaseAudit) {
+func coordinatorClosureApplyRPCError(kind rootproto.TransitAct, err error) error {
+	if errors.Is(err, rootstate.ErrInvalidTenure) {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
 	switch kind {
-	case rootproto.CoordinatorClosureCommandSeal:
-		if errors.Is(err, rootstate.ErrCoordinatorLeaseOwner) {
+	case rootproto.TransitActSeal:
+		if errors.Is(err, rootstate.ErrPrimacy) {
 			return status.Error(codes.FailedPrecondition, err.Error())
 		}
-	case rootproto.CoordinatorClosureCommandConfirm:
-		if errors.Is(err, rootstate.ErrCoordinatorLeaseOwner) {
+	case rootproto.TransitActConfirm:
+		if errors.Is(err, rootstate.ErrClosure) {
+			return status.Error(codes.InvalidArgument, err.Error())
+		}
+		if errors.Is(err, rootstate.ErrPrimacy) {
 			return status.Error(codes.FailedPrecondition, err.Error())
 		}
-	case rootproto.CoordinatorClosureCommandClose:
-		if errors.Is(err, rootstate.ErrCoordinatorLeaseOwner) ||
-			errors.Is(err, rootstate.ErrCoordinatorLeaseClose) {
+	case rootproto.TransitActClose:
+		if errors.Is(err, rootstate.ErrPrimacy) ||
+			errors.Is(err, rootstate.ErrClosure) {
 			return status.Error(codes.FailedPrecondition, err.Error())
 		}
-	case rootproto.CoordinatorClosureCommandReattach:
-		if errors.Is(err, rootstate.ErrCoordinatorLeaseOwner) ||
-			errors.Is(err, rootstate.ErrCoordinatorLeaseReattach) {
+	case rootproto.TransitActReattach:
+		if errors.Is(err, rootstate.ErrPrimacy) ||
+			errors.Is(err, rootstate.ErrClosure) {
 			return status.Error(codes.FailedPrecondition, err.Error())
 		}
 	}

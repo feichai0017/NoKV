@@ -24,11 +24,11 @@ type fakeLoadStore struct {
 func (f fakeLoadStore) Load() (Snapshot, error)                                  { return CloneSnapshot(f.snapshot), f.err }
 func (f fakeLoadStore) AppendRootEvent(context.Context, rootevent.Event) error   { return nil }
 func (f fakeLoadStore) SaveAllocatorState(context.Context, uint64, uint64) error { return nil }
-func (f fakeLoadStore) ApplyCoordinatorLease(context.Context, rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
-	return rootstate.CoordinatorProtocolState{}, nil
+func (f fakeLoadStore) ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.SuccessionState, error) {
+	return rootstate.SuccessionState{}, nil
 }
-func (f fakeLoadStore) ApplyCoordinatorClosure(context.Context, rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
-	return rootstate.CoordinatorProtocolState{}, nil
+func (f fakeLoadStore) ApplyTransit(context.Context, rootproto.TransitCommand) (rootstate.SuccessionState, error) {
+	return rootstate.SuccessionState{}, nil
 }
 func (f fakeLoadStore) Refresh() error   { return nil }
 func (f fakeLoadStore) IsLeader() bool   { return true }
@@ -57,8 +57,8 @@ type fakeRootBackend struct {
 	isLeader            bool
 	leaderID            uint64
 	tailNotifyCh        chan struct{}
-	applyLeaseResult    rootstate.CoordinatorProtocolState
-	applyClosureResult  rootstate.CoordinatorProtocolState
+	applyLeaseResult    rootstate.SuccessionState
+	applyClosureResult  rootstate.SuccessionState
 }
 
 func (f *fakeRootBackend) Snapshot() (rootstate.Snapshot, error) {
@@ -151,26 +151,26 @@ func (f *fakeRootBackend) ObserveCommitted() (rootstorage.ObservedCommitted, err
 func (f *fakeRootBackend) IsLeader() bool   { return f.isLeader }
 func (f *fakeRootBackend) LeaderID() uint64 { return f.leaderID }
 
-func (f *fakeRootBackend) ApplyCoordinatorLease(_ context.Context, _ rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (f *fakeRootBackend) ApplyTenure(_ context.Context, _ rootproto.TenureCommand) (rootstate.SuccessionState, error) {
 	if f.applyLeaseErr != nil {
-		return rootstate.CoordinatorProtocolState{}, f.applyLeaseErr
+		return rootstate.SuccessionState{}, f.applyLeaseErr
 	}
-	f.snapshot.State.CoordinatorLease = f.applyLeaseResult.Lease
-	f.snapshot.State.CoordinatorSeal = f.applyLeaseResult.Seal
-	f.snapshot.State.CoordinatorClosure = f.applyLeaseResult.Closure
+	f.snapshot.State.Tenure = f.applyLeaseResult.Tenure
+	f.snapshot.State.Legacy = f.applyLeaseResult.Legacy
+	f.snapshot.State.Transit = f.applyLeaseResult.Transit
 	if f.useObserved {
 		f.observed.Checkpoint.Snapshot = rootstate.CloneSnapshot(f.snapshot)
 	}
 	return f.applyLeaseResult, nil
 }
 
-func (f *fakeRootBackend) ApplyCoordinatorClosure(_ context.Context, _ rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (f *fakeRootBackend) ApplyTransit(_ context.Context, _ rootproto.TransitCommand) (rootstate.SuccessionState, error) {
 	if f.applyClosureErr != nil {
-		return rootstate.CoordinatorProtocolState{}, f.applyClosureErr
+		return rootstate.SuccessionState{}, f.applyClosureErr
 	}
-	f.snapshot.State.CoordinatorLease = f.applyClosureResult.Lease
-	f.snapshot.State.CoordinatorSeal = f.applyClosureResult.Seal
-	f.snapshot.State.CoordinatorClosure = f.applyClosureResult.Closure
+	f.snapshot.State.Tenure = f.applyClosureResult.Tenure
+	f.snapshot.State.Legacy = f.applyClosureResult.Legacy
+	f.snapshot.State.Transit = f.applyClosureResult.Transit
 	if f.useObserved {
 		f.observed.Checkpoint.Snapshot = rootstate.CloneSnapshot(f.snapshot)
 	}
@@ -214,9 +214,9 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 			desc1.RegionID: {Kind: rootstate.PendingRangeChangeSplit, ParentRegionID: desc1.RegionID, Left: desc1, Right: desc2},
 		},
 		Allocator: AllocatorState{IDCurrent: 20, TSCurrent: 30},
-		CoordinatorLease: rootstate.CoordinatorLease{
+		Tenure: rootstate.Tenure{
 			HolderID:        "coord",
-			CertGeneration:  7,
+			Epoch:           7,
 			ExpiresUnixNano: 999,
 		},
 	}
@@ -227,11 +227,11 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 
 	rootSnapshot := rootstate.Snapshot{
 		State: rootstate.State{
-			ClusterEpoch:     5,
-			LastCommitted:    rootstate.Cursor{Term: 3, Index: 10},
-			IDFence:          40,
-			TSOFence:         50,
-			CoordinatorLease: snapshot.CoordinatorLease,
+			ClusterEpoch:  5,
+			LastCommitted: rootstate.Cursor{Term: 3, Index: 10},
+			IDFence:       40,
+			TSOFence:      50,
+			Tenure:        snapshot.Tenure,
 		},
 		Descriptors:         snapshot.Descriptors,
 		PendingPeerChanges:  snapshot.PendingPeerChanges,
@@ -303,12 +303,12 @@ func TestRemoteConfigAndNilStoreHelpers(t *testing.T) {
 	require.Zero(t, store.LeaderID())
 	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.Event{}))
 	require.NoError(t, store.SaveAllocatorState(context.Background(), 1, 2))
-	leaseState, err := store.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{})
+	leaseState, err := store.ApplyTenure(context.Background(), rootproto.TenureCommand{})
 	require.NoError(t, err)
-	require.Equal(t, rootstate.CoordinatorProtocolState{}, leaseState)
-	closureState, err := store.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{})
+	require.Equal(t, rootstate.SuccessionState{}, leaseState)
+	closureState, err := store.ApplyTransit(context.Background(), rootproto.TransitCommand{})
 	require.NoError(t, err)
-	require.Equal(t, rootstate.CoordinatorProtocolState{}, closureState)
+	require.Equal(t, rootstate.SuccessionState{}, closureState)
 	require.NoError(t, store.Close())
 }
 
@@ -371,16 +371,16 @@ func TestRootStoreWithOptionalBackend(t *testing.T) {
 			rootstorage.TailToken{Cursor: rootstate.Cursor{}, Revision: 1},
 			rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 2}, Revision: 2},
 		),
-		applyLeaseResult: rootstate.CoordinatorProtocolState{
-			Lease: rootstate.CoordinatorLease{HolderID: "coord-2", CertGeneration: 2, ExpiresUnixNano: 999},
+		applyLeaseResult: rootstate.SuccessionState{
+			Tenure: rootstate.Tenure{HolderID: "coord-2", Epoch: 2, ExpiresUnixNano: 999},
 		},
-		applyClosureResult: rootstate.CoordinatorProtocolState{
-			Closure: rootstate.CoordinatorClosure{
-				HolderID:            "coord-2",
-				SealGeneration:      2,
-				SuccessorGeneration: 3,
-				SealDigest:          "seal",
-				Stage:               rootproto.CoordinatorClosureStageClosed,
+		applyClosureResult: rootstate.SuccessionState{
+			Transit: rootstate.Transit{
+				HolderID:       "coord-2",
+				LegacyEpoch:    2,
+				SuccessorEpoch: 3,
+				LegacyDigest:   "seal",
+				Stage:          rootproto.TransitStageClosed,
 			},
 		},
 	}
@@ -417,13 +417,13 @@ func TestRootStoreWithOptionalBackend(t *testing.T) {
 	require.NoError(t, store.SaveAllocatorState(context.Background(), 55, 66))
 	require.Equal(t, []rootstate.AllocatorKind{rootstate.AllocatorKindID, rootstate.AllocatorKindTSO}, fake.fenceCalls)
 
-	leaseState, err := store.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{})
+	leaseState, err := store.ApplyTenure(context.Background(), rootproto.TenureCommand{})
 	require.NoError(t, err)
-	require.Equal(t, "coord-2", leaseState.Lease.HolderID)
+	require.Equal(t, "coord-2", leaseState.Tenure.HolderID)
 
-	closureState, err := store.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{})
+	closureState, err := store.ApplyTransit(context.Background(), rootproto.TransitCommand{})
 	require.NoError(t, err)
-	require.Equal(t, rootproto.CoordinatorClosureStageClosed, closureState.Closure.Stage)
+	require.Equal(t, rootproto.TransitStageClosed, closureState.Transit.Stage)
 
 	require.NoError(t, store.Close())
 	require.True(t, fake.closeCalled)
@@ -435,10 +435,10 @@ func TestRootStoreUnsupportedApplyCommands(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = store.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{})
-	require.ErrorIs(t, err, errCoordinatorLeaseCommandUnsupported)
-	_, err = store.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{})
-	require.ErrorIs(t, err, errCoordinatorClosureCommandUnsupported)
+	_, err = store.ApplyTenure(context.Background(), rootproto.TenureCommand{})
+	require.ErrorIs(t, err, errTenureCommandUnsupported)
+	_, err = store.ApplyTransit(context.Background(), rootproto.TransitCommand{})
+	require.ErrorIs(t, err, errTransitCommandUnsupported)
 }
 
 func mustRestoreDescriptorsNil(t *testing.T) int {

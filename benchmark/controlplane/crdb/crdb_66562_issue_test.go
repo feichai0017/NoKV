@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
-	protocol "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
+	protocol "github.com/feichai0017/NoKV/coordinator/protocol/succession"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/stretchr/testify/require"
@@ -131,18 +131,18 @@ func TestControlPlaneCRDB66562RootedGate(t *testing.T) {
 	servedFrontier := h.sealed.Summary.MaxTimestamp()
 	require.Equal(t, uint64(9), servedFrontier)
 
-	seal := rootstate.CoordinatorSeal{
-		HolderID:       "n2",
-		CertGeneration: 1,
-		DutyMask:       rootproto.CoordinatorDutyMaskDefault,
+	seal := rootstate.Legacy{
+		HolderID: "n2",
+		Epoch:    1,
+		Mandate:  rootproto.MandateDefault,
 	}
-	seal = rootstate.CoordinatorSealWithServedFrontier(seal, servedFrontier)
+	seal = rootstate.LegacyWithServedFrontier(seal, servedFrontier)
 
-	require.Equal(t, servedFrontier, seal.Frontiers.Frontier(rootproto.CoordinatorDutyLeaseStart))
+	require.Equal(t, servedFrontier, seal.Frontiers.Frontier(rootproto.MandateLeaseStart))
 
-	rejectErr := rootstate.ValidateCoordinatorLeaseStartCoverage(seal, 8)
-	require.ErrorIs(t, rejectErr, rootstate.ErrCoordinatorLeaseCoverage)
-	require.NoError(t, rootstate.ValidateCoordinatorLeaseStartCoverage(seal, 10))
+	rejectErr := rootstate.ValidateLeaseStartInheritance(seal, 8)
+	require.ErrorIs(t, rejectErr, rootstate.ErrInheritance)
+	require.NoError(t, rootstate.ValidateLeaseStartInheritance(seal, 10))
 
 	candidate := protocol.LeaseView{HolderID: "n3", LeaseStart: 8, LeaseExpiration: 12, Acquisition: protocol.LeaseAcquisitionFresh}
 	protocolErr := protocol.ValidateLeaseStartCoverage(candidate, h.sealed.Summary)
