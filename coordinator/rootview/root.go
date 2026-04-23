@@ -44,7 +44,7 @@ type rootBackend interface {
 	FenceAllocator(ctx context.Context, kind rootstate.AllocatorKind, min uint64) (uint64, error)
 }
 
-type rootOptionalBackend interface {
+type rootRuntimeBackend interface {
 	rootBackend
 	Refresh() error
 	WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
@@ -55,60 +55,151 @@ type rootOptionalBackend interface {
 	LeaderID() uint64
 	ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
 	ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
+	Close() error
+}
+
+type rootRefreshBackend interface {
+	Refresh() error
+}
+
+type rootTailBackend interface {
+	WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
+	ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
+	TailNotify() <-chan struct{}
+	ObserveCommitted() (rootstorage.ObservedCommitted, error)
+}
+
+type rootLeaderBackend interface {
+	IsLeader() bool
+	LeaderID() uint64
+}
+
+type rootCoordinatorProtocolBackend interface {
+	ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
+	ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
+}
+
+type rootCloseBackend interface {
+	Close() error
+}
+
+type rootBackendAdapter struct {
+	rootBackend
+	refresh  rootRefreshBackend
+	tail     rootTailBackend
+	leader   rootLeaderBackend
+	protocol rootCoordinatorProtocolBackend
+	closer   rootCloseBackend
+}
+
+func (a rootBackendAdapter) Refresh() error {
+	if a.refresh == nil {
+		return nil
+	}
+	return a.refresh.Refresh()
+}
+
+func (a rootBackendAdapter) WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error) {
+	if a.tail == nil {
+		return rootstorage.TailAdvance{}, nil
+	}
+	return a.tail.WaitForTail(after, timeout)
+}
+
+func (a rootBackendAdapter) ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error) {
+	if a.tail == nil {
+		return rootstorage.TailAdvance{}, nil
+	}
+	return a.tail.ObserveTail(after)
+}
+
+func (a rootBackendAdapter) TailNotify() <-chan struct{} {
+	if a.tail == nil {
+		return nil
+	}
+	return a.tail.TailNotify()
+}
+
+func (a rootBackendAdapter) ObserveCommitted() (rootstorage.ObservedCommitted, error) {
+	if a.tail == nil {
+		return rootstorage.ObservedCommitted{}, nil
+	}
+	return a.tail.ObserveCommitted()
+}
+
+func (a rootBackendAdapter) IsLeader() bool {
+	if a.leader == nil {
+		return true
+	}
+	return a.leader.IsLeader()
+}
+
+func (a rootBackendAdapter) LeaderID() uint64 {
+	if a.leader == nil {
+		return 0
+	}
+	return a.leader.LeaderID()
+}
+
+func (a rootBackendAdapter) ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+	if a.protocol == nil {
+		return rootstate.CoordinatorProtocolState{}, errCoordinatorLeaseCommandUnsupported
+	}
+	return a.protocol.ApplyCoordinatorLease(ctx, cmd)
+}
+
+func (a rootBackendAdapter) ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+	if a.protocol == nil {
+		return rootstate.CoordinatorProtocolState{}, errCoordinatorClosureCommandUnsupported
+	}
+	return a.protocol.ApplyCoordinatorClosure(ctx, cmd)
+}
+
+func (a rootBackendAdapter) Close() error {
+	if a.closer == nil {
+		return nil
+	}
+	return a.closer.Close()
+}
+
+type rootBackendCapabilities struct {
+	tail     bool
+	protocol bool
+}
+
+func adaptRootBackend(root rootBackend) (rootRuntimeBackend, rootBackendCapabilities) {
+	if runtime, ok := root.(rootRuntimeBackend); ok {
+		return runtime, rootBackendCapabilities{tail: true, protocol: true}
+	}
+	adapter := rootBackendAdapter{rootBackend: root}
+	if refresh, ok := root.(rootRefreshBackend); ok {
+		adapter.refresh = refresh
+	}
+	if tail, ok := root.(rootTailBackend); ok {
+		adapter.tail = tail
+	}
+	if leader, ok := root.(rootLeaderBackend); ok {
+		adapter.leader = leader
+	}
+	if protocol, ok := root.(rootCoordinatorProtocolBackend); ok {
+		adapter.protocol = protocol
+	}
+	if closer, ok := root.(rootCloseBackend); ok {
+		adapter.closer = closer
+	}
+	return adapter, rootBackendCapabilities{
+		tail:     adapter.tail != nil,
+		protocol: adapter.protocol != nil,
+	}
 }
 
 // OpenRootStore opens a Coordinator storage backend backed by the metadata root.
 func OpenRootStore(root rootBackend) (*RootStore, error) {
-	store := &RootStore{root: root}
-	if optional, ok := root.(rootOptionalBackend); ok {
-		store.refresh = optional.Refresh
-		store.waitForTail = optional.WaitForTail
-		store.observeTail = optional.ObserveTail
-		store.tailNotify = optional.TailNotify
-		store.observeCommitted = optional.ObserveCommitted
-		store.isLeader = optional.IsLeader
-		store.leaderID = optional.LeaderID
-		store.applyCoordinatorLease = optional.ApplyCoordinatorLease
-		store.applyCoordinatorClosure = optional.ApplyCoordinatorClosure
-	} else {
-		if refresher, ok := root.(interface{ Refresh() error }); ok {
-			store.refresh = refresher.Refresh
-		}
-		if waiter, ok := root.(interface {
-			WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
-		}); ok {
-			store.waitForTail = waiter.WaitForTail
-		}
-		if observer, ok := root.(interface {
-			ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
-		}); ok {
-			store.observeTail = observer.ObserveTail
-		}
-		if notifier, ok := root.(interface{ TailNotify() <-chan struct{} }); ok {
-			store.tailNotify = notifier.TailNotify
-		}
-		if observer, ok := root.(interface {
-			ObserveCommitted() (rootstorage.ObservedCommitted, error)
-		}); ok {
-			store.observeCommitted = observer.ObserveCommitted
-		}
-		if leader, ok := root.(interface {
-			IsLeader() bool
-			LeaderID() uint64
-		}); ok {
-			store.isLeader = leader.IsLeader
-			store.leaderID = leader.LeaderID
-		}
-		if leaseApplier, ok := root.(interface {
-			ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
-		}); ok {
-			store.applyCoordinatorLease = leaseApplier.ApplyCoordinatorLease
-		}
-		if closureApplier, ok := root.(interface {
-			ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
-		}); ok {
-			store.applyCoordinatorClosure = closureApplier.ApplyCoordinatorClosure
-		}
+	adapted, caps := adaptRootBackend(root)
+	store := &RootStore{
+		root:             adapted,
+		supportsTail:     caps.tail,
+		supportsProtocol: caps.protocol,
 	}
 	if err := store.reload(); err != nil {
 		return nil, err
@@ -119,16 +210,9 @@ func OpenRootStore(root rootBackend) (*RootStore, error) {
 // RootStore persists Coordinator truth on top of the metadata root and reconstructs the
 // region catalog by replaying committed root events.
 type RootStore struct {
-	root                    rootBackend
-	refresh                 func() error
-	observeTail             func(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
-	waitForTail             func(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error)
-	tailNotify              func() <-chan struct{}
-	observeCommitted        func() (rootstorage.ObservedCommitted, error)
-	isLeader                func() bool
-	leaderID                func() uint64
-	applyCoordinatorLease   func(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
-	applyCoordinatorClosure func(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
+	root             rootRuntimeBackend
+	supportsTail     bool
+	supportsProtocol bool
 
 	mu       sync.RWMutex
 	snapshot Snapshot
@@ -149,17 +233,17 @@ func (s *RootStore) Refresh() error {
 	if s == nil {
 		return nil
 	}
-	return s.runAndReload(s.refresh)
+	if !s.supportsTail {
+		return s.reload()
+	}
+	return s.runAndReload(s.root.Refresh)
 }
 
 func (s *RootStore) WaitForTail(after rootstorage.TailToken, timeout time.Duration) (rootstorage.TailAdvance, error) {
-	if s == nil || s.root == nil {
+	if s == nil || s.root == nil || !s.supportsTail {
 		return rootstorage.TailAdvance{}, nil
 	}
-	if s.waitForTail == nil {
-		return rootstorage.TailAdvance{}, nil
-	}
-	advance, err := s.waitForTail(after, timeout)
+	advance, err := s.root.WaitForTail(after, timeout)
 	if err != nil {
 		return advance, err
 	}
@@ -171,13 +255,10 @@ func (s *RootStore) WaitForTail(after rootstorage.TailToken, timeout time.Durati
 // the cached rooted snapshot in sync whenever the observed advance requires a
 // state reload or bootstrap install.
 func (s *RootStore) ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error) {
-	if s == nil || s.root == nil {
+	if s == nil || s.root == nil || !s.supportsTail {
 		return rootstorage.TailAdvance{}, nil
 	}
-	if s.observeTail == nil {
-		return rootstorage.TailAdvance{}, nil
-	}
-	advance, err := s.observeTail(after)
+	advance, err := s.root.ObserveTail(after)
 	if err != nil {
 		return advance, err
 	}
@@ -190,40 +271,24 @@ func (s *RootStore) ObserveTail(after rootstorage.TailToken) (rootstorage.TailAd
 // fallback through RootStore so callers no longer have to open-code tail-token
 // loops or manage cache refresh themselves.
 func (s *RootStore) SubscribeTail(after rootstorage.TailToken) *rootstorage.TailSubscription {
-	if s == nil || s.root == nil {
+	if s == nil || s.root == nil || !s.supportsTail {
 		return nil
 	}
-	if s.observeTail != nil {
-		var watch <-chan struct{}
-		if s.tailNotify != nil {
-			watch = s.tailNotify()
-		}
-		return rootstorage.NewWatchedTailSubscription(after, s.ObserveTail, watch, s.WaitForTail)
-	}
-	if s.waitForTail == nil {
-		return nil
-	}
-	return rootstorage.NewTailSubscription(after, s.WaitForTail)
+	return rootstorage.NewWatchedTailSubscription(after, s.ObserveTail, s.root.TailNotify(), s.WaitForTail)
 }
 
 func (s *RootStore) IsLeader() bool {
 	if s == nil || s.root == nil {
 		return true
 	}
-	if s.isLeader != nil {
-		return s.isLeader()
-	}
-	return true
+	return s.root.IsLeader()
 }
 
 func (s *RootStore) LeaderID() uint64 {
 	if s == nil || s.root == nil {
 		return 0
 	}
-	if s.leaderID != nil {
-		return s.leaderID()
-	}
-	return 0
+	return s.root.LeaderID()
 }
 
 // AppendRootEvent persists one explicit rooted metadata event.
@@ -257,11 +322,11 @@ func (s *RootStore) ApplyCoordinatorLease(ctx context.Context, cmd rootproto.Coo
 	if s == nil || s.root == nil {
 		return rootstate.CoordinatorProtocolState{}, nil
 	}
-	if s.applyCoordinatorLease == nil {
+	if !s.supportsProtocol {
 		return rootstate.CoordinatorProtocolState{}, errCoordinatorLeaseCommandUnsupported
 	}
 	return s.applyAndReload(func() (rootstate.CoordinatorProtocolState, error) {
-		return s.applyCoordinatorLease(ctx, cmd)
+		return s.root.ApplyCoordinatorLease(ctx, cmd)
 	})
 }
 
@@ -269,11 +334,11 @@ func (s *RootStore) ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.C
 	if s == nil || s.root == nil {
 		return rootstate.CoordinatorProtocolState{}, nil
 	}
-	if s.applyCoordinatorClosure == nil {
+	if !s.supportsProtocol {
 		return rootstate.CoordinatorProtocolState{}, errCoordinatorClosureCommandUnsupported
 	}
 	return s.applyAndReload(func() (rootstate.CoordinatorProtocolState, error) {
-		return s.applyCoordinatorClosure(ctx, cmd)
+		return s.root.ApplyCoordinatorClosure(ctx, cmd)
 	})
 }
 
@@ -282,18 +347,15 @@ func (s *RootStore) Close() error {
 	if s == nil {
 		return nil
 	}
-	if closer, ok := s.root.(interface{ Close() error }); ok {
-		return closer.Close()
-	}
-	return nil
+	return s.root.Close()
 }
 
 func (s *RootStore) reload() error {
 	if s == nil || s.root == nil {
 		return nil
 	}
-	if s.observeCommitted != nil {
-		observed, err := s.observeCommitted()
+	if s.supportsTail {
+		observed, err := s.root.ObserveCommitted()
 		if err != nil {
 			return err
 		}

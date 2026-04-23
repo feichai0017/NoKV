@@ -131,6 +131,28 @@ func (c *Cluster) LeaderService() (uint64, *coordserver.Service) {
 	return id, c.Services[id]
 }
 
+func (c *Cluster) ConfigureCoordinatorLeases(ttl, renewIn time.Duration) {
+	c.tb.Helper()
+	for id, svc := range c.Services {
+		if svc == nil {
+			continue
+		}
+		svc.ConfigureCoordinatorLease("c"+strconv.FormatUint(id, 10), ttl, renewIn)
+	}
+}
+
+func (c *Cluster) RestartService(nodeID uint64) *coordserver.Service {
+	c.tb.Helper()
+	store, ok := c.RootStores[nodeID]
+	require.True(c.tb, ok, "missing root store %d", nodeID)
+	cluster := catalog.NewCluster()
+	bootstrap, err := rootview.Bootstrap(store, cluster.PublishRegionDescriptor, 1, 1)
+	require.NoError(c.tb, err)
+	svc := coordserver.NewService(cluster, idalloc.NewIDAllocator(bootstrap.IDStart), tso.NewAllocator(bootstrap.TSStart), store)
+	c.Services[nodeID] = svc
+	return svc
+}
+
 func (c *Cluster) Campaign(nodeID uint64) {
 	c.tb.Helper()
 	driver, ok := c.Drivers[nodeID]

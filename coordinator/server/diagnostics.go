@@ -169,6 +169,7 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 			},
 		},
 		"closure_witness": diagnosticsClosureWitness(report.ClosureWitness),
+		"ccc_metrics":     s.cccMetrics.snapshot(),
 	}
 }
 

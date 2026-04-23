@@ -710,6 +710,87 @@ A node may be:
 
 That distinction should remain sharp.
 
+### 8.4 Current coordinator contract
+
+The current implementation already enforces a concrete degraded-mode contract at
+the Coordinator RPC boundary.
+
+#### Metadata reads (`GetRegionByKey`)
+
+- `Freshness=BEST_EFFORT`
+  - serves from the local materialized catalog even when `meta/root` is
+    currently unavailable
+  - returns `degraded_mode=ROOT_UNAVAILABLE` when the rooted snapshot cannot be
+    reloaded
+  - returns `degraded_mode=ROOT_LAGGING` when the local catalog trails rooted
+    truth
+- `Freshness=BOUNDED`
+  - rejects when `meta/root` is unavailable
+  - rejects when `root_lag > max_root_lag`
+  - rejects when catch-up is still `BOOTSTRAP_REQUIRED`
+- `Freshness=STRONG`
+  - rejects on followers
+  - rejects whenever `root_lag > 0`
+  - rejects when `meta/root` is unavailable
+
+In all cases, successful replies carry the current answerability witness:
+
+- `served_root_token`
+- `current_root_token`
+- `root_lag`
+- `catch_up_state`
+- `degraded_mode`
+- `serving_class`
+- `sync_health`
+
+#### Duty-gated writes (`AllocID`, `TSO`, scheduler decisions)
+
+These do **not** have a degraded fallback.
+
+- the local coordinator must first campaign / renew the rooted lease
+- the rooted lease must still be active for the local holder
+- the rooted generation must not already be sealed
+- the rooted duty mask must admit the requested action
+
+If any of those fail, the request is rejected instead of falling back to stale
+local state. This is the current boundary between:
+
+- read-path degradation
+- write-path fail-stop admission
+
+#### Lifecycle mutations (`Seal`, `Confirm`, `Close`, `Reattach`)
+
+Lifecycle mutations are stricter than hot-path duty admission:
+
+- they always re-read rooted state from storage before mutating
+- they reject any stale-holder / expired-lease / sealed-generation view
+- they treat closure completeness as a rooted safety condition, not a best-effort hint
+
+That is why seal / confirm / close / reattach do not use the cached mirror
+admission path.
+
+### 8.5 Operational diagnostics
+
+`DiagnosticsSnapshot()` now exports both:
+
+- the current degraded serving state (`root`, `lease`, `audit`, `closure_witness`)
+- cumulative CCC counters under `ccc_metrics`
+
+`ccc_metrics` is grouped into:
+
+- `lease_generation_transitions_total`
+- `closure_stage_transitions_total`
+- `pre_action_gate_rejections_total`
+- `ali_violations_total`
+
+The `ali_violations_total` buckets map to the four Authority Lineage
+Invariants:
+
+- `authority_uniqueness`
+- `successor_coverage`
+- `post_seal_inadmissibility`
+- `closure_completeness`
+
 ---
 
 ## 9. API Direction

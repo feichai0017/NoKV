@@ -14,8 +14,10 @@ import (
 type debugSnapshotFunc func() any
 
 var (
-	coordinatorExpvarOnce     sync.Once
-	coordinatorExpvarProvider atomic.Value
+	coordinatorExpvarOnce        sync.Once
+	coordinatorExpvarProvider    atomic.Value
+	coordinatorCCCExpvarOnce     sync.Once
+	coordinatorCCCExpvarProvider atomic.Value
 )
 
 func installCoordinatorExpvar(svc *coordserver.Service) {
@@ -27,9 +29,25 @@ func installCoordinatorExpvar(svc *coordserver.Service) {
 			"state": svc.DiagnosticsSnapshot(),
 		}
 	}))
+	coordinatorCCCExpvarProvider.Store(debugSnapshotFunc(func() any {
+		snapshot := svc.DiagnosticsSnapshot()
+		if metrics, ok := snapshot["ccc_metrics"]; ok {
+			return metrics
+		}
+		return map[string]any{}
+	}))
 	coordinatorExpvarOnce.Do(func() {
 		expvar.Publish("nokv_coordinator", expvar.Func(func() any {
 			provider, _ := coordinatorExpvarProvider.Load().(debugSnapshotFunc)
+			if provider == nil {
+				return map[string]any{}
+			}
+			return provider()
+		}))
+	})
+	coordinatorCCCExpvarOnce.Do(func() {
+		expvar.Publish("nokv_coordinator_ccc", expvar.Func(func() any {
+			provider, _ := coordinatorCCCExpvarProvider.Load().(debugSnapshotFunc)
 			if provider == nil {
 				return map[string]any{}
 			}

@@ -288,8 +288,8 @@ func TestRemoteConfigAndNilStoreHelpers(t *testing.T) {
 	require.ErrorContains(t, (RemoteRootConfig{Targets: map[uint64]string{1: "   "}}).Validate(), "missing remote root address")
 	require.NoError(t, (RemoteRootConfig{Targets: map[uint64]string{1: "127.0.0.1:1"}}).Validate())
 
-	require.False(t, (remoteRootBackend{}).IsLeader())
-	require.True(t, (remoteRootBackend{Client: &rootclient.Client{}}).IsLeader())
+	require.False(t, (&remoteRootBackend{}).IsLeader())
+	require.True(t, (&remoteRootBackend{Client: &rootclient.Client{}}).IsLeader())
 
 	var store *RootStore
 	snapshot, err := store.Load()
