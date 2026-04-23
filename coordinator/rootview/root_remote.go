@@ -36,7 +36,7 @@ func OpenRootRemoteStore(cfg RemoteRootConfig) (*RootStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	store, err := OpenRootStore(remoteRootBackend{Client: client})
+	store, err := OpenRootStore(&remoteRootBackend{Client: client})
 	if err != nil {
 		_ = client.Close()
 		return nil, err
@@ -63,7 +63,7 @@ type remoteRootBackend struct {
 	*rootclient.Client
 }
 
-func (b remoteRootBackend) IsLeader() bool {
+func (b *remoteRootBackend) IsLeader() bool {
 	// A remote coordinator is not co-located with one root raft peer. Writes are
 	// routed by the remote client to the current metadata-root leader, so the
 	// coordinator-side RootStorage should not reject writes based on whichever

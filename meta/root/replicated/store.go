@@ -8,6 +8,7 @@ import (
 
 	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootfailpoints "github.com/feichai0017/NoKV/meta/root/failpoints"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -221,6 +222,9 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 	if err := ctx.Err(); err != nil {
 		return rootstate.CommitInfo{}, err
 	}
+	if err := rootfailpoints.InjectAfterAppendCommittedBeforeCheckpoint(); err != nil {
+		return rootstate.CommitInfo{}, err
+	}
 	if err := s.driver.SaveCheckpoint(rootstorage.Checkpoint{
 		Snapshot:   rootstate.CloneSnapshot(snapshot),
 		TailOffset: logEnd,
@@ -240,6 +244,9 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 func (s *Store) ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
 	if s == nil {
 		return rootstate.CoordinatorProtocolState{}, nil
+	}
+	if err := rootfailpoints.InjectBeforeApplyCoordinatorLease(); err != nil {
+		return rootstate.CoordinatorProtocolState{}, err
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -304,6 +311,9 @@ func (s *Store) ApplyCoordinatorLease(ctx context.Context, cmd rootproto.Coordin
 func (s *Store) ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
 	if s == nil {
 		return rootstate.CoordinatorProtocolState{}, nil
+	}
+	if err := rootfailpoints.InjectBeforeApplyCoordinatorClosure(); err != nil {
+		return rootstate.CoordinatorProtocolState{}, err
 	}
 	if ctx == nil {
 		ctx = context.Background()
