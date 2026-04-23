@@ -52,7 +52,7 @@ type Snapshot struct {
 	Allocator           AllocatorState
 	Tenure              rootstate.Tenure
 	Legacy              rootstate.Legacy
-	Transit             rootstate.Transit
+	Handover            rootstate.Handover
 }
 
 func CloneSnapshot(snapshot Snapshot) Snapshot {
@@ -66,7 +66,7 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 		Allocator:           snapshot.Allocator,
 		Tenure:              snapshot.Tenure,
 		Legacy:              snapshot.Legacy,
-		Transit:             snapshot.Transit,
+		Handover:            snapshot.Handover,
 	}
 }
 
@@ -85,9 +85,9 @@ func SnapshotFromRoot(snapshot rootstate.Snapshot) Snapshot {
 			IDCurrent: snapshot.State.IDFence,
 			TSCurrent: snapshot.State.TSOFence,
 		},
-		Tenure:  snapshot.State.Tenure,
-		Legacy:  snapshot.State.Legacy,
-		Transit: snapshot.State.Transit,
+		Tenure:   snapshot.State.Tenure,
+		Legacy:   snapshot.State.Legacy,
+		Handover: snapshot.State.Handover,
 	}
 }
 

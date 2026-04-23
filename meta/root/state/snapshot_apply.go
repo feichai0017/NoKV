@@ -35,8 +35,8 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 		applyTenureToState(&snapshot.State, cursor, event)
 	case rootevent.KindLegacy:
 		applyLegacyToState(&snapshot.State, cursor, event)
-	case rootevent.KindTransit:
-		applyTransitToState(&snapshot.State, cursor, event)
+	case rootevent.KindHandover:
+		applyHandoverToState(&snapshot.State, cursor, event)
 	case rootevent.KindRegionBootstrap, rootevent.KindRegionDescriptorPublished:
 		snapshot.State.ClusterEpoch++
 		desc := event.RegionDescriptor.Descriptor.Clone()

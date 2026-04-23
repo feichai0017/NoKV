@@ -40,8 +40,8 @@ func releaseLease(store *Store, holderID string, nowUnixNano int64, idFence, tso
 }
 
 func sealLease(store *Store, holderID string, nowUnixNano int64, frontiers rootproto.MandateFrontiers) (rootstate.Legacy, error) {
-	state, err := store.ApplyTransit(context.Background(), rootproto.TransitCommand{
-		Kind:        rootproto.TransitActSeal,
+	state, err := store.ApplyHandover(context.Background(), rootproto.HandoverCommand{
+		Kind:        rootproto.HandoverActSeal,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 		Frontiers:   frontiers,
@@ -49,31 +49,31 @@ func sealLease(store *Store, holderID string, nowUnixNano int64, frontiers rootp
 	return state.Legacy, err
 }
 
-func confirmClosure(store *Store, holderID string, nowUnixNano int64) (rootstate.Transit, error) {
-	state, err := store.ApplyTransit(context.Background(), rootproto.TransitCommand{
-		Kind:        rootproto.TransitActConfirm,
+func confirmHandover(store *Store, holderID string, nowUnixNano int64) (rootstate.Handover, error) {
+	state, err := store.ApplyHandover(context.Background(), rootproto.HandoverCommand{
+		Kind:        rootproto.HandoverActConfirm,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 	})
-	return state.Transit, err
+	return state.Handover, err
 }
 
-func closeClosure(store *Store, holderID string, nowUnixNano int64) (rootstate.Transit, error) {
-	state, err := store.ApplyTransit(context.Background(), rootproto.TransitCommand{
-		Kind:        rootproto.TransitActClose,
+func closeHandover(store *Store, holderID string, nowUnixNano int64) (rootstate.Handover, error) {
+	state, err := store.ApplyHandover(context.Background(), rootproto.HandoverCommand{
+		Kind:        rootproto.HandoverActClose,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 	})
-	return state.Transit, err
+	return state.Handover, err
 }
 
-func reattachClosure(store *Store, holderID string, nowUnixNano int64) (rootstate.Transit, error) {
-	state, err := store.ApplyTransit(context.Background(), rootproto.TransitCommand{
-		Kind:        rootproto.TransitActReattach,
+func reattachHandover(store *Store, holderID string, nowUnixNano int64) (rootstate.Handover, error) {
+	state, err := store.ApplyHandover(context.Background(), rootproto.HandoverCommand{
+		Kind:        rootproto.HandoverActReattach,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 	})
-	return state.Transit, err
+	return state.Handover, err
 }
 
 func TestReplicatedStoreAppendAndReopen(t *testing.T) {
@@ -324,7 +324,7 @@ func TestReplicatedStoreCampaignTenure(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
-func TestReplicatedStoreConfirmTransit(t *testing.T) {
+func TestReplicatedStoreConfirmHandover(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 	desc := testDescriptor(1, []byte("a"), []byte("z"))
 	desc.RootEpoch = 56
@@ -338,18 +338,18 @@ func TestReplicatedStoreConfirmTransit(t *testing.T) {
 	lease, err := campaignLease(stores[leaderID], "c1", 1_200, 250, 12, 34, 56, rootstate.DigestOfLegacy(seal))
 	require.NoError(t, err)
 
-	closure, err := confirmClosure(stores[leaderID], "c1", 260)
+	handover, err := confirmHandover(stores[leaderID], "c1", 260)
 	require.NoError(t, err)
-	require.Equal(t, seal.Epoch, closure.LegacyEpoch)
-	require.Equal(t, lease.Epoch, closure.SuccessorEpoch)
-	require.Equal(t, rootstate.DigestOfLegacy(seal), closure.LegacyDigest)
-	require.Equal(t, rootproto.TransitStageConfirmed, closure.Stage)
+	require.Equal(t, seal.Epoch, handover.LegacyEpoch)
+	require.Equal(t, lease.Epoch, handover.SuccessorEpoch)
+	require.Equal(t, rootstate.DigestOfLegacy(seal), handover.LegacyDigest)
+	require.Equal(t, rootproto.HandoverStageConfirmed, handover.Stage)
 	current, err := stores[leaderID].Current()
 	require.NoError(t, err)
-	require.Equal(t, closure, current.Transit)
+	require.Equal(t, handover, current.Handover)
 }
 
-func TestReplicatedStoreReattachTransit(t *testing.T) {
+func TestReplicatedStoreReattachHandover(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 	desc := testDescriptor(1, []byte("a"), []byte("z"))
 	desc.RootEpoch = 56
@@ -363,24 +363,24 @@ func TestReplicatedStoreReattachTransit(t *testing.T) {
 	_, err = campaignLease(stores[leaderID], "c1", 1_200, 250, 12, 34, 56, rootstate.DigestOfLegacy(seal))
 	require.NoError(t, err)
 
-	_, err = reattachClosure(stores[leaderID], "c1", 255)
-	require.ErrorIs(t, err, rootstate.ErrClosure)
+	_, err = reattachHandover(stores[leaderID], "c1", 255)
+	require.ErrorIs(t, err, rootstate.ErrFinality)
 
-	confirmed, err := confirmClosure(stores[leaderID], "c1", 260)
+	confirmed, err := confirmHandover(stores[leaderID], "c1", 260)
 	require.NoError(t, err)
-	closed, err := closeClosure(stores[leaderID], "c1", 265)
+	closed, err := closeHandover(stores[leaderID], "c1", 265)
 	require.NoError(t, err)
-	reattached, err := reattachClosure(stores[leaderID], "c1", 270)
+	reattached, err := reattachHandover(stores[leaderID], "c1", 270)
 	require.NoError(t, err)
 	require.Equal(t, closed.SuccessorEpoch, reattached.SuccessorEpoch)
 	require.Equal(t, closed.LegacyEpoch, reattached.LegacyEpoch)
 	require.Equal(t, closed.LegacyDigest, reattached.LegacyDigest)
-	require.Equal(t, rootproto.TransitStageReattached, reattached.Stage)
+	require.Equal(t, rootproto.HandoverStageReattached, reattached.Stage)
 
 	current, err := stores[leaderID].Current()
 	require.NoError(t, err)
-	require.Equal(t, reattached, current.Transit)
-	require.Equal(t, rootproto.TransitStageConfirmed, confirmed.Stage)
+	require.Equal(t, reattached, current.Handover)
+	require.Equal(t, rootproto.HandoverStageConfirmed, confirmed.Stage)
 }
 
 func TestReplicatedStoreTenureFenceSurvivesLeaderChange(t *testing.T) {

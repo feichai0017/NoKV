@@ -235,13 +235,13 @@ func (c *Client) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (
 	return protocolState, nil
 }
 
-func (c *Client) ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error) {
-	if !validTransitAct(cmd.Kind) {
-		return rootstate.SuccessionState{}, rootstate.ErrClosure
+func (c *Client) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
+	if !validHandoverAct(cmd.Kind) {
+		return rootstate.SuccessionState{}, rootstate.ErrFinality
 	}
-	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyTransitResponse, error) {
-		return rpc.ApplyTransit(ctx, &metapb.MetadataRootApplyTransitRequest{
-			Command: metawire.RootTransitCommandToProto(cmd),
+	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyHandoverResponse, error) {
+		return rpc.ApplyHandover(ctx, &metapb.MetadataRootApplyHandoverRequest{
+			Command: metawire.RootHandoverCommandToProto(cmd),
 		})
 	})
 	if err != nil {
@@ -426,12 +426,12 @@ func validTenureAct(kind rootproto.TenureAct) bool {
 	}
 }
 
-func validTransitAct(kind rootproto.TransitAct) bool {
+func validHandoverAct(kind rootproto.HandoverAct) bool {
 	switch kind {
-	case rootproto.TransitActSeal,
-		rootproto.TransitActConfirm,
-		rootproto.TransitActClose,
-		rootproto.TransitActReattach:
+	case rootproto.HandoverActSeal,
+		rootproto.HandoverActConfirm,
+		rootproto.HandoverActClose,
+		rootproto.HandoverActReattach:
 		return true
 	default:
 		return false

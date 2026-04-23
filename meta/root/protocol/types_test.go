@@ -104,7 +104,7 @@ func TestAuthorityHandoffRecordValidation(t *testing.T) {
 	})
 }
 
-func TestCoverageAndTransitWitnessHelpers(t *testing.T) {
+func TestCoverageAndHandoverWitnessHelpers(t *testing.T) {
 	coverage := InheritanceStatus{
 		Checks: []InheritanceCoverage{
 			{
@@ -142,7 +142,7 @@ func TestCoverageAndTransitWitnessHelpers(t *testing.T) {
 			{Mandate: MandateGetRegionByKey, Covered: true},
 		},
 	}
-	witness := TransitWitness{
+	witness := HandoverWitness{
 		LegacyEpoch:               9,
 		LegacyDigest:              "seal",
 		SuccessorPresent:          true,
@@ -150,17 +150,17 @@ func TestCoverageAndTransitWitnessHelpers(t *testing.T) {
 		SuccessorLineageSatisfied: true,
 		SealedGenerationRetired:   true,
 	}
-	require.True(t, witness.ClosureSatisfied())
+	require.True(t, witness.FinalitySatisfied())
 	require.True(t, witness.SuccessorMonotoneCovered())
 	require.True(t, witness.SuccessorDescriptorCovered())
 	require.True(t, witness.ReplyGenerationLegal(0))
 	require.False(t, witness.ReplyGenerationLegal(ContinuationWitnessGenerationSuppressed))
 	require.False(t, witness.ReplyGenerationLegal(witness.LegacyEpoch))
 	require.True(t, witness.ReplyGenerationLegal(witness.LegacyEpoch+1))
-	require.Equal(t, TransitStageClosed, witness.WithStage(TransitStageClosed).Stage)
+	require.Equal(t, HandoverStageClosed, witness.WithStage(HandoverStageClosed).Stage)
 
 	witness.SuccessorPresent = false
-	require.False(t, witness.ClosureSatisfied())
+	require.False(t, witness.FinalitySatisfied())
 	require.False(t, witness.SuccessorMonotoneCovered())
 	require.False(t, witness.SuccessorDescriptorCovered())
 
@@ -169,8 +169,8 @@ func TestCoverageAndTransitWitnessHelpers(t *testing.T) {
 	suppressed := NewSuppressedContinuationWitness(MandateTSO)
 	require.Equal(t, ContinuationWitnessGenerationSuppressed, suppressed.Epoch)
 
-	require.Equal(t, "pending_confirm", TransitStagePendingConfirm.String())
-	require.Equal(t, "unknown", TransitStage(99).String())
-	require.True(t, TransitStageAtLeast(TransitStageClosed, TransitStageConfirmed))
-	require.False(t, TransitStageAtLeast(TransitStageConfirmed, TransitStageClosed))
+	require.Equal(t, "pending_confirm", HandoverStagePendingConfirm.String())
+	require.Equal(t, "unknown", HandoverStage(99).String())
+	require.True(t, HandoverStageAtLeast(HandoverStageClosed, HandoverStageConfirmed))
+	require.False(t, HandoverStageAtLeast(HandoverStageConfirmed, HandoverStageClosed))
 }

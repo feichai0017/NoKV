@@ -28,7 +28,7 @@ func RootStateToProto(state rootstate.State) *metapb.RootState {
 		TsoFence:        state.TSOFence,
 		Tenure:          RootTenureToProto(state.Tenure),
 		Legacy:          RootLegacyToProto(state.Legacy),
-		Transit:         RootTransitToProto(state.Transit),
+		Handover:        RootHandoverToProto(state.Handover),
 	}
 }
 
@@ -44,7 +44,7 @@ func RootStateFromProto(pbState *metapb.RootState) rootstate.State {
 		TSOFence:        pbState.TsoFence,
 		Tenure:          RootTenureFromProto(pbState.GetTenure()),
 		Legacy:          RootLegacyFromProto(pbState.GetLegacy()),
-		Transit:         RootTransitFromProto(pbState.GetTransit()),
+		Handover:        RootHandoverFromProto(pbState.GetHandover()),
 	}
 }
 
@@ -102,35 +102,35 @@ func RootLegacyFromProto(seal *metapb.RootLegacy) rootstate.Legacy {
 	}
 }
 
-func RootTransitToProto(closure rootstate.Transit) *metapb.RootTransit {
-	if !closure.Present() {
+func RootHandoverToProto(handover rootstate.Handover) *metapb.RootHandover {
+	if !handover.Present() {
 		return nil
 	}
-	return &metapb.RootTransit{
-		HolderId:       closure.HolderID,
-		LegacyEpoch:    closure.LegacyEpoch,
-		SuccessorEpoch: closure.SuccessorEpoch,
-		LegacyDigest:   closure.LegacyDigest,
-		Stage:          rootTransitStageToProto(closure.Stage),
-		ConfirmedAt:    RootCursorToProto(closure.ConfirmedAt),
-		ClosedAt:       RootCursorToProto(closure.ClosedAt),
-		ReattachedAt:   RootCursorToProto(closure.ReattachedAt),
+	return &metapb.RootHandover{
+		HolderId:       handover.HolderID,
+		LegacyEpoch:    handover.LegacyEpoch,
+		SuccessorEpoch: handover.SuccessorEpoch,
+		LegacyDigest:   handover.LegacyDigest,
+		Stage:          rootHandoverStageToProto(handover.Stage),
+		ConfirmedAt:    RootCursorToProto(handover.ConfirmedAt),
+		ClosedAt:       RootCursorToProto(handover.ClosedAt),
+		ReattachedAt:   RootCursorToProto(handover.ReattachedAt),
 	}
 }
 
-func RootTransitFromProto(closure *metapb.RootTransit) rootstate.Transit {
-	if closure == nil {
-		return rootstate.Transit{}
+func RootHandoverFromProto(handover *metapb.RootHandover) rootstate.Handover {
+	if handover == nil {
+		return rootstate.Handover{}
 	}
-	return rootstate.Transit{
-		HolderID:       closure.GetHolderId(),
-		LegacyEpoch:    closure.GetLegacyEpoch(),
-		SuccessorEpoch: closure.GetSuccessorEpoch(),
-		LegacyDigest:   closure.GetLegacyDigest(),
-		Stage:          rootTransitStageFromProto(closure.GetStage()),
-		ConfirmedAt:    RootCursorFromProto(closure.GetConfirmedAt()),
-		ClosedAt:       RootCursorFromProto(closure.GetClosedAt()),
-		ReattachedAt:   RootCursorFromProto(closure.GetReattachedAt()),
+	return rootstate.Handover{
+		HolderID:       handover.GetHolderId(),
+		LegacyEpoch:    handover.GetLegacyEpoch(),
+		SuccessorEpoch: handover.GetSuccessorEpoch(),
+		LegacyDigest:   handover.GetLegacyDigest(),
+		Stage:          rootHandoverStageFromProto(handover.GetStage()),
+		ConfirmedAt:    RootCursorFromProto(handover.GetConfirmedAt()),
+		ClosedAt:       RootCursorFromProto(handover.GetClosedAt()),
+		ReattachedAt:   RootCursorFromProto(handover.GetReattachedAt()),
 	}
 }
 
@@ -162,9 +162,9 @@ func RootMandateFrontiersFromProto(frontiers []*metapb.RootMandateFrontier) root
 
 func RootSuccessionStateToProto(state rootstate.SuccessionState) *metapb.RootSuccessionState {
 	return &metapb.RootSuccessionState{
-		Tenure:  RootTenureToProto(state.Tenure),
-		Legacy:  RootLegacyToProto(state.Legacy),
-		Transit: RootTransitToProto(state.Transit),
+		Tenure:   RootTenureToProto(state.Tenure),
+		Legacy:   RootLegacyToProto(state.Legacy),
+		Handover: RootHandoverToProto(state.Handover),
 	}
 }
 
@@ -173,9 +173,9 @@ func RootSuccessionStateFromProto(state *metapb.RootSuccessionState) rootstate.S
 		return rootstate.SuccessionState{}
 	}
 	return rootstate.SuccessionState{
-		Tenure:  RootTenureFromProto(state.GetTenure()),
-		Legacy:  RootLegacyFromProto(state.GetLegacy()),
-		Transit: RootTransitFromProto(state.GetTransit()),
+		Tenure:   RootTenureFromProto(state.GetTenure()),
+		Legacy:   RootLegacyFromProto(state.GetLegacy()),
+		Handover: RootHandoverFromProto(state.GetHandover()),
 	}
 }
 
@@ -204,21 +204,21 @@ func RootTenureCommandFromProto(cmd *metapb.RootTenureCommand) rootproto.TenureC
 	}
 }
 
-func RootTransitCommandToProto(cmd rootproto.TransitCommand) *metapb.RootTransitCommand {
-	return &metapb.RootTransitCommand{
-		Kind:        rootTransitActToProto(cmd.Kind),
+func RootHandoverCommandToProto(cmd rootproto.HandoverCommand) *metapb.RootHandoverCommand {
+	return &metapb.RootHandoverCommand{
+		Kind:        rootHandoverActToProto(cmd.Kind),
 		HolderId:    cmd.HolderID,
 		NowUnixNano: cmd.NowUnixNano,
 		Frontiers:   RootMandateFrontiersToProto(cmd.Frontiers),
 	}
 }
 
-func RootTransitCommandFromProto(cmd *metapb.RootTransitCommand) rootproto.TransitCommand {
+func RootHandoverCommandFromProto(cmd *metapb.RootHandoverCommand) rootproto.HandoverCommand {
 	if cmd == nil {
-		return rootproto.TransitCommand{}
+		return rootproto.HandoverCommand{}
 	}
-	return rootproto.TransitCommand{
-		Kind:        rootTransitActFromProto(cmd.GetKind()),
+	return rootproto.HandoverCommand{
+		Kind:        rootHandoverActFromProto(cmd.GetKind()),
 		HolderID:    cmd.GetHolderId(),
 		NowUnixNano: cmd.GetNowUnixNano(),
 		Frontiers:   RootMandateFrontiersFromProto(cmd.GetFrontiers()),
@@ -281,48 +281,48 @@ func rootEventLegacyFromProto(seal *metapb.RootLegacy) *rootevent.Legacy {
 	}
 }
 
-func rootEventTransitToProto(closure *rootevent.Transit) *metapb.RootTransit {
-	if closure == nil {
+func rootEventHandoverToProto(handover *rootevent.Handover) *metapb.RootHandover {
+	if handover == nil {
 		return nil
 	}
-	return &metapb.RootTransit{
-		HolderId:       closure.HolderID,
-		LegacyEpoch:    closure.LegacyEpoch,
-		SuccessorEpoch: closure.SuccessorEpoch,
-		LegacyDigest:   closure.LegacyDigest,
-		Stage:          rootTransitStageToProto(closure.Stage),
-		ConfirmedAt:    RootCursorToProto(closure.ConfirmedAt),
-		ClosedAt:       RootCursorToProto(closure.ClosedAt),
-		ReattachedAt:   RootCursorToProto(closure.ReattachedAt),
+	return &metapb.RootHandover{
+		HolderId:       handover.HolderID,
+		LegacyEpoch:    handover.LegacyEpoch,
+		SuccessorEpoch: handover.SuccessorEpoch,
+		LegacyDigest:   handover.LegacyDigest,
+		Stage:          rootHandoverStageToProto(handover.Stage),
+		ConfirmedAt:    RootCursorToProto(handover.ConfirmedAt),
+		ClosedAt:       RootCursorToProto(handover.ClosedAt),
+		ReattachedAt:   RootCursorToProto(handover.ReattachedAt),
 	}
 }
 
-func rootEventTransitFromProto(closure *metapb.RootTransit) *rootevent.Transit {
-	if closure == nil {
+func rootEventHandoverFromProto(handover *metapb.RootHandover) *rootevent.Handover {
+	if handover == nil {
 		return nil
 	}
-	return &rootevent.Transit{
-		HolderID:       closure.GetHolderId(),
-		LegacyEpoch:    closure.GetLegacyEpoch(),
-		SuccessorEpoch: closure.GetSuccessorEpoch(),
-		LegacyDigest:   closure.GetLegacyDigest(),
-		Stage:          rootTransitStageFromProto(closure.GetStage()),
-		ConfirmedAt:    RootCursorFromProto(closure.GetConfirmedAt()),
-		ClosedAt:       RootCursorFromProto(closure.GetClosedAt()),
-		ReattachedAt:   RootCursorFromProto(closure.GetReattachedAt()),
+	return &rootevent.Handover{
+		HolderID:       handover.GetHolderId(),
+		LegacyEpoch:    handover.GetLegacyEpoch(),
+		SuccessorEpoch: handover.GetSuccessorEpoch(),
+		LegacyDigest:   handover.GetLegacyDigest(),
+		Stage:          rootHandoverStageFromProto(handover.GetStage()),
+		ConfirmedAt:    RootCursorFromProto(handover.GetConfirmedAt()),
+		ClosedAt:       RootCursorFromProto(handover.GetClosedAt()),
+		ReattachedAt:   RootCursorFromProto(handover.GetReattachedAt()),
 	}
 }
 
-func rootTransitStageToProto(stage rootproto.TransitStage) metapb.RootTransitStage {
+func rootHandoverStageToProto(stage rootproto.HandoverStage) metapb.RootHandoverStage {
 	switch stage {
-	case rootproto.TransitStageConfirmed:
-		return metapb.RootTransitStage_ROOT_TRANSIT_STAGE_CONFIRMED
-	case rootproto.TransitStageClosed:
-		return metapb.RootTransitStage_ROOT_TRANSIT_STAGE_CLOSED
-	case rootproto.TransitStageReattached:
-		return metapb.RootTransitStage_ROOT_TRANSIT_STAGE_REATTACHED
+	case rootproto.HandoverStageConfirmed:
+		return metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_CONFIRMED
+	case rootproto.HandoverStageClosed:
+		return metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_CLOSED
+	case rootproto.HandoverStageReattached:
+		return metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_REATTACHED
 	default:
-		return metapb.RootTransitStage_ROOT_TRANSIT_STAGE_PENDING_CONFIRM
+		return metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_PENDING_CONFIRM
 	}
 }
 
@@ -348,46 +348,46 @@ func rootTenureActFromProto(kind metapb.RootTenureAct) rootproto.TenureAct {
 	}
 }
 
-func rootTransitActToProto(kind rootproto.TransitAct) metapb.RootTransitAct {
+func rootHandoverActToProto(kind rootproto.HandoverAct) metapb.RootHandoverAct {
 	switch kind {
-	case rootproto.TransitActSeal:
-		return metapb.RootTransitAct_ROOT_TRANSIT_ACT_SEAL
-	case rootproto.TransitActConfirm:
-		return metapb.RootTransitAct_ROOT_TRANSIT_ACT_CONFIRM
-	case rootproto.TransitActClose:
-		return metapb.RootTransitAct_ROOT_TRANSIT_ACT_CLOSE
-	case rootproto.TransitActReattach:
-		return metapb.RootTransitAct_ROOT_TRANSIT_ACT_REATTACH
+	case rootproto.HandoverActSeal:
+		return metapb.RootHandoverAct_ROOT_HANDOVER_ACT_SEAL
+	case rootproto.HandoverActConfirm:
+		return metapb.RootHandoverAct_ROOT_HANDOVER_ACT_CONFIRM
+	case rootproto.HandoverActClose:
+		return metapb.RootHandoverAct_ROOT_HANDOVER_ACT_CLOSE
+	case rootproto.HandoverActReattach:
+		return metapb.RootHandoverAct_ROOT_HANDOVER_ACT_REATTACH
 	default:
-		return metapb.RootTransitAct_ROOT_TRANSIT_ACT_UNSPECIFIED
+		return metapb.RootHandoverAct_ROOT_HANDOVER_ACT_UNSPECIFIED
 	}
 }
 
-func rootTransitActFromProto(kind metapb.RootTransitAct) rootproto.TransitAct {
+func rootHandoverActFromProto(kind metapb.RootHandoverAct) rootproto.HandoverAct {
 	switch kind {
-	case metapb.RootTransitAct_ROOT_TRANSIT_ACT_SEAL:
-		return rootproto.TransitActSeal
-	case metapb.RootTransitAct_ROOT_TRANSIT_ACT_CONFIRM:
-		return rootproto.TransitActConfirm
-	case metapb.RootTransitAct_ROOT_TRANSIT_ACT_CLOSE:
-		return rootproto.TransitActClose
-	case metapb.RootTransitAct_ROOT_TRANSIT_ACT_REATTACH:
-		return rootproto.TransitActReattach
+	case metapb.RootHandoverAct_ROOT_HANDOVER_ACT_SEAL:
+		return rootproto.HandoverActSeal
+	case metapb.RootHandoverAct_ROOT_HANDOVER_ACT_CONFIRM:
+		return rootproto.HandoverActConfirm
+	case metapb.RootHandoverAct_ROOT_HANDOVER_ACT_CLOSE:
+		return rootproto.HandoverActClose
+	case metapb.RootHandoverAct_ROOT_HANDOVER_ACT_REATTACH:
+		return rootproto.HandoverActReattach
 	default:
-		return rootproto.TransitActUnknown
+		return rootproto.HandoverActUnknown
 	}
 }
 
-func rootTransitStageFromProto(stage metapb.RootTransitStage) rootproto.TransitStage {
+func rootHandoverStageFromProto(stage metapb.RootHandoverStage) rootproto.HandoverStage {
 	switch stage {
-	case metapb.RootTransitStage_ROOT_TRANSIT_STAGE_CONFIRMED:
-		return rootproto.TransitStageConfirmed
-	case metapb.RootTransitStage_ROOT_TRANSIT_STAGE_CLOSED:
-		return rootproto.TransitStageClosed
-	case metapb.RootTransitStage_ROOT_TRANSIT_STAGE_REATTACHED:
-		return rootproto.TransitStageReattached
+	case metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_CONFIRMED:
+		return rootproto.HandoverStageConfirmed
+	case metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_CLOSED:
+		return rootproto.HandoverStageClosed
+	case metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_REATTACHED:
+		return rootproto.HandoverStageReattached
 	default:
-		return rootproto.TransitStagePendingConfirm
+		return rootproto.HandoverStagePendingConfirm
 	}
 }
 
@@ -560,8 +560,8 @@ func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 		pbEvent.Payload = &metapb.RootEvent_Tenure{Tenure: rootEventTenureToProto(event.Tenure)}
 	case event.Legacy != nil:
 		pbEvent.Payload = &metapb.RootEvent_Legacy{Legacy: rootEventLegacyToProto(event.Legacy)}
-	case event.Transit != nil:
-		pbEvent.Payload = &metapb.RootEvent_Transit{Transit: rootEventTransitToProto(event.Transit)}
+	case event.Handover != nil:
+		pbEvent.Payload = &metapb.RootEvent_Handover{Handover: rootEventHandoverToProto(event.Handover)}
 	case event.RegionDescriptor != nil:
 		pbEvent.Payload = &metapb.RootEvent_RegionDescriptor{RegionDescriptor: &metapb.RootRegionDescriptor{Descriptor_: DescriptorToProto(event.RegionDescriptor.Descriptor)}}
 	case event.RegionRemoval != nil:
@@ -611,8 +611,8 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 	if body := pbEvent.GetLegacy(); body != nil {
 		event.Legacy = rootEventLegacyFromProto(body)
 	}
-	if body := pbEvent.GetTransit(); body != nil {
-		event.Transit = rootEventTransitFromProto(body)
+	if body := pbEvent.GetHandover(); body != nil {
+		event.Handover = rootEventHandoverFromProto(body)
 	}
 	if body := pbEvent.GetRegionDescriptor(); body != nil {
 		event.RegionDescriptor = &rootevent.RegionDescriptorRecord{Descriptor: DescriptorFromProto(body.GetDescriptor_())}
@@ -694,8 +694,8 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_TENURE
 	case rootevent.KindLegacy:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_LEGACY
-	case rootevent.KindTransit:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_TRANSIT
+	case rootevent.KindHandover:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_HANDOVER
 	default:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_UNSPECIFIED
 	}
@@ -745,8 +745,8 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindTenure
 	case metapb.RootEventKind_ROOT_EVENT_KIND_LEGACY:
 		return rootevent.KindLegacy
-	case metapb.RootEventKind_ROOT_EVENT_KIND_TRANSIT:
-		return rootevent.KindTransit
+	case metapb.RootEventKind_ROOT_EVENT_KIND_HANDOVER:
+		return rootevent.KindHandover
 	default:
 		return rootevent.KindUnknown
 	}

@@ -7,21 +7,21 @@ import (
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 )
 
-// SnapshotAnomalies surfaces the most important closure/audit gaps in a form
+// SnapshotAnomalies surfaces the most important finality/audit gaps in a form
 // suitable for CLI or standalone checker consumption.
-type ClosureDefect string
+type FinalityDefect string
 
 const (
-	ClosureDefectNone                    ClosureDefect = ""
-	ClosureDefectSuccessorIncomplete     ClosureDefect = "successor_incomplete"
-	ClosureDefectMissingConfirm          ClosureDefect = "missing_confirm"
-	ClosureDefectMissingClose            ClosureDefect = "missing_close"
-	ClosureDefectCloseWithoutConfirm     ClosureDefect = "close_without_confirm"
-	ClosureDefectLineageMismatch         ClosureDefect = "lineage_mismatch"
-	ClosureDefectReattachWithoutConfirm  ClosureDefect = "reattach_without_confirm"
-	ClosureDefectReattachWithoutClose    ClosureDefect = "reattach_without_close"
-	ClosureDefectReattachLineageMismatch ClosureDefect = "reattach_lineage_mismatch"
-	ClosureDefectReattachIncomplete      ClosureDefect = "reattach_incomplete"
+	FinalityDefectNone                    FinalityDefect = ""
+	FinalityDefectSuccessorIncomplete     FinalityDefect = "successor_incomplete"
+	FinalityDefectMissingConfirm          FinalityDefect = "missing_confirm"
+	FinalityDefectMissingClose            FinalityDefect = "missing_close"
+	FinalityDefectCloseWithoutConfirm     FinalityDefect = "close_without_confirm"
+	FinalityDefectLineageMismatch         FinalityDefect = "lineage_mismatch"
+	FinalityDefectReattachWithoutConfirm  FinalityDefect = "reattach_without_confirm"
+	FinalityDefectReattachWithoutClose    FinalityDefect = "reattach_without_close"
+	FinalityDefectReattachLineageMismatch FinalityDefect = "reattach_lineage_mismatch"
+	FinalityDefectReattachIncomplete      FinalityDefect = "reattach_incomplete"
 )
 
 type SnapshotAnomalies struct {
@@ -30,7 +30,7 @@ type SnapshotAnomalies struct {
 	UncoveredDescriptorRevision bool
 	LeaseStartCoverageViolation bool
 	SealedGenerationStillLive   bool
-	ClosureDefect               ClosureDefect
+	FinalityDefect              FinalityDefect
 }
 
 // Report is the standalone succession-audit projection for one rooted snapshot.
@@ -42,8 +42,8 @@ type Report struct {
 	CurrentHolderID        string
 	CurrentGeneration      uint64
 	Handoff                rootproto.AuthorityHandoffRecord
-	TransitWitness         rootproto.TransitWitness
-	Closure                rootproto.TransitStatus
+	HandoverWitness        rootproto.HandoverWitness
+	Handover               rootproto.HandoverStatus
 	Anomalies              SnapshotAnomalies
 }
 
@@ -53,10 +53,10 @@ func evaluateSnapshot(snapshot rootview.Snapshot, holderID string, nowUnixNano i
 		IDFence:  snapshot.Allocator.IDCurrent,
 		TSOFence: snapshot.Allocator.TSCurrent,
 	}, descriptorRevision)
-	closureWitness := succession.BuildTransitWitness(snapshot.Tenure, currentFrontiers, snapshot.Legacy, nowUnixNano)
-	closure := succession.EvaluateTransitStage(
+	handoverWitness := succession.BuildHandoverWitness(snapshot.Tenure, currentFrontiers, snapshot.Legacy, nowUnixNano)
+	handover := succession.EvaluateHandoverStage(
 		snapshot.Tenure,
-		snapshot.Transit,
+		snapshot.Handover,
 		holderID,
 		nowUnixNano,
 	)
@@ -68,79 +68,79 @@ func evaluateSnapshot(snapshot rootview.Snapshot, holderID string, nowUnixNano i
 		CurrentHolderID:        snapshot.Tenure.HolderID,
 		CurrentGeneration:      snapshot.Tenure.Epoch,
 		Handoff:                succession.HandoffRecord(snapshot.Tenure, currentFrontiers),
-		TransitWitness:         closureWitness.WithStage(closure.Stage),
-		Closure:                closure,
+		HandoverWitness:        handoverWitness.WithStage(handover.Stage),
+		Handover:               handover,
 	}
 }
 
-func evaluateClosureDefect(snapshot rootview.Snapshot, holderID string, nowUnixNano int64, witness rootproto.TransitWitness, status rootproto.TransitStatus) ClosureDefect {
+func evaluateFinalityDefect(snapshot rootview.Snapshot, holderID string, nowUnixNano int64, witness rootproto.HandoverWitness, status rootproto.HandoverStatus) FinalityDefect {
 	current := snapshot.Tenure
-	closure := snapshot.Transit
+	handover := snapshot.Handover
 	if holderID == "" || holderID != current.HolderID || !current.ActiveAt(nowUnixNano) {
-		return ClosureDefectNone
+		return FinalityDefectNone
 	}
-	if witness.LegacyEpoch != 0 && !witness.ClosureSatisfied() {
-		return ClosureDefectSuccessorIncomplete
+	if witness.LegacyEpoch != 0 && !witness.FinalitySatisfied() {
+		return FinalityDefectSuccessorIncomplete
 	}
-	confirmPresent := closure.Present() && closure.HolderID == holderID
+	confirmPresent := handover.Present() && handover.HolderID == holderID
 	if !confirmPresent {
-		if status.Stage == rootproto.TransitStageUnspecified {
-			if witness.ClosureSatisfied() {
-				return ClosureDefectMissingConfirm
+		if status.Stage == rootproto.HandoverStageUnspecified {
+			if witness.FinalitySatisfied() {
+				return FinalityDefectMissingConfirm
 			}
-			return ClosureDefectNone
+			return FinalityDefectNone
 		}
-		if rootproto.TransitStageAtLeast(status.Stage, rootproto.TransitStageReattached) {
-			return ClosureDefectReattachWithoutConfirm
+		if rootproto.HandoverStageAtLeast(status.Stage, rootproto.HandoverStageReattached) {
+			return FinalityDefectReattachWithoutConfirm
 		}
-		if rootproto.TransitStageAtLeast(status.Stage, rootproto.TransitStageClosed) {
-			return ClosureDefectCloseWithoutConfirm
+		if rootproto.HandoverStageAtLeast(status.Stage, rootproto.HandoverStageClosed) {
+			return FinalityDefectCloseWithoutConfirm
 		}
-		return ClosureDefectMissingConfirm
+		return FinalityDefectMissingConfirm
 	}
 	confirmMatchesCurrent := confirmPresent &&
-		closure.SuccessorEpoch > closure.LegacyEpoch &&
-		closure.SuccessorEpoch == current.Epoch
+		handover.SuccessorEpoch > handover.LegacyEpoch &&
+		handover.SuccessorEpoch == current.Epoch
 	lineageSatisfied := confirmMatchesCurrent &&
-		current.LineageDigest == closure.LegacyDigest
-	closePresent := confirmPresent && rootproto.TransitStageAtLeast(closure.Stage, rootproto.TransitStageClosed)
-	reattachPresent := confirmPresent && rootproto.TransitStageAtLeast(closure.Stage, rootproto.TransitStageReattached)
+		current.LineageDigest == handover.LegacyDigest
+	closePresent := confirmPresent && rootproto.HandoverStageAtLeast(handover.Stage, rootproto.HandoverStageClosed)
+	reattachPresent := confirmPresent && rootproto.HandoverStageAtLeast(handover.Stage, rootproto.HandoverStageReattached)
 
 	if reattachPresent {
 		if !closePresent {
-			return ClosureDefectReattachWithoutClose
+			return FinalityDefectReattachWithoutClose
 		}
 		if !lineageSatisfied {
-			return ClosureDefectReattachLineageMismatch
+			return FinalityDefectReattachLineageMismatch
 		}
-		if status.Stage != rootproto.TransitStageReattached {
-			return ClosureDefectReattachIncomplete
+		if status.Stage != rootproto.HandoverStageReattached {
+			return FinalityDefectReattachIncomplete
 		}
-		return ClosureDefectNone
+		return FinalityDefectNone
 	}
 	if closePresent {
 		if !lineageSatisfied {
-			return ClosureDefectLineageMismatch
+			return FinalityDefectLineageMismatch
 		}
-		return ClosureDefectNone
+		return FinalityDefectNone
 	}
 	if !lineageSatisfied {
-		return ClosureDefectLineageMismatch
+		return FinalityDefectLineageMismatch
 	}
-	return ClosureDefectMissingClose
+	return FinalityDefectMissingClose
 }
 
 // BuildReport materializes one rooted snapshot into a standalone audit report
 // that callers can serialize or render without duplicating anomaly logic.
 func BuildReport(snapshot rootview.Snapshot, holderID string, nowUnixNano int64) Report {
 	report := evaluateSnapshot(snapshot, holderID, nowUnixNano)
-	closureDefect := evaluateClosureDefect(snapshot, holderID, nowUnixNano, report.TransitWitness, report.Closure)
+	finalityDefect := evaluateFinalityDefect(snapshot, holderID, nowUnixNano, report.HandoverWitness, report.Handover)
 	anomalies := SnapshotAnomalies{
-		SuccessorLineageMismatch:    report.TransitWitness.SuccessorPresent && !report.TransitWitness.SuccessorLineageSatisfied,
-		UncoveredMonotoneFrontier:   report.TransitWitness.SuccessorPresent && !report.TransitWitness.SuccessorMonotoneCovered(),
-		UncoveredDescriptorRevision: report.TransitWitness.SuccessorPresent && !report.TransitWitness.SuccessorDescriptorCovered(),
-		SealedGenerationStillLive:   report.TransitWitness.LegacyEpoch != 0 && !report.TransitWitness.SealedGenerationRetired,
-		ClosureDefect:               closureDefect,
+		SuccessorLineageMismatch:    report.HandoverWitness.SuccessorPresent && !report.HandoverWitness.SuccessorLineageSatisfied,
+		UncoveredMonotoneFrontier:   report.HandoverWitness.SuccessorPresent && !report.HandoverWitness.SuccessorMonotoneCovered(),
+		UncoveredDescriptorRevision: report.HandoverWitness.SuccessorPresent && !report.HandoverWitness.SuccessorDescriptorCovered(),
+		SealedGenerationStillLive:   report.HandoverWitness.LegacyEpoch != 0 && !report.HandoverWitness.SealedGenerationRetired,
+		FinalityDefect:              finalityDefect,
 	}
 	report.Anomalies = anomalies
 	return report

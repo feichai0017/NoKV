@@ -51,7 +51,7 @@ type gateKind uint8
 
 const (
 	gateLegacyFormation gateKind = iota
-	gateTransitMutation
+	gateHandoverMutation
 	gateMandateAdmission
 )
 
@@ -87,7 +87,7 @@ func (s *Service) successionGateCached(kind gateKind, mandate uint32) error {
 
 // successionGateRooted validates against a freshly loaded rooted
 // snapshot. Used for control-plane mutations where stale-read would
-// violate closure completeness.
+// violate finality.
 func (s *Service) successionGateRooted(kind gateKind, mandate uint32) error {
 	current, seal, err := s.currentTenureViewFromStorage()
 	if err != nil {
@@ -148,10 +148,10 @@ func (s *Service) validateGateTenure(kind gateKind, mandate uint32, current root
 	case gateLegacyFormation:
 		if rootstate.TenureSealed(current, seal) {
 			s.successionMetrics.recordGateRejection(kind)
-			s.successionMetrics.recordGuaranteeViolation(guaranteeClosure)
-			return statusTenure(fmt.Errorf("%w: epoch=%d already sealed", rootstate.ErrClosure, current.Epoch))
+			s.successionMetrics.recordGuaranteeViolation(guaranteeFinality)
+			return statusTenure(fmt.Errorf("%w: epoch=%d already sealed", rootstate.ErrFinality, current.Epoch))
 		}
-	case gateTransitMutation:
+	case gateHandoverMutation:
 		if rootstate.TenureSealed(current, seal) {
 			s.successionMetrics.recordGateRejection(kind)
 			s.successionMetrics.recordGuaranteeViolation(guaranteeSilence)

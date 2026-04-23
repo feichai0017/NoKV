@@ -21,7 +21,7 @@ import (
 func TestServiceDiagnosticsSnapshotIncludesSuccessionMetrics(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	svc.successionMetrics.recordTenureEpochTransition(1, 2)
-	svc.successionMetrics.recordTransitStageTransition(rootproto.TransitStageUnspecified, rootproto.TransitStageConfirmed)
+	svc.successionMetrics.recordHandoverStageTransition(rootproto.HandoverStageUnspecified, rootproto.HandoverStageConfirmed)
 	svc.successionMetrics.recordGateRejection(gateMandateAdmission)
 	svc.successionMetrics.recordGuaranteeViolation(guaranteeInheritance)
 
@@ -31,17 +31,17 @@ func TestServiceDiagnosticsSnapshotIncludesSuccessionMetrics(t *testing.T) {
 		"confirmed":  uint64(1),
 		"closed":     uint64(0),
 		"reattached": uint64(0),
-	}, metrics["transit_stage_transitions_total"])
+	}, metrics["handover_stage_transitions_total"])
 	require.Equal(t, map[string]any{
 		"legacy_formation":  uint64(0),
-		"transit_mutation":  uint64(0),
+		"handover_mutation": uint64(0),
 		"mandate_admission": uint64(1),
 	}, metrics["gate_rejections_total"])
 	require.Equal(t, map[string]any{
 		"primacy":     uint64(0),
 		"inheritance": uint64(1),
 		"silence":     uint64(0),
-		"closure":     uint64(0),
+		"finality":    uint64(0),
 	}, metrics["guarantee_violations_total"])
 }
 
@@ -71,18 +71,18 @@ func TestServiceValidatePreActionLeaseRecordsPostSealMetric(t *testing.T) {
 	metrics := svc.DiagnosticsSnapshot()["succession_metrics"].(map[string]any)
 	require.Equal(t, map[string]any{
 		"legacy_formation":  uint64(0),
-		"transit_mutation":  uint64(0),
+		"handover_mutation": uint64(0),
 		"mandate_admission": uint64(1),
 	}, metrics["gate_rejections_total"])
 	require.Equal(t, map[string]any{
 		"primacy":     uint64(0),
 		"inheritance": uint64(0),
 		"silence":     uint64(1),
-		"closure":     uint64(0),
+		"finality":    uint64(0),
 	}, metrics["guarantee_violations_total"])
 }
 
-func TestServiceClosureMetricsTrackLifecycleStages(t *testing.T) {
+func TestServiceFinalityMetricsTrackLifecycleStages(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
@@ -114,16 +114,16 @@ func TestServiceClosureMetricsTrackLifecycleStages(t *testing.T) {
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
-	require.NoError(t, svc.ConfirmTransit())
-	require.NoError(t, svc.CloseTransit())
-	require.NoError(t, svc.ReattachTransit())
+	require.NoError(t, svc.ConfirmHandover())
+	require.NoError(t, svc.CloseHandover())
+	require.NoError(t, svc.ReattachHandover())
 
 	metrics := svc.DiagnosticsSnapshot()["succession_metrics"].(map[string]any)
 	require.Equal(t, map[string]any{
 		"confirmed":  uint64(1),
 		"closed":     uint64(1),
 		"reattached": uint64(1),
-	}, metrics["transit_stage_transitions_total"])
+	}, metrics["handover_stage_transitions_total"])
 }
 
 func TestServiceEnsureTenureRecordsCoverageViolationMetric(t *testing.T) {
@@ -142,6 +142,6 @@ func TestServiceEnsureTenureRecordsCoverageViolationMetric(t *testing.T) {
 		"primacy":     uint64(0),
 		"inheritance": uint64(1),
 		"silence":     uint64(0),
-		"closure":     uint64(0),
+		"finality":    uint64(0),
 	}, metrics["guarantee_violations_total"])
 }

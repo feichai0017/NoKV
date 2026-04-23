@@ -138,7 +138,7 @@ func (s *Service) releaseTenure(ctx context.Context) error {
 	return s.reloadAndFenceAllocators(true)
 }
 
-// SealTenure records one rooted closure point for the current
+// SealTenure records one rooted legacy point for the current
 // authority generation using the frontiers already consumed by this service.
 func (s *Service) SealTenure() error {
 	return s.sealTenure(context.Background())
@@ -158,9 +158,9 @@ func (s *Service) sealTenure(ctx context.Context) error {
 	consumedIDFrontier := s.ids.Current()
 	consumedTSOFrontier := s.tso.Current()
 	s.allocMu.Unlock()
-	return s.applyClosureCommand(
+	return s.applyHandoverCommand(
 		ctx,
-		rootproto.TransitActSeal,
+		rootproto.HandoverActSeal,
 		gateLegacyFormation,
 		succession.Frontiers(rootstate.State{
 			IDFence:  consumedIDFrontier,
@@ -169,45 +169,45 @@ func (s *Service) sealTenure(ctx context.Context) error {
 	)
 }
 
-// ConfirmTransit explicitly records one rooted audit confirmation
+// ConfirmHandover explicitly records one rooted audit confirmation
 // after a sealed generation has been covered by a successor authority instance.
-func (s *Service) ConfirmTransit() error {
-	return s.confirmTransit(context.Background())
+func (s *Service) ConfirmHandover() error {
+	return s.confirmHandover(context.Background())
 }
 
-func (s *Service) confirmTransit(ctx context.Context) error {
+func (s *Service) confirmHandover(ctx context.Context) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
 	if !s.storage.IsLeader() {
 		return nil
 	}
-	return s.applyClosureCommand(ctx, rootproto.TransitActConfirm, gateTransitMutation, rootproto.NewMandateFrontiers())
+	return s.applyHandoverCommand(ctx, rootproto.HandoverActConfirm, gateHandoverMutation, rootproto.NewMandateFrontiers())
 }
 
-// CloseTransit explicitly records that the current successor
-// generation has been explicitly closed after rooted closure confirmation.
-func (s *Service) CloseTransit() error {
-	return s.closeTransit(context.Background())
+// CloseHandover explicitly records that the current successor
+// generation has been explicitly finalized after rooted handover confirmation.
+func (s *Service) CloseHandover() error {
+	return s.closeHandover(context.Background())
 }
 
-func (s *Service) closeTransit(ctx context.Context) error {
+func (s *Service) closeHandover(ctx context.Context) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
 	if !s.storage.IsLeader() {
 		return nil
 	}
-	return s.applyClosureCommand(ctx, rootproto.TransitActClose, gateTransitMutation, rootproto.NewMandateFrontiers())
+	return s.applyHandoverCommand(ctx, rootproto.HandoverActClose, gateHandoverMutation, rootproto.NewMandateFrontiers())
 }
 
-// ReattachTransit explicitly records that the current successor
-// generation has been reattached after rooted close has already landed.
-func (s *Service) ReattachTransit() error {
-	return s.reattachTransit(context.Background())
+// ReattachHandover explicitly records that the current successor
+// generation has been reattached after rooted finality has already landed.
+func (s *Service) ReattachHandover() error {
+	return s.reattachHandover(context.Background())
 }
 
-func (s *Service) reattachTransit(ctx context.Context) error {
+func (s *Service) reattachHandover(ctx context.Context) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
@@ -217,10 +217,10 @@ func (s *Service) reattachTransit(ctx context.Context) error {
 	if !s.storage.IsLeader() {
 		return nil
 	}
-	return s.applyClosureCommand(ctx, rootproto.TransitActReattach, gateTransitMutation, rootproto.NewMandateFrontiers())
+	return s.applyHandoverCommand(ctx, rootproto.HandoverActReattach, gateHandoverMutation, rootproto.NewMandateFrontiers())
 }
 
-func (s *Service) applyClosureCommand(ctx context.Context, kind rootproto.TransitAct, gate gateKind, frontiers rootproto.MandateFrontiers) error {
+func (s *Service) applyHandoverCommand(ctx context.Context, kind rootproto.HandoverAct, gate gateKind, frontiers rootproto.MandateFrontiers) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
@@ -239,11 +239,11 @@ func (s *Service) applyClosureCommand(ctx context.Context, kind rootproto.Transi
 	if holderID == "" {
 		return nil
 	}
-	beforeStage := s.currentTransit().Stage
+	beforeStage := s.currentHandover().Stage
 	if err := s.successionGate(gate, 0); err != nil {
 		return err
 	}
-	protocolState, err := s.storage.ApplyTransit(ctx, rootproto.TransitCommand{
+	protocolState, err := s.storage.ApplyHandover(ctx, rootproto.HandoverCommand{
 		Kind:        kind,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
@@ -253,10 +253,10 @@ func (s *Service) applyClosureCommand(ctx context.Context, kind rootproto.Transi
 		s.successionMetrics.recordGuaranteeViolationForError(err)
 		return err
 	}
-	if err := coordfailpoints.InjectAfterApplyTransitBeforeReload(); err != nil {
+	if err := coordfailpoints.InjectAfterApplyHandoverBeforeReload(); err != nil {
 		return err
 	}
-	s.successionMetrics.recordTransitStageTransition(beforeStage, protocolState.Transit.Stage)
+	s.successionMetrics.recordHandoverStageTransition(beforeStage, protocolState.Handover.Stage)
 	return s.reloadAndFenceAllocators(true)
 }
 
@@ -375,7 +375,7 @@ func (s *Service) currentTenure() rootstate.Tenure {
 	}
 	s.leaseMu.RLock()
 	defer s.leaseMu.RUnlock()
-	return s.leaseView.Lease()
+	return s.leaseView.Tenure()
 }
 
 func (s *Service) currentTenureView() (rootstate.Tenure, rootstate.Legacy) {
@@ -387,13 +387,13 @@ func (s *Service) currentTenureView() (rootstate.Tenure, rootstate.Legacy) {
 	return s.leaseView.Current()
 }
 
-func (s *Service) currentTransit() rootstate.Transit {
+func (s *Service) currentHandover() rootstate.Handover {
 	if s == nil {
-		return rootstate.Transit{}
+		return rootstate.Handover{}
 	}
 	s.leaseMu.RLock()
 	defer s.leaseMu.RUnlock()
-	return s.leaseView.Closure()
+	return s.leaseView.Handover()
 }
 
 func (s *Service) leaseCampaignBounds() (nowUnixNano, expiresUnixNano int64, holderID string, renewIn, clockSkew time.Duration) {

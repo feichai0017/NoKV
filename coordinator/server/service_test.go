@@ -58,9 +58,9 @@ type fakeStorage struct {
 
 func (f *fakeStorage) protocolState() rootstate.SuccessionState {
 	return rootstate.SuccessionState{
-		Tenure:  f.snapshot.Tenure,
-		Legacy:  f.snapshot.Legacy,
-		Transit: f.snapshot.Transit,
+		Tenure:   f.snapshot.Tenure,
+		Legacy:   f.snapshot.Legacy,
+		Handover: f.snapshot.Handover,
 	}
 }
 
@@ -168,9 +168,9 @@ func (f *fakeStorage) ApplyTenure(_ context.Context, cmd rootproto.TenureCommand
 	return f.protocolState(), nil
 }
 
-func (f *fakeStorage) ApplyTransit(_ context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error) {
+func (f *fakeStorage) ApplyHandover(_ context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
 	switch cmd.Kind {
-	case rootproto.TransitActSeal:
+	case rootproto.HandoverActSeal:
 		f.sealCalls++
 		if f.sealErr != nil {
 			return rootstate.SuccessionState{}, f.sealErr
@@ -188,7 +188,7 @@ func (f *fakeStorage) ApplyTransit(_ context.Context, cmd rootproto.TransitComma
 			Mandate:   mandate,
 			Frontiers: cmd.Frontiers,
 		}
-	case rootproto.TransitActConfirm:
+	case rootproto.HandoverActConfirm:
 		f.confirmCalls++
 		if f.confirmErr != nil {
 			return rootstate.SuccessionState{}, f.confirmErr
@@ -196,7 +196,7 @@ func (f *fakeStorage) ApplyTransit(_ context.Context, cmd rootproto.TransitComma
 		if strings.TrimSpace(cmd.HolderID) == "" || strings.TrimSpace(cmd.HolderID) != f.snapshot.Tenure.HolderID {
 			return f.protocolState(), rootstate.ErrPrimacy
 		}
-		auditStatus, err := succession.ValidateTransitConfirmation(
+		auditStatus, err := succession.ValidateHandoverConfirmation(
 			f.snapshot.Tenure,
 			succession.Frontiers(rootstate.State{
 				IDFence:  f.snapshot.Allocator.IDCurrent,
@@ -208,33 +208,33 @@ func (f *fakeStorage) ApplyTransit(_ context.Context, cmd rootproto.TransitComma
 		if err != nil {
 			return f.protocolState(), err
 		}
-		f.snapshot.Transit = rootstate.Transit{
+		f.snapshot.Handover = rootstate.Handover{
 			HolderID:       cmd.HolderID,
 			LegacyEpoch:    auditStatus.LegacyEpoch,
 			SuccessorEpoch: f.snapshot.Tenure.Epoch,
 			LegacyDigest:   auditStatus.LegacyDigest,
-			Stage:          rootproto.TransitStageConfirmed,
+			Stage:          rootproto.HandoverStageConfirmed,
 		}
-	case rootproto.TransitActClose:
+	case rootproto.HandoverActClose:
 		f.closeCalls++
 		if f.closeErr != nil {
 			return rootstate.SuccessionState{}, f.closeErr
 		}
-		if err := succession.ValidateTransitClosure(f.snapshot.Tenure, f.snapshot.Transit, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+		if err := succession.ValidateHandoverFinality(f.snapshot.Tenure, f.snapshot.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return f.protocolState(), err
 		}
-		f.snapshot.Transit.Stage = rootproto.TransitStageClosed
-	case rootproto.TransitActReattach:
+		f.snapshot.Handover.Stage = rootproto.HandoverStageClosed
+	case rootproto.HandoverActReattach:
 		f.reattachCalls++
 		if f.reattachErr != nil {
 			return rootstate.SuccessionState{}, f.reattachErr
 		}
-		if err := succession.ValidateTransitReattach(f.snapshot.Tenure, f.snapshot.Transit, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+		if err := succession.ValidateHandoverReattach(f.snapshot.Tenure, f.snapshot.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return f.protocolState(), err
 		}
-		f.snapshot.Transit.Stage = rootproto.TransitStageReattached
+		f.snapshot.Handover.Stage = rootproto.HandoverStageReattached
 	default:
-		return rootstate.SuccessionState{}, rootstate.ErrClosure
+		return rootstate.SuccessionState{}, rootstate.ErrFinality
 	}
 	return f.protocolState(), nil
 }
@@ -436,8 +436,8 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 	require.Equal(t, true, audit["successor_monotone_covered"])
 	require.Equal(t, false, audit["successor_descriptor_covered"])
 	require.Equal(t, true, audit["sealed_generation_retired"])
-	require.Equal(t, false, audit["closure_satisfied"])
-	require.Equal(t, "unspecified", audit["closure_stage"])
+	require.Equal(t, false, audit["finality_satisfied"])
+	require.Equal(t, "unspecified", audit["handover_stage"])
 	require.Len(t, regions, 1)
 	require.Equal(t, uint64(11), regions[0]["region_id"])
 	require.Equal(t, uint64(1), regions[0]["leader_store_id"])
@@ -2229,7 +2229,7 @@ func TestServiceMetadataAnswerFailsWhenGenerationSealedAndCannotRenew(t *testing
 	require.Contains(t, err.Error(), errTenurePrefix)
 }
 
-func TestServiceConfirmTransit(t *testing.T) {
+func TestServiceConfirmHandover(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
@@ -2263,15 +2263,15 @@ func TestServiceConfirmTransit(t *testing.T) {
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
-	require.NoError(t, svc.ConfirmTransit())
+	require.NoError(t, svc.ConfirmHandover())
 	require.Equal(t, 1, store.confirmCalls)
-	require.Equal(t, uint64(2), store.snapshot.Transit.LegacyEpoch)
-	require.Equal(t, uint64(3), store.snapshot.Transit.SuccessorEpoch)
-	require.Equal(t, rootstate.DigestOfLegacy(store.snapshot.Legacy), store.snapshot.Transit.LegacyDigest)
-	require.Equal(t, rootproto.TransitStageConfirmed, store.snapshot.Transit.Stage)
+	require.Equal(t, uint64(2), store.snapshot.Handover.LegacyEpoch)
+	require.Equal(t, uint64(3), store.snapshot.Handover.SuccessorEpoch)
+	require.Equal(t, rootstate.DigestOfLegacy(store.snapshot.Legacy), store.snapshot.Handover.LegacyDigest)
+	require.Equal(t, rootproto.HandoverStageConfirmed, store.snapshot.Handover.Stage)
 }
 
-func TestServiceCloseTransit(t *testing.T) {
+func TestServiceCloseHandover(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
@@ -2282,12 +2282,12 @@ func TestServiceCloseTransit(t *testing.T) {
 				Mandate:         rootproto.MandateDefault,
 				LineageDigest:   "seal-digest",
 			},
-			Transit: rootstate.Transit{
+			Handover: rootstate.Handover{
 				HolderID:       "c1",
 				LegacyEpoch:    2,
 				SuccessorEpoch: 3,
 				LegacyDigest:   "seal-digest",
-				Stage:          rootproto.TransitStageConfirmed,
+				Stage:          rootproto.HandoverStageConfirmed,
 			},
 		},
 	}
@@ -2297,15 +2297,15 @@ func TestServiceCloseTransit(t *testing.T) {
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
-	require.NoError(t, svc.CloseTransit())
+	require.NoError(t, svc.CloseHandover())
 	require.Equal(t, 1, store.closeCalls)
-	require.Equal(t, uint64(3), store.snapshot.Transit.SuccessorEpoch)
-	require.Equal(t, uint64(2), store.snapshot.Transit.LegacyEpoch)
-	require.Equal(t, "seal-digest", store.snapshot.Transit.LegacyDigest)
-	require.Equal(t, rootproto.TransitStageClosed, store.snapshot.Transit.Stage)
+	require.Equal(t, uint64(3), store.snapshot.Handover.SuccessorEpoch)
+	require.Equal(t, uint64(2), store.snapshot.Handover.LegacyEpoch)
+	require.Equal(t, "seal-digest", store.snapshot.Handover.LegacyDigest)
+	require.Equal(t, rootproto.HandoverStageClosed, store.snapshot.Handover.Stage)
 }
 
-func TestServiceReattachTransit(t *testing.T) {
+func TestServiceReattachHandover(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
@@ -2321,12 +2321,12 @@ func TestServiceReattachTransit(t *testing.T) {
 				Mandate:   rootproto.MandateDefault,
 				Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 			},
-			Transit: rootstate.Transit{
+			Handover: rootstate.Handover{
 				HolderID:       "c1",
 				LegacyEpoch:    2,
 				SuccessorEpoch: 3,
 				LegacyDigest:   "seal-digest",
-				Stage:          rootproto.TransitStageClosed,
+				Stage:          rootproto.HandoverStageClosed,
 			},
 		},
 	}
@@ -2337,12 +2337,12 @@ func TestServiceReattachTransit(t *testing.T) {
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
-	require.NoError(t, svc.ReattachTransit())
+	require.NoError(t, svc.ReattachHandover())
 	require.Equal(t, 1, store.reattachCalls)
-	require.Equal(t, uint64(3), store.snapshot.Transit.SuccessorEpoch)
-	require.Equal(t, uint64(2), store.snapshot.Transit.LegacyEpoch)
-	require.Equal(t, "seal-digest", store.snapshot.Transit.LegacyDigest)
-	require.Equal(t, rootproto.TransitStageReattached, store.snapshot.Transit.Stage)
+	require.Equal(t, uint64(3), store.snapshot.Handover.SuccessorEpoch)
+	require.Equal(t, uint64(2), store.snapshot.Handover.LegacyEpoch)
+	require.Equal(t, "seal-digest", store.snapshot.Handover.LegacyDigest)
+	require.Equal(t, rootproto.HandoverStageReattached, store.snapshot.Handover.Stage)
 }
 
 func TestServiceAblationDisableReattachNoop(t *testing.T) {
@@ -2361,12 +2361,12 @@ func TestServiceAblationDisableReattachNoop(t *testing.T) {
 				Mandate:   rootproto.MandateDefault,
 				Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 			},
-			Transit: rootstate.Transit{
+			Handover: rootstate.Handover{
 				HolderID:       "c1",
 				LegacyEpoch:    2,
 				SuccessorEpoch: 3,
 				LegacyDigest:   "seal-digest",
-				Stage:          rootproto.TransitStageClosed,
+				Stage:          rootproto.HandoverStageClosed,
 			},
 		},
 	}
@@ -2378,12 +2378,12 @@ func TestServiceAblationDisableReattachNoop(t *testing.T) {
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
-	require.NoError(t, svc.ReattachTransit())
+	require.NoError(t, svc.ReattachHandover())
 	require.Equal(t, 0, store.reattachCalls)
-	require.Equal(t, rootproto.TransitStageClosed, store.snapshot.Transit.Stage)
+	require.Equal(t, rootproto.HandoverStageClosed, store.snapshot.Handover.Stage)
 }
 
-func TestServiceReattachTransitRejectsLineageMismatch(t *testing.T) {
+func TestServiceReattachHandoverRejectsLineageMismatch(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
@@ -2400,12 +2400,12 @@ func TestServiceReattachTransitRejectsLineageMismatch(t *testing.T) {
 				Mandate:   rootproto.MandateDefault,
 				Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 			},
-			Transit: rootstate.Transit{
+			Handover: rootstate.Handover{
 				HolderID:       "c1",
 				LegacyEpoch:    2,
 				SuccessorEpoch: 3,
 				LegacyDigest:   "seal-digest",
-				Stage:          rootproto.TransitStageClosed,
+				Stage:          rootproto.HandoverStageClosed,
 			},
 		},
 	}
@@ -2415,10 +2415,10 @@ func TestServiceReattachTransitRejectsLineageMismatch(t *testing.T) {
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
-	err := svc.ReattachTransit()
-	require.ErrorIs(t, err, rootstate.ErrClosure)
+	err := svc.ReattachHandover()
+	require.ErrorIs(t, err, rootstate.ErrFinality)
 	require.Equal(t, 1, store.reattachCalls)
-	require.Equal(t, rootproto.TransitStageClosed, store.snapshot.Transit.Stage)
+	require.Equal(t, rootproto.HandoverStageClosed, store.snapshot.Handover.Stage)
 }
 
 func TestServiceMonotoneDutyFailsWhenInheritanceNotMet(t *testing.T) {

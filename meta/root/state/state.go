@@ -1,5 +1,5 @@
 // Package state holds the compact applied root state of the metadata
-// kernel (State, Tenure/Seal/Closure, pending peer/range
+// kernel (State, Tenure/Legacy/Handover, pending peer/range
 // changes) and the ApplyEventToState / ApplyEventToSnapshot functions
 // that drive a rooted event log into that state.
 //
@@ -39,7 +39,7 @@ type State struct {
 	TSOFence        uint64
 	Tenure          Tenure
 	Legacy          Legacy
-	Transit         Transit
+	Handover        Handover
 }
 
 // Tenure is the compact control-plane owner lease stored in root
@@ -62,12 +62,12 @@ type Legacy struct {
 	SealedAt  Cursor
 }
 
-type Transit struct {
+type Handover struct {
 	HolderID       string
 	LegacyEpoch    uint64
 	SuccessorEpoch uint64
 	LegacyDigest   string
-	Stage          rootproto.TransitStage
+	Stage          rootproto.HandoverStage
 	ConfirmedAt    Cursor
 	ClosedAt       Cursor
 	ReattachedAt   Cursor
@@ -219,8 +219,8 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		applyTenureToState(state, cursor, event)
 	case rootevent.KindLegacy:
 		applyLegacyToState(state, cursor, event)
-	case rootevent.KindTransit:
-		applyTransitToState(state, cursor, event)
+	case rootevent.KindHandover:
+		applyHandoverToState(state, cursor, event)
 	case rootevent.KindRegionBootstrap,
 		rootevent.KindRegionDescriptorPublished,
 		rootevent.KindRegionTombstoned,
@@ -261,23 +261,23 @@ func applyLegacyToState(state *State, cursor Cursor, event rootevent.Event) {
 		Frontiers: seal.Frontiers,
 		SealedAt:  sealedAt,
 	}
-	state.Transit = Transit{}
+	state.Handover = Handover{}
 }
 
-func applyTransitToState(state *State, cursor Cursor, event rootevent.Event) {
-	if state == nil || event.Transit == nil {
+func applyHandoverToState(state *State, cursor Cursor, event rootevent.Event) {
+	if state == nil || event.Handover == nil {
 		return
 	}
-	closure := event.Transit
-	confirmedAt := coalesceCursor(closure.ConfirmedAt, cursor)
-	closedAt := coalesceCursor(closure.ClosedAt, cursor)
-	reattachedAt := coalesceCursor(closure.ReattachedAt, cursor)
-	state.Transit = Transit{
-		HolderID:       closure.HolderID,
-		LegacyEpoch:    closure.LegacyEpoch,
-		SuccessorEpoch: closure.SuccessorEpoch,
-		LegacyDigest:   closure.LegacyDigest,
-		Stage:          closure.Stage,
+	handover := event.Handover
+	confirmedAt := coalesceCursor(handover.ConfirmedAt, cursor)
+	closedAt := coalesceCursor(handover.ClosedAt, cursor)
+	reattachedAt := coalesceCursor(handover.ReattachedAt, cursor)
+	state.Handover = Handover{
+		HolderID:       handover.HolderID,
+		LegacyEpoch:    handover.LegacyEpoch,
+		SuccessorEpoch: handover.SuccessorEpoch,
+		LegacyDigest:   handover.LegacyDigest,
+		Stage:          handover.Stage,
 		ConfirmedAt:    confirmedAt,
 		ClosedAt:       closedAt,
 		ReattachedAt:   reattachedAt,

@@ -64,8 +64,8 @@ func (f *fakeMetadataRootClient) ApplyTenure(context.Context, *metapb.MetadataRo
 	return nil, status.Error(codes.Unimplemented, "lease")
 }
 
-func (f *fakeMetadataRootClient) ApplyTransit(context.Context, *metapb.MetadataRootApplyTransitRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyTransitResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "closure")
+func (f *fakeMetadataRootClient) ApplyHandover(context.Context, *metapb.MetadataRootApplyHandoverRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyHandoverResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "handover")
 }
 
 func (f *fakeMetadataRootClient) ObserveCommitted(context.Context, *metapb.MetadataRootObserveCommittedRequest, ...grpc.CallOption) (*metapb.MetadataRootObserveCommittedResponse, error) {
@@ -112,8 +112,8 @@ func TestClientHelpersAndOrdering(t *testing.T) {
 
 	require.True(t, validTenureAct(1))
 	require.False(t, validTenureAct(99))
-	require.True(t, validTransitAct(1))
-	require.False(t, validTransitAct(99))
+	require.True(t, validHandoverAct(1))
+	require.False(t, validHandoverAct(99))
 
 	leaderID, ok := leaderHint(status.Error(codes.FailedPrecondition, errMetadataRootNotLeader+" (leader_id=23)"))
 	require.True(t, ok)

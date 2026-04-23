@@ -11,9 +11,9 @@ import (
 
 func TestValidateLeaseStartInheritanceRejectsBelowFrontier(t *testing.T) {
 	seal := rootstate.Legacy{
-		HolderID:       "n1",
-		Epoch: 1,
-		Mandate:       rootproto.MandateDefault,
+		HolderID: "n1",
+		Epoch:    1,
+		Mandate:  rootproto.MandateDefault,
 		Frontiers: rootproto.NewMandateFrontiers(
 			rootproto.MandateFrontier{Mandate: rootproto.MandateLeaseStart, Frontier: 15},
 		),
@@ -66,7 +66,7 @@ func TestNextTenureEpoch(t *testing.T) {
 	current := rootstate.Tenure{
 		HolderID:        "c1",
 		ExpiresUnixNano: 1_000,
-		Epoch:  7,
+		Epoch:           7,
 	}
 	seal := rootstate.Legacy{HolderID: "c1", Epoch: 7}
 
@@ -91,7 +91,7 @@ func TestTenureRenewableAndSealedGeneration(t *testing.T) {
 	current := rootstate.Tenure{
 		HolderID:        "c1",
 		ExpiresUnixNano: 1_000,
-		Epoch:  7,
+		Epoch:           7,
 	}
 	seal := rootstate.Legacy{HolderID: "c1", Epoch: 7}
 
@@ -113,13 +113,13 @@ func TestValidateInheritance(t *testing.T) {
 	current := rootstate.Tenure{
 		HolderID:        "c1",
 		ExpiresUnixNano: 1_000,
-		Epoch:  7,
+		Epoch:           7,
 	}
 	seal := rootstate.Legacy{
-		HolderID:       "c1",
-		Epoch: 7,
-		Mandate:       rootproto.MandateDefault,
-		Frontiers:      succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
+		HolderID:  "c1",
+		Epoch:     7,
+		Mandate:   rootproto.MandateDefault,
+		Frontiers: succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
 	}
 
 	if err := rootstate.ValidateInheritance(current, rootstate.Legacy{}, rootproto.MandateFrontiers{}); err != nil {
@@ -165,17 +165,17 @@ func TestValidateInheritance(t *testing.T) {
 
 func TestValidateTenureClaimLineage(t *testing.T) {
 	current := rootstate.Tenure{
-		HolderID:          "c1",
-		ExpiresUnixNano:   1_000,
-		Epoch:    7,
-		LineageDigest: "prev",
+		HolderID:        "c1",
+		ExpiresUnixNano: 1_000,
+		Epoch:           7,
+		LineageDigest:   "prev",
 	}
 	seal := rootstate.Legacy{
-		HolderID:       "c1",
-		Epoch: 7,
-		Mandate:       rootproto.MandateDefault,
-		Frontiers:      succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
-		SealedAt: rootstate.Cursor{Term: 1, Index: 9},
+		HolderID:  "c1",
+		Epoch:     7,
+		Mandate:   rootproto.MandateDefault,
+		Frontiers: succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
+		SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
 	}
 
 	if err := rootstate.ValidateTenureClaim(current, rootstate.Legacy{}, "c1", "prev", 1_100, 500); err != nil {
@@ -196,11 +196,11 @@ func TestValidateTenureClaimLineage(t *testing.T) {
 
 func TestDigestOfLegacyIncludesNonMaskedLeaseStartFrontier(t *testing.T) {
 	base := rootstate.Legacy{
-		HolderID:       "c1",
-		Epoch: 7,
-		Mandate:       rootproto.MandateDefault,
-		Frontiers:      succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
-		SealedAt: rootstate.Cursor{Term: 1, Index: 9},
+		HolderID:  "c1",
+		Epoch:     7,
+		Mandate:   rootproto.MandateDefault,
+		Frontiers: succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
+		SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
 	}
 	withLeaseStart := base
 	withLeaseStart.Frontiers = withLeaseStart.Frontiers.WithFrontier(rootproto.MandateLeaseStart, 105)

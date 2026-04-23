@@ -30,7 +30,7 @@ enum RootEventKind {
   ROOT_EVENT_KIND_PEER_REMOVAL_CANCELLED = 19;
   ROOT_EVENT_KIND_TENURE = 20;
   ROOT_EVENT_KIND_LEGACY = 21;
-  ROOT_EVENT_KIND_TRANSIT = 22;
+  ROOT_EVENT_KIND_HANDOVER = 22;
 }
 
 message RootCursor {
@@ -46,7 +46,7 @@ message RootState {
   uint64 tso_fence = 6;
   RootTenure tenure = 7;
   RootLegacy legacy = 8;
-  RootTransit transit = 9;
+  RootHandover handover = 9;
 }
 
 message RootCheckpoint {
@@ -89,19 +89,19 @@ message RootLegacy {
   RootCursor sealed_at = 8;
 }
 
-enum RootTransitStage {
-  ROOT_TRANSIT_STAGE_PENDING_CONFIRM = 0;
-  ROOT_TRANSIT_STAGE_CONFIRMED = 1;
-  ROOT_TRANSIT_STAGE_CLOSED = 2;
-  ROOT_TRANSIT_STAGE_REATTACHED = 3;
+enum RootHandoverStage {
+  ROOT_HANDOVER_STAGE_PENDING_CONFIRM = 0;
+  ROOT_HANDOVER_STAGE_CONFIRMED = 1;
+  ROOT_HANDOVER_STAGE_CLOSED = 2;
+  ROOT_HANDOVER_STAGE_REATTACHED = 3;
 }
 
-message RootTransit {
+message RootHandover {
   string holder_id = 1;
   uint64 legacy_epoch = 2;
   uint64 successor_epoch = 3;
   string legacy_digest = 4;
-  RootTransitStage stage = 5;
+  RootHandoverStage stage = 5;
   RootCursor confirmed_at = 6;
   RootCursor closed_at = 7;
   RootCursor reattached_at = 8;
@@ -186,7 +186,7 @@ message RootEvent {
     RootPeerChange peer_change = 8;
     RootTenure tenure = 9;
     RootLegacy legacy = 10;
-    RootTransit transit = 11;
+    RootHandover handover = 11;
   }
 }
 
@@ -242,16 +242,16 @@ message RootTenureCommand {
   repeated RootMandateFrontier inherited_frontiers = 6;
 }
 
-enum RootTransitAct {
-  ROOT_TRANSIT_ACT_UNSPECIFIED = 0;
-  ROOT_TRANSIT_ACT_SEAL = 1;
-  ROOT_TRANSIT_ACT_CONFIRM = 2;
-  ROOT_TRANSIT_ACT_CLOSE = 3;
-  ROOT_TRANSIT_ACT_REATTACH = 4;
+enum RootHandoverAct {
+  ROOT_HANDOVER_ACT_UNSPECIFIED = 0;
+  ROOT_HANDOVER_ACT_SEAL = 1;
+  ROOT_HANDOVER_ACT_CONFIRM = 2;
+  ROOT_HANDOVER_ACT_CLOSE = 3;
+  ROOT_HANDOVER_ACT_REATTACH = 4;
 }
 
-message RootTransitCommand {
-  RootTransitAct kind = 1;
+message RootHandoverCommand {
+  RootHandoverAct kind = 1;
   string holder_id = 2;
   int64 now_unix_nano = 3;
   repeated RootMandateFrontier frontiers = 4;
@@ -260,7 +260,7 @@ message RootTransitCommand {
 message RootSuccessionState {
   RootTenure tenure = 1;
   RootLegacy legacy = 2;
-  RootTransit transit = 3;
+  RootHandover handover = 3;
 }
 
 enum RootTenureApplyStatus {
@@ -278,11 +278,11 @@ message MetadataRootApplyTenureResponse {
   RootTenureApplyStatus status = 2;
 }
 
-message MetadataRootApplyTransitRequest {
-  RootTransitCommand command = 1;
+message MetadataRootApplyHandoverRequest {
+  RootHandoverCommand command = 1;
 }
 
-message MetadataRootApplyTransitResponse {
+message MetadataRootApplyHandoverResponse {
   RootSuccessionState state = 1;
 }
 
@@ -341,7 +341,7 @@ service MetadataRoot {
   rpc FenceAllocator(MetadataRootFenceAllocatorRequest) returns (MetadataRootFenceAllocatorResponse);
   rpc Status(MetadataRootStatusRequest) returns (MetadataRootStatusResponse);
   rpc ApplyTenure(MetadataRootApplyTenureRequest) returns (MetadataRootApplyTenureResponse);
-  rpc ApplyTransit(MetadataRootApplyTransitRequest) returns (MetadataRootApplyTransitResponse);
+  rpc ApplyHandover(MetadataRootApplyHandoverRequest) returns (MetadataRootApplyHandoverResponse);
   rpc ObserveCommitted(MetadataRootObserveCommittedRequest) returns (MetadataRootObserveCommittedResponse);
   rpc ObserveTail(MetadataRootObserveTailRequest) returns (MetadataRootObserveTailResponse);
   rpc WaitTail(MetadataRootWaitTailRequest) returns (MetadataRootWaitTailResponse);

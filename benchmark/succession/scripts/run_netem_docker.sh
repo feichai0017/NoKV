@@ -3,8 +3,8 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-CONTROLPLANE_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
-BENCH_DIR=$(cd -- "$CONTROLPLANE_DIR/.." && pwd)
+SUCCESSION_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
+BENCH_DIR=$(cd -- "$SUCCESSION_DIR/.." && pwd)
 REPO_ROOT=$(cd -- "$BENCH_DIR/.." && pwd)
 
 DELAY=${CONTROL_PLANE_NETEM_DELAY:-1ms}

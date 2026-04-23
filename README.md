@@ -131,9 +131,9 @@ Control-plane correctness is modeled in TLA+ under [`spec/`](./spec/), with a **
 
 | Spec | Role | TLC outcome |
 |---|---|---|
-| [`Succession.tla`](./spec/Succession.tla) | Positive model — repeated authority handoff with closure lifecycle | ✅ 3924 distinct states, depth 20, invariants hold |
+| [`Succession.tla`](./spec/Succession.tla) | Positive model — repeated authority handoff with handover lifecycle | ✅ 3924 distinct states, depth 20, invariants hold |
 | [`SuccessionMultiDim.tla`](./spec/SuccessionMultiDim.tla) | Multi-dimensional frontier coverage | ✅ 326 distinct states, invariants hold |
-| [`LeaseOnly.tla`](./spec/LeaseOnly.tla) | Contrast — no reply-side guard, no rooted closure | ❌ counterexample: old-generation reply delivered after successor |
+| [`LeaseOnly.tla`](./spec/LeaseOnly.tla) | Contrast — no reply-side guard, no rooted handover | ❌ counterexample: old-generation reply delivered after successor |
 | [`TokenOnly.tla`](./spec/TokenOnly.tla) | Contrast — bounded-freshness token only | ❌ counterexample: freshness ≠ authority lineage |
 | [`ChubbyFencedLease.tla`](./spec/ChubbyFencedLease.tla) | Contrast — per-reply sequencer fencing | ❌ counterexample: stale-reject holds, but successor coverage fails |
 | [`LeaseStartOnly.tla`](./spec/LeaseStartOnly.tla) | Contrast — no lease-start coverage | ❌ counterexample: write accepted behind predecessor's served read |

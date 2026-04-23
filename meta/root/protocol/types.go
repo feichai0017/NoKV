@@ -69,14 +69,14 @@ type ContinuationWitness struct {
 	ConsumedFrontier uint64
 }
 
-type TransitStage uint8
+type HandoverStage uint8
 
 const (
-	TransitStageUnspecified TransitStage = iota
-	TransitStagePendingConfirm
-	TransitStageConfirmed
-	TransitStageClosed
-	TransitStageReattached
+	HandoverStageUnspecified HandoverStage = iota
+	HandoverStagePendingConfirm
+	HandoverStageConfirmed
+	HandoverStageClosed
+	HandoverStageReattached
 )
 
 const (
@@ -84,35 +84,35 @@ const (
 	ContinuationWitnessGenerationSuppressed uint64 = ^uint64(0)
 )
 
-func (s TransitStage) String() string {
+func (s HandoverStage) String() string {
 	switch s {
-	case TransitStageUnspecified:
+	case HandoverStageUnspecified:
 		return "unspecified"
-	case TransitStagePendingConfirm:
+	case HandoverStagePendingConfirm:
 		return "pending_confirm"
-	case TransitStageConfirmed:
+	case HandoverStageConfirmed:
 		return "confirmed"
-	case TransitStageClosed:
+	case HandoverStageClosed:
 		return "closed"
-	case TransitStageReattached:
+	case HandoverStageReattached:
 		return "reattached"
 	default:
 		return "unknown"
 	}
 }
 
-type TransitWitness struct {
+type HandoverWitness struct {
 	LegacyEpoch               uint64
 	LegacyDigest              string
 	SuccessorPresent          bool
 	Inheritance               InheritanceStatus
 	SuccessorLineageSatisfied bool
 	SealedGenerationRetired   bool
-	Stage                     TransitStage
+	Stage                     HandoverStage
 }
 
-type TransitStatus struct {
-	Stage TransitStage
+type HandoverStatus struct {
+	Stage HandoverStage
 }
 
 type TenureAct uint8
@@ -132,18 +132,18 @@ type TenureCommand struct {
 	InheritedFrontiers MandateFrontiers
 }
 
-type TransitAct uint8
+type HandoverAct uint8
 
 const (
-	TransitActUnknown TransitAct = iota
-	TransitActSeal
-	TransitActConfirm
-	TransitActClose
-	TransitActReattach
+	HandoverActUnknown HandoverAct = iota
+	HandoverActSeal
+	HandoverActConfirm
+	HandoverActClose
+	HandoverActReattach
 )
 
-type TransitCommand struct {
-	Kind        TransitAct
+type HandoverCommand struct {
+	Kind        HandoverAct
 	HolderID    string
 	NowUnixNano int64
 	Frontiers   MandateFrontiers
@@ -323,7 +323,7 @@ func (s InheritanceStatus) FirstGap() (InheritanceCoverage, bool) {
 	return InheritanceCoverage{}, false
 }
 
-func (w TransitWitness) ClosureSatisfied() bool {
+func (w HandoverWitness) FinalitySatisfied() bool {
 	return w.LegacyEpoch != 0 &&
 		w.SuccessorPresent &&
 		w.SuccessorLineageSatisfied &&
@@ -331,17 +331,17 @@ func (w TransitWitness) ClosureSatisfied() bool {
 		w.SealedGenerationRetired
 }
 
-func (w TransitWitness) SuccessorMonotoneCovered() bool {
+func (w HandoverWitness) SuccessorMonotoneCovered() bool {
 	return w.SuccessorPresent &&
 		w.Inheritance.CoveredMandate(MandateAllocID|MandateTSO)
 }
 
-func (w TransitWitness) SuccessorDescriptorCovered() bool {
+func (w HandoverWitness) SuccessorDescriptorCovered() bool {
 	return w.SuccessorPresent &&
 		w.Inheritance.CoveredMandate(MandateGetRegionByKey)
 }
 
-func (w TransitWitness) ReplyGenerationLegal(epoch uint64) bool {
+func (w HandoverWitness) ReplyGenerationLegal(epoch uint64) bool {
 	if epoch == ContinuationWitnessGenerationAttached {
 		return true
 	}
@@ -354,10 +354,10 @@ func (w TransitWitness) ReplyGenerationLegal(epoch uint64) bool {
 	if epoch == w.LegacyEpoch {
 		return false
 	}
-	return w.ClosureSatisfied()
+	return w.FinalitySatisfied()
 }
 
-func (w TransitWitness) WithStage(stage TransitStage) TransitWitness {
+func (w HandoverWitness) WithStage(stage HandoverStage) HandoverWitness {
 	w.Stage = stage
 	return w
 }
@@ -366,24 +366,24 @@ func (r AuthorityHandoffRecord) Present() bool {
 	return r.HolderID != ""
 }
 
-func TransitStageAtLeast(stage, target TransitStage) bool {
+func HandoverStageAtLeast(stage, target HandoverStage) bool {
 	switch target {
-	case TransitStageUnspecified:
+	case HandoverStageUnspecified:
 		return true
-	case TransitStagePendingConfirm:
-		return stage == TransitStagePendingConfirm ||
-			stage == TransitStageConfirmed ||
-			stage == TransitStageClosed ||
-			stage == TransitStageReattached
-	case TransitStageConfirmed:
-		return stage == TransitStageConfirmed ||
-			stage == TransitStageClosed ||
-			stage == TransitStageReattached
-	case TransitStageClosed:
-		return stage == TransitStageClosed ||
-			stage == TransitStageReattached
-	case TransitStageReattached:
-		return stage == TransitStageReattached
+	case HandoverStagePendingConfirm:
+		return stage == HandoverStagePendingConfirm ||
+			stage == HandoverStageConfirmed ||
+			stage == HandoverStageClosed ||
+			stage == HandoverStageReattached
+	case HandoverStageConfirmed:
+		return stage == HandoverStageConfirmed ||
+			stage == HandoverStageClosed ||
+			stage == HandoverStageReattached
+	case HandoverStageClosed:
+		return stage == HandoverStageClosed ||
+			stage == HandoverStageReattached
+	case HandoverStageReattached:
+		return stage == HandoverStageReattached
 	default:
 		return false
 	}

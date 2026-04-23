@@ -200,7 +200,7 @@ func (f *followerStorage) SaveAllocatorState(context.Context, uint64, uint64) er
 func (f *followerStorage) ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.SuccessionState, error) {
 	return rootstate.SuccessionState{}, nil
 }
-func (f *followerStorage) ApplyTransit(context.Context, rootproto.TransitCommand) (rootstate.SuccessionState, error) {
+func (f *followerStorage) ApplyHandover(context.Context, rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
 	return rootstate.SuccessionState{}, nil
 }
 func (f *followerStorage) Refresh() error   { return nil }
