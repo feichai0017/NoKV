@@ -17,16 +17,16 @@ EXTENDS Naturals, FiniteSets
 
 CONSTANTS
     \* @type: Int;
-    MaxGeneration,
+    MaxEra,
     \* @type: Int;
     MaxFrontier
 
-Generations == 0..MaxGeneration
+Eras        == 0..MaxEra
 Frontiers   == 0..MaxFrontier
 Phases      == {"Attached", "Active", "Sealed", "Covered", "Closed"}
-NoPending   == MaxGeneration + 1
-ReplySet    == { [gen |-> g, frontier |-> f] : g \in Generations, f \in Frontiers }
-NoDelivered == [valid |-> FALSE, gen |-> 0, frontier |-> 0]
+NoPending   == MaxEra + 1
+ReplySet    == { [era |-> e, frontier |-> f] : e \in Eras, f \in Frontiers }
+NoDelivered == [valid |-> FALSE, era |-> 0, frontier |-> 0]
 
 VARIABLES
     \* @type: Str;
@@ -34,7 +34,7 @@ VARIABLES
     \* @type: Set(Int);
     issued,
     \* @type: Int;
-    activeGen,
+    activeEra,
     \* @type: Int;
     pendingSeal,
     \* @type: Set(Int);
@@ -45,105 +45,105 @@ VARIABLES
     closed,
     \* @type: Int -> Int;
     frontier,
-    \* @type: Set([gen: Int, frontier: Int]);
+    \* @type: Set([era: Int, frontier: Int]);
     inflight,
-    \* @type: [valid: Bool, gen: Int, frontier: Int];
+    \* @type: [valid: Bool, era: Int, frontier: Int];
     delivered
 
-Vars == <<phase, issued, activeGen, pendingSeal, sealed, covered, closed, frontier, inflight, delivered>>
+Vars == <<phase, issued, activeEra, pendingSeal, sealed, covered, closed, frontier, inflight, delivered>>
 
 Init ==
     /\ phase = "Attached"
     /\ issued = {}
-    /\ activeGen = 0
+    /\ activeEra = 0
     /\ pendingSeal = NoPending
     /\ sealed = {}
     /\ covered = {}
     /\ closed = {}
-    /\ frontier = [g \in Generations |-> 0]
+    /\ frontier = [e \in Eras |-> 0]
     /\ inflight = {}
     /\ delivered = NoDelivered
 
 Issue ==
-    \E g \in Generations:
+    \E e \in Eras:
         /\ phase \in {"Attached", "Sealed"}
-        /\ g \notin issued
-        /\ g > activeGen
-        /\ issued' = issued \cup {g}
-        /\ frontier' = [frontier EXCEPT ![g] = frontier[activeGen]]
-        /\ activeGen' = g
+        /\ e \notin issued
+        /\ e > activeEra
+        /\ issued' = issued \cup {e}
+        /\ frontier' = [frontier EXCEPT ![e] = frontier[activeEra]]
+        /\ activeEra' = e
         /\ phase' = "Active"
         /\ delivered' = NoDelivered
         /\ UNCHANGED <<pendingSeal, sealed, covered, closed, inflight>>
 
 ActiveReply ==
     /\ phase = "Active"
-    /\ activeGen \in issued
-    /\ activeGen \notin sealed
+    /\ activeEra \in issued
+    /\ activeEra \notin sealed
     /\ \E f \in Frontiers:
-        /\ f >= frontier[activeGen]
-        /\ frontier' = [frontier EXCEPT ![activeGen] = f]
-        /\ inflight' = inflight \cup {[gen |-> activeGen, frontier |-> f]}
+        /\ f >= frontier[activeEra]
+        /\ frontier' = [frontier EXCEPT ![activeEra] = f]
+        /\ inflight' = inflight \cup {[era |-> activeEra, frontier |-> f]}
     /\ delivered' = NoDelivered
-    /\ UNCHANGED <<issued, activeGen, pendingSeal, sealed, covered, closed>>
+    /\ UNCHANGED <<issued, activeEra, pendingSeal, sealed, covered, closed>>
     /\ phase' = phase
 
 DeliverReply ==
     /\ \E r \in inflight:
-        /\ r.gen \notin sealed
+        /\ r.era \notin sealed
         /\ inflight' = inflight \ {r}
-        /\ delivered' = [valid |-> TRUE, gen |-> r.gen, frontier |-> r.frontier]
-    /\ UNCHANGED <<phase, issued, activeGen, pendingSeal, sealed, covered, closed, frontier>>
+        /\ delivered' = [valid |-> TRUE, era |-> r.era, frontier |-> r.frontier]
+    /\ UNCHANGED <<phase, issued, activeEra, pendingSeal, sealed, covered, closed, frontier>>
 
 DropReply ==
     /\ \E r \in inflight:
         /\ inflight' = inflight \ {r}
     /\ delivered' = NoDelivered
-    /\ UNCHANGED <<phase, issued, activeGen, pendingSeal, sealed, covered, closed, frontier>>
+    /\ UNCHANGED <<phase, issued, activeEra, pendingSeal, sealed, covered, closed, frontier>>
 
 ClearDelivered ==
     /\ delivered.valid
     /\ delivered' = NoDelivered
-    /\ UNCHANGED <<phase, issued, activeGen, pendingSeal, sealed, covered, closed, frontier, inflight>>
+    /\ UNCHANGED <<phase, issued, activeEra, pendingSeal, sealed, covered, closed, frontier, inflight>>
 
 Seal ==
     /\ phase = "Active"
     /\ pendingSeal = NoPending
-    /\ activeGen \notin sealed
-    /\ sealed' = sealed \cup {activeGen}
-    /\ pendingSeal' = activeGen
+    /\ activeEra \notin sealed
+    /\ sealed' = sealed \cup {activeEra}
+    /\ pendingSeal' = activeEra
     /\ phase' = "Sealed"
     /\ delivered' = NoDelivered
-    /\ UNCHANGED <<issued, activeGen, covered, closed, frontier, inflight>>
+    /\ UNCHANGED <<issued, activeEra, covered, closed, frontier, inflight>>
 
 Cover ==
     /\ phase \in {"Sealed", "Active"}
     /\ pendingSeal # NoPending
-    /\ activeGen \in issued
-    /\ activeGen > pendingSeal
-    /\ frontier[activeGen] >= frontier[pendingSeal]
+    /\ activeEra \in issued
+    /\ activeEra > pendingSeal
+    /\ frontier[activeEra] >= frontier[pendingSeal]
     /\ covered' = covered \cup {pendingSeal}
     /\ pendingSeal' = NoPending
     /\ phase' = "Covered"
     /\ delivered' = NoDelivered
-    /\ UNCHANGED <<issued, activeGen, sealed, closed, frontier, inflight>>
+    /\ UNCHANGED <<issued, activeEra, sealed, closed, frontier, inflight>>
 
 Close ==
     /\ phase = "Covered"
-    /\ \E g \in covered \ closed:
-        /\ closed' = closed \cup {g}
+    /\ \E e \in covered \ closed:
+        /\ closed' = closed \cup {e}
         /\ phase' = "Closed"
     /\ delivered' = NoDelivered
-    /\ UNCHANGED <<issued, activeGen, pendingSeal, sealed, covered, frontier, inflight>>
+    /\ UNCHANGED <<issued, activeEra, pendingSeal, sealed, covered, frontier, inflight>>
 
 Reattach ==
     /\ phase = "Closed"
-    /\ \A g \in sealed: g \in covered \/ g \in closed
+    /\ \A e \in sealed: e \in covered \/ e \in closed
     \* Reattach completes the predecessor handover and returns the successor to
     \* steady-state serving, so the next seal/issue cycle can proceed.
     /\ phase' = "Active"
     /\ delivered' = NoDelivered
-    /\ UNCHANGED <<issued, activeGen, pendingSeal, sealed, covered, closed, frontier, inflight>>
+    /\ UNCHANGED <<issued, activeEra, pendingSeal, sealed, covered, closed, frontier, inflight>>
 
 Stutter ==
     UNCHANGED Vars
@@ -162,55 +162,55 @@ Next ==
 
 TypeOK ==
     /\ phase \in Phases
-    /\ issued \subseteq Generations
-    /\ activeGen \in Generations
-    /\ pendingSeal \in 0..(MaxGeneration + 1)
+    /\ issued \subseteq Eras
+    /\ activeEra \in Eras
+    /\ pendingSeal \in 0..(MaxEra + 1)
     /\ sealed \subseteq issued
     /\ covered \subseteq sealed
     /\ closed \subseteq covered
-    /\ frontier \in [Generations -> Frontiers]
+    /\ frontier \in [Eras -> Frontiers]
     /\ inflight \subseteq ReplySet
-    /\ delivered \in [valid : BOOLEAN, gen : Generations, frontier : Frontiers]
+    /\ delivered \in [valid : BOOLEAN, era : Eras, frontier : Frontiers]
 
-LiveGenerations == issued \ sealed
+LiveEras == issued \ sealed
 
-\* Stronger Primacy shape invariant: every issued generation that is not the
-\* current active generation has already been sealed. This is induction-friendly
-\* and does not depend on the concrete generation bound; the bound only limits
+\* Stronger Primacy shape invariant: every issued era that is not the
+\* current active era has already been sealed. This is induction-friendly
+\* and does not depend on the concrete era bound; the bound only limits
 \* how many times TLC can exercise the repeated cycle in one run.
 OnlyCurrentMayRemainUnsealed ==
-    \A g \in issued:
-        g # activeGen => g \in sealed
+    \A e \in issued:
+        e # activeEra => e \in sealed
 
-ActiveGenerationIssued ==
-    issued = {} \/ activeGen \in issued
+ActiveEraIssued ==
+    issued = {} \/ activeEra \in issued
 
 PrimacyInductive ==
-    /\ ActiveGenerationIssued
+    /\ ActiveEraIssued
     /\ OnlyCurrentMayRemainUnsealed
 
-\* Primacy: at most one generation is live for serving.
+\* Primacy: at most one era is live for serving.
 Primacy ==
-    Cardinality(LiveGenerations) <= 1
+    Cardinality(LiveEras) <= 1
 
 \* Inheritance: any sealed predecessor that is marked covered must be covered by a
-\* strictly newer generation whose frontier is no smaller.
+\* strictly newer era whose frontier is no smaller.
 Inheritance ==
-    \A g \in covered:
+    \A e \in covered:
         \E h \in issued:
-            /\ h > g
-            /\ h = activeGen \/ h \in LiveGenerations
-            /\ frontier[h] >= frontier[g]
+            /\ h > e
+            /\ h = activeEra \/ h \in LiveEras
+            /\ frontier[h] >= frontier[e]
 
-\* Silence: once a generation is sealed, a valid reply may not still cite it.
+\* Silence: once an era is sealed, a valid reply may not still cite it.
 Silence ==
-    delivered.valid => delivered.gen \notin sealed
+    delivered.valid => delivered.era \notin sealed
 
-\* Finality side: every sealed predecessor must be pending cover,
+\* Finality: every sealed predecessor must be pending cover,
 \* already covered, or already closed before reattach is legal.
 Finality ==
-    \A g \in sealed:
-        /\ g = pendingSeal \/ g \in covered \/ g \in closed
+    \A e \in sealed:
+        /\ e = pendingSeal \/ e \in covered \/ e \in closed
 
 G1_Succession ==
     Inheritance
@@ -234,8 +234,8 @@ SuccessionGuarantees ==
     /\ G4_Finality
 
 \* Stronger lemma used to support an induction-style argument for Primacy:
-\* if only the current active generation may remain unsealed, then there can be
-\* at most one live generation.
+\* if only the current active era may remain unsealed, then there can be
+\* at most one live era.
 THEOREM PrimacyInductiveImpliesPrimacy ==
     PrimacyInductive => Primacy
 

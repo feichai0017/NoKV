@@ -269,11 +269,11 @@ func (s *Store) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (r
 		); err != nil {
 			return s.state.Succession(), err
 		}
-		generation := rootstate.NextTenureEpoch(s.state.Tenure, s.state.Legacy, cmd.HolderID, cmd.NowUnixNano)
+		era := rootstate.NextTenureEra(s.state.Tenure, s.state.Legacy, cmd.HolderID, cmd.NowUnixNano)
 		commit, err := s.appendLocked(ctx, rootevent.TenureGranted(
 			cmd.HolderID,
 			cmd.ExpiresUnixNano,
-			generation,
+			era,
 			rootproto.MandateDefault,
 			cmd.LineageDigest,
 			cmd.InheritedFrontiers,
@@ -294,7 +294,7 @@ func (s *Store) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (r
 		commit, err := s.appendLocked(ctx, rootevent.TenureReleased(
 			cmd.HolderID,
 			cmd.NowUnixNano,
-			current.Epoch,
+			current.Era,
 			mandate,
 			current.LineageDigest,
 			cmd.InheritedFrontiers,
@@ -327,8 +327,8 @@ func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand
 	switch cmd.Kind {
 	case rootproto.HandoverActSeal:
 		current := s.state.Tenure
-		if s.state.Legacy.Epoch != 0 &&
-			s.state.Legacy.Epoch == current.Epoch &&
+		if s.state.Legacy.Era != 0 &&
+			s.state.Legacy.Era == current.Era &&
 			s.state.Legacy.HolderID == strings.TrimSpace(cmd.HolderID) {
 			return s.state.Succession(), nil
 		}
@@ -341,7 +341,7 @@ func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand
 		}
 		commit, err := s.appendLocked(ctx, rootevent.TenureSealed(
 			cmd.HolderID,
-			current.Epoch,
+			current.Era,
 			mandate,
 			cmd.Frontiers,
 		))
@@ -363,15 +363,15 @@ func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand
 			return s.state.Succession(), err
 		}
 		if rootproto.HandoverStageAtLeast(s.state.Handover.Stage, rootproto.HandoverStageConfirmed) &&
-			s.state.Handover.LegacyEpoch == auditStatus.LegacyEpoch &&
-			s.state.Handover.SuccessorEpoch == s.state.Tenure.Epoch &&
+			s.state.Handover.LegacyEra == auditStatus.LegacyEra &&
+			s.state.Handover.SuccessorEra == s.state.Tenure.Era &&
 			s.state.Handover.LegacyDigest == auditStatus.LegacyDigest {
 			return s.state.Succession(), nil
 		}
 		commit, err := s.appendLocked(ctx, rootevent.HandoverConfirmed(
 			cmd.HolderID,
-			auditStatus.LegacyEpoch,
-			s.state.Tenure.Epoch,
+			auditStatus.LegacyEra,
+			s.state.Tenure.Era,
 			auditStatus.LegacyDigest,
 		))
 		if err != nil {
@@ -387,8 +387,8 @@ func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand
 		}
 		commit, err := s.appendLocked(ctx, rootevent.HandoverClosed(
 			cmd.HolderID,
-			s.state.Handover.LegacyEpoch,
-			s.state.Handover.SuccessorEpoch,
+			s.state.Handover.LegacyEra,
+			s.state.Handover.SuccessorEra,
 			s.state.Handover.LegacyDigest,
 		))
 		if err != nil {
@@ -404,8 +404,8 @@ func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand
 		}
 		commit, err := s.appendLocked(ctx, rootevent.HandoverReattached(
 			cmd.HolderID,
-			s.state.Handover.LegacyEpoch,
-			s.state.Handover.SuccessorEpoch,
+			s.state.Handover.LegacyEra,
+			s.state.Handover.SuccessorEra,
 			s.state.Handover.LegacyDigest,
 		))
 		if err != nil {

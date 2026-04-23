@@ -130,7 +130,7 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 			"active":             lease.ActiveAt(nowUnixNano),
 			"held_by_self":       lease.HolderID != "" && lease.HolderID == holderID,
 			"usable_by_self":     leaseUsableBy(lease, holderID, nowUnixNano, clockSkew.Nanoseconds()),
-			"epoch":              lease.Epoch,
+			"era":                lease.Era,
 			"issued_at": map[string]any{
 				"term":  lease.IssuedAt.Term,
 				"index": lease.IssuedAt.Index,
@@ -141,7 +141,7 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 		"handoff": diagnosticsAuthorityHandoff(report.Handoff),
 		"seal": map[string]any{
 			"holder_id":          rootSnapshot.Legacy.HolderID,
-			"epoch":              rootSnapshot.Legacy.Epoch,
+			"era":                rootSnapshot.Legacy.Era,
 			"mandate":            rootSnapshot.Legacy.Mandate,
 			"consumed_frontiers": diagnosticsCoordinatorFrontiers(rootSnapshot.Legacy.Frontiers),
 			"sealed_at": map[string]any{
@@ -150,22 +150,22 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 			},
 		},
 		"audit": map[string]any{
-			"legacy_epoch":                 report.HandoverWitness.LegacyEpoch,
+			"legacy_era":                   report.HandoverWitness.LegacyEra,
 			"legacy_digest":                report.HandoverWitness.LegacyDigest,
 			"successor_present":            report.HandoverWitness.SuccessorPresent,
 			"successor_frontier_coverage":  diagnosticsCoordinatorCoverage(report.HandoverWitness.Inheritance),
 			"successor_lineage_satisfied":  report.HandoverWitness.SuccessorLineageSatisfied,
 			"successor_monotone_covered":   report.HandoverWitness.SuccessorMonotoneCovered(),
 			"successor_descriptor_covered": report.HandoverWitness.SuccessorDescriptorCovered(),
-			"sealed_generation_retired":    report.HandoverWitness.SealedGenerationRetired,
+			"sealed_era_retired":           report.HandoverWitness.SealedEraRetired,
 			"finality_satisfied":           report.HandoverWitness.FinalitySatisfied(),
 			"handover_stage":               report.Handover.Stage.String(),
 			"finality_defect":              string(report.Anomalies.FinalityDefect),
 			"handover_recorded": map[string]any{
-				"holder_id":       rootSnapshot.Handover.HolderID,
-				"legacy_epoch":    rootSnapshot.Handover.LegacyEpoch,
-				"successor_epoch": rootSnapshot.Handover.SuccessorEpoch,
-				"legacy_digest":   rootSnapshot.Handover.LegacyDigest,
+				"holder_id":     rootSnapshot.Handover.HolderID,
+				"legacy_era":    rootSnapshot.Handover.LegacyEra,
+				"successor_era": rootSnapshot.Handover.SuccessorEra,
+				"legacy_digest": rootSnapshot.Handover.LegacyDigest,
 			},
 		},
 		"handover_witness":   diagnosticsHandoverWitness(report.HandoverWitness),
@@ -209,7 +209,7 @@ func diagnosticsAuthorityHandoff(record rootproto.AuthorityHandoffRecord) map[st
 	return map[string]any{
 		"holder_id":         record.HolderID,
 		"expires_unix_nano": record.ExpiresUnixNano,
-		"epoch":             record.Epoch,
+		"era":               record.Era,
 		"mandate":           record.Mandate,
 		"lineage_digest":    record.LineageDigest,
 		"issued_at": map[string]any{
@@ -238,12 +238,12 @@ func diagnosticsCoordinatorFrontiers(frontiers rootproto.MandateFrontiers) []map
 
 func diagnosticsHandoverWitness(witness rootproto.HandoverWitness) map[string]any {
 	return map[string]any{
-		"legacy_epoch":                witness.LegacyEpoch,
+		"legacy_era":                  witness.LegacyEra,
 		"legacy_digest":               witness.LegacyDigest,
 		"successor_present":           witness.SuccessorPresent,
 		"successor_frontier_coverage": diagnosticsCoordinatorCoverage(witness.Inheritance),
 		"successor_lineage_satisfied": witness.SuccessorLineageSatisfied,
-		"sealed_generation_retired":   witness.SealedGenerationRetired,
+		"sealed_era_retired":          witness.SealedEraRetired,
 		"handover_stage":              witness.Stage.String(),
 		"finality_satisfied":          witness.FinalitySatisfied(),
 	}

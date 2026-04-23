@@ -43,7 +43,7 @@ The current models now distinguish:
 - `delivered` reply currently being admitted by the caller
 
 This means `Seal` no longer retroactively clears outstanding replies. Instead,
-the positive model only allows delivery of replies whose generation remains
+the positive model only allows delivery of replies whose era remains
 legal under the rooted handover state. The contrast model keeps the same
 in-flight structure but removes finality-aware admission.
 
@@ -58,8 +58,8 @@ For `Primacy`, the spec now includes a stronger induction-friendly invariant:
 
 - `G2_PrimacyInductive`
 
-This invariant states that every issued generation other than the current
-`activeGen` has already been sealed. TLC and Apalache both check this stronger
+This invariant states that every issued era other than the current
+`activeEra` has already been sealed. TLC and Apalache both check this stronger
 shape directly, and the spec includes a lemma showing it implies the original
 `Primacy` claim. This is still not a full TLAPS proof, but it is a
 more robust bridge from bounded checking to an unbounded-by-construction

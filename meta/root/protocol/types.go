@@ -56,16 +56,16 @@ type InheritanceStatus struct {
 type AuthorityHandoffRecord struct {
 	HolderID        string
 	ExpiresUnixNano int64
-	Epoch           uint64
+	Era             uint64
 	IssuedAt        Cursor
 	Mandate         uint32
 	LineageDigest   string
 	Frontiers       MandateFrontiers
 }
 
-type ContinuationWitness struct {
+type MandateWitness struct {
 	Mandate          uint32
-	Epoch            uint64
+	Era              uint64
 	ConsumedFrontier uint64
 }
 
@@ -73,23 +73,20 @@ type HandoverStage uint8
 
 const (
 	HandoverStageUnspecified HandoverStage = iota
-	HandoverStagePendingConfirm
 	HandoverStageConfirmed
 	HandoverStageClosed
 	HandoverStageReattached
 )
 
 const (
-	ContinuationWitnessGenerationAttached   uint64 = 0
-	ContinuationWitnessGenerationSuppressed uint64 = ^uint64(0)
+	MandateWitnessEraAttached   uint64 = 0
+	MandateWitnessEraSuppressed uint64 = ^uint64(0)
 )
 
 func (s HandoverStage) String() string {
 	switch s {
 	case HandoverStageUnspecified:
 		return "unspecified"
-	case HandoverStagePendingConfirm:
-		return "pending_confirm"
 	case HandoverStageConfirmed:
 		return "confirmed"
 	case HandoverStageClosed:
@@ -102,12 +99,12 @@ func (s HandoverStage) String() string {
 }
 
 type HandoverWitness struct {
-	LegacyEpoch               uint64
+	LegacyEra                 uint64
 	LegacyDigest              string
 	SuccessorPresent          bool
 	Inheritance               InheritanceStatus
 	SuccessorLineageSatisfied bool
-	SealedGenerationRetired   bool
+	SealedEraRetired          bool
 	Stage                     HandoverStage
 }
 
@@ -239,33 +236,33 @@ func OrderedMandateMasks(mandate uint32, frontiers MandateFrontiers) []uint32 {
 	return out
 }
 
-func NewContinuationWitness(mandate uint32, epoch, consumedFrontier uint64) ContinuationWitness {
-	return ContinuationWitness{
+func NewMandateWitness(mandate uint32, era, consumedFrontier uint64) MandateWitness {
+	return MandateWitness{
 		Mandate:          mandate,
-		Epoch:            epoch,
+		Era:              era,
 		ConsumedFrontier: consumedFrontier,
 	}
 }
 
-func NewSuppressedContinuationWitness(mandate uint32) ContinuationWitness {
-	return ContinuationWitness{
+func NewSuppressedMandateWitness(mandate uint32) MandateWitness {
+	return MandateWitness{
 		Mandate:          mandate,
-		Epoch:            ContinuationWitnessGenerationSuppressed,
+		Era:              MandateWitnessEraSuppressed,
 		ConsumedFrontier: 0,
 	}
 }
 
-func NewAuthorityHandoffRecord(holderID string, expiresUnixNano int64, epoch uint64, issuedAt Cursor, mandate uint32, lineageDigest string, frontiers MandateFrontiers) (AuthorityHandoffRecord, error) {
+func NewAuthorityHandoffRecord(holderID string, expiresUnixNano int64, era uint64, issuedAt Cursor, mandate uint32, lineageDigest string, frontiers MandateFrontiers) (AuthorityHandoffRecord, error) {
 	holderID = strings.TrimSpace(holderID)
 	lineageDigest = strings.TrimSpace(lineageDigest)
 	if holderID == "" {
-		if expiresUnixNano == 0 && epoch == 0 && issuedAt == (Cursor{}) && mandate == 0 && lineageDigest == "" && frontiers.Len() == 0 {
+		if expiresUnixNano == 0 && era == 0 && issuedAt == (Cursor{}) && mandate == 0 && lineageDigest == "" && frontiers.Len() == 0 {
 			return AuthorityHandoffRecord{}, nil
 		}
 		return AuthorityHandoffRecord{}, fmt.Errorf("authority handoff record: holder id is required")
 	}
-	if epoch == 0 {
-		return AuthorityHandoffRecord{}, fmt.Errorf("authority handoff record: cert generation is required")
+	if era == 0 {
+		return AuthorityHandoffRecord{}, fmt.Errorf("authority handoff record: era is required")
 	}
 	resolvedMandate := mandate & mandateMaskAll
 	if resolvedMandate == 0 {
@@ -277,7 +274,7 @@ func NewAuthorityHandoffRecord(holderID string, expiresUnixNano int64, epoch uin
 	return AuthorityHandoffRecord{
 		HolderID:        holderID,
 		ExpiresUnixNano: expiresUnixNano,
-		Epoch:           epoch,
+		Era:             era,
 		IssuedAt:        issuedAt,
 		Mandate:         resolvedMandate,
 		LineageDigest:   lineageDigest,
@@ -285,8 +282,8 @@ func NewAuthorityHandoffRecord(holderID string, expiresUnixNano int64, epoch uin
 	}, nil
 }
 
-func MustNewAuthorityHandoffRecord(holderID string, expiresUnixNano int64, epoch uint64, issuedAt Cursor, mandate uint32, lineageDigest string, frontiers MandateFrontiers) AuthorityHandoffRecord {
-	record, err := NewAuthorityHandoffRecord(holderID, expiresUnixNano, epoch, issuedAt, mandate, lineageDigest, frontiers)
+func MustNewAuthorityHandoffRecord(holderID string, expiresUnixNano int64, era uint64, issuedAt Cursor, mandate uint32, lineageDigest string, frontiers MandateFrontiers) AuthorityHandoffRecord {
+	record, err := NewAuthorityHandoffRecord(holderID, expiresUnixNano, era, issuedAt, mandate, lineageDigest, frontiers)
 	if err != nil {
 		panic(err)
 	}
@@ -324,11 +321,11 @@ func (s InheritanceStatus) FirstGap() (InheritanceCoverage, bool) {
 }
 
 func (w HandoverWitness) FinalitySatisfied() bool {
-	return w.LegacyEpoch != 0 &&
+	return w.LegacyEra != 0 &&
 		w.SuccessorPresent &&
 		w.SuccessorLineageSatisfied &&
 		w.Inheritance.Covered() &&
-		w.SealedGenerationRetired
+		w.SealedEraRetired
 }
 
 func (w HandoverWitness) SuccessorMonotoneCovered() bool {
@@ -341,17 +338,17 @@ func (w HandoverWitness) SuccessorDescriptorCovered() bool {
 		w.Inheritance.CoveredMandate(MandateGetRegionByKey)
 }
 
-func (w HandoverWitness) ReplyGenerationLegal(epoch uint64) bool {
-	if epoch == ContinuationWitnessGenerationAttached {
+func (w HandoverWitness) ReplyEraLegal(era uint64) bool {
+	if era == MandateWitnessEraAttached {
 		return true
 	}
-	if epoch == ContinuationWitnessGenerationSuppressed {
+	if era == MandateWitnessEraSuppressed {
 		return false
 	}
-	if w.LegacyEpoch == 0 {
+	if w.LegacyEra == 0 {
 		return true
 	}
-	if epoch == w.LegacyEpoch {
+	if era == w.LegacyEra {
 		return false
 	}
 	return w.FinalitySatisfied()
@@ -370,11 +367,6 @@ func HandoverStageAtLeast(stage, target HandoverStage) bool {
 	switch target {
 	case HandoverStageUnspecified:
 		return true
-	case HandoverStagePendingConfirm:
-		return stage == HandoverStagePendingConfirm ||
-			stage == HandoverStageConfirmed ||
-			stage == HandoverStageClosed ||
-			stage == HandoverStageReattached
 	case HandoverStageConfirmed:
 		return stage == HandoverStageConfirmed ||
 			stage == HandoverStageClosed ||

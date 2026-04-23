@@ -83,11 +83,11 @@ func (s *protocolMatrixStorage) ApplyTenure(_ context.Context, cmd rootproto.Ten
 		if err := rootstate.ValidateInheritance(s.snapshot.Tenure, s.snapshot.Legacy, cmd.InheritedFrontiers); err != nil {
 			return s.protocolState(), err
 		}
-		generation := rootstate.NextTenureEpoch(s.snapshot.Tenure, s.snapshot.Legacy, cmd.HolderID, cmd.NowUnixNano)
+		era := rootstate.NextTenureEra(s.snapshot.Tenure, s.snapshot.Legacy, cmd.HolderID, cmd.NowUnixNano)
 		s.snapshot.Tenure = rootstate.Tenure{
 			HolderID:        cmd.HolderID,
 			ExpiresUnixNano: cmd.ExpiresUnixNano,
-			Epoch:           generation,
+			Era:             era,
 			Mandate:         rootproto.MandateDefault,
 			LineageDigest:   cmd.LineageDigest,
 		}
@@ -104,7 +104,7 @@ func (s *protocolMatrixStorage) ApplyTenure(_ context.Context, cmd rootproto.Ten
 		s.snapshot.Tenure = rootstate.Tenure{
 			HolderID:        cmd.HolderID,
 			ExpiresUnixNano: cmd.NowUnixNano,
-			Epoch:           s.snapshot.Tenure.Epoch,
+			Era:             s.snapshot.Tenure.Era,
 			IssuedAt:        s.snapshot.Tenure.IssuedAt,
 			Mandate:         s.snapshot.Tenure.Mandate,
 			LineageDigest:   s.snapshot.Tenure.LineageDigest,
@@ -133,7 +133,7 @@ func (s *protocolMatrixStorage) ApplyHandover(_ context.Context, cmd rootproto.H
 		}
 		s.snapshot.Legacy = rootstate.Legacy{
 			HolderID:  cmd.HolderID,
-			Epoch:     s.snapshot.Tenure.Epoch,
+			Era:       s.snapshot.Tenure.Era,
 			Mandate:   mandate,
 			Frontiers: cmd.Frontiers,
 		}
@@ -158,11 +158,11 @@ func (s *protocolMatrixStorage) ApplyHandover(_ context.Context, cmd rootproto.H
 			return s.protocolState(), err
 		}
 		s.snapshot.Handover = rootstate.Handover{
-			HolderID:       cmd.HolderID,
-			LegacyEpoch:    auditStatus.LegacyEpoch,
-			SuccessorEpoch: s.snapshot.Tenure.Epoch,
-			LegacyDigest:   auditStatus.LegacyDigest,
-			Stage:          rootproto.HandoverStageConfirmed,
+			HolderID:     cmd.HolderID,
+			LegacyEra:    auditStatus.LegacyEra,
+			SuccessorEra: s.snapshot.Tenure.Era,
+			LegacyDigest: auditStatus.LegacyDigest,
+			Stage:        rootproto.HandoverStageConfirmed,
 		}
 	case rootproto.HandoverActClose:
 		s.closes++
@@ -299,25 +299,25 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 	activeLeaseExpiry := time.Now().Add(20 * time.Second).UnixNano()
 	sealWithDescriptor7 := rootstate.Legacy{
 		HolderID:  "c1",
-		Epoch:     2,
+		Era:       2,
 		Mandate:   rootproto.MandateDefault,
 		Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 	}
 	sealWithDescriptor7Digest := rootstate.DigestOfLegacy(sealWithDescriptor7)
 	sealWithDescriptor9 := rootstate.Legacy{
 		HolderID:  "c1",
-		Epoch:     2,
+		Era:       2,
 		Mandate:   rootproto.MandateDefault,
 		Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 9),
 	}
 	sealWithDescriptor9Digest := rootstate.DigestOfLegacy(sealWithDescriptor9)
 
 	cases := []faultCase{
-		// F.revived_holder + F.root_unreach — once the predecessor generation has
+		// F.revived_holder + F.root_unreach — once the predecessor era has
 		// sealed and no covered successor is present, the old holder must fail-stop
 		// for monotone duties instead of continuing on cached authority.
 		{
-			name: "sealed_generation_cannot_continue_monotone_without_successor",
+			name: "sealed_era_cannot_continue_monotone_without_successor",
 			store: &protocolMatrixStorage{
 				leader:      true,
 				campaignErr: rootstate.ErrPrimacy,
@@ -325,10 +325,10 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 					Tenure: rootstate.Tenure{
 						HolderID:        "c1",
 						ExpiresUnixNano: activeLeaseExpiry,
-						Epoch:           2,
+						Era:             2,
 						Mandate:         rootproto.MandateDefault,
 					},
-					Legacy: rootstate.Legacy{HolderID: "c1", Epoch: 2, Mandate: rootproto.MandateDefault},
+					Legacy: rootstate.Legacy{HolderID: "c1", Era: 2, Mandate: rootproto.MandateDefault},
 				},
 			},
 			run: func(t *testing.T, svc *coordserver.Service) {
@@ -344,7 +344,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 		// F.root_unreach — metadata answers must also fail-stop once the rooted
 		// authority path has sealed but no successor coverage has landed.
 		{
-			name: "sealed_generation_cannot_continue_metadata_without_successor",
+			name: "sealed_era_cannot_continue_metadata_without_successor",
 			store: &protocolMatrixStorage{
 				leader:      true,
 				campaignErr: rootstate.ErrPrimacy,
@@ -352,10 +352,10 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 					Tenure: rootstate.Tenure{
 						HolderID:        "c1",
 						ExpiresUnixNano: activeLeaseExpiry,
-						Epoch:           2,
+						Era:             2,
 						Mandate:         rootproto.MandateDefault,
 					},
-					Legacy:      rootstate.Legacy{HolderID: "c1", Epoch: 2, Mandate: rootproto.MandateDefault, Frontiers: succession.Frontiers(rootstate.State{IDFence: 0, TSOFence: 0}, 7)},
+					Legacy:      rootstate.Legacy{HolderID: "c1", Era: 2, Mandate: rootproto.MandateDefault, Frontiers: succession.Frontiers(rootstate.State{IDFence: 0, TSOFence: 0}, 7)},
 					Descriptors: baseDescriptors,
 				},
 			},
@@ -369,7 +369,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 				"handover_stage":     "unspecified",
 			},
 		},
-		// F.successor_campaign + F.budget_exhaustion — a successor generation may
+		// F.successor_campaign + F.budget_exhaustion — a successor era may
 		// campaign, but it cannot confirm handover before covering the predecessor's
 		// sealed monotone frontier.
 		{
@@ -380,7 +380,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 					Tenure: rootstate.Tenure{
 						HolderID:        "c1",
 						ExpiresUnixNano: activeLeaseExpiry,
-						Epoch:           3,
+						Era:             3,
 						Mandate:         rootproto.MandateDefault,
 						LineageDigest:   sealWithDescriptor7Digest,
 					},
@@ -415,7 +415,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 					Tenure: rootstate.Tenure{
 						HolderID:        "c1",
 						ExpiresUnixNano: activeLeaseExpiry,
-						Epoch:           3,
+						Era:             3,
 						Mandate:         rootproto.MandateDefault,
 						LineageDigest:   sealWithDescriptor9Digest,
 					},
@@ -449,7 +449,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 					Tenure: rootstate.Tenure{
 						HolderID:        "c1",
 						ExpiresUnixNano: activeLeaseExpiry,
-						Epoch:           3,
+						Era:             3,
 						Mandate:         rootproto.MandateDefault,
 						LineageDigest:   sealWithDescriptor7Digest,
 					},
@@ -479,7 +479,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 					Tenure: rootstate.Tenure{
 						HolderID:        "c1",
 						ExpiresUnixNano: activeLeaseExpiry,
-						Epoch:           3,
+						Era:             3,
 						Mandate:         rootproto.MandateDefault,
 						LineageDigest:   "other-digest",
 					},
@@ -489,11 +489,11 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 						TSCurrent: 34,
 					},
 					Handover: rootstate.Handover{
-						HolderID:       "c1",
-						LegacyEpoch:    2,
-						SuccessorEpoch: 3,
-						LegacyDigest:   sealWithDescriptor7Digest,
-						Stage:          rootproto.HandoverStageClosed,
+						HolderID:     "c1",
+						LegacyEra:    2,
+						SuccessorEra: 3,
+						LegacyDigest: sealWithDescriptor7Digest,
+						Stage:        rootproto.HandoverStageClosed,
 					},
 					Descriptors: baseDescriptors,
 				},
@@ -508,7 +508,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 			},
 		},
 		// F.successor_campaign — once lineage, coverage, close, and reattach all
-		// line up, the successor can continue detached duties with the new generation.
+		// line up, the successor can continue detached duties with the new era.
 		{
 			name: "successor_can_confirm_and_reattach_end_to_end",
 			store: &protocolMatrixStorage{
@@ -517,7 +517,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 					Tenure: rootstate.Tenure{
 						HolderID:        "c1",
 						ExpiresUnixNano: activeLeaseExpiry,
-						Epoch:           3,
+						Era:             3,
 						Mandate:         rootproto.MandateDefault,
 						LineageDigest:   sealWithDescriptor7Digest,
 					},
@@ -535,10 +535,10 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 				require.NoError(t, svc.ReattachHandover())
 				allocResp, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 				require.NoError(t, err)
-				require.Equal(t, uint64(3), allocResp.GetEpoch())
+				require.Equal(t, uint64(3), allocResp.GetEra())
 				resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
 				require.NoError(t, err)
-				require.Equal(t, uint64(3), resp.GetEpoch())
+				require.Equal(t, uint64(3), resp.GetEra())
 			},
 			diagKeys: map[string]any{
 				"finality_satisfied": true,
@@ -561,7 +561,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 
 func TestDetachedLateReplyAfterSealRejectedByClientVerifier(t *testing.T) {
 	// F.delayed_reply — a predecessor reply leaves before seal, then arrives only
-	// after the client has already observed the successor generation.
+	// after the client has already observed the successor era.
 	activeLeaseExpiry := time.Now().Add(20 * time.Second).UnixNano()
 
 	staleStore := &protocolMatrixStorage{
@@ -570,7 +570,7 @@ func TestDetachedLateReplyAfterSealRejectedByClientVerifier(t *testing.T) {
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: activeLeaseExpiry,
-				Epoch:           1,
+				Era:             1,
 				Mandate:         rootproto.MandateDefault,
 			},
 		},
@@ -581,7 +581,7 @@ func TestDetachedLateReplyAfterSealRejectedByClientVerifier(t *testing.T) {
 
 	oldResp, err := staleSvc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), oldResp.GetEpoch())
+	require.Equal(t, uint64(1), oldResp.GetEra())
 
 	require.NoError(t, staleSvc.SealTenure())
 	seal := staleStore.snapshot.Legacy
@@ -593,7 +593,7 @@ func TestDetachedLateReplyAfterSealRejectedByClientVerifier(t *testing.T) {
 			Tenure: rootstate.Tenure{
 				HolderID:        "c2",
 				ExpiresUnixNano: activeLeaseExpiry,
-				Epoch:           2,
+				Era:             2,
 				Mandate:         rootproto.MandateDefault,
 				LineageDigest:   legacyDigest,
 			},
@@ -613,10 +613,10 @@ func TestDetachedLateReplyAfterSealRejectedByClientVerifier(t *testing.T) {
 
 	freshResp1, err := successorSvc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
-	require.Equal(t, uint64(2), freshResp1.GetEpoch())
+	require.Equal(t, uint64(2), freshResp1.GetEra())
 	freshResp2, err := successorSvc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
-	require.Equal(t, uint64(2), freshResp2.GetEpoch())
+	require.Equal(t, uint64(2), freshResp2.GetEra())
 
 	freshPrimary := &allocSequenceServer{
 		steps: []allocStep{
@@ -644,12 +644,12 @@ func TestDetachedLateReplyAfterSealRejectedByClientVerifier(t *testing.T) {
 	resp, err := cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
 	require.Equal(t, freshResp1.GetFirstId(), resp.GetFirstId())
-	require.Equal(t, uint64(2), resp.GetEpoch())
+	require.Equal(t, uint64(2), resp.GetEra())
 
 	resp, err = cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
 	require.Equal(t, freshResp2.GetFirstId(), resp.GetFirstId())
-	require.Equal(t, uint64(2), resp.GetEpoch())
+	require.Equal(t, uint64(2), resp.GetEra())
 
 	require.Equal(t, 2, freshPrimary.calls)
 	require.Equal(t, 1, lateReply.calls)

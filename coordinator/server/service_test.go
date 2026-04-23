@@ -127,11 +127,11 @@ func (f *fakeStorage) ApplyTenure(_ context.Context, cmd rootproto.TenureCommand
 		if err := rootstate.ValidateInheritance(f.snapshot.Tenure, f.snapshot.Legacy, cmd.InheritedFrontiers); err != nil {
 			return f.protocolState(), err
 		}
-		generation := rootstate.NextTenureEpoch(f.snapshot.Tenure, f.snapshot.Legacy, cmd.HolderID, cmd.NowUnixNano)
+		era := rootstate.NextTenureEra(f.snapshot.Tenure, f.snapshot.Legacy, cmd.HolderID, cmd.NowUnixNano)
 		f.snapshot.Tenure = rootstate.Tenure{
 			HolderID:        cmd.HolderID,
 			ExpiresUnixNano: cmd.ExpiresUnixNano,
-			Epoch:           generation,
+			Era:             era,
 			Mandate:         rootproto.MandateDefault,
 			LineageDigest:   cmd.LineageDigest,
 		}
@@ -152,7 +152,7 @@ func (f *fakeStorage) ApplyTenure(_ context.Context, cmd rootproto.TenureCommand
 		f.snapshot.Tenure = rootstate.Tenure{
 			HolderID:        cmd.HolderID,
 			ExpiresUnixNano: cmd.NowUnixNano,
-			Epoch:           f.snapshot.Tenure.Epoch,
+			Era:             f.snapshot.Tenure.Era,
 			IssuedAt:        f.snapshot.Tenure.IssuedAt,
 			Mandate:         f.snapshot.Tenure.Mandate,
 		}
@@ -184,7 +184,7 @@ func (f *fakeStorage) ApplyHandover(_ context.Context, cmd rootproto.HandoverCom
 		}
 		f.snapshot.Legacy = rootstate.Legacy{
 			HolderID:  cmd.HolderID,
-			Epoch:     f.snapshot.Tenure.Epoch,
+			Era:       f.snapshot.Tenure.Era,
 			Mandate:   mandate,
 			Frontiers: cmd.Frontiers,
 		}
@@ -209,11 +209,11 @@ func (f *fakeStorage) ApplyHandover(_ context.Context, cmd rootproto.HandoverCom
 			return f.protocolState(), err
 		}
 		f.snapshot.Handover = rootstate.Handover{
-			HolderID:       cmd.HolderID,
-			LegacyEpoch:    auditStatus.LegacyEpoch,
-			SuccessorEpoch: f.snapshot.Tenure.Epoch,
-			LegacyDigest:   auditStatus.LegacyDigest,
-			Stage:          rootproto.HandoverStageConfirmed,
+			HolderID:     cmd.HolderID,
+			LegacyEra:    auditStatus.LegacyEra,
+			SuccessorEra: f.snapshot.Tenure.Era,
+			LegacyDigest: auditStatus.LegacyDigest,
+			Stage:        rootproto.HandoverStageConfirmed,
 		}
 	case rootproto.HandoverActClose:
 		f.closeCalls++
@@ -370,13 +370,13 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: now.Add(5 * time.Second).UnixNano(),
-				Epoch:           3,
+				Era:             3,
 				IssuedAt:        rootstate.Cursor{Term: 2, Index: 9},
 				Mandate:         rootproto.MandateDefault,
 			},
 			Legacy: rootstate.Legacy{
 				HolderID:  "c1",
-				Epoch:     2,
+				Era:       2,
 				Mandate:   rootproto.MandateDefault,
 				Frontiers: succession.Frontiers(rootstate.State{IDFence: 44, TSOFence: 77}, 5),
 				SealedAt:  rootstate.Cursor{Term: 2, Index: 8},
@@ -419,23 +419,23 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 	require.Equal(t, true, lease["active"])
 	require.Equal(t, true, lease["held_by_self"])
 	require.Equal(t, true, lease["usable_by_self"])
-	require.Equal(t, uint64(3), lease["epoch"])
+	require.Equal(t, uint64(3), lease["era"])
 	require.Equal(t, uint32(rootproto.MandateDefault), lease["mandate"])
 	require.Equal(t, map[string]any{"term": uint64(2), "index": uint64(9)}, lease["issued_at"])
 	require.Equal(t, "c1", seal["holder_id"])
-	require.Equal(t, uint64(2), seal["epoch"])
+	require.Equal(t, uint64(2), seal["era"])
 	require.Equal(t, []map[string]any{
 		{"mandate": rootproto.MandateAllocID, "duty_name": "alloc_id", "frontier": uint64(44)},
 		{"mandate": rootproto.MandateTSO, "duty_name": "tso", "frontier": uint64(77)},
 		{"mandate": rootproto.MandateGetRegionByKey, "duty_name": "get_region_by_key", "frontier": uint64(5)},
 	}, seal["consumed_frontiers"])
 	require.Equal(t, map[string]any{"term": uint64(2), "index": uint64(8)}, seal["sealed_at"])
-	require.Equal(t, uint64(2), audit["legacy_epoch"])
+	require.Equal(t, uint64(2), audit["legacy_era"])
 	require.Equal(t, true, audit["successor_present"])
 	require.Equal(t, true, audit["successor_lineage_satisfied"])
 	require.Equal(t, true, audit["successor_monotone_covered"])
 	require.Equal(t, false, audit["successor_descriptor_covered"])
-	require.Equal(t, true, audit["sealed_generation_retired"])
+	require.Equal(t, true, audit["sealed_era_retired"])
 	require.Equal(t, false, audit["finality_satisfied"])
 	require.Equal(t, "unspecified", audit["handover_stage"])
 	require.Len(t, regions, 1)
@@ -480,7 +480,7 @@ func TestServiceGetRegionByKeyRequiredRootToken(t *testing.T) {
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: 10_000,
-				Epoch:           4,
+				Era:             4,
 			},
 		},
 	}
@@ -512,7 +512,7 @@ func TestServiceGetRegionByKeyRequiredRootToken(t *testing.T) {
 	require.Equal(t, uint64(3), resp.GetServedRootToken().GetIndex())
 	require.Equal(t, uint64(5), resp.GetDescriptorRevision())
 	require.Zero(t, resp.GetRequiredDescriptorRevision())
-	require.Equal(t, uint64(4), resp.GetEpoch())
+	require.Equal(t, uint64(4), resp.GetEra())
 	require.Equal(t, coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE, resp.GetServingClass())
 	require.Equal(t, coordpb.SyncHealth_SYNC_HEALTH_HEALTHY, resp.GetSyncHealth())
 }
@@ -553,7 +553,7 @@ func TestServiceGetRegionByKeyRequiredDescriptorRevision(t *testing.T) {
 	require.Equal(t, uint64(7), resp.GetDescriptorRevision())
 	require.Equal(t, uint64(7), resp.GetRequiredDescriptorRevision())
 	require.Equal(t, uint64(7), resp.GetRegionDescriptor().GetRootEpoch())
-	require.Zero(t, resp.GetEpoch())
+	require.Zero(t, resp.GetEra())
 	require.Equal(t, coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE, resp.GetServingClass())
 	require.Equal(t, coordpb.SyncHealth_SYNC_HEALTH_HEALTHY, resp.GetSyncHealth())
 }
@@ -877,14 +877,14 @@ func TestServiceAllocIDAndTSO(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), idResp.GetFirstId())
 	require.Equal(t, uint64(3), idResp.GetCount())
-	require.Zero(t, idResp.GetEpoch())
+	require.Zero(t, idResp.GetEra())
 	require.Equal(t, uint64(102), idResp.GetConsumedFrontier())
 
 	tsResp, err := svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 2})
 	require.NoError(t, err)
 	require.Equal(t, uint64(500), tsResp.GetTimestamp())
 	require.Equal(t, uint64(2), tsResp.GetCount())
-	require.Zero(t, tsResp.GetEpoch())
+	require.Zero(t, tsResp.GetEra())
 	require.Equal(t, uint64(501), tsResp.GetConsumedFrontier())
 }
 
@@ -1805,16 +1805,16 @@ func TestServiceTenureReusedAcrossAllocatorRequests(t *testing.T) {
 	idResp, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
 	require.Equal(t, uint64(10), idResp.GetFirstId())
-	require.Equal(t, uint64(1), idResp.GetEpoch())
+	require.Equal(t, uint64(1), idResp.GetEra())
 	require.Equal(t, uint64(10), idResp.GetConsumedFrontier())
 	require.Equal(t, 1, store.campaignCalls)
 	require.Equal(t, "c1", store.snapshot.Tenure.HolderID)
-	require.Equal(t, uint64(1), store.snapshot.Tenure.Epoch)
+	require.Equal(t, uint64(1), store.snapshot.Tenure.Era)
 
 	tsResp, err := svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), tsResp.GetTimestamp())
-	require.Equal(t, uint64(1), tsResp.GetEpoch())
+	require.Equal(t, uint64(1), tsResp.GetEra())
 	require.Equal(t, uint64(100), tsResp.GetConsumedFrontier())
 	require.Equal(t, 1, store.campaignCalls)
 }
@@ -1827,12 +1827,12 @@ func TestServiceMonotoneRepliesCarryLeaseEvidence(t *testing.T) {
 
 	idResp, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 3})
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), idResp.GetEpoch())
+	require.Equal(t, uint64(1), idResp.GetEra())
 	require.Equal(t, uint64(52), idResp.GetConsumedFrontier())
 
 	tsResp, err := svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 4})
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), tsResp.GetEpoch())
+	require.Equal(t, uint64(1), tsResp.GetEra())
 	require.Equal(t, uint64(903), tsResp.GetConsumedFrontier())
 }
 
@@ -1852,7 +1852,7 @@ func TestServiceTenureRenewsInsideRenewWindow(t *testing.T) {
 	_, err = svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
 	require.NoError(t, err)
 	require.Equal(t, 2, store.campaignCalls)
-	require.Equal(t, uint64(1), store.snapshot.Tenure.Epoch)
+	require.Equal(t, uint64(1), store.snapshot.Tenure.Era)
 }
 
 func TestServiceTenureRenewDoesNotReloadAllocators(t *testing.T) {
@@ -1970,7 +1970,7 @@ func TestServiceReleaseTenure(t *testing.T) {
 	require.NoError(t, svc.ReleaseTenure())
 	require.Equal(t, 1, store.releaseCalls)
 	require.Equal(t, int64(200), store.snapshot.Tenure.ExpiresUnixNano)
-	require.Equal(t, uint64(1), store.snapshot.Tenure.Epoch)
+	require.Equal(t, uint64(1), store.snapshot.Tenure.Era)
 	require.False(t, store.snapshot.Tenure.ActiveAt(200))
 }
 
@@ -1997,7 +1997,7 @@ func TestServiceSealTenure(t *testing.T) {
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				Epoch:           2,
+				Era:             2,
 				Mandate:         rootproto.MandateDefault,
 			},
 		},
@@ -2024,20 +2024,20 @@ func TestServiceSealTenure(t *testing.T) {
 	require.NoError(t, svc.SealTenure())
 	require.Equal(t, 1, store.sealCalls)
 	require.Equal(t, "c1", store.snapshot.Legacy.HolderID)
-	require.Equal(t, uint64(2), store.snapshot.Legacy.Epoch)
+	require.Equal(t, uint64(2), store.snapshot.Legacy.Era)
 	require.Equal(t, uint64(11), store.snapshot.Legacy.Frontiers.Frontier(rootproto.MandateAllocID))
 	require.Equal(t, uint64(102), store.snapshot.Legacy.Frontiers.Frontier(rootproto.MandateTSO))
 	require.Equal(t, uint64(7), store.snapshot.Legacy.Frontiers.Frontier(rootproto.MandateGetRegionByKey))
 
 	nextID, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
-	require.Equal(t, uint64(3), nextID.GetEpoch())
+	require.Equal(t, uint64(3), nextID.GetEra())
 	require.Equal(t, rootstate.DigestOfLegacy(store.snapshot.Legacy), store.snapshot.Tenure.LineageDigest)
 	require.Equal(t, campaignCallsBeforeSeal+1, store.campaignCalls)
 
 	routeResp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
 	require.NoError(t, err)
-	require.Equal(t, uint64(3), routeResp.GetEpoch())
+	require.Equal(t, uint64(3), routeResp.GetEra())
 }
 
 func TestServiceSealTenurePreActionGateRejectsStaleHolder(t *testing.T) {
@@ -2047,7 +2047,7 @@ func TestServiceSealTenurePreActionGateRejectsStaleHolder(t *testing.T) {
 			Tenure: rootstate.Tenure{
 				HolderID:        "c2",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				Epoch:           2,
+				Era:             2,
 				Mandate:         rootproto.MandateDefault,
 			},
 		},
@@ -2071,7 +2071,7 @@ func TestServiceSealTenureAblationNoop(t *testing.T) {
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				Epoch:           2,
+				Era:             2,
 				Mandate:         rootproto.MandateDefault,
 			},
 		},
@@ -2105,7 +2105,7 @@ func TestServiceAblationDisableBudgetUsesLargeRunway(t *testing.T) {
 	require.Greater(t, store.lastID, uint64(100))
 }
 
-func TestServiceMonotoneDutyFailsWhenGenerationSealedAndCannotRenew(t *testing.T) {
+func TestServiceMonotoneDutyFailsWhenEraSealedAndCannotRenew(t *testing.T) {
 	store := &fakeStorage{
 		leader:      true,
 		campaignErr: rootstate.ErrPrimacy,
@@ -2113,12 +2113,12 @@ func TestServiceMonotoneDutyFailsWhenGenerationSealedAndCannotRenew(t *testing.T
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				Epoch:           2,
+				Era:             2,
 				Mandate:         rootproto.MandateDefault,
 			},
 			Legacy: rootstate.Legacy{
 				HolderID: "c1",
-				Epoch:    2,
+				Era:      2,
 				Mandate:  rootproto.MandateDefault,
 			},
 		},
@@ -2141,7 +2141,7 @@ func TestServiceAblationDisableReplyEvidenceMarksWitnessSuppressed(t *testing.T)
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				Epoch:           2,
+				Era:             2,
 				Mandate:         rootproto.MandateDefault,
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
@@ -2157,17 +2157,17 @@ func TestServiceAblationDisableReplyEvidenceMarksWitnessSuppressed(t *testing.T)
 
 	allocResp, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
-	require.Equal(t, rootproto.ContinuationWitnessGenerationSuppressed, allocResp.GetEpoch())
+	require.Equal(t, rootproto.MandateWitnessEraSuppressed, allocResp.GetEra())
 	require.Zero(t, allocResp.GetConsumedFrontier())
 
 	tsoResp, err := svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
 	require.NoError(t, err)
-	require.Equal(t, rootproto.ContinuationWitnessGenerationSuppressed, tsoResp.GetEpoch())
+	require.Equal(t, rootproto.MandateWitnessEraSuppressed, tsoResp.GetEra())
 	require.Zero(t, tsoResp.GetConsumedFrontier())
 
 	getResp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
 	require.NoError(t, err)
-	require.Equal(t, rootproto.ContinuationWitnessGenerationSuppressed, getResp.GetEpoch())
+	require.Equal(t, rootproto.MandateWitnessEraSuppressed, getResp.GetEra())
 }
 
 func TestServiceAblationFailStopOnRootUnreachRejectsBestEffortMetadata(t *testing.T) {
@@ -2196,7 +2196,7 @@ func TestServiceAblationFailStopOnRootUnreachRejectsBestEffortMetadata(t *testin
 	require.Contains(t, err.Error(), errRootUnavailable)
 }
 
-func TestServiceMetadataAnswerFailsWhenGenerationSealedAndCannotRenew(t *testing.T) {
+func TestServiceMetadataAnswerFailsWhenEraSealedAndCannotRenew(t *testing.T) {
 	store := &fakeStorage{
 		leader:      true,
 		campaignErr: rootstate.ErrPrimacy,
@@ -2204,12 +2204,12 @@ func TestServiceMetadataAnswerFailsWhenGenerationSealedAndCannotRenew(t *testing
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				Epoch:           2,
+				Era:             2,
 				Mandate:         rootproto.MandateDefault,
 			},
 			Legacy: rootstate.Legacy{
 				HolderID:  "c1",
-				Epoch:     2,
+				Era:       2,
 				Mandate:   rootproto.MandateDefault,
 				Frontiers: succession.Frontiers(rootstate.State{IDFence: 0, TSOFence: 0}, 7),
 			},
@@ -2240,13 +2240,13 @@ func TestServiceConfirmHandover(t *testing.T) {
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 20_000).UnixNano(),
-				Epoch:           3,
+				Era:             3,
 				Mandate:         rootproto.MandateDefault,
 				LineageDigest:   "seal-digest",
 			},
 			Legacy: rootstate.Legacy{
 				HolderID:  "c1",
-				Epoch:     2,
+				Era:       2,
 				Mandate:   rootproto.MandateDefault,
 				Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 				SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
@@ -2265,8 +2265,8 @@ func TestServiceConfirmHandover(t *testing.T) {
 
 	require.NoError(t, svc.ConfirmHandover())
 	require.Equal(t, 1, store.confirmCalls)
-	require.Equal(t, uint64(2), store.snapshot.Handover.LegacyEpoch)
-	require.Equal(t, uint64(3), store.snapshot.Handover.SuccessorEpoch)
+	require.Equal(t, uint64(2), store.snapshot.Handover.LegacyEra)
+	require.Equal(t, uint64(3), store.snapshot.Handover.SuccessorEra)
 	require.Equal(t, rootstate.DigestOfLegacy(store.snapshot.Legacy), store.snapshot.Handover.LegacyDigest)
 	require.Equal(t, rootproto.HandoverStageConfirmed, store.snapshot.Handover.Stage)
 }
@@ -2278,16 +2278,16 @@ func TestServiceCloseHandover(t *testing.T) {
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 20_000).UnixNano(),
-				Epoch:           3,
+				Era:             3,
 				Mandate:         rootproto.MandateDefault,
 				LineageDigest:   "seal-digest",
 			},
 			Handover: rootstate.Handover{
-				HolderID:       "c1",
-				LegacyEpoch:    2,
-				SuccessorEpoch: 3,
-				LegacyDigest:   "seal-digest",
-				Stage:          rootproto.HandoverStageConfirmed,
+				HolderID:     "c1",
+				LegacyEra:    2,
+				SuccessorEra: 3,
+				LegacyDigest: "seal-digest",
+				Stage:        rootproto.HandoverStageConfirmed,
 			},
 		},
 	}
@@ -2299,8 +2299,8 @@ func TestServiceCloseHandover(t *testing.T) {
 
 	require.NoError(t, svc.CloseHandover())
 	require.Equal(t, 1, store.closeCalls)
-	require.Equal(t, uint64(3), store.snapshot.Handover.SuccessorEpoch)
-	require.Equal(t, uint64(2), store.snapshot.Handover.LegacyEpoch)
+	require.Equal(t, uint64(3), store.snapshot.Handover.SuccessorEra)
+	require.Equal(t, uint64(2), store.snapshot.Handover.LegacyEra)
 	require.Equal(t, "seal-digest", store.snapshot.Handover.LegacyDigest)
 	require.Equal(t, rootproto.HandoverStageClosed, store.snapshot.Handover.Stage)
 }
@@ -2312,21 +2312,21 @@ func TestServiceReattachHandover(t *testing.T) {
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 20_000).UnixNano(),
-				Epoch:           3,
+				Era:             3,
 				Mandate:         rootproto.MandateDefault,
 			},
 			Legacy: rootstate.Legacy{
 				HolderID:  "c1",
-				Epoch:     2,
+				Era:       2,
 				Mandate:   rootproto.MandateDefault,
 				Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 			},
 			Handover: rootstate.Handover{
-				HolderID:       "c1",
-				LegacyEpoch:    2,
-				SuccessorEpoch: 3,
-				LegacyDigest:   "seal-digest",
-				Stage:          rootproto.HandoverStageClosed,
+				HolderID:     "c1",
+				LegacyEra:    2,
+				SuccessorEra: 3,
+				LegacyDigest: "seal-digest",
+				Stage:        rootproto.HandoverStageClosed,
 			},
 		},
 	}
@@ -2339,8 +2339,8 @@ func TestServiceReattachHandover(t *testing.T) {
 
 	require.NoError(t, svc.ReattachHandover())
 	require.Equal(t, 1, store.reattachCalls)
-	require.Equal(t, uint64(3), store.snapshot.Handover.SuccessorEpoch)
-	require.Equal(t, uint64(2), store.snapshot.Handover.LegacyEpoch)
+	require.Equal(t, uint64(3), store.snapshot.Handover.SuccessorEra)
+	require.Equal(t, uint64(2), store.snapshot.Handover.LegacyEra)
 	require.Equal(t, "seal-digest", store.snapshot.Handover.LegacyDigest)
 	require.Equal(t, rootproto.HandoverStageReattached, store.snapshot.Handover.Stage)
 }
@@ -2352,21 +2352,21 @@ func TestServiceAblationDisableReattachNoop(t *testing.T) {
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 20_000).UnixNano(),
-				Epoch:           3,
+				Era:             3,
 				Mandate:         rootproto.MandateDefault,
 			},
 			Legacy: rootstate.Legacy{
 				HolderID:  "c1",
-				Epoch:     2,
+				Era:       2,
 				Mandate:   rootproto.MandateDefault,
 				Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 			},
 			Handover: rootstate.Handover{
-				HolderID:       "c1",
-				LegacyEpoch:    2,
-				SuccessorEpoch: 3,
-				LegacyDigest:   "seal-digest",
-				Stage:          rootproto.HandoverStageClosed,
+				HolderID:     "c1",
+				LegacyEra:    2,
+				SuccessorEra: 3,
+				LegacyDigest: "seal-digest",
+				Stage:        rootproto.HandoverStageClosed,
 			},
 		},
 	}
@@ -2390,22 +2390,22 @@ func TestServiceReattachHandoverRejectsLineageMismatch(t *testing.T) {
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 20_000).UnixNano(),
-				Epoch:           3,
+				Era:             3,
 				Mandate:         rootproto.MandateDefault,
 				LineageDigest:   "other-digest",
 			},
 			Legacy: rootstate.Legacy{
 				HolderID:  "c1",
-				Epoch:     2,
+				Era:       2,
 				Mandate:   rootproto.MandateDefault,
 				Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 			},
 			Handover: rootstate.Handover{
-				HolderID:       "c1",
-				LegacyEpoch:    2,
-				SuccessorEpoch: 3,
-				LegacyDigest:   "seal-digest",
-				Stage:          rootproto.HandoverStageClosed,
+				HolderID:     "c1",
+				LegacyEra:    2,
+				SuccessorEra: 3,
+				LegacyDigest: "seal-digest",
+				Stage:        rootproto.HandoverStageClosed,
 			},
 		},
 	}
@@ -2428,12 +2428,12 @@ func TestServiceMonotoneDutyFailsWhenInheritanceNotMet(t *testing.T) {
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				Epoch:           2,
+				Era:             2,
 				Mandate:         rootproto.MandateDefault,
 			},
 			Legacy: rootstate.Legacy{
 				HolderID:  "c1",
-				Epoch:     2,
+				Era:       2,
 				Mandate:   rootproto.MandateAllocID | rootproto.MandateTSO,
 				Frontiers: succession.Frontiers(rootstate.State{IDFence: 50, TSOFence: 150}, 0),
 			},
@@ -2457,12 +2457,12 @@ func TestServiceMonotoneDutyFailsWhenDescriptorCoverageNotMet(t *testing.T) {
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				Epoch:           2,
+				Era:             2,
 				Mandate:         rootproto.MandateDefault,
 			},
 			Legacy: rootstate.Legacy{
 				HolderID:  "c1",
-				Epoch:     2,
+				Era:       2,
 				Mandate:   rootproto.MandateDefault,
 				Frontiers: succession.Frontiers(rootstate.State{IDFence: 10, TSOFence: 100}, 8),
 			},
@@ -2489,7 +2489,7 @@ func TestServiceAllocIDFailsWhenDutyNotAdmitted(t *testing.T) {
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(10, 0).UnixNano(),
-				Epoch:           2,
+				Era:             2,
 				Mandate:         rootproto.MandateTSO | rootproto.MandateGetRegionByKey,
 			},
 		},
@@ -2518,7 +2518,7 @@ func TestServiceGetRegionByKeyFailsWhenDutyNotAdmitted(t *testing.T) {
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(10, 0).UnixNano(),
-				Epoch:           2,
+				Era:             2,
 				Mandate:         rootproto.MandateAllocID | rootproto.MandateTSO,
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
@@ -2542,14 +2542,14 @@ func TestServiceGetRegionByKeyFailsWhenDutyNotAdmitted(t *testing.T) {
 	require.Contains(t, err.Error(), "mandate mismatch")
 }
 
-func TestServiceGetRegionByKeyAllowsReadOnlyServingFromCurrentRootedGeneration(t *testing.T) {
+func TestServiceGetRegionByKeyAllowsReadOnlyServingFromCurrentRootedEra(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(10, 0).UnixNano(),
-				Epoch:           2,
+				Era:             2,
 				Mandate:         rootproto.MandateDefault,
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
@@ -2569,7 +2569,7 @@ func TestServiceGetRegionByKeyAllowsReadOnlyServingFromCurrentRootedGeneration(t
 	require.NoError(t, err)
 	require.False(t, resp.GetNotFound())
 	require.Equal(t, uint64(11), resp.GetRegionDescriptor().GetRegionId())
-	require.Equal(t, uint64(2), resp.GetEpoch())
+	require.Equal(t, uint64(2), resp.GetEra())
 }
 
 func TestServiceTenureRejectsOtherHolder(t *testing.T) {

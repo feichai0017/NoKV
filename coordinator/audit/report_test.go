@@ -15,7 +15,7 @@ import (
 func TestBuildReport(t *testing.T) {
 	seal := rootstate.Legacy{
 		HolderID:  "c1",
-		Epoch:     2,
+		Era:       2,
 		Mandate:   rootproto.MandateDefault,
 		Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 		SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
@@ -30,17 +30,17 @@ func TestBuildReport(t *testing.T) {
 		Tenure: rootstate.Tenure{
 			HolderID:        "c1",
 			ExpiresUnixNano: 2_000,
-			Epoch:           3,
+			Era:             3,
 			Mandate:         rootproto.MandateDefault,
 			LineageDigest:   legacyDigest,
 		},
 		Legacy: seal,
 		Handover: rootstate.Handover{
-			HolderID:       "c1",
-			LegacyEpoch:    2,
-			SuccessorEpoch: 3,
-			LegacyDigest:   legacyDigest,
-			Stage:          rootproto.HandoverStageReattached,
+			HolderID:     "c1",
+			LegacyEra:    2,
+			SuccessorEra: 3,
+			LegacyDigest: legacyDigest,
+			Stage:        rootproto.HandoverStageReattached,
 		},
 		Descriptors: map[uint64]descriptor.Descriptor{
 			1: {RegionID: 1, RootEpoch: 7},
@@ -51,7 +51,7 @@ func TestBuildReport(t *testing.T) {
 	require.Equal(t, uint64(7), report.RootDescriptorRevision)
 	require.Equal(t, "fresh", report.CatchUpState)
 	require.Equal(t, "c1", report.CurrentHolderID)
-	require.Equal(t, uint64(3), report.CurrentGeneration)
+	require.Equal(t, uint64(3), report.CurrentEra)
 	require.True(t, report.HandoverWitness.FinalitySatisfied())
 	require.Equal(t, rootproto.HandoverStageReattached, report.Handover.Stage)
 	require.Equal(t, coordaudit.FinalityDefectNone, report.Anomalies.FinalityDefect)
@@ -60,7 +60,7 @@ func TestBuildReport(t *testing.T) {
 func TestBuildReportSurfacesClosureGaps(t *testing.T) {
 	seal := rootstate.Legacy{
 		HolderID:  "c1",
-		Epoch:     2,
+		Era:       2,
 		Mandate:   rootproto.MandateDefault,
 		Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 9),
 		SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
@@ -75,7 +75,7 @@ func TestBuildReportSurfacesClosureGaps(t *testing.T) {
 		Tenure: rootstate.Tenure{
 			HolderID:        "c2",
 			ExpiresUnixNano: 2_000,
-			Epoch:           3,
+			Era:             3,
 			Mandate:         rootproto.MandateDefault,
 			LineageDigest:   legacyDigest,
 		},
@@ -90,7 +90,7 @@ func TestBuildReportSurfacesClosureGaps(t *testing.T) {
 	require.False(t, report.Anomalies.SuccessorLineageMismatch)
 	require.False(t, report.Anomalies.UncoveredMonotoneFrontier)
 	require.False(t, report.Anomalies.UncoveredDescriptorRevision)
-	require.False(t, report.Anomalies.SealedGenerationStillLive)
+	require.False(t, report.Anomalies.SealedEraStillLive)
 	require.Equal(t, coordaudit.FinalityDefectMissingConfirm, report.Anomalies.FinalityDefect)
 }
 

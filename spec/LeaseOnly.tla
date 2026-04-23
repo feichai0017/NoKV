@@ -7,69 +7,69 @@ EXTENDS Naturals, FiniteSets
 
 CONSTANTS
     \* @type: Int;
-    MaxGeneration,
+    MaxEra,
     \* @type: Int;
     MaxFrontier
 
-Generations == 0..MaxGeneration
+Eras        == 0..MaxEra
 Frontiers   == 0..MaxFrontier
-ReplySet    == { [gen |-> g, frontier |-> f] : g \in Generations, f \in Frontiers }
-NoDelivered == [valid |-> FALSE, gen |-> 0, frontier |-> 0]
+ReplySet    == { [era |-> e, frontier |-> f] : e \in Eras, f \in Frontiers }
+NoDelivered == [valid |-> FALSE, era |-> 0, frontier |-> 0]
 
 VARIABLES
     \* @type: Set(Int);
     issued,
     \* @type: Int;
-    activeGen,
+    activeEra,
     \* @type: Int -> Int;
     frontier,
-    \* @type: Set([gen: Int, frontier: Int]);
+    \* @type: Set([era: Int, frontier: Int]);
     inflight,
-    \* @type: [valid: Bool, gen: Int, frontier: Int];
+    \* @type: [valid: Bool, era: Int, frontier: Int];
     delivered
 
-Vars == <<issued, activeGen, frontier, inflight, delivered>>
+Vars == <<issued, activeEra, frontier, inflight, delivered>>
 
 Init ==
     /\ issued = {0}
-    /\ activeGen = 0
-    /\ frontier = [g \in Generations |-> 0]
+    /\ activeEra = 0
+    /\ frontier = [e \in Eras |-> 0]
     /\ inflight = {}
     /\ delivered = NoDelivered
 
 Issue ==
-    \E g \in Generations:
-        /\ g \notin issued
-        /\ g > activeGen
-        /\ issued' = issued \cup {g}
-        /\ activeGen' = g
+    \E e \in Eras:
+        /\ e \notin issued
+        /\ e > activeEra
+        /\ issued' = issued \cup {e}
+        /\ activeEra' = e
         /\ delivered' = NoDelivered
         /\ UNCHANGED <<frontier, inflight>>
 
 CurrentReply ==
     /\ \E f \in Frontiers:
-        /\ f >= frontier[activeGen]
-        /\ frontier' = [frontier EXCEPT ![activeGen] = f]
-        /\ inflight' = inflight \cup {[gen |-> activeGen, frontier |-> f]}
+        /\ f >= frontier[activeEra]
+        /\ frontier' = [frontier EXCEPT ![activeEra] = f]
+        /\ inflight' = inflight \cup {[era |-> activeEra, frontier |-> f]}
     /\ delivered' = NoDelivered
-    /\ UNCHANGED <<issued, activeGen>>
+    /\ UNCHANGED <<issued, activeEra>>
 
 DeliverReply ==
     /\ \E r \in inflight:
         /\ inflight' = inflight \ {r}
-        /\ delivered' = [valid |-> TRUE, gen |-> r.gen, frontier |-> r.frontier]
-    /\ UNCHANGED <<issued, activeGen, frontier>>
+        /\ delivered' = [valid |-> TRUE, era |-> r.era, frontier |-> r.frontier]
+    /\ UNCHANGED <<issued, activeEra, frontier>>
 
 DropReply ==
     /\ \E r \in inflight:
         /\ inflight' = inflight \ {r}
     /\ delivered' = NoDelivered
-    /\ UNCHANGED <<issued, activeGen, frontier>>
+    /\ UNCHANGED <<issued, activeEra, frontier>>
 
 ClearDelivered ==
     /\ delivered.valid
     /\ delivered' = NoDelivered
-    /\ UNCHANGED <<issued, activeGen, frontier, inflight>>
+    /\ UNCHANGED <<issued, activeEra, frontier, inflight>>
 
 Stutter ==
     UNCHANGED Vars
@@ -83,16 +83,16 @@ Next ==
     \/ Stutter
 
 TypeOK ==
-    /\ issued \subseteq Generations
-    /\ activeGen \in Generations
-    /\ frontier \in [Generations -> Frontiers]
+    /\ issued \subseteq Eras
+    /\ activeEra \in Eras
+    /\ frontier \in [Eras -> Frontiers]
     /\ inflight \subseteq ReplySet
-    /\ delivered \in [valid : BOOLEAN, gen : Generations, frontier : Frontiers]
+    /\ delivered \in [valid : BOOLEAN, era : Eras, frontier : Frontiers]
 
 \* This is the bad state that TLC/Apalache should be able to reach.
 OldReplyAfterSuccessor ==
     /\ delivered.valid
-    /\ delivered.gen < activeGen
+    /\ delivered.era < activeEra
 
 NoOldReplyAfterSuccessor ==
     ~OldReplyAfterSuccessor
