@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0f1f7414.js";
+            window.path_to_searchindex_js = "searchindex-0e4739fd.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-87c44e77.js"></script>
+        <script src="toc-1516f189.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -293,7 +293,7 @@
 </thead>
 <tbody>
 <tr><td>CLI reference (<code>nokv</code>)</td><td><a href="#cli-cmdnokv-reference">cli.md</a></td></tr>
-<tr><td><strong>ccc-audit</strong> (read-only remote audit against meta-root)</td><td><a href="#ccc-audit">ccc-audit.md</a></td></tr>
+<tr><td><strong>succession-audit</strong> (read-only remote audit against meta-root)</td><td><a href="#succession-audit">succession-audit.md</a></td></tr>
 <tr><td>Redis gateway (<code>nokv-redis</code>)</td><td><a href="#redis-gateway">nokv-redis.md</a></td></tr>
 <tr><td>Configuration</td><td><a href="#configuration--options">config.md</a></td></tr>
 <tr><td>Scripts layout</td><td><a href="#scripts-overview">scripts.md</a></td></tr>
@@ -1716,30 +1716,30 @@ local state. This is the current boundary between:</p>
 <ul>
 <li>they always re-read rooted state from storage before mutating</li>
 <li>they reject any stale-holder / expired-lease / sealed-generation view</li>
-<li>they treat closure completeness as a rooted safety condition, not a best-effort hint</li>
+<li>they treat finality as a rooted safety condition, not a best-effort hint</li>
 </ul>
 <p>That is why seal / confirm / close / reattach do not use the cached mirror
 admission path.</p>
 <h3 id="85-operational-diagnostics"><a class="header" href="#85-operational-diagnostics">8.5 Operational diagnostics</a></h3>
 <p><code>DiagnosticsSnapshot()</code> now exports both:</p>
 <ul>
-<li>the current degraded serving state (<code>root</code>, <code>lease</code>, <code>audit</code>, <code>closure_witness</code>)</li>
-<li>cumulative CCC counters under <code>ccc_metrics</code></li>
+<li>the current degraded serving state (<code>root</code>, <code>lease</code>, <code>audit</code>, <code>handover_witness</code>)</li>
+<li>cumulative Succession counters under <code>succession_metrics</code></li>
 </ul>
-<p><code>ccc_metrics</code> is grouped into:</p>
+<p><code>succession_metrics</code> is grouped into:</p>
 <ul>
-<li><code>lease_generation_transitions_total</code></li>
-<li><code>closure_stage_transitions_total</code></li>
-<li><code>pre_action_gate_rejections_total</code></li>
-<li><code>ali_violations_total</code></li>
+<li><code>tenure_epoch_transitions_total</code></li>
+<li><code>handover_stage_transitions_total</code></li>
+<li><code>gate_rejections_total</code></li>
+<li><code>guarantee_violations_total</code></li>
 </ul>
-<p>The <code>ali_violations_total</code> buckets map to the four Authority Lineage
-Invariants:</p>
+<p>The <code>guarantee_violations_total</code> buckets map directly to the four Succession
+guarantees:</p>
 <ul>
-<li><code>authority_uniqueness</code></li>
-<li><code>successor_coverage</code></li>
-<li><code>post_seal_inadmissibility</code></li>
-<li><code>closure_completeness</code></li>
+<li><code>primacy</code></li>
+<li><code>inheritance</code></li>
+<li><code>silence</code></li>
+<li><code>finality</code></li>
 </ul>
 <hr>
 <h2 id="9-api-direction"><a class="header" href="#9-api-direction">9. API Direction</a></h2>
@@ -4129,6 +4129,44 @@ can rely on.</p>
 <p>The current protocol is intentionally minimal. It does not yet expose the full
 future runtime/operator model such as stalled transitions or richer catch-up
 actions.</p>
+<h3 id="minimal-succession-vocabulary"><a class="header" href="#minimal-succession-vocabulary">Minimal Succession vocabulary</a></h3>
+<p>The rooted handoff protocol is smaller than some of the implementation type
+names suggest. At the doc / operator level, keep just these words:</p>
+<ul>
+<li><code>Lease</code> — the currently active authority record</li>
+<li><code>Seal</code> — the retired predecessor generation plus the frontier it already
+consumed</li>
+<li><code>Handover</code> — the rooted handoff record for the current successor</li>
+<li><code>Generation</code> — the monotonic authority generation</li>
+<li><code>Witness</code> — the operator-visible proof bundle that explains whether the
+current handoff state is safe</li>
+</ul>
+<p>The four guarantees discussed by the docs and runtime metrics are:</p>
+<ul>
+<li><code>Primacy</code> — at most one authority generation is active</li>
+<li><code>Inheritance</code> — the successor must cover the predecessor’s published work</li>
+<li><code>Silence</code> — a sealed predecessor must not keep serving</li>
+<li><code>Finality</code> — a handoff must not remain permanently half-finished</li>
+</ul>
+<p>Implementation names remain more explicit:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Doc term</th><th>Implementation term</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Lease</code></td><td><code>Tenure</code></td></tr>
+<tr><td><code>Seal</code></td><td><code>Legacy</code></td></tr>
+<tr><td><code>Handover</code></td><td><code>Handover</code></td></tr>
+<tr><td><code>Generation</code></td><td><code>Epoch</code> / <code>epoch</code></td></tr>
+<tr><td><code>Witness</code></td><td><code>HandoverWitness</code> / continuation witness fields</td></tr>
+<tr><td><code>Frontiers</code></td><td><code>MandateFrontiers</code> / <code>frontiers</code> / <code>consumed_frontiers</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>This split is deliberate: docs describe the protocol in the smallest stable
+vocabulary, while code keeps the more explicit type names that make mutation
+boundaries obvious.</p>
 <hr>
 <h2 id="3-deployment-model"><a class="header" href="#3-deployment-model">3. Deployment Model</a></h2>
 <p>NoKV ships exactly one distributed topology plus the standalone engine shape.</p>
@@ -4147,7 +4185,7 @@ plane deployment; it simply has no control plane.</p>
 (replicated raft quorum, the only backend NoKV ships)</li>
 <li>one or more <code>nokv coordinator</code> processes connect through the remote
 metadata-root gRPC API</li>
-<li><code>CoordinatorLease</code> gates singleton Coordinator duties: <code>AllocID</code>, <code>Tso</code>,
+<li><code>Tenure</code> gates singleton Coordinator duties: <code>AllocID</code>, <code>Tso</code>,
 and scheduler operation planning</li>
 <li>route reads still come from Coordinator’s rebuildable in-memory view and
 expose <code>Freshness</code>, <code>RootToken</code>, <code>CatchUpState</code>, and <code>DegradedMode</code></li>
@@ -4164,7 +4202,7 @@ expose <code>Freshness</code>, <code>RootToken</code>, <code>CatchUpState</code>
 <li>exactly three meta-root replicas</li>
 <li>meta-root is the only place durable rooted truth lives</li>
 <li>coordinators are stateless relative to rooted truth; only the
-<code>CoordinatorLease</code> differentiates active vs standby</li>
+<code>Tenure</code> differentiates active vs standby</li>
 <li>no dynamic metadata-root membership</li>
 <li>no production-grade dynamic coordinator membership manager</li>
 </ul>
@@ -4198,7 +4236,7 @@ remote root endpoints through <code>--root-peer nodeID=grpc_addr</code>.</p>
 <li><code>meta-root</code> workdirs own durable rooted truth and replicated metadata-root
 raft state.</li>
 <li><code>coordinator</code> runtime view is rebuildable from remote <code>meta/root</code>.</li>
-<li>allocator fences and <code>CoordinatorLease</code> are rooted events, not local
+<li>allocator fences and <code>Tenure</code> are rooted events, not local
 coordinator files.</li>
 </ol>
 <p><code>--coordinator-id</code> must be a stable configured identity. It is used for lease
@@ -4338,7 +4376,7 @@ service surface.</p>
 <p>In separated mode:</p>
 <ul>
 <li><code>meta-root</code> leadership determines which root endpoint accepts truth writes</li>
-<li><code>CoordinatorLease</code> determines which Coordinator may serve singleton duties</li>
+<li><code>Tenure</code> determines which Coordinator may serve singleton duties</li>
 <li>non-holder Coordinators may still serve route reads if their rooted view
 satisfies the caller’s freshness contract</li>
 </ul>
@@ -4354,7 +4392,7 @@ satisfies the caller’s freshness contract</li>
 <p>Followers return <code>FailedPrecondition</code> with <code>coordinator not leader</code> semantics, and
 clients are expected to retry against another Coordinator endpoint.</p>
 <p>In separated mode, <code>AllocID</code>, <code>Tso</code>, and scheduler operation planning also
-require the local Coordinator to hold <code>CoordinatorLease</code>.</p>
+require the local Coordinator to hold <code>Tenure</code>.</p>
 <h3 id="any-node-reads"><a class="header" href="#any-node-reads">Any-node reads</a></h3>
 <p>These RPCs may be served by any Coordinator node:</p>
 <ul>
@@ -4405,7 +4443,7 @@ and <code>-addr</code>; they share the same <code>-root-peer</code> set):</p>
 <li>exactly three meta-root replicas</li>
 <li>meta-root is the only place durable rooted truth lives</li>
 <li>coordinators are stateless relative to rooted truth; only the
-<code>CoordinatorLease</code> differentiates active vs standby</li>
+<code>Tenure</code> differentiates active vs standby</li>
 <li>no dynamic metadata-root membership</li>
 </ul>
 <p>For local bootstrap, use:</p>
@@ -4440,7 +4478,7 @@ rooted backend and rebuilds its service-side view from rooted truth.</li>
 <ul>
 <li>region descriptor publish/tombstone events</li>
 <li>allocator durability (<code>AllocID</code>, <code>TSO</code>)</li>
-<li><code>CoordinatorLease</code> ownership for separated singleton duties</li>
+<li><code>Tenure</code> ownership for separated singleton duties</li>
 </ul>
 </li>
 <li>Coordinator is not the durable owner of a store’s local raft/region truth. Store
@@ -4463,7 +4501,7 @@ deliberately small HA surface:
 <ul>
 <li>use it for control-plane research and failure-domain experiments</li>
 <li>do not treat it as the default production path yet</li>
-<li>failure/recovery E2E tests and control-plane benchmarks still need to be
+<li>failure/recovery E2E tests and succession benchmarks still need to be
 expanded before stronger claims are made</li>
 </ul>
 </li>
@@ -4491,14 +4529,14 @@ keeps the rooted truth surface small.</p>
 <ul>
 <li><strong>Coordinator is stateless at restart</strong> — the only persistent thing about a coordinator is its configured holder ID; everything else is rebuilt from <code>meta/root</code> on boot</li>
 <li><strong>The log can be swapped</strong> between local (single-node) and replicated (embedded-raft) backends without changing coordinator code</li>
-<li><strong>Authority handoff is auditable</strong> — every lease grant / seal / closure event is a committed log record with a cursor</li>
+<li><strong>Authority handoff is auditable</strong> — every tenure issue / legacy seal / handover event is a committed log record with a cursor</li>
 </ul>
 <hr>
 <h2 id="2-package-layout"><a class="header" href="#2-package-layout">2. Package layout</a></h2>
 <pre><code>meta/
 ├── root/
 │   ├── protocol/       # Pure protocol types (Cursor, Frontiers, Handoff, Witness, ...)
-│   ├── event/          # Typed events (KindStoreJoined, KindCoordinatorLease, ...)
+│   ├── event/          # Typed events (KindStoreJoined, KindTenure, ...)
 │   ├── state/          # Compact applied state (State, Snapshot, ApplyEventToSnapshot)
 │   ├── materialize/    # Helpers that build Snapshot from raw events
 │   ├── storage/        # Virtual log file layout + checkpoint format
@@ -4518,9 +4556,9 @@ keeps the rooted truth surface small.</p>
     LastCommitted      Cursor         // highest committed (term, index)
     IDFence            uint64         // globally fenced ID allocator floor
     TSOFence           uint64         // globally fenced TSO allocator floor
-    CoordinatorLease   CoordinatorLease
-    CoordinatorSeal    CoordinatorSeal
-    CoordinatorClosure CoordinatorClosure
+    Tenure   Tenure
+    Legacy    Legacy
+    Handover Handover
 }
 </code></pre>
 <p><code>Snapshot</code> wraps <code>State</code> together with descriptors and pending peer/range changes:</p>
@@ -4565,22 +4603,22 @@ Historical single-process “local” backend has been removed.</p>
 (raft hard state + snapshot + retained entries)</li>
 </ul>
 <hr>
-<h2 id="6-coordinator-commands--how-leasesealclosure-flow-in"><a class="header" href="#6-coordinator-commands--how-leasesealclosure-flow-in">6. Coordinator commands — how lease/seal/closure flow in</a></h2>
+<h2 id="6-coordinator-commands--how-tenurelegacyhandover-flow-in"><a class="header" href="#6-coordinator-commands--how-tenurelegacyhandover-flow-in">6. Coordinator commands — how tenure/legacy/handover flow in</a></h2>
 <p>In addition to “raw” events, backends expose command APIs for control-plane-specific operations:</p>
-<pre><code class="language-go">ApplyCoordinatorLease(ctx, cmd CoordinatorLeaseCommand)
-    (CoordinatorProtocolState, error)
+<pre><code class="language-go">ApplyTenure(ctx, cmd TenureCommand)
+    (SuccessionState, error)
 
-ApplyCoordinatorClosure(ctx, cmd CoordinatorClosureCommand)
-    (CoordinatorProtocolState, error)
+ApplyHandover(ctx, cmd HandoverCommand)
+    (SuccessionState, error)
 </code></pre>
 <p>These are <strong>validated, typed writes</strong> that internally:</p>
 <ol>
-<li>Validate the command against current state (e.g., seal requires active lease, confirm requires prior seal)</li>
-<li>Emit the appropriate <code>KindCoordinatorLease</code> / <code>KindCoordinatorSeal</code> / <code>KindCoordinatorClosure</code> event</li>
+<li>Validate the command against current state (e.g., <code>Seal</code> requires an active <code>Tenure</code>, <code>Confirm</code> requires prior <code>Legacy</code>)</li>
+<li>Emit the appropriate <code>KindTenure</code> / <code>KindLegacy</code> / <code>KindHandover</code> event</li>
 <li>Append through the normal log path</li>
-<li>Return the new <code>CoordinatorProtocolState = { Lease, Seal, Closure }</code></li>
+<li>Return the new <code>SuccessionState = { Tenure, Legacy, Handover }</code></li>
 </ol>
-<p>Command-level validation lives in <a href="../meta/root/state/coordinator_lease.go"><code>meta/root/state/coordinator_lease.go</code></a>.</p>
+<p>Command-level validation lives in <a href="../meta/root/state/succession.go"><code>meta/root/state/succession.go</code></a>.</p>
 <hr>
 <h2 id="7-tail-subscription--how-coordinator-consumes"><a class="header" href="#7-tail-subscription--how-coordinator-consumes">7. Tail subscription — how coordinator consumes</a></h2>
 <p>Coordinators don’t poll <code>Snapshot()</code> — they subscribe:</p>
@@ -4607,7 +4645,7 @@ sub.Acknowledge(advance)
 <li>Open the replicated backend (each peer via <code>rootreplicated.Open</code>, or connect through <code>coordinator/rootview</code> for the client side)</li>
 <li>Call <code>Snapshot()</code> — backend replays/bootstraps internally</li>
 <li>Build a <code>TailSubscription</code> from the snapshot’s <code>LastCommitted</code></li>
-<li>Start the lease campaign loop, which will eventually <code>ApplyCoordinatorLease(Issue)</code> when it’s leader</li>
+<li>Start the tenure campaign loop, which will eventually <code>ApplyTenure(Issue)</code> when it’s leader</li>
 </ol>
 <p>If the backend file is corrupted, the coordinator fails fast — it does <strong>not</strong> try to reconstruct rooted state from raftstore local metadata. The two are deliberately partitioned.</p>
 <hr>
@@ -4630,7 +4668,7 @@ sub.Acknowledge(advance)
 <tr><td><a href="../meta/root/protocol/types.go"><code>meta/root/protocol/types.go</code></a></td><td>Pure protocol types (no persistence logic)</td></tr>
 <tr><td><a href="../meta/root/event/types.go"><code>meta/root/event/types.go</code></a></td><td>Typed event constructors</td></tr>
 <tr><td><a href="../meta/root/state/state.go"><code>meta/root/state/state.go</code></a></td><td><code>State</code>, <code>Snapshot</code>, <code>ApplyEventToSnapshot</code></td></tr>
-<tr><td><a href="../meta/root/state/coordinator_lease.go"><code>meta/root/state/coordinator_lease.go</code></a></td><td>Lease/Seal/Closure validation + digest</td></tr>
+<tr><td><a href="../meta/root/state/succession.go"><code>meta/root/state/succession.go</code></a></td><td>Tenure/Legacy/Handover validation + digest</td></tr>
 <tr><td><a href="../meta/root/state/transition.go"><code>meta/root/state/transition.go</code></a></td><td>Cross-event transition rules</td></tr>
 <tr><td><a href="../meta/root/storage/virtual_log.go"><code>meta/root/storage/virtual_log.go</code></a></td><td>Tail subscription + checkpoint primitives</td></tr>
 <tr><td><a href="../meta/root/replicated/store.go"><code>meta/root/replicated/store.go</code></a></td><td>The only backend: 3-peer raft-replicated meta-root</td></tr>
@@ -5574,7 +5612,7 @@ them is a common deployment mistake, so be explicit:</p>
 </thead>
 <tbody>
 <tr><td><strong>Address directory</strong></td><td><code>meta_root.peers</code>, <code>coordinator</code>, <code>stores</code>, <code>store_work_dir_template</code>, <code>max_retries</code></td><td>Read on <strong>every</strong> CLI invocation. Keep in sync with deployed containers/hosts.</td><td><strong>This file is the source of truth.</strong> Nothing else knows where to dial.</td></tr>
-<tr><td><strong>Bootstrap seed</strong></td><td><code>regions</code></td><td>Read <strong>only</strong> on first startup by <code>scripts/ops/bootstrap.sh</code>. Once a store has <code>CURRENT</code>, bootstrap skips it.</td><td>After first bootstrap, <strong>meta-root</strong> owns the runtime region topology. Inspect with <code>nokv-config regions</code> or <code>nokv ccc-audit</code>.</td></tr>
+<tr><td><strong>Bootstrap seed</strong></td><td><code>regions</code></td><td>Read <strong>only</strong> on first startup by <code>scripts/ops/bootstrap.sh</code>. Once a store has <code>CURRENT</code>, bootstrap skips it.</td><td>After first bootstrap, <strong>meta-root</strong> owns the runtime region topology. Inspect with <code>nokv-config regions</code> or <code>nokv succession-audit</code>.</td></tr>
 </tbody>
 </table>
 </div>
@@ -5593,7 +5631,7 @@ a source of defaults:</p>
   "meta_root": {
     "peers": [
       { "node_id": 1,
-        "addr": "127.0.0.1:2380",         // coordinator/ccc-audit dial here
+        "addr": "127.0.0.1:2380",         // coordinator/succession-audit dial here
         "docker_addr": "nokv-meta-root-1:2380",
         "transport_addr": "127.0.0.1:3380", // sibling meta-root peers dial here for raft
         "docker_transport_addr": "nokv-meta-root-1:2480",
@@ -5627,7 +5665,7 @@ a source of defaults:</p>
 <h3 id="field-notes"><a class="header" href="#field-notes">Field notes</a></h3>
 <ul>
 <li><strong><code>meta_root.peers</code></strong>: exactly 3 entries. <code>addr</code> is the gRPC service port
-(coordinators/ccc-audit dial it). <code>transport_addr</code> is the raft transport
+(coordinators/succession-audit dial it). <code>transport_addr</code> is the raft transport
 port (sibling meta-root peers dial it for raft messages). They MUST be
 different ports on the same host.</li>
 <li><strong><code>coordinator.addr</code> / <code>docker_addr</code></strong>: may be a single endpoint or
@@ -5973,11 +6011,11 @@ removed from the CLI.</li>
 <li>Use <code>nokv stats --expvar</code> for online diagnostics and <code>--workdir</code> for offline forensics.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="ccc-audit"><a class="header" href="#ccc-audit">ccc-audit</a></h1>
-<p><code>nokv ccc-audit</code> is a read-only operator tool that projects a live 3-peer
+<h1 id="succession-audit"><a class="header" href="#succession-audit">succession-audit</a></h1>
+<p><code>nokv succession-audit</code> is a read-only operator tool that projects a live 3-peer
 meta-root cluster’s current rooted state into the <code>coordinator/audit</code>
-closure-complete-continuation (CCC) vocabulary. It is the operator
-counterpart to the TLA+ CCC model and the <code>coordinator/audit</code> library that
+succession (Succession) vocabulary. It is the operator
+counterpart to the TLA+ Succession model and the <code>coordinator/audit</code> library that
 coordinator/server consults at runtime.</p>
 <p>Because NoKV only ships the separated topology (3 meta-root + N coordinator),
 the audit tool speaks only remote gRPC — it does not read meta-root workdirs
@@ -5987,19 +6025,42 @@ directly.</p>
 <li>Dial the 3 meta-root peers through <code>meta/root/client</code> (the same client
 coordinators use) wrapped by <code>coordinator/rootview.OpenRootRemoteStore</code>.</li>
 <li>Load one rooted <code>Snapshot</code> — current descriptors, allocator fences,
-<code>CoordinatorLease</code>, <code>CoordinatorSeal</code>, <code>CoordinatorClosure</code>.</li>
+<code>Tenure</code>, <code>Legacy</code>, <code>Handover</code>.</li>
 <li>Project the snapshot through <code>coordinator/audit.BuildReport(snapshot, holderID, nowUnixNano)</code> to produce a <code>Report</code> containing <code>SnapshotAnomalies</code>
-and a <code>ClosureDefect</code> enum.</li>
+and a <code>FinalityDefect</code> enum.</li>
 <li>Optionally load a reply-trace JSON (from stdin or a file) and call
 <code>coordinator/audit.EvaluateReplyTrace(report, records)</code> to flag any
-accepted replies that are illegal under the current closure witness.</li>
+accepted replies that are illegal under the current handover witness.</li>
 <li>Render the combined result as human-readable text or JSON.</li>
 </ol>
 <p>The audit is read-only: it never writes to meta-root, never advances fences,
 and never mutates coordinator state. It can run while the cluster is live and
 healthy, or attached to a quiesced cluster during post-incident analysis.</p>
+<h2 id="minimal-vocabulary"><a class="header" href="#minimal-vocabulary">Minimal vocabulary</a></h2>
+<p>The audit output intentionally uses a smaller protocol vocabulary than the full
+implementation:</p>
+<ul>
+<li><code>Lease</code> — the active authority record</li>
+<li><code>Seal</code> — the retired predecessor generation and the frontier it already
+consumed</li>
+<li><code>Handover</code> — the successor handoff-completion record</li>
+<li><code>Generation</code> — the authority generation counter (implementation fields still
+use <code>epoch</code> for compatibility)</li>
+<li><code>Witness</code> — the proof bundle derived from <code>{Lease, Seal, Handover}</code></li>
+</ul>
+<p>The four safety guarantees the audit talks about are:</p>
+<ul>
+<li><code>Primacy</code> — at most one generation is active</li>
+<li><code>Inheritance</code> — the successor covers predecessor commitments</li>
+<li><code>Silence</code> — a sealed generation does not continue serving</li>
+<li><code>Finality</code> — a handoff finishes instead of hanging forever</li>
+</ul>
+<p>Implementation types such as <code>Tenure</code>, <code>Legacy</code>,
+<code>Handover</code>, <code>LineageDigest</code>, and <code>MandateFrontiers</code>
+remain unchanged in code. The audit doc keeps the public vocabulary shorter on
+purpose.</p>
 <h2 id="usage"><a class="header" href="#usage">Usage</a></h2>
-<pre><code class="language-bash">nokv ccc-audit \
+<pre><code class="language-bash">nokv succession-audit \
   --root-peer 1=127.0.0.1:2380 \
   --root-peer 2=127.0.0.1:2381 \
   --root-peer 3=127.0.0.1:2382
@@ -6012,7 +6073,7 @@ that <code>nokv coordinator --root-peer ...</code> uses.</li>
 <p>Optional:</p>
 <ul>
 <li><code>--holder &lt;id&gt;</code> — override the holder id used for reattach checks.
-Defaults to <code>snapshot.CoordinatorLease.HolderID</code>.</li>
+Defaults to <code>snapshot.Tenure.HolderID</code>.</li>
 <li><code>--now-unix-nano &lt;ns&gt;</code> — override the audit clock. Defaults to
 <code>time.Now().UnixNano()</code>. Useful for deterministic regression runs.</li>
 <li><code>--reply-trace &lt;path&gt;</code> — path to a reply-trace JSON file (<code>-</code> for stdin).
@@ -6022,7 +6083,7 @@ When omitted, only the snapshot-level audit runs.</li>
 <li><code>--json</code> — emit JSON instead of the default human-readable text.</li>
 </ul>
 <h2 id="sample-output"><a class="header" href="#sample-output">Sample output</a></h2>
-<pre><code class="language-text">CCC audit report
+<pre><code class="language-text">Succession audit report
 ----------------
 holder             : coord-1
 now_unix_nano      : 1714857600000000000
@@ -6030,8 +6091,8 @@ root_desc_revision : 42
 catch_up_state     : fresh
 current_holder     : coord-1
 current_generation : 7
-closure            : stage=confirmed
-closure_witness    : stage=confirmed seal_gen=6 successor_present=true successor_coverage=covered lineage_satisfied=true sealed_gen_retired=true
+handover           : stage=confirmed
+handover_witness   : stage=confirmed seal_gen=6 successor_present=true inheritance=covered lineage_satisfied=true sealed_gen_retired=true
 
 snapshot anomalies:
   successor_lineage_mismatch     : false
@@ -6039,10 +6100,10 @@ snapshot anomalies:
   uncovered_descriptor_revision  : false
   lease_start_coverage_violation : false
   sealed_generation_still_live   : false
-  closure_defect                 : none
+  finality_defect                 : none
 </code></pre>
 <p>When <code>--reply-trace</code> is provided, each accepted reply that violates the
-closure witness prints as a trailing line:</p>
+handover witness prints as a trailing line:</p>
 <pre><code class="language-text">reply-trace anomalies (1):
   [3] kind=accepted_reply_behind_successor duty=lease_start cert_gen=5 reason="accepted reply generation 5 behind observed successor generation 7"
 </code></pre>
@@ -6056,34 +6117,34 @@ enum:</p>
 <li><code>reattach_without_confirm</code> / <code>reattach_without_close</code> /
 <code>reattach_lineage_mismatch</code> / <code>reattach_incomplete</code></li>
 </ul>
-<p>Any non-empty <code>closure_defect</code> or any <code>true</code> flag under <code>snapshot anomalies</code>
-indicates that the rooted closure state has drifted from the expected
-<code>Attached → Active → Seal → Cover → Close → Reattach</code> lifecycle — which is
-exactly the property CCC.tla proves meta-root must preserve.</p>
+<p>Any non-empty <code>finality_defect</code> or any <code>true</code> flag under <code>snapshot anomalies</code>
+indicates that the rooted handoff state has drifted from the expected
+<code>active lease → sealed predecessor → inherited successor → closed handoff</code>
+lifecycle — which is exactly the property <code>spec/Succession.tla</code> proves meta-root must
+preserve.</p>
 <h2 id="runtime-diagnostics-and-metrics"><a class="header" href="#runtime-diagnostics-and-metrics">Runtime diagnostics and metrics</a></h2>
 <p>The audit CLI is the read-only offline/operator view. The live coordinator
-runtime now exposes a matching <code>ccc_metrics</code> block through
+runtime now exposes a matching <code>succession_metrics</code> block through
 <code>coordinator/server.DiagnosticsSnapshot()</code> and the <code>nokv_coordinator</code> expvar
 surface.</p>
 <p>That block exports four counter families:</p>
 <ul>
 <li><code>lease_generation_transitions_total</code></li>
-<li><code>closure_stage_transitions_total</code></li>
+<li><code>handover_stage_transitions_total</code></li>
 <li><code>pre_action_gate_rejections_total</code></li>
-<li><code>ali_violations_total</code></li>
+<li><code>guarantee_violations_total</code></li>
 </ul>
-<p><code>ali_violations_total</code> uses the same four-way CCC vocabulary as the paper and
-the TLA+ model:</p>
+<p><code>guarantee_violations_total</code> uses the same four Succession guarantees:</p>
 <ul>
-<li><code>authority_uniqueness</code></li>
-<li><code>successor_coverage</code></li>
-<li><code>post_seal_inadmissibility</code></li>
-<li><code>closure_completeness</code></li>
+<li><code>primacy</code></li>
+<li><code>inheritance</code></li>
+<li><code>silence</code></li>
+<li><code>finality</code></li>
 </ul>
 <p>The intended split is:</p>
 <ul>
-<li><code>ccc-audit</code> explains whether the <strong>current rooted snapshot</strong> is legal</li>
-<li><code>ccc_metrics</code> shows how often the <strong>live runtime</strong> has rejected unsafe
+<li><code>succession-audit</code> explains whether the <strong>current rooted snapshot</strong> is legal</li>
+<li><code>succession_metrics</code> shows how often the <strong>live runtime</strong> has rejected unsafe
 continuations while the system is running</li>
 </ul>
 <h2 id="related"><a class="header" href="#related">Related</a></h2>
@@ -6118,7 +6179,7 @@ consecutive numbers — easy to remember, easy to script against.</p>
 <tbody>
 <tr><td>Redis gateway</td><td><code>6380</code></td><td>RESP protocol — <code>redis-cli -p 6380 ...</code></td></tr>
 <tr><td>Redis expvar</td><td><code>9300</code></td><td><code>/debug/vars</code> JSON</td></tr>
-<tr><td>Meta-root-1 gRPC</td><td><code>2380</code></td><td><code>nokv ccc-audit --root-peer 1=127.0.0.1:2380 ...</code></td></tr>
+<tr><td>Meta-root-1 gRPC</td><td><code>2380</code></td><td><code>nokv succession-audit --root-peer 1=127.0.0.1:2380 ...</code></td></tr>
 <tr><td>Meta-root-2 gRPC</td><td><code>2381</code></td><td></td></tr>
 <tr><td>Meta-root-3 gRPC</td><td><code>2382</code></td><td></td></tr>
 <tr><td>Meta-root-1 expvar</td><td><code>9380</code></td><td><code>/debug/vars</code> JSON</td></tr>
@@ -6138,11 +6199,11 @@ consecutive numbers — easy to remember, easy to script against.</p>
 </div>
 <h3 id="why-are-meta-root-grpc-ports-exposed"><a class="header" href="#why-are-meta-root-grpc-ports-exposed">Why are meta-root gRPC ports exposed?</a></h3>
 <p>Meta-root (<code>2380/2381/2382</code>) is exposed so host-side tools like
-<code>nokv ccc-audit</code> and <code>nokv-config</code> can query rooted state directly for
+<code>nokv succession-audit</code> and <code>nokv-config</code> can query rooted state directly for
 debugging. All <code>/debug/vars</code> endpoints also expose the meta-root’s state
 summary (leader, committed index, generation) for the dashboard.</p>
 <p><strong>For production, don’t expose meta-root publicly.</strong> The gRPC API accepts
-<code>ApplyCoordinatorLease</code> and <code>ApplyCoordinatorClosure</code> which are
+<code>ApplyTenure</code> and <code>ApplyHandover</code> which are
 lease-gated but still structurally sensitive. To opt out, delete the
 <code>ports:</code> block under <code>meta-root-1</code>, <code>meta-root-2</code>, <code>meta-root-3</code> in
 <code>docker-compose.yml</code> — the dashboard loses the “Truth plane” cards (they
@@ -6152,8 +6213,8 @@ ports.</p>
 <p>Same applies to coordinator gRPC (<code>2390/2391/2392</code>): convenient for
 host-side client experiments, don’t expose publicly.</p>
 <h3 id="live-audit-from-the-host"><a class="header" href="#live-audit-from-the-host">Live audit from the host</a></h3>
-<pre><code class="language-bash"># Project rooted state through the CCC audit vocabulary
-nokv ccc-audit \
+<pre><code class="language-bash"># Project rooted state through the Succession audit vocabulary
+nokv succession-audit \
   --root-peer 1=127.0.0.1:2380 \
   --root-peer 2=127.0.0.1:2381 \
   --root-peer 3=127.0.0.1:2382
@@ -6168,7 +6229,7 @@ three planes:</p>
 <ul>
 <li><strong>Truth plane</strong> — which meta-root is raft leader, committed index, allocator
 fences, descriptor / pending-change counts.</li>
-<li><strong>Control plane</strong> — which coordinator currently holds the CCC lease, lease
+<li><strong>Control plane</strong> — which coordinator currently holds the Succession lease, lease
 generation, root lag, degraded mode, active vs standby tag on every coord.</li>
 <li><strong>Execution plane</strong> — stores heap usage, goroutine count.</li>
 <li><strong>Gateway</strong> — Redis expvar counters.</li>
@@ -6205,14 +6266,14 @@ basic auth).</p>
 <li><strong>Top:</strong> cluster-wide status pill (“10/10 reachable · HH:MM:SS”)</li>
 <li><strong>Topology diagram:</strong> 3 truth-plane meta-root peers ↔ 3 control-plane
 coordinators ↔ 3 execution-plane stores, with the raft leader highlighted
-in blue, the CCC lease holder in purple, and pulsing lines showing the
+in blue, the Succession lease holder in purple, and pulsing lines showing the
 active control-flow edge (lease holder → raft leader, holder → stores,
 gateway → holder).</li>
 <li><strong>Per-service cards:</strong> one card per service showing leader state, lease
 generation, committed index, allocator fences, heap stats.</li>
 <li><strong>Event timeline:</strong> auto-populated from expvar diffs — lease handoffs,
 raft elections, descriptor-count changes, node up/down transitions. Use
-this to watch the CCC lifecycle live.</li>
+this to watch the Succession lifecycle live.</li>
 <li><strong>Failure drills:</strong> one button per meta-root / coordinator container to
 stop or start it without leaving the browser.</li>
 <li><strong>Redis terminal:</strong> type commands like <code>SET demo "hello"</code>, <code>GET demo</code>,
@@ -6223,7 +6284,7 @@ also lands in the event timeline.</li>
 <ul>
 <li>exactly one meta-root card shows the blue <strong>raft leader</strong> badge</li>
 <li>exactly one coordinator card shows the purple <strong>lease holder</strong> badge and
-a <code>cert_generation</code> that stays stable unless you kill something</li>
+a <code>epoch</code> that stays stable unless you kill something</li>
 <li>topology diagram: one blue circle on the left column, one purple on
 the middle column</li>
 <li>event timeline scrolls slowly with committed-index bumps under load</li>
@@ -6287,9 +6348,9 @@ publicly.</p>
 <ul>
 <li><a href="#configuration--options">docs/config.md</a> — <code>raft_config.example.json</code> schema (two-layer
 model: address directory vs bootstrap seed)</li>
-<li><a href="#ccc-audit">docs/ccc-audit.md</a> — the CCC audit tool behind the dashboard’s
-“closure witness” row</li>
-<li><a href="#coordinator">docs/coordinator.md</a> — CCC lease lifecycle</li>
+<li><a href="#succession-audit">docs/succession-audit.md</a> — the Succession audit tool behind the dashboard’s
+“handover witness” row</li>
+<li><a href="#coordinator">docs/coordinator.md</a> — Succession lease lifecycle</li>
 <li><a href="#rooted-truth--metaroot">docs/rooted_truth.md</a> — meta-root internals</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -6864,7 +6925,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <li><strong>RECOVERY_METRIC logs</strong> – produced when <code>RECOVERY_TRACE_METRICS=1</code>; helpful when triaging targeted recovery suites and CI failures.</li>
 <li><strong>TRANSPORT_METRIC logs</strong> – emitted by transport chaos tests when <code>CHAOS_TRACE_METRICS=1</code>, capturing gRPC watchdog counters during network partitions and retries.</li>
 <li><strong>Stats snapshots</strong> – <code>stats_test.go</code> verifies JSON structure so CLI output remains backwards compatible.</li>
-<li><strong>Benchmark artefacts</strong> – stored under <code>benchmark/results/</code> for shared suites and under suite-local result directories where applicable, for example <code>benchmark/results/ycsb/</code> and <code>benchmark/controlplane/results/</code>.</li>
+<li><strong>Benchmark artefacts</strong> – stored under <code>benchmark/results/</code> for shared suites and under suite-local result directories where applicable, for example <code>benchmark/results/ycsb/</code> and <code>benchmark/succession/results/</code>.</li>
 </ul>
 <hr>
 <h2 id="5-extending-coverage"><a class="header" href="#5-extending-coverage">5. Extending Coverage</a></h2>
@@ -10030,7 +10091,7 @@ NoKV 的 <code>meta/root</code> 是专用的 metadata truth kernel。</p>
 </li>
 <li><code>meta/root/backend/replicated</code> 覆盖 root leader change：
 <ul>
-<li>old root leader 写入 <code>CoordinatorLease</code> 和 allocator fences</li>
+<li>old root leader 写入 <code>Tenure</code> 和 allocator fences</li>
 <li>new root leader 继续 renew 同一 holder</li>
 <li>ID / TSO fences 在所有 root peers 上保持单调不回退</li>
 </ul>
@@ -10204,7 +10265,7 @@ NoKV 的 <code>meta/root</code> 是专用的 metadata truth kernel。</p>
 <li>Append 成功后，Coordinator 要么 wait 到 returned token，要么在 response 中返回 committed root token，要求 caller 后续用 freshness 检查。</li>
 </ul>
 <p>Lease 事件可以作为 rooted truth 的一部分：</p>
-<pre><code class="language-go">type CoordinatorLease struct {
+<pre><code class="language-go">type Tenure struct {
     HolderID     string
     Term         uint64
     ExpiresUnixNano int64
@@ -10214,7 +10275,7 @@ NoKV 的 <code>meta/root</code> 是专用的 metadata truth kernel。</p>
 </code></pre>
 <p><code>Campaign</code> 的语义必须明确：</p>
 <ol>
-<li>Coordinator 向 <code>meta/root</code> leader 提交 <code>KindCoordinatorLease</code> campaign。</li>
+<li>Coordinator 向 <code>meta/root</code> leader 提交 <code>KindTenure</code> campaign。</li>
 <li><code>meta/root</code> 状态机检查当前 lease 是否仍 active。</li>
 <li>如果已有 active holder，返回失败并携带 current holder / expiry / leader hint。</li>
 <li>如果没有 active holder，写入新 lease，返回 success、lease term、expiry、ID fence、TSO fence。</li>
@@ -10442,19 +10503,19 @@ remote fence latency = 1ms
 <p>状态：root truth 层和 coordinator runtime 最小 gate 已实现；默认仍未启用 separated deployment。</p>
 <p>已经落地：</p>
 <ul>
-<li><code>meta/root/event</code> 增加 <code>CoordinatorLeaseGranted</code> rooted event。</li>
-<li><code>meta/root/state</code> checkpoint state 增加 <code>CoordinatorLease</code>。</li>
-<li>local / replicated root backend 增加 <code>CampaignCoordinatorLease</code>。</li>
+<li><code>meta/root/event</code> 增加 <code>TenureGranted</code> rooted event。</li>
+<li><code>meta/root/state</code> checkpoint state 增加 <code>Tenure</code>。</li>
+<li>local / replicated root backend 增加 <code>CampaignTenure</code>。</li>
 <li>remote root RPC 增加 <code>Campaign</code>。</li>
 <li>active holder 未过期时，新 holder campaign 返回 current holder。</li>
 <li>holder 自己可以 renew，过期后新 holder 可以接管。</li>
 <li>campaign event 同时推进 ID / TSO durable fences。</li>
-<li><code>coordinator/server.Service</code> 增加显式 <code>ConfigureCoordinatorLease(...)</code>。</li>
+<li><code>coordinator/server.Service</code> 增加显式 <code>ConfigureTenure(...)</code>。</li>
 <li>开启 lease gate 后，<code>Tso</code> / <code>AllocID</code> / scheduler operation 都要求当前 holder 持有 lease。</li>
 <li><code>StoreHeartbeat</code> 仍然接受统计上报，但在无 lease 或 follower 时不返回 scheduler operations。</li>
 <li>runtime 在 <code>ExpiresUnixNano - clock_skew_buffer</code> 前停止继续使用本地 lease，并要求先 renew/campaign。</li>
-<li><code>RunCoordinatorLeaseLoop(ctx)</code> 已落地；启用 <code>--coordinator-id</code> 的 coordinator 会后台续租。</li>
-<li>rooted <code>ReleaseCoordinatorLease()</code> 已落地；graceful shutdown 会显式 release 当前 holder lease。</li>
+<li><code>RunTenureLoop(ctx)</code> 已落地；启用 <code>--coordinator-id</code> 的 coordinator 会后台续租。</li>
+<li>rooted <code>ReleaseTenure()</code> 已落地；graceful shutdown 会显式 release 当前 holder lease。</li>
 </ul>
 <p>仍未落地：</p>
 <ul>

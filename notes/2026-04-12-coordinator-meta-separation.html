@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0f1f7414.js";
+            window.path_to_searchindex_js = "../searchindex-0e4739fd.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-87c44e77.js"></script>
+        <script src="../toc-1516f189.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -253,7 +253,7 @@
 </li>
 <li><code>meta/root/backend/replicated</code> 覆盖 root leader change：
 <ul>
-<li>old root leader 写入 <code>CoordinatorLease</code> 和 allocator fences</li>
+<li>old root leader 写入 <code>Tenure</code> 和 allocator fences</li>
 <li>new root leader 继续 renew 同一 holder</li>
 <li>ID / TSO fences 在所有 root peers 上保持单调不回退</li>
 </ul>
@@ -427,7 +427,7 @@
 <li>Append 成功后，Coordinator 要么 wait 到 returned token，要么在 response 中返回 committed root token，要求 caller 后续用 freshness 检查。</li>
 </ul>
 <p>Lease 事件可以作为 rooted truth 的一部分：</p>
-<pre><code class="language-go">type CoordinatorLease struct {
+<pre><code class="language-go">type Tenure struct {
     HolderID     string
     Term         uint64
     ExpiresUnixNano int64
@@ -437,7 +437,7 @@
 </code></pre>
 <p><code>Campaign</code> 的语义必须明确：</p>
 <ol>
-<li>Coordinator 向 <code>meta/root</code> leader 提交 <code>KindCoordinatorLease</code> campaign。</li>
+<li>Coordinator 向 <code>meta/root</code> leader 提交 <code>KindTenure</code> campaign。</li>
 <li><code>meta/root</code> 状态机检查当前 lease 是否仍 active。</li>
 <li>如果已有 active holder，返回失败并携带 current holder / expiry / leader hint。</li>
 <li>如果没有 active holder，写入新 lease，返回 success、lease term、expiry、ID fence、TSO fence。</li>
@@ -665,19 +665,19 @@ remote fence latency = 1ms
 <p>状态：root truth 层和 coordinator runtime 最小 gate 已实现；默认仍未启用 separated deployment。</p>
 <p>已经落地：</p>
 <ul>
-<li><code>meta/root/event</code> 增加 <code>CoordinatorLeaseGranted</code> rooted event。</li>
-<li><code>meta/root/state</code> checkpoint state 增加 <code>CoordinatorLease</code>。</li>
-<li>local / replicated root backend 增加 <code>CampaignCoordinatorLease</code>。</li>
+<li><code>meta/root/event</code> 增加 <code>TenureGranted</code> rooted event。</li>
+<li><code>meta/root/state</code> checkpoint state 增加 <code>Tenure</code>。</li>
+<li>local / replicated root backend 增加 <code>CampaignTenure</code>。</li>
 <li>remote root RPC 增加 <code>Campaign</code>。</li>
 <li>active holder 未过期时，新 holder campaign 返回 current holder。</li>
 <li>holder 自己可以 renew，过期后新 holder 可以接管。</li>
 <li>campaign event 同时推进 ID / TSO durable fences。</li>
-<li><code>coordinator/server.Service</code> 增加显式 <code>ConfigureCoordinatorLease(...)</code>。</li>
+<li><code>coordinator/server.Service</code> 增加显式 <code>ConfigureTenure(...)</code>。</li>
 <li>开启 lease gate 后，<code>Tso</code> / <code>AllocID</code> / scheduler operation 都要求当前 holder 持有 lease。</li>
 <li><code>StoreHeartbeat</code> 仍然接受统计上报，但在无 lease 或 follower 时不返回 scheduler operations。</li>
 <li>runtime 在 <code>ExpiresUnixNano - clock_skew_buffer</code> 前停止继续使用本地 lease，并要求先 renew/campaign。</li>
-<li><code>RunCoordinatorLeaseLoop(ctx)</code> 已落地；启用 <code>--coordinator-id</code> 的 coordinator 会后台续租。</li>
-<li>rooted <code>ReleaseCoordinatorLease()</code> 已落地；graceful shutdown 会显式 release 当前 holder lease。</li>
+<li><code>RunTenureLoop(ctx)</code> 已落地；启用 <code>--coordinator-id</code> 的 coordinator 会后台续租。</li>
+<li>rooted <code>ReleaseTenure()</code> 已落地；graceful shutdown 会显式 release 当前 holder lease。</li>
 </ul>
 <p>仍未落地：</p>
 <ul>

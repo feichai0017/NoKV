@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0f1f7414.js";
+            window.path_to_searchindex_js = "searchindex-0e4739fd.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-87c44e77.js"></script>
+        <script src="toc-1516f189.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -196,14 +196,14 @@
 <ul>
 <li><strong>Coordinator is stateless at restart</strong> — the only persistent thing about a coordinator is its configured holder ID; everything else is rebuilt from <code>meta/root</code> on boot</li>
 <li><strong>The log can be swapped</strong> between local (single-node) and replicated (embedded-raft) backends without changing coordinator code</li>
-<li><strong>Authority handoff is auditable</strong> — every lease grant / seal / closure event is a committed log record with a cursor</li>
+<li><strong>Authority handoff is auditable</strong> — every tenure issue / legacy seal / handover event is a committed log record with a cursor</li>
 </ul>
 <hr>
 <h2 id="2-package-layout"><a class="header" href="#2-package-layout">2. Package layout</a></h2>
 <pre><code>meta/
 ├── root/
 │   ├── protocol/       # Pure protocol types (Cursor, Frontiers, Handoff, Witness, ...)
-│   ├── event/          # Typed events (KindStoreJoined, KindCoordinatorLease, ...)
+│   ├── event/          # Typed events (KindStoreJoined, KindTenure, ...)
 │   ├── state/          # Compact applied state (State, Snapshot, ApplyEventToSnapshot)
 │   ├── materialize/    # Helpers that build Snapshot from raw events
 │   ├── storage/        # Virtual log file layout + checkpoint format
@@ -223,9 +223,9 @@
     LastCommitted      Cursor         // highest committed (term, index)
     IDFence            uint64         // globally fenced ID allocator floor
     TSOFence           uint64         // globally fenced TSO allocator floor
-    CoordinatorLease   CoordinatorLease
-    CoordinatorSeal    CoordinatorSeal
-    CoordinatorClosure CoordinatorClosure
+    Tenure   Tenure
+    Legacy    Legacy
+    Handover Handover
 }
 </code></pre>
 <p><code>Snapshot</code> wraps <code>State</code> together with descriptors and pending peer/range changes:</p>
@@ -270,22 +270,22 @@ Historical single-process “local” backend has been removed.</p>
 (raft hard state + snapshot + retained entries)</li>
 </ul>
 <hr>
-<h2 id="6-coordinator-commands--how-leasesealclosure-flow-in"><a class="header" href="#6-coordinator-commands--how-leasesealclosure-flow-in">6. Coordinator commands — how lease/seal/closure flow in</a></h2>
+<h2 id="6-coordinator-commands--how-tenurelegacyhandover-flow-in"><a class="header" href="#6-coordinator-commands--how-tenurelegacyhandover-flow-in">6. Coordinator commands — how tenure/legacy/handover flow in</a></h2>
 <p>In addition to “raw” events, backends expose command APIs for control-plane-specific operations:</p>
-<pre><code class="language-go">ApplyCoordinatorLease(ctx, cmd CoordinatorLeaseCommand)
-    (CoordinatorProtocolState, error)
+<pre><code class="language-go">ApplyTenure(ctx, cmd TenureCommand)
+    (SuccessionState, error)
 
-ApplyCoordinatorClosure(ctx, cmd CoordinatorClosureCommand)
-    (CoordinatorProtocolState, error)
+ApplyHandover(ctx, cmd HandoverCommand)
+    (SuccessionState, error)
 </code></pre>
 <p>These are <strong>validated, typed writes</strong> that internally:</p>
 <ol>
-<li>Validate the command against current state (e.g., seal requires active lease, confirm requires prior seal)</li>
-<li>Emit the appropriate <code>KindCoordinatorLease</code> / <code>KindCoordinatorSeal</code> / <code>KindCoordinatorClosure</code> event</li>
+<li>Validate the command against current state (e.g., <code>Seal</code> requires an active <code>Tenure</code>, <code>Confirm</code> requires prior <code>Legacy</code>)</li>
+<li>Emit the appropriate <code>KindTenure</code> / <code>KindLegacy</code> / <code>KindHandover</code> event</li>
 <li>Append through the normal log path</li>
-<li>Return the new <code>CoordinatorProtocolState = { Lease, Seal, Closure }</code></li>
+<li>Return the new <code>SuccessionState = { Tenure, Legacy, Handover }</code></li>
 </ol>
-<p>Command-level validation lives in <a href="../meta/root/state/coordinator_lease.go"><code>meta/root/state/coordinator_lease.go</code></a>.</p>
+<p>Command-level validation lives in <a href="../meta/root/state/succession.go"><code>meta/root/state/succession.go</code></a>.</p>
 <hr>
 <h2 id="7-tail-subscription--how-coordinator-consumes"><a class="header" href="#7-tail-subscription--how-coordinator-consumes">7. Tail subscription — how coordinator consumes</a></h2>
 <p>Coordinators don’t poll <code>Snapshot()</code> — they subscribe:</p>
@@ -312,7 +312,7 @@ sub.Acknowledge(advance)
 <li>Open the replicated backend (each peer via <code>rootreplicated.Open</code>, or connect through <code>coordinator/rootview</code> for the client side)</li>
 <li>Call <code>Snapshot()</code> — backend replays/bootstraps internally</li>
 <li>Build a <code>TailSubscription</code> from the snapshot’s <code>LastCommitted</code></li>
-<li>Start the lease campaign loop, which will eventually <code>ApplyCoordinatorLease(Issue)</code> when it’s leader</li>
+<li>Start the tenure campaign loop, which will eventually <code>ApplyTenure(Issue)</code> when it’s leader</li>
 </ol>
 <p>If the backend file is corrupted, the coordinator fails fast — it does <strong>not</strong> try to reconstruct rooted state from raftstore local metadata. The two are deliberately partitioned.</p>
 <hr>
@@ -335,7 +335,7 @@ sub.Acknowledge(advance)
 <tr><td><a href="../meta/root/protocol/types.go"><code>meta/root/protocol/types.go</code></a></td><td>Pure protocol types (no persistence logic)</td></tr>
 <tr><td><a href="../meta/root/event/types.go"><code>meta/root/event/types.go</code></a></td><td>Typed event constructors</td></tr>
 <tr><td><a href="../meta/root/state/state.go"><code>meta/root/state/state.go</code></a></td><td><code>State</code>, <code>Snapshot</code>, <code>ApplyEventToSnapshot</code></td></tr>
-<tr><td><a href="../meta/root/state/coordinator_lease.go"><code>meta/root/state/coordinator_lease.go</code></a></td><td>Lease/Seal/Closure validation + digest</td></tr>
+<tr><td><a href="../meta/root/state/succession.go"><code>meta/root/state/succession.go</code></a></td><td>Tenure/Legacy/Handover validation + digest</td></tr>
 <tr><td><a href="../meta/root/state/transition.go"><code>meta/root/state/transition.go</code></a></td><td>Cross-event transition rules</td></tr>
 <tr><td><a href="../meta/root/storage/virtual_log.go"><code>meta/root/storage/virtual_log.go</code></a></td><td>Tail subscription + checkpoint primitives</td></tr>
 <tr><td><a href="../meta/root/replicated/store.go"><code>meta/root/replicated/store.go</code></a></td><td>The only backend: 3-peer raft-replicated meta-root</td></tr>

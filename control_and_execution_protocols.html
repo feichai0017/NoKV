@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0f1f7414.js";
+            window.path_to_searchindex_js = "searchindex-0e4739fd.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-87c44e77.js"></script>
+        <script src="toc-1516f189.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -858,30 +858,30 @@ local state. This is the current boundary between:</p>
 <ul>
 <li>they always re-read rooted state from storage before mutating</li>
 <li>they reject any stale-holder / expired-lease / sealed-generation view</li>
-<li>they treat closure completeness as a rooted safety condition, not a best-effort hint</li>
+<li>they treat finality as a rooted safety condition, not a best-effort hint</li>
 </ul>
 <p>That is why seal / confirm / close / reattach do not use the cached mirror
 admission path.</p>
 <h3 id="85-operational-diagnostics"><a class="header" href="#85-operational-diagnostics">8.5 Operational diagnostics</a></h3>
 <p><code>DiagnosticsSnapshot()</code> now exports both:</p>
 <ul>
-<li>the current degraded serving state (<code>root</code>, <code>lease</code>, <code>audit</code>, <code>closure_witness</code>)</li>
-<li>cumulative CCC counters under <code>ccc_metrics</code></li>
+<li>the current degraded serving state (<code>root</code>, <code>lease</code>, <code>audit</code>, <code>handover_witness</code>)</li>
+<li>cumulative Succession counters under <code>succession_metrics</code></li>
 </ul>
-<p><code>ccc_metrics</code> is grouped into:</p>
+<p><code>succession_metrics</code> is grouped into:</p>
 <ul>
-<li><code>lease_generation_transitions_total</code></li>
-<li><code>closure_stage_transitions_total</code></li>
-<li><code>pre_action_gate_rejections_total</code></li>
-<li><code>ali_violations_total</code></li>
+<li><code>tenure_epoch_transitions_total</code></li>
+<li><code>handover_stage_transitions_total</code></li>
+<li><code>gate_rejections_total</code></li>
+<li><code>guarantee_violations_total</code></li>
 </ul>
-<p>The <code>ali_violations_total</code> buckets map to the four Authority Lineage
-Invariants:</p>
+<p>The <code>guarantee_violations_total</code> buckets map directly to the four Succession
+guarantees:</p>
 <ul>
-<li><code>authority_uniqueness</code></li>
-<li><code>successor_coverage</code></li>
-<li><code>post_seal_inadmissibility</code></li>
-<li><code>closure_completeness</code></li>
+<li><code>primacy</code></li>
+<li><code>inheritance</code></li>
+<li><code>silence</code></li>
+<li><code>finality</code></li>
 </ul>
 <hr>
 <h2 id="9-api-direction"><a class="header" href="#9-api-direction">9. API Direction</a></h2>

@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>ccc-audit - NoKV Docs</title>
+        <title>succession-audit - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0f1f7414.js";
+            window.path_to_searchindex_js = "searchindex-0e4739fd.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-87c44e77.js"></script>
+        <script src="toc-1516f189.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,11 +178,11 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="ccc-audit"><a class="header" href="#ccc-audit">ccc-audit</a></h1>
-<p><code>nokv ccc-audit</code> is a read-only operator tool that projects a live 3-peer
+                        <h1 id="succession-audit"><a class="header" href="#succession-audit">succession-audit</a></h1>
+<p><code>nokv succession-audit</code> is a read-only operator tool that projects a live 3-peer
 meta-root cluster’s current rooted state into the <code>coordinator/audit</code>
-closure-complete-continuation (CCC) vocabulary. It is the operator
-counterpart to the TLA+ CCC model and the <code>coordinator/audit</code> library that
+succession (Succession) vocabulary. It is the operator
+counterpart to the TLA+ Succession model and the <code>coordinator/audit</code> library that
 coordinator/server consults at runtime.</p>
 <p>Because NoKV only ships the separated topology (3 meta-root + N coordinator),
 the audit tool speaks only remote gRPC — it does not read meta-root workdirs
@@ -192,19 +192,42 @@ directly.</p>
 <li>Dial the 3 meta-root peers through <code>meta/root/client</code> (the same client
 coordinators use) wrapped by <code>coordinator/rootview.OpenRootRemoteStore</code>.</li>
 <li>Load one rooted <code>Snapshot</code> — current descriptors, allocator fences,
-<code>CoordinatorLease</code>, <code>CoordinatorSeal</code>, <code>CoordinatorClosure</code>.</li>
+<code>Tenure</code>, <code>Legacy</code>, <code>Handover</code>.</li>
 <li>Project the snapshot through <code>coordinator/audit.BuildReport(snapshot, holderID, nowUnixNano)</code> to produce a <code>Report</code> containing <code>SnapshotAnomalies</code>
-and a <code>ClosureDefect</code> enum.</li>
+and a <code>FinalityDefect</code> enum.</li>
 <li>Optionally load a reply-trace JSON (from stdin or a file) and call
 <code>coordinator/audit.EvaluateReplyTrace(report, records)</code> to flag any
-accepted replies that are illegal under the current closure witness.</li>
+accepted replies that are illegal under the current handover witness.</li>
 <li>Render the combined result as human-readable text or JSON.</li>
 </ol>
 <p>The audit is read-only: it never writes to meta-root, never advances fences,
 and never mutates coordinator state. It can run while the cluster is live and
 healthy, or attached to a quiesced cluster during post-incident analysis.</p>
+<h2 id="minimal-vocabulary"><a class="header" href="#minimal-vocabulary">Minimal vocabulary</a></h2>
+<p>The audit output intentionally uses a smaller protocol vocabulary than the full
+implementation:</p>
+<ul>
+<li><code>Lease</code> — the active authority record</li>
+<li><code>Seal</code> — the retired predecessor generation and the frontier it already
+consumed</li>
+<li><code>Handover</code> — the successor handoff-completion record</li>
+<li><code>Generation</code> — the authority generation counter (implementation fields still
+use <code>epoch</code> for compatibility)</li>
+<li><code>Witness</code> — the proof bundle derived from <code>{Lease, Seal, Handover}</code></li>
+</ul>
+<p>The four safety guarantees the audit talks about are:</p>
+<ul>
+<li><code>Primacy</code> — at most one generation is active</li>
+<li><code>Inheritance</code> — the successor covers predecessor commitments</li>
+<li><code>Silence</code> — a sealed generation does not continue serving</li>
+<li><code>Finality</code> — a handoff finishes instead of hanging forever</li>
+</ul>
+<p>Implementation types such as <code>Tenure</code>, <code>Legacy</code>,
+<code>Handover</code>, <code>LineageDigest</code>, and <code>MandateFrontiers</code>
+remain unchanged in code. The audit doc keeps the public vocabulary shorter on
+purpose.</p>
 <h2 id="usage"><a class="header" href="#usage">Usage</a></h2>
-<pre><code class="language-bash">nokv ccc-audit \
+<pre><code class="language-bash">nokv succession-audit \
   --root-peer 1=127.0.0.1:2380 \
   --root-peer 2=127.0.0.1:2381 \
   --root-peer 3=127.0.0.1:2382
@@ -217,7 +240,7 @@ that <code>nokv coordinator --root-peer ...</code> uses.</li>
 <p>Optional:</p>
 <ul>
 <li><code>--holder &lt;id&gt;</code> — override the holder id used for reattach checks.
-Defaults to <code>snapshot.CoordinatorLease.HolderID</code>.</li>
+Defaults to <code>snapshot.Tenure.HolderID</code>.</li>
 <li><code>--now-unix-nano &lt;ns&gt;</code> — override the audit clock. Defaults to
 <code>time.Now().UnixNano()</code>. Useful for deterministic regression runs.</li>
 <li><code>--reply-trace &lt;path&gt;</code> — path to a reply-trace JSON file (<code>-</code> for stdin).
@@ -227,7 +250,7 @@ When omitted, only the snapshot-level audit runs.</li>
 <li><code>--json</code> — emit JSON instead of the default human-readable text.</li>
 </ul>
 <h2 id="sample-output"><a class="header" href="#sample-output">Sample output</a></h2>
-<pre><code class="language-text">CCC audit report
+<pre><code class="language-text">Succession audit report
 ----------------
 holder             : coord-1
 now_unix_nano      : 1714857600000000000
@@ -235,8 +258,8 @@ root_desc_revision : 42
 catch_up_state     : fresh
 current_holder     : coord-1
 current_generation : 7
-closure            : stage=confirmed
-closure_witness    : stage=confirmed seal_gen=6 successor_present=true successor_coverage=covered lineage_satisfied=true sealed_gen_retired=true
+handover           : stage=confirmed
+handover_witness   : stage=confirmed seal_gen=6 successor_present=true inheritance=covered lineage_satisfied=true sealed_gen_retired=true
 
 snapshot anomalies:
   successor_lineage_mismatch     : false
@@ -244,10 +267,10 @@ snapshot anomalies:
   uncovered_descriptor_revision  : false
   lease_start_coverage_violation : false
   sealed_generation_still_live   : false
-  closure_defect                 : none
+  finality_defect                 : none
 </code></pre>
 <p>When <code>--reply-trace</code> is provided, each accepted reply that violates the
-closure witness prints as a trailing line:</p>
+handover witness prints as a trailing line:</p>
 <pre><code class="language-text">reply-trace anomalies (1):
   [3] kind=accepted_reply_behind_successor duty=lease_start cert_gen=5 reason="accepted reply generation 5 behind observed successor generation 7"
 </code></pre>
@@ -261,34 +284,34 @@ enum:</p>
 <li><code>reattach_without_confirm</code> / <code>reattach_without_close</code> /
 <code>reattach_lineage_mismatch</code> / <code>reattach_incomplete</code></li>
 </ul>
-<p>Any non-empty <code>closure_defect</code> or any <code>true</code> flag under <code>snapshot anomalies</code>
-indicates that the rooted closure state has drifted from the expected
-<code>Attached → Active → Seal → Cover → Close → Reattach</code> lifecycle — which is
-exactly the property CCC.tla proves meta-root must preserve.</p>
+<p>Any non-empty <code>finality_defect</code> or any <code>true</code> flag under <code>snapshot anomalies</code>
+indicates that the rooted handoff state has drifted from the expected
+<code>active lease → sealed predecessor → inherited successor → closed handoff</code>
+lifecycle — which is exactly the property <code>spec/Succession.tla</code> proves meta-root must
+preserve.</p>
 <h2 id="runtime-diagnostics-and-metrics"><a class="header" href="#runtime-diagnostics-and-metrics">Runtime diagnostics and metrics</a></h2>
 <p>The audit CLI is the read-only offline/operator view. The live coordinator
-runtime now exposes a matching <code>ccc_metrics</code> block through
+runtime now exposes a matching <code>succession_metrics</code> block through
 <code>coordinator/server.DiagnosticsSnapshot()</code> and the <code>nokv_coordinator</code> expvar
 surface.</p>
 <p>That block exports four counter families:</p>
 <ul>
 <li><code>lease_generation_transitions_total</code></li>
-<li><code>closure_stage_transitions_total</code></li>
+<li><code>handover_stage_transitions_total</code></li>
 <li><code>pre_action_gate_rejections_total</code></li>
-<li><code>ali_violations_total</code></li>
+<li><code>guarantee_violations_total</code></li>
 </ul>
-<p><code>ali_violations_total</code> uses the same four-way CCC vocabulary as the paper and
-the TLA+ model:</p>
+<p><code>guarantee_violations_total</code> uses the same four Succession guarantees:</p>
 <ul>
-<li><code>authority_uniqueness</code></li>
-<li><code>successor_coverage</code></li>
-<li><code>post_seal_inadmissibility</code></li>
-<li><code>closure_completeness</code></li>
+<li><code>primacy</code></li>
+<li><code>inheritance</code></li>
+<li><code>silence</code></li>
+<li><code>finality</code></li>
 </ul>
 <p>The intended split is:</p>
 <ul>
-<li><code>ccc-audit</code> explains whether the <strong>current rooted snapshot</strong> is legal</li>
-<li><code>ccc_metrics</code> shows how often the <strong>live runtime</strong> has rejected unsafe
+<li><code>succession-audit</code> explains whether the <strong>current rooted snapshot</strong> is legal</li>
+<li><code>succession_metrics</code> shows how often the <strong>live runtime</strong> has rejected unsafe
 continuations while the system is running</li>
 </ul>
 <h2 id="related"><a class="header" href="#related">Related</a></h2>

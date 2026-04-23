@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0f1f7414.js";
+            window.path_to_searchindex_js = "searchindex-0e4739fd.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-87c44e77.js"></script>
+        <script src="toc-1516f189.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -235,6 +235,44 @@ can rely on.</p>
 <p>The current protocol is intentionally minimal. It does not yet expose the full
 future runtime/operator model such as stalled transitions or richer catch-up
 actions.</p>
+<h3 id="minimal-succession-vocabulary"><a class="header" href="#minimal-succession-vocabulary">Minimal Succession vocabulary</a></h3>
+<p>The rooted handoff protocol is smaller than some of the implementation type
+names suggest. At the doc / operator level, keep just these words:</p>
+<ul>
+<li><code>Lease</code> — the currently active authority record</li>
+<li><code>Seal</code> — the retired predecessor generation plus the frontier it already
+consumed</li>
+<li><code>Handover</code> — the rooted handoff record for the current successor</li>
+<li><code>Generation</code> — the monotonic authority generation</li>
+<li><code>Witness</code> — the operator-visible proof bundle that explains whether the
+current handoff state is safe</li>
+</ul>
+<p>The four guarantees discussed by the docs and runtime metrics are:</p>
+<ul>
+<li><code>Primacy</code> — at most one authority generation is active</li>
+<li><code>Inheritance</code> — the successor must cover the predecessor’s published work</li>
+<li><code>Silence</code> — a sealed predecessor must not keep serving</li>
+<li><code>Finality</code> — a handoff must not remain permanently half-finished</li>
+</ul>
+<p>Implementation names remain more explicit:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Doc term</th><th>Implementation term</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Lease</code></td><td><code>Tenure</code></td></tr>
+<tr><td><code>Seal</code></td><td><code>Legacy</code></td></tr>
+<tr><td><code>Handover</code></td><td><code>Handover</code></td></tr>
+<tr><td><code>Generation</code></td><td><code>Epoch</code> / <code>epoch</code></td></tr>
+<tr><td><code>Witness</code></td><td><code>HandoverWitness</code> / continuation witness fields</td></tr>
+<tr><td><code>Frontiers</code></td><td><code>MandateFrontiers</code> / <code>frontiers</code> / <code>consumed_frontiers</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>This split is deliberate: docs describe the protocol in the smallest stable
+vocabulary, while code keeps the more explicit type names that make mutation
+boundaries obvious.</p>
 <hr>
 <h2 id="3-deployment-model"><a class="header" href="#3-deployment-model">3. Deployment Model</a></h2>
 <p>NoKV ships exactly one distributed topology plus the standalone engine shape.</p>
@@ -253,7 +291,7 @@ plane deployment; it simply has no control plane.</p>
 (replicated raft quorum, the only backend NoKV ships)</li>
 <li>one or more <code>nokv coordinator</code> processes connect through the remote
 metadata-root gRPC API</li>
-<li><code>CoordinatorLease</code> gates singleton Coordinator duties: <code>AllocID</code>, <code>Tso</code>,
+<li><code>Tenure</code> gates singleton Coordinator duties: <code>AllocID</code>, <code>Tso</code>,
 and scheduler operation planning</li>
 <li>route reads still come from Coordinator’s rebuildable in-memory view and
 expose <code>Freshness</code>, <code>RootToken</code>, <code>CatchUpState</code>, and <code>DegradedMode</code></li>
@@ -270,7 +308,7 @@ expose <code>Freshness</code>, <code>RootToken</code>, <code>CatchUpState</code>
 <li>exactly three meta-root replicas</li>
 <li>meta-root is the only place durable rooted truth lives</li>
 <li>coordinators are stateless relative to rooted truth; only the
-<code>CoordinatorLease</code> differentiates active vs standby</li>
+<code>Tenure</code> differentiates active vs standby</li>
 <li>no dynamic metadata-root membership</li>
 <li>no production-grade dynamic coordinator membership manager</li>
 </ul>
@@ -304,7 +342,7 @@ remote root endpoints through <code>--root-peer nodeID=grpc_addr</code>.</p>
 <li><code>meta-root</code> workdirs own durable rooted truth and replicated metadata-root
 raft state.</li>
 <li><code>coordinator</code> runtime view is rebuildable from remote <code>meta/root</code>.</li>
-<li>allocator fences and <code>CoordinatorLease</code> are rooted events, not local
+<li>allocator fences and <code>Tenure</code> are rooted events, not local
 coordinator files.</li>
 </ol>
 <p><code>--coordinator-id</code> must be a stable configured identity. It is used for lease
@@ -444,7 +482,7 @@ service surface.</p>
 <p>In separated mode:</p>
 <ul>
 <li><code>meta-root</code> leadership determines which root endpoint accepts truth writes</li>
-<li><code>CoordinatorLease</code> determines which Coordinator may serve singleton duties</li>
+<li><code>Tenure</code> determines which Coordinator may serve singleton duties</li>
 <li>non-holder Coordinators may still serve route reads if their rooted view
 satisfies the caller’s freshness contract</li>
 </ul>
@@ -460,7 +498,7 @@ satisfies the caller’s freshness contract</li>
 <p>Followers return <code>FailedPrecondition</code> with <code>coordinator not leader</code> semantics, and
 clients are expected to retry against another Coordinator endpoint.</p>
 <p>In separated mode, <code>AllocID</code>, <code>Tso</code>, and scheduler operation planning also
-require the local Coordinator to hold <code>CoordinatorLease</code>.</p>
+require the local Coordinator to hold <code>Tenure</code>.</p>
 <h3 id="any-node-reads"><a class="header" href="#any-node-reads">Any-node reads</a></h3>
 <p>These RPCs may be served by any Coordinator node:</p>
 <ul>
@@ -511,7 +549,7 @@ and <code>-addr</code>; they share the same <code>-root-peer</code> set):</p>
 <li>exactly three meta-root replicas</li>
 <li>meta-root is the only place durable rooted truth lives</li>
 <li>coordinators are stateless relative to rooted truth; only the
-<code>CoordinatorLease</code> differentiates active vs standby</li>
+<code>Tenure</code> differentiates active vs standby</li>
 <li>no dynamic metadata-root membership</li>
 </ul>
 <p>For local bootstrap, use:</p>
@@ -546,7 +584,7 @@ rooted backend and rebuilds its service-side view from rooted truth.</li>
 <ul>
 <li>region descriptor publish/tombstone events</li>
 <li>allocator durability (<code>AllocID</code>, <code>TSO</code>)</li>
-<li><code>CoordinatorLease</code> ownership for separated singleton duties</li>
+<li><code>Tenure</code> ownership for separated singleton duties</li>
 </ul>
 </li>
 <li>Coordinator is not the durable owner of a store’s local raft/region truth. Store
@@ -569,7 +607,7 @@ deliberately small HA surface:
 <ul>
 <li>use it for control-plane research and failure-domain experiments</li>
 <li>do not treat it as the default production path yet</li>
-<li>failure/recovery E2E tests and control-plane benchmarks still need to be
+<li>failure/recovery E2E tests and succession benchmarks still need to be
 expanded before stronger claims are made</li>
 </ul>
 </li>

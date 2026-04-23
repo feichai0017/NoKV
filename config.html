@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0f1f7414.js";
+            window.path_to_searchindex_js = "searchindex-0e4739fd.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-87c44e77.js"></script>
+        <script src="toc-1516f189.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -323,7 +323,7 @@ them is a common deployment mistake, so be explicit:</p>
 </thead>
 <tbody>
 <tr><td><strong>Address directory</strong></td><td><code>meta_root.peers</code>, <code>coordinator</code>, <code>stores</code>, <code>store_work_dir_template</code>, <code>max_retries</code></td><td>Read on <strong>every</strong> CLI invocation. Keep in sync with deployed containers/hosts.</td><td><strong>This file is the source of truth.</strong> Nothing else knows where to dial.</td></tr>
-<tr><td><strong>Bootstrap seed</strong></td><td><code>regions</code></td><td>Read <strong>only</strong> on first startup by <code>scripts/ops/bootstrap.sh</code>. Once a store has <code>CURRENT</code>, bootstrap skips it.</td><td>After first bootstrap, <strong>meta-root</strong> owns the runtime region topology. Inspect with <code>nokv-config regions</code> or <code>nokv ccc-audit</code>.</td></tr>
+<tr><td><strong>Bootstrap seed</strong></td><td><code>regions</code></td><td>Read <strong>only</strong> on first startup by <code>scripts/ops/bootstrap.sh</code>. Once a store has <code>CURRENT</code>, bootstrap skips it.</td><td>After first bootstrap, <strong>meta-root</strong> owns the runtime region topology. Inspect with <code>nokv-config regions</code> or <code>nokv succession-audit</code>.</td></tr>
 </tbody>
 </table>
 </div>
@@ -342,7 +342,7 @@ a source of defaults:</p>
   "meta_root": {
     "peers": [
       { "node_id": 1,
-        "addr": "127.0.0.1:2380",         // coordinator/ccc-audit dial here
+        "addr": "127.0.0.1:2380",         // coordinator/succession-audit dial here
         "docker_addr": "nokv-meta-root-1:2380",
         "transport_addr": "127.0.0.1:3380", // sibling meta-root peers dial here for raft
         "docker_transport_addr": "nokv-meta-root-1:2480",
@@ -376,7 +376,7 @@ a source of defaults:</p>
 <h3 id="field-notes"><a class="header" href="#field-notes">Field notes</a></h3>
 <ul>
 <li><strong><code>meta_root.peers</code></strong>: exactly 3 entries. <code>addr</code> is the gRPC service port
-(coordinators/ccc-audit dial it). <code>transport_addr</code> is the raft transport
+(coordinators/succession-audit dial it). <code>transport_addr</code> is the raft transport
 port (sibling meta-root peers dial it for raft messages). They MUST be
 different ports on the same host.</li>
 <li><strong><code>coordinator.addr</code> / <code>docker_addr</code></strong>: may be a single endpoint or
