@@ -34,18 +34,17 @@ The audit output intentionally uses a smaller protocol vocabulary than the full
 implementation:
 
 - `Lease` — the active authority record
-- `Seal` — the retired predecessor generation and the frontier it already
+- `Seal` — the retired predecessor era and the frontier it already
   consumed
 - `Handover` — the successor handoff-completion record
-- `Generation` — the authority generation counter (implementation fields still
-  use `epoch` for compatibility)
+- `Era` — the authority era counter
 - `Witness` — the proof bundle derived from `{Lease, Seal, Handover}`
 
 The four safety guarantees the audit talks about are:
 
-- `Primacy` — at most one generation is active
+- `Primacy` — at most one era is active
 - `Inheritance` — the successor covers predecessor commitments
-- `Silence` — a sealed generation does not continue serving
+- `Silence` — a sealed era does not continue serving
 - `Finality` — a handoff finishes instead of hanging forever
 
 Implementation types such as `Tenure`, `Legacy`,
@@ -89,16 +88,16 @@ now_unix_nano      : 1714857600000000000
 root_desc_revision : 42
 catch_up_state     : fresh
 current_holder     : coord-1
-current_generation : 7
+current_era        : 7
 handover           : stage=confirmed
-handover_witness   : stage=confirmed seal_gen=6 successor_present=true inheritance=covered lineage_satisfied=true sealed_gen_retired=true
+handover_witness   : stage=confirmed legacy_era=6 successor_present=true inheritance=covered lineage_satisfied=true sealed_era_retired=true
 
 snapshot anomalies:
   successor_lineage_mismatch     : false
   uncovered_monotone_frontier    : false
   uncovered_descriptor_revision  : false
   lease_start_coverage_violation : false
-  sealed_generation_still_live   : false
+  sealed_era_still_live      : false
   finality_defect                 : none
 ```
 
@@ -107,7 +106,7 @@ handover witness prints as a trailing line:
 
 ```text
 reply-trace anomalies (1):
-  [3] kind=accepted_reply_behind_successor duty=lease_start cert_gen=5 reason="accepted reply generation 5 behind observed successor generation 7"
+  [3] kind=accepted_reply_behind_successor duty=lease_start cert_era=5 reason="accepted reply era 5 behind observed successor era 7"
 ```
 
 ## Anomaly vocabulary
@@ -136,7 +135,7 @@ surface.
 
 That block exports four counter families:
 
-- `lease_generation_transitions_total`
+- `lease_era_transitions_total`
 - `handover_stage_transitions_total`
 - `pre_action_gate_rejections_total`
 - `guarantee_violations_total`

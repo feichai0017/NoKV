@@ -20,13 +20,13 @@ import (
 
 func TestServiceDiagnosticsSnapshotIncludesSuccessionMetrics(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
-	svc.successionMetrics.recordTenureEpochTransition(1, 2)
+	svc.successionMetrics.recordTenureEraTransition(1, 2)
 	svc.successionMetrics.recordHandoverStageTransition(rootproto.HandoverStageUnspecified, rootproto.HandoverStageConfirmed)
 	svc.successionMetrics.recordGateRejection(gateMandateAdmission)
 	svc.successionMetrics.recordGuaranteeViolation(guaranteeInheritance)
 
 	metrics := svc.DiagnosticsSnapshot()["succession_metrics"].(map[string]any)
-	require.Equal(t, uint64(1), metrics["tenure_epoch_transitions_total"])
+	require.Equal(t, uint64(1), metrics["tenure_era_transitions_total"])
 	require.Equal(t, map[string]any{
 		"confirmed":  uint64(1),
 		"closed":     uint64(0),
@@ -56,12 +56,12 @@ func TestServiceValidatePreActionLeaseRecordsPostSealMetric(t *testing.T) {
 		rootstate.Tenure{
 			HolderID:        "c1",
 			ExpiresUnixNano: time.Unix(0, 200).UnixNano(),
-			Epoch:           3,
+			Era:             3,
 			Mandate:         rootproto.MandateDefault,
 		},
 		rootstate.Legacy{
 			HolderID:  "c1",
-			Epoch:     3,
+			Era:       3,
 			Mandate:   rootproto.MandateDefault,
 			Frontiers: succession.Frontiers(rootstate.State{IDFence: 5, TSOFence: 9}, 0),
 		},
@@ -93,12 +93,12 @@ func TestServiceFinalityMetricsTrackLifecycleStages(t *testing.T) {
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 20_000).UnixNano(),
-				Epoch:           3,
+				Era:             3,
 				Mandate:         rootproto.MandateDefault,
 			},
 			Legacy: rootstate.Legacy{
 				HolderID:  "c1",
-				Epoch:     2,
+				Era:       2,
 				Mandate:   rootproto.MandateDefault,
 				Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 				SealedAt:  rootstate.Cursor{Term: 1, Index: 9},

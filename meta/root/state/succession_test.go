@@ -12,7 +12,7 @@ import (
 func TestValidateLeaseStartInheritanceRejectsBelowFrontier(t *testing.T) {
 	seal := rootstate.Legacy{
 		HolderID: "n1",
-		Epoch:    1,
+		Era:      1,
 		Mandate:  rootproto.MandateDefault,
 		Frontiers: rootproto.NewMandateFrontiers(
 			rootproto.MandateFrontier{Mandate: rootproto.MandateLeaseStart, Frontier: 15},
@@ -37,14 +37,14 @@ func TestValidateLeaseStartInheritanceNoOpWhenSealAbsent(t *testing.T) {
 }
 
 func TestValidateLeaseStartInheritanceNoOpWhenFrontierZero(t *testing.T) {
-	seal := rootstate.Legacy{HolderID: "n1", Epoch: 1}
+	seal := rootstate.Legacy{HolderID: "n1", Era: 1}
 	if err := rootstate.ValidateLeaseStartInheritance(seal, 0); err != nil {
 		t.Fatalf("zero frontier must be a no-op, got err=%v", err)
 	}
 }
 
 func TestLegacyWithServedFrontierMonotonic(t *testing.T) {
-	seal := rootstate.Legacy{HolderID: "n1", Epoch: 1}
+	seal := rootstate.Legacy{HolderID: "n1", Era: 1}
 
 	updated := rootstate.LegacyWithServedFrontier(seal, 10)
 	if got := updated.Frontiers.Frontier(rootproto.MandateLeaseStart); got != 10 {
@@ -62,44 +62,44 @@ func TestLegacyWithServedFrontierMonotonic(t *testing.T) {
 	}
 }
 
-func TestNextTenureEpoch(t *testing.T) {
+func TestNextTenureEra(t *testing.T) {
 	current := rootstate.Tenure{
 		HolderID:        "c1",
 		ExpiresUnixNano: 1_000,
-		Epoch:           7,
+		Era:             7,
 	}
-	seal := rootstate.Legacy{HolderID: "c1", Epoch: 7}
+	seal := rootstate.Legacy{HolderID: "c1", Era: 7}
 
-	if got := rootstate.NextTenureEpoch(rootstate.Tenure{}, rootstate.Legacy{}, "c1", 100); got != 1 {
-		t.Fatalf("empty lease should start at generation 1, got %d", got)
+	if got := rootstate.NextTenureEra(rootstate.Tenure{}, rootstate.Legacy{}, "c1", 100); got != 1 {
+		t.Fatalf("empty lease should start at era 1, got %d", got)
 	}
-	if got := rootstate.NextTenureEpoch(current, rootstate.Legacy{}, "c1", 500); got != 7 {
-		t.Fatalf("active same-holder lease should keep generation 7, got %d", got)
+	if got := rootstate.NextTenureEra(current, rootstate.Legacy{}, "c1", 500); got != 7 {
+		t.Fatalf("active same-holder lease should keep era 7, got %d", got)
 	}
-	if got := rootstate.NextTenureEpoch(current, rootstate.Legacy{}, "c2", 500); got != 8 {
-		t.Fatalf("new holder should bump generation to 8, got %d", got)
+	if got := rootstate.NextTenureEra(current, rootstate.Legacy{}, "c2", 500); got != 8 {
+		t.Fatalf("new holder should bump era to 8, got %d", got)
 	}
-	if got := rootstate.NextTenureEpoch(current, rootstate.Legacy{}, "c1", 1_000); got != 8 {
-		t.Fatalf("expired lease should bump generation to 8, got %d", got)
+	if got := rootstate.NextTenureEra(current, rootstate.Legacy{}, "c1", 1_000); got != 8 {
+		t.Fatalf("expired lease should bump era to 8, got %d", got)
 	}
-	if got := rootstate.NextTenureEpoch(current, seal, "c1", 500); got != 8 {
-		t.Fatalf("sealed lease should bump generation to 8, got %d", got)
+	if got := rootstate.NextTenureEra(current, seal, "c1", 500); got != 8 {
+		t.Fatalf("sealed lease should bump era to 8, got %d", got)
 	}
 }
 
-func TestTenureRenewableAndSealedGeneration(t *testing.T) {
+func TestTenureRenewableAndSealedEra(t *testing.T) {
 	current := rootstate.Tenure{
 		HolderID:        "c1",
 		ExpiresUnixNano: 1_000,
-		Epoch:           7,
+		Era:             7,
 	}
-	seal := rootstate.Legacy{HolderID: "c1", Epoch: 7}
+	seal := rootstate.Legacy{HolderID: "c1", Era: 7}
 
 	if rootstate.TenureSealed(current, rootstate.Legacy{}) {
-		t.Fatalf("unsealed generation must not be marked sealed")
+		t.Fatalf("unsealed era must not be marked sealed")
 	}
 	if !rootstate.TenureSealed(current, seal) {
-		t.Fatalf("matching seal must mark generation sealed")
+		t.Fatalf("matching seal must mark era sealed")
 	}
 	if !rootstate.TenureRenewable(current, rootstate.Legacy{}, "c1", 500) {
 		t.Fatalf("active same-holder lease should be continuable")
@@ -113,11 +113,11 @@ func TestValidateInheritance(t *testing.T) {
 	current := rootstate.Tenure{
 		HolderID:        "c1",
 		ExpiresUnixNano: 1_000,
-		Epoch:           7,
+		Era:             7,
 	}
 	seal := rootstate.Legacy{
 		HolderID:  "c1",
-		Epoch:     7,
+		Era:       7,
 		Mandate:   rootproto.MandateDefault,
 		Frontiers: succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
 	}
@@ -167,12 +167,12 @@ func TestValidateTenureClaimLineage(t *testing.T) {
 	current := rootstate.Tenure{
 		HolderID:        "c1",
 		ExpiresUnixNano: 1_000,
-		Epoch:           7,
+		Era:             7,
 		LineageDigest:   "prev",
 	}
 	seal := rootstate.Legacy{
 		HolderID:  "c1",
-		Epoch:     7,
+		Era:       7,
 		Mandate:   rootproto.MandateDefault,
 		Frontiers: succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
 		SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
@@ -197,7 +197,7 @@ func TestValidateTenureClaimLineage(t *testing.T) {
 func TestDigestOfLegacyIncludesNonMaskedLeaseStartFrontier(t *testing.T) {
 	base := rootstate.Legacy{
 		HolderID:  "c1",
-		Epoch:     7,
+		Era:       7,
 		Mandate:   rootproto.MandateDefault,
 		Frontiers: succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
 		SealedAt:  rootstate.Cursor{Term: 1, Index: 9},

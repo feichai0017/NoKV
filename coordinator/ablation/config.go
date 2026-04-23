@@ -27,9 +27,9 @@ type Config struct {
 	// windows to a large local runway.
 	DisableBudget bool
 	// DisableClientVerify bypasses client-side witness verification and stale
-	// generation rejection.
+	// era rejection.
 	DisableClientVerify bool
-	// DisableReplyEvidence strips reply-side generation/budget/frontier evidence
+	// DisableReplyEvidence strips reply-side era/budget/frontier evidence
 	// from detached control-plane answers.
 	DisableReplyEvidence bool
 	// DisableReattach suppresses explicit rooted reattach recording after close.

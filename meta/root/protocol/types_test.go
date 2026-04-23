@@ -65,7 +65,7 @@ func TestAuthorityHandoffRecordValidation(t *testing.T) {
 		Mandate:  MandateAllocID,
 		Frontier: 10,
 	}))
-	require.ErrorContains(t, err, "cert generation is required")
+	require.ErrorContains(t, err, "era is required")
 
 	_, err = NewAuthorityHandoffRecord("holder", 1, 1, Cursor{}, 0, "", MandateFrontiers{})
 	require.ErrorContains(t, err, "duty mask is required")
@@ -143,20 +143,20 @@ func TestCoverageAndHandoverWitnessHelpers(t *testing.T) {
 		},
 	}
 	witness := HandoverWitness{
-		LegacyEpoch:               9,
+		LegacyEra:                 9,
 		LegacyDigest:              "seal",
 		SuccessorPresent:          true,
 		Inheritance:               allCovered,
 		SuccessorLineageSatisfied: true,
-		SealedGenerationRetired:   true,
+		SealedEraRetired:          true,
 	}
 	require.True(t, witness.FinalitySatisfied())
 	require.True(t, witness.SuccessorMonotoneCovered())
 	require.True(t, witness.SuccessorDescriptorCovered())
-	require.True(t, witness.ReplyGenerationLegal(0))
-	require.False(t, witness.ReplyGenerationLegal(ContinuationWitnessGenerationSuppressed))
-	require.False(t, witness.ReplyGenerationLegal(witness.LegacyEpoch))
-	require.True(t, witness.ReplyGenerationLegal(witness.LegacyEpoch+1))
+	require.True(t, witness.ReplyEraLegal(0))
+	require.False(t, witness.ReplyEraLegal(MandateWitnessEraSuppressed))
+	require.False(t, witness.ReplyEraLegal(witness.LegacyEra))
+	require.True(t, witness.ReplyEraLegal(witness.LegacyEra+1))
 	require.Equal(t, HandoverStageClosed, witness.WithStage(HandoverStageClosed).Stage)
 
 	witness.SuccessorPresent = false
@@ -164,12 +164,11 @@ func TestCoverageAndHandoverWitnessHelpers(t *testing.T) {
 	require.False(t, witness.SuccessorMonotoneCovered())
 	require.False(t, witness.SuccessorDescriptorCovered())
 
-	attached := NewContinuationWitness(MandateAllocID, 3, 99)
-	require.Equal(t, uint64(3), attached.Epoch)
-	suppressed := NewSuppressedContinuationWitness(MandateTSO)
-	require.Equal(t, ContinuationWitnessGenerationSuppressed, suppressed.Epoch)
+	attached := NewMandateWitness(MandateAllocID, 3, 99)
+	require.Equal(t, uint64(3), attached.Era)
+	suppressed := NewSuppressedMandateWitness(MandateTSO)
+	require.Equal(t, MandateWitnessEraSuppressed, suppressed.Era)
 
-	require.Equal(t, "pending_confirm", HandoverStagePendingConfirm.String())
 	require.Equal(t, "unknown", HandoverStage(99).String())
 	require.True(t, HandoverStageAtLeast(HandoverStageClosed, HandoverStageConfirmed))
 	require.False(t, HandoverStageAtLeast(HandoverStageConfirmed, HandoverStageClosed))

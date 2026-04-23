@@ -133,7 +133,7 @@ func TestControlPlaneCRDB66562RootedGate(t *testing.T) {
 
 	seal := rootstate.Legacy{
 		HolderID: "n2",
-		Epoch:    1,
+		Era:      1,
 		Mandate:  rootproto.MandateDefault,
 	}
 	seal = rootstate.LegacyWithServedFrontier(seal, servedFrontier)

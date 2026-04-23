@@ -2,83 +2,83 @@
 EXTENDS Naturals, FiniteSets
 
 \* Contrast model: lease-based serving with per-reply sequencer-style fencing.
-\* The client remembers the highest generation it has admitted and rejects any
+\* The client remembers the highest era it has admitted and rejects any
 \* older reply after that point. This blocks stale delivery, but there is still
 \* no rooted seal / cover / close object that forces successor coverage.
 
 CONSTANTS
     \* @type: Int;
-    MaxGeneration,
+    MaxEra,
     \* @type: Int;
     MaxFrontier
 
-Generations == 0..MaxGeneration
+Eras        == 0..MaxEra
 Frontiers   == 0..MaxFrontier
-ReplySet    == { [gen |-> g, frontier |-> f] : g \in Generations, f \in Frontiers }
-NoDelivered == [valid |-> FALSE, gen |-> 0, frontier |-> 0]
+ReplySet    == { [era |-> e, frontier |-> f] : e \in Eras, f \in Frontiers }
+NoDelivered == [valid |-> FALSE, era |-> 0, frontier |-> 0]
 
 VARIABLES
     \* @type: Set(Int);
     issued,
     \* @type: Int;
-    activeGen,
+    activeEra,
     \* @type: Int -> Int;
     frontier,
-    \* @type: Set([gen: Int, frontier: Int]);
+    \* @type: Set([era: Int, frontier: Int]);
     inflight,
-    \* @type: [valid: Bool, gen: Int, frontier: Int];
+    \* @type: [valid: Bool, era: Int, frontier: Int];
     delivered,
     \* @type: Int;
-    observedMax
+    observedMaxEra
 
-Vars == <<issued, activeGen, frontier, inflight, delivered, observedMax>>
+Vars == <<issued, activeEra, frontier, inflight, delivered, observedMaxEra>>
 
 Init ==
     /\ issued = {0}
-    /\ activeGen = 0
-    /\ frontier = [g \in Generations |-> 0]
+    /\ activeEra = 0
+    /\ frontier = [e \in Eras |-> 0]
     /\ inflight = {}
     /\ delivered = NoDelivered
-    /\ observedMax = 0
+    /\ observedMaxEra = 0
 
 Issue ==
-    \E g \in Generations:
-        /\ g \notin issued
-        /\ g > activeGen
-        /\ issued' = issued \cup {g}
-        /\ activeGen' = g
+    \E e \in Eras:
+        /\ e \notin issued
+        /\ e > activeEra
+        /\ issued' = issued \cup {e}
+        /\ activeEra' = e
         /\ delivered' = NoDelivered
-        /\ UNCHANGED <<frontier, inflight, observedMax>>
+        /\ UNCHANGED <<frontier, inflight, observedMaxEra>>
 
 CurrentReply ==
     /\ \E f \in Frontiers:
-        /\ f >= frontier[activeGen]
-        /\ frontier' = [frontier EXCEPT ![activeGen] = f]
-        /\ inflight' = inflight \cup {[gen |-> activeGen, frontier |-> f]}
+        /\ f >= frontier[activeEra]
+        /\ frontier' = [frontier EXCEPT ![activeEra] = f]
+        /\ inflight' = inflight \cup {[era |-> activeEra, frontier |-> f]}
     /\ delivered' = NoDelivered
-    /\ UNCHANGED <<issued, activeGen, observedMax>>
+    /\ UNCHANGED <<issued, activeEra, observedMaxEra>>
 
 DeliverReply ==
     /\ \E r \in inflight:
         /\ inflight' = inflight \ {r}
-        /\ \/ /\ r.gen >= observedMax
-              /\ delivered' = [valid |-> TRUE, gen |-> r.gen, frontier |-> r.frontier]
-              /\ observedMax' = r.gen
-           \/ /\ r.gen < observedMax
+        /\ \/ /\ r.era >= observedMaxEra
+              /\ delivered' = [valid |-> TRUE, era |-> r.era, frontier |-> r.frontier]
+              /\ observedMaxEra' = r.era
+           \/ /\ r.era < observedMaxEra
               /\ delivered' = NoDelivered
-              /\ observedMax' = observedMax
-    /\ UNCHANGED <<issued, activeGen, frontier>>
+              /\ observedMaxEra' = observedMaxEra
+    /\ UNCHANGED <<issued, activeEra, frontier>>
 
 DropReply ==
     /\ \E r \in inflight:
         /\ inflight' = inflight \ {r}
     /\ delivered' = NoDelivered
-    /\ UNCHANGED <<issued, activeGen, frontier, observedMax>>
+    /\ UNCHANGED <<issued, activeEra, frontier, observedMaxEra>>
 
 ClearDelivered ==
     /\ delivered.valid
     /\ delivered' = NoDelivered
-    /\ UNCHANGED <<issued, activeGen, frontier, inflight, observedMax>>
+    /\ UNCHANGED <<issued, activeEra, frontier, inflight, observedMaxEra>>
 
 Stutter ==
     UNCHANGED Vars
@@ -92,24 +92,24 @@ Next ==
     \/ Stutter
 
 TypeOK ==
-    /\ issued \subseteq Generations
-    /\ activeGen \in Generations
-    /\ frontier \in [Generations -> Frontiers]
+    /\ issued \subseteq Eras
+    /\ activeEra \in Eras
+    /\ frontier \in [Eras -> Frontiers]
     /\ inflight \subseteq ReplySet
-    /\ delivered \in [valid : BOOLEAN, gen : Generations, frontier : Frontiers]
-    /\ observedMax \in Generations
+    /\ delivered \in [valid : BOOLEAN, era : Eras, frontier : Frontiers]
+    /\ observedMaxEra \in Eras
 
 OldReplyAfterSuccessor ==
     /\ delivered.valid
-    /\ delivered.gen < activeGen
+    /\ delivered.era < activeEra
 
 NoOldReplyAfterSuccessor ==
     ~OldReplyAfterSuccessor
 
 CoverageGapAfterSuccessor ==
-    \E g \in issued:
-        /\ g < activeGen
-        /\ frontier[activeGen] < frontier[g]
+    \E e \in issued:
+        /\ e < activeEra
+        /\ frontier[activeEra] < frontier[e]
 
 SuccessorCoversHistoricalFrontiers ==
     ~CoverageGapAfterSuccessor

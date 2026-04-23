@@ -54,27 +54,27 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 		Tenure: rootstate.Tenure{
 			HolderID:        "coord-1",
 			ExpiresUnixNano: 12345,
-			Epoch:           5,
+			Era:             5,
 			IssuedAt:        rootproto.Cursor{Term: 2, Index: 8},
 			Mandate:         rootproto.MandateDefault,
 			LineageDigest:   "pred",
 		},
 		Legacy: rootstate.Legacy{
 			HolderID:  "coord-1",
-			Epoch:     5,
+			Era:       5,
 			Mandate:   rootproto.MandateAllocID | rootproto.MandateTSO,
 			Frontiers: frontiers,
 			SealedAt:  rootproto.Cursor{Term: 2, Index: 9},
 		},
 		Handover: rootstate.Handover{
-			HolderID:       "coord-1",
-			LegacyEpoch:    5,
-			SuccessorEpoch: 6,
-			LegacyDigest:   "seal",
-			Stage:          rootproto.HandoverStageClosed,
-			ConfirmedAt:    rootproto.Cursor{Term: 2, Index: 10},
-			ClosedAt:       rootproto.Cursor{Term: 2, Index: 11},
-			ReattachedAt:   rootproto.Cursor{Term: 2, Index: 12},
+			HolderID:     "coord-1",
+			LegacyEra:    5,
+			SuccessorEra: 6,
+			LegacyDigest: "seal",
+			Stage:        rootproto.HandoverStageClosed,
+			ConfirmedAt:  rootproto.Cursor{Term: 2, Index: 10},
+			ClosedAt:     rootproto.Cursor{Term: 2, Index: 11},
+			ReattachedAt: rootproto.Cursor{Term: 2, Index: 12},
 		},
 	}
 
@@ -127,8 +127,8 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	require.Equal(t, closureCmd, RootHandoverCommandFromProto(RootHandoverCommandToProto(closureCmd)))
 	require.Equal(t, rootproto.HandoverCommand{}, RootHandoverCommandFromProto(nil))
 
-	require.Equal(t, metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_PENDING_CONFIRM, rootHandoverStageToProto(rootproto.HandoverStageUnspecified))
-	require.Equal(t, rootproto.HandoverStagePendingConfirm, rootHandoverStageFromProto(metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_PENDING_CONFIRM))
+	require.Equal(t, metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_UNSPECIFIED, rootHandoverStageToProto(rootproto.HandoverStageUnspecified))
+	require.Equal(t, rootproto.HandoverStageUnspecified, rootHandoverStageFromProto(metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_UNSPECIFIED))
 	require.Equal(t, metapb.RootTenureAct_ROOT_TENURE_ACT_UNSPECIFIED, rootTenureActToProto(rootproto.TenureActUnknown))
 	require.Equal(t, rootproto.TenureActUnknown, rootTenureActFromProto(metapb.RootTenureAct_ROOT_TENURE_ACT_UNSPECIFIED))
 	require.Equal(t, metapb.RootHandoverAct_ROOT_HANDOVER_ACT_UNSPECIFIED, rootHandoverActToProto(rootproto.HandoverActUnknown))

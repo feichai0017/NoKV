@@ -48,7 +48,7 @@ type State struct {
 type Tenure struct {
 	HolderID        string
 	ExpiresUnixNano int64
-	Epoch           uint64
+	Era             uint64
 	IssuedAt        Cursor
 	Mandate         uint32
 	LineageDigest   string
@@ -56,21 +56,21 @@ type Tenure struct {
 
 type Legacy struct {
 	HolderID  string
-	Epoch     uint64
+	Era       uint64
 	Mandate   uint32
 	Frontiers rootproto.MandateFrontiers
 	SealedAt  Cursor
 }
 
 type Handover struct {
-	HolderID       string
-	LegacyEpoch    uint64
-	SuccessorEpoch uint64
-	LegacyDigest   string
-	Stage          rootproto.HandoverStage
-	ConfirmedAt    Cursor
-	ClosedAt       Cursor
-	ReattachedAt   Cursor
+	HolderID     string
+	LegacyEra    uint64
+	SuccessorEra uint64
+	LegacyDigest string
+	Stage        rootproto.HandoverStage
+	ConfirmedAt  Cursor
+	ClosedAt     Cursor
+	ReattachedAt Cursor
 }
 
 func (l Tenure) ActiveAt(nowUnixNano int64) bool {
@@ -256,7 +256,7 @@ func applyLegacyToState(state *State, cursor Cursor, event rootevent.Event) {
 	}
 	state.Legacy = Legacy{
 		HolderID:  seal.HolderID,
-		Epoch:     seal.Epoch,
+		Era:       seal.Era,
 		Mandate:   mandate,
 		Frontiers: seal.Frontiers,
 		SealedAt:  sealedAt,
@@ -273,14 +273,14 @@ func applyHandoverToState(state *State, cursor Cursor, event rootevent.Event) {
 	closedAt := coalesceCursor(handover.ClosedAt, cursor)
 	reattachedAt := coalesceCursor(handover.ReattachedAt, cursor)
 	state.Handover = Handover{
-		HolderID:       handover.HolderID,
-		LegacyEpoch:    handover.LegacyEpoch,
-		SuccessorEpoch: handover.SuccessorEpoch,
-		LegacyDigest:   handover.LegacyDigest,
-		Stage:          handover.Stage,
-		ConfirmedAt:    confirmedAt,
-		ClosedAt:       closedAt,
-		ReattachedAt:   reattachedAt,
+		HolderID:     handover.HolderID,
+		LegacyEra:    handover.LegacyEra,
+		SuccessorEra: handover.SuccessorEra,
+		LegacyDigest: handover.LegacyDigest,
+		Stage:        handover.Stage,
+		ConfirmedAt:  confirmedAt,
+		ClosedAt:     closedAt,
+		ReattachedAt: reattachedAt,
 	}
 }
 
@@ -294,7 +294,7 @@ func applyTenureToState(state *State, cursor Cursor, event rootevent.Event) {
 	if issuedAt.Term == 0 && issuedAt.Index == 0 {
 		issuedAt = cursor
 	}
-	if lease.Epoch == 0 || lease.Epoch != state.Tenure.Epoch {
+	if lease.Era == 0 || lease.Era != state.Tenure.Era {
 		issuedAt = cursor
 	}
 	mandate := lease.Mandate
@@ -302,13 +302,13 @@ func applyTenureToState(state *State, cursor Cursor, event rootevent.Event) {
 		mandate = rootproto.MandateDefault
 	}
 	lineageDigest := lease.LineageDigest
-	if lineageDigest == "" && lease.Epoch == state.Tenure.Epoch {
+	if lineageDigest == "" && lease.Era == state.Tenure.Era {
 		lineageDigest = state.Tenure.LineageDigest
 	}
 	state.Tenure = Tenure{
 		HolderID:        lease.HolderID,
 		ExpiresUnixNano: lease.ExpiresUnixNano,
-		Epoch:           lease.Epoch,
+		Era:             lease.Era,
 		IssuedAt:        issuedAt,
 		Mandate:         mandate,
 		LineageDigest:   lineageDigest,

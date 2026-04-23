@@ -28,19 +28,19 @@ type etcdReadIndexSchedule struct {
 }
 
 type etcdReadIndexScheduleStep struct {
-	Op                  string `json:"op"`
-	MemberID            string `json:"member_id,omitempty"`
-	Duty                string `json:"duty,omitempty"`
-	Generation          uint64 `json:"generation,omitempty"`
-	ReadStateGeneration uint64 `json:"read_state_generation,omitempty"`
+	Op           string `json:"op"`
+	MemberID     string `json:"member_id,omitempty"`
+	Duty         string `json:"duty,omitempty"`
+	Era          uint64 `json:"era,omitempty"`
+	ReadStateEra uint64 `json:"read_state_era,omitempty"`
 }
 
 type etcdReadIndexTraceRecord struct {
-	MemberID            string `json:"member_id,omitempty"`
-	Duty                string `json:"duty,omitempty"`
-	ReadStateGeneration uint64 `json:"read_state_generation"`
-	SuccessorEpoch      uint64 `json:"successor_epoch"`
-	Accepted            bool   `json:"accepted"`
+	MemberID     string `json:"member_id,omitempty"`
+	Duty         string `json:"duty,omitempty"`
+	ReadStateEra uint64 `json:"read_state_era"`
+	SuccessorEra uint64 `json:"successor_era"`
+	Accepted     bool   `json:"accepted"`
 }
 
 func TestControlPlaneEtcdReadIndexPilot(t *testing.T) {
@@ -153,20 +153,20 @@ func projectEtcdReadIndexScheduleRecords(schedule etcdReadIndexSchedule) ([]etcd
 		return nil, fmt.Errorf("schedule %q has no steps", schedule.Name)
 	}
 
-	var observedSuccessorEpoch uint64
+	var observedSuccessorEra uint64
 	records := make([]etcdReadIndexTraceRecord, 0, len(schedule.Steps))
 	for idx, step := range schedule.Steps {
 		switch strings.TrimSpace(step.Op) {
 		case "observe_successor":
-			if step.Generation == 0 {
-				return nil, fmt.Errorf("schedule %q step %d observe_successor requires generation", schedule.Name, idx)
+			if step.Era == 0 {
+				return nil, fmt.Errorf("schedule %q step %d observe_successor requires era", schedule.Name, idx)
 			}
-			observedSuccessorEpoch = step.Generation
+			observedSuccessorEra = step.Era
 		case "accept_reply", "reject_reply":
-			if step.ReadStateGeneration == 0 {
-				return nil, fmt.Errorf("schedule %q step %d reply requires read_state_generation", schedule.Name, idx)
+			if step.ReadStateEra == 0 {
+				return nil, fmt.Errorf("schedule %q step %d reply requires read_state_era", schedule.Name, idx)
 			}
-			if observedSuccessorEpoch == 0 {
+			if observedSuccessorEra == 0 {
 				return nil, fmt.Errorf("schedule %q step %d reply requires prior observe_successor", schedule.Name, idx)
 			}
 			duty := strings.TrimSpace(step.Duty)
@@ -174,11 +174,11 @@ func projectEtcdReadIndexScheduleRecords(schedule etcdReadIndexSchedule) ([]etcd
 				duty = "read_index"
 			}
 			records = append(records, etcdReadIndexTraceRecord{
-				MemberID:            strings.TrimSpace(step.MemberID),
-				Duty:                duty,
-				ReadStateGeneration: step.ReadStateGeneration,
-				SuccessorEpoch:      observedSuccessorEpoch,
-				Accepted:            step.Op == "accept_reply",
+				MemberID:     strings.TrimSpace(step.MemberID),
+				Duty:         duty,
+				ReadStateEra: step.ReadStateEra,
+				SuccessorEra: observedSuccessorEra,
+				Accepted:     step.Op == "accept_reply",
 			})
 		default:
 			return nil, fmt.Errorf("schedule %q step %d has unsupported op %q", schedule.Name, idx, step.Op)

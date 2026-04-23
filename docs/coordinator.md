@@ -76,16 +76,16 @@ The rooted handoff protocol is smaller than some of the implementation type
 names suggest. At the doc / operator level, keep just these words:
 
 - `Lease` — the currently active authority record
-- `Seal` — the retired predecessor generation plus the frontier it already
+- `Seal` — the retired predecessor era plus the frontier it already
   consumed
 - `Handover` — the rooted handoff record for the current successor
-- `Generation` — the monotonic authority generation
+- `Era` — the monotonic authority era
 - `Witness` — the operator-visible proof bundle that explains whether the
   current handoff state is safe
 
 The four guarantees discussed by the docs and runtime metrics are:
 
-- `Primacy` — at most one authority generation is active
+- `Primacy` — at most one authority era is active
 - `Inheritance` — the successor must cover the predecessor's published work
 - `Silence` — a sealed predecessor must not keep serving
 - `Finality` — a handoff must not remain permanently half-finished
@@ -97,7 +97,7 @@ Implementation names remain more explicit:
 | `Lease` | `Tenure` |
 | `Seal` | `Legacy` |
 | `Handover` | `Handover` |
-| `Generation` | `Epoch` / `epoch` |
+| `Era` | `Era` / `era` |
 | `Witness` | `HandoverWitness` / continuation witness fields |
 | `Frontiers` | `MandateFrontiers` / `frontiers` / `consumed_frontiers` |
 

@@ -12,7 +12,7 @@ var (
 	// ErrMandate indicates that the current rooted lease does not
 	// admit one requested coordinator mandate.
 	ErrMandate = errors.New("meta/root/state: mandate mismatch")
-	// ErrSilence indicates that a sealed predecessor generation was still admitted on a live path.
+	// ErrSilence indicates that a sealed predecessor era was still admitted on a live path.
 	ErrSilence = errors.New("meta/root/state: silence violated")
 	// ErrFinality indicates that rooted handover was not yet complete for the requested operation.
 	ErrFinality = errors.New("meta/root/state: finality violated")
