@@ -232,7 +232,7 @@ record-tlc-leasestart:
 
 record-apalache-succession:
 	@echo "Recording Apalache bounded-check output for Succession..."
-	./scripts/tla/record_apalache_check.sh spec/Succession.tla spec/Succession.cfg G1_Succession,G2_Primacy,G2_PrimacyInductive,G3_Silence 8 spec/artifacts/apalache-succession.out
+	./scripts/tla/record_apalache_check.sh spec/Succession.tla spec/Succession.cfg G1_Succession,G2_Primacy,G2_PrimacyInductive,G3_Silence,G4_Finality 8 spec/artifacts/apalache-succession.out
 	@echo "✓ Recorded Apalache output for Succession"
 
 record-apalache-successionmultidim:
@@ -253,7 +253,7 @@ apalache-typecheck:
 
 apalache-check-succession:
 	@echo "Running bounded Apalache check on Succession..."
-	./scripts/tla/apalache.sh --features=no-rows check --config=spec/Succession.cfg --no-deadlock --length=8 --inv=G1_Succession,G2_Primacy,G2_PrimacyInductive,G3_Silence spec/Succession.tla
+	./scripts/tla/apalache.sh --features=no-rows check --config=spec/Succession.cfg --no-deadlock --length=8 --inv=G1_Succession,G2_Primacy,G2_PrimacyInductive,G3_Silence,G4_Finality spec/Succession.tla
 
 apalache-check-successionmultidim:
 	@echo "Running bounded Apalache check on SuccessionMultiDim..."

@@ -31,7 +31,7 @@ make record-formal-artifacts
 
 Current contrast models:
 
-- `LeaseOnly.tla`: no reply-side guard and no rooted closure object; expected to violate `NoOldReplyAfterSuccessor`
+- `LeaseOnly.tla`: no reply-side guard and no rooted handover record; expected to violate `NoOldReplyAfterSuccessor`
 - `SuccessionMultiDim.tla`: positive lease-start coverage model for the CRDB `#66562` analog
 - `LeaseStartOnly.tla`: no lease-start coverage check on predecessor served-read summaries; expected to violate `NoWriteBehindServedRead`
 - `TokenOnly.tla`: bounded-freshness token only; still expected to violate `NoOldReplyAfterSuccessor`
@@ -44,15 +44,15 @@ The current models now distinguish:
 
 This means `Seal` no longer retroactively clears outstanding replies. Instead,
 the positive model only allows delivery of replies whose generation remains
-legal under the rooted closure state. The contrast model keeps the same
-in-flight structure but removes closure-aware admission.
+legal under the rooted handover state. The contrast model keeps the same
+in-flight structure but removes finality-aware admission.
 
 `Succession.tla` now models a repeated rooted handoff cycle:
 
 - `Issue -> Active -> Seal -> Issue(successor) -> Cover -> Close -> Reattach -> Active`
 
 The model is still checked with finite constants, but it is no longer limited
-to a single closure cycle.
+to a single finality cycle.
 
 For `Primacy`, the spec now includes a stronger induction-friendly invariant:
 
@@ -81,6 +81,7 @@ make apalache-check-successionmultidim
 - `G2_Primacy`
 - `G2_PrimacyInductive`
 - `G3_Silence`
+- `G4_Finality`
 
 `apalache-check-successionmultidim` runs a bounded check of `SuccessionMultiDim.tla`
 against:

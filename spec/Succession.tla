@@ -139,7 +139,7 @@ Close ==
 Reattach ==
     /\ phase = "Closed"
     /\ \A g \in sealed: g \in covered \/ g \in closed
-    \* Reattach completes the predecessor closure and returns the successor to
+    \* Reattach completes the predecessor handover and returns the successor to
     \* steady-state serving, so the next seal/issue cycle can proceed.
     /\ phase' = "Active"
     /\ delivered' = NoDelivered
@@ -206,15 +206,14 @@ Inheritance ==
 Silence ==
     delivered.valid => delivered.gen \notin sealed
 
-\* Closure side: every sealed predecessor must be pending cover,
+\* Finality side: every sealed predecessor must be pending cover,
 \* already covered, or already closed before reattach is legal.
-Closure ==
+Finality ==
     \A g \in sealed:
         /\ g = pendingSeal \/ g \in covered \/ g \in closed
 
 G1_Succession ==
-    /\ Inheritance
-    /\ Closure
+    Inheritance
 
 G2_Primacy ==
     Primacy
@@ -225,10 +224,14 @@ G2_PrimacyInductive ==
 G3_Silence ==
     Silence
 
+G4_Finality ==
+    Finality
+
 SuccessionGuarantees ==
     /\ G1_Succession
     /\ G2_Primacy
     /\ G3_Silence
+    /\ G4_Finality
 
 \* Stronger lemma used to support an induction-style argument for Primacy:
 \* if only the current active generation may remain unsealed, then there can be

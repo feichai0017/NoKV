@@ -764,7 +764,7 @@ Lifecycle mutations are stricter than hot-path duty admission:
 
 - they always re-read rooted state from storage before mutating
 - they reject any stale-holder / expired-lease / sealed-generation view
-- they treat closure completeness as a rooted safety condition, not a best-effort hint
+- they treat finality as a rooted safety condition, not a best-effort hint
 
 That is why seal / confirm / close / reattach do not use the cached mirror
 admission path.
@@ -773,13 +773,13 @@ admission path.
 
 `DiagnosticsSnapshot()` now exports both:
 
-- the current degraded serving state (`root`, `lease`, `audit`, `closure_witness`)
+- the current degraded serving state (`root`, `lease`, `audit`, `handover_witness`)
 - cumulative Succession counters under `succession_metrics`
 
 `succession_metrics` is grouped into:
 
 - `tenure_epoch_transitions_total`
-- `transit_stage_transitions_total`
+- `handover_stage_transitions_total`
 - `gate_rejections_total`
 - `guarantee_violations_total`
 
@@ -789,7 +789,7 @@ guarantees:
 - `primacy`
 - `inheritance`
 - `silence`
-- `closure`
+- `finality`
 
 ---
 

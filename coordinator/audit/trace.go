@@ -66,8 +66,8 @@ func acceptedReplyBehindSuccessorReason(record ReplyTraceRecord) string {
 }
 
 // EvaluateReplyTrace projects reply-level trace records into the current
-// closure semantics. The first version only flags accepted replies whose
-// generation is already illegal under the rooted closure state.
+// finality semantics. The first version only flags accepted replies whose
+// generation is already illegal under the rooted handover state.
 func EvaluateReplyTrace(report Report, records []ReplyTraceRecord) []ReplyTraceAnomaly {
 	if len(records) == 0 {
 		return nil
@@ -87,23 +87,23 @@ func EvaluateReplyTrace(report Report, records []ReplyTraceRecord) []ReplyTraceA
 			})
 			continue
 		}
-		if report.TransitWitness.LegacyEpoch != 0 && record.Epoch == report.TransitWitness.LegacyEpoch {
+		if report.HandoverWitness.LegacyEpoch != 0 && record.Epoch == report.HandoverWitness.LegacyEpoch {
 			anomalies = append(anomalies, ReplyTraceAnomaly{
 				Index:  idx,
 				Kind:   "post_seal_accepted_reply",
 				Duty:   record.Duty,
 				Epoch:  record.Epoch,
-				Reason: fmt.Sprintf("accepted reply at sealed generation %d after rooted seal", report.TransitWitness.LegacyEpoch),
+				Reason: fmt.Sprintf("accepted reply at sealed generation %d after rooted seal", report.HandoverWitness.LegacyEpoch),
 			})
 			continue
 		}
-		if !report.TransitWitness.ReplyGenerationLegal(record.Epoch) {
+		if !report.HandoverWitness.ReplyGenerationLegal(record.Epoch) {
 			anomalies = append(anomalies, ReplyTraceAnomaly{
 				Index:  idx,
 				Kind:   "illegal_reply_generation",
 				Duty:   record.Duty,
 				Epoch:  record.Epoch,
-				Reason: fmt.Sprintf("accepted reply generation %d is not legal under current closure state", record.Epoch),
+				Reason: fmt.Sprintf("accepted reply generation %d is not legal under current handover state", record.Epoch),
 			})
 		}
 	}

@@ -21,9 +21,9 @@ func CloneEvent(in Event) Event {
 		cp.Frontiers = in.Legacy.Frontiers
 		out.Legacy = &cp
 	}
-	if in.Transit != nil {
-		cp := *in.Transit
-		out.Transit = &cp
+	if in.Handover != nil {
+		cp := *in.Handover
+		out.Handover = &cp
 	}
 	if in.RegionDescriptor != nil {
 		cp := *in.RegionDescriptor

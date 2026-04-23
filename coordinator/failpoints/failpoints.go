@@ -12,16 +12,16 @@ type Mode uint32
 const (
 	None Mode = 0
 
-	// AfterApplyTransitBeforeReload simulates a coordinator crash
-	// after rooted closure truth has already committed but before the local
+	// AfterApplyHandoverBeforeReload simulates a coordinator crash
+	// after rooted handover truth has already committed but before the local
 	// service has reloaded/fenced its in-memory view.
-	AfterApplyTransitBeforeReload Mode = 1 << iota
+	AfterApplyHandoverBeforeReload Mode = 1 << iota
 )
 
 var (
 	currentMode atomic.Uint32
 
-	ErrAfterApplyTransitBeforeReload = errors.New("coordinator failpoint: after apply coordinator closure before reload")
+	ErrAfterApplyHandoverBeforeReload = errors.New("coordinator failpoint: after apply coordinator handover before reload")
 )
 
 // Set installs the active coordinator failpoint mask.
@@ -38,11 +38,11 @@ func enabled(mode Mode) bool {
 	return Current()&mode != 0
 }
 
-// InjectAfterApplyTransitBeforeReload returns the configured
+// InjectAfterApplyHandoverBeforeReload returns the configured
 // injected failure for the rooted-commit-before-local-reload cut.
-func InjectAfterApplyTransitBeforeReload() error {
-	if enabled(AfterApplyTransitBeforeReload) {
-		return ErrAfterApplyTransitBeforeReload
+func InjectAfterApplyHandoverBeforeReload() error {
+	if enabled(AfterApplyHandoverBeforeReload) {
+		return ErrAfterApplyHandoverBeforeReload
 	}
 	return nil
 }

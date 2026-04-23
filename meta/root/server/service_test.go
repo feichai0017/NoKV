@@ -117,7 +117,7 @@ func (f *fakeServiceBackend) ApplyTenure(context.Context, rootproto.TenureComman
 	return f.applyLeaseResult, f.applyLeaseErr
 }
 
-func (f *fakeServiceBackend) ApplyTransit(context.Context, rootproto.TransitCommand) (rootstate.SuccessionState, error) {
+func (f *fakeServiceBackend) ApplyHandover(context.Context, rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
 	return f.applyClosureResult, f.applyClosureErr
 }
 
@@ -467,33 +467,33 @@ func TestServiceApplyTenure(t *testing.T) {
 	})
 }
 
-func TestServiceApplyTransit(t *testing.T) {
+func TestServiceApplyHandover(t *testing.T) {
 	closureState := rootstate.SuccessionState{
-		Transit: rootstate.Transit{
+		Handover: rootstate.Handover{
 			HolderID:       "coord-1",
 			LegacyEpoch:    3,
 			SuccessorEpoch: 4,
 			LegacyDigest:   "digest",
-			Stage:          rootproto.TransitStageClosed,
+			Stage:          rootproto.HandoverStageClosed,
 		},
 	}
-	cmd := rootproto.TransitCommand{
-		Kind:        rootproto.TransitActClose,
+	cmd := rootproto.HandoverCommand{
+		Kind:        rootproto.HandoverActClose,
 		HolderID:    "coord-1",
 		NowUnixNano: 1000,
 	}
 
 	t.Run("nil service", func(t *testing.T) {
 		var svc *Service
-		resp, err := svc.ApplyTransit(context.Background(), &metapb.MetadataRootApplyTransitRequest{})
+		resp, err := svc.ApplyHandover(context.Background(), &metapb.MetadataRootApplyHandoverRequest{})
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 	})
 
 	t.Run("unimplemented", func(t *testing.T) {
 		svc := NewService(&basicServiceBackend{snapshot: testServerSnapshot(), isLeader: true})
-		_, err := svc.ApplyTransit(context.Background(), &metapb.MetadataRootApplyTransitRequest{
-			Command: metawire.RootTransitCommandToProto(cmd),
+		_, err := svc.ApplyHandover(context.Background(), &metapb.MetadataRootApplyHandoverRequest{
+			Command: metawire.RootHandoverCommandToProto(cmd),
 		})
 		require.Equal(t, codes.Unimplemented, status.Code(err))
 	})
@@ -503,8 +503,8 @@ func TestServiceApplyTransit(t *testing.T) {
 			isLeader:           true,
 			applyClosureResult: closureState,
 		})
-		resp, err := svc.ApplyTransit(context.Background(), &metapb.MetadataRootApplyTransitRequest{
-			Command: metawire.RootTransitCommandToProto(cmd),
+		resp, err := svc.ApplyHandover(context.Background(), &metapb.MetadataRootApplyHandoverRequest{
+			Command: metawire.RootHandoverCommandToProto(cmd),
 		})
 		require.NoError(t, err)
 		require.Equal(t, closureState, metawire.RootSuccessionStateFromProto(resp.State))
@@ -513,10 +513,10 @@ func TestServiceApplyTransit(t *testing.T) {
 	t.Run("mapped failed precondition", func(t *testing.T) {
 		svc := NewService(&fakeServiceBackend{
 			isLeader:        true,
-			applyClosureErr: rootstate.ErrClosure,
+			applyClosureErr: rootstate.ErrFinality,
 		})
-		_, err := svc.ApplyTransit(context.Background(), &metapb.MetadataRootApplyTransitRequest{
-			Command: metawire.RootTransitCommandToProto(cmd),
+		_, err := svc.ApplyHandover(context.Background(), &metapb.MetadataRootApplyHandoverRequest{
+			Command: metawire.RootHandoverCommandToProto(cmd),
 		})
 		require.Equal(t, codes.FailedPrecondition, status.Code(err))
 	})
@@ -530,15 +530,15 @@ func TestCoordinatorApplyErrorMappings(t *testing.T) {
 	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorLeaseApplyRPCError(rootproto.TenureActRelease, rootstate.ErrInvalidTenure)))
 	require.Equal(t, codes.Internal, status.Code(coordinatorLeaseApplyRPCError(rootproto.TenureActUnknown, errors.New("boom"))))
 
-	require.Equal(t, codes.InvalidArgument, status.Code(coordinatorClosureApplyRPCError(rootproto.TransitActSeal, rootstate.ErrInvalidTenure)))
-	require.Equal(t, codes.InvalidArgument, status.Code(coordinatorClosureApplyRPCError(rootproto.TransitActConfirm, rootstate.ErrClosure)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorClosureApplyRPCError(rootproto.TransitActSeal, rootstate.ErrPrimacy)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorClosureApplyRPCError(rootproto.TransitActConfirm, rootstate.ErrPrimacy)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorClosureApplyRPCError(rootproto.TransitActClose, rootstate.ErrPrimacy)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorClosureApplyRPCError(rootproto.TransitActClose, rootstate.ErrClosure)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorClosureApplyRPCError(rootproto.TransitActReattach, rootstate.ErrPrimacy)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorClosureApplyRPCError(rootproto.TransitActReattach, rootstate.ErrClosure)))
-	require.Equal(t, codes.Internal, status.Code(coordinatorClosureApplyRPCError(rootproto.TransitActUnknown, errors.New("boom"))))
+	require.Equal(t, codes.InvalidArgument, status.Code(coordinatorHandoverApplyRPCError(rootproto.HandoverActSeal, rootstate.ErrInvalidTenure)))
+	require.Equal(t, codes.InvalidArgument, status.Code(coordinatorHandoverApplyRPCError(rootproto.HandoverActConfirm, rootstate.ErrFinality)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorHandoverApplyRPCError(rootproto.HandoverActSeal, rootstate.ErrPrimacy)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorHandoverApplyRPCError(rootproto.HandoverActConfirm, rootstate.ErrPrimacy)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorHandoverApplyRPCError(rootproto.HandoverActClose, rootstate.ErrPrimacy)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorHandoverApplyRPCError(rootproto.HandoverActClose, rootstate.ErrFinality)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorHandoverApplyRPCError(rootproto.HandoverActReattach, rootstate.ErrPrimacy)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorHandoverApplyRPCError(rootproto.HandoverActReattach, rootstate.ErrFinality)))
+	require.Equal(t, codes.Internal, status.Code(coordinatorHandoverApplyRPCError(rootproto.HandoverActUnknown, errors.New("boom"))))
 }
 
 func testServerSnapshot() rootstate.Snapshot {

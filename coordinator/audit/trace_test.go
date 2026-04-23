@@ -36,12 +36,12 @@ func TestEvaluateReplyTrace(t *testing.T) {
 			LineageDigest:   legacyDigest,
 		},
 		Legacy: seal,
-		Transit: rootstate.Transit{
+		Handover: rootstate.Handover{
 			HolderID:       "c1",
 			LegacyEpoch:    2,
 			SuccessorEpoch: 3,
 			LegacyDigest:   legacyDigest,
-			Stage:          rootproto.TransitStageReattached,
+			Stage:          rootproto.HandoverStageReattached,
 		},
 		Descriptors: map[uint64]descriptor.Descriptor{
 			1: {RegionID: 1, RootEpoch: 7},

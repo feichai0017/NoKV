@@ -46,9 +46,9 @@ type protocolMatrixStorage struct {
 
 func (s *protocolMatrixStorage) protocolState() rootstate.SuccessionState {
 	return rootstate.SuccessionState{
-		Tenure:  s.snapshot.Tenure,
-		Legacy:  s.snapshot.Legacy,
-		Transit: s.snapshot.Transit,
+		Tenure:   s.snapshot.Tenure,
+		Legacy:   s.snapshot.Legacy,
+		Handover: s.snapshot.Handover,
 	}
 }
 
@@ -121,9 +121,9 @@ func (s *protocolMatrixStorage) ApplyTenure(_ context.Context, cmd rootproto.Ten
 	return s.protocolState(), nil
 }
 
-func (s *protocolMatrixStorage) ApplyTransit(_ context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error) {
+func (s *protocolMatrixStorage) ApplyHandover(_ context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
 	switch cmd.Kind {
-	case rootproto.TransitActSeal:
+	case rootproto.HandoverActSeal:
 		if err := rootstate.ValidateLegacyFormation(s.snapshot.Tenure, cmd.HolderID); err != nil {
 			return s.protocolState(), err
 		}
@@ -137,7 +137,7 @@ func (s *protocolMatrixStorage) ApplyTransit(_ context.Context, cmd rootproto.Tr
 			Mandate:   mandate,
 			Frontiers: cmd.Frontiers,
 		}
-	case rootproto.TransitActConfirm:
+	case rootproto.HandoverActConfirm:
 		s.confirms++
 		if s.confirmErr != nil {
 			return rootstate.SuccessionState{}, s.confirmErr
@@ -145,7 +145,7 @@ func (s *protocolMatrixStorage) ApplyTransit(_ context.Context, cmd rootproto.Tr
 		if strings.TrimSpace(cmd.HolderID) == "" || strings.TrimSpace(cmd.HolderID) != s.snapshot.Tenure.HolderID {
 			return s.protocolState(), rootstate.ErrPrimacy
 		}
-		auditStatus, err := succession.ValidateTransitConfirmation(
+		auditStatus, err := succession.ValidateHandoverConfirmation(
 			s.snapshot.Tenure,
 			succession.Frontiers(rootstate.State{
 				IDFence:  s.snapshot.Allocator.IDCurrent,
@@ -157,33 +157,33 @@ func (s *protocolMatrixStorage) ApplyTransit(_ context.Context, cmd rootproto.Tr
 		if err != nil {
 			return s.protocolState(), err
 		}
-		s.snapshot.Transit = rootstate.Transit{
+		s.snapshot.Handover = rootstate.Handover{
 			HolderID:       cmd.HolderID,
 			LegacyEpoch:    auditStatus.LegacyEpoch,
 			SuccessorEpoch: s.snapshot.Tenure.Epoch,
 			LegacyDigest:   auditStatus.LegacyDigest,
-			Stage:          rootproto.TransitStageConfirmed,
+			Stage:          rootproto.HandoverStageConfirmed,
 		}
-	case rootproto.TransitActClose:
+	case rootproto.HandoverActClose:
 		s.closes++
 		if s.closeErr != nil {
 			return rootstate.SuccessionState{}, s.closeErr
 		}
-		if err := succession.ValidateTransitClosure(s.snapshot.Tenure, s.snapshot.Transit, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+		if err := succession.ValidateHandoverFinality(s.snapshot.Tenure, s.snapshot.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return s.protocolState(), err
 		}
-		s.snapshot.Transit.Stage = rootproto.TransitStageClosed
-	case rootproto.TransitActReattach:
+		s.snapshot.Handover.Stage = rootproto.HandoverStageClosed
+	case rootproto.HandoverActReattach:
 		s.reattaches++
 		if s.reattachErr != nil {
 			return rootstate.SuccessionState{}, s.reattachErr
 		}
-		if err := succession.ValidateTransitReattach(s.snapshot.Tenure, s.snapshot.Transit, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+		if err := succession.ValidateHandoverReattach(s.snapshot.Tenure, s.snapshot.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return s.protocolState(), err
 		}
-		s.snapshot.Transit.Stage = rootproto.TransitStageReattached
+		s.snapshot.Handover.Stage = rootproto.HandoverStageReattached
 	default:
-		return rootstate.SuccessionState{}, rootstate.ErrClosure
+		return rootstate.SuccessionState{}, rootstate.ErrFinality
 	}
 	return s.protocolState(), nil
 }
@@ -337,8 +337,8 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 				require.Equal(t, codes.FailedPrecondition, status.Code(err))
 			},
 			diagKeys: map[string]any{
-				"closure_satisfied": false,
-				"closure_stage":     "unspecified",
+				"finality_satisfied": false,
+				"handover_stage":     "unspecified",
 			},
 		},
 		// F.root_unreach — metadata answers must also fail-stop once the rooted
@@ -365,12 +365,12 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 				require.Equal(t, codes.FailedPrecondition, status.Code(err))
 			},
 			diagKeys: map[string]any{
-				"closure_satisfied": false,
-				"closure_stage":     "unspecified",
+				"finality_satisfied": false,
+				"handover_stage":     "unspecified",
 			},
 		},
 		// F.successor_campaign + F.budget_exhaustion — a successor generation may
-		// campaign, but it cannot confirm closure before covering the predecessor's
+		// campaign, but it cannot confirm handover before covering the predecessor's
 		// sealed monotone frontier.
 		{
 			name: "confirm_rejected_before_monotone_coverage",
@@ -393,16 +393,16 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 				},
 			},
 			run: func(t *testing.T, svc *coordserver.Service) {
-				err := svc.ConfirmTransit()
-				require.ErrorIs(t, err, rootstate.ErrClosure)
+				err := svc.ConfirmHandover()
+				require.ErrorIs(t, err, rootstate.ErrFinality)
 			},
 			diagKeys: map[string]any{
 				"successor_present":            true,
 				"successor_lineage_satisfied":  true,
 				"successor_monotone_covered":   false,
 				"successor_descriptor_covered": true,
-				"closure_satisfied":            false,
-				"closure_stage":                "unspecified",
+				"finality_satisfied":           false,
+				"handover_stage":               "unspecified",
 			},
 		},
 		// F.successor_campaign + F.descriptor_publish_race — successor coverage is
@@ -428,15 +428,15 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 				},
 			},
 			run: func(t *testing.T, svc *coordserver.Service) {
-				err := svc.ConfirmTransit()
-				require.ErrorIs(t, err, rootstate.ErrClosure)
+				err := svc.ConfirmHandover()
+				require.ErrorIs(t, err, rootstate.ErrFinality)
 			},
 			diagKeys: map[string]any{
 				"successor_present":            true,
 				"successor_monotone_covered":   true,
 				"successor_descriptor_covered": false,
-				"closure_satisfied":            false,
-				"closure_stage":                "unspecified",
+				"finality_satisfied":           false,
+				"handover_stage":               "unspecified",
 			},
 		},
 		// F.lease_expiry + F.successor_campaign — even with a successor lease in
@@ -462,11 +462,11 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 				},
 			},
 			run: func(t *testing.T, svc *coordserver.Service) {
-				err := svc.ReattachTransit()
-				require.ErrorIs(t, err, rootstate.ErrClosure)
+				err := svc.ReattachHandover()
+				require.ErrorIs(t, err, rootstate.ErrFinality)
 			},
 			diagKeys: map[string]any{
-				"closure_stage": "unspecified",
+				"handover_stage": "unspecified",
 			},
 		},
 		// F.revived_holder + F.successor_campaign — a successor whose lineage no
@@ -488,22 +488,22 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 						IDCurrent: 12,
 						TSCurrent: 34,
 					},
-					Transit: rootstate.Transit{
+					Handover: rootstate.Handover{
 						HolderID:       "c1",
 						LegacyEpoch:    2,
 						SuccessorEpoch: 3,
 						LegacyDigest:   sealWithDescriptor7Digest,
-						Stage:          rootproto.TransitStageClosed,
+						Stage:          rootproto.HandoverStageClosed,
 					},
 					Descriptors: baseDescriptors,
 				},
 			},
 			run: func(t *testing.T, svc *coordserver.Service) {
-				err := svc.ReattachTransit()
-				require.ErrorIs(t, err, rootstate.ErrClosure)
+				err := svc.ReattachHandover()
+				require.ErrorIs(t, err, rootstate.ErrFinality)
 			},
 			diagKeys: map[string]any{
-				"closure_stage":               "unspecified",
+				"handover_stage":              "unspecified",
 				"successor_lineage_satisfied": false,
 			},
 		},
@@ -530,9 +530,9 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 				},
 			},
 			run: func(t *testing.T, svc *coordserver.Service) {
-				require.NoError(t, svc.ConfirmTransit())
-				require.NoError(t, svc.CloseTransit())
-				require.NoError(t, svc.ReattachTransit())
+				require.NoError(t, svc.ConfirmHandover())
+				require.NoError(t, svc.CloseHandover())
+				require.NoError(t, svc.ReattachHandover())
 				allocResp, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 				require.NoError(t, err)
 				require.Equal(t, uint64(3), allocResp.GetEpoch())
@@ -541,8 +541,8 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 				require.Equal(t, uint64(3), resp.GetEpoch())
 			},
 			diagKeys: map[string]any{
-				"closure_satisfied": true,
-				"closure_stage":     "reattached",
+				"finality_satisfied": true,
+				"handover_stage":     "reattached",
 			},
 		},
 	}
@@ -607,9 +607,9 @@ func TestDetachedLateReplyAfterSealRejectedByClientVerifier(t *testing.T) {
 	successorSvc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(seal.Frontiers.Frontier(rootproto.MandateAllocID)+1), tso.NewAllocator(100), successorStore)
 	successorSvc.ConfigureTenure("c2", 10*time.Second, 3*time.Second)
 	require.NoError(t, successorSvc.ReloadFromStorage())
-	require.NoError(t, successorSvc.ConfirmTransit())
-	require.NoError(t, successorSvc.CloseTransit())
-	require.NoError(t, successorSvc.ReattachTransit())
+	require.NoError(t, successorSvc.ConfirmHandover())
+	require.NoError(t, successorSvc.CloseHandover())
+	require.NoError(t, successorSvc.ReattachHandover())
 
 	freshResp1, err := successorSvc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)

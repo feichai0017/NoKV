@@ -10,16 +10,16 @@ import (
 )
 
 type SuccessionState struct {
-	Tenure  Tenure
-	Legacy  Legacy
-	Transit Transit
+	Tenure   Tenure
+	Legacy   Legacy
+	Handover Handover
 }
 
 func (s State) Succession() SuccessionState {
 	return SuccessionState{
-		Tenure:  s.Tenure,
-		Legacy:  s.Legacy,
-		Transit: s.Transit,
+		Tenure:   s.Tenure,
+		Legacy:   s.Legacy,
+		Handover: s.Handover,
 	}
 }
 
@@ -31,12 +31,12 @@ func (s Legacy) Present() bool {
 	return s.Epoch != 0 && strings.TrimSpace(s.HolderID) != ""
 }
 
-func (c Transit) Present() bool {
+func (c Handover) Present() bool {
 	return strings.TrimSpace(c.HolderID) != "" &&
 		c.LegacyEpoch != 0 &&
 		c.SuccessorEpoch != 0 &&
 		strings.TrimSpace(c.LegacyDigest) != "" &&
-		c.Stage != rootproto.TransitStageUnspecified
+		c.Stage != rootproto.HandoverStageUnspecified
 }
 
 func DigestOfLegacy(seal Legacy) string {
@@ -148,7 +148,7 @@ func EvaluateInheritance(current Tenure, seal Legacy, frontiers rootproto.Mandat
 		required := requiredFrontiers.Frontier(mask)
 		actual := frontiers.Frontier(mask)
 		status.Checks = append(status.Checks, rootproto.InheritanceCoverage{
-			Mandate:         mask,
+			Mandate:          mask,
 			RequiredFrontier: required,
 			ActualFrontier:   actual,
 			Covered:          actual >= required,

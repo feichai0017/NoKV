@@ -31,7 +31,7 @@ const (
 	KindPeerRemovalCancelled
 	KindTenure
 	KindLegacy
-	KindTransit
+	KindHandover
 )
 
 // StoreMembership describes one store membership change carried by a root event.
@@ -58,7 +58,7 @@ type Tenure struct {
 	Frontiers       rootproto.MandateFrontiers
 }
 
-// Legacy records one rooted closure point for the current control-plane
+// Legacy records one rooted handover point for the current control-plane
 // authority generation.
 type Legacy struct {
 	HolderID  string
@@ -68,24 +68,24 @@ type Legacy struct {
 	SealedAt  RootCursor
 }
 
-type TransitStage = rootproto.TransitStage
+type HandoverStage = rootproto.HandoverStage
 
 const (
-	TransitStageUnspecified    = rootproto.TransitStageUnspecified
-	TransitStagePendingConfirm = rootproto.TransitStagePendingConfirm
-	TransitStageConfirmed      = rootproto.TransitStageConfirmed
-	TransitStageClosed         = rootproto.TransitStageClosed
-	TransitStageReattached     = rootproto.TransitStageReattached
+	HandoverStageUnspecified    = rootproto.HandoverStageUnspecified
+	HandoverStagePendingConfirm = rootproto.HandoverStagePendingConfirm
+	HandoverStageConfirmed      = rootproto.HandoverStageConfirmed
+	HandoverStageClosed         = rootproto.HandoverStageClosed
+	HandoverStageReattached     = rootproto.HandoverStageReattached
 )
 
-// Transit records one rooted closure lifecycle entry for a sealed
+// Handover records one rooted handover lifecycle entry for a sealed
 // predecessor generation and its successor authority instance.
-type Transit struct {
+type Handover struct {
 	HolderID       string
 	LegacyEpoch    uint64
 	SuccessorEpoch uint64
 	LegacyDigest   string
-	Stage          TransitStage
+	Stage          HandoverStage
 	ConfirmedAt    RootCursor
 	ClosedAt       RootCursor
 	ReattachedAt   RootCursor
@@ -136,7 +136,7 @@ type Event struct {
 	AllocatorFence   *AllocatorFence
 	Tenure           *Tenure
 	Legacy           *Legacy
-	Transit          *Transit
+	Handover         *Handover
 	RegionDescriptor *RegionDescriptorRecord
 	RegionRemoval    *RegionRemoval
 	RangeSplit       *RangeSplit
@@ -194,22 +194,22 @@ func TenureSealed(holderID string, epoch uint64, mandate uint32, frontiers rootp
 	}
 }
 
-func TransitConfirmed(holderID string, legacyEpoch, successorEpoch uint64, legacyDigest string) Event {
-	return newTransitEvent(holderID, legacyEpoch, successorEpoch, legacyDigest, TransitStageConfirmed)
+func HandoverConfirmed(holderID string, legacyEpoch, successorEpoch uint64, legacyDigest string) Event {
+	return newHandoverEvent(holderID, legacyEpoch, successorEpoch, legacyDigest, HandoverStageConfirmed)
 }
 
-func TransitClosed(holderID string, legacyEpoch, successorEpoch uint64, legacyDigest string) Event {
-	return newTransitEvent(holderID, legacyEpoch, successorEpoch, legacyDigest, TransitStageClosed)
+func HandoverClosed(holderID string, legacyEpoch, successorEpoch uint64, legacyDigest string) Event {
+	return newHandoverEvent(holderID, legacyEpoch, successorEpoch, legacyDigest, HandoverStageClosed)
 }
 
-func TransitReattached(holderID string, legacyEpoch, successorEpoch uint64, legacyDigest string) Event {
-	return newTransitEvent(holderID, legacyEpoch, successorEpoch, legacyDigest, TransitStageReattached)
+func HandoverReattached(holderID string, legacyEpoch, successorEpoch uint64, legacyDigest string) Event {
+	return newHandoverEvent(holderID, legacyEpoch, successorEpoch, legacyDigest, HandoverStageReattached)
 }
 
-func newTransitEvent(holderID string, legacyEpoch, successorEpoch uint64, legacyDigest string, stage TransitStage) Event {
+func newHandoverEvent(holderID string, legacyEpoch, successorEpoch uint64, legacyDigest string, stage HandoverStage) Event {
 	return Event{
-		Kind: KindTransit,
-		Transit: &Transit{
+		Kind: KindHandover,
+		Handover: &Handover{
 			HolderID:       holderID,
 			LegacyEpoch:    legacyEpoch,
 			SuccessorEpoch: successorEpoch,
