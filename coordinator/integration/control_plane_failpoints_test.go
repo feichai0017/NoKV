@@ -16,121 +16,121 @@ import (
 	pdtestcluster "github.com/feichai0017/NoKV/coordinator/testcluster"
 )
 
-func TestControlPlaneFailpointBeforeApplyCoordinatorLeaseRejectsDutyAdmission(t *testing.T) {
+func TestControlPlaneFailpointBeforeApplyTenureRejectsDutyAdmission(t *testing.T) {
 	cluster := pdtestcluster.OpenReplicated(t)
-	cluster.ConfigureCoordinatorLeases(10*time.Second, 3*time.Second)
+	cluster.ConfigureTenures(10*time.Second, 3*time.Second)
 	_, leader := cluster.LeaderService()
 
-	rootfailpoints.Set(rootfailpoints.BeforeApplyCoordinatorLease)
+	rootfailpoints.Set(rootfailpoints.BeforeApplyTenure)
 	t.Cleanup(func() { rootfailpoints.Set(rootfailpoints.None) })
 
 	_, err := leader.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
 	require.Equal(t, codes.Internal, status.Code(err))
-	require.Contains(t, status.Convert(err).Message(), rootfailpoints.ErrBeforeApplyCoordinatorLease.Error())
+	require.Contains(t, status.Convert(err).Message(), rootfailpoints.ErrBeforeApplyTenure.Error())
 }
 
-func TestControlPlaneFailpointBeforeCoordinatorLeaseStorageReadRejectsSeal(t *testing.T) {
+func TestControlPlaneFailpointBeforeTenureStorageReadRejectsSeal(t *testing.T) {
 	cluster := pdtestcluster.OpenReplicated(t)
-	cluster.ConfigureCoordinatorLeases(10*time.Second, 3*time.Second)
+	cluster.ConfigureTenures(10*time.Second, 3*time.Second)
 	_, leader := cluster.LeaderService()
 
 	_, err := leader.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
 
-	rootfailpoints.Set(rootfailpoints.BeforeCoordinatorLeaseStorageRead)
+	rootfailpoints.Set(rootfailpoints.BeforeTenureStorageRead)
 	t.Cleanup(func() { rootfailpoints.Set(rootfailpoints.None) })
 
-	err = leader.SealCoordinatorLease()
+	err = leader.SealTenure()
 	require.Error(t, err)
 	require.Equal(t, codes.Internal, status.Code(err))
-	require.Contains(t, status.Convert(err).Message(), rootfailpoints.ErrBeforeCoordinatorLeaseStorageRead.Error())
+	require.Contains(t, status.Convert(err).Message(), rootfailpoints.ErrBeforeTenureStorageRead.Error())
 }
 
-func TestControlPlaneFailpointBeforeApplyCoordinatorClosureRejectsSeal(t *testing.T) {
+func TestControlPlaneFailpointBeforeApplyTransitRejectsSeal(t *testing.T) {
 	cluster := pdtestcluster.OpenReplicated(t)
-	cluster.ConfigureCoordinatorLeases(10*time.Second, 3*time.Second)
+	cluster.ConfigureTenures(10*time.Second, 3*time.Second)
 	_, leader := cluster.LeaderService()
 
 	_, err := leader.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
 
-	rootfailpoints.Set(rootfailpoints.BeforeApplyCoordinatorClosure)
+	rootfailpoints.Set(rootfailpoints.BeforeApplyTransit)
 	t.Cleanup(func() { rootfailpoints.Set(rootfailpoints.None) })
 
-	err = leader.SealCoordinatorLease()
-	require.ErrorIs(t, err, rootfailpoints.ErrBeforeApplyCoordinatorClosure)
+	err = leader.SealTenure()
+	require.ErrorIs(t, err, rootfailpoints.ErrBeforeApplyTransit)
 }
 
-func TestControlPlaneFailpointAfterApplyCoordinatorClosureBeforeReloadPreservesSealAcrossRestart(t *testing.T) {
+func TestControlPlaneFailpointAfterApplyTransitBeforeReloadPreservesSealAcrossRestart(t *testing.T) {
 	cluster := pdtestcluster.OpenReplicated(t)
-	cluster.ConfigureCoordinatorLeases(10*time.Second, 3*time.Second)
+	cluster.ConfigureTenures(10*time.Second, 3*time.Second)
 	leaderID, leader := cluster.LeaderService()
 
 	_, err := leader.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 4})
 	require.NoError(t, err)
 
-	coordfailpoints.Set(coordfailpoints.AfterApplyCoordinatorClosureBeforeReload)
+	coordfailpoints.Set(coordfailpoints.AfterApplyTransitBeforeReload)
 	t.Cleanup(func() { coordfailpoints.Set(coordfailpoints.None) })
 
-	err = leader.SealCoordinatorLease()
-	require.ErrorIs(t, err, coordfailpoints.ErrAfterApplyCoordinatorClosureBeforeReload)
+	err = leader.SealTenure()
+	require.ErrorIs(t, err, coordfailpoints.ErrAfterApplyTransitBeforeReload)
 
 	rootState, err := cluster.Roots[leaderID].Current()
 	require.NoError(t, err)
-	require.Equal(t, rootState.CoordinatorLease.CertGeneration, rootState.CoordinatorSeal.CertGeneration)
-	require.NotZero(t, rootState.CoordinatorSeal.CertGeneration)
+	require.Equal(t, rootState.Tenure.Epoch, rootState.Legacy.Epoch)
+	require.NotZero(t, rootState.Legacy.Epoch)
 
 	coordfailpoints.Set(coordfailpoints.None)
 	restarted := cluster.RestartService(leaderID)
-	restarted.ConfigureCoordinatorLease("c-next", 10*time.Second, 3*time.Second)
+	restarted.ConfigureTenure("c-next", 10*time.Second, 3*time.Second)
 	require.NoError(t, restarted.ReloadFromStorage())
 
 	allocResp, err := restarted.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
-	require.Greater(t, allocResp.GetCertGeneration(), rootState.CoordinatorSeal.CertGeneration)
-	require.NoError(t, restarted.ConfirmCoordinatorClosure())
-	require.NoError(t, restarted.CloseCoordinatorClosure())
-	require.NoError(t, restarted.ReattachCoordinatorClosure())
+	require.Greater(t, allocResp.GetEpoch(), rootState.Legacy.Epoch)
+	require.NoError(t, restarted.ConfirmTransit())
+	require.NoError(t, restarted.CloseTransit())
+	require.NoError(t, restarted.ReattachTransit())
 
 	audit := restarted.DiagnosticsSnapshot()["audit"].(map[string]any)
 	require.Equal(t, "reattached", audit["closure_stage"])
 	require.Equal(t, true, audit["closure_satisfied"])
 }
 
-func TestControlPlaneFailpointAfterApplyCoordinatorClosureBeforeReloadPreservesConfirmedClosureAcrossRestart(t *testing.T) {
+func TestControlPlaneFailpointAfterApplyTransitBeforeReloadPreservesConfirmedClosureAcrossRestart(t *testing.T) {
 	cluster := pdtestcluster.OpenReplicated(t)
-	cluster.ConfigureCoordinatorLeases(10*time.Second, 3*time.Second)
+	cluster.ConfigureTenures(10*time.Second, 3*time.Second)
 	leaderID, leader := cluster.LeaderService()
 
 	_, err := leader.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 2})
 	require.NoError(t, err)
-	require.NoError(t, leader.SealCoordinatorLease())
+	require.NoError(t, leader.SealTenure())
 
-	leader.ConfigureCoordinatorLease("c-successor", 10*time.Second, 3*time.Second)
+	leader.ConfigureTenure("c-successor", 10*time.Second, 3*time.Second)
 	require.NoError(t, leader.ReloadFromStorage())
 	_, err = leader.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
 
-	coordfailpoints.Set(coordfailpoints.AfterApplyCoordinatorClosureBeforeReload)
+	coordfailpoints.Set(coordfailpoints.AfterApplyTransitBeforeReload)
 	t.Cleanup(func() { coordfailpoints.Set(coordfailpoints.None) })
 
-	err = leader.ConfirmCoordinatorClosure()
-	require.ErrorIs(t, err, coordfailpoints.ErrAfterApplyCoordinatorClosureBeforeReload)
+	err = leader.ConfirmTransit()
+	require.ErrorIs(t, err, coordfailpoints.ErrAfterApplyTransitBeforeReload)
 
 	rootState, err := cluster.Roots[leaderID].Current()
 	require.NoError(t, err)
-	require.Equal(t, rootproto.CoordinatorClosureStageConfirmed, rootState.CoordinatorClosure.Stage)
-	require.Equal(t, rootState.CoordinatorSeal.CertGeneration, rootState.CoordinatorClosure.SealGeneration)
-	require.Equal(t, rootState.CoordinatorLease.CertGeneration, rootState.CoordinatorClosure.SuccessorGeneration)
+	require.Equal(t, rootproto.TransitStageConfirmed, rootState.Transit.Stage)
+	require.Equal(t, rootState.Legacy.Epoch, rootState.Transit.LegacyEpoch)
+	require.Equal(t, rootState.Tenure.Epoch, rootState.Transit.SuccessorEpoch)
 
 	coordfailpoints.Set(coordfailpoints.None)
 	restarted := cluster.RestartService(leaderID)
-	restarted.ConfigureCoordinatorLease("c-successor", 10*time.Second, 3*time.Second)
+	restarted.ConfigureTenure("c-successor", 10*time.Second, 3*time.Second)
 	require.NoError(t, restarted.ReloadFromStorage())
 
-	require.NoError(t, restarted.CloseCoordinatorClosure())
-	require.NoError(t, restarted.ReattachCoordinatorClosure())
+	require.NoError(t, restarted.CloseTransit())
+	require.NoError(t, restarted.ReattachTransit())
 
 	audit := restarted.DiagnosticsSnapshot()["audit"].(map[string]any)
 	require.Equal(t, "reattached", audit["closure_stage"])

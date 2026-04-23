@@ -24,7 +24,7 @@ const (
 //     on first startup to seed fresh store workdirs. Once a store has a
 //     `CURRENT` manifest, bootstrap skips it and the `Regions` section is
 //     ignored. Runtime topology (splits, merges, peer changes) lives in
-//     meta-root, not here; use `nokv-config regions` or ccc-audit to inspect
+//     meta-root, not here; use `nokv-config regions` or succession-audit to inspect
 //     current state.
 type File struct {
 	MaxRetries                 int          `json:"max_retries"`
@@ -44,7 +44,7 @@ type MetaRoot struct {
 }
 
 // MetaRootPeer binds one meta-root peer's identity to its gRPC service
-// address (dialed by coordinator and ccc-audit), raft transport address
+// address (dialed by coordinator and succession-audit), raft transport address
 // (dialed by sibling meta-root peers), and on-disk workdir. Each field has
 // host / docker variants resolved by the --scope flag.
 type MetaRootPeer struct {

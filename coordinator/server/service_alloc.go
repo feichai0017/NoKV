@@ -252,7 +252,7 @@ func (s *Service) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*co
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
-	if err := s.requireDutyAdmission(ctx, rootproto.CoordinatorDutyAllocID); err != nil {
+	if err := s.requireDutyAdmission(ctx, rootproto.MandateAllocID); err != nil {
 		return nil, err
 	}
 	first, err := s.reserveIDs(ctx, count)
@@ -262,14 +262,14 @@ func (s *Service) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*co
 		}
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
-	lease, seal := s.currentCoordinatorLeaseView()
-	witness := s.monotoneReplyEvidence(rootproto.CoordinatorDutyAllocID, lease, allocationConsumedFrontier(first, count))
+	lease, seal := s.currentTenureView()
+	witness := s.monotoneReplyEvidence(rootproto.MandateAllocID, lease, allocationConsumedFrontier(first, count))
 	return &coordpb.AllocIDResponse{
-		FirstId:                first,
-		Count:                  count,
-		CertGeneration:         witness.CertGeneration,
-		ConsumedFrontier:       witness.ConsumedFrontier,
-		ObservedSealGeneration: seal.CertGeneration,
+		FirstId:             first,
+		Count:               count,
+		Epoch:               witness.Epoch,
+		ConsumedFrontier:    witness.ConsumedFrontier,
+		ObservedLegacyEpoch: seal.Epoch,
 	}, nil
 }
 
@@ -288,7 +288,7 @@ func (s *Service) Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.Ts
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
-	if err := s.requireDutyAdmission(ctx, rootproto.CoordinatorDutyTSO); err != nil {
+	if err := s.requireDutyAdmission(ctx, rootproto.MandateTSO); err != nil {
 		return nil, err
 	}
 	first, got, err := s.reserveTSO(ctx, count)
@@ -298,27 +298,27 @@ func (s *Service) Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.Ts
 		}
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
-	lease, seal := s.currentCoordinatorLeaseView()
-	witness := s.monotoneReplyEvidence(rootproto.CoordinatorDutyTSO, lease, allocationConsumedFrontier(first, got))
+	lease, seal := s.currentTenureView()
+	witness := s.monotoneReplyEvidence(rootproto.MandateTSO, lease, allocationConsumedFrontier(first, got))
 	return &coordpb.TsoResponse{
-		Timestamp:              first,
-		Count:                  got,
-		CertGeneration:         witness.CertGeneration,
-		ConsumedFrontier:       witness.ConsumedFrontier,
-		ObservedSealGeneration: seal.CertGeneration,
+		Timestamp:           first,
+		Count:               got,
+		Epoch:               witness.Epoch,
+		ConsumedFrontier:    witness.ConsumedFrontier,
+		ObservedLegacyEpoch: seal.Epoch,
 	}, nil
 }
 
-func (s *Service) monotoneReplyEvidence(dutyMask uint32, lease rootstate.CoordinatorLease, consumedFrontier uint64) rootproto.ContinuationWitness {
+func (s *Service) monotoneReplyEvidence(mandate uint32, lease rootstate.Tenure, consumedFrontier uint64) rootproto.ContinuationWitness {
 	if s != nil && s.ablation.DisableReplyEvidence {
-		return rootproto.NewSuppressedContinuationWitness(dutyMask)
+		return rootproto.NewSuppressedContinuationWitness(mandate)
 	}
-	return rootproto.NewContinuationWitness(dutyMask, lease.CertGeneration, consumedFrontier)
+	return rootproto.NewContinuationWitness(mandate, lease.Epoch, consumedFrontier)
 }
 
-func (s *Service) metadataReplyGeneration(certGeneration uint64) uint64 {
+func (s *Service) metadataReplyGeneration(epoch uint64) uint64 {
 	if s != nil && s.ablation.DisableReplyEvidence {
 		return rootproto.ContinuationWitnessGenerationSuppressed
 	}
-	return certGeneration
+	return epoch
 }

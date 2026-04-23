@@ -1,4 +1,4 @@
-------------------------- MODULE CCCMultiDim -------------------------
+------------------------- MODULE SuccessionMultiDim -------------------------
 EXTENDS Naturals, FiniteSets
 
 \* Minimal positive model for the CRDB #66562 analog.

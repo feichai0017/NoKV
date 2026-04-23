@@ -8,7 +8,7 @@
 #
 # Architecture:
 #   Truth plane:     3× meta-root  (replicated raft, quorum of 2 — tolerates 1 peer loss)
-#   Control plane:   3× coordinator (CCC lease-gated singleton; one active holder, two standby)
+#   Control plane:   3× coordinator (Succession lease-gated singleton; one active holder, two standby)
 #   Execution plane: 3× store      (per-region raft, quorum of 2)
 #   Gateway:         1× nokv-redis (RESP-compatible; multi-endpoint failover client-side)
 #
@@ -16,7 +16,7 @@
 # --coordinator-addr list. coordinator/client.GRPCClient parses that list,
 # keeps a preferred endpoint, and transparently fails over to another
 # coordinator on FailedPrecondition "coordinator lease not held" / "coordinator
-# not leader" errors. If the active CoordinatorLease holder dies, the next
+# not leader" errors. If the active Tenure holder dies, the next
 # write retries and lands on whichever standby has grabbed the lease.
 #
 # Every runtime binary (coordinator, store, redis, meta-root) exposes expvar
@@ -68,7 +68,7 @@ services:
       - meta-root-1-data:/var/lib/nokv-meta-root
     expose: ["2380", "2480", "9380"]
     ports:
-      - "2380:2380"   # gRPC service (coord / ccc-audit from host dial here)
+      - "2380:2380"   # gRPC service (coord / succession-audit from host dial here)
       - "9380:9380"   # expvar dashboard
 
   meta-root-2:
@@ -109,7 +109,7 @@ services:
       - "2382:2380"
       - "9382:9380"
 
-  # ============= CONTROL PLANE: 3× coordinator (CCC lease HA) =============
+  # ============= CONTROL PLANE: 3× coordinator (Succession lease HA) =============
   coordinator-1:
     <<: *common
     container_name: nokv-coordinator-1

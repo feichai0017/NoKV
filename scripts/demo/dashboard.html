@@ -319,7 +319,7 @@
 
   <div class="topo-legend">
     <span><span class="chip leader"></span> raft leader</span>
-    <span><span class="chip holder"></span> CCC lease holder</span>
+    <span><span class="chip holder"></span> Succession holder</span>
     <span><span class="chip region"></span> region raft leader</span>
     <span><span class="chip dead"></span> unreachable</span>
     <span style="margin-left:auto;">pulsing line = active flow</span>
@@ -337,7 +337,7 @@
 <div class="plane">
   <div class="plane-head">
     <span class="badge control">Control plane</span>
-    <h2>3× coordinator — CCC lease-gated singleton</h2>
+    <h2>3× coordinator — Succession-gated singleton</h2>
   </div>
   <div class="grid" id="coord-grid"></div>
 </div>
@@ -729,7 +729,7 @@ function diffForEvents(prev, curr) {
   const prevHolder = prevLease[0]?.holder_id;
   const currHolder = currLease[0]?.holder_id;
   if (prevHolder !== currHolder && currHolder) {
-    pushEvent('lease', `CCC lease holder → ${currHolder}`);
+    pushEvent('lease', `Succession holder → ${currHolder}`);
   }
   currLease.forEach((l, i) => {
     const p = prevLease[i] || {};

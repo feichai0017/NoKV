@@ -111,7 +111,7 @@ func TestSyncDirOpenFailure(t *testing.T) {
 	}
 }
 
-func TestLockExclusive(t *testing.T) {
+func TestLockPrimacy(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), "LOCK")
 
 	lock, err := (OSFS{}).Lock(lockPath)

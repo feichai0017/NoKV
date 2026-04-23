@@ -213,7 +213,7 @@ func TestControlPlaneEtcdReadIndexRealDelayedInFlightReply(t *testing.T) {
 			MemberID:            oldLeader,
 			Duty:                "read_index",
 			ReadStateGeneration: uint64(delayedResp.resp.Header.Revision),
-			SuccessorGeneration: uint64(successorWrite.Header.Revision),
+			SuccessorEpoch:      uint64(successorWrite.Header.Revision),
 			Accepted:            true,
 		},
 	})

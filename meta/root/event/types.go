@@ -29,9 +29,9 @@ const (
 	KindPeerRemoved
 	KindPeerAdditionCancelled
 	KindPeerRemovalCancelled
-	KindCoordinatorLease
-	KindCoordinatorSeal
-	KindCoordinatorClosure
+	KindTenure
+	KindLegacy
+	KindTransit
 )
 
 // StoreMembership describes one store membership change carried by a root event.
@@ -47,48 +47,48 @@ type AllocatorFence struct {
 
 type RootCursor = rootproto.Cursor
 
-// CoordinatorLease records the current control-plane owner lease.
-type CoordinatorLease struct {
-	HolderID          string
-	ExpiresUnixNano   int64
-	CertGeneration    uint64
-	IssuedCursor      RootCursor
-	DutyMask          uint32
-	PredecessorDigest string
-	Frontiers         rootproto.CoordinatorDutyFrontiers
+// Tenure records the current control-plane owner lease.
+type Tenure struct {
+	HolderID        string
+	ExpiresUnixNano int64
+	Epoch           uint64
+	IssuedAt        RootCursor
+	Mandate         uint32
+	LineageDigest   string
+	Frontiers       rootproto.MandateFrontiers
 }
 
-// CoordinatorSeal records one rooted closure point for the current control-plane
+// Legacy records one rooted closure point for the current control-plane
 // authority generation.
-type CoordinatorSeal struct {
-	HolderID       string
-	CertGeneration uint64
-	DutyMask       uint32
-	Frontiers      rootproto.CoordinatorDutyFrontiers
-	SealedAtCursor RootCursor
+type Legacy struct {
+	HolderID  string
+	Epoch     uint64
+	Mandate   uint32
+	Frontiers rootproto.MandateFrontiers
+	SealedAt  RootCursor
 }
 
-type CoordinatorClosureStage = rootproto.CoordinatorClosureStage
+type TransitStage = rootproto.TransitStage
 
 const (
-	CoordinatorClosureStageUnspecified    = rootproto.CoordinatorClosureStageUnspecified
-	CoordinatorClosureStagePendingConfirm = rootproto.CoordinatorClosureStagePendingConfirm
-	CoordinatorClosureStageConfirmed      = rootproto.CoordinatorClosureStageConfirmed
-	CoordinatorClosureStageClosed         = rootproto.CoordinatorClosureStageClosed
-	CoordinatorClosureStageReattached     = rootproto.CoordinatorClosureStageReattached
+	TransitStageUnspecified    = rootproto.TransitStageUnspecified
+	TransitStagePendingConfirm = rootproto.TransitStagePendingConfirm
+	TransitStageConfirmed      = rootproto.TransitStageConfirmed
+	TransitStageClosed         = rootproto.TransitStageClosed
+	TransitStageReattached     = rootproto.TransitStageReattached
 )
 
-// CoordinatorClosure records one rooted closure lifecycle entry for a sealed
+// Transit records one rooted closure lifecycle entry for a sealed
 // predecessor generation and its successor authority instance.
-type CoordinatorClosure struct {
-	HolderID            string
-	SealGeneration      uint64
-	SuccessorGeneration uint64
-	SealDigest          string
-	Stage               CoordinatorClosureStage
-	ConfirmedAtCursor   RootCursor
-	ClosedAtCursor      RootCursor
-	ReattachedAtCursor  RootCursor
+type Transit struct {
+	HolderID       string
+	LegacyEpoch    uint64
+	SuccessorEpoch uint64
+	LegacyDigest   string
+	Stage          TransitStage
+	ConfirmedAt    RootCursor
+	ClosedAt       RootCursor
+	ReattachedAt   RootCursor
 }
 
 // RegionDescriptorRecord carries one descriptor snapshot into the root log.
@@ -132,16 +132,16 @@ type PeerChange struct {
 type Event struct {
 	Kind Kind
 
-	StoreMembership    *StoreMembership
-	AllocatorFence     *AllocatorFence
-	CoordinatorLease   *CoordinatorLease
-	CoordinatorSeal    *CoordinatorSeal
-	CoordinatorClosure *CoordinatorClosure
-	RegionDescriptor   *RegionDescriptorRecord
-	RegionRemoval      *RegionRemoval
-	RangeSplit         *RangeSplit
-	RangeMerge         *RangeMerge
-	PeerChange         *PeerChange
+	StoreMembership  *StoreMembership
+	AllocatorFence   *AllocatorFence
+	Tenure           *Tenure
+	Legacy           *Legacy
+	Transit          *Transit
+	RegionDescriptor *RegionDescriptorRecord
+	RegionRemoval    *RegionRemoval
+	RangeSplit       *RangeSplit
+	RangeMerge       *RangeMerge
+	PeerChange       *PeerChange
 }
 
 func StoreJoined(storeID uint64, address string) Event {
@@ -160,61 +160,61 @@ func TSOAllocatorFenced(min uint64) Event {
 	return Event{Kind: KindTSOAllocatorFenced, AllocatorFence: &AllocatorFence{Minimum: min}}
 }
 
-func CoordinatorLeaseGranted(holderID string, expiresUnixNano int64, certGeneration uint64, dutyMask uint32, predecessorDigest string, frontiers rootproto.CoordinatorDutyFrontiers) Event {
-	return newCoordinatorLeaseEvent(holderID, expiresUnixNano, certGeneration, dutyMask, predecessorDigest, frontiers)
+func TenureGranted(holderID string, expiresUnixNano int64, epoch uint64, mandate uint32, lineageDigest string, frontiers rootproto.MandateFrontiers) Event {
+	return newTenureEvent(holderID, expiresUnixNano, epoch, mandate, lineageDigest, frontiers)
 }
 
-func CoordinatorLeaseReleased(holderID string, releasedUnixNano int64, certGeneration uint64, dutyMask uint32, predecessorDigest string, frontiers rootproto.CoordinatorDutyFrontiers) Event {
-	return newCoordinatorLeaseEvent(holderID, releasedUnixNano, certGeneration, dutyMask, predecessorDigest, frontiers)
+func TenureReleased(holderID string, releasedUnixNano int64, epoch uint64, mandate uint32, lineageDigest string, frontiers rootproto.MandateFrontiers) Event {
+	return newTenureEvent(holderID, releasedUnixNano, epoch, mandate, lineageDigest, frontiers)
 }
 
-func newCoordinatorLeaseEvent(holderID string, expiresUnixNano int64, certGeneration uint64, dutyMask uint32, predecessorDigest string, frontiers rootproto.CoordinatorDutyFrontiers) Event {
+func newTenureEvent(holderID string, expiresUnixNano int64, epoch uint64, mandate uint32, lineageDigest string, frontiers rootproto.MandateFrontiers) Event {
 	return Event{
-		Kind: KindCoordinatorLease,
-		CoordinatorLease: &CoordinatorLease{
-			HolderID:          holderID,
-			ExpiresUnixNano:   expiresUnixNano,
-			CertGeneration:    certGeneration,
-			DutyMask:          dutyMask,
-			PredecessorDigest: predecessorDigest,
-			Frontiers:         frontiers,
+		Kind: KindTenure,
+		Tenure: &Tenure{
+			HolderID:        holderID,
+			ExpiresUnixNano: expiresUnixNano,
+			Epoch:           epoch,
+			Mandate:         mandate,
+			LineageDigest:   lineageDigest,
+			Frontiers:       frontiers,
 		},
 	}
 }
 
-func CoordinatorLeaseSealed(holderID string, certGeneration uint64, dutyMask uint32, frontiers rootproto.CoordinatorDutyFrontiers) Event {
+func TenureSealed(holderID string, epoch uint64, mandate uint32, frontiers rootproto.MandateFrontiers) Event {
 	return Event{
-		Kind: KindCoordinatorSeal,
-		CoordinatorSeal: &CoordinatorSeal{
+		Kind: KindLegacy,
+		Legacy: &Legacy{
+			HolderID:  holderID,
+			Epoch:     epoch,
+			Mandate:   mandate,
+			Frontiers: frontiers,
+		},
+	}
+}
+
+func TransitConfirmed(holderID string, legacyEpoch, successorEpoch uint64, legacyDigest string) Event {
+	return newTransitEvent(holderID, legacyEpoch, successorEpoch, legacyDigest, TransitStageConfirmed)
+}
+
+func TransitClosed(holderID string, legacyEpoch, successorEpoch uint64, legacyDigest string) Event {
+	return newTransitEvent(holderID, legacyEpoch, successorEpoch, legacyDigest, TransitStageClosed)
+}
+
+func TransitReattached(holderID string, legacyEpoch, successorEpoch uint64, legacyDigest string) Event {
+	return newTransitEvent(holderID, legacyEpoch, successorEpoch, legacyDigest, TransitStageReattached)
+}
+
+func newTransitEvent(holderID string, legacyEpoch, successorEpoch uint64, legacyDigest string, stage TransitStage) Event {
+	return Event{
+		Kind: KindTransit,
+		Transit: &Transit{
 			HolderID:       holderID,
-			CertGeneration: certGeneration,
-			DutyMask:       dutyMask,
-			Frontiers:      frontiers,
-		},
-	}
-}
-
-func CoordinatorClosureConfirmed(holderID string, sealGeneration, successorGeneration uint64, sealDigest string) Event {
-	return newCoordinatorClosureEvent(holderID, sealGeneration, successorGeneration, sealDigest, CoordinatorClosureStageConfirmed)
-}
-
-func CoordinatorClosureClosed(holderID string, sealGeneration, successorGeneration uint64, sealDigest string) Event {
-	return newCoordinatorClosureEvent(holderID, sealGeneration, successorGeneration, sealDigest, CoordinatorClosureStageClosed)
-}
-
-func CoordinatorClosureReattached(holderID string, sealGeneration, successorGeneration uint64, sealDigest string) Event {
-	return newCoordinatorClosureEvent(holderID, sealGeneration, successorGeneration, sealDigest, CoordinatorClosureStageReattached)
-}
-
-func newCoordinatorClosureEvent(holderID string, sealGeneration, successorGeneration uint64, sealDigest string, stage CoordinatorClosureStage) Event {
-	return Event{
-		Kind: KindCoordinatorClosure,
-		CoordinatorClosure: &CoordinatorClosure{
-			HolderID:            holderID,
-			SealGeneration:      sealGeneration,
-			SuccessorGeneration: successorGeneration,
-			SealDigest:          sealDigest,
-			Stage:               stage,
+			LegacyEpoch:    legacyEpoch,
+			SuccessorEpoch: successorEpoch,
+			LegacyDigest:   legacyDigest,
+			Stage:          stage,
 		},
 	}
 }

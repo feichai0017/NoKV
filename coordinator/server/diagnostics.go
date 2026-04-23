@@ -2,7 +2,7 @@ package server
 
 import (
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
-	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
+	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
@@ -47,9 +47,9 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 	}
 
 	nowUnixNano, _, holderID, renewIn, clockSkew := s.leaseCampaignBounds()
-	lease, _ := s.currentCoordinatorLeaseView()
+	lease, _ := s.currentTenureView()
 	report := coordaudit.BuildReport(rootSnapshot, holderID, nowUnixNano)
-	leaseFrontiers := controlplane.Frontiers(rootstate.State{
+	leaseFrontiers := succession.Frontiers(rootstate.State{
 		IDFence:  rootSnapshot.Allocator.IDCurrent,
 		TSOFence: rootSnapshot.Allocator.TSCurrent,
 	}, report.RootDescriptorRevision)
@@ -130,46 +130,46 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 			"active":             lease.ActiveAt(nowUnixNano),
 			"held_by_self":       lease.HolderID != "" && lease.HolderID == holderID,
 			"usable_by_self":     leaseUsableBy(lease, holderID, nowUnixNano, clockSkew.Nanoseconds()),
-			"cert_generation":    lease.CertGeneration,
-			"issued_cursor": map[string]any{
-				"term":  lease.IssuedCursor.Term,
-				"index": lease.IssuedCursor.Index,
+			"epoch":              lease.Epoch,
+			"issued_at": map[string]any{
+				"term":  lease.IssuedAt.Term,
+				"index": lease.IssuedAt.Index,
 			},
-			"duty_mask": lease.DutyMask,
+			"mandate":   lease.Mandate,
 			"frontiers": diagnosticsCoordinatorFrontiers(leaseFrontiers),
 		},
 		"handoff": diagnosticsAuthorityHandoff(report.Handoff),
 		"seal": map[string]any{
-			"holder_id":          rootSnapshot.CoordinatorSeal.HolderID,
-			"cert_generation":    rootSnapshot.CoordinatorSeal.CertGeneration,
-			"duty_mask":          rootSnapshot.CoordinatorSeal.DutyMask,
-			"consumed_frontiers": diagnosticsCoordinatorFrontiers(rootSnapshot.CoordinatorSeal.Frontiers),
-			"sealed_at_cursor": map[string]any{
-				"term":  rootSnapshot.CoordinatorSeal.SealedAtCursor.Term,
-				"index": rootSnapshot.CoordinatorSeal.SealedAtCursor.Index,
+			"holder_id":          rootSnapshot.Legacy.HolderID,
+			"epoch":              rootSnapshot.Legacy.Epoch,
+			"mandate":            rootSnapshot.Legacy.Mandate,
+			"consumed_frontiers": diagnosticsCoordinatorFrontiers(rootSnapshot.Legacy.Frontiers),
+			"sealed_at": map[string]any{
+				"term":  rootSnapshot.Legacy.SealedAt.Term,
+				"index": rootSnapshot.Legacy.SealedAt.Index,
 			},
 		},
 		"audit": map[string]any{
-			"seal_generation":              report.ClosureWitness.SealGeneration,
-			"seal_digest":                  report.ClosureWitness.SealDigest,
-			"successor_present":            report.ClosureWitness.SuccessorPresent,
-			"successor_frontier_coverage":  diagnosticsCoordinatorCoverage(report.ClosureWitness.SuccessorCoverage),
-			"successor_lineage_satisfied":  report.ClosureWitness.SuccessorLineageSatisfied,
-			"successor_monotone_covered":   report.ClosureWitness.SuccessorMonotoneCovered(),
-			"successor_descriptor_covered": report.ClosureWitness.SuccessorDescriptorCovered(),
-			"sealed_generation_retired":    report.ClosureWitness.SealedGenerationRetired,
-			"closure_satisfied":            report.ClosureWitness.ClosureSatisfied(),
+			"legacy_epoch":                 report.TransitWitness.LegacyEpoch,
+			"legacy_digest":                report.TransitWitness.LegacyDigest,
+			"successor_present":            report.TransitWitness.SuccessorPresent,
+			"successor_frontier_coverage":  diagnosticsCoordinatorCoverage(report.TransitWitness.Inheritance),
+			"successor_lineage_satisfied":  report.TransitWitness.SuccessorLineageSatisfied,
+			"successor_monotone_covered":   report.TransitWitness.SuccessorMonotoneCovered(),
+			"successor_descriptor_covered": report.TransitWitness.SuccessorDescriptorCovered(),
+			"sealed_generation_retired":    report.TransitWitness.SealedGenerationRetired,
+			"closure_satisfied":            report.TransitWitness.ClosureSatisfied(),
 			"closure_stage":                report.Closure.Stage.String(),
 			"closure_defect":               string(report.Anomalies.ClosureDefect),
 			"closure_recorded": map[string]any{
-				"holder_id":            rootSnapshot.CoordinatorClosure.HolderID,
-				"seal_generation":      rootSnapshot.CoordinatorClosure.SealGeneration,
-				"successor_generation": rootSnapshot.CoordinatorClosure.SuccessorGeneration,
-				"seal_digest":          rootSnapshot.CoordinatorClosure.SealDigest,
+				"holder_id":       rootSnapshot.Transit.HolderID,
+				"legacy_epoch":    rootSnapshot.Transit.LegacyEpoch,
+				"successor_epoch": rootSnapshot.Transit.SuccessorEpoch,
+				"legacy_digest":   rootSnapshot.Transit.LegacyDigest,
 			},
 		},
-		"closure_witness": diagnosticsClosureWitness(report.ClosureWitness),
-		"ccc_metrics":     s.cccMetrics.snapshot(),
+		"closure_witness":    diagnosticsTransitWitness(report.TransitWitness),
+		"succession_metrics": s.successionMetrics.snapshot(),
 	}
 }
 
@@ -188,15 +188,15 @@ func diagnosticsLeaderID(storage rootview.RootStorage) uint64 {
 	return storage.LeaderID()
 }
 
-func diagnosticsCoordinatorCoverage(status rootproto.CoordinatorSuccessorCoverageStatus) []map[string]any {
+func diagnosticsCoordinatorCoverage(status rootproto.InheritanceStatus) []map[string]any {
 	if len(status.Checks) == 0 {
 		return []map[string]any{}
 	}
 	out := make([]map[string]any, 0, len(status.Checks))
 	for _, check := range status.Checks {
 		out = append(out, map[string]any{
-			"duty_mask":         check.DutyMask,
-			"duty_name":         rootproto.CoordinatorDutyName(check.DutyMask),
+			"mandate":           check.Mandate,
+			"duty_name":         rootproto.MandateName(check.Mandate),
 			"required_frontier": check.RequiredFrontier,
 			"actual_frontier":   check.ActualFrontier,
 			"covered":           check.Covered,
@@ -207,20 +207,20 @@ func diagnosticsCoordinatorCoverage(status rootproto.CoordinatorSuccessorCoverag
 
 func diagnosticsAuthorityHandoff(record rootproto.AuthorityHandoffRecord) map[string]any {
 	return map[string]any{
-		"holder_id":          record.HolderID,
-		"expires_unix_nano":  record.ExpiresUnixNano,
-		"cert_generation":    record.CertGeneration,
-		"duty_mask":          record.DutyMask,
-		"predecessor_digest": record.PredecessorDigest,
-		"issued_cursor": map[string]any{
-			"term":  record.IssuedCursor.Term,
-			"index": record.IssuedCursor.Index,
+		"holder_id":         record.HolderID,
+		"expires_unix_nano": record.ExpiresUnixNano,
+		"epoch":             record.Epoch,
+		"mandate":           record.Mandate,
+		"lineage_digest":    record.LineageDigest,
+		"issued_at": map[string]any{
+			"term":  record.IssuedAt.Term,
+			"index": record.IssuedAt.Index,
 		},
 		"frontiers": diagnosticsCoordinatorFrontiers(record.Frontiers),
 	}
 }
 
-func diagnosticsCoordinatorFrontiers(frontiers rootproto.CoordinatorDutyFrontiers) []map[string]any {
+func diagnosticsCoordinatorFrontiers(frontiers rootproto.MandateFrontiers) []map[string]any {
 	if frontiers.Len() == 0 {
 		return []map[string]any{}
 	}
@@ -228,20 +228,20 @@ func diagnosticsCoordinatorFrontiers(frontiers rootproto.CoordinatorDutyFrontier
 	out := make([]map[string]any, 0, len(entries))
 	for _, entry := range entries {
 		out = append(out, map[string]any{
-			"duty_mask": entry.DutyMask,
-			"duty_name": rootproto.CoordinatorDutyName(entry.DutyMask),
+			"mandate":   entry.Mandate,
+			"duty_name": rootproto.MandateName(entry.Mandate),
 			"frontier":  entry.Frontier,
 		})
 	}
 	return out
 }
 
-func diagnosticsClosureWitness(witness rootproto.ClosureWitness) map[string]any {
+func diagnosticsTransitWitness(witness rootproto.TransitWitness) map[string]any {
 	return map[string]any{
-		"seal_generation":             witness.SealGeneration,
-		"seal_digest":                 witness.SealDigest,
+		"legacy_epoch":                witness.LegacyEpoch,
+		"legacy_digest":               witness.LegacyDigest,
 		"successor_present":           witness.SuccessorPresent,
-		"successor_frontier_coverage": diagnosticsCoordinatorCoverage(witness.SuccessorCoverage),
+		"successor_frontier_coverage": diagnosticsCoordinatorCoverage(witness.Inheritance),
 		"successor_lineage_satisfied": witness.SuccessorLineageSatisfied,
 		"sealed_generation_retired":   witness.SealedGenerationRetired,
 		"closure_stage":               witness.Stage.String(),
@@ -249,7 +249,7 @@ func diagnosticsClosureWitness(witness rootproto.ClosureWitness) map[string]any 
 	}
 }
 
-func leaseUsableBy(lease rootstate.CoordinatorLease, holderID string, nowUnixNano int64, clockSkewNanos int64) bool {
+func leaseUsableBy(lease rootstate.Tenure, holderID string, nowUnixNano int64, clockSkewNanos int64) bool {
 	if lease.HolderID == "" || lease.HolderID != holderID {
 		return false
 	}

@@ -53,7 +53,7 @@ func TestSeparatedModeCoordinatorCrashAndRecoveryPreservesAllocatorFence(t *test
 			return false
 		}
 		return state.IDFence >= next.GetFirstId() &&
-			state.CoordinatorLease.HolderID == "c1" &&
+			state.Tenure.HolderID == "c1" &&
 			state.IDFence >= lastID
 	}, 8*time.Second, 50*time.Millisecond)
 }
@@ -198,7 +198,7 @@ func TestSeparatedModeCoordinatorContestedFailoverPreservesAllocatorFence(t *tes
 		if currentErr != nil {
 			return false
 		}
-		return state.CoordinatorLease.HolderID == "c2" &&
+		return state.Tenure.HolderID == "c2" &&
 			state.IDFence >= lastID &&
 			state.IDFence >= next.GetFirstId()
 	}, 8*time.Second, 50*time.Millisecond)
@@ -254,7 +254,7 @@ func TestSeparatedModeCoordinatorChaosMonotonicAllocID(t *testing.T) {
 			require.Eventually(t, func() bool {
 				state, err := rootCluster.Roots[leaderID].Current()
 				return err == nil &&
-					state.CoordinatorLease.HolderID == "c1" &&
+					state.Tenure.HolderID == "c1" &&
 					state.IDFence >= prevLastID
 			}, 8*time.Second, 50*time.Millisecond, "iteration %d lease campaign did not inherit previous allocator fence", i)
 		}
@@ -334,6 +334,6 @@ func openSeparatedCoordinatorWithLease(t *testing.T, targets map[uint64]string, 
 		tso.NewAllocator(bootstrap.TSStart),
 		store,
 	)
-	svc.ConfigureCoordinatorLease(coordinatorID, leaseTTL, renewIn)
+	svc.ConfigureTenure(coordinatorID, leaseTTL, renewIn)
 	return svc, store
 }

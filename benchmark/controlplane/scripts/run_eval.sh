@@ -36,7 +36,7 @@ summary_md="$result_dir/summary.md"
 
 (
 	cd "$BENCH_DIR"
-	go test ./controlplane \
+	go test ./succession \
 		-run '^$' \
 		-bench 'BenchmarkControlPlane(AllocID|TSO|Metadata)WitnessTax$' \
 		-benchmem \
@@ -46,7 +46,7 @@ summary_md="$result_dir/summary.md"
 
 (
 	cd "$BENCH_DIR"
-	go test ./controlplane \
+	go test ./succession \
 		-run TestControlPlaneDetachedAblationRunner \
 		-count 1 \
 		-v
@@ -54,7 +54,7 @@ summary_md="$result_dir/summary.md"
 
 (
 	cd "$BENCH_DIR"
-	go test ./controlplane/crdb \
+	go test ./succession/crdb \
 		-run 'TestControlPlaneCRDB66562(IssueSchedule|RootedGate)' \
 		-count 1 \
 		-v
@@ -62,7 +62,7 @@ summary_md="$result_dir/summary.md"
 
 (
 	cd "$BENCH_DIR"
-	go test ./controlplane/etcd \
+	go test ./succession/etcd \
 		-run 'TestControlPlaneEtcd(ReadIndex(Pilot|RealDelayedInFlightReply)|LeaseKeepAliveBufferedSuccessAfterRevoke(WithWitnessGate)?)' \
 		-count 1 \
 		-v
@@ -70,7 +70,7 @@ summary_md="$result_dir/summary.md"
 
 (
 	cd "$BENCH_DIR"
-	go test ./controlplane \
+	go test ./succession \
 		-run 'TestControlPlaneNoKVLateReplyControl' \
 		-count 1 \
 		-v

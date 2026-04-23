@@ -60,7 +60,7 @@ func IsNotLeader(err error) bool {
 }
 
 // IsLeaseNotHeld reports whether err is a coordinator rejecting a
-// lease-gated write because it is not the current CoordinatorLease holder.
+// lease-gated write because it is not the current Tenure holder.
 // Treated as retryable: another endpoint in the client's pool may hold the
 // lease.
 func IsLeaseNotHeld(err error) bool {

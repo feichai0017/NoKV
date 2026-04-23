@@ -21,14 +21,14 @@ func RootCursorFromProto(pbCursor *metapb.RootCursor) rootproto.Cursor {
 
 func RootStateToProto(state rootstate.State) *metapb.RootState {
 	return &metapb.RootState{
-		ClusterEpoch:       state.ClusterEpoch,
-		MembershipEpoch:    state.MembershipEpoch,
-		LastCommitted:      RootCursorToProto(state.LastCommitted),
-		IdFence:            state.IDFence,
-		TsoFence:           state.TSOFence,
-		CoordinatorLease:   RootCoordinatorLeaseToProto(state.CoordinatorLease),
-		CoordinatorSeal:    RootCoordinatorSealToProto(state.CoordinatorSeal),
-		CoordinatorClosure: RootCoordinatorClosureToProto(state.CoordinatorClosure),
+		ClusterEpoch:    state.ClusterEpoch,
+		MembershipEpoch: state.MembershipEpoch,
+		LastCommitted:   RootCursorToProto(state.LastCommitted),
+		IdFence:         state.IDFence,
+		TsoFence:        state.TSOFence,
+		Tenure:          RootTenureToProto(state.Tenure),
+		Legacy:          RootLegacyToProto(state.Legacy),
+		Transit:         RootTransitToProto(state.Transit),
 	}
 }
 
@@ -37,357 +37,357 @@ func RootStateFromProto(pbState *metapb.RootState) rootstate.State {
 		return rootstate.State{}
 	}
 	return rootstate.State{
-		ClusterEpoch:       pbState.ClusterEpoch,
-		MembershipEpoch:    pbState.MembershipEpoch,
-		LastCommitted:      RootCursorFromProto(pbState.LastCommitted),
-		IDFence:            pbState.IdFence,
-		TSOFence:           pbState.TsoFence,
-		CoordinatorLease:   RootCoordinatorLeaseFromProto(pbState.GetCoordinatorLease()),
-		CoordinatorSeal:    RootCoordinatorSealFromProto(pbState.GetCoordinatorSeal()),
-		CoordinatorClosure: RootCoordinatorClosureFromProto(pbState.GetCoordinatorClosure()),
+		ClusterEpoch:    pbState.ClusterEpoch,
+		MembershipEpoch: pbState.MembershipEpoch,
+		LastCommitted:   RootCursorFromProto(pbState.LastCommitted),
+		IDFence:         pbState.IdFence,
+		TSOFence:        pbState.TsoFence,
+		Tenure:          RootTenureFromProto(pbState.GetTenure()),
+		Legacy:          RootLegacyFromProto(pbState.GetLegacy()),
+		Transit:         RootTransitFromProto(pbState.GetTransit()),
 	}
 }
 
-func RootCoordinatorLeaseToProto(lease rootstate.CoordinatorLease) *metapb.RootCoordinatorLease {
+func RootTenureToProto(lease rootstate.Tenure) *metapb.RootTenure {
 	if !lease.Present() {
 		return nil
 	}
-	return &metapb.RootCoordinatorLease{
-		HolderId:          lease.HolderID,
-		ExpiresUnixNano:   lease.ExpiresUnixNano,
-		CertGeneration:    lease.CertGeneration,
-		IssuedCursor:      RootCursorToProto(lease.IssuedCursor),
-		DutyMask:          lease.DutyMask,
-		PredecessorDigest: lease.PredecessorDigest,
+	return &metapb.RootTenure{
+		HolderId:        lease.HolderID,
+		ExpiresUnixNano: lease.ExpiresUnixNano,
+		Epoch:           lease.Epoch,
+		IssuedAt:        RootCursorToProto(lease.IssuedAt),
+		Mandate:         lease.Mandate,
+		LineageDigest:   lease.LineageDigest,
 	}
 }
 
-func RootCoordinatorLeaseFromProto(lease *metapb.RootCoordinatorLease) rootstate.CoordinatorLease {
+func RootTenureFromProto(lease *metapb.RootTenure) rootstate.Tenure {
 	if lease == nil {
-		return rootstate.CoordinatorLease{}
+		return rootstate.Tenure{}
 	}
-	return rootstate.CoordinatorLease{
-		HolderID:          lease.GetHolderId(),
-		ExpiresUnixNano:   lease.GetExpiresUnixNano(),
-		CertGeneration:    lease.GetCertGeneration(),
-		IssuedCursor:      RootCursorFromProto(lease.GetIssuedCursor()),
-		DutyMask:          lease.GetDutyMask(),
-		PredecessorDigest: lease.GetPredecessorDigest(),
+	return rootstate.Tenure{
+		HolderID:        lease.GetHolderId(),
+		ExpiresUnixNano: lease.GetExpiresUnixNano(),
+		Epoch:           lease.GetEpoch(),
+		IssuedAt:        RootCursorFromProto(lease.GetIssuedAt()),
+		Mandate:         lease.GetMandate(),
+		LineageDigest:   lease.GetLineageDigest(),
 	}
 }
 
-func RootCoordinatorSealToProto(seal rootstate.CoordinatorSeal) *metapb.RootCoordinatorSeal {
+func RootLegacyToProto(seal rootstate.Legacy) *metapb.RootLegacy {
 	if !seal.Present() {
 		return nil
 	}
-	return &metapb.RootCoordinatorSeal{
-		HolderId:          seal.HolderID,
-		CertGeneration:    seal.CertGeneration,
-		DutyMask:          seal.DutyMask,
-		ConsumedFrontiers: RootDutyFrontiersToProto(seal.Frontiers),
-		SealedAtCursor:    RootCursorToProto(seal.SealedAtCursor),
+	return &metapb.RootLegacy{
+		HolderId:  seal.HolderID,
+		Epoch:     seal.Epoch,
+		Mandate:   seal.Mandate,
+		Frontiers: RootMandateFrontiersToProto(seal.Frontiers),
+		SealedAt:  RootCursorToProto(seal.SealedAt),
 	}
 }
 
-func RootCoordinatorSealFromProto(seal *metapb.RootCoordinatorSeal) rootstate.CoordinatorSeal {
+func RootLegacyFromProto(seal *metapb.RootLegacy) rootstate.Legacy {
 	if seal == nil {
-		return rootstate.CoordinatorSeal{}
+		return rootstate.Legacy{}
 	}
-	return rootstate.CoordinatorSeal{
-		HolderID:       seal.GetHolderId(),
-		CertGeneration: seal.GetCertGeneration(),
-		DutyMask:       seal.GetDutyMask(),
-		Frontiers:      RootDutyFrontiersFromProto(seal.GetConsumedFrontiers()),
-		SealedAtCursor: RootCursorFromProto(seal.GetSealedAtCursor()),
+	return rootstate.Legacy{
+		HolderID:  seal.GetHolderId(),
+		Epoch:     seal.GetEpoch(),
+		Mandate:   seal.GetMandate(),
+		Frontiers: RootMandateFrontiersFromProto(seal.GetFrontiers()),
+		SealedAt:  RootCursorFromProto(seal.GetSealedAt()),
 	}
 }
 
-func RootCoordinatorClosureToProto(closure rootstate.CoordinatorClosure) *metapb.RootCoordinatorClosure {
+func RootTransitToProto(closure rootstate.Transit) *metapb.RootTransit {
 	if !closure.Present() {
 		return nil
 	}
-	return &metapb.RootCoordinatorClosure{
-		HolderId:            closure.HolderID,
-		SealGeneration:      closure.SealGeneration,
-		SuccessorGeneration: closure.SuccessorGeneration,
-		SealDigest:          closure.SealDigest,
-		Stage:               rootCoordinatorClosureStageToProto(closure.Stage),
-		ConfirmedAtCursor:   RootCursorToProto(closure.ConfirmedAtCursor),
-		ClosedAtCursor:      RootCursorToProto(closure.ClosedAtCursor),
-		ReattachedAtCursor:  RootCursorToProto(closure.ReattachedAtCursor),
+	return &metapb.RootTransit{
+		HolderId:       closure.HolderID,
+		LegacyEpoch:    closure.LegacyEpoch,
+		SuccessorEpoch: closure.SuccessorEpoch,
+		LegacyDigest:   closure.LegacyDigest,
+		Stage:          rootTransitStageToProto(closure.Stage),
+		ConfirmedAt:    RootCursorToProto(closure.ConfirmedAt),
+		ClosedAt:       RootCursorToProto(closure.ClosedAt),
+		ReattachedAt:   RootCursorToProto(closure.ReattachedAt),
 	}
 }
 
-func RootCoordinatorClosureFromProto(closure *metapb.RootCoordinatorClosure) rootstate.CoordinatorClosure {
+func RootTransitFromProto(closure *metapb.RootTransit) rootstate.Transit {
 	if closure == nil {
-		return rootstate.CoordinatorClosure{}
+		return rootstate.Transit{}
 	}
-	return rootstate.CoordinatorClosure{
-		HolderID:            closure.GetHolderId(),
-		SealGeneration:      closure.GetSealGeneration(),
-		SuccessorGeneration: closure.GetSuccessorGeneration(),
-		SealDigest:          closure.GetSealDigest(),
-		Stage:               rootCoordinatorClosureStageFromProto(closure.GetStage()),
-		ConfirmedAtCursor:   RootCursorFromProto(closure.GetConfirmedAtCursor()),
-		ClosedAtCursor:      RootCursorFromProto(closure.GetClosedAtCursor()),
-		ReattachedAtCursor:  RootCursorFromProto(closure.GetReattachedAtCursor()),
+	return rootstate.Transit{
+		HolderID:       closure.GetHolderId(),
+		LegacyEpoch:    closure.GetLegacyEpoch(),
+		SuccessorEpoch: closure.GetSuccessorEpoch(),
+		LegacyDigest:   closure.GetLegacyDigest(),
+		Stage:          rootTransitStageFromProto(closure.GetStage()),
+		ConfirmedAt:    RootCursorFromProto(closure.GetConfirmedAt()),
+		ClosedAt:       RootCursorFromProto(closure.GetClosedAt()),
+		ReattachedAt:   RootCursorFromProto(closure.GetReattachedAt()),
 	}
 }
 
-func RootDutyFrontiersToProto(frontiers rootproto.CoordinatorDutyFrontiers) []*metapb.RootDutyFrontier {
+func RootMandateFrontiersToProto(frontiers rootproto.MandateFrontiers) []*metapb.RootMandateFrontier {
 	if frontiers.Len() == 0 {
 		return nil
 	}
 	entries := frontiers.Entries()
-	out := make([]*metapb.RootDutyFrontier, 0, len(entries))
+	out := make([]*metapb.RootMandateFrontier, 0, len(entries))
 	for _, entry := range entries {
-		out = append(out, &metapb.RootDutyFrontier{DutyMask: entry.DutyMask, Frontier: entry.Frontier})
+		out = append(out, &metapb.RootMandateFrontier{Mandate: entry.Mandate, Frontier: entry.Frontier})
 	}
 	return out
 }
 
-func RootDutyFrontiersFromProto(frontiers []*metapb.RootDutyFrontier) rootproto.CoordinatorDutyFrontiers {
-	entries := make([]rootproto.CoordinatorDutyFrontier, 0, len(frontiers))
+func RootMandateFrontiersFromProto(frontiers []*metapb.RootMandateFrontier) rootproto.MandateFrontiers {
+	entries := make([]rootproto.MandateFrontier, 0, len(frontiers))
 	for _, entry := range frontiers {
-		if entry == nil || entry.GetDutyMask() == 0 {
+		if entry == nil || entry.GetMandate() == 0 {
 			continue
 		}
-		entries = append(entries, rootproto.CoordinatorDutyFrontier{
-			DutyMask: entry.GetDutyMask(),
+		entries = append(entries, rootproto.MandateFrontier{
+			Mandate:  entry.GetMandate(),
 			Frontier: entry.GetFrontier(),
 		})
 	}
-	return rootproto.NewCoordinatorDutyFrontiers(entries...)
+	return rootproto.NewMandateFrontiers(entries...)
 }
 
-func RootCoordinatorProtocolStateToProto(state rootstate.CoordinatorProtocolState) *metapb.RootCoordinatorProtocolState {
-	return &metapb.RootCoordinatorProtocolState{
-		Lease:   RootCoordinatorLeaseToProto(state.Lease),
-		Seal:    RootCoordinatorSealToProto(state.Seal),
-		Closure: RootCoordinatorClosureToProto(state.Closure),
+func RootSuccessionStateToProto(state rootstate.SuccessionState) *metapb.RootSuccessionState {
+	return &metapb.RootSuccessionState{
+		Tenure:  RootTenureToProto(state.Tenure),
+		Legacy:  RootLegacyToProto(state.Legacy),
+		Transit: RootTransitToProto(state.Transit),
 	}
 }
 
-func RootCoordinatorProtocolStateFromProto(state *metapb.RootCoordinatorProtocolState) rootstate.CoordinatorProtocolState {
+func RootSuccessionStateFromProto(state *metapb.RootSuccessionState) rootstate.SuccessionState {
 	if state == nil {
-		return rootstate.CoordinatorProtocolState{}
+		return rootstate.SuccessionState{}
 	}
-	return rootstate.CoordinatorProtocolState{
-		Lease:   RootCoordinatorLeaseFromProto(state.GetLease()),
-		Seal:    RootCoordinatorSealFromProto(state.GetSeal()),
-		Closure: RootCoordinatorClosureFromProto(state.GetClosure()),
-	}
-}
-
-func RootCoordinatorLeaseCommandToProto(cmd rootproto.CoordinatorLeaseCommand) *metapb.RootCoordinatorLeaseCommand {
-	return &metapb.RootCoordinatorLeaseCommand{
-		Kind:              rootCoordinatorLeaseCommandKindToProto(cmd.Kind),
-		HolderId:          cmd.HolderID,
-		ExpiresUnixNano:   cmd.ExpiresUnixNano,
-		NowUnixNano:       cmd.NowUnixNano,
-		PredecessorDigest: cmd.PredecessorDigest,
-		HandoffFrontiers:  RootDutyFrontiersToProto(cmd.HandoffFrontiers),
+	return rootstate.SuccessionState{
+		Tenure:  RootTenureFromProto(state.GetTenure()),
+		Legacy:  RootLegacyFromProto(state.GetLegacy()),
+		Transit: RootTransitFromProto(state.GetTransit()),
 	}
 }
 
-func RootCoordinatorLeaseCommandFromProto(cmd *metapb.RootCoordinatorLeaseCommand) rootproto.CoordinatorLeaseCommand {
+func RootTenureCommandToProto(cmd rootproto.TenureCommand) *metapb.RootTenureCommand {
+	return &metapb.RootTenureCommand{
+		Kind:               rootTenureActToProto(cmd.Kind),
+		HolderId:           cmd.HolderID,
+		ExpiresUnixNano:    cmd.ExpiresUnixNano,
+		NowUnixNano:        cmd.NowUnixNano,
+		LineageDigest:      cmd.LineageDigest,
+		InheritedFrontiers: RootMandateFrontiersToProto(cmd.InheritedFrontiers),
+	}
+}
+
+func RootTenureCommandFromProto(cmd *metapb.RootTenureCommand) rootproto.TenureCommand {
 	if cmd == nil {
-		return rootproto.CoordinatorLeaseCommand{}
+		return rootproto.TenureCommand{}
 	}
-	return rootproto.CoordinatorLeaseCommand{
-		Kind:              rootCoordinatorLeaseCommandKindFromProto(cmd.GetKind()),
-		HolderID:          cmd.GetHolderId(),
-		ExpiresUnixNano:   cmd.GetExpiresUnixNano(),
-		NowUnixNano:       cmd.GetNowUnixNano(),
-		PredecessorDigest: cmd.GetPredecessorDigest(),
-		HandoffFrontiers:  RootDutyFrontiersFromProto(cmd.GetHandoffFrontiers()),
+	return rootproto.TenureCommand{
+		Kind:               rootTenureActFromProto(cmd.GetKind()),
+		HolderID:           cmd.GetHolderId(),
+		ExpiresUnixNano:    cmd.GetExpiresUnixNano(),
+		NowUnixNano:        cmd.GetNowUnixNano(),
+		LineageDigest:      cmd.GetLineageDigest(),
+		InheritedFrontiers: RootMandateFrontiersFromProto(cmd.GetInheritedFrontiers()),
 	}
 }
 
-func RootCoordinatorClosureCommandToProto(cmd rootproto.CoordinatorClosureCommand) *metapb.RootCoordinatorClosureCommand {
-	return &metapb.RootCoordinatorClosureCommand{
-		Kind:        rootCoordinatorClosureCommandKindToProto(cmd.Kind),
+func RootTransitCommandToProto(cmd rootproto.TransitCommand) *metapb.RootTransitCommand {
+	return &metapb.RootTransitCommand{
+		Kind:        rootTransitActToProto(cmd.Kind),
 		HolderId:    cmd.HolderID,
 		NowUnixNano: cmd.NowUnixNano,
-		Frontiers:   RootDutyFrontiersToProto(cmd.Frontiers),
+		Frontiers:   RootMandateFrontiersToProto(cmd.Frontiers),
 	}
 }
 
-func RootCoordinatorClosureCommandFromProto(cmd *metapb.RootCoordinatorClosureCommand) rootproto.CoordinatorClosureCommand {
+func RootTransitCommandFromProto(cmd *metapb.RootTransitCommand) rootproto.TransitCommand {
 	if cmd == nil {
-		return rootproto.CoordinatorClosureCommand{}
+		return rootproto.TransitCommand{}
 	}
-	return rootproto.CoordinatorClosureCommand{
-		Kind:        rootCoordinatorClosureCommandKindFromProto(cmd.GetKind()),
+	return rootproto.TransitCommand{
+		Kind:        rootTransitActFromProto(cmd.GetKind()),
 		HolderID:    cmd.GetHolderId(),
 		NowUnixNano: cmd.GetNowUnixNano(),
-		Frontiers:   RootDutyFrontiersFromProto(cmd.GetFrontiers()),
+		Frontiers:   RootMandateFrontiersFromProto(cmd.GetFrontiers()),
 	}
 }
 
-func rootEventCoordinatorLeaseToProto(lease *rootevent.CoordinatorLease) *metapb.RootCoordinatorLease {
+func rootEventTenureToProto(lease *rootevent.Tenure) *metapb.RootTenure {
 	if lease == nil {
 		return nil
 	}
-	return &metapb.RootCoordinatorLease{
-		HolderId:          lease.HolderID,
-		ExpiresUnixNano:   lease.ExpiresUnixNano,
-		CertGeneration:    lease.CertGeneration,
-		IssuedCursor:      RootCursorToProto(lease.IssuedCursor),
-		DutyMask:          lease.DutyMask,
-		PredecessorDigest: lease.PredecessorDigest,
-		HandoffFrontiers:  RootDutyFrontiersToProto(lease.Frontiers),
+	return &metapb.RootTenure{
+		HolderId:           lease.HolderID,
+		ExpiresUnixNano:    lease.ExpiresUnixNano,
+		Epoch:              lease.Epoch,
+		IssuedAt:           RootCursorToProto(lease.IssuedAt),
+		Mandate:            lease.Mandate,
+		LineageDigest:      lease.LineageDigest,
+		InheritedFrontiers: RootMandateFrontiersToProto(lease.Frontiers),
 	}
 }
 
-func rootEventCoordinatorLeaseFromProto(lease *metapb.RootCoordinatorLease) *rootevent.CoordinatorLease {
+func rootEventTenureFromProto(lease *metapb.RootTenure) *rootevent.Tenure {
 	if lease == nil {
 		return nil
 	}
-	return &rootevent.CoordinatorLease{
-		HolderID:          lease.GetHolderId(),
-		ExpiresUnixNano:   lease.GetExpiresUnixNano(),
-		CertGeneration:    lease.GetCertGeneration(),
-		IssuedCursor:      RootCursorFromProto(lease.GetIssuedCursor()),
-		DutyMask:          lease.GetDutyMask(),
-		PredecessorDigest: lease.GetPredecessorDigest(),
-		Frontiers:         RootDutyFrontiersFromProto(lease.GetHandoffFrontiers()),
+	return &rootevent.Tenure{
+		HolderID:        lease.GetHolderId(),
+		ExpiresUnixNano: lease.GetExpiresUnixNano(),
+		Epoch:           lease.GetEpoch(),
+		IssuedAt:        RootCursorFromProto(lease.GetIssuedAt()),
+		Mandate:         lease.GetMandate(),
+		LineageDigest:   lease.GetLineageDigest(),
+		Frontiers:       RootMandateFrontiersFromProto(lease.GetInheritedFrontiers()),
 	}
 }
 
-func rootEventCoordinatorSealToProto(seal *rootevent.CoordinatorSeal) *metapb.RootCoordinatorSeal {
+func rootEventLegacyToProto(seal *rootevent.Legacy) *metapb.RootLegacy {
 	if seal == nil {
 		return nil
 	}
-	return &metapb.RootCoordinatorSeal{
-		HolderId:          seal.HolderID,
-		CertGeneration:    seal.CertGeneration,
-		DutyMask:          seal.DutyMask,
-		ConsumedFrontiers: RootDutyFrontiersToProto(seal.Frontiers),
-		SealedAtCursor:    RootCursorToProto(seal.SealedAtCursor),
+	return &metapb.RootLegacy{
+		HolderId:  seal.HolderID,
+		Epoch:     seal.Epoch,
+		Mandate:   seal.Mandate,
+		Frontiers: RootMandateFrontiersToProto(seal.Frontiers),
+		SealedAt:  RootCursorToProto(seal.SealedAt),
 	}
 }
 
-func rootEventCoordinatorSealFromProto(seal *metapb.RootCoordinatorSeal) *rootevent.CoordinatorSeal {
+func rootEventLegacyFromProto(seal *metapb.RootLegacy) *rootevent.Legacy {
 	if seal == nil {
 		return nil
 	}
-	return &rootevent.CoordinatorSeal{
-		HolderID:       seal.GetHolderId(),
-		CertGeneration: seal.GetCertGeneration(),
-		DutyMask:       seal.GetDutyMask(),
-		Frontiers:      RootDutyFrontiersFromProto(seal.GetConsumedFrontiers()),
-		SealedAtCursor: RootCursorFromProto(seal.GetSealedAtCursor()),
+	return &rootevent.Legacy{
+		HolderID:  seal.GetHolderId(),
+		Epoch:     seal.GetEpoch(),
+		Mandate:   seal.GetMandate(),
+		Frontiers: RootMandateFrontiersFromProto(seal.GetFrontiers()),
+		SealedAt:  RootCursorFromProto(seal.GetSealedAt()),
 	}
 }
 
-func rootEventCoordinatorClosureToProto(closure *rootevent.CoordinatorClosure) *metapb.RootCoordinatorClosure {
+func rootEventTransitToProto(closure *rootevent.Transit) *metapb.RootTransit {
 	if closure == nil {
 		return nil
 	}
-	return &metapb.RootCoordinatorClosure{
-		HolderId:            closure.HolderID,
-		SealGeneration:      closure.SealGeneration,
-		SuccessorGeneration: closure.SuccessorGeneration,
-		SealDigest:          closure.SealDigest,
-		Stage:               rootCoordinatorClosureStageToProto(closure.Stage),
-		ConfirmedAtCursor:   RootCursorToProto(closure.ConfirmedAtCursor),
-		ClosedAtCursor:      RootCursorToProto(closure.ClosedAtCursor),
-		ReattachedAtCursor:  RootCursorToProto(closure.ReattachedAtCursor),
+	return &metapb.RootTransit{
+		HolderId:       closure.HolderID,
+		LegacyEpoch:    closure.LegacyEpoch,
+		SuccessorEpoch: closure.SuccessorEpoch,
+		LegacyDigest:   closure.LegacyDigest,
+		Stage:          rootTransitStageToProto(closure.Stage),
+		ConfirmedAt:    RootCursorToProto(closure.ConfirmedAt),
+		ClosedAt:       RootCursorToProto(closure.ClosedAt),
+		ReattachedAt:   RootCursorToProto(closure.ReattachedAt),
 	}
 }
 
-func rootEventCoordinatorClosureFromProto(closure *metapb.RootCoordinatorClosure) *rootevent.CoordinatorClosure {
+func rootEventTransitFromProto(closure *metapb.RootTransit) *rootevent.Transit {
 	if closure == nil {
 		return nil
 	}
-	return &rootevent.CoordinatorClosure{
-		HolderID:            closure.GetHolderId(),
-		SealGeneration:      closure.GetSealGeneration(),
-		SuccessorGeneration: closure.GetSuccessorGeneration(),
-		SealDigest:          closure.GetSealDigest(),
-		Stage:               rootCoordinatorClosureStageFromProto(closure.GetStage()),
-		ConfirmedAtCursor:   RootCursorFromProto(closure.GetConfirmedAtCursor()),
-		ClosedAtCursor:      RootCursorFromProto(closure.GetClosedAtCursor()),
-		ReattachedAtCursor:  RootCursorFromProto(closure.GetReattachedAtCursor()),
+	return &rootevent.Transit{
+		HolderID:       closure.GetHolderId(),
+		LegacyEpoch:    closure.GetLegacyEpoch(),
+		SuccessorEpoch: closure.GetSuccessorEpoch(),
+		LegacyDigest:   closure.GetLegacyDigest(),
+		Stage:          rootTransitStageFromProto(closure.GetStage()),
+		ConfirmedAt:    RootCursorFromProto(closure.GetConfirmedAt()),
+		ClosedAt:       RootCursorFromProto(closure.GetClosedAt()),
+		ReattachedAt:   RootCursorFromProto(closure.GetReattachedAt()),
 	}
 }
 
-func rootCoordinatorClosureStageToProto(stage rootproto.CoordinatorClosureStage) metapb.RootCoordinatorClosureStage {
+func rootTransitStageToProto(stage rootproto.TransitStage) metapb.RootTransitStage {
 	switch stage {
-	case rootproto.CoordinatorClosureStageConfirmed:
-		return metapb.RootCoordinatorClosureStage_ROOT_COORDINATOR_CLOSURE_STAGE_CONFIRMED
-	case rootproto.CoordinatorClosureStageClosed:
-		return metapb.RootCoordinatorClosureStage_ROOT_COORDINATOR_CLOSURE_STAGE_CLOSED
-	case rootproto.CoordinatorClosureStageReattached:
-		return metapb.RootCoordinatorClosureStage_ROOT_COORDINATOR_CLOSURE_STAGE_REATTACHED
+	case rootproto.TransitStageConfirmed:
+		return metapb.RootTransitStage_ROOT_TRANSIT_STAGE_CONFIRMED
+	case rootproto.TransitStageClosed:
+		return metapb.RootTransitStage_ROOT_TRANSIT_STAGE_CLOSED
+	case rootproto.TransitStageReattached:
+		return metapb.RootTransitStage_ROOT_TRANSIT_STAGE_REATTACHED
 	default:
-		return metapb.RootCoordinatorClosureStage_ROOT_COORDINATOR_CLOSURE_STAGE_PENDING_CONFIRM
+		return metapb.RootTransitStage_ROOT_TRANSIT_STAGE_PENDING_CONFIRM
 	}
 }
 
-func rootCoordinatorLeaseCommandKindToProto(kind rootproto.CoordinatorLeaseCommandKind) metapb.RootCoordinatorLeaseCommandKind {
+func rootTenureActToProto(kind rootproto.TenureAct) metapb.RootTenureAct {
 	switch kind {
-	case rootproto.CoordinatorLeaseCommandIssue:
-		return metapb.RootCoordinatorLeaseCommandKind_ROOT_COORDINATOR_LEASE_COMMAND_KIND_ISSUE
-	case rootproto.CoordinatorLeaseCommandRelease:
-		return metapb.RootCoordinatorLeaseCommandKind_ROOT_COORDINATOR_LEASE_COMMAND_KIND_RELEASE
+	case rootproto.TenureActIssue:
+		return metapb.RootTenureAct_ROOT_TENURE_ACT_ISSUE
+	case rootproto.TenureActRelease:
+		return metapb.RootTenureAct_ROOT_TENURE_ACT_RELEASE
 	default:
-		return metapb.RootCoordinatorLeaseCommandKind_ROOT_COORDINATOR_LEASE_COMMAND_KIND_UNSPECIFIED
+		return metapb.RootTenureAct_ROOT_TENURE_ACT_UNSPECIFIED
 	}
 }
 
-func rootCoordinatorLeaseCommandKindFromProto(kind metapb.RootCoordinatorLeaseCommandKind) rootproto.CoordinatorLeaseCommandKind {
+func rootTenureActFromProto(kind metapb.RootTenureAct) rootproto.TenureAct {
 	switch kind {
-	case metapb.RootCoordinatorLeaseCommandKind_ROOT_COORDINATOR_LEASE_COMMAND_KIND_ISSUE:
-		return rootproto.CoordinatorLeaseCommandIssue
-	case metapb.RootCoordinatorLeaseCommandKind_ROOT_COORDINATOR_LEASE_COMMAND_KIND_RELEASE:
-		return rootproto.CoordinatorLeaseCommandRelease
+	case metapb.RootTenureAct_ROOT_TENURE_ACT_ISSUE:
+		return rootproto.TenureActIssue
+	case metapb.RootTenureAct_ROOT_TENURE_ACT_RELEASE:
+		return rootproto.TenureActRelease
 	default:
-		return rootproto.CoordinatorLeaseCommandUnknown
+		return rootproto.TenureActUnknown
 	}
 }
 
-func rootCoordinatorClosureCommandKindToProto(kind rootproto.CoordinatorClosureCommandKind) metapb.RootCoordinatorClosureCommandKind {
+func rootTransitActToProto(kind rootproto.TransitAct) metapb.RootTransitAct {
 	switch kind {
-	case rootproto.CoordinatorClosureCommandSeal:
-		return metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_SEAL
-	case rootproto.CoordinatorClosureCommandConfirm:
-		return metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_CONFIRM
-	case rootproto.CoordinatorClosureCommandClose:
-		return metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_CLOSE
-	case rootproto.CoordinatorClosureCommandReattach:
-		return metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_REATTACH
+	case rootproto.TransitActSeal:
+		return metapb.RootTransitAct_ROOT_TRANSIT_ACT_SEAL
+	case rootproto.TransitActConfirm:
+		return metapb.RootTransitAct_ROOT_TRANSIT_ACT_CONFIRM
+	case rootproto.TransitActClose:
+		return metapb.RootTransitAct_ROOT_TRANSIT_ACT_CLOSE
+	case rootproto.TransitActReattach:
+		return metapb.RootTransitAct_ROOT_TRANSIT_ACT_REATTACH
 	default:
-		return metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_UNSPECIFIED
+		return metapb.RootTransitAct_ROOT_TRANSIT_ACT_UNSPECIFIED
 	}
 }
 
-func rootCoordinatorClosureCommandKindFromProto(kind metapb.RootCoordinatorClosureCommandKind) rootproto.CoordinatorClosureCommandKind {
+func rootTransitActFromProto(kind metapb.RootTransitAct) rootproto.TransitAct {
 	switch kind {
-	case metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_SEAL:
-		return rootproto.CoordinatorClosureCommandSeal
-	case metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_CONFIRM:
-		return rootproto.CoordinatorClosureCommandConfirm
-	case metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_CLOSE:
-		return rootproto.CoordinatorClosureCommandClose
-	case metapb.RootCoordinatorClosureCommandKind_ROOT_COORDINATOR_CLOSURE_COMMAND_KIND_REATTACH:
-		return rootproto.CoordinatorClosureCommandReattach
+	case metapb.RootTransitAct_ROOT_TRANSIT_ACT_SEAL:
+		return rootproto.TransitActSeal
+	case metapb.RootTransitAct_ROOT_TRANSIT_ACT_CONFIRM:
+		return rootproto.TransitActConfirm
+	case metapb.RootTransitAct_ROOT_TRANSIT_ACT_CLOSE:
+		return rootproto.TransitActClose
+	case metapb.RootTransitAct_ROOT_TRANSIT_ACT_REATTACH:
+		return rootproto.TransitActReattach
 	default:
-		return rootproto.CoordinatorClosureCommandUnknown
+		return rootproto.TransitActUnknown
 	}
 }
 
-func rootCoordinatorClosureStageFromProto(stage metapb.RootCoordinatorClosureStage) rootproto.CoordinatorClosureStage {
+func rootTransitStageFromProto(stage metapb.RootTransitStage) rootproto.TransitStage {
 	switch stage {
-	case metapb.RootCoordinatorClosureStage_ROOT_COORDINATOR_CLOSURE_STAGE_CONFIRMED:
-		return rootproto.CoordinatorClosureStageConfirmed
-	case metapb.RootCoordinatorClosureStage_ROOT_COORDINATOR_CLOSURE_STAGE_CLOSED:
-		return rootproto.CoordinatorClosureStageClosed
-	case metapb.RootCoordinatorClosureStage_ROOT_COORDINATOR_CLOSURE_STAGE_REATTACHED:
-		return rootproto.CoordinatorClosureStageReattached
+	case metapb.RootTransitStage_ROOT_TRANSIT_STAGE_CONFIRMED:
+		return rootproto.TransitStageConfirmed
+	case metapb.RootTransitStage_ROOT_TRANSIT_STAGE_CLOSED:
+		return rootproto.TransitStageClosed
+	case metapb.RootTransitStage_ROOT_TRANSIT_STAGE_REATTACHED:
+		return rootproto.TransitStageReattached
 	default:
-		return rootproto.CoordinatorClosureStagePendingConfirm
+		return rootproto.TransitStagePendingConfirm
 	}
 }
 
@@ -556,12 +556,12 @@ func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 		pbEvent.Payload = &metapb.RootEvent_StoreMembership{StoreMembership: &metapb.RootStoreMembership{StoreId: event.StoreMembership.StoreID, Address: event.StoreMembership.Address}}
 	case event.AllocatorFence != nil:
 		pbEvent.Payload = &metapb.RootEvent_AllocatorFence{AllocatorFence: &metapb.RootAllocatorFence{Minimum: event.AllocatorFence.Minimum}}
-	case event.CoordinatorLease != nil:
-		pbEvent.Payload = &metapb.RootEvent_CoordinatorLease{CoordinatorLease: rootEventCoordinatorLeaseToProto(event.CoordinatorLease)}
-	case event.CoordinatorSeal != nil:
-		pbEvent.Payload = &metapb.RootEvent_CoordinatorSeal{CoordinatorSeal: rootEventCoordinatorSealToProto(event.CoordinatorSeal)}
-	case event.CoordinatorClosure != nil:
-		pbEvent.Payload = &metapb.RootEvent_CoordinatorClosure{CoordinatorClosure: rootEventCoordinatorClosureToProto(event.CoordinatorClosure)}
+	case event.Tenure != nil:
+		pbEvent.Payload = &metapb.RootEvent_Tenure{Tenure: rootEventTenureToProto(event.Tenure)}
+	case event.Legacy != nil:
+		pbEvent.Payload = &metapb.RootEvent_Legacy{Legacy: rootEventLegacyToProto(event.Legacy)}
+	case event.Transit != nil:
+		pbEvent.Payload = &metapb.RootEvent_Transit{Transit: rootEventTransitToProto(event.Transit)}
 	case event.RegionDescriptor != nil:
 		pbEvent.Payload = &metapb.RootEvent_RegionDescriptor{RegionDescriptor: &metapb.RootRegionDescriptor{Descriptor_: DescriptorToProto(event.RegionDescriptor.Descriptor)}}
 	case event.RegionRemoval != nil:
@@ -605,14 +605,14 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 	if body := pbEvent.GetAllocatorFence(); body != nil {
 		event.AllocatorFence = &rootevent.AllocatorFence{Minimum: body.Minimum}
 	}
-	if body := pbEvent.GetCoordinatorLease(); body != nil {
-		event.CoordinatorLease = rootEventCoordinatorLeaseFromProto(body)
+	if body := pbEvent.GetTenure(); body != nil {
+		event.Tenure = rootEventTenureFromProto(body)
 	}
-	if body := pbEvent.GetCoordinatorSeal(); body != nil {
-		event.CoordinatorSeal = rootEventCoordinatorSealFromProto(body)
+	if body := pbEvent.GetLegacy(); body != nil {
+		event.Legacy = rootEventLegacyFromProto(body)
 	}
-	if body := pbEvent.GetCoordinatorClosure(); body != nil {
-		event.CoordinatorClosure = rootEventCoordinatorClosureFromProto(body)
+	if body := pbEvent.GetTransit(); body != nil {
+		event.Transit = rootEventTransitFromProto(body)
 	}
 	if body := pbEvent.GetRegionDescriptor(); body != nil {
 		event.RegionDescriptor = &rootevent.RegionDescriptorRecord{Descriptor: DescriptorFromProto(body.GetDescriptor_())}
@@ -690,12 +690,12 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_ADDITION_CANCELLED
 	case rootevent.KindPeerRemovalCancelled:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVAL_CANCELLED
-	case rootevent.KindCoordinatorLease:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_COORDINATOR_LEASE
-	case rootevent.KindCoordinatorSeal:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_COORDINATOR_SEAL
-	case rootevent.KindCoordinatorClosure:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_COORDINATOR_CLOSURE
+	case rootevent.KindTenure:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_TENURE
+	case rootevent.KindLegacy:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_LEGACY
+	case rootevent.KindTransit:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_TRANSIT
 	default:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_UNSPECIFIED
 	}
@@ -741,12 +741,12 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindPeerAdditionCancelled
 	case metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVAL_CANCELLED:
 		return rootevent.KindPeerRemovalCancelled
-	case metapb.RootEventKind_ROOT_EVENT_KIND_COORDINATOR_LEASE:
-		return rootevent.KindCoordinatorLease
-	case metapb.RootEventKind_ROOT_EVENT_KIND_COORDINATOR_SEAL:
-		return rootevent.KindCoordinatorSeal
-	case metapb.RootEventKind_ROOT_EVENT_KIND_COORDINATOR_CLOSURE:
-		return rootevent.KindCoordinatorClosure
+	case metapb.RootEventKind_ROOT_EVENT_KIND_TENURE:
+		return rootevent.KindTenure
+	case metapb.RootEventKind_ROOT_EVENT_KIND_LEGACY:
+		return rootevent.KindLegacy
+	case metapb.RootEventKind_ROOT_EVENT_KIND_TRANSIT:
+		return rootevent.KindTransit
 	default:
 		return rootevent.KindUnknown
 	}

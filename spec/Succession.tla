@@ -1,4 +1,4 @@
------------------------------- MODULE CCC ------------------------------
+------------------------------ MODULE Succession ------------------------------
 EXTENDS Naturals, FiniteSets
 
 \* Repeated-handoff positive model for the control-plane paper.
@@ -174,7 +174,7 @@ TypeOK ==
 
 LiveGenerations == issued \ sealed
 
-\* Stronger ALI-1 shape invariant: every issued generation that is not the
+\* Stronger Primacy shape invariant: every issued generation that is not the
 \* current active generation has already been sealed. This is induction-friendly
 \* and does not depend on the concrete generation bound; the bound only limits
 \* how many times TLC can exercise the repeated cycle in one run.
@@ -185,56 +185,56 @@ OnlyCurrentMayRemainUnsealed ==
 ActiveGenerationIssued ==
     issued = {} \/ activeGen \in issued
 
-AuthorityUniquenessInductive ==
+PrimacyInductive ==
     /\ ActiveGenerationIssued
     /\ OnlyCurrentMayRemainUnsealed
 
-\* ALI-1: at most one generation is live for serving.
-AuthorityUniqueness ==
+\* Primacy: at most one generation is live for serving.
+Primacy ==
     Cardinality(LiveGenerations) <= 1
 
-\* ALI-2: any sealed predecessor that is marked covered must be covered by a
+\* Inheritance: any sealed predecessor that is marked covered must be covered by a
 \* strictly newer generation whose frontier is no smaller.
-SuccessorCoverage ==
+Inheritance ==
     \A g \in covered:
         \E h \in issued:
             /\ h > g
             /\ h = activeGen \/ h \in LiveGenerations
             /\ frontier[h] >= frontier[g]
 
-\* ALI-3: once a generation is sealed, a valid reply may not still cite it.
-PostSealInadmissibility ==
+\* Silence: once a generation is sealed, a valid reply may not still cite it.
+Silence ==
     delivered.valid => delivered.gen \notin sealed
 
-\* ALI-4 / CCC closure side: every sealed predecessor must be pending cover,
+\* Closure side: every sealed predecessor must be pending cover,
 \* already covered, or already closed before reattach is legal.
-ClosureCompleteness ==
+Closure ==
     \A g \in sealed:
         /\ g = pendingSeal \/ g \in covered \/ g \in closed
 
-G1_ClosureCompleteContinuation ==
-    /\ SuccessorCoverage
-    /\ ClosureCompleteness
+G1_Succession ==
+    /\ Inheritance
+    /\ Closure
 
-G2_AuthorityUniqueness ==
-    AuthorityUniqueness
+G2_Primacy ==
+    Primacy
 
-G2_AuthorityUniquenessInductive ==
-    AuthorityUniquenessInductive
+G2_PrimacyInductive ==
+    PrimacyInductive
 
-G3_PostSealInadmissibility ==
-    PostSealInadmissibility
+G3_Silence ==
+    Silence
 
-ALI ==
-    /\ G1_ClosureCompleteContinuation
-    /\ G2_AuthorityUniqueness
-    /\ G3_PostSealInadmissibility
+SuccessionGuarantees ==
+    /\ G1_Succession
+    /\ G2_Primacy
+    /\ G3_Silence
 
-\* Stronger lemma used to support an induction-style argument for ALI-1:
+\* Stronger lemma used to support an induction-style argument for Primacy:
 \* if only the current active generation may remain unsealed, then there can be
 \* at most one live generation.
-THEOREM AuthorityUniquenessInductiveImpliesAuthorityUniqueness ==
-    AuthorityUniquenessInductive => AuthorityUniqueness
+THEOREM PrimacyInductiveImpliesPrimacy ==
+    PrimacyInductive => Primacy
 
 Spec ==
     Init /\ [][Next]_Vars
