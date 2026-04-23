@@ -15,13 +15,13 @@ directly.
 1. Dial the 3 meta-root peers through `meta/root/client` (the same client
    coordinators use) wrapped by `coordinator/rootview.OpenRootRemoteStore`.
 2. Load one rooted `Snapshot` — current descriptors, allocator fences,
-   `Tenure`, `Legacy`, `Transit`.
+   `Tenure`, `Legacy`, `Handover`.
 3. Project the snapshot through `coordinator/audit.BuildReport(snapshot,
    holderID, nowUnixNano)` to produce a `Report` containing `SnapshotAnomalies`
-   and a `ClosureDefect` enum.
+   and a `FinalityDefect` enum.
 4. Optionally load a reply-trace JSON (from stdin or a file) and call
    `coordinator/audit.EvaluateReplyTrace(report, records)` to flag any
-   accepted replies that are illegal under the current closure witness.
+   accepted replies that are illegal under the current handover witness.
 5. Render the combined result as human-readable text or JSON.
 
 The audit is read-only: it never writes to meta-root, never advances fences,
@@ -36,20 +36,20 @@ implementation:
 - `Lease` — the active authority record
 - `Seal` — the retired predecessor generation and the frontier it already
   consumed
-- `Closure` — the successor handoff-completion record
+- `Handover` — the successor handoff-completion record
 - `Generation` — the authority generation counter (implementation fields still
   use `epoch` for compatibility)
-- `Witness` — the proof bundle derived from `{Lease, Seal, Closure}`
+- `Witness` — the proof bundle derived from `{Lease, Seal, Handover}`
 
 The four safety guarantees the audit talks about are:
 
 - `Primacy` — at most one generation is active
 - `Inheritance` — the successor covers predecessor commitments
 - `Silence` — a sealed generation does not continue serving
-- `Closure` — a handoff finishes instead of hanging forever
+- `Finality` — a handoff finishes instead of hanging forever
 
 Implementation types such as `Tenure`, `Legacy`,
-`Transit`, `LineageDigest`, and `MandateFrontiers`
+`Handover`, `LineageDigest`, and `MandateFrontiers`
 remain unchanged in code. The audit doc keeps the public vocabulary shorter on
 purpose.
 
@@ -90,8 +90,8 @@ root_desc_revision : 42
 catch_up_state     : fresh
 current_holder     : coord-1
 current_generation : 7
-closure            : stage=confirmed
-closure_witness    : stage=confirmed seal_gen=6 successor_present=true inheritance=covered lineage_satisfied=true sealed_gen_retired=true
+handover           : stage=confirmed
+handover_witness   : stage=confirmed seal_gen=6 successor_present=true inheritance=covered lineage_satisfied=true sealed_gen_retired=true
 
 snapshot anomalies:
   successor_lineage_mismatch     : false
@@ -99,11 +99,11 @@ snapshot anomalies:
   uncovered_descriptor_revision  : false
   lease_start_coverage_violation : false
   sealed_generation_still_live   : false
-  closure_defect                 : none
+  finality_defect                 : none
 ```
 
 When `--reply-trace` is provided, each accepted reply that violates the
-closure witness prints as a trailing line:
+handover witness prints as a trailing line:
 
 ```text
 reply-trace anomalies (1):
@@ -121,7 +121,7 @@ enum:
 - `reattach_without_confirm` / `reattach_without_close` /
   `reattach_lineage_mismatch` / `reattach_incomplete`
 
-Any non-empty `closure_defect` or any `true` flag under `snapshot anomalies`
+Any non-empty `finality_defect` or any `true` flag under `snapshot anomalies`
 indicates that the rooted handoff state has drifted from the expected
 `active lease → sealed predecessor → inherited successor → closed handoff`
 lifecycle — which is exactly the property `spec/Succession.tla` proves meta-root must
@@ -137,7 +137,7 @@ surface.
 That block exports four counter families:
 
 - `lease_generation_transitions_total`
-- `closure_stage_transitions_total`
+- `handover_stage_transitions_total`
 - `pre_action_gate_rejections_total`
 - `guarantee_violations_total`
 
@@ -146,7 +146,7 @@ That block exports four counter families:
 - `primacy`
 - `inheritance`
 - `silence`
-- `closure`
+- `finality`
 
 The intended split is:
 

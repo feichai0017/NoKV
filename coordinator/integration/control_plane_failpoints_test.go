@@ -47,7 +47,7 @@ func TestControlPlaneFailpointBeforeTenureStorageReadRejectsSeal(t *testing.T) {
 	require.Contains(t, status.Convert(err).Message(), rootfailpoints.ErrBeforeTenureStorageRead.Error())
 }
 
-func TestControlPlaneFailpointBeforeApplyTransitRejectsSeal(t *testing.T) {
+func TestControlPlaneFailpointBeforeApplyHandoverRejectsSeal(t *testing.T) {
 	cluster := pdtestcluster.OpenReplicated(t)
 	cluster.ConfigureTenures(10*time.Second, 3*time.Second)
 	_, leader := cluster.LeaderService()
@@ -55,14 +55,14 @@ func TestControlPlaneFailpointBeforeApplyTransitRejectsSeal(t *testing.T) {
 	_, err := leader.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
 
-	rootfailpoints.Set(rootfailpoints.BeforeApplyTransit)
+	rootfailpoints.Set(rootfailpoints.BeforeApplyHandover)
 	t.Cleanup(func() { rootfailpoints.Set(rootfailpoints.None) })
 
 	err = leader.SealTenure()
-	require.ErrorIs(t, err, rootfailpoints.ErrBeforeApplyTransit)
+	require.ErrorIs(t, err, rootfailpoints.ErrBeforeApplyHandover)
 }
 
-func TestControlPlaneFailpointAfterApplyTransitBeforeReloadPreservesSealAcrossRestart(t *testing.T) {
+func TestControlPlaneFailpointAfterApplyHandoverBeforeReloadPreservesSealAcrossRestart(t *testing.T) {
 	cluster := pdtestcluster.OpenReplicated(t)
 	cluster.ConfigureTenures(10*time.Second, 3*time.Second)
 	leaderID, leader := cluster.LeaderService()
@@ -70,11 +70,11 @@ func TestControlPlaneFailpointAfterApplyTransitBeforeReloadPreservesSealAcrossRe
 	_, err := leader.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 4})
 	require.NoError(t, err)
 
-	coordfailpoints.Set(coordfailpoints.AfterApplyTransitBeforeReload)
+	coordfailpoints.Set(coordfailpoints.AfterApplyHandoverBeforeReload)
 	t.Cleanup(func() { coordfailpoints.Set(coordfailpoints.None) })
 
 	err = leader.SealTenure()
-	require.ErrorIs(t, err, coordfailpoints.ErrAfterApplyTransitBeforeReload)
+	require.ErrorIs(t, err, coordfailpoints.ErrAfterApplyHandoverBeforeReload)
 
 	rootState, err := cluster.Roots[leaderID].Current()
 	require.NoError(t, err)
@@ -89,16 +89,16 @@ func TestControlPlaneFailpointAfterApplyTransitBeforeReloadPreservesSealAcrossRe
 	allocResp, err := restarted.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
 	require.Greater(t, allocResp.GetEpoch(), rootState.Legacy.Epoch)
-	require.NoError(t, restarted.ConfirmTransit())
-	require.NoError(t, restarted.CloseTransit())
-	require.NoError(t, restarted.ReattachTransit())
+	require.NoError(t, restarted.ConfirmHandover())
+	require.NoError(t, restarted.CloseHandover())
+	require.NoError(t, restarted.ReattachHandover())
 
 	audit := restarted.DiagnosticsSnapshot()["audit"].(map[string]any)
-	require.Equal(t, "reattached", audit["closure_stage"])
-	require.Equal(t, true, audit["closure_satisfied"])
+	require.Equal(t, "reattached", audit["handover_stage"])
+	require.Equal(t, true, audit["finality_satisfied"])
 }
 
-func TestControlPlaneFailpointAfterApplyTransitBeforeReloadPreservesConfirmedClosureAcrossRestart(t *testing.T) {
+func TestControlPlaneFailpointAfterApplyHandoverBeforeReloadPreservesConfirmedClosureAcrossRestart(t *testing.T) {
 	cluster := pdtestcluster.OpenReplicated(t)
 	cluster.ConfigureTenures(10*time.Second, 3*time.Second)
 	leaderID, leader := cluster.LeaderService()
@@ -112,27 +112,27 @@ func TestControlPlaneFailpointAfterApplyTransitBeforeReloadPreservesConfirmedClo
 	_, err = leader.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
 
-	coordfailpoints.Set(coordfailpoints.AfterApplyTransitBeforeReload)
+	coordfailpoints.Set(coordfailpoints.AfterApplyHandoverBeforeReload)
 	t.Cleanup(func() { coordfailpoints.Set(coordfailpoints.None) })
 
-	err = leader.ConfirmTransit()
-	require.ErrorIs(t, err, coordfailpoints.ErrAfterApplyTransitBeforeReload)
+	err = leader.ConfirmHandover()
+	require.ErrorIs(t, err, coordfailpoints.ErrAfterApplyHandoverBeforeReload)
 
 	rootState, err := cluster.Roots[leaderID].Current()
 	require.NoError(t, err)
-	require.Equal(t, rootproto.TransitStageConfirmed, rootState.Transit.Stage)
-	require.Equal(t, rootState.Legacy.Epoch, rootState.Transit.LegacyEpoch)
-	require.Equal(t, rootState.Tenure.Epoch, rootState.Transit.SuccessorEpoch)
+	require.Equal(t, rootproto.HandoverStageConfirmed, rootState.Handover.Stage)
+	require.Equal(t, rootState.Legacy.Epoch, rootState.Handover.LegacyEpoch)
+	require.Equal(t, rootState.Tenure.Epoch, rootState.Handover.SuccessorEpoch)
 
 	coordfailpoints.Set(coordfailpoints.None)
 	restarted := cluster.RestartService(leaderID)
 	restarted.ConfigureTenure("c-successor", 10*time.Second, 3*time.Second)
 	require.NoError(t, restarted.ReloadFromStorage())
 
-	require.NoError(t, restarted.CloseTransit())
-	require.NoError(t, restarted.ReattachTransit())
+	require.NoError(t, restarted.CloseHandover())
+	require.NoError(t, restarted.ReattachHandover())
 
 	audit := restarted.DiagnosticsSnapshot()["audit"].(map[string]any)
-	require.Equal(t, "reattached", audit["closure_stage"])
-	require.Equal(t, true, audit["closure_satisfied"])
+	require.Equal(t, "reattached", audit["handover_stage"])
+	require.Equal(t, true, audit["finality_satisfied"])
 }

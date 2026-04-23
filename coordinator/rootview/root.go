@@ -20,8 +20,8 @@ import (
 )
 
 var (
-	errTenureCommandUnsupported  = errors.New("coordinator/rootview: coordinator lease command unsupported")
-	errTransitCommandUnsupported = errors.New("coordinator/rootview: coordinator closure command unsupported")
+	errTenureCommandUnsupported   = errors.New("coordinator/rootview: coordinator tenure command unsupported")
+	errHandoverCommandUnsupported = errors.New("coordinator/rootview: coordinator handover command unsupported")
 )
 
 // RootStorage persists control-plane mutations into durable metadata truth and
@@ -31,7 +31,7 @@ type RootStorage interface {
 	AppendRootEvent(ctx context.Context, event rootevent.Event) error
 	SaveAllocatorState(ctx context.Context, idCurrent, tsCurrent uint64) error
 	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error)
-	ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error)
+	ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error)
 	Refresh() error
 	IsLeader() bool
 	LeaderID() uint64
@@ -54,7 +54,7 @@ type rootRuntimeBackend interface {
 	IsLeader() bool
 	LeaderID() uint64
 	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error)
-	ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error)
+	ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error)
 	Close() error
 }
 
@@ -76,7 +76,7 @@ type rootLeaderBackend interface {
 
 type rootCoordinatorProtocolBackend interface {
 	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error)
-	ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error)
+	ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error)
 }
 
 type rootCloseBackend interface {
@@ -148,11 +148,11 @@ func (a rootBackendAdapter) ApplyTenure(ctx context.Context, cmd rootproto.Tenur
 	return a.protocol.ApplyTenure(ctx, cmd)
 }
 
-func (a rootBackendAdapter) ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error) {
+func (a rootBackendAdapter) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
 	if a.protocol == nil {
-		return rootstate.SuccessionState{}, errTransitCommandUnsupported
+		return rootstate.SuccessionState{}, errHandoverCommandUnsupported
 	}
-	return a.protocol.ApplyTransit(ctx, cmd)
+	return a.protocol.ApplyHandover(ctx, cmd)
 }
 
 func (a rootBackendAdapter) Close() error {
@@ -330,15 +330,15 @@ func (s *RootStore) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand
 	})
 }
 
-func (s *RootStore) ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error) {
+func (s *RootStore) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
 	if s == nil || s.root == nil {
 		return rootstate.SuccessionState{}, nil
 	}
 	if !s.supportsProtocol {
-		return rootstate.SuccessionState{}, errTransitCommandUnsupported
+		return rootstate.SuccessionState{}, errHandoverCommandUnsupported
 	}
 	return s.applyAndReload(func() (rootstate.SuccessionState, error) {
-		return s.root.ApplyTransit(ctx, cmd)
+		return s.root.ApplyHandover(ctx, cmd)
 	})
 }
 
@@ -398,7 +398,7 @@ func (s *RootStore) applyAndReload(run func() (rootstate.SuccessionState, error)
 		return protocolState, err
 	}
 	// The Apply response carries the authoritative post-apply
-	// Lease/Seal/Closure from the meta-root leader. Merge it into the cached
+	// Tenure/Legacy/Handover from the meta-root leader. Merge it into the cached
 	// snapshot BEFORE the reload roundtrip so subsequent calls never race
 	// against a follower that has not yet replicated the event. Without this,
 	// a coordinator that writes to the meta-root leader and then reads back
@@ -409,7 +409,7 @@ func (s *RootStore) applyAndReload(run func() (rootstate.SuccessionState, error)
 	return protocolState, s.reload()
 }
 
-// mergeSuccessionState overlays the Lease/Seal/Closure from an
+// mergeSuccessionState overlays the Tenure/Legacy/Handover from an
 // authoritative Apply response onto the cached snapshot. Other fields
 // (descriptors, allocator fences) are left untouched — the subsequent reload
 // or a later tail advance refreshes them.
@@ -420,7 +420,7 @@ func (s *RootStore) mergeSuccessionState(state rootstate.SuccessionState) {
 	s.mu.Lock()
 	s.snapshot.Tenure = state.Tenure
 	s.snapshot.Legacy = state.Legacy
-	s.snapshot.Transit = state.Transit
+	s.snapshot.Handover = state.Handover
 	s.mu.Unlock()
 }
 

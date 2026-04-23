@@ -21,7 +21,7 @@ const (
 // paper's fault and benchmark runners.
 type Config struct {
 	// DisableSeal removes rooted seal emission so the current holder never
-	// publishes a predecessor closure point.
+	// publishes a predecessor legacy point.
 	DisableSeal bool
 	// DisableBudget removes small rooted refill budgets by switching allocator
 	// windows to a large local runway.
@@ -66,7 +66,7 @@ func (p Preset) Config() (Config, error) {
 
 // Validate rejects semantically inconsistent switch combinations. The current
 // artifact intentionally keeps the switch set small and only rules out
-// combinations that cannot describe a meaningful closure path.
+// combinations that cannot describe a meaningful finality path.
 func (c Config) Validate() error {
 	if c.DisableSeal && c.DisableReattach {
 		return fmt.Errorf("invalid ablation config: disable_reattach requires seal path")

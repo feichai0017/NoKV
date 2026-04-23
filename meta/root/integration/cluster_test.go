@@ -141,10 +141,10 @@ func campaignLease(store interface {
 }
 
 func sealLease(store interface {
-	ApplyTransit(context.Context, rootproto.TransitCommand) (rootstate.SuccessionState, error)
+	ApplyHandover(context.Context, rootproto.HandoverCommand) (rootstate.SuccessionState, error)
 }, holderID string, nowUnixNano int64, frontiers rootproto.MandateFrontiers) (rootstate.Legacy, error) {
-	state, err := store.ApplyTransit(context.Background(), rootproto.TransitCommand{
-		Kind:        rootproto.TransitActSeal,
+	state, err := store.ApplyHandover(context.Background(), rootproto.HandoverCommand{
+		Kind:        rootproto.HandoverActSeal,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 		Frontiers:   frontiers,

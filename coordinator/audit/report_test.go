@@ -35,12 +35,12 @@ func TestBuildReport(t *testing.T) {
 			LineageDigest:   legacyDigest,
 		},
 		Legacy: seal,
-		Transit: rootstate.Transit{
+		Handover: rootstate.Handover{
 			HolderID:       "c1",
 			LegacyEpoch:    2,
 			SuccessorEpoch: 3,
 			LegacyDigest:   legacyDigest,
-			Stage:          rootproto.TransitStageReattached,
+			Stage:          rootproto.HandoverStageReattached,
 		},
 		Descriptors: map[uint64]descriptor.Descriptor{
 			1: {RegionID: 1, RootEpoch: 7},
@@ -52,9 +52,9 @@ func TestBuildReport(t *testing.T) {
 	require.Equal(t, "fresh", report.CatchUpState)
 	require.Equal(t, "c1", report.CurrentHolderID)
 	require.Equal(t, uint64(3), report.CurrentGeneration)
-	require.True(t, report.TransitWitness.ClosureSatisfied())
-	require.Equal(t, rootproto.TransitStageReattached, report.Closure.Stage)
-	require.Equal(t, coordaudit.ClosureDefectNone, report.Anomalies.ClosureDefect)
+	require.True(t, report.HandoverWitness.FinalitySatisfied())
+	require.Equal(t, rootproto.HandoverStageReattached, report.Handover.Stage)
+	require.Equal(t, coordaudit.FinalityDefectNone, report.Anomalies.FinalityDefect)
 }
 
 func TestBuildReportSurfacesClosureGaps(t *testing.T) {
@@ -86,12 +86,12 @@ func TestBuildReportSurfacesClosureGaps(t *testing.T) {
 	}
 
 	report := coordaudit.BuildReport(snapshot, "c2", 1_000)
-	require.Equal(t, rootproto.TransitStageUnspecified, report.Closure.Stage)
+	require.Equal(t, rootproto.HandoverStageUnspecified, report.Handover.Stage)
 	require.False(t, report.Anomalies.SuccessorLineageMismatch)
 	require.False(t, report.Anomalies.UncoveredMonotoneFrontier)
 	require.False(t, report.Anomalies.UncoveredDescriptorRevision)
 	require.False(t, report.Anomalies.SealedGenerationStillLive)
-	require.Equal(t, coordaudit.ClosureDefectMissingConfirm, report.Anomalies.ClosureDefect)
+	require.Equal(t, coordaudit.FinalityDefectMissingConfirm, report.Anomalies.FinalityDefect)
 }
 
 func TestBuildLeaseStartCoverageReport(t *testing.T) {

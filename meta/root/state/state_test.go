@@ -47,49 +47,49 @@ func TestApplyTenureToState(t *testing.T) {
 	require.False(t, st.Tenure.ActiveAt(1_000))
 }
 
-func TestApplyTransitConfirmedToState(t *testing.T) {
+func TestApplyHandoverConfirmedToState(t *testing.T) {
 	var st rootstate.State
-	event := rootevent.TransitConfirmed("c1", 7, 8, "seal-digest")
+	event := rootevent.HandoverConfirmed("c1", 7, 8, "seal-digest")
 
 	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 2, Index: 9}, event)
 
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 9}, st.LastCommitted)
-	require.Equal(t, "c1", st.Transit.HolderID)
-	require.Equal(t, uint64(7), st.Transit.LegacyEpoch)
-	require.Equal(t, uint64(8), st.Transit.SuccessorEpoch)
-	require.Equal(t, "seal-digest", st.Transit.LegacyDigest)
-	require.Equal(t, rootproto.TransitStageConfirmed, st.Transit.Stage)
-	require.Equal(t, rootstate.Cursor{Term: 2, Index: 9}, st.Transit.ConfirmedAt)
+	require.Equal(t, "c1", st.Handover.HolderID)
+	require.Equal(t, uint64(7), st.Handover.LegacyEpoch)
+	require.Equal(t, uint64(8), st.Handover.SuccessorEpoch)
+	require.Equal(t, "seal-digest", st.Handover.LegacyDigest)
+	require.Equal(t, rootproto.HandoverStageConfirmed, st.Handover.Stage)
+	require.Equal(t, rootstate.Cursor{Term: 2, Index: 9}, st.Handover.ConfirmedAt)
 }
 
-func TestApplyTransitClosedToState(t *testing.T) {
+func TestApplyHandoverClosedToState(t *testing.T) {
 	var st rootstate.State
-	event := rootevent.TransitClosed("c1", 7, 8, "seal-digest")
+	event := rootevent.HandoverClosed("c1", 7, 8, "seal-digest")
 
 	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 2, Index: 10}, event)
 
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.LastCommitted)
-	require.Equal(t, "c1", st.Transit.HolderID)
-	require.Equal(t, uint64(8), st.Transit.SuccessorEpoch)
-	require.Equal(t, uint64(7), st.Transit.LegacyEpoch)
-	require.Equal(t, "seal-digest", st.Transit.LegacyDigest)
-	require.Equal(t, rootproto.TransitStageClosed, st.Transit.Stage)
-	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.Transit.ClosedAt)
+	require.Equal(t, "c1", st.Handover.HolderID)
+	require.Equal(t, uint64(8), st.Handover.SuccessorEpoch)
+	require.Equal(t, uint64(7), st.Handover.LegacyEpoch)
+	require.Equal(t, "seal-digest", st.Handover.LegacyDigest)
+	require.Equal(t, rootproto.HandoverStageClosed, st.Handover.Stage)
+	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.Handover.ClosedAt)
 }
 
-func TestApplyTransitReattachToState(t *testing.T) {
+func TestApplyHandoverReattachToState(t *testing.T) {
 	var st rootstate.State
-	event := rootevent.TransitReattached("c1", 7, 8, "seal-digest")
+	event := rootevent.HandoverReattached("c1", 7, 8, "seal-digest")
 
 	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 2, Index: 10}, event)
 
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.LastCommitted)
-	require.Equal(t, "c1", st.Transit.HolderID)
-	require.Equal(t, uint64(8), st.Transit.SuccessorEpoch)
-	require.Equal(t, uint64(7), st.Transit.LegacyEpoch)
-	require.Equal(t, "seal-digest", st.Transit.LegacyDigest)
-	require.Equal(t, rootproto.TransitStageReattached, st.Transit.Stage)
-	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.Transit.ReattachedAt)
+	require.Equal(t, "c1", st.Handover.HolderID)
+	require.Equal(t, uint64(8), st.Handover.SuccessorEpoch)
+	require.Equal(t, uint64(7), st.Handover.LegacyEpoch)
+	require.Equal(t, "seal-digest", st.Handover.LegacyDigest)
+	require.Equal(t, rootproto.HandoverStageReattached, st.Handover.Stage)
+	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.Handover.ReattachedAt)
 }
 
 func TestApplyTenurePreservesIssuedAtForSameGeneration(t *testing.T) {

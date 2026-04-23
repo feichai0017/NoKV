@@ -3,8 +3,8 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-CONTROLPLANE_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
-BENCH_DIR=$(cd -- "$CONTROLPLANE_DIR/.." && pwd)
+SUCCESSION_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
+BENCH_DIR=$(cd -- "$SUCCESSION_DIR/.." && pwd)
 REPO_ROOT=$(cd -- "$BENCH_DIR/.." && pwd)
 
 BENCHTIME=${CONTROL_PLANE_BENCHTIME:-500ms}
@@ -13,10 +13,10 @@ RECOVERY_COUNT=${CONTROL_PLANE_RECOVERY_COUNT:-5}
 SUFFIX=${CONTROL_PLANE_RESULT_SUFFIX:-}
 
 stamp=$(date +"%Y%m%d_%H%M%S")
-result_dir="$CONTROLPLANE_DIR/results/${stamp}${SUFFIX}"
+result_dir="$SUCCESSION_DIR/results/${stamp}${SUFFIX}"
 mkdir -p "$result_dir"
 
-echo "control-plane benchmark results -> $result_dir"
+echo "succession benchmark results -> $result_dir"
 echo "benchtime=$BENCHTIME perf_count=$PERF_COUNT recovery_count=$RECOVERY_COUNT"
 
 recovery_raw="$result_dir/recovery_raw.txt"

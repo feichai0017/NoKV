@@ -26,7 +26,7 @@ const (
 	MetadataRoot_FenceAllocator_FullMethodName   = "/nokv.meta.v1.MetadataRoot/FenceAllocator"
 	MetadataRoot_Status_FullMethodName           = "/nokv.meta.v1.MetadataRoot/Status"
 	MetadataRoot_ApplyTenure_FullMethodName      = "/nokv.meta.v1.MetadataRoot/ApplyTenure"
-	MetadataRoot_ApplyTransit_FullMethodName     = "/nokv.meta.v1.MetadataRoot/ApplyTransit"
+	MetadataRoot_ApplyHandover_FullMethodName    = "/nokv.meta.v1.MetadataRoot/ApplyHandover"
 	MetadataRoot_ObserveCommitted_FullMethodName = "/nokv.meta.v1.MetadataRoot/ObserveCommitted"
 	MetadataRoot_ObserveTail_FullMethodName      = "/nokv.meta.v1.MetadataRoot/ObserveTail"
 	MetadataRoot_WaitTail_FullMethodName         = "/nokv.meta.v1.MetadataRoot/WaitTail"
@@ -41,7 +41,7 @@ type MetadataRootClient interface {
 	FenceAllocator(ctx context.Context, in *MetadataRootFenceAllocatorRequest, opts ...grpc.CallOption) (*MetadataRootFenceAllocatorResponse, error)
 	Status(ctx context.Context, in *MetadataRootStatusRequest, opts ...grpc.CallOption) (*MetadataRootStatusResponse, error)
 	ApplyTenure(ctx context.Context, in *MetadataRootApplyTenureRequest, opts ...grpc.CallOption) (*MetadataRootApplyTenureResponse, error)
-	ApplyTransit(ctx context.Context, in *MetadataRootApplyTransitRequest, opts ...grpc.CallOption) (*MetadataRootApplyTransitResponse, error)
+	ApplyHandover(ctx context.Context, in *MetadataRootApplyHandoverRequest, opts ...grpc.CallOption) (*MetadataRootApplyHandoverResponse, error)
 	ObserveCommitted(ctx context.Context, in *MetadataRootObserveCommittedRequest, opts ...grpc.CallOption) (*MetadataRootObserveCommittedResponse, error)
 	ObserveTail(ctx context.Context, in *MetadataRootObserveTailRequest, opts ...grpc.CallOption) (*MetadataRootObserveTailResponse, error)
 	WaitTail(ctx context.Context, in *MetadataRootWaitTailRequest, opts ...grpc.CallOption) (*MetadataRootWaitTailResponse, error)
@@ -105,10 +105,10 @@ func (c *metadataRootClient) ApplyTenure(ctx context.Context, in *MetadataRootAp
 	return out, nil
 }
 
-func (c *metadataRootClient) ApplyTransit(ctx context.Context, in *MetadataRootApplyTransitRequest, opts ...grpc.CallOption) (*MetadataRootApplyTransitResponse, error) {
+func (c *metadataRootClient) ApplyHandover(ctx context.Context, in *MetadataRootApplyHandoverRequest, opts ...grpc.CallOption) (*MetadataRootApplyHandoverResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MetadataRootApplyTransitResponse)
-	err := c.cc.Invoke(ctx, MetadataRoot_ApplyTransit_FullMethodName, in, out, cOpts...)
+	out := new(MetadataRootApplyHandoverResponse)
+	err := c.cc.Invoke(ctx, MetadataRoot_ApplyHandover_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +154,7 @@ type MetadataRootServer interface {
 	FenceAllocator(context.Context, *MetadataRootFenceAllocatorRequest) (*MetadataRootFenceAllocatorResponse, error)
 	Status(context.Context, *MetadataRootStatusRequest) (*MetadataRootStatusResponse, error)
 	ApplyTenure(context.Context, *MetadataRootApplyTenureRequest) (*MetadataRootApplyTenureResponse, error)
-	ApplyTransit(context.Context, *MetadataRootApplyTransitRequest) (*MetadataRootApplyTransitResponse, error)
+	ApplyHandover(context.Context, *MetadataRootApplyHandoverRequest) (*MetadataRootApplyHandoverResponse, error)
 	ObserveCommitted(context.Context, *MetadataRootObserveCommittedRequest) (*MetadataRootObserveCommittedResponse, error)
 	ObserveTail(context.Context, *MetadataRootObserveTailRequest) (*MetadataRootObserveTailResponse, error)
 	WaitTail(context.Context, *MetadataRootWaitTailRequest) (*MetadataRootWaitTailResponse, error)
@@ -182,8 +182,8 @@ func (UnimplementedMetadataRootServer) Status(context.Context, *MetadataRootStat
 func (UnimplementedMetadataRootServer) ApplyTenure(context.Context, *MetadataRootApplyTenureRequest) (*MetadataRootApplyTenureResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApplyTenure not implemented")
 }
-func (UnimplementedMetadataRootServer) ApplyTransit(context.Context, *MetadataRootApplyTransitRequest) (*MetadataRootApplyTransitResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ApplyTransit not implemented")
+func (UnimplementedMetadataRootServer) ApplyHandover(context.Context, *MetadataRootApplyHandoverRequest) (*MetadataRootApplyHandoverResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyHandover not implemented")
 }
 func (UnimplementedMetadataRootServer) ObserveCommitted(context.Context, *MetadataRootObserveCommittedRequest) (*MetadataRootObserveCommittedResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ObserveCommitted not implemented")
@@ -304,20 +304,20 @@ func _MetadataRoot_ApplyTenure_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
-func _MetadataRoot_ApplyTransit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MetadataRootApplyTransitRequest)
+func _MetadataRoot_ApplyHandover_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MetadataRootApplyHandoverRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(MetadataRootServer).ApplyTransit(ctx, in)
+		return srv.(MetadataRootServer).ApplyHandover(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: MetadataRoot_ApplyTransit_FullMethodName,
+		FullMethod: MetadataRoot_ApplyHandover_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MetadataRootServer).ApplyTransit(ctx, req.(*MetadataRootApplyTransitRequest))
+		return srv.(MetadataRootServer).ApplyHandover(ctx, req.(*MetadataRootApplyHandoverRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -404,8 +404,8 @@ var MetadataRoot_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _MetadataRoot_ApplyTenure_Handler,
 		},
 		{
-			MethodName: "ApplyTransit",
-			Handler:    _MetadataRoot_ApplyTransit_Handler,
+			MethodName: "ApplyHandover",
+			Handler:    _MetadataRoot_ApplyHandover_Handler,
 		},
 		{
 			MethodName: "ObserveCommitted",

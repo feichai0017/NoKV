@@ -60,43 +60,43 @@ func TestTenureEvent(t *testing.T) {
 	require.Equal(t, "pred", cloned.Tenure.LineageDigest)
 }
 
-func TestTransitConfirmedEvent(t *testing.T) {
-	event := rootevent.TransitConfirmed("c1", 7, 8, "seal-digest")
+func TestHandoverConfirmedEvent(t *testing.T) {
+	event := rootevent.HandoverConfirmed("c1", 7, 8, "seal-digest")
 	cloned := rootevent.CloneEvent(event)
 
-	event.Transit.HolderID = "c2"
-	require.Equal(t, rootevent.KindTransit, cloned.Kind)
-	require.Equal(t, "c1", cloned.Transit.HolderID)
-	require.Equal(t, uint64(7), cloned.Transit.LegacyEpoch)
-	require.Equal(t, uint64(8), cloned.Transit.SuccessorEpoch)
-	require.Equal(t, "seal-digest", cloned.Transit.LegacyDigest)
-	require.Equal(t, rootevent.TransitStageConfirmed, cloned.Transit.Stage)
+	event.Handover.HolderID = "c2"
+	require.Equal(t, rootevent.KindHandover, cloned.Kind)
+	require.Equal(t, "c1", cloned.Handover.HolderID)
+	require.Equal(t, uint64(7), cloned.Handover.LegacyEpoch)
+	require.Equal(t, uint64(8), cloned.Handover.SuccessorEpoch)
+	require.Equal(t, "seal-digest", cloned.Handover.LegacyDigest)
+	require.Equal(t, rootevent.HandoverStageConfirmed, cloned.Handover.Stage)
 }
 
-func TestTransitClosedEvent(t *testing.T) {
-	event := rootevent.TransitClosed("c1", 7, 8, "seal-digest")
+func TestHandoverClosedEvent(t *testing.T) {
+	event := rootevent.HandoverClosed("c1", 7, 8, "seal-digest")
 	cloned := rootevent.CloneEvent(event)
 
-	event.Transit.HolderID = "c2"
-	require.Equal(t, rootevent.KindTransit, cloned.Kind)
-	require.Equal(t, "c1", cloned.Transit.HolderID)
-	require.Equal(t, uint64(7), cloned.Transit.LegacyEpoch)
-	require.Equal(t, uint64(8), cloned.Transit.SuccessorEpoch)
-	require.Equal(t, "seal-digest", cloned.Transit.LegacyDigest)
-	require.Equal(t, rootevent.TransitStageClosed, cloned.Transit.Stage)
+	event.Handover.HolderID = "c2"
+	require.Equal(t, rootevent.KindHandover, cloned.Kind)
+	require.Equal(t, "c1", cloned.Handover.HolderID)
+	require.Equal(t, uint64(7), cloned.Handover.LegacyEpoch)
+	require.Equal(t, uint64(8), cloned.Handover.SuccessorEpoch)
+	require.Equal(t, "seal-digest", cloned.Handover.LegacyDigest)
+	require.Equal(t, rootevent.HandoverStageClosed, cloned.Handover.Stage)
 }
 
-func TestTransitReattachedEvent(t *testing.T) {
-	event := rootevent.TransitReattached("c1", 7, 8, "seal-digest")
+func TestHandoverReattachedEvent(t *testing.T) {
+	event := rootevent.HandoverReattached("c1", 7, 8, "seal-digest")
 	cloned := rootevent.CloneEvent(event)
 
-	event.Transit.HolderID = "c2"
-	require.Equal(t, rootevent.KindTransit, cloned.Kind)
-	require.Equal(t, "c1", cloned.Transit.HolderID)
-	require.Equal(t, uint64(7), cloned.Transit.LegacyEpoch)
-	require.Equal(t, uint64(8), cloned.Transit.SuccessorEpoch)
-	require.Equal(t, "seal-digest", cloned.Transit.LegacyDigest)
-	require.Equal(t, rootevent.TransitStageReattached, cloned.Transit.Stage)
+	event.Handover.HolderID = "c2"
+	require.Equal(t, rootevent.KindHandover, cloned.Kind)
+	require.Equal(t, "c1", cloned.Handover.HolderID)
+	require.Equal(t, uint64(7), cloned.Handover.LegacyEpoch)
+	require.Equal(t, uint64(8), cloned.Handover.SuccessorEpoch)
+	require.Equal(t, "seal-digest", cloned.Handover.LegacyDigest)
+	require.Equal(t, rootevent.HandoverStageReattached, cloned.Handover.Stage)
 }
 
 func TestMembershipAndAllocatorConstructors(t *testing.T) {

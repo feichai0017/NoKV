@@ -308,11 +308,11 @@ func (s *Store) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (r
 	}
 }
 
-func (s *Store) ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error) {
+func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
 	if s == nil {
 		return rootstate.SuccessionState{}, nil
 	}
-	if err := rootfailpoints.InjectBeforeApplyTransit(); err != nil {
+	if err := rootfailpoints.InjectBeforeApplyHandover(); err != nil {
 		return rootstate.SuccessionState{}, err
 	}
 	if ctx == nil {
@@ -325,7 +325,7 @@ func (s *Store) ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) 
 	defer s.mu.Unlock()
 
 	switch cmd.Kind {
-	case rootproto.TransitActSeal:
+	case rootproto.HandoverActSeal:
 		current := s.state.Tenure
 		if s.state.Legacy.Epoch != 0 &&
 			s.state.Legacy.Epoch == current.Epoch &&
@@ -349,11 +349,11 @@ func (s *Store) ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) 
 			return rootstate.SuccessionState{}, err
 		}
 		return commit.State.Succession(), nil
-	case rootproto.TransitActConfirm:
+	case rootproto.HandoverActConfirm:
 		if strings.TrimSpace(cmd.HolderID) == "" || strings.TrimSpace(cmd.HolderID) != s.state.Tenure.HolderID {
 			return s.state.Succession(), rootstate.ErrPrimacy
 		}
-		auditStatus, err := succession.ValidateTransitConfirmation(
+		auditStatus, err := succession.ValidateHandoverConfirmation(
 			s.state.Tenure,
 			succession.Frontiers(s.state, rootstate.MaxDescriptorRevision(s.descs)),
 			s.state.Legacy,
@@ -362,13 +362,13 @@ func (s *Store) ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) 
 		if err != nil {
 			return s.state.Succession(), err
 		}
-		if rootproto.TransitStageAtLeast(s.state.Transit.Stage, rootproto.TransitStageConfirmed) &&
-			s.state.Transit.LegacyEpoch == auditStatus.LegacyEpoch &&
-			s.state.Transit.SuccessorEpoch == s.state.Tenure.Epoch &&
-			s.state.Transit.LegacyDigest == auditStatus.LegacyDigest {
+		if rootproto.HandoverStageAtLeast(s.state.Handover.Stage, rootproto.HandoverStageConfirmed) &&
+			s.state.Handover.LegacyEpoch == auditStatus.LegacyEpoch &&
+			s.state.Handover.SuccessorEpoch == s.state.Tenure.Epoch &&
+			s.state.Handover.LegacyDigest == auditStatus.LegacyDigest {
 			return s.state.Succession(), nil
 		}
-		commit, err := s.appendLocked(ctx, rootevent.TransitConfirmed(
+		commit, err := s.appendLocked(ctx, rootevent.HandoverConfirmed(
 			cmd.HolderID,
 			auditStatus.LegacyEpoch,
 			s.state.Tenure.Epoch,
@@ -378,42 +378,42 @@ func (s *Store) ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) 
 			return rootstate.SuccessionState{}, err
 		}
 		return commit.State.Succession(), nil
-	case rootproto.TransitActClose:
-		if err := succession.ValidateTransitClosure(s.state.Tenure, s.state.Transit, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+	case rootproto.HandoverActClose:
+		if err := succession.ValidateHandoverFinality(s.state.Tenure, s.state.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return s.state.Succession(), err
 		}
-		if rootproto.TransitStageAtLeast(s.state.Transit.Stage, rootproto.TransitStageClosed) {
+		if rootproto.HandoverStageAtLeast(s.state.Handover.Stage, rootproto.HandoverStageClosed) {
 			return s.state.Succession(), nil
 		}
-		commit, err := s.appendLocked(ctx, rootevent.TransitClosed(
+		commit, err := s.appendLocked(ctx, rootevent.HandoverClosed(
 			cmd.HolderID,
-			s.state.Transit.LegacyEpoch,
-			s.state.Transit.SuccessorEpoch,
-			s.state.Transit.LegacyDigest,
+			s.state.Handover.LegacyEpoch,
+			s.state.Handover.SuccessorEpoch,
+			s.state.Handover.LegacyDigest,
 		))
 		if err != nil {
 			return rootstate.SuccessionState{}, err
 		}
 		return commit.State.Succession(), nil
-	case rootproto.TransitActReattach:
-		if err := succession.ValidateTransitReattach(s.state.Tenure, s.state.Transit, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+	case rootproto.HandoverActReattach:
+		if err := succession.ValidateHandoverReattach(s.state.Tenure, s.state.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return s.state.Succession(), err
 		}
-		if rootproto.TransitStageAtLeast(s.state.Transit.Stage, rootproto.TransitStageReattached) {
+		if rootproto.HandoverStageAtLeast(s.state.Handover.Stage, rootproto.HandoverStageReattached) {
 			return s.state.Succession(), nil
 		}
-		commit, err := s.appendLocked(ctx, rootevent.TransitReattached(
+		commit, err := s.appendLocked(ctx, rootevent.HandoverReattached(
 			cmd.HolderID,
-			s.state.Transit.LegacyEpoch,
-			s.state.Transit.SuccessorEpoch,
-			s.state.Transit.LegacyDigest,
+			s.state.Handover.LegacyEpoch,
+			s.state.Handover.SuccessorEpoch,
+			s.state.Handover.LegacyDigest,
 		))
 		if err != nil {
 			return rootstate.SuccessionState{}, err
 		}
 		return commit.State.Succession(), nil
 	default:
-		return s.state.Succession(), rootstate.ErrClosure
+		return s.state.Succession(), rootstate.ErrFinality
 	}
 }
 

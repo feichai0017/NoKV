@@ -43,7 +43,7 @@ type tailBackend interface {
 
 type leaseBackend interface {
 	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error)
-	ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error)
+	ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error)
 }
 
 // Service exposes one metadata-root backend through the MetadataRoot RPC API.
@@ -152,20 +152,20 @@ func (s *Service) ApplyTenure(ctx context.Context, req *metapb.MetadataRootApply
 	}, nil
 }
 
-func (s *Service) ApplyTransit(ctx context.Context, req *metapb.MetadataRootApplyTransitRequest) (*metapb.MetadataRootApplyTransitResponse, error) {
+func (s *Service) ApplyHandover(ctx context.Context, req *metapb.MetadataRootApplyHandoverRequest) (*metapb.MetadataRootApplyHandoverResponse, error) {
 	if s == nil || s.backend == nil {
-		return &metapb.MetadataRootApplyTransitResponse{}, nil
+		return &metapb.MetadataRootApplyHandoverResponse{}, nil
 	}
 	backend, err := s.coordinatorProtocolBackend()
 	if err != nil {
 		return nil, err
 	}
-	cmd := metawire.RootTransitCommandFromProto(req.GetCommand())
-	protocolState, err := backend.ApplyTransit(ctx, cmd)
+	cmd := metawire.RootHandoverCommandFromProto(req.GetCommand())
+	protocolState, err := backend.ApplyHandover(ctx, cmd)
 	if err != nil {
-		return nil, coordinatorClosureApplyRPCError(cmd.Kind, err)
+		return nil, coordinatorHandoverApplyRPCError(cmd.Kind, err)
 	}
-	return &metapb.MetadataRootApplyTransitResponse{
+	return &metapb.MetadataRootApplyHandoverResponse{
 		State: metawire.RootSuccessionStateToProto(protocolState),
 	}, nil
 }
@@ -294,30 +294,30 @@ func coordinatorLeaseApplyRPCError(kind rootproto.TenureAct, err error) error {
 	return status.Error(codes.Internal, err.Error())
 }
 
-func coordinatorClosureApplyRPCError(kind rootproto.TransitAct, err error) error {
+func coordinatorHandoverApplyRPCError(kind rootproto.HandoverAct, err error) error {
 	if errors.Is(err, rootstate.ErrInvalidTenure) {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
 	switch kind {
-	case rootproto.TransitActSeal:
+	case rootproto.HandoverActSeal:
 		if errors.Is(err, rootstate.ErrPrimacy) {
 			return status.Error(codes.FailedPrecondition, err.Error())
 		}
-	case rootproto.TransitActConfirm:
-		if errors.Is(err, rootstate.ErrClosure) {
+	case rootproto.HandoverActConfirm:
+		if errors.Is(err, rootstate.ErrFinality) {
 			return status.Error(codes.InvalidArgument, err.Error())
 		}
 		if errors.Is(err, rootstate.ErrPrimacy) {
 			return status.Error(codes.FailedPrecondition, err.Error())
 		}
-	case rootproto.TransitActClose:
+	case rootproto.HandoverActClose:
 		if errors.Is(err, rootstate.ErrPrimacy) ||
-			errors.Is(err, rootstate.ErrClosure) {
+			errors.Is(err, rootstate.ErrFinality) {
 			return status.Error(codes.FailedPrecondition, err.Error())
 		}
-	case rootproto.TransitActReattach:
+	case rootproto.HandoverActReattach:
 		if errors.Is(err, rootstate.ErrPrimacy) ||
-			errors.Is(err, rootstate.ErrClosure) {
+			errors.Is(err, rootstate.ErrFinality) {
 			return status.Error(codes.FailedPrecondition, err.Error())
 		}
 	}

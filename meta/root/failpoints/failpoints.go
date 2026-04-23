@@ -15,9 +15,9 @@ const (
 	// BeforeApplyTenure aborts a rooted coordinator lease mutation
 	// before it enters the replicated metadata-root state machine.
 	BeforeApplyTenure Mode = 1 << iota
-	// BeforeApplyTransit aborts a rooted coordinator closure mutation
+	// BeforeApplyHandover aborts a rooted coordinator handover mutation
 	// before it enters the replicated metadata-root state machine.
-	BeforeApplyTransit
+	BeforeApplyHandover
 	// BeforeTenureStorageRead aborts the coordinator's storage-backed
 	// succession gate before it reloads a rooted snapshot.
 	BeforeTenureStorageRead
@@ -30,7 +30,7 @@ var currentMode atomic.Uint32
 
 var (
 	ErrBeforeApplyTenure                    = errors.New("meta/root failpoint: before apply coordinator lease")
-	ErrBeforeApplyTransit                   = errors.New("meta/root failpoint: before apply coordinator closure")
+	ErrBeforeApplyHandover                  = errors.New("meta/root failpoint: before apply coordinator handover")
 	ErrBeforeTenureStorageRead              = errors.New("meta/root failpoint: before coordinator lease storage read")
 	ErrAfterAppendCommittedBeforeCheckpoint = errors.New("meta/root failpoint: after append committed before checkpoint")
 )
@@ -59,11 +59,11 @@ func InjectBeforeApplyTenure() error {
 	return nil
 }
 
-// InjectBeforeApplyTransit returns the configured injected failure
-// for rooted closure apply operations.
-func InjectBeforeApplyTransit() error {
-	if enabled(BeforeApplyTransit) {
-		return ErrBeforeApplyTransit
+// InjectBeforeApplyHandover returns the configured injected failure
+// for rooted handover apply operations.
+func InjectBeforeApplyHandover() error {
+	if enabled(BeforeApplyHandover) {
+		return ErrBeforeApplyHandover
 	}
 	return nil
 }

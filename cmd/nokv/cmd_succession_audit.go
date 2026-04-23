@@ -17,7 +17,7 @@ import (
 // against a live 3-peer meta-root cluster. It connects via the same remote
 // gRPC client coordinators use (coordinator/rootview.OpenRootRemoteStore),
 // loads the rooted snapshot, and projects it into coordinator/audit's
-// SnapshotAnomalies / ClosureDefect vocabulary.
+// SnapshotAnomalies / FinalityDefect vocabulary.
 //
 // Inputs the tool accepts:
 //   - --root-peer nodeID=addr (repeatable, exactly 3): meta-root gRPC endpoints
@@ -132,14 +132,14 @@ func renderSuccessionAuditText(w io.Writer, report coordaudit.Report, anomalies 
 	_, _ = fmt.Fprintf(w, "catch_up_state     : %s\n", report.CatchUpState)
 	_, _ = fmt.Fprintf(w, "current_holder     : %s\n", report.CurrentHolderID)
 	_, _ = fmt.Fprintf(w, "current_generation : %d\n", report.CurrentGeneration)
-	_, _ = fmt.Fprintf(w, "closure            : stage=%s\n", report.Closure.Stage)
-	_, _ = fmt.Fprintf(w, "closure_witness    : stage=%s seal_gen=%d successor_present=%v inheritance=%v lineage_satisfied=%v sealed_gen_retired=%v\n",
-		report.TransitWitness.Stage,
-		report.TransitWitness.LegacyEpoch,
-		report.TransitWitness.SuccessorPresent,
-		report.TransitWitness.Inheritance,
-		report.TransitWitness.SuccessorLineageSatisfied,
-		report.TransitWitness.SealedGenerationRetired)
+	_, _ = fmt.Fprintf(w, "handover           : stage=%s\n", report.Handover.Stage)
+	_, _ = fmt.Fprintf(w, "handover_witness   : stage=%s seal_gen=%d successor_present=%v inheritance=%v lineage_satisfied=%v sealed_gen_retired=%v\n",
+		report.HandoverWitness.Stage,
+		report.HandoverWitness.LegacyEpoch,
+		report.HandoverWitness.SuccessorPresent,
+		report.HandoverWitness.Inheritance,
+		report.HandoverWitness.SuccessorLineageSatisfied,
+		report.HandoverWitness.SealedGenerationRetired)
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "snapshot anomalies:")
 	_, _ = fmt.Fprintf(w, "  successor_lineage_mismatch     : %v\n", report.Anomalies.SuccessorLineageMismatch)
@@ -147,7 +147,7 @@ func renderSuccessionAuditText(w io.Writer, report coordaudit.Report, anomalies 
 	_, _ = fmt.Fprintf(w, "  uncovered_descriptor_revision  : %v\n", report.Anomalies.UncoveredDescriptorRevision)
 	_, _ = fmt.Fprintf(w, "  lease_start_coverage_violation : %v\n", report.Anomalies.LeaseStartCoverageViolation)
 	_, _ = fmt.Fprintf(w, "  sealed_generation_still_live   : %v\n", report.Anomalies.SealedGenerationStillLive)
-	_, _ = fmt.Fprintf(w, "  closure_defect                 : %s\n", defectOrNone(report.Anomalies.ClosureDefect))
+	_, _ = fmt.Fprintf(w, "  finality_defect                : %s\n", defectOrNone(report.Anomalies.FinalityDefect))
 
 	if len(anomalies) > 0 {
 		_, _ = fmt.Fprintln(w)
@@ -160,7 +160,7 @@ func renderSuccessionAuditText(w io.Writer, report coordaudit.Report, anomalies 
 	return nil
 }
 
-func defectOrNone(d coordaudit.ClosureDefect) string {
+func defectOrNone(d coordaudit.FinalityDefect) string {
 	if d == "" {
 		return "none"
 	}

@@ -50,7 +50,7 @@ debugging. All `/debug/vars` endpoints also expose the meta-root's state
 summary (leader, committed index, generation) for the dashboard.
 
 **For production, don't expose meta-root publicly.** The gRPC API accepts
-`ApplyTenure` and `ApplyTransit` which are
+`ApplyTenure` and `ApplyHandover` which are
 lease-gated but still structurally sensitive. To opt out, delete the
 `ports:` block under `meta-root-1`, `meta-root-2`, `meta-root-3` in
 `docker-compose.yml` — the dashboard loses the "Truth plane" cards (they
@@ -223,6 +223,6 @@ publicly.
 - [docs/config.md](config.md) — `raft_config.example.json` schema (two-layer
   model: address directory vs bootstrap seed)
 - [docs/succession-audit.md](succession-audit.md) — the Succession audit tool behind the dashboard's
-  "closure witness" row
+  "handover witness" row
 - [docs/coordinator.md](coordinator.md) — Succession lease lifecycle
 - [docs/rooted_truth.md](rooted_truth.md) — meta-root internals

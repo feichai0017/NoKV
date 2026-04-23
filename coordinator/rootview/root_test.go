@@ -27,7 +27,7 @@ func (f fakeLoadStore) SaveAllocatorState(context.Context, uint64, uint64) error
 func (f fakeLoadStore) ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.SuccessionState, error) {
 	return rootstate.SuccessionState{}, nil
 }
-func (f fakeLoadStore) ApplyTransit(context.Context, rootproto.TransitCommand) (rootstate.SuccessionState, error) {
+func (f fakeLoadStore) ApplyHandover(context.Context, rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
 	return rootstate.SuccessionState{}, nil
 }
 func (f fakeLoadStore) Refresh() error   { return nil }
@@ -157,20 +157,20 @@ func (f *fakeRootBackend) ApplyTenure(_ context.Context, _ rootproto.TenureComma
 	}
 	f.snapshot.State.Tenure = f.applyLeaseResult.Tenure
 	f.snapshot.State.Legacy = f.applyLeaseResult.Legacy
-	f.snapshot.State.Transit = f.applyLeaseResult.Transit
+	f.snapshot.State.Handover = f.applyLeaseResult.Handover
 	if f.useObserved {
 		f.observed.Checkpoint.Snapshot = rootstate.CloneSnapshot(f.snapshot)
 	}
 	return f.applyLeaseResult, nil
 }
 
-func (f *fakeRootBackend) ApplyTransit(_ context.Context, _ rootproto.TransitCommand) (rootstate.SuccessionState, error) {
+func (f *fakeRootBackend) ApplyHandover(_ context.Context, _ rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
 	if f.applyClosureErr != nil {
 		return rootstate.SuccessionState{}, f.applyClosureErr
 	}
 	f.snapshot.State.Tenure = f.applyClosureResult.Tenure
 	f.snapshot.State.Legacy = f.applyClosureResult.Legacy
-	f.snapshot.State.Transit = f.applyClosureResult.Transit
+	f.snapshot.State.Handover = f.applyClosureResult.Handover
 	if f.useObserved {
 		f.observed.Checkpoint.Snapshot = rootstate.CloneSnapshot(f.snapshot)
 	}
@@ -306,7 +306,7 @@ func TestRemoteConfigAndNilStoreHelpers(t *testing.T) {
 	leaseState, err := store.ApplyTenure(context.Background(), rootproto.TenureCommand{})
 	require.NoError(t, err)
 	require.Equal(t, rootstate.SuccessionState{}, leaseState)
-	closureState, err := store.ApplyTransit(context.Background(), rootproto.TransitCommand{})
+	closureState, err := store.ApplyHandover(context.Background(), rootproto.HandoverCommand{})
 	require.NoError(t, err)
 	require.Equal(t, rootstate.SuccessionState{}, closureState)
 	require.NoError(t, store.Close())
@@ -375,12 +375,12 @@ func TestRootStoreWithOptionalBackend(t *testing.T) {
 			Tenure: rootstate.Tenure{HolderID: "coord-2", Epoch: 2, ExpiresUnixNano: 999},
 		},
 		applyClosureResult: rootstate.SuccessionState{
-			Transit: rootstate.Transit{
+			Handover: rootstate.Handover{
 				HolderID:       "coord-2",
 				LegacyEpoch:    2,
 				SuccessorEpoch: 3,
 				LegacyDigest:   "seal",
-				Stage:          rootproto.TransitStageClosed,
+				Stage:          rootproto.HandoverStageClosed,
 			},
 		},
 	}
@@ -421,9 +421,9 @@ func TestRootStoreWithOptionalBackend(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "coord-2", leaseState.Tenure.HolderID)
 
-	closureState, err := store.ApplyTransit(context.Background(), rootproto.TransitCommand{})
+	closureState, err := store.ApplyHandover(context.Background(), rootproto.HandoverCommand{})
 	require.NoError(t, err)
-	require.Equal(t, rootproto.TransitStageClosed, closureState.Transit.Stage)
+	require.Equal(t, rootproto.HandoverStageClosed, closureState.Handover.Stage)
 
 	require.NoError(t, store.Close())
 	require.True(t, fake.closeCalled)
@@ -437,8 +437,8 @@ func TestRootStoreUnsupportedApplyCommands(t *testing.T) {
 
 	_, err = store.ApplyTenure(context.Background(), rootproto.TenureCommand{})
 	require.ErrorIs(t, err, errTenureCommandUnsupported)
-	_, err = store.ApplyTransit(context.Background(), rootproto.TransitCommand{})
-	require.ErrorIs(t, err, errTransitCommandUnsupported)
+	_, err = store.ApplyHandover(context.Background(), rootproto.HandoverCommand{})
+	require.ErrorIs(t, err, errHandoverCommandUnsupported)
 }
 
 func mustRestoreDescriptorsNil(t *testing.T) int {

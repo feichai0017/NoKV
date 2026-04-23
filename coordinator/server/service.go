@@ -69,9 +69,9 @@ type Service struct {
 }
 
 type coordinatorLeaseView struct {
-	lease   rootstate.Tenure
-	seal    rootstate.Legacy
-	closure rootstate.Transit
+	tenure   rootstate.Tenure
+	legacy   rootstate.Legacy
+	handover rootstate.Handover
 }
 
 type coordinatorRootSnapshotView struct {
@@ -85,34 +85,34 @@ func (v *coordinatorLeaseView) Reset() {
 	if v == nil {
 		return
 	}
-	v.lease = rootstate.Tenure{}
-	v.seal = rootstate.Legacy{}
-	v.closure = rootstate.Transit{}
+	v.tenure = rootstate.Tenure{}
+	v.legacy = rootstate.Legacy{}
+	v.handover = rootstate.Handover{}
 }
 
 func (v *coordinatorLeaseView) Refresh(snapshot rootview.Snapshot) {
 	if v == nil {
 		return
 	}
-	v.lease = snapshot.Tenure
-	v.seal = snapshot.Legacy
-	v.closure = snapshot.Transit
+	v.tenure = snapshot.Tenure
+	v.legacy = snapshot.Legacy
+	v.handover = snapshot.Handover
 }
 
 func (v coordinatorLeaseView) Current() (rootstate.Tenure, rootstate.Legacy) {
-	return v.lease, v.seal
+	return v.tenure, v.legacy
 }
 
-func (v coordinatorLeaseView) Lease() rootstate.Tenure {
-	return v.lease
+func (v coordinatorLeaseView) Tenure() rootstate.Tenure {
+	return v.tenure
 }
 
-func (v coordinatorLeaseView) Seal() rootstate.Legacy {
-	return v.seal
+func (v coordinatorLeaseView) Legacy() rootstate.Legacy {
+	return v.legacy
 }
 
-func (v coordinatorLeaseView) Closure() rootstate.Transit {
-	return v.closure
+func (v coordinatorLeaseView) Handover() rootstate.Handover {
+	return v.handover
 }
 
 const defaultAllocatorWindowSize uint64 = 10_000

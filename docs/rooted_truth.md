@@ -20,7 +20,7 @@ The benefits are concrete:
 
 - **Coordinator is stateless at restart** — the only persistent thing about a coordinator is its configured holder ID; everything else is rebuilt from `meta/root` on boot
 - **The log can be swapped** between local (single-node) and replicated (embedded-raft) backends without changing coordinator code
-- **Authority handoff is auditable** — every lease grant / seal / closure event is a committed log record with a cursor
+- **Authority handoff is auditable** — every tenure issue / legacy seal / handover event is a committed log record with a cursor
 
 ---
 
@@ -57,7 +57,7 @@ type State struct {
     TSOFence           uint64         // globally fenced TSO allocator floor
     Tenure   Tenure
     Legacy    Legacy
-    Transit Transit
+    Handover Handover
 }
 ```
 
@@ -118,7 +118,7 @@ Historical single-process "local" backend has been removed.
 
 ---
 
-## 6. Coordinator commands — how lease/seal/closure flow in
+## 6. Coordinator commands — how tenure/legacy/handover flow in
 
 In addition to "raw" events, backends expose command APIs for control-plane-specific operations:
 
@@ -126,16 +126,16 @@ In addition to "raw" events, backends expose command APIs for control-plane-spec
 ApplyTenure(ctx, cmd TenureCommand)
     (SuccessionState, error)
 
-ApplyTransit(ctx, cmd TransitCommand)
+ApplyHandover(ctx, cmd HandoverCommand)
     (SuccessionState, error)
 ```
 
 These are **validated, typed writes** that internally:
 
 1. Validate the command against current state (e.g., `Seal` requires an active `Tenure`, `Confirm` requires prior `Legacy`)
-2. Emit the appropriate `KindTenure` / `KindLegacy` / `KindTransit` event
+2. Emit the appropriate `KindTenure` / `KindLegacy` / `KindHandover` event
 3. Append through the normal log path
-4. Return the new `SuccessionState = { Tenure, Legacy, Transit }`
+4. Return the new `SuccessionState = { Tenure, Legacy, Handover }`
 
 Command-level validation lives in [`meta/root/state/succession.go`](../meta/root/state/succession.go).
 
@@ -198,7 +198,7 @@ This is what keeps `coordinator/` deployable separately from the rooted log, if 
 | [`meta/root/protocol/types.go`](../meta/root/protocol/types.go) | Pure protocol types (no persistence logic) |
 | [`meta/root/event/types.go`](../meta/root/event/types.go) | Typed event constructors |
 | [`meta/root/state/state.go`](../meta/root/state/state.go) | `State`, `Snapshot`, `ApplyEventToSnapshot` |
-| [`meta/root/state/succession.go`](../meta/root/state/succession.go) | Tenure/Legacy/Transit validation + digest |
+| [`meta/root/state/succession.go`](../meta/root/state/succession.go) | Tenure/Legacy/Handover validation + digest |
 | [`meta/root/state/transition.go`](../meta/root/state/transition.go) | Cross-event transition rules |
 | [`meta/root/storage/virtual_log.go`](../meta/root/storage/virtual_log.go) | Tail subscription + checkpoint primitives |
 | [`meta/root/replicated/store.go`](../meta/root/replicated/store.go) | The only backend: 3-peer raft-replicated meta-root |

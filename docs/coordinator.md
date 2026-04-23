@@ -78,7 +78,7 @@ names suggest. At the doc / operator level, keep just these words:
 - `Lease` — the currently active authority record
 - `Seal` — the retired predecessor generation plus the frontier it already
   consumed
-- `Closure` — the handoff-completion record for the current successor
+- `Handover` — the rooted handoff record for the current successor
 - `Generation` — the monotonic authority generation
 - `Witness` — the operator-visible proof bundle that explains whether the
   current handoff state is safe
@@ -88,7 +88,7 @@ The four guarantees discussed by the docs and runtime metrics are:
 - `Primacy` — at most one authority generation is active
 - `Inheritance` — the successor must cover the predecessor's published work
 - `Silence` — a sealed predecessor must not keep serving
-- `Closure` — a handoff must not remain permanently half-finished
+- `Finality` — a handoff must not remain permanently half-finished
 
 Implementation names remain more explicit:
 
@@ -96,9 +96,9 @@ Implementation names remain more explicit:
 |---|---|
 | `Lease` | `Tenure` |
 | `Seal` | `Legacy` |
-| `Closure` | `Transit` |
+| `Handover` | `Handover` |
 | `Generation` | `Epoch` / `epoch` |
-| `Witness` | `TransitWitness` / continuation witness fields |
+| `Witness` | `HandoverWitness` / continuation witness fields |
 | `Frontiers` | `MandateFrontiers` / `frontiers` / `consumed_frontiers` |
 
 This split is deliberate: docs describe the protocol in the smallest stable
@@ -482,7 +482,7 @@ For local bootstrap, use:
 - `separated meta-root + remote coordinator` is implemented but experimental:
   - use it for control-plane research and failure-domain experiments
   - do not treat it as the default production path yet
-  - failure/recovery E2E tests and control-plane benchmarks still need to be
+  - failure/recovery E2E tests and succession benchmarks still need to be
     expanded before stronger claims are made
 - Scheduler policy is intentionally small (leader transfer focused).
 - No advanced placement constraints yet.

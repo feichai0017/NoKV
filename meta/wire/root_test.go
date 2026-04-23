@@ -66,12 +66,12 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 			Frontiers: frontiers,
 			SealedAt:  rootproto.Cursor{Term: 2, Index: 9},
 		},
-		Transit: rootstate.Transit{
+		Handover: rootstate.Handover{
 			HolderID:       "coord-1",
 			LegacyEpoch:    5,
 			SuccessorEpoch: 6,
 			LegacyDigest:   "seal",
-			Stage:          rootproto.TransitStageClosed,
+			Stage:          rootproto.HandoverStageClosed,
 			ConfirmedAt:    rootproto.Cursor{Term: 2, Index: 10},
 			ClosedAt:       rootproto.Cursor{Term: 2, Index: 11},
 			ReattachedAt:   rootproto.Cursor{Term: 2, Index: 12},
@@ -85,10 +85,10 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 
 	require.Nil(t, RootTenureToProto(rootstate.Tenure{}))
 	require.Nil(t, RootLegacyToProto(rootstate.Legacy{}))
-	require.Nil(t, RootTransitToProto(rootstate.Transit{}))
+	require.Nil(t, RootHandoverToProto(rootstate.Handover{}))
 	require.Equal(t, state.Tenure, RootTenureFromProto(RootTenureToProto(state.Tenure)))
 	require.Equal(t, state.Legacy, RootLegacyFromProto(RootLegacyToProto(state.Legacy)))
-	require.Equal(t, state.Transit, RootTransitFromProto(RootTransitToProto(state.Transit)))
+	require.Equal(t, state.Handover, RootHandoverFromProto(RootHandoverToProto(state.Handover)))
 
 	require.Nil(t, RootMandateFrontiersToProto(rootproto.MandateFrontiers{}))
 	filtered := RootMandateFrontiersFromProto([]*metapb.RootMandateFrontier{
@@ -100,9 +100,9 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	require.Equal(t, frontiers, filtered)
 
 	protocolState := rootstate.SuccessionState{
-		Tenure:  state.Tenure,
-		Legacy:  state.Legacy,
-		Transit: state.Transit,
+		Tenure:   state.Tenure,
+		Legacy:   state.Legacy,
+		Handover: state.Handover,
 	}
 	require.Equal(t, protocolState, RootSuccessionStateFromProto(RootSuccessionStateToProto(protocolState)))
 	require.Equal(t, rootstate.SuccessionState{}, RootSuccessionStateFromProto(nil))
@@ -118,21 +118,21 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	require.Equal(t, leaseCmd, RootTenureCommandFromProto(RootTenureCommandToProto(leaseCmd)))
 	require.Equal(t, rootproto.TenureCommand{}, RootTenureCommandFromProto(nil))
 
-	closureCmd := rootproto.TransitCommand{
-		Kind:        rootproto.TransitActReattach,
+	closureCmd := rootproto.HandoverCommand{
+		Kind:        rootproto.HandoverActReattach,
 		HolderID:    "coord-1",
 		NowUnixNano: 999,
 		Frontiers:   frontiers,
 	}
-	require.Equal(t, closureCmd, RootTransitCommandFromProto(RootTransitCommandToProto(closureCmd)))
-	require.Equal(t, rootproto.TransitCommand{}, RootTransitCommandFromProto(nil))
+	require.Equal(t, closureCmd, RootHandoverCommandFromProto(RootHandoverCommandToProto(closureCmd)))
+	require.Equal(t, rootproto.HandoverCommand{}, RootHandoverCommandFromProto(nil))
 
-	require.Equal(t, metapb.RootTransitStage_ROOT_TRANSIT_STAGE_PENDING_CONFIRM, rootTransitStageToProto(rootproto.TransitStageUnspecified))
-	require.Equal(t, rootproto.TransitStagePendingConfirm, rootTransitStageFromProto(metapb.RootTransitStage_ROOT_TRANSIT_STAGE_PENDING_CONFIRM))
+	require.Equal(t, metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_PENDING_CONFIRM, rootHandoverStageToProto(rootproto.HandoverStageUnspecified))
+	require.Equal(t, rootproto.HandoverStagePendingConfirm, rootHandoverStageFromProto(metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_PENDING_CONFIRM))
 	require.Equal(t, metapb.RootTenureAct_ROOT_TENURE_ACT_UNSPECIFIED, rootTenureActToProto(rootproto.TenureActUnknown))
 	require.Equal(t, rootproto.TenureActUnknown, rootTenureActFromProto(metapb.RootTenureAct_ROOT_TENURE_ACT_UNSPECIFIED))
-	require.Equal(t, metapb.RootTransitAct_ROOT_TRANSIT_ACT_UNSPECIFIED, rootTransitActToProto(rootproto.TransitActUnknown))
-	require.Equal(t, rootproto.TransitActUnknown, rootTransitActFromProto(metapb.RootTransitAct_ROOT_TRANSIT_ACT_UNSPECIFIED))
+	require.Equal(t, metapb.RootHandoverAct_ROOT_HANDOVER_ACT_UNSPECIFIED, rootHandoverActToProto(rootproto.HandoverActUnknown))
+	require.Equal(t, rootproto.HandoverActUnknown, rootHandoverActFromProto(metapb.RootHandoverAct_ROOT_HANDOVER_ACT_UNSPECIFIED))
 }
 
 func TestRootSnapshotTailAndAllocatorRoundTrip(t *testing.T) {
@@ -249,7 +249,7 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.IDAllocatorFenced(10),
 		rootevent.TenureGranted("coord", 123, 7, rootproto.MandateAllocID, "pred", frontiers),
 		rootevent.TenureSealed("coord", 7, rootproto.MandateAllocID, frontiers),
-		rootevent.TransitClosed("coord", 7, 8, "seal"),
+		rootevent.HandoverClosed("coord", 7, 8, "seal"),
 		rootevent.RegionDescriptorPublished(desc),
 		rootevent.RegionTombstoned(desc.RegionID),
 		rootevent.RegionSplitCancelled(desc.RegionID, []byte("f"), left, right, base),
@@ -274,10 +274,10 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 
 	require.Nil(t, rootEventTenureToProto(nil))
 	require.Nil(t, rootEventLegacyToProto(nil))
-	require.Nil(t, rootEventTransitToProto(nil))
+	require.Nil(t, rootEventHandoverToProto(nil))
 	require.Nil(t, rootEventTenureFromProto(nil))
 	require.Nil(t, rootEventLegacyFromProto(nil))
-	require.Nil(t, rootEventTransitFromProto(nil))
+	require.Nil(t, rootEventHandoverFromProto(nil))
 
 	kinds := []rootevent.Kind{
 		rootevent.KindStoreJoined,
@@ -301,7 +301,7 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.KindPeerRemovalCancelled,
 		rootevent.KindTenure,
 		rootevent.KindLegacy,
-		rootevent.KindTransit,
+		rootevent.KindHandover,
 	}
 	for _, kind := range kinds {
 		require.Equal(t, kind, rootEventKindFromProto(rootEventKindToProto(kind)))

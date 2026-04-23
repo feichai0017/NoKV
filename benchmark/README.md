@@ -105,7 +105,7 @@ Outputs:
 - raw benchmark logs under `benchmark/succession/results/<stamp>/`
 - a paper-friendly markdown summary at `summary.md`
 - witness-tax logs comparing `baseline` vs `disable_client_verify` (and `disable_reply_evidence_disable_client_verify`) for `AllocID` / `Tso` / `GetRegionByKey`
-- CRDB `#66562` logs showing `without_ccc_coverage` vs `with_ccc_coverage`, replaying the original `n1 -> n2 transfer -> n2 expiry -> n3 fresh lease` schedule with both snapshot and trace-level `lease_start_coverage_violation` evidence
+- CRDB `#66562` logs showing `without_lease_start_coverage` vs `with_lease_start_coverage`, replaying the original `n1 -> n2 transfer -> n2 expiry -> n3 fresh lease` schedule with both snapshot and trace-level `lease_start_coverage_violation` evidence
 
 Linux netem wrapper via Docker:
 

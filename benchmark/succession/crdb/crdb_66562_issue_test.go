@@ -14,7 +14,7 @@ import (
 )
 
 func TestControlPlaneCRDB66562IssueSchedule(t *testing.T) {
-	t.Run("without_ccc_coverage", func(t *testing.T) {
+	t.Run("without_lease_start_coverage", func(t *testing.T) {
 		harness := newCRDB66562Harness(crdb66562Config{DisableCoverage: true})
 
 		require.NoError(t, harness.AcquireFreshLease("n1", 0, 10))
@@ -53,7 +53,7 @@ func TestControlPlaneCRDB66562IssueSchedule(t *testing.T) {
 		require.Equal(t, []string{"lease_start_coverage_violation"}, anomalyKinds(traceAnomalies))
 
 		t.Logf(
-			"crdb_66562 scenario=without_ccc_coverage n1_lease=[%d,%d] transfer=n1->n2@%d expiry=%d n3_fresh_start=%d served_key=%s served_ts=%d write_ts=%d snapshot_anomalies=%s trace_anomalies=%s",
+			"crdb_66562 scenario=without_lease_start_coverage n1_lease=[%d,%d] transfer=n1->n2@%d expiry=%d n3_fresh_start=%d served_key=%s served_ts=%d write_ts=%d snapshot_anomalies=%s trace_anomalies=%s",
 			uint64(0),
 			uint64(10),
 			uint64(6),
@@ -67,7 +67,7 @@ func TestControlPlaneCRDB66562IssueSchedule(t *testing.T) {
 		)
 	})
 
-	t.Run("with_ccc_coverage", func(t *testing.T) {
+	t.Run("with_lease_start_coverage", func(t *testing.T) {
 		harness := newCRDB66562Harness(crdb66562Config{})
 
 		require.NoError(t, harness.AcquireFreshLease("n1", 0, 10))
@@ -110,7 +110,7 @@ func TestControlPlaneCRDB66562IssueSchedule(t *testing.T) {
 		require.Empty(t, acceptedTraceAnomalies)
 
 		t.Logf(
-			"crdb_66562 scenario=with_ccc_coverage rejected_n3_fresh_start=%d accepted_n3_fresh_start=%d carried_served_ts=%d write_ts=%d snapshot_anomalies=%s trace_anomalies=%s",
+			"crdb_66562 scenario=with_lease_start_coverage rejected_n3_fresh_start=%d accepted_n3_fresh_start=%d carried_served_ts=%d write_ts=%d snapshot_anomalies=%s trace_anomalies=%s",
 			uint64(8),
 			report.Successor.LeaseStart,
 			harness.sealed.Summary.MaxTimestamp(),
