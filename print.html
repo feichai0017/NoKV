@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-2c0f4017.js";
+            window.path_to_searchindex_js = "searchindex-0f1f7414.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-87c44e77.js"></script>
@@ -1657,6 +1657,90 @@ It is a serving restriction mode.</p>
 <li><code>ViewOnly</code> and still serve diagnostics</li>
 </ul>
 <p>That distinction should remain sharp.</p>
+<h3 id="84-current-coordinator-contract"><a class="header" href="#84-current-coordinator-contract">8.4 Current coordinator contract</a></h3>
+<p>The current implementation already enforces a concrete degraded-mode contract at
+the Coordinator RPC boundary.</p>
+<h4 id="metadata-reads-getregionbykey"><a class="header" href="#metadata-reads-getregionbykey">Metadata reads (<code>GetRegionByKey</code>)</a></h4>
+<ul>
+<li><code>Freshness=BEST_EFFORT</code>
+<ul>
+<li>serves from the local materialized catalog even when <code>meta/root</code> is
+currently unavailable</li>
+<li>returns <code>degraded_mode=ROOT_UNAVAILABLE</code> when the rooted snapshot cannot be
+reloaded</li>
+<li>returns <code>degraded_mode=ROOT_LAGGING</code> when the local catalog trails rooted
+truth</li>
+</ul>
+</li>
+<li><code>Freshness=BOUNDED</code>
+<ul>
+<li>rejects when <code>meta/root</code> is unavailable</li>
+<li>rejects when <code>root_lag &gt; max_root_lag</code></li>
+<li>rejects when catch-up is still <code>BOOTSTRAP_REQUIRED</code></li>
+</ul>
+</li>
+<li><code>Freshness=STRONG</code>
+<ul>
+<li>rejects on followers</li>
+<li>rejects whenever <code>root_lag &gt; 0</code></li>
+<li>rejects when <code>meta/root</code> is unavailable</li>
+</ul>
+</li>
+</ul>
+<p>In all cases, successful replies carry the current answerability witness:</p>
+<ul>
+<li><code>served_root_token</code></li>
+<li><code>current_root_token</code></li>
+<li><code>root_lag</code></li>
+<li><code>catch_up_state</code></li>
+<li><code>degraded_mode</code></li>
+<li><code>serving_class</code></li>
+<li><code>sync_health</code></li>
+</ul>
+<h4 id="duty-gated-writes-allocid-tso-scheduler-decisions"><a class="header" href="#duty-gated-writes-allocid-tso-scheduler-decisions">Duty-gated writes (<code>AllocID</code>, <code>TSO</code>, scheduler decisions)</a></h4>
+<p>These do <strong>not</strong> have a degraded fallback.</p>
+<ul>
+<li>the local coordinator must first campaign / renew the rooted lease</li>
+<li>the rooted lease must still be active for the local holder</li>
+<li>the rooted generation must not already be sealed</li>
+<li>the rooted duty mask must admit the requested action</li>
+</ul>
+<p>If any of those fail, the request is rejected instead of falling back to stale
+local state. This is the current boundary between:</p>
+<ul>
+<li>read-path degradation</li>
+<li>write-path fail-stop admission</li>
+</ul>
+<h4 id="lifecycle-mutations-seal-confirm-close-reattach"><a class="header" href="#lifecycle-mutations-seal-confirm-close-reattach">Lifecycle mutations (<code>Seal</code>, <code>Confirm</code>, <code>Close</code>, <code>Reattach</code>)</a></h4>
+<p>Lifecycle mutations are stricter than hot-path duty admission:</p>
+<ul>
+<li>they always re-read rooted state from storage before mutating</li>
+<li>they reject any stale-holder / expired-lease / sealed-generation view</li>
+<li>they treat closure completeness as a rooted safety condition, not a best-effort hint</li>
+</ul>
+<p>That is why seal / confirm / close / reattach do not use the cached mirror
+admission path.</p>
+<h3 id="85-operational-diagnostics"><a class="header" href="#85-operational-diagnostics">8.5 Operational diagnostics</a></h3>
+<p><code>DiagnosticsSnapshot()</code> now exports both:</p>
+<ul>
+<li>the current degraded serving state (<code>root</code>, <code>lease</code>, <code>audit</code>, <code>closure_witness</code>)</li>
+<li>cumulative CCC counters under <code>ccc_metrics</code></li>
+</ul>
+<p><code>ccc_metrics</code> is grouped into:</p>
+<ul>
+<li><code>lease_generation_transitions_total</code></li>
+<li><code>closure_stage_transitions_total</code></li>
+<li><code>pre_action_gate_rejections_total</code></li>
+<li><code>ali_violations_total</code></li>
+</ul>
+<p>The <code>ali_violations_total</code> buckets map to the four Authority Lineage
+Invariants:</p>
+<ul>
+<li><code>authority_uniqueness</code></li>
+<li><code>successor_coverage</code></li>
+<li><code>post_seal_inadmissibility</code></li>
+<li><code>closure_completeness</code></li>
+</ul>
 <hr>
 <h2 id="9-api-direction"><a class="header" href="#9-api-direction">9. API Direction</a></h2>
 <p>The most valuable first implementation step is at the Coordinator RPC boundary.</p>
@@ -5976,6 +6060,32 @@ enum:</p>
 indicates that the rooted closure state has drifted from the expected
 <code>Attached → Active → Seal → Cover → Close → Reattach</code> lifecycle — which is
 exactly the property CCC.tla proves meta-root must preserve.</p>
+<h2 id="runtime-diagnostics-and-metrics"><a class="header" href="#runtime-diagnostics-and-metrics">Runtime diagnostics and metrics</a></h2>
+<p>The audit CLI is the read-only offline/operator view. The live coordinator
+runtime now exposes a matching <code>ccc_metrics</code> block through
+<code>coordinator/server.DiagnosticsSnapshot()</code> and the <code>nokv_coordinator</code> expvar
+surface.</p>
+<p>That block exports four counter families:</p>
+<ul>
+<li><code>lease_generation_transitions_total</code></li>
+<li><code>closure_stage_transitions_total</code></li>
+<li><code>pre_action_gate_rejections_total</code></li>
+<li><code>ali_violations_total</code></li>
+</ul>
+<p><code>ali_violations_total</code> uses the same four-way CCC vocabulary as the paper and
+the TLA+ model:</p>
+<ul>
+<li><code>authority_uniqueness</code></li>
+<li><code>successor_coverage</code></li>
+<li><code>post_seal_inadmissibility</code></li>
+<li><code>closure_completeness</code></li>
+</ul>
+<p>The intended split is:</p>
+<ul>
+<li><code>ccc-audit</code> explains whether the <strong>current rooted snapshot</strong> is legal</li>
+<li><code>ccc_metrics</code> shows how often the <strong>live runtime</strong> has rejected unsafe
+continuations while the system is running</li>
+</ul>
 <h2 id="related"><a class="header" href="#related">Related</a></h2>
 <ul>
 <li><a href="#rooted-truth--metaroot">Rooted truth</a> — lifecycle semantics audited by this tool</li>
