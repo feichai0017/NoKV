@@ -40,9 +40,9 @@ type GRPCClient struct {
 	preferred int
 
 	verifyMu         sync.Mutex
-	allocGen         witnessGenerationFloor
-	tsoGen           witnessGenerationFloor
-	metadataGen      witnessGenerationFloor
+	allocGen         witnessEraFloor
+	tsoGen           witnessEraFloor
+	metadataGen      witnessEraFloor
 	metadataAttached metadataAttachedFloor
 	ablation         coordablation.Config
 }
@@ -358,7 +358,7 @@ func invokeRPCValidated[T any](c *GRPCClient, retryable func(error) bool, call f
 
 func retryableRead(err error) bool {
 	code := status.Code(err)
-	return code == codes.Unavailable || code == codes.DeadlineExceeded || IsStaleWitnessGeneration(err)
+	return code == codes.Unavailable || code == codes.DeadlineExceeded || IsStaleWitnessEra(err)
 }
 
 func retryableWrite(err error) bool {
@@ -368,7 +368,7 @@ func retryableWrite(err error) bool {
 	return IsNotLeader(err) || IsLeaseNotHeld(err)
 }
 
-type witnessGenerationFloor struct {
+type witnessEraFloor struct {
 	maxSeen    uint64
 	sealedSeen uint64
 }
@@ -390,7 +390,7 @@ func (c *GRPCClient) validateAllocIDResponse(req *coordpb.AllocIDRequest, resp *
 	if resp == nil {
 		return fmt.Errorf("%w: alloc id response is nil", errInvalidWitness)
 	}
-	return c.validateMonotoneWitness("alloc_id", normalizedCount(requestedAllocIDCount(req)), resp.GetFirstId(), resp.GetCount(), resp.GetEpoch(), resp.GetConsumedFrontier(), resp.GetObservedLegacyEpoch(), &c.allocGen)
+	return c.validateMonotoneWitness("alloc_id", normalizedCount(requestedAllocIDCount(req)), resp.GetFirstId(), resp.GetCount(), resp.GetEra(), resp.GetConsumedFrontier(), resp.GetObservedLegacyEra(), &c.allocGen)
 }
 
 func (c *GRPCClient) validateGetRegionByKeyResponse(req *coordpb.GetRegionByKeyRequest, resp *coordpb.GetRegionByKeyResponse) error {
@@ -432,7 +432,7 @@ func (c *GRPCClient) validateGetRegionByKeyResponse(req *coordpb.GetRegionByKeyR
 	if err := metadataFreshnessSatisfied(expectation.freshness, resp); err != nil {
 		return err
 	}
-	if err := c.validateMetadataWitnessGeneration(resp); err != nil {
+	if err := c.validateMetadataWitnessEra(resp); err != nil {
 		return err
 	}
 	if resp.GetNotFound() {
@@ -457,11 +457,11 @@ func (c *GRPCClient) validateTSOResponse(req *coordpb.TsoRequest, resp *coordpb.
 	if resp == nil {
 		return fmt.Errorf("%w: tso response is nil", errInvalidWitness)
 	}
-	return c.validateMonotoneWitness("tso", normalizedCount(requestedTSOCount(req)), resp.GetTimestamp(), resp.GetCount(), resp.GetEpoch(), resp.GetConsumedFrontier(), resp.GetObservedLegacyEpoch(), &c.tsoGen)
+	return c.validateMonotoneWitness("tso", normalizedCount(requestedTSOCount(req)), resp.GetTimestamp(), resp.GetCount(), resp.GetEra(), resp.GetConsumedFrontier(), resp.GetObservedLegacyEra(), &c.tsoGen)
 }
 
-func (c *GRPCClient) validateMonotoneWitness(kind string, requestedCount, first, gotCount, epoch, consumedFrontier, observedLegacyEpoch uint64, generation *witnessGenerationFloor) error {
-	if epoch == rootproto.ContinuationWitnessGenerationSuppressed {
+func (c *GRPCClient) validateMonotoneWitness(kind string, requestedCount, first, gotCount, era, consumedFrontier, observedLegacyEra uint64, floor *witnessEraFloor) error {
+	if era == rootproto.MandateWitnessEraSuppressed {
 		return fmt.Errorf("%w: %s reply evidence suppressed", errInvalidWitness, kind)
 	}
 	if gotCount != requestedCount {
@@ -474,22 +474,22 @@ func (c *GRPCClient) validateMonotoneWitness(kind string, requestedCount, first,
 	if consumedFrontier != expectedFrontier {
 		return fmt.Errorf("%w: %s consumed_frontier=%d expected=%d", errInvalidWitness, kind, consumedFrontier, expectedFrontier)
 	}
-	return c.advanceWitnessGenerationFloor(kind, epoch, observedLegacyEpoch, generation)
+	return c.advanceWitnessEraFloor(kind, era, observedLegacyEra, floor)
 }
 
-func (c *GRPCClient) validateMetadataWitnessGeneration(resp *coordpb.GetRegionByKeyResponse) error {
-	epoch := resp.GetEpoch()
-	if epoch == rootproto.ContinuationWitnessGenerationSuppressed {
+func (c *GRPCClient) validateMetadataWitnessEra(resp *coordpb.GetRegionByKeyResponse) error {
+	era := resp.GetEra()
+	if era == rootproto.MandateWitnessEraSuppressed {
 		return fmt.Errorf("%w: get_region_by_key reply evidence suppressed", errInvalidWitness)
 	}
-	if epoch == rootproto.ContinuationWitnessGenerationAttached {
+	if era == rootproto.MandateWitnessEraAttached {
 		if resp.GetServingClass() != coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE ||
 			resp.GetSyncHealth() != coordpb.SyncHealth_SYNC_HEALTH_HEALTHY ||
 			!resp.GetServedByLeader() ||
 			resp.GetRootLag() != 0 ||
 			resp.GetCatchUpState() != coordpb.CatchUpState_CATCH_UP_STATE_FRESH {
 			return fmt.Errorf(
-				"%w: get_region_by_key epoch=0 requires authoritative attached serving_class=%s sync_health=%s served_by_leader=%t root_lag=%d catch_up_state=%s",
+				"%w: get_region_by_key era=0 requires authoritative attached serving_class=%s sync_health=%s served_by_leader=%t root_lag=%d catch_up_state=%s",
 				errInvalidWitness,
 				resp.GetServingClass(),
 				resp.GetSyncHealth(),
@@ -500,7 +500,7 @@ func (c *GRPCClient) validateMetadataWitnessGeneration(resp *coordpb.GetRegionBy
 		}
 		return c.advanceAttachedMetadataFloor(resp)
 	}
-	return c.advanceWitnessGenerationFloor("get_region_by_key", epoch, resp.GetObservedLegacyEpoch(), &c.metadataGen)
+	return c.advanceWitnessEraFloor("get_region_by_key", era, resp.GetObservedLegacyEra(), &c.metadataGen)
 }
 
 func (c *GRPCClient) advanceAttachedMetadataFloor(resp *coordpb.GetRegionByKeyResponse) error {
@@ -510,7 +510,7 @@ func (c *GRPCClient) advanceAttachedMetadataFloor(resp *coordpb.GetRegionByKeyRe
 	currentToken := resp.GetCurrentRootToken()
 	if c.metadataAttached.hasCurrentToken && !metadataRootTokenSatisfied(currentToken, c.metadataAttached.currentToken) {
 		return fmt.Errorf(
-			"%w: get_region_by_key epoch=0 current_root_token regressed behind attached floor",
+			"%w: get_region_by_key era=0 current_root_token regressed behind attached floor",
 			errInvalidWitness,
 		)
 	}
@@ -518,7 +518,7 @@ func (c *GRPCClient) advanceAttachedMetadataFloor(resp *coordpb.GetRegionByKeyRe
 		resp.GetDescriptorRevision() != 0 &&
 		resp.GetDescriptorRevision() < c.metadataAttached.descriptorRevision {
 		return fmt.Errorf(
-			"%w: get_region_by_key epoch=0 descriptor_revision=%d attached_floor=%d",
+			"%w: get_region_by_key era=0 descriptor_revision=%d attached_floor=%d",
 			errInvalidWitness,
 			resp.GetDescriptorRevision(),
 			c.metadataAttached.descriptorRevision,
@@ -535,23 +535,23 @@ func (c *GRPCClient) advanceAttachedMetadataFloor(resp *coordpb.GetRegionByKeyRe
 	return nil
 }
 
-func (c *GRPCClient) advanceWitnessGenerationFloor(kind string, epoch, observedLegacyEpoch uint64, floor *witnessGenerationFloor) error {
+func (c *GRPCClient) advanceWitnessEraFloor(kind string, era, observedLegacyEra uint64, floor *witnessEraFloor) error {
 	c.verifyMu.Lock()
 	defer c.verifyMu.Unlock()
-	if epoch == rootproto.ContinuationWitnessGenerationSuppressed {
-		return fmt.Errorf("%w: %s epoch suppressed", errInvalidWitness, kind)
+	if era == rootproto.MandateWitnessEraSuppressed {
+		return fmt.Errorf("%w: %s era suppressed", errInvalidWitness, kind)
 	}
-	if observedLegacyEpoch > floor.sealedSeen {
-		floor.sealedSeen = observedLegacyEpoch
+	if observedLegacyEra > floor.sealedSeen {
+		floor.sealedSeen = observedLegacyEra
 	}
-	if floor.sealedSeen != 0 && epoch <= floor.sealedSeen {
-		return fmt.Errorf("%w: %s epoch=%d sealed_floor=%d", errStaleWitnessGeneration, kind, epoch, floor.sealedSeen)
+	if floor.sealedSeen != 0 && era <= floor.sealedSeen {
+		return fmt.Errorf("%w: %s era=%d sealed_floor=%d", errStaleWitnessEra, kind, era, floor.sealedSeen)
 	}
-	if epoch < floor.maxSeen {
-		return fmt.Errorf("%w: %s epoch=%d max_seen=%d", errStaleWitnessGeneration, kind, epoch, floor.maxSeen)
+	if era < floor.maxSeen {
+		return fmt.Errorf("%w: %s era=%d max_seen=%d", errStaleWitnessEra, kind, era, floor.maxSeen)
 	}
-	if epoch > floor.maxSeen {
-		floor.maxSeen = epoch
+	if era > floor.maxSeen {
+		floor.maxSeen = era
 	}
 	return nil
 }

@@ -18,7 +18,7 @@ const (
 )
 
 type successionMetrics struct {
-	tenureEpochTransitionsTotal atomic.Uint64
+	tenureEraTransitionsTotal atomic.Uint64
 
 	handoverStageConfirmedTotal  atomic.Uint64
 	handoverStageClosedTotal     atomic.Uint64
@@ -36,7 +36,7 @@ type successionMetrics struct {
 
 func (m *successionMetrics) snapshot() map[string]any {
 	return map[string]any{
-		"tenure_epoch_transitions_total": m.tenureEpochTransitionsTotal.Load(),
+		"tenure_era_transitions_total": m.tenureEraTransitionsTotal.Load(),
 		"handover_stage_transitions_total": map[string]any{
 			"confirmed":  m.handoverStageConfirmedTotal.Load(),
 			"closed":     m.handoverStageClosedTotal.Load(),
@@ -56,11 +56,11 @@ func (m *successionMetrics) snapshot() map[string]any {
 	}
 }
 
-func (m *successionMetrics) recordTenureEpochTransition(before, after uint64) {
+func (m *successionMetrics) recordTenureEraTransition(before, after uint64) {
 	if after == 0 || before == after {
 		return
 	}
-	m.tenureEpochTransitionsTotal.Add(1)
+	m.tenureEraTransitionsTotal.Add(1)
 }
 
 func (m *successionMetrics) recordHandoverStageTransition(before, after rootproto.HandoverStage) {

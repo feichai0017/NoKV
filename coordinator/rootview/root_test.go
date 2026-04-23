@@ -216,7 +216,7 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 		Allocator: AllocatorState{IDCurrent: 20, TSCurrent: 30},
 		Tenure: rootstate.Tenure{
 			HolderID:        "coord",
-			Epoch:           7,
+			Era:             7,
 			ExpiresUnixNano: 999,
 		},
 	}
@@ -372,15 +372,15 @@ func TestRootStoreWithOptionalBackend(t *testing.T) {
 			rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 2}, Revision: 2},
 		),
 		applyLeaseResult: rootstate.SuccessionState{
-			Tenure: rootstate.Tenure{HolderID: "coord-2", Epoch: 2, ExpiresUnixNano: 999},
+			Tenure: rootstate.Tenure{HolderID: "coord-2", Era: 2, ExpiresUnixNano: 999},
 		},
 		applyClosureResult: rootstate.SuccessionState{
 			Handover: rootstate.Handover{
-				HolderID:       "coord-2",
-				LegacyEpoch:    2,
-				SuccessorEpoch: 3,
-				LegacyDigest:   "seal",
-				Stage:          rootproto.HandoverStageClosed,
+				HolderID:     "coord-2",
+				LegacyEra:    2,
+				SuccessorEra: 3,
+				LegacyDigest: "seal",
+				Stage:        rootproto.HandoverStageClosed,
 			},
 		},
 	}

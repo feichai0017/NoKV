@@ -16,9 +16,9 @@ var (
 	errNoReachableAddress = errors.New("coordinator client: no reachable address")
 	// errConnectionShutdown indicates that the underlying gRPC connection shut down before becoming ready.
 	errConnectionShutdown = errors.New("coordinator client: grpc connection shutdown")
-	// errStaleWitnessGeneration indicates that a reply was self-consistent but
-	// carried a generation older than one already accepted by this client.
-	errStaleWitnessGeneration = errors.New("coordinator client: stale witness generation")
+	// errStaleWitnessEra indicates that a reply was self-consistent but
+	// carried a era older than one already accepted by this client.
+	errStaleWitnessEra = errors.New("coordinator client: stale witness era")
 	// errInvalidWitness indicates that a reply carried malformed monotone-duty
 	// witness fields and cannot be admitted as a legal continuation reply.
 	errInvalidWitness = errors.New("coordinator client: invalid witness")
@@ -42,10 +42,10 @@ func IsConnectionShutdown(err error) bool {
 	return errors.Is(err, errConnectionShutdown)
 }
 
-// IsStaleWitnessGeneration reports whether err represents a stale reply whose
-// witness generation regressed behind one already accepted by this client.
-func IsStaleWitnessGeneration(err error) bool {
-	return errors.Is(err, errStaleWitnessGeneration)
+// IsStaleWitnessEra reports whether err represents a stale reply whose
+// witness era regressed behind one already accepted by this client.
+func IsStaleWitnessEra(err error) bool {
+	return errors.Is(err, errStaleWitnessEra)
 }
 
 // IsInvalidWitness reports whether err represents malformed reply witness

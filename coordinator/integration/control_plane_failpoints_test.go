@@ -78,8 +78,8 @@ func TestControlPlaneFailpointAfterApplyHandoverBeforeReloadPreservesSealAcrossR
 
 	rootState, err := cluster.Roots[leaderID].Current()
 	require.NoError(t, err)
-	require.Equal(t, rootState.Tenure.Epoch, rootState.Legacy.Epoch)
-	require.NotZero(t, rootState.Legacy.Epoch)
+	require.Equal(t, rootState.Tenure.Era, rootState.Legacy.Era)
+	require.NotZero(t, rootState.Legacy.Era)
 
 	coordfailpoints.Set(coordfailpoints.None)
 	restarted := cluster.RestartService(leaderID)
@@ -88,7 +88,7 @@ func TestControlPlaneFailpointAfterApplyHandoverBeforeReloadPreservesSealAcrossR
 
 	allocResp, err := restarted.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
-	require.Greater(t, allocResp.GetEpoch(), rootState.Legacy.Epoch)
+	require.Greater(t, allocResp.GetEra(), rootState.Legacy.Era)
 	require.NoError(t, restarted.ConfirmHandover())
 	require.NoError(t, restarted.CloseHandover())
 	require.NoError(t, restarted.ReattachHandover())
@@ -121,8 +121,8 @@ func TestControlPlaneFailpointAfterApplyHandoverBeforeReloadPreservesConfirmedCl
 	rootState, err := cluster.Roots[leaderID].Current()
 	require.NoError(t, err)
 	require.Equal(t, rootproto.HandoverStageConfirmed, rootState.Handover.Stage)
-	require.Equal(t, rootState.Legacy.Epoch, rootState.Handover.LegacyEpoch)
-	require.Equal(t, rootState.Tenure.Epoch, rootState.Handover.SuccessorEpoch)
+	require.Equal(t, rootState.Legacy.Era, rootState.Handover.LegacyEra)
+	require.Equal(t, rootState.Tenure.Era, rootState.Handover.SuccessorEra)
 
 	coordfailpoints.Set(coordfailpoints.None)
 	restarted := cluster.RestartService(leaderID)

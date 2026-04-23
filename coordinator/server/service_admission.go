@@ -17,12 +17,12 @@ func (s *Service) requireExpectedClusterEpoch(expected uint64) error {
 	}
 	current, err := s.currentClusterEpoch()
 	if err != nil {
-		return status.Error(codes.Internal, "load current cluster epoch: "+err.Error())
+		return status.Error(codes.Internal, "load current cluster era: "+err.Error())
 	}
 	if current == expected {
 		return nil
 	}
-	return status.Error(codes.FailedPrecondition, fmt.Sprintf("pd/meta cluster epoch mismatch (expected=%d current=%d)", expected, current))
+	return status.Error(codes.FailedPrecondition, fmt.Sprintf("pd/meta cluster era mismatch (expected=%d current=%d)", expected, current))
 }
 
 func (s *Service) currentClusterEpoch() (uint64, error) {
@@ -141,7 +141,7 @@ func (s *Service) validateGateTenure(kind gateKind, mandate uint32, current root
 	if !current.ActiveAt(nowUnixNano) {
 		s.successionMetrics.recordGateRejection(kind)
 		s.successionMetrics.recordGuaranteeViolation(guaranteePrimacy)
-		return statusTenure(fmt.Errorf("%w: rooted lease expired generation=%d", rootstate.ErrInvalidTenure, current.Epoch))
+		return statusTenure(fmt.Errorf("%w: rooted lease expired era=%d", rootstate.ErrInvalidTenure, current.Era))
 	}
 
 	switch kind {
@@ -149,24 +149,24 @@ func (s *Service) validateGateTenure(kind gateKind, mandate uint32, current root
 		if rootstate.TenureSealed(current, seal) {
 			s.successionMetrics.recordGateRejection(kind)
 			s.successionMetrics.recordGuaranteeViolation(guaranteeFinality)
-			return statusTenure(fmt.Errorf("%w: epoch=%d already sealed", rootstate.ErrFinality, current.Epoch))
+			return statusTenure(fmt.Errorf("%w: era=%d already sealed", rootstate.ErrFinality, current.Era))
 		}
 	case gateHandoverMutation:
 		if rootstate.TenureSealed(current, seal) {
 			s.successionMetrics.recordGateRejection(kind)
 			s.successionMetrics.recordGuaranteeViolation(guaranteeSilence)
-			return statusTenure(fmt.Errorf("%w: epoch=%d legacy_epoch=%d", rootstate.ErrSilence, current.Epoch, seal.Epoch))
+			return statusTenure(fmt.Errorf("%w: era=%d legacy_era=%d", rootstate.ErrSilence, current.Era, seal.Era))
 		}
 	case gateMandateAdmission:
 		currentMandate := current.Mandate
 		if mandate != 0 && currentMandate&mandate != mandate {
 			s.successionMetrics.recordGateRejection(kind)
-			return statusTenure(fmt.Errorf("%w: required_mandate=%d rooted_mandate=%d epoch=%d", rootstate.ErrMandate, mandate, currentMandate, current.Epoch))
+			return statusTenure(fmt.Errorf("%w: required_mandate=%d rooted_mandate=%d era=%d", rootstate.ErrMandate, mandate, currentMandate, current.Era))
 		}
 		if rootstate.TenureSealed(current, seal) {
 			s.successionMetrics.recordGateRejection(kind)
 			s.successionMetrics.recordGuaranteeViolation(guaranteeSilence)
-			return statusTenure(fmt.Errorf("%w: epoch=%d legacy_epoch=%d", rootstate.ErrSilence, current.Epoch, seal.Epoch))
+			return statusTenure(fmt.Errorf("%w: era=%d legacy_era=%d", rootstate.ErrSilence, current.Era, seal.Era))
 		}
 	}
 	return nil

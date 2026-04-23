@@ -58,11 +58,11 @@ func decodeNoKVReplyTrace(data []byte) ([]ReplyTraceRecord, error) {
 }
 
 type etcdReadIndexTraceRecord struct {
-	MemberID            string `json:"member_id,omitempty"`
-	Duty                string `json:"duty,omitempty"`
-	ReadStateGeneration uint64 `json:"read_state_generation"`
-	SuccessorEpoch      uint64 `json:"successor_epoch"`
-	Accepted            bool   `json:"accepted"`
+	MemberID     string `json:"member_id,omitempty"`
+	Duty         string `json:"duty,omitempty"`
+	ReadStateEra uint64 `json:"read_state_era"`
+	SuccessorEra uint64 `json:"successor_era"`
+	Accepted     bool   `json:"accepted"`
 }
 
 func decodeEtcdReadIndexTrace(data []byte) ([]ReplyTraceRecord, error) {
@@ -87,11 +87,11 @@ func projectEtcdReadIndexTrace(records []etcdReadIndexTraceRecord) []ReplyTraceR
 			duty = "read_index"
 		}
 		out = append(out, ReplyTraceRecord{
-			Source:                 "etcd-read-index",
-			Duty:                   duty,
-			Epoch:                  record.ReadStateGeneration,
-			ObservedSuccessorEpoch: record.SuccessorEpoch,
-			Accepted:               record.Accepted,
+			Source:               "etcd-read-index",
+			Duty:                 duty,
+			Era:                  record.ReadStateEra,
+			ObservedSuccessorEra: record.SuccessorEra,
+			Accepted:             record.Accepted,
 		})
 	}
 	return out
@@ -127,11 +127,11 @@ func projectEtcdLeaseRenewTrace(records []etcdLeaseRenewTraceRecord) []ReplyTrac
 			duty = "lease_renew"
 		}
 		out = append(out, ReplyTraceRecord{
-			Source:                 "etcd-lease-renew",
-			Duty:                   duty,
-			Epoch:                  record.ResponseRevision,
-			ObservedSuccessorEpoch: record.RevokeRevision,
-			Accepted:               record.Accepted,
+			Source:               "etcd-lease-renew",
+			Duty:                 duty,
+			Era:                  record.ResponseRevision,
+			ObservedSuccessorEra: record.RevokeRevision,
+			Accepted:             record.Accepted,
 		})
 	}
 	return out
@@ -167,11 +167,11 @@ func projectCRDBLeaseStartTrace(records []crdbLeaseStartTraceRecord) []ReplyTrac
 			duty = "lease_start_coverage"
 		}
 		out = append(out, ReplyTraceRecord{
-			Source:                 "crdb-lease-start",
-			Duty:                   duty,
-			Epoch:                  record.SuccessorLeaseStart,
-			ObservedSuccessorEpoch: record.ServedTimestamp,
-			Accepted:               record.Accepted,
+			Source:               "crdb-lease-start",
+			Duty:                 duty,
+			Era:                  record.SuccessorLeaseStart,
+			ObservedSuccessorEra: record.ServedTimestamp,
+			Accepted:             record.Accepted,
 		})
 	}
 	return out

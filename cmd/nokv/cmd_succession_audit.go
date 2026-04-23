@@ -131,30 +131,30 @@ func renderSuccessionAuditText(w io.Writer, report coordaudit.Report, anomalies 
 	_, _ = fmt.Fprintf(w, "root_desc_revision : %d\n", report.RootDescriptorRevision)
 	_, _ = fmt.Fprintf(w, "catch_up_state     : %s\n", report.CatchUpState)
 	_, _ = fmt.Fprintf(w, "current_holder     : %s\n", report.CurrentHolderID)
-	_, _ = fmt.Fprintf(w, "current_generation : %d\n", report.CurrentGeneration)
+	_, _ = fmt.Fprintf(w, "current_era : %d\n", report.CurrentEra)
 	_, _ = fmt.Fprintf(w, "handover           : stage=%s\n", report.Handover.Stage)
-	_, _ = fmt.Fprintf(w, "handover_witness   : stage=%s seal_gen=%d successor_present=%v inheritance=%v lineage_satisfied=%v sealed_gen_retired=%v\n",
+	_, _ = fmt.Fprintf(w, "handover_witness   : stage=%s legacy_era=%d successor_present=%v inheritance=%v lineage_satisfied=%v sealed_era_retired=%v\n",
 		report.HandoverWitness.Stage,
-		report.HandoverWitness.LegacyEpoch,
+		report.HandoverWitness.LegacyEra,
 		report.HandoverWitness.SuccessorPresent,
 		report.HandoverWitness.Inheritance,
 		report.HandoverWitness.SuccessorLineageSatisfied,
-		report.HandoverWitness.SealedGenerationRetired)
+		report.HandoverWitness.SealedEraRetired)
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "snapshot anomalies:")
 	_, _ = fmt.Fprintf(w, "  successor_lineage_mismatch     : %v\n", report.Anomalies.SuccessorLineageMismatch)
 	_, _ = fmt.Fprintf(w, "  uncovered_monotone_frontier    : %v\n", report.Anomalies.UncoveredMonotoneFrontier)
 	_, _ = fmt.Fprintf(w, "  uncovered_descriptor_revision  : %v\n", report.Anomalies.UncoveredDescriptorRevision)
 	_, _ = fmt.Fprintf(w, "  lease_start_coverage_violation : %v\n", report.Anomalies.LeaseStartCoverageViolation)
-	_, _ = fmt.Fprintf(w, "  sealed_generation_still_live   : %v\n", report.Anomalies.SealedGenerationStillLive)
+	_, _ = fmt.Fprintf(w, "  sealed_era_still_live   : %v\n", report.Anomalies.SealedEraStillLive)
 	_, _ = fmt.Fprintf(w, "  finality_defect                : %s\n", defectOrNone(report.Anomalies.FinalityDefect))
 
 	if len(anomalies) > 0 {
 		_, _ = fmt.Fprintln(w)
 		_, _ = fmt.Fprintf(w, "reply-trace anomalies (%d):\n", len(anomalies))
 		for _, a := range anomalies {
-			_, _ = fmt.Fprintf(w, "  [%d] kind=%s duty=%s cert_gen=%d reason=%q\n",
-				a.Index, a.Kind, a.Duty, a.Epoch, a.Reason)
+			_, _ = fmt.Fprintf(w, "  [%d] kind=%s duty=%s cert_era=%d reason=%q\n",
+				a.Index, a.Kind, a.Duty, a.Era, a.Reason)
 		}
 	}
 	return nil

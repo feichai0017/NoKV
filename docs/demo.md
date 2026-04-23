@@ -47,7 +47,7 @@ consecutive numbers — easy to remember, easy to script against.
 Meta-root (`2380/2381/2382`) is exposed so host-side tools like
 `nokv succession-audit` and `nokv-config` can query rooted state directly for
 debugging. All `/debug/vars` endpoints also expose the meta-root's state
-summary (leader, committed index, generation) for the dashboard.
+summary (leader, committed index, era) for the dashboard.
 
 **For production, don't expose meta-root publicly.** The gRPC API accepts
 `ApplyTenure` and `ApplyHandover` which are
@@ -84,7 +84,7 @@ three planes:
 - **Truth plane** — which meta-root is raft leader, committed index, allocator
   fences, descriptor / pending-change counts.
 - **Control plane** — which coordinator currently holds the Succession lease, lease
-  generation, root lag, degraded mode, active vs standby tag on every coord.
+  era, root lag, degraded mode, active vs standby tag on every coord.
 - **Execution plane** — stores heap usage, goroutine count.
 - **Gateway** — Redis expvar counters.
 
@@ -124,7 +124,7 @@ basic auth).
   active control-flow edge (lease holder → raft leader, holder → stores,
   gateway → holder).
 - **Per-service cards:** one card per service showing leader state, lease
-  generation, committed index, allocator fences, heap stats.
+  era, committed index, allocator fences, heap stats.
 - **Event timeline:** auto-populated from expvar diffs — lease handoffs,
   raft elections, descriptor-count changes, node up/down transitions. Use
   this to watch the Succession lifecycle live.
@@ -154,7 +154,7 @@ meta-root and coordinator container directly. Click one, watch:
   the handoff.
 - **Stop the raft leader meta-root** → raft election visible as the blue
   ring disappears briefly and lands on a surviving peer; coord lease may
-  churn through one generation before settling (~17 s total recovery).
+  churn through one era before settling (~17 s total recovery).
 - **Start the stopped container** → it rejoins quietly as a standby.
 
 The same drills run from the terminal if you prefer: `docker stop

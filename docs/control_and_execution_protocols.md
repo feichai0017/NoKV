@@ -749,7 +749,7 @@ These do **not** have a degraded fallback.
 
 - the local coordinator must first campaign / renew the rooted lease
 - the rooted lease must still be active for the local holder
-- the rooted generation must not already be sealed
+- the rooted era must not already be sealed
 - the rooted duty mask must admit the requested action
 
 If any of those fail, the request is rejected instead of falling back to stale
@@ -763,7 +763,7 @@ local state. This is the current boundary between:
 Lifecycle mutations are stricter than hot-path duty admission:
 
 - they always re-read rooted state from storage before mutating
-- they reject any stale-holder / expired-lease / sealed-generation view
+- they reject any stale-holder / expired-lease / sealed-era view
 - they treat finality as a rooted safety condition, not a best-effort hint
 
 That is why seal / confirm / close / reattach do not use the cached mirror
@@ -778,7 +778,7 @@ admission path.
 
 `succession_metrics` is grouped into:
 
-- `tenure_epoch_transitions_total`
+- `tenure_era_transitions_total`
 - `handover_stage_transitions_total`
 - `gate_rejections_total`
 - `guarantee_violations_total`

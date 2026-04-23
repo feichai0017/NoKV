@@ -54,7 +54,7 @@ func TestTenureEvent(t *testing.T) {
 	require.Equal(t, rootevent.KindTenure, cloned.Kind)
 	require.Equal(t, "c1", cloned.Tenure.HolderID)
 	require.Equal(t, int64(1_000), cloned.Tenure.ExpiresUnixNano)
-	require.Equal(t, uint64(1), cloned.Tenure.Epoch)
+	require.Equal(t, uint64(1), cloned.Tenure.Era)
 	require.Equal(t, uint32(7), cloned.Tenure.Mandate)
 	require.Equal(t, frontiers, cloned.Tenure.Frontiers)
 	require.Equal(t, "pred", cloned.Tenure.LineageDigest)
@@ -67,8 +67,8 @@ func TestHandoverConfirmedEvent(t *testing.T) {
 	event.Handover.HolderID = "c2"
 	require.Equal(t, rootevent.KindHandover, cloned.Kind)
 	require.Equal(t, "c1", cloned.Handover.HolderID)
-	require.Equal(t, uint64(7), cloned.Handover.LegacyEpoch)
-	require.Equal(t, uint64(8), cloned.Handover.SuccessorEpoch)
+	require.Equal(t, uint64(7), cloned.Handover.LegacyEra)
+	require.Equal(t, uint64(8), cloned.Handover.SuccessorEra)
 	require.Equal(t, "seal-digest", cloned.Handover.LegacyDigest)
 	require.Equal(t, rootevent.HandoverStageConfirmed, cloned.Handover.Stage)
 }
@@ -80,8 +80,8 @@ func TestHandoverClosedEvent(t *testing.T) {
 	event.Handover.HolderID = "c2"
 	require.Equal(t, rootevent.KindHandover, cloned.Kind)
 	require.Equal(t, "c1", cloned.Handover.HolderID)
-	require.Equal(t, uint64(7), cloned.Handover.LegacyEpoch)
-	require.Equal(t, uint64(8), cloned.Handover.SuccessorEpoch)
+	require.Equal(t, uint64(7), cloned.Handover.LegacyEra)
+	require.Equal(t, uint64(8), cloned.Handover.SuccessorEra)
 	require.Equal(t, "seal-digest", cloned.Handover.LegacyDigest)
 	require.Equal(t, rootevent.HandoverStageClosed, cloned.Handover.Stage)
 }
@@ -93,8 +93,8 @@ func TestHandoverReattachedEvent(t *testing.T) {
 	event.Handover.HolderID = "c2"
 	require.Equal(t, rootevent.KindHandover, cloned.Kind)
 	require.Equal(t, "c1", cloned.Handover.HolderID)
-	require.Equal(t, uint64(7), cloned.Handover.LegacyEpoch)
-	require.Equal(t, uint64(8), cloned.Handover.SuccessorEpoch)
+	require.Equal(t, uint64(7), cloned.Handover.LegacyEra)
+	require.Equal(t, uint64(8), cloned.Handover.SuccessorEra)
 	require.Equal(t, "seal-digest", cloned.Handover.LegacyDigest)
 	require.Equal(t, rootevent.HandoverStageReattached, cloned.Handover.Stage)
 }
@@ -128,14 +128,14 @@ func TestTenureReleasedAndSealed(t *testing.T) {
 	require.Equal(t, rootevent.KindTenure, released.Kind)
 	require.Equal(t, "c1", released.Tenure.HolderID)
 	require.Equal(t, int64(2_000), released.Tenure.ExpiresUnixNano)
-	require.Equal(t, uint64(3), released.Tenure.Epoch)
+	require.Equal(t, uint64(3), released.Tenure.Era)
 	require.Equal(t, uint32(5), released.Tenure.Mandate)
 	require.Equal(t, "digest", released.Tenure.LineageDigest)
 	require.Equal(t, frontiers, released.Tenure.Frontiers)
 
 	require.Equal(t, rootevent.KindLegacy, sealed.Kind)
 	require.Equal(t, "c1", sealed.Legacy.HolderID)
-	require.Equal(t, uint64(3), sealed.Legacy.Epoch)
+	require.Equal(t, uint64(3), sealed.Legacy.Era)
 	require.Equal(t, uint32(5), sealed.Legacy.Mandate)
 	require.Equal(t, frontiers, sealed.Legacy.Frontiers)
 }

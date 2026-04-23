@@ -413,7 +413,7 @@ func TestServiceApplyTenure(t *testing.T) {
 		Tenure: rootstate.Tenure{
 			HolderID:        "coord-1",
 			ExpiresUnixNano: 1234,
-			Epoch:           7,
+			Era:             7,
 			Mandate:         rootproto.MandateDefault,
 		},
 	}
@@ -470,11 +470,11 @@ func TestServiceApplyTenure(t *testing.T) {
 func TestServiceApplyHandover(t *testing.T) {
 	closureState := rootstate.SuccessionState{
 		Handover: rootstate.Handover{
-			HolderID:       "coord-1",
-			LegacyEpoch:    3,
-			SuccessorEpoch: 4,
-			LegacyDigest:   "digest",
-			Stage:          rootproto.HandoverStageClosed,
+			HolderID:     "coord-1",
+			LegacyEra:    3,
+			SuccessorEra: 4,
+			LegacyDigest: "digest",
+			Stage:        rootproto.HandoverStageClosed,
 		},
 	}
 	cmd := rootproto.HandoverCommand{

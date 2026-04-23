@@ -302,7 +302,7 @@ func TestReplicatedStoreCampaignTenure(t *testing.T) {
 	lease, err := campaignLease(stores[leaderID], "c1", 1_000, 100, 123, 456, 1, "")
 	require.NoError(t, err)
 	require.Equal(t, "c1", lease.HolderID)
-	require.Equal(t, uint64(1), lease.Epoch)
+	require.Equal(t, uint64(1), lease.Era)
 	require.Equal(t, uint32(rootproto.MandateDefault), lease.Mandate)
 	require.NotEqual(t, rootstate.Cursor{}, lease.IssuedAt)
 
@@ -318,7 +318,7 @@ func TestReplicatedStoreCampaignTenure(t *testing.T) {
 			return false
 		}
 		return current.Tenure.HolderID == "c1" &&
-			current.Tenure.Epoch == 1 &&
+			current.Tenure.Era == 1 &&
 			current.IDFence == 123 &&
 			current.TSOFence == 456
 	}, 5*time.Second, 50*time.Millisecond)
@@ -340,8 +340,8 @@ func TestReplicatedStoreConfirmHandover(t *testing.T) {
 
 	handover, err := confirmHandover(stores[leaderID], "c1", 260)
 	require.NoError(t, err)
-	require.Equal(t, seal.Epoch, handover.LegacyEpoch)
-	require.Equal(t, lease.Epoch, handover.SuccessorEpoch)
+	require.Equal(t, seal.Era, handover.LegacyEra)
+	require.Equal(t, lease.Era, handover.SuccessorEra)
 	require.Equal(t, rootstate.DigestOfLegacy(seal), handover.LegacyDigest)
 	require.Equal(t, rootproto.HandoverStageConfirmed, handover.Stage)
 	current, err := stores[leaderID].Current()
@@ -372,8 +372,8 @@ func TestReplicatedStoreReattachHandover(t *testing.T) {
 	require.NoError(t, err)
 	reattached, err := reattachHandover(stores[leaderID], "c1", 270)
 	require.NoError(t, err)
-	require.Equal(t, closed.SuccessorEpoch, reattached.SuccessorEpoch)
-	require.Equal(t, closed.LegacyEpoch, reattached.LegacyEpoch)
+	require.Equal(t, closed.SuccessorEra, reattached.SuccessorEra)
+	require.Equal(t, closed.LegacyEra, reattached.LegacyEra)
 	require.Equal(t, closed.LegacyDigest, reattached.LegacyDigest)
 	require.Equal(t, rootproto.HandoverStageReattached, reattached.Stage)
 
@@ -393,7 +393,7 @@ func TestReplicatedStoreTenureFenceSurvivesLeaderChange(t *testing.T) {
 	lease, err := campaignLease(stores[leaderID], "c1", 1_000, 100, 123, 456, 1, "")
 	require.NoError(t, err)
 	require.Equal(t, "c1", lease.HolderID)
-	require.Equal(t, uint64(1), lease.Epoch)
+	require.Equal(t, uint64(1), lease.Era)
 	require.NotEqual(t, rootstate.Cursor{}, lease.IssuedAt)
 
 	require.Eventually(t, func() bool {
@@ -403,7 +403,7 @@ func TestReplicatedStoreTenureFenceSurvivesLeaderChange(t *testing.T) {
 		current, err := stores[followerID].Current()
 		return err == nil &&
 			current.Tenure.HolderID == "c1" &&
-			current.Tenure.Epoch == 1 &&
+			current.Tenure.Era == 1 &&
 			current.IDFence == 123 &&
 			current.TSOFence == 456
 	}, 5*time.Second, 50*time.Millisecond)
@@ -418,7 +418,7 @@ func TestReplicatedStoreTenureFenceSurvivesLeaderChange(t *testing.T) {
 	renewed, err := campaignLease(stores[followerID], "c1", 2_000, 500, 200, 600, 1, "")
 	require.NoError(t, err)
 	require.Equal(t, "c1", renewed.HolderID)
-	require.Equal(t, uint64(1), renewed.Epoch)
+	require.Equal(t, uint64(1), renewed.Era)
 	require.Equal(t, initialIssued, renewed.IssuedAt)
 
 	for _, id := range []uint64{1, 2, 3} {
@@ -429,7 +429,7 @@ func TestReplicatedStoreTenureFenceSurvivesLeaderChange(t *testing.T) {
 			current, err := stores[id].Current()
 			return err == nil &&
 				current.Tenure.HolderID == "c1" &&
-				current.Tenure.Epoch == 1 &&
+				current.Tenure.Era == 1 &&
 				current.Tenure.IssuedAt == initialIssued &&
 				current.IDFence == 200 &&
 				current.TSOFence == 600
@@ -446,7 +446,7 @@ func TestReplicatedStoreReleaseTenure(t *testing.T) {
 	lease, err := releaseLease(stores[leaderID], "c1", 200, 300, 500)
 	require.NoError(t, err)
 	require.Equal(t, "c1", lease.HolderID)
-	require.Equal(t, uint64(1), lease.Epoch)
+	require.Equal(t, uint64(1), lease.Era)
 	require.Equal(t, int64(200), lease.ExpiresUnixNano)
 
 	_, err = releaseLease(stores[leaderID], "c2", 250, 300, 500)

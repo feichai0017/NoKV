@@ -24,17 +24,17 @@ func (s State) Succession() SuccessionState {
 }
 
 func (l Tenure) Present() bool {
-	return strings.TrimSpace(l.HolderID) != "" && l.Epoch != 0
+	return strings.TrimSpace(l.HolderID) != "" && l.Era != 0
 }
 
 func (s Legacy) Present() bool {
-	return s.Epoch != 0 && strings.TrimSpace(s.HolderID) != ""
+	return s.Era != 0 && strings.TrimSpace(s.HolderID) != ""
 }
 
 func (c Handover) Present() bool {
 	return strings.TrimSpace(c.HolderID) != "" &&
-		c.LegacyEpoch != 0 &&
-		c.SuccessorEpoch != 0 &&
+		c.LegacyEra != 0 &&
+		c.SuccessorEra != 0 &&
 		strings.TrimSpace(c.LegacyDigest) != "" &&
 		c.Stage != rootproto.HandoverStageUnspecified
 }
@@ -62,7 +62,7 @@ func DigestOfLegacy(seal Legacy) string {
 	holderID := strings.TrimSpace(seal.HolderID)
 	mandate := seal.Mandate
 	writeString(holderID)
-	writeUint64(seal.Epoch)
+	writeUint64(seal.Era)
 	writeUint32(mandate)
 	for _, mask := range rootproto.OrderedMandateMasks(mandate, seal.Frontiers) {
 		frontier := seal.Frontiers.Frontier(mask)
@@ -92,10 +92,10 @@ func ResolveLineageDigest(current Tenure, seal Legacy, holderID string, nowUnixN
 }
 
 func TenureSealed(current Tenure, seal Legacy) bool {
-	if current.Epoch == 0 || seal.Epoch == 0 {
+	if current.Era == 0 || seal.Era == 0 {
 		return false
 	}
-	if current.Epoch != seal.Epoch {
+	if current.Era != seal.Era {
 		return false
 	}
 	if strings.TrimSpace(current.HolderID) == "" || !seal.Present() {
@@ -193,37 +193,37 @@ func ValidateTenureYield(current Tenure, holderID string, nowUnixNano int64) err
 	return nil
 }
 
-// NextTenureEpoch returns the authority generation that should be
+// NextTenureEra returns the authority era that should be
 // attached to the next rooted lease record for holderID at nowUnixNano.
 //
-// Same-holder renewals of a still-live lease preserve the current generation.
+// Same-holder renewals of a still-live lease preserve the current era.
 // Any new authority instance, including takeover after expiry or reacquire
-// after explicit release, advances the generation.
-func NextTenureEpoch(current Tenure, seal Legacy, holderID string, nowUnixNano int64) uint64 {
+// after explicit release, advances the era.
+func NextTenureEra(current Tenure, seal Legacy, holderID string, nowUnixNano int64) uint64 {
 	holderID = strings.TrimSpace(holderID)
 	if holderID == "" {
-		return current.Epoch
+		return current.Era
 	}
 	if current.ActiveAt(nowUnixNano) && current.HolderID == holderID && !TenureSealed(current, seal) {
-		if current.Epoch != 0 {
-			return current.Epoch
+		if current.Era != 0 {
+			return current.Era
 		}
 		return 1
 	}
-	if current.Epoch == 0 {
+	if current.Era == 0 {
 		return 1
 	}
-	return current.Epoch + 1
+	return current.Era + 1
 }
 
 // ValidateLegacyFormation verifies whether holder can seal the current
-// rooted authority generation.
+// rooted authority era.
 func ValidateLegacyFormation(current Tenure, holderID string) error {
 	holderID = strings.TrimSpace(holderID)
 	if holderID == "" {
 		return fmt.Errorf("%w: holder id is required", ErrInvalidTenure)
 	}
-	if strings.TrimSpace(current.HolderID) == "" || current.Epoch == 0 {
+	if strings.TrimSpace(current.HolderID) == "" || current.Era == 0 {
 		return fmt.Errorf("%w: no current holder", ErrPrimacy)
 	}
 	if current.HolderID != holderID {

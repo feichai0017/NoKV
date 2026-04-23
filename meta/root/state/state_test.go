@@ -37,7 +37,7 @@ func TestApplyTenureToState(t *testing.T) {
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, st.LastCommitted)
 	require.Equal(t, "c1", st.Tenure.HolderID)
 	require.Equal(t, int64(1_000), st.Tenure.ExpiresUnixNano)
-	require.Equal(t, uint64(1), st.Tenure.Epoch)
+	require.Equal(t, uint64(1), st.Tenure.Era)
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, st.Tenure.IssuedAt)
 	require.Equal(t, uint32(rootproto.MandateDefault), st.Tenure.Mandate)
 	require.Equal(t, "pred", st.Tenure.LineageDigest)
@@ -55,8 +55,8 @@ func TestApplyHandoverConfirmedToState(t *testing.T) {
 
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 9}, st.LastCommitted)
 	require.Equal(t, "c1", st.Handover.HolderID)
-	require.Equal(t, uint64(7), st.Handover.LegacyEpoch)
-	require.Equal(t, uint64(8), st.Handover.SuccessorEpoch)
+	require.Equal(t, uint64(7), st.Handover.LegacyEra)
+	require.Equal(t, uint64(8), st.Handover.SuccessorEra)
 	require.Equal(t, "seal-digest", st.Handover.LegacyDigest)
 	require.Equal(t, rootproto.HandoverStageConfirmed, st.Handover.Stage)
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 9}, st.Handover.ConfirmedAt)
@@ -70,8 +70,8 @@ func TestApplyHandoverClosedToState(t *testing.T) {
 
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.LastCommitted)
 	require.Equal(t, "c1", st.Handover.HolderID)
-	require.Equal(t, uint64(8), st.Handover.SuccessorEpoch)
-	require.Equal(t, uint64(7), st.Handover.LegacyEpoch)
+	require.Equal(t, uint64(8), st.Handover.SuccessorEra)
+	require.Equal(t, uint64(7), st.Handover.LegacyEra)
 	require.Equal(t, "seal-digest", st.Handover.LegacyDigest)
 	require.Equal(t, rootproto.HandoverStageClosed, st.Handover.Stage)
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.Handover.ClosedAt)
@@ -85,19 +85,19 @@ func TestApplyHandoverReattachToState(t *testing.T) {
 
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.LastCommitted)
 	require.Equal(t, "c1", st.Handover.HolderID)
-	require.Equal(t, uint64(8), st.Handover.SuccessorEpoch)
-	require.Equal(t, uint64(7), st.Handover.LegacyEpoch)
+	require.Equal(t, uint64(8), st.Handover.SuccessorEra)
+	require.Equal(t, uint64(7), st.Handover.LegacyEra)
 	require.Equal(t, "seal-digest", st.Handover.LegacyDigest)
 	require.Equal(t, rootproto.HandoverStageReattached, st.Handover.Stage)
 	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.Handover.ReattachedAt)
 }
 
-func TestApplyTenurePreservesIssuedAtForSameGeneration(t *testing.T) {
+func TestApplyTenurePreservesIssuedAtForSameEra(t *testing.T) {
 	var st rootstate.State
 	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 1}, rootevent.TenureGranted("c1", 1_000, 1, rootproto.MandateDefault, "pred", succession.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0)))
 	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 2}, rootevent.TenureGranted("c1", 2_000, 1, rootproto.MandateDefault, "", succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 30}, 0)))
 
-	require.Equal(t, uint64(1), st.Tenure.Epoch)
+	require.Equal(t, uint64(1), st.Tenure.Era)
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, st.Tenure.IssuedAt)
 	require.Equal(t, uint64(20), st.IDFence)
 	require.Equal(t, uint64(30), st.TSOFence)
@@ -105,14 +105,14 @@ func TestApplyTenurePreservesIssuedAtForSameGeneration(t *testing.T) {
 }
 
 func TestStateProtocolHelpers(t *testing.T) {
-	witness := rootproto.NewContinuationWitness(rootproto.MandateTSO, 8, 51)
+	witness := rootproto.NewMandateWitness(rootproto.MandateTSO, 8, 51)
 	require.Equal(t, rootproto.MandateTSO, witness.Mandate)
-	require.Equal(t, uint64(8), witness.Epoch)
+	require.Equal(t, uint64(8), witness.Era)
 	require.Equal(t, uint64(51), witness.ConsumedFrontier)
 
 	seal := rootstate.Legacy{
 		HolderID:  "c1",
-		Epoch:     7,
+		Era:       7,
 		Mandate:   rootproto.MandateDefault,
 		Frontiers: succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
 	}

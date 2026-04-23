@@ -29,7 +29,7 @@ type SnapshotAnomalies struct {
 	UncoveredMonotoneFrontier   bool
 	UncoveredDescriptorRevision bool
 	LeaseStartCoverageViolation bool
-	SealedGenerationStillLive   bool
+	SealedEraStillLive          bool
 	FinalityDefect              FinalityDefect
 }
 
@@ -40,7 +40,7 @@ type Report struct {
 	RootDescriptorRevision uint64
 	CatchUpState           string
 	CurrentHolderID        string
-	CurrentGeneration      uint64
+	CurrentEra             uint64
 	Handoff                rootproto.AuthorityHandoffRecord
 	HandoverWitness        rootproto.HandoverWitness
 	Handover               rootproto.HandoverStatus
@@ -66,7 +66,7 @@ func evaluateSnapshot(snapshot rootview.Snapshot, holderID string, nowUnixNano i
 		RootDescriptorRevision: descriptorRevision,
 		CatchUpState:           snapshot.CatchUpState.String(),
 		CurrentHolderID:        snapshot.Tenure.HolderID,
-		CurrentGeneration:      snapshot.Tenure.Epoch,
+		CurrentEra:             snapshot.Tenure.Era,
 		Handoff:                succession.HandoffRecord(snapshot.Tenure, currentFrontiers),
 		HandoverWitness:        handoverWitness.WithStage(handover.Stage),
 		Handover:               handover,
@@ -79,7 +79,7 @@ func evaluateFinalityDefect(snapshot rootview.Snapshot, holderID string, nowUnix
 	if holderID == "" || holderID != current.HolderID || !current.ActiveAt(nowUnixNano) {
 		return FinalityDefectNone
 	}
-	if witness.LegacyEpoch != 0 && !witness.FinalitySatisfied() {
+	if witness.LegacyEra != 0 && !witness.FinalitySatisfied() {
 		return FinalityDefectSuccessorIncomplete
 	}
 	confirmPresent := handover.Present() && handover.HolderID == holderID
@@ -99,8 +99,8 @@ func evaluateFinalityDefect(snapshot rootview.Snapshot, holderID string, nowUnix
 		return FinalityDefectMissingConfirm
 	}
 	confirmMatchesCurrent := confirmPresent &&
-		handover.SuccessorEpoch > handover.LegacyEpoch &&
-		handover.SuccessorEpoch == current.Epoch
+		handover.SuccessorEra > handover.LegacyEra &&
+		handover.SuccessorEra == current.Era
 	lineageSatisfied := confirmMatchesCurrent &&
 		current.LineageDigest == handover.LegacyDigest
 	closePresent := confirmPresent && rootproto.HandoverStageAtLeast(handover.Stage, rootproto.HandoverStageClosed)
@@ -139,7 +139,7 @@ func BuildReport(snapshot rootview.Snapshot, holderID string, nowUnixNano int64)
 		SuccessorLineageMismatch:    report.HandoverWitness.SuccessorPresent && !report.HandoverWitness.SuccessorLineageSatisfied,
 		UncoveredMonotoneFrontier:   report.HandoverWitness.SuccessorPresent && !report.HandoverWitness.SuccessorMonotoneCovered(),
 		UncoveredDescriptorRevision: report.HandoverWitness.SuccessorPresent && !report.HandoverWitness.SuccessorDescriptorCovered(),
-		SealedGenerationStillLive:   report.HandoverWitness.LegacyEpoch != 0 && !report.HandoverWitness.SealedGenerationRetired,
+		SealedEraStillLive:          report.HandoverWitness.LegacyEra != 0 && !report.HandoverWitness.SealedEraRetired,
 		FinalityDefect:              finalityDefect,
 	}
 	report.Anomalies = anomalies

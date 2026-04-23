@@ -67,8 +67,8 @@ type readState struct {
 	catchUpState   rootview.CatchUpState
 	degraded       coordpb.DegradedMode
 	servedByLeader bool
-	epoch          uint64
-	legacyEpoch    uint64
+	era            uint64
+	legacyEra      uint64
 	leasePresent   bool
 	leaseActive    bool
 	leaseSealed    bool
@@ -103,8 +103,8 @@ func (a metadataAnswerability) responseBase() *coordpb.GetRegionByKeyResponse {
 		RootLag:                    a.state.rootLag,
 		CatchUpState:               catchUpStateToProto(a.state.catchUpState),
 		RequiredDescriptorRevision: a.requiredDescriptorRevision,
-		Epoch:                      a.state.epoch,
-		ObservedLegacyEpoch:        a.state.legacyEpoch,
+		Era:                        a.state.era,
+		ObservedLegacyEra:          a.state.legacyEra,
 		ServingClass:               a.servingClass,
 		SyncHealth:                 a.syncHealth,
 	}
@@ -129,13 +129,13 @@ func (s *Service) admitMetadataAnswerability(req *coordpb.GetRegionByKeyRequest,
 	}
 	if loadErr == nil && s != nil && s.coordinatorLeaseEnabled() && admission.state.leasePresent {
 		if admission.state.leaseMandate&rootproto.MandateGetRegionByKey == 0 {
-			return metadataAnswerability{}, statusTenure(fmt.Errorf("%w: required_mandate=%d rooted_mandate=%d generation=%d", rootstate.ErrMandate, rootproto.MandateGetRegionByKey, admission.state.leaseMandate, admission.state.epoch))
+			return metadataAnswerability{}, statusTenure(fmt.Errorf("%w: required_mandate=%d rooted_mandate=%d era=%d", rootstate.ErrMandate, rootproto.MandateGetRegionByKey, admission.state.leaseMandate, admission.state.era))
 		}
 		if !admission.state.leaseActive {
-			return metadataAnswerability{}, statusTenure(fmt.Errorf("%w: rooted lease expired generation=%d", rootstate.ErrInvalidTenure, admission.state.epoch))
+			return metadataAnswerability{}, statusTenure(fmt.Errorf("%w: rooted lease expired era=%d", rootstate.ErrInvalidTenure, admission.state.era))
 		}
 		if admission.state.leaseSealed {
-			return metadataAnswerability{}, statusTenure(fmt.Errorf("%w: generation=%d sealed_generation=%d", rootstate.ErrPrimacy, admission.state.epoch, admission.state.epoch))
+			return metadataAnswerability{}, statusTenure(fmt.Errorf("%w: era=%d sealed_era=%d", rootstate.ErrPrimacy, admission.state.era, admission.state.era))
 		}
 	}
 	if !rootTokenSatisfied(admission.state.servedToken, admission.requiredRootToken) {
@@ -189,19 +189,19 @@ func (s *Service) currentReadState() (readState, error) {
 		state.catchUpState = rootview.CatchUpStateUnavailable
 		return state, err
 	}
-	if snapshot.Tenure.Epoch != 0 && strings.TrimSpace(snapshot.Tenure.HolderID) != "" {
+	if snapshot.Tenure.Era != 0 && strings.TrimSpace(snapshot.Tenure.HolderID) != "" {
 		state.leasePresent = true
 		state.leaseActive = snapshot.Tenure.ActiveAt(nowUnixNano)
 		state.leaseSealed = rootstate.TenureSealed(snapshot.Tenure, snapshot.Legacy)
 		state.leaseMandate = snapshot.Tenure.Mandate
 	}
 	if snapshot.Legacy.Present() {
-		state.legacyEpoch = snapshot.Legacy.Epoch
+		state.legacyEra = snapshot.Legacy.Era
 	}
 	state.currentToken = snapshot.RootToken
 	state.rootLag = rootLag(state.currentToken, state.servedToken)
 	state.catchUpState = snapshot.CatchUpState
-	state.epoch = s.metadataReplyGeneration(snapshot.Tenure.Epoch)
+	state.era = s.metadataReplyEra(snapshot.Tenure.Era)
 	if s.cachedRootSnapshotStale() {
 		if errText := s.lastRootReloadError(); strings.TrimSpace(errText) != "" {
 			state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE

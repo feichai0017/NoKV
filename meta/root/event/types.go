@@ -51,7 +51,7 @@ type RootCursor = rootproto.Cursor
 type Tenure struct {
 	HolderID        string
 	ExpiresUnixNano int64
-	Epoch           uint64
+	Era             uint64
 	IssuedAt        RootCursor
 	Mandate         uint32
 	LineageDigest   string
@@ -59,10 +59,10 @@ type Tenure struct {
 }
 
 // Legacy records one rooted handover point for the current control-plane
-// authority generation.
+// authority era.
 type Legacy struct {
 	HolderID  string
-	Epoch     uint64
+	Era       uint64
 	Mandate   uint32
 	Frontiers rootproto.MandateFrontiers
 	SealedAt  RootCursor
@@ -71,24 +71,23 @@ type Legacy struct {
 type HandoverStage = rootproto.HandoverStage
 
 const (
-	HandoverStageUnspecified    = rootproto.HandoverStageUnspecified
-	HandoverStagePendingConfirm = rootproto.HandoverStagePendingConfirm
-	HandoverStageConfirmed      = rootproto.HandoverStageConfirmed
-	HandoverStageClosed         = rootproto.HandoverStageClosed
-	HandoverStageReattached     = rootproto.HandoverStageReattached
+	HandoverStageUnspecified = rootproto.HandoverStageUnspecified
+	HandoverStageConfirmed   = rootproto.HandoverStageConfirmed
+	HandoverStageClosed      = rootproto.HandoverStageClosed
+	HandoverStageReattached  = rootproto.HandoverStageReattached
 )
 
 // Handover records one rooted handover lifecycle entry for a sealed
-// predecessor generation and its successor authority instance.
+// predecessor era and its successor authority instance.
 type Handover struct {
-	HolderID       string
-	LegacyEpoch    uint64
-	SuccessorEpoch uint64
-	LegacyDigest   string
-	Stage          HandoverStage
-	ConfirmedAt    RootCursor
-	ClosedAt       RootCursor
-	ReattachedAt   RootCursor
+	HolderID     string
+	LegacyEra    uint64
+	SuccessorEra uint64
+	LegacyDigest string
+	Stage        HandoverStage
+	ConfirmedAt  RootCursor
+	ClosedAt     RootCursor
+	ReattachedAt RootCursor
 }
 
 // RegionDescriptorRecord carries one descriptor snapshot into the root log.
@@ -160,21 +159,21 @@ func TSOAllocatorFenced(min uint64) Event {
 	return Event{Kind: KindTSOAllocatorFenced, AllocatorFence: &AllocatorFence{Minimum: min}}
 }
 
-func TenureGranted(holderID string, expiresUnixNano int64, epoch uint64, mandate uint32, lineageDigest string, frontiers rootproto.MandateFrontiers) Event {
-	return newTenureEvent(holderID, expiresUnixNano, epoch, mandate, lineageDigest, frontiers)
+func TenureGranted(holderID string, expiresUnixNano int64, era uint64, mandate uint32, lineageDigest string, frontiers rootproto.MandateFrontiers) Event {
+	return newTenureEvent(holderID, expiresUnixNano, era, mandate, lineageDigest, frontiers)
 }
 
-func TenureReleased(holderID string, releasedUnixNano int64, epoch uint64, mandate uint32, lineageDigest string, frontiers rootproto.MandateFrontiers) Event {
-	return newTenureEvent(holderID, releasedUnixNano, epoch, mandate, lineageDigest, frontiers)
+func TenureReleased(holderID string, releasedUnixNano int64, era uint64, mandate uint32, lineageDigest string, frontiers rootproto.MandateFrontiers) Event {
+	return newTenureEvent(holderID, releasedUnixNano, era, mandate, lineageDigest, frontiers)
 }
 
-func newTenureEvent(holderID string, expiresUnixNano int64, epoch uint64, mandate uint32, lineageDigest string, frontiers rootproto.MandateFrontiers) Event {
+func newTenureEvent(holderID string, expiresUnixNano int64, era uint64, mandate uint32, lineageDigest string, frontiers rootproto.MandateFrontiers) Event {
 	return Event{
 		Kind: KindTenure,
 		Tenure: &Tenure{
 			HolderID:        holderID,
 			ExpiresUnixNano: expiresUnixNano,
-			Epoch:           epoch,
+			Era:             era,
 			Mandate:         mandate,
 			LineageDigest:   lineageDigest,
 			Frontiers:       frontiers,
@@ -182,39 +181,39 @@ func newTenureEvent(holderID string, expiresUnixNano int64, epoch uint64, mandat
 	}
 }
 
-func TenureSealed(holderID string, epoch uint64, mandate uint32, frontiers rootproto.MandateFrontiers) Event {
+func TenureSealed(holderID string, era uint64, mandate uint32, frontiers rootproto.MandateFrontiers) Event {
 	return Event{
 		Kind: KindLegacy,
 		Legacy: &Legacy{
 			HolderID:  holderID,
-			Epoch:     epoch,
+			Era:       era,
 			Mandate:   mandate,
 			Frontiers: frontiers,
 		},
 	}
 }
 
-func HandoverConfirmed(holderID string, legacyEpoch, successorEpoch uint64, legacyDigest string) Event {
-	return newHandoverEvent(holderID, legacyEpoch, successorEpoch, legacyDigest, HandoverStageConfirmed)
+func HandoverConfirmed(holderID string, legacyEra, successorEra uint64, legacyDigest string) Event {
+	return newHandoverEvent(holderID, legacyEra, successorEra, legacyDigest, HandoverStageConfirmed)
 }
 
-func HandoverClosed(holderID string, legacyEpoch, successorEpoch uint64, legacyDigest string) Event {
-	return newHandoverEvent(holderID, legacyEpoch, successorEpoch, legacyDigest, HandoverStageClosed)
+func HandoverClosed(holderID string, legacyEra, successorEra uint64, legacyDigest string) Event {
+	return newHandoverEvent(holderID, legacyEra, successorEra, legacyDigest, HandoverStageClosed)
 }
 
-func HandoverReattached(holderID string, legacyEpoch, successorEpoch uint64, legacyDigest string) Event {
-	return newHandoverEvent(holderID, legacyEpoch, successorEpoch, legacyDigest, HandoverStageReattached)
+func HandoverReattached(holderID string, legacyEra, successorEra uint64, legacyDigest string) Event {
+	return newHandoverEvent(holderID, legacyEra, successorEra, legacyDigest, HandoverStageReattached)
 }
 
-func newHandoverEvent(holderID string, legacyEpoch, successorEpoch uint64, legacyDigest string, stage HandoverStage) Event {
+func newHandoverEvent(holderID string, legacyEra, successorEra uint64, legacyDigest string, stage HandoverStage) Event {
 	return Event{
 		Kind: KindHandover,
 		Handover: &Handover{
-			HolderID:       holderID,
-			LegacyEpoch:    legacyEpoch,
-			SuccessorEpoch: successorEpoch,
-			LegacyDigest:   legacyDigest,
-			Stage:          stage,
+			HolderID:     holderID,
+			LegacyEra:    legacyEra,
+			SuccessorEra: successorEra,
+			LegacyDigest: legacyDigest,
+			Stage:        stage,
 		},
 	}
 }

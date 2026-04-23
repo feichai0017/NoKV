@@ -139,7 +139,7 @@ func (s *Service) releaseTenure(ctx context.Context) error {
 }
 
 // SealTenure records one rooted legacy point for the current
-// authority generation using the frontiers already consumed by this service.
+// authority era using the frontiers already consumed by this service.
 func (s *Service) SealTenure() error {
 	return s.sealTenure(context.Background())
 }
@@ -170,7 +170,7 @@ func (s *Service) sealTenure(ctx context.Context) error {
 }
 
 // ConfirmHandover explicitly records one rooted audit confirmation
-// after a sealed generation has been covered by a successor authority instance.
+// after a sealed era has been covered by a successor authority instance.
 func (s *Service) ConfirmHandover() error {
 	return s.confirmHandover(context.Background())
 }
@@ -186,7 +186,7 @@ func (s *Service) confirmHandover(ctx context.Context) error {
 }
 
 // CloseHandover explicitly records that the current successor
-// generation has been explicitly finalized after rooted handover confirmation.
+// era has been explicitly finalized after rooted handover confirmation.
 func (s *Service) CloseHandover() error {
 	return s.closeHandover(context.Background())
 }
@@ -202,7 +202,7 @@ func (s *Service) closeHandover(ctx context.Context) error {
 }
 
 // ReattachHandover explicitly records that the current successor
-// generation has been reattached after rooted finality has already landed.
+// era has been reattached after rooted finality has already landed.
 func (s *Service) ReattachHandover() error {
 	return s.reattachHandover(context.Background())
 }
@@ -293,7 +293,7 @@ func (s *Service) ensureTenure(ctx context.Context) error {
 		s.successionMetrics.recordGuaranteeViolationForError(err)
 		return err
 	}
-	s.successionMetrics.recordTenureEpochTransition(current.Epoch, protocolState.Tenure.Epoch)
+	s.successionMetrics.recordTenureEraTransition(current.Era, protocolState.Tenure.Era)
 	return s.reloadAndFenceAllocators(true)
 }
 

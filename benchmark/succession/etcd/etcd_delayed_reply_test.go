@@ -210,11 +210,11 @@ func TestControlPlaneEtcdReadIndexRealDelayedInFlightReply(t *testing.T) {
 
 	records := mustDecodeEtcdReadIndexTrace(t, []etcdReadIndexTraceRecord{
 		{
-			MemberID:            oldLeader,
-			Duty:                "read_index",
-			ReadStateGeneration: uint64(delayedResp.resp.Header.Revision),
-			SuccessorEpoch:      uint64(successorWrite.Header.Revision),
-			Accepted:            true,
+			MemberID:     oldLeader,
+			Duty:         "read_index",
+			ReadStateEra: uint64(delayedResp.resp.Header.Revision),
+			SuccessorEra: uint64(successorWrite.Header.Revision),
+			Accepted:     true,
 		},
 	})
 	anomalies := coordaudit.EvaluateReplyTrace(coordaudit.Report{}, records)

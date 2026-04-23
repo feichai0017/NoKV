@@ -135,25 +135,25 @@ func (RootEventKind) EnumDescriptor() ([]byte, []int) {
 type RootHandoverStage int32
 
 const (
-	RootHandoverStage_ROOT_HANDOVER_STAGE_PENDING_CONFIRM RootHandoverStage = 0
-	RootHandoverStage_ROOT_HANDOVER_STAGE_CONFIRMED       RootHandoverStage = 1
-	RootHandoverStage_ROOT_HANDOVER_STAGE_CLOSED          RootHandoverStage = 2
-	RootHandoverStage_ROOT_HANDOVER_STAGE_REATTACHED      RootHandoverStage = 3
+	RootHandoverStage_ROOT_HANDOVER_STAGE_UNSPECIFIED RootHandoverStage = 0
+	RootHandoverStage_ROOT_HANDOVER_STAGE_CONFIRMED   RootHandoverStage = 1
+	RootHandoverStage_ROOT_HANDOVER_STAGE_CLOSED      RootHandoverStage = 2
+	RootHandoverStage_ROOT_HANDOVER_STAGE_REATTACHED  RootHandoverStage = 3
 )
 
 // Enum value maps for RootHandoverStage.
 var (
 	RootHandoverStage_name = map[int32]string{
-		0: "ROOT_HANDOVER_STAGE_PENDING_CONFIRM",
+		0: "ROOT_HANDOVER_STAGE_UNSPECIFIED",
 		1: "ROOT_HANDOVER_STAGE_CONFIRMED",
 		2: "ROOT_HANDOVER_STAGE_CLOSED",
 		3: "ROOT_HANDOVER_STAGE_REATTACHED",
 	}
 	RootHandoverStage_value = map[string]int32{
-		"ROOT_HANDOVER_STAGE_PENDING_CONFIRM": 0,
-		"ROOT_HANDOVER_STAGE_CONFIRMED":       1,
-		"ROOT_HANDOVER_STAGE_CLOSED":          2,
-		"ROOT_HANDOVER_STAGE_REATTACHED":      3,
+		"ROOT_HANDOVER_STAGE_UNSPECIFIED": 0,
+		"ROOT_HANDOVER_STAGE_CONFIRMED":   1,
+		"ROOT_HANDOVER_STAGE_CLOSED":      2,
+		"ROOT_HANDOVER_STAGE_REATTACHED":  3,
 	}
 )
 
@@ -812,7 +812,7 @@ type RootTenure struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	HolderId           string                 `protobuf:"bytes,1,opt,name=holder_id,json=holderId,proto3" json:"holder_id,omitempty"`
 	ExpiresUnixNano    int64                  `protobuf:"varint,2,opt,name=expires_unix_nano,json=expiresUnixNano,proto3" json:"expires_unix_nano,omitempty"`
-	Epoch              uint64                 `protobuf:"varint,3,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Era                uint64                 `protobuf:"varint,3,opt,name=era,proto3" json:"era,omitempty"`
 	IssuedAt           *RootCursor            `protobuf:"bytes,4,opt,name=issued_at,json=issuedAt,proto3" json:"issued_at,omitempty"`
 	Mandate            uint32                 `protobuf:"varint,5,opt,name=mandate,proto3" json:"mandate,omitempty"`
 	LineageDigest      string                 `protobuf:"bytes,6,opt,name=lineage_digest,json=lineageDigest,proto3" json:"lineage_digest,omitempty"`
@@ -865,9 +865,9 @@ func (x *RootTenure) GetExpiresUnixNano() int64 {
 	return 0
 }
 
-func (x *RootTenure) GetEpoch() uint64 {
+func (x *RootTenure) GetEra() uint64 {
 	if x != nil {
-		return x.Epoch
+		return x.Era
 	}
 	return 0
 }
@@ -955,7 +955,7 @@ func (x *RootMandateFrontier) GetFrontier() uint64 {
 type RootLegacy struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	HolderId      string                 `protobuf:"bytes,1,opt,name=holder_id,json=holderId,proto3" json:"holder_id,omitempty"`
-	Epoch         uint64                 `protobuf:"varint,2,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Era           uint64                 `protobuf:"varint,2,opt,name=era,proto3" json:"era,omitempty"`
 	Mandate       uint32                 `protobuf:"varint,3,opt,name=mandate,proto3" json:"mandate,omitempty"`
 	Frontiers     []*RootMandateFrontier `protobuf:"bytes,4,rep,name=frontiers,proto3" json:"frontiers,omitempty"`
 	SealedAt      *RootCursor            `protobuf:"bytes,8,opt,name=sealed_at,json=sealedAt,proto3" json:"sealed_at,omitempty"`
@@ -1000,9 +1000,9 @@ func (x *RootLegacy) GetHolderId() string {
 	return ""
 }
 
-func (x *RootLegacy) GetEpoch() uint64 {
+func (x *RootLegacy) GetEra() uint64 {
 	if x != nil {
-		return x.Epoch
+		return x.Era
 	}
 	return 0
 }
@@ -1029,17 +1029,17 @@ func (x *RootLegacy) GetSealedAt() *RootCursor {
 }
 
 type RootHandover struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	HolderId       string                 `protobuf:"bytes,1,opt,name=holder_id,json=holderId,proto3" json:"holder_id,omitempty"`
-	LegacyEpoch    uint64                 `protobuf:"varint,2,opt,name=legacy_epoch,json=legacyEpoch,proto3" json:"legacy_epoch,omitempty"`
-	SuccessorEpoch uint64                 `protobuf:"varint,3,opt,name=successor_epoch,json=successorEpoch,proto3" json:"successor_epoch,omitempty"`
-	LegacyDigest   string                 `protobuf:"bytes,4,opt,name=legacy_digest,json=legacyDigest,proto3" json:"legacy_digest,omitempty"`
-	Stage          RootHandoverStage      `protobuf:"varint,5,opt,name=stage,proto3,enum=nokv.meta.v1.RootHandoverStage" json:"stage,omitempty"`
-	ConfirmedAt    *RootCursor            `protobuf:"bytes,6,opt,name=confirmed_at,json=confirmedAt,proto3" json:"confirmed_at,omitempty"`
-	ClosedAt       *RootCursor            `protobuf:"bytes,7,opt,name=closed_at,json=closedAt,proto3" json:"closed_at,omitempty"`
-	ReattachedAt   *RootCursor            `protobuf:"bytes,8,opt,name=reattached_at,json=reattachedAt,proto3" json:"reattached_at,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	HolderId      string                 `protobuf:"bytes,1,opt,name=holder_id,json=holderId,proto3" json:"holder_id,omitempty"`
+	LegacyEra     uint64                 `protobuf:"varint,2,opt,name=legacy_era,json=legacyEra,proto3" json:"legacy_era,omitempty"`
+	SuccessorEra  uint64                 `protobuf:"varint,3,opt,name=successor_era,json=successorEra,proto3" json:"successor_era,omitempty"`
+	LegacyDigest  string                 `protobuf:"bytes,4,opt,name=legacy_digest,json=legacyDigest,proto3" json:"legacy_digest,omitempty"`
+	Stage         RootHandoverStage      `protobuf:"varint,5,opt,name=stage,proto3,enum=nokv.meta.v1.RootHandoverStage" json:"stage,omitempty"`
+	ConfirmedAt   *RootCursor            `protobuf:"bytes,6,opt,name=confirmed_at,json=confirmedAt,proto3" json:"confirmed_at,omitempty"`
+	ClosedAt      *RootCursor            `protobuf:"bytes,7,opt,name=closed_at,json=closedAt,proto3" json:"closed_at,omitempty"`
+	ReattachedAt  *RootCursor            `protobuf:"bytes,8,opt,name=reattached_at,json=reattachedAt,proto3" json:"reattached_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RootHandover) Reset() {
@@ -1079,16 +1079,16 @@ func (x *RootHandover) GetHolderId() string {
 	return ""
 }
 
-func (x *RootHandover) GetLegacyEpoch() uint64 {
+func (x *RootHandover) GetLegacyEra() uint64 {
 	if x != nil {
-		return x.LegacyEpoch
+		return x.LegacyEra
 	}
 	return 0
 }
 
-func (x *RootHandover) GetSuccessorEpoch() uint64 {
+func (x *RootHandover) GetSuccessorEra() uint64 {
 	if x != nil {
-		return x.SuccessorEpoch
+		return x.SuccessorEra
 	}
 	return 0
 }
@@ -1104,7 +1104,7 @@ func (x *RootHandover) GetStage() RootHandoverStage {
 	if x != nil {
 		return x.Stage
 	}
-	return RootHandoverStage_ROOT_HANDOVER_STAGE_PENDING_CONFIRM
+	return RootHandoverStage_ROOT_HANDOVER_STAGE_UNSPECIFIED
 }
 
 func (x *RootHandover) GetConfirmedAt() *RootCursor {
@@ -3155,30 +3155,31 @@ const file_meta_root_proto_rawDesc = "" +
 	"\bstore_id\x18\x01 \x01(\x04R\astoreId\x12\x18\n" +
 	"\aaddress\x18\x02 \x01(\tR\aaddress\".\n" +
 	"\x12RootAllocatorFence\x12\x18\n" +
-	"\aminimum\x18\x01 \x01(\x04R\aminimum\"\xb7\x02\n" +
+	"\aminimum\x18\x01 \x01(\x04R\aminimum\"\xb3\x02\n" +
 	"\n" +
 	"RootTenure\x12\x1b\n" +
 	"\tholder_id\x18\x01 \x01(\tR\bholderId\x12*\n" +
-	"\x11expires_unix_nano\x18\x02 \x01(\x03R\x0fexpiresUnixNano\x12\x14\n" +
-	"\x05epoch\x18\x03 \x01(\x04R\x05epoch\x125\n" +
+	"\x11expires_unix_nano\x18\x02 \x01(\x03R\x0fexpiresUnixNano\x12\x10\n" +
+	"\x03era\x18\x03 \x01(\x04R\x03era\x125\n" +
 	"\tissued_at\x18\x04 \x01(\v2\x18.nokv.meta.v1.RootCursorR\bissuedAt\x12\x18\n" +
 	"\amandate\x18\x05 \x01(\rR\amandate\x12%\n" +
 	"\x0elineage_digest\x18\x06 \x01(\tR\rlineageDigest\x12R\n" +
 	"\x13inherited_frontiers\x18\a \x03(\v2!.nokv.meta.v1.RootMandateFrontierR\x12inheritedFrontiers\"K\n" +
 	"\x13RootMandateFrontier\x12\x18\n" +
 	"\amandate\x18\x01 \x01(\rR\amandate\x12\x1a\n" +
-	"\bfrontier\x18\x02 \x01(\x04R\bfrontier\"\xd1\x01\n" +
+	"\bfrontier\x18\x02 \x01(\x04R\bfrontier\"\xcd\x01\n" +
 	"\n" +
 	"RootLegacy\x12\x1b\n" +
-	"\tholder_id\x18\x01 \x01(\tR\bholderId\x12\x14\n" +
-	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\x12\x18\n" +
+	"\tholder_id\x18\x01 \x01(\tR\bholderId\x12\x10\n" +
+	"\x03era\x18\x02 \x01(\x04R\x03era\x12\x18\n" +
 	"\amandate\x18\x03 \x01(\rR\amandate\x12?\n" +
 	"\tfrontiers\x18\x04 \x03(\v2!.nokv.meta.v1.RootMandateFrontierR\tfrontiers\x125\n" +
-	"\tsealed_at\x18\b \x01(\v2\x18.nokv.meta.v1.RootCursorR\bsealedAt\"\x86\x03\n" +
+	"\tsealed_at\x18\b \x01(\v2\x18.nokv.meta.v1.RootCursorR\bsealedAt\"\xfe\x02\n" +
 	"\fRootHandover\x12\x1b\n" +
-	"\tholder_id\x18\x01 \x01(\tR\bholderId\x12!\n" +
-	"\flegacy_epoch\x18\x02 \x01(\x04R\vlegacyEpoch\x12'\n" +
-	"\x0fsuccessor_epoch\x18\x03 \x01(\x04R\x0esuccessorEpoch\x12#\n" +
+	"\tholder_id\x18\x01 \x01(\tR\bholderId\x12\x1d\n" +
+	"\n" +
+	"legacy_era\x18\x02 \x01(\x04R\tlegacyEra\x12#\n" +
+	"\rsuccessor_era\x18\x03 \x01(\x04R\fsuccessorEra\x12#\n" +
 	"\rlegacy_digest\x18\x04 \x01(\tR\flegacyDigest\x125\n" +
 	"\x05stage\x18\x05 \x01(\x0e2\x1f.nokv.meta.v1.RootHandoverStageR\x05stage\x12;\n" +
 	"\fconfirmed_at\x18\x06 \x01(\v2\x18.nokv.meta.v1.RootCursorR\vconfirmedAt\x125\n" +
@@ -3355,9 +3356,9 @@ const file_meta_root_proto_rawDesc = "" +
 	"&ROOT_EVENT_KIND_PEER_REMOVAL_CANCELLED\x10\x13\x12\x1a\n" +
 	"\x16ROOT_EVENT_KIND_TENURE\x10\x14\x12\x1a\n" +
 	"\x16ROOT_EVENT_KIND_LEGACY\x10\x15\x12\x1c\n" +
-	"\x18ROOT_EVENT_KIND_HANDOVER\x10\x16*\xa3\x01\n" +
-	"\x11RootHandoverStage\x12'\n" +
-	"#ROOT_HANDOVER_STAGE_PENDING_CONFIRM\x10\x00\x12!\n" +
+	"\x18ROOT_EVENT_KIND_HANDOVER\x10\x16*\x9f\x01\n" +
+	"\x11RootHandoverStage\x12#\n" +
+	"\x1fROOT_HANDOVER_STAGE_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dROOT_HANDOVER_STAGE_CONFIRMED\x10\x01\x12\x1e\n" +
 	"\x1aROOT_HANDOVER_STAGE_CLOSED\x10\x02\x12\"\n" +
 	"\x1eROOT_HANDOVER_STAGE_REATTACHED\x10\x03*\xa1\x01\n" +

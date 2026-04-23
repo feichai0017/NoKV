@@ -69,8 +69,8 @@ func TestMetaRootLeaderChangePreservesClosureLineage(t *testing.T) {
 
 	successor, err := campaignLease(cluster.Stores[newLeaderID], "c2", 1_400, 300, 12, 34, 56, rootstate.DigestOfLegacy(seal))
 	require.NoError(t, err)
-	require.Greater(t, successor.Epoch, seal.Epoch)
-	require.Equal(t, lease.Epoch, seal.Epoch)
+	require.Greater(t, successor.Era, seal.Era)
+	require.Equal(t, lease.Era, seal.Era)
 
 	require.Eventually(t, func() bool {
 		for _, id := range []uint64{1, 2, 3} {
@@ -82,8 +82,8 @@ func TestMetaRootLeaderChangePreservesClosureLineage(t *testing.T) {
 				return false
 			}
 			if current.Tenure.HolderID != "c2" ||
-				current.Tenure.Epoch != successor.Epoch ||
-				current.Legacy.Epoch != seal.Epoch ||
+				current.Tenure.Era != successor.Era ||
+				current.Legacy.Era != seal.Era ||
 				current.Legacy.HolderID != "c1" ||
 				current.IDFence != 12 ||
 				current.TSOFence != 34 {
@@ -112,18 +112,18 @@ func TestMetaRootPartialSealRecoversFromCommittedLog(t *testing.T) {
 
 	current, err := cluster.Stores[leaderID].Current()
 	require.NoError(t, err)
-	require.Equal(t, uint64(0), current.Legacy.Epoch)
+	require.Equal(t, uint64(0), current.Legacy.Era)
 
 	rootfailpoints.Set(rootfailpoints.None)
 	reopened := cluster.ReopenStore(leaderID)
 	current, err = reopened.Current()
 	require.NoError(t, err)
-	require.Equal(t, lease.Epoch, current.Legacy.Epoch)
+	require.Equal(t, lease.Era, current.Legacy.Era)
 	require.Equal(t, "c1", current.Legacy.HolderID)
 
 	successor, err := campaignLease(reopened, "c2", 1_400, 300, 12, 34, 64, rootstate.DigestOfLegacy(current.Legacy))
 	require.NoError(t, err)
-	require.Equal(t, uint64(2), successor.Epoch)
+	require.Equal(t, uint64(2), successor.Era)
 }
 
 func campaignLease(store interface {

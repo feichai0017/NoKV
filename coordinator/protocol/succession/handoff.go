@@ -18,13 +18,13 @@ func Frontiers(state rootstate.State, descriptorRevision uint64) rootproto.Manda
 // HandoffRecord projects the current rooted tenure plus handoff frontier view into the portable
 // handoff record used by checker and diagnostics code.
 func HandoffRecord(current rootstate.Tenure, frontiers rootproto.MandateFrontiers) rootproto.AuthorityHandoffRecord {
-	if current.HolderID == "" || current.Epoch == 0 {
+	if current.HolderID == "" || current.Era == 0 {
 		return rootproto.AuthorityHandoffRecord{}
 	}
 	return rootproto.MustNewAuthorityHandoffRecord(
 		current.HolderID,
 		current.ExpiresUnixNano,
-		current.Epoch,
+		current.Era,
 		current.IssuedAt,
 		current.Mandate,
 		current.LineageDigest,
@@ -39,14 +39,14 @@ func BuildHandoverWitness(current rootstate.Tenure, currentFrontiers rootproto.M
 		return rootproto.HandoverWitness{}
 	}
 	witness := rootproto.HandoverWitness{
-		LegacyEpoch:  seal.Epoch,
+		LegacyEra:    seal.Era,
 		LegacyDigest: rootstate.DigestOfLegacy(seal),
 		Stage:        rootproto.HandoverStageUnspecified,
 	}
-	witness.SuccessorPresent = current.Epoch > seal.Epoch
+	witness.SuccessorPresent = current.Era > seal.Era
 	witness.Inheritance = rootstate.EvaluateInheritance(current, seal, currentFrontiers)
 	witness.SuccessorLineageSatisfied = witness.SuccessorPresent && current.LineageDigest == witness.LegacyDigest
-	witness.SealedGenerationRetired = current.Epoch != seal.Epoch || !current.ActiveAt(nowUnixNano)
+	witness.SealedEraRetired = current.Era != seal.Era || !current.ActiveAt(nowUnixNano)
 	return witness
 }
 
@@ -65,8 +65,8 @@ func EvaluateHandoverStage(current rootstate.Tenure, handover rootstate.Handover
 	if !handover.Present() || handover.HolderID != holderID {
 		return rootproto.HandoverStatus{}
 	}
-	if handover.SuccessorEpoch <= handover.LegacyEpoch ||
-		handover.SuccessorEpoch != current.Epoch ||
+	if handover.SuccessorEra <= handover.LegacyEra ||
+		handover.SuccessorEra != current.Era ||
 		current.LineageDigest != handover.LegacyDigest {
 		return rootproto.HandoverStatus{}
 	}
@@ -83,10 +83,10 @@ func AdvanceHandover(current rootstate.Tenure, existing rootstate.Handover, stag
 	handover := existing
 	if handover.HolderID == "" || stage == rootproto.HandoverStageConfirmed {
 		handover = rootstate.Handover{
-			HolderID:       holderID,
-			LegacyEpoch:    legacyEpoch,
-			SuccessorEpoch: current.Epoch,
-			LegacyDigest:   legacyDigest,
+			HolderID:     holderID,
+			LegacyEra:    legacyEpoch,
+			SuccessorEra: current.Era,
+			LegacyDigest: legacyDigest,
 		}
 	}
 	handover.Stage = stage
