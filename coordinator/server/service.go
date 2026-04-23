@@ -64,12 +64,14 @@ type Service struct {
 	statusMu       sync.RWMutex
 	lastRootReload int64
 	lastRootError  string
+	cccMetrics     coordinatorCCCMetrics
 	ablation       coordablation.Config
 }
 
 type coordinatorLeaseView struct {
-	lease rootstate.CoordinatorLease
-	seal  rootstate.CoordinatorSeal
+	lease   rootstate.CoordinatorLease
+	seal    rootstate.CoordinatorSeal
+	closure rootstate.CoordinatorClosure
 }
 
 type coordinatorRootSnapshotView struct {
@@ -85,6 +87,7 @@ func (v *coordinatorLeaseView) Reset() {
 	}
 	v.lease = rootstate.CoordinatorLease{}
 	v.seal = rootstate.CoordinatorSeal{}
+	v.closure = rootstate.CoordinatorClosure{}
 }
 
 func (v *coordinatorLeaseView) Refresh(snapshot rootview.Snapshot) {
@@ -93,6 +96,7 @@ func (v *coordinatorLeaseView) Refresh(snapshot rootview.Snapshot) {
 	}
 	v.lease = snapshot.CoordinatorLease
 	v.seal = snapshot.CoordinatorSeal
+	v.closure = snapshot.CoordinatorClosure
 }
 
 func (v coordinatorLeaseView) Current() (rootstate.CoordinatorLease, rootstate.CoordinatorSeal) {
@@ -105,6 +109,10 @@ func (v coordinatorLeaseView) Lease() rootstate.CoordinatorLease {
 
 func (v coordinatorLeaseView) Seal() rootstate.CoordinatorSeal {
 	return v.seal
+}
+
+func (v coordinatorLeaseView) Closure() rootstate.CoordinatorClosure {
+	return v.closure
 }
 
 const defaultAllocatorWindowSize uint64 = 10_000

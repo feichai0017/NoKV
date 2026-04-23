@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	coordfailpoints "github.com/feichai0017/NoKV/coordinator/failpoints"
 	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -131,6 +132,7 @@ func (s *Service) releaseCoordinatorLease(ctx context.Context) error {
 		NowUnixNano:      nowUnixNano,
 		HandoffFrontiers: handoffFrontiers,
 	}); err != nil {
+		s.cccMetrics.recordALIViolationForError(err)
 		return err
 	}
 	return s.reloadAndFenceAllocators(true)
@@ -237,17 +239,24 @@ func (s *Service) applyClosureCommand(ctx context.Context, kind rootproto.Coordi
 	if holderID == "" {
 		return nil
 	}
+	beforeStage := s.currentCoordinatorClosure().Stage
 	if err := s.preActionGate(gate, 0); err != nil {
 		return err
 	}
-	if _, err := s.storage.ApplyCoordinatorClosure(ctx, rootproto.CoordinatorClosureCommand{
+	protocolState, err := s.storage.ApplyCoordinatorClosure(ctx, rootproto.CoordinatorClosureCommand{
 		Kind:        kind,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 		Frontiers:   frontiers,
-	}); err != nil {
+	})
+	if err != nil {
+		s.cccMetrics.recordALIViolationForError(err)
 		return err
 	}
+	if err := coordfailpoints.InjectAfterApplyCoordinatorClosureBeforeReload(); err != nil {
+		return err
+	}
+	s.cccMetrics.recordClosureStageTransition(beforeStage, protocolState.Closure.Stage)
 	return s.reloadAndFenceAllocators(true)
 }
 
@@ -272,16 +281,19 @@ func (s *Service) ensureCoordinatorLease(ctx context.Context) error {
 	current, seal := s.currentCoordinatorLeaseView()
 	predecessorDigest := rootstate.ResolveCoordinatorLeasePredecessorDigest(current, seal, holderID, nowUnixNano)
 
-	if _, err := s.storage.ApplyCoordinatorLease(ctx, rootproto.CoordinatorLeaseCommand{
+	protocolState, err := s.storage.ApplyCoordinatorLease(ctx, rootproto.CoordinatorLeaseCommand{
 		Kind:              rootproto.CoordinatorLeaseCommandIssue,
 		HolderID:          holderID,
 		ExpiresUnixNano:   expiresUnixNano,
 		NowUnixNano:       nowUnixNano,
 		PredecessorDigest: predecessorDigest,
 		HandoffFrontiers:  handoffFrontiers,
-	}); err != nil {
+	})
+	if err != nil {
+		s.cccMetrics.recordALIViolationForError(err)
 		return err
 	}
+	s.cccMetrics.recordLeaseGenerationTransition(current.CertGeneration, protocolState.Lease.CertGeneration)
 	return s.reloadAndFenceAllocators(true)
 }
 
@@ -373,6 +385,15 @@ func (s *Service) currentCoordinatorLeaseView() (rootstate.CoordinatorLease, roo
 	s.leaseMu.RLock()
 	defer s.leaseMu.RUnlock()
 	return s.leaseView.Current()
+}
+
+func (s *Service) currentCoordinatorClosure() rootstate.CoordinatorClosure {
+	if s == nil {
+		return rootstate.CoordinatorClosure{}
+	}
+	s.leaseMu.RLock()
+	defer s.leaseMu.RUnlock()
+	return s.leaseView.Closure()
 }
 
 func (s *Service) leaseCampaignBounds() (nowUnixNano, expiresUnixNano int64, holderID string, renewIn, clockSkew time.Duration) {

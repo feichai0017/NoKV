@@ -101,6 +101,34 @@ indicates that the rooted closure state has drifted from the expected
 `Attached → Active → Seal → Cover → Close → Reattach` lifecycle — which is
 exactly the property CCC.tla proves meta-root must preserve.
 
+## Runtime diagnostics and metrics
+
+The audit CLI is the read-only offline/operator view. The live coordinator
+runtime now exposes a matching `ccc_metrics` block through
+`coordinator/server.DiagnosticsSnapshot()` and the `nokv_coordinator` expvar
+surface.
+
+That block exports four counter families:
+
+- `lease_generation_transitions_total`
+- `closure_stage_transitions_total`
+- `pre_action_gate_rejections_total`
+- `ali_violations_total`
+
+`ali_violations_total` uses the same four-way CCC vocabulary as the paper and
+the TLA+ model:
+
+- `authority_uniqueness`
+- `successor_coverage`
+- `post_seal_inadmissibility`
+- `closure_completeness`
+
+The intended split is:
+
+- `ccc-audit` explains whether the **current rooted snapshot** is legal
+- `ccc_metrics` shows how often the **live runtime** has rejected unsafe
+  continuations while the system is running
+
 ## Related
 
 - [Rooted truth](rooted_truth.md) — lifecycle semantics audited by this tool

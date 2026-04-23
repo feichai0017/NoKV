@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	rootfailpoints "github.com/feichai0017/NoKV/meta/root/failpoints"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -99,6 +100,9 @@ func (s *Service) currentCoordinatorLeaseViewFromStorage() (rootstate.Coordinato
 	if s == nil || s.storage == nil {
 		return rootstate.CoordinatorLease{}, rootstate.CoordinatorSeal{}, nil
 	}
+	if err := rootfailpoints.InjectBeforeCoordinatorLeaseStorageRead(); err != nil {
+		return rootstate.CoordinatorLease{}, rootstate.CoordinatorSeal{}, err
+	}
 	snapshot, err := s.storage.Load()
 	if err != nil {
 		return rootstate.CoordinatorLease{}, rootstate.CoordinatorSeal{}, err
@@ -125,30 +129,43 @@ func (s *Service) validatePreActionLease(kind preActionKind, dutyMask uint32, cu
 	}
 
 	if current.HolderID == "" {
+		s.cccMetrics.recordPreActionGateRejection(kind)
+		s.cccMetrics.recordALIViolation(aliAuthorityUniqueness)
 		return statusCoordinatorLease(fmt.Errorf("%w: no rooted coordinator lease", rootstate.ErrCoordinatorLeaseHeld))
 	}
 	if current.HolderID != holderID {
+		s.cccMetrics.recordPreActionGateRejection(kind)
+		s.cccMetrics.recordALIViolation(aliAuthorityUniqueness)
 		return statusCoordinatorLease(fmt.Errorf("%w: rooted holder=%s local_holder=%s", rootstate.ErrCoordinatorLeaseOwner, current.HolderID, holderID))
 	}
 	if !current.ActiveAt(nowUnixNano) {
+		s.cccMetrics.recordPreActionGateRejection(kind)
+		s.cccMetrics.recordALIViolation(aliAuthorityUniqueness)
 		return statusCoordinatorLease(fmt.Errorf("%w: rooted lease expired generation=%d", rootstate.ErrInvalidCoordinatorLease, current.CertGeneration))
 	}
 
 	switch kind {
 	case preActionSealCurrentGeneration:
 		if rootstate.CoordinatorGenerationSealed(current, seal) {
+			s.cccMetrics.recordPreActionGateRejection(kind)
+			s.cccMetrics.recordALIViolation(aliPostSealInadmissibility)
 			return statusCoordinatorLease(fmt.Errorf("%w: generation=%d already sealed", rootstate.ErrCoordinatorLeaseHeld, current.CertGeneration))
 		}
 	case preActionLifecycleMutation:
 		if rootstate.CoordinatorGenerationSealed(current, seal) {
+			s.cccMetrics.recordPreActionGateRejection(kind)
+			s.cccMetrics.recordALIViolation(aliPostSealInadmissibility)
 			return statusCoordinatorLease(fmt.Errorf("%w: generation=%d sealed_generation=%d", rootstate.ErrCoordinatorLeaseHeld, current.CertGeneration, seal.CertGeneration))
 		}
 	case preActionDutyAdmission:
 		currentDutyMask := current.DutyMask
 		if dutyMask != 0 && currentDutyMask&dutyMask != dutyMask {
+			s.cccMetrics.recordPreActionGateRejection(kind)
 			return statusCoordinatorLease(fmt.Errorf("%w: required_duty_mask=%d rooted_duty_mask=%d generation=%d", rootstate.ErrCoordinatorLeaseDuty, dutyMask, currentDutyMask, current.CertGeneration))
 		}
 		if rootstate.CoordinatorGenerationSealed(current, seal) {
+			s.cccMetrics.recordPreActionGateRejection(kind)
+			s.cccMetrics.recordALIViolation(aliPostSealInadmissibility)
 			return statusCoordinatorLease(fmt.Errorf("%w: generation=%d sealed_generation=%d", rootstate.ErrCoordinatorLeaseHeld, current.CertGeneration, seal.CertGeneration))
 		}
 	}
