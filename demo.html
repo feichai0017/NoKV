@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0e4739fd.js";
+            window.path_to_searchindex_js = "searchindex-2ab2b35a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-1516f189.js"></script>
@@ -224,7 +224,7 @@ consecutive numbers — easy to remember, easy to script against.</p>
 <p>Meta-root (<code>2380/2381/2382</code>) is exposed so host-side tools like
 <code>nokv succession-audit</code> and <code>nokv-config</code> can query rooted state directly for
 debugging. All <code>/debug/vars</code> endpoints also expose the meta-root’s state
-summary (leader, committed index, generation) for the dashboard.</p>
+summary (leader, committed index, era) for the dashboard.</p>
 <p><strong>For production, don’t expose meta-root publicly.</strong> The gRPC API accepts
 <code>ApplyTenure</code> and <code>ApplyHandover</code> which are
 lease-gated but still structurally sensitive. To opt out, delete the
@@ -253,7 +253,7 @@ three planes:</p>
 <li><strong>Truth plane</strong> — which meta-root is raft leader, committed index, allocator
 fences, descriptor / pending-change counts.</li>
 <li><strong>Control plane</strong> — which coordinator currently holds the Succession lease, lease
-generation, root lag, degraded mode, active vs standby tag on every coord.</li>
+era, root lag, degraded mode, active vs standby tag on every coord.</li>
 <li><strong>Execution plane</strong> — stores heap usage, goroutine count.</li>
 <li><strong>Gateway</strong> — Redis expvar counters.</li>
 </ul>
@@ -293,7 +293,7 @@ in blue, the Succession lease holder in purple, and pulsing lines showing the
 active control-flow edge (lease holder → raft leader, holder → stores,
 gateway → holder).</li>
 <li><strong>Per-service cards:</strong> one card per service showing leader state, lease
-generation, committed index, allocator fences, heap stats.</li>
+era, committed index, allocator fences, heap stats.</li>
 <li><strong>Event timeline:</strong> auto-populated from expvar diffs — lease handoffs,
 raft elections, descriptor-count changes, node up/down transitions. Use
 this to watch the Succession lifecycle live.</li>
@@ -322,7 +322,7 @@ purple ring in the topology diagram moves, and the event timeline logs
 the handoff.</li>
 <li><strong>Stop the raft leader meta-root</strong> → raft election visible as the blue
 ring disappears briefly and lands on a surviving peer; coord lease may
-churn through one generation before settling (~17 s total recovery).</li>
+churn through one era before settling (~17 s total recovery).</li>
 <li><strong>Start the stopped container</strong> → it rejoins quietly as a standby.</li>
 </ul>
 <p>The same drills run from the terminal if you prefer: <code>docker stop nokv-coordinator-1</code>, <code>docker stop nokv-meta-root-1</code>, etc.</p>

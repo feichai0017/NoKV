@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0e4739fd.js";
+            window.path_to_searchindex_js = "searchindex-2ab2b35a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-1516f189.js"></script>
@@ -208,18 +208,17 @@ healthy, or attached to a quiesced cluster during post-incident analysis.</p>
 implementation:</p>
 <ul>
 <li><code>Lease</code> — the active authority record</li>
-<li><code>Seal</code> — the retired predecessor generation and the frontier it already
+<li><code>Seal</code> — the retired predecessor era and the frontier it already
 consumed</li>
 <li><code>Handover</code> — the successor handoff-completion record</li>
-<li><code>Generation</code> — the authority generation counter (implementation fields still
-use <code>epoch</code> for compatibility)</li>
+<li><code>Era</code> — the authority era counter</li>
 <li><code>Witness</code> — the proof bundle derived from <code>{Lease, Seal, Handover}</code></li>
 </ul>
 <p>The four safety guarantees the audit talks about are:</p>
 <ul>
-<li><code>Primacy</code> — at most one generation is active</li>
+<li><code>Primacy</code> — at most one era is active</li>
 <li><code>Inheritance</code> — the successor covers predecessor commitments</li>
-<li><code>Silence</code> — a sealed generation does not continue serving</li>
+<li><code>Silence</code> — a sealed era does not continue serving</li>
 <li><code>Finality</code> — a handoff finishes instead of hanging forever</li>
 </ul>
 <p>Implementation types such as <code>Tenure</code>, <code>Legacy</code>,
@@ -257,22 +256,22 @@ now_unix_nano      : 1714857600000000000
 root_desc_revision : 42
 catch_up_state     : fresh
 current_holder     : coord-1
-current_generation : 7
+current_era        : 7
 handover           : stage=confirmed
-handover_witness   : stage=confirmed seal_gen=6 successor_present=true inheritance=covered lineage_satisfied=true sealed_gen_retired=true
+handover_witness   : stage=confirmed legacy_era=6 successor_present=true inheritance=covered lineage_satisfied=true sealed_era_retired=true
 
 snapshot anomalies:
   successor_lineage_mismatch     : false
   uncovered_monotone_frontier    : false
   uncovered_descriptor_revision  : false
   lease_start_coverage_violation : false
-  sealed_generation_still_live   : false
+  sealed_era_still_live      : false
   finality_defect                 : none
 </code></pre>
 <p>When <code>--reply-trace</code> is provided, each accepted reply that violates the
 handover witness prints as a trailing line:</p>
 <pre><code class="language-text">reply-trace anomalies (1):
-  [3] kind=accepted_reply_behind_successor duty=lease_start cert_gen=5 reason="accepted reply generation 5 behind observed successor generation 7"
+  [3] kind=accepted_reply_behind_successor duty=lease_start cert_era=5 reason="accepted reply era 5 behind observed successor era 7"
 </code></pre>
 <h2 id="anomaly-vocabulary"><a class="header" href="#anomaly-vocabulary">Anomaly vocabulary</a></h2>
 <p>See <a href="../coordinator/audit/report.go">coordinator/audit/report.go</a> for the full
@@ -296,7 +295,7 @@ runtime now exposes a matching <code>succession_metrics</code> block through
 surface.</p>
 <p>That block exports four counter families:</p>
 <ul>
-<li><code>lease_generation_transitions_total</code></li>
+<li><code>lease_era_transitions_total</code></li>
 <li><code>handover_stage_transitions_total</code></li>
 <li><code>pre_action_gate_rejections_total</code></li>
 <li><code>guarantee_violations_total</code></li>

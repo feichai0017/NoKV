@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0e4739fd.js";
+            window.path_to_searchindex_js = "searchindex-2ab2b35a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-1516f189.js"></script>
@@ -240,16 +240,16 @@ actions.</p>
 names suggest. At the doc / operator level, keep just these words:</p>
 <ul>
 <li><code>Lease</code> — the currently active authority record</li>
-<li><code>Seal</code> — the retired predecessor generation plus the frontier it already
+<li><code>Seal</code> — the retired predecessor era plus the frontier it already
 consumed</li>
 <li><code>Handover</code> — the rooted handoff record for the current successor</li>
-<li><code>Generation</code> — the monotonic authority generation</li>
+<li><code>Era</code> — the monotonic authority era</li>
 <li><code>Witness</code> — the operator-visible proof bundle that explains whether the
 current handoff state is safe</li>
 </ul>
 <p>The four guarantees discussed by the docs and runtime metrics are:</p>
 <ul>
-<li><code>Primacy</code> — at most one authority generation is active</li>
+<li><code>Primacy</code> — at most one authority era is active</li>
 <li><code>Inheritance</code> — the successor must cover the predecessor’s published work</li>
 <li><code>Silence</code> — a sealed predecessor must not keep serving</li>
 <li><code>Finality</code> — a handoff must not remain permanently half-finished</li>
@@ -264,7 +264,7 @@ current handoff state is safe</li>
 <tr><td><code>Lease</code></td><td><code>Tenure</code></td></tr>
 <tr><td><code>Seal</code></td><td><code>Legacy</code></td></tr>
 <tr><td><code>Handover</code></td><td><code>Handover</code></td></tr>
-<tr><td><code>Generation</code></td><td><code>Epoch</code> / <code>epoch</code></td></tr>
+<tr><td><code>Era</code></td><td><code>Era</code> / <code>era</code></td></tr>
 <tr><td><code>Witness</code></td><td><code>HandoverWitness</code> / continuation witness fields</td></tr>
 <tr><td><code>Frontiers</code></td><td><code>MandateFrontiers</code> / <code>frontiers</code> / <code>consumed_frontiers</code></td></tr>
 </tbody>

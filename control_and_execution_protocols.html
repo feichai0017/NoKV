@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0e4739fd.js";
+            window.path_to_searchindex_js = "searchindex-2ab2b35a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-1516f189.js"></script>
@@ -844,7 +844,7 @@ truth</li>
 <ul>
 <li>the local coordinator must first campaign / renew the rooted lease</li>
 <li>the rooted lease must still be active for the local holder</li>
-<li>the rooted generation must not already be sealed</li>
+<li>the rooted era must not already be sealed</li>
 <li>the rooted duty mask must admit the requested action</li>
 </ul>
 <p>If any of those fail, the request is rejected instead of falling back to stale
@@ -857,7 +857,7 @@ local state. This is the current boundary between:</p>
 <p>Lifecycle mutations are stricter than hot-path duty admission:</p>
 <ul>
 <li>they always re-read rooted state from storage before mutating</li>
-<li>they reject any stale-holder / expired-lease / sealed-generation view</li>
+<li>they reject any stale-holder / expired-lease / sealed-era view</li>
 <li>they treat finality as a rooted safety condition, not a best-effort hint</li>
 </ul>
 <p>That is why seal / confirm / close / reattach do not use the cached mirror
@@ -870,7 +870,7 @@ admission path.</p>
 </ul>
 <p><code>succession_metrics</code> is grouped into:</p>
 <ul>
-<li><code>tenure_epoch_transitions_total</code></li>
+<li><code>tenure_era_transitions_total</code></li>
 <li><code>handover_stage_transitions_total</code></li>
 <li><code>gate_rejections_total</code></li>
 <li><code>guarantee_violations_total</code></li>
