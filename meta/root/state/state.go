@@ -1,5 +1,5 @@
 // Package state holds the compact applied root state of the metadata
-// kernel (State, CoordinatorLease/Seal/Closure, pending peer/range
+// kernel (State, Tenure/Seal/Closure, pending peer/range
 // changes) and the ApplyEventToState / ApplyEventToSnapshot functions
 // that drive a rooted event log into that state.
 //
@@ -9,7 +9,7 @@
 // coordinator/, and raftstore/ consume the resulting State as truth.
 //
 // See docs/rooted_truth.md for the overall kernel design and
-// spec/CCC.tla for the formal authority-handoff model.
+// spec/Succession.tla for the formal authority-handoff model.
 package state
 
 import (
@@ -32,48 +32,48 @@ const (
 
 // State is the compact checkpointed state of the metadata root.
 type State struct {
-	ClusterEpoch       uint64
-	MembershipEpoch    uint64
-	LastCommitted      Cursor
-	IDFence            uint64
-	TSOFence           uint64
-	CoordinatorLease   CoordinatorLease
-	CoordinatorSeal    CoordinatorSeal
-	CoordinatorClosure CoordinatorClosure
+	ClusterEpoch    uint64
+	MembershipEpoch uint64
+	LastCommitted   Cursor
+	IDFence         uint64
+	TSOFence        uint64
+	Tenure          Tenure
+	Legacy          Legacy
+	Transit         Transit
 }
 
-// CoordinatorLease is the compact control-plane owner lease stored in root
+// Tenure is the compact control-plane owner lease stored in root
 // truth. It is separate from raft leadership: it gates coordinator-only duties
 // such as TSO, ID allocation, and scheduler ownership in separated deployments.
-type CoordinatorLease struct {
-	HolderID          string
-	ExpiresUnixNano   int64
-	CertGeneration    uint64
-	IssuedCursor      Cursor
-	DutyMask          uint32
-	PredecessorDigest string
+type Tenure struct {
+	HolderID        string
+	ExpiresUnixNano int64
+	Epoch           uint64
+	IssuedAt        Cursor
+	Mandate         uint32
+	LineageDigest   string
 }
 
-type CoordinatorSeal struct {
+type Legacy struct {
+	HolderID  string
+	Epoch     uint64
+	Mandate   uint32
+	Frontiers rootproto.MandateFrontiers
+	SealedAt  Cursor
+}
+
+type Transit struct {
 	HolderID       string
-	CertGeneration uint64
-	DutyMask       uint32
-	Frontiers      rootproto.CoordinatorDutyFrontiers
-	SealedAtCursor Cursor
+	LegacyEpoch    uint64
+	SuccessorEpoch uint64
+	LegacyDigest   string
+	Stage          rootproto.TransitStage
+	ConfirmedAt    Cursor
+	ClosedAt       Cursor
+	ReattachedAt   Cursor
 }
 
-type CoordinatorClosure struct {
-	HolderID            string
-	SealGeneration      uint64
-	SuccessorGeneration uint64
-	SealDigest          string
-	Stage               rootproto.CoordinatorClosureStage
-	ConfirmedAtCursor   Cursor
-	ClosedAtCursor      Cursor
-	ReattachedAtCursor  Cursor
-}
-
-func (l CoordinatorLease) ActiveAt(nowUnixNano int64) bool {
+func (l Tenure) ActiveAt(nowUnixNano int64) bool {
 	return l.HolderID != "" && l.ExpiresUnixNano > nowUnixNano
 }
 
@@ -215,12 +215,12 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		if event.AllocatorFence != nil && event.AllocatorFence.Minimum > state.TSOFence {
 			state.TSOFence = event.AllocatorFence.Minimum
 		}
-	case rootevent.KindCoordinatorLease:
-		applyCoordinatorLeaseToState(state, cursor, event)
-	case rootevent.KindCoordinatorSeal:
-		applyCoordinatorSealToState(state, cursor, event)
-	case rootevent.KindCoordinatorClosure:
-		applyCoordinatorClosureToState(state, cursor, event)
+	case rootevent.KindTenure:
+		applyTenureToState(state, cursor, event)
+	case rootevent.KindLegacy:
+		applyLegacyToState(state, cursor, event)
+	case rootevent.KindTransit:
+		applyTransitToState(state, cursor, event)
 	case rootevent.KindRegionBootstrap,
 		rootevent.KindRegionDescriptorPublished,
 		rootevent.KindRegionTombstoned,
@@ -241,83 +241,83 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 	state.LastCommitted = cursor
 }
 
-func applyCoordinatorSealToState(state *State, cursor Cursor, event rootevent.Event) {
-	if state == nil || event.CoordinatorSeal == nil {
+func applyLegacyToState(state *State, cursor Cursor, event rootevent.Event) {
+	if state == nil || event.Legacy == nil {
 		return
 	}
-	seal := event.CoordinatorSeal
-	sealedAt := coalesceCursor(seal.SealedAtCursor, cursor)
-	dutyMask := seal.DutyMask
-	if dutyMask == 0 {
-		dutyMask = state.CoordinatorLease.DutyMask
-		if dutyMask == 0 {
-			dutyMask = rootproto.CoordinatorDutyMaskDefault
+	seal := event.Legacy
+	sealedAt := coalesceCursor(seal.SealedAt, cursor)
+	mandate := seal.Mandate
+	if mandate == 0 {
+		mandate = state.Tenure.Mandate
+		if mandate == 0 {
+			mandate = rootproto.MandateDefault
 		}
 	}
-	state.CoordinatorSeal = CoordinatorSeal{
-		HolderID:       seal.HolderID,
-		CertGeneration: seal.CertGeneration,
-		DutyMask:       dutyMask,
-		Frontiers:      seal.Frontiers,
-		SealedAtCursor: sealedAt,
+	state.Legacy = Legacy{
+		HolderID:  seal.HolderID,
+		Epoch:     seal.Epoch,
+		Mandate:   mandate,
+		Frontiers: seal.Frontiers,
+		SealedAt:  sealedAt,
 	}
-	state.CoordinatorClosure = CoordinatorClosure{}
+	state.Transit = Transit{}
 }
 
-func applyCoordinatorClosureToState(state *State, cursor Cursor, event rootevent.Event) {
-	if state == nil || event.CoordinatorClosure == nil {
+func applyTransitToState(state *State, cursor Cursor, event rootevent.Event) {
+	if state == nil || event.Transit == nil {
 		return
 	}
-	closure := event.CoordinatorClosure
-	confirmedAt := coalesceCursor(closure.ConfirmedAtCursor, cursor)
-	closedAt := coalesceCursor(closure.ClosedAtCursor, cursor)
-	reattachedAt := coalesceCursor(closure.ReattachedAtCursor, cursor)
-	state.CoordinatorClosure = CoordinatorClosure{
-		HolderID:            closure.HolderID,
-		SealGeneration:      closure.SealGeneration,
-		SuccessorGeneration: closure.SuccessorGeneration,
-		SealDigest:          closure.SealDigest,
-		Stage:               closure.Stage,
-		ConfirmedAtCursor:   confirmedAt,
-		ClosedAtCursor:      closedAt,
-		ReattachedAtCursor:  reattachedAt,
+	closure := event.Transit
+	confirmedAt := coalesceCursor(closure.ConfirmedAt, cursor)
+	closedAt := coalesceCursor(closure.ClosedAt, cursor)
+	reattachedAt := coalesceCursor(closure.ReattachedAt, cursor)
+	state.Transit = Transit{
+		HolderID:       closure.HolderID,
+		LegacyEpoch:    closure.LegacyEpoch,
+		SuccessorEpoch: closure.SuccessorEpoch,
+		LegacyDigest:   closure.LegacyDigest,
+		Stage:          closure.Stage,
+		ConfirmedAt:    confirmedAt,
+		ClosedAt:       closedAt,
+		ReattachedAt:   reattachedAt,
 	}
 }
 
-func applyCoordinatorLeaseToState(state *State, cursor Cursor, event rootevent.Event) {
-	if state == nil || event.CoordinatorLease == nil {
+func applyTenureToState(state *State, cursor Cursor, event rootevent.Event) {
+	if state == nil || event.Tenure == nil {
 		return
 	}
-	lease := event.CoordinatorLease
-	issuedCursor := state.CoordinatorLease.IssuedCursor
-	issuedCursor = coalesceCursor(lease.IssuedCursor, issuedCursor)
-	if issuedCursor.Term == 0 && issuedCursor.Index == 0 {
-		issuedCursor = cursor
+	lease := event.Tenure
+	issuedAt := state.Tenure.IssuedAt
+	issuedAt = coalesceCursor(lease.IssuedAt, issuedAt)
+	if issuedAt.Term == 0 && issuedAt.Index == 0 {
+		issuedAt = cursor
 	}
-	if lease.CertGeneration == 0 || lease.CertGeneration != state.CoordinatorLease.CertGeneration {
-		issuedCursor = cursor
+	if lease.Epoch == 0 || lease.Epoch != state.Tenure.Epoch {
+		issuedAt = cursor
 	}
-	dutyMask := lease.DutyMask
-	if dutyMask == 0 {
-		dutyMask = rootproto.CoordinatorDutyMaskDefault
+	mandate := lease.Mandate
+	if mandate == 0 {
+		mandate = rootproto.MandateDefault
 	}
-	predecessorDigest := lease.PredecessorDigest
-	if predecessorDigest == "" && lease.CertGeneration == state.CoordinatorLease.CertGeneration {
-		predecessorDigest = state.CoordinatorLease.PredecessorDigest
+	lineageDigest := lease.LineageDigest
+	if lineageDigest == "" && lease.Epoch == state.Tenure.Epoch {
+		lineageDigest = state.Tenure.LineageDigest
 	}
-	state.CoordinatorLease = CoordinatorLease{
-		HolderID:          lease.HolderID,
-		ExpiresUnixNano:   lease.ExpiresUnixNano,
-		CertGeneration:    lease.CertGeneration,
-		IssuedCursor:      issuedCursor,
-		DutyMask:          dutyMask,
-		PredecessorDigest: predecessorDigest,
+	state.Tenure = Tenure{
+		HolderID:        lease.HolderID,
+		ExpiresUnixNano: lease.ExpiresUnixNano,
+		Epoch:           lease.Epoch,
+		IssuedAt:        issuedAt,
+		Mandate:         mandate,
+		LineageDigest:   lineageDigest,
 	}
 	frontiers := lease.Frontiers
-	if frontier := frontiers.Frontier(rootproto.CoordinatorDutyAllocID); frontier > state.IDFence {
+	if frontier := frontiers.Frontier(rootproto.MandateAllocID); frontier > state.IDFence {
 		state.IDFence = frontier
 	}
-	if frontier := frontiers.Frontier(rootproto.CoordinatorDutyTSO); frontier > state.TSOFence {
+	if frontier := frontiers.Frontier(rootproto.MandateTSO); frontier > state.TSOFence {
 		state.TSOFence = frontier
 	}
 }

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
+	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootfailpoints "github.com/feichai0017/NoKV/meta/root/failpoints"
@@ -59,7 +59,7 @@ func TestMetaRootLeaderChangePreservesClosureLineage(t *testing.T) {
 
 	lease, err := campaignLease(cluster.Stores[leaderID], "c1", 1_000, 100, 10, 20, 56, "")
 	require.NoError(t, err)
-	seal, err := sealLease(cluster.Stores[leaderID], "c1", 200, controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
+	seal, err := sealLease(cluster.Stores[leaderID], "c1", 200, succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
 	require.NoError(t, err)
 
 	newLeaderID := cluster.FollowerIDs(leaderID)[0]
@@ -67,10 +67,10 @@ func TestMetaRootLeaderChangePreservesClosureLineage(t *testing.T) {
 	newLeaderID = cluster.WaitLeader(leaderID)
 	cluster.RefreshStore(newLeaderID)
 
-	successor, err := campaignLease(cluster.Stores[newLeaderID], "c2", 1_400, 300, 12, 34, 56, rootstate.CoordinatorSealDigest(seal))
+	successor, err := campaignLease(cluster.Stores[newLeaderID], "c2", 1_400, 300, 12, 34, 56, rootstate.DigestOfLegacy(seal))
 	require.NoError(t, err)
-	require.Greater(t, successor.CertGeneration, seal.CertGeneration)
-	require.Equal(t, lease.CertGeneration, seal.CertGeneration)
+	require.Greater(t, successor.Epoch, seal.Epoch)
+	require.Equal(t, lease.Epoch, seal.Epoch)
 
 	require.Eventually(t, func() bool {
 		for _, id := range []uint64{1, 2, 3} {
@@ -81,10 +81,10 @@ func TestMetaRootLeaderChangePreservesClosureLineage(t *testing.T) {
 			if err != nil {
 				return false
 			}
-			if current.CoordinatorLease.HolderID != "c2" ||
-				current.CoordinatorLease.CertGeneration != successor.CertGeneration ||
-				current.CoordinatorSeal.CertGeneration != seal.CertGeneration ||
-				current.CoordinatorSeal.HolderID != "c1" ||
+			if current.Tenure.HolderID != "c2" ||
+				current.Tenure.Epoch != successor.Epoch ||
+				current.Legacy.Epoch != seal.Epoch ||
+				current.Legacy.HolderID != "c1" ||
 				current.IDFence != 12 ||
 				current.TSOFence != 34 {
 				return false
@@ -107,49 +107,49 @@ func TestMetaRootPartialSealRecoversFromCommittedLog(t *testing.T) {
 	rootfailpoints.Set(rootfailpoints.AfterAppendCommittedBeforeCheckpoint)
 	t.Cleanup(func() { rootfailpoints.Set(rootfailpoints.None) })
 
-	_, err = sealLease(cluster.Stores[leaderID], "c1", 200, controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 64))
+	_, err = sealLease(cluster.Stores[leaderID], "c1", 200, succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 64))
 	require.ErrorIs(t, err, rootfailpoints.ErrAfterAppendCommittedBeforeCheckpoint)
 
 	current, err := cluster.Stores[leaderID].Current()
 	require.NoError(t, err)
-	require.Equal(t, uint64(0), current.CoordinatorSeal.CertGeneration)
+	require.Equal(t, uint64(0), current.Legacy.Epoch)
 
 	rootfailpoints.Set(rootfailpoints.None)
 	reopened := cluster.ReopenStore(leaderID)
 	current, err = reopened.Current()
 	require.NoError(t, err)
-	require.Equal(t, lease.CertGeneration, current.CoordinatorSeal.CertGeneration)
-	require.Equal(t, "c1", current.CoordinatorSeal.HolderID)
+	require.Equal(t, lease.Epoch, current.Legacy.Epoch)
+	require.Equal(t, "c1", current.Legacy.HolderID)
 
-	successor, err := campaignLease(reopened, "c2", 1_400, 300, 12, 34, 64, rootstate.CoordinatorSealDigest(current.CoordinatorSeal))
+	successor, err := campaignLease(reopened, "c2", 1_400, 300, 12, 34, 64, rootstate.DigestOfLegacy(current.Legacy))
 	require.NoError(t, err)
-	require.Equal(t, uint64(2), successor.CertGeneration)
+	require.Equal(t, uint64(2), successor.Epoch)
 }
 
 func campaignLease(store interface {
-	ApplyCoordinatorLease(context.Context, rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error)
-}, holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence, descriptorRevision uint64, predecessorDigest string) (rootstate.CoordinatorLease, error) {
-	state, err := store.ApplyCoordinatorLease(context.Background(), rootproto.CoordinatorLeaseCommand{
-		Kind:              rootproto.CoordinatorLeaseCommandIssue,
-		HolderID:          holderID,
-		ExpiresUnixNano:   expiresUnixNano,
-		NowUnixNano:       nowUnixNano,
-		PredecessorDigest: predecessorDigest,
-		HandoffFrontiers:  controlplane.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, descriptorRevision),
+	ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.SuccessionState, error)
+}, holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence, descriptorRevision uint64, lineageDigest string) (rootstate.Tenure, error) {
+	state, err := store.ApplyTenure(context.Background(), rootproto.TenureCommand{
+		Kind:               rootproto.TenureActIssue,
+		HolderID:           holderID,
+		ExpiresUnixNano:    expiresUnixNano,
+		NowUnixNano:        nowUnixNano,
+		LineageDigest:      lineageDigest,
+		InheritedFrontiers: succession.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, descriptorRevision),
 	})
-	return state.Lease, err
+	return state.Tenure, err
 }
 
 func sealLease(store interface {
-	ApplyCoordinatorClosure(context.Context, rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error)
-}, holderID string, nowUnixNano int64, frontiers rootproto.CoordinatorDutyFrontiers) (rootstate.CoordinatorSeal, error) {
-	state, err := store.ApplyCoordinatorClosure(context.Background(), rootproto.CoordinatorClosureCommand{
-		Kind:        rootproto.CoordinatorClosureCommandSeal,
+	ApplyTransit(context.Context, rootproto.TransitCommand) (rootstate.SuccessionState, error)
+}, holderID string, nowUnixNano int64, frontiers rootproto.MandateFrontiers) (rootstate.Legacy, error) {
+	state, err := store.ApplyTransit(context.Background(), rootproto.TransitCommand{
+		Kind:        rootproto.TransitActSeal,
 		HolderID:    holderID,
 		NowUnixNano: nowUnixNano,
 		Frontiers:   frontiers,
 	})
-	return state.Seal, err
+	return state.Legacy, err
 }
 
 func testDescriptor(id uint64, start, end []byte, rootEpoch uint64) descriptor.Descriptor {

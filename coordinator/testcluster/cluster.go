@@ -131,13 +131,13 @@ func (c *Cluster) LeaderService() (uint64, *coordserver.Service) {
 	return id, c.Services[id]
 }
 
-func (c *Cluster) ConfigureCoordinatorLeases(ttl, renewIn time.Duration) {
+func (c *Cluster) ConfigureTenures(ttl, renewIn time.Duration) {
 	c.tb.Helper()
 	for id, svc := range c.Services {
 		if svc == nil {
 			continue
 		}
-		svc.ConfigureCoordinatorLease("c"+strconv.FormatUint(id, 10), ttl, renewIn)
+		svc.ConfigureTenure("c"+strconv.FormatUint(id, 10), ttl, renewIn)
 	}
 }
 

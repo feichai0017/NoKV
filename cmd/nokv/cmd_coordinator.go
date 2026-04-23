@@ -122,7 +122,7 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 	ids := idalloc.NewIDAllocator(*idStart)
 	tsAlloc := tso.NewAllocator(*tsStart)
 	svc := coordserver.NewService(cluster, ids, tsAlloc, rootStore)
-	svc.ConfigureCoordinatorLease(coordinatorIDValue, *leaseTTL, *leaseRenewBefore)
+	svc.ConfigureTenure(coordinatorIDValue, *leaseTTL, *leaseRenewBefore)
 	installCoordinatorExpvar(svc)
 
 	grpcServer := grpc.NewServer()
@@ -150,7 +150,7 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 
 	ctx, cancel := coordinatorNotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	go svc.RunCoordinatorLeaseLoop(ctx)
+	go svc.RunTenureLoop(ctx)
 	go func() {
 		subscription := rootStore.SubscribeTail(rootstorage.TailToken{})
 		if subscription == nil {
@@ -183,7 +183,7 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 		}
 		return nil
 	case <-ctx.Done():
-		_ = svc.ReleaseCoordinatorLease()
+		_ = svc.ReleaseTenure()
 		grpcServer.GracefulStop()
 		serveErr := <-serveErrCh
 		if serveErr != nil && !errors.Is(serveErr, grpc.ErrServerStopped) {

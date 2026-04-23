@@ -296,7 +296,7 @@ func (f *FaultFS) OpenFileHandle(name string, flag int, perm os.FileMode) (File,
 	return &faultFile{base: file, parent: f, path: name}, nil
 }
 
-// Lock acquires an exclusive lock on name.
+// Lock acquires an primacy lock on name.
 func (f *FaultFS) Lock(name string) (io.Closer, error) {
 	if err := f.before(OpLock, name); err != nil {
 		return nil, err

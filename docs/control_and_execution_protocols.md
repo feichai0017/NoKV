@@ -774,22 +774,22 @@ admission path.
 `DiagnosticsSnapshot()` now exports both:
 
 - the current degraded serving state (`root`, `lease`, `audit`, `closure_witness`)
-- cumulative CCC counters under `ccc_metrics`
+- cumulative Succession counters under `succession_metrics`
 
-`ccc_metrics` is grouped into:
+`succession_metrics` is grouped into:
 
-- `lease_generation_transitions_total`
-- `closure_stage_transitions_total`
-- `pre_action_gate_rejections_total`
-- `ali_violations_total`
+- `tenure_epoch_transitions_total`
+- `transit_stage_transitions_total`
+- `gate_rejections_total`
+- `guarantee_violations_total`
 
-The `ali_violations_total` buckets map to the four Authority Lineage
-Invariants:
+The `guarantee_violations_total` buckets map directly to the four Succession
+guarantees:
 
-- `authority_uniqueness`
-- `successor_coverage`
-- `post_seal_inadmissibility`
-- `closure_completeness`
+- `primacy`
+- `inheritance`
+- `silence`
+- `closure`
 
 ---
 

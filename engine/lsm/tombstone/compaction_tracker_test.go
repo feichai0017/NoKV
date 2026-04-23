@@ -28,7 +28,7 @@ func TestCompactionTrackerCoversWithMonotonicKeys(t *testing.T) {
 		t.Fatalf("expected key e@10 not covered when versions are equal")
 	}
 	if tracker.Covers(kv.CFDefault, []byte("f"), 1) {
-		t.Fatalf("expected key f@1 not covered (end is exclusive)")
+		t.Fatalf("expected key f@1 not covered (end is primacy)")
 	}
 }
 

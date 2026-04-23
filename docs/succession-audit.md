@@ -1,9 +1,9 @@
-# ccc-audit
+# succession-audit
 
-`nokv ccc-audit` is a read-only operator tool that projects a live 3-peer
+`nokv succession-audit` is a read-only operator tool that projects a live 3-peer
 meta-root cluster's current rooted state into the `coordinator/audit`
-closure-complete-continuation (CCC) vocabulary. It is the operator
-counterpart to the TLA+ CCC model and the `coordinator/audit` library that
+succession (Succession) vocabulary. It is the operator
+counterpart to the TLA+ Succession model and the `coordinator/audit` library that
 coordinator/server consults at runtime.
 
 Because NoKV only ships the separated topology (3 meta-root + N coordinator),
@@ -15,7 +15,7 @@ directly.
 1. Dial the 3 meta-root peers through `meta/root/client` (the same client
    coordinators use) wrapped by `coordinator/rootview.OpenRootRemoteStore`.
 2. Load one rooted `Snapshot` — current descriptors, allocator fences,
-   `CoordinatorLease`, `CoordinatorSeal`, `CoordinatorClosure`.
+   `Tenure`, `Legacy`, `Transit`.
 3. Project the snapshot through `coordinator/audit.BuildReport(snapshot,
    holderID, nowUnixNano)` to produce a `Report` containing `SnapshotAnomalies`
    and a `ClosureDefect` enum.
@@ -28,10 +28,35 @@ The audit is read-only: it never writes to meta-root, never advances fences,
 and never mutates coordinator state. It can run while the cluster is live and
 healthy, or attached to a quiesced cluster during post-incident analysis.
 
+## Minimal vocabulary
+
+The audit output intentionally uses a smaller protocol vocabulary than the full
+implementation:
+
+- `Lease` — the active authority record
+- `Seal` — the retired predecessor generation and the frontier it already
+  consumed
+- `Closure` — the successor handoff-completion record
+- `Generation` — the authority generation counter (implementation fields still
+  use `epoch` for compatibility)
+- `Witness` — the proof bundle derived from `{Lease, Seal, Closure}`
+
+The four safety guarantees the audit talks about are:
+
+- `Primacy` — at most one generation is active
+- `Inheritance` — the successor covers predecessor commitments
+- `Silence` — a sealed generation does not continue serving
+- `Closure` — a handoff finishes instead of hanging forever
+
+Implementation types such as `Tenure`, `Legacy`,
+`Transit`, `LineageDigest`, and `MandateFrontiers`
+remain unchanged in code. The audit doc keeps the public vocabulary shorter on
+purpose.
+
 ## Usage
 
 ```bash
-nokv ccc-audit \
+nokv succession-audit \
   --root-peer 1=127.0.0.1:2380 \
   --root-peer 2=127.0.0.1:2381 \
   --root-peer 3=127.0.0.1:2382
@@ -45,7 +70,7 @@ Required:
 Optional:
 
 - `--holder <id>` — override the holder id used for reattach checks.
-  Defaults to `snapshot.CoordinatorLease.HolderID`.
+  Defaults to `snapshot.Tenure.HolderID`.
 - `--now-unix-nano <ns>` — override the audit clock. Defaults to
   `time.Now().UnixNano()`. Useful for deterministic regression runs.
 - `--reply-trace <path>` — path to a reply-trace JSON file (`-` for stdin).
@@ -57,7 +82,7 @@ Optional:
 ## Sample output
 
 ```text
-CCC audit report
+Succession audit report
 ----------------
 holder             : coord-1
 now_unix_nano      : 1714857600000000000
@@ -66,7 +91,7 @@ catch_up_state     : fresh
 current_holder     : coord-1
 current_generation : 7
 closure            : stage=confirmed
-closure_witness    : stage=confirmed seal_gen=6 successor_present=true successor_coverage=covered lineage_satisfied=true sealed_gen_retired=true
+closure_witness    : stage=confirmed seal_gen=6 successor_present=true inheritance=covered lineage_satisfied=true sealed_gen_retired=true
 
 snapshot anomalies:
   successor_lineage_mismatch     : false
@@ -97,14 +122,15 @@ enum:
   `reattach_lineage_mismatch` / `reattach_incomplete`
 
 Any non-empty `closure_defect` or any `true` flag under `snapshot anomalies`
-indicates that the rooted closure state has drifted from the expected
-`Attached → Active → Seal → Cover → Close → Reattach` lifecycle — which is
-exactly the property CCC.tla proves meta-root must preserve.
+indicates that the rooted handoff state has drifted from the expected
+`active lease → sealed predecessor → inherited successor → closed handoff`
+lifecycle — which is exactly the property `spec/Succession.tla` proves meta-root must
+preserve.
 
 ## Runtime diagnostics and metrics
 
 The audit CLI is the read-only offline/operator view. The live coordinator
-runtime now exposes a matching `ccc_metrics` block through
+runtime now exposes a matching `succession_metrics` block through
 `coordinator/server.DiagnosticsSnapshot()` and the `nokv_coordinator` expvar
 surface.
 
@@ -113,20 +139,19 @@ That block exports four counter families:
 - `lease_generation_transitions_total`
 - `closure_stage_transitions_total`
 - `pre_action_gate_rejections_total`
-- `ali_violations_total`
+- `guarantee_violations_total`
 
-`ali_violations_total` uses the same four-way CCC vocabulary as the paper and
-the TLA+ model:
+`guarantee_violations_total` uses the same four Succession guarantees:
 
-- `authority_uniqueness`
-- `successor_coverage`
-- `post_seal_inadmissibility`
-- `closure_completeness`
+- `primacy`
+- `inheritance`
+- `silence`
+- `closure`
 
 The intended split is:
 
-- `ccc-audit` explains whether the **current rooted snapshot** is legal
-- `ccc_metrics` shows how often the **live runtime** has rejected unsafe
+- `succession-audit` explains whether the **current rooted snapshot** is legal
+- `succession_metrics` shows how often the **live runtime** has rejected unsafe
   continuations while the system is running
 
 ## Related

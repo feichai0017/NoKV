@@ -131,14 +131,14 @@ Control-plane correctness is modeled in TLA+ under [`spec/`](./spec/), with a **
 
 | Spec | Role | TLC outcome |
 |---|---|---|
-| [`CCC.tla`](./spec/CCC.tla) | Positive model — repeated authority handoff with closure lifecycle | ✅ 3924 distinct states, depth 20, invariants hold |
-| [`CCCMultiDim.tla`](./spec/CCCMultiDim.tla) | Multi-dimensional frontier coverage | ✅ 326 distinct states, invariants hold |
+| [`Succession.tla`](./spec/Succession.tla) | Positive model — repeated authority handoff with closure lifecycle | ✅ 3924 distinct states, depth 20, invariants hold |
+| [`SuccessionMultiDim.tla`](./spec/SuccessionMultiDim.tla) | Multi-dimensional frontier coverage | ✅ 326 distinct states, invariants hold |
 | [`LeaseOnly.tla`](./spec/LeaseOnly.tla) | Contrast — no reply-side guard, no rooted closure | ❌ counterexample: old-generation reply delivered after successor |
 | [`TokenOnly.tla`](./spec/TokenOnly.tla) | Contrast — bounded-freshness token only | ❌ counterexample: freshness ≠ authority lineage |
 | [`ChubbyFencedLease.tla`](./spec/ChubbyFencedLease.tla) | Contrast — per-reply sequencer fencing | ❌ counterexample: stale-reject holds, but successor coverage fails |
 | [`LeaseStartOnly.tla`](./spec/LeaseStartOnly.tla) | Contrast — no lease-start coverage | ❌ counterexample: write accepted behind predecessor's served read |
 
-Run `make tlc-ccc` / `make tlc-leaseonly-counterexample` / etc. to reproduce. Artifact outputs are checked in under [`spec/artifacts/`](./spec/artifacts/).
+Run `make tlc-succession` / `make tlc-leaseonly-counterexample` / etc. to reproduce. Artifact outputs are checked in under [`spec/artifacts/`](./spec/artifacts/).
 
 <br/>
 

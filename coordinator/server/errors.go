@@ -10,7 +10,7 @@ import (
 const (
 	errNotLeaderPrefix                 = "coordinator not leader"
 	errRootUnavailable                 = "coordinator root unavailable"
-	errCoordinatorLeasePrefix          = "coordinator lease not held"
+	errTenurePrefix                    = "coordinator lease not held"
 	errRootLagExceedsStrongFreshness   = "root lag exceeds strong freshness"
 	errBootstrapRequiredBeforeBounded  = "bootstrap required before bounded freshness"
 	errRequiredRootedTokenNotSatisfied = "required rooted token not satisfied"
@@ -26,6 +26,6 @@ func statusNotLeader(leaderID uint64) error {
 	return status.Error(codes.FailedPrecondition, fmt.Sprintf("%s (leader_id=%d)", errNotLeaderPrefix, leaderID))
 }
 
-func statusCoordinatorLease(err error) error {
-	return status.Error(codes.FailedPrecondition, fmt.Sprintf("%s: %v", errCoordinatorLeasePrefix, err))
+func statusTenure(err error) error {
+	return status.Error(codes.FailedPrecondition, fmt.Sprintf("%s: %v", errTenurePrefix, err))
 }

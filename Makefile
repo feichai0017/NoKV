@@ -3,7 +3,7 @@
 
 .PHONY: help build test test-short test-race test-coverage lint fmt clean docker-up docker-down bench install-tools install-tla-tools
 .PHONY: proto proto-check proto-breaking-check
-.PHONY: tlc-ccc tlc-cccmultidim tlc-leaseonly-counterexample tlc-leasestart-counterexample apalache-typecheck apalache-check-ccc apalache-check-cccmultidim
+.PHONY: tlc-succession tlc-successionmultidim tlc-leaseonly-counterexample tlc-leasestart-counterexample apalache-typecheck apalache-check-succession apalache-check-successionmultidim
 
 GOLANGCI_LINT_VERSION ?= v2.9.0
 BUF_VERSION ?= 1.66.0
@@ -26,13 +26,13 @@ help:
 	@echo "  make bench              - Run benchmarks"
 	@echo "  make install-tools      - Install development tools"
 	@echo "  make install-tla-tools  - Install pinned TLC and Apalache locally under third_party/"
-	@echo "  make tlc-ccc            - Run TLC on spec/CCC.tla"
-	@echo "  make tlc-cccmultidim    - Run TLC on spec/CCCMultiDim.tla"
+	@echo "  make tlc-succession            - Run TLC on spec/Succession.tla"
+	@echo "  make tlc-successionmultidim    - Run TLC on spec/SuccessionMultiDim.tla"
 	@echo "  make tlc-leaseonly-counterexample - Run TLC and expect a counterexample for spec/LeaseOnly.tla"
 	@echo "  make tlc-leasestart-counterexample - Run TLC and expect a counterexample for spec/LeaseStartOnly.tla"
 	@echo "  make apalache-typecheck - Run Apalache typecheck on current specs"
-	@echo "  make apalache-check-ccc - Run bounded Apalache check on CCC invariants"
-	@echo "  make apalache-check-cccmultidim - Run bounded Apalache check on CCCMultiDim invariants"
+	@echo "  make apalache-check-succession - Run bounded Apalache check on Succession invariants"
+	@echo "  make apalache-check-successionmultidim - Run bounded Apalache check on SuccessionMultiDim invariants"
 	@echo "  make docker-up          - Start Docker Compose cluster"
 	@echo "  make docker-down        - Stop Docker Compose cluster"
 	@echo "  make clean              - Remove build artifacts and test data"
@@ -130,13 +130,13 @@ install-tla-tools:
 	@echo "Installing pinned TLA+ tools locally..."
 	./scripts/tla/setup.sh
 
-tlc-ccc:
-	@echo "Running TLC on spec/CCC.tla..."
-	./scripts/tla/tlc.sh spec/CCC.tla
+tlc-succession:
+	@echo "Running TLC on spec/Succession.tla..."
+	./scripts/tla/tlc.sh spec/Succession.tla
 
-tlc-cccmultidim:
-	@echo "Running TLC on spec/CCCMultiDim.tla..."
-	./scripts/tla/tlc.sh spec/CCCMultiDim.tla
+tlc-successionmultidim:
+	@echo "Running TLC on spec/SuccessionMultiDim.tla..."
+	./scripts/tla/tlc.sh spec/SuccessionMultiDim.tla
 
 tlc-leaseonly-counterexample:
 	@echo "Running TLC on spec/LeaseOnly.tla (expecting counterexample)..."
@@ -176,21 +176,21 @@ tlc-tokenonly-counterexample:
 
 tlc-contrast-models: tlc-leaseonly-counterexample tlc-tokenonly-counterexample tlc-chubbyfenced-counterexample tlc-leasestart-counterexample
 
-record-tlc-ccc:
-	@echo "Recording TLC output for CCC..."
-	@if ./scripts/tla/record_tlc.sh spec/CCC.tla spec/artifacts/tlc-ccc.out; then \
-		echo "✓ Recorded TLC output for CCC"; \
+record-tlc-succession:
+	@echo "Recording TLC output for Succession..."
+	@if ./scripts/tla/record_tlc.sh spec/Succession.tla spec/artifacts/tlc-succession.out; then \
+		echo "✓ Recorded TLC output for Succession"; \
 	else \
-		echo "expected CCC to succeed under TLC, but recording failed"; \
+		echo "expected Succession to succeed under TLC, but recording failed"; \
 		exit 1; \
 	fi
 
-record-tlc-cccmultidim:
-	@echo "Recording TLC output for CCCMultiDim..."
-	@if ./scripts/tla/record_tlc.sh spec/CCCMultiDim.tla spec/artifacts/tlc-cccmultidim.out; then \
-		echo "✓ Recorded TLC output for CCCMultiDim"; \
+record-tlc-successionmultidim:
+	@echo "Recording TLC output for SuccessionMultiDim..."
+	@if ./scripts/tla/record_tlc.sh spec/SuccessionMultiDim.tla spec/artifacts/tlc-successionmultidim.out; then \
+		echo "✓ Recorded TLC output for SuccessionMultiDim"; \
 	else \
-		echo "expected CCCMultiDim to succeed under TLC, but recording failed"; \
+		echo "expected SuccessionMultiDim to succeed under TLC, but recording failed"; \
 		exit 1; \
 	fi
 
@@ -230,34 +230,34 @@ record-tlc-leasestart:
 		echo "✓ Recorded TLC counterexample for LeaseStartOnly"; \
 	fi
 
-record-apalache-ccc:
-	@echo "Recording Apalache bounded-check output for CCC..."
-	./scripts/tla/record_apalache_check.sh spec/CCC.tla spec/CCC.cfg G1_ClosureCompleteContinuation,G2_AuthorityUniqueness,G2_AuthorityUniquenessInductive,G3_PostSealInadmissibility 8 spec/artifacts/apalache-ccc.out
-	@echo "✓ Recorded Apalache output for CCC"
+record-apalache-succession:
+	@echo "Recording Apalache bounded-check output for Succession..."
+	./scripts/tla/record_apalache_check.sh spec/Succession.tla spec/Succession.cfg G1_Succession,G2_Primacy,G2_PrimacyInductive,G3_Silence 8 spec/artifacts/apalache-succession.out
+	@echo "✓ Recorded Apalache output for Succession"
 
-record-apalache-cccmultidim:
-	@echo "Recording Apalache bounded-check output for CCCMultiDim..."
-	./scripts/tla/record_apalache_check.sh spec/CCCMultiDim.tla spec/CCCMultiDim.cfg NoWriteBehindServedRead 6 spec/artifacts/apalache-cccmultidim.out
-	@echo "✓ Recorded Apalache output for CCCMultiDim"
+record-apalache-successionmultidim:
+	@echo "Recording Apalache bounded-check output for SuccessionMultiDim..."
+	./scripts/tla/record_apalache_check.sh spec/SuccessionMultiDim.tla spec/SuccessionMultiDim.cfg NoWriteBehindServedRead 6 spec/artifacts/apalache-successionmultidim.out
+	@echo "✓ Recorded Apalache output for SuccessionMultiDim"
 
-record-formal-artifacts: record-tlc-ccc record-tlc-cccmultidim record-tlc-leaseonly record-tlc-tokenonly record-tlc-chubbyfenced record-tlc-leasestart record-apalache-ccc record-apalache-cccmultidim
+record-formal-artifacts: record-tlc-succession record-tlc-successionmultidim record-tlc-leaseonly record-tlc-tokenonly record-tlc-chubbyfenced record-tlc-leasestart record-apalache-succession record-apalache-successionmultidim
 
 apalache-typecheck:
 	@echo "Running Apalache typecheck on current specs..."
-	./scripts/tla/apalache.sh typecheck --features=no-rows spec/CCC.tla
-	./scripts/tla/apalache.sh typecheck --features=no-rows spec/CCCMultiDim.tla
+	./scripts/tla/apalache.sh typecheck --features=no-rows spec/Succession.tla
+	./scripts/tla/apalache.sh typecheck --features=no-rows spec/SuccessionMultiDim.tla
 	./scripts/tla/apalache.sh typecheck --features=no-rows spec/LeaseOnly.tla
 	./scripts/tla/apalache.sh typecheck --features=no-rows spec/LeaseStartOnly.tla
 	./scripts/tla/apalache.sh typecheck --features=no-rows spec/ChubbyFencedLease.tla
 	./scripts/tla/apalache.sh typecheck --features=no-rows spec/TokenOnly.tla
 
-apalache-check-ccc:
-	@echo "Running bounded Apalache check on CCC..."
-	./scripts/tla/apalache.sh --features=no-rows check --config=spec/CCC.cfg --no-deadlock --length=8 --inv=G1_ClosureCompleteContinuation,G2_AuthorityUniqueness,G2_AuthorityUniquenessInductive,G3_PostSealInadmissibility spec/CCC.tla
+apalache-check-succession:
+	@echo "Running bounded Apalache check on Succession..."
+	./scripts/tla/apalache.sh --features=no-rows check --config=spec/Succession.cfg --no-deadlock --length=8 --inv=G1_Succession,G2_Primacy,G2_PrimacyInductive,G3_Silence spec/Succession.tla
 
-apalache-check-cccmultidim:
-	@echo "Running bounded Apalache check on CCCMultiDim..."
-	./scripts/tla/apalache.sh --features=no-rows check --config=spec/CCCMultiDim.cfg --no-deadlock --length=6 --inv=NoWriteBehindServedRead spec/CCCMultiDim.tla
+apalache-check-successionmultidim:
+	@echo "Running bounded Apalache check on SuccessionMultiDim..."
+	./scripts/tla/apalache.sh --features=no-rows check --config=spec/SuccessionMultiDim.cfg --no-deadlock --length=6 --inv=NoWriteBehindServedRead spec/SuccessionMultiDim.tla
 
 # Start Docker Compose cluster
 docker-up:

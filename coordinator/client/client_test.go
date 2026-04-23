@@ -197,11 +197,11 @@ func (f *followerStorage) AppendRootEvent(context.Context, rootevent.Event) erro
 func (f *followerStorage) SaveAllocatorState(context.Context, uint64, uint64) error {
 	return nil
 }
-func (f *followerStorage) ApplyCoordinatorLease(context.Context, rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
-	return rootstate.CoordinatorProtocolState{}, nil
+func (f *followerStorage) ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.SuccessionState, error) {
+	return rootstate.SuccessionState{}, nil
 }
-func (f *followerStorage) ApplyCoordinatorClosure(context.Context, rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
-	return rootstate.CoordinatorProtocolState{}, nil
+func (f *followerStorage) ApplyTransit(context.Context, rootproto.TransitCommand) (rootstate.SuccessionState, error) {
+	return rootstate.SuccessionState{}, nil
 }
 func (f *followerStorage) Refresh() error   { return nil }
 func (f *followerStorage) Close() error     { return nil }
@@ -245,7 +245,7 @@ func TestGRPCClientRejectsInvalidAllocWitness(t *testing.T) {
 				{
 					FirstId:          10,
 					Count:            2,
-					CertGeneration:   1,
+					Epoch:            1,
 					ConsumedFrontier: 10,
 				},
 			},
@@ -265,13 +265,13 @@ func TestGRPCClientRetriesStaleWitnessGenerationAcrossEndpoints(t *testing.T) {
 				{
 					FirstId:          100,
 					Count:            1,
-					CertGeneration:   2,
+					Epoch:            2,
 					ConsumedFrontier: 100,
 				},
 				{
 					FirstId:          101,
 					Count:            1,
-					CertGeneration:   2,
+					Epoch:            2,
 					ConsumedFrontier: 101,
 				},
 			},
@@ -281,7 +281,7 @@ func TestGRPCClientRetriesStaleWitnessGenerationAcrossEndpoints(t *testing.T) {
 				{
 					FirstId:          50,
 					Count:            1,
-					CertGeneration:   1,
+					Epoch:            1,
 					ConsumedFrontier: 50,
 				},
 			},
@@ -309,7 +309,7 @@ func TestGRPCClientRejectsInvalidTSOWitness(t *testing.T) {
 				{
 					Timestamp:        90,
 					Count:            1,
-					CertGeneration:   3,
+					Epoch:            3,
 					ConsumedFrontier: 89,
 				},
 			},
@@ -335,7 +335,7 @@ func TestGRPCClientRejectsInvalidMetadataWitness(t *testing.T) {
 					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_LAGGING,
 					DescriptorRevision:         7,
 					RequiredDescriptorRevision: 7,
-					CertGeneration:             2,
+					Epoch:                      2,
 					ServingClass:               coordpb.ServingClass_SERVING_CLASS_BOUNDED_STALE,
 					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_LAGGING,
 				},
@@ -368,7 +368,7 @@ func TestGRPCClientAcceptsValidMetadataWitness(t *testing.T) {
 					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_LAGGING,
 					DescriptorRevision:         9,
 					RequiredDescriptorRevision: 8,
-					CertGeneration:             3,
+					Epoch:                      3,
 					ServingClass:               coordpb.ServingClass_SERVING_CLASS_BOUNDED_STALE,
 					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_LAGGING,
 				},
@@ -401,7 +401,7 @@ func TestGRPCClientRetriesStaleMetadataWitnessGenerationAcrossEndpoints(t *testi
 					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_LAGGING,
 					DescriptorRevision:         9,
 					RequiredDescriptorRevision: 8,
-					CertGeneration:             3,
+					Epoch:                      3,
 					ServingClass:               coordpb.ServingClass_SERVING_CLASS_BOUNDED_STALE,
 					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_LAGGING,
 				},
@@ -414,7 +414,7 @@ func TestGRPCClientRetriesStaleMetadataWitnessGenerationAcrossEndpoints(t *testi
 					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_LAGGING,
 					DescriptorRevision:         10,
 					RequiredDescriptorRevision: 8,
-					CertGeneration:             3,
+					Epoch:                      3,
 					ServingClass:               coordpb.ServingClass_SERVING_CLASS_BOUNDED_STALE,
 					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_LAGGING,
 				},
@@ -431,7 +431,7 @@ func TestGRPCClientRetriesStaleMetadataWitnessGenerationAcrossEndpoints(t *testi
 					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_LAGGING,
 					DescriptorRevision:         9,
 					RequiredDescriptorRevision: 8,
-					CertGeneration:             2,
+					Epoch:                      2,
 					ServingClass:               coordpb.ServingClass_SERVING_CLASS_BOUNDED_STALE,
 					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_LAGGING,
 				},
@@ -478,7 +478,7 @@ func TestGRPCClientAcceptsZeroGenerationMetadataWitnessAfterDetachedGeneration(t
 					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_LAGGING,
 					DescriptorRevision:         9,
 					RequiredDescriptorRevision: 8,
-					CertGeneration:             3,
+					Epoch:                      3,
 					ServingClass:               coordpb.ServingClass_SERVING_CLASS_BOUNDED_STALE,
 					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_LAGGING,
 				},
@@ -491,7 +491,7 @@ func TestGRPCClientAcceptsZeroGenerationMetadataWitnessAfterDetachedGeneration(t
 					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_FRESH,
 					DescriptorRevision:         10,
 					RequiredDescriptorRevision: 8,
-					CertGeneration:             0,
+					Epoch:                      0,
 					ServingClass:               coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE,
 					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_HEALTHY,
 					ServedByLeader:             true,
@@ -517,7 +517,7 @@ func TestGRPCClientAcceptsZeroGenerationMetadataWitnessAfterDetachedGeneration(t
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(12), resp.GetRegionDescriptor().GetRegionId())
-	require.Zero(t, resp.GetCertGeneration())
+	require.Zero(t, resp.GetEpoch())
 }
 
 func TestGRPCClientRejectsZeroGenerationMetadataWitnessRegressingAttachedFrontier(t *testing.T) {
@@ -533,7 +533,7 @@ func TestGRPCClientRejectsZeroGenerationMetadataWitnessRegressingAttachedFrontie
 					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_FRESH,
 					DescriptorRevision:         10,
 					RequiredDescriptorRevision: 8,
-					CertGeneration:             0,
+					Epoch:                      0,
 					ServingClass:               coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE,
 					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_HEALTHY,
 					ServedByLeader:             true,
@@ -547,7 +547,7 @@ func TestGRPCClientRejectsZeroGenerationMetadataWitnessRegressingAttachedFrontie
 					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_FRESH,
 					DescriptorRevision:         9,
 					RequiredDescriptorRevision: 8,
-					CertGeneration:             0,
+					Epoch:                      0,
 					ServingClass:               coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE,
 					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_HEALTHY,
 					ServedByLeader:             true,
@@ -589,7 +589,7 @@ func TestGRPCClientRejectsZeroGenerationMetadataWitnessWithoutAuthoritativeAttac
 					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_LAGGING,
 					DescriptorRevision:         9,
 					RequiredDescriptorRevision: 8,
-					CertGeneration:             3,
+					Epoch:                      3,
 					ServingClass:               coordpb.ServingClass_SERVING_CLASS_BOUNDED_STALE,
 					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_LAGGING,
 				},
@@ -602,7 +602,7 @@ func TestGRPCClientRejectsZeroGenerationMetadataWitnessWithoutAuthoritativeAttac
 					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_LAGGING,
 					DescriptorRevision:         10,
 					RequiredDescriptorRevision: 8,
-					CertGeneration:             0,
+					Epoch:                      0,
 					ServingClass:               coordpb.ServingClass_SERVING_CLASS_BOUNDED_STALE,
 					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_LAGGING,
 				},
@@ -627,7 +627,7 @@ func TestGRPCClientRejectsZeroGenerationMetadataWitnessWithoutAuthoritativeAttac
 	})
 	require.Error(t, err)
 	require.True(t, IsInvalidWitness(err))
-	require.Contains(t, err.Error(), "cert_generation=0 requires authoritative attached")
+	require.Contains(t, err.Error(), "epoch=0 requires authoritative attached")
 }
 
 func TestGRPCClientRejectsSuppressedReplyEvidence(t *testing.T) {
@@ -637,7 +637,7 @@ func TestGRPCClientRejectsSuppressedReplyEvidence(t *testing.T) {
 				{
 					FirstId:          100,
 					Count:            1,
-					CertGeneration:   rootproto.ContinuationWitnessGenerationSuppressed,
+					Epoch:            rootproto.ContinuationWitnessGenerationSuppressed,
 					ConsumedFrontier: 0,
 				},
 			},
@@ -651,7 +651,7 @@ func TestGRPCClientRejectsSuppressedReplyEvidence(t *testing.T) {
 					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_FRESH,
 					DescriptorRevision:         10,
 					RequiredDescriptorRevision: 8,
-					CertGeneration:             rootproto.ContinuationWitnessGenerationSuppressed,
+					Epoch:                      rootproto.ContinuationWitnessGenerationSuppressed,
 					ServingClass:               coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE,
 					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_HEALTHY,
 					ServedByLeader:             true,
@@ -681,11 +681,11 @@ func TestGRPCClientRejectsReplyAtObservedSealFloor(t *testing.T) {
 		"mixed": {
 			allocResponses: []*coordpb.AllocIDResponse{
 				{
-					FirstId:                100,
-					Count:                  1,
-					CertGeneration:         2,
-					ConsumedFrontier:       100,
-					ObservedSealGeneration: 2,
+					FirstId:             100,
+					Count:               1,
+					Epoch:               2,
+					ConsumedFrontier:    100,
+					ObservedLegacyEpoch: 2,
 				},
 			},
 		},
@@ -704,7 +704,7 @@ func TestGRPCClientAblationDisableClientVerifyAcceptsStaleGeneration(t *testing.
 				{
 					FirstId:          100,
 					Count:            1,
-					CertGeneration:   2,
+					Epoch:            2,
 					ConsumedFrontier: 100,
 				},
 			},
@@ -714,7 +714,7 @@ func TestGRPCClientAblationDisableClientVerifyAcceptsStaleGeneration(t *testing.
 				{
 					FirstId:          50,
 					Count:            1,
-					CertGeneration:   1,
+					Epoch:            1,
 					ConsumedFrontier: 50,
 				},
 			},
@@ -732,7 +732,7 @@ func TestGRPCClientAblationDisableClientVerifyAcceptsStaleGeneration(t *testing.
 	resp, err = cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
 	require.Equal(t, uint64(50), resp.GetFirstId())
-	require.Equal(t, uint64(1), resp.GetCertGeneration())
+	require.Equal(t, uint64(1), resp.GetEpoch())
 }
 
 type scriptedCoordinatorServer struct {

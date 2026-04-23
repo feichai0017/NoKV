@@ -12,7 +12,7 @@ import (
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
-	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
+	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
 	"github.com/feichai0017/NoKV/coordinator/tso"
@@ -44,11 +44,11 @@ type protocolMatrixStorage struct {
 	reattaches  int
 }
 
-func (s *protocolMatrixStorage) protocolState() rootstate.CoordinatorProtocolState {
-	return rootstate.CoordinatorProtocolState{
-		Lease:   s.snapshot.CoordinatorLease,
-		Seal:    s.snapshot.CoordinatorSeal,
-		Closure: s.snapshot.CoordinatorClosure,
+func (s *protocolMatrixStorage) protocolState() rootstate.SuccessionState {
+	return rootstate.SuccessionState{
+		Tenure:  s.snapshot.Tenure,
+		Legacy:  s.snapshot.Legacy,
+		Transit: s.snapshot.Transit,
 	}
 }
 
@@ -70,120 +70,120 @@ func (s *protocolMatrixStorage) SaveAllocatorState(_ context.Context, idCurrent,
 	return nil
 }
 
-func (s *protocolMatrixStorage) ApplyCoordinatorLease(_ context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *protocolMatrixStorage) ApplyTenure(_ context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error) {
 	switch cmd.Kind {
-	case rootproto.CoordinatorLeaseCommandIssue:
+	case rootproto.TenureActIssue:
 		s.campaigns++
 		if s.campaignErr != nil {
-			return rootstate.CoordinatorProtocolState{}, s.campaignErr
+			return rootstate.SuccessionState{}, s.campaignErr
 		}
-		if err := rootstate.ValidateCoordinatorLeaseCampaign(s.snapshot.CoordinatorLease, s.snapshot.CoordinatorSeal, cmd.HolderID, cmd.PredecessorDigest, cmd.ExpiresUnixNano, cmd.NowUnixNano); err != nil {
+		if err := rootstate.ValidateTenureClaim(s.snapshot.Tenure, s.snapshot.Legacy, cmd.HolderID, cmd.LineageDigest, cmd.ExpiresUnixNano, cmd.NowUnixNano); err != nil {
 			return s.protocolState(), err
 		}
-		if err := rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(s.snapshot.CoordinatorLease, s.snapshot.CoordinatorSeal, cmd.HandoffFrontiers); err != nil {
+		if err := rootstate.ValidateInheritance(s.snapshot.Tenure, s.snapshot.Legacy, cmd.InheritedFrontiers); err != nil {
 			return s.protocolState(), err
 		}
-		generation := rootstate.NextCoordinatorLeaseGeneration(s.snapshot.CoordinatorLease, s.snapshot.CoordinatorSeal, cmd.HolderID, cmd.NowUnixNano)
-		s.snapshot.CoordinatorLease = rootstate.CoordinatorLease{
-			HolderID:          cmd.HolderID,
-			ExpiresUnixNano:   cmd.ExpiresUnixNano,
-			CertGeneration:    generation,
-			DutyMask:          rootproto.CoordinatorDutyMaskDefault,
-			PredecessorDigest: cmd.PredecessorDigest,
+		generation := rootstate.NextTenureEpoch(s.snapshot.Tenure, s.snapshot.Legacy, cmd.HolderID, cmd.NowUnixNano)
+		s.snapshot.Tenure = rootstate.Tenure{
+			HolderID:        cmd.HolderID,
+			ExpiresUnixNano: cmd.ExpiresUnixNano,
+			Epoch:           generation,
+			Mandate:         rootproto.MandateDefault,
+			LineageDigest:   cmd.LineageDigest,
 		}
-		if idFence := cmd.HandoffFrontiers.Frontier(rootproto.CoordinatorDutyAllocID); idFence > s.snapshot.Allocator.IDCurrent {
+		if idFence := cmd.InheritedFrontiers.Frontier(rootproto.MandateAllocID); idFence > s.snapshot.Allocator.IDCurrent {
 			s.snapshot.Allocator.IDCurrent = idFence
 		}
-		if tsoFence := cmd.HandoffFrontiers.Frontier(rootproto.CoordinatorDutyTSO); tsoFence > s.snapshot.Allocator.TSCurrent {
+		if tsoFence := cmd.InheritedFrontiers.Frontier(rootproto.MandateTSO); tsoFence > s.snapshot.Allocator.TSCurrent {
 			s.snapshot.Allocator.TSCurrent = tsoFence
 		}
-	case rootproto.CoordinatorLeaseCommandRelease:
-		if err := rootstate.ValidateCoordinatorLeaseRelease(s.snapshot.CoordinatorLease, cmd.HolderID, cmd.NowUnixNano); err != nil {
+	case rootproto.TenureActRelease:
+		if err := rootstate.ValidateTenureYield(s.snapshot.Tenure, cmd.HolderID, cmd.NowUnixNano); err != nil {
 			return s.protocolState(), err
 		}
-		s.snapshot.CoordinatorLease = rootstate.CoordinatorLease{
-			HolderID:          cmd.HolderID,
-			ExpiresUnixNano:   cmd.NowUnixNano,
-			CertGeneration:    s.snapshot.CoordinatorLease.CertGeneration,
-			IssuedCursor:      s.snapshot.CoordinatorLease.IssuedCursor,
-			DutyMask:          s.snapshot.CoordinatorLease.DutyMask,
-			PredecessorDigest: s.snapshot.CoordinatorLease.PredecessorDigest,
+		s.snapshot.Tenure = rootstate.Tenure{
+			HolderID:        cmd.HolderID,
+			ExpiresUnixNano: cmd.NowUnixNano,
+			Epoch:           s.snapshot.Tenure.Epoch,
+			IssuedAt:        s.snapshot.Tenure.IssuedAt,
+			Mandate:         s.snapshot.Tenure.Mandate,
+			LineageDigest:   s.snapshot.Tenure.LineageDigest,
 		}
-		if idFence := cmd.HandoffFrontiers.Frontier(rootproto.CoordinatorDutyAllocID); idFence > s.snapshot.Allocator.IDCurrent {
+		if idFence := cmd.InheritedFrontiers.Frontier(rootproto.MandateAllocID); idFence > s.snapshot.Allocator.IDCurrent {
 			s.snapshot.Allocator.IDCurrent = idFence
 		}
-		if tsoFence := cmd.HandoffFrontiers.Frontier(rootproto.CoordinatorDutyTSO); tsoFence > s.snapshot.Allocator.TSCurrent {
+		if tsoFence := cmd.InheritedFrontiers.Frontier(rootproto.MandateTSO); tsoFence > s.snapshot.Allocator.TSCurrent {
 			s.snapshot.Allocator.TSCurrent = tsoFence
 		}
 	default:
-		return rootstate.CoordinatorProtocolState{}, rootstate.ErrInvalidCoordinatorLease
+		return rootstate.SuccessionState{}, rootstate.ErrInvalidTenure
 	}
 	return s.protocolState(), nil
 }
 
-func (s *protocolMatrixStorage) ApplyCoordinatorClosure(_ context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *protocolMatrixStorage) ApplyTransit(_ context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error) {
 	switch cmd.Kind {
-	case rootproto.CoordinatorClosureCommandSeal:
-		if err := rootstate.ValidateCoordinatorLeaseSeal(s.snapshot.CoordinatorLease, cmd.HolderID); err != nil {
+	case rootproto.TransitActSeal:
+		if err := rootstate.ValidateLegacyFormation(s.snapshot.Tenure, cmd.HolderID); err != nil {
 			return s.protocolState(), err
 		}
-		dutyMask := s.snapshot.CoordinatorLease.DutyMask
-		if dutyMask == 0 {
-			dutyMask = rootproto.CoordinatorDutyMaskDefault
+		mandate := s.snapshot.Tenure.Mandate
+		if mandate == 0 {
+			mandate = rootproto.MandateDefault
 		}
-		s.snapshot.CoordinatorSeal = rootstate.CoordinatorSeal{
-			HolderID:       cmd.HolderID,
-			CertGeneration: s.snapshot.CoordinatorLease.CertGeneration,
-			DutyMask:       dutyMask,
-			Frontiers:      cmd.Frontiers,
+		s.snapshot.Legacy = rootstate.Legacy{
+			HolderID:  cmd.HolderID,
+			Epoch:     s.snapshot.Tenure.Epoch,
+			Mandate:   mandate,
+			Frontiers: cmd.Frontiers,
 		}
-	case rootproto.CoordinatorClosureCommandConfirm:
+	case rootproto.TransitActConfirm:
 		s.confirms++
 		if s.confirmErr != nil {
-			return rootstate.CoordinatorProtocolState{}, s.confirmErr
+			return rootstate.SuccessionState{}, s.confirmErr
 		}
-		if strings.TrimSpace(cmd.HolderID) == "" || strings.TrimSpace(cmd.HolderID) != s.snapshot.CoordinatorLease.HolderID {
-			return s.protocolState(), rootstate.ErrCoordinatorLeaseOwner
+		if strings.TrimSpace(cmd.HolderID) == "" || strings.TrimSpace(cmd.HolderID) != s.snapshot.Tenure.HolderID {
+			return s.protocolState(), rootstate.ErrPrimacy
 		}
-		auditStatus, err := controlplane.ValidateClosureConfirmation(
-			s.snapshot.CoordinatorLease,
-			controlplane.Frontiers(rootstate.State{
+		auditStatus, err := succession.ValidateTransitConfirmation(
+			s.snapshot.Tenure,
+			succession.Frontiers(rootstate.State{
 				IDFence:  s.snapshot.Allocator.IDCurrent,
 				TSOFence: s.snapshot.Allocator.TSCurrent,
 			}, rootstate.MaxDescriptorRevision(s.snapshot.Descriptors)),
-			s.snapshot.CoordinatorSeal,
+			s.snapshot.Legacy,
 			cmd.NowUnixNano,
 		)
 		if err != nil {
 			return s.protocolState(), err
 		}
-		s.snapshot.CoordinatorClosure = rootstate.CoordinatorClosure{
-			HolderID:            cmd.HolderID,
-			SealGeneration:      auditStatus.SealGeneration,
-			SuccessorGeneration: s.snapshot.CoordinatorLease.CertGeneration,
-			SealDigest:          auditStatus.SealDigest,
-			Stage:               rootproto.CoordinatorClosureStageConfirmed,
+		s.snapshot.Transit = rootstate.Transit{
+			HolderID:       cmd.HolderID,
+			LegacyEpoch:    auditStatus.LegacyEpoch,
+			SuccessorEpoch: s.snapshot.Tenure.Epoch,
+			LegacyDigest:   auditStatus.LegacyDigest,
+			Stage:          rootproto.TransitStageConfirmed,
 		}
-	case rootproto.CoordinatorClosureCommandClose:
+	case rootproto.TransitActClose:
 		s.closes++
 		if s.closeErr != nil {
-			return rootstate.CoordinatorProtocolState{}, s.closeErr
+			return rootstate.SuccessionState{}, s.closeErr
 		}
-		if err := controlplane.ValidateClosureClose(s.snapshot.CoordinatorLease, s.snapshot.CoordinatorClosure, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+		if err := succession.ValidateTransitClosure(s.snapshot.Tenure, s.snapshot.Transit, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return s.protocolState(), err
 		}
-		s.snapshot.CoordinatorClosure.Stage = rootproto.CoordinatorClosureStageClosed
-	case rootproto.CoordinatorClosureCommandReattach:
+		s.snapshot.Transit.Stage = rootproto.TransitStageClosed
+	case rootproto.TransitActReattach:
 		s.reattaches++
 		if s.reattachErr != nil {
-			return rootstate.CoordinatorProtocolState{}, s.reattachErr
+			return rootstate.SuccessionState{}, s.reattachErr
 		}
-		if err := controlplane.ValidateClosureReattach(s.snapshot.CoordinatorLease, s.snapshot.CoordinatorClosure, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+		if err := succession.ValidateTransitReattach(s.snapshot.Tenure, s.snapshot.Transit, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return s.protocolState(), err
 		}
-		s.snapshot.CoordinatorClosure.Stage = rootproto.CoordinatorClosureStageReattached
+		s.snapshot.Transit.Stage = rootproto.TransitStageReattached
 	default:
-		return rootstate.CoordinatorProtocolState{}, rootstate.ErrCoordinatorLeaseAudit
+		return rootstate.SuccessionState{}, rootstate.ErrClosure
 	}
 	return s.protocolState(), nil
 }
@@ -288,7 +288,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 
 	newService := func(store *protocolMatrixStorage) *coordserver.Service {
 		svc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-		svc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+		svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 		require.NoError(t, svc.ReloadFromStorage())
 		return svc
 	}
@@ -297,20 +297,20 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 		1: {RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
 	}
 	activeLeaseExpiry := time.Now().Add(20 * time.Second).UnixNano()
-	sealWithDescriptor7 := rootstate.CoordinatorSeal{
-		HolderID:       "c1",
-		CertGeneration: 2,
-		DutyMask:       rootproto.CoordinatorDutyMaskDefault,
-		Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
+	sealWithDescriptor7 := rootstate.Legacy{
+		HolderID:  "c1",
+		Epoch:     2,
+		Mandate:   rootproto.MandateDefault,
+		Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 	}
-	sealWithDescriptor7Digest := rootstate.CoordinatorSealDigest(sealWithDescriptor7)
-	sealWithDescriptor9 := rootstate.CoordinatorSeal{
-		HolderID:       "c1",
-		CertGeneration: 2,
-		DutyMask:       rootproto.CoordinatorDutyMaskDefault,
-		Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 9),
+	sealWithDescriptor7Digest := rootstate.DigestOfLegacy(sealWithDescriptor7)
+	sealWithDescriptor9 := rootstate.Legacy{
+		HolderID:  "c1",
+		Epoch:     2,
+		Mandate:   rootproto.MandateDefault,
+		Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 9),
 	}
-	sealWithDescriptor9Digest := rootstate.CoordinatorSealDigest(sealWithDescriptor9)
+	sealWithDescriptor9Digest := rootstate.DigestOfLegacy(sealWithDescriptor9)
 
 	cases := []faultCase{
 		// F.revived_holder + F.root_unreach — once the predecessor generation has
@@ -320,15 +320,15 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 			name: "sealed_generation_cannot_continue_monotone_without_successor",
 			store: &protocolMatrixStorage{
 				leader:      true,
-				campaignErr: rootstate.ErrCoordinatorLeaseHeld,
+				campaignErr: rootstate.ErrPrimacy,
 				snapshot: rootview.Snapshot{
-					CoordinatorLease: rootstate.CoordinatorLease{
+					Tenure: rootstate.Tenure{
 						HolderID:        "c1",
 						ExpiresUnixNano: activeLeaseExpiry,
-						CertGeneration:  2,
-						DutyMask:        rootproto.CoordinatorDutyMaskDefault,
+						Epoch:           2,
+						Mandate:         rootproto.MandateDefault,
 					},
-					CoordinatorSeal: rootstate.CoordinatorSeal{HolderID: "c1", CertGeneration: 2, DutyMask: rootproto.CoordinatorDutyMaskDefault},
+					Legacy: rootstate.Legacy{HolderID: "c1", Epoch: 2, Mandate: rootproto.MandateDefault},
 				},
 			},
 			run: func(t *testing.T, svc *coordserver.Service) {
@@ -347,16 +347,16 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 			name: "sealed_generation_cannot_continue_metadata_without_successor",
 			store: &protocolMatrixStorage{
 				leader:      true,
-				campaignErr: rootstate.ErrCoordinatorLeaseHeld,
+				campaignErr: rootstate.ErrPrimacy,
 				snapshot: rootview.Snapshot{
-					CoordinatorLease: rootstate.CoordinatorLease{
+					Tenure: rootstate.Tenure{
 						HolderID:        "c1",
 						ExpiresUnixNano: activeLeaseExpiry,
-						CertGeneration:  2,
-						DutyMask:        rootproto.CoordinatorDutyMaskDefault,
+						Epoch:           2,
+						Mandate:         rootproto.MandateDefault,
 					},
-					CoordinatorSeal: rootstate.CoordinatorSeal{HolderID: "c1", CertGeneration: 2, DutyMask: rootproto.CoordinatorDutyMaskDefault, Frontiers: controlplane.Frontiers(rootstate.State{IDFence: 0, TSOFence: 0}, 7)},
-					Descriptors:     baseDescriptors,
+					Legacy:      rootstate.Legacy{HolderID: "c1", Epoch: 2, Mandate: rootproto.MandateDefault, Frontiers: succession.Frontiers(rootstate.State{IDFence: 0, TSOFence: 0}, 7)},
+					Descriptors: baseDescriptors,
 				},
 			},
 			run: func(t *testing.T, svc *coordserver.Service) {
@@ -377,14 +377,14 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 			store: &protocolMatrixStorage{
 				leader: true,
 				snapshot: rootview.Snapshot{
-					CoordinatorLease: rootstate.CoordinatorLease{
-						HolderID:          "c1",
-						ExpiresUnixNano:   activeLeaseExpiry,
-						CertGeneration:    3,
-						DutyMask:          rootproto.CoordinatorDutyMaskDefault,
-						PredecessorDigest: sealWithDescriptor7Digest,
+					Tenure: rootstate.Tenure{
+						HolderID:        "c1",
+						ExpiresUnixNano: activeLeaseExpiry,
+						Epoch:           3,
+						Mandate:         rootproto.MandateDefault,
+						LineageDigest:   sealWithDescriptor7Digest,
 					},
-					CoordinatorSeal: sealWithDescriptor7,
+					Legacy: sealWithDescriptor7,
 					Allocator: rootview.AllocatorState{
 						IDCurrent: 11,
 						TSCurrent: 34,
@@ -393,8 +393,8 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 				},
 			},
 			run: func(t *testing.T, svc *coordserver.Service) {
-				err := svc.ConfirmCoordinatorClosure()
-				require.ErrorIs(t, err, rootstate.ErrCoordinatorLeaseAudit)
+				err := svc.ConfirmTransit()
+				require.ErrorIs(t, err, rootstate.ErrClosure)
 			},
 			diagKeys: map[string]any{
 				"successor_present":            true,
@@ -412,14 +412,14 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 			store: &protocolMatrixStorage{
 				leader: true,
 				snapshot: rootview.Snapshot{
-					CoordinatorLease: rootstate.CoordinatorLease{
-						HolderID:          "c1",
-						ExpiresUnixNano:   activeLeaseExpiry,
-						CertGeneration:    3,
-						DutyMask:          rootproto.CoordinatorDutyMaskDefault,
-						PredecessorDigest: sealWithDescriptor9Digest,
+					Tenure: rootstate.Tenure{
+						HolderID:        "c1",
+						ExpiresUnixNano: activeLeaseExpiry,
+						Epoch:           3,
+						Mandate:         rootproto.MandateDefault,
+						LineageDigest:   sealWithDescriptor9Digest,
 					},
-					CoordinatorSeal: sealWithDescriptor9,
+					Legacy: sealWithDescriptor9,
 					Allocator: rootview.AllocatorState{
 						IDCurrent: 12,
 						TSCurrent: 34,
@@ -428,8 +428,8 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 				},
 			},
 			run: func(t *testing.T, svc *coordserver.Service) {
-				err := svc.ConfirmCoordinatorClosure()
-				require.ErrorIs(t, err, rootstate.ErrCoordinatorLeaseAudit)
+				err := svc.ConfirmTransit()
+				require.ErrorIs(t, err, rootstate.ErrClosure)
 			},
 			diagKeys: map[string]any{
 				"successor_present":            true,
@@ -446,14 +446,14 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 			store: &protocolMatrixStorage{
 				leader: true,
 				snapshot: rootview.Snapshot{
-					CoordinatorLease: rootstate.CoordinatorLease{
-						HolderID:          "c1",
-						ExpiresUnixNano:   activeLeaseExpiry,
-						CertGeneration:    3,
-						DutyMask:          rootproto.CoordinatorDutyMaskDefault,
-						PredecessorDigest: sealWithDescriptor7Digest,
+					Tenure: rootstate.Tenure{
+						HolderID:        "c1",
+						ExpiresUnixNano: activeLeaseExpiry,
+						Epoch:           3,
+						Mandate:         rootproto.MandateDefault,
+						LineageDigest:   sealWithDescriptor7Digest,
 					},
-					CoordinatorSeal: sealWithDescriptor7,
+					Legacy: sealWithDescriptor7,
 					Allocator: rootview.AllocatorState{
 						IDCurrent: 12,
 						TSCurrent: 34,
@@ -462,8 +462,8 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 				},
 			},
 			run: func(t *testing.T, svc *coordserver.Service) {
-				err := svc.ReattachCoordinatorClosure()
-				require.ErrorIs(t, err, rootstate.ErrCoordinatorLeaseReattach)
+				err := svc.ReattachTransit()
+				require.ErrorIs(t, err, rootstate.ErrClosure)
 			},
 			diagKeys: map[string]any{
 				"closure_stage": "unspecified",
@@ -476,31 +476,31 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 			store: &protocolMatrixStorage{
 				leader: true,
 				snapshot: rootview.Snapshot{
-					CoordinatorLease: rootstate.CoordinatorLease{
-						HolderID:          "c1",
-						ExpiresUnixNano:   activeLeaseExpiry,
-						CertGeneration:    3,
-						DutyMask:          rootproto.CoordinatorDutyMaskDefault,
-						PredecessorDigest: "other-digest",
+					Tenure: rootstate.Tenure{
+						HolderID:        "c1",
+						ExpiresUnixNano: activeLeaseExpiry,
+						Epoch:           3,
+						Mandate:         rootproto.MandateDefault,
+						LineageDigest:   "other-digest",
 					},
-					CoordinatorSeal: sealWithDescriptor7,
+					Legacy: sealWithDescriptor7,
 					Allocator: rootview.AllocatorState{
 						IDCurrent: 12,
 						TSCurrent: 34,
 					},
-					CoordinatorClosure: rootstate.CoordinatorClosure{
-						HolderID:            "c1",
-						SealGeneration:      2,
-						SuccessorGeneration: 3,
-						SealDigest:          sealWithDescriptor7Digest,
-						Stage:               rootproto.CoordinatorClosureStageClosed,
+					Transit: rootstate.Transit{
+						HolderID:       "c1",
+						LegacyEpoch:    2,
+						SuccessorEpoch: 3,
+						LegacyDigest:   sealWithDescriptor7Digest,
+						Stage:          rootproto.TransitStageClosed,
 					},
 					Descriptors: baseDescriptors,
 				},
 			},
 			run: func(t *testing.T, svc *coordserver.Service) {
-				err := svc.ReattachCoordinatorClosure()
-				require.ErrorIs(t, err, rootstate.ErrCoordinatorLeaseReattach)
+				err := svc.ReattachTransit()
+				require.ErrorIs(t, err, rootstate.ErrClosure)
 			},
 			diagKeys: map[string]any{
 				"closure_stage":               "unspecified",
@@ -514,14 +514,14 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 			store: &protocolMatrixStorage{
 				leader: true,
 				snapshot: rootview.Snapshot{
-					CoordinatorLease: rootstate.CoordinatorLease{
-						HolderID:          "c1",
-						ExpiresUnixNano:   activeLeaseExpiry,
-						CertGeneration:    3,
-						DutyMask:          rootproto.CoordinatorDutyMaskDefault,
-						PredecessorDigest: sealWithDescriptor7Digest,
+					Tenure: rootstate.Tenure{
+						HolderID:        "c1",
+						ExpiresUnixNano: activeLeaseExpiry,
+						Epoch:           3,
+						Mandate:         rootproto.MandateDefault,
+						LineageDigest:   sealWithDescriptor7Digest,
 					},
-					CoordinatorSeal: sealWithDescriptor7,
+					Legacy: sealWithDescriptor7,
 					Allocator: rootview.AllocatorState{
 						IDCurrent: 12,
 						TSCurrent: 34,
@@ -530,15 +530,15 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 				},
 			},
 			run: func(t *testing.T, svc *coordserver.Service) {
-				require.NoError(t, svc.ConfirmCoordinatorClosure())
-				require.NoError(t, svc.CloseCoordinatorClosure())
-				require.NoError(t, svc.ReattachCoordinatorClosure())
+				require.NoError(t, svc.ConfirmTransit())
+				require.NoError(t, svc.CloseTransit())
+				require.NoError(t, svc.ReattachTransit())
 				allocResp, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 				require.NoError(t, err)
-				require.Equal(t, uint64(3), allocResp.GetCertGeneration())
+				require.Equal(t, uint64(3), allocResp.GetEpoch())
 				resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
 				require.NoError(t, err)
-				require.Equal(t, uint64(3), resp.GetCertGeneration())
+				require.Equal(t, uint64(3), resp.GetEpoch())
 			},
 			diagKeys: map[string]any{
 				"closure_satisfied": true,
@@ -567,56 +567,56 @@ func TestDetachedLateReplyAfterSealRejectedByClientVerifier(t *testing.T) {
 	staleStore := &protocolMatrixStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			CoordinatorLease: rootstate.CoordinatorLease{
+			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: activeLeaseExpiry,
-				CertGeneration:  1,
-				DutyMask:        rootproto.CoordinatorDutyMaskDefault,
+				Epoch:           1,
+				Mandate:         rootproto.MandateDefault,
 			},
 		},
 	}
 	staleSvc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), staleStore)
-	staleSvc.ConfigureCoordinatorLease("c1", 10*time.Second, 3*time.Second)
+	staleSvc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	require.NoError(t, staleSvc.ReloadFromStorage())
 
 	oldResp, err := staleSvc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), oldResp.GetCertGeneration())
+	require.Equal(t, uint64(1), oldResp.GetEpoch())
 
-	require.NoError(t, staleSvc.SealCoordinatorLease())
-	seal := staleStore.snapshot.CoordinatorSeal
-	sealDigest := rootstate.CoordinatorSealDigest(seal)
+	require.NoError(t, staleSvc.SealTenure())
+	seal := staleStore.snapshot.Legacy
+	legacyDigest := rootstate.DigestOfLegacy(seal)
 
 	successorStore := &protocolMatrixStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			CoordinatorLease: rootstate.CoordinatorLease{
-				HolderID:          "c2",
-				ExpiresUnixNano:   activeLeaseExpiry,
-				CertGeneration:    2,
-				DutyMask:          rootproto.CoordinatorDutyMaskDefault,
-				PredecessorDigest: sealDigest,
+			Tenure: rootstate.Tenure{
+				HolderID:        "c2",
+				ExpiresUnixNano: activeLeaseExpiry,
+				Epoch:           2,
+				Mandate:         rootproto.MandateDefault,
+				LineageDigest:   legacyDigest,
 			},
-			CoordinatorSeal: seal,
+			Legacy: seal,
 			Allocator: rootview.AllocatorState{
-				IDCurrent: seal.Frontiers.Frontier(rootproto.CoordinatorDutyAllocID),
-				TSCurrent: seal.Frontiers.Frontier(rootproto.CoordinatorDutyTSO),
+				IDCurrent: seal.Frontiers.Frontier(rootproto.MandateAllocID),
+				TSCurrent: seal.Frontiers.Frontier(rootproto.MandateTSO),
 			},
 		},
 	}
-	successorSvc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(seal.Frontiers.Frontier(rootproto.CoordinatorDutyAllocID)+1), tso.NewAllocator(100), successorStore)
-	successorSvc.ConfigureCoordinatorLease("c2", 10*time.Second, 3*time.Second)
+	successorSvc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(seal.Frontiers.Frontier(rootproto.MandateAllocID)+1), tso.NewAllocator(100), successorStore)
+	successorSvc.ConfigureTenure("c2", 10*time.Second, 3*time.Second)
 	require.NoError(t, successorSvc.ReloadFromStorage())
-	require.NoError(t, successorSvc.ConfirmCoordinatorClosure())
-	require.NoError(t, successorSvc.CloseCoordinatorClosure())
-	require.NoError(t, successorSvc.ReattachCoordinatorClosure())
+	require.NoError(t, successorSvc.ConfirmTransit())
+	require.NoError(t, successorSvc.CloseTransit())
+	require.NoError(t, successorSvc.ReattachTransit())
 
 	freshResp1, err := successorSvc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
-	require.Equal(t, uint64(2), freshResp1.GetCertGeneration())
+	require.Equal(t, uint64(2), freshResp1.GetEpoch())
 	freshResp2, err := successorSvc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
-	require.Equal(t, uint64(2), freshResp2.GetCertGeneration())
+	require.Equal(t, uint64(2), freshResp2.GetEpoch())
 
 	freshPrimary := &allocSequenceServer{
 		steps: []allocStep{
@@ -644,12 +644,12 @@ func TestDetachedLateReplyAfterSealRejectedByClientVerifier(t *testing.T) {
 	resp, err := cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
 	require.Equal(t, freshResp1.GetFirstId(), resp.GetFirstId())
-	require.Equal(t, uint64(2), resp.GetCertGeneration())
+	require.Equal(t, uint64(2), resp.GetEpoch())
 
 	resp, err = cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
 	require.Equal(t, freshResp2.GetFirstId(), resp.GetFirstId())
-	require.Equal(t, uint64(2), resp.GetCertGeneration())
+	require.Equal(t, uint64(2), resp.GetEpoch())
 
 	require.Equal(t, 2, freshPrimary.calls)
 	require.Equal(t, 1, lateReply.calls)

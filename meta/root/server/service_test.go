@@ -33,8 +33,8 @@ type fakeServiceBackend struct {
 	observed            rootstorage.ObservedCommitted
 	observeAdvance      rootstorage.TailAdvance
 	waitAdvance         rootstorage.TailAdvance
-	applyLeaseResult    rootstate.CoordinatorProtocolState
-	applyClosureResult  rootstate.CoordinatorProtocolState
+	applyLeaseResult    rootstate.SuccessionState
+	applyClosureResult  rootstate.SuccessionState
 	isLeader            bool
 	leaderID            uint64
 	appendCalls         int
@@ -113,11 +113,11 @@ func (f *fakeServiceBackend) WaitForTail(rootstorage.TailToken, time.Duration) (
 	return f.waitAdvance, nil
 }
 
-func (f *fakeServiceBackend) ApplyCoordinatorLease(context.Context, rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (f *fakeServiceBackend) ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.SuccessionState, error) {
 	return f.applyLeaseResult, f.applyLeaseErr
 }
 
-func (f *fakeServiceBackend) ApplyCoordinatorClosure(context.Context, rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (f *fakeServiceBackend) ApplyTransit(context.Context, rootproto.TransitCommand) (rootstate.SuccessionState, error) {
 	return f.applyClosureResult, f.applyClosureErr
 }
 
@@ -408,17 +408,17 @@ func TestServiceObserveFallbackAndTailPaths(t *testing.T) {
 	})
 }
 
-func TestServiceApplyCoordinatorLease(t *testing.T) {
-	leaseState := rootstate.CoordinatorProtocolState{
-		Lease: rootstate.CoordinatorLease{
+func TestServiceApplyTenure(t *testing.T) {
+	leaseState := rootstate.SuccessionState{
+		Tenure: rootstate.Tenure{
 			HolderID:        "coord-1",
 			ExpiresUnixNano: 1234,
-			CertGeneration:  7,
-			DutyMask:        rootproto.CoordinatorDutyMaskDefault,
+			Epoch:           7,
+			Mandate:         rootproto.MandateDefault,
 		},
 	}
-	cmd := rootproto.CoordinatorLeaseCommand{
-		Kind:            rootproto.CoordinatorLeaseCommandIssue,
+	cmd := rootproto.TenureCommand{
+		Kind:            rootproto.TenureActIssue,
 		HolderID:        "coord-1",
 		ExpiresUnixNano: 1234,
 		NowUnixNano:     1000,
@@ -426,15 +426,15 @@ func TestServiceApplyCoordinatorLease(t *testing.T) {
 
 	t.Run("nil service", func(t *testing.T) {
 		var svc *Service
-		resp, err := svc.ApplyCoordinatorLease(context.Background(), &metapb.MetadataRootApplyCoordinatorLeaseRequest{})
+		resp, err := svc.ApplyTenure(context.Background(), &metapb.MetadataRootApplyTenureRequest{})
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 	})
 
 	t.Run("unimplemented", func(t *testing.T) {
 		svc := NewService(&basicServiceBackend{snapshot: testServerSnapshot(), isLeader: true})
-		_, err := svc.ApplyCoordinatorLease(context.Background(), &metapb.MetadataRootApplyCoordinatorLeaseRequest{
-			Command: metawire.RootCoordinatorLeaseCommandToProto(cmd),
+		_, err := svc.ApplyTenure(context.Background(), &metapb.MetadataRootApplyTenureRequest{
+			Command: metawire.RootTenureCommandToProto(cmd),
 		})
 		require.Equal(t, codes.Unimplemented, status.Code(err))
 	})
@@ -443,14 +443,14 @@ func TestServiceApplyCoordinatorLease(t *testing.T) {
 		svc := NewService(&fakeServiceBackend{
 			isLeader:         true,
 			applyLeaseResult: leaseState,
-			applyLeaseErr:    rootstate.ErrCoordinatorLeaseHeld,
+			applyLeaseErr:    rootstate.ErrPrimacy,
 		})
-		resp, err := svc.ApplyCoordinatorLease(context.Background(), &metapb.MetadataRootApplyCoordinatorLeaseRequest{
-			Command: metawire.RootCoordinatorLeaseCommandToProto(cmd),
+		resp, err := svc.ApplyTenure(context.Background(), &metapb.MetadataRootApplyTenureRequest{
+			Command: metawire.RootTenureCommandToProto(cmd),
 		})
 		require.NoError(t, err)
-		require.Equal(t, metapb.RootCoordinatorLeaseApplyStatus_ROOT_COORDINATOR_LEASE_APPLY_STATUS_HELD, resp.Status)
-		require.Equal(t, leaseState, metawire.RootCoordinatorProtocolStateFromProto(resp.State))
+		require.Equal(t, metapb.RootTenureApplyStatus_ROOT_TENURE_APPLY_STATUS_HELD, resp.Status)
+		require.Equal(t, leaseState, metawire.RootSuccessionStateFromProto(resp.State))
 	})
 
 	t.Run("success", func(t *testing.T) {
@@ -458,42 +458,42 @@ func TestServiceApplyCoordinatorLease(t *testing.T) {
 			isLeader:         true,
 			applyLeaseResult: leaseState,
 		})
-		resp, err := svc.ApplyCoordinatorLease(context.Background(), &metapb.MetadataRootApplyCoordinatorLeaseRequest{
-			Command: metawire.RootCoordinatorLeaseCommandToProto(cmd),
+		resp, err := svc.ApplyTenure(context.Background(), &metapb.MetadataRootApplyTenureRequest{
+			Command: metawire.RootTenureCommandToProto(cmd),
 		})
 		require.NoError(t, err)
-		require.Equal(t, metapb.RootCoordinatorLeaseApplyStatus_ROOT_COORDINATOR_LEASE_APPLY_STATUS_GRANTED, resp.Status)
-		require.Equal(t, leaseState, metawire.RootCoordinatorProtocolStateFromProto(resp.State))
+		require.Equal(t, metapb.RootTenureApplyStatus_ROOT_TENURE_APPLY_STATUS_GRANTED, resp.Status)
+		require.Equal(t, leaseState, metawire.RootSuccessionStateFromProto(resp.State))
 	})
 }
 
-func TestServiceApplyCoordinatorClosure(t *testing.T) {
-	closureState := rootstate.CoordinatorProtocolState{
-		Closure: rootstate.CoordinatorClosure{
-			HolderID:            "coord-1",
-			SealGeneration:      3,
-			SuccessorGeneration: 4,
-			SealDigest:          "digest",
-			Stage:               rootproto.CoordinatorClosureStageClosed,
+func TestServiceApplyTransit(t *testing.T) {
+	closureState := rootstate.SuccessionState{
+		Transit: rootstate.Transit{
+			HolderID:       "coord-1",
+			LegacyEpoch:    3,
+			SuccessorEpoch: 4,
+			LegacyDigest:   "digest",
+			Stage:          rootproto.TransitStageClosed,
 		},
 	}
-	cmd := rootproto.CoordinatorClosureCommand{
-		Kind:        rootproto.CoordinatorClosureCommandClose,
+	cmd := rootproto.TransitCommand{
+		Kind:        rootproto.TransitActClose,
 		HolderID:    "coord-1",
 		NowUnixNano: 1000,
 	}
 
 	t.Run("nil service", func(t *testing.T) {
 		var svc *Service
-		resp, err := svc.ApplyCoordinatorClosure(context.Background(), &metapb.MetadataRootApplyCoordinatorClosureRequest{})
+		resp, err := svc.ApplyTransit(context.Background(), &metapb.MetadataRootApplyTransitRequest{})
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 	})
 
 	t.Run("unimplemented", func(t *testing.T) {
 		svc := NewService(&basicServiceBackend{snapshot: testServerSnapshot(), isLeader: true})
-		_, err := svc.ApplyCoordinatorClosure(context.Background(), &metapb.MetadataRootApplyCoordinatorClosureRequest{
-			Command: metawire.RootCoordinatorClosureCommandToProto(cmd),
+		_, err := svc.ApplyTransit(context.Background(), &metapb.MetadataRootApplyTransitRequest{
+			Command: metawire.RootTransitCommandToProto(cmd),
 		})
 		require.Equal(t, codes.Unimplemented, status.Code(err))
 	})
@@ -503,42 +503,42 @@ func TestServiceApplyCoordinatorClosure(t *testing.T) {
 			isLeader:           true,
 			applyClosureResult: closureState,
 		})
-		resp, err := svc.ApplyCoordinatorClosure(context.Background(), &metapb.MetadataRootApplyCoordinatorClosureRequest{
-			Command: metawire.RootCoordinatorClosureCommandToProto(cmd),
+		resp, err := svc.ApplyTransit(context.Background(), &metapb.MetadataRootApplyTransitRequest{
+			Command: metawire.RootTransitCommandToProto(cmd),
 		})
 		require.NoError(t, err)
-		require.Equal(t, closureState, metawire.RootCoordinatorProtocolStateFromProto(resp.State))
+		require.Equal(t, closureState, metawire.RootSuccessionStateFromProto(resp.State))
 	})
 
 	t.Run("mapped failed precondition", func(t *testing.T) {
 		svc := NewService(&fakeServiceBackend{
 			isLeader:        true,
-			applyClosureErr: rootstate.ErrCoordinatorLeaseClose,
+			applyClosureErr: rootstate.ErrClosure,
 		})
-		_, err := svc.ApplyCoordinatorClosure(context.Background(), &metapb.MetadataRootApplyCoordinatorClosureRequest{
-			Command: metawire.RootCoordinatorClosureCommandToProto(cmd),
+		_, err := svc.ApplyTransit(context.Background(), &metapb.MetadataRootApplyTransitRequest{
+			Command: metawire.RootTransitCommandToProto(cmd),
 		})
 		require.Equal(t, codes.FailedPrecondition, status.Code(err))
 	})
 }
 
 func TestCoordinatorApplyErrorMappings(t *testing.T) {
-	require.Equal(t, codes.InvalidArgument, status.Code(coordinatorLeaseApplyRPCError(rootproto.CoordinatorLeaseCommandIssue, rootstate.ErrInvalidCoordinatorLease)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorLeaseApplyRPCError(rootproto.CoordinatorLeaseCommandIssue, rootstate.ErrCoordinatorLeaseCoverage)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorLeaseApplyRPCError(rootproto.CoordinatorLeaseCommandIssue, rootstate.ErrCoordinatorLeaseLineage)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorLeaseApplyRPCError(rootproto.CoordinatorLeaseCommandRelease, rootstate.ErrCoordinatorLeaseOwner)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorLeaseApplyRPCError(rootproto.CoordinatorLeaseCommandRelease, rootstate.ErrInvalidCoordinatorLease)))
-	require.Equal(t, codes.Internal, status.Code(coordinatorLeaseApplyRPCError(rootproto.CoordinatorLeaseCommandUnknown, errors.New("boom"))))
+	require.Equal(t, codes.InvalidArgument, status.Code(coordinatorLeaseApplyRPCError(rootproto.TenureActIssue, rootstate.ErrInvalidTenure)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorLeaseApplyRPCError(rootproto.TenureActIssue, rootstate.ErrInheritance)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorLeaseApplyRPCError(rootproto.TenureActIssue, rootstate.ErrInheritance)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorLeaseApplyRPCError(rootproto.TenureActRelease, rootstate.ErrPrimacy)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorLeaseApplyRPCError(rootproto.TenureActRelease, rootstate.ErrInvalidTenure)))
+	require.Equal(t, codes.Internal, status.Code(coordinatorLeaseApplyRPCError(rootproto.TenureActUnknown, errors.New("boom"))))
 
-	require.Equal(t, codes.InvalidArgument, status.Code(coordinatorClosureApplyRPCError(rootproto.CoordinatorClosureCommandSeal, rootstate.ErrInvalidCoordinatorLease)))
-	require.Equal(t, codes.InvalidArgument, status.Code(coordinatorClosureApplyRPCError(rootproto.CoordinatorClosureCommandConfirm, rootstate.ErrCoordinatorLeaseAudit)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorClosureApplyRPCError(rootproto.CoordinatorClosureCommandSeal, rootstate.ErrCoordinatorLeaseOwner)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorClosureApplyRPCError(rootproto.CoordinatorClosureCommandConfirm, rootstate.ErrCoordinatorLeaseOwner)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorClosureApplyRPCError(rootproto.CoordinatorClosureCommandClose, rootstate.ErrCoordinatorLeaseOwner)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorClosureApplyRPCError(rootproto.CoordinatorClosureCommandClose, rootstate.ErrCoordinatorLeaseClose)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorClosureApplyRPCError(rootproto.CoordinatorClosureCommandReattach, rootstate.ErrCoordinatorLeaseOwner)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorClosureApplyRPCError(rootproto.CoordinatorClosureCommandReattach, rootstate.ErrCoordinatorLeaseReattach)))
-	require.Equal(t, codes.Internal, status.Code(coordinatorClosureApplyRPCError(rootproto.CoordinatorClosureCommandUnknown, errors.New("boom"))))
+	require.Equal(t, codes.InvalidArgument, status.Code(coordinatorClosureApplyRPCError(rootproto.TransitActSeal, rootstate.ErrInvalidTenure)))
+	require.Equal(t, codes.InvalidArgument, status.Code(coordinatorClosureApplyRPCError(rootproto.TransitActConfirm, rootstate.ErrClosure)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorClosureApplyRPCError(rootproto.TransitActSeal, rootstate.ErrPrimacy)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorClosureApplyRPCError(rootproto.TransitActConfirm, rootstate.ErrPrimacy)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorClosureApplyRPCError(rootproto.TransitActClose, rootstate.ErrPrimacy)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorClosureApplyRPCError(rootproto.TransitActClose, rootstate.ErrClosure)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorClosureApplyRPCError(rootproto.TransitActReattach, rootstate.ErrPrimacy)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorClosureApplyRPCError(rootproto.TransitActReattach, rootstate.ErrClosure)))
+	require.Equal(t, codes.Internal, status.Code(coordinatorClosureApplyRPCError(rootproto.TransitActUnknown, errors.New("boom"))))
 }
 
 func testServerSnapshot() rootstate.Snapshot {

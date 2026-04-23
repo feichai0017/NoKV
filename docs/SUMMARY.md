@@ -39,7 +39,7 @@
 
 - [Configuration](config.md)
 - [CLI](cli.md)
-- [ccc-audit](ccc-audit.md)
+- [succession-audit](succession-audit.md)
 - [Cluster Demo & Dashboard](demo.md)
 - [Scripts](scripts.md)
 - [NoKV Redis](nokv-redis.md)

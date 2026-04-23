@@ -61,7 +61,7 @@ type etcdReadIndexTraceRecord struct {
 	MemberID            string `json:"member_id,omitempty"`
 	Duty                string `json:"duty,omitempty"`
 	ReadStateGeneration uint64 `json:"read_state_generation"`
-	SuccessorGeneration uint64 `json:"successor_generation"`
+	SuccessorEpoch      uint64 `json:"successor_epoch"`
 	Accepted            bool   `json:"accepted"`
 }
 
@@ -87,11 +87,11 @@ func projectEtcdReadIndexTrace(records []etcdReadIndexTraceRecord) []ReplyTraceR
 			duty = "read_index"
 		}
 		out = append(out, ReplyTraceRecord{
-			Source:                      "etcd-read-index",
-			Duty:                        duty,
-			CertGeneration:              record.ReadStateGeneration,
-			ObservedSuccessorGeneration: record.SuccessorGeneration,
-			Accepted:                    record.Accepted,
+			Source:                 "etcd-read-index",
+			Duty:                   duty,
+			Epoch:                  record.ReadStateGeneration,
+			ObservedSuccessorEpoch: record.SuccessorEpoch,
+			Accepted:               record.Accepted,
 		})
 	}
 	return out
@@ -127,11 +127,11 @@ func projectEtcdLeaseRenewTrace(records []etcdLeaseRenewTraceRecord) []ReplyTrac
 			duty = "lease_renew"
 		}
 		out = append(out, ReplyTraceRecord{
-			Source:                      "etcd-lease-renew",
-			Duty:                        duty,
-			CertGeneration:              record.ResponseRevision,
-			ObservedSuccessorGeneration: record.RevokeRevision,
-			Accepted:                    record.Accepted,
+			Source:                 "etcd-lease-renew",
+			Duty:                   duty,
+			Epoch:                  record.ResponseRevision,
+			ObservedSuccessorEpoch: record.RevokeRevision,
+			Accepted:               record.Accepted,
 		})
 	}
 	return out
@@ -167,11 +167,11 @@ func projectCRDBLeaseStartTrace(records []crdbLeaseStartTraceRecord) []ReplyTrac
 			duty = "lease_start_coverage"
 		}
 		out = append(out, ReplyTraceRecord{
-			Source:                      "crdb-lease-start",
-			Duty:                        duty,
-			CertGeneration:              record.SuccessorLeaseStart,
-			ObservedSuccessorGeneration: record.ServedTimestamp,
-			Accepted:                    record.Accepted,
+			Source:                 "crdb-lease-start",
+			Duty:                   duty,
+			Epoch:                  record.SuccessorLeaseStart,
+			ObservedSuccessorEpoch: record.ServedTimestamp,
+			Accepted:               record.Accepted,
 		})
 	}
 	return out

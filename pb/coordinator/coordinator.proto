@@ -254,12 +254,12 @@ message GetRegionByKeyResponse {
   // required_descriptor_revision echoes the minimum descriptor revision the
   // caller required for this answer. 0 means unspecified.
   uint64 required_descriptor_revision = 11;
-  // cert_generation identifies the detached/rooted authority instance that
+  // epoch identifies the detached/rooted authority instance that
   // served this reply when coordinator lease evidence is available.
-  uint64 cert_generation = 12;
-  // observed_seal_generation carries the latest rooted sealed generation
+  uint64 epoch = 12;
+  // observed_legacy_epoch carries the latest rooted sealed generation
   // observed by the serving coordinator when it constructed this reply.
-  uint64 observed_seal_generation = 15;
+  uint64 observed_legacy_epoch = 15;
   // serving_class reports the client-visible serving contract used for this reply.
   ServingClass serving_class = 13;
   // sync_health reports the rooted catch-up health that justified this reply.
@@ -273,11 +273,11 @@ message AllocIDRequest {
 message AllocIDResponse {
   uint64 first_id = 1;
   uint64 count = 2;
-  // cert_generation and consumed_frontier together form the protocol-level
+  // epoch and consumed_frontier together form the protocol-level
   // legality witness for monotone detached replies.
-  uint64 cert_generation = 3;
+  uint64 epoch = 3;
   uint64 consumed_frontier = 4;
-  uint64 observed_seal_generation = 5;
+  uint64 observed_legacy_epoch = 5;
 }
 
 message TsoRequest {
@@ -287,11 +287,11 @@ message TsoRequest {
 message TsoResponse {
   uint64 timestamp = 1;
   uint64 count = 2;
-  // cert_generation and consumed_frontier together form the protocol-level
+  // epoch and consumed_frontier together form the protocol-level
   // legality witness for monotone detached replies.
-  uint64 cert_generation = 3;
+  uint64 epoch = 3;
   uint64 consumed_frontier = 4;
-  uint64 observed_seal_generation = 5;
+  uint64 observed_legacy_epoch = 5;
 }
 
 service Coordinator {

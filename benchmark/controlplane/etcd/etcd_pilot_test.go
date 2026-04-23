@@ -39,7 +39,7 @@ type etcdReadIndexTraceRecord struct {
 	MemberID            string `json:"member_id,omitempty"`
 	Duty                string `json:"duty,omitempty"`
 	ReadStateGeneration uint64 `json:"read_state_generation"`
-	SuccessorGeneration uint64 `json:"successor_generation"`
+	SuccessorEpoch      uint64 `json:"successor_epoch"`
 	Accepted            bool   `json:"accepted"`
 }
 
@@ -153,7 +153,7 @@ func projectEtcdReadIndexScheduleRecords(schedule etcdReadIndexSchedule) ([]etcd
 		return nil, fmt.Errorf("schedule %q has no steps", schedule.Name)
 	}
 
-	var observedSuccessorGeneration uint64
+	var observedSuccessorEpoch uint64
 	records := make([]etcdReadIndexTraceRecord, 0, len(schedule.Steps))
 	for idx, step := range schedule.Steps {
 		switch strings.TrimSpace(step.Op) {
@@ -161,12 +161,12 @@ func projectEtcdReadIndexScheduleRecords(schedule etcdReadIndexSchedule) ([]etcd
 			if step.Generation == 0 {
 				return nil, fmt.Errorf("schedule %q step %d observe_successor requires generation", schedule.Name, idx)
 			}
-			observedSuccessorGeneration = step.Generation
+			observedSuccessorEpoch = step.Generation
 		case "accept_reply", "reject_reply":
 			if step.ReadStateGeneration == 0 {
 				return nil, fmt.Errorf("schedule %q step %d reply requires read_state_generation", schedule.Name, idx)
 			}
-			if observedSuccessorGeneration == 0 {
+			if observedSuccessorEpoch == 0 {
 				return nil, fmt.Errorf("schedule %q step %d reply requires prior observe_successor", schedule.Name, idx)
 			}
 			duty := strings.TrimSpace(step.Duty)
@@ -177,7 +177,7 @@ func projectEtcdReadIndexScheduleRecords(schedule etcdReadIndexSchedule) ([]etcd
 				MemberID:            strings.TrimSpace(step.MemberID),
 				Duty:                duty,
 				ReadStateGeneration: step.ReadStateGeneration,
-				SuccessorGeneration: observedSuccessorGeneration,
+				SuccessorEpoch:      observedSuccessorEpoch,
 				Accepted:            step.Op == "accept_reply",
 			})
 		default:

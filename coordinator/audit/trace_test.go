@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
-	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
+	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -14,34 +14,34 @@ import (
 )
 
 func TestEvaluateReplyTrace(t *testing.T) {
-	seal := rootstate.CoordinatorSeal{
-		HolderID:       "c1",
-		CertGeneration: 2,
-		DutyMask:       rootproto.CoordinatorDutyMaskDefault,
-		Frontiers:      controlplane.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
-		SealedAtCursor: rootstate.Cursor{Term: 1, Index: 9},
+	seal := rootstate.Legacy{
+		HolderID:  "c1",
+		Epoch:     2,
+		Mandate:   rootproto.MandateDefault,
+		Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
+		SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
 	}
-	sealDigest := rootstate.CoordinatorSealDigest(seal)
+	legacyDigest := rootstate.DigestOfLegacy(seal)
 	report := coordaudit.BuildReport(rootview.Snapshot{
 		CatchUpState: rootview.CatchUpStateFresh,
 		Allocator: rootview.AllocatorState{
 			IDCurrent: 12,
 			TSCurrent: 34,
 		},
-		CoordinatorLease: rootstate.CoordinatorLease{
-			HolderID:          "c1",
-			ExpiresUnixNano:   2_000,
-			CertGeneration:    3,
-			DutyMask:          rootproto.CoordinatorDutyMaskDefault,
-			PredecessorDigest: sealDigest,
+		Tenure: rootstate.Tenure{
+			HolderID:        "c1",
+			ExpiresUnixNano: 2_000,
+			Epoch:           3,
+			Mandate:         rootproto.MandateDefault,
+			LineageDigest:   legacyDigest,
 		},
-		CoordinatorSeal: seal,
-		CoordinatorClosure: rootstate.CoordinatorClosure{
-			HolderID:            "c1",
-			SealGeneration:      2,
-			SuccessorGeneration: 3,
-			SealDigest:          sealDigest,
-			Stage:               rootproto.CoordinatorClosureStageReattached,
+		Legacy: seal,
+		Transit: rootstate.Transit{
+			HolderID:       "c1",
+			LegacyEpoch:    2,
+			SuccessorEpoch: 3,
+			LegacyDigest:   legacyDigest,
+			Stage:          rootproto.TransitStageReattached,
 		},
 		Descriptors: map[uint64]descriptor.Descriptor{
 			1: {RegionID: 1, RootEpoch: 7},
@@ -49,36 +49,36 @@ func TestEvaluateReplyTrace(t *testing.T) {
 	}, "c1", 1_000)
 
 	anomalies := coordaudit.EvaluateReplyTrace(report, []coordaudit.ReplyTraceRecord{
-		{Duty: "allocid", CertGeneration: 2, Accepted: true},
-		{Duty: "allocid", CertGeneration: 1, Accepted: true},
-		{Duty: "allocid", CertGeneration: 2, Accepted: false},
-		{Duty: "allocid", CertGeneration: 3, Accepted: true},
+		{Duty: "allocid", Epoch: 2, Accepted: true},
+		{Duty: "allocid", Epoch: 1, Accepted: true},
+		{Duty: "allocid", Epoch: 2, Accepted: false},
+		{Duty: "allocid", Epoch: 3, Accepted: true},
 	})
 	require.Len(t, anomalies, 1)
 	require.Equal(t, "post_seal_accepted_reply", anomalies[0].Kind)
-	require.Equal(t, uint64(2), anomalies[0].CertGeneration)
+	require.Equal(t, uint64(2), anomalies[0].Epoch)
 }
 
 func TestEvaluateReplyTraceFlagsAcceptedReplyBehindSuccessor(t *testing.T) {
 	anomalies := coordaudit.EvaluateReplyTrace(coordaudit.Report{}, []coordaudit.ReplyTraceRecord{
 		{
-			Source:                      "etcd-read-index",
-			Duty:                        "read_index",
-			CertGeneration:              1,
-			ObservedSuccessorGeneration: 2,
-			Accepted:                    true,
+			Source:                 "etcd-read-index",
+			Duty:                   "read_index",
+			Epoch:                  1,
+			ObservedSuccessorEpoch: 2,
+			Accepted:               true,
 		},
 		{
-			Source:                      "etcd-read-index",
-			Duty:                        "read_index",
-			CertGeneration:              2,
-			ObservedSuccessorGeneration: 2,
-			Accepted:                    true,
+			Source:                 "etcd-read-index",
+			Duty:                   "read_index",
+			Epoch:                  2,
+			ObservedSuccessorEpoch: 2,
+			Accepted:               true,
 		},
 	})
 	require.Len(t, anomalies, 1)
 	require.Equal(t, "accepted_read_index_behind_successor", anomalies[0].Kind)
-	require.Equal(t, uint64(1), anomalies[0].CertGeneration)
+	require.Equal(t, uint64(1), anomalies[0].Epoch)
 }
 
 func TestDecodeEtcdLeaseRenewTraceFlagsAcceptedReplyBehindRevoke(t *testing.T) {
@@ -105,7 +105,7 @@ func TestDecodeEtcdLeaseRenewTraceFlagsAcceptedReplyBehindRevoke(t *testing.T) {
 	require.Len(t, anomalies, 1)
 	require.Equal(t, "accepted_keepalive_success_after_revoke", anomalies[0].Kind)
 	require.Equal(t, "lease_renew", anomalies[0].Duty)
-	require.Equal(t, uint64(7), anomalies[0].CertGeneration)
+	require.Equal(t, uint64(7), anomalies[0].Epoch)
 }
 
 func TestDecodeCRDBLeaseStartTraceFlagsCoverageViolation(t *testing.T) {
@@ -132,6 +132,6 @@ func TestDecodeCRDBLeaseStartTraceFlagsCoverageViolation(t *testing.T) {
 	require.Len(t, anomalies, 1)
 	require.Equal(t, "lease_start_coverage_violation", anomalies[0].Kind)
 	require.Equal(t, "lease_start_coverage", anomalies[0].Duty)
-	require.Equal(t, uint64(103), anomalies[0].CertGeneration)
+	require.Equal(t, uint64(103), anomalies[0].Epoch)
 	require.Contains(t, anomalies[0].Reason, "served timestamp 105")
 }

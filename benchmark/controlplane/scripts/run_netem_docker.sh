@@ -38,5 +38,5 @@ docker run --rm \
 		apt-get install -y iproute2 >/dev/null
 		tc qdisc add dev lo root netem delay $DELAY $JITTER loss $LOSS
 		trap 'tc qdisc del dev lo root 2>/dev/null || true' EXIT
-		./benchmark/controlplane/scripts/run_eval.sh
+		./benchmark/succession/scripts/run_eval.sh
 	"

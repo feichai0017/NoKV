@@ -13,7 +13,7 @@ import (
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 )
 
-// runCCCAuditCmd runs one read-only closure-complete-continuation audit pass
+// runSuccessionAuditCmd runs one read-only succession audit pass
 // against a live 3-peer meta-root cluster. It connects via the same remote
 // gRPC client coordinators use (coordinator/rootview.OpenRootRemoteStore),
 // loads the rooted snapshot, and projects it into coordinator/audit's
@@ -28,8 +28,8 @@ import (
 //   - --reply-trace-format: projection vocabulary (nokv/etcd-read-index/
 //     etcd-lease-renew/crdb-lease-start)
 //   - --json: emit JSON instead of human-readable text
-func runCCCAuditCmd(w io.Writer, args []string) error {
-	fs := flag.NewFlagSet("ccc-audit", flag.ContinueOnError)
+func runSuccessionAuditCmd(w io.Writer, args []string) error {
+	fs := flag.NewFlagSet("succession-audit", flag.ContinueOnError)
 	holder := fs.String("holder", "", "override holder id used for audit reattach checks")
 	nowUnixNano := fs.Int64("now-unix-nano", 0, "override audit timestamp (unix nano); defaults to current time")
 	replyTracePath := fs.String("reply-trace", "", "path to reply-trace JSON (\"-\" for stdin); optional")
@@ -54,25 +54,25 @@ func runCCCAuditCmd(w io.Writer, args []string) error {
 		return err
 	}
 	if len(peers) != 3 {
-		return fmt.Errorf("ccc-audit requires exactly 3 --root-peer values")
+		return fmt.Errorf("succession-audit requires exactly 3 --root-peer values")
 	}
 
 	rootStore, err := rootview.OpenRootRemoteStore(rootview.RemoteRootConfig{
 		Targets: peers,
 	})
 	if err != nil {
-		return fmt.Errorf("ccc-audit open remote metadata root: %w", err)
+		return fmt.Errorf("succession-audit open remote metadata root: %w", err)
 	}
 	defer func() { _ = rootStore.Close() }()
 
 	snapshot, err := rootStore.Load()
 	if err != nil {
-		return fmt.Errorf("ccc-audit load rooted snapshot: %w", err)
+		return fmt.Errorf("succession-audit load rooted snapshot: %w", err)
 	}
 
 	holderID := strings.TrimSpace(*holder)
 	if holderID == "" {
-		holderID = snapshot.CoordinatorLease.HolderID
+		holderID = snapshot.Tenure.HolderID
 	}
 	auditTime := *nowUnixNano
 	if auditTime == 0 {
@@ -85,23 +85,23 @@ func runCCCAuditCmd(w io.Writer, args []string) error {
 	if strings.TrimSpace(*replyTracePath) != "" {
 		format, ferr := coordaudit.ParseReplyTraceFormat(*replyTraceFormat)
 		if ferr != nil {
-			return fmt.Errorf("ccc-audit reply-trace-format: %w", ferr)
+			return fmt.Errorf("succession-audit reply-trace-format: %w", ferr)
 		}
 		data, rerr := readReplyTrace(*replyTracePath)
 		if rerr != nil {
-			return fmt.Errorf("ccc-audit read reply-trace: %w", rerr)
+			return fmt.Errorf("succession-audit read reply-trace: %w", rerr)
 		}
 		records, derr := coordaudit.DecodeReplyTrace(data, format)
 		if derr != nil {
-			return fmt.Errorf("ccc-audit decode reply-trace: %w", derr)
+			return fmt.Errorf("succession-audit decode reply-trace: %w", derr)
 		}
 		traceAnomalies = coordaudit.EvaluateReplyTrace(report, records)
 	}
 
 	if *asJSON {
-		return renderCCCAuditJSON(w, report, traceAnomalies)
+		return renderSuccessionAuditJSON(w, report, traceAnomalies)
 	}
-	return renderCCCAuditText(w, report, traceAnomalies)
+	return renderSuccessionAuditText(w, report, traceAnomalies)
 }
 
 func readReplyTrace(path string) ([]byte, error) {
@@ -111,20 +111,20 @@ func readReplyTrace(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-type cccAuditJSON struct {
+type successionAuditJSON struct {
 	Report         coordaudit.Report              `json:"report"`
 	TraceAnomalies []coordaudit.ReplyTraceAnomaly `json:"trace_anomalies,omitempty"`
 }
 
-func renderCCCAuditJSON(w io.Writer, report coordaudit.Report, anomalies []coordaudit.ReplyTraceAnomaly) error {
-	out := cccAuditJSON{Report: report, TraceAnomalies: anomalies}
+func renderSuccessionAuditJSON(w io.Writer, report coordaudit.Report, anomalies []coordaudit.ReplyTraceAnomaly) error {
+	out := successionAuditJSON{Report: report, TraceAnomalies: anomalies}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
 }
 
-func renderCCCAuditText(w io.Writer, report coordaudit.Report, anomalies []coordaudit.ReplyTraceAnomaly) error {
-	_, _ = fmt.Fprintln(w, "CCC audit report")
+func renderSuccessionAuditText(w io.Writer, report coordaudit.Report, anomalies []coordaudit.ReplyTraceAnomaly) error {
+	_, _ = fmt.Fprintln(w, "Succession audit report")
 	_, _ = fmt.Fprintln(w, "----------------")
 	_, _ = fmt.Fprintf(w, "holder             : %s\n", report.HolderID)
 	_, _ = fmt.Fprintf(w, "now_unix_nano      : %d\n", report.NowUnixNano)
@@ -133,13 +133,13 @@ func renderCCCAuditText(w io.Writer, report coordaudit.Report, anomalies []coord
 	_, _ = fmt.Fprintf(w, "current_holder     : %s\n", report.CurrentHolderID)
 	_, _ = fmt.Fprintf(w, "current_generation : %d\n", report.CurrentGeneration)
 	_, _ = fmt.Fprintf(w, "closure            : stage=%s\n", report.Closure.Stage)
-	_, _ = fmt.Fprintf(w, "closure_witness    : stage=%s seal_gen=%d successor_present=%v successor_coverage=%v lineage_satisfied=%v sealed_gen_retired=%v\n",
-		report.ClosureWitness.Stage,
-		report.ClosureWitness.SealGeneration,
-		report.ClosureWitness.SuccessorPresent,
-		report.ClosureWitness.SuccessorCoverage,
-		report.ClosureWitness.SuccessorLineageSatisfied,
-		report.ClosureWitness.SealedGenerationRetired)
+	_, _ = fmt.Fprintf(w, "closure_witness    : stage=%s seal_gen=%d successor_present=%v inheritance=%v lineage_satisfied=%v sealed_gen_retired=%v\n",
+		report.TransitWitness.Stage,
+		report.TransitWitness.LegacyEpoch,
+		report.TransitWitness.SuccessorPresent,
+		report.TransitWitness.Inheritance,
+		report.TransitWitness.SuccessorLineageSatisfied,
+		report.TransitWitness.SealedGenerationRetired)
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "snapshot anomalies:")
 	_, _ = fmt.Fprintf(w, "  successor_lineage_mismatch     : %v\n", report.Anomalies.SuccessorLineageMismatch)
@@ -154,7 +154,7 @@ func renderCCCAuditText(w io.Writer, report coordaudit.Report, anomalies []coord
 		_, _ = fmt.Fprintf(w, "reply-trace anomalies (%d):\n", len(anomalies))
 		for _, a := range anomalies {
 			_, _ = fmt.Fprintf(w, "  [%d] kind=%s duty=%s cert_gen=%d reason=%q\n",
-				a.Index, a.Kind, a.Duty, a.CertGeneration, a.Reason)
+				a.Index, a.Kind, a.Duty, a.Epoch, a.Reason)
 		}
 	}
 	return nil

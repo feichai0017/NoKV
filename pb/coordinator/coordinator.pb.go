@@ -1668,12 +1668,12 @@ type GetRegionByKeyResponse struct {
 	// required_descriptor_revision echoes the minimum descriptor revision the
 	// caller required for this answer. 0 means unspecified.
 	RequiredDescriptorRevision uint64 `protobuf:"varint,11,opt,name=required_descriptor_revision,json=requiredDescriptorRevision,proto3" json:"required_descriptor_revision,omitempty"`
-	// cert_generation identifies the detached/rooted authority instance that
+	// epoch identifies the detached/rooted authority instance that
 	// served this reply when coordinator lease evidence is available.
-	CertGeneration uint64 `protobuf:"varint,12,opt,name=cert_generation,json=certGeneration,proto3" json:"cert_generation,omitempty"`
-	// observed_seal_generation carries the latest rooted sealed generation
+	Epoch uint64 `protobuf:"varint,12,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	// observed_legacy_epoch carries the latest rooted sealed generation
 	// observed by the serving coordinator when it constructed this reply.
-	ObservedSealGeneration uint64 `protobuf:"varint,15,opt,name=observed_seal_generation,json=observedSealGeneration,proto3" json:"observed_seal_generation,omitempty"`
+	ObservedLegacyEpoch uint64 `protobuf:"varint,15,opt,name=observed_legacy_epoch,json=observedLegacyEpoch,proto3" json:"observed_legacy_epoch,omitempty"`
 	// serving_class reports the client-visible serving contract used for this reply.
 	ServingClass ServingClass `protobuf:"varint,13,opt,name=serving_class,json=servingClass,proto3,enum=nokv.coordinator.v1.ServingClass" json:"serving_class,omitempty"`
 	// sync_health reports the rooted catch-up health that justified this reply.
@@ -1789,16 +1789,16 @@ func (x *GetRegionByKeyResponse) GetRequiredDescriptorRevision() uint64 {
 	return 0
 }
 
-func (x *GetRegionByKeyResponse) GetCertGeneration() uint64 {
+func (x *GetRegionByKeyResponse) GetEpoch() uint64 {
 	if x != nil {
-		return x.CertGeneration
+		return x.Epoch
 	}
 	return 0
 }
 
-func (x *GetRegionByKeyResponse) GetObservedSealGeneration() uint64 {
+func (x *GetRegionByKeyResponse) GetObservedLegacyEpoch() uint64 {
 	if x != nil {
-		return x.ObservedSealGeneration
+		return x.ObservedLegacyEpoch
 	}
 	return 0
 }
@@ -1865,13 +1865,13 @@ type AllocIDResponse struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	FirstId uint64                 `protobuf:"varint,1,opt,name=first_id,json=firstId,proto3" json:"first_id,omitempty"`
 	Count   uint64                 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
-	// cert_generation and consumed_frontier together form the protocol-level
+	// epoch and consumed_frontier together form the protocol-level
 	// legality witness for monotone detached replies.
-	CertGeneration         uint64 `protobuf:"varint,3,opt,name=cert_generation,json=certGeneration,proto3" json:"cert_generation,omitempty"`
-	ConsumedFrontier       uint64 `protobuf:"varint,4,opt,name=consumed_frontier,json=consumedFrontier,proto3" json:"consumed_frontier,omitempty"`
-	ObservedSealGeneration uint64 `protobuf:"varint,5,opt,name=observed_seal_generation,json=observedSealGeneration,proto3" json:"observed_seal_generation,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	Epoch               uint64 `protobuf:"varint,3,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	ConsumedFrontier    uint64 `protobuf:"varint,4,opt,name=consumed_frontier,json=consumedFrontier,proto3" json:"consumed_frontier,omitempty"`
+	ObservedLegacyEpoch uint64 `protobuf:"varint,5,opt,name=observed_legacy_epoch,json=observedLegacyEpoch,proto3" json:"observed_legacy_epoch,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *AllocIDResponse) Reset() {
@@ -1918,9 +1918,9 @@ func (x *AllocIDResponse) GetCount() uint64 {
 	return 0
 }
 
-func (x *AllocIDResponse) GetCertGeneration() uint64 {
+func (x *AllocIDResponse) GetEpoch() uint64 {
 	if x != nil {
-		return x.CertGeneration
+		return x.Epoch
 	}
 	return 0
 }
@@ -1932,9 +1932,9 @@ func (x *AllocIDResponse) GetConsumedFrontier() uint64 {
 	return 0
 }
 
-func (x *AllocIDResponse) GetObservedSealGeneration() uint64 {
+func (x *AllocIDResponse) GetObservedLegacyEpoch() uint64 {
 	if x != nil {
-		return x.ObservedSealGeneration
+		return x.ObservedLegacyEpoch
 	}
 	return 0
 }
@@ -1987,13 +1987,13 @@ type TsoResponse struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	Timestamp uint64                 `protobuf:"varint,1,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
 	Count     uint64                 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
-	// cert_generation and consumed_frontier together form the protocol-level
+	// epoch and consumed_frontier together form the protocol-level
 	// legality witness for monotone detached replies.
-	CertGeneration         uint64 `protobuf:"varint,3,opt,name=cert_generation,json=certGeneration,proto3" json:"cert_generation,omitempty"`
-	ConsumedFrontier       uint64 `protobuf:"varint,4,opt,name=consumed_frontier,json=consumedFrontier,proto3" json:"consumed_frontier,omitempty"`
-	ObservedSealGeneration uint64 `protobuf:"varint,5,opt,name=observed_seal_generation,json=observedSealGeneration,proto3" json:"observed_seal_generation,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	Epoch               uint64 `protobuf:"varint,3,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	ConsumedFrontier    uint64 `protobuf:"varint,4,opt,name=consumed_frontier,json=consumedFrontier,proto3" json:"consumed_frontier,omitempty"`
+	ObservedLegacyEpoch uint64 `protobuf:"varint,5,opt,name=observed_legacy_epoch,json=observedLegacyEpoch,proto3" json:"observed_legacy_epoch,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *TsoResponse) Reset() {
@@ -2040,9 +2040,9 @@ func (x *TsoResponse) GetCount() uint64 {
 	return 0
 }
 
-func (x *TsoResponse) GetCertGeneration() uint64 {
+func (x *TsoResponse) GetEpoch() uint64 {
 	if x != nil {
-		return x.CertGeneration
+		return x.Epoch
 	}
 	return 0
 }
@@ -2054,9 +2054,9 @@ func (x *TsoResponse) GetConsumedFrontier() uint64 {
 	return 0
 }
 
-func (x *TsoResponse) GetObservedSealGeneration() uint64 {
+func (x *TsoResponse) GetObservedLegacyEpoch() uint64 {
 	if x != nil {
-		return x.ObservedSealGeneration
+		return x.ObservedLegacyEpoch
 	}
 	return 0
 }
@@ -2142,7 +2142,7 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\fmax_root_lag\x18\x04 \x01(\x04H\x00R\n" +
 	"maxRootLag\x88\x01\x01\x12@\n" +
 	"\x1crequired_descriptor_revision\x18\x05 \x01(\x04R\x1arequiredDescriptorRevisionB\x0f\n" +
-	"\r_max_root_lag\"\x9d\a\n" +
+	"\r_max_root_lag\"\x84\a\n" +
 	"\x16GetRegionByKeyResponse\x12K\n" +
 	"\x11region_descriptor\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x10regionDescriptor\x12\x1b\n" +
 	"\tnot_found\x18\x02 \x01(\bR\bnotFound\x12J\n" +
@@ -2155,29 +2155,29 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\x0ecatch_up_state\x18\t \x01(\x0e2!.nokv.coordinator.v1.CatchUpStateR\fcatchUpState\x12/\n" +
 	"\x13descriptor_revision\x18\n" +
 	" \x01(\x04R\x12descriptorRevision\x12@\n" +
-	"\x1crequired_descriptor_revision\x18\v \x01(\x04R\x1arequiredDescriptorRevision\x12'\n" +
-	"\x0fcert_generation\x18\f \x01(\x04R\x0ecertGeneration\x128\n" +
-	"\x18observed_seal_generation\x18\x0f \x01(\x04R\x16observedSealGeneration\x12F\n" +
+	"\x1crequired_descriptor_revision\x18\v \x01(\x04R\x1arequiredDescriptorRevision\x12\x14\n" +
+	"\x05epoch\x18\f \x01(\x04R\x05epoch\x122\n" +
+	"\x15observed_legacy_epoch\x18\x0f \x01(\x04R\x13observedLegacyEpoch\x12F\n" +
 	"\rserving_class\x18\r \x01(\x0e2!.nokv.coordinator.v1.ServingClassR\fservingClass\x12@\n" +
 	"\vsync_health\x18\x0e \x01(\x0e2\x1f.nokv.coordinator.v1.SyncHealthR\n" +
 	"syncHealth\"&\n" +
 	"\x0eAllocIDRequest\x12\x14\n" +
-	"\x05count\x18\x01 \x01(\x04R\x05count\"\xd2\x01\n" +
+	"\x05count\x18\x01 \x01(\x04R\x05count\"\xb9\x01\n" +
 	"\x0fAllocIDResponse\x12\x19\n" +
 	"\bfirst_id\x18\x01 \x01(\x04R\afirstId\x12\x14\n" +
-	"\x05count\x18\x02 \x01(\x04R\x05count\x12'\n" +
-	"\x0fcert_generation\x18\x03 \x01(\x04R\x0ecertGeneration\x12+\n" +
-	"\x11consumed_frontier\x18\x04 \x01(\x04R\x10consumedFrontier\x128\n" +
-	"\x18observed_seal_generation\x18\x05 \x01(\x04R\x16observedSealGeneration\"\"\n" +
+	"\x05count\x18\x02 \x01(\x04R\x05count\x12\x14\n" +
+	"\x05epoch\x18\x03 \x01(\x04R\x05epoch\x12+\n" +
+	"\x11consumed_frontier\x18\x04 \x01(\x04R\x10consumedFrontier\x122\n" +
+	"\x15observed_legacy_epoch\x18\x05 \x01(\x04R\x13observedLegacyEpoch\"\"\n" +
 	"\n" +
 	"TsoRequest\x12\x14\n" +
-	"\x05count\x18\x01 \x01(\x04R\x05count\"\xd1\x01\n" +
+	"\x05count\x18\x01 \x01(\x04R\x05count\"\xb8\x01\n" +
 	"\vTsoResponse\x12\x1c\n" +
 	"\ttimestamp\x18\x01 \x01(\x04R\ttimestamp\x12\x14\n" +
-	"\x05count\x18\x02 \x01(\x04R\x05count\x12'\n" +
-	"\x0fcert_generation\x18\x03 \x01(\x04R\x0ecertGeneration\x12+\n" +
-	"\x11consumed_frontier\x18\x04 \x01(\x04R\x10consumedFrontier\x128\n" +
-	"\x18observed_seal_generation\x18\x05 \x01(\x04R\x16observedSealGeneration*i\n" +
+	"\x05count\x18\x02 \x01(\x04R\x05count\x12\x14\n" +
+	"\x05epoch\x18\x03 \x01(\x04R\x05epoch\x12+\n" +
+	"\x11consumed_frontier\x18\x04 \x01(\x04R\x10consumedFrontier\x122\n" +
+	"\x15observed_legacy_epoch\x18\x05 \x01(\x04R\x13observedLegacyEpoch*i\n" +
 	"\x16SchedulerOperationType\x12!\n" +
 	"\x1dSCHEDULER_OPERATION_TYPE_NONE\x10\x00\x12,\n" +
 	"(SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER\x10\x01*t\n" +

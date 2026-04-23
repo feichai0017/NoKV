@@ -75,7 +75,7 @@ func (OSFS) OpenFileHandle(name string, flag int, perm os.FileMode) (File, error
 	return os.OpenFile(name, flag, perm)
 }
 
-// Lock acquires an exclusive non-blocking lock on name and returns a closer
+// Lock acquires an primacy non-blocking lock on name and returns a closer
 // that releases it. The lock file is truncated on open so stale contents from
 // older implementations do not persist across reopen.
 func (OSFS) Lock(name string) (io.Closer, error) {

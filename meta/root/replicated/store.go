@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
+	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootfailpoints "github.com/feichai0017/NoKV/meta/root/failpoints"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
@@ -241,179 +241,179 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 	return rootstate.CommitInfo{Cursor: snapshot.State.LastCommitted, State: snapshot.State}, nil
 }
 
-func (s *Store) ApplyCoordinatorLease(ctx context.Context, cmd rootproto.CoordinatorLeaseCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *Store) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error) {
 	if s == nil {
-		return rootstate.CoordinatorProtocolState{}, nil
+		return rootstate.SuccessionState{}, nil
 	}
-	if err := rootfailpoints.InjectBeforeApplyCoordinatorLease(); err != nil {
-		return rootstate.CoordinatorProtocolState{}, err
+	if err := rootfailpoints.InjectBeforeApplyTenure(); err != nil {
+		return rootstate.SuccessionState{}, err
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return rootstate.CoordinatorProtocolState{}, err
+		return rootstate.SuccessionState{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	switch cmd.Kind {
-	case rootproto.CoordinatorLeaseCommandIssue:
-		if err := rootstate.ValidateCoordinatorLeaseCampaign(s.state.CoordinatorLease, s.state.CoordinatorSeal, cmd.HolderID, cmd.PredecessorDigest, cmd.ExpiresUnixNano, cmd.NowUnixNano); err != nil {
-			return s.state.CoordinatorProtocol(), err
+	case rootproto.TenureActIssue:
+		if err := rootstate.ValidateTenureClaim(s.state.Tenure, s.state.Legacy, cmd.HolderID, cmd.LineageDigest, cmd.ExpiresUnixNano, cmd.NowUnixNano); err != nil {
+			return s.state.Succession(), err
 		}
-		if err := rootstate.ValidateCoordinatorLeaseSuccessorCoverageFrontiers(
-			s.state.CoordinatorLease,
-			s.state.CoordinatorSeal,
-			cmd.HandoffFrontiers,
+		if err := rootstate.ValidateInheritance(
+			s.state.Tenure,
+			s.state.Legacy,
+			cmd.InheritedFrontiers,
 		); err != nil {
-			return s.state.CoordinatorProtocol(), err
+			return s.state.Succession(), err
 		}
-		generation := rootstate.NextCoordinatorLeaseGeneration(s.state.CoordinatorLease, s.state.CoordinatorSeal, cmd.HolderID, cmd.NowUnixNano)
-		commit, err := s.appendLocked(ctx, rootevent.CoordinatorLeaseGranted(
+		generation := rootstate.NextTenureEpoch(s.state.Tenure, s.state.Legacy, cmd.HolderID, cmd.NowUnixNano)
+		commit, err := s.appendLocked(ctx, rootevent.TenureGranted(
 			cmd.HolderID,
 			cmd.ExpiresUnixNano,
 			generation,
-			rootproto.CoordinatorDutyMaskDefault,
-			cmd.PredecessorDigest,
-			cmd.HandoffFrontiers,
+			rootproto.MandateDefault,
+			cmd.LineageDigest,
+			cmd.InheritedFrontiers,
 		))
 		if err != nil {
-			return rootstate.CoordinatorProtocolState{}, err
+			return rootstate.SuccessionState{}, err
 		}
-		return commit.State.CoordinatorProtocol(), nil
-	case rootproto.CoordinatorLeaseCommandRelease:
-		if err := rootstate.ValidateCoordinatorLeaseRelease(s.state.CoordinatorLease, cmd.HolderID, cmd.NowUnixNano); err != nil {
-			return s.state.CoordinatorProtocol(), err
+		return commit.State.Succession(), nil
+	case rootproto.TenureActRelease:
+		if err := rootstate.ValidateTenureYield(s.state.Tenure, cmd.HolderID, cmd.NowUnixNano); err != nil {
+			return s.state.Succession(), err
 		}
-		current := s.state.CoordinatorLease
-		dutyMask := current.DutyMask
-		if dutyMask == 0 {
-			dutyMask = rootproto.CoordinatorDutyMaskDefault
+		current := s.state.Tenure
+		mandate := current.Mandate
+		if mandate == 0 {
+			mandate = rootproto.MandateDefault
 		}
-		commit, err := s.appendLocked(ctx, rootevent.CoordinatorLeaseReleased(
+		commit, err := s.appendLocked(ctx, rootevent.TenureReleased(
 			cmd.HolderID,
 			cmd.NowUnixNano,
-			current.CertGeneration,
-			dutyMask,
-			current.PredecessorDigest,
-			cmd.HandoffFrontiers,
+			current.Epoch,
+			mandate,
+			current.LineageDigest,
+			cmd.InheritedFrontiers,
 		))
 		if err != nil {
-			return rootstate.CoordinatorProtocolState{}, err
+			return rootstate.SuccessionState{}, err
 		}
-		return commit.State.CoordinatorProtocol(), nil
+		return commit.State.Succession(), nil
 	default:
-		return s.state.CoordinatorProtocol(), rootstate.ErrInvalidCoordinatorLease
+		return s.state.Succession(), rootstate.ErrInvalidTenure
 	}
 }
 
-func (s *Store) ApplyCoordinatorClosure(ctx context.Context, cmd rootproto.CoordinatorClosureCommand) (rootstate.CoordinatorProtocolState, error) {
+func (s *Store) ApplyTransit(ctx context.Context, cmd rootproto.TransitCommand) (rootstate.SuccessionState, error) {
 	if s == nil {
-		return rootstate.CoordinatorProtocolState{}, nil
+		return rootstate.SuccessionState{}, nil
 	}
-	if err := rootfailpoints.InjectBeforeApplyCoordinatorClosure(); err != nil {
-		return rootstate.CoordinatorProtocolState{}, err
+	if err := rootfailpoints.InjectBeforeApplyTransit(); err != nil {
+		return rootstate.SuccessionState{}, err
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return rootstate.CoordinatorProtocolState{}, err
+		return rootstate.SuccessionState{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	switch cmd.Kind {
-	case rootproto.CoordinatorClosureCommandSeal:
-		current := s.state.CoordinatorLease
-		if s.state.CoordinatorSeal.CertGeneration != 0 &&
-			s.state.CoordinatorSeal.CertGeneration == current.CertGeneration &&
-			s.state.CoordinatorSeal.HolderID == strings.TrimSpace(cmd.HolderID) {
-			return s.state.CoordinatorProtocol(), nil
+	case rootproto.TransitActSeal:
+		current := s.state.Tenure
+		if s.state.Legacy.Epoch != 0 &&
+			s.state.Legacy.Epoch == current.Epoch &&
+			s.state.Legacy.HolderID == strings.TrimSpace(cmd.HolderID) {
+			return s.state.Succession(), nil
 		}
-		if err := rootstate.ValidateCoordinatorLeaseSeal(current, cmd.HolderID); err != nil {
-			return s.state.CoordinatorProtocol(), err
+		if err := rootstate.ValidateLegacyFormation(current, cmd.HolderID); err != nil {
+			return s.state.Succession(), err
 		}
-		dutyMask := current.DutyMask
-		if dutyMask == 0 {
-			dutyMask = rootproto.CoordinatorDutyMaskDefault
+		mandate := current.Mandate
+		if mandate == 0 {
+			mandate = rootproto.MandateDefault
 		}
-		commit, err := s.appendLocked(ctx, rootevent.CoordinatorLeaseSealed(
+		commit, err := s.appendLocked(ctx, rootevent.TenureSealed(
 			cmd.HolderID,
-			current.CertGeneration,
-			dutyMask,
+			current.Epoch,
+			mandate,
 			cmd.Frontiers,
 		))
 		if err != nil {
-			return rootstate.CoordinatorProtocolState{}, err
+			return rootstate.SuccessionState{}, err
 		}
-		return commit.State.CoordinatorProtocol(), nil
-	case rootproto.CoordinatorClosureCommandConfirm:
-		if strings.TrimSpace(cmd.HolderID) == "" || strings.TrimSpace(cmd.HolderID) != s.state.CoordinatorLease.HolderID {
-			return s.state.CoordinatorProtocol(), rootstate.ErrCoordinatorLeaseOwner
+		return commit.State.Succession(), nil
+	case rootproto.TransitActConfirm:
+		if strings.TrimSpace(cmd.HolderID) == "" || strings.TrimSpace(cmd.HolderID) != s.state.Tenure.HolderID {
+			return s.state.Succession(), rootstate.ErrPrimacy
 		}
-		auditStatus, err := controlplane.ValidateClosureConfirmation(
-			s.state.CoordinatorLease,
-			controlplane.Frontiers(s.state, rootstate.MaxDescriptorRevision(s.descs)),
-			s.state.CoordinatorSeal,
+		auditStatus, err := succession.ValidateTransitConfirmation(
+			s.state.Tenure,
+			succession.Frontiers(s.state, rootstate.MaxDescriptorRevision(s.descs)),
+			s.state.Legacy,
 			cmd.NowUnixNano,
 		)
 		if err != nil {
-			return s.state.CoordinatorProtocol(), err
+			return s.state.Succession(), err
 		}
-		if rootproto.ClosureStageAtLeast(s.state.CoordinatorClosure.Stage, rootproto.CoordinatorClosureStageConfirmed) &&
-			s.state.CoordinatorClosure.SealGeneration == auditStatus.SealGeneration &&
-			s.state.CoordinatorClosure.SuccessorGeneration == s.state.CoordinatorLease.CertGeneration &&
-			s.state.CoordinatorClosure.SealDigest == auditStatus.SealDigest {
-			return s.state.CoordinatorProtocol(), nil
+		if rootproto.TransitStageAtLeast(s.state.Transit.Stage, rootproto.TransitStageConfirmed) &&
+			s.state.Transit.LegacyEpoch == auditStatus.LegacyEpoch &&
+			s.state.Transit.SuccessorEpoch == s.state.Tenure.Epoch &&
+			s.state.Transit.LegacyDigest == auditStatus.LegacyDigest {
+			return s.state.Succession(), nil
 		}
-		commit, err := s.appendLocked(ctx, rootevent.CoordinatorClosureConfirmed(
+		commit, err := s.appendLocked(ctx, rootevent.TransitConfirmed(
 			cmd.HolderID,
-			auditStatus.SealGeneration,
-			s.state.CoordinatorLease.CertGeneration,
-			auditStatus.SealDigest,
+			auditStatus.LegacyEpoch,
+			s.state.Tenure.Epoch,
+			auditStatus.LegacyDigest,
 		))
 		if err != nil {
-			return rootstate.CoordinatorProtocolState{}, err
+			return rootstate.SuccessionState{}, err
 		}
-		return commit.State.CoordinatorProtocol(), nil
-	case rootproto.CoordinatorClosureCommandClose:
-		if err := controlplane.ValidateClosureClose(s.state.CoordinatorLease, s.state.CoordinatorClosure, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
-			return s.state.CoordinatorProtocol(), err
+		return commit.State.Succession(), nil
+	case rootproto.TransitActClose:
+		if err := succession.ValidateTransitClosure(s.state.Tenure, s.state.Transit, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+			return s.state.Succession(), err
 		}
-		if rootproto.ClosureStageAtLeast(s.state.CoordinatorClosure.Stage, rootproto.CoordinatorClosureStageClosed) {
-			return s.state.CoordinatorProtocol(), nil
+		if rootproto.TransitStageAtLeast(s.state.Transit.Stage, rootproto.TransitStageClosed) {
+			return s.state.Succession(), nil
 		}
-		commit, err := s.appendLocked(ctx, rootevent.CoordinatorClosureClosed(
+		commit, err := s.appendLocked(ctx, rootevent.TransitClosed(
 			cmd.HolderID,
-			s.state.CoordinatorClosure.SealGeneration,
-			s.state.CoordinatorClosure.SuccessorGeneration,
-			s.state.CoordinatorClosure.SealDigest,
+			s.state.Transit.LegacyEpoch,
+			s.state.Transit.SuccessorEpoch,
+			s.state.Transit.LegacyDigest,
 		))
 		if err != nil {
-			return rootstate.CoordinatorProtocolState{}, err
+			return rootstate.SuccessionState{}, err
 		}
-		return commit.State.CoordinatorProtocol(), nil
-	case rootproto.CoordinatorClosureCommandReattach:
-		if err := controlplane.ValidateClosureReattach(s.state.CoordinatorLease, s.state.CoordinatorClosure, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
-			return s.state.CoordinatorProtocol(), err
+		return commit.State.Succession(), nil
+	case rootproto.TransitActReattach:
+		if err := succession.ValidateTransitReattach(s.state.Tenure, s.state.Transit, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+			return s.state.Succession(), err
 		}
-		if rootproto.ClosureStageAtLeast(s.state.CoordinatorClosure.Stage, rootproto.CoordinatorClosureStageReattached) {
-			return s.state.CoordinatorProtocol(), nil
+		if rootproto.TransitStageAtLeast(s.state.Transit.Stage, rootproto.TransitStageReattached) {
+			return s.state.Succession(), nil
 		}
-		commit, err := s.appendLocked(ctx, rootevent.CoordinatorClosureReattached(
+		commit, err := s.appendLocked(ctx, rootevent.TransitReattached(
 			cmd.HolderID,
-			s.state.CoordinatorClosure.SealGeneration,
-			s.state.CoordinatorClosure.SuccessorGeneration,
-			s.state.CoordinatorClosure.SealDigest,
+			s.state.Transit.LegacyEpoch,
+			s.state.Transit.SuccessorEpoch,
+			s.state.Transit.LegacyDigest,
 		))
 		if err != nil {
-			return rootstate.CoordinatorProtocolState{}, err
+			return rootstate.SuccessionState{}, err
 		}
-		return commit.State.CoordinatorProtocol(), nil
+		return commit.State.Succession(), nil
 	default:
-		return s.state.CoordinatorProtocol(), rootstate.ErrCoordinatorLeaseAudit
+		return s.state.Succession(), rootstate.ErrClosure
 	}
 }
 

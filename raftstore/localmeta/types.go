@@ -101,7 +101,7 @@ func CloneRaftPointers(src map[uint64]RaftLogPointer) map[uint64]RaftLogPointer 
 // This is the execution-plane to control-plane durability bridge. If a store
 // crashes after local raft apply but before Coordinator publish succeeds, the
 // recovered store replays these entries and retries publish instead of losing
-// terminal topology truth. CoordinatorLease controls which Coordinator may
+// terminal topology truth. Tenure controls which Coordinator may
 // accept singleton duties, but the store still persists these events locally
 // until publish acknowledgement removes them.
 type PendingRootEvent struct {

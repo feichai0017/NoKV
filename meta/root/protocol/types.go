@@ -13,70 +13,70 @@ type Cursor struct {
 }
 
 const (
-	CoordinatorDutyAllocID uint32 = 1 << iota
-	CoordinatorDutyTSO
-	CoordinatorDutyGetRegionByKey
-	CoordinatorDutyLeaseStart
+	MandateAllocID uint32 = 1 << iota
+	MandateTSO
+	MandateGetRegionByKey
+	MandateLeaseStart
 )
 
-const CoordinatorDutyMaskDefault = CoordinatorDutyAllocID | CoordinatorDutyTSO | CoordinatorDutyGetRegionByKey
+const MandateDefault = MandateAllocID | MandateTSO | MandateGetRegionByKey
 
-type CoordinatorDutyFrontier struct {
-	DutyMask uint32
+type MandateFrontier struct {
+	Mandate  uint32
 	Frontier uint64
 }
 
-const coordinatorDutyFrontierMaskAll = CoordinatorDutyAllocID | CoordinatorDutyTSO | CoordinatorDutyGetRegionByKey | CoordinatorDutyLeaseStart
+const mandateMaskAll = MandateAllocID | MandateTSO | MandateGetRegionByKey | MandateLeaseStart
 
-var coordinatorDutyOrder = [...]uint32{
-	CoordinatorDutyAllocID,
-	CoordinatorDutyTSO,
-	CoordinatorDutyGetRegionByKey,
-	CoordinatorDutyLeaseStart,
+var mandateOrder = [...]uint32{
+	MandateAllocID,
+	MandateTSO,
+	MandateGetRegionByKey,
+	MandateLeaseStart,
 }
 
-// CoordinatorDutyFrontiers is the protocol-level duty frontier algebra carried
+// MandateFrontiers is the protocol-level duty frontier algebra carried
 // across rooted handoff, verifier, and audit boundaries.
-type CoordinatorDutyFrontiers struct {
-	values  [len(coordinatorDutyOrder)]uint64
+type MandateFrontiers struct {
+	values  [len(mandateOrder)]uint64
 	present uint32
 }
 
-type CoordinatorFrontierCoverage struct {
-	DutyMask         uint32
+type InheritanceCoverage struct {
+	Mandate          uint32
 	RequiredFrontier uint64
 	ActualFrontier   uint64
 	Covered          bool
 }
 
-type CoordinatorSuccessorCoverageStatus struct {
-	Checks []CoordinatorFrontierCoverage
+type InheritanceStatus struct {
+	Checks []InheritanceCoverage
 }
 
 type AuthorityHandoffRecord struct {
-	HolderID          string
-	ExpiresUnixNano   int64
-	CertGeneration    uint64
-	IssuedCursor      Cursor
-	DutyMask          uint32
-	PredecessorDigest string
-	Frontiers         CoordinatorDutyFrontiers
+	HolderID        string
+	ExpiresUnixNano int64
+	Epoch           uint64
+	IssuedAt        Cursor
+	Mandate         uint32
+	LineageDigest   string
+	Frontiers       MandateFrontiers
 }
 
 type ContinuationWitness struct {
-	DutyMask         uint32
-	CertGeneration   uint64
+	Mandate          uint32
+	Epoch            uint64
 	ConsumedFrontier uint64
 }
 
-type CoordinatorClosureStage uint8
+type TransitStage uint8
 
 const (
-	CoordinatorClosureStageUnspecified CoordinatorClosureStage = iota
-	CoordinatorClosureStagePendingConfirm
-	CoordinatorClosureStageConfirmed
-	CoordinatorClosureStageClosed
-	CoordinatorClosureStageReattached
+	TransitStageUnspecified TransitStage = iota
+	TransitStagePendingConfirm
+	TransitStageConfirmed
+	TransitStageClosed
+	TransitStageReattached
 )
 
 const (
@@ -84,153 +84,153 @@ const (
 	ContinuationWitnessGenerationSuppressed uint64 = ^uint64(0)
 )
 
-func (s CoordinatorClosureStage) String() string {
+func (s TransitStage) String() string {
 	switch s {
-	case CoordinatorClosureStageUnspecified:
+	case TransitStageUnspecified:
 		return "unspecified"
-	case CoordinatorClosureStagePendingConfirm:
+	case TransitStagePendingConfirm:
 		return "pending_confirm"
-	case CoordinatorClosureStageConfirmed:
+	case TransitStageConfirmed:
 		return "confirmed"
-	case CoordinatorClosureStageClosed:
+	case TransitStageClosed:
 		return "closed"
-	case CoordinatorClosureStageReattached:
+	case TransitStageReattached:
 		return "reattached"
 	default:
 		return "unknown"
 	}
 }
 
-type ClosureWitness struct {
-	SealGeneration            uint64
-	SealDigest                string
+type TransitWitness struct {
+	LegacyEpoch               uint64
+	LegacyDigest              string
 	SuccessorPresent          bool
-	SuccessorCoverage         CoordinatorSuccessorCoverageStatus
+	Inheritance               InheritanceStatus
 	SuccessorLineageSatisfied bool
 	SealedGenerationRetired   bool
-	Stage                     CoordinatorClosureStage
+	Stage                     TransitStage
 }
 
-type CoordinatorClosureStatus struct {
-	Stage CoordinatorClosureStage
+type TransitStatus struct {
+	Stage TransitStage
 }
 
-type CoordinatorLeaseCommandKind uint8
+type TenureAct uint8
 
 const (
-	CoordinatorLeaseCommandUnknown CoordinatorLeaseCommandKind = iota
-	CoordinatorLeaseCommandIssue
-	CoordinatorLeaseCommandRelease
+	TenureActUnknown TenureAct = iota
+	TenureActIssue
+	TenureActRelease
 )
 
-type CoordinatorLeaseCommand struct {
-	Kind              CoordinatorLeaseCommandKind
-	HolderID          string
-	ExpiresUnixNano   int64
-	NowUnixNano       int64
-	PredecessorDigest string
-	HandoffFrontiers  CoordinatorDutyFrontiers
+type TenureCommand struct {
+	Kind               TenureAct
+	HolderID           string
+	ExpiresUnixNano    int64
+	NowUnixNano        int64
+	LineageDigest      string
+	InheritedFrontiers MandateFrontiers
 }
 
-type CoordinatorClosureCommandKind uint8
+type TransitAct uint8
 
 const (
-	CoordinatorClosureCommandUnknown CoordinatorClosureCommandKind = iota
-	CoordinatorClosureCommandSeal
-	CoordinatorClosureCommandConfirm
-	CoordinatorClosureCommandClose
-	CoordinatorClosureCommandReattach
+	TransitActUnknown TransitAct = iota
+	TransitActSeal
+	TransitActConfirm
+	TransitActClose
+	TransitActReattach
 )
 
-type CoordinatorClosureCommand struct {
-	Kind        CoordinatorClosureCommandKind
+type TransitCommand struct {
+	Kind        TransitAct
 	HolderID    string
 	NowUnixNano int64
-	Frontiers   CoordinatorDutyFrontiers
+	Frontiers   MandateFrontiers
 }
 
-func CoordinatorDutyName(dutyMask uint32) string {
-	switch dutyMask {
-	case CoordinatorDutyAllocID:
+func MandateName(mandate uint32) string {
+	switch mandate {
+	case MandateAllocID:
 		return "alloc_id"
-	case CoordinatorDutyTSO:
+	case MandateTSO:
 		return "tso"
-	case CoordinatorDutyGetRegionByKey:
+	case MandateGetRegionByKey:
 		return "get_region_by_key"
-	case CoordinatorDutyLeaseStart:
+	case MandateLeaseStart:
 		return "lease_start"
 	default:
-		return fmt.Sprintf("duty_%d", dutyMask)
+		return fmt.Sprintf("mandate_%d", mandate)
 	}
 }
 
-func NewCoordinatorDutyFrontiers(entries ...CoordinatorDutyFrontier) CoordinatorDutyFrontiers {
-	var frontiers CoordinatorDutyFrontiers
+func NewMandateFrontiers(entries ...MandateFrontier) MandateFrontiers {
+	var frontiers MandateFrontiers
 	for _, entry := range entries {
-		frontiers = frontiers.WithFrontier(entry.DutyMask, entry.Frontier)
+		frontiers = frontiers.WithFrontier(entry.Mandate, entry.Frontier)
 	}
 	return frontiers
 }
 
-func CoordinatorDutyFrontiersFromMap(values map[uint32]uint64) CoordinatorDutyFrontiers {
-	var frontiers CoordinatorDutyFrontiers
-	for dutyMask, frontier := range values {
-		frontiers = frontiers.WithFrontier(dutyMask, frontier)
+func MandateFrontiersFromMap(values map[uint32]uint64) MandateFrontiers {
+	var frontiers MandateFrontiers
+	for mandate, frontier := range values {
+		frontiers = frontiers.WithFrontier(mandate, frontier)
 	}
 	return frontiers
 }
 
-func (f CoordinatorDutyFrontiers) Frontier(dutyMask uint32) uint64 {
-	idx, ok := coordinatorDutyFrontierIndex(dutyMask)
+func (f MandateFrontiers) Frontier(mandate uint32) uint64 {
+	idx, ok := mandateIndex(mandate)
 	if !ok {
 		return 0
 	}
 	return f.values[idx]
 }
 
-func (f CoordinatorDutyFrontiers) Len() int {
-	return bits.OnesCount32(f.present & coordinatorDutyFrontierMaskAll)
+func (f MandateFrontiers) Len() int {
+	return bits.OnesCount32(f.present & mandateMaskAll)
 }
 
-func (f CoordinatorDutyFrontiers) Entries() []CoordinatorDutyFrontier {
+func (f MandateFrontiers) Entries() []MandateFrontier {
 	if f.Len() == 0 {
 		return nil
 	}
-	out := make([]CoordinatorDutyFrontier, 0, f.Len())
-	for _, dutyMask := range OrderedCoordinatorDutyMasks(0, f) {
-		out = append(out, CoordinatorDutyFrontier{
-			DutyMask: dutyMask,
-			Frontier: f.Frontier(dutyMask),
+	out := make([]MandateFrontier, 0, f.Len())
+	for _, mandate := range OrderedMandateMasks(0, f) {
+		out = append(out, MandateFrontier{
+			Mandate:  mandate,
+			Frontier: f.Frontier(mandate),
 		})
 	}
 	return out
 }
 
-func (f CoordinatorDutyFrontiers) AsMap() map[uint32]uint64 {
+func (f MandateFrontiers) AsMap() map[uint32]uint64 {
 	if f.Len() == 0 {
 		return map[uint32]uint64{}
 	}
 	out := make(map[uint32]uint64, f.Len())
-	for _, dutyMask := range OrderedCoordinatorDutyMasks(0, f) {
-		out[dutyMask] = f.Frontier(dutyMask)
+	for _, mandate := range OrderedMandateMasks(0, f) {
+		out[mandate] = f.Frontier(mandate)
 	}
 	return out
 }
 
-func (f CoordinatorDutyFrontiers) WithFrontier(dutyMask uint32, frontier uint64) CoordinatorDutyFrontiers {
-	idx, ok := coordinatorDutyFrontierIndex(dutyMask)
+func (f MandateFrontiers) WithFrontier(mandate uint32, frontier uint64) MandateFrontiers {
+	idx, ok := mandateIndex(mandate)
 	if !ok {
 		return f
 	}
 	f.values[idx] = frontier
-	f.present |= dutyMask
+	f.present |= mandate
 	return f
 }
 
-func OrderedCoordinatorDutyMasks(dutyMask uint32, frontiers CoordinatorDutyFrontiers) []uint32 {
-	seen := (frontiers.present | dutyMask) & coordinatorDutyFrontierMaskAll
+func OrderedMandateMasks(mandate uint32, frontiers MandateFrontiers) []uint32 {
+	seen := (frontiers.present | mandate) & mandateMaskAll
 	out := make([]uint32, 0, bits.OnesCount32(seen))
-	for _, mask := range coordinatorDutyOrder {
+	for _, mask := range mandateOrder {
 		if seen&mask == 0 {
 			continue
 		}
@@ -239,61 +239,61 @@ func OrderedCoordinatorDutyMasks(dutyMask uint32, frontiers CoordinatorDutyFront
 	return out
 }
 
-func NewContinuationWitness(dutyMask uint32, certGeneration, consumedFrontier uint64) ContinuationWitness {
+func NewContinuationWitness(mandate uint32, epoch, consumedFrontier uint64) ContinuationWitness {
 	return ContinuationWitness{
-		DutyMask:         dutyMask,
-		CertGeneration:   certGeneration,
+		Mandate:          mandate,
+		Epoch:            epoch,
 		ConsumedFrontier: consumedFrontier,
 	}
 }
 
-func NewSuppressedContinuationWitness(dutyMask uint32) ContinuationWitness {
+func NewSuppressedContinuationWitness(mandate uint32) ContinuationWitness {
 	return ContinuationWitness{
-		DutyMask:         dutyMask,
-		CertGeneration:   ContinuationWitnessGenerationSuppressed,
+		Mandate:          mandate,
+		Epoch:            ContinuationWitnessGenerationSuppressed,
 		ConsumedFrontier: 0,
 	}
 }
 
-func NewAuthorityHandoffRecord(holderID string, expiresUnixNano int64, certGeneration uint64, issuedCursor Cursor, dutyMask uint32, predecessorDigest string, frontiers CoordinatorDutyFrontiers) (AuthorityHandoffRecord, error) {
+func NewAuthorityHandoffRecord(holderID string, expiresUnixNano int64, epoch uint64, issuedAt Cursor, mandate uint32, lineageDigest string, frontiers MandateFrontiers) (AuthorityHandoffRecord, error) {
 	holderID = strings.TrimSpace(holderID)
-	predecessorDigest = strings.TrimSpace(predecessorDigest)
+	lineageDigest = strings.TrimSpace(lineageDigest)
 	if holderID == "" {
-		if expiresUnixNano == 0 && certGeneration == 0 && issuedCursor == (Cursor{}) && dutyMask == 0 && predecessorDigest == "" && frontiers.Len() == 0 {
+		if expiresUnixNano == 0 && epoch == 0 && issuedAt == (Cursor{}) && mandate == 0 && lineageDigest == "" && frontiers.Len() == 0 {
 			return AuthorityHandoffRecord{}, nil
 		}
 		return AuthorityHandoffRecord{}, fmt.Errorf("authority handoff record: holder id is required")
 	}
-	if certGeneration == 0 {
+	if epoch == 0 {
 		return AuthorityHandoffRecord{}, fmt.Errorf("authority handoff record: cert generation is required")
 	}
-	resolvedDutyMask := dutyMask & coordinatorDutyFrontierMaskAll
-	if resolvedDutyMask == 0 {
+	resolvedMandate := mandate & mandateMaskAll
+	if resolvedMandate == 0 {
 		return AuthorityHandoffRecord{}, fmt.Errorf("authority handoff record: duty mask is required")
 	}
-	if frontiers.present&resolvedDutyMask != resolvedDutyMask {
+	if frontiers.present&resolvedMandate != resolvedMandate {
 		return AuthorityHandoffRecord{}, fmt.Errorf("authority handoff record: frontiers must cover all duty mask bits")
 	}
 	return AuthorityHandoffRecord{
-		HolderID:          holderID,
-		ExpiresUnixNano:   expiresUnixNano,
-		CertGeneration:    certGeneration,
-		IssuedCursor:      issuedCursor,
-		DutyMask:          resolvedDutyMask,
-		PredecessorDigest: predecessorDigest,
-		Frontiers:         frontiers,
+		HolderID:        holderID,
+		ExpiresUnixNano: expiresUnixNano,
+		Epoch:           epoch,
+		IssuedAt:        issuedAt,
+		Mandate:         resolvedMandate,
+		LineageDigest:   lineageDigest,
+		Frontiers:       frontiers,
 	}, nil
 }
 
-func MustNewAuthorityHandoffRecord(holderID string, expiresUnixNano int64, certGeneration uint64, issuedCursor Cursor, dutyMask uint32, predecessorDigest string, frontiers CoordinatorDutyFrontiers) AuthorityHandoffRecord {
-	record, err := NewAuthorityHandoffRecord(holderID, expiresUnixNano, certGeneration, issuedCursor, dutyMask, predecessorDigest, frontiers)
+func MustNewAuthorityHandoffRecord(holderID string, expiresUnixNano int64, epoch uint64, issuedAt Cursor, mandate uint32, lineageDigest string, frontiers MandateFrontiers) AuthorityHandoffRecord {
+	record, err := NewAuthorityHandoffRecord(holderID, expiresUnixNano, epoch, issuedAt, mandate, lineageDigest, frontiers)
 	if err != nil {
 		panic(err)
 	}
 	return record
 }
 
-func (s CoordinatorSuccessorCoverageStatus) Covered() bool {
+func (s InheritanceStatus) Covered() bool {
 	for _, check := range s.Checks {
 		if !check.Covered {
 			return false
@@ -302,9 +302,9 @@ func (s CoordinatorSuccessorCoverageStatus) Covered() bool {
 	return true
 }
 
-func (s CoordinatorSuccessorCoverageStatus) CoveredDutyMask(dutyMask uint32) bool {
+func (s InheritanceStatus) CoveredMandate(mandate uint32) bool {
 	for _, check := range s.Checks {
-		if dutyMask&check.DutyMask == 0 {
+		if mandate&check.Mandate == 0 {
 			continue
 		}
 		if !check.Covered {
@@ -314,50 +314,50 @@ func (s CoordinatorSuccessorCoverageStatus) CoveredDutyMask(dutyMask uint32) boo
 	return true
 }
 
-func (s CoordinatorSuccessorCoverageStatus) FirstGap() (CoordinatorFrontierCoverage, bool) {
+func (s InheritanceStatus) FirstGap() (InheritanceCoverage, bool) {
 	for _, check := range s.Checks {
 		if !check.Covered {
 			return check, true
 		}
 	}
-	return CoordinatorFrontierCoverage{}, false
+	return InheritanceCoverage{}, false
 }
 
-func (w ClosureWitness) ClosureSatisfied() bool {
-	return w.SealGeneration != 0 &&
+func (w TransitWitness) ClosureSatisfied() bool {
+	return w.LegacyEpoch != 0 &&
 		w.SuccessorPresent &&
 		w.SuccessorLineageSatisfied &&
-		w.SuccessorCoverage.Covered() &&
+		w.Inheritance.Covered() &&
 		w.SealedGenerationRetired
 }
 
-func (w ClosureWitness) SuccessorMonotoneCovered() bool {
+func (w TransitWitness) SuccessorMonotoneCovered() bool {
 	return w.SuccessorPresent &&
-		w.SuccessorCoverage.CoveredDutyMask(CoordinatorDutyAllocID|CoordinatorDutyTSO)
+		w.Inheritance.CoveredMandate(MandateAllocID|MandateTSO)
 }
 
-func (w ClosureWitness) SuccessorDescriptorCovered() bool {
+func (w TransitWitness) SuccessorDescriptorCovered() bool {
 	return w.SuccessorPresent &&
-		w.SuccessorCoverage.CoveredDutyMask(CoordinatorDutyGetRegionByKey)
+		w.Inheritance.CoveredMandate(MandateGetRegionByKey)
 }
 
-func (w ClosureWitness) ReplyGenerationLegal(certGeneration uint64) bool {
-	if certGeneration == ContinuationWitnessGenerationAttached {
+func (w TransitWitness) ReplyGenerationLegal(epoch uint64) bool {
+	if epoch == ContinuationWitnessGenerationAttached {
 		return true
 	}
-	if certGeneration == ContinuationWitnessGenerationSuppressed {
+	if epoch == ContinuationWitnessGenerationSuppressed {
 		return false
 	}
-	if w.SealGeneration == 0 {
+	if w.LegacyEpoch == 0 {
 		return true
 	}
-	if certGeneration == w.SealGeneration {
+	if epoch == w.LegacyEpoch {
 		return false
 	}
 	return w.ClosureSatisfied()
 }
 
-func (w ClosureWitness) WithStage(stage CoordinatorClosureStage) ClosureWitness {
+func (w TransitWitness) WithStage(stage TransitStage) TransitWitness {
 	w.Stage = stage
 	return w
 }
@@ -366,38 +366,38 @@ func (r AuthorityHandoffRecord) Present() bool {
 	return r.HolderID != ""
 }
 
-func ClosureStageAtLeast(stage, target CoordinatorClosureStage) bool {
+func TransitStageAtLeast(stage, target TransitStage) bool {
 	switch target {
-	case CoordinatorClosureStageUnspecified:
+	case TransitStageUnspecified:
 		return true
-	case CoordinatorClosureStagePendingConfirm:
-		return stage == CoordinatorClosureStagePendingConfirm ||
-			stage == CoordinatorClosureStageConfirmed ||
-			stage == CoordinatorClosureStageClosed ||
-			stage == CoordinatorClosureStageReattached
-	case CoordinatorClosureStageConfirmed:
-		return stage == CoordinatorClosureStageConfirmed ||
-			stage == CoordinatorClosureStageClosed ||
-			stage == CoordinatorClosureStageReattached
-	case CoordinatorClosureStageClosed:
-		return stage == CoordinatorClosureStageClosed ||
-			stage == CoordinatorClosureStageReattached
-	case CoordinatorClosureStageReattached:
-		return stage == CoordinatorClosureStageReattached
+	case TransitStagePendingConfirm:
+		return stage == TransitStagePendingConfirm ||
+			stage == TransitStageConfirmed ||
+			stage == TransitStageClosed ||
+			stage == TransitStageReattached
+	case TransitStageConfirmed:
+		return stage == TransitStageConfirmed ||
+			stage == TransitStageClosed ||
+			stage == TransitStageReattached
+	case TransitStageClosed:
+		return stage == TransitStageClosed ||
+			stage == TransitStageReattached
+	case TransitStageReattached:
+		return stage == TransitStageReattached
 	default:
 		return false
 	}
 }
 
-func coordinatorDutyFrontierIndex(dutyMask uint32) (int, bool) {
-	switch dutyMask {
-	case CoordinatorDutyAllocID:
+func mandateIndex(mandate uint32) (int, bool) {
+	switch mandate {
+	case MandateAllocID:
 		return 0, true
-	case CoordinatorDutyTSO:
+	case MandateTSO:
 		return 1, true
-	case CoordinatorDutyGetRegionByKey:
+	case MandateGetRegionByKey:
 		return 2, true
-	case CoordinatorDutyLeaseStart:
+	case MandateLeaseStart:
 		return 3, true
 	default:
 		return 0, false

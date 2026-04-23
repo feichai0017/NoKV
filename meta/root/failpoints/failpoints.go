@@ -12,15 +12,15 @@ type Mode uint32
 const (
 	// None disables all rooted control-plane failpoints.
 	None Mode = 0
-	// BeforeApplyCoordinatorLease aborts a rooted coordinator lease mutation
+	// BeforeApplyTenure aborts a rooted coordinator lease mutation
 	// before it enters the replicated metadata-root state machine.
-	BeforeApplyCoordinatorLease Mode = 1 << iota
-	// BeforeApplyCoordinatorClosure aborts a rooted coordinator closure mutation
+	BeforeApplyTenure Mode = 1 << iota
+	// BeforeApplyTransit aborts a rooted coordinator closure mutation
 	// before it enters the replicated metadata-root state machine.
-	BeforeApplyCoordinatorClosure
-	// BeforeCoordinatorLeaseStorageRead aborts the coordinator's storage-backed
-	// preAction gate before it reloads a rooted snapshot.
-	BeforeCoordinatorLeaseStorageRead
+	BeforeApplyTransit
+	// BeforeTenureStorageRead aborts the coordinator's storage-backed
+	// succession gate before it reloads a rooted snapshot.
+	BeforeTenureStorageRead
 	// AfterAppendCommittedBeforeCheckpoint aborts one rooted append after the
 	// replicated log commit is observed but before the checkpoint is advanced.
 	AfterAppendCommittedBeforeCheckpoint
@@ -29,9 +29,9 @@ const (
 var currentMode atomic.Uint32
 
 var (
-	ErrBeforeApplyCoordinatorLease          = errors.New("meta/root failpoint: before apply coordinator lease")
-	ErrBeforeApplyCoordinatorClosure        = errors.New("meta/root failpoint: before apply coordinator closure")
-	ErrBeforeCoordinatorLeaseStorageRead    = errors.New("meta/root failpoint: before coordinator lease storage read")
+	ErrBeforeApplyTenure                    = errors.New("meta/root failpoint: before apply coordinator lease")
+	ErrBeforeApplyTransit                   = errors.New("meta/root failpoint: before apply coordinator closure")
+	ErrBeforeTenureStorageRead              = errors.New("meta/root failpoint: before coordinator lease storage read")
 	ErrAfterAppendCommittedBeforeCheckpoint = errors.New("meta/root failpoint: after append committed before checkpoint")
 )
 
@@ -50,29 +50,29 @@ func enabled(mode Mode) bool {
 	return Current()&mode != 0
 }
 
-// InjectBeforeApplyCoordinatorLease returns the configured injected failure for
+// InjectBeforeApplyTenure returns the configured injected failure for
 // rooted lease apply operations.
-func InjectBeforeApplyCoordinatorLease() error {
-	if enabled(BeforeApplyCoordinatorLease) {
-		return ErrBeforeApplyCoordinatorLease
+func InjectBeforeApplyTenure() error {
+	if enabled(BeforeApplyTenure) {
+		return ErrBeforeApplyTenure
 	}
 	return nil
 }
 
-// InjectBeforeApplyCoordinatorClosure returns the configured injected failure
+// InjectBeforeApplyTransit returns the configured injected failure
 // for rooted closure apply operations.
-func InjectBeforeApplyCoordinatorClosure() error {
-	if enabled(BeforeApplyCoordinatorClosure) {
-		return ErrBeforeApplyCoordinatorClosure
+func InjectBeforeApplyTransit() error {
+	if enabled(BeforeApplyTransit) {
+		return ErrBeforeApplyTransit
 	}
 	return nil
 }
 
-// InjectBeforeCoordinatorLeaseStorageRead returns the configured injected
+// InjectBeforeTenureStorageRead returns the configured injected
 // failure for storage-backed coordinator lease view refreshes.
-func InjectBeforeCoordinatorLeaseStorageRead() error {
-	if enabled(BeforeCoordinatorLeaseStorageRead) {
-		return ErrBeforeCoordinatorLeaseStorageRead
+func InjectBeforeTenureStorageRead() error {
+	if enabled(BeforeTenureStorageRead) {
+		return ErrBeforeTenureStorageRead
 	}
 	return nil
 }

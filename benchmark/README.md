@@ -79,19 +79,19 @@ The `benchmark/` submodule also owns the repeatable control-plane evaluation
 artifacts used by the separated `meta/root` work. The split is deliberate:
 
 - the main module keeps only control-plane implementation code
-- `benchmark/controlplane` keeps only NoKV-native control-plane artifact code:
+- `benchmark/succession` keeps only NoKV-native control-plane artifact code:
   witness tax, detached ablation, helper-process infrastructure, and NoKV-side
   control experiments
-- `benchmark/controlplane/etcd` owns upstream etcd issue evidence
-- `benchmark/controlplane/crdb` owns CockroachDB `#66562` issue evidence
-- `benchmark/controlplane/scripts` owns repeatable runners and netem wrappers
+- `benchmark/succession/etcd` owns upstream etcd issue evidence
+- `benchmark/succession/crdb` owns CockroachDB `#66562` issue evidence
+- `benchmark/succession/scripts` owns repeatable runners and netem wrappers
 - benchmark-only dependencies such as embedded etcd do not leak into the main
   module
 
 Fixed-parameter localhost evaluation:
 
 ```bash
-./benchmark/controlplane/scripts/run_eval.sh
+./benchmark/succession/scripts/run_eval.sh
 ```
 
 Default parameters:
@@ -102,7 +102,7 @@ Default parameters:
 
 Outputs:
 
-- raw benchmark logs under `benchmark/controlplane/results/<stamp>/`
+- raw benchmark logs under `benchmark/succession/results/<stamp>/`
 - a paper-friendly markdown summary at `summary.md`
 - witness-tax logs comparing `baseline` vs `disable_client_verify` (and `disable_reply_evidence_disable_client_verify`) for `AllocID` / `Tso` / `GetRegionByKey`
 - CRDB `#66562` logs showing `without_ccc_coverage` vs `with_ccc_coverage`, replaying the original `n1 -> n2 transfer -> n2 expiry -> n3 fresh lease` schedule with both snapshot and trace-level `lease_start_coverage_violation` evidence
@@ -110,7 +110,7 @@ Outputs:
 Linux netem wrapper via Docker:
 
 ```bash
-./benchmark/controlplane/scripts/run_netem_docker.sh
+./benchmark/succession/scripts/run_netem_docker.sh
 ```
 
 Environment overrides:

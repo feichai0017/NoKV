@@ -21,15 +21,15 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	MetadataRoot_Snapshot_FullMethodName                = "/nokv.meta.v1.MetadataRoot/Snapshot"
-	MetadataRoot_Append_FullMethodName                  = "/nokv.meta.v1.MetadataRoot/Append"
-	MetadataRoot_FenceAllocator_FullMethodName          = "/nokv.meta.v1.MetadataRoot/FenceAllocator"
-	MetadataRoot_Status_FullMethodName                  = "/nokv.meta.v1.MetadataRoot/Status"
-	MetadataRoot_ApplyCoordinatorLease_FullMethodName   = "/nokv.meta.v1.MetadataRoot/ApplyCoordinatorLease"
-	MetadataRoot_ApplyCoordinatorClosure_FullMethodName = "/nokv.meta.v1.MetadataRoot/ApplyCoordinatorClosure"
-	MetadataRoot_ObserveCommitted_FullMethodName        = "/nokv.meta.v1.MetadataRoot/ObserveCommitted"
-	MetadataRoot_ObserveTail_FullMethodName             = "/nokv.meta.v1.MetadataRoot/ObserveTail"
-	MetadataRoot_WaitTail_FullMethodName                = "/nokv.meta.v1.MetadataRoot/WaitTail"
+	MetadataRoot_Snapshot_FullMethodName         = "/nokv.meta.v1.MetadataRoot/Snapshot"
+	MetadataRoot_Append_FullMethodName           = "/nokv.meta.v1.MetadataRoot/Append"
+	MetadataRoot_FenceAllocator_FullMethodName   = "/nokv.meta.v1.MetadataRoot/FenceAllocator"
+	MetadataRoot_Status_FullMethodName           = "/nokv.meta.v1.MetadataRoot/Status"
+	MetadataRoot_ApplyTenure_FullMethodName      = "/nokv.meta.v1.MetadataRoot/ApplyTenure"
+	MetadataRoot_ApplyTransit_FullMethodName     = "/nokv.meta.v1.MetadataRoot/ApplyTransit"
+	MetadataRoot_ObserveCommitted_FullMethodName = "/nokv.meta.v1.MetadataRoot/ObserveCommitted"
+	MetadataRoot_ObserveTail_FullMethodName      = "/nokv.meta.v1.MetadataRoot/ObserveTail"
+	MetadataRoot_WaitTail_FullMethodName         = "/nokv.meta.v1.MetadataRoot/WaitTail"
 )
 
 // MetadataRootClient is the client API for MetadataRoot service.
@@ -40,8 +40,8 @@ type MetadataRootClient interface {
 	Append(ctx context.Context, in *MetadataRootAppendRequest, opts ...grpc.CallOption) (*MetadataRootAppendResponse, error)
 	FenceAllocator(ctx context.Context, in *MetadataRootFenceAllocatorRequest, opts ...grpc.CallOption) (*MetadataRootFenceAllocatorResponse, error)
 	Status(ctx context.Context, in *MetadataRootStatusRequest, opts ...grpc.CallOption) (*MetadataRootStatusResponse, error)
-	ApplyCoordinatorLease(ctx context.Context, in *MetadataRootApplyCoordinatorLeaseRequest, opts ...grpc.CallOption) (*MetadataRootApplyCoordinatorLeaseResponse, error)
-	ApplyCoordinatorClosure(ctx context.Context, in *MetadataRootApplyCoordinatorClosureRequest, opts ...grpc.CallOption) (*MetadataRootApplyCoordinatorClosureResponse, error)
+	ApplyTenure(ctx context.Context, in *MetadataRootApplyTenureRequest, opts ...grpc.CallOption) (*MetadataRootApplyTenureResponse, error)
+	ApplyTransit(ctx context.Context, in *MetadataRootApplyTransitRequest, opts ...grpc.CallOption) (*MetadataRootApplyTransitResponse, error)
 	ObserveCommitted(ctx context.Context, in *MetadataRootObserveCommittedRequest, opts ...grpc.CallOption) (*MetadataRootObserveCommittedResponse, error)
 	ObserveTail(ctx context.Context, in *MetadataRootObserveTailRequest, opts ...grpc.CallOption) (*MetadataRootObserveTailResponse, error)
 	WaitTail(ctx context.Context, in *MetadataRootWaitTailRequest, opts ...grpc.CallOption) (*MetadataRootWaitTailResponse, error)
@@ -95,20 +95,20 @@ func (c *metadataRootClient) Status(ctx context.Context, in *MetadataRootStatusR
 	return out, nil
 }
 
-func (c *metadataRootClient) ApplyCoordinatorLease(ctx context.Context, in *MetadataRootApplyCoordinatorLeaseRequest, opts ...grpc.CallOption) (*MetadataRootApplyCoordinatorLeaseResponse, error) {
+func (c *metadataRootClient) ApplyTenure(ctx context.Context, in *MetadataRootApplyTenureRequest, opts ...grpc.CallOption) (*MetadataRootApplyTenureResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MetadataRootApplyCoordinatorLeaseResponse)
-	err := c.cc.Invoke(ctx, MetadataRoot_ApplyCoordinatorLease_FullMethodName, in, out, cOpts...)
+	out := new(MetadataRootApplyTenureResponse)
+	err := c.cc.Invoke(ctx, MetadataRoot_ApplyTenure_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *metadataRootClient) ApplyCoordinatorClosure(ctx context.Context, in *MetadataRootApplyCoordinatorClosureRequest, opts ...grpc.CallOption) (*MetadataRootApplyCoordinatorClosureResponse, error) {
+func (c *metadataRootClient) ApplyTransit(ctx context.Context, in *MetadataRootApplyTransitRequest, opts ...grpc.CallOption) (*MetadataRootApplyTransitResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MetadataRootApplyCoordinatorClosureResponse)
-	err := c.cc.Invoke(ctx, MetadataRoot_ApplyCoordinatorClosure_FullMethodName, in, out, cOpts...)
+	out := new(MetadataRootApplyTransitResponse)
+	err := c.cc.Invoke(ctx, MetadataRoot_ApplyTransit_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -153,8 +153,8 @@ type MetadataRootServer interface {
 	Append(context.Context, *MetadataRootAppendRequest) (*MetadataRootAppendResponse, error)
 	FenceAllocator(context.Context, *MetadataRootFenceAllocatorRequest) (*MetadataRootFenceAllocatorResponse, error)
 	Status(context.Context, *MetadataRootStatusRequest) (*MetadataRootStatusResponse, error)
-	ApplyCoordinatorLease(context.Context, *MetadataRootApplyCoordinatorLeaseRequest) (*MetadataRootApplyCoordinatorLeaseResponse, error)
-	ApplyCoordinatorClosure(context.Context, *MetadataRootApplyCoordinatorClosureRequest) (*MetadataRootApplyCoordinatorClosureResponse, error)
+	ApplyTenure(context.Context, *MetadataRootApplyTenureRequest) (*MetadataRootApplyTenureResponse, error)
+	ApplyTransit(context.Context, *MetadataRootApplyTransitRequest) (*MetadataRootApplyTransitResponse, error)
 	ObserveCommitted(context.Context, *MetadataRootObserveCommittedRequest) (*MetadataRootObserveCommittedResponse, error)
 	ObserveTail(context.Context, *MetadataRootObserveTailRequest) (*MetadataRootObserveTailResponse, error)
 	WaitTail(context.Context, *MetadataRootWaitTailRequest) (*MetadataRootWaitTailResponse, error)
@@ -179,11 +179,11 @@ func (UnimplementedMetadataRootServer) FenceAllocator(context.Context, *Metadata
 func (UnimplementedMetadataRootServer) Status(context.Context, *MetadataRootStatusRequest) (*MetadataRootStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Status not implemented")
 }
-func (UnimplementedMetadataRootServer) ApplyCoordinatorLease(context.Context, *MetadataRootApplyCoordinatorLeaseRequest) (*MetadataRootApplyCoordinatorLeaseResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ApplyCoordinatorLease not implemented")
+func (UnimplementedMetadataRootServer) ApplyTenure(context.Context, *MetadataRootApplyTenureRequest) (*MetadataRootApplyTenureResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyTenure not implemented")
 }
-func (UnimplementedMetadataRootServer) ApplyCoordinatorClosure(context.Context, *MetadataRootApplyCoordinatorClosureRequest) (*MetadataRootApplyCoordinatorClosureResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ApplyCoordinatorClosure not implemented")
+func (UnimplementedMetadataRootServer) ApplyTransit(context.Context, *MetadataRootApplyTransitRequest) (*MetadataRootApplyTransitResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyTransit not implemented")
 }
 func (UnimplementedMetadataRootServer) ObserveCommitted(context.Context, *MetadataRootObserveCommittedRequest) (*MetadataRootObserveCommittedResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ObserveCommitted not implemented")
@@ -286,38 +286,38 @@ func _MetadataRoot_Status_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
-func _MetadataRoot_ApplyCoordinatorLease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MetadataRootApplyCoordinatorLeaseRequest)
+func _MetadataRoot_ApplyTenure_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MetadataRootApplyTenureRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(MetadataRootServer).ApplyCoordinatorLease(ctx, in)
+		return srv.(MetadataRootServer).ApplyTenure(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: MetadataRoot_ApplyCoordinatorLease_FullMethodName,
+		FullMethod: MetadataRoot_ApplyTenure_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MetadataRootServer).ApplyCoordinatorLease(ctx, req.(*MetadataRootApplyCoordinatorLeaseRequest))
+		return srv.(MetadataRootServer).ApplyTenure(ctx, req.(*MetadataRootApplyTenureRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _MetadataRoot_ApplyCoordinatorClosure_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MetadataRootApplyCoordinatorClosureRequest)
+func _MetadataRoot_ApplyTransit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MetadataRootApplyTransitRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(MetadataRootServer).ApplyCoordinatorClosure(ctx, in)
+		return srv.(MetadataRootServer).ApplyTransit(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: MetadataRoot_ApplyCoordinatorClosure_FullMethodName,
+		FullMethod: MetadataRoot_ApplyTransit_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MetadataRootServer).ApplyCoordinatorClosure(ctx, req.(*MetadataRootApplyCoordinatorClosureRequest))
+		return srv.(MetadataRootServer).ApplyTransit(ctx, req.(*MetadataRootApplyTransitRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -400,12 +400,12 @@ var MetadataRoot_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _MetadataRoot_Status_Handler,
 		},
 		{
-			MethodName: "ApplyCoordinatorLease",
-			Handler:    _MetadataRoot_ApplyCoordinatorLease_Handler,
+			MethodName: "ApplyTenure",
+			Handler:    _MetadataRoot_ApplyTenure_Handler,
 		},
 		{
-			MethodName: "ApplyCoordinatorClosure",
-			Handler:    _MetadataRoot_ApplyCoordinatorClosure_Handler,
+			MethodName: "ApplyTransit",
+			Handler:    _MetadataRoot_ApplyTransit_Handler,
 		},
 		{
 			MethodName: "ObserveCommitted",

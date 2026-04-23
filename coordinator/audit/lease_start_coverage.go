@@ -1,20 +1,20 @@
 package audit
 
-import controlplane "github.com/feichai0017/NoKV/coordinator/protocol/controlplane"
+import succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
 
-// LeaseStartCoverageReport is the minimal ccc-audit bridge for the NoKV-native
+// LeaseStartCoverageReport is the minimal succession-audit bridge for the NoKV-native
 // CRDB #66562 reproduction schedule. It intentionally stays outside rooted
 // persisted schema.
 type LeaseStartCoverageReport struct {
-	Predecessor controlplane.LeaseView                `json:"predecessor"`
-	Successor   controlplane.LeaseView                `json:"successor"`
-	ReadSummary controlplane.ReadSummary              `json:"read_summary"`
-	Coverage    controlplane.LeaseStartCoverageStatus `json:"coverage"`
-	Anomalies   SnapshotAnomalies                     `json:"anomalies"`
+	Predecessor succession.LeaseView                `json:"predecessor"`
+	Successor   succession.LeaseView                `json:"successor"`
+	ReadSummary succession.ReadSummary              `json:"read_summary"`
+	Coverage    succession.LeaseStartCoverageStatus `json:"coverage"`
+	Anomalies   SnapshotAnomalies                   `json:"anomalies"`
 }
 
-func BuildLeaseStartCoverageReport(predecessor, successor controlplane.LeaseView, summary controlplane.ReadSummary) LeaseStartCoverageReport {
-	coverage := controlplane.EvaluateLeaseStartCoverage(successor, summary)
+func BuildLeaseStartCoverageReport(predecessor, successor succession.LeaseView, summary succession.ReadSummary) LeaseStartCoverageReport {
+	coverage := succession.EvaluateLeaseStartCoverage(successor, summary)
 	return LeaseStartCoverageReport{
 		Predecessor: predecessor,
 		Successor:   successor,

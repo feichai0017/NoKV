@@ -31,12 +31,12 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 		if event.AllocatorFence != nil && event.AllocatorFence.Minimum > snapshot.State.TSOFence {
 			snapshot.State.TSOFence = event.AllocatorFence.Minimum
 		}
-	case rootevent.KindCoordinatorLease:
-		applyCoordinatorLeaseToState(&snapshot.State, cursor, event)
-	case rootevent.KindCoordinatorSeal:
-		applyCoordinatorSealToState(&snapshot.State, cursor, event)
-	case rootevent.KindCoordinatorClosure:
-		applyCoordinatorClosureToState(&snapshot.State, cursor, event)
+	case rootevent.KindTenure:
+		applyTenureToState(&snapshot.State, cursor, event)
+	case rootevent.KindLegacy:
+		applyLegacyToState(&snapshot.State, cursor, event)
+	case rootevent.KindTransit:
+		applyTransitToState(&snapshot.State, cursor, event)
 	case rootevent.KindRegionBootstrap, rootevent.KindRegionDescriptorPublished:
 		snapshot.State.ClusterEpoch++
 		desc := event.RegionDescriptor.Descriptor.Clone()

@@ -47,17 +47,17 @@ func (s *Service) currentDescriptorRevision() uint64 {
 	return s.cluster.MaxDescriptorRevision()
 }
 
-type preActionKind uint8
+type gateKind uint8
 
 const (
-	preActionSealCurrentGeneration preActionKind = iota
-	preActionLifecycleMutation
-	preActionDutyAdmission
+	gateLegacyFormation gateKind = iota
+	gateTransitMutation
+	gateMandateAdmission
 )
 
-// preActionGate picks the lease-view source based on kind.
+// successionGate picks the tenure-view source based on kind.
 //
-// Duty-admission (hot path, once per AllocID/TSO/GetRegionByKey) uses the
+// Mandate admission (hot path, once per AllocID/TSO/GetRegionByKey) uses the
 // cached mirror: it must be cheap. The cache is kept honest by the rooted
 // refresh loop and by publish paths that overwrite it on every committed
 // rooted event.
@@ -65,53 +65,53 @@ const (
 // Lifecycle mutations (seal, close, reattach) are infrequent and safety
 // critical, so they re-read from storage to avoid a tiny window where
 // the cached mirror has not yet absorbed a concurrent publish.
-func (s *Service) preActionGate(kind preActionKind, dutyMask uint32) error {
+func (s *Service) successionGate(kind gateKind, mandate uint32) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
 	switch kind {
-	case preActionDutyAdmission:
-		return s.preActionGateCached(kind, dutyMask)
+	case gateMandateAdmission:
+		return s.successionGateCached(kind, mandate)
 	default:
-		return s.preActionGateStorage(kind, dutyMask)
+		return s.successionGateRooted(kind, mandate)
 	}
 }
 
-// preActionGateCached validates against the in-memory mirror. Cheap but
+// successionGateCached validates against the in-memory mirror. Cheap but
 // can race with a just-landed rooted publish; only safe for read-path
-// duty admission where a one-tick staleness is tolerable.
-func (s *Service) preActionGateCached(kind preActionKind, dutyMask uint32) error {
-	current, seal := s.currentCoordinatorLeaseView()
-	return s.validatePreActionLease(kind, dutyMask, current, seal)
+// mandate admission where a one-tick staleness is tolerable.
+func (s *Service) successionGateCached(kind gateKind, mandate uint32) error {
+	current, seal := s.currentTenureView()
+	return s.validateGateTenure(kind, mandate, current, seal)
 }
 
-// preActionGateStorage validates against a freshly loaded rooted
+// successionGateRooted validates against a freshly loaded rooted
 // snapshot. Used for control-plane mutations where stale-read would
 // violate closure completeness.
-func (s *Service) preActionGateStorage(kind preActionKind, dutyMask uint32) error {
-	current, seal, err := s.currentCoordinatorLeaseViewFromStorage()
+func (s *Service) successionGateRooted(kind gateKind, mandate uint32) error {
+	current, seal, err := s.currentTenureViewFromStorage()
 	if err != nil {
 		return status.Error(codes.Internal, "load rooted snapshot: "+err.Error())
 	}
-	return s.validatePreActionLease(kind, dutyMask, current, seal)
+	return s.validateGateTenure(kind, mandate, current, seal)
 }
 
-func (s *Service) currentCoordinatorLeaseViewFromStorage() (rootstate.CoordinatorLease, rootstate.CoordinatorSeal, error) {
+func (s *Service) currentTenureViewFromStorage() (rootstate.Tenure, rootstate.Legacy, error) {
 	if s == nil || s.storage == nil {
-		return rootstate.CoordinatorLease{}, rootstate.CoordinatorSeal{}, nil
+		return rootstate.Tenure{}, rootstate.Legacy{}, nil
 	}
-	if err := rootfailpoints.InjectBeforeCoordinatorLeaseStorageRead(); err != nil {
-		return rootstate.CoordinatorLease{}, rootstate.CoordinatorSeal{}, err
+	if err := rootfailpoints.InjectBeforeTenureStorageRead(); err != nil {
+		return rootstate.Tenure{}, rootstate.Legacy{}, err
 	}
 	snapshot, err := s.storage.Load()
 	if err != nil {
-		return rootstate.CoordinatorLease{}, rootstate.CoordinatorSeal{}, err
+		return rootstate.Tenure{}, rootstate.Legacy{}, err
 	}
 	s.refreshLeaseMirror(snapshot)
-	return snapshot.CoordinatorLease, snapshot.CoordinatorSeal, nil
+	return snapshot.Tenure, snapshot.Legacy, nil
 }
 
-func (s *Service) validatePreActionLease(kind preActionKind, dutyMask uint32, current rootstate.CoordinatorLease, seal rootstate.CoordinatorSeal) error {
+func (s *Service) validateGateTenure(kind gateKind, mandate uint32, current rootstate.Tenure, seal rootstate.Legacy) error {
 	if s == nil {
 		return nil
 	}
@@ -129,44 +129,44 @@ func (s *Service) validatePreActionLease(kind preActionKind, dutyMask uint32, cu
 	}
 
 	if current.HolderID == "" {
-		s.cccMetrics.recordPreActionGateRejection(kind)
-		s.cccMetrics.recordALIViolation(aliAuthorityUniqueness)
-		return statusCoordinatorLease(fmt.Errorf("%w: no rooted coordinator lease", rootstate.ErrCoordinatorLeaseHeld))
+		s.successionMetrics.recordGateRejection(kind)
+		s.successionMetrics.recordGuaranteeViolation(guaranteePrimacy)
+		return statusTenure(fmt.Errorf("%w: no rooted tenure", rootstate.ErrPrimacy))
 	}
 	if current.HolderID != holderID {
-		s.cccMetrics.recordPreActionGateRejection(kind)
-		s.cccMetrics.recordALIViolation(aliAuthorityUniqueness)
-		return statusCoordinatorLease(fmt.Errorf("%w: rooted holder=%s local_holder=%s", rootstate.ErrCoordinatorLeaseOwner, current.HolderID, holderID))
+		s.successionMetrics.recordGateRejection(kind)
+		s.successionMetrics.recordGuaranteeViolation(guaranteePrimacy)
+		return statusTenure(fmt.Errorf("%w: rooted holder=%s local_holder=%s", rootstate.ErrPrimacy, current.HolderID, holderID))
 	}
 	if !current.ActiveAt(nowUnixNano) {
-		s.cccMetrics.recordPreActionGateRejection(kind)
-		s.cccMetrics.recordALIViolation(aliAuthorityUniqueness)
-		return statusCoordinatorLease(fmt.Errorf("%w: rooted lease expired generation=%d", rootstate.ErrInvalidCoordinatorLease, current.CertGeneration))
+		s.successionMetrics.recordGateRejection(kind)
+		s.successionMetrics.recordGuaranteeViolation(guaranteePrimacy)
+		return statusTenure(fmt.Errorf("%w: rooted lease expired generation=%d", rootstate.ErrInvalidTenure, current.Epoch))
 	}
 
 	switch kind {
-	case preActionSealCurrentGeneration:
-		if rootstate.CoordinatorGenerationSealed(current, seal) {
-			s.cccMetrics.recordPreActionGateRejection(kind)
-			s.cccMetrics.recordALIViolation(aliPostSealInadmissibility)
-			return statusCoordinatorLease(fmt.Errorf("%w: generation=%d already sealed", rootstate.ErrCoordinatorLeaseHeld, current.CertGeneration))
+	case gateLegacyFormation:
+		if rootstate.TenureSealed(current, seal) {
+			s.successionMetrics.recordGateRejection(kind)
+			s.successionMetrics.recordGuaranteeViolation(guaranteeClosure)
+			return statusTenure(fmt.Errorf("%w: epoch=%d already sealed", rootstate.ErrClosure, current.Epoch))
 		}
-	case preActionLifecycleMutation:
-		if rootstate.CoordinatorGenerationSealed(current, seal) {
-			s.cccMetrics.recordPreActionGateRejection(kind)
-			s.cccMetrics.recordALIViolation(aliPostSealInadmissibility)
-			return statusCoordinatorLease(fmt.Errorf("%w: generation=%d sealed_generation=%d", rootstate.ErrCoordinatorLeaseHeld, current.CertGeneration, seal.CertGeneration))
+	case gateTransitMutation:
+		if rootstate.TenureSealed(current, seal) {
+			s.successionMetrics.recordGateRejection(kind)
+			s.successionMetrics.recordGuaranteeViolation(guaranteeSilence)
+			return statusTenure(fmt.Errorf("%w: epoch=%d legacy_epoch=%d", rootstate.ErrSilence, current.Epoch, seal.Epoch))
 		}
-	case preActionDutyAdmission:
-		currentDutyMask := current.DutyMask
-		if dutyMask != 0 && currentDutyMask&dutyMask != dutyMask {
-			s.cccMetrics.recordPreActionGateRejection(kind)
-			return statusCoordinatorLease(fmt.Errorf("%w: required_duty_mask=%d rooted_duty_mask=%d generation=%d", rootstate.ErrCoordinatorLeaseDuty, dutyMask, currentDutyMask, current.CertGeneration))
+	case gateMandateAdmission:
+		currentMandate := current.Mandate
+		if mandate != 0 && currentMandate&mandate != mandate {
+			s.successionMetrics.recordGateRejection(kind)
+			return statusTenure(fmt.Errorf("%w: required_mandate=%d rooted_mandate=%d epoch=%d", rootstate.ErrMandate, mandate, currentMandate, current.Epoch))
 		}
-		if rootstate.CoordinatorGenerationSealed(current, seal) {
-			s.cccMetrics.recordPreActionGateRejection(kind)
-			s.cccMetrics.recordALIViolation(aliPostSealInadmissibility)
-			return statusCoordinatorLease(fmt.Errorf("%w: generation=%d sealed_generation=%d", rootstate.ErrCoordinatorLeaseHeld, current.CertGeneration, seal.CertGeneration))
+		if rootstate.TenureSealed(current, seal) {
+			s.successionMetrics.recordGateRejection(kind)
+			s.successionMetrics.recordGuaranteeViolation(guaranteeSilence)
+			return statusTenure(fmt.Errorf("%w: epoch=%d legacy_epoch=%d", rootstate.ErrSilence, current.Epoch, seal.Epoch))
 		}
 	}
 	return nil
