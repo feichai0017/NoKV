@@ -16,6 +16,8 @@ type fakeRunner struct {
 	nextTS    uint64
 	data      map[string][]byte
 	mutations [][]*kvrpcpb.Mutation
+	getCalls  int
+	mutateErr error
 }
 
 func newFakeRunner() *fakeRunner {
@@ -35,6 +37,7 @@ func (r *fakeRunner) ReserveTimestamp(_ context.Context, count uint64) (uint64, 
 }
 
 func (r *fakeRunner) Get(_ context.Context, key []byte, _ uint64) ([]byte, bool, error) {
+	r.getCalls++
 	value, ok := r.data[string(key)]
 	if !ok {
 		return nil, false, nil
@@ -66,6 +69,9 @@ func (r *fakeRunner) Scan(_ context.Context, startKey []byte, limit uint32, _ ui
 }
 
 func (r *fakeRunner) Mutate(_ context.Context, _ []byte, mutations []*kvrpcpb.Mutation, _, _, _ uint64) error {
+	if r.mutateErr != nil {
+		return r.mutateErr
+	}
 	cloned := make([]*kvrpcpb.Mutation, 0, len(mutations))
 	for _, mut := range mutations {
 		if mut.GetAssertionNotExist() {
@@ -131,6 +137,25 @@ func TestExecutorCreateRejectsExistingDentry(t *testing.T) {
 	err = executor.Create(context.Background(), req, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
 	require.ErrorIs(t, err, fsmeta.ErrExists)
 	require.Len(t, runner.mutations, 1)
+	require.Zero(t, runner.getCalls)
+}
+
+func TestExecutorCreateTranslatesAlreadyExistsConflict(t *testing.T) {
+	runner := newFakeRunner()
+	runner.mutateErr = fakeKeyConflictError{errors: []*kvrpcpb.KeyError{{
+		AlreadyExists: &kvrpcpb.KeyAlreadyExists{Key: []byte("dentry")},
+	}}}
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Inode:  22,
+	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+	require.ErrorIs(t, err, fsmeta.ErrExists)
+	require.Zero(t, runner.getCalls)
 }
 
 func TestExecutorLookupReturnsNotFound(t *testing.T) {
@@ -195,4 +220,16 @@ func cloneMutation(mut *kvrpcpb.Mutation) *kvrpcpb.Mutation {
 		AssertionNotExist: mut.GetAssertionNotExist(),
 		ExpiresAt:         mut.GetExpiresAt(),
 	}
+}
+
+type fakeKeyConflictError struct {
+	errors []*kvrpcpb.KeyError
+}
+
+func (e fakeKeyConflictError) Error() string {
+	return "fake key conflict"
+}
+
+func (e fakeKeyConflictError) KeyErrors() []*kvrpcpb.KeyError {
+	return e.errors
 }

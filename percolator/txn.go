@@ -65,6 +65,15 @@ func prewriteMutation(db NoKV.MVCCStore, reader *Reader, req *kvrpcpb.PrewriteRe
 	} else if write != nil && commitTs >= req.StartVersion {
 		return keyErrorWriteConflict(key, req.PrimaryLock, commitTs, write.StartTs, req.StartVersion)
 	}
+	if mut.GetAssertionNotExist() {
+		exists, err := keyExistsAt(reader, key, req.StartVersion)
+		if err != nil {
+			return keyErrorRetryable(err)
+		}
+		if exists {
+			return keyErrorAlreadyExists(key)
+		}
+	}
 	ops := make([]versionedOp, 0, 3)
 	switch mut.Op {
 	case kvrpcpb.Mutation_Put:
@@ -307,6 +316,10 @@ func keyErrorRetryable(err error) *kvrpcpb.KeyError {
 	return &kvrpcpb.KeyError{Retryable: err.Error()}
 }
 
+func keyErrorAlreadyExists(key []byte) *kvrpcpb.KeyError {
+	return &kvrpcpb.KeyError{AlreadyExists: &kvrpcpb.KeyAlreadyExists{Key: kv.SafeCopy(nil, key)}}
+}
+
 func keyErrorAbort(msg string) *kvrpcpb.KeyError {
 	return &kvrpcpb.KeyError{Abort: msg}
 }
@@ -318,6 +331,22 @@ func keyErrorCommitTsExpired(key []byte, commitTs, minCommitTs uint64) *kvrpcpb.
 			CommitTs:    commitTs,
 			MinCommitTs: minCommitTs,
 		},
+	}
+}
+
+func keyExistsAt(reader *Reader, key []byte, readTs uint64) (bool, error) {
+	write, _, err := reader.getWriteForRead(key, readTs)
+	if err != nil {
+		return false, err
+	}
+	if write == nil {
+		return false, nil
+	}
+	switch write.Kind {
+	case kvrpcpb.Mutation_Delete, kvrpcpb.Mutation_Rollback:
+		return false, nil
+	default:
+		return true, nil
 	}
 }
 
