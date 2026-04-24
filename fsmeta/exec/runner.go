@@ -1,0 +1,181 @@
+package exec
+
+import (
+	"bytes"
+	"context"
+	"errors"
+
+	"github.com/feichai0017/NoKV/fsmeta"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+)
+
+const defaultLockTTL uint64 = 3000
+
+// KV is the minimal key/value tuple the fsmeta executor consumes from scans.
+type KV struct {
+	Key   []byte
+	Value []byte
+}
+
+// TxnRunner is the NoKV transaction surface required by fsmeta execution.
+//
+// ReserveTimestamp returns the first timestamp in a consecutive range of count
+// timestamps. Mutate must provide Percolator-style atomicity for all mutations.
+type TxnRunner interface {
+	ReserveTimestamp(ctx context.Context, count uint64) (uint64, error)
+	Get(ctx context.Context, key []byte, version uint64) ([]byte, bool, error)
+	Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]KV, error)
+	Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error
+}
+
+// Executor interprets fsmeta operation plans against a TxnRunner.
+type Executor struct {
+	runner  TxnRunner
+	lockTTL uint64
+}
+
+// Option configures an Executor.
+type Option func(*Executor)
+
+// WithLockTTL overrides the Percolator lock TTL used by mutating operations.
+func WithLockTTL(ttl uint64) Option {
+	return func(e *Executor) {
+		if ttl > 0 {
+			e.lockTTL = ttl
+		}
+	}
+}
+
+// New constructs an fsmeta executor.
+func New(runner TxnRunner, opts ...Option) (*Executor, error) {
+	if runner == nil {
+		return nil, errors.New("fsmeta/exec: runner required")
+	}
+	executor := &Executor{
+		runner:  runner,
+		lockTTL: defaultLockTTL,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(executor)
+		}
+	}
+	return executor, nil
+}
+
+// Create creates one dentry and its inode record in a single transaction.
+func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest, inode fsmeta.InodeRecord) error {
+	plan, err := fsmeta.PlanCreate(req)
+	if err != nil {
+		return err
+	}
+	startVersion, commitVersion, err := e.reserveTxnVersions(ctx)
+	if err != nil {
+		return err
+	}
+	if _, ok, err := e.runner.Get(ctx, plan.ReadKeys[0], startVersion); err != nil {
+		return err
+	} else if ok {
+		return fsmeta.ErrExists
+	}
+	inode.Inode = req.Inode
+	if inode.LinkCount == 0 {
+		inode.LinkCount = 1
+	}
+	dentryValue, err := fsmeta.EncodeDentryValue(fsmeta.DentryRecord{
+		Parent: req.Parent,
+		Name:   req.Name,
+		Inode:  req.Inode,
+		Type:   inode.Type,
+	})
+	if err != nil {
+		return err
+	}
+	inodeValue, err := fsmeta.EncodeInodeValue(inode)
+	if err != nil {
+		return err
+	}
+	mutations := []*kvrpcpb.Mutation{
+		{
+			Op:                kvrpcpb.Mutation_Put,
+			Key:               cloneBytes(plan.MutateKeys[0]),
+			Value:             dentryValue,
+			AssertionNotExist: true,
+		},
+		{
+			Op:                kvrpcpb.Mutation_Put,
+			Key:               cloneBytes(plan.MutateKeys[1]),
+			Value:             inodeValue,
+			AssertionNotExist: true,
+		},
+	}
+	return e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+}
+
+// Lookup returns the dentry record for parent/name.
+func (e *Executor) Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error) {
+	plan, err := fsmeta.PlanLookup(req)
+	if err != nil {
+		return fsmeta.DentryRecord{}, err
+	}
+	version, err := e.reserveReadVersion(ctx)
+	if err != nil {
+		return fsmeta.DentryRecord{}, err
+	}
+	value, ok, err := e.runner.Get(ctx, plan.PrimaryKey, version)
+	if err != nil {
+		return fsmeta.DentryRecord{}, err
+	}
+	if !ok {
+		return fsmeta.DentryRecord{}, fsmeta.ErrNotFound
+	}
+	return fsmeta.DecodeDentryValue(value)
+}
+
+// ReadDir returns one directory page from a dentry prefix scan.
+func (e *Executor) ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error) {
+	plan, err := fsmeta.PlanReadDir(req)
+	if err != nil {
+		return nil, err
+	}
+	version, err := e.reserveReadVersion(ctx)
+	if err != nil {
+		return nil, err
+	}
+	kvs, err := e.runner.Scan(ctx, plan.StartKey, plan.Limit, version)
+	if err != nil {
+		return nil, err
+	}
+	prefix := plan.ReadPrefixes[0]
+	out := make([]fsmeta.DentryRecord, 0, len(kvs))
+	for _, kv := range kvs {
+		if !bytes.HasPrefix(kv.Key, prefix) {
+			break
+		}
+		record, err := fsmeta.DecodeDentryValue(kv.Value)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, record)
+	}
+	return out, nil
+}
+
+func (e *Executor) reserveReadVersion(ctx context.Context) (uint64, error) {
+	return e.runner.ReserveTimestamp(ctx, 1)
+}
+
+func (e *Executor) reserveTxnVersions(ctx context.Context) (uint64, uint64, error) {
+	startVersion, err := e.runner.ReserveTimestamp(ctx, 2)
+	if err != nil {
+		return 0, 0, err
+	}
+	return startVersion, startVersion + 1, nil
+}
+
+func cloneBytes(in []byte) []byte {
+	if in == nil {
+		return nil
+	}
+	return append([]byte(nil), in...)
+}
