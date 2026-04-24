@@ -48,6 +48,15 @@ func (e *KeyConflictError) Error() string {
 	return fmt.Sprintf("client: prewrite key errors: %+v", e.Errors)
 }
 
+// KeyErrors exposes the raw per-key conflicts without forcing callers to
+// depend on this package's concrete error type.
+func (e *KeyConflictError) KeyErrors() []*kvrpcpb.KeyError {
+	if e == nil {
+		return nil
+	}
+	return e.Errors
+}
+
 // AsKeyConflict extracts a KeyConflictError from err.
 func AsKeyConflict(err error) (*KeyConflictError, bool) {
 	var target *KeyConflictError
