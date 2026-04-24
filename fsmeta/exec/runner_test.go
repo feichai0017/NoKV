@@ -195,6 +195,110 @@ func TestExecutorReadDirConsumesPlanCursorAndLimit(t *testing.T) {
 	}}, records)
 }
 
+func TestExecutorUnlinkRemovesDentry(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "file", 22)
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	err = executor.Unlink(context.Background(), fsmeta.UnlinkRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Name:   "file",
+	})
+	require.NoError(t, err)
+
+	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Name:   "file",
+	})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	require.Len(t, runner.mutations, 1)
+	require.Len(t, runner.mutations[0], 1)
+	require.Equal(t, kvrpcpb.Mutation_Delete, runner.mutations[0][0].GetOp())
+}
+
+func TestExecutorUnlinkMissingDentry(t *testing.T) {
+	runner := newFakeRunner()
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	err = executor.Unlink(context.Background(), fsmeta.UnlinkRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Name:   "missing",
+	})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	require.Empty(t, runner.mutations)
+}
+
+func TestExecutorRenameMovesDentry(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "old", 22)
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "old",
+		ToParent:   8,
+		ToName:     "new",
+	})
+	require.NoError(t, err)
+
+	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 7, Name: "old"})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 8, Name: "new"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.DentryRecord{
+		Parent: 8,
+		Name:   "new",
+		Inode:  22,
+		Type:   fsmeta.InodeTypeFile,
+	}, record)
+	require.Len(t, runner.mutations, 1)
+	require.Len(t, runner.mutations[0], 2)
+	require.Equal(t, kvrpcpb.Mutation_Delete, runner.mutations[0][0].GetOp())
+	require.Equal(t, kvrpcpb.Mutation_Put, runner.mutations[0][1].GetOp())
+	require.True(t, runner.mutations[0][1].GetAssertionNotExist())
+}
+
+func TestExecutorRenameRejectsMissingSource(t *testing.T) {
+	runner := newFakeRunner()
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "missing",
+		ToParent:   8,
+		ToName:     "new",
+	})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	require.Empty(t, runner.mutations)
+}
+
+func TestExecutorRenameRejectsExistingDestination(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "old", 22)
+	seedDentry(t, runner, "vol", 8, "existing", 23)
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "old",
+		ToParent:   8,
+		ToName:     "existing",
+	})
+	require.ErrorIs(t, err, fsmeta.ErrExists)
+	require.Empty(t, runner.mutations)
+}
+
 func seedDentry(t *testing.T, runner *fakeRunner, mount fsmeta.MountID, parent fsmeta.InodeID, name string, inode fsmeta.InodeID) {
 	t.Helper()
 	key, err := fsmeta.EncodeDentryKey(mount, parent, name)
