@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
@@ -26,6 +27,10 @@ type TxnRunner interface {
 	Get(ctx context.Context, key []byte, version uint64) ([]byte, bool, error)
 	Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]KV, error)
 	Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error
+}
+
+type keyConflictError interface {
+	KeyErrors() []*kvrpcpb.KeyError
 }
 
 // Executor interprets fsmeta operation plans against a TxnRunner.
@@ -73,11 +78,6 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest, inode f
 	if err != nil {
 		return err
 	}
-	if _, ok, err := e.runner.Get(ctx, plan.ReadKeys[0], startVersion); err != nil {
-		return err
-	} else if ok {
-		return fsmeta.ErrExists
-	}
 	inode.Inode = req.Inode
 	if inode.LinkCount == 0 {
 		inode.LinkCount = 1
@@ -109,7 +109,10 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest, inode f
 			AssertionNotExist: true,
 		},
 	}
-	return e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+	if err := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
+		return translateMutateError(err)
+	}
+	return nil
 }
 
 // Lookup returns the dentry record for parent/name.
@@ -178,4 +181,22 @@ func cloneBytes(in []byte) []byte {
 		return nil
 	}
 	return append([]byte(nil), in...)
+}
+
+func translateMutateError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, fsmeta.ErrExists) {
+		return err
+	}
+	var conflict keyConflictError
+	if errors.As(err, &conflict) {
+		for _, keyErr := range conflict.KeyErrors() {
+			if keyErr != nil && keyErr.GetAlreadyExists() != nil {
+				return fmt.Errorf("%w: %v", fsmeta.ErrExists, err)
+			}
+		}
+	}
+	return err
 }
