@@ -447,3 +447,176 @@ func TestClientTwoPhaseCommitResolvesSecondariesAfterSecondaryCommitFailure(t *t
 	require.Equal(t, uint64(41), committed.commitVersion)
 	require.Equal(t, 1, resolveHits)
 }
+
+func TestClientTwoPhaseCommitReroutesAfterPrewriteEpochMismatch(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   nil,
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+		},
+		leaderStore: 1,
+	})
+	svc := &scriptedKVService{mockService: mockService{storeID: 1, cluster: cluster}}
+	var splitOnce bool
+	svc.prewriteFn = func(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
+		if !splitOnce && req.GetContext().GetRegionId() == 1 {
+			splitOnce = true
+			regionErr := installSplitRegionsForTest(cluster)
+			return &kvrpcpb.KvPrewriteResponse{RegionError: regionErr}, nil
+		}
+		return svc.mockService.KvPrewrite(ctx, req)
+	}
+	addr, stop := startBlockingStore(t, svc)
+	defer stop()
+
+	cli, err := New(Config{
+		Stores: []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		RegionResolver: &mockRegionResolver{region: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   nil,
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+		}},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:       RetryPolicy{MaxAttempts: 4, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	err = cli.TwoPhaseCommit(context.Background(), []byte("alfa"), []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("omega"), Value: []byte("v2")},
+	}, 50, 51, 3000)
+	require.NoError(t, err)
+
+	cluster.mu.Lock()
+	region11 := cluster.regions[11]
+	region12 := cluster.regions[12]
+	cluster.mu.Unlock()
+	require.Equal(t, []byte("v1"), region11.committed["alfa"].value)
+	require.Equal(t, []byte("v2"), region12.committed["omega"].value)
+}
+
+func TestClientTwoPhaseCommitReroutesSecondaryCommitAfterEpochMismatch(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("m"),
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+			},
+			leaderStore: 1,
+		},
+		clusterRegion{
+			meta: &metapb.RegionDescriptor{
+				RegionId: 2,
+				StartKey: []byte("m"),
+				EndKey:   nil,
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 201}},
+			},
+			leaderStore: 1,
+		},
+	)
+	svc := &scriptedKVService{mockService: mockService{storeID: 1, cluster: cluster}}
+	var epochOnce bool
+	svc.commitFn = func(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
+		if !epochOnce && req.GetContext().GetRegionId() == 2 {
+			epochOnce = true
+			regionErr := replaceSecondaryRegionForTest(cluster)
+			return &kvrpcpb.KvCommitResponse{RegionError: regionErr}, nil
+		}
+		return svc.mockService.KvCommit(ctx, req)
+	}
+	addr, stop := startBlockingStore(t, svc)
+	defer stop()
+
+	cli, err := New(Config{
+		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 4, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	err = cli.TwoPhaseCommit(context.Background(), []byte("alfa"), []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("omega"), Value: []byte("v2")},
+	}, 60, 61, 3000)
+	require.NoError(t, err)
+
+	cluster.mu.Lock()
+	secondary := cluster.regions[22]
+	_, pending := secondary.pending[60]
+	committed := secondary.committed["omega"]
+	cluster.mu.Unlock()
+	require.False(t, pending)
+	require.Equal(t, []byte("v2"), committed.value)
+	require.Equal(t, uint64(61), committed.commitVersion)
+}
+
+func installSplitRegionsForTest(cluster *mockCluster) *errorpb.RegionError {
+	left := &clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 11,
+			StartKey: []byte("a"),
+			EndKey:   []byte("m"),
+			Epoch:    &metapb.RegionEpoch{Version: 2, ConfVersion: 1},
+			Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 111}},
+		},
+		leaderStore: 1,
+		pending:     make(map[uint64]map[string]clusterPending),
+		committed:   make(map[string]clusterValue),
+	}
+	right := &clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 12,
+			StartKey: []byte("m"),
+			EndKey:   nil,
+			Epoch:    &metapb.RegionEpoch{Version: 2, ConfVersion: 1},
+			Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 121}},
+		},
+		leaderStore: 1,
+		pending:     make(map[uint64]map[string]clusterPending),
+		committed:   make(map[string]clusterValue),
+	}
+	cluster.mu.Lock()
+	delete(cluster.regions, 1)
+	cluster.regions[11] = left
+	cluster.regions[12] = right
+	cluster.mu.Unlock()
+	return &errorpb.RegionError{EpochNotMatch: &errorpb.EpochNotMatch{Regions: []*metapb.RegionDescriptor{
+		protoClone(left.meta),
+		protoClone(right.meta),
+	}}}
+}
+
+func replaceSecondaryRegionForTest(cluster *mockCluster) *errorpb.RegionError {
+	cluster.mu.Lock()
+	old := cluster.regions[2]
+	delete(cluster.regions, 2)
+	replacement := &clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 22,
+			StartKey: []byte("m"),
+			EndKey:   nil,
+			Epoch:    &metapb.RegionEpoch{Version: 2, ConfVersion: 1},
+			Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 221}},
+		},
+		leaderStore: 1,
+		pending:     old.pending,
+		committed:   old.committed,
+	}
+	cluster.regions[22] = replacement
+	cluster.mu.Unlock()
+	return &errorpb.RegionError{EpochNotMatch: &errorpb.EpochNotMatch{Regions: []*metapb.RegionDescriptor{
+		protoClone(replacement.meta),
+	}}}
+}
