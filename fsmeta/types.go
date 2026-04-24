@@ -28,14 +28,18 @@ package fsmeta
 import "errors"
 
 var (
-	ErrInvalidMountID  = errors.New("fsmeta: invalid mount id")
-	ErrInvalidInodeID  = errors.New("fsmeta: invalid inode id")
-	ErrInvalidName     = errors.New("fsmeta: invalid name")
-	ErrInvalidSession  = errors.New("fsmeta: invalid session id")
-	ErrInvalidRequest  = errors.New("fsmeta: invalid request")
-	ErrInvalidKey      = errors.New("fsmeta: invalid key")
-	ErrInvalidKeyKind  = errors.New("fsmeta: invalid key kind")
-	ErrInvalidPageSize = errors.New("fsmeta: invalid page size")
+	ErrInvalidMountID   = errors.New("fsmeta: invalid mount id")
+	ErrInvalidInodeID   = errors.New("fsmeta: invalid inode id")
+	ErrInvalidName      = errors.New("fsmeta: invalid name")
+	ErrInvalidSession   = errors.New("fsmeta: invalid session id")
+	ErrInvalidRequest   = errors.New("fsmeta: invalid request")
+	ErrInvalidKey       = errors.New("fsmeta: invalid key")
+	ErrInvalidKeyKind   = errors.New("fsmeta: invalid key kind")
+	ErrInvalidValue     = errors.New("fsmeta: invalid value")
+	ErrInvalidValueKind = errors.New("fsmeta: invalid value kind")
+	ErrInvalidPageSize  = errors.New("fsmeta: invalid page size")
+	ErrExists           = errors.New("fsmeta: entry exists")
+	ErrNotFound         = errors.New("fsmeta: entry not found")
 )
 
 // MountID identifies one filesystem namespace hosted inside fsmeta.
