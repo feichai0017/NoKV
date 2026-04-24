@@ -15,7 +15,7 @@ func TestDentryValueRoundTrip(t *testing.T) {
 		Type:   InodeTypeFile,
 	})
 	require.NoError(t, err)
-	require.Equal(t, "667376000164", hex.EncodeToString(value[:6]))
+	require.Equal(t, "66737600016400000000000000010466696c65000000000000001601", hex.EncodeToString(value))
 
 	kind, err := ValueKindOf(value)
 	require.NoError(t, err)
@@ -39,6 +39,7 @@ func TestInodeValueRoundTrip(t *testing.T) {
 		LinkCount: 1,
 	})
 	require.NoError(t, err)
+	require.Equal(t, "6673760001690000000000000016010000000000001000000000000000000100000000000000000000000000000000", hex.EncodeToString(value))
 
 	record, err := DecodeInodeValue(value)
 	require.NoError(t, err)
@@ -79,8 +80,19 @@ func TestValueKindOfRejectsInvalidValues(t *testing.T) {
 	_, err := ValueKindOf([]byte("not-fsmeta-value"))
 	require.ErrorIs(t, err, ErrInvalidValue)
 
-	value, err := encodeValue(ValueKind('x'), map[string]string{"x": "y"})
-	require.NoError(t, err)
+	value := encodeValue(ValueKind('x'), []byte("body"))
 	_, err = ValueKindOf(value)
 	require.ErrorIs(t, err, ErrInvalidValueKind)
+}
+
+func TestValueCodecsRejectInvalidType(t *testing.T) {
+	_, err := EncodeInodeValue(InodeRecord{Inode: 22, Type: InodeType("symlink")})
+	require.ErrorIs(t, err, ErrInvalidValue)
+
+	value := encodeValue(ValueKindInode, append([]byte{
+		0, 0, 0, 0, 0, 0, 0, 22,
+		99,
+	}, make([]byte, 32)...))
+	_, err = DecodeInodeValue(value)
+	require.ErrorIs(t, err, ErrInvalidValue)
 }
