@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
@@ -341,16 +342,22 @@ func (c *Client) TwoPhaseCommit(ctx context.Context, primary []byte, mutations [
 	if !ok || len(primaryMutations) == 0 {
 		return fmt.Errorf("client: primary key %q missing from mutations", primary)
 	}
+	prewritten := make(map[uint64][][]byte, len(grouped))
 	if err := c.prewriteRegion(ctx, primaryID, primary, startVersion, lockTTL, primaryMutations); err != nil {
 		return err
 	}
+	prewritten[primaryID] = collectKeys(primaryMutations)
 	for regionID, muts := range grouped {
 		if regionID == primaryID {
 			continue
 		}
 		if err := c.prewriteRegion(ctx, regionID, primary, startVersion, lockTTL, muts); err != nil {
+			if rollbackErr := c.rollbackPrewrites(ctx, prewritten, startVersion); rollbackErr != nil {
+				return errors.Join(err, fmt.Errorf("client: rollback after prewrite failure: %w", rollbackErr))
+			}
 			return err
 		}
+		prewritten[regionID] = collectKeys(muts)
 	}
 	if err := c.commitRegion(ctx, primaryID, collectKeys(primaryMutations), startVersion, commitVersion); err != nil {
 		return err
@@ -360,10 +367,38 @@ func (c *Client) TwoPhaseCommit(ctx context.Context, primary []byte, mutations [
 			continue
 		}
 		if err := c.commitRegion(ctx, regionID, collectKeys(muts), startVersion, commitVersion); err != nil {
-			return err
+			if resolveErr := c.resolveCommittedSecondaries(ctx, grouped, primaryID, startVersion, commitVersion); resolveErr != nil {
+				return errors.Join(err, fmt.Errorf("client: resolve committed secondaries: %w", resolveErr))
+			}
+			return nil
 		}
 	}
 	return nil
+}
+
+func (c *Client) rollbackPrewrites(ctx context.Context, prewritten map[uint64][][]byte, startVersion uint64) error {
+	var joined error
+	for regionID, keys := range prewritten {
+		if len(keys) == 0 {
+			continue
+		}
+		if err := c.batchRollbackRegion(ctx, regionID, keys, startVersion); err != nil {
+			joined = errors.Join(joined, err)
+		}
+	}
+	return joined
+}
+
+func (c *Client) resolveCommittedSecondaries(ctx context.Context, grouped map[uint64][]*kvrpcpb.Mutation, primaryID uint64, startVersion, commitVersion uint64) error {
+	keys := make([][]byte, 0)
+	for regionID, muts := range grouped {
+		if regionID == primaryID {
+			continue
+		}
+		keys = append(keys, collectKeys(muts)...)
+	}
+	_, err := c.ResolveLocks(ctx, startVersion, commitVersion, keys)
+	return err
 }
 
 func (c *Client) prewriteRegion(ctx context.Context, regionID uint64, primary []byte, startVersion, ttl uint64, muts []*kvrpcpb.Mutation) error {
@@ -481,6 +516,63 @@ func (c *Client) commitRegion(ctx context.Context, regionID uint64, keys [][]byt
 		return err
 	}
 	return fmt.Errorf("client: commit retries exhausted for region %d", regionID)
+}
+
+func (c *Client) batchRollbackRegion(ctx context.Context, regionID uint64, keys [][]byte, startVersion uint64) error {
+	var lastErr error
+	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
+		region, ok := c.regionSnapshot(regionID)
+		if !ok {
+			return fmt.Errorf("client: region %d missing for rollback", regionID)
+		}
+		cl, err := c.storeClient(ctx, region.leader)
+		if err != nil {
+			if isTransportUnavailable(err) {
+				lastErr = err
+				if err := c.waitRetry(ctx, attempt, retryTransportUnavailable); err != nil {
+					return err
+				}
+				continue
+			}
+			return err
+		}
+		header, err := buildContext(region)
+		if err != nil {
+			return err
+		}
+		req := &kvrpcpb.KvBatchRollbackRequest{
+			Context: header,
+			Request: &kvrpcpb.BatchRollbackRequest{
+				Keys:         cloneKeys(keys),
+				StartVersion: startVersion,
+			},
+		}
+		resp, err := cl.KvBatchRollback(ctx, req)
+		if err != nil {
+			return normalizeRPCError(err)
+		}
+		if regionErr := resp.GetRegionError(); regionErr != nil {
+			lastErr = c.handleRegionError(regionID, regionErr)
+			if lastErr != nil {
+				return lastErr
+			}
+			if err := c.waitRetry(ctx, attempt, retryRegionError); err != nil {
+				return err
+			}
+			continue
+		}
+		if br := resp.GetResponse(); br != nil && br.GetError() != nil {
+			return fmt.Errorf("client: rollback key error: %v", br.GetError())
+		}
+		return nil
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return fmt.Errorf("client: rollback retries exhausted for region %d", regionID)
 }
 
 // CheckTxnStatus inspects the primary lock for a transaction and returns the
