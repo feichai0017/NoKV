@@ -1,7 +1,7 @@
 package fsmeta
 
 import (
-	"encoding/json"
+	"encoding/binary"
 	"fmt"
 )
 
@@ -70,16 +70,25 @@ func EncodeInodeValue(record InodeRecord) ([]byte, error) {
 	if err := validateInodeID(record.Inode); err != nil {
 		return nil, err
 	}
-	return encodeValue(ValueKindInode, record)
+	typ, err := encodeInodeType(record.Type)
+	if err != nil {
+		return nil, err
+	}
+	body := make([]byte, 0, 41)
+	body = binary.BigEndian.AppendUint64(body, uint64(record.Inode))
+	body = append(body, typ)
+	body = binary.BigEndian.AppendUint64(body, record.Size)
+	body = binary.BigEndian.AppendUint32(body, record.Mode)
+	body = binary.BigEndian.AppendUint32(body, record.LinkCount)
+	body = binary.BigEndian.AppendUint64(body, uint64(record.CreatedUnixNs))
+	body = binary.BigEndian.AppendUint64(body, uint64(record.UpdatedUnixNs))
+	return encodeValue(ValueKindInode, body), nil
 }
 
 // DecodeInodeValue decodes an inode record.
 func DecodeInodeValue(value []byte) (InodeRecord, error) {
 	var record InodeRecord
 	if err := decodeValue(value, ValueKindInode, &record); err != nil {
-		return InodeRecord{}, err
-	}
-	if err := validateInodeID(record.Inode); err != nil {
 		return InodeRecord{}, err
 	}
 	return record, nil
@@ -96,22 +105,23 @@ func EncodeDentryValue(record DentryRecord) ([]byte, error) {
 	if err := validateInodeID(record.Inode); err != nil {
 		return nil, err
 	}
-	return encodeValue(ValueKindDentry, record)
+	typ, err := encodeInodeType(record.Type)
+	if err != nil {
+		return nil, err
+	}
+	body := make([]byte, 0, 8+binary.MaxVarintLen64+len(record.Name)+8+1)
+	body = binary.BigEndian.AppendUint64(body, uint64(record.Parent))
+	body = binary.AppendUvarint(body, uint64(len(record.Name)))
+	body = append(body, record.Name...)
+	body = binary.BigEndian.AppendUint64(body, uint64(record.Inode))
+	body = append(body, typ)
+	return encodeValue(ValueKindDentry, body), nil
 }
 
 // DecodeDentryValue decodes a dentry record.
 func DecodeDentryValue(value []byte) (DentryRecord, error) {
 	var record DentryRecord
 	if err := decodeValue(value, ValueKindDentry, &record); err != nil {
-		return DentryRecord{}, err
-	}
-	if err := validateInodeID(record.Parent); err != nil {
-		return DentryRecord{}, err
-	}
-	if err := validateName(record.Name); err != nil {
-		return DentryRecord{}, err
-	}
-	if err := validateInodeID(record.Inode); err != nil {
 		return DentryRecord{}, err
 	}
 	return record, nil
@@ -125,19 +135,18 @@ func EncodeSessionValue(record SessionRecord) ([]byte, error) {
 	if err := validateInodeID(record.Inode); err != nil {
 		return nil, err
 	}
-	return encodeValue(ValueKindSession, record)
+	body := make([]byte, 0, binary.MaxVarintLen64+len(record.Session)+16)
+	body = binary.AppendUvarint(body, uint64(len(record.Session)))
+	body = append(body, string(record.Session)...)
+	body = binary.BigEndian.AppendUint64(body, uint64(record.Inode))
+	body = binary.BigEndian.AppendUint64(body, uint64(record.ExpiresUnixNs))
+	return encodeValue(ValueKindSession, body), nil
 }
 
 // DecodeSessionValue decodes a session record.
 func DecodeSessionValue(value []byte) (SessionRecord, error) {
 	var record SessionRecord
 	if err := decodeValue(value, ValueKindSession, &record); err != nil {
-		return SessionRecord{}, err
-	}
-	if err := validateSessionID(record.Session); err != nil {
-		return SessionRecord{}, err
-	}
-	if err := validateInodeID(record.Inode); err != nil {
 		return SessionRecord{}, err
 	}
 	return record, nil
@@ -161,17 +170,13 @@ func ValueKindOf(value []byte) (ValueKind, error) {
 	}
 }
 
-func encodeValue(kind ValueKind, record any) ([]byte, error) {
-	body, err := json.Marshal(record)
-	if err != nil {
-		return nil, err
-	}
+func encodeValue(kind ValueKind, body []byte) []byte {
 	out := make([]byte, 0, len(valueMagic)+2+len(body))
 	out = append(out, valueMagic...)
 	out = append(out, valueSchemaVersion)
 	out = append(out, byte(kind))
 	out = append(out, body...)
-	return out, nil
+	return out
 }
 
 func decodeValue(value []byte, expected ValueKind, out any) error {
@@ -186,10 +191,129 @@ func decodeValue(value []byte, expected ValueKind, out any) error {
 	if kind != expected {
 		return ErrInvalidValueKind
 	}
-	if err := json.Unmarshal(value[pos+1:], out); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidValue, err)
+	body := value[pos+1:]
+	switch expected {
+	case ValueKindInode:
+		record, ok := out.(*InodeRecord)
+		if !ok {
+			return ErrInvalidValue
+		}
+		decoded, err := decodeInodeBody(body)
+		if err != nil {
+			return err
+		}
+		*record = decoded
+	case ValueKindDentry:
+		record, ok := out.(*DentryRecord)
+		if !ok {
+			return ErrInvalidValue
+		}
+		decoded, err := decodeDentryBody(body)
+		if err != nil {
+			return err
+		}
+		*record = decoded
+	case ValueKindSession:
+		record, ok := out.(*SessionRecord)
+		if !ok {
+			return ErrInvalidValue
+		}
+		decoded, err := decodeSessionBody(body)
+		if err != nil {
+			return err
+		}
+		*record = decoded
+	default:
+		return ErrInvalidValueKind
 	}
 	return nil
+}
+
+func decodeInodeBody(body []byte) (InodeRecord, error) {
+	const size = 8 + 1 + 8 + 4 + 4 + 8 + 8
+	if len(body) != size {
+		return InodeRecord{}, ErrInvalidValue
+	}
+	record := InodeRecord{
+		Inode:         InodeID(binary.BigEndian.Uint64(body[:8])),
+		Size:          binary.BigEndian.Uint64(body[9:17]),
+		Mode:          binary.BigEndian.Uint32(body[17:21]),
+		LinkCount:     binary.BigEndian.Uint32(body[21:25]),
+		CreatedUnixNs: int64(binary.BigEndian.Uint64(body[25:33])),
+		UpdatedUnixNs: int64(binary.BigEndian.Uint64(body[33:41])),
+	}
+	typ, err := decodeInodeType(body[8])
+	if err != nil {
+		return InodeRecord{}, err
+	}
+	record.Type = typ
+	if err := validateInodeID(record.Inode); err != nil {
+		return InodeRecord{}, err
+	}
+	return record, nil
+}
+
+func decodeDentryBody(body []byte) (DentryRecord, error) {
+	if len(body) < 8+1+8+1 {
+		return DentryRecord{}, ErrInvalidValue
+	}
+	parent := InodeID(binary.BigEndian.Uint64(body[:8]))
+	pos := 8
+	nameLen, n := binary.Uvarint(body[pos:])
+	if n <= 0 {
+		return DentryRecord{}, ErrInvalidValue
+	}
+	pos += n
+	if nameLen == 0 || uint64(len(body)-pos) < nameLen+9 {
+		return DentryRecord{}, ErrInvalidValue
+	}
+	name := string(body[pos : pos+int(nameLen)])
+	pos += int(nameLen)
+	inode := InodeID(binary.BigEndian.Uint64(body[pos : pos+8]))
+	pos += 8
+	if pos != len(body)-1 {
+		return DentryRecord{}, ErrInvalidValue
+	}
+	typ, err := decodeInodeType(body[pos])
+	if err != nil {
+		return DentryRecord{}, err
+	}
+	record := DentryRecord{Parent: parent, Name: name, Inode: inode, Type: typ}
+	if err := validateInodeID(record.Parent); err != nil {
+		return DentryRecord{}, err
+	}
+	if err := validateName(record.Name); err != nil {
+		return DentryRecord{}, err
+	}
+	if err := validateInodeID(record.Inode); err != nil {
+		return DentryRecord{}, err
+	}
+	return record, nil
+}
+
+func decodeSessionBody(body []byte) (SessionRecord, error) {
+	sessionLen, n := binary.Uvarint(body)
+	if n <= 0 {
+		return SessionRecord{}, ErrInvalidValue
+	}
+	pos := n
+	if sessionLen == 0 || uint64(len(body)-pos) != sessionLen+16 {
+		return SessionRecord{}, ErrInvalidValue
+	}
+	session := SessionID(string(body[pos : pos+int(sessionLen)]))
+	pos += int(sessionLen)
+	record := SessionRecord{
+		Session:       session,
+		Inode:         InodeID(binary.BigEndian.Uint64(body[pos : pos+8])),
+		ExpiresUnixNs: int64(binary.BigEndian.Uint64(body[pos+8 : pos+16])),
+	}
+	if err := validateSessionID(record.Session); err != nil {
+		return SessionRecord{}, err
+	}
+	if err := validateInodeID(record.Inode); err != nil {
+		return SessionRecord{}, err
+	}
+	return record, nil
 }
 
 func decodeValueHeader(value []byte) (int, error) {
@@ -207,4 +331,30 @@ func decodeValueHeader(value []byte) (int, error) {
 	}
 	pos++
 	return pos, nil
+}
+
+func encodeInodeType(typ InodeType) (byte, error) {
+	switch typ {
+	case "":
+		return 0, nil
+	case InodeTypeFile:
+		return 1, nil
+	case InodeTypeDirectory:
+		return 2, nil
+	default:
+		return 0, ErrInvalidValue
+	}
+}
+
+func decodeInodeType(encoded byte) (InodeType, error) {
+	switch encoded {
+	case 0:
+		return "", nil
+	case 1:
+		return InodeTypeFile, nil
+	case 2:
+		return InodeTypeDirectory, nil
+	default:
+		return "", ErrInvalidValue
+	}
 }
