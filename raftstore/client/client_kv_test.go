@@ -237,7 +237,7 @@ func TestClientCheckTxnStatusRetriesOnNotLeader(t *testing.T) {
 	cli.mu.RUnlock()
 }
 
-func TestClientResolveRegionLocksReturnsKeyError(t *testing.T) {
+func TestClientResolveLocksReturnsKeyError(t *testing.T) {
 	cluster := newMockCluster(clusterRegion{
 		meta: &metapb.RegionDescriptor{
 			RegionId: 1,
@@ -272,11 +272,7 @@ func TestClientResolveRegionLocksReturnsKeyError(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = cli.Close() }()
 
-	cli.mu.Lock()
-	cli.upsertRegionLocked(metawire.DescriptorFromProto(cluster.regions[1].meta), 1)
-	cli.mu.Unlock()
-
-	_, err = cli.resolveRegionLocks(context.Background(), 1, 10, 11, [][]byte{[]byte("alfa")})
+	_, err = cli.ResolveLocks(context.Background(), 10, 11, [][]byte{[]byte("alfa")})
 	require.ErrorContains(t, err, "resolve lock key error")
 }
 
@@ -446,6 +442,69 @@ func TestClientTwoPhaseCommitResolvesSecondariesAfterSecondaryCommitFailure(t *t
 	require.Equal(t, []byte("v2"), committed.value)
 	require.Equal(t, uint64(41), committed.commitVersion)
 	require.Equal(t, 1, resolveHits)
+}
+
+func TestClientTwoPhaseCommitReportsSecondaryCommitAndResolveFailures(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("m"),
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+			},
+			leaderStore: 1,
+		},
+		clusterRegion{
+			meta: &metapb.RegionDescriptor{
+				RegionId: 2,
+				StartKey: []byte("m"),
+				EndKey:   nil,
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 201}},
+			},
+			leaderStore: 1,
+		},
+	)
+	svc := &scriptedKVService{mockService: mockService{storeID: 1, cluster: cluster}}
+	svc.commitFn = func(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
+		if req.GetContext().GetRegionId() == 2 {
+			return &kvrpcpb.KvCommitResponse{
+				Response: &kvrpcpb.CommitResponse{
+					Error: &kvrpcpb.KeyError{Abort: "secondary commit failed"},
+				},
+			}, nil
+		}
+		return svc.mockService.KvCommit(ctx, req)
+	}
+	svc.resolveLockFn = func(context.Context, *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
+		return &kvrpcpb.KvResolveLockResponse{
+			Response: &kvrpcpb.ResolveLockResponse{
+				Error: &kvrpcpb.KeyError{Abort: "resolve failed"},
+			},
+		}, nil
+	}
+	addr, stop := startBlockingStore(t, svc)
+	defer stop()
+
+	cli, err := New(Config{
+		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	err = cli.TwoPhaseCommit(context.Background(), []byte("alfa"), []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("omega"), Value: []byte("v2")},
+	}, 45, 46, 3000)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "secondary commit failed")
+	require.ErrorContains(t, err, "resolve committed secondaries")
+	require.ErrorContains(t, err, "resolve failed")
 }
 
 func TestClientTwoPhaseCommitReroutesAfterPrewriteEpochMismatch(t *testing.T) {

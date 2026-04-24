@@ -878,51 +878,6 @@ func (c *Client) resolveLocksByRoute(ctx context.Context, startVersion, commitVe
 	return resolved, fmt.Errorf("client: resolve lock retries exhausted")
 }
 
-func (c *Client) resolveRegionLocks(ctx context.Context, regionID uint64, startVersion, commitVersion uint64, keys [][]byte) (uint64, error) {
-	var lastErr error
-	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
-		region, ok := c.regionSnapshot(regionID)
-		if !ok {
-			return 0, fmt.Errorf("client: region %d missing for resolve", regionID)
-		}
-		resp, regionErr, err := c.resolveRegionLocksOnce(ctx, region, startVersion, commitVersion, keys)
-		if err != nil {
-			if isTransportUnavailable(err) {
-				lastErr = err
-				if err := c.waitRetry(ctx, attempt, retryTransportUnavailable); err != nil {
-					return 0, err
-				}
-				continue
-			}
-			return 0, err
-		}
-		if regionErr != nil {
-			lastErr = c.handleRegionError(regionID, regionErr)
-			if lastErr != nil {
-				return 0, lastErr
-			}
-			if err := c.waitRetry(ctx, attempt, retryRegionError); err != nil {
-				return 0, err
-			}
-			continue
-		}
-		if resp != nil {
-			if keyErr := resp.GetError(); keyErr != nil {
-				return 0, fmt.Errorf("client: resolve lock key error: %v", keyErr)
-			}
-			return resp.GetResolvedLocks(), nil
-		}
-		return 0, nil
-	}
-	if lastErr != nil {
-		return 0, lastErr
-	}
-	if err := ctx.Err(); err != nil {
-		return 0, err
-	}
-	return 0, fmt.Errorf("client: resolve lock retries exhausted for region %d", regionID)
-}
-
 func (c *Client) resolveRegionLocksOnce(ctx context.Context, region regionSnapshot, startVersion, commitVersion uint64, keys [][]byte) (*kvrpcpb.ResolveLockResponse, *errorpb.RegionError, error) {
 	cl, err := c.storeClient(ctx, region.leader)
 	if err != nil {
