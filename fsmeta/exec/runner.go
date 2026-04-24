@@ -164,6 +164,74 @@ func (e *Executor) ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fs
 	return out, nil
 }
 
+// Unlink removes one dentry. V0 intentionally leaves inode link-count and GC
+// outside this operation slice.
+func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
+	plan, err := fsmeta.PlanUnlink(req)
+	if err != nil {
+		return err
+	}
+	startVersion, commitVersion, err := e.reserveTxnVersions(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := e.readDentry(ctx, plan.PrimaryKey, startVersion); err != nil {
+		return err
+	}
+	mutations := []*kvrpcpb.Mutation{{
+		Op:  kvrpcpb.Mutation_Delete,
+		Key: cloneBytes(plan.MutateKeys[0]),
+	}}
+	if err := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
+		return translateMutateError(err)
+	}
+	return nil
+}
+
+// Rename moves one dentry from source to destination. V0 rejects destination
+// overwrite; POSIX replacement and type checks are intentionally deferred.
+func (e *Executor) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
+	plan, err := fsmeta.PlanRename(req)
+	if err != nil {
+		return err
+	}
+	startVersion, commitVersion, err := e.reserveTxnVersions(ctx)
+	if err != nil {
+		return err
+	}
+	record, err := e.readDentry(ctx, plan.ReadKeys[0], startVersion)
+	if err != nil {
+		return err
+	}
+	if _, err := e.readDentry(ctx, plan.ReadKeys[1], startVersion); err == nil {
+		return fsmeta.ErrExists
+	} else if !errors.Is(err, fsmeta.ErrNotFound) {
+		return err
+	}
+	record.Parent = req.ToParent
+	record.Name = req.ToName
+	value, err := fsmeta.EncodeDentryValue(record)
+	if err != nil {
+		return err
+	}
+	mutations := []*kvrpcpb.Mutation{
+		{
+			Op:  kvrpcpb.Mutation_Delete,
+			Key: cloneBytes(plan.MutateKeys[0]),
+		},
+		{
+			Op:                kvrpcpb.Mutation_Put,
+			Key:               cloneBytes(plan.MutateKeys[1]),
+			Value:             value,
+			AssertionNotExist: true,
+		},
+	}
+	if err := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
+		return translateMutateError(err)
+	}
+	return nil
+}
+
 func (e *Executor) reserveReadVersion(ctx context.Context) (uint64, error) {
 	return e.runner.ReserveTimestamp(ctx, 1)
 }
@@ -181,6 +249,17 @@ func cloneBytes(in []byte) []byte {
 		return nil
 	}
 	return append([]byte(nil), in...)
+}
+
+func (e *Executor) readDentry(ctx context.Context, key []byte, version uint64) (fsmeta.DentryRecord, error) {
+	value, ok, err := e.runner.Get(ctx, key, version)
+	if err != nil {
+		return fsmeta.DentryRecord{}, err
+	}
+	if !ok {
+		return fsmeta.DentryRecord{}, fsmeta.ErrNotFound
+	}
+	return fsmeta.DecodeDentryValue(value)
 }
 
 func translateMutateError(err error) error {
