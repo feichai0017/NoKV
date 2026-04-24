@@ -42,6 +42,8 @@ type clusterRegion struct {
 	committed    map[string]clusterValue
 	prewriteHits int
 	commitHits   int
+	rollbackHits int
+	resolveHits  int
 	getHits      int
 	scanHits     int
 }
@@ -266,6 +268,79 @@ func (mc *mockCluster) commit(storeID uint64, regionID uint64, req *kvrpcpb.Comm
 	return &kvrpcpb.CommitResponse{}, nil
 }
 
+func (mc *mockCluster) rollback(storeID uint64, regionID uint64, req *kvrpcpb.BatchRollbackRequest) (*kvrpcpb.BatchRollbackResponse, *errorpb.RegionError) {
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+	region, ok := mc.regions[regionID]
+	if !ok || region == nil {
+		atomic.AddInt32(&mc.notLeaderCount, 1)
+		return nil, epochNotMatch(mc.regions)
+	}
+	if storeID != region.leaderStore {
+		atomic.AddInt32(&mc.notLeaderCount, 1)
+		return nil, notLeaderError(region)
+	}
+	if req == nil {
+		return &kvrpcpb.BatchRollbackResponse{}, nil
+	}
+	pending := region.pending[req.GetStartVersion()]
+	for _, key := range req.GetKeys() {
+		if pending != nil {
+			delete(pending, string(key))
+		}
+	}
+	if len(pending) == 0 {
+		delete(region.pending, req.GetStartVersion())
+	}
+	region.rollbackHits++
+	return &kvrpcpb.BatchRollbackResponse{}, nil
+}
+
+func (mc *mockCluster) resolve(storeID uint64, regionID uint64, req *kvrpcpb.ResolveLockRequest) (*kvrpcpb.ResolveLockResponse, *errorpb.RegionError) {
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+	region, ok := mc.regions[regionID]
+	if !ok || region == nil {
+		atomic.AddInt32(&mc.notLeaderCount, 1)
+		return nil, epochNotMatch(mc.regions)
+	}
+	if storeID != region.leaderStore {
+		atomic.AddInt32(&mc.notLeaderCount, 1)
+		return nil, notLeaderError(region)
+	}
+	if req == nil {
+		return &kvrpcpb.ResolveLockResponse{}, nil
+	}
+	pending := region.pending[req.GetStartVersion()]
+	var resolved uint64
+	for _, key := range req.GetKeys() {
+		pend, ok := pending[string(key)]
+		if !ok {
+			continue
+		}
+		if req.GetCommitVersion() == 0 {
+			delete(pending, string(key))
+			resolved++
+			continue
+		}
+		if pend.delete {
+			delete(region.committed, string(key))
+		} else {
+			region.committed[string(key)] = clusterValue{
+				value:         append([]byte(nil), pend.value...),
+				commitVersion: req.GetCommitVersion(),
+			}
+		}
+		delete(pending, string(key))
+		resolved++
+	}
+	if len(pending) == 0 {
+		delete(region.pending, req.GetStartVersion())
+	}
+	region.resolveHits++
+	return &kvrpcpb.ResolveLockResponse{ResolvedLocks: resolved}, nil
+}
+
 func (mc *mockCluster) get(storeID uint64, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
 	ctx := req.GetContext()
 	if ctx == nil {
@@ -450,12 +525,26 @@ func (s *mockService) KvCommit(ctx context.Context, req *kvrpcpb.KvCommitRequest
 	}, nil
 }
 
-func (s *mockService) KvBatchRollback(context.Context, *kvrpcpb.KvBatchRollbackRequest) (*kvrpcpb.KvBatchRollbackResponse, error) {
-	return &kvrpcpb.KvBatchRollbackResponse{}, nil
+func (s *mockService) KvBatchRollback(ctx context.Context, req *kvrpcpb.KvBatchRollbackRequest) (*kvrpcpb.KvBatchRollbackResponse, error) {
+	if req == nil || req.GetContext() == nil {
+		return nil, statusInvalidArgument("context required")
+	}
+	resp, regionErr := s.cluster.rollback(s.storeID, req.GetContext().GetRegionId(), req.GetRequest())
+	return &kvrpcpb.KvBatchRollbackResponse{
+		Response:    resp,
+		RegionError: regionErr,
+	}, nil
 }
 
-func (s *mockService) KvResolveLock(context.Context, *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
-	return &kvrpcpb.KvResolveLockResponse{}, nil
+func (s *mockService) KvResolveLock(ctx context.Context, req *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
+	if req == nil || req.GetContext() == nil {
+		return nil, statusInvalidArgument("context required")
+	}
+	resp, regionErr := s.cluster.resolve(s.storeID, req.GetContext().GetRegionId(), req.GetRequest())
+	return &kvrpcpb.KvResolveLockResponse{
+		Response:    resp,
+		RegionError: regionErr,
+	}, nil
 }
 
 func (s *mockService) KvCheckTxnStatus(context.Context, *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error) {
