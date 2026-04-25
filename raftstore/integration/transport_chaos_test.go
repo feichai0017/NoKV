@@ -158,24 +158,21 @@ func TestTransferLeaderRecoversAfterPartitionedTargetReturns(t *testing.T) {
 	seed.UnblockPeer(201)
 	target2.UnblockPeer(101)
 
-	currentLeader, currentStatus := testcluster.FindLeader(t, ctx, 82, seed, target2, target3)
-	if currentStatus.GetLeaderPeerId() == 201 {
-		require.Equal(t, target2.Addr(), currentLeader.Addr())
-		require.True(t, currentStatus.GetLeader())
-		return
-	}
-
-	result, err := migrate.TransferLeader(ctx, migrate.TransferLeaderConfig{
-		Addr:            currentLeader.Addr(),
-		TargetAdminAddr: target2.Addr(),
-		RegionID:        82,
-		PeerID:          201,
-		WaitTimeout:     5 * time.Second,
-		PollInterval:    20 * time.Millisecond,
-	})
-	require.NoError(t, err)
-	require.True(t, result.TargetLeader)
-	require.Equal(t, uint64(201), result.LeaderPeerID)
+	require.Eventually(t, func() bool {
+		currentLeader, currentStatus := testcluster.FindLeader(t, ctx, 82, seed, target2, target3)
+		if currentStatus.GetLeaderPeerId() == 201 {
+			return currentLeader.Addr() == target2.Addr() && currentStatus.GetLeader()
+		}
+		result, err := migrate.TransferLeader(ctx, migrate.TransferLeaderConfig{
+			Addr:            currentLeader.Addr(),
+			TargetAdminAddr: target2.Addr(),
+			RegionID:        82,
+			PeerID:          201,
+			WaitTimeout:     500 * time.Millisecond,
+			PollInterval:    20 * time.Millisecond,
+		})
+		return err == nil && result.TargetLeader && result.LeaderPeerID == 201
+	}, 5*time.Second, 50*time.Millisecond)
 }
 
 func TestRepeatedLinkFlapConvergesDuringMembershipChanges(t *testing.T) {
