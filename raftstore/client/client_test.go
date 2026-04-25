@@ -1957,7 +1957,7 @@ func TestClientPutHonorsCanceledContextDuringRPC(t *testing.T) {
 	}
 }
 
-func TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRouteLookup(t *testing.T) {
+func TestClientTwoPhaseCommitHonorsCanceledContextDuringRouteLookup(t *testing.T) {
 	metaA := &metapb.RegionDescriptor{
 		RegionId: 1,
 		StartKey: []byte("a"),
@@ -1974,7 +1974,7 @@ func TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRouteLookup(t
 	}
 	resolver := &keyedBlockingResolver{
 		started:     make(chan struct{}, 1),
-		blockedKeys: map[string]struct{}{"omega": {}},
+		blockedKeys: map[string]struct{}{"alfa": {}},
 		regions:     []*metapb.RegionDescriptor{metaA, metaB},
 	}
 	cli, err := New(Config{
@@ -2001,7 +2001,7 @@ func TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRouteLookup(t
 	select {
 	case <-resolver.started:
 	case <-time.After(time.Second):
-		t.Fatal("resolver was not invoked for second region")
+		t.Fatal("resolver was not invoked for primary route")
 	}
 	cancel()
 

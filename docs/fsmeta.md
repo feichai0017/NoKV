@@ -115,7 +115,7 @@ docker run --rm --network nokv_default \
   -v "$PWD":/workspace \
   -w /workspace/benchmark \
   -e NOKV_FSMETA_BENCH=1 \
-  golang:1.26 \
+  golang:1.26.2-bookworm \
   go test ./fsmeta -run TestBenchmarkFSMeta -count=1 -timeout 30m -v -args \
     -fsmeta_drivers native-fsmeta,generic-kv \
     -fsmeta_mount "fsmeta-formal-${RUN_TS}" \

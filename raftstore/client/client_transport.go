@@ -67,7 +67,7 @@ func (c *Client) storeClient(ctx context.Context, storeID uint64) (kvrpcpb.NoKVC
 	c.invalidateStore(storeID, st)
 	refreshed, refreshErr := c.storeConn(ctx, storeID)
 	if refreshErr != nil {
-		return nil, fmt.Errorf("%w; refresh store %d: %v", err, storeID, refreshErr)
+		return nil, fmt.Errorf("client: store %d: %w; refresh: %w", storeID, err, refreshErr)
 	}
 	return refreshed.clientFor(ctx)
 }
