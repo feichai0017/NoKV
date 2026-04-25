@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/feichai0017/NoKV/fsmeta"
@@ -144,11 +145,19 @@ func (s *Service) WatchSubtree(stream fsmetapb.FSMetadata_WatchSubtreeServer) er
 	if subscribe == nil {
 		return status.Error(codes.InvalidArgument, "fsmeta watch first message must subscribe")
 	}
-	sub, err := s.watcher.Subscribe(stream.Context(), watchRequestFromProto(subscribe))
+	watchReq := watchRequestFromProto(subscribe)
+	sub, err := s.watcher.Subscribe(stream.Context(), watchReq)
 	if err != nil {
 		return rpcError(err)
 	}
 	defer sub.Close()
+	if err := stream.Send(&fsmetapb.WatchSubtreeResponse{
+		Payload: &fsmetapb.WatchSubtreeResponse_Ready{
+			Ready: &fsmetapb.WatchReady{Cursor: watchCursorToProto(watchReq.ResumeCursor)},
+		},
+	}); err != nil {
+		return rpcStreamError(err)
+	}
 
 	recvErr := make(chan error, 1)
 	go func() {
@@ -199,6 +208,9 @@ func (s *Service) SnapshotSubtree(ctx context.Context, req *fsmetapb.SnapshotSub
 	}
 	if s.snapshot != nil {
 		if err := s.snapshot.PublishSnapshotSubtree(ctx, token); err != nil {
+			if retireErr := s.snapshot.RetireSnapshotSubtree(ctx, token); retireErr != nil {
+				return nil, rpcError(errors.Join(err, fmt.Errorf("retire snapshot epoch after publish failure: %w", retireErr)))
+			}
 			return nil, rpcError(err)
 		}
 	}

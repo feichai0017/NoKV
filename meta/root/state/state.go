@@ -272,7 +272,7 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		applyLegacyToState(state, cursor, event)
 	case rootevent.KindHandover:
 		applyHandoverToState(state, cursor, event)
-	case rootevent.KindSnapshotEpochPublished:
+	case rootevent.KindSnapshotEpochPublished, rootevent.KindSnapshotEpochRetired:
 		// Snapshot epochs are rooted retention/audit claims. They advance the
 		// root cursor but intentionally do not mutate cluster or membership
 		// epochs.

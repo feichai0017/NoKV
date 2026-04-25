@@ -33,6 +33,8 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 		applyStoreRetiredToSnapshot(snapshot, cursor, event)
 	case rootevent.KindSnapshotEpochPublished:
 		applySnapshotEpochPublishedToSnapshot(snapshot, cursor, event)
+	case rootevent.KindSnapshotEpochRetired:
+		applySnapshotEpochRetiredToSnapshot(snapshot, event)
 	case rootevent.KindIDAllocatorFenced:
 		if event.AllocatorFence != nil && event.AllocatorFence.Minimum > snapshot.State.IDFence {
 			snapshot.State.IDFence = event.AllocatorFence.Minimum
@@ -85,6 +87,24 @@ func applySnapshotEpochPublishedToSnapshot(snapshot *Snapshot, cursor Cursor, ev
 		return
 	}
 	snapshot.SnapshotEpochs[epoch.SnapshotID] = epoch
+}
+
+func applySnapshotEpochRetiredToSnapshot(snapshot *Snapshot, event rootevent.Event) {
+	if snapshot == nil || event.SnapshotEpoch == nil {
+		return
+	}
+	id := event.SnapshotEpoch.SnapshotID
+	if id == "" {
+		id = rootevent.SnapshotEpochID(
+			event.SnapshotEpoch.Mount,
+			event.SnapshotEpoch.RootInode,
+			event.SnapshotEpoch.ReadVersion,
+		)
+	}
+	if id == "" {
+		return
+	}
+	delete(snapshot.SnapshotEpochs, id)
 }
 
 func applyStoreJoinedToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Event) {

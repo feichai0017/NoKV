@@ -268,6 +268,7 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.TenureSealed("coord", 7, rootproto.MandateAllocID, frontiers),
 		rootevent.HandoverClosed("coord", 7, 8, "seal"),
 		rootevent.SnapshotEpochPublished("vol", 42, 99),
+		rootevent.SnapshotEpochRetired("vol", 42, 99),
 		rootevent.RegionDescriptorPublished(desc),
 		rootevent.RegionTombstoned(desc.RegionID),
 		rootevent.RegionSplitCancelled(desc.RegionID, []byte("f"), left, right, base),
@@ -323,6 +324,7 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.KindLegacy,
 		rootevent.KindHandover,
 		rootevent.KindSnapshotEpochPublished,
+		rootevent.KindSnapshotEpochRetired,
 	}
 	for _, kind := range kinds {
 		require.Equal(t, kind, rootEventKindFromProto(rootEventKindToProto(kind)))

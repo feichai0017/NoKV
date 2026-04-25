@@ -6,6 +6,7 @@ import (
 )
 
 var ErrWatchOverflow = errors.New("fsmeta: watch backlog overflow")
+var ErrWatchCursorExpired = errors.New("fsmeta: watch cursor expired")
 
 // WatchEventSource identifies the raftstore command source that made a key
 // visible to MVCC readers.
@@ -58,6 +59,7 @@ type Watcher interface {
 // layer such as meta/root. Implementations must not store per-dentry data.
 type SnapshotPublisher interface {
 	PublishSnapshotSubtree(context.Context, SnapshotSubtreeToken) error
+	RetireSnapshotSubtree(context.Context, SnapshotSubtreeToken) error
 }
 
 // SnapshotPublisherFunc adapts a function into SnapshotPublisher.
@@ -68,6 +70,10 @@ func (f SnapshotPublisherFunc) PublishSnapshotSubtree(ctx context.Context, token
 		return nil
 	}
 	return f(ctx, token)
+}
+
+func (f SnapshotPublisherFunc) RetireSnapshotSubtree(context.Context, SnapshotSubtreeToken) error {
+	return nil
 }
 
 // WatchPrefix returns the byte prefix a WatchRequest should match.
