@@ -17,10 +17,7 @@ benchmark/eunomia/results/
 
 build/
 book/
-docs/research/*
-!docs/research/
-!docs/research/control-plane-paper-draft.zh.md
-!docs/research/eunomia-protocol.zh.md
+docs/research/
 
 cpu.pprof
 mem.pprof
