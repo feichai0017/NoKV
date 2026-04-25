@@ -24,22 +24,18 @@ Stage 1 已经把 client bootstrap 从静态 store list 收敛到 coordinator en
 
 ## 2. 当前状态
 
-代码里已经有 rooted membership 的雏形：
+Stage 2.1 已经把 rooted membership 从雏形推进到执行路径：
 
-- `meta/root/event/types.go` 里有 `KindStoreJoined` / `KindStoreLeft`。
-- `meta/root/state.State` 有 `MembershipEpoch`。
-- `ApplyEventToSnapshot` 遇到 store join / leave 会推进 `MembershipEpoch`。
-- `meta/wire/root.go` 已经能编码 `RootStoreMembership`。
+- `meta/root/event/types.go` 里有 `KindStoreJoined` / `KindStoreRetired`。
+- `rootstate.Snapshot` 持有 `Stores map[uint64]StoreMembership`。
+- `ApplyEventToSnapshot` 遇到 store join / retire 会推进 `MembershipEpoch` 并 materialize compact membership state。
+- `meta/wire/root.go` 能编码 root event payload 和 checkpoint 里的 store membership compact state。
+- `coordinator/rootview` bootstrap 会把 rooted store membership materialize 到 `coordinator/catalog.Cluster`。
+- `coordinator/catalog.Cluster.UpsertStoreHeartbeat` 只接受 rooted active store；unknown / retired store 会被拒绝。
+- `coordinator/server.GetStore/ListStores` 返回 membership + heartbeat 组合出来的 store state。
+- `StoreState_TOMBSTONE` 由 rooted retired membership 驱动。
 
-但这个雏形还没变成真正的 store membership truth：
-
-- `rootstate.Snapshot` 里没有 `Stores` map。
-- `coordinator/rootview` bootstrap 不会把 rooted store membership materialize 到 `coordinator/catalog.Cluster`。
-- `coordinator/catalog.Cluster.UpsertStoreHeartbeat` 仍然把 heartbeat 当作注册来源。
-- `coordinator/server.GetStore/ListStores` 返回的是 runtime heartbeat view，不区分"已注册但离线"和"从未加入"。
-- `StoreState_TOMBSTONE` 还没有 rooted source。
-
-所以 Stage 1 的说法是准确的：store registry 已经从静态 config 进入 coordinator，但还没有进入 rooted truth。
+因此 Stage 2.1 的边界已经收紧：store registry 不再由 heartbeat 隐式创建；heartbeat 只是刷新已注册 store 的 runtime view。
 
 ## 3. 为什么不能把地址也写进 `meta/root`
 
@@ -73,10 +69,11 @@ Stage 2.1 使用两个 lifecycle event：
 | `StoreJoined(store_id)` | 该 store ID 成为集群成员。 |
 | `StoreRetired(store_id)` | 该 store ID 被显式下线，不再接受 heartbeat 注册。 |
 
-当前代码里的 `StoreJoined(storeID, address)` 和 `StoreLeft(storeID, address)` 需要收紧：
+rooted membership payload 必须保持精简：
 
-- `address` 从 rooted membership payload 中移除，或者只保留为 debug note，不参与 truth。
-- `StoreLeft` 命名应改成 `StoreRetired`。`left` 像瞬时离线，`retired` 才表示 membership lifecycle 结束。
+- `StoreJoined(storeID)` 只声明成员资格。
+- `StoreRetired(storeID)` 只声明成员生命周期结束。
+- `address` 不进入 root event；client / raft 地址只来自 heartbeat runtime view。
 
 目标 compact state：
 
@@ -113,9 +110,10 @@ Coordinator 启动时应该从 rooted snapshot 恢复 membership，再等待 hea
 
 | 状态 | 条件 | `GetStore` 行为 |
 |---|---|---|
-| `UNKNOWN` | store 不在 rooted membership 里 | `not_found=true` |
+| `not_found` | store 不在 rooted membership 里 | `not_found=true` |
+| `UNKNOWN` | rooted active，但还没有 heartbeat | 返回 store，state=`UNKNOWN`，client 不 dial |
 | `UP` | rooted active + heartbeat 未过 TTL | 返回 `client_addr` |
-| `DOWN` | rooted active + 无 heartbeat 或 heartbeat 过 TTL | 返回 store，state=`DOWN`，client 不 dial |
+| `DOWN` | rooted active + heartbeat 过 TTL | 返回 store，state=`DOWN`，client 不 dial |
 | `TOMBSTONE` | rooted retired | 返回 store，state=`TOMBSTONE`，client 不 retry |
 
 这个设计把 "never joined" 和 "known but currently down" 分开。Stage 1 只能靠 heartbeat view 推断，Stage 2 可以给出明确语义。
@@ -185,7 +183,7 @@ Stage 2.1 必须覆盖：
 
 ## 10. 实施顺序
 
-1. 改 `meta/root/event`：引入 `StoreRetired` 命名，收紧 payload。
+1. 改 `meta/root/event`：使用 `StoreJoined(storeID)` / `StoreRetired(storeID)` 精简 payload。
 2. 改 `rootstate.Snapshot`：增加 `Stores map[uint64]StoreMembership`。
 3. 改 materialization / wire / tests：join / retire 进入 compact snapshot。
 4. 改 `coordinator/rootview`：bootstrap 时把 rooted membership 装入 `catalog.Cluster`。
@@ -214,4 +212,3 @@ Stage 2.1 完成时，系统应该满足：
 3. retired store 发 heartbeat 会被拒绝，并在 `ListStores` 中显示为 tombstone。
 4. fsmeta / redis / raftstore client 仍然只依赖 coordinator endpoint。
 5. `meta/root` 仍然只保存 membership truth，不保存 runtime endpoint。
-
