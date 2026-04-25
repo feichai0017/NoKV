@@ -170,6 +170,55 @@ func (CheckTxnStatusAction) EnumDescriptor() ([]byte, []int) {
 	return file_kv_kv_proto_rawDescGZIP(), []int{2}
 }
 
+type ApplyWatchEventSource int32
+
+const (
+	ApplyWatchEventSource_APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED  ApplyWatchEventSource = 0
+	ApplyWatchEventSource_APPLY_WATCH_EVENT_SOURCE_COMMIT       ApplyWatchEventSource = 1
+	ApplyWatchEventSource_APPLY_WATCH_EVENT_SOURCE_RESOLVE_LOCK ApplyWatchEventSource = 2
+)
+
+// Enum value maps for ApplyWatchEventSource.
+var (
+	ApplyWatchEventSource_name = map[int32]string{
+		0: "APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED",
+		1: "APPLY_WATCH_EVENT_SOURCE_COMMIT",
+		2: "APPLY_WATCH_EVENT_SOURCE_RESOLVE_LOCK",
+	}
+	ApplyWatchEventSource_value = map[string]int32{
+		"APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED":  0,
+		"APPLY_WATCH_EVENT_SOURCE_COMMIT":       1,
+		"APPLY_WATCH_EVENT_SOURCE_RESOLVE_LOCK": 2,
+	}
+)
+
+func (x ApplyWatchEventSource) Enum() *ApplyWatchEventSource {
+	p := new(ApplyWatchEventSource)
+	*p = x
+	return p
+}
+
+func (x ApplyWatchEventSource) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ApplyWatchEventSource) Descriptor() protoreflect.EnumDescriptor {
+	return file_kv_kv_proto_enumTypes[3].Descriptor()
+}
+
+func (ApplyWatchEventSource) Type() protoreflect.EnumType {
+	return &file_kv_kv_proto_enumTypes[3]
+}
+
+func (x ApplyWatchEventSource) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ApplyWatchEventSource.Descriptor instead.
+func (ApplyWatchEventSource) EnumDescriptor() ([]byte, []int) {
+	return file_kv_kv_proto_rawDescGZIP(), []int{3}
+}
+
 type Mutation_Op int32
 
 const (
@@ -206,11 +255,11 @@ func (x Mutation_Op) String() string {
 }
 
 func (Mutation_Op) Descriptor() protoreflect.EnumDescriptor {
-	return file_kv_kv_proto_enumTypes[3].Descriptor()
+	return file_kv_kv_proto_enumTypes[4].Descriptor()
 }
 
 func (Mutation_Op) Type() protoreflect.EnumType {
-	return &file_kv_kv_proto_enumTypes[3]
+	return &file_kv_kv_proto_enumTypes[4]
 }
 
 func (x Mutation_Op) Number() protoreflect.EnumNumber {
@@ -2290,6 +2339,194 @@ func (x *KvCheckTxnStatusResponse) GetRegionError() *error1.RegionError {
 	return nil
 }
 
+type ApplyWatchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	KeyPrefix     []byte                 `protobuf:"bytes,1,opt,name=key_prefix,json=keyPrefix,proto3" json:"key_prefix,omitempty"`
+	Buffer        uint32                 `protobuf:"varint,2,opt,name=buffer,proto3" json:"buffer,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApplyWatchRequest) Reset() {
+	*x = ApplyWatchRequest{}
+	mi := &file_kv_kv_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplyWatchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplyWatchRequest) ProtoMessage() {}
+
+func (x *ApplyWatchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kv_kv_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplyWatchRequest.ProtoReflect.Descriptor instead.
+func (*ApplyWatchRequest) Descriptor() ([]byte, []int) {
+	return file_kv_kv_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *ApplyWatchRequest) GetKeyPrefix() []byte {
+	if x != nil {
+		return x.KeyPrefix
+	}
+	return nil
+}
+
+func (x *ApplyWatchRequest) GetBuffer() uint32 {
+	if x != nil {
+		return x.Buffer
+	}
+	return 0
+}
+
+type ApplyWatchEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	Term          uint64                 `protobuf:"varint,2,opt,name=term,proto3" json:"term,omitempty"`
+	Index         uint64                 `protobuf:"varint,3,opt,name=index,proto3" json:"index,omitempty"`
+	Source        ApplyWatchEventSource  `protobuf:"varint,4,opt,name=source,proto3,enum=nokv.kv.v1.ApplyWatchEventSource" json:"source,omitempty"`
+	CommitVersion uint64                 `protobuf:"varint,5,opt,name=commit_version,json=commitVersion,proto3" json:"commit_version,omitempty"`
+	Keys          [][]byte               `protobuf:"bytes,6,rep,name=keys,proto3" json:"keys,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApplyWatchEvent) Reset() {
+	*x = ApplyWatchEvent{}
+	mi := &file_kv_kv_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplyWatchEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplyWatchEvent) ProtoMessage() {}
+
+func (x *ApplyWatchEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_kv_kv_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplyWatchEvent.ProtoReflect.Descriptor instead.
+func (*ApplyWatchEvent) Descriptor() ([]byte, []int) {
+	return file_kv_kv_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *ApplyWatchEvent) GetRegionId() uint64 {
+	if x != nil {
+		return x.RegionId
+	}
+	return 0
+}
+
+func (x *ApplyWatchEvent) GetTerm() uint64 {
+	if x != nil {
+		return x.Term
+	}
+	return 0
+}
+
+func (x *ApplyWatchEvent) GetIndex() uint64 {
+	if x != nil {
+		return x.Index
+	}
+	return 0
+}
+
+func (x *ApplyWatchEvent) GetSource() ApplyWatchEventSource {
+	if x != nil {
+		return x.Source
+	}
+	return ApplyWatchEventSource_APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED
+}
+
+func (x *ApplyWatchEvent) GetCommitVersion() uint64 {
+	if x != nil {
+		return x.CommitVersion
+	}
+	return 0
+}
+
+func (x *ApplyWatchEvent) GetKeys() [][]byte {
+	if x != nil {
+		return x.Keys
+	}
+	return nil
+}
+
+type ApplyWatchResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Event         *ApplyWatchEvent       `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
+	DroppedEvents uint64                 `protobuf:"varint,2,opt,name=dropped_events,json=droppedEvents,proto3" json:"dropped_events,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApplyWatchResponse) Reset() {
+	*x = ApplyWatchResponse{}
+	mi := &file_kv_kv_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplyWatchResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplyWatchResponse) ProtoMessage() {}
+
+func (x *ApplyWatchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kv_kv_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplyWatchResponse.ProtoReflect.Descriptor instead.
+func (*ApplyWatchResponse) Descriptor() ([]byte, []int) {
+	return file_kv_kv_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *ApplyWatchResponse) GetEvent() *ApplyWatchEvent {
+	if x != nil {
+		return x.Event
+	}
+	return nil
+}
+
+func (x *ApplyWatchResponse) GetDroppedEvents() uint64 {
+	if x != nil {
+		return x.DroppedEvents
+	}
+	return 0
+}
+
 type KeyError struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Locked          *Locked                `protobuf:"bytes,1,opt,name=locked,proto3" json:"locked,omitempty"`
@@ -2304,7 +2541,7 @@ type KeyError struct {
 
 func (x *KeyError) Reset() {
 	*x = KeyError{}
-	mi := &file_kv_kv_proto_msgTypes[36]
+	mi := &file_kv_kv_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2316,7 +2553,7 @@ func (x *KeyError) String() string {
 func (*KeyError) ProtoMessage() {}
 
 func (x *KeyError) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[36]
+	mi := &file_kv_kv_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2329,7 +2566,7 @@ func (x *KeyError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyError.ProtoReflect.Descriptor instead.
 func (*KeyError) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{36}
+	return file_kv_kv_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *KeyError) GetLocked() *Locked {
@@ -2388,7 +2625,7 @@ type Locked struct {
 
 func (x *Locked) Reset() {
 	*x = Locked{}
-	mi := &file_kv_kv_proto_msgTypes[37]
+	mi := &file_kv_kv_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2400,7 +2637,7 @@ func (x *Locked) String() string {
 func (*Locked) ProtoMessage() {}
 
 func (x *Locked) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[37]
+	mi := &file_kv_kv_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2413,7 +2650,7 @@ func (x *Locked) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Locked.ProtoReflect.Descriptor instead.
 func (*Locked) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{37}
+	return file_kv_kv_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *Locked) GetPrimaryLock() []byte {
@@ -2471,7 +2708,7 @@ type WriteConflict struct {
 
 func (x *WriteConflict) Reset() {
 	*x = WriteConflict{}
-	mi := &file_kv_kv_proto_msgTypes[38]
+	mi := &file_kv_kv_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2483,7 +2720,7 @@ func (x *WriteConflict) String() string {
 func (*WriteConflict) ProtoMessage() {}
 
 func (x *WriteConflict) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[38]
+	mi := &file_kv_kv_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2496,7 +2733,7 @@ func (x *WriteConflict) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteConflict.ProtoReflect.Descriptor instead.
 func (*WriteConflict) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{38}
+	return file_kv_kv_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *WriteConflict) GetKey() []byte {
@@ -2543,7 +2780,7 @@ type KeyAlreadyExists struct {
 
 func (x *KeyAlreadyExists) Reset() {
 	*x = KeyAlreadyExists{}
-	mi := &file_kv_kv_proto_msgTypes[39]
+	mi := &file_kv_kv_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2555,7 +2792,7 @@ func (x *KeyAlreadyExists) String() string {
 func (*KeyAlreadyExists) ProtoMessage() {}
 
 func (x *KeyAlreadyExists) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[39]
+	mi := &file_kv_kv_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2568,7 +2805,7 @@ func (x *KeyAlreadyExists) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyAlreadyExists.ProtoReflect.Descriptor instead.
 func (*KeyAlreadyExists) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{39}
+	return file_kv_kv_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *KeyAlreadyExists) GetKey() []byte {
@@ -2589,7 +2826,7 @@ type CommitTsExpired struct {
 
 func (x *CommitTsExpired) Reset() {
 	*x = CommitTsExpired{}
-	mi := &file_kv_kv_proto_msgTypes[40]
+	mi := &file_kv_kv_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2601,7 +2838,7 @@ func (x *CommitTsExpired) String() string {
 func (*CommitTsExpired) ProtoMessage() {}
 
 func (x *CommitTsExpired) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[40]
+	mi := &file_kv_kv_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2614,7 +2851,7 @@ func (x *CommitTsExpired) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitTsExpired.ProtoReflect.Descriptor instead.
 func (*CommitTsExpired) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{40}
+	return file_kv_kv_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *CommitTsExpired) GetKey() []byte {
@@ -2788,7 +3025,21 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\arequest\x18\x02 \x01(\v2!.nokv.kv.v1.CheckTxnStatusRequestR\arequest\"\x99\x01\n" +
 	"\x18KvCheckTxnStatusResponse\x12>\n" +
 	"\bresponse\x18\x01 \x01(\v2\".nokv.kv.v1.CheckTxnStatusResponseR\bresponse\x12=\n" +
-	"\fregion_error\x18\x02 \x01(\v2\x1a.nokv.error.v1.RegionErrorR\vregionError\"\xba\x02\n" +
+	"\fregion_error\x18\x02 \x01(\v2\x1a.nokv.error.v1.RegionErrorR\vregionError\"J\n" +
+	"\x11ApplyWatchRequest\x12\x1d\n" +
+	"\n" +
+	"key_prefix\x18\x01 \x01(\fR\tkeyPrefix\x12\x16\n" +
+	"\x06buffer\x18\x02 \x01(\rR\x06buffer\"\xce\x01\n" +
+	"\x0fApplyWatchEvent\x12\x1b\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12\x12\n" +
+	"\x04term\x18\x02 \x01(\x04R\x04term\x12\x14\n" +
+	"\x05index\x18\x03 \x01(\x04R\x05index\x129\n" +
+	"\x06source\x18\x04 \x01(\x0e2!.nokv.kv.v1.ApplyWatchEventSourceR\x06source\x12%\n" +
+	"\x0ecommit_version\x18\x05 \x01(\x04R\rcommitVersion\x12\x12\n" +
+	"\x04keys\x18\x06 \x03(\fR\x04keys\"n\n" +
+	"\x12ApplyWatchResponse\x121\n" +
+	"\x05event\x18\x01 \x01(\v2\x1b.nokv.kv.v1.ApplyWatchEventR\x05event\x12%\n" +
+	"\x0edropped_events\x18\x02 \x01(\x04R\rdroppedEvents\"\xba\x02\n" +
 	"\bKeyError\x12*\n" +
 	"\x06locked\x18\x01 \x01(\v2\x12.nokv.kv.v1.LockedR\x06locked\x12@\n" +
 	"\x0ewrite_conflict\x18\x02 \x01(\v2\x19.nokv.kv.v1.WriteConflictR\rwriteConflict\x12C\n" +
@@ -2826,7 +3077,11 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x16CheckTxnStatusNoAction\x10\x00\x12#\n" +
 	"\x1fCheckTxnStatusTTLExpireRollback\x10\x01\x12&\n" +
 	"\"CheckTxnStatusLockNotExistRollback\x10\x02\x12#\n" +
-	"\x1fCheckTxnStatusMinCommitTsPushed\x10\x032\xf7\x04\n" +
+	"\x1fCheckTxnStatusMinCommitTsPushed\x10\x03*\x91\x01\n" +
+	"\x15ApplyWatchEventSource\x12(\n" +
+	"$APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED\x10\x00\x12#\n" +
+	"\x1fAPPLY_WATCH_EVENT_SOURCE_COMMIT\x10\x01\x12)\n" +
+	"%APPLY_WATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x022\xc8\x05\n" +
 	"\x04NoKV\x12<\n" +
 	"\x05KvGet\x12\x18.nokv.kv.v1.KvGetRequest\x1a\x19.nokv.kv.v1.KvGetResponse\x12K\n" +
 	"\n" +
@@ -2837,7 +3092,8 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\bKvCommit\x12\x1b.nokv.kv.v1.KvCommitRequest\x1a\x1c.nokv.kv.v1.KvCommitResponse\x12Z\n" +
 	"\x0fKvBatchRollback\x12\".nokv.kv.v1.KvBatchRollbackRequest\x1a#.nokv.kv.v1.KvBatchRollbackResponse\x12T\n" +
 	"\rKvResolveLock\x12 .nokv.kv.v1.KvResolveLockRequest\x1a!.nokv.kv.v1.KvResolveLockResponse\x12]\n" +
-	"\x10KvCheckTxnStatus\x12#.nokv.kv.v1.KvCheckTxnStatusRequest\x1a$.nokv.kv.v1.KvCheckTxnStatusResponseB+Z)github.com/feichai0017/NoKV/pb/kv;kvrpcpbb\x06proto3"
+	"\x10KvCheckTxnStatus\x12#.nokv.kv.v1.KvCheckTxnStatusRequest\x1a$.nokv.kv.v1.KvCheckTxnStatusResponse\x12O\n" +
+	"\fKvWatchApply\x12\x1d.nokv.kv.v1.ApplyWatchRequest\x1a\x1e.nokv.kv.v1.ApplyWatchResponse0\x01B+Z)github.com/feichai0017/NoKV/pb/kv;kvrpcpbb\x06proto3"
 
 var (
 	file_kv_kv_proto_rawDescOnce sync.Once
@@ -2851,135 +3107,143 @@ func file_kv_kv_proto_rawDescGZIP() []byte {
 	return file_kv_kv_proto_rawDescData
 }
 
-var file_kv_kv_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_kv_kv_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
+var file_kv_kv_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_kv_kv_proto_msgTypes = make([]protoimpl.MessageInfo, 44)
 var file_kv_kv_proto_goTypes = []any{
 	(ReadConsistency)(0),             // 0: nokv.kv.v1.ReadConsistency
 	(ReadPreference)(0),              // 1: nokv.kv.v1.ReadPreference
 	(CheckTxnStatusAction)(0),        // 2: nokv.kv.v1.CheckTxnStatusAction
-	(Mutation_Op)(0),                 // 3: nokv.kv.v1.Mutation.Op
-	(*KV)(nil),                       // 4: nokv.kv.v1.KV
-	(*KVList)(nil),                   // 5: nokv.kv.v1.KVList
-	(*GetRequest)(nil),               // 6: nokv.kv.v1.GetRequest
-	(*GetResponse)(nil),              // 7: nokv.kv.v1.GetResponse
-	(*BatchGetRequest)(nil),          // 8: nokv.kv.v1.BatchGetRequest
-	(*BatchGetResponse)(nil),         // 9: nokv.kv.v1.BatchGetResponse
-	(*ScanRequest)(nil),              // 10: nokv.kv.v1.ScanRequest
-	(*ScanResponse)(nil),             // 11: nokv.kv.v1.ScanResponse
-	(*Mutation)(nil),                 // 12: nokv.kv.v1.Mutation
-	(*PrewriteRequest)(nil),          // 13: nokv.kv.v1.PrewriteRequest
-	(*PrewriteResponse)(nil),         // 14: nokv.kv.v1.PrewriteResponse
-	(*CommitRequest)(nil),            // 15: nokv.kv.v1.CommitRequest
-	(*CommitResponse)(nil),           // 16: nokv.kv.v1.CommitResponse
-	(*BatchRollbackRequest)(nil),     // 17: nokv.kv.v1.BatchRollbackRequest
-	(*BatchRollbackResponse)(nil),    // 18: nokv.kv.v1.BatchRollbackResponse
-	(*ResolveLockRequest)(nil),       // 19: nokv.kv.v1.ResolveLockRequest
-	(*ResolveLockResponse)(nil),      // 20: nokv.kv.v1.ResolveLockResponse
-	(*CheckTxnStatusRequest)(nil),    // 21: nokv.kv.v1.CheckTxnStatusRequest
-	(*CheckTxnStatusResponse)(nil),   // 22: nokv.kv.v1.CheckTxnStatusResponse
-	(*Context)(nil),                  // 23: nokv.kv.v1.Context
-	(*KvGetRequest)(nil),             // 24: nokv.kv.v1.KvGetRequest
-	(*KvGetResponse)(nil),            // 25: nokv.kv.v1.KvGetResponse
-	(*KvBatchGetRequest)(nil),        // 26: nokv.kv.v1.KvBatchGetRequest
-	(*KvBatchGetResponse)(nil),       // 27: nokv.kv.v1.KvBatchGetResponse
-	(*KvScanRequest)(nil),            // 28: nokv.kv.v1.KvScanRequest
-	(*KvScanResponse)(nil),           // 29: nokv.kv.v1.KvScanResponse
-	(*KvPrewriteRequest)(nil),        // 30: nokv.kv.v1.KvPrewriteRequest
-	(*KvPrewriteResponse)(nil),       // 31: nokv.kv.v1.KvPrewriteResponse
-	(*KvCommitRequest)(nil),          // 32: nokv.kv.v1.KvCommitRequest
-	(*KvCommitResponse)(nil),         // 33: nokv.kv.v1.KvCommitResponse
-	(*KvBatchRollbackRequest)(nil),   // 34: nokv.kv.v1.KvBatchRollbackRequest
-	(*KvBatchRollbackResponse)(nil),  // 35: nokv.kv.v1.KvBatchRollbackResponse
-	(*KvResolveLockRequest)(nil),     // 36: nokv.kv.v1.KvResolveLockRequest
-	(*KvResolveLockResponse)(nil),    // 37: nokv.kv.v1.KvResolveLockResponse
-	(*KvCheckTxnStatusRequest)(nil),  // 38: nokv.kv.v1.KvCheckTxnStatusRequest
-	(*KvCheckTxnStatusResponse)(nil), // 39: nokv.kv.v1.KvCheckTxnStatusResponse
-	(*KeyError)(nil),                 // 40: nokv.kv.v1.KeyError
-	(*Locked)(nil),                   // 41: nokv.kv.v1.Locked
-	(*WriteConflict)(nil),            // 42: nokv.kv.v1.WriteConflict
-	(*KeyAlreadyExists)(nil),         // 43: nokv.kv.v1.KeyAlreadyExists
-	(*CommitTsExpired)(nil),          // 44: nokv.kv.v1.CommitTsExpired
-	(*meta.RegionEpoch)(nil),         // 45: nokv.meta.v1.RegionEpoch
-	(*meta.RegionPeer)(nil),          // 46: nokv.meta.v1.RegionPeer
-	(*error1.RegionError)(nil),       // 47: nokv.error.v1.RegionError
+	(ApplyWatchEventSource)(0),       // 3: nokv.kv.v1.ApplyWatchEventSource
+	(Mutation_Op)(0),                 // 4: nokv.kv.v1.Mutation.Op
+	(*KV)(nil),                       // 5: nokv.kv.v1.KV
+	(*KVList)(nil),                   // 6: nokv.kv.v1.KVList
+	(*GetRequest)(nil),               // 7: nokv.kv.v1.GetRequest
+	(*GetResponse)(nil),              // 8: nokv.kv.v1.GetResponse
+	(*BatchGetRequest)(nil),          // 9: nokv.kv.v1.BatchGetRequest
+	(*BatchGetResponse)(nil),         // 10: nokv.kv.v1.BatchGetResponse
+	(*ScanRequest)(nil),              // 11: nokv.kv.v1.ScanRequest
+	(*ScanResponse)(nil),             // 12: nokv.kv.v1.ScanResponse
+	(*Mutation)(nil),                 // 13: nokv.kv.v1.Mutation
+	(*PrewriteRequest)(nil),          // 14: nokv.kv.v1.PrewriteRequest
+	(*PrewriteResponse)(nil),         // 15: nokv.kv.v1.PrewriteResponse
+	(*CommitRequest)(nil),            // 16: nokv.kv.v1.CommitRequest
+	(*CommitResponse)(nil),           // 17: nokv.kv.v1.CommitResponse
+	(*BatchRollbackRequest)(nil),     // 18: nokv.kv.v1.BatchRollbackRequest
+	(*BatchRollbackResponse)(nil),    // 19: nokv.kv.v1.BatchRollbackResponse
+	(*ResolveLockRequest)(nil),       // 20: nokv.kv.v1.ResolveLockRequest
+	(*ResolveLockResponse)(nil),      // 21: nokv.kv.v1.ResolveLockResponse
+	(*CheckTxnStatusRequest)(nil),    // 22: nokv.kv.v1.CheckTxnStatusRequest
+	(*CheckTxnStatusResponse)(nil),   // 23: nokv.kv.v1.CheckTxnStatusResponse
+	(*Context)(nil),                  // 24: nokv.kv.v1.Context
+	(*KvGetRequest)(nil),             // 25: nokv.kv.v1.KvGetRequest
+	(*KvGetResponse)(nil),            // 26: nokv.kv.v1.KvGetResponse
+	(*KvBatchGetRequest)(nil),        // 27: nokv.kv.v1.KvBatchGetRequest
+	(*KvBatchGetResponse)(nil),       // 28: nokv.kv.v1.KvBatchGetResponse
+	(*KvScanRequest)(nil),            // 29: nokv.kv.v1.KvScanRequest
+	(*KvScanResponse)(nil),           // 30: nokv.kv.v1.KvScanResponse
+	(*KvPrewriteRequest)(nil),        // 31: nokv.kv.v1.KvPrewriteRequest
+	(*KvPrewriteResponse)(nil),       // 32: nokv.kv.v1.KvPrewriteResponse
+	(*KvCommitRequest)(nil),          // 33: nokv.kv.v1.KvCommitRequest
+	(*KvCommitResponse)(nil),         // 34: nokv.kv.v1.KvCommitResponse
+	(*KvBatchRollbackRequest)(nil),   // 35: nokv.kv.v1.KvBatchRollbackRequest
+	(*KvBatchRollbackResponse)(nil),  // 36: nokv.kv.v1.KvBatchRollbackResponse
+	(*KvResolveLockRequest)(nil),     // 37: nokv.kv.v1.KvResolveLockRequest
+	(*KvResolveLockResponse)(nil),    // 38: nokv.kv.v1.KvResolveLockResponse
+	(*KvCheckTxnStatusRequest)(nil),  // 39: nokv.kv.v1.KvCheckTxnStatusRequest
+	(*KvCheckTxnStatusResponse)(nil), // 40: nokv.kv.v1.KvCheckTxnStatusResponse
+	(*ApplyWatchRequest)(nil),        // 41: nokv.kv.v1.ApplyWatchRequest
+	(*ApplyWatchEvent)(nil),          // 42: nokv.kv.v1.ApplyWatchEvent
+	(*ApplyWatchResponse)(nil),       // 43: nokv.kv.v1.ApplyWatchResponse
+	(*KeyError)(nil),                 // 44: nokv.kv.v1.KeyError
+	(*Locked)(nil),                   // 45: nokv.kv.v1.Locked
+	(*WriteConflict)(nil),            // 46: nokv.kv.v1.WriteConflict
+	(*KeyAlreadyExists)(nil),         // 47: nokv.kv.v1.KeyAlreadyExists
+	(*CommitTsExpired)(nil),          // 48: nokv.kv.v1.CommitTsExpired
+	(*meta.RegionEpoch)(nil),         // 49: nokv.meta.v1.RegionEpoch
+	(*meta.RegionPeer)(nil),          // 50: nokv.meta.v1.RegionPeer
+	(*error1.RegionError)(nil),       // 51: nokv.error.v1.RegionError
 }
 var file_kv_kv_proto_depIdxs = []int32{
-	4,  // 0: nokv.kv.v1.KVList.kv:type_name -> nokv.kv.v1.KV
-	40, // 1: nokv.kv.v1.GetResponse.error:type_name -> nokv.kv.v1.KeyError
-	6,  // 2: nokv.kv.v1.BatchGetRequest.requests:type_name -> nokv.kv.v1.GetRequest
-	7,  // 3: nokv.kv.v1.BatchGetResponse.responses:type_name -> nokv.kv.v1.GetResponse
-	4,  // 4: nokv.kv.v1.ScanResponse.kvs:type_name -> nokv.kv.v1.KV
-	40, // 5: nokv.kv.v1.ScanResponse.error:type_name -> nokv.kv.v1.KeyError
-	3,  // 6: nokv.kv.v1.Mutation.op:type_name -> nokv.kv.v1.Mutation.Op
-	12, // 7: nokv.kv.v1.PrewriteRequest.mutations:type_name -> nokv.kv.v1.Mutation
-	40, // 8: nokv.kv.v1.PrewriteResponse.errors:type_name -> nokv.kv.v1.KeyError
-	40, // 9: nokv.kv.v1.CommitResponse.error:type_name -> nokv.kv.v1.KeyError
-	40, // 10: nokv.kv.v1.BatchRollbackResponse.error:type_name -> nokv.kv.v1.KeyError
-	40, // 11: nokv.kv.v1.ResolveLockResponse.error:type_name -> nokv.kv.v1.KeyError
-	40, // 12: nokv.kv.v1.CheckTxnStatusResponse.error:type_name -> nokv.kv.v1.KeyError
+	5,  // 0: nokv.kv.v1.KVList.kv:type_name -> nokv.kv.v1.KV
+	44, // 1: nokv.kv.v1.GetResponse.error:type_name -> nokv.kv.v1.KeyError
+	7,  // 2: nokv.kv.v1.BatchGetRequest.requests:type_name -> nokv.kv.v1.GetRequest
+	8,  // 3: nokv.kv.v1.BatchGetResponse.responses:type_name -> nokv.kv.v1.GetResponse
+	5,  // 4: nokv.kv.v1.ScanResponse.kvs:type_name -> nokv.kv.v1.KV
+	44, // 5: nokv.kv.v1.ScanResponse.error:type_name -> nokv.kv.v1.KeyError
+	4,  // 6: nokv.kv.v1.Mutation.op:type_name -> nokv.kv.v1.Mutation.Op
+	13, // 7: nokv.kv.v1.PrewriteRequest.mutations:type_name -> nokv.kv.v1.Mutation
+	44, // 8: nokv.kv.v1.PrewriteResponse.errors:type_name -> nokv.kv.v1.KeyError
+	44, // 9: nokv.kv.v1.CommitResponse.error:type_name -> nokv.kv.v1.KeyError
+	44, // 10: nokv.kv.v1.BatchRollbackResponse.error:type_name -> nokv.kv.v1.KeyError
+	44, // 11: nokv.kv.v1.ResolveLockResponse.error:type_name -> nokv.kv.v1.KeyError
+	44, // 12: nokv.kv.v1.CheckTxnStatusResponse.error:type_name -> nokv.kv.v1.KeyError
 	2,  // 13: nokv.kv.v1.CheckTxnStatusResponse.action:type_name -> nokv.kv.v1.CheckTxnStatusAction
-	45, // 14: nokv.kv.v1.Context.region_epoch:type_name -> nokv.meta.v1.RegionEpoch
-	46, // 15: nokv.kv.v1.Context.peer:type_name -> nokv.meta.v1.RegionPeer
+	49, // 14: nokv.kv.v1.Context.region_epoch:type_name -> nokv.meta.v1.RegionEpoch
+	50, // 15: nokv.kv.v1.Context.peer:type_name -> nokv.meta.v1.RegionPeer
 	0,  // 16: nokv.kv.v1.Context.read_consistency:type_name -> nokv.kv.v1.ReadConsistency
 	1,  // 17: nokv.kv.v1.Context.read_preference:type_name -> nokv.kv.v1.ReadPreference
-	23, // 18: nokv.kv.v1.KvGetRequest.context:type_name -> nokv.kv.v1.Context
-	6,  // 19: nokv.kv.v1.KvGetRequest.request:type_name -> nokv.kv.v1.GetRequest
-	7,  // 20: nokv.kv.v1.KvGetResponse.response:type_name -> nokv.kv.v1.GetResponse
-	47, // 21: nokv.kv.v1.KvGetResponse.region_error:type_name -> nokv.error.v1.RegionError
-	23, // 22: nokv.kv.v1.KvBatchGetRequest.context:type_name -> nokv.kv.v1.Context
-	8,  // 23: nokv.kv.v1.KvBatchGetRequest.request:type_name -> nokv.kv.v1.BatchGetRequest
-	9,  // 24: nokv.kv.v1.KvBatchGetResponse.response:type_name -> nokv.kv.v1.BatchGetResponse
-	47, // 25: nokv.kv.v1.KvBatchGetResponse.region_error:type_name -> nokv.error.v1.RegionError
-	23, // 26: nokv.kv.v1.KvScanRequest.context:type_name -> nokv.kv.v1.Context
-	10, // 27: nokv.kv.v1.KvScanRequest.request:type_name -> nokv.kv.v1.ScanRequest
-	11, // 28: nokv.kv.v1.KvScanResponse.response:type_name -> nokv.kv.v1.ScanResponse
-	47, // 29: nokv.kv.v1.KvScanResponse.region_error:type_name -> nokv.error.v1.RegionError
-	23, // 30: nokv.kv.v1.KvPrewriteRequest.context:type_name -> nokv.kv.v1.Context
-	13, // 31: nokv.kv.v1.KvPrewriteRequest.request:type_name -> nokv.kv.v1.PrewriteRequest
-	14, // 32: nokv.kv.v1.KvPrewriteResponse.response:type_name -> nokv.kv.v1.PrewriteResponse
-	47, // 33: nokv.kv.v1.KvPrewriteResponse.region_error:type_name -> nokv.error.v1.RegionError
-	23, // 34: nokv.kv.v1.KvCommitRequest.context:type_name -> nokv.kv.v1.Context
-	15, // 35: nokv.kv.v1.KvCommitRequest.request:type_name -> nokv.kv.v1.CommitRequest
-	16, // 36: nokv.kv.v1.KvCommitResponse.response:type_name -> nokv.kv.v1.CommitResponse
-	47, // 37: nokv.kv.v1.KvCommitResponse.region_error:type_name -> nokv.error.v1.RegionError
-	23, // 38: nokv.kv.v1.KvBatchRollbackRequest.context:type_name -> nokv.kv.v1.Context
-	17, // 39: nokv.kv.v1.KvBatchRollbackRequest.request:type_name -> nokv.kv.v1.BatchRollbackRequest
-	18, // 40: nokv.kv.v1.KvBatchRollbackResponse.response:type_name -> nokv.kv.v1.BatchRollbackResponse
-	47, // 41: nokv.kv.v1.KvBatchRollbackResponse.region_error:type_name -> nokv.error.v1.RegionError
-	23, // 42: nokv.kv.v1.KvResolveLockRequest.context:type_name -> nokv.kv.v1.Context
-	19, // 43: nokv.kv.v1.KvResolveLockRequest.request:type_name -> nokv.kv.v1.ResolveLockRequest
-	20, // 44: nokv.kv.v1.KvResolveLockResponse.response:type_name -> nokv.kv.v1.ResolveLockResponse
-	47, // 45: nokv.kv.v1.KvResolveLockResponse.region_error:type_name -> nokv.error.v1.RegionError
-	23, // 46: nokv.kv.v1.KvCheckTxnStatusRequest.context:type_name -> nokv.kv.v1.Context
-	21, // 47: nokv.kv.v1.KvCheckTxnStatusRequest.request:type_name -> nokv.kv.v1.CheckTxnStatusRequest
-	22, // 48: nokv.kv.v1.KvCheckTxnStatusResponse.response:type_name -> nokv.kv.v1.CheckTxnStatusResponse
-	47, // 49: nokv.kv.v1.KvCheckTxnStatusResponse.region_error:type_name -> nokv.error.v1.RegionError
-	41, // 50: nokv.kv.v1.KeyError.locked:type_name -> nokv.kv.v1.Locked
-	42, // 51: nokv.kv.v1.KeyError.write_conflict:type_name -> nokv.kv.v1.WriteConflict
-	43, // 52: nokv.kv.v1.KeyError.already_exists:type_name -> nokv.kv.v1.KeyAlreadyExists
-	44, // 53: nokv.kv.v1.KeyError.commit_ts_expired:type_name -> nokv.kv.v1.CommitTsExpired
-	3,  // 54: nokv.kv.v1.Locked.lock_type:type_name -> nokv.kv.v1.Mutation.Op
-	24, // 55: nokv.kv.v1.NoKV.KvGet:input_type -> nokv.kv.v1.KvGetRequest
-	26, // 56: nokv.kv.v1.NoKV.KvBatchGet:input_type -> nokv.kv.v1.KvBatchGetRequest
-	28, // 57: nokv.kv.v1.NoKV.KvScan:input_type -> nokv.kv.v1.KvScanRequest
-	30, // 58: nokv.kv.v1.NoKV.KvPrewrite:input_type -> nokv.kv.v1.KvPrewriteRequest
-	32, // 59: nokv.kv.v1.NoKV.KvCommit:input_type -> nokv.kv.v1.KvCommitRequest
-	34, // 60: nokv.kv.v1.NoKV.KvBatchRollback:input_type -> nokv.kv.v1.KvBatchRollbackRequest
-	36, // 61: nokv.kv.v1.NoKV.KvResolveLock:input_type -> nokv.kv.v1.KvResolveLockRequest
-	38, // 62: nokv.kv.v1.NoKV.KvCheckTxnStatus:input_type -> nokv.kv.v1.KvCheckTxnStatusRequest
-	25, // 63: nokv.kv.v1.NoKV.KvGet:output_type -> nokv.kv.v1.KvGetResponse
-	27, // 64: nokv.kv.v1.NoKV.KvBatchGet:output_type -> nokv.kv.v1.KvBatchGetResponse
-	29, // 65: nokv.kv.v1.NoKV.KvScan:output_type -> nokv.kv.v1.KvScanResponse
-	31, // 66: nokv.kv.v1.NoKV.KvPrewrite:output_type -> nokv.kv.v1.KvPrewriteResponse
-	33, // 67: nokv.kv.v1.NoKV.KvCommit:output_type -> nokv.kv.v1.KvCommitResponse
-	35, // 68: nokv.kv.v1.NoKV.KvBatchRollback:output_type -> nokv.kv.v1.KvBatchRollbackResponse
-	37, // 69: nokv.kv.v1.NoKV.KvResolveLock:output_type -> nokv.kv.v1.KvResolveLockResponse
-	39, // 70: nokv.kv.v1.NoKV.KvCheckTxnStatus:output_type -> nokv.kv.v1.KvCheckTxnStatusResponse
-	63, // [63:71] is the sub-list for method output_type
-	55, // [55:63] is the sub-list for method input_type
-	55, // [55:55] is the sub-list for extension type_name
-	55, // [55:55] is the sub-list for extension extendee
-	0,  // [0:55] is the sub-list for field type_name
+	24, // 18: nokv.kv.v1.KvGetRequest.context:type_name -> nokv.kv.v1.Context
+	7,  // 19: nokv.kv.v1.KvGetRequest.request:type_name -> nokv.kv.v1.GetRequest
+	8,  // 20: nokv.kv.v1.KvGetResponse.response:type_name -> nokv.kv.v1.GetResponse
+	51, // 21: nokv.kv.v1.KvGetResponse.region_error:type_name -> nokv.error.v1.RegionError
+	24, // 22: nokv.kv.v1.KvBatchGetRequest.context:type_name -> nokv.kv.v1.Context
+	9,  // 23: nokv.kv.v1.KvBatchGetRequest.request:type_name -> nokv.kv.v1.BatchGetRequest
+	10, // 24: nokv.kv.v1.KvBatchGetResponse.response:type_name -> nokv.kv.v1.BatchGetResponse
+	51, // 25: nokv.kv.v1.KvBatchGetResponse.region_error:type_name -> nokv.error.v1.RegionError
+	24, // 26: nokv.kv.v1.KvScanRequest.context:type_name -> nokv.kv.v1.Context
+	11, // 27: nokv.kv.v1.KvScanRequest.request:type_name -> nokv.kv.v1.ScanRequest
+	12, // 28: nokv.kv.v1.KvScanResponse.response:type_name -> nokv.kv.v1.ScanResponse
+	51, // 29: nokv.kv.v1.KvScanResponse.region_error:type_name -> nokv.error.v1.RegionError
+	24, // 30: nokv.kv.v1.KvPrewriteRequest.context:type_name -> nokv.kv.v1.Context
+	14, // 31: nokv.kv.v1.KvPrewriteRequest.request:type_name -> nokv.kv.v1.PrewriteRequest
+	15, // 32: nokv.kv.v1.KvPrewriteResponse.response:type_name -> nokv.kv.v1.PrewriteResponse
+	51, // 33: nokv.kv.v1.KvPrewriteResponse.region_error:type_name -> nokv.error.v1.RegionError
+	24, // 34: nokv.kv.v1.KvCommitRequest.context:type_name -> nokv.kv.v1.Context
+	16, // 35: nokv.kv.v1.KvCommitRequest.request:type_name -> nokv.kv.v1.CommitRequest
+	17, // 36: nokv.kv.v1.KvCommitResponse.response:type_name -> nokv.kv.v1.CommitResponse
+	51, // 37: nokv.kv.v1.KvCommitResponse.region_error:type_name -> nokv.error.v1.RegionError
+	24, // 38: nokv.kv.v1.KvBatchRollbackRequest.context:type_name -> nokv.kv.v1.Context
+	18, // 39: nokv.kv.v1.KvBatchRollbackRequest.request:type_name -> nokv.kv.v1.BatchRollbackRequest
+	19, // 40: nokv.kv.v1.KvBatchRollbackResponse.response:type_name -> nokv.kv.v1.BatchRollbackResponse
+	51, // 41: nokv.kv.v1.KvBatchRollbackResponse.region_error:type_name -> nokv.error.v1.RegionError
+	24, // 42: nokv.kv.v1.KvResolveLockRequest.context:type_name -> nokv.kv.v1.Context
+	20, // 43: nokv.kv.v1.KvResolveLockRequest.request:type_name -> nokv.kv.v1.ResolveLockRequest
+	21, // 44: nokv.kv.v1.KvResolveLockResponse.response:type_name -> nokv.kv.v1.ResolveLockResponse
+	51, // 45: nokv.kv.v1.KvResolveLockResponse.region_error:type_name -> nokv.error.v1.RegionError
+	24, // 46: nokv.kv.v1.KvCheckTxnStatusRequest.context:type_name -> nokv.kv.v1.Context
+	22, // 47: nokv.kv.v1.KvCheckTxnStatusRequest.request:type_name -> nokv.kv.v1.CheckTxnStatusRequest
+	23, // 48: nokv.kv.v1.KvCheckTxnStatusResponse.response:type_name -> nokv.kv.v1.CheckTxnStatusResponse
+	51, // 49: nokv.kv.v1.KvCheckTxnStatusResponse.region_error:type_name -> nokv.error.v1.RegionError
+	3,  // 50: nokv.kv.v1.ApplyWatchEvent.source:type_name -> nokv.kv.v1.ApplyWatchEventSource
+	42, // 51: nokv.kv.v1.ApplyWatchResponse.event:type_name -> nokv.kv.v1.ApplyWatchEvent
+	45, // 52: nokv.kv.v1.KeyError.locked:type_name -> nokv.kv.v1.Locked
+	46, // 53: nokv.kv.v1.KeyError.write_conflict:type_name -> nokv.kv.v1.WriteConflict
+	47, // 54: nokv.kv.v1.KeyError.already_exists:type_name -> nokv.kv.v1.KeyAlreadyExists
+	48, // 55: nokv.kv.v1.KeyError.commit_ts_expired:type_name -> nokv.kv.v1.CommitTsExpired
+	4,  // 56: nokv.kv.v1.Locked.lock_type:type_name -> nokv.kv.v1.Mutation.Op
+	25, // 57: nokv.kv.v1.NoKV.KvGet:input_type -> nokv.kv.v1.KvGetRequest
+	27, // 58: nokv.kv.v1.NoKV.KvBatchGet:input_type -> nokv.kv.v1.KvBatchGetRequest
+	29, // 59: nokv.kv.v1.NoKV.KvScan:input_type -> nokv.kv.v1.KvScanRequest
+	31, // 60: nokv.kv.v1.NoKV.KvPrewrite:input_type -> nokv.kv.v1.KvPrewriteRequest
+	33, // 61: nokv.kv.v1.NoKV.KvCommit:input_type -> nokv.kv.v1.KvCommitRequest
+	35, // 62: nokv.kv.v1.NoKV.KvBatchRollback:input_type -> nokv.kv.v1.KvBatchRollbackRequest
+	37, // 63: nokv.kv.v1.NoKV.KvResolveLock:input_type -> nokv.kv.v1.KvResolveLockRequest
+	39, // 64: nokv.kv.v1.NoKV.KvCheckTxnStatus:input_type -> nokv.kv.v1.KvCheckTxnStatusRequest
+	41, // 65: nokv.kv.v1.NoKV.KvWatchApply:input_type -> nokv.kv.v1.ApplyWatchRequest
+	26, // 66: nokv.kv.v1.NoKV.KvGet:output_type -> nokv.kv.v1.KvGetResponse
+	28, // 67: nokv.kv.v1.NoKV.KvBatchGet:output_type -> nokv.kv.v1.KvBatchGetResponse
+	30, // 68: nokv.kv.v1.NoKV.KvScan:output_type -> nokv.kv.v1.KvScanResponse
+	32, // 69: nokv.kv.v1.NoKV.KvPrewrite:output_type -> nokv.kv.v1.KvPrewriteResponse
+	34, // 70: nokv.kv.v1.NoKV.KvCommit:output_type -> nokv.kv.v1.KvCommitResponse
+	36, // 71: nokv.kv.v1.NoKV.KvBatchRollback:output_type -> nokv.kv.v1.KvBatchRollbackResponse
+	38, // 72: nokv.kv.v1.NoKV.KvResolveLock:output_type -> nokv.kv.v1.KvResolveLockResponse
+	40, // 73: nokv.kv.v1.NoKV.KvCheckTxnStatus:output_type -> nokv.kv.v1.KvCheckTxnStatusResponse
+	43, // 74: nokv.kv.v1.NoKV.KvWatchApply:output_type -> nokv.kv.v1.ApplyWatchResponse
+	66, // [66:75] is the sub-list for method output_type
+	57, // [57:66] is the sub-list for method input_type
+	57, // [57:57] is the sub-list for extension type_name
+	57, // [57:57] is the sub-list for extension extendee
+	0,  // [0:57] is the sub-list for field type_name
 }
 
 func init() { file_kv_kv_proto_init() }
@@ -2992,8 +3256,8 @@ func file_kv_kv_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kv_kv_proto_rawDesc), len(file_kv_kv_proto_rawDesc)),
-			NumEnums:      4,
-			NumMessages:   41,
+			NumEnums:      5,
+			NumMessages:   44,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaserver "github.com/feichai0017/NoKV/fsmeta/server"
@@ -116,12 +117,78 @@ func TestTypedClientPreservesUnknownStatus(t *testing.T) {
 	require.Equal(t, codes.Internal, status.Code(err))
 }
 
-func openBufconnClient(t *testing.T, executor fsmetaserver.Executor) (*GRPCClient, func()) {
+func TestTypedClientWatchSubtree(t *testing.T) {
+	watcher := &fakeWatcher{sub: newFakeWatchSub(1)}
+	cli, cleanup := openBufconnClient(t, &fakeExecutor{}, fsmetaserver.WithWatcher(watcher))
+	defer cleanup()
+
+	stream, err := cli.WatchSubtree(context.Background(), fsmeta.WatchRequest{
+		KeyPrefix:          []byte("fsm/"),
+		BackPressureWindow: 4,
+	})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		return string(watcher.req.KeyPrefix) == "fsm/" && watcher.req.BackPressureWindow == 4
+	}, time.Second, 10*time.Millisecond)
+	evt := fsmeta.WatchEvent{
+		Cursor:        fsmeta.WatchCursor{RegionID: 8, Term: 1, Index: 2},
+		CommitVersion: 90,
+		Source:        fsmeta.WatchEventSourceResolveLock,
+		Key:           []byte("fsm/checkpoint"),
+	}
+	watcher.sub.events <- evt
+	got, err := stream.Recv()
+	require.NoError(t, err)
+	require.Equal(t, evt, got)
+	require.NoError(t, stream.Ack(got.Cursor))
+	require.Eventually(t, func() bool {
+		return len(watcher.sub.acks) == 1 && watcher.sub.acks[0] == evt.Cursor
+	}, time.Second, 10*time.Millisecond)
+	require.NoError(t, stream.Close())
+}
+
+type fakeWatcher struct {
+	req fsmeta.WatchRequest
+	sub *fakeWatchSub
+}
+
+func (w *fakeWatcher) Subscribe(_ context.Context, req fsmeta.WatchRequest) (fsmeta.WatchSubscription, error) {
+	w.req = req
+	return w.sub, nil
+}
+
+type fakeWatchSub struct {
+	events chan fsmeta.WatchEvent
+	acks   []fsmeta.WatchCursor
+}
+
+func newFakeWatchSub(buffer int) *fakeWatchSub {
+	return &fakeWatchSub{events: make(chan fsmeta.WatchEvent, buffer)}
+}
+
+func (s *fakeWatchSub) Events() <-chan fsmeta.WatchEvent {
+	return s.events
+}
+
+func (s *fakeWatchSub) Ack(cursor fsmeta.WatchCursor) {
+	s.acks = append(s.acks, cursor)
+}
+
+func (s *fakeWatchSub) Close() {
+	close(s.events)
+}
+
+func (s *fakeWatchSub) Err() error {
+	return nil
+}
+
+func openBufconnClient(t *testing.T, executor fsmetaserver.Executor, opts ...fsmetaserver.Option) (*GRPCClient, func()) {
 	t.Helper()
 	const bufSize = 1 << 20
 	listener := bufconn.Listen(bufSize)
 	grpcServer := grpc.NewServer()
-	fsmetaserver.Register(grpcServer, executor)
+	fsmetaserver.Register(grpcServer, executor, opts...)
 	go func() {
 		_ = grpcServer.Serve(listener)
 	}()

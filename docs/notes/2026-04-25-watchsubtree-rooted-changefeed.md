@@ -241,7 +241,7 @@ dispatcher 在 fsmeta/exec 层、不在 raftstore——**保持 raftstore 不感
 
 `fsmeta/server` 的 `WatchSubtree` handler：
 - 接收 `subscribe` 消息 → 在 WatchRouter 注册 subscriber（按 mount+prefix 计算 fsmeta key prefix）
-- catch-up 阶段：从 resume_cursor 开始重放历史（v0 用 raft log + apply observer 二选一，详见 §5）
+- v0 live 阶段：从订阅建立后开始推送新事件；`resume_cursor` 先作为 wire 预留字段，详见 §5
 - live 阶段：逐事件 send，遵守 back-pressure
 - 接收 `ack` 消息 → 转发给 router 释放 budget
 - 客户端断连 → 注销 subscriber，丢弃 buffered 事件
@@ -252,13 +252,16 @@ dispatcher 在 fsmeta/exec 层、不在 raftstore——**保持 raftstore 不感
 
 **问题**：客户端用 `resume_cursor` 重连，要求服务端把"从该 cursor 之后到 live 现在"的事件流给它。raftstore apply observer 是流式的，不保留历史。
 
-两条策略：
-- **A（v0 选）**：raft log 内置已 retained。`raftstore/raftlog` 里已有 raft log + truncation；`fsmeta/exec/watch` 在 catch-up 时直接读 raft entries（按 region 收到的 cursor 范围），decode 后 emit。**前提**：log 还没被 truncate。如果 cursor < truncation point → 返回 `FailedPrecondition` 让客户端 reset 状态。
-- **B（v1）**：单独的 cdc-style log，独立 retention。学术上更干净但工程量大。**Stage 2.2 不做。**
+v0 明确选择 **live-only**：
+- `resume_cursor` 进入 wire contract，但服务端不 replay 历史。
+- `WatchCatchupComplete` 作为兼容字段保留，v0 不发送。
+- 客户端重连后如果需要修复本地 cache，必须主动 `ReadDirPlus` / LIST 重新拉一页，再重新订阅 live stream。
 
-`WatchCatchupComplete` 表示 server 已 catch up 到 `live cursor`（最新 raft commit 时点），后面纯流式。
+两条后续策略：
+- **A（Stage 2.2-E / optional）**：raft log retained 时直接读 raft entries，从 `resume_cursor` 到 live cursor decode 后 emit。前提是 cursor 没被 truncate；否则返回 `FailedPrecondition`。
+- **B（Stage 3）**：单独的 cdc-style log，独立 retention。学术上更干净，但工程量更大。
 
-**FS / 对象存储 视角差异**：FS 客户端会用 catch-up 把 metadata cache 同步到当前；OS gateway 用 catch-up 重放 ETL trigger。两侧对 catch-up 缺失处理策略不同：FS 要 fallback 到 readdir 重新拉；OS 要重新 LIST 重 ingest。**这两个策略都在 client 侧实现**，server 只负责诚实告诉它"cursor 已截断"。
+**FS / 对象存储 视角差异**：FS 客户端在 v0 断流后 fallback 到 readdir / ReadDirPlus 重新拉；OS gateway fallback 到 LIST 重新 ingest。catch-up 做进 server 之前，这两个修复策略都在客户端侧实现。
 
 ## 6. Back-pressure 协议
 
@@ -296,7 +299,7 @@ dispatcher 在 fsmeta/exec 层、不在 raftstore——**保持 raftstore 不感
 |---|---|---|
 | raftstore peer 切主 | `Unavailable` | router 把订阅迁到新 leader region；客户端 reconnect 透明（cursor 不变） |
 | region 分裂 / 合并 | `Unavailable` 或 `FailedPrecondition` | v0：关流让客户端 reconnect；v1：路由到新 region |
-| log truncated 超过 resume_cursor | `FailedPrecondition: cursor truncated` | 客户端必须重新 LIST / readdir |
+| 需要历史 catch-up | v0 不提供历史重放 | 客户端必须重新 LIST / readdir 后重订阅 |
 | dispatcher backlog overflow | stream 关闭 | metrics 计数 + log warning |
 | coordinator unavailable（store registry） | 不直接影响 watch | watch 路径只依赖 raftstore，不依赖 coordinator |
 | fsmeta server 重启 | stream 关闭 | 客户端按 cursor 重连，新 server 实例继续 |
@@ -305,7 +308,7 @@ dispatcher 在 fsmeta/exec 层、不在 raftstore——**保持 raftstore 不感
 
 - **filter beyond prefix**：v1 加 `op_kinds`、`since_attr_change` 等。
 - **broker fan-out**：单进程 fsmeta server。客户端多了就靠 fsmeta service 横向扩。
-- **保证 catch-up**：log 截断时直接告诉客户端 fail。Stage 3 看是否需要 cdc-log 化。
+- **历史 catch-up**：v0 是 live-only；Stage 2.2-E 再评估 raft log replay，Stage 3 看是否需要 cdc-log 化。
 - **跨 mount 订阅**：v0 一个 subscribe 只覆盖一个 mount + 一个 prefix。
 - **strict per-key serialization**：保证全局 commit 顺序，但单 key 内的 multi-mutation 一次 raft entry 内的顺序未跨 entry 保证（v0 acceptable; 一般 metadata 不用单 entry 多 mutation）。
 
@@ -316,7 +319,7 @@ dispatcher 在 fsmeta/exec 层、不在 raftstore——**保持 raftstore 不感
 | **Stage 2.2-A** | raftstore store command post-apply observer interface + register/deregister + non-blocking dispatch + dropped metric | unit + raftstore/integration 加一个 observer 测试，断言 commit / resolve-lock 事件按 raft apply 顺序透传到 observer |
 | **Stage 2.2-B** | `fsmeta/exec/watch` package：`WatchRouter`，prefix filter，per-subscriber back-pressure；纯逻辑可单元测 | 单元测试：100 万事件、N 个 subscriber、prefix 命中率、ack 释放 budget、overflow 关流 |
 | **Stage 2.2-C** | `pb/fsmeta` 加 `WatchSubtree` bidi stream + `WatchEvent` 等 message；`fsmeta/server` 实装 handler；`fsmeta/client` 提供 typed Subscribe | bufconn integration（两端 typed） |
-| **Stage 2.2-D** | 真集群 e2e（`fsmeta/integration`）+ `cmd/fsmeta-demo` workload "subtree subscribe under checkpoint storm"；catch-up 截断分支测试 | sub-second notification latency 断言 |
+| **Stage 2.2-D** | 真集群 e2e（`fsmeta/integration`）+ `cmd/fsmeta-demo` workload "subtree subscribe under checkpoint storm" | sub-second notification latency 断言 |
 | **Stage 2.2-E**（可选 / 后置） | catch-up via raft log replay 优化 / metrics 完善 | benchmark 上 watch overhead < 5% |
 
 每个 PR 通过后 push 到 `feature/fsmeta-stage2-foundation`，**不开 PR**直到 Stage 2 全部段位完成。
@@ -343,5 +346,5 @@ Stage 2.2 闭合 = 下面这条能讲：
 
 ## 13. 决策记录
 
-- **2026-04-25 v0**：选 bidirectional stream，不选 server-stream + side-channel ack；catch-up 用现有 raft log 不引入独立 cdc log；back-pressure 默认 window=256；明确 raft log truncation 是客户端可见的硬错误。
+- **2026-04-25 v0**：选 bidirectional stream，不选 server-stream + side-channel ack；WatchSubtree 先做 live-only，不在 v0 做历史 catch-up；back-pressure 默认 window=256。
 - 后续 v1+ 修订入此文，每条带日期。
