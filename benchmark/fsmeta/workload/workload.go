@@ -20,7 +20,7 @@ const (
 	HotspotFanIn    = "hotspot-fanin"
 )
 
-var ErrWorkloadFailed = errors.New("fsmeta/workload: workload completed with operation errors")
+var ErrWorkloadFailed = errors.New("benchmark/fsmeta/workload: workload completed with operation errors")
 
 // Client is the fsmeta operation surface needed by metadata workloads.
 // fsmeta/client.GRPCClient satisfies this interface.
