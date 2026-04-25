@@ -9,14 +9,14 @@ import (
 	"strings"
 )
 
-type SuccessionState struct {
+type EunomiaState struct {
 	Tenure   Tenure
 	Legacy   Legacy
 	Handover Handover
 }
 
-func (s State) Succession() SuccessionState {
-	return SuccessionState{
+func (s State) Eunomia() EunomiaState {
+	return EunomiaState{
 		Tenure:   s.Tenure,
 		Legacy:   s.Legacy,
 		Handover: s.Handover,

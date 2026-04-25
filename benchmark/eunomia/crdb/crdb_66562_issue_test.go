@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
-	protocol "github.com/feichai0017/NoKV/coordinator/protocol/succession"
+	protocol "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/stretchr/testify/require"

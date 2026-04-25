@@ -1,4 +1,4 @@
-------------------------- MODULE SuccessionMultiDim -------------------------
+------------------------- MODULE EunomiaMultiDim -------------------------
 EXTENDS Naturals, FiniteSets
 
 \* Minimal positive model for the CRDB #66562 analog.

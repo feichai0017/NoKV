@@ -3,8 +3,8 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-SUCCESSION_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
-BENCH_DIR=$(cd -- "$SUCCESSION_DIR/.." && pwd)
+EUNOMIA_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
+BENCH_DIR=$(cd -- "$EUNOMIA_DIR/.." && pwd)
 REPO_ROOT=$(cd -- "$BENCH_DIR/.." && pwd)
 
 DELAY=${CONTROL_PLANE_NETEM_DELAY:-1ms}
@@ -38,5 +38,5 @@ docker run --rm \
 		apt-get install -y iproute2 >/dev/null
 		tc qdisc add dev lo root netem delay $DELAY $JITTER loss $LOSS
 		trap 'tc qdisc del dev lo root 2>/dev/null || true' EXIT
-		./benchmark/succession/scripts/run_eval.sh
+		./benchmark/eunomia/scripts/run_eval.sh
 	"

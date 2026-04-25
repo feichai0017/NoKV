@@ -33,8 +33,8 @@ type fakeServiceBackend struct {
 	observed            rootstorage.ObservedCommitted
 	observeAdvance      rootstorage.TailAdvance
 	waitAdvance         rootstorage.TailAdvance
-	applyLeaseResult    rootstate.SuccessionState
-	applyClosureResult  rootstate.SuccessionState
+	applyLeaseResult    rootstate.EunomiaState
+	applyClosureResult  rootstate.EunomiaState
 	isLeader            bool
 	leaderID            uint64
 	appendCalls         int
@@ -113,11 +113,11 @@ func (f *fakeServiceBackend) WaitForTail(rootstorage.TailToken, time.Duration) (
 	return f.waitAdvance, nil
 }
 
-func (f *fakeServiceBackend) ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.SuccessionState, error) {
+func (f *fakeServiceBackend) ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.EunomiaState, error) {
 	return f.applyLeaseResult, f.applyLeaseErr
 }
 
-func (f *fakeServiceBackend) ApplyHandover(context.Context, rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
+func (f *fakeServiceBackend) ApplyHandover(context.Context, rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
 	return f.applyClosureResult, f.applyClosureErr
 }
 
@@ -409,7 +409,7 @@ func TestServiceObserveFallbackAndTailPaths(t *testing.T) {
 }
 
 func TestServiceApplyTenure(t *testing.T) {
-	leaseState := rootstate.SuccessionState{
+	leaseState := rootstate.EunomiaState{
 		Tenure: rootstate.Tenure{
 			HolderID:        "coord-1",
 			ExpiresUnixNano: 1234,
@@ -450,7 +450,7 @@ func TestServiceApplyTenure(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, metapb.RootTenureApplyStatus_ROOT_TENURE_APPLY_STATUS_HELD, resp.Status)
-		require.Equal(t, leaseState, metawire.RootSuccessionStateFromProto(resp.State))
+		require.Equal(t, leaseState, metawire.RootEunomiaStateFromProto(resp.State))
 	})
 
 	t.Run("success", func(t *testing.T) {
@@ -463,12 +463,12 @@ func TestServiceApplyTenure(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, metapb.RootTenureApplyStatus_ROOT_TENURE_APPLY_STATUS_GRANTED, resp.Status)
-		require.Equal(t, leaseState, metawire.RootSuccessionStateFromProto(resp.State))
+		require.Equal(t, leaseState, metawire.RootEunomiaStateFromProto(resp.State))
 	})
 }
 
 func TestServiceApplyHandover(t *testing.T) {
-	closureState := rootstate.SuccessionState{
+	closureState := rootstate.EunomiaState{
 		Handover: rootstate.Handover{
 			HolderID:     "coord-1",
 			LegacyEra:    3,
@@ -507,7 +507,7 @@ func TestServiceApplyHandover(t *testing.T) {
 			Command: metawire.RootHandoverCommandToProto(cmd),
 		})
 		require.NoError(t, err)
-		require.Equal(t, closureState, metawire.RootSuccessionStateFromProto(resp.State))
+		require.Equal(t, closureState, metawire.RootEunomiaStateFromProto(resp.State))
 	})
 
 	t.Run("mapped failed precondition", func(t *testing.T) {

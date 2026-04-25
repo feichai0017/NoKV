@@ -1,7 +1,7 @@
 # Recorded Apalache bounded-check output
-spec=spec/Succession.tla
-config=spec/Succession.cfg
-invariants=G1_Succession,G2_Primacy,G2_PrimacyInductive,G3_Silence,G4_Finality
+spec=spec/Eunomia.tla
+config=spec/Eunomia.cfg
+invariants=G1_Eunomia,G2_Primacy,G2_PrimacyInductive,G3_Silence,G4_Finality
 length=8
 
 PASS #0: SanyParser                                               I@02:22:31.097

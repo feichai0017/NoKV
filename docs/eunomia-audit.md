@@ -1,10 +1,10 @@
-# succession-audit
+# eunomia-audit
 
-`nokv succession-audit` is a read-only operator tool that projects a live 3-peer
+`nokv eunomia-audit` is a read-only operator tool that projects a live 3-peer
 meta-root cluster's current rooted state into the `coordinator/audit`
-succession (Succession) vocabulary. It is the operator
-counterpart to the TLA+ Succession model and the `coordinator/audit` library that
-coordinator/server consults at runtime.
+Eunomia vocabulary. It is the operator counterpart to the TLA+ Eunomia model
+(`spec/Eunomia.tla`) and the
+`coordinator/audit` library that coordinator/server consults at runtime.
 
 Because NoKV only ships the separated topology (3 meta-root + N coordinator),
 the audit tool speaks only remote gRPC — it does not read meta-root workdirs
@@ -55,7 +55,7 @@ purpose.
 ## Usage
 
 ```bash
-nokv succession-audit \
+nokv eunomia-audit \
   --root-peer 1=127.0.0.1:2380 \
   --root-peer 2=127.0.0.1:2381 \
   --root-peer 3=127.0.0.1:2382
@@ -81,7 +81,7 @@ Optional:
 ## Sample output
 
 ```text
-Succession audit report
+Eunomia audit report
 ----------------
 holder             : coord-1
 now_unix_nano      : 1714857600000000000
@@ -123,13 +123,13 @@ enum:
 Any non-empty `finality_defect` or any `true` flag under `snapshot anomalies`
 indicates that the rooted handoff state has drifted from the expected
 `active lease → sealed predecessor → inherited successor → closed handoff`
-lifecycle — which is exactly the property `spec/Succession.tla` proves meta-root must
+lifecycle — which is exactly the property `spec/Eunomia.tla` proves meta-root must
 preserve.
 
 ## Runtime diagnostics and metrics
 
 The audit CLI is the read-only offline/operator view. The live coordinator
-runtime now exposes a matching `succession_metrics` block through
+runtime now exposes a matching `eunomia_metrics` block through
 `coordinator/server.DiagnosticsSnapshot()` and the `nokv_coordinator` expvar
 surface.
 
@@ -140,7 +140,7 @@ That block exports four counter families:
 - `pre_action_gate_rejections_total`
 - `guarantee_violations_total`
 
-`guarantee_violations_total` uses the same four Succession guarantees:
+`guarantee_violations_total` uses the same four Eunomia guarantees:
 
 - `primacy`
 - `inheritance`
@@ -149,8 +149,8 @@ That block exports four counter families:
 
 The intended split is:
 
-- `succession-audit` explains whether the **current rooted snapshot** is legal
-- `succession_metrics` shows how often the **live runtime** has rejected unsafe
+- `eunomia-audit` explains whether the **current rooted snapshot** is legal
+- `eunomia_metrics` shows how often the **live runtime** has rejected unsafe
   continuations while the system is running
 
 ## Related

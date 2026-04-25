@@ -217,11 +217,11 @@ func (f *followerStorage) AppendRootEvent(context.Context, rootevent.Event) erro
 func (f *followerStorage) SaveAllocatorState(context.Context, uint64, uint64) error {
 	return nil
 }
-func (f *followerStorage) ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.SuccessionState, error) {
-	return rootstate.SuccessionState{}, nil
+func (f *followerStorage) ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.EunomiaState, error) {
+	return rootstate.EunomiaState{}, nil
 }
-func (f *followerStorage) ApplyHandover(context.Context, rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
-	return rootstate.SuccessionState{}, nil
+func (f *followerStorage) ApplyHandover(context.Context, rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
+	return rootstate.EunomiaState{}, nil
 }
 func (f *followerStorage) Refresh() error   { return nil }
 func (f *followerStorage) Close() error     { return nil }

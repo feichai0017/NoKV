@@ -1,5 +1,5 @@
 # Recorded TLC output
-spec=spec/Succession.tla
+spec=spec/Eunomia.tla
 status=success
 
 Model checking completed. No error has been found.

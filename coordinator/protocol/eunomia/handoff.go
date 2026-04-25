@@ -1,4 +1,4 @@
-package succession
+package eunomia
 
 import (
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"

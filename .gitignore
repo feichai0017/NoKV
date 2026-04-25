@@ -10,14 +10,17 @@ benchmark/benchmark_data_policy_*/
 benchmark/benchmark_results.txt
 benchmark/benchmark_results/
 benchmark/data/
-benchmark/succession/results/
+benchmark/eunomia/results/
 
 .gocache
 .gomodcache
 
 build/
 book/
-docs/research/
+docs/research/*
+!docs/research/
+!docs/research/control-plane-paper-draft.zh.md
+!docs/research/eunomia-protocol.zh.md
 
 cpu.pprof
 mem.pprof

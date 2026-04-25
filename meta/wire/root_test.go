@@ -99,13 +99,13 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	})
 	require.Equal(t, frontiers, filtered)
 
-	protocolState := rootstate.SuccessionState{
+	protocolState := rootstate.EunomiaState{
 		Tenure:   state.Tenure,
 		Legacy:   state.Legacy,
 		Handover: state.Handover,
 	}
-	require.Equal(t, protocolState, RootSuccessionStateFromProto(RootSuccessionStateToProto(protocolState)))
-	require.Equal(t, rootstate.SuccessionState{}, RootSuccessionStateFromProto(nil))
+	require.Equal(t, protocolState, RootEunomiaStateFromProto(RootEunomiaStateToProto(protocolState)))
+	require.Equal(t, rootstate.EunomiaState{}, RootEunomiaStateFromProto(nil))
 
 	leaseCmd := rootproto.TenureCommand{
 		Kind:               rootproto.TenureActRelease,
