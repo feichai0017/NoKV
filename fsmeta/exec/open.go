@@ -123,7 +123,7 @@ func OpenWithRaftstore(ctx context.Context, opts Options) (*Runtime, error) {
 
 	var mon *monitor
 	if opts.MonitorInterval >= 0 {
-		mon = startMonitor(ctx, coord, router, mounts, opts.MonitorInterval)
+		mon = startMonitor(ctx, coord, router, mounts, quotas, pub, opts.MonitorInterval)
 	}
 
 	rt := &Runtime{

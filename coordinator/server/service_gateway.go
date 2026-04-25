@@ -109,6 +109,18 @@ func (s *Service) ListMounts(ctx context.Context, _ *coordpb.ListMountsRequest) 
 	return &coordpb.ListMountsResponse{Mounts: out}, nil
 }
 
+func (s *Service) ListSubtreeAuthorities(ctx context.Context, _ *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
+	subtrees := s.cluster.SubtreeAuthoritySnapshot()
+	out := make([]*coordpb.SubtreeAuthorityInfo, 0, len(subtrees))
+	for _, subtree := range subtrees {
+		out = append(out, subtreeAuthorityInfoToProto(subtree))
+	}
+	return &coordpb.ListSubtreeAuthoritiesResponse{Subtrees: out}, nil
+}
+
 func (s *Service) GetQuotaFence(ctx context.Context, req *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, status.Error(codes.Canceled, err.Error())
@@ -161,6 +173,38 @@ func quotaFenceInfoToProto(fence rootstate.QuotaFence) *coordpb.QuotaFenceInfo {
 		Era:         fence.Era,
 		Frontier:    fence.Frontier,
 		UpdatedAt:   metawire.RootCursorToProto(fence.UpdatedAt),
+	}
+}
+
+func subtreeAuthorityInfoToProto(subtree rootstate.SubtreeAuthority) *coordpb.SubtreeAuthorityInfo {
+	return &coordpb.SubtreeAuthorityInfo{
+		SubtreeId:              subtree.SubtreeID,
+		MountId:                subtree.Mount,
+		RootInode:              subtree.RootInode,
+		AuthorityId:            subtree.AuthorityID,
+		Era:                    subtree.Era,
+		Frontier:               subtree.Frontier,
+		State:                  subtreeAuthorityStateToProto(subtree.State),
+		DeclaredAt:             metawire.RootCursorToProto(subtree.DeclaredAt),
+		HandoffStartedAt:       metawire.RootCursorToProto(subtree.HandoffStartedAt),
+		HandoffCompletedAt:     metawire.RootCursorToProto(subtree.HandoffCompletedAt),
+		PredecessorAuthorityId: subtree.PredecessorAuthorityID,
+		PredecessorEra:         subtree.PredecessorEra,
+		PredecessorFrontier:    subtree.PredecessorFrontier,
+		SuccessorAuthorityId:   subtree.SuccessorAuthorityID,
+		SuccessorEra:           subtree.SuccessorEra,
+		InheritedFrontier:      subtree.InheritedFrontier,
+	}
+}
+
+func subtreeAuthorityStateToProto(state rootstate.SubtreeAuthorityState) coordpb.SubtreeAuthorityState {
+	switch state {
+	case rootstate.SubtreeAuthorityActive:
+		return coordpb.SubtreeAuthorityState_SUBTREE_AUTHORITY_STATE_ACTIVE
+	case rootstate.SubtreeAuthorityHandoff:
+		return coordpb.SubtreeAuthorityState_SUBTREE_AUTHORITY_STATE_HANDOFF
+	default:
+		return coordpb.SubtreeAuthorityState_SUBTREE_AUTHORITY_STATE_UNKNOWN
 	}
 }
 

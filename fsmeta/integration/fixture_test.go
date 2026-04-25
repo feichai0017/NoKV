@@ -178,16 +178,16 @@ type testMountResolver struct {
 	coord *coordclient.GRPCClient
 }
 
-func (r testMountResolver) ResolveMount(ctx context.Context, mount fsmeta.MountID) (fsmetaexec.MountRecord, error) {
+func (r testMountResolver) ResolveMount(ctx context.Context, mount fsmeta.MountID) (fsmetaexec.MountAdmission, error) {
 	resp, err := r.coord.GetMount(ctx, &coordpb.GetMountRequest{MountId: string(mount)})
 	if err != nil {
-		return fsmetaexec.MountRecord{}, err
+		return fsmetaexec.MountAdmission{}, err
 	}
 	if resp == nil || resp.GetNotFound() || resp.GetMount() == nil {
-		return fsmetaexec.MountRecord{}, fsmeta.ErrMountNotRegistered
+		return fsmetaexec.MountAdmission{}, fsmeta.ErrMountNotRegistered
 	}
 	info := resp.GetMount()
-	return fsmetaexec.MountRecord{
+	return fsmetaexec.MountAdmission{
 		MountID:       fsmeta.MountID(info.GetMountId()),
 		RootInode:     fsmeta.InodeID(info.GetRootInode()),
 		SchemaVersion: info.GetSchemaVersion(),
@@ -199,11 +199,6 @@ func registerMount(t *testing.T, ctx context.Context, coord *coordclient.GRPCCli
 	t.Helper()
 	resp, err := coord.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
 		Event: metawire.RootEventToProto(rootevent.MountRegistered(string(mount), uint64(fsmeta.RootInode), 1)),
-	})
-	require.NoError(t, err)
-	require.True(t, resp.GetAccepted())
-	resp, err = coord.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
-		Event: metawire.RootEventToProto(rootevent.SubtreeAuthorityDeclared(string(mount), uint64(fsmeta.RootInode), string(mount), 0, 0)),
 	})
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())

@@ -56,21 +56,14 @@ func TestRunMountRegisterCmdPublishesRootEvent(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, client.closed)
-	require.Len(t, client.published, 2)
+	require.Len(t, client.published, 1)
 	event := client.published[0].GetEvent()
 	require.NotNil(t, event.GetMount())
 	require.Equal(t, "vol", event.GetMount().GetMountId())
-	authority := client.published[1].GetEvent().GetSubtreeAuthority()
-	require.NotNil(t, authority)
-	require.Equal(t, "vol", authority.GetMount())
-	require.Equal(t, uint64(1), authority.GetRootInode())
-	require.Equal(t, "vol", authority.GetAuthorityId())
-	require.Equal(t, uint64(0), authority.GetEra())
-	require.Equal(t, uint64(0), authority.GetFrontier())
 	require.Contains(t, out.String(), "registered")
 }
 
-func TestRunMountRegisterCmdBackfillsRootAuthorityForExistingMount(t *testing.T) {
+func TestRunMountRegisterCmdLeavesExistingMountUnchanged(t *testing.T) {
 	client := &fakeMountClient{mounts: []*coordpb.MountInfo{{
 		MountId:       "vol",
 		RootInode:     1,
@@ -92,12 +85,7 @@ func TestRunMountRegisterCmdBackfillsRootAuthorityForExistingMount(t *testing.T)
 		"--schema-version", "1",
 	})
 	require.NoError(t, err)
-	require.Len(t, client.published, 1)
-	authority := client.published[0].GetEvent().GetSubtreeAuthority()
-	require.NotNil(t, authority)
-	require.Equal(t, "vol", authority.GetMount())
-	require.Equal(t, uint64(1), authority.GetRootInode())
-	require.Equal(t, "vol", authority.GetAuthorityId())
+	require.Empty(t, client.published)
 	require.Contains(t, out.String(), "already registered")
 }
 

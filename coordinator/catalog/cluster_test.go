@@ -84,13 +84,12 @@ func TestClusterSubtreeAuthorityLifecycleRootEvents(t *testing.T) {
 	c := NewCluster()
 	require.NoError(t, c.PublishRootEvent(rootevent.MountRegistered("vol", 1, 1)))
 
-	require.NoError(t, c.PublishRootEvent(rootevent.SubtreeAuthorityDeclared("vol", 1, "vol", 0, 10)))
 	key := rootstate.SubtreeAuthorityKey("vol", 1)
 	subtree, ok := c.SubtreeAuthorityByID(key)
 	require.True(t, ok)
 	require.Equal(t, rootstate.SubtreeAuthorityActive, subtree.State)
 	require.Equal(t, "vol", subtree.AuthorityID)
-	require.Equal(t, uint64(10), subtree.Frontier)
+	require.Equal(t, uint64(0), subtree.Frontier)
 
 	require.NoError(t, c.PublishRootEvent(rootevent.SubtreeHandoffStarted("vol", 1, 12)))
 	subtree, ok = c.SubtreeAuthorityByID(key)

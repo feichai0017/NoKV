@@ -24,21 +24,23 @@ type fakeRunner struct {
 }
 
 type fakeMountResolver struct {
-	records map[fsmeta.MountID]MountRecord
+	records map[fsmeta.MountID]MountAdmission
 	err     error
 	calls   int
 }
 
 type fakeSubtreePublisher struct {
-	starts    []subtreePublishCall
-	completes []subtreePublishCall
-	err       error
+	starts      []subtreePublishCall
+	completes   []subtreePublishCall
+	err         error
+	startErr    error
+	completeErr error
 }
 
 type fakeQuotaResolver struct {
 	err      error
-	checks   []quotaCheck
-	accounts []quotaAccount
+	changes  [][]QuotaChange
+	mutation *kvrpcpb.Mutation
 }
 
 type subtreePublishCall struct {
@@ -47,30 +49,21 @@ type subtreePublishCall struct {
 	frontier uint64
 }
 
-type quotaCheck struct {
-	mount     fsmeta.MountID
-	root      fsmeta.InodeID
-	addBytes  uint64
-	addInodes uint64
-}
-
-type quotaAccount struct {
-	mount       fsmeta.MountID
-	root        fsmeta.InodeID
-	deltaBytes  int64
-	deltaInodes int64
-}
-
-func (q *fakeQuotaResolver) CheckQuota(_ context.Context, mount fsmeta.MountID, root fsmeta.InodeID, addBytes, addInodes uint64) error {
-	q.checks = append(q.checks, quotaCheck{mount: mount, root: root, addBytes: addBytes, addInodes: addInodes})
-	return q.err
-}
-
-func (q *fakeQuotaResolver) AccountQuota(mount fsmeta.MountID, root fsmeta.InodeID, deltaBytes, deltaInodes int64) {
-	q.accounts = append(q.accounts, quotaAccount{mount: mount, root: root, deltaBytes: deltaBytes, deltaInodes: deltaInodes})
+func (q *fakeQuotaResolver) ReserveQuota(_ context.Context, _ TxnRunner, changes []QuotaChange, _ uint64) ([]*kvrpcpb.Mutation, error) {
+	q.changes = append(q.changes, append([]QuotaChange(nil), changes...))
+	if q.err != nil {
+		return nil, q.err
+	}
+	if q.mutation != nil {
+		return []*kvrpcpb.Mutation{cloneMutation(q.mutation)}, nil
+	}
+	return nil, nil
 }
 
 func (p *fakeSubtreePublisher) StartSubtreeHandoff(_ context.Context, mount fsmeta.MountID, root fsmeta.InodeID, frontier uint64) error {
+	if p.startErr != nil {
+		return p.startErr
+	}
 	if p.err != nil {
 		return p.err
 	}
@@ -79,6 +72,9 @@ func (p *fakeSubtreePublisher) StartSubtreeHandoff(_ context.Context, mount fsme
 }
 
 func (p *fakeSubtreePublisher) CompleteSubtreeHandoff(_ context.Context, mount fsmeta.MountID, root fsmeta.InodeID, frontier uint64) error {
+	if p.completeErr != nil {
+		return p.completeErr
+	}
 	if p.err != nil {
 		return p.err
 	}
@@ -86,14 +82,14 @@ func (p *fakeSubtreePublisher) CompleteSubtreeHandoff(_ context.Context, mount f
 	return nil
 }
 
-func (r *fakeMountResolver) ResolveMount(_ context.Context, mount fsmeta.MountID) (MountRecord, error) {
+func (r *fakeMountResolver) ResolveMount(_ context.Context, mount fsmeta.MountID) (MountAdmission, error) {
 	r.calls++
 	if r.err != nil {
-		return MountRecord{}, r.err
+		return MountAdmission{}, r.err
 	}
 	record, ok := r.records[mount]
 	if !ok {
-		return MountRecord{}, fsmeta.ErrMountNotRegistered
+		return MountAdmission{}, fsmeta.ErrMountNotRegistered
 	}
 	return record, nil
 }
@@ -265,7 +261,7 @@ func TestExecutorCreateRejectsExistingDentry(t *testing.T) {
 func TestExecutorCreateRequiresActiveMountWhenResolverConfigured(t *testing.T) {
 	t.Run("active mount", func(t *testing.T) {
 		runner := newFakeRunner()
-		resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountRecord{
+		resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
 			"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
 		}}
 		executor, err := New(runner, WithMountResolver(resolver))
@@ -284,7 +280,7 @@ func TestExecutorCreateRequiresActiveMountWhenResolverConfigured(t *testing.T) {
 
 	t.Run("missing mount", func(t *testing.T) {
 		runner := newFakeRunner()
-		resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountRecord{}}
+		resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{}}
 		executor, err := New(runner, WithMountResolver(resolver))
 		require.NoError(t, err)
 
@@ -301,7 +297,7 @@ func TestExecutorCreateRequiresActiveMountWhenResolverConfigured(t *testing.T) {
 
 	t.Run("retired mount", func(t *testing.T) {
 		runner := newFakeRunner()
-		resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountRecord{
+		resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
 			"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1, Retired: true},
 		}}
 		executor, err := New(runner, WithMountResolver(resolver))
@@ -319,9 +315,11 @@ func TestExecutorCreateRequiresActiveMountWhenResolverConfigured(t *testing.T) {
 	})
 }
 
-func TestExecutorCreateChecksAndAccountsQuota(t *testing.T) {
+func TestExecutorCreateReservesQuotaInsideMutation(t *testing.T) {
 	runner := newFakeRunner()
-	quota := &fakeQuotaResolver{}
+	quotaKey, err := fsmeta.EncodeUsageKey("vol", 0)
+	require.NoError(t, err)
+	quota := &fakeQuotaResolver{mutation: &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: quotaKey, Value: []byte("usage")}}
 	executor, err := New(runner, WithQuotaResolver(quota))
 	require.NoError(t, err)
 
@@ -332,8 +330,9 @@ func TestExecutorCreateChecksAndAccountsQuota(t *testing.T) {
 		Inode:  22,
 	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, Size: 4096})
 	require.NoError(t, err)
-	require.Equal(t, []quotaCheck{{mount: "vol", root: 7, addBytes: 4096, addInodes: 1}}, quota.checks)
-	require.Equal(t, []quotaAccount{{mount: "vol", root: 7, deltaBytes: 4096, deltaInodes: 1}}, quota.accounts)
+	require.Equal(t, [][]QuotaChange{{{Mount: "vol", Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.changes)
+	require.Len(t, runner.mutations, 1)
+	require.Equal(t, quotaKey, runner.mutations[0][2].GetKey())
 }
 
 func TestExecutorCreateRejectsQuotaExceededBeforeMutation(t *testing.T) {
@@ -350,10 +349,10 @@ func TestExecutorCreateRejectsQuotaExceededBeforeMutation(t *testing.T) {
 	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, Size: 4096})
 	require.ErrorIs(t, err, fsmeta.ErrQuotaExceeded)
 	require.Empty(t, runner.mutations)
-	require.Empty(t, quota.accounts)
+	require.Equal(t, [][]QuotaChange{{{Mount: "vol", Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.changes)
 }
 
-func TestExecutorUnlinkReleasesQuotaWhenInodeExists(t *testing.T) {
+func TestExecutorUnlinkReservesNegativeQuotaWhenInodeExists(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "file", 22)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
@@ -363,7 +362,7 @@ func TestExecutorUnlinkReleasesQuotaWhenInodeExists(t *testing.T) {
 
 	err = executor.Unlink(context.Background(), fsmeta.UnlinkRequest{Mount: "vol", Parent: 7, Name: "file"})
 	require.NoError(t, err)
-	require.Equal(t, []quotaAccount{{mount: "vol", root: 7, deltaBytes: -4096, deltaInodes: -1}}, quota.accounts)
+	require.Equal(t, [][]QuotaChange{{{Mount: "vol", Scope: 7, Bytes: -4096, Inodes: -1}}}, quota.changes)
 }
 
 func TestExecutorCreateTranslatesAlreadyExistsConflict(t *testing.T) {
@@ -555,7 +554,7 @@ func TestExecutorRenameSubtreeMovesDentry(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "old", 22)
 	publisher := &fakeSubtreePublisher{}
-	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountRecord{
+	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
 		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
 	}}
 	executor, err := New(runner, WithMountResolver(resolver), WithSubtreeHandoffPublisher(publisher))
@@ -589,11 +588,11 @@ func TestExecutorRenameSubtreeMovesDentry(t *testing.T) {
 	require.Equal(t, []subtreePublishCall{{mount: "vol", root: fsmeta.RootInode, frontier: 2}}, publisher.completes)
 }
 
-func TestExecutorRenameSubtreeReportsPostCommitHandoffFailure(t *testing.T) {
+func TestExecutorRenameSubtreeBlocksMutationWhenStartHandoffFails(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "old", 22)
-	publisher := &fakeSubtreePublisher{err: errors.New("publish failed")}
-	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountRecord{
+	publisher := &fakeSubtreePublisher{startErr: errors.New("publish failed")}
+	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
 		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
 	}}
 	executor, err := New(runner, WithMountResolver(resolver), WithSubtreeHandoffPublisher(publisher))
@@ -607,7 +606,33 @@ func TestExecutorRenameSubtreeReportsPostCommitHandoffFailure(t *testing.T) {
 		ToName:     "new",
 	})
 	require.ErrorContains(t, err, "publish failed")
+	require.Empty(t, runner.mutations)
+
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 7, Name: "old"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.InodeID(22), record.Inode)
+}
+
+func TestExecutorRenameSubtreeReportsCompleteHandoffFailureAfterMutation(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "old", 22)
+	publisher := &fakeSubtreePublisher{completeErr: errors.New("complete failed")}
+	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
+		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+	}}
+	executor, err := New(runner, WithMountResolver(resolver), WithSubtreeHandoffPublisher(publisher))
+	require.NoError(t, err)
+
+	err = executor.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "old",
+		ToParent:   8,
+		ToName:     "new",
+	})
+	require.ErrorContains(t, err, "complete failed")
 	require.Len(t, runner.mutations, 1)
+	require.Equal(t, []subtreePublishCall{{mount: "vol", root: fsmeta.RootInode, frontier: 2}}, publisher.starts)
 
 	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 7, Name: "old"})
 	require.ErrorIs(t, err, fsmeta.ErrNotFound)
@@ -636,7 +661,11 @@ func TestExecutorRenameSubtreeRejectsExistingDestination(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "old", 22)
 	seedDentry(t, runner, "vol", 8, "existing", 23)
-	executor, err := New(runner)
+	publisher := &fakeSubtreePublisher{}
+	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
+		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+	}}
+	executor, err := New(runner, WithMountResolver(resolver), WithSubtreeHandoffPublisher(publisher))
 	require.NoError(t, err)
 
 	err = executor.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{
@@ -648,6 +677,8 @@ func TestExecutorRenameSubtreeRejectsExistingDestination(t *testing.T) {
 	})
 	require.ErrorIs(t, err, fsmeta.ErrExists)
 	require.Empty(t, runner.mutations)
+	require.Empty(t, publisher.starts)
+	require.Empty(t, publisher.completes)
 }
 
 func seedDentry(t *testing.T, runner *fakeRunner, mount fsmeta.MountID, parent fsmeta.InodeID, name string, inode fsmeta.InodeID) {

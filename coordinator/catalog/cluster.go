@@ -589,7 +589,7 @@ func (c *Cluster) replaceMounts(mounts map[string]rootstate.MountRecord) {
 }
 
 func (c *Cluster) applyRootEventToSubtreeAuthorities(snapshot rootstate.Snapshot, event rootevent.Event) {
-	if c == nil || event.SubtreeAuthority == nil {
+	if c == nil || (event.SubtreeAuthority == nil && event.Kind != rootevent.KindMountRegistered) {
 		return
 	}
 	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.NextCursor(snapshot.State.LastCommitted), event)
@@ -685,6 +685,9 @@ func validateSubtreeAuthorityEvent(snapshot rootstate.Snapshot, event rootevent.
 		if current.State == rootstate.SubtreeAuthorityUnknown {
 			return ErrSubtreeAuthorityNotFound
 		}
+		if current.State == rootstate.SubtreeAuthorityHandoff && current.PredecessorFrontier == payload.Frontier {
+			return nil
+		}
 		if current.State != rootstate.SubtreeAuthorityActive {
 			return ErrSubtreeAuthorityHandoff
 		}
@@ -694,6 +697,9 @@ func validateSubtreeAuthorityEvent(snapshot rootstate.Snapshot, event rootevent.
 	case rootevent.KindSubtreeHandoffCompleted:
 		if current.State == rootstate.SubtreeAuthorityUnknown {
 			return ErrSubtreeAuthorityNotFound
+		}
+		if current.State == rootstate.SubtreeAuthorityActive && current.Frontier >= payload.InheritedFrontier {
+			return nil
 		}
 		if current.State != rootstate.SubtreeAuthorityHandoff {
 			return ErrSubtreeAuthorityHandoff

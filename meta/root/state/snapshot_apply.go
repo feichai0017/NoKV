@@ -209,6 +209,19 @@ func applyMountRegisteredToSnapshot(snapshot *Snapshot, cursor Cursor, event roo
 		State:         MountStateActive,
 		RegisteredAt:  cursor,
 	}
+	key := SubtreeAuthorityKey(event.Mount.MountID, event.Mount.RootInode)
+	if key != "" && snapshot.Subtrees[key].State == SubtreeAuthorityUnknown {
+		snapshot.Subtrees[key] = SubtreeAuthority{
+			SubtreeID:   key,
+			Mount:       event.Mount.MountID,
+			RootInode:   event.Mount.RootInode,
+			AuthorityID: event.Mount.MountID,
+			Era:         0,
+			Frontier:    0,
+			State:       SubtreeAuthorityActive,
+			DeclaredAt:  cursor,
+		}
+	}
 }
 
 func applyMountRetiredToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Event) {

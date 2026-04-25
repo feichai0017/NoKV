@@ -21,21 +21,22 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Coordinator_StoreHeartbeat_FullMethodName   = "/nokv.coordinator.v1.Coordinator/StoreHeartbeat"
-	Coordinator_GetStore_FullMethodName         = "/nokv.coordinator.v1.Coordinator/GetStore"
-	Coordinator_ListStores_FullMethodName       = "/nokv.coordinator.v1.Coordinator/ListStores"
-	Coordinator_GetMount_FullMethodName         = "/nokv.coordinator.v1.Coordinator/GetMount"
-	Coordinator_ListMounts_FullMethodName       = "/nokv.coordinator.v1.Coordinator/ListMounts"
-	Coordinator_GetQuotaFence_FullMethodName    = "/nokv.coordinator.v1.Coordinator/GetQuotaFence"
-	Coordinator_ListQuotaFences_FullMethodName  = "/nokv.coordinator.v1.Coordinator/ListQuotaFences"
-	Coordinator_RegionLiveness_FullMethodName   = "/nokv.coordinator.v1.Coordinator/RegionLiveness"
-	Coordinator_PublishRootEvent_FullMethodName = "/nokv.coordinator.v1.Coordinator/PublishRootEvent"
-	Coordinator_ListTransitions_FullMethodName  = "/nokv.coordinator.v1.Coordinator/ListTransitions"
-	Coordinator_AssessRootEvent_FullMethodName  = "/nokv.coordinator.v1.Coordinator/AssessRootEvent"
-	Coordinator_RemoveRegion_FullMethodName     = "/nokv.coordinator.v1.Coordinator/RemoveRegion"
-	Coordinator_GetRegionByKey_FullMethodName   = "/nokv.coordinator.v1.Coordinator/GetRegionByKey"
-	Coordinator_AllocID_FullMethodName          = "/nokv.coordinator.v1.Coordinator/AllocID"
-	Coordinator_Tso_FullMethodName              = "/nokv.coordinator.v1.Coordinator/Tso"
+	Coordinator_StoreHeartbeat_FullMethodName         = "/nokv.coordinator.v1.Coordinator/StoreHeartbeat"
+	Coordinator_GetStore_FullMethodName               = "/nokv.coordinator.v1.Coordinator/GetStore"
+	Coordinator_ListStores_FullMethodName             = "/nokv.coordinator.v1.Coordinator/ListStores"
+	Coordinator_GetMount_FullMethodName               = "/nokv.coordinator.v1.Coordinator/GetMount"
+	Coordinator_ListMounts_FullMethodName             = "/nokv.coordinator.v1.Coordinator/ListMounts"
+	Coordinator_ListSubtreeAuthorities_FullMethodName = "/nokv.coordinator.v1.Coordinator/ListSubtreeAuthorities"
+	Coordinator_GetQuotaFence_FullMethodName          = "/nokv.coordinator.v1.Coordinator/GetQuotaFence"
+	Coordinator_ListQuotaFences_FullMethodName        = "/nokv.coordinator.v1.Coordinator/ListQuotaFences"
+	Coordinator_RegionLiveness_FullMethodName         = "/nokv.coordinator.v1.Coordinator/RegionLiveness"
+	Coordinator_PublishRootEvent_FullMethodName       = "/nokv.coordinator.v1.Coordinator/PublishRootEvent"
+	Coordinator_ListTransitions_FullMethodName        = "/nokv.coordinator.v1.Coordinator/ListTransitions"
+	Coordinator_AssessRootEvent_FullMethodName        = "/nokv.coordinator.v1.Coordinator/AssessRootEvent"
+	Coordinator_RemoveRegion_FullMethodName           = "/nokv.coordinator.v1.Coordinator/RemoveRegion"
+	Coordinator_GetRegionByKey_FullMethodName         = "/nokv.coordinator.v1.Coordinator/GetRegionByKey"
+	Coordinator_AllocID_FullMethodName                = "/nokv.coordinator.v1.Coordinator/AllocID"
+	Coordinator_Tso_FullMethodName                    = "/nokv.coordinator.v1.Coordinator/Tso"
 )
 
 // CoordinatorClient is the client API for Coordinator service.
@@ -47,6 +48,7 @@ type CoordinatorClient interface {
 	ListStores(ctx context.Context, in *ListStoresRequest, opts ...grpc.CallOption) (*ListStoresResponse, error)
 	GetMount(ctx context.Context, in *GetMountRequest, opts ...grpc.CallOption) (*GetMountResponse, error)
 	ListMounts(ctx context.Context, in *ListMountsRequest, opts ...grpc.CallOption) (*ListMountsResponse, error)
+	ListSubtreeAuthorities(ctx context.Context, in *ListSubtreeAuthoritiesRequest, opts ...grpc.CallOption) (*ListSubtreeAuthoritiesResponse, error)
 	GetQuotaFence(ctx context.Context, in *GetQuotaFenceRequest, opts ...grpc.CallOption) (*GetQuotaFenceResponse, error)
 	ListQuotaFences(ctx context.Context, in *ListQuotaFencesRequest, opts ...grpc.CallOption) (*ListQuotaFencesResponse, error)
 	RegionLiveness(ctx context.Context, in *RegionLivenessRequest, opts ...grpc.CallOption) (*RegionLivenessResponse, error)
@@ -111,6 +113,16 @@ func (c *coordinatorClient) ListMounts(ctx context.Context, in *ListMountsReques
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListMountsResponse)
 	err := c.cc.Invoke(ctx, Coordinator_ListMounts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coordinatorClient) ListSubtreeAuthorities(ctx context.Context, in *ListSubtreeAuthoritiesRequest, opts ...grpc.CallOption) (*ListSubtreeAuthoritiesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSubtreeAuthoritiesResponse)
+	err := c.cc.Invoke(ctx, Coordinator_ListSubtreeAuthorities_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -226,6 +238,7 @@ type CoordinatorServer interface {
 	ListStores(context.Context, *ListStoresRequest) (*ListStoresResponse, error)
 	GetMount(context.Context, *GetMountRequest) (*GetMountResponse, error)
 	ListMounts(context.Context, *ListMountsRequest) (*ListMountsResponse, error)
+	ListSubtreeAuthorities(context.Context, *ListSubtreeAuthoritiesRequest) (*ListSubtreeAuthoritiesResponse, error)
 	GetQuotaFence(context.Context, *GetQuotaFenceRequest) (*GetQuotaFenceResponse, error)
 	ListQuotaFences(context.Context, *ListQuotaFencesRequest) (*ListQuotaFencesResponse, error)
 	RegionLiveness(context.Context, *RegionLivenessRequest) (*RegionLivenessResponse, error)
@@ -259,6 +272,9 @@ func (UnimplementedCoordinatorServer) GetMount(context.Context, *GetMountRequest
 }
 func (UnimplementedCoordinatorServer) ListMounts(context.Context, *ListMountsRequest) (*ListMountsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListMounts not implemented")
+}
+func (UnimplementedCoordinatorServer) ListSubtreeAuthorities(context.Context, *ListSubtreeAuthoritiesRequest) (*ListSubtreeAuthoritiesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSubtreeAuthorities not implemented")
 }
 func (UnimplementedCoordinatorServer) GetQuotaFence(context.Context, *GetQuotaFenceRequest) (*GetQuotaFenceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetQuotaFence not implemented")
@@ -396,6 +412,24 @@ func _Coordinator_ListMounts_Handler(srv interface{}, ctx context.Context, dec f
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(CoordinatorServer).ListMounts(ctx, req.(*ListMountsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Coordinator_ListSubtreeAuthorities_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSubtreeAuthoritiesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServer).ListSubtreeAuthorities(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Coordinator_ListSubtreeAuthorities_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoordinatorServer).ListSubtreeAuthorities(ctx, req.(*ListSubtreeAuthoritiesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -606,6 +640,10 @@ var Coordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListMounts",
 			Handler:    _Coordinator_ListMounts_Handler,
+		},
+		{
+			MethodName: "ListSubtreeAuthorities",
+			Handler:    _Coordinator_ListSubtreeAuthorities_Handler,
 		},
 		{
 			MethodName: "GetQuotaFence",
