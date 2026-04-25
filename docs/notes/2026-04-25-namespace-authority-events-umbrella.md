@@ -47,7 +47,7 @@ Stage 2 要新增的 primitive 不应该各自发明 RootEvent。先统一成一
 
 | 推荐 | 避免 | 理由 |
 |---|---|---|
-| `StoreJoined` / `StoreRetired` | `StoreLeft` | `left` 像暂时离线，`retired` 是 membership 终态 |
+| `StoreJoined` / `StoreRetired` | 暂时离线类命名 | `retired` 明确表示 membership 终态 |
 | `MountRegistered` / `MountRetired` | `MountAdded` / `MountDeleted` | mount 是 authority object，不只是 map entry |
 | `SnapshotEpochPublished` / `SnapshotEpochRetired` | `SnapshotCreated` | snapshot 关键是 read epoch，不是文件对象 |
 | `QuotaFenceUpdated` | `QuotaChanged` | fence 表示 authority boundary |
@@ -274,4 +274,3 @@ QuotaFenceUpdated(subject, limit_bytes, limit_inodes, era, frontier)
 5. 它的四类测试在哪里？
 
 答不上来，就不写代码。
-
