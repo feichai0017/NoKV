@@ -159,6 +159,15 @@ func TestRootSnapshotTailAndAllocatorRoundTrip(t *testing.T) {
 				RetiredAt: rootproto.Cursor{Term: 2, Index: 8},
 			},
 		},
+		SnapshotEpochs: map[string]rootstate.SnapshotEpoch{
+			"vol/42/99": {
+				SnapshotID:  "vol/42/99",
+				Mount:       "vol",
+				RootInode:   42,
+				ReadVersion: 99,
+				PublishedAt: rootproto.Cursor{Term: 2, Index: 9},
+			},
+		},
 		Descriptors: map[uint64]descriptor.Descriptor{
 			desc.RegionID: desc,
 		},
@@ -258,6 +267,7 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.TenureGranted("coord", 123, 7, rootproto.MandateAllocID, "pred", frontiers),
 		rootevent.TenureSealed("coord", 7, rootproto.MandateAllocID, frontiers),
 		rootevent.HandoverClosed("coord", 7, 8, "seal"),
+		rootevent.SnapshotEpochPublished("vol", 42, 99),
 		rootevent.RegionDescriptorPublished(desc),
 		rootevent.RegionTombstoned(desc.RegionID),
 		rootevent.RegionSplitCancelled(desc.RegionID, []byte("f"), left, right, base),
@@ -283,9 +293,11 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 	require.Nil(t, rootEventTenureToProto(nil))
 	require.Nil(t, rootEventLegacyToProto(nil))
 	require.Nil(t, rootEventHandoverToProto(nil))
+	require.Nil(t, rootEventSnapshotEpochToProto(nil))
 	require.Nil(t, rootEventTenureFromProto(nil))
 	require.Nil(t, rootEventLegacyFromProto(nil))
 	require.Nil(t, rootEventHandoverFromProto(nil))
+	require.Nil(t, rootEventSnapshotEpochFromProto(nil))
 
 	kinds := []rootevent.Kind{
 		rootevent.KindStoreJoined,
@@ -310,6 +322,7 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.KindTenure,
 		rootevent.KindLegacy,
 		rootevent.KindHandover,
+		rootevent.KindSnapshotEpochPublished,
 	}
 	for _, kind := range kinds {
 		require.Equal(t, kind, rootEventKindFromProto(rootEventKindToProto(kind)))

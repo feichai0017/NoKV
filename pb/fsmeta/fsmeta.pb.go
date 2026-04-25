@@ -542,13 +542,14 @@ func (x *LookupResponse) GetDentry() *DentryRecord {
 }
 
 type ReadDirRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Mount         string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
-	Parent        uint64                 `protobuf:"varint,2,opt,name=parent,proto3" json:"parent,omitempty"`
-	StartAfter    string                 `protobuf:"bytes,3,opt,name=start_after,json=startAfter,proto3" json:"start_after,omitempty"`
-	Limit         uint32                 `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Mount           string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
+	Parent          uint64                 `protobuf:"varint,2,opt,name=parent,proto3" json:"parent,omitempty"`
+	StartAfter      string                 `protobuf:"bytes,3,opt,name=start_after,json=startAfter,proto3" json:"start_after,omitempty"`
+	Limit           uint32                 `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
+	SnapshotVersion uint64                 `protobuf:"varint,5,opt,name=snapshot_version,json=snapshotVersion,proto3" json:"snapshot_version,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ReadDirRequest) Reset() {
@@ -605,6 +606,13 @@ func (x *ReadDirRequest) GetStartAfter() string {
 func (x *ReadDirRequest) GetLimit() uint32 {
 	if x != nil {
 		return x.Limit
+	}
+	return 0
+}
+
+func (x *ReadDirRequest) GetSnapshotVersion() uint64 {
+	if x != nil {
+		return x.SnapshotVersion
 	}
 	return 0
 }
@@ -1237,6 +1245,118 @@ func (*WatchAckOrSubscribe_Subscribe) isWatchAckOrSubscribe_Body() {}
 
 func (*WatchAckOrSubscribe_Ack) isWatchAckOrSubscribe_Body() {}
 
+type SnapshotSubtreeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Mount         string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
+	RootInode     uint64                 `protobuf:"varint,2,opt,name=root_inode,json=rootInode,proto3" json:"root_inode,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SnapshotSubtreeRequest) Reset() {
+	*x = SnapshotSubtreeRequest{}
+	mi := &file_fsmeta_fsmeta_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SnapshotSubtreeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SnapshotSubtreeRequest) ProtoMessage() {}
+
+func (x *SnapshotSubtreeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_fsmeta_fsmeta_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SnapshotSubtreeRequest.ProtoReflect.Descriptor instead.
+func (*SnapshotSubtreeRequest) Descriptor() ([]byte, []int) {
+	return file_fsmeta_fsmeta_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *SnapshotSubtreeRequest) GetMount() string {
+	if x != nil {
+		return x.Mount
+	}
+	return ""
+}
+
+func (x *SnapshotSubtreeRequest) GetRootInode() uint64 {
+	if x != nil {
+		return x.RootInode
+	}
+	return 0
+}
+
+type SnapshotSubtreeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Mount         string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
+	RootInode     uint64                 `protobuf:"varint,2,opt,name=root_inode,json=rootInode,proto3" json:"root_inode,omitempty"`
+	ReadVersion   uint64                 `protobuf:"varint,3,opt,name=read_version,json=readVersion,proto3" json:"read_version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SnapshotSubtreeResponse) Reset() {
+	*x = SnapshotSubtreeResponse{}
+	mi := &file_fsmeta_fsmeta_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SnapshotSubtreeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SnapshotSubtreeResponse) ProtoMessage() {}
+
+func (x *SnapshotSubtreeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_fsmeta_fsmeta_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SnapshotSubtreeResponse.ProtoReflect.Descriptor instead.
+func (*SnapshotSubtreeResponse) Descriptor() ([]byte, []int) {
+	return file_fsmeta_fsmeta_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *SnapshotSubtreeResponse) GetMount() string {
+	if x != nil {
+		return x.Mount
+	}
+	return ""
+}
+
+func (x *SnapshotSubtreeResponse) GetRootInode() uint64 {
+	if x != nil {
+		return x.RootInode
+	}
+	return 0
+}
+
+func (x *SnapshotSubtreeResponse) GetReadVersion() uint64 {
+	if x != nil {
+		return x.ReadVersion
+	}
+	return 0
+}
+
 type RenameRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Mount         string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
@@ -1250,7 +1370,7 @@ type RenameRequest struct {
 
 func (x *RenameRequest) Reset() {
 	*x = RenameRequest{}
-	mi := &file_fsmeta_fsmeta_proto_msgTypes[18]
+	mi := &file_fsmeta_fsmeta_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1262,7 +1382,7 @@ func (x *RenameRequest) String() string {
 func (*RenameRequest) ProtoMessage() {}
 
 func (x *RenameRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_fsmeta_fsmeta_proto_msgTypes[18]
+	mi := &file_fsmeta_fsmeta_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1275,7 +1395,7 @@ func (x *RenameRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenameRequest.ProtoReflect.Descriptor instead.
 func (*RenameRequest) Descriptor() ([]byte, []int) {
-	return file_fsmeta_fsmeta_proto_rawDescGZIP(), []int{18}
+	return file_fsmeta_fsmeta_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *RenameRequest) GetMount() string {
@@ -1321,7 +1441,7 @@ type RenameResponse struct {
 
 func (x *RenameResponse) Reset() {
 	*x = RenameResponse{}
-	mi := &file_fsmeta_fsmeta_proto_msgTypes[19]
+	mi := &file_fsmeta_fsmeta_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1333,7 +1453,7 @@ func (x *RenameResponse) String() string {
 func (*RenameResponse) ProtoMessage() {}
 
 func (x *RenameResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_fsmeta_fsmeta_proto_msgTypes[19]
+	mi := &file_fsmeta_fsmeta_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1346,7 +1466,7 @@ func (x *RenameResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenameResponse.ProtoReflect.Descriptor instead.
 func (*RenameResponse) Descriptor() ([]byte, []int) {
-	return file_fsmeta_fsmeta_proto_rawDescGZIP(), []int{19}
+	return file_fsmeta_fsmeta_proto_rawDescGZIP(), []int{21}
 }
 
 type UnlinkRequest struct {
@@ -1360,7 +1480,7 @@ type UnlinkRequest struct {
 
 func (x *UnlinkRequest) Reset() {
 	*x = UnlinkRequest{}
-	mi := &file_fsmeta_fsmeta_proto_msgTypes[20]
+	mi := &file_fsmeta_fsmeta_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1372,7 +1492,7 @@ func (x *UnlinkRequest) String() string {
 func (*UnlinkRequest) ProtoMessage() {}
 
 func (x *UnlinkRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_fsmeta_fsmeta_proto_msgTypes[20]
+	mi := &file_fsmeta_fsmeta_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1385,7 +1505,7 @@ func (x *UnlinkRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnlinkRequest.ProtoReflect.Descriptor instead.
 func (*UnlinkRequest) Descriptor() ([]byte, []int) {
-	return file_fsmeta_fsmeta_proto_rawDescGZIP(), []int{20}
+	return file_fsmeta_fsmeta_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *UnlinkRequest) GetMount() string {
@@ -1417,7 +1537,7 @@ type UnlinkResponse struct {
 
 func (x *UnlinkResponse) Reset() {
 	*x = UnlinkResponse{}
-	mi := &file_fsmeta_fsmeta_proto_msgTypes[21]
+	mi := &file_fsmeta_fsmeta_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1429,7 +1549,7 @@ func (x *UnlinkResponse) String() string {
 func (*UnlinkResponse) ProtoMessage() {}
 
 func (x *UnlinkResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_fsmeta_fsmeta_proto_msgTypes[21]
+	mi := &file_fsmeta_fsmeta_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1442,7 +1562,7 @@ func (x *UnlinkResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnlinkResponse.ProtoReflect.Descriptor instead.
 func (*UnlinkResponse) Descriptor() ([]byte, []int) {
-	return file_fsmeta_fsmeta_proto_rawDescGZIP(), []int{21}
+	return file_fsmeta_fsmeta_proto_rawDescGZIP(), []int{23}
 }
 
 var File_fsmeta_fsmeta_proto protoreflect.FileDescriptor
@@ -1478,13 +1598,14 @@ const file_fsmeta_fsmeta_proto_rawDesc = "" +
 	"\x06parent\x18\x02 \x01(\x04R\x06parent\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\"F\n" +
 	"\x0eLookupResponse\x124\n" +
-	"\x06dentry\x18\x01 \x01(\v2\x1c.nokv.fsmeta.v1.DentryRecordR\x06dentry\"u\n" +
+	"\x06dentry\x18\x01 \x01(\v2\x1c.nokv.fsmeta.v1.DentryRecordR\x06dentry\"\xa0\x01\n" +
 	"\x0eReadDirRequest\x12\x14\n" +
 	"\x05mount\x18\x01 \x01(\tR\x05mount\x12\x16\n" +
 	"\x06parent\x18\x02 \x01(\x04R\x06parent\x12\x1f\n" +
 	"\vstart_after\x18\x03 \x01(\tR\n" +
 	"startAfter\x12\x14\n" +
-	"\x05limit\x18\x04 \x01(\rR\x05limit\"I\n" +
+	"\x05limit\x18\x04 \x01(\rR\x05limit\x12)\n" +
+	"\x10snapshot_version\x18\x05 \x01(\x04R\x0fsnapshotVersion\"I\n" +
 	"\x0fReadDirResponse\x126\n" +
 	"\aentries\x18\x01 \x03(\v2\x1c.nokv.fsmeta.v1.DentryRecordR\aentries\"O\n" +
 	"\x13ReadDirPlusResponse\x128\n" +
@@ -1525,7 +1646,16 @@ const file_fsmeta_fsmeta_proto_rawDesc = "" +
 	"\x13WatchAckOrSubscribe\x12C\n" +
 	"\tsubscribe\x18\x01 \x01(\v2#.nokv.fsmeta.v1.WatchSubtreeRequestH\x00R\tsubscribe\x12,\n" +
 	"\x03ack\x18\x02 \x01(\v2\x18.nokv.fsmeta.v1.WatchAckH\x00R\x03ackB\x06\n" +
-	"\x04body\"\x99\x01\n" +
+	"\x04body\"M\n" +
+	"\x16SnapshotSubtreeRequest\x12\x14\n" +
+	"\x05mount\x18\x01 \x01(\tR\x05mount\x12\x1d\n" +
+	"\n" +
+	"root_inode\x18\x02 \x01(\x04R\trootInode\"q\n" +
+	"\x17SnapshotSubtreeResponse\x12\x14\n" +
+	"\x05mount\x18\x01 \x01(\tR\x05mount\x12\x1d\n" +
+	"\n" +
+	"root_inode\x18\x02 \x01(\x04R\trootInode\x12!\n" +
+	"\fread_version\x18\x03 \x01(\x04R\vreadVersion\"\x99\x01\n" +
 	"\rRenameRequest\x12\x14\n" +
 	"\x05mount\x18\x01 \x01(\tR\x05mount\x12\x1f\n" +
 	"\vfrom_parent\x18\x02 \x01(\x04R\n" +
@@ -1546,14 +1676,15 @@ const file_fsmeta_fsmeta_proto_rawDesc = "" +
 	"\x10WatchEventSource\x12\"\n" +
 	"\x1eWATCH_EVENT_SOURCE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19WATCH_EVENT_SOURCE_COMMIT\x10\x01\x12#\n" +
-	"\x1fWATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x022\xaf\x04\n" +
+	"\x1fWATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x022\x93\x05\n" +
 	"\n" +
 	"FSMetadata\x12G\n" +
 	"\x06Create\x12\x1d.nokv.fsmeta.v1.CreateRequest\x1a\x1e.nokv.fsmeta.v1.CreateResponse\x12G\n" +
 	"\x06Lookup\x12\x1d.nokv.fsmeta.v1.LookupRequest\x1a\x1e.nokv.fsmeta.v1.LookupResponse\x12J\n" +
 	"\aReadDir\x12\x1e.nokv.fsmeta.v1.ReadDirRequest\x1a\x1f.nokv.fsmeta.v1.ReadDirResponse\x12R\n" +
 	"\vReadDirPlus\x12\x1e.nokv.fsmeta.v1.ReadDirRequest\x1a#.nokv.fsmeta.v1.ReadDirPlusResponse\x12]\n" +
-	"\fWatchSubtree\x12#.nokv.fsmeta.v1.WatchAckOrSubscribe\x1a$.nokv.fsmeta.v1.WatchSubtreeResponse(\x010\x01\x12G\n" +
+	"\fWatchSubtree\x12#.nokv.fsmeta.v1.WatchAckOrSubscribe\x1a$.nokv.fsmeta.v1.WatchSubtreeResponse(\x010\x01\x12b\n" +
+	"\x0fSnapshotSubtree\x12&.nokv.fsmeta.v1.SnapshotSubtreeRequest\x1a'.nokv.fsmeta.v1.SnapshotSubtreeResponse\x12G\n" +
 	"\x06Rename\x12\x1d.nokv.fsmeta.v1.RenameRequest\x1a\x1e.nokv.fsmeta.v1.RenameResponse\x12G\n" +
 	"\x06Unlink\x12\x1d.nokv.fsmeta.v1.UnlinkRequest\x1a\x1e.nokv.fsmeta.v1.UnlinkResponseB0Z.github.com/feichai0017/NoKV/pb/fsmeta;fsmetapbb\x06proto3"
 
@@ -1570,32 +1701,34 @@ func file_fsmeta_fsmeta_proto_rawDescGZIP() []byte {
 }
 
 var file_fsmeta_fsmeta_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_fsmeta_fsmeta_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_fsmeta_fsmeta_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_fsmeta_fsmeta_proto_goTypes = []any{
-	(InodeType)(0),               // 0: nokv.fsmeta.v1.InodeType
-	(WatchEventSource)(0),        // 1: nokv.fsmeta.v1.WatchEventSource
-	(*InodeRecord)(nil),          // 2: nokv.fsmeta.v1.InodeRecord
-	(*DentryRecord)(nil),         // 3: nokv.fsmeta.v1.DentryRecord
-	(*DentryAttrPair)(nil),       // 4: nokv.fsmeta.v1.DentryAttrPair
-	(*CreateRequest)(nil),        // 5: nokv.fsmeta.v1.CreateRequest
-	(*CreateResponse)(nil),       // 6: nokv.fsmeta.v1.CreateResponse
-	(*LookupRequest)(nil),        // 7: nokv.fsmeta.v1.LookupRequest
-	(*LookupResponse)(nil),       // 8: nokv.fsmeta.v1.LookupResponse
-	(*ReadDirRequest)(nil),       // 9: nokv.fsmeta.v1.ReadDirRequest
-	(*ReadDirResponse)(nil),      // 10: nokv.fsmeta.v1.ReadDirResponse
-	(*ReadDirPlusResponse)(nil),  // 11: nokv.fsmeta.v1.ReadDirPlusResponse
-	(*WatchCursor)(nil),          // 12: nokv.fsmeta.v1.WatchCursor
-	(*WatchSubtreeRequest)(nil),  // 13: nokv.fsmeta.v1.WatchSubtreeRequest
-	(*WatchEvent)(nil),           // 14: nokv.fsmeta.v1.WatchEvent
-	(*WatchAck)(nil),             // 15: nokv.fsmeta.v1.WatchAck
-	(*WatchCatchupComplete)(nil), // 16: nokv.fsmeta.v1.WatchCatchupComplete
-	(*WatchThrottle)(nil),        // 17: nokv.fsmeta.v1.WatchThrottle
-	(*WatchSubtreeResponse)(nil), // 18: nokv.fsmeta.v1.WatchSubtreeResponse
-	(*WatchAckOrSubscribe)(nil),  // 19: nokv.fsmeta.v1.WatchAckOrSubscribe
-	(*RenameRequest)(nil),        // 20: nokv.fsmeta.v1.RenameRequest
-	(*RenameResponse)(nil),       // 21: nokv.fsmeta.v1.RenameResponse
-	(*UnlinkRequest)(nil),        // 22: nokv.fsmeta.v1.UnlinkRequest
-	(*UnlinkResponse)(nil),       // 23: nokv.fsmeta.v1.UnlinkResponse
+	(InodeType)(0),                  // 0: nokv.fsmeta.v1.InodeType
+	(WatchEventSource)(0),           // 1: nokv.fsmeta.v1.WatchEventSource
+	(*InodeRecord)(nil),             // 2: nokv.fsmeta.v1.InodeRecord
+	(*DentryRecord)(nil),            // 3: nokv.fsmeta.v1.DentryRecord
+	(*DentryAttrPair)(nil),          // 4: nokv.fsmeta.v1.DentryAttrPair
+	(*CreateRequest)(nil),           // 5: nokv.fsmeta.v1.CreateRequest
+	(*CreateResponse)(nil),          // 6: nokv.fsmeta.v1.CreateResponse
+	(*LookupRequest)(nil),           // 7: nokv.fsmeta.v1.LookupRequest
+	(*LookupResponse)(nil),          // 8: nokv.fsmeta.v1.LookupResponse
+	(*ReadDirRequest)(nil),          // 9: nokv.fsmeta.v1.ReadDirRequest
+	(*ReadDirResponse)(nil),         // 10: nokv.fsmeta.v1.ReadDirResponse
+	(*ReadDirPlusResponse)(nil),     // 11: nokv.fsmeta.v1.ReadDirPlusResponse
+	(*WatchCursor)(nil),             // 12: nokv.fsmeta.v1.WatchCursor
+	(*WatchSubtreeRequest)(nil),     // 13: nokv.fsmeta.v1.WatchSubtreeRequest
+	(*WatchEvent)(nil),              // 14: nokv.fsmeta.v1.WatchEvent
+	(*WatchAck)(nil),                // 15: nokv.fsmeta.v1.WatchAck
+	(*WatchCatchupComplete)(nil),    // 16: nokv.fsmeta.v1.WatchCatchupComplete
+	(*WatchThrottle)(nil),           // 17: nokv.fsmeta.v1.WatchThrottle
+	(*WatchSubtreeResponse)(nil),    // 18: nokv.fsmeta.v1.WatchSubtreeResponse
+	(*WatchAckOrSubscribe)(nil),     // 19: nokv.fsmeta.v1.WatchAckOrSubscribe
+	(*SnapshotSubtreeRequest)(nil),  // 20: nokv.fsmeta.v1.SnapshotSubtreeRequest
+	(*SnapshotSubtreeResponse)(nil), // 21: nokv.fsmeta.v1.SnapshotSubtreeResponse
+	(*RenameRequest)(nil),           // 22: nokv.fsmeta.v1.RenameRequest
+	(*RenameResponse)(nil),          // 23: nokv.fsmeta.v1.RenameResponse
+	(*UnlinkRequest)(nil),           // 24: nokv.fsmeta.v1.UnlinkRequest
+	(*UnlinkResponse)(nil),          // 25: nokv.fsmeta.v1.UnlinkResponse
 }
 var file_fsmeta_fsmeta_proto_depIdxs = []int32{
 	0,  // 0: nokv.fsmeta.v1.InodeRecord.type:type_name -> nokv.fsmeta.v1.InodeType
@@ -1621,17 +1754,19 @@ var file_fsmeta_fsmeta_proto_depIdxs = []int32{
 	9,  // 20: nokv.fsmeta.v1.FSMetadata.ReadDir:input_type -> nokv.fsmeta.v1.ReadDirRequest
 	9,  // 21: nokv.fsmeta.v1.FSMetadata.ReadDirPlus:input_type -> nokv.fsmeta.v1.ReadDirRequest
 	19, // 22: nokv.fsmeta.v1.FSMetadata.WatchSubtree:input_type -> nokv.fsmeta.v1.WatchAckOrSubscribe
-	20, // 23: nokv.fsmeta.v1.FSMetadata.Rename:input_type -> nokv.fsmeta.v1.RenameRequest
-	22, // 24: nokv.fsmeta.v1.FSMetadata.Unlink:input_type -> nokv.fsmeta.v1.UnlinkRequest
-	6,  // 25: nokv.fsmeta.v1.FSMetadata.Create:output_type -> nokv.fsmeta.v1.CreateResponse
-	8,  // 26: nokv.fsmeta.v1.FSMetadata.Lookup:output_type -> nokv.fsmeta.v1.LookupResponse
-	10, // 27: nokv.fsmeta.v1.FSMetadata.ReadDir:output_type -> nokv.fsmeta.v1.ReadDirResponse
-	11, // 28: nokv.fsmeta.v1.FSMetadata.ReadDirPlus:output_type -> nokv.fsmeta.v1.ReadDirPlusResponse
-	18, // 29: nokv.fsmeta.v1.FSMetadata.WatchSubtree:output_type -> nokv.fsmeta.v1.WatchSubtreeResponse
-	21, // 30: nokv.fsmeta.v1.FSMetadata.Rename:output_type -> nokv.fsmeta.v1.RenameResponse
-	23, // 31: nokv.fsmeta.v1.FSMetadata.Unlink:output_type -> nokv.fsmeta.v1.UnlinkResponse
-	25, // [25:32] is the sub-list for method output_type
-	18, // [18:25] is the sub-list for method input_type
+	20, // 23: nokv.fsmeta.v1.FSMetadata.SnapshotSubtree:input_type -> nokv.fsmeta.v1.SnapshotSubtreeRequest
+	22, // 24: nokv.fsmeta.v1.FSMetadata.Rename:input_type -> nokv.fsmeta.v1.RenameRequest
+	24, // 25: nokv.fsmeta.v1.FSMetadata.Unlink:input_type -> nokv.fsmeta.v1.UnlinkRequest
+	6,  // 26: nokv.fsmeta.v1.FSMetadata.Create:output_type -> nokv.fsmeta.v1.CreateResponse
+	8,  // 27: nokv.fsmeta.v1.FSMetadata.Lookup:output_type -> nokv.fsmeta.v1.LookupResponse
+	10, // 28: nokv.fsmeta.v1.FSMetadata.ReadDir:output_type -> nokv.fsmeta.v1.ReadDirResponse
+	11, // 29: nokv.fsmeta.v1.FSMetadata.ReadDirPlus:output_type -> nokv.fsmeta.v1.ReadDirPlusResponse
+	18, // 30: nokv.fsmeta.v1.FSMetadata.WatchSubtree:output_type -> nokv.fsmeta.v1.WatchSubtreeResponse
+	21, // 31: nokv.fsmeta.v1.FSMetadata.SnapshotSubtree:output_type -> nokv.fsmeta.v1.SnapshotSubtreeResponse
+	23, // 32: nokv.fsmeta.v1.FSMetadata.Rename:output_type -> nokv.fsmeta.v1.RenameResponse
+	25, // 33: nokv.fsmeta.v1.FSMetadata.Unlink:output_type -> nokv.fsmeta.v1.UnlinkResponse
+	26, // [26:34] is the sub-list for method output_type
+	18, // [18:26] is the sub-list for method input_type
 	18, // [18:18] is the sub-list for extension type_name
 	18, // [18:18] is the sub-list for extension extendee
 	0,  // [0:18] is the sub-list for field type_name
@@ -1657,7 +1792,7 @@ func file_fsmeta_fsmeta_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_fsmeta_fsmeta_proto_rawDesc), len(file_fsmeta_fsmeta_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   22,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

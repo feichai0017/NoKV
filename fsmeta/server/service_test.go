@@ -21,6 +21,7 @@ type fakeExecutor struct {
 	createReq   fsmeta.CreateRequest
 	createInode fsmeta.InodeRecord
 	readDirReq  fsmeta.ReadDirRequest
+	snapshotReq fsmeta.SnapshotSubtreeRequest
 	err         error
 }
 
@@ -75,6 +76,14 @@ func (e *fakeExecutor) ReadDirPlus(_ context.Context, req fsmeta.ReadDirRequest)
 			LinkCount: 1,
 		},
 	}}, nil
+}
+
+func (e *fakeExecutor) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
+	e.snapshotReq = req
+	if e.err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, e.err
+	}
+	return fsmeta.SnapshotSubtreeToken{Mount: req.Mount, RootInode: req.RootInode, ReadVersion: 1234}, nil
 }
 
 func (e *fakeExecutor) Rename(context.Context, fsmeta.RenameRequest) error {
@@ -197,6 +206,32 @@ func TestGRPCServiceWatchSubtree(t *testing.T) {
 		return len(watcher.sub.acks) == 1 && watcher.sub.acks[0] == evt.Cursor
 	}, time.Second, 10*time.Millisecond)
 	require.NoError(t, stream.CloseSend())
+}
+
+func TestGRPCServiceSnapshotSubtreePublishesToken(t *testing.T) {
+	executor := &fakeExecutor{}
+	publisher := &fakeSnapshotPublisher{}
+	client, cleanup := openBufconnClient(t, executor, WithSnapshotPublisher(publisher))
+	defer cleanup()
+
+	resp, err := client.SnapshotSubtree(context.Background(), &fsmetapb.SnapshotSubtreeRequest{
+		Mount:     "vol",
+		RootInode: 42,
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.SnapshotSubtreeRequest{Mount: "vol", RootInode: 42}, executor.snapshotReq)
+	require.Equal(t, uint64(1234), resp.GetReadVersion())
+	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 1234}, publisher.token)
+}
+
+type fakeSnapshotPublisher struct {
+	token fsmeta.SnapshotSubtreeToken
+	err   error
+}
+
+func (p *fakeSnapshotPublisher) PublishSnapshotSubtree(_ context.Context, token fsmeta.SnapshotSubtreeToken) error {
+	p.token = token
+	return p.err
 }
 
 type fakeWatcher struct {

@@ -137,6 +137,7 @@ type PendingRangeChange struct {
 type Snapshot struct {
 	State               State
 	Stores              map[uint64]StoreMembership
+	SnapshotEpochs      map[string]SnapshotEpoch
 	Descriptors         map[uint64]descriptor.Descriptor
 	PendingPeerChanges  map[uint64]PendingPeerChange
 	PendingRangeChanges map[uint64]PendingRangeChange
@@ -153,10 +154,28 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 	out := Snapshot{
 		State:               state,
 		Stores:              CloneStoreMemberships(snapshot.Stores),
+		SnapshotEpochs:      CloneSnapshotEpochs(snapshot.SnapshotEpochs),
 		Descriptors:         CloneDescriptors(snapshot.Descriptors),
 		PendingPeerChanges:  ClonePendingPeerChanges(snapshot.PendingPeerChanges),
 		PendingRangeChanges: ClonePendingRangeChanges(snapshot.PendingRangeChanges),
 	}
+	return out
+}
+
+type SnapshotEpoch struct {
+	SnapshotID  string
+	Mount       string
+	RootInode   uint64
+	ReadVersion uint64
+	PublishedAt Cursor
+}
+
+func CloneSnapshotEpochs(in map[string]SnapshotEpoch) map[string]SnapshotEpoch {
+	if len(in) == 0 {
+		return make(map[string]SnapshotEpoch)
+	}
+	out := make(map[string]SnapshotEpoch, len(in))
+	maps.Copy(out, in)
 	return out
 }
 
@@ -253,6 +272,10 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		applyLegacyToState(state, cursor, event)
 	case rootevent.KindHandover:
 		applyHandoverToState(state, cursor, event)
+	case rootevent.KindSnapshotEpochPublished:
+		// Snapshot epochs are rooted retention/audit claims. They advance the
+		// root cursor but intentionally do not mutate cluster or membership
+		// epochs.
 	case rootevent.KindRegionBootstrap,
 		rootevent.KindRegionDescriptorPublished,
 		rootevent.KindRegionTombstoned,
