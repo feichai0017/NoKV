@@ -62,10 +62,7 @@ func TestClusterSurvivesCoordinatorUnavailableAfterStartup(t *testing.T) {
 	resolver, err := coordclient.NewGRPCClient(ctx, coord.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	cli, err := client.New(client.Config{
-		Stores: []client.StoreEndpoint{
-			{StoreID: 1, Addr: seed.Addr()},
-			{StoreID: 2, Addr: target.Addr()},
-		},
+		StoreResolver:  resolver,
 		RegionResolver: resolver,
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 	})
@@ -102,10 +99,7 @@ func TestClusterSurvivesCoordinatorUnavailableAfterStartup(t *testing.T) {
 
 	staleResolver := &unavailableResolver{}
 	coldCli, err := client.New(client.Config{
-		Stores: []client.StoreEndpoint{
-			{StoreID: 1, Addr: seed.Addr()},
-			{StoreID: 2, Addr: target.Addr()},
-		},
+		StoreResolver:  staleResolver,
 		RegionResolver: staleResolver,
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 		Retry: client.RetryPolicy{
@@ -124,6 +118,10 @@ func TestClusterSurvivesCoordinatorUnavailableAfterStartup(t *testing.T) {
 type unavailableResolver struct{}
 
 func (u *unavailableResolver) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
+	return nil, context.DeadlineExceeded
+}
+
+func (u *unavailableResolver) GetStore(context.Context, *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error) {
 	return nil, context.DeadlineExceeded
 }
 

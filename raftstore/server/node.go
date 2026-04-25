@@ -97,6 +97,7 @@ func NewNode(cfg Config) (*Node, error) {
 		_ = tr.Close()
 		return nil, err
 	}
+	st.SetAdvertiseAddrs(tr.Addr(), tr.Addr())
 
 	node := &Node{
 		store:     st,

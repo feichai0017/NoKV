@@ -86,7 +86,7 @@ func TestClientCommitRegionReturnsKeyError(t *testing.T) {
 	defer stop()
 
 	cli, err := New(Config{
-		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
 		RegionResolver: resolverFromCluster(cluster),
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
@@ -147,7 +147,7 @@ func TestClientResolveLocksRetriesOnNotLeader(t *testing.T) {
 	defer stop2()
 
 	cli, err := New(Config{
-		Stores: []StoreEndpoint{
+		StoreResolver: staticStoreResolver{
 			{StoreID: 1, Addr: addr1},
 			{StoreID: 2, Addr: addr2},
 		},
@@ -214,7 +214,7 @@ func TestClientCheckTxnStatusRetriesOnNotLeader(t *testing.T) {
 	defer stop2()
 
 	cli, err := New(Config{
-		Stores: []StoreEndpoint{
+		StoreResolver: staticStoreResolver{
 			{StoreID: 1, Addr: addr1},
 			{StoreID: 2, Addr: addr2},
 		},
@@ -264,7 +264,7 @@ func TestClientResolveLocksReturnsKeyError(t *testing.T) {
 	defer stop()
 
 	cli, err := New(Config{
-		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
 		RegionResolver: resolverFromCluster(cluster),
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
@@ -307,7 +307,7 @@ func TestClientTwoPhaseCommitRejectsMissingPrimaryMutation(t *testing.T) {
 	defer stop()
 
 	cli, err := New(Config{
-		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
 		RegionResolver: resolverFromCluster(cluster),
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 	})
@@ -358,7 +358,7 @@ func TestClientTwoPhaseCommitRollsBackPrewritesAfterSecondaryPrewriteFailure(t *
 	defer stop()
 
 	cli, err := New(Config{
-		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
 		RegionResolver: resolverFromCluster(cluster),
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
@@ -418,7 +418,7 @@ func TestClientTwoPhaseCommitResolvesSecondariesAfterSecondaryCommitFailure(t *t
 	defer stop()
 
 	cli, err := New(Config{
-		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
 		RegionResolver: resolverFromCluster(cluster),
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
@@ -489,7 +489,7 @@ func TestClientTwoPhaseCommitReportsSecondaryCommitAndResolveFailures(t *testing
 	defer stop()
 
 	cli, err := New(Config{
-		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
 		RegionResolver: resolverFromCluster(cluster),
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
@@ -532,7 +532,7 @@ func TestClientTwoPhaseCommitReroutesAfterPrewriteEpochMismatch(t *testing.T) {
 	defer stop()
 
 	cli, err := New(Config{
-		Stores: []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		StoreResolver: staticStoreResolver{{StoreID: 1, Addr: addr}},
 		RegionResolver: &mockRegionResolver{region: &metapb.RegionDescriptor{
 			RegionId: 1,
 			StartKey: []byte("a"),
@@ -597,7 +597,7 @@ func TestClientTwoPhaseCommitReroutesSecondaryCommitAfterEpochMismatch(t *testin
 	defer stop()
 
 	cli, err := New(Config{
-		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
 		RegionResolver: resolverFromCluster(cluster),
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 		Retry:          RetryPolicy{MaxAttempts: 4, RegionErrorBackoff: 0},

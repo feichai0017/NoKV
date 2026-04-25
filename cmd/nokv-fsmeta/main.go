@@ -8,11 +8,9 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
-	"github.com/feichai0017/NoKV/config"
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	fsmetaserver "github.com/feichai0017/NoKV/fsmeta/server"
@@ -31,26 +29,20 @@ var fatalf = func(format string, args ...any) {
 
 var listen = net.Listen
 var signalNotify = signal.Notify
-var openExecutor = newExecutorFromConfig
+var openExecutor = newExecutor
 
 func main() {
 	var (
 		addr        = flag.String("addr", "127.0.0.1:8090", "listen address for FSMetadata gRPC server")
-		raftConfig  = flag.String("raft-config", "", "JSON config describing raftstore cluster endpoints")
-		coordAddr   = flag.String("coordinator-addr", "", "optional coordinator gRPC endpoint override; defaults to config.coordinator")
-		addrScope   = flag.String("addr-scope", "host", "store/coordinator address scope to use (host|docker)")
+		coordAddr   = flag.String("coordinator-addr", "", "coordinator gRPC endpoint used for TSO, routing, and store discovery")
 		metricsAddr = flag.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
 	)
 	flag.Parse()
 
-	if strings.TrimSpace(*raftConfig) == "" {
-		fatalf("raft-config is required")
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	executor, closeExecutor, err := openExecutor(ctx, *raftConfig, *coordAddr, *addrScope)
+	executor, closeExecutor, err := openExecutor(ctx, *coordAddr)
 	if err != nil {
 		fatalf("open fsmeta executor: %v", err)
 	}
@@ -107,41 +99,7 @@ func main() {
 
 type closeFunc func() error
 
-func newExecutorFromConfig(ctx context.Context, cfgPath, coordAddr, addrScope string) (*fsmetaexec.Executor, closeFunc, error) {
-	cfgFile, err := config.LoadFile(cfgPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read config: %w", err)
-	}
-	if err := cfgFile.Validate(); err != nil {
-		return nil, nil, fmt.Errorf("config invalid: %w", err)
-	}
-	scope := strings.ToLower(strings.TrimSpace(addrScope))
-	if scope == "" {
-		scope = "host"
-	}
-	if scope != "host" && scope != "docker" {
-		return nil, nil, fmt.Errorf("unknown addr-scope %q (expected host|docker)", addrScope)
-	}
-
-	stores := make([]client.StoreEndpoint, 0, len(cfgFile.Stores))
-	for _, st := range cfgFile.Stores {
-		addr := strings.TrimSpace(st.Addr)
-		if scope == "docker" && strings.TrimSpace(st.DockerAddr) != "" {
-			addr = strings.TrimSpace(st.DockerAddr)
-		}
-		if addr == "" {
-			return nil, nil, fmt.Errorf("store %d address missing for scope %q", st.StoreID, scope)
-		}
-		stores = append(stores, client.StoreEndpoint{StoreID: st.StoreID, Addr: addr})
-	}
-	if len(stores) == 0 {
-		return nil, nil, fmt.Errorf("no stores configured")
-	}
-
-	coordAddr = strings.TrimSpace(coordAddr)
-	if coordAddr == "" {
-		coordAddr = cfgFile.ResolveCoordinatorAddr(scope)
-	}
+func newExecutor(ctx context.Context, coordAddr string) (*fsmetaexec.Executor, closeFunc, error) {
 	if coordAddr == "" {
 		return nil, nil, fmt.Errorf("coordinator-addr is required")
 	}
@@ -153,12 +111,9 @@ func newExecutorFromConfig(ctx context.Context, cfgPath, coordAddr, addrScope st
 	}
 	kv, err := client.New(client.Config{
 		Context:        ctx,
-		Stores:         stores,
+		StoreResolver:  coordRPC,
 		RegionResolver: coordRPC,
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
-		Retry: client.RetryPolicy{
-			MaxAttempts: cfgFile.MaxRetries,
-		},
 	})
 	if err != nil {
 		_ = coordRPC.Close()

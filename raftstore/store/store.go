@@ -18,6 +18,7 @@ import (
 	"context"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"sync"
 	"time"
 )
 
@@ -29,6 +30,9 @@ type Store struct {
 	peerBuilder PeerBuilder
 	workDir     string
 	storeID     uint64
+	addressMu   sync.RWMutex
+	clientAddr  string
+	raftAddr    string
 	ctx         context.Context
 	cancel      context.CancelFunc
 	regions     *regionRuntime
@@ -80,6 +84,8 @@ func NewStore(cfg Config) *Store {
 		peerBuilder: cfg.PeerBuilder,
 		workDir:     cfg.WorkDir,
 		storeID:     cfg.StoreID,
+		clientAddr:  cfg.ClientAddr,
+		raftAddr:    cfg.RaftAddr,
 		ctx:         ctx,
 		cancel:      cancel,
 		sched: &schedulerRuntime{
@@ -132,6 +138,17 @@ func NewStore(cfg Config) *Store {
 		s.signalRegionFlush()
 	}
 	return s
+}
+
+// SetAdvertiseAddrs updates the runtime endpoints reported to Coordinator.
+func (s *Store) SetAdvertiseAddrs(clientAddr, raftAddr string) {
+	if s == nil {
+		return
+	}
+	s.addressMu.Lock()
+	s.clientAddr = clientAddr
+	s.raftAddr = raftAddr
+	s.addressMu.Unlock()
 }
 
 // WorkDir returns the store-local workdir used for metadata and staging.

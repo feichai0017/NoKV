@@ -12,12 +12,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// StoreEndpoint describes a reachable store in the cluster.
-type StoreEndpoint struct {
-	StoreID uint64
-	Addr    string
-}
-
 // RegionResolver resolves Region metadata for an arbitrary key. A Coordinator client
 // implementation should satisfy this interface.
 type RegionResolver interface {
@@ -25,11 +19,16 @@ type RegionResolver interface {
 	Close() error
 }
 
+// StoreResolver resolves runtime store endpoints from the control plane.
+type StoreResolver interface {
+	GetStore(ctx context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error)
+}
+
 // Config configures the NoKV distributed client.
 type Config struct {
 	Context            context.Context
-	Stores             []StoreEndpoint
 	RegionResolver     RegionResolver
+	StoreResolver      StoreResolver
 	RouteLookupTimeout time.Duration
 	DialTimeout        time.Duration
 	DialOptions        []grpc.DialOption
@@ -51,17 +50,20 @@ type Client struct {
 	regions            map[uint64]*regionState
 	regionIndex        []regionRange
 	regionResolver     RegionResolver
+	storeResolver      StoreResolver
 	routeLookupTimeout time.Duration
+	dialTimeout        time.Duration
+	dialOpts           []grpc.DialOption
 	retry              RetryPolicy
 }
 
 // New constructs a Client using the provided configuration.
 func New(cfg Config) (*Client, error) {
-	if len(cfg.Stores) == 0 {
-		return nil, errMissingStoreEndpoints
-	}
 	if cfg.RegionResolver == nil {
 		return nil, errMissingRegionResolver
+	}
+	if cfg.StoreResolver == nil {
+		return nil, errMissingStoreResolver
 	}
 	dialTimeout := cfg.DialTimeout
 	if dialTimeout <= 0 {
@@ -75,17 +77,6 @@ func New(cfg Config) (*Client, error) {
 	if len(dialOpts) == 0 {
 		dialOpts = []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 	}
-	stores := make(map[uint64]*storeConn, len(cfg.Stores))
-	for _, endpoint := range cfg.Stores {
-		if endpoint.StoreID == 0 || endpoint.Addr == "" {
-			return nil, fmt.Errorf("client: invalid store endpoint %+v", endpoint)
-		}
-		stores[endpoint.StoreID] = &storeConn{
-			addr:        endpoint.Addr,
-			dialTimeout: dialTimeout,
-			dialOpts:    append([]grpc.DialOption(nil), dialOpts...),
-		}
-	}
 	retry := cfg.Retry
 	if retry.MaxAttempts <= 0 {
 		retry.MaxAttempts = 5
@@ -94,10 +85,13 @@ func New(cfg Config) (*Client, error) {
 	retry.TransportUnavailableBackoff = normalizeRetryBackoff(retry.TransportUnavailableBackoff, 10*time.Millisecond)
 	retry.RegionErrorBackoff = normalizeRetryBackoff(retry.RegionErrorBackoff, 0)
 	return &Client{
-		stores:             stores,
+		stores:             make(map[uint64]*storeConn),
 		regions:            make(map[uint64]*regionState),
 		regionResolver:     cfg.RegionResolver,
+		storeResolver:      cfg.StoreResolver,
 		routeLookupTimeout: routeLookupTimeout,
+		dialTimeout:        dialTimeout,
+		dialOpts:           append([]grpc.DialOption(nil), dialOpts...),
 		retry:              retry,
 	}, nil
 }

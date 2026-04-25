@@ -241,16 +241,16 @@ func TestNodeWithClientTwoPhaseCommit(t *testing.T) {
 		startRegionPeer(t, nodes[i])
 	}
 
-	stores := make([]client.StoreEndpoint, 0, len(nodes))
+	stores := make([]testStoreEndpoint, 0, len(nodes))
 	regions := make([]*metapb.RegionDescriptor, 0, len(nodes))
 	for _, n := range nodes {
-		stores = append(stores, client.StoreEndpoint{StoreID: n.storeID, Addr: n.addr})
+		stores = append(stores, testStoreEndpoint{StoreID: n.storeID, Addr: n.addr})
 		regions = append(regions, regionMetaToPB(n.region))
 	}
 	sort.Slice(regions, func(i, j int) bool { return regions[i].GetRegionId() < regions[j].GetRegionId() })
 
 	cli, err := client.New(client.Config{
-		Stores:         stores,
+		StoreResolver:  staticStoreResolver(stores),
 		RegionResolver: &staticRegionResolver{regions: regions},
 		DialOptions: []grpc.DialOption{
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -329,6 +329,28 @@ type testNode struct {
 
 type staticRegionResolver struct {
 	regions []*metapb.RegionDescriptor
+}
+
+type testStoreEndpoint struct {
+	StoreID uint64
+	Addr    string
+}
+
+type staticStoreResolver []testStoreEndpoint
+
+func (r staticStoreResolver) GetStore(_ context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error) {
+	for _, endpoint := range r {
+		if endpoint.StoreID == req.GetStoreId() {
+			return &coordpb.GetStoreResponse{
+				Store: &coordpb.StoreInfo{
+					StoreId:    endpoint.StoreID,
+					ClientAddr: endpoint.Addr,
+					State:      coordpb.StoreState_STORE_STATE_UP,
+				},
+			}, nil
+		}
+	}
+	return &coordpb.GetStoreResponse{NotFound: true}, nil
 }
 
 func (r *staticRegionResolver) GetRegionByKey(_ context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {

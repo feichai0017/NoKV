@@ -31,9 +31,9 @@ func main() {
 		workDir     = flag.String("workdir", "./work_redis", "database work directory")
 		addr        = flag.String("addr", "127.0.0.1:6380", "listen address for RESP server")
 		metricsAddr = flag.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
-		raftConfig  = flag.String("raft-config", "", "optional JSON config describing raftstore cluster endpoints")
-		coordAddr   = flag.String("coordinator-addr", "", "optional coordinator gRPC endpoint override in raft mode; defaults to config.coordinator (e.g. 127.0.0.1:2379)")
-		addrScope   = flag.String("addr-scope", "host", "store address scope to use (host|docker)")
+		raftConfig  = flag.String("raft-config", "", "optional JSON config used to resolve coordinator endpoint")
+		coordAddr   = flag.String("coordinator-addr", "", "coordinator gRPC endpoint for raft mode")
+		addrScope   = flag.String("addr-scope", "host", "coordinator address scope to use with --raft-config (host|docker)")
 	)
 	flag.Parse()
 
@@ -47,7 +47,7 @@ func main() {
 	backendCtx, cancelBackend := context.WithCancel(context.Background())
 	defer cancelBackend()
 
-	if *raftConfig != "" {
+	if *coordAddr != "" || *raftConfig != "" {
 		var err error
 		backend, err = newRaftBackend(backendCtx, *raftConfig, *coordAddr, *addrScope)
 		if err != nil {

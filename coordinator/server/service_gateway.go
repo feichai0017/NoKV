@@ -25,6 +25,8 @@ func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbea
 	}
 	err := s.cluster.UpsertStoreHeartbeat(pdview.StoreStats{
 		StoreID:           req.GetStoreId(),
+		ClientAddr:        req.GetClientAddr(),
+		RaftAddr:          req.GetRaftAddr(),
 		RegionNum:         req.GetRegionNum(),
 		LeaderNum:         req.GetLeaderNum(),
 		Capacity:          req.GetCapacity(),
@@ -47,6 +49,53 @@ func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbea
 		Accepted:   true,
 		Operations: operations,
 	}, nil
+}
+
+// GetStore returns the current runtime endpoint for one store.
+func (s *Service) GetStore(ctx context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
+	if req == nil || req.GetStoreId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "get store request missing store_id")
+	}
+	stats, ok := s.cluster.StoreByID(req.GetStoreId())
+	if !ok {
+		return &coordpb.GetStoreResponse{NotFound: true}, nil
+	}
+	return &coordpb.GetStoreResponse{Store: storeInfoToProto(stats)}, nil
+}
+
+// ListStores returns the current runtime store registry.
+func (s *Service) ListStores(ctx context.Context, _ *coordpb.ListStoresRequest) (*coordpb.ListStoresResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
+	stores := s.cluster.StoreSnapshot()
+	out := make([]*coordpb.StoreInfo, 0, len(stores))
+	for _, st := range stores {
+		out = append(out, storeInfoToProto(st))
+	}
+	return &coordpb.ListStoresResponse{Stores: out}, nil
+}
+
+func storeInfoToProto(stats pdview.StoreStats) *coordpb.StoreInfo {
+	state := coordpb.StoreState_STORE_STATE_UP
+	if stats.StoreID == 0 {
+		state = coordpb.StoreState_STORE_STATE_UNKNOWN
+	}
+	return &coordpb.StoreInfo{
+		StoreId:               stats.StoreID,
+		ClientAddr:            stats.ClientAddr,
+		RaftAddr:              stats.RaftAddr,
+		State:                 state,
+		RegionNum:             stats.RegionNum,
+		LeaderNum:             stats.LeaderNum,
+		Capacity:              stats.Capacity,
+		Available:             stats.Available,
+		DroppedOperations:     stats.DroppedOperations,
+		LastHeartbeatUnixNano: uint64(stats.UpdatedAt.UnixNano()),
+	}
 }
 
 // RegionLiveness records one runtime heartbeat without mutating rooted truth.
