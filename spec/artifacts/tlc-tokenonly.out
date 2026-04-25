@@ -1,0 +1,32 @@
+# Recorded TLC output
+spec=spec/TokenOnly.tla
+status=failure
+
+Error: Invariant NoOldReplyAfterSuccessor is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ inflight = {}
+/\ frontier = (0 :> 0 @@ 1 :> 0 @@ 2 :> 0 @@ 3 :> 0)
+/\ activeEra = 0
+/\ issued = {0}
+/\ delivered = [era |-> 0, frontier |-> 0, valid |-> FALSE]
+State 2: <CurrentReply line 53, col 5 to line 58, col 38 of module TokenOnly>
+/\ inflight = {[era |-> 0, frontier |-> 0]}
+/\ frontier = (0 :> 0 @@ 1 :> 0 @@ 2 :> 0 @@ 3 :> 0)
+/\ activeEra = 0
+/\ issued = {0}
+/\ delivered = [era |-> 0, frontier |-> 0, valid |-> FALSE]
+State 3: <Issue line 45, col 9 to line 50, col 43 of module TokenOnly>
+/\ inflight = {[era |-> 0, frontier |-> 0]}
+/\ frontier = (0 :> 0 @@ 1 :> 0 @@ 2 :> 0 @@ 3 :> 0)
+/\ activeEra = 1
+/\ issued = {0, 1}
+/\ delivered = [era |-> 0, frontier |-> 0, valid |-> FALSE]
+State 4: <DeliverReply line 61, col 5 to line 69, col 48 of module TokenOnly>
+/\ inflight = {}
+/\ frontier = (0 :> 0 @@ 1 :> 0 @@ 2 :> 0 @@ 3 :> 0)
+/\ activeEra = 1
+/\ issued = {0, 1}
+/\ delivered = [era |-> 0, frontier |-> 0, valid |-> TRUE]
+120 states generated, 85 distinct states found, 64 states left on queue.
+The depth of the complete state graph search is 4.

@@ -1,0 +1,29 @@
+# Recorded TLC output
+spec=spec/ChubbyFencedLease.tla
+status=failure
+
+Error: Invariant SuccessorCoversHistoricalFrontiers is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ inflight = {}
+/\ observedMaxEra = 0
+/\ frontier = (0 :> 0 @@ 1 :> 0 @@ 2 :> 0 @@ 3 :> 0)
+/\ activeEra = 0
+/\ issued = {0}
+/\ delivered = [era |-> 0, frontier |-> 0, valid |-> FALSE]
+State 2: <CurrentReply line 54, col 5 to line 59, col 54 of module ChubbyFencedLease>
+/\ inflight = {[era |-> 0, frontier |-> 1]}
+/\ observedMaxEra = 0
+/\ frontier = (0 :> 1 @@ 1 :> 0 @@ 2 :> 0 @@ 3 :> 0)
+/\ activeEra = 0
+/\ issued = {0}
+/\ delivered = [era |-> 0, frontier |-> 0, valid |-> FALSE]
+State 3: <Issue line 46, col 9 to line 51, col 59 of module ChubbyFencedLease>
+/\ inflight = {[era |-> 0, frontier |-> 1]}
+/\ observedMaxEra = 0
+/\ frontier = (0 :> 1 @@ 1 :> 0 @@ 2 :> 0 @@ 3 :> 0)
+/\ activeEra = 1
+/\ issued = {0, 1}
+/\ delivered = [era |-> 0, frontier |-> 0, valid |-> FALSE]
+33 states generated, 26 distinct states found, 19 states left on queue.
+The depth of the complete state graph search is 3.
