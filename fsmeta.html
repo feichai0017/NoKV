@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-78ea1104.js";
+            window.path_to_searchindex_js = "searchindex-1c78d743.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-f12f6280.js"></script>
+        <script src="toc-409c1dfb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -205,6 +205,8 @@ by <code>fsmeta/server</code>.</p>
 <tr><td><code>Lookup</code></td><td>Read one dentry by <code>(mount, parent inode, name)</code>.</td></tr>
 <tr><td><code>ReadDir</code></td><td>Scan dentries under one parent inode.</td></tr>
 <tr><td><code>ReadDirPlus</code></td><td>Scan dentries and fetch inode attributes in one typed operation.</td></tr>
+<tr><td><code>WatchSubtree</code></td><td>Live prefix-scoped metadata change stream with explicit ack/back-pressure.</td></tr>
+<tr><td><code>SnapshotSubtree</code></td><td>Publish a stable MVCC read epoch for later snapshot-version reads.</td></tr>
 <tr><td><code>Rename</code></td><td>Atomically move one dentry from one parent/name to another.</td></tr>
 <tr><td><code>Unlink</code></td><td>Delete one dentry.</td></tr>
 </tbody>
@@ -228,13 +230,28 @@ schema usually implements the same operation as one scan plus N point reads.</p>
 <tr><td>Server-side <code>AssertionNotExist</code></td><td>Implemented in Percolator prewrite</td></tr>
 <tr><td>Native gRPC service and typed Go client</td><td>Implemented</td></tr>
 <tr><td>Docker Compose service</td><td>Implemented</td></tr>
-<tr><td>Hardlink ref-count, xattrs, subtree watch, quota fence</td><td>Not in Stage 1</td></tr>
+<tr><td>Live <code>WatchSubtree</code></td><td>Implemented in Stage 2.2</td></tr>
+<tr><td><code>SnapshotSubtree</code> MVCC epoch</td><td>Implemented in Stage 2.3</td></tr>
+<tr><td>Historical watch catch-up, hardlink ref-count, xattrs, quota fence</td><td>Future work</td></tr>
 </tbody>
 </table>
 </div>
 <p>The current service is a metadata substrate, not a complete filesystem stack.
-FUSE, POSIX compatibility, subtree-level watch, quota, and snapshot semantics
-belong to later stages.</p>
+FUSE, POSIX compatibility, historical watch catch-up, quota, recursive subtree
+materialization, and snapshot GC retention enforcement belong to later stages.</p>
+<h2 id="snapshotsubtree"><a class="header" href="#snapshotsubtree">SnapshotSubtree</a></h2>
+<p><code>SnapshotSubtree</code> returns a <code>read_version</code> from coordinator TSO and publishes the
+epoch into rooted truth as <code>SnapshotEpochPublished</code>. Subsequent <code>ReadDir</code> /
+<code>ReadDirPlus</code> calls can pass that version through <code>ReadDirRequest.snapshot_version</code>
+to read a stable MVCC view.</p>
+<p>V0 is intentionally a read-epoch primitive:</p>
+<ul>
+<li>It does not copy the subtree.</li>
+<li>It does not recursively traverse children.</li>
+<li>It does not enforce MVCC GC retention yet, because data-plane GC is not enabled.</li>
+<li>It records the snapshot epoch in <code>meta/root</code> so future GC / audit / namespace
+authority work has a durable contract to depend on.</li>
+</ul>
 <h2 id="running-with-docker-compose"><a class="header" href="#running-with-docker-compose">Running With Docker Compose</a></h2>
 <p>Build and start the full local stack:</p>
 <pre><code class="language-bash">docker compose up -d --build
@@ -283,7 +300,7 @@ docker run --rm --network nokv_default \
   -v "$PWD":/workspace \
   -w /workspace/benchmark \
   -e NOKV_FSMETA_BENCH=1 \
-  golang:1.26 \
+  golang:1.26.2-bookworm \
   go test ./fsmeta -run TestBenchmarkFSMeta -count=1 -timeout 30m -v -args \
     -fsmeta_drivers native-fsmeta,generic-kv \
     -fsmeta_mount "fsmeta-formal-${RUN_TS}" \
@@ -298,16 +315,34 @@ docker run --rm --network nokv_default \
     -fsmeta_page_limit 512 \
     -fsmeta_readdirplus=true \
     -fsmeta_timeout 25m \
-    -fsmeta_output "data/fsmeta/results/fsmeta_native_vs_generic_${RUN_TS}.csv"
+    -fsmeta_output "../data/fsmeta/results/fsmeta_native_vs_generic_${RUN_TS}.csv"
 </code></pre>
-<p>The generated CSV under <code>benchmark/data/</code> is a local run artifact and is ignored
-by Git (the example above writes to <code>&lt;repo&gt;/benchmark/data/...</code> because the
-docker run is <code>-w /workspace/benchmark</code>). Curated, committed results live under
-<code>benchmark/fsmeta/results/</code> — point <code>-fsmeta_output</code> at <code>fsmeta/results/...</code>
-(relative to <code>/workspace/benchmark</code>) when promoting a run to a tracked
-artifact.</p>
+<p>The test binary runs from the package directory <code>benchmark/fsmeta</code>. The example
+above writes a local ignored artifact to <code>&lt;repo&gt;/benchmark/data/...</code> via
+<code>../data/...</code>. Curated, committed results live under
+<code>benchmark/fsmeta/results/</code>; point <code>-fsmeta_output</code> at <code>results/...</code> when
+promoting a run to a tracked artifact.</p>
 <p>For the Stage 1 result interpretation, see
 <code>docs/notes/2026-04-25-fsmeta-stage1-benchmark-results.md</code>.</p>
+<p>Run the Stage 2.2 WatchSubtree evidence workload:</p>
+<pre><code class="language-bash">RUN_TS=$(date -u +%Y%m%dT%H%M%SZ)
+docker run --rm --network nokv_default \
+  -v "$PWD":/workspace \
+  -w /workspace/benchmark \
+  -e NOKV_FSMETA_BENCH=1 \
+  golang:1.26.2-bookworm \
+  go test ./fsmeta -run TestBenchmarkFSMeta -count=1 -timeout 20m -v -args \
+    -fsmeta_drivers native-fsmeta \
+    -fsmeta_mount "fsmeta-watch-${RUN_TS}" \
+    -fsmeta_addr nokv-fsmeta:8090 \
+    -fsmeta_coordinator_addr nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379 \
+    -fsmeta_workloads watch-subtree \
+    -fsmeta_clients 8 \
+    -fsmeta_files 512 \
+    -fsmeta_watch_window 1024 \
+    -fsmeta_timeout 15m \
+    -fsmeta_output "../data/fsmeta/results/fsmeta_watchsubtree_${RUN_TS}.csv"
+</code></pre>
 <h2 id="why-native-metadata-api-matters"><a class="header" href="#why-native-metadata-api-matters">Why Native Metadata API Matters</a></h2>
 <p>The generic-KV baseline intentionally uses the same NoKV raftstore and
 Percolator substrate. The difference is API shape:</p>

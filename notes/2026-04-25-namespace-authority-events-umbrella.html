@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>2026-04-25 Coordinator 驱动的 Store Registry - NoKV Docs</title>
+        <title>2026-04-25 Namespace Authority Events Umbrella - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-78ea1104.js";
+            window.path_to_searchindex_js = "../searchindex-1c78d743.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-f12f6280.js"></script>
+        <script src="../toc-409c1dfb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,170 +178,247 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="2026-04-25-coordinator-驱动的-store-registry"><a class="header" href="#2026-04-25-coordinator-驱动的-store-registry">2026-04-25 Coordinator 驱动的 Store Registry</a></h1>
-<blockquote>
-<p>状态：已落地。NoKV 客户端 bootstrap 已从“静态 <code>raft_config</code> 携带全部 store 地址”收敛到“只依赖 coordinator endpoint”。</p>
-</blockquote>
+                        <h1 id="2026-04-25-namespace-authority-events-umbrella"><a class="header" href="#2026-04-25-namespace-authority-events-umbrella">2026-04-25 Namespace Authority Events Umbrella</a></h1>
+<h2 id="导读"><a class="header" href="#导读">导读</a></h2>
+<ul>
+<li>🧭 主题：给 Stage 2 的 namespace / subtree / snapshot / quota primitive 预先统一 rooted event 边界</li>
+<li>🧱 核心对象：Mount、Subtree、SnapshotEpoch、QuotaFence、StoreMembership</li>
+<li>🔁 调用链：<code>fsmeta/server -&gt; coordinator/meta-root command -&gt; rooted event -&gt; coordinator/runtime view -&gt; raftstore/fsmeta primitive</code></li>
+<li>📚 参考对象：NoKV Succession、<code>meta/root</code> rooted truth、DaisyNFS / FSCQ 的 verified metadata 边界、TiKV PD 的 membership / runtime view 分层</li>
+</ul>
 <h2 id="1-结论"><a class="header" href="#1-结论">1. 结论</a></h2>
-<p>NoKV 现在参考 TiKV PD 和 FoundationDB 的 bootstrap 思路，把 store 地址发现交给 <code>coordinator</code>。</p>
-<p><code>coordinator</code> 同时提供三类运行时入口：</p>
+<p>Stage 2 要新增的 primitive 不应该各自发明 RootEvent。先统一成一个 namespace authority umbrella：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Domain</th><th>Rooted truth</th><th>Runtime view</th><th>Stage</th></tr>
+</thead>
+<tbody>
+<tr><td>Store membership</td><td>store 是否属于集群、是否 retired</td><td>address、heartbeat、capacity、load</td><td>2.1</td></tr>
+<tr><td>Mount lifecycle</td><td>mount 是否存在、owner、root inode、schema version</td><td>mount cache、active sessions</td><td>2.2+</td></tr>
+<tr><td>Subtree authority</td><td>某个 subtree 的 authority era / handoff frontier</td><td>watcher fan-out、hot prefix stats</td><td>2.2+</td></tr>
+<tr><td>Snapshot epoch</td><td>snapshot ID、read timestamp、covered subtree</td><td>snapshot cache、read iterator</td><td>2.3</td></tr>
+<tr><td>Quota fence</td><td>quota limit、used frontier、fence era</td><td>approximate counters、rate limiter</td><td>3+</td></tr>
+</tbody>
+</table>
+</div>
+<p>原则：</p>
+<blockquote>
+<p><code>meta/root</code> 只保存必须持久、可审计、影响 authority legality 的事实。所有地址、负载、cache、watcher、近似计数都留在 runtime view。</p>
+</blockquote>
+<h2 id="2-为什么要先做-umbrella"><a class="header" href="#2-为什么要先做-umbrella">2. 为什么要先做 umbrella</a></h2>
+<p>如果不先统一 schema，后面会出现五种互相不兼容的 event 风格：</p>
 <ul>
-<li><code>GetRegionByKey(key)</code>：返回 region descriptor 和 peer <code>store_id</code>。</li>
-<li><code>GetStore(store_id)</code>：返回该 store 当前 client gRPC 地址。</li>
-<li><code>Tso</code> / <code>AllocID</code>：提供事务时间戳和 ID 分配。</li>
+<li>store membership 一套；</li>
+<li>mount registry 一套；</li>
+<li>snapshot 一套；</li>
+<li>quota 一套；</li>
+<li>subtree handoff 又一套。</li>
 </ul>
-<p>数据面请求仍然直连 raftstore。coordinator 只负责 discovery / route / TSO，不代理 KV 读写。</p>
-<pre><code class="language-text">client / fsmeta / redis
-    |
-    | only coordinator endpoint
-    v
-coordinator
-    | GetRegionByKey(key) -&gt; region descriptor
-    | GetStore(store_id)  -&gt; current store address
-    v
-raftstore store
-</code></pre>
-<h2 id="2-参考边界"><a class="header" href="#2-参考边界">2. 参考边界</a></h2>
-<p>TiKV 把 store liveness、store state、region state 上报给 PD，PD 根据 store heartbeat 和 region heartbeat 做调度与路由决策。参考：<a href="https://tikv.org/docs/dev/reference/architecture/scheduling/">https://tikv.org/docs/dev/reference/architecture/scheduling/</a></p>
-<p>FoundationDB 的客户端和服务端从 cluster file 找到 coordinators，再进入实际集群。参考：<a href="https://apple.github.io/foundationdb/architecture.html">https://apple.github.io/foundationdb/architecture.html</a></p>
-<p>NoKV 的实现更接近 TiKV PD：coordinator 维护 runtime store registry，raftstore 继续执行读写。</p>
-<h2 id="3-wire-contract"><a class="header" href="#3-wire-contract">3. Wire Contract</a></h2>
-<p>Store heartbeat 上报 data-plane 地址：</p>
-<pre><code class="language-proto">message StoreHeartbeatRequest {
-  uint64 store_id = 1;
-  uint64 region_num = 2;
-  uint64 leader_num = 3;
-  uint64 capacity = 4;
-  uint64 available = 5;
-  uint64 dropped_operations = 6;
-  repeated uint64 leader_region_ids = 7;
-  string client_addr = 8;
-  string raft_addr = 9;
-}
-</code></pre>
-<p>Coordinator 暴露 store discovery：</p>
-<pre><code class="language-proto">enum StoreState {
-  STORE_STATE_UNKNOWN = 0;
-  STORE_STATE_UP = 1;
-  STORE_STATE_DOWN = 2;
-}
-
-message StoreInfo {
-  uint64 store_id = 1;
-  string client_addr = 2;
-  string raft_addr = 3;
-  StoreState state = 4;
-  uint64 region_num = 5;
-  uint64 leader_num = 6;
-  uint64 capacity = 7;
-  uint64 available = 8;
-  uint64 dropped_operations = 9;
-  uint64 last_heartbeat_unix_nano = 10;
-}
-
-message GetStoreRequest {
-  uint64 store_id = 1;
-}
-
-message GetStoreResponse {
-  StoreInfo store = 1;
-  bool not_found = 2;
-}
-
-message ListStoresRequest {}
-
-message ListStoresResponse {
-  repeated StoreInfo stores = 1;
-}
-</code></pre>
-<p><code>client_addr</code> 是 KV RPC dial 地址。<code>raft_addr</code> 目前通常等于 <code>client_addr</code>，保留给 transport-aware scheduling 和诊断。</p>
-<p><code>STORE_STATE_DOWN</code> 不是占位：coordinator 会根据最后一次 heartbeat 时间和 <code>storeHeartbeatTTL</code> 判断 store 是否过期。过期 store 仍然出现在 <code>ListStores</code> 中用于诊断，但 client 看到 <code>DOWN</code> 后不会继续 dial 该地址。</p>
-<h2 id="4-coordinator-内部职责"><a class="header" href="#4-coordinator-内部职责">4. Coordinator 内部职责</a></h2>
-<p><code>coordinator/view.StoreStats</code> 保存 runtime address 和 heartbeat stats：</p>
-<pre><code class="language-go">type StoreStats struct {
-    StoreID           uint64
-    ClientAddr        string
-    RaftAddr          string
-    RegionNum         uint64
-    LeaderNum         uint64
-    Capacity          uint64
-    Available         uint64
-    DroppedOperations uint64
-    UpdatedAt         time.Time
-}
-</code></pre>
-<p><code>coordinator/catalog.Cluster</code> 提供：</p>
-<ul>
-<li><code>StoreByID(storeID)</code>：单 store lookup。</li>
-<li><code>StoreSnapshot()</code>：diagnostics / <code>ListStores</code>。</li>
-</ul>
-<p>这仍然是 rebuildable runtime view。coordinator 重启后，store 下一轮 heartbeat 会恢复 registry。registry 空窗口期应该返回 <code>NotFound</code> / <code>Unavailable</code>，不从旧配置绕过控制面。</p>
-<h2 id="5-client-侧职责"><a class="header" href="#5-client-侧职责">5. Client 侧职责</a></h2>
-<p><code>raftstore/client.Config</code> 现在要求两个 resolver：</p>
-<pre><code class="language-go">type RegionResolver interface {
-    GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error)
-    Close() error
-}
-
-type StoreResolver interface {
-    GetStore(ctx context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error)
-}
-
-type Config struct {
-    RegionResolver RegionResolver
-    StoreResolver  StoreResolver
-}
-</code></pre>
-<p>正常部署中，两者由同一个 <code>coordinator/client.GRPCClient</code> 提供。</p>
-<p>执行流程：</p>
+<p>结果是 <code>meta/root/state</code> 变成事件堆场，<code>coordinator/rootview</code> 每个 primitive 写一份 materialization，测试矩阵也会碎掉。</p>
+<p>这份 umbrella 的目的不是一次实现所有 event，而是先固定三件事：</p>
 <ol>
-<li><code>GetRegionByKey</code> 得到 region descriptor。</li>
-<li>client 选择 leader store。</li>
-<li>store cache miss 时调用 <code>GetStore(store_id)</code>。</li>
-<li>如果 <code>StoreInfo.state == DOWN</code>，直接按 store unavailable 处理。</li>
-<li>dial <code>StoreInfo.client_addr</code> 并缓存连接。</li>
-<li>连接失败时失效 store cache，重新向 coordinator resolve。</li>
+<li>哪些事实可以进入 rooted truth；</li>
+<li>event 命名和 payload 风格；</li>
+<li>compact state 怎么按 domain 分层。</li>
 </ol>
-<p>缓存命中不是永久信任。<code>raftstore/client</code> 默认每 30 秒 revalidate 一次 cached store endpoint：</p>
+<h2 id="3-event-命名规则"><a class="header" href="#3-event-命名规则">3. Event 命名规则</a></h2>
+<p>用 lifecycle 动词，不用模糊状态词。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>推荐</th><th>避免</th><th>理由</th></tr>
+</thead>
+<tbody>
+<tr><td><code>StoreJoined</code> / <code>StoreRetired</code></td><td>暂时离线类命名</td><td><code>retired</code> 明确表示 membership 终态</td></tr>
+<tr><td><code>MountRegistered</code> / <code>MountRetired</code></td><td><code>MountAdded</code> / <code>MountDeleted</code></td><td>mount 是 authority object，不只是 map entry</td></tr>
+<tr><td><code>SnapshotEpochPublished</code> / <code>SnapshotEpochRetired</code></td><td><code>SnapshotCreated</code></td><td>snapshot 关键是 read epoch，不是文件对象</td></tr>
+<tr><td><code>QuotaFenceUpdated</code></td><td><code>QuotaChanged</code></td><td>fence 表示 authority boundary</td></tr>
+<tr><td><code>SubtreeHandoffStarted</code> / <code>SubtreeHandoffCompleted</code></td><td><code>SubtreeMoved</code></td><td>handoff 是协议，不是单次赋值</td></tr>
+</tbody>
+</table>
+</div>
+<p>所有 event 都应满足：</p>
 <ul>
-<li>revalidation 看到 <code>DOWN</code>：失效本地 store cache，返回 <code>ErrStoreUnavailable</code>。</li>
-<li>revalidation 看到同地址 <code>UP</code>：刷新 validated timestamp，不重连。</li>
-<li>revalidation 看到新地址 <code>UP</code>：替换本地 store connection。</li>
-<li>revalidation 期间 coordinator 短暂不可达：继续使用已有连接，避免控制面抖动放大成数据面中断。</li>
+<li>payload 只包含 truth 字段；</li>
+<li>不包含 runtime address / load / cache；</li>
+<li>有明确 idempotent materialization 规则；</li>
+<li>能从 compact state 反推出当前 truth；</li>
+<li>能被 audit 工具独立解释。</li>
 </ul>
-<p>生产 client 不再接受静态 <code>Stores []StoreEndpoint</code>。测试里可以注入静态 resolver，但那只是 fake coordinator，不是运行时 fallback。</p>
-<h2 id="6-gateway--service-启动方式"><a class="header" href="#6-gateway--service-启动方式">6. Gateway / Service 启动方式</a></h2>
-<p><code>cmd/nokv-fsmeta</code>：</p>
-<pre><code class="language-bash">nokv-fsmeta \
-  -coordinator-addr 127.0.0.1:2379 \
-  -addr 127.0.0.1:8090
+<h2 id="4-compact-state-分层"><a class="header" href="#4-compact-state-分层">4. Compact state 分层</a></h2>
+<p><code>rootstate.Snapshot</code> 不应该只有 flat fields。Stage 2 后建议分 domain：</p>
+<pre><code class="language-go">type Snapshot struct {
+    State State
+
+    Stores   map[uint64]StoreMembership
+    Mounts   map[string]MountRecord
+    Subtrees map[SubtreeID]SubtreeAuthority
+    Snapshots map[SnapshotID]SnapshotEpoch
+    Quotas   map[QuotaSubject]QuotaFence
+
+    Descriptors map[uint64]descriptor.Descriptor
+    PendingPeerChanges map[uint64]PendingPeerChange
+    PendingRangeChanges map[uint64]PendingRangeChange
+}
 </code></pre>
-<p><code>cmd/nokv-redis</code> 分布式模式：</p>
-<pre><code class="language-bash">nokv-redis \
-  -coordinator-addr 127.0.0.1:2379 \
-  -addr 127.0.0.1:6380
+<p>这不是要求一次改完。Stage 2.1 只加 <code>Stores</code>。但后续 domain 必须按这个方向扩展，不要把所有东西塞进 <code>State</code>。</p>
+<h2 id="5-store-membership-events"><a class="header" href="#5-store-membership-events">5. Store membership events</a></h2>
+<p>Stage 2.1 第一刀：</p>
+<pre><code class="language-go">type StoreMembership struct {
+    StoreID uint64
+    State   StoreMembershipState
+    JoinedAt rootstate.Cursor
+    RetiredAt rootstate.Cursor
+}
 </code></pre>
-<p><code>cmd/nokv-redis --raft-config</code> 只保留为开发便利入口：从 config 解析 coordinator addr，而不是解析 stores。<code>cmd/nokv-fsmeta</code> 不支持 <code>--raft-config</code>，避免把新服务继续绑定到静态 topology 文件。</p>
-<h2 id="7-设计边界"><a class="header" href="#7-设计边界">7. 设计边界</a></h2>
-<p>这条改动不会削弱 <code>meta/root</code> 和 <code>coordinator</code> 的分离：</p>
+<p>Events：</p>
+<pre><code class="language-text">StoreJoined(store_id)
+StoreRetired(store_id)
+</code></pre>
+<p>不进 rooted truth 的字段：</p>
 <ul>
-<li>durable truth：仍然在 <code>meta/root</code>。</li>
-<li>region descriptor truth：仍然通过 rooted events 发布。</li>
-<li>store address / liveness：runtime view，放 coordinator。</li>
-<li>data-plane execution：仍然在 raftstore。</li>
-<li>client bootstrap：只依赖 coordinator endpoint。</li>
+<li><code>client_addr</code></li>
+<li><code>raft_addr</code></li>
+<li><code>last_heartbeat</code></li>
+<li><code>capacity</code></li>
+<li><code>available</code></li>
+<li><code>leader_count</code></li>
 </ul>
-<p>coordinator 不是 data-plane proxy，也不是重新变成“大脑数据库”。它只是补齐 PD-style runtime discovery 职责。</p>
-<h2 id="8-验收"><a class="header" href="#8-验收">8. 验收</a></h2>
-<p>当前验收点：</p>
+<p>这些字段由 store heartbeat 刷新到 coordinator runtime view。</p>
+<h2 id="6-mount-lifecycle-events"><a class="header" href="#6-mount-lifecycle-events">6. Mount lifecycle events</a></h2>
+<p>Mount 是 fsmeta 的 namespace 根。Stage 2 不需要完整 POSIX mount，但需要一个 durable mount registry，避免每个 fsmeta caller 自己约定 mount string。</p>
+<p>建议 events：</p>
+<pre><code class="language-text">MountRegistered(mount_id, root_inode, schema_version)
+MountRetired(mount_id, retired_at)
+</code></pre>
+<p>Compact record：</p>
+<pre><code class="language-go">type MountRecord struct {
+    MountID string
+    RootInode uint64
+    SchemaVersion uint32
+    RegisteredAt rootstate.Cursor
+    RetiredAt rootstate.Cursor
+}
+</code></pre>
+<p>进入 rooted truth：</p>
 <ul>
-<li><code>cmd/nokv-fsmeta</code> 不需要 <code>--raft-config</code>。</li>
-<li><code>cmd/nokv-redis</code> 可以只用 <code>--coordinator-addr</code> 进入 raft 模式。</li>
-<li><code>raftstore/client</code> 在 store cache miss 时自动 <code>GetStore</code>。</li>
-<li>coordinator 会把超过 heartbeat TTL 的 store 标记为 <code>DOWN</code>，client 看到 <code>DOWN</code> 会拒绝 dial。</li>
-<li><code>fsmeta/integration</code> 使用 coordinator-only discovery 跑完整 gRPC -&gt; fsmeta server -&gt; executor -&gt; raftstore 链路。</li>
-<li><code>raftstore/integration</code> 覆盖 coordinator unavailable 后的已有连接行为和 cold client 失败路径。</li>
+<li>mount 是否存在；</li>
+<li>root inode；</li>
+<li>fsmeta schema version；</li>
+<li>retired 状态。</li>
 </ul>
+<p>不进入 rooted truth：</p>
+<ul>
+<li>active client sessions；</li>
+<li>local mount cache；</li>
+<li>mount endpoint / frontend address。</li>
+</ul>
+<h2 id="7-subtree-authority-events"><a class="header" href="#7-subtree-authority-events">7. Subtree authority events</a></h2>
+<p><code>WatchSubtree</code> 本身不需要把每个 watch subscription 写进 root。subscription 是 runtime view。</p>
+<p>但 subtree 的 authority boundary 需要 rooted event，否则后续 <code>RenameSubtree</code> / <code>SnapshotSubtree</code> / <code>QuotaFence</code> 会各自发明边界。</p>
+<p>建议先定义 umbrella，不急着实现：</p>
+<pre><code class="language-text">SubtreeAuthorityDeclared(mount_id, subtree_root, authority_id, era)
+SubtreeHandoffStarted(mount_id, subtree_root, from_authority, to_authority, legacy_frontier)
+SubtreeHandoffCompleted(mount_id, subtree_root, authority_id, era, inherited_frontier)
+</code></pre>
+<p>这套命名直接对应 Succession：</p>
+<ul>
+<li><code>authority_id + era</code> 类似 Tenure；</li>
+<li><code>legacy_frontier</code> 类似 Legacy；</li>
+<li><code>handoff completed</code> 对应 Finality。</li>
+</ul>
+<p>Stage 2.2 的 <code>WatchSubtree</code> 可以先只使用 subtree prefix，不实现 authority handoff。但 event schema 要提前留出位置，避免 Stage 3 RenameSubtree 重构。</p>
+<h2 id="8-snapshot-epoch-events"><a class="header" href="#8-snapshot-epoch-events">8. Snapshot epoch events</a></h2>
+<p><code>SnapshotSubtree</code> 的核心不是复制一份数据，而是发布一个 stable read epoch。</p>
+<p>建议 events：</p>
+<pre><code class="language-text">SnapshotEpochPublished(snapshot_id, mount_id, subtree_root, read_ts, frontier)
+SnapshotEpochRetired(snapshot_id)
+</code></pre>
+<p>Compact record：</p>
+<pre><code class="language-go">type SnapshotEpoch struct {
+    SnapshotID string
+    MountID string
+    SubtreeRoot uint64
+    ReadTS uint64
+    Frontier uint64
+    PublishedAt rootstate.Cursor
+    RetiredAt rootstate.Cursor
+}
+</code></pre>
+<p><code>read_ts</code> 来自 coordinator TSO。<code>frontier</code> 表示 snapshot 覆盖的 metadata frontier。真正的数据读取仍然走 Percolator MVCC，不把文件列表写进 root。</p>
+<h2 id="9-quota-fence-events"><a class="header" href="#9-quota-fence-events">9. Quota fence events</a></h2>
+<p>Quota 不应该先做，但 schema 要先定。</p>
+<p>建议 event：</p>
+<pre><code class="language-text">QuotaFenceUpdated(subject, limit_bytes, limit_inodes, era, frontier)
+</code></pre>
+<p>核心语义：</p>
+<ul>
+<li>rooted truth 保存 quota limit 和 fence era；</li>
+<li>runtime view 保存近似 used counter；</li>
+<li>写路径只需要判断当前 counter 是否越过 rooted fence；</li>
+<li>真实 reconciliation 可以异步修正 runtime counter。</li>
+</ul>
+<p>不要把每次 usage 增减写进 root。那会把高频数据面计数污染 authority truth。</p>
+<h2 id="10-watchsubtree-与-rooted-event-的边界"><a class="header" href="#10-watchsubtree-与-rooted-event-的边界">10. WatchSubtree 与 rooted event 的边界</a></h2>
+<p><code>WatchSubtree</code> 是 Stage 2 headline primitive，但它自己的 event stream 不等于 RootEvent。</p>
+<p>两条流要分开：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>流</th><th>来源</th><th>内容</th><th>持久性</th></tr>
+</thead>
+<tbody>
+<tr><td>RootEvent</td><td><code>meta/root</code></td><td>authority / lifecycle truth</td><td>持久、审计</td></tr>
+<tr><td>WatchEvent</td><td>raftstore apply hook</td><td>file/dentry mutation notification</td><td>可恢复 cursor，但不进 root</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>WatchSubtree</code> 可以借鉴 <code>meta/root</code> 的 TailSubscription 模式，但不能把每个 file mutation 塞进 <code>meta/root</code>。</p>
+<h2 id="11-stage-2-实施顺序"><a class="header" href="#11-stage-2-实施顺序">11. Stage 2 实施顺序</a></h2>
+<ol>
+<li><code>StoreJoined</code> / <code>StoreRetired</code>：最小 rooted membership。</li>
+<li><code>MountRegistered</code> / <code>MountRetired</code>：fsmeta namespace registry。</li>
+<li><code>WatchSubtree</code>：runtime watch stream，不新增 high-frequency root events。</li>
+<li><code>SnapshotEpochPublished</code>：第一个 subtree authority-adjacent rooted event。</li>
+<li><code>SubtreeAuthorityDeclared</code> / handoff events：留给 RenameSubtree 前置。</li>
+<li><code>QuotaFenceUpdated</code>：留到有真实 quota workload 时做。</li>
+</ol>
+<p>这个顺序的好处是：先验证 root schema 扩展，再做 runtime watch，再做 read-only snapshot，最后才碰复杂 handoff。</p>
+<h2 id="12-测试规则"><a class="header" href="#12-测试规则">12. 测试规则</a></h2>
+<p>每新增一种 RootEvent 必须有四类测试：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>测试</th><th>位置</th><th>目的</th></tr>
+</thead>
+<tbody>
+<tr><td>event constructor / clone</td><td><code>meta/root/event</code></td><td>payload 不 alias</td></tr>
+<tr><td>wire roundtrip</td><td><code>meta/wire</code></td><td>proto 编码不丢字段</td></tr>
+<tr><td>state materialization</td><td><code>meta/root/state</code></td><td>compact state 正确</td></tr>
+<tr><td>coordinator bootstrap</td><td><code>coordinator/integration</code></td><td>runtime view 从 rooted snapshot 恢复</td></tr>
+</tbody>
+</table>
+</div>
+<p>如果 event 会影响 data-plane admission，还要加 <code>raftstore/integration</code> 测试。</p>
+<h2 id="13-不做什么"><a class="header" href="#13-不做什么">13. 不做什么</a></h2>
+<ul>
+<li>不把 WatchEvent 当 RootEvent。</li>
+<li>不把 runtime address、watcher、session、cache、load 写进 root。</li>
+<li>不把 mount registry 放进 fsmeta 本地内存当 truth。</li>
+<li>不让 snapshot 记录具体 dentry 列表。</li>
+<li>不在 umbrella 阶段实现 RenameSubtree。</li>
+</ul>
+<h2 id="14-完成信号"><a class="header" href="#14-完成信号">14. 完成信号</a></h2>
+<p>这份 umbrella 完成后，Stage 2 后续任何 primitive 都必须先回答：</p>
+<ol>
+<li>它有没有 rooted truth？</li>
+<li>如果有，event 名是什么，payload 是否只包含 truth？</li>
+<li>它对应的 runtime view 是什么？</li>
+<li>它和 Succession / authority handoff 有没有关系？</li>
+<li>它的四类测试在哪里？</li>
+</ol>
+<p>答不上来，就不写代码。</p>
 
                     </main>
 
@@ -351,7 +428,7 @@ type Config struct {
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../notes/2026-04-25-fsmeta-stage1-benchmark-results.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../notes/2026-04-25-snapshot-subtree-mvcc-epoch.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -365,7 +442,7 @@ type Config struct {
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../notes/2026-04-25-fsmeta-stage1-benchmark-results.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../notes/2026-04-25-snapshot-subtree-mvcc-epoch.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

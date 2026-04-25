@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>2026-04-25 fsmeta Stage 1 benchmark 结果 - NoKV Docs</title>
+        <title>2026-04-25 SnapshotSubtree：subtree-scoped MVCC epoch - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-78ea1104.js";
+            window.path_to_searchindex_js = "../searchindex-1c78d743.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-f12f6280.js"></script>
+        <script src="../toc-409c1dfb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,161 +178,82 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="2026-04-25-fsmeta-stage-1-benchmark-结果"><a class="header" href="#2026-04-25-fsmeta-stage-1-benchmark-结果">2026-04-25 fsmeta Stage 1 benchmark 结果</a></h1>
-<h2 id="导读"><a class="header" href="#导读">导读</a></h2>
-<ul>
-<li>🧭 主题：验证 <code>fsmeta</code> native API 相比 generic KV schema 的 Stage 1 价值</li>
-<li>🧱 核心对象：<code>ReadDirPlus</code>、<code>AssertionNotExist</code>、<code>native-fsmeta</code> driver、<code>generic-kv</code> driver</li>
-<li>🔁 调用链：<code>fsmeta/client -&gt; fsmeta/server -&gt; fsmeta/exec -&gt; raftstore/client -&gt; stores</code></li>
-<li>📚 结果文件：<code>benchmark/fsmeta/results/fsmeta_formal_native_vs_generic_20260425T051640Z.csv</code></li>
-</ul>
+                        <h1 id="2026-04-25-snapshotsubtreesubtree-scoped-mvcc-epoch"><a class="header" href="#2026-04-25-snapshotsubtreesubtree-scoped-mvcc-epoch">2026-04-25 SnapshotSubtree：subtree-scoped MVCC epoch</a></h1>
 <h2 id="结论"><a class="header" href="#结论">结论</a></h2>
-<p>这轮结果里，<code>ReadDirPlus</code> 是 Stage 1 的主数字：</p>
-<blockquote>
-<p>在同一个 NoKV Docker Compose 集群上，<code>native-fsmeta</code> 的 <code>ReadDirPlus</code>
-平均延迟为 <strong>12.0 ms</strong>，<code>generic-kv</code> 为 <strong>510.3 ms</strong>。generic/native
-平均延迟比约 <strong>42.5x</strong>，p50 比约 <strong>44.8x</strong>。</p>
-</blockquote>
-<p>这不是底层存储引擎对比，而是 API shape 对比。两个 driver 使用同一个 NoKV 集群、同一个 raftstore、同一个 Percolator 事务层。差异只在元数据操作怎么表达：</p>
+<p><code>SnapshotSubtree</code> 是 fsmeta Stage 2.3 的最后一块原生 primitive。它不复制目录树，也不把 dentry / inode 写入 <code>meta/root</code>。v0 的语义很窄：</p>
+<ol>
+<li>fsmeta 从 coordinator TSO 取得一个 <code>read_version</code>。</li>
+<li>fsmeta 把 <code>(mount, root_inode, read_version)</code> 作为 <code>SnapshotSubtree</code> token 返回给调用方。</li>
+<li>调用方之后用这个 token 做 <code>ReadDir</code> / <code>ReadDirPlus</code>，读到的是同一个 MVCC snapshot。</li>
+<li>fsmeta 同时把 <code>SnapshotEpochPublished</code> 事件写入 rooted truth，用于后续 retention / audit / namespace authority 扩展。</li>
+</ol>
+<p>这条 primitive 的核心价值是数据集版本化：AI training / object namespace / DFS frontend 可以先发布一个稳定的 subtree epoch，再让 reader 在之后任意时间以同一个版本读目录页。</p>
+<h2 id="不做什么"><a class="header" href="#不做什么">不做什么</a></h2>
+<p>v0 明确不做：</p>
 <ul>
-<li><code>native-fsmeta</code>：服务端原生 <code>ReadDirPlus</code>，一次 dentry scan + 一次 batch inode fetch。</li>
-<li><code>generic-kv</code>：把 fsmeta 当 raw KV，用一次 dentry scan + N 次 point Get 组合出 <code>ReadDirPlus</code>。</li>
+<li>不做物化 snapshot copy。</li>
+<li>不做 recursive subtree traversal。</li>
+<li>不做历史 catch-up watch。</li>
+<li>不做 MVCC GC retention enforcement。当前 NoKV 还没有数据面 MVCC GC，rooted event 先记录 retention claim。</li>
+<li>不做 snapshot delete / retire。后续如果引入 GC，再补 <code>SnapshotEpochRetired</code>。</li>
 </ul>
-<h2 id="运行环境"><a class="header" href="#运行环境">运行环境</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>项</th><th>值</th></tr>
-</thead>
-<tbody>
-<tr><td>日期</td><td>2026-04-25</td></tr>
-<tr><td>运行方式</td><td>Docker Compose，本机单机多容器</td></tr>
-<tr><td>集群</td><td>3 meta-root + 3 coordinator + 3 raftstore + fsmeta service</td></tr>
-<tr><td>benchmark 容器</td><td><code>golang:1.26</code></td></tr>
-<tr><td>网络</td><td>Docker bridge network <code>nokv_default</code></td></tr>
-<tr><td>fsmeta endpoint</td><td><code>nokv-fsmeta:8090</code></td></tr>
-<tr><td>coordinator endpoints</td><td><code>nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379</code></td></tr>
-</tbody>
-</table>
-</div>
-<p>这组数字只能说明同一集群、同一机器、同一 workload 下的 native-vs-generic 比例。不能拿来声称 NoKV 绝对性能优于 TiKV、FoundationDB 或其他系统。</p>
-<h2 id="workload"><a class="header" href="#workload">Workload</a></h2>
-<p>命令：</p>
-<pre><code class="language-bash">docker run --rm --network nokv_default \
-  -v "$PWD":/workspace \
-  -w /workspace/benchmark \
-  -e NOKV_FSMETA_BENCH=1 \
-  golang:1.26 \
-  go test ./fsmeta -run TestBenchmarkFSMeta -count=1 -timeout 30m -v -args \
-    -fsmeta_drivers native-fsmeta,generic-kv \
-    -fsmeta_mount fsmeta-formal-20260425T051640Z \
-    -fsmeta_addr nokv-fsmeta:8090 \
-    -fsmeta_coordinator_addr nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379 \
-    -fsmeta_workloads checkpoint-storm,hotspot-fanin \
-    -fsmeta_clients 8 \
-    -fsmeta_dirs 16 \
-    -fsmeta_files_per_dir 32 \
-    -fsmeta_files 512 \
-    -fsmeta_reads_per_client 16 \
-    -fsmeta_page_limit 512 \
-    -fsmeta_readdirplus=true \
-    -fsmeta_timeout 25m \
-    -fsmeta_output fsmeta/results/fsmeta_formal_native_vs_generic_20260425T051640Z.csv
+<h2 id="api"><a class="header" href="#api">API</a></h2>
+<p>fsmeta wire API：</p>
+<pre><code class="language-proto">message SnapshotSubtreeRequest {
+  string mount = 1;
+  uint64 root_inode = 2;
+}
+
+message SnapshotSubtreeResponse {
+  string mount = 1;
+  uint64 root_inode = 2;
+  uint64 read_version = 3;
+}
+
+message ReadDirRequest {
+  string mount = 1;
+  uint64 parent = 2;
+  string start_after = 3;
+  uint32 limit = 4;
+  uint64 snapshot_version = 5;
+}
 </code></pre>
-<p>数据形状：</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Workload</th><th>参数</th><th>目的</th></tr>
-</thead>
-<tbody>
-<tr><td><code>checkpoint-storm</code></td><td>8 clients, 16 dirs, 32 files/dir, 512 create ops</td><td>模拟 checkpoint 文件创建风暴</td></tr>
-<tr><td><code>hotspot-fanin</code></td><td>512 files, 8 clients, 16 reads/client, page limit 512</td><td>模拟单目录 fan-in 下的 <code>readdir + stat</code></td></tr>
-</tbody>
-</table>
-</div>
-<h2 id="结果表"><a class="header" href="#结果表">结果表</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>workload</th><th>driver</th><th style="text-align: right">operation</th><th style="text-align: right">count</th><th style="text-align: right">errors</th><th style="text-align: right">throughput</th><th style="text-align: right">avg</th><th style="text-align: right">p50</th><th style="text-align: right">p95</th></tr>
-</thead>
-<tbody>
-<tr><td>checkpoint-storm</td><td>native-fsmeta</td><td style="text-align: right">create_checkpoint</td><td style="text-align: right">512</td><td style="text-align: right">0</td><td style="text-align: right">21.048/s</td><td style="text-align: right">338.552 ms</td><td style="text-align: right">242.777 ms</td><td style="text-align: right">977.968 ms</td></tr>
-<tr><td>checkpoint-storm</td><td>generic-kv</td><td style="text-align: right">create_checkpoint</td><td style="text-align: right">512</td><td style="text-align: right">0</td><td style="text-align: right">16.715/s</td><td style="text-align: right">434.678 ms</td><td style="text-align: right">317.780 ms</td><td style="text-align: right">1132.722 ms</td></tr>
-<tr><td>hotspot-fanin</td><td>native-fsmeta</td><td style="text-align: right">seed_create</td><td style="text-align: right">512</td><td style="text-align: right">0</td><td style="text-align: right">6.032/s</td><td style="text-align: right">165.070 ms</td><td style="text-align: right">160.619 ms</td><td style="text-align: right">202.537 ms</td></tr>
-<tr><td>hotspot-fanin</td><td>generic-kv</td><td style="text-align: right">seed_create</td><td style="text-align: right">512</td><td style="text-align: right">0</td><td style="text-align: right">7.308/s</td><td style="text-align: right">120.550 ms</td><td style="text-align: right">114.639 ms</td><td style="text-align: right">148.740 ms</td></tr>
-<tr><td>hotspot-fanin</td><td>native-fsmeta</td><td style="text-align: right">readdirplus</td><td style="text-align: right">128</td><td style="text-align: right">0</td><td style="text-align: right">1.508/s</td><td style="text-align: right">12.020 ms</td><td style="text-align: right">11.344 ms</td><td style="text-align: right">16.696 ms</td></tr>
-<tr><td>hotspot-fanin</td><td>generic-kv</td><td style="text-align: right">readdirplus</td><td style="text-align: right">128</td><td style="text-align: right">0</td><td style="text-align: right">1.827/s</td><td style="text-align: right">510.289 ms</td><td style="text-align: right">508.717 ms</td><td style="text-align: right">539.054 ms</td></tr>
-</tbody>
-</table>
-</div>
-<p>Ratios:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Operation</th><th style="text-align: right">avg generic/native</th><th style="text-align: right">p50 generic/native</th><th style="text-align: right">throughput native/generic</th><th>解读</th></tr>
-</thead>
-<tbody>
-<tr><td><code>checkpoint-storm/create_checkpoint</code></td><td style="text-align: right">1.28x</td><td style="text-align: right">1.31x</td><td style="text-align: right">1.26x</td><td>native 小幅领先，主要来自 server-side assertion 路径</td></tr>
-<tr><td><code>hotspot-fanin/seed_create</code></td><td style="text-align: right">0.73x</td><td style="text-align: right">0.71x</td><td style="text-align: right">0.83x</td><td>generic 更快，说明单 mutation 写入 native 多一层 service tax</td></tr>
-<tr><td><code>hotspot-fanin/readdirplus</code></td><td style="text-align: right">42.45x</td><td style="text-align: right">44.84x</td><td style="text-align: right">0.83x</td><td>native 明显领先，API shape 减少了 N 次 point Get</td></tr>
-</tbody>
-</table>
-</div>
-<h2 id="解读"><a class="header" href="#解读">解读</a></h2>
-<h3 id="1-readdirplus-是-stage-1-的-headline"><a class="header" href="#1-readdirplus-是-stage-1-的-headline">1. <code>ReadDirPlus</code> 是 Stage 1 的 headline</a></h3>
-<p><code>ReadDirPlus</code> 的差距来自 RPC / KV 操作数量：</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Path</th><th>操作形状</th></tr>
-</thead>
-<tbody>
-<tr><td>native</td><td><code>Scan(dentry prefix)</code> + <code>BatchGet(inode keys)</code></td></tr>
-<tr><td>generic</td><td><code>Scan(dentry prefix)</code> + <code>Get(inode key)</code> × 512</td></tr>
-</tbody>
-</table>
-</div>
-<p>这正是 fsmeta 这条线要证明的事：元数据 workload 的自然形状不是 raw KV API。把 <code>readdir + stat</code> 提升为服务端原语后，系统能少做大量 round trip 和 point lookup。</p>
-<h3 id="2-create-路径只有小幅领先"><a class="header" href="#2-create-路径只有小幅领先">2. Create 路径只有小幅领先</a></h3>
-<p><code>checkpoint-storm/create_checkpoint</code> native 平均延迟低约 28%。这条改善来自 <code>Create</code> 的原子语义：</p>
+<p><code>snapshot_version == 0</code> 表示普通最新快照读；非零时，executor 不再重新 reserve TSO，而是直接按该 version 读。</p>
+<h2 id="rooted-event"><a class="header" href="#rooted-event">Rooted Event</a></h2>
+<p>rooted truth 只记录 snapshot epoch 的 authority/retention 合同：</p>
+<pre><code class="language-go">SnapshotEpochPublished{
+    SnapshotID:  "mount/root/read_version",
+    Mount:       "dataset-a",
+    RootInode:   42,
+    ReadVersion: 170000000,
+}
+</code></pre>
+<p>这里的 <code>meta/root</code> 不是存 filesystem metadata，而是存“这个 snapshot epoch 曾被发布“这个事实。后续 GC / audit / namespace authority 都可以依赖它。</p>
+<h2 id="correctness-contract"><a class="header" href="#correctness-contract">Correctness Contract</a></h2>
+<p><code>SnapshotSubtree</code> 保证：</p>
 <ul>
-<li>native：直接发 2PC mutation，Percolator prewrite 阶段执行 <code>AssertionNotExist</code>。</li>
-<li>generic：client 先 <code>Get</code> dentry 和 inode，确认不存在后再 Put。</li>
+<li>token 内的 <code>read_version</code> 来自 coordinator TSO。</li>
+<li>对同一 token 的多次 <code>ReadDirPlus</code> 使用同一个 <code>read_version</code>。</li>
+<li>token 创建之后的新 dentry 不应出现在用该 token 读取的页里。</li>
+<li>当前 v0 只支持直接 parent page；recursive subtree snapshot 留给后续目录树索引。</li>
 </ul>
-<p>这条不是 headline，但它说明 server-side assertion 不是只解决正确性，也减少了部分前置读。</p>
-<h3 id="3-单点写入-native-不一定更快"><a class="header" href="#3-单点写入-native-不一定更快">3. 单点写入 native 不一定更快</a></h3>
-<p><code>hotspot-fanin/seed_create</code> 里 generic 更快。原因很清楚：generic driver 直接用 <code>raftstore/client</code>，native 多走 <code>fsmeta gRPC service -&gt; executor -&gt; runner</code>。对单 mutation 写入来说，native API 的服务层会带来额外开销。</p>
-<p>这条必须写清楚。fsmeta 的优势不在“所有操作都更快“，而在 fused metadata primitive 和更强的服务端原子语义。单点写入如果只看 latency，generic path 可能更低。</p>
-<h2 id="caveats"><a class="header" href="#caveats">Caveats</a></h2>
+<h2 id="evidence"><a class="header" href="#evidence">Evidence</a></h2>
+<p>Stage 2.3 的最小测试必须覆盖：</p>
 <ol>
-<li>这是 Docker Compose 单机多容器结果，不能代表裸金属、多机网络或生产部署。</li>
-<li>这不是 NoKV vs TiKV / FDB 的系统对比。两个 driver 都跑在 NoKV 上，目的是隔离 native API shape 的收益。</li>
-<li><code>ReadDirPlus</code> 的 generic baseline 是串行 point Get。并发 fan-out 可以缩小差距，但那是另一个优化 baseline，应该作为第三个 driver 单独测。</li>
-<li>第一次完整 run 在集群刚重启后出现过一次 <code>generic-kv/checkpoint-storm</code> 的 transient failure。补充错误样本输出后，单独重跑 generic checkpoint 通过，第二次完整 run 通过。本次记录以第二次完整通过 run 为准。</li>
-<li>吞吐字段受 workload 总 duration 影响，<code>hotspot-fanin</code> 的 seed 和 read 阶段在同一个 workload duration 里统计；判断核心应看 per-operation latency。</li>
+<li>创建 <code>a</code>。</li>
+<li>调用 <code>SnapshotSubtree(root)</code> 得到 <code>read_version</code>。</li>
+<li>创建 <code>b</code>。</li>
+<li><code>ReadDirPlus(snapshot_version=read_version)</code> 只能看到 <code>a</code>。</li>
+<li>普通 <code>ReadDirPlus</code> 能看到 <code>a</code> 和 <code>b</code>。</li>
+<li>rooted snapshot 中存在对应 <code>SnapshotEpochPublished</code> 记录。</li>
 </ol>
-<h2 id="代码中已经补的护栏"><a class="header" href="#代码中已经补的护栏">代码中已经补的护栏</a></h2>
-<ul>
-<li><code>generic-kv</code> driver 复用 <code>fsmeta/exec.TxnRunner</code>，保证对比使用同一 raftstore / Percolator substrate。</li>
-<li><code>generic-kv</code> Create 明确不使用 <code>AssertionNotExist</code>，测试会检查 mutation 上没有 native assertion。</li>
-<li><code>generic-kv</code> ReadDirPlus 明确使用 point Get，测试会检查没有走 <code>BatchGet</code>。</li>
-<li>benchmark CSV 增加 <code>driver</code> 列，可以在同一份结果里直接分组画图。</li>
-<li>workload 失败时会输出前几个错误样本，不再只给 <code>N/M operations failed</code>。</li>
-</ul>
-<h2 id="下一步"><a class="header" href="#下一步">下一步</a></h2>
-<p>Stage 1 可以收尾。后续正式结果要补两类：</p>
-<ol>
-<li>加 <code>generic-kv-fanout</code> driver，衡量 client-side 并发 point Get 能把差距缩到多少。</li>
-<li>在 Stage 2 引入 <code>WatchSubtree</code> / <code>RenameSubtree</code> / <code>QuotaFence</code> 前，每条 primitive 先落 design note，再加同集群 native-vs-generic 对照。</li>
-</ol>
+<p>这证明 fsmeta API 层和 rooted authority 层都接上了。</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../notes/2026-04-25-coordinator-store-registry.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../notes/2026-04-25-namespace-authority-events-umbrella.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -343,7 +264,7 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../notes/2026-04-25-coordinator-store-registry.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../notes/2026-04-25-namespace-authority-events-umbrella.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
