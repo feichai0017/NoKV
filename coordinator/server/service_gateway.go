@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	pdview "github.com/feichai0017/NoKV/coordinator/view"
@@ -63,7 +64,7 @@ func (s *Service) GetStore(ctx context.Context, req *coordpb.GetStoreRequest) (*
 	if !ok {
 		return &coordpb.GetStoreResponse{NotFound: true}, nil
 	}
-	return &coordpb.GetStoreResponse{Store: storeInfoToProto(stats)}, nil
+	return &coordpb.GetStoreResponse{Store: s.storeInfoToProto(stats)}, nil
 }
 
 // ListStores returns the current runtime store registry.
@@ -74,21 +75,17 @@ func (s *Service) ListStores(ctx context.Context, _ *coordpb.ListStoresRequest) 
 	stores := s.cluster.StoreSnapshot()
 	out := make([]*coordpb.StoreInfo, 0, len(stores))
 	for _, st := range stores {
-		out = append(out, storeInfoToProto(st))
+		out = append(out, s.storeInfoToProto(st))
 	}
 	return &coordpb.ListStoresResponse{Stores: out}, nil
 }
 
-func storeInfoToProto(stats pdview.StoreStats) *coordpb.StoreInfo {
-	state := coordpb.StoreState_STORE_STATE_UP
-	if stats.StoreID == 0 {
-		state = coordpb.StoreState_STORE_STATE_UNKNOWN
-	}
+func (s *Service) storeInfoToProto(stats pdview.StoreStats) *coordpb.StoreInfo {
 	return &coordpb.StoreInfo{
 		StoreId:               stats.StoreID,
 		ClientAddr:            stats.ClientAddr,
 		RaftAddr:              stats.RaftAddr,
-		State:                 state,
+		State:                 s.storeState(stats),
 		RegionNum:             stats.RegionNum,
 		LeaderNum:             stats.LeaderNum,
 		Capacity:              stats.Capacity,
@@ -96,6 +93,26 @@ func storeInfoToProto(stats pdview.StoreStats) *coordpb.StoreInfo {
 		DroppedOperations:     stats.DroppedOperations,
 		LastHeartbeatUnixNano: uint64(stats.UpdatedAt.UnixNano()),
 	}
+}
+
+func (s *Service) storeState(stats pdview.StoreStats) coordpb.StoreState {
+	if stats.StoreID == 0 || stats.UpdatedAt.IsZero() {
+		return coordpb.StoreState_STORE_STATE_UNKNOWN
+	}
+	now := time.Now()
+	ttl := defaultStoreHeartbeatTTL
+	if s != nil {
+		if s.now != nil {
+			now = s.now()
+		}
+		if s.storeHeartbeatTTL > 0 {
+			ttl = s.storeHeartbeatTTL
+		}
+	}
+	if ttl > 0 && stats.UpdatedAt.Add(ttl).Before(now) {
+		return coordpb.StoreState_STORE_STATE_DOWN
+	}
+	return coordpb.StoreState_STORE_STATE_UP
 }
 
 // RegionLiveness records one runtime heartbeat without mutating rooted truth.

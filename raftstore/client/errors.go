@@ -14,6 +14,8 @@ var (
 	errMissingStoreResolver = errors.New("client: store resolver required")
 	// errStoreIDNotSet indicates that a request tried to use an empty store id.
 	errStoreIDNotSet = errors.New("client: store id not set")
+	// errStoreUnavailable indicates that Coordinator knows the store but marks its heartbeat stale.
+	errStoreUnavailable = errors.New("client: store unavailable")
 	// errResolvedRegionIDMissing indicates that routing returned a descriptor without a region id.
 	errResolvedRegionIDMissing = errors.New("client: resolved region id missing")
 	// errRegionMetaMissing indicates that a routed region snapshot had no metadata.
@@ -29,6 +31,8 @@ func IsMissingRegionResolver(err error) bool { return errors.Is(err, errMissingR
 func IsMissingStoreResolver(err error) bool { return errors.Is(err, errMissingStoreResolver) }
 
 func IsStoreIDNotSet(err error) bool { return errors.Is(err, errStoreIDNotSet) }
+
+func IsStoreUnavailable(err error) bool { return errors.Is(err, errStoreUnavailable) }
 
 func IsResolvedRegionIDMissing(err error) bool { return errors.Is(err, errResolvedRegionIDMissing) }
 

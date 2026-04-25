@@ -95,6 +95,7 @@ type mockRegionResolver struct {
 type testStoreEndpoint struct {
 	StoreID uint64
 	Addr    string
+	State   coordpb.StoreState
 }
 
 type staticStoreResolver []testStoreEndpoint
@@ -102,11 +103,15 @@ type staticStoreResolver []testStoreEndpoint
 func (r staticStoreResolver) GetStore(_ context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error) {
 	for _, endpoint := range r {
 		if endpoint.StoreID == req.GetStoreId() {
+			state := endpoint.State
+			if state == coordpb.StoreState_STORE_STATE_UNKNOWN {
+				state = coordpb.StoreState_STORE_STATE_UP
+			}
 			return &coordpb.GetStoreResponse{
 				Store: &coordpb.StoreInfo{
 					StoreId:    endpoint.StoreID,
 					ClientAddr: endpoint.Addr,
-					State:      coordpb.StoreState_STORE_STATE_UP,
+					State:      state,
 				},
 			}, nil
 		}
@@ -1269,6 +1274,39 @@ func TestClientLazyDialSkipsUnusedStores(t *testing.T) {
 	require.NotNil(t, cli.stores[1].conn)
 	require.NotContains(t, cli.stores, uint64(2), "unused store should not be resolved or dialed eagerly")
 	cli.mu.RUnlock()
+}
+
+func TestClientRejectsDownStoreFromResolver(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers: []*metapb.RegionPeer{
+					{StoreId: 1, PeerId: 101},
+				},
+			},
+			leaderStore: 1,
+		},
+	)
+	cli, err := New(Config{
+		StoreResolver: staticStoreResolver{
+			{StoreID: 1, Addr: "127.0.0.1:1", State: coordpb.StoreState_STORE_STATE_DOWN},
+		},
+		RegionResolver: &mockRegionResolver{region: cluster.regions[1].meta},
+		Retry: RetryPolicy{
+			MaxAttempts:                 1,
+			TransportUnavailableBackoff: 0,
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	_, err = cli.Get(context.Background(), []byte("alfa"), 20)
+	require.Error(t, err)
+	require.True(t, IsStoreUnavailable(err))
 }
 
 func TestClientRegionResolverLookupUsesIndexedCacheAcrossRegions(t *testing.T) {
