@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Scripts - NoKV Docs</title>
+        <title>FSMetadata - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -178,261 +178,163 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="scripts-overview"><a class="header" href="#scripts-overview">Scripts Overview</a></h1>
-<p>NoKV now groups shell entrypoints by role instead of keeping every helper flat under <code>scripts/</code>.</p>
-<h2 id="layout"><a class="header" href="#layout">Layout</a></h2>
+                        <h1 id="fsmetadata"><a class="header" href="#fsmetadata">FSMetadata</a></h1>
+<p><code>fsmeta</code> is NoKV’s native metadata service for distributed filesystem-style
+workloads. It is not a POSIX filesystem frontend. It is a typed metadata API
+layer built on top of NoKV’s existing distributed substrate:</p>
+<pre><code class="language-text">fsmeta/client
+    -&gt; fsmeta/server
+        -&gt; fsmeta/exec
+            -&gt; raftstore/client
+                -&gt; coordinator (TSO, region routing, store discovery)
+                -&gt; raftstore stores
+</code></pre>
+<p>The point of <code>fsmeta</code> is to expose metadata operations in their natural shape
+instead of forcing users to rebuild filesystem semantics from raw key/value
+operations.</p>
+<h2 id="api-surface"><a class="header" href="#api-surface">API Surface</a></h2>
+<p>The current v1 service is defined in <code>pb/fsmeta/fsmeta.proto</code> and implemented
+by <code>fsmeta/server</code>.</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Path</th><th>Role</th></tr>
+<tr><th>RPC</th><th>Meaning</th></tr>
 </thead>
 <tbody>
-<tr><td><code>scripts/dev</code></td><td>Local development and bootstrap helpers for running a cluster from <code>raft_config*.json</code>.</td></tr>
-<tr><td><code>scripts/ops</code></td><td>Operator-style workflows that drive the formal migration CLI.</td></tr>
-<tr><td><code>scripts/lib</code></td><td>Shared shell helpers for config lookup, workdir hygiene, and build/bootstrap rules.</td></tr>
-<tr><td><code>scripts/*.sh</code></td><td>Tooling or benchmark entrypoints that are still intentionally top-level.</td></tr>
+<tr><td><code>Create</code></td><td>Create one dentry and inode atomically.</td></tr>
+<tr><td><code>Lookup</code></td><td>Read one dentry by <code>(mount, parent inode, name)</code>.</td></tr>
+<tr><td><code>ReadDir</code></td><td>Scan dentries under one parent inode.</td></tr>
+<tr><td><code>ReadDirPlus</code></td><td>Scan dentries and fetch inode attributes in one typed operation.</td></tr>
+<tr><td><code>Rename</code></td><td>Atomically move one dentry from one parent/name to another.</td></tr>
+<tr><td><code>Unlink</code></td><td>Delete one dentry.</td></tr>
 </tbody>
 </table>
 </div>
-<p>This split is deliberate:</p>
-<ul>
-<li><code>dev</code> scripts are allowed to help with local experiments and smoke tests.</li>
-<li><code>ops</code> scripts must treat the migration CLI as source of truth and stay stricter.</li>
-<li><code>lib</code> is where shared rules live, so shell semantics do not drift across scripts.</li>
-</ul>
-<h2 id="bootstrap--local-launch"><a class="header" href="#bootstrap--local-launch">Bootstrap &amp; Local Launch</a></h2>
-<h3 id="scriptsdevclustersh"><a class="header" href="#scriptsdevclustersh"><code>scripts/dev/cluster.sh</code></a></h3>
-<ul>
-<li>Purpose: build <code>nokv</code> and <code>nokv-config</code>, start the canonical 333 separated dev cluster,
-seed fresh store workdirs, then start stores from <code>raft_config.json</code>.</li>
-<li>Starts:
-<ul>
-<li>three <code>nokv meta-root</code> processes (Truth plane; replicated is the only mode)</li>
-<li>one <code>nokv coordinator</code> process (Service plane; always remote-rooted)</li>
-<li>all configured stores (Execution plane)</li>
-</ul>
-</li>
-<li>Uses shared rules from:
-<ul>
-<li><code>scripts/lib/common.sh</code></li>
-<li><code>scripts/lib/config.sh</code></li>
-<li><code>scripts/lib/workdir.sh</code></li>
-</ul>
-</li>
-<li>Example:
-<pre><code class="language-bash">./scripts/dev/cluster.sh --config ./raft_config.example.json --workdir ./artifacts/cluster
-</code></pre>
-</li>
-<li>Notes:
-<ul>
-<li><code>--config</code> defaults to <code>./raft_config.example.json</code></li>
-<li><code>--workdir</code> defaults to <code>./artifacts/cluster</code></li>
-<li>uses fixed local metadata-root gRPC endpoints <code>127.0.0.1:2380/2381/2382</code></li>
-<li>uses fixed local metadata-root raft transport endpoints <code>127.0.0.1:3380/3381/3382</code></li>
-<li>store workdirs are rejected if they contain unexpected files</li>
-<li>logs stream with <code>[meta-root-&lt;id&gt;]</code> / <code>[coordinator]</code> / <code>[store-&lt;id&gt;]</code> prefixes
-and are still written to <code>root.log</code> / <code>coordinator.log</code> / <code>server.log</code></li>
-<li>this is a bootstrap/dev launcher, not a restart command</li>
-<li>production-style restarts should run <code>scripts/ops/serve-meta-root.sh</code>,
-<code>scripts/ops/serve-coordinator.sh</code>, and <code>scripts/ops/serve-store.sh</code>
-directly against the same durable workdirs</li>
-</ul>
-</li>
-</ul>
-<h3 id="scriptsopsbootstrapsh"><a class="header" href="#scriptsopsbootstrapsh"><code>scripts/ops/bootstrap.sh</code></a></h3>
-<ul>
-<li>Purpose: seed local peer catalog metadata into a set of store directories derived from a path template.</li>
-<li>Intended for:
-<ul>
-<li>Docker Compose bootstrap</li>
-<li>local static-topology experiments</li>
-</ul>
-</li>
-<li>Example:
-<pre><code class="language-bash">./scripts/ops/bootstrap.sh --config /etc/nokv/raft_config.json --path-template /data/store-{id}
-</code></pre>
-</li>
-<li>Notes:
-<ul>
-<li>skips stores that already contain <code>CURRENT</code></li>
-<li>refuses to seed into dirty directories</li>
-<li>this is bootstrap-only; it does not recover runtime topology</li>
-<li>use <code>nokv serve</code> / <code>scripts/ops/serve-store.sh</code> to restart an existing store from the same workdir</li>
-</ul>
-</li>
-</ul>
-<h3 id="scriptsopsserve-storesh"><a class="header" href="#scriptsopsserve-storesh"><code>scripts/ops/serve-store.sh</code></a></h3>
-<ul>
-<li>Purpose: thin wrapper around <code>nokv serve</code> for one store.</li>
-<li>Example:
-<pre><code class="language-bash">./scripts/ops/serve-store.sh \
-  --config ./raft_config.example.json \
-  --store-id 1 \
-  --workdir ./artifacts/cluster/store-1 \
-  --scope local
-</code></pre>
-</li>
-<li>Notes:
-<ul>
-<li>resolves store listen/workdir/Coordinator defaults through <code>nokv serve --config</code></li>
-<li>remote peer recovery comes from <code>raftstore/localmeta</code>; config <code>stores</code> only
-provide <code>storeID -&gt; addr</code></li>
-<li>no longer treats <code>config.regions</code> as restart-time topology truth</li>
-<li>if a static transport override is needed, use <code>--store-addr &lt;store-id&gt;=&lt;addr&gt;</code>
-rather than a peer-id keyed mapping</li>
-<li><code>--scope docker</code> selects container-friendly addresses</li>
-</ul>
-</li>
-</ul>
-<h3 id="scriptsopsserve-meta-rootsh"><a class="header" href="#scriptsopsserve-meta-rootsh"><code>scripts/ops/serve-meta-root.sh</code></a></h3>
-<ul>
-<li>Purpose: thin wrapper around <code>nokv meta-root</code> for one replicated metadata-root peer.</li>
-<li>Example:
-<pre><code class="language-bash">./scripts/ops/serve-meta-root.sh \
-  --addr 127.0.0.1:2380 \
-  --workdir ./artifacts/cluster/meta-root-1 \
-  --node-id 1 \
-  --transport-addr 127.0.0.1:3380 \
-  --peer 1=127.0.0.1:3380 \
-  --peer 2=127.0.0.1:3381 \
-  --peer 3=127.0.0.1:3382
-</code></pre>
-</li>
-<li>Notes:
-<ul>
-<li><code>--peer</code> values are metadata-root raft transport addresses, not gRPC
-service addresses</li>
-<li><code>--workdir</code>, <code>--node-id</code>, <code>--transport-addr</code>, and exactly 3 <code>--peer</code>
-values are required; there is no single-process local mode</li>
-<li>forwards shutdown signals to <code>nokv meta-root</code></li>
-</ul>
-</li>
-</ul>
-<h3 id="scriptsopsserve-coordinatorsh"><a class="header" href="#scriptsopsserve-coordinatorsh"><code>scripts/ops/serve-coordinator.sh</code></a></h3>
-<ul>
-<li>Purpose: thin wrapper around <code>nokv coordinator</code> for one coordinator process
-wired to an external 3-peer meta-root cluster.</li>
-<li>Example:
-<pre><code class="language-bash">./scripts/ops/serve-coordinator.sh \
-  --addr 127.0.0.1:2379 \
-  --coordinator-id c1 \
-  --root-peer 1=127.0.0.1:2380 \
-  --root-peer 2=127.0.0.1:2381 \
-  --root-peer 3=127.0.0.1:2382
-</code></pre>
-</li>
-<li>Notes:
-<ul>
-<li><code>--root-peer</code> values are metadata-root gRPC service addresses, not raft transport</li>
-<li>exactly 3 <code>--root-peer</code> values are required (mirrors the Truth-plane quorum)</li>
-<li><code>--coordinator-id</code> is required (stable lease owner id)</li>
-<li>forwards shutdown signals to <code>nokv coordinator</code></li>
-</ul>
-</li>
-</ul>
-<h2 id="migration-workflow"><a class="header" href="#migration-workflow">Migration Workflow</a></h2>
-<h3 id="scriptsopsmigrate-clustersh"><a class="header" href="#scriptsopsmigrate-clustersh"><code>scripts/ops/migrate-cluster.sh</code></a></h3>
-<ul>
-<li>Purpose: one-shot local operator wrapper for the standalone-to-cluster migration path.</li>
-<li>Drives:
-<ul>
-<li><code>nokv migrate plan</code></li>
-<li><code>nokv migrate init</code></li>
-<li><code>nokv migrate expand</code></li>
-<li>optional <code>transfer-leader</code></li>
-<li>optional <code>remove-peer</code></li>
-</ul>
-</li>
-<li>Example:
-<pre><code class="language-bash">./scripts/ops/migrate-cluster.sh \
-  --config ./raft_config.example.json \
-  --workdir ./artifacts/standalone \
-  --seed-store 1 \
-  --seed-region 1 \
-  --seed-peer 101 \
-  --target 2:201 \
-  --target 3:301 \
-  --transfer-leader 201 \
-  --remove-peer 101
-</code></pre>
-</li>
-<li>Notes:
-<ul>
-<li>seed workdir must already contain standalone data</li>
-<li>target store workdirs must be fresh</li>
-<li>uses the migration CLI as the only source of truth</li>
-</ul>
-</li>
-</ul>
-<h2 id="shared-shell-rules"><a class="header" href="#shared-shell-rules">Shared Shell Rules</a></h2>
-<h3 id="scriptslibcommonsh"><a class="header" href="#scriptslibcommonsh"><code>scripts/lib/common.sh</code></a></h3>
-<ul>
-<li>shared repo-root detection</li>
-<li>shared build helpers for <code>nokv</code> and <code>nokv-config</code></li>
-<li>shared TCP readiness helper</li>
-</ul>
-<h3 id="scriptslibconfigsh"><a class="header" href="#scriptslibconfigsh"><code>scripts/lib/config.sh</code></a></h3>
-<ul>
-<li>shared <code>nokv-config</code> lookups for:
-<ul>
-<li>store lines</li>
-<li>region lines</li>
-<li>Coordinator address</li>
-<li>Coordinator workdir</li>
-</ul>
-</li>
-</ul>
-<h3 id="scriptslibworkdirsh"><a class="header" href="#scriptslibworkdirsh"><code>scripts/lib/workdir.sh</code></a></h3>
-<ul>
-<li>shared workdir hygiene rules:
-<ul>
-<li>remove stale <code>LOCK</code></li>
-<li>reject unexpected directory contents</li>
-<li>assert a directory is fresh before seeding or bootstrap</li>
-</ul>
-</li>
-</ul>
-<p>This is where shell-level correctness rules should keep living. New scripts should reuse these helpers instead of open-coding workdir or config parsing logic again.</p>
-<h2 id="tooling--benchmarks"><a class="header" href="#tooling--benchmarks">Tooling &amp; Benchmarks</a></h2>
+<p><code>ReadDirPlus</code> is the main Stage 1 shape advantage: the native path performs one
+dentry scan plus one batched inode read at one snapshot timestamp. A generic KV
+schema usually implements the same operation as one scan plus N point reads.</p>
+<h2 id="current-scope"><a class="header" href="#current-scope">Current Scope</a></h2>
+<p>Stage 1 intentionally keeps the model small:</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Script</th><th>Purpose</th></tr>
+<tr><th>Area</th><th>Status</th></tr>
 </thead>
 <tbody>
-<tr><td><code>scripts/run_benchmarks.sh</code></td><td>Execute YCSB benchmarks (default engines: NoKV/Badger/Pebble, optional RocksDB).</td></tr>
-<tr><td><code>scripts/build_rocksdb.sh</code></td><td>Build local RocksDB artifacts used by benchmark comparisons.</td></tr>
-<tr><td><code>scripts/debug.sh</code></td><td>Wrap <code>dlv test</code> for focused debugging.</td></tr>
-<tr><td><code>scripts/gen.sh</code></td><td>Format protobufs and regenerate Go bindings through Buf.</td></tr>
+<tr><td>Dentry and inode binary codecs</td><td>Implemented</td></tr>
+<tr><td>Plan-driven operation contracts</td><td>Implemented</td></tr>
+<tr><td>Create / Lookup / ReadDir / ReadDirPlus / Rename / Unlink</td><td>Implemented</td></tr>
+<tr><td>Cross-region 2PC consumption</td><td>Implemented through <code>raftstore/client</code></td></tr>
+<tr><td>Server-side <code>AssertionNotExist</code></td><td>Implemented in Percolator prewrite</td></tr>
+<tr><td>Native gRPC service and typed Go client</td><td>Implemented</td></tr>
+<tr><td>Docker Compose service</td><td>Implemented</td></tr>
+<tr><td>Hardlink ref-count, xattrs, subtree watch, quota fence</td><td>Not in Stage 1</td></tr>
 </tbody>
 </table>
 </div>
-<p>For recovery and transport fault validation, use direct Go tests instead of shell wrappers:</p>
-<pre><code class="language-bash">RECOVERY_TRACE_METRICS=1 \
-go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFromManifest|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
-
-CHAOS_TRACE_METRICS=1 \
-go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport
+<p>The current service is a metadata substrate, not a complete filesystem stack.
+FUSE, POSIX compatibility, subtree-level watch, quota, and snapshot semantics
+belong to later stages.</p>
+<h2 id="running-with-docker-compose"><a class="header" href="#running-with-docker-compose">Running With Docker Compose</a></h2>
+<p>Build and start the full local stack:</p>
+<pre><code class="language-bash">docker compose up -d --build
 </code></pre>
-<h2 id="relationship-with-nokv-config"><a class="header" href="#relationship-with-nokv-config">Relationship with <code>nokv-config</code></a></h2>
-<ul>
-<li><code>nokv-config stores</code> / <code>regions</code> / <code>coordinator</code> remain the structured topology source for shell scripts.</li>
-<li><code>config.regions</code> remain bootstrap/deployment metadata, not restart-time peer truth.</li>
-<li><code>nokv-config catalog</code> writes Region metadata into the local peer catalog.</li>
-<li><code>cmd/nokv-redis</code> uses the same <code>raft_config.json</code>, so local scripts and Redis gateway stay aligned.</li>
-<li>Go tools can import <code>github.com/feichai0017/NoKV/config</code> and call <code>config.LoadFile</code> / <code>Validate</code> directly.</li>
-</ul>
-<p>Maintaining a single <code>raft_config.json</code> still keeps development scripts, Docker Compose, Redis gateway, and automated tests aligned. The difference now is that shell behavior is shared and explicit instead of repeated across four separate entrypoints.</p>
+<p>This starts:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Component</th><th>Endpoint</th></tr>
+</thead>
+<tbody>
+<tr><td><code>nokv-fsmeta</code></td><td><code>127.0.0.1:8090</code></td></tr>
+<tr><td>fsmeta metrics</td><td><code>http://127.0.0.1:9400/debug/vars</code></td></tr>
+<tr><td>coordinators</td><td><code>127.0.0.1:2390</code>, <code>2391</code>, <code>2392</code></td></tr>
+<tr><td>Redis gateway</td><td><code>127.0.0.1:6380</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>The compose bootstrap job is idempotent for existing Docker volumes. It uses
+<code>scripts/ops/bootstrap.sh --skip-existing</code>, so repeated <code>docker compose up</code> runs
+do not fail when stores already contain a <code>CURRENT</code> manifest.</p>
+<p>Check service health:</p>
+<pre><code class="language-bash">docker compose ps --all
+curl -sf http://127.0.0.1:9400/debug/vars &gt;/dev/null &amp;&amp; echo fsmeta-ok
+</code></pre>
+<h2 id="running-the-service-directly"><a class="header" href="#running-the-service-directly">Running The Service Directly</a></h2>
+<p>After a NoKV coordinator and raftstore cluster are running, start fsmeta with:</p>
+<pre><code class="language-bash">go run ./cmd/nokv-fsmeta \
+  --addr 127.0.0.1:8090 \
+  --coordinator-addr 127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392 \
+  --metrics-addr 127.0.0.1:9400
+</code></pre>
+<p><code>nokv-fsmeta</code> only needs coordinator endpoints. Store addresses are discovered
+through the coordinator store registry, following the same bootstrap pattern as
+TiKV clients using PD.</p>
+<p>When the raftstore nodes run inside Docker Compose, use the compose-managed
+<code>fsmeta</code> service. Those stores advertise Docker-network names such as
+<code>nokv-store-1:20160</code>, which are not host-reachable unless the stores are started
+with host-scoped advertised addresses.</p>
+<h2 id="native-vs-generic-benchmark"><a class="header" href="#native-vs-generic-benchmark">Native-vs-Generic Benchmark</a></h2>
+<p>The benchmark lives under <code>benchmark/fsmeta</code>.</p>
+<p>Run it inside the Docker network so both paths can resolve coordinator-advertised
+store addresses:</p>
+<pre><code class="language-bash">RUN_TS=$(date -u +%Y%m%dT%H%M%SZ)
+docker run --rm --network nokv_default \
+  -v "$PWD":/workspace \
+  -w /workspace/benchmark \
+  -e NOKV_FSMETA_BENCH=1 \
+  golang:1.26 \
+  go test ./fsmeta -run TestBenchmarkFSMeta -count=1 -timeout 30m -v -args \
+    -fsmeta_drivers native-fsmeta,generic-kv \
+    -fsmeta_mount "fsmeta-formal-${RUN_TS}" \
+    -fsmeta_addr nokv-fsmeta:8090 \
+    -fsmeta_coordinator_addr nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379 \
+    -fsmeta_workloads checkpoint-storm,hotspot-fanin \
+    -fsmeta_clients 8 \
+    -fsmeta_dirs 16 \
+    -fsmeta_files_per_dir 32 \
+    -fsmeta_files 512 \
+    -fsmeta_reads_per_client 16 \
+    -fsmeta_page_limit 512 \
+    -fsmeta_readdirplus=true \
+    -fsmeta_timeout 25m \
+    -fsmeta_output "data/fsmeta/results/fsmeta_native_vs_generic_${RUN_TS}.csv"
+</code></pre>
+<p>The generated CSV under <code>benchmark/data/</code> is a local run artifact and is ignored
+by Git (the example above writes to <code>&lt;repo&gt;/benchmark/data/...</code> because the
+docker run is <code>-w /workspace/benchmark</code>). Curated, committed results live under
+<code>benchmark/fsmeta/results/</code> — point <code>-fsmeta_output</code> at <code>fsmeta/results/...</code>
+(relative to <code>/workspace/benchmark</code>) when promoting a run to a tracked
+artifact.</p>
+<p>For the Stage 1 result interpretation, see
+<code>docs/notes/2026-04-25-fsmeta-stage1-benchmark-results.md</code>.</p>
+<h2 id="why-native-metadata-api-matters"><a class="header" href="#why-native-metadata-api-matters">Why Native Metadata API Matters</a></h2>
+<p>The generic-KV baseline intentionally uses the same NoKV raftstore and
+Percolator substrate. The difference is API shape:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Path</th><th>Create</th><th>ReadDirPlus</th></tr>
+</thead>
+<tbody>
+<tr><td><code>native-fsmeta</code></td><td>Server-side multi-key <code>AssertionNotExist</code></td><td>Scan + batched inode fetch at one snapshot</td></tr>
+<tr><td><code>generic-kv</code></td><td>Client-side read-then-write checks</td><td>Scan + one point Get per dentry</td></tr>
+</tbody>
+</table>
+</div>
+<p>This isolates the question NoKV is trying to answer in Stage 1: what does the
+system gain when filesystem metadata operations are first-class operations
+instead of application-level conventions over a raw KV API?</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="demo.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="percolator.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="nokv-redis.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="migration.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -442,11 +344,11 @@ go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedP
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="demo.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="percolator.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="nokv-redis.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="migration.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

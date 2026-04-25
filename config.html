@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-2ab2b35a.js";
+            window.path_to_searchindex_js = "searchindex-78ea1104.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-1516f189.js"></script>
+        <script src="toc-f12f6280.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -414,7 +414,7 @@ peers := cfg.MetaRootServicePeers("docker") // id → gRPC addr
 <li><code>scripts/dev/cluster.sh --config raft_config.example.json</code></li>
 <li><code>scripts/ops/serve-meta-root.sh --config ... --node-id 1</code></li>
 <li><code>scripts/ops/serve-coordinator.sh --config ... --coordinator-id c1</code></li>
-<li><code>go run ./cmd/nokv-redis --raft-config raft_config.example.json</code></li>
+<li><code>go run ./cmd/nokv-redis --coordinator-addr 127.0.0.1:2379</code></li>
 <li><code>nokv-config stores</code> / <code>nokv-config regions</code> — query current rooted
 topology (not the JSON). Use these to diff against the deployment manifest
 after scheduler operations.</li>

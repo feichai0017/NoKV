@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-2ab2b35a.js";
+            window.path_to_searchindex_js = "searchindex-78ea1104.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-1516f189.js"></script>
+        <script src="toc-f12f6280.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -187,11 +187,11 @@
 </thead>
 <tbody>
 <tr><td>Embedded (<code>embedded</code>)</td><td>Opens a local <code>*NoKV.DB</code> work directory. Commands (<code>SET</code>, <code>SET NX/XX</code>, <code>EX/PX/EXAT/PXAT</code>, <code>MSET</code>, <code>INCR/DECR</code>, <code>DEL</code>, <code>MGET</code>, <code>EXISTS</code>, …) run through regular DB APIs (<code>Get/Set/SetWithTTL/Del</code>) with backend-side synchronization for read-modify-write operations.</td><td><code>--workdir &lt;dir&gt;</code></td></tr>
-<tr><td>Raft (<code>raft</code>)</td><td>Routes requests through <code>raftstore/client</code> and a NoKV cluster. Writes execute via TwoPhaseCommit; TTL is persisted directly in entry <code>expires_at</code> metadata (same write path as value updates). Routing and TSO allocation are provided by Coordinator over gRPC (Coordinator is runtime route source; config regions are bootstrap metadata).</td><td><code>--raft-config &lt;file&gt;</code><br><code>--coordinator-addr host:port</code> (optional override; defaults to <code>config.coordinator</code>)</td></tr>
+<tr><td>Raft (<code>raft</code>)</td><td>Routes requests through <code>raftstore/client</code> and a NoKV cluster. Writes execute via TwoPhaseCommit; TTL is persisted directly in entry <code>expires_at</code> metadata (same write path as value updates). Routing, store discovery, and TSO allocation are provided by Coordinator over gRPC.</td><td><code>--coordinator-addr host:port</code></td></tr>
 </tbody>
 </table>
 </div>
-<p>When both CLI and config provide the same setting, CLI wins.</p>
+<p><code>--raft-config</code> remains available as a development shortcut for resolving the Coordinator address from <code>config.coordinator</code>; it is not used as the runtime store-address directory.</p>
 <h2 id="usage-examples"><a class="header" href="#usage-examples">Usage examples</a></h2>
 <h3 id="embedded-backend"><a class="header" href="#embedded-backend">Embedded backend</a></h3>
 <pre><code class="language-bash">go run ./cmd/nokv-redis \
@@ -212,7 +212,7 @@
 <p>Run the gateway:</p>
 <pre><code class="language-bash">go run ./cmd/nokv-redis \
   --addr 127.0.0.1:6380 \
-  --raft-config raft_config.example.json
+  --coordinator-addr 127.0.0.1:2379
 </code></pre>
 </li>
 </ol>

@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-2ab2b35a.js";
+            window.path_to_searchindex_js = "searchindex-78ea1104.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-1516f189.js"></script>
+        <script src="toc-f12f6280.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -433,7 +433,7 @@ defer srv.Close()
 <h2 id="5-client-workflow"><a class="header" href="#5-client-workflow">5. Client Workflow</a></h2>
 <p><code>raftstore/client</code> offers a leader-aware client with retry logic and convenient helpers:</p>
 <ul>
-<li><strong>Initialization</strong>: provide <code>[]StoreEndpoint</code> + <code>RegionResolver</code> (<code>GetRegionByKey</code>) so runtime routing is Coordinator-driven.</li>
+<li><strong>Initialization</strong>: provide a Coordinator-backed <code>RegionResolver</code> (<code>GetRegionByKey</code>) and <code>StoreResolver</code> (<code>GetStore</code>) so runtime routing and store discovery are Coordinator-driven.</li>
 <li><strong>Reads</strong>: <code>Get</code> and <code>Scan</code> pick the leader store for a key range, issue NoKV RPCs, and retry on NotLeader/EpochNotMatch.</li>
 <li><strong>Writes</strong>: <code>Mutate</code> bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); <code>Put</code> and <code>Delete</code> are convenience wrappers using the same 2PC path.</li>
 <li><strong>Timestamps</strong>: clients must supply <code>startVersion</code>/<code>commitVersion</code>. For distributed demos, use Coordinator (<code>nokv coordinator</code>) to obtain globally increasing values before calling <code>TwoPhaseCommit</code>.</li>

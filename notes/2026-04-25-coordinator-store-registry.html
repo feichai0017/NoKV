@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Scripts - NoKV Docs</title>
+        <title>2026-04-25 Coordinator 驱动的 Store Registry - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -12,34 +12,34 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="favicon-8114d1fc.png">
-        <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-2459343d.css">
-        <link rel="stylesheet" href="css/chrome-ae938929.css">
-        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-2459343d.css">
+        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="docs/custom-a69f6233.css">
+        <link rel="stylesheet" href="../docs/custom-a69f6233.css">
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "";
+            const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-78ea1104.js";
+            window.path_to_searchindex_js = "../searchindex-78ea1104.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-f12f6280.js"></script>
+        <script src="../toc-f12f6280.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -106,7 +106,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -141,7 +141,7 @@
                     <h1 class="menu-title">NoKV Docs</h1>
 
                     <div class="right-buttons">
-                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
@@ -178,261 +178,180 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="scripts-overview"><a class="header" href="#scripts-overview">Scripts Overview</a></h1>
-<p>NoKV now groups shell entrypoints by role instead of keeping every helper flat under <code>scripts/</code>.</p>
-<h2 id="layout"><a class="header" href="#layout">Layout</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Path</th><th>Role</th></tr>
-</thead>
-<tbody>
-<tr><td><code>scripts/dev</code></td><td>Local development and bootstrap helpers for running a cluster from <code>raft_config*.json</code>.</td></tr>
-<tr><td><code>scripts/ops</code></td><td>Operator-style workflows that drive the formal migration CLI.</td></tr>
-<tr><td><code>scripts/lib</code></td><td>Shared shell helpers for config lookup, workdir hygiene, and build/bootstrap rules.</td></tr>
-<tr><td><code>scripts/*.sh</code></td><td>Tooling or benchmark entrypoints that are still intentionally top-level.</td></tr>
-</tbody>
-</table>
-</div>
-<p>This split is deliberate:</p>
+                        <h1 id="2026-04-25-coordinator-驱动的-store-registry"><a class="header" href="#2026-04-25-coordinator-驱动的-store-registry">2026-04-25 Coordinator 驱动的 Store Registry</a></h1>
+<blockquote>
+<p>状态：已落地。NoKV 客户端 bootstrap 已从“静态 <code>raft_config</code> 携带全部 store 地址”收敛到“只依赖 coordinator endpoint”。</p>
+</blockquote>
+<h2 id="1-结论"><a class="header" href="#1-结论">1. 结论</a></h2>
+<p>NoKV 现在参考 TiKV PD 和 FoundationDB 的 bootstrap 思路，把 store 地址发现交给 <code>coordinator</code>。</p>
+<p><code>coordinator</code> 同时提供三类运行时入口：</p>
 <ul>
-<li><code>dev</code> scripts are allowed to help with local experiments and smoke tests.</li>
-<li><code>ops</code> scripts must treat the migration CLI as source of truth and stay stricter.</li>
-<li><code>lib</code> is where shared rules live, so shell semantics do not drift across scripts.</li>
+<li><code>GetRegionByKey(key)</code>：返回 region descriptor 和 peer <code>store_id</code>。</li>
+<li><code>GetStore(store_id)</code>：返回该 store 当前 client gRPC 地址。</li>
+<li><code>Tso</code> / <code>AllocID</code>：提供事务时间戳和 ID 分配。</li>
 </ul>
-<h2 id="bootstrap--local-launch"><a class="header" href="#bootstrap--local-launch">Bootstrap &amp; Local Launch</a></h2>
-<h3 id="scriptsdevclustersh"><a class="header" href="#scriptsdevclustersh"><code>scripts/dev/cluster.sh</code></a></h3>
-<ul>
-<li>Purpose: build <code>nokv</code> and <code>nokv-config</code>, start the canonical 333 separated dev cluster,
-seed fresh store workdirs, then start stores from <code>raft_config.json</code>.</li>
-<li>Starts:
-<ul>
-<li>three <code>nokv meta-root</code> processes (Truth plane; replicated is the only mode)</li>
-<li>one <code>nokv coordinator</code> process (Service plane; always remote-rooted)</li>
-<li>all configured stores (Execution plane)</li>
-</ul>
-</li>
-<li>Uses shared rules from:
-<ul>
-<li><code>scripts/lib/common.sh</code></li>
-<li><code>scripts/lib/config.sh</code></li>
-<li><code>scripts/lib/workdir.sh</code></li>
-</ul>
-</li>
-<li>Example:
-<pre><code class="language-bash">./scripts/dev/cluster.sh --config ./raft_config.example.json --workdir ./artifacts/cluster
+<p>数据面请求仍然直连 raftstore。coordinator 只负责 discovery / route / TSO，不代理 KV 读写。</p>
+<pre><code class="language-text">client / fsmeta / redis
+    |
+    | only coordinator endpoint
+    v
+coordinator
+    | GetRegionByKey(key) -&gt; region descriptor
+    | GetStore(store_id)  -&gt; current store address
+    v
+raftstore store
 </code></pre>
-</li>
-<li>Notes:
-<ul>
-<li><code>--config</code> defaults to <code>./raft_config.example.json</code></li>
-<li><code>--workdir</code> defaults to <code>./artifacts/cluster</code></li>
-<li>uses fixed local metadata-root gRPC endpoints <code>127.0.0.1:2380/2381/2382</code></li>
-<li>uses fixed local metadata-root raft transport endpoints <code>127.0.0.1:3380/3381/3382</code></li>
-<li>store workdirs are rejected if they contain unexpected files</li>
-<li>logs stream with <code>[meta-root-&lt;id&gt;]</code> / <code>[coordinator]</code> / <code>[store-&lt;id&gt;]</code> prefixes
-and are still written to <code>root.log</code> / <code>coordinator.log</code> / <code>server.log</code></li>
-<li>this is a bootstrap/dev launcher, not a restart command</li>
-<li>production-style restarts should run <code>scripts/ops/serve-meta-root.sh</code>,
-<code>scripts/ops/serve-coordinator.sh</code>, and <code>scripts/ops/serve-store.sh</code>
-directly against the same durable workdirs</li>
-</ul>
-</li>
-</ul>
-<h3 id="scriptsopsbootstrapsh"><a class="header" href="#scriptsopsbootstrapsh"><code>scripts/ops/bootstrap.sh</code></a></h3>
-<ul>
-<li>Purpose: seed local peer catalog metadata into a set of store directories derived from a path template.</li>
-<li>Intended for:
-<ul>
-<li>Docker Compose bootstrap</li>
-<li>local static-topology experiments</li>
-</ul>
-</li>
-<li>Example:
-<pre><code class="language-bash">./scripts/ops/bootstrap.sh --config /etc/nokv/raft_config.json --path-template /data/store-{id}
+<h2 id="2-参考边界"><a class="header" href="#2-参考边界">2. 参考边界</a></h2>
+<p>TiKV 把 store liveness、store state、region state 上报给 PD，PD 根据 store heartbeat 和 region heartbeat 做调度与路由决策。参考：<a href="https://tikv.org/docs/dev/reference/architecture/scheduling/">https://tikv.org/docs/dev/reference/architecture/scheduling/</a></p>
+<p>FoundationDB 的客户端和服务端从 cluster file 找到 coordinators，再进入实际集群。参考：<a href="https://apple.github.io/foundationdb/architecture.html">https://apple.github.io/foundationdb/architecture.html</a></p>
+<p>NoKV 的实现更接近 TiKV PD：coordinator 维护 runtime store registry，raftstore 继续执行读写。</p>
+<h2 id="3-wire-contract"><a class="header" href="#3-wire-contract">3. Wire Contract</a></h2>
+<p>Store heartbeat 上报 data-plane 地址：</p>
+<pre><code class="language-proto">message StoreHeartbeatRequest {
+  uint64 store_id = 1;
+  uint64 region_num = 2;
+  uint64 leader_num = 3;
+  uint64 capacity = 4;
+  uint64 available = 5;
+  uint64 dropped_operations = 6;
+  repeated uint64 leader_region_ids = 7;
+  string client_addr = 8;
+  string raft_addr = 9;
+}
 </code></pre>
-</li>
-<li>Notes:
-<ul>
-<li>skips stores that already contain <code>CURRENT</code></li>
-<li>refuses to seed into dirty directories</li>
-<li>this is bootstrap-only; it does not recover runtime topology</li>
-<li>use <code>nokv serve</code> / <code>scripts/ops/serve-store.sh</code> to restart an existing store from the same workdir</li>
-</ul>
-</li>
-</ul>
-<h3 id="scriptsopsserve-storesh"><a class="header" href="#scriptsopsserve-storesh"><code>scripts/ops/serve-store.sh</code></a></h3>
-<ul>
-<li>Purpose: thin wrapper around <code>nokv serve</code> for one store.</li>
-<li>Example:
-<pre><code class="language-bash">./scripts/ops/serve-store.sh \
-  --config ./raft_config.example.json \
-  --store-id 1 \
-  --workdir ./artifacts/cluster/store-1 \
-  --scope local
-</code></pre>
-</li>
-<li>Notes:
-<ul>
-<li>resolves store listen/workdir/Coordinator defaults through <code>nokv serve --config</code></li>
-<li>remote peer recovery comes from <code>raftstore/localmeta</code>; config <code>stores</code> only
-provide <code>storeID -&gt; addr</code></li>
-<li>no longer treats <code>config.regions</code> as restart-time topology truth</li>
-<li>if a static transport override is needed, use <code>--store-addr &lt;store-id&gt;=&lt;addr&gt;</code>
-rather than a peer-id keyed mapping</li>
-<li><code>--scope docker</code> selects container-friendly addresses</li>
-</ul>
-</li>
-</ul>
-<h3 id="scriptsopsserve-meta-rootsh"><a class="header" href="#scriptsopsserve-meta-rootsh"><code>scripts/ops/serve-meta-root.sh</code></a></h3>
-<ul>
-<li>Purpose: thin wrapper around <code>nokv meta-root</code> for one replicated metadata-root peer.</li>
-<li>Example:
-<pre><code class="language-bash">./scripts/ops/serve-meta-root.sh \
-  --addr 127.0.0.1:2380 \
-  --workdir ./artifacts/cluster/meta-root-1 \
-  --node-id 1 \
-  --transport-addr 127.0.0.1:3380 \
-  --peer 1=127.0.0.1:3380 \
-  --peer 2=127.0.0.1:3381 \
-  --peer 3=127.0.0.1:3382
-</code></pre>
-</li>
-<li>Notes:
-<ul>
-<li><code>--peer</code> values are metadata-root raft transport addresses, not gRPC
-service addresses</li>
-<li><code>--workdir</code>, <code>--node-id</code>, <code>--transport-addr</code>, and exactly 3 <code>--peer</code>
-values are required; there is no single-process local mode</li>
-<li>forwards shutdown signals to <code>nokv meta-root</code></li>
-</ul>
-</li>
-</ul>
-<h3 id="scriptsopsserve-coordinatorsh"><a class="header" href="#scriptsopsserve-coordinatorsh"><code>scripts/ops/serve-coordinator.sh</code></a></h3>
-<ul>
-<li>Purpose: thin wrapper around <code>nokv coordinator</code> for one coordinator process
-wired to an external 3-peer meta-root cluster.</li>
-<li>Example:
-<pre><code class="language-bash">./scripts/ops/serve-coordinator.sh \
-  --addr 127.0.0.1:2379 \
-  --coordinator-id c1 \
-  --root-peer 1=127.0.0.1:2380 \
-  --root-peer 2=127.0.0.1:2381 \
-  --root-peer 3=127.0.0.1:2382
-</code></pre>
-</li>
-<li>Notes:
-<ul>
-<li><code>--root-peer</code> values are metadata-root gRPC service addresses, not raft transport</li>
-<li>exactly 3 <code>--root-peer</code> values are required (mirrors the Truth-plane quorum)</li>
-<li><code>--coordinator-id</code> is required (stable lease owner id)</li>
-<li>forwards shutdown signals to <code>nokv coordinator</code></li>
-</ul>
-</li>
-</ul>
-<h2 id="migration-workflow"><a class="header" href="#migration-workflow">Migration Workflow</a></h2>
-<h3 id="scriptsopsmigrate-clustersh"><a class="header" href="#scriptsopsmigrate-clustersh"><code>scripts/ops/migrate-cluster.sh</code></a></h3>
-<ul>
-<li>Purpose: one-shot local operator wrapper for the standalone-to-cluster migration path.</li>
-<li>Drives:
-<ul>
-<li><code>nokv migrate plan</code></li>
-<li><code>nokv migrate init</code></li>
-<li><code>nokv migrate expand</code></li>
-<li>optional <code>transfer-leader</code></li>
-<li>optional <code>remove-peer</code></li>
-</ul>
-</li>
-<li>Example:
-<pre><code class="language-bash">./scripts/ops/migrate-cluster.sh \
-  --config ./raft_config.example.json \
-  --workdir ./artifacts/standalone \
-  --seed-store 1 \
-  --seed-region 1 \
-  --seed-peer 101 \
-  --target 2:201 \
-  --target 3:301 \
-  --transfer-leader 201 \
-  --remove-peer 101
-</code></pre>
-</li>
-<li>Notes:
-<ul>
-<li>seed workdir must already contain standalone data</li>
-<li>target store workdirs must be fresh</li>
-<li>uses the migration CLI as the only source of truth</li>
-</ul>
-</li>
-</ul>
-<h2 id="shared-shell-rules"><a class="header" href="#shared-shell-rules">Shared Shell Rules</a></h2>
-<h3 id="scriptslibcommonsh"><a class="header" href="#scriptslibcommonsh"><code>scripts/lib/common.sh</code></a></h3>
-<ul>
-<li>shared repo-root detection</li>
-<li>shared build helpers for <code>nokv</code> and <code>nokv-config</code></li>
-<li>shared TCP readiness helper</li>
-</ul>
-<h3 id="scriptslibconfigsh"><a class="header" href="#scriptslibconfigsh"><code>scripts/lib/config.sh</code></a></h3>
-<ul>
-<li>shared <code>nokv-config</code> lookups for:
-<ul>
-<li>store lines</li>
-<li>region lines</li>
-<li>Coordinator address</li>
-<li>Coordinator workdir</li>
-</ul>
-</li>
-</ul>
-<h3 id="scriptslibworkdirsh"><a class="header" href="#scriptslibworkdirsh"><code>scripts/lib/workdir.sh</code></a></h3>
-<ul>
-<li>shared workdir hygiene rules:
-<ul>
-<li>remove stale <code>LOCK</code></li>
-<li>reject unexpected directory contents</li>
-<li>assert a directory is fresh before seeding or bootstrap</li>
-</ul>
-</li>
-</ul>
-<p>This is where shell-level correctness rules should keep living. New scripts should reuse these helpers instead of open-coding workdir or config parsing logic again.</p>
-<h2 id="tooling--benchmarks"><a class="header" href="#tooling--benchmarks">Tooling &amp; Benchmarks</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Script</th><th>Purpose</th></tr>
-</thead>
-<tbody>
-<tr><td><code>scripts/run_benchmarks.sh</code></td><td>Execute YCSB benchmarks (default engines: NoKV/Badger/Pebble, optional RocksDB).</td></tr>
-<tr><td><code>scripts/build_rocksdb.sh</code></td><td>Build local RocksDB artifacts used by benchmark comparisons.</td></tr>
-<tr><td><code>scripts/debug.sh</code></td><td>Wrap <code>dlv test</code> for focused debugging.</td></tr>
-<tr><td><code>scripts/gen.sh</code></td><td>Format protobufs and regenerate Go bindings through Buf.</td></tr>
-</tbody>
-</table>
-</div>
-<p>For recovery and transport fault validation, use direct Go tests instead of shell wrappers:</p>
-<pre><code class="language-bash">RECOVERY_TRACE_METRICS=1 \
-go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFromManifest|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
+<p>Coordinator 暴露 store discovery：</p>
+<pre><code class="language-proto">enum StoreState {
+  STORE_STATE_UNKNOWN = 0;
+  STORE_STATE_UP = 1;
+  STORE_STATE_DOWN = 2;
+}
 
-CHAOS_TRACE_METRICS=1 \
-go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport
+message StoreInfo {
+  uint64 store_id = 1;
+  string client_addr = 2;
+  string raft_addr = 3;
+  StoreState state = 4;
+  uint64 region_num = 5;
+  uint64 leader_num = 6;
+  uint64 capacity = 7;
+  uint64 available = 8;
+  uint64 dropped_operations = 9;
+  uint64 last_heartbeat_unix_nano = 10;
+}
+
+message GetStoreRequest {
+  uint64 store_id = 1;
+}
+
+message GetStoreResponse {
+  StoreInfo store = 1;
+  bool not_found = 2;
+}
+
+message ListStoresRequest {}
+
+message ListStoresResponse {
+  repeated StoreInfo stores = 1;
+}
 </code></pre>
-<h2 id="relationship-with-nokv-config"><a class="header" href="#relationship-with-nokv-config">Relationship with <code>nokv-config</code></a></h2>
+<p><code>client_addr</code> 是 KV RPC dial 地址。<code>raft_addr</code> 目前通常等于 <code>client_addr</code>，保留给 transport-aware scheduling 和诊断。</p>
+<p><code>STORE_STATE_DOWN</code> 不是占位：coordinator 会根据最后一次 heartbeat 时间和 <code>storeHeartbeatTTL</code> 判断 store 是否过期。过期 store 仍然出现在 <code>ListStores</code> 中用于诊断，但 client 看到 <code>DOWN</code> 后不会继续 dial 该地址。</p>
+<h2 id="4-coordinator-内部职责"><a class="header" href="#4-coordinator-内部职责">4. Coordinator 内部职责</a></h2>
+<p><code>coordinator/view.StoreStats</code> 保存 runtime address 和 heartbeat stats：</p>
+<pre><code class="language-go">type StoreStats struct {
+    StoreID           uint64
+    ClientAddr        string
+    RaftAddr          string
+    RegionNum         uint64
+    LeaderNum         uint64
+    Capacity          uint64
+    Available         uint64
+    DroppedOperations uint64
+    UpdatedAt         time.Time
+}
+</code></pre>
+<p><code>coordinator/catalog.Cluster</code> 提供：</p>
 <ul>
-<li><code>nokv-config stores</code> / <code>regions</code> / <code>coordinator</code> remain the structured topology source for shell scripts.</li>
-<li><code>config.regions</code> remain bootstrap/deployment metadata, not restart-time peer truth.</li>
-<li><code>nokv-config catalog</code> writes Region metadata into the local peer catalog.</li>
-<li><code>cmd/nokv-redis</code> uses the same <code>raft_config.json</code>, so local scripts and Redis gateway stay aligned.</li>
-<li>Go tools can import <code>github.com/feichai0017/NoKV/config</code> and call <code>config.LoadFile</code> / <code>Validate</code> directly.</li>
+<li><code>StoreByID(storeID)</code>：单 store lookup。</li>
+<li><code>StoreSnapshot()</code>：diagnostics / <code>ListStores</code>。</li>
 </ul>
-<p>Maintaining a single <code>raft_config.json</code> still keeps development scripts, Docker Compose, Redis gateway, and automated tests aligned. The difference now is that shell behavior is shared and explicit instead of repeated across four separate entrypoints.</p>
+<p>这仍然是 rebuildable runtime view。coordinator 重启后，store 下一轮 heartbeat 会恢复 registry。registry 空窗口期应该返回 <code>NotFound</code> / <code>Unavailable</code>，不从旧配置绕过控制面。</p>
+<h2 id="5-client-侧职责"><a class="header" href="#5-client-侧职责">5. Client 侧职责</a></h2>
+<p><code>raftstore/client.Config</code> 现在要求两个 resolver：</p>
+<pre><code class="language-go">type RegionResolver interface {
+    GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error)
+    Close() error
+}
+
+type StoreResolver interface {
+    GetStore(ctx context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error)
+}
+
+type Config struct {
+    RegionResolver RegionResolver
+    StoreResolver  StoreResolver
+}
+</code></pre>
+<p>正常部署中，两者由同一个 <code>coordinator/client.GRPCClient</code> 提供。</p>
+<p>执行流程：</p>
+<ol>
+<li><code>GetRegionByKey</code> 得到 region descriptor。</li>
+<li>client 选择 leader store。</li>
+<li>store cache miss 时调用 <code>GetStore(store_id)</code>。</li>
+<li>如果 <code>StoreInfo.state == DOWN</code>，直接按 store unavailable 处理。</li>
+<li>dial <code>StoreInfo.client_addr</code> 并缓存连接。</li>
+<li>连接失败时失效 store cache，重新向 coordinator resolve。</li>
+</ol>
+<p>缓存命中不是永久信任。<code>raftstore/client</code> 默认每 30 秒 revalidate 一次 cached store endpoint：</p>
+<ul>
+<li>revalidation 看到 <code>DOWN</code>：失效本地 store cache，返回 <code>ErrStoreUnavailable</code>。</li>
+<li>revalidation 看到同地址 <code>UP</code>：刷新 validated timestamp，不重连。</li>
+<li>revalidation 看到新地址 <code>UP</code>：替换本地 store connection。</li>
+<li>revalidation 期间 coordinator 短暂不可达：继续使用已有连接，避免控制面抖动放大成数据面中断。</li>
+</ul>
+<p>生产 client 不再接受静态 <code>Stores []StoreEndpoint</code>。测试里可以注入静态 resolver，但那只是 fake coordinator，不是运行时 fallback。</p>
+<h2 id="6-gateway--service-启动方式"><a class="header" href="#6-gateway--service-启动方式">6. Gateway / Service 启动方式</a></h2>
+<p><code>cmd/nokv-fsmeta</code>：</p>
+<pre><code class="language-bash">nokv-fsmeta \
+  -coordinator-addr 127.0.0.1:2379 \
+  -addr 127.0.0.1:8090
+</code></pre>
+<p><code>cmd/nokv-redis</code> 分布式模式：</p>
+<pre><code class="language-bash">nokv-redis \
+  -coordinator-addr 127.0.0.1:2379 \
+  -addr 127.0.0.1:6380
+</code></pre>
+<p><code>cmd/nokv-redis --raft-config</code> 只保留为开发便利入口：从 config 解析 coordinator addr，而不是解析 stores。<code>cmd/nokv-fsmeta</code> 不支持 <code>--raft-config</code>，避免把新服务继续绑定到静态 topology 文件。</p>
+<h2 id="7-设计边界"><a class="header" href="#7-设计边界">7. 设计边界</a></h2>
+<p>这条改动不会削弱 <code>meta/root</code> 和 <code>coordinator</code> 的分离：</p>
+<ul>
+<li>durable truth：仍然在 <code>meta/root</code>。</li>
+<li>region descriptor truth：仍然通过 rooted events 发布。</li>
+<li>store address / liveness：runtime view，放 coordinator。</li>
+<li>data-plane execution：仍然在 raftstore。</li>
+<li>client bootstrap：只依赖 coordinator endpoint。</li>
+</ul>
+<p>coordinator 不是 data-plane proxy，也不是重新变成“大脑数据库”。它只是补齐 PD-style runtime discovery 职责。</p>
+<h2 id="8-验收"><a class="header" href="#8-验收">8. 验收</a></h2>
+<p>当前验收点：</p>
+<ul>
+<li><code>cmd/nokv-fsmeta</code> 不需要 <code>--raft-config</code>。</li>
+<li><code>cmd/nokv-redis</code> 可以只用 <code>--coordinator-addr</code> 进入 raft 模式。</li>
+<li><code>raftstore/client</code> 在 store cache miss 时自动 <code>GetStore</code>。</li>
+<li>coordinator 会把超过 heartbeat TTL 的 store 标记为 <code>DOWN</code>，client 看到 <code>DOWN</code> 会拒绝 dial。</li>
+<li><code>fsmeta/integration</code> 使用 coordinator-only discovery 跑完整 gRPC -&gt; fsmeta server -&gt; executor -&gt; raftstore 链路。</li>
+<li><code>raftstore/integration</code> 覆盖 coordinator unavailable 后的已有连接行为和 cold client 失败路径。</li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="demo.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../notes/2026-04-24-fsmeta-positioning.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="nokv-redis.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../notes/2026-04-25-fsmeta-stage1-benchmark-results.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -442,11 +361,11 @@ go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedP
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="demo.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../notes/2026-04-24-fsmeta-positioning.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="nokv-redis.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../notes/2026-04-25-fsmeta-stage1-benchmark-results.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -466,17 +385,17 @@ go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedP
         </script>
 
 
-        <script src="elasticlunr-ef4e11c1.min.js"></script>
-        <script src="mark-09e88c2c.min.js"></script>
-        <script src="searcher-c2a407aa.js"></script>
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-c2a407aa.js"></script>
 
-        <script src="clipboard-1626706a.min.js"></script>
-        <script src="highlight-abc7f01d.js"></script>
-        <script src="book-a0b12cfe.js"></script>
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="docs/custom-732fa610.js"></script>
-        <script src="docs/mermaid-init-8a66ee6c.js"></script>
+        <script src="../docs/custom-732fa610.js"></script>
+        <script src="../docs/mermaid-init-8a66ee6c.js"></script>
 
 
 

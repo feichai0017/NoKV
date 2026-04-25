@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-2ab2b35a.js";
+            window.path_to_searchindex_js = "searchindex-78ea1104.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-1516f189.js"></script>
+        <script src="toc-f12f6280.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -200,11 +200,12 @@ workdir:</p>
   --workdir ./artifacts/cluster/store-1
 </code></pre>
 <p>On restart, NoKV recovers hosted peers from local metadata in the store workdir.
-The config file is only used to resolve store and Coordinator addresses.
+The config file is only used to start stores and Coordinator. Runtime clients
+discover store addresses from Coordinator heartbeats.
 Do not rerun <code>scripts/ops/bootstrap.sh</code> or treat <code>scripts/dev/cluster.sh</code> as the
 restart path for an already-running store.</p>
 <p>Start the Redis-compatible gateway in another shell:</p>
-<pre><code class="language-bash">go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --raft-config raft_config.example.json
+<pre><code class="language-bash">go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --coordinator-addr 127.0.0.1:2379
 </code></pre>
 <p>Quick smoke test:</p>
 <pre><code class="language-bash">redis-cli -p 6380 ping

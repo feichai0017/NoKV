@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-2ab2b35a.js";
+            window.path_to_searchindex_js = "searchindex-78ea1104.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-1516f189.js"></script>
+        <script src="toc-f12f6280.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -276,6 +276,7 @@
 <tr><td>Coordinator (route / TSO / heartbeats)</td><td><a href="coordinator.html">coordinator.md</a></td></tr>
 <tr><td><strong>Rooted truth kernel</strong> (<code>meta/root</code>)</td><td><a href="rooted_truth.html">rooted_truth.md</a></td></tr>
 <tr><td>Control-plane ↔ execution-plane contract</td><td><a href="control_and_execution_protocols.html">control_and_execution_protocols.md</a></td></tr>
+<tr><td>FS metadata service (<code>fsmeta</code>)</td><td><a href="fsmeta.html">fsmeta.md</a></td></tr>
 <tr><td>Standalone → distributed migration</td><td><a href="migration.html">migration.md</a></td></tr>
 <tr><td>Recovery model</td><td><a href="recovery.html">recovery.md</a></td></tr>
 <tr><td>Percolator MVCC 2PC</td><td><a href="percolator.html">percolator.md</a></td></tr>
@@ -326,6 +327,8 @@
 <li><a href="notes/2026-03-31-sst-snapshot-install.html">SST-based snapshot install</a></li>
 <li><a href="notes/2026-04-03-delos-lite-metadata-root-roadmap.html">Delos-lite rooted-truth roadmap</a></li>
 <li><a href="notes/2026-04-05-range-filter-from-grf.html">Range filter — from GRF, but not quite</a></li>
+<li><a href="notes/2026-04-24-fsmeta-positioning.html">fsmeta positioning</a></li>
+<li><a href="notes/2026-04-25-fsmeta-stage1-benchmark-results.html">fsmeta Stage 1 benchmark results</a></li>
 </ul>
 <hr>
 <h2 id="-architecture-at-a-glance"><a class="header" href="#-architecture-at-a-glance">🏗️ Architecture at a Glance</a></h2>
@@ -371,6 +374,7 @@ go run ./cmd/nokv regions --workdir ./artifacts/cluster/store-1 --json
 <tr><td><strong><a href="scripts.html">Scripts layout</a></strong></td><td>Local cluster, bootstrap, ops helpers</td></tr>
 <tr><td><strong><a href="coordinator.html">Coordinator</a></strong></td><td>Route / TSO / heartbeat service</td></tr>
 <tr><td><strong><a href="percolator.html">Percolator / MVCC</a></strong></td><td>2PC primitives in distributed mode</td></tr>
+<tr><td><strong><a href="fsmeta.html">FSMetadata</a></strong></td><td>Native metadata API for distributed filesystem-style workloads</td></tr>
 <tr><td><strong><a href="runtime.html">Runtime call chains</a></strong></td><td>Function-level sequence diagrams</td></tr>
 <tr><td><strong><a href="testing.html">Testing</a></strong></td><td>Failpoints, chaos, restart, migration matrix</td></tr>
 <tr><td><strong><a href="SUMMARY.html">SUMMARY.md</a></strong></td><td>Full mdbook table of contents</td></tr>

@@ -1,0 +1,660 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>2026-04-24 fsmeta 定位：面向分布式文件系统的元数据底座 - NoKV Docs</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="NoKV design, architecture, migration, and testing documentation.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-2459343d.css">
+        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../docs/custom-a69f6233.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-78ea1104.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-f12f6280.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">NoKV Docs</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="2026-04-24-fsmeta-定位面向分布式文件系统的元数据底座"><a class="header" href="#2026-04-24-fsmeta-定位面向分布式文件系统的元数据底座">2026-04-24 fsmeta 定位：面向分布式文件系统的元数据底座</a></h1>
+<blockquote>
+<p>状态：Stage 1 native-service roadmap v3。<code>fsmeta/</code> 已落 schema、plan、executor、跨 region 2PC 硬化、<code>ReadDirPlus</code>、native gRPC service + typed client。v3 相对 v2 的主要修订：</p>
+<ul>
+<li>新增 §7.5 主流分布式 KV 的 primitive 能力对比矩阵（NoKV vs TiKV / FoundationDB / etcd / CockroachDB）；</li>
+<li>新增 §7.6 三类结构性优势分类（Shape / Structure / Correctness），每类对应到已 / 将实现的原语；</li>
+<li>§10 Related Work 扩充为 “工业 / 学术历史 + 近两年研究热点分级 + Stage 2 primitive × 研究锚点映射”；</li>
+<li>确认 Stage 1 benchmark 锚点为 “同一 NoKV 集群下 native API vs generic KV schema”，对标 workload 为 Mooncake / MLPerf Storage v2.0 checkpoint storm + Tectonic §3.2 fan-in。</li>
+</ul>
+<p>v2 修订（保留）：Stage 1 从 JuiceFS TKV adapter 改为 NoKV-native metadata service；JuiceFS 降级为 Stage 3 兼容性验证，不再作为主线卖点。</p>
+</blockquote>
+<h2 id="导读"><a class="header" href="#导读">导读</a></h2>
+<ul>
+<li>🧭 主题：NoKV 作为云原生分布式文件系统的 metadata service，是否是一个成立的生态位。</li>
+<li>🧱 核心对象：<code>fsmeta</code>、<code>raftstore</code>、<code>percolator</code>、<code>coordinator</code>、<code>meta/root</code>、Succession。</li>
+<li>🔁 调用链：native fsmeta service -&gt; <code>fsmeta</code> schema/API -&gt; NoKV transaction client -&gt; raftstore multi-Raft execution；mount/subtree authority -&gt; <code>meta/root</code> rooted events。</li>
+<li>📚 参考对象：
+<ul>
+<li>工业 —— Meta Tectonic、Google Colossus、DeepSeek 3FS、CephFS、HDFS/RBF、JuiceFS、CurveFS、CubeFS、Lustre、FoundationDB、etcd；</li>
+<li>学术 —— Weil’04、IndexFS、ShardFS、HopsFS、InfiniFS、CFS、Tectonic、λFS、FileScale、FoundationDB、DaisyNFS、Mooncake、Quiver。</li>
+</ul>
+</li>
+</ul>
+<h2 id="1-结论"><a class="header" href="#1-结论">1. 结论</a></h2>
+<p>NoKV 不应该把这个方向包装成“又一个分布式文件系统“。更准确的位置是：</p>
+<blockquote>
+<p><strong>NoKV fsmeta 是 hyperscaler “stateless schema 层 + 外部事务 KV” 架构在 Go + CNCF 生态里的开源实现，专门为 filesystem metadata workload 调过边界。</strong></p>
+</blockquote>
+<p><strong>为什么这个定位站得住</strong>：2021 年以来，hyperscaler 的 DFS 元数据设计已经<strong>明显收敛</strong>到同一个模式——Google Colossus (Curator + Bigtable)、Meta Tectonic (ZippyDB)、DeepSeek 3FS (FoundationDB)、Snowflake (FoundationDB)——也就是“无状态 schema / 业务层 + 外部事务 KV 做持久层“。开源 / CNCF 生态已经有 CubeFS、Curve、JuiceFS 这类完整文件系统或 frontend，但缺的是一个<strong>面向 DFS metadata workload 的外部事务 KV substrate</strong>：既是可复用后端，又把目录 range、subtree authority、watch、readdir+stat 这些语义纳入存储层边界。</p>
+<p>这个生态位和现有系统不完全重叠：</p>
+<ul>
+<li>JuiceFS 把 metadata engine 抽象成可插拔接口，但它自己不做 KV；TKV 模式下 inode/dentry/chunk/session 都编码成普通 key/value。</li>
+<li>3FS 的 metadata service 轻量，所有事务边界都压到 FoundationDB；inode 用 <code>INOD</code>、dentry 用 <code>DENT</code>。</li>
+<li>Meta Tectonic 把 metadata 拆成 Name / File / Block 三层，全部压到 ZippyDB。</li>
+<li>CurveFS / CephFS 是完整文件系统，metadata service 深度绑定自己的客户端协议。</li>
+<li>etcd 是小规模强一致配置 KV，不适合承接数亿 inode/dentry 主存储。</li>
+</ul>
+<p>NoKV 要做的不是“比它们都强“，而是做一个<strong>专门给 filesystem metadata workload 调过边界的、开源可运维的 KV/transaction substrate</strong>：目录 range、inode/dentry lifecycle、subtree authority、readdir+stat、watch/cache invalidation 这些语义下沉到存储层，而不是全靠上层 key schema 拼出来。</p>
+<h2 id="2-外部系统事实核验"><a class="header" href="#2-外部系统事实核验">2. 外部系统事实核验</a></h2>
+<h3 id="21-工业系统"><a class="header" href="#21-工业系统">2.1 工业系统</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>系统</th><th>元数据落点</th><th>工程含义</th><th>对 NoKV 的启发</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Meta Tectonic</strong> (FAST’21)</td><td>三层 metadata（Name / File / Block），全部压到 ZippyDB（Paxos-replicated RocksDB KV）。stateless front-end。按 directory-id / file-id / block-id hash partition。参考：<a href="https://www.usenix.org/system/files/fast21-pan.pdf">FAST’21 PDF</a>。</td><td>论文 §3.2 自己承认：MapReduce 读同目录 10k 个文件 → 单 ZippyDB shard 融化。hash-by-dir 解决不了 fan-in hotspot。</td><td>NoKV 的 range-partitioned multi-Raft + split-on-hotness 是这条痛点的直接答案。</td></tr>
+<tr><td><strong>Google Colossus</strong></td><td>stateless Curators + Bigtable 存 FS 行；根元数据靠 Chubby 协调。参考：<a href="https://cloud.google.com/blog/products/storage-data-transfer/a-peek-behind-colossus-googles-file-system">Google Cloud blog</a>。</td><td>Curator 不服务数据，只做 control plane。scale 靠 Bigtable tablet split。</td><td>验证“stateless meta + external tx-KV“是成熟范式，不是异端。</td></tr>
+<tr><td><strong>DeepSeek 3FS</strong></td><td>stateless meta service + FDB；inode <code>"INOD"+le64(id)</code>、dentry 按 parent inode 聚簇。SSI 事务。参考：<a href="https://github.com/deepseek-ai/3FS/blob/main/docs/design_notes.md">3FS design notes</a>。</td><td>继承 FDB 硬限（10MB / 5s / 10KB key）；文件长度在并发写入时只做最终一致，<code>close/fsync</code> 修正。</td><td>不照抄 FDB layer：把 metadata 常见原语下沉到 KV 层，绕开 5s 单事务上限的妥协。</td></tr>
+<tr><td><strong>JuiceFS + TiKV</strong></td><td>TKV 模式下 inode / dentry / chunk / session 编码成普通 KV。参考：<a href="https://juicefs.com/docs/community/internals/">JuiceFS Internals</a>。</td><td>JuiceFS 不要求 metadata backend 理解目录；TiKV 只是通用 range KV + tx。</td><td>它是反面边界：TKV 兼容会隐藏 fsmeta 的 native 差异化。NoKV 可以 Stage 3 验证兼容性，但 Stage 1 不以它为主线。</td></tr>
+<tr><td><strong>CubeFS MetaNode</strong></td><td>meta-partition 按 inode range，multi-Raft；内存 B-tree + snapshot + WAL。参考：<a href="https://www.cubefs.io/docs/master/design/metanode.html">CubeFS design</a>。</td><td>inode range 不天然等价于 parent-directory locality，大目录和跨目录操作仍要在文件系统层处理。</td><td>NoKV 可以优先探索目录前缀 / subtree-aware 的 range placement，让 locality 成为存储层合同的一部分。</td></tr>
+<tr><td><strong>CurveFS</strong></td><td>MDS 用 etcd 存拓扑（HA）；Metaserver 存 inode/dentry（multi-Raft）。参考：<a href="https://docs.opencurve.io/CurveFS/architecture/architecture-intro">CurveFS architecture</a>。</td><td>CurveFS 明确不把 etcd 当 inode/dentry 主存储。</td><td>支持我们的判断：etcd 不适合承接高 churn FS metadata。</td></tr>
+<tr><td><strong>CephFS MDS</strong></td><td>stateful MDS + RADOS；Weil 2004 “dynamic subtree partitioning”。参考：<a href="https://ceph.io/assets/pdfs/weil-mds-sc04.pdf">Weil SC’04</a>、<a href="https://tracker.ceph.com/issues/24840">tracker #24840</a>。</td><td>subtree balancer 不稳定（18 小时 delayed request），Reef+ 默认关闭多 MDS balancing。2025 年 <a href="https://dl.acm.org/doi/10.1145/3721483">ACM TOS</a> 仍在研究怎么修。</td><td>20 年未修的包袱是我们的攻击面：NoKV 用 Succession 把 subtree handoff 形式化，规避 Ceph balancer 不稳定性。</td></tr>
+<tr><td><strong>HDFS + RBF</strong></td><td>单 JVM NN + QJM；federation 静态切；RBF router stateless。参考：<a href="https://hadoop.apache.org/docs/stable/hadoop-project-dist/hadoop-hdfs-rbf/HDFSRouterFederation.html">HDFS RBF</a>。</td><td>LinkedIn 1.1B objects / 380GB heap；Uber 切 ViewFs；跨 subcluster rename 不支持。</td><td>静态 federation 的硬限定义了对比基线。</td></tr>
+<tr><td><strong>FoundationDB</strong></td><td>单事务 10MB / 5s / key 10KB / value 100KB。参考：<a href="https://apple.github.io/foundationdb/known-limitations.html">FDB known limitations</a>。</td><td>大目录 rename、递归 delete、批量 snapshot 必须拆小事务或上层协议。</td><td>我们的机会在 subtree-scoped 可恢复 operation，不是单个超大 KV 事务。</td></tr>
+<tr><td><strong>etcd</strong></td><td>请求 1.5MiB；DB 2GiB 默认、8GiB 建议上限。参考：<a href="https://etcd.io/docs/v3.4/dev-guide/limit/">etcd limits</a>。</td><td>适合配置 / 选主 / 控制面，不适合承接数亿 inode。</td><td>兼容 K8s 运维习惯，但目标不能降级成“更大的 etcd“。</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="22-学术参考时间线"><a class="header" href="#22-学术参考时间线">2.2 学术参考（时间线）</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>论文</th><th>贡献</th><th>对 NoKV 的启发</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Weil et al. SC’04</strong> “Dynamic Metadata Management”</td><td>MDS 持有 subtree，hot subtree 分裂迁移。CephFS 至今架构骨架。参考：<a href="https://ceph.io/assets/pdfs/weil-mds-sc04.pdf">SC’04 PDF</a>。</td><td>subtree authority 方向对；Ceph 的 unbounded handoff 是痛点。NoKV Succession 形式化 handoff → subtree 权威可控。</td></tr>
+<tr><td><strong>IndexFS</strong> (SC’14)</td><td>每目录增量切分 (GIGA+)；LSM-style metadata 落盘；stateless client 缓存；<strong>bulk insertion 针对 N-N checkpoint storm</strong>。参考：<a href="https://www.pdl.cmu.edu/PDL-FTP/FS/IndexFS-SC14.pdf">PDL PDF</a>。</td><td>三条直接可借：目录级增量 split、LSM-native metadata 落盘（NoKV 已有）、bulk insert 专门应对 AI checkpoint。</td></tr>
+<tr><td><strong>ShardFS</strong> (SoCC’15)</td><td>对立路线：directory-lookup state 全副本广播。参考：<a href="https://dl.acm.org/doi/10.1145/2806777.2806844">SoCC’15</a>。</td><td>反面教材——mutation-heavy 时更差。NoKV 不走这条。</td></tr>
+<tr><td><strong>HopsFS</strong> (FAST’17)</td><td>把 HDFS 单 NN 的内存 metadata 换成 NewSQL（MySQL NDB）；<strong>same-parent-same-shard</strong> partitioning + 分布式事务。37× 容量、16-37× 吞吐。参考：<a href="https://www.usenix.org/conference/fast17/technical-sessions/presentation/niazi">FAST’17</a>。</td><td><strong>最接近的“stateless NN + tx-KV“先例</strong>。same-parent-same-shard 是 fsmeta 的关键 partitioning 启发。</td></tr>
+<tr><td><strong>FoundationDB</strong> (SIGMOD’21)</td><td>“Unbundled” 事务 KV 的 canonical design paper。参考：<a href="https://dl.acm.org/doi/10.1145/3448016.3457559">SIGMOD’21</a>。</td><td>外 KV 做 metadata substrate 的权威引用。我们不是发明这条路，是在 CNCF 生态里兑现它。</td></tr>
+<tr><td><strong>Tectonic</strong> (FAST’21)</td><td>hierarchical metadata 拆三层，全部压 ZippyDB。参考：<a href="https://www.usenix.org/conference/fast21/presentation/pan">FAST’21</a>。</td><td>架构和 NoKV fsmeta 同构——<strong>pattern 本身被 Meta 在生产验证</strong>。</td></tr>
+<tr><td><strong>InfiniFS</strong> (FAST’22)</td><td><strong>100B 文件 namespace</strong>。三个想法：(a) 解耦 access metadata (permission/path) vs content metadata (inode attrs) → 按不同维度 partition；(b) speculative parallel path resolution；(c) optimistic access-metadata client cache → 干掉近根 hotspot。报告 73× / 23× 超 HopsFS / CephFS。参考：<a href="https://www.usenix.org/conference/fast22/presentation/lv">FAST’22</a>。</td><td><strong>最值得借鉴的学术先例</strong>。access/content 解耦 → fsmeta schema 把 permission 和 attr 分开 partition；parallel path resolution → native RPC 设计。</td></tr>
+<tr><td><strong>CFS</strong> (EuroSys’23)</td><td>百度 AI Cloud 生产化。分层 metadata（attr vs namespace 独立扩）；<strong>单 shard 原子原语替代分布式事务</strong>；client-side metadata 解析。比 InfiniFS 快 1.22-4.10×。参考：<a href="https://dl.acm.org/doi/10.1145/3552326.3587443">EuroSys’23</a>。</td><td><strong>最近的直接先验</strong>。哲学相同：“尽量把操作 confine 到单 shard，去掉分布式事务冲突”。必须显式引用并说差异化（CFS 是内部系统、不 CNCF、没形式化 authority handoff）。</td></tr>
+<tr><td><strong>λFS</strong> (ASPLOS’23)</td><td>HopsFS 的 NN 跑成 serverless function，动态 20→74 实例。参考：<a href="https://dl.acm.org/doi/10.1145/3623278.3624765">ASPLOS’23</a>。</td><td>验证“schema 层无状态、真相在 KV“的可扩性极限。</td></tr>
+<tr><td><strong>FileScale</strong> (SoCC’23)</td><td>三层架构；小规模接近单机内存、大规模随 DDBMS 线性扩。参考：<a href="https://dl.acm.org/doi/10.1145/3620678.3624784">SoCC’23</a>。</td><td>直接回应“DDBMS-based 系统在小规模慢 10x“的老问题——给 NoKV 的小规模性能要求提供学术对标。</td></tr>
+<tr><td><strong>Mooncake</strong> (FAST’25 Best Paper)</td><td>把“storage for AI“拉上顶会。参考：<a href="https://www.usenix.org/conference/fast25/presentation/qin">FAST’25</a>。</td><td>AI-storage 话题正式获得学术合法性，Stage 3 进入这个方向有顶会可投。</td></tr>
+<tr><td><strong>DaisyNFS</strong> (OSDI’22)</td><td>Perennial + Iris + Coq 证明并发 + crash-safe NFS。60%+ Linux-NFS 吞吐。参考：<a href="https://www.usenix.org/conference/osdi22/presentation/chajed">OSDI’22</a>。</td><td><strong>分布式 metadata 的 formal verification 学术空白</strong>。NoKV 已有 Succession TLA+，延展到 namespace correctness 是真正可发 paper 的点。</td></tr>
+<tr><td><strong>Quiver</strong> (FAST’20)</td><td>DL workload 下的 informed storage cache。参考：<a href="https://www.usenix.org/conference/fast20/presentation/kumar">FAST’20</a>。</td><td>Stage 3 方向储备。</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="3-nokv-当前能力盘点fileline-校准"><a class="header" href="#3-nokv-当前能力盘点fileline-校准">3. NoKV 当前能力盘点（file:line 校准）</a></h2>
+<p>这轮重新读了本仓关键路径，结论比上一轮更精确。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>能力</th><th>当前状态</th><th>判断</th></tr>
+</thead>
+<tbody>
+<tr><td>Multi-Raft range execution</td><td><code>raftstore/server/node.go</code>、<code>raftstore/store/store.go</code>、<code>raftstore/kv/service.go</code>：region descriptor、epoch 校验、leader 路由、scan / get / prewrite / commit / rollback RPC 均已就绪。</td><td>可直接作为 inode / dentry / chunk-map 的物理执行层。</td></tr>
+<tr><td><strong>跨 region Percolator 事务</strong></td><td><code>raftstore/client/client_kv.go:319</code> <code>TwoPhaseCommit</code> 已经支持跨 region：按 key 路由分组，先 primary prewrite/commit，再处理 secondaries。<code>raftstore/client/client_test.go:984,1669,1727</code> 已覆盖 route 不可用、取消路径、leader change 场景。<code>percolator/txn.go</code> 的单 region apply 是 <strong>server-side apply 单位</strong>，不是客户端事务边界。</td><td><strong>Stage 1 不是从零做 2PC</strong>，是硬化现有路径：补 secondary prewrite 失败清理、commit primary 成功而 secondary commit 失败的 resolve path、region split / epoch mismatch 下的 fsmeta-level 恢复测试。</td></tr>
+<tr><td>Prefix scan</td><td><code>raftstore/kv/service.go</code> <code>KvScan</code> 已存在；反向 scan 未支持。</td><td><code>readdir</code> 基础已有；缺 <code>readdir+stat</code> fused RPC 和分页 contract。</td></tr>
+<tr><td>DeleteRange</td><td><code>db.go</code> 单机 <code>DB.DeleteRange</code> 存在；<code>raftstore/kv/service.go</code> 未暴露 distributed DeleteRange RPC。</td><td>recursive delete / subtree cleanup / GC 需补 region-by-region tombstone 事务 / 恢复设计。</td></tr>
+<tr><td>Watch / change feed</td><td><code>meta/root</code> 有 tail subscription；数据面 KV 无 watch RPC。</td><td>FUSE / client cache invalidation、subtree watch 需要补。<code>meta/root</code> 的 tail 语义模型可以迁移到数据面 changefeed。</td></tr>
+<tr><td><strong>ID / TSO RPC</strong></td><td><code>pb/coordinator/coordinator.proto:305-306</code> 已定义 <code>AllocID</code> 和 <code>Tso</code> RPC，带 witness 验证。</td><td><strong>不需要新 RPC</strong>，需要整理成 fsmeta 稳定依赖的 client wrapper + 错误语义 + 超时重试 + witness 失败处理合同。</td></tr>
+<tr><td>Rooted truth / Succession</td><td><code>meta/root/</code> + <code>spec/Succession.tla</code> 已能表达 authority handoff、allocator fences、coordinator lease；4 个 contrast model 形式化了 handoff legality 的最小保证。</td><td>不应承载每个 inode / dentry mutation；适合 mount、subtree authority、snapshot era、quota fence 这类低频 rooted truth。</td></tr>
+<tr><td>Namespace shell</td><td><code>namespace.go</code> 是 DB lifecycle shell；<code>fsmeta/types.go</code> 顶部已声明用户 metadata plane 包边界，<code>fsmeta/value.go</code> 和 <code>fsmeta/exec/</code> 已形成最小 native executor。</td><td>方向正确：<code>fsmeta</code> 是应用数据 plane，不放进内部 <code>meta/</code>。</td></tr>
+<tr><td><strong>单 fsync 域（raft log + LSM 复用 WAL）</strong></td><td><code>raftstore/engine/wal_storage.go</code>：raft entries 与 LSM 写同一 <code>wal.Manager</code>；<code>lsm.canRemoveWalSegment</code> 需同时咨询 manifest checkpoint 和 raft truncation metadata。</td><td><strong>结构性优势，明确可宣称</strong>：metadata 小写密集 workload 下，单 fsync 比“metadata service WAL + 底层 KV WAL“双层方案少一层 syscall 和一次 fsync barrier。</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="4-正确的系统边界"><a class="header" href="#4-正确的系统边界">4. 正确的系统边界</a></h2>
+<p><code>fsmeta</code> 应该分三层：</p>
+<pre class="mermaid">flowchart TD
+    F["NoKV-native fsmeta service"] --&gt; S["fsmeta schema and operations"]
+    D["fsmeta demo / benchmark workload"] --&gt; F
+    S --&gt; T["NoKV transaction client"]
+    T --&gt; R["raftstore multi-Raft KV"]
+
+    S --&gt; C["coordinator: route, TSO, ID allocation"]
+    S --&gt; M["meta/root: rooted namespace authority"]
+    M --&gt; SU["Succession: authority handoff contract"]
+</pre>
+
+<p>边界要固定：</p>
+<ul>
+<li><code>fsmeta</code> 是用户 metadata plane，不是 NoKV 内部 cluster truth。</li>
+<li><code>meta/root</code> 只放 namespace-level truth：mount registry、subtree owner、snapshot era、quota fence、authority handoff。</li>
+<li>inode / dentry / xattr / chunk / session 都是 raftstore / percolator 上的数据面记录。</li>
+<li>Stage 1 不做 JuiceFS TKV adapter。TKV 兼容会把 NoKV fsmeta 降级成“第五个通用 KV backend“，隐藏目录 range、subtree authority、native readdir 这些差异化。</li>
+<li>Stage 1 的验证入口是 NoKV-native service 和 workload benchmark；JuiceFS 只作为 Stage 3 末尾的兼容性验证。</li>
+</ul>
+<h2 id="45-借鉴与差异化"><a class="header" href="#45-借鉴与差异化">4.5 借鉴与差异化</a></h2>
+<p>fsmeta 不是从零发明架构。下表明确每一条设计决定的学术/工业来源，以及 NoKV 在此之上加了什么。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>设计决定</th><th>借鉴来源</th><th>NoKV 在此之上加的</th></tr>
+</thead>
+<tbody>
+<tr><td>stateless schema 层 + 外部事务 KV 做 truth</td><td>Tectonic / Colossus / 3FS / HopsFS</td><td>在开源云原生生态里做一个可复用 metadata substrate；KV 层为 filesystem metadata 调过边界（不是只暴露通用 KV）。</td></tr>
+<tr><td>same-parent-same-shard key partition</td><td>HopsFS (FAST’17)</td><td>用 range partition + region split hint 让它成为<strong>副作用</strong>而非显式 directive。</td></tr>
+<tr><td>access metadata vs content metadata 解耦</td><td>InfiniFS (FAST’22)</td><td><code>meta/root</code> 承载 authority-sensitive 的 access metadata（mount / quota / snapshot epoch）；<code>raftstore</code> 承载高频 content metadata。</td></tr>
+<tr><td>单 shard 原子原语替代分布式事务</td><td>CFS (EuroSys’23)</td><td>用 NoKV 已有 region-local Percolator 实现；跨 region 仍用 <code>TwoPhaseCommit</code>。</td></tr>
+<tr><td>dynamic subtree partitioning</td><td>Weil SC’04 (CephFS)</td><td><strong>Succession 形式化 bounded handoff</strong>，规避 Ceph balancer 的 unbounded migration 不稳定性。</td></tr>
+<tr><td>per-directory incremental split + LSM metadata</td><td>IndexFS (SC’14)</td><td>LSM 已是一等公民，不需要中间层。</td></tr>
+<tr><td>bulk insertion for checkpoint storm</td><td>IndexFS (SC’14)</td><td><code>engine/lsm/</code> ingest buffer 天生适合，Stage 2 再做专门 API。</td></tr>
+<tr><td>hierarchical metadata 分层扩展</td><td>Tectonic (FAST’21)</td><td>分层但都落在<strong>同一 NoKV KV 上</strong>，避免 ZippyDB hash-by-dir 的 MapReduce 融化问题。</td></tr>
+<tr><td>client-side path resolution cache</td><td>InfiniFS / CFS</td><td>用 <code>meta/root</code> tail subscription 做 bounded-freshness 客户端 cache 失效。</td></tr>
+<tr><td>serverless / elastic meta workers</td><td>λFS (ASPLOS’23)</td><td>Stage 2 可选；Stage 0-1 先保证架构分层允许 fsmeta 水平扩展。</td></tr>
+<tr><td>formal verification of metadata</td><td>DaisyNFS (OSDI’22, 单机), Succession TLA+ (NoKV 自有)</td><td><strong>学术空白</strong>：DaisyNFS 没做分布式；NoKV Succession 扩展到 namespace correctness 是 novel research 贡献。</td></tr>
+<tr><td>AI checkpoint-aware metadata</td><td>Mooncake / Quiver (FAST’20, FAST’25)</td><td>Stage 1 benchmark 锚点；先做 checkpoint storm 和目录 hotspot fan-in 两个 workload，避免落入通用 KV 对标。</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>自己独有、没人做的</strong>：<strong>Succession 形式化的 authority handoff 作为 namespace authority 的基础</strong>。Weil’04 的 subtree 思想 + Succession 的 handoff legality = 别人做不到的差异化组合。</p>
+<h2 id="5-claim-budget"><a class="header" href="#5-claim-budget">5. Claim budget</a></h2>
+<p>先把能说、不能说、Stage 2 才能说的 claim 切清楚。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>类型</th><th>现阶段可说</th><th>Stage 2 完成后可说</th><th>永远不能说</th></tr>
+</thead>
+<tbody>
+<tr><td>Guaranteed property</td><td><code>fsmeta</code> 和 <code>meta/root</code> 分层；rooted truth 不承载 per-inode mutation；subtree authority 可映射到 Succession。</td><td>subtree rename / delete 具备 bounded handoff + rooted recovery；subtree watch 是 KV 层 novel primitive。</td><td>“NoKV 是 production-ready DFS metadata service”。</td></tr>
+<tr><td>Measured effect</td><td>引用 NoKV 已有 KV / scan / raftstore benchmark；单 fsync 域是结构性事实。</td><td>引用 <code>benchmark/fsmeta</code>：同一 NoKV 集群下 native API vs generic KV schema，在 checkpoint storm / directory fan-in workload 上的差异。</td><td>“比 TiKV / FDB 更快”——没有同 workload、公平部署、可复现脚本前都不能说。</td></tr>
+<tr><td>Design hypothesis</td><td>metadata-native range / subtree primitive 能减少上层 schema hack，提高 readdir / rename / recursive delete / watch 的可维护性。</td><td>metadata-native primitive 在<strong>百度 CFS / InfiniFS 同尺度 workload</strong>下可对标或有差异化改进。</td><td>“通用 KV 做不到”——通用 KV 能做，但语义和恢复协议会挤到上层；这是更准确的说法。</td></tr>
+<tr><td>Non-goal</td><td>Stage 1 不做完整 POSIX FS，不替代 CephFS，不做数据块存储，不承诺 FUSE 性能，不做 JuiceFS TKV adapter。</td><td>Stage 2 不做 kernel module / native client 数据面。</td><td>不要同时讲“教学平台“和“工业级 DFS“两套定位。</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="6-stage-01-具体动作基于本轮-audit-更新"><a class="header" href="#6-stage-01-具体动作基于本轮-audit-更新">6. Stage 0/1 具体动作（基于本轮 audit 更新）</a></h2>
+<h3 id="stage-0边界落地"><a class="header" href="#stage-0边界落地">Stage 0：边界落地</a></h3>
+<p>完成信号：</p>
+<ul>
+<li><code>fsmeta/</code> 包存在，只描述 filesystem metadata plane，不引入实现。</li>
+<li>本文进入 <code>docs/notes</code>，对外能解释 why fsmeta、why not <code>meta/</code>、why not another DFS。</li>
+<li><code>docs/SUMMARY.md</code> 挂上本文。</li>
+</ul>
+<p>当前 <code>fsmeta/types.go</code> 的包说明和本文已就位，Stage 0 闭合。</p>
+<h3 id="stage-1nokv-native-metadata-service--workload-benchmark"><a class="header" href="#stage-1nokv-native-metadata-service--workload-benchmark">Stage 1：NoKV-native metadata service + workload benchmark</a></h3>
+<p><strong>关键校正</strong>：Stage 1 完全绕开 JuiceFS。目标不是成为 JuiceFS 的第五个 TKV backend，而是形成一个端到端 NoKV-native metadata 薄片：native service、native executor、native benchmark。<code>TwoPhaseCommit</code> 和 <code>AllocID / Tso</code> 都不是从零做，是<strong>硬化 + 包装</strong>。</p>
+<p>Stage 1 主干已落地：</p>
+<ol>
+<li>
+<p><strong>硬化跨 region TwoPhaseCommit</strong><br><code>raftstore/client.TwoPhaseCommit</code> 已补齐：</p>
+<ul>
+<li>secondary prewrite 失败后的 rollback / cleanup；</li>
+<li>commit primary 成功、secondary commit 失败后的 resolve path；</li>
+<li>region split / epoch mismatch 下按 key 重新 route；</li>
+<li>resolve failure 的 joined-error 覆盖。</li>
+</ul>
+<p>后续只补 fsmeta rename / unlink 级语义测试和 transaction status / lock resolver 后台清理入口。</p>
+</li>
+<li>
+<p><strong>定义 fsmeta native schema v0</strong>
+<code>fsmeta/keys.go</code> 已定义 magic/version/key-kind；<code>fsmeta/value.go</code> 已定义 Inode / Dentry / Session 二进制 value codec。Chunk、quota usage、mount metadata 留到 Stage 2，不混进 Stage 1。</p>
+</li>
+<li>
+<p><strong>做 <code>fsmeta/exec</code> 到 <code>fsmeta/server</code> / <code>fsmeta/client</code> 的 native API</strong>
+<code>fsmeta/exec</code> 已实现 <code>Create</code> / <code>Lookup</code> / <code>ReadDir</code> / <code>ReadDirPlus</code> / <code>Unlink</code> / <code>Rename</code>。<code>fsmeta/server</code> 暴露 FSMetadata gRPC API，<code>fsmeta/client</code> 提供 typed wrapper。<code>Rename</code> 已通过真集群跨 region integration test 消费 hardened 2PC。</p>
+</li>
+<li>
+<p><strong>打通 coordinator 依赖</strong>
+<code>nokv-fsmeta</code> 启动时只需要 coordinator endpoint。TSO 和 store discovery 都走 coordinator；store 地址不再从静态 <code>raft_config</code> 注入到客户端。后续如果 fsmeta 自己分配 inode，再补 <code>AllocID</code> 的 fsmeta-facing wrapper。</p>
+</li>
+<li>
+<p><strong>做 native workload benchmark</strong>
+Stage 1 benchmark 不对标 TiKV / FDB。对照组是同一 NoKV 集群的两种模式：</p>
+<ul>
+<li><strong>generic KV schema</strong>：上层自己拼 key、自己做 read-modify-write；</li>
+<li><strong>fsmeta native service</strong>：走 <code>fsmeta/server</code> + <code>fsmeta/client</code> 的 operation API。</li>
+</ul>
+<p>两个 workload：</p>
+<ul>
+<li><strong>checkpoint storm</strong>：并发 client 在多个目录批量 create checkpoint files；</li>
+<li><strong>directory hotspot fan-in</strong>：大量文件集中在单目录，被并发 <code>ReadDirPlus</code> 访问。</li>
+</ul>
+<p>正式 Stage 1 结果记录在 <code>docs/notes/2026-04-25-fsmeta-stage1-benchmark-results.md</code>。</p>
+</li>
+<li>
+<p><strong>补 distributed DeleteRange 设计草案</strong>
+不一定 Stage 1 全实现，但 recursive delete 和 GC 会卡在这里。至少要定义 region-by-region range tombstone 的事务 / 恢复语义。</p>
+</li>
+<li>
+<p><strong>明确 JuiceFS 位置</strong>
+JuiceFS 不进入 Stage 1。Stage 3 末尾可以做一次性兼容性验证：证明 NoKV 的通用 KV 层能跑 JuiceFS，不追求性能，不作为项目卖点。</p>
+</li>
+</ol>
+<h2 id="7-stage-2-以后nokv-真正的差异化"><a class="header" href="#7-stage-2-以后nokv-真正的差异化">7. Stage 2 以后：NoKV 真正的差异化</a></h2>
+<p>Stage 1 只是进入牌桌。NoKV 的独特点要到 Stage 2 才明显。每个原语都映射到已有学术 / 工业锚点：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>原语</th><th>锚点</th><th>NoKV 的做法</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ReadDirPlus(parent, cursor, limit)</code></td><td>InfiniFS speculative parallel resolution；CFS client-side</td><td>raftstore 一次返回 dentry + inode attr，减少 RPC 和 MVCC read set</td></tr>
+<tr><td><code>RenameSubtree(src, dst)</code></td><td>Weil’04 subtree 思想 + CFS 单 shard 原子</td><td>rooted subtree authority + bounded KV txn；Succession 保证 handoff legality，规避 Ceph 不稳定</td></tr>
+<tr><td><code>DeleteSubtree(root)</code></td><td>FDB 硬限 → 3FS 拆小事务；CFS pruned critical sections</td><td>rooted deletion job + distributed DeleteRange + idempotent cleanup</td></tr>
+<tr><td><code>WatchSubtree(root, era)</code></td><td><strong>工业 / 学术全空白</strong>（etcd watch 是 key 粒度，不是 subtree）</td><td><code>meta/root</code> tail subscription 模型迁移到数据面 changefeed，按 subtree 前缀过滤。<strong>真正的 novel primitive。</strong></td></tr>
+<tr><td><code>SnapshotSubtree(root)</code></td><td>Mooncake dataset management；Colossus snapshot</td><td>subtree era + immutable frontier，不要求复制所有 dentry</td></tr>
+<tr><td><code>QuotaFence(root)</code></td><td>Tectonic / HopsFS quota counter；Succession authority</td><td>quota fence 作为 rooted event；普通计数走 KV，关键边界走 authority gate</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Stage 2 交付范围</strong>：6 条里实际交付 2-3 条（优先 <code>ReadDirPlus</code> + <code>RenameSubtree</code> + <code>WatchSubtree</code>），其余进 Stage 3 roadmap。避免 over-promise。</p>
+<p>这部分才是 NoKV 相比 FDB / TiKV / etcd 的独立生态位：<strong>不是“我也是 KV“，而是“我把 filesystem metadata 的操作边界做成存储层原语，并且给 subtree authority 提供形式化的 handoff 合同“</strong>。</p>
+<h2 id="75-与主流分布式-kv-的-primitive-能力对比"><a class="header" href="#75-与主流分布式-kv-的-primitive-能力对比">7.5 与主流分布式 KV 的 primitive 能力对比</a></h2>
+<p>“differentiation is visible only where the API differs.” 下面这张表展示我们的 primitive 设计和其他主流 KV 在<strong>能力合同</strong>上的差异——不是 “谁更快”，是 “谁有/没有这个 shape”。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Primitive</th><th><strong>NoKV / fsmeta</strong></th><th>TiKV</th><th>FoundationDB</th><th>etcd</th><th>CockroachDB</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>ReadDirPlus</strong>（dentry + attr 单快照融合）</td><td>✅ 服务端 Scan + BatchGet 同 ts，一致快照</td><td>❌ client-side N+1，无跨 RPC 一致性</td><td>❌ 同上</td><td>❌ 无 bulk readdir 概念</td><td>❌ 需 SQL join</td></tr>
+<tr><td><strong>AssertionNotExist</strong>（跨 region 多 key 原子）</td><td>✅ 服务端 Percolator 层强制</td><td>⚠️ 单 region 有类似标记，跨 region 语义差异</td><td>⚠️ <code>snapshot_get</code> + <code>add_conflict_range</code> 组合，非原语</td><td>⚠️ <code>Compare(Value=)</code> 单 key</td><td>⚠️ SQL UNIQUE，KV 层无对应</td></tr>
+<tr><td><strong>目录 prefix 共置 range partition</strong></td><td>✅ 现有 + Stage 2 感知目录边界的 split-hint</td><td>✅ 通用 range 分区，不感知目录</td><td>✅ directory layer 有 path locality，不感知 hotspot</td><td>❌ 单 boltdb 无分区</td><td>✅ 通用 range，不感知目录</td></tr>
+<tr><td><strong>单 fsync 域</strong>（raft log + LSM WAL 复用）</td><td>✅ <code>wal/Manager</code> 共用</td><td>❌ raft log + data 分别 RocksDB</td><td>❌ txn log + storage 分离</td><td>❌ raft log + mvcc 分离</td><td>❌ raft log 独立 Pebble</td></tr>
+<tr><td><strong>Succession-bounded authority handoff</strong></td><td>✅ TLA+ 形式化 + 4 条最小保证 + 4 个对照反例</td><td>❌ PD 选主无形式化 handoff</td><td>❌ 控制器容错但无形式化</td><td>❌ raft 选主，无 succession 概念</td><td>❌ range lease transfer 无形式化</td></tr>
+<tr><td><strong>WatchSubtree / RenameSubtree / SnapshotSubtree / QuotaFence</strong></td><td>🚧 Stage 2 规划</td><td>❌ 无对应</td><td>❌ 无对应</td><td>⚠️ key-prefix watch 最接近但非 subtree 语义</td><td>❌ 无对应</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>这张表最强的三行</strong>是 WatchSubtree / Succession / 单 fsync 域 —— NoKV 在这三条上<strong>结构性独有</strong>，不是“实现更优“。</p>
+<h2 id="76-三类结构性优势"><a class="header" href="#76-三类结构性优势">7.6 三类结构性优势</a></h2>
+<p>我们的设计优势可以严格分成三类，每类的说服力来源不同：</p>
+<h3 id="a-类api-shape-即差异化design-level"><a class="header" href="#a-类api-shape-即差异化design-level">A 类：<strong>API Shape 即差异化</strong>（design-level）</a></h3>
+<p>原语的形状本身就是优势，调用方不需要在客户端拼什么就能享受到。</p>
+<ul>
+<li><code>ReadDirPlus</code> —— workload 的自然形状 <code>readdir + stat all</code> 就是原语；TiKV/FDB 用户必须在客户端拼 N+1 次 lookup 或本地 cache。</li>
+<li><code>BatchCreate</code>（Stage 2）—— checkpoint storm 的自然形状；单 primary 覆盖 N 文件。</li>
+<li><strong>行业 precedent</strong>：InfiniFS (FAST’22) parallel path resolution、CFS (EuroSys’23) pruned single-shard primitives——“把语义抬到存储层“是近两年学术界共识。</li>
+</ul>
+<h3 id="b-类架构不对称structure-level"><a class="header" href="#b-类架构不对称structure-level">B 类：<strong>架构不对称</strong>（structure-level）</a></h3>
+<p>结构性选择决定了工作负载的下限，不是调优能弥补的。</p>
+<ul>
+<li><strong>单 fsync 域</strong>（已实现）—— 元数据小写密集下，raft log + LSM WAL 共用 <code>wal.Manager</code> 省一层 syscall 和一次 fsync barrier。</li>
+<li><strong>目录前缀感知 region split</strong>（Stage 2）—— range partition 不是新，<strong>split 策略感知目录边界是新</strong>；Tectonic FAST’21 §3.2 公开承认 hash-by-dir 解决不了 fan-in hotspot。</li>
+<li><strong>raft + LSM WAL 合并</strong>（已实现）—— 工程先例有（某些 bespoke KV），但用在元数据场景下效果倍增。</li>
+</ul>
+<h3 id="c-类correctness-语义独有formal-method-level"><a class="header" href="#c-类correctness-语义独有formal-method-level">C 类：<strong>Correctness 语义独有</strong>（formal method-level）</a></h3>
+<p>形式化证据是我们独有的、OSDI/FAST 级研究可引用的东西。</p>
+<ul>
+<li><strong>Succession</strong>（已 TLA+ 证明）—— <code>spec/Succession.tla</code> 正模型 + 四个对照反例模型（LeaseOnly / TokenOnly / ChubbyFencedLease / LeaseStartOnly）。<strong>别人都有 TLA+，但没人把 handoff legality 抬成独立的 correctness class。</strong></li>
+<li><strong>AssertionNotExist 跨 region 多 key 原子</strong>（已在 <code>percolator/txn.go</code> 和 <code>fsmeta/exec</code> 端到端实现）—— TiKV 有单 region 的；我们在跨 region 2PC 下保证多 key 原子 assertion，Create 和 Rename 的“多条必须都不存在“语义直接服务端跑完。</li>
+<li><strong>未来</strong>：Succession 扩展到 namespace authority（mount / subtree / snapshot / quota handoff）—— DaisyNFS 风格的分布式 metadata verification 是学术空白。</li>
+</ul>
+<p><strong>一句话</strong>：Shape 赢 API 设计，Structure 赢工作负载下限，Correctness 赢学术叙事。三类互不替代，NoKV 需要三条腿都稳。</p>
+<h2 id="8-工业生态位"><a class="header" href="#8-工业生态位">8. 工业生态位</a></h2>
+<p>适合切入的场景：</p>
+<ol>
+<li>
+<p><strong>云原生 fsmeta service</strong>
+面向自研 DFS frontend、AI dataset service、对象存储网关，提供 Go-native、Kubernetes-friendly、multi-Raft replicated metadata substrate。</p>
+</li>
+<li>
+<p><strong>AI / analytics dataset namespace service</strong><br>不抢 3FS 的 RDMA 数据面，专注 dataset 目录、snapshot、rename、quota、session、cache invalidation。</p>
+</li>
+<li>
+<p><strong>对象存储网关的强一致 namespace 层</strong><br>S3 / object storage 没有天然目录树；NoKV fsmeta 可以做 bucket / prefix namespace authority、atomic publish、recursive cleanup。</p>
+</li>
+<li>
+<p><strong>多租户 mount / subtree authority service</strong><br>把 Succession 从 coordinator authority 推广到 namespace authority：mount owner、snapshot era、quota fence、subtree migration 都有明确 handoff contract。</p>
+</li>
+</ol>
+<p>不适合现在切入的场景：</p>
+<ul>
+<li>替代 CephFS 全栈。</li>
+<li>做 kernel module / native client 数据面。</li>
+<li>承诺比 FDB / TiKV 快，但没有同 workload benchmark。</li>
+<li>把 Stage 1 做成 JuiceFS TKV backend。</li>
+<li>把所有文件操作都放进 <code>meta/root</code> rooted event。</li>
+</ul>
+<h2 id="9-最近应执行的工作单"><a class="header" href="#9-最近应执行的工作单">9. 最近应执行的工作单</a></h2>
+<p>按优先级（基于 v1 audit 后的实际工作量）：</p>
+<ol>
+<li>写 <code>fsmeta</code> v0 schema 和 operation contract：<code>Create</code> / <code>Lookup</code> / <code>ReadDir</code> / <code>Rename</code> / <code>Unlink</code> / <code>OpenWriteSession</code>。</li>
+<li>给 <code>raftstore/client.TwoPhaseCommit</code> 补 failure cleanup 测试矩阵：secondary prewrite fail、primary committed secondary pending、region epoch mismatch、leader unavailable。</li>
+<li>补 <code>fsmeta/exec</code> 的 <code>Unlink</code> 和 <code>Rename</code>，让 native executor 真实消费跨 region 2PC。</li>
+<li>定义 <code>fsmeta/server</code> gRPC API 和 <code>fsmeta/client</code> typed wrapper：<code>Create</code> / <code>Lookup</code> / <code>ReadDir</code> / <code>ReadDirPlus</code> / <code>Unlink</code> / <code>Rename</code>，错误语义按 fsmeta native contract 暴露。</li>
+<li>提供 <code>cmd/nokv-fsmeta</code> 部署入口：只依赖 coordinator endpoint，启动 FSMetadata gRPC server。</li>
+<li>做 <code>benchmark/fsmeta</code>：同一 NoKV 集群下 generic KV schema vs fsmeta native service，并提交可追溯结果 CSV。</li>
+<li>包装 <code>AllocID</code> 为 fsmeta 稳定 client surface（如果后续由 fsmeta service 自己分配 inode）。</li>
+<li>做 <code>cmd/fsmeta-demo</code>：模拟 checkpoint storm、dataset readdir、跨目录 atomic rename、quota check。</li>
+<li>写 distributed DeleteRange design note，明确是否需要 rooted job。</li>
+</ol>
+<p>这条线的判断标准很简单：Stage 1 如果不能证明 native service 在 metadata workload 上比“把 NoKV 当通用 KV 用“更清楚、更少 RPC 或更少事务冲突，这个方向就只能停留在架构叙事；如果能在 checkpoint storm / directory fan-in 上给出 profile，Stage 2 的 metadata-native primitive 才有可信基础。</p>
+<h2 id="10-related-work"><a class="header" href="#10-related-work">10. Related Work</a></h2>
+<h3 id="工业系统--设计文档"><a class="header" href="#工业系统--设计文档">工业系统 / 设计文档</a></h3>
+<ul>
+<li>Meta Tectonic — Pan et al., FAST’21. <a href="https://www.usenix.org/system/files/fast21-pan.pdf">https://www.usenix.org/system/files/fast21-pan.pdf</a></li>
+<li>Google Colossus peek — Google Cloud blog (2021). <a href="https://cloud.google.com/blog/products/storage-data-transfer/a-peek-behind-colossus-googles-file-system">https://cloud.google.com/blog/products/storage-data-transfer/a-peek-behind-colossus-googles-file-system</a></li>
+<li>DeepSeek 3FS design notes (2025, 非 peer-reviewed). <a href="https://github.com/deepseek-ai/3FS/blob/main/docs/design_notes.md">https://github.com/deepseek-ai/3FS/blob/main/docs/design_notes.md</a></li>
+<li>Alibaba Pangu 2.0 — Li et al., FAST’23. <a href="https://www.usenix.org/system/files/fast23-li-qiang_more.pdf">https://www.usenix.org/system/files/fast23-li-qiang_more.pdf</a></li>
+<li>FoundationDB — Zhou et al., SIGMOD’21. <a href="https://dl.acm.org/doi/10.1145/3448016.3457559">https://dl.acm.org/doi/10.1145/3448016.3457559</a></li>
+<li>Snowflake cloud services over FDB — Dageville et al., SIGMOD’16. <a href="https://dl.acm.org/doi/10.1145/2882903.2903741">https://dl.acm.org/doi/10.1145/2882903.2903741</a></li>
+<li>CephFS MDS foundational — Weil, SC’04. <a href="https://ceph.io/assets/pdfs/weil-mds-sc04.pdf">https://ceph.io/assets/pdfs/weil-mds-sc04.pdf</a></li>
+<li>CephFS dynamic balancer 现状 — Yang et al., ACM TOS 2025. <a href="https://dl.acm.org/doi/10.1145/3721483">https://dl.acm.org/doi/10.1145/3721483</a></li>
+<li>CubeFS MetaNode. <a href="https://www.cubefs.io/docs/master/design/metanode.html">https://www.cubefs.io/docs/master/design/metanode.html</a></li>
+<li>CurveFS architecture. <a href="https://docs.opencurve.io/CurveFS/architecture/architecture-intro">https://docs.opencurve.io/CurveFS/architecture/architecture-intro</a></li>
+<li>HDFS Router-Based Federation. <a href="https://hadoop.apache.org/docs/stable/hadoop-project-dist/hadoop-hdfs-rbf/HDFSRouterFederation.html">https://hadoop.apache.org/docs/stable/hadoop-project-dist/hadoop-hdfs-rbf/HDFSRouterFederation.html</a></li>
+<li>JuiceFS Internals. <a href="https://juicefs.com/docs/community/internals/">https://juicefs.com/docs/community/internals/</a></li>
+<li>FDB known limitations. <a href="https://apple.github.io/foundationdb/known-limitations.html">https://apple.github.io/foundationdb/known-limitations.html</a></li>
+<li>etcd system limits. <a href="https://etcd.io/docs/v3.4/dev-guide/limit/">https://etcd.io/docs/v3.4/dev-guide/limit/</a></li>
+</ul>
+<h3 id="学术论文"><a class="header" href="#学术论文">学术论文</a></h3>
+<ul>
+<li>IndexFS — Ren et al., SC’14. <a href="https://www.pdl.cmu.edu/PDL-FTP/FS/IndexFS-SC14.pdf">https://www.pdl.cmu.edu/PDL-FTP/FS/IndexFS-SC14.pdf</a></li>
+<li>ShardFS — Xiao et al., SoCC’15. <a href="https://dl.acm.org/doi/10.1145/2806777.2806844">https://dl.acm.org/doi/10.1145/2806777.2806844</a></li>
+<li>HopsFS — Niazi et al., FAST’17. <a href="https://www.usenix.org/conference/fast17/technical-sessions/presentation/niazi">https://www.usenix.org/conference/fast17/technical-sessions/presentation/niazi</a></li>
+<li>InfiniFS — Lv et al., FAST’22. <a href="https://www.usenix.org/conference/fast22/presentation/lv">https://www.usenix.org/conference/fast22/presentation/lv</a></li>
+<li>CFS — Wang et al., EuroSys’23. <a href="https://dl.acm.org/doi/10.1145/3552326.3587443">https://dl.acm.org/doi/10.1145/3552326.3587443</a></li>
+<li>Tectonic — Pan et al., FAST’21. <a href="https://www.usenix.org/conference/fast21/presentation/pan">https://www.usenix.org/conference/fast21/presentation/pan</a></li>
+<li>λFS — Carver et al., ASPLOS’23. <a href="https://dl.acm.org/doi/10.1145/3623278.3624765">https://dl.acm.org/doi/10.1145/3623278.3624765</a></li>
+<li>FileScale — Gankidi et al., SoCC’23. <a href="https://dl.acm.org/doi/10.1145/3620678.3624784">https://dl.acm.org/doi/10.1145/3620678.3624784</a></li>
+<li>Quiver — Kumar &amp; Sivathanu, FAST’20. <a href="https://www.usenix.org/conference/fast20/presentation/kumar">https://www.usenix.org/conference/fast20/presentation/kumar</a></li>
+<li>Mooncake — Qin et al., FAST’25 Best Paper. <a href="https://www.usenix.org/conference/fast25/presentation/qin">https://www.usenix.org/conference/fast25/presentation/qin</a></li>
+<li>DaisyNFS — Chajed et al., OSDI’22. <a href="https://www.usenix.org/conference/osdi22/presentation/chajed">https://www.usenix.org/conference/osdi22/presentation/chajed</a></li>
+<li>FSCQ — Chen et al., SOSP’15. <a href="https://dl.acm.org/doi/10.1145/2815400.2815402">https://dl.acm.org/doi/10.1145/2815400.2815402</a></li>
+<li>Yggdrasil — Sigurbjarnarson et al., OSDI’16 Best Paper. <a href="https://www.usenix.org/conference/osdi16/technical-sessions/presentation/sigurbjarnarson">https://www.usenix.org/conference/osdi16/technical-sessions/presentation/sigurbjarnarson</a></li>
+</ul>
+<h3 id="103-近两年研究热点分级跟踪"><a class="header" href="#103-近两年研究热点分级跟踪">10.3 近两年研究热点（分级跟踪）</a></h3>
+<p><strong>Tier 1 — 直接影响 Stage 2 设计方向（必须跟进）</strong></p>
+<p>AI 训练元数据方向：</p>
+<ul>
+<li><strong>Mooncake</strong> (FAST’25 Best Paper) —— Qin et al., LLM serving 的 KVCache 集中存储。不是 FS 元数据，但证明“storage for AI“是顶会 first-class topic；<strong>disaggregated + context-aware scheduling</strong> 思想可直接借鉴到 <code>fsmeta/service</code> 的客户端元数据 cache。<a href="https://www.usenix.org/conference/fast25/presentation/qin">https://www.usenix.org/conference/fast25/presentation/qin</a></li>
+<li><strong>MLPerf Storage v2.0</strong> (2025-08) —— MLCommons 官方加入 checkpointing workload。<strong>Stage 1 benchmark workload A (checkpoint storm) 直接复现这个测试规范。</strong><a href="https://mlcommons.org/2025/08/storage-2-checkpointing/">https://mlcommons.org/2025/08/storage-2-checkpointing/</a></li>
+<li><strong>3FS design notes</strong> (2025-02) —— DeepSeek 开源，<code>INOD</code>/<code>DENT</code> schema、stateless meta + FDB。<strong>Stage 1 benchmark 的 key schema 对标这份 design notes。</strong><a href="https://github.com/deepseek-ai/3FS/blob/main/docs/design_notes.md">https://github.com/deepseek-ai/3FS/blob/main/docs/design_notes.md</a></li>
+<li><strong>Quiver</strong> (FAST’20) —— DL workload 的 informed storage cache，dataset 管理经典先例。<a href="https://www.usenix.org/conference/fast20/presentation/kumar">https://www.usenix.org/conference/fast20/presentation/kumar</a></li>
+</ul>
+<p>Metadata-specific scaling 方向：</p>
+<ul>
+<li><strong>InfiniFS</strong> (FAST’22) —— access vs content metadata 解耦、speculative parallel path resolution。<strong>我们 <code>meta/root</code> vs <code>fsmeta/*</code> 的分层直接借用这条概念。</strong><a href="https://www.usenix.org/conference/fast22/presentation/lv">https://www.usenix.org/conference/fast22/presentation/lv</a></li>
+<li><strong>CFS</strong> (EuroSys’23) —— 百度 AI Cloud 生产化，single-shard pruned critical section。<strong><code>RenameSubtree</code> 有界版本的设计直接引用这条思想。</strong><a href="https://dl.acm.org/doi/10.1145/3552326.3587443">https://dl.acm.org/doi/10.1145/3552326.3587443</a></li>
+</ul>
+<p><strong>Tier 2 — Stage 2 研究腿可直接写论文的方向</strong></p>
+<p>Verified distributed metadata（<strong>学术空白，NoKV 独有机会</strong>）：</p>
+<ul>
+<li><strong>DaisyNFS</strong> (OSDI’22) —— Perennial + Iris + Coq 证明并发 + crash-safe NFS，<strong>单节点</strong>。<a href="https://www.usenix.org/conference/osdi22/presentation/chajed">https://www.usenix.org/conference/osdi22/presentation/chajed</a></li>
+<li><strong>Grove / Perennial 2.0</strong>（近期工作）—— 分布式形式化验证框架雏形。</li>
+<li><strong>NoKV Succession TLA+ + DaisyNFS 风格扩展到分布式 metadata service 语义</strong>是明确空白点，可投 OSDI / SOSP。</li>
+</ul>
+<p>Deterministic simulation testing：</p>
+<ul>
+<li><strong>FoundationDB flow simulation</strong> —— 业界 canon。</li>
+<li><strong>TigerBeetle / DBOS / LazyFS</strong> —— 近两年复刻浪潮。</li>
+<li>NoKV 现有 <strong>18 VFS failpoint + 8 raft failpoint + Succession 对照模型</strong>已经是 deterministic simulation 的雏形；整理发表是一篇 ATC / NSDI workshop 级文章。</li>
+</ul>
+<p><strong>Tier 3 — 借思想不要直接做的方向</strong></p>
+<p>Subtree 语义研究：</p>
+<ul>
+<li><strong>Weil SC’04</strong>（Ceph 原生 paper）+ <strong>ACM TOS’25</strong> Yang et al., “Agile and Judicious Metadata Load Balancing” —— 20 年未解的活问题。Succession-bounded subtree handoff 有充分理由作为差异化。<a href="https://dl.acm.org/doi/10.1145/3721483">https://dl.acm.org/doi/10.1145/3721483</a></li>
+</ul>
+<p>SmartNIC / DPU offload（Stage 3+ 储备）：</p>
+<ul>
+<li><strong>LineFS</strong> (SOSP’21 Best Paper) —— BlueField 卸载 DFS 操作，2.x latency / throughput win。<a href="https://dl.acm.org/doi/10.1145/3477132.3483565">https://dl.acm.org/doi/10.1145/3477132.3483565</a></li>
+</ul>
+<p>Learned metadata caching（可选优化）：</p>
+<ul>
+<li><strong>XStore</strong> (OSDI’20) —— learned index as RDMA remote cache。<a href="https://www.usenix.org/conference/osdi20/presentation/wei">https://www.usenix.org/conference/osdi20/presentation/wei</a></li>
+<li><strong>SIEVE</strong> (NSDI’24) —— simpler-than-LRU eviction algorithm。<a href="https://www.usenix.org/conference/nsdi24/presentation/zhang-yazhuo">https://www.usenix.org/conference/nsdi24/presentation/zhang-yazhuo</a></li>
+</ul>
+<p><strong>Tier 4 — 关注但先不跟</strong></p>
+<ul>
+<li>CXL / memory disaggregation：研究热，要硬件栈，NoKV 是软件层。</li>
+<li>Vector database metadata：RAG 场景 shape 和 FS 元数据差异大，生态位交叠低。</li>
+<li>Temporal databases：CockroachDB <code>AS OF SYSTEM TIME</code> 之类，不是 fsmeta 主线。</li>
+</ul>
+<h3 id="104-stage-2-primitive--研究锚点映射"><a class="header" href="#104-stage-2-primitive--研究锚点映射">10.4 Stage 2 Primitive × 研究锚点映射</a></h3>
+<p>每条 Stage 2 primitive 都必须能精确引用 1-2 篇近 3 年论文作为正向或反向参考——<strong>没有论文背书的 primitive 不做</strong>。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Primitive</th><th>正向锚点（借鉴）</th><th>反向锚点（避坑）</th><th>我们加的</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ReadDirPlus</code> ✅</td><td>InfiniFS (FAST’22) parallel path resolution；CFS (EuroSys’23) client-side</td><td>Tectonic FAST’21 §3.2 hash-by-dir fan-in 失败</td><td>服务端单快照融合，shape 本身就是 API</td></tr>
+<tr><td><code>RenameSubtree</code> 🚧</td><td>Weil SC’04 subtree 思想；CFS single-shard 原子</td><td>Ceph <code>tracker/#24840</code> + ACM TOS’25：20 年未修的 balancer 不稳定</td><td>Succession 形式化 bounded handoff</td></tr>
+<tr><td><code>DeleteSubtree</code> 🚧</td><td>IndexFS (SC’14) bulk primitive；CFS pruned critical section</td><td>FDB 10MB/5s 硬限 → 3FS 被迫拆小事务</td><td>rooted deletion job + idempotent cleanup</td></tr>
+<tr><td><code>WatchSubtree</code> 🚧</td><td><strong>工业 / 学术全空白</strong>（etcd watch 是 key，TiKV CDC 是 region）</td><td>—</td><td>从 <code>meta/root</code> TailSubscription 迁移到数据面 changefeed。<strong>唯一真正 novel primitive。</strong></td></tr>
+<tr><td><code>SnapshotSubtree</code> 🚧</td><td>Mooncake (FAST’25) dataset management；IndexFS bulk insertion</td><td>Colossus snapshot 深度绑定 Bigtable tablet</td><td>subtree era + immutable frontier，rooted event 表达</td></tr>
+<tr><td><code>QuotaFence</code> 🚧</td><td>HopsFS (FAST’17) counter；Tectonic quota</td><td>Ceph quota 不形式化 → 并发下 race</td><td>quota fence = rooted authority event，Succession 保证切换合法</td></tr>
+<tr><td><code>AssertionNotExist</code> 跨 region ✅</td><td>—</td><td>FDB <code>add_conflict_range</code> 只能单 txn；TiKV 单 region</td><td>Percolator prewrite 阶段服务端检查，跨 region 多 key 原子</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>原则</strong>：Stage 2 任何一条 primitive 写代码前，先在 <code>docs/notes/</code> 落一份 design note，明确写出“借鉴了哪两篇论文的什么思想“ + “我们加了什么是这两篇没做的”。没有这份 design note 的 primitive <strong>不进 Stage 2 roadmap</strong>。</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../notes/2026-04-12-coordinator-meta-separation.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../notes/2026-04-25-coordinator-store-registry.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../notes/2026-04-12-coordinator-meta-separation.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../notes/2026-04-25-coordinator-store-registry.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-c2a407aa.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../docs/custom-732fa610.js"></script>
+        <script src="../docs/mermaid-init-8a66ee6c.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

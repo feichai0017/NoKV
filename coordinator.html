@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-2ab2b35a.js";
+            window.path_to_searchindex_js = "searchindex-78ea1104.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-1516f189.js"></script>
+        <script src="toc-f12f6280.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -236,12 +236,12 @@ can rely on.</p>
 future runtime/operator model such as stalled transitions or richer catch-up
 actions.</p>
 <h3 id="minimal-succession-vocabulary"><a class="header" href="#minimal-succession-vocabulary">Minimal Succession vocabulary</a></h3>
-<p>The rooted handoff protocol is smaller than some of the implementation type
-names suggest. At the doc / operator level, keep just these words:</p>
+<p>The rooted handoff protocol is intentionally small. Docs and operator-facing
+surfaces should use the same vocabulary as the implementation and the
+Succession research note:</p>
 <ul>
-<li><code>Lease</code> — the currently active authority record</li>
-<li><code>Seal</code> — the retired predecessor era plus the frontier it already
-consumed</li>
+<li><code>Tenure</code> — the currently active authority record</li>
+<li><code>Legacy</code> — the retired predecessor era plus the frontier it already consumed</li>
 <li><code>Handover</code> — the rooted handoff record for the current successor</li>
 <li><code>Era</code> — the monotonic authority era</li>
 <li><code>Witness</code> — the operator-visible proof bundle that explains whether the
@@ -254,15 +254,15 @@ current handoff state is safe</li>
 <li><code>Silence</code> — a sealed predecessor must not keep serving</li>
 <li><code>Finality</code> — a handoff must not remain permanently half-finished</li>
 </ul>
-<p>Implementation names remain more explicit:</p>
+<p>The mapping to concrete implementation types is direct:</p>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>Doc term</th><th>Implementation term</th></tr>
 </thead>
 <tbody>
-<tr><td><code>Lease</code></td><td><code>Tenure</code></td></tr>
-<tr><td><code>Seal</code></td><td><code>Legacy</code></td></tr>
+<tr><td><code>Tenure</code></td><td><code>Tenure</code></td></tr>
+<tr><td><code>Legacy</code></td><td><code>Legacy</code></td></tr>
 <tr><td><code>Handover</code></td><td><code>Handover</code></td></tr>
 <tr><td><code>Era</code></td><td><code>Era</code> / <code>era</code></td></tr>
 <tr><td><code>Witness</code></td><td><code>HandoverWitness</code> / continuation witness fields</td></tr>
@@ -270,9 +270,9 @@ current handoff state is safe</li>
 </tbody>
 </table>
 </div>
-<p>This split is deliberate: docs describe the protocol in the smallest stable
-vocabulary, while code keeps the more explicit type names that make mutation
-boundaries obvious.</p>
+<p>Do not reintroduce <code>Lease</code> / <code>Seal</code> as public aliases. They are useful
+informally, but keeping them in formal docs creates two names for the same
+rooted objects and makes Succession harder to explain.</p>
 <hr>
 <h2 id="3-deployment-model"><a class="header" href="#3-deployment-model">3. Deployment Model</a></h2>
 <p>NoKV ships exactly one distributed topology plus the standalone engine shape.</p>
