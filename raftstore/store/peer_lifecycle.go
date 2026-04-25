@@ -124,6 +124,9 @@ func (s *Store) Close() {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	if s.observers != nil {
+		s.observers.close()
+	}
 }
 
 // VisitPeers executes the provided callback for every peer registered with the
