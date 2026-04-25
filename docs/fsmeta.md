@@ -30,7 +30,7 @@ by `fsmeta/server`.
 | `ReadDirPlus` | Scan dentries and fetch inode attributes in one typed operation. |
 | `WatchSubtree` | Live prefix-scoped metadata change stream with explicit ack/back-pressure. |
 | `SnapshotSubtree` | Publish a stable MVCC read epoch for later snapshot-version reads. |
-| `Rename` | Atomically move one dentry from one parent/name to another. |
+| `RenameSubtree` | Atomically move one subtree root dentry from one parent/name to another. |
 | `Unlink` | Delete one dentry. |
 
 `ReadDirPlus` is the main Stage 1 shape advantage: the native path performs one
@@ -45,18 +45,50 @@ Stage 1 intentionally keeps the model small:
 |---|---|
 | Dentry and inode binary codecs | Implemented |
 | Plan-driven operation contracts | Implemented |
-| Create / Lookup / ReadDir / ReadDirPlus / Rename / Unlink | Implemented |
+| Create / Lookup / ReadDir / ReadDirPlus / RenameSubtree / Unlink | Implemented |
 | Cross-region 2PC consumption | Implemented through `raftstore/client` |
 | Server-side `AssertionNotExist` | Implemented in Percolator prewrite |
 | Native gRPC service and typed Go client | Implemented |
 | Docker Compose service | Implemented |
 | Live `WatchSubtree` | Implemented in Stage 2.2 |
 | `SnapshotSubtree` MVCC epoch | Implemented in Stage 2.3 |
-| Historical watch catch-up, hardlink ref-count, xattrs, quota fence | Future work |
+| Historical watch catch-up | Implemented in Stage 3.1 |
+| Rooted mount lifecycle | Implemented in Stage 3.2 |
+| Hardlink ref-count, xattrs, quota fence | Future work |
 
 The current service is a metadata substrate, not a complete filesystem stack.
-FUSE, POSIX compatibility, historical watch catch-up, quota, recursive subtree
-materialization, and snapshot GC retention enforcement belong to later stages.
+FUSE, POSIX compatibility, quota, recursive subtree materialization, and
+snapshot GC retention enforcement belong to later stages.
+
+## Mount Lifecycle
+
+`mount` is no longer a caller-local string convention. Production `nokv-fsmeta`
+checks mount membership through the coordinator before mutating metadata:
+
+- `MountRegistered(mount_id, root_inode, schema_version)` is rooted truth.
+- `MountRetired(mount_id)` is terminal; retired mounts reject writes.
+- Runtime mount caches belong to coordinator / fsmeta, not `meta/root`.
+
+Register a mount explicitly:
+
+```bash
+nokv mount register \
+  --coordinator-addr 127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392 \
+  --mount default \
+  --root-inode 1 \
+  --schema-version 1
+```
+
+List or retire mounts:
+
+```bash
+nokv mount list --coordinator-addr 127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392
+nokv mount retire --coordinator-addr 127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392 --mount default
+```
+
+For local development, Docker Compose runs the same explicit registration once
+through the `mount-init` service. `nokv-fsmeta` itself never creates mounts; if
+the mount is missing or retired, mutating RPCs fail with `FailedPrecondition`.
 
 ## SnapshotSubtree
 

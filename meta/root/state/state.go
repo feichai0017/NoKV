@@ -92,6 +92,25 @@ type StoreMembership struct {
 	RetiredAt Cursor
 }
 
+type MountState uint8
+
+const (
+	MountStateUnknown MountState = iota
+	MountStateActive
+	MountStateRetired
+)
+
+// MountRecord is rooted truth for one fsmeta mount. Runtime fsmeta sessions
+// and cache state are intentionally excluded.
+type MountRecord struct {
+	MountID       string
+	RootInode     uint64
+	SchemaVersion uint32
+	State         MountState
+	RegisteredAt  Cursor
+	RetiredAt     Cursor
+}
+
 func (l Tenure) ActiveAt(nowUnixNano int64) bool {
 	return l.HolderID != "" && l.ExpiresUnixNano > nowUnixNano
 }
@@ -138,6 +157,7 @@ type Snapshot struct {
 	State               State
 	Stores              map[uint64]StoreMembership
 	SnapshotEpochs      map[string]SnapshotEpoch
+	Mounts              map[string]MountRecord
 	Descriptors         map[uint64]descriptor.Descriptor
 	PendingPeerChanges  map[uint64]PendingPeerChange
 	PendingRangeChanges map[uint64]PendingRangeChange
@@ -155,10 +175,20 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 		State:               state,
 		Stores:              CloneStoreMemberships(snapshot.Stores),
 		SnapshotEpochs:      CloneSnapshotEpochs(snapshot.SnapshotEpochs),
+		Mounts:              CloneMounts(snapshot.Mounts),
 		Descriptors:         CloneDescriptors(snapshot.Descriptors),
 		PendingPeerChanges:  ClonePendingPeerChanges(snapshot.PendingPeerChanges),
 		PendingRangeChanges: ClonePendingRangeChanges(snapshot.PendingRangeChanges),
 	}
+	return out
+}
+
+func CloneMounts(in map[string]MountRecord) map[string]MountRecord {
+	if len(in) == 0 {
+		return make(map[string]MountRecord)
+	}
+	out := make(map[string]MountRecord, len(in))
+	maps.Copy(out, in)
 	return out
 }
 

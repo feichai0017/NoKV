@@ -106,6 +106,8 @@ func TestMembershipAndAllocatorConstructors(t *testing.T) {
 	tsoFence := rootevent.TSOAllocatorFenced(29)
 	snapshot := rootevent.SnapshotEpochPublished("vol", 42, 99)
 	retiredSnapshot := rootevent.SnapshotEpochRetired("vol", 42, 99)
+	mount := rootevent.MountRegistered("vol", 1, 1)
+	retiredMount := rootevent.MountRetired("vol")
 
 	require.Equal(t, rootevent.KindStoreJoined, joined.Kind)
 	require.Equal(t, uint64(7), joined.StoreMembership.StoreID)
@@ -125,6 +127,12 @@ func TestMembershipAndAllocatorConstructors(t *testing.T) {
 	require.Equal(t, uint64(99), snapshot.SnapshotEpoch.ReadVersion)
 	require.Equal(t, rootevent.KindSnapshotEpochRetired, retiredSnapshot.Kind)
 	require.Equal(t, snapshot.SnapshotEpoch.SnapshotID, retiredSnapshot.SnapshotEpoch.SnapshotID)
+	require.Equal(t, rootevent.KindMountRegistered, mount.Kind)
+	require.Equal(t, "vol", mount.Mount.MountID)
+	require.Equal(t, uint64(1), mount.Mount.RootInode)
+	require.Equal(t, uint32(1), mount.Mount.SchemaVersion)
+	require.Equal(t, rootevent.KindMountRetired, retiredMount.Kind)
+	require.Equal(t, "vol", retiredMount.Mount.MountID)
 }
 
 func TestTenureReleasedAndSealed(t *testing.T) {

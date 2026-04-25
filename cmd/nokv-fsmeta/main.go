@@ -60,7 +60,6 @@ func main() {
 			}
 		}
 	}()
-
 	// From this point on, prefer logging + return so the deferred closer above
 	// runs and the raftstore + coordinator clients are released. Calling
 	// fatalf directly would invoke os.Exit and skip the defers, leaking
@@ -150,7 +149,7 @@ func newExecutor(ctx context.Context, coordAddr string) (*fsmetaexec.Executor, f
 		_ = coordRPC.Close()
 		return nil, nil, nil, nil, fmt.Errorf("init fsmeta runner: %w", err)
 	}
-	executor, err := fsmetaexec.New(runner)
+	executor, err := fsmetaexec.New(runner, fsmetaexec.WithMountResolver(coordinatorMountResolver{coord: coordRPC}))
 	if err != nil {
 		_ = kv.Close()
 		_ = coordRPC.Close()
@@ -205,6 +204,33 @@ func (w fsmetaWatchRuntime) Stats() map[string]any {
 
 type rootSnapshotPublisher struct {
 	coord *coordclient.GRPCClient
+}
+
+type coordinatorMountResolver struct {
+	coord *coordclient.GRPCClient
+}
+
+func (r coordinatorMountResolver) ResolveMount(ctx context.Context, mount fsmeta.MountID) (fsmetaexec.MountRecord, error) {
+	if r.coord == nil {
+		return fsmetaexec.MountRecord{}, fmt.Errorf("mount resolver is not configured")
+	}
+	resp, err := r.coord.GetMount(ctx, &coordpb.GetMountRequest{MountId: string(mount)})
+	if err != nil {
+		return fsmetaexec.MountRecord{}, err
+	}
+	if resp == nil || resp.GetNotFound() {
+		return fsmetaexec.MountRecord{}, fsmeta.ErrMountNotRegistered
+	}
+	info := resp.GetMount()
+	if info == nil {
+		return fsmetaexec.MountRecord{}, fsmeta.ErrMountNotRegistered
+	}
+	return fsmetaexec.MountRecord{
+		MountID:       fsmeta.MountID(info.GetMountId()),
+		RootInode:     fsmeta.InodeID(info.GetRootInode()),
+		SchemaVersion: info.GetSchemaVersion(),
+		Retired:       info.GetState() == coordpb.MountState_MOUNT_STATE_RETIRED,
+	}, nil
 }
 
 func (p rootSnapshotPublisher) PublishSnapshotSubtree(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error {

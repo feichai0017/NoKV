@@ -339,6 +339,32 @@ func rootEventSnapshotEpochFromProto(epoch *metapb.RootSnapshotEpoch) *rootevent
 	}
 }
 
+func rootEventMountToProto(mount *rootevent.Mount) *metapb.RootMount {
+	if mount == nil {
+		return nil
+	}
+	return &metapb.RootMount{
+		MountId:       mount.MountID,
+		RootInode:     mount.RootInode,
+		SchemaVersion: mount.SchemaVersion,
+		RegisteredAt:  RootCursorToProto(mount.RegisteredAt),
+		RetiredAt:     RootCursorToProto(mount.RetiredAt),
+	}
+}
+
+func rootEventMountFromProto(mount *metapb.RootMount) *rootevent.Mount {
+	if mount == nil {
+		return nil
+	}
+	return &rootevent.Mount{
+		MountID:       mount.GetMountId(),
+		RootInode:     mount.GetRootInode(),
+		SchemaVersion: mount.GetSchemaVersion(),
+		RegisteredAt:  RootCursorFromProto(mount.GetRegisteredAt()),
+		RetiredAt:     RootCursorFromProto(mount.GetRetiredAt()),
+	}
+}
+
 func rootHandoverStageToProto(stage rootproto.HandoverStage) metapb.RootHandoverStage {
 	switch stage {
 	case rootproto.HandoverStageUnspecified:
@@ -430,6 +456,10 @@ func RootSnapshotToProto(snapshot rootstate.Snapshot, tailOffset uint64) *metapb
 	for _, epoch := range snapshot.SnapshotEpochs {
 		snapshotEpochs = append(snapshotEpochs, RootSnapshotEpochToProto(epoch))
 	}
+	mounts := make([]*metapb.RootMount, 0, len(snapshot.Mounts))
+	for _, mount := range snapshot.Mounts {
+		mounts = append(mounts, RootMountToProto(mount))
+	}
 	descriptors := make([]*metapb.RegionDescriptor, 0, len(snapshot.Descriptors))
 	for _, desc := range snapshot.Descriptors {
 		descriptors = append(descriptors, DescriptorToProto(desc))
@@ -450,6 +480,7 @@ func RootSnapshotToProto(snapshot rootstate.Snapshot, tailOffset uint64) *metapb
 		PendingRangeChanges: pendingRanges,
 		Stores:              stores,
 		SnapshotEpochs:      snapshotEpochs,
+		Mounts:              mounts,
 	}
 }
 
@@ -483,6 +514,16 @@ func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snaps
 		}
 		snapshot.SnapshotEpochs[epoch.SnapshotID] = epoch
 	}
+	if len(pbCheckpoint.Mounts) > 0 {
+		snapshot.Mounts = make(map[string]rootstate.MountRecord, len(pbCheckpoint.Mounts))
+	}
+	for _, pbMount := range pbCheckpoint.Mounts {
+		mount := RootMountFromProto(pbMount)
+		if mount.MountID == "" {
+			continue
+		}
+		snapshot.Mounts[mount.MountID] = mount
+	}
 	for _, pbDesc := range pbCheckpoint.Descriptors {
 		desc := DescriptorFromProto(pbDesc)
 		if desc.RegionID == 0 {
@@ -505,6 +546,31 @@ func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snaps
 		snapshot.PendingRangeChanges[regionID] = change
 	}
 	return snapshot, pbCheckpoint.TailOffset
+}
+
+func RootMountToProto(mount rootstate.MountRecord) *metapb.RootMount {
+	return &metapb.RootMount{
+		MountId:       mount.MountID,
+		RootInode:     mount.RootInode,
+		SchemaVersion: mount.SchemaVersion,
+		State:         rootMountStateToProto(mount.State),
+		RegisteredAt:  RootCursorToProto(mount.RegisteredAt),
+		RetiredAt:     RootCursorToProto(mount.RetiredAt),
+	}
+}
+
+func RootMountFromProto(pbMount *metapb.RootMount) rootstate.MountRecord {
+	if pbMount == nil {
+		return rootstate.MountRecord{}
+	}
+	return rootstate.MountRecord{
+		MountID:       pbMount.GetMountId(),
+		RootInode:     pbMount.GetRootInode(),
+		SchemaVersion: pbMount.GetSchemaVersion(),
+		State:         rootMountStateFromProto(pbMount.GetState()),
+		RegisteredAt:  RootCursorFromProto(pbMount.GetRegisteredAt()),
+		RetiredAt:     RootCursorFromProto(pbMount.GetRetiredAt()),
+	}
 }
 
 func RootSnapshotEpochToProto(epoch rootstate.SnapshotEpoch) *metapb.RootSnapshotEpoch {
@@ -693,6 +759,8 @@ func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 		pbEvent.Payload = &metapb.RootEvent_Handover{Handover: rootEventHandoverToProto(event.Handover)}
 	case event.SnapshotEpoch != nil:
 		pbEvent.Payload = &metapb.RootEvent_SnapshotEpoch{SnapshotEpoch: rootEventSnapshotEpochToProto(event.SnapshotEpoch)}
+	case event.Mount != nil:
+		pbEvent.Payload = &metapb.RootEvent_Mount{Mount: rootEventMountToProto(event.Mount)}
 	case event.RegionDescriptor != nil:
 		pbEvent.Payload = &metapb.RootEvent_RegionDescriptor{RegionDescriptor: &metapb.RootRegionDescriptor{Descriptor_: DescriptorToProto(event.RegionDescriptor.Descriptor)}}
 	case event.RegionRemoval != nil:
@@ -747,6 +815,9 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 	}
 	if body := pbEvent.GetSnapshotEpoch(); body != nil {
 		event.SnapshotEpoch = rootEventSnapshotEpochFromProto(body)
+	}
+	if body := pbEvent.GetMount(); body != nil {
+		event.Mount = rootEventMountFromProto(body)
 	}
 	if body := pbEvent.GetRegionDescriptor(); body != nil {
 		event.RegionDescriptor = &rootevent.RegionDescriptorRecord{Descriptor: DescriptorFromProto(body.GetDescriptor_())}
@@ -834,6 +905,10 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED
 	case rootevent.KindSnapshotEpochRetired:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED
+	case rootevent.KindMountRegistered:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_MOUNT_REGISTERED
+	case rootevent.KindMountRetired:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_MOUNT_RETIRED
 	default:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_UNSPECIFIED
 	}
@@ -889,7 +964,33 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindSnapshotEpochPublished
 	case metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED:
 		return rootevent.KindSnapshotEpochRetired
+	case metapb.RootEventKind_ROOT_EVENT_KIND_MOUNT_REGISTERED:
+		return rootevent.KindMountRegistered
+	case metapb.RootEventKind_ROOT_EVENT_KIND_MOUNT_RETIRED:
+		return rootevent.KindMountRetired
 	default:
 		return rootevent.KindUnknown
+	}
+}
+
+func rootMountStateToProto(state rootstate.MountState) metapb.RootMountState {
+	switch state {
+	case rootstate.MountStateActive:
+		return metapb.RootMountState_ROOT_MOUNT_STATE_ACTIVE
+	case rootstate.MountStateRetired:
+		return metapb.RootMountState_ROOT_MOUNT_STATE_RETIRED
+	default:
+		return metapb.RootMountState_ROOT_MOUNT_STATE_UNSPECIFIED
+	}
+}
+
+func rootMountStateFromProto(state metapb.RootMountState) rootstate.MountState {
+	switch state {
+	case metapb.RootMountState_ROOT_MOUNT_STATE_ACTIVE:
+		return rootstate.MountStateActive
+	case metapb.RootMountState_ROOT_MOUNT_STATE_RETIRED:
+		return rootstate.MountStateRetired
+	default:
+		return rootstate.MountStateUnknown
 	}
 }

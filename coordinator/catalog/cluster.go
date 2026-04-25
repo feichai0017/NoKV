@@ -27,6 +27,8 @@ type Cluster struct {
 	regions             *pdview.RegionDirectoryView
 	storeMembershipMu   sync.RWMutex
 	storeMemberships    map[uint64]rootstate.StoreMembership
+	mountMu             sync.RWMutex
+	mounts              map[string]rootstate.MountRecord
 	pendingMu           sync.RWMutex
 	pendingPeerChanges  map[uint64]rootstate.PendingPeerChange
 	pendingRangeChanges map[uint64]rootstate.PendingRangeChange
@@ -40,6 +42,7 @@ func NewCluster() *Cluster {
 		stores:              pdview.NewStoreHealthView(),
 		regions:             pdview.NewRegionDirectoryView(),
 		storeMemberships:    make(map[uint64]rootstate.StoreMembership),
+		mounts:              make(map[string]rootstate.MountRecord),
 		pendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
 		pendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
 	}
@@ -150,6 +153,25 @@ func (c *Cluster) StoreMembershipSnapshot() map[uint64]rootstate.StoreMembership
 	return rootstate.CloneStoreMemberships(c.storeMemberships)
 }
 
+func (c *Cluster) MountByID(mountID string) (rootstate.MountRecord, bool) {
+	if c == nil || mountID == "" {
+		return rootstate.MountRecord{}, false
+	}
+	c.mountMu.RLock()
+	defer c.mountMu.RUnlock()
+	mount, ok := c.mounts[mountID]
+	return mount, ok
+}
+
+func (c *Cluster) MountSnapshot() map[string]rootstate.MountRecord {
+	if c == nil {
+		return make(map[string]rootstate.MountRecord)
+	}
+	c.mountMu.RLock()
+	defer c.mountMu.RUnlock()
+	return rootstate.CloneMounts(c.mounts)
+}
+
 // PublishRegionDescriptor applies one rooted region descriptor into the runtime
 // Coordinator route view.
 func (c *Cluster) PublishRegionDescriptor(desc descriptor.Descriptor) error {
@@ -182,6 +204,7 @@ func (c *Cluster) PublishRootEvent(event rootevent.Event) error {
 		return err
 	}
 	c.applyRootEventToStoreMemberships(event)
+	c.applyRootEventToMounts(event)
 	c.applyRootEventToTransitions(snapshot, event)
 	return nil
 }
@@ -339,6 +362,7 @@ func (c *Cluster) ReplaceRootSnapshot(snapshot rootstate.Snapshot, token rootsto
 	}
 	c.regions.Replace(snapshot.Descriptors)
 	c.replaceStoreMemberships(snapshot.Stores)
+	c.replaceMounts(snapshot.Mounts)
 	c.rootMu.Lock()
 	c.rootToken = token
 	c.rootMu.Unlock()
@@ -480,10 +504,71 @@ func (c *Cluster) replaceStoreMemberships(memberships map[uint64]rootstate.Store
 	}
 }
 
+func (c *Cluster) applyRootEventToMounts(event rootevent.Event) {
+	if c == nil || event.Mount == nil || event.Mount.MountID == "" {
+		return
+	}
+	c.mountMu.Lock()
+	defer c.mountMu.Unlock()
+	current := c.mounts[event.Mount.MountID]
+	switch event.Kind {
+	case rootevent.KindMountRegistered:
+		c.mounts[event.Mount.MountID] = rootstate.MountRecord{
+			MountID:       event.Mount.MountID,
+			RootInode:     event.Mount.RootInode,
+			SchemaVersion: event.Mount.SchemaVersion,
+			State:         rootstate.MountStateActive,
+			RegisteredAt:  current.RegisteredAt,
+		}
+	case rootevent.KindMountRetired:
+		current.MountID = event.Mount.MountID
+		current.State = rootstate.MountStateRetired
+		c.mounts[event.Mount.MountID] = current
+	}
+}
+
+func (c *Cluster) replaceMounts(mounts map[string]rootstate.MountRecord) {
+	if c == nil {
+		return
+	}
+	c.mountMu.Lock()
+	c.mounts = rootstate.CloneMounts(mounts)
+	c.mountMu.Unlock()
+}
+
+func validateMountEvent(snapshot rootstate.Snapshot, event rootevent.Event) error {
+	if event.Mount == nil {
+		return nil
+	}
+	mountID := event.Mount.MountID
+	if mountID == "" {
+		return ErrInvalidMountID
+	}
+	current := snapshot.Mounts[mountID]
+	switch event.Kind {
+	case rootevent.KindMountRegistered:
+		if event.Mount.RootInode == 0 {
+			return ErrInvalidMountID
+		}
+		if current.State == rootstate.MountStateRetired {
+			return ErrMountRetired
+		}
+		if current.MountID != "" && (current.RootInode != event.Mount.RootInode || current.SchemaVersion != event.Mount.SchemaVersion) {
+			return ErrMountConflict
+		}
+	case rootevent.KindMountRetired:
+		if current.MountID == "" {
+			return ErrMountNotFound
+		}
+	}
+	return nil
+}
+
 func (c *Cluster) rootedSnapshot() rootstate.Snapshot {
 	if c == nil {
 		return rootstate.Snapshot{
 			Stores:              make(map[uint64]rootstate.StoreMembership),
+			Mounts:              make(map[string]rootstate.MountRecord),
 			Descriptors:         make(map[uint64]descriptor.Descriptor),
 			PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
 			PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
@@ -491,6 +576,7 @@ func (c *Cluster) rootedSnapshot() rootstate.Snapshot {
 	}
 	return rootstate.Snapshot{
 		Stores:              c.StoreMembershipSnapshot(),
+		Mounts:              c.MountSnapshot(),
 		Descriptors:         c.regions.DescriptorsSnapshot(),
 		PendingPeerChanges:  c.clonePendingPeerChanges(),
 		PendingRangeChanges: c.clonePendingRangeChanges(),
@@ -500,6 +586,9 @@ func (c *Cluster) rootedSnapshot() rootstate.Snapshot {
 func (c *Cluster) validateRootEventAgainstSnapshot(snapshot rootstate.Snapshot, event rootevent.Event) error {
 	if c == nil {
 		return nil
+	}
+	if err := validateMountEvent(snapshot, event); err != nil {
+		return err
 	}
 	regions := pdview.NewRegionDirectoryView()
 	regions.Replace(snapshot.Descriptors)

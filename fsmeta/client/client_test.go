@@ -57,7 +57,7 @@ func (e *fakeExecutor) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSub
 	return fsmeta.SnapshotSubtreeToken{Mount: req.Mount, RootInode: req.RootInode, ReadVersion: 5678}, nil
 }
 
-func (e *fakeExecutor) Rename(context.Context, fsmeta.RenameRequest) error {
+func (e *fakeExecutor) RenameSubtree(context.Context, fsmeta.RenameSubtreeRequest) error {
 	return e.err
 }
 

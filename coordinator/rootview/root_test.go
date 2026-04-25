@@ -204,6 +204,7 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 		RootToken:    rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 4}, Revision: 2},
 		CatchUpState: CatchUpStateLagging,
 		Stores:       map[uint64]rootstate.StoreMembership{},
+		Mounts:       map[string]rootstate.MountRecord{},
 		Descriptors: map[uint64]descriptor.Descriptor{
 			desc2.RegionID: desc2,
 			desc1.RegionID: desc1,

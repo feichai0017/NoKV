@@ -33,6 +33,8 @@ enum RootEventKind {
   ROOT_EVENT_KIND_HANDOVER = 22;
   ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED = 23;
   ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED = 24;
+  ROOT_EVENT_KIND_MOUNT_REGISTERED = 25;
+  ROOT_EVENT_KIND_MOUNT_RETIRED = 26;
 }
 
 message RootCursor {
@@ -59,6 +61,7 @@ message RootCheckpoint {
   repeated RootPendingRangeChange pending_range_changes = 5;
   repeated RootStore stores = 6;
   repeated RootSnapshotEpoch snapshot_epochs = 7;
+  repeated RootMount mounts = 8;
 }
 
 message RootStoreMembership {
@@ -84,6 +87,21 @@ message RootSnapshotEpoch {
   uint64 root_inode = 3;
   uint64 read_version = 4;
   RootCursor published_at = 5;
+}
+
+enum RootMountState {
+  ROOT_MOUNT_STATE_UNSPECIFIED = 0;
+  ROOT_MOUNT_STATE_ACTIVE = 1;
+  ROOT_MOUNT_STATE_RETIRED = 2;
+}
+
+message RootMount {
+  string mount_id = 1;
+  uint64 root_inode = 2;
+  uint32 schema_version = 3;
+  RootMountState state = 4;
+  RootCursor registered_at = 5;
+  RootCursor retired_at = 6;
 }
 
 message RootAllocatorFence {
@@ -212,6 +230,7 @@ message RootEvent {
     RootLegacy legacy = 10;
     RootHandover handover = 11;
     RootSnapshotEpoch snapshot_epoch = 12;
+    RootMount mount = 13;
   }
 }
 

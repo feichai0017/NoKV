@@ -1513,7 +1513,7 @@ func (*RetireSnapshotSubtreeResponse) Descriptor() ([]byte, []int) {
 	return file_fsmeta_fsmeta_proto_rawDescGZIP(), []int{22}
 }
 
-type RenameRequest struct {
+type RenameSubtreeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Mount         string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
 	FromParent    uint64                 `protobuf:"varint,2,opt,name=from_parent,json=fromParent,proto3" json:"from_parent,omitempty"`
@@ -1524,20 +1524,20 @@ type RenameRequest struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *RenameRequest) Reset() {
-	*x = RenameRequest{}
+func (x *RenameSubtreeRequest) Reset() {
+	*x = RenameSubtreeRequest{}
 	mi := &file_fsmeta_fsmeta_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RenameRequest) String() string {
+func (x *RenameSubtreeRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RenameRequest) ProtoMessage() {}
+func (*RenameSubtreeRequest) ProtoMessage() {}
 
-func (x *RenameRequest) ProtoReflect() protoreflect.Message {
+func (x *RenameSubtreeRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_fsmeta_fsmeta_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1549,66 +1549,66 @@ func (x *RenameRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RenameRequest.ProtoReflect.Descriptor instead.
-func (*RenameRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use RenameSubtreeRequest.ProtoReflect.Descriptor instead.
+func (*RenameSubtreeRequest) Descriptor() ([]byte, []int) {
 	return file_fsmeta_fsmeta_proto_rawDescGZIP(), []int{23}
 }
 
-func (x *RenameRequest) GetMount() string {
+func (x *RenameSubtreeRequest) GetMount() string {
 	if x != nil {
 		return x.Mount
 	}
 	return ""
 }
 
-func (x *RenameRequest) GetFromParent() uint64 {
+func (x *RenameSubtreeRequest) GetFromParent() uint64 {
 	if x != nil {
 		return x.FromParent
 	}
 	return 0
 }
 
-func (x *RenameRequest) GetFromName() string {
+func (x *RenameSubtreeRequest) GetFromName() string {
 	if x != nil {
 		return x.FromName
 	}
 	return ""
 }
 
-func (x *RenameRequest) GetToParent() uint64 {
+func (x *RenameSubtreeRequest) GetToParent() uint64 {
 	if x != nil {
 		return x.ToParent
 	}
 	return 0
 }
 
-func (x *RenameRequest) GetToName() string {
+func (x *RenameSubtreeRequest) GetToName() string {
 	if x != nil {
 		return x.ToName
 	}
 	return ""
 }
 
-type RenameResponse struct {
+type RenameSubtreeResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *RenameResponse) Reset() {
-	*x = RenameResponse{}
+func (x *RenameSubtreeResponse) Reset() {
+	*x = RenameSubtreeResponse{}
 	mi := &file_fsmeta_fsmeta_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RenameResponse) String() string {
+func (x *RenameSubtreeResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RenameResponse) ProtoMessage() {}
+func (*RenameSubtreeResponse) ProtoMessage() {}
 
-func (x *RenameResponse) ProtoReflect() protoreflect.Message {
+func (x *RenameSubtreeResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_fsmeta_fsmeta_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1620,8 +1620,8 @@ func (x *RenameResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RenameResponse.ProtoReflect.Descriptor instead.
-func (*RenameResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use RenameSubtreeResponse.ProtoReflect.Descriptor instead.
+func (*RenameSubtreeResponse) Descriptor() ([]byte, []int) {
 	return file_fsmeta_fsmeta_proto_rawDescGZIP(), []int{24}
 }
 
@@ -1821,15 +1821,15 @@ const file_fsmeta_fsmeta_proto_rawDesc = "" +
 	"\n" +
 	"root_inode\x18\x02 \x01(\x04R\trootInode\x12!\n" +
 	"\fread_version\x18\x03 \x01(\x04R\vreadVersion\"\x1f\n" +
-	"\x1dRetireSnapshotSubtreeResponse\"\x99\x01\n" +
-	"\rRenameRequest\x12\x14\n" +
+	"\x1dRetireSnapshotSubtreeResponse\"\xa0\x01\n" +
+	"\x14RenameSubtreeRequest\x12\x14\n" +
 	"\x05mount\x18\x01 \x01(\tR\x05mount\x12\x1f\n" +
 	"\vfrom_parent\x18\x02 \x01(\x04R\n" +
 	"fromParent\x12\x1b\n" +
 	"\tfrom_name\x18\x03 \x01(\tR\bfromName\x12\x1b\n" +
 	"\tto_parent\x18\x04 \x01(\x04R\btoParent\x12\x17\n" +
-	"\ato_name\x18\x05 \x01(\tR\x06toName\"\x10\n" +
-	"\x0eRenameResponse\"Q\n" +
+	"\ato_name\x18\x05 \x01(\tR\x06toName\"\x17\n" +
+	"\x15RenameSubtreeResponse\"Q\n" +
 	"\rUnlinkRequest\x12\x14\n" +
 	"\x05mount\x18\x01 \x01(\tR\x05mount\x12\x16\n" +
 	"\x06parent\x18\x02 \x01(\x04R\x06parent\x12\x12\n" +
@@ -1842,7 +1842,7 @@ const file_fsmeta_fsmeta_proto_rawDesc = "" +
 	"\x10WatchEventSource\x12\"\n" +
 	"\x1eWATCH_EVENT_SOURCE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19WATCH_EVENT_SOURCE_COMMIT\x10\x01\x12#\n" +
-	"\x1fWATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x022\x89\x06\n" +
+	"\x1fWATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x022\x9e\x06\n" +
 	"\n" +
 	"FSMetadata\x12G\n" +
 	"\x06Create\x12\x1d.nokv.fsmeta.v1.CreateRequest\x1a\x1e.nokv.fsmeta.v1.CreateResponse\x12G\n" +
@@ -1851,8 +1851,8 @@ const file_fsmeta_fsmeta_proto_rawDesc = "" +
 	"\vReadDirPlus\x12\x1e.nokv.fsmeta.v1.ReadDirRequest\x1a#.nokv.fsmeta.v1.ReadDirPlusResponse\x12]\n" +
 	"\fWatchSubtree\x12#.nokv.fsmeta.v1.WatchAckOrSubscribe\x1a$.nokv.fsmeta.v1.WatchSubtreeResponse(\x010\x01\x12b\n" +
 	"\x0fSnapshotSubtree\x12&.nokv.fsmeta.v1.SnapshotSubtreeRequest\x1a'.nokv.fsmeta.v1.SnapshotSubtreeResponse\x12t\n" +
-	"\x15RetireSnapshotSubtree\x12,.nokv.fsmeta.v1.RetireSnapshotSubtreeRequest\x1a-.nokv.fsmeta.v1.RetireSnapshotSubtreeResponse\x12G\n" +
-	"\x06Rename\x12\x1d.nokv.fsmeta.v1.RenameRequest\x1a\x1e.nokv.fsmeta.v1.RenameResponse\x12G\n" +
+	"\x15RetireSnapshotSubtree\x12,.nokv.fsmeta.v1.RetireSnapshotSubtreeRequest\x1a-.nokv.fsmeta.v1.RetireSnapshotSubtreeResponse\x12\\\n" +
+	"\rRenameSubtree\x12$.nokv.fsmeta.v1.RenameSubtreeRequest\x1a%.nokv.fsmeta.v1.RenameSubtreeResponse\x12G\n" +
 	"\x06Unlink\x12\x1d.nokv.fsmeta.v1.UnlinkRequest\x1a\x1e.nokv.fsmeta.v1.UnlinkResponseB0Z.github.com/feichai0017/NoKV/pb/fsmeta;fsmetapbb\x06proto3"
 
 var (
@@ -1895,8 +1895,8 @@ var file_fsmeta_fsmeta_proto_goTypes = []any{
 	(*SnapshotSubtreeResponse)(nil),       // 22: nokv.fsmeta.v1.SnapshotSubtreeResponse
 	(*RetireSnapshotSubtreeRequest)(nil),  // 23: nokv.fsmeta.v1.RetireSnapshotSubtreeRequest
 	(*RetireSnapshotSubtreeResponse)(nil), // 24: nokv.fsmeta.v1.RetireSnapshotSubtreeResponse
-	(*RenameRequest)(nil),                 // 25: nokv.fsmeta.v1.RenameRequest
-	(*RenameResponse)(nil),                // 26: nokv.fsmeta.v1.RenameResponse
+	(*RenameSubtreeRequest)(nil),          // 25: nokv.fsmeta.v1.RenameSubtreeRequest
+	(*RenameSubtreeResponse)(nil),         // 26: nokv.fsmeta.v1.RenameSubtreeResponse
 	(*UnlinkRequest)(nil),                 // 27: nokv.fsmeta.v1.UnlinkRequest
 	(*UnlinkResponse)(nil),                // 28: nokv.fsmeta.v1.UnlinkResponse
 }
@@ -1928,7 +1928,7 @@ var file_fsmeta_fsmeta_proto_depIdxs = []int32{
 	20, // 24: nokv.fsmeta.v1.FSMetadata.WatchSubtree:input_type -> nokv.fsmeta.v1.WatchAckOrSubscribe
 	21, // 25: nokv.fsmeta.v1.FSMetadata.SnapshotSubtree:input_type -> nokv.fsmeta.v1.SnapshotSubtreeRequest
 	23, // 26: nokv.fsmeta.v1.FSMetadata.RetireSnapshotSubtree:input_type -> nokv.fsmeta.v1.RetireSnapshotSubtreeRequest
-	25, // 27: nokv.fsmeta.v1.FSMetadata.Rename:input_type -> nokv.fsmeta.v1.RenameRequest
+	25, // 27: nokv.fsmeta.v1.FSMetadata.RenameSubtree:input_type -> nokv.fsmeta.v1.RenameSubtreeRequest
 	27, // 28: nokv.fsmeta.v1.FSMetadata.Unlink:input_type -> nokv.fsmeta.v1.UnlinkRequest
 	6,  // 29: nokv.fsmeta.v1.FSMetadata.Create:output_type -> nokv.fsmeta.v1.CreateResponse
 	8,  // 30: nokv.fsmeta.v1.FSMetadata.Lookup:output_type -> nokv.fsmeta.v1.LookupResponse
@@ -1937,7 +1937,7 @@ var file_fsmeta_fsmeta_proto_depIdxs = []int32{
 	19, // 33: nokv.fsmeta.v1.FSMetadata.WatchSubtree:output_type -> nokv.fsmeta.v1.WatchSubtreeResponse
 	22, // 34: nokv.fsmeta.v1.FSMetadata.SnapshotSubtree:output_type -> nokv.fsmeta.v1.SnapshotSubtreeResponse
 	24, // 35: nokv.fsmeta.v1.FSMetadata.RetireSnapshotSubtree:output_type -> nokv.fsmeta.v1.RetireSnapshotSubtreeResponse
-	26, // 36: nokv.fsmeta.v1.FSMetadata.Rename:output_type -> nokv.fsmeta.v1.RenameResponse
+	26, // 36: nokv.fsmeta.v1.FSMetadata.RenameSubtree:output_type -> nokv.fsmeta.v1.RenameSubtreeResponse
 	28, // 37: nokv.fsmeta.v1.FSMetadata.Unlink:output_type -> nokv.fsmeta.v1.UnlinkResponse
 	29, // [29:38] is the sub-list for method output_type
 	20, // [20:29] is the sub-list for method input_type

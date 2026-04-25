@@ -84,8 +84,8 @@ func TestPlanReadDirRejectsOversizedPage(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidPageSize)
 }
 
-func TestPlanRenameTouchesSourceAndDestinationDentries(t *testing.T) {
-	plan, err := PlanRename(RenameRequest{
+func TestPlanRenameSubtreeTouchesSourceAndDestinationDentries(t *testing.T) {
+	plan, err := PlanRenameSubtree(RenameSubtreeRequest{
 		Mount:      "vol",
 		FromParent: 2,
 		FromName:   "old",
@@ -99,14 +99,14 @@ func TestPlanRenameTouchesSourceAndDestinationDentries(t *testing.T) {
 	to, err := EncodeDentryKey("vol", 3, "new")
 	require.NoError(t, err)
 
-	require.Equal(t, OperationRename, plan.Kind)
+	require.Equal(t, OperationRenameSubtree, plan.Kind)
 	require.Equal(t, from, plan.PrimaryKey)
 	require.Equal(t, [][]byte{from, to}, plan.ReadKeys)
 	require.Equal(t, [][]byte{from, to}, plan.MutateKeys)
 }
 
-func TestPlanRenameRejectsNoop(t *testing.T) {
-	_, err := PlanRename(RenameRequest{
+func TestPlanRenameSubtreeRejectsNoop(t *testing.T) {
+	_, err := PlanRenameSubtree(RenameSubtreeRequest{
 		Mount:      "vol",
 		FromParent: 2,
 		FromName:   "same",

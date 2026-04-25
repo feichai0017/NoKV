@@ -33,6 +33,8 @@ type Client interface {
 	Close() error
 	GetStore(ctx context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error)
 	ListStores(ctx context.Context, req *coordpb.ListStoresRequest) (*coordpb.ListStoresResponse, error)
+	GetMount(ctx context.Context, req *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error)
+	ListMounts(ctx context.Context, req *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error)
 }
 
 // GRPCClient is a thin wrapper around generated coordpb.CoordinatorClient.
@@ -229,6 +231,18 @@ func (c *GRPCClient) ListStores(ctx context.Context, req *coordpb.ListStoresRequ
 	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListStoresResponse, error) {
 		return coord.ListStores(ctx, req)
 	}, validateListStoresResponse)
+}
+
+func (c *GRPCClient) GetMount(ctx context.Context, req *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error) {
+	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.GetMountResponse, error) {
+		return coord.GetMount(ctx, req)
+	}, validateGetMountResponse)
+}
+
+func (c *GRPCClient) ListMounts(ctx context.Context, req *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error) {
+	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListMountsResponse, error) {
+		return coord.ListMounts(ctx, req)
+	}, validateListMountsResponse)
 }
 
 // AllocID forwards ID allocation RPC.
@@ -511,6 +525,46 @@ func validateListStoresResponse(resp *coordpb.ListStoresResponse) error {
 			return fmt.Errorf("%w: list_stores duplicate store_id=%d", errInvalidWitness, store.GetStoreId())
 		}
 		seen[store.GetStoreId()] = struct{}{}
+	}
+	return nil
+}
+
+func validateGetMountResponse(resp *coordpb.GetMountResponse) error {
+	if resp == nil {
+		return fmt.Errorf("%w: get_mount response is nil", errInvalidWitness)
+	}
+	if resp.GetNotFound() {
+		if resp.GetMount() != nil {
+			return fmt.Errorf("%w: get_mount not_found reply carries mount", errInvalidWitness)
+		}
+		return nil
+	}
+	mount := resp.GetMount()
+	if mount == nil {
+		return fmt.Errorf("%w: get_mount missing mount on non-not-found reply", errInvalidWitness)
+	}
+	if mount.GetMountId() == "" {
+		return fmt.Errorf("%w: get_mount mount_id is empty", errInvalidWitness)
+	}
+	return nil
+}
+
+func validateListMountsResponse(resp *coordpb.ListMountsResponse) error {
+	if resp == nil {
+		return fmt.Errorf("%w: list_mounts response is nil", errInvalidWitness)
+	}
+	seen := make(map[string]struct{}, len(resp.GetMounts()))
+	for _, mount := range resp.GetMounts() {
+		if mount == nil {
+			return fmt.Errorf("%w: list_mounts contains nil mount", errInvalidWitness)
+		}
+		if mount.GetMountId() == "" {
+			return fmt.Errorf("%w: list_mounts contains empty mount_id", errInvalidWitness)
+		}
+		if _, ok := seen[mount.GetMountId()]; ok {
+			return fmt.Errorf("%w: list_mounts duplicate mount_id=%s", errInvalidWitness, mount.GetMountId())
+		}
+		seen[mount.GetMountId()] = struct{}{}
 	}
 	return nil
 }

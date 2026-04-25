@@ -21,7 +21,7 @@ type Executor interface {
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
 	ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
 	SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error)
-	Rename(ctx context.Context, req fsmeta.RenameRequest) error
+	RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error
 	Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
 }
 
@@ -230,17 +230,17 @@ func (s *Service) RetireSnapshotSubtree(ctx context.Context, req *fsmetapb.Retir
 	return &fsmetapb.RetireSnapshotSubtreeResponse{}, nil
 }
 
-func (s *Service) Rename(ctx context.Context, req *fsmetapb.RenameRequest) (*fsmetapb.RenameResponse, error) {
+func (s *Service) RenameSubtree(ctx context.Context, req *fsmetapb.RenameSubtreeRequest) (*fsmetapb.RenameSubtreeResponse, error) {
 	if err := s.requireExecutor(); err != nil {
 		return nil, err
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "fsmeta rename request is required")
+		return nil, status.Error(codes.InvalidArgument, "fsmeta rename subtree request is required")
 	}
-	if err := s.executor.Rename(ctx, renameRequestFromProto(req)); err != nil {
+	if err := s.executor.RenameSubtree(ctx, renameSubtreeRequestFromProto(req)); err != nil {
 		return nil, rpcError(err)
 	}
-	return &fsmetapb.RenameResponse{}, nil
+	return &fsmetapb.RenameSubtreeResponse{}, nil
 }
 
 func (s *Service) Unlink(ctx context.Context, req *fsmetapb.UnlinkRequest) (*fsmetapb.UnlinkResponse, error) {
@@ -290,6 +290,8 @@ func rpcError(err error) error {
 		return status.Error(codes.AlreadyExists, err.Error())
 	case errors.Is(err, fsmeta.ErrNotFound):
 		return status.Error(codes.NotFound, err.Error())
+	case errors.Is(err, fsmeta.ErrMountNotRegistered), errors.Is(err, fsmeta.ErrMountRetired):
+		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, fsmeta.ErrInvalidMountID),
 		errors.Is(err, fsmeta.ErrInvalidInodeID),
 		errors.Is(err, fsmeta.ErrInvalidName),

@@ -149,7 +149,7 @@ message RetireSnapshotSubtreeRequest {
 
 message RetireSnapshotSubtreeResponse {}
 
-message RenameRequest {
+message RenameSubtreeRequest {
   string mount = 1;
   uint64 from_parent = 2;
   string from_name = 3;
@@ -157,7 +157,7 @@ message RenameRequest {
   string to_name = 5;
 }
 
-message RenameResponse {}
+message RenameSubtreeResponse {}
 
 message UnlinkRequest {
   string mount = 1;
@@ -175,6 +175,6 @@ service FSMetadata {
   rpc WatchSubtree(stream WatchAckOrSubscribe) returns (stream WatchSubtreeResponse);
   rpc SnapshotSubtree(SnapshotSubtreeRequest) returns (SnapshotSubtreeResponse);
   rpc RetireSnapshotSubtree(RetireSnapshotSubtreeRequest) returns (RetireSnapshotSubtreeResponse);
-  rpc Rename(RenameRequest) returns (RenameResponse);
+  rpc RenameSubtree(RenameSubtreeRequest) returns (RenameSubtreeResponse);
   rpc Unlink(UnlinkRequest) returns (UnlinkResponse);
 }

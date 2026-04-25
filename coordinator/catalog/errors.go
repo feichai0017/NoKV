@@ -19,4 +19,12 @@ var (
 	ErrStoreNotJoined = errors.New("coordinator/catalog: store is not joined in rooted membership")
 	// ErrStoreRetired indicates a store heartbeat arrived after rooted membership retired it.
 	ErrStoreRetired = errors.New("coordinator/catalog: store is retired in rooted membership")
+	// ErrInvalidMountID indicates a rooted mount event uses an invalid mount id.
+	ErrInvalidMountID = errors.New("coordinator/catalog: invalid mount id")
+	// ErrMountNotFound indicates a mount-scoped operation referenced an unknown rooted mount.
+	ErrMountNotFound = errors.New("coordinator/catalog: mount is not registered")
+	// ErrMountRetired indicates a mount-scoped operation referenced a retired rooted mount.
+	ErrMountRetired = errors.New("coordinator/catalog: mount is retired")
+	// ErrMountConflict indicates a mount registration conflicts with existing rooted truth.
+	ErrMountConflict = errors.New("coordinator/catalog: mount registration conflicts with rooted truth")
 )

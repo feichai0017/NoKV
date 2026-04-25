@@ -10,6 +10,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
@@ -71,6 +72,7 @@ func openRealClusterRuntime(t *testing.T, ctx context.Context) *realClusterRunti
 	coordRPC, err := coordclient.NewGRPCClient(ctx, coord.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = coordRPC.Close() })
+	registerMount(t, ctx, coordRPC, "vol")
 	kv, err := client.New(client.Config{
 		StoreResolver:  coordRPC,
 		RegionResolver: coordRPC,
@@ -81,7 +83,7 @@ func openRealClusterRuntime(t *testing.T, ctx context.Context) *realClusterRunti
 
 	runner, err := fsmetaexec.NewRaftstoreRunner(kv, coordRPC)
 	require.NoError(t, err)
-	executor, err := fsmetaexec.New(runner)
+	executor, err := fsmetaexec.New(runner, fsmetaexec.WithMountResolver(testMountResolver{coord: coordRPC}))
 	require.NoError(t, err)
 	return &realClusterRuntime{executor: executor, node: node}
 }
@@ -153,6 +155,7 @@ func openSplitRealClusterExecutor(t *testing.T, ctx context.Context) *fsmetaexec
 	coordRPC, err := coordclient.NewGRPCClient(ctx, coord.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = coordRPC.Close() })
+	registerMount(t, ctx, coordRPC, "vol")
 	kv, err := client.New(client.Config{
 		StoreResolver: coordRPC,
 		RegionResolver: &staticRegionResolver{regions: []*metapb.RegionDescriptor{
@@ -166,9 +169,39 @@ func openSplitRealClusterExecutor(t *testing.T, ctx context.Context) *fsmetaexec
 
 	runner, err := fsmetaexec.NewRaftstoreRunner(kv, coordRPC)
 	require.NoError(t, err)
-	executor, err := fsmetaexec.New(runner)
+	executor, err := fsmetaexec.New(runner, fsmetaexec.WithMountResolver(testMountResolver{coord: coordRPC}))
 	require.NoError(t, err)
 	return executor
+}
+
+type testMountResolver struct {
+	coord *coordclient.GRPCClient
+}
+
+func (r testMountResolver) ResolveMount(ctx context.Context, mount fsmeta.MountID) (fsmetaexec.MountRecord, error) {
+	resp, err := r.coord.GetMount(ctx, &coordpb.GetMountRequest{MountId: string(mount)})
+	if err != nil {
+		return fsmetaexec.MountRecord{}, err
+	}
+	if resp == nil || resp.GetNotFound() || resp.GetMount() == nil {
+		return fsmetaexec.MountRecord{}, fsmeta.ErrMountNotRegistered
+	}
+	info := resp.GetMount()
+	return fsmetaexec.MountRecord{
+		MountID:       fsmeta.MountID(info.GetMountId()),
+		RootInode:     fsmeta.InodeID(info.GetRootInode()),
+		SchemaVersion: info.GetSchemaVersion(),
+		Retired:       info.GetState() == coordpb.MountState_MOUNT_STATE_RETIRED,
+	}, nil
+}
+
+func registerMount(t *testing.T, ctx context.Context, coord *coordclient.GRPCClient, mount fsmeta.MountID) {
+	t.Helper()
+	resp, err := coord.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
+		Event: metawire.RootEventToProto(rootevent.MountRegistered(string(mount), uint64(fsmeta.RootInode), 1)),
+	})
+	require.NoError(t, err)
+	require.True(t, resp.GetAccepted())
 }
 
 type staticRegionResolver struct {
