@@ -318,9 +318,13 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 	})
 }
 
-// RenameSubtree moves the subtree root dentry from source to destination and
-// advances the rooted subtree authority era after the dentry commit succeeds.
+// RenameSubtree moves the subtree root dentry from source to destination.
 // Descendants follow through inode parent links rather than key rewrites.
+//
+// The rooted authority handoff is published after the dentry transaction
+// commits. A publisher error is returned to the caller, but it does not roll the
+// already-committed dentry move back; repair must retry the handoff publication
+// against the rooted authority frontier.
 func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error {
 	plan, err := fsmeta.PlanRenameSubtree(req)
 	if err != nil {
