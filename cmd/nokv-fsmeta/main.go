@@ -4,7 +4,6 @@ import (
 	"context"
 	"expvar"
 	"flag"
-	"fmt"
 	"log"
 	"net"
 	"os"
@@ -13,18 +12,12 @@ import (
 	"syscall"
 	"time"
 
-	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
-	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	fsmetaserver "github.com/feichai0017/NoKV/fsmeta/server"
-	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	metawire "github.com/feichai0017/NoKV/meta/wire"
 	metricspkg "github.com/feichai0017/NoKV/metrics"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
-	"github.com/feichai0017/NoKV/raftstore/client"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 var exit = os.Exit
@@ -130,57 +123,14 @@ func publishExpvarOnce(name string, value expvar.Var) {
 type closeFunc func() error
 
 func newExecutor(ctx context.Context, coordAddr string) (*fsmetaexec.Executor, fsmeta.Watcher, fsmeta.SnapshotPublisher, closeFunc, error) {
-	if coordAddr == "" {
-		return nil, nil, nil, nil, fmt.Errorf("coordinator-addr is required")
-	}
-	dialCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	coordRPC, err := coordclient.NewGRPCClient(dialCtx, coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	cancel()
-	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("init coordinator client: %w", err)
-	}
-	kv, err := client.New(client.Config{
-		Context:        ctx,
-		StoreResolver:  coordRPC,
-		RegionResolver: coordRPC,
-		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+	runtime, err := fsmetaexec.OpenWithRaftstore(ctx, fsmetaexec.RaftstoreOptions{
+		CoordinatorAddr:  coordAddr,
+		MountResolverTTL: defaultMountResolverTTL,
 	})
 	if err != nil {
-		_ = coordRPC.Close()
-		return nil, nil, nil, nil, fmt.Errorf("init raftstore client: %w", err)
+		return nil, nil, nil, nil, err
 	}
-	runner, err := fsmetaexec.NewRaftstoreRunner(kv, coordRPC)
-	if err != nil {
-		_ = kv.Close()
-		_ = coordRPC.Close()
-		return nil, nil, nil, nil, fmt.Errorf("init fsmeta runner: %w", err)
-	}
-	mountResolver := &coordinatorMountResolver{
-		coord: coordRPC,
-		ttl:   defaultMountResolverTTL,
-	}
-	snapshotPublisher := rootSnapshotPublisher{coord: coordRPC}
-	executor, err := fsmetaexec.New(
-		runner,
-		fsmetaexec.WithMountResolver(mountResolver),
-		fsmetaexec.WithSubtreeHandoffPublisher(snapshotPublisher),
-	)
-	if err != nil {
-		_ = kv.Close()
-		_ = coordRPC.Close()
-		return nil, nil, nil, nil, fmt.Errorf("init fsmeta executor: %w", err)
-	}
-	router := fsmetawatch.NewRouter()
-	source, err := fsmetawatch.StartRemoteSource(ctx, coordRPC, router, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		_ = kv.Close()
-		_ = coordRPC.Close()
-		return nil, nil, nil, nil, fmt.Errorf("init fsmeta watch source: %w", err)
-	}
-	mountMonitor := startMountLifecycleMonitor(ctx, coordRPC, router, mountResolver, defaultMountMonitorInterval)
-	// Compose closer: shutdown order is kv first (it holds dialed store conns
-	// keyed by coordinator-resolved addresses) then coordRPC. Both errors are
-	// reported; the first non-nil wins.
+	mountMonitor := startMountLifecycleMonitor(ctx, runtime.MountLister, runtime.MountRouter, runtime.MountRetirer, defaultMountMonitorInterval)
 	closer := func() error {
 		var errAll error
 		if mountMonitor != nil {
@@ -188,66 +138,12 @@ func newExecutor(ctx context.Context, coordAddr string) (*fsmetaexec.Executor, f
 				errAll = cerr
 			}
 		}
-		if cerr := source.Close(); cerr != nil {
-			errAll = cerr
-		}
-		if cerr := kv.Close(); cerr != nil && errAll == nil {
-			errAll = cerr
-		}
-		if cerr := coordRPC.Close(); cerr != nil && errAll == nil {
+		if cerr := runtime.Close(); cerr != nil && errAll == nil {
 			errAll = cerr
 		}
 		return errAll
 	}
-	return executor, fsmetaWatchRuntime{Router: router, source: source, mounts: mountResolver}, snapshotPublisher, closer, nil
-}
-
-type fsmetaWatchRuntime struct {
-	*fsmetawatch.Router
-	source *fsmetawatch.RemoteSource
-	mounts fsmetaexec.MountResolver
-}
-
-func (w fsmetaWatchRuntime) Subscribe(ctx context.Context, req fsmeta.WatchRequest) (fsmeta.WatchSubscription, error) {
-	if req.Mount != "" && w.mounts != nil {
-		record, err := w.mounts.ResolveMount(ctx, req.Mount)
-		if err != nil {
-			return nil, err
-		}
-		if record.MountID == "" {
-			return nil, fsmeta.ErrMountNotRegistered
-		}
-		if record.Retired {
-			return nil, fsmeta.ErrMountRetired
-		}
-	}
-	if w.Router == nil {
-		return nil, fsmeta.ErrInvalidRequest
-	}
-	return w.Router.Subscribe(ctx, req)
-}
-
-func (w fsmetaWatchRuntime) Stats() map[string]any {
-	out := map[string]any{}
-	if w.Router != nil {
-		for key, value := range w.Router.Stats() {
-			out[key] = value
-		}
-	}
-	if w.source != nil {
-		for key, value := range w.source.Stats() {
-			out[key] = value
-		}
-	}
-	return out
-}
-
-type rootSnapshotPublisher struct {
-	coord *coordclient.GRPCClient
-}
-
-type mountLookupClient interface {
-	GetMount(context.Context, *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error)
+	return runtime.Executor, runtime.Watcher, runtime.SnapshotPublisher, closer, nil
 }
 
 type mountListClient interface {
@@ -256,100 +152,6 @@ type mountListClient interface {
 
 type mountRetirementRouter interface {
 	RetireMount(fsmeta.MountID) int
-}
-
-type coordinatorMountResolver struct {
-	coord mountLookupClient
-	ttl   time.Duration
-	now   func() time.Time
-
-	mu      sync.Mutex
-	entries map[fsmeta.MountID]mountCacheEntry
-}
-
-type mountCacheEntry struct {
-	record    fsmetaexec.MountRecord
-	err       error
-	expiresAt time.Time
-}
-
-func (r *coordinatorMountResolver) ResolveMount(ctx context.Context, mount fsmeta.MountID) (fsmetaexec.MountRecord, error) {
-	if r.coord == nil {
-		return fsmetaexec.MountRecord{}, fmt.Errorf("mount resolver is not configured")
-	}
-	now := r.currentTime()
-	if record, err, ok := r.cached(mount, now); ok {
-		return record, err
-	}
-	resp, err := r.coord.GetMount(ctx, &coordpb.GetMountRequest{MountId: string(mount)})
-	if err != nil {
-		return fsmetaexec.MountRecord{}, err
-	}
-	record, err := mountRecordFromResponse(resp)
-	r.store(mount, now, record, err)
-	return record, err
-}
-
-func (r *coordinatorMountResolver) MarkMountRetired(mount fsmeta.MountID) {
-	if mount == "" {
-		return
-	}
-	r.store(mount, r.currentTime(), fsmetaexec.MountRecord{
-		MountID: mount,
-		Retired: true,
-	}, nil)
-}
-
-func (r *coordinatorMountResolver) currentTime() time.Time {
-	if r.now != nil {
-		return r.now()
-	}
-	return time.Now()
-}
-
-func (r *coordinatorMountResolver) cached(mount fsmeta.MountID, now time.Time) (fsmetaexec.MountRecord, error, bool) {
-	if r.ttl <= 0 {
-		return fsmetaexec.MountRecord{}, nil, false
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	entry, ok := r.entries[mount]
-	if !ok || !now.Before(entry.expiresAt) {
-		return fsmetaexec.MountRecord{}, nil, false
-	}
-	return entry.record, entry.err, true
-}
-
-func (r *coordinatorMountResolver) store(mount fsmeta.MountID, now time.Time, record fsmetaexec.MountRecord, err error) {
-	if r.ttl <= 0 {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.entries == nil {
-		r.entries = make(map[fsmeta.MountID]mountCacheEntry)
-	}
-	r.entries[mount] = mountCacheEntry{
-		record:    record,
-		err:       err,
-		expiresAt: now.Add(r.ttl),
-	}
-}
-
-func mountRecordFromResponse(resp *coordpb.GetMountResponse) (fsmetaexec.MountRecord, error) {
-	if resp == nil || resp.GetNotFound() {
-		return fsmetaexec.MountRecord{}, fsmeta.ErrMountNotRegistered
-	}
-	info := resp.GetMount()
-	if info == nil {
-		return fsmetaexec.MountRecord{}, fsmeta.ErrMountNotRegistered
-	}
-	return fsmetaexec.MountRecord{
-		MountID:       fsmeta.MountID(info.GetMountId()),
-		RootInode:     fsmeta.InodeID(info.GetRootInode()),
-		SchemaVersion: info.GetSchemaVersion(),
-		Retired:       info.GetState() == coordpb.MountState_MOUNT_STATE_RETIRED,
-	}, nil
 }
 
 type mountLifecycleMonitor struct {
@@ -433,37 +235,5 @@ func (m *mountLifecycleMonitor) Close() error {
 		close(m.stop)
 	})
 	<-m.done
-	return nil
-}
-
-func (p rootSnapshotPublisher) PublishSnapshotSubtree(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error {
-	return p.publish(ctx, rootevent.SnapshotEpochPublished(string(token.Mount), uint64(token.RootInode), token.ReadVersion))
-}
-
-func (p rootSnapshotPublisher) RetireSnapshotSubtree(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error {
-	return p.publish(ctx, rootevent.SnapshotEpochRetired(string(token.Mount), uint64(token.RootInode), token.ReadVersion))
-}
-
-func (p rootSnapshotPublisher) StartSubtreeHandoff(ctx context.Context, mount fsmeta.MountID, root fsmeta.InodeID, frontier uint64) error {
-	return p.publish(ctx, rootevent.SubtreeHandoffStarted(string(mount), uint64(root), frontier))
-}
-
-func (p rootSnapshotPublisher) CompleteSubtreeHandoff(ctx context.Context, mount fsmeta.MountID, root fsmeta.InodeID, frontier uint64) error {
-	return p.publish(ctx, rootevent.SubtreeHandoffCompleted(string(mount), uint64(root), frontier))
-}
-
-func (p rootSnapshotPublisher) publish(ctx context.Context, event rootevent.Event) error {
-	if p.coord == nil {
-		return fmt.Errorf("root event publisher is not configured")
-	}
-	resp, err := p.coord.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
-		Event: metawire.RootEventToProto(event),
-	})
-	if err != nil {
-		return err
-	}
-	if resp == nil || !resp.GetAccepted() {
-		return fmt.Errorf("root event was not accepted")
-	}
 	return nil
 }
