@@ -26,7 +26,16 @@ import (
 
 func openRealClusterExecutor(t *testing.T, ctx context.Context) *fsmetaexec.Executor {
 	t.Helper()
+	return openRealClusterRuntime(t, ctx).executor
+}
 
+type realClusterRuntime struct {
+	executor *fsmetaexec.Executor
+	node     *testcluster.Node
+}
+
+func openRealClusterRuntime(t *testing.T, ctx context.Context) *realClusterRuntime {
+	t.Helper()
 	coord := testcluster.StartCoordinator(t)
 	t.Cleanup(func() { coord.Close(t) })
 
@@ -74,7 +83,7 @@ func openRealClusterExecutor(t *testing.T, ctx context.Context) *fsmetaexec.Exec
 	require.NoError(t, err)
 	executor, err := fsmetaexec.New(runner)
 	require.NoError(t, err)
-	return executor
+	return &realClusterRuntime{executor: executor, node: node}
 }
 
 func openSplitRealClusterExecutor(t *testing.T, ctx context.Context) *fsmetaexec.Executor {

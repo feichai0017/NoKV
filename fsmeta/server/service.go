@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetapb "github.com/feichai0017/NoKV/pb/fsmeta"
@@ -29,16 +30,33 @@ type Service struct {
 	fsmetapb.UnimplementedFSMetadataServer
 
 	executor Executor
+	watcher  fsmeta.Watcher
+}
+
+// Option configures an FSMetadata service.
+type Option func(*Service)
+
+// WithWatcher enables WatchSubtree streams for the service.
+func WithWatcher(watcher fsmeta.Watcher) Option {
+	return func(s *Service) {
+		s.watcher = watcher
+	}
 }
 
 // NewService constructs an FSMetadata service around executor.
-func NewService(executor Executor) *Service {
-	return &Service{executor: executor}
+func NewService(executor Executor, opts ...Option) *Service {
+	svc := &Service{executor: executor}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(svc)
+		}
+	}
+	return svc
 }
 
 // Register registers one FSMetadata service.
-func Register(reg grpc.ServiceRegistrar, executor Executor) {
-	fsmetapb.RegisterFSMetadataServer(reg, NewService(executor))
+func Register(reg grpc.ServiceRegistrar, executor Executor, opts ...Option) {
+	fsmetapb.RegisterFSMetadataServer(reg, NewService(executor, opts...))
 }
 
 func (s *Service) Create(ctx context.Context, req *fsmetapb.CreateRequest) (*fsmetapb.CreateResponse, error) {
@@ -105,6 +123,60 @@ func (s *Service) ReadDirPlus(ctx context.Context, req *fsmetapb.ReadDirRequest)
 	return resp, nil
 }
 
+func (s *Service) WatchSubtree(stream fsmetapb.FSMetadata_WatchSubtreeServer) error {
+	if err := s.requireWatcher(); err != nil {
+		return err
+	}
+	first, err := stream.Recv()
+	if err != nil {
+		return rpcStreamError(err)
+	}
+	subscribe := first.GetSubscribe()
+	if subscribe == nil {
+		return status.Error(codes.InvalidArgument, "fsmeta watch first message must subscribe")
+	}
+	sub, err := s.watcher.Subscribe(stream.Context(), watchRequestFromProto(subscribe))
+	if err != nil {
+		return rpcError(err)
+	}
+	defer sub.Close()
+
+	recvErr := make(chan error, 1)
+	go func() {
+		for {
+			msg, err := stream.Recv()
+			if err != nil {
+				recvErr <- err
+				return
+			}
+			if ack := msg.GetAck(); ack != nil {
+				sub.Ack(watchCursorFromProto(ack.GetCursor()))
+				continue
+			}
+			recvErr <- status.Error(codes.InvalidArgument, "fsmeta watch stream only accepts ack after subscribe")
+			return
+		}
+	}()
+
+	for {
+		select {
+		case err := <-recvErr:
+			return rpcStreamError(err)
+		case <-stream.Context().Done():
+			return rpcStreamError(stream.Context().Err())
+		case evt, ok := <-sub.Events():
+			if !ok {
+				return rpcError(sub.Err())
+			}
+			if err := stream.Send(&fsmetapb.WatchSubtreeResponse{
+				Payload: &fsmetapb.WatchSubtreeResponse_Event{Event: watchEventToProto(evt)},
+			}); err != nil {
+				return rpcStreamError(err)
+			}
+		}
+	}
+}
+
 func (s *Service) Rename(ctx context.Context, req *fsmetapb.RenameRequest) (*fsmetapb.RenameResponse, error) {
 	if err := s.requireExecutor(); err != nil {
 		return nil, err
@@ -138,6 +210,13 @@ func (s *Service) requireExecutor() error {
 	return nil
 }
 
+func (s *Service) requireWatcher() error {
+	if s == nil || s.watcher == nil {
+		return status.Error(codes.FailedPrecondition, "fsmeta watcher is not configured")
+	}
+	return nil
+}
+
 func rpcError(err error) error {
 	if err == nil {
 		return nil
@@ -146,6 +225,8 @@ func rpcError(err error) error {
 		return err
 	}
 	switch {
+	case errors.Is(err, fsmeta.ErrWatchOverflow):
+		return status.Error(codes.ResourceExhausted, err.Error())
 	case errors.Is(err, context.Canceled):
 		return status.Error(codes.Canceled, err.Error())
 	case errors.Is(err, context.DeadlineExceeded):
@@ -168,4 +249,11 @@ func rpcError(err error) error {
 	default:
 		return status.Error(codes.Internal, err.Error())
 	}
+}
+
+func rpcStreamError(err error) error {
+	if err == nil || errors.Is(err, io.EOF) {
+		return nil
+	}
+	return rpcError(err)
 }

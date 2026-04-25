@@ -28,6 +28,7 @@ by `fsmeta/server`.
 | `Lookup` | Read one dentry by `(mount, parent inode, name)`. |
 | `ReadDir` | Scan dentries under one parent inode. |
 | `ReadDirPlus` | Scan dentries and fetch inode attributes in one typed operation. |
+| `WatchSubtree` | Live prefix-scoped metadata change stream with explicit ack/back-pressure. |
 | `Rename` | Atomically move one dentry from one parent/name to another. |
 | `Unlink` | Delete one dentry. |
 
@@ -48,11 +49,12 @@ Stage 1 intentionally keeps the model small:
 | Server-side `AssertionNotExist` | Implemented in Percolator prewrite |
 | Native gRPC service and typed Go client | Implemented |
 | Docker Compose service | Implemented |
-| Hardlink ref-count, xattrs, subtree watch, quota fence | Not in Stage 1 |
+| Live `WatchSubtree` | Implemented in Stage 2.2 |
+| Historical watch catch-up, hardlink ref-count, xattrs, quota fence | Future work |
 
 The current service is a metadata substrate, not a complete filesystem stack.
-FUSE, POSIX compatibility, subtree-level watch, quota, and snapshot semantics
-belong to later stages.
+FUSE, POSIX compatibility, historical watch catch-up, quota, and snapshot
+semantics belong to later stages.
 
 ## Running With Docker Compose
 
