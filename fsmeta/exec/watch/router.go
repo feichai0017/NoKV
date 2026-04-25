@@ -49,6 +49,7 @@ func (r *Router) Subscribe(ctx context.Context, req fsmeta.WatchRequest) (fsmeta
 	}
 	sub := &Subscription{
 		router:  r,
+		mount:   req.Mount,
 		prefix:  prefix,
 		events:  make(chan fsmeta.WatchEvent, window),
 		window:  window,
@@ -216,6 +217,26 @@ func (r *Router) replayLocked(cursor fsmeta.WatchCursor, prefix []byte) ([]fsmet
 	return replay, latest, nil
 }
 
+// RetireMount closes all subscriptions attached to a retired mount.
+func (r *Router) RetireMount(mount fsmeta.MountID) int {
+	if r == nil || mount == "" {
+		return 0
+	}
+	var retired []*Subscription
+	r.mu.Lock()
+	for id, sub := range r.subs {
+		if sub.mount == mount {
+			delete(r.subs, id)
+			retired = append(retired, sub)
+		}
+	}
+	r.mu.Unlock()
+	for _, sub := range retired {
+		sub.closeWith(fsmeta.ErrMountRetired)
+	}
+	return len(retired)
+}
+
 func (r *Router) unregister(id uint64, sub *Subscription) {
 	r.mu.Lock()
 	if current := r.subs[id]; current == sub {
@@ -228,6 +249,7 @@ func (r *Router) unregister(id uint64, sub *Subscription) {
 type Subscription struct {
 	router *Router
 	id     uint64
+	mount  fsmeta.MountID
 	prefix []byte
 	events chan fsmeta.WatchEvent
 	window uint32
