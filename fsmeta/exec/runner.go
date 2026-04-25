@@ -36,9 +36,23 @@ type keyConflictError interface {
 	KeyErrors() []*kvrpcpb.KeyError
 }
 
+// MountRecord is the executor's mount-admission view.
+type MountRecord struct {
+	MountID       fsmeta.MountID
+	RootInode     fsmeta.InodeID
+	SchemaVersion uint32
+	Retired       bool
+}
+
+// MountResolver checks rooted mount lifecycle before mutating fsmeta data.
+type MountResolver interface {
+	ResolveMount(context.Context, fsmeta.MountID) (MountRecord, error)
+}
+
 // Executor interprets fsmeta operation plans against a TxnRunner.
 type Executor struct {
 	runner                 TxnRunner
+	mounts                 MountResolver
 	lockTTL                uint64
 	txnRetriesTotal        atomic.Uint64
 	txnRetryExhaustedTotal atomic.Uint64
@@ -53,6 +67,14 @@ func WithLockTTL(ttl uint64) Option {
 		if ttl > 0 {
 			e.lockTTL = ttl
 		}
+	}
+}
+
+// WithMountResolver enables rooted mount lifecycle admission for mutating
+// fsmeta operations.
+func WithMountResolver(resolver MountResolver) Option {
+	return func(e *Executor) {
+		e.mounts = resolver
 	}
 }
 
@@ -91,6 +113,9 @@ func (e *Executor) Stats() map[string]any {
 func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest, inode fsmeta.InodeRecord) error {
 	plan, err := fsmeta.PlanCreate(req)
 	if err != nil {
+		return err
+	}
+	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
 		return err
 	}
 	inode.Inode = req.Inode
@@ -221,6 +246,9 @@ func (e *Executor) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtr
 	if _, err := fsmeta.PlanSnapshotSubtree(req); err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}
+	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, err
+	}
 	version, err := e.reserveReadVersion(ctx)
 	if err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
@@ -259,6 +287,9 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 	if err != nil {
 		return err
 	}
+	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
+		return err
+	}
 	mutations := []*kvrpcpb.Mutation{{
 		Op:  kvrpcpb.Mutation_Delete,
 		Key: cloneBytes(plan.MutateKeys[0]),
@@ -271,11 +302,15 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 	})
 }
 
-// Rename moves one dentry from source to destination. V0 rejects destination
-// overwrite; POSIX replacement and type checks are intentionally deferred.
-func (e *Executor) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
-	plan, err := fsmeta.PlanRename(req)
+// RenameSubtree moves the subtree root dentry from source to destination. V0
+// rejects destination overwrite; descendants follow through inode parent links
+// rather than key rewrites.
+func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error {
+	plan, err := fsmeta.PlanRenameSubtree(req)
 	if err != nil {
+		return err
+	}
+	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
 		return err
 	}
 	return e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
@@ -308,6 +343,23 @@ func (e *Executor) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
 		}
 		return e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
 	})
+}
+
+func (e *Executor) requireActiveMount(ctx context.Context, mount fsmeta.MountID) error {
+	if e == nil || e.mounts == nil {
+		return nil
+	}
+	record, err := e.mounts.ResolveMount(ctx, mount)
+	if err != nil {
+		return err
+	}
+	if record.MountID == "" {
+		return fsmeta.ErrMountNotRegistered
+	}
+	if record.Retired {
+		return fsmeta.ErrMountRetired
+	}
+	return nil
 }
 
 func (e *Executor) reserveReadVersion(ctx context.Context) (uint64, error) {

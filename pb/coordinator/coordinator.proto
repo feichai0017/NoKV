@@ -66,6 +66,36 @@ message ListStoresResponse {
   repeated StoreInfo stores = 1;
 }
 
+enum MountState {
+  MOUNT_STATE_UNKNOWN = 0;
+  MOUNT_STATE_ACTIVE = 1;
+  MOUNT_STATE_RETIRED = 2;
+}
+
+message MountInfo {
+  string mount_id = 1;
+  uint64 root_inode = 2;
+  uint32 schema_version = 3;
+  MountState state = 4;
+  nokv.meta.v1.RootCursor registered_at = 5;
+  nokv.meta.v1.RootCursor retired_at = 6;
+}
+
+message GetMountRequest {
+  string mount_id = 1;
+}
+
+message GetMountResponse {
+  MountInfo mount = 1;
+  bool not_found = 2;
+}
+
+message ListMountsRequest {}
+
+message ListMountsResponse {
+  repeated MountInfo mounts = 1;
+}
+
 enum SchedulerOperationType {
   SCHEDULER_OPERATION_TYPE_NONE = 0;
   SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER = 1;
@@ -339,6 +369,8 @@ service Coordinator {
   rpc StoreHeartbeat(StoreHeartbeatRequest) returns (StoreHeartbeatResponse);
   rpc GetStore(GetStoreRequest) returns (GetStoreResponse);
   rpc ListStores(ListStoresRequest) returns (ListStoresResponse);
+  rpc GetMount(GetMountRequest) returns (GetMountResponse);
+  rpc ListMounts(ListMountsRequest) returns (ListMountsResponse);
   rpc RegionLiveness(RegionLivenessRequest) returns (RegionLivenessResponse);
   rpc PublishRootEvent(PublishRootEventRequest) returns (PublishRootEventResponse);
   rpc ListTransitions(ListTransitionsRequest) returns (ListTransitionsResponse);

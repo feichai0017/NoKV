@@ -52,6 +52,34 @@ func TestClusterStoreHeartbeatRequiresActiveMembership(t *testing.T) {
 	require.False(t, info.HasRuntime)
 }
 
+func TestClusterMountLifecycleRootEvents(t *testing.T) {
+	c := NewCluster()
+
+	require.NoError(t, c.PublishRootEvent(rootevent.MountRegistered("vol", 1, 1)))
+	mount, ok := c.MountByID("vol")
+	require.True(t, ok)
+	require.Equal(t, rootstate.MountRecord{
+		MountID:       "vol",
+		RootInode:     1,
+		SchemaVersion: 1,
+		State:         rootstate.MountStateActive,
+	}, mount)
+
+	require.NoError(t, c.ValidateRootEvent(rootevent.MountRegistered("vol", 1, 1)))
+	err := c.ValidateRootEvent(rootevent.MountRegistered("vol", 2, 1))
+	require.ErrorIs(t, err, ErrMountConflict)
+
+	require.NoError(t, c.PublishRootEvent(rootevent.MountRetired("vol")))
+	mount, ok = c.MountByID("vol")
+	require.True(t, ok)
+	require.Equal(t, rootstate.MountStateRetired, mount.State)
+
+	err = c.ValidateRootEvent(rootevent.MountRegistered("vol", 1, 1))
+	require.ErrorIs(t, err, ErrMountRetired)
+	err = c.ValidateRootEvent(rootevent.MountRetired("missing"))
+	require.ErrorIs(t, err, ErrMountNotFound)
+}
+
 func TestClusterRegionHeartbeatAndRouteLookup(t *testing.T) {
 	c := NewCluster()
 	require.NoError(t, c.PublishRegionDescriptor(testDescriptor(1, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1})))

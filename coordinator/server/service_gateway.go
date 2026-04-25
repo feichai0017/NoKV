@@ -83,6 +83,54 @@ func (s *Service) ListStores(ctx context.Context, _ *coordpb.ListStoresRequest) 
 	return &coordpb.ListStoresResponse{Stores: out}, nil
 }
 
+func (s *Service) GetMount(ctx context.Context, req *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
+	if req == nil || req.GetMountId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "get mount request missing mount_id")
+	}
+	mount, ok := s.cluster.MountByID(req.GetMountId())
+	if !ok {
+		return &coordpb.GetMountResponse{NotFound: true}, nil
+	}
+	return &coordpb.GetMountResponse{Mount: mountInfoToProto(mount)}, nil
+}
+
+func (s *Service) ListMounts(ctx context.Context, _ *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
+	mounts := s.cluster.MountSnapshot()
+	out := make([]*coordpb.MountInfo, 0, len(mounts))
+	for _, mount := range mounts {
+		out = append(out, mountInfoToProto(mount))
+	}
+	return &coordpb.ListMountsResponse{Mounts: out}, nil
+}
+
+func mountInfoToProto(mount rootstate.MountRecord) *coordpb.MountInfo {
+	return &coordpb.MountInfo{
+		MountId:       mount.MountID,
+		RootInode:     mount.RootInode,
+		SchemaVersion: mount.SchemaVersion,
+		State:         mountStateToProto(mount.State),
+		RegisteredAt:  metawire.RootCursorToProto(mount.RegisteredAt),
+		RetiredAt:     metawire.RootCursorToProto(mount.RetiredAt),
+	}
+}
+
+func mountStateToProto(state rootstate.MountState) coordpb.MountState {
+	switch state {
+	case rootstate.MountStateActive:
+		return coordpb.MountState_MOUNT_STATE_ACTIVE
+	case rootstate.MountStateRetired:
+		return coordpb.MountState_MOUNT_STATE_RETIRED
+	default:
+		return coordpb.MountState_MOUNT_STATE_UNKNOWN
+	}
+}
+
 func (s *Service) storeInfoToProto(info catalog.StoreInfo) *coordpb.StoreInfo {
 	stats := info.Stats
 	// Zero-time guard: avoid uint64 wrap when stats.UpdatedAt is the zero
@@ -182,9 +230,10 @@ func (s *Service) PublishRootEvent(ctx context.Context, req *coordpb.PublishRoot
 	}
 	if err := s.cluster.ValidateRootEvent(event); err != nil {
 		switch {
-		case errors.Is(err, catalog.ErrInvalidRegionID):
+		case errors.Is(err, catalog.ErrInvalidRegionID), errors.Is(err, catalog.ErrInvalidMountID):
 			return nil, status.Error(codes.InvalidArgument, err.Error())
-		case errors.Is(err, catalog.ErrRegionHeartbeatStale), errors.Is(err, catalog.ErrRegionRangeOverlap):
+		case errors.Is(err, catalog.ErrRegionHeartbeatStale), errors.Is(err, catalog.ErrRegionRangeOverlap),
+			errors.Is(err, catalog.ErrMountNotFound), errors.Is(err, catalog.ErrMountRetired), errors.Is(err, catalog.ErrMountConflict):
 			return nil, status.Error(codes.FailedPrecondition, err.Error())
 		default:
 			return nil, status.Error(codes.Internal, err.Error())

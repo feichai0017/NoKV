@@ -74,7 +74,7 @@ func TestFSMetadataClientServerOnRealCluster(t *testing.T) {
 	err = cli.Create(ctx, req, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
 	require.True(t, errors.Is(err, fsmeta.ErrExists), "duplicate create error = %v", err)
 
-	require.NoError(t, cli.Rename(ctx, fsmeta.RenameRequest{
+	require.NoError(t, cli.RenameSubtree(ctx, fsmeta.RenameSubtreeRequest{
 		Mount:      req.Mount,
 		FromParent: req.Parent,
 		FromName:   req.Name,
@@ -221,7 +221,7 @@ func TestFSMetadataSnapshotSubtreeOnRealCluster(t *testing.T) {
 	cli, cleanup := openFSMetadataClient(t, ctx, executor, fsmetaserver.WithSnapshotPublisher(publisher))
 	defer cleanup()
 
-	mount := fsmeta.MountID("snapvol")
+	mount := fsmeta.MountID("vol")
 	require.NoError(t, cli.Create(ctx, fsmeta.CreateRequest{
 		Mount:  mount,
 		Parent: fsmeta.RootInode,

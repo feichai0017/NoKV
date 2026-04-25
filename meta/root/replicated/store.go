@@ -36,6 +36,7 @@ type Store struct {
 	state              rootstate.State
 	stores             map[uint64]rootstate.StoreMembership
 	snapshots          map[string]rootstate.SnapshotEpoch
+	mounts             map[string]rootstate.MountRecord
 	descs              map[uint64]descriptor.Descriptor
 	pending            map[uint64]rootstate.PendingPeerChange
 	pendingRange       map[uint64]rootstate.PendingRangeChange
@@ -64,11 +65,16 @@ func Open(cfg Config) (*Store, error) {
 	if snapshots == nil {
 		snapshots = make(map[string]rootstate.SnapshotEpoch)
 	}
+	mounts := bootstrap.Snapshot.Mounts
+	if mounts == nil {
+		mounts = make(map[string]rootstate.MountRecord)
+	}
 	return &Store{
 		driver:             cfg.Driver,
 		state:              bootstrap.Snapshot.State,
 		stores:             stores,
 		snapshots:          snapshots,
+		mounts:             mounts,
 		descs:              bootstrap.Snapshot.Descriptors,
 		pending:            bootstrap.Snapshot.PendingPeerChanges,
 		pendingRange:       bootstrap.Snapshot.PendingRangeChanges,
@@ -175,6 +181,7 @@ func (s *Store) Snapshot() (rootstate.Snapshot, error) {
 		State:               s.state,
 		Stores:              s.stores,
 		SnapshotEpochs:      s.snapshots,
+		Mounts:              s.mounts,
 		Descriptors:         s.descs,
 		PendingPeerChanges:  s.pending,
 		PendingRangeChanges: s.pendingRange,
@@ -221,6 +228,7 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 		State:               s.state,
 		Stores:              rootstate.CloneStoreMemberships(s.stores),
 		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(s.snapshots),
+		Mounts:              rootstate.CloneMounts(s.mounts),
 		Descriptors:         rootstate.CloneDescriptors(s.descs),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.pending),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.pendingRange),
@@ -250,6 +258,7 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 	s.state = snapshot.State
 	s.stores = snapshot.Stores
 	s.snapshots = snapshot.SnapshotEpochs
+	s.mounts = snapshot.Mounts
 	s.descs = snapshot.Descriptors
 	s.pending = snapshot.PendingPeerChanges
 	s.pendingRange = snapshot.PendingRangeChanges
@@ -505,6 +514,7 @@ func (s *Store) maybeCompactLocked() {
 		State:               s.state,
 		Stores:              rootstate.CloneStoreMemberships(s.stores),
 		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(s.snapshots),
+		Mounts:              rootstate.CloneMounts(s.mounts),
 		Descriptors:         rootstate.CloneDescriptors(s.descs),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.pending),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.pendingRange),
@@ -536,6 +546,10 @@ func (s *Store) applyObserved(observed rootstorage.ObservedCommitted) {
 	s.snapshots = bootstrap.Snapshot.SnapshotEpochs
 	if s.snapshots == nil {
 		s.snapshots = make(map[string]rootstate.SnapshotEpoch)
+	}
+	s.mounts = bootstrap.Snapshot.Mounts
+	if s.mounts == nil {
+		s.mounts = make(map[string]rootstate.MountRecord)
 	}
 	s.descs = bootstrap.Snapshot.Descriptors
 	s.pending = bootstrap.Snapshot.PendingPeerChanges

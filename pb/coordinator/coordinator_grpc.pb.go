@@ -24,6 +24,8 @@ const (
 	Coordinator_StoreHeartbeat_FullMethodName   = "/nokv.coordinator.v1.Coordinator/StoreHeartbeat"
 	Coordinator_GetStore_FullMethodName         = "/nokv.coordinator.v1.Coordinator/GetStore"
 	Coordinator_ListStores_FullMethodName       = "/nokv.coordinator.v1.Coordinator/ListStores"
+	Coordinator_GetMount_FullMethodName         = "/nokv.coordinator.v1.Coordinator/GetMount"
+	Coordinator_ListMounts_FullMethodName       = "/nokv.coordinator.v1.Coordinator/ListMounts"
 	Coordinator_RegionLiveness_FullMethodName   = "/nokv.coordinator.v1.Coordinator/RegionLiveness"
 	Coordinator_PublishRootEvent_FullMethodName = "/nokv.coordinator.v1.Coordinator/PublishRootEvent"
 	Coordinator_ListTransitions_FullMethodName  = "/nokv.coordinator.v1.Coordinator/ListTransitions"
@@ -41,6 +43,8 @@ type CoordinatorClient interface {
 	StoreHeartbeat(ctx context.Context, in *StoreHeartbeatRequest, opts ...grpc.CallOption) (*StoreHeartbeatResponse, error)
 	GetStore(ctx context.Context, in *GetStoreRequest, opts ...grpc.CallOption) (*GetStoreResponse, error)
 	ListStores(ctx context.Context, in *ListStoresRequest, opts ...grpc.CallOption) (*ListStoresResponse, error)
+	GetMount(ctx context.Context, in *GetMountRequest, opts ...grpc.CallOption) (*GetMountResponse, error)
+	ListMounts(ctx context.Context, in *ListMountsRequest, opts ...grpc.CallOption) (*ListMountsResponse, error)
 	RegionLiveness(ctx context.Context, in *RegionLivenessRequest, opts ...grpc.CallOption) (*RegionLivenessResponse, error)
 	PublishRootEvent(ctx context.Context, in *PublishRootEventRequest, opts ...grpc.CallOption) (*PublishRootEventResponse, error)
 	ListTransitions(ctx context.Context, in *ListTransitionsRequest, opts ...grpc.CallOption) (*ListTransitionsResponse, error)
@@ -83,6 +87,26 @@ func (c *coordinatorClient) ListStores(ctx context.Context, in *ListStoresReques
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListStoresResponse)
 	err := c.cc.Invoke(ctx, Coordinator_ListStores_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coordinatorClient) GetMount(ctx context.Context, in *GetMountRequest, opts ...grpc.CallOption) (*GetMountResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetMountResponse)
+	err := c.cc.Invoke(ctx, Coordinator_GetMount_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coordinatorClient) ListMounts(ctx context.Context, in *ListMountsRequest, opts ...grpc.CallOption) (*ListMountsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListMountsResponse)
+	err := c.cc.Invoke(ctx, Coordinator_ListMounts_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -176,6 +200,8 @@ type CoordinatorServer interface {
 	StoreHeartbeat(context.Context, *StoreHeartbeatRequest) (*StoreHeartbeatResponse, error)
 	GetStore(context.Context, *GetStoreRequest) (*GetStoreResponse, error)
 	ListStores(context.Context, *ListStoresRequest) (*ListStoresResponse, error)
+	GetMount(context.Context, *GetMountRequest) (*GetMountResponse, error)
+	ListMounts(context.Context, *ListMountsRequest) (*ListMountsResponse, error)
 	RegionLiveness(context.Context, *RegionLivenessRequest) (*RegionLivenessResponse, error)
 	PublishRootEvent(context.Context, *PublishRootEventRequest) (*PublishRootEventResponse, error)
 	ListTransitions(context.Context, *ListTransitionsRequest) (*ListTransitionsResponse, error)
@@ -201,6 +227,12 @@ func (UnimplementedCoordinatorServer) GetStore(context.Context, *GetStoreRequest
 }
 func (UnimplementedCoordinatorServer) ListStores(context.Context, *ListStoresRequest) (*ListStoresResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListStores not implemented")
+}
+func (UnimplementedCoordinatorServer) GetMount(context.Context, *GetMountRequest) (*GetMountResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMount not implemented")
+}
+func (UnimplementedCoordinatorServer) ListMounts(context.Context, *ListMountsRequest) (*ListMountsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListMounts not implemented")
 }
 func (UnimplementedCoordinatorServer) RegionLiveness(context.Context, *RegionLivenessRequest) (*RegionLivenessResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegionLiveness not implemented")
@@ -296,6 +328,42 @@ func _Coordinator_ListStores_Handler(srv interface{}, ctx context.Context, dec f
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(CoordinatorServer).ListStores(ctx, req.(*ListStoresRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Coordinator_GetMount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMountRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServer).GetMount(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Coordinator_GetMount_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoordinatorServer).GetMount(ctx, req.(*GetMountRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Coordinator_ListMounts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListMountsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServer).ListMounts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Coordinator_ListMounts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoordinatorServer).ListMounts(ctx, req.(*ListMountsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -462,6 +530,14 @@ var Coordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListStores",
 			Handler:    _Coordinator_ListStores_Handler,
+		},
+		{
+			MethodName: "GetMount",
+			Handler:    _Coordinator_GetMount_Handler,
+		},
+		{
+			MethodName: "ListMounts",
+			Handler:    _Coordinator_ListMounts_Handler,
 		},
 		{
 			MethodName: "RegionLiveness",

@@ -23,6 +23,24 @@ type fakeRunner struct {
 	mutateErrs    []error
 }
 
+type fakeMountResolver struct {
+	records map[fsmeta.MountID]MountRecord
+	err     error
+	calls   int
+}
+
+func (r *fakeMountResolver) ResolveMount(_ context.Context, mount fsmeta.MountID) (MountRecord, error) {
+	r.calls++
+	if r.err != nil {
+		return MountRecord{}, r.err
+	}
+	record, ok := r.records[mount]
+	if !ok {
+		return MountRecord{}, fsmeta.ErrMountNotRegistered
+	}
+	return record, nil
+}
+
 func newFakeRunner() *fakeRunner {
 	return &fakeRunner{
 		nextTS: 1,
@@ -185,6 +203,63 @@ func TestExecutorCreateRejectsExistingDentry(t *testing.T) {
 	require.ErrorIs(t, err, fsmeta.ErrExists)
 	require.Len(t, runner.mutations, 1)
 	require.Zero(t, runner.getCalls)
+}
+
+func TestExecutorCreateRequiresActiveMountWhenResolverConfigured(t *testing.T) {
+	t.Run("active mount", func(t *testing.T) {
+		runner := newFakeRunner()
+		resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountRecord{
+			"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+		}}
+		executor, err := New(runner, WithMountResolver(resolver))
+		require.NoError(t, err)
+
+		err = executor.Create(context.Background(), fsmeta.CreateRequest{
+			Mount:  "vol",
+			Parent: fsmeta.RootInode,
+			Name:   "file",
+			Inode:  22,
+		}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+		require.NoError(t, err)
+		require.Equal(t, 1, resolver.calls)
+		require.Len(t, runner.mutations, 1)
+	})
+
+	t.Run("missing mount", func(t *testing.T) {
+		runner := newFakeRunner()
+		resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountRecord{}}
+		executor, err := New(runner, WithMountResolver(resolver))
+		require.NoError(t, err)
+
+		err = executor.Create(context.Background(), fsmeta.CreateRequest{
+			Mount:  "missing",
+			Parent: fsmeta.RootInode,
+			Name:   "file",
+			Inode:  22,
+		}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+		require.ErrorIs(t, err, fsmeta.ErrMountNotRegistered)
+		require.Equal(t, 1, resolver.calls)
+		require.Empty(t, runner.mutations)
+	})
+
+	t.Run("retired mount", func(t *testing.T) {
+		runner := newFakeRunner()
+		resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountRecord{
+			"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1, Retired: true},
+		}}
+		executor, err := New(runner, WithMountResolver(resolver))
+		require.NoError(t, err)
+
+		err = executor.Create(context.Background(), fsmeta.CreateRequest{
+			Mount:  "vol",
+			Parent: fsmeta.RootInode,
+			Name:   "file",
+			Inode:  22,
+		}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+		require.ErrorIs(t, err, fsmeta.ErrMountRetired)
+		require.Equal(t, 1, resolver.calls)
+		require.Empty(t, runner.mutations)
+	})
 }
 
 func TestExecutorCreateTranslatesAlreadyExistsConflict(t *testing.T) {
@@ -372,13 +447,13 @@ func TestExecutorUnlinkMissingDentry(t *testing.T) {
 	require.Empty(t, runner.mutations)
 }
 
-func TestExecutorRenameMovesDentry(t *testing.T) {
+func TestExecutorRenameSubtreeMovesDentry(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "old", 22)
 	executor, err := New(runner)
 	require.NoError(t, err)
 
-	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
+	err = executor.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{
 		Mount:      "vol",
 		FromParent: 7,
 		FromName:   "old",
@@ -404,12 +479,12 @@ func TestExecutorRenameMovesDentry(t *testing.T) {
 	require.True(t, runner.mutations[0][1].GetAssertionNotExist())
 }
 
-func TestExecutorRenameRejectsMissingSource(t *testing.T) {
+func TestExecutorRenameSubtreeRejectsMissingSource(t *testing.T) {
 	runner := newFakeRunner()
 	executor, err := New(runner)
 	require.NoError(t, err)
 
-	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
+	err = executor.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{
 		Mount:      "vol",
 		FromParent: 7,
 		FromName:   "missing",
@@ -420,14 +495,14 @@ func TestExecutorRenameRejectsMissingSource(t *testing.T) {
 	require.Empty(t, runner.mutations)
 }
 
-func TestExecutorRenameRejectsExistingDestination(t *testing.T) {
+func TestExecutorRenameSubtreeRejectsExistingDestination(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "old", 22)
 	seedDentry(t, runner, "vol", 8, "existing", 23)
 	executor, err := New(runner)
 	require.NoError(t, err)
 
-	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
+	err = executor.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{
 		Mount:      "vol",
 		FromParent: 7,
 		FromName:   "old",

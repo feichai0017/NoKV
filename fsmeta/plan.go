@@ -3,8 +3,10 @@ package fsmeta
 // V0 scope:
 //   - PlanUnlink only touches the dentry. Hardlink ref-count and inode GC are
 //     intentionally out of this contract slice.
-//   - PlanRename only plans source and destination dentry keys. POSIX overwrite
-//     and file-type checks belong to the executor that interprets current values.
+//   - PlanRenameSubtree v0 only moves the subtree root dentry. Descendants refer
+//     to parent inode IDs, so they follow the moved root without key rewrites.
+//     POSIX overwrite and file-type checks belong to the executor that
+//     interprets current values.
 //   - mkdir, link, and setxattr are left for later slices after the base
 //     transaction contract is stable.
 
@@ -16,7 +18,7 @@ const (
 	OperationLookup           OperationKind = "lookup"
 	OperationReadDir          OperationKind = "readdir"
 	OperationSnapshotSubtree  OperationKind = "snapshot_subtree"
-	OperationRename           OperationKind = "rename"
+	OperationRenameSubtree    OperationKind = "rename_subtree"
 	OperationUnlink           OperationKind = "unlink"
 	OperationOpenWriteSession OperationKind = "open_write_session"
 )
@@ -62,7 +64,7 @@ type SnapshotSubtreeRequest struct {
 	RootInode InodeID
 }
 
-type RenameRequest struct {
+type RenameSubtreeRequest struct {
 	Mount      MountID
 	FromParent InodeID
 	FromName   string
@@ -179,7 +181,7 @@ func PlanSnapshotSubtree(req SnapshotSubtreeRequest) (OperationPlan, error) {
 	}, nil
 }
 
-func PlanRename(req RenameRequest) (OperationPlan, error) {
+func PlanRenameSubtree(req RenameSubtreeRequest) (OperationPlan, error) {
 	if req.FromParent == req.ToParent && req.FromName == req.ToName {
 		return OperationPlan{}, ErrInvalidRequest
 	}
@@ -192,7 +194,7 @@ func PlanRename(req RenameRequest) (OperationPlan, error) {
 		return OperationPlan{}, err
 	}
 	return OperationPlan{
-		Kind:       OperationRename,
+		Kind:       OperationRenameSubtree,
 		Mount:      req.Mount,
 		PrimaryKey: cloneBytes(from),
 		ReadKeys:   cloneKeySet(from, to),
