@@ -92,6 +92,8 @@ message ListStoresResponse {
 
 `client_addr` 是 KV RPC dial 地址。`raft_addr` 目前通常等于 `client_addr`，保留给 transport-aware scheduling 和诊断。
 
+`STORE_STATE_DOWN` 不是占位：coordinator 会根据最后一次 heartbeat 时间和 `storeHeartbeatTTL` 判断 store 是否过期。过期 store 仍然出现在 `ListStores` 中用于诊断，但 client 看到 `DOWN` 后不会继续 dial 该地址。
+
 ## 4. Coordinator 内部职责
 
 `coordinator/view.StoreStats` 保存 runtime address 和 heartbeat stats：
@@ -144,8 +146,9 @@ type Config struct {
 1. `GetRegionByKey` 得到 region descriptor。
 2. client 选择 leader store。
 3. store cache miss 时调用 `GetStore(store_id)`。
-4. dial `StoreInfo.client_addr` 并缓存连接。
-5. 连接失败时失效 store cache，重新向 coordinator resolve。
+4. 如果 `StoreInfo.state == DOWN`，直接按 store unavailable 处理。
+5. dial `StoreInfo.client_addr` 并缓存连接。
+6. 连接失败时失效 store cache，重新向 coordinator resolve。
 
 生产 client 不再接受静态 `Stores []StoreEndpoint`。测试里可以注入静态 resolver，但那只是 fake coordinator，不是运行时 fallback。
 
@@ -188,5 +191,6 @@ coordinator 不是 data-plane proxy，也不是重新变成“大脑数据库”
 - `cmd/nokv-fsmeta` 不需要 `--raft-config`。
 - `cmd/nokv-redis` 可以只用 `--coordinator-addr` 进入 raft 模式。
 - `raftstore/client` 在 store cache miss 时自动 `GetStore`。
+- coordinator 会把超过 heartbeat TTL 的 store 标记为 `DOWN`，client 看到 `DOWN` 会拒绝 dial。
 - `fsmeta/integration` 使用 coordinator-only discovery 跑完整 gRPC -> fsmeta server -> executor -> raftstore 链路。
 - `raftstore/integration` 覆盖 coordinator unavailable 后的已有连接行为和 cold client 失败路径。
