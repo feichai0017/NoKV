@@ -110,6 +110,35 @@ func TestClusterSubtreeAuthorityLifecycleRootEvents(t *testing.T) {
 	require.Equal(t, uint64(13), subtree.Frontier)
 }
 
+func TestClusterQuotaFenceRootEvents(t *testing.T) {
+	c := NewCluster()
+	require.NoError(t, c.PublishRootEvent(rootevent.MountRegistered("vol", 1, 1)))
+
+	require.NoError(t, c.PublishRootEvent(rootevent.QuotaFenceUpdated("vol", 0, 1024, 10, 1, 0)))
+	fence, ok := c.QuotaFenceBySubject("vol", 0)
+	require.True(t, ok)
+	require.Equal(t, rootstate.QuotaFence{
+		SubjectID:   rootstate.QuotaFenceKey("vol", 0),
+		Mount:       "vol",
+		LimitBytes:  1024,
+		LimitInodes: 10,
+		Era:         1,
+		UpdatedAt:   rootstate.Cursor{Term: 1, Index: 1},
+	}, fence)
+
+	err := c.ValidateRootEvent(rootevent.QuotaFenceUpdated("vol", 0, 2048, 20, 1, 0))
+	require.ErrorIs(t, err, ErrQuotaFenceConflict)
+	err = c.ValidateRootEvent(rootevent.QuotaFenceUpdated("missing", 0, 1, 1, 1, 0))
+	require.ErrorIs(t, err, ErrMountNotFound)
+
+	require.NoError(t, c.PublishRootEvent(rootevent.QuotaFenceUpdated("vol", 0, 0, 0, 2, 0)))
+	fence, ok = c.QuotaFenceBySubject("vol", 0)
+	require.True(t, ok)
+	require.Equal(t, uint64(2), fence.Era)
+	require.Zero(t, fence.LimitBytes)
+	require.Zero(t, fence.LimitInodes)
+}
+
 func TestClusterRegionHeartbeatAndRouteLookup(t *testing.T) {
 	c := NewCluster()
 	require.NoError(t, c.PublishRegionDescriptor(testDescriptor(1, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1})))

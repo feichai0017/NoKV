@@ -35,10 +35,39 @@ type fakeSubtreePublisher struct {
 	err       error
 }
 
+type fakeQuotaResolver struct {
+	err      error
+	checks   []quotaCheck
+	accounts []quotaAccount
+}
+
 type subtreePublishCall struct {
 	mount    fsmeta.MountID
 	root     fsmeta.InodeID
 	frontier uint64
+}
+
+type quotaCheck struct {
+	mount     fsmeta.MountID
+	root      fsmeta.InodeID
+	addBytes  uint64
+	addInodes uint64
+}
+
+type quotaAccount struct {
+	mount       fsmeta.MountID
+	root        fsmeta.InodeID
+	deltaBytes  int64
+	deltaInodes int64
+}
+
+func (q *fakeQuotaResolver) CheckQuota(_ context.Context, mount fsmeta.MountID, root fsmeta.InodeID, addBytes, addInodes uint64) error {
+	q.checks = append(q.checks, quotaCheck{mount: mount, root: root, addBytes: addBytes, addInodes: addInodes})
+	return q.err
+}
+
+func (q *fakeQuotaResolver) AccountQuota(mount fsmeta.MountID, root fsmeta.InodeID, deltaBytes, deltaInodes int64) {
+	q.accounts = append(q.accounts, quotaAccount{mount: mount, root: root, deltaBytes: deltaBytes, deltaInodes: deltaInodes})
 }
 
 func (p *fakeSubtreePublisher) StartSubtreeHandoff(_ context.Context, mount fsmeta.MountID, root fsmeta.InodeID, frontier uint64) error {
@@ -288,6 +317,53 @@ func TestExecutorCreateRequiresActiveMountWhenResolverConfigured(t *testing.T) {
 		require.Equal(t, 1, resolver.calls)
 		require.Empty(t, runner.mutations)
 	})
+}
+
+func TestExecutorCreateChecksAndAccountsQuota(t *testing.T) {
+	runner := newFakeRunner()
+	quota := &fakeQuotaResolver{}
+	executor, err := New(runner, WithQuotaResolver(quota))
+	require.NoError(t, err)
+
+	err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Name:   "file",
+		Inode:  22,
+	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, Size: 4096})
+	require.NoError(t, err)
+	require.Equal(t, []quotaCheck{{mount: "vol", root: 7, addBytes: 4096, addInodes: 1}}, quota.checks)
+	require.Equal(t, []quotaAccount{{mount: "vol", root: 7, deltaBytes: 4096, deltaInodes: 1}}, quota.accounts)
+}
+
+func TestExecutorCreateRejectsQuotaExceededBeforeMutation(t *testing.T) {
+	runner := newFakeRunner()
+	quota := &fakeQuotaResolver{err: fsmeta.ErrQuotaExceeded}
+	executor, err := New(runner, WithQuotaResolver(quota))
+	require.NoError(t, err)
+
+	err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Name:   "file",
+		Inode:  22,
+	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, Size: 4096})
+	require.ErrorIs(t, err, fsmeta.ErrQuotaExceeded)
+	require.Empty(t, runner.mutations)
+	require.Empty(t, quota.accounts)
+}
+
+func TestExecutorUnlinkReleasesQuotaWhenInodeExists(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "file", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
+	quota := &fakeQuotaResolver{}
+	executor, err := New(runner, WithQuotaResolver(quota))
+	require.NoError(t, err)
+
+	err = executor.Unlink(context.Background(), fsmeta.UnlinkRequest{Mount: "vol", Parent: 7, Name: "file"})
+	require.NoError(t, err)
+	require.Equal(t, []quotaAccount{{mount: "vol", root: 7, deltaBytes: -4096, deltaInodes: -1}}, quota.accounts)
 }
 
 func TestExecutorCreateTranslatesAlreadyExistsConflict(t *testing.T) {

@@ -33,4 +33,8 @@ var (
 	ErrSubtreeAuthorityConflict = errors.New("coordinator/catalog: subtree authority conflicts with rooted truth")
 	// ErrSubtreeAuthorityHandoff indicates a subtree handoff violates Succession coverage or finality.
 	ErrSubtreeAuthorityHandoff = errors.New("coordinator/catalog: invalid subtree authority handoff")
+	// ErrQuotaFenceNotFound indicates a quota-scoped operation referenced an unknown fence.
+	ErrQuotaFenceNotFound = errors.New("coordinator/catalog: quota fence is not published")
+	// ErrQuotaFenceConflict indicates a quota update regressed or conflicted with rooted truth.
+	ErrQuotaFenceConflict = errors.New("coordinator/catalog: quota fence conflicts with rooted truth")
 )

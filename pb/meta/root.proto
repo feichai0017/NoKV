@@ -38,6 +38,7 @@ enum RootEventKind {
   ROOT_EVENT_KIND_SUBTREE_AUTHORITY_DECLARED = 27;
   ROOT_EVENT_KIND_SUBTREE_HANDOFF_STARTED = 28;
   ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED = 29;
+  ROOT_EVENT_KIND_QUOTA_FENCE_UPDATED = 30;
 }
 
 message RootCursor {
@@ -66,6 +67,7 @@ message RootCheckpoint {
   repeated RootSnapshotEpoch snapshot_epochs = 7;
   repeated RootMount mounts = 8;
   repeated RootSubtreeAuthority subtrees = 9;
+  repeated RootQuotaFence quotas = 10;
 }
 
 message RootStoreMembership {
@@ -131,6 +133,17 @@ message RootSubtreeAuthority {
   string successor_authority_id = 14;
   uint64 successor_era = 15;
   uint64 inherited_frontier = 16;
+}
+
+message RootQuotaFence {
+  string subject_id = 1;
+  string mount = 2;
+  uint64 subtree_root = 3;
+  uint64 limit_bytes = 4;
+  uint64 limit_inodes = 5;
+  uint64 era = 6;
+  uint64 frontier = 7;
+  RootCursor updated_at = 8;
 }
 
 message RootAllocatorFence {
@@ -261,6 +274,7 @@ message RootEvent {
     RootSnapshotEpoch snapshot_epoch = 12;
     RootMount mount = 13;
     RootSubtreeAuthority subtree_authority = 14;
+    RootQuotaFence quota_fence = 15;
   }
 }
 

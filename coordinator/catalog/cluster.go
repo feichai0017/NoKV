@@ -31,6 +31,8 @@ type Cluster struct {
 	mounts              map[string]rootstate.MountRecord
 	subtreeMu           sync.RWMutex
 	subtrees            map[string]rootstate.SubtreeAuthority
+	quotaMu             sync.RWMutex
+	quotas              map[string]rootstate.QuotaFence
 	pendingMu           sync.RWMutex
 	pendingPeerChanges  map[uint64]rootstate.PendingPeerChange
 	pendingRangeChanges map[uint64]rootstate.PendingRangeChange
@@ -46,6 +48,7 @@ func NewCluster() *Cluster {
 		storeMemberships:    make(map[uint64]rootstate.StoreMembership),
 		mounts:              make(map[string]rootstate.MountRecord),
 		subtrees:            make(map[string]rootstate.SubtreeAuthority),
+		quotas:              make(map[string]rootstate.QuotaFence),
 		pendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
 		pendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
 	}
@@ -194,6 +197,29 @@ func (c *Cluster) SubtreeAuthoritySnapshot() map[string]rootstate.SubtreeAuthori
 	return rootstate.CloneSubtreeAuthorities(c.subtrees)
 }
 
+func (c *Cluster) QuotaFenceByID(subjectID string) (rootstate.QuotaFence, bool) {
+	if c == nil || subjectID == "" {
+		return rootstate.QuotaFence{}, false
+	}
+	c.quotaMu.RLock()
+	defer c.quotaMu.RUnlock()
+	fence, ok := c.quotas[subjectID]
+	return fence, ok
+}
+
+func (c *Cluster) QuotaFenceBySubject(mount string, rootInode uint64) (rootstate.QuotaFence, bool) {
+	return c.QuotaFenceByID(rootstate.QuotaFenceKey(mount, rootInode))
+}
+
+func (c *Cluster) QuotaFenceSnapshot() map[string]rootstate.QuotaFence {
+	if c == nil {
+		return make(map[string]rootstate.QuotaFence)
+	}
+	c.quotaMu.RLock()
+	defer c.quotaMu.RUnlock()
+	return rootstate.CloneQuotaFences(c.quotas)
+}
+
 // PublishRegionDescriptor applies one rooted region descriptor into the runtime
 // Coordinator route view.
 func (c *Cluster) PublishRegionDescriptor(desc descriptor.Descriptor) error {
@@ -228,6 +254,7 @@ func (c *Cluster) PublishRootEvent(event rootevent.Event) error {
 	c.applyRootEventToStoreMemberships(event)
 	c.applyRootEventToMounts(event)
 	c.applyRootEventToSubtreeAuthorities(snapshot, event)
+	c.applyRootEventToQuotaFences(snapshot, event)
 	c.applyRootEventToTransitions(snapshot, event)
 	return nil
 }
@@ -387,6 +414,7 @@ func (c *Cluster) ReplaceRootSnapshot(snapshot rootstate.Snapshot, token rootsto
 	c.replaceStoreMemberships(snapshot.Stores)
 	c.replaceMounts(snapshot.Mounts)
 	c.replaceSubtreeAuthorities(snapshot.Subtrees)
+	c.replaceQuotaFences(snapshot.Quotas)
 	c.rootMu.Lock()
 	c.rootToken = token
 	c.rootMu.Unlock()
@@ -577,6 +605,23 @@ func (c *Cluster) replaceSubtreeAuthorities(subtrees map[string]rootstate.Subtre
 	c.subtreeMu.Unlock()
 }
 
+func (c *Cluster) applyRootEventToQuotaFences(snapshot rootstate.Snapshot, event rootevent.Event) {
+	if c == nil || event.QuotaFence == nil {
+		return
+	}
+	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.NextCursor(snapshot.State.LastCommitted), event)
+	c.replaceQuotaFences(snapshot.Quotas)
+}
+
+func (c *Cluster) replaceQuotaFences(quotas map[string]rootstate.QuotaFence) {
+	if c == nil {
+		return
+	}
+	c.quotaMu.Lock()
+	c.quotas = rootstate.CloneQuotaFences(quotas)
+	c.quotaMu.Unlock()
+}
+
 func validateMountEvent(snapshot rootstate.Snapshot, event rootevent.Event) error {
 	if event.Mount == nil {
 		return nil
@@ -660,12 +705,36 @@ func validateSubtreeAuthorityEvent(snapshot rootstate.Snapshot, event rootevent.
 	return nil
 }
 
+func validateQuotaFenceEvent(snapshot rootstate.Snapshot, event rootevent.Event) error {
+	if event.QuotaFence == nil {
+		return nil
+	}
+	payload := event.QuotaFence
+	key := rootstate.QuotaFenceKey(payload.Mount, payload.RootInode)
+	if key == "" {
+		return ErrInvalidMountID
+	}
+	mount := snapshot.Mounts[payload.Mount]
+	if mount.MountID == "" {
+		return ErrMountNotFound
+	}
+	if mount.State == rootstate.MountStateRetired {
+		return ErrMountRetired
+	}
+	current := snapshot.Quotas[key]
+	if current.SubjectID != "" && payload.Era <= current.Era {
+		return ErrQuotaFenceConflict
+	}
+	return nil
+}
+
 func (c *Cluster) rootedSnapshot() rootstate.Snapshot {
 	if c == nil {
 		return rootstate.Snapshot{
 			Stores:              make(map[uint64]rootstate.StoreMembership),
 			Mounts:              make(map[string]rootstate.MountRecord),
 			Subtrees:            make(map[string]rootstate.SubtreeAuthority),
+			Quotas:              make(map[string]rootstate.QuotaFence),
 			Descriptors:         make(map[uint64]descriptor.Descriptor),
 			PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
 			PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
@@ -675,6 +744,7 @@ func (c *Cluster) rootedSnapshot() rootstate.Snapshot {
 		Stores:              c.StoreMembershipSnapshot(),
 		Mounts:              c.MountSnapshot(),
 		Subtrees:            c.SubtreeAuthoritySnapshot(),
+		Quotas:              c.QuotaFenceSnapshot(),
 		Descriptors:         c.regions.DescriptorsSnapshot(),
 		PendingPeerChanges:  c.clonePendingPeerChanges(),
 		PendingRangeChanges: c.clonePendingRangeChanges(),
@@ -689,6 +759,9 @@ func (c *Cluster) validateRootEventAgainstSnapshot(snapshot rootstate.Snapshot, 
 		return err
 	}
 	if err := validateSubtreeAuthorityEvent(snapshot, event); err != nil {
+		return err
+	}
+	if err := validateQuotaFenceEvent(snapshot, event); err != nil {
 		return err
 	}
 	regions := pdview.NewRegionDirectoryView()

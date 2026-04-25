@@ -110,6 +110,7 @@ func (s *Service) publishRootSnapshot(snapshot rootview.Snapshot) {
 			Stores:              snapshot.Stores,
 			Subtrees:            snapshot.Subtrees,
 			Mounts:              snapshot.Mounts,
+			Quotas:              snapshot.Quotas,
 			Descriptors:         snapshot.Descriptors,
 			PendingPeerChanges:  snapshot.PendingPeerChanges,
 			PendingRangeChanges: snapshot.PendingRangeChanges,

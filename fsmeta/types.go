@@ -42,6 +42,7 @@ var (
 	ErrNotFound           = errors.New("fsmeta: entry not found")
 	ErrMountNotRegistered = errors.New("fsmeta: mount is not registered")
 	ErrMountRetired       = errors.New("fsmeta: mount is retired")
+	ErrQuotaExceeded      = errors.New("fsmeta: quota exceeded")
 )
 
 // MountID identifies one filesystem namespace hosted inside fsmeta.

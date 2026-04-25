@@ -23,6 +23,7 @@ type Options struct {
 	DialOptions     []grpc.DialOption
 	DialTimeout     time.Duration
 	MountTTL        time.Duration
+	QuotaTTL        time.Duration
 
 	// MonitorInterval controls the rooted mount lifecycle poll interval.
 	// Zero uses the package default; negative disables the monitor.
@@ -36,6 +37,7 @@ type Runtime struct {
 	Watcher           fsmeta.Watcher
 	SnapshotPublisher fsmeta.SnapshotPublisher
 	MountResolver     MountResolver
+	QuotaResolver     QuotaResolver
 
 	close func() error
 	once  sync.Once
@@ -98,8 +100,13 @@ func OpenWithRaftstore(ctx context.Context, opts Options) (*Runtime, error) {
 		mountTTL = defaultMountTTL
 	}
 	mounts := &mountCache{coord: coord, ttl: mountTTL}
+	quotaTTL := opts.QuotaTTL
+	if quotaTTL == 0 {
+		quotaTTL = defaultQuotaTTL
+	}
+	quotas := &quotaCache{coord: coord, ttl: quotaTTL}
 	pub := rootPublisher{coord: coord}
-	exec, err := New(runner, WithMountResolver(mounts), WithSubtreeHandoffPublisher(pub))
+	exec, err := New(runner, WithMountResolver(mounts), WithQuotaResolver(quotas), WithSubtreeHandoffPublisher(pub))
 	if err != nil {
 		_ = kv.Close()
 		_ = coord.Close()
@@ -124,6 +131,7 @@ func OpenWithRaftstore(ctx context.Context, opts Options) (*Runtime, error) {
 		Watcher:           watcher{Router: router, source: source, mounts: mounts},
 		SnapshotPublisher: pub,
 		MountResolver:     mounts,
+		QuotaResolver:     quotas,
 	}
 	rt.close = func() error {
 		var first error

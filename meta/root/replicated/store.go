@@ -38,6 +38,7 @@ type Store struct {
 	snapshots          map[string]rootstate.SnapshotEpoch
 	mounts             map[string]rootstate.MountRecord
 	subtrees           map[string]rootstate.SubtreeAuthority
+	quotas             map[string]rootstate.QuotaFence
 	descs              map[uint64]descriptor.Descriptor
 	pending            map[uint64]rootstate.PendingPeerChange
 	pendingRange       map[uint64]rootstate.PendingRangeChange
@@ -74,6 +75,10 @@ func Open(cfg Config) (*Store, error) {
 	if subtrees == nil {
 		subtrees = make(map[string]rootstate.SubtreeAuthority)
 	}
+	quotas := bootstrap.Snapshot.Quotas
+	if quotas == nil {
+		quotas = make(map[string]rootstate.QuotaFence)
+	}
 	return &Store{
 		driver:             cfg.Driver,
 		state:              bootstrap.Snapshot.State,
@@ -81,6 +86,7 @@ func Open(cfg Config) (*Store, error) {
 		snapshots:          snapshots,
 		mounts:             mounts,
 		subtrees:           subtrees,
+		quotas:             quotas,
 		descs:              bootstrap.Snapshot.Descriptors,
 		pending:            bootstrap.Snapshot.PendingPeerChanges,
 		pendingRange:       bootstrap.Snapshot.PendingRangeChanges,
@@ -189,6 +195,7 @@ func (s *Store) Snapshot() (rootstate.Snapshot, error) {
 		SnapshotEpochs:      s.snapshots,
 		Mounts:              s.mounts,
 		Subtrees:            s.subtrees,
+		Quotas:              s.quotas,
 		Descriptors:         s.descs,
 		PendingPeerChanges:  s.pending,
 		PendingRangeChanges: s.pendingRange,
@@ -237,6 +244,7 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(s.snapshots),
 		Mounts:              rootstate.CloneMounts(s.mounts),
 		Subtrees:            rootstate.CloneSubtreeAuthorities(s.subtrees),
+		Quotas:              rootstate.CloneQuotaFences(s.quotas),
 		Descriptors:         rootstate.CloneDescriptors(s.descs),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.pending),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.pendingRange),
@@ -268,6 +276,7 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 	s.snapshots = snapshot.SnapshotEpochs
 	s.mounts = snapshot.Mounts
 	s.subtrees = snapshot.Subtrees
+	s.quotas = snapshot.Quotas
 	s.descs = snapshot.Descriptors
 	s.pending = snapshot.PendingPeerChanges
 	s.pendingRange = snapshot.PendingRangeChanges
@@ -525,6 +534,7 @@ func (s *Store) maybeCompactLocked() {
 		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(s.snapshots),
 		Mounts:              rootstate.CloneMounts(s.mounts),
 		Subtrees:            rootstate.CloneSubtreeAuthorities(s.subtrees),
+		Quotas:              rootstate.CloneQuotaFences(s.quotas),
 		Descriptors:         rootstate.CloneDescriptors(s.descs),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.pending),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.pendingRange),
@@ -564,6 +574,10 @@ func (s *Store) applyObserved(observed rootstorage.ObservedCommitted) {
 	s.subtrees = bootstrap.Snapshot.Subtrees
 	if s.subtrees == nil {
 		s.subtrees = make(map[string]rootstate.SubtreeAuthority)
+	}
+	s.quotas = bootstrap.Snapshot.Quotas
+	if s.quotas == nil {
+		s.quotas = make(map[string]rootstate.QuotaFence)
 	}
 	s.descs = bootstrap.Snapshot.Descriptors
 	s.pending = bootstrap.Snapshot.PendingPeerChanges
