@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/feichai0017/NoKV/benchmark/fsmeta/workload"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaclient "github.com/feichai0017/NoKV/fsmeta/client"
-	"github.com/feichai0017/NoKV/fsmeta/workload"
 )
 
 const benchEnvKey = "NOKV_FSMETA_BENCH"
