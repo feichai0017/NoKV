@@ -151,6 +151,14 @@ func TestRootSnapshotTailAndAllocatorRoundTrip(t *testing.T) {
 			IDFence:       50,
 			TSOFence:      60,
 		},
+		Stores: map[uint64]rootstate.StoreMembership{
+			1: {
+				StoreID:   1,
+				State:     rootstate.StoreMembershipRetired,
+				JoinedAt:  rootproto.Cursor{Term: 1, Index: 1},
+				RetiredAt: rootproto.Cursor{Term: 2, Index: 8},
+			},
+		},
 		Descriptors: map[uint64]descriptor.Descriptor{
 			desc.RegionID: desc,
 		},
@@ -245,7 +253,7 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 	)
 
 	events := []rootevent.Event{
-		rootevent.StoreJoined(1, "s1"),
+		rootevent.StoreJoined(1),
 		rootevent.IDAllocatorFenced(10),
 		rootevent.TenureGranted("coord", 123, 7, rootproto.MandateAllocID, "pred", frontiers),
 		rootevent.TenureSealed("coord", 7, rootproto.MandateAllocID, frontiers),
@@ -281,7 +289,7 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 
 	kinds := []rootevent.Kind{
 		rootevent.KindStoreJoined,
-		rootevent.KindStoreLeft,
+		rootevent.KindStoreRetired,
 		rootevent.KindIDAllocatorFenced,
 		rootevent.KindTSOAllocatorFenced,
 		rootevent.KindRegionBootstrap,
