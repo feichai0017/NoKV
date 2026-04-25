@@ -129,6 +129,44 @@ Current scope limits:
   container on loopback; it is still a single-host impairment setup, not a
   multi-host cluster benchmark
 
+## FSMetadata Native-vs-Generic Evaluation
+
+The fsmeta benchmark compares two drivers against the same NoKV cluster and the
+same metadata workload:
+
+- `native-fsmeta`: calls the `nokv-fsmeta` gRPC service. This path exercises
+  native metadata operations such as server-side create assertions and
+  `ReadDirPlus`.
+- `generic-kv`: bypasses the fsmeta service and treats fsmeta as a plain KV
+  schema over raftstore. This path uses client-side read-then-write checks and
+  implements `ReadDirPlus` as scan plus N point reads.
+
+Prerequisites:
+
+- a running NoKV coordinator and raftstore nodes
+- `nokv-fsmeta` running only when `native-fsmeta` is selected
+- the coordinator endpoint reachable by the benchmark when `generic-kv` is
+  selected
+
+Example:
+
+```bash
+NOKV_FSMETA_BENCH=1 go test ./fsmeta -run TestBenchmarkFSMeta -count=1 -v -args \
+  -fsmeta_drivers native-fsmeta,generic-kv \
+  -fsmeta_addr 127.0.0.1:8090 \
+  -fsmeta_coordinator_addr 127.0.0.1:2379 \
+  -fsmeta_workloads checkpoint-storm,hotspot-fanin \
+  -fsmeta_readdirplus=true
+```
+
+The summary CSV is written under `data/fsmeta/results/` unless
+`-fsmeta_output` is set. Rows include a `driver` column so native and generic
+results can be plotted from one file.
+
+Curated result CSVs that are referenced by documentation live in
+`fsmeta/results/`. Local ad-hoc runs under `data/fsmeta/results/` are ignored by
+Git.
+
 ## Research Plotting
 
 The `benchmark/plot` subpackage provides publication-oriented plotting helpers

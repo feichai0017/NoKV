@@ -44,6 +44,7 @@ services:
       - "/etc/nokv/raft_config.json"
       - "--path-template"
       - "/volumes/store-{id}"
+      - "--skip-existing"
     volumes:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
       - store1-data:/volumes/store-1
@@ -275,6 +276,25 @@ services:
       - "6380:6380"   # RESP gateway — redis-cli -p 6380
       - "9300:9300"   # expvar
     expose: ["9300"]
+    depends_on:
+      store-1: { condition: service_started }
+      store-2: { condition: service_started }
+      store-3: { condition: service_started }
+      coordinator-1: { condition: service_started }
+
+  # ============= FSMETA GATEWAY =============
+  fsmeta:
+    <<: *common
+    container_name: nokv-fsmeta
+    entrypoint: ["/usr/local/bin/nokv-fsmeta"]
+    command:
+      - "--addr=0.0.0.0:8090"
+      - "--coordinator-addr=nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379"
+      - "--metrics-addr=0.0.0.0:9400"
+    ports:
+      - "8090:8090"   # FSMetadata gRPC
+      - "9400:9400"   # expvar
+    expose: ["8090", "9400"]
     depends_on:
       store-1: { condition: service_started }
       store-2: { condition: service_started }

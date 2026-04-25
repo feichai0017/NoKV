@@ -32,6 +32,7 @@
 - [Coordinator](coordinator.md)
 - [Rooted Truth (meta/root)](rooted_truth.md)
 - [Percolator](percolator.md)
+- [FSMetadata](fsmeta.md)
 - [Migration](migration.md)
 - [Recovery](recovery.md)
 
@@ -66,3 +67,4 @@
   - [2026-04-12 Coordinator 和 meta/root 分离部署设计](notes/2026-04-12-coordinator-meta-separation.md)
   - [2026-04-24 fsmeta 定位：面向分布式文件系统的元数据底座](notes/2026-04-24-fsmeta-positioning.md)
   - [2026-04-25 Coordinator 驱动的 Store Registry](notes/2026-04-25-coordinator-store-registry.md)
+  - [2026-04-25 fsmeta Stage 1 benchmark 结果](notes/2026-04-25-fsmeta-stage1-benchmark-results.md)

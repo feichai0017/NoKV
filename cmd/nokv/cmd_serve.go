@@ -59,8 +59,8 @@ func runServeCmd(w io.Writer, args []string) error {
 	}
 
 	var cfg *config.File
+	scopeNorm := strings.ToLower(strings.TrimSpace(*scope))
 	if strings.TrimSpace(*configPath) != "" {
-		scopeNorm := strings.ToLower(strings.TrimSpace(*scope))
 		if scopeNorm != "host" && scopeNorm != "docker" {
 			return fmt.Errorf("invalid serve scope %q (expected host|docker)", *scope)
 		}
@@ -169,10 +169,12 @@ func runServeCmd(w io.Writer, args []string) error {
 			Raft: db.RaftLog(),
 		},
 		Store: storepkg.Config{
-			StoreID:   *storeID,
-			LocalMeta: localMeta,
-			WorkDir:   *workDir,
-			Scheduler: coordScheduler,
+			StoreID:    *storeID,
+			ClientAddr: resolveStoreAdvertiseAddr(cfg, *storeID, scopeNorm),
+			RaftAddr:   resolveStoreAdvertiseAddr(cfg, *storeID, scopeNorm),
+			LocalMeta:  localMeta,
+			WorkDir:    *workDir,
+			Scheduler:  coordScheduler,
 		},
 		EnableRaftDebugLog: *raftDebugLog,
 		RaftTickInterval:   *raftTickInterval,
@@ -289,6 +291,13 @@ func resolveTransportPeers(snapshot map[uint64]localmeta.RegionMeta, localStoreI
 		return nil, fmt.Errorf("serve unused --store-addr override for store %d: local metadata does not reference that remote store", storeID)
 	}
 	return out, nil
+}
+
+func resolveStoreAdvertiseAddr(cfg *config.File, storeID uint64, scope string) string {
+	if cfg == nil || storeID == 0 {
+		return ""
+	}
+	return strings.TrimSpace(cfg.ResolveStoreAddr(storeID, scope))
 }
 
 func collectRemotePeers(snapshot map[uint64]localmeta.RegionMeta, localStoreID uint64) map[uint64]uint64 {

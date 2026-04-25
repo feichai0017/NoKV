@@ -8,6 +8,7 @@ import (
 	"io"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,6 +19,9 @@ import (
 const (
 	CheckpointStorm = "checkpoint-storm"
 	HotspotFanIn    = "hotspot-fanin"
+
+	DriverNativeFSMetadata = "native-fsmeta"
+	DriverGenericKV        = "generic-kv"
 )
 
 var ErrWorkloadFailed = errors.New("benchmark/fsmeta/workload: workload completed with operation errors")
@@ -52,6 +56,7 @@ type HotspotFanInConfig struct {
 
 type Result struct {
 	Name      string
+	Driver    string
 	RunID     string
 	StartedAt time.Time
 	Duration  time.Duration
@@ -68,6 +73,7 @@ type Sample struct {
 
 type SummaryRow struct {
 	Workload     string
+	Driver       string
 	RunID        string
 	Operation    string
 	Count        int
@@ -240,6 +246,7 @@ func SummaryRows(result Result) []SummaryRow {
 		}
 		rows = append(rows, SummaryRow{
 			Workload:     result.Name,
+			Driver:       result.Driver,
 			RunID:        result.RunID,
 			Operation:    op,
 			Count:        count,
@@ -259,6 +266,7 @@ func WriteSummaryCSV(w io.Writer, rows []SummaryRow) error {
 	cw := csv.NewWriter(w)
 	if err := cw.Write([]string{
 		"workload",
+		"driver",
 		"run_id",
 		"operation",
 		"count",
@@ -275,6 +283,7 @@ func WriteSummaryCSV(w io.Writer, rows []SummaryRow) error {
 	for _, row := range rows {
 		if err := cw.Write([]string{
 			row.Workload,
+			row.Driver,
 			row.RunID,
 			row.Operation,
 			strconv.Itoa(row.Count),
@@ -350,9 +359,29 @@ func finishResult(name, runID string, started time.Time, samples []Sample) (Resu
 		}
 	}
 	if result.Errors > 0 {
-		return result, fmt.Errorf("%w: %d/%d operations failed", ErrWorkloadFailed, result.Errors, result.Ops)
+		return result, fmt.Errorf("%w: %d/%d operations failed; samples: %s", ErrWorkloadFailed, result.Errors, result.Ops, firstErrorSummary(samples, 3))
 	}
 	return result, nil
+}
+
+func firstErrorSummary(samples []Sample, limit int) string {
+	if limit <= 0 {
+		limit = 1
+	}
+	out := make([]string, 0, limit)
+	for _, sample := range samples {
+		if sample.Error == "" {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s: %s", sample.Operation, sample.Error))
+		if len(out) >= limit {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return "none"
+	}
+	return strings.Join(out, "; ")
 }
 
 func normalizeCheckpointStormConfig(cfg CheckpointStormConfig) CheckpointStormConfig {
