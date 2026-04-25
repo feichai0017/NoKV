@@ -51,6 +51,17 @@ func snapshotSubtreeResponseToProto(token fsmeta.SnapshotSubtreeToken) *fsmetapb
 	}
 }
 
+func retireSnapshotSubtreeRequestFromProto(req *fsmetapb.RetireSnapshotSubtreeRequest) fsmeta.SnapshotSubtreeToken {
+	if req == nil {
+		return fsmeta.SnapshotSubtreeToken{}
+	}
+	return fsmeta.SnapshotSubtreeToken{
+		Mount:       fsmeta.MountID(req.GetMount()),
+		RootInode:   fsmeta.InodeID(req.GetRootInode()),
+		ReadVersion: req.GetReadVersion(),
+	}
+}
+
 func renameRequestFromProto(req *fsmetapb.RenameRequest) fsmeta.RenameRequest {
 	return fsmeta.RenameRequest{
 		Mount:      fsmeta.MountID(req.GetMount()),

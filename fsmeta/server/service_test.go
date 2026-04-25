@@ -189,6 +189,7 @@ func TestGRPCServiceWatchSubtree(t *testing.T) {
 	ready, err := stream.Recv()
 	require.NoError(t, err)
 	require.NotNil(t, ready.GetReady())
+	require.Equal(t, uint64(3), ready.GetReady().GetCursor().GetIndex())
 
 	evt := fsmeta.WatchEvent{
 		Cursor:        fsmeta.WatchCursor{RegionID: 1, Term: 2, Index: 3},
@@ -243,6 +244,20 @@ func TestGRPCServiceSnapshotSubtreeRetiresTokenAfterPublishFailure(t *testing.T)
 	require.Equal(t, want, publisher.retired)
 }
 
+func TestGRPCServiceRetireSnapshotSubtree(t *testing.T) {
+	publisher := &fakeSnapshotPublisher{}
+	client, cleanup := openBufconnClient(t, &fakeExecutor{}, WithSnapshotPublisher(publisher))
+	defer cleanup()
+
+	_, err := client.RetireSnapshotSubtree(context.Background(), &fsmetapb.RetireSnapshotSubtreeRequest{
+		Mount:       "vol",
+		RootInode:   42,
+		ReadVersion: 1234,
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 1234}, publisher.retired)
+}
+
 type fakeSnapshotPublisher struct {
 	token       fsmeta.SnapshotSubtreeToken
 	retired     fsmeta.SnapshotSubtreeToken
@@ -278,14 +293,22 @@ type fakeWatchSub struct {
 	events chan fsmeta.WatchEvent
 	acks   []fsmeta.WatchCursor
 	err    error
+	ready  fsmeta.WatchCursor
 }
 
 func newFakeWatchSub(buffer int) *fakeWatchSub {
-	return &fakeWatchSub{events: make(chan fsmeta.WatchEvent, buffer)}
+	return &fakeWatchSub{
+		events: make(chan fsmeta.WatchEvent, buffer),
+		ready:  fsmeta.WatchCursor{RegionID: 1, Term: 2, Index: 3},
+	}
 }
 
 func (s *fakeWatchSub) Events() <-chan fsmeta.WatchEvent {
 	return s.events
+}
+
+func (s *fakeWatchSub) ReadyCursor() fsmeta.WatchCursor {
+	return s.ready
 }
 
 func (s *fakeWatchSub) Ack(cursor fsmeta.WatchCursor) {

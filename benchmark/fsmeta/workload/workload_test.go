@@ -181,6 +181,10 @@ func (s *fakeWatchStream) Recv() (fsmeta.WatchEvent, error) {
 	return <-s.events, nil
 }
 
+func (s *fakeWatchStream) ReadyCursor() fsmeta.WatchCursor {
+	return fsmeta.WatchCursor{}
+}
+
 func (s *fakeWatchStream) Ack(fsmeta.WatchCursor) error {
 	return nil
 }

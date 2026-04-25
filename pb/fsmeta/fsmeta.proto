@@ -141,6 +141,14 @@ message SnapshotSubtreeResponse {
   uint64 read_version = 3;
 }
 
+message RetireSnapshotSubtreeRequest {
+  string mount = 1;
+  uint64 root_inode = 2;
+  uint64 read_version = 3;
+}
+
+message RetireSnapshotSubtreeResponse {}
+
 message RenameRequest {
   string mount = 1;
   uint64 from_parent = 2;
@@ -166,6 +174,7 @@ service FSMetadata {
   rpc ReadDirPlus(ReadDirRequest) returns (ReadDirPlusResponse);
   rpc WatchSubtree(stream WatchAckOrSubscribe) returns (stream WatchSubtreeResponse);
   rpc SnapshotSubtree(SnapshotSubtreeRequest) returns (SnapshotSubtreeResponse);
+  rpc RetireSnapshotSubtree(RetireSnapshotSubtreeRequest) returns (RetireSnapshotSubtreeResponse);
   rpc Rename(RenameRequest) returns (RenameResponse);
   rpc Unlink(UnlinkRequest) returns (UnlinkResponse);
 }

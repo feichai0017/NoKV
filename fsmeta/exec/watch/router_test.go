@@ -120,6 +120,71 @@ func TestRouterDeduplicatesReplicatedApplyEvents(t *testing.T) {
 	}
 }
 
+func TestRouterReplaysEventsAfterResumeCursor(t *testing.T) {
+	router := NewRouter()
+	prefix := []byte("k/")
+	first := fsmeta.WatchEvent{
+		Cursor:        fsmeta.WatchCursor{RegionID: 1, Term: 1, Index: 1},
+		CommitVersion: 10,
+		Source:        fsmeta.WatchEventSourceCommit,
+		Key:           []byte("k/a"),
+	}
+	second := fsmeta.WatchEvent{
+		Cursor:        fsmeta.WatchCursor{RegionID: 1, Term: 1, Index: 2},
+		CommitVersion: 11,
+		Source:        fsmeta.WatchEventSourceCommit,
+		Key:           []byte("k/b"),
+	}
+	thirdOtherPrefix := fsmeta.WatchEvent{
+		Cursor:        fsmeta.WatchCursor{RegionID: 1, Term: 1, Index: 3},
+		CommitVersion: 12,
+		Source:        fsmeta.WatchEventSourceCommit,
+		Key:           []byte("other/c"),
+	}
+	router.Publish(first)
+	router.Publish(second)
+	router.Publish(thirdOtherPrefix)
+
+	sub, err := router.Subscribe(context.Background(), fsmeta.WatchRequest{
+		KeyPrefix:    prefix,
+		ResumeCursor: first.Cursor,
+	})
+	require.NoError(t, err)
+	defer sub.Close()
+	require.Equal(t, thirdOtherPrefix.Cursor, sub.ReadyCursor())
+	require.Equal(t, second, <-sub.Events())
+	select {
+	case got := <-sub.Events():
+		t.Fatalf("unexpected extra replay event: %+v", got)
+	default:
+	}
+
+	live := fsmeta.WatchEvent{
+		Cursor:        fsmeta.WatchCursor{RegionID: 1, Term: 1, Index: 4},
+		CommitVersion: 13,
+		Source:        fsmeta.WatchEventSourceCommit,
+		Key:           []byte("k/d"),
+	}
+	router.Publish(live)
+	require.Equal(t, live, <-sub.Events())
+}
+
+func TestRouterRejectsExpiredResumeCursor(t *testing.T) {
+	router := NewRouter()
+	router.Publish(fsmeta.WatchEvent{
+		Cursor:        fsmeta.WatchCursor{RegionID: 1, Term: 1, Index: 10},
+		CommitVersion: 20,
+		Source:        fsmeta.WatchEventSourceCommit,
+		Key:           []byte("k/current"),
+	})
+
+	_, err := router.Subscribe(context.Background(), fsmeta.WatchRequest{
+		KeyPrefix:    []byte("k/"),
+		ResumeCursor: fsmeta.WatchCursor{RegionID: 1, Term: 1, Index: 9},
+	})
+	require.ErrorIs(t, err, fsmeta.ErrWatchCursorExpired)
+}
+
 func TestWatchPrefixRejectsRecursiveInodeSubtree(t *testing.T) {
 	_, err := fsmeta.WatchPrefix(fsmeta.WatchRequest{
 		Mount:              "vol",

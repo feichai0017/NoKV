@@ -80,6 +80,7 @@ func main() {
 	}()
 
 	if *metricsAddr != "" {
+		publishExpvarOnce("nokv_fsmeta_executor", expvar.Func(func() any { return executor.Stats() }))
 		if stats, ok := watcher.(interface{ Stats() map[string]any }); ok {
 			publishExpvarOnce("nokv_fsmeta_watch", expvar.Func(func() any { return stats.Stats() }))
 		}
@@ -179,7 +180,27 @@ func newExecutor(ctx context.Context, coordAddr string) (*fsmetaexec.Executor, f
 		}
 		return errAll
 	}
-	return executor, router, snapshotPublisher, closer, nil
+	return executor, fsmetaWatchRuntime{Router: router, source: source}, snapshotPublisher, closer, nil
+}
+
+type fsmetaWatchRuntime struct {
+	*fsmetawatch.Router
+	source *fsmetawatch.RemoteSource
+}
+
+func (w fsmetaWatchRuntime) Stats() map[string]any {
+	out := map[string]any{}
+	if w.Router != nil {
+		for key, value := range w.Router.Stats() {
+			out[key] = value
+		}
+	}
+	if w.source != nil {
+		for key, value := range w.source.Stats() {
+			out[key] = value
+		}
+	}
+	return out
 }
 
 type rootSnapshotPublisher struct {

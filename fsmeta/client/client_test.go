@@ -134,6 +134,7 @@ func TestTypedClientWatchSubtree(t *testing.T) {
 		BackPressureWindow: 4,
 	})
 	require.NoError(t, err)
+	require.Equal(t, watcher.sub.ready, stream.ReadyCursor())
 
 	require.Eventually(t, func() bool {
 		return string(watcher.req.KeyPrefix) == "fsm/" && watcher.req.BackPressureWindow == 4
@@ -156,7 +157,8 @@ func TestTypedClientWatchSubtree(t *testing.T) {
 }
 
 func TestTypedClientSnapshotSubtree(t *testing.T) {
-	cli, cleanup := openBufconnClient(t, &fakeExecutor{})
+	publisher := &fakeSnapshotPublisher{}
+	cli, cleanup := openBufconnClient(t, &fakeExecutor{}, fsmetaserver.WithSnapshotPublisher(publisher))
 	defer cleanup()
 
 	token, err := cli.SnapshotSubtree(context.Background(), fsmeta.SnapshotSubtreeRequest{
@@ -165,6 +167,21 @@ func TestTypedClientSnapshotSubtree(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 5678}, token)
+	require.NoError(t, cli.RetireSnapshotSubtree(context.Background(), token))
+	require.Equal(t, token, publisher.retired)
+}
+
+type fakeSnapshotPublisher struct {
+	retired fsmeta.SnapshotSubtreeToken
+}
+
+func (p *fakeSnapshotPublisher) PublishSnapshotSubtree(context.Context, fsmeta.SnapshotSubtreeToken) error {
+	return nil
+}
+
+func (p *fakeSnapshotPublisher) RetireSnapshotSubtree(_ context.Context, token fsmeta.SnapshotSubtreeToken) error {
+	p.retired = token
+	return nil
 }
 
 type fakeWatcher struct {
@@ -180,14 +197,22 @@ func (w *fakeWatcher) Subscribe(_ context.Context, req fsmeta.WatchRequest) (fsm
 type fakeWatchSub struct {
 	events chan fsmeta.WatchEvent
 	acks   []fsmeta.WatchCursor
+	ready  fsmeta.WatchCursor
 }
 
 func newFakeWatchSub(buffer int) *fakeWatchSub {
-	return &fakeWatchSub{events: make(chan fsmeta.WatchEvent, buffer)}
+	return &fakeWatchSub{
+		events: make(chan fsmeta.WatchEvent, buffer),
+		ready:  fsmeta.WatchCursor{RegionID: 8, Term: 1, Index: 1},
+	}
 }
 
 func (s *fakeWatchSub) Events() <-chan fsmeta.WatchEvent {
 	return s.events
+}
+
+func (s *fakeWatchSub) ReadyCursor() fsmeta.WatchCursor {
+	return s.ready
 }
 
 func (s *fakeWatchSub) Ack(cursor fsmeta.WatchCursor) {
