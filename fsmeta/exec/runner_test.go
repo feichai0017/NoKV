@@ -29,6 +29,34 @@ type fakeMountResolver struct {
 	calls   int
 }
 
+type fakeSubtreePublisher struct {
+	starts    []subtreePublishCall
+	completes []subtreePublishCall
+	err       error
+}
+
+type subtreePublishCall struct {
+	mount    fsmeta.MountID
+	root     fsmeta.InodeID
+	frontier uint64
+}
+
+func (p *fakeSubtreePublisher) StartSubtreeHandoff(_ context.Context, mount fsmeta.MountID, root fsmeta.InodeID, frontier uint64) error {
+	if p.err != nil {
+		return p.err
+	}
+	p.starts = append(p.starts, subtreePublishCall{mount: mount, root: root, frontier: frontier})
+	return nil
+}
+
+func (p *fakeSubtreePublisher) CompleteSubtreeHandoff(_ context.Context, mount fsmeta.MountID, root fsmeta.InodeID, frontier uint64) error {
+	if p.err != nil {
+		return p.err
+	}
+	p.completes = append(p.completes, subtreePublishCall{mount: mount, root: root, frontier: frontier})
+	return nil
+}
+
 func (r *fakeMountResolver) ResolveMount(_ context.Context, mount fsmeta.MountID) (MountRecord, error) {
 	r.calls++
 	if r.err != nil {
@@ -450,7 +478,11 @@ func TestExecutorUnlinkMissingDentry(t *testing.T) {
 func TestExecutorRenameSubtreeMovesDentry(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "old", 22)
-	executor, err := New(runner)
+	publisher := &fakeSubtreePublisher{}
+	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountRecord{
+		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+	}}
+	executor, err := New(runner, WithMountResolver(resolver), WithSubtreeHandoffPublisher(publisher))
 	require.NoError(t, err)
 
 	err = executor.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{
@@ -477,6 +509,8 @@ func TestExecutorRenameSubtreeMovesDentry(t *testing.T) {
 	require.Equal(t, kvrpcpb.Mutation_Delete, runner.mutations[0][0].GetOp())
 	require.Equal(t, kvrpcpb.Mutation_Put, runner.mutations[0][1].GetOp())
 	require.True(t, runner.mutations[0][1].GetAssertionNotExist())
+	require.Equal(t, []subtreePublishCall{{mount: "vol", root: fsmeta.RootInode, frontier: 2}}, publisher.starts)
+	require.Equal(t, []subtreePublishCall{{mount: "vol", root: fsmeta.RootInode, frontier: 2}}, publisher.completes)
 }
 
 func TestExecutorRenameSubtreeRejectsMissingSource(t *testing.T) {

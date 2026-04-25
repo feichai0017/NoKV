@@ -13,6 +13,7 @@
 package state
 
 import (
+	"fmt"
 	"maps"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
@@ -111,6 +112,49 @@ type MountRecord struct {
 	RetiredAt     Cursor
 }
 
+type SubtreeAuthorityState uint8
+
+const (
+	SubtreeAuthorityUnknown SubtreeAuthorityState = iota
+	SubtreeAuthorityActive
+	SubtreeAuthorityHandoff
+)
+
+// SubtreeAuthority is rooted truth for one subtree authority era. The record is
+// keyed by (mount, root inode); dentry mutations remain data-plane writes.
+type SubtreeAuthority struct {
+	SubtreeID              string
+	Mount                  string
+	RootInode              uint64
+	AuthorityID            string
+	Era                    uint64
+	Frontier               uint64
+	State                  SubtreeAuthorityState
+	DeclaredAt             Cursor
+	HandoffStartedAt       Cursor
+	HandoffCompletedAt     Cursor
+	PredecessorAuthorityID string
+	PredecessorEra         uint64
+	PredecessorFrontier    uint64
+	SuccessorAuthorityID   string
+	SuccessorEra           uint64
+	InheritedFrontier      uint64
+}
+
+func SubtreeAuthorityKey(mount string, rootInode uint64) string {
+	if mount == "" || rootInode == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s/%d", mount, rootInode)
+}
+
+func SubtreeAuthorityID(mount string, rootInode, era uint64) string {
+	if mount == "" || rootInode == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s/%d#%d", mount, rootInode, era)
+}
+
 func (l Tenure) ActiveAt(nowUnixNano int64) bool {
 	return l.HolderID != "" && l.ExpiresUnixNano > nowUnixNano
 }
@@ -158,6 +202,7 @@ type Snapshot struct {
 	Stores              map[uint64]StoreMembership
 	SnapshotEpochs      map[string]SnapshotEpoch
 	Mounts              map[string]MountRecord
+	Subtrees            map[string]SubtreeAuthority
 	Descriptors         map[uint64]descriptor.Descriptor
 	PendingPeerChanges  map[uint64]PendingPeerChange
 	PendingRangeChanges map[uint64]PendingRangeChange
@@ -176,6 +221,7 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 		Stores:              CloneStoreMemberships(snapshot.Stores),
 		SnapshotEpochs:      CloneSnapshotEpochs(snapshot.SnapshotEpochs),
 		Mounts:              CloneMounts(snapshot.Mounts),
+		Subtrees:            CloneSubtreeAuthorities(snapshot.Subtrees),
 		Descriptors:         CloneDescriptors(snapshot.Descriptors),
 		PendingPeerChanges:  ClonePendingPeerChanges(snapshot.PendingPeerChanges),
 		PendingRangeChanges: ClonePendingRangeChanges(snapshot.PendingRangeChanges),
@@ -188,6 +234,18 @@ func CloneMounts(in map[string]MountRecord) map[string]MountRecord {
 		return make(map[string]MountRecord)
 	}
 	out := make(map[string]MountRecord, len(in))
+	maps.Copy(out, in)
+	return out
+}
+
+func CloneSubtreeAuthorities(in map[string]SubtreeAuthority) map[string]SubtreeAuthority {
+	if in == nil {
+		return nil
+	}
+	if len(in) == 0 {
+		return make(map[string]SubtreeAuthority)
+	}
+	out := make(map[string]SubtreeAuthority, len(in))
 	maps.Copy(out, in)
 	return out
 }
@@ -302,10 +360,15 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		applyLegacyToState(state, cursor, event)
 	case rootevent.KindHandover:
 		applyHandoverToState(state, cursor, event)
-	case rootevent.KindSnapshotEpochPublished, rootevent.KindSnapshotEpochRetired:
-		// Snapshot epochs are rooted retention/audit claims. They advance the
-		// root cursor but intentionally do not mutate cluster or membership
-		// epochs.
+	case rootevent.KindSnapshotEpochPublished,
+		rootevent.KindSnapshotEpochRetired,
+		rootevent.KindMountRegistered,
+		rootevent.KindMountRetired,
+		rootevent.KindSubtreeAuthorityDeclared,
+		rootevent.KindSubtreeHandoffStarted,
+		rootevent.KindSubtreeHandoffCompleted:
+		// Filesystem namespace authority events advance the root cursor but do
+		// not mutate cluster topology or store membership epochs.
 	case rootevent.KindRegionBootstrap,
 		rootevent.KindRegionDescriptorPublished,
 		rootevent.KindRegionTombstoned,

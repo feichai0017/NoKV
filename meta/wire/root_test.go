@@ -280,6 +280,9 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.SnapshotEpochRetired("vol", 42, 99),
 		rootevent.MountRegistered("vol", 1, 1),
 		rootevent.MountRetired("vol"),
+		rootevent.SubtreeAuthorityDeclared("vol", 1, "vol", 0, 10),
+		rootevent.SubtreeHandoffStarted("vol", 1, 11),
+		rootevent.SubtreeHandoffCompleted("vol", 1, 12),
 		rootevent.RegionDescriptorPublished(desc),
 		rootevent.RegionTombstoned(desc.RegionID),
 		rootevent.RegionSplitCancelled(desc.RegionID, []byte("f"), left, right, base),
@@ -307,11 +310,13 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 	require.Nil(t, rootEventHandoverToProto(nil))
 	require.Nil(t, rootEventSnapshotEpochToProto(nil))
 	require.Nil(t, rootEventMountToProto(nil))
+	require.Nil(t, rootEventSubtreeAuthorityToProto(nil))
 	require.Nil(t, rootEventTenureFromProto(nil))
 	require.Nil(t, rootEventLegacyFromProto(nil))
 	require.Nil(t, rootEventHandoverFromProto(nil))
 	require.Nil(t, rootEventSnapshotEpochFromProto(nil))
 	require.Nil(t, rootEventMountFromProto(nil))
+	require.Nil(t, rootEventSubtreeAuthorityFromProto(nil))
 
 	kinds := []rootevent.Kind{
 		rootevent.KindStoreJoined,
@@ -340,6 +345,9 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.KindSnapshotEpochRetired,
 		rootevent.KindMountRegistered,
 		rootevent.KindMountRetired,
+		rootevent.KindSubtreeAuthorityDeclared,
+		rootevent.KindSubtreeHandoffStarted,
+		rootevent.KindSubtreeHandoffCompleted,
 	}
 	for _, kind := range kinds {
 		require.Equal(t, kind, rootEventKindFromProto(rootEventKindToProto(kind)))
