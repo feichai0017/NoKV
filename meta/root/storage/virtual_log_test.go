@@ -50,8 +50,8 @@ func TestObserveCommittedDerivesLastCursorAndRetainFrom(t *testing.T) {
 			StartOffset:     32,
 			EndOffset:       64,
 			Records: []CommittedEvent{
-				{Cursor: rootstate.Cursor{Term: 2, Index: 5}, Event: rootevent.StoreJoined(1, "s1")},
-				{Cursor: rootstate.Cursor{Term: 2, Index: 6}, Event: rootevent.StoreJoined(2, "s2")},
+				{Cursor: rootstate.Cursor{Term: 2, Index: 5}, Event: rootevent.StoreJoined(1)},
+				{Cursor: rootstate.Cursor{Term: 2, Index: 6}, Event: rootevent.StoreJoined(2)},
 			},
 		},
 	}
@@ -130,7 +130,7 @@ func TestTailAdvanceDetectsBootstrapInstall(t *testing.T) {
 				StartOffset:     12,
 				EndOffset:       16,
 				Records: []CommittedEvent{
-					{Cursor: rootstate.Cursor{Term: 3, Index: 9}, Event: rootevent.StoreJoined(1, "a")},
+					{Cursor: rootstate.Cursor{Term: 3, Index: 9}, Event: rootevent.StoreJoined(1)},
 				},
 			},
 		},
@@ -151,7 +151,7 @@ func TestObservedCommittedInstallableResetsTailOrigin(t *testing.T) {
 			StartOffset:     48,
 			EndOffset:       96,
 			Records: []CommittedEvent{
-				{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Event: rootevent.StoreJoined(1, "a")},
+				{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Event: rootevent.StoreJoined(1)},
 			},
 		},
 	}
@@ -165,9 +165,9 @@ func TestObservedCommittedInstallableResetsTailOrigin(t *testing.T) {
 
 func TestPlanTailCompaction(t *testing.T) {
 	records := []CommittedEvent{
-		{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Event: rootevent.StoreJoined(1, "a")},
-		{Cursor: rootstate.Cursor{Term: 1, Index: 4}, Event: rootevent.StoreJoined(2, "b")},
-		{Cursor: rootstate.Cursor{Term: 1, Index: 5}, Event: rootevent.StoreJoined(3, "c")},
+		{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Event: rootevent.StoreJoined(1)},
+		{Cursor: rootstate.Cursor{Term: 1, Index: 4}, Event: rootevent.StoreJoined(2)},
+		{Cursor: rootstate.Cursor{Term: 1, Index: 5}, Event: rootevent.StoreJoined(3)},
 	}
 	plan := PlanTailCompaction(records, rootstate.Cursor{Term: 1, Index: 5}, 2)
 	require.True(t, plan.Compacted)

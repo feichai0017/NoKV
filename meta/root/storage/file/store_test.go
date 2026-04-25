@@ -17,15 +17,15 @@ func TestStoreReadCommittedReportsFellBehindCompaction(t *testing.T) {
 
 	rec1 := rootstorage.CommittedEvent{
 		Cursor: rootstate.Cursor{Term: 1, Index: 1},
-		Event:  rootevent.StoreJoined(1, "s1"),
+		Event:  rootevent.StoreJoined(1),
 	}
 	rec2 := rootstorage.CommittedEvent{
 		Cursor: rootstate.Cursor{Term: 1, Index: 2},
-		Event:  rootevent.StoreJoined(2, "s2"),
+		Event:  rootevent.StoreJoined(2),
 	}
 	rec3 := rootstorage.CommittedEvent{
 		Cursor: rootstate.Cursor{Term: 1, Index: 3},
-		Event:  rootevent.StoreJoined(3, "s3"),
+		Event:  rootevent.StoreJoined(3),
 	}
 
 	offsetAfterFirst, err := store.AppendCommitted(context.Background(), rec1)
@@ -63,7 +63,7 @@ func TestStoreInstallBootstrapNormalizesTailOrigin(t *testing.T) {
 			StartOffset:     64,
 			EndOffset:       96,
 			Records: []rootstorage.CommittedEvent{
-				{Cursor: rootstate.Cursor{Term: 1, Index: 2}, Event: rootevent.StoreJoined(2, "s2")},
+				{Cursor: rootstate.Cursor{Term: 1, Index: 2}, Event: rootevent.StoreJoined(2)},
 			},
 		},
 	}

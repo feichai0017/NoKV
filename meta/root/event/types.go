@@ -11,7 +11,7 @@ type Kind uint16
 const (
 	KindUnknown Kind = iota
 	KindStoreJoined
-	KindStoreLeft
+	KindStoreRetired
 	KindIDAllocatorFenced
 	KindTSOAllocatorFenced
 	KindRegionBootstrap
@@ -37,7 +37,6 @@ const (
 // StoreMembership describes one store membership change carried by a root event.
 type StoreMembership struct {
 	StoreID uint64
-	Address string
 }
 
 // AllocatorFence raises one rooted allocator floor monotonically.
@@ -143,12 +142,12 @@ type Event struct {
 	PeerChange       *PeerChange
 }
 
-func StoreJoined(storeID uint64, address string) Event {
-	return Event{Kind: KindStoreJoined, StoreMembership: &StoreMembership{StoreID: storeID, Address: address}}
+func StoreJoined(storeID uint64) Event {
+	return Event{Kind: KindStoreJoined, StoreMembership: &StoreMembership{StoreID: storeID}}
 }
 
-func StoreLeft(storeID uint64, address string) Event {
-	return Event{Kind: KindStoreLeft, StoreMembership: &StoreMembership{StoreID: storeID, Address: address}}
+func StoreRetired(storeID uint64) Event {
+	return Event{Kind: KindStoreRetired, StoreMembership: &StoreMembership{StoreID: storeID}}
 }
 
 func IDAllocatorFenced(min uint64) Event {

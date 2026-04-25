@@ -73,6 +73,23 @@ type Handover struct {
 	ReattachedAt Cursor
 }
 
+type StoreMembershipState uint8
+
+const (
+	StoreMembershipUnknown StoreMembershipState = iota
+	StoreMembershipActive
+	StoreMembershipRetired
+)
+
+// StoreMembership is the rooted membership truth for one store ID. Runtime
+// liveness and network addresses are intentionally kept out of this record.
+type StoreMembership struct {
+	StoreID   uint64
+	State     StoreMembershipState
+	JoinedAt  Cursor
+	RetiredAt Cursor
+}
+
 func (l Tenure) ActiveAt(nowUnixNano int64) bool {
 	return l.HolderID != "" && l.ExpiresUnixNano > nowUnixNano
 }
@@ -117,6 +134,7 @@ type PendingRangeChange struct {
 // Snapshot is the compact materialized rooted metadata state used for bounded bootstrap and recovery.
 type Snapshot struct {
 	State               State
+	Stores              map[uint64]StoreMembership
 	Descriptors         map[uint64]descriptor.Descriptor
 	PendingPeerChanges  map[uint64]PendingPeerChange
 	PendingRangeChanges map[uint64]PendingRangeChange
@@ -132,9 +150,21 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 	state := snapshot.State
 	out := Snapshot{
 		State:               state,
+		Stores:              CloneStoreMemberships(snapshot.Stores),
 		Descriptors:         CloneDescriptors(snapshot.Descriptors),
 		PendingPeerChanges:  ClonePendingPeerChanges(snapshot.PendingPeerChanges),
 		PendingRangeChanges: ClonePendingRangeChanges(snapshot.PendingRangeChanges),
+	}
+	return out
+}
+
+func CloneStoreMemberships(in map[uint64]StoreMembership) map[uint64]StoreMembership {
+	if len(in) == 0 {
+		return make(map[uint64]StoreMembership)
+	}
+	out := make(map[uint64]StoreMembership, len(in))
+	for storeID, membership := range in {
+		out[storeID] = membership
 	}
 	return out
 }
@@ -205,8 +235,10 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		return
 	}
 	switch event.Kind {
-	case rootevent.KindStoreJoined, rootevent.KindStoreLeft:
-		state.MembershipEpoch++
+	case rootevent.KindStoreJoined, rootevent.KindStoreRetired:
+		if event.StoreMembership != nil && event.StoreMembership.StoreID != 0 {
+			state.MembershipEpoch++
+		}
 	case rootevent.KindIDAllocatorFenced:
 		if event.AllocatorFence != nil && event.AllocatorFence.Minimum > state.IDFence {
 			state.IDFence = event.AllocatorFence.Minimum

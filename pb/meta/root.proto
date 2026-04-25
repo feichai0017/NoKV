@@ -10,7 +10,7 @@ option go_package = "github.com/feichai0017/NoKV/pb/meta;metapb";
 enum RootEventKind {
   ROOT_EVENT_KIND_UNSPECIFIED = 0;
   ROOT_EVENT_KIND_STORE_JOINED = 1;
-  ROOT_EVENT_KIND_STORE_LEFT = 2;
+  ROOT_EVENT_KIND_STORE_RETIRED = 2;
   ROOT_EVENT_KIND_ID_ALLOCATOR_FENCED = 3;
   ROOT_EVENT_KIND_REGION_BOOTSTRAP = 4;
   ROOT_EVENT_KIND_REGION_DESCRIPTOR_PUBLISHED = 5;
@@ -55,11 +55,24 @@ message RootCheckpoint {
   uint64 tail_offset = 3;
   repeated RootPendingPeerChange pending_peer_changes = 4;
   repeated RootPendingRangeChange pending_range_changes = 5;
+  repeated RootStore stores = 6;
 }
 
 message RootStoreMembership {
   uint64 store_id = 1;
-  string address = 2;
+}
+
+enum RootStoreState {
+  ROOT_STORE_STATE_UNSPECIFIED = 0;
+  ROOT_STORE_STATE_ACTIVE = 1;
+  ROOT_STORE_STATE_RETIRED = 2;
+}
+
+message RootStore {
+  uint64 store_id = 1;
+  RootStoreState state = 2;
+  RootCursor joined_at = 3;
+  RootCursor retired_at = 4;
 }
 
 message RootAllocatorFence {

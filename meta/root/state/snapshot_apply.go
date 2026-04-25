@@ -11,6 +11,9 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 	if snapshot == nil {
 		return
 	}
+	if snapshot.Stores == nil {
+		snapshot.Stores = make(map[uint64]StoreMembership)
+	}
 	if snapshot.Descriptors == nil {
 		snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
 	}
@@ -21,8 +24,10 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 		snapshot.PendingRangeChanges = make(map[uint64]PendingRangeChange)
 	}
 	switch event.Kind {
-	case rootevent.KindStoreJoined, rootevent.KindStoreLeft:
-		snapshot.State.MembershipEpoch++
+	case rootevent.KindStoreJoined:
+		applyStoreJoinedToSnapshot(snapshot, cursor, event)
+	case rootevent.KindStoreRetired:
+		applyStoreRetiredToSnapshot(snapshot, cursor, event)
 	case rootevent.KindIDAllocatorFenced:
 		if event.AllocatorFence != nil && event.AllocatorFence.Minimum > snapshot.State.IDFence {
 			snapshot.State.IDFence = event.AllocatorFence.Minimum
@@ -55,6 +60,35 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 		_ = ApplyPeerChangeToSnapshot(snapshot, event)
 	}
 	snapshot.State.LastCommitted = cursor
+}
+
+func applyStoreJoinedToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Event) {
+	if snapshot == nil || event.StoreMembership == nil || event.StoreMembership.StoreID == 0 {
+		return
+	}
+	storeID := event.StoreMembership.StoreID
+	snapshot.State.MembershipEpoch++
+	snapshot.Stores[storeID] = StoreMembership{
+		StoreID:  storeID,
+		State:    StoreMembershipActive,
+		JoinedAt: cursor,
+	}
+}
+
+func applyStoreRetiredToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Event) {
+	if snapshot == nil || event.StoreMembership == nil || event.StoreMembership.StoreID == 0 {
+		return
+	}
+	storeID := event.StoreMembership.StoreID
+	current := snapshot.Stores[storeID]
+	if current.JoinedAt == (Cursor{}) {
+		current.JoinedAt = cursor
+	}
+	current.StoreID = storeID
+	current.State = StoreMembershipRetired
+	current.RetiredAt = cursor
+	snapshot.State.MembershipEpoch++
+	snapshot.Stores[storeID] = current
 }
 
 // ApplyPeerChangeToSnapshot applies one peer-change lifecycle event into the

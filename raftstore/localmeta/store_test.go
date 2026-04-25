@@ -189,7 +189,7 @@ func TestLocalStoreAllowsPendingRootEventOverwriteAtLimit(t *testing.T) {
 		}
 		require.NoError(t, store.SavePendingRootEvent(PendingRootEvent{
 			Sequence: uint64(maxPendingRootEvents),
-			Event:    rootevent.StoreJoined(uint64(maxPendingRootEvents), "store-replaced"),
+			Event:    rootevent.StoreJoined(uint64(maxPendingRootEvents)),
 		}))
 		pending := store.PendingRootEvents()
 		require.Len(t, pending, maxPendingRootEvents)
