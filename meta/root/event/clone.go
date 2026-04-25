@@ -25,6 +25,10 @@ func CloneEvent(in Event) Event {
 		cp := *in.Handover
 		out.Handover = &cp
 	}
+	if in.SnapshotEpoch != nil {
+		cp := *in.SnapshotEpoch
+		out.SnapshotEpoch = &cp
+	}
 	if in.RegionDescriptor != nil {
 		cp := *in.RegionDescriptor
 		cp.Descriptor = in.RegionDescriptor.Descriptor.Clone()

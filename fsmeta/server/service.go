@@ -19,6 +19,7 @@ type Executor interface {
 	Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error)
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
 	ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
+	SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error)
 	Rename(ctx context.Context, req fsmeta.RenameRequest) error
 	Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
 }
@@ -31,6 +32,7 @@ type Service struct {
 
 	executor Executor
 	watcher  fsmeta.Watcher
+	snapshot fsmeta.SnapshotPublisher
 }
 
 // Option configures an FSMetadata service.
@@ -40,6 +42,13 @@ type Option func(*Service)
 func WithWatcher(watcher fsmeta.Watcher) Option {
 	return func(s *Service) {
 		s.watcher = watcher
+	}
+}
+
+// WithSnapshotPublisher records SnapshotSubtree epochs in rooted truth.
+func WithSnapshotPublisher(publisher fsmeta.SnapshotPublisher) Option {
+	return func(s *Service) {
+		s.snapshot = publisher
 	}
 }
 
@@ -175,6 +184,25 @@ func (s *Service) WatchSubtree(stream fsmetapb.FSMetadata_WatchSubtreeServer) er
 			}
 		}
 	}
+}
+
+func (s *Service) SnapshotSubtree(ctx context.Context, req *fsmetapb.SnapshotSubtreeRequest) (*fsmetapb.SnapshotSubtreeResponse, error) {
+	if err := s.requireExecutor(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "fsmeta snapshot subtree request is required")
+	}
+	token, err := s.executor.SnapshotSubtree(ctx, snapshotSubtreeRequestFromProto(req))
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	if s.snapshot != nil {
+		if err := s.snapshot.PublishSnapshotSubtree(ctx, token); err != nil {
+			return nil, rpcError(err)
+		}
+	}
+	return snapshotSubtreeResponseToProto(token), nil
 }
 
 func (s *Service) Rename(ctx context.Context, req *fsmetapb.RenameRequest) (*fsmetapb.RenameResponse, error) {

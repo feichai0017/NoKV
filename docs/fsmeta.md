@@ -29,6 +29,7 @@ by `fsmeta/server`.
 | `ReadDir` | Scan dentries under one parent inode. |
 | `ReadDirPlus` | Scan dentries and fetch inode attributes in one typed operation. |
 | `WatchSubtree` | Live prefix-scoped metadata change stream with explicit ack/back-pressure. |
+| `SnapshotSubtree` | Publish a stable MVCC read epoch for later snapshot-version reads. |
 | `Rename` | Atomically move one dentry from one parent/name to another. |
 | `Unlink` | Delete one dentry. |
 
@@ -50,11 +51,27 @@ Stage 1 intentionally keeps the model small:
 | Native gRPC service and typed Go client | Implemented |
 | Docker Compose service | Implemented |
 | Live `WatchSubtree` | Implemented in Stage 2.2 |
+| `SnapshotSubtree` MVCC epoch | Implemented in Stage 2.3 |
 | Historical watch catch-up, hardlink ref-count, xattrs, quota fence | Future work |
 
 The current service is a metadata substrate, not a complete filesystem stack.
-FUSE, POSIX compatibility, historical watch catch-up, quota, and snapshot
-semantics belong to later stages.
+FUSE, POSIX compatibility, historical watch catch-up, quota, recursive subtree
+materialization, and snapshot GC retention enforcement belong to later stages.
+
+## SnapshotSubtree
+
+`SnapshotSubtree` returns a `read_version` from coordinator TSO and publishes the
+epoch into rooted truth as `SnapshotEpochPublished`. Subsequent `ReadDir` /
+`ReadDirPlus` calls can pass that version through `ReadDirRequest.snapshot_version`
+to read a stable MVCC view.
+
+V0 is intentionally a read-epoch primitive:
+
+- It does not copy the subtree.
+- It does not recursively traverse children.
+- It does not enforce MVCC GC retention yet, because data-plane GC is not enabled.
+- It records the snapshot epoch in `meta/root` so future GC / audit / namespace
+  authority work has a durable contract to depend on.
 
 ## Running With Docker Compose
 

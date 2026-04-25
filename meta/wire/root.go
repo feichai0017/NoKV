@@ -313,6 +313,32 @@ func rootEventHandoverFromProto(handover *metapb.RootHandover) *rootevent.Handov
 	}
 }
 
+func rootEventSnapshotEpochToProto(epoch *rootevent.SnapshotEpoch) *metapb.RootSnapshotEpoch {
+	if epoch == nil {
+		return nil
+	}
+	return &metapb.RootSnapshotEpoch{
+		SnapshotId:  epoch.SnapshotID,
+		Mount:       epoch.Mount,
+		RootInode:   epoch.RootInode,
+		ReadVersion: epoch.ReadVersion,
+		PublishedAt: RootCursorToProto(epoch.PublishedAt),
+	}
+}
+
+func rootEventSnapshotEpochFromProto(epoch *metapb.RootSnapshotEpoch) *rootevent.SnapshotEpoch {
+	if epoch == nil {
+		return nil
+	}
+	return &rootevent.SnapshotEpoch{
+		SnapshotID:  epoch.GetSnapshotId(),
+		Mount:       epoch.GetMount(),
+		RootInode:   epoch.GetRootInode(),
+		ReadVersion: epoch.GetReadVersion(),
+		PublishedAt: RootCursorFromProto(epoch.GetPublishedAt()),
+	}
+}
+
 func rootHandoverStageToProto(stage rootproto.HandoverStage) metapb.RootHandoverStage {
 	switch stage {
 	case rootproto.HandoverStageUnspecified:
@@ -400,6 +426,10 @@ func RootSnapshotToProto(snapshot rootstate.Snapshot, tailOffset uint64) *metapb
 	for storeID, membership := range snapshot.Stores {
 		stores = append(stores, RootStoreMembershipToProto(storeID, membership))
 	}
+	snapshotEpochs := make([]*metapb.RootSnapshotEpoch, 0, len(snapshot.SnapshotEpochs))
+	for _, epoch := range snapshot.SnapshotEpochs {
+		snapshotEpochs = append(snapshotEpochs, RootSnapshotEpochToProto(epoch))
+	}
 	descriptors := make([]*metapb.RegionDescriptor, 0, len(snapshot.Descriptors))
 	for _, desc := range snapshot.Descriptors {
 		descriptors = append(descriptors, DescriptorToProto(desc))
@@ -419,6 +449,7 @@ func RootSnapshotToProto(snapshot rootstate.Snapshot, tailOffset uint64) *metapb
 		PendingPeerChanges:  pending,
 		PendingRangeChanges: pendingRanges,
 		Stores:              stores,
+		SnapshotEpochs:      snapshotEpochs,
 	}
 }
 
@@ -442,6 +473,16 @@ func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snaps
 		}
 		snapshot.Stores[storeID] = membership
 	}
+	if len(pbCheckpoint.SnapshotEpochs) > 0 {
+		snapshot.SnapshotEpochs = make(map[string]rootstate.SnapshotEpoch, len(pbCheckpoint.SnapshotEpochs))
+	}
+	for _, pbEpoch := range pbCheckpoint.SnapshotEpochs {
+		epoch := RootSnapshotEpochFromProto(pbEpoch)
+		if epoch.SnapshotID == "" {
+			continue
+		}
+		snapshot.SnapshotEpochs[epoch.SnapshotID] = epoch
+	}
 	for _, pbDesc := range pbCheckpoint.Descriptors {
 		desc := DescriptorFromProto(pbDesc)
 		if desc.RegionID == 0 {
@@ -464,6 +505,29 @@ func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snaps
 		snapshot.PendingRangeChanges[regionID] = change
 	}
 	return snapshot, pbCheckpoint.TailOffset
+}
+
+func RootSnapshotEpochToProto(epoch rootstate.SnapshotEpoch) *metapb.RootSnapshotEpoch {
+	return &metapb.RootSnapshotEpoch{
+		SnapshotId:  epoch.SnapshotID,
+		Mount:       epoch.Mount,
+		RootInode:   epoch.RootInode,
+		ReadVersion: epoch.ReadVersion,
+		PublishedAt: RootCursorToProto(epoch.PublishedAt),
+	}
+}
+
+func RootSnapshotEpochFromProto(pbEpoch *metapb.RootSnapshotEpoch) rootstate.SnapshotEpoch {
+	if pbEpoch == nil {
+		return rootstate.SnapshotEpoch{}
+	}
+	return rootstate.SnapshotEpoch{
+		SnapshotID:  pbEpoch.GetSnapshotId(),
+		Mount:       pbEpoch.GetMount(),
+		RootInode:   pbEpoch.GetRootInode(),
+		ReadVersion: pbEpoch.GetReadVersion(),
+		PublishedAt: RootCursorFromProto(pbEpoch.GetPublishedAt()),
+	}
 }
 
 func RootStoreMembershipToProto(storeID uint64, membership rootstate.StoreMembership) *metapb.RootStore {
@@ -627,6 +691,8 @@ func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 		pbEvent.Payload = &metapb.RootEvent_Legacy{Legacy: rootEventLegacyToProto(event.Legacy)}
 	case event.Handover != nil:
 		pbEvent.Payload = &metapb.RootEvent_Handover{Handover: rootEventHandoverToProto(event.Handover)}
+	case event.SnapshotEpoch != nil:
+		pbEvent.Payload = &metapb.RootEvent_SnapshotEpoch{SnapshotEpoch: rootEventSnapshotEpochToProto(event.SnapshotEpoch)}
 	case event.RegionDescriptor != nil:
 		pbEvent.Payload = &metapb.RootEvent_RegionDescriptor{RegionDescriptor: &metapb.RootRegionDescriptor{Descriptor_: DescriptorToProto(event.RegionDescriptor.Descriptor)}}
 	case event.RegionRemoval != nil:
@@ -678,6 +744,9 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 	}
 	if body := pbEvent.GetHandover(); body != nil {
 		event.Handover = rootEventHandoverFromProto(body)
+	}
+	if body := pbEvent.GetSnapshotEpoch(); body != nil {
+		event.SnapshotEpoch = rootEventSnapshotEpochFromProto(body)
 	}
 	if body := pbEvent.GetRegionDescriptor(); body != nil {
 		event.RegionDescriptor = &rootevent.RegionDescriptorRecord{Descriptor: DescriptorFromProto(body.GetDescriptor_())}
@@ -761,6 +830,8 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_LEGACY
 	case rootevent.KindHandover:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_HANDOVER
+	case rootevent.KindSnapshotEpochPublished:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED
 	default:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_UNSPECIFIED
 	}
@@ -812,6 +883,8 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindLegacy
 	case metapb.RootEventKind_ROOT_EVENT_KIND_HANDOVER:
 		return rootevent.KindHandover
+	case metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED:
+		return rootevent.KindSnapshotEpochPublished
 	default:
 		return rootevent.KindUnknown
 	}
