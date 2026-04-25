@@ -119,6 +119,54 @@ func (r staticStoreResolver) GetStore(_ context.Context, req *coordpb.GetStoreRe
 	return &coordpb.GetStoreResponse{NotFound: true}, nil
 }
 
+type mutableStoreResolver struct {
+	mu       sync.Mutex
+	endpoint testStoreEndpoint
+	calls    int
+	err      error
+}
+
+func (r *mutableStoreResolver) GetStore(_ context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+	if r.err != nil {
+		return nil, r.err
+	}
+	if r.endpoint.StoreID != req.GetStoreId() {
+		return &coordpb.GetStoreResponse{NotFound: true}, nil
+	}
+	state := r.endpoint.State
+	if state == coordpb.StoreState_STORE_STATE_UNKNOWN {
+		state = coordpb.StoreState_STORE_STATE_UP
+	}
+	return &coordpb.GetStoreResponse{
+		Store: &coordpb.StoreInfo{
+			StoreId:    r.endpoint.StoreID,
+			ClientAddr: r.endpoint.Addr,
+			State:      state,
+		},
+	}, nil
+}
+
+func (r *mutableStoreResolver) setEndpoint(endpoint testStoreEndpoint) {
+	r.mu.Lock()
+	r.endpoint = endpoint
+	r.mu.Unlock()
+}
+
+func (r *mutableStoreResolver) setError(err error) {
+	r.mu.Lock()
+	r.err = err
+	r.mu.Unlock()
+}
+
+func (r *mutableStoreResolver) callCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
 type blockingRegionResolver struct {
 	started chan struct{}
 }
@@ -1307,6 +1355,100 @@ func TestClientRejectsDownStoreFromResolver(t *testing.T) {
 	_, err = cli.Get(context.Background(), []byte("alfa"), 20)
 	require.Error(t, err)
 	require.True(t, IsStoreUnavailable(err))
+}
+
+func TestClientRevalidatesCachedStoreAndRejectsDownState(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers: []*metapb.RegionPeer{
+					{StoreId: 1, PeerId: 101},
+				},
+			},
+			leaderStore: 1,
+			committed: map[string]clusterValue{
+				"alfa": {value: []byte("value-a"), commitVersion: 10},
+			},
+		},
+	)
+	addr, stop := startMockStore(t, cluster, 1)
+	defer stop()
+
+	storeResolver := &mutableStoreResolver{endpoint: testStoreEndpoint{StoreID: 1, Addr: addr}}
+	cli, err := New(Config{
+		StoreResolver:           storeResolver,
+		RegionResolver:          &mockRegionResolver{region: cluster.regions[1].meta},
+		StoreRevalidateInterval: time.Nanosecond,
+		DialOptions:             []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry: RetryPolicy{
+			MaxAttempts:                 1,
+			TransportUnavailableBackoff: 0,
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	resp, err := cli.Get(context.Background(), []byte("alfa"), 20)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value-a"), resp.GetValue())
+
+	storeResolver.setEndpoint(testStoreEndpoint{
+		StoreID: 1,
+		Addr:    addr,
+		State:   coordpb.StoreState_STORE_STATE_DOWN,
+	})
+	_, err = cli.Get(context.Background(), []byte("alfa"), 20)
+	require.Error(t, err)
+	require.True(t, IsStoreUnavailable(err))
+
+	cli.mu.RLock()
+	require.NotContains(t, cli.stores, uint64(1))
+	cli.mu.RUnlock()
+}
+
+func TestClientKeepsCachedStoreWhenRevalidationResolverFails(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers: []*metapb.RegionPeer{
+					{StoreId: 1, PeerId: 101},
+				},
+			},
+			leaderStore: 1,
+			committed: map[string]clusterValue{
+				"alfa": {value: []byte("value-a"), commitVersion: 10},
+			},
+		},
+	)
+	addr, stop := startMockStore(t, cluster, 1)
+	defer stop()
+
+	storeResolver := &mutableStoreResolver{endpoint: testStoreEndpoint{StoreID: 1, Addr: addr}}
+	cli, err := New(Config{
+		StoreResolver:           storeResolver,
+		RegionResolver:          &mockRegionResolver{region: cluster.regions[1].meta},
+		StoreRevalidateInterval: time.Nanosecond,
+		DialOptions:             []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	_, err = cli.Get(context.Background(), []byte("alfa"), 20)
+	require.NoError(t, err)
+
+	storeResolver.setError(status.Error(codes.Unavailable, "coordinator down"))
+	resp, err := cli.Get(context.Background(), []byte("alfa"), 20)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value-a"), resp.GetValue())
+	require.GreaterOrEqual(t, storeResolver.callCount(), 2)
 }
 
 func TestClientRegionResolverLookupUsesIndexedCacheAcrossRegions(t *testing.T) {

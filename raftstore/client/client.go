@@ -30,9 +30,12 @@ type Config struct {
 	RegionResolver     RegionResolver
 	StoreResolver      StoreResolver
 	RouteLookupTimeout time.Duration
-	DialTimeout        time.Duration
-	DialOptions        []grpc.DialOption
-	Retry              RetryPolicy
+	// StoreRevalidateInterval controls how often cached store endpoints are
+	// checked against Coordinator. The default is 30s.
+	StoreRevalidateInterval time.Duration
+	DialTimeout             time.Duration
+	DialOptions             []grpc.DialOption
+	Retry                   RetryPolicy
 }
 
 // RetryPolicy defines retry budgets and backoff for client-side retries.
@@ -52,6 +55,7 @@ type Client struct {
 	regionResolver     RegionResolver
 	storeResolver      StoreResolver
 	routeLookupTimeout time.Duration
+	storeRevalidateIn  time.Duration
 	dialTimeout        time.Duration
 	dialOpts           []grpc.DialOption
 	retry              RetryPolicy
@@ -73,6 +77,10 @@ func New(cfg Config) (*Client, error) {
 	if routeLookupTimeout <= 0 {
 		routeLookupTimeout = 2 * time.Second
 	}
+	storeRevalidateIn := cfg.StoreRevalidateInterval
+	if storeRevalidateIn <= 0 {
+		storeRevalidateIn = 30 * time.Second
+	}
 	dialOpts := cfg.DialOptions
 	if len(dialOpts) == 0 {
 		dialOpts = []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
@@ -90,6 +98,7 @@ func New(cfg Config) (*Client, error) {
 		regionResolver:     cfg.RegionResolver,
 		storeResolver:      cfg.StoreResolver,
 		routeLookupTimeout: routeLookupTimeout,
+		storeRevalidateIn:  storeRevalidateIn,
 		dialTimeout:        dialTimeout,
 		dialOpts:           append([]grpc.DialOption(nil), dialOpts...),
 		retry:              retry,

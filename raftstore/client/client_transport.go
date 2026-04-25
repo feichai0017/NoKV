@@ -17,6 +17,7 @@ import (
 
 type storeConn struct {
 	addr        string
+	resolvedAt  time.Time
 	dialTimeout time.Duration
 	dialOpts    []grpc.DialOption
 
@@ -72,12 +73,48 @@ func (c *Client) storeClient(ctx context.Context, storeID uint64) (kvrpcpb.NoKVC
 }
 
 func (c *Client) storeConn(ctx context.Context, storeID uint64) (*storeConn, error) {
+	now := time.Now()
 	c.mu.RLock()
 	st := c.stores[storeID]
+	revalidate := c.storeRevalidateIn
 	c.mu.RUnlock()
-	if st != nil {
+	if st != nil && !storeConnExpired(st, now, revalidate) {
 		return st, nil
 	}
+	next, err := c.resolveStoreConn(ctx, storeID, now)
+	if err != nil {
+		if st != nil {
+			if errors.Is(err, errStoreUnavailable) {
+				c.invalidateStore(storeID, st)
+				return nil, err
+			}
+			c.deferStoreRevalidation(storeID, st, now)
+			return st, nil
+		}
+		return nil, err
+	}
+	c.mu.Lock()
+	existing := c.stores[storeID]
+	if existing != nil && existing != st && !storeConnExpired(existing, now, revalidate) {
+		c.mu.Unlock()
+		_ = next.close()
+		return existing, nil
+	}
+	if st != nil && existing == st && st.addr == next.addr {
+		st.resolvedAt = next.resolvedAt
+		c.mu.Unlock()
+		_ = next.close()
+		return st, nil
+	}
+	c.stores[storeID] = next
+	c.mu.Unlock()
+	if existing != nil && existing != next {
+		_ = existing.close()
+	}
+	return next, nil
+}
+
+func (c *Client) resolveStoreConn(ctx context.Context, storeID uint64, now time.Time) (*storeConn, error) {
 	if c.storeResolver == nil {
 		return nil, errMissingStoreResolver
 	}
@@ -100,17 +137,29 @@ func (c *Client) storeConn(ctx context.Context, storeID uint64) (*storeConn, err
 	}
 	next := &storeConn{
 		addr:        info.GetClientAddr(),
+		resolvedAt:  now,
 		dialTimeout: c.dialTimeout,
 		dialOpts:    append([]grpc.DialOption(nil), c.dialOpts...),
 	}
-	c.mu.Lock()
-	if existing := c.stores[storeID]; existing != nil {
-		c.mu.Unlock()
-		return existing, nil
-	}
-	c.stores[storeID] = next
-	c.mu.Unlock()
 	return next, nil
+}
+
+func storeConnExpired(st *storeConn, now time.Time, interval time.Duration) bool {
+	if st == nil || interval <= 0 {
+		return false
+	}
+	if st.resolvedAt.IsZero() {
+		return true
+	}
+	return !st.resolvedAt.Add(interval).After(now)
+}
+
+func (c *Client) deferStoreRevalidation(storeID uint64, expected *storeConn, now time.Time) {
+	c.mu.Lock()
+	if current := c.stores[storeID]; current == expected && current != nil {
+		current.resolvedAt = now
+	}
+	c.mu.Unlock()
 }
 
 func (c *Client) invalidateStore(storeID uint64, expected *storeConn) {
