@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
@@ -91,6 +92,9 @@ func (c *Client) storeConn(ctx context.Context, storeID uint64) (*storeConn, err
 	if info.GetStoreId() != storeID {
 		return nil, fmt.Errorf("client: resolved store id %d != requested %d", info.GetStoreId(), storeID)
 	}
+	if info.GetState() == coordpb.StoreState_STORE_STATE_DOWN {
+		return nil, fmt.Errorf("%w: store %d", errStoreUnavailable, storeID)
+	}
 	if info.GetClientAddr() == "" {
 		return nil, fmt.Errorf("client: store %d has empty client address", storeID)
 	}
@@ -131,7 +135,7 @@ func normalizeRetryBackoff(backoff, fallback time.Duration) time.Duration {
 }
 
 func isTransportUnavailable(err error) bool {
-	return status.Code(err) == codes.Unavailable
+	return errors.Is(err, errStoreUnavailable) || status.Code(err) == codes.Unavailable
 }
 
 func (c *Client) waitRetry(ctx context.Context, attempt int, kind retryKind) error {
