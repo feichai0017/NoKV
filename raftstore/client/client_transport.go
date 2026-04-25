@@ -84,12 +84,23 @@ func (c *Client) storeConn(ctx context.Context, storeID uint64) (*storeConn, err
 	next, err := c.resolveStoreConn(ctx, storeID, now)
 	if err != nil {
 		if st != nil {
+			// Coordinator says the store is gone -> drop the cached conn so
+			// the next call resolves freshly.
 			if errors.Is(err, errStoreUnavailable) {
 				c.invalidateStore(storeID, st)
 				return nil, err
 			}
-			c.deferStoreRevalidation(storeID, st, now)
-			return st, nil
+			// Transient resolver glitch (coordinator briefly Unavailable /
+			// timeout) -> keep serving from cache and bump resolvedAt so we
+			// don't hammer the resolver every RPC.
+			if isTransientResolverError(err) {
+				c.deferStoreRevalidation(storeID, st, now)
+				return st, nil
+			}
+			// Anything else (ctx.Canceled, validation error, malformed
+			// response) is propagated without bumping resolvedAt so the
+			// caller can decide and the next call retries promptly.
+			return nil, err
 		}
 		return nil, err
 	}
@@ -185,6 +196,25 @@ func normalizeRetryBackoff(backoff, fallback time.Duration) time.Duration {
 
 func isTransportUnavailable(err error) bool {
 	return errors.Is(err, errStoreUnavailable) || status.Code(err) == codes.Unavailable
+}
+
+// isTransientResolverError is true when the coordinator-side store resolver
+// failed in a way that is likely to clear up on its own. The cached storeConn
+// can keep serving while waiting out the transient window. Non-transient
+// failures (ctx.Canceled, validation errors, malformed responses) bypass the
+// defer path so the next call retries immediately.
+func isTransientResolverError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded:
+		return true
+	}
+	return false
 }
 
 func (c *Client) waitRetry(ctx context.Context, attempt int, kind retryKind) error {
