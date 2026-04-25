@@ -130,11 +130,15 @@ docker run --rm --network nokv_default \
     -fsmeta_page_limit 512 \
     -fsmeta_readdirplus=true \
     -fsmeta_timeout 25m \
-    -fsmeta_output "../data/fsmeta/results/fsmeta_formal_native_vs_generic_${RUN_TS}.csv"
+    -fsmeta_output "data/fsmeta/results/fsmeta_native_vs_generic_${RUN_TS}.csv"
 ```
 
 The generated CSV under `benchmark/data/` is a local run artifact and is ignored
-by Git. Curated committed results live under `benchmark/fsmeta/results/`.
+by Git (the example above writes to `<repo>/benchmark/data/...` because the
+docker run is `-w /workspace/benchmark`). Curated, committed results live under
+`benchmark/fsmeta/results/` — point `-fsmeta_output` at `fsmeta/results/...`
+(relative to `/workspace/benchmark`) when promoting a run to a tracked
+artifact.
 
 For the Stage 1 result interpretation, see
 `docs/notes/2026-04-25-fsmeta-stage1-benchmark-results.md`.

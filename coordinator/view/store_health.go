@@ -56,6 +56,17 @@ func (v *StoreHealthView) Remove(storeID uint64) {
 	v.mu.Unlock()
 }
 
+// Get returns one store entry by id without allocating or sorting.
+func (v *StoreHealthView) Get(storeID uint64) (StoreStats, bool) {
+	if v == nil || storeID == 0 {
+		return StoreStats{}, false
+	}
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	stats, ok := v.stores[storeID]
+	return stats, ok
+}
+
 func (v *StoreHealthView) Snapshot() []StoreStats {
 	if v == nil {
 		return nil

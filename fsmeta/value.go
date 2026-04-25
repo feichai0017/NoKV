@@ -264,7 +264,10 @@ func decodeDentryBody(body []byte) (DentryRecord, error) {
 		return DentryRecord{}, ErrInvalidValue
 	}
 	pos += n
-	if nameLen == 0 || uint64(len(body)-pos) < nameLen+9 {
+	remaining := uint64(len(body) - pos)
+	// Subtract first to avoid uint64 overflow when nameLen is near MaxUint64.
+	// Need: nameLen >= 1, remaining >= nameLen, and remaining-nameLen >= 8 (inode) + 1 (type) = 9.
+	if nameLen == 0 || nameLen > remaining || remaining-nameLen < 9 {
 		return DentryRecord{}, ErrInvalidValue
 	}
 	name := string(body[pos : pos+int(nameLen)])
@@ -297,7 +300,10 @@ func decodeSessionBody(body []byte) (SessionRecord, error) {
 		return SessionRecord{}, ErrInvalidValue
 	}
 	pos := n
-	if sessionLen == 0 || uint64(len(body)-pos) != sessionLen+16 {
+	remaining := uint64(len(body) - pos)
+	// Subtract first to avoid uint64 overflow when sessionLen is near MaxUint64.
+	// Body shape after the varint: sessionLen bytes + 8 (inode) + 8 (expiry) = sessionLen + 16.
+	if sessionLen == 0 || sessionLen > remaining || remaining-sessionLen != 16 {
 		return SessionRecord{}, ErrInvalidValue
 	}
 	session := SessionID(string(body[pos : pos+int(sessionLen)]))
