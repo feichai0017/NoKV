@@ -1,14 +1,14 @@
-package exec
+package integration
 
 import (
 	"bytes"
 	"context"
-	"errors"
 	"testing"
 	"time"
 
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -24,135 +24,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-func TestRaftstoreRunnerExecutorContractOnRealCluster(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-	defer cancel()
-
-	executor := openRealClusterExecutor(t, ctx)
-
-	req := fsmeta.CreateRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "checkpoint-0001",
-		Inode:  42,
-	}
-	err := executor.Create(ctx, req, fsmeta.InodeRecord{
-		Type:      fsmeta.InodeTypeFile,
-		Size:      4096,
-		LinkCount: 1,
-		Mode:      0o644,
-	})
-	require.NoError(t, err)
-
-	record, err := executor.Lookup(ctx, fsmeta.LookupRequest{
-		Mount:  req.Mount,
-		Parent: req.Parent,
-		Name:   req.Name,
-	})
-	require.NoError(t, err)
-	require.Equal(t, fsmeta.DentryRecord{
-		Parent: req.Parent,
-		Name:   req.Name,
-		Inode:  req.Inode,
-		Type:   fsmeta.InodeTypeFile,
-	}, record)
-
-	entries, err := executor.ReadDir(ctx, fsmeta.ReadDirRequest{
-		Mount:  req.Mount,
-		Parent: req.Parent,
-		Limit:  8,
-	})
-	require.NoError(t, err)
-	require.Equal(t, []fsmeta.DentryRecord{{
-		Parent: req.Parent,
-		Name:   req.Name,
-		Inode:  req.Inode,
-		Type:   fsmeta.InodeTypeFile,
-	}}, entries)
-
-	pairs, err := executor.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
-		Mount:  req.Mount,
-		Parent: req.Parent,
-		Limit:  8,
-	})
-	require.NoError(t, err)
-	require.Equal(t, []fsmeta.DentryAttrPair{{
-		Dentry: fsmeta.DentryRecord{
-			Parent: req.Parent,
-			Name:   req.Name,
-			Inode:  req.Inode,
-			Type:   fsmeta.InodeTypeFile,
-		},
-		Inode: fsmeta.InodeRecord{
-			Inode:     req.Inode,
-			Type:      fsmeta.InodeTypeFile,
-			Size:      4096,
-			Mode:      0o644,
-			LinkCount: 1,
-		},
-	}}, pairs)
-
-	err = executor.Create(ctx, req, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
-	require.True(t, errors.Is(err, fsmeta.ErrExists), "duplicate create error = %v", err)
-}
-
-func TestRaftstoreRunnerRenameAcrossRegionsOnRealCluster(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-	defer cancel()
-
-	executor := openSplitRealClusterExecutor(t, ctx)
-
-	err := executor.Create(ctx, fsmeta.CreateRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "alpha",
-		Inode:  61,
-	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
-	require.NoError(t, err)
-
-	err = executor.Rename(ctx, fsmeta.RenameRequest{
-		Mount:      "vol",
-		FromParent: fsmeta.RootInode,
-		FromName:   "alpha",
-		ToParent:   fsmeta.RootInode,
-		ToName:     "zulu",
-	})
-	require.NoError(t, err)
-
-	_, err = executor.Lookup(ctx, fsmeta.LookupRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "alpha",
-	})
-	require.ErrorIs(t, err, fsmeta.ErrNotFound)
-
-	record, err := executor.Lookup(ctx, fsmeta.LookupRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "zulu",
-	})
-	require.NoError(t, err)
-	require.Equal(t, fsmeta.DentryRecord{
-		Parent: fsmeta.RootInode,
-		Name:   "zulu",
-		Inode:  61,
-		Type:   fsmeta.InodeTypeFile,
-	}, record)
-
-	require.NoError(t, executor.Unlink(ctx, fsmeta.UnlinkRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "zulu",
-	}))
-	_, err = executor.Lookup(ctx, fsmeta.LookupRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "zulu",
-	})
-	require.ErrorIs(t, err, fsmeta.ErrNotFound)
-}
-
-func openRealClusterExecutor(t *testing.T, ctx context.Context) *Executor {
+func openRealClusterExecutor(t *testing.T, ctx context.Context) *fsmetaexec.Executor {
 	t.Helper()
 
 	coord := testcluster.StartCoordinator(t)
@@ -164,9 +36,10 @@ func openRealClusterExecutor(t *testing.T, ctx context.Context) *Executor {
 
 	const (
 		storeID  = uint64(1)
-		regionID = uint64(121)
+		regionID = uint64(171)
 		peerID   = uint64(101)
 	)
+	coord.JoinStore(t, storeID)
 	_, err := migrate.Init(migrate.InitConfig{
 		WorkDir:  seedDir,
 		StoreID:  storeID,
@@ -197,14 +70,14 @@ func openRealClusterExecutor(t *testing.T, ctx context.Context) *Executor {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = kv.Close() })
 
-	runner, err := NewRaftstoreRunner(kv, coordRPC)
+	runner, err := fsmetaexec.NewRaftstoreRunner(kv, coordRPC)
 	require.NoError(t, err)
-	executor, err := New(runner)
+	executor, err := fsmetaexec.New(runner)
 	require.NoError(t, err)
 	return executor
 }
 
-func openSplitRealClusterExecutor(t *testing.T, ctx context.Context) *Executor {
+func openSplitRealClusterExecutor(t *testing.T, ctx context.Context) *fsmetaexec.Executor {
 	t.Helper()
 
 	coord := testcluster.StartCoordinator(t)
@@ -221,6 +94,7 @@ func openSplitRealClusterExecutor(t *testing.T, ctx context.Context) *Executor {
 		parentPeerID   = uint64(101)
 		childPeerID    = uint64(102)
 	)
+	coord.JoinStore(t, storeID)
 	_, err := migrate.Init(migrate.InitConfig{
 		WorkDir:  seedDir,
 		StoreID:  storeID,
@@ -280,9 +154,9 @@ func openSplitRealClusterExecutor(t *testing.T, ctx context.Context) *Executor {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = kv.Close() })
 
-	runner, err := NewRaftstoreRunner(kv, coordRPC)
+	runner, err := fsmetaexec.NewRaftstoreRunner(kv, coordRPC)
 	require.NoError(t, err)
-	executor, err := New(runner)
+	executor, err := fsmetaexec.New(runner)
 	require.NoError(t, err)
 	return executor
 }
