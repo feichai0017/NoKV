@@ -35,6 +35,7 @@ const (
 	KindLegacy
 	KindHandover
 	KindSnapshotEpochPublished
+	KindSnapshotEpochRetired
 )
 
 // StoreMembership describes one store membership change carried by a root event.
@@ -171,6 +172,18 @@ func SnapshotEpochID(mount string, rootInode, readVersion uint64) string {
 func SnapshotEpochPublished(mount string, rootInode, readVersion uint64) Event {
 	return Event{
 		Kind: KindSnapshotEpochPublished,
+		SnapshotEpoch: &SnapshotEpoch{
+			SnapshotID:  SnapshotEpochID(mount, rootInode, readVersion),
+			Mount:       mount,
+			RootInode:   rootInode,
+			ReadVersion: readVersion,
+		},
+	}
+}
+
+func SnapshotEpochRetired(mount string, rootInode, readVersion uint64) Event {
+	return Event{
+		Kind: KindSnapshotEpochRetired,
 		SnapshotEpoch: &SnapshotEpoch{
 			SnapshotID:  SnapshotEpochID(mount, rootInode, readVersion),
 			Mount:       mount,

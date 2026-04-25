@@ -122,6 +122,10 @@ func (c *GRPCClient) WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) 
 	}); err != nil {
 		return nil, translateRPCError(err)
 	}
+	if err := waitForWatchReady(stream); err != nil {
+		_ = stream.CloseSend()
+		return nil, err
+	}
 	return &WatchStream{stream: stream}, nil
 }
 
@@ -179,6 +183,25 @@ func (s *WatchStream) Recv() (fsmeta.WatchEvent, error) {
 		}
 		if throttle := resp.GetThrottle(); throttle != nil {
 			return fsmeta.WatchEvent{}, fmt.Errorf("%w: %s", fsmeta.ErrWatchOverflow, throttle.GetReason())
+		}
+		// Ready and catch-up markers are stream-control frames, not user events.
+	}
+}
+
+func waitForWatchReady(stream fsmetapb.FSMetadata_WatchSubtreeClient) error {
+	for {
+		resp, err := stream.Recv()
+		if err != nil {
+			return translateRPCError(err)
+		}
+		if resp.GetReady() != nil {
+			return nil
+		}
+		if throttle := resp.GetThrottle(); throttle != nil {
+			return fmt.Errorf("%w: %s", fsmeta.ErrWatchOverflow, throttle.GetReason())
+		}
+		if resp.GetEvent() != nil {
+			return errors.New("fsmeta/client: watch stream delivered event before ready")
 		}
 	}
 }
