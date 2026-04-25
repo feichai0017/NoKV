@@ -24,6 +24,7 @@ type Client interface {
 	WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) (WatchSubscription, error)
 	SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error)
 	RetireSnapshotSubtree(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error
+	GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error)
 	RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error
 	Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
 	Close() error
@@ -150,6 +151,17 @@ func (c *GRPCClient) RetireSnapshotSubtree(ctx context.Context, token fsmeta.Sna
 	}
 	_, err := c.rpc.RetireSnapshotSubtree(ctx, retireSnapshotSubtreeRequestToProto(token))
 	return translateRPCError(err)
+}
+
+func (c *GRPCClient) GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error) {
+	if err := c.requireRPC(); err != nil {
+		return fsmeta.UsageRecord{}, err
+	}
+	resp, err := c.rpc.GetQuotaUsage(ctx, quotaUsageRequestToProto(req))
+	if err != nil {
+		return fsmeta.UsageRecord{}, translateRPCError(err)
+	}
+	return quotaUsageFromProto(resp), nil
 }
 
 func (c *GRPCClient) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error {

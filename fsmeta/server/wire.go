@@ -62,6 +62,23 @@ func retireSnapshotSubtreeRequestFromProto(req *fsmetapb.RetireSnapshotSubtreeRe
 	}
 }
 
+func quotaUsageRequestFromProto(req *fsmetapb.QuotaUsageRequest) fsmeta.QuotaUsageRequest {
+	if req == nil {
+		return fsmeta.QuotaUsageRequest{}
+	}
+	return fsmeta.QuotaUsageRequest{
+		Mount: fsmeta.MountID(req.GetMount()),
+		Scope: fsmeta.InodeID(req.GetScope()),
+	}
+}
+
+func quotaUsageResponseToProto(record fsmeta.UsageRecord) *fsmetapb.QuotaUsageResponse {
+	return &fsmetapb.QuotaUsageResponse{
+		Bytes:  record.Bytes,
+		Inodes: record.Inodes,
+	}
+}
+
 func renameSubtreeRequestFromProto(req *fsmetapb.RenameSubtreeRequest) fsmeta.RenameSubtreeRequest {
 	return fsmeta.RenameSubtreeRequest{
 		Mount:      fsmeta.MountID(req.GetMount()),
