@@ -153,6 +153,75 @@ func TestFSMetadataWatchSubtreeOnRealCluster(t *testing.T) {
 	require.NoError(t, stream.Ack(got.Cursor))
 }
 
+func TestFSMetadataSnapshotSubtreeOnRealCluster(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	executor := openRealClusterExecutor(t, ctx)
+	publisher := &snapshotRecorder{}
+	cli, cleanup := openFSMetadataClient(t, ctx, executor, fsmetaserver.WithSnapshotPublisher(publisher))
+	defer cleanup()
+
+	mount := fsmeta.MountID("snapvol")
+	require.NoError(t, cli.Create(ctx, fsmeta.CreateRequest{
+		Mount:  mount,
+		Parent: fsmeta.RootInode,
+		Name:   "a",
+		Inode:  501,
+	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, LinkCount: 1}))
+
+	token, err := cli.SnapshotSubtree(ctx, fsmeta.SnapshotSubtreeRequest{
+		Mount:     mount,
+		RootInode: fsmeta.RootInode,
+	})
+	require.NoError(t, err)
+	require.Equal(t, mount, token.Mount)
+	require.Equal(t, fsmeta.RootInode, token.RootInode)
+	require.NotZero(t, token.ReadVersion)
+	require.Equal(t, token, publisher.token)
+
+	require.NoError(t, cli.Create(ctx, fsmeta.CreateRequest{
+		Mount:  mount,
+		Parent: fsmeta.RootInode,
+		Name:   "b",
+		Inode:  502,
+	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, LinkCount: 1}))
+
+	snapshotPage, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
+		Mount:           mount,
+		Parent:          fsmeta.RootInode,
+		Limit:           8,
+		SnapshotVersion: token.ReadVersion,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"a"}, dentryNames(snapshotPage))
+
+	latestPage, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
+		Mount:  mount,
+		Parent: fsmeta.RootInode,
+		Limit:  8,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"a", "b"}, dentryNames(latestPage))
+}
+
+type snapshotRecorder struct {
+	token fsmeta.SnapshotSubtreeToken
+}
+
+func (r *snapshotRecorder) PublishSnapshotSubtree(_ context.Context, token fsmeta.SnapshotSubtreeToken) error {
+	r.token = token
+	return nil
+}
+
+func dentryNames(entries []fsmeta.DentryAttrPair) []string {
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, entry.Dentry.Name)
+	}
+	return out
+}
+
 func openFSMetadataClient(t *testing.T, ctx context.Context, executor fsmetaserver.Executor, opts ...fsmetaserver.Option) (*fsmetaclient.GRPCClient, func()) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

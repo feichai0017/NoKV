@@ -25,10 +25,29 @@ func lookupRequestFromProto(req *fsmetapb.LookupRequest) fsmeta.LookupRequest {
 
 func readDirRequestFromProto(req *fsmetapb.ReadDirRequest) fsmeta.ReadDirRequest {
 	return fsmeta.ReadDirRequest{
-		Mount:      fsmeta.MountID(req.GetMount()),
-		Parent:     fsmeta.InodeID(req.GetParent()),
-		StartAfter: req.GetStartAfter(),
-		Limit:      req.GetLimit(),
+		Mount:           fsmeta.MountID(req.GetMount()),
+		Parent:          fsmeta.InodeID(req.GetParent()),
+		StartAfter:      req.GetStartAfter(),
+		Limit:           req.GetLimit(),
+		SnapshotVersion: req.GetSnapshotVersion(),
+	}
+}
+
+func snapshotSubtreeRequestFromProto(req *fsmetapb.SnapshotSubtreeRequest) fsmeta.SnapshotSubtreeRequest {
+	if req == nil {
+		return fsmeta.SnapshotSubtreeRequest{}
+	}
+	return fsmeta.SnapshotSubtreeRequest{
+		Mount:     fsmeta.MountID(req.GetMount()),
+		RootInode: fsmeta.InodeID(req.GetRootInode()),
+	}
+}
+
+func snapshotSubtreeResponseToProto(token fsmeta.SnapshotSubtreeToken) *fsmetapb.SnapshotSubtreeResponse {
+	return &fsmetapb.SnapshotSubtreeResponse{
+		Mount:       string(token.Mount),
+		RootInode:   uint64(token.RootInode),
+		ReadVersion: token.ReadVersion,
 	}
 }
 

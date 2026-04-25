@@ -1,6 +1,8 @@
 package event
 
 import (
+	"fmt"
+
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
@@ -32,11 +34,22 @@ const (
 	KindTenure
 	KindLegacy
 	KindHandover
+	KindSnapshotEpochPublished
 )
 
 // StoreMembership describes one store membership change carried by a root event.
 type StoreMembership struct {
 	StoreID uint64
+}
+
+// SnapshotEpoch publishes one fsmeta subtree MVCC read epoch into rooted truth.
+// It is an authority/retention claim, not a materialized filesystem snapshot.
+type SnapshotEpoch struct {
+	SnapshotID  string
+	Mount       string
+	RootInode   uint64
+	ReadVersion uint64
+	PublishedAt RootCursor
 }
 
 // AllocatorFence raises one rooted allocator floor monotonically.
@@ -135,6 +148,7 @@ type Event struct {
 	Tenure           *Tenure
 	Legacy           *Legacy
 	Handover         *Handover
+	SnapshotEpoch    *SnapshotEpoch
 	RegionDescriptor *RegionDescriptorRecord
 	RegionRemoval    *RegionRemoval
 	RangeSplit       *RangeSplit
@@ -148,6 +162,22 @@ func StoreJoined(storeID uint64) Event {
 
 func StoreRetired(storeID uint64) Event {
 	return Event{Kind: KindStoreRetired, StoreMembership: &StoreMembership{StoreID: storeID}}
+}
+
+func SnapshotEpochID(mount string, rootInode, readVersion uint64) string {
+	return fmt.Sprintf("%s/%d/%d", mount, rootInode, readVersion)
+}
+
+func SnapshotEpochPublished(mount string, rootInode, readVersion uint64) Event {
+	return Event{
+		Kind: KindSnapshotEpochPublished,
+		SnapshotEpoch: &SnapshotEpoch{
+			SnapshotID:  SnapshotEpochID(mount, rootInode, readVersion),
+			Mount:       mount,
+			RootInode:   rootInode,
+			ReadVersion: readVersion,
+		},
+	}
 }
 
 func IDAllocatorFenced(min uint64) Event {

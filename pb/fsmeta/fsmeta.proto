@@ -57,6 +57,7 @@ message ReadDirRequest {
   uint64 parent = 2;
   string start_after = 3;
   uint32 limit = 4;
+  uint64 snapshot_version = 5;
 }
 
 message ReadDirResponse {
@@ -124,6 +125,17 @@ message WatchAckOrSubscribe {
   }
 }
 
+message SnapshotSubtreeRequest {
+  string mount = 1;
+  uint64 root_inode = 2;
+}
+
+message SnapshotSubtreeResponse {
+  string mount = 1;
+  uint64 root_inode = 2;
+  uint64 read_version = 3;
+}
+
 message RenameRequest {
   string mount = 1;
   uint64 from_parent = 2;
@@ -148,6 +160,7 @@ service FSMetadata {
   rpc ReadDir(ReadDirRequest) returns (ReadDirResponse);
   rpc ReadDirPlus(ReadDirRequest) returns (ReadDirPlusResponse);
   rpc WatchSubtree(stream WatchAckOrSubscribe) returns (stream WatchSubtreeResponse);
+  rpc SnapshotSubtree(SnapshotSubtreeRequest) returns (SnapshotSubtreeResponse);
   rpc Rename(RenameRequest) returns (RenameResponse);
   rpc Unlink(UnlinkRequest) returns (UnlinkResponse);
 }

@@ -14,6 +14,9 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 	if snapshot.Stores == nil {
 		snapshot.Stores = make(map[uint64]StoreMembership)
 	}
+	if snapshot.SnapshotEpochs == nil {
+		snapshot.SnapshotEpochs = make(map[string]SnapshotEpoch)
+	}
 	if snapshot.Descriptors == nil {
 		snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
 	}
@@ -28,6 +31,8 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 		applyStoreJoinedToSnapshot(snapshot, cursor, event)
 	case rootevent.KindStoreRetired:
 		applyStoreRetiredToSnapshot(snapshot, cursor, event)
+	case rootevent.KindSnapshotEpochPublished:
+		applySnapshotEpochPublishedToSnapshot(snapshot, cursor, event)
 	case rootevent.KindIDAllocatorFenced:
 		if event.AllocatorFence != nil && event.AllocatorFence.Minimum > snapshot.State.IDFence {
 			snapshot.State.IDFence = event.AllocatorFence.Minimum
@@ -60,6 +65,26 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 		_ = ApplyPeerChangeToSnapshot(snapshot, event)
 	}
 	snapshot.State.LastCommitted = cursor
+}
+
+func applySnapshotEpochPublishedToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Event) {
+	if snapshot == nil || event.SnapshotEpoch == nil {
+		return
+	}
+	epoch := SnapshotEpoch{
+		SnapshotID:  event.SnapshotEpoch.SnapshotID,
+		Mount:       event.SnapshotEpoch.Mount,
+		RootInode:   event.SnapshotEpoch.RootInode,
+		ReadVersion: event.SnapshotEpoch.ReadVersion,
+		PublishedAt: cursor,
+	}
+	if epoch.SnapshotID == "" {
+		epoch.SnapshotID = rootevent.SnapshotEpochID(epoch.Mount, epoch.RootInode, epoch.ReadVersion)
+	}
+	if epoch.Mount == "" || epoch.RootInode == 0 || epoch.ReadVersion == 0 {
+		return
+	}
+	snapshot.SnapshotEpochs[epoch.SnapshotID] = epoch
 }
 
 func applyStoreJoinedToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Event) {

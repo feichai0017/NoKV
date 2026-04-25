@@ -21,6 +21,7 @@ type Client interface {
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
 	ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
 	WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) (WatchSubscription, error)
+	SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error)
 	Rename(ctx context.Context, req fsmeta.RenameRequest) error
 	Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
 	Close() error
@@ -122,6 +123,17 @@ func (c *GRPCClient) WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) 
 		return nil, translateRPCError(err)
 	}
 	return &WatchStream{stream: stream}, nil
+}
+
+func (c *GRPCClient) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
+	if err := c.requireRPC(); err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, err
+	}
+	resp, err := c.rpc.SnapshotSubtree(ctx, snapshotSubtreeRequestToProto(req))
+	if err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, translateRPCError(err)
+	}
+	return snapshotSubtreeTokenFromProto(resp), nil
 }
 
 func (c *GRPCClient) Rename(ctx context.Context, req fsmeta.RenameRequest) error {

@@ -142,7 +142,7 @@ func (e *Executor) ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fs
 	if err != nil {
 		return nil, err
 	}
-	version, err := e.reserveReadVersion(ctx)
+	version, err := e.readVersion(ctx, req.SnapshotVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +157,7 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 	if err != nil {
 		return nil, err
 	}
-	version, err := e.reserveReadVersion(ctx)
+	version, err := e.readVersion(ctx, req.SnapshotVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -199,6 +199,24 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 		})
 	}
 	return out, nil
+}
+
+// SnapshotSubtree publishes a stable MVCC read version for one direct subtree
+// root. The returned token is consumed by ReadDir / ReadDirPlus through
+// ReadDirRequest.SnapshotVersion.
+func (e *Executor) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
+	if _, err := fsmeta.PlanSnapshotSubtree(req); err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, err
+	}
+	version, err := e.reserveReadVersion(ctx)
+	if err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, err
+	}
+	return fsmeta.SnapshotSubtreeToken{
+		Mount:       req.Mount,
+		RootInode:   req.RootInode,
+		ReadVersion: version,
+	}, nil
 }
 
 func (e *Executor) scanDentries(ctx context.Context, plan fsmeta.OperationPlan, version uint64) ([]fsmeta.DentryRecord, error) {
@@ -291,6 +309,13 @@ func (e *Executor) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
 
 func (e *Executor) reserveReadVersion(ctx context.Context) (uint64, error) {
 	return e.runner.ReserveTimestamp(ctx, 1)
+}
+
+func (e *Executor) readVersion(ctx context.Context, snapshotVersion uint64) (uint64, error) {
+	if snapshotVersion != 0 {
+		return snapshotVersion, nil
+	}
+	return e.reserveReadVersion(ctx)
 }
 
 // reserveTxnVersions pre-allocates both start_ts and commit_ts in a single TSO

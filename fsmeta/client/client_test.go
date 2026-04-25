@@ -50,6 +50,13 @@ func (e *fakeExecutor) ReadDirPlus(context.Context, fsmeta.ReadDirRequest) ([]fs
 	}}, nil
 }
 
+func (e *fakeExecutor) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
+	if e.err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, e.err
+	}
+	return fsmeta.SnapshotSubtreeToken{Mount: req.Mount, RootInode: req.RootInode, ReadVersion: 5678}, nil
+}
+
 func (e *fakeExecutor) Rename(context.Context, fsmeta.RenameRequest) error {
 	return e.err
 }
@@ -146,6 +153,18 @@ func TestTypedClientWatchSubtree(t *testing.T) {
 		return len(watcher.sub.acks) == 1 && watcher.sub.acks[0] == evt.Cursor
 	}, time.Second, 10*time.Millisecond)
 	require.NoError(t, stream.Close())
+}
+
+func TestTypedClientSnapshotSubtree(t *testing.T) {
+	cli, cleanup := openBufconnClient(t, &fakeExecutor{})
+	defer cleanup()
+
+	token, err := cli.SnapshotSubtree(context.Background(), fsmeta.SnapshotSubtreeRequest{
+		Mount:     "vol",
+		RootInode: 42,
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 5678}, token)
 }
 
 type fakeWatcher struct {

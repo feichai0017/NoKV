@@ -54,6 +54,22 @@ type Watcher interface {
 	Subscribe(context.Context, WatchRequest) (WatchSubscription, error)
 }
 
+// SnapshotPublisher records published subtree snapshot epochs into an authority
+// layer such as meta/root. Implementations must not store per-dentry data.
+type SnapshotPublisher interface {
+	PublishSnapshotSubtree(context.Context, SnapshotSubtreeToken) error
+}
+
+// SnapshotPublisherFunc adapts a function into SnapshotPublisher.
+type SnapshotPublisherFunc func(context.Context, SnapshotSubtreeToken) error
+
+func (f SnapshotPublisherFunc) PublishSnapshotSubtree(ctx context.Context, token SnapshotSubtreeToken) error {
+	if f == nil {
+		return nil
+	}
+	return f(ctx, token)
+}
+
 // WatchPrefix returns the byte prefix a WatchRequest should match.
 func WatchPrefix(req WatchRequest) ([]byte, error) {
 	if len(req.KeyPrefix) > 0 {
