@@ -150,6 +150,13 @@ type Config struct {
 5. dial `StoreInfo.client_addr` 并缓存连接。
 6. 连接失败时失效 store cache，重新向 coordinator resolve。
 
+缓存命中不是永久信任。`raftstore/client` 默认每 30 秒 revalidate 一次 cached store endpoint：
+
+- revalidation 看到 `DOWN`：失效本地 store cache，返回 `ErrStoreUnavailable`。
+- revalidation 看到同地址 `UP`：刷新 validated timestamp，不重连。
+- revalidation 看到新地址 `UP`：替换本地 store connection。
+- revalidation 期间 coordinator 短暂不可达：继续使用已有连接，避免控制面抖动放大成数据面中断。
+
 生产 client 不再接受静态 `Stores []StoreEndpoint`。测试里可以注入静态 resolver，但那只是 fake coordinator，不是运行时 fallback。
 
 ## 6. Gateway / Service 启动方式
