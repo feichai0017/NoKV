@@ -70,3 +70,4 @@
   - [2026-04-25 fsmeta Stage 1 benchmark 结果](notes/2026-04-25-fsmeta-stage1-benchmark-results.md)
   - [2026-04-25 Store Membership：rooted truth 与 runtime view 的边界](notes/2026-04-25-store-membership-rooted-vs-runtime-view.md)
   - [2026-04-25 Namespace Authority Events Umbrella](notes/2026-04-25-namespace-authority-events-umbrella.md)
+  - [2026-04-25 WatchSubtree —— rooted changefeed for filesystem & object namespace](notes/2026-04-25-watchsubtree-rooted-changefeed.md)
