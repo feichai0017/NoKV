@@ -13,6 +13,8 @@
 package state
 
 import (
+	"maps"
+
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -163,9 +165,7 @@ func CloneStoreMemberships(in map[uint64]StoreMembership) map[uint64]StoreMember
 		return make(map[uint64]StoreMembership)
 	}
 	out := make(map[uint64]StoreMembership, len(in))
-	for storeID, membership := range in {
-		out[storeID] = membership
-	}
+	maps.Copy(out, in)
 	return out
 }
 

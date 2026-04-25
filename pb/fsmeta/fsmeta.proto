@@ -67,6 +67,63 @@ message ReadDirPlusResponse {
   repeated DentryAttrPair entries = 1;
 }
 
+message WatchCursor {
+  uint64 region_id = 1;
+  uint64 term = 2;
+  uint64 index = 3;
+}
+
+enum WatchEventSource {
+  WATCH_EVENT_SOURCE_UNSPECIFIED = 0;
+  WATCH_EVENT_SOURCE_COMMIT = 1;
+  WATCH_EVENT_SOURCE_RESOLVE_LOCK = 2;
+}
+
+message WatchSubtreeRequest {
+  string mount = 1;
+  uint64 root_inode = 2;
+  bytes key_prefix = 3;
+  bool descend_recursively = 4;
+  WatchCursor resume_cursor = 5;
+  uint32 back_pressure_window = 6;
+}
+
+message WatchEvent {
+  WatchCursor raft_cursor = 1;
+  uint64 commit_version = 2;
+  WatchEventSource source = 3;
+  bytes key = 4;
+}
+
+message WatchAck {
+  WatchCursor cursor = 1;
+}
+
+message WatchCatchupComplete {
+  WatchCursor cursor = 1;
+}
+
+message WatchThrottle {
+  uint32 outstanding = 1;
+  uint32 limit = 2;
+  string reason = 3;
+}
+
+message WatchSubtreeResponse {
+  oneof payload {
+    WatchEvent event = 1;
+    WatchCatchupComplete catchup_complete = 2;
+    WatchThrottle throttle = 3;
+  }
+}
+
+message WatchAckOrSubscribe {
+  oneof body {
+    WatchSubtreeRequest subscribe = 1;
+    WatchAck ack = 2;
+  }
+}
+
 message RenameRequest {
   string mount = 1;
   uint64 from_parent = 2;
@@ -90,6 +147,7 @@ service FSMetadata {
   rpc Lookup(LookupRequest) returns (LookupResponse);
   rpc ReadDir(ReadDirRequest) returns (ReadDirResponse);
   rpc ReadDirPlus(ReadDirRequest) returns (ReadDirPlusResponse);
+  rpc WatchSubtree(stream WatchAckOrSubscribe) returns (stream WatchSubtreeResponse);
   rpc Rename(RenameRequest) returns (RenameResponse);
   rpc Unlink(UnlinkRequest) returns (UnlinkResponse);
 }

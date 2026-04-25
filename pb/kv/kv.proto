@@ -245,6 +245,31 @@ message KvCheckTxnStatusResponse {
   nokv.error.v1.RegionError region_error = 2;
 }
 
+enum ApplyWatchEventSource {
+  APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED = 0;
+  APPLY_WATCH_EVENT_SOURCE_COMMIT = 1;
+  APPLY_WATCH_EVENT_SOURCE_RESOLVE_LOCK = 2;
+}
+
+message ApplyWatchRequest {
+  bytes key_prefix = 1;
+  uint32 buffer = 2;
+}
+
+message ApplyWatchEvent {
+  uint64 region_id = 1;
+  uint64 term = 2;
+  uint64 index = 3;
+  ApplyWatchEventSource source = 4;
+  uint64 commit_version = 5;
+  repeated bytes keys = 6;
+}
+
+message ApplyWatchResponse {
+  ApplyWatchEvent event = 1;
+  uint64 dropped_events = 2;
+}
+
 service NoKV {
   rpc KvGet(KvGetRequest) returns (KvGetResponse);
   rpc KvBatchGet(KvBatchGetRequest) returns (KvBatchGetResponse);
@@ -254,6 +279,7 @@ service NoKV {
   rpc KvBatchRollback(KvBatchRollbackRequest) returns (KvBatchRollbackResponse);
   rpc KvResolveLock(KvResolveLockRequest) returns (KvResolveLockResponse);
   rpc KvCheckTxnStatus(KvCheckTxnStatusRequest) returns (KvCheckTxnStatusResponse);
+  rpc KvWatchApply(ApplyWatchRequest) returns (stream ApplyWatchResponse);
 }
 
 message KeyError {

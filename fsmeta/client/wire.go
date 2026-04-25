@@ -99,6 +99,59 @@ func pairFromProto(pb *fsmetapb.DentryAttrPair) fsmeta.DentryAttrPair {
 	}
 }
 
+func watchRequestToProto(req fsmeta.WatchRequest) *fsmetapb.WatchSubtreeRequest {
+	return &fsmetapb.WatchSubtreeRequest{
+		Mount:              string(req.Mount),
+		RootInode:          uint64(req.RootInode),
+		KeyPrefix:          append([]byte(nil), req.KeyPrefix...),
+		DescendRecursively: req.DescendRecursively,
+		ResumeCursor:       watchCursorToProto(req.ResumeCursor),
+		BackPressureWindow: req.BackPressureWindow,
+	}
+}
+
+func watchCursorToProto(cursor fsmeta.WatchCursor) *fsmetapb.WatchCursor {
+	return &fsmetapb.WatchCursor{
+		RegionId: cursor.RegionID,
+		Term:     cursor.Term,
+		Index:    cursor.Index,
+	}
+}
+
+func watchCursorFromProto(cursor *fsmetapb.WatchCursor) fsmeta.WatchCursor {
+	if cursor == nil {
+		return fsmeta.WatchCursor{}
+	}
+	return fsmeta.WatchCursor{
+		RegionID: cursor.GetRegionId(),
+		Term:     cursor.GetTerm(),
+		Index:    cursor.GetIndex(),
+	}
+}
+
+func watchEventFromProto(pb *fsmetapb.WatchEvent) fsmeta.WatchEvent {
+	if pb == nil {
+		return fsmeta.WatchEvent{}
+	}
+	return fsmeta.WatchEvent{
+		Cursor:        watchCursorFromProto(pb.GetRaftCursor()),
+		CommitVersion: pb.GetCommitVersion(),
+		Source:        watchEventSourceFromProto(pb.GetSource()),
+		Key:           append([]byte(nil), pb.GetKey()...),
+	}
+}
+
+func watchEventSourceFromProto(source fsmetapb.WatchEventSource) fsmeta.WatchEventSource {
+	switch source {
+	case fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_COMMIT:
+		return fsmeta.WatchEventSourceCommit
+	case fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_RESOLVE_LOCK:
+		return fsmeta.WatchEventSourceResolveLock
+	default:
+		return 0
+	}
+}
+
 func inodeTypeFromProto(typ fsmetapb.InodeType) fsmeta.InodeType {
 	switch typ {
 	case fsmetapb.InodeType_INODE_TYPE_FILE:

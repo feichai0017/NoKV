@@ -499,6 +499,7 @@ func (mc *mockCluster) scan(storeID uint64, req *kvrpcpb.KvScanRequest) (*kvrpcp
 }
 
 type mockService struct {
+	kvrpcpb.UnimplementedNoKVServer
 	storeID uint64
 	cluster *mockCluster
 }

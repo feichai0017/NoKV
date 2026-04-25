@@ -21,12 +21,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	FSMetadata_Create_FullMethodName      = "/nokv.fsmeta.v1.FSMetadata/Create"
-	FSMetadata_Lookup_FullMethodName      = "/nokv.fsmeta.v1.FSMetadata/Lookup"
-	FSMetadata_ReadDir_FullMethodName     = "/nokv.fsmeta.v1.FSMetadata/ReadDir"
-	FSMetadata_ReadDirPlus_FullMethodName = "/nokv.fsmeta.v1.FSMetadata/ReadDirPlus"
-	FSMetadata_Rename_FullMethodName      = "/nokv.fsmeta.v1.FSMetadata/Rename"
-	FSMetadata_Unlink_FullMethodName      = "/nokv.fsmeta.v1.FSMetadata/Unlink"
+	FSMetadata_Create_FullMethodName       = "/nokv.fsmeta.v1.FSMetadata/Create"
+	FSMetadata_Lookup_FullMethodName       = "/nokv.fsmeta.v1.FSMetadata/Lookup"
+	FSMetadata_ReadDir_FullMethodName      = "/nokv.fsmeta.v1.FSMetadata/ReadDir"
+	FSMetadata_ReadDirPlus_FullMethodName  = "/nokv.fsmeta.v1.FSMetadata/ReadDirPlus"
+	FSMetadata_WatchSubtree_FullMethodName = "/nokv.fsmeta.v1.FSMetadata/WatchSubtree"
+	FSMetadata_Rename_FullMethodName       = "/nokv.fsmeta.v1.FSMetadata/Rename"
+	FSMetadata_Unlink_FullMethodName       = "/nokv.fsmeta.v1.FSMetadata/Unlink"
 )
 
 // FSMetadataClient is the client API for FSMetadata service.
@@ -37,6 +38,7 @@ type FSMetadataClient interface {
 	Lookup(ctx context.Context, in *LookupRequest, opts ...grpc.CallOption) (*LookupResponse, error)
 	ReadDir(ctx context.Context, in *ReadDirRequest, opts ...grpc.CallOption) (*ReadDirResponse, error)
 	ReadDirPlus(ctx context.Context, in *ReadDirRequest, opts ...grpc.CallOption) (*ReadDirPlusResponse, error)
+	WatchSubtree(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[WatchAckOrSubscribe, WatchSubtreeResponse], error)
 	Rename(ctx context.Context, in *RenameRequest, opts ...grpc.CallOption) (*RenameResponse, error)
 	Unlink(ctx context.Context, in *UnlinkRequest, opts ...grpc.CallOption) (*UnlinkResponse, error)
 }
@@ -89,6 +91,19 @@ func (c *fSMetadataClient) ReadDirPlus(ctx context.Context, in *ReadDirRequest, 
 	return out, nil
 }
 
+func (c *fSMetadataClient) WatchSubtree(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[WatchAckOrSubscribe, WatchSubtreeResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FSMetadata_ServiceDesc.Streams[0], FSMetadata_WatchSubtree_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchAckOrSubscribe, WatchSubtreeResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FSMetadata_WatchSubtreeClient = grpc.BidiStreamingClient[WatchAckOrSubscribe, WatchSubtreeResponse]
+
 func (c *fSMetadataClient) Rename(ctx context.Context, in *RenameRequest, opts ...grpc.CallOption) (*RenameResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RenameResponse)
@@ -117,6 +132,7 @@ type FSMetadataServer interface {
 	Lookup(context.Context, *LookupRequest) (*LookupResponse, error)
 	ReadDir(context.Context, *ReadDirRequest) (*ReadDirResponse, error)
 	ReadDirPlus(context.Context, *ReadDirRequest) (*ReadDirPlusResponse, error)
+	WatchSubtree(grpc.BidiStreamingServer[WatchAckOrSubscribe, WatchSubtreeResponse]) error
 	Rename(context.Context, *RenameRequest) (*RenameResponse, error)
 	Unlink(context.Context, *UnlinkRequest) (*UnlinkResponse, error)
 }
@@ -139,6 +155,9 @@ func (UnimplementedFSMetadataServer) ReadDir(context.Context, *ReadDirRequest) (
 }
 func (UnimplementedFSMetadataServer) ReadDirPlus(context.Context, *ReadDirRequest) (*ReadDirPlusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReadDirPlus not implemented")
+}
+func (UnimplementedFSMetadataServer) WatchSubtree(grpc.BidiStreamingServer[WatchAckOrSubscribe, WatchSubtreeResponse]) error {
+	return status.Error(codes.Unimplemented, "method WatchSubtree not implemented")
 }
 func (UnimplementedFSMetadataServer) Rename(context.Context, *RenameRequest) (*RenameResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Rename not implemented")
@@ -238,6 +257,13 @@ func _FSMetadata_ReadDirPlus_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FSMetadata_WatchSubtree_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(FSMetadataServer).WatchSubtree(&grpc.GenericServerStream[WatchAckOrSubscribe, WatchSubtreeResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FSMetadata_WatchSubtreeServer = grpc.BidiStreamingServer[WatchAckOrSubscribe, WatchSubtreeResponse]
+
 func _FSMetadata_Rename_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RenameRequest)
 	if err := dec(in); err != nil {
@@ -306,6 +332,13 @@ var FSMetadata_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _FSMetadata_Unlink_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "WatchSubtree",
+			Handler:       _FSMetadata_WatchSubtree_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
 	Metadata: "fsmeta/fsmeta.proto",
 }
