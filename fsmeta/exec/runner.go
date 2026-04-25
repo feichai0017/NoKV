@@ -298,6 +298,30 @@ func (e *Executor) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtr
 	}, nil
 }
 
+// GetQuotaUsage returns the current persisted usage counter for one quota
+// subject. Missing usage keys represent zero usage.
+func (e *Executor) GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error) {
+	if req.Mount == "" {
+		return fsmeta.UsageRecord{}, fsmeta.ErrInvalidMountID
+	}
+	key, err := fsmeta.EncodeUsageKey(req.Mount, req.Scope)
+	if err != nil {
+		return fsmeta.UsageRecord{}, err
+	}
+	version, err := e.reserveReadVersion(ctx)
+	if err != nil {
+		return fsmeta.UsageRecord{}, err
+	}
+	value, ok, err := e.runner.Get(ctx, key, version)
+	if err != nil {
+		return fsmeta.UsageRecord{}, err
+	}
+	if !ok {
+		return fsmeta.UsageRecord{}, nil
+	}
+	return fsmeta.DecodeUsageValue(value)
+}
+
 func (e *Executor) scanDentries(ctx context.Context, plan fsmeta.OperationPlan, version uint64) ([]fsmeta.DentryRecord, error) {
 	kvs, err := e.runner.Scan(ctx, plan.StartKey, plan.Limit, version)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
@@ -26,6 +27,10 @@ type mountCache struct {
 
 	mu      sync.Mutex
 	entries map[fsmeta.MountID]mountEntry
+
+	cacheHitsTotal        atomic.Uint64
+	cacheMissesTotal      atomic.Uint64
+	admissionRejectsTotal atomic.Uint64
 }
 
 type mountEntry struct {
@@ -40,14 +45,18 @@ func (c *mountCache) ResolveMount(ctx context.Context, mount fsmeta.MountID) (Mo
 	}
 	now := c.clock()
 	if record, err, ok := c.lookup(mount, now); ok {
+		c.cacheHitsTotal.Add(1)
+		c.countAdmissionReject(record, err)
 		return record, err
 	}
+	c.cacheMissesTotal.Add(1)
 	resp, err := c.coord.GetMount(ctx, &coordpb.GetMountRequest{MountId: string(mount)})
 	if err != nil {
 		return MountAdmission{}, err
 	}
 	record, err := mountFromProto(resp)
 	c.put(mount, now, record, err)
+	c.countAdmissionReject(record, err)
 	return record, err
 }
 
@@ -91,6 +100,27 @@ func (c *mountCache) put(mount fsmeta.MountID, now time.Time, record MountAdmiss
 		c.entries = make(map[fsmeta.MountID]mountEntry)
 	}
 	c.entries[mount] = mountEntry{record: record, err: err, expiresAt: now.Add(c.ttl)}
+}
+
+func (c *mountCache) countAdmissionReject(record MountAdmission, err error) {
+	if c == nil {
+		return
+	}
+	if err != nil || record.MountID == "" || record.Retired {
+		c.admissionRejectsTotal.Add(1)
+	}
+}
+
+// Stats returns mount-admission counters suitable for expvar export.
+func (c *mountCache) Stats() map[string]any {
+	if c == nil {
+		return map[string]any{}
+	}
+	return map[string]any{
+		"cache_hits_total":        c.cacheHitsTotal.Load(),
+		"cache_misses_total":      c.cacheMissesTotal.Load(),
+		"admission_rejects_total": c.admissionRejectsTotal.Load(),
+	}
 }
 
 func mountFromProto(resp *coordpb.GetMountResponse) (MountAdmission, error) {

@@ -30,6 +30,7 @@ by `fsmeta/server`.
 | `ReadDirPlus` | Scan dentries and fetch inode attributes in one typed operation. |
 | `WatchSubtree` | Live prefix-scoped metadata change stream with explicit ack/back-pressure. |
 | `SnapshotSubtree` | Publish a stable MVCC read epoch for later snapshot-version reads. |
+| `GetQuotaUsage` | Read the persisted quota usage counter for one mount/scope. |
 | `RenameSubtree` | Atomically move one subtree root dentry from one parent/name to another. |
 | `Unlink` | Delete one dentry. |
 
@@ -54,11 +55,16 @@ Stage 1 intentionally keeps the model small:
 | `SnapshotSubtree` MVCC epoch | Implemented in Stage 2.3 |
 | Historical watch catch-up | Implemented in Stage 3.1 |
 | Rooted mount lifecycle | Implemented in Stage 3.2 |
-| Hardlink ref-count, xattrs, quota fence | Future work |
+| Rooted quota fence and persisted usage counters | Implemented in Stage 3.5 |
+| Hardlink ref-count, inode GC, xattrs | Future work |
 
 The current service is a metadata substrate, not a complete filesystem stack.
-FUSE, POSIX compatibility, quota, recursive subtree materialization, and
-snapshot GC retention enforcement belong to later stages.
+FUSE, POSIX compatibility, hardlink semantics, recursive subtree
+materialization, and snapshot GC retention enforcement belong to later stages.
+
+`Unlink` currently removes one dentry only. It does not decrement
+`InodeRecord.LinkCount` and does not garbage-collect unreachable inode records;
+callers must treat inode GC as a future Stage 4 responsibility.
 
 ## Mount Lifecycle
 
@@ -89,6 +95,22 @@ nokv mount retire --coordinator-addr 127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:239
 For local development, Docker Compose runs the same explicit registration once
 through the `mount-init` service. `nokv-fsmeta` itself never creates mounts; if
 the mount is missing or retired, mutating RPCs fail with `FailedPrecondition`.
+
+Mount retirement and pending subtree handoff repair are detected by the
+`nokv-fsmeta` runtime monitor. The default detection interval is one second.
+During that window, safety wins over availability: a subtree with a rooted
+pending handoff rejects competing mutations until the monitor completes the
+handoff.
+
+## Quota Fence
+
+Quota fences are rooted truth. Usage counters are stored as fsmeta data-plane
+keys and are updated in the same Percolator transaction as the metadata
+mutation that changes usage. Scope `0` is mount-wide usage; non-zero scopes are
+direct quota accounting roots.
+
+Use `GetQuotaUsage` to inspect the persisted counter for one subject. Missing
+usage keys mean zero usage.
 
 ## SnapshotSubtree
 

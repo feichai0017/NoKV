@@ -21,6 +21,7 @@ type Executor interface {
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
 	ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
 	SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error)
+	GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error)
 	RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error
 	Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
 }
@@ -228,6 +229,20 @@ func (s *Service) RetireSnapshotSubtree(ctx context.Context, req *fsmetapb.Retir
 		return nil, rpcError(err)
 	}
 	return &fsmetapb.RetireSnapshotSubtreeResponse{}, nil
+}
+
+func (s *Service) GetQuotaUsage(ctx context.Context, req *fsmetapb.QuotaUsageRequest) (*fsmetapb.QuotaUsageResponse, error) {
+	if err := s.requireExecutor(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "fsmeta quota usage request is required")
+	}
+	usage, err := s.executor.GetQuotaUsage(ctx, quotaUsageRequestFromProto(req))
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	return quotaUsageResponseToProto(usage), nil
 }
 
 func (s *Service) RenameSubtree(ctx context.Context, req *fsmetapb.RenameSubtreeRequest) (*fsmetapb.RenameSubtreeResponse, error) {

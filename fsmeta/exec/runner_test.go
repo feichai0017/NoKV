@@ -179,6 +179,31 @@ func TestExecutorSnapshotSubtreeTokenDrivesReadVersion(t *testing.T) {
 	require.Equal(t, []uint64{token.ReadVersion}, runner.batchVersions)
 }
 
+func TestExecutorGetQuotaUsage(t *testing.T) {
+	runner := newFakeRunner()
+	key, err := fsmeta.EncodeUsageKey("vol", 7)
+	require.NoError(t, err)
+	value, err := fsmeta.EncodeUsageValue(fsmeta.UsageRecord{Bytes: 4096, Inodes: 2})
+	require.NoError(t, err)
+	runner.data[string(key)] = value
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	usage, err := executor.GetQuotaUsage(context.Background(), fsmeta.QuotaUsageRequest{Mount: "vol", Scope: 7})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.UsageRecord{Bytes: 4096, Inodes: 2}, usage)
+}
+
+func TestExecutorGetQuotaUsageReturnsZeroForMissingCounter(t *testing.T) {
+	runner := newFakeRunner()
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	usage, err := executor.GetQuotaUsage(context.Background(), fsmeta.QuotaUsageRequest{Mount: "vol"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.UsageRecord{}, usage)
+}
+
 func (r *fakeRunner) Mutate(_ context.Context, _ []byte, mutations []*kvrpcpb.Mutation, _, _, _ uint64) error {
 	if len(r.mutateErrs) > 0 {
 		err := r.mutateErrs[0]
