@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1c78d743.js";
+            window.path_to_searchindex_js = "searchindex-29b09330.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-409c1dfb.js"></script>
+        <script src="toc-2018305d.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -207,7 +207,8 @@ by <code>fsmeta/server</code>.</p>
 <tr><td><code>ReadDirPlus</code></td><td>Scan dentries and fetch inode attributes in one typed operation.</td></tr>
 <tr><td><code>WatchSubtree</code></td><td>Live prefix-scoped metadata change stream with explicit ack/back-pressure.</td></tr>
 <tr><td><code>SnapshotSubtree</code></td><td>Publish a stable MVCC read epoch for later snapshot-version reads.</td></tr>
-<tr><td><code>Rename</code></td><td>Atomically move one dentry from one parent/name to another.</td></tr>
+<tr><td><code>GetQuotaUsage</code></td><td>Read the persisted quota usage counter for one mount/scope.</td></tr>
+<tr><td><code>RenameSubtree</code></td><td>Atomically move one subtree root dentry from one parent/name to another.</td></tr>
 <tr><td><code>Unlink</code></td><td>Delete one dentry.</td></tr>
 </tbody>
 </table>
@@ -225,20 +226,62 @@ schema usually implements the same operation as one scan plus N point reads.</p>
 <tbody>
 <tr><td>Dentry and inode binary codecs</td><td>Implemented</td></tr>
 <tr><td>Plan-driven operation contracts</td><td>Implemented</td></tr>
-<tr><td>Create / Lookup / ReadDir / ReadDirPlus / Rename / Unlink</td><td>Implemented</td></tr>
+<tr><td>Create / Lookup / ReadDir / ReadDirPlus / RenameSubtree / Link / Unlink</td><td>Implemented</td></tr>
 <tr><td>Cross-region 2PC consumption</td><td>Implemented through <code>raftstore/client</code></td></tr>
 <tr><td>Server-side <code>AssertionNotExist</code></td><td>Implemented in Percolator prewrite</td></tr>
 <tr><td>Native gRPC service and typed Go client</td><td>Implemented</td></tr>
 <tr><td>Docker Compose service</td><td>Implemented</td></tr>
 <tr><td>Live <code>WatchSubtree</code></td><td>Implemented in Stage 2.2</td></tr>
 <tr><td><code>SnapshotSubtree</code> MVCC epoch</td><td>Implemented in Stage 2.3</td></tr>
-<tr><td>Historical watch catch-up, hardlink ref-count, xattrs, quota fence</td><td>Future work</td></tr>
+<tr><td>Historical watch catch-up</td><td>Implemented in Stage 3.1</td></tr>
+<tr><td>Rooted mount lifecycle</td><td>Implemented in Stage 3.2</td></tr>
+<tr><td>Rooted quota fence and persisted usage counters</td><td>Implemented in Stage 3.5</td></tr>
+<tr><td>Hardlink ref-count and last-link inode GC</td><td>Implemented</td></tr>
+<tr><td>xattrs</td><td>Future work</td></tr>
 </tbody>
 </table>
 </div>
 <p>The current service is a metadata substrate, not a complete filesystem stack.
-FUSE, POSIX compatibility, historical watch catch-up, quota, recursive subtree
-materialization, and snapshot GC retention enforcement belong to later stages.</p>
+FUSE, full POSIX compatibility, recursive subtree materialization, and snapshot
+GC retention enforcement belong to later stages.</p>
+<p><code>Link</code> creates an additional dentry for an existing non-directory inode and
+increments <code>InodeRecord.LinkCount</code> in the same transaction. <code>Unlink</code> decrements
+the link count and deletes the inode record when the last dentry is removed.
+Directory hard links remain invalid.</p>
+<h2 id="mount-lifecycle"><a class="header" href="#mount-lifecycle">Mount Lifecycle</a></h2>
+<p><code>mount</code> is no longer a caller-local string convention. Production <code>nokv-fsmeta</code>
+checks mount membership through the coordinator before mutating metadata:</p>
+<ul>
+<li><code>MountRegistered(mount_id, root_inode, schema_version)</code> is rooted truth.</li>
+<li><code>MountRetired(mount_id)</code> is terminal; retired mounts reject writes.</li>
+<li>Runtime mount caches belong to coordinator / fsmeta, not <code>meta/root</code>.</li>
+</ul>
+<p>Register a mount explicitly:</p>
+<pre><code class="language-bash">nokv mount register \
+  --coordinator-addr 127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392 \
+  --mount default \
+  --root-inode 1 \
+  --schema-version 1
+</code></pre>
+<p>List or retire mounts:</p>
+<pre><code class="language-bash">nokv mount list --coordinator-addr 127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392
+nokv mount retire --coordinator-addr 127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392 --mount default
+</code></pre>
+<p>For local development, Docker Compose runs the same explicit registration once
+through the <code>mount-init</code> service. <code>nokv-fsmeta</code> itself never creates mounts; if
+the mount is missing or retired, mutating RPCs fail with <code>FailedPrecondition</code>.</p>
+<p>Mount retirement and pending subtree handoff repair are detected by the
+<code>nokv-fsmeta</code> runtime monitor. The default detection interval is one second.
+During that window, safety wins over availability: a subtree with a rooted
+pending handoff rejects competing mutations until the monitor completes the
+handoff.</p>
+<h2 id="quota-fence"><a class="header" href="#quota-fence">Quota Fence</a></h2>
+<p>Quota fences are rooted truth. Usage counters are stored as fsmeta data-plane
+keys and are updated in the same Percolator transaction as the metadata
+mutation that changes usage. Scope <code>0</code> is mount-wide usage; non-zero scopes are
+direct quota accounting roots.</p>
+<p>Use <code>GetQuotaUsage</code> to inspect the persisted counter for one subject. Missing
+usage keys mean zero usage.</p>
 <h2 id="snapshotsubtree"><a class="header" href="#snapshotsubtree">SnapshotSubtree</a></h2>
 <p><code>SnapshotSubtree</code> returns a <code>read_version</code> from coordinator TSO and publishes the
 epoch into rooted truth as <code>SnapshotEpochPublished</code>. Subsequent <code>ReadDir</code> /

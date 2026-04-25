@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1c78d743.js";
+            window.path_to_searchindex_js = "searchindex-29b09330.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-409c1dfb.js"></script>
+        <script src="toc-2018305d.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -202,7 +202,7 @@ consecutive numbers — easy to remember, easy to script against.</p>
 <tbody>
 <tr><td>Redis gateway</td><td><code>6380</code></td><td>RESP protocol — <code>redis-cli -p 6380 ...</code></td></tr>
 <tr><td>Redis expvar</td><td><code>9300</code></td><td><code>/debug/vars</code> JSON</td></tr>
-<tr><td>Meta-root-1 gRPC</td><td><code>2380</code></td><td><code>nokv succession-audit --root-peer 1=127.0.0.1:2380 ...</code></td></tr>
+<tr><td>Meta-root-1 gRPC</td><td><code>2380</code></td><td><code>nokv eunomia-audit --root-peer 1=127.0.0.1:2380 ...</code></td></tr>
 <tr><td>Meta-root-2 gRPC</td><td><code>2381</code></td><td></td></tr>
 <tr><td>Meta-root-3 gRPC</td><td><code>2382</code></td><td></td></tr>
 <tr><td>Meta-root-1 expvar</td><td><code>9380</code></td><td><code>/debug/vars</code> JSON</td></tr>
@@ -222,7 +222,7 @@ consecutive numbers — easy to remember, easy to script against.</p>
 </div>
 <h3 id="why-are-meta-root-grpc-ports-exposed"><a class="header" href="#why-are-meta-root-grpc-ports-exposed">Why are meta-root gRPC ports exposed?</a></h3>
 <p>Meta-root (<code>2380/2381/2382</code>) is exposed so host-side tools like
-<code>nokv succession-audit</code> and <code>nokv-config</code> can query rooted state directly for
+<code>nokv eunomia-audit</code> and <code>nokv-config</code> can query rooted state directly for
 debugging. All <code>/debug/vars</code> endpoints also expose the meta-root’s state
 summary (leader, committed index, era) for the dashboard.</p>
 <p><strong>For production, don’t expose meta-root publicly.</strong> The gRPC API accepts
@@ -236,8 +236,8 @@ ports.</p>
 <p>Same applies to coordinator gRPC (<code>2390/2391/2392</code>): convenient for
 host-side client experiments, don’t expose publicly.</p>
 <h3 id="live-audit-from-the-host"><a class="header" href="#live-audit-from-the-host">Live audit from the host</a></h3>
-<pre><code class="language-bash"># Project rooted state through the Succession audit vocabulary
-nokv succession-audit \
+<pre><code class="language-bash"># Project rooted state through the Eunomia audit vocabulary
+nokv eunomia-audit \
   --root-peer 1=127.0.0.1:2380 \
   --root-peer 2=127.0.0.1:2381 \
   --root-peer 3=127.0.0.1:2382
@@ -252,7 +252,7 @@ three planes:</p>
 <ul>
 <li><strong>Truth plane</strong> — which meta-root is raft leader, committed index, allocator
 fences, descriptor / pending-change counts.</li>
-<li><strong>Control plane</strong> — which coordinator currently holds the Succession lease, lease
+<li><strong>Control plane</strong> — which coordinator currently holds the Eunomia lease, lease
 era, root lag, degraded mode, active vs standby tag on every coord.</li>
 <li><strong>Execution plane</strong> — stores heap usage, goroutine count.</li>
 <li><strong>Gateway</strong> — Redis expvar counters.</li>
@@ -289,14 +289,14 @@ basic auth).</p>
 <li><strong>Top:</strong> cluster-wide status pill (“10/10 reachable · HH:MM:SS”)</li>
 <li><strong>Topology diagram:</strong> 3 truth-plane meta-root peers ↔ 3 control-plane
 coordinators ↔ 3 execution-plane stores, with the raft leader highlighted
-in blue, the Succession lease holder in purple, and pulsing lines showing the
+in blue, the Eunomia lease holder in purple, and pulsing lines showing the
 active control-flow edge (lease holder → raft leader, holder → stores,
 gateway → holder).</li>
 <li><strong>Per-service cards:</strong> one card per service showing leader state, lease
 era, committed index, allocator fences, heap stats.</li>
 <li><strong>Event timeline:</strong> auto-populated from expvar diffs — lease handoffs,
 raft elections, descriptor-count changes, node up/down transitions. Use
-this to watch the Succession lifecycle live.</li>
+this to watch the Eunomia lifecycle live.</li>
 <li><strong>Failure drills:</strong> one button per meta-root / coordinator container to
 stop or start it without leaving the browser.</li>
 <li><strong>Redis terminal:</strong> type commands like <code>SET demo "hello"</code>, <code>GET demo</code>,
@@ -371,9 +371,9 @@ publicly.</p>
 <ul>
 <li><a href="config.html">docs/config.md</a> — <code>raft_config.example.json</code> schema (two-layer
 model: address directory vs bootstrap seed)</li>
-<li><a href="succession-audit.html">docs/succession-audit.md</a> — the Succession audit tool behind the dashboard’s
+<li><a href="eunomia-audit.html">docs/eunomia-audit.md</a> — the Eunomia audit tool behind the dashboard’s
 “handover witness” row</li>
-<li><a href="coordinator.html">docs/coordinator.md</a> — Succession lease lifecycle</li>
+<li><a href="coordinator.html">docs/coordinator.md</a> — Eunomia lease lifecycle</li>
 <li><a href="rooted_truth.html">docs/rooted_truth.md</a> — meta-root internals</li>
 </ul>
 
@@ -381,7 +381,7 @@ model: address directory vs bootstrap seed)</li>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="succession-audit.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="eunomia-audit.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -395,7 +395,7 @@ model: address directory vs bootstrap seed)</li>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="succession-audit.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="eunomia-audit.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

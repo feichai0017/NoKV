@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>succession-audit - NoKV Docs</title>
+        <title>eunomia-audit - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1c78d743.js";
+            window.path_to_searchindex_js = "searchindex-29b09330.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-409c1dfb.js"></script>
+        <script src="toc-2018305d.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,12 +178,12 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="succession-audit"><a class="header" href="#succession-audit">succession-audit</a></h1>
-<p><code>nokv succession-audit</code> is a read-only operator tool that projects a live 3-peer
+                        <h1 id="eunomia-audit"><a class="header" href="#eunomia-audit">eunomia-audit</a></h1>
+<p><code>nokv eunomia-audit</code> is a read-only operator tool that projects a live 3-peer
 meta-root cluster’s current rooted state into the <code>coordinator/audit</code>
-succession (Succession) vocabulary. It is the operator
-counterpart to the TLA+ Succession model and the <code>coordinator/audit</code> library that
-coordinator/server consults at runtime.</p>
+Eunomia vocabulary. It is the operator counterpart to the TLA+ Eunomia model
+(<code>spec/Eunomia.tla</code>) and the
+<code>coordinator/audit</code> library that coordinator/server consults at runtime.</p>
 <p>Because NoKV only ships the separated topology (3 meta-root + N coordinator),
 the audit tool speaks only remote gRPC — it does not read meta-root workdirs
 directly.</p>
@@ -226,7 +226,7 @@ consumed</li>
 remain unchanged in code. The audit doc keeps the public vocabulary shorter on
 purpose.</p>
 <h2 id="usage"><a class="header" href="#usage">Usage</a></h2>
-<pre><code class="language-bash">nokv succession-audit \
+<pre><code class="language-bash">nokv eunomia-audit \
   --root-peer 1=127.0.0.1:2380 \
   --root-peer 2=127.0.0.1:2381 \
   --root-peer 3=127.0.0.1:2382
@@ -249,7 +249,7 @@ When omitted, only the snapshot-level audit runs.</li>
 <li><code>--json</code> — emit JSON instead of the default human-readable text.</li>
 </ul>
 <h2 id="sample-output"><a class="header" href="#sample-output">Sample output</a></h2>
-<pre><code class="language-text">Succession audit report
+<pre><code class="language-text">Eunomia audit report
 ----------------
 holder             : coord-1
 now_unix_nano      : 1714857600000000000
@@ -286,11 +286,11 @@ enum:</p>
 <p>Any non-empty <code>finality_defect</code> or any <code>true</code> flag under <code>snapshot anomalies</code>
 indicates that the rooted handoff state has drifted from the expected
 <code>active lease → sealed predecessor → inherited successor → closed handoff</code>
-lifecycle — which is exactly the property <code>spec/Succession.tla</code> proves meta-root must
+lifecycle — which is exactly the property <code>spec/Eunomia.tla</code> proves meta-root must
 preserve.</p>
 <h2 id="runtime-diagnostics-and-metrics"><a class="header" href="#runtime-diagnostics-and-metrics">Runtime diagnostics and metrics</a></h2>
 <p>The audit CLI is the read-only offline/operator view. The live coordinator
-runtime now exposes a matching <code>succession_metrics</code> block through
+runtime now exposes a matching <code>eunomia_metrics</code> block through
 <code>coordinator/server.DiagnosticsSnapshot()</code> and the <code>nokv_coordinator</code> expvar
 surface.</p>
 <p>That block exports four counter families:</p>
@@ -300,7 +300,7 @@ surface.</p>
 <li><code>pre_action_gate_rejections_total</code></li>
 <li><code>guarantee_violations_total</code></li>
 </ul>
-<p><code>guarantee_violations_total</code> uses the same four Succession guarantees:</p>
+<p><code>guarantee_violations_total</code> uses the same four Eunomia guarantees:</p>
 <ul>
 <li><code>primacy</code></li>
 <li><code>inheritance</code></li>
@@ -309,8 +309,8 @@ surface.</p>
 </ul>
 <p>The intended split is:</p>
 <ul>
-<li><code>succession-audit</code> explains whether the <strong>current rooted snapshot</strong> is legal</li>
-<li><code>succession_metrics</code> shows how often the <strong>live runtime</strong> has rejected unsafe
+<li><code>eunomia-audit</code> explains whether the <strong>current rooted snapshot</strong> is legal</li>
+<li><code>eunomia_metrics</code> shows how often the <strong>live runtime</strong> has rejected unsafe
 continuations while the system is running</li>
 </ul>
 <h2 id="related"><a class="header" href="#related">Related</a></h2>

@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1c78d743.js";
+            window.path_to_searchindex_js = "searchindex-29b09330.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-409c1dfb.js"></script>
+        <script src="toc-2018305d.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -235,10 +235,10 @@ can rely on.</p>
 <p>The current protocol is intentionally minimal. It does not yet expose the full
 future runtime/operator model such as stalled transitions or richer catch-up
 actions.</p>
-<h3 id="minimal-succession-vocabulary"><a class="header" href="#minimal-succession-vocabulary">Minimal Succession vocabulary</a></h3>
+<h3 id="minimal-eunomia-vocabulary"><a class="header" href="#minimal-eunomia-vocabulary">Minimal Eunomia vocabulary</a></h3>
 <p>The rooted handoff protocol is intentionally small. Docs and operator-facing
 surfaces should use the same vocabulary as the implementation and the
-Succession research note:</p>
+Eunomia research note:</p>
 <ul>
 <li><code>Tenure</code> — the currently active authority record</li>
 <li><code>Legacy</code> — the retired predecessor era plus the frontier it already consumed</li>
@@ -272,7 +272,7 @@ current handoff state is safe</li>
 </div>
 <p>Do not reintroduce <code>Lease</code> / <code>Seal</code> as public aliases. They are useful
 informally, but keeping them in formal docs creates two names for the same
-rooted objects and makes Succession harder to explain.</p>
+rooted objects and makes Eunomia harder to explain.</p>
 <hr>
 <h2 id="3-deployment-model"><a class="header" href="#3-deployment-model">3. Deployment Model</a></h2>
 <p>NoKV ships exactly one distributed topology plus the standalone engine shape.</p>
@@ -607,7 +607,7 @@ deliberately small HA surface:
 <ul>
 <li>use it for control-plane research and failure-domain experiments</li>
 <li>do not treat it as the default production path yet</li>
-<li>failure/recovery E2E tests and succession benchmarks still need to be
+<li>failure/recovery E2E tests and eunomia benchmarks still need to be
 expanded before stronger claims are made</li>
 </ul>
 </li>

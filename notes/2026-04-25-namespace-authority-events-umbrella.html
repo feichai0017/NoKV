@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1c78d743.js";
+            window.path_to_searchindex_js = "../searchindex-29b09330.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-409c1dfb.js"></script>
+        <script src="../toc-2018305d.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -184,7 +184,7 @@
 <li>🧭 主题：给 Stage 2 的 namespace / subtree / snapshot / quota primitive 预先统一 rooted event 边界</li>
 <li>🧱 核心对象：Mount、Subtree、SnapshotEpoch、QuotaFence、StoreMembership</li>
 <li>🔁 调用链：<code>fsmeta/server -&gt; coordinator/meta-root command -&gt; rooted event -&gt; coordinator/runtime view -&gt; raftstore/fsmeta primitive</code></li>
-<li>📚 参考对象：NoKV Succession、<code>meta/root</code> rooted truth、DaisyNFS / FSCQ 的 verified metadata 边界、TiKV PD 的 membership / runtime view 分层</li>
+<li>📚 参考对象：NoKV Eunomia、<code>meta/root</code> rooted truth、DaisyNFS / FSCQ 的 verified metadata 边界、TiKV PD 的 membership / runtime view 分层</li>
 </ul>
 <h2 id="1-结论"><a class="header" href="#1-结论">1. 结论</a></h2>
 <p>Stage 2 要新增的 primitive 不应该各自发明 RootEvent。先统一成一个 namespace authority umbrella：</p>
@@ -288,6 +288,13 @@ StoreRetired(store_id)
 <p>这些字段由 store heartbeat 刷新到 coordinator runtime view。</p>
 <h2 id="6-mount-lifecycle-events"><a class="header" href="#6-mount-lifecycle-events">6. Mount lifecycle events</a></h2>
 <p>Mount 是 fsmeta 的 namespace 根。Stage 2 不需要完整 POSIX mount，但需要一个 durable mount registry，避免每个 fsmeta caller 自己约定 mount string。</p>
+<p>Stage 3.2 已实现这条 registry：mount membership 进入 <code>meta/root</code> rooted truth，<code>nokv-fsmeta</code> 的写路径通过 coordinator mount view 做 admission，未注册或 retired mount 会被拒绝。</p>
+<p>Stage 3.4 进一步把这条 lifecycle 写成 <code>spec/MountLifecycle.tla</code>：</p>
+<ul>
+<li><code>MountRegistered</code> 只能把未出现过的 mount 变成 active；</li>
+<li><code>MountRetired</code> 是终态，retired mount 不能再次 active；</li>
+<li>mount 的 root inode 和 schema version 属于 rooted identity，不是 runtime cache。</li>
+</ul>
 <p>建议 events：</p>
 <pre><code class="language-text">MountRegistered(mount_id, root_inode, schema_version)
 MountRetired(mount_id, retired_at)
@@ -322,13 +329,21 @@ MountRetired(mount_id, retired_at)
 SubtreeHandoffStarted(mount_id, subtree_root, from_authority, to_authority, legacy_frontier)
 SubtreeHandoffCompleted(mount_id, subtree_root, authority_id, era, inherited_frontier)
 </code></pre>
-<p>这套命名直接对应 Succession：</p>
+<p>这套命名直接对应 Eunomia：</p>
 <ul>
 <li><code>authority_id + era</code> 类似 Tenure；</li>
 <li><code>legacy_frontier</code> 类似 Legacy；</li>
 <li><code>handoff completed</code> 对应 Finality。</li>
 </ul>
 <p>Stage 2.2 的 <code>WatchSubtree</code> 可以先只使用 subtree prefix，不实现 authority handoff。但 event schema 要提前留出位置，避免 Stage 3 RenameSubtree 重构。</p>
+<p>Stage 3.4 已把这组 handoff 语义先落成 <code>spec/SubtreeAuthority.tla</code>。这个 spec 不建模 dentry 写入，只建模 authority 记录本身：</p>
+<ul>
+<li><code>Primacy</code>：每个 subtree 至多一个 active authority；</li>
+<li><code>Inheritance</code>：successor frontier 必须覆盖 predecessor frontier；</li>
+<li><code>Silence</code>：sealed authority 的 reply 不再 admissible；</li>
+<li><code>Finality</code>：sealed predecessor 必须处于 pending handoff 或 closed。</li>
+</ul>
+<p>Stage 3.3 的 <code>RenameSubtree v1</code> 应按这个 spec 实现 rooted handoff event，而不是重新发明一套 rename-local 状态机。</p>
 <h2 id="8-snapshot-epoch-events"><a class="header" href="#8-snapshot-epoch-events">8. Snapshot epoch events</a></h2>
 <p><code>SnapshotSubtree</code> 的核心不是复制一份数据，而是发布一个 stable read epoch。</p>
 <p>建议 events：</p>
@@ -415,7 +430,7 @@ SnapshotEpochRetired(snapshot_id)
 <li>它有没有 rooted truth？</li>
 <li>如果有，event 名是什么，payload 是否只包含 truth？</li>
 <li>它对应的 runtime view 是什么？</li>
-<li>它和 Succession / authority handoff 有没有关系？</li>
+<li>它和 Eunomia / authority handoff 有没有关系？</li>
 <li>它的四类测试在哪里？</li>
 </ol>
 <p>答不上来，就不写代码。</p>
