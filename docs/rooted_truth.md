@@ -202,7 +202,7 @@ This is what keeps `coordinator/` deployable separately from the rooted log, if 
 | [`meta/root/state/transition.go`](../meta/root/state/transition.go) | Cross-event transition rules |
 | [`meta/root/storage/virtual_log.go`](../meta/root/storage/virtual_log.go) | Tail subscription + checkpoint primitives |
 | [`meta/root/replicated/store.go`](../meta/root/replicated/store.go) | The only backend: 3-peer raft-replicated meta-root |
-| [`meta/root/remote/service.go`](../meta/root/remote/service.go) | gRPC service + client for meta-root |
+| [`meta/root/server/service.go`](../meta/root/server/service.go), [`meta/root/client/client.go`](../meta/root/client/client.go) | gRPC service + client for meta-root |
 | [`meta/wire/root.go`](../meta/wire/root.go) | proto ↔ Go conversions |
 
 Related docs:

@@ -4,11 +4,11 @@
   <h1>NoKV</h1>
 
   <p>
-    <strong>An open-source namespace metadata substrate for distributed filesystems and object storage — with formally verified authority handoff.</strong>
+    <strong>An open-source namespace metadata substrate for distributed filesystems, object storage, and AI dataset metadata.</strong>
   </p>
 
   <p>
-    <em>Native fsmeta primitives · Eunomia handoff protocol (TLA+ verified) · Own LSM · Own Raft · Own MVCC · Own control plane</em>
+    <em>Native fsmeta primitives · Own LSM · Own Raft · Own MVCC · Own control plane</em>
   </p>
 
   <p>
@@ -32,7 +32,7 @@
 
 ## What is NoKV?
 
-**NoKV is the open-source counterpart of the "stateless schema layer + transactional KV" pattern** that powers Meta Tectonic (over ZippyDB), Google Colossus (over Bigtable), and DeepSeek 3FS (over FoundationDB). It exposes namespace metadata as a first-class service via **`fsmeta`** (gRPC + embedded Go), backed by an in-house transactional KV substrate, and ships with **`Eunomia`**, a TLA+-verified protocol for authority handoff continuation legality.
+**NoKV is the open-source counterpart of the "stateless schema layer + transactional KV" pattern** that powers Meta Tectonic (over ZippyDB), Google Colossus (over Bigtable), and DeepSeek 3FS (over FoundationDB). It exposes namespace metadata as a first-class service via **`fsmeta`** (gRPC + embedded Go), backed by an in-house transactional KV substrate.
 
 **Three audiences, one substrate:**
 
@@ -42,12 +42,11 @@
 
 **Why the substrate matters:**
 
-1. **Native metadata primitives** — server-side `ReadDirPlus`, `AssertionNotExist`, `WatchSubtree`, `SnapshotSubtree`, atomic cross-region `RenameSubtree`, `Link` / `Unlink` with inode GC. These exist in hyperscaler stacks (Tectonic / Colossus / 3FS) but were missing from the open-source CNCF landscape.
-2. **Formally verified authority handoff (Eunomia)** — 4 minimal invariants (`Primacy / Inheritance / Silence / Finality`) + 10 TLA+ specs with contrast family. Closes a bug class (etcd `#21638`, CockroachDB `#66562`) that no industrial system has fixed end-to-end.
-3. **Single source of truth (`meta/root`)** — Mount lifecycle / subtree authority era / snapshot epoch / quota fence all live in one rooted, replicated, auditable event log; no parallel truths across config files, runtime caches, and coordinator state.
-4. **Vertical integration** — own LSM (with ART memtable) + own Raft + own Percolator MVCC + own coordinator. No external dependency gates how a metadata primitive interacts with the storage layer.
+1. **Native metadata primitives** — `ReadDirPlus`, `WatchSubtree`, `SnapshotSubtree`, and cross-region `RenameSubtree` are first-class server-side operations, not client-side compositions over `Get` / `Put` / `Scan`.
+2. **Single source of namespace truth** — mount lifecycle, subtree authority, snapshot epoch, and quota fence live in one rooted, replicated event log.
+3. **Vertical integration** — own LSM (with ART memtable) + own Raft + own Percolator MVCC + own coordinator. No external dependency gates how a metadata primitive interacts with the storage layer.
 
-> NoKV is a **substrate**, not a finished filesystem server. Build a FUSE driver / S3 gateway / dataset metadata service on top; we don't ship those out of the box. We do ship the primitives, the truth kernel, the verified handoff protocol, and a Redis-compatible gateway over the underlying KV.
+> NoKV is a **substrate**, not a finished filesystem server. Build a FUSE driver / S3 gateway / dataset metadata service on top; we don't ship those out of the box. We do ship the metadata primitives, the rooted truth kernel, and a Redis-compatible gateway over the underlying KV.
 
 <br/>
 
@@ -114,7 +113,7 @@ NoKV's value comes from **owning the entire vertical** so namespace-metadata-nat
 ┌─────────────────────────────────────────────────────────────┐
 │ Layer 1  Userspace API (namespace semantics)                │
 │   fsmeta/  — Create / Lookup / ReadDir / ReadDirPlus /      │
-│              RenameSubtree / Unlink / Link / SnapshotSubtree│
+│              RenameSubtree / Link / Unlink / SnapshotSubtree│
 │              WatchSubtree (catch-up replay + ack window)    │
 └──────────────────────┬──────────────────────────────────────┘
                        │
@@ -123,11 +122,11 @@ NoKV's value comes from **owning the entire vertical** so namespace-metadata-nat
 │                                                              │
 │  Control plane:              Execution plane:                │
 │  • meta/root  — typed         • raftstore  — per-region Raft │
-│    rooted truth (Eunomia      • percolator — 2PC + MVCC      │
-│    Tenure / Legacy /            + AssertionNotExist          │
-│    Handover, mount, subtree   • apply observer → fsmeta      │
-│    authority, snapshot          watch router                 │
-│    epoch, quota fence)        • SST snapshot install         │
+│    rooted truth (mount,       • percolator — 2PC + MVCC      │
+│    subtree authority,           + AssertionNotExist          │
+│    snapshot epoch, quota      • apply observer → fsmeta      │
+│    fence)                       watch router                 │
+│                               • SST snapshot install         │
 │  • coordinator — TSO,                                        │
 │    routing, store discovery,                                 │
 │    rooted event publish,                                     │
@@ -141,12 +140,12 @@ NoKV's value comes from **owning the entire vertical** so namespace-metadata-nat
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Four invariants that distinguish this stack:
+Four boundaries that distinguish this stack:
 
-1. **Single source of truth.** All authority lifecycle (mount, subtree, snapshot, quota) lives in `meta/root` as typed rooted events. No parallel truths across config / cache / coordinator.
-2. **Layer separation enforced in code.** Layer 1 doesn't import raftstore client; Layer 2 doesn't know about fsmeta concepts; Layer 3 doesn't know there's a namespace.
-3. **Multi-gateway-safe by construction.** Quota usage and subtree authority handoff use Percolator-transactional updates against `meta/root`, not in-process counters. N gateways stay coherent without coordination.
-4. **Streaming lifecycle, not polling.** `coordinator.WatchRootEvents` pushes mount retire / quota fence updates / pending handoff to gateways within milliseconds, not poll intervals.
+1. **fsmeta-first API.** Metadata operations expose filesystem/object-namespace shapes directly, instead of forcing users to assemble them from raw KV calls.
+2. **Layer separation enforced in code.** The fsmeta executor consumes a narrow `TxnRunner`; the default `OpenWithRaftstore` adapter owns raftstore wiring; lower layers do not import fsmeta.
+3. **Multi-gateway-safe by construction.** Quota fences live in rooted truth; usage counters are data-plane keys updated in the same Percolator transaction as metadata mutations. Subtree authority handoff uses rooted events with runtime repair.
+4. **Root-event driven lifecycle.** `coordinator.WatchRootEvents` pushes mount retire, quota fence, and pending handoff updates to gateways after a bootstrap snapshot; the monitor interval is only reconnect backoff.
 
 Deep-dive: [`docs/architecture.md`](docs/architecture.md) · [`docs/runtime.md`](docs/runtime.md) · [`docs/control_and_execution_protocols.md`](docs/control_and_execution_protocols.md)
 
@@ -158,15 +157,11 @@ Native API surface (gRPC at `nokv-fsmeta:8090`, also embedded Go via `fsmeta/exe
 
 | Primitive | Semantics |
 |---|---|
-| `Create(parent, name, attr, asserts_not_exist)` | Atomic dentry + inode creation; server-side `AssertionNotExist`, no client TOCTOU |
-| `Link(from, to_parent, to_name)` | Hard link — same-mount only, non-directory; new dentry + `LinkCount++` in one 2PC |
-| `Lookup` / `ReadDir` / `ReadDirPlus` | Single dentry / paginated scan / **fused scan + batch inode fetch** (42.5× over generic KV) |
-| `Unlink` | Atomic delete; `LinkCount--`; **last-link triggers inode GC in same transaction** |
-| `RenameSubtree` | Cross-region atomic rename (Percolator 2PC) + rooted era handoff (Start → Mutate → Complete; monitor reconciles pending) |
-| `SnapshotSubtree` | MVCC read-version token + `SnapshotEpochPublished` rooted event; auto-retire on publish failure |
-| `RetireSnapshotSubtree` | Client-driven epoch retire |
-| `WatchSubtree(prefix)` bidi stream | Prefix-scoped live change feed: `Ready{cursor}` signal, per-region replay ring, cursor-based catch-up, `Ack(cursor)` for flow control, mount-retire auto-close |
-| `GetQuotaUsage` | Read transactional quota usage (multi-gateway safe) |
+| `ReadDirPlus` | Fused directory scan + batch inode fetch under one snapshot, avoiding client-side N+1 metadata reads |
+| `WatchSubtree` | Prefix-scoped live change feed with ready signal, cursor replay, and flow-control acks |
+| `SnapshotSubtree` | MVCC read-version token for stable dataset / bucket / directory views |
+| `RenameSubtree` | Cross-region atomic namespace move backed by Percolator 2PC |
+| Basic namespace ops | `Create`, `Lookup`, `ReadDir`, `Link`, `Unlink`, quota usage, and mount lifecycle |
 
 Authority lifecycle (rooted in `meta/root`, managed via `nokv mount` / `nokv quota` CLI):
 
@@ -178,46 +173,6 @@ Authority lifecycle (rooted in `meta/root`, managed via `nokv mount` / `nokv quo
 | **Quota fence** | `QuotaFenceUpdated` (mount + subtree level, bytes + inodes) | Usage in raftstore (transactional, not in-memory) |
 
 Documentation: [`docs/fsmeta.md`](docs/fsmeta.md) · [positioning note](docs/notes/2026-04-24-fsmeta-positioning.md) · [namespace authority events umbrella](docs/notes/2026-04-25-namespace-authority-events-umbrella.md)
-
-<br/>
-
-## 🔬 `Eunomia` — TLA+-Verified Authority Handoff
-
-A **service-level correctness class** for what continuation is legal after authority handoff. Closes a bug class (etcd `#21638` filed upstream 2026-04-19, CockroachDB `#66562` 5-year open issue) that no industrial system has fixed end-to-end.
-
-Four minimal invariants:
-
-```
-Eunomia := Primacy ∧ Inheritance ∧ Silence ∧ Finality
-```
-
-| Invariant | What it forbids |
-|---|---|
-| **Primacy** | Two active authorities for the same lock / region / subtree at the same time |
-| **Inheritance** | Successor must cover predecessor's served frontier (the missing piece in CRDB #66562) |
-| **Silence** | A sealed era cannot deliver replies after seal (the missing piece in etcd #21638) |
-| **Finality** | A handoff must close explicitly; no "half-open" detached state |
-
-Verified by 10 TLA+ specs under [`spec/`](./spec/) — positive model + contrast family proving each invariant is necessary:
-
-| Spec | Role | TLC outcome |
-|---|---|---|
-| [`Eunomia.tla`](./spec/Eunomia.tla) | Positive — repeated rooted handoff cycle | ✅ 3924 distinct states, depth 20, all 4 invariants hold (incl. inductive Primacy) |
-| [`EunomiaMultiDim.tla`](./spec/EunomiaMultiDim.tla) | Multi-dimensional frontier coverage | ✅ holds |
-| [`SubtreeAuthority.tla`](./spec/SubtreeAuthority.tla) | Eunomia projected onto fsmeta `RenameSubtree` | ✅ all 4 invariants hold |
-| [`MountLifecycle.tla`](./spec/MountLifecycle.tla) | Mount as monotonic Eunomia instance | ✅ holds |
-| [`LeaseOnly.tla`](./spec/LeaseOnly.tla) | Contrast — no rooted seal | ❌ violates `NoOldReplyAfterSuccessor` |
-| [`TokenOnly.tla`](./spec/TokenOnly.tla) | Contrast — bounded-freshness token only | ❌ violates same — freshness ≠ authority lineage |
-| [`ChubbyFencedLease.tla`](./spec/ChubbyFencedLease.tla) | Contrast — per-reply sequencer fencing only | ❌ stale-reject holds, **successor coverage fails** |
-| [`LeaseStartOnly.tla`](./spec/LeaseStartOnly.tla) | Contrast — no lease-start coverage | ❌ violates `NoWriteBehindServedRead` |
-| [`SubtreeWithoutSeal.tla`](./spec/SubtreeWithoutSeal.tla) | Subtree contrast — no seal | ❌ Primacy violated |
-| [`SubtreeWithoutFrontierCoverage.tla`](./spec/SubtreeWithoutFrontierCoverage.tla) | Subtree contrast — no coverage | ❌ Inheritance violated |
-
-Reference implementation: [`meta/root/state/eunomia.go`](./meta/root/state) + [`coordinator/protocol/eunomia/`](./coordinator/protocol/eunomia) + 3-layer admission (server gate / client witness / offline `eunomia-audit`).
-
-`make tlc-eunomia` / `make apalache-check-eunomia` / `make tlc-leaseonly-counterexample` — artifacts checked in under [`spec/artifacts/`](./spec/artifacts/).
-
-Research drafts are kept local-only and are intentionally excluded from Git.
 
 <br/>
 
@@ -313,8 +268,6 @@ nokv stats --workdir ./artifacts/cluster/store-1
 nokv manifest --workdir ./artifacts/cluster/store-1
 nokv regions --workdir ./artifacts/cluster/store-1 --json
 
-# Eunomia audit (read-only against meta-root)
-nokv eunomia-audit --workdir ./artifacts/cluster/coord-1
 ```
 
 Full guide: [`docs/getting_started.md`](docs/getting_started.md) · CLI reference: [`docs/cli.md`](docs/cli.md)
@@ -335,7 +288,7 @@ Full guide: [`docs/getting_started.md`](docs/getting_started.md) · CLI referenc
 | 📦 | **SST-based Raft snapshot install** — snapshots ship materialized SST files, target node ingests directly | [`raftstore/snapshot/`](./raftstore/snapshot) · [design note](docs/notes/2026-03-31-sst-snapshot-install.md) |
 | 🏛️ | **Delos-lite rooted truth kernel** — typed event log is the single source of truth; coordinator and raftstore are consumers | [`meta/root/`](./meta/root) · [design note](docs/notes/2026-04-03-delos-lite-metadata-root-roadmap.md) |
 | 🪞 | **Apply observer at store level** — post-commit semantic events with `(region_id, term, index, commit_version)` cursor; survives raft snapshot replay | [`raftstore/store/observer.go`](./raftstore/store/observer.go) |
-| 🔁 | **Cross-region atomic Rename / RenameSubtree** — Percolator 2PC + commit-ts-expired auto-retry (3×) + Eunomia era handoff with monitor reconcile | [`fsmeta/exec/runner.go`](./fsmeta/exec/runner.go) · [Eunomia spec](./spec/SubtreeAuthority.tla) |
+| 🔁 | **Cross-region atomic RenameSubtree** — Percolator 2PC + commit-ts-expired auto-retry (3×) + monitor reconciliation for pending moves | [`fsmeta/exec/runner.go`](./fsmeta/exec/runner.go) |
 
 All design notes under [`docs/notes/`](./docs/notes/) are dated decision records — read them to understand *why* something is the way it is, not just what it does.
 
@@ -347,9 +300,9 @@ All design notes under [`docs/notes/`](./docs/notes/) are dated decision records
 |---|---|---|
 | **[`fsmeta/`](./fsmeta)** | **Namespace metadata schema, executor, gRPC service, embedded API** | **[fsmeta](docs/fsmeta.md)** |
 | [`fsmeta/exec/watch/`](./fsmeta/exec/watch) | WatchSubtree router + RemoteSource + catch-up replay | [fsmeta](docs/fsmeta.md) |
-| [`spec/`](./spec) | TLA+ Eunomia + contrast family + SubtreeAuthority + MountLifecycle | [spec/README.md](./spec/README.md) |
-| [`meta/root/`](./meta/root) | Typed rooted truth kernel (Delos-lite); Eunomia state | [Rooted Truth](docs/rooted_truth.md) |
-| [`coordinator/`](./coordinator) | Routing, TSO, store discovery, root-event publish, streaming subscribe; Eunomia gate | [Coordinator](docs/coordinator.md) |
+| [`spec/`](./spec) | TLA+ models for control-plane and metadata transition safety | [spec/README.md](./spec/README.md) |
+| [`meta/root/`](./meta/root) | Typed rooted truth kernel (Delos-lite) | [Rooted Truth](docs/rooted_truth.md) |
+| [`coordinator/`](./coordinator) | Routing, TSO, store discovery, root-event publish, streaming subscribe | [Coordinator](docs/coordinator.md) |
 | [`raftstore/`](./raftstore) | Multi-Raft, transport, membership, SST snapshot install, apply observer | [RaftStore](docs/raftstore.md) |
 | [`percolator/`](./percolator) | Distributed MVCC 2PC + AssertionNotExist | [Percolator](docs/percolator.md) |
 | [`engine/lsm/`](./engine/lsm) | MemTable, flush, leveled compaction, SST | [LSM](docs/memtable.md) · [flush](docs/flush.md) · [compaction](docs/compaction.md) |
@@ -358,7 +311,7 @@ All design notes under [`docs/notes/`](./docs/notes/) are dated decision records
 | [`engine/manifest/`](./engine/manifest) | VersionEdit log, atomic CURRENT | [Manifest](docs/manifest.md) |
 | [`engine/vfs/`](./engine/vfs) | VFS abstraction, FaultFS, cross-platform atomic rename | [VFS](docs/vfs.md) |
 | [`thermos/`](./thermos) | Hot-key observer | [Thermos](docs/thermos.md) |
-| [`cmd/nokv/`](./cmd/nokv) | CLI: stats, manifest, regions, vlog, migrate, mount, quota, eunomia-audit | [CLI](docs/cli.md) |
+| [`cmd/nokv/`](./cmd/nokv) | CLI: stats, manifest, regions, vlog, migrate, mount, quota | [CLI](docs/cli.md) |
 | [`cmd/nokv-fsmeta/`](./cmd/nokv-fsmeta) | Standalone fsmeta gRPC gateway | [fsmeta](docs/fsmeta.md) |
 | [`cmd/nokv-redis/`](./cmd/nokv-redis) | Redis-compatible gateway (secondary product line) | [Redis](docs/nokv-redis.md) |
 
@@ -429,6 +382,6 @@ Local scripts, Docker Compose, and all CLI tools consume the same file. Programm
 ---
 
 <div align="center">
-<sub><strong>Open-source namespace metadata substrate for DFS, OSS, and AI dataset metadata — with TLA+-verified authority handoff.</strong></sub><br/>
+<sub><strong>Open-source namespace metadata substrate for DFS, OSS, and AI dataset metadata.</strong></sub><br/>
 <sub>Built from scratch — no external storage engine, no external Raft library, no external coordinator.</sub>
 </div>
