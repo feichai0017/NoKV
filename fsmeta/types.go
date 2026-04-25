@@ -54,6 +54,12 @@ type ChunkIndex uint64
 // SessionID identifies one client/session lease record.
 type SessionID string
 
+// DentryAttrPair is the fused result returned by ReadDirPlus-style operations.
+type DentryAttrPair struct {
+	Dentry DentryRecord
+	Inode  InodeRecord
+}
+
 const (
 	// RootInode is the conventional root inode for one mount.
 	RootInode InodeID = 1
