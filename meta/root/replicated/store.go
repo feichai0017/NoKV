@@ -34,6 +34,7 @@ type Store struct {
 
 	mu                 sync.RWMutex
 	state              rootstate.State
+	stores             map[uint64]rootstate.StoreMembership
 	descs              map[uint64]descriptor.Descriptor
 	pending            map[uint64]rootstate.PendingPeerChange
 	pendingRange       map[uint64]rootstate.PendingRangeChange
@@ -54,9 +55,14 @@ func Open(cfg Config) (*Store, error) {
 		return nil, err
 	}
 	bootstrap := rootmaterialize.BootstrapFromObserved(observed)
+	stores := bootstrap.Snapshot.Stores
+	if stores == nil {
+		stores = make(map[uint64]rootstate.StoreMembership)
+	}
 	return &Store{
 		driver:             cfg.Driver,
 		state:              bootstrap.Snapshot.State,
+		stores:             stores,
 		descs:              bootstrap.Snapshot.Descriptors,
 		pending:            bootstrap.Snapshot.PendingPeerChanges,
 		pendingRange:       bootstrap.Snapshot.PendingRangeChanges,
@@ -161,6 +167,7 @@ func (s *Store) Snapshot() (rootstate.Snapshot, error) {
 	defer s.mu.RUnlock()
 	return rootstate.CloneSnapshot(rootstate.Snapshot{
 		State:               s.state,
+		Stores:              s.stores,
 		Descriptors:         s.descs,
 		PendingPeerChanges:  s.pending,
 		PendingRangeChanges: s.pendingRange,
@@ -205,6 +212,7 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 	var next rootstate.Cursor
 	snapshot := rootstate.Snapshot{
 		State:               s.state,
+		Stores:              rootstate.CloneStoreMemberships(s.stores),
 		Descriptors:         rootstate.CloneDescriptors(s.descs),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.pending),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.pendingRange),
@@ -232,6 +240,7 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 		return rootstate.CommitInfo{}, err
 	}
 	s.state = snapshot.State
+	s.stores = snapshot.Stores
 	s.descs = snapshot.Descriptors
 	s.pending = snapshot.PendingPeerChanges
 	s.pendingRange = snapshot.PendingRangeChanges
@@ -485,6 +494,7 @@ func (s *Store) maybeCompactLocked() {
 	}
 	snapshot := rootstate.Snapshot{
 		State:               s.state,
+		Stores:              rootstate.CloneStoreMemberships(s.stores),
 		Descriptors:         rootstate.CloneDescriptors(s.descs),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.pending),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.pendingRange),
@@ -509,6 +519,10 @@ func (s *Store) applyObserved(observed rootstorage.ObservedCommitted) {
 	bootstrap := rootmaterialize.BootstrapFromObserved(observed)
 	s.mu.Lock()
 	s.state = bootstrap.Snapshot.State
+	s.stores = bootstrap.Snapshot.Stores
+	if s.stores == nil {
+		s.stores = make(map[uint64]rootstate.StoreMembership)
+	}
 	s.descs = bootstrap.Snapshot.Descriptors
 	s.pending = bootstrap.Snapshot.PendingPeerChanges
 	s.pendingRange = bootstrap.Snapshot.PendingRangeChanges
