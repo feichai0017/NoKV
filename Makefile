@@ -3,7 +3,7 @@
 
 .PHONY: help build test test-short test-race test-coverage lint fmt clean docker-up docker-down bench install-tools install-tla-tools
 .PHONY: proto proto-check proto-breaking-check
-.PHONY: tlc-succession tlc-successionmultidim tlc-mountlifecycle tlc-subtreeauthority tlc-leaseonly-counterexample tlc-leasestart-counterexample apalache-typecheck apalache-check-succession apalache-check-successionmultidim
+.PHONY: tlc-succession tlc-successionmultidim tlc-mountlifecycle tlc-subtreeauthority tlc-leaseonly-counterexample tlc-leasestart-counterexample tlc-subtreewithoutfrontiercoverage-counterexample tlc-subtreewithoutseal-counterexample apalache-typecheck apalache-check-succession apalache-check-successionmultidim
 
 GOLANGCI_LINT_VERSION ?= v2.9.0
 BUF_VERSION ?= 1.66.0
@@ -32,6 +32,8 @@ help:
 	@echo "  make tlc-subtreeauthority      - Run TLC on spec/SubtreeAuthority.tla"
 	@echo "  make tlc-leaseonly-counterexample - Run TLC and expect a counterexample for spec/LeaseOnly.tla"
 	@echo "  make tlc-leasestart-counterexample - Run TLC and expect a counterexample for spec/LeaseStartOnly.tla"
+	@echo "  make tlc-subtreewithoutfrontiercoverage-counterexample - Run TLC and expect a counterexample for spec/SubtreeWithoutFrontierCoverage.tla"
+	@echo "  make tlc-subtreewithoutseal-counterexample - Run TLC and expect a counterexample for spec/SubtreeWithoutSeal.tla"
 	@echo "  make apalache-typecheck - Run Apalache typecheck on current specs"
 	@echo "  make apalache-check-succession - Run bounded Apalache check on Succession invariants"
 	@echo "  make apalache-check-successionmultidim - Run bounded Apalache check on SuccessionMultiDim invariants"
@@ -185,7 +187,25 @@ tlc-tokenonly-counterexample:
 		echo "✓ TLC found the expected counterexample for TokenOnly"; \
 	fi
 
-tlc-contrast-models: tlc-leaseonly-counterexample tlc-tokenonly-counterexample tlc-chubbyfenced-counterexample tlc-leasestart-counterexample
+tlc-subtreewithoutfrontiercoverage-counterexample:
+	@echo "Running TLC on spec/SubtreeWithoutFrontierCoverage.tla (expecting inheritance counterexample)..."
+	@if ./scripts/tla/tlc.sh spec/SubtreeWithoutFrontierCoverage.tla; then \
+		echo "expected TLC to find a counterexample for SubtreeWithoutFrontierCoverage, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ TLC found the expected counterexample for SubtreeWithoutFrontierCoverage"; \
+	fi
+
+tlc-subtreewithoutseal-counterexample:
+	@echo "Running TLC on spec/SubtreeWithoutSeal.tla (expecting primacy counterexample)..."
+	@if ./scripts/tla/tlc.sh spec/SubtreeWithoutSeal.tla; then \
+		echo "expected TLC to find a counterexample for SubtreeWithoutSeal, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ TLC found the expected counterexample for SubtreeWithoutSeal"; \
+	fi
+
+tlc-contrast-models: tlc-leaseonly-counterexample tlc-tokenonly-counterexample tlc-chubbyfenced-counterexample tlc-leasestart-counterexample tlc-subtreewithoutfrontiercoverage-counterexample tlc-subtreewithoutseal-counterexample
 
 record-tlc-succession:
 	@echo "Recording TLC output for Succession..."
@@ -259,6 +279,24 @@ record-tlc-leasestart:
 		echo "✓ Recorded TLC counterexample for LeaseStartOnly"; \
 	fi
 
+record-tlc-subtreewithoutfrontiercoverage:
+	@echo "Recording TLC counterexample for SubtreeWithoutFrontierCoverage..."
+	@if ./scripts/tla/record_tlc.sh spec/SubtreeWithoutFrontierCoverage.tla spec/artifacts/tlc-subtreewithoutfrontiercoverage.out; then \
+		echo "expected SubtreeWithoutFrontierCoverage recording to fail with counterexample, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ Recorded TLC counterexample for SubtreeWithoutFrontierCoverage"; \
+	fi
+
+record-tlc-subtreewithoutseal:
+	@echo "Recording TLC counterexample for SubtreeWithoutSeal..."
+	@if ./scripts/tla/record_tlc.sh spec/SubtreeWithoutSeal.tla spec/artifacts/tlc-subtreewithoutseal.out; then \
+		echo "expected SubtreeWithoutSeal recording to fail with counterexample, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ Recorded TLC counterexample for SubtreeWithoutSeal"; \
+	fi
+
 record-apalache-succession:
 	@echo "Recording Apalache bounded-check output for Succession..."
 	./scripts/tla/record_apalache_check.sh spec/Succession.tla spec/Succession.cfg G1_Succession,G2_Primacy,G2_PrimacyInductive,G3_Silence,G4_Finality 8 spec/artifacts/apalache-succession.out
@@ -269,7 +307,7 @@ record-apalache-successionmultidim:
 	./scripts/tla/record_apalache_check.sh spec/SuccessionMultiDim.tla spec/SuccessionMultiDim.cfg NoWriteBehindServedRead 6 spec/artifacts/apalache-successionmultidim.out
 	@echo "✓ Recorded Apalache output for SuccessionMultiDim"
 
-record-formal-artifacts: record-tlc-succession record-tlc-successionmultidim record-tlc-mountlifecycle record-tlc-subtreeauthority record-tlc-leaseonly record-tlc-tokenonly record-tlc-chubbyfenced record-tlc-leasestart record-apalache-succession record-apalache-successionmultidim
+record-formal-artifacts: record-tlc-succession record-tlc-successionmultidim record-tlc-mountlifecycle record-tlc-subtreeauthority record-tlc-leaseonly record-tlc-tokenonly record-tlc-chubbyfenced record-tlc-leasestart record-tlc-subtreewithoutfrontiercoverage record-tlc-subtreewithoutseal record-apalache-succession record-apalache-successionmultidim
 
 apalache-typecheck:
 	@echo "Running Apalache typecheck on current specs..."
