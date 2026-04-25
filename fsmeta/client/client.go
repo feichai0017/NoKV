@@ -20,7 +20,7 @@ type Client interface {
 	Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error)
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
 	ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
-	WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) (*WatchStream, error)
+	WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) (WatchSubscription, error)
 	Rename(ctx context.Context, req fsmeta.RenameRequest) error
 	Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
 	Close() error
@@ -108,7 +108,7 @@ func (c *GRPCClient) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest)
 
 // WatchSubtree opens a live prefix watch stream. v0 is live-only: ResumeCursor
 // is accepted on the wire but no catch-up replay is performed by the client.
-func (c *GRPCClient) WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) (*WatchStream, error) {
+func (c *GRPCClient) WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) (WatchSubscription, error) {
 	if err := c.requireRPC(); err != nil {
 		return nil, err
 	}
@@ -140,7 +140,14 @@ func (c *GRPCClient) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
 	return translateRPCError(err)
 }
 
-// WatchStream is one typed WatchSubtree client stream.
+// WatchSubscription is one typed WatchSubtree client stream.
+type WatchSubscription interface {
+	Recv() (fsmeta.WatchEvent, error)
+	Ack(fsmeta.WatchCursor) error
+	Close() error
+}
+
+// WatchStream is the gRPC-backed WatchSubtree stream implementation.
 type WatchStream struct {
 	stream fsmetapb.FSMetadata_WatchSubtreeClient
 }

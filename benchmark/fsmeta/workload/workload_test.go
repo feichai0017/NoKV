@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetaclient "github.com/feichai0017/NoKV/fsmeta/client"
 	"github.com/stretchr/testify/require"
 )
 
@@ -89,6 +90,30 @@ func TestRunHotspotFanIn(t *testing.T) {
 	require.Zero(t, result.Errors)
 }
 
+func TestRunWatchSubtree(t *testing.T) {
+	result, err := RunWatchSubtree(context.Background(), newFakeWatchClient(), WatchSubtreeConfig{
+		Mount:              "vol",
+		RunID:              "test",
+		Clients:            2,
+		Files:              3,
+		StartInode:         300,
+		BackPressureWindow: 8,
+	})
+	require.NoError(t, err)
+	require.Equal(t, WatchSubtree, result.Name)
+	require.Equal(t, 7, result.Ops)
+	require.Zero(t, result.Errors)
+	rows := SummaryRows(result)
+	var sawNotify bool
+	for _, row := range rows {
+		if row.Operation == "watch_notify" {
+			sawNotify = true
+			require.Equal(t, 3, row.Count)
+		}
+	}
+	require.True(t, sawNotify)
+}
+
 func TestWriteSummaryCSVIncludesDriver(t *testing.T) {
 	var buf bytes.Buffer
 	err := WriteSummaryCSV(&buf, []SummaryRow{{
@@ -105,4 +130,61 @@ func TestWriteSummaryCSVIncludesDriver(t *testing.T) {
 
 func dentryID(parent fsmeta.InodeID, name string) string {
 	return fmt.Sprintf("%d/%s", parent, name)
+}
+
+type fakeWatchClient struct {
+	*fakeClient
+	stream *fakeWatchStream
+}
+
+func newFakeWatchClient() *fakeWatchClient {
+	return &fakeWatchClient{
+		fakeClient: newFakeClient(),
+		stream:     &fakeWatchStream{events: make(chan fsmeta.WatchEvent, 16)},
+	}
+}
+
+func (c *fakeWatchClient) Create(ctx context.Context, req fsmeta.CreateRequest, inode fsmeta.InodeRecord) error {
+	if err := c.fakeClient.Create(ctx, req, inode); err != nil {
+		return err
+	}
+	if c.stream == nil {
+		return nil
+	}
+	key, err := fsmeta.EncodeDentryKey(req.Mount, req.Parent, req.Name)
+	if err != nil {
+		return err
+	}
+	if len(c.stream.prefix) > 0 && !bytes.HasPrefix(key, c.stream.prefix) {
+		return nil
+	}
+	c.stream.events <- fsmeta.WatchEvent{
+		Cursor:        fsmeta.WatchCursor{RegionID: 1, Term: 1, Index: uint64(len(c.stream.events) + 1)},
+		CommitVersion: uint64(len(c.stream.events) + 1),
+		Source:        fsmeta.WatchEventSourceCommit,
+		Key:           key,
+	}
+	return nil
+}
+
+func (c *fakeWatchClient) WatchSubtree(_ context.Context, req fsmeta.WatchRequest) (fsmetaclient.WatchSubscription, error) {
+	c.stream.prefix = append([]byte(nil), req.KeyPrefix...)
+	return c.stream, nil
+}
+
+type fakeWatchStream struct {
+	prefix []byte
+	events chan fsmeta.WatchEvent
+}
+
+func (s *fakeWatchStream) Recv() (fsmeta.WatchEvent, error) {
+	return <-s.events, nil
+}
+
+func (s *fakeWatchStream) Ack(fsmeta.WatchCursor) error {
+	return nil
+}
+
+func (s *fakeWatchStream) Close() error {
+	return nil
 }
