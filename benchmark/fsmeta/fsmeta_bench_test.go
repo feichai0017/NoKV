@@ -35,6 +35,7 @@ var (
 	fsmetaReadsPerClient = flag.Int("fsmeta_reads_per_client", 128, "hotspot-fanin reads per client")
 	fsmetaPageLimit      = flag.Uint("fsmeta_page_limit", 0, "readdir page limit; 0 uses workload default")
 	fsmetaReadDirPlus    = flag.Bool("fsmeta_readdirplus", true, "hotspot-fanin uses ReadDirPlus instead of ReadDir")
+	fsmetaWatchWindow    = flag.Uint("fsmeta_watch_window", 0, "watch-subtree back-pressure window; 0 uses workload default")
 	fsmetaStartInode     = flag.Uint64("fsmeta_start_inode", 10_000_000, "first inode id used by generated metadata")
 	fsmetaTimeout        = flag.Duration("fsmeta_timeout", 5*time.Minute, "overall benchmark timeout")
 	fsmetaOutput         = flag.String("fsmeta_output", "", "summary CSV output path")
@@ -154,6 +155,15 @@ func runBenchmarkWorkload(ctx context.Context, cli workload.Client, driverName, 
 			PageLimit:      uint32(*fsmetaPageLimit),
 			ReadDirPlus:    *fsmetaReadDirPlus,
 			StartInode:     startInode + 1_000_000,
+		})
+	case workload.WatchSubtree:
+		result, err = workload.RunWatchSubtree(ctx, cli, workload.WatchSubtreeConfig{
+			Mount:              fsmeta.MountID(*fsmetaMount),
+			RunID:              runID,
+			Clients:            *fsmetaClients,
+			Files:              *fsmetaFiles,
+			StartInode:         startInode + 2_000_000,
+			BackPressureWindow: uint32(*fsmetaWatchWindow),
 		})
 	default:
 		return workload.Result{}, fmt.Errorf("unknown workload %q", workloadName)

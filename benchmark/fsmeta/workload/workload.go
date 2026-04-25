@@ -14,11 +14,13 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetaclient "github.com/feichai0017/NoKV/fsmeta/client"
 )
 
 const (
 	CheckpointStorm = "checkpoint-storm"
 	HotspotFanIn    = "hotspot-fanin"
+	WatchSubtree    = "watch-subtree"
 
 	DriverNativeFSMetadata = "native-fsmeta"
 	DriverGenericKV        = "generic-kv"
@@ -54,6 +56,15 @@ type HotspotFanInConfig struct {
 	StartInode     fsmeta.InodeID
 }
 
+type WatchSubtreeConfig struct {
+	Mount              fsmeta.MountID
+	RunID              string
+	Clients            int
+	Files              int
+	StartInode         fsmeta.InodeID
+	BackPressureWindow uint32
+}
+
 type Result struct {
 	Name      string
 	Driver    string
@@ -63,6 +74,11 @@ type Result struct {
 	Ops       int
 	Errors    int
 	Samples   []Sample
+}
+
+type WatchClient interface {
+	Client
+	WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) (fsmetaclient.WatchSubscription, error)
 }
 
 type Sample struct {
@@ -213,6 +229,104 @@ func RunHotspotFanIn(ctx context.Context, cli Client, cfg HotspotFanInConfig) (R
 	wg.Wait()
 
 	return finishResult(HotspotFanIn, cfg.RunID, started, rec.snapshot())
+}
+
+func RunWatchSubtree(ctx context.Context, cli Client, cfg WatchSubtreeConfig) (Result, error) {
+	watchCli, ok := cli.(WatchClient)
+	if !ok {
+		return Result{}, fmt.Errorf("watch-subtree requires native fsmeta watch client")
+	}
+	cfg = normalizeWatchSubtreeConfig(cfg)
+	started := time.Now()
+	rec := newRecorder()
+
+	dirInode := cfg.StartInode
+	dirName := fmt.Sprintf("watch-%s", cfg.RunID)
+	rec.recordCall("mkdir", func() error {
+		return cli.Create(ctx, fsmeta.CreateRequest{
+			Mount:  cfg.Mount,
+			Parent: fsmeta.RootInode,
+			Name:   dirName,
+			Inode:  dirInode,
+		}, fsmeta.InodeRecord{
+			Type:      fsmeta.InodeTypeDirectory,
+			Mode:      0o755,
+			LinkCount: 1,
+		})
+	})
+	prefix, err := fsmeta.EncodeDentryPrefix(cfg.Mount, dirInode)
+	if err != nil {
+		return Result{}, err
+	}
+	stream, err := watchCli.WatchSubtree(ctx, fsmeta.WatchRequest{
+		KeyPrefix:          prefix,
+		BackPressureWindow: cfg.BackPressureWindow,
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	defer func() { _ = stream.Close() }()
+
+	warmupKey, err := fsmeta.EncodeDentryKey(cfg.Mount, dirInode, "watch-warmup")
+	if err != nil {
+		return Result{}, err
+	}
+	if err := cli.Create(ctx, fsmeta.CreateRequest{
+		Mount:  cfg.Mount,
+		Parent: dirInode,
+		Name:   "watch-warmup",
+		Inode:  cfg.StartInode + fsmeta.InodeID(cfg.Files+1),
+	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, Mode: 0o644, LinkCount: 1}); err != nil {
+		return Result{}, err
+	}
+	if err := waitForWatchKey(ctx, stream, warmupKey); err != nil {
+		return Result{}, err
+	}
+
+	starts := newWatchStarts()
+	done := make(chan error, 1)
+	go collectWatchEvents(ctx, stream, starts, cfg.Files, rec, done)
+
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	for worker := 0; worker < cfg.Clients; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				idx := int(next.Add(1)) - 1
+				if idx >= cfg.Files {
+					return
+				}
+				inode := cfg.StartInode + fsmeta.InodeID(idx+1)
+				name := fmt.Sprintf("watch-%s-file-%08d", cfg.RunID, idx)
+				key, err := fsmeta.EncodeDentryKey(cfg.Mount, dirInode, name)
+				if err != nil {
+					rec.record("watch_create", 0, err)
+					continue
+				}
+				starts.put(key, time.Now())
+				rec.recordCall("watch_create", func() error {
+					return cli.Create(ctx, fsmeta.CreateRequest{
+						Mount:  cfg.Mount,
+						Parent: dirInode,
+						Name:   name,
+						Inode:  inode,
+					}, fsmeta.InodeRecord{
+						Type:      fsmeta.InodeTypeFile,
+						Mode:      0o644,
+						LinkCount: 1,
+					})
+				})
+			}
+		}()
+	}
+	wg.Wait()
+	if err := <-done; err != nil {
+		rec.record("watch_notify", 0, err)
+	}
+
+	return finishResult(WatchSubtree, cfg.RunID, started, rec.snapshot())
 }
 
 func SummaryRows(result Result) []SummaryRow {
@@ -384,6 +498,76 @@ func firstErrorSummary(samples []Sample, limit int) string {
 	return strings.Join(out, "; ")
 }
 
+type watchStarts struct {
+	mu     sync.Mutex
+	values map[string]time.Time
+}
+
+func newWatchStarts() *watchStarts {
+	return &watchStarts{values: make(map[string]time.Time)}
+}
+
+func (s *watchStarts) put(key []byte, started time.Time) {
+	s.mu.Lock()
+	s.values[string(key)] = started
+	s.mu.Unlock()
+}
+
+func (s *watchStarts) pop(key []byte) (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	started, ok := s.values[string(key)]
+	if ok {
+		delete(s.values, string(key))
+	}
+	return started, ok
+}
+
+func collectWatchEvents(ctx context.Context, stream fsmetaclient.WatchSubscription, starts *watchStarts, target int, rec *recorder, done chan<- error) {
+	received := 0
+	for received < target {
+		evt, err := stream.Recv()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				done <- nil
+				return
+			}
+			done <- err
+			return
+		}
+		_ = stream.Ack(evt.Cursor)
+		if started, ok := starts.pop(evt.Key); ok {
+			rec.record("watch_notify", time.Since(started), nil)
+			received++
+		}
+		select {
+		case <-ctx.Done():
+			done <- ctx.Err()
+			return
+		default:
+		}
+	}
+	done <- nil
+}
+
+func waitForWatchKey(ctx context.Context, stream fsmetaclient.WatchSubscription, key []byte) error {
+	for {
+		evt, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+		_ = stream.Ack(evt.Cursor)
+		if string(evt.Key) == string(key) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+	}
+}
+
 func normalizeCheckpointStormConfig(cfg CheckpointStormConfig) CheckpointStormConfig {
 	if cfg.Mount == "" {
 		cfg.Mount = "fsmeta-workload"
@@ -402,6 +586,28 @@ func normalizeCheckpointStormConfig(cfg CheckpointStormConfig) CheckpointStormCo
 	}
 	if cfg.StartInode == 0 {
 		cfg.StartInode = 1_000_000
+	}
+	return cfg
+}
+
+func normalizeWatchSubtreeConfig(cfg WatchSubtreeConfig) WatchSubtreeConfig {
+	if cfg.Mount == "" {
+		cfg.Mount = "fsmeta-workload"
+	}
+	if cfg.RunID == "" {
+		cfg.RunID = NewRunID()
+	}
+	if cfg.Clients <= 0 {
+		cfg.Clients = 4
+	}
+	if cfg.Files <= 0 {
+		cfg.Files = 1024
+	}
+	if cfg.StartInode == 0 {
+		cfg.StartInode = 3_000_000
+	}
+	if cfg.BackPressureWindow == 0 {
+		cfg.BackPressureWindow = uint32(cfg.Files + 1)
 	}
 	return cfg
 }
