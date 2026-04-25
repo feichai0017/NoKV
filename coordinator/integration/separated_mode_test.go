@@ -297,6 +297,113 @@ func averageDuration(samples []time.Duration) time.Duration {
 	return total / time.Duration(len(samples))
 }
 
+// TestSeparatedModeCoordinatorRestartRestoresStoreMembership verifies the
+// Stage 2.1 rooted-membership chain end-to-end against a real replicated
+// meta/root cluster (not the in-process fakeStorage):
+//
+//   - Coordinator A publishes StoreJoined(11) and StoreJoined(12), then
+//     StoreRetired(12). Membership truth lives in meta/root.
+//   - Coordinator A is closed. A fresh Coordinator B opens against the same
+//     replicated root and runs RefreshFromStorage.
+//   - B must observe store 11 as ACTIVE (heartbeat accepted, surfaced via
+//     GetStore) and store 12 as TOMBSTONE (heartbeat rejected with
+//     FailedPrecondition) without ever re-publishing the events.
+//
+// This complements TestServiceRefreshFromStorageRestoresStoreMembership
+// (fakeStorage version) by exercising the durable replicated path: rooted
+// event append, rooted snapshot persistence, RemoteStore Load, and
+// catalog.Cluster.ReplaceRootSnapshot fan-out.
+func TestSeparatedModeCoordinatorRestartRestoresStoreMembership(t *testing.T) {
+	rootCluster := pdtestcluster.OpenReplicated(t)
+	targets := exposeRemoteRoots(t, rootCluster)
+	rootCluster.WaitLeader()
+
+	first, firstStore := openSeparatedCoordinator(t, targets, "c1")
+
+	publish := func(svc *coordserver.Service, event rootevent.Event) {
+		t.Helper()
+		_, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
+			Event: metawire.RootEventToProto(event),
+		})
+		require.NoError(t, err)
+	}
+	publish(first, rootevent.StoreJoined(11))
+	publish(first, rootevent.StoreJoined(12))
+	publish(first, rootevent.StoreRetired(12))
+
+	require.NoError(t, firstStore.Close())
+
+	// Fresh coordinator against the same replicated root cluster. It has
+	// never seen the StoreJoined / StoreRetired events at runtime; the only
+	// path to membership is the durable rooted snapshot.
+	second, secondStore := openSeparatedCoordinator(t, targets, "c1")
+	t.Cleanup(func() { require.NoError(t, secondStore.Close()) })
+
+	var lastActive *coordpb.GetStoreResponse
+	var lastRetired *coordpb.GetStoreResponse
+	if !assertEventually(t, 8*time.Second, 50*time.Millisecond, func() bool {
+		if err := second.RefreshFromStorage(); err != nil {
+			return false
+		}
+		getActive, err := second.GetStore(context.Background(), &coordpb.GetStoreRequest{StoreId: 11})
+		if err != nil {
+			return false
+		}
+		lastActive = getActive
+		if getActive.GetNotFound() {
+			return false
+		}
+		getRetired, err := second.GetStore(context.Background(), &coordpb.GetStoreRequest{StoreId: 12})
+		if err != nil {
+			return false
+		}
+		lastRetired = getRetired
+		if getRetired.GetNotFound() {
+			return false
+		}
+		return getRetired.GetStore().GetState() == coordpb.StoreState_STORE_STATE_TOMBSTONE
+	}) {
+		t.Fatalf("rooted membership not restored: active=%+v retired=%+v", lastActive, lastRetired)
+	}
+
+	// Active member: heartbeat is accepted post-restart with no new
+	// StoreJoined publish. Retry under a short window so we tolerate the
+	// rooted-view cache lag immediately after restart.
+	require.Eventually(t, func() bool {
+		resp, err := second.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
+			StoreId:    11,
+			ClientAddr: "127.0.0.1:20171",
+		})
+		return err == nil && resp.GetAccepted()
+	}, 4*time.Second, 50*time.Millisecond)
+
+	// Retired member: heartbeat is rejected post-restart, proving the
+	// retirement event survived.
+	_, retiredErr := second.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
+		StoreId:    12,
+		ClientAddr: "127.0.0.1:20172",
+	})
+	require.Error(t, retiredErr)
+}
+
+// assertEventually polls condition until it returns true or the timeout
+// elapses. Returns whether the condition was satisfied within budget. Used
+// when the test wants to inspect the last-observed state on failure rather
+// than only seeing a generic "Condition never satisfied".
+func assertEventually(t *testing.T, timeout, interval time.Duration, condition func() bool) bool {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if condition() {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(interval)
+	}
+}
+
 func exposeRemoteRoots(t *testing.T, cluster *pdtestcluster.Cluster) map[uint64]string {
 	t.Helper()
 	targets := make(map[uint64]string, len(cluster.Roots))
@@ -327,6 +434,7 @@ func openSeparatedCoordinatorWithLease(t *testing.T, targets map[uint64]string, 
 	cluster := catalog.NewCluster()
 	bootstrap, err := rootview.Bootstrap(store, cluster.PublishRegionDescriptor, 1, 1)
 	require.NoError(t, err)
+	cluster.ReplaceRootSnapshot(bootstrap.Snapshot.RootSnapshot(), bootstrap.Snapshot.RootToken)
 
 	svc := coordserver.NewService(
 		cluster,

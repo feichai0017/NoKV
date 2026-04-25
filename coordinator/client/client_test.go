@@ -66,6 +66,12 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = cli.Close() })
 
+	joinResp, err := cli.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
+		Event: metawire.RootEventToProto(rootevent.StoreJoined(1)),
+	})
+	require.NoError(t, err)
+	require.True(t, joinResp.GetAccepted())
+
 	storeResp, err := cli.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
 		StoreId:   1,
 		RegionNum: 2,

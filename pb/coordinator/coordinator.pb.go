@@ -27,9 +27,10 @@ const (
 type StoreState int32
 
 const (
-	StoreState_STORE_STATE_UNKNOWN StoreState = 0
-	StoreState_STORE_STATE_UP      StoreState = 1
-	StoreState_STORE_STATE_DOWN    StoreState = 2
+	StoreState_STORE_STATE_UNKNOWN   StoreState = 0
+	StoreState_STORE_STATE_UP        StoreState = 1
+	StoreState_STORE_STATE_DOWN      StoreState = 2
+	StoreState_STORE_STATE_TOMBSTONE StoreState = 3
 )
 
 // Enum value maps for StoreState.
@@ -38,11 +39,13 @@ var (
 		0: "STORE_STATE_UNKNOWN",
 		1: "STORE_STATE_UP",
 		2: "STORE_STATE_DOWN",
+		3: "STORE_STATE_TOMBSTONE",
 	}
 	StoreState_value = map[string]int32{
-		"STORE_STATE_UNKNOWN": 0,
-		"STORE_STATE_UP":      1,
-		"STORE_STATE_DOWN":    2,
+		"STORE_STATE_UNKNOWN":   0,
+		"STORE_STATE_UP":        1,
+		"STORE_STATE_DOWN":      2,
+		"STORE_STATE_TOMBSTONE": 3,
 	}
 )
 
@@ -2564,12 +2567,13 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\x05count\x18\x02 \x01(\x04R\x05count\x12\x10\n" +
 	"\x03era\x18\x03 \x01(\x04R\x03era\x12+\n" +
 	"\x11consumed_frontier\x18\x04 \x01(\x04R\x10consumedFrontier\x12.\n" +
-	"\x13observed_legacy_era\x18\x05 \x01(\x04R\x11observedLegacyEra*O\n" +
+	"\x13observed_legacy_era\x18\x05 \x01(\x04R\x11observedLegacyEra*j\n" +
 	"\n" +
 	"StoreState\x12\x17\n" +
 	"\x13STORE_STATE_UNKNOWN\x10\x00\x12\x12\n" +
 	"\x0eSTORE_STATE_UP\x10\x01\x12\x14\n" +
-	"\x10STORE_STATE_DOWN\x10\x02*i\n" +
+	"\x10STORE_STATE_DOWN\x10\x02\x12\x19\n" +
+	"\x15STORE_STATE_TOMBSTONE\x10\x03*i\n" +
 	"\x16SchedulerOperationType\x12!\n" +
 	"\x1dSCHEDULER_OPERATION_TYPE_NONE\x10\x00\x12,\n" +
 	"(SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER\x10\x01*t\n" +
