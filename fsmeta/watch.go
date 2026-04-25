@@ -45,6 +45,7 @@ type WatchEvent struct {
 // WatchSubscription is one live fsmeta watch stream.
 type WatchSubscription interface {
 	Events() <-chan WatchEvent
+	ReadyCursor() WatchCursor
 	Ack(WatchCursor)
 	Close()
 	Err() error

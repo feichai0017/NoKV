@@ -37,8 +37,12 @@ func main() {
 		err = runCoordinatorCmd(os.Stdout, args)
 	case "meta-root":
 		err = runMetaRootCmd(os.Stdout, args)
-	case "succession-audit":
-		err = runSuccessionAuditCmd(os.Stdout, args)
+	case "mount":
+		err = runMountCmd(os.Stdout, args)
+	case "quota":
+		err = runQuotaCmd(os.Stdout, args)
+	case "eunomia-audit":
+		err = runEunomiaAuditCmd(os.Stdout, args)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -64,7 +68,9 @@ func printUsage(w io.Writer) {
 	  serve     Start NoKV gRPC service backed by a local raftstore
 	  coordinator Start coordinator gRPC service (control plane)
 	  meta-root Start metadata root gRPC service
-	  succession-audit Read-only succession audit against a live meta-root cluster
+	  mount     Register, retire, or list rooted fsmeta mounts
+	  quota     Set, clear, or list rooted fsmeta quota fences
+	  eunomia-audit Read-only eunomia audit against a live meta-root cluster
 
 Run "nokv <command> -h" for command-specific flags.`)
 }

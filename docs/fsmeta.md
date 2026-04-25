@@ -30,7 +30,8 @@ by `fsmeta/server`.
 | `ReadDirPlus` | Scan dentries and fetch inode attributes in one typed operation. |
 | `WatchSubtree` | Live prefix-scoped metadata change stream with explicit ack/back-pressure. |
 | `SnapshotSubtree` | Publish a stable MVCC read epoch for later snapshot-version reads. |
-| `Rename` | Atomically move one dentry from one parent/name to another. |
+| `GetQuotaUsage` | Read the persisted quota usage counter for one mount/scope. |
+| `RenameSubtree` | Atomically move one subtree root dentry from one parent/name to another. |
 | `Unlink` | Delete one dentry. |
 
 `ReadDirPlus` is the main Stage 1 shape advantage: the native path performs one
@@ -45,18 +46,73 @@ Stage 1 intentionally keeps the model small:
 |---|---|
 | Dentry and inode binary codecs | Implemented |
 | Plan-driven operation contracts | Implemented |
-| Create / Lookup / ReadDir / ReadDirPlus / Rename / Unlink | Implemented |
+| Create / Lookup / ReadDir / ReadDirPlus / RenameSubtree / Link / Unlink | Implemented |
 | Cross-region 2PC consumption | Implemented through `raftstore/client` |
 | Server-side `AssertionNotExist` | Implemented in Percolator prewrite |
 | Native gRPC service and typed Go client | Implemented |
 | Docker Compose service | Implemented |
 | Live `WatchSubtree` | Implemented in Stage 2.2 |
 | `SnapshotSubtree` MVCC epoch | Implemented in Stage 2.3 |
-| Historical watch catch-up, hardlink ref-count, xattrs, quota fence | Future work |
+| Historical watch catch-up | Implemented in Stage 3.1 |
+| Rooted mount lifecycle | Implemented in Stage 3.2 |
+| Rooted quota fence and persisted usage counters | Implemented in Stage 3.5 |
+| Hardlink ref-count and last-link inode GC | Implemented |
+| xattrs | Future work |
 
 The current service is a metadata substrate, not a complete filesystem stack.
-FUSE, POSIX compatibility, historical watch catch-up, quota, recursive subtree
-materialization, and snapshot GC retention enforcement belong to later stages.
+FUSE, full POSIX compatibility, recursive subtree materialization, and snapshot
+GC retention enforcement belong to later stages.
+
+`Link` creates an additional dentry for an existing non-directory inode and
+increments `InodeRecord.LinkCount` in the same transaction. `Unlink` decrements
+the link count and deletes the inode record when the last dentry is removed.
+Directory hard links remain invalid.
+
+## Mount Lifecycle
+
+`mount` is no longer a caller-local string convention. Production `nokv-fsmeta`
+checks mount membership through the coordinator before mutating metadata:
+
+- `MountRegistered(mount_id, root_inode, schema_version)` is rooted truth.
+- `MountRetired(mount_id)` is terminal; retired mounts reject writes.
+- Runtime mount caches belong to coordinator / fsmeta, not `meta/root`.
+
+Register a mount explicitly:
+
+```bash
+nokv mount register \
+  --coordinator-addr 127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392 \
+  --mount default \
+  --root-inode 1 \
+  --schema-version 1
+```
+
+List or retire mounts:
+
+```bash
+nokv mount list --coordinator-addr 127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392
+nokv mount retire --coordinator-addr 127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392 --mount default
+```
+
+For local development, Docker Compose runs the same explicit registration once
+through the `mount-init` service. `nokv-fsmeta` itself never creates mounts; if
+the mount is missing or retired, mutating RPCs fail with `FailedPrecondition`.
+
+Mount retirement and pending subtree handoff repair are detected by the
+`nokv-fsmeta` runtime monitor. The default detection interval is one second.
+During that window, safety wins over availability: a subtree with a rooted
+pending handoff rejects competing mutations until the monitor completes the
+handoff.
+
+## Quota Fence
+
+Quota fences are rooted truth. Usage counters are stored as fsmeta data-plane
+keys and are updated in the same Percolator transaction as the metadata
+mutation that changes usage. Scope `0` is mount-wide usage; non-zero scopes are
+direct quota accounting roots.
+
+Use `GetQuotaUsage` to inspect the persisted counter for one subject. Missing
+usage keys mean zero usage.
 
 ## SnapshotSubtree
 

@@ -19,7 +19,7 @@ const (
 	// before it enters the replicated metadata-root state machine.
 	BeforeApplyHandover
 	// BeforeTenureStorageRead aborts the coordinator's storage-backed
-	// succession gate before it reloads a rooted snapshot.
+	// eunomia gate before it reloads a rooted snapshot.
 	BeforeTenureStorageRead
 	// AfterAppendCommittedBeforeCheckpoint aborts one rooted append after the
 	// replicated log commit is observed but before the checkpoint is advanced.

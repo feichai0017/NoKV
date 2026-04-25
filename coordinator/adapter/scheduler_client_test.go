@@ -13,6 +13,7 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
+	"google.golang.org/grpc"
 )
 
 type fakePDClient struct {
@@ -81,6 +82,30 @@ func (f *fakePDClient) GetStore(context.Context, *coordpb.GetStoreRequest) (*coo
 
 func (f *fakePDClient) ListStores(context.Context, *coordpb.ListStoresRequest) (*coordpb.ListStoresResponse, error) {
 	return &coordpb.ListStoresResponse{}, nil
+}
+
+func (f *fakePDClient) GetMount(context.Context, *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error) {
+	return &coordpb.GetMountResponse{}, nil
+}
+
+func (f *fakePDClient) ListMounts(context.Context, *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error) {
+	return &coordpb.ListMountsResponse{}, nil
+}
+
+func (f *fakePDClient) ListSubtreeAuthorities(context.Context, *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error) {
+	return &coordpb.ListSubtreeAuthoritiesResponse{}, nil
+}
+
+func (f *fakePDClient) GetQuotaFence(context.Context, *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error) {
+	return &coordpb.GetQuotaFenceResponse{}, nil
+}
+
+func (f *fakePDClient) ListQuotaFences(context.Context, *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error) {
+	return &coordpb.ListQuotaFencesResponse{}, nil
+}
+
+func (f *fakePDClient) WatchRootEvents(context.Context, *coordpb.WatchRootEventsRequest, ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
+	return nil, nil
 }
 
 func (f *fakePDClient) AllocID(context.Context, *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error) {

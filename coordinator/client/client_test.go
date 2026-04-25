@@ -72,6 +72,20 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, joinResp.GetAccepted())
 
+	mountResp, err := cli.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
+		Event: metawire.RootEventToProto(rootevent.MountRegistered("vol", 1, 1)),
+	})
+	require.NoError(t, err)
+	require.True(t, mountResp.GetAccepted())
+	getMountResp, err := cli.GetMount(context.Background(), &coordpb.GetMountRequest{MountId: "vol"})
+	require.NoError(t, err)
+	require.False(t, getMountResp.GetNotFound())
+	require.Equal(t, "vol", getMountResp.GetMount().GetMountId())
+	require.Equal(t, coordpb.MountState_MOUNT_STATE_ACTIVE, getMountResp.GetMount().GetState())
+	listMountsResp, err := cli.ListMounts(context.Background(), &coordpb.ListMountsRequest{})
+	require.NoError(t, err)
+	require.Len(t, listMountsResp.GetMounts(), 1)
+
 	storeResp, err := cli.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
 		StoreId:   1,
 		RegionNum: 2,
@@ -203,11 +217,11 @@ func (f *followerStorage) AppendRootEvent(context.Context, rootevent.Event) erro
 func (f *followerStorage) SaveAllocatorState(context.Context, uint64, uint64) error {
 	return nil
 }
-func (f *followerStorage) ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.SuccessionState, error) {
-	return rootstate.SuccessionState{}, nil
+func (f *followerStorage) ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.EunomiaState, error) {
+	return rootstate.EunomiaState{}, nil
 }
-func (f *followerStorage) ApplyHandover(context.Context, rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
-	return rootstate.SuccessionState{}, nil
+func (f *followerStorage) ApplyHandover(context.Context, rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
+	return rootstate.EunomiaState{}, nil
 }
 func (f *followerStorage) Refresh() error   { return nil }
 func (f *followerStorage) Close() error     { return nil }

@@ -6,15 +6,15 @@
 // meta/root/ but never owns durable cluster state. The execution plane
 // (raftstore/) applies and publishes, and coordinator reconstructs its
 // view by tailing rooted commits. Contracts between the planes are
-// specified in TLA+ under spec/Succession.tla.
+// specified in TLA+ under spec/Eunomia.tla.
 //
 // Heavy logic is deliberately split into sibling packages:
 // catalog (region/event validation), view (directory + store health),
-// protocol/succession (authority handoff primitives), storage
+// protocol/eunomia (authority handoff primitives), storage
 // (rooted adapter), audit (snapshot + trace audit).
 //
 // Design references: docs/coordinator.md, docs/control_and_execution_protocols.md,
-// docs/rooted_truth.md, docs/succession-audit.md.
+// docs/rooted_truth.md, docs/eunomia-audit.md.
 package server
 
 import (
@@ -69,7 +69,7 @@ type Service struct {
 	statusMu          sync.RWMutex
 	lastRootReload    int64
 	lastRootError     string
-	successionMetrics successionMetrics
+	eunomiaMetrics    eunomiaMetrics
 	ablation          coordablation.Config
 }
 

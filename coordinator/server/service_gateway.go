@@ -10,11 +10,17 @@ import (
 	pdview "github.com/feichai0017/NoKV/coordinator/view"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+type rootedTailSubscriber interface {
+	SubscribeTail(rootstorage.TailToken) *rootstorage.TailSubscription
+}
 
 // StoreHeartbeat records store-level stats.
 func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbeatRequest) (*coordpb.StoreHeartbeatResponse, error) {
@@ -81,6 +87,200 @@ func (s *Service) ListStores(ctx context.Context, _ *coordpb.ListStoresRequest) 
 		out = append(out, s.storeInfoToProto(info))
 	}
 	return &coordpb.ListStoresResponse{Stores: out}, nil
+}
+
+func (s *Service) GetMount(ctx context.Context, req *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
+	if req == nil || req.GetMountId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "get mount request missing mount_id")
+	}
+	mount, ok := s.cluster.MountByID(req.GetMountId())
+	if !ok {
+		return &coordpb.GetMountResponse{NotFound: true}, nil
+	}
+	return &coordpb.GetMountResponse{Mount: mountInfoToProto(mount)}, nil
+}
+
+func (s *Service) ListMounts(ctx context.Context, _ *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
+	mounts := s.cluster.MountSnapshot()
+	out := make([]*coordpb.MountInfo, 0, len(mounts))
+	for _, mount := range mounts {
+		out = append(out, mountInfoToProto(mount))
+	}
+	return &coordpb.ListMountsResponse{Mounts: out}, nil
+}
+
+func (s *Service) ListSubtreeAuthorities(ctx context.Context, _ *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
+	subtrees := s.cluster.SubtreeAuthoritySnapshot()
+	out := make([]*coordpb.SubtreeAuthorityInfo, 0, len(subtrees))
+	for _, subtree := range subtrees {
+		out = append(out, subtreeAuthorityInfoToProto(subtree))
+	}
+	return &coordpb.ListSubtreeAuthoritiesResponse{Subtrees: out}, nil
+}
+
+func (s *Service) GetQuotaFence(ctx context.Context, req *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "get quota fence request missing subject")
+	}
+	subject := req.GetSubject()
+	if subject == nil || subject.GetMountId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "get quota fence request missing subject")
+	}
+	fence, ok := s.cluster.QuotaFenceBySubject(subject.GetMountId(), subject.GetSubtreeRoot())
+	if !ok {
+		return &coordpb.GetQuotaFenceResponse{NotFound: true}, nil
+	}
+	return &coordpb.GetQuotaFenceResponse{Fence: quotaFenceInfoToProto(fence)}, nil
+}
+
+func (s *Service) ListQuotaFences(ctx context.Context, _ *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
+	quotas := s.cluster.QuotaFenceSnapshot()
+	out := make([]*coordpb.QuotaFenceInfo, 0, len(quotas))
+	for _, quota := range quotas {
+		out = append(out, quotaFenceInfoToProto(quota))
+	}
+	return &coordpb.ListQuotaFencesResponse{Fences: out}, nil
+}
+
+func (s *Service) WatchRootEvents(req *coordpb.WatchRootEventsRequest, stream coordpb.Coordinator_WatchRootEventsServer) error {
+	if stream == nil {
+		return status.Error(codes.InvalidArgument, "watch root events stream is nil")
+	}
+	if s == nil || s.storage == nil {
+		return status.Error(codes.FailedPrecondition, "root storage is not configured")
+	}
+	subscriber, ok := s.storage.(rootedTailSubscriber)
+	if !ok {
+		return status.Error(codes.FailedPrecondition, "root storage does not support tail subscriptions")
+	}
+	var after rootstorage.TailToken
+	if req != nil {
+		after = metawire.RootTailTokenFromProto(req.GetAfter())
+	}
+	sub := subscriber.SubscribeTail(after)
+	if sub == nil {
+		return status.Error(codes.FailedPrecondition, "root tail subscription is not available")
+	}
+	ctx := stream.Context()
+	for {
+		advance, err := sub.Next(ctx, 30*time.Second)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return status.Error(codes.Canceled, err.Error())
+			}
+			return status.Error(codes.Internal, err.Error())
+		}
+		if !advance.Advanced() {
+			continue
+		}
+		events := rootEventsAfter(advance.Observed.Tail.Records, advance.After.Cursor)
+		resp := &coordpb.WatchRootEventsResponse{
+			Token:             metawire.RootTailTokenToProto(advance.Token),
+			Events:            events,
+			BootstrapRequired: advance.CatchUpAction() == rootstorage.TailCatchUpInstallBootstrap,
+		}
+		if err := stream.Send(resp); err != nil {
+			return err
+		}
+		sub.Acknowledge(advance)
+	}
+}
+
+func rootEventsAfter(records []rootstorage.CommittedEvent, after rootstate.Cursor) []*metapb.RootCommittedEvent {
+	out := make([]*metapb.RootCommittedEvent, 0, len(records))
+	for _, record := range records {
+		if !rootstate.CursorAfter(record.Cursor, after) {
+			continue
+		}
+		out = append(out, &metapb.RootCommittedEvent{
+			Cursor: metawire.RootCursorToProto(record.Cursor),
+			Event:  metawire.RootEventToProto(record.Event),
+		})
+	}
+	return out
+}
+
+func mountInfoToProto(mount rootstate.MountRecord) *coordpb.MountInfo {
+	return &coordpb.MountInfo{
+		MountId:       mount.MountID,
+		RootInode:     mount.RootInode,
+		SchemaVersion: mount.SchemaVersion,
+		State:         mountStateToProto(mount.State),
+		RegisteredAt:  metawire.RootCursorToProto(mount.RegisteredAt),
+		RetiredAt:     metawire.RootCursorToProto(mount.RetiredAt),
+	}
+}
+
+func quotaFenceInfoToProto(fence rootstate.QuotaFence) *coordpb.QuotaFenceInfo {
+	return &coordpb.QuotaFenceInfo{
+		Subject: &coordpb.QuotaSubject{
+			MountId:     fence.Mount,
+			SubtreeRoot: fence.RootInode,
+		},
+		LimitBytes:  fence.LimitBytes,
+		LimitInodes: fence.LimitInodes,
+		Era:         fence.Era,
+		Frontier:    fence.Frontier,
+		UpdatedAt:   metawire.RootCursorToProto(fence.UpdatedAt),
+	}
+}
+
+func subtreeAuthorityInfoToProto(subtree rootstate.SubtreeAuthority) *coordpb.SubtreeAuthorityInfo {
+	return &coordpb.SubtreeAuthorityInfo{
+		SubtreeId:              subtree.SubtreeID,
+		MountId:                subtree.Mount,
+		RootInode:              subtree.RootInode,
+		AuthorityId:            subtree.AuthorityID,
+		Era:                    subtree.Era,
+		Frontier:               subtree.Frontier,
+		State:                  subtreeAuthorityStateToProto(subtree.State),
+		DeclaredAt:             metawire.RootCursorToProto(subtree.DeclaredAt),
+		HandoffStartedAt:       metawire.RootCursorToProto(subtree.HandoffStartedAt),
+		HandoffCompletedAt:     metawire.RootCursorToProto(subtree.HandoffCompletedAt),
+		PredecessorAuthorityId: subtree.PredecessorAuthorityID,
+		PredecessorEra:         subtree.PredecessorEra,
+		PredecessorFrontier:    subtree.PredecessorFrontier,
+		SuccessorAuthorityId:   subtree.SuccessorAuthorityID,
+		SuccessorEra:           subtree.SuccessorEra,
+		InheritedFrontier:      subtree.InheritedFrontier,
+	}
+}
+
+func subtreeAuthorityStateToProto(state rootstate.SubtreeAuthorityState) coordpb.SubtreeAuthorityState {
+	switch state {
+	case rootstate.SubtreeAuthorityActive:
+		return coordpb.SubtreeAuthorityState_SUBTREE_AUTHORITY_STATE_ACTIVE
+	case rootstate.SubtreeAuthorityHandoff:
+		return coordpb.SubtreeAuthorityState_SUBTREE_AUTHORITY_STATE_HANDOFF
+	default:
+		return coordpb.SubtreeAuthorityState_SUBTREE_AUTHORITY_STATE_UNKNOWN
+	}
+}
+
+func mountStateToProto(state rootstate.MountState) coordpb.MountState {
+	switch state {
+	case rootstate.MountStateActive:
+		return coordpb.MountState_MOUNT_STATE_ACTIVE
+	case rootstate.MountStateRetired:
+		return coordpb.MountState_MOUNT_STATE_RETIRED
+	default:
+		return coordpb.MountState_MOUNT_STATE_UNKNOWN
+	}
 }
 
 func (s *Service) storeInfoToProto(info catalog.StoreInfo) *coordpb.StoreInfo {
@@ -182,9 +382,13 @@ func (s *Service) PublishRootEvent(ctx context.Context, req *coordpb.PublishRoot
 	}
 	if err := s.cluster.ValidateRootEvent(event); err != nil {
 		switch {
-		case errors.Is(err, catalog.ErrInvalidRegionID):
+		case errors.Is(err, catalog.ErrInvalidRegionID), errors.Is(err, catalog.ErrInvalidMountID):
 			return nil, status.Error(codes.InvalidArgument, err.Error())
-		case errors.Is(err, catalog.ErrRegionHeartbeatStale), errors.Is(err, catalog.ErrRegionRangeOverlap):
+		case errors.Is(err, catalog.ErrRegionHeartbeatStale), errors.Is(err, catalog.ErrRegionRangeOverlap),
+			errors.Is(err, catalog.ErrMountNotFound), errors.Is(err, catalog.ErrMountRetired), errors.Is(err, catalog.ErrMountConflict),
+			errors.Is(err, catalog.ErrSubtreeAuthorityNotFound), errors.Is(err, catalog.ErrSubtreeAuthorityConflict),
+			errors.Is(err, catalog.ErrSubtreeAuthorityHandoff), errors.Is(err, catalog.ErrQuotaFenceNotFound),
+			errors.Is(err, catalog.ErrQuotaFenceConflict):
 			return nil, status.Error(codes.FailedPrecondition, err.Error())
 		default:
 			return nil, status.Error(codes.Internal, err.Error())
@@ -220,6 +424,9 @@ func (s *Service) assessRootEventLifecycle(event rootevent.Event) (rootstate.Tra
 	}
 	rooted := rootstate.Snapshot{
 		Stores:              snapshot.Stores,
+		Mounts:              snapshot.Mounts,
+		Subtrees:            snapshot.Subtrees,
+		Quotas:              snapshot.Quotas,
 		Descriptors:         snapshot.Descriptors,
 		PendingPeerChanges:  snapshot.PendingPeerChanges,
 		PendingRangeChanges: snapshot.PendingRangeChanges,

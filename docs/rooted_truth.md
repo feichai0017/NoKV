@@ -124,10 +124,10 @@ In addition to "raw" events, backends expose command APIs for control-plane-spec
 
 ```go
 ApplyTenure(ctx, cmd TenureCommand)
-    (SuccessionState, error)
+    (EunomiaState, error)
 
 ApplyHandover(ctx, cmd HandoverCommand)
-    (SuccessionState, error)
+    (EunomiaState, error)
 ```
 
 These are **validated, typed writes** that internally:
@@ -135,9 +135,9 @@ These are **validated, typed writes** that internally:
 1. Validate the command against current state (e.g., `Seal` requires an active `Tenure`, `Confirm` requires prior `Legacy`)
 2. Emit the appropriate `KindTenure` / `KindLegacy` / `KindHandover` event
 3. Append through the normal log path
-4. Return the new `SuccessionState = { Tenure, Legacy, Handover }`
+4. Return the new `EunomiaState = { Tenure, Legacy, Handover }`
 
-Command-level validation lives in [`meta/root/state/succession.go`](../meta/root/state/succession.go).
+Command-level validation lives in [`meta/root/state/eunomia.go`](../meta/root/state/eunomia.go).
 
 ---
 
@@ -198,7 +198,7 @@ This is what keeps `coordinator/` deployable separately from the rooted log, if 
 | [`meta/root/protocol/types.go`](../meta/root/protocol/types.go) | Pure protocol types (no persistence logic) |
 | [`meta/root/event/types.go`](../meta/root/event/types.go) | Typed event constructors |
 | [`meta/root/state/state.go`](../meta/root/state/state.go) | `State`, `Snapshot`, `ApplyEventToSnapshot` |
-| [`meta/root/state/succession.go`](../meta/root/state/succession.go) | Tenure/Legacy/Handover validation + digest |
+| [`meta/root/state/eunomia.go`](../meta/root/state/eunomia.go) | Tenure/Legacy/Handover validation + digest |
 | [`meta/root/state/transition.go`](../meta/root/state/transition.go) | Cross-event transition rules |
 | [`meta/root/storage/virtual_log.go`](../meta/root/storage/virtual_log.go) | Tail subscription + checkpoint primitives |
 | [`meta/root/replicated/store.go`](../meta/root/replicated/store.go) | The only backend: 3-peer raft-replicated meta-root |

@@ -215,9 +215,9 @@ func (c *Client) LeaderID() uint64 {
 	return statusResp.GetLeaderId()
 }
 
-func (c *Client) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error) {
+func (c *Client) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error) {
 	if !validTenureAct(cmd.Kind) {
-		return rootstate.SuccessionState{}, rootstate.ErrInvalidTenure
+		return rootstate.EunomiaState{}, rootstate.ErrInvalidTenure
 	}
 	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyTenureResponse, error) {
 		return rpc.ApplyTenure(ctx, &metapb.MetadataRootApplyTenureRequest{
@@ -225,9 +225,9 @@ func (c *Client) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (
 		})
 	})
 	if err != nil {
-		return rootstate.SuccessionState{}, err
+		return rootstate.EunomiaState{}, err
 	}
-	protocolState := metawire.RootSuccessionStateFromProto(resp.GetState())
+	protocolState := metawire.RootEunomiaStateFromProto(resp.GetState())
 	if cmd.Kind == rootproto.TenureActIssue &&
 		resp.GetStatus() == metapb.RootTenureApplyStatus_ROOT_TENURE_APPLY_STATUS_HELD {
 		return protocolState, rootstate.ErrPrimacy
@@ -235,9 +235,9 @@ func (c *Client) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (
 	return protocolState, nil
 }
 
-func (c *Client) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
+func (c *Client) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
 	if !validHandoverAct(cmd.Kind) {
-		return rootstate.SuccessionState{}, rootstate.ErrFinality
+		return rootstate.EunomiaState{}, rootstate.ErrFinality
 	}
 	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyHandoverResponse, error) {
 		return rpc.ApplyHandover(ctx, &metapb.MetadataRootApplyHandoverRequest{
@@ -245,9 +245,9 @@ func (c *Client) ApplyHandover(ctx context.Context, cmd rootproto.HandoverComman
 		})
 	})
 	if err != nil {
-		return rootstate.SuccessionState{}, err
+		return rootstate.EunomiaState{}, err
 	}
-	return metawire.RootSuccessionStateFromProto(resp.GetState()), nil
+	return metawire.RootEunomiaStateFromProto(resp.GetState()), nil
 }
 
 func (c *Client) ObserveCommitted() (rootstorage.ObservedCommitted, error) {

@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
-	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
+	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -17,7 +17,7 @@ func TestBuildReport(t *testing.T) {
 		HolderID:  "c1",
 		Era:       2,
 		Mandate:   rootproto.MandateDefault,
-		Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
+		Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 		SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
 	}
 	legacyDigest := rootstate.DigestOfLegacy(seal)
@@ -62,7 +62,7 @@ func TestBuildReportSurfacesClosureGaps(t *testing.T) {
 		HolderID:  "c1",
 		Era:       2,
 		Mandate:   rootproto.MandateDefault,
-		Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 9),
+		Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 9),
 		SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
 	}
 	legacyDigest := rootstate.DigestOfLegacy(seal)
@@ -96,10 +96,10 @@ func TestBuildReportSurfacesClosureGaps(t *testing.T) {
 
 func TestBuildLeaseStartCoverageReport(t *testing.T) {
 	report := coordaudit.BuildLeaseStartCoverageReport(
-		succession.LeaseView{HolderID: "A", LeaseStart: 100},
-		succession.LeaseView{HolderID: "C", LeaseStart: 103},
-		succession.NewReadSummary(
-			succession.ServedRead{Key: "k", Timestamp: 105},
+		eunomia.LeaseView{HolderID: "A", LeaseStart: 100},
+		eunomia.LeaseView{HolderID: "C", LeaseStart: 103},
+		eunomia.NewReadSummary(
+			eunomia.ServedRead{Key: "k", Timestamp: 105},
 		),
 	)
 
@@ -108,10 +108,10 @@ func TestBuildLeaseStartCoverageReport(t *testing.T) {
 	require.Len(t, report.Coverage.Violations(), 1)
 
 	report = coordaudit.BuildLeaseStartCoverageReport(
-		succession.LeaseView{HolderID: "A", LeaseStart: 100},
-		succession.LeaseView{HolderID: "C", LeaseStart: 106},
-		succession.NewReadSummary(
-			succession.ServedRead{Key: "k", Timestamp: 105},
+		eunomia.LeaseView{HolderID: "A", LeaseStart: 100},
+		eunomia.LeaseView{HolderID: "C", LeaseStart: 106},
+		eunomia.NewReadSummary(
+			eunomia.ServedRead{Key: "k", Timestamp: 105},
 		),
 	)
 

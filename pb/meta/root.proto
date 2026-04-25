@@ -33,6 +33,12 @@ enum RootEventKind {
   ROOT_EVENT_KIND_HANDOVER = 22;
   ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED = 23;
   ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED = 24;
+  ROOT_EVENT_KIND_MOUNT_REGISTERED = 25;
+  ROOT_EVENT_KIND_MOUNT_RETIRED = 26;
+  ROOT_EVENT_KIND_SUBTREE_AUTHORITY_DECLARED = 27;
+  ROOT_EVENT_KIND_SUBTREE_HANDOFF_STARTED = 28;
+  ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED = 29;
+  ROOT_EVENT_KIND_QUOTA_FENCE_UPDATED = 30;
 }
 
 message RootCursor {
@@ -59,6 +65,9 @@ message RootCheckpoint {
   repeated RootPendingRangeChange pending_range_changes = 5;
   repeated RootStore stores = 6;
   repeated RootSnapshotEpoch snapshot_epochs = 7;
+  repeated RootMount mounts = 8;
+  repeated RootSubtreeAuthority subtrees = 9;
+  repeated RootQuotaFence quotas = 10;
 }
 
 message RootStoreMembership {
@@ -84,6 +93,57 @@ message RootSnapshotEpoch {
   uint64 root_inode = 3;
   uint64 read_version = 4;
   RootCursor published_at = 5;
+}
+
+enum RootMountState {
+  ROOT_MOUNT_STATE_UNSPECIFIED = 0;
+  ROOT_MOUNT_STATE_ACTIVE = 1;
+  ROOT_MOUNT_STATE_RETIRED = 2;
+}
+
+message RootMount {
+  string mount_id = 1;
+  uint64 root_inode = 2;
+  uint32 schema_version = 3;
+  RootMountState state = 4;
+  RootCursor registered_at = 5;
+  RootCursor retired_at = 6;
+}
+
+enum RootSubtreeAuthorityState {
+  ROOT_SUBTREE_AUTHORITY_STATE_UNSPECIFIED = 0;
+  ROOT_SUBTREE_AUTHORITY_STATE_ACTIVE = 1;
+  ROOT_SUBTREE_AUTHORITY_STATE_HANDOFF = 2;
+}
+
+message RootSubtreeAuthority {
+  string subtree_id = 1;
+  string mount = 2;
+  uint64 root_inode = 3;
+  string authority_id = 4;
+  uint64 era = 5;
+  uint64 frontier = 6;
+  RootSubtreeAuthorityState state = 7;
+  RootCursor declared_at = 8;
+  RootCursor handoff_started_at = 9;
+  RootCursor handoff_completed_at = 10;
+  string predecessor_authority_id = 11;
+  uint64 predecessor_era = 12;
+  uint64 predecessor_frontier = 13;
+  string successor_authority_id = 14;
+  uint64 successor_era = 15;
+  uint64 inherited_frontier = 16;
+}
+
+message RootQuotaFence {
+  string subject_id = 1;
+  string mount = 2;
+  uint64 subtree_root = 3;
+  uint64 limit_bytes = 4;
+  uint64 limit_inodes = 5;
+  uint64 era = 6;
+  uint64 frontier = 7;
+  RootCursor updated_at = 8;
 }
 
 message RootAllocatorFence {
@@ -212,6 +272,9 @@ message RootEvent {
     RootLegacy legacy = 10;
     RootHandover handover = 11;
     RootSnapshotEpoch snapshot_epoch = 12;
+    RootMount mount = 13;
+    RootSubtreeAuthority subtree_authority = 14;
+    RootQuotaFence quota_fence = 15;
   }
 }
 
@@ -282,7 +345,7 @@ message RootHandoverCommand {
   repeated RootMandateFrontier frontiers = 4;
 }
 
-message RootSuccessionState {
+message RootEunomiaState {
   RootTenure tenure = 1;
   RootLegacy legacy = 2;
   RootHandover handover = 3;
@@ -299,7 +362,7 @@ message MetadataRootApplyTenureRequest {
 }
 
 message MetadataRootApplyTenureResponse {
-  RootSuccessionState state = 1;
+  RootEunomiaState state = 1;
   RootTenureApplyStatus status = 2;
 }
 
@@ -308,7 +371,7 @@ message MetadataRootApplyHandoverRequest {
 }
 
 message MetadataRootApplyHandoverResponse {
-  RootSuccessionState state = 1;
+  RootEunomiaState state = 1;
 }
 
 message RootTailToken {

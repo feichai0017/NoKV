@@ -12,7 +12,7 @@ import (
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
-	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
+	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
 	"github.com/feichai0017/NoKV/coordinator/tso"
@@ -44,8 +44,8 @@ type protocolMatrixStorage struct {
 	reattaches  int
 }
 
-func (s *protocolMatrixStorage) protocolState() rootstate.SuccessionState {
-	return rootstate.SuccessionState{
+func (s *protocolMatrixStorage) protocolState() rootstate.EunomiaState {
+	return rootstate.EunomiaState{
 		Tenure:   s.snapshot.Tenure,
 		Legacy:   s.snapshot.Legacy,
 		Handover: s.snapshot.Handover,
@@ -70,12 +70,12 @@ func (s *protocolMatrixStorage) SaveAllocatorState(_ context.Context, idCurrent,
 	return nil
 }
 
-func (s *protocolMatrixStorage) ApplyTenure(_ context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error) {
+func (s *protocolMatrixStorage) ApplyTenure(_ context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error) {
 	switch cmd.Kind {
 	case rootproto.TenureActIssue:
 		s.campaigns++
 		if s.campaignErr != nil {
-			return rootstate.SuccessionState{}, s.campaignErr
+			return rootstate.EunomiaState{}, s.campaignErr
 		}
 		if err := rootstate.ValidateTenureClaim(s.snapshot.Tenure, s.snapshot.Legacy, cmd.HolderID, cmd.LineageDigest, cmd.ExpiresUnixNano, cmd.NowUnixNano); err != nil {
 			return s.protocolState(), err
@@ -116,12 +116,12 @@ func (s *protocolMatrixStorage) ApplyTenure(_ context.Context, cmd rootproto.Ten
 			s.snapshot.Allocator.TSCurrent = tsoFence
 		}
 	default:
-		return rootstate.SuccessionState{}, rootstate.ErrInvalidTenure
+		return rootstate.EunomiaState{}, rootstate.ErrInvalidTenure
 	}
 	return s.protocolState(), nil
 }
 
-func (s *protocolMatrixStorage) ApplyHandover(_ context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
+func (s *protocolMatrixStorage) ApplyHandover(_ context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
 	switch cmd.Kind {
 	case rootproto.HandoverActSeal:
 		if err := rootstate.ValidateLegacyFormation(s.snapshot.Tenure, cmd.HolderID); err != nil {
@@ -140,14 +140,14 @@ func (s *protocolMatrixStorage) ApplyHandover(_ context.Context, cmd rootproto.H
 	case rootproto.HandoverActConfirm:
 		s.confirms++
 		if s.confirmErr != nil {
-			return rootstate.SuccessionState{}, s.confirmErr
+			return rootstate.EunomiaState{}, s.confirmErr
 		}
 		if strings.TrimSpace(cmd.HolderID) == "" || strings.TrimSpace(cmd.HolderID) != s.snapshot.Tenure.HolderID {
 			return s.protocolState(), rootstate.ErrPrimacy
 		}
-		auditStatus, err := succession.ValidateHandoverConfirmation(
+		auditStatus, err := eunomia.ValidateHandoverConfirmation(
 			s.snapshot.Tenure,
-			succession.Frontiers(rootstate.State{
+			eunomia.Frontiers(rootstate.State{
 				IDFence:  s.snapshot.Allocator.IDCurrent,
 				TSOFence: s.snapshot.Allocator.TSCurrent,
 			}, rootstate.MaxDescriptorRevision(s.snapshot.Descriptors)),
@@ -167,23 +167,23 @@ func (s *protocolMatrixStorage) ApplyHandover(_ context.Context, cmd rootproto.H
 	case rootproto.HandoverActClose:
 		s.closes++
 		if s.closeErr != nil {
-			return rootstate.SuccessionState{}, s.closeErr
+			return rootstate.EunomiaState{}, s.closeErr
 		}
-		if err := succession.ValidateHandoverFinality(s.snapshot.Tenure, s.snapshot.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+		if err := eunomia.ValidateHandoverFinality(s.snapshot.Tenure, s.snapshot.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return s.protocolState(), err
 		}
 		s.snapshot.Handover.Stage = rootproto.HandoverStageClosed
 	case rootproto.HandoverActReattach:
 		s.reattaches++
 		if s.reattachErr != nil {
-			return rootstate.SuccessionState{}, s.reattachErr
+			return rootstate.EunomiaState{}, s.reattachErr
 		}
-		if err := succession.ValidateHandoverReattach(s.snapshot.Tenure, s.snapshot.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+		if err := eunomia.ValidateHandoverReattach(s.snapshot.Tenure, s.snapshot.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return s.protocolState(), err
 		}
 		s.snapshot.Handover.Stage = rootproto.HandoverStageReattached
 	default:
-		return rootstate.SuccessionState{}, rootstate.ErrFinality
+		return rootstate.EunomiaState{}, rootstate.ErrFinality
 	}
 	return s.protocolState(), nil
 }
@@ -301,14 +301,14 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 		HolderID:  "c1",
 		Era:       2,
 		Mandate:   rootproto.MandateDefault,
-		Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
+		Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 	}
 	sealWithDescriptor7Digest := rootstate.DigestOfLegacy(sealWithDescriptor7)
 	sealWithDescriptor9 := rootstate.Legacy{
 		HolderID:  "c1",
 		Era:       2,
 		Mandate:   rootproto.MandateDefault,
-		Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 9),
+		Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 9),
 	}
 	sealWithDescriptor9Digest := rootstate.DigestOfLegacy(sealWithDescriptor9)
 
@@ -355,7 +355,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 						Era:             2,
 						Mandate:         rootproto.MandateDefault,
 					},
-					Legacy:      rootstate.Legacy{HolderID: "c1", Era: 2, Mandate: rootproto.MandateDefault, Frontiers: succession.Frontiers(rootstate.State{IDFence: 0, TSOFence: 0}, 7)},
+					Legacy:      rootstate.Legacy{HolderID: "c1", Era: 2, Mandate: rootproto.MandateDefault, Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 0, TSOFence: 0}, 7)},
 					Descriptors: baseDescriptors,
 				},
 			},

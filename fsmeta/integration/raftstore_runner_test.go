@@ -96,7 +96,7 @@ func TestRaftstoreRunnerRenameAcrossRegionsOnRealCluster(t *testing.T) {
 	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
 	require.NoError(t, err)
 
-	err = executor.Rename(ctx, fsmeta.RenameRequest{
+	err = executor.RenameSubtree(ctx, fsmeta.RenameSubtreeRequest{
 		Mount:      "vol",
 		FromParent: fsmeta.RootInode,
 		FromName:   "alpha",

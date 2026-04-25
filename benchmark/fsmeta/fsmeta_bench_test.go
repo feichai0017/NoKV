@@ -15,6 +15,9 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaclient "github.com/feichai0017/NoKV/fsmeta/client"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	raftclient "github.com/feichai0017/NoKV/raftstore/client"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -47,6 +50,7 @@ func TestBenchmarkFSMeta(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), *fsmetaTimeout)
 	defer cancel()
+	ensureBenchmarkMount(t, ctx)
 
 	runID := workload.NewRunID()
 	var results []workload.Result
@@ -84,6 +88,55 @@ func TestBenchmarkFSMeta(t *testing.T) {
 		t.Fatalf("write summary CSV: %v", err)
 	}
 	t.Logf("wrote fsmeta benchmark summary: %s", output)
+}
+
+func ensureBenchmarkMount(t *testing.T, ctx context.Context) {
+	t.Helper()
+	if strings.TrimSpace(*fsmetaCoordAddr) == "" || strings.TrimSpace(*fsmetaMount) == "" {
+		return
+	}
+	coordRPC, err := coordclient.NewGRPCClient(ctx, *fsmetaCoordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial coordinator for mount bootstrap: %v", err)
+	}
+	defer func() { _ = coordRPC.Close() }()
+	resp, err := coordRPC.GetMount(ctx, &coordpb.GetMountRequest{MountId: strings.TrimSpace(*fsmetaMount)})
+	if err != nil {
+		t.Fatalf("get benchmark mount: %v", err)
+	}
+	if resp != nil && !resp.GetNotFound() {
+		if resp.GetMount().GetState() == coordpb.MountState_MOUNT_STATE_RETIRED {
+			t.Fatalf("benchmark mount %q is retired", *fsmetaMount)
+		}
+		publishResp, err := coordRPC.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
+			Event: metawire.RootEventToProto(rootevent.SubtreeAuthorityDeclared(strings.TrimSpace(*fsmetaMount), uint64(fsmeta.RootInode), strings.TrimSpace(*fsmetaMount), 0, 0)),
+		})
+		if err != nil {
+			t.Fatalf("declare benchmark subtree authority: %v", err)
+		}
+		if publishResp == nil || !publishResp.GetAccepted() {
+			t.Fatalf("benchmark subtree authority root event was not accepted")
+		}
+		return
+	}
+	publishResp, err := coordRPC.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
+		Event: metawire.RootEventToProto(rootevent.MountRegistered(strings.TrimSpace(*fsmetaMount), uint64(fsmeta.RootInode), 1)),
+	})
+	if err != nil {
+		t.Fatalf("register benchmark mount: %v", err)
+	}
+	if publishResp == nil || !publishResp.GetAccepted() {
+		t.Fatalf("benchmark mount root event was not accepted")
+	}
+	publishResp, err = coordRPC.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
+		Event: metawire.RootEventToProto(rootevent.SubtreeAuthorityDeclared(strings.TrimSpace(*fsmetaMount), uint64(fsmeta.RootInode), strings.TrimSpace(*fsmetaMount), 0, 0)),
+	})
+	if err != nil {
+		t.Fatalf("declare benchmark subtree authority: %v", err)
+	}
+	if publishResp == nil || !publishResp.GetAccepted() {
+		t.Fatalf("benchmark subtree authority root event was not accepted")
+	}
 }
 
 func openBenchmarkClient(t *testing.T, ctx context.Context, driverName string) (workload.Client, func()) {

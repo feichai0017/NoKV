@@ -21,14 +21,17 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	FSMetadata_Create_FullMethodName          = "/nokv.fsmeta.v1.FSMetadata/Create"
-	FSMetadata_Lookup_FullMethodName          = "/nokv.fsmeta.v1.FSMetadata/Lookup"
-	FSMetadata_ReadDir_FullMethodName         = "/nokv.fsmeta.v1.FSMetadata/ReadDir"
-	FSMetadata_ReadDirPlus_FullMethodName     = "/nokv.fsmeta.v1.FSMetadata/ReadDirPlus"
-	FSMetadata_WatchSubtree_FullMethodName    = "/nokv.fsmeta.v1.FSMetadata/WatchSubtree"
-	FSMetadata_SnapshotSubtree_FullMethodName = "/nokv.fsmeta.v1.FSMetadata/SnapshotSubtree"
-	FSMetadata_Rename_FullMethodName          = "/nokv.fsmeta.v1.FSMetadata/Rename"
-	FSMetadata_Unlink_FullMethodName          = "/nokv.fsmeta.v1.FSMetadata/Unlink"
+	FSMetadata_Create_FullMethodName                = "/nokv.fsmeta.v1.FSMetadata/Create"
+	FSMetadata_Lookup_FullMethodName                = "/nokv.fsmeta.v1.FSMetadata/Lookup"
+	FSMetadata_ReadDir_FullMethodName               = "/nokv.fsmeta.v1.FSMetadata/ReadDir"
+	FSMetadata_ReadDirPlus_FullMethodName           = "/nokv.fsmeta.v1.FSMetadata/ReadDirPlus"
+	FSMetadata_WatchSubtree_FullMethodName          = "/nokv.fsmeta.v1.FSMetadata/WatchSubtree"
+	FSMetadata_SnapshotSubtree_FullMethodName       = "/nokv.fsmeta.v1.FSMetadata/SnapshotSubtree"
+	FSMetadata_RetireSnapshotSubtree_FullMethodName = "/nokv.fsmeta.v1.FSMetadata/RetireSnapshotSubtree"
+	FSMetadata_GetQuotaUsage_FullMethodName         = "/nokv.fsmeta.v1.FSMetadata/GetQuotaUsage"
+	FSMetadata_RenameSubtree_FullMethodName         = "/nokv.fsmeta.v1.FSMetadata/RenameSubtree"
+	FSMetadata_Link_FullMethodName                  = "/nokv.fsmeta.v1.FSMetadata/Link"
+	FSMetadata_Unlink_FullMethodName                = "/nokv.fsmeta.v1.FSMetadata/Unlink"
 )
 
 // FSMetadataClient is the client API for FSMetadata service.
@@ -41,7 +44,10 @@ type FSMetadataClient interface {
 	ReadDirPlus(ctx context.Context, in *ReadDirRequest, opts ...grpc.CallOption) (*ReadDirPlusResponse, error)
 	WatchSubtree(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[WatchAckOrSubscribe, WatchSubtreeResponse], error)
 	SnapshotSubtree(ctx context.Context, in *SnapshotSubtreeRequest, opts ...grpc.CallOption) (*SnapshotSubtreeResponse, error)
-	Rename(ctx context.Context, in *RenameRequest, opts ...grpc.CallOption) (*RenameResponse, error)
+	RetireSnapshotSubtree(ctx context.Context, in *RetireSnapshotSubtreeRequest, opts ...grpc.CallOption) (*RetireSnapshotSubtreeResponse, error)
+	GetQuotaUsage(ctx context.Context, in *QuotaUsageRequest, opts ...grpc.CallOption) (*QuotaUsageResponse, error)
+	RenameSubtree(ctx context.Context, in *RenameSubtreeRequest, opts ...grpc.CallOption) (*RenameSubtreeResponse, error)
+	Link(ctx context.Context, in *LinkRequest, opts ...grpc.CallOption) (*LinkResponse, error)
 	Unlink(ctx context.Context, in *UnlinkRequest, opts ...grpc.CallOption) (*UnlinkResponse, error)
 }
 
@@ -116,10 +122,40 @@ func (c *fSMetadataClient) SnapshotSubtree(ctx context.Context, in *SnapshotSubt
 	return out, nil
 }
 
-func (c *fSMetadataClient) Rename(ctx context.Context, in *RenameRequest, opts ...grpc.CallOption) (*RenameResponse, error) {
+func (c *fSMetadataClient) RetireSnapshotSubtree(ctx context.Context, in *RetireSnapshotSubtreeRequest, opts ...grpc.CallOption) (*RetireSnapshotSubtreeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RenameResponse)
-	err := c.cc.Invoke(ctx, FSMetadata_Rename_FullMethodName, in, out, cOpts...)
+	out := new(RetireSnapshotSubtreeResponse)
+	err := c.cc.Invoke(ctx, FSMetadata_RetireSnapshotSubtree_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fSMetadataClient) GetQuotaUsage(ctx context.Context, in *QuotaUsageRequest, opts ...grpc.CallOption) (*QuotaUsageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(QuotaUsageResponse)
+	err := c.cc.Invoke(ctx, FSMetadata_GetQuotaUsage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fSMetadataClient) RenameSubtree(ctx context.Context, in *RenameSubtreeRequest, opts ...grpc.CallOption) (*RenameSubtreeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenameSubtreeResponse)
+	err := c.cc.Invoke(ctx, FSMetadata_RenameSubtree_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fSMetadataClient) Link(ctx context.Context, in *LinkRequest, opts ...grpc.CallOption) (*LinkResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LinkResponse)
+	err := c.cc.Invoke(ctx, FSMetadata_Link_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +182,10 @@ type FSMetadataServer interface {
 	ReadDirPlus(context.Context, *ReadDirRequest) (*ReadDirPlusResponse, error)
 	WatchSubtree(grpc.BidiStreamingServer[WatchAckOrSubscribe, WatchSubtreeResponse]) error
 	SnapshotSubtree(context.Context, *SnapshotSubtreeRequest) (*SnapshotSubtreeResponse, error)
-	Rename(context.Context, *RenameRequest) (*RenameResponse, error)
+	RetireSnapshotSubtree(context.Context, *RetireSnapshotSubtreeRequest) (*RetireSnapshotSubtreeResponse, error)
+	GetQuotaUsage(context.Context, *QuotaUsageRequest) (*QuotaUsageResponse, error)
+	RenameSubtree(context.Context, *RenameSubtreeRequest) (*RenameSubtreeResponse, error)
+	Link(context.Context, *LinkRequest) (*LinkResponse, error)
 	Unlink(context.Context, *UnlinkRequest) (*UnlinkResponse, error)
 }
 
@@ -175,8 +214,17 @@ func (UnimplementedFSMetadataServer) WatchSubtree(grpc.BidiStreamingServer[Watch
 func (UnimplementedFSMetadataServer) SnapshotSubtree(context.Context, *SnapshotSubtreeRequest) (*SnapshotSubtreeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SnapshotSubtree not implemented")
 }
-func (UnimplementedFSMetadataServer) Rename(context.Context, *RenameRequest) (*RenameResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method Rename not implemented")
+func (UnimplementedFSMetadataServer) RetireSnapshotSubtree(context.Context, *RetireSnapshotSubtreeRequest) (*RetireSnapshotSubtreeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RetireSnapshotSubtree not implemented")
+}
+func (UnimplementedFSMetadataServer) GetQuotaUsage(context.Context, *QuotaUsageRequest) (*QuotaUsageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetQuotaUsage not implemented")
+}
+func (UnimplementedFSMetadataServer) RenameSubtree(context.Context, *RenameSubtreeRequest) (*RenameSubtreeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RenameSubtree not implemented")
+}
+func (UnimplementedFSMetadataServer) Link(context.Context, *LinkRequest) (*LinkResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Link not implemented")
 }
 func (UnimplementedFSMetadataServer) Unlink(context.Context, *UnlinkRequest) (*UnlinkResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Unlink not implemented")
@@ -298,20 +346,74 @@ func _FSMetadata_SnapshotSubtree_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
-func _FSMetadata_Rename_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RenameRequest)
+func _FSMetadata_RetireSnapshotSubtree_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RetireSnapshotSubtreeRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(FSMetadataServer).Rename(ctx, in)
+		return srv.(FSMetadataServer).RetireSnapshotSubtree(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: FSMetadata_Rename_FullMethodName,
+		FullMethod: FSMetadata_RetireSnapshotSubtree_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(FSMetadataServer).Rename(ctx, req.(*RenameRequest))
+		return srv.(FSMetadataServer).RetireSnapshotSubtree(ctx, req.(*RetireSnapshotSubtreeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FSMetadata_GetQuotaUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QuotaUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FSMetadataServer).GetQuotaUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FSMetadata_GetQuotaUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FSMetadataServer).GetQuotaUsage(ctx, req.(*QuotaUsageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FSMetadata_RenameSubtree_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenameSubtreeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FSMetadataServer).RenameSubtree(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FSMetadata_RenameSubtree_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FSMetadataServer).RenameSubtree(ctx, req.(*RenameSubtreeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FSMetadata_Link_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LinkRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FSMetadataServer).Link(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FSMetadata_Link_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FSMetadataServer).Link(ctx, req.(*LinkRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -362,8 +464,20 @@ var FSMetadata_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _FSMetadata_SnapshotSubtree_Handler,
 		},
 		{
-			MethodName: "Rename",
-			Handler:    _FSMetadata_Rename_Handler,
+			MethodName: "RetireSnapshotSubtree",
+			Handler:    _FSMetadata_RetireSnapshotSubtree_Handler,
+		},
+		{
+			MethodName: "GetQuotaUsage",
+			Handler:    _FSMetadata_GetQuotaUsage_Handler,
+		},
+		{
+			MethodName: "RenameSubtree",
+			Handler:    _FSMetadata_RenameSubtree_Handler,
+		},
+		{
+			MethodName: "Link",
+			Handler:    _FSMetadata_Link_Handler,
 		},
 		{
 			MethodName: "Unlink",

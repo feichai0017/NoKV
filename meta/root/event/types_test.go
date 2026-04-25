@@ -3,7 +3,7 @@ package event_test
 import (
 	"testing"
 
-	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
+	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -46,7 +46,7 @@ func TestCloneEventDetachesPayload(t *testing.T) {
 }
 
 func TestTenureEvent(t *testing.T) {
-	frontiers := succession.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0)
+	frontiers := eunomia.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0)
 	event := rootevent.TenureGranted("c1", 1_000, 1, 7, "pred", frontiers)
 	cloned := rootevent.CloneEvent(event)
 
@@ -106,6 +106,12 @@ func TestMembershipAndAllocatorConstructors(t *testing.T) {
 	tsoFence := rootevent.TSOAllocatorFenced(29)
 	snapshot := rootevent.SnapshotEpochPublished("vol", 42, 99)
 	retiredSnapshot := rootevent.SnapshotEpochRetired("vol", 42, 99)
+	mount := rootevent.MountRegistered("vol", 1, 1)
+	retiredMount := rootevent.MountRetired("vol")
+	declaredSubtree := rootevent.SubtreeAuthorityDeclared("vol", 1, "vol", 0, 10)
+	startedSubtree := rootevent.SubtreeHandoffStarted("vol", 1, 11)
+	completedSubtree := rootevent.SubtreeHandoffCompleted("vol", 1, 12)
+	quota := rootevent.QuotaFenceUpdated("vol", 1, 4096, 12, 2, 99)
 
 	require.Equal(t, rootevent.KindStoreJoined, joined.Kind)
 	require.Equal(t, uint64(7), joined.StoreMembership.StoreID)
@@ -125,10 +131,32 @@ func TestMembershipAndAllocatorConstructors(t *testing.T) {
 	require.Equal(t, uint64(99), snapshot.SnapshotEpoch.ReadVersion)
 	require.Equal(t, rootevent.KindSnapshotEpochRetired, retiredSnapshot.Kind)
 	require.Equal(t, snapshot.SnapshotEpoch.SnapshotID, retiredSnapshot.SnapshotEpoch.SnapshotID)
+	require.Equal(t, rootevent.KindMountRegistered, mount.Kind)
+	require.Equal(t, "vol", mount.Mount.MountID)
+	require.Equal(t, uint64(1), mount.Mount.RootInode)
+	require.Equal(t, uint32(1), mount.Mount.SchemaVersion)
+	require.Equal(t, rootevent.KindMountRetired, retiredMount.Kind)
+	require.Equal(t, "vol", retiredMount.Mount.MountID)
+
+	require.Equal(t, rootevent.KindSubtreeAuthorityDeclared, declaredSubtree.Kind)
+	require.Equal(t, "vol", declaredSubtree.SubtreeAuthority.Mount)
+	require.Equal(t, uint64(1), declaredSubtree.SubtreeAuthority.RootInode)
+	require.Equal(t, "vol", declaredSubtree.SubtreeAuthority.AuthorityID)
+	require.Equal(t, uint64(10), declaredSubtree.SubtreeAuthority.Frontier)
+	require.Equal(t, rootevent.KindSubtreeHandoffStarted, startedSubtree.Kind)
+	require.Equal(t, uint64(11), startedSubtree.SubtreeAuthority.Frontier)
+	require.Equal(t, rootevent.KindSubtreeHandoffCompleted, completedSubtree.Kind)
+	require.Equal(t, uint64(12), completedSubtree.SubtreeAuthority.InheritedFrontier)
+	require.Equal(t, rootevent.KindQuotaFenceUpdated, quota.Kind)
+	require.Equal(t, rootevent.QuotaFenceID("vol", 1), quota.QuotaFence.SubjectID)
+	require.Equal(t, uint64(4096), quota.QuotaFence.LimitBytes)
+	require.Equal(t, uint64(12), quota.QuotaFence.LimitInodes)
+	require.Equal(t, uint64(2), quota.QuotaFence.Era)
+	require.Equal(t, uint64(99), quota.QuotaFence.Frontier)
 }
 
 func TestTenureReleasedAndSealed(t *testing.T) {
-	frontiers := succession.Frontiers(rootstate.State{IDFence: 5, TSOFence: 9}, 0)
+	frontiers := eunomia.Frontiers(rootstate.State{IDFence: 5, TSOFence: 9}, 0)
 	released := rootevent.TenureReleased("c1", 2_000, 3, 5, "digest", frontiers)
 	sealed := rootevent.TenureSealed("c1", 3, 5, frontiers)
 

@@ -16,6 +16,7 @@ const (
 	ValueKindInode   ValueKind = 'i'
 	ValueKindDentry  ValueKind = 'd'
 	ValueKindSession ValueKind = 's'
+	ValueKindUsage   ValueKind = 'u'
 )
 
 // InodeType describes the user-visible inode kind tracked by fsmeta.
@@ -52,6 +53,12 @@ type SessionRecord struct {
 	ExpiresUnixNs int64     `json:"expires_unix_ns,omitempty"`
 }
 
+// UsageRecord is the value stored under quota usage counter keys.
+type UsageRecord struct {
+	Bytes  uint64 `json:"bytes,omitempty"`
+	Inodes uint64 `json:"inodes,omitempty"`
+}
+
 func (k ValueKind) String() string {
 	switch k {
 	case ValueKindInode:
@@ -60,6 +67,8 @@ func (k ValueKind) String() string {
 		return "dentry"
 	case ValueKindSession:
 		return "session"
+	case ValueKindUsage:
+		return "usage"
 	default:
 		return fmt.Sprintf("unknown(%d)", byte(k))
 	}
@@ -152,6 +161,23 @@ func DecodeSessionValue(value []byte) (SessionRecord, error) {
 	return record, nil
 }
 
+// EncodeUsageValue returns the canonical value encoding for a usage counter.
+func EncodeUsageValue(record UsageRecord) ([]byte, error) {
+	body := make([]byte, 0, 16)
+	body = binary.BigEndian.AppendUint64(body, record.Bytes)
+	body = binary.BigEndian.AppendUint64(body, record.Inodes)
+	return encodeValue(ValueKindUsage, body), nil
+}
+
+// DecodeUsageValue decodes a usage counter value.
+func DecodeUsageValue(value []byte) (UsageRecord, error) {
+	var record UsageRecord
+	if err := decodeValue(value, ValueKindUsage, &record); err != nil {
+		return UsageRecord{}, err
+	}
+	return record, nil
+}
+
 // ValueKindOf returns the kind byte encoded in a fsmeta value.
 func ValueKindOf(value []byte) (ValueKind, error) {
 	pos, err := decodeValueHeader(value)
@@ -163,7 +189,7 @@ func ValueKindOf(value []byte) (ValueKind, error) {
 	}
 	kind := ValueKind(value[pos])
 	switch kind {
-	case ValueKindInode, ValueKindDentry, ValueKindSession:
+	case ValueKindInode, ValueKindDentry, ValueKindSession, ValueKindUsage:
 		return kind, nil
 	default:
 		return 0, ErrInvalidValueKind
@@ -219,6 +245,16 @@ func decodeValue(value []byte, expected ValueKind, out any) error {
 			return ErrInvalidValue
 		}
 		decoded, err := decodeSessionBody(body)
+		if err != nil {
+			return err
+		}
+		*record = decoded
+	case ValueKindUsage:
+		record, ok := out.(*UsageRecord)
+		if !ok {
+			return ErrInvalidValue
+		}
+		decoded, err := decodeUsageBody(body)
 		if err != nil {
 			return err
 		}
@@ -320,6 +356,16 @@ func decodeSessionBody(body []byte) (SessionRecord, error) {
 		return SessionRecord{}, err
 	}
 	return record, nil
+}
+
+func decodeUsageBody(body []byte) (UsageRecord, error) {
+	if len(body) != 16 {
+		return UsageRecord{}, ErrInvalidValue
+	}
+	return UsageRecord{
+		Bytes:  binary.BigEndian.Uint64(body[:8]),
+		Inodes: binary.BigEndian.Uint64(body[8:16]),
+	}, nil
 }
 
 func decodeValueHeader(value []byte) (int, error) {

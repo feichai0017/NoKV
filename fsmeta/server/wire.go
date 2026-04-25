@@ -51,8 +51,46 @@ func snapshotSubtreeResponseToProto(token fsmeta.SnapshotSubtreeToken) *fsmetapb
 	}
 }
 
-func renameRequestFromProto(req *fsmetapb.RenameRequest) fsmeta.RenameRequest {
-	return fsmeta.RenameRequest{
+func retireSnapshotSubtreeRequestFromProto(req *fsmetapb.RetireSnapshotSubtreeRequest) fsmeta.SnapshotSubtreeToken {
+	if req == nil {
+		return fsmeta.SnapshotSubtreeToken{}
+	}
+	return fsmeta.SnapshotSubtreeToken{
+		Mount:       fsmeta.MountID(req.GetMount()),
+		RootInode:   fsmeta.InodeID(req.GetRootInode()),
+		ReadVersion: req.GetReadVersion(),
+	}
+}
+
+func quotaUsageRequestFromProto(req *fsmetapb.QuotaUsageRequest) fsmeta.QuotaUsageRequest {
+	if req == nil {
+		return fsmeta.QuotaUsageRequest{}
+	}
+	return fsmeta.QuotaUsageRequest{
+		Mount: fsmeta.MountID(req.GetMount()),
+		Scope: fsmeta.InodeID(req.GetScope()),
+	}
+}
+
+func quotaUsageResponseToProto(record fsmeta.UsageRecord) *fsmetapb.QuotaUsageResponse {
+	return &fsmetapb.QuotaUsageResponse{
+		Bytes:  record.Bytes,
+		Inodes: record.Inodes,
+	}
+}
+
+func renameSubtreeRequestFromProto(req *fsmetapb.RenameSubtreeRequest) fsmeta.RenameSubtreeRequest {
+	return fsmeta.RenameSubtreeRequest{
+		Mount:      fsmeta.MountID(req.GetMount()),
+		FromParent: fsmeta.InodeID(req.GetFromParent()),
+		FromName:   req.GetFromName(),
+		ToParent:   fsmeta.InodeID(req.GetToParent()),
+		ToName:     req.GetToName(),
+	}
+}
+
+func linkRequestFromProto(req *fsmetapb.LinkRequest) fsmeta.LinkRequest {
+	return fsmeta.LinkRequest{
 		Mount:      fsmeta.MountID(req.GetMount()),
 		FromParent: fsmeta.InodeID(req.GetFromParent()),
 		FromName:   req.GetFromName(),

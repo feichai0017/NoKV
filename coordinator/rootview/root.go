@@ -30,8 +30,8 @@ type RootStorage interface {
 	Load() (Snapshot, error)
 	AppendRootEvent(ctx context.Context, event rootevent.Event) error
 	SaveAllocatorState(ctx context.Context, idCurrent, tsCurrent uint64) error
-	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error)
-	ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error)
+	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error)
+	ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error)
 	Refresh() error
 	IsLeader() bool
 	LeaderID() uint64
@@ -53,8 +53,8 @@ type rootRuntimeBackend interface {
 	ObserveCommitted() (rootstorage.ObservedCommitted, error)
 	IsLeader() bool
 	LeaderID() uint64
-	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error)
-	ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error)
+	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error)
+	ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error)
 	Close() error
 }
 
@@ -75,8 +75,8 @@ type rootLeaderBackend interface {
 }
 
 type rootCoordinatorProtocolBackend interface {
-	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error)
-	ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error)
+	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error)
+	ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error)
 }
 
 type rootCloseBackend interface {
@@ -141,16 +141,16 @@ func (a rootBackendAdapter) LeaderID() uint64 {
 	return a.leader.LeaderID()
 }
 
-func (a rootBackendAdapter) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error) {
+func (a rootBackendAdapter) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error) {
 	if a.protocol == nil {
-		return rootstate.SuccessionState{}, errTenureCommandUnsupported
+		return rootstate.EunomiaState{}, errTenureCommandUnsupported
 	}
 	return a.protocol.ApplyTenure(ctx, cmd)
 }
 
-func (a rootBackendAdapter) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
+func (a rootBackendAdapter) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
 	if a.protocol == nil {
-		return rootstate.SuccessionState{}, errHandoverCommandUnsupported
+		return rootstate.EunomiaState{}, errHandoverCommandUnsupported
 	}
 	return a.protocol.ApplyHandover(ctx, cmd)
 }
@@ -318,26 +318,26 @@ func (s *RootStore) SaveAllocatorState(ctx context.Context, idCurrent, tsCurrent
 	})
 }
 
-func (s *RootStore) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error) {
+func (s *RootStore) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error) {
 	if s == nil || s.root == nil {
-		return rootstate.SuccessionState{}, nil
+		return rootstate.EunomiaState{}, nil
 	}
 	if !s.supportsProtocol {
-		return rootstate.SuccessionState{}, errTenureCommandUnsupported
+		return rootstate.EunomiaState{}, errTenureCommandUnsupported
 	}
-	return s.applyAndReload(func() (rootstate.SuccessionState, error) {
+	return s.applyAndReload(func() (rootstate.EunomiaState, error) {
 		return s.root.ApplyTenure(ctx, cmd)
 	})
 }
 
-func (s *RootStore) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
+func (s *RootStore) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
 	if s == nil || s.root == nil {
-		return rootstate.SuccessionState{}, nil
+		return rootstate.EunomiaState{}, nil
 	}
 	if !s.supportsProtocol {
-		return rootstate.SuccessionState{}, errHandoverCommandUnsupported
+		return rootstate.EunomiaState{}, errHandoverCommandUnsupported
 	}
-	return s.applyAndReload(func() (rootstate.SuccessionState, error) {
+	return s.applyAndReload(func() (rootstate.EunomiaState, error) {
 		return s.root.ApplyHandover(ctx, cmd)
 	})
 }
@@ -386,12 +386,12 @@ func (s *RootStore) runAndReload(run func() error) error {
 	return s.reload()
 }
 
-func (s *RootStore) applyAndReload(run func() (rootstate.SuccessionState, error)) (rootstate.SuccessionState, error) {
+func (s *RootStore) applyAndReload(run func() (rootstate.EunomiaState, error)) (rootstate.EunomiaState, error) {
 	if s == nil {
-		return rootstate.SuccessionState{}, nil
+		return rootstate.EunomiaState{}, nil
 	}
 	if run == nil {
-		return rootstate.SuccessionState{}, nil
+		return rootstate.EunomiaState{}, nil
 	}
 	protocolState, err := run()
 	if err != nil {
@@ -405,15 +405,15 @@ func (s *RootStore) applyAndReload(run func() (rootstate.SuccessionState, error)
 	// from a lagging follower observes a state regression and treats its own
 	// fresh lease as stale, which triggers churn (lease lineage mismatches,
 	// "lease held" retries) in multi-coordinator deployments.
-	s.mergeSuccessionState(protocolState)
+	s.mergeEunomiaState(protocolState)
 	return protocolState, s.reload()
 }
 
-// mergeSuccessionState overlays the Tenure/Legacy/Handover from an
+// mergeEunomiaState overlays the Tenure/Legacy/Handover from an
 // authoritative Apply response onto the cached snapshot. Other fields
 // (descriptors, allocator fences) are left untouched — the subsequent reload
 // or a later tail advance refreshes them.
-func (s *RootStore) mergeSuccessionState(state rootstate.SuccessionState) {
+func (s *RootStore) mergeEunomiaState(state rootstate.EunomiaState) {
 	if s == nil {
 		return
 	}

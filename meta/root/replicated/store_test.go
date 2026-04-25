@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
+	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
@@ -24,7 +24,7 @@ func campaignLease(store *Store, holderID string, expiresUnixNano, nowUnixNano i
 		ExpiresUnixNano:    expiresUnixNano,
 		NowUnixNano:        nowUnixNano,
 		LineageDigest:      lineageDigest,
-		InheritedFrontiers: succession.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, descriptorRevision),
+		InheritedFrontiers: eunomia.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, descriptorRevision),
 	})
 	return state.Tenure, err
 }
@@ -34,7 +34,7 @@ func releaseLease(store *Store, holderID string, nowUnixNano int64, idFence, tso
 		Kind:               rootproto.TenureActRelease,
 		HolderID:           holderID,
 		NowUnixNano:        nowUnixNano,
-		InheritedFrontiers: succession.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, 0),
+		InheritedFrontiers: eunomia.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, 0),
 	})
 	return state.Tenure, err
 }
@@ -333,7 +333,7 @@ func TestReplicatedStoreConfirmHandover(t *testing.T) {
 
 	_, err = campaignLease(stores[leaderID], "c1", 1_000, 100, 10, 20, 56, "")
 	require.NoError(t, err)
-	seal, err := sealLease(stores[leaderID], "c1", 200, succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
+	seal, err := sealLease(stores[leaderID], "c1", 200, eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
 	require.NoError(t, err)
 	lease, err := campaignLease(stores[leaderID], "c1", 1_200, 250, 12, 34, 56, rootstate.DigestOfLegacy(seal))
 	require.NoError(t, err)
@@ -358,7 +358,7 @@ func TestReplicatedStoreReattachHandover(t *testing.T) {
 
 	_, err = campaignLease(stores[leaderID], "c1", 1_000, 100, 10, 20, 56, "")
 	require.NoError(t, err)
-	seal, err := sealLease(stores[leaderID], "c1", 200, succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
+	seal, err := sealLease(stores[leaderID], "c1", 200, eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
 	require.NoError(t, err)
 	_, err = campaignLease(stores[leaderID], "c1", 1_200, 250, 12, 34, 56, rootstate.DigestOfLegacy(seal))
 	require.NoError(t, err)

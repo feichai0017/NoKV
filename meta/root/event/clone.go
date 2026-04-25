@@ -29,6 +29,18 @@ func CloneEvent(in Event) Event {
 		cp := *in.SnapshotEpoch
 		out.SnapshotEpoch = &cp
 	}
+	if in.Mount != nil {
+		cp := *in.Mount
+		out.Mount = &cp
+	}
+	if in.SubtreeAuthority != nil {
+		cp := *in.SubtreeAuthority
+		out.SubtreeAuthority = &cp
+	}
+	if in.QuotaFence != nil {
+		cp := *in.QuotaFence
+		out.QuotaFence = &cp
+	}
 	if in.RegionDescriptor != nil {
 		cp := *in.RegionDescriptor
 		cp.Descriptor = in.RegionDescriptor.Descriptor.Clone()

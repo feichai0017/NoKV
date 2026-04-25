@@ -52,6 +52,92 @@ func TestClusterStoreHeartbeatRequiresActiveMembership(t *testing.T) {
 	require.False(t, info.HasRuntime)
 }
 
+func TestClusterMountLifecycleRootEvents(t *testing.T) {
+	c := NewCluster()
+
+	require.NoError(t, c.PublishRootEvent(rootevent.MountRegistered("vol", 1, 1)))
+	mount, ok := c.MountByID("vol")
+	require.True(t, ok)
+	require.Equal(t, rootstate.MountRecord{
+		MountID:       "vol",
+		RootInode:     1,
+		SchemaVersion: 1,
+		State:         rootstate.MountStateActive,
+	}, mount)
+
+	require.NoError(t, c.ValidateRootEvent(rootevent.MountRegistered("vol", 1, 1)))
+	err := c.ValidateRootEvent(rootevent.MountRegistered("vol", 2, 1))
+	require.ErrorIs(t, err, ErrMountConflict)
+
+	require.NoError(t, c.PublishRootEvent(rootevent.MountRetired("vol")))
+	mount, ok = c.MountByID("vol")
+	require.True(t, ok)
+	require.Equal(t, rootstate.MountStateRetired, mount.State)
+
+	err = c.ValidateRootEvent(rootevent.MountRegistered("vol", 1, 1))
+	require.ErrorIs(t, err, ErrMountRetired)
+	err = c.ValidateRootEvent(rootevent.MountRetired("missing"))
+	require.ErrorIs(t, err, ErrMountNotFound)
+}
+
+func TestClusterSubtreeAuthorityLifecycleRootEvents(t *testing.T) {
+	c := NewCluster()
+	require.NoError(t, c.PublishRootEvent(rootevent.MountRegistered("vol", 1, 1)))
+
+	key := rootstate.SubtreeAuthorityKey("vol", 1)
+	subtree, ok := c.SubtreeAuthorityByID(key)
+	require.True(t, ok)
+	require.Equal(t, rootstate.SubtreeAuthorityActive, subtree.State)
+	require.Equal(t, "vol", subtree.AuthorityID)
+	require.Equal(t, uint64(0), subtree.Frontier)
+
+	require.NoError(t, c.PublishRootEvent(rootevent.SubtreeHandoffStarted("vol", 1, 12)))
+	subtree, ok = c.SubtreeAuthorityByID(key)
+	require.True(t, ok)
+	require.Equal(t, rootstate.SubtreeAuthorityHandoff, subtree.State)
+	require.Equal(t, uint64(12), subtree.PredecessorFrontier)
+
+	err := c.ValidateRootEvent(rootevent.SubtreeHandoffCompleted("vol", 1, 11))
+	require.ErrorIs(t, err, ErrSubtreeAuthorityHandoff)
+
+	require.NoError(t, c.PublishRootEvent(rootevent.SubtreeHandoffCompleted("vol", 1, 13)))
+	subtree, ok = c.SubtreeAuthorityByID(key)
+	require.True(t, ok)
+	require.Equal(t, rootstate.SubtreeAuthorityActive, subtree.State)
+	require.Equal(t, "vol/1#1", subtree.AuthorityID)
+	require.Equal(t, uint64(1), subtree.Era)
+	require.Equal(t, uint64(13), subtree.Frontier)
+}
+
+func TestClusterQuotaFenceRootEvents(t *testing.T) {
+	c := NewCluster()
+	require.NoError(t, c.PublishRootEvent(rootevent.MountRegistered("vol", 1, 1)))
+
+	require.NoError(t, c.PublishRootEvent(rootevent.QuotaFenceUpdated("vol", 0, 1024, 10, 1, 0)))
+	fence, ok := c.QuotaFenceBySubject("vol", 0)
+	require.True(t, ok)
+	require.Equal(t, rootstate.QuotaFence{
+		SubjectID:   rootstate.QuotaFenceKey("vol", 0),
+		Mount:       "vol",
+		LimitBytes:  1024,
+		LimitInodes: 10,
+		Era:         1,
+		UpdatedAt:   rootstate.Cursor{Term: 1, Index: 1},
+	}, fence)
+
+	err := c.ValidateRootEvent(rootevent.QuotaFenceUpdated("vol", 0, 2048, 20, 1, 0))
+	require.ErrorIs(t, err, ErrQuotaFenceConflict)
+	err = c.ValidateRootEvent(rootevent.QuotaFenceUpdated("missing", 0, 1, 1, 1, 0))
+	require.ErrorIs(t, err, ErrMountNotFound)
+
+	require.NoError(t, c.PublishRootEvent(rootevent.QuotaFenceUpdated("vol", 0, 0, 0, 2, 0)))
+	fence, ok = c.QuotaFenceBySubject("vol", 0)
+	require.True(t, ok)
+	require.Equal(t, uint64(2), fence.Era)
+	require.Zero(t, fence.LimitBytes)
+	require.Zero(t, fence.LimitInodes)
+}
+
 func TestClusterRegionHeartbeatAndRouteLookup(t *testing.T) {
 	c := NewCluster()
 	require.NoError(t, c.PublishRegionDescriptor(testDescriptor(1, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1})))

@@ -3,7 +3,7 @@
 
 .PHONY: help build test test-short test-race test-coverage lint fmt clean docker-up docker-down bench install-tools install-tla-tools
 .PHONY: proto proto-check proto-breaking-check
-.PHONY: tlc-succession tlc-successionmultidim tlc-leaseonly-counterexample tlc-leasestart-counterexample apalache-typecheck apalache-check-succession apalache-check-successionmultidim
+.PHONY: tlc-eunomia tlc-eunomiamultidim tlc-mountlifecycle tlc-subtreeauthority tlc-leaseonly-counterexample tlc-leasestart-counterexample tlc-subtreewithoutfrontiercoverage-counterexample tlc-subtreewithoutseal-counterexample apalache-typecheck apalache-check-eunomia apalache-check-eunomiamultidim
 
 GOLANGCI_LINT_VERSION ?= v2.9.0
 BUF_VERSION ?= 1.66.0
@@ -26,13 +26,17 @@ help:
 	@echo "  make bench              - Run benchmarks"
 	@echo "  make install-tools      - Install development tools"
 	@echo "  make install-tla-tools  - Install pinned TLC and Apalache locally under third_party/"
-	@echo "  make tlc-succession            - Run TLC on spec/Succession.tla"
-	@echo "  make tlc-successionmultidim    - Run TLC on spec/SuccessionMultiDim.tla"
+	@echo "  make tlc-eunomia            - Run TLC on spec/Eunomia.tla"
+	@echo "  make tlc-eunomiamultidim    - Run TLC on spec/EunomiaMultiDim.tla"
+	@echo "  make tlc-mountlifecycle        - Run TLC on spec/MountLifecycle.tla"
+	@echo "  make tlc-subtreeauthority      - Run TLC on spec/SubtreeAuthority.tla"
 	@echo "  make tlc-leaseonly-counterexample - Run TLC and expect a counterexample for spec/LeaseOnly.tla"
 	@echo "  make tlc-leasestart-counterexample - Run TLC and expect a counterexample for spec/LeaseStartOnly.tla"
+	@echo "  make tlc-subtreewithoutfrontiercoverage-counterexample - Run TLC and expect a counterexample for spec/SubtreeWithoutFrontierCoverage.tla"
+	@echo "  make tlc-subtreewithoutseal-counterexample - Run TLC and expect a counterexample for spec/SubtreeWithoutSeal.tla"
 	@echo "  make apalache-typecheck - Run Apalache typecheck on current specs"
-	@echo "  make apalache-check-succession - Run bounded Apalache check on Succession invariants"
-	@echo "  make apalache-check-successionmultidim - Run bounded Apalache check on SuccessionMultiDim invariants"
+	@echo "  make apalache-check-eunomia - Run bounded Apalache check on Eunomia invariants"
+	@echo "  make apalache-check-eunomiamultidim - Run bounded Apalache check on EunomiaMultiDim invariants"
 	@echo "  make docker-up          - Start Docker Compose cluster"
 	@echo "  make docker-down        - Stop Docker Compose cluster"
 	@echo "  make clean              - Remove build artifacts and test data"
@@ -131,13 +135,21 @@ install-tla-tools:
 	@echo "Installing pinned TLA+ tools locally..."
 	./scripts/tla/setup.sh
 
-tlc-succession:
-	@echo "Running TLC on spec/Succession.tla..."
-	./scripts/tla/tlc.sh spec/Succession.tla
+tlc-eunomia:
+	@echo "Running TLC on spec/Eunomia.tla..."
+	./scripts/tla/tlc.sh spec/Eunomia.tla
 
-tlc-successionmultidim:
-	@echo "Running TLC on spec/SuccessionMultiDim.tla..."
-	./scripts/tla/tlc.sh spec/SuccessionMultiDim.tla
+tlc-eunomiamultidim:
+	@echo "Running TLC on spec/EunomiaMultiDim.tla..."
+	./scripts/tla/tlc.sh spec/EunomiaMultiDim.tla
+
+tlc-mountlifecycle:
+	@echo "Running TLC on spec/MountLifecycle.tla..."
+	./scripts/tla/tlc.sh spec/MountLifecycle.tla
+
+tlc-subtreeauthority:
+	@echo "Running TLC on spec/SubtreeAuthority.tla..."
+	./scripts/tla/tlc.sh spec/SubtreeAuthority.tla
 
 tlc-leaseonly-counterexample:
 	@echo "Running TLC on spec/LeaseOnly.tla (expecting counterexample)..."
@@ -175,23 +187,59 @@ tlc-tokenonly-counterexample:
 		echo "✓ TLC found the expected counterexample for TokenOnly"; \
 	fi
 
-tlc-contrast-models: tlc-leaseonly-counterexample tlc-tokenonly-counterexample tlc-chubbyfenced-counterexample tlc-leasestart-counterexample
-
-record-tlc-succession:
-	@echo "Recording TLC output for Succession..."
-	@if ./scripts/tla/record_tlc.sh spec/Succession.tla spec/artifacts/tlc-succession.out; then \
-		echo "✓ Recorded TLC output for Succession"; \
+tlc-subtreewithoutfrontiercoverage-counterexample:
+	@echo "Running TLC on spec/SubtreeWithoutFrontierCoverage.tla (expecting inheritance counterexample)..."
+	@if ./scripts/tla/tlc.sh spec/SubtreeWithoutFrontierCoverage.tla; then \
+		echo "expected TLC to find a counterexample for SubtreeWithoutFrontierCoverage, but it succeeded"; \
+		exit 1; \
 	else \
-		echo "expected Succession to succeed under TLC, but recording failed"; \
+		echo "✓ TLC found the expected counterexample for SubtreeWithoutFrontierCoverage"; \
+	fi
+
+tlc-subtreewithoutseal-counterexample:
+	@echo "Running TLC on spec/SubtreeWithoutSeal.tla (expecting primacy counterexample)..."
+	@if ./scripts/tla/tlc.sh spec/SubtreeWithoutSeal.tla; then \
+		echo "expected TLC to find a counterexample for SubtreeWithoutSeal, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ TLC found the expected counterexample for SubtreeWithoutSeal"; \
+	fi
+
+tlc-contrast-models: tlc-leaseonly-counterexample tlc-tokenonly-counterexample tlc-chubbyfenced-counterexample tlc-leasestart-counterexample tlc-subtreewithoutfrontiercoverage-counterexample tlc-subtreewithoutseal-counterexample
+
+record-tlc-eunomia:
+	@echo "Recording TLC output for Eunomia..."
+	@if ./scripts/tla/record_tlc.sh spec/Eunomia.tla spec/artifacts/tlc-eunomia.out; then \
+		echo "✓ Recorded TLC output for Eunomia"; \
+	else \
+		echo "expected Eunomia to succeed under TLC, but recording failed"; \
 		exit 1; \
 	fi
 
-record-tlc-successionmultidim:
-	@echo "Recording TLC output for SuccessionMultiDim..."
-	@if ./scripts/tla/record_tlc.sh spec/SuccessionMultiDim.tla spec/artifacts/tlc-successionmultidim.out; then \
-		echo "✓ Recorded TLC output for SuccessionMultiDim"; \
+record-tlc-eunomiamultidim:
+	@echo "Recording TLC output for EunomiaMultiDim..."
+	@if ./scripts/tla/record_tlc.sh spec/EunomiaMultiDim.tla spec/artifacts/tlc-eunomiamultidim.out; then \
+		echo "✓ Recorded TLC output for EunomiaMultiDim"; \
 	else \
-		echo "expected SuccessionMultiDim to succeed under TLC, but recording failed"; \
+		echo "expected EunomiaMultiDim to succeed under TLC, but recording failed"; \
+		exit 1; \
+	fi
+
+record-tlc-mountlifecycle:
+	@echo "Recording TLC output for MountLifecycle..."
+	@if ./scripts/tla/record_tlc.sh spec/MountLifecycle.tla spec/artifacts/tlc-mountlifecycle.out; then \
+		echo "✓ Recorded TLC output for MountLifecycle"; \
+	else \
+		echo "expected MountLifecycle to succeed under TLC, but recording failed"; \
+		exit 1; \
+	fi
+
+record-tlc-subtreeauthority:
+	@echo "Recording TLC output for SubtreeAuthority..."
+	@if ./scripts/tla/record_tlc.sh spec/SubtreeAuthority.tla spec/artifacts/tlc-subtreeauthority.out; then \
+		echo "✓ Recorded TLC output for SubtreeAuthority"; \
+	else \
+		echo "expected SubtreeAuthority to succeed under TLC, but recording failed"; \
 		exit 1; \
 	fi
 
@@ -231,34 +279,52 @@ record-tlc-leasestart:
 		echo "✓ Recorded TLC counterexample for LeaseStartOnly"; \
 	fi
 
-record-apalache-succession:
-	@echo "Recording Apalache bounded-check output for Succession..."
-	./scripts/tla/record_apalache_check.sh spec/Succession.tla spec/Succession.cfg G1_Succession,G2_Primacy,G2_PrimacyInductive,G3_Silence,G4_Finality 8 spec/artifacts/apalache-succession.out
-	@echo "✓ Recorded Apalache output for Succession"
+record-tlc-subtreewithoutfrontiercoverage:
+	@echo "Recording TLC counterexample for SubtreeWithoutFrontierCoverage..."
+	@if ./scripts/tla/record_tlc.sh spec/SubtreeWithoutFrontierCoverage.tla spec/artifacts/tlc-subtreewithoutfrontiercoverage.out; then \
+		echo "expected SubtreeWithoutFrontierCoverage recording to fail with counterexample, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ Recorded TLC counterexample for SubtreeWithoutFrontierCoverage"; \
+	fi
 
-record-apalache-successionmultidim:
-	@echo "Recording Apalache bounded-check output for SuccessionMultiDim..."
-	./scripts/tla/record_apalache_check.sh spec/SuccessionMultiDim.tla spec/SuccessionMultiDim.cfg NoWriteBehindServedRead 6 spec/artifacts/apalache-successionmultidim.out
-	@echo "✓ Recorded Apalache output for SuccessionMultiDim"
+record-tlc-subtreewithoutseal:
+	@echo "Recording TLC counterexample for SubtreeWithoutSeal..."
+	@if ./scripts/tla/record_tlc.sh spec/SubtreeWithoutSeal.tla spec/artifacts/tlc-subtreewithoutseal.out; then \
+		echo "expected SubtreeWithoutSeal recording to fail with counterexample, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ Recorded TLC counterexample for SubtreeWithoutSeal"; \
+	fi
 
-record-formal-artifacts: record-tlc-succession record-tlc-successionmultidim record-tlc-leaseonly record-tlc-tokenonly record-tlc-chubbyfenced record-tlc-leasestart record-apalache-succession record-apalache-successionmultidim
+record-apalache-eunomia:
+	@echo "Recording Apalache bounded-check output for Eunomia..."
+	./scripts/tla/record_apalache_check.sh spec/Eunomia.tla spec/Eunomia.cfg G1_Eunomia,G2_Primacy,G2_PrimacyInductive,G3_Silence,G4_Finality 8 spec/artifacts/apalache-eunomia.out
+	@echo "✓ Recorded Apalache output for Eunomia"
+
+record-apalache-eunomiamultidim:
+	@echo "Recording Apalache bounded-check output for EunomiaMultiDim..."
+	./scripts/tla/record_apalache_check.sh spec/EunomiaMultiDim.tla spec/EunomiaMultiDim.cfg NoWriteBehindServedRead 6 spec/artifacts/apalache-eunomiamultidim.out
+	@echo "✓ Recorded Apalache output for EunomiaMultiDim"
+
+record-formal-artifacts: record-tlc-eunomia record-tlc-eunomiamultidim record-tlc-mountlifecycle record-tlc-subtreeauthority record-tlc-leaseonly record-tlc-tokenonly record-tlc-chubbyfenced record-tlc-leasestart record-tlc-subtreewithoutfrontiercoverage record-tlc-subtreewithoutseal record-apalache-eunomia record-apalache-eunomiamultidim
 
 apalache-typecheck:
 	@echo "Running Apalache typecheck on current specs..."
-	./scripts/tla/apalache.sh typecheck --features=no-rows spec/Succession.tla
-	./scripts/tla/apalache.sh typecheck --features=no-rows spec/SuccessionMultiDim.tla
+	./scripts/tla/apalache.sh typecheck --features=no-rows spec/Eunomia.tla
+	./scripts/tla/apalache.sh typecheck --features=no-rows spec/EunomiaMultiDim.tla
 	./scripts/tla/apalache.sh typecheck --features=no-rows spec/LeaseOnly.tla
 	./scripts/tla/apalache.sh typecheck --features=no-rows spec/LeaseStartOnly.tla
 	./scripts/tla/apalache.sh typecheck --features=no-rows spec/ChubbyFencedLease.tla
 	./scripts/tla/apalache.sh typecheck --features=no-rows spec/TokenOnly.tla
 
-apalache-check-succession:
-	@echo "Running bounded Apalache check on Succession..."
-	./scripts/tla/apalache.sh --features=no-rows check --config=spec/Succession.cfg --no-deadlock --length=8 --inv=G1_Succession,G2_Primacy,G2_PrimacyInductive,G3_Silence,G4_Finality spec/Succession.tla
+apalache-check-eunomia:
+	@echo "Running bounded Apalache check on Eunomia..."
+	./scripts/tla/apalache.sh --features=no-rows check --config=spec/Eunomia.cfg --no-deadlock --length=8 --inv=G1_Eunomia,G2_Primacy,G2_PrimacyInductive,G3_Silence,G4_Finality spec/Eunomia.tla
 
-apalache-check-successionmultidim:
-	@echo "Running bounded Apalache check on SuccessionMultiDim..."
-	./scripts/tla/apalache.sh --features=no-rows check --config=spec/SuccessionMultiDim.cfg --no-deadlock --length=6 --inv=NoWriteBehindServedRead spec/SuccessionMultiDim.tla
+apalache-check-eunomiamultidim:
+	@echo "Running bounded Apalache check on EunomiaMultiDim..."
+	./scripts/tla/apalache.sh --features=no-rows check --config=spec/EunomiaMultiDim.cfg --no-deadlock --length=6 --inv=NoWriteBehindServedRead spec/EunomiaMultiDim.tla
 
 # Start Docker Compose cluster
 docker-up:

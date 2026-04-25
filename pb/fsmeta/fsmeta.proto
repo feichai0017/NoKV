@@ -141,7 +141,27 @@ message SnapshotSubtreeResponse {
   uint64 read_version = 3;
 }
 
-message RenameRequest {
+message RetireSnapshotSubtreeRequest {
+  string mount = 1;
+  uint64 root_inode = 2;
+  uint64 read_version = 3;
+}
+
+message RetireSnapshotSubtreeResponse {}
+
+message QuotaUsageRequest {
+  string mount = 1;
+  // scope=0 means mount-wide usage. Non-zero scopes are direct quota
+  // accounting roots.
+  uint64 scope = 2;
+}
+
+message QuotaUsageResponse {
+  uint64 bytes = 1;
+  uint64 inodes = 2;
+}
+
+message RenameSubtreeRequest {
   string mount = 1;
   uint64 from_parent = 2;
   string from_name = 3;
@@ -149,7 +169,17 @@ message RenameRequest {
   string to_name = 5;
 }
 
-message RenameResponse {}
+message RenameSubtreeResponse {}
+
+message LinkRequest {
+  string mount = 1;
+  uint64 from_parent = 2;
+  string from_name = 3;
+  uint64 to_parent = 4;
+  string to_name = 5;
+}
+
+message LinkResponse {}
 
 message UnlinkRequest {
   string mount = 1;
@@ -166,6 +196,9 @@ service FSMetadata {
   rpc ReadDirPlus(ReadDirRequest) returns (ReadDirPlusResponse);
   rpc WatchSubtree(stream WatchAckOrSubscribe) returns (stream WatchSubtreeResponse);
   rpc SnapshotSubtree(SnapshotSubtreeRequest) returns (SnapshotSubtreeResponse);
-  rpc Rename(RenameRequest) returns (RenameResponse);
+  rpc RetireSnapshotSubtree(RetireSnapshotSubtreeRequest) returns (RetireSnapshotSubtreeResponse);
+  rpc GetQuotaUsage(QuotaUsageRequest) returns (QuotaUsageResponse);
+  rpc RenameSubtree(RenameSubtreeRequest) returns (RenameSubtreeResponse);
+  rpc Link(LinkRequest) returns (LinkResponse);
   rpc Unlink(UnlinkRequest) returns (UnlinkResponse);
 }
