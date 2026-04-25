@@ -26,6 +26,8 @@ make tlc-leaseonly-counterexample
 make tlc-leasestart-counterexample
 make tlc-tokenonly-counterexample
 make tlc-chubbyfenced-counterexample
+make tlc-subtreewithoutfrontiercoverage-counterexample
+make tlc-subtreewithoutseal-counterexample
 make record-formal-artifacts
 ```
 
@@ -40,6 +42,8 @@ Current contrast models:
 - `LeaseStartOnly.tla`: no lease-start coverage check on predecessor served-read summaries; expected to violate `NoWriteBehindServedRead`
 - `TokenOnly.tla`: bounded-freshness token only; still expected to violate `NoOldReplyAfterSuccessor`
 - `ChubbyFencedLease.tla`: per-reply sequencer fencing; expected to preserve stale-reply rejection but violate successor coverage
+- `SubtreeWithoutFrontierCoverage.tla`: subtree handoff without successor frontier coverage; expected to violate `Inheritance`
+- `SubtreeWithoutSeal.tla`: subtree handoff that leaves the predecessor active; expected to violate `Primacy`
 
 The current models now distinguish:
 
@@ -79,7 +83,9 @@ Stage 3 adds two namespace-facing positive models:
   will consume. It excludes dentry mutation and checks only authority
   correctness: one active authority per subtree, successor frontier coverage,
   inadmissibility of sealed-authority replies, and finality of sealed
-  predecessors.
+  predecessors. It also carries `PrimacyInductive`, a pairwise active-record
+  uniqueness shape that is stronger than the cardinality-only `Primacy`
+  invariant and better suited for a later proof.
 
 ## Run Apalache
 

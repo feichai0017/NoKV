@@ -1,0 +1,36 @@
+# Recorded TLC output
+spec=spec/SubtreeWithoutFrontierCoverage.tla
+status=failure
+
+Error: Invariant Inheritance is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ pending = {}
+/\ coveredBy = {}
+/\ frontier = ( [authority |-> 0, era |-> 0] :> 0 @@
+/\ active = {[authority |-> 0, era |-> 0]}
+/\ closed = {}
+/\ sealed = {}
+State 2: <Serve line 72, col 5 to line 76, col 67 of module SubtreeWithoutFrontierCoverage>
+/\ pending = {}
+/\ coveredBy = {}
+/\ frontier = ( [authority |-> 0, era |-> 0] :> 1 @@
+/\ active = {[authority |-> 0, era |-> 0]}
+/\ closed = {}
+/\ sealed = {}
+State 3: <StartHandoff line 79, col 5 to line 92, col 52 of module SubtreeWithoutFrontierCoverage>
+/\ pending = {[pred |-> 0, predEra |-> 0, succ |-> 1, succEra |-> 1, predFrontier |-> 1]}
+/\ coveredBy = {}
+/\ frontier = ( [authority |-> 0, era |-> 0] :> 1 @@
+/\ active = {}
+/\ closed = {}
+/\ sealed = {[authority |-> 0, era |-> 0]}
+State 4: <CompleteHandoff line 95, col 5 to line 106, col 27 of module SubtreeWithoutFrontierCoverage>
+/\ pending = {}
+/\ coveredBy = {[pred |-> [authority |-> 0, era |-> 0], succ |-> [authority |-> 1, era |-> 1]]}
+/\ frontier = ( [authority |-> 0, era |-> 0] :> 1 @@
+/\ active = {[authority |-> 1, era |-> 1]}
+/\ closed = {[authority |-> 0, era |-> 0]}
+/\ sealed = {[authority |-> 0, era |-> 0]}
+12 states generated, 7 distinct states found, 2 states left on queue.
+The depth of the complete state graph search is 4.

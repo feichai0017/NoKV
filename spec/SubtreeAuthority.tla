@@ -205,6 +205,18 @@ TypeOK ==
 ActiveFor(subtree) ==
     { r \in active : r.subtree = subtree }
 
+ActiveRecordsDeclared ==
+    \A r \in active: r.subtree \in declared
+
+OnlyOneActiveRecordPerSubtree ==
+    \A r \in active:
+        \A q \in active:
+            r.subtree = q.subtree => r = q
+
+PrimacyInductive ==
+    /\ ActiveRecordsDeclared
+    /\ OnlyOneActiveRecordPerSubtree
+
 PendingPreds ==
     { PredOf(h) : h \in pending }
 
@@ -230,9 +242,13 @@ Finality ==
 
 SubtreeAuthorityGuarantees ==
     /\ Primacy
+    /\ PrimacyInductive
     /\ Inheritance
     /\ Silence
     /\ Finality
+
+THEOREM PrimacyInductiveImpliesPrimacy ==
+    PrimacyInductive => Primacy
 
 Spec ==
     Init /\ [][Next]_Vars
