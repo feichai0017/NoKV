@@ -7,19 +7,12 @@ import (
 	"testing"
 	"time"
 
-	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaclient "github.com/feichai0017/NoKV/fsmeta/client"
-	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
+	fswatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	fsmetaserver "github.com/feichai0017/NoKV/fsmeta/server"
-	"github.com/feichai0017/NoKV/raftstore/client"
-	"github.com/feichai0017/NoKV/raftstore/migrate"
-	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
-	storepkg "github.com/feichai0017/NoKV/raftstore/store"
-	"github.com/feichai0017/NoKV/raftstore/testcluster"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 func TestFSMetadataClientServerOnRealCluster(t *testing.T) {
@@ -108,12 +101,137 @@ func TestFSMetadataClientServerOnRealCluster(t *testing.T) {
 	require.ErrorIs(t, err, fsmeta.ErrNotFound)
 }
 
-func openFSMetadataClient(t *testing.T, ctx context.Context, executor fsmetaserver.Executor) (*fsmetaclient.GRPCClient, func()) {
+func TestFSMetadataWatchSubtreeOnRealCluster(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	runtime := openRealClusterRuntime(t, ctx)
+	router := fswatch.NewRouter()
+	reg, err := runtime.node.Server.Store().RegisterApplyObserver(router, 256)
+	require.NoError(t, err)
+	defer reg.Close()
+
+	cli, cleanup := openFSMetadataClient(t, ctx, runtime.executor, fsmetaserver.WithWatcher(router))
+	defer cleanup()
+
+	prefix, err := fsmeta.EncodeDentryPrefix("vol", fsmeta.RootInode)
+	require.NoError(t, err)
+	stream, err := cli.WatchSubtree(ctx, fsmeta.WatchRequest{
+		KeyPrefix:          prefix,
+		BackPressureWindow: 8,
+	})
+	require.NoError(t, err)
+	defer func() { _ = stream.Close() }()
+
+	req := fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "watched-checkpoint",
+		Inode:  77,
+	}
+	require.NoError(t, cli.Create(ctx, req, fsmeta.InodeRecord{
+		Type:      fsmeta.InodeTypeFile,
+		Size:      1,
+		Mode:      0o644,
+		LinkCount: 1,
+	}))
+	wantKey, err := fsmeta.EncodeDentryKey(req.Mount, req.Parent, req.Name)
+	require.NoError(t, err)
+
+	var got fsmeta.WatchEvent
+	require.Eventually(t, func() bool {
+		evt, err := stream.Recv()
+		if err != nil {
+			return false
+		}
+		got = evt
+		return string(evt.Key) == string(wantKey)
+	}, 5*time.Second, 20*time.Millisecond)
+	require.Equal(t, fsmeta.WatchEventSourceCommit, got.Source)
+	require.NotZero(t, got.CommitVersion)
+	require.NotZero(t, got.Cursor.Index)
+	require.NoError(t, stream.Ack(got.Cursor))
+}
+
+func TestFSMetadataSnapshotSubtreeOnRealCluster(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	executor := openRealClusterExecutor(t, ctx)
+	publisher := &snapshotRecorder{}
+	cli, cleanup := openFSMetadataClient(t, ctx, executor, fsmetaserver.WithSnapshotPublisher(publisher))
+	defer cleanup()
+
+	mount := fsmeta.MountID("snapvol")
+	require.NoError(t, cli.Create(ctx, fsmeta.CreateRequest{
+		Mount:  mount,
+		Parent: fsmeta.RootInode,
+		Name:   "a",
+		Inode:  501,
+	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, LinkCount: 1}))
+
+	token, err := cli.SnapshotSubtree(ctx, fsmeta.SnapshotSubtreeRequest{
+		Mount:     mount,
+		RootInode: fsmeta.RootInode,
+	})
+	require.NoError(t, err)
+	require.Equal(t, mount, token.Mount)
+	require.Equal(t, fsmeta.RootInode, token.RootInode)
+	require.NotZero(t, token.ReadVersion)
+	require.Equal(t, token, publisher.token)
+
+	require.NoError(t, cli.Create(ctx, fsmeta.CreateRequest{
+		Mount:  mount,
+		Parent: fsmeta.RootInode,
+		Name:   "b",
+		Inode:  502,
+	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, LinkCount: 1}))
+
+	snapshotPage, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
+		Mount:           mount,
+		Parent:          fsmeta.RootInode,
+		Limit:           8,
+		SnapshotVersion: token.ReadVersion,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"a"}, dentryNames(snapshotPage))
+
+	latestPage, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
+		Mount:  mount,
+		Parent: fsmeta.RootInode,
+		Limit:  8,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"a", "b"}, dentryNames(latestPage))
+}
+
+type snapshotRecorder struct {
+	token fsmeta.SnapshotSubtreeToken
+}
+
+func (r *snapshotRecorder) PublishSnapshotSubtree(_ context.Context, token fsmeta.SnapshotSubtreeToken) error {
+	r.token = token
+	return nil
+}
+
+func (r *snapshotRecorder) RetireSnapshotSubtree(context.Context, fsmeta.SnapshotSubtreeToken) error {
+	return nil
+}
+
+func dentryNames(entries []fsmeta.DentryAttrPair) []string {
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, entry.Dentry.Name)
+	}
+	return out
+}
+
+func openFSMetadataClient(t *testing.T, ctx context.Context, executor fsmetaserver.Executor, opts ...fsmetaserver.Option) (*fsmetaclient.GRPCClient, func()) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	grpcServer := grpc.NewServer()
-	fsmetaserver.Register(grpcServer, executor)
+	fsmetaserver.Register(grpcServer, executor, opts...)
 	go func() {
 		_ = grpcServer.Serve(ln)
 	}()
@@ -124,56 +242,4 @@ func openFSMetadataClient(t *testing.T, ctx context.Context, executor fsmetaserv
 		grpcServer.Stop()
 		_ = ln.Close()
 	}
-}
-
-func openRealClusterExecutor(t *testing.T, ctx context.Context) *fsmetaexec.Executor {
-	t.Helper()
-
-	coord := testcluster.StartCoordinator(t)
-	t.Cleanup(func() { coord.Close(t) })
-
-	seedDir := t.TempDir()
-	standalone := testcluster.OpenStandaloneDB(t, seedDir, nil)
-	require.NoError(t, standalone.Close())
-
-	const (
-		storeID  = uint64(1)
-		regionID = uint64(171)
-		peerID   = uint64(101)
-	)
-	_, err := migrate.Init(migrate.InitConfig{
-		WorkDir:  seedDir,
-		StoreID:  storeID,
-		RegionID: regionID,
-		PeerID:   peerID,
-	})
-	require.NoError(t, err)
-
-	node := testcluster.StartNodeWithConfig(t, storeID, seedDir, testcluster.NodeConfig{
-		AllowedModes:      []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster},
-		StartPeers:        true,
-		Scheduler:         testcluster.NewScheduler(t, coord.Addr(), 100*time.Millisecond),
-		HeartbeatInterval: 50 * time.Millisecond,
-	})
-	t.Cleanup(func() { node.Close(t) })
-
-	testcluster.WaitForLeaderPeer(t, ctx, node.Addr(), regionID, peerID)
-	testcluster.WaitForSchedulerMode(t, node, storepkg.SchedulerModeHealthy, false)
-
-	coordRPC, err := coordclient.NewGRPCClient(ctx, coord.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = coordRPC.Close() })
-	kv, err := client.New(client.Config{
-		StoreResolver:  coordRPC,
-		RegionResolver: coordRPC,
-		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = kv.Close() })
-
-	runner, err := fsmetaexec.NewRaftstoreRunner(kv, coordRPC)
-	require.NoError(t, err)
-	executor, err := fsmetaexec.New(runner)
-	require.NoError(t, err)
-	return executor
 }

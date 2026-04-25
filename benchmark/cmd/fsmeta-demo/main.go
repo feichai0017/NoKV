@@ -16,7 +16,7 @@ import (
 func main() {
 	var (
 		addr           = flag.String("addr", "127.0.0.1:8090", "FSMetadata gRPC endpoint")
-		workloadName   = flag.String("workload", workload.CheckpointStorm, "workload: checkpoint-storm|hotspot-fanin")
+		workloadName   = flag.String("workload", workload.CheckpointStorm, "workload: checkpoint-storm|hotspot-fanin|watch-subtree")
 		mount          = flag.String("mount", "fsmeta-demo", "fsmeta mount id")
 		runID          = flag.String("run-id", "", "run id suffix; defaults to current UTC timestamp")
 		clients        = flag.Int("clients", 4, "concurrent clients")
@@ -25,6 +25,7 @@ func main() {
 		files          = flag.Int("files", 1024, "hotspot-fanin file count")
 		readsPerClient = flag.Int("reads-per-client", 64, "hotspot-fanin reads per client")
 		pageLimit      = flag.Uint("page-limit", 0, "readdir page limit; 0 uses workload default")
+		watchWindow    = flag.Uint("watch-window", 0, "watch-subtree back-pressure window; 0 uses workload default")
 		useReadDirPlus = flag.Bool("readdirplus", true, "hotspot-fanin uses ReadDirPlus instead of ReadDir")
 		startInode     = flag.Uint64("start-inode", 1_000_000, "first inode id used by generated metadata")
 		timeout        = flag.Duration("timeout", 2*time.Minute, "overall workload timeout")
@@ -56,6 +57,7 @@ func main() {
 		files:          *files,
 		readsPerClient: *readsPerClient,
 		pageLimit:      uint32(*pageLimit),
+		watchWindow:    uint32(*watchWindow),
 		readDirPlus:    *useReadDirPlus,
 		startInode:     fsmeta.InodeID(*startInode),
 	})
@@ -80,6 +82,7 @@ type runConfig struct {
 	files          int
 	readsPerClient int
 	pageLimit      uint32
+	watchWindow    uint32
 	readDirPlus    bool
 	startInode     fsmeta.InodeID
 }
@@ -105,6 +108,15 @@ func run(ctx context.Context, cli workload.Client, cfg runConfig) (workload.Resu
 			PageLimit:      cfg.pageLimit,
 			ReadDirPlus:    cfg.readDirPlus,
 			StartInode:     cfg.startInode,
+		})
+	case workload.WatchSubtree:
+		return workload.RunWatchSubtree(ctx, cli, workload.WatchSubtreeConfig{
+			Mount:              cfg.mount,
+			RunID:              cfg.runID,
+			Clients:            cfg.clients,
+			Files:              cfg.files,
+			StartInode:         cfg.startInode,
+			BackPressureWindow: cfg.watchWindow,
 		})
 	default:
 		return workload.Result{}, fmt.Errorf("unknown workload %q", cfg.name)

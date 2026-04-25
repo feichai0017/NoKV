@@ -80,7 +80,7 @@ func TestReplicatedStoreAppendAndReopen(t *testing.T) {
 	stores, drivers, leaderID := openNetworkTestCluster(t, 4)
 
 	commit, err := stores[leaderID].Append(context.Background(),
-		rootevent.StoreJoined(1, "s1"),
+		rootevent.StoreJoined(1),
 		rootevent.RegionDescriptorPublished(testDescriptor(10, []byte("a"), []byte("z"))),
 	)
 	require.NoError(t, err)

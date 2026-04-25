@@ -25,10 +25,29 @@ func lookupRequestFromProto(req *fsmetapb.LookupRequest) fsmeta.LookupRequest {
 
 func readDirRequestFromProto(req *fsmetapb.ReadDirRequest) fsmeta.ReadDirRequest {
 	return fsmeta.ReadDirRequest{
-		Mount:      fsmeta.MountID(req.GetMount()),
-		Parent:     fsmeta.InodeID(req.GetParent()),
-		StartAfter: req.GetStartAfter(),
-		Limit:      req.GetLimit(),
+		Mount:           fsmeta.MountID(req.GetMount()),
+		Parent:          fsmeta.InodeID(req.GetParent()),
+		StartAfter:      req.GetStartAfter(),
+		Limit:           req.GetLimit(),
+		SnapshotVersion: req.GetSnapshotVersion(),
+	}
+}
+
+func snapshotSubtreeRequestFromProto(req *fsmetapb.SnapshotSubtreeRequest) fsmeta.SnapshotSubtreeRequest {
+	if req == nil {
+		return fsmeta.SnapshotSubtreeRequest{}
+	}
+	return fsmeta.SnapshotSubtreeRequest{
+		Mount:     fsmeta.MountID(req.GetMount()),
+		RootInode: fsmeta.InodeID(req.GetRootInode()),
+	}
+}
+
+func snapshotSubtreeResponseToProto(token fsmeta.SnapshotSubtreeToken) *fsmetapb.SnapshotSubtreeResponse {
+	return &fsmetapb.SnapshotSubtreeResponse{
+		Mount:       string(token.Mount),
+		RootInode:   uint64(token.RootInode),
+		ReadVersion: token.ReadVersion,
 	}
 }
 
@@ -90,6 +109,59 @@ func pairToProto(pair fsmeta.DentryAttrPair) *fsmetapb.DentryAttrPair {
 	return &fsmetapb.DentryAttrPair{
 		Dentry: dentryToProto(pair.Dentry),
 		Inode:  inodeToProto(pair.Inode),
+	}
+}
+
+func watchRequestFromProto(req *fsmetapb.WatchSubtreeRequest) fsmeta.WatchRequest {
+	if req == nil {
+		return fsmeta.WatchRequest{}
+	}
+	return fsmeta.WatchRequest{
+		Mount:              fsmeta.MountID(req.GetMount()),
+		RootInode:          fsmeta.InodeID(req.GetRootInode()),
+		KeyPrefix:          append([]byte(nil), req.GetKeyPrefix()...),
+		DescendRecursively: req.GetDescendRecursively(),
+		ResumeCursor:       watchCursorFromProto(req.GetResumeCursor()),
+		BackPressureWindow: req.GetBackPressureWindow(),
+	}
+}
+
+func watchCursorFromProto(cursor *fsmetapb.WatchCursor) fsmeta.WatchCursor {
+	if cursor == nil {
+		return fsmeta.WatchCursor{}
+	}
+	return fsmeta.WatchCursor{
+		RegionID: cursor.GetRegionId(),
+		Term:     cursor.GetTerm(),
+		Index:    cursor.GetIndex(),
+	}
+}
+
+func watchCursorToProto(cursor fsmeta.WatchCursor) *fsmetapb.WatchCursor {
+	return &fsmetapb.WatchCursor{
+		RegionId: cursor.RegionID,
+		Term:     cursor.Term,
+		Index:    cursor.Index,
+	}
+}
+
+func watchEventToProto(evt fsmeta.WatchEvent) *fsmetapb.WatchEvent {
+	return &fsmetapb.WatchEvent{
+		RaftCursor:    watchCursorToProto(evt.Cursor),
+		CommitVersion: evt.CommitVersion,
+		Source:        watchEventSourceToProto(evt.Source),
+		Key:           append([]byte(nil), evt.Key...),
+	}
+}
+
+func watchEventSourceToProto(source fsmeta.WatchEventSource) fsmetapb.WatchEventSource {
+	switch source {
+	case fsmeta.WatchEventSourceCommit:
+		return fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_COMMIT
+	case fsmeta.WatchEventSourceResolveLock:
+		return fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_RESOLVE_LOCK
+	default:
+		return fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_UNSPECIFIED
 	}
 }
 
