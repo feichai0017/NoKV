@@ -14,8 +14,8 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// API is the typed fsmeta client surface consumed by demos and benchmarks.
-type API interface {
+// Client is the typed fsmeta client surface consumed by demos and benchmarks.
+type Client interface {
 	Create(ctx context.Context, req fsmeta.CreateRequest, inode fsmeta.InodeRecord) error
 	Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error)
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
