@@ -2,7 +2,7 @@ package server
 
 import (
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
-	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
+	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
@@ -49,7 +49,7 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 	nowUnixNano, _, holderID, renewIn, clockSkew := s.leaseCampaignBounds()
 	lease, _ := s.currentTenureView()
 	report := coordaudit.BuildReport(rootSnapshot, holderID, nowUnixNano)
-	leaseFrontiers := succession.Frontiers(rootstate.State{
+	leaseFrontiers := eunomia.Frontiers(rootstate.State{
 		IDFence:  rootSnapshot.Allocator.IDCurrent,
 		TSOFence: rootSnapshot.Allocator.TSCurrent,
 	}, report.RootDescriptorRevision)
@@ -168,8 +168,8 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 				"legacy_digest": rootSnapshot.Handover.LegacyDigest,
 			},
 		},
-		"handover_witness":   diagnosticsHandoverWitness(report.HandoverWitness),
-		"succession_metrics": s.successionMetrics.snapshot(),
+		"handover_witness": diagnosticsHandoverWitness(report.HandoverWitness),
+		"eunomia_metrics":  s.eunomiaMetrics.snapshot(),
 	}
 }
 

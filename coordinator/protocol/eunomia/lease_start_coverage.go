@@ -1,4 +1,4 @@
-package succession
+package eunomia
 
 import (
 	"errors"
@@ -6,7 +6,7 @@ import (
 	"sort"
 )
 
-var ErrLeaseStartCoverage = errors.New("coordinator/protocol/succession: successor lease_start does not cover predecessor served summary")
+var ErrLeaseStartCoverage = errors.New("coordinator/protocol/eunomia: successor lease_start does not cover predecessor served summary")
 
 type LeaseAcquisitionKind uint8
 

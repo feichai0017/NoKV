@@ -7,7 +7,7 @@ import (
 	"time"
 
 	coordfailpoints "github.com/feichai0017/NoKV/coordinator/failpoints"
-	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
+	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -49,7 +49,7 @@ func (s *Service) requireDutyAdmission(ctx context.Context, mandate uint32) erro
 	if err := s.ensureTenure(ctx); err != nil {
 		return translateTenureError(err)
 	}
-	return s.successionGate(gateMandateAdmission, mandate)
+	return s.eunomiaGate(gateMandateAdmission, mandate)
 }
 
 // RunTenureLoop keeps the local coordinator lease renewed while ctx
@@ -120,7 +120,7 @@ func (s *Service) releaseTenure(ctx context.Context) error {
 	}
 
 	s.allocMu.Lock()
-	inheritedFrontiers := succession.Frontiers(rootstate.State{
+	inheritedFrontiers := eunomia.Frontiers(rootstate.State{
 		IDFence:  s.currentIDFenceLocked(),
 		TSOFence: s.currentTSOFenceLocked(),
 	}, s.currentDescriptorRevision())
@@ -132,7 +132,7 @@ func (s *Service) releaseTenure(ctx context.Context) error {
 		NowUnixNano:        nowUnixNano,
 		InheritedFrontiers: inheritedFrontiers,
 	}); err != nil {
-		s.successionMetrics.recordGuaranteeViolationForError(err)
+		s.eunomiaMetrics.recordGuaranteeViolationForError(err)
 		return err
 	}
 	return s.reloadAndFenceAllocators(true)
@@ -162,7 +162,7 @@ func (s *Service) sealTenure(ctx context.Context) error {
 		ctx,
 		rootproto.HandoverActSeal,
 		gateLegacyFormation,
-		succession.Frontiers(rootstate.State{
+		eunomia.Frontiers(rootstate.State{
 			IDFence:  consumedIDFrontier,
 			TSOFence: consumedTSOFrontier,
 		}, s.currentDescriptorRevision()),
@@ -240,7 +240,7 @@ func (s *Service) applyHandoverCommand(ctx context.Context, kind rootproto.Hando
 		return nil
 	}
 	beforeStage := s.currentHandover().Stage
-	if err := s.successionGate(gate, 0); err != nil {
+	if err := s.eunomiaGate(gate, 0); err != nil {
 		return err
 	}
 	protocolState, err := s.storage.ApplyHandover(ctx, rootproto.HandoverCommand{
@@ -250,13 +250,13 @@ func (s *Service) applyHandoverCommand(ctx context.Context, kind rootproto.Hando
 		Frontiers:   frontiers,
 	})
 	if err != nil {
-		s.successionMetrics.recordGuaranteeViolationForError(err)
+		s.eunomiaMetrics.recordGuaranteeViolationForError(err)
 		return err
 	}
 	if err := coordfailpoints.InjectAfterApplyHandoverBeforeReload(); err != nil {
 		return err
 	}
-	s.successionMetrics.recordHandoverStageTransition(beforeStage, protocolState.Handover.Stage)
+	s.eunomiaMetrics.recordHandoverStageTransition(beforeStage, protocolState.Handover.Stage)
 	return s.reloadAndFenceAllocators(true)
 }
 
@@ -276,7 +276,7 @@ func (s *Service) ensureTenure(ctx context.Context) error {
 	}
 
 	s.allocMu.Lock()
-	inheritedFrontiers := succession.Frontiers(rootstate.State{IDFence: s.currentIDFenceLocked(), TSOFence: s.currentTSOFenceLocked()}, s.currentDescriptorRevision())
+	inheritedFrontiers := eunomia.Frontiers(rootstate.State{IDFence: s.currentIDFenceLocked(), TSOFence: s.currentTSOFenceLocked()}, s.currentDescriptorRevision())
 	s.allocMu.Unlock()
 	current, seal := s.currentTenureView()
 	lineageDigest := rootstate.ResolveLineageDigest(current, seal, holderID, nowUnixNano)
@@ -290,10 +290,10 @@ func (s *Service) ensureTenure(ctx context.Context) error {
 		InheritedFrontiers: inheritedFrontiers,
 	})
 	if err != nil {
-		s.successionMetrics.recordGuaranteeViolationForError(err)
+		s.eunomiaMetrics.recordGuaranteeViolationForError(err)
 		return err
 	}
-	s.successionMetrics.recordTenureEraTransition(current.Era, protocolState.Tenure.Era)
+	s.eunomiaMetrics.recordTenureEraTransition(current.Era, protocolState.Tenure.Era)
 	return s.reloadAndFenceAllocators(true)
 }
 

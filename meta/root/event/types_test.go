@@ -3,7 +3,7 @@ package event_test
 import (
 	"testing"
 
-	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
+	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -46,7 +46,7 @@ func TestCloneEventDetachesPayload(t *testing.T) {
 }
 
 func TestTenureEvent(t *testing.T) {
-	frontiers := succession.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0)
+	frontiers := eunomia.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0)
 	event := rootevent.TenureGranted("c1", 1_000, 1, 7, "pred", frontiers)
 	cloned := rootevent.CloneEvent(event)
 
@@ -156,7 +156,7 @@ func TestMembershipAndAllocatorConstructors(t *testing.T) {
 }
 
 func TestTenureReleasedAndSealed(t *testing.T) {
-	frontiers := succession.Frontiers(rootstate.State{IDFence: 5, TSOFence: 9}, 0)
+	frontiers := eunomia.Frontiers(rootstate.State{IDFence: 5, TSOFence: 9}, 0)
 	released := rootevent.TenureReleased("c1", 2_000, 3, 5, "digest", frontiers)
 	sealed := rootevent.TenureSealed("c1", 3, 5, frontiers)
 

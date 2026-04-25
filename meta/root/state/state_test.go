@@ -3,7 +3,7 @@ package state_test
 import (
 	"testing"
 
-	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
+	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
@@ -30,7 +30,7 @@ func TestApplyEventToStateAdvancesEpochsAndCursor(t *testing.T) {
 
 func TestApplyTenureToState(t *testing.T) {
 	var st rootstate.State
-	event := rootevent.TenureGranted("c1", 1_000, 1, rootproto.MandateDefault, "pred", succession.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0))
+	event := rootevent.TenureGranted("c1", 1_000, 1, rootproto.MandateDefault, "pred", eunomia.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0))
 
 	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 1}, event)
 
@@ -94,8 +94,8 @@ func TestApplyHandoverReattachToState(t *testing.T) {
 
 func TestApplyTenurePreservesIssuedAtForSameEra(t *testing.T) {
 	var st rootstate.State
-	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 1}, rootevent.TenureGranted("c1", 1_000, 1, rootproto.MandateDefault, "pred", succession.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0)))
-	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 2}, rootevent.TenureGranted("c1", 2_000, 1, rootproto.MandateDefault, "", succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 30}, 0)))
+	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 1}, rootevent.TenureGranted("c1", 1_000, 1, rootproto.MandateDefault, "pred", eunomia.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0)))
+	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 2}, rootevent.TenureGranted("c1", 2_000, 1, rootproto.MandateDefault, "", eunomia.Frontiers(rootstate.State{IDFence: 20, TSOFence: 30}, 0)))
 
 	require.Equal(t, uint64(1), st.Tenure.Era)
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, st.Tenure.IssuedAt)
@@ -114,7 +114,7 @@ func TestStateProtocolHelpers(t *testing.T) {
 		HolderID:  "c1",
 		Era:       7,
 		Mandate:   rootproto.MandateDefault,
-		Frontiers: succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
+		Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
 	}
 	require.Equal(t, uint64(20), seal.Frontiers.Frontier(rootproto.MandateAllocID))
 	require.Equal(t, uint64(40), seal.Frontiers.Frontier(rootproto.MandateTSO))

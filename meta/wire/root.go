@@ -160,19 +160,19 @@ func RootMandateFrontiersFromProto(frontiers []*metapb.RootMandateFrontier) root
 	return rootproto.NewMandateFrontiers(entries...)
 }
 
-func RootSuccessionStateToProto(state rootstate.SuccessionState) *metapb.RootSuccessionState {
-	return &metapb.RootSuccessionState{
+func RootEunomiaStateToProto(state rootstate.EunomiaState) *metapb.RootEunomiaState {
+	return &metapb.RootEunomiaState{
 		Tenure:   RootTenureToProto(state.Tenure),
 		Legacy:   RootLegacyToProto(state.Legacy),
 		Handover: RootHandoverToProto(state.Handover),
 	}
 }
 
-func RootSuccessionStateFromProto(state *metapb.RootSuccessionState) rootstate.SuccessionState {
+func RootEunomiaStateFromProto(state *metapb.RootEunomiaState) rootstate.EunomiaState {
 	if state == nil {
-		return rootstate.SuccessionState{}
+		return rootstate.EunomiaState{}
 	}
-	return rootstate.SuccessionState{
+	return rootstate.EunomiaState{
 		Tenure:   RootTenureFromProto(state.GetTenure()),
 		Legacy:   RootLegacyFromProto(state.GetLegacy()),
 		Handover: RootHandoverFromProto(state.GetHandover()),

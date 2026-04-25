@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
+	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootfailpoints "github.com/feichai0017/NoKV/meta/root/failpoints"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
@@ -286,18 +286,18 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 	return rootstate.CommitInfo{Cursor: snapshot.State.LastCommitted, State: snapshot.State}, nil
 }
 
-func (s *Store) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error) {
+func (s *Store) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error) {
 	if s == nil {
-		return rootstate.SuccessionState{}, nil
+		return rootstate.EunomiaState{}, nil
 	}
 	if err := rootfailpoints.InjectBeforeApplyTenure(); err != nil {
-		return rootstate.SuccessionState{}, err
+		return rootstate.EunomiaState{}, err
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return rootstate.SuccessionState{}, err
+		return rootstate.EunomiaState{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -305,14 +305,14 @@ func (s *Store) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (r
 	switch cmd.Kind {
 	case rootproto.TenureActIssue:
 		if err := rootstate.ValidateTenureClaim(s.state.Tenure, s.state.Legacy, cmd.HolderID, cmd.LineageDigest, cmd.ExpiresUnixNano, cmd.NowUnixNano); err != nil {
-			return s.state.Succession(), err
+			return s.state.Eunomia(), err
 		}
 		if err := rootstate.ValidateInheritance(
 			s.state.Tenure,
 			s.state.Legacy,
 			cmd.InheritedFrontiers,
 		); err != nil {
-			return s.state.Succession(), err
+			return s.state.Eunomia(), err
 		}
 		era := rootstate.NextTenureEra(s.state.Tenure, s.state.Legacy, cmd.HolderID, cmd.NowUnixNano)
 		commit, err := s.appendLocked(ctx, rootevent.TenureGranted(
@@ -324,12 +324,12 @@ func (s *Store) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (r
 			cmd.InheritedFrontiers,
 		))
 		if err != nil {
-			return rootstate.SuccessionState{}, err
+			return rootstate.EunomiaState{}, err
 		}
-		return commit.State.Succession(), nil
+		return commit.State.Eunomia(), nil
 	case rootproto.TenureActRelease:
 		if err := rootstate.ValidateTenureYield(s.state.Tenure, cmd.HolderID, cmd.NowUnixNano); err != nil {
-			return s.state.Succession(), err
+			return s.state.Eunomia(), err
 		}
 		current := s.state.Tenure
 		mandate := current.Mandate
@@ -345,26 +345,26 @@ func (s *Store) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (r
 			cmd.InheritedFrontiers,
 		))
 		if err != nil {
-			return rootstate.SuccessionState{}, err
+			return rootstate.EunomiaState{}, err
 		}
-		return commit.State.Succession(), nil
+		return commit.State.Eunomia(), nil
 	default:
-		return s.state.Succession(), rootstate.ErrInvalidTenure
+		return s.state.Eunomia(), rootstate.ErrInvalidTenure
 	}
 }
 
-func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
+func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
 	if s == nil {
-		return rootstate.SuccessionState{}, nil
+		return rootstate.EunomiaState{}, nil
 	}
 	if err := rootfailpoints.InjectBeforeApplyHandover(); err != nil {
-		return rootstate.SuccessionState{}, err
+		return rootstate.EunomiaState{}, err
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return rootstate.SuccessionState{}, err
+		return rootstate.EunomiaState{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -375,10 +375,10 @@ func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand
 		if s.state.Legacy.Era != 0 &&
 			s.state.Legacy.Era == current.Era &&
 			s.state.Legacy.HolderID == strings.TrimSpace(cmd.HolderID) {
-			return s.state.Succession(), nil
+			return s.state.Eunomia(), nil
 		}
 		if err := rootstate.ValidateLegacyFormation(current, cmd.HolderID); err != nil {
-			return s.state.Succession(), err
+			return s.state.Eunomia(), err
 		}
 		mandate := current.Mandate
 		if mandate == 0 {
@@ -391,27 +391,27 @@ func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand
 			cmd.Frontiers,
 		))
 		if err != nil {
-			return rootstate.SuccessionState{}, err
+			return rootstate.EunomiaState{}, err
 		}
-		return commit.State.Succession(), nil
+		return commit.State.Eunomia(), nil
 	case rootproto.HandoverActConfirm:
 		if strings.TrimSpace(cmd.HolderID) == "" || strings.TrimSpace(cmd.HolderID) != s.state.Tenure.HolderID {
-			return s.state.Succession(), rootstate.ErrPrimacy
+			return s.state.Eunomia(), rootstate.ErrPrimacy
 		}
-		auditStatus, err := succession.ValidateHandoverConfirmation(
+		auditStatus, err := eunomia.ValidateHandoverConfirmation(
 			s.state.Tenure,
-			succession.Frontiers(s.state, rootstate.MaxDescriptorRevision(s.descs)),
+			eunomia.Frontiers(s.state, rootstate.MaxDescriptorRevision(s.descs)),
 			s.state.Legacy,
 			cmd.NowUnixNano,
 		)
 		if err != nil {
-			return s.state.Succession(), err
+			return s.state.Eunomia(), err
 		}
 		if rootproto.HandoverStageAtLeast(s.state.Handover.Stage, rootproto.HandoverStageConfirmed) &&
 			s.state.Handover.LegacyEra == auditStatus.LegacyEra &&
 			s.state.Handover.SuccessorEra == s.state.Tenure.Era &&
 			s.state.Handover.LegacyDigest == auditStatus.LegacyDigest {
-			return s.state.Succession(), nil
+			return s.state.Eunomia(), nil
 		}
 		commit, err := s.appendLocked(ctx, rootevent.HandoverConfirmed(
 			cmd.HolderID,
@@ -420,15 +420,15 @@ func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand
 			auditStatus.LegacyDigest,
 		))
 		if err != nil {
-			return rootstate.SuccessionState{}, err
+			return rootstate.EunomiaState{}, err
 		}
-		return commit.State.Succession(), nil
+		return commit.State.Eunomia(), nil
 	case rootproto.HandoverActClose:
-		if err := succession.ValidateHandoverFinality(s.state.Tenure, s.state.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
-			return s.state.Succession(), err
+		if err := eunomia.ValidateHandoverFinality(s.state.Tenure, s.state.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+			return s.state.Eunomia(), err
 		}
 		if rootproto.HandoverStageAtLeast(s.state.Handover.Stage, rootproto.HandoverStageClosed) {
-			return s.state.Succession(), nil
+			return s.state.Eunomia(), nil
 		}
 		commit, err := s.appendLocked(ctx, rootevent.HandoverClosed(
 			cmd.HolderID,
@@ -437,15 +437,15 @@ func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand
 			s.state.Handover.LegacyDigest,
 		))
 		if err != nil {
-			return rootstate.SuccessionState{}, err
+			return rootstate.EunomiaState{}, err
 		}
-		return commit.State.Succession(), nil
+		return commit.State.Eunomia(), nil
 	case rootproto.HandoverActReattach:
-		if err := succession.ValidateHandoverReattach(s.state.Tenure, s.state.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
-			return s.state.Succession(), err
+		if err := eunomia.ValidateHandoverReattach(s.state.Tenure, s.state.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+			return s.state.Eunomia(), err
 		}
 		if rootproto.HandoverStageAtLeast(s.state.Handover.Stage, rootproto.HandoverStageReattached) {
-			return s.state.Succession(), nil
+			return s.state.Eunomia(), nil
 		}
 		commit, err := s.appendLocked(ctx, rootevent.HandoverReattached(
 			cmd.HolderID,
@@ -454,11 +454,11 @@ func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand
 			s.state.Handover.LegacyDigest,
 		))
 		if err != nil {
-			return rootstate.SuccessionState{}, err
+			return rootstate.EunomiaState{}, err
 		}
-		return commit.State.Succession(), nil
+		return commit.State.Eunomia(), nil
 	default:
-		return s.state.Succession(), rootstate.ErrFinality
+		return s.state.Eunomia(), rootstate.ErrFinality
 	}
 }
 

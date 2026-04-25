@@ -70,11 +70,11 @@ The current protocol is intentionally minimal. It does not yet expose the full
 future runtime/operator model such as stalled transitions or richer catch-up
 actions.
 
-### Minimal Succession vocabulary
+### Minimal Eunomia vocabulary
 
 The rooted handoff protocol is intentionally small. Docs and operator-facing
 surfaces should use the same vocabulary as the implementation and the
-Succession research note:
+Eunomia research note:
 
 - `Tenure` — the currently active authority record
 - `Legacy` — the retired predecessor era plus the frontier it already consumed
@@ -103,7 +103,7 @@ The mapping to concrete implementation types is direct:
 
 Do not reintroduce `Lease` / `Seal` as public aliases. They are useful
 informally, but keeping them in formal docs creates two names for the same
-rooted objects and makes Succession harder to explain.
+rooted objects and makes Eunomia harder to explain.
 
 ---
 
@@ -482,7 +482,7 @@ For local bootstrap, use:
 - `separated meta-root + remote coordinator` is implemented but experimental:
   - use it for control-plane research and failure-domain experiments
   - do not treat it as the default production path yet
-  - failure/recovery E2E tests and succession benchmarks still need to be
+  - failure/recovery E2E tests and eunomia benchmarks still need to be
     expanded before stronger claims are made
 - Scheduler policy is intentionally small (leader transfer focused).
 - No advanced placement constraints yet.

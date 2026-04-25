@@ -55,7 +55,7 @@ const (
 	gateMandateAdmission
 )
 
-// successionGate picks the tenure-view source based on kind.
+// eunomiaGate picks the tenure-view source based on kind.
 //
 // Mandate admission (hot path, once per AllocID/TSO/GetRegionByKey) uses the
 // cached mirror: it must be cheap. The cache is kept honest by the rooted
@@ -65,30 +65,30 @@ const (
 // Lifecycle mutations (seal, close, reattach) are infrequent and safety
 // critical, so they re-read from storage to avoid a tiny window where
 // the cached mirror has not yet absorbed a concurrent publish.
-func (s *Service) successionGate(kind gateKind, mandate uint32) error {
+func (s *Service) eunomiaGate(kind gateKind, mandate uint32) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
 	switch kind {
 	case gateMandateAdmission:
-		return s.successionGateCached(kind, mandate)
+		return s.eunomiaGateCached(kind, mandate)
 	default:
-		return s.successionGateRooted(kind, mandate)
+		return s.eunomiaGateRooted(kind, mandate)
 	}
 }
 
-// successionGateCached validates against the in-memory mirror. Cheap but
+// eunomiaGateCached validates against the in-memory mirror. Cheap but
 // can race with a just-landed rooted publish; only safe for read-path
 // mandate admission where a one-tick staleness is tolerable.
-func (s *Service) successionGateCached(kind gateKind, mandate uint32) error {
+func (s *Service) eunomiaGateCached(kind gateKind, mandate uint32) error {
 	current, seal := s.currentTenureView()
 	return s.validateGateTenure(kind, mandate, current, seal)
 }
 
-// successionGateRooted validates against a freshly loaded rooted
+// eunomiaGateRooted validates against a freshly loaded rooted
 // snapshot. Used for control-plane mutations where stale-read would
 // violate finality.
-func (s *Service) successionGateRooted(kind gateKind, mandate uint32) error {
+func (s *Service) eunomiaGateRooted(kind gateKind, mandate uint32) error {
 	current, seal, err := s.currentTenureViewFromStorage()
 	if err != nil {
 		return status.Error(codes.Internal, "load rooted snapshot: "+err.Error())
@@ -129,43 +129,43 @@ func (s *Service) validateGateTenure(kind gateKind, mandate uint32, current root
 	}
 
 	if current.HolderID == "" {
-		s.successionMetrics.recordGateRejection(kind)
-		s.successionMetrics.recordGuaranteeViolation(guaranteePrimacy)
+		s.eunomiaMetrics.recordGateRejection(kind)
+		s.eunomiaMetrics.recordGuaranteeViolation(guaranteePrimacy)
 		return statusTenure(fmt.Errorf("%w: no rooted tenure", rootstate.ErrPrimacy))
 	}
 	if current.HolderID != holderID {
-		s.successionMetrics.recordGateRejection(kind)
-		s.successionMetrics.recordGuaranteeViolation(guaranteePrimacy)
+		s.eunomiaMetrics.recordGateRejection(kind)
+		s.eunomiaMetrics.recordGuaranteeViolation(guaranteePrimacy)
 		return statusTenure(fmt.Errorf("%w: rooted holder=%s local_holder=%s", rootstate.ErrPrimacy, current.HolderID, holderID))
 	}
 	if !current.ActiveAt(nowUnixNano) {
-		s.successionMetrics.recordGateRejection(kind)
-		s.successionMetrics.recordGuaranteeViolation(guaranteePrimacy)
+		s.eunomiaMetrics.recordGateRejection(kind)
+		s.eunomiaMetrics.recordGuaranteeViolation(guaranteePrimacy)
 		return statusTenure(fmt.Errorf("%w: rooted lease expired era=%d", rootstate.ErrInvalidTenure, current.Era))
 	}
 
 	switch kind {
 	case gateLegacyFormation:
 		if rootstate.TenureSealed(current, seal) {
-			s.successionMetrics.recordGateRejection(kind)
-			s.successionMetrics.recordGuaranteeViolation(guaranteeFinality)
+			s.eunomiaMetrics.recordGateRejection(kind)
+			s.eunomiaMetrics.recordGuaranteeViolation(guaranteeFinality)
 			return statusTenure(fmt.Errorf("%w: era=%d already sealed", rootstate.ErrFinality, current.Era))
 		}
 	case gateHandoverMutation:
 		if rootstate.TenureSealed(current, seal) {
-			s.successionMetrics.recordGateRejection(kind)
-			s.successionMetrics.recordGuaranteeViolation(guaranteeSilence)
+			s.eunomiaMetrics.recordGateRejection(kind)
+			s.eunomiaMetrics.recordGuaranteeViolation(guaranteeSilence)
 			return statusTenure(fmt.Errorf("%w: era=%d legacy_era=%d", rootstate.ErrSilence, current.Era, seal.Era))
 		}
 	case gateMandateAdmission:
 		currentMandate := current.Mandate
 		if mandate != 0 && currentMandate&mandate != mandate {
-			s.successionMetrics.recordGateRejection(kind)
+			s.eunomiaMetrics.recordGateRejection(kind)
 			return statusTenure(fmt.Errorf("%w: required_mandate=%d rooted_mandate=%d era=%d", rootstate.ErrMandate, mandate, currentMandate, current.Era))
 		}
 		if rootstate.TenureSealed(current, seal) {
-			s.successionMetrics.recordGateRejection(kind)
-			s.successionMetrics.recordGuaranteeViolation(guaranteeSilence)
+			s.eunomiaMetrics.recordGateRejection(kind)
+			s.eunomiaMetrics.recordGuaranteeViolation(guaranteeSilence)
 			return statusTenure(fmt.Errorf("%w: era=%d legacy_era=%d", rootstate.ErrSilence, current.Era, seal.Era))
 		}
 	}

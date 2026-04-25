@@ -2,7 +2,7 @@ package audit
 
 import "fmt"
 
-// ReplyTraceRecord is the minimal reply-level input consumed by succession-audit.
+// ReplyTraceRecord is the minimal reply-level input consumed by eunomia-audit.
 // It intentionally keeps the schema small so adapters can project external
 // traces into a common authority-gap vocabulary.
 type ReplyTraceRecord struct {
@@ -14,7 +14,7 @@ type ReplyTraceRecord struct {
 }
 
 // ReplyTraceAnomaly captures one reply-level legality violation discovered by
-// succession-audit.
+// eunomia-audit.
 type ReplyTraceAnomaly struct {
 	Index  int    `json:"index"`
 	Kind   string `json:"kind"`

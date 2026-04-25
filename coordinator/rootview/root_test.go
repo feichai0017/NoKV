@@ -24,11 +24,11 @@ type fakeLoadStore struct {
 func (f fakeLoadStore) Load() (Snapshot, error)                                  { return CloneSnapshot(f.snapshot), f.err }
 func (f fakeLoadStore) AppendRootEvent(context.Context, rootevent.Event) error   { return nil }
 func (f fakeLoadStore) SaveAllocatorState(context.Context, uint64, uint64) error { return nil }
-func (f fakeLoadStore) ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.SuccessionState, error) {
-	return rootstate.SuccessionState{}, nil
+func (f fakeLoadStore) ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.EunomiaState, error) {
+	return rootstate.EunomiaState{}, nil
 }
-func (f fakeLoadStore) ApplyHandover(context.Context, rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
-	return rootstate.SuccessionState{}, nil
+func (f fakeLoadStore) ApplyHandover(context.Context, rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
+	return rootstate.EunomiaState{}, nil
 }
 func (f fakeLoadStore) Refresh() error   { return nil }
 func (f fakeLoadStore) IsLeader() bool   { return true }
@@ -57,8 +57,8 @@ type fakeRootBackend struct {
 	isLeader            bool
 	leaderID            uint64
 	tailNotifyCh        chan struct{}
-	applyLeaseResult    rootstate.SuccessionState
-	applyClosureResult  rootstate.SuccessionState
+	applyLeaseResult    rootstate.EunomiaState
+	applyClosureResult  rootstate.EunomiaState
 }
 
 func (f *fakeRootBackend) Snapshot() (rootstate.Snapshot, error) {
@@ -151,9 +151,9 @@ func (f *fakeRootBackend) ObserveCommitted() (rootstorage.ObservedCommitted, err
 func (f *fakeRootBackend) IsLeader() bool   { return f.isLeader }
 func (f *fakeRootBackend) LeaderID() uint64 { return f.leaderID }
 
-func (f *fakeRootBackend) ApplyTenure(_ context.Context, _ rootproto.TenureCommand) (rootstate.SuccessionState, error) {
+func (f *fakeRootBackend) ApplyTenure(_ context.Context, _ rootproto.TenureCommand) (rootstate.EunomiaState, error) {
 	if f.applyLeaseErr != nil {
-		return rootstate.SuccessionState{}, f.applyLeaseErr
+		return rootstate.EunomiaState{}, f.applyLeaseErr
 	}
 	f.snapshot.State.Tenure = f.applyLeaseResult.Tenure
 	f.snapshot.State.Legacy = f.applyLeaseResult.Legacy
@@ -164,9 +164,9 @@ func (f *fakeRootBackend) ApplyTenure(_ context.Context, _ rootproto.TenureComma
 	return f.applyLeaseResult, nil
 }
 
-func (f *fakeRootBackend) ApplyHandover(_ context.Context, _ rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
+func (f *fakeRootBackend) ApplyHandover(_ context.Context, _ rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
 	if f.applyClosureErr != nil {
-		return rootstate.SuccessionState{}, f.applyClosureErr
+		return rootstate.EunomiaState{}, f.applyClosureErr
 	}
 	f.snapshot.State.Tenure = f.applyClosureResult.Tenure
 	f.snapshot.State.Legacy = f.applyClosureResult.Legacy
@@ -311,10 +311,10 @@ func TestRemoteConfigAndNilStoreHelpers(t *testing.T) {
 	require.NoError(t, store.SaveAllocatorState(context.Background(), 1, 2))
 	leaseState, err := store.ApplyTenure(context.Background(), rootproto.TenureCommand{})
 	require.NoError(t, err)
-	require.Equal(t, rootstate.SuccessionState{}, leaseState)
+	require.Equal(t, rootstate.EunomiaState{}, leaseState)
 	closureState, err := store.ApplyHandover(context.Background(), rootproto.HandoverCommand{})
 	require.NoError(t, err)
-	require.Equal(t, rootstate.SuccessionState{}, closureState)
+	require.Equal(t, rootstate.EunomiaState{}, closureState)
 	require.NoError(t, store.Close())
 }
 
@@ -377,10 +377,10 @@ func TestRootStoreWithOptionalBackend(t *testing.T) {
 			rootstorage.TailToken{Cursor: rootstate.Cursor{}, Revision: 1},
 			rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 2}, Revision: 2},
 		),
-		applyLeaseResult: rootstate.SuccessionState{
+		applyLeaseResult: rootstate.EunomiaState{
 			Tenure: rootstate.Tenure{HolderID: "coord-2", Era: 2, ExpiresUnixNano: 999},
 		},
-		applyClosureResult: rootstate.SuccessionState{
+		applyClosureResult: rootstate.EunomiaState{
 			Handover: rootstate.Handover{
 				HolderID:     "coord-2",
 				LegacyEra:    2,

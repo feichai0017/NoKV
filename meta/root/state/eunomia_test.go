@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
+	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 )
@@ -119,29 +119,29 @@ func TestValidateInheritance(t *testing.T) {
 		HolderID:  "c1",
 		Era:       7,
 		Mandate:   rootproto.MandateDefault,
-		Frontiers: succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
+		Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
 	}
 
 	if err := rootstate.ValidateInheritance(current, rootstate.Legacy{}, rootproto.MandateFrontiers{}); err != nil {
 		t.Fatalf("empty seal must not require coverage, got err=%v", err)
 	}
-	if err := rootstate.ValidateInheritance(current, seal, succession.Frontiers(rootstate.State{IDFence: 19, TSOFence: 40}, 60)); !errors.Is(err, rootstate.ErrInheritance) {
+	if err := rootstate.ValidateInheritance(current, seal, eunomia.Frontiers(rootstate.State{IDFence: 19, TSOFence: 40}, 60)); !errors.Is(err, rootstate.ErrInheritance) {
 		t.Fatalf("alloc_id gap must be rejected, got err=%v", err)
 	}
-	if err := rootstate.ValidateInheritance(current, seal, succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 39}, 60)); !errors.Is(err, rootstate.ErrInheritance) {
+	if err := rootstate.ValidateInheritance(current, seal, eunomia.Frontiers(rootstate.State{IDFence: 20, TSOFence: 39}, 60)); !errors.Is(err, rootstate.ErrInheritance) {
 		t.Fatalf("tso gap must be rejected, got err=%v", err)
 	}
-	if err := rootstate.ValidateInheritance(current, seal, succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 59)); !errors.Is(err, rootstate.ErrInheritance) {
+	if err := rootstate.ValidateInheritance(current, seal, eunomia.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 59)); !errors.Is(err, rootstate.ErrInheritance) {
 		t.Fatalf("descriptor gap must be rejected, got err=%v", err)
 	}
-	if err := rootstate.ValidateInheritance(current, seal, succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60)); err != nil {
+	if err := rootstate.ValidateInheritance(current, seal, eunomia.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60)); err != nil {
 		t.Fatalf("exact coverage must be accepted, got err=%v", err)
 	}
-	if err := rootstate.ValidateInheritance(current, seal, succession.Frontiers(rootstate.State{IDFence: 25, TSOFence: 45}, 65)); err != nil {
+	if err := rootstate.ValidateInheritance(current, seal, eunomia.Frontiers(rootstate.State{IDFence: 25, TSOFence: 45}, 65)); err != nil {
 		t.Fatalf("higher coverage must be accepted, got err=%v", err)
 	}
 
-	coverage := rootstate.EvaluateInheritance(current, seal, succession.Frontiers(rootstate.State{IDFence: 25, TSOFence: 45}, 65))
+	coverage := rootstate.EvaluateInheritance(current, seal, eunomia.Frontiers(rootstate.State{IDFence: 25, TSOFence: 45}, 65))
 	if len(coverage.Checks) != 3 {
 		t.Fatalf("expected 3 coverage checks, got %d", len(coverage.Checks))
 	}
@@ -154,7 +154,7 @@ func TestValidateInheritance(t *testing.T) {
 
 	maskedSeal := seal
 	maskedSeal.Mandate = rootproto.MandateAllocID | rootproto.MandateTSO
-	maskedCoverage := rootstate.EvaluateInheritance(current, maskedSeal, succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 1))
+	maskedCoverage := rootstate.EvaluateInheritance(current, maskedSeal, eunomia.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 1))
 	if len(maskedCoverage.Checks) != 2 {
 		t.Fatalf("expected 2 masked checks, got %d", len(maskedCoverage.Checks))
 	}
@@ -174,7 +174,7 @@ func TestValidateTenureClaimLineage(t *testing.T) {
 		HolderID:  "c1",
 		Era:       7,
 		Mandate:   rootproto.MandateDefault,
-		Frontiers: succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
+		Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
 		SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
 	}
 
@@ -199,7 +199,7 @@ func TestDigestOfLegacyIncludesNonMaskedLeaseStartFrontier(t *testing.T) {
 		HolderID:  "c1",
 		Era:       7,
 		Mandate:   rootproto.MandateDefault,
-		Frontiers: succession.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
+		Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
 		SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
 	}
 	withLeaseStart := base
