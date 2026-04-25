@@ -13,6 +13,7 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
+	"google.golang.org/grpc"
 )
 
 type fakePDClient struct {
@@ -101,6 +102,10 @@ func (f *fakePDClient) GetQuotaFence(context.Context, *coordpb.GetQuotaFenceRequ
 
 func (f *fakePDClient) ListQuotaFences(context.Context, *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error) {
 	return &coordpb.ListQuotaFencesResponse{}, nil
+}
+
+func (f *fakePDClient) WatchRootEvents(context.Context, *coordpb.WatchRootEventsRequest, ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
+	return nil, nil
 }
 
 func (f *fakePDClient) AllocID(context.Context, *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error) {

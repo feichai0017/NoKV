@@ -10,11 +10,17 @@ import (
 	pdview "github.com/feichai0017/NoKV/coordinator/view"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+type rootedTailSubscriber interface {
+	SubscribeTail(rootstorage.TailToken) *rootstorage.TailSubscription
+}
 
 // StoreHeartbeat records store-level stats.
 func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbeatRequest) (*coordpb.StoreHeartbeatResponse, error) {
@@ -149,6 +155,64 @@ func (s *Service) ListQuotaFences(ctx context.Context, _ *coordpb.ListQuotaFence
 		out = append(out, quotaFenceInfoToProto(quota))
 	}
 	return &coordpb.ListQuotaFencesResponse{Fences: out}, nil
+}
+
+func (s *Service) WatchRootEvents(req *coordpb.WatchRootEventsRequest, stream coordpb.Coordinator_WatchRootEventsServer) error {
+	if stream == nil {
+		return status.Error(codes.InvalidArgument, "watch root events stream is nil")
+	}
+	if s == nil || s.storage == nil {
+		return status.Error(codes.FailedPrecondition, "root storage is not configured")
+	}
+	subscriber, ok := s.storage.(rootedTailSubscriber)
+	if !ok {
+		return status.Error(codes.FailedPrecondition, "root storage does not support tail subscriptions")
+	}
+	var after rootstorage.TailToken
+	if req != nil {
+		after = metawire.RootTailTokenFromProto(req.GetAfter())
+	}
+	sub := subscriber.SubscribeTail(after)
+	if sub == nil {
+		return status.Error(codes.FailedPrecondition, "root tail subscription is not available")
+	}
+	ctx := stream.Context()
+	for {
+		advance, err := sub.Next(ctx, 30*time.Second)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return status.Error(codes.Canceled, err.Error())
+			}
+			return status.Error(codes.Internal, err.Error())
+		}
+		if !advance.Advanced() {
+			continue
+		}
+		events := rootEventsAfter(advance.Observed.Tail.Records, advance.After.Cursor)
+		resp := &coordpb.WatchRootEventsResponse{
+			Token:             metawire.RootTailTokenToProto(advance.Token),
+			Events:            events,
+			BootstrapRequired: advance.CatchUpAction() == rootstorage.TailCatchUpInstallBootstrap,
+		}
+		if err := stream.Send(resp); err != nil {
+			return err
+		}
+		sub.Acknowledge(advance)
+	}
+}
+
+func rootEventsAfter(records []rootstorage.CommittedEvent, after rootstate.Cursor) []*metapb.RootCommittedEvent {
+	out := make([]*metapb.RootCommittedEvent, 0, len(records))
+	for _, record := range records {
+		if !rootstate.CursorAfter(record.Cursor, after) {
+			continue
+		}
+		out = append(out, &metapb.RootCommittedEvent{
+			Cursor: metawire.RootCursorToProto(record.Cursor),
+			Event:  metawire.RootEventToProto(record.Event),
+		})
+	}
+	return out
 }
 
 func mountInfoToProto(mount rootstate.MountRecord) *coordpb.MountInfo {

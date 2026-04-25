@@ -390,6 +390,51 @@ func TestExecutorUnlinkReservesNegativeQuotaWhenInodeExists(t *testing.T) {
 	require.Equal(t, [][]QuotaChange{{{Mount: "vol", Scope: 7, Bytes: -4096, Inodes: -1}}}, quota.changes)
 }
 
+func TestExecutorLinkCreatesDentryAndIncrementsLinkCount(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "file", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
+	quota := &fakeQuotaResolver{}
+	executor, err := New(runner, WithQuotaResolver(quota))
+	require.NoError(t, err)
+
+	err = executor.Link(context.Background(), fsmeta.LinkRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "file",
+		ToParent:   8,
+		ToName:     "alias",
+	})
+	require.NoError(t, err)
+
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 8, Name: "alias"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.InodeID(22), record.Inode)
+	inode, ok, err := executor.readInode(context.Background(), "vol", 22, 99)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, uint32(2), inode.LinkCount)
+	require.Equal(t, [][]QuotaChange{{{Mount: "vol", Scope: 8, Bytes: 4096, Inodes: 1}}}, quota.changes)
+}
+
+func TestExecutorLinkRejectsDirectory(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentryType(t, runner, "vol", 7, "dir", 22, fsmeta.InodeTypeDirectory)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeDirectory, LinkCount: 1})
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	err = executor.Link(context.Background(), fsmeta.LinkRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "dir",
+		ToParent:   8,
+		ToName:     "alias",
+	})
+	require.ErrorIs(t, err, fsmeta.ErrInvalidRequest)
+	require.Empty(t, runner.mutations)
+}
+
 func TestExecutorCreateTranslatesAlreadyExistsConflict(t *testing.T) {
 	runner := newFakeRunner()
 	runner.mutateErr = fakeKeyConflictError{errors: []*kvrpcpb.KeyError{{
@@ -540,6 +585,7 @@ func TestExecutorReadDirPlusMissingInodeReturnsNotFound(t *testing.T) {
 func TestExecutorUnlinkRemovesDentry(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "file", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
 	executor, err := New(runner)
 	require.NoError(t, err)
 
@@ -557,8 +603,28 @@ func TestExecutorUnlinkRemovesDentry(t *testing.T) {
 	})
 	require.ErrorIs(t, err, fsmeta.ErrNotFound)
 	require.Len(t, runner.mutations, 1)
-	require.Len(t, runner.mutations[0], 1)
+	require.Len(t, runner.mutations[0], 2)
 	require.Equal(t, kvrpcpb.Mutation_Delete, runner.mutations[0][0].GetOp())
+	require.Equal(t, kvrpcpb.Mutation_Delete, runner.mutations[0][1].GetOp())
+	_, ok, err := executor.readInode(context.Background(), "vol", 22, 99)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestExecutorUnlinkDecrementsMultiLinkInode(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "file", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 2})
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	err = executor.Unlink(context.Background(), fsmeta.UnlinkRequest{Mount: "vol", Parent: 7, Name: "file"})
+	require.NoError(t, err)
+
+	inode, ok, err := executor.readInode(context.Background(), "vol", 22, 99)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, uint32(1), inode.LinkCount)
 }
 
 func TestExecutorUnlinkMissingDentry(t *testing.T) {

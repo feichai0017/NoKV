@@ -23,6 +23,7 @@ type Executor interface {
 	SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error)
 	GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error)
 	RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error
+	Link(ctx context.Context, req fsmeta.LinkRequest) error
 	Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
 }
 
@@ -256,6 +257,19 @@ func (s *Service) RenameSubtree(ctx context.Context, req *fsmetapb.RenameSubtree
 		return nil, rpcError(err)
 	}
 	return &fsmetapb.RenameSubtreeResponse{}, nil
+}
+
+func (s *Service) Link(ctx context.Context, req *fsmetapb.LinkRequest) (*fsmetapb.LinkResponse, error) {
+	if err := s.requireExecutor(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "fsmeta link request is required")
+	}
+	if err := s.executor.Link(ctx, linkRequestFromProto(req)); err != nil {
+		return nil, rpcError(err)
+	}
+	return &fsmetapb.LinkResponse{}, nil
 }
 
 func (s *Service) Unlink(ctx context.Context, req *fsmetapb.UnlinkRequest) (*fsmetapb.UnlinkResponse, error) {

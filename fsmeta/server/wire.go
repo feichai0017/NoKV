@@ -89,6 +89,16 @@ func renameSubtreeRequestFromProto(req *fsmetapb.RenameSubtreeRequest) fsmeta.Re
 	}
 }
 
+func linkRequestFromProto(req *fsmetapb.LinkRequest) fsmeta.LinkRequest {
+	return fsmeta.LinkRequest{
+		Mount:      fsmeta.MountID(req.GetMount()),
+		FromParent: fsmeta.InodeID(req.GetFromParent()),
+		FromName:   req.GetFromName(),
+		ToParent:   fsmeta.InodeID(req.GetToParent()),
+		ToName:     req.GetToName(),
+	}
+}
+
 func unlinkRequestFromProto(req *fsmetapb.UnlinkRequest) fsmeta.UnlinkRequest {
 	return fsmeta.UnlinkRequest{
 		Mount:  fsmeta.MountID(req.GetMount()),

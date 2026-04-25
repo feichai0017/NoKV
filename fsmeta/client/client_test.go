@@ -68,6 +68,10 @@ func (e *fakeExecutor) RenameSubtree(context.Context, fsmeta.RenameSubtreeReques
 	return e.err
 }
 
+func (e *fakeExecutor) Link(context.Context, fsmeta.LinkRequest) error {
+	return e.err
+}
+
 func (e *fakeExecutor) Unlink(context.Context, fsmeta.UnlinkRequest) error {
 	return e.err
 }

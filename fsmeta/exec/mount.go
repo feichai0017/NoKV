@@ -62,7 +62,7 @@ func (c *mountCache) ResolveMount(ctx context.Context, mount fsmeta.MountID) (Mo
 
 // markRetired forces the cached view of mount to retired. The monitor calls
 // this when it observes a rooted MountRetired event so admission flips before
-// the next ResolveMount poll.
+// the cached TTL expires.
 func (c *mountCache) markRetired(mount fsmeta.MountID) {
 	if mount == "" {
 		return

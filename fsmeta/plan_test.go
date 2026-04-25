@@ -116,6 +116,36 @@ func TestPlanRenameSubtreeRejectsNoop(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidRequest)
 }
 
+func TestPlanLinkTouchesSourceDestinationAndRejectsNoop(t *testing.T) {
+	plan, err := PlanLink(LinkRequest{
+		Mount:      "vol",
+		FromParent: 2,
+		FromName:   "old",
+		ToParent:   3,
+		ToName:     "new",
+	})
+	require.NoError(t, err)
+
+	from, err := EncodeDentryKey("vol", 2, "old")
+	require.NoError(t, err)
+	to, err := EncodeDentryKey("vol", 3, "new")
+	require.NoError(t, err)
+
+	require.Equal(t, OperationLink, plan.Kind)
+	require.Equal(t, to, plan.PrimaryKey)
+	require.Equal(t, [][]byte{from, to}, plan.ReadKeys)
+	require.Equal(t, [][]byte{to}, plan.MutateKeys)
+
+	_, err = PlanLink(LinkRequest{
+		Mount:      "vol",
+		FromParent: 2,
+		FromName:   "same",
+		ToParent:   2,
+		ToName:     "same",
+	})
+	require.ErrorIs(t, err, ErrInvalidRequest)
+}
+
 func TestPlansCloneKeys(t *testing.T) {
 	plan, err := PlanLookup(LookupRequest{Mount: "vol", Parent: RootInode, Name: "file"})
 	require.NoError(t, err)

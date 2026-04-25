@@ -1,13 +1,11 @@
 package fsmeta
 
 // V0 scope:
-//   - PlanUnlink only touches the dentry. Hardlink ref-count and inode GC are
-//     intentionally out of this contract slice.
 //   - PlanRenameSubtree v0 only moves the subtree root dentry. Descendants refer
 //     to parent inode IDs, so they follow the moved root without key rewrites.
 //     POSIX overwrite and file-type checks belong to the executor that
 //     interprets current values.
-//   - mkdir, link, and setxattr are left for later slices after the base
+//   - mkdir and setxattr are left for later slices after the base
 //     transaction contract is stable.
 
 // OperationKind identifies one metadata operation contract.
@@ -19,6 +17,7 @@ const (
 	OperationReadDir          OperationKind = "readdir"
 	OperationSnapshotSubtree  OperationKind = "snapshot_subtree"
 	OperationRenameSubtree    OperationKind = "rename_subtree"
+	OperationLink             OperationKind = "link"
 	OperationUnlink           OperationKind = "unlink"
 	OperationOpenWriteSession OperationKind = "open_write_session"
 )
@@ -65,6 +64,14 @@ type SnapshotSubtreeRequest struct {
 }
 
 type RenameSubtreeRequest struct {
+	Mount      MountID
+	FromParent InodeID
+	FromName   string
+	ToParent   InodeID
+	ToName     string
+}
+
+type LinkRequest struct {
 	Mount      MountID
 	FromParent InodeID
 	FromName   string
@@ -199,6 +206,27 @@ func PlanRenameSubtree(req RenameSubtreeRequest) (OperationPlan, error) {
 		PrimaryKey: cloneBytes(from),
 		ReadKeys:   cloneKeySet(from, to),
 		MutateKeys: cloneKeySet(from, to),
+	}, nil
+}
+
+func PlanLink(req LinkRequest) (OperationPlan, error) {
+	if req.FromParent == req.ToParent && req.FromName == req.ToName {
+		return OperationPlan{}, ErrInvalidRequest
+	}
+	from, err := EncodeDentryKey(req.Mount, req.FromParent, req.FromName)
+	if err != nil {
+		return OperationPlan{}, err
+	}
+	to, err := EncodeDentryKey(req.Mount, req.ToParent, req.ToName)
+	if err != nil {
+		return OperationPlan{}, err
+	}
+	return OperationPlan{
+		Kind:       OperationLink,
+		Mount:      req.Mount,
+		PrimaryKey: cloneBytes(to),
+		ReadKeys:   cloneKeySet(from, to),
+		MutateKeys: cloneKeySet(to),
 	}, nil
 }
 

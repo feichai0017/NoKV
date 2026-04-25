@@ -83,6 +83,16 @@ func renameSubtreeRequestToProto(req fsmeta.RenameSubtreeRequest) *fsmetapb.Rena
 	}
 }
 
+func linkRequestToProto(req fsmeta.LinkRequest) *fsmetapb.LinkRequest {
+	return &fsmetapb.LinkRequest{
+		Mount:      string(req.Mount),
+		FromParent: uint64(req.FromParent),
+		FromName:   req.FromName,
+		ToParent:   uint64(req.ToParent),
+		ToName:     req.ToName,
+	}
+}
+
 func unlinkRequestToProto(req fsmeta.UnlinkRequest) *fsmetapb.UnlinkRequest {
 	return &fsmetapb.UnlinkRequest{
 		Mount:  string(req.Mount),
