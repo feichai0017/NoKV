@@ -118,6 +118,8 @@ StoreRetired(store_id)
 
 Mount 是 fsmeta 的 namespace 根。Stage 2 不需要完整 POSIX mount，但需要一个 durable mount registry，避免每个 fsmeta caller 自己约定 mount string。
 
+Stage 3.2 已实现这条 registry：mount membership 进入 `meta/root` rooted truth，`nokv-fsmeta` 的写路径通过 coordinator mount view 做 admission，未注册或 retired mount 会被拒绝。
+
 建议 events：
 
 ```text

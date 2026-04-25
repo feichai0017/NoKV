@@ -36,6 +36,8 @@ const (
 	KindHandover
 	KindSnapshotEpochPublished
 	KindSnapshotEpochRetired
+	KindMountRegistered
+	KindMountRetired
 )
 
 // StoreMembership describes one store membership change carried by a root event.
@@ -51,6 +53,15 @@ type SnapshotEpoch struct {
 	RootInode   uint64
 	ReadVersion uint64
 	PublishedAt RootCursor
+}
+
+// Mount records one filesystem metadata mount lifecycle event.
+type Mount struct {
+	MountID       string
+	RootInode     uint64
+	SchemaVersion uint32
+	RegisteredAt  RootCursor
+	RetiredAt     RootCursor
 }
 
 // AllocatorFence raises one rooted allocator floor monotonically.
@@ -150,11 +161,30 @@ type Event struct {
 	Legacy           *Legacy
 	Handover         *Handover
 	SnapshotEpoch    *SnapshotEpoch
+	Mount            *Mount
 	RegionDescriptor *RegionDescriptorRecord
 	RegionRemoval    *RegionRemoval
 	RangeSplit       *RangeSplit
 	RangeMerge       *RangeMerge
 	PeerChange       *PeerChange
+}
+
+func MountRegistered(mountID string, rootInode uint64, schemaVersion uint32) Event {
+	return Event{
+		Kind: KindMountRegistered,
+		Mount: &Mount{
+			MountID:       mountID,
+			RootInode:     rootInode,
+			SchemaVersion: schemaVersion,
+		},
+	}
+}
+
+func MountRetired(mountID string) Event {
+	return Event{
+		Kind:  KindMountRetired,
+		Mount: &Mount{MountID: mountID},
+	}
 }
 
 func StoreJoined(storeID uint64) Event {

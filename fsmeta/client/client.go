@@ -23,7 +23,7 @@ type Client interface {
 	WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) (WatchSubscription, error)
 	SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error)
 	RetireSnapshotSubtree(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error
-	Rename(ctx context.Context, req fsmeta.RenameRequest) error
+	RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error
 	Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
 	Close() error
 }
@@ -151,11 +151,11 @@ func (c *GRPCClient) RetireSnapshotSubtree(ctx context.Context, token fsmeta.Sna
 	return translateRPCError(err)
 }
 
-func (c *GRPCClient) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
+func (c *GRPCClient) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error {
 	if err := c.requireRPC(); err != nil {
 		return err
 	}
-	_, err := c.rpc.Rename(ctx, renameRequestToProto(req))
+	_, err := c.rpc.RenameSubtree(ctx, renameSubtreeRequestToProto(req))
 	return translateRPCError(err)
 }
 

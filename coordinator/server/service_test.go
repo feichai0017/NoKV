@@ -90,6 +90,7 @@ func (f *fakeStorage) AppendRootEvent(_ context.Context, event rootevent.Event) 
 			LastCommitted: rootstate.Cursor{Term: 1, Index: uint64(f.eventCalls)},
 		},
 		Stores:              rootstate.CloneStoreMemberships(f.snapshot.Stores),
+		Mounts:              rootstate.CloneMounts(f.snapshot.Mounts),
 		Descriptors:         rootCloneDescriptorsForTest(f.snapshot.Descriptors),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(f.snapshot.PendingPeerChanges),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(f.snapshot.PendingRangeChanges),

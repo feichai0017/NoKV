@@ -28,18 +28,20 @@ package fsmeta
 import "errors"
 
 var (
-	ErrInvalidMountID   = errors.New("fsmeta: invalid mount id")
-	ErrInvalidInodeID   = errors.New("fsmeta: invalid inode id")
-	ErrInvalidName      = errors.New("fsmeta: invalid name")
-	ErrInvalidSession   = errors.New("fsmeta: invalid session id")
-	ErrInvalidRequest   = errors.New("fsmeta: invalid request")
-	ErrInvalidKey       = errors.New("fsmeta: invalid key")
-	ErrInvalidKeyKind   = errors.New("fsmeta: invalid key kind")
-	ErrInvalidValue     = errors.New("fsmeta: invalid value")
-	ErrInvalidValueKind = errors.New("fsmeta: invalid value kind")
-	ErrInvalidPageSize  = errors.New("fsmeta: invalid page size")
-	ErrExists           = errors.New("fsmeta: entry exists")
-	ErrNotFound         = errors.New("fsmeta: entry not found")
+	ErrInvalidMountID     = errors.New("fsmeta: invalid mount id")
+	ErrInvalidInodeID     = errors.New("fsmeta: invalid inode id")
+	ErrInvalidName        = errors.New("fsmeta: invalid name")
+	ErrInvalidSession     = errors.New("fsmeta: invalid session id")
+	ErrInvalidRequest     = errors.New("fsmeta: invalid request")
+	ErrInvalidKey         = errors.New("fsmeta: invalid key")
+	ErrInvalidKeyKind     = errors.New("fsmeta: invalid key kind")
+	ErrInvalidValue       = errors.New("fsmeta: invalid value")
+	ErrInvalidValueKind   = errors.New("fsmeta: invalid value kind")
+	ErrInvalidPageSize    = errors.New("fsmeta: invalid page size")
+	ErrExists             = errors.New("fsmeta: entry exists")
+	ErrNotFound           = errors.New("fsmeta: entry not found")
+	ErrMountNotRegistered = errors.New("fsmeta: mount is not registered")
+	ErrMountRetired       = errors.New("fsmeta: mount is retired")
 )
 
 // MountID identifies one filesystem namespace hosted inside fsmeta.

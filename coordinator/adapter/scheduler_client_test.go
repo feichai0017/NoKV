@@ -83,6 +83,14 @@ func (f *fakePDClient) ListStores(context.Context, *coordpb.ListStoresRequest) (
 	return &coordpb.ListStoresResponse{}, nil
 }
 
+func (f *fakePDClient) GetMount(context.Context, *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error) {
+	return &coordpb.GetMountResponse{}, nil
+}
+
+func (f *fakePDClient) ListMounts(context.Context, *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error) {
+	return &coordpb.ListMountsResponse{}, nil
+}
+
 func (f *fakePDClient) AllocID(context.Context, *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error) {
 	return &coordpb.AllocIDResponse{}, nil
 }

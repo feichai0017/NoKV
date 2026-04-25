@@ -17,6 +17,9 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 	if snapshot.SnapshotEpochs == nil {
 		snapshot.SnapshotEpochs = make(map[string]SnapshotEpoch)
 	}
+	if snapshot.Mounts == nil {
+		snapshot.Mounts = make(map[string]MountRecord)
+	}
 	if snapshot.Descriptors == nil {
 		snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
 	}
@@ -35,6 +38,10 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 		applySnapshotEpochPublishedToSnapshot(snapshot, cursor, event)
 	case rootevent.KindSnapshotEpochRetired:
 		applySnapshotEpochRetiredToSnapshot(snapshot, event)
+	case rootevent.KindMountRegistered:
+		applyMountRegisteredToSnapshot(snapshot, cursor, event)
+	case rootevent.KindMountRetired:
+		applyMountRetiredToSnapshot(snapshot, cursor, event)
 	case rootevent.KindIDAllocatorFenced:
 		if event.AllocatorFence != nil && event.AllocatorFence.Minimum > snapshot.State.IDFence {
 			snapshot.State.IDFence = event.AllocatorFence.Minimum
@@ -67,6 +74,36 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 		_ = ApplyPeerChangeToSnapshot(snapshot, event)
 	}
 	snapshot.State.LastCommitted = cursor
+}
+
+func applyMountRegisteredToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Event) {
+	if snapshot == nil || event.Mount == nil || event.Mount.MountID == "" || event.Mount.RootInode == 0 {
+		return
+	}
+	current := snapshot.Mounts[event.Mount.MountID]
+	if current.State == MountStateRetired {
+		return
+	}
+	snapshot.Mounts[event.Mount.MountID] = MountRecord{
+		MountID:       event.Mount.MountID,
+		RootInode:     event.Mount.RootInode,
+		SchemaVersion: event.Mount.SchemaVersion,
+		State:         MountStateActive,
+		RegisteredAt:  cursor,
+	}
+}
+
+func applyMountRetiredToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Event) {
+	if snapshot == nil || event.Mount == nil || event.Mount.MountID == "" {
+		return
+	}
+	current := snapshot.Mounts[event.Mount.MountID]
+	if current.MountID == "" {
+		current.MountID = event.Mount.MountID
+	}
+	current.State = MountStateRetired
+	current.RetiredAt = cursor
+	snapshot.Mounts[event.Mount.MountID] = current
 }
 
 func applySnapshotEpochPublishedToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Event) {
