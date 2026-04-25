@@ -513,6 +513,33 @@ func TestExecutorRenameSubtreeMovesDentry(t *testing.T) {
 	require.Equal(t, []subtreePublishCall{{mount: "vol", root: fsmeta.RootInode, frontier: 2}}, publisher.completes)
 }
 
+func TestExecutorRenameSubtreeReportsPostCommitHandoffFailure(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "old", 22)
+	publisher := &fakeSubtreePublisher{err: errors.New("publish failed")}
+	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountRecord{
+		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+	}}
+	executor, err := New(runner, WithMountResolver(resolver), WithSubtreeHandoffPublisher(publisher))
+	require.NoError(t, err)
+
+	err = executor.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "old",
+		ToParent:   8,
+		ToName:     "new",
+	})
+	require.ErrorContains(t, err, "publish failed")
+	require.Len(t, runner.mutations, 1)
+
+	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 7, Name: "old"})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 8, Name: "new"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.InodeID(22), record.Inode)
+}
+
 func TestExecutorRenameSubtreeRejectsMissingSource(t *testing.T) {
 	runner := newFakeRunner()
 	executor, err := New(runner)
