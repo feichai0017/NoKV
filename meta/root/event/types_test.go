@@ -100,18 +100,16 @@ func TestHandoverReattachedEvent(t *testing.T) {
 }
 
 func TestMembershipAndAllocatorConstructors(t *testing.T) {
-	joined := rootevent.StoreJoined(7, "store-7")
-	left := rootevent.StoreLeft(7, "store-7")
+	joined := rootevent.StoreJoined(7)
+	retired := rootevent.StoreRetired(7)
 	idFence := rootevent.IDAllocatorFenced(11)
 	tsoFence := rootevent.TSOAllocatorFenced(29)
 
 	require.Equal(t, rootevent.KindStoreJoined, joined.Kind)
 	require.Equal(t, uint64(7), joined.StoreMembership.StoreID)
-	require.Equal(t, "store-7", joined.StoreMembership.Address)
 
-	require.Equal(t, rootevent.KindStoreLeft, left.Kind)
-	require.Equal(t, uint64(7), left.StoreMembership.StoreID)
-	require.Equal(t, "store-7", left.StoreMembership.Address)
+	require.Equal(t, rootevent.KindStoreRetired, retired.Kind)
+	require.Equal(t, uint64(7), retired.StoreMembership.StoreID)
 
 	require.Equal(t, rootevent.KindIDAllocatorFenced, idFence.Kind)
 	require.Equal(t, uint64(11), idFence.AllocatorFence.Minimum)

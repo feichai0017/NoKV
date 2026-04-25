@@ -396,6 +396,10 @@ func rootHandoverStageFromProto(stage metapb.RootHandoverStage) rootproto.Handov
 }
 
 func RootSnapshotToProto(snapshot rootstate.Snapshot, tailOffset uint64) *metapb.RootCheckpoint {
+	stores := make([]*metapb.RootStore, 0, len(snapshot.Stores))
+	for storeID, membership := range snapshot.Stores {
+		stores = append(stores, RootStoreMembershipToProto(storeID, membership))
+	}
 	descriptors := make([]*metapb.RegionDescriptor, 0, len(snapshot.Descriptors))
 	for _, desc := range snapshot.Descriptors {
 		descriptors = append(descriptors, DescriptorToProto(desc))
@@ -414,6 +418,7 @@ func RootSnapshotToProto(snapshot rootstate.Snapshot, tailOffset uint64) *metapb
 		TailOffset:          tailOffset,
 		PendingPeerChanges:  pending,
 		PendingRangeChanges: pendingRanges,
+		Stores:              stores,
 	}
 }
 
@@ -426,6 +431,16 @@ func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snaps
 		Descriptors:         make(map[uint64]descriptor.Descriptor, len(pbCheckpoint.Descriptors)),
 		PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange, len(pbCheckpoint.PendingPeerChanges)),
 		PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange, len(pbCheckpoint.PendingRangeChanges)),
+	}
+	if len(pbCheckpoint.Stores) > 0 {
+		snapshot.Stores = make(map[uint64]rootstate.StoreMembership, len(pbCheckpoint.Stores))
+	}
+	for _, pbStore := range pbCheckpoint.Stores {
+		storeID, membership := RootStoreMembershipFromProto(pbStore)
+		if storeID == 0 {
+			continue
+		}
+		snapshot.Stores[storeID] = membership
 	}
 	for _, pbDesc := range pbCheckpoint.Descriptors {
 		desc := DescriptorFromProto(pbDesc)
@@ -449,6 +464,52 @@ func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snaps
 		snapshot.PendingRangeChanges[regionID] = change
 	}
 	return snapshot, pbCheckpoint.TailOffset
+}
+
+func RootStoreMembershipToProto(storeID uint64, membership rootstate.StoreMembership) *metapb.RootStore {
+	if membership.StoreID != 0 {
+		storeID = membership.StoreID
+	}
+	return &metapb.RootStore{
+		StoreId:   storeID,
+		State:     rootStoreStateToProto(membership.State),
+		JoinedAt:  RootCursorToProto(membership.JoinedAt),
+		RetiredAt: RootCursorToProto(membership.RetiredAt),
+	}
+}
+
+func RootStoreMembershipFromProto(pbStore *metapb.RootStore) (uint64, rootstate.StoreMembership) {
+	if pbStore == nil || pbStore.GetStoreId() == 0 {
+		return 0, rootstate.StoreMembership{}
+	}
+	return pbStore.GetStoreId(), rootstate.StoreMembership{
+		StoreID:   pbStore.GetStoreId(),
+		State:     rootStoreStateFromProto(pbStore.GetState()),
+		JoinedAt:  RootCursorFromProto(pbStore.GetJoinedAt()),
+		RetiredAt: RootCursorFromProto(pbStore.GetRetiredAt()),
+	}
+}
+
+func rootStoreStateToProto(state rootstate.StoreMembershipState) metapb.RootStoreState {
+	switch state {
+	case rootstate.StoreMembershipActive:
+		return metapb.RootStoreState_ROOT_STORE_STATE_ACTIVE
+	case rootstate.StoreMembershipRetired:
+		return metapb.RootStoreState_ROOT_STORE_STATE_RETIRED
+	default:
+		return metapb.RootStoreState_ROOT_STORE_STATE_UNSPECIFIED
+	}
+}
+
+func rootStoreStateFromProto(state metapb.RootStoreState) rootstate.StoreMembershipState {
+	switch state {
+	case metapb.RootStoreState_ROOT_STORE_STATE_ACTIVE:
+		return rootstate.StoreMembershipActive
+	case metapb.RootStoreState_ROOT_STORE_STATE_RETIRED:
+		return rootstate.StoreMembershipRetired
+	default:
+		return rootstate.StoreMembershipUnknown
+	}
 }
 
 func RootPendingPeerChangeToProto(regionID uint64, change rootstate.PendingPeerChange) *metapb.RootPendingPeerChange {
@@ -557,7 +618,7 @@ func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 	pbEvent := &metapb.RootEvent{Kind: rootEventKindToProto(event.Kind)}
 	switch {
 	case event.StoreMembership != nil:
-		pbEvent.Payload = &metapb.RootEvent_StoreMembership{StoreMembership: &metapb.RootStoreMembership{StoreId: event.StoreMembership.StoreID, Address: event.StoreMembership.Address}}
+		pbEvent.Payload = &metapb.RootEvent_StoreMembership{StoreMembership: &metapb.RootStoreMembership{StoreId: event.StoreMembership.StoreID}}
 	case event.AllocatorFence != nil:
 		pbEvent.Payload = &metapb.RootEvent_AllocatorFence{AllocatorFence: &metapb.RootAllocatorFence{Minimum: event.AllocatorFence.Minimum}}
 	case event.Tenure != nil:
@@ -604,7 +665,7 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 	}
 	event := rootevent.Event{Kind: rootEventKindFromProto(pbEvent.Kind)}
 	if body := pbEvent.GetStoreMembership(); body != nil {
-		event.StoreMembership = &rootevent.StoreMembership{StoreID: body.StoreId, Address: body.Address}
+		event.StoreMembership = &rootevent.StoreMembership{StoreID: body.StoreId}
 	}
 	if body := pbEvent.GetAllocatorFence(); body != nil {
 		event.AllocatorFence = &rootevent.AllocatorFence{Minimum: body.Minimum}
@@ -658,8 +719,8 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 	switch kind {
 	case rootevent.KindStoreJoined:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_STORE_JOINED
-	case rootevent.KindStoreLeft:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_STORE_LEFT
+	case rootevent.KindStoreRetired:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_STORE_RETIRED
 	case rootevent.KindIDAllocatorFenced:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_ID_ALLOCATOR_FENCED
 	case rootevent.KindRegionBootstrap:
@@ -709,8 +770,8 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 	switch kind {
 	case metapb.RootEventKind_ROOT_EVENT_KIND_STORE_JOINED:
 		return rootevent.KindStoreJoined
-	case metapb.RootEventKind_ROOT_EVENT_KIND_STORE_LEFT:
-		return rootevent.KindStoreLeft
+	case metapb.RootEventKind_ROOT_EVENT_KIND_STORE_RETIRED:
+		return rootevent.KindStoreRetired
 	case metapb.RootEventKind_ROOT_EVENT_KIND_ID_ALLOCATOR_FENCED:
 		return rootevent.KindIDAllocatorFenced
 	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_BOOTSTRAP:
