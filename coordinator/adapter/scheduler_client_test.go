@@ -91,6 +91,14 @@ func (f *fakePDClient) ListMounts(context.Context, *coordpb.ListMountsRequest) (
 	return &coordpb.ListMountsResponse{}, nil
 }
 
+func (f *fakePDClient) GetQuotaFence(context.Context, *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error) {
+	return &coordpb.GetQuotaFenceResponse{}, nil
+}
+
+func (f *fakePDClient) ListQuotaFences(context.Context, *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error) {
+	return &coordpb.ListQuotaFencesResponse{}, nil
+}
+
 func (f *fakePDClient) AllocID(context.Context, *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error) {
 	return &coordpb.AllocIDResponse{}, nil
 }

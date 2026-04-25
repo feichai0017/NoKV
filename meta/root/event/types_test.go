@@ -111,6 +111,7 @@ func TestMembershipAndAllocatorConstructors(t *testing.T) {
 	declaredSubtree := rootevent.SubtreeAuthorityDeclared("vol", 1, "vol", 0, 10)
 	startedSubtree := rootevent.SubtreeHandoffStarted("vol", 1, 11)
 	completedSubtree := rootevent.SubtreeHandoffCompleted("vol", 1, 12)
+	quota := rootevent.QuotaFenceUpdated("vol", 1, 4096, 12, 2, 99)
 
 	require.Equal(t, rootevent.KindStoreJoined, joined.Kind)
 	require.Equal(t, uint64(7), joined.StoreMembership.StoreID)
@@ -146,6 +147,12 @@ func TestMembershipAndAllocatorConstructors(t *testing.T) {
 	require.Equal(t, uint64(11), startedSubtree.SubtreeAuthority.Frontier)
 	require.Equal(t, rootevent.KindSubtreeHandoffCompleted, completedSubtree.Kind)
 	require.Equal(t, uint64(12), completedSubtree.SubtreeAuthority.InheritedFrontier)
+	require.Equal(t, rootevent.KindQuotaFenceUpdated, quota.Kind)
+	require.Equal(t, rootevent.QuotaFenceID("vol", 1), quota.QuotaFence.SubjectID)
+	require.Equal(t, uint64(4096), quota.QuotaFence.LimitBytes)
+	require.Equal(t, uint64(12), quota.QuotaFence.LimitInodes)
+	require.Equal(t, uint64(2), quota.QuotaFence.Era)
+	require.Equal(t, uint64(99), quota.QuotaFence.Frontier)
 }
 
 func TestTenureReleasedAndSealed(t *testing.T) {

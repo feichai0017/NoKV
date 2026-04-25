@@ -41,6 +41,7 @@ const (
 	KindSubtreeAuthorityDeclared
 	KindSubtreeHandoffStarted
 	KindSubtreeHandoffCompleted
+	KindQuotaFenceUpdated
 )
 
 // StoreMembership describes one store membership change carried by a root event.
@@ -87,6 +88,19 @@ type SubtreeAuthority struct {
 	DeclaredAt             RootCursor
 	HandoffStartedAt       RootCursor
 	HandoffCompletedAt     RootCursor
+}
+
+// QuotaFence records one rooted quota limit for a mount or subtree. RootInode
+// 0 means mount-wide. Zero limits mean "unlimited" for that dimension.
+type QuotaFence struct {
+	SubjectID   string
+	Mount       string
+	RootInode   uint64
+	LimitBytes  uint64
+	LimitInodes uint64
+	Era         uint64
+	Frontier    uint64
+	UpdatedAt   RootCursor
 }
 
 // AllocatorFence raises one rooted allocator floor monotonically.
@@ -188,6 +202,7 @@ type Event struct {
 	SnapshotEpoch    *SnapshotEpoch
 	Mount            *Mount
 	SubtreeAuthority *SubtreeAuthority
+	QuotaFence       *QuotaFence
 	RegionDescriptor *RegionDescriptorRecord
 	RegionRemoval    *RegionRemoval
 	RangeSplit       *RangeSplit
@@ -244,6 +259,31 @@ func SubtreeHandoffCompleted(mount string, rootInode, inheritedFrontier uint64) 
 			Mount:             mount,
 			RootInode:         rootInode,
 			InheritedFrontier: inheritedFrontier,
+		},
+	}
+}
+
+func QuotaFenceID(mount string, rootInode uint64) string {
+	if mount == "" {
+		return ""
+	}
+	if rootInode == 0 {
+		return mount
+	}
+	return fmt.Sprintf("%s/%d", mount, rootInode)
+}
+
+func QuotaFenceUpdated(mount string, rootInode, limitBytes, limitInodes, era, frontier uint64) Event {
+	return Event{
+		Kind: KindQuotaFenceUpdated,
+		QuotaFence: &QuotaFence{
+			SubjectID:   QuotaFenceID(mount, rootInode),
+			Mount:       mount,
+			RootInode:   rootInode,
+			LimitBytes:  limitBytes,
+			LimitInodes: limitInodes,
+			Era:         era,
+			Frontier:    frontier,
 		},
 	}
 }

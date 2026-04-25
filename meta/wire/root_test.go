@@ -177,6 +177,16 @@ func TestRootSnapshotTailAndAllocatorRoundTrip(t *testing.T) {
 				RegisteredAt:  rootproto.Cursor{Term: 2, Index: 10},
 			},
 		},
+		Quotas: map[string]rootstate.QuotaFence{
+			rootstate.QuotaFenceKey("vol", 0): {
+				SubjectID:   rootstate.QuotaFenceKey("vol", 0),
+				Mount:       "vol",
+				LimitBytes:  4096,
+				LimitInodes: 10,
+				Era:         2,
+				UpdatedAt:   rootproto.Cursor{Term: 2, Index: 11},
+			},
+		},
 		Descriptors: map[uint64]descriptor.Descriptor{
 			desc.RegionID: desc,
 		},
@@ -283,6 +293,7 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.SubtreeAuthorityDeclared("vol", 1, "vol", 0, 10),
 		rootevent.SubtreeHandoffStarted("vol", 1, 11),
 		rootevent.SubtreeHandoffCompleted("vol", 1, 12),
+		rootevent.QuotaFenceUpdated("vol", 1, 4096, 10, 2, 99),
 		rootevent.RegionDescriptorPublished(desc),
 		rootevent.RegionTombstoned(desc.RegionID),
 		rootevent.RegionSplitCancelled(desc.RegionID, []byte("f"), left, right, base),
@@ -311,12 +322,14 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 	require.Nil(t, rootEventSnapshotEpochToProto(nil))
 	require.Nil(t, rootEventMountToProto(nil))
 	require.Nil(t, rootEventSubtreeAuthorityToProto(nil))
+	require.Nil(t, rootEventQuotaFenceToProto(nil))
 	require.Nil(t, rootEventTenureFromProto(nil))
 	require.Nil(t, rootEventLegacyFromProto(nil))
 	require.Nil(t, rootEventHandoverFromProto(nil))
 	require.Nil(t, rootEventSnapshotEpochFromProto(nil))
 	require.Nil(t, rootEventMountFromProto(nil))
 	require.Nil(t, rootEventSubtreeAuthorityFromProto(nil))
+	require.Nil(t, rootEventQuotaFenceFromProto(nil))
 
 	kinds := []rootevent.Kind{
 		rootevent.KindStoreJoined,
@@ -348,6 +361,7 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.KindSubtreeAuthorityDeclared,
 		rootevent.KindSubtreeHandoffStarted,
 		rootevent.KindSubtreeHandoffCompleted,
+		rootevent.KindQuotaFenceUpdated,
 	}
 	for _, kind := range kinds {
 		require.Equal(t, kind, rootEventKindFromProto(rootEventKindToProto(kind)))

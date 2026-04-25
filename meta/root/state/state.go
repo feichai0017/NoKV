@@ -141,11 +141,28 @@ type SubtreeAuthority struct {
 	InheritedFrontier      uint64
 }
 
+// QuotaFence is rooted quota truth for one mount or subtree. RootInode 0 means
+// mount-wide.
+type QuotaFence struct {
+	SubjectID   string
+	Mount       string
+	RootInode   uint64
+	LimitBytes  uint64
+	LimitInodes uint64
+	Era         uint64
+	Frontier    uint64
+	UpdatedAt   Cursor
+}
+
 func SubtreeAuthorityKey(mount string, rootInode uint64) string {
 	if mount == "" || rootInode == 0 {
 		return ""
 	}
 	return fmt.Sprintf("%s/%d", mount, rootInode)
+}
+
+func QuotaFenceKey(mount string, rootInode uint64) string {
+	return rootevent.QuotaFenceID(mount, rootInode)
 }
 
 func SubtreeAuthorityID(mount string, rootInode, era uint64) string {
@@ -203,6 +220,7 @@ type Snapshot struct {
 	SnapshotEpochs      map[string]SnapshotEpoch
 	Mounts              map[string]MountRecord
 	Subtrees            map[string]SubtreeAuthority
+	Quotas              map[string]QuotaFence
 	Descriptors         map[uint64]descriptor.Descriptor
 	PendingPeerChanges  map[uint64]PendingPeerChange
 	PendingRangeChanges map[uint64]PendingRangeChange
@@ -222,6 +240,7 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 		SnapshotEpochs:      CloneSnapshotEpochs(snapshot.SnapshotEpochs),
 		Mounts:              CloneMounts(snapshot.Mounts),
 		Subtrees:            CloneSubtreeAuthorities(snapshot.Subtrees),
+		Quotas:              CloneQuotaFences(snapshot.Quotas),
 		Descriptors:         CloneDescriptors(snapshot.Descriptors),
 		PendingPeerChanges:  ClonePendingPeerChanges(snapshot.PendingPeerChanges),
 		PendingRangeChanges: ClonePendingRangeChanges(snapshot.PendingRangeChanges),
@@ -246,6 +265,18 @@ func CloneSubtreeAuthorities(in map[string]SubtreeAuthority) map[string]SubtreeA
 		return make(map[string]SubtreeAuthority)
 	}
 	out := make(map[string]SubtreeAuthority, len(in))
+	maps.Copy(out, in)
+	return out
+}
+
+func CloneQuotaFences(in map[string]QuotaFence) map[string]QuotaFence {
+	if in == nil {
+		return nil
+	}
+	if len(in) == 0 {
+		return make(map[string]QuotaFence)
+	}
+	out := make(map[string]QuotaFence, len(in))
 	maps.Copy(out, in)
 	return out
 }
@@ -366,7 +397,8 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		rootevent.KindMountRetired,
 		rootevent.KindSubtreeAuthorityDeclared,
 		rootevent.KindSubtreeHandoffStarted,
-		rootevent.KindSubtreeHandoffCompleted:
+		rootevent.KindSubtreeHandoffCompleted,
+		rootevent.KindQuotaFenceUpdated:
 		// Filesystem namespace authority events advance the root cursor but do
 		// not mutate cluster topology or store membership epochs.
 	case rootevent.KindRegionBootstrap,

@@ -23,6 +23,9 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 	if snapshot.Subtrees == nil {
 		snapshot.Subtrees = make(map[string]SubtreeAuthority)
 	}
+	if snapshot.Quotas == nil {
+		snapshot.Quotas = make(map[string]QuotaFence)
+	}
 	if snapshot.Descriptors == nil {
 		snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
 	}
@@ -51,6 +54,8 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 		applySubtreeHandoffStartedToSnapshot(snapshot, cursor, event)
 	case rootevent.KindSubtreeHandoffCompleted:
 		applySubtreeHandoffCompletedToSnapshot(snapshot, cursor, event)
+	case rootevent.KindQuotaFenceUpdated:
+		applyQuotaFenceUpdatedToSnapshot(snapshot, cursor, event)
 	case rootevent.KindIDAllocatorFenced:
 		if event.AllocatorFence != nil && event.AllocatorFence.Minimum > snapshot.State.IDFence {
 			snapshot.State.IDFence = event.AllocatorFence.Minimum
@@ -83,6 +88,31 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 		_ = ApplyPeerChangeToSnapshot(snapshot, event)
 	}
 	snapshot.State.LastCommitted = cursor
+}
+
+func applyQuotaFenceUpdatedToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Event) {
+	if snapshot == nil || event.QuotaFence == nil {
+		return
+	}
+	payload := event.QuotaFence
+	key := QuotaFenceKey(payload.Mount, payload.RootInode)
+	if key == "" {
+		return
+	}
+	current := snapshot.Quotas[key]
+	if current.SubjectID != "" && payload.Era <= current.Era {
+		return
+	}
+	snapshot.Quotas[key] = QuotaFence{
+		SubjectID:   key,
+		Mount:       payload.Mount,
+		RootInode:   payload.RootInode,
+		LimitBytes:  payload.LimitBytes,
+		LimitInodes: payload.LimitInodes,
+		Era:         payload.Era,
+		Frontier:    payload.Frontier,
+		UpdatedAt:   cursor,
+	}
 }
 
 func applySubtreeAuthorityDeclaredToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Event) {

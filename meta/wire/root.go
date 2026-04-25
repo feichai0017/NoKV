@@ -411,6 +411,42 @@ func rootEventSubtreeAuthorityFromProto(subtree *metapb.RootSubtreeAuthority) *r
 	}
 }
 
+func rootEventQuotaFenceToProto(fence *rootevent.QuotaFence) *metapb.RootQuotaFence {
+	if fence == nil {
+		return nil
+	}
+	return &metapb.RootQuotaFence{
+		SubjectId:   fence.SubjectID,
+		Mount:       fence.Mount,
+		SubtreeRoot: fence.RootInode,
+		LimitBytes:  fence.LimitBytes,
+		LimitInodes: fence.LimitInodes,
+		Era:         fence.Era,
+		Frontier:    fence.Frontier,
+		UpdatedAt:   RootCursorToProto(fence.UpdatedAt),
+	}
+}
+
+func rootEventQuotaFenceFromProto(fence *metapb.RootQuotaFence) *rootevent.QuotaFence {
+	if fence == nil {
+		return nil
+	}
+	out := &rootevent.QuotaFence{
+		SubjectID:   fence.GetSubjectId(),
+		Mount:       fence.GetMount(),
+		RootInode:   fence.GetSubtreeRoot(),
+		LimitBytes:  fence.GetLimitBytes(),
+		LimitInodes: fence.GetLimitInodes(),
+		Era:         fence.GetEra(),
+		Frontier:    fence.GetFrontier(),
+		UpdatedAt:   RootCursorFromProto(fence.GetUpdatedAt()),
+	}
+	if out.SubjectID == "" {
+		out.SubjectID = rootevent.QuotaFenceID(out.Mount, out.RootInode)
+	}
+	return out
+}
+
 func rootHandoverStageToProto(stage rootproto.HandoverStage) metapb.RootHandoverStage {
 	switch stage {
 	case rootproto.HandoverStageUnspecified:
@@ -510,6 +546,10 @@ func RootSnapshotToProto(snapshot rootstate.Snapshot, tailOffset uint64) *metapb
 	for _, subtree := range snapshot.Subtrees {
 		subtrees = append(subtrees, RootSubtreeAuthorityToProto(subtree))
 	}
+	quotas := make([]*metapb.RootQuotaFence, 0, len(snapshot.Quotas))
+	for _, quota := range snapshot.Quotas {
+		quotas = append(quotas, RootQuotaFenceToProto(quota))
+	}
 	descriptors := make([]*metapb.RegionDescriptor, 0, len(snapshot.Descriptors))
 	for _, desc := range snapshot.Descriptors {
 		descriptors = append(descriptors, DescriptorToProto(desc))
@@ -532,6 +572,7 @@ func RootSnapshotToProto(snapshot rootstate.Snapshot, tailOffset uint64) *metapb
 		SnapshotEpochs:      snapshotEpochs,
 		Mounts:              mounts,
 		Subtrees:            subtrees,
+		Quotas:              quotas,
 	}
 }
 
@@ -584,6 +625,16 @@ func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snaps
 			continue
 		}
 		snapshot.Subtrees[subtree.SubtreeID] = subtree
+	}
+	if len(pbCheckpoint.Quotas) > 0 {
+		snapshot.Quotas = make(map[string]rootstate.QuotaFence, len(pbCheckpoint.Quotas))
+	}
+	for _, pbQuota := range pbCheckpoint.Quotas {
+		quota := RootQuotaFenceFromProto(pbQuota)
+		if quota.SubjectID == "" {
+			continue
+		}
+		snapshot.Quotas[quota.SubjectID] = quota
 	}
 	for _, pbDesc := range pbCheckpoint.Descriptors {
 		desc := DescriptorFromProto(pbDesc)
@@ -667,6 +718,39 @@ func RootSubtreeAuthorityFromProto(pbSubtree *metapb.RootSubtreeAuthority) roots
 		subtree.SubtreeID = rootstate.SubtreeAuthorityKey(subtree.Mount, subtree.RootInode)
 	}
 	return subtree
+}
+
+func RootQuotaFenceToProto(fence rootstate.QuotaFence) *metapb.RootQuotaFence {
+	return &metapb.RootQuotaFence{
+		SubjectId:   fence.SubjectID,
+		Mount:       fence.Mount,
+		SubtreeRoot: fence.RootInode,
+		LimitBytes:  fence.LimitBytes,
+		LimitInodes: fence.LimitInodes,
+		Era:         fence.Era,
+		Frontier:    fence.Frontier,
+		UpdatedAt:   RootCursorToProto(fence.UpdatedAt),
+	}
+}
+
+func RootQuotaFenceFromProto(pbFence *metapb.RootQuotaFence) rootstate.QuotaFence {
+	if pbFence == nil {
+		return rootstate.QuotaFence{}
+	}
+	fence := rootstate.QuotaFence{
+		SubjectID:   pbFence.GetSubjectId(),
+		Mount:       pbFence.GetMount(),
+		RootInode:   pbFence.GetSubtreeRoot(),
+		LimitBytes:  pbFence.GetLimitBytes(),
+		LimitInodes: pbFence.GetLimitInodes(),
+		Era:         pbFence.GetEra(),
+		Frontier:    pbFence.GetFrontier(),
+		UpdatedAt:   RootCursorFromProto(pbFence.GetUpdatedAt()),
+	}
+	if fence.SubjectID == "" {
+		fence.SubjectID = rootstate.QuotaFenceKey(fence.Mount, fence.RootInode)
+	}
+	return fence
 }
 
 func RootMountFromProto(pbMount *metapb.RootMount) rootstate.MountRecord {
@@ -873,6 +957,8 @@ func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 		pbEvent.Payload = &metapb.RootEvent_Mount{Mount: rootEventMountToProto(event.Mount)}
 	case event.SubtreeAuthority != nil:
 		pbEvent.Payload = &metapb.RootEvent_SubtreeAuthority{SubtreeAuthority: rootEventSubtreeAuthorityToProto(event.SubtreeAuthority)}
+	case event.QuotaFence != nil:
+		pbEvent.Payload = &metapb.RootEvent_QuotaFence{QuotaFence: rootEventQuotaFenceToProto(event.QuotaFence)}
 	case event.RegionDescriptor != nil:
 		pbEvent.Payload = &metapb.RootEvent_RegionDescriptor{RegionDescriptor: &metapb.RootRegionDescriptor{Descriptor_: DescriptorToProto(event.RegionDescriptor.Descriptor)}}
 	case event.RegionRemoval != nil:
@@ -933,6 +1019,9 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 	}
 	if body := pbEvent.GetSubtreeAuthority(); body != nil {
 		event.SubtreeAuthority = rootEventSubtreeAuthorityFromProto(body)
+	}
+	if body := pbEvent.GetQuotaFence(); body != nil {
+		event.QuotaFence = rootEventQuotaFenceFromProto(body)
 	}
 	if body := pbEvent.GetRegionDescriptor(); body != nil {
 		event.RegionDescriptor = &rootevent.RegionDescriptorRecord{Descriptor: DescriptorFromProto(body.GetDescriptor_())}
@@ -1030,6 +1119,8 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_SUBTREE_HANDOFF_STARTED
 	case rootevent.KindSubtreeHandoffCompleted:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED
+	case rootevent.KindQuotaFenceUpdated:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_QUOTA_FENCE_UPDATED
 	default:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_UNSPECIFIED
 	}
@@ -1095,6 +1186,8 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindSubtreeHandoffStarted
 	case metapb.RootEventKind_ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED:
 		return rootevent.KindSubtreeHandoffCompleted
+	case metapb.RootEventKind_ROOT_EVENT_KIND_QUOTA_FENCE_UPDATED:
+		return rootevent.KindQuotaFenceUpdated
 	default:
 		return rootevent.KindUnknown
 	}
