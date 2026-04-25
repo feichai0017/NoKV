@@ -5,9 +5,9 @@
 | Mode | Description | Key flags |
 | --- | --- | --- |
 | Embedded (`embedded`) | Opens a local `*NoKV.DB` work directory. Commands (`SET`, `SET NX/XX`, `EX/PX/EXAT/PXAT`, `MSET`, `INCR/DECR`, `DEL`, `MGET`, `EXISTS`, …) run through regular DB APIs (`Get/Set/SetWithTTL/Del`) with backend-side synchronization for read-modify-write operations. | `--workdir <dir>` |
-| Raft (`raft`) | Routes requests through `raftstore/client` and a NoKV cluster. Writes execute via TwoPhaseCommit; TTL is persisted directly in entry `expires_at` metadata (same write path as value updates). Routing and TSO allocation are provided by Coordinator over gRPC (Coordinator is runtime route source; config regions are bootstrap metadata). | `--raft-config <file>`<br>`--coordinator-addr host:port` (optional override; defaults to `config.coordinator`) |
+| Raft (`raft`) | Routes requests through `raftstore/client` and a NoKV cluster. Writes execute via TwoPhaseCommit; TTL is persisted directly in entry `expires_at` metadata (same write path as value updates). Routing, store discovery, and TSO allocation are provided by Coordinator over gRPC. | `--coordinator-addr host:port` |
 
-When both CLI and config provide the same setting, CLI wins.
+`--raft-config` remains available as a development shortcut for resolving the Coordinator address from `config.coordinator`; it is not used as the runtime store-address directory.
 
 ## Usage examples
 
@@ -36,7 +36,7 @@ Validate with `redis-cli -p 6380 ping`. Metrics are exposed at `http://127.0.0.1
    ```bash
    go run ./cmd/nokv-redis \
      --addr 127.0.0.1:6380 \
-     --raft-config raft_config.example.json
+     --coordinator-addr 127.0.0.1:2379
    ```
 
 ## Supported commands

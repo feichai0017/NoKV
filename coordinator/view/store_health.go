@@ -9,6 +9,8 @@ import (
 // StoreStats captures store-level heartbeat data tracked by Coordinator views.
 type StoreStats struct {
 	StoreID           uint64    `json:"store_id"`
+	ClientAddr        string    `json:"client_addr,omitempty"`
+	RaftAddr          string    `json:"raft_addr,omitempty"`
 	RegionNum         uint64    `json:"region_num"`
 	LeaderNum         uint64    `json:"leader_num"`
 	Capacity          uint64    `json:"capacity"`
