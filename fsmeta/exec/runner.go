@@ -293,6 +293,23 @@ func (e *Executor) reserveReadVersion(ctx context.Context) (uint64, error) {
 	return e.runner.ReserveTimestamp(ctx, 1)
 }
 
+// reserveTxnVersions pre-allocates both start_ts and commit_ts in a single TSO
+// hop. In strict Percolator the commit_ts must be obtained AFTER prewrite to
+// guarantee snapshot isolation; here we rely on two server-side safety nets to
+// make pre-allocation safe in practice:
+//
+//  1. When a concurrent reader at start_ts > our commit_ts encounters our
+//     prewrite lock, it pushes lock.MinCommitTs = reader_start_ts + 1 via
+//     CheckTxnStatus (see percolator/txn.go: CallerStartTs handling).
+//  2. commitKey rejects the commit with keyErrorCommitTsExpired when
+//     lock.MinCommitTs > commitVersion (see percolator/txn.go:373-375).
+//
+// Together these force a retry-with-fresh-ts under contention — incorrect
+// pre-allocation is detected at commit time, never silently violated. The
+// optimization saves one TSO RPC per fsmeta operation under the common
+// contention-free path. A follow-up will translate keyErrorCommitTsExpired
+// into a transparent retry inside Executor; until then it surfaces as a
+// Percolator commit error and the fsmeta caller must retry the operation.
 func (e *Executor) reserveTxnVersions(ctx context.Context) (uint64, uint64, error) {
 	startVersion, err := e.runner.ReserveTimestamp(ctx, 2)
 	if err != nil {

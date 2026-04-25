@@ -85,6 +85,13 @@ func (s *Service) ListStores(ctx context.Context, _ *coordpb.ListStoresRequest) 
 
 func (s *Service) storeInfoToProto(info catalog.StoreInfo) *coordpb.StoreInfo {
 	stats := info.Stats
+	// Zero-time guard: avoid uint64 wrap when stats.UpdatedAt is the zero
+	// time (no heartbeat received yet). PR #153 fix carried over to the
+	// Stage 2 catalog.StoreInfo signature.
+	var lastHeartbeat uint64
+	if !stats.UpdatedAt.IsZero() {
+		lastHeartbeat = uint64(stats.UpdatedAt.UnixNano())
+	}
 	return &coordpb.StoreInfo{
 		StoreId:               stats.StoreID,
 		ClientAddr:            stats.ClientAddr,
@@ -95,7 +102,7 @@ func (s *Service) storeInfoToProto(info catalog.StoreInfo) *coordpb.StoreInfo {
 		Capacity:              stats.Capacity,
 		Available:             stats.Available,
 		DroppedOperations:     stats.DroppedOperations,
-		LastHeartbeatUnixNano: uint64(stats.UpdatedAt.UnixNano()),
+		LastHeartbeatUnixNano: lastHeartbeat,
 	}
 }
 
@@ -113,8 +120,11 @@ func (s *Service) storeState(info catalog.StoreInfo) coordpb.StoreState {
 		if s.now != nil {
 			now = s.now()
 		}
-		if s.storeHeartbeatTTL > 0 {
-			ttl = s.storeHeartbeatTTL
+		// storeHeartbeatTTL is read via atomic load to avoid a data race with
+		// ConfigureStoreHeartbeatTTL writers; reads here happen on the RPC
+		// path concurrently with reconfiguration.
+		if v := time.Duration(s.storeHeartbeatTTL.Load()); v > 0 {
+			ttl = v
 		}
 	}
 	if ttl > 0 && stats.UpdatedAt.Add(ttl).Before(now) {
