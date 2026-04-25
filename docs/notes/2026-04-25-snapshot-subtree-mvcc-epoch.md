@@ -2,7 +2,7 @@
 
 ## 结论
 
-`SnapshotSubtree` 是 fsmeta Stage 2.3 的最后一块原生 primitive。它不复制目录树，也不把 dentry / inode 写入 `meta/root`。v0 的语义很窄：
+`SnapshotSubtree` 是 fsmeta 的原生 snapshot primitive。它不复制目录树，也不把 dentry / inode 写入 `meta/root`。当前语义很窄：
 
 1. fsmeta 从 coordinator TSO 取得一个 `read_version`。
 2. fsmeta 把 `(mount, root_inode, read_version)` 作为 `SnapshotSubtree` token 返回给调用方。
@@ -74,7 +74,7 @@ SnapshotEpochPublished{
 
 ## Evidence
 
-Stage 2.3 的最小测试必须覆盖：
+最小测试必须覆盖：
 
 1. 创建 `a`。
 2. 调用 `SnapshotSubtree(root)` 得到 `read_version`。

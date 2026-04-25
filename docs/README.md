@@ -3,10 +3,10 @@
 <div align="center">
   <img src="assets/logo.svg" width="160" alt="NoKV" />
 
-  <p><strong>An open-source namespace metadata substrate for distributed filesystems and object storage — with formally verified authority handoff.</strong></p>
+  <p><strong>An open-source namespace metadata substrate for distributed filesystems, object storage, and AI dataset metadata.</strong></p>
 
   <p>
-    <em>Native fsmeta primitives · Eunomia handoff protocol (TLA+ verified) · Own LSM · Own Raft · Own MVCC · Own control plane</em>
+    <em>Native fsmeta primitives · Own LSM · Own Raft · Own MVCC · Own control plane</em>
   </p>
 
   <p>
@@ -25,9 +25,9 @@
   </p>
 </div>
 
-NoKV is the open-source counterpart of the **"stateless schema layer + transactional KV"** pattern that powers Meta Tectonic (over ZippyDB), Google Colossus (over Bigtable), and DeepSeek 3FS (over FoundationDB). The headline service is **`fsmeta`**, a namespace metadata API for distributed filesystems / object storage / AI dataset metadata; the headline protocol is **`Eunomia`**, a TLA+-verified service-level correctness class for authority handoff continuation legality.
+NoKV is the open-source counterpart of the **"stateless schema layer + transactional KV"** pattern that powers Meta Tectonic (over ZippyDB), Google Colossus (over Bigtable), and DeepSeek 3FS (over FoundationDB). The headline service is **`fsmeta`**, a namespace metadata API for distributed filesystems / object storage / AI dataset metadata.
 
-The interesting part isn't the feature list. The interesting part is that **layer separation is enforced in code**: Layer 1 (`fsmeta`) doesn't import the raftstore client; Layer 2 (`meta/root` + `coordinator` + `raftstore` + `percolator`) doesn't know about fsmeta concepts; Layer 3 (`engine`) doesn't know there's a namespace.
+The interesting part isn't the feature list. The interesting part is that **layer separation is enforced in code**: the fsmeta executor consumes a narrow `TxnRunner`; the default `OpenWithRaftstore` adapter owns raftstore wiring; `meta/root` keeps only lifecycle / authority truth; the storage engine never learns that a namespace exists.
 
 > This site is the **technical docs hub**. For the project landing page, headline benchmarks, and the `Why NoKV vs X?` matrix, see the [root README](../README.md).
 
@@ -38,11 +38,10 @@ The interesting part isn't the feature list. The interesting part is that **laye
 |  | DFS frontend | Object storage namespace | AI dataset metadata |
 |---|---|---|---|
 | **Consumer shape** | FUSE / NFS / SMB driver | S3-compatible HTTP gateway | training pipeline / scheduler |
-| **fsmeta primitives used** | Mount, Create, ReadDirPlus, RenameSubtree, Unlink, Link, WatchSubtree | Mount = bucket; Create = PUT-IfNotExist; LIST = ReadDirPlus; atomic prefix rename = RenameSubtree; bucket events = WatchSubtree; bucket version = SnapshotSubtree | Mount = dataset; SnapshotSubtree = dataset version; WatchSubtree = checkpoint storm notification; ReadDirPlus = batch metadata fetch |
-| **Eunomia coverage** | Subtree authority handoff during rename / migration | Bucket ownership transfer | Dataset version handoff |
+| **fsmeta primitives used** | `ReadDirPlus`, `WatchSubtree`, `SnapshotSubtree`, `RenameSubtree` | `ReadDirPlus` for LIST, `WatchSubtree` for bucket events, `SnapshotSubtree` for versions, `RenameSubtree` for prefix moves | `SnapshotSubtree` for dataset versions, `WatchSubtree` for checkpoint notification, `ReadDirPlus` for batch metadata fetch |
 | **Comparable industrial pattern** | Tectonic / Colossus / 3FS / HopsFS | Tectonic / Colossus over object layer | Mooncake / Quiver / 3FS dataset layer |
 
-All three consume the **same** rooted truth in `meta/root`, the **same** native primitives in `fsmeta`, and the **same** Eunomia handoff protocol — schema is not specialized to any single consumer.
+All three consume the **same** rooted truth in `meta/root` and the **same** native primitives in `fsmeta` — schema is not specialized to any single consumer.
 
 Deep dive: [fsmeta positioning](notes/2026-04-24-fsmeta-positioning.md) · [namespace authority events umbrella](notes/2026-04-25-namespace-authority-events-umbrella.md)
 
@@ -56,10 +55,7 @@ Start here:
 2. **[architecture.md](architecture.md)** — three-layer architecture. Where each module lives, what each layer is allowed to know.
 3. **[control_and_execution_protocols.md](control_and_execution_protocols.md)** — the contract between control plane (`coordinator/`), execution plane (`raftstore/`), and rooted truth (`meta/root/`).
 
-Plus, if you want to understand the verified protocol:
-
-4. **[notes/2026-04-25-namespace-authority-events-umbrella.md](notes/2026-04-25-namespace-authority-events-umbrella.md)** — what counts as rooted truth vs runtime view, and why
-5. Eunomia paper drafts are kept local-only and are intentionally excluded from Git.
+For the authority schema behind those primitives, read **[notes/2026-04-25-namespace-authority-events-umbrella.md](notes/2026-04-25-namespace-authority-events-umbrella.md)**.
 
 ---
 
@@ -70,22 +66,17 @@ Plus, if you want to understand the verified protocol:
 | Topic | Doc |
 |---|---|
 | Complete reference (primitives + lifecycle + deployment) | [fsmeta.md](fsmeta.md) |
-| Positioning v4 (DFS / OSS / AI three-audience) | [notes/2026-04-24-fsmeta-positioning.md](notes/2026-04-24-fsmeta-positioning.md) |
+| Positioning v5 (DFS / OSS / AI three-audience) | [notes/2026-04-24-fsmeta-positioning.md](notes/2026-04-24-fsmeta-positioning.md) |
 | Namespace authority events umbrella (Mount / SubtreeAuthority / SnapshotEpoch / QuotaFence schema) | [notes/2026-04-25-namespace-authority-events-umbrella.md](notes/2026-04-25-namespace-authority-events-umbrella.md) |
 | Snapshot subtree MVCC epoch | [notes/2026-04-25-snapshot-subtree-mvcc-epoch.md](notes/2026-04-25-snapshot-subtree-mvcc-epoch.md) |
-| Benchmark results (rolling: Stage 1 native vs generic-KV, Stage 2.2 watch latency) | [notes/2026-04-25-fsmeta-stage1-benchmark-results.md](notes/2026-04-25-fsmeta-stage1-benchmark-results.md) · [notes/2026-04-25-fsmeta-stage2-watch-results.md](notes/2026-04-25-fsmeta-stage2-watch-results.md) |
+| Benchmark results | [fsmeta.md](fsmeta.md#9-benchmarks) · [`benchmark/fsmeta/results/`](../benchmark/fsmeta/results/) |
 
-### 🔬 Eunomia protocol (verified authority handoff) — the intellectual core
+### 🔬 Correctness models
 
 | Topic | Location |
 |---|---|
-| Formal specifications (TLA+ + Apalache) | [`spec/`](../spec) · [spec/README.md](../spec/README.md) |
-| `Eunomia.tla` positive model + 4 contrast specs | [`spec/Eunomia.tla`](../spec/Eunomia.tla) · [`spec/LeaseOnly.tla`](../spec/LeaseOnly.tla) · [`spec/TokenOnly.tla`](../spec/TokenOnly.tla) · [`spec/ChubbyFencedLease.tla`](../spec/ChubbyFencedLease.tla) · [`spec/LeaseStartOnly.tla`](../spec/LeaseStartOnly.tla) |
-| `SubtreeAuthority.tla` — Eunomia projected onto `RenameSubtree` | [`spec/SubtreeAuthority.tla`](../spec/SubtreeAuthority.tla) |
-| `MountLifecycle.tla` — mount as monotonic Eunomia instance | [`spec/MountLifecycle.tla`](../spec/MountLifecycle.tla) |
-| Subtree contrast family (`SubtreeWithoutSeal`, `SubtreeWithoutFrontierCoverage`) | [`spec/`](../spec) |
-| TLC / Apalache artifacts (sanitized, checked in) | [`spec/artifacts/`](../spec/artifacts/) |
-| **eunomia-audit** read-only audit tool | [eunomia-audit.md](eunomia-audit.md) |
+| TLA+ and Apalache models for control-plane and metadata transition safety | [`spec/`](../spec) · [spec/README.md](../spec/README.md) |
+| Checked artifacts | [`spec/artifacts/`](../spec/artifacts/) |
 
 ### 🏛️ Distributed runtime — the layer below fsmeta
 
@@ -94,8 +85,7 @@ Plus, if you want to understand the verified protocol:
 | **Rooted truth kernel** (`meta/root`) | [rooted_truth.md](rooted_truth.md) |
 | Coordinator (route / TSO / heartbeats / WatchRootEvents stream) | [coordinator.md](coordinator.md) |
 | Coordinator ↔ meta/root deployment separation | [notes/2026-04-12-coordinator-meta-separation.md](notes/2026-04-12-coordinator-meta-separation.md) |
-| Coordinator-driven store registry | [notes/2026-04-25-coordinator-store-registry.md](notes/2026-04-25-coordinator-store-registry.md) |
-| Store membership: rooted truth vs runtime view | [notes/2026-04-25-store-membership-rooted-vs-runtime-view.md](notes/2026-04-25-store-membership-rooted-vs-runtime-view.md) |
+| Coordinator-driven store registry and rooted membership | [coordinator.md](coordinator.md) · [rooted_truth.md](rooted_truth.md) |
 | Raftstore overview (store / peer / admin) | [raftstore.md](raftstore.md) |
 | Control-plane ↔ execution-plane contract | [control_and_execution_protocols.md](control_and_execution_protocols.md) |
 | Standalone → distributed migration | [migration.md](migration.md) |
@@ -126,10 +116,9 @@ The single-node substrate that everything sits on. Independently usable as an em
 
 | Topic | Doc |
 |---|---|
-| **CLI reference** (`nokv` — stats / manifest / regions / mount / quota / eunomia-audit / migrate) | [cli.md](cli.md) |
+| **CLI reference** (`nokv` — stats / manifest / regions / mount / quota / migrate) | [cli.md](cli.md) |
 | **`nokv-fsmeta`** standalone gRPC gateway | [fsmeta.md](fsmeta.md) |
 | **`nokv-redis`** secondary Redis-compatible gateway (KV layer only, does not consume fsmeta) | [nokv-redis.md](nokv-redis.md) |
-| **`eunomia-audit`** offline audit tool against meta-root | [eunomia-audit.md](eunomia-audit.md) |
 | Configuration (one JSON file shared by all binaries) | [config.md](config.md) |
 | Cluster demo & dashboard | [demo.md](demo.md) |
 | Scripts layout | [scripts.md](scripts.md) |
@@ -150,9 +139,8 @@ All notes under [`notes/`](notes/) are dated decision records — they explain t
 - [SST-based snapshot install](notes/2026-03-31-sst-snapshot-install.md)
 - [Delos-lite rooted-truth roadmap](notes/2026-04-03-delos-lite-metadata-root-roadmap.md)
 - [Range filter — from GRF, but not quite](notes/2026-04-05-range-filter-from-grf.md)
-- [fsmeta positioning v4 (DFS + OSS + AI dataset)](notes/2026-04-24-fsmeta-positioning.md)
+- [fsmeta positioning v5 (DFS + OSS + AI dataset)](notes/2026-04-24-fsmeta-positioning.md)
 - [Namespace authority events umbrella](notes/2026-04-25-namespace-authority-events-umbrella.md)
-- [WatchSubtree rooted change feed](notes/2026-04-25-watchsubtree-rooted-changefeed.md)
 - [Snapshot subtree MVCC epoch](notes/2026-04-25-snapshot-subtree-mvcc-epoch.md)
 
 ---
@@ -164,9 +152,9 @@ All notes under [`notes/`](notes/) are dated decision records — they explain t
 </p>
 
 ```
-Layer 1  fsmeta            ← namespace primitives (Create / ReadDirPlus / WatchSubtree / RenameSubtree / SnapshotSubtree / Link / Unlink with GC)
+Layer 1  fsmeta            ← namespace primitives (Create / ReadDirPlus / WatchSubtree / RenameSubtree / SnapshotSubtree / Link / Unlink with link-count GC)
    │
-Layer 2  meta/root         ← rooted authority truth (Mount / SubtreeAuthority / SnapshotEpoch / QuotaFence; Eunomia Tenure / Legacy / Handover)
+Layer 2  meta/root         ← rooted authority truth (Mount / SubtreeAuthority / SnapshotEpoch / QuotaFence)
          coordinator       ← routing, TSO, store discovery, root-event publish + WatchRootEvents stream
          raftstore         ← per-region Raft + apply observer
          percolator        ← 2PC + MVCC + AssertionNotExist + commit-ts retry
@@ -174,12 +162,12 @@ Layer 2  meta/root         ← rooted authority truth (Mount / SubtreeAuthority 
 Layer 3  engine            ← LSM + ART memtable + WAL + value log (with per-CF/prefix value separation policy: fsm\x00 → AlwaysInline)
 ```
 
-**Four invariants enforced in code:**
+**Four boundaries enforced in code:**
 
-1. **Single source of truth.** All authority lifecycle (mount, subtree, snapshot, quota) lives in `meta/root` as typed rooted events. No parallel truths.
-2. **Layer separation enforced.** Layer 1 doesn't import raftstore client; Layer 2 doesn't know about fsmeta; Layer 3 doesn't know there's a namespace.
-3. **Multi-gateway-safe.** Quota usage and subtree authority handoff are Percolator-transactional against `meta/root`, not in-process counters.
-4. **Streaming lifecycle, not polling.** `coordinator.WatchRootEvents` pushes mount retire / quota fence updates / pending handoff to gateways within milliseconds.
+1. **fsmeta-first API.** Metadata operations expose filesystem/object-namespace shapes directly, instead of forcing users to assemble them from raw KV calls.
+2. **Layer separation enforced.** The fsmeta executor consumes a narrow `TxnRunner`; the default runtime adapter owns raftstore wiring; lower layers do not import fsmeta.
+3. **Multi-gateway-safe.** Quota fences are rooted truth; usage counters are data-plane keys updated in the same Percolator transaction as metadata mutations. Subtree handoff uses rooted events plus runtime repair.
+4. **Root-event driven lifecycle.** `coordinator.WatchRootEvents` pushes mount retire / quota fence / pending handoff changes after bootstrap; the monitor interval is reconnect backoff.
 
 ---
 
@@ -208,22 +196,10 @@ nokv quota set --coordinator-addr 127.0.0.1:2379 \
 
 # 6. Inspect runtime state
 curl http://127.0.0.1:9101/debug/vars | jq '.nokv_fsmeta_executor, .nokv_fsmeta_watch, .nokv_fsmeta_quota, .nokv_fsmeta_mount'
-nokv eunomia-audit --workdir ./artifacts/cluster/coord-1
 nokv stats --workdir ./artifacts/cluster/store-1
 ```
 
 Full walkthrough: [getting_started.md](getting_started.md) · CLI reference: [cli.md](cli.md)
-
-### Run TLA+ verification
-
-```bash
-make tlc-eunomia                            # positive model
-make tlc-leaseonly-counterexample           # contrast: no rooted seal → counterexample
-make tlc-tokenonly-counterexample           # contrast: bounded freshness only
-make tlc-chubbyfenced-counterexample        # contrast: per-reply sequencer only
-make apalache-check-eunomia                 # bounded inductive Primacy check
-make record-formal-artifacts                # refresh spec/artifacts/
-```
 
 ---
 
@@ -232,9 +208,8 @@ make record-formal-artifacts                # refresh spec/artifacts/
 | | |
 |---|---|
 | **[fsmeta service](fsmeta.md)** | The headline product — namespace metadata API |
-| **[Eunomia spec](../spec/README.md)** | TLA+ verified handoff protocol |
-| **[eunomia-audit](eunomia-audit.md)** | Read-only audit tool |
-| **[CLI surface](cli.md)** | `nokv` — stats, manifest, regions, mount, quota, audit, migrate |
+| **[Formal specs](../spec/README.md)** | TLA+ / Apalache models for transition safety |
+| **[CLI surface](cli.md)** | `nokv` — stats, manifest, regions, mount, quota, migrate |
 | **[Topology config](config.md)** | One JSON file shared by scripts, Docker, all CLI |
 | **[Coordinator](coordinator.md)** | Route / TSO / heartbeat / root-event subscribe |
 | **[Rooted truth](rooted_truth.md)** | `meta/root` typed event log |
@@ -247,6 +222,6 @@ make record-formal-artifacts                # refresh spec/artifacts/
 ---
 
 <div align="center">
-  <sub><strong>Open-source namespace metadata substrate for DFS, OSS, and AI dataset metadata — with TLA+-verified authority handoff.</strong></sub><br/>
+  <sub><strong>Open-source namespace metadata substrate for DFS, OSS, and AI dataset metadata.</strong></sub><br/>
   <sub>Built from scratch — no external storage engine, no external Raft library, no external coordinator.</sub>
 </div>

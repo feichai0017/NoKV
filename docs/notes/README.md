@@ -73,18 +73,13 @@
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-04-25</span>
-    <h3><a href="2026-04-25-fsmeta-stage1-benchmark-results.html">fsmeta Stage 1 benchmark 结果</a></h3>
-    <p>记录 native-fsmeta 与 generic-kv 在同一 NoKV 集群上的正式对比，重点解释 ReadDirPlus 的 42.5x 延迟差异和 caveat。</p>
-  </div>
-  <div class="blog-card">
-    <span class="blog-date">2026-04-25</span>
-    <h3><a href="2026-04-25-store-membership-rooted-vs-runtime-view.html">Store Membership：rooted truth 与 runtime view 的边界</a></h3>
-    <p>定义 Stage 2 第一刀：store membership 进入 meta/root，地址和 liveness 留在 coordinator runtime view。</p>
-  </div>
-  <div class="blog-card">
-    <span class="blog-date">2026-04-25</span>
     <h3><a href="2026-04-25-namespace-authority-events-umbrella.html">Namespace Authority Events Umbrella</a></h3>
-    <p>统一 Stage 2 后续 mount、subtree、snapshot、quota primitive 的 RootEvent 命名、payload 和 runtime view 边界。</p>
+    <p>统一 mount、subtree、snapshot、quota primitive 的 RootEvent 命名、payload 和 runtime view 边界。</p>
+  </div>
+  <div class="blog-card">
+    <span class="blog-date">2026-04-25</span>
+    <h3><a href="2026-04-25-snapshot-subtree-mvcc-epoch.html">SnapshotSubtree：subtree-scoped MVCC epoch</a></h3>
+    <p>说明 SnapshotSubtree 为什么只发布 read epoch，不复制目录树，也不把 dentry 列表写进 meta/root。</p>
   </div>
 </div>
 
