@@ -20,6 +20,9 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 	if snapshot.Mounts == nil {
 		snapshot.Mounts = make(map[string]MountRecord)
 	}
+	if snapshot.Subtrees == nil {
+		snapshot.Subtrees = make(map[string]SubtreeAuthority)
+	}
 	if snapshot.Descriptors == nil {
 		snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
 	}
@@ -42,6 +45,12 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 		applyMountRegisteredToSnapshot(snapshot, cursor, event)
 	case rootevent.KindMountRetired:
 		applyMountRetiredToSnapshot(snapshot, cursor, event)
+	case rootevent.KindSubtreeAuthorityDeclared:
+		applySubtreeAuthorityDeclaredToSnapshot(snapshot, cursor, event)
+	case rootevent.KindSubtreeHandoffStarted:
+		applySubtreeHandoffStartedToSnapshot(snapshot, cursor, event)
+	case rootevent.KindSubtreeHandoffCompleted:
+		applySubtreeHandoffCompletedToSnapshot(snapshot, cursor, event)
 	case rootevent.KindIDAllocatorFenced:
 		if event.AllocatorFence != nil && event.AllocatorFence.Minimum > snapshot.State.IDFence {
 			snapshot.State.IDFence = event.AllocatorFence.Minimum
@@ -74,6 +83,85 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 		_ = ApplyPeerChangeToSnapshot(snapshot, event)
 	}
 	snapshot.State.LastCommitted = cursor
+}
+
+func applySubtreeAuthorityDeclaredToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Event) {
+	if snapshot == nil || event.SubtreeAuthority == nil {
+		return
+	}
+	payload := event.SubtreeAuthority
+	key := SubtreeAuthorityKey(payload.Mount, payload.RootInode)
+	if key == "" || payload.AuthorityID == "" {
+		return
+	}
+	current := snapshot.Subtrees[key]
+	if current.State != SubtreeAuthorityUnknown {
+		return
+	}
+	era := payload.Era
+	snapshot.Subtrees[key] = SubtreeAuthority{
+		SubtreeID:   key,
+		Mount:       payload.Mount,
+		RootInode:   payload.RootInode,
+		AuthorityID: payload.AuthorityID,
+		Era:         era,
+		Frontier:    payload.Frontier,
+		State:       SubtreeAuthorityActive,
+		DeclaredAt:  cursor,
+	}
+}
+
+func applySubtreeHandoffStartedToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Event) {
+	if snapshot == nil || event.SubtreeAuthority == nil {
+		return
+	}
+	payload := event.SubtreeAuthority
+	key := SubtreeAuthorityKey(payload.Mount, payload.RootInode)
+	if key == "" {
+		return
+	}
+	current := snapshot.Subtrees[key]
+	if current.State != SubtreeAuthorityActive || current.AuthorityID == "" {
+		return
+	}
+	frontier := payload.Frontier
+	if frontier < current.Frontier {
+		return
+	}
+	successorEra := current.Era + 1
+	current.State = SubtreeAuthorityHandoff
+	current.HandoffStartedAt = cursor
+	current.PredecessorAuthorityID = current.AuthorityID
+	current.PredecessorEra = current.Era
+	current.PredecessorFrontier = frontier
+	current.SuccessorAuthorityID = SubtreeAuthorityID(current.Mount, current.RootInode, successorEra)
+	current.SuccessorEra = successorEra
+	snapshot.Subtrees[key] = current
+}
+
+func applySubtreeHandoffCompletedToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Event) {
+	if snapshot == nil || event.SubtreeAuthority == nil {
+		return
+	}
+	payload := event.SubtreeAuthority
+	key := SubtreeAuthorityKey(payload.Mount, payload.RootInode)
+	if key == "" {
+		return
+	}
+	current := snapshot.Subtrees[key]
+	if current.State != SubtreeAuthorityHandoff || current.SuccessorAuthorityID == "" {
+		return
+	}
+	if payload.InheritedFrontier < current.PredecessorFrontier {
+		return
+	}
+	current.AuthorityID = current.SuccessorAuthorityID
+	current.Era = current.SuccessorEra
+	current.Frontier = payload.InheritedFrontier
+	current.InheritedFrontier = payload.InheritedFrontier
+	current.State = SubtreeAuthorityActive
+	current.HandoffCompletedAt = cursor
+	snapshot.Subtrees[key] = current
 }
 
 func applyMountRegisteredToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Event) {

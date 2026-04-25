@@ -27,4 +27,10 @@ var (
 	ErrMountRetired = errors.New("coordinator/catalog: mount is retired")
 	// ErrMountConflict indicates a mount registration conflicts with existing rooted truth.
 	ErrMountConflict = errors.New("coordinator/catalog: mount registration conflicts with rooted truth")
+	// ErrSubtreeAuthorityNotFound indicates a handoff references an undeclared subtree authority.
+	ErrSubtreeAuthorityNotFound = errors.New("coordinator/catalog: subtree authority is not declared")
+	// ErrSubtreeAuthorityConflict indicates a subtree authority event conflicts with rooted truth.
+	ErrSubtreeAuthorityConflict = errors.New("coordinator/catalog: subtree authority conflicts with rooted truth")
+	// ErrSubtreeAuthorityHandoff indicates a subtree handoff violates Succession coverage or finality.
+	ErrSubtreeAuthorityHandoff = errors.New("coordinator/catalog: invalid subtree authority handoff")
 )

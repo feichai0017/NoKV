@@ -35,6 +35,9 @@ enum RootEventKind {
   ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED = 24;
   ROOT_EVENT_KIND_MOUNT_REGISTERED = 25;
   ROOT_EVENT_KIND_MOUNT_RETIRED = 26;
+  ROOT_EVENT_KIND_SUBTREE_AUTHORITY_DECLARED = 27;
+  ROOT_EVENT_KIND_SUBTREE_HANDOFF_STARTED = 28;
+  ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED = 29;
 }
 
 message RootCursor {
@@ -62,6 +65,7 @@ message RootCheckpoint {
   repeated RootStore stores = 6;
   repeated RootSnapshotEpoch snapshot_epochs = 7;
   repeated RootMount mounts = 8;
+  repeated RootSubtreeAuthority subtrees = 9;
 }
 
 message RootStoreMembership {
@@ -102,6 +106,31 @@ message RootMount {
   RootMountState state = 4;
   RootCursor registered_at = 5;
   RootCursor retired_at = 6;
+}
+
+enum RootSubtreeAuthorityState {
+  ROOT_SUBTREE_AUTHORITY_STATE_UNSPECIFIED = 0;
+  ROOT_SUBTREE_AUTHORITY_STATE_ACTIVE = 1;
+  ROOT_SUBTREE_AUTHORITY_STATE_HANDOFF = 2;
+}
+
+message RootSubtreeAuthority {
+  string subtree_id = 1;
+  string mount = 2;
+  uint64 root_inode = 3;
+  string authority_id = 4;
+  uint64 era = 5;
+  uint64 frontier = 6;
+  RootSubtreeAuthorityState state = 7;
+  RootCursor declared_at = 8;
+  RootCursor handoff_started_at = 9;
+  RootCursor handoff_completed_at = 10;
+  string predecessor_authority_id = 11;
+  uint64 predecessor_era = 12;
+  uint64 predecessor_frontier = 13;
+  string successor_authority_id = 14;
+  uint64 successor_era = 15;
+  uint64 inherited_frontier = 16;
 }
 
 message RootAllocatorFence {
@@ -231,6 +260,7 @@ message RootEvent {
     RootHandover handover = 11;
     RootSnapshotEpoch snapshot_epoch = 12;
     RootMount mount = 13;
+    RootSubtreeAuthority subtree_authority = 14;
   }
 }
 
