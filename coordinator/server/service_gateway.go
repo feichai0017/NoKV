@@ -38,6 +38,9 @@ func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbea
 		if errors.Is(err, catalog.ErrInvalidStoreID) {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
+		if errors.Is(err, catalog.ErrStoreNotJoined) || errors.Is(err, catalog.ErrStoreRetired) {
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	// Record which regions this store claims raft leadership of. If the
@@ -60,11 +63,11 @@ func (s *Service) GetStore(ctx context.Context, req *coordpb.GetStoreRequest) (*
 	if req == nil || req.GetStoreId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, "get store request missing store_id")
 	}
-	stats, ok := s.cluster.StoreByID(req.GetStoreId())
+	info, ok := s.cluster.StoreInfoByID(req.GetStoreId())
 	if !ok {
 		return &coordpb.GetStoreResponse{NotFound: true}, nil
 	}
-	return &coordpb.GetStoreResponse{Store: s.storeInfoToProto(stats)}, nil
+	return &coordpb.GetStoreResponse{Store: s.storeInfoToProto(info)}, nil
 }
 
 // ListStores returns the current runtime store registry.
@@ -72,20 +75,21 @@ func (s *Service) ListStores(ctx context.Context, _ *coordpb.ListStoresRequest) 
 	if err := ctx.Err(); err != nil {
 		return nil, status.Error(codes.Canceled, err.Error())
 	}
-	stores := s.cluster.StoreSnapshot()
+	stores := s.cluster.StoreInfos()
 	out := make([]*coordpb.StoreInfo, 0, len(stores))
-	for _, st := range stores {
-		out = append(out, s.storeInfoToProto(st))
+	for _, info := range stores {
+		out = append(out, s.storeInfoToProto(info))
 	}
 	return &coordpb.ListStoresResponse{Stores: out}, nil
 }
 
-func (s *Service) storeInfoToProto(stats pdview.StoreStats) *coordpb.StoreInfo {
+func (s *Service) storeInfoToProto(info catalog.StoreInfo) *coordpb.StoreInfo {
+	stats := info.Stats
 	return &coordpb.StoreInfo{
 		StoreId:               stats.StoreID,
 		ClientAddr:            stats.ClientAddr,
 		RaftAddr:              stats.RaftAddr,
-		State:                 s.storeState(stats),
+		State:                 s.storeState(info),
 		RegionNum:             stats.RegionNum,
 		LeaderNum:             stats.LeaderNum,
 		Capacity:              stats.Capacity,
@@ -95,7 +99,11 @@ func (s *Service) storeInfoToProto(stats pdview.StoreStats) *coordpb.StoreInfo {
 	}
 }
 
-func (s *Service) storeState(stats pdview.StoreStats) coordpb.StoreState {
+func (s *Service) storeState(info catalog.StoreInfo) coordpb.StoreState {
+	if info.Membership.State == rootstate.StoreMembershipRetired {
+		return coordpb.StoreState_STORE_STATE_TOMBSTONE
+	}
+	stats := info.Stats
 	if stats.StoreID == 0 || stats.UpdatedAt.IsZero() {
 		return coordpb.StoreState_STORE_STATE_UNKNOWN
 	}
@@ -201,6 +209,7 @@ func (s *Service) assessRootEventLifecycle(event rootevent.Event) (rootstate.Tra
 		return rootstate.TransitionAssessment{}, fmt.Errorf("load rooted snapshot: %w", err)
 	}
 	rooted := rootstate.Snapshot{
+		Stores:              snapshot.Stores,
 		Descriptors:         snapshot.Descriptors,
 		PendingPeerChanges:  snapshot.PendingPeerChanges,
 		PendingRangeChanges: snapshot.PendingRangeChanges,

@@ -89,6 +89,7 @@ func (f *fakeStorage) AppendRootEvent(_ context.Context, event rootevent.Event) 
 			Tenure:        f.snapshot.Tenure,
 			LastCommitted: rootstate.Cursor{Term: 1, Index: uint64(f.eventCalls)},
 		},
+		Stores:              rootstate.CloneStoreMemberships(f.snapshot.Stores),
 		Descriptors:         rootCloneDescriptorsForTest(f.snapshot.Descriptors),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(f.snapshot.PendingPeerChanges),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(f.snapshot.PendingRangeChanges),
@@ -316,8 +317,16 @@ func publishDescriptorEvent(t *testing.T, svc *Service, desc descriptor.Descript
 	return err
 }
 
+func joinStores(t *testing.T, svc *Service, storeIDs ...uint64) {
+	t.Helper()
+	for _, storeID := range storeIDs {
+		require.NoError(t, svc.cluster.PublishRootEvent(rootevent.StoreJoined(storeID)))
+	}
+}
+
 func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+	joinStores(t, svc, 1)
 
 	storeResp, err := svc.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
 		StoreId:           1,
@@ -355,6 +364,7 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 func TestServiceGetStoreMarksStaleHeartbeatDown(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	svc.ConfigureStoreHeartbeatTTL(5 * time.Second)
+	joinStores(t, svc, 7)
 
 	_, err := svc.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
 		StoreId:    7,
@@ -378,6 +388,32 @@ func TestServiceGetStoreMarksStaleHeartbeatDown(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, listResp.GetStores(), 1)
 	require.Equal(t, coordpb.StoreState_STORE_STATE_DOWN, listResp.GetStores()[0].GetState())
+}
+
+func TestServiceStoreHeartbeatRequiresRootedMembership(t *testing.T) {
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+
+	_, err := svc.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{StoreId: 8})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+
+	joinStores(t, svc, 8)
+	resp, err := svc.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
+		StoreId:    8,
+		ClientAddr: "127.0.0.1:20160",
+	})
+	require.NoError(t, err)
+	require.True(t, resp.GetAccepted())
+
+	require.NoError(t, svc.cluster.PublishRootEvent(rootevent.StoreRetired(8)))
+	_, err = svc.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{StoreId: 8})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+
+	getResp, err := svc.GetStore(context.Background(), &coordpb.GetStoreRequest{StoreId: 8})
+	require.NoError(t, err)
+	require.Equal(t, coordpb.StoreState_STORE_STATE_TOMBSTONE, getResp.GetStore().GetState())
+	require.Empty(t, getResp.GetStore().GetClientAddr())
 }
 
 func TestServiceDiagnosticsSnapshot(t *testing.T) {
@@ -419,6 +455,7 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 	svc.now = func() time.Time { return now }
 	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	require.NoError(t, svc.ReloadFromStorage())
+	joinStores(t, svc, 1)
 	_, err := svc.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
 		StoreId:         1,
 		RegionNum:       1,
@@ -494,12 +531,9 @@ func TestServiceGetRegionByKeyRequiredRootToken(t *testing.T) {
 	cluster := catalog.NewCluster()
 	desc := testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
 	desc.RootEpoch = 5
-	cluster.ReplaceRootSnapshot(
-		map[uint64]descriptor.Descriptor{desc.RegionID: desc},
-		nil,
-		nil,
-		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 5},
-	)
+	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
+		Descriptors: map[uint64]descriptor.Descriptor{desc.RegionID: desc},
+	}, rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 5})
 	storage := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
@@ -549,12 +583,9 @@ func TestServiceGetRegionByKeyRequiredDescriptorRevision(t *testing.T) {
 	cluster := catalog.NewCluster()
 	desc := testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
 	desc.RootEpoch = 7
-	cluster.ReplaceRootSnapshot(
-		map[uint64]descriptor.Descriptor{desc.RegionID: desc},
-		nil,
-		nil,
-		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 5},
-	)
+	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
+		Descriptors: map[uint64]descriptor.Descriptor{desc.RegionID: desc},
+	}, rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 5})
 	storage := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
@@ -592,13 +623,12 @@ func TestServiceGetRegionByKeyRejectsSplitPendingDescriptor(t *testing.T) {
 	right := testDescriptor(42, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
 	left.RootEpoch = 6
 	right.RootEpoch = 6
-	cluster.ReplaceRootSnapshot(
-		map[uint64]descriptor.Descriptor{
+	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
+		Descriptors: map[uint64]descriptor.Descriptor{
 			left.RegionID:  left,
 			right.RegionID: right,
 		},
-		nil,
-		map[uint64]rootstate.PendingRangeChange{
+		PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
 			40: {
 				Kind:           rootstate.PendingRangeChangeSplit,
 				ParentRegionID: 40,
@@ -608,8 +638,7 @@ func TestServiceGetRegionByKeyRejectsSplitPendingDescriptor(t *testing.T) {
 				Right:          right,
 			},
 		},
-		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 6},
-	)
+	}, rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 6})
 	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 
 	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("b")})
@@ -623,12 +652,11 @@ func TestServiceGetRegionByKeyRejectsMergePendingDescriptor(t *testing.T) {
 	cluster := catalog.NewCluster()
 	merged := testDescriptor(51, []byte("a"), []byte("z"), metaregion.Epoch{Version: 3, ConfVersion: 2}, nil)
 	merged.RootEpoch = 9
-	cluster.ReplaceRootSnapshot(
-		map[uint64]descriptor.Descriptor{
+	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
+		Descriptors: map[uint64]descriptor.Descriptor{
 			merged.RegionID: merged,
 		},
-		nil,
-		map[uint64]rootstate.PendingRangeChange{
+		PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
 			merged.RegionID: {
 				Kind:          rootstate.PendingRangeChangeMerge,
 				LeftRegionID:  49,
@@ -636,8 +664,7 @@ func TestServiceGetRegionByKeyRejectsMergePendingDescriptor(t *testing.T) {
 				Merged:        merged,
 			},
 		},
-		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 9},
-	)
+	}, rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 9})
 	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 
 	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("b")})
@@ -737,14 +764,11 @@ func TestServiceGetRegionByKeyBestEffortWithUnavailableRoot(t *testing.T) {
 
 func TestServiceGetRegionByKeyReportsRootLagging(t *testing.T) {
 	cluster := catalog.NewCluster()
-	cluster.ReplaceRootSnapshot(
-		map[uint64]descriptor.Descriptor{
+	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
+		Descriptors: map[uint64]descriptor.Descriptor{
 			11: testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil),
 		},
-		nil,
-		nil,
-		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 3},
-	)
+	}, rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 3})
 	storage := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
@@ -802,12 +826,9 @@ func TestServiceGetRegionByKeyReportsRootLagging(t *testing.T) {
 func TestServiceGetRegionByKeyBoundedRejectsBootstrapRequired(t *testing.T) {
 	cluster := catalog.NewCluster()
 	desc := testDescriptor(21, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
-	cluster.ReplaceRootSnapshot(
-		map[uint64]descriptor.Descriptor{desc.RegionID: desc},
-		nil,
-		nil,
-		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 2}, Revision: 2},
-	)
+	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
+		Descriptors: map[uint64]descriptor.Descriptor{desc.RegionID: desc},
+	}, rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 2}, Revision: 2})
 	storage := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
@@ -960,6 +981,7 @@ func TestServiceRegionLivenessTouchesExistingRegion(t *testing.T) {
 
 func TestServiceStoreHeartbeatReturnsLeaderTransferHint(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), nil, nil)
+	joinStores(t, svc, 1, 2)
 	err := publishDescriptorEvent(t, svc, testDescriptor(100, []byte(""), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}}), 0)
 	require.NoError(t, err)
 
@@ -1358,9 +1380,9 @@ func TestServiceListTransitionsReturnsOperatorView(t *testing.T) {
 	target.RootEpoch = 6
 	target.EnsureHash()
 
-	cluster.ReplaceRootSnapshot(
-		map[uint64]descriptor.Descriptor{target.RegionID: target},
-		map[uint64]rootstate.PendingPeerChange{
+	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
+		Descriptors: map[uint64]descriptor.Descriptor{target.RegionID: target},
+		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
 			target.RegionID: {
 				Kind:    rootstate.PendingPeerChangeAddition,
 				StoreID: 2,
@@ -1369,9 +1391,7 @@ func TestServiceListTransitionsReturnsOperatorView(t *testing.T) {
 				Target:  target,
 			},
 		},
-		nil,
-		rootstorage.TailToken{},
-	)
+	}, rootstorage.TailToken{})
 
 	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	resp, err := svc.ListTransitions(context.Background(), &coordpb.ListTransitionsRequest{})
@@ -1397,9 +1417,9 @@ func TestServiceAssessRootEventReturnsConflictAssessment(t *testing.T) {
 	target.RootEpoch = 6
 	target.EnsureHash()
 
-	cluster.ReplaceRootSnapshot(
-		map[uint64]descriptor.Descriptor{target.RegionID: target},
-		map[uint64]rootstate.PendingPeerChange{
+	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
+		Descriptors: map[uint64]descriptor.Descriptor{target.RegionID: target},
+		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
 			target.RegionID: {
 				Kind:    rootstate.PendingPeerChangeAddition,
 				StoreID: 2,
@@ -1408,9 +1428,7 @@ func TestServiceAssessRootEventReturnsConflictAssessment(t *testing.T) {
 				Target:  target,
 			},
 		},
-		nil,
-		rootstorage.TailToken{},
-	)
+	}, rootstorage.TailToken{})
 
 	conflicting := current.Clone()
 	conflicting.Peers = append(conflicting.Peers, metaregion.Peer{StoreID: 3, PeerID: 301})
@@ -2629,6 +2647,10 @@ func TestServiceStoreHeartbeatSuppressesOperationsWithoutTenure(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
+			Stores: map[uint64]rootstate.StoreMembership{
+				1: {StoreID: 1, State: rootstate.StoreMembershipActive},
+				2: {StoreID: 2, State: rootstate.StoreMembershipActive},
+			},
 			Tenure: rootstate.Tenure{
 				HolderID:        "other",
 				ExpiresUnixNano: 10_000,
@@ -2638,6 +2660,7 @@ func TestServiceStoreHeartbeatSuppressesOperationsWithoutTenure(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), nil, nil, store)
 	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 100) }
+	joinStores(t, svc, 1, 2)
 
 	err := publishDescriptorEvent(t, svc, testDescriptor(100, []byte(""), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}}), 0)
 	require.NoError(t, err)
@@ -2686,6 +2709,7 @@ func TestServiceRejectsWritesOnFollower(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 
+	joinStores(t, svc, 1)
 	_, err = svc.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{StoreId: 1})
 	require.NoError(t, err)
 	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})

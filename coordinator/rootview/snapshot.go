@@ -46,6 +46,7 @@ type Snapshot struct {
 	ClusterEpoch        uint64
 	RootToken           rootstorage.TailToken
 	CatchUpState        CatchUpState
+	Stores              map[uint64]rootstate.StoreMembership
 	Descriptors         map[uint64]descriptor.Descriptor
 	PendingPeerChanges  map[uint64]rootstate.PendingPeerChange
 	PendingRangeChanges map[uint64]rootstate.PendingRangeChange
@@ -60,6 +61,7 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 		ClusterEpoch:        snapshot.ClusterEpoch,
 		RootToken:           snapshot.RootToken,
 		CatchUpState:        snapshot.CatchUpState,
+		Stores:              rootstate.CloneStoreMemberships(snapshot.Stores),
 		Descriptors:         rootstate.CloneDescriptors(snapshot.Descriptors),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),
@@ -78,6 +80,7 @@ func SnapshotFromRoot(snapshot rootstate.Snapshot) Snapshot {
 			Revision: 0,
 		},
 		CatchUpState:        CatchUpStateFresh,
+		Stores:              rootstate.CloneStoreMemberships(snapshot.Stores),
 		Descriptors:         rootstate.CloneDescriptors(snapshot.Descriptors),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),
@@ -88,6 +91,24 @@ func SnapshotFromRoot(snapshot rootstate.Snapshot) Snapshot {
 		Tenure:   snapshot.State.Tenure,
 		Legacy:   snapshot.State.Legacy,
 		Handover: snapshot.State.Handover,
+	}
+}
+
+func (s Snapshot) RootSnapshot() rootstate.Snapshot {
+	return rootstate.Snapshot{
+		State: rootstate.State{
+			ClusterEpoch:  s.ClusterEpoch,
+			LastCommitted: s.RootToken.Cursor,
+			IDFence:       s.Allocator.IDCurrent,
+			TSOFence:      s.Allocator.TSCurrent,
+			Tenure:        s.Tenure,
+			Legacy:        s.Legacy,
+			Handover:      s.Handover,
+		},
+		Stores:              rootstate.CloneStoreMemberships(s.Stores),
+		Descriptors:         rootstate.CloneDescriptors(s.Descriptors),
+		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.PendingPeerChanges),
+		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.PendingRangeChanges),
 	}
 }
 

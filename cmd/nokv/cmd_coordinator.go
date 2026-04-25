@@ -116,6 +116,7 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 	if err != nil {
 		return fmt.Errorf("coordinator bootstrap from remote metadata root: %w", err)
 	}
+	cluster.ReplaceRootSnapshot(bootstrap.Snapshot.RootSnapshot(), bootstrap.Snapshot.RootToken)
 	*idStart, *tsStart = bootstrap.IDStart, bootstrap.TSStart
 	loadedRegions := bootstrap.LoadedRegions
 

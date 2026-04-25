@@ -327,6 +327,7 @@ func openSeparatedCoordinatorWithLease(t *testing.T, targets map[uint64]string, 
 	cluster := catalog.NewCluster()
 	bootstrap, err := rootview.Bootstrap(store, cluster.PublishRegionDescriptor, 1, 1)
 	require.NoError(t, err)
+	cluster.ReplaceRootSnapshot(bootstrap.Snapshot.RootSnapshot(), bootstrap.Snapshot.RootToken)
 
 	svc := coordserver.NewService(
 		cluster,

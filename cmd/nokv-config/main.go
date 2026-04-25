@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	"os"
 	"path/filepath"
 	"strings"
@@ -221,7 +222,7 @@ Commands:
   stores   Print store endpoints from the raft configuration
   regions  Print region metadata from the raft configuration
   coordinator Print coordinator endpoint from the raft configuration
-  catalog  Write region metadata into the raftstore local peer catalog
+  catalog  Write region metadata and optional store membership seed into the raftstore local peer catalog
 
 Flags:
   --config <path>   Path to raft_config JSON (defaults to ./raft_config.example.json)
@@ -238,6 +239,7 @@ func runCatalog(args []string) error {
 	version := fs.Uint64("epoch-version", 1, "region version epoch")
 	confVer := fs.Uint64("epoch-conf-version", 0, "region configuration version (defaults to number of peers)")
 	stateStr := fs.String("state", "running", "region state (running|tombstone)")
+	bootstrapStoreID := fs.Uint64("bootstrap-store-id", 0, "optional store ID to seed as a pending rooted StoreJoined event")
 	var peerFlags multiValue
 	fs.Var(&peerFlags, "peer", "peer mapping: storeID:peerID (repeatable)")
 	if err := fs.Parse(args); err != nil {
@@ -288,6 +290,14 @@ func runCatalog(args []string) error {
 
 	if err := metaStore.SaveRegion(meta); err != nil {
 		return fmt.Errorf("persist region: %w", err)
+	}
+	if *bootstrapStoreID != 0 {
+		if err := metaStore.SavePendingRootEvent(localmeta.PendingRootEvent{
+			Sequence: 1,
+			Event:    rootevent.StoreJoined(*bootstrapStoreID),
+		}); err != nil {
+			return fmt.Errorf("persist store membership root event: %w", err)
+		}
 	}
 	if _, err := fmt.Fprintf(os.Stdout, "stored region %d in local peer catalog at %s\n", meta.ID, *workdir); err != nil {
 		return err
