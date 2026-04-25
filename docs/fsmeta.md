@@ -132,18 +132,39 @@ docker run --rm --network nokv_default \
     -fsmeta_page_limit 512 \
     -fsmeta_readdirplus=true \
     -fsmeta_timeout 25m \
-    -fsmeta_output "data/fsmeta/results/fsmeta_native_vs_generic_${RUN_TS}.csv"
+    -fsmeta_output "../data/fsmeta/results/fsmeta_native_vs_generic_${RUN_TS}.csv"
 ```
 
-The generated CSV under `benchmark/data/` is a local run artifact and is ignored
-by Git (the example above writes to `<repo>/benchmark/data/...` because the
-docker run is `-w /workspace/benchmark`). Curated, committed results live under
-`benchmark/fsmeta/results/` — point `-fsmeta_output` at `fsmeta/results/...`
-(relative to `/workspace/benchmark`) when promoting a run to a tracked
-artifact.
+The test binary runs from the package directory `benchmark/fsmeta`. The example
+above writes a local ignored artifact to `<repo>/benchmark/data/...` via
+`../data/...`. Curated, committed results live under
+`benchmark/fsmeta/results/`; point `-fsmeta_output` at `results/...` when
+promoting a run to a tracked artifact.
 
 For the Stage 1 result interpretation, see
 `docs/notes/2026-04-25-fsmeta-stage1-benchmark-results.md`.
+
+Run the Stage 2.2 WatchSubtree evidence workload:
+
+```bash
+RUN_TS=$(date -u +%Y%m%dT%H%M%SZ)
+docker run --rm --network nokv_default \
+  -v "$PWD":/workspace \
+  -w /workspace/benchmark \
+  -e NOKV_FSMETA_BENCH=1 \
+  golang:1.26.2-bookworm \
+  go test ./fsmeta -run TestBenchmarkFSMeta -count=1 -timeout 20m -v -args \
+    -fsmeta_drivers native-fsmeta \
+    -fsmeta_mount "fsmeta-watch-${RUN_TS}" \
+    -fsmeta_addr nokv-fsmeta:8090 \
+    -fsmeta_coordinator_addr nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379 \
+    -fsmeta_workloads watch-subtree \
+    -fsmeta_clients 8 \
+    -fsmeta_files 512 \
+    -fsmeta_watch_window 1024 \
+    -fsmeta_timeout 15m \
+    -fsmeta_output "../data/fsmeta/results/fsmeta_watchsubtree_${RUN_TS}.csv"
+```
 
 ## Why Native Metadata API Matters
 

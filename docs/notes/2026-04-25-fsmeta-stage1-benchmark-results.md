@@ -58,8 +58,10 @@ docker run --rm --network nokv_default \
     -fsmeta_page_limit 512 \
     -fsmeta_readdirplus=true \
     -fsmeta_timeout 25m \
-    -fsmeta_output fsmeta/results/fsmeta_formal_native_vs_generic_20260425T051640Z.csv
+    -fsmeta_output results/fsmeta_formal_native_vs_generic_20260425T051640Z.csv
 ```
+
+`go test ./fsmeta` 的 test binary 工作目录是 `benchmark/fsmeta`，所以 committed result 路径使用 `results/...`。
 
 数据形状：
 
