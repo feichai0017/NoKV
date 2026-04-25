@@ -38,7 +38,10 @@ var listen = net.Listen
 var signalNotify = signal.Notify
 var openExecutor = newExecutor
 
-const defaultMountResolverTTL = time.Second
+const (
+	defaultMountResolverTTL     = time.Second
+	defaultMountMonitorInterval = time.Second
+)
 
 func main() {
 	var (
@@ -152,10 +155,11 @@ func newExecutor(ctx context.Context, coordAddr string) (*fsmetaexec.Executor, f
 		_ = coordRPC.Close()
 		return nil, nil, nil, nil, fmt.Errorf("init fsmeta runner: %w", err)
 	}
-	executor, err := fsmetaexec.New(runner, fsmetaexec.WithMountResolver(&coordinatorMountResolver{
+	mountResolver := &coordinatorMountResolver{
 		coord: coordRPC,
 		ttl:   defaultMountResolverTTL,
-	}))
+	}
+	executor, err := fsmetaexec.New(runner, fsmetaexec.WithMountResolver(mountResolver))
 	if err != nil {
 		_ = kv.Close()
 		_ = coordRPC.Close()
@@ -168,12 +172,18 @@ func newExecutor(ctx context.Context, coordAddr string) (*fsmetaexec.Executor, f
 		_ = coordRPC.Close()
 		return nil, nil, nil, nil, fmt.Errorf("init fsmeta watch source: %w", err)
 	}
+	mountMonitor := startMountLifecycleMonitor(ctx, coordRPC, router, mountResolver, defaultMountMonitorInterval)
 	snapshotPublisher := rootSnapshotPublisher{coord: coordRPC}
 	// Compose closer: shutdown order is kv first (it holds dialed store conns
 	// keyed by coordinator-resolved addresses) then coordRPC. Both errors are
 	// reported; the first non-nil wins.
 	closer := func() error {
 		var errAll error
+		if mountMonitor != nil {
+			if cerr := mountMonitor.Close(); cerr != nil {
+				errAll = cerr
+			}
+		}
 		if cerr := source.Close(); cerr != nil {
 			errAll = cerr
 		}
@@ -185,12 +195,32 @@ func newExecutor(ctx context.Context, coordAddr string) (*fsmetaexec.Executor, f
 		}
 		return errAll
 	}
-	return executor, fsmetaWatchRuntime{Router: router, source: source}, snapshotPublisher, closer, nil
+	return executor, fsmetaWatchRuntime{Router: router, source: source, mounts: mountResolver}, snapshotPublisher, closer, nil
 }
 
 type fsmetaWatchRuntime struct {
 	*fsmetawatch.Router
 	source *fsmetawatch.RemoteSource
+	mounts fsmetaexec.MountResolver
+}
+
+func (w fsmetaWatchRuntime) Subscribe(ctx context.Context, req fsmeta.WatchRequest) (fsmeta.WatchSubscription, error) {
+	if req.Mount != "" && w.mounts != nil {
+		record, err := w.mounts.ResolveMount(ctx, req.Mount)
+		if err != nil {
+			return nil, err
+		}
+		if record.MountID == "" {
+			return nil, fsmeta.ErrMountNotRegistered
+		}
+		if record.Retired {
+			return nil, fsmeta.ErrMountRetired
+		}
+	}
+	if w.Router == nil {
+		return nil, fsmeta.ErrInvalidRequest
+	}
+	return w.Router.Subscribe(ctx, req)
 }
 
 func (w fsmetaWatchRuntime) Stats() map[string]any {
@@ -214,6 +244,14 @@ type rootSnapshotPublisher struct {
 
 type mountLookupClient interface {
 	GetMount(context.Context, *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error)
+}
+
+type mountListClient interface {
+	ListMounts(context.Context, *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error)
+}
+
+type mountRetirementRouter interface {
+	RetireMount(fsmeta.MountID) int
 }
 
 type coordinatorMountResolver struct {
@@ -246,6 +284,16 @@ func (r *coordinatorMountResolver) ResolveMount(ctx context.Context, mount fsmet
 	record, err := mountRecordFromResponse(resp)
 	r.store(mount, now, record, err)
 	return record, err
+}
+
+func (r *coordinatorMountResolver) MarkMountRetired(mount fsmeta.MountID) {
+	if mount == "" {
+		return
+	}
+	r.store(mount, r.currentTime(), fsmetaexec.MountRecord{
+		MountID: mount,
+		Retired: true,
+	}, nil)
 }
 
 func (r *coordinatorMountResolver) currentTime() time.Time {
@@ -298,6 +346,90 @@ func mountRecordFromResponse(resp *coordpb.GetMountResponse) (fsmetaexec.MountRe
 		SchemaVersion: info.GetSchemaVersion(),
 		Retired:       info.GetState() == coordpb.MountState_MOUNT_STATE_RETIRED,
 	}, nil
+}
+
+type mountLifecycleMonitor struct {
+	coord    mountListClient
+	router   mountRetirementRouter
+	resolver interface {
+		MarkMountRetired(fsmeta.MountID)
+	}
+	interval time.Duration
+	stop     chan struct{}
+	done     chan struct{}
+	once     sync.Once
+}
+
+func startMountLifecycleMonitor(ctx context.Context, coord mountListClient, router mountRetirementRouter, resolver interface {
+	MarkMountRetired(fsmeta.MountID)
+}, interval time.Duration) *mountLifecycleMonitor {
+	if coord == nil || router == nil {
+		return nil
+	}
+	if interval <= 0 {
+		interval = defaultMountMonitorInterval
+	}
+	monitor := &mountLifecycleMonitor{
+		coord:    coord,
+		router:   router,
+		resolver: resolver,
+		interval: interval,
+		stop:     make(chan struct{}),
+		done:     make(chan struct{}),
+	}
+	go monitor.run(ctx)
+	return monitor
+}
+
+func (m *mountLifecycleMonitor) run(ctx context.Context) {
+	defer close(m.done)
+	_ = m.poll(ctx)
+	ticker := time.NewTicker(m.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-m.stop:
+			return
+		case <-ticker.C:
+			if err := m.poll(ctx); err != nil && ctx.Err() == nil {
+				log.Printf("fsmeta mount lifecycle monitor: %v", err)
+			}
+		}
+	}
+}
+
+func (m *mountLifecycleMonitor) poll(ctx context.Context) error {
+	if m == nil || m.coord == nil || m.router == nil {
+		return nil
+	}
+	resp, err := m.coord.ListMounts(ctx, &coordpb.ListMountsRequest{})
+	if err != nil {
+		return err
+	}
+	for _, mount := range resp.GetMounts() {
+		if mount.GetMountId() == "" || mount.GetState() != coordpb.MountState_MOUNT_STATE_RETIRED {
+			continue
+		}
+		mountID := fsmeta.MountID(mount.GetMountId())
+		if m.resolver != nil {
+			m.resolver.MarkMountRetired(mountID)
+		}
+		m.router.RetireMount(mountID)
+	}
+	return nil
+}
+
+func (m *mountLifecycleMonitor) Close() error {
+	if m == nil {
+		return nil
+	}
+	m.once.Do(func() {
+		close(m.stop)
+	})
+	<-m.done
+	return nil
 }
 
 func (p rootSnapshotPublisher) PublishSnapshotSubtree(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error {
