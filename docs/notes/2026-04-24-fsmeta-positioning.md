@@ -105,7 +105,7 @@ fsmeta 的同一份架构对外有**三种身份**，pitch 时选其一，不混
 | Watch / change feed | `meta/root` 有 tail subscription；数据面 KV 无 watch RPC。 | FUSE / client cache invalidation、subtree watch 需要补。`meta/root` 的 tail 语义模型可以迁移到数据面 changefeed。 |
 | **ID / TSO RPC** | `pb/coordinator/coordinator.proto:305-306` 已定义 `AllocID` 和 `Tso` RPC，带 witness 验证。 | **不需要新 RPC**，需要整理成 fsmeta 稳定依赖的 client wrapper + 错误语义 + 超时重试 + witness 失败处理合同。 |
 | Rooted truth / Succession | `meta/root/` + `spec/Succession.tla` 已能表达 authority handoff、allocator fences、coordinator lease；4 个 contrast model 形式化了 handoff legality 的最小保证。 | 不应承载每个 inode / dentry mutation；适合 mount、subtree authority、snapshot era、quota fence 这类低频 rooted truth。 |
-| Namespace shell | `namespace.go` 是 DB lifecycle shell；`fsmeta/types.go` 顶部已声明用户 metadata plane 包边界，`fsmeta/value.go` 和 `fsmeta/exec/` 已形成最小 native executor。 | 方向正确：`fsmeta` 是应用数据 plane，不放进内部 `meta/`。 |
+| fsmeta 原生层 | `fsmeta/types.go` 顶部已声明用户 metadata plane 包边界，`fsmeta/value.go`、`fsmeta/exec/`、`fsmeta/server/` 和 `fsmeta/client/` 已形成 native metadata API。旧 `namespace.go` lifecycle shell 已删除。 | 方向正确：`fsmeta` 是应用数据 plane，不放进内部 `meta/`，也不再保留旧 namespace listing shell。 |
 | **单 fsync 域（raft log + LSM 复用 WAL）** | `raftstore/engine/wal_storage.go`：raft entries 与 LSM 写同一 `wal.Manager`；`lsm.canRemoveWalSegment` 需同时咨询 manifest checkpoint 和 raft truncation metadata。 | **结构性优势，明确可宣称**：metadata 小写密集 workload 下，单 fsync 比"metadata service WAL + 底层 KV WAL"双层方案少一层 syscall 和一次 fsync barrier。 |
 
 ## 4. 正确的系统边界
