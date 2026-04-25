@@ -8,12 +8,14 @@ import (
 )
 
 var (
-	// errMissingStoreEndpoints indicates that no store endpoints were configured.
-	errMissingStoreEndpoints = errors.New("client: at least one store endpoint required")
 	// errMissingRegionResolver indicates that the distributed client cannot route requests without a resolver.
 	errMissingRegionResolver = errors.New("client: region resolver required")
+	// errMissingStoreResolver indicates that the distributed client cannot dial stores without a resolver.
+	errMissingStoreResolver = errors.New("client: store resolver required")
 	// errStoreIDNotSet indicates that a request tried to use an empty store id.
 	errStoreIDNotSet = errors.New("client: store id not set")
+	// errStoreUnavailable indicates that Coordinator knows the store but marks its heartbeat stale.
+	errStoreUnavailable = errors.New("client: store unavailable")
 	// errResolvedRegionIDMissing indicates that routing returned a descriptor without a region id.
 	errResolvedRegionIDMissing = errors.New("client: resolved region id missing")
 	// errRegionMetaMissing indicates that a routed region snapshot had no metadata.
@@ -24,11 +26,13 @@ var (
 	errInvalidScanLimit = errors.New("client: scan limit must be > 0")
 )
 
-func IsMissingStoreEndpoints(err error) bool { return errors.Is(err, errMissingStoreEndpoints) }
-
 func IsMissingRegionResolver(err error) bool { return errors.Is(err, errMissingRegionResolver) }
 
+func IsMissingStoreResolver(err error) bool { return errors.Is(err, errMissingStoreResolver) }
+
 func IsStoreIDNotSet(err error) bool { return errors.Is(err, errStoreIDNotSet) }
+
+func IsStoreUnavailable(err error) bool { return errors.Is(err, errStoreUnavailable) }
 
 func IsResolvedRegionIDMissing(err error) bool { return errors.Is(err, errResolvedRegionIDMissing) }
 
@@ -46,6 +50,15 @@ type KeyConflictError struct {
 
 func (e *KeyConflictError) Error() string {
 	return fmt.Sprintf("client: prewrite key errors: %+v", e.Errors)
+}
+
+// KeyErrors exposes the raw per-key conflicts without forcing callers to
+// depend on this package's concrete error type.
+func (e *KeyConflictError) KeyErrors() []*kvrpcpb.KeyError {
+	if e == nil {
+		return nil
+	}
+	return e.Errors
 }
 
 // AsKeyConflict extracts a KeyConflictError from err.

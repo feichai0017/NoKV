@@ -9,16 +9,16 @@ import (
 )
 
 func TestClientSentinelHelpers(t *testing.T) {
-	require.True(t, IsMissingStoreEndpoints(errMissingStoreEndpoints))
 	require.True(t, IsMissingRegionResolver(errMissingRegionResolver))
+	require.True(t, IsMissingStoreResolver(errMissingStoreResolver))
 	require.True(t, IsStoreIDNotSet(errStoreIDNotSet))
 	require.True(t, IsResolvedRegionIDMissing(errResolvedRegionIDMissing))
 	require.True(t, IsRegionMetaMissing(errRegionMetaMissing))
 	require.True(t, IsLeaderUnknown(errLeaderUnknown))
 	require.True(t, IsInvalidScanLimit(errInvalidScanLimit))
 
-	require.False(t, IsMissingStoreEndpoints(nil))
 	require.False(t, IsMissingRegionResolver(errors.New("other")))
+	require.False(t, IsMissingStoreResolver(errors.New("other")))
 }
 
 func TestClientTypedErrors(t *testing.T) {

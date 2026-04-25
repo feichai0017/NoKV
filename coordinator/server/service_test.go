@@ -352,6 +352,34 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 	require.Zero(t, getResp.GetRequiredDescriptorRevision())
 }
 
+func TestServiceGetStoreMarksStaleHeartbeatDown(t *testing.T) {
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+	svc.ConfigureStoreHeartbeatTTL(5 * time.Second)
+
+	_, err := svc.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
+		StoreId:    7,
+		ClientAddr: "127.0.0.1:20160",
+		RaftAddr:   "127.0.0.1:20160",
+	})
+	require.NoError(t, err)
+
+	heartbeatAt := time.Now()
+	svc.now = func() time.Time { return heartbeatAt.Add(4 * time.Second) }
+	getResp, err := svc.GetStore(context.Background(), &coordpb.GetStoreRequest{StoreId: 7})
+	require.NoError(t, err)
+	require.Equal(t, coordpb.StoreState_STORE_STATE_UP, getResp.GetStore().GetState())
+
+	svc.now = func() time.Time { return heartbeatAt.Add(6 * time.Second) }
+	getResp, err = svc.GetStore(context.Background(), &coordpb.GetStoreRequest{StoreId: 7})
+	require.NoError(t, err)
+	require.Equal(t, coordpb.StoreState_STORE_STATE_DOWN, getResp.GetStore().GetState())
+
+	listResp, err := svc.ListStores(context.Background(), &coordpb.ListStoresRequest{})
+	require.NoError(t, err)
+	require.Len(t, listResp.GetStores(), 1)
+	require.Equal(t, coordpb.StoreState_STORE_STATE_DOWN, listResp.GetStores()[0].GetState())
+}
+
 func TestServiceDiagnosticsSnapshot(t *testing.T) {
 	now := time.Unix(100, 0)
 	storage := &fakeStorage{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	pdview "github.com/feichai0017/NoKV/coordinator/view"
@@ -25,6 +26,8 @@ func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbea
 	}
 	err := s.cluster.UpsertStoreHeartbeat(pdview.StoreStats{
 		StoreID:           req.GetStoreId(),
+		ClientAddr:        req.GetClientAddr(),
+		RaftAddr:          req.GetRaftAddr(),
 		RegionNum:         req.GetRegionNum(),
 		LeaderNum:         req.GetLeaderNum(),
 		Capacity:          req.GetCapacity(),
@@ -47,6 +50,76 @@ func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbea
 		Accepted:   true,
 		Operations: operations,
 	}, nil
+}
+
+// GetStore returns the current runtime endpoint for one store.
+func (s *Service) GetStore(ctx context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
+	if req == nil || req.GetStoreId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "get store request missing store_id")
+	}
+	stats, ok := s.cluster.StoreByID(req.GetStoreId())
+	if !ok {
+		return &coordpb.GetStoreResponse{NotFound: true}, nil
+	}
+	return &coordpb.GetStoreResponse{Store: s.storeInfoToProto(stats)}, nil
+}
+
+// ListStores returns the current runtime store registry.
+func (s *Service) ListStores(ctx context.Context, _ *coordpb.ListStoresRequest) (*coordpb.ListStoresResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
+	stores := s.cluster.StoreSnapshot()
+	out := make([]*coordpb.StoreInfo, 0, len(stores))
+	for _, st := range stores {
+		out = append(out, s.storeInfoToProto(st))
+	}
+	return &coordpb.ListStoresResponse{Stores: out}, nil
+}
+
+func (s *Service) storeInfoToProto(stats pdview.StoreStats) *coordpb.StoreInfo {
+	var lastHeartbeat uint64
+	if !stats.UpdatedAt.IsZero() {
+		lastHeartbeat = uint64(stats.UpdatedAt.UnixNano())
+	}
+	return &coordpb.StoreInfo{
+		StoreId:               stats.StoreID,
+		ClientAddr:            stats.ClientAddr,
+		RaftAddr:              stats.RaftAddr,
+		State:                 s.storeState(stats),
+		RegionNum:             stats.RegionNum,
+		LeaderNum:             stats.LeaderNum,
+		Capacity:              stats.Capacity,
+		Available:             stats.Available,
+		DroppedOperations:     stats.DroppedOperations,
+		LastHeartbeatUnixNano: lastHeartbeat,
+	}
+}
+
+func (s *Service) storeState(stats pdview.StoreStats) coordpb.StoreState {
+	if stats.StoreID == 0 || stats.UpdatedAt.IsZero() {
+		return coordpb.StoreState_STORE_STATE_UNKNOWN
+	}
+	now := time.Now()
+	ttl := defaultStoreHeartbeatTTL
+	if s != nil {
+		if s.now != nil {
+			now = s.now()
+		}
+		// storeHeartbeatTTL is read via atomic load to avoid a data race with
+		// ConfigureStoreHeartbeatTTL writers; reads here happen on the RPC
+		// path concurrently with reconfiguration.
+		if v := time.Duration(s.storeHeartbeatTTL.Load()); v > 0 {
+			ttl = v
+		}
+	}
+	if ttl > 0 && stats.UpdatedAt.Add(ttl).Before(now) {
+		return coordpb.StoreState_STORE_STATE_DOWN
+	}
+	return coordpb.StoreState_STORE_STATE_UP
 }
 
 // RegionLiveness records one runtime heartbeat without mutating rooted truth.

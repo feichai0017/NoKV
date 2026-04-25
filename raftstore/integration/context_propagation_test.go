@@ -29,6 +29,26 @@ type staticResolver struct {
 	regions []*metapb.RegionDescriptor
 }
 
+type testStoreEndpoint struct {
+	StoreID uint64
+	Addr    string
+}
+
+type staticStoreResolver []testStoreEndpoint
+
+func (r staticStoreResolver) GetStore(_ context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error) {
+	for _, endpoint := range r {
+		if endpoint.StoreID == req.GetStoreId() {
+			return &coordpb.GetStoreResponse{Store: &coordpb.StoreInfo{
+				StoreId:    endpoint.StoreID,
+				ClientAddr: endpoint.Addr,
+				State:      coordpb.StoreState_STORE_STATE_UP,
+			}}, nil
+		}
+	}
+	return &coordpb.GetStoreResponse{NotFound: true}, nil
+}
+
 func (r *staticResolver) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
 	for _, region := range r.regions {
 		if region != nil && containsRegionKey(region, req.GetKey()) {
@@ -151,7 +171,7 @@ func TestClientReadWriteHonorContextUnderQuorumLoss(t *testing.T) {
 
 	leaderStatus := testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 1)
 	cli, err := client.New(client.Config{
-		Stores: []client.StoreEndpoint{
+		StoreResolver: staticStoreResolver{
 			{StoreID: 1, Addr: seed.Addr()},
 			{StoreID: 2, Addr: target2.Addr()},
 			{StoreID: 3, Addr: target3.Addr()},
@@ -277,7 +297,7 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 	childLeaderNode, _ := testcluster.FindLeader(t, ctx, 92, seed, target)
 
 	cli, err := client.New(client.Config{
-		Stores: []client.StoreEndpoint{
+		StoreResolver: staticStoreResolver{
 			{StoreID: 1, Addr: seed.Addr()},
 			{StoreID: 2, Addr: target.Addr()},
 		},
@@ -326,7 +346,7 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 			return false
 		}
 		recoveryCli, err := client.New(client.Config{
-			Stores: []client.StoreEndpoint{
+			StoreResolver: staticStoreResolver{
 				{StoreID: 1, Addr: seed.Addr()},
 				{StoreID: 2, Addr: target.Addr()},
 			},

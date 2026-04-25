@@ -42,6 +42,8 @@ type clusterRegion struct {
 	committed    map[string]clusterValue
 	prewriteHits int
 	commitHits   int
+	rollbackHits int
+	resolveHits  int
 	getHits      int
 	scanHits     int
 }
@@ -88,6 +90,81 @@ type mockRegionResolver struct {
 	calls    int
 	closed   bool
 	closeErr error
+}
+
+type testStoreEndpoint struct {
+	StoreID uint64
+	Addr    string
+	State   coordpb.StoreState
+}
+
+type staticStoreResolver []testStoreEndpoint
+
+func (r staticStoreResolver) GetStore(_ context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error) {
+	for _, endpoint := range r {
+		if endpoint.StoreID == req.GetStoreId() {
+			state := endpoint.State
+			if state == coordpb.StoreState_STORE_STATE_UNKNOWN {
+				state = coordpb.StoreState_STORE_STATE_UP
+			}
+			return &coordpb.GetStoreResponse{
+				Store: &coordpb.StoreInfo{
+					StoreId:    endpoint.StoreID,
+					ClientAddr: endpoint.Addr,
+					State:      state,
+				},
+			}, nil
+		}
+	}
+	return &coordpb.GetStoreResponse{NotFound: true}, nil
+}
+
+type mutableStoreResolver struct {
+	mu       sync.Mutex
+	endpoint testStoreEndpoint
+	calls    int
+	err      error
+}
+
+func (r *mutableStoreResolver) GetStore(_ context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+	if r.err != nil {
+		return nil, r.err
+	}
+	if r.endpoint.StoreID != req.GetStoreId() {
+		return &coordpb.GetStoreResponse{NotFound: true}, nil
+	}
+	state := r.endpoint.State
+	if state == coordpb.StoreState_STORE_STATE_UNKNOWN {
+		state = coordpb.StoreState_STORE_STATE_UP
+	}
+	return &coordpb.GetStoreResponse{
+		Store: &coordpb.StoreInfo{
+			StoreId:    r.endpoint.StoreID,
+			ClientAddr: r.endpoint.Addr,
+			State:      state,
+		},
+	}, nil
+}
+
+func (r *mutableStoreResolver) setEndpoint(endpoint testStoreEndpoint) {
+	r.mu.Lock()
+	r.endpoint = endpoint
+	r.mu.Unlock()
+}
+
+func (r *mutableStoreResolver) setError(err error) {
+	r.mu.Lock()
+	r.err = err
+	r.mu.Unlock()
+}
+
+func (r *mutableStoreResolver) callCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
 }
 
 type blockingRegionResolver struct {
@@ -264,6 +341,79 @@ func (mc *mockCluster) commit(storeID uint64, regionID uint64, req *kvrpcpb.Comm
 	}
 	region.commitHits++
 	return &kvrpcpb.CommitResponse{}, nil
+}
+
+func (mc *mockCluster) rollback(storeID uint64, regionID uint64, req *kvrpcpb.BatchRollbackRequest) (*kvrpcpb.BatchRollbackResponse, *errorpb.RegionError) {
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+	region, ok := mc.regions[regionID]
+	if !ok || region == nil {
+		atomic.AddInt32(&mc.notLeaderCount, 1)
+		return nil, epochNotMatch(mc.regions)
+	}
+	if storeID != region.leaderStore {
+		atomic.AddInt32(&mc.notLeaderCount, 1)
+		return nil, notLeaderError(region)
+	}
+	if req == nil {
+		return &kvrpcpb.BatchRollbackResponse{}, nil
+	}
+	pending := region.pending[req.GetStartVersion()]
+	for _, key := range req.GetKeys() {
+		if pending != nil {
+			delete(pending, string(key))
+		}
+	}
+	if len(pending) == 0 {
+		delete(region.pending, req.GetStartVersion())
+	}
+	region.rollbackHits++
+	return &kvrpcpb.BatchRollbackResponse{}, nil
+}
+
+func (mc *mockCluster) resolve(storeID uint64, regionID uint64, req *kvrpcpb.ResolveLockRequest) (*kvrpcpb.ResolveLockResponse, *errorpb.RegionError) {
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+	region, ok := mc.regions[regionID]
+	if !ok || region == nil {
+		atomic.AddInt32(&mc.notLeaderCount, 1)
+		return nil, epochNotMatch(mc.regions)
+	}
+	if storeID != region.leaderStore {
+		atomic.AddInt32(&mc.notLeaderCount, 1)
+		return nil, notLeaderError(region)
+	}
+	if req == nil {
+		return &kvrpcpb.ResolveLockResponse{}, nil
+	}
+	pending := region.pending[req.GetStartVersion()]
+	var resolved uint64
+	for _, key := range req.GetKeys() {
+		pend, ok := pending[string(key)]
+		if !ok {
+			continue
+		}
+		if req.GetCommitVersion() == 0 {
+			delete(pending, string(key))
+			resolved++
+			continue
+		}
+		if pend.delete {
+			delete(region.committed, string(key))
+		} else {
+			region.committed[string(key)] = clusterValue{
+				value:         append([]byte(nil), pend.value...),
+				commitVersion: req.GetCommitVersion(),
+			}
+		}
+		delete(pending, string(key))
+		resolved++
+	}
+	if len(pending) == 0 {
+		delete(region.pending, req.GetStartVersion())
+	}
+	region.resolveHits++
+	return &kvrpcpb.ResolveLockResponse{ResolvedLocks: resolved}, nil
 }
 
 func (mc *mockCluster) get(storeID uint64, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
@@ -450,12 +600,26 @@ func (s *mockService) KvCommit(ctx context.Context, req *kvrpcpb.KvCommitRequest
 	}, nil
 }
 
-func (s *mockService) KvBatchRollback(context.Context, *kvrpcpb.KvBatchRollbackRequest) (*kvrpcpb.KvBatchRollbackResponse, error) {
-	return &kvrpcpb.KvBatchRollbackResponse{}, nil
+func (s *mockService) KvBatchRollback(ctx context.Context, req *kvrpcpb.KvBatchRollbackRequest) (*kvrpcpb.KvBatchRollbackResponse, error) {
+	if req == nil || req.GetContext() == nil {
+		return nil, statusInvalidArgument("context required")
+	}
+	resp, regionErr := s.cluster.rollback(s.storeID, req.GetContext().GetRegionId(), req.GetRequest())
+	return &kvrpcpb.KvBatchRollbackResponse{
+		Response:    resp,
+		RegionError: regionErr,
+	}, nil
 }
 
-func (s *mockService) KvResolveLock(context.Context, *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
-	return &kvrpcpb.KvResolveLockResponse{}, nil
+func (s *mockService) KvResolveLock(ctx context.Context, req *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
+	if req == nil || req.GetContext() == nil {
+		return nil, statusInvalidArgument("context required")
+	}
+	resp, regionErr := s.cluster.resolve(s.storeID, req.GetContext().GetRegionId(), req.GetRequest())
+	return &kvrpcpb.KvResolveLockResponse{
+		Response:    resp,
+		RegionError: regionErr,
+	}, nil
 }
 
 func (s *mockService) KvCheckTxnStatus(context.Context, *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error) {
@@ -565,7 +729,7 @@ func TestClientTwoPhaseCommitAndGet(t *testing.T) {
 	defer stopFollower()
 
 	clientCfg := Config{
-		Stores: []StoreEndpoint{
+		StoreResolver: staticStoreResolver{
 			{StoreID: 2, Addr: addrFollower},
 			{StoreID: 1, Addr: addrLeader},
 		},
@@ -653,7 +817,7 @@ func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 	defer stop()
 
 	clientCfg := Config{
-		Stores: []StoreEndpoint{
+		StoreResolver: staticStoreResolver{
 			{StoreID: 1, Addr: addr},
 		},
 		RegionResolver: resolverFromCluster(cluster),
@@ -709,7 +873,7 @@ func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 
 func TestNewRequiresRegionResolver(t *testing.T) {
 	_, err := New(Config{
-		Stores: []StoreEndpoint{
+		StoreResolver: staticStoreResolver{
 			{StoreID: 1, Addr: "127.0.0.1:1"},
 		},
 	})
@@ -740,7 +904,7 @@ func TestClientRegionResolverLookupAndCache(t *testing.T) {
 
 	resolver := &mockRegionResolver{region: cluster.regions[1].meta}
 	cli, err := New(Config{
-		Stores: []StoreEndpoint{
+		StoreResolver: staticStoreResolver{
 			{StoreID: 1, Addr: addr},
 		},
 		RegionResolver: resolver,
@@ -837,7 +1001,7 @@ func TestNormalizeRPCErrorOnGet(t *testing.T) {
 		},
 	}
 	cli, err := New(Config{
-		Stores: []StoreEndpoint{
+		StoreResolver: staticStoreResolver{
 			{StoreID: 1, Addr: addr},
 		},
 		RegionResolver: &mockRegionResolver{region: meta},
@@ -873,7 +1037,7 @@ func TestClientRegionResolverLookupErrors(t *testing.T) {
 
 	makeClient := func(resolver *mockRegionResolver) *Client {
 		cli, err := New(Config{
-			Stores: []StoreEndpoint{
+			StoreResolver: staticStoreResolver{
 				{StoreID: 1, Addr: addr},
 			},
 			RegionResolver: resolver,
@@ -927,7 +1091,7 @@ func TestClientRetriesRouteUnavailable(t *testing.T) {
 		errs:   []error{status.Error(codes.Unavailable, "pd down")},
 	}
 	cli, err := New(Config{
-		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
 		RegionResolver: resolver,
 		DialOptions: []grpc.DialOption{
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -963,7 +1127,7 @@ func TestClientRetriesTransportUnavailable(t *testing.T) {
 	defer stop()
 
 	cli, err := New(Config{
-		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
 		RegionResolver: &mockRegionResolver{region: meta},
 		DialOptions: []grpc.DialOption{
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -1004,7 +1168,7 @@ func TestClientTwoPhaseCommitRetriesRouteUnavailableDuringGrouping(t *testing.T)
 	resolver.errs = []error{status.Error(codes.Unavailable, "pd down")}
 
 	cli, err := New(Config{
-		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
 		RegionResolver: resolver,
 		DialOptions: []grpc.DialOption{
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -1050,7 +1214,7 @@ func TestClientResolveLocksRetriesRouteUnavailableDuringGrouping(t *testing.T) {
 	resolver.errs = []error{status.Error(codes.Unavailable, "pd down")}
 
 	cli, err := New(Config{
-		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
 		RegionResolver: resolver,
 		DialOptions: []grpc.DialOption{
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -1095,7 +1259,7 @@ func TestClientCheckTxnStatusRetriesRouteUnavailable(t *testing.T) {
 	resolver.errs = []error{status.Error(codes.Unavailable, "pd down")}
 
 	cli, err := New(Config{
-		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
 		RegionResolver: resolver,
 		DialOptions: []grpc.DialOption{
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -1116,7 +1280,7 @@ func TestClientCheckTxnStatusRetriesRouteUnavailable(t *testing.T) {
 	resolver.mu.Unlock()
 }
 
-func TestClientLazyDialSkipsUnusedStoreEndpoints(t *testing.T) {
+func TestClientLazyDialSkipsUnusedStores(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
 			meta: &metapb.RegionDescriptor{
@@ -1138,7 +1302,7 @@ func TestClientLazyDialSkipsUnusedStoreEndpoints(t *testing.T) {
 	defer stop()
 
 	cli, err := New(Config{
-		Stores: []StoreEndpoint{
+		StoreResolver: staticStoreResolver{
 			{StoreID: 1, Addr: addr},
 			{StoreID: 2, Addr: "127.0.0.1:1"},
 		},
@@ -1156,8 +1320,135 @@ func TestClientLazyDialSkipsUnusedStoreEndpoints(t *testing.T) {
 
 	cli.mu.RLock()
 	require.NotNil(t, cli.stores[1].conn)
-	require.Nil(t, cli.stores[2].conn, "unused store should not be dialed eagerly")
+	require.NotContains(t, cli.stores, uint64(2), "unused store should not be resolved or dialed eagerly")
 	cli.mu.RUnlock()
+}
+
+func TestClientRejectsDownStoreFromResolver(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers: []*metapb.RegionPeer{
+					{StoreId: 1, PeerId: 101},
+				},
+			},
+			leaderStore: 1,
+		},
+	)
+	cli, err := New(Config{
+		StoreResolver: staticStoreResolver{
+			{StoreID: 1, Addr: "127.0.0.1:1", State: coordpb.StoreState_STORE_STATE_DOWN},
+		},
+		RegionResolver: &mockRegionResolver{region: cluster.regions[1].meta},
+		Retry: RetryPolicy{
+			MaxAttempts:                 1,
+			TransportUnavailableBackoff: 0,
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	_, err = cli.Get(context.Background(), []byte("alfa"), 20)
+	require.Error(t, err)
+	require.True(t, IsStoreUnavailable(err))
+}
+
+func TestClientRevalidatesCachedStoreAndRejectsDownState(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers: []*metapb.RegionPeer{
+					{StoreId: 1, PeerId: 101},
+				},
+			},
+			leaderStore: 1,
+			committed: map[string]clusterValue{
+				"alfa": {value: []byte("value-a"), commitVersion: 10},
+			},
+		},
+	)
+	addr, stop := startMockStore(t, cluster, 1)
+	defer stop()
+
+	storeResolver := &mutableStoreResolver{endpoint: testStoreEndpoint{StoreID: 1, Addr: addr}}
+	cli, err := New(Config{
+		StoreResolver:           storeResolver,
+		RegionResolver:          &mockRegionResolver{region: cluster.regions[1].meta},
+		StoreRevalidateInterval: time.Nanosecond,
+		DialOptions:             []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry: RetryPolicy{
+			MaxAttempts:                 1,
+			TransportUnavailableBackoff: 0,
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	resp, err := cli.Get(context.Background(), []byte("alfa"), 20)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value-a"), resp.GetValue())
+
+	storeResolver.setEndpoint(testStoreEndpoint{
+		StoreID: 1,
+		Addr:    addr,
+		State:   coordpb.StoreState_STORE_STATE_DOWN,
+	})
+	_, err = cli.Get(context.Background(), []byte("alfa"), 20)
+	require.Error(t, err)
+	require.True(t, IsStoreUnavailable(err))
+
+	cli.mu.RLock()
+	require.NotContains(t, cli.stores, uint64(1))
+	cli.mu.RUnlock()
+}
+
+func TestClientKeepsCachedStoreWhenRevalidationResolverFails(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers: []*metapb.RegionPeer{
+					{StoreId: 1, PeerId: 101},
+				},
+			},
+			leaderStore: 1,
+			committed: map[string]clusterValue{
+				"alfa": {value: []byte("value-a"), commitVersion: 10},
+			},
+		},
+	)
+	addr, stop := startMockStore(t, cluster, 1)
+	defer stop()
+
+	storeResolver := &mutableStoreResolver{endpoint: testStoreEndpoint{StoreID: 1, Addr: addr}}
+	cli, err := New(Config{
+		StoreResolver:           storeResolver,
+		RegionResolver:          &mockRegionResolver{region: cluster.regions[1].meta},
+		StoreRevalidateInterval: time.Nanosecond,
+		DialOptions:             []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	_, err = cli.Get(context.Background(), []byte("alfa"), 20)
+	require.NoError(t, err)
+
+	storeResolver.setError(status.Error(codes.Unavailable, "coordinator down"))
+	resp, err := cli.Get(context.Background(), []byte("alfa"), 20)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value-a"), resp.GetValue())
+	require.GreaterOrEqual(t, storeResolver.callCount(), 2)
 }
 
 func TestClientRegionResolverLookupUsesIndexedCacheAcrossRegions(t *testing.T) {
@@ -1198,7 +1489,7 @@ func TestClientRegionResolverLookupUsesIndexedCacheAcrossRegions(t *testing.T) {
 
 	resolver := resolverFromCluster(cluster)
 	cli, err := New(Config{
-		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
 		RegionResolver: resolver,
 		DialOptions: []grpc.DialOption{
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -1453,7 +1744,7 @@ func TestRegionForKeyFromResolverDropsStaleCachedLeader(t *testing.T) {
 		},
 	}
 	cli, err := New(Config{
-		Stores: []StoreEndpoint{
+		StoreResolver: staticStoreResolver{
 			{StoreID: 2, Addr: "127.0.0.1:2"},
 			{StoreID: 3, Addr: "127.0.0.1:3"},
 		},
@@ -1487,7 +1778,7 @@ func TestRegionForKeyFromResolverDropsStaleCachedLeader(t *testing.T) {
 func TestClientGetHonorsCanceledContextDuringRouteLookup(t *testing.T) {
 	resolver := &blockingRegionResolver{started: make(chan struct{}, 1)}
 	cli, err := New(Config{
-		Stores:         []StoreEndpoint{{StoreID: 1, Addr: "127.0.0.1:1"}},
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: "127.0.0.1:1"}},
 		RegionResolver: resolver,
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 		Retry: RetryPolicy{
@@ -1536,7 +1827,7 @@ func TestClientGetHonorsCanceledContextDuringRPC(t *testing.T) {
 
 	resolver := &mockRegionResolver{region: meta}
 	cli, err := New(Config{
-		Stores:             []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		StoreResolver:      staticStoreResolver{{StoreID: 1, Addr: addr}},
 		RegionResolver:     resolver,
 		RouteLookupTimeout: time.Second,
 		DialOptions:        []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
@@ -1579,7 +1870,7 @@ func TestClientGetHonorsCanceledContextDuringRPC(t *testing.T) {
 func TestClientPutHonorsCanceledContextDuringRouteLookup(t *testing.T) {
 	resolver := &blockingRegionResolver{started: make(chan struct{}, 1)}
 	cli, err := New(Config{
-		Stores:         []StoreEndpoint{{StoreID: 1, Addr: "127.0.0.1:1"}},
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: "127.0.0.1:1"}},
 		RegionResolver: resolver,
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 		Retry: RetryPolicy{
@@ -1627,7 +1918,7 @@ func TestClientPutHonorsCanceledContextDuringRPC(t *testing.T) {
 
 	resolver := &mockRegionResolver{region: meta}
 	cli, err := New(Config{
-		Stores:             []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		StoreResolver:      staticStoreResolver{{StoreID: 1, Addr: addr}},
 		RegionResolver:     resolver,
 		RouteLookupTimeout: time.Second,
 		DialOptions:        []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
@@ -1687,7 +1978,7 @@ func TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRouteLookup(t
 		regions:     []*metapb.RegionDescriptor{metaA, metaB},
 	}
 	cli, err := New(Config{
-		Stores:         []StoreEndpoint{{StoreID: 1, Addr: "127.0.0.1:1"}},
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: "127.0.0.1:1"}},
 		RegionResolver: resolver,
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 		Retry: RetryPolicy{
@@ -1757,7 +2048,7 @@ func TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRPC(t *testin
 	defer stop()
 
 	cli, err := New(Config{
-		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
 		RegionResolver: resolverFromCluster(cluster),
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 		Retry: RetryPolicy{
@@ -1830,7 +2121,7 @@ func TestClientResolveLocksHonorsCanceledContextDuringMultiRegionRPC(t *testing.
 	defer stop()
 
 	cli, err := New(Config{
-		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
 		RegionResolver: resolverFromCluster(cluster),
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 		Retry: RetryPolicy{

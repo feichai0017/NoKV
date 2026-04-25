@@ -104,6 +104,8 @@ func (s *SchedulerClient) StoreHeartbeat(ctx context.Context, stats storepkg.Sto
 	defer cancel()
 	resp, err := s.coordinator.StoreHeartbeat(ctx, &coordpb.StoreHeartbeatRequest{
 		StoreId:           stats.StoreID,
+		ClientAddr:        stats.ClientAddr,
+		RaftAddr:          stats.RaftAddr,
 		RegionNum:         stats.RegionNum,
 		LeaderNum:         stats.LeaderNum,
 		Capacity:          stats.Capacity,

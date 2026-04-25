@@ -19,6 +19,7 @@ package server
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	coordablation "github.com/feichai0017/NoKV/coordinator/ablation"
@@ -61,6 +62,10 @@ type Service struct {
 	rootViewMu        sync.RWMutex
 	rootView          coordinatorRootSnapshotView
 	rootViewTTL       time.Duration
+	// storeHeartbeatTTL holds the time.Duration value as an int64 so callers
+	// (storeState reads, ConfigureStoreHeartbeatTTL writes) avoid a data race
+	// without taking a lock on the read path.
+	storeHeartbeatTTL atomic.Int64
 	statusMu          sync.RWMutex
 	lastRootReload    int64
 	lastRootError     string
@@ -124,6 +129,7 @@ const defaultTenureRetryMin = 200 * time.Millisecond
 const maxTenureRetry = 60 * time.Second
 const defaultTenureReleaseTimeout = 2 * time.Second
 const defaultRootSnapshotRefreshInterval = 250 * time.Millisecond
+const defaultStoreHeartbeatTTL = 10 * time.Second
 
 // NewService constructs a Coordinator service. The optional root storage fixes
 // durable rooted persistence at construction time; omitting it keeps the service
@@ -142,7 +148,7 @@ func NewService(cluster *catalog.Cluster, ids *idalloc.IDAllocator, tsAlloc *tso
 	if len(root) > 0 {
 		storage = root[0]
 	}
-	return &Service{
+	svc := &Service{
 		cluster:       cluster,
 		ids:           ids,
 		tso:           tsAlloc,
@@ -151,6 +157,8 @@ func NewService(cluster *catalog.Cluster, ids *idalloc.IDAllocator, tsAlloc *tso
 		tsoWindowSize: defaultAllocatorWindowSize,
 		now:           time.Now,
 	}
+	svc.storeHeartbeatTTL.Store(int64(defaultStoreHeartbeatTTL))
+	return svc
 }
 
 // ConfigureTenure enables the explicit coordinator owner lease gate.
@@ -202,6 +210,20 @@ func (s *Service) ConfigureAllocatorWindows(idWindowSize, tsoWindowSize uint64) 
 	if tsoWindowSize != 0 {
 		s.tsoWindowSize = tsoWindowSize
 	}
+}
+
+// ConfigureStoreHeartbeatTTL controls when the runtime store registry marks a
+// store as down after its last heartbeat. Non-positive values keep the default.
+// Safe to call concurrently with RPC handlers that read storeHeartbeatTTL via
+// atomic load (see storeState in service_gateway.go).
+func (s *Service) ConfigureStoreHeartbeatTTL(ttl time.Duration) {
+	if s == nil {
+		return
+	}
+	if ttl <= 0 {
+		ttl = defaultStoreHeartbeatTTL
+	}
+	s.storeHeartbeatTTL.Store(int64(ttl))
 }
 
 // ConfigureAblation installs first-cut experimental switches used by the

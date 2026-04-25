@@ -18,6 +18,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /out/nokv-redis ./cmd/nokv-redis
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /out/nokv-fsmeta ./cmd/nokv-fsmeta
 
 FROM debian:bookworm-slim
 RUN useradd --system --create-home --home-dir /var/lib/nokv nokv \
@@ -27,6 +30,7 @@ RUN useradd --system --create-home --home-dir /var/lib/nokv nokv \
 COPY --from=builder /out/nokv /usr/local/bin/nokv
 COPY --from=builder /out/nokv-config /usr/local/bin/nokv-config
 COPY --from=builder /out/nokv-redis /usr/local/bin/nokv-redis
+COPY --from=builder /out/nokv-fsmeta /usr/local/bin/nokv-fsmeta
 COPY scripts /usr/local/lib/nokv-scripts
 # Wrappers instead of symlinks: the scripts resolve $SCRIPT_DIR from
 # $BASH_SOURCE[0], which with a symlink points at /usr/local/bin and breaks

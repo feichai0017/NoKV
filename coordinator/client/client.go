@@ -31,6 +31,8 @@ type Client interface {
 	AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error)
 	Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.TsoResponse, error)
 	Close() error
+	GetStore(ctx context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error)
+	ListStores(ctx context.Context, req *coordpb.ListStoresRequest) (*coordpb.ListStoresResponse, error)
 }
 
 // GRPCClient is a thin wrapper around generated coordpb.CoordinatorClient.
@@ -213,6 +215,20 @@ func (c *GRPCClient) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionB
 	}, func(resp *coordpb.GetRegionByKeyResponse) error {
 		return c.validateGetRegionByKeyResponse(req, resp)
 	})
+}
+
+// GetStore returns the current runtime endpoint for one store.
+func (c *GRPCClient) GetStore(ctx context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error) {
+	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.GetStoreResponse, error) {
+		return coord.GetStore(ctx, req)
+	}, validateGetStoreResponse)
+}
+
+// ListStores returns the current runtime store registry snapshot.
+func (c *GRPCClient) ListStores(ctx context.Context, req *coordpb.ListStoresRequest) (*coordpb.ListStoresResponse, error) {
+	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListStoresResponse, error) {
+		return coord.ListStores(ctx, req)
+	}, validateListStoresResponse)
 }
 
 // AllocID forwards ID allocation RPC.
@@ -449,6 +465,52 @@ func (c *GRPCClient) validateGetRegionByKeyResponse(req *coordpb.GetRegionByKeyR
 	}
 	if resp.GetDescriptorRevision() < expectation.requiredDescriptorRevision {
 		return fmt.Errorf("%w: descriptor_revision=%d required=%d", errInvalidWitness, resp.GetDescriptorRevision(), expectation.requiredDescriptorRevision)
+	}
+	return nil
+}
+
+func validateGetStoreResponse(resp *coordpb.GetStoreResponse) error {
+	if resp == nil {
+		return fmt.Errorf("%w: get_store response is nil", errInvalidWitness)
+	}
+	if resp.GetNotFound() {
+		if resp.GetStore() != nil {
+			return fmt.Errorf("%w: get_store not_found reply carries store", errInvalidWitness)
+		}
+		return nil
+	}
+	store := resp.GetStore()
+	if store == nil {
+		return fmt.Errorf("%w: get_store missing store on non-not-found reply", errInvalidWitness)
+	}
+	if store.GetStoreId() == 0 {
+		return fmt.Errorf("%w: get_store store_id is zero", errInvalidWitness)
+	}
+	if store.GetClientAddr() == "" {
+		return fmt.Errorf("%w: get_store client_addr is empty", errInvalidWitness)
+	}
+	return nil
+}
+
+func validateListStoresResponse(resp *coordpb.ListStoresResponse) error {
+	if resp == nil {
+		return fmt.Errorf("%w: list_stores response is nil", errInvalidWitness)
+	}
+	seen := make(map[uint64]struct{}, len(resp.GetStores()))
+	for _, store := range resp.GetStores() {
+		if store == nil {
+			return fmt.Errorf("%w: list_stores contains nil store", errInvalidWitness)
+		}
+		if store.GetStoreId() == 0 {
+			return fmt.Errorf("%w: list_stores contains zero store_id", errInvalidWitness)
+		}
+		if store.GetClientAddr() == "" {
+			return fmt.Errorf("%w: list_stores store %d has empty client_addr", errInvalidWitness, store.GetStoreId())
+		}
+		if _, ok := seen[store.GetStoreId()]; ok {
+			return fmt.Errorf("%w: list_stores duplicate store_id=%d", errInvalidWitness, store.GetStoreId())
+		}
+		seen[store.GetStoreId()] = struct{}{}
 	}
 	return nil
 }
