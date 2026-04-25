@@ -1,6 +1,7 @@
 package workload
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"testing"
@@ -64,9 +65,12 @@ func TestRunCheckpointStorm(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, CheckpointStorm, result.Name)
+	result.Driver = DriverNativeFSMetadata
 	require.Equal(t, 8, result.Ops)
 	require.Zero(t, result.Errors)
-	require.NotEmpty(t, SummaryRows(result))
+	rows := SummaryRows(result)
+	require.NotEmpty(t, rows)
+	require.Equal(t, DriverNativeFSMetadata, rows[0].Driver)
 }
 
 func TestRunHotspotFanIn(t *testing.T) {
@@ -83,6 +87,20 @@ func TestRunHotspotFanIn(t *testing.T) {
 	require.Equal(t, HotspotFanIn, result.Name)
 	require.Equal(t, 12, result.Ops)
 	require.Zero(t, result.Errors)
+}
+
+func TestWriteSummaryCSVIncludesDriver(t *testing.T) {
+	var buf bytes.Buffer
+	err := WriteSummaryCSV(&buf, []SummaryRow{{
+		Workload:  CheckpointStorm,
+		Driver:    DriverGenericKV,
+		RunID:     "run-1",
+		Operation: "create_checkpoint",
+		Count:     1,
+	}})
+	require.NoError(t, err)
+	require.Contains(t, buf.String(), "workload,driver,run_id,operation")
+	require.Contains(t, buf.String(), "checkpoint-storm,generic-kv,run-1,create_checkpoint")
 }
 
 func dentryID(parent fsmeta.InodeID, name string) string {
