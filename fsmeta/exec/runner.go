@@ -25,6 +25,7 @@ type KV struct {
 type TxnRunner interface {
 	ReserveTimestamp(ctx context.Context, count uint64) (uint64, error)
 	Get(ctx context.Context, key []byte, version uint64) ([]byte, bool, error)
+	BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string][]byte, error)
 	Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]KV, error)
 	Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error
 }
@@ -145,6 +146,62 @@ func (e *Executor) ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fs
 	if err != nil {
 		return nil, err
 	}
+	return e.scanDentries(ctx, plan, version)
+}
+
+// ReadDirPlus returns one directory page fused with inode attributes at the
+// same snapshot version. This is the first native fsmeta operation that avoids
+// client-side dentry scan plus N point reads.
+func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error) {
+	plan, err := fsmeta.PlanReadDir(req)
+	if err != nil {
+		return nil, err
+	}
+	version, err := e.reserveReadVersion(ctx)
+	if err != nil {
+		return nil, err
+	}
+	dentries, err := e.scanDentries(ctx, plan, version)
+	if err != nil {
+		return nil, err
+	}
+	if len(dentries) == 0 {
+		return []fsmeta.DentryAttrPair{}, nil
+	}
+	inodeKeys := make([][]byte, 0, len(dentries))
+	for _, dentry := range dentries {
+		key, err := fsmeta.EncodeInodeKey(req.Mount, dentry.Inode)
+		if err != nil {
+			return nil, err
+		}
+		inodeKeys = append(inodeKeys, key)
+	}
+	inodeValues, err := e.runner.BatchGet(ctx, inodeKeys, version)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]fsmeta.DentryAttrPair, 0, len(dentries))
+	for i, dentry := range dentries {
+		value, ok := inodeValues[string(inodeKeys[i])]
+		if !ok {
+			return nil, fmt.Errorf("%w: inode %d", fsmeta.ErrNotFound, dentry.Inode)
+		}
+		inode, err := fsmeta.DecodeInodeValue(value)
+		if err != nil {
+			return nil, err
+		}
+		if inode.Inode != dentry.Inode {
+			return nil, fmt.Errorf("%w: dentry inode=%d value inode=%d", fsmeta.ErrInvalidValue, dentry.Inode, inode.Inode)
+		}
+		out = append(out, fsmeta.DentryAttrPair{
+			Dentry: dentry,
+			Inode:  inode,
+		})
+	}
+	return out, nil
+}
+
+func (e *Executor) scanDentries(ctx context.Context, plan fsmeta.OperationPlan, version uint64) ([]fsmeta.DentryRecord, error) {
 	kvs, err := e.runner.Scan(ctx, plan.StartKey, plan.Limit, version)
 	if err != nil {
 		return nil, err

@@ -45,6 +45,16 @@ func (r *fakeRunner) Get(_ context.Context, key []byte, _ uint64) ([]byte, bool,
 	return append([]byte(nil), value...), true, nil
 }
 
+func (r *fakeRunner) BatchGet(_ context.Context, keys [][]byte, _ uint64) (map[string][]byte, error) {
+	out := make(map[string][]byte, len(keys))
+	for _, key := range keys {
+		if value, ok := r.data[string(key)]; ok {
+			out[string(key)] = append([]byte(nil), value...)
+		}
+	}
+	return out, nil
+}
+
 func (r *fakeRunner) Scan(_ context.Context, startKey []byte, limit uint32, _ uint64) ([]KV, error) {
 	keys := make([][]byte, 0, len(r.data))
 	for key := range r.data {
@@ -195,6 +205,70 @@ func TestExecutorReadDirConsumesPlanCursorAndLimit(t *testing.T) {
 	}}, records)
 }
 
+func TestExecutorReadDirPlusReturnsDentriesAndAttrs(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "a", 21)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{
+		Inode:     21,
+		Type:      fsmeta.InodeTypeFile,
+		Size:      4096,
+		Mode:      0o644,
+		LinkCount: 1,
+	})
+	seedDentryType(t, runner, "vol", 7, "b", 22, fsmeta.InodeTypeDirectory)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{
+		Inode:     22,
+		Type:      fsmeta.InodeTypeDirectory,
+		Mode:      0o755,
+		LinkCount: 2,
+	})
+
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	pairs, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Limit:  8,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []fsmeta.DentryAttrPair{
+		{
+			Dentry: fsmeta.DentryRecord{Parent: 7, Name: "a", Inode: 21, Type: fsmeta.InodeTypeFile},
+			Inode: fsmeta.InodeRecord{
+				Inode:     21,
+				Type:      fsmeta.InodeTypeFile,
+				Size:      4096,
+				Mode:      0o644,
+				LinkCount: 1,
+			},
+		},
+		{
+			Dentry: fsmeta.DentryRecord{Parent: 7, Name: "b", Inode: 22, Type: fsmeta.InodeTypeDirectory},
+			Inode: fsmeta.InodeRecord{
+				Inode:     22,
+				Type:      fsmeta.InodeTypeDirectory,
+				Mode:      0o755,
+				LinkCount: 2,
+			},
+		},
+	}, pairs)
+}
+
+func TestExecutorReadDirPlusMissingInodeReturnsNotFound(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "a", 21)
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	_, err = executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Limit:  8,
+	})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+}
+
 func TestExecutorUnlinkRemovesDentry(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "file", 22)
@@ -301,14 +375,28 @@ func TestExecutorRenameRejectsExistingDestination(t *testing.T) {
 
 func seedDentry(t *testing.T, runner *fakeRunner, mount fsmeta.MountID, parent fsmeta.InodeID, name string, inode fsmeta.InodeID) {
 	t.Helper()
+	seedDentryType(t, runner, mount, parent, name, inode, fsmeta.InodeTypeFile)
+}
+
+func seedDentryType(t *testing.T, runner *fakeRunner, mount fsmeta.MountID, parent fsmeta.InodeID, name string, inode fsmeta.InodeID, typ fsmeta.InodeType) {
+	t.Helper()
 	key, err := fsmeta.EncodeDentryKey(mount, parent, name)
 	require.NoError(t, err)
 	value, err := fsmeta.EncodeDentryValue(fsmeta.DentryRecord{
 		Parent: parent,
 		Name:   name,
 		Inode:  inode,
-		Type:   fsmeta.InodeTypeFile,
+		Type:   typ,
 	})
+	require.NoError(t, err)
+	runner.data[string(key)] = value
+}
+
+func seedInode(t *testing.T, runner *fakeRunner, mount fsmeta.MountID, record fsmeta.InodeRecord) {
+	t.Helper()
+	key, err := fsmeta.EncodeInodeKey(mount, record.Inode)
+	require.NoError(t, err)
+	value, err := fsmeta.EncodeInodeValue(record)
 	require.NoError(t, err)
 	runner.data[string(key)] = value
 }

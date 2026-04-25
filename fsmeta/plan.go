@@ -5,8 +5,8 @@ package fsmeta
 //     intentionally out of this contract slice.
 //   - PlanRename only plans source and destination dentry keys. POSIX overwrite
 //     and file-type checks belong to the executor that interprets current values.
-//   - mkdir, link, setxattr, and native ReadDirPlus are left for the next slice
-//     after the base transaction contract is stable.
+//   - mkdir, link, and setxattr are left for later slices after the base
+//     transaction contract is stable.
 
 // OperationKind identifies one metadata operation contract.
 type OperationKind string

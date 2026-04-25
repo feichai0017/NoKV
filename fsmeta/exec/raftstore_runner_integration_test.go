@@ -70,6 +70,28 @@ func TestRaftstoreRunnerExecutorContractOnRealCluster(t *testing.T) {
 		Type:   fsmeta.InodeTypeFile,
 	}}, entries)
 
+	pairs, err := executor.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
+		Mount:  req.Mount,
+		Parent: req.Parent,
+		Limit:  8,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []fsmeta.DentryAttrPair{{
+		Dentry: fsmeta.DentryRecord{
+			Parent: req.Parent,
+			Name:   req.Name,
+			Inode:  req.Inode,
+			Type:   fsmeta.InodeTypeFile,
+		},
+		Inode: fsmeta.InodeRecord{
+			Inode:     req.Inode,
+			Type:      fsmeta.InodeTypeFile,
+			Size:      4096,
+			Mode:      0o644,
+			LinkCount: 1,
+		},
+	}}, pairs)
+
 	err = executor.Create(ctx, req, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
 	require.True(t, errors.Is(err, fsmeta.ErrExists), "duplicate create error = %v", err)
 }

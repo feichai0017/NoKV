@@ -12,6 +12,7 @@ import (
 // KVClient is the raftstore client surface required by RaftstoreRunner.
 type KVClient interface {
 	Get(ctx context.Context, key []byte, version uint64) (*kvrpcpb.GetResponse, error)
+	BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string]*kvrpcpb.GetResponse, error)
 	Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]*kvrpcpb.KV, error)
 	Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error
 }
@@ -76,6 +77,25 @@ func (r *RaftstoreRunner) Get(ctx context.Context, key []byte, version uint64) (
 		return nil, false, fmt.Errorf("fsmeta/exec: kv get key error: %v", keyErr)
 	}
 	return append([]byte(nil), resp.GetValue()...), true, nil
+}
+
+// BatchGet returns found values visible at version, keyed by string(key).
+func (r *RaftstoreRunner) BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string][]byte, error) {
+	responses, err := r.kv.BatchGet(ctx, keys, version)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]byte, len(responses))
+	for keyID, resp := range responses {
+		if resp == nil || resp.GetNotFound() {
+			continue
+		}
+		if keyErr := resp.GetError(); keyErr != nil {
+			return nil, fmt.Errorf("fsmeta/exec: kv batch get key error: %v", keyErr)
+		}
+		out[keyID] = append([]byte(nil), resp.GetValue()...)
+	}
+	return out, nil
 }
 
 // Scan returns up to limit key/value pairs starting at startKey.
