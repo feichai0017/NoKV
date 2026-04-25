@@ -28,14 +28,15 @@ workdir:
 ```
 
 On restart, NoKV recovers hosted peers from local metadata in the store workdir.
-The config file is only used to resolve store and Coordinator addresses.
+The config file is only used to start stores and Coordinator. Runtime clients
+discover store addresses from Coordinator heartbeats.
 Do not rerun `scripts/ops/bootstrap.sh` or treat `scripts/dev/cluster.sh` as the
 restart path for an already-running store.
 
 Start the Redis-compatible gateway in another shell:
 
 ```bash
-go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --raft-config raft_config.example.json
+go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --coordinator-addr 127.0.0.1:2379
 ```
 
 Quick smoke test:

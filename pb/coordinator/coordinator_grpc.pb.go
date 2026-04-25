@@ -22,6 +22,8 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	Coordinator_StoreHeartbeat_FullMethodName   = "/nokv.coordinator.v1.Coordinator/StoreHeartbeat"
+	Coordinator_GetStore_FullMethodName         = "/nokv.coordinator.v1.Coordinator/GetStore"
+	Coordinator_ListStores_FullMethodName       = "/nokv.coordinator.v1.Coordinator/ListStores"
 	Coordinator_RegionLiveness_FullMethodName   = "/nokv.coordinator.v1.Coordinator/RegionLiveness"
 	Coordinator_PublishRootEvent_FullMethodName = "/nokv.coordinator.v1.Coordinator/PublishRootEvent"
 	Coordinator_ListTransitions_FullMethodName  = "/nokv.coordinator.v1.Coordinator/ListTransitions"
@@ -37,6 +39,8 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type CoordinatorClient interface {
 	StoreHeartbeat(ctx context.Context, in *StoreHeartbeatRequest, opts ...grpc.CallOption) (*StoreHeartbeatResponse, error)
+	GetStore(ctx context.Context, in *GetStoreRequest, opts ...grpc.CallOption) (*GetStoreResponse, error)
+	ListStores(ctx context.Context, in *ListStoresRequest, opts ...grpc.CallOption) (*ListStoresResponse, error)
 	RegionLiveness(ctx context.Context, in *RegionLivenessRequest, opts ...grpc.CallOption) (*RegionLivenessResponse, error)
 	PublishRootEvent(ctx context.Context, in *PublishRootEventRequest, opts ...grpc.CallOption) (*PublishRootEventResponse, error)
 	ListTransitions(ctx context.Context, in *ListTransitionsRequest, opts ...grpc.CallOption) (*ListTransitionsResponse, error)
@@ -59,6 +63,26 @@ func (c *coordinatorClient) StoreHeartbeat(ctx context.Context, in *StoreHeartbe
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StoreHeartbeatResponse)
 	err := c.cc.Invoke(ctx, Coordinator_StoreHeartbeat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coordinatorClient) GetStore(ctx context.Context, in *GetStoreRequest, opts ...grpc.CallOption) (*GetStoreResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetStoreResponse)
+	err := c.cc.Invoke(ctx, Coordinator_GetStore_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coordinatorClient) ListStores(ctx context.Context, in *ListStoresRequest, opts ...grpc.CallOption) (*ListStoresResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListStoresResponse)
+	err := c.cc.Invoke(ctx, Coordinator_ListStores_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +174,8 @@ func (c *coordinatorClient) Tso(ctx context.Context, in *TsoRequest, opts ...grp
 // for forward compatibility.
 type CoordinatorServer interface {
 	StoreHeartbeat(context.Context, *StoreHeartbeatRequest) (*StoreHeartbeatResponse, error)
+	GetStore(context.Context, *GetStoreRequest) (*GetStoreResponse, error)
+	ListStores(context.Context, *ListStoresRequest) (*ListStoresResponse, error)
 	RegionLiveness(context.Context, *RegionLivenessRequest) (*RegionLivenessResponse, error)
 	PublishRootEvent(context.Context, *PublishRootEventRequest) (*PublishRootEventResponse, error)
 	ListTransitions(context.Context, *ListTransitionsRequest) (*ListTransitionsResponse, error)
@@ -169,6 +195,12 @@ type UnimplementedCoordinatorServer struct{}
 
 func (UnimplementedCoordinatorServer) StoreHeartbeat(context.Context, *StoreHeartbeatRequest) (*StoreHeartbeatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StoreHeartbeat not implemented")
+}
+func (UnimplementedCoordinatorServer) GetStore(context.Context, *GetStoreRequest) (*GetStoreResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetStore not implemented")
+}
+func (UnimplementedCoordinatorServer) ListStores(context.Context, *ListStoresRequest) (*ListStoresResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListStores not implemented")
 }
 func (UnimplementedCoordinatorServer) RegionLiveness(context.Context, *RegionLivenessRequest) (*RegionLivenessResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegionLiveness not implemented")
@@ -228,6 +260,42 @@ func _Coordinator_StoreHeartbeat_Handler(srv interface{}, ctx context.Context, d
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(CoordinatorServer).StoreHeartbeat(ctx, req.(*StoreHeartbeatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Coordinator_GetStore_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetStoreRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServer).GetStore(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Coordinator_GetStore_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoordinatorServer).GetStore(ctx, req.(*GetStoreRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Coordinator_ListStores_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListStoresRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServer).ListStores(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Coordinator_ListStores_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoordinatorServer).ListStores(ctx, req.(*ListStoresRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -386,6 +454,14 @@ var Coordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StoreHeartbeat",
 			Handler:    _Coordinator_StoreHeartbeat_Handler,
+		},
+		{
+			MethodName: "GetStore",
+			Handler:    _Coordinator_GetStore_Handler,
+		},
+		{
+			MethodName: "ListStores",
+			Handler:    _Coordinator_ListStores_Handler,
 		},
 		{
 			MethodName: "RegionLiveness",

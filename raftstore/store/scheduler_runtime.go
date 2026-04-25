@@ -856,8 +856,14 @@ func (s *Store) storeStatsSnapshot() StoreStats {
 		return StoreStats{}
 	}
 	leaderRegions := s.leaderRegionIDs()
+	s.addressMu.RLock()
+	clientAddr := s.clientAddr
+	raftAddr := s.raftAddr
+	s.addressMu.RUnlock()
 	stats := StoreStats{
 		StoreID:         s.storeID,
+		ClientAddr:      clientAddr,
+		RaftAddr:        raftAddr,
 		RegionNum:       uint64(len(s.RegionMetas())),
 		LeaderNum:       uint64(len(leaderRegions)),
 		LeaderRegionIDs: leaderRegions,

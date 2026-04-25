@@ -75,6 +75,14 @@ func (f *fakePDClient) GetRegionByKey(context.Context, *coordpb.GetRegionByKeyRe
 	return &coordpb.GetRegionByKeyResponse{}, nil
 }
 
+func (f *fakePDClient) GetStore(context.Context, *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error) {
+	return &coordpb.GetStoreResponse{}, nil
+}
+
+func (f *fakePDClient) ListStores(context.Context, *coordpb.ListStoresRequest) (*coordpb.ListStoresResponse, error) {
+	return &coordpb.ListStoresResponse{}, nil
+}
+
 func (f *fakePDClient) AllocID(context.Context, *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error) {
 	return &coordpb.AllocIDResponse{}, nil
 }

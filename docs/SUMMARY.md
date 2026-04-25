@@ -65,3 +65,4 @@
   - [2026-04-05 Range Filter：从 GRF 得到启发，但不照搬 GRF](notes/2026-04-05-range-filter-from-grf.md)
   - [2026-04-12 Coordinator 和 meta/root 分离部署设计](notes/2026-04-12-coordinator-meta-separation.md)
   - [2026-04-24 fsmeta 定位：面向分布式文件系统的元数据底座](notes/2026-04-24-fsmeta-positioning.md)
+  - [2026-04-25 Coordinator 驱动的 Store Registry](notes/2026-04-25-coordinator-store-registry.md)

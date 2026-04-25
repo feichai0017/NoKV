@@ -190,9 +190,7 @@ func openRealClusterExecutor(t *testing.T, ctx context.Context) *Executor {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = coordRPC.Close() })
 	kv, err := client.New(client.Config{
-		Stores: []client.StoreEndpoint{
-			{StoreID: storeID, Addr: node.Addr()},
-		},
+		StoreResolver:  coordRPC,
 		RegionResolver: coordRPC,
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 	})
@@ -272,9 +270,7 @@ func openSplitRealClusterExecutor(t *testing.T, ctx context.Context) *Executor {
 	coordRPC, err := coordclient.NewGRPCClient(ctx, coord.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	kv, err := client.New(client.Config{
-		Stores: []client.StoreEndpoint{
-			{StoreID: storeID, Addr: node.Addr()},
-		},
+		StoreResolver: coordRPC,
 		RegionResolver: &staticRegionResolver{regions: []*metapb.RegionDescriptor{
 			parentStatus.GetRegion(),
 			childStatus.GetRegion(),

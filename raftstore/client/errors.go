@@ -8,10 +8,10 @@ import (
 )
 
 var (
-	// errMissingStoreEndpoints indicates that no store endpoints were configured.
-	errMissingStoreEndpoints = errors.New("client: at least one store endpoint required")
 	// errMissingRegionResolver indicates that the distributed client cannot route requests without a resolver.
 	errMissingRegionResolver = errors.New("client: region resolver required")
+	// errMissingStoreResolver indicates that the distributed client cannot dial stores without a resolver.
+	errMissingStoreResolver = errors.New("client: store resolver required")
 	// errStoreIDNotSet indicates that a request tried to use an empty store id.
 	errStoreIDNotSet = errors.New("client: store id not set")
 	// errResolvedRegionIDMissing indicates that routing returned a descriptor without a region id.
@@ -24,9 +24,9 @@ var (
 	errInvalidScanLimit = errors.New("client: scan limit must be > 0")
 )
 
-func IsMissingStoreEndpoints(err error) bool { return errors.Is(err, errMissingStoreEndpoints) }
-
 func IsMissingRegionResolver(err error) bool { return errors.Is(err, errMissingRegionResolver) }
+
+func IsMissingStoreResolver(err error) bool { return errors.Is(err, errMissingStoreResolver) }
 
 func IsStoreIDNotSet(err error) bool { return errors.Is(err, errStoreIDNotSet) }
 

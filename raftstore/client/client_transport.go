@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"sync"
 	"time"
@@ -50,17 +51,73 @@ func dialStore(ctx context.Context, target string, opts ...grpc.DialOption) (*gr
 }
 
 func (c *Client) storeClient(ctx context.Context, storeID uint64) (kvrpcpb.NoKVClient, error) {
-	c.mu.RLock()
 	if storeID == 0 {
-		c.mu.RUnlock()
 		return nil, errStoreIDNotSet
 	}
-	st, ok := c.stores[storeID]
+	st, err := c.storeConn(ctx, storeID)
+	if err != nil {
+		return nil, err
+	}
+	cl, err := st.clientFor(ctx)
+	if err == nil {
+		return cl, nil
+	}
+	c.invalidateStore(storeID, st)
+	refreshed, refreshErr := c.storeConn(ctx, storeID)
+	if refreshErr != nil {
+		return nil, fmt.Errorf("%w; refresh store %d: %v", err, storeID, refreshErr)
+	}
+	return refreshed.clientFor(ctx)
+}
+
+func (c *Client) storeConn(ctx context.Context, storeID uint64) (*storeConn, error) {
+	c.mu.RLock()
+	st := c.stores[storeID]
 	c.mu.RUnlock()
-	if !ok || st == nil {
+	if st != nil {
+		return st, nil
+	}
+	if c.storeResolver == nil {
+		return nil, errMissingStoreResolver
+	}
+	resp, err := c.storeResolver.GetStore(ctx, &coordpb.GetStoreRequest{StoreId: storeID})
+	if err != nil {
+		return nil, fmt.Errorf("client: resolve store %d: %w", storeID, err)
+	}
+	if resp == nil || resp.GetNotFound() || resp.GetStore() == nil {
 		return nil, fmt.Errorf("client: store %d not found", storeID)
 	}
-	return st.clientFor(ctx)
+	info := resp.GetStore()
+	if info.GetStoreId() != storeID {
+		return nil, fmt.Errorf("client: resolved store id %d != requested %d", info.GetStoreId(), storeID)
+	}
+	if info.GetClientAddr() == "" {
+		return nil, fmt.Errorf("client: store %d has empty client address", storeID)
+	}
+	next := &storeConn{
+		addr:        info.GetClientAddr(),
+		dialTimeout: c.dialTimeout,
+		dialOpts:    append([]grpc.DialOption(nil), c.dialOpts...),
+	}
+	c.mu.Lock()
+	if existing := c.stores[storeID]; existing != nil {
+		c.mu.Unlock()
+		return existing, nil
+	}
+	c.stores[storeID] = next
+	c.mu.Unlock()
+	return next, nil
+}
+
+func (c *Client) invalidateStore(storeID uint64, expected *storeConn) {
+	c.mu.Lock()
+	if current := c.stores[storeID]; current == expected {
+		delete(c.stores, storeID)
+	}
+	c.mu.Unlock()
+	if expected != nil {
+		_ = expected.close()
+	}
 }
 
 func normalizeRetryBackoff(backoff, fallback time.Duration) time.Duration {

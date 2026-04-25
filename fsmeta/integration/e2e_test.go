@@ -164,9 +164,7 @@ func openRealClusterExecutor(t *testing.T, ctx context.Context) *fsmetaexec.Exec
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = coordRPC.Close() })
 	kv, err := client.New(client.Config{
-		Stores: []client.StoreEndpoint{
-			{StoreID: storeID, Addr: node.Addr()},
-		},
+		StoreResolver:  coordRPC,
 		RegionResolver: coordRPC,
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 	})
