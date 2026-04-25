@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/index"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -65,6 +67,34 @@ func TestNodeStartsKVService(t *testing.T) {
 	require.Equal(t, codes.InvalidArgument, st.Code())
 }
 
+func TestNodePreservesConfiguredAdvertiseAddrs(t *testing.T) {
+	db, _ := openTestDB(t)
+	scheduler := &captureScheduler{}
+	node, err := serverpkg.NewNode(serverpkg.Config{
+		Storage: serverpkg.Storage{
+			MVCC: db,
+			Raft: db.RaftLog(),
+		},
+		Store: storepkg.Config{
+			StoreID:           1,
+			ClientAddr:        "store-1.example:20160",
+			RaftAddr:          "store-1-raft.example:20160",
+			Scheduler:         scheduler,
+			HeartbeatInterval: 10 * time.Millisecond,
+		},
+		TransportAddr: "127.0.0.1:0",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = node.Close() })
+
+	require.Eventually(t, func() bool {
+		stats, ok := scheduler.latestStore()
+		return ok &&
+			stats.ClientAddr == "store-1.example:20160" &&
+			stats.RaftAddr == "store-1-raft.example:20160"
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestNodeRequiresSnapshotBridge(t *testing.T) {
 	node, err := serverpkg.NewNode(serverpkg.Config{
 		Storage: serverpkg.Storage{
@@ -79,6 +109,40 @@ func TestNodeRequiresSnapshotBridge(t *testing.T) {
 	require.Nil(t, node)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "snapshot bridge")
+}
+
+type captureScheduler struct {
+	mu    sync.Mutex
+	stats storepkg.StoreStats
+	seen  bool
+}
+
+func (s *captureScheduler) ReportRegionHeartbeat(context.Context, uint64) {}
+
+func (s *captureScheduler) PublishRootEvent(context.Context, rootevent.Event) error {
+	return nil
+}
+
+func (s *captureScheduler) StoreHeartbeat(_ context.Context, stats storepkg.StoreStats) []storepkg.Operation {
+	s.mu.Lock()
+	s.stats = stats
+	s.seen = true
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *captureScheduler) Status() storepkg.SchedulerStatus {
+	return storepkg.SchedulerStatus{}
+}
+
+func (s *captureScheduler) Close() error {
+	return nil
+}
+
+func (s *captureScheduler) latestStore() (storepkg.StoreStats, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stats, s.seen
 }
 
 func TestNodeStartsRaftAdminService(t *testing.T) {

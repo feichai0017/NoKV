@@ -451,48 +451,6 @@ func (c *Client) resolveCommittedSecondaries(ctx context.Context, keys [][]byte,
 	return err
 }
 
-func (c *Client) prewriteRegion(ctx context.Context, regionID uint64, primary []byte, startVersion, ttl uint64, muts []*kvrpcpb.Mutation) error {
-	var lastErr error
-	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
-		region, ok := c.regionSnapshot(regionID)
-		if !ok {
-			return fmt.Errorf("client: region %d missing for prewrite", regionID)
-		}
-		resp, regionErr, err := c.prewriteRegionOnce(ctx, region, primary, startVersion, ttl, muts)
-		if err != nil {
-			if isTransportUnavailable(err) {
-				lastErr = err
-				if err := c.waitRetry(ctx, attempt, retryTransportUnavailable); err != nil {
-					return err
-				}
-				continue
-			}
-			return err
-		}
-		if regionErr != nil {
-			lastErr = c.handleRegionError(regionID, regionErr)
-			if lastErr != nil {
-				return lastErr
-			}
-			if err := c.waitRetry(ctx, attempt, retryRegionError); err != nil {
-				return err
-			}
-			continue
-		}
-		if resp != nil && len(resp.GetErrors()) > 0 {
-			return &KeyConflictError{Errors: resp.GetErrors()}
-		}
-		return nil
-	}
-	if lastErr != nil {
-		return lastErr
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return fmt.Errorf("client: prewrite retries exhausted for region %d", regionID)
-}
-
 func (c *Client) prewriteRegionOnce(ctx context.Context, region regionSnapshot, primary []byte, startVersion, ttl uint64, muts []*kvrpcpb.Mutation) (*kvrpcpb.PrewriteResponse, *errorpb.RegionError, error) {
 	cl, err := c.storeClient(ctx, region.leader)
 	if err != nil {
@@ -635,48 +593,6 @@ func (c *Client) commitRegionOnce(ctx context.Context, region regionSnapshot, ke
 		return nil, nil, normalizeRPCError(err)
 	}
 	return resp.GetResponse(), resp.GetRegionError(), nil
-}
-
-func (c *Client) batchRollbackRegion(ctx context.Context, regionID uint64, keys [][]byte, startVersion uint64) error {
-	var lastErr error
-	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
-		region, ok := c.regionSnapshot(regionID)
-		if !ok {
-			return fmt.Errorf("client: region %d missing for rollback", regionID)
-		}
-		resp, regionErr, err := c.batchRollbackRegionOnce(ctx, region, keys, startVersion)
-		if err != nil {
-			if isTransportUnavailable(err) {
-				lastErr = err
-				if err := c.waitRetry(ctx, attempt, retryTransportUnavailable); err != nil {
-					return err
-				}
-				continue
-			}
-			return err
-		}
-		if regionErr != nil {
-			lastErr = c.handleRegionError(regionID, regionErr)
-			if lastErr != nil {
-				return lastErr
-			}
-			if err := c.waitRetry(ctx, attempt, retryRegionError); err != nil {
-				return err
-			}
-			continue
-		}
-		if resp != nil && resp.GetError() != nil {
-			return fmt.Errorf("client: rollback key error: %v", resp.GetError())
-		}
-		return nil
-	}
-	if lastErr != nil {
-		return lastErr
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return fmt.Errorf("client: rollback retries exhausted for region %d", regionID)
 }
 
 func (c *Client) rollbackKeysByRoute(ctx context.Context, keys [][]byte, startVersion uint64) error {
