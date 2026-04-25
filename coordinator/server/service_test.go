@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	coordablation "github.com/feichai0017/NoKV/coordinator/ablation"
-	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
+	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
@@ -56,8 +56,8 @@ type fakeStorage struct {
 	snapshot      rootview.Snapshot
 }
 
-func (f *fakeStorage) protocolState() rootstate.SuccessionState {
-	return rootstate.SuccessionState{
+func (f *fakeStorage) protocolState() rootstate.EunomiaState {
+	return rootstate.EunomiaState{
 		Tenure:   f.snapshot.Tenure,
 		Legacy:   f.snapshot.Legacy,
 		Handover: f.snapshot.Handover,
@@ -116,12 +116,12 @@ func (f *fakeStorage) SaveAllocatorState(_ context.Context, idCurrent, tsCurrent
 	return nil
 }
 
-func (f *fakeStorage) ApplyTenure(_ context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error) {
+func (f *fakeStorage) ApplyTenure(_ context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error) {
 	switch cmd.Kind {
 	case rootproto.TenureActIssue:
 		f.campaignCalls++
 		if f.campaignErr != nil {
-			return rootstate.SuccessionState{}, f.campaignErr
+			return rootstate.EunomiaState{}, f.campaignErr
 		}
 		if err := rootstate.ValidateTenureClaim(f.snapshot.Tenure, f.snapshot.Legacy, cmd.HolderID, cmd.LineageDigest, cmd.ExpiresUnixNano, cmd.NowUnixNano); err != nil {
 			return f.protocolState(), err
@@ -146,7 +146,7 @@ func (f *fakeStorage) ApplyTenure(_ context.Context, cmd rootproto.TenureCommand
 	case rootproto.TenureActRelease:
 		f.releaseCalls++
 		if f.releaseErr != nil {
-			return rootstate.SuccessionState{}, f.releaseErr
+			return rootstate.EunomiaState{}, f.releaseErr
 		}
 		if err := rootstate.ValidateTenureYield(f.snapshot.Tenure, cmd.HolderID, cmd.NowUnixNano); err != nil {
 			return f.protocolState(), err
@@ -165,17 +165,17 @@ func (f *fakeStorage) ApplyTenure(_ context.Context, cmd rootproto.TenureCommand
 			f.snapshot.Allocator.TSCurrent = tsoFence
 		}
 	default:
-		return rootstate.SuccessionState{}, rootstate.ErrInvalidTenure
+		return rootstate.EunomiaState{}, rootstate.ErrInvalidTenure
 	}
 	return f.protocolState(), nil
 }
 
-func (f *fakeStorage) ApplyHandover(_ context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
+func (f *fakeStorage) ApplyHandover(_ context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
 	switch cmd.Kind {
 	case rootproto.HandoverActSeal:
 		f.sealCalls++
 		if f.sealErr != nil {
-			return rootstate.SuccessionState{}, f.sealErr
+			return rootstate.EunomiaState{}, f.sealErr
 		}
 		if err := rootstate.ValidateLegacyFormation(f.snapshot.Tenure, cmd.HolderID); err != nil {
 			return f.protocolState(), err
@@ -193,14 +193,14 @@ func (f *fakeStorage) ApplyHandover(_ context.Context, cmd rootproto.HandoverCom
 	case rootproto.HandoverActConfirm:
 		f.confirmCalls++
 		if f.confirmErr != nil {
-			return rootstate.SuccessionState{}, f.confirmErr
+			return rootstate.EunomiaState{}, f.confirmErr
 		}
 		if strings.TrimSpace(cmd.HolderID) == "" || strings.TrimSpace(cmd.HolderID) != f.snapshot.Tenure.HolderID {
 			return f.protocolState(), rootstate.ErrPrimacy
 		}
-		auditStatus, err := succession.ValidateHandoverConfirmation(
+		auditStatus, err := eunomia.ValidateHandoverConfirmation(
 			f.snapshot.Tenure,
-			succession.Frontiers(rootstate.State{
+			eunomia.Frontiers(rootstate.State{
 				IDFence:  f.snapshot.Allocator.IDCurrent,
 				TSOFence: f.snapshot.Allocator.TSCurrent,
 			}, rootstate.MaxDescriptorRevision(f.snapshot.Descriptors)),
@@ -220,23 +220,23 @@ func (f *fakeStorage) ApplyHandover(_ context.Context, cmd rootproto.HandoverCom
 	case rootproto.HandoverActClose:
 		f.closeCalls++
 		if f.closeErr != nil {
-			return rootstate.SuccessionState{}, f.closeErr
+			return rootstate.EunomiaState{}, f.closeErr
 		}
-		if err := succession.ValidateHandoverFinality(f.snapshot.Tenure, f.snapshot.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+		if err := eunomia.ValidateHandoverFinality(f.snapshot.Tenure, f.snapshot.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return f.protocolState(), err
 		}
 		f.snapshot.Handover.Stage = rootproto.HandoverStageClosed
 	case rootproto.HandoverActReattach:
 		f.reattachCalls++
 		if f.reattachErr != nil {
-			return rootstate.SuccessionState{}, f.reattachErr
+			return rootstate.EunomiaState{}, f.reattachErr
 		}
-		if err := succession.ValidateHandoverReattach(f.snapshot.Tenure, f.snapshot.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+		if err := eunomia.ValidateHandoverReattach(f.snapshot.Tenure, f.snapshot.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
 			return f.protocolState(), err
 		}
 		f.snapshot.Handover.Stage = rootproto.HandoverStageReattached
 	default:
-		return rootstate.SuccessionState{}, rootstate.ErrFinality
+		return rootstate.EunomiaState{}, rootstate.ErrFinality
 	}
 	return f.protocolState(), nil
 }
@@ -512,7 +512,7 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 				HolderID:  "c1",
 				Era:       2,
 				Mandate:   rootproto.MandateDefault,
-				Frontiers: succession.Frontiers(rootstate.State{IDFence: 44, TSOFence: 77}, 5),
+				Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 44, TSOFence: 77}, 5),
 				SealedAt:  rootstate.Cursor{Term: 2, Index: 8},
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
@@ -2327,7 +2327,7 @@ func TestServiceMetadataAnswerFailsWhenEraSealedAndCannotRenew(t *testing.T) {
 				HolderID:  "c1",
 				Era:       2,
 				Mandate:   rootproto.MandateDefault,
-				Frontiers: succession.Frontiers(rootstate.State{IDFence: 0, TSOFence: 0}, 7),
+				Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 0, TSOFence: 0}, 7),
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
 				1: {RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
@@ -2364,7 +2364,7 @@ func TestServiceConfirmHandover(t *testing.T) {
 				HolderID:  "c1",
 				Era:       2,
 				Mandate:   rootproto.MandateDefault,
-				Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
+				Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 				SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
@@ -2435,7 +2435,7 @@ func TestServiceReattachHandover(t *testing.T) {
 				HolderID:  "c1",
 				Era:       2,
 				Mandate:   rootproto.MandateDefault,
-				Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
+				Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 			},
 			Handover: rootstate.Handover{
 				HolderID:     "c1",
@@ -2475,7 +2475,7 @@ func TestServiceAblationDisableReattachNoop(t *testing.T) {
 				HolderID:  "c1",
 				Era:       2,
 				Mandate:   rootproto.MandateDefault,
-				Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
+				Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 			},
 			Handover: rootstate.Handover{
 				HolderID:     "c1",
@@ -2514,7 +2514,7 @@ func TestServiceReattachHandoverRejectsLineageMismatch(t *testing.T) {
 				HolderID:  "c1",
 				Era:       2,
 				Mandate:   rootproto.MandateDefault,
-				Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
+				Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 			},
 			Handover: rootstate.Handover{
 				HolderID:     "c1",
@@ -2551,7 +2551,7 @@ func TestServiceMonotoneDutyFailsWhenInheritanceNotMet(t *testing.T) {
 				HolderID:  "c1",
 				Era:       2,
 				Mandate:   rootproto.MandateAllocID | rootproto.MandateTSO,
-				Frontiers: succession.Frontiers(rootstate.State{IDFence: 50, TSOFence: 150}, 0),
+				Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 50, TSOFence: 150}, 0),
 			},
 		},
 	}
@@ -2580,7 +2580,7 @@ func TestServiceMonotoneDutyFailsWhenDescriptorCoverageNotMet(t *testing.T) {
 				HolderID:  "c1",
 				Era:       2,
 				Mandate:   rootproto.MandateDefault,
-				Frontiers: succession.Frontiers(rootstate.State{IDFence: 10, TSOFence: 100}, 8),
+				Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 10, TSOFence: 100}, 8),
 			},
 			Descriptors: map[uint64]descriptor.Descriptor{
 				1: {RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
@@ -2617,7 +2617,7 @@ func TestServiceAllocIDFailsWhenDutyNotAdmitted(t *testing.T) {
 	require.Equal(t, uint32(rootproto.MandateTSO|rootproto.MandateGetRegionByKey), store.snapshot.Tenure.Mandate)
 	require.Equal(t, uint32(rootproto.MandateTSO|rootproto.MandateGetRegionByKey), svc.currentTenure().Mandate)
 
-	err := svc.successionGate(gateMandateAdmission, rootproto.MandateAllocID)
+	err := svc.eunomiaGate(gateMandateAdmission, rootproto.MandateAllocID)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "mandate mismatch")
 

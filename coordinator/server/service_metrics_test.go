@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
+	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -18,14 +18,14 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
-func TestServiceDiagnosticsSnapshotIncludesSuccessionMetrics(t *testing.T) {
+func TestServiceDiagnosticsSnapshotIncludesEunomiaMetrics(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
-	svc.successionMetrics.recordTenureEraTransition(1, 2)
-	svc.successionMetrics.recordHandoverStageTransition(rootproto.HandoverStageUnspecified, rootproto.HandoverStageConfirmed)
-	svc.successionMetrics.recordGateRejection(gateMandateAdmission)
-	svc.successionMetrics.recordGuaranteeViolation(guaranteeInheritance)
+	svc.eunomiaMetrics.recordTenureEraTransition(1, 2)
+	svc.eunomiaMetrics.recordHandoverStageTransition(rootproto.HandoverStageUnspecified, rootproto.HandoverStageConfirmed)
+	svc.eunomiaMetrics.recordGateRejection(gateMandateAdmission)
+	svc.eunomiaMetrics.recordGuaranteeViolation(guaranteeInheritance)
 
-	metrics := svc.DiagnosticsSnapshot()["succession_metrics"].(map[string]any)
+	metrics := svc.DiagnosticsSnapshot()["eunomia_metrics"].(map[string]any)
 	require.Equal(t, uint64(1), metrics["tenure_era_transitions_total"])
 	require.Equal(t, map[string]any{
 		"confirmed":  uint64(1),
@@ -63,12 +63,12 @@ func TestServiceValidatePreActionLeaseRecordsPostSealMetric(t *testing.T) {
 			HolderID:  "c1",
 			Era:       3,
 			Mandate:   rootproto.MandateDefault,
-			Frontiers: succession.Frontiers(rootstate.State{IDFence: 5, TSOFence: 9}, 0),
+			Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 5, TSOFence: 9}, 0),
 		},
 	)
 	require.Error(t, err)
 
-	metrics := svc.DiagnosticsSnapshot()["succession_metrics"].(map[string]any)
+	metrics := svc.DiagnosticsSnapshot()["eunomia_metrics"].(map[string]any)
 	require.Equal(t, map[string]any{
 		"legacy_formation":  uint64(0),
 		"handover_mutation": uint64(0),
@@ -100,7 +100,7 @@ func TestServiceFinalityMetricsTrackLifecycleStages(t *testing.T) {
 				HolderID:  "c1",
 				Era:       2,
 				Mandate:   rootproto.MandateDefault,
-				Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
+				Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 				SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
 			},
 			Descriptors: rootCloneDescriptorsForTest(map[uint64]descriptor.Descriptor{
@@ -118,7 +118,7 @@ func TestServiceFinalityMetricsTrackLifecycleStages(t *testing.T) {
 	require.NoError(t, svc.CloseHandover())
 	require.NoError(t, svc.ReattachHandover())
 
-	metrics := svc.DiagnosticsSnapshot()["succession_metrics"].(map[string]any)
+	metrics := svc.DiagnosticsSnapshot()["eunomia_metrics"].(map[string]any)
 	require.Equal(t, map[string]any{
 		"confirmed":  uint64(1),
 		"closed":     uint64(1),
@@ -137,7 +137,7 @@ func TestServiceEnsureTenureRecordsCoverageViolationMetric(t *testing.T) {
 	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
 
-	metrics := svc.DiagnosticsSnapshot()["succession_metrics"].(map[string]any)
+	metrics := svc.DiagnosticsSnapshot()["eunomia_metrics"].(map[string]any)
 	require.Equal(t, map[string]any{
 		"primacy":     uint64(0),
 		"inheritance": uint64(1),

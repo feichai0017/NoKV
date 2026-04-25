@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
-	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
+	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -18,7 +18,7 @@ func TestEvaluateReplyTrace(t *testing.T) {
 		HolderID:  "c1",
 		Era:       2,
 		Mandate:   rootproto.MandateDefault,
-		Frontiers: succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
+		Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 		SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
 	}
 	legacyDigest := rootstate.DigestOfLegacy(seal)

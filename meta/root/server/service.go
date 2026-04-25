@@ -42,8 +42,8 @@ type tailBackend interface {
 }
 
 type leaseBackend interface {
-	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error)
-	ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error)
+	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error)
+	ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error)
 }
 
 // Service exposes one metadata-root backend through the MetadataRoot RPC API.
@@ -140,14 +140,14 @@ func (s *Service) ApplyTenure(ctx context.Context, req *metapb.MetadataRootApply
 	if err != nil {
 		if errors.Is(err, rootstate.ErrPrimacy) {
 			return &metapb.MetadataRootApplyTenureResponse{
-				State:  metawire.RootSuccessionStateToProto(protocolState),
+				State:  metawire.RootEunomiaStateToProto(protocolState),
 				Status: metapb.RootTenureApplyStatus_ROOT_TENURE_APPLY_STATUS_HELD,
 			}, nil
 		}
 		return nil, coordinatorLeaseApplyRPCError(cmd.Kind, err)
 	}
 	return &metapb.MetadataRootApplyTenureResponse{
-		State:  metawire.RootSuccessionStateToProto(protocolState),
+		State:  metawire.RootEunomiaStateToProto(protocolState),
 		Status: metapb.RootTenureApplyStatus_ROOT_TENURE_APPLY_STATUS_GRANTED,
 	}, nil
 }
@@ -166,7 +166,7 @@ func (s *Service) ApplyHandover(ctx context.Context, req *metapb.MetadataRootApp
 		return nil, coordinatorHandoverApplyRPCError(cmd.Kind, err)
 	}
 	return &metapb.MetadataRootApplyHandoverResponse{
-		State: metawire.RootSuccessionStateToProto(protocolState),
+		State: metawire.RootEunomiaStateToProto(protocolState),
 	}, nil
 }
 

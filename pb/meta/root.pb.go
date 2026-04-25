@@ -3141,7 +3141,7 @@ func (x *RootHandoverCommand) GetFrontiers() []*RootMandateFrontier {
 	return nil
 }
 
-type RootSuccessionState struct {
+type RootEunomiaState struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Tenure        *RootTenure            `protobuf:"bytes,1,opt,name=tenure,proto3" json:"tenure,omitempty"`
 	Legacy        *RootLegacy            `protobuf:"bytes,2,opt,name=legacy,proto3" json:"legacy,omitempty"`
@@ -3150,20 +3150,20 @@ type RootSuccessionState struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *RootSuccessionState) Reset() {
-	*x = RootSuccessionState{}
+func (x *RootEunomiaState) Reset() {
+	*x = RootEunomiaState{}
 	mi := &file_meta_root_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RootSuccessionState) String() string {
+func (x *RootEunomiaState) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RootSuccessionState) ProtoMessage() {}
+func (*RootEunomiaState) ProtoMessage() {}
 
-func (x *RootSuccessionState) ProtoReflect() protoreflect.Message {
+func (x *RootEunomiaState) ProtoReflect() protoreflect.Message {
 	mi := &file_meta_root_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3175,26 +3175,26 @@ func (x *RootSuccessionState) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RootSuccessionState.ProtoReflect.Descriptor instead.
-func (*RootSuccessionState) Descriptor() ([]byte, []int) {
+// Deprecated: Use RootEunomiaState.ProtoReflect.Descriptor instead.
+func (*RootEunomiaState) Descriptor() ([]byte, []int) {
 	return file_meta_root_proto_rawDescGZIP(), []int{32}
 }
 
-func (x *RootSuccessionState) GetTenure() *RootTenure {
+func (x *RootEunomiaState) GetTenure() *RootTenure {
 	if x != nil {
 		return x.Tenure
 	}
 	return nil
 }
 
-func (x *RootSuccessionState) GetLegacy() *RootLegacy {
+func (x *RootEunomiaState) GetLegacy() *RootLegacy {
 	if x != nil {
 		return x.Legacy
 	}
 	return nil
 }
 
-func (x *RootSuccessionState) GetHandover() *RootHandover {
+func (x *RootEunomiaState) GetHandover() *RootHandover {
 	if x != nil {
 		return x.Handover
 	}
@@ -3247,7 +3247,7 @@ func (x *MetadataRootApplyTenureRequest) GetCommand() *RootTenureCommand {
 
 type MetadataRootApplyTenureResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	State         *RootSuccessionState   `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
+	State         *RootEunomiaState      `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
 	Status        RootTenureApplyStatus  `protobuf:"varint,2,opt,name=status,proto3,enum=nokv.meta.v1.RootTenureApplyStatus" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3283,7 +3283,7 @@ func (*MetadataRootApplyTenureResponse) Descriptor() ([]byte, []int) {
 	return file_meta_root_proto_rawDescGZIP(), []int{34}
 }
 
-func (x *MetadataRootApplyTenureResponse) GetState() *RootSuccessionState {
+func (x *MetadataRootApplyTenureResponse) GetState() *RootEunomiaState {
 	if x != nil {
 		return x.State
 	}
@@ -3343,7 +3343,7 @@ func (x *MetadataRootApplyHandoverRequest) GetCommand() *RootHandoverCommand {
 
 type MetadataRootApplyHandoverResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	State         *RootSuccessionState   `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
+	State         *RootEunomiaState      `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3378,7 +3378,7 @@ func (*MetadataRootApplyHandoverResponse) Descriptor() ([]byte, []int) {
 	return file_meta_root_proto_rawDescGZIP(), []int{36}
 }
 
-func (x *MetadataRootApplyHandoverResponse) GetState() *RootSuccessionState {
+func (x *MetadataRootApplyHandoverResponse) GetState() *RootEunomiaState {
 	if x != nil {
 		return x.State
 	}
@@ -4105,20 +4105,20 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1d.nokv.meta.v1.RootHandoverActR\x04kind\x12\x1b\n" +
 	"\tholder_id\x18\x02 \x01(\tR\bholderId\x12\"\n" +
 	"\rnow_unix_nano\x18\x03 \x01(\x03R\vnowUnixNano\x12?\n" +
-	"\tfrontiers\x18\x04 \x03(\v2!.nokv.meta.v1.RootMandateFrontierR\tfrontiers\"\xb1\x01\n" +
-	"\x13RootSuccessionState\x120\n" +
+	"\tfrontiers\x18\x04 \x03(\v2!.nokv.meta.v1.RootMandateFrontierR\tfrontiers\"\xae\x01\n" +
+	"\x10RootEunomiaState\x120\n" +
 	"\x06tenure\x18\x01 \x01(\v2\x18.nokv.meta.v1.RootTenureR\x06tenure\x120\n" +
 	"\x06legacy\x18\x02 \x01(\v2\x18.nokv.meta.v1.RootLegacyR\x06legacy\x126\n" +
 	"\bhandover\x18\x03 \x01(\v2\x1a.nokv.meta.v1.RootHandoverR\bhandover\"[\n" +
 	"\x1eMetadataRootApplyTenureRequest\x129\n" +
-	"\acommand\x18\x01 \x01(\v2\x1f.nokv.meta.v1.RootTenureCommandR\acommand\"\x97\x01\n" +
-	"\x1fMetadataRootApplyTenureResponse\x127\n" +
-	"\x05state\x18\x01 \x01(\v2!.nokv.meta.v1.RootSuccessionStateR\x05state\x12;\n" +
+	"\acommand\x18\x01 \x01(\v2\x1f.nokv.meta.v1.RootTenureCommandR\acommand\"\x94\x01\n" +
+	"\x1fMetadataRootApplyTenureResponse\x124\n" +
+	"\x05state\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RootEunomiaStateR\x05state\x12;\n" +
 	"\x06status\x18\x02 \x01(\x0e2#.nokv.meta.v1.RootTenureApplyStatusR\x06status\"_\n" +
 	" MetadataRootApplyHandoverRequest\x12;\n" +
-	"\acommand\x18\x01 \x01(\v2!.nokv.meta.v1.RootHandoverCommandR\acommand\"\\\n" +
-	"!MetadataRootApplyHandoverResponse\x127\n" +
-	"\x05state\x18\x01 \x01(\v2!.nokv.meta.v1.RootSuccessionStateR\x05state\"]\n" +
+	"\acommand\x18\x01 \x01(\v2!.nokv.meta.v1.RootHandoverCommandR\acommand\"Y\n" +
+	"!MetadataRootApplyHandoverResponse\x124\n" +
+	"\x05state\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RootEunomiaStateR\x05state\"]\n" +
 	"\rRootTailToken\x120\n" +
 	"\x06cursor\x18\x01 \x01(\v2\x18.nokv.meta.v1.RootCursorR\x06cursor\x12\x1a\n" +
 	"\brevision\x18\x02 \x01(\x04R\brevision\"u\n" +
@@ -4302,7 +4302,7 @@ var file_meta_root_proto_goTypes = []any{
 	(*MetadataRootStatusResponse)(nil),           // 40: nokv.meta.v1.MetadataRootStatusResponse
 	(*RootTenureCommand)(nil),                    // 41: nokv.meta.v1.RootTenureCommand
 	(*RootHandoverCommand)(nil),                  // 42: nokv.meta.v1.RootHandoverCommand
-	(*RootSuccessionState)(nil),                  // 43: nokv.meta.v1.RootSuccessionState
+	(*RootEunomiaState)(nil),                     // 43: nokv.meta.v1.RootEunomiaState
 	(*MetadataRootApplyTenureRequest)(nil),       // 44: nokv.meta.v1.MetadataRootApplyTenureRequest
 	(*MetadataRootApplyTenureResponse)(nil),      // 45: nokv.meta.v1.MetadataRootApplyTenureResponse
 	(*MetadataRootApplyHandoverRequest)(nil),     // 46: nokv.meta.v1.MetadataRootApplyHandoverRequest
@@ -4395,14 +4395,14 @@ var file_meta_root_proto_depIdxs = []int32{
 	22,  // 73: nokv.meta.v1.RootTenureCommand.inherited_frontiers:type_name -> nokv.meta.v1.RootMandateFrontier
 	9,   // 74: nokv.meta.v1.RootHandoverCommand.kind:type_name -> nokv.meta.v1.RootHandoverAct
 	22,  // 75: nokv.meta.v1.RootHandoverCommand.frontiers:type_name -> nokv.meta.v1.RootMandateFrontier
-	21,  // 76: nokv.meta.v1.RootSuccessionState.tenure:type_name -> nokv.meta.v1.RootTenure
-	23,  // 77: nokv.meta.v1.RootSuccessionState.legacy:type_name -> nokv.meta.v1.RootLegacy
-	24,  // 78: nokv.meta.v1.RootSuccessionState.handover:type_name -> nokv.meta.v1.RootHandover
+	21,  // 76: nokv.meta.v1.RootEunomiaState.tenure:type_name -> nokv.meta.v1.RootTenure
+	23,  // 77: nokv.meta.v1.RootEunomiaState.legacy:type_name -> nokv.meta.v1.RootLegacy
+	24,  // 78: nokv.meta.v1.RootEunomiaState.handover:type_name -> nokv.meta.v1.RootHandover
 	41,  // 79: nokv.meta.v1.MetadataRootApplyTenureRequest.command:type_name -> nokv.meta.v1.RootTenureCommand
-	43,  // 80: nokv.meta.v1.MetadataRootApplyTenureResponse.state:type_name -> nokv.meta.v1.RootSuccessionState
+	43,  // 80: nokv.meta.v1.MetadataRootApplyTenureResponse.state:type_name -> nokv.meta.v1.RootEunomiaState
 	10,  // 81: nokv.meta.v1.MetadataRootApplyTenureResponse.status:type_name -> nokv.meta.v1.RootTenureApplyStatus
 	42,  // 82: nokv.meta.v1.MetadataRootApplyHandoverRequest.command:type_name -> nokv.meta.v1.RootHandoverCommand
-	43,  // 83: nokv.meta.v1.MetadataRootApplyHandoverResponse.state:type_name -> nokv.meta.v1.RootSuccessionState
+	43,  // 83: nokv.meta.v1.MetadataRootApplyHandoverResponse.state:type_name -> nokv.meta.v1.RootEunomiaState
 	11,  // 84: nokv.meta.v1.RootTailToken.cursor:type_name -> nokv.meta.v1.RootCursor
 	11,  // 85: nokv.meta.v1.RootCommittedEvent.cursor:type_name -> nokv.meta.v1.RootCursor
 	32,  // 86: nokv.meta.v1.RootCommittedEvent.event:type_name -> nokv.meta.v1.RootEvent

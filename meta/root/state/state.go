@@ -9,7 +9,7 @@
 // coordinator/, and raftstore/ consume the resulting State as truth.
 //
 // See docs/rooted_truth.md for the overall kernel design and
-// spec/Succession.tla for the formal authority-handoff model.
+// spec/Eunomia.tla for the formal authority-handoff model.
 package state
 
 import (

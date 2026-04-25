@@ -345,7 +345,7 @@ message RootHandoverCommand {
   repeated RootMandateFrontier frontiers = 4;
 }
 
-message RootSuccessionState {
+message RootEunomiaState {
   RootTenure tenure = 1;
   RootLegacy legacy = 2;
   RootHandover handover = 3;
@@ -362,7 +362,7 @@ message MetadataRootApplyTenureRequest {
 }
 
 message MetadataRootApplyTenureResponse {
-  RootSuccessionState state = 1;
+  RootEunomiaState state = 1;
   RootTenureApplyStatus status = 2;
 }
 
@@ -371,7 +371,7 @@ message MetadataRootApplyHandoverRequest {
 }
 
 message MetadataRootApplyHandoverResponse {
-  RootSuccessionState state = 1;
+  RootEunomiaState state = 1;
 }
 
 message RootTailToken {

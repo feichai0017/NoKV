@@ -1,7 +1,7 @@
 -------------------------- MODULE SubtreeAuthority --------------------------
 EXTENDS Naturals, FiniteSets
 
-\* Namespace-authority instance of Succession.
+\* Namespace-authority instance of Eunomia.
 \* One subtree has at most one active authority. Handoff seals the predecessor,
 \* installs one successor with a covering frontier, and closes the predecessor.
 \* The model intentionally omits the KV dentry mutation; this is the authority

@@ -3,8 +3,8 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-SUCCESSION_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
-BENCH_DIR=$(cd -- "$SUCCESSION_DIR/.." && pwd)
+EUNOMIA_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
+BENCH_DIR=$(cd -- "$EUNOMIA_DIR/.." && pwd)
 REPO_ROOT=$(cd -- "$BENCH_DIR/.." && pwd)
 
 BENCHTIME=${CONTROL_PLANE_BENCHTIME:-500ms}
@@ -13,10 +13,10 @@ RECOVERY_COUNT=${CONTROL_PLANE_RECOVERY_COUNT:-5}
 SUFFIX=${CONTROL_PLANE_RESULT_SUFFIX:-}
 
 stamp=$(date +"%Y%m%d_%H%M%S")
-result_dir="$SUCCESSION_DIR/results/${stamp}${SUFFIX}"
+result_dir="$EUNOMIA_DIR/results/${stamp}${SUFFIX}"
 mkdir -p "$result_dir"
 
-echo "succession benchmark results -> $result_dir"
+echo "eunomia benchmark results -> $result_dir"
 echo "benchtime=$BENCHTIME perf_count=$PERF_COUNT recovery_count=$RECOVERY_COUNT"
 
 recovery_raw="$result_dir/recovery_raw.txt"
@@ -36,7 +36,7 @@ summary_md="$result_dir/summary.md"
 
 (
 	cd "$BENCH_DIR"
-	go test ./succession \
+	go test ./eunomia \
 		-run '^$' \
 		-bench 'BenchmarkControlPlane(AllocID|TSO|Metadata)WitnessTax$' \
 		-benchmem \
@@ -46,7 +46,7 @@ summary_md="$result_dir/summary.md"
 
 (
 	cd "$BENCH_DIR"
-	go test ./succession \
+	go test ./eunomia \
 		-run TestControlPlaneDetachedAblationRunner \
 		-count 1 \
 		-v
@@ -54,7 +54,7 @@ summary_md="$result_dir/summary.md"
 
 (
 	cd "$BENCH_DIR"
-	go test ./succession/crdb \
+	go test ./eunomia/crdb \
 		-run 'TestControlPlaneCRDB66562(IssueSchedule|RootedGate)' \
 		-count 1 \
 		-v
@@ -62,7 +62,7 @@ summary_md="$result_dir/summary.md"
 
 (
 	cd "$BENCH_DIR"
-	go test ./succession/etcd \
+	go test ./eunomia/etcd \
 		-run 'TestControlPlaneEtcd(ReadIndex(Pilot|RealDelayedInFlightReply)|LeaseKeepAliveBufferedSuccessAfterRevoke(WithWitnessGate)?)' \
 		-count 1 \
 		-v
@@ -70,7 +70,7 @@ summary_md="$result_dir/summary.md"
 
 (
 	cd "$BENCH_DIR"
-	go test ./succession \
+	go test ./eunomia \
 		-run 'TestControlPlaneNoKVLateReplyControl' \
 		-count 1 \
 		-v

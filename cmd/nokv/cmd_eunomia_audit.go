@@ -13,7 +13,7 @@ import (
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 )
 
-// runSuccessionAuditCmd runs one read-only succession audit pass
+// runEunomiaAuditCmd runs one read-only eunomia audit pass
 // against a live 3-peer meta-root cluster. It connects via the same remote
 // gRPC client coordinators use (coordinator/rootview.OpenRootRemoteStore),
 // loads the rooted snapshot, and projects it into coordinator/audit's
@@ -28,8 +28,8 @@ import (
 //   - --reply-trace-format: projection vocabulary (nokv/etcd-read-index/
 //     etcd-lease-renew/crdb-lease-start)
 //   - --json: emit JSON instead of human-readable text
-func runSuccessionAuditCmd(w io.Writer, args []string) error {
-	fs := flag.NewFlagSet("succession-audit", flag.ContinueOnError)
+func runEunomiaAuditCmd(w io.Writer, args []string) error {
+	fs := flag.NewFlagSet("eunomia-audit", flag.ContinueOnError)
 	holder := fs.String("holder", "", "override holder id used for audit reattach checks")
 	nowUnixNano := fs.Int64("now-unix-nano", 0, "override audit timestamp (unix nano); defaults to current time")
 	replyTracePath := fs.String("reply-trace", "", "path to reply-trace JSON (\"-\" for stdin); optional")
@@ -54,20 +54,20 @@ func runSuccessionAuditCmd(w io.Writer, args []string) error {
 		return err
 	}
 	if len(peers) != 3 {
-		return fmt.Errorf("succession-audit requires exactly 3 --root-peer values")
+		return fmt.Errorf("eunomia-audit requires exactly 3 --root-peer values")
 	}
 
 	rootStore, err := rootview.OpenRootRemoteStore(rootview.RemoteRootConfig{
 		Targets: peers,
 	})
 	if err != nil {
-		return fmt.Errorf("succession-audit open remote metadata root: %w", err)
+		return fmt.Errorf("eunomia-audit open remote metadata root: %w", err)
 	}
 	defer func() { _ = rootStore.Close() }()
 
 	snapshot, err := rootStore.Load()
 	if err != nil {
-		return fmt.Errorf("succession-audit load rooted snapshot: %w", err)
+		return fmt.Errorf("eunomia-audit load rooted snapshot: %w", err)
 	}
 
 	holderID := strings.TrimSpace(*holder)
@@ -85,23 +85,23 @@ func runSuccessionAuditCmd(w io.Writer, args []string) error {
 	if strings.TrimSpace(*replyTracePath) != "" {
 		format, ferr := coordaudit.ParseReplyTraceFormat(*replyTraceFormat)
 		if ferr != nil {
-			return fmt.Errorf("succession-audit reply-trace-format: %w", ferr)
+			return fmt.Errorf("eunomia-audit reply-trace-format: %w", ferr)
 		}
 		data, rerr := readReplyTrace(*replyTracePath)
 		if rerr != nil {
-			return fmt.Errorf("succession-audit read reply-trace: %w", rerr)
+			return fmt.Errorf("eunomia-audit read reply-trace: %w", rerr)
 		}
 		records, derr := coordaudit.DecodeReplyTrace(data, format)
 		if derr != nil {
-			return fmt.Errorf("succession-audit decode reply-trace: %w", derr)
+			return fmt.Errorf("eunomia-audit decode reply-trace: %w", derr)
 		}
 		traceAnomalies = coordaudit.EvaluateReplyTrace(report, records)
 	}
 
 	if *asJSON {
-		return renderSuccessionAuditJSON(w, report, traceAnomalies)
+		return renderEunomiaAuditJSON(w, report, traceAnomalies)
 	}
-	return renderSuccessionAuditText(w, report, traceAnomalies)
+	return renderEunomiaAuditText(w, report, traceAnomalies)
 }
 
 func readReplyTrace(path string) ([]byte, error) {
@@ -111,20 +111,20 @@ func readReplyTrace(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-type successionAuditJSON struct {
+type eunomiaAuditJSON struct {
 	Report         coordaudit.Report              `json:"report"`
 	TraceAnomalies []coordaudit.ReplyTraceAnomaly `json:"trace_anomalies,omitempty"`
 }
 
-func renderSuccessionAuditJSON(w io.Writer, report coordaudit.Report, anomalies []coordaudit.ReplyTraceAnomaly) error {
-	out := successionAuditJSON{Report: report, TraceAnomalies: anomalies}
+func renderEunomiaAuditJSON(w io.Writer, report coordaudit.Report, anomalies []coordaudit.ReplyTraceAnomaly) error {
+	out := eunomiaAuditJSON{Report: report, TraceAnomalies: anomalies}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
 }
 
-func renderSuccessionAuditText(w io.Writer, report coordaudit.Report, anomalies []coordaudit.ReplyTraceAnomaly) error {
-	_, _ = fmt.Fprintln(w, "Succession audit report")
+func renderEunomiaAuditText(w io.Writer, report coordaudit.Report, anomalies []coordaudit.ReplyTraceAnomaly) error {
+	_, _ = fmt.Fprintln(w, "Eunomia audit report")
 	_, _ = fmt.Fprintln(w, "----------------")
 	_, _ = fmt.Fprintf(w, "holder             : %s\n", report.HolderID)
 	_, _ = fmt.Fprintf(w, "now_unix_nano      : %d\n", report.NowUnixNano)

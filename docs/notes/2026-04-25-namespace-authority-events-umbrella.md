@@ -5,7 +5,7 @@
 - 🧭 主题：给 Stage 2 的 namespace / subtree / snapshot / quota primitive 预先统一 rooted event 边界
 - 🧱 核心对象：Mount、Subtree、SnapshotEpoch、QuotaFence、StoreMembership
 - 🔁 调用链：`fsmeta/server -> coordinator/meta-root command -> rooted event -> coordinator/runtime view -> raftstore/fsmeta primitive`
-- 📚 参考对象：NoKV Succession、`meta/root` rooted truth、DaisyNFS / FSCQ 的 verified metadata 边界、TiKV PD 的 membership / runtime view 分层
+- 📚 参考对象：NoKV Eunomia、`meta/root` rooted truth、DaisyNFS / FSCQ 的 verified metadata 边界、TiKV PD 的 membership / runtime view 分层
 
 ## 1. 结论
 
@@ -172,7 +172,7 @@ SubtreeHandoffStarted(mount_id, subtree_root, from_authority, to_authority, lega
 SubtreeHandoffCompleted(mount_id, subtree_root, authority_id, era, inherited_frontier)
 ```
 
-这套命名直接对应 Succession：
+这套命名直接对应 Eunomia：
 
 - `authority_id + era` 类似 Tenure；
 - `legacy_frontier` 类似 Legacy；
@@ -287,7 +287,7 @@ QuotaFenceUpdated(subject, limit_bytes, limit_inodes, era, frontier)
 1. 它有没有 rooted truth？
 2. 如果有，event 名是什么，payload 是否只包含 truth？
 3. 它对应的 runtime view 是什么？
-4. 它和 Succession / authority handoff 有没有关系？
+4. 它和 Eunomia / authority handoff 有没有关系？
 5. 它的四类测试在哪里？
 
 答不上来，就不写代码。

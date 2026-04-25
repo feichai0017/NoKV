@@ -12,13 +12,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestInstallCoordinatorExpvarPublishesDedicatedSuccessionSnapshot(t *testing.T) {
+func TestInstallCoordinatorExpvarPublishesDedicatedEunomiaSnapshot(t *testing.T) {
 	svc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	installCoordinatorExpvar(svc)
 
 	rootVar := expvar.Get("nokv_coordinator")
 	require.NotNil(t, rootVar)
-	cccVar := expvar.Get("nokv_coordinator_succession")
+	cccVar := expvar.Get("nokv_coordinator_eunomia")
 	require.NotNil(t, cccVar)
 
 	var rootSnapshot map[string]any
@@ -28,5 +28,5 @@ func TestInstallCoordinatorExpvarPublishesDedicatedSuccessionSnapshot(t *testing
 
 	state, ok := rootSnapshot["state"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, state["succession_metrics"], cccSnapshot)
+	require.Equal(t, state["eunomia_metrics"], cccSnapshot)
 }

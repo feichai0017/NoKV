@@ -1,6 +1,6 @@
 # Recorded Apalache bounded-check output
-spec=spec/SuccessionMultiDim.tla
-config=spec/SuccessionMultiDim.cfg
+spec=spec/EunomiaMultiDim.tla
+config=spec/EunomiaMultiDim.cfg
 invariants=NoWriteBehindServedRead
 length=6
 

@@ -18,8 +18,8 @@ Both are installed locally under `third_party/tla/`.
 ## Run TLC
 
 ```bash
-make tlc-succession
-make tlc-successionmultidim
+make tlc-eunomia
+make tlc-eunomiamultidim
 make tlc-mountlifecycle
 make tlc-subtreeauthority
 make tlc-leaseonly-counterexample
@@ -31,14 +31,15 @@ make tlc-subtreewithoutseal-counterexample
 make record-formal-artifacts
 ```
 
-`Succession.tla` is the positive model and should satisfy its configured invariants.
+The Eunomia positive model lives at `Eunomia.tla` and should satisfy its
+configured invariants.
 
 Current contrast models:
 
 - `LeaseOnly.tla`: no reply-side guard and no rooted handover record; expected to violate `NoOldReplyAfterSuccessor`
-- `SuccessionMultiDim.tla`: positive lease-start coverage model for the CRDB `#66562` analog
+- `EunomiaMultiDim.tla`: positive lease-start coverage model for the CRDB `#66562` analog
 - `MountLifecycle.tla`: positive rooted mount lifecycle model; checks that registered mounts cannot be implicitly created or reactivated after retirement
-- `SubtreeAuthority.tla`: positive namespace authority handoff model; projects Succession's Primacy / Inheritance / Silence / Finality onto subtree authority records
+- `SubtreeAuthority.tla`: positive namespace authority handoff model; projects Eunomia's Primacy / Inheritance / Silence / Finality onto subtree authority records
 - `LeaseStartOnly.tla`: no lease-start coverage check on predecessor served-read summaries; expected to violate `NoWriteBehindServedRead`
 - `TokenOnly.tla`: bounded-freshness token only; still expected to violate `NoOldReplyAfterSuccessor`
 - `ChubbyFencedLease.tla`: per-reply sequencer fencing; expected to preserve stale-reply rejection but violate successor coverage
@@ -55,7 +56,7 @@ the positive model only allows delivery of replies whose era remains
 legal under the rooted handover state. The contrast model keeps the same
 in-flight structure but removes finality-aware admission.
 
-`Succession.tla` now models a repeated rooted handoff cycle:
+The Eunomia model in `Eunomia.tla` now models a repeated rooted handoff cycle:
 
 - `Issue -> Active -> Seal -> Issue(successor) -> Cover -> Close -> Reattach -> Active`
 
@@ -91,21 +92,22 @@ Stage 3 adds two namespace-facing positive models:
 
 ```bash
 make apalache-typecheck
-make apalache-check-succession
-make apalache-check-successionmultidim
+make apalache-check-eunomia
+make apalache-check-eunomiamultidim
 ```
 
 `apalache-typecheck` checks that the current specs are well-typed.
 
-`apalache-check-succession` runs a bounded check of `Succession.tla` against:
+`apalache-check-eunomia` runs a bounded check of the Eunomia model
+(`Eunomia.tla`) against:
 
-- `G1_Succession`
+- `G1_Eunomia`
 - `G2_Primacy`
 - `G2_PrimacyInductive`
 - `G3_Silence`
 - `G4_Finality`
 
-`apalache-check-successionmultidim` runs a bounded check of `SuccessionMultiDim.tla`
+`apalache-check-eunomiamultidim` runs a bounded check of `EunomiaMultiDim.tla`
 against:
 
 - `NoWriteBehindServedRead`

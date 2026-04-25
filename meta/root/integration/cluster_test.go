@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
+	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootfailpoints "github.com/feichai0017/NoKV/meta/root/failpoints"
@@ -59,7 +59,7 @@ func TestMetaRootLeaderChangePreservesClosureLineage(t *testing.T) {
 
 	lease, err := campaignLease(cluster.Stores[leaderID], "c1", 1_000, 100, 10, 20, 56, "")
 	require.NoError(t, err)
-	seal, err := sealLease(cluster.Stores[leaderID], "c1", 200, succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
+	seal, err := sealLease(cluster.Stores[leaderID], "c1", 200, eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
 	require.NoError(t, err)
 
 	newLeaderID := cluster.FollowerIDs(leaderID)[0]
@@ -107,7 +107,7 @@ func TestMetaRootPartialSealRecoversFromCommittedLog(t *testing.T) {
 	rootfailpoints.Set(rootfailpoints.AfterAppendCommittedBeforeCheckpoint)
 	t.Cleanup(func() { rootfailpoints.Set(rootfailpoints.None) })
 
-	_, err = sealLease(cluster.Stores[leaderID], "c1", 200, succession.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 64))
+	_, err = sealLease(cluster.Stores[leaderID], "c1", 200, eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 64))
 	require.ErrorIs(t, err, rootfailpoints.ErrAfterAppendCommittedBeforeCheckpoint)
 
 	current, err := cluster.Stores[leaderID].Current()
@@ -127,7 +127,7 @@ func TestMetaRootPartialSealRecoversFromCommittedLog(t *testing.T) {
 }
 
 func campaignLease(store interface {
-	ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.SuccessionState, error)
+	ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.EunomiaState, error)
 }, holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence, descriptorRevision uint64, lineageDigest string) (rootstate.Tenure, error) {
 	state, err := store.ApplyTenure(context.Background(), rootproto.TenureCommand{
 		Kind:               rootproto.TenureActIssue,
@@ -135,13 +135,13 @@ func campaignLease(store interface {
 		ExpiresUnixNano:    expiresUnixNano,
 		NowUnixNano:        nowUnixNano,
 		LineageDigest:      lineageDigest,
-		InheritedFrontiers: succession.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, descriptorRevision),
+		InheritedFrontiers: eunomia.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, descriptorRevision),
 	})
 	return state.Tenure, err
 }
 
 func sealLease(store interface {
-	ApplyHandover(context.Context, rootproto.HandoverCommand) (rootstate.SuccessionState, error)
+	ApplyHandover(context.Context, rootproto.HandoverCommand) (rootstate.EunomiaState, error)
 }, holderID string, nowUnixNano int64, frontiers rootproto.MandateFrontiers) (rootstate.Legacy, error) {
 	state, err := store.ApplyHandover(context.Background(), rootproto.HandoverCommand{
 		Kind:        rootproto.HandoverActSeal,

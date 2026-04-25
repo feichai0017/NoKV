@@ -1,4 +1,4 @@
-package succession
+package eunomia
 
 import (
 	"context"

@@ -1,4 +1,4 @@
------------------------------- MODULE Succession ------------------------------
+------------------------------ MODULE Eunomia ------------------------------
 EXTENDS Naturals, FiniteSets
 
 \* Repeated-handoff positive model for the control-plane paper.
@@ -212,7 +212,7 @@ Finality ==
     \A e \in sealed:
         /\ e = pendingSeal \/ e \in covered \/ e \in closed
 
-G1_Succession ==
+G1_Eunomia ==
     Inheritance
 
 G2_Primacy ==
@@ -227,8 +227,8 @@ G3_Silence ==
 G4_Finality ==
     Finality
 
-SuccessionGuarantees ==
-    /\ G1_Succession
+EunomiaGuarantees ==
+    /\ G1_Eunomia
     /\ G2_Primacy
     /\ G3_Silence
     /\ G4_Finality

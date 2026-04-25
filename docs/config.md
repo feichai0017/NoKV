@@ -129,7 +129,7 @@ them is a common deployment mistake, so be explicit:
 | Layer | Keys | Lifecycle | Source of truth |
 |---|---|---|---|
 | **Address directory** | `meta_root.peers`, `coordinator`, `stores`, `store_work_dir_template`, `max_retries` | Read on **every** CLI invocation. Keep in sync with deployed containers/hosts. | **This file is the source of truth.** Nothing else knows where to dial. |
-| **Bootstrap seed** | `regions` | Read **only** on first startup by `scripts/ops/bootstrap.sh`. Once a store has `CURRENT`, bootstrap skips it. | After first bootstrap, **meta-root** owns the runtime region topology. Inspect with `nokv-config regions` or `nokv succession-audit`. |
+| **Bootstrap seed** | `regions` | Read **only** on first startup by `scripts/ops/bootstrap.sh`. Once a store has `CURRENT`, bootstrap skips it. | After first bootstrap, **meta-root** owns the runtime region topology. Inspect with `nokv-config regions` or `nokv eunomia-audit`. |
 
 Consequence: editing `regions` after bootstrap is a no-op for running
 clusters. Editing addresses is effective on the next CLI invocation
@@ -153,7 +153,7 @@ a source of defaults:
   "meta_root": {
     "peers": [
       { "node_id": 1,
-        "addr": "127.0.0.1:2380",         // coordinator/succession-audit dial here
+        "addr": "127.0.0.1:2380",         // coordinator/eunomia-audit dial here
         "docker_addr": "nokv-meta-root-1:2380",
         "transport_addr": "127.0.0.1:3380", // sibling meta-root peers dial here for raft
         "docker_transport_addr": "nokv-meta-root-1:2480",
@@ -188,7 +188,7 @@ a source of defaults:
 ### Field notes
 
 - **`meta_root.peers`**: exactly 3 entries. `addr` is the gRPC service port
-  (coordinators/succession-audit dial it). `transport_addr` is the raft transport
+  (coordinators/eunomia-audit dial it). `transport_addr` is the raft transport
   port (sibling meta-root peers dial it for raft messages). They MUST be
   different ports on the same host.
 - **`coordinator.addr` / `docker_addr`**: may be a single endpoint or

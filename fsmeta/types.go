@@ -18,7 +18,7 @@
 //
 //   - fsmeta reuses percolator for cross-row atomicity, and may reuse
 //     meta/root's rooted-event substrate only for namespace-level authority
-//     where Succession semantics apply. Per-inode and per-dentry mutations are
+//     where Eunomia semantics apply. Per-inode and per-dentry mutations are
 //     data-plane writes, never rooted events.
 //
 // See docs/notes/2026-04-24-fsmeta-positioning.md for the market gap analysis
