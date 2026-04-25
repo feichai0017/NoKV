@@ -26,6 +26,8 @@ const (
 	Coordinator_ListStores_FullMethodName       = "/nokv.coordinator.v1.Coordinator/ListStores"
 	Coordinator_GetMount_FullMethodName         = "/nokv.coordinator.v1.Coordinator/GetMount"
 	Coordinator_ListMounts_FullMethodName       = "/nokv.coordinator.v1.Coordinator/ListMounts"
+	Coordinator_GetQuotaFence_FullMethodName    = "/nokv.coordinator.v1.Coordinator/GetQuotaFence"
+	Coordinator_ListQuotaFences_FullMethodName  = "/nokv.coordinator.v1.Coordinator/ListQuotaFences"
 	Coordinator_RegionLiveness_FullMethodName   = "/nokv.coordinator.v1.Coordinator/RegionLiveness"
 	Coordinator_PublishRootEvent_FullMethodName = "/nokv.coordinator.v1.Coordinator/PublishRootEvent"
 	Coordinator_ListTransitions_FullMethodName  = "/nokv.coordinator.v1.Coordinator/ListTransitions"
@@ -45,6 +47,8 @@ type CoordinatorClient interface {
 	ListStores(ctx context.Context, in *ListStoresRequest, opts ...grpc.CallOption) (*ListStoresResponse, error)
 	GetMount(ctx context.Context, in *GetMountRequest, opts ...grpc.CallOption) (*GetMountResponse, error)
 	ListMounts(ctx context.Context, in *ListMountsRequest, opts ...grpc.CallOption) (*ListMountsResponse, error)
+	GetQuotaFence(ctx context.Context, in *GetQuotaFenceRequest, opts ...grpc.CallOption) (*GetQuotaFenceResponse, error)
+	ListQuotaFences(ctx context.Context, in *ListQuotaFencesRequest, opts ...grpc.CallOption) (*ListQuotaFencesResponse, error)
 	RegionLiveness(ctx context.Context, in *RegionLivenessRequest, opts ...grpc.CallOption) (*RegionLivenessResponse, error)
 	PublishRootEvent(ctx context.Context, in *PublishRootEventRequest, opts ...grpc.CallOption) (*PublishRootEventResponse, error)
 	ListTransitions(ctx context.Context, in *ListTransitionsRequest, opts ...grpc.CallOption) (*ListTransitionsResponse, error)
@@ -107,6 +111,26 @@ func (c *coordinatorClient) ListMounts(ctx context.Context, in *ListMountsReques
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListMountsResponse)
 	err := c.cc.Invoke(ctx, Coordinator_ListMounts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coordinatorClient) GetQuotaFence(ctx context.Context, in *GetQuotaFenceRequest, opts ...grpc.CallOption) (*GetQuotaFenceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetQuotaFenceResponse)
+	err := c.cc.Invoke(ctx, Coordinator_GetQuotaFence_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coordinatorClient) ListQuotaFences(ctx context.Context, in *ListQuotaFencesRequest, opts ...grpc.CallOption) (*ListQuotaFencesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListQuotaFencesResponse)
+	err := c.cc.Invoke(ctx, Coordinator_ListQuotaFences_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -202,6 +226,8 @@ type CoordinatorServer interface {
 	ListStores(context.Context, *ListStoresRequest) (*ListStoresResponse, error)
 	GetMount(context.Context, *GetMountRequest) (*GetMountResponse, error)
 	ListMounts(context.Context, *ListMountsRequest) (*ListMountsResponse, error)
+	GetQuotaFence(context.Context, *GetQuotaFenceRequest) (*GetQuotaFenceResponse, error)
+	ListQuotaFences(context.Context, *ListQuotaFencesRequest) (*ListQuotaFencesResponse, error)
 	RegionLiveness(context.Context, *RegionLivenessRequest) (*RegionLivenessResponse, error)
 	PublishRootEvent(context.Context, *PublishRootEventRequest) (*PublishRootEventResponse, error)
 	ListTransitions(context.Context, *ListTransitionsRequest) (*ListTransitionsResponse, error)
@@ -233,6 +259,12 @@ func (UnimplementedCoordinatorServer) GetMount(context.Context, *GetMountRequest
 }
 func (UnimplementedCoordinatorServer) ListMounts(context.Context, *ListMountsRequest) (*ListMountsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListMounts not implemented")
+}
+func (UnimplementedCoordinatorServer) GetQuotaFence(context.Context, *GetQuotaFenceRequest) (*GetQuotaFenceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetQuotaFence not implemented")
+}
+func (UnimplementedCoordinatorServer) ListQuotaFences(context.Context, *ListQuotaFencesRequest) (*ListQuotaFencesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListQuotaFences not implemented")
 }
 func (UnimplementedCoordinatorServer) RegionLiveness(context.Context, *RegionLivenessRequest) (*RegionLivenessResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegionLiveness not implemented")
@@ -364,6 +396,42 @@ func _Coordinator_ListMounts_Handler(srv interface{}, ctx context.Context, dec f
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(CoordinatorServer).ListMounts(ctx, req.(*ListMountsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Coordinator_GetQuotaFence_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetQuotaFenceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServer).GetQuotaFence(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Coordinator_GetQuotaFence_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoordinatorServer).GetQuotaFence(ctx, req.(*GetQuotaFenceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Coordinator_ListQuotaFences_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListQuotaFencesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServer).ListQuotaFences(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Coordinator_ListQuotaFences_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoordinatorServer).ListQuotaFences(ctx, req.(*ListQuotaFencesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -538,6 +606,14 @@ var Coordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListMounts",
 			Handler:    _Coordinator_ListMounts_Handler,
+		},
+		{
+			MethodName: "GetQuotaFence",
+			Handler:    _Coordinator_GetQuotaFence_Handler,
+		},
+		{
+			MethodName: "ListQuotaFences",
+			Handler:    _Coordinator_ListQuotaFences_Handler,
 		},
 		{
 			MethodName: "RegionLiveness",

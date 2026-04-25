@@ -35,6 +35,8 @@ type Client interface {
 	ListStores(ctx context.Context, req *coordpb.ListStoresRequest) (*coordpb.ListStoresResponse, error)
 	GetMount(ctx context.Context, req *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error)
 	ListMounts(ctx context.Context, req *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error)
+	GetQuotaFence(ctx context.Context, req *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error)
+	ListQuotaFences(ctx context.Context, req *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error)
 }
 
 // GRPCClient is a thin wrapper around generated coordpb.CoordinatorClient.
@@ -243,6 +245,18 @@ func (c *GRPCClient) ListMounts(ctx context.Context, req *coordpb.ListMountsRequ
 	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListMountsResponse, error) {
 		return coord.ListMounts(ctx, req)
 	}, validateListMountsResponse)
+}
+
+func (c *GRPCClient) GetQuotaFence(ctx context.Context, req *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error) {
+	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.GetQuotaFenceResponse, error) {
+		return coord.GetQuotaFence(ctx, req)
+	}, validateGetQuotaFenceResponse)
+}
+
+func (c *GRPCClient) ListQuotaFences(ctx context.Context, req *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error) {
+	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListQuotaFencesResponse, error) {
+		return coord.ListQuotaFences(ctx, req)
+	}, validateListQuotaFencesResponse)
 }
 
 // AllocID forwards ID allocation RPC.
@@ -565,6 +579,48 @@ func validateListMountsResponse(resp *coordpb.ListMountsResponse) error {
 			return fmt.Errorf("%w: list_mounts duplicate mount_id=%s", errInvalidWitness, mount.GetMountId())
 		}
 		seen[mount.GetMountId()] = struct{}{}
+	}
+	return nil
+}
+
+func validateGetQuotaFenceResponse(resp *coordpb.GetQuotaFenceResponse) error {
+	if resp == nil {
+		return fmt.Errorf("%w: get_quota_fence response is nil", errInvalidWitness)
+	}
+	if resp.GetNotFound() {
+		if resp.GetFence() != nil {
+			return fmt.Errorf("%w: get_quota_fence not_found reply carries fence", errInvalidWitness)
+		}
+		return nil
+	}
+	return validateQuotaFenceInfo("get_quota_fence", resp.GetFence())
+}
+
+func validateListQuotaFencesResponse(resp *coordpb.ListQuotaFencesResponse) error {
+	if resp == nil {
+		return fmt.Errorf("%w: list_quota_fences response is nil", errInvalidWitness)
+	}
+	seen := make(map[string]struct{}, len(resp.GetFences()))
+	for _, fence := range resp.GetFences() {
+		if err := validateQuotaFenceInfo("list_quota_fences", fence); err != nil {
+			return err
+		}
+		key := fmt.Sprintf("%s/%d", fence.GetSubject().GetMountId(), fence.GetSubject().GetSubtreeRoot())
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("%w: list_quota_fences duplicate subject=%s", errInvalidWitness, key)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+func validateQuotaFenceInfo(kind string, fence *coordpb.QuotaFenceInfo) error {
+	if fence == nil {
+		return fmt.Errorf("%w: %s missing fence on non-not-found reply", errInvalidWitness, kind)
+	}
+	subject := fence.GetSubject()
+	if subject == nil || subject.GetMountId() == "" {
+		return fmt.Errorf("%w: %s missing quota subject", errInvalidWitness, kind)
 	}
 	return nil
 }

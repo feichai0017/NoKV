@@ -292,6 +292,8 @@ func rpcError(err error) error {
 		return status.Error(codes.NotFound, err.Error())
 	case errors.Is(err, fsmeta.ErrMountNotRegistered), errors.Is(err, fsmeta.ErrMountRetired):
 		return status.Error(codes.FailedPrecondition, err.Error())
+	case errors.Is(err, fsmeta.ErrQuotaExceeded):
+		return status.Error(codes.ResourceExhausted, err.Error())
 	case errors.Is(err, fsmeta.ErrInvalidMountID),
 		errors.Is(err, fsmeta.ErrInvalidInodeID),
 		errors.Is(err, fsmeta.ErrInvalidName),

@@ -99,6 +99,31 @@ func TestApplySubtreeAuthorityRejectsIncompleteCoverage(t *testing.T) {
 	require.Equal(t, uint64(0), got.Era)
 }
 
+func TestApplyQuotaFenceUpdatedToSnapshot(t *testing.T) {
+	snapshot := rootstate.Snapshot{}
+	cursor := rootstate.Cursor{Term: 1, Index: 2}
+	rootstate.ApplyEventToSnapshot(&snapshot, cursor, rootevent.QuotaFenceUpdated("vol", 7, 4096, 12, 1, 99))
+
+	key := rootstate.QuotaFenceKey("vol", 7)
+	require.Equal(t, rootstate.QuotaFence{
+		SubjectID:   key,
+		Mount:       "vol",
+		RootInode:   7,
+		LimitBytes:  4096,
+		LimitInodes: 12,
+		Era:         1,
+		Frontier:    99,
+		UpdatedAt:   cursor,
+	}, snapshot.Quotas[key])
+
+	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 3}, rootevent.QuotaFenceUpdated("vol", 7, 1, 1, 1, 100))
+	require.Equal(t, uint64(4096), snapshot.Quotas[key].LimitBytes)
+
+	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 4}, rootevent.QuotaFenceUpdated("vol", 7, 0, 0, 2, 101))
+	require.Equal(t, uint64(0), snapshot.Quotas[key].LimitBytes)
+	require.Equal(t, uint64(2), snapshot.Quotas[key].Era)
+}
+
 func TestApplyRangeChangeCancelToSnapshot(t *testing.T) {
 	parent := testDescriptor(140, []byte("a"), []byte("z"))
 	left := testDescriptor(140, []byte("a"), []byte("m"))

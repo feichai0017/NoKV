@@ -96,6 +96,37 @@ message ListMountsResponse {
   repeated MountInfo mounts = 1;
 }
 
+message QuotaSubject {
+  string mount_id = 1;
+  // subtree_root=0 means the quota is mount-wide. Non-zero scopes the fence to
+  // one subtree root inode inside the mount.
+  uint64 subtree_root = 2;
+}
+
+message QuotaFenceInfo {
+  QuotaSubject subject = 1;
+  uint64 limit_bytes = 2;
+  uint64 limit_inodes = 3;
+  uint64 era = 4;
+  uint64 frontier = 5;
+  nokv.meta.v1.RootCursor updated_at = 6;
+}
+
+message GetQuotaFenceRequest {
+  QuotaSubject subject = 1;
+}
+
+message GetQuotaFenceResponse {
+  QuotaFenceInfo fence = 1;
+  bool not_found = 2;
+}
+
+message ListQuotaFencesRequest {}
+
+message ListQuotaFencesResponse {
+  repeated QuotaFenceInfo fences = 1;
+}
+
 enum SchedulerOperationType {
   SCHEDULER_OPERATION_TYPE_NONE = 0;
   SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER = 1;
@@ -371,6 +402,8 @@ service Coordinator {
   rpc ListStores(ListStoresRequest) returns (ListStoresResponse);
   rpc GetMount(GetMountRequest) returns (GetMountResponse);
   rpc ListMounts(ListMountsRequest) returns (ListMountsResponse);
+  rpc GetQuotaFence(GetQuotaFenceRequest) returns (GetQuotaFenceResponse);
+  rpc ListQuotaFences(ListQuotaFencesRequest) returns (ListQuotaFencesResponse);
   rpc RegionLiveness(RegionLivenessRequest) returns (RegionLivenessResponse);
   rpc PublishRootEvent(PublishRootEventRequest) returns (PublishRootEventResponse);
   rpc ListTransitions(ListTransitionsRequest) returns (ListTransitionsResponse);

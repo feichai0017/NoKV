@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetapb "github.com/feichai0017/NoKV/pb/fsmeta"
@@ -277,6 +278,15 @@ func translateRPCError(err error) error {
 		return fmt.Errorf("%w: %v", fsmeta.ErrNotFound, err)
 	case codes.OutOfRange:
 		return fmt.Errorf("%w: %v", fsmeta.ErrWatchCursorExpired, err)
+	case codes.ResourceExhausted:
+		msg := status.Convert(err).Message()
+		if strings.Contains(msg, fsmeta.ErrQuotaExceeded.Error()) {
+			return fmt.Errorf("%w: %v", fsmeta.ErrQuotaExceeded, err)
+		}
+		if strings.Contains(msg, fsmeta.ErrWatchOverflow.Error()) {
+			return fmt.Errorf("%w: %v", fsmeta.ErrWatchOverflow, err)
+		}
+		return err
 	default:
 		return err
 	}

@@ -60,6 +60,7 @@ type SubtreeHandoffPublisher interface {
 type Executor struct {
 	runner                 TxnRunner
 	mounts                 MountResolver
+	quotas                 QuotaResolver
 	subtrees               SubtreeHandoffPublisher
 	lockTTL                uint64
 	txnRetriesTotal        atomic.Uint64
@@ -83,6 +84,14 @@ func WithLockTTL(ttl uint64) Option {
 func WithMountResolver(resolver MountResolver) Option {
 	return func(e *Executor) {
 		e.mounts = resolver
+	}
+}
+
+// WithQuotaResolver enables rooted quota-fence admission for resource-creating
+// fsmeta operations.
+func WithQuotaResolver(resolver QuotaResolver) Option {
+	return func(e *Executor) {
+		e.quotas = resolver
 	}
 }
 
@@ -134,6 +143,9 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest, inode f
 	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
 		return err
 	}
+	if err := e.checkQuota(ctx, req.Mount, req.Parent, inode.Size, 1); err != nil {
+		return err
+	}
 	inode.Inode = req.Inode
 	if inode.LinkCount == 0 {
 		inode.LinkCount = 1
@@ -165,9 +177,13 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest, inode f
 			AssertionNotExist: true,
 		},
 	}
-	return e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
 		return e.runner.Mutate(ctx, plan.PrimaryKey, cloneMutations(mutations), startVersion, commitVersion, e.lockTTL)
-	})
+	}); err != nil {
+		return err
+	}
+	e.accountQuota(req.Mount, req.Parent, inodeSizeDelta(inode.Size), 1)
+	return nil
 }
 
 // Lookup returns the dentry record for parent/name.
@@ -306,16 +322,31 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
 		return err
 	}
+	var releasedBytes uint64
+	var released bool
 	mutations := []*kvrpcpb.Mutation{{
 		Op:  kvrpcpb.Mutation_Delete,
 		Key: cloneBytes(plan.MutateKeys[0]),
 	}}
-	return e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
-		if _, err := e.readDentry(ctx, plan.PrimaryKey, startVersion); err != nil {
+	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+		record, err := e.readDentry(ctx, plan.PrimaryKey, startVersion)
+		if err != nil {
 			return err
 		}
+		if inode, ok, err := e.readInode(ctx, req.Mount, record.Inode, startVersion); err != nil {
+			return err
+		} else if ok {
+			releasedBytes = inode.Size
+			released = true
+		}
 		return e.runner.Mutate(ctx, plan.PrimaryKey, cloneMutations(mutations), startVersion, commitVersion, e.lockTTL)
-	})
+	}); err != nil {
+		return err
+	}
+	if released {
+		e.accountQuota(req.Mount, req.Parent, -inodeSizeDelta(releasedBytes), -1)
+	}
+	return nil
 }
 
 // RenameSubtree moves the subtree root dentry from source to destination.
@@ -407,6 +438,20 @@ func (e *Executor) resolveActiveMount(ctx context.Context, mount fsmeta.MountID)
 		return MountRecord{}, fsmeta.ErrMountRetired
 	}
 	return record, nil
+}
+
+func (e *Executor) checkQuota(ctx context.Context, mount fsmeta.MountID, root fsmeta.InodeID, addBytes, addInodes uint64) error {
+	if e == nil || e.quotas == nil {
+		return nil
+	}
+	return e.quotas.CheckQuota(ctx, mount, root, addBytes, addInodes)
+}
+
+func (e *Executor) accountQuota(mount fsmeta.MountID, root fsmeta.InodeID, deltaBytes, deltaInodes int64) {
+	if e == nil || e.quotas == nil {
+		return
+	}
+	e.quotas.AccountQuota(mount, root, deltaBytes, deltaInodes)
 }
 
 func (e *Executor) reserveReadVersion(ctx context.Context) (uint64, error) {
@@ -505,6 +550,22 @@ func (e *Executor) readDentry(ctx context.Context, key []byte, version uint64) (
 		return fsmeta.DentryRecord{}, fsmeta.ErrNotFound
 	}
 	return fsmeta.DecodeDentryValue(value)
+}
+
+func (e *Executor) readInode(ctx context.Context, mount fsmeta.MountID, inodeID fsmeta.InodeID, version uint64) (fsmeta.InodeRecord, bool, error) {
+	key, err := fsmeta.EncodeInodeKey(mount, inodeID)
+	if err != nil {
+		return fsmeta.InodeRecord{}, false, err
+	}
+	value, ok, err := e.runner.Get(ctx, key, version)
+	if err != nil || !ok {
+		return fsmeta.InodeRecord{}, ok, err
+	}
+	inode, err := fsmeta.DecodeInodeValue(value)
+	if err != nil {
+		return fsmeta.InodeRecord{}, false, err
+	}
+	return inode, true, nil
 }
 
 func translateMutateError(err error) error {

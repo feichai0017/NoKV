@@ -109,6 +109,36 @@ func (s *Service) ListMounts(ctx context.Context, _ *coordpb.ListMountsRequest) 
 	return &coordpb.ListMountsResponse{Mounts: out}, nil
 }
 
+func (s *Service) GetQuotaFence(ctx context.Context, req *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "get quota fence request missing subject")
+	}
+	subject := req.GetSubject()
+	if subject == nil || subject.GetMountId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "get quota fence request missing subject")
+	}
+	fence, ok := s.cluster.QuotaFenceBySubject(subject.GetMountId(), subject.GetSubtreeRoot())
+	if !ok {
+		return &coordpb.GetQuotaFenceResponse{NotFound: true}, nil
+	}
+	return &coordpb.GetQuotaFenceResponse{Fence: quotaFenceInfoToProto(fence)}, nil
+}
+
+func (s *Service) ListQuotaFences(ctx context.Context, _ *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.Error(codes.Canceled, err.Error())
+	}
+	quotas := s.cluster.QuotaFenceSnapshot()
+	out := make([]*coordpb.QuotaFenceInfo, 0, len(quotas))
+	for _, quota := range quotas {
+		out = append(out, quotaFenceInfoToProto(quota))
+	}
+	return &coordpb.ListQuotaFencesResponse{Fences: out}, nil
+}
+
 func mountInfoToProto(mount rootstate.MountRecord) *coordpb.MountInfo {
 	return &coordpb.MountInfo{
 		MountId:       mount.MountID,
@@ -117,6 +147,20 @@ func mountInfoToProto(mount rootstate.MountRecord) *coordpb.MountInfo {
 		State:         mountStateToProto(mount.State),
 		RegisteredAt:  metawire.RootCursorToProto(mount.RegisteredAt),
 		RetiredAt:     metawire.RootCursorToProto(mount.RetiredAt),
+	}
+}
+
+func quotaFenceInfoToProto(fence rootstate.QuotaFence) *coordpb.QuotaFenceInfo {
+	return &coordpb.QuotaFenceInfo{
+		Subject: &coordpb.QuotaSubject{
+			MountId:     fence.Mount,
+			SubtreeRoot: fence.RootInode,
+		},
+		LimitBytes:  fence.LimitBytes,
+		LimitInodes: fence.LimitInodes,
+		Era:         fence.Era,
+		Frontier:    fence.Frontier,
+		UpdatedAt:   metawire.RootCursorToProto(fence.UpdatedAt),
 	}
 }
 
@@ -235,7 +279,8 @@ func (s *Service) PublishRootEvent(ctx context.Context, req *coordpb.PublishRoot
 		case errors.Is(err, catalog.ErrRegionHeartbeatStale), errors.Is(err, catalog.ErrRegionRangeOverlap),
 			errors.Is(err, catalog.ErrMountNotFound), errors.Is(err, catalog.ErrMountRetired), errors.Is(err, catalog.ErrMountConflict),
 			errors.Is(err, catalog.ErrSubtreeAuthorityNotFound), errors.Is(err, catalog.ErrSubtreeAuthorityConflict),
-			errors.Is(err, catalog.ErrSubtreeAuthorityHandoff):
+			errors.Is(err, catalog.ErrSubtreeAuthorityHandoff), errors.Is(err, catalog.ErrQuotaFenceNotFound),
+			errors.Is(err, catalog.ErrQuotaFenceConflict):
 			return nil, status.Error(codes.FailedPrecondition, err.Error())
 		default:
 			return nil, status.Error(codes.Internal, err.Error())
@@ -271,6 +316,9 @@ func (s *Service) assessRootEventLifecycle(event rootevent.Event) (rootstate.Tra
 	}
 	rooted := rootstate.Snapshot{
 		Stores:              snapshot.Stores,
+		Mounts:              snapshot.Mounts,
+		Subtrees:            snapshot.Subtrees,
+		Quotas:              snapshot.Quotas,
 		Descriptors:         snapshot.Descriptors,
 		PendingPeerChanges:  snapshot.PendingPeerChanges,
 		PendingRangeChanges: snapshot.PendingRangeChanges,
