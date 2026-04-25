@@ -108,6 +108,9 @@ func TestMembershipAndAllocatorConstructors(t *testing.T) {
 	retiredSnapshot := rootevent.SnapshotEpochRetired("vol", 42, 99)
 	mount := rootevent.MountRegistered("vol", 1, 1)
 	retiredMount := rootevent.MountRetired("vol")
+	declaredSubtree := rootevent.SubtreeAuthorityDeclared("vol", 1, "vol", 0, 10)
+	startedSubtree := rootevent.SubtreeHandoffStarted("vol", 1, 11)
+	completedSubtree := rootevent.SubtreeHandoffCompleted("vol", 1, 12)
 
 	require.Equal(t, rootevent.KindStoreJoined, joined.Kind)
 	require.Equal(t, uint64(7), joined.StoreMembership.StoreID)
@@ -133,6 +136,16 @@ func TestMembershipAndAllocatorConstructors(t *testing.T) {
 	require.Equal(t, uint32(1), mount.Mount.SchemaVersion)
 	require.Equal(t, rootevent.KindMountRetired, retiredMount.Kind)
 	require.Equal(t, "vol", retiredMount.Mount.MountID)
+
+	require.Equal(t, rootevent.KindSubtreeAuthorityDeclared, declaredSubtree.Kind)
+	require.Equal(t, "vol", declaredSubtree.SubtreeAuthority.Mount)
+	require.Equal(t, uint64(1), declaredSubtree.SubtreeAuthority.RootInode)
+	require.Equal(t, "vol", declaredSubtree.SubtreeAuthority.AuthorityID)
+	require.Equal(t, uint64(10), declaredSubtree.SubtreeAuthority.Frontier)
+	require.Equal(t, rootevent.KindSubtreeHandoffStarted, startedSubtree.Kind)
+	require.Equal(t, uint64(11), startedSubtree.SubtreeAuthority.Frontier)
+	require.Equal(t, rootevent.KindSubtreeHandoffCompleted, completedSubtree.Kind)
+	require.Equal(t, uint64(12), completedSubtree.SubtreeAuthority.InheritedFrontier)
 }
 
 func TestTenureReleasedAndSealed(t *testing.T) {

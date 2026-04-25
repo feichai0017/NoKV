@@ -108,6 +108,8 @@ func (s *Service) publishRootSnapshot(snapshot rootview.Snapshot) {
 	if s.cluster != nil {
 		s.cluster.ReplaceRootSnapshot(rootstate.Snapshot{
 			Stores:              snapshot.Stores,
+			Subtrees:            snapshot.Subtrees,
+			Mounts:              snapshot.Mounts,
 			Descriptors:         snapshot.Descriptors,
 			PendingPeerChanges:  snapshot.PendingPeerChanges,
 			PendingRangeChanges: snapshot.PendingRangeChanges,

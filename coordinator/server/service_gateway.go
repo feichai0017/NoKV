@@ -233,7 +233,9 @@ func (s *Service) PublishRootEvent(ctx context.Context, req *coordpb.PublishRoot
 		case errors.Is(err, catalog.ErrInvalidRegionID), errors.Is(err, catalog.ErrInvalidMountID):
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		case errors.Is(err, catalog.ErrRegionHeartbeatStale), errors.Is(err, catalog.ErrRegionRangeOverlap),
-			errors.Is(err, catalog.ErrMountNotFound), errors.Is(err, catalog.ErrMountRetired), errors.Is(err, catalog.ErrMountConflict):
+			errors.Is(err, catalog.ErrMountNotFound), errors.Is(err, catalog.ErrMountRetired), errors.Is(err, catalog.ErrMountConflict),
+			errors.Is(err, catalog.ErrSubtreeAuthorityNotFound), errors.Is(err, catalog.ErrSubtreeAuthorityConflict),
+			errors.Is(err, catalog.ErrSubtreeAuthorityHandoff):
 			return nil, status.Error(codes.FailedPrecondition, err.Error())
 		default:
 			return nil, status.Error(codes.Internal, err.Error())

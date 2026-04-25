@@ -53,6 +53,9 @@ const (
 	RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED      RootEventKind = 24
 	RootEventKind_ROOT_EVENT_KIND_MOUNT_REGISTERED            RootEventKind = 25
 	RootEventKind_ROOT_EVENT_KIND_MOUNT_RETIRED               RootEventKind = 26
+	RootEventKind_ROOT_EVENT_KIND_SUBTREE_AUTHORITY_DECLARED  RootEventKind = 27
+	RootEventKind_ROOT_EVENT_KIND_SUBTREE_HANDOFF_STARTED     RootEventKind = 28
+	RootEventKind_ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED   RootEventKind = 29
 )
 
 // Enum value maps for RootEventKind.
@@ -85,6 +88,9 @@ var (
 		24: "ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED",
 		25: "ROOT_EVENT_KIND_MOUNT_REGISTERED",
 		26: "ROOT_EVENT_KIND_MOUNT_RETIRED",
+		27: "ROOT_EVENT_KIND_SUBTREE_AUTHORITY_DECLARED",
+		28: "ROOT_EVENT_KIND_SUBTREE_HANDOFF_STARTED",
+		29: "ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED",
 	}
 	RootEventKind_value = map[string]int32{
 		"ROOT_EVENT_KIND_UNSPECIFIED":                 0,
@@ -114,6 +120,9 @@ var (
 		"ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED":      24,
 		"ROOT_EVENT_KIND_MOUNT_REGISTERED":            25,
 		"ROOT_EVENT_KIND_MOUNT_RETIRED":               26,
+		"ROOT_EVENT_KIND_SUBTREE_AUTHORITY_DECLARED":  27,
+		"ROOT_EVENT_KIND_SUBTREE_HANDOFF_STARTED":     28,
+		"ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED":   29,
 	}
 )
 
@@ -242,6 +251,55 @@ func (RootMountState) EnumDescriptor() ([]byte, []int) {
 	return file_meta_root_proto_rawDescGZIP(), []int{2}
 }
 
+type RootSubtreeAuthorityState int32
+
+const (
+	RootSubtreeAuthorityState_ROOT_SUBTREE_AUTHORITY_STATE_UNSPECIFIED RootSubtreeAuthorityState = 0
+	RootSubtreeAuthorityState_ROOT_SUBTREE_AUTHORITY_STATE_ACTIVE      RootSubtreeAuthorityState = 1
+	RootSubtreeAuthorityState_ROOT_SUBTREE_AUTHORITY_STATE_HANDOFF     RootSubtreeAuthorityState = 2
+)
+
+// Enum value maps for RootSubtreeAuthorityState.
+var (
+	RootSubtreeAuthorityState_name = map[int32]string{
+		0: "ROOT_SUBTREE_AUTHORITY_STATE_UNSPECIFIED",
+		1: "ROOT_SUBTREE_AUTHORITY_STATE_ACTIVE",
+		2: "ROOT_SUBTREE_AUTHORITY_STATE_HANDOFF",
+	}
+	RootSubtreeAuthorityState_value = map[string]int32{
+		"ROOT_SUBTREE_AUTHORITY_STATE_UNSPECIFIED": 0,
+		"ROOT_SUBTREE_AUTHORITY_STATE_ACTIVE":      1,
+		"ROOT_SUBTREE_AUTHORITY_STATE_HANDOFF":     2,
+	}
+)
+
+func (x RootSubtreeAuthorityState) Enum() *RootSubtreeAuthorityState {
+	p := new(RootSubtreeAuthorityState)
+	*p = x
+	return p
+}
+
+func (x RootSubtreeAuthorityState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RootSubtreeAuthorityState) Descriptor() protoreflect.EnumDescriptor {
+	return file_meta_root_proto_enumTypes[3].Descriptor()
+}
+
+func (RootSubtreeAuthorityState) Type() protoreflect.EnumType {
+	return &file_meta_root_proto_enumTypes[3]
+}
+
+func (x RootSubtreeAuthorityState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RootSubtreeAuthorityState.Descriptor instead.
+func (RootSubtreeAuthorityState) EnumDescriptor() ([]byte, []int) {
+	return file_meta_root_proto_rawDescGZIP(), []int{3}
+}
+
 type RootHandoverStage int32
 
 const (
@@ -278,11 +336,11 @@ func (x RootHandoverStage) String() string {
 }
 
 func (RootHandoverStage) Descriptor() protoreflect.EnumDescriptor {
-	return file_meta_root_proto_enumTypes[3].Descriptor()
+	return file_meta_root_proto_enumTypes[4].Descriptor()
 }
 
 func (RootHandoverStage) Type() protoreflect.EnumType {
-	return &file_meta_root_proto_enumTypes[3]
+	return &file_meta_root_proto_enumTypes[4]
 }
 
 func (x RootHandoverStage) Number() protoreflect.EnumNumber {
@@ -291,7 +349,7 @@ func (x RootHandoverStage) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RootHandoverStage.Descriptor instead.
 func (RootHandoverStage) EnumDescriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{3}
+	return file_meta_root_proto_rawDescGZIP(), []int{4}
 }
 
 type RootPendingPeerChangeKind int32
@@ -327,11 +385,11 @@ func (x RootPendingPeerChangeKind) String() string {
 }
 
 func (RootPendingPeerChangeKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_meta_root_proto_enumTypes[4].Descriptor()
+	return file_meta_root_proto_enumTypes[5].Descriptor()
 }
 
 func (RootPendingPeerChangeKind) Type() protoreflect.EnumType {
-	return &file_meta_root_proto_enumTypes[4]
+	return &file_meta_root_proto_enumTypes[5]
 }
 
 func (x RootPendingPeerChangeKind) Number() protoreflect.EnumNumber {
@@ -340,7 +398,7 @@ func (x RootPendingPeerChangeKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RootPendingPeerChangeKind.Descriptor instead.
 func (RootPendingPeerChangeKind) EnumDescriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{4}
+	return file_meta_root_proto_rawDescGZIP(), []int{5}
 }
 
 type RootPendingRangeChangeKind int32
@@ -376,11 +434,11 @@ func (x RootPendingRangeChangeKind) String() string {
 }
 
 func (RootPendingRangeChangeKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_meta_root_proto_enumTypes[5].Descriptor()
+	return file_meta_root_proto_enumTypes[6].Descriptor()
 }
 
 func (RootPendingRangeChangeKind) Type() protoreflect.EnumType {
-	return &file_meta_root_proto_enumTypes[5]
+	return &file_meta_root_proto_enumTypes[6]
 }
 
 func (x RootPendingRangeChangeKind) Number() protoreflect.EnumNumber {
@@ -389,7 +447,7 @@ func (x RootPendingRangeChangeKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RootPendingRangeChangeKind.Descriptor instead.
 func (RootPendingRangeChangeKind) EnumDescriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{5}
+	return file_meta_root_proto_rawDescGZIP(), []int{6}
 }
 
 type RootAllocatorKind int32
@@ -425,11 +483,11 @@ func (x RootAllocatorKind) String() string {
 }
 
 func (RootAllocatorKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_meta_root_proto_enumTypes[6].Descriptor()
+	return file_meta_root_proto_enumTypes[7].Descriptor()
 }
 
 func (RootAllocatorKind) Type() protoreflect.EnumType {
-	return &file_meta_root_proto_enumTypes[6]
+	return &file_meta_root_proto_enumTypes[7]
 }
 
 func (x RootAllocatorKind) Number() protoreflect.EnumNumber {
@@ -438,7 +496,7 @@ func (x RootAllocatorKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RootAllocatorKind.Descriptor instead.
 func (RootAllocatorKind) EnumDescriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{6}
+	return file_meta_root_proto_rawDescGZIP(), []int{7}
 }
 
 type RootTenureAct int32
@@ -474,11 +532,11 @@ func (x RootTenureAct) String() string {
 }
 
 func (RootTenureAct) Descriptor() protoreflect.EnumDescriptor {
-	return file_meta_root_proto_enumTypes[7].Descriptor()
+	return file_meta_root_proto_enumTypes[8].Descriptor()
 }
 
 func (RootTenureAct) Type() protoreflect.EnumType {
-	return &file_meta_root_proto_enumTypes[7]
+	return &file_meta_root_proto_enumTypes[8]
 }
 
 func (x RootTenureAct) Number() protoreflect.EnumNumber {
@@ -487,7 +545,7 @@ func (x RootTenureAct) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RootTenureAct.Descriptor instead.
 func (RootTenureAct) EnumDescriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{7}
+	return file_meta_root_proto_rawDescGZIP(), []int{8}
 }
 
 type RootHandoverAct int32
@@ -529,11 +587,11 @@ func (x RootHandoverAct) String() string {
 }
 
 func (RootHandoverAct) Descriptor() protoreflect.EnumDescriptor {
-	return file_meta_root_proto_enumTypes[8].Descriptor()
+	return file_meta_root_proto_enumTypes[9].Descriptor()
 }
 
 func (RootHandoverAct) Type() protoreflect.EnumType {
-	return &file_meta_root_proto_enumTypes[8]
+	return &file_meta_root_proto_enumTypes[9]
 }
 
 func (x RootHandoverAct) Number() protoreflect.EnumNumber {
@@ -542,7 +600,7 @@ func (x RootHandoverAct) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RootHandoverAct.Descriptor instead.
 func (RootHandoverAct) EnumDescriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{8}
+	return file_meta_root_proto_rawDescGZIP(), []int{9}
 }
 
 type RootTenureApplyStatus int32
@@ -578,11 +636,11 @@ func (x RootTenureApplyStatus) String() string {
 }
 
 func (RootTenureApplyStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_meta_root_proto_enumTypes[9].Descriptor()
+	return file_meta_root_proto_enumTypes[10].Descriptor()
 }
 
 func (RootTenureApplyStatus) Type() protoreflect.EnumType {
-	return &file_meta_root_proto_enumTypes[9]
+	return &file_meta_root_proto_enumTypes[10]
 }
 
 func (x RootTenureApplyStatus) Number() protoreflect.EnumNumber {
@@ -591,7 +649,7 @@ func (x RootTenureApplyStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RootTenureApplyStatus.Descriptor instead.
 func (RootTenureApplyStatus) EnumDescriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{9}
+	return file_meta_root_proto_rawDescGZIP(), []int{10}
 }
 
 type RootCursor struct {
@@ -756,6 +814,7 @@ type RootCheckpoint struct {
 	Stores              []*RootStore              `protobuf:"bytes,6,rep,name=stores,proto3" json:"stores,omitempty"`
 	SnapshotEpochs      []*RootSnapshotEpoch      `protobuf:"bytes,7,rep,name=snapshot_epochs,json=snapshotEpochs,proto3" json:"snapshot_epochs,omitempty"`
 	Mounts              []*RootMount              `protobuf:"bytes,8,rep,name=mounts,proto3" json:"mounts,omitempty"`
+	Subtrees            []*RootSubtreeAuthority   `protobuf:"bytes,9,rep,name=subtrees,proto3" json:"subtrees,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -842,6 +901,13 @@ func (x *RootCheckpoint) GetSnapshotEpochs() []*RootSnapshotEpoch {
 func (x *RootCheckpoint) GetMounts() []*RootMount {
 	if x != nil {
 		return x.Mounts
+	}
+	return nil
+}
+
+func (x *RootCheckpoint) GetSubtrees() []*RootSubtreeAuthority {
+	if x != nil {
+		return x.Subtrees
 	}
 	return nil
 }
@@ -1118,6 +1184,170 @@ func (x *RootMount) GetRetiredAt() *RootCursor {
 	return nil
 }
 
+type RootSubtreeAuthority struct {
+	state                  protoimpl.MessageState    `protogen:"open.v1"`
+	SubtreeId              string                    `protobuf:"bytes,1,opt,name=subtree_id,json=subtreeId,proto3" json:"subtree_id,omitempty"`
+	Mount                  string                    `protobuf:"bytes,2,opt,name=mount,proto3" json:"mount,omitempty"`
+	RootInode              uint64                    `protobuf:"varint,3,opt,name=root_inode,json=rootInode,proto3" json:"root_inode,omitempty"`
+	AuthorityId            string                    `protobuf:"bytes,4,opt,name=authority_id,json=authorityId,proto3" json:"authority_id,omitempty"`
+	Era                    uint64                    `protobuf:"varint,5,opt,name=era,proto3" json:"era,omitempty"`
+	Frontier               uint64                    `protobuf:"varint,6,opt,name=frontier,proto3" json:"frontier,omitempty"`
+	State                  RootSubtreeAuthorityState `protobuf:"varint,7,opt,name=state,proto3,enum=nokv.meta.v1.RootSubtreeAuthorityState" json:"state,omitempty"`
+	DeclaredAt             *RootCursor               `protobuf:"bytes,8,opt,name=declared_at,json=declaredAt,proto3" json:"declared_at,omitempty"`
+	HandoffStartedAt       *RootCursor               `protobuf:"bytes,9,opt,name=handoff_started_at,json=handoffStartedAt,proto3" json:"handoff_started_at,omitempty"`
+	HandoffCompletedAt     *RootCursor               `protobuf:"bytes,10,opt,name=handoff_completed_at,json=handoffCompletedAt,proto3" json:"handoff_completed_at,omitempty"`
+	PredecessorAuthorityId string                    `protobuf:"bytes,11,opt,name=predecessor_authority_id,json=predecessorAuthorityId,proto3" json:"predecessor_authority_id,omitempty"`
+	PredecessorEra         uint64                    `protobuf:"varint,12,opt,name=predecessor_era,json=predecessorEra,proto3" json:"predecessor_era,omitempty"`
+	PredecessorFrontier    uint64                    `protobuf:"varint,13,opt,name=predecessor_frontier,json=predecessorFrontier,proto3" json:"predecessor_frontier,omitempty"`
+	SuccessorAuthorityId   string                    `protobuf:"bytes,14,opt,name=successor_authority_id,json=successorAuthorityId,proto3" json:"successor_authority_id,omitempty"`
+	SuccessorEra           uint64                    `protobuf:"varint,15,opt,name=successor_era,json=successorEra,proto3" json:"successor_era,omitempty"`
+	InheritedFrontier      uint64                    `protobuf:"varint,16,opt,name=inherited_frontier,json=inheritedFrontier,proto3" json:"inherited_frontier,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *RootSubtreeAuthority) Reset() {
+	*x = RootSubtreeAuthority{}
+	mi := &file_meta_root_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RootSubtreeAuthority) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RootSubtreeAuthority) ProtoMessage() {}
+
+func (x *RootSubtreeAuthority) ProtoReflect() protoreflect.Message {
+	mi := &file_meta_root_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RootSubtreeAuthority.ProtoReflect.Descriptor instead.
+func (*RootSubtreeAuthority) Descriptor() ([]byte, []int) {
+	return file_meta_root_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *RootSubtreeAuthority) GetSubtreeId() string {
+	if x != nil {
+		return x.SubtreeId
+	}
+	return ""
+}
+
+func (x *RootSubtreeAuthority) GetMount() string {
+	if x != nil {
+		return x.Mount
+	}
+	return ""
+}
+
+func (x *RootSubtreeAuthority) GetRootInode() uint64 {
+	if x != nil {
+		return x.RootInode
+	}
+	return 0
+}
+
+func (x *RootSubtreeAuthority) GetAuthorityId() string {
+	if x != nil {
+		return x.AuthorityId
+	}
+	return ""
+}
+
+func (x *RootSubtreeAuthority) GetEra() uint64 {
+	if x != nil {
+		return x.Era
+	}
+	return 0
+}
+
+func (x *RootSubtreeAuthority) GetFrontier() uint64 {
+	if x != nil {
+		return x.Frontier
+	}
+	return 0
+}
+
+func (x *RootSubtreeAuthority) GetState() RootSubtreeAuthorityState {
+	if x != nil {
+		return x.State
+	}
+	return RootSubtreeAuthorityState_ROOT_SUBTREE_AUTHORITY_STATE_UNSPECIFIED
+}
+
+func (x *RootSubtreeAuthority) GetDeclaredAt() *RootCursor {
+	if x != nil {
+		return x.DeclaredAt
+	}
+	return nil
+}
+
+func (x *RootSubtreeAuthority) GetHandoffStartedAt() *RootCursor {
+	if x != nil {
+		return x.HandoffStartedAt
+	}
+	return nil
+}
+
+func (x *RootSubtreeAuthority) GetHandoffCompletedAt() *RootCursor {
+	if x != nil {
+		return x.HandoffCompletedAt
+	}
+	return nil
+}
+
+func (x *RootSubtreeAuthority) GetPredecessorAuthorityId() string {
+	if x != nil {
+		return x.PredecessorAuthorityId
+	}
+	return ""
+}
+
+func (x *RootSubtreeAuthority) GetPredecessorEra() uint64 {
+	if x != nil {
+		return x.PredecessorEra
+	}
+	return 0
+}
+
+func (x *RootSubtreeAuthority) GetPredecessorFrontier() uint64 {
+	if x != nil {
+		return x.PredecessorFrontier
+	}
+	return 0
+}
+
+func (x *RootSubtreeAuthority) GetSuccessorAuthorityId() string {
+	if x != nil {
+		return x.SuccessorAuthorityId
+	}
+	return ""
+}
+
+func (x *RootSubtreeAuthority) GetSuccessorEra() uint64 {
+	if x != nil {
+		return x.SuccessorEra
+	}
+	return 0
+}
+
+func (x *RootSubtreeAuthority) GetInheritedFrontier() uint64 {
+	if x != nil {
+		return x.InheritedFrontier
+	}
+	return 0
+}
+
 type RootAllocatorFence struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Minimum       uint64                 `protobuf:"varint,1,opt,name=minimum,proto3" json:"minimum,omitempty"`
@@ -1127,7 +1357,7 @@ type RootAllocatorFence struct {
 
 func (x *RootAllocatorFence) Reset() {
 	*x = RootAllocatorFence{}
-	mi := &file_meta_root_proto_msgTypes[7]
+	mi := &file_meta_root_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1139,7 +1369,7 @@ func (x *RootAllocatorFence) String() string {
 func (*RootAllocatorFence) ProtoMessage() {}
 
 func (x *RootAllocatorFence) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[7]
+	mi := &file_meta_root_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1152,7 +1382,7 @@ func (x *RootAllocatorFence) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootAllocatorFence.ProtoReflect.Descriptor instead.
 func (*RootAllocatorFence) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{7}
+	return file_meta_root_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *RootAllocatorFence) GetMinimum() uint64 {
@@ -1177,7 +1407,7 @@ type RootTenure struct {
 
 func (x *RootTenure) Reset() {
 	*x = RootTenure{}
-	mi := &file_meta_root_proto_msgTypes[8]
+	mi := &file_meta_root_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1189,7 +1419,7 @@ func (x *RootTenure) String() string {
 func (*RootTenure) ProtoMessage() {}
 
 func (x *RootTenure) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[8]
+	mi := &file_meta_root_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1202,7 +1432,7 @@ func (x *RootTenure) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootTenure.ProtoReflect.Descriptor instead.
 func (*RootTenure) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{8}
+	return file_meta_root_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RootTenure) GetHolderId() string {
@@ -1264,7 +1494,7 @@ type RootMandateFrontier struct {
 
 func (x *RootMandateFrontier) Reset() {
 	*x = RootMandateFrontier{}
-	mi := &file_meta_root_proto_msgTypes[9]
+	mi := &file_meta_root_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1276,7 +1506,7 @@ func (x *RootMandateFrontier) String() string {
 func (*RootMandateFrontier) ProtoMessage() {}
 
 func (x *RootMandateFrontier) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[9]
+	mi := &file_meta_root_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1289,7 +1519,7 @@ func (x *RootMandateFrontier) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootMandateFrontier.ProtoReflect.Descriptor instead.
 func (*RootMandateFrontier) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{9}
+	return file_meta_root_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *RootMandateFrontier) GetMandate() uint32 {
@@ -1319,7 +1549,7 @@ type RootLegacy struct {
 
 func (x *RootLegacy) Reset() {
 	*x = RootLegacy{}
-	mi := &file_meta_root_proto_msgTypes[10]
+	mi := &file_meta_root_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1331,7 +1561,7 @@ func (x *RootLegacy) String() string {
 func (*RootLegacy) ProtoMessage() {}
 
 func (x *RootLegacy) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[10]
+	mi := &file_meta_root_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1344,7 +1574,7 @@ func (x *RootLegacy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootLegacy.ProtoReflect.Descriptor instead.
 func (*RootLegacy) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{10}
+	return file_meta_root_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *RootLegacy) GetHolderId() string {
@@ -1398,7 +1628,7 @@ type RootHandover struct {
 
 func (x *RootHandover) Reset() {
 	*x = RootHandover{}
-	mi := &file_meta_root_proto_msgTypes[11]
+	mi := &file_meta_root_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1410,7 +1640,7 @@ func (x *RootHandover) String() string {
 func (*RootHandover) ProtoMessage() {}
 
 func (x *RootHandover) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[11]
+	mi := &file_meta_root_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1423,7 +1653,7 @@ func (x *RootHandover) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootHandover.ProtoReflect.Descriptor instead.
 func (*RootHandover) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{11}
+	return file_meta_root_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *RootHandover) GetHolderId() string {
@@ -1491,7 +1721,7 @@ type RootRegionDescriptor struct {
 
 func (x *RootRegionDescriptor) Reset() {
 	*x = RootRegionDescriptor{}
-	mi := &file_meta_root_proto_msgTypes[12]
+	mi := &file_meta_root_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1503,7 +1733,7 @@ func (x *RootRegionDescriptor) String() string {
 func (*RootRegionDescriptor) ProtoMessage() {}
 
 func (x *RootRegionDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[12]
+	mi := &file_meta_root_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1516,7 +1746,7 @@ func (x *RootRegionDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootRegionDescriptor.ProtoReflect.Descriptor instead.
 func (*RootRegionDescriptor) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{12}
+	return file_meta_root_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *RootRegionDescriptor) GetDescriptor_() *RegionDescriptor {
@@ -1535,7 +1765,7 @@ type RootRegionRemoval struct {
 
 func (x *RootRegionRemoval) Reset() {
 	*x = RootRegionRemoval{}
-	mi := &file_meta_root_proto_msgTypes[13]
+	mi := &file_meta_root_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1547,7 +1777,7 @@ func (x *RootRegionRemoval) String() string {
 func (*RootRegionRemoval) ProtoMessage() {}
 
 func (x *RootRegionRemoval) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[13]
+	mi := &file_meta_root_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1560,7 +1790,7 @@ func (x *RootRegionRemoval) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootRegionRemoval.ProtoReflect.Descriptor instead.
 func (*RootRegionRemoval) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{13}
+	return file_meta_root_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *RootRegionRemoval) GetRegionId() uint64 {
@@ -1583,7 +1813,7 @@ type RootRangeSplit struct {
 
 func (x *RootRangeSplit) Reset() {
 	*x = RootRangeSplit{}
-	mi := &file_meta_root_proto_msgTypes[14]
+	mi := &file_meta_root_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1595,7 +1825,7 @@ func (x *RootRangeSplit) String() string {
 func (*RootRangeSplit) ProtoMessage() {}
 
 func (x *RootRangeSplit) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[14]
+	mi := &file_meta_root_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1608,7 +1838,7 @@ func (x *RootRangeSplit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootRangeSplit.ProtoReflect.Descriptor instead.
 func (*RootRangeSplit) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{14}
+	return file_meta_root_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *RootRangeSplit) GetParentRegionId() uint64 {
@@ -1659,7 +1889,7 @@ type RootRangeMerge struct {
 
 func (x *RootRangeMerge) Reset() {
 	*x = RootRangeMerge{}
-	mi := &file_meta_root_proto_msgTypes[15]
+	mi := &file_meta_root_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1671,7 +1901,7 @@ func (x *RootRangeMerge) String() string {
 func (*RootRangeMerge) ProtoMessage() {}
 
 func (x *RootRangeMerge) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[15]
+	mi := &file_meta_root_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1684,7 +1914,7 @@ func (x *RootRangeMerge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootRangeMerge.ProtoReflect.Descriptor instead.
 func (*RootRangeMerge) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{15}
+	return file_meta_root_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *RootRangeMerge) GetLeftRegionId() uint64 {
@@ -1735,7 +1965,7 @@ type RootPeerChange struct {
 
 func (x *RootPeerChange) Reset() {
 	*x = RootPeerChange{}
-	mi := &file_meta_root_proto_msgTypes[16]
+	mi := &file_meta_root_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1747,7 +1977,7 @@ func (x *RootPeerChange) String() string {
 func (*RootPeerChange) ProtoMessage() {}
 
 func (x *RootPeerChange) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[16]
+	mi := &file_meta_root_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1760,7 +1990,7 @@ func (x *RootPeerChange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootPeerChange.ProtoReflect.Descriptor instead.
 func (*RootPeerChange) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{16}
+	return file_meta_root_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *RootPeerChange) GetRegionId() uint64 {
@@ -1812,7 +2042,7 @@ type RootPendingPeerChange struct {
 
 func (x *RootPendingPeerChange) Reset() {
 	*x = RootPendingPeerChange{}
-	mi := &file_meta_root_proto_msgTypes[17]
+	mi := &file_meta_root_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1824,7 +2054,7 @@ func (x *RootPendingPeerChange) String() string {
 func (*RootPendingPeerChange) ProtoMessage() {}
 
 func (x *RootPendingPeerChange) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[17]
+	mi := &file_meta_root_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1837,7 +2067,7 @@ func (x *RootPendingPeerChange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootPendingPeerChange.ProtoReflect.Descriptor instead.
 func (*RootPendingPeerChange) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{17}
+	return file_meta_root_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *RootPendingPeerChange) GetRegionId() uint64 {
@@ -1901,7 +2131,7 @@ type RootPendingRangeChange struct {
 
 func (x *RootPendingRangeChange) Reset() {
 	*x = RootPendingRangeChange{}
-	mi := &file_meta_root_proto_msgTypes[18]
+	mi := &file_meta_root_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1913,7 +2143,7 @@ func (x *RootPendingRangeChange) String() string {
 func (*RootPendingRangeChange) ProtoMessage() {}
 
 func (x *RootPendingRangeChange) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[18]
+	mi := &file_meta_root_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1926,7 +2156,7 @@ func (x *RootPendingRangeChange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootPendingRangeChange.ProtoReflect.Descriptor instead.
 func (*RootPendingRangeChange) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{18}
+	return file_meta_root_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *RootPendingRangeChange) GetRegionId() uint64 {
@@ -2023,6 +2253,7 @@ type RootEvent struct {
 	//	*RootEvent_Handover
 	//	*RootEvent_SnapshotEpoch
 	//	*RootEvent_Mount
+	//	*RootEvent_SubtreeAuthority
 	Payload       isRootEvent_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2030,7 +2261,7 @@ type RootEvent struct {
 
 func (x *RootEvent) Reset() {
 	*x = RootEvent{}
-	mi := &file_meta_root_proto_msgTypes[19]
+	mi := &file_meta_root_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2042,7 +2273,7 @@ func (x *RootEvent) String() string {
 func (*RootEvent) ProtoMessage() {}
 
 func (x *RootEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[19]
+	mi := &file_meta_root_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2055,7 +2286,7 @@ func (x *RootEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootEvent.ProtoReflect.Descriptor instead.
 func (*RootEvent) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{19}
+	return file_meta_root_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *RootEvent) GetKind() RootEventKind {
@@ -2180,6 +2411,15 @@ func (x *RootEvent) GetMount() *RootMount {
 	return nil
 }
 
+func (x *RootEvent) GetSubtreeAuthority() *RootSubtreeAuthority {
+	if x != nil {
+		if x, ok := x.Payload.(*RootEvent_SubtreeAuthority); ok {
+			return x.SubtreeAuthority
+		}
+	}
+	return nil
+}
+
 type isRootEvent_Payload interface {
 	isRootEvent_Payload()
 }
@@ -2232,6 +2472,10 @@ type RootEvent_Mount struct {
 	Mount *RootMount `protobuf:"bytes,13,opt,name=mount,proto3,oneof"`
 }
 
+type RootEvent_SubtreeAuthority struct {
+	SubtreeAuthority *RootSubtreeAuthority `protobuf:"bytes,14,opt,name=subtree_authority,json=subtreeAuthority,proto3,oneof"`
+}
+
 func (*RootEvent_StoreMembership) isRootEvent_Payload() {}
 
 func (*RootEvent_AllocatorFence) isRootEvent_Payload() {}
@@ -2256,6 +2500,8 @@ func (*RootEvent_SnapshotEpoch) isRootEvent_Payload() {}
 
 func (*RootEvent_Mount) isRootEvent_Payload() {}
 
+func (*RootEvent_SubtreeAuthority) isRootEvent_Payload() {}
+
 type MetadataRootSnapshotRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -2264,7 +2510,7 @@ type MetadataRootSnapshotRequest struct {
 
 func (x *MetadataRootSnapshotRequest) Reset() {
 	*x = MetadataRootSnapshotRequest{}
-	mi := &file_meta_root_proto_msgTypes[20]
+	mi := &file_meta_root_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2276,7 +2522,7 @@ func (x *MetadataRootSnapshotRequest) String() string {
 func (*MetadataRootSnapshotRequest) ProtoMessage() {}
 
 func (x *MetadataRootSnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[20]
+	mi := &file_meta_root_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2289,7 +2535,7 @@ func (x *MetadataRootSnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataRootSnapshotRequest.ProtoReflect.Descriptor instead.
 func (*MetadataRootSnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{20}
+	return file_meta_root_proto_rawDescGZIP(), []int{21}
 }
 
 type MetadataRootSnapshotResponse struct {
@@ -2301,7 +2547,7 @@ type MetadataRootSnapshotResponse struct {
 
 func (x *MetadataRootSnapshotResponse) Reset() {
 	*x = MetadataRootSnapshotResponse{}
-	mi := &file_meta_root_proto_msgTypes[21]
+	mi := &file_meta_root_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2313,7 +2559,7 @@ func (x *MetadataRootSnapshotResponse) String() string {
 func (*MetadataRootSnapshotResponse) ProtoMessage() {}
 
 func (x *MetadataRootSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[21]
+	mi := &file_meta_root_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2326,7 +2572,7 @@ func (x *MetadataRootSnapshotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataRootSnapshotResponse.ProtoReflect.Descriptor instead.
 func (*MetadataRootSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{21}
+	return file_meta_root_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *MetadataRootSnapshotResponse) GetCheckpoint() *RootCheckpoint {
@@ -2345,7 +2591,7 @@ type MetadataRootAppendRequest struct {
 
 func (x *MetadataRootAppendRequest) Reset() {
 	*x = MetadataRootAppendRequest{}
-	mi := &file_meta_root_proto_msgTypes[22]
+	mi := &file_meta_root_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2357,7 +2603,7 @@ func (x *MetadataRootAppendRequest) String() string {
 func (*MetadataRootAppendRequest) ProtoMessage() {}
 
 func (x *MetadataRootAppendRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[22]
+	mi := &file_meta_root_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2370,7 +2616,7 @@ func (x *MetadataRootAppendRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataRootAppendRequest.ProtoReflect.Descriptor instead.
 func (*MetadataRootAppendRequest) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{22}
+	return file_meta_root_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *MetadataRootAppendRequest) GetEvents() []*RootEvent {
@@ -2390,7 +2636,7 @@ type MetadataRootAppendResponse struct {
 
 func (x *MetadataRootAppendResponse) Reset() {
 	*x = MetadataRootAppendResponse{}
-	mi := &file_meta_root_proto_msgTypes[23]
+	mi := &file_meta_root_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2402,7 +2648,7 @@ func (x *MetadataRootAppendResponse) String() string {
 func (*MetadataRootAppendResponse) ProtoMessage() {}
 
 func (x *MetadataRootAppendResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[23]
+	mi := &file_meta_root_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2415,7 +2661,7 @@ func (x *MetadataRootAppendResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataRootAppendResponse.ProtoReflect.Descriptor instead.
 func (*MetadataRootAppendResponse) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{23}
+	return file_meta_root_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *MetadataRootAppendResponse) GetCursor() *RootCursor {
@@ -2442,7 +2688,7 @@ type MetadataRootFenceAllocatorRequest struct {
 
 func (x *MetadataRootFenceAllocatorRequest) Reset() {
 	*x = MetadataRootFenceAllocatorRequest{}
-	mi := &file_meta_root_proto_msgTypes[24]
+	mi := &file_meta_root_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2454,7 +2700,7 @@ func (x *MetadataRootFenceAllocatorRequest) String() string {
 func (*MetadataRootFenceAllocatorRequest) ProtoMessage() {}
 
 func (x *MetadataRootFenceAllocatorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[24]
+	mi := &file_meta_root_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2467,7 +2713,7 @@ func (x *MetadataRootFenceAllocatorRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use MetadataRootFenceAllocatorRequest.ProtoReflect.Descriptor instead.
 func (*MetadataRootFenceAllocatorRequest) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{24}
+	return file_meta_root_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *MetadataRootFenceAllocatorRequest) GetKind() RootAllocatorKind {
@@ -2493,7 +2739,7 @@ type MetadataRootFenceAllocatorResponse struct {
 
 func (x *MetadataRootFenceAllocatorResponse) Reset() {
 	*x = MetadataRootFenceAllocatorResponse{}
-	mi := &file_meta_root_proto_msgTypes[25]
+	mi := &file_meta_root_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2505,7 +2751,7 @@ func (x *MetadataRootFenceAllocatorResponse) String() string {
 func (*MetadataRootFenceAllocatorResponse) ProtoMessage() {}
 
 func (x *MetadataRootFenceAllocatorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[25]
+	mi := &file_meta_root_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2518,7 +2764,7 @@ func (x *MetadataRootFenceAllocatorResponse) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use MetadataRootFenceAllocatorResponse.ProtoReflect.Descriptor instead.
 func (*MetadataRootFenceAllocatorResponse) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{25}
+	return file_meta_root_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *MetadataRootFenceAllocatorResponse) GetCurrent() uint64 {
@@ -2536,7 +2782,7 @@ type MetadataRootStatusRequest struct {
 
 func (x *MetadataRootStatusRequest) Reset() {
 	*x = MetadataRootStatusRequest{}
-	mi := &file_meta_root_proto_msgTypes[26]
+	mi := &file_meta_root_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2548,7 +2794,7 @@ func (x *MetadataRootStatusRequest) String() string {
 func (*MetadataRootStatusRequest) ProtoMessage() {}
 
 func (x *MetadataRootStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[26]
+	mi := &file_meta_root_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2561,7 +2807,7 @@ func (x *MetadataRootStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataRootStatusRequest.ProtoReflect.Descriptor instead.
 func (*MetadataRootStatusRequest) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{26}
+	return file_meta_root_proto_rawDescGZIP(), []int{27}
 }
 
 type MetadataRootStatusResponse struct {
@@ -2574,7 +2820,7 @@ type MetadataRootStatusResponse struct {
 
 func (x *MetadataRootStatusResponse) Reset() {
 	*x = MetadataRootStatusResponse{}
-	mi := &file_meta_root_proto_msgTypes[27]
+	mi := &file_meta_root_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2586,7 +2832,7 @@ func (x *MetadataRootStatusResponse) String() string {
 func (*MetadataRootStatusResponse) ProtoMessage() {}
 
 func (x *MetadataRootStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[27]
+	mi := &file_meta_root_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2599,7 +2845,7 @@ func (x *MetadataRootStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataRootStatusResponse.ProtoReflect.Descriptor instead.
 func (*MetadataRootStatusResponse) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{27}
+	return file_meta_root_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *MetadataRootStatusResponse) GetIsLeader() bool {
@@ -2630,7 +2876,7 @@ type RootTenureCommand struct {
 
 func (x *RootTenureCommand) Reset() {
 	*x = RootTenureCommand{}
-	mi := &file_meta_root_proto_msgTypes[28]
+	mi := &file_meta_root_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2642,7 +2888,7 @@ func (x *RootTenureCommand) String() string {
 func (*RootTenureCommand) ProtoMessage() {}
 
 func (x *RootTenureCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[28]
+	mi := &file_meta_root_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2655,7 +2901,7 @@ func (x *RootTenureCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootTenureCommand.ProtoReflect.Descriptor instead.
 func (*RootTenureCommand) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{28}
+	return file_meta_root_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *RootTenureCommand) GetKind() RootTenureAct {
@@ -2712,7 +2958,7 @@ type RootHandoverCommand struct {
 
 func (x *RootHandoverCommand) Reset() {
 	*x = RootHandoverCommand{}
-	mi := &file_meta_root_proto_msgTypes[29]
+	mi := &file_meta_root_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2724,7 +2970,7 @@ func (x *RootHandoverCommand) String() string {
 func (*RootHandoverCommand) ProtoMessage() {}
 
 func (x *RootHandoverCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[29]
+	mi := &file_meta_root_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2737,7 +2983,7 @@ func (x *RootHandoverCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootHandoverCommand.ProtoReflect.Descriptor instead.
 func (*RootHandoverCommand) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{29}
+	return file_meta_root_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *RootHandoverCommand) GetKind() RootHandoverAct {
@@ -2779,7 +3025,7 @@ type RootSuccessionState struct {
 
 func (x *RootSuccessionState) Reset() {
 	*x = RootSuccessionState{}
-	mi := &file_meta_root_proto_msgTypes[30]
+	mi := &file_meta_root_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2791,7 +3037,7 @@ func (x *RootSuccessionState) String() string {
 func (*RootSuccessionState) ProtoMessage() {}
 
 func (x *RootSuccessionState) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[30]
+	mi := &file_meta_root_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2804,7 +3050,7 @@ func (x *RootSuccessionState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootSuccessionState.ProtoReflect.Descriptor instead.
 func (*RootSuccessionState) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{30}
+	return file_meta_root_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *RootSuccessionState) GetTenure() *RootTenure {
@@ -2837,7 +3083,7 @@ type MetadataRootApplyTenureRequest struct {
 
 func (x *MetadataRootApplyTenureRequest) Reset() {
 	*x = MetadataRootApplyTenureRequest{}
-	mi := &file_meta_root_proto_msgTypes[31]
+	mi := &file_meta_root_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2849,7 +3095,7 @@ func (x *MetadataRootApplyTenureRequest) String() string {
 func (*MetadataRootApplyTenureRequest) ProtoMessage() {}
 
 func (x *MetadataRootApplyTenureRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[31]
+	mi := &file_meta_root_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2862,7 +3108,7 @@ func (x *MetadataRootApplyTenureRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataRootApplyTenureRequest.ProtoReflect.Descriptor instead.
 func (*MetadataRootApplyTenureRequest) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{31}
+	return file_meta_root_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *MetadataRootApplyTenureRequest) GetCommand() *RootTenureCommand {
@@ -2882,7 +3128,7 @@ type MetadataRootApplyTenureResponse struct {
 
 func (x *MetadataRootApplyTenureResponse) Reset() {
 	*x = MetadataRootApplyTenureResponse{}
-	mi := &file_meta_root_proto_msgTypes[32]
+	mi := &file_meta_root_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2894,7 +3140,7 @@ func (x *MetadataRootApplyTenureResponse) String() string {
 func (*MetadataRootApplyTenureResponse) ProtoMessage() {}
 
 func (x *MetadataRootApplyTenureResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[32]
+	mi := &file_meta_root_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2907,7 +3153,7 @@ func (x *MetadataRootApplyTenureResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataRootApplyTenureResponse.ProtoReflect.Descriptor instead.
 func (*MetadataRootApplyTenureResponse) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{32}
+	return file_meta_root_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *MetadataRootApplyTenureResponse) GetState() *RootSuccessionState {
@@ -2933,7 +3179,7 @@ type MetadataRootApplyHandoverRequest struct {
 
 func (x *MetadataRootApplyHandoverRequest) Reset() {
 	*x = MetadataRootApplyHandoverRequest{}
-	mi := &file_meta_root_proto_msgTypes[33]
+	mi := &file_meta_root_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2945,7 +3191,7 @@ func (x *MetadataRootApplyHandoverRequest) String() string {
 func (*MetadataRootApplyHandoverRequest) ProtoMessage() {}
 
 func (x *MetadataRootApplyHandoverRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[33]
+	mi := &file_meta_root_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2958,7 +3204,7 @@ func (x *MetadataRootApplyHandoverRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataRootApplyHandoverRequest.ProtoReflect.Descriptor instead.
 func (*MetadataRootApplyHandoverRequest) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{33}
+	return file_meta_root_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *MetadataRootApplyHandoverRequest) GetCommand() *RootHandoverCommand {
@@ -2977,7 +3223,7 @@ type MetadataRootApplyHandoverResponse struct {
 
 func (x *MetadataRootApplyHandoverResponse) Reset() {
 	*x = MetadataRootApplyHandoverResponse{}
-	mi := &file_meta_root_proto_msgTypes[34]
+	mi := &file_meta_root_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2989,7 +3235,7 @@ func (x *MetadataRootApplyHandoverResponse) String() string {
 func (*MetadataRootApplyHandoverResponse) ProtoMessage() {}
 
 func (x *MetadataRootApplyHandoverResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[34]
+	mi := &file_meta_root_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3002,7 +3248,7 @@ func (x *MetadataRootApplyHandoverResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use MetadataRootApplyHandoverResponse.ProtoReflect.Descriptor instead.
 func (*MetadataRootApplyHandoverResponse) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{34}
+	return file_meta_root_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *MetadataRootApplyHandoverResponse) GetState() *RootSuccessionState {
@@ -3022,7 +3268,7 @@ type RootTailToken struct {
 
 func (x *RootTailToken) Reset() {
 	*x = RootTailToken{}
-	mi := &file_meta_root_proto_msgTypes[35]
+	mi := &file_meta_root_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3034,7 +3280,7 @@ func (x *RootTailToken) String() string {
 func (*RootTailToken) ProtoMessage() {}
 
 func (x *RootTailToken) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[35]
+	mi := &file_meta_root_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3047,7 +3293,7 @@ func (x *RootTailToken) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootTailToken.ProtoReflect.Descriptor instead.
 func (*RootTailToken) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{35}
+	return file_meta_root_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *RootTailToken) GetCursor() *RootCursor {
@@ -3074,7 +3320,7 @@ type RootCommittedEvent struct {
 
 func (x *RootCommittedEvent) Reset() {
 	*x = RootCommittedEvent{}
-	mi := &file_meta_root_proto_msgTypes[36]
+	mi := &file_meta_root_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3086,7 +3332,7 @@ func (x *RootCommittedEvent) String() string {
 func (*RootCommittedEvent) ProtoMessage() {}
 
 func (x *RootCommittedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[36]
+	mi := &file_meta_root_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3099,7 +3345,7 @@ func (x *RootCommittedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootCommittedEvent.ProtoReflect.Descriptor instead.
 func (*RootCommittedEvent) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{36}
+	return file_meta_root_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *RootCommittedEvent) GetCursor() *RootCursor {
@@ -3128,7 +3374,7 @@ type RootCommittedTail struct {
 
 func (x *RootCommittedTail) Reset() {
 	*x = RootCommittedTail{}
-	mi := &file_meta_root_proto_msgTypes[37]
+	mi := &file_meta_root_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3140,7 +3386,7 @@ func (x *RootCommittedTail) String() string {
 func (*RootCommittedTail) ProtoMessage() {}
 
 func (x *RootCommittedTail) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[37]
+	mi := &file_meta_root_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3153,7 +3399,7 @@ func (x *RootCommittedTail) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootCommittedTail.ProtoReflect.Descriptor instead.
 func (*RootCommittedTail) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{37}
+	return file_meta_root_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *RootCommittedTail) GetRequestedOffset() int64 {
@@ -3193,7 +3439,7 @@ type MetadataRootObserveCommittedRequest struct {
 
 func (x *MetadataRootObserveCommittedRequest) Reset() {
 	*x = MetadataRootObserveCommittedRequest{}
-	mi := &file_meta_root_proto_msgTypes[38]
+	mi := &file_meta_root_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3205,7 +3451,7 @@ func (x *MetadataRootObserveCommittedRequest) String() string {
 func (*MetadataRootObserveCommittedRequest) ProtoMessage() {}
 
 func (x *MetadataRootObserveCommittedRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[38]
+	mi := &file_meta_root_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3218,7 +3464,7 @@ func (x *MetadataRootObserveCommittedRequest) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use MetadataRootObserveCommittedRequest.ProtoReflect.Descriptor instead.
 func (*MetadataRootObserveCommittedRequest) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{38}
+	return file_meta_root_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *MetadataRootObserveCommittedRequest) GetRequestedOffset() int64 {
@@ -3238,7 +3484,7 @@ type MetadataRootObserveCommittedResponse struct {
 
 func (x *MetadataRootObserveCommittedResponse) Reset() {
 	*x = MetadataRootObserveCommittedResponse{}
-	mi := &file_meta_root_proto_msgTypes[39]
+	mi := &file_meta_root_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3250,7 +3496,7 @@ func (x *MetadataRootObserveCommittedResponse) String() string {
 func (*MetadataRootObserveCommittedResponse) ProtoMessage() {}
 
 func (x *MetadataRootObserveCommittedResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[39]
+	mi := &file_meta_root_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3263,7 +3509,7 @@ func (x *MetadataRootObserveCommittedResponse) ProtoReflect() protoreflect.Messa
 
 // Deprecated: Use MetadataRootObserveCommittedResponse.ProtoReflect.Descriptor instead.
 func (*MetadataRootObserveCommittedResponse) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{39}
+	return file_meta_root_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *MetadataRootObserveCommittedResponse) GetCheckpoint() *RootCheckpoint {
@@ -3289,7 +3535,7 @@ type MetadataRootObserveTailRequest struct {
 
 func (x *MetadataRootObserveTailRequest) Reset() {
 	*x = MetadataRootObserveTailRequest{}
-	mi := &file_meta_root_proto_msgTypes[40]
+	mi := &file_meta_root_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3301,7 +3547,7 @@ func (x *MetadataRootObserveTailRequest) String() string {
 func (*MetadataRootObserveTailRequest) ProtoMessage() {}
 
 func (x *MetadataRootObserveTailRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[40]
+	mi := &file_meta_root_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3314,7 +3560,7 @@ func (x *MetadataRootObserveTailRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataRootObserveTailRequest.ProtoReflect.Descriptor instead.
 func (*MetadataRootObserveTailRequest) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{40}
+	return file_meta_root_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *MetadataRootObserveTailRequest) GetAfter() *RootTailToken {
@@ -3336,7 +3582,7 @@ type MetadataRootObserveTailResponse struct {
 
 func (x *MetadataRootObserveTailResponse) Reset() {
 	*x = MetadataRootObserveTailResponse{}
-	mi := &file_meta_root_proto_msgTypes[41]
+	mi := &file_meta_root_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3348,7 +3594,7 @@ func (x *MetadataRootObserveTailResponse) String() string {
 func (*MetadataRootObserveTailResponse) ProtoMessage() {}
 
 func (x *MetadataRootObserveTailResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[41]
+	mi := &file_meta_root_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3361,7 +3607,7 @@ func (x *MetadataRootObserveTailResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataRootObserveTailResponse.ProtoReflect.Descriptor instead.
 func (*MetadataRootObserveTailResponse) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{41}
+	return file_meta_root_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *MetadataRootObserveTailResponse) GetAfter() *RootTailToken {
@@ -3402,7 +3648,7 @@ type MetadataRootWaitTailRequest struct {
 
 func (x *MetadataRootWaitTailRequest) Reset() {
 	*x = MetadataRootWaitTailRequest{}
-	mi := &file_meta_root_proto_msgTypes[42]
+	mi := &file_meta_root_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3414,7 +3660,7 @@ func (x *MetadataRootWaitTailRequest) String() string {
 func (*MetadataRootWaitTailRequest) ProtoMessage() {}
 
 func (x *MetadataRootWaitTailRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[42]
+	mi := &file_meta_root_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3427,7 +3673,7 @@ func (x *MetadataRootWaitTailRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataRootWaitTailRequest.ProtoReflect.Descriptor instead.
 func (*MetadataRootWaitTailRequest) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{42}
+	return file_meta_root_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *MetadataRootWaitTailRequest) GetAfter() *RootTailToken {
@@ -3456,7 +3702,7 @@ type MetadataRootWaitTailResponse struct {
 
 func (x *MetadataRootWaitTailResponse) Reset() {
 	*x = MetadataRootWaitTailResponse{}
-	mi := &file_meta_root_proto_msgTypes[43]
+	mi := &file_meta_root_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3468,7 +3714,7 @@ func (x *MetadataRootWaitTailResponse) String() string {
 func (*MetadataRootWaitTailResponse) ProtoMessage() {}
 
 func (x *MetadataRootWaitTailResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_meta_root_proto_msgTypes[43]
+	mi := &file_meta_root_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3481,7 +3727,7 @@ func (x *MetadataRootWaitTailResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataRootWaitTailResponse.ProtoReflect.Descriptor instead.
 func (*MetadataRootWaitTailResponse) Descriptor() ([]byte, []int) {
-	return file_meta_root_proto_rawDescGZIP(), []int{43}
+	return file_meta_root_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *MetadataRootWaitTailResponse) GetAfter() *RootTailToken {
@@ -3529,7 +3775,7 @@ const file_meta_root_proto_rawDesc = "" +
 	"\ttso_fence\x18\x06 \x01(\x04R\btsoFence\x120\n" +
 	"\x06tenure\x18\a \x01(\v2\x18.nokv.meta.v1.RootTenureR\x06tenure\x120\n" +
 	"\x06legacy\x18\b \x01(\v2\x18.nokv.meta.v1.RootLegacyR\x06legacy\x126\n" +
-	"\bhandover\x18\t \x01(\v2\x1a.nokv.meta.v1.RootHandoverR\bhandover\"\xff\x03\n" +
+	"\bhandover\x18\t \x01(\v2\x1a.nokv.meta.v1.RootHandoverR\bhandover\"\xbf\x04\n" +
 	"\x0eRootCheckpoint\x12-\n" +
 	"\x05state\x18\x01 \x01(\v2\x17.nokv.meta.v1.RootStateR\x05state\x12@\n" +
 	"\vdescriptors\x18\x02 \x03(\v2\x1e.nokv.meta.v1.RegionDescriptorR\vdescriptors\x12\x1f\n" +
@@ -3539,7 +3785,8 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x15pending_range_changes\x18\x05 \x03(\v2$.nokv.meta.v1.RootPendingRangeChangeR\x13pendingRangeChanges\x12/\n" +
 	"\x06stores\x18\x06 \x03(\v2\x17.nokv.meta.v1.RootStoreR\x06stores\x12H\n" +
 	"\x0fsnapshot_epochs\x18\a \x03(\v2\x1f.nokv.meta.v1.RootSnapshotEpochR\x0esnapshotEpochs\x12/\n" +
-	"\x06mounts\x18\b \x03(\v2\x17.nokv.meta.v1.RootMountR\x06mounts\"0\n" +
+	"\x06mounts\x18\b \x03(\v2\x17.nokv.meta.v1.RootMountR\x06mounts\x12>\n" +
+	"\bsubtrees\x18\t \x03(\v2\".nokv.meta.v1.RootSubtreeAuthorityR\bsubtrees\"0\n" +
 	"\x13RootStoreMembership\x12\x19\n" +
 	"\bstore_id\x18\x01 \x01(\x04R\astoreId\"\xca\x01\n" +
 	"\tRootStore\x12\x19\n" +
@@ -3564,7 +3811,28 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x05state\x18\x04 \x01(\x0e2\x1c.nokv.meta.v1.RootMountStateR\x05state\x12=\n" +
 	"\rregistered_at\x18\x05 \x01(\v2\x18.nokv.meta.v1.RootCursorR\fregisteredAt\x127\n" +
 	"\n" +
-	"retired_at\x18\x06 \x01(\v2\x18.nokv.meta.v1.RootCursorR\tretiredAt\".\n" +
+	"retired_at\x18\x06 \x01(\v2\x18.nokv.meta.v1.RootCursorR\tretiredAt\"\xe9\x05\n" +
+	"\x14RootSubtreeAuthority\x12\x1d\n" +
+	"\n" +
+	"subtree_id\x18\x01 \x01(\tR\tsubtreeId\x12\x14\n" +
+	"\x05mount\x18\x02 \x01(\tR\x05mount\x12\x1d\n" +
+	"\n" +
+	"root_inode\x18\x03 \x01(\x04R\trootInode\x12!\n" +
+	"\fauthority_id\x18\x04 \x01(\tR\vauthorityId\x12\x10\n" +
+	"\x03era\x18\x05 \x01(\x04R\x03era\x12\x1a\n" +
+	"\bfrontier\x18\x06 \x01(\x04R\bfrontier\x12=\n" +
+	"\x05state\x18\a \x01(\x0e2'.nokv.meta.v1.RootSubtreeAuthorityStateR\x05state\x129\n" +
+	"\vdeclared_at\x18\b \x01(\v2\x18.nokv.meta.v1.RootCursorR\n" +
+	"declaredAt\x12F\n" +
+	"\x12handoff_started_at\x18\t \x01(\v2\x18.nokv.meta.v1.RootCursorR\x10handoffStartedAt\x12J\n" +
+	"\x14handoff_completed_at\x18\n" +
+	" \x01(\v2\x18.nokv.meta.v1.RootCursorR\x12handoffCompletedAt\x128\n" +
+	"\x18predecessor_authority_id\x18\v \x01(\tR\x16predecessorAuthorityId\x12'\n" +
+	"\x0fpredecessor_era\x18\f \x01(\x04R\x0epredecessorEra\x121\n" +
+	"\x14predecessor_frontier\x18\r \x01(\x04R\x13predecessorFrontier\x124\n" +
+	"\x16successor_authority_id\x18\x0e \x01(\tR\x14successorAuthorityId\x12#\n" +
+	"\rsuccessor_era\x18\x0f \x01(\x04R\fsuccessorEra\x12-\n" +
+	"\x12inherited_frontier\x18\x10 \x01(\x04R\x11inheritedFrontier\".\n" +
 	"\x12RootAllocatorFence\x12\x18\n" +
 	"\aminimum\x18\x01 \x01(\x04R\aminimum\"\xb3\x02\n" +
 	"\n" +
@@ -3643,7 +3911,7 @@ const file_meta_root_proto_rawDesc = "" +
 	"\tbase_left\x18\n" +
 	" \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\bbaseLeft\x12=\n" +
 	"\n" +
-	"base_right\x18\v \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\tbaseRight\"\xe1\x06\n" +
+	"base_right\x18\v \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\tbaseRight\"\xb4\a\n" +
 	"\tRootEvent\x12/\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1b.nokv.meta.v1.RootEventKindR\x04kind\x12N\n" +
 	"\x10store_membership\x18\x02 \x01(\v2!.nokv.meta.v1.RootStoreMembershipH\x00R\x0fstoreMembership\x12K\n" +
@@ -3661,7 +3929,8 @@ const file_meta_root_proto_rawDesc = "" +
 	" \x01(\v2\x18.nokv.meta.v1.RootLegacyH\x00R\x06legacy\x128\n" +
 	"\bhandover\x18\v \x01(\v2\x1a.nokv.meta.v1.RootHandoverH\x00R\bhandover\x12H\n" +
 	"\x0esnapshot_epoch\x18\f \x01(\v2\x1f.nokv.meta.v1.RootSnapshotEpochH\x00R\rsnapshotEpoch\x12/\n" +
-	"\x05mount\x18\r \x01(\v2\x17.nokv.meta.v1.RootMountH\x00R\x05mountB\t\n" +
+	"\x05mount\x18\r \x01(\v2\x17.nokv.meta.v1.RootMountH\x00R\x05mount\x12Q\n" +
+	"\x11subtree_authority\x18\x0e \x01(\v2\".nokv.meta.v1.RootSubtreeAuthorityH\x00R\x10subtreeAuthorityB\t\n" +
 	"\apayload\"\x1d\n" +
 	"\x1bMetadataRootSnapshotRequest\"\\\n" +
 	"\x1cMetadataRootSnapshotResponse\x12<\n" +
@@ -3744,7 +4013,7 @@ const file_meta_root_proto_rawDesc = "" +
 	"\n" +
 	"checkpoint\x18\x03 \x01(\v2\x1c.nokv.meta.v1.RootCheckpointR\n" +
 	"checkpoint\x123\n" +
-	"\x04tail\x18\x04 \x01(\v2\x1f.nokv.meta.v1.RootCommittedTailR\x04tail*\xaa\b\n" +
+	"\x04tail\x18\x04 \x01(\v2\x1f.nokv.meta.v1.RootCommittedTailR\x04tail*\xb6\t\n" +
 	"\rRootEventKind\x12\x1f\n" +
 	"\x1bROOT_EVENT_KIND_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cROOT_EVENT_KIND_STORE_JOINED\x10\x01\x12!\n" +
@@ -3773,7 +4042,10 @@ const file_meta_root_proto_rawDesc = "" +
 	"(ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED\x10\x17\x12*\n" +
 	"&ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED\x10\x18\x12$\n" +
 	" ROOT_EVENT_KIND_MOUNT_REGISTERED\x10\x19\x12!\n" +
-	"\x1dROOT_EVENT_KIND_MOUNT_RETIRED\x10\x1a*m\n" +
+	"\x1dROOT_EVENT_KIND_MOUNT_RETIRED\x10\x1a\x12.\n" +
+	"*ROOT_EVENT_KIND_SUBTREE_AUTHORITY_DECLARED\x10\x1b\x12+\n" +
+	"'ROOT_EVENT_KIND_SUBTREE_HANDOFF_STARTED\x10\x1c\x12-\n" +
+	")ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED\x10\x1d*m\n" +
 	"\x0eRootStoreState\x12 \n" +
 	"\x1cROOT_STORE_STATE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17ROOT_STORE_STATE_ACTIVE\x10\x01\x12\x1c\n" +
@@ -3781,7 +4053,11 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x0eRootMountState\x12 \n" +
 	"\x1cROOT_MOUNT_STATE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17ROOT_MOUNT_STATE_ACTIVE\x10\x01\x12\x1c\n" +
-	"\x18ROOT_MOUNT_STATE_RETIRED\x10\x02*\x9f\x01\n" +
+	"\x18ROOT_MOUNT_STATE_RETIRED\x10\x02*\x9c\x01\n" +
+	"\x19RootSubtreeAuthorityState\x12,\n" +
+	"(ROOT_SUBTREE_AUTHORITY_STATE_UNSPECIFIED\x10\x00\x12'\n" +
+	"#ROOT_SUBTREE_AUTHORITY_STATE_ACTIVE\x10\x01\x12(\n" +
+	"$ROOT_SUBTREE_AUTHORITY_STATE_HANDOFF\x10\x02*\x9f\x01\n" +
 	"\x11RootHandoverStage\x12#\n" +
 	"\x1fROOT_HANDOVER_STAGE_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dROOT_HANDOVER_STAGE_CONFIRMED\x10\x01\x12\x1e\n" +
@@ -3836,180 +4112,188 @@ func file_meta_root_proto_rawDescGZIP() []byte {
 	return file_meta_root_proto_rawDescData
 }
 
-var file_meta_root_proto_enumTypes = make([]protoimpl.EnumInfo, 10)
-var file_meta_root_proto_msgTypes = make([]protoimpl.MessageInfo, 44)
+var file_meta_root_proto_enumTypes = make([]protoimpl.EnumInfo, 11)
+var file_meta_root_proto_msgTypes = make([]protoimpl.MessageInfo, 45)
 var file_meta_root_proto_goTypes = []any{
 	(RootEventKind)(0),                           // 0: nokv.meta.v1.RootEventKind
 	(RootStoreState)(0),                          // 1: nokv.meta.v1.RootStoreState
 	(RootMountState)(0),                          // 2: nokv.meta.v1.RootMountState
-	(RootHandoverStage)(0),                       // 3: nokv.meta.v1.RootHandoverStage
-	(RootPendingPeerChangeKind)(0),               // 4: nokv.meta.v1.RootPendingPeerChangeKind
-	(RootPendingRangeChangeKind)(0),              // 5: nokv.meta.v1.RootPendingRangeChangeKind
-	(RootAllocatorKind)(0),                       // 6: nokv.meta.v1.RootAllocatorKind
-	(RootTenureAct)(0),                           // 7: nokv.meta.v1.RootTenureAct
-	(RootHandoverAct)(0),                         // 8: nokv.meta.v1.RootHandoverAct
-	(RootTenureApplyStatus)(0),                   // 9: nokv.meta.v1.RootTenureApplyStatus
-	(*RootCursor)(nil),                           // 10: nokv.meta.v1.RootCursor
-	(*RootState)(nil),                            // 11: nokv.meta.v1.RootState
-	(*RootCheckpoint)(nil),                       // 12: nokv.meta.v1.RootCheckpoint
-	(*RootStoreMembership)(nil),                  // 13: nokv.meta.v1.RootStoreMembership
-	(*RootStore)(nil),                            // 14: nokv.meta.v1.RootStore
-	(*RootSnapshotEpoch)(nil),                    // 15: nokv.meta.v1.RootSnapshotEpoch
-	(*RootMount)(nil),                            // 16: nokv.meta.v1.RootMount
-	(*RootAllocatorFence)(nil),                   // 17: nokv.meta.v1.RootAllocatorFence
-	(*RootTenure)(nil),                           // 18: nokv.meta.v1.RootTenure
-	(*RootMandateFrontier)(nil),                  // 19: nokv.meta.v1.RootMandateFrontier
-	(*RootLegacy)(nil),                           // 20: nokv.meta.v1.RootLegacy
-	(*RootHandover)(nil),                         // 21: nokv.meta.v1.RootHandover
-	(*RootRegionDescriptor)(nil),                 // 22: nokv.meta.v1.RootRegionDescriptor
-	(*RootRegionRemoval)(nil),                    // 23: nokv.meta.v1.RootRegionRemoval
-	(*RootRangeSplit)(nil),                       // 24: nokv.meta.v1.RootRangeSplit
-	(*RootRangeMerge)(nil),                       // 25: nokv.meta.v1.RootRangeMerge
-	(*RootPeerChange)(nil),                       // 26: nokv.meta.v1.RootPeerChange
-	(*RootPendingPeerChange)(nil),                // 27: nokv.meta.v1.RootPendingPeerChange
-	(*RootPendingRangeChange)(nil),               // 28: nokv.meta.v1.RootPendingRangeChange
-	(*RootEvent)(nil),                            // 29: nokv.meta.v1.RootEvent
-	(*MetadataRootSnapshotRequest)(nil),          // 30: nokv.meta.v1.MetadataRootSnapshotRequest
-	(*MetadataRootSnapshotResponse)(nil),         // 31: nokv.meta.v1.MetadataRootSnapshotResponse
-	(*MetadataRootAppendRequest)(nil),            // 32: nokv.meta.v1.MetadataRootAppendRequest
-	(*MetadataRootAppendResponse)(nil),           // 33: nokv.meta.v1.MetadataRootAppendResponse
-	(*MetadataRootFenceAllocatorRequest)(nil),    // 34: nokv.meta.v1.MetadataRootFenceAllocatorRequest
-	(*MetadataRootFenceAllocatorResponse)(nil),   // 35: nokv.meta.v1.MetadataRootFenceAllocatorResponse
-	(*MetadataRootStatusRequest)(nil),            // 36: nokv.meta.v1.MetadataRootStatusRequest
-	(*MetadataRootStatusResponse)(nil),           // 37: nokv.meta.v1.MetadataRootStatusResponse
-	(*RootTenureCommand)(nil),                    // 38: nokv.meta.v1.RootTenureCommand
-	(*RootHandoverCommand)(nil),                  // 39: nokv.meta.v1.RootHandoverCommand
-	(*RootSuccessionState)(nil),                  // 40: nokv.meta.v1.RootSuccessionState
-	(*MetadataRootApplyTenureRequest)(nil),       // 41: nokv.meta.v1.MetadataRootApplyTenureRequest
-	(*MetadataRootApplyTenureResponse)(nil),      // 42: nokv.meta.v1.MetadataRootApplyTenureResponse
-	(*MetadataRootApplyHandoverRequest)(nil),     // 43: nokv.meta.v1.MetadataRootApplyHandoverRequest
-	(*MetadataRootApplyHandoverResponse)(nil),    // 44: nokv.meta.v1.MetadataRootApplyHandoverResponse
-	(*RootTailToken)(nil),                        // 45: nokv.meta.v1.RootTailToken
-	(*RootCommittedEvent)(nil),                   // 46: nokv.meta.v1.RootCommittedEvent
-	(*RootCommittedTail)(nil),                    // 47: nokv.meta.v1.RootCommittedTail
-	(*MetadataRootObserveCommittedRequest)(nil),  // 48: nokv.meta.v1.MetadataRootObserveCommittedRequest
-	(*MetadataRootObserveCommittedResponse)(nil), // 49: nokv.meta.v1.MetadataRootObserveCommittedResponse
-	(*MetadataRootObserveTailRequest)(nil),       // 50: nokv.meta.v1.MetadataRootObserveTailRequest
-	(*MetadataRootObserveTailResponse)(nil),      // 51: nokv.meta.v1.MetadataRootObserveTailResponse
-	(*MetadataRootWaitTailRequest)(nil),          // 52: nokv.meta.v1.MetadataRootWaitTailRequest
-	(*MetadataRootWaitTailResponse)(nil),         // 53: nokv.meta.v1.MetadataRootWaitTailResponse
-	(*RegionDescriptor)(nil),                     // 54: nokv.meta.v1.RegionDescriptor
+	(RootSubtreeAuthorityState)(0),               // 3: nokv.meta.v1.RootSubtreeAuthorityState
+	(RootHandoverStage)(0),                       // 4: nokv.meta.v1.RootHandoverStage
+	(RootPendingPeerChangeKind)(0),               // 5: nokv.meta.v1.RootPendingPeerChangeKind
+	(RootPendingRangeChangeKind)(0),              // 6: nokv.meta.v1.RootPendingRangeChangeKind
+	(RootAllocatorKind)(0),                       // 7: nokv.meta.v1.RootAllocatorKind
+	(RootTenureAct)(0),                           // 8: nokv.meta.v1.RootTenureAct
+	(RootHandoverAct)(0),                         // 9: nokv.meta.v1.RootHandoverAct
+	(RootTenureApplyStatus)(0),                   // 10: nokv.meta.v1.RootTenureApplyStatus
+	(*RootCursor)(nil),                           // 11: nokv.meta.v1.RootCursor
+	(*RootState)(nil),                            // 12: nokv.meta.v1.RootState
+	(*RootCheckpoint)(nil),                       // 13: nokv.meta.v1.RootCheckpoint
+	(*RootStoreMembership)(nil),                  // 14: nokv.meta.v1.RootStoreMembership
+	(*RootStore)(nil),                            // 15: nokv.meta.v1.RootStore
+	(*RootSnapshotEpoch)(nil),                    // 16: nokv.meta.v1.RootSnapshotEpoch
+	(*RootMount)(nil),                            // 17: nokv.meta.v1.RootMount
+	(*RootSubtreeAuthority)(nil),                 // 18: nokv.meta.v1.RootSubtreeAuthority
+	(*RootAllocatorFence)(nil),                   // 19: nokv.meta.v1.RootAllocatorFence
+	(*RootTenure)(nil),                           // 20: nokv.meta.v1.RootTenure
+	(*RootMandateFrontier)(nil),                  // 21: nokv.meta.v1.RootMandateFrontier
+	(*RootLegacy)(nil),                           // 22: nokv.meta.v1.RootLegacy
+	(*RootHandover)(nil),                         // 23: nokv.meta.v1.RootHandover
+	(*RootRegionDescriptor)(nil),                 // 24: nokv.meta.v1.RootRegionDescriptor
+	(*RootRegionRemoval)(nil),                    // 25: nokv.meta.v1.RootRegionRemoval
+	(*RootRangeSplit)(nil),                       // 26: nokv.meta.v1.RootRangeSplit
+	(*RootRangeMerge)(nil),                       // 27: nokv.meta.v1.RootRangeMerge
+	(*RootPeerChange)(nil),                       // 28: nokv.meta.v1.RootPeerChange
+	(*RootPendingPeerChange)(nil),                // 29: nokv.meta.v1.RootPendingPeerChange
+	(*RootPendingRangeChange)(nil),               // 30: nokv.meta.v1.RootPendingRangeChange
+	(*RootEvent)(nil),                            // 31: nokv.meta.v1.RootEvent
+	(*MetadataRootSnapshotRequest)(nil),          // 32: nokv.meta.v1.MetadataRootSnapshotRequest
+	(*MetadataRootSnapshotResponse)(nil),         // 33: nokv.meta.v1.MetadataRootSnapshotResponse
+	(*MetadataRootAppendRequest)(nil),            // 34: nokv.meta.v1.MetadataRootAppendRequest
+	(*MetadataRootAppendResponse)(nil),           // 35: nokv.meta.v1.MetadataRootAppendResponse
+	(*MetadataRootFenceAllocatorRequest)(nil),    // 36: nokv.meta.v1.MetadataRootFenceAllocatorRequest
+	(*MetadataRootFenceAllocatorResponse)(nil),   // 37: nokv.meta.v1.MetadataRootFenceAllocatorResponse
+	(*MetadataRootStatusRequest)(nil),            // 38: nokv.meta.v1.MetadataRootStatusRequest
+	(*MetadataRootStatusResponse)(nil),           // 39: nokv.meta.v1.MetadataRootStatusResponse
+	(*RootTenureCommand)(nil),                    // 40: nokv.meta.v1.RootTenureCommand
+	(*RootHandoverCommand)(nil),                  // 41: nokv.meta.v1.RootHandoverCommand
+	(*RootSuccessionState)(nil),                  // 42: nokv.meta.v1.RootSuccessionState
+	(*MetadataRootApplyTenureRequest)(nil),       // 43: nokv.meta.v1.MetadataRootApplyTenureRequest
+	(*MetadataRootApplyTenureResponse)(nil),      // 44: nokv.meta.v1.MetadataRootApplyTenureResponse
+	(*MetadataRootApplyHandoverRequest)(nil),     // 45: nokv.meta.v1.MetadataRootApplyHandoverRequest
+	(*MetadataRootApplyHandoverResponse)(nil),    // 46: nokv.meta.v1.MetadataRootApplyHandoverResponse
+	(*RootTailToken)(nil),                        // 47: nokv.meta.v1.RootTailToken
+	(*RootCommittedEvent)(nil),                   // 48: nokv.meta.v1.RootCommittedEvent
+	(*RootCommittedTail)(nil),                    // 49: nokv.meta.v1.RootCommittedTail
+	(*MetadataRootObserveCommittedRequest)(nil),  // 50: nokv.meta.v1.MetadataRootObserveCommittedRequest
+	(*MetadataRootObserveCommittedResponse)(nil), // 51: nokv.meta.v1.MetadataRootObserveCommittedResponse
+	(*MetadataRootObserveTailRequest)(nil),       // 52: nokv.meta.v1.MetadataRootObserveTailRequest
+	(*MetadataRootObserveTailResponse)(nil),      // 53: nokv.meta.v1.MetadataRootObserveTailResponse
+	(*MetadataRootWaitTailRequest)(nil),          // 54: nokv.meta.v1.MetadataRootWaitTailRequest
+	(*MetadataRootWaitTailResponse)(nil),         // 55: nokv.meta.v1.MetadataRootWaitTailResponse
+	(*RegionDescriptor)(nil),                     // 56: nokv.meta.v1.RegionDescriptor
 }
 var file_meta_root_proto_depIdxs = []int32{
-	10,  // 0: nokv.meta.v1.RootState.last_committed:type_name -> nokv.meta.v1.RootCursor
-	18,  // 1: nokv.meta.v1.RootState.tenure:type_name -> nokv.meta.v1.RootTenure
-	20,  // 2: nokv.meta.v1.RootState.legacy:type_name -> nokv.meta.v1.RootLegacy
-	21,  // 3: nokv.meta.v1.RootState.handover:type_name -> nokv.meta.v1.RootHandover
-	11,  // 4: nokv.meta.v1.RootCheckpoint.state:type_name -> nokv.meta.v1.RootState
-	54,  // 5: nokv.meta.v1.RootCheckpoint.descriptors:type_name -> nokv.meta.v1.RegionDescriptor
-	27,  // 6: nokv.meta.v1.RootCheckpoint.pending_peer_changes:type_name -> nokv.meta.v1.RootPendingPeerChange
-	28,  // 7: nokv.meta.v1.RootCheckpoint.pending_range_changes:type_name -> nokv.meta.v1.RootPendingRangeChange
-	14,  // 8: nokv.meta.v1.RootCheckpoint.stores:type_name -> nokv.meta.v1.RootStore
-	15,  // 9: nokv.meta.v1.RootCheckpoint.snapshot_epochs:type_name -> nokv.meta.v1.RootSnapshotEpoch
-	16,  // 10: nokv.meta.v1.RootCheckpoint.mounts:type_name -> nokv.meta.v1.RootMount
-	1,   // 11: nokv.meta.v1.RootStore.state:type_name -> nokv.meta.v1.RootStoreState
-	10,  // 12: nokv.meta.v1.RootStore.joined_at:type_name -> nokv.meta.v1.RootCursor
-	10,  // 13: nokv.meta.v1.RootStore.retired_at:type_name -> nokv.meta.v1.RootCursor
-	10,  // 14: nokv.meta.v1.RootSnapshotEpoch.published_at:type_name -> nokv.meta.v1.RootCursor
-	2,   // 15: nokv.meta.v1.RootMount.state:type_name -> nokv.meta.v1.RootMountState
-	10,  // 16: nokv.meta.v1.RootMount.registered_at:type_name -> nokv.meta.v1.RootCursor
-	10,  // 17: nokv.meta.v1.RootMount.retired_at:type_name -> nokv.meta.v1.RootCursor
-	10,  // 18: nokv.meta.v1.RootTenure.issued_at:type_name -> nokv.meta.v1.RootCursor
-	19,  // 19: nokv.meta.v1.RootTenure.inherited_frontiers:type_name -> nokv.meta.v1.RootMandateFrontier
-	19,  // 20: nokv.meta.v1.RootLegacy.frontiers:type_name -> nokv.meta.v1.RootMandateFrontier
-	10,  // 21: nokv.meta.v1.RootLegacy.sealed_at:type_name -> nokv.meta.v1.RootCursor
-	3,   // 22: nokv.meta.v1.RootHandover.stage:type_name -> nokv.meta.v1.RootHandoverStage
-	10,  // 23: nokv.meta.v1.RootHandover.confirmed_at:type_name -> nokv.meta.v1.RootCursor
-	10,  // 24: nokv.meta.v1.RootHandover.closed_at:type_name -> nokv.meta.v1.RootCursor
-	10,  // 25: nokv.meta.v1.RootHandover.reattached_at:type_name -> nokv.meta.v1.RootCursor
-	54,  // 26: nokv.meta.v1.RootRegionDescriptor.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	54,  // 27: nokv.meta.v1.RootRangeSplit.left:type_name -> nokv.meta.v1.RegionDescriptor
-	54,  // 28: nokv.meta.v1.RootRangeSplit.right:type_name -> nokv.meta.v1.RegionDescriptor
-	54,  // 29: nokv.meta.v1.RootRangeSplit.base_parent:type_name -> nokv.meta.v1.RegionDescriptor
-	54,  // 30: nokv.meta.v1.RootRangeMerge.merged:type_name -> nokv.meta.v1.RegionDescriptor
-	54,  // 31: nokv.meta.v1.RootRangeMerge.base_left:type_name -> nokv.meta.v1.RegionDescriptor
-	54,  // 32: nokv.meta.v1.RootRangeMerge.base_right:type_name -> nokv.meta.v1.RegionDescriptor
-	54,  // 33: nokv.meta.v1.RootPeerChange.target:type_name -> nokv.meta.v1.RegionDescriptor
-	54,  // 34: nokv.meta.v1.RootPeerChange.base:type_name -> nokv.meta.v1.RegionDescriptor
-	4,   // 35: nokv.meta.v1.RootPendingPeerChange.kind:type_name -> nokv.meta.v1.RootPendingPeerChangeKind
-	54,  // 36: nokv.meta.v1.RootPendingPeerChange.target:type_name -> nokv.meta.v1.RegionDescriptor
-	54,  // 37: nokv.meta.v1.RootPendingPeerChange.base:type_name -> nokv.meta.v1.RegionDescriptor
-	5,   // 38: nokv.meta.v1.RootPendingRangeChange.kind:type_name -> nokv.meta.v1.RootPendingRangeChangeKind
-	54,  // 39: nokv.meta.v1.RootPendingRangeChange.left:type_name -> nokv.meta.v1.RegionDescriptor
-	54,  // 40: nokv.meta.v1.RootPendingRangeChange.right:type_name -> nokv.meta.v1.RegionDescriptor
-	54,  // 41: nokv.meta.v1.RootPendingRangeChange.merged:type_name -> nokv.meta.v1.RegionDescriptor
-	54,  // 42: nokv.meta.v1.RootPendingRangeChange.base_parent:type_name -> nokv.meta.v1.RegionDescriptor
-	54,  // 43: nokv.meta.v1.RootPendingRangeChange.base_left:type_name -> nokv.meta.v1.RegionDescriptor
-	54,  // 44: nokv.meta.v1.RootPendingRangeChange.base_right:type_name -> nokv.meta.v1.RegionDescriptor
-	0,   // 45: nokv.meta.v1.RootEvent.kind:type_name -> nokv.meta.v1.RootEventKind
-	13,  // 46: nokv.meta.v1.RootEvent.store_membership:type_name -> nokv.meta.v1.RootStoreMembership
-	17,  // 47: nokv.meta.v1.RootEvent.allocator_fence:type_name -> nokv.meta.v1.RootAllocatorFence
-	22,  // 48: nokv.meta.v1.RootEvent.region_descriptor:type_name -> nokv.meta.v1.RootRegionDescriptor
-	23,  // 49: nokv.meta.v1.RootEvent.region_removal:type_name -> nokv.meta.v1.RootRegionRemoval
-	24,  // 50: nokv.meta.v1.RootEvent.range_split:type_name -> nokv.meta.v1.RootRangeSplit
-	25,  // 51: nokv.meta.v1.RootEvent.range_merge:type_name -> nokv.meta.v1.RootRangeMerge
-	26,  // 52: nokv.meta.v1.RootEvent.peer_change:type_name -> nokv.meta.v1.RootPeerChange
-	18,  // 53: nokv.meta.v1.RootEvent.tenure:type_name -> nokv.meta.v1.RootTenure
-	20,  // 54: nokv.meta.v1.RootEvent.legacy:type_name -> nokv.meta.v1.RootLegacy
-	21,  // 55: nokv.meta.v1.RootEvent.handover:type_name -> nokv.meta.v1.RootHandover
-	15,  // 56: nokv.meta.v1.RootEvent.snapshot_epoch:type_name -> nokv.meta.v1.RootSnapshotEpoch
-	16,  // 57: nokv.meta.v1.RootEvent.mount:type_name -> nokv.meta.v1.RootMount
-	12,  // 58: nokv.meta.v1.MetadataRootSnapshotResponse.checkpoint:type_name -> nokv.meta.v1.RootCheckpoint
-	29,  // 59: nokv.meta.v1.MetadataRootAppendRequest.events:type_name -> nokv.meta.v1.RootEvent
-	10,  // 60: nokv.meta.v1.MetadataRootAppendResponse.cursor:type_name -> nokv.meta.v1.RootCursor
-	11,  // 61: nokv.meta.v1.MetadataRootAppendResponse.state:type_name -> nokv.meta.v1.RootState
-	6,   // 62: nokv.meta.v1.MetadataRootFenceAllocatorRequest.kind:type_name -> nokv.meta.v1.RootAllocatorKind
-	7,   // 63: nokv.meta.v1.RootTenureCommand.kind:type_name -> nokv.meta.v1.RootTenureAct
-	19,  // 64: nokv.meta.v1.RootTenureCommand.inherited_frontiers:type_name -> nokv.meta.v1.RootMandateFrontier
-	8,   // 65: nokv.meta.v1.RootHandoverCommand.kind:type_name -> nokv.meta.v1.RootHandoverAct
-	19,  // 66: nokv.meta.v1.RootHandoverCommand.frontiers:type_name -> nokv.meta.v1.RootMandateFrontier
-	18,  // 67: nokv.meta.v1.RootSuccessionState.tenure:type_name -> nokv.meta.v1.RootTenure
-	20,  // 68: nokv.meta.v1.RootSuccessionState.legacy:type_name -> nokv.meta.v1.RootLegacy
-	21,  // 69: nokv.meta.v1.RootSuccessionState.handover:type_name -> nokv.meta.v1.RootHandover
-	38,  // 70: nokv.meta.v1.MetadataRootApplyTenureRequest.command:type_name -> nokv.meta.v1.RootTenureCommand
-	40,  // 71: nokv.meta.v1.MetadataRootApplyTenureResponse.state:type_name -> nokv.meta.v1.RootSuccessionState
-	9,   // 72: nokv.meta.v1.MetadataRootApplyTenureResponse.status:type_name -> nokv.meta.v1.RootTenureApplyStatus
-	39,  // 73: nokv.meta.v1.MetadataRootApplyHandoverRequest.command:type_name -> nokv.meta.v1.RootHandoverCommand
-	40,  // 74: nokv.meta.v1.MetadataRootApplyHandoverResponse.state:type_name -> nokv.meta.v1.RootSuccessionState
-	10,  // 75: nokv.meta.v1.RootTailToken.cursor:type_name -> nokv.meta.v1.RootCursor
-	10,  // 76: nokv.meta.v1.RootCommittedEvent.cursor:type_name -> nokv.meta.v1.RootCursor
-	29,  // 77: nokv.meta.v1.RootCommittedEvent.event:type_name -> nokv.meta.v1.RootEvent
-	46,  // 78: nokv.meta.v1.RootCommittedTail.records:type_name -> nokv.meta.v1.RootCommittedEvent
-	12,  // 79: nokv.meta.v1.MetadataRootObserveCommittedResponse.checkpoint:type_name -> nokv.meta.v1.RootCheckpoint
-	47,  // 80: nokv.meta.v1.MetadataRootObserveCommittedResponse.tail:type_name -> nokv.meta.v1.RootCommittedTail
-	45,  // 81: nokv.meta.v1.MetadataRootObserveTailRequest.after:type_name -> nokv.meta.v1.RootTailToken
-	45,  // 82: nokv.meta.v1.MetadataRootObserveTailResponse.after:type_name -> nokv.meta.v1.RootTailToken
-	45,  // 83: nokv.meta.v1.MetadataRootObserveTailResponse.token:type_name -> nokv.meta.v1.RootTailToken
-	12,  // 84: nokv.meta.v1.MetadataRootObserveTailResponse.checkpoint:type_name -> nokv.meta.v1.RootCheckpoint
-	47,  // 85: nokv.meta.v1.MetadataRootObserveTailResponse.tail:type_name -> nokv.meta.v1.RootCommittedTail
-	45,  // 86: nokv.meta.v1.MetadataRootWaitTailRequest.after:type_name -> nokv.meta.v1.RootTailToken
-	45,  // 87: nokv.meta.v1.MetadataRootWaitTailResponse.after:type_name -> nokv.meta.v1.RootTailToken
-	45,  // 88: nokv.meta.v1.MetadataRootWaitTailResponse.token:type_name -> nokv.meta.v1.RootTailToken
-	12,  // 89: nokv.meta.v1.MetadataRootWaitTailResponse.checkpoint:type_name -> nokv.meta.v1.RootCheckpoint
-	47,  // 90: nokv.meta.v1.MetadataRootWaitTailResponse.tail:type_name -> nokv.meta.v1.RootCommittedTail
-	30,  // 91: nokv.meta.v1.MetadataRoot.Snapshot:input_type -> nokv.meta.v1.MetadataRootSnapshotRequest
-	32,  // 92: nokv.meta.v1.MetadataRoot.Append:input_type -> nokv.meta.v1.MetadataRootAppendRequest
-	34,  // 93: nokv.meta.v1.MetadataRoot.FenceAllocator:input_type -> nokv.meta.v1.MetadataRootFenceAllocatorRequest
-	36,  // 94: nokv.meta.v1.MetadataRoot.Status:input_type -> nokv.meta.v1.MetadataRootStatusRequest
-	41,  // 95: nokv.meta.v1.MetadataRoot.ApplyTenure:input_type -> nokv.meta.v1.MetadataRootApplyTenureRequest
-	43,  // 96: nokv.meta.v1.MetadataRoot.ApplyHandover:input_type -> nokv.meta.v1.MetadataRootApplyHandoverRequest
-	48,  // 97: nokv.meta.v1.MetadataRoot.ObserveCommitted:input_type -> nokv.meta.v1.MetadataRootObserveCommittedRequest
-	50,  // 98: nokv.meta.v1.MetadataRoot.ObserveTail:input_type -> nokv.meta.v1.MetadataRootObserveTailRequest
-	52,  // 99: nokv.meta.v1.MetadataRoot.WaitTail:input_type -> nokv.meta.v1.MetadataRootWaitTailRequest
-	31,  // 100: nokv.meta.v1.MetadataRoot.Snapshot:output_type -> nokv.meta.v1.MetadataRootSnapshotResponse
-	33,  // 101: nokv.meta.v1.MetadataRoot.Append:output_type -> nokv.meta.v1.MetadataRootAppendResponse
-	35,  // 102: nokv.meta.v1.MetadataRoot.FenceAllocator:output_type -> nokv.meta.v1.MetadataRootFenceAllocatorResponse
-	37,  // 103: nokv.meta.v1.MetadataRoot.Status:output_type -> nokv.meta.v1.MetadataRootStatusResponse
-	42,  // 104: nokv.meta.v1.MetadataRoot.ApplyTenure:output_type -> nokv.meta.v1.MetadataRootApplyTenureResponse
-	44,  // 105: nokv.meta.v1.MetadataRoot.ApplyHandover:output_type -> nokv.meta.v1.MetadataRootApplyHandoverResponse
-	49,  // 106: nokv.meta.v1.MetadataRoot.ObserveCommitted:output_type -> nokv.meta.v1.MetadataRootObserveCommittedResponse
-	51,  // 107: nokv.meta.v1.MetadataRoot.ObserveTail:output_type -> nokv.meta.v1.MetadataRootObserveTailResponse
-	53,  // 108: nokv.meta.v1.MetadataRoot.WaitTail:output_type -> nokv.meta.v1.MetadataRootWaitTailResponse
-	100, // [100:109] is the sub-list for method output_type
-	91,  // [91:100] is the sub-list for method input_type
-	91,  // [91:91] is the sub-list for extension type_name
-	91,  // [91:91] is the sub-list for extension extendee
-	0,   // [0:91] is the sub-list for field type_name
+	11,  // 0: nokv.meta.v1.RootState.last_committed:type_name -> nokv.meta.v1.RootCursor
+	20,  // 1: nokv.meta.v1.RootState.tenure:type_name -> nokv.meta.v1.RootTenure
+	22,  // 2: nokv.meta.v1.RootState.legacy:type_name -> nokv.meta.v1.RootLegacy
+	23,  // 3: nokv.meta.v1.RootState.handover:type_name -> nokv.meta.v1.RootHandover
+	12,  // 4: nokv.meta.v1.RootCheckpoint.state:type_name -> nokv.meta.v1.RootState
+	56,  // 5: nokv.meta.v1.RootCheckpoint.descriptors:type_name -> nokv.meta.v1.RegionDescriptor
+	29,  // 6: nokv.meta.v1.RootCheckpoint.pending_peer_changes:type_name -> nokv.meta.v1.RootPendingPeerChange
+	30,  // 7: nokv.meta.v1.RootCheckpoint.pending_range_changes:type_name -> nokv.meta.v1.RootPendingRangeChange
+	15,  // 8: nokv.meta.v1.RootCheckpoint.stores:type_name -> nokv.meta.v1.RootStore
+	16,  // 9: nokv.meta.v1.RootCheckpoint.snapshot_epochs:type_name -> nokv.meta.v1.RootSnapshotEpoch
+	17,  // 10: nokv.meta.v1.RootCheckpoint.mounts:type_name -> nokv.meta.v1.RootMount
+	18,  // 11: nokv.meta.v1.RootCheckpoint.subtrees:type_name -> nokv.meta.v1.RootSubtreeAuthority
+	1,   // 12: nokv.meta.v1.RootStore.state:type_name -> nokv.meta.v1.RootStoreState
+	11,  // 13: nokv.meta.v1.RootStore.joined_at:type_name -> nokv.meta.v1.RootCursor
+	11,  // 14: nokv.meta.v1.RootStore.retired_at:type_name -> nokv.meta.v1.RootCursor
+	11,  // 15: nokv.meta.v1.RootSnapshotEpoch.published_at:type_name -> nokv.meta.v1.RootCursor
+	2,   // 16: nokv.meta.v1.RootMount.state:type_name -> nokv.meta.v1.RootMountState
+	11,  // 17: nokv.meta.v1.RootMount.registered_at:type_name -> nokv.meta.v1.RootCursor
+	11,  // 18: nokv.meta.v1.RootMount.retired_at:type_name -> nokv.meta.v1.RootCursor
+	3,   // 19: nokv.meta.v1.RootSubtreeAuthority.state:type_name -> nokv.meta.v1.RootSubtreeAuthorityState
+	11,  // 20: nokv.meta.v1.RootSubtreeAuthority.declared_at:type_name -> nokv.meta.v1.RootCursor
+	11,  // 21: nokv.meta.v1.RootSubtreeAuthority.handoff_started_at:type_name -> nokv.meta.v1.RootCursor
+	11,  // 22: nokv.meta.v1.RootSubtreeAuthority.handoff_completed_at:type_name -> nokv.meta.v1.RootCursor
+	11,  // 23: nokv.meta.v1.RootTenure.issued_at:type_name -> nokv.meta.v1.RootCursor
+	21,  // 24: nokv.meta.v1.RootTenure.inherited_frontiers:type_name -> nokv.meta.v1.RootMandateFrontier
+	21,  // 25: nokv.meta.v1.RootLegacy.frontiers:type_name -> nokv.meta.v1.RootMandateFrontier
+	11,  // 26: nokv.meta.v1.RootLegacy.sealed_at:type_name -> nokv.meta.v1.RootCursor
+	4,   // 27: nokv.meta.v1.RootHandover.stage:type_name -> nokv.meta.v1.RootHandoverStage
+	11,  // 28: nokv.meta.v1.RootHandover.confirmed_at:type_name -> nokv.meta.v1.RootCursor
+	11,  // 29: nokv.meta.v1.RootHandover.closed_at:type_name -> nokv.meta.v1.RootCursor
+	11,  // 30: nokv.meta.v1.RootHandover.reattached_at:type_name -> nokv.meta.v1.RootCursor
+	56,  // 31: nokv.meta.v1.RootRegionDescriptor.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	56,  // 32: nokv.meta.v1.RootRangeSplit.left:type_name -> nokv.meta.v1.RegionDescriptor
+	56,  // 33: nokv.meta.v1.RootRangeSplit.right:type_name -> nokv.meta.v1.RegionDescriptor
+	56,  // 34: nokv.meta.v1.RootRangeSplit.base_parent:type_name -> nokv.meta.v1.RegionDescriptor
+	56,  // 35: nokv.meta.v1.RootRangeMerge.merged:type_name -> nokv.meta.v1.RegionDescriptor
+	56,  // 36: nokv.meta.v1.RootRangeMerge.base_left:type_name -> nokv.meta.v1.RegionDescriptor
+	56,  // 37: nokv.meta.v1.RootRangeMerge.base_right:type_name -> nokv.meta.v1.RegionDescriptor
+	56,  // 38: nokv.meta.v1.RootPeerChange.target:type_name -> nokv.meta.v1.RegionDescriptor
+	56,  // 39: nokv.meta.v1.RootPeerChange.base:type_name -> nokv.meta.v1.RegionDescriptor
+	5,   // 40: nokv.meta.v1.RootPendingPeerChange.kind:type_name -> nokv.meta.v1.RootPendingPeerChangeKind
+	56,  // 41: nokv.meta.v1.RootPendingPeerChange.target:type_name -> nokv.meta.v1.RegionDescriptor
+	56,  // 42: nokv.meta.v1.RootPendingPeerChange.base:type_name -> nokv.meta.v1.RegionDescriptor
+	6,   // 43: nokv.meta.v1.RootPendingRangeChange.kind:type_name -> nokv.meta.v1.RootPendingRangeChangeKind
+	56,  // 44: nokv.meta.v1.RootPendingRangeChange.left:type_name -> nokv.meta.v1.RegionDescriptor
+	56,  // 45: nokv.meta.v1.RootPendingRangeChange.right:type_name -> nokv.meta.v1.RegionDescriptor
+	56,  // 46: nokv.meta.v1.RootPendingRangeChange.merged:type_name -> nokv.meta.v1.RegionDescriptor
+	56,  // 47: nokv.meta.v1.RootPendingRangeChange.base_parent:type_name -> nokv.meta.v1.RegionDescriptor
+	56,  // 48: nokv.meta.v1.RootPendingRangeChange.base_left:type_name -> nokv.meta.v1.RegionDescriptor
+	56,  // 49: nokv.meta.v1.RootPendingRangeChange.base_right:type_name -> nokv.meta.v1.RegionDescriptor
+	0,   // 50: nokv.meta.v1.RootEvent.kind:type_name -> nokv.meta.v1.RootEventKind
+	14,  // 51: nokv.meta.v1.RootEvent.store_membership:type_name -> nokv.meta.v1.RootStoreMembership
+	19,  // 52: nokv.meta.v1.RootEvent.allocator_fence:type_name -> nokv.meta.v1.RootAllocatorFence
+	24,  // 53: nokv.meta.v1.RootEvent.region_descriptor:type_name -> nokv.meta.v1.RootRegionDescriptor
+	25,  // 54: nokv.meta.v1.RootEvent.region_removal:type_name -> nokv.meta.v1.RootRegionRemoval
+	26,  // 55: nokv.meta.v1.RootEvent.range_split:type_name -> nokv.meta.v1.RootRangeSplit
+	27,  // 56: nokv.meta.v1.RootEvent.range_merge:type_name -> nokv.meta.v1.RootRangeMerge
+	28,  // 57: nokv.meta.v1.RootEvent.peer_change:type_name -> nokv.meta.v1.RootPeerChange
+	20,  // 58: nokv.meta.v1.RootEvent.tenure:type_name -> nokv.meta.v1.RootTenure
+	22,  // 59: nokv.meta.v1.RootEvent.legacy:type_name -> nokv.meta.v1.RootLegacy
+	23,  // 60: nokv.meta.v1.RootEvent.handover:type_name -> nokv.meta.v1.RootHandover
+	16,  // 61: nokv.meta.v1.RootEvent.snapshot_epoch:type_name -> nokv.meta.v1.RootSnapshotEpoch
+	17,  // 62: nokv.meta.v1.RootEvent.mount:type_name -> nokv.meta.v1.RootMount
+	18,  // 63: nokv.meta.v1.RootEvent.subtree_authority:type_name -> nokv.meta.v1.RootSubtreeAuthority
+	13,  // 64: nokv.meta.v1.MetadataRootSnapshotResponse.checkpoint:type_name -> nokv.meta.v1.RootCheckpoint
+	31,  // 65: nokv.meta.v1.MetadataRootAppendRequest.events:type_name -> nokv.meta.v1.RootEvent
+	11,  // 66: nokv.meta.v1.MetadataRootAppendResponse.cursor:type_name -> nokv.meta.v1.RootCursor
+	12,  // 67: nokv.meta.v1.MetadataRootAppendResponse.state:type_name -> nokv.meta.v1.RootState
+	7,   // 68: nokv.meta.v1.MetadataRootFenceAllocatorRequest.kind:type_name -> nokv.meta.v1.RootAllocatorKind
+	8,   // 69: nokv.meta.v1.RootTenureCommand.kind:type_name -> nokv.meta.v1.RootTenureAct
+	21,  // 70: nokv.meta.v1.RootTenureCommand.inherited_frontiers:type_name -> nokv.meta.v1.RootMandateFrontier
+	9,   // 71: nokv.meta.v1.RootHandoverCommand.kind:type_name -> nokv.meta.v1.RootHandoverAct
+	21,  // 72: nokv.meta.v1.RootHandoverCommand.frontiers:type_name -> nokv.meta.v1.RootMandateFrontier
+	20,  // 73: nokv.meta.v1.RootSuccessionState.tenure:type_name -> nokv.meta.v1.RootTenure
+	22,  // 74: nokv.meta.v1.RootSuccessionState.legacy:type_name -> nokv.meta.v1.RootLegacy
+	23,  // 75: nokv.meta.v1.RootSuccessionState.handover:type_name -> nokv.meta.v1.RootHandover
+	40,  // 76: nokv.meta.v1.MetadataRootApplyTenureRequest.command:type_name -> nokv.meta.v1.RootTenureCommand
+	42,  // 77: nokv.meta.v1.MetadataRootApplyTenureResponse.state:type_name -> nokv.meta.v1.RootSuccessionState
+	10,  // 78: nokv.meta.v1.MetadataRootApplyTenureResponse.status:type_name -> nokv.meta.v1.RootTenureApplyStatus
+	41,  // 79: nokv.meta.v1.MetadataRootApplyHandoverRequest.command:type_name -> nokv.meta.v1.RootHandoverCommand
+	42,  // 80: nokv.meta.v1.MetadataRootApplyHandoverResponse.state:type_name -> nokv.meta.v1.RootSuccessionState
+	11,  // 81: nokv.meta.v1.RootTailToken.cursor:type_name -> nokv.meta.v1.RootCursor
+	11,  // 82: nokv.meta.v1.RootCommittedEvent.cursor:type_name -> nokv.meta.v1.RootCursor
+	31,  // 83: nokv.meta.v1.RootCommittedEvent.event:type_name -> nokv.meta.v1.RootEvent
+	48,  // 84: nokv.meta.v1.RootCommittedTail.records:type_name -> nokv.meta.v1.RootCommittedEvent
+	13,  // 85: nokv.meta.v1.MetadataRootObserveCommittedResponse.checkpoint:type_name -> nokv.meta.v1.RootCheckpoint
+	49,  // 86: nokv.meta.v1.MetadataRootObserveCommittedResponse.tail:type_name -> nokv.meta.v1.RootCommittedTail
+	47,  // 87: nokv.meta.v1.MetadataRootObserveTailRequest.after:type_name -> nokv.meta.v1.RootTailToken
+	47,  // 88: nokv.meta.v1.MetadataRootObserveTailResponse.after:type_name -> nokv.meta.v1.RootTailToken
+	47,  // 89: nokv.meta.v1.MetadataRootObserveTailResponse.token:type_name -> nokv.meta.v1.RootTailToken
+	13,  // 90: nokv.meta.v1.MetadataRootObserveTailResponse.checkpoint:type_name -> nokv.meta.v1.RootCheckpoint
+	49,  // 91: nokv.meta.v1.MetadataRootObserveTailResponse.tail:type_name -> nokv.meta.v1.RootCommittedTail
+	47,  // 92: nokv.meta.v1.MetadataRootWaitTailRequest.after:type_name -> nokv.meta.v1.RootTailToken
+	47,  // 93: nokv.meta.v1.MetadataRootWaitTailResponse.after:type_name -> nokv.meta.v1.RootTailToken
+	47,  // 94: nokv.meta.v1.MetadataRootWaitTailResponse.token:type_name -> nokv.meta.v1.RootTailToken
+	13,  // 95: nokv.meta.v1.MetadataRootWaitTailResponse.checkpoint:type_name -> nokv.meta.v1.RootCheckpoint
+	49,  // 96: nokv.meta.v1.MetadataRootWaitTailResponse.tail:type_name -> nokv.meta.v1.RootCommittedTail
+	32,  // 97: nokv.meta.v1.MetadataRoot.Snapshot:input_type -> nokv.meta.v1.MetadataRootSnapshotRequest
+	34,  // 98: nokv.meta.v1.MetadataRoot.Append:input_type -> nokv.meta.v1.MetadataRootAppendRequest
+	36,  // 99: nokv.meta.v1.MetadataRoot.FenceAllocator:input_type -> nokv.meta.v1.MetadataRootFenceAllocatorRequest
+	38,  // 100: nokv.meta.v1.MetadataRoot.Status:input_type -> nokv.meta.v1.MetadataRootStatusRequest
+	43,  // 101: nokv.meta.v1.MetadataRoot.ApplyTenure:input_type -> nokv.meta.v1.MetadataRootApplyTenureRequest
+	45,  // 102: nokv.meta.v1.MetadataRoot.ApplyHandover:input_type -> nokv.meta.v1.MetadataRootApplyHandoverRequest
+	50,  // 103: nokv.meta.v1.MetadataRoot.ObserveCommitted:input_type -> nokv.meta.v1.MetadataRootObserveCommittedRequest
+	52,  // 104: nokv.meta.v1.MetadataRoot.ObserveTail:input_type -> nokv.meta.v1.MetadataRootObserveTailRequest
+	54,  // 105: nokv.meta.v1.MetadataRoot.WaitTail:input_type -> nokv.meta.v1.MetadataRootWaitTailRequest
+	33,  // 106: nokv.meta.v1.MetadataRoot.Snapshot:output_type -> nokv.meta.v1.MetadataRootSnapshotResponse
+	35,  // 107: nokv.meta.v1.MetadataRoot.Append:output_type -> nokv.meta.v1.MetadataRootAppendResponse
+	37,  // 108: nokv.meta.v1.MetadataRoot.FenceAllocator:output_type -> nokv.meta.v1.MetadataRootFenceAllocatorResponse
+	39,  // 109: nokv.meta.v1.MetadataRoot.Status:output_type -> nokv.meta.v1.MetadataRootStatusResponse
+	44,  // 110: nokv.meta.v1.MetadataRoot.ApplyTenure:output_type -> nokv.meta.v1.MetadataRootApplyTenureResponse
+	46,  // 111: nokv.meta.v1.MetadataRoot.ApplyHandover:output_type -> nokv.meta.v1.MetadataRootApplyHandoverResponse
+	51,  // 112: nokv.meta.v1.MetadataRoot.ObserveCommitted:output_type -> nokv.meta.v1.MetadataRootObserveCommittedResponse
+	53,  // 113: nokv.meta.v1.MetadataRoot.ObserveTail:output_type -> nokv.meta.v1.MetadataRootObserveTailResponse
+	55,  // 114: nokv.meta.v1.MetadataRoot.WaitTail:output_type -> nokv.meta.v1.MetadataRootWaitTailResponse
+	106, // [106:115] is the sub-list for method output_type
+	97,  // [97:106] is the sub-list for method input_type
+	97,  // [97:97] is the sub-list for extension type_name
+	97,  // [97:97] is the sub-list for extension extendee
+	0,   // [0:97] is the sub-list for field type_name
 }
 
 func init() { file_meta_root_proto_init() }
@@ -4018,7 +4302,7 @@ func file_meta_root_proto_init() {
 		return
 	}
 	file_meta_descriptor_proto_init()
-	file_meta_root_proto_msgTypes[19].OneofWrappers = []any{
+	file_meta_root_proto_msgTypes[20].OneofWrappers = []any{
 		(*RootEvent_StoreMembership)(nil),
 		(*RootEvent_AllocatorFence)(nil),
 		(*RootEvent_RegionDescriptor)(nil),
@@ -4031,14 +4315,15 @@ func file_meta_root_proto_init() {
 		(*RootEvent_Handover)(nil),
 		(*RootEvent_SnapshotEpoch)(nil),
 		(*RootEvent_Mount)(nil),
+		(*RootEvent_SubtreeAuthority)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_meta_root_proto_rawDesc), len(file_meta_root_proto_rawDesc)),
-			NumEnums:      10,
-			NumMessages:   44,
+			NumEnums:      11,
+			NumMessages:   45,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

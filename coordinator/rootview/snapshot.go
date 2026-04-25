@@ -48,6 +48,7 @@ type Snapshot struct {
 	CatchUpState        CatchUpState
 	Stores              map[uint64]rootstate.StoreMembership
 	Mounts              map[string]rootstate.MountRecord
+	Subtrees            map[string]rootstate.SubtreeAuthority
 	Descriptors         map[uint64]descriptor.Descriptor
 	PendingPeerChanges  map[uint64]rootstate.PendingPeerChange
 	PendingRangeChanges map[uint64]rootstate.PendingRangeChange
@@ -64,6 +65,7 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 		CatchUpState:        snapshot.CatchUpState,
 		Stores:              rootstate.CloneStoreMemberships(snapshot.Stores),
 		Mounts:              rootstate.CloneMounts(snapshot.Mounts),
+		Subtrees:            rootstate.CloneSubtreeAuthorities(snapshot.Subtrees),
 		Descriptors:         rootstate.CloneDescriptors(snapshot.Descriptors),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),
@@ -84,6 +86,7 @@ func SnapshotFromRoot(snapshot rootstate.Snapshot) Snapshot {
 		CatchUpState:        CatchUpStateFresh,
 		Stores:              rootstate.CloneStoreMemberships(snapshot.Stores),
 		Mounts:              rootstate.CloneMounts(snapshot.Mounts),
+		Subtrees:            rootstate.CloneSubtreeAuthorities(snapshot.Subtrees),
 		Descriptors:         rootstate.CloneDescriptors(snapshot.Descriptors),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),
@@ -110,6 +113,7 @@ func (s Snapshot) RootSnapshot() rootstate.Snapshot {
 		},
 		Stores:              rootstate.CloneStoreMemberships(s.Stores),
 		Mounts:              rootstate.CloneMounts(s.Mounts),
+		Subtrees:            rootstate.CloneSubtreeAuthorities(s.Subtrees),
 		Descriptors:         rootstate.CloneDescriptors(s.Descriptors),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.PendingPeerChanges),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.PendingRangeChanges),

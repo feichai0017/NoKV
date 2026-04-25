@@ -159,7 +159,12 @@ func newExecutor(ctx context.Context, coordAddr string) (*fsmetaexec.Executor, f
 		coord: coordRPC,
 		ttl:   defaultMountResolverTTL,
 	}
-	executor, err := fsmetaexec.New(runner, fsmetaexec.WithMountResolver(mountResolver))
+	snapshotPublisher := rootSnapshotPublisher{coord: coordRPC}
+	executor, err := fsmetaexec.New(
+		runner,
+		fsmetaexec.WithMountResolver(mountResolver),
+		fsmetaexec.WithSubtreeHandoffPublisher(snapshotPublisher),
+	)
 	if err != nil {
 		_ = kv.Close()
 		_ = coordRPC.Close()
@@ -173,7 +178,6 @@ func newExecutor(ctx context.Context, coordAddr string) (*fsmetaexec.Executor, f
 		return nil, nil, nil, nil, fmt.Errorf("init fsmeta watch source: %w", err)
 	}
 	mountMonitor := startMountLifecycleMonitor(ctx, coordRPC, router, mountResolver, defaultMountMonitorInterval)
-	snapshotPublisher := rootSnapshotPublisher{coord: coordRPC}
 	// Compose closer: shutdown order is kv first (it holds dialed store conns
 	// keyed by coordinator-resolved addresses) then coordRPC. Both errors are
 	// reported; the first non-nil wins.
@@ -440,9 +444,17 @@ func (p rootSnapshotPublisher) RetireSnapshotSubtree(ctx context.Context, token 
 	return p.publish(ctx, rootevent.SnapshotEpochRetired(string(token.Mount), uint64(token.RootInode), token.ReadVersion))
 }
 
+func (p rootSnapshotPublisher) StartSubtreeHandoff(ctx context.Context, mount fsmeta.MountID, root fsmeta.InodeID, frontier uint64) error {
+	return p.publish(ctx, rootevent.SubtreeHandoffStarted(string(mount), uint64(root), frontier))
+}
+
+func (p rootSnapshotPublisher) CompleteSubtreeHandoff(ctx context.Context, mount fsmeta.MountID, root fsmeta.InodeID, frontier uint64) error {
+	return p.publish(ctx, rootevent.SubtreeHandoffCompleted(string(mount), uint64(root), frontier))
+}
+
 func (p rootSnapshotPublisher) publish(ctx context.Context, event rootevent.Event) error {
 	if p.coord == nil {
-		return fmt.Errorf("snapshot subtree publisher is not configured")
+		return fmt.Errorf("root event publisher is not configured")
 	}
 	resp, err := p.coord.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
 		Event: metawire.RootEventToProto(event),
@@ -451,7 +463,7 @@ func (p rootSnapshotPublisher) publish(ctx context.Context, event rootevent.Even
 		return err
 	}
 	if resp == nil || !resp.GetAccepted() {
-		return fmt.Errorf("snapshot subtree root event was not accepted")
+		return fmt.Errorf("root event was not accepted")
 	}
 	return nil
 }

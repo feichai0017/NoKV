@@ -202,6 +202,11 @@ func registerMount(t *testing.T, ctx context.Context, coord *coordclient.GRPCCli
 	})
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())
+	resp, err = coord.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
+		Event: metawire.RootEventToProto(rootevent.SubtreeAuthorityDeclared(string(mount), uint64(fsmeta.RootInode), string(mount), 0, 0)),
+	})
+	require.NoError(t, err)
+	require.True(t, resp.GetAccepted())
 }
 
 type staticRegionResolver struct {

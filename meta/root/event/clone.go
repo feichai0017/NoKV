@@ -33,6 +33,10 @@ func CloneEvent(in Event) Event {
 		cp := *in.Mount
 		out.Mount = &cp
 	}
+	if in.SubtreeAuthority != nil {
+		cp := *in.SubtreeAuthority
+		out.SubtreeAuthority = &cp
+	}
 	if in.RegionDescriptor != nil {
 		cp := *in.RegionDescriptor
 		cp.Descriptor = in.RegionDescriptor.Descriptor.Clone()

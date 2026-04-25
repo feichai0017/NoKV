@@ -49,10 +49,18 @@ type MountResolver interface {
 	ResolveMount(context.Context, fsmeta.MountID) (MountRecord, error)
 }
 
+// SubtreeHandoffPublisher publishes rooted subtree authority handoff events for
+// successful authority-aware namespace mutations.
+type SubtreeHandoffPublisher interface {
+	StartSubtreeHandoff(context.Context, fsmeta.MountID, fsmeta.InodeID, uint64) error
+	CompleteSubtreeHandoff(context.Context, fsmeta.MountID, fsmeta.InodeID, uint64) error
+}
+
 // Executor interprets fsmeta operation plans against a TxnRunner.
 type Executor struct {
 	runner                 TxnRunner
 	mounts                 MountResolver
+	subtrees               SubtreeHandoffPublisher
 	lockTTL                uint64
 	txnRetriesTotal        atomic.Uint64
 	txnRetryExhaustedTotal atomic.Uint64
@@ -75,6 +83,14 @@ func WithLockTTL(ttl uint64) Option {
 func WithMountResolver(resolver MountResolver) Option {
 	return func(e *Executor) {
 		e.mounts = resolver
+	}
+}
+
+// WithSubtreeHandoffPublisher enables rooted subtree authority era advancement
+// for RenameSubtree.
+func WithSubtreeHandoffPublisher(publisher SubtreeHandoffPublisher) Option {
+	return func(e *Executor) {
+		e.subtrees = publisher
 	}
 }
 
@@ -302,18 +318,21 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 	})
 }
 
-// RenameSubtree moves the subtree root dentry from source to destination. V0
-// rejects destination overwrite; descendants follow through inode parent links
-// rather than key rewrites.
+// RenameSubtree moves the subtree root dentry from source to destination and
+// advances the rooted subtree authority era after the dentry commit succeeds.
+// Descendants follow through inode parent links rather than key rewrites.
 func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error {
 	plan, err := fsmeta.PlanRenameSubtree(req)
 	if err != nil {
 		return err
 	}
-	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
+	if err != nil {
 		return err
 	}
-	return e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+	var movedRoot fsmeta.InodeID
+	var committedAt uint64
+	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
 		record, err := e.readDentry(ctx, plan.ReadKeys[0], startVersion)
 		if err != nil {
 			return err
@@ -329,6 +348,8 @@ func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRe
 		if err != nil {
 			return err
 		}
+		movedRoot = record.Inode
+		committedAt = commitVersion
 		mutations := []*kvrpcpb.Mutation{
 			{
 				Op:  kvrpcpb.Mutation_Delete,
@@ -342,24 +363,46 @@ func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRe
 			},
 		}
 		return e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
-	})
+	}); err != nil {
+		return err
+	}
+	authorityRoot := movedRoot
+	if mountRecord.RootInode != 0 {
+		authorityRoot = mountRecord.RootInode
+	}
+	return e.publishSubtreeHandoff(ctx, req.Mount, authorityRoot, committedAt)
+}
+
+func (e *Executor) publishSubtreeHandoff(ctx context.Context, mount fsmeta.MountID, root fsmeta.InodeID, frontier uint64) error {
+	if e == nil || e.subtrees == nil || mount == "" || root == 0 || frontier == 0 {
+		return nil
+	}
+	if err := e.subtrees.StartSubtreeHandoff(ctx, mount, root, frontier); err != nil {
+		return err
+	}
+	return e.subtrees.CompleteSubtreeHandoff(ctx, mount, root, frontier)
 }
 
 func (e *Executor) requireActiveMount(ctx context.Context, mount fsmeta.MountID) error {
+	_, err := e.resolveActiveMount(ctx, mount)
+	return err
+}
+
+func (e *Executor) resolveActiveMount(ctx context.Context, mount fsmeta.MountID) (MountRecord, error) {
 	if e == nil || e.mounts == nil {
-		return nil
+		return MountRecord{}, nil
 	}
 	record, err := e.mounts.ResolveMount(ctx, mount)
 	if err != nil {
-		return err
+		return MountRecord{}, err
 	}
 	if record.MountID == "" {
-		return fsmeta.ErrMountNotRegistered
+		return MountRecord{}, fsmeta.ErrMountNotRegistered
 	}
 	if record.Retired {
-		return fsmeta.ErrMountRetired
+		return MountRecord{}, fsmeta.ErrMountRetired
 	}
-	return nil
+	return record, nil
 }
 
 func (e *Executor) reserveReadVersion(ctx context.Context) (uint64, error) {

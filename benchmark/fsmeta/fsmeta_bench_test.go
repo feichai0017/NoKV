@@ -108,6 +108,15 @@ func ensureBenchmarkMount(t *testing.T, ctx context.Context) {
 		if resp.GetMount().GetState() == coordpb.MountState_MOUNT_STATE_RETIRED {
 			t.Fatalf("benchmark mount %q is retired", *fsmetaMount)
 		}
+		publishResp, err := coordRPC.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
+			Event: metawire.RootEventToProto(rootevent.SubtreeAuthorityDeclared(strings.TrimSpace(*fsmetaMount), uint64(fsmeta.RootInode), strings.TrimSpace(*fsmetaMount), 0, 0)),
+		})
+		if err != nil {
+			t.Fatalf("declare benchmark subtree authority: %v", err)
+		}
+		if publishResp == nil || !publishResp.GetAccepted() {
+			t.Fatalf("benchmark subtree authority root event was not accepted")
+		}
 		return
 	}
 	publishResp, err := coordRPC.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
@@ -118,6 +127,15 @@ func ensureBenchmarkMount(t *testing.T, ctx context.Context) {
 	}
 	if publishResp == nil || !publishResp.GetAccepted() {
 		t.Fatalf("benchmark mount root event was not accepted")
+	}
+	publishResp, err = coordRPC.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
+		Event: metawire.RootEventToProto(rootevent.SubtreeAuthorityDeclared(strings.TrimSpace(*fsmetaMount), uint64(fsmeta.RootInode), strings.TrimSpace(*fsmetaMount), 0, 0)),
+	})
+	if err != nil {
+		t.Fatalf("declare benchmark subtree authority: %v", err)
+	}
+	if publishResp == nil || !publishResp.GetAccepted() {
+		t.Fatalf("benchmark subtree authority root event was not accepted")
 	}
 }
 

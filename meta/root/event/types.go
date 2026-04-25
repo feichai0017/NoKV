@@ -38,6 +38,9 @@ const (
 	KindSnapshotEpochRetired
 	KindMountRegistered
 	KindMountRetired
+	KindSubtreeAuthorityDeclared
+	KindSubtreeHandoffStarted
+	KindSubtreeHandoffCompleted
 )
 
 // StoreMembership describes one store membership change carried by a root event.
@@ -62,6 +65,28 @@ type Mount struct {
 	SchemaVersion uint32
 	RegisteredAt  RootCursor
 	RetiredAt     RootCursor
+}
+
+// SubtreeAuthority records one rooted subtree authority event. Declare events
+// use AuthorityID/Era/Frontier. Handoff-start events use Frontier as the
+// predecessor frontier. Handoff-complete events use InheritedFrontier as the
+// successor coverage frontier.
+type SubtreeAuthority struct {
+	SubtreeID              string
+	Mount                  string
+	RootInode              uint64
+	AuthorityID            string
+	Era                    uint64
+	Frontier               uint64
+	PredecessorAuthorityID string
+	PredecessorEra         uint64
+	PredecessorFrontier    uint64
+	SuccessorAuthorityID   string
+	SuccessorEra           uint64
+	InheritedFrontier      uint64
+	DeclaredAt             RootCursor
+	HandoffStartedAt       RootCursor
+	HandoffCompletedAt     RootCursor
 }
 
 // AllocatorFence raises one rooted allocator floor monotonically.
@@ -162,6 +187,7 @@ type Event struct {
 	Handover         *Handover
 	SnapshotEpoch    *SnapshotEpoch
 	Mount            *Mount
+	SubtreeAuthority *SubtreeAuthority
 	RegionDescriptor *RegionDescriptorRecord
 	RegionRemoval    *RegionRemoval
 	RangeSplit       *RangeSplit
@@ -184,6 +210,41 @@ func MountRetired(mountID string) Event {
 	return Event{
 		Kind:  KindMountRetired,
 		Mount: &Mount{MountID: mountID},
+	}
+}
+
+func SubtreeAuthorityDeclared(mount string, rootInode uint64, authorityID string, era, frontier uint64) Event {
+	return Event{
+		Kind: KindSubtreeAuthorityDeclared,
+		SubtreeAuthority: &SubtreeAuthority{
+			Mount:       mount,
+			RootInode:   rootInode,
+			AuthorityID: authorityID,
+			Era:         era,
+			Frontier:    frontier,
+		},
+	}
+}
+
+func SubtreeHandoffStarted(mount string, rootInode, frontier uint64) Event {
+	return Event{
+		Kind: KindSubtreeHandoffStarted,
+		SubtreeAuthority: &SubtreeAuthority{
+			Mount:     mount,
+			RootInode: rootInode,
+			Frontier:  frontier,
+		},
+	}
+}
+
+func SubtreeHandoffCompleted(mount string, rootInode, inheritedFrontier uint64) Event {
+	return Event{
+		Kind: KindSubtreeHandoffCompleted,
+		SubtreeAuthority: &SubtreeAuthority{
+			Mount:             mount,
+			RootInode:         rootInode,
+			InheritedFrontier: inheritedFrontier,
+		},
 	}
 }
 
