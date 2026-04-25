@@ -153,7 +153,7 @@ func (s *Service) WatchSubtree(stream fsmetapb.FSMetadata_WatchSubtreeServer) er
 	defer sub.Close()
 	if err := stream.Send(&fsmetapb.WatchSubtreeResponse{
 		Payload: &fsmetapb.WatchSubtreeResponse_Ready{
-			Ready: &fsmetapb.WatchReady{Cursor: watchCursorToProto(watchReq.ResumeCursor)},
+			Ready: &fsmetapb.WatchReady{Cursor: watchCursorToProto(sub.ReadyCursor())},
 		},
 	}); err != nil {
 		return rpcStreamError(err)
@@ -217,6 +217,19 @@ func (s *Service) SnapshotSubtree(ctx context.Context, req *fsmetapb.SnapshotSub
 	return snapshotSubtreeResponseToProto(token), nil
 }
 
+func (s *Service) RetireSnapshotSubtree(ctx context.Context, req *fsmetapb.RetireSnapshotSubtreeRequest) (*fsmetapb.RetireSnapshotSubtreeResponse, error) {
+	if s == nil || s.snapshot == nil {
+		return nil, status.Error(codes.FailedPrecondition, "fsmeta snapshot publisher is not configured")
+	}
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "fsmeta retire snapshot subtree request is required")
+	}
+	if err := s.snapshot.RetireSnapshotSubtree(ctx, retireSnapshotSubtreeRequestFromProto(req)); err != nil {
+		return nil, rpcError(err)
+	}
+	return &fsmetapb.RetireSnapshotSubtreeResponse{}, nil
+}
+
 func (s *Service) Rename(ctx context.Context, req *fsmetapb.RenameRequest) (*fsmetapb.RenameResponse, error) {
 	if err := s.requireExecutor(); err != nil {
 		return nil, err
@@ -267,6 +280,8 @@ func rpcError(err error) error {
 	switch {
 	case errors.Is(err, fsmeta.ErrWatchOverflow):
 		return status.Error(codes.ResourceExhausted, err.Error())
+	case errors.Is(err, fsmeta.ErrWatchCursorExpired):
+		return status.Error(codes.OutOfRange, err.Error())
 	case errors.Is(err, context.Canceled):
 		return status.Error(codes.Canceled, err.Error())
 	case errors.Is(err, context.DeadlineExceeded):

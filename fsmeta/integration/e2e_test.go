@@ -153,6 +153,65 @@ func TestFSMetadataWatchSubtreeOnRealCluster(t *testing.T) {
 	require.NoError(t, stream.Ack(got.Cursor))
 }
 
+func TestFSMetadataWatchSubtreeReplaysAfterResumeCursor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	runtime := openRealClusterRuntime(t, ctx)
+	router := fswatch.NewRouter()
+	reg, err := runtime.node.Server.Store().RegisterApplyObserver(router, 256)
+	require.NoError(t, err)
+	defer reg.Close()
+
+	cli, cleanup := openFSMetadataClient(t, ctx, runtime.executor, fsmetaserver.WithWatcher(router))
+	defer cleanup()
+
+	prefix, err := fsmeta.EncodeDentryPrefix("vol", fsmeta.RootInode)
+	require.NoError(t, err)
+	stream, err := cli.WatchSubtree(ctx, fsmeta.WatchRequest{
+		KeyPrefix:          prefix,
+		BackPressureWindow: 8,
+	})
+	require.NoError(t, err)
+
+	first := fsmeta.CreateRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "catchup-0001", Inode: 801}
+	require.NoError(t, cli.Create(ctx, first, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, LinkCount: 1}))
+	firstKey, err := fsmeta.EncodeDentryKey(first.Mount, first.Parent, first.Name)
+	require.NoError(t, err)
+	firstEvent := recvWatchKey(t, stream, firstKey)
+	require.NoError(t, stream.Ack(firstEvent.Cursor))
+	require.NoError(t, stream.Close())
+
+	second := fsmeta.CreateRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "catchup-0002", Inode: 802}
+	third := fsmeta.CreateRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "catchup-0003", Inode: 803}
+	require.NoError(t, cli.Create(ctx, second, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, LinkCount: 1}))
+	require.NoError(t, cli.Create(ctx, third, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, LinkCount: 1}))
+	secondKey, err := fsmeta.EncodeDentryKey(second.Mount, second.Parent, second.Name)
+	require.NoError(t, err)
+	thirdKey, err := fsmeta.EncodeDentryKey(third.Mount, third.Parent, third.Name)
+	require.NoError(t, err)
+
+	resumed, err := cli.WatchSubtree(ctx, fsmeta.WatchRequest{
+		KeyPrefix:          prefix,
+		ResumeCursor:       firstEvent.Cursor,
+		BackPressureWindow: 8,
+	})
+	require.NoError(t, err)
+	defer func() { _ = resumed.Close() }()
+	require.NotZero(t, resumed.ReadyCursor().Index)
+
+	got := map[string]bool{}
+	require.Eventually(t, func() bool {
+		evt, err := resumed.Recv()
+		if err != nil {
+			return false
+		}
+		got[string(evt.Key)] = true
+		_ = resumed.Ack(evt.Cursor)
+		return got[string(secondKey)] && got[string(thirdKey)]
+	}, 5*time.Second, 20*time.Millisecond)
+}
+
 func TestFSMetadataSnapshotSubtreeOnRealCluster(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -203,10 +262,14 @@ func TestFSMetadataSnapshotSubtreeOnRealCluster(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"a", "b"}, dentryNames(latestPage))
+
+	require.NoError(t, cli.RetireSnapshotSubtree(ctx, token))
+	require.Equal(t, token, publisher.retired)
 }
 
 type snapshotRecorder struct {
-	token fsmeta.SnapshotSubtreeToken
+	token   fsmeta.SnapshotSubtreeToken
+	retired fsmeta.SnapshotSubtreeToken
 }
 
 func (r *snapshotRecorder) PublishSnapshotSubtree(_ context.Context, token fsmeta.SnapshotSubtreeToken) error {
@@ -214,8 +277,23 @@ func (r *snapshotRecorder) PublishSnapshotSubtree(_ context.Context, token fsmet
 	return nil
 }
 
-func (r *snapshotRecorder) RetireSnapshotSubtree(context.Context, fsmeta.SnapshotSubtreeToken) error {
+func (r *snapshotRecorder) RetireSnapshotSubtree(_ context.Context, token fsmeta.SnapshotSubtreeToken) error {
+	r.retired = token
 	return nil
+}
+
+func recvWatchKey(t *testing.T, stream fsmetaclient.WatchSubscription, key []byte) fsmeta.WatchEvent {
+	t.Helper()
+	var got fsmeta.WatchEvent
+	require.Eventually(t, func() bool {
+		evt, err := stream.Recv()
+		if err != nil {
+			return false
+		}
+		got = evt
+		return string(evt.Key) == string(key)
+	}, 5*time.Second, 20*time.Millisecond)
+	return got
 }
 
 func dentryNames(entries []fsmeta.DentryAttrPair) []string {

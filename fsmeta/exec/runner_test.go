@@ -229,6 +229,8 @@ func TestExecutorRetriesCommitTsExpired(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, runner.mutations, 1)
 	require.Equal(t, uint64(5), runner.nextTS)
+	require.Equal(t, uint64(1), executor.Stats()["txn_retries_total"])
+	require.Equal(t, uint64(0), executor.Stats()["txn_retry_exhausted_total"])
 }
 
 func TestExecutorLookupReturnsNotFound(t *testing.T) {

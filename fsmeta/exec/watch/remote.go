@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
@@ -39,6 +40,8 @@ type RemoteSource struct {
 
 	mu     sync.Mutex
 	stores map[uint64]*remoteStoreWatch
+
+	applyDropped atomic.Uint64
 }
 
 type remoteStoreWatch struct {
@@ -179,6 +182,7 @@ func (s *RemoteSource) runStore(ctx context.Context, storeID uint64, conn *grpc.
 			continue
 		}
 		backoff = remoteWatchMinBackoff
+		lastDropped := uint64(0)
 		for {
 			resp, err := stream.Recv()
 			if err != nil {
@@ -197,6 +201,10 @@ func (s *RemoteSource) runStore(ctx context.Context, storeID uint64, conn *grpc.
 				break
 			}
 			backoff = remoteWatchMinBackoff
+			if dropped := resp.GetDroppedEvents(); dropped > lastDropped {
+				s.applyDropped.Add(dropped - lastDropped)
+				lastDropped = dropped
+			}
 			publishApplyWatchEvent(s.router, resp.GetEvent())
 		}
 	}
@@ -237,6 +245,23 @@ func (s *RemoteSource) Close() error {
 	}
 	s.wg.Wait()
 	return first
+}
+
+// Stats returns point-in-time remote apply-watch source counters.
+func (s *RemoteSource) Stats() map[string]any {
+	if s == nil {
+		return map[string]any{
+			"remote_stores":                       0,
+			"apply_observer_dropped_events_total": uint64(0),
+		}
+	}
+	s.mu.Lock()
+	stores := len(s.stores)
+	s.mu.Unlock()
+	return map[string]any{
+		"remote_stores":                       stores,
+		"apply_observer_dropped_events_total": s.applyDropped.Load(),
+	}
 }
 
 func stopRemoteStore(watch *remoteStoreWatch) error {

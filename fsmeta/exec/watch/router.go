@@ -15,13 +15,10 @@ const defaultRecentEvents = 4096
 
 // Router fans committed raftstore key events out to fsmeta prefix subscribers.
 type Router struct {
-	mu         sync.RWMutex
-	next       uint64
-	subs       map[uint64]*Subscription
-	recent     map[eventKey]struct{}
-	recentRing [defaultRecentEvents]eventKey
-	recentNext int
-	recentLen  int
+	mu      sync.RWMutex
+	next    uint64
+	subs    map[uint64]*Subscription
+	regions map[uint64]*regionHistory
 
 	published atomic.Uint64
 	delivered atomic.Uint64
@@ -32,8 +29,8 @@ type Router struct {
 // NewRouter constructs an empty watch router.
 func NewRouter() *Router {
 	return &Router{
-		subs:   make(map[uint64]*Subscription),
-		recent: make(map[eventKey]struct{}),
+		subs:    make(map[uint64]*Subscription),
+		regions: make(map[uint64]*regionHistory),
 	}
 }
 
@@ -58,6 +55,20 @@ func (r *Router) Subscribe(ctx context.Context, req fsmeta.WatchRequest) (fsmeta
 		pending: make(map[fsmeta.WatchCursor]uint32),
 	}
 	r.mu.Lock()
+	replay, ready, err := r.replayLocked(req.ResumeCursor, prefix)
+	if err != nil {
+		r.mu.Unlock()
+		return nil, err
+	}
+	for _, evt := range replay {
+		if !sub.enqueueReplayLocked(evt) {
+			r.overflow.Add(1)
+			r.dropped.Add(1)
+			r.mu.Unlock()
+			return nil, fsmeta.ErrWatchOverflow
+		}
+	}
+	sub.ready = ready
 	r.next++
 	sub.id = r.next
 	r.subs[sub.id] = sub
@@ -77,12 +88,14 @@ func (r *Router) Publish(evt fsmeta.WatchEvent) {
 		return
 	}
 	id := eventID(evt)
+	stored := cloneEvent(evt)
 	r.mu.Lock()
-	if _, ok := r.recent[id]; ok {
+	history := r.regionLocked(evt.Cursor.RegionID)
+	if history.remembered(id) {
 		r.mu.Unlock()
 		return
 	}
-	r.rememberLocked(id)
+	history.remember(id, stored)
 	subs := make([]*Subscription, 0, len(r.subs))
 	for _, sub := range r.subs {
 		subs = append(subs, sub)
@@ -142,10 +155,15 @@ func (r *Router) Stats() map[string]any {
 	}
 	r.mu.RLock()
 	subscribers := len(r.subs)
-	recent := r.recentLen
+	recent := 0
+	regions := len(r.regions)
+	for _, history := range r.regions {
+		recent += history.len
+	}
 	r.mu.RUnlock()
 	return map[string]any{
 		"subscribers":     subscribers,
+		"regions":         regions,
 		"recent_events":   recent,
 		"events_total":    r.published.Load(),
 		"delivered_total": r.delivered.Load(),
@@ -154,18 +172,48 @@ func (r *Router) Stats() map[string]any {
 	}
 }
 
-func (r *Router) rememberLocked(id eventKey) {
-	r.recent[id] = struct{}{}
-	if r.recentLen < defaultRecentEvents {
-		r.recentRing[r.recentNext] = id
-		r.recentNext = (r.recentNext + 1) % defaultRecentEvents
-		r.recentLen++
-		return
+func (r *Router) regionLocked(regionID uint64) *regionHistory {
+	history := r.regions[regionID]
+	if history == nil {
+		history = &regionHistory{
+			recent: make(map[eventKey]struct{}),
+			ring:   make([]historyEntry, defaultRecentEvents),
+		}
+		r.regions[regionID] = history
 	}
-	old := r.recentRing[r.recentNext]
-	delete(r.recent, old)
-	r.recentRing[r.recentNext] = id
-	r.recentNext = (r.recentNext + 1) % defaultRecentEvents
+	return history
+}
+
+func (r *Router) replayLocked(cursor fsmeta.WatchCursor, prefix []byte) ([]fsmeta.WatchEvent, fsmeta.WatchCursor, error) {
+	if cursor.RegionID == 0 {
+		return nil, fsmeta.WatchCursor{}, nil
+	}
+	history := r.regions[cursor.RegionID]
+	if history == nil || history.len == 0 {
+		return nil, fsmeta.WatchCursor{}, fsmeta.ErrWatchCursorExpired
+	}
+	entries := history.ordered()
+	latest := entries[len(entries)-1].event.Cursor
+	found := false
+	for _, entry := range entries {
+		if sameCursor(entry.event.Cursor, cursor) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		if compareCursor(cursor, latest) > 0 {
+			return nil, latest, nil
+		}
+		return nil, latest, fsmeta.ErrWatchCursorExpired
+	}
+	replay := make([]fsmeta.WatchEvent, 0, len(entries))
+	for _, entry := range entries {
+		if compareCursor(entry.event.Cursor, cursor) > 0 && bytes.HasPrefix(entry.event.Key, prefix) {
+			replay = append(replay, cloneEvent(entry.event))
+		}
+	}
+	return replay, latest, nil
 }
 
 func (r *Router) unregister(id uint64, sub *Subscription) {
@@ -183,6 +231,7 @@ type Subscription struct {
 	prefix []byte
 	events chan fsmeta.WatchEvent
 	window uint32
+	ready  fsmeta.WatchCursor
 
 	mu          sync.Mutex
 	outstanding uint32
@@ -197,6 +246,15 @@ func (s *Subscription) Events() <-chan fsmeta.WatchEvent {
 		return nil
 	}
 	return s.events
+}
+
+// ReadyCursor returns the router frontier after any catch-up replay queued for
+// this subscription.
+func (s *Subscription) ReadyCursor() fsmeta.WatchCursor {
+	if s == nil {
+		return fsmeta.WatchCursor{}
+	}
+	return s.ready
 }
 
 // Ack releases outstanding event budget up to cursor within the same region.
@@ -245,8 +303,13 @@ func (s *Subscription) enqueue(evt fsmeta.WatchEvent) {
 		return
 	}
 	if s.outstanding >= s.window {
+		s.markClosedLocked(fsmeta.ErrWatchOverflow)
+		id := s.id
+		router := s.router
 		s.mu.Unlock()
-		s.closeWith(fsmeta.ErrWatchOverflow)
+		if router != nil {
+			router.unregister(id, s)
+		}
 		if s.router != nil {
 			s.router.dropped.Add(1)
 			s.router.overflow.Add(1)
@@ -271,6 +334,33 @@ func (s *Subscription) enqueue(evt fsmeta.WatchEvent) {
 	}
 }
 
+func (s *Subscription) enqueueReplayLocked(evt fsmeta.WatchEvent) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	if s.outstanding >= s.window {
+		s.markClosedLocked(fsmeta.ErrWatchOverflow)
+		return false
+	}
+	s.outstanding++
+	s.pending[evt.Cursor]++
+	select {
+	case s.events <- cloneEvent(evt):
+		if s.router != nil {
+			s.router.delivered.Add(1)
+		}
+		return true
+	default:
+		s.markClosedLocked(fsmeta.ErrWatchOverflow)
+		return false
+	}
+}
+
 func (s *Subscription) closeWith(err error) {
 	if s == nil {
 		return
@@ -280,15 +370,22 @@ func (s *Subscription) closeWith(err error) {
 		s.mu.Unlock()
 		return
 	}
-	s.closed = true
-	s.err = err
-	close(s.events)
+	s.markClosedLocked(err)
 	id := s.id
 	router := s.router
 	s.mu.Unlock()
 	if router != nil {
 		router.unregister(id, s)
 	}
+}
+
+func (s *Subscription) markClosedLocked(err error) {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	s.err = err
+	close(s.events)
 }
 
 func cloneEvent(evt fsmeta.WatchEvent) fsmeta.WatchEvent {
@@ -314,6 +411,78 @@ func eventID(evt fsmeta.WatchEvent) eventKey {
 		commitVersion: evt.CommitVersion,
 		key:           string(evt.Key),
 	}
+}
+
+type historyEntry struct {
+	id    eventKey
+	event fsmeta.WatchEvent
+}
+
+type regionHistory struct {
+	recent map[eventKey]struct{}
+	ring   []historyEntry
+	next   int
+	len    int
+}
+
+func (h *regionHistory) remembered(id eventKey) bool {
+	_, ok := h.recent[id]
+	return ok
+}
+
+func (h *regionHistory) remember(id eventKey, evt fsmeta.WatchEvent) {
+	h.recent[id] = struct{}{}
+	if h.len < len(h.ring) {
+		h.ring[h.next] = historyEntry{id: id, event: evt}
+		h.next = (h.next + 1) % len(h.ring)
+		h.len++
+		return
+	}
+	old := h.ring[h.next]
+	delete(h.recent, old.id)
+	h.ring[h.next] = historyEntry{id: id, event: evt}
+	h.next = (h.next + 1) % len(h.ring)
+}
+
+func (h *regionHistory) ordered() []historyEntry {
+	if h == nil || h.len == 0 {
+		return nil
+	}
+	out := make([]historyEntry, 0, h.len)
+	start := h.next - h.len
+	if start < 0 {
+		start += len(h.ring)
+	}
+	for i := 0; i < h.len; i++ {
+		out = append(out, h.ring[(start+i)%len(h.ring)])
+	}
+	return out
+}
+
+func sameCursor(a, b fsmeta.WatchCursor) bool {
+	return a.RegionID == b.RegionID && a.Term == b.Term && a.Index == b.Index
+}
+
+func compareCursor(a, b fsmeta.WatchCursor) int {
+	if a.RegionID != b.RegionID {
+		if a.RegionID < b.RegionID {
+			return -1
+		}
+		return 1
+	}
+	if a.Term != b.Term {
+		if a.Term < b.Term {
+			return -1
+		}
+		return 1
+	}
+	if a.Index != b.Index {
+		if a.Index < b.Index {
+			return -1
+		}
+		return 1
+	}
+	return 0
 }
 
 func cursorCovers(pending, ack fsmeta.WatchCursor) bool {

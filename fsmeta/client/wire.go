@@ -51,6 +51,14 @@ func snapshotSubtreeTokenFromProto(resp *fsmetapb.SnapshotSubtreeResponse) fsmet
 	}
 }
 
+func retireSnapshotSubtreeRequestToProto(token fsmeta.SnapshotSubtreeToken) *fsmetapb.RetireSnapshotSubtreeRequest {
+	return &fsmetapb.RetireSnapshotSubtreeRequest{
+		Mount:       string(token.Mount),
+		RootInode:   uint64(token.RootInode),
+		ReadVersion: token.ReadVersion,
+	}
+}
+
 func renameRequestToProto(req fsmeta.RenameRequest) *fsmetapb.RenameRequest {
 	return &fsmetapb.RenameRequest{
 		Mount:      string(req.Mount),
