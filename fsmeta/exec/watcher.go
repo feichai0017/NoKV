@@ -38,14 +38,16 @@ func (w watcher) Subscribe(ctx context.Context, req fsmeta.WatchRequest) (fsmeta
 func (w watcher) Stats() map[string]any {
 	out := map[string]any{}
 	if w.Router != nil {
-		for k, v := range w.Router.Stats() {
-			out[k] = v
-		}
+		copyStats(out, w.Router.Stats())
 	}
 	if w.source != nil {
-		for k, v := range w.source.Stats() {
-			out[k] = v
-		}
+		copyStats(out, w.source.Stats())
 	}
 	return out
+}
+
+func copyStats(dst, src map[string]any) {
+	for key := range src {
+		dst[key] = src[key]
+	}
 }

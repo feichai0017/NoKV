@@ -29,7 +29,7 @@ func (f *fakeQuotaLookup) GetQuotaFence(_ context.Context, req *coordpb.GetQuota
 func TestQuotaReserveWritesUsageCountersInTransaction(t *testing.T) {
 	runner := newFakeRunner()
 	lookup := &fakeQuotaLookup{fences: map[quotaSubject]*coordpb.QuotaFenceInfo{
-		{mount: "vol"}:          {Subject: &coordpb.QuotaSubject{MountId: "vol"}, LimitBytes: 8192, LimitInodes: 10, Era: 1},
+		{mount: "vol"}:           {Subject: &coordpb.QuotaSubject{MountId: "vol"}, LimitBytes: 8192, LimitInodes: 10, Era: 1},
 		{mount: "vol", scope: 7}: {Subject: &coordpb.QuotaSubject{MountId: "vol", SubtreeRoot: 7}, LimitBytes: 4096, LimitInodes: 2, Era: 1},
 	}}
 	cache := &quotaCache{coord: lookup, ttl: time.Minute}
@@ -65,7 +65,7 @@ func TestQuotaReserveRejectsClusterWideLimit(t *testing.T) {
 func TestQuotaReserveCoalescesRenameTransfer(t *testing.T) {
 	runner := newFakeRunner()
 	lookup := &fakeQuotaLookup{fences: map[quotaSubject]*coordpb.QuotaFenceInfo{
-		{mount: "vol"}:          {Subject: &coordpb.QuotaSubject{MountId: "vol"}, LimitBytes: 1000, LimitInodes: 10, Era: 1},
+		{mount: "vol"}:           {Subject: &coordpb.QuotaSubject{MountId: "vol"}, LimitBytes: 1000, LimitInodes: 10, Era: 1},
 		{mount: "vol", scope: 7}: {Subject: &coordpb.QuotaSubject{MountId: "vol", SubtreeRoot: 7}, LimitBytes: 1000, LimitInodes: 10, Era: 1},
 		{mount: "vol", scope: 8}: {Subject: &coordpb.QuotaSubject{MountId: "vol", SubtreeRoot: 8}, LimitBytes: 1000, LimitInodes: 10, Era: 1},
 	}}

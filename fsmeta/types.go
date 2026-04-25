@@ -72,6 +72,13 @@ type SnapshotSubtreeToken struct {
 	ReadVersion uint64
 }
 
+// QuotaUsageRequest addresses one usage counter. Scope 0 is mount-wide;
+// non-zero scopes are direct quota accounting roots.
+type QuotaUsageRequest struct {
+	Mount MountID
+	Scope InodeID
+}
+
 const (
 	// RootInode is the conventional root inode for one mount.
 	RootInode InodeID = 1

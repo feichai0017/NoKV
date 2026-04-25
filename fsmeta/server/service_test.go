@@ -22,6 +22,7 @@ type fakeExecutor struct {
 	createInode fsmeta.InodeRecord
 	readDirReq  fsmeta.ReadDirRequest
 	snapshotReq fsmeta.SnapshotSubtreeRequest
+	quotaReq    fsmeta.QuotaUsageRequest
 	err         error
 }
 
@@ -84,6 +85,14 @@ func (e *fakeExecutor) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSub
 		return fsmeta.SnapshotSubtreeToken{}, e.err
 	}
 	return fsmeta.SnapshotSubtreeToken{Mount: req.Mount, RootInode: req.RootInode, ReadVersion: 1234}, nil
+}
+
+func (e *fakeExecutor) GetQuotaUsage(_ context.Context, req fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error) {
+	e.quotaReq = req
+	if e.err != nil {
+		return fsmeta.UsageRecord{}, e.err
+	}
+	return fsmeta.UsageRecord{Bytes: 4096, Inodes: 2}, nil
 }
 
 func (e *fakeExecutor) RenameSubtree(context.Context, fsmeta.RenameSubtreeRequest) error {
@@ -256,6 +265,21 @@ func TestGRPCServiceRetireSnapshotSubtree(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 1234}, publisher.retired)
+}
+
+func TestGRPCServiceGetQuotaUsage(t *testing.T) {
+	executor := &fakeExecutor{}
+	client, cleanup := openBufconnClient(t, executor)
+	defer cleanup()
+
+	resp, err := client.GetQuotaUsage(context.Background(), &fsmetapb.QuotaUsageRequest{
+		Mount: "vol",
+		Scope: 7,
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.QuotaUsageRequest{Mount: "vol", Scope: 7}, executor.quotaReq)
+	require.Equal(t, uint64(4096), resp.GetBytes())
+	require.Equal(t, uint64(2), resp.GetInodes())
 }
 
 type fakeSnapshotPublisher struct {

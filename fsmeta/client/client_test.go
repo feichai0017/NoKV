@@ -57,6 +57,13 @@ func (e *fakeExecutor) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSub
 	return fsmeta.SnapshotSubtreeToken{Mount: req.Mount, RootInode: req.RootInode, ReadVersion: 5678}, nil
 }
 
+func (e *fakeExecutor) GetQuotaUsage(context.Context, fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error) {
+	if e.err != nil {
+		return fsmeta.UsageRecord{}, e.err
+	}
+	return fsmeta.UsageRecord{Bytes: 4096, Inodes: 2}, nil
+}
+
 func (e *fakeExecutor) RenameSubtree(context.Context, fsmeta.RenameSubtreeRequest) error {
 	return e.err
 }
@@ -169,6 +176,15 @@ func TestTypedClientSnapshotSubtree(t *testing.T) {
 	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 5678}, token)
 	require.NoError(t, cli.RetireSnapshotSubtree(context.Background(), token))
 	require.Equal(t, token, publisher.retired)
+}
+
+func TestTypedClientGetQuotaUsage(t *testing.T) {
+	cli, cleanup := openBufconnClient(t, &fakeExecutor{})
+	defer cleanup()
+
+	usage, err := cli.GetQuotaUsage(context.Background(), fsmeta.QuotaUsageRequest{Mount: "vol", Scope: 7})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.UsageRecord{Bytes: 4096, Inodes: 2}, usage)
 }
 
 type fakeSnapshotPublisher struct {

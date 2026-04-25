@@ -98,6 +98,11 @@ func TestMountCacheCachesNotFound(t *testing.T) {
 	_, err = cache.ResolveMount(context.Background(), fsmeta.MountID("missing"))
 	require.ErrorIs(t, err, fsmeta.ErrMountNotRegistered)
 	require.Equal(t, 1, lookup.calls)
+	require.Equal(t, map[string]any{
+		"cache_hits_total":        uint64(1),
+		"cache_misses_total":      uint64(1),
+		"admission_rejects_total": uint64(2),
+	}, cache.Stats())
 }
 
 func TestWatcherRejectsRetiredMount(t *testing.T) {

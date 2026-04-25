@@ -71,6 +71,9 @@ func main() {
 		if stats, ok := rt.Watcher.(interface{ Stats() map[string]any }); ok {
 			publishExpvarOnce("nokv_fsmeta_watch", expvar.Func(func() any { return stats.Stats() }))
 		}
+		if stats, ok := rt.MountResolver.(interface{ Stats() map[string]any }); ok {
+			publishExpvarOnce("nokv_fsmeta_mount", expvar.Func(func() any { return stats.Stats() }))
+		}
 		if stats, ok := rt.QuotaResolver.(interface{ Stats() map[string]any }); ok {
 			publishExpvarOnce("nokv_fsmeta_quota", expvar.Func(func() any { return stats.Stats() }))
 		}
