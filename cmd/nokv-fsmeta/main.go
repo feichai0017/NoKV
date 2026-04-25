@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -36,6 +37,8 @@ var fatalf = func(format string, args ...any) {
 var listen = net.Listen
 var signalNotify = signal.Notify
 var openExecutor = newExecutor
+
+const defaultMountResolverTTL = time.Second
 
 func main() {
 	var (
@@ -149,7 +152,10 @@ func newExecutor(ctx context.Context, coordAddr string) (*fsmetaexec.Executor, f
 		_ = coordRPC.Close()
 		return nil, nil, nil, nil, fmt.Errorf("init fsmeta runner: %w", err)
 	}
-	executor, err := fsmetaexec.New(runner, fsmetaexec.WithMountResolver(coordinatorMountResolver{coord: coordRPC}))
+	executor, err := fsmetaexec.New(runner, fsmetaexec.WithMountResolver(&coordinatorMountResolver{
+		coord: coordRPC,
+		ttl:   defaultMountResolverTTL,
+	}))
 	if err != nil {
 		_ = kv.Close()
 		_ = coordRPC.Close()
@@ -206,18 +212,79 @@ type rootSnapshotPublisher struct {
 	coord *coordclient.GRPCClient
 }
 
-type coordinatorMountResolver struct {
-	coord *coordclient.GRPCClient
+type mountLookupClient interface {
+	GetMount(context.Context, *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error)
 }
 
-func (r coordinatorMountResolver) ResolveMount(ctx context.Context, mount fsmeta.MountID) (fsmetaexec.MountRecord, error) {
+type coordinatorMountResolver struct {
+	coord mountLookupClient
+	ttl   time.Duration
+	now   func() time.Time
+
+	mu      sync.Mutex
+	entries map[fsmeta.MountID]mountCacheEntry
+}
+
+type mountCacheEntry struct {
+	record    fsmetaexec.MountRecord
+	err       error
+	expiresAt time.Time
+}
+
+func (r *coordinatorMountResolver) ResolveMount(ctx context.Context, mount fsmeta.MountID) (fsmetaexec.MountRecord, error) {
 	if r.coord == nil {
 		return fsmetaexec.MountRecord{}, fmt.Errorf("mount resolver is not configured")
+	}
+	now := r.currentTime()
+	if record, err, ok := r.cached(mount, now); ok {
+		return record, err
 	}
 	resp, err := r.coord.GetMount(ctx, &coordpb.GetMountRequest{MountId: string(mount)})
 	if err != nil {
 		return fsmetaexec.MountRecord{}, err
 	}
+	record, err := mountRecordFromResponse(resp)
+	r.store(mount, now, record, err)
+	return record, err
+}
+
+func (r *coordinatorMountResolver) currentTime() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now()
+}
+
+func (r *coordinatorMountResolver) cached(mount fsmeta.MountID, now time.Time) (fsmetaexec.MountRecord, error, bool) {
+	if r.ttl <= 0 {
+		return fsmetaexec.MountRecord{}, nil, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, ok := r.entries[mount]
+	if !ok || !now.Before(entry.expiresAt) {
+		return fsmetaexec.MountRecord{}, nil, false
+	}
+	return entry.record, entry.err, true
+}
+
+func (r *coordinatorMountResolver) store(mount fsmeta.MountID, now time.Time, record fsmetaexec.MountRecord, err error) {
+	if r.ttl <= 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.entries == nil {
+		r.entries = make(map[fsmeta.MountID]mountCacheEntry)
+	}
+	r.entries[mount] = mountCacheEntry{
+		record:    record,
+		err:       err,
+		expiresAt: now.Add(r.ttl),
+	}
+}
+
+func mountRecordFromResponse(resp *coordpb.GetMountResponse) (fsmetaexec.MountRecord, error) {
 	if resp == nil || resp.GetNotFound() {
 		return fsmetaexec.MountRecord{}, fsmeta.ErrMountNotRegistered
 	}
