@@ -185,6 +185,45 @@ func TestRouterRejectsExpiredResumeCursor(t *testing.T) {
 	require.ErrorIs(t, err, fsmeta.ErrWatchCursorExpired)
 }
 
+func TestRouterRetiresMountSubscriptions(t *testing.T) {
+	router := NewRouter()
+	volPrefix, err := fsmeta.EncodeDentryPrefix("vol", fsmeta.RootInode)
+	require.NoError(t, err)
+	otherPrefix, err := fsmeta.EncodeDentryPrefix("other", fsmeta.RootInode)
+	require.NoError(t, err)
+	volSub, err := router.Subscribe(context.Background(), fsmeta.WatchRequest{
+		Mount:     "vol",
+		RootInode: fsmeta.RootInode,
+	})
+	require.NoError(t, err)
+	otherSub, err := router.Subscribe(context.Background(), fsmeta.WatchRequest{
+		Mount:     "other",
+		RootInode: fsmeta.RootInode,
+	})
+	require.NoError(t, err)
+	defer otherSub.Close()
+
+	require.Equal(t, 1, router.RetireMount("vol"))
+	_, ok := <-volSub.Events()
+	require.False(t, ok)
+	require.ErrorIs(t, volSub.Err(), fsmeta.ErrMountRetired)
+
+	evt := fsmeta.WatchEvent{
+		Cursor:        fsmeta.WatchCursor{RegionID: 1, Term: 1, Index: 10},
+		CommitVersion: 20,
+		Source:        fsmeta.WatchEventSourceCommit,
+		Key:           append(otherPrefix, []byte("entry")...),
+	}
+	router.Publish(fsmeta.WatchEvent{
+		Cursor:        fsmeta.WatchCursor{RegionID: 1, Term: 1, Index: 9},
+		CommitVersion: 19,
+		Source:        fsmeta.WatchEventSourceCommit,
+		Key:           append(volPrefix, []byte("entry")...),
+	})
+	router.Publish(evt)
+	require.Equal(t, evt, <-otherSub.Events())
+}
+
 func TestWatchPrefixRejectsRecursiveInodeSubtree(t *testing.T) {
 	_, err := fsmeta.WatchPrefix(fsmeta.WatchRequest{
 		Mount:              "vol",
