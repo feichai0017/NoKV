@@ -416,6 +416,75 @@ func TestServiceStoreHeartbeatRequiresRootedMembership(t *testing.T) {
 	require.Empty(t, getResp.GetStore().GetClientAddr())
 }
 
+// TestServiceRefreshFromStorageRestoresStoreMembership verifies the full
+// Stage 2.1 restart-restore chain end-to-end: a freshly constructed Service
+// pointed at a populated rooted snapshot must rebuild the in-memory store
+// membership view after RefreshFromStorage so that:
+//
+//   - heartbeats from active members are accepted without re-publishing
+//     StoreJoined,
+//   - retired members are reported as TOMBSTONE through GetStore, and
+//   - heartbeats from retired members are rejected with FailedPrecondition.
+//
+// This closes the audit gap where every component along the chain
+// (state.ApplyEventToSnapshot, fakeStorage.AppendRootEvent,
+// publishRootSnapshot, Cluster.ReplaceRootSnapshot,
+// Cluster.replaceStoreMemberships) was tested in isolation but the full
+// "coordinator restart from durable snapshot" path was not.
+func TestServiceRefreshFromStorageRestoresStoreMembership(t *testing.T) {
+	storage := &fakeStorage{
+		leader: true,
+		snapshot: rootview.Snapshot{
+			Stores: map[uint64]rootstate.StoreMembership{
+				11: {
+					StoreID:  11,
+					State:    rootstate.StoreMembershipActive,
+					JoinedAt: rootstate.Cursor{Term: 1, Index: 1},
+				},
+				12: {
+					StoreID:   12,
+					State:     rootstate.StoreMembershipRetired,
+					JoinedAt:  rootstate.Cursor{Term: 1, Index: 2},
+					RetiredAt: rootstate.Cursor{Term: 1, Index: 3},
+				},
+			},
+			Descriptors: make(map[uint64]descriptor.Descriptor),
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1), storage)
+
+	require.NoError(t, svc.RefreshFromStorage())
+
+	// Active member: heartbeat accepted without re-publishing StoreJoined.
+	resp, err := svc.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
+		StoreId:    11,
+		ClientAddr: "127.0.0.1:20171",
+	})
+	require.NoError(t, err)
+	require.True(t, resp.GetAccepted())
+
+	getActive, err := svc.GetStore(context.Background(), &coordpb.GetStoreRequest{StoreId: 11})
+	require.NoError(t, err)
+	require.Equal(t, "127.0.0.1:20171", getActive.GetStore().GetClientAddr())
+
+	// Retired member: surfaced as TOMBSTONE; heartbeat rejected.
+	getRetired, err := svc.GetStore(context.Background(), &coordpb.GetStoreRequest{StoreId: 12})
+	require.NoError(t, err)
+	require.Equal(t, coordpb.StoreState_STORE_STATE_TOMBSTONE, getRetired.GetStore().GetState())
+
+	_, err = svc.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
+		StoreId:    12,
+		ClientAddr: "127.0.0.1:20172",
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+
+	// A store that was never joined remains rejected even after restore.
+	_, err = svc.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{StoreId: 99})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+}
+
 func TestServiceDiagnosticsSnapshot(t *testing.T) {
 	now := time.Unix(100, 0)
 	storage := &fakeStorage{
