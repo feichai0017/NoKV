@@ -342,8 +342,96 @@ func (e *Executor) scanDentries(ctx context.Context, plan fsmeta.OperationPlan, 
 	return out, nil
 }
 
-// Unlink removes one dentry. V0 intentionally leaves inode link-count and GC
-// outside this operation slice.
+// Link creates a second dentry for an existing non-directory inode and bumps
+// the inode link count in the same transaction.
+func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
+	plan, err := fsmeta.PlanLink(req)
+	if err != nil {
+		return err
+	}
+	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
+		return err
+	}
+	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+		record, err := e.readDentry(ctx, plan.ReadKeys[0], startVersion)
+		if err != nil {
+			return err
+		}
+		if record.Type == fsmeta.InodeTypeDirectory {
+			return fsmeta.ErrInvalidRequest
+		}
+		if _, err := e.readDentry(ctx, plan.ReadKeys[1], startVersion); err == nil {
+			return fsmeta.ErrExists
+		} else if !errors.Is(err, fsmeta.ErrNotFound) {
+			return err
+		}
+		inode, ok, err := e.readInode(ctx, req.Mount, record.Inode, startVersion)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fsmeta.ErrNotFound
+		}
+		if inode.Type == fsmeta.InodeTypeDirectory {
+			return fsmeta.ErrInvalidRequest
+		}
+		if inode.LinkCount == ^uint32(0) {
+			return fsmeta.ErrInvalidRequest
+		}
+		if inode.LinkCount == 0 {
+			inode.LinkCount = 1
+		}
+		inode.LinkCount++
+
+		dentryValue, err := fsmeta.EncodeDentryValue(fsmeta.DentryRecord{
+			Parent: req.ToParent,
+			Name:   req.ToName,
+			Inode:  record.Inode,
+			Type:   record.Type,
+		})
+		if err != nil {
+			return err
+		}
+		inodeKey, err := fsmeta.EncodeInodeKey(req.Mount, inode.Inode)
+		if err != nil {
+			return err
+		}
+		inodeValue, err := fsmeta.EncodeInodeValue(inode)
+		if err != nil {
+			return err
+		}
+		mutations := []*kvrpcpb.Mutation{
+			{
+				Op:                kvrpcpb.Mutation_Put,
+				Key:               cloneBytes(plan.ReadKeys[1]),
+				Value:             dentryValue,
+				AssertionNotExist: true,
+			},
+			{
+				Op:    kvrpcpb.Mutation_Put,
+				Key:   inodeKey,
+				Value: inodeValue,
+			},
+		}
+		quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
+			Mount:  req.Mount,
+			Scope:  req.ToParent,
+			Bytes:  inodeSizeDelta(inode.Size),
+			Inodes: 1,
+		}}, startVersion)
+		if err != nil {
+			return err
+		}
+		mutations = append(mutations, quotaMutations...)
+		return e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Unlink removes one dentry, decrements its inode link count, and deletes the
+// inode record when the last dentry goes away.
 func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 	plan, err := fsmeta.PlanUnlink(req)
 	if err != nil {
@@ -352,37 +440,44 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
 		return err
 	}
-	var releasedBytes uint64
-	var released bool
-	mutations := []*kvrpcpb.Mutation{{
-		Op:  kvrpcpb.Mutation_Delete,
-		Key: cloneBytes(plan.MutateKeys[0]),
-	}}
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
 		record, err := e.readDentry(ctx, plan.PrimaryKey, startVersion)
 		if err != nil {
 			return err
 		}
+		mutations := []*kvrpcpb.Mutation{{
+			Op:  kvrpcpb.Mutation_Delete,
+			Key: cloneBytes(plan.MutateKeys[0]),
+		}}
 		if inode, ok, err := e.readInode(ctx, req.Mount, record.Inode, startVersion); err != nil {
 			return err
 		} else if ok {
-			releasedBytes = inode.Size
-			released = true
-		}
-		all := cloneMutations(mutations)
-		if released {
+			inodeKey, err := fsmeta.EncodeInodeKey(req.Mount, inode.Inode)
+			if err != nil {
+				return err
+			}
+			if inode.LinkCount <= 1 {
+				mutations = append(mutations, &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Delete, Key: inodeKey})
+			} else {
+				inode.LinkCount--
+				inodeValue, err := fsmeta.EncodeInodeValue(inode)
+				if err != nil {
+					return err
+				}
+				mutations = append(mutations, &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: inodeKey, Value: inodeValue})
+			}
 			quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
 				Mount:  req.Mount,
 				Scope:  req.Parent,
-				Bytes:  -inodeSizeDelta(releasedBytes),
+				Bytes:  -inodeSizeDelta(inode.Size),
 				Inodes: -1,
 			}}, startVersion)
 			if err != nil {
 				return err
 			}
-			all = append(all, quotaMutations...)
+			mutations = append(mutations, quotaMutations...)
 		}
-		return e.runner.Mutate(ctx, plan.PrimaryKey, all, startVersion, commitVersion, e.lockTTL)
+		return e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
 	}); err != nil {
 		return err
 	}

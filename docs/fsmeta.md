@@ -46,7 +46,7 @@ Stage 1 intentionally keeps the model small:
 |---|---|
 | Dentry and inode binary codecs | Implemented |
 | Plan-driven operation contracts | Implemented |
-| Create / Lookup / ReadDir / ReadDirPlus / RenameSubtree / Unlink | Implemented |
+| Create / Lookup / ReadDir / ReadDirPlus / RenameSubtree / Link / Unlink | Implemented |
 | Cross-region 2PC consumption | Implemented through `raftstore/client` |
 | Server-side `AssertionNotExist` | Implemented in Percolator prewrite |
 | Native gRPC service and typed Go client | Implemented |
@@ -56,15 +56,17 @@ Stage 1 intentionally keeps the model small:
 | Historical watch catch-up | Implemented in Stage 3.1 |
 | Rooted mount lifecycle | Implemented in Stage 3.2 |
 | Rooted quota fence and persisted usage counters | Implemented in Stage 3.5 |
-| Hardlink ref-count, inode GC, xattrs | Future work |
+| Hardlink ref-count and last-link inode GC | Implemented |
+| xattrs | Future work |
 
 The current service is a metadata substrate, not a complete filesystem stack.
-FUSE, POSIX compatibility, hardlink semantics, recursive subtree
-materialization, and snapshot GC retention enforcement belong to later stages.
+FUSE, full POSIX compatibility, recursive subtree materialization, and snapshot
+GC retention enforcement belong to later stages.
 
-`Unlink` currently removes one dentry only. It does not decrement
-`InodeRecord.LinkCount` and does not garbage-collect unreachable inode records;
-callers must treat inode GC as a future Stage 4 responsibility.
+`Link` creates an additional dentry for an existing non-directory inode and
+increments `InodeRecord.LinkCount` in the same transaction. `Unlink` decrements
+the link count and deletes the inode record when the last dentry is removed.
+Directory hard links remain invalid.
 
 ## Mount Lifecycle
 

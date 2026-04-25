@@ -29,6 +29,7 @@ const (
 	Coordinator_ListSubtreeAuthorities_FullMethodName = "/nokv.coordinator.v1.Coordinator/ListSubtreeAuthorities"
 	Coordinator_GetQuotaFence_FullMethodName          = "/nokv.coordinator.v1.Coordinator/GetQuotaFence"
 	Coordinator_ListQuotaFences_FullMethodName        = "/nokv.coordinator.v1.Coordinator/ListQuotaFences"
+	Coordinator_WatchRootEvents_FullMethodName        = "/nokv.coordinator.v1.Coordinator/WatchRootEvents"
 	Coordinator_RegionLiveness_FullMethodName         = "/nokv.coordinator.v1.Coordinator/RegionLiveness"
 	Coordinator_PublishRootEvent_FullMethodName       = "/nokv.coordinator.v1.Coordinator/PublishRootEvent"
 	Coordinator_ListTransitions_FullMethodName        = "/nokv.coordinator.v1.Coordinator/ListTransitions"
@@ -51,6 +52,7 @@ type CoordinatorClient interface {
 	ListSubtreeAuthorities(ctx context.Context, in *ListSubtreeAuthoritiesRequest, opts ...grpc.CallOption) (*ListSubtreeAuthoritiesResponse, error)
 	GetQuotaFence(ctx context.Context, in *GetQuotaFenceRequest, opts ...grpc.CallOption) (*GetQuotaFenceResponse, error)
 	ListQuotaFences(ctx context.Context, in *ListQuotaFencesRequest, opts ...grpc.CallOption) (*ListQuotaFencesResponse, error)
+	WatchRootEvents(ctx context.Context, in *WatchRootEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchRootEventsResponse], error)
 	RegionLiveness(ctx context.Context, in *RegionLivenessRequest, opts ...grpc.CallOption) (*RegionLivenessResponse, error)
 	PublishRootEvent(ctx context.Context, in *PublishRootEventRequest, opts ...grpc.CallOption) (*PublishRootEventResponse, error)
 	ListTransitions(ctx context.Context, in *ListTransitionsRequest, opts ...grpc.CallOption) (*ListTransitionsResponse, error)
@@ -149,6 +151,25 @@ func (c *coordinatorClient) ListQuotaFences(ctx context.Context, in *ListQuotaFe
 	return out, nil
 }
 
+func (c *coordinatorClient) WatchRootEvents(ctx context.Context, in *WatchRootEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchRootEventsResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Coordinator_ServiceDesc.Streams[0], Coordinator_WatchRootEvents_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchRootEventsRequest, WatchRootEventsResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Coordinator_WatchRootEventsClient = grpc.ServerStreamingClient[WatchRootEventsResponse]
+
 func (c *coordinatorClient) RegionLiveness(ctx context.Context, in *RegionLivenessRequest, opts ...grpc.CallOption) (*RegionLivenessResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RegionLivenessResponse)
@@ -241,6 +262,7 @@ type CoordinatorServer interface {
 	ListSubtreeAuthorities(context.Context, *ListSubtreeAuthoritiesRequest) (*ListSubtreeAuthoritiesResponse, error)
 	GetQuotaFence(context.Context, *GetQuotaFenceRequest) (*GetQuotaFenceResponse, error)
 	ListQuotaFences(context.Context, *ListQuotaFencesRequest) (*ListQuotaFencesResponse, error)
+	WatchRootEvents(*WatchRootEventsRequest, grpc.ServerStreamingServer[WatchRootEventsResponse]) error
 	RegionLiveness(context.Context, *RegionLivenessRequest) (*RegionLivenessResponse, error)
 	PublishRootEvent(context.Context, *PublishRootEventRequest) (*PublishRootEventResponse, error)
 	ListTransitions(context.Context, *ListTransitionsRequest) (*ListTransitionsResponse, error)
@@ -281,6 +303,9 @@ func (UnimplementedCoordinatorServer) GetQuotaFence(context.Context, *GetQuotaFe
 }
 func (UnimplementedCoordinatorServer) ListQuotaFences(context.Context, *ListQuotaFencesRequest) (*ListQuotaFencesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListQuotaFences not implemented")
+}
+func (UnimplementedCoordinatorServer) WatchRootEvents(*WatchRootEventsRequest, grpc.ServerStreamingServer[WatchRootEventsResponse]) error {
+	return status.Error(codes.Unimplemented, "method WatchRootEvents not implemented")
 }
 func (UnimplementedCoordinatorServer) RegionLiveness(context.Context, *RegionLivenessRequest) (*RegionLivenessResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegionLiveness not implemented")
@@ -469,6 +494,17 @@ func _Coordinator_ListQuotaFences_Handler(srv interface{}, ctx context.Context, 
 	}
 	return interceptor(ctx, in, info, handler)
 }
+
+func _Coordinator_WatchRootEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchRootEventsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(CoordinatorServer).WatchRootEvents(m, &grpc.GenericServerStream[WatchRootEventsRequest, WatchRootEventsResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Coordinator_WatchRootEventsServer = grpc.ServerStreamingServer[WatchRootEventsResponse]
 
 func _Coordinator_RegionLiveness_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RegionLivenessRequest)
@@ -686,6 +722,12 @@ var Coordinator_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Coordinator_Tso_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "WatchRootEvents",
+			Handler:       _Coordinator_WatchRootEvents_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "coordinator/coordinator.proto",
 }
