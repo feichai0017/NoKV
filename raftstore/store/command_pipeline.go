@@ -32,6 +32,8 @@ type commandPipeline struct {
 	applier   func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error)
 }
 
+type applyEventEmitter func(myraft.Entry, *raftcmdpb.RaftCmdRequest, *raftcmdpb.RaftCmdResponse)
+
 func newCommandPipeline(applier func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error)) *commandPipeline {
 	return &commandPipeline{
 		proposals: make(map[uint64]*commandProposal),
@@ -87,9 +89,13 @@ func (cp *commandPipeline) completeProposal(id uint64, resp *raftcmdpb.RaftCmdRe
 	close(prop.ch)
 }
 
-func (cp *commandPipeline) applyEntries(entries []myraft.Entry) error {
+func (cp *commandPipeline) applyEntries(entries []myraft.Entry, emitters ...applyEventEmitter) error {
 	if cp == nil {
 		return fmt.Errorf("commandPipeline: pipeline is nil")
+	}
+	var emit applyEventEmitter
+	if len(emitters) > 0 {
+		emit = emitters[0]
 	}
 	for _, entry := range entries {
 		if entry.Type != myraft.EntryNormal {
@@ -114,6 +120,9 @@ func (cp *commandPipeline) applyEntries(entries []myraft.Entry) error {
 			cp.completeProposal(requestID, nil, applyErr)
 			return fmt.Errorf("commandPipeline: apply request %d failed: %w", requestID, applyErr)
 		}
+		if emit != nil {
+			emit(entry, req, resp)
+		}
 		cp.completeProposal(req.GetHeader().GetRequestId(), resp, nil)
 	}
 	return nil
@@ -126,5 +135,5 @@ func (s *Store) applyEntries(entries []myraft.Entry) error {
 	if s.cmds == nil || s.cmds.pipe == nil {
 		return errCommandApplyWithoutHandler
 	}
-	return s.cmds.pipe.applyEntries(entries)
+	return s.cmds.pipe.applyEntries(entries, s.emitApplyEvents)
 }
