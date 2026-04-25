@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
@@ -37,8 +38,10 @@ type keyConflictError interface {
 
 // Executor interprets fsmeta operation plans against a TxnRunner.
 type Executor struct {
-	runner  TxnRunner
-	lockTTL uint64
+	runner                 TxnRunner
+	lockTTL                uint64
+	txnRetriesTotal        atomic.Uint64
+	txnRetryExhaustedTotal atomic.Uint64
 }
 
 // Option configures an Executor.
@@ -68,6 +71,20 @@ func New(runner TxnRunner, opts ...Option) (*Executor, error) {
 		}
 	}
 	return executor, nil
+}
+
+// Stats returns executor counters suitable for expvar export.
+func (e *Executor) Stats() map[string]any {
+	if e == nil {
+		return map[string]any{
+			"txn_retries_total":         uint64(0),
+			"txn_retry_exhausted_total": uint64(0),
+		}
+	}
+	return map[string]any{
+		"txn_retries_total":         e.txnRetriesTotal.Load(),
+		"txn_retry_exhausted_total": e.txnRetryExhaustedTotal.Load(),
+	}
 }
 
 // Create creates one dentry and its inode record in a single transaction.
@@ -343,6 +360,11 @@ func (e *Executor) withTxnRetry(ctx context.Context, run func(startVersion, comm
 			return translateMutateError(err)
 		}
 		last = err
+		if attempt == maxCommitTsExpiredRetries {
+			e.txnRetryExhaustedTotal.Add(1)
+			break
+		}
+		e.txnRetriesTotal.Add(1)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
