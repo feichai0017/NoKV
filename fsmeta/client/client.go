@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetapb "github.com/feichai0017/NoKV/pb/fsmeta"
@@ -22,7 +23,10 @@ type Client interface {
 	ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
 	WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) (WatchSubscription, error)
 	SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error)
-	Rename(ctx context.Context, req fsmeta.RenameRequest) error
+	RetireSnapshotSubtree(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error
+	GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error)
+	RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error
+	Link(ctx context.Context, req fsmeta.LinkRequest) error
 	Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
 	Close() error
 }
@@ -107,8 +111,9 @@ func (c *GRPCClient) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest)
 	return out, nil
 }
 
-// WatchSubtree opens a live prefix watch stream. v0 is live-only: ResumeCursor
-// is accepted on the wire but no catch-up replay is performed by the client.
+// WatchSubtree opens a prefix watch stream. When ResumeCursor is set, the
+// server replays retained events after that cursor before switching to live
+// delivery.
 func (c *GRPCClient) WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) (WatchSubscription, error) {
 	if err := c.requireRPC(); err != nil {
 		return nil, err
@@ -122,11 +127,12 @@ func (c *GRPCClient) WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) 
 	}); err != nil {
 		return nil, translateRPCError(err)
 	}
-	if err := waitForWatchReady(stream); err != nil {
+	ready, err := waitForWatchReady(stream)
+	if err != nil {
 		_ = stream.CloseSend()
 		return nil, err
 	}
-	return &WatchStream{stream: stream}, nil
+	return &WatchStream{stream: stream, ready: ready}, nil
 }
 
 func (c *GRPCClient) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
@@ -140,11 +146,38 @@ func (c *GRPCClient) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSub
 	return snapshotSubtreeTokenFromProto(resp), nil
 }
 
-func (c *GRPCClient) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
+func (c *GRPCClient) RetireSnapshotSubtree(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error {
 	if err := c.requireRPC(); err != nil {
 		return err
 	}
-	_, err := c.rpc.Rename(ctx, renameRequestToProto(req))
+	_, err := c.rpc.RetireSnapshotSubtree(ctx, retireSnapshotSubtreeRequestToProto(token))
+	return translateRPCError(err)
+}
+
+func (c *GRPCClient) GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error) {
+	if err := c.requireRPC(); err != nil {
+		return fsmeta.UsageRecord{}, err
+	}
+	resp, err := c.rpc.GetQuotaUsage(ctx, quotaUsageRequestToProto(req))
+	if err != nil {
+		return fsmeta.UsageRecord{}, translateRPCError(err)
+	}
+	return quotaUsageFromProto(resp), nil
+}
+
+func (c *GRPCClient) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error {
+	if err := c.requireRPC(); err != nil {
+		return err
+	}
+	_, err := c.rpc.RenameSubtree(ctx, renameSubtreeRequestToProto(req))
+	return translateRPCError(err)
+}
+
+func (c *GRPCClient) Link(ctx context.Context, req fsmeta.LinkRequest) error {
+	if err := c.requireRPC(); err != nil {
+		return err
+	}
+	_, err := c.rpc.Link(ctx, linkRequestToProto(req))
 	return translateRPCError(err)
 }
 
@@ -159,6 +192,7 @@ func (c *GRPCClient) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
 // WatchSubscription is one typed WatchSubtree client stream.
 type WatchSubscription interface {
 	Recv() (fsmeta.WatchEvent, error)
+	ReadyCursor() fsmeta.WatchCursor
 	Ack(fsmeta.WatchCursor) error
 	Close() error
 }
@@ -166,6 +200,7 @@ type WatchSubscription interface {
 // WatchStream is the gRPC-backed WatchSubtree stream implementation.
 type WatchStream struct {
 	stream fsmetapb.FSMetadata_WatchSubtreeClient
+	ready  fsmeta.WatchCursor
 }
 
 // Recv blocks until the next watch event arrives.
@@ -188,22 +223,31 @@ func (s *WatchStream) Recv() (fsmeta.WatchEvent, error) {
 	}
 }
 
-func waitForWatchReady(stream fsmetapb.FSMetadata_WatchSubtreeClient) error {
+func waitForWatchReady(stream fsmetapb.FSMetadata_WatchSubtreeClient) (fsmeta.WatchCursor, error) {
 	for {
 		resp, err := stream.Recv()
 		if err != nil {
-			return translateRPCError(err)
+			return fsmeta.WatchCursor{}, translateRPCError(err)
 		}
-		if resp.GetReady() != nil {
-			return nil
+		if ready := resp.GetReady(); ready != nil {
+			return watchCursorFromProto(ready.GetCursor()), nil
 		}
 		if throttle := resp.GetThrottle(); throttle != nil {
-			return fmt.Errorf("%w: %s", fsmeta.ErrWatchOverflow, throttle.GetReason())
+			return fsmeta.WatchCursor{}, fmt.Errorf("%w: %s", fsmeta.ErrWatchOverflow, throttle.GetReason())
 		}
 		if resp.GetEvent() != nil {
-			return errors.New("fsmeta/client: watch stream delivered event before ready")
+			return fsmeta.WatchCursor{}, errors.New("fsmeta/client: watch stream delivered event before ready")
 		}
 	}
+}
+
+// ReadyCursor returns the server frontier after the subscription's initial
+// catch-up replay was queued.
+func (s *WatchStream) ReadyCursor() fsmeta.WatchCursor {
+	if s == nil {
+		return fsmeta.WatchCursor{}
+	}
+	return s.ready
 }
 
 // Ack releases back-pressure budget for a received event.
@@ -214,6 +258,11 @@ func (s *WatchStream) Ack(cursor fsmeta.WatchCursor) error {
 	return translateRPCError(s.stream.Send(&fsmetapb.WatchAckOrSubscribe{
 		Body: &fsmetapb.WatchAckOrSubscribe_Ack{Ack: &fsmetapb.WatchAck{Cursor: watchCursorToProto(cursor)}},
 	}))
+}
+
+// AckEvent releases back-pressure budget for a received event.
+func (s *WatchStream) AckEvent(evt fsmeta.WatchEvent) error {
+	return s.Ack(evt.Cursor)
 }
 
 // Close closes the sending side of the watch stream.
@@ -248,9 +297,62 @@ func translateRPCError(err error) error {
 		return fmt.Errorf("%w: %v", fsmeta.ErrExists, err)
 	case codes.NotFound:
 		return fmt.Errorf("%w: %v", fsmeta.ErrNotFound, err)
+	case codes.OutOfRange:
+		return fmt.Errorf("%w: %v", fsmeta.ErrWatchCursorExpired, err)
+	case codes.ResourceExhausted:
+		msg := status.Convert(err).Message()
+		if strings.Contains(msg, fsmeta.ErrQuotaExceeded.Error()) {
+			return fmt.Errorf("%w: %v", fsmeta.ErrQuotaExceeded, err)
+		}
+		if strings.Contains(msg, fsmeta.ErrWatchOverflow.Error()) {
+			return fmt.Errorf("%w: %v", fsmeta.ErrWatchOverflow, err)
+		}
+		return err
 	default:
 		return err
 	}
+}
+
+// WatchSession wraps a WatchSubscription with event-based ack helpers.
+type WatchSession struct {
+	sub WatchSubscription
+}
+
+// NewWatchSession constructs a helper around one watch subscription.
+func NewWatchSession(sub WatchSubscription) *WatchSession {
+	return &WatchSession{sub: sub}
+}
+
+// Recv receives the next watch event.
+func (s *WatchSession) Recv() (fsmeta.WatchEvent, error) {
+	if s == nil || s.sub == nil {
+		return fsmeta.WatchEvent{}, errors.New("fsmeta/client: watch session is not configured")
+	}
+	return s.sub.Recv()
+}
+
+// Ack acknowledges the cursor carried by event.
+func (s *WatchSession) Ack(event fsmeta.WatchEvent) error {
+	if s == nil || s.sub == nil {
+		return errors.New("fsmeta/client: watch session is not configured")
+	}
+	return s.sub.Ack(event.Cursor)
+}
+
+// ReadyCursor returns the server frontier after initial replay.
+func (s *WatchSession) ReadyCursor() fsmeta.WatchCursor {
+	if s == nil || s.sub == nil {
+		return fsmeta.WatchCursor{}
+	}
+	return s.sub.ReadyCursor()
+}
+
+// Close closes the wrapped subscription.
+func (s *WatchSession) Close() error {
+	if s == nil || s.sub == nil {
+		return nil
+	}
+	return s.sub.Close()
 }
 
 func normalizeDialOptions(opts []grpc.DialOption) []grpc.DialOption {

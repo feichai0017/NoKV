@@ -99,13 +99,13 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	})
 	require.Equal(t, frontiers, filtered)
 
-	protocolState := rootstate.SuccessionState{
+	protocolState := rootstate.EunomiaState{
 		Tenure:   state.Tenure,
 		Legacy:   state.Legacy,
 		Handover: state.Handover,
 	}
-	require.Equal(t, protocolState, RootSuccessionStateFromProto(RootSuccessionStateToProto(protocolState)))
-	require.Equal(t, rootstate.SuccessionState{}, RootSuccessionStateFromProto(nil))
+	require.Equal(t, protocolState, RootEunomiaStateFromProto(RootEunomiaStateToProto(protocolState)))
+	require.Equal(t, rootstate.EunomiaState{}, RootEunomiaStateFromProto(nil))
 
 	leaseCmd := rootproto.TenureCommand{
 		Kind:               rootproto.TenureActRelease,
@@ -166,6 +166,25 @@ func TestRootSnapshotTailAndAllocatorRoundTrip(t *testing.T) {
 				RootInode:   42,
 				ReadVersion: 99,
 				PublishedAt: rootproto.Cursor{Term: 2, Index: 9},
+			},
+		},
+		Mounts: map[string]rootstate.MountRecord{
+			"vol": {
+				MountID:       "vol",
+				RootInode:     1,
+				SchemaVersion: 1,
+				State:         rootstate.MountStateActive,
+				RegisteredAt:  rootproto.Cursor{Term: 2, Index: 10},
+			},
+		},
+		Quotas: map[string]rootstate.QuotaFence{
+			rootstate.QuotaFenceKey("vol", 0): {
+				SubjectID:   rootstate.QuotaFenceKey("vol", 0),
+				Mount:       "vol",
+				LimitBytes:  4096,
+				LimitInodes: 10,
+				Era:         2,
+				UpdatedAt:   rootproto.Cursor{Term: 2, Index: 11},
 			},
 		},
 		Descriptors: map[uint64]descriptor.Descriptor{
@@ -269,6 +288,12 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.HandoverClosed("coord", 7, 8, "seal"),
 		rootevent.SnapshotEpochPublished("vol", 42, 99),
 		rootevent.SnapshotEpochRetired("vol", 42, 99),
+		rootevent.MountRegistered("vol", 1, 1),
+		rootevent.MountRetired("vol"),
+		rootevent.SubtreeAuthorityDeclared("vol", 1, "vol", 0, 10),
+		rootevent.SubtreeHandoffStarted("vol", 1, 11),
+		rootevent.SubtreeHandoffCompleted("vol", 1, 12),
+		rootevent.QuotaFenceUpdated("vol", 1, 4096, 10, 2, 99),
 		rootevent.RegionDescriptorPublished(desc),
 		rootevent.RegionTombstoned(desc.RegionID),
 		rootevent.RegionSplitCancelled(desc.RegionID, []byte("f"), left, right, base),
@@ -295,10 +320,16 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 	require.Nil(t, rootEventLegacyToProto(nil))
 	require.Nil(t, rootEventHandoverToProto(nil))
 	require.Nil(t, rootEventSnapshotEpochToProto(nil))
+	require.Nil(t, rootEventMountToProto(nil))
+	require.Nil(t, rootEventSubtreeAuthorityToProto(nil))
+	require.Nil(t, rootEventQuotaFenceToProto(nil))
 	require.Nil(t, rootEventTenureFromProto(nil))
 	require.Nil(t, rootEventLegacyFromProto(nil))
 	require.Nil(t, rootEventHandoverFromProto(nil))
 	require.Nil(t, rootEventSnapshotEpochFromProto(nil))
+	require.Nil(t, rootEventMountFromProto(nil))
+	require.Nil(t, rootEventSubtreeAuthorityFromProto(nil))
+	require.Nil(t, rootEventQuotaFenceFromProto(nil))
 
 	kinds := []rootevent.Kind{
 		rootevent.KindStoreJoined,
@@ -325,6 +356,12 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.KindHandover,
 		rootevent.KindSnapshotEpochPublished,
 		rootevent.KindSnapshotEpochRetired,
+		rootevent.KindMountRegistered,
+		rootevent.KindMountRetired,
+		rootevent.KindSubtreeAuthorityDeclared,
+		rootevent.KindSubtreeHandoffStarted,
+		rootevent.KindSubtreeHandoffCompleted,
+		rootevent.KindQuotaFenceUpdated,
 	}
 	for _, kind := range kinds {
 		require.Equal(t, kind, rootEventKindFromProto(rootEventKindToProto(kind)))

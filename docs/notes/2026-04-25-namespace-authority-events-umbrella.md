@@ -5,7 +5,7 @@
 - 🧭 主题：给 Stage 2 的 namespace / subtree / snapshot / quota primitive 预先统一 rooted event 边界
 - 🧱 核心对象：Mount、Subtree、SnapshotEpoch、QuotaFence、StoreMembership
 - 🔁 调用链：`fsmeta/server -> coordinator/meta-root command -> rooted event -> coordinator/runtime view -> raftstore/fsmeta primitive`
-- 📚 参考对象：NoKV Succession、`meta/root` rooted truth、DaisyNFS / FSCQ 的 verified metadata 边界、TiKV PD 的 membership / runtime view 分层
+- 📚 参考对象：NoKV Eunomia、`meta/root` rooted truth、DaisyNFS / FSCQ 的 verified metadata 边界、TiKV PD 的 membership / runtime view 分层
 
 ## 1. 结论
 
@@ -118,6 +118,14 @@ StoreRetired(store_id)
 
 Mount 是 fsmeta 的 namespace 根。Stage 2 不需要完整 POSIX mount，但需要一个 durable mount registry，避免每个 fsmeta caller 自己约定 mount string。
 
+Stage 3.2 已实现这条 registry：mount membership 进入 `meta/root` rooted truth，`nokv-fsmeta` 的写路径通过 coordinator mount view 做 admission，未注册或 retired mount 会被拒绝。
+
+Stage 3.4 进一步把这条 lifecycle 写成 `spec/MountLifecycle.tla`：
+
+- `MountRegistered` 只能把未出现过的 mount 变成 active；
+- `MountRetired` 是终态，retired mount 不能再次 active；
+- mount 的 root inode 和 schema version 属于 rooted identity，不是 runtime cache。
+
 建议 events：
 
 ```text
@@ -164,13 +172,22 @@ SubtreeHandoffStarted(mount_id, subtree_root, from_authority, to_authority, lega
 SubtreeHandoffCompleted(mount_id, subtree_root, authority_id, era, inherited_frontier)
 ```
 
-这套命名直接对应 Succession：
+这套命名直接对应 Eunomia：
 
 - `authority_id + era` 类似 Tenure；
 - `legacy_frontier` 类似 Legacy；
 - `handoff completed` 对应 Finality。
 
 Stage 2.2 的 `WatchSubtree` 可以先只使用 subtree prefix，不实现 authority handoff。但 event schema 要提前留出位置，避免 Stage 3 RenameSubtree 重构。
+
+Stage 3.4 已把这组 handoff 语义先落成 `spec/SubtreeAuthority.tla`。这个 spec 不建模 dentry 写入，只建模 authority 记录本身：
+
+- `Primacy`：每个 subtree 至多一个 active authority；
+- `Inheritance`：successor frontier 必须覆盖 predecessor frontier；
+- `Silence`：sealed authority 的 reply 不再 admissible；
+- `Finality`：sealed predecessor 必须处于 pending handoff 或 closed。
+
+Stage 3.3 的 `RenameSubtree v1` 应按这个 spec 实现 rooted handoff event，而不是重新发明一套 rename-local 状态机。
 
 ## 8. Snapshot epoch events
 
@@ -270,7 +287,7 @@ QuotaFenceUpdated(subject, limit_bytes, limit_inodes, era, frontier)
 1. 它有没有 rooted truth？
 2. 如果有，event 名是什么，payload 是否只包含 truth？
 3. 它对应的 runtime view 是什么？
-4. 它和 Succession / authority handoff 有没有关系？
+4. 它和 Eunomia / authority handoff 有没有关系？
 5. 它的四类测试在哪里？
 
 答不上来，就不写代码。

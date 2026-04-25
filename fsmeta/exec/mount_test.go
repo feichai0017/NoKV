@@ -1,0 +1,126 @@
+package exec
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
+	"github.com/stretchr/testify/require"
+)
+
+type fakeMountLookup struct {
+	calls int
+	resp  *coordpb.GetMountResponse
+	err   error
+}
+
+func (c *fakeMountLookup) GetMount(context.Context, *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error) {
+	c.calls++
+	return c.resp, c.err
+}
+
+func TestMountCacheReturnsActiveMount(t *testing.T) {
+	lookup := &fakeMountLookup{
+		resp: &coordpb.GetMountResponse{Mount: &coordpb.MountInfo{
+			MountId:       "vol",
+			RootInode:     1,
+			SchemaVersion: 1,
+			State:         coordpb.MountState_MOUNT_STATE_ACTIVE,
+		}},
+	}
+	now := time.Unix(100, 0)
+	cache := &mountCache{
+		coord: lookup,
+		ttl:   time.Minute,
+		now:   func() time.Time { return now },
+	}
+
+	first, err := cache.ResolveMount(context.Background(), fsmeta.MountID("vol"))
+	require.NoError(t, err)
+	second, err := cache.ResolveMount(context.Background(), fsmeta.MountID("vol"))
+	require.NoError(t, err)
+
+	require.Equal(t, 1, lookup.calls)
+	require.Equal(t, first, second)
+	require.Equal(t, fsmeta.MountID("vol"), first.MountID)
+	require.False(t, first.Retired)
+}
+
+func TestMountCacheRefreshesAfterTTL(t *testing.T) {
+	lookup := &fakeMountLookup{
+		resp: &coordpb.GetMountResponse{Mount: &coordpb.MountInfo{
+			MountId:       "vol",
+			RootInode:     1,
+			SchemaVersion: 1,
+			State:         coordpb.MountState_MOUNT_STATE_ACTIVE,
+		}},
+	}
+	now := time.Unix(100, 0)
+	cache := &mountCache{
+		coord: lookup,
+		ttl:   time.Second,
+		now:   func() time.Time { return now },
+	}
+
+	first, err := cache.ResolveMount(context.Background(), fsmeta.MountID("vol"))
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.InodeID(1), first.RootInode)
+
+	now = now.Add(2 * time.Second)
+	lookup.resp = &coordpb.GetMountResponse{Mount: &coordpb.MountInfo{
+		MountId:       "vol",
+		RootInode:     9,
+		SchemaVersion: 2,
+		State:         coordpb.MountState_MOUNT_STATE_RETIRED,
+	}}
+	second, err := cache.ResolveMount(context.Background(), fsmeta.MountID("vol"))
+	require.NoError(t, err)
+
+	require.Equal(t, 2, lookup.calls)
+	require.Equal(t, fsmeta.InodeID(9), second.RootInode)
+	require.True(t, second.Retired)
+}
+
+func TestMountCacheCachesNotFound(t *testing.T) {
+	lookup := &fakeMountLookup{resp: &coordpb.GetMountResponse{NotFound: true}}
+	now := time.Unix(100, 0)
+	cache := &mountCache{
+		coord: lookup,
+		ttl:   time.Minute,
+		now:   func() time.Time { return now },
+	}
+
+	_, err := cache.ResolveMount(context.Background(), fsmeta.MountID("missing"))
+	require.ErrorIs(t, err, fsmeta.ErrMountNotRegistered)
+	_, err = cache.ResolveMount(context.Background(), fsmeta.MountID("missing"))
+	require.ErrorIs(t, err, fsmeta.ErrMountNotRegistered)
+	require.Equal(t, 1, lookup.calls)
+	require.Equal(t, map[string]any{
+		"cache_hits_total":        uint64(1),
+		"cache_misses_total":      uint64(1),
+		"admission_rejects_total": uint64(2),
+	}, cache.Stats())
+}
+
+func TestWatcherRejectsRetiredMount(t *testing.T) {
+	lookup := &fakeMountLookup{
+		resp: &coordpb.GetMountResponse{Mount: &coordpb.MountInfo{
+			MountId:       "vol",
+			RootInode:     1,
+			SchemaVersion: 1,
+			State:         coordpb.MountState_MOUNT_STATE_RETIRED,
+		}},
+	}
+	cache := &mountCache{coord: lookup, ttl: time.Minute}
+	w := watcher{Router: fsmetawatch.NewRouter(), mounts: cache}
+
+	_, err := w.Subscribe(context.Background(), fsmeta.WatchRequest{
+		Mount:     "vol",
+		RootInode: fsmeta.RootInode,
+	})
+	require.ErrorIs(t, err, fsmeta.ErrMountRetired)
+	require.Equal(t, 1, lookup.calls)
+}

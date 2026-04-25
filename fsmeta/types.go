@@ -18,7 +18,7 @@
 //
 //   - fsmeta reuses percolator for cross-row atomicity, and may reuse
 //     meta/root's rooted-event substrate only for namespace-level authority
-//     where Succession semantics apply. Per-inode and per-dentry mutations are
+//     where Eunomia semantics apply. Per-inode and per-dentry mutations are
 //     data-plane writes, never rooted events.
 //
 // See docs/notes/2026-04-24-fsmeta-positioning.md for the market gap analysis
@@ -28,18 +28,21 @@ package fsmeta
 import "errors"
 
 var (
-	ErrInvalidMountID   = errors.New("fsmeta: invalid mount id")
-	ErrInvalidInodeID   = errors.New("fsmeta: invalid inode id")
-	ErrInvalidName      = errors.New("fsmeta: invalid name")
-	ErrInvalidSession   = errors.New("fsmeta: invalid session id")
-	ErrInvalidRequest   = errors.New("fsmeta: invalid request")
-	ErrInvalidKey       = errors.New("fsmeta: invalid key")
-	ErrInvalidKeyKind   = errors.New("fsmeta: invalid key kind")
-	ErrInvalidValue     = errors.New("fsmeta: invalid value")
-	ErrInvalidValueKind = errors.New("fsmeta: invalid value kind")
-	ErrInvalidPageSize  = errors.New("fsmeta: invalid page size")
-	ErrExists           = errors.New("fsmeta: entry exists")
-	ErrNotFound         = errors.New("fsmeta: entry not found")
+	ErrInvalidMountID     = errors.New("fsmeta: invalid mount id")
+	ErrInvalidInodeID     = errors.New("fsmeta: invalid inode id")
+	ErrInvalidName        = errors.New("fsmeta: invalid name")
+	ErrInvalidSession     = errors.New("fsmeta: invalid session id")
+	ErrInvalidRequest     = errors.New("fsmeta: invalid request")
+	ErrInvalidKey         = errors.New("fsmeta: invalid key")
+	ErrInvalidKeyKind     = errors.New("fsmeta: invalid key kind")
+	ErrInvalidValue       = errors.New("fsmeta: invalid value")
+	ErrInvalidValueKind   = errors.New("fsmeta: invalid value kind")
+	ErrInvalidPageSize    = errors.New("fsmeta: invalid page size")
+	ErrExists             = errors.New("fsmeta: entry exists")
+	ErrNotFound           = errors.New("fsmeta: entry not found")
+	ErrMountNotRegistered = errors.New("fsmeta: mount is not registered")
+	ErrMountRetired       = errors.New("fsmeta: mount is retired")
+	ErrQuotaExceeded      = errors.New("fsmeta: quota exceeded")
 )
 
 // MountID identifies one filesystem namespace hosted inside fsmeta.
@@ -67,6 +70,13 @@ type SnapshotSubtreeToken struct {
 	Mount       MountID
 	RootInode   InodeID
 	ReadVersion uint64
+}
+
+// QuotaUsageRequest addresses one usage counter. Scope 0 is mount-wide;
+// non-zero scopes are direct quota accounting roots.
+type QuotaUsageRequest struct {
+	Mount MountID
+	Scope InodeID
 }
 
 const (

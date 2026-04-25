@@ -160,19 +160,19 @@ func RootMandateFrontiersFromProto(frontiers []*metapb.RootMandateFrontier) root
 	return rootproto.NewMandateFrontiers(entries...)
 }
 
-func RootSuccessionStateToProto(state rootstate.SuccessionState) *metapb.RootSuccessionState {
-	return &metapb.RootSuccessionState{
+func RootEunomiaStateToProto(state rootstate.EunomiaState) *metapb.RootEunomiaState {
+	return &metapb.RootEunomiaState{
 		Tenure:   RootTenureToProto(state.Tenure),
 		Legacy:   RootLegacyToProto(state.Legacy),
 		Handover: RootHandoverToProto(state.Handover),
 	}
 }
 
-func RootSuccessionStateFromProto(state *metapb.RootSuccessionState) rootstate.SuccessionState {
+func RootEunomiaStateFromProto(state *metapb.RootEunomiaState) rootstate.EunomiaState {
 	if state == nil {
-		return rootstate.SuccessionState{}
+		return rootstate.EunomiaState{}
 	}
-	return rootstate.SuccessionState{
+	return rootstate.EunomiaState{
 		Tenure:   RootTenureFromProto(state.GetTenure()),
 		Legacy:   RootLegacyFromProto(state.GetLegacy()),
 		Handover: RootHandoverFromProto(state.GetHandover()),
@@ -339,6 +339,114 @@ func rootEventSnapshotEpochFromProto(epoch *metapb.RootSnapshotEpoch) *rootevent
 	}
 }
 
+func rootEventMountToProto(mount *rootevent.Mount) *metapb.RootMount {
+	if mount == nil {
+		return nil
+	}
+	return &metapb.RootMount{
+		MountId:       mount.MountID,
+		RootInode:     mount.RootInode,
+		SchemaVersion: mount.SchemaVersion,
+		RegisteredAt:  RootCursorToProto(mount.RegisteredAt),
+		RetiredAt:     RootCursorToProto(mount.RetiredAt),
+	}
+}
+
+func rootEventMountFromProto(mount *metapb.RootMount) *rootevent.Mount {
+	if mount == nil {
+		return nil
+	}
+	return &rootevent.Mount{
+		MountID:       mount.GetMountId(),
+		RootInode:     mount.GetRootInode(),
+		SchemaVersion: mount.GetSchemaVersion(),
+		RegisteredAt:  RootCursorFromProto(mount.GetRegisteredAt()),
+		RetiredAt:     RootCursorFromProto(mount.GetRetiredAt()),
+	}
+}
+
+func rootEventSubtreeAuthorityToProto(subtree *rootevent.SubtreeAuthority) *metapb.RootSubtreeAuthority {
+	if subtree == nil {
+		return nil
+	}
+	return &metapb.RootSubtreeAuthority{
+		SubtreeId:              subtree.SubtreeID,
+		Mount:                  subtree.Mount,
+		RootInode:              subtree.RootInode,
+		AuthorityId:            subtree.AuthorityID,
+		Era:                    subtree.Era,
+		Frontier:               subtree.Frontier,
+		DeclaredAt:             RootCursorToProto(subtree.DeclaredAt),
+		HandoffStartedAt:       RootCursorToProto(subtree.HandoffStartedAt),
+		HandoffCompletedAt:     RootCursorToProto(subtree.HandoffCompletedAt),
+		PredecessorAuthorityId: subtree.PredecessorAuthorityID,
+		PredecessorEra:         subtree.PredecessorEra,
+		PredecessorFrontier:    subtree.PredecessorFrontier,
+		SuccessorAuthorityId:   subtree.SuccessorAuthorityID,
+		SuccessorEra:           subtree.SuccessorEra,
+		InheritedFrontier:      subtree.InheritedFrontier,
+	}
+}
+
+func rootEventSubtreeAuthorityFromProto(subtree *metapb.RootSubtreeAuthority) *rootevent.SubtreeAuthority {
+	if subtree == nil {
+		return nil
+	}
+	return &rootevent.SubtreeAuthority{
+		SubtreeID:              subtree.GetSubtreeId(),
+		Mount:                  subtree.GetMount(),
+		RootInode:              subtree.GetRootInode(),
+		AuthorityID:            subtree.GetAuthorityId(),
+		Era:                    subtree.GetEra(),
+		Frontier:               subtree.GetFrontier(),
+		DeclaredAt:             RootCursorFromProto(subtree.GetDeclaredAt()),
+		HandoffStartedAt:       RootCursorFromProto(subtree.GetHandoffStartedAt()),
+		HandoffCompletedAt:     RootCursorFromProto(subtree.GetHandoffCompletedAt()),
+		PredecessorAuthorityID: subtree.GetPredecessorAuthorityId(),
+		PredecessorEra:         subtree.GetPredecessorEra(),
+		PredecessorFrontier:    subtree.GetPredecessorFrontier(),
+		SuccessorAuthorityID:   subtree.GetSuccessorAuthorityId(),
+		SuccessorEra:           subtree.GetSuccessorEra(),
+		InheritedFrontier:      subtree.GetInheritedFrontier(),
+	}
+}
+
+func rootEventQuotaFenceToProto(fence *rootevent.QuotaFence) *metapb.RootQuotaFence {
+	if fence == nil {
+		return nil
+	}
+	return &metapb.RootQuotaFence{
+		SubjectId:   fence.SubjectID,
+		Mount:       fence.Mount,
+		SubtreeRoot: fence.RootInode,
+		LimitBytes:  fence.LimitBytes,
+		LimitInodes: fence.LimitInodes,
+		Era:         fence.Era,
+		Frontier:    fence.Frontier,
+		UpdatedAt:   RootCursorToProto(fence.UpdatedAt),
+	}
+}
+
+func rootEventQuotaFenceFromProto(fence *metapb.RootQuotaFence) *rootevent.QuotaFence {
+	if fence == nil {
+		return nil
+	}
+	out := &rootevent.QuotaFence{
+		SubjectID:   fence.GetSubjectId(),
+		Mount:       fence.GetMount(),
+		RootInode:   fence.GetSubtreeRoot(),
+		LimitBytes:  fence.GetLimitBytes(),
+		LimitInodes: fence.GetLimitInodes(),
+		Era:         fence.GetEra(),
+		Frontier:    fence.GetFrontier(),
+		UpdatedAt:   RootCursorFromProto(fence.GetUpdatedAt()),
+	}
+	if out.SubjectID == "" {
+		out.SubjectID = rootevent.QuotaFenceID(out.Mount, out.RootInode)
+	}
+	return out
+}
+
 func rootHandoverStageToProto(stage rootproto.HandoverStage) metapb.RootHandoverStage {
 	switch stage {
 	case rootproto.HandoverStageUnspecified:
@@ -430,6 +538,18 @@ func RootSnapshotToProto(snapshot rootstate.Snapshot, tailOffset uint64) *metapb
 	for _, epoch := range snapshot.SnapshotEpochs {
 		snapshotEpochs = append(snapshotEpochs, RootSnapshotEpochToProto(epoch))
 	}
+	mounts := make([]*metapb.RootMount, 0, len(snapshot.Mounts))
+	for _, mount := range snapshot.Mounts {
+		mounts = append(mounts, RootMountToProto(mount))
+	}
+	subtrees := make([]*metapb.RootSubtreeAuthority, 0, len(snapshot.Subtrees))
+	for _, subtree := range snapshot.Subtrees {
+		subtrees = append(subtrees, RootSubtreeAuthorityToProto(subtree))
+	}
+	quotas := make([]*metapb.RootQuotaFence, 0, len(snapshot.Quotas))
+	for _, quota := range snapshot.Quotas {
+		quotas = append(quotas, RootQuotaFenceToProto(quota))
+	}
 	descriptors := make([]*metapb.RegionDescriptor, 0, len(snapshot.Descriptors))
 	for _, desc := range snapshot.Descriptors {
 		descriptors = append(descriptors, DescriptorToProto(desc))
@@ -450,6 +570,9 @@ func RootSnapshotToProto(snapshot rootstate.Snapshot, tailOffset uint64) *metapb
 		PendingRangeChanges: pendingRanges,
 		Stores:              stores,
 		SnapshotEpochs:      snapshotEpochs,
+		Mounts:              mounts,
+		Subtrees:            subtrees,
+		Quotas:              quotas,
 	}
 }
 
@@ -483,6 +606,36 @@ func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snaps
 		}
 		snapshot.SnapshotEpochs[epoch.SnapshotID] = epoch
 	}
+	if len(pbCheckpoint.Mounts) > 0 {
+		snapshot.Mounts = make(map[string]rootstate.MountRecord, len(pbCheckpoint.Mounts))
+	}
+	for _, pbMount := range pbCheckpoint.Mounts {
+		mount := RootMountFromProto(pbMount)
+		if mount.MountID == "" {
+			continue
+		}
+		snapshot.Mounts[mount.MountID] = mount
+	}
+	if len(pbCheckpoint.Subtrees) > 0 {
+		snapshot.Subtrees = make(map[string]rootstate.SubtreeAuthority, len(pbCheckpoint.Subtrees))
+	}
+	for _, pbSubtree := range pbCheckpoint.Subtrees {
+		subtree := RootSubtreeAuthorityFromProto(pbSubtree)
+		if subtree.SubtreeID == "" {
+			continue
+		}
+		snapshot.Subtrees[subtree.SubtreeID] = subtree
+	}
+	if len(pbCheckpoint.Quotas) > 0 {
+		snapshot.Quotas = make(map[string]rootstate.QuotaFence, len(pbCheckpoint.Quotas))
+	}
+	for _, pbQuota := range pbCheckpoint.Quotas {
+		quota := RootQuotaFenceFromProto(pbQuota)
+		if quota.SubjectID == "" {
+			continue
+		}
+		snapshot.Quotas[quota.SubjectID] = quota
+	}
 	for _, pbDesc := range pbCheckpoint.Descriptors {
 		desc := DescriptorFromProto(pbDesc)
 		if desc.RegionID == 0 {
@@ -505,6 +658,113 @@ func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snaps
 		snapshot.PendingRangeChanges[regionID] = change
 	}
 	return snapshot, pbCheckpoint.TailOffset
+}
+
+func RootMountToProto(mount rootstate.MountRecord) *metapb.RootMount {
+	return &metapb.RootMount{
+		MountId:       mount.MountID,
+		RootInode:     mount.RootInode,
+		SchemaVersion: mount.SchemaVersion,
+		State:         rootMountStateToProto(mount.State),
+		RegisteredAt:  RootCursorToProto(mount.RegisteredAt),
+		RetiredAt:     RootCursorToProto(mount.RetiredAt),
+	}
+}
+
+func RootSubtreeAuthorityToProto(subtree rootstate.SubtreeAuthority) *metapb.RootSubtreeAuthority {
+	return &metapb.RootSubtreeAuthority{
+		SubtreeId:              subtree.SubtreeID,
+		Mount:                  subtree.Mount,
+		RootInode:              subtree.RootInode,
+		AuthorityId:            subtree.AuthorityID,
+		Era:                    subtree.Era,
+		Frontier:               subtree.Frontier,
+		State:                  rootSubtreeAuthorityStateToProto(subtree.State),
+		DeclaredAt:             RootCursorToProto(subtree.DeclaredAt),
+		HandoffStartedAt:       RootCursorToProto(subtree.HandoffStartedAt),
+		HandoffCompletedAt:     RootCursorToProto(subtree.HandoffCompletedAt),
+		PredecessorAuthorityId: subtree.PredecessorAuthorityID,
+		PredecessorEra:         subtree.PredecessorEra,
+		PredecessorFrontier:    subtree.PredecessorFrontier,
+		SuccessorAuthorityId:   subtree.SuccessorAuthorityID,
+		SuccessorEra:           subtree.SuccessorEra,
+		InheritedFrontier:      subtree.InheritedFrontier,
+	}
+}
+
+func RootSubtreeAuthorityFromProto(pbSubtree *metapb.RootSubtreeAuthority) rootstate.SubtreeAuthority {
+	if pbSubtree == nil {
+		return rootstate.SubtreeAuthority{}
+	}
+	subtree := rootstate.SubtreeAuthority{
+		SubtreeID:              pbSubtree.GetSubtreeId(),
+		Mount:                  pbSubtree.GetMount(),
+		RootInode:              pbSubtree.GetRootInode(),
+		AuthorityID:            pbSubtree.GetAuthorityId(),
+		Era:                    pbSubtree.GetEra(),
+		Frontier:               pbSubtree.GetFrontier(),
+		State:                  rootSubtreeAuthorityStateFromProto(pbSubtree.GetState()),
+		DeclaredAt:             RootCursorFromProto(pbSubtree.GetDeclaredAt()),
+		HandoffStartedAt:       RootCursorFromProto(pbSubtree.GetHandoffStartedAt()),
+		HandoffCompletedAt:     RootCursorFromProto(pbSubtree.GetHandoffCompletedAt()),
+		PredecessorAuthorityID: pbSubtree.GetPredecessorAuthorityId(),
+		PredecessorEra:         pbSubtree.GetPredecessorEra(),
+		PredecessorFrontier:    pbSubtree.GetPredecessorFrontier(),
+		SuccessorAuthorityID:   pbSubtree.GetSuccessorAuthorityId(),
+		SuccessorEra:           pbSubtree.GetSuccessorEra(),
+		InheritedFrontier:      pbSubtree.GetInheritedFrontier(),
+	}
+	if subtree.SubtreeID == "" {
+		subtree.SubtreeID = rootstate.SubtreeAuthorityKey(subtree.Mount, subtree.RootInode)
+	}
+	return subtree
+}
+
+func RootQuotaFenceToProto(fence rootstate.QuotaFence) *metapb.RootQuotaFence {
+	return &metapb.RootQuotaFence{
+		SubjectId:   fence.SubjectID,
+		Mount:       fence.Mount,
+		SubtreeRoot: fence.RootInode,
+		LimitBytes:  fence.LimitBytes,
+		LimitInodes: fence.LimitInodes,
+		Era:         fence.Era,
+		Frontier:    fence.Frontier,
+		UpdatedAt:   RootCursorToProto(fence.UpdatedAt),
+	}
+}
+
+func RootQuotaFenceFromProto(pbFence *metapb.RootQuotaFence) rootstate.QuotaFence {
+	if pbFence == nil {
+		return rootstate.QuotaFence{}
+	}
+	fence := rootstate.QuotaFence{
+		SubjectID:   pbFence.GetSubjectId(),
+		Mount:       pbFence.GetMount(),
+		RootInode:   pbFence.GetSubtreeRoot(),
+		LimitBytes:  pbFence.GetLimitBytes(),
+		LimitInodes: pbFence.GetLimitInodes(),
+		Era:         pbFence.GetEra(),
+		Frontier:    pbFence.GetFrontier(),
+		UpdatedAt:   RootCursorFromProto(pbFence.GetUpdatedAt()),
+	}
+	if fence.SubjectID == "" {
+		fence.SubjectID = rootstate.QuotaFenceKey(fence.Mount, fence.RootInode)
+	}
+	return fence
+}
+
+func RootMountFromProto(pbMount *metapb.RootMount) rootstate.MountRecord {
+	if pbMount == nil {
+		return rootstate.MountRecord{}
+	}
+	return rootstate.MountRecord{
+		MountID:       pbMount.GetMountId(),
+		RootInode:     pbMount.GetRootInode(),
+		SchemaVersion: pbMount.GetSchemaVersion(),
+		State:         rootMountStateFromProto(pbMount.GetState()),
+		RegisteredAt:  RootCursorFromProto(pbMount.GetRegisteredAt()),
+		RetiredAt:     RootCursorFromProto(pbMount.GetRetiredAt()),
+	}
 }
 
 func RootSnapshotEpochToProto(epoch rootstate.SnapshotEpoch) *metapb.RootSnapshotEpoch {
@@ -693,6 +953,12 @@ func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 		pbEvent.Payload = &metapb.RootEvent_Handover{Handover: rootEventHandoverToProto(event.Handover)}
 	case event.SnapshotEpoch != nil:
 		pbEvent.Payload = &metapb.RootEvent_SnapshotEpoch{SnapshotEpoch: rootEventSnapshotEpochToProto(event.SnapshotEpoch)}
+	case event.Mount != nil:
+		pbEvent.Payload = &metapb.RootEvent_Mount{Mount: rootEventMountToProto(event.Mount)}
+	case event.SubtreeAuthority != nil:
+		pbEvent.Payload = &metapb.RootEvent_SubtreeAuthority{SubtreeAuthority: rootEventSubtreeAuthorityToProto(event.SubtreeAuthority)}
+	case event.QuotaFence != nil:
+		pbEvent.Payload = &metapb.RootEvent_QuotaFence{QuotaFence: rootEventQuotaFenceToProto(event.QuotaFence)}
 	case event.RegionDescriptor != nil:
 		pbEvent.Payload = &metapb.RootEvent_RegionDescriptor{RegionDescriptor: &metapb.RootRegionDescriptor{Descriptor_: DescriptorToProto(event.RegionDescriptor.Descriptor)}}
 	case event.RegionRemoval != nil:
@@ -747,6 +1013,15 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 	}
 	if body := pbEvent.GetSnapshotEpoch(); body != nil {
 		event.SnapshotEpoch = rootEventSnapshotEpochFromProto(body)
+	}
+	if body := pbEvent.GetMount(); body != nil {
+		event.Mount = rootEventMountFromProto(body)
+	}
+	if body := pbEvent.GetSubtreeAuthority(); body != nil {
+		event.SubtreeAuthority = rootEventSubtreeAuthorityFromProto(body)
+	}
+	if body := pbEvent.GetQuotaFence(); body != nil {
+		event.QuotaFence = rootEventQuotaFenceFromProto(body)
 	}
 	if body := pbEvent.GetRegionDescriptor(); body != nil {
 		event.RegionDescriptor = &rootevent.RegionDescriptorRecord{Descriptor: DescriptorFromProto(body.GetDescriptor_())}
@@ -834,6 +1109,18 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED
 	case rootevent.KindSnapshotEpochRetired:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED
+	case rootevent.KindMountRegistered:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_MOUNT_REGISTERED
+	case rootevent.KindMountRetired:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_MOUNT_RETIRED
+	case rootevent.KindSubtreeAuthorityDeclared:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_SUBTREE_AUTHORITY_DECLARED
+	case rootevent.KindSubtreeHandoffStarted:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_SUBTREE_HANDOFF_STARTED
+	case rootevent.KindSubtreeHandoffCompleted:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED
+	case rootevent.KindQuotaFenceUpdated:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_QUOTA_FENCE_UPDATED
 	default:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_UNSPECIFIED
 	}
@@ -889,7 +1176,63 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindSnapshotEpochPublished
 	case metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED:
 		return rootevent.KindSnapshotEpochRetired
+	case metapb.RootEventKind_ROOT_EVENT_KIND_MOUNT_REGISTERED:
+		return rootevent.KindMountRegistered
+	case metapb.RootEventKind_ROOT_EVENT_KIND_MOUNT_RETIRED:
+		return rootevent.KindMountRetired
+	case metapb.RootEventKind_ROOT_EVENT_KIND_SUBTREE_AUTHORITY_DECLARED:
+		return rootevent.KindSubtreeAuthorityDeclared
+	case metapb.RootEventKind_ROOT_EVENT_KIND_SUBTREE_HANDOFF_STARTED:
+		return rootevent.KindSubtreeHandoffStarted
+	case metapb.RootEventKind_ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED:
+		return rootevent.KindSubtreeHandoffCompleted
+	case metapb.RootEventKind_ROOT_EVENT_KIND_QUOTA_FENCE_UPDATED:
+		return rootevent.KindQuotaFenceUpdated
 	default:
 		return rootevent.KindUnknown
+	}
+}
+
+func rootMountStateToProto(state rootstate.MountState) metapb.RootMountState {
+	switch state {
+	case rootstate.MountStateActive:
+		return metapb.RootMountState_ROOT_MOUNT_STATE_ACTIVE
+	case rootstate.MountStateRetired:
+		return metapb.RootMountState_ROOT_MOUNT_STATE_RETIRED
+	default:
+		return metapb.RootMountState_ROOT_MOUNT_STATE_UNSPECIFIED
+	}
+}
+
+func rootMountStateFromProto(state metapb.RootMountState) rootstate.MountState {
+	switch state {
+	case metapb.RootMountState_ROOT_MOUNT_STATE_ACTIVE:
+		return rootstate.MountStateActive
+	case metapb.RootMountState_ROOT_MOUNT_STATE_RETIRED:
+		return rootstate.MountStateRetired
+	default:
+		return rootstate.MountStateUnknown
+	}
+}
+
+func rootSubtreeAuthorityStateToProto(state rootstate.SubtreeAuthorityState) metapb.RootSubtreeAuthorityState {
+	switch state {
+	case rootstate.SubtreeAuthorityActive:
+		return metapb.RootSubtreeAuthorityState_ROOT_SUBTREE_AUTHORITY_STATE_ACTIVE
+	case rootstate.SubtreeAuthorityHandoff:
+		return metapb.RootSubtreeAuthorityState_ROOT_SUBTREE_AUTHORITY_STATE_HANDOFF
+	default:
+		return metapb.RootSubtreeAuthorityState_ROOT_SUBTREE_AUTHORITY_STATE_UNSPECIFIED
+	}
+}
+
+func rootSubtreeAuthorityStateFromProto(state metapb.RootSubtreeAuthorityState) rootstate.SubtreeAuthorityState {
+	switch state {
+	case metapb.RootSubtreeAuthorityState_ROOT_SUBTREE_AUTHORITY_STATE_ACTIVE:
+		return rootstate.SubtreeAuthorityActive
+	case metapb.RootSubtreeAuthorityState_ROOT_SUBTREE_AUTHORITY_STATE_HANDOFF:
+		return rootstate.SubtreeAuthorityHandoff
+	default:
+		return rootstate.SubtreeAuthorityUnknown
 	}
 }

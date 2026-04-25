@@ -33,6 +33,12 @@ type Client interface {
 	Close() error
 	GetStore(ctx context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error)
 	ListStores(ctx context.Context, req *coordpb.ListStoresRequest) (*coordpb.ListStoresResponse, error)
+	GetMount(ctx context.Context, req *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error)
+	ListMounts(ctx context.Context, req *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error)
+	ListSubtreeAuthorities(ctx context.Context, req *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error)
+	GetQuotaFence(ctx context.Context, req *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error)
+	ListQuotaFences(ctx context.Context, req *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error)
+	WatchRootEvents(ctx context.Context, req *coordpb.WatchRootEventsRequest, opts ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error)
 }
 
 // GRPCClient is a thin wrapper around generated coordpb.CoordinatorClient.
@@ -229,6 +235,62 @@ func (c *GRPCClient) ListStores(ctx context.Context, req *coordpb.ListStoresRequ
 	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListStoresResponse, error) {
 		return coord.ListStores(ctx, req)
 	}, validateListStoresResponse)
+}
+
+func (c *GRPCClient) GetMount(ctx context.Context, req *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error) {
+	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.GetMountResponse, error) {
+		return coord.GetMount(ctx, req)
+	}, validateGetMountResponse)
+}
+
+func (c *GRPCClient) ListMounts(ctx context.Context, req *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error) {
+	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListMountsResponse, error) {
+		return coord.ListMounts(ctx, req)
+	}, validateListMountsResponse)
+}
+
+func (c *GRPCClient) ListSubtreeAuthorities(ctx context.Context, req *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error) {
+	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListSubtreeAuthoritiesResponse, error) {
+		return coord.ListSubtreeAuthorities(ctx, req)
+	}, validateListSubtreeAuthoritiesResponse)
+}
+
+func (c *GRPCClient) GetQuotaFence(ctx context.Context, req *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error) {
+	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.GetQuotaFenceResponse, error) {
+		return coord.GetQuotaFence(ctx, req)
+	}, validateGetQuotaFenceResponse)
+}
+
+func (c *GRPCClient) ListQuotaFences(ctx context.Context, req *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error) {
+	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListQuotaFencesResponse, error) {
+		return coord.ListQuotaFences(ctx, req)
+	}, validateListQuotaFencesResponse)
+}
+
+func (c *GRPCClient) WatchRootEvents(ctx context.Context, req *coordpb.WatchRootEventsRequest, opts ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
+	if c == nil {
+		return nil, errNoReachableAddress
+	}
+	endpoints := c.orderedEndpoints()
+	if len(endpoints) == 0 {
+		return nil, errNoReachableAddress
+	}
+	var lastErr error
+	for i, endpoint := range endpoints {
+		stream, err := endpoint.coord.WatchRootEvents(ctx, req, opts...)
+		if err == nil {
+			c.markPreferred(endpoint.addr)
+			return stream, nil
+		}
+		lastErr = err
+		if i == len(endpoints)-1 || !retryableRead(err) {
+			return nil, err
+		}
+	}
+	if lastErr == nil {
+		lastErr = errNoReachableAddress
+	}
+	return nil, lastErr
 }
 
 // AllocID forwards ID allocation RPC.
@@ -511,6 +573,108 @@ func validateListStoresResponse(resp *coordpb.ListStoresResponse) error {
 			return fmt.Errorf("%w: list_stores duplicate store_id=%d", errInvalidWitness, store.GetStoreId())
 		}
 		seen[store.GetStoreId()] = struct{}{}
+	}
+	return nil
+}
+
+func validateGetMountResponse(resp *coordpb.GetMountResponse) error {
+	if resp == nil {
+		return fmt.Errorf("%w: get_mount response is nil", errInvalidWitness)
+	}
+	if resp.GetNotFound() {
+		if resp.GetMount() != nil {
+			return fmt.Errorf("%w: get_mount not_found reply carries mount", errInvalidWitness)
+		}
+		return nil
+	}
+	mount := resp.GetMount()
+	if mount == nil {
+		return fmt.Errorf("%w: get_mount missing mount on non-not-found reply", errInvalidWitness)
+	}
+	if mount.GetMountId() == "" {
+		return fmt.Errorf("%w: get_mount mount_id is empty", errInvalidWitness)
+	}
+	return nil
+}
+
+func validateListMountsResponse(resp *coordpb.ListMountsResponse) error {
+	if resp == nil {
+		return fmt.Errorf("%w: list_mounts response is nil", errInvalidWitness)
+	}
+	seen := make(map[string]struct{}, len(resp.GetMounts()))
+	for _, mount := range resp.GetMounts() {
+		if mount == nil {
+			return fmt.Errorf("%w: list_mounts contains nil mount", errInvalidWitness)
+		}
+		if mount.GetMountId() == "" {
+			return fmt.Errorf("%w: list_mounts contains empty mount_id", errInvalidWitness)
+		}
+		if _, ok := seen[mount.GetMountId()]; ok {
+			return fmt.Errorf("%w: list_mounts duplicate mount_id=%s", errInvalidWitness, mount.GetMountId())
+		}
+		seen[mount.GetMountId()] = struct{}{}
+	}
+	return nil
+}
+
+func validateListSubtreeAuthoritiesResponse(resp *coordpb.ListSubtreeAuthoritiesResponse) error {
+	if resp == nil {
+		return fmt.Errorf("%w: list_subtree_authorities response is nil", errInvalidWitness)
+	}
+	seen := make(map[string]struct{}, len(resp.GetSubtrees()))
+	for _, subtree := range resp.GetSubtrees() {
+		if subtree == nil {
+			return fmt.Errorf("%w: list_subtree_authorities contains nil subtree", errInvalidWitness)
+		}
+		if subtree.GetSubtreeId() == "" || subtree.GetMountId() == "" || subtree.GetRootInode() == 0 {
+			return fmt.Errorf("%w: list_subtree_authorities contains invalid subtree", errInvalidWitness)
+		}
+		if _, ok := seen[subtree.GetSubtreeId()]; ok {
+			return fmt.Errorf("%w: list_subtree_authorities duplicate subtree=%s", errInvalidWitness, subtree.GetSubtreeId())
+		}
+		seen[subtree.GetSubtreeId()] = struct{}{}
+	}
+	return nil
+}
+
+func validateGetQuotaFenceResponse(resp *coordpb.GetQuotaFenceResponse) error {
+	if resp == nil {
+		return fmt.Errorf("%w: get_quota_fence response is nil", errInvalidWitness)
+	}
+	if resp.GetNotFound() {
+		if resp.GetFence() != nil {
+			return fmt.Errorf("%w: get_quota_fence not_found reply carries fence", errInvalidWitness)
+		}
+		return nil
+	}
+	return validateQuotaFenceInfo("get_quota_fence", resp.GetFence())
+}
+
+func validateListQuotaFencesResponse(resp *coordpb.ListQuotaFencesResponse) error {
+	if resp == nil {
+		return fmt.Errorf("%w: list_quota_fences response is nil", errInvalidWitness)
+	}
+	seen := make(map[string]struct{}, len(resp.GetFences()))
+	for _, fence := range resp.GetFences() {
+		if err := validateQuotaFenceInfo("list_quota_fences", fence); err != nil {
+			return err
+		}
+		key := fmt.Sprintf("%s/%d", fence.GetSubject().GetMountId(), fence.GetSubject().GetSubtreeRoot())
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("%w: list_quota_fences duplicate subject=%s", errInvalidWitness, key)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+func validateQuotaFenceInfo(kind string, fence *coordpb.QuotaFenceInfo) error {
+	if fence == nil {
+		return fmt.Errorf("%w: %s missing fence on non-not-found reply", errInvalidWitness, kind)
+	}
+	subject := fence.GetSubject()
+	if subject == nil || subject.GetMountId() == "" {
+		return fmt.Errorf("%w: %s missing quota subject", errInvalidWitness, kind)
 	}
 	return nil
 }

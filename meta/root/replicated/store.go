@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
+	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootfailpoints "github.com/feichai0017/NoKV/meta/root/failpoints"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
@@ -36,6 +36,9 @@ type Store struct {
 	state              rootstate.State
 	stores             map[uint64]rootstate.StoreMembership
 	snapshots          map[string]rootstate.SnapshotEpoch
+	mounts             map[string]rootstate.MountRecord
+	subtrees           map[string]rootstate.SubtreeAuthority
+	quotas             map[string]rootstate.QuotaFence
 	descs              map[uint64]descriptor.Descriptor
 	pending            map[uint64]rootstate.PendingPeerChange
 	pendingRange       map[uint64]rootstate.PendingRangeChange
@@ -64,11 +67,26 @@ func Open(cfg Config) (*Store, error) {
 	if snapshots == nil {
 		snapshots = make(map[string]rootstate.SnapshotEpoch)
 	}
+	mounts := bootstrap.Snapshot.Mounts
+	if mounts == nil {
+		mounts = make(map[string]rootstate.MountRecord)
+	}
+	subtrees := bootstrap.Snapshot.Subtrees
+	if subtrees == nil {
+		subtrees = make(map[string]rootstate.SubtreeAuthority)
+	}
+	quotas := bootstrap.Snapshot.Quotas
+	if quotas == nil {
+		quotas = make(map[string]rootstate.QuotaFence)
+	}
 	return &Store{
 		driver:             cfg.Driver,
 		state:              bootstrap.Snapshot.State,
 		stores:             stores,
 		snapshots:          snapshots,
+		mounts:             mounts,
+		subtrees:           subtrees,
+		quotas:             quotas,
 		descs:              bootstrap.Snapshot.Descriptors,
 		pending:            bootstrap.Snapshot.PendingPeerChanges,
 		pendingRange:       bootstrap.Snapshot.PendingRangeChanges,
@@ -175,6 +193,9 @@ func (s *Store) Snapshot() (rootstate.Snapshot, error) {
 		State:               s.state,
 		Stores:              s.stores,
 		SnapshotEpochs:      s.snapshots,
+		Mounts:              s.mounts,
+		Subtrees:            s.subtrees,
+		Quotas:              s.quotas,
 		Descriptors:         s.descs,
 		PendingPeerChanges:  s.pending,
 		PendingRangeChanges: s.pendingRange,
@@ -221,6 +242,9 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 		State:               s.state,
 		Stores:              rootstate.CloneStoreMemberships(s.stores),
 		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(s.snapshots),
+		Mounts:              rootstate.CloneMounts(s.mounts),
+		Subtrees:            rootstate.CloneSubtreeAuthorities(s.subtrees),
+		Quotas:              rootstate.CloneQuotaFences(s.quotas),
 		Descriptors:         rootstate.CloneDescriptors(s.descs),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.pending),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.pendingRange),
@@ -250,6 +274,9 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 	s.state = snapshot.State
 	s.stores = snapshot.Stores
 	s.snapshots = snapshot.SnapshotEpochs
+	s.mounts = snapshot.Mounts
+	s.subtrees = snapshot.Subtrees
+	s.quotas = snapshot.Quotas
 	s.descs = snapshot.Descriptors
 	s.pending = snapshot.PendingPeerChanges
 	s.pendingRange = snapshot.PendingRangeChanges
@@ -259,18 +286,18 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 	return rootstate.CommitInfo{Cursor: snapshot.State.LastCommitted, State: snapshot.State}, nil
 }
 
-func (s *Store) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.SuccessionState, error) {
+func (s *Store) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error) {
 	if s == nil {
-		return rootstate.SuccessionState{}, nil
+		return rootstate.EunomiaState{}, nil
 	}
 	if err := rootfailpoints.InjectBeforeApplyTenure(); err != nil {
-		return rootstate.SuccessionState{}, err
+		return rootstate.EunomiaState{}, err
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return rootstate.SuccessionState{}, err
+		return rootstate.EunomiaState{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -278,14 +305,14 @@ func (s *Store) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (r
 	switch cmd.Kind {
 	case rootproto.TenureActIssue:
 		if err := rootstate.ValidateTenureClaim(s.state.Tenure, s.state.Legacy, cmd.HolderID, cmd.LineageDigest, cmd.ExpiresUnixNano, cmd.NowUnixNano); err != nil {
-			return s.state.Succession(), err
+			return s.state.Eunomia(), err
 		}
 		if err := rootstate.ValidateInheritance(
 			s.state.Tenure,
 			s.state.Legacy,
 			cmd.InheritedFrontiers,
 		); err != nil {
-			return s.state.Succession(), err
+			return s.state.Eunomia(), err
 		}
 		era := rootstate.NextTenureEra(s.state.Tenure, s.state.Legacy, cmd.HolderID, cmd.NowUnixNano)
 		commit, err := s.appendLocked(ctx, rootevent.TenureGranted(
@@ -297,12 +324,12 @@ func (s *Store) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (r
 			cmd.InheritedFrontiers,
 		))
 		if err != nil {
-			return rootstate.SuccessionState{}, err
+			return rootstate.EunomiaState{}, err
 		}
-		return commit.State.Succession(), nil
+		return commit.State.Eunomia(), nil
 	case rootproto.TenureActRelease:
 		if err := rootstate.ValidateTenureYield(s.state.Tenure, cmd.HolderID, cmd.NowUnixNano); err != nil {
-			return s.state.Succession(), err
+			return s.state.Eunomia(), err
 		}
 		current := s.state.Tenure
 		mandate := current.Mandate
@@ -318,26 +345,26 @@ func (s *Store) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (r
 			cmd.InheritedFrontiers,
 		))
 		if err != nil {
-			return rootstate.SuccessionState{}, err
+			return rootstate.EunomiaState{}, err
 		}
-		return commit.State.Succession(), nil
+		return commit.State.Eunomia(), nil
 	default:
-		return s.state.Succession(), rootstate.ErrInvalidTenure
+		return s.state.Eunomia(), rootstate.ErrInvalidTenure
 	}
 }
 
-func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.SuccessionState, error) {
+func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
 	if s == nil {
-		return rootstate.SuccessionState{}, nil
+		return rootstate.EunomiaState{}, nil
 	}
 	if err := rootfailpoints.InjectBeforeApplyHandover(); err != nil {
-		return rootstate.SuccessionState{}, err
+		return rootstate.EunomiaState{}, err
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return rootstate.SuccessionState{}, err
+		return rootstate.EunomiaState{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -348,10 +375,10 @@ func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand
 		if s.state.Legacy.Era != 0 &&
 			s.state.Legacy.Era == current.Era &&
 			s.state.Legacy.HolderID == strings.TrimSpace(cmd.HolderID) {
-			return s.state.Succession(), nil
+			return s.state.Eunomia(), nil
 		}
 		if err := rootstate.ValidateLegacyFormation(current, cmd.HolderID); err != nil {
-			return s.state.Succession(), err
+			return s.state.Eunomia(), err
 		}
 		mandate := current.Mandate
 		if mandate == 0 {
@@ -364,27 +391,27 @@ func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand
 			cmd.Frontiers,
 		))
 		if err != nil {
-			return rootstate.SuccessionState{}, err
+			return rootstate.EunomiaState{}, err
 		}
-		return commit.State.Succession(), nil
+		return commit.State.Eunomia(), nil
 	case rootproto.HandoverActConfirm:
 		if strings.TrimSpace(cmd.HolderID) == "" || strings.TrimSpace(cmd.HolderID) != s.state.Tenure.HolderID {
-			return s.state.Succession(), rootstate.ErrPrimacy
+			return s.state.Eunomia(), rootstate.ErrPrimacy
 		}
-		auditStatus, err := succession.ValidateHandoverConfirmation(
+		auditStatus, err := eunomia.ValidateHandoverConfirmation(
 			s.state.Tenure,
-			succession.Frontiers(s.state, rootstate.MaxDescriptorRevision(s.descs)),
+			eunomia.Frontiers(s.state, rootstate.MaxDescriptorRevision(s.descs)),
 			s.state.Legacy,
 			cmd.NowUnixNano,
 		)
 		if err != nil {
-			return s.state.Succession(), err
+			return s.state.Eunomia(), err
 		}
 		if rootproto.HandoverStageAtLeast(s.state.Handover.Stage, rootproto.HandoverStageConfirmed) &&
 			s.state.Handover.LegacyEra == auditStatus.LegacyEra &&
 			s.state.Handover.SuccessorEra == s.state.Tenure.Era &&
 			s.state.Handover.LegacyDigest == auditStatus.LegacyDigest {
-			return s.state.Succession(), nil
+			return s.state.Eunomia(), nil
 		}
 		commit, err := s.appendLocked(ctx, rootevent.HandoverConfirmed(
 			cmd.HolderID,
@@ -393,15 +420,15 @@ func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand
 			auditStatus.LegacyDigest,
 		))
 		if err != nil {
-			return rootstate.SuccessionState{}, err
+			return rootstate.EunomiaState{}, err
 		}
-		return commit.State.Succession(), nil
+		return commit.State.Eunomia(), nil
 	case rootproto.HandoverActClose:
-		if err := succession.ValidateHandoverFinality(s.state.Tenure, s.state.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
-			return s.state.Succession(), err
+		if err := eunomia.ValidateHandoverFinality(s.state.Tenure, s.state.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+			return s.state.Eunomia(), err
 		}
 		if rootproto.HandoverStageAtLeast(s.state.Handover.Stage, rootproto.HandoverStageClosed) {
-			return s.state.Succession(), nil
+			return s.state.Eunomia(), nil
 		}
 		commit, err := s.appendLocked(ctx, rootevent.HandoverClosed(
 			cmd.HolderID,
@@ -410,15 +437,15 @@ func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand
 			s.state.Handover.LegacyDigest,
 		))
 		if err != nil {
-			return rootstate.SuccessionState{}, err
+			return rootstate.EunomiaState{}, err
 		}
-		return commit.State.Succession(), nil
+		return commit.State.Eunomia(), nil
 	case rootproto.HandoverActReattach:
-		if err := succession.ValidateHandoverReattach(s.state.Tenure, s.state.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
-			return s.state.Succession(), err
+		if err := eunomia.ValidateHandoverReattach(s.state.Tenure, s.state.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
+			return s.state.Eunomia(), err
 		}
 		if rootproto.HandoverStageAtLeast(s.state.Handover.Stage, rootproto.HandoverStageReattached) {
-			return s.state.Succession(), nil
+			return s.state.Eunomia(), nil
 		}
 		commit, err := s.appendLocked(ctx, rootevent.HandoverReattached(
 			cmd.HolderID,
@@ -427,11 +454,11 @@ func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand
 			s.state.Handover.LegacyDigest,
 		))
 		if err != nil {
-			return rootstate.SuccessionState{}, err
+			return rootstate.EunomiaState{}, err
 		}
-		return commit.State.Succession(), nil
+		return commit.State.Eunomia(), nil
 	default:
-		return s.state.Succession(), rootstate.ErrFinality
+		return s.state.Eunomia(), rootstate.ErrFinality
 	}
 }
 
@@ -505,6 +532,9 @@ func (s *Store) maybeCompactLocked() {
 		State:               s.state,
 		Stores:              rootstate.CloneStoreMemberships(s.stores),
 		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(s.snapshots),
+		Mounts:              rootstate.CloneMounts(s.mounts),
+		Subtrees:            rootstate.CloneSubtreeAuthorities(s.subtrees),
+		Quotas:              rootstate.CloneQuotaFences(s.quotas),
 		Descriptors:         rootstate.CloneDescriptors(s.descs),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.pending),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.pendingRange),
@@ -536,6 +566,18 @@ func (s *Store) applyObserved(observed rootstorage.ObservedCommitted) {
 	s.snapshots = bootstrap.Snapshot.SnapshotEpochs
 	if s.snapshots == nil {
 		s.snapshots = make(map[string]rootstate.SnapshotEpoch)
+	}
+	s.mounts = bootstrap.Snapshot.Mounts
+	if s.mounts == nil {
+		s.mounts = make(map[string]rootstate.MountRecord)
+	}
+	s.subtrees = bootstrap.Snapshot.Subtrees
+	if s.subtrees == nil {
+		s.subtrees = make(map[string]rootstate.SubtreeAuthority)
+	}
+	s.quotas = bootstrap.Snapshot.Quotas
+	if s.quotas == nil {
+		s.quotas = make(map[string]rootstate.QuotaFence)
 	}
 	s.descs = bootstrap.Snapshot.Descriptors
 	s.pending = bootstrap.Snapshot.PendingPeerChanges

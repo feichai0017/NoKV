@@ -21,7 +21,9 @@ type Executor interface {
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
 	ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
 	SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error)
-	Rename(ctx context.Context, req fsmeta.RenameRequest) error
+	GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error)
+	RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error
+	Link(ctx context.Context, req fsmeta.LinkRequest) error
 	Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
 }
 
@@ -153,7 +155,7 @@ func (s *Service) WatchSubtree(stream fsmetapb.FSMetadata_WatchSubtreeServer) er
 	defer sub.Close()
 	if err := stream.Send(&fsmetapb.WatchSubtreeResponse{
 		Payload: &fsmetapb.WatchSubtreeResponse_Ready{
-			Ready: &fsmetapb.WatchReady{Cursor: watchCursorToProto(watchReq.ResumeCursor)},
+			Ready: &fsmetapb.WatchReady{Cursor: watchCursorToProto(sub.ReadyCursor())},
 		},
 	}); err != nil {
 		return rpcStreamError(err)
@@ -217,17 +219,57 @@ func (s *Service) SnapshotSubtree(ctx context.Context, req *fsmetapb.SnapshotSub
 	return snapshotSubtreeResponseToProto(token), nil
 }
 
-func (s *Service) Rename(ctx context.Context, req *fsmetapb.RenameRequest) (*fsmetapb.RenameResponse, error) {
+func (s *Service) RetireSnapshotSubtree(ctx context.Context, req *fsmetapb.RetireSnapshotSubtreeRequest) (*fsmetapb.RetireSnapshotSubtreeResponse, error) {
+	if s == nil || s.snapshot == nil {
+		return nil, status.Error(codes.FailedPrecondition, "fsmeta snapshot publisher is not configured")
+	}
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "fsmeta retire snapshot subtree request is required")
+	}
+	if err := s.snapshot.RetireSnapshotSubtree(ctx, retireSnapshotSubtreeRequestFromProto(req)); err != nil {
+		return nil, rpcError(err)
+	}
+	return &fsmetapb.RetireSnapshotSubtreeResponse{}, nil
+}
+
+func (s *Service) GetQuotaUsage(ctx context.Context, req *fsmetapb.QuotaUsageRequest) (*fsmetapb.QuotaUsageResponse, error) {
 	if err := s.requireExecutor(); err != nil {
 		return nil, err
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "fsmeta rename request is required")
+		return nil, status.Error(codes.InvalidArgument, "fsmeta quota usage request is required")
 	}
-	if err := s.executor.Rename(ctx, renameRequestFromProto(req)); err != nil {
+	usage, err := s.executor.GetQuotaUsage(ctx, quotaUsageRequestFromProto(req))
+	if err != nil {
 		return nil, rpcError(err)
 	}
-	return &fsmetapb.RenameResponse{}, nil
+	return quotaUsageResponseToProto(usage), nil
+}
+
+func (s *Service) RenameSubtree(ctx context.Context, req *fsmetapb.RenameSubtreeRequest) (*fsmetapb.RenameSubtreeResponse, error) {
+	if err := s.requireExecutor(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "fsmeta rename subtree request is required")
+	}
+	if err := s.executor.RenameSubtree(ctx, renameSubtreeRequestFromProto(req)); err != nil {
+		return nil, rpcError(err)
+	}
+	return &fsmetapb.RenameSubtreeResponse{}, nil
+}
+
+func (s *Service) Link(ctx context.Context, req *fsmetapb.LinkRequest) (*fsmetapb.LinkResponse, error) {
+	if err := s.requireExecutor(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "fsmeta link request is required")
+	}
+	if err := s.executor.Link(ctx, linkRequestFromProto(req)); err != nil {
+		return nil, rpcError(err)
+	}
+	return &fsmetapb.LinkResponse{}, nil
 }
 
 func (s *Service) Unlink(ctx context.Context, req *fsmetapb.UnlinkRequest) (*fsmetapb.UnlinkResponse, error) {
@@ -267,6 +309,8 @@ func rpcError(err error) error {
 	switch {
 	case errors.Is(err, fsmeta.ErrWatchOverflow):
 		return status.Error(codes.ResourceExhausted, err.Error())
+	case errors.Is(err, fsmeta.ErrWatchCursorExpired):
+		return status.Error(codes.OutOfRange, err.Error())
 	case errors.Is(err, context.Canceled):
 		return status.Error(codes.Canceled, err.Error())
 	case errors.Is(err, context.DeadlineExceeded):
@@ -275,6 +319,10 @@ func rpcError(err error) error {
 		return status.Error(codes.AlreadyExists, err.Error())
 	case errors.Is(err, fsmeta.ErrNotFound):
 		return status.Error(codes.NotFound, err.Error())
+	case errors.Is(err, fsmeta.ErrMountNotRegistered), errors.Is(err, fsmeta.ErrMountRetired):
+		return status.Error(codes.FailedPrecondition, err.Error())
+	case errors.Is(err, fsmeta.ErrQuotaExceeded):
+		return status.Error(codes.ResourceExhausted, err.Error())
 	case errors.Is(err, fsmeta.ErrInvalidMountID),
 		errors.Is(err, fsmeta.ErrInvalidInodeID),
 		errors.Is(err, fsmeta.ErrInvalidName),

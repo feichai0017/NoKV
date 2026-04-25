@@ -1,0 +1,11 @@
+# Recorded Apalache bounded-check output
+spec=spec/EunomiaMultiDim.tla
+config=spec/EunomiaMultiDim.cfg
+invariants=NoWriteBehindServedRead
+length=6
+
+PASS #0: SanyParser                                               I@02:22:36.011
+PASS #1: TypeCheckerSnowcat                                       I@02:22:36.186
+PASS #13: BoundedChecker                                          I@02:22:36.630
+The outcome is: NoError                                           I@02:22:37.547
+Checker reports no error up to computation length 6               I@02:22:37.547

@@ -40,7 +40,7 @@
 
 - [Configuration](config.md)
 - [CLI](cli.md)
-- [succession-audit](succession-audit.md)
+- [eunomia-audit](eunomia-audit.md)
 - [Cluster Demo & Dashboard](demo.md)
 - [Scripts](scripts.md)
 - [NoKV Redis](nokv-redis.md)

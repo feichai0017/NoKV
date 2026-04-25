@@ -774,16 +774,16 @@ admission path.
 `DiagnosticsSnapshot()` now exports both:
 
 - the current degraded serving state (`root`, `lease`, `audit`, `handover_witness`)
-- cumulative Succession counters under `succession_metrics`
+- cumulative Eunomia counters under `eunomia_metrics`
 
-`succession_metrics` is grouped into:
+`eunomia_metrics` is grouped into:
 
 - `tenure_era_transitions_total`
 - `handover_stage_transitions_total`
 - `gate_rejections_total`
 - `guarantee_violations_total`
 
-The `guarantee_violations_total` buckets map directly to the four Succession
+The `guarantee_violations_total` buckets map directly to the four Eunomia
 guarantees:
 
 - `primacy`

@@ -1,0 +1,17 @@
+# Recorded TLC output
+spec=spec/SubtreeWithoutSeal.tla
+status=failure
+
+Error: Invariant Primacy is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ pending = {}
+/\ active = {[authority |-> 0, era |-> 0]}
+State 2: <StartHandoff line 48, col 5 to line 58, col 27 of module SubtreeWithoutSeal>
+/\ pending = {[pred |-> 0, predEra |-> 0, succ |-> 1, succEra |-> 1]}
+/\ active = {[authority |-> 0, era |-> 0]}
+State 3: <CompleteHandoff line 61, col 5 to line 63, col 35 of module SubtreeWithoutSeal>
+/\ pending = {}
+/\ active = {[authority |-> 0, era |-> 0], [authority |-> 1, era |-> 1]}
+4 states generated, 3 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 3.

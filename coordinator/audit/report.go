@@ -1,7 +1,7 @@
 package audit
 
 import (
-	succession "github.com/feichai0017/NoKV/coordinator/protocol/succession"
+	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -33,7 +33,7 @@ type SnapshotAnomalies struct {
 	FinalityDefect              FinalityDefect
 }
 
-// Report is the standalone succession-audit projection for one rooted snapshot.
+// Report is the standalone eunomia-audit projection for one rooted snapshot.
 type Report struct {
 	HolderID               string
 	NowUnixNano            int64
@@ -49,12 +49,12 @@ type Report struct {
 
 func evaluateSnapshot(snapshot rootview.Snapshot, holderID string, nowUnixNano int64) Report {
 	descriptorRevision := rootstate.MaxDescriptorRevision(snapshot.Descriptors)
-	currentFrontiers := succession.Frontiers(rootstate.State{
+	currentFrontiers := eunomia.Frontiers(rootstate.State{
 		IDFence:  snapshot.Allocator.IDCurrent,
 		TSOFence: snapshot.Allocator.TSCurrent,
 	}, descriptorRevision)
-	handoverWitness := succession.BuildHandoverWitness(snapshot.Tenure, currentFrontiers, snapshot.Legacy, nowUnixNano)
-	handover := succession.EvaluateHandoverStage(
+	handoverWitness := eunomia.BuildHandoverWitness(snapshot.Tenure, currentFrontiers, snapshot.Legacy, nowUnixNano)
+	handover := eunomia.EvaluateHandoverStage(
 		snapshot.Tenure,
 		snapshot.Handover,
 		holderID,
@@ -67,7 +67,7 @@ func evaluateSnapshot(snapshot rootview.Snapshot, holderID string, nowUnixNano i
 		CatchUpState:           snapshot.CatchUpState.String(),
 		CurrentHolderID:        snapshot.Tenure.HolderID,
 		CurrentEra:             snapshot.Tenure.Era,
-		Handoff:                succession.HandoffRecord(snapshot.Tenure, currentFrontiers),
+		Handoff:                eunomia.HandoffRecord(snapshot.Tenure, currentFrontiers),
 		HandoverWitness:        handoverWitness.WithStage(handover.Stage),
 		Handover:               handover,
 	}

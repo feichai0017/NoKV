@@ -14,10 +14,10 @@ import (
 type debugSnapshotFunc func() any
 
 var (
-	coordinatorExpvarOnce               sync.Once
-	coordinatorExpvarProvider           atomic.Value
-	coordinatorSuccessionExpvarOnce     sync.Once
-	coordinatorSuccessionExpvarProvider atomic.Value
+	coordinatorExpvarOnce            sync.Once
+	coordinatorExpvarProvider        atomic.Value
+	coordinatorEunomiaExpvarOnce     sync.Once
+	coordinatorEunomiaExpvarProvider atomic.Value
 )
 
 func installCoordinatorExpvar(svc *coordserver.Service) {
@@ -29,9 +29,9 @@ func installCoordinatorExpvar(svc *coordserver.Service) {
 			"state": svc.DiagnosticsSnapshot(),
 		}
 	}))
-	coordinatorSuccessionExpvarProvider.Store(debugSnapshotFunc(func() any {
+	coordinatorEunomiaExpvarProvider.Store(debugSnapshotFunc(func() any {
 		snapshot := svc.DiagnosticsSnapshot()
-		if metrics, ok := snapshot["succession_metrics"]; ok {
+		if metrics, ok := snapshot["eunomia_metrics"]; ok {
 			return metrics
 		}
 		return map[string]any{}
@@ -45,9 +45,9 @@ func installCoordinatorExpvar(svc *coordserver.Service) {
 			return provider()
 		}))
 	})
-	coordinatorSuccessionExpvarOnce.Do(func() {
-		expvar.Publish("nokv_coordinator_succession", expvar.Func(func() any {
-			provider, _ := coordinatorSuccessionExpvarProvider.Load().(debugSnapshotFunc)
+	coordinatorEunomiaExpvarOnce.Do(func() {
+		expvar.Publish("nokv_coordinator_eunomia", expvar.Func(func() any {
+			provider, _ := coordinatorEunomiaExpvarProvider.Load().(debugSnapshotFunc)
 			if provider == nil {
 				return map[string]any{}
 			}

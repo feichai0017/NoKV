@@ -18,24 +18,33 @@ Both are installed locally under `third_party/tla/`.
 ## Run TLC
 
 ```bash
-make tlc-succession
-make tlc-successionmultidim
+make tlc-eunomia
+make tlc-eunomiamultidim
+make tlc-mountlifecycle
+make tlc-subtreeauthority
 make tlc-leaseonly-counterexample
 make tlc-leasestart-counterexample
 make tlc-tokenonly-counterexample
 make tlc-chubbyfenced-counterexample
+make tlc-subtreewithoutfrontiercoverage-counterexample
+make tlc-subtreewithoutseal-counterexample
 make record-formal-artifacts
 ```
 
-`Succession.tla` is the positive model and should satisfy its configured invariants.
+The Eunomia positive model lives at `Eunomia.tla` and should satisfy its
+configured invariants.
 
 Current contrast models:
 
 - `LeaseOnly.tla`: no reply-side guard and no rooted handover record; expected to violate `NoOldReplyAfterSuccessor`
-- `SuccessionMultiDim.tla`: positive lease-start coverage model for the CRDB `#66562` analog
+- `EunomiaMultiDim.tla`: positive lease-start coverage model for the CRDB `#66562` analog
+- `MountLifecycle.tla`: positive rooted mount lifecycle model; checks that registered mounts cannot be implicitly created or reactivated after retirement
+- `SubtreeAuthority.tla`: positive namespace authority handoff model; projects Eunomia's Primacy / Inheritance / Silence / Finality onto subtree authority records
 - `LeaseStartOnly.tla`: no lease-start coverage check on predecessor served-read summaries; expected to violate `NoWriteBehindServedRead`
 - `TokenOnly.tla`: bounded-freshness token only; still expected to violate `NoOldReplyAfterSuccessor`
 - `ChubbyFencedLease.tla`: per-reply sequencer fencing; expected to preserve stale-reply rejection but violate successor coverage
+- `SubtreeWithoutFrontierCoverage.tla`: subtree handoff without successor frontier coverage; expected to violate `Inheritance`
+- `SubtreeWithoutSeal.tla`: subtree handoff that leaves the predecessor active; expected to violate `Primacy`
 
 The current models now distinguish:
 
@@ -47,7 +56,7 @@ the positive model only allows delivery of replies whose era remains
 legal under the rooted handover state. The contrast model keeps the same
 in-flight structure but removes finality-aware admission.
 
-`Succession.tla` now models a repeated rooted handoff cycle:
+The Eunomia model in `Eunomia.tla` now models a repeated rooted handoff cycle:
 
 - `Issue -> Active -> Seal -> Issue(successor) -> Cover -> Close -> Reattach -> Active`
 
@@ -65,25 +74,40 @@ shape directly, and the spec includes a lemma showing it implies the original
 more robust bridge from bounded checking to an unbounded-by-construction
 argument for Primacy than the earlier cardinality-only invariant.
 
+Stage 3 adds two namespace-facing positive models:
+
+- `MountLifecycle.tla` models `MountRegistered` / `MountRetired` as rooted
+  lifecycle truth. It checks three mount invariants: retired mounts never
+  become active again, active/retired mounts must have been explicitly
+  registered, and mount identity fields stay present after registration.
+- `SubtreeAuthority.tla` models the authority protocol that `RenameSubtree v1`
+  will consume. It excludes dentry mutation and checks only authority
+  correctness: one active authority per subtree, successor frontier coverage,
+  inadmissibility of sealed-authority replies, and finality of sealed
+  predecessors. It also carries `PrimacyInductive`, a pairwise active-record
+  uniqueness shape that is stronger than the cardinality-only `Primacy`
+  invariant and better suited for a later proof.
+
 ## Run Apalache
 
 ```bash
 make apalache-typecheck
-make apalache-check-succession
-make apalache-check-successionmultidim
+make apalache-check-eunomia
+make apalache-check-eunomiamultidim
 ```
 
 `apalache-typecheck` checks that the current specs are well-typed.
 
-`apalache-check-succession` runs a bounded check of `Succession.tla` against:
+`apalache-check-eunomia` runs a bounded check of the Eunomia model
+(`Eunomia.tla`) against:
 
-- `G1_Succession`
+- `G1_Eunomia`
 - `G2_Primacy`
 - `G2_PrimacyInductive`
 - `G3_Silence`
 - `G4_Finality`
 
-`apalache-check-successionmultidim` runs a bounded check of `SuccessionMultiDim.tla`
+`apalache-check-eunomiamultidim` runs a bounded check of `EunomiaMultiDim.tla`
 against:
 
 - `NoWriteBehindServedRead`

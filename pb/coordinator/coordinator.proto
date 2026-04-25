@@ -66,6 +66,108 @@ message ListStoresResponse {
   repeated StoreInfo stores = 1;
 }
 
+enum MountState {
+  MOUNT_STATE_UNKNOWN = 0;
+  MOUNT_STATE_ACTIVE = 1;
+  MOUNT_STATE_RETIRED = 2;
+}
+
+message MountInfo {
+  string mount_id = 1;
+  uint64 root_inode = 2;
+  uint32 schema_version = 3;
+  MountState state = 4;
+  nokv.meta.v1.RootCursor registered_at = 5;
+  nokv.meta.v1.RootCursor retired_at = 6;
+}
+
+message GetMountRequest {
+  string mount_id = 1;
+}
+
+message GetMountResponse {
+  MountInfo mount = 1;
+  bool not_found = 2;
+}
+
+message ListMountsRequest {}
+
+message ListMountsResponse {
+  repeated MountInfo mounts = 1;
+}
+
+enum SubtreeAuthorityState {
+  SUBTREE_AUTHORITY_STATE_UNKNOWN = 0;
+  SUBTREE_AUTHORITY_STATE_ACTIVE = 1;
+  SUBTREE_AUTHORITY_STATE_HANDOFF = 2;
+}
+
+message SubtreeAuthorityInfo {
+  string subtree_id = 1;
+  string mount_id = 2;
+  uint64 root_inode = 3;
+  string authority_id = 4;
+  uint64 era = 5;
+  uint64 frontier = 6;
+  SubtreeAuthorityState state = 7;
+  nokv.meta.v1.RootCursor declared_at = 8;
+  nokv.meta.v1.RootCursor handoff_started_at = 9;
+  nokv.meta.v1.RootCursor handoff_completed_at = 10;
+  string predecessor_authority_id = 11;
+  uint64 predecessor_era = 12;
+  uint64 predecessor_frontier = 13;
+  string successor_authority_id = 14;
+  uint64 successor_era = 15;
+  uint64 inherited_frontier = 16;
+}
+
+message ListSubtreeAuthoritiesRequest {}
+
+message ListSubtreeAuthoritiesResponse {
+  repeated SubtreeAuthorityInfo subtrees = 1;
+}
+
+message QuotaSubject {
+  string mount_id = 1;
+  // subtree_root=0 means the quota is mount-wide. Non-zero scopes the fence to
+  // one subtree root inode inside the mount.
+  uint64 subtree_root = 2;
+}
+
+message QuotaFenceInfo {
+  QuotaSubject subject = 1;
+  uint64 limit_bytes = 2;
+  uint64 limit_inodes = 3;
+  uint64 era = 4;
+  uint64 frontier = 5;
+  nokv.meta.v1.RootCursor updated_at = 6;
+}
+
+message GetQuotaFenceRequest {
+  QuotaSubject subject = 1;
+}
+
+message GetQuotaFenceResponse {
+  QuotaFenceInfo fence = 1;
+  bool not_found = 2;
+}
+
+message ListQuotaFencesRequest {}
+
+message ListQuotaFencesResponse {
+  repeated QuotaFenceInfo fences = 1;
+}
+
+message WatchRootEventsRequest {
+  nokv.meta.v1.RootTailToken after = 1;
+}
+
+message WatchRootEventsResponse {
+  nokv.meta.v1.RootTailToken token = 1;
+  repeated nokv.meta.v1.RootCommittedEvent events = 2;
+  bool bootstrap_required = 3;
+}
+
 enum SchedulerOperationType {
   SCHEDULER_OPERATION_TYPE_NONE = 0;
   SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER = 1;
@@ -339,6 +441,12 @@ service Coordinator {
   rpc StoreHeartbeat(StoreHeartbeatRequest) returns (StoreHeartbeatResponse);
   rpc GetStore(GetStoreRequest) returns (GetStoreResponse);
   rpc ListStores(ListStoresRequest) returns (ListStoresResponse);
+  rpc GetMount(GetMountRequest) returns (GetMountResponse);
+  rpc ListMounts(ListMountsRequest) returns (ListMountsResponse);
+  rpc ListSubtreeAuthorities(ListSubtreeAuthoritiesRequest) returns (ListSubtreeAuthoritiesResponse);
+  rpc GetQuotaFence(GetQuotaFenceRequest) returns (GetQuotaFenceResponse);
+  rpc ListQuotaFences(ListQuotaFencesRequest) returns (ListQuotaFencesResponse);
+  rpc WatchRootEvents(WatchRootEventsRequest) returns (stream WatchRootEventsResponse);
   rpc RegionLiveness(RegionLivenessRequest) returns (RegionLivenessResponse);
   rpc PublishRootEvent(PublishRootEventRequest) returns (PublishRootEventResponse);
   rpc ListTransitions(ListTransitionsRequest) returns (ListTransitionsResponse);

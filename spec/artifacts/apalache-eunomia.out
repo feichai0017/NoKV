@@ -1,0 +1,11 @@
+# Recorded Apalache bounded-check output
+spec=spec/Eunomia.tla
+config=spec/Eunomia.cfg
+invariants=G1_Eunomia,G2_Primacy,G2_PrimacyInductive,G3_Silence,G4_Finality
+length=8
+
+PASS #0: SanyParser                                               I@02:22:31.097
+PASS #1: TypeCheckerSnowcat                                       I@02:22:31.304
+PASS #13: BoundedChecker                                          I@02:22:31.955
+The outcome is: NoError                                           I@02:22:35.295
+Checker reports no error up to computation length 8               I@02:22:35.295

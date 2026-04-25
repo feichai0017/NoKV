@@ -17,7 +17,7 @@ const (
 	guaranteeFinality
 )
 
-type successionMetrics struct {
+type eunomiaMetrics struct {
 	tenureEraTransitionsTotal atomic.Uint64
 
 	handoverStageConfirmedTotal  atomic.Uint64
@@ -34,7 +34,7 @@ type successionMetrics struct {
 	guaranteeFinalityTotal    atomic.Uint64
 }
 
-func (m *successionMetrics) snapshot() map[string]any {
+func (m *eunomiaMetrics) snapshot() map[string]any {
 	return map[string]any{
 		"tenure_era_transitions_total": m.tenureEraTransitionsTotal.Load(),
 		"handover_stage_transitions_total": map[string]any{
@@ -56,14 +56,14 @@ func (m *successionMetrics) snapshot() map[string]any {
 	}
 }
 
-func (m *successionMetrics) recordTenureEraTransition(before, after uint64) {
+func (m *eunomiaMetrics) recordTenureEraTransition(before, after uint64) {
 	if after == 0 || before == after {
 		return
 	}
 	m.tenureEraTransitionsTotal.Add(1)
 }
 
-func (m *successionMetrics) recordHandoverStageTransition(before, after rootproto.HandoverStage) {
+func (m *eunomiaMetrics) recordHandoverStageTransition(before, after rootproto.HandoverStage) {
 	if after == before {
 		return
 	}
@@ -77,7 +77,7 @@ func (m *successionMetrics) recordHandoverStageTransition(before, after rootprot
 	}
 }
 
-func (m *successionMetrics) recordGateRejection(kind gateKind) {
+func (m *eunomiaMetrics) recordGateRejection(kind gateKind) {
 	switch kind {
 	case gateLegacyFormation:
 		m.gateLegacyFormationRejectedTotal.Add(1)
@@ -88,7 +88,7 @@ func (m *successionMetrics) recordGateRejection(kind gateKind) {
 	}
 }
 
-func (m *successionMetrics) recordGuaranteeViolation(kind coordinatorGuaranteeViolation) {
+func (m *eunomiaMetrics) recordGuaranteeViolation(kind coordinatorGuaranteeViolation) {
 	switch kind {
 	case guaranteePrimacy:
 		m.guaranteePrimacyTotal.Add(1)
@@ -101,7 +101,7 @@ func (m *successionMetrics) recordGuaranteeViolation(kind coordinatorGuaranteeVi
 	}
 }
 
-func (m *successionMetrics) recordGuaranteeViolationForError(err error) {
+func (m *eunomiaMetrics) recordGuaranteeViolationForError(err error) {
 	switch {
 	case err == nil:
 		return
