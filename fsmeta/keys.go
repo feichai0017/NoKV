@@ -96,13 +96,11 @@ func EncodeSessionKey(mount MountID, session SessionID) ([]byte, error) {
 	return encodeKey(mount, KeyKindSession, []byte(session))
 }
 
-// EncodeUsageKey returns the per-directory usage/counter key.
-func EncodeUsageKey(mount MountID, dir InodeID) ([]byte, error) {
-	if err := validateInodeID(dir); err != nil {
-		return nil, err
-	}
+// EncodeUsageKey returns a quota usage/counter key. Scope 0 is mount-wide;
+// non-zero scopes are direct quota accounting roots.
+func EncodeUsageKey(mount MountID, scope InodeID) ([]byte, error) {
 	var body [8]byte
-	binary.BigEndian.PutUint64(body[:], uint64(dir))
+	binary.BigEndian.PutUint64(body[:], uint64(scope))
 	return encodeKey(mount, KeyKindUsage, body[:])
 }
 

@@ -96,6 +96,37 @@ message ListMountsResponse {
   repeated MountInfo mounts = 1;
 }
 
+enum SubtreeAuthorityState {
+  SUBTREE_AUTHORITY_STATE_UNKNOWN = 0;
+  SUBTREE_AUTHORITY_STATE_ACTIVE = 1;
+  SUBTREE_AUTHORITY_STATE_HANDOFF = 2;
+}
+
+message SubtreeAuthorityInfo {
+  string subtree_id = 1;
+  string mount_id = 2;
+  uint64 root_inode = 3;
+  string authority_id = 4;
+  uint64 era = 5;
+  uint64 frontier = 6;
+  SubtreeAuthorityState state = 7;
+  nokv.meta.v1.RootCursor declared_at = 8;
+  nokv.meta.v1.RootCursor handoff_started_at = 9;
+  nokv.meta.v1.RootCursor handoff_completed_at = 10;
+  string predecessor_authority_id = 11;
+  uint64 predecessor_era = 12;
+  uint64 predecessor_frontier = 13;
+  string successor_authority_id = 14;
+  uint64 successor_era = 15;
+  uint64 inherited_frontier = 16;
+}
+
+message ListSubtreeAuthoritiesRequest {}
+
+message ListSubtreeAuthoritiesResponse {
+  repeated SubtreeAuthorityInfo subtrees = 1;
+}
+
 message QuotaSubject {
   string mount_id = 1;
   // subtree_root=0 means the quota is mount-wide. Non-zero scopes the fence to
@@ -402,6 +433,7 @@ service Coordinator {
   rpc ListStores(ListStoresRequest) returns (ListStoresResponse);
   rpc GetMount(GetMountRequest) returns (GetMountResponse);
   rpc ListMounts(ListMountsRequest) returns (ListMountsResponse);
+  rpc ListSubtreeAuthorities(ListSubtreeAuthoritiesRequest) returns (ListSubtreeAuthoritiesResponse);
   rpc GetQuotaFence(GetQuotaFenceRequest) returns (GetQuotaFenceResponse);
   rpc ListQuotaFences(ListQuotaFencesRequest) returns (ListQuotaFencesResponse);
   rpc RegionLiveness(RegionLivenessRequest) returns (RegionLivenessResponse);

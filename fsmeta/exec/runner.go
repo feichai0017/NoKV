@@ -36,8 +36,8 @@ type keyConflictError interface {
 	KeyErrors() []*kvrpcpb.KeyError
 }
 
-// MountRecord is the executor's mount-admission view.
-type MountRecord struct {
+// MountAdmission is the executor's mount-admission view.
+type MountAdmission struct {
 	MountID       fsmeta.MountID
 	RootInode     fsmeta.InodeID
 	SchemaVersion uint32
@@ -46,7 +46,7 @@ type MountRecord struct {
 
 // MountResolver checks rooted mount lifecycle before mutating fsmeta data.
 type MountResolver interface {
-	ResolveMount(context.Context, fsmeta.MountID) (MountRecord, error)
+	ResolveMount(context.Context, fsmeta.MountID) (MountAdmission, error)
 }
 
 // SubtreeHandoffPublisher publishes rooted subtree authority handoff events for
@@ -143,9 +143,6 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest, inode f
 	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
 		return err
 	}
-	if err := e.checkQuota(ctx, req.Mount, req.Parent, inode.Size, 1); err != nil {
-		return err
-	}
 	inode.Inode = req.Inode
 	if inode.LinkCount == 0 {
 		inode.LinkCount = 1
@@ -178,11 +175,20 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest, inode f
 		},
 	}
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
-		return e.runner.Mutate(ctx, plan.PrimaryKey, cloneMutations(mutations), startVersion, commitVersion, e.lockTTL)
+		quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
+			Mount:  req.Mount,
+			Scope:  req.Parent,
+			Bytes:  inodeSizeDelta(inode.Size),
+			Inodes: 1,
+		}}, startVersion)
+		if err != nil {
+			return err
+		}
+		all := append(cloneMutations(mutations), quotaMutations...)
+		return e.runner.Mutate(ctx, plan.PrimaryKey, all, startVersion, commitVersion, e.lockTTL)
 	}); err != nil {
 		return err
 	}
-	e.accountQuota(req.Mount, req.Parent, inodeSizeDelta(inode.Size), 1)
 	return nil
 }
 
@@ -339,23 +345,28 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 			releasedBytes = inode.Size
 			released = true
 		}
-		return e.runner.Mutate(ctx, plan.PrimaryKey, cloneMutations(mutations), startVersion, commitVersion, e.lockTTL)
+		all := cloneMutations(mutations)
+		if released {
+			quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
+				Mount:  req.Mount,
+				Scope:  req.Parent,
+				Bytes:  -inodeSizeDelta(releasedBytes),
+				Inodes: -1,
+			}}, startVersion)
+			if err != nil {
+				return err
+			}
+			all = append(all, quotaMutations...)
+		}
+		return e.runner.Mutate(ctx, plan.PrimaryKey, all, startVersion, commitVersion, e.lockTTL)
 	}); err != nil {
 		return err
-	}
-	if released {
-		e.accountQuota(req.Mount, req.Parent, -inodeSizeDelta(releasedBytes), -1)
 	}
 	return nil
 }
 
 // RenameSubtree moves the subtree root dentry from source to destination.
 // Descendants follow through inode parent links rather than key rewrites.
-//
-// The rooted authority handoff is published after the dentry transaction
-// commits. A publisher error is returned to the caller, but it does not roll the
-// already-committed dentry move back; repair must retry the handoff publication
-// against the rooted authority frontier.
 func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error {
 	plan, err := fsmeta.PlanRenameSubtree(req)
 	if err != nil {
@@ -365,55 +376,108 @@ func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRe
 	if err != nil {
 		return err
 	}
-	var movedRoot fsmeta.InodeID
+	authorityRoot := mountRecord.RootInode
+	if e.subtrees != nil && authorityRoot == 0 {
+		return fsmeta.ErrInvalidInodeID
+	}
+	var movedSize uint64
+	var movedInode bool
 	var committedAt uint64
+	var handoffStarted bool
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
-		record, err := e.readDentry(ctx, plan.ReadKeys[0], startVersion)
+		mutations, err := e.prepareRenameSubtreeMutations(ctx, plan, req, startVersion, &movedSize, &movedInode)
 		if err != nil {
 			return err
 		}
-		if _, err := e.readDentry(ctx, plan.ReadKeys[1], startVersion); err == nil {
-			return fsmeta.ErrExists
-		} else if !errors.Is(err, fsmeta.ErrNotFound) {
+		if err := e.startSubtreeHandoff(ctx, req.Mount, authorityRoot, commitVersion); err != nil {
 			return err
 		}
-		record.Parent = req.ToParent
-		record.Name = req.ToName
-		value, err := fsmeta.EncodeDentryValue(record)
-		if err != nil {
-			return err
+		handoffStarted = true
+		mutationErr := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+		// Once StartSubtreeHandoff is rooted, a Mutate error may still be
+		// ambiguous with respect to primary commit. Complete closes the rooted
+		// pending state; at worst this advances an empty era rather than leaving
+		// an unrecoverable handoff.
+		completeErr := e.completeSubtreeHandoff(ctx, req.Mount, authorityRoot, commitVersion)
+		if mutationErr != nil {
+			if completeErr != nil {
+				return errors.Join(mutationErr, fmt.Errorf("complete subtree handoff: %w", completeErr))
+			}
+			return mutationErr
 		}
-		movedRoot = record.Inode
+		if completeErr != nil {
+			return completeErr
+		}
 		committedAt = commitVersion
-		mutations := []*kvrpcpb.Mutation{
-			{
-				Op:  kvrpcpb.Mutation_Delete,
-				Key: cloneBytes(plan.MutateKeys[0]),
-			},
-			{
-				Op:                kvrpcpb.Mutation_Put,
-				Key:               cloneBytes(plan.MutateKeys[1]),
-				Value:             value,
-				AssertionNotExist: true,
-			},
-		}
-		return e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+		return nil
 	}); err != nil {
 		return err
 	}
-	authorityRoot := movedRoot
-	if mountRecord.RootInode != 0 {
-		authorityRoot = mountRecord.RootInode
+	if handoffStarted && committedAt == 0 {
+		return fmt.Errorf("subtree handoff started without committed frontier")
 	}
-	return e.publishSubtreeHandoff(ctx, req.Mount, authorityRoot, committedAt)
+	return nil
 }
 
-func (e *Executor) publishSubtreeHandoff(ctx context.Context, mount fsmeta.MountID, root fsmeta.InodeID, frontier uint64) error {
+func (e *Executor) prepareRenameSubtreeMutations(ctx context.Context, plan fsmeta.OperationPlan, req fsmeta.RenameSubtreeRequest, startVersion uint64, movedSize *uint64, movedInode *bool) ([]*kvrpcpb.Mutation, error) {
+	record, err := e.readDentry(ctx, plan.ReadKeys[0], startVersion)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := e.readDentry(ctx, plan.ReadKeys[1], startVersion); err == nil {
+		return nil, fsmeta.ErrExists
+	} else if !errors.Is(err, fsmeta.ErrNotFound) {
+		return nil, err
+	}
+	record.Parent = req.ToParent
+	record.Name = req.ToName
+	value, err := fsmeta.EncodeDentryValue(record)
+	if err != nil {
+		return nil, err
+	}
+	*movedSize = 0
+	*movedInode = false
+	if inode, ok, err := e.readInode(ctx, req.Mount, record.Inode, startVersion); err != nil {
+		return nil, err
+	} else if ok {
+		*movedSize = inode.Size
+		*movedInode = true
+	}
+	mutations := []*kvrpcpb.Mutation{
+		{
+			Op:  kvrpcpb.Mutation_Delete,
+			Key: cloneBytes(plan.MutateKeys[0]),
+		},
+		{
+			Op:                kvrpcpb.Mutation_Put,
+			Key:               cloneBytes(plan.MutateKeys[1]),
+			Value:             value,
+			AssertionNotExist: true,
+		},
+	}
+	if *movedInode {
+		quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{
+			{Mount: req.Mount, Scope: req.FromParent, Bytes: -inodeSizeDelta(*movedSize), Inodes: -1},
+			{Mount: req.Mount, Scope: req.ToParent, Bytes: inodeSizeDelta(*movedSize), Inodes: 1},
+		}, startVersion)
+		if err != nil {
+			return nil, err
+		}
+		mutations = append(mutations, quotaMutations...)
+	}
+	return mutations, nil
+}
+
+func (e *Executor) startSubtreeHandoff(ctx context.Context, mount fsmeta.MountID, root fsmeta.InodeID, frontier uint64) error {
 	if e == nil || e.subtrees == nil || mount == "" || root == 0 || frontier == 0 {
 		return nil
 	}
-	if err := e.subtrees.StartSubtreeHandoff(ctx, mount, root, frontier); err != nil {
-		return err
+	return e.subtrees.StartSubtreeHandoff(ctx, mount, root, frontier)
+}
+
+func (e *Executor) completeSubtreeHandoff(ctx context.Context, mount fsmeta.MountID, root fsmeta.InodeID, frontier uint64) error {
+	if e == nil || e.subtrees == nil || mount == "" || root == 0 || frontier == 0 {
+		return nil
 	}
 	return e.subtrees.CompleteSubtreeHandoff(ctx, mount, root, frontier)
 }
@@ -423,35 +487,28 @@ func (e *Executor) requireActiveMount(ctx context.Context, mount fsmeta.MountID)
 	return err
 }
 
-func (e *Executor) resolveActiveMount(ctx context.Context, mount fsmeta.MountID) (MountRecord, error) {
+func (e *Executor) resolveActiveMount(ctx context.Context, mount fsmeta.MountID) (MountAdmission, error) {
 	if e == nil || e.mounts == nil {
-		return MountRecord{}, nil
+		return MountAdmission{}, nil
 	}
 	record, err := e.mounts.ResolveMount(ctx, mount)
 	if err != nil {
-		return MountRecord{}, err
+		return MountAdmission{}, err
 	}
 	if record.MountID == "" {
-		return MountRecord{}, fsmeta.ErrMountNotRegistered
+		return MountAdmission{}, fsmeta.ErrMountNotRegistered
 	}
 	if record.Retired {
-		return MountRecord{}, fsmeta.ErrMountRetired
+		return MountAdmission{}, fsmeta.ErrMountRetired
 	}
 	return record, nil
 }
 
-func (e *Executor) checkQuota(ctx context.Context, mount fsmeta.MountID, root fsmeta.InodeID, addBytes, addInodes uint64) error {
+func (e *Executor) reserveQuota(ctx context.Context, changes []QuotaChange, startVersion uint64) ([]*kvrpcpb.Mutation, error) {
 	if e == nil || e.quotas == nil {
-		return nil
+		return nil, nil
 	}
-	return e.quotas.CheckQuota(ctx, mount, root, addBytes, addInodes)
-}
-
-func (e *Executor) accountQuota(mount fsmeta.MountID, root fsmeta.InodeID, deltaBytes, deltaInodes int64) {
-	if e == nil || e.quotas == nil {
-		return
-	}
-	e.quotas.AccountQuota(mount, root, deltaBytes, deltaInodes)
+	return e.quotas.ReserveQuota(ctx, e.runner, changes, startVersion)
 }
 
 func (e *Executor) reserveReadVersion(ctx context.Context) (uint64, error) {

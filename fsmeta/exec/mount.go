@@ -29,14 +29,14 @@ type mountCache struct {
 }
 
 type mountEntry struct {
-	record    MountRecord
+	record    MountAdmission
 	err       error
 	expiresAt time.Time
 }
 
-func (c *mountCache) ResolveMount(ctx context.Context, mount fsmeta.MountID) (MountRecord, error) {
+func (c *mountCache) ResolveMount(ctx context.Context, mount fsmeta.MountID) (MountAdmission, error) {
 	if c.coord == nil {
-		return MountRecord{}, errors.New("mount cache is not configured")
+		return MountAdmission{}, errors.New("mount cache is not configured")
 	}
 	now := c.clock()
 	if record, err, ok := c.lookup(mount, now); ok {
@@ -44,7 +44,7 @@ func (c *mountCache) ResolveMount(ctx context.Context, mount fsmeta.MountID) (Mo
 	}
 	resp, err := c.coord.GetMount(ctx, &coordpb.GetMountRequest{MountId: string(mount)})
 	if err != nil {
-		return MountRecord{}, err
+		return MountAdmission{}, err
 	}
 	record, err := mountFromProto(resp)
 	c.put(mount, now, record, err)
@@ -58,7 +58,7 @@ func (c *mountCache) markRetired(mount fsmeta.MountID) {
 	if mount == "" {
 		return
 	}
-	c.put(mount, c.clock(), MountRecord{MountID: mount, Retired: true}, nil)
+	c.put(mount, c.clock(), MountAdmission{MountID: mount, Retired: true}, nil)
 }
 
 func (c *mountCache) clock() time.Time {
@@ -68,20 +68,20 @@ func (c *mountCache) clock() time.Time {
 	return time.Now()
 }
 
-func (c *mountCache) lookup(mount fsmeta.MountID, now time.Time) (MountRecord, error, bool) {
+func (c *mountCache) lookup(mount fsmeta.MountID, now time.Time) (MountAdmission, error, bool) {
 	if c.ttl <= 0 {
-		return MountRecord{}, nil, false
+		return MountAdmission{}, nil, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.entries[mount]
 	if !ok || !now.Before(entry.expiresAt) {
-		return MountRecord{}, nil, false
+		return MountAdmission{}, nil, false
 	}
 	return entry.record, entry.err, true
 }
 
-func (c *mountCache) put(mount fsmeta.MountID, now time.Time, record MountRecord, err error) {
+func (c *mountCache) put(mount fsmeta.MountID, now time.Time, record MountAdmission, err error) {
 	if c.ttl <= 0 {
 		return
 	}
@@ -93,15 +93,15 @@ func (c *mountCache) put(mount fsmeta.MountID, now time.Time, record MountRecord
 	c.entries[mount] = mountEntry{record: record, err: err, expiresAt: now.Add(c.ttl)}
 }
 
-func mountFromProto(resp *coordpb.GetMountResponse) (MountRecord, error) {
+func mountFromProto(resp *coordpb.GetMountResponse) (MountAdmission, error) {
 	if resp == nil || resp.GetNotFound() {
-		return MountRecord{}, fsmeta.ErrMountNotRegistered
+		return MountAdmission{}, fsmeta.ErrMountNotRegistered
 	}
 	info := resp.GetMount()
 	if info == nil {
-		return MountRecord{}, fsmeta.ErrMountNotRegistered
+		return MountAdmission{}, fsmeta.ErrMountNotRegistered
 	}
-	return MountRecord{
+	return MountAdmission{
 		MountID:       fsmeta.MountID(info.GetMountId()),
 		RootInode:     fsmeta.InodeID(info.GetRootInode()),
 		SchemaVersion: info.GetSchemaVersion(),

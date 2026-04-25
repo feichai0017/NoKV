@@ -35,6 +35,7 @@ type Client interface {
 	ListStores(ctx context.Context, req *coordpb.ListStoresRequest) (*coordpb.ListStoresResponse, error)
 	GetMount(ctx context.Context, req *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error)
 	ListMounts(ctx context.Context, req *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error)
+	ListSubtreeAuthorities(ctx context.Context, req *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error)
 	GetQuotaFence(ctx context.Context, req *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error)
 	ListQuotaFences(ctx context.Context, req *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error)
 }
@@ -245,6 +246,12 @@ func (c *GRPCClient) ListMounts(ctx context.Context, req *coordpb.ListMountsRequ
 	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListMountsResponse, error) {
 		return coord.ListMounts(ctx, req)
 	}, validateListMountsResponse)
+}
+
+func (c *GRPCClient) ListSubtreeAuthorities(ctx context.Context, req *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error) {
+	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListSubtreeAuthoritiesResponse, error) {
+		return coord.ListSubtreeAuthorities(ctx, req)
+	}, validateListSubtreeAuthoritiesResponse)
 }
 
 func (c *GRPCClient) GetQuotaFence(ctx context.Context, req *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error) {
@@ -579,6 +586,26 @@ func validateListMountsResponse(resp *coordpb.ListMountsResponse) error {
 			return fmt.Errorf("%w: list_mounts duplicate mount_id=%s", errInvalidWitness, mount.GetMountId())
 		}
 		seen[mount.GetMountId()] = struct{}{}
+	}
+	return nil
+}
+
+func validateListSubtreeAuthoritiesResponse(resp *coordpb.ListSubtreeAuthoritiesResponse) error {
+	if resp == nil {
+		return fmt.Errorf("%w: list_subtree_authorities response is nil", errInvalidWitness)
+	}
+	seen := make(map[string]struct{}, len(resp.GetSubtrees()))
+	for _, subtree := range resp.GetSubtrees() {
+		if subtree == nil {
+			return fmt.Errorf("%w: list_subtree_authorities contains nil subtree", errInvalidWitness)
+		}
+		if subtree.GetSubtreeId() == "" || subtree.GetMountId() == "" || subtree.GetRootInode() == 0 {
+			return fmt.Errorf("%w: list_subtree_authorities contains invalid subtree", errInvalidWitness)
+		}
+		if _, ok := seen[subtree.GetSubtreeId()]; ok {
+			return fmt.Errorf("%w: list_subtree_authorities duplicate subtree=%s", errInvalidWitness, subtree.GetSubtreeId())
+		}
+		seen[subtree.GetSubtreeId()] = struct{}{}
 	}
 	return nil
 }
