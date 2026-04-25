@@ -46,6 +46,7 @@ build:
 	go build -o build/nokv-redis ./cmd/nokv-redis
 	go build -o build/nokv-config ./cmd/nokv-config
 	go build -o build/nokv-fsmeta ./cmd/nokv-fsmeta
+	go build -o build/fsmeta-demo ./cmd/fsmeta-demo
 	@echo "✓ Build complete: binaries in build/"
 
 # Run all tests
