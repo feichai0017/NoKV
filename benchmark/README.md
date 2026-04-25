@@ -148,9 +148,11 @@ Prerequisites:
 - the coordinator endpoint reachable by the benchmark when `generic-kv` is
   selected
 
-Example:
+Example (run from inside the `benchmark/` Go module — the repo root has a
+top-level `fsmeta/` package and won't resolve this path):
 
 ```bash
+cd benchmark
 NOKV_FSMETA_BENCH=1 go test ./fsmeta -run TestBenchmarkFSMeta -count=1 -v -args \
   -fsmeta_drivers native-fsmeta,generic-kv \
   -fsmeta_addr 127.0.0.1:8090 \

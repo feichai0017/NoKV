@@ -58,7 +58,7 @@ docker run --rm --network nokv_default \
     -fsmeta_page_limit 512 \
     -fsmeta_readdirplus=true \
     -fsmeta_timeout 25m \
-    -fsmeta_output ../data/fsmeta/results/fsmeta_formal_native_vs_generic_20260425T051640Z.csv
+    -fsmeta_output fsmeta/results/fsmeta_formal_native_vs_generic_20260425T051640Z.csv
 ```
 
 数据形状：
