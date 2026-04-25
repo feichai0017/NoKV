@@ -8,6 +8,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 type fakeMountList struct {
@@ -35,6 +36,10 @@ func (c *fakeMountList) ListSubtreeAuthorities(context.Context, *coordpb.ListSub
 	return &coordpb.ListSubtreeAuthoritiesResponse{Subtrees: c.subtrees}, c.err
 }
 
+func (c *fakeMountList) WatchRootEvents(context.Context, *coordpb.WatchRootEventsRequest, ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
+	return nil, c.err
+}
+
 type fakeRetireRouter struct {
 	retired []fsmeta.MountID
 }
@@ -58,7 +63,7 @@ func TestMonitorRetiresWatchersAndCache(t *testing.T) {
 
 	quotas := &quotaCache{ttl: time.Minute}
 	mon := &monitor{coord: list, router: router, cache: cache, quotas: quotas}
-	require.NoError(t, mon.poll(context.Background()))
+	require.NoError(t, mon.bootstrap(context.Background()))
 
 	require.Equal(t, 1, list.mountCalls)
 	require.Equal(t, 1, list.quotaCalls)
@@ -83,7 +88,7 @@ func TestMonitorCompletesPendingSubtreeHandoffs(t *testing.T) {
 	pub := &fakeSubtreePublisher{}
 
 	mon := &monitor{coord: list, router: router, subtrees: pub}
-	require.NoError(t, mon.poll(context.Background()))
+	require.NoError(t, mon.bootstrap(context.Background()))
 
 	require.Equal(t, []subtreePublishCall{{mount: "vol", root: 1, frontier: 42}}, pub.completes)
 }
@@ -101,7 +106,7 @@ func TestMonitorRefreshesQuotaFences(t *testing.T) {
 	router := &fakeRetireRouter{}
 
 	mon := &monitor{coord: list, router: router, quotas: quotas}
-	require.NoError(t, mon.poll(context.Background()))
+	require.NoError(t, mon.bootstrap(context.Background()))
 
 	fence, ok, found := quotas.lookup(quotaSubject{mount: "vol", scope: 7}, time.Now())
 	require.True(t, found)

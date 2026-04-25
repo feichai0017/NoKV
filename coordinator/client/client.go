@@ -38,6 +38,7 @@ type Client interface {
 	ListSubtreeAuthorities(ctx context.Context, req *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error)
 	GetQuotaFence(ctx context.Context, req *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error)
 	ListQuotaFences(ctx context.Context, req *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error)
+	WatchRootEvents(ctx context.Context, req *coordpb.WatchRootEventsRequest, opts ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error)
 }
 
 // GRPCClient is a thin wrapper around generated coordpb.CoordinatorClient.
@@ -264,6 +265,32 @@ func (c *GRPCClient) ListQuotaFences(ctx context.Context, req *coordpb.ListQuota
 	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListQuotaFencesResponse, error) {
 		return coord.ListQuotaFences(ctx, req)
 	}, validateListQuotaFencesResponse)
+}
+
+func (c *GRPCClient) WatchRootEvents(ctx context.Context, req *coordpb.WatchRootEventsRequest, opts ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
+	if c == nil {
+		return nil, errNoReachableAddress
+	}
+	endpoints := c.orderedEndpoints()
+	if len(endpoints) == 0 {
+		return nil, errNoReachableAddress
+	}
+	var lastErr error
+	for i, endpoint := range endpoints {
+		stream, err := endpoint.coord.WatchRootEvents(ctx, req, opts...)
+		if err == nil {
+			c.markPreferred(endpoint.addr)
+			return stream, nil
+		}
+		lastErr = err
+		if i == len(endpoints)-1 || !retryableRead(err) {
+			return nil, err
+		}
+	}
+	if lastErr == nil {
+		lastErr = errNoReachableAddress
+	}
+	return nil, lastErr
 }
 
 // AllocID forwards ID allocation RPC.

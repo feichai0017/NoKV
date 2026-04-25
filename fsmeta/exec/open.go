@@ -25,7 +25,7 @@ type Options struct {
 	MountTTL        time.Duration
 	QuotaTTL        time.Duration
 
-	// MonitorInterval controls the rooted mount lifecycle poll interval.
+	// MonitorInterval controls rooted lifecycle stream reconnect backoff.
 	// Zero uses the package default; negative disables the monitor.
 	MonitorInterval time.Duration
 }

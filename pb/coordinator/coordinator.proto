@@ -158,6 +158,16 @@ message ListQuotaFencesResponse {
   repeated QuotaFenceInfo fences = 1;
 }
 
+message WatchRootEventsRequest {
+  nokv.meta.v1.RootTailToken after = 1;
+}
+
+message WatchRootEventsResponse {
+  nokv.meta.v1.RootTailToken token = 1;
+  repeated nokv.meta.v1.RootCommittedEvent events = 2;
+  bool bootstrap_required = 3;
+}
+
 enum SchedulerOperationType {
   SCHEDULER_OPERATION_TYPE_NONE = 0;
   SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER = 1;
@@ -436,6 +446,7 @@ service Coordinator {
   rpc ListSubtreeAuthorities(ListSubtreeAuthoritiesRequest) returns (ListSubtreeAuthoritiesResponse);
   rpc GetQuotaFence(GetQuotaFenceRequest) returns (GetQuotaFenceResponse);
   rpc ListQuotaFences(ListQuotaFencesRequest) returns (ListQuotaFencesResponse);
+  rpc WatchRootEvents(WatchRootEventsRequest) returns (stream WatchRootEventsResponse);
   rpc RegionLiveness(RegionLivenessRequest) returns (RegionLivenessResponse);
   rpc PublishRootEvent(PublishRootEventRequest) returns (PublishRootEventResponse);
   rpc ListTransitions(ListTransitionsRequest) returns (ListTransitionsResponse);

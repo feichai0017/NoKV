@@ -7,26 +7,31 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
+	"google.golang.org/grpc"
 )
 
 const defaultMonitorInterval = time.Second
 
-type mountList interface {
+type lifecycleSource interface {
 	ListMounts(context.Context, *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error)
 	ListSubtreeAuthorities(context.Context, *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error)
 	ListQuotaFences(context.Context, *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error)
+	WatchRootEvents(context.Context, *coordpb.WatchRootEventsRequest, ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error)
 }
 
 type retireRouter interface {
 	RetireMount(fsmeta.MountID) int
 }
 
-// monitor polls coordinator ListMounts for retired mounts and fans the retire
-// signal to the router (close watchers) and the mount cache (flip admission
-// immediately). It is owned by Runtime and shut down by Runtime.Close.
+// monitor bootstraps lifecycle state once, then follows coordinator rooted
+// event streams for mount retire, quota fence, and pending subtree handoff
+// updates. It is owned by Runtime and shut down by Runtime.Close.
 type monitor struct {
-	coord    mountList
+	coord    lifecycleSource
 	router   retireRouter
 	cache    *mountCache
 	quotas   *quotaCache
@@ -37,7 +42,7 @@ type monitor struct {
 	once     sync.Once
 }
 
-func startMonitor(ctx context.Context, coord mountList, router retireRouter, cache *mountCache, quotas *quotaCache, subtrees SubtreeHandoffPublisher, interval time.Duration) *monitor {
+func startMonitor(ctx context.Context, coord lifecycleSource, router retireRouter, cache *mountCache, quotas *quotaCache, subtrees SubtreeHandoffPublisher, interval time.Duration) *monitor {
 	if coord == nil || router == nil {
 		return nil
 	}
@@ -60,24 +65,21 @@ func startMonitor(ctx context.Context, coord mountList, router retireRouter, cac
 
 func (m *monitor) run(ctx context.Context) {
 	defer close(m.done)
-	_ = m.poll(ctx)
-	tick := time.NewTicker(m.interval)
-	defer tick.Stop()
+	var after rootstorage.TailToken
+	if err := m.bootstrap(ctx); err != nil && ctx.Err() == nil {
+		log.Printf("fsmeta monitor bootstrap: %v", err)
+	}
 	for {
-		select {
-		case <-ctx.Done():
+		if err := m.watch(ctx, &after); err != nil && ctx.Err() == nil {
+			log.Printf("fsmeta monitor watch: %v", err)
+		}
+		if !m.wait(ctx, m.interval) {
 			return
-		case <-m.stop:
-			return
-		case <-tick.C:
-			if err := m.poll(ctx); err != nil && ctx.Err() == nil {
-				log.Printf("fsmeta monitor: %v", err)
-			}
 		}
 	}
 }
 
-func (m *monitor) poll(ctx context.Context) error {
+func (m *monitor) bootstrap(ctx context.Context) error {
 	if m == nil || m.coord == nil || m.router == nil {
 		return nil
 	}
@@ -126,6 +128,110 @@ func (m *monitor) poll(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (m *monitor) watch(ctx context.Context, after *rootstorage.TailToken) error {
+	if m == nil || m.coord == nil {
+		return nil
+	}
+	var token rootstorage.TailToken
+	if after != nil {
+		token = *after
+	}
+	stream, err := m.coord.WatchRootEvents(ctx, &coordpb.WatchRootEventsRequest{
+		After: metawire.RootTailTokenToProto(token),
+	})
+	if err != nil {
+		return err
+	}
+	for {
+		resp, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+		if resp.GetBootstrapRequired() {
+			if err := m.bootstrap(ctx); err != nil {
+				return err
+			}
+		}
+		token = metawire.RootTailTokenFromProto(resp.GetToken())
+		if after != nil {
+			*after = token
+		}
+		for _, record := range resp.GetEvents() {
+			m.applyRootEvent(ctx, metawire.RootEventFromProto(record.GetEvent()))
+		}
+	}
+}
+
+func (m *monitor) applyRootEvent(ctx context.Context, event rootevent.Event) {
+	switch event.Kind {
+	case rootevent.KindMountRetired:
+		if event.Mount == nil || event.Mount.MountID == "" {
+			return
+		}
+		m.retireMount(fsmeta.MountID(event.Mount.MountID))
+	case rootevent.KindQuotaFenceUpdated:
+		if m.quotas == nil || event.QuotaFence == nil {
+			return
+		}
+		m.quotas.markFenceUpdated(&coordpb.QuotaFenceInfo{
+			Subject: &coordpb.QuotaSubject{
+				MountId:     event.QuotaFence.Mount,
+				SubtreeRoot: event.QuotaFence.RootInode,
+			},
+			LimitBytes:  event.QuotaFence.LimitBytes,
+			LimitInodes: event.QuotaFence.LimitInodes,
+			Era:         event.QuotaFence.Era,
+			Frontier:    event.QuotaFence.Frontier,
+		})
+	case rootevent.KindSubtreeHandoffStarted:
+		if event.SubtreeAuthority == nil {
+			return
+		}
+		m.completePendingSubtreeHandoff(ctx, event.SubtreeAuthority.Mount, event.SubtreeAuthority.RootInode, event.SubtreeAuthority.Frontier)
+	}
+}
+
+func (m *monitor) retireMount(id fsmeta.MountID) {
+	if id == "" {
+		return
+	}
+	if m.cache != nil {
+		m.cache.markRetired(id)
+	}
+	if m.quotas != nil {
+		m.quotas.purgeMount(id)
+	}
+	if m.router != nil {
+		m.router.RetireMount(id)
+	}
+}
+
+func (m *monitor) completePendingSubtreeHandoff(ctx context.Context, mount string, rootInode, frontier uint64) {
+	if m.subtrees == nil || mount == "" || rootInode == 0 || frontier == 0 {
+		return
+	}
+	if err := m.subtrees.CompleteSubtreeHandoff(ctx, fsmeta.MountID(mount), fsmeta.InodeID(rootInode), frontier); err != nil {
+		log.Printf("fsmeta monitor: complete pending subtree handoff mount=%s root=%d frontier=%d: %v",
+			mount, rootInode, frontier, err)
+	}
+}
+
+func (m *monitor) wait(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		d = defaultMonitorInterval
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-m.stop:
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func (m *monitor) Close() error {

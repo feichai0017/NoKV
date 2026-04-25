@@ -101,6 +101,73 @@ func TestFSMetadataClientServerOnRealCluster(t *testing.T) {
 	require.ErrorIs(t, err, fsmeta.ErrNotFound)
 }
 
+func TestFSMetadataHardLinkLifecycleOnRealCluster(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	executor := openRealClusterExecutor(t, ctx)
+	cli, cleanup := openFSMetadataClient(t, ctx, executor)
+	defer cleanup()
+
+	mount := fsmeta.MountID("vol")
+	require.NoError(t, cli.Create(ctx, fsmeta.CreateRequest{
+		Mount:  mount,
+		Parent: fsmeta.RootInode,
+		Name:   "original",
+		Inode:  901,
+	}, fsmeta.InodeRecord{
+		Type:      fsmeta.InodeTypeFile,
+		Size:      8192,
+		Mode:      0o644,
+		LinkCount: 1,
+	}))
+
+	require.NoError(t, cli.Link(ctx, fsmeta.LinkRequest{
+		Mount:      mount,
+		FromParent: fsmeta.RootInode,
+		FromName:   "original",
+		ToParent:   fsmeta.RootInode,
+		ToName:     "alias",
+	}))
+
+	linked, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
+		Mount:  mount,
+		Parent: fsmeta.RootInode,
+		Limit:  8,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"alias", "original"}, dentryNames(linked))
+	require.Equal(t, uint32(2), inodeLinkCount(t, linked, "alias"))
+	require.Equal(t, uint32(2), inodeLinkCount(t, linked, "original"))
+
+	require.NoError(t, cli.Unlink(ctx, fsmeta.UnlinkRequest{
+		Mount:  mount,
+		Parent: fsmeta.RootInode,
+		Name:   "original",
+	}))
+	afterFirstUnlink, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
+		Mount:  mount,
+		Parent: fsmeta.RootInode,
+		Limit:  8,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"alias"}, dentryNames(afterFirstUnlink))
+	require.Equal(t, uint32(1), inodeLinkCount(t, afterFirstUnlink, "alias"))
+
+	require.NoError(t, cli.Unlink(ctx, fsmeta.UnlinkRequest{
+		Mount:  mount,
+		Parent: fsmeta.RootInode,
+		Name:   "alias",
+	}))
+	afterLastUnlink, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
+		Mount:  mount,
+		Parent: fsmeta.RootInode,
+		Limit:  8,
+	})
+	require.NoError(t, err)
+	require.Empty(t, afterLastUnlink)
+}
+
 func TestFSMetadataWatchSubtreeOnRealCluster(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -302,6 +369,17 @@ func dentryNames(entries []fsmeta.DentryAttrPair) []string {
 		out = append(out, entry.Dentry.Name)
 	}
 	return out
+}
+
+func inodeLinkCount(t *testing.T, entries []fsmeta.DentryAttrPair, name string) uint32 {
+	t.Helper()
+	for _, entry := range entries {
+		if entry.Dentry.Name == name {
+			return entry.Inode.LinkCount
+		}
+	}
+	t.Fatalf("dentry %q not found in %v", name, dentryNames(entries))
+	return 0
 }
 
 func openFSMetadataClient(t *testing.T, ctx context.Context, executor fsmetaserver.Executor, opts ...fsmetaserver.Option) (*fsmetaclient.GRPCClient, func()) {
