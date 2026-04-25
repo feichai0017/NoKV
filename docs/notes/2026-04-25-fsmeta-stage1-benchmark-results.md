@@ -27,7 +27,7 @@
 | 日期 | 2026-04-25 |
 | 运行方式 | Docker Compose，本机单机多容器 |
 | 集群 | 3 meta-root + 3 coordinator + 3 raftstore + fsmeta service |
-| benchmark 容器 | `golang:1.26` |
+| benchmark 容器 | `golang:1.26.2-bookworm` |
 | 网络 | Docker bridge network `nokv_default` |
 | fsmeta endpoint | `nokv-fsmeta:8090` |
 | coordinator endpoints | `nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379` |
@@ -43,7 +43,7 @@ docker run --rm --network nokv_default \
   -v "$PWD":/workspace \
   -w /workspace/benchmark \
   -e NOKV_FSMETA_BENCH=1 \
-  golang:1.26 \
+  golang:1.26.2-bookworm \
   go test ./fsmeta -run TestBenchmarkFSMeta -count=1 -timeout 30m -v -args \
     -fsmeta_drivers native-fsmeta,generic-kv \
     -fsmeta_mount fsmeta-formal-20260425T051640Z \
@@ -137,4 +137,3 @@ Stage 1 可以收尾。后续正式结果要补两类：
 
 1. 加 `generic-kv-fanout` driver，衡量 client-side 并发 point Get 能把差距缩到多少。
 2. 在 Stage 2 引入 `WatchSubtree` / `RenameSubtree` / `QuotaFence` 前，每条 primitive 先落 design note，再加同集群 native-vs-generic 对照。
-
