@@ -129,7 +129,9 @@ func (c *Client) resolveStoreConn(ctx context.Context, storeID uint64, now time.
 	if info.GetStoreId() != storeID {
 		return nil, fmt.Errorf("client: resolved store id %d != requested %d", info.GetStoreId(), storeID)
 	}
-	if info.GetState() == coordpb.StoreState_STORE_STATE_DOWN {
+	if info.GetState() == coordpb.StoreState_STORE_STATE_UNKNOWN ||
+		info.GetState() == coordpb.StoreState_STORE_STATE_DOWN ||
+		info.GetState() == coordpb.StoreState_STORE_STATE_TOMBSTONE {
 		return nil, fmt.Errorf("%w: store %d", errStoreUnavailable, storeID)
 	}
 	if info.GetClientAddr() == "" {

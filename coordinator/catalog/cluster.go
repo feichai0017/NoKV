@@ -1,13 +1,15 @@
 package catalog
 
 import (
+	"sort"
+	"sync"
+	"time"
+
 	pdview "github.com/feichai0017/NoKV/coordinator/view"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	"sync"
-	"time"
 )
 
 type PendingSnapshot struct {
@@ -23,6 +25,8 @@ type PendingSnapshot struct {
 type Cluster struct {
 	stores              *pdview.StoreHealthView
 	regions             *pdview.RegionDirectoryView
+	storeMembershipMu   sync.RWMutex
+	storeMemberships    map[uint64]rootstate.StoreMembership
 	pendingMu           sync.RWMutex
 	pendingPeerChanges  map[uint64]rootstate.PendingPeerChange
 	pendingRangeChanges map[uint64]rootstate.PendingRangeChange
@@ -35,6 +39,7 @@ func NewCluster() *Cluster {
 	return &Cluster{
 		stores:              pdview.NewStoreHealthView(),
 		regions:             pdview.NewRegionDirectoryView(),
+		storeMemberships:    make(map[uint64]rootstate.StoreMembership),
 		pendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
 		pendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
 	}
@@ -44,6 +49,13 @@ func NewCluster() *Cluster {
 func (c *Cluster) UpsertStoreHeartbeat(stats pdview.StoreStats) error {
 	if c == nil {
 		return nil
+	}
+	membership, ok := c.StoreMembershipByID(stats.StoreID)
+	if !ok {
+		return ErrStoreNotJoined
+	}
+	if membership.State == rootstate.StoreMembershipRetired {
+		return ErrStoreRetired
 	}
 	return c.stores.Upsert(stats)
 }
@@ -77,6 +89,71 @@ func (c *Cluster) StoreByID(storeID uint64) (pdview.StoreStats, bool) {
 	return pdview.StoreStats{}, false
 }
 
+type StoreInfo struct {
+	Membership rootstate.StoreMembership
+	Stats      pdview.StoreStats
+	HasRuntime bool
+}
+
+func (c *Cluster) StoreInfoByID(storeID uint64) (StoreInfo, bool) {
+	if c == nil || storeID == 0 {
+		return StoreInfo{}, false
+	}
+	membership, ok := c.StoreMembershipByID(storeID)
+	if !ok {
+		return StoreInfo{}, false
+	}
+	info := StoreInfo{Membership: membership}
+	if stats, hasRuntime := c.StoreByID(storeID); hasRuntime {
+		info.Stats = stats
+		info.HasRuntime = true
+	} else {
+		info.Stats.StoreID = storeID
+	}
+	return info, true
+}
+
+func (c *Cluster) StoreInfos() []StoreInfo {
+	if c == nil {
+		return nil
+	}
+	memberships := c.StoreMembershipSnapshot()
+	out := make([]StoreInfo, 0, len(memberships))
+	for storeID, membership := range memberships {
+		info := StoreInfo{Membership: membership}
+		if stats, ok := c.StoreByID(storeID); ok {
+			info.Stats = stats
+			info.HasRuntime = true
+		} else {
+			info.Stats.StoreID = storeID
+		}
+		out = append(out, info)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Membership.StoreID < out[j].Membership.StoreID
+	})
+	return out
+}
+
+func (c *Cluster) StoreMembershipByID(storeID uint64) (rootstate.StoreMembership, bool) {
+	if c == nil || storeID == 0 {
+		return rootstate.StoreMembership{}, false
+	}
+	c.storeMembershipMu.RLock()
+	defer c.storeMembershipMu.RUnlock()
+	membership, ok := c.storeMemberships[storeID]
+	return membership, ok
+}
+
+func (c *Cluster) StoreMembershipSnapshot() map[uint64]rootstate.StoreMembership {
+	if c == nil {
+		return make(map[uint64]rootstate.StoreMembership)
+	}
+	c.storeMembershipMu.RLock()
+	defer c.storeMembershipMu.RUnlock()
+	return rootstate.CloneStoreMemberships(c.storeMemberships)
+}
+
 // PublishRegionDescriptor applies one rooted region descriptor into the runtime
 // Coordinator route view.
 func (c *Cluster) PublishRegionDescriptor(desc descriptor.Descriptor) error {
@@ -108,6 +185,7 @@ func (c *Cluster) PublishRootEvent(event rootevent.Event) error {
 	if err := c.applyRootEventToRegions(event); err != nil {
 		return err
 	}
+	c.applyRootEventToStoreMemberships(event)
 	c.applyRootEventToTransitions(snapshot, event)
 	return nil
 }
@@ -254,28 +332,21 @@ func (c *Cluster) MaxDescriptorRevision() uint64 {
 // ReplaceRegionSnapshot replaces the region directory view from one rooted
 // snapshot while preserving store-health runtime observations.
 func (c *Cluster) ReplaceRegionSnapshot(descriptors map[uint64]descriptor.Descriptor) {
-	c.ReplaceRootSnapshot(descriptors, nil, nil, rootstorage.TailToken{})
+	c.ReplaceRootSnapshot(rootstate.Snapshot{Descriptors: descriptors}, rootstorage.TailToken{})
 }
 
 // ReplaceRootSnapshot replaces the runtime rooted view from one rooted durable
 // snapshot while preserving store-heartbeat observations.
-func (c *Cluster) ReplaceRootSnapshot(
-	descriptors map[uint64]descriptor.Descriptor,
-	pendingPeerChanges map[uint64]rootstate.PendingPeerChange,
-	pendingRangeChanges map[uint64]rootstate.PendingRangeChange,
-	token rootstorage.TailToken,
-) {
+func (c *Cluster) ReplaceRootSnapshot(snapshot rootstate.Snapshot, token rootstorage.TailToken) {
 	if c == nil {
 		return
 	}
-	c.regions.Replace(descriptors)
+	c.regions.Replace(snapshot.Descriptors)
+	c.replaceStoreMemberships(snapshot.Stores)
 	c.rootMu.Lock()
 	c.rootToken = token
 	c.rootMu.Unlock()
-	c.replaceTransitionRuntime(rootstate.Snapshot{
-		PendingPeerChanges:  pendingPeerChanges,
-		PendingRangeChanges: pendingRangeChanges,
-	})
+	c.replaceTransitionRuntime(snapshot)
 }
 
 func (c *Cluster) CatalogRootToken() rootstorage.TailToken {
@@ -374,15 +445,56 @@ func (c *Cluster) replaceTransitionRuntime(snapshot rootstate.Snapshot) {
 	c.pendingMu.Unlock()
 }
 
+func (c *Cluster) applyRootEventToStoreMemberships(event rootevent.Event) {
+	if c == nil || event.StoreMembership == nil || event.StoreMembership.StoreID == 0 {
+		return
+	}
+	storeID := event.StoreMembership.StoreID
+	c.storeMembershipMu.Lock()
+	defer c.storeMembershipMu.Unlock()
+	current := c.storeMemberships[storeID]
+	switch event.Kind {
+	case rootevent.KindStoreJoined:
+		c.storeMemberships[storeID] = rootstate.StoreMembership{
+			StoreID:  storeID,
+			State:    rootstate.StoreMembershipActive,
+			JoinedAt: current.JoinedAt,
+		}
+	case rootevent.KindStoreRetired:
+		current.StoreID = storeID
+		current.State = rootstate.StoreMembershipRetired
+		c.storeMemberships[storeID] = current
+		c.stores.Remove(storeID)
+	}
+}
+
+func (c *Cluster) replaceStoreMemberships(memberships map[uint64]rootstate.StoreMembership) {
+	if c == nil {
+		return
+	}
+	next := rootstate.CloneStoreMemberships(memberships)
+	c.storeMembershipMu.Lock()
+	c.storeMemberships = next
+	c.storeMembershipMu.Unlock()
+	for _, stats := range c.stores.Snapshot() {
+		membership, ok := next[stats.StoreID]
+		if !ok || membership.State == rootstate.StoreMembershipRetired {
+			c.stores.Remove(stats.StoreID)
+		}
+	}
+}
+
 func (c *Cluster) rootedSnapshot() rootstate.Snapshot {
 	if c == nil {
 		return rootstate.Snapshot{
+			Stores:              make(map[uint64]rootstate.StoreMembership),
 			Descriptors:         make(map[uint64]descriptor.Descriptor),
 			PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
 			PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
 		}
 	}
 	return rootstate.Snapshot{
+		Stores:              c.StoreMembershipSnapshot(),
 		Descriptors:         c.regions.DescriptorsSnapshot(),
 		PendingPeerChanges:  c.clonePendingPeerChanges(),
 		PendingRangeChanges: c.clonePendingRangeChanges(),
