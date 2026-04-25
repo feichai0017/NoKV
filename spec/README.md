@@ -20,6 +20,8 @@ Both are installed locally under `third_party/tla/`.
 ```bash
 make tlc-succession
 make tlc-successionmultidim
+make tlc-mountlifecycle
+make tlc-subtreeauthority
 make tlc-leaseonly-counterexample
 make tlc-leasestart-counterexample
 make tlc-tokenonly-counterexample
@@ -33,6 +35,8 @@ Current contrast models:
 
 - `LeaseOnly.tla`: no reply-side guard and no rooted handover record; expected to violate `NoOldReplyAfterSuccessor`
 - `SuccessionMultiDim.tla`: positive lease-start coverage model for the CRDB `#66562` analog
+- `MountLifecycle.tla`: positive rooted mount lifecycle model; checks that registered mounts cannot be implicitly created or reactivated after retirement
+- `SubtreeAuthority.tla`: positive namespace authority handoff model; projects Succession's Primacy / Inheritance / Silence / Finality onto subtree authority records
 - `LeaseStartOnly.tla`: no lease-start coverage check on predecessor served-read summaries; expected to violate `NoWriteBehindServedRead`
 - `TokenOnly.tla`: bounded-freshness token only; still expected to violate `NoOldReplyAfterSuccessor`
 - `ChubbyFencedLease.tla`: per-reply sequencer fencing; expected to preserve stale-reply rejection but violate successor coverage
@@ -64,6 +68,18 @@ shape directly, and the spec includes a lemma showing it implies the original
 `Primacy` claim. This is still not a full TLAPS proof, but it is a
 more robust bridge from bounded checking to an unbounded-by-construction
 argument for Primacy than the earlier cardinality-only invariant.
+
+Stage 3 adds two namespace-facing positive models:
+
+- `MountLifecycle.tla` models `MountRegistered` / `MountRetired` as rooted
+  lifecycle truth. It checks three mount invariants: retired mounts never
+  become active again, active/retired mounts must have been explicitly
+  registered, and mount identity fields stay present after registration.
+- `SubtreeAuthority.tla` models the authority protocol that `RenameSubtree v1`
+  will consume. It excludes dentry mutation and checks only authority
+  correctness: one active authority per subtree, successor frontier coverage,
+  inadmissibility of sealed-authority replies, and finality of sealed
+  predecessors.
 
 ## Run Apalache
 

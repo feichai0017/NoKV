@@ -3,7 +3,7 @@
 
 .PHONY: help build test test-short test-race test-coverage lint fmt clean docker-up docker-down bench install-tools install-tla-tools
 .PHONY: proto proto-check proto-breaking-check
-.PHONY: tlc-succession tlc-successionmultidim tlc-leaseonly-counterexample tlc-leasestart-counterexample apalache-typecheck apalache-check-succession apalache-check-successionmultidim
+.PHONY: tlc-succession tlc-successionmultidim tlc-mountlifecycle tlc-subtreeauthority tlc-leaseonly-counterexample tlc-leasestart-counterexample apalache-typecheck apalache-check-succession apalache-check-successionmultidim
 
 GOLANGCI_LINT_VERSION ?= v2.9.0
 BUF_VERSION ?= 1.66.0
@@ -28,6 +28,8 @@ help:
 	@echo "  make install-tla-tools  - Install pinned TLC and Apalache locally under third_party/"
 	@echo "  make tlc-succession            - Run TLC on spec/Succession.tla"
 	@echo "  make tlc-successionmultidim    - Run TLC on spec/SuccessionMultiDim.tla"
+	@echo "  make tlc-mountlifecycle        - Run TLC on spec/MountLifecycle.tla"
+	@echo "  make tlc-subtreeauthority      - Run TLC on spec/SubtreeAuthority.tla"
 	@echo "  make tlc-leaseonly-counterexample - Run TLC and expect a counterexample for spec/LeaseOnly.tla"
 	@echo "  make tlc-leasestart-counterexample - Run TLC and expect a counterexample for spec/LeaseStartOnly.tla"
 	@echo "  make apalache-typecheck - Run Apalache typecheck on current specs"
@@ -139,6 +141,14 @@ tlc-successionmultidim:
 	@echo "Running TLC on spec/SuccessionMultiDim.tla..."
 	./scripts/tla/tlc.sh spec/SuccessionMultiDim.tla
 
+tlc-mountlifecycle:
+	@echo "Running TLC on spec/MountLifecycle.tla..."
+	./scripts/tla/tlc.sh spec/MountLifecycle.tla
+
+tlc-subtreeauthority:
+	@echo "Running TLC on spec/SubtreeAuthority.tla..."
+	./scripts/tla/tlc.sh spec/SubtreeAuthority.tla
+
 tlc-leaseonly-counterexample:
 	@echo "Running TLC on spec/LeaseOnly.tla (expecting counterexample)..."
 	@if ./scripts/tla/tlc.sh spec/LeaseOnly.tla; then \
@@ -195,6 +205,24 @@ record-tlc-successionmultidim:
 		exit 1; \
 	fi
 
+record-tlc-mountlifecycle:
+	@echo "Recording TLC output for MountLifecycle..."
+	@if ./scripts/tla/record_tlc.sh spec/MountLifecycle.tla spec/artifacts/tlc-mountlifecycle.out; then \
+		echo "✓ Recorded TLC output for MountLifecycle"; \
+	else \
+		echo "expected MountLifecycle to succeed under TLC, but recording failed"; \
+		exit 1; \
+	fi
+
+record-tlc-subtreeauthority:
+	@echo "Recording TLC output for SubtreeAuthority..."
+	@if ./scripts/tla/record_tlc.sh spec/SubtreeAuthority.tla spec/artifacts/tlc-subtreeauthority.out; then \
+		echo "✓ Recorded TLC output for SubtreeAuthority"; \
+	else \
+		echo "expected SubtreeAuthority to succeed under TLC, but recording failed"; \
+		exit 1; \
+	fi
+
 record-tlc-leaseonly:
 	@echo "Recording TLC counterexample for LeaseOnly..."
 	@if ./scripts/tla/record_tlc.sh spec/LeaseOnly.tla spec/artifacts/tlc-leaseonly.out; then \
@@ -241,7 +269,7 @@ record-apalache-successionmultidim:
 	./scripts/tla/record_apalache_check.sh spec/SuccessionMultiDim.tla spec/SuccessionMultiDim.cfg NoWriteBehindServedRead 6 spec/artifacts/apalache-successionmultidim.out
 	@echo "✓ Recorded Apalache output for SuccessionMultiDim"
 
-record-formal-artifacts: record-tlc-succession record-tlc-successionmultidim record-tlc-leaseonly record-tlc-tokenonly record-tlc-chubbyfenced record-tlc-leasestart record-apalache-succession record-apalache-successionmultidim
+record-formal-artifacts: record-tlc-succession record-tlc-successionmultidim record-tlc-mountlifecycle record-tlc-subtreeauthority record-tlc-leaseonly record-tlc-tokenonly record-tlc-chubbyfenced record-tlc-leasestart record-apalache-succession record-apalache-successionmultidim
 
 apalache-typecheck:
 	@echo "Running Apalache typecheck on current specs..."

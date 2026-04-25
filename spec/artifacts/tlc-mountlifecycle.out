@@ -1,0 +1,7 @@
+# Recorded TLC output
+spec=spec/MountLifecycle.tla
+status=success
+
+Model checking completed. No error has been found.
+2674 states generated, 729 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 7.
