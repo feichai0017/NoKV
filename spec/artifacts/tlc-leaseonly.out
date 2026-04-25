@@ -1,0 +1,32 @@
+# Recorded TLC output
+spec=spec/LeaseOnly.tla
+status=failure
+
+Error: Invariant NoOldReplyAfterSuccessor is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ inflight = {}
+/\ frontier = (0 :> 0 @@ 1 :> 0 @@ 2 :> 0 @@ 3 :> 0)
+/\ activeEra = 0
+/\ issued = {0}
+/\ delivered = [era |-> 0, frontier |-> 0, valid |-> FALSE]
+State 2: <CurrentReply line 50, col 5 to line 55, col 38 of module LeaseOnly>
+/\ inflight = {[era |-> 0, frontier |-> 0]}
+/\ frontier = (0 :> 0 @@ 1 :> 0 @@ 2 :> 0 @@ 3 :> 0)
+/\ activeEra = 0
+/\ issued = {0}
+/\ delivered = [era |-> 0, frontier |-> 0, valid |-> FALSE]
+State 3: <Issue line 42, col 9 to line 47, col 43 of module LeaseOnly>
+/\ inflight = {[era |-> 0, frontier |-> 0]}
+/\ frontier = (0 :> 0 @@ 1 :> 0 @@ 2 :> 0 @@ 3 :> 0)
+/\ activeEra = 1
+/\ issued = {0, 1}
+/\ delivered = [era |-> 0, frontier |-> 0, valid |-> FALSE]
+State 4: <DeliverReply line 58, col 5 to line 61, col 48 of module LeaseOnly>
+/\ inflight = {}
+/\ frontier = (0 :> 0 @@ 1 :> 0 @@ 2 :> 0 @@ 3 :> 0)
+/\ activeEra = 1
+/\ issued = {0, 1}
+/\ delivered = [era |-> 0, frontier |-> 0, valid |-> TRUE]
+120 states generated, 85 distinct states found, 64 states left on queue.
+The depth of the complete state graph search is 4.

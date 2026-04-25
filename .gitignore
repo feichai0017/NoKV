@@ -26,7 +26,7 @@ benchmark.test
 
 AGENTS.md
 
-artifacts/
+./artifacts/
 
 work_redis
 

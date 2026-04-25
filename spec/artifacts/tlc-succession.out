@@ -1,0 +1,7 @@
+# Recorded TLC output
+spec=spec/Succession.tla
+status=success
+
+Model checking completed. No error has been found.
+22876 states generated, 3924 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 20.
