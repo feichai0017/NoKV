@@ -203,6 +203,7 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 		ClusterEpoch: 5,
 		RootToken:    rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 4}, Revision: 2},
 		CatchUpState: CatchUpStateLagging,
+		Stores:       map[uint64]rootstate.StoreMembership{},
 		Descriptors: map[uint64]descriptor.Descriptor{
 			desc2.RegionID: desc2,
 			desc1.RegionID: desc1,
@@ -233,12 +234,16 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 			TSOFence:      50,
 			Tenure:        snapshot.Tenure,
 		},
+		Stores: map[uint64]rootstate.StoreMembership{
+			7: {StoreID: 7, State: rootstate.StoreMembershipActive, JoinedAt: rootstate.Cursor{Term: 2, Index: 3}},
+		},
 		Descriptors:         snapshot.Descriptors,
 		PendingPeerChanges:  snapshot.PendingPeerChanges,
 		PendingRangeChanges: snapshot.PendingRangeChanges,
 	}
 	fromRoot := SnapshotFromRoot(rootSnapshot)
 	require.Equal(t, CatchUpStateFresh, fromRoot.CatchUpState)
+	require.Equal(t, rootstate.StoreMembershipActive, fromRoot.Stores[7].State)
 	require.Equal(t, uint64(40), fromRoot.Allocator.IDCurrent)
 	require.Equal(t, rootstate.Cursor{Term: 3, Index: 10}, fromRoot.RootToken.Cursor)
 

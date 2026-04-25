@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/coordinator/rootview"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
@@ -105,7 +106,12 @@ func (s *Service) publishRootSnapshot(snapshot rootview.Snapshot) {
 		return
 	}
 	if s.cluster != nil {
-		s.cluster.ReplaceRootSnapshot(snapshot.Descriptors, snapshot.PendingPeerChanges, snapshot.PendingRangeChanges, snapshot.RootToken)
+		s.cluster.ReplaceRootSnapshot(rootstate.Snapshot{
+			Stores:              snapshot.Stores,
+			Descriptors:         snapshot.Descriptors,
+			PendingPeerChanges:  snapshot.PendingPeerChanges,
+			PendingRangeChanges: snapshot.PendingRangeChanges,
+		}, snapshot.RootToken)
 	}
 }
 

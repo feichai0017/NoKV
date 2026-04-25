@@ -14,6 +14,8 @@ import (
 
 func TestClusterStoreHeartbeatAndSnapshot(t *testing.T) {
 	c := NewCluster()
+	require.NoError(t, c.PublishRootEvent(rootevent.StoreJoined(1)))
+	require.NoError(t, c.PublishRootEvent(rootevent.StoreJoined(2)))
 	require.NoError(t, c.UpsertStoreHeartbeat(pdview.StoreStats{StoreID: 1, RegionNum: 3}))
 	require.NoError(t, c.UpsertStoreHeartbeat(pdview.StoreStats{StoreID: 2, RegionNum: 5}))
 
@@ -27,6 +29,27 @@ func TestClusterStoreHeartbeatAndSnapshot(t *testing.T) {
 	snap = c.StoreSnapshot()
 	require.Len(t, snap, 1)
 	require.Equal(t, uint64(2), snap[0].StoreID)
+}
+
+func TestClusterStoreHeartbeatRequiresActiveMembership(t *testing.T) {
+	c := NewCluster()
+	err := c.UpsertStoreHeartbeat(pdview.StoreStats{StoreID: 7})
+	require.ErrorIs(t, err, ErrStoreNotJoined)
+
+	require.NoError(t, c.PublishRootEvent(rootevent.StoreJoined(7)))
+	require.NoError(t, c.UpsertStoreHeartbeat(pdview.StoreStats{StoreID: 7}))
+	info, ok := c.StoreInfoByID(7)
+	require.True(t, ok)
+	require.Equal(t, rootstate.StoreMembershipActive, info.Membership.State)
+	require.True(t, info.HasRuntime)
+
+	require.NoError(t, c.PublishRootEvent(rootevent.StoreRetired(7)))
+	err = c.UpsertStoreHeartbeat(pdview.StoreStats{StoreID: 7})
+	require.ErrorIs(t, err, ErrStoreRetired)
+	info, ok = c.StoreInfoByID(7)
+	require.True(t, ok)
+	require.Equal(t, rootstate.StoreMembershipRetired, info.Membership.State)
+	require.False(t, info.HasRuntime)
 }
 
 func TestClusterRegionHeartbeatAndRouteLookup(t *testing.T) {
@@ -202,6 +225,7 @@ func TestClusterPublishRootEventTracksTransitionSnapshot(t *testing.T) {
 
 func TestClusterReplaceRootSnapshotPreservesStoreStateAndRefreshesRuntime(t *testing.T) {
 	c := NewCluster()
+	require.NoError(t, c.PublishRootEvent(rootevent.StoreJoined(9)))
 	require.NoError(t, c.UpsertStoreHeartbeat(pdview.StoreStats{StoreID: 9, RegionNum: 2}))
 
 	base := testDescriptor(30, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
@@ -210,9 +234,10 @@ func TestClusterReplaceRootSnapshotPreservesStoreStateAndRefreshesRuntime(t *tes
 	target.Epoch.ConfVersion++
 	target.EnsureHash()
 
-	c.ReplaceRootSnapshot(
-		map[uint64]descriptor.Descriptor{base.RegionID: base},
-		map[uint64]rootstate.PendingPeerChange{
+	c.ReplaceRootSnapshot(rootstate.Snapshot{
+		Stores:      map[uint64]rootstate.StoreMembership{9: {StoreID: 9, State: rootstate.StoreMembershipActive}},
+		Descriptors: map[uint64]descriptor.Descriptor{base.RegionID: base},
+		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
 			base.RegionID: {
 				Kind:    rootstate.PendingPeerChangeAddition,
 				StoreID: 2,
@@ -221,9 +246,7 @@ func TestClusterReplaceRootSnapshotPreservesStoreStateAndRefreshesRuntime(t *tes
 				Target:  target,
 			},
 		},
-		nil,
-		rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 9}, Revision: 4},
-	)
+	}, rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 9}, Revision: 4})
 
 	require.Len(t, c.StoreSnapshot(), 1)
 	require.Len(t, c.RegionSnapshot(), 1)
@@ -237,7 +260,7 @@ func TestClusterReplaceRootSnapshotPreservesStoreStateAndRefreshesRuntime(t *tes
 	require.Equal(t, []byte("a"), freshTransitions.PendingPeerChanges[base.RegionID].Target.StartKey)
 	require.Equal(t, uint64(4), c.CatalogRootToken().Revision)
 
-	c.ReplaceRootSnapshot(nil, nil, nil, rootstorage.TailToken{})
+	c.ReplaceRootSnapshot(rootstate.Snapshot{Stores: map[uint64]rootstate.StoreMembership{9: {StoreID: 9, State: rootstate.StoreMembershipActive}}}, rootstorage.TailToken{})
 	require.Len(t, c.StoreSnapshot(), 1)
 	require.Empty(t, c.RegionSnapshot())
 	require.Empty(t, c.TransitionSnapshot().PendingPeerChanges)
@@ -355,10 +378,9 @@ func TestClusterLeaderClaimsAndPendingRangeHelpers(t *testing.T) {
 	require.Equal(t, right.RootEpoch, c.MaxDescriptorRevision())
 
 	merged := testDescriptor(72, []byte(""), []byte(""), metaregion.Epoch{Version: 3, ConfVersion: 1})
-	c.ReplaceRootSnapshot(
-		map[uint64]descriptor.Descriptor{merged.RegionID: merged},
-		nil,
-		map[uint64]rootstate.PendingRangeChange{
+	c.ReplaceRootSnapshot(rootstate.Snapshot{
+		Descriptors: map[uint64]descriptor.Descriptor{merged.RegionID: merged},
+		PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
 			merged.RegionID: {
 				Kind:          rootstate.PendingRangeChangeMerge,
 				LeftRegionID:  left.RegionID,
@@ -366,8 +388,7 @@ func TestClusterLeaderClaimsAndPendingRangeHelpers(t *testing.T) {
 				Merged:        merged,
 			},
 		},
-		rootstorage.TailToken{},
-	)
+	}, rootstorage.TailToken{})
 
 	change, ok := c.PendingRangeChangeForDescriptor(merged.RegionID)
 	require.True(t, ok)
