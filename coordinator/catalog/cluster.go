@@ -64,6 +64,15 @@ func (c *Cluster) StoreSnapshot() []pdview.StoreStats {
 	return c.stores.Snapshot()
 }
 
+// StoreByID returns the latest runtime store registry entry. The lookup is O(1)
+// via StoreHealthView.Get and does not allocate or sort.
+func (c *Cluster) StoreByID(storeID uint64) (pdview.StoreStats, bool) {
+	if c == nil || storeID == 0 {
+		return pdview.StoreStats{}, false
+	}
+	return c.stores.Get(storeID)
+}
+
 // PublishRegionDescriptor applies one rooted region descriptor into the runtime
 // Coordinator route view.
 func (c *Cluster) PublishRegionDescriptor(desc descriptor.Descriptor) error {

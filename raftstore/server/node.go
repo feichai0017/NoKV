@@ -97,6 +97,15 @@ func NewNode(cfg Config) (*Node, error) {
 		_ = tr.Close()
 		return nil, err
 	}
+	clientAddr := storeCfg.ClientAddr
+	if clientAddr == "" {
+		clientAddr = tr.Addr()
+	}
+	raftAddr := storeCfg.RaftAddr
+	if raftAddr == "" {
+		raftAddr = clientAddr
+	}
+	st.SetAdvertiseAddrs(clientAddr, raftAddr)
 
 	node := &Node{
 		store:     st,

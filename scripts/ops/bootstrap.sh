@@ -14,17 +14,21 @@ Options:
   --config PATH          Raft configuration file (default: ./raft_config.example.json)
   --path-template TMPL   Template for store workdirs, e.g. /data/store-{id}
   --state STATE          Optional region state (running|tombstone)
+  --skip-existing        Exit successfully for stores that already have CURRENT
 
 Notes:
   - bootstrap.sh only seeds fresh store workdirs from config.regions.
   - It must not be used to restart a store that already has runtime raft/local metadata.
   - Runtime topology changes are recovered from local metadata, not from config.regions.
+  - --skip-existing is intended for Docker Compose restart workflows; the default
+    remains fail-fast to prevent accidental reseeding of runtime directories.
 USAGE
 }
 
 CONFIG=""
 PATH_TEMPLATE=""
 REGION_STATE="running"
+SKIP_EXISTING=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -39,6 +43,10 @@ while [[ $# -gt 0 ]]; do
     --state)
       REGION_STATE=$2
       shift 2
+      ;;
+    --skip-existing)
+      SKIP_EXISTING=1
+      shift
       ;;
     --help|-h)
       usage
@@ -93,6 +101,10 @@ for store_line in "${STORE_LINES[@]}"; do
   store_path=${PATH_TEMPLATE//\{id\}/$store_id}
   mkdir -p "$store_path"
   if [[ -f "$store_path/CURRENT" ]]; then
+    if [[ "$SKIP_EXISTING" -eq 1 ]]; then
+      echo "bootstrap.sh: store $store_id already bootstrapped; skipping"
+      continue
+    fi
     nokv_die "bootstrap.sh: store $store_id already bootstrapped; refusing to seed into an existing runtime workdir"
   fi
   nokv_assert_fresh_workdir "$store_path" "bootstrap.sh: store $store_id has stale files; refusing to seed into dirty directory"

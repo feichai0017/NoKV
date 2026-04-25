@@ -66,6 +66,16 @@
     <h3><a href="2026-04-12-coordinator-meta-separation.html">Coordinator 和 meta/root 分离部署设计</a></h3>
     <p>讨论 co-located 与 separated control-plane deployment 的边界、TSO/ID window、Coordinator lease、freshness 语义和落地顺序。</p>
   </div>
+  <div class="blog-card">
+    <span class="blog-date">2026-04-24</span>
+    <h3><a href="2026-04-24-fsmeta-positioning.html">fsmeta 定位：面向分布式文件系统的元数据底座</a></h3>
+    <p>说明为什么 fsmeta 不走 JuiceFS TKV 兼容路线，而是把 metadata-native API 作为 NoKV 的云原生生态位。</p>
+  </div>
+  <div class="blog-card">
+    <span class="blog-date">2026-04-25</span>
+    <h3><a href="2026-04-25-fsmeta-stage1-benchmark-results.html">fsmeta Stage 1 benchmark 结果</a></h3>
+    <p>记录 native-fsmeta 与 generic-kv 在同一 NoKV 集群上的正式对比，重点解释 ReadDirPlus 的 42.5x 延迟差异和 caveat。</p>
+  </div>
 </div>
 
 ## 这里应该写什么

@@ -229,7 +229,7 @@ peers := cfg.MetaRootServicePeers("docker") // id → gRPC addr
 - `scripts/dev/cluster.sh --config raft_config.example.json`
 - `scripts/ops/serve-meta-root.sh --config ... --node-id 1`
 - `scripts/ops/serve-coordinator.sh --config ... --coordinator-id c1`
-- `go run ./cmd/nokv-redis --raft-config raft_config.example.json`
+- `go run ./cmd/nokv-redis --coordinator-addr 127.0.0.1:2379`
 - `nokv-config stores` / `nokv-config regions` — query current rooted
   topology (not the JSON). Use these to diff against the deployment manifest
   after scheduler operations.
