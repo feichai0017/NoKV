@@ -23,6 +23,46 @@ message StoreHeartbeatRequest {
   // the reports will briefly disagree and converge within one heartbeat
   // tick.
   repeated uint64 leader_region_ids = 7;
+  // client_addr is the data-plane gRPC address clients should dial for KV RPCs.
+  string client_addr = 8;
+  // raft_addr is the raft transport address used by operators and future
+  // transport-aware scheduling. The first implementation usually matches
+  // client_addr because NoKV currently shares one gRPC transport.
+  string raft_addr = 9;
+}
+
+enum StoreState {
+  STORE_STATE_UNKNOWN = 0;
+  STORE_STATE_UP = 1;
+  STORE_STATE_DOWN = 2;
+}
+
+message StoreInfo {
+  uint64 store_id = 1;
+  string client_addr = 2;
+  string raft_addr = 3;
+  StoreState state = 4;
+  uint64 region_num = 5;
+  uint64 leader_num = 6;
+  uint64 capacity = 7;
+  uint64 available = 8;
+  uint64 dropped_operations = 9;
+  uint64 last_heartbeat_unix_nano = 10;
+}
+
+message GetStoreRequest {
+  uint64 store_id = 1;
+}
+
+message GetStoreResponse {
+  StoreInfo store = 1;
+  bool not_found = 2;
+}
+
+message ListStoresRequest {}
+
+message ListStoresResponse {
+  repeated StoreInfo stores = 1;
 }
 
 enum SchedulerOperationType {
@@ -296,6 +336,8 @@ message TsoResponse {
 
 service Coordinator {
   rpc StoreHeartbeat(StoreHeartbeatRequest) returns (StoreHeartbeatResponse);
+  rpc GetStore(GetStoreRequest) returns (GetStoreResponse);
+  rpc ListStores(ListStoresRequest) returns (ListStoresResponse);
   rpc RegionLiveness(RegionLivenessRequest) returns (RegionLivenessResponse);
   rpc PublishRootEvent(PublishRootEventRequest) returns (PublishRootEventResponse);
   rpc ListTransitions(ListTransitionsRequest) returns (ListTransitionsResponse);

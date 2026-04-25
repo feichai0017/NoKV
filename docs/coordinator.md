@@ -72,12 +72,12 @@ actions.
 
 ### Minimal Succession vocabulary
 
-The rooted handoff protocol is smaller than some of the implementation type
-names suggest. At the doc / operator level, keep just these words:
+The rooted handoff protocol is intentionally small. Docs and operator-facing
+surfaces should use the same vocabulary as the implementation and the
+Succession research note:
 
-- `Lease` — the currently active authority record
-- `Seal` — the retired predecessor era plus the frontier it already
-  consumed
+- `Tenure` — the currently active authority record
+- `Legacy` — the retired predecessor era plus the frontier it already consumed
 - `Handover` — the rooted handoff record for the current successor
 - `Era` — the monotonic authority era
 - `Witness` — the operator-visible proof bundle that explains whether the
@@ -90,20 +90,20 @@ The four guarantees discussed by the docs and runtime metrics are:
 - `Silence` — a sealed predecessor must not keep serving
 - `Finality` — a handoff must not remain permanently half-finished
 
-Implementation names remain more explicit:
+The mapping to concrete implementation types is direct:
 
 | Doc term | Implementation term |
 |---|---|
-| `Lease` | `Tenure` |
-| `Seal` | `Legacy` |
+| `Tenure` | `Tenure` |
+| `Legacy` | `Legacy` |
 | `Handover` | `Handover` |
 | `Era` | `Era` / `era` |
 | `Witness` | `HandoverWitness` / continuation witness fields |
 | `Frontiers` | `MandateFrontiers` / `frontiers` / `consumed_frontiers` |
 
-This split is deliberate: docs describe the protocol in the smallest stable
-vocabulary, while code keeps the more explicit type names that make mutation
-boundaries obvious.
+Do not reintroduce `Lease` / `Seal` as public aliases. They are useful
+informally, but keeping them in formal docs creates two names for the same
+rooted objects and makes Succession harder to explain.
 
 ---
 

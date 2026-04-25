@@ -1,0 +1,95 @@
+// Use scripts/gen.sh to generate .pb.go files.
+syntax = "proto3";
+
+package nokv.fsmeta.v1;
+
+option go_package = "github.com/feichai0017/NoKV/pb/fsmeta;fsmetapb";
+
+enum InodeType {
+  INODE_TYPE_UNSPECIFIED = 0;
+  INODE_TYPE_FILE = 1;
+  INODE_TYPE_DIRECTORY = 2;
+}
+
+message InodeRecord {
+  uint64 inode = 1;
+  InodeType type = 2;
+  uint64 size = 3;
+  uint32 mode = 4;
+  uint32 link_count = 5;
+  int64 created_unix_ns = 6;
+  int64 updated_unix_ns = 7;
+}
+
+message DentryRecord {
+  uint64 parent = 1;
+  string name = 2;
+  uint64 inode = 3;
+  InodeType type = 4;
+}
+
+message DentryAttrPair {
+  DentryRecord dentry = 1;
+  InodeRecord inode = 2;
+}
+
+message CreateRequest {
+  string mount = 1;
+  uint64 parent = 2;
+  string name = 3;
+  InodeRecord inode = 4;
+}
+
+message CreateResponse {}
+
+message LookupRequest {
+  string mount = 1;
+  uint64 parent = 2;
+  string name = 3;
+}
+
+message LookupResponse {
+  DentryRecord dentry = 1;
+}
+
+message ReadDirRequest {
+  string mount = 1;
+  uint64 parent = 2;
+  string start_after = 3;
+  uint32 limit = 4;
+}
+
+message ReadDirResponse {
+  repeated DentryRecord entries = 1;
+}
+
+message ReadDirPlusResponse {
+  repeated DentryAttrPair entries = 1;
+}
+
+message RenameRequest {
+  string mount = 1;
+  uint64 from_parent = 2;
+  string from_name = 3;
+  uint64 to_parent = 4;
+  string to_name = 5;
+}
+
+message RenameResponse {}
+
+message UnlinkRequest {
+  string mount = 1;
+  uint64 parent = 2;
+  string name = 3;
+}
+
+message UnlinkResponse {}
+
+service FSMetadata {
+  rpc Create(CreateRequest) returns (CreateResponse);
+  rpc Lookup(LookupRequest) returns (LookupResponse);
+  rpc ReadDir(ReadDirRequest) returns (ReadDirResponse);
+  rpc ReadDirPlus(ReadDirRequest) returns (ReadDirPlusResponse);
+  rpc Rename(RenameRequest) returns (RenameResponse);
+  rpc Unlink(UnlinkRequest) returns (UnlinkResponse);
+}

@@ -90,6 +90,7 @@ Raftstore, coordinator, rooted truth, migration — the distributed layer.
 | Coordinator (route / TSO / heartbeats) | [coordinator.md](coordinator.md) |
 | **Rooted truth kernel** (`meta/root`) | [rooted_truth.md](rooted_truth.md) |
 | Control-plane ↔ execution-plane contract | [control_and_execution_protocols.md](control_and_execution_protocols.md) |
+| FS metadata service (`fsmeta`) | [fsmeta.md](fsmeta.md) |
 | Standalone → distributed migration | [migration.md](migration.md) |
 | Recovery model | [recovery.md](recovery.md) |
 | Percolator MVCC 2PC | [percolator.md](percolator.md) |
@@ -130,6 +131,8 @@ Notable design notes:
 - [SST-based snapshot install](notes/2026-03-31-sst-snapshot-install.md)
 - [Delos-lite rooted-truth roadmap](notes/2026-04-03-delos-lite-metadata-root-roadmap.md)
 - [Range filter — from GRF, but not quite](notes/2026-04-05-range-filter-from-grf.md)
+- [fsmeta positioning](notes/2026-04-24-fsmeta-positioning.md)
+- [fsmeta Stage 1 benchmark results](notes/2026-04-25-fsmeta-stage1-benchmark-results.md)
 
 ---
 
@@ -181,6 +184,7 @@ Full walkthrough: [getting_started.md](getting_started.md).
 | **[Scripts layout](scripts.md)** | Local cluster, bootstrap, ops helpers |
 | **[Coordinator](coordinator.md)** | Route / TSO / heartbeat service |
 | **[Percolator / MVCC](percolator.md)** | 2PC primitives in distributed mode |
+| **[FSMetadata](fsmeta.md)** | Native metadata API for distributed filesystem-style workloads |
 | **[Runtime call chains](runtime.md)** | Function-level sequence diagrams |
 | **[Testing](testing.md)** | Failpoints, chaos, restart, migration matrix |
 | **[SUMMARY.md](SUMMARY.md)** | Full mdbook table of contents |

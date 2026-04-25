@@ -80,35 +80,27 @@ func (p *coordinatorTSOAllocator) Reserve(n uint64) (uint64, error) {
 }
 
 func newRaftBackend(ctx context.Context, cfgPath, coordAddr, addrScope string) (*raftBackend, error) {
-	cfgFile, err := config.LoadFile(cfgPath)
-	if err != nil {
-		return nil, fmt.Errorf("raft backend: read config: %w", err)
-	}
-	if err := cfgFile.Validate(); err != nil {
-		return nil, fmt.Errorf("raft backend: config invalid: %w", err)
-	}
 	cfg := client.Config{
 		Context: ctx,
-		Retry: client.RetryPolicy{
-			MaxAttempts: cfgFile.MaxRetries,
-		},
 	}
-	for _, st := range cfgFile.Stores {
-		addr := strings.TrimSpace(st.Addr)
-		if strings.EqualFold(addrScope, "docker") && st.DockerAddr != "" {
-			addr = strings.TrimSpace(st.DockerAddr)
+	if strings.TrimSpace(cfgPath) != "" {
+		cfgFile, err := config.LoadFile(cfgPath)
+		if err != nil {
+			return nil, fmt.Errorf("raft backend: read config: %w", err)
 		}
-		cfg.Stores = append(cfg.Stores, client.StoreEndpoint{
-			StoreID: st.StoreID,
-			Addr:    addr,
-		})
+		if err := cfgFile.Validate(); err != nil {
+			return nil, fmt.Errorf("raft backend: config invalid: %w", err)
+		}
+		cfg.Retry = client.RetryPolicy{
+			MaxAttempts: cfgFile.MaxRetries,
+		}
+		if strings.TrimSpace(coordAddr) == "" {
+			coordAddr = cfgFile.ResolveCoordinatorAddr(addrScope)
+		}
 	}
 	// Route source is converged to the Coordinator resolver. raft_config regions are treated
 	// as bootstrap/deployment metadata and are not used as runtime routing truth.
 	coordAddr = strings.TrimSpace(coordAddr)
-	if coordAddr == "" {
-		coordAddr = cfgFile.ResolveCoordinatorAddr(addrScope)
-	}
 	if coordAddr == "" {
 		return nil, fmt.Errorf("raft backend: coordinator-addr is required in raft mode (flag or config.coordinator)")
 	}
@@ -119,6 +111,7 @@ func newRaftBackend(ctx context.Context, cfgPath, coordAddr, addrScope string) (
 		return nil, fmt.Errorf("raft backend: init coordinator client: %w", err)
 	}
 	cfg.RegionResolver = coordCli
+	cfg.StoreResolver = coordCli
 	cl, err := client.New(cfg)
 	if err != nil {
 		_ = coordCli.Close()

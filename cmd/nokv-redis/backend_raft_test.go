@@ -122,6 +122,7 @@ func startStubNoKV(t *testing.T) (addr string, srv *stubNoKVServer, shutdown fun
 	if err != nil {
 		t.Fatalf("listen tinykv stub: %v", err)
 	}
+	setDefaultStubStoreAddr(l.Addr().String())
 	server := grpc.NewServer()
 	stub := &stubNoKVServer{}
 	kvrpcpb.RegisterNoKVServer(server, stub)
@@ -134,11 +135,29 @@ func startStubNoKV(t *testing.T) (addr string, srv *stubNoKVServer, shutdown fun
 	}
 }
 
+var defaultStubStoreAddr struct {
+	sync.Mutex
+	addr string
+}
+
+func setDefaultStubStoreAddr(addr string) {
+	defaultStubStoreAddr.Lock()
+	defaultStubStoreAddr.addr = addr
+	defaultStubStoreAddr.Unlock()
+}
+
+func currentDefaultStubStoreAddr() string {
+	defaultStubStoreAddr.Lock()
+	defer defaultStubStoreAddr.Unlock()
+	return defaultStubStoreAddr.addr
+}
+
 type stubCoordinatorServer struct {
 	coordpb.UnimplementedCoordinatorServer
 
 	mu         sync.Mutex
 	region     *metapb.RegionDescriptor
+	storeAddr  string
 	nextTS     uint64
 	tsoCalls   int
 	routeCalls int
@@ -203,6 +222,32 @@ func (s *stubCoordinatorServer) GetRegionByKey(_ context.Context, req *coordpb.G
 	return resp, nil
 }
 
+func (s *stubCoordinatorServer) GetStore(_ context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if req == nil || req.GetStoreId() == 0 || s.storeAddr == "" {
+		return &coordpb.GetStoreResponse{NotFound: true}, nil
+	}
+	return &coordpb.GetStoreResponse{Store: &coordpb.StoreInfo{
+		StoreId:    req.GetStoreId(),
+		ClientAddr: s.storeAddr,
+		State:      coordpb.StoreState_STORE_STATE_UP,
+	}}, nil
+}
+
+func (s *stubCoordinatorServer) ListStores(context.Context, *coordpb.ListStoresRequest) (*coordpb.ListStoresResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.storeAddr == "" {
+		return &coordpb.ListStoresResponse{}, nil
+	}
+	return &coordpb.ListStoresResponse{Stores: []*coordpb.StoreInfo{{
+		StoreId:    1,
+		ClientAddr: s.storeAddr,
+		State:      coordpb.StoreState_STORE_STATE_UP,
+	}}}, nil
+}
+
 func startStubCoordinator(t *testing.T, region *metapb.RegionDescriptor) (addr string, srv *stubCoordinatorServer, shutdown func()) {
 	t.Helper()
 
@@ -211,8 +256,9 @@ func startStubCoordinator(t *testing.T, region *metapb.RegionDescriptor) (addr s
 
 	server := grpc.NewServer()
 	stub := &stubCoordinatorServer{
-		region: region,
-		nextTS: 100,
+		region:    region,
+		storeAddr: currentDefaultStubStoreAddr(),
+		nextTS:    100,
 	}
 	coordpb.RegisterCoordinatorServer(server, stub)
 	go func() {

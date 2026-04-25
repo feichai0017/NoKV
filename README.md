@@ -155,7 +155,7 @@ Spin up a full three-node Raft cluster with Coordinator and Redis gateway in one
 # In another terminal: Redis gateway on top of the running cluster
 go run ./cmd/nokv-redis \
   --addr 127.0.0.1:6380 \
-  --raft-config ./raft_config.example.json \
+  --coordinator-addr 127.0.0.1:2379 \
   --metrics-addr 127.0.0.1:9100
 
 # Or: Docker Compose (cluster + gateway + Coordinator in one stack)
@@ -278,11 +278,11 @@ More in [`docs/stats.md`](docs/stats.md) · [`docs/cli.md`](docs/cli.md) · [`do
 
 ## 🔌 Redis Gateway
 
-`cmd/nokv-redis` exposes a RESP-compatible endpoint. In embedded mode (`--workdir`) commands execute through `DB` APIs; in distributed mode (`--raft-config`) calls are routed through `raftstore/client` and committed via Percolator 2PC.
+`cmd/nokv-redis` exposes a RESP-compatible endpoint. In embedded mode (`--workdir`) commands execute through `DB` APIs; in distributed mode (`--coordinator-addr`) calls are routed through `raftstore/client` and committed via Percolator 2PC.
 
 - TTL is persisted in the value entry (`expires_at`) through the same 2PC write path
 - `--metrics-addr` exposes Redis-gateway metrics under `NoKV.Stats.redis` via expvar
-- `--coordinator-addr` overrides the coordinator endpoint when you don't want the default
+- `--coordinator-addr` is the only runtime discovery root for region routing, store endpoints, and TSO
 
 Full command matrix: [`docs/nokv-redis.md`](docs/nokv-redis.md).
 

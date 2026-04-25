@@ -254,7 +254,7 @@ The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC
 
 `raftstore/client` offers a leader-aware client with retry logic and convenient helpers:
 
-- **Initialization**: provide `[]StoreEndpoint` + `RegionResolver` (`GetRegionByKey`) so runtime routing is Coordinator-driven.
+- **Initialization**: provide a Coordinator-backed `RegionResolver` (`GetRegionByKey`) and `StoreResolver` (`GetStore`) so runtime routing and store discovery are Coordinator-driven.
 - **Reads**: `Get` and `Scan` pick the leader store for a key range, issue NoKV RPCs, and retry on NotLeader/EpochNotMatch.
 - **Writes**: `Mutate` bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); `Put` and `Delete` are convenience wrappers using the same 2PC path.
 - **Timestamps**: clients must supply `startVersion`/`commitVersion`. For distributed demos, use Coordinator (`nokv coordinator`) to obtain globally increasing values before calling `TwoPhaseCommit`.

@@ -340,6 +340,20 @@ func TestResolveTransportPeersRejectsOverridesWithoutRemoteStores(t *testing.T) 
 	require.ErrorContains(t, err, "local metadata has no remote stores")
 }
 
+func TestResolveStoreAdvertiseAddrFromConfig(t *testing.T) {
+	cfg := &config.File{
+		Stores: []config.Store{{
+			StoreID:    1,
+			Addr:       "127.0.0.1:20170",
+			DockerAddr: "nokv-store-1:20160",
+		}},
+	}
+	require.Equal(t, "127.0.0.1:20170", resolveStoreAdvertiseAddr(cfg, 1, "host"))
+	require.Equal(t, "nokv-store-1:20160", resolveStoreAdvertiseAddr(cfg, 1, "docker"))
+	require.Empty(t, resolveStoreAdvertiseAddr(cfg, 2, "docker"))
+	require.Empty(t, resolveStoreAdvertiseAddr(nil, 1, "docker"))
+}
+
 func TestValidateServeModeRejectsStoreMismatch(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, raftmode.Write(dir, raftmode.State{

@@ -64,7 +64,7 @@ func TestPartitionedFollowerCatchesUpAfterRecovery(t *testing.T) {
 
 	leaderStatus := testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 81)
 	cli, err := client.New(client.Config{
-		Stores: []client.StoreEndpoint{
+		StoreResolver: staticStoreResolver{
 			{StoreID: 1, Addr: seed.Addr()},
 			{StoreID: 2, Addr: target2.Addr()},
 			{StoreID: 3, Addr: target3.Addr()},

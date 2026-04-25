@@ -162,6 +162,97 @@ func TestPrewriteAndCommitPut(t *testing.T) {
 	require.Nil(t, lock)
 }
 
+func TestPrewriteAssertionNotExistRejectsVisibleValue(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(32)
+	key := []byte("assert-new")
+
+	first := &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   key,
+			Value: []byte("v1"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: 10,
+		LockTtl:      3000,
+	}
+	require.Empty(t, Prewrite(db, latches, first))
+	require.Nil(t, Commit(db, latches, &kvrpcpb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  first.StartVersion,
+		CommitVersion: 20,
+	}))
+
+	second := &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:                kvrpcpb.Mutation_Put,
+			Key:               key,
+			Value:             []byte("v2"),
+			AssertionNotExist: true,
+		}},
+		PrimaryLock:  key,
+		StartVersion: 30,
+		LockTtl:      3000,
+	}
+	errs := Prewrite(db, latches, second)
+	require.Len(t, errs, 1)
+	require.NotNil(t, errs[0].GetAlreadyExists())
+	require.Equal(t, key, errs[0].GetAlreadyExists().GetKey())
+}
+
+func TestPrewriteAssertionNotExistAllowsDeletedValue(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(32)
+	key := []byte("assert-after-delete")
+
+	put := &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   key,
+			Value: []byte("v1"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: 10,
+		LockTtl:      3000,
+	}
+	require.Empty(t, Prewrite(db, latches, put))
+	require.Nil(t, Commit(db, latches, &kvrpcpb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  put.StartVersion,
+		CommitVersion: 20,
+	}))
+
+	del := &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:  kvrpcpb.Mutation_Delete,
+			Key: key,
+		}},
+		PrimaryLock:  key,
+		StartVersion: 30,
+		LockTtl:      3000,
+	}
+	require.Empty(t, Prewrite(db, latches, del))
+	require.Nil(t, Commit(db, latches, &kvrpcpb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  del.StartVersion,
+		CommitVersion: 40,
+	}))
+
+	create := &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:                kvrpcpb.Mutation_Put,
+			Key:               key,
+			Value:             []byte("v2"),
+			AssertionNotExist: true,
+		}},
+		PrimaryLock:  key,
+		StartVersion: 50,
+		LockTtl:      3000,
+	}
+	require.Empty(t, Prewrite(db, latches, create))
+}
+
 func TestPrewriteConflictingLock(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(32)

@@ -2,7 +2,9 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"sync"
 	"time"
@@ -15,6 +17,7 @@ import (
 
 type storeConn struct {
 	addr        string
+	resolvedAt  time.Time
 	dialTimeout time.Duration
 	dialOpts    []grpc.DialOption
 
@@ -50,17 +53,135 @@ func dialStore(ctx context.Context, target string, opts ...grpc.DialOption) (*gr
 }
 
 func (c *Client) storeClient(ctx context.Context, storeID uint64) (kvrpcpb.NoKVClient, error) {
-	c.mu.RLock()
 	if storeID == 0 {
-		c.mu.RUnlock()
 		return nil, errStoreIDNotSet
 	}
-	st, ok := c.stores[storeID]
+	st, err := c.storeConn(ctx, storeID)
+	if err != nil {
+		return nil, err
+	}
+	cl, err := st.clientFor(ctx)
+	if err == nil {
+		return cl, nil
+	}
+	c.invalidateStore(storeID, st)
+	refreshed, refreshErr := c.storeConn(ctx, storeID)
+	if refreshErr != nil {
+		return nil, fmt.Errorf("%w; refresh store %d: %v", err, storeID, refreshErr)
+	}
+	return refreshed.clientFor(ctx)
+}
+
+func (c *Client) storeConn(ctx context.Context, storeID uint64) (*storeConn, error) {
+	now := time.Now()
+	c.mu.RLock()
+	st := c.stores[storeID]
+	revalidate := c.storeRevalidateIn
 	c.mu.RUnlock()
-	if !ok || st == nil {
+	if st != nil && !storeConnExpired(st, now, revalidate) {
+		return st, nil
+	}
+	next, err := c.resolveStoreConn(ctx, storeID, now)
+	if err != nil {
+		if st != nil {
+			// Coordinator says the store is gone -> drop the cached conn so
+			// the next call resolves freshly.
+			if errors.Is(err, errStoreUnavailable) {
+				c.invalidateStore(storeID, st)
+				return nil, err
+			}
+			// Transient resolver glitch (coordinator briefly Unavailable /
+			// timeout) -> keep serving from cache and bump resolvedAt so we
+			// don't hammer the resolver every RPC.
+			if isTransientResolverError(err) {
+				c.deferStoreRevalidation(storeID, st, now)
+				return st, nil
+			}
+			// Anything else (ctx.Canceled, validation error, malformed
+			// response) is propagated without bumping resolvedAt so the
+			// caller can decide and the next call retries promptly.
+			return nil, err
+		}
+		return nil, err
+	}
+	c.mu.Lock()
+	existing := c.stores[storeID]
+	if existing != nil && existing != st && !storeConnExpired(existing, now, revalidate) {
+		c.mu.Unlock()
+		_ = next.close()
+		return existing, nil
+	}
+	if st != nil && existing == st && st.addr == next.addr {
+		st.resolvedAt = next.resolvedAt
+		c.mu.Unlock()
+		_ = next.close()
+		return st, nil
+	}
+	c.stores[storeID] = next
+	c.mu.Unlock()
+	if existing != nil && existing != next {
+		_ = existing.close()
+	}
+	return next, nil
+}
+
+func (c *Client) resolveStoreConn(ctx context.Context, storeID uint64, now time.Time) (*storeConn, error) {
+	if c.storeResolver == nil {
+		return nil, errMissingStoreResolver
+	}
+	resp, err := c.storeResolver.GetStore(ctx, &coordpb.GetStoreRequest{StoreId: storeID})
+	if err != nil {
+		return nil, fmt.Errorf("client: resolve store %d: %w", storeID, err)
+	}
+	if resp == nil || resp.GetNotFound() || resp.GetStore() == nil {
 		return nil, fmt.Errorf("client: store %d not found", storeID)
 	}
-	return st.clientFor(ctx)
+	info := resp.GetStore()
+	if info.GetStoreId() != storeID {
+		return nil, fmt.Errorf("client: resolved store id %d != requested %d", info.GetStoreId(), storeID)
+	}
+	if info.GetState() == coordpb.StoreState_STORE_STATE_DOWN {
+		return nil, fmt.Errorf("%w: store %d", errStoreUnavailable, storeID)
+	}
+	if info.GetClientAddr() == "" {
+		return nil, fmt.Errorf("client: store %d has empty client address", storeID)
+	}
+	next := &storeConn{
+		addr:        info.GetClientAddr(),
+		resolvedAt:  now,
+		dialTimeout: c.dialTimeout,
+		dialOpts:    append([]grpc.DialOption(nil), c.dialOpts...),
+	}
+	return next, nil
+}
+
+func storeConnExpired(st *storeConn, now time.Time, interval time.Duration) bool {
+	if st == nil || interval <= 0 {
+		return false
+	}
+	if st.resolvedAt.IsZero() {
+		return true
+	}
+	return !st.resolvedAt.Add(interval).After(now)
+}
+
+func (c *Client) deferStoreRevalidation(storeID uint64, expected *storeConn, now time.Time) {
+	c.mu.Lock()
+	if current := c.stores[storeID]; current == expected && current != nil {
+		current.resolvedAt = now
+	}
+	c.mu.Unlock()
+}
+
+func (c *Client) invalidateStore(storeID uint64, expected *storeConn) {
+	c.mu.Lock()
+	if current := c.stores[storeID]; current == expected {
+		delete(c.stores, storeID)
+	}
+	c.mu.Unlock()
+	if expected != nil {
+		_ = expected.close()
+	}
 }
 
 func normalizeRetryBackoff(backoff, fallback time.Duration) time.Duration {
@@ -74,7 +195,26 @@ func normalizeRetryBackoff(backoff, fallback time.Duration) time.Duration {
 }
 
 func isTransportUnavailable(err error) bool {
-	return status.Code(err) == codes.Unavailable
+	return errors.Is(err, errStoreUnavailable) || status.Code(err) == codes.Unavailable
+}
+
+// isTransientResolverError is true when the coordinator-side store resolver
+// failed in a way that is likely to clear up on its own. The cached storeConn
+// can keep serving while waiting out the transient window. Non-transient
+// failures (ctx.Canceled, validation errors, malformed responses) bypass the
+// defer path so the next call retries immediately.
+func isTransientResolverError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded:
+		return true
+	}
+	return false
 }
 
 func (c *Client) waitRetry(ctx context.Context, attempt int, kind retryKind) error {
