@@ -3,6 +3,7 @@ package watch
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -10,10 +11,14 @@ import (
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 const defaultStoreRefreshInterval = time.Second
+const remoteWatchMinBackoff = 100 * time.Millisecond
+const remoteWatchMaxBackoff = 2 * time.Second
 
 // StoreLister returns the runtime store registry snapshot.
 type StoreLister interface {
@@ -155,16 +160,45 @@ func (s *RemoteSource) ensureStore(ctx context.Context, storeID uint64, addr str
 func (s *RemoteSource) runStore(ctx context.Context, storeID uint64, conn *grpc.ClientConn) {
 	defer s.wg.Done()
 	defer s.removeStore(storeID, conn)
-	stream, err := kvrpcpb.NewNoKVClient(conn).KvWatchApply(ctx, &kvrpcpb.ApplyWatchRequest{})
-	if err != nil {
-		return
-	}
-	for {
-		resp, err := stream.Recv()
+	backoff := remoteWatchMinBackoff
+	for ctx.Err() == nil {
+		stream, err := kvrpcpb.NewNoKVClient(conn).KvWatchApply(ctx, &kvrpcpb.ApplyWatchRequest{})
 		if err != nil {
-			return
+			if ctx.Err() != nil {
+				return
+			}
+			if isPermanentWatchError(err) {
+				log.Printf("fsmeta/watch: store %d apply-watch stream rejected: %v", storeID, err)
+				return
+			}
+			log.Printf("fsmeta/watch: store %d apply-watch connect failed: %v; retrying in %s", storeID, err, backoff)
+			if !sleepBackoff(ctx, backoff) {
+				return
+			}
+			backoff = nextBackoff(backoff)
+			continue
 		}
-		publishApplyWatchEvent(s.router, resp.GetEvent())
+		backoff = remoteWatchMinBackoff
+		for {
+			resp, err := stream.Recv()
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				if isPermanentWatchError(err) {
+					log.Printf("fsmeta/watch: store %d apply-watch stream closed permanently: %v", storeID, err)
+					return
+				}
+				log.Printf("fsmeta/watch: store %d apply-watch stream failed: %v; retrying in %s", storeID, err, backoff)
+				if !sleepBackoff(ctx, backoff) {
+					return
+				}
+				backoff = nextBackoff(backoff)
+				break
+			}
+			backoff = remoteWatchMinBackoff
+			publishApplyWatchEvent(s.router, resp.GetEvent())
+		}
 	}
 }
 
@@ -240,8 +274,36 @@ func newWatchEvent(evt *kvrpcpb.ApplyWatchEvent, source fsmeta.WatchEventSource,
 		},
 		CommitVersion: evt.GetCommitVersion(),
 		Source:        source,
-		Key:           append([]byte(nil), key...),
+		Key:           key,
 	}
+}
+
+func isPermanentWatchError(err error) bool {
+	switch status.Code(err) {
+	case codes.NotFound, codes.FailedPrecondition, codes.PermissionDenied, codes.Unimplemented:
+		return true
+	default:
+		return false
+	}
+}
+
+func sleepBackoff(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func nextBackoff(delay time.Duration) time.Duration {
+	delay *= 2
+	if delay > remoteWatchMaxBackoff {
+		return remoteWatchMaxBackoff
+	}
+	return delay
 }
 
 func applyWatchSourceFromProto(source kvrpcpb.ApplyWatchEventSource) fsmeta.WatchEventSource {

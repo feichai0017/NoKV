@@ -186,6 +186,9 @@ func TestGRPCServiceWatchSubtree(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return string(watcher.req.KeyPrefix) == "fsm/" && watcher.req.BackPressureWindow == 8
 	}, time.Second, 10*time.Millisecond)
+	ready, err := stream.Recv()
+	require.NoError(t, err)
+	require.NotNil(t, ready.GetReady())
 
 	evt := fsmeta.WatchEvent{
 		Cursor:        fsmeta.WatchCursor{RegionID: 1, Term: 2, Index: 3},
@@ -224,14 +227,37 @@ func TestGRPCServiceSnapshotSubtreePublishesToken(t *testing.T) {
 	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 1234}, publisher.token)
 }
 
+func TestGRPCServiceSnapshotSubtreeRetiresTokenAfterPublishFailure(t *testing.T) {
+	executor := &fakeExecutor{}
+	publisher := &fakeSnapshotPublisher{err: errors.New("publish failed")}
+	client, cleanup := openBufconnClient(t, executor, WithSnapshotPublisher(publisher))
+	defer cleanup()
+
+	_, err := client.SnapshotSubtree(context.Background(), &fsmetapb.SnapshotSubtreeRequest{
+		Mount:     "vol",
+		RootInode: 42,
+	})
+	require.Error(t, err)
+	want := fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 1234}
+	require.Equal(t, want, publisher.token)
+	require.Equal(t, want, publisher.retired)
+}
+
 type fakeSnapshotPublisher struct {
-	token fsmeta.SnapshotSubtreeToken
-	err   error
+	token       fsmeta.SnapshotSubtreeToken
+	retired     fsmeta.SnapshotSubtreeToken
+	err         error
+	retireError error
 }
 
 func (p *fakeSnapshotPublisher) PublishSnapshotSubtree(_ context.Context, token fsmeta.SnapshotSubtreeToken) error {
 	p.token = token
 	return p.err
+}
+
+func (p *fakeSnapshotPublisher) RetireSnapshotSubtree(_ context.Context, token fsmeta.SnapshotSubtreeToken) error {
+	p.retired = token
+	return p.retireError
 }
 
 type fakeWatcher struct {

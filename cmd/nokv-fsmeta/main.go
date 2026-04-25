@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"expvar"
 	"flag"
 	"fmt"
 	"log"
@@ -79,6 +80,9 @@ func main() {
 	}()
 
 	if *metricsAddr != "" {
+		if stats, ok := watcher.(interface{ Stats() map[string]any }); ok {
+			publishExpvarOnce("nokv_fsmeta_watch", expvar.Func(func() any { return stats.Stats() }))
+		}
 		metricsLn, err := metricspkg.StartExpvarServer(*metricsAddr)
 		if err != nil {
 			log.Printf("start metrics endpoint: %v", err)
@@ -108,6 +112,13 @@ func main() {
 	}
 	cancel()
 	grpcServer.GracefulStop()
+}
+
+func publishExpvarOnce(name string, value expvar.Var) {
+	if expvar.Get(name) != nil {
+		return
+	}
+	expvar.Publish(name, value)
 }
 
 type closeFunc func() error
@@ -151,18 +162,7 @@ func newExecutor(ctx context.Context, coordAddr string) (*fsmetaexec.Executor, f
 		_ = coordRPC.Close()
 		return nil, nil, nil, nil, fmt.Errorf("init fsmeta watch source: %w", err)
 	}
-	snapshotPublisher := fsmeta.SnapshotPublisherFunc(func(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error {
-		resp, err := coordRPC.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
-			Event: metawire.RootEventToProto(rootevent.SnapshotEpochPublished(string(token.Mount), uint64(token.RootInode), token.ReadVersion)),
-		})
-		if err != nil {
-			return err
-		}
-		if resp == nil || !resp.GetAccepted() {
-			return fmt.Errorf("snapshot subtree root event was not accepted")
-		}
-		return nil
-	})
+	snapshotPublisher := rootSnapshotPublisher{coord: coordRPC}
 	// Compose closer: shutdown order is kv first (it holds dialed store conns
 	// keyed by coordinator-resolved addresses) then coordRPC. Both errors are
 	// reported; the first non-nil wins.
@@ -180,4 +180,32 @@ func newExecutor(ctx context.Context, coordAddr string) (*fsmetaexec.Executor, f
 		return errAll
 	}
 	return executor, router, snapshotPublisher, closer, nil
+}
+
+type rootSnapshotPublisher struct {
+	coord *coordclient.GRPCClient
+}
+
+func (p rootSnapshotPublisher) PublishSnapshotSubtree(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error {
+	return p.publish(ctx, rootevent.SnapshotEpochPublished(string(token.Mount), uint64(token.RootInode), token.ReadVersion))
+}
+
+func (p rootSnapshotPublisher) RetireSnapshotSubtree(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error {
+	return p.publish(ctx, rootevent.SnapshotEpochRetired(string(token.Mount), uint64(token.RootInode), token.ReadVersion))
+}
+
+func (p rootSnapshotPublisher) publish(ctx context.Context, event rootevent.Event) error {
+	if p.coord == nil {
+		return fmt.Errorf("snapshot subtree publisher is not configured")
+	}
+	resp, err := p.coord.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
+		Event: metawire.RootEventToProto(event),
+	})
+	if err != nil {
+		return err
+	}
+	if resp == nil || !resp.GetAccepted() {
+		return fmt.Errorf("snapshot subtree root event was not accepted")
+	}
+	return nil
 }

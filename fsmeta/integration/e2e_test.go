@@ -214,6 +214,10 @@ func (r *snapshotRecorder) PublishSnapshotSubtree(_ context.Context, token fsmet
 	return nil
 }
 
+func (r *snapshotRecorder) RetireSnapshotSubtree(context.Context, fsmeta.SnapshotSubtreeToken) error {
+	return nil
+}
+
 func dentryNames(entries []fsmeta.DentryAttrPair) []string {
 	out := make([]string, 0, len(entries))
 	for _, entry := range entries {

@@ -183,6 +183,11 @@ func TestApplySnapshotEpochPublishedToSnapshot(t *testing.T) {
 		ReadVersion: 100,
 		PublishedAt: cursor,
 	}, snapshot.SnapshotEpochs[id])
+
+	retireCursor := rootstate.Cursor{Term: 2, Index: 8}
+	rootstate.ApplyEventToSnapshot(&snapshot, retireCursor, rootevent.SnapshotEpochRetired("vol", 42, 100))
+	require.Equal(t, retireCursor, snapshot.State.LastCommitted)
+	require.NotContains(t, snapshot.SnapshotEpochs, id)
 }
 
 func TestCloneStoreMembershipsDetachesMap(t *testing.T) {

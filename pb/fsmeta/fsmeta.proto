@@ -104,6 +104,10 @@ message WatchCatchupComplete {
   WatchCursor cursor = 1;
 }
 
+message WatchReady {
+  WatchCursor cursor = 1;
+}
+
 message WatchThrottle {
   uint32 outstanding = 1;
   uint32 limit = 2;
@@ -115,6 +119,7 @@ message WatchSubtreeResponse {
     WatchEvent event = 1;
     WatchCatchupComplete catchup_complete = 2;
     WatchThrottle throttle = 3;
+    WatchReady ready = 4;
   }
 }
 

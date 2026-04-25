@@ -3,7 +3,6 @@ package watch
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -16,19 +15,25 @@ const defaultRecentEvents = 4096
 
 // Router fans committed raftstore key events out to fsmeta prefix subscribers.
 type Router struct {
-	mu      sync.RWMutex
-	next    uint64
-	subs    map[uint64]*Subscription
-	recent  map[string]struct{}
-	order   []string
-	dropped atomic.Uint64
+	mu         sync.RWMutex
+	next       uint64
+	subs       map[uint64]*Subscription
+	recent     map[eventKey]struct{}
+	recentRing [defaultRecentEvents]eventKey
+	recentNext int
+	recentLen  int
+
+	published atomic.Uint64
+	delivered atomic.Uint64
+	dropped   atomic.Uint64
+	overflow  atomic.Uint64
 }
 
 // NewRouter constructs an empty watch router.
 func NewRouter() *Router {
 	return &Router{
 		subs:   make(map[uint64]*Subscription),
-		recent: make(map[string]struct{}),
+		recent: make(map[eventKey]struct{}),
 	}
 }
 
@@ -46,10 +51,11 @@ func (r *Router) Subscribe(ctx context.Context, req fsmeta.WatchRequest) (fsmeta
 		window = defaultWindow
 	}
 	sub := &Subscription{
-		router: r,
-		prefix: prefix,
-		events: make(chan fsmeta.WatchEvent, window),
-		window: window,
+		router:  r,
+		prefix:  prefix,
+		events:  make(chan fsmeta.WatchEvent, window),
+		window:  window,
+		pending: make(map[fsmeta.WatchCursor]uint32),
 	}
 	r.mu.Lock()
 	r.next++
@@ -76,19 +82,13 @@ func (r *Router) Publish(evt fsmeta.WatchEvent) {
 		r.mu.Unlock()
 		return
 	}
-	r.recent[id] = struct{}{}
-	r.order = append(r.order, id)
-	if len(r.order) > defaultRecentEvents {
-		old := r.order[0]
-		copy(r.order, r.order[1:])
-		r.order = r.order[:len(r.order)-1]
-		delete(r.recent, old)
-	}
+	r.rememberLocked(id)
 	subs := make([]*Subscription, 0, len(r.subs))
 	for _, sub := range r.subs {
 		subs = append(subs, sub)
 	}
 	r.mu.Unlock()
+	r.published.Add(1)
 	for _, sub := range subs {
 		if bytes.HasPrefix(evt.Key, sub.prefix) {
 			sub.enqueue(evt)
@@ -116,7 +116,7 @@ func (r *Router) OnApply(evt storepkg.ApplyEvent) {
 			},
 			CommitVersion: evt.CommitVersion,
 			Source:        source,
-			Key:           append([]byte(nil), key...),
+			Key:           key,
 		})
 	}
 }
@@ -127,6 +127,45 @@ func (r *Router) Dropped() uint64 {
 		return 0
 	}
 	return r.dropped.Load()
+}
+
+// Stats returns a point-in-time router metrics snapshot.
+func (r *Router) Stats() map[string]any {
+	if r == nil {
+		return map[string]any{
+			"subscribers":     0,
+			"events_total":    uint64(0),
+			"delivered_total": uint64(0),
+			"dropped_total":   uint64(0),
+			"overflow_total":  uint64(0),
+		}
+	}
+	r.mu.RLock()
+	subscribers := len(r.subs)
+	recent := r.recentLen
+	r.mu.RUnlock()
+	return map[string]any{
+		"subscribers":     subscribers,
+		"recent_events":   recent,
+		"events_total":    r.published.Load(),
+		"delivered_total": r.delivered.Load(),
+		"dropped_total":   r.dropped.Load(),
+		"overflow_total":  r.overflow.Load(),
+	}
+}
+
+func (r *Router) rememberLocked(id eventKey) {
+	r.recent[id] = struct{}{}
+	if r.recentLen < defaultRecentEvents {
+		r.recentRing[r.recentNext] = id
+		r.recentNext = (r.recentNext + 1) % defaultRecentEvents
+		r.recentLen++
+		return
+	}
+	old := r.recentRing[r.recentNext]
+	delete(r.recent, old)
+	r.recentRing[r.recentNext] = id
+	r.recentNext = (r.recentNext + 1) % defaultRecentEvents
 }
 
 func (r *Router) unregister(id uint64, sub *Subscription) {
@@ -147,6 +186,7 @@ type Subscription struct {
 
 	mu          sync.Mutex
 	outstanding uint32
+	pending     map[fsmeta.WatchCursor]uint32
 	closed      bool
 	err         error
 }
@@ -159,14 +199,23 @@ func (s *Subscription) Events() <-chan fsmeta.WatchEvent {
 	return s.events
 }
 
-// Ack releases one outstanding event budget. v0 tracks count, not cursor order.
-func (s *Subscription) Ack(fsmeta.WatchCursor) {
+// Ack releases outstanding event budget up to cursor within the same region.
+func (s *Subscription) Ack(cursor fsmeta.WatchCursor) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
-	if s.outstanding > 0 {
-		s.outstanding--
+	var released uint32
+	for pending, count := range s.pending {
+		if cursorCovers(pending, cursor) {
+			released += count
+			delete(s.pending, pending)
+		}
+	}
+	if released > s.outstanding {
+		s.outstanding = 0
+	} else {
+		s.outstanding -= released
 	}
 	s.mu.Unlock()
 }
@@ -200,18 +249,24 @@ func (s *Subscription) enqueue(evt fsmeta.WatchEvent) {
 		s.closeWith(fsmeta.ErrWatchOverflow)
 		if s.router != nil {
 			s.router.dropped.Add(1)
+			s.router.overflow.Add(1)
 		}
 		return
 	}
 	s.outstanding++
+	s.pending[evt.Cursor]++
 	s.mu.Unlock()
 
 	select {
 	case s.events <- cloneEvent(evt):
+		if s.router != nil {
+			s.router.delivered.Add(1)
+		}
 	default:
 		s.closeWith(fsmeta.ErrWatchOverflow)
 		if s.router != nil {
 			s.router.dropped.Add(1)
+			s.router.overflow.Add(1)
 		}
 	}
 }
@@ -241,13 +296,32 @@ func cloneEvent(evt fsmeta.WatchEvent) fsmeta.WatchEvent {
 	return evt
 }
 
-func eventID(evt fsmeta.WatchEvent) string {
-	return fmt.Sprintf("%d/%d/%d/%d/%d/%s",
-		evt.Cursor.RegionID,
-		evt.Cursor.Term,
-		evt.Cursor.Index,
-		evt.Source,
-		evt.CommitVersion,
-		string(evt.Key),
-	)
+type eventKey struct {
+	regionID      uint64
+	term          uint64
+	index         uint64
+	source        fsmeta.WatchEventSource
+	commitVersion uint64
+	key           string
+}
+
+func eventID(evt fsmeta.WatchEvent) eventKey {
+	return eventKey{
+		regionID:      evt.Cursor.RegionID,
+		term:          evt.Cursor.Term,
+		index:         evt.Cursor.Index,
+		source:        evt.Source,
+		commitVersion: evt.CommitVersion,
+		key:           string(evt.Key),
+	}
+}
+
+func cursorCovers(pending, ack fsmeta.WatchCursor) bool {
+	if pending.RegionID != ack.RegionID || ack.RegionID == 0 {
+		return false
+	}
+	if pending.Term < ack.Term {
+		return true
+	}
+	return pending.Term == ack.Term && pending.Index <= ack.Index
 }

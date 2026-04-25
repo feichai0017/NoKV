@@ -50,6 +50,7 @@ const (
 	RootEventKind_ROOT_EVENT_KIND_LEGACY                      RootEventKind = 21
 	RootEventKind_ROOT_EVENT_KIND_HANDOVER                    RootEventKind = 22
 	RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED    RootEventKind = 23
+	RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED      RootEventKind = 24
 )
 
 // Enum value maps for RootEventKind.
@@ -79,6 +80,7 @@ var (
 		21: "ROOT_EVENT_KIND_LEGACY",
 		22: "ROOT_EVENT_KIND_HANDOVER",
 		23: "ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED",
+		24: "ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED",
 	}
 	RootEventKind_value = map[string]int32{
 		"ROOT_EVENT_KIND_UNSPECIFIED":                 0,
@@ -105,6 +107,7 @@ var (
 		"ROOT_EVENT_KIND_LEGACY":                      21,
 		"ROOT_EVENT_KIND_HANDOVER":                    22,
 		"ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED":    23,
+		"ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED":      24,
 	}
 )
 
@@ -3567,7 +3570,7 @@ const file_meta_root_proto_rawDesc = "" +
 	"\n" +
 	"checkpoint\x18\x03 \x01(\v2\x1c.nokv.meta.v1.RootCheckpointR\n" +
 	"checkpoint\x123\n" +
-	"\x04tail\x18\x04 \x01(\v2\x1f.nokv.meta.v1.RootCommittedTailR\x04tail*\xb5\a\n" +
+	"\x04tail\x18\x04 \x01(\v2\x1f.nokv.meta.v1.RootCommittedTailR\x04tail*\xe1\a\n" +
 	"\rRootEventKind\x12\x1f\n" +
 	"\x1bROOT_EVENT_KIND_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cROOT_EVENT_KIND_STORE_JOINED\x10\x01\x12!\n" +
@@ -3593,7 +3596,8 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x16ROOT_EVENT_KIND_TENURE\x10\x14\x12\x1a\n" +
 	"\x16ROOT_EVENT_KIND_LEGACY\x10\x15\x12\x1c\n" +
 	"\x18ROOT_EVENT_KIND_HANDOVER\x10\x16\x12,\n" +
-	"(ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED\x10\x17*m\n" +
+	"(ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED\x10\x17\x12*\n" +
+	"&ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED\x10\x18*m\n" +
 	"\x0eRootStoreState\x12 \n" +
 	"\x1cROOT_STORE_STATE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17ROOT_STORE_STATE_ACTIVE\x10\x01\x12\x1c\n" +

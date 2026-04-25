@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"sync/atomic"
 
@@ -100,7 +101,10 @@ func (r *applyObserverRuntime) emit(evt ApplyEvent) {
 		select {
 		case observer.ch <- evt:
 		default:
-			r.dropped.Add(1)
+			dropped := r.dropped.Add(1)
+			if dropped == 1 || dropped%1024 == 0 {
+				log.Printf("raftstore/store: apply observer dropped events total=%d", dropped)
+			}
 		}
 	}
 }
