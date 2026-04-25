@@ -122,16 +122,10 @@ func runMountRegisterCmd(w io.Writer, args []string) error {
 		if info.GetRootInode() != *rootInode || info.GetSchemaVersion() != uint32(*schemaVersion) {
 			return fmt.Errorf("mount %q conflicts with rooted truth", mountID)
 		}
-		if err := publishMountEvent(ctx, cli, rootevent.SubtreeAuthorityDeclared(mountID, *rootInode, mountID, 0, 0)); err != nil {
-			return err
-		}
 		_, _ = fmt.Fprintf(w, "mount %q already registered root_inode=%d schema_version=%d\n", mountID, *rootInode, *schemaVersion)
 		return nil
 	}
 	if err := publishMountEvent(ctx, cli, rootevent.MountRegistered(mountID, *rootInode, uint32(*schemaVersion))); err != nil {
-		return err
-	}
-	if err := publishMountEvent(ctx, cli, rootevent.SubtreeAuthorityDeclared(mountID, *rootInode, mountID, 0, 0)); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(w, "mount %q registered root_inode=%d schema_version=%d\n", mountID, *rootInode, *schemaVersion)

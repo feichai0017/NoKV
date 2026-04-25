@@ -88,6 +88,24 @@ func TestApplySubtreeAuthorityHandoffToSnapshot(t *testing.T) {
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 3}, completed.HandoffCompletedAt)
 }
 
+func TestApplyMountRegisteredDeclaresRootAuthority(t *testing.T) {
+	snapshot := rootstate.Snapshot{}
+	cursor := rootstate.Cursor{Term: 1, Index: 1}
+	rootstate.ApplyEventToSnapshot(&snapshot, cursor, rootevent.MountRegistered("vol", 1, 1))
+
+	key := rootstate.SubtreeAuthorityKey("vol", 1)
+	require.Equal(t, rootstate.SubtreeAuthority{
+		SubtreeID:   key,
+		Mount:       "vol",
+		RootInode:   1,
+		AuthorityID: "vol",
+		Era:         0,
+		Frontier:    0,
+		State:       rootstate.SubtreeAuthorityActive,
+		DeclaredAt:  cursor,
+	}, snapshot.Subtrees[key])
+}
+
 func TestApplySubtreeAuthorityRejectsIncompleteCoverage(t *testing.T) {
 	snapshot := rootstate.Snapshot{}
 	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 1}, rootevent.SubtreeAuthorityDeclared("vol", 1, "vol", 0, 10))

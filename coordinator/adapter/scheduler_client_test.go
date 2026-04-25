@@ -91,6 +91,10 @@ func (f *fakePDClient) ListMounts(context.Context, *coordpb.ListMountsRequest) (
 	return &coordpb.ListMountsResponse{}, nil
 }
 
+func (f *fakePDClient) ListSubtreeAuthorities(context.Context, *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error) {
+	return &coordpb.ListSubtreeAuthoritiesResponse{}, nil
+}
+
 func (f *fakePDClient) GetQuotaFence(context.Context, *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error) {
 	return &coordpb.GetQuotaFenceResponse{}, nil
 }

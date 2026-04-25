@@ -19,6 +19,15 @@ func TestKeyLayoutStable(t *testing.T) {
 	require.Equal(t, KeyKindInode, kind)
 }
 
+func TestUsageKeyAllowsMountWideScope(t *testing.T) {
+	key, err := EncodeUsageKey("vol", 0)
+	require.NoError(t, err)
+
+	kind, err := KeyKindOf(key)
+	require.NoError(t, err)
+	require.Equal(t, KeyKindUsage, kind)
+}
+
 func TestDentryPrefixGroupsDirectoryEntries(t *testing.T) {
 	prefix, err := EncodeDentryPrefix("vol", 9)
 	require.NoError(t, err)

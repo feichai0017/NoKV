@@ -14,6 +14,8 @@ const defaultMonitorInterval = time.Second
 
 type mountList interface {
 	ListMounts(context.Context, *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error)
+	ListSubtreeAuthorities(context.Context, *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error)
+	ListQuotaFences(context.Context, *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error)
 }
 
 type retireRouter interface {
@@ -27,13 +29,15 @@ type monitor struct {
 	coord    mountList
 	router   retireRouter
 	cache    *mountCache
+	quotas   *quotaCache
+	subtrees SubtreeHandoffPublisher
 	interval time.Duration
 	stop     chan struct{}
 	done     chan struct{}
 	once     sync.Once
 }
 
-func startMonitor(ctx context.Context, coord mountList, router retireRouter, cache *mountCache, interval time.Duration) *monitor {
+func startMonitor(ctx context.Context, coord mountList, router retireRouter, cache *mountCache, quotas *quotaCache, subtrees SubtreeHandoffPublisher, interval time.Duration) *monitor {
 	if coord == nil || router == nil {
 		return nil
 	}
@@ -44,6 +48,8 @@ func startMonitor(ctx context.Context, coord mountList, router retireRouter, cac
 		coord:    coord,
 		router:   router,
 		cache:    cache,
+		quotas:   quotas,
+		subtrees: subtrees,
 		interval: interval,
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
@@ -87,7 +93,37 @@ func (m *monitor) poll(ctx context.Context) error {
 		if m.cache != nil {
 			m.cache.markRetired(id)
 		}
+		if m.quotas != nil {
+			m.quotas.purgeMount(id)
+		}
 		m.router.RetireMount(id)
+	}
+	quotas, err := m.coord.ListQuotaFences(ctx, &coordpb.ListQuotaFencesRequest{})
+	if err != nil {
+		return err
+	}
+	if m.quotas != nil {
+		for _, fence := range quotas.GetFences() {
+			m.quotas.markFenceUpdated(fence)
+		}
+	}
+	subtrees, err := m.coord.ListSubtreeAuthorities(ctx, &coordpb.ListSubtreeAuthoritiesRequest{})
+	if err != nil {
+		return err
+	}
+	if m.subtrees != nil {
+		for _, subtree := range subtrees.GetSubtrees() {
+			if subtree.GetState() != coordpb.SubtreeAuthorityState_SUBTREE_AUTHORITY_STATE_HANDOFF {
+				continue
+			}
+			if subtree.GetMountId() == "" || subtree.GetRootInode() == 0 || subtree.GetPredecessorFrontier() == 0 {
+				continue
+			}
+			if err := m.subtrees.CompleteSubtreeHandoff(ctx, fsmeta.MountID(subtree.GetMountId()), fsmeta.InodeID(subtree.GetRootInode()), subtree.GetPredecessorFrontier()); err != nil {
+				log.Printf("fsmeta monitor: complete pending subtree handoff mount=%s root=%d frontier=%d: %v",
+					subtree.GetMountId(), subtree.GetRootInode(), subtree.GetPredecessorFrontier(), err)
+			}
+		}
 	}
 	return nil
 }
