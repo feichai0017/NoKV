@@ -67,7 +67,7 @@ func (c *Client) storeClient(ctx context.Context, storeID uint64) (kvrpcpb.NoKVC
 	c.invalidateStore(storeID, st)
 	refreshed, refreshErr := c.storeConn(ctx, storeID)
 	if refreshErr != nil {
-		return nil, fmt.Errorf("%w; refresh store %d: %v", err, storeID, refreshErr)
+		return nil, fmt.Errorf("client: store %d: %w; refresh: %w", storeID, err, refreshErr)
 	}
 	return refreshed.clientFor(ctx)
 }
@@ -140,7 +140,9 @@ func (c *Client) resolveStoreConn(ctx context.Context, storeID uint64, now time.
 	if info.GetStoreId() != storeID {
 		return nil, fmt.Errorf("client: resolved store id %d != requested %d", info.GetStoreId(), storeID)
 	}
-	if info.GetState() == coordpb.StoreState_STORE_STATE_DOWN {
+	if info.GetState() == coordpb.StoreState_STORE_STATE_UNKNOWN ||
+		info.GetState() == coordpb.StoreState_STORE_STATE_DOWN ||
+		info.GetState() == coordpb.StoreState_STORE_STATE_TOMBSTONE {
 		return nil, fmt.Errorf("%w: store %d", errStoreUnavailable, storeID)
 	}
 	if info.GetClientAddr() == "" {

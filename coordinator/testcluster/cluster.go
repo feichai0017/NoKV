@@ -72,6 +72,7 @@ func OpenReplicatedWithTickIntervals(tb testing.TB, tickIntervals map[uint64]tim
 		cluster := catalog.NewCluster()
 		bootstrap, err := rootview.Bootstrap(store, cluster.PublishRegionDescriptor, 1, 1)
 		require.NoError(tb, err)
+		cluster.ReplaceRootSnapshot(bootstrap.Snapshot.RootSnapshot(), bootstrap.Snapshot.RootToken)
 		svc := coordserver.NewService(cluster, idalloc.NewIDAllocator(bootstrap.IDStart), tso.NewAllocator(bootstrap.TSStart), store)
 		c.Services[id] = svc
 	}
@@ -148,6 +149,7 @@ func (c *Cluster) RestartService(nodeID uint64) *coordserver.Service {
 	cluster := catalog.NewCluster()
 	bootstrap, err := rootview.Bootstrap(store, cluster.PublishRegionDescriptor, 1, 1)
 	require.NoError(c.tb, err)
+	cluster.ReplaceRootSnapshot(bootstrap.Snapshot.RootSnapshot(), bootstrap.Snapshot.RootToken)
 	svc := coordserver.NewService(cluster, idalloc.NewIDAllocator(bootstrap.IDStart), tso.NewAllocator(bootstrap.TSStart), store)
 	c.Services[nodeID] = svc
 	return svc

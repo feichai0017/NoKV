@@ -31,6 +31,8 @@ func TestClusterSurvivesCoordinatorUnavailableAfterStartup(t *testing.T) {
 	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 61, PeerID: 101})
 	require.NoError(t, err)
 
+	coord.JoinStore(t, 1)
+	coord.JoinStore(t, 2)
 	seed := testcluster.StartNodeWithConfig(t, 1, seedDir, testcluster.NodeConfig{
 		AllowedModes:      []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster},
 		StartPeers:        true,

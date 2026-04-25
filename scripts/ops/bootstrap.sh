@@ -110,7 +110,7 @@ for store_line in "${STORE_LINES[@]}"; do
   nokv_assert_fresh_workdir "$store_path" "bootstrap.sh: store $store_id has stale files; refusing to seed into dirty directory"
   for region_line in "${REGION_LINES[@]}"; do
     read -r region_id start_key end_key epoch_ver epoch_conf peer_str _ <<<"$region_line"
-    args=(--workdir "$store_path" --region-id "$region_id" --epoch-version "$epoch_ver" --epoch-conf-version "$epoch_conf" --state "$REGION_STATE")
+    args=(--workdir "$store_path" --region-id "$region_id" --epoch-version "$epoch_ver" --epoch-conf-version "$epoch_conf" --state "$REGION_STATE" --bootstrap-store-id "$store_id")
     if [[ "$start_key" != "-" ]]; then
       args+=(--start-key "$start_key")
     fi

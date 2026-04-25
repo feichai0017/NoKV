@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaserver "github.com/feichai0017/NoKV/fsmeta/server"
@@ -47,6 +48,13 @@ func (e *fakeExecutor) ReadDirPlus(context.Context, fsmeta.ReadDirRequest) ([]fs
 		Dentry: fsmeta.DentryRecord{Parent: fsmeta.RootInode, Name: "checkpoint", Inode: 42, Type: fsmeta.InodeTypeFile},
 		Inode:  fsmeta.InodeRecord{Inode: 42, Type: fsmeta.InodeTypeFile, Size: 4096, Mode: 0o644, LinkCount: 1},
 	}}, nil
+}
+
+func (e *fakeExecutor) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
+	if e.err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, e.err
+	}
+	return fsmeta.SnapshotSubtreeToken{Mount: req.Mount, RootInode: req.RootInode, ReadVersion: 5678}, nil
 }
 
 func (e *fakeExecutor) Rename(context.Context, fsmeta.RenameRequest) error {
@@ -116,12 +124,90 @@ func TestTypedClientPreservesUnknownStatus(t *testing.T) {
 	require.Equal(t, codes.Internal, status.Code(err))
 }
 
-func openBufconnClient(t *testing.T, executor fsmetaserver.Executor) (*GRPCClient, func()) {
+func TestTypedClientWatchSubtree(t *testing.T) {
+	watcher := &fakeWatcher{sub: newFakeWatchSub(1)}
+	cli, cleanup := openBufconnClient(t, &fakeExecutor{}, fsmetaserver.WithWatcher(watcher))
+	defer cleanup()
+
+	stream, err := cli.WatchSubtree(context.Background(), fsmeta.WatchRequest{
+		KeyPrefix:          []byte("fsm/"),
+		BackPressureWindow: 4,
+	})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		return string(watcher.req.KeyPrefix) == "fsm/" && watcher.req.BackPressureWindow == 4
+	}, time.Second, 10*time.Millisecond)
+	evt := fsmeta.WatchEvent{
+		Cursor:        fsmeta.WatchCursor{RegionID: 8, Term: 1, Index: 2},
+		CommitVersion: 90,
+		Source:        fsmeta.WatchEventSourceResolveLock,
+		Key:           []byte("fsm/checkpoint"),
+	}
+	watcher.sub.events <- evt
+	got, err := stream.Recv()
+	require.NoError(t, err)
+	require.Equal(t, evt, got)
+	require.NoError(t, stream.Ack(got.Cursor))
+	require.Eventually(t, func() bool {
+		return len(watcher.sub.acks) == 1 && watcher.sub.acks[0] == evt.Cursor
+	}, time.Second, 10*time.Millisecond)
+	require.NoError(t, stream.Close())
+}
+
+func TestTypedClientSnapshotSubtree(t *testing.T) {
+	cli, cleanup := openBufconnClient(t, &fakeExecutor{})
+	defer cleanup()
+
+	token, err := cli.SnapshotSubtree(context.Background(), fsmeta.SnapshotSubtreeRequest{
+		Mount:     "vol",
+		RootInode: 42,
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 5678}, token)
+}
+
+type fakeWatcher struct {
+	req fsmeta.WatchRequest
+	sub *fakeWatchSub
+}
+
+func (w *fakeWatcher) Subscribe(_ context.Context, req fsmeta.WatchRequest) (fsmeta.WatchSubscription, error) {
+	w.req = req
+	return w.sub, nil
+}
+
+type fakeWatchSub struct {
+	events chan fsmeta.WatchEvent
+	acks   []fsmeta.WatchCursor
+}
+
+func newFakeWatchSub(buffer int) *fakeWatchSub {
+	return &fakeWatchSub{events: make(chan fsmeta.WatchEvent, buffer)}
+}
+
+func (s *fakeWatchSub) Events() <-chan fsmeta.WatchEvent {
+	return s.events
+}
+
+func (s *fakeWatchSub) Ack(cursor fsmeta.WatchCursor) {
+	s.acks = append(s.acks, cursor)
+}
+
+func (s *fakeWatchSub) Close() {
+	close(s.events)
+}
+
+func (s *fakeWatchSub) Err() error {
+	return nil
+}
+
+func openBufconnClient(t *testing.T, executor fsmetaserver.Executor, opts ...fsmetaserver.Option) (*GRPCClient, func()) {
 	t.Helper()
 	const bufSize = 1 << 20
 	listener := bufconn.Listen(bufSize)
 	grpcServer := grpc.NewServer()
-	fsmetaserver.Register(grpcServer, executor)
+	fsmetaserver.Register(grpcServer, executor, opts...)
 	go func() {
 		_ = grpcServer.Serve(listener)
 	}()

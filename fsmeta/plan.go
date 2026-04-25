@@ -15,6 +15,7 @@ const (
 	OperationCreate           OperationKind = "create"
 	OperationLookup           OperationKind = "lookup"
 	OperationReadDir          OperationKind = "readdir"
+	OperationSnapshotSubtree  OperationKind = "snapshot_subtree"
 	OperationRename           OperationKind = "rename"
 	OperationUnlink           OperationKind = "unlink"
 	OperationOpenWriteSession OperationKind = "open_write_session"
@@ -49,10 +50,16 @@ type LookupRequest struct {
 }
 
 type ReadDirRequest struct {
-	Mount      MountID
-	Parent     InodeID
-	StartAfter string
-	Limit      uint32
+	Mount           MountID
+	Parent          InodeID
+	StartAfter      string
+	Limit           uint32
+	SnapshotVersion uint64
+}
+
+type SnapshotSubtreeRequest struct {
+	Mount     MountID
+	RootInode InodeID
 }
 
 type RenameRequest struct {
@@ -149,6 +156,25 @@ func PlanReadDir(req ReadDirRequest) (OperationPlan, error) {
 		PrimaryKey:   cloneBytes(prefix),
 		StartKey:     cloneBytes(startKey),
 		Limit:        limit,
+		ReadPrefixes: cloneKeySet(prefix),
+	}, nil
+}
+
+func PlanSnapshotSubtree(req SnapshotSubtreeRequest) (OperationPlan, error) {
+	if err := validateMountID(req.Mount); err != nil {
+		return OperationPlan{}, err
+	}
+	if err := validateInodeID(req.RootInode); err != nil {
+		return OperationPlan{}, err
+	}
+	prefix, err := EncodeDentryPrefix(req.Mount, req.RootInode)
+	if err != nil {
+		return OperationPlan{}, err
+	}
+	return OperationPlan{
+		Kind:         OperationSnapshotSubtree,
+		Mount:        req.Mount,
+		PrimaryKey:   cloneBytes(prefix),
 		ReadPrefixes: cloneKeySet(prefix),
 	}, nil
 }

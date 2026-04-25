@@ -15,7 +15,7 @@ import (
 func TestApplyEventToStateAdvancesEpochsAndCursor(t *testing.T) {
 	var st rootstate.State
 
-	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 1}, rootevent.StoreJoined(1, "s1"))
+	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 1}, rootevent.StoreJoined(1))
 	require.Equal(t, uint64(1), st.MembershipEpoch)
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, st.LastCommitted)
 
@@ -138,6 +138,87 @@ func TestCloneDescriptorsDetachesMapAndValues(t *testing.T) {
 
 	in[7].StartKey[0] = 'x'
 	require.Equal(t, byte('m'), out[7].StartKey[0])
+}
+
+func TestApplyStoreMembershipEventsToSnapshot(t *testing.T) {
+	var snapshot rootstate.Snapshot
+	joinCursor := rootstate.Cursor{Term: 1, Index: 1}
+	retireCursor := rootstate.Cursor{Term: 1, Index: 2}
+
+	rootstate.ApplyEventToSnapshot(&snapshot, joinCursor, rootevent.StoreJoined(7))
+
+	require.Equal(t, uint64(1), snapshot.State.MembershipEpoch)
+	require.Equal(t, joinCursor, snapshot.State.LastCommitted)
+	require.Equal(t, rootstate.StoreMembership{
+		StoreID:  7,
+		State:    rootstate.StoreMembershipActive,
+		JoinedAt: joinCursor,
+	}, snapshot.Stores[7])
+
+	rootstate.ApplyEventToSnapshot(&snapshot, retireCursor, rootevent.StoreRetired(7))
+
+	require.Equal(t, uint64(2), snapshot.State.MembershipEpoch)
+	require.Equal(t, retireCursor, snapshot.State.LastCommitted)
+	require.Equal(t, rootstate.StoreMembership{
+		StoreID:   7,
+		State:     rootstate.StoreMembershipRetired,
+		JoinedAt:  joinCursor,
+		RetiredAt: retireCursor,
+	}, snapshot.Stores[7])
+}
+
+func TestApplySnapshotEpochPublishedToSnapshot(t *testing.T) {
+	var snapshot rootstate.Snapshot
+	cursor := rootstate.Cursor{Term: 2, Index: 7}
+	event := rootevent.SnapshotEpochPublished("vol", 42, 100)
+
+	rootstate.ApplyEventToSnapshot(&snapshot, cursor, event)
+
+	id := rootevent.SnapshotEpochID("vol", 42, 100)
+	require.Equal(t, cursor, snapshot.State.LastCommitted)
+	require.Equal(t, rootstate.SnapshotEpoch{
+		SnapshotID:  id,
+		Mount:       "vol",
+		RootInode:   42,
+		ReadVersion: 100,
+		PublishedAt: cursor,
+	}, snapshot.SnapshotEpochs[id])
+
+	retireCursor := rootstate.Cursor{Term: 2, Index: 8}
+	rootstate.ApplyEventToSnapshot(&snapshot, retireCursor, rootevent.SnapshotEpochRetired("vol", 42, 100))
+	require.Equal(t, retireCursor, snapshot.State.LastCommitted)
+	require.NotContains(t, snapshot.SnapshotEpochs, id)
+}
+
+func TestCloneStoreMembershipsDetachesMap(t *testing.T) {
+	in := map[uint64]rootstate.StoreMembership{
+		7: {
+			StoreID:  7,
+			State:    rootstate.StoreMembershipActive,
+			JoinedAt: rootstate.Cursor{Term: 1, Index: 1},
+		},
+	}
+
+	out := rootstate.CloneStoreMemberships(in)
+	in[7] = rootstate.StoreMembership{StoreID: 7, State: rootstate.StoreMembershipRetired}
+
+	require.Equal(t, rootstate.StoreMembershipActive, out[7].State)
+}
+
+func TestCloneSnapshotEpochsDetachesMap(t *testing.T) {
+	in := map[string]rootstate.SnapshotEpoch{
+		"vol/7/9": {
+			SnapshotID:  "vol/7/9",
+			Mount:       "vol",
+			RootInode:   7,
+			ReadVersion: 9,
+		},
+	}
+
+	out := rootstate.CloneSnapshotEpochs(in)
+	in["vol/7/9"] = rootstate.SnapshotEpoch{SnapshotID: "mutated"}
+
+	require.Equal(t, uint64(9), out["vol/7/9"].ReadVersion)
 }
 
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {

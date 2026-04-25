@@ -42,26 +42,26 @@ import (
 type Service struct {
 	coordpb.UnimplementedCoordinatorServer
 
-	cluster           *catalog.Cluster
-	ids               *idalloc.IDAllocator
-	tso               *tso.Allocator
-	storage           rootview.RootStorage
-	idWindowHigh      uint64
-	idWindowSize      uint64
-	tsoWindowHigh     uint64
-	tsoWindowSize     uint64
-	allocMu           sync.Mutex
-	writeMu           sync.Mutex
-	leaseMu           sync.RWMutex
-	coordinatorID     string
-	leaseTTL          time.Duration
-	leaseRenewIn      time.Duration
-	leaseClockSkew    time.Duration
-	now               func() time.Time
-	leaseView         coordinatorLeaseView
-	rootViewMu        sync.RWMutex
-	rootView          coordinatorRootSnapshotView
-	rootViewTTL       time.Duration
+	cluster        *catalog.Cluster
+	ids            *idalloc.IDAllocator
+	tso            *tso.Allocator
+	storage        rootview.RootStorage
+	idWindowHigh   uint64
+	idWindowSize   uint64
+	tsoWindowHigh  uint64
+	tsoWindowSize  uint64
+	allocMu        sync.Mutex
+	writeMu        sync.Mutex
+	leaseMu        sync.RWMutex
+	coordinatorID  string
+	leaseTTL       time.Duration
+	leaseRenewIn   time.Duration
+	leaseClockSkew time.Duration
+	now            func() time.Time
+	leaseView      coordinatorLeaseView
+	rootViewMu     sync.RWMutex
+	rootView       coordinatorRootSnapshotView
+	rootViewTTL    time.Duration
 	// storeHeartbeatTTL holds the time.Duration value as an int64 so callers
 	// (storeState reads, ConfigureStoreHeartbeatTTL writes) avoid a data race
 	// without taking a lock on the read path.

@@ -29,6 +29,7 @@ const (
 	NoKV_KvBatchRollback_FullMethodName  = "/nokv.kv.v1.NoKV/KvBatchRollback"
 	NoKV_KvResolveLock_FullMethodName    = "/nokv.kv.v1.NoKV/KvResolveLock"
 	NoKV_KvCheckTxnStatus_FullMethodName = "/nokv.kv.v1.NoKV/KvCheckTxnStatus"
+	NoKV_KvWatchApply_FullMethodName     = "/nokv.kv.v1.NoKV/KvWatchApply"
 )
 
 // NoKVClient is the client API for NoKV service.
@@ -43,6 +44,7 @@ type NoKVClient interface {
 	KvBatchRollback(ctx context.Context, in *KvBatchRollbackRequest, opts ...grpc.CallOption) (*KvBatchRollbackResponse, error)
 	KvResolveLock(ctx context.Context, in *KvResolveLockRequest, opts ...grpc.CallOption) (*KvResolveLockResponse, error)
 	KvCheckTxnStatus(ctx context.Context, in *KvCheckTxnStatusRequest, opts ...grpc.CallOption) (*KvCheckTxnStatusResponse, error)
+	KvWatchApply(ctx context.Context, in *ApplyWatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ApplyWatchResponse], error)
 }
 
 type noKVClient struct {
@@ -133,6 +135,25 @@ func (c *noKVClient) KvCheckTxnStatus(ctx context.Context, in *KvCheckTxnStatusR
 	return out, nil
 }
 
+func (c *noKVClient) KvWatchApply(ctx context.Context, in *ApplyWatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ApplyWatchResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &NoKV_ServiceDesc.Streams[0], NoKV_KvWatchApply_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ApplyWatchRequest, ApplyWatchResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type NoKV_KvWatchApplyClient = grpc.ServerStreamingClient[ApplyWatchResponse]
+
 // NoKVServer is the server API for NoKV service.
 // All implementations should embed UnimplementedNoKVServer
 // for forward compatibility.
@@ -145,6 +166,7 @@ type NoKVServer interface {
 	KvBatchRollback(context.Context, *KvBatchRollbackRequest) (*KvBatchRollbackResponse, error)
 	KvResolveLock(context.Context, *KvResolveLockRequest) (*KvResolveLockResponse, error)
 	KvCheckTxnStatus(context.Context, *KvCheckTxnStatusRequest) (*KvCheckTxnStatusResponse, error)
+	KvWatchApply(*ApplyWatchRequest, grpc.ServerStreamingServer[ApplyWatchResponse]) error
 }
 
 // UnimplementedNoKVServer should be embedded to have
@@ -177,6 +199,9 @@ func (UnimplementedNoKVServer) KvResolveLock(context.Context, *KvResolveLockRequ
 }
 func (UnimplementedNoKVServer) KvCheckTxnStatus(context.Context, *KvCheckTxnStatusRequest) (*KvCheckTxnStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method KvCheckTxnStatus not implemented")
+}
+func (UnimplementedNoKVServer) KvWatchApply(*ApplyWatchRequest, grpc.ServerStreamingServer[ApplyWatchResponse]) error {
+	return status.Error(codes.Unimplemented, "method KvWatchApply not implemented")
 }
 func (UnimplementedNoKVServer) testEmbeddedByValue() {}
 
@@ -342,6 +367,17 @@ func _NoKV_KvCheckTxnStatus_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NoKV_KvWatchApply_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ApplyWatchRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(NoKVServer).KvWatchApply(m, &grpc.GenericServerStream[ApplyWatchRequest, ApplyWatchResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type NoKV_KvWatchApplyServer = grpc.ServerStreamingServer[ApplyWatchResponse]
+
 // NoKV_ServiceDesc is the grpc.ServiceDesc for NoKV service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -382,6 +418,12 @@ var NoKV_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _NoKV_KvCheckTxnStatus_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "KvWatchApply",
+			Handler:       _NoKV_KvWatchApply_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "kv/kv.proto",
 }

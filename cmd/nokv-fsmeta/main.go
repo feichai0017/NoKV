@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"expvar"
 	"flag"
 	"fmt"
 	"log"
@@ -12,9 +13,14 @@ import (
 	"time"
 
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
+	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
+	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	fsmetaserver "github.com/feichai0017/NoKV/fsmeta/server"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	metricspkg "github.com/feichai0017/NoKV/metrics"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -42,7 +48,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	executor, closeExecutor, err := openExecutor(ctx, *coordAddr)
+	executor, watcher, snapshotPublisher, closeExecutor, err := openExecutor(ctx, *coordAddr)
 	if err != nil {
 		fatalf("open fsmeta executor: %v", err)
 		return
@@ -67,13 +73,16 @@ func main() {
 	defer func() { _ = ln.Close() }()
 
 	grpcServer := grpc.NewServer()
-	fsmetaserver.Register(grpcServer, executor)
+	fsmetaserver.Register(grpcServer, executor, fsmetaserver.WithWatcher(watcher), fsmetaserver.WithSnapshotPublisher(snapshotPublisher))
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- grpcServer.Serve(ln)
 	}()
 
 	if *metricsAddr != "" {
+		if stats, ok := watcher.(interface{ Stats() map[string]any }); ok {
+			publishExpvarOnce("nokv_fsmeta_watch", expvar.Func(func() any { return stats.Stats() }))
+		}
 		metricsLn, err := metricspkg.StartExpvarServer(*metricsAddr)
 		if err != nil {
 			log.Printf("start metrics endpoint: %v", err)
@@ -105,17 +114,24 @@ func main() {
 	grpcServer.GracefulStop()
 }
 
+func publishExpvarOnce(name string, value expvar.Var) {
+	if expvar.Get(name) != nil {
+		return
+	}
+	expvar.Publish(name, value)
+}
+
 type closeFunc func() error
 
-func newExecutor(ctx context.Context, coordAddr string) (*fsmetaexec.Executor, closeFunc, error) {
+func newExecutor(ctx context.Context, coordAddr string) (*fsmetaexec.Executor, fsmeta.Watcher, fsmeta.SnapshotPublisher, closeFunc, error) {
 	if coordAddr == "" {
-		return nil, nil, fmt.Errorf("coordinator-addr is required")
+		return nil, nil, nil, nil, fmt.Errorf("coordinator-addr is required")
 	}
 	dialCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	coordRPC, err := coordclient.NewGRPCClient(dialCtx, coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	cancel()
 	if err != nil {
-		return nil, nil, fmt.Errorf("init coordinator client: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("init coordinator client: %w", err)
 	}
 	kv, err := client.New(client.Config{
 		Context:        ctx,
@@ -125,26 +141,37 @@ func newExecutor(ctx context.Context, coordAddr string) (*fsmetaexec.Executor, c
 	})
 	if err != nil {
 		_ = coordRPC.Close()
-		return nil, nil, fmt.Errorf("init raftstore client: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("init raftstore client: %w", err)
 	}
 	runner, err := fsmetaexec.NewRaftstoreRunner(kv, coordRPC)
 	if err != nil {
 		_ = kv.Close()
 		_ = coordRPC.Close()
-		return nil, nil, fmt.Errorf("init fsmeta runner: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("init fsmeta runner: %w", err)
 	}
 	executor, err := fsmetaexec.New(runner)
 	if err != nil {
 		_ = kv.Close()
 		_ = coordRPC.Close()
-		return nil, nil, fmt.Errorf("init fsmeta executor: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("init fsmeta executor: %w", err)
 	}
+	router := fsmetawatch.NewRouter()
+	source, err := fsmetawatch.StartRemoteSource(ctx, coordRPC, router, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		_ = kv.Close()
+		_ = coordRPC.Close()
+		return nil, nil, nil, nil, fmt.Errorf("init fsmeta watch source: %w", err)
+	}
+	snapshotPublisher := rootSnapshotPublisher{coord: coordRPC}
 	// Compose closer: shutdown order is kv first (it holds dialed store conns
 	// keyed by coordinator-resolved addresses) then coordRPC. Both errors are
 	// reported; the first non-nil wins.
 	closer := func() error {
 		var errAll error
-		if cerr := kv.Close(); cerr != nil {
+		if cerr := source.Close(); cerr != nil {
+			errAll = cerr
+		}
+		if cerr := kv.Close(); cerr != nil && errAll == nil {
 			errAll = cerr
 		}
 		if cerr := coordRPC.Close(); cerr != nil && errAll == nil {
@@ -152,5 +179,33 @@ func newExecutor(ctx context.Context, coordAddr string) (*fsmetaexec.Executor, c
 		}
 		return errAll
 	}
-	return executor, closer, nil
+	return executor, router, snapshotPublisher, closer, nil
+}
+
+type rootSnapshotPublisher struct {
+	coord *coordclient.GRPCClient
+}
+
+func (p rootSnapshotPublisher) PublishSnapshotSubtree(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error {
+	return p.publish(ctx, rootevent.SnapshotEpochPublished(string(token.Mount), uint64(token.RootInode), token.ReadVersion))
+}
+
+func (p rootSnapshotPublisher) RetireSnapshotSubtree(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error {
+	return p.publish(ctx, rootevent.SnapshotEpochRetired(string(token.Mount), uint64(token.RootInode), token.ReadVersion))
+}
+
+func (p rootSnapshotPublisher) publish(ctx context.Context, event rootevent.Event) error {
+	if p.coord == nil {
+		return fmt.Errorf("snapshot subtree publisher is not configured")
+	}
+	resp, err := p.coord.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
+		Event: metawire.RootEventToProto(event),
+	})
+	if err != nil {
+		return err
+	}
+	if resp == nil || !resp.GetAccepted() {
+		return fmt.Errorf("snapshot subtree root event was not accepted")
+	}
+	return nil
 }

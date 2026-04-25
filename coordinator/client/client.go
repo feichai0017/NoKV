@@ -486,7 +486,7 @@ func validateGetStoreResponse(resp *coordpb.GetStoreResponse) error {
 	if store.GetStoreId() == 0 {
 		return fmt.Errorf("%w: get_store store_id is zero", errInvalidWitness)
 	}
-	if store.GetClientAddr() == "" {
+	if store.GetClientAddr() == "" && store.GetState() == coordpb.StoreState_STORE_STATE_UP {
 		return fmt.Errorf("%w: get_store client_addr is empty", errInvalidWitness)
 	}
 	return nil
@@ -504,7 +504,7 @@ func validateListStoresResponse(resp *coordpb.ListStoresResponse) error {
 		if store.GetStoreId() == 0 {
 			return fmt.Errorf("%w: list_stores contains zero store_id", errInvalidWitness)
 		}
-		if store.GetClientAddr() == "" {
+		if store.GetClientAddr() == "" && store.GetState() == coordpb.StoreState_STORE_STATE_UP {
 			return fmt.Errorf("%w: list_stores store %d has empty client_addr", errInvalidWitness, store.GetStoreId())
 		}
 		if _, ok := seen[store.GetStoreId()]; ok {

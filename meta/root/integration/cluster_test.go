@@ -22,7 +22,7 @@ func TestMetaRootNodeIsolationElectsNewLeaderAndHeals(t *testing.T) {
 	leaderID := cluster.WaitLeader()
 
 	initialCommit, err := cluster.Stores[leaderID].Append(context.Background(),
-		rootevent.StoreJoined(1, "s1"),
+		rootevent.StoreJoined(1),
 	)
 	require.NoError(t, err)
 	cluster.RefreshAll()

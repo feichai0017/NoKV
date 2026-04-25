@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetapb "github.com/feichai0017/NoKV/pb/fsmeta"
@@ -20,6 +21,7 @@ type fakeExecutor struct {
 	createReq   fsmeta.CreateRequest
 	createInode fsmeta.InodeRecord
 	readDirReq  fsmeta.ReadDirRequest
+	snapshotReq fsmeta.SnapshotSubtreeRequest
 	err         error
 }
 
@@ -74,6 +76,14 @@ func (e *fakeExecutor) ReadDirPlus(_ context.Context, req fsmeta.ReadDirRequest)
 			LinkCount: 1,
 		},
 	}}, nil
+}
+
+func (e *fakeExecutor) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
+	e.snapshotReq = req
+	if e.err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, e.err
+	}
+	return fsmeta.SnapshotSubtreeToken{Mount: req.Mount, RootInode: req.RootInode, ReadVersion: 1234}, nil
 }
 
 func (e *fakeExecutor) Rename(context.Context, fsmeta.RenameRequest) error {
@@ -160,12 +170,142 @@ func TestGRPCServiceErrorMapping(t *testing.T) {
 	}
 }
 
-func openBufconnClient(t *testing.T, executor Executor) (fsmetapb.FSMetadataClient, func()) {
+func TestGRPCServiceWatchSubtree(t *testing.T) {
+	watcher := &fakeWatcher{sub: newFakeWatchSub(1)}
+	client, cleanup := openBufconnClient(t, &fakeExecutor{}, WithWatcher(watcher))
+	defer cleanup()
+
+	stream, err := client.WatchSubtree(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, stream.Send(&fsmetapb.WatchAckOrSubscribe{
+		Body: &fsmetapb.WatchAckOrSubscribe_Subscribe{Subscribe: &fsmetapb.WatchSubtreeRequest{
+			KeyPrefix:          []byte("fsm/"),
+			BackPressureWindow: 8,
+		}},
+	}))
+	require.Eventually(t, func() bool {
+		return string(watcher.req.KeyPrefix) == "fsm/" && watcher.req.BackPressureWindow == 8
+	}, time.Second, 10*time.Millisecond)
+	ready, err := stream.Recv()
+	require.NoError(t, err)
+	require.NotNil(t, ready.GetReady())
+
+	evt := fsmeta.WatchEvent{
+		Cursor:        fsmeta.WatchCursor{RegionID: 1, Term: 2, Index: 3},
+		CommitVersion: 44,
+		Source:        fsmeta.WatchEventSourceCommit,
+		Key:           []byte("fsm/a"),
+	}
+	watcher.sub.events <- evt
+	resp, err := stream.Recv()
+	require.NoError(t, err)
+	require.Equal(t, uint64(44), resp.GetEvent().GetCommitVersion())
+	require.Equal(t, []byte("fsm/a"), resp.GetEvent().GetKey())
+
+	require.NoError(t, stream.Send(&fsmetapb.WatchAckOrSubscribe{
+		Body: &fsmetapb.WatchAckOrSubscribe_Ack{Ack: &fsmetapb.WatchAck{Cursor: resp.GetEvent().GetRaftCursor()}},
+	}))
+	require.Eventually(t, func() bool {
+		return len(watcher.sub.acks) == 1 && watcher.sub.acks[0] == evt.Cursor
+	}, time.Second, 10*time.Millisecond)
+	require.NoError(t, stream.CloseSend())
+}
+
+func TestGRPCServiceSnapshotSubtreePublishesToken(t *testing.T) {
+	executor := &fakeExecutor{}
+	publisher := &fakeSnapshotPublisher{}
+	client, cleanup := openBufconnClient(t, executor, WithSnapshotPublisher(publisher))
+	defer cleanup()
+
+	resp, err := client.SnapshotSubtree(context.Background(), &fsmetapb.SnapshotSubtreeRequest{
+		Mount:     "vol",
+		RootInode: 42,
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.SnapshotSubtreeRequest{Mount: "vol", RootInode: 42}, executor.snapshotReq)
+	require.Equal(t, uint64(1234), resp.GetReadVersion())
+	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 1234}, publisher.token)
+}
+
+func TestGRPCServiceSnapshotSubtreeRetiresTokenAfterPublishFailure(t *testing.T) {
+	executor := &fakeExecutor{}
+	publisher := &fakeSnapshotPublisher{err: errors.New("publish failed")}
+	client, cleanup := openBufconnClient(t, executor, WithSnapshotPublisher(publisher))
+	defer cleanup()
+
+	_, err := client.SnapshotSubtree(context.Background(), &fsmetapb.SnapshotSubtreeRequest{
+		Mount:     "vol",
+		RootInode: 42,
+	})
+	require.Error(t, err)
+	want := fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 1234}
+	require.Equal(t, want, publisher.token)
+	require.Equal(t, want, publisher.retired)
+}
+
+type fakeSnapshotPublisher struct {
+	token       fsmeta.SnapshotSubtreeToken
+	retired     fsmeta.SnapshotSubtreeToken
+	err         error
+	retireError error
+}
+
+func (p *fakeSnapshotPublisher) PublishSnapshotSubtree(_ context.Context, token fsmeta.SnapshotSubtreeToken) error {
+	p.token = token
+	return p.err
+}
+
+func (p *fakeSnapshotPublisher) RetireSnapshotSubtree(_ context.Context, token fsmeta.SnapshotSubtreeToken) error {
+	p.retired = token
+	return p.retireError
+}
+
+type fakeWatcher struct {
+	req fsmeta.WatchRequest
+	sub *fakeWatchSub
+	err error
+}
+
+func (w *fakeWatcher) Subscribe(_ context.Context, req fsmeta.WatchRequest) (fsmeta.WatchSubscription, error) {
+	w.req = req
+	if w.err != nil {
+		return nil, w.err
+	}
+	return w.sub, nil
+}
+
+type fakeWatchSub struct {
+	events chan fsmeta.WatchEvent
+	acks   []fsmeta.WatchCursor
+	err    error
+}
+
+func newFakeWatchSub(buffer int) *fakeWatchSub {
+	return &fakeWatchSub{events: make(chan fsmeta.WatchEvent, buffer)}
+}
+
+func (s *fakeWatchSub) Events() <-chan fsmeta.WatchEvent {
+	return s.events
+}
+
+func (s *fakeWatchSub) Ack(cursor fsmeta.WatchCursor) {
+	s.acks = append(s.acks, cursor)
+}
+
+func (s *fakeWatchSub) Close() {
+	close(s.events)
+}
+
+func (s *fakeWatchSub) Err() error {
+	return s.err
+}
+
+func openBufconnClient(t *testing.T, executor Executor, opts ...Option) (fsmetapb.FSMetadataClient, func()) {
 	t.Helper()
 	const bufSize = 1 << 20
 	listener := bufconn.Listen(bufSize)
 	grpcServer := grpc.NewServer()
-	Register(grpcServer, executor)
+	Register(grpcServer, executor, opts...)
 	go func() {
 		_ = grpcServer.Serve(listener)
 	}()

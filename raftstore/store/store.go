@@ -39,6 +39,7 @@ type Store struct {
 	sched       *schedulerRuntime
 	cmds        *commandRuntime
 	exec        *executionRuntime
+	observers   *applyObserverRuntime
 }
 
 // NewStore constructs a Store using concrete dependencies. It keeps peer
@@ -109,7 +110,8 @@ func NewStore(cfg Config) *Store {
 			pipe:    newCommandPipeline(cfg.CommandApplier),
 			timeout: commandTimeout,
 		},
-		exec: newExecutionRuntime(),
+		exec:      newExecutionRuntime(),
+		observers: newApplyObserverRuntime(),
 	}
 	s.regions = &regionRuntime{
 		metrics: regionMetrics,

@@ -336,11 +336,6 @@ func (c *Client) TwoPhaseCommit(ctx context.Context, primary []byte, mutations [
 	if primaryMutation == nil {
 		return fmt.Errorf("client: primary key %q missing from mutations", primary)
 	}
-	for _, mut := range cleaned {
-		if _, err := c.routeKeyWithRetry(ctx, mut.GetKey()); err != nil {
-			return err
-		}
-	}
 	prewritten, err := c.prewriteMutationsByRoute(ctx, primary, startVersion, lockTTL, []*kvrpcpb.Mutation{primaryMutation})
 	if err != nil {
 		return err

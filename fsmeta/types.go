@@ -60,6 +60,15 @@ type DentryAttrPair struct {
 	Inode  InodeRecord
 }
 
+// SnapshotSubtreeToken identifies one MVCC read epoch for a direct subtree
+// page. V0 uses the token as a stable read version; recursive subtree
+// materialization and GC retention enforcement are later layers.
+type SnapshotSubtreeToken struct {
+	Mount       MountID
+	RootInode   InodeID
+	ReadVersion uint64
+}
+
 const (
 	// RootInode is the conventional root inode for one mount.
 	RootInode InodeID = 1

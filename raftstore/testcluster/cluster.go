@@ -5,8 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	adminpb "github.com/feichai0017/NoKV/pb/admin"
-	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"net"
 	"slices"
 	"testing"
@@ -19,6 +17,10 @@ import (
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
 	"github.com/feichai0017/NoKV/coordinator/tso"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
+	adminpb "github.com/feichai0017/NoKV/pb/admin"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	raftkv "github.com/feichai0017/NoKV/raftstore/kv"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -48,9 +50,10 @@ type NodeConfig struct {
 }
 
 type Coordinator struct {
-	addr   string
-	lis    net.Listener
-	server *grpc.Server
+	addr    string
+	lis     net.Listener
+	server  *grpc.Server
+	service *coordserver.Service
 }
 
 func OpenStandaloneDB(tb testing.TB, dir string, tweak func(*NoKV.Options)) *NoKV.DB {
@@ -134,9 +137,10 @@ func StartCoordinator(tb testing.TB) *Coordinator {
 		_ = grpcServer.Serve(lis)
 	}()
 	return &Coordinator{
-		addr:   lis.Addr().String(),
-		lis:    lis,
-		server: grpcServer,
+		addr:    lis.Addr().String(),
+		lis:     lis,
+		server:  grpcServer,
+		service: svc,
 	}
 }
 
@@ -162,6 +166,32 @@ func (c *Coordinator) Close(tb testing.TB) {
 		}
 		c.lis = nil
 	}
+}
+
+func (c *Coordinator) PublishRootEvent(tb testing.TB, event rootevent.Event) {
+	tb.Helper()
+	if c == nil || c.service == nil {
+		tb.Fatalf("publish root event: coordinator is not running")
+	}
+	resp, err := c.service.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
+		Event: metawire.RootEventToProto(event),
+	})
+	if err != nil {
+		tb.Fatalf("publish root event %v: %v", event.Kind, err)
+	}
+	if resp == nil || !resp.GetAccepted() {
+		tb.Fatalf("publish root event %v was not accepted", event.Kind)
+	}
+}
+
+func (c *Coordinator) JoinStore(tb testing.TB, storeID uint64) {
+	tb.Helper()
+	c.PublishRootEvent(tb, rootevent.StoreJoined(storeID))
+}
+
+func (c *Coordinator) RetireStore(tb testing.TB, storeID uint64) {
+	tb.Helper()
+	c.PublishRootEvent(tb, rootevent.StoreRetired(storeID))
 }
 
 func NewScheduler(tb testing.TB, coordAddr string, timeout time.Duration) storepkg.SchedulerClient {

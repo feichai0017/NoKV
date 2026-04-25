@@ -11,6 +11,7 @@ import (
 )
 
 const defaultLockTTL uint64 = 3000
+const maxCommitTsExpiredRetries = 3
 
 // KV is the minimal key/value tuple the fsmeta executor consumes from scans.
 type KV struct {
@@ -75,10 +76,6 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest, inode f
 	if err != nil {
 		return err
 	}
-	startVersion, commitVersion, err := e.reserveTxnVersions(ctx)
-	if err != nil {
-		return err
-	}
 	inode.Inode = req.Inode
 	if inode.LinkCount == 0 {
 		inode.LinkCount = 1
@@ -110,10 +107,9 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest, inode f
 			AssertionNotExist: true,
 		},
 	}
-	if err := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
-		return translateMutateError(err)
-	}
-	return nil
+	return e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+		return e.runner.Mutate(ctx, plan.PrimaryKey, cloneMutations(mutations), startVersion, commitVersion, e.lockTTL)
+	})
 }
 
 // Lookup returns the dentry record for parent/name.
@@ -142,7 +138,7 @@ func (e *Executor) ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fs
 	if err != nil {
 		return nil, err
 	}
-	version, err := e.reserveReadVersion(ctx)
+	version, err := e.readVersion(ctx, req.SnapshotVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +153,7 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 	if err != nil {
 		return nil, err
 	}
-	version, err := e.reserveReadVersion(ctx)
+	version, err := e.readVersion(ctx, req.SnapshotVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -201,6 +197,24 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 	return out, nil
 }
 
+// SnapshotSubtree publishes a stable MVCC read version for one direct subtree
+// root. The returned token is consumed by ReadDir / ReadDirPlus through
+// ReadDirRequest.SnapshotVersion.
+func (e *Executor) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
+	if _, err := fsmeta.PlanSnapshotSubtree(req); err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, err
+	}
+	version, err := e.reserveReadVersion(ctx)
+	if err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, err
+	}
+	return fsmeta.SnapshotSubtreeToken{
+		Mount:       req.Mount,
+		RootInode:   req.RootInode,
+		ReadVersion: version,
+	}, nil
+}
+
 func (e *Executor) scanDentries(ctx context.Context, plan fsmeta.OperationPlan, version uint64) ([]fsmeta.DentryRecord, error) {
 	kvs, err := e.runner.Scan(ctx, plan.StartKey, plan.Limit, version)
 	if err != nil {
@@ -228,21 +242,16 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 	if err != nil {
 		return err
 	}
-	startVersion, commitVersion, err := e.reserveTxnVersions(ctx)
-	if err != nil {
-		return err
-	}
-	if _, err := e.readDentry(ctx, plan.PrimaryKey, startVersion); err != nil {
-		return err
-	}
 	mutations := []*kvrpcpb.Mutation{{
 		Op:  kvrpcpb.Mutation_Delete,
 		Key: cloneBytes(plan.MutateKeys[0]),
 	}}
-	if err := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
-		return translateMutateError(err)
-	}
-	return nil
+	return e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+		if _, err := e.readDentry(ctx, plan.PrimaryKey, startVersion); err != nil {
+			return err
+		}
+		return e.runner.Mutate(ctx, plan.PrimaryKey, cloneMutations(mutations), startVersion, commitVersion, e.lockTTL)
+	})
 }
 
 // Rename moves one dentry from source to destination. V0 rejects destination
@@ -252,45 +261,47 @@ func (e *Executor) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
 	if err != nil {
 		return err
 	}
-	startVersion, commitVersion, err := e.reserveTxnVersions(ctx)
-	if err != nil {
-		return err
-	}
-	record, err := e.readDentry(ctx, plan.ReadKeys[0], startVersion)
-	if err != nil {
-		return err
-	}
-	if _, err := e.readDentry(ctx, plan.ReadKeys[1], startVersion); err == nil {
-		return fsmeta.ErrExists
-	} else if !errors.Is(err, fsmeta.ErrNotFound) {
-		return err
-	}
-	record.Parent = req.ToParent
-	record.Name = req.ToName
-	value, err := fsmeta.EncodeDentryValue(record)
-	if err != nil {
-		return err
-	}
-	mutations := []*kvrpcpb.Mutation{
-		{
-			Op:  kvrpcpb.Mutation_Delete,
-			Key: cloneBytes(plan.MutateKeys[0]),
-		},
-		{
-			Op:                kvrpcpb.Mutation_Put,
-			Key:               cloneBytes(plan.MutateKeys[1]),
-			Value:             value,
-			AssertionNotExist: true,
-		},
-	}
-	if err := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
-		return translateMutateError(err)
-	}
-	return nil
+	return e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+		record, err := e.readDentry(ctx, plan.ReadKeys[0], startVersion)
+		if err != nil {
+			return err
+		}
+		if _, err := e.readDentry(ctx, plan.ReadKeys[1], startVersion); err == nil {
+			return fsmeta.ErrExists
+		} else if !errors.Is(err, fsmeta.ErrNotFound) {
+			return err
+		}
+		record.Parent = req.ToParent
+		record.Name = req.ToName
+		value, err := fsmeta.EncodeDentryValue(record)
+		if err != nil {
+			return err
+		}
+		mutations := []*kvrpcpb.Mutation{
+			{
+				Op:  kvrpcpb.Mutation_Delete,
+				Key: cloneBytes(plan.MutateKeys[0]),
+			},
+			{
+				Op:                kvrpcpb.Mutation_Put,
+				Key:               cloneBytes(plan.MutateKeys[1]),
+				Value:             value,
+				AssertionNotExist: true,
+			},
+		}
+		return e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+	})
 }
 
 func (e *Executor) reserveReadVersion(ctx context.Context) (uint64, error) {
 	return e.runner.ReserveTimestamp(ctx, 1)
+}
+
+func (e *Executor) readVersion(ctx context.Context, snapshotVersion uint64) (uint64, error) {
+	if snapshotVersion != 0 {
+		return snapshotVersion, nil
+	}
+	return e.reserveReadVersion(ctx)
 }
 
 // reserveTxnVersions pre-allocates both start_ts and commit_ts in a single TSO
@@ -307,9 +318,8 @@ func (e *Executor) reserveReadVersion(ctx context.Context) (uint64, error) {
 // Together these force a retry-with-fresh-ts under contention — incorrect
 // pre-allocation is detected at commit time, never silently violated. The
 // optimization saves one TSO RPC per fsmeta operation under the common
-// contention-free path. A follow-up will translate keyErrorCommitTsExpired
-// into a transparent retry inside Executor; until then it surfaces as a
-// Percolator commit error and the fsmeta caller must retry the operation.
+// contention-free path. CommitTsExpired is retried transparently by
+// withTxnRetry below.
 func (e *Executor) reserveTxnVersions(ctx context.Context) (uint64, uint64, error) {
 	startVersion, err := e.runner.ReserveTimestamp(ctx, 2)
 	if err != nil {
@@ -318,11 +328,51 @@ func (e *Executor) reserveTxnVersions(ctx context.Context) (uint64, uint64, erro
 	return startVersion, startVersion + 1, nil
 }
 
+func (e *Executor) withTxnRetry(ctx context.Context, run func(startVersion, commitVersion uint64) error) error {
+	var last error
+	for attempt := 0; attempt <= maxCommitTsExpiredRetries; attempt++ {
+		startVersion, commitVersion, err := e.reserveTxnVersions(ctx)
+		if err != nil {
+			return err
+		}
+		err = run(startVersion, commitVersion)
+		if err == nil {
+			return nil
+		}
+		if !isCommitTsExpired(err) {
+			return translateMutateError(err)
+		}
+		last = err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+	}
+	return translateMutateError(last)
+}
+
 func cloneBytes(in []byte) []byte {
 	if in == nil {
 		return nil
 	}
 	return append([]byte(nil), in...)
+}
+
+func cloneMutations(in []*kvrpcpb.Mutation) []*kvrpcpb.Mutation {
+	out := make([]*kvrpcpb.Mutation, 0, len(in))
+	for _, mut := range in {
+		if mut == nil {
+			out = append(out, nil)
+			continue
+		}
+		out = append(out, &kvrpcpb.Mutation{
+			Op:                mut.GetOp(),
+			Key:               cloneBytes(mut.GetKey()),
+			Value:             cloneBytes(mut.GetValue()),
+			AssertionNotExist: mut.GetAssertionNotExist(),
+			ExpiresAt:         mut.GetExpiresAt(),
+		})
+	}
+	return out
 }
 
 func (e *Executor) readDentry(ctx context.Context, key []byte, version uint64) (fsmeta.DentryRecord, error) {
@@ -352,4 +402,17 @@ func translateMutateError(err error) error {
 		}
 	}
 	return err
+}
+
+func isCommitTsExpired(err error) bool {
+	var conflict keyConflictError
+	if !errors.As(err, &conflict) {
+		return false
+	}
+	for _, keyErr := range conflict.KeyErrors() {
+		if keyErr != nil && keyErr.GetCommitTsExpired() != nil {
+			return true
+		}
+	}
+	return false
 }

@@ -20,6 +20,8 @@ type Client interface {
 	Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error)
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
 	ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
+	WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) (WatchSubscription, error)
+	SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error)
 	Rename(ctx context.Context, req fsmeta.RenameRequest) error
 	Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
 	Close() error
@@ -105,6 +107,39 @@ func (c *GRPCClient) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest)
 	return out, nil
 }
 
+// WatchSubtree opens a live prefix watch stream. v0 is live-only: ResumeCursor
+// is accepted on the wire but no catch-up replay is performed by the client.
+func (c *GRPCClient) WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) (WatchSubscription, error) {
+	if err := c.requireRPC(); err != nil {
+		return nil, err
+	}
+	stream, err := c.rpc.WatchSubtree(ctx)
+	if err != nil {
+		return nil, translateRPCError(err)
+	}
+	if err := stream.Send(&fsmetapb.WatchAckOrSubscribe{
+		Body: &fsmetapb.WatchAckOrSubscribe_Subscribe{Subscribe: watchRequestToProto(req)},
+	}); err != nil {
+		return nil, translateRPCError(err)
+	}
+	if err := waitForWatchReady(stream); err != nil {
+		_ = stream.CloseSend()
+		return nil, err
+	}
+	return &WatchStream{stream: stream}, nil
+}
+
+func (c *GRPCClient) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
+	if err := c.requireRPC(); err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, err
+	}
+	resp, err := c.rpc.SnapshotSubtree(ctx, snapshotSubtreeRequestToProto(req))
+	if err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, translateRPCError(err)
+	}
+	return snapshotSubtreeTokenFromProto(resp), nil
+}
+
 func (c *GRPCClient) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
 	if err := c.requireRPC(); err != nil {
 		return err
@@ -119,6 +154,74 @@ func (c *GRPCClient) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
 	}
 	_, err := c.rpc.Unlink(ctx, unlinkRequestToProto(req))
 	return translateRPCError(err)
+}
+
+// WatchSubscription is one typed WatchSubtree client stream.
+type WatchSubscription interface {
+	Recv() (fsmeta.WatchEvent, error)
+	Ack(fsmeta.WatchCursor) error
+	Close() error
+}
+
+// WatchStream is the gRPC-backed WatchSubtree stream implementation.
+type WatchStream struct {
+	stream fsmetapb.FSMetadata_WatchSubtreeClient
+}
+
+// Recv blocks until the next watch event arrives.
+func (s *WatchStream) Recv() (fsmeta.WatchEvent, error) {
+	if s == nil || s.stream == nil {
+		return fsmeta.WatchEvent{}, errors.New("fsmeta/client: watch stream is not configured")
+	}
+	for {
+		resp, err := s.stream.Recv()
+		if err != nil {
+			return fsmeta.WatchEvent{}, translateRPCError(err)
+		}
+		if event := resp.GetEvent(); event != nil {
+			return watchEventFromProto(event), nil
+		}
+		if throttle := resp.GetThrottle(); throttle != nil {
+			return fsmeta.WatchEvent{}, fmt.Errorf("%w: %s", fsmeta.ErrWatchOverflow, throttle.GetReason())
+		}
+		// Ready and catch-up markers are stream-control frames, not user events.
+	}
+}
+
+func waitForWatchReady(stream fsmetapb.FSMetadata_WatchSubtreeClient) error {
+	for {
+		resp, err := stream.Recv()
+		if err != nil {
+			return translateRPCError(err)
+		}
+		if resp.GetReady() != nil {
+			return nil
+		}
+		if throttle := resp.GetThrottle(); throttle != nil {
+			return fmt.Errorf("%w: %s", fsmeta.ErrWatchOverflow, throttle.GetReason())
+		}
+		if resp.GetEvent() != nil {
+			return errors.New("fsmeta/client: watch stream delivered event before ready")
+		}
+	}
+}
+
+// Ack releases back-pressure budget for a received event.
+func (s *WatchStream) Ack(cursor fsmeta.WatchCursor) error {
+	if s == nil || s.stream == nil {
+		return errors.New("fsmeta/client: watch stream is not configured")
+	}
+	return translateRPCError(s.stream.Send(&fsmetapb.WatchAckOrSubscribe{
+		Body: &fsmetapb.WatchAckOrSubscribe_Ack{Ack: &fsmetapb.WatchAck{Cursor: watchCursorToProto(cursor)}},
+	}))
+}
+
+// Close closes the sending side of the watch stream.
+func (s *WatchStream) Close() error {
+	if s == nil || s.stream == nil {
+		return nil
+	}
+	return s.stream.CloseSend()
 }
 
 // Close closes the underlying connection when this client owns one.

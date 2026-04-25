@@ -41,7 +41,7 @@ func TestLocalMetaCloneHelpers(t *testing.T) {
 	}
 	eventClone := ClonePendingRootEvents(map[uint64]PendingRootEvent{event.Sequence: event})
 	require.Equal(t, event.Event.Kind, eventClone[event.Sequence].Event.Kind)
-	eventClone[event.Sequence] = PendingRootEvent{Sequence: event.Sequence, Event: rootevent.StoreJoined(8, "mutated")}
+	eventClone[event.Sequence] = PendingRootEvent{Sequence: event.Sequence, Event: rootevent.StoreJoined(8)}
 	require.Equal(t, rootevent.KindRegionTombstoned, event.Event.Kind)
 	require.Nil(t, ClonePendingRootEvents(nil))
 

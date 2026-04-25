@@ -13,11 +13,14 @@ import (
 )
 
 type fakeRunner struct {
-	nextTS    uint64
-	data      map[string][]byte
-	mutations [][]*kvrpcpb.Mutation
-	getCalls  int
-	mutateErr error
+	nextTS        uint64
+	data          map[string][]byte
+	mutations     [][]*kvrpcpb.Mutation
+	getCalls      int
+	scanVersions  []uint64
+	batchVersions []uint64
+	mutateErr     error
+	mutateErrs    []error
 }
 
 func newFakeRunner() *fakeRunner {
@@ -45,7 +48,8 @@ func (r *fakeRunner) Get(_ context.Context, key []byte, _ uint64) ([]byte, bool,
 	return append([]byte(nil), value...), true, nil
 }
 
-func (r *fakeRunner) BatchGet(_ context.Context, keys [][]byte, _ uint64) (map[string][]byte, error) {
+func (r *fakeRunner) BatchGet(_ context.Context, keys [][]byte, version uint64) (map[string][]byte, error) {
+	r.batchVersions = append(r.batchVersions, version)
 	out := make(map[string][]byte, len(keys))
 	for _, key := range keys {
 		if value, ok := r.data[string(key)]; ok {
@@ -55,7 +59,8 @@ func (r *fakeRunner) BatchGet(_ context.Context, keys [][]byte, _ uint64) (map[s
 	return out, nil
 }
 
-func (r *fakeRunner) Scan(_ context.Context, startKey []byte, limit uint32, _ uint64) ([]KV, error) {
+func (r *fakeRunner) Scan(_ context.Context, startKey []byte, limit uint32, version uint64) ([]KV, error) {
+	r.scanVersions = append(r.scanVersions, version)
 	keys := make([][]byte, 0, len(r.data))
 	for key := range r.data {
 		if bytes.Compare([]byte(key), startKey) >= 0 {
@@ -78,7 +83,39 @@ func (r *fakeRunner) Scan(_ context.Context, startKey []byte, limit uint32, _ ui
 	return out, nil
 }
 
+func TestExecutorSnapshotSubtreeTokenDrivesReadVersion(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "a", 21)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 21, Type: fsmeta.InodeTypeFile, LinkCount: 1})
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	token, err := executor.SnapshotSubtree(context.Background(), fsmeta.SnapshotSubtreeRequest{
+		Mount:     "vol",
+		RootInode: 7,
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 7, ReadVersion: 1}, token)
+
+	_, err = executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount:           "vol",
+		Parent:          7,
+		Limit:           8,
+		SnapshotVersion: token.ReadVersion,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{token.ReadVersion}, runner.scanVersions)
+	require.Equal(t, []uint64{token.ReadVersion}, runner.batchVersions)
+}
+
 func (r *fakeRunner) Mutate(_ context.Context, _ []byte, mutations []*kvrpcpb.Mutation, _, _, _ uint64) error {
+	if len(r.mutateErrs) > 0 {
+		err := r.mutateErrs[0]
+		r.mutateErrs = r.mutateErrs[1:]
+		if err != nil {
+			return err
+		}
+	}
 	if r.mutateErr != nil {
 		return r.mutateErr
 	}
@@ -166,6 +203,32 @@ func TestExecutorCreateTranslatesAlreadyExistsConflict(t *testing.T) {
 	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
 	require.ErrorIs(t, err, fsmeta.ErrExists)
 	require.Zero(t, runner.getCalls)
+}
+
+func TestExecutorRetriesCommitTsExpired(t *testing.T) {
+	runner := newFakeRunner()
+	runner.mutateErrs = []error{
+		fakeKeyConflictError{errors: []*kvrpcpb.KeyError{{
+			CommitTsExpired: &kvrpcpb.CommitTsExpired{
+				Key:         []byte("dentry"),
+				CommitTs:    2,
+				MinCommitTs: 5,
+			},
+		}}},
+		nil,
+	}
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Inode:  22,
+	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+	require.NoError(t, err)
+	require.Len(t, runner.mutations, 1)
+	require.Equal(t, uint64(5), runner.nextTS)
 }
 
 func TestExecutorLookupReturnsNotFound(t *testing.T) {

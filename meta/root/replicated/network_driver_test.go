@@ -18,7 +18,7 @@ func TestNetworkDriverReplicatesAcrossThreeNodes(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 
 	commit, err := stores[leaderID].Append(context.Background(),
-		rootevent.StoreJoined(1, "s1"),
+		rootevent.StoreJoined(1),
 		rootevent.RegionDescriptorPublished(testDescriptor(60, []byte("a"), []byte("z"))),
 	)
 	require.NoError(t, err)
@@ -93,7 +93,7 @@ func TestNetworkDriverRestartsFromPersistedState(t *testing.T) {
 	}
 
 	stores, drivers, leaderID := openCluster()
-	commit1, err := stores[leaderID].Append(context.Background(), rootevent.StoreJoined(1, "s1"))
+	commit1, err := stores[leaderID].Append(context.Background(), rootevent.StoreJoined(1))
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		for _, id := range []uint64{1, 2, 3} {
