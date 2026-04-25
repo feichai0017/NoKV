@@ -143,6 +143,7 @@ func openSplitRealClusterExecutor(t *testing.T, ctx context.Context) *fsmetaexec
 	childStatus := testcluster.FetchRuntimeStatus(t, ctx, node.Addr(), childRegionID)
 	coordRPC, err := coordclient.NewGRPCClient(ctx, coord.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = coordRPC.Close() })
 	kv, err := client.New(client.Config{
 		StoreResolver: coordRPC,
 		RegionResolver: &staticRegionResolver{regions: []*metapb.RegionDescriptor{

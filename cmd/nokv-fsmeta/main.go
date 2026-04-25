@@ -45,6 +45,7 @@ func main() {
 	executor, closeExecutor, err := openExecutor(ctx, *coordAddr)
 	if err != nil {
 		fatalf("open fsmeta executor: %v", err)
+		return
 	}
 	defer func() {
 		if closeExecutor != nil {
@@ -54,9 +55,14 @@ func main() {
 		}
 	}()
 
+	// From this point on, prefer logging + return so the deferred closer above
+	// runs and the raftstore + coordinator clients are released. Calling
+	// fatalf directly would invoke os.Exit and skip the defers, leaking
+	// connections.
 	ln, err := listen("tcp", *addr)
 	if err != nil {
-		fatalf("listen: %v", err)
+		log.Printf("listen: %v", err)
+		return
 	}
 	defer func() { _ = ln.Close() }()
 
@@ -70,7 +76,9 @@ func main() {
 	if *metricsAddr != "" {
 		metricsLn, err := metricspkg.StartExpvarServer(*metricsAddr)
 		if err != nil {
-			fatalf("start metrics endpoint: %v", err)
+			log.Printf("start metrics endpoint: %v", err)
+			grpcServer.GracefulStop()
+			return
 		}
 		defer func() {
 			if metricsLn != nil {
@@ -122,12 +130,27 @@ func newExecutor(ctx context.Context, coordAddr string) (*fsmetaexec.Executor, c
 	runner, err := fsmetaexec.NewRaftstoreRunner(kv, coordRPC)
 	if err != nil {
 		_ = kv.Close()
+		_ = coordRPC.Close()
 		return nil, nil, fmt.Errorf("init fsmeta runner: %w", err)
 	}
 	executor, err := fsmetaexec.New(runner)
 	if err != nil {
 		_ = kv.Close()
+		_ = coordRPC.Close()
 		return nil, nil, fmt.Errorf("init fsmeta executor: %w", err)
 	}
-	return executor, kv.Close, nil
+	// Compose closer: shutdown order is kv first (it holds dialed store conns
+	// keyed by coordinator-resolved addresses) then coordRPC. Both errors are
+	// reported; the first non-nil wins.
+	closer := func() error {
+		var errAll error
+		if cerr := kv.Close(); cerr != nil {
+			errAll = cerr
+		}
+		if cerr := coordRPC.Close(); cerr != nil && errAll == nil {
+			errAll = cerr
+		}
+		return errAll
+	}
+	return executor, closer, nil
 }
