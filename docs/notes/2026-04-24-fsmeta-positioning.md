@@ -209,7 +209,10 @@ Stage 1 主干已落地：
    - **checkpoint storm**：并发 client 在多个目录批量 create checkpoint files；
    - **directory hotspot fan-in**：大量文件集中在单目录，被并发 `ReadDirPlus` 访问。
 
-   正式 Stage 1 结果记录在 `docs/notes/2026-04-25-fsmeta-stage1-benchmark-results.md`。
+   正式结果落在 `benchmark/fsmeta/results/`：Stage 1 native vs generic-KV 对照见
+   `fsmeta_formal_native_vs_generic_20260425T051640Z.csv`（headline：ReadDirPlus 42.5×）；
+   Stage 2.2 watchsubtree 端到端通知延迟见 `fsmeta_watchsubtree_20260425T083316Z.csv`
+   （p50≈178ms / p95≈472ms / p99≈1235ms）。每次正式 run 留 CSV，不再单独开 results note。
 
 6. **补 distributed DeleteRange 设计草案**
    不一定 Stage 1 全实现，但 recursive delete 和 GC 会卡在这里。至少要定义 region-by-region range tombstone 的事务 / 恢复语义。
