@@ -25,6 +25,13 @@ log() {
 
 die() {
   echo "redis-smoke: $*" >&2
+  case "$*" in
+    *"raft backend"*|*"primacy violated"*|*"coordinator lease not held"*)
+      echo >&2
+      echo "hint: this usually means the store raft volumes contain stale data." >&2
+      echo "      try: docker compose down -v && docker compose up -d --build" >&2
+      ;;
+  esac
   exit 1
 }
 
