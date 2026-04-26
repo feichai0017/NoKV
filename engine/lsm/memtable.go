@@ -1,9 +1,7 @@
 package lsm
 
 import (
-	"log/slog"
 	"math"
-	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -30,17 +28,19 @@ type memIndex interface {
 
 // memTable holds the active Skiplist and its WAL segment id.
 type memTable struct {
-	lsm        *LSM
-	segmentID  uint32
-	index      memIndex
-	maxVersion uint64
+	lsm       *LSM
+	shard     *lsmShard
+	segmentID uint32
+	index     memIndex
+	// maxVersion is the highest internal-key timestamp ever inserted into this
+	// memtable. It is mutated concurrently from applyBatch (called under the
+	// shard's read-lock by multiple write goroutines) so accesses must be
+	// atomic.
+	maxVersion atomic.Uint64
 	walSize    atomic.Int64
-	// reservedSize tracks in-flight write reservations to avoid overcommitting
-	// a memtable when multiple writers proceed under read locks.
-	reservedSize atomic.Int64
 
-	// rtMu protects rangeTombstones. Written by setBatch (which may run
-	// under lsm.lock read-lock or write-lock), read concurrently by
+	// rtMu protects rangeTombstones. Written by Set/applyBatch (which may run
+	// under the shard's read-lock or write-lock), read concurrently by
 	// isKeyCoveredByRangeTombstone. The cached per-CF span index is rebuilt
 	// lazily on demand when rtIndexDirty is set.
 	rtMu            sync.RWMutex
@@ -63,14 +63,19 @@ func arenaSizeFor(memTableSize int64) int64 {
 	return base * 2
 }
 
-// NewMemtable creates the active MemTable and switches WAL to the new segment.
-func (lsm *LSM) NewMemtable() (*memTable, error) {
+// newMemtableForShard creates a fresh active memtable bound to the given
+// shard and switches that shard's WAL to a new segment.
+func (lsm *LSM) newMemtableForShard(s *lsmShard) (*memTable, error) {
+	if s == nil {
+		return nil, ErrLSMNil
+	}
 	newFid := lsm.levels.maxFID.Add(1)
-	if err := lsm.wal.SwitchSegment(uint32(newFid), true); err != nil {
+	if err := s.wal.SwitchSegment(uint32(newFid), true); err != nil {
 		return nil, err
 	}
 	return &memTable{
 		lsm:       lsm,
+		shard:     s,
 		segmentID: uint32(newFid),
 		index:     newMemIndex(lsm.option),
 	}, nil
@@ -97,7 +102,7 @@ func (m *memTable) Set(entry *kv.Entry) error {
 	if entry == nil || len(entry.Key) == 0 {
 		return utils.ErrEmptyKey
 	}
-	info, err := m.lsm.wal.AppendEntry(wal.DurabilityFlushed, entry)
+	info, err := m.shard.wal.AppendEntry(wal.DurabilityFlushed, entry)
 	if err != nil {
 		return err
 	}
@@ -129,20 +134,31 @@ func (m *memTable) Size() int64 {
 	return m.index.MemSize()
 }
 
-func (m *memTable) setBatch(entries []*kv.Entry) error {
-	if m == nil || len(entries) == 0 {
+func (m *memTable) applyBatch(entries []*kv.Entry, walBytes int64) error {
+	if m == nil {
+		return ErrMemtableNotInitialized
+	}
+	if len(entries) == 0 {
 		return nil
 	}
-	if len(entries) == 1 {
-		return m.Set(entries[0])
+	for _, entry := range entries {
+		if entry == nil || len(entry.Key) == 0 {
+			return utils.ErrEmptyKey
+		}
 	}
-	info, err := m.lsm.wal.AppendEntryBatch(wal.DurabilityFlushed, entries)
-	if err != nil {
-		return err
+	if walBytes > 0 {
+		m.walSize.Add(walBytes)
 	}
-	m.walSize.Add(int64(info.Length) + 8)
-	if m.index != nil {
-		for _, entry := range entries {
+	for _, entry := range entries {
+		if ts := kv.Timestamp(entry.Key); ts > 0 {
+			for {
+				cur := m.maxVersion.Load()
+				if ts <= cur || m.maxVersion.CompareAndSwap(cur, ts) {
+					break
+				}
+			}
+		}
+		if m.index != nil {
 			m.index.Add(entry)
 			m.trackRangeTombstone(entry)
 		}
@@ -150,9 +166,9 @@ func (m *memTable) setBatch(entries []*kv.Entry) error {
 	return nil
 }
 
-// recovery rebuilds memtables from existing WAL segments.
-func (lsm *LSM) recovery() (*memTable, []*memTable, error) {
-	files, err := lsm.wal.ListSegments()
+// recoverShard rebuilds the shard's memtable queue from its WAL segments.
+func (lsm *LSM) recoverShard(s *lsmShard) (*memTable, []*memTable, error) {
+	files, err := s.wal.ListSegments()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -174,24 +190,16 @@ func (lsm *LSM) recovery() (*memTable, []*memTable, error) {
 	}
 	slices.Sort(fids)
 
-	if seg, _ := lsm.levels.logPointer(); seg > 0 {
-		cleaned := make([]uint64, 0, len(fids))
-		for _, fid := range fids {
-			if fid <= uint64(seg) {
-				if err := lsm.wal.RemoveSegment(uint32(fid)); err != nil && !os.IsNotExist(err) && !errors.Is(err, wal.ErrSegmentRetained) {
-					slog.Default().Error("remove wal segment", "segment", fid, "error", err)
-					cleaned = append(cleaned, fid)
-				}
-				continue
-			}
-			cleaned = append(cleaned, fid)
-		}
-		fids = cleaned
-	}
+	// With sharded LSM data planes the global manifest logPointer is no
+	// longer authoritative for "this segment was flushed" — peer shards
+	// flush at independent rates. Inline segment removal at flush time
+	// (level_manager.flush) is the canonical cleanup. Recovery just
+	// replays whatever survives on disk; duplicate apply is idempotent
+	// under MVCC versioning.
 
 	if len(fids) == 0 {
 		lsm.levels.maxFID.Store(maxFid)
-		active, createErr := lsm.NewMemtable()
+		active, createErr := lsm.newMemtableForShard(s)
 		if createErr != nil {
 			return nil, nil, createErr
 		}
@@ -200,7 +208,7 @@ func (lsm *LSM) recovery() (*memTable, []*memTable, error) {
 
 	tables := make([]*memTable, 0, len(fids))
 	for _, fid := range fids {
-		mt, err := lsm.openMemTable(fid)
+		mt, err := lsm.openMemTable(s, fid)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -211,7 +219,7 @@ func (lsm *LSM) recovery() (*memTable, []*memTable, error) {
 	}
 	if len(tables) == 0 {
 		lsm.levels.maxFID.Store(maxFid)
-		active, createErr := lsm.NewMemtable()
+		active, createErr := lsm.newMemtableForShard(s)
 		if createErr != nil {
 			return nil, nil, createErr
 		}
@@ -221,22 +229,23 @@ func (lsm *LSM) recovery() (*memTable, []*memTable, error) {
 	lsm.levels.maxFID.Store(maxFid)
 	active := tables[len(tables)-1]
 	tables = tables[:len(tables)-1]
-	if err := lsm.wal.SwitchSegment(active.segmentID, false); err != nil {
+	if err := s.wal.SwitchSegment(active.segmentID, false); err != nil {
 		return nil, nil, err
 	}
 	return active, tables, nil
 }
 
-func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
+func (lsm *LSM) openMemTable(s *lsmShard, fid uint64) (*memTable, error) {
 	mt := &memTable{
 		lsm:       lsm,
+		shard:     s,
 		segmentID: uint32(fid),
 		index:     newMemIndex(lsm.option),
 	}
-	err := lsm.wal.ReplaySegment(uint32(fid), func(info wal.EntryInfo, payload []byte) error {
+	err := s.wal.ReplaySegment(uint32(fid), func(info wal.EntryInfo, payload []byte) error {
 		applyEntry := func(entry *kv.Entry) {
-			if ts := kv.Timestamp(entry.Key); ts > mt.maxVersion {
-				mt.maxVersion = ts
+			if ts := kv.Timestamp(entry.Key); ts > mt.maxVersion.Load() {
+				mt.maxVersion.Store(ts)
 			}
 			if mt.index != nil {
 				mt.index.Add(entry)
@@ -279,54 +288,10 @@ func (mt *memTable) canReserve(need, limit int64) bool {
 		return true
 	}
 	used := mt.walSize.Load()
-	reserved := mt.reservedSize.Load()
-	if used < 0 || reserved < 0 || used > limit {
+	if used < 0 || used > limit {
 		return false
 	}
-	remaining := limit - used
-	if reserved > remaining {
-		return false
-	}
-	remaining -= reserved
-	return need <= remaining
-}
-
-func (mt *memTable) tryReserve(need, limit int64) bool {
-	if mt == nil {
-		return false
-	}
-	if need <= 0 {
-		return true
-	}
-	for {
-		used := mt.walSize.Load()
-		reserved := mt.reservedSize.Load()
-		if used < 0 || reserved < 0 || used > limit {
-			return false
-		}
-		remaining := limit - used
-		if reserved > remaining {
-			return false
-		}
-		remaining -= reserved
-		if need > remaining {
-			return false
-		}
-		if mt.reservedSize.CompareAndSwap(reserved, reserved+need) {
-			return true
-		}
-	}
-}
-
-func (mt *memTable) releaseReserve(need int64) {
-	if mt == nil || need <= 0 {
-		return
-	}
-	if n := mt.reservedSize.Add(-need); n < 0 {
-		// Defensive clamping: reservation accounting bug must not crash the whole service.
-		// Keep the counter non-negative and surface via diagnostics/tests.
-		mt.reservedSize.Store(0)
-	}
+	return need <= limit-used
 }
 
 // reference counting helpers, delegate to the backing index.
