@@ -78,44 +78,54 @@ func defaultBadgerCacheBudgetMB(totalMB int) (blockMB, indexMB int) {
 	return blockMB, indexMB
 }
 
-// buildNoKVBenchmarkOptions returns the explicit benchmark profile for NoKV.
-// The profile disables production-only helpers so YCSB reflects storage-path
-// behavior instead of optional heuristics like hotspot tracking or watchdogs.
+// buildNoKVBenchmarkOptions starts from NoKV.NewDefaultOptions() and
+// overrides only the workload-specific sizing plus the background helpers
+// (WAL watchdog, vlog GC, batch coalescing wait, hot-key throttle) that
+// would otherwise muddy benchmark numbers. The shape is intentionally
+// production-like so that perf changes in NewDefaultOptions are picked
+// up by YCSB on the next run without manual re-sync.
 func buildNoKVBenchmarkOptions(dir string, opts ycsbEngineOptions, memtable NoKV.MemTableEngine) *NoKV.Options {
-	if memtable == "" {
-		memtable = NoKV.MemTableEngineART
+	cfg := NoKV.NewDefaultOptions()
+	cfg.WorkDir = dir
+	if memtable != "" {
+		cfg.MemTableEngine = memtable
 	}
-	compactionPolicy := NoKV.CompactionPolicy(opts.NoKVCompactionPolicy)
-	if compactionPolicy == "" {
-		compactionPolicy = NoKV.CompactionPolicyLeveled
+	if opts.NoKVCompactionPolicy != "" {
+		cfg.CompactionPolicy = NoKV.CompactionPolicy(opts.NoKVCompactionPolicy)
 	}
+
+	cfg.MemTableSize = int64(opts.MemtableMB) << 20
+	cfg.SSTableMaxSz = int64(opts.SSTableMB) << 20
+	cfg.ValueLogFileSize = opts.VlogFileMB << 20
+	cfg.ValueLogMaxEntries = 1 << 20
+	cfg.ValueThreshold = int64(opts.ValueThreshold)
+	cfg.WriteBatchMaxCount = ycsbNoKVWriteBatchMaxCount
+	cfg.WriteBatchMaxSize = ycsbNoKVWriteBatchMaxSize
+	cfg.MaxBatchCount = ycsbNoKVWriteBatchMaxCount
+	cfg.MaxBatchSize = ycsbNoKVWriteBatchMaxSize
+	cfg.DetectConflicts = false
+	cfg.SyncWrites = opts.SyncWrites
+	cfg.ValueLogBucketCount = ycsbNoKVValueLogBuckets
+
 	totalCacheMB := normalizeTotalCacheMB(opts.BlockCacheMB)
 	blockCacheMB, indexCacheMB := resolveNoKVCacheBudgetMB(totalCacheMB, opts.NoKVIndexCacheMB)
-	return &NoKV.Options{
-		WorkDir:             dir,
-		MemTableSize:        int64(opts.MemtableMB) << 20,
-		MemTableEngine:      memtable,
-		SSTableMaxSz:        int64(opts.SSTableMB) << 20,
-		ValueLogFileSize:    opts.VlogFileMB << 20,
-		ValueLogMaxEntries:  1 << 20,
-		ValueThreshold:      int64(opts.ValueThreshold),
-		WriteBatchMaxCount:  ycsbNoKVWriteBatchMaxCount,
-		WriteBatchMaxSize:   ycsbNoKVWriteBatchMaxSize,
-		MaxBatchCount:       ycsbNoKVWriteBatchMaxCount,
-		MaxBatchSize:        ycsbNoKVWriteBatchMaxSize,
-		DetectConflicts:     false,
-		SyncWrites:          opts.SyncWrites,
-		BlockCacheBytes:     cacheBudgetBytes(blockCacheMB),
-		IndexCacheBytes:     cacheBudgetBytes(indexCacheMB),
-		CompactionPolicy:    compactionPolicy,
-		ValueLogBucketCount: ycsbNoKVValueLogBuckets,
-		LSMShardCount:       ycsbNoKVLSMShards(),
-		WriteBatchWait:      0,
-		WriteHotKeyLimit:    0,
-		EnableWALWatchdog:   false,
-		ValueLogGCInterval:  0,
-		ManifestSync:        false,
+	cfg.BlockCacheBytes = cacheBudgetBytes(blockCacheMB)
+	cfg.IndexCacheBytes = cacheBudgetBytes(indexCacheMB)
+
+	// Per-test sweep override; otherwise inherit NewDefaultOptions().
+	if n := ycsbNoKVLSMShards(); n > 0 {
+		cfg.LSMShardCount = n
 	}
+
+	// Disable background helpers and timing-sensitive heuristics so
+	// benchmark numbers reflect the steady-state storage path only.
+	cfg.WriteBatchWait = 0
+	cfg.WriteHotKeyLimit = 0
+	cfg.EnableWALWatchdog = false
+	cfg.ValueLogGCInterval = 0
+	cfg.ManifestSync = false
+
+	return cfg
 }
 
 // ycsbNoKVLSMShards reads NOKV_TEST_LSM_SHARDS for ad-hoc sweeps. Zero or

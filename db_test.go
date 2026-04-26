@@ -1598,10 +1598,14 @@ func drSimulateCrash(t *testing.T, db *DB) {
 			_ = mgr.Close()
 		}
 	}
-	for i, mgr := range db.lsmWALs {
+	// Close each WAL Manager but do not nil the slot — commit processor
+	// goroutines still hold the pointer (cached at startup) and the race
+	// detector flags the slot rewrite even though the goroutine never
+	// re-reads the slice. A closed Manager is enough to fail subsequent
+	// writes; nilling is unnecessary.
+	for _, mgr := range db.lsmWALs {
 		if mgr != nil {
 			_ = mgr.Close()
-			db.lsmWALs[i] = nil
 		}
 	}
 	if db.dirLock != nil {

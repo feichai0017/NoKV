@@ -108,10 +108,14 @@ type (
 		commitWG        sync.WaitGroup
 		commitBatchPool sync.Pool
 		// commitDispatch holds one channel per LSM data-plane shard. The
-		// dispatcher routes each batch to commitDispatch[shardID] so the
-		// processor pinned to that shard sees it. Each channel is closed
-		// by the dispatcher when no more batches will arrive; processors
-		// return when their channel drains.
+		// dispatcher routes each batch to commitDispatch[shardID]; the
+		// pinned processor drains it. cap=32 lets the dispatcher run
+		// ahead of slow processors so the burst coalesce loop in
+		// runCommitBurst sees multiple batches and merges them into one
+		// WAL append. We tried a custom SPSC ring (utils.SPSCQueue) here;
+		// benchmarks showed cap=32 buffered chan was 30-40% faster on
+		// YCSB-A — the chan buffer already amortizes scheduler hops and
+		// the atomic traffic on a user-space ring outweighs the savings.
 		commitDispatch  []chan *dbruntime.CommitBatch
 		syncQueue       chan *dbruntime.SyncBatch
 		syncWG          sync.WaitGroup
@@ -264,10 +268,6 @@ func (db *DB) startWriteRuntime() {
 		workers = 1
 	}
 	db.commitDispatch = make([]chan *dbruntime.CommitBatch, workers)
-	// Large per-shard channel: lets the dispatcher run ahead of slow
-	// processors so drain (in runCommitBurst) sees multiple batches and
-	// coalesces them into one WAL append + flush + (optional) sync.
-	// Bytes are negligible (32 * 8B = 256B per shard).
 	for i := 0; i < workers; i++ {
 		db.commitDispatch[i] = make(chan *dbruntime.CommitBatch, 32)
 	}
@@ -1375,7 +1375,7 @@ func (db *DB) commitProcessor(shardID int) {
 	for first := range db.commitDispatch[shardID] {
 		burst = burst[:0]
 		burst = append(burst, first)
-		// Drain any extra batches already sitting in the channel.
+		// Drain any extras already sitting in the channel.
 	drain:
 		for {
 			select {

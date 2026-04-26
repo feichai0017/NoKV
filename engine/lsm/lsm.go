@@ -608,10 +608,6 @@ func (lsm *LSM) SetBatchGroup(shardID int, groups [][]*kv.Entry) (int, error) {
 	return lsm.applyWriteBatches(lsm.shards[shardID], batches)
 }
 
-// ShardCount exposes the number of LSM data shards. Commit dispatchers
-// use this to size their per-shard fan-out.
-func (lsm *LSM) ShardCount() int { return lsm.shardCount() }
-
 // Get returns the newest visible entry for key.
 // key must be an InternalKey.
 func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
@@ -805,7 +801,7 @@ func (lsm *LSM) startFlushWorkers(n int) {
 						return
 					}
 					lsm.flushQueue.markInstalled(task)
-					if s := lsm.shardOf(mt); s != nil {
+					if s := mt.shard; s != nil {
 						s.lock.Lock()
 						for idx, imm := range s.immutables {
 							if imm == mt {
