@@ -341,34 +341,65 @@ func (m *Manager) AppendEntryBatch(durability DurabilityPolicy, entries []*kv.En
 }
 
 // AppendRecords appends typed records with explicit durability semantics.
+//
+// The hot path is split into two phases. Phase 1 runs without the WAL mutex:
+// each record is fully encoded (length header + type byte + payload + CRC32)
+// into a pooled scratch buffer. CRC computation and four small Write calls
+// previously serialized inside m.mu now run in parallel across producers.
+//
+// Phase 2 holds m.mu only long enough to (a) check capacity and rotate
+// segments at record boundaries, (b) memcpy the pre-encoded bytes into the
+// shared bufio writer, (c) update activeSize plus per-segment counters, and
+// (d) apply the durability policy. The lock-held critical section becomes a
+// single bufio.Write per record (instead of four) plus tiny bookkeeping.
 func (m *Manager) AppendRecords(durability DurabilityPolicy, records ...Record) ([]EntryInfo, error) {
+	if !durability.valid() {
+		return nil, fmt.Errorf("wal: invalid durability policy %d", durability)
+	}
+	if len(records) == 0 {
+		return nil, nil
+	}
+
+	// Phase 1: encode all records to a pooled local buffer (no lock).
+	bufRef := acquireRecordBuf()
+	defer releaseRecordBuf(bufRef)
+
+	sizes := make([]int, len(records))
+	for i, rec := range records {
+		before := len(*bufRef)
+		*bufRef = EncodeRecordTo(*bufRef, rec.Type, rec.Payload)
+		sizes[i] = len(*bufRef) - before
+	}
+	encoded := *bufRef
+
+	// Phase 2: hold m.mu only for the bufio copy + bookkeeping.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
 		return nil, fmt.Errorf("wal: manager closed")
 	}
-	if !durability.valid() {
-		return nil, fmt.Errorf("wal: invalid durability policy %d", durability)
-	}
+
 	results := make([]EntryInfo, len(records))
+	cursor := 0
 	for i, rec := range records {
-		payload := rec.Payload
-		totalRecordSize := len(payload) + 1 + 4 + 4 // Type + Payload + Length field + CRC field
-		if err := m.ensureCapacity(int64(totalRecordSize)); err != nil {
+		size := sizes[i]
+		if err := m.ensureCapacity(int64(size)); err != nil {
 			return nil, err
 		}
 		offset := m.activeSize
 
-		n, err := EncodeRecord(m.writer, rec.Type, payload)
-		if err != nil {
+		// Single bufio.Write per record - encoding chunks are already
+		// concatenated in the local buffer.
+		if _, err := m.writer.Write(encoded[cursor : cursor+size]); err != nil {
 			return nil, err
 		}
+		cursor += size
+		m.activeSize += int64(size)
 
-		m.activeSize += int64(n)
 		results[i] = EntryInfo{
 			SegmentID: m.activeID,
 			Offset:    offset,
-			Length:    uint32(len(payload) + 1),
+			Length:    uint32(len(rec.Payload) + 1),
 			Type:      rec.Type,
 		}
 		segMetrics := m.segmentTotals[m.activeID]
@@ -485,7 +516,6 @@ func (m *Manager) flushBufioLocked() error {
 	}
 	return nil
 }
-
 
 func (m *Manager) ensureCapacity(need int64) error {
 	if m.activeSize+need <= m.segmentSize {

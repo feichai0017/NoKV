@@ -92,6 +92,10 @@ type (
 		commitQueue     dbruntime.CommitQueue
 		commitWG        sync.WaitGroup
 		commitBatchPool sync.Pool
+		// commitDispatch carries batches from the single MPSC dispatcher to N
+		// commit processors. Closed by the dispatcher when no more batches
+		// will arrive; processors return when the channel drains.
+		commitDispatch  chan *dbruntime.CommitBatch
 		syncQueue       chan *dbruntime.SyncBatch
 		syncWG          sync.WaitGroup
 		iterPool        *dbruntime.IteratorPool
@@ -217,8 +221,21 @@ func (db *DB) startWriteRuntime() {
 		db.syncWG.Add(1)
 		go db.syncWorker()
 	}
+	workers := db.opt.CommitWorkers
+	if workers <= 0 {
+		workers = 1
+	}
+	// Buffered channel sized to the number of processors so the dispatcher
+	// rarely stalls and processors rarely starve; the dispatcher always sees
+	// a slot once any processor has finished a batch.
+	db.commitDispatch = make(chan *dbruntime.CommitBatch, workers*2)
+
 	db.commitWG.Add(1)
-	go db.commitWorker()
+	go db.commitDispatcher()
+	for i := 0; i < workers; i++ {
+		db.commitWG.Add(1)
+		go db.commitProcessor(i)
+	}
 }
 
 func (db *DB) runtimeLSMOptions() *lsm.Options {
@@ -1167,18 +1184,42 @@ func (db *DB) nextCommitBatch(consumer *utils.MPSCConsumer[*dbruntime.CommitRequ
 	return &dbruntime.CommitBatch{Reqs: batch, Pool: batchPtr}
 }
 
-func (db *DB) commitWorker() {
+// commitDispatcher owns the MPSC queue's single consumer slot. It pulls
+// batches off the queue and fans them out to commitDispatch where any of the
+// N processors can pick them up. The dispatcher does no per-batch work
+// itself, so it never bottlenecks on vlog/WAL/applyRequests latency.
+//
+// On queue close, the dispatcher closes commitDispatch which is the signal
+// for processors to drain remaining batches and return.
+func (db *DB) commitDispatcher() {
 	defer db.commitWG.Done()
 	consumer := db.commitQueue.Consumer()
 	if consumer == nil {
+		close(db.commitDispatch)
 		return
 	}
 	defer consumer.Close()
 	for {
 		batch := db.nextCommitBatch(consumer)
 		if batch == nil {
+			close(db.commitDispatch)
 			return
 		}
+		db.commitDispatch <- batch
+	}
+}
+
+// commitProcessor runs the per-batch CPU pipeline (collect -> vlog write ->
+// applyRequests -> ack) in parallel across multiple goroutines. Each batch
+// is fully owned by the goroutine that pulls it; coordination across
+// processors only happens at the WAL/memtable layers below applyRequests.
+//
+// SetBatch atomicity is preserved because a single commit request lives in
+// exactly one batch, and that batch is processed end-to-end by one
+// processor.
+func (db *DB) commitProcessor(id int) {
+	defer db.commitWG.Done()
+	for batch := range db.commitDispatch {
 		batch.BatchStart = time.Now()
 		requests, totalEntries, totalSize, waitSum := db.collectCommitRequests(batch.Reqs, batch.BatchStart)
 		if len(requests) == 0 {

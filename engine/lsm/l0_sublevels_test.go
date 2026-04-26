@@ -229,7 +229,7 @@ func BenchmarkL0SelectTablesForKeyLinear(b *testing.B) {
 
 	const n = 64
 	l0 := lsm.levels.levels[0]
-	for i := 0; i < n; i++ {
+	for i := range n {
 		key := fmt.Sprintf("k%05d", i)
 		tbl := buildTableWithEntry(&testing.T{}, lsm, uint64(20000+i), key, uint64(i+1), "v")
 		l0.add(tbl)
@@ -254,7 +254,7 @@ func BenchmarkL0SelectTablesForKeyViaSublevels(b *testing.B) {
 
 	const n = 64
 	l0 := lsm.levels.levels[0]
-	for i := 0; i < n; i++ {
+	for i := range n {
 		key := fmt.Sprintf("k%05d", i)
 		tbl := buildTableWithEntry(&testing.T{}, lsm, uint64(30000+i), key, uint64(i+1), "v")
 		l0.add(tbl)

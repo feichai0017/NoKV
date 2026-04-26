@@ -14,9 +14,14 @@ import (
 )
 
 const (
-	defaultWriteBatchMaxCount       = 64
-	defaultWriteBatchMaxSize  int64 = 1 << 20
-	defaultThermosTopK              = 16
+	defaultWriteBatchMaxCount = 64
+	// defaultCommitWorkers=1 matches legacy behaviour. The fan-out path is
+	// available for benchmarking but with the current shared-WAL architecture
+	// more workers contend on wal.Manager.mu rather than parallelize. Raise
+	// only after LSM data-plane WAL is sharded.
+	defaultCommitWorkers           = 1
+	defaultWriteBatchMaxSize int64 = 1 << 20
+	defaultThermosTopK             = 16
 )
 
 // Options holds the top-level database configuration.
@@ -116,7 +121,12 @@ type Options struct {
 	// WAL fsync from the commit pipeline. When false (the default), the commit
 	// worker performs fsync inline. Only effective when SyncWrites is true.
 	SyncPipeline bool
-	ManifestSync bool
+	// CommitWorkers is the number of parallel processor goroutines downstream
+	// of the commit dispatcher. A single dispatcher continues to own the MPSC
+	// queue consumer and fans batches out to N workers. Zero or negative falls
+	// back to a single processor (legacy behavior).
+	CommitWorkers int
+	ManifestSync  bool
 	// ManifestRewriteThreshold triggers a manifest rewrite when the active
 	// MANIFEST file grows beyond this size (bytes). Values <= 0 disable rewrites.
 	ManifestRewriteThreshold int64
@@ -295,6 +305,7 @@ func NewDefaultOptions() *Options {
 		// Conservative defaults to avoid long batch-induced pauses.
 		WriteBatchMaxCount:            defaultWriteBatchMaxCount,
 		WriteBatchMaxSize:             defaultWriteBatchMaxSize,
+		CommitWorkers:                 defaultCommitWorkers,
 		MaxBatchCount:                 defaultWriteBatchMaxCount,
 		MaxBatchSize:                  defaultWriteBatchMaxSize,
 		BlockCacheBytes:               lsmpkg.DefaultBlockCacheBytes,
