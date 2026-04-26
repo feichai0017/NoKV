@@ -100,9 +100,12 @@ func TestReadAfterRotateSealsSegment(t *testing.T) {
 		t.Fatalf("rotate: %v", err)
 	}
 
-	seg := mgr.files[oldFID]
-	if seg == nil || !seg.isSealed() {
-		t.Fatalf("expected sealed segment for fid %d", oldFID)
+	// After Rotate the previous active segment must be sealed: a Read of
+	// its still-published pointer must succeed (sealed segments use the
+	// pin path, not the active rwlock). This is the externally observable
+	// proxy for "isSealed" now that the state machine is private to slab.
+	if oldFID == mgr.ActiveFID() {
+		t.Fatalf("expected new active fid != old fid after Rotate")
 	}
 
 	data, unlock, err := mgr.Read(&ptrs[0])
