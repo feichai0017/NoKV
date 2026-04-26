@@ -491,10 +491,16 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Raft.GroupCount = len(ptrs)
 	}
 
-	analysis := metrics.AnalyzeWALBacklog(wstats, segmentMetrics, ptrs)
+	analysis := metrics.AnalyzeWALBacklog(wstats, segmentMetrics)
 	snap.WAL.RecordCounts = analysis.RecordCounts
 	snap.WAL.SegmentsWithRaftRecords = analysis.SegmentsWithRaft
-	snap.WAL.RemovableRaftSegments = len(analysis.RemovableSegments)
+	removableRaftSegments := 0
+	for _, id := range analysis.RemovableSegments {
+		if segmentMetrics[id].RaftRecords() > 0 && wstats != nil && id < wstats.ActiveSegment {
+			removableRaftSegments++
+		}
+	}
+	snap.WAL.RemovableRaftSegments = removableRaftSegments
 	snap.WAL.TypedRecordRatio = analysis.TypedRecordRatio
 
 	if len(ptrs) > 0 {

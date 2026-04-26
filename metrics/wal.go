@@ -2,10 +2,7 @@ package metrics
 
 import (
 	"fmt"
-	"math"
 	"slices"
-
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 )
 
 // WALRecordMetrics summarises counts per record type.
@@ -46,13 +43,13 @@ type WALBacklogAnalysis struct {
 	SegmentsWithRaft    int
 	RemovableSegments   []uint32
 	TypedRecordRatio    float64
-	RetainSegment       uint32
 	SegmentMetricsCount int
 }
 
-// AnalyzeWALBacklog inspects WAL metrics, per-segment metrics, and raft pointers to
-// derive GC candidates and typed record ratios.
-func AnalyzeWALBacklog(metrics *WALMetrics, segmentMetrics map[uint32]WALRecordMetrics, ptrs map[uint64]localmeta.RaftLogPointer) WALBacklogAnalysis {
+// AnalyzeWALBacklog inspects WAL metrics and per-segment metrics to derive
+// coarse GC candidates and typed record ratios. Callers must apply retention
+// ownership before deleting a candidate.
+func AnalyzeWALBacklog(metrics *WALMetrics, segmentMetrics map[uint32]WALRecordMetrics) WALBacklogAnalysis {
 	var analysis WALBacklogAnalysis
 	if metrics != nil {
 		analysis.ActiveSegment = metrics.ActiveSegment
@@ -75,40 +72,10 @@ func AnalyzeWALBacklog(metrics *WALMetrics, segmentMetrics map[uint32]WALRecordM
 		analysis.TypedRecordRatio = float64(analysis.RecordCounts.RaftRecords()) / float64(total)
 	}
 
-	retainSegment := uint32(math.MaxUint32)
-	if len(ptrs) > 0 {
-		effectiveActive := analysis.ActiveSegment
-		if analysis.ActiveSize == 0 && effectiveActive > 0 {
-			effectiveActive--
-		}
-		for _, ptr := range ptrs {
-			if ptr.Segment > 0 && ptr.Segment < retainSegment {
-				retainSegment = ptr.Segment
-			}
-			if ptr.SegmentIndex > 0 {
-				if idx := uint32(ptr.SegmentIndex); idx < retainSegment {
-					retainSegment = idx
-				}
-			}
-			if ptr.Segment == 0 && ptr.SegmentIndex == 0 && effectiveActive > 0 && retainSegment == math.MaxUint32 {
-				retainSegment = effectiveActive
-			}
-		}
-	}
-	if retainSegment == math.MaxUint32 {
-		retainSegment = 0
-	}
-	analysis.RetainSegment = retainSegment
-
-	if retainSegment > 0 && len(segmentMetrics) > 0 {
+	if len(segmentMetrics) > 0 {
 		candidates := make([]uint32, 0, len(segmentMetrics))
-		for id, metrics := range segmentMetrics {
-			if metrics.RaftRecords() == 0 {
-				continue
-			}
-			if id < retainSegment {
-				candidates = append(candidates, id)
-			}
+		for id := range segmentMetrics {
+			candidates = append(candidates, id)
 		}
 		slices.Sort(candidates)
 		analysis.RemovableSegments = candidates

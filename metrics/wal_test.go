@@ -2,8 +2,6 @@ package metrics
 
 import (
 	"testing"
-
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 )
 
 func TestWALRecordMetricsTotals(t *testing.T) {
@@ -29,24 +27,22 @@ func TestAnalyzeWALBacklogAndWarning(t *testing.T) {
 		3: {RaftEntries: 1},
 		5: {Entries: 5},
 	}
-	ptrs := map[uint64]localmeta.RaftLogPointer{
-		1: {GroupID: 1, Segment: 4},
-		2: {GroupID: 2, SegmentIndex: 3},
-	}
 
-	analysis := AnalyzeWALBacklog(metrics, segMetrics, ptrs)
+	analysis := AnalyzeWALBacklog(metrics, segMetrics)
 	if analysis.ActiveSegment != 5 || analysis.SegmentCount != 6 {
 		t.Fatalf("unexpected active/segments: %+v", analysis)
 	}
 	if analysis.TypedRecordRatio <= 0 {
 		t.Fatalf("expected typed ratio > 0")
 	}
-	if analysis.RetainSegment != 3 {
-		t.Fatalf("retain segment = %d, want 3", analysis.RetainSegment)
-	}
-	wantRemovable := []uint32{1}
-	if len(analysis.RemovableSegments) != len(wantRemovable) || analysis.RemovableSegments[0] != wantRemovable[0] {
+	wantRemovable := []uint32{1, 3, 5}
+	if len(analysis.RemovableSegments) != len(wantRemovable) {
 		t.Fatalf("removable = %v, want %v", analysis.RemovableSegments, wantRemovable)
+	}
+	for i := range wantRemovable {
+		if analysis.RemovableSegments[i] != wantRemovable[i] {
+			t.Fatalf("removable = %v, want %v", analysis.RemovableSegments, wantRemovable)
+		}
 	}
 
 	warn, reason := WALTypedWarning(analysis.TypedRecordRatio, analysis.SegmentsWithRaft, 0.1, 1)
