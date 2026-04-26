@@ -138,10 +138,12 @@ type Manager struct {
 	segmentTotals   map[uint32]RecordMetrics
 	retention       map[string]RetentionFunc
 	fsyncCond       *sync.Cond
+	activeFileCond  *sync.Cond
 	fsyncClosed     bool
 	fsyncBatchSeq   uint64
 	fsyncDurableSeq uint64
 	fsyncErr        error
+	activeSyncRefs  int
 }
 
 // Open creates or resumes a WAL manager.
@@ -162,6 +164,7 @@ func Open(cfg Config) (*Manager, error) {
 		segmentTotals: make(map[uint32]RecordMetrics, 16),
 	}
 	m.fsyncCond = sync.NewCond(&m.mu)
+	m.activeFileCond = sync.NewCond(&m.mu)
 	if err := m.openLatestSegment(); err != nil {
 		return nil, err
 	}
@@ -237,6 +240,7 @@ func (m *Manager) switchSegmentLocked(id uint32, truncate bool) error {
 		if err := m.rebuildActiveCatalogLocked(); err != nil {
 			return err
 		}
+		m.waitActiveSyncRefsLocked()
 		if err := m.active.Close(); err != nil {
 			return err
 		}
@@ -477,7 +481,7 @@ func (m *Manager) runFsyncBatch() {
 		// new appended after this point belongs to a future seq and will be
 		// covered by a subsequent fsync cycle.
 		flushErr := m.flushBufioLocked()
-		active := m.active
+		active := m.pinActiveForSyncLocked(flushErr)
 		m.mu.Unlock()
 
 		// Phase 2 (no lock): the slow fsync syscall runs concurrently with new
@@ -491,6 +495,9 @@ func (m *Manager) runFsyncBatch() {
 		}
 
 		m.mu.Lock()
+		if active != nil {
+			m.unpinActiveSyncLocked()
+		}
 		err := flushErr
 		if err == nil {
 			err = syncErr
@@ -503,6 +510,30 @@ func (m *Manager) runFsyncBatch() {
 		if !more {
 			return
 		}
+	}
+}
+
+func (m *Manager) pinActiveForSyncLocked(flushErr error) vfs.File {
+	if flushErr != nil || m.active == nil {
+		return nil
+	}
+	m.activeSyncRefs++
+	return m.active
+}
+
+func (m *Manager) unpinActiveSyncLocked() {
+	m.activeSyncRefs--
+	if m.activeSyncRefs < 0 {
+		panic("wal: active sync refs underflow")
+	}
+	if m.activeSyncRefs == 0 && m.activeFileCond != nil {
+		m.activeFileCond.Broadcast()
+	}
+}
+
+func (m *Manager) waitActiveSyncRefsLocked() {
+	for m.activeSyncRefs > 0 {
+		m.activeFileCond.Wait()
 	}
 }
 
@@ -649,6 +680,7 @@ func (m *Manager) Close() error {
 	}
 	if m.writer != nil {
 		if err := m.writer.Flush(); err != nil {
+			m.waitActiveSyncRefsLocked()
 			closeErr := m.active.Close()
 			m.active = nil
 			m.writer = nil
@@ -657,6 +689,7 @@ func (m *Manager) Close() error {
 		}
 	}
 	if err := m.active.Sync(); err != nil {
+		m.waitActiveSyncRefsLocked()
 		closeErr := m.active.Close()
 		m.active = nil
 		m.writer = nil
@@ -664,12 +697,14 @@ func (m *Manager) Close() error {
 		return errors.Join(err, closeErr)
 	}
 	if err := m.rebuildActiveCatalogLocked(); err != nil {
+		m.waitActiveSyncRefsLocked()
 		closeErr := m.active.Close()
 		m.active = nil
 		m.writer = nil
 		m.closed = true
 		return errors.Join(err, closeErr)
 	}
+	m.waitActiveSyncRefsLocked()
 	if err := m.active.Close(); err != nil {
 		// Keep state intact so callers can retry Close() on transient close failures.
 		return err
