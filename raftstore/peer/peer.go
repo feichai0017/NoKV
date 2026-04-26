@@ -405,7 +405,38 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 		info.setInjected(failpoints.ShouldFailBeforeStorage())
 	}
 
-	if !myraft.IsEmptyHardState(rd.HardState) {
+	hardStateStored := false
+	entriesStored := false
+	if !myraft.IsEmptyHardState(rd.HardState) && len(rd.Entries) > 0 && myraft.IsEmptySnap(rd.Snapshot) {
+		if storage, ok := p.storage.(raftlog.AppendWithHardStateStorage); ok {
+			if err := p.raftLog.injectFailure("before_hard_state"); err != nil {
+				return err
+			}
+			if err := p.raftLog.injectFailure("before_entries"); err != nil {
+				return err
+			}
+			if err := storage.AppendWithHardState(rd.Entries, rd.HardState); err != nil {
+				return err
+			}
+			hardStateStored = true
+			entriesStored = true
+			if info := p.raftLog; info != nil {
+				info.capturePointer(localmeta.RaftLogPointer{
+					GroupID:      info.groupID,
+					AppliedIndex: rd.Commit,
+					AppliedTerm:  rd.Term,
+				})
+				last := rd.Entries[len(rd.Entries)-1]
+				info.capturePointer(localmeta.RaftLogPointer{
+					GroupID:      info.groupID,
+					AppliedIndex: last.Index,
+					AppliedTerm:  last.Term,
+				})
+			}
+		}
+	}
+
+	if !hardStateStored && !myraft.IsEmptyHardState(rd.HardState) {
 		if err := p.raftLog.injectFailure("before_hard_state"); err != nil {
 			return err
 		}
@@ -449,7 +480,7 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 			p.markSnapshotApplied(meta.Index)
 		}
 	}
-	if len(rd.Entries) > 0 {
+	if !entriesStored && len(rd.Entries) > 0 {
 		if err := p.raftLog.injectFailure("before_entries"); err != nil {
 			return err
 		}

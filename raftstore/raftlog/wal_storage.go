@@ -202,6 +202,59 @@ func (ws *WALStorage) Append(entries []myraft.Entry) error {
 	return ws.updatePointer(ptr)
 }
 
+// AppendWithHardState persists raft entries and HardState in one WAL batch.
+func (ws *WALStorage) AppendWithHardState(entries []myraft.Entry, st myraft.HardState) error {
+	if len(entries) == 0 {
+		return ws.SetHardState(st)
+	}
+	if myraft.IsEmptyHardState(st) {
+		return ws.Append(entries)
+	}
+	statePayload, err := encodeRaftHardState(ws.groupID, st)
+	if err != nil {
+		return err
+	}
+	entryPayload, err := encodeRaftEntries(ws.groupID, entries)
+	if err != nil {
+		return err
+	}
+
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	infos, err := ws.wal.AppendRecords(wal.DurabilityFsyncBatched,
+		wal.Record{Type: wal.RecordTypeRaftState, Payload: statePayload},
+		wal.Record{Type: wal.RecordTypeRaftEntry, Payload: entryPayload},
+	)
+	if err != nil {
+		return err
+	}
+	if len(infos) != 2 {
+		return fmt.Errorf("raftstore: expected two coalesced WAL records, got %d", len(infos))
+	}
+	if err := ws.mem.SetHardState(st); err != nil {
+		return err
+	}
+	if err := ws.mem.Append(entries); err != nil {
+		return err
+	}
+	ws.recordEntrySpan(infos[1], entryPayload, entries)
+	last := entries[len(entries)-1]
+	ptr := ws.pointer
+	ptr.GroupID = ws.groupID
+	ptr.Segment = infos[1].SegmentID
+	ptr.Offset = recordEnd(infos[1])
+	ptr.AppliedIndex = last.Index
+	ptr.AppliedTerm = last.Term
+	if st.Commit > ptr.Committed {
+		ptr.Committed = st.Commit
+	}
+	if st.Term > ptr.AppliedTerm {
+		ptr.AppliedTerm = st.Term
+	}
+	return ws.updatePointer(ptr)
+}
+
 // ApplySnapshot persists and applies a raft snapshot.
 func (ws *WALStorage) ApplySnapshot(snap myraft.Snapshot) error {
 	if myraft.IsEmptySnap(snap) {
