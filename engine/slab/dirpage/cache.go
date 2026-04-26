@@ -46,12 +46,12 @@ func (c Config) resolve() Config {
 // without affecting correctness — Lookup returns false on stale and the
 // caller falls back to its source of truth.
 type Cache struct {
-	cfg     Config
-	mgr     *slab.Manager
-	pageMu  sync.RWMutex
-	pages   map[PageKey]*pageSet // in-memory index of materialized pages
-	epochs  sync.Map             // PageKey -> *atomic.Uint64 (current invalidation epoch)
-	stats   stats
+	cfg    Config
+	mgr    *slab.Manager
+	pageMu sync.RWMutex
+	pages  map[PageKey]*pageSet // in-memory index of materialized pages
+	epochs sync.Map             // PageKey -> *atomic.Uint64 (current invalidation epoch)
+	stats  stats
 }
 
 // pageSet is the cache's view of one directory's materialized pages.

@@ -1,195 +1,63 @@
 package lsm
 
 import (
-	"bytes"
-	"sync"
-
-	xxhash "github.com/cespare/xxhash/v2"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 )
 
-const defaultNegativeCacheBuckets = 1 << 16
-
+// negativeCache is the lsm-side adapter around the generic
+// engine/slab/negativecache.Cache. It supplies kv.InternalToBaseKey as
+// the GroupKeyFn so Invalidate(internal_key) bumps the user-key group
+// — every cached "X@v not found" entry whose base equals X becomes
+// stale on the next Has lookup.
+//
+// The wire format, persistence, and per-bucket cuckoo-style hashing
+// all live in engine/slab/negativecache. This file is a 30-line
+// adapter; the only lsm-specific knowledge is "internal keys carry a
+// timestamp suffix and the group key is the user key without it".
 type negativeCache struct {
-	mask        uint64
-	entries     []negativeEntryBucket
-	generations []negativeGenerationBucket
-}
-
-type negativeEntryBucket struct {
-	mu    sync.RWMutex
-	hash  uint64
-	key   []byte
-	gen   uint64
-	valid bool
-}
-
-type negativeGenerationBucket struct {
-	mu    sync.RWMutex
-	hash  uint64
-	key   []byte
-	gen   uint64
-	valid bool
+	inner *negativecache.Cache
 }
 
 func newNegativeCache() *negativeCache {
 	return &negativeCache{
-		mask:        defaultNegativeCacheBuckets - 1,
-		entries:     make([]negativeEntryBucket, defaultNegativeCacheBuckets),
-		generations: make([]negativeGenerationBucket, defaultNegativeCacheBuckets),
+		inner: negativecache.New(negativecache.Config{
+			GroupKeyFn: kv.InternalToBaseKey,
+		}),
 	}
+}
+
+// newNegativeCacheWithInner wraps a pre-built generic cache. Used by
+// the persistent variant where Open returns the cache plus a
+// Persistence helper as a pair.
+func newNegativeCacheWithInner(inner *negativecache.Cache) *negativeCache {
+	return &negativeCache{inner: inner}
 }
 
 func (c *negativeCache) contains(internalKey []byte) bool {
-	if c == nil || len(c.entries) == 0 || len(c.generations) == 0 {
+	if c == nil {
 		return false
 	}
-	baseKey, baseHash, keyHash, ok := negativeKey(internalKey)
-	if !ok {
-		return false
-	}
-	gen, ok := c.generation(baseKey, baseHash)
-	if !ok {
-		return false
-	}
-	b := &c.entries[keyHash&c.mask]
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.valid && b.hash == keyHash && b.gen == gen && bytes.Equal(b.key, internalKey)
+	return c.inner.Has(internalKey)
 }
 
 func (c *negativeCache) remember(internalKey []byte) {
-	if c == nil || len(c.entries) == 0 || len(c.generations) == 0 {
+	if c == nil {
 		return
 	}
-	baseKey, baseHash, keyHash, ok := negativeKey(internalKey)
-	if !ok {
-		return
-	}
-	gen := c.ensureGeneration(baseKey, baseHash)
-	b := &c.entries[keyHash&c.mask]
-	b.mu.Lock()
-	b.hash = keyHash
-	b.key = append(b.key[:0], internalKey...)
-	b.gen = gen
-	b.valid = true
-	b.mu.Unlock()
+	c.inner.Remember(internalKey)
 }
 
 func (c *negativeCache) invalidate(internalKey []byte) {
-	if c == nil || len(c.generations) == 0 {
+	if c == nil {
 		return
 	}
-	baseKey, baseHash, _, ok := negativeKey(internalKey)
-	if !ok {
-		return
-	}
-	b := &c.generations[baseHash&c.mask]
-	b.mu.Lock()
-	if !b.valid || b.hash != baseHash || !bytes.Equal(b.key, baseKey) {
-		b.hash = baseHash
-		b.key = append(b.key[:0], baseKey...)
-		b.gen = 1
-		b.valid = true
-		b.mu.Unlock()
-		return
-	}
-	b.gen++
-	if b.gen == 0 {
-		b.gen = 1
-	}
-	b.mu.Unlock()
+	c.inner.Invalidate(internalKey)
 }
 
 func (c *negativeCache) clear() {
 	if c == nil {
 		return
 	}
-	for i := range c.entries {
-		b := &c.entries[i]
-		b.mu.Lock()
-		b.valid = false
-		b.key = b.key[:0]
-		b.hash = 0
-		b.gen = 0
-		b.mu.Unlock()
-	}
-	for i := range c.generations {
-		b := &c.generations[i]
-		b.mu.Lock()
-		b.valid = false
-		b.key = b.key[:0]
-		b.hash = 0
-		b.gen = 0
-		b.mu.Unlock()
-	}
-}
-
-func (c *negativeCache) generation(baseKey []byte, baseHash uint64) (uint64, bool) {
-	b := &c.generations[baseHash&c.mask]
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	if !b.valid || b.hash != baseHash || !bytes.Equal(b.key, baseKey) {
-		return 0, false
-	}
-	return b.gen, true
-}
-
-func (c *negativeCache) ensureGeneration(baseKey []byte, baseHash uint64) uint64 {
-	b := &c.generations[baseHash&c.mask]
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if !b.valid || b.hash != baseHash || !bytes.Equal(b.key, baseKey) {
-		b.hash = baseHash
-		b.key = append(b.key[:0], baseKey...)
-		b.gen = 1
-		b.valid = true
-		return b.gen
-	}
-	if b.gen == 0 {
-		b.gen = 1
-	}
-	return b.gen
-}
-
-func negativeKey(internalKey []byte) ([]byte, uint64, uint64, bool) {
-	if len(internalKey) == 0 {
-		return nil, 0, 0, false
-	}
-	baseKey := kv.InternalToBaseKey(internalKey)
-	if len(baseKey) == 0 {
-		return nil, 0, 0, false
-	}
-	return baseKey, xxhash.Sum64(baseKey), xxhash.Sum64(internalKey), true
-}
-
-// snapshotKeys returns a copy of every internal key currently held in the
-// cache, suitable for handing off to a slab-backed persistence consumer at
-// Close time. The returned slice is independent of the cache buckets, so the
-// caller can iterate it without holding bucket locks.
-func (c *negativeCache) snapshotKeys() [][]byte {
-	if c == nil {
-		return nil
-	}
-	out := make([][]byte, 0, len(c.entries)/8)
-	for i := range c.entries {
-		b := &c.entries[i]
-		b.mu.RLock()
-		if b.valid && len(b.key) > 0 {
-			// Verify the entry's generation still matches its base — stale
-			// entries (those whose base was invalidated) are dropped on
-			// snapshot so we don't restore them next time.
-			baseKey := kv.InternalToBaseKey(b.key)
-			if len(baseKey) > 0 {
-				baseHash := xxhash.Sum64(baseKey)
-				if gen, ok := c.generation(baseKey, baseHash); ok && gen == b.gen {
-					cp := make([]byte, len(b.key))
-					copy(cp, b.key)
-					out = append(out, cp)
-				}
-			}
-		}
-		b.mu.RUnlock()
-	}
-	return out
+	c.inner.Clear()
 }

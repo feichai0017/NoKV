@@ -32,6 +32,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/manifest"
+	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -47,7 +48,7 @@ type LSM struct {
 	shards           []*lsmShard
 	shardHints       *shardHintTable
 	negatives        *negativeCache
-	negativesPersist *negativePersistence
+	negativesPersist *negativecache.Persistence
 	levels           *levelManager
 	option           *Options
 	closer           *utils.Closer
@@ -149,8 +150,8 @@ func (lsm *LSM) Close() error {
 	if lsm.levels != nil {
 		closeErr = errors.Join(closeErr, lsm.levels.close())
 	}
-	if lsm.negativesPersist != nil && lsm.negatives != nil {
-		if n, err := lsm.negativesPersist.Snapshot(lsm.negatives); err != nil {
+	if lsm.negativesPersist != nil {
+		if n, err := lsm.negativesPersist.Snapshot(); err != nil {
 			lsm.logger.Warn("negative cache snapshot on close failed",
 				slog.String("err", err.Error()))
 		} else if n > 0 {
@@ -342,22 +343,28 @@ func NewLSM(opt *Options, walMgrs []*wal.Manager) (*LSM, error) {
 		option:     frozen,
 		shards:     shards,
 		shardHints: newShardHintTable(),
-		negatives:  newNegativeCache(),
 		closer:     utils.NewCloser(),
 		logger:     frozen.Logger,
 	}
 	if frozen.NegativeCachePersistent && frozen.WorkDir != "" {
-		lsm.negativesPersist = newNegativePersistence(
-			filepath.Join(frozen.WorkDir, "negative-slab"),
-			frozen.NegativeCacheSlabMaxSize,
+		inner, persist, err := negativecache.OpenWithPersistence(
+			negativecache.Config{GroupKeyFn: kv.InternalToBaseKey},
+			negativecache.PersistConfig{
+				Dir:     filepath.Join(frozen.WorkDir, "negative-slab"),
+				MaxSize: frozen.NegativeCacheSlabMaxSize,
+			},
 		)
-		if restored, err := lsm.negativesPersist.Restore(lsm.negatives); err != nil {
+		if err != nil {
+			if lsm.logger == nil {
+				lsm.logger = slog.Default()
+			}
 			lsm.logger.Warn("negative cache restore failed; cold start",
 				slog.String("err", err.Error()))
-		} else if restored > 0 {
-			lsm.logger.Info("negative cache warmed from slab",
-				slog.Int("restored", restored))
 		}
+		lsm.negatives = newNegativeCacheWithInner(inner)
+		lsm.negativesPersist = persist
+	} else {
+		lsm.negatives = newNegativeCache()
 	}
 	if lsm.logger == nil {
 		lsm.logger = slog.Default()
