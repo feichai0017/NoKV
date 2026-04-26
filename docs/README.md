@@ -181,7 +181,7 @@ make build
 
 # 2. Launch full cluster: meta-root + coordinator + 3 stores + fsmeta gateway
 ./scripts/dev/cluster.sh --config ./raft_config.example.json
-# (Or: docker compose up --build  — includes mount-init bootstrap)
+# (Or: docker compose up -d  — includes mount-init bootstrap)
 
 # 3. Register a mount (rooted authority)
 nokv mount register --coordinator-addr 127.0.0.1:2379 \

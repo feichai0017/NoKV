@@ -6,8 +6,8 @@ One-command demo of the full 333 HA topology (3 meta-root + 3 coordinator +
 ## One-shot startup
 
 ```bash
-# Build images + start every service + run bootstrap once
-docker compose up -d --build
+# Pull image + start every service + run bootstrap once
+docker compose up -d
 
 # Wait for the Redis-compatible gateway and verify write/read persistence
 scripts/demo/redis-smoke.sh

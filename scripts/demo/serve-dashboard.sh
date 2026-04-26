@@ -15,7 +15,7 @@ cat <<EOF
 NoKV dashboard will be served at http://localhost:${PORT}/dashboard.html
 
 Make sure the cluster is running first:
-  docker compose up -d --build
+  docker compose up -d
 
 Dashboard endpoints served by this process:
   GET  /dashboard.html                       static page

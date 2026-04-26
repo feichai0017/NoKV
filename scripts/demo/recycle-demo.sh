@@ -18,6 +18,7 @@ INTERVAL=""
 DASHBOARD=0
 DASHBOARD_PORT=18080
 BUILD=1
+BUILD_FLAG_SET=0
 TIMEOUT=120
 DRY_RUN=0
 
@@ -28,7 +29,7 @@ Usage: scripts/demo/recycle-demo.sh [options]
 One-shot reset:
   - stop and remove the demo stack
   - wipe docker volumes (-v)
-  - rebuild/restart the stack
+  - build/restart the stack
   - wait for redis gateway readiness
   - optionally restart the local dashboard proxy
 
@@ -36,7 +37,8 @@ Options:
   --dashboard             restart dashboard_server.py after the cluster is ready
   --dashboard-port PORT   dashboard port (default: 18080)
   --interval SECONDS      repeat forever, sleeping this many seconds between cycles
-  --no-build              skip docker compose --build on startup
+  --build                 build the local image from this checkout (default)
+  --no-build              use the published image; kept for existing automation
   --timeout SECONDS       readiness timeout waiting for redis ping (default: 120)
   --dry-run               print actions without executing them
   -h, --help              show this help
@@ -76,8 +78,14 @@ while [[ $# -gt 0 ]]; do
       INTERVAL="${2:-}"
       shift 2
       ;;
+    --build)
+      BUILD=1
+      BUILD_FLAG_SET=1
+      shift
+      ;;
     --no-build)
       BUILD=0
+      BUILD_FLAG_SET=1
       shift
       ;;
     --timeout)
@@ -111,6 +119,9 @@ fi
 if ! [[ "$TIMEOUT" =~ ^[0-9]+$ ]]; then
   echo "--timeout must be an integer number of seconds" >&2
   exit 1
+fi
+if [[ "$BUILD_FLAG_SET" == "0" ]]; then
+  log "building the local image by default; pass --no-build to use the published image"
 fi
 
 compose_up() {

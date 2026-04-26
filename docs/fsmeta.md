@@ -153,7 +153,7 @@ fence 变化通过 coordinator root-event stream 推给 fsmeta runtime，cache m
 Docker Compose 会启动 meta-root、coordinator、raftstore、fsmeta gateway、Redis gateway，并通过 `mount-init` 注册默认 mount：
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
 
 直接启动 fsmeta gateway：

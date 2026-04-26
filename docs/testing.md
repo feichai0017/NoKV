@@ -35,7 +35,7 @@ go run ./cmd/nokv coordinator --addr 127.0.0.1:2379 --id-start 1 --ts-start 100 
 # Tear down with Ctrl+C
 
 # Docker-compose sandbox (3 nodes + Coordinator)
-docker compose up --build
+docker compose up -d
 docker compose down -v
 
 # Build RocksDB locally (installs into ./third_party/rocksdb/dist by default)
