@@ -2,9 +2,10 @@
 
 > 本文合并了原 `2026-04-26-lsm-engine-throughput-roadmap.md`（综合路线图）和
 > `2026-04-26-lsm-data-plane-sharding-design.md`（数据面分片设计稿）两份笔记。
-> Sharding 部分（原属于路线图 §3.1）已经按设计稿落地为 commits
-> `eeeee1f0` (Phase 1+2) 和 `5a6ec5ef` (Phase 3+4)，本文相应地把它从"待办"
-> 移到"已完成 + 实现细节"，剩余路线图保持原状。
+> 二次审计后又把若干已经落地但仍写在"待办"的项目搬到"已完成"：
+> Compressed Block Cache、Subcompactions、Adaptive L0 Slowdown、
+> Auto-tuning Compaction Concurrency、Prefix Bloom、Adaptive Iterator
+> Prefetch、IteratorPool。代码出处全部已在小节内注明。
 
 ---
 
@@ -37,21 +38,28 @@
 | Compaction picker / executor | `engine/lsm/picker.go` / `compaction_executor.go` | 标准 LSM |
 | L0 sublevels (Phase A+B) | `engine/lsm/l0_sublevels.go` | 读路径 + trivial move |
 | L0 slowdown / stop trigger | `engine/lsm/options.go` | 写背压 |
+| **Adaptive L0 throttle** | `lsm.throttlePressure` permille + `WriteThrottleState` 三档 | 滑动 backlog → slowdown / stop / resume |
 | External SST ingestion | `engine/lsm/external_sst.go` | bulk load 快路径 |
 | KV separation (vlog) | `engine/vlog/` | WiscKey-style，bucket-sharded |
 | Pipelined Write | `db.go` | MPSC commitQueue + dispatcher + N processor |
 | **Sharded LSM Data Plane** | `engine/lsm/shard.go`、`db.go`、`wal-XX/` 目录 | **N=4 个独立 WAL Manager + memtable + commit processor，per-key affinity 路由 + commit burst coalesce** |
 | **跨 shard MVCC 读** | `lsm.Get` walks all shards, picks max-version | sub-µs ART lookup × 4 shards |
+| **Subcompactions** | `engine/lsm/compaction_executor.go:484/572` `levelManager.subcompact` | 按 splits 并行写出，`utils.Throttle(8+len(splits))` 控并发 |
+| **Auto-tuning Compactor 并发** | `compaction_executor.go:67` "adaptive bump: more backlog → more shards" | backlog 大就拉 shard 数 |
+| **Compressed Block Cache** | `engine/lsm/cache.go` `blockEntry.diskData/compression` + `table.decodeCachedBlock` | cache 存压缩字节，hit 时按需解压；BlockCache 已 shard |
+| **Prefix Bloom (SST)** | `tableIndex.PrefixBloomFilter` + `table.prefixBloomMiss` | metadata workload 直接命中 |
+| **Adaptive iterator prefetch** | `engine/index/iterator.go` `PrefetchAdaptive` | 动态调 prefetch 深度 |
+| **IteratorPool** | `internal/runtime/iterator_pool.go` | iterator context 池化复用 |
 
 ### 2.2 主要剩余缺口
 
 | 维度 | 缺口 |
 |---|---|
-| Compaction | 单 worker 跑整个 keyrange，无 subcompactions |
-| Cache | 未 shard，未压缩缓存；filter 受 LRU 影响 |
-| Filter | 无 Ribbon、无 negative cache |
+| Filter | 无 Ribbon、无 negative cache、filter 仍走 BlockCache LRU 未独立永驻 |
 | SST 格式 | 单层 index，restart interval 固定 |
-| IO | syscall 模型，无 io_uring / vectored |
+| 读路径 | 跨 shard memtable Get 无 hint cache，N 倍 ART lookup |
+| Compaction 结构 | 纯 leveled，未 hybrid tiered+leveled；无 TTL compaction |
+| IO | syscall 模型，无 io_uring / vectored / O_DIRECT |
 | 架构 | shared levels/manifest（未 shard-per-core） |
 
 ---
@@ -178,41 +186,35 @@ Pebble 风格：L0 SST 与 L1 不重叠时直接 rename。fsmeta workload 命中
 
 ---
 
-### 3.5 Subcompactions —— 待办
+### 3.5 Subcompactions —— ✅ 已落地
 
-**问题**：一次 compaction 单 worker 跑整个 keyrange。大 compaction
-可能 30s+，期间 backlog 累积。
-
-**Pebble 设计**：把 compaction input 按 keyrange 切成 N 段，N 个
-worker 并行写 N 个输出 SST。
-
-**收益**：compaction 完成时间 -70%，前台 latency 抖动减小。
-
-**复杂度**：中。compaction executor 改为 fan-out / fan-in 结构。
+> 实现：`engine/lsm/compaction_executor.go:484` `subcompact` +
+> `utils.Throttle(8+len(splits))` 控并发。compaction 按 KeyRange splits
+> 切片，N 个 worker 并行写 N 个 SST。
 
 ---
 
-### 3.6 Adaptive L0 Slowdown —— 待办
+### 3.6 Adaptive L0 Slowdown —— ✅ 已落地
 
-**问题**：`L0SlowdownWritesTrigger` 固定数字。
-
-**设计**：滑动窗口监测 `L0 增长速度` vs `compaction 完成速度`，
-自适应退避。
-
-**收益**：burst 写不被无意义降速；p99 写延迟更稳。
+> 实现：`lsm.throttleWrites` 把 `WriteThrottleState`（None / Slowdown
+> / Stop）和 `throttlePressure` (permille [0,1000]) + `throttleRate`
+> (bytes/sec) 一起暴露给 DB 写入侧。`compaction_executor.go:67` 的
+> "adaptive bump: more backlog => allow more shards" 把 compaction
+> shard 数也按 backlog 自适应。L0 slowdown / stop / resume 三档触发器
+> 在 `options.go:99-104` + `applyLSMSharedOptions` 里默认值化。
 
 ---
 
 ## 4. 读路径优化
 
-### 4.1 Compressed Block Cache —— 待办
+### 4.1 Compressed Block Cache —— ✅ 已落地
 
-**问题**：BlockCache 缓存解压后的 block。压缩比 3-5× 时，cache
-容量等价被压缩。
-
-**Pebble 设计**：cache 中存压缩后的 block，hit 时按需解压。
-
-**收益**：磁盘读 -50~70%，p99 读延迟显著下降。
+> 实现：`engine/lsm/cache.go` `blockEntry { diskData, compression,
+> rawLen }` 直接存磁盘字节；`engine/lsm/table.go:425`
+> `decodeCachedBlock` 在 cache hit 时按需调用 `decodeBlockPayload`
+> 解压。BlockCache 已 shard（`blockCacheShardCount`），命中走 ristretto
+> 子缓存。覆盖测试 `engine/lsm/cache_test.go:92`
+> `TestBlockCacheStoresCompressedPayload`。
 
 ---
 
@@ -236,9 +238,15 @@ filter 占用 -30%。
 
 ---
 
-### 4.5 Multi-Level Iterator Pinning —— 待办
+### 4.5 Multi-Level Iterator Pinning —— ⚠️ 部分落地
 
-iterator 持有 block 引用直到 seek 到下一 block，长 scan 的 cache 抖动消除。
+> 已有：`engine/index/iterator.go` `PrefetchAdaptive` 字段动态调
+> prefetch 深度；`internal/runtime/iterator_pool.go` `IteratorPool` 复用
+> per-iterator context；block 在 cache 里有 refcount + `release()`，长
+> scan 内单 block 不会被淘汰。
+>
+> 还缺：跨 SST/level 切换时显式 pin 当前 block，到下一个 block 才
+> release。Pebble 在长 prefix scan 上更激进。
 
 ---
 
@@ -270,9 +278,11 @@ read amp 上升。
 
 ---
 
-### 5.3 Auto-tuning Compaction Concurrency —— 待办
+### 5.3 Auto-tuning Compaction Concurrency —— ✅ 已落地
 
-按 write QPS / L0 backlog 动态调整 worker 数。
+> `compaction_executor.go:67` 的 "adaptive bump: more backlog => allow
+> more shards, capped by shard count" 实时按 backlog 调 inflight
+> compaction worker 数。
 
 ---
 
@@ -336,18 +346,25 @@ scan 时一次 `readv` 读 N 个相邻 block，syscall 数下降。
 | Pipelined Write (§3.2) | ✅ MPSC + dispatcher + N processor |
 | Parallel Memtable Flush (§3.3) | ✅ N flush workers |
 | Trivial Move (§3.4) | ✅ Phase A+B |
+| **Subcompactions (§3.5)** | ✅ `levelManager.subcompact` + Throttle |
+| **Adaptive L0 Slowdown (§3.6)** | ✅ throttlePressure permille + 三档 state |
+| **Compressed Block Cache (§4.1)** | ✅ `blockEntry.diskData/compression` + `decodeCachedBlock` |
+| **Auto-tuning Compactor (§5.3)** | ✅ adaptive shard bump by backlog |
+| **Prefix Bloom (SST)** | ✅ `tableIndex.PrefixBloomFilter` |
+| **Adaptive iterator prefetch** | ✅ `index.PrefetchAdaptive` |
+| **IteratorPool** | ✅ `dbruntime.IteratorPool` |
 | L0 sublevels read path | ✅ |
 | Commit burst coalesce | ✅ |
 | per-key affinity routing | ✅ |
 
-### Tier 1 — 短期最高 ROI
+### Tier 1 — 短期最高 ROI（更新）
 
 | # | 优化 | 周 | 主要收益 |
 |---|---|---|---|
-| 4.1 | Compressed Block Cache | 1 | 容量等价 ×3-5 |
 | 7.1 | io_uring | 3 | 写侧 syscall.write -50% |
-| 4.6 | Cross-shard memtable hint | 0.5 | 读路径 -10~17% |
-| 3.6 | Adaptive L0 Slowdown | 1 | burst 写 p99 改善 |
+| 4.6 | Cross-shard memtable hint | 0.5 | 读路径 -10~17%（多 shard 副产品） |
+| 4.2 | Filter 永驻独立 cache | 1 | bloom 命中率 100% |
+| 4.3 | Ribbon Filter | 1 | filter 占用 -30% |
 
 **3-4 周做完后预期**：
 - 写吞吐 N=4 c=128：725K → 1M+
@@ -358,10 +375,10 @@ scan 时一次 `readv` 读 N 个相邻 block，syscall 数下降。
 
 | # | 优化 | 周 |
 |---|---|---|
-| 3.5 | Subcompactions | 2 |
-| 4.3 | Ribbon Filter | 1 |
-| 4.2 | Filter 永驻 | 0.5 |
 | 5.1 | Hybrid Tiered+Leveled | 2 |
+| 6.2 | Two-Level Index + Index Compression | 1.5 |
+| 4.5 | 跨 SST iterator pin（完成 partial）| 1 |
+| 3.5补 | Subcompaction 错误回滚 / 切片质量提升 | 1 |
 
 ### Tier 3 — 特化场景
 
@@ -390,19 +407,25 @@ scan 时一次 `readv` 读 N 个相邻 block，syscall 数下降。
 | Sharded Memtable | ⚠️ | ❌ | ✅ | ✅ | **✅ (N=4)** | ✅ |
 | Sharded WAL | ❌ | ❌ | per-region | per-core | **✅ (N=4 LSM + 4 raft)** | ✅ |
 | Trivial Move | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Subcompactions | ✅ | ⚠️ | ✅ | ✅ | ❌ | ✅ |
-| Compressed Cache | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| Subcompactions | ✅ | ⚠️ | ✅ | ✅ | **✅** | ✅ |
+| Adaptive L0 Slowdown | ✅ | ✅ | ✅ | ✅ | **✅** | ✅ |
+| Auto-tuning Compactor 并发 | ✅ | ⚠️ | ✅ | ✅ | **✅** | ✅ |
+| Compressed Cache | ✅ | ✅ | ✅ | ✅ | **✅** | ✅ |
+| Prefix Bloom | ✅ | ✅ | ✅ | ⚠️ | **✅** | ✅ |
 | Ribbon Filter | ✅ | ❌ | ✅ | ❌ | ❌ | ✅ |
+| Filter 独立永驻 cache | ✅ | ⚠️ | ✅ | ✅ | ❌ | ✅ |
 | Hybrid Tiered+Leveled | ✅ | ❌ | ✅ | ✅ | ❌ | ✅ |
-| Two-Level Index | ✅ | ✅ | ✅ | ⚠️ | ❌ | ✅ (Tier3) |
+| Two-Level Index | ✅ | ✅ | ✅ | ⚠️ | ❌ | ✅ (Tier2) |
 | io_uring | ⚠️ | ⚠️ | ✅ | ✅ | (planned) | ✅ |
 | mmap SST | ⚠️ | ⚠️ | ❌ | ✅ | ❌ | ✅ (可选) |
 | Shard-per-Core | ❌ | ❌ | ❌ | ✅ | ❌ | (Tier4) |
 
-**结论**：sharded WAL+memtable + commit pipeline 已经把 NoKV 推到了 Go
-生态里少有的位置（Pebble/Badger 都还是单 WAL）；做完 Tier 1+2，单机
-引擎成熟度和 RocksDB / Pebble 同代，部分维度（unified WAL、sharded
-data plane、Ribbon、io_uring）可能更现代。
+**结论**：当前能力对照 RocksDB / Pebble / TiKV / ScyllaDB 的核心列表，
+NoKV 已落地 ✅ 11 项，剩余主要差距在 **Ribbon Filter / Filter 永驻 /
+Hybrid Tiered+Leveled / Two-Level Index / io_uring**。Tier 1+2 推完，
+单机引擎成熟度和 RocksDB / Pebble 同代，部分维度（unified sharded
+WAL+memtable+commit pipeline、subcompactions+auto-tuning concurrency、
+compressed block cache + prefix bloom）已经接近或更现代。
 
 ---
 
@@ -476,10 +499,12 @@ data plane、Ribbon、io_uring）可能更现代。
 
 ## 14. 一句话总结
 
-> **写路径**：sharded WAL+memtable+commit pipeline ✅；下一波是 io_uring +
-> Subcompactions。
-> **读路径**：cross-shard hint cache + compressed block cache + Ribbon。
-> **结构**：Hybrid Tiered+Leveled。
+> **写路径**：sharded WAL+memtable+commit pipeline ✅、Subcompactions ✅、
+> Adaptive L0 ✅；下一波是 io_uring + cross-shard memtable hint。
+> **读路径**：Compressed Block Cache ✅、Prefix Bloom ✅、Adaptive
+> Iterator Prefetch ✅、IteratorPool ✅；下一波是 Filter 独立永驻
+> cache + Ribbon Filter + 跨 SST iterator pin。
+> **结构**：Hybrid Tiered+Leveled、Two-Level Index 仍待办。
 > **远期**：Shard-per-Core 让性能从亚线性扩展变线性扩展。
 >
 > 目前 N=4 c=128 = 725K ops/s（YCSB-A，benchmark-tuned），相对 175K
