@@ -1,6 +1,7 @@
 package slab
 
 import (
+	"io"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -211,4 +212,79 @@ func TestSegmentWriteSizeMonotonicOutOfOrder(t *testing.T) {
 
 	// Final high-water must cover the largest reservation.
 	require.Equal(t, int64(cursor), s.Size(), "final high-water must cover all reservations")
+}
+
+// TestSegmentFreshOpenSizeIsZero locks the new high-water invariant
+// introduced when Segment was made a generic substrate: Open MUST initialize
+// the logical high-water to 0 even though the on-disk file may have been
+// preallocated to MaxSz. Pre-fix this test would observe Size == MaxSz and a
+// Read at offset 0 of length MaxSz would return capacity-bounded mmap bytes
+// (junk) instead of io.EOF.
+func TestSegmentFreshOpenSizeIsZero(t *testing.T) {
+	dir := t.TempDir()
+	const maxSz = 4 << 20
+	opt := &file.Options{
+		FID:      7,
+		FileName: filepath.Join(dir, "fresh.seg"),
+		MaxSz:    maxSz,
+	}
+	var s Segment
+	require.NoError(t, s.Open(opt))
+	defer func() { _ = s.Close() }()
+
+	require.Equal(t, int64(0), s.Size(), "fresh open must have logical high-water = 0")
+	require.Equal(t, int64(maxSz), s.Capacity(), "fresh open exposes mapped capacity")
+
+	// Reading any byte before logical writes must EOF, even though the
+	// mmap region has capacity backing it.
+	_, err := s.Read(0, 1)
+	require.ErrorIs(t, err, io.EOF, "Read before any Write must EOF on logical bound")
+
+	// After a Write the high-water advances; a Read inside the new
+	// high-water succeeds.
+	payload := []byte("hello-fresh")
+	require.NoError(t, s.Write(0, payload))
+	require.Equal(t, int64(len(payload)), s.Size())
+	got, err := s.Read(0, uint32(len(payload)))
+	require.NoError(t, err)
+	require.Equal(t, payload, got)
+
+	// A Read past the high-water but inside Capacity must still EOF.
+	_, err = s.Read(uint32(len(payload)), 1)
+	require.ErrorIs(t, err, io.EOF, "Read past high-water must EOF even within Capacity")
+}
+
+// TestSegmentLoadSizeFromFile verifies the reload path used by vlog populate
+// for sealed segments: after Open (size = 0) the caller restores the logical
+// high-water from the file's on-disk size, which equals the logical extent
+// after DoneWriting / VerifyDir truncation.
+func TestSegmentLoadSizeFromFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "reload.seg")
+
+	// Phase 1: write some data, seal the segment, close.
+	{
+		opt := &file.Options{FID: 1, FileName: path, MaxSz: 4 << 20}
+		var s Segment
+		require.NoError(t, s.Open(opt))
+		require.NoError(t, s.Bootstrap(segmentTestHeaderSize))
+		body := []byte("reload-body")
+		require.NoError(t, s.Write(uint32(segmentTestHeaderSize), body))
+		end := uint32(segmentTestHeaderSize + len(body))
+		require.NoError(t, s.DoneWriting(end))
+		require.Equal(t, int64(end), s.Size())
+		require.NoError(t, s.Close())
+	}
+
+	// Phase 2: reopen. Open alone leaves size = 0; LoadSizeFromFile
+	// restores it to the sealed file's truncated extent.
+	{
+		opt := &file.Options{FID: 1, FileName: path, MaxSz: 4 << 20}
+		var s Segment
+		require.NoError(t, s.Open(opt))
+		defer func() { _ = s.Close() }()
+		require.Equal(t, int64(0), s.Size(), "Open must not infer size from file stat")
+		require.NoError(t, s.LoadSizeFromFile())
+		require.Equal(t, int64(segmentTestHeaderSize+len("reload-body")), s.Size())
+	}
 }

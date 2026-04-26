@@ -35,10 +35,23 @@ type Segment struct {
 	ro   bool
 }
 
-// Open creates or attaches the mmap region described by opt. New files are
-// truncated to opt.MaxSz and the entire region is mapped; the size high-water
-// is initialized to the on-disk file size (which is opt.MaxSz for fresh
-// files and the previously-written size for reopens of sealed segments).
+// Open creates or attaches the mmap region described by opt. The mapped
+// region is sized to opt.MaxSz (fresh files are truncated up to that size).
+//
+// IMPORTANT — size invariant: Open initializes the *logical high-water mark*
+// to zero, NOT to the file's on-disk byte count. For freshly-allocated files
+// the on-disk size equals the preallocated mmap capacity, which has no
+// meaningful relationship to "how many bytes have been logically written".
+// Treating capacity as high-water made Read's EOF check (offset+len > size)
+// meaningless and risked returning trailing junk to a consumer that didn't
+// maintain its own logical cursor (vlog manager.offset, negative
+// persistence's explicit Truncate(headerSize)).
+//
+// Callers reopening an existing sealed segment (whose on-disk size has been
+// truncated to its logical extent by DoneWriting or VerifyDir/sanitize) must
+// follow Open with LoadSizeFromFile() to restore the high-water from stat.
+// Callers creating a fresh segment do not need to: Bootstrap (or the first
+// Write) advances the high-water via the monotonic CAS in Write.
 func (s *Segment) Open(opt *file.Options) error {
 	var err error
 	s.FID = uint32(opt.FID)
@@ -51,15 +64,7 @@ func (s *Segment) Open(opt *file.Options) error {
 	if err != nil {
 		return errors.Wrapf(err, "unable to open segment file")
 	}
-	fi, err := s.f.File.Stat()
-	if err != nil {
-		return errors.Wrapf(err, "Unable to run file.Stat")
-	}
-	sz := fi.Size()
-	if sz > math.MaxUint32 {
-		panic(fmt.Errorf("file size: %d greater than %d", uint32(sz), uint32(math.MaxUint32)))
-	}
-	s.size.Store(uint32(sz))
+	s.size.Store(0)
 	s.ro = flag == os.O_RDONLY
 	return nil
 }
@@ -166,7 +171,35 @@ func (s *Segment) Truncate(offset int64) error {
 
 func (s *Segment) Close() error { return s.f.Close() }
 
+// Size returns the logical high-water mark (the largest offset+length ever
+// committed by Write or set explicitly by Truncate / LoadSizeFromFile).
+// This is the upper bound that Read enforces; reads beyond it return io.EOF.
 func (s *Segment) Size() int64 { return int64(s.size.Load()) }
+
+// Capacity returns the mapped region size in bytes. This is the physical
+// upper bound on Read addresses; consumers should not reach past Capacity
+// even with explicit Truncate(>Capacity) since the underlying mmap is fixed.
+// Capacity is set at Open time from opt.MaxSz; it changes only when an
+// AppendBuffer-induced grow re-mmaps the file.
+func (s *Segment) Capacity() int64 { return int64(len(s.f.Data)) }
+
+// LoadSizeFromFile sets the logical high-water mark from the file's current
+// on-disk size. This is the right thing for reopening a sealed segment whose
+// physical size already equals its logical extent (sealed via DoneWriting or
+// truncated by VerifyDir/sanitize). It is the wrong thing for a fresh,
+// preallocated file whose on-disk size is its capacity.
+func (s *Segment) LoadSizeFromFile() error {
+	fstat, err := s.f.File.Stat()
+	if err != nil {
+		return errors.Wrapf(err, "Unable to check stat for %q", s.FileName())
+	}
+	sz := max(fstat.Size(), 0)
+	if sz > math.MaxUint32 {
+		panic(fmt.Errorf("[Segment.LoadSizeFromFile] sz > math.MaxUint32"))
+	}
+	s.size.Store(uint32(sz))
+	return nil
+}
 
 // Bootstrap reserves and zeroes a header region of the given size. headerSize
 // of 0 is a no-op. Used by consumers that need a small fixed-format header
@@ -186,7 +219,10 @@ func (s *Segment) Bootstrap(headerSize int) error {
 }
 
 // Init resyncs the high-water from the on-disk file size. Used after
-// DoneWriting and during reload to reflect any external truncation.
+// DoneWriting (when the file has been truncated to its logical size) to
+// reflect the post-truncate extent. Equivalent to LoadSizeFromFile but
+// silently no-ops when the file is empty (preserving older behavior used
+// by DoneWriting → Init re-init flow).
 func (s *Segment) Init() error {
 	fstat, err := s.f.File.Stat()
 	if err != nil {
