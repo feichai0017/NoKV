@@ -294,10 +294,21 @@ func (lm *levelManager) canMoveToNextLevel(cd *compactDef) bool {
 	if cd.plan.IngestMode != IngestNone {
 		return false
 	}
-	if cd.thisLevel.levelNum == 0 || cd.thisLevel == cd.nextLevel {
+	if cd.thisLevel == cd.nextLevel {
 		return false
 	}
-	return len(cd.top) > 0 && len(cd.bot) == 0
+	if len(cd.top) == 0 || len(cd.bot) != 0 {
+		return false
+	}
+	if cd.thisLevel.levelNum == 0 {
+		// L0 trivial move is only safe when the chosen group has no overlap
+		// with any other L0 table. Otherwise promoting it would leave older
+		// L0 tables masking newer keys at the destination level.
+		if !l0GroupHasNoOtherOverlap(cd.top, cd.thisLevel.tables) {
+			return false
+		}
+	}
+	return true
 }
 
 func (lm *levelManager) moveToNextLevel(cd *compactDef) error {

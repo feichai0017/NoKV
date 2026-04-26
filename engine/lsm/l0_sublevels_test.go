@@ -135,6 +135,90 @@ func TestL0GetReadPathReturnsHighestVersionAcrossSublevels(t *testing.T) {
 	entry.DecrRef()
 }
 
+func TestL0GroupHasNoOtherOverlapAcceptsLonelyIsland(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	a := buildTableWithEntry(t, lsm, 11001, "a", 1, "va")
+	c := buildTableWithEntry(t, lsm, 11002, "c", 1, "vc")
+	z := buildTableWithEntry(t, lsm, 11003, "z", 1, "vz")
+	all := []*table{a, c, z}
+
+	// {a} is a lonely island: keyrange "a" does not overlap "c" or "z".
+	require.True(t, l0GroupHasNoOtherOverlap([]*table{a}, all))
+	require.True(t, l0GroupHasNoOtherOverlap([]*table{c}, all))
+	require.True(t, l0GroupHasNoOtherOverlap([]*table{z}, all))
+}
+
+func TestL0GroupHasNoOtherOverlapRejectsOverlappedGroup(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	a := buildTableWithEntry(t, lsm, 12001, "a", 1, "v1") // overlaps b
+	b := buildTableWithEntry(t, lsm, 12002, "a", 2, "v2") // overlaps a
+	z := buildTableWithEntry(t, lsm, 12003, "z", 1, "vz") // disjoint
+	all := []*table{a, b, z}
+
+	// {a} overlaps b, so it cannot trivial move alone.
+	require.False(t, l0GroupHasNoOtherOverlap([]*table{a}, all))
+	require.False(t, l0GroupHasNoOtherOverlap([]*table{b}, all))
+	// {a, b} together cover their overlap so external overlaps are zero.
+	require.True(t, l0GroupHasNoOtherOverlap([]*table{a, b}, all))
+	// {z} is still a lonely island.
+	require.True(t, l0GroupHasNoOtherOverlap([]*table{z}, all))
+}
+
+func TestCanMoveToNextLevelAllowsL0LonelyIsland(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	// Two L0 tables with disjoint key ranges -> each is a lonely island.
+	a := buildTableWithEntry(t, lsm, 13001, "a", 1, "va")
+	z := buildTableWithEntry(t, lsm, 13002, "z", 1, "vz")
+	src := lsm.levels.levels[0]
+	src.add(a)
+	src.add(z)
+	src.Sort()
+
+	cd := buildCompactDef(lsm, 0, 0, 1)
+	cd.top = []*table{a}
+	cd.plan.TopIDs = []uint64{a.fid}
+	cd.plan.ThisRange = getKeyRange(a)
+	cd.plan.NextRange = cd.plan.ThisRange
+	cd.thisSize = a.Size()
+
+	require.True(t, lsm.levels.canMoveToNextLevel(cd),
+		"a single L0 table whose keyrange does not overlap any other L0 table should trivial-move")
+}
+
+func TestCanMoveToNextLevelRejectsL0OverlappingGroup(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	// Two overlapping L0 tables. Picking only one breaks the L0 invariant
+	// because the older one would be left behind shadowing the moved table.
+	a := buildTableWithEntry(t, lsm, 14001, "a", 1, "v1")
+	b := buildTableWithEntry(t, lsm, 14002, "a", 2, "v2")
+	src := lsm.levels.levels[0]
+	src.add(a)
+	src.add(b)
+	src.Sort()
+
+	cd := buildCompactDef(lsm, 0, 0, 1)
+	cd.top = []*table{b} // pick only one of an overlapping pair
+	cd.plan.TopIDs = []uint64{b.fid}
+	cd.plan.ThisRange = getKeyRange(b)
+	cd.plan.NextRange = cd.plan.ThisRange
+	cd.thisSize = b.Size()
+
+	require.False(t, lsm.levels.canMoveToNextLevel(cd),
+		"trivial move must refuse a partial L0 group whose range overlaps untouched L0 tables")
+}
+
 // BenchmarkL0SelectTablesForKeyLinear measures the cost of the legacy linear
 // scan over L0 tables. We force the sublevel index to nil so selectTablesForKey
 // falls back to getTablesForKeyLinear.

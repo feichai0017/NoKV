@@ -87,6 +87,55 @@ func (s l0Sublevel) candidate(key []byte) *table {
 	return candidate
 }
 
+// l0GroupHasNoOtherOverlap reports whether the union range of group has no
+// overlap with any L0 table outside group. When true, the group can be safely
+// promoted to the next level via trivial move because nothing else in L0
+// shadows or extends its range.
+//
+// group is expected to be a set of L0 tables already chosen by the picker
+// (typically a contiguous overlapping batch). all is the full set of L0
+// tables, including group. Both are read without taking lh's mutex; callers
+// must already hold the appropriate level lock.
+func l0GroupHasNoOtherOverlap(group, all []*table) bool {
+	if len(group) == 0 {
+		return false
+	}
+
+	groupIDs := make(map[uint64]struct{}, len(group))
+	minKey := group[0].MinKey()
+	maxKey := group[0].MaxKey()
+	for _, t := range group {
+		if t == nil {
+			return false
+		}
+		groupIDs[t.fid] = struct{}{}
+		if kv.CompareBaseKeys(t.MinKey(), minKey) < 0 {
+			minKey = t.MinKey()
+		}
+		if kv.CompareBaseKeys(t.MaxKey(), maxKey) > 0 {
+			maxKey = t.MaxKey()
+		}
+	}
+
+	for _, t := range all {
+		if t == nil {
+			continue
+		}
+		if _, in := groupIDs[t.fid]; in {
+			continue
+		}
+		// Non-overlap iff t.MaxKey < group.MinKey or t.MinKey > group.MaxKey.
+		if kv.CompareBaseKeys(t.MaxKey(), minKey) < 0 {
+			continue
+		}
+		if kv.CompareBaseKeys(t.MinKey(), maxKey) > 0 {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // l0CandidateTables returns up to one candidate table per sublevel whose
 // range covers key. The returned slice contains at most len(sublevels) entries
 // and may be empty if no sublevel covers the key.
