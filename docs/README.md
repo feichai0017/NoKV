@@ -75,7 +75,7 @@ For the authority schema behind those primitives, read **[notes/2026-04-25-names
 
 | Topic | Location |
 |---|---|
-| TLA+ and Apalache models for control-plane and metadata transition safety | [`spec/`](../spec) · [spec/README.md](../spec/README.md) |
+| TLA+ / TLC models for control-plane and metadata transition safety | [`spec/`](../spec) · [spec/README.md](../spec/README.md) |
 | Checked artifacts | [`spec/artifacts/`](../spec/artifacts/) |
 
 ### 🏛️ Distributed runtime — the layer below fsmeta
@@ -208,7 +208,7 @@ Full walkthrough: [getting_started.md](getting_started.md) · CLI reference: [cl
 | | |
 |---|---|
 | **[fsmeta service](fsmeta.md)** | The headline product — namespace metadata API |
-| **[Formal specs](../spec/README.md)** | TLA+ / Apalache models for transition safety |
+| **[Formal specs](../spec/README.md)** | TLA+ / TLC models for transition safety |
 | **[CLI surface](cli.md)** | `nokv` — stats, manifest, regions, mount, quota, migrate |
 | **[Topology config](config.md)** | One JSON file shared by scripts, Docker, all CLI |
 | **[Coordinator](coordinator.md)** | Route / TSO / heartbeat / root-event subscribe |

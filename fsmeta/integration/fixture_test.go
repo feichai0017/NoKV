@@ -37,6 +37,11 @@ type realClusterRuntime struct {
 
 func openRealClusterRuntime(t *testing.T, ctx context.Context) *realClusterRuntime {
 	t.Helper()
+	return openRealClusterRuntimeWithOptions(t, ctx)
+}
+
+func openRealClusterRuntimeWithOptions(t *testing.T, ctx context.Context, opts ...fsmetaexec.Option) *realClusterRuntime {
+	t.Helper()
 	coord := testcluster.StartCoordinator(t)
 	t.Cleanup(func() { coord.Close(t) })
 
@@ -83,7 +88,9 @@ func openRealClusterRuntime(t *testing.T, ctx context.Context) *realClusterRunti
 
 	runner, err := fsmetaexec.NewRaftstoreRunner(kv, coordRPC)
 	require.NoError(t, err)
-	executor, err := fsmetaexec.New(runner, fsmetaexec.WithMountResolver(testMountResolver{coord: coordRPC}))
+	executorOpts := []fsmetaexec.Option{fsmetaexec.WithMountResolver(testMountResolver{coord: coordRPC})}
+	executorOpts = append(executorOpts, opts...)
+	executor, err := fsmetaexec.New(runner, executorOpts...)
 	require.NoError(t, err)
 	return &realClusterRuntime{executor: executor, node: node}
 }

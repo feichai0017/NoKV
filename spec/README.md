@@ -8,12 +8,11 @@ This directory holds the first model-checking skeleton for the control-plane pap
 make install-tla-tools
 ```
 
-This downloads pinned versions of:
+This downloads a pinned version of:
 
 - `tla2tools.jar` for TLC
-- `Apalache`
 
-Both are installed locally under `third_party/tla/`.
+It is installed locally under `third_party/tla/`.
 
 ## Run TLC
 
@@ -68,11 +67,11 @@ For `Primacy`, the spec now includes a stronger induction-friendly invariant:
 - `G2_PrimacyInductive`
 
 This invariant states that every issued era other than the current
-`activeEra` has already been sealed. TLC and Apalache both check this stronger
-shape directly, and the spec includes a lemma showing it implies the original
-`Primacy` claim. This is still not a full TLAPS proof, but it is a
-more robust bridge from bounded checking to an unbounded-by-construction
-argument for Primacy than the earlier cardinality-only invariant.
+`activeEra` has already been sealed. TLC checks this stronger shape directly,
+and the spec includes a lemma showing it implies the original `Primacy` claim.
+This is still not a full TLAPS proof, but it is a more robust bridge from
+bounded checking to an unbounded-by-construction argument for Primacy than the
+earlier cardinality-only invariant.
 
 Stage 3 adds two namespace-facing positive models:
 
@@ -88,29 +87,6 @@ Stage 3 adds two namespace-facing positive models:
   uniqueness shape that is stronger than the cardinality-only `Primacy`
   invariant and better suited for a later proof.
 
-## Run Apalache
-
-```bash
-make apalache-typecheck
-make apalache-check-eunomia
-make apalache-check-eunomiamultidim
-```
-
-`apalache-typecheck` checks that the current specs are well-typed.
-
-`apalache-check-eunomia` runs a bounded check of the Eunomia model
-(`Eunomia.tla`) against:
-
-- `G1_Eunomia`
-- `G2_Primacy`
-- `G2_PrimacyInductive`
-- `G3_Silence`
-- `G4_Finality`
-
-`apalache-check-eunomiamultidim` runs a bounded check of `EunomiaMultiDim.tla`
-against:
-
-- `NoWriteBehindServedRead`
-
-`record-formal-artifacts` stores sanitized TLC / Apalache outputs under
-`spec/artifacts/` so the current result shape is checked into the repo.
+`record-formal-artifacts` stores sanitized TLC outputs under `spec/artifacts/`
+so the current result shape is checked into the repo. These are bounded model
+checks, not a TLAPS / Coq / Dafny proof.

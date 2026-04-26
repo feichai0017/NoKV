@@ -89,7 +89,7 @@ TypeOK ==
     /\ inflight \subseteq ReplySet
     /\ delivered \in [valid : BOOLEAN, era : Eras, frontier : Frontiers]
 
-\* This is the bad state that TLC/Apalache should be able to reach.
+\* This is the bad state that TLC should be able to reach.
 OldReplyAfterSuccessor ==
     /\ delivered.valid
     /\ delivered.era < activeEra

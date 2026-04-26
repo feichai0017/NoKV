@@ -12,9 +12,8 @@ This directory stores sanitized, checked-in outputs from the current TLA+ runs.
 - `tlc-chubbyfenced.out`: counterexample for `ChubbyFencedLease.tla`
 - `tlc-subtreewithoutfrontiercoverage.out`: counterexample for `SubtreeWithoutFrontierCoverage.tla`
 - `tlc-subtreewithoutseal.out`: counterexample for `SubtreeWithoutSeal.tla`
-- `apalache-eunomia.out`: bounded Apalache check for `Eunomia.tla`
-- `apalache-eunomiamultidim.out`: bounded Apalache check for `EunomiaMultiDim.tla`
 
 The outputs are intentionally filtered so they are stable enough to diff in the
 repo while still showing the key result shape: no-error on the positive model,
-counterexample on contrast models, and the main state-count summary.
+counterexample on contrast models, and the main state-count summary. They are
+TLC bounded model-checking artifacts, not machine-checked proofs.
