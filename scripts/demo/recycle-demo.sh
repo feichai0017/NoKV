@@ -36,7 +36,7 @@ Options:
   --dashboard             restart dashboard_server.py after the cluster is ready
   --dashboard-port PORT   dashboard port (default: 18080)
   --interval SECONDS      repeat forever, sleeping this many seconds between cycles
-  --build                 build the local image with docker-compose.dev.yml
+  --build                 build the local image from this checkout
   --no-build              use the published image (default)
   --timeout SECONDS       readiness timeout waiting for redis ping (default: 120)
   --dry-run               print actions without executing them
@@ -120,7 +120,7 @@ fi
 
 compose_up() {
   if [[ "$BUILD" == "1" ]]; then
-    run docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+    run docker compose up -d --build
   else
     run docker compose up -d
   fi

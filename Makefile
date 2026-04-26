@@ -305,7 +305,7 @@ docker-up:
 # Build local image and start Docker Compose cluster
 docker-dev-up:
 	@echo "Building local image and starting Docker Compose cluster..."
-	docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+	docker compose up -d --build
 
 # Stop Docker Compose cluster
 docker-down:

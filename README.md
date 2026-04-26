@@ -188,7 +188,7 @@ Documentation: [`docs/fsmeta.md`](docs/fsmeta.md) · [positioning note](docs/not
 docker compose up -d
 
 # Local Docker development build
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+docker compose up -d --build
 ```
 
 ![NoKV demo](./img/nokv-demo.gif)

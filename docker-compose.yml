@@ -7,7 +7,7 @@
 #   docker compose down -v    # wipes data volumes too
 #
 # Local development build:
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#   docker compose up -d --build
 #
 # Architecture:
 #   Truth plane:     3× meta-root  (replicated raft, quorum of 2 — tolerates 1 peer loss)
@@ -27,6 +27,7 @@
 # the three meta-root peers.
 
 x-nokv-image: &nokv-image
+  build: .
   image: ${NOKV_IMAGE:-ghcr.io/feichai0017/nokv:latest}
 
 x-common: &common

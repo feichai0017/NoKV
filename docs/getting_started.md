@@ -61,7 +61,7 @@ docker compose up -d
 For local Docker development builds from this checkout:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+docker compose up -d --build
 ```
 
 Tear down:
