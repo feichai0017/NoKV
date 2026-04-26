@@ -296,6 +296,9 @@ func TestRemoteConfigAndNilStoreHelpers(t *testing.T) {
 
 	require.False(t, (&remoteRootBackend{}).IsLeader())
 	require.True(t, (&remoteRootBackend{Client: &rootclient.Client{}}).IsLeader())
+	adapted, caps := adaptRootBackend(&remoteRootBackend{Client: &rootclient.Client{}})
+	require.True(t, caps.tail)
+	require.Nil(t, adapted.TailNotify())
 
 	var store *RootStore
 	snapshot, err := store.Load()
