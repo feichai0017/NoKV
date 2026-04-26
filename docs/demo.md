@@ -172,7 +172,7 @@ scripts/demo/recycle-demo.sh --dashboard
 That script does one full reset:
 
 1. `docker compose down -v --remove-orphans`
-2. `docker compose up -d`
+2. `docker compose up -d --build`
 3. wait until `redis-cli -p 6380 ping` succeeds
 4. optionally restart the local dashboard proxy on `:18080`
 

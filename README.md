@@ -189,6 +189,9 @@ docker compose up -d
 
 # Local Docker development build
 docker compose up -d --build
+
+# Return to the published image after a local build when available
+make docker-up
 ```
 
 ![NoKV demo](./img/nokv-demo.gif)

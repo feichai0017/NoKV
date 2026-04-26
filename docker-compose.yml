@@ -28,10 +28,10 @@
 
 x-nokv-image: &nokv-image
   build: .
-  image: ${NOKV_IMAGE:-ghcr.io/feichai0017/nokv:latest}
+  image: ${NOKV_IMAGE:-ghcr.io/feichai0017/nokv:${NOKV_IMAGE_TAG:-latest}}
 
 x-common: &common
-  image: ${NOKV_IMAGE:-ghcr.io/feichai0017/nokv:latest}
+  image: ${NOKV_IMAGE:-ghcr.io/feichai0017/nokv:${NOKV_IMAGE_TAG:-latest}}
   restart: unless-stopped
   stop_signal: SIGINT
   stop_grace_period: 30s
@@ -290,10 +290,11 @@ services:
     container_name: nokv-mount-init
     restart: "no"
     entrypoint: ["/bin/sh", "-c"]
-    command: >
-      until /usr/local/bin/nokv mount register
-      --coordinator-addr nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379
-      --mount default --root-inode 1 --schema-version 1; do sleep 1; done
+    command:
+      - >
+        until /usr/local/bin/nokv mount register
+        --coordinator-addr nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379
+        --mount default --root-inode 1 --schema-version 1; do sleep 1; done
     depends_on:
       coordinator-1: { condition: service_started }
       coordinator-2: { condition: service_started }

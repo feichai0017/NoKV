@@ -300,7 +300,12 @@ record-formal-artifacts: record-tlc-eunomia record-tlc-eunomiamultidim record-tl
 # Start Docker Compose cluster
 docker-up:
 	@echo "Starting Docker Compose cluster..."
-	docker compose up -d
+	@if docker compose pull --policy always --ignore-buildable; then \
+		docker compose up -d; \
+	else \
+		echo "Published image unavailable; falling back to local build..."; \
+		docker compose up -d --build; \
+	fi
 
 # Build local image and start Docker Compose cluster
 docker-dev-up:
