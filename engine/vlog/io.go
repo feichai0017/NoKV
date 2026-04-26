@@ -12,8 +12,8 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/feichai0017/NoKV/engine/file"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/slab"
 	"github.com/feichai0017/NoKV/utils"
 	pkgerrors "github.com/pkg/errors"
 )
@@ -73,7 +73,7 @@ func (m *Manager) AppendEntry(e *kv.Entry) (*kv.ValuePtr, error) {
 }
 
 // reserve allocates space in the active segment, rotating if needed.
-func (m *Manager) reserve(sz int) (*file.LogFile, uint32, uint32, error) {
+func (m *Manager) reserve(sz int) (*slab.Segment, uint32, uint32, error) {
 	if sz <= 0 {
 		return nil, 0, 0, fmt.Errorf("vlog manager: invalid append size %d", sz)
 	}
@@ -205,7 +205,7 @@ func (m *Manager) Read(ptr *kv.ValuePtr) ([]byte, func(), error) {
 		}
 		return nil, nil, err
 	}
-	buf, err := store.Read(ptr)
+	buf, err := store.Read(ptr.Offset, ptr.Len)
 	if err != nil {
 		unlock()
 		return nil, nil, err
@@ -485,7 +485,7 @@ func extractFID(path string) uint64 {
 	return fid
 }
 
-func sanitizeValueLog(store *file.LogFile) (uint32, error) {
+func sanitizeValueLog(store *slab.Segment) (uint32, error) {
 	start, err := firstNonZeroOffset(store)
 	if err != nil {
 		return 0, err
@@ -514,7 +514,7 @@ func sanitizeValueLog(store *file.LogFile) (uint32, error) {
 	}
 }
 
-func checkValueLog(store *file.LogFile) (uint32, error) {
+func checkValueLog(store *slab.Segment) (uint32, error) {
 	start, err := firstNonZeroOffset(store)
 	if err != nil {
 		return 0, err
@@ -545,7 +545,7 @@ func checkValueLog(store *file.LogFile) (uint32, error) {
 	}
 }
 
-func checkValueLogUntil(store *file.LogFile, endOffset uint32) (uint32, error) {
+func checkValueLogUntil(store *slab.Segment, endOffset uint32) (uint32, error) {
 	start, err := firstNonZeroOffset(store)
 	if err != nil {
 		return 0, err
@@ -589,7 +589,7 @@ func checkValueLogUntil(store *file.LogFile, endOffset uint32) (uint32, error) {
 	}
 }
 
-func firstNonZeroOffset(store *file.LogFile) (uint32, error) {
+func firstNonZeroOffset(store *slab.Segment) (uint32, error) {
 	size := store.Size()
 	start := int64(kv.ValueLogHeaderSize)
 	if size <= start {
@@ -621,7 +621,7 @@ func firstNonZeroOffset(store *file.LogFile) (uint32, error) {
 	return uint32(start), nil
 }
 
-func iterateLogFile(store *file.LogFile, bucket uint32, fid uint32, offset uint32, fn kv.LogEntry) (uint32, error) {
+func iterateLogFile(store *slab.Segment, bucket uint32, fid uint32, offset uint32, fn kv.LogEntry) (uint32, error) {
 	if offset == 0 {
 		offset = uint32(kv.ValueLogHeaderSize)
 	}

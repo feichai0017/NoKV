@@ -13,6 +13,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/file"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/slab"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/utils"
 	pkgerrors "github.com/pkg/errors"
@@ -85,7 +86,7 @@ func (m *Manager) refreshIndexLocked() {
 }
 
 // ensureActiveLocked returns the active segment store; caller must hold m.filesLock.
-func (m *Manager) ensureActiveLocked() (*file.LogFile, uint32, error) {
+func (m *Manager) ensureActiveLocked() (*slab.Segment, uint32, error) {
 	if m.active != nil {
 		return m.active.store, m.activeID, nil
 	}
@@ -145,12 +146,12 @@ func Open(cfg Config) (*Manager, error) {
 	return mgr, nil
 }
 
-func openLogFile(fs vfs.FS, fid uint32, path string, dir string, maxSize int64, readOnly bool) (*file.LogFile, error) {
+func openLogFile(fs vfs.FS, fid uint32, path string, dir string, maxSize int64, readOnly bool) (*slab.Segment, error) {
 	flag := os.O_CREATE | os.O_RDWR
 	if readOnly {
 		flag = os.O_RDONLY
 	}
-	lf := &file.LogFile{}
+	lf := &slab.Segment{}
 	if err := lf.Open(&file.Options{
 		FID:      uint64(fid),
 		FileName: path,
@@ -164,12 +165,12 @@ func openLogFile(fs vfs.FS, fid uint32, path string, dir string, maxSize int64, 
 	return lf, nil
 }
 
-func createLogFile(fs vfs.FS, fid uint32, path string, dir string, maxSize int64) (*file.LogFile, error) {
+func createLogFile(fs vfs.FS, fid uint32, path string, dir string, maxSize int64) (*slab.Segment, error) {
 	lf, err := openLogFile(fs, fid, path, dir, maxSize, false)
 	if err != nil {
 		return nil, err
 	}
-	if err := lf.Bootstrap(); err != nil {
+	if err := lf.Bootstrap(kv.ValueLogHeaderSize); err != nil {
 		_ = lf.Close()
 		return nil, err
 	}
@@ -208,7 +209,7 @@ func (m *Manager) populate() error {
 	return nil
 }
 
-func (m *Manager) create(fid uint32) (*file.LogFile, error) {
+func (m *Manager) create(fid uint32) (*slab.Segment, error) {
 	path := filepath.Join(m.cfg.Dir, fmt.Sprintf("%05d.vlog", fid))
 	store, err := createLogFile(m.cfg.FS, fid, path, m.cfg.Dir, m.cfg.MaxSize)
 	if err != nil {
@@ -250,7 +251,7 @@ func (m *Manager) rotateLocked() error {
 
 // getStoreForRead returns a store and release callback without acquiring m.filesLock.
 // Sealed segments are pinned; active segments use the store read lock.
-func (m *Manager) getStoreForRead(fid uint32) (*file.LogFile, func(), error) {
+func (m *Manager) getStoreForRead(fid uint32) (*slab.Segment, func(), error) {
 	seg, ok := m.loadIndex().files[fid]
 	if !ok {
 		return nil, nil, pkgerrors.Errorf("value log file %d not found", fid)
@@ -268,7 +269,7 @@ func (m *Manager) getStoreForRead(fid uint32) (*file.LogFile, func(), error) {
 	return seg.store, seg.store.Lock.RUnlock, nil
 }
 
-func (m *Manager) getFile(fid uint32) (*file.LogFile, error) {
+func (m *Manager) getFile(fid uint32) (*slab.Segment, error) {
 	seg, ok := m.loadIndex().files[fid]
 	if !ok {
 		return nil, pkgerrors.Errorf("value log file %d not found", fid)
@@ -421,7 +422,7 @@ func (m *Manager) SegmentBootstrap(fid uint32) error {
 	}
 	store.Lock.Lock()
 	defer store.Lock.Unlock()
-	return store.Bootstrap()
+	return store.Bootstrap(kv.ValueLogHeaderSize)
 }
 
 // SegmentTruncate shrinks the segment to the provided offset.

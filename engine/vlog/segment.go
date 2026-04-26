@@ -4,7 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/feichai0017/NoKV/engine/file"
+	"github.com/feichai0017/NoKV/engine/slab"
 )
 
 type segmentState uint32
@@ -16,14 +16,14 @@ const (
 )
 
 type segment struct {
-	store    *file.LogFile
+	store    *slab.Segment
 	pinMu    sync.Mutex
 	pinCond  *sync.Cond
 	state    atomic.Uint32
 	pinCount atomic.Int32
 }
 
-func newSegment(store *file.LogFile, sealed bool) *segment {
+func newSegment(store *slab.Segment, sealed bool) *segment {
 	st := segmentActive
 	if sealed {
 		st = segmentSealed
