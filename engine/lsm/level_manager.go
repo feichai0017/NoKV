@@ -236,7 +236,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 
 	iter.Rewind()
 	if !iter.Valid() {
-		if err := lm.lsm.wal.RemoveSegment(uint32(fid)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := lm.lsm.wal.RemoveSegment(uint32(fid)); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, wal.ErrSegmentRetained) {
 			return err
 		}
 		return nil

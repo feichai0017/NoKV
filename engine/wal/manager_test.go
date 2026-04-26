@@ -91,8 +91,15 @@ func TestManagerCloseReturnsSyncFailure(t *testing.T) {
 func TestManagerCloseRetriesAfterCloseFailure(t *testing.T) {
 	dir := t.TempDir()
 	injected := errors.New("close fail")
-	// The first close happens during Open() replay; fail the next close invoked by Manager.Close().
-	policy := vfs.NewFaultPolicy(vfs.FailOnNthRule(vfs.OpFileClose, "", 2, injected))
+	failClose := false
+	policy := vfs.NewFaultPolicy()
+	policy.SetHook(func(op vfs.Op, _ string) error {
+		if op == vfs.OpFileClose && failClose {
+			failClose = false
+			return injected
+		}
+		return nil
+	})
 	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
 
 	m, err := wal.Open(wal.Config{Dir: dir, FS: fs})
@@ -101,6 +108,7 @@ func TestManagerCloseRetriesAfterCloseFailure(t *testing.T) {
 	}
 	appendEntryValue(t, m, "k", "x")
 
+	failClose = true
 	err = m.Close()
 	if !errors.Is(err, injected) {
 		t.Fatalf("expected close failure, got %v", err)
@@ -159,6 +167,74 @@ func TestManagerAppendAndReplay(t *testing.T) {
 		if entries[i] != got[i] {
 			t.Fatalf("entry %d mismatch: want %q got %q", i, entries[i], got[i])
 		}
+	}
+}
+
+func TestManagerReplayRebuildsStaleCatalog(t *testing.T) {
+	dir := t.TempDir()
+	m, err := wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	appendEntryValue(t, m, "k", "catalog")
+	if err := m.Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	catalogPath := filepath.Join(dir, "00001.wal.idx")
+	if err := os.WriteFile(catalogPath, []byte("stale"), 0o644); err != nil {
+		t.Fatalf("write stale catalog: %v", err)
+	}
+
+	var got []string
+	if err := m.Replay(func(_ wal.EntryInfo, payload []byte) error {
+		entry, err := kv.DecodeEntry(payload)
+		if err != nil {
+			return err
+		}
+		got = append(got, string(entry.Value))
+		entry.DecrRef()
+		return nil
+	}); err != nil {
+		t.Fatalf("replay with stale catalog: %v", err)
+	}
+	if len(got) != 1 || got[0] != "catalog" {
+		t.Fatalf("unexpected replayed values: %v", got)
+	}
+	info, err := os.Stat(catalogPath)
+	if err != nil {
+		t.Fatalf("stat rebuilt catalog: %v", err)
+	}
+	if info.Size() <= int64(len("stale")) {
+		t.Fatalf("expected catalog to be rebuilt, size=%d", info.Size())
+	}
+}
+
+func TestManagerRemoveSegmentRemovesCatalog(t *testing.T) {
+	dir := t.TempDir()
+	m, err := wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	appendEntryValue(t, m, "k1", "v1")
+	if err := m.Rotate(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	appendEntryValue(t, m, "k2", "v2")
+
+	catalogPath := filepath.Join(dir, "00001.wal.idx")
+	if _, err := os.Stat(catalogPath); err != nil {
+		t.Fatalf("expected rotated segment catalog: %v", err)
+	}
+	if err := m.RemoveSegment(1); err != nil {
+		t.Fatalf("remove segment: %v", err)
+	}
+	if _, err := os.Stat(catalogPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected catalog removal, got %v", err)
 	}
 }
 

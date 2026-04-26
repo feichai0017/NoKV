@@ -234,6 +234,9 @@ func (m *Manager) switchSegmentLocked(id uint32, truncate bool) error {
 		if err := m.active.Sync(); err != nil {
 			return err
 		}
+		if err := m.rebuildActiveCatalogLocked(); err != nil {
+			return err
+		}
 		if err := m.active.Close(); err != nil {
 			return err
 		}
@@ -551,42 +554,21 @@ func (m *Manager) Replay(fn func(info EntryInfo, payload []byte) error) error {
 }
 
 func (m *Manager) replayFile(id uint32, path string, fn func(info EntryInfo, payload []byte) error) error {
-	f, err := m.cfg.FS.OpenHandle(path)
+	entries, err := m.loadSegmentCatalog(id)
+	if err == nil {
+		err = m.replayIndexedFile(path, entries, fn)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, errStaleCatalog) {
+			return err
+		}
+	}
+	entries, err = m.rebuildSegmentCatalog(id, path)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
-
-	reIter := NewRecordIterator(f, m.bufferSize)
-	defer func() { _ = reIter.Close() }()
-
-	var offset int64
-	for reIter.Next() {
-		length := reIter.Length()
-		recType := reIter.Type()
-		payload := reIter.Record()
-		info := EntryInfo{
-			SegmentID: id,
-			Offset:    offset,
-			Length:    length,
-			Type:      recType,
-		}
-		if err := fn(info, payload); err != nil {
-			return err
-		}
-		offset += int64(length) + 8
-	}
-
-	switch err := reIter.Err(); err {
-	case nil, io.EOF:
-		return nil
-	case ErrPartialRecord:
-		return nil
-	case kv.ErrBadChecksum:
-		return fmt.Errorf("wal: checksum mismatch segment=%d offset=%d", id, offset)
-	default:
-		return err
-	}
+	return m.replayIndexedFile(path, entries, fn)
 }
 
 // Close closes the manager and active segment.
@@ -614,6 +596,13 @@ func (m *Manager) Close() error {
 		}
 	}
 	if err := m.active.Sync(); err != nil {
+		closeErr := m.active.Close()
+		m.active = nil
+		m.writer = nil
+		m.closed = true
+		return errors.Join(err, closeErr)
+	}
+	if err := m.rebuildActiveCatalogLocked(); err != nil {
 		closeErr := m.active.Close()
 		m.active = nil
 		m.writer = nil
@@ -746,6 +735,20 @@ func checkSegment(fs vfs.FS, path string) error {
 	}
 }
 
+func (m *Manager) rebuildActiveCatalogLocked() error {
+	if m.activeID == 0 || m.active == nil {
+		return nil
+	}
+	if _, err := m.active.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	_, err := m.scanAndWriteSegmentCatalog(m.activeID, m.active)
+	if _, seekErr := m.active.Seek(0, io.SeekEnd); err == nil {
+		err = seekErr
+	}
+	return err
+}
+
 // RemoveSegment deletes a WAL segment from disk.
 func (m *Manager) RemoveSegment(id uint32) error {
 	if !m.CanRemoveSegment(id) {
@@ -753,6 +756,9 @@ func (m *Manager) RemoveSegment(id uint32) error {
 	}
 	path := m.segmentPath(id)
 	if err := m.cfg.FS.Remove(path); err != nil {
+		return err
+	}
+	if err := m.cfg.FS.Remove(m.catalogPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	m.removedSegments.Add(1)
