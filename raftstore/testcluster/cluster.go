@@ -60,6 +60,11 @@ func OpenStandaloneDB(tb testing.TB, dir string, tweak func(*NoKV.Options)) *NoK
 	tb.Helper()
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
+	// Percolator-backed integration tests rely on same-key write ordering
+	// (lock-write then lock-delete at the same start TS). Multi-shard
+	// round-robin routing breaks that invariant; pin the data-plane to one
+	// shard until Phase 3 introduces per-key affinity routing.
+	opt.LSMShardCount = 1
 	if tweak != nil {
 		tweak(opt)
 	}
@@ -87,6 +92,8 @@ func StartNodeWithConfig(tb testing.TB, storeID uint64, dir string, cfg NodeConf
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
+	// See comment in OpenStandaloneDB.
+	opt.LSMShardCount = 1
 	if cfg.AllowedModes != nil {
 		opt.AllowedModes = cfg.AllowedModes
 	}

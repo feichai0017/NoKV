@@ -96,7 +96,7 @@ func TestBackgroundServicesLifecycle(t *testing.T) {
 	require.Equal(t, 1, valueLogGCStarts)
 	require.Equal(t, 1, stats.started)
 	require.Same(t, stats, services.StatsCollector())
-	require.Nil(t, services.WALWatchdog())
+	require.Empty(t, services.WALWatchdogs())
 
 	rm := metrics.NewRegionMetrics()
 	services.SetRegionMetrics(rm)
@@ -105,7 +105,7 @@ func TestBackgroundServicesLifecycle(t *testing.T) {
 	require.NoError(t, services.Close())
 	require.Equal(t, 1, stats.closed)
 	require.Nil(t, services.StatsCollector())
-	require.Nil(t, services.WALWatchdog())
+	require.Empty(t, services.WALWatchdogs())
 }
 
 func TestBackgroundServicesClosePropagatesStatsError(t *testing.T) {

@@ -25,6 +25,12 @@ func testOptionsForDir(dir string) *NoKV.Options {
 	opt.SSTableMaxSz = 1 << 20
 	opt.ValueLogFileSize = 1 << 20
 	opt.ValueThreshold = utils.DefaultValueThreshold
+	// Percolator's lock CF protocol writes lock-on then lock-off at the
+	// same start TS for a given key. With multi-shard round-robin those
+	// two writes can land on different shards' memtables and the read
+	// path has no MVCC tiebreaker for equal versions. Pin to one shard
+	// until Phase 3 introduces per-key affinity routing.
+	opt.LSMShardCount = 1
 	return opt
 }
 
@@ -45,7 +51,8 @@ func applyVersionedEntryForTxnTest(t *testing.T, db *NoKV.DB, cf kv.ColumnFamily
 
 func latestWALPath(t *testing.T, dir string) string {
 	t.Helper()
-	files, err := filepath.Glob(filepath.Join(dir, "*.wal"))
+	// LSM data plane is sharded into <dir>/lsm-wal-XX/.
+	files, err := filepath.Glob(filepath.Join(dir, "lsm-wal-*", "*.wal"))
 	require.NoError(t, err)
 	require.NotEmpty(t, files)
 	sort.Strings(files)

@@ -21,7 +21,7 @@ func buildTestLSM(t *testing.T, opt *Options) *LSM {
 	opt.DiscardStatsCh = &c
 	wlog, err := wal.Open(wal.Config{Dir: opt.WorkDir})
 	require.NoError(t, err)
-	lsm, err := NewLSM(opt, wlog)
+	lsm, err := NewLSM(opt, []*wal.Manager{wlog})
 	require.NoError(t, err)
 	return lsm
 }

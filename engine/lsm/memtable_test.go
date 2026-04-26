@@ -15,22 +15,23 @@ func TestOpenMemTableReplayWithTypedRecords(t *testing.T) {
 	defer func() { _ = lsm.Close() }()
 
 	const segID = uint32(77)
-	require.NoError(t, lsm.wal.SwitchSegment(segID, true))
+	shard := lsm.primaryShard()
+	require.NoError(t, shard.wal.SwitchSegment(segID, true))
 
 	entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("replay-key"), 9), []byte("replay-value"))
 	defer entry.DecrRef()
 	payload, err := wal.EncodeEntryBatch([]*kv.Entry{entry})
 	require.NoError(t, err)
 
-	infos, err := lsm.wal.AppendRecords(wal.DurabilityBuffered,
+	infos, err := shard.wal.AppendRecords(wal.DurabilityBuffered,
 		wal.Record{Type: wal.RecordTypeRaftState, Payload: []byte("ignored")},
 		wal.Record{Type: wal.RecordTypeEntryBatch, Payload: payload},
 	)
 	require.NoError(t, err)
 	require.Len(t, infos, 2)
-	require.NoError(t, lsm.wal.Sync())
+	require.NoError(t, shard.wal.Sync())
 
-	mt, err := lsm.openMemTable(uint64(segID))
+	mt, err := lsm.openMemTable(shard, uint64(segID))
 	require.NoError(t, err)
 	require.NotNil(t, mt)
 	require.Equal(t, segID, mt.segmentID)
@@ -49,15 +50,16 @@ func TestOpenMemTableReplayDecodeError(t *testing.T) {
 	defer func() { _ = lsm.Close() }()
 
 	const segID = uint32(78)
-	require.NoError(t, lsm.wal.SwitchSegment(segID, true))
-	_, err := lsm.wal.AppendRecords(wal.DurabilityBuffered, wal.Record{
+	shard := lsm.primaryShard()
+	require.NoError(t, shard.wal.SwitchSegment(segID, true))
+	_, err := shard.wal.AppendRecords(wal.DurabilityBuffered, wal.Record{
 		Type:    wal.RecordTypeEntryBatch,
 		Payload: []byte("bad-entry-payload"),
 	})
 	require.NoError(t, err)
-	require.NoError(t, lsm.wal.Sync())
+	require.NoError(t, shard.wal.Sync())
 
-	_, err = lsm.openMemTable(uint64(segID))
+	_, err = lsm.openMemTable(shard, uint64(segID))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "while updating memtable index")
 }
@@ -67,7 +69,7 @@ func TestMemTableSetRejectsInvalidInput(t *testing.T) {
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
 
-	mt := lsm.memTable
+	mt := lsm.primaryShard().memTable
 	require.NotNil(t, mt)
 
 	require.ErrorIs(t, mt.Set(nil), utils.ErrEmptyKey)

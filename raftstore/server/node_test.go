@@ -256,6 +256,7 @@ func TestNodeWithClientTwoPhaseCommit(t *testing.T) {
 		workDir := t.TempDir()
 		opt := NoKV.NewDefaultOptions()
 		opt.WorkDir = workDir
+		opt.LSMShardCount = 1
 		localMeta, err := localmeta.OpenLocalStore(workDir, nil)
 		require.NoError(t, err)
 		opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
@@ -371,6 +372,9 @@ func openTestDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
 	t.Helper()
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
+	// 2PC tests use the same startTS lock-on/lock-off pattern; pin the
+	// LSM data plane to one shard until per-key affinity routing lands.
+	opt.LSMShardCount = 1
 	localMeta, err := localmeta.OpenLocalStore(opt.WorkDir, nil)
 	require.NoError(t, err)
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot

@@ -1,0 +1,66 @@
+package lsm
+
+import (
+	"sync"
+	"sync/atomic"
+
+	"github.com/feichai0017/NoKV/engine/wal"
+)
+
+// lsmShard owns one slice of the LSM data plane: the active memtable, the
+// queue of immutable memtables awaiting flush, and the WAL manager backing
+// both. With multiple shards each pair runs on its own fd, fsync worker,
+// and bufio.Writer so writes do not contend on a single Manager.mu. See
+// docs/notes/2026-04-26-lsm-data-plane-sharding-design.md for the broader
+// plan and the routing/recovery/flush invariants.
+type lsmShard struct {
+	id int
+	// lock guards memTable and immutables for this shard.
+	lock       sync.RWMutex
+	memTable   *memTable
+	immutables []*memTable
+	wal        *wal.Manager
+	// highestFlushedSeg tracks the largest WAL segment ID flushed from
+	// this shard. WAL retention uses it so each Manager keeps only its
+	// own unflushed segments — a global high-water mark is unsafe under
+	// interleaved per-shard flushes.
+	highestFlushedSeg atomic.Uint32
+}
+
+// newLSMShard constructs an empty shard bound to walMgr. The memtable and
+// immutables slice are populated by recovery / NewMemtable.
+func newLSMShard(id int, walMgr *wal.Manager) *lsmShard {
+	return &lsmShard{
+		id:  id,
+		wal: walMgr,
+	}
+}
+
+// primaryShard returns the canonical shard for the LSM. With shardCount == 1
+// this is the only shard; with shardCount > 1 it is shards[0] and callers
+// must explicitly pick the correct shard for writes.
+func (lsm *LSM) primaryShard() *lsmShard {
+	if lsm == nil || len(lsm.shards) == 0 {
+		return nil
+	}
+	return lsm.shards[0]
+}
+
+// shardCount returns the number of LSM data shards. Phase 1 always
+// returns 1; later phases honour Options.LSMShardCount.
+func (lsm *LSM) shardCount() int {
+	if lsm == nil {
+		return 0
+	}
+	return len(lsm.shards)
+}
+
+// shardOf returns the shard that owns mt, or nil if mt is not bound to
+// any shard (which should not happen for memtables created via the
+// normal NewMemtable / openMemTable paths).
+func (lsm *LSM) shardOf(mt *memTable) *lsmShard {
+	if lsm == nil || mt == nil {
+		return nil
+	}
+	return mt.shard
+}

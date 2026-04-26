@@ -476,15 +476,34 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		segmentMetrics map[uint32]wal.RecordMetrics
 		ptrs           map[uint64]localmeta.RaftLogPointer
 	)
-	if s.db.wal != nil {
-		wstats = s.db.wal.Metrics()
-		if wstats != nil {
-			snap.WAL.ActiveSegment = int64(wstats.ActiveSegment)
-			snap.WAL.ActiveSize = wstats.ActiveSize
-			snap.WAL.SegmentCount = int64(wstats.SegmentCount)
-			snap.WAL.SegmentsRemoved = wstats.RemovedSegments
+	// Aggregate metrics across every LSM data-plane WAL shard. Active
+	// segment is the highest active across shards (most-recently-rotated
+	// shard wins) since the snapshot is a coarse health signal, not a
+	// per-shard breakdown.
+	for _, mgr := range s.db.lsmWALs {
+		if mgr == nil {
+			continue
 		}
-		segmentMetrics = s.db.wal.SegmentMetrics()
+		shardStats := mgr.Metrics()
+		if shardStats != nil {
+			if int64(shardStats.ActiveSegment) > snap.WAL.ActiveSegment {
+				snap.WAL.ActiveSegment = int64(shardStats.ActiveSegment)
+			}
+			snap.WAL.ActiveSize += shardStats.ActiveSize
+			snap.WAL.SegmentCount += int64(shardStats.SegmentCount)
+			snap.WAL.SegmentsRemoved += shardStats.RemovedSegments
+			if wstats == nil {
+				wstats = shardStats
+			}
+		}
+		shardSegments := mgr.SegmentMetrics()
+		if segmentMetrics == nil {
+			segmentMetrics = shardSegments
+		} else {
+			for k, v := range shardSegments {
+				segmentMetrics[k] = v
+			}
+		}
 	}
 	if s.db.opt != nil && s.db.opt.RaftPointerSnapshot != nil {
 		ptrs = s.db.opt.RaftPointerSnapshot()
@@ -576,14 +595,28 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	}
 
 	warning, reason := metrics.WALTypedWarning(snap.WAL.TypedRecordRatio, snap.WAL.SegmentsWithRaftRecords, s.db.opt.WALTypedRecordWarnRatio, s.db.opt.WALTypedRecordWarnSegments)
-	if watchdog := s.db.background.WALWatchdog(); watchdog != nil {
-		wsnap := watchdog.Snapshot()
-		snap.WAL.AutoGCRuns = wsnap.AutoRuns
-		snap.WAL.AutoGCRemoved = wsnap.SegmentsRemoved
-		snap.WAL.AutoGCLastUnix = wsnap.LastAutoUnix
-		if wsnap.Warning {
+	watchdogs := s.db.background.WALWatchdogs()
+	if len(watchdogs) > 0 {
+		var anyWarn bool
+		var warnReason string
+		for _, watchdog := range watchdogs {
+			if watchdog == nil {
+				continue
+			}
+			wsnap := watchdog.Snapshot()
+			snap.WAL.AutoGCRuns += wsnap.AutoRuns
+			snap.WAL.AutoGCRemoved += wsnap.SegmentsRemoved
+			if wsnap.LastAutoUnix > snap.WAL.AutoGCLastUnix {
+				snap.WAL.AutoGCLastUnix = wsnap.LastAutoUnix
+			}
+			if wsnap.Warning && !anyWarn {
+				anyWarn = true
+				warnReason = wsnap.WarningReason
+			}
+		}
+		if anyWarn {
 			snap.WAL.TypedRecordWarning = true
-			snap.WAL.TypedRecordReason = wsnap.WarningReason
+			snap.WAL.TypedRecordReason = warnReason
 		} else if warning {
 			snap.WAL.TypedRecordWarning = true
 			snap.WAL.TypedRecordReason = reason

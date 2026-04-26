@@ -35,18 +35,18 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
-// LSM is the log-structured merge-tree engine. It wires a single
-// active memtable, a queue of immutable memtables, the level manager,
-// the flush runtime, and the shared WAL into one coherent storage core.
-// See the package docstring for the durability ordering invariant.
+// LSM is the log-structured merge-tree engine. It wires N parallel
+// data-plane shards (each owning an active memtable, an immutable queue,
+// and a WAL Manager), the level manager, and the flush runtime into one
+// coherent storage core. See the package docstring for the durability
+// ordering invariant and
+// docs/notes/2026-04-26-lsm-data-plane-sharding-design.md for the
+// sharding rationale and routing/recovery/flush invariants.
 type LSM struct {
-	lock       sync.RWMutex
-	memTable   *memTable
-	immutables []*memTable
+	shards     []*lsmShard
 	levels     *levelManager
 	option     *Options
 	closer     *utils.Closer
-	wal        *wal.Manager
 	flushQueue *flushRuntime
 	flushWG    sync.WaitGroup
 	logger     *slog.Logger
@@ -124,17 +124,19 @@ func (lsm *LSM) Close() error {
 	}
 	lsm.flushWG.Wait()
 
-	lsm.lock.Lock()
-	mem := lsm.memTable
-	immutables := append([]*memTable(nil), lsm.immutables...)
-	lsm.memTable = nil
-	lsm.immutables = nil
-	lsm.lock.Unlock()
-
-	if mem != nil {
-		closeErr = errors.Join(closeErr, mem.close())
+	var orphans []*memTable
+	for _, s := range lsm.shards {
+		s.lock.Lock()
+		if s.memTable != nil {
+			orphans = append(orphans, s.memTable)
+		}
+		orphans = append(orphans, s.immutables...)
+		s.memTable = nil
+		s.immutables = nil
+		s.lock.Unlock()
 	}
-	for _, mt := range immutables {
+
+	for _, mt := range orphans {
 		if mt == nil {
 			continue
 		}
@@ -153,12 +155,15 @@ func (lsm *LSM) getDiscardStatsCh() chan map[manifest.ValueLogID]int64 {
 	return lsm.discardStatsCh
 }
 
-func (lsm *LSM) walRetentionMark() wal.RetentionMark {
-	if lsm == nil || lsm.levels == nil {
+// shardRetentionMark returns the retention bound for a single shard's WAL
+// Manager. Each shard tracks its own highest flushed segment so that
+// interleaved cross-shard flushes never truncate an unflushed segment from
+// a peer shard.
+func shardRetentionMark(s *lsmShard) wal.RetentionMark {
+	if s == nil {
 		return wal.RetentionMark{FirstSegment: 1}
 	}
-	seg, _ := lsm.levels.logPointer()
-	return wal.RetentionMark{FirstSegment: seg + 1}
+	return wal.RetentionMark{FirstSegment: s.highestFlushedSeg.Load() + 1}
 }
 
 func (lsm *LSM) getLogger() *slog.Logger {
@@ -245,21 +250,23 @@ func (lsm *LSM) MaxVersion() uint64 {
 
 	var max uint64
 
-	lsm.lock.RLock()
-	if lsm.memTable != nil {
-		if v := lsm.memTable.maxVersion.Load(); v > max {
-			max = v
+	for _, s := range lsm.shards {
+		s.lock.RLock()
+		if s.memTable != nil {
+			if v := s.memTable.maxVersion.Load(); v > max {
+				max = v
+			}
 		}
+		for _, mt := range s.immutables {
+			if mt == nil {
+				continue
+			}
+			if v := mt.maxVersion.Load(); v > max {
+				max = v
+			}
+		}
+		s.lock.RUnlock()
 	}
-	for _, mt := range lsm.immutables {
-		if mt == nil {
-			continue
-		}
-		if v := mt.maxVersion.Load(); v > max {
-			max = v
-		}
-	}
-	lsm.lock.RUnlock()
 
 	if lm := lsm.levels; lm != nil {
 		if v := lm.maxVersion(); v > max {
@@ -294,22 +301,33 @@ func (lsm *LSM) LogValueLogUpdate(meta *manifest.ValueLogMeta) error {
 	return lsm.levels.manifestMgr.LogValueLogUpdate(*meta)
 }
 
-// NewLSM constructs the LSM core and returns initialization errors.
-func NewLSM(opt *Options, walMgr *wal.Manager) (*LSM, error) {
+// NewLSM constructs the LSM core, binding one shard to each WAL Manager
+// in walMgrs. The slice must be non-empty; len(walMgrs) is the data-plane
+// shard count.
+func NewLSM(opt *Options, walMgrs []*wal.Manager) (*LSM, error) {
 	if opt == nil {
 		return nil, ErrLSMNilOptions
 	}
-	if walMgr == nil {
+	if len(walMgrs) == 0 {
 		return nil, ErrLSMNilWALManager
+	}
+	for _, mgr := range walMgrs {
+		if mgr == nil {
+			return nil, ErrLSMNilWALManager
+		}
 	}
 	frozen := opt.Clone()
 	frozen.NormalizeInPlace()
 	if frozen == nil {
 		return nil, ErrLSMNilClonedOptions
 	}
+	shards := make([]*lsmShard, len(walMgrs))
+	for i, mgr := range walMgrs {
+		shards[i] = newLSMShard(i, mgr)
+	}
 	lsm := &LSM{
 		option: frozen,
-		wal:    walMgr,
+		shards: shards,
 		closer: utils.NewCloser(),
 		logger: frozen.Logger,
 	}
@@ -327,24 +345,33 @@ func NewLSM(opt *Options, walMgr *wal.Manager) (*LSM, error) {
 		return nil, fmt.Errorf("lsm init level manager: %w", err)
 	}
 	lsm.levels = lm
-	if err := walMgr.RegisterRetention("lsm", lsm.walRetentionMark); err != nil {
-		return nil, fmt.Errorf("lsm register wal retention: %w", err)
+	for _, s := range lsm.shards {
+		shard := s // closure capture per shard
+		if err := shard.wal.RegisterRetention("lsm", func() wal.RetentionMark {
+			return shardRetentionMark(shard)
+		}); err != nil {
+			return nil, fmt.Errorf("lsm register wal retention shard %d: %w", shard.id, err)
+		}
 	}
 	// Populate range tombstone collector from existing SSTables
 	if lsm.levels != nil && lsm.levels.rtCollector != nil {
 		lsm.levels.rebuildRangeTombstones()
 	}
-	// start the db recovery process to load the wal, if there is no recovery content, create a new memtable
-	lsm.memTable, lsm.immutables, err = lsm.recovery()
-	if err != nil {
-		_ = lsm.Close()
-		return nil, fmt.Errorf("lsm recovery: %w", err)
-	}
-	lsm.startFlushWorkers(1)
-	for _, mt := range lsm.immutables {
-		if err := lsm.submitFlush(mt); err != nil {
+	// Recover each shard's memtable queue from its own WAL.
+	for _, s := range lsm.shards {
+		s.memTable, s.immutables, err = lsm.recoverShard(s)
+		if err != nil {
 			_ = lsm.Close()
-			return nil, fmt.Errorf("lsm submit recovered flush task: %w", err)
+			return nil, fmt.Errorf("lsm recovery shard %d: %w", s.id, err)
+		}
+	}
+	lsm.startFlushWorkers(len(lsm.shards))
+	for _, s := range lsm.shards {
+		for _, mt := range s.immutables {
+			if err := lsm.submitFlush(mt); err != nil {
+				_ = lsm.Close()
+				return nil, fmt.Errorf("lsm submit recovered flush task: %w", err)
+			}
 		}
 	}
 	return lsm, nil
@@ -388,14 +415,14 @@ func (b *writeBatch) estimate() int64 {
 	return estimatePipelineBatchWALSize(b.entries)
 }
 
-func (lsm *LSM) applyWriteBatches(batches []*writeBatch) (int, error) {
+func (lsm *LSM) applyWriteBatches(s *lsmShard, batches []*writeBatch) (int, error) {
 	for len(batches) > 0 {
-		n, err := lsm.writeSome(batches)
+		n, err := lsm.writeSome(s, batches)
 		if err != nil {
 			return batches[0].index, err
 		}
 		if n == 0 {
-			if err := lsm.rotateForWrite(); err != nil {
+			if err := lsm.rotateForWriteShard(s); err != nil {
 				return batches[0].index, err
 			}
 			continue
@@ -405,25 +432,28 @@ func (lsm *LSM) applyWriteBatches(batches []*writeBatch) (int, error) {
 	return -1, nil
 }
 
-func (lsm *LSM) writeSome(batches []*writeBatch) (int, error) {
-	lsm.lock.RLock()
-	mt := lsm.memTable
+func (lsm *LSM) writeSome(s *lsmShard, batches []*writeBatch) (int, error) {
+	if s == nil {
+		return 0, ErrMemtableNotInitialized
+	}
+	s.lock.RLock()
+	mt := s.memTable
 	if mt == nil {
-		lsm.lock.RUnlock()
+		s.lock.RUnlock()
 		return 0, ErrMemtableNotInitialized
 	}
 	n, entries, estimate, err := fitWritePrefix(mt, lsm.option.MemTableSize, batches)
 	if err != nil {
-		lsm.lock.RUnlock()
+		s.lock.RUnlock()
 		return 0, err
 	}
 	if n == 0 {
-		lsm.lock.RUnlock()
+		s.lock.RUnlock()
 		return 0, nil
 	}
-	info, err := lsm.wal.AppendEntryBatch(wal.DurabilityFlushed, entries)
+	info, err := s.wal.AppendEntryBatch(wal.DurabilityFlushed, entries)
 	if err != nil {
-		lsm.lock.RUnlock()
+		s.lock.RUnlock()
 		return 0, err
 	}
 	walBytes := int64(info.Length) + 8
@@ -431,14 +461,14 @@ func (lsm *LSM) writeSome(batches []*writeBatch) (int, error) {
 		// The estimator is conservative for admission, but the persisted byte
 		// count is the WAL return value. Keep this guard to catch encoder drift
 		// before it silently overcommits the active memtable.
-		lsm.lock.RUnlock()
+		s.lock.RUnlock()
 		panic(fmt.Sprintf("lsm: WAL batch larger than estimate: got=%d estimate=%d", walBytes, estimate))
 	}
 	if err := mt.applyBatch(entries, walBytes); err != nil {
-		lsm.lock.RUnlock()
+		s.lock.RUnlock()
 		panic(fmt.Sprintf("lsm: durable WAL batch could not be applied to memtable: %v", err))
 	}
-	lsm.lock.RUnlock()
+	s.lock.RUnlock()
 	return n, nil
 }
 
@@ -498,10 +528,10 @@ func totalWriteEntries(batches []*writeBatch) int {
 	return total
 }
 
-func (lsm *LSM) rotateForWrite() error {
-	lsm.lock.Lock()
-	old, err := lsm.rotateLocked()
-	lsm.lock.Unlock()
+func (lsm *LSM) rotateForWriteShard(s *lsmShard) error {
+	s.lock.Lock()
+	old, err := lsm.rotateShardLocked(s)
+	s.lock.Unlock()
 	if err != nil {
 		return err
 	}
@@ -523,7 +553,8 @@ func (lsm *LSM) prepareWrite() error {
 	return nil
 }
 
-// Set writes one entry into the active memtable/WAL.
+// Set writes one entry into shard 0's memtable/WAL. Use SetBatchGroup for
+// commit-pipeline writes that need explicit shard routing.
 // entry.Key must be an InternalKey (CF + user key + timestamp suffix).
 func (lsm *LSM) Set(entry *kv.Entry) (err error) {
 	if entry == nil || len(entry.Key) == 0 {
@@ -532,28 +563,30 @@ func (lsm *LSM) Set(entry *kv.Entry) (err error) {
 	return lsm.SetBatch([]*kv.Entry{entry})
 }
 
-// SetBatch atomically writes a batch of entries into one memtable WAL record.
-//
-// The batch is treated as an indivisible unit: either the entire batch is
-// accepted by the active memtable (after at most one rotation), or the call
-// fails. Batches larger than MemTableSize are rejected with ErrTxnTooBig.
-// Every entry key in the batch must be an InternalKey.
+// SetBatch atomically writes a batch of entries into shard 0's WAL record.
+// Used by non-pipeline callers (admin tools, recovery glue, tests).
 func (lsm *LSM) SetBatch(entries []*kv.Entry) error {
 	if len(entries) == 0 {
 		return nil
 	}
-	_, err := lsm.SetBatchGroup([][]*kv.Entry{entries})
+	_, err := lsm.SetBatchGroup(0, [][]*kv.Entry{entries})
 	return err
 }
 
-// SetBatchGroup writes multiple atomic batches through one LSM apply pass.
+// SetBatchGroup writes multiple atomic batches into the WAL+memtable of the
+// specified shard.
 //
-// Each inner batch remains indivisible: rotation may split between batches, but
-// never inside one batch. The returned failedAt is the first batch index that
-// was not applied, or -1 on success.
-func (lsm *LSM) SetBatchGroup(groups [][]*kv.Entry) (int, error) {
+// Each inner batch remains indivisible: rotation may split between batches,
+// but never inside one batch. The returned failedAt is the first batch index
+// that was not applied, or -1 on success. Routing is the caller's choice —
+// commit-worker affinity preserves SetBatch atomicity (see
+// docs/notes/2026-04-26-lsm-data-plane-sharding-design.md §2.2).
+func (lsm *LSM) SetBatchGroup(shardID int, groups [][]*kv.Entry) (int, error) {
 	if len(groups) == 0 {
 		return -1, nil
+	}
+	if shardID < 0 || shardID >= len(lsm.shards) {
+		return 0, fmt.Errorf("lsm: shardID %d out of range [0,%d)", shardID, len(lsm.shards))
 	}
 	if err := lsm.prepareWrite(); err != nil {
 		return 0, err
@@ -572,8 +605,12 @@ func (lsm *LSM) SetBatchGroup(groups [][]*kv.Entry) (int, error) {
 	if len(batches) == 0 {
 		return -1, nil
 	}
-	return lsm.applyWriteBatches(batches)
+	return lsm.applyWriteBatches(lsm.shards[shardID], batches)
 }
+
+// ShardCount exposes the number of LSM data shards. Commit dispatchers
+// use this to size their per-shard fan-out.
+func (lsm *LSM) ShardCount() int { return lsm.shardCount() }
 
 // Get returns the newest visible entry for key.
 // key must be an InternalKey.
@@ -607,21 +644,37 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 		return lsm.checkRangeTombstone(cf, userKey, entry.Version, tables)
 	}
 
+	// With multiple shards each memtable is an independent timeline; the
+	// same userKey may live on more than one shard at different versions.
+	// Walk every memtable and keep the highest-version hit so MVCC reads
+	// see the most recent write regardless of which shard accepted it.
+	var best *kv.Entry
 	for _, mt := range tables {
 		if mt == nil {
 			continue
 		}
-		entry, err := mt.Get(key)
-		if isMemHit(entry) {
-			if isCovered(entry) {
+		entry, _ := mt.Get(key)
+		if !isMemHit(entry) {
+			if entry != nil {
 				entry.DecrRef()
-				return nil, utils.ErrKeyNotFound
 			}
-			return entry, err
+			continue
 		}
-		if entry != nil {
+		if best == nil || entry.Version > best.Version {
+			if best != nil {
+				best.DecrRef()
+			}
+			best = entry
+		} else {
 			entry.DecrRef()
 		}
+	}
+	if best != nil {
+		if isCovered(best) {
+			best.DecrRef()
+			return nil, utils.ErrKeyNotFound
+		}
+		return best, nil
 	}
 	// query from the levels runtime
 	entry, err := lsm.levels.Get(key)
@@ -635,60 +688,85 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 	return entry, nil
 }
 
-// MemSize returns the current active memtable memory usage.
+// MemSize returns the active memtable memory usage summed across shards.
 func (lsm *LSM) MemSize() int64 {
-	return lsm.memTable.Size()
-}
-
-// memTableIsNil reports whether the active memtable pointer is unset.
-func (lsm *LSM) memTableIsNil() bool {
-	return lsm.memTable == nil
-}
-
-// Rotate seals the active memtable, creates a new one, and schedules flush.
-func (lsm *LSM) Rotate() error {
-	lsm.lock.Lock()
-	old, err := lsm.rotateLocked()
-	lsm.lock.Unlock()
-	if err != nil {
-		return err
+	var total int64
+	for _, s := range lsm.shards {
+		s.lock.RLock()
+		if s.memTable != nil {
+			total += s.memTable.Size()
+		}
+		s.lock.RUnlock()
 	}
-	return lsm.submitFlush(old)
+	return total
 }
 
-// rotateLocked swaps the active memtable; caller must hold lsm.lock.
-func (lsm *LSM) rotateLocked() (*memTable, error) {
-	old := lsm.memTable
-	next, err := lsm.NewMemtable()
+// memTableIsNil reports whether any shard has a nil active memtable.
+func (lsm *LSM) memTableIsNil() bool {
+	for _, s := range lsm.shards {
+		s.lock.RLock()
+		nilMT := s.memTable == nil
+		s.lock.RUnlock()
+		if nilMT {
+			return true
+		}
+	}
+	return false
+}
+
+// Rotate seals every shard's active memtable, creates fresh ones, and
+// schedules each old memtable for flush.
+func (lsm *LSM) Rotate() error {
+	for _, s := range lsm.shards {
+		s.lock.Lock()
+		old, err := lsm.rotateShardLocked(s)
+		s.lock.Unlock()
+		if err != nil {
+			return err
+		}
+		if err := lsm.submitFlush(old); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// rotateShardLocked swaps the shard's active memtable; caller must hold s.lock.
+func (lsm *LSM) rotateShardLocked(s *lsmShard) (*memTable, error) {
+	old := s.memTable
+	next, err := lsm.newMemtableForShard(s)
 	if err != nil {
 		return nil, err
 	}
-	lsm.immutables = append(lsm.immutables, old)
-	lsm.memTable = next
+	s.immutables = append(s.immutables, old)
+	s.memTable = next
 	return old, nil
 }
 
-// getMemTables pins active+immutable memtables and returns an unlock callback.
+// getMemTables pins active+immutable memtables across all shards and returns
+// an unlock callback. Newest-first ordering within each shard is preserved
+// (active memtable, then immutables in reverse insertion order). Callers
+// that need MVCC ordering across shards rely on internal-key timestamps.
 func (lsm *LSM) getMemTables() ([]*memTable, func()) {
-	lsm.lock.RLock()
-	defer lsm.lock.RUnlock()
-
 	var tables []*memTable
-
-	tables = append(tables, lsm.memTable)
-	lsm.memTable.IncrRef()
-
-	last := len(lsm.immutables) - 1
-	for i := range lsm.immutables {
-		tables = append(tables, lsm.immutables[last-i])
-		lsm.immutables[last-i].IncrRef()
+	for _, s := range lsm.shards {
+		s.lock.RLock()
+		if s.memTable != nil {
+			tables = append(tables, s.memTable)
+			s.memTable.IncrRef()
+		}
+		last := len(s.immutables) - 1
+		for i := range s.immutables {
+			tables = append(tables, s.immutables[last-i])
+			s.immutables[last-i].IncrRef()
+		}
+		s.lock.RUnlock()
 	}
 	return tables, func() {
 		for _, tbl := range tables {
 			tbl.DecrRef()
 		}
 	}
-
 }
 
 func (lsm *LSM) submitFlush(mt *memTable) error {
@@ -727,14 +805,16 @@ func (lsm *LSM) startFlushWorkers(n int) {
 						return
 					}
 					lsm.flushQueue.markInstalled(task)
-					lsm.lock.Lock()
-					for idx, imm := range lsm.immutables {
-						if imm == mt {
-							lsm.immutables = append(lsm.immutables[:idx], lsm.immutables[idx+1:]...)
-							break
+					if s := lsm.shardOf(mt); s != nil {
+						s.lock.Lock()
+						for idx, imm := range s.immutables {
+							if imm == mt {
+								s.immutables = append(s.immutables[:idx], s.immutables[idx+1:]...)
+								break
+							}
 						}
+						s.lock.Unlock()
 					}
-					lsm.lock.Unlock()
 					_ = mt.close()
 					lsm.flushQueue.markDone(task)
 				}()

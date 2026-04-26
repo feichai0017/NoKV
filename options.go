@@ -22,6 +22,11 @@ const (
 	defaultCommitWorkers           = 1
 	defaultWriteBatchMaxSize int64 = 1 << 20
 	defaultThermosTopK             = 16
+	// defaultLSMShardCount is the number of WAL Manager + memtable pairs
+	// that back the LSM data plane. Each shard runs on its own fd, fsync
+	// worker, and bufio.Writer so writes do not contend on a single
+	// Manager.mu. Must be a power of two.
+	defaultLSMShardCount = 4
 )
 
 // Options holds the top-level database configuration.
@@ -124,8 +129,15 @@ type Options struct {
 	// CommitWorkers is the number of parallel processor goroutines downstream
 	// of the commit dispatcher. A single dispatcher continues to own the MPSC
 	// queue consumer and fans batches out to N workers. Zero or negative falls
-	// back to a single processor (legacy behavior).
+	// back to a single processor (legacy behavior). When the LSM data plane
+	// is sharded, CommitWorkers is coupled to LSMShardCount so each worker is
+	// pinned to one shard (preserves SetBatch atomicity).
 	CommitWorkers int
+	// LSMShardCount is the number of WAL Manager + memtable pairs that back
+	// the LSM data plane. Must be a power of two. Zero falls back to the
+	// constructor default. See
+	// docs/notes/2026-04-26-lsm-data-plane-sharding-design.md.
+	LSMShardCount int
 	ManifestSync  bool
 	// ManifestRewriteThreshold triggers a manifest rewrite when the active
 	// MANIFEST file grows beyond this size (bytes). Values <= 0 disable rewrites.
@@ -306,6 +318,7 @@ func NewDefaultOptions() *Options {
 		WriteBatchMaxCount:            defaultWriteBatchMaxCount,
 		WriteBatchMaxSize:             defaultWriteBatchMaxSize,
 		CommitWorkers:                 defaultCommitWorkers,
+		LSMShardCount:                 defaultLSMShardCount,
 		MaxBatchCount:                 defaultWriteBatchMaxCount,
 		MaxBatchSize:                  defaultWriteBatchMaxSize,
 		BlockCacheBytes:               lsmpkg.DefaultBlockCacheBytes,
@@ -394,6 +407,18 @@ func (opt *Options) resolveOpenDefaults() {
 	opt.normalizeLSMSharedOptions()
 	if opt.WALBufferSize <= 0 {
 		opt.WALBufferSize = wal.DefaultBufferSize
+	}
+	if opt.LSMShardCount <= 0 {
+		opt.LSMShardCount = defaultLSMShardCount
+	}
+	// Power-of-two so the eventual hash routing can use & (N-1).
+	if opt.LSMShardCount&(opt.LSMShardCount-1) != 0 {
+		// Round down to nearest power of two; never zero.
+		n := 1
+		for n*2 <= opt.LSMShardCount {
+			n *= 2
+		}
+		opt.LSMShardCount = n
 	}
 }
 

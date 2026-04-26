@@ -97,7 +97,14 @@ func openTestDB(t testing.TB, opt *Options) *DB {
 
 func TestColumnFamilies(t *testing.T) {
 	clearDir()
-	db := openTestDB(t, opt)
+	// This test writes the same userKey twice with the same version
+	// (nonTxnMaxVersion) and relies on later-write-wins semantics. With
+	// multiple LSM shards and round-robin batch routing the two writes
+	// land in different memtables with no MVCC tiebreaker. Pin to one
+	// shard so the test's same-version semantics hold.
+	pinned := *opt
+	pinned.LSMShardCount = 1
+	db := openTestDB(t, &pinned)
 	defer func() { _ = db.Close() }()
 
 	key := []byte("user-key")
@@ -1365,7 +1372,7 @@ func TestApplyRequestsFailureIndex(t *testing.T) {
 		},
 	}
 
-	failedAt, err := db.applyRequests(reqs)
+	failedAt, err := db.applyRequests(reqs, 0)
 	require.Equal(t, 1, failedAt)
 	require.Error(t, err)
 
@@ -1395,7 +1402,7 @@ func TestApplyRequestsInlineRequestWithoutPtrs(t *testing.T) {
 		},
 	}
 
-	failedAt, err := db.applyRequests(reqs)
+	failedAt, err := db.applyRequests(reqs, 0)
 	require.Equal(t, -1, failedAt)
 	require.NoError(t, err)
 
@@ -1426,13 +1433,13 @@ func TestApplyRequestsCoalescesCommitBatchIntoOneLSMRecord(t *testing.T) {
 		{Entries: []*kv.Entry{second}},
 	}
 
-	failedAt, err := db.applyRequests(reqs)
+	failedAt, err := db.applyRequests(reqs, 0)
 	require.Equal(t, -1, failedAt)
 	require.NoError(t, err)
 
 	var batchRecords int
 	var decoded int
-	err = db.wal.Replay(func(info wal.EntryInfo, payload []byte) error {
+	err = db.lsmWALs[0].Replay(func(info wal.EntryInfo, payload []byte) error {
 		if info.Type != wal.RecordTypeEntryBatch {
 			return nil
 		}
@@ -1598,7 +1605,12 @@ func drSimulateCrash(t *testing.T, db *DB) {
 			_ = mgr.Close()
 		}
 	}
-	_ = db.wal.Close()
+	for i, mgr := range db.lsmWALs {
+		if mgr != nil {
+			_ = mgr.Close()
+			db.lsmWALs[i] = nil
+		}
+	}
 	if db.dirLock != nil {
 		_ = db.dirLock.Close()
 		db.dirLock = nil
@@ -1620,7 +1632,7 @@ func drRequireNotFound(t *testing.T, db *DB, key []byte) {
 
 func drFirstWALSegmentPath(t *testing.T, dir string) string {
 	t.Helper()
-	files, err := filepath.Glob(filepath.Join(dir, "*.wal"))
+	files, err := filepath.Glob(filepath.Join(dir, "lsm-wal-*", "*.wal"))
 	require.NoError(t, err)
 	require.NotEmpty(t, files, "expected at least one wal segment")
 	return files[0]
@@ -2130,6 +2142,9 @@ func TestRecoveryWALReplayTruncatedTailBatchIsNotPartiallyApplied(t *testing.T) 
 		opt := newTestOptions(t)
 		opt.WorkDir = dir
 		opt.MemTableEngine = engine
+		// Both writes need to land in one WAL so the truncation hits the
+		// batch tail rather than orphaning the anchor on a peer shard.
+		opt.LSMShardCount = 1
 
 		db := openTestDB(t, opt)
 		require.NoError(t, db.Set([]byte("anchor"), []byte("ok")))
@@ -2195,7 +2210,8 @@ func TestRecoveryVlogPointerRoundTripAfterReopen(t *testing.T) {
 
 func TestCloseAggregatesWalAndDirLockErrors(t *testing.T) {
 	dir := t.TempDir()
-	walPath := filepath.Join(dir, "00001.wal")
+	// Inject the fault on shard 0's WAL — the only one Set() touches.
+	walPath := filepath.Join(dir, "lsm-wal-00", "00001.wal")
 	walSyncErr := errors.New("wal sync close error")
 	dirCloseErr := errors.New("dir lock close error")
 	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
@@ -2227,7 +2243,8 @@ func TestCloseAggregatesWalAndDirLockErrors(t *testing.T) {
 
 func TestFaultFSWriteFailureThenRecoverableReopen(t *testing.T) {
 	dir := t.TempDir()
-	walPath := filepath.Join(dir, "00001.wal")
+	// Set("first") routes to shard 0; inject the fault there.
+	walPath := filepath.Join(dir, "lsm-wal-00", "00001.wal")
 	injected := errors.New("wal write injected")
 	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
 		vfs.FailOnceRule(vfs.OpFileWrite, walPath, injected),
@@ -2272,7 +2289,7 @@ func TestRecoveryTruncateFailureThenSucceedsWithHealthyFS(t *testing.T) {
 	faultFS := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
 		vfs.FailOnceRule(vfs.OpFileTrunc, seg, truncErr),
 	))
-	err := wal.VerifyDir(dir, faultFS)
+	err := wal.VerifyDir(filepath.Dir(seg), faultFS)
 	require.ErrorIs(t, err, truncErr)
 
 	db = openTestDB(t, opt)
@@ -2424,7 +2441,7 @@ func TestSyncPipelineWALConsistency(t *testing.T) {
 	value := []byte("hello-sync-pipeline")
 
 	readWALFiles := func(dir string) []byte {
-		matches, err := filepath.Glob(filepath.Join(dir, "*.wal"))
+		matches, err := filepath.Glob(filepath.Join(dir, "lsm-wal-*", "*.wal"))
 		require.NoError(t, err)
 		var all []byte
 		for _, f := range matches {
@@ -2603,7 +2620,9 @@ func TestRaftLogUsesShardedWAL(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, storage.Append([]myraft.Entry{{Index: 1, Term: 1, Data: []byte("raft")}}))
 
-	require.Equal(t, uint64(0), db.wal.Metrics().RecordCounts.RaftEntries)
+	for _, mgr := range db.lsmWALs {
+		require.Equal(t, uint64(0), mgr.Metrics().RecordCounts.RaftEntries)
+	}
 	shard := raftWALShard(9)
 	matches, err := filepath.Glob(filepath.Join(dir, fmt.Sprintf("raft-wal-%02d", shard), "*.wal"))
 	require.NoError(t, err)

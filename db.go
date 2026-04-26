@@ -36,7 +36,17 @@ import (
 // Non-transactional writes use monotonic versions <= this sentinel.
 const nonTxnMaxVersion = kv.MaxVersion
 
-const defaultRaftWALShards = 8
+// defaultRaftWALShards controls the number of WAL Manager instances that
+// back the raft control-plane fan-out. Each shard is one fd + one fsync
+// worker + one bufio.Writer, so the count is a tradeoff between fd cost
+// and per-Manager.mu contention. Must be a power of two — raftWALShard
+// uses `& (N-1)` for placement.
+//
+// Total Manager budget under the LSM data-plane sharding plan
+// (see docs/notes/2026-04-26-lsm-data-plane-sharding-design.md):
+// 4 raft + 4 LSM data = 8 Managers. There is no separate control-plane
+// Manager — db.wal is dissolved into the LSM shards.
+const defaultRaftWALShards = 4
 
 type (
 	// BatchSetItem represents one non-transactional write in the default CF.
@@ -70,7 +80,12 @@ type (
 		fs              vfs.FS
 		dirLock         io.Closer
 		lsm             *lsm.LSM
-		wal             *wal.Manager
+		// lsmWALs holds one WAL Manager per LSM data-plane shard. The
+		// number of entries is db.opt.LSMShardCount (resolved at Open).
+		// Each Manager has its own fd, fsync worker, and bufio.Writer so
+		// commit workers do not contend on a single Manager.mu.
+		lsmWALs         []*wal.Manager
+		lsmWatchdogs    []*wal.Watchdog
 		raftWALMu       sync.Mutex
 		raftWALs        [defaultRaftWALShards]*wal.Manager
 		raftWatchdogs   [defaultRaftWALShards]*wal.Watchdog
@@ -92,10 +107,12 @@ type (
 		commitQueue     dbruntime.CommitQueue
 		commitWG        sync.WaitGroup
 		commitBatchPool sync.Pool
-		// commitDispatch carries batches from the single MPSC dispatcher to N
-		// commit processors. Closed by the dispatcher when no more batches
-		// will arrive; processors return when the channel drains.
-		commitDispatch  chan *dbruntime.CommitBatch
+		// commitDispatch holds one channel per LSM data-plane shard. The
+		// dispatcher routes each batch to commitDispatch[shardID] so the
+		// processor pinned to that shard sees it. Each channel is closed
+		// by the dispatcher when no more batches will arrive; processors
+		// return when their channel drains.
+		commitDispatch  []chan *dbruntime.CommitBatch
 		syncQueue       chan *dbruntime.SyncBatch
 		syncWG          sync.WaitGroup
 		iterPool        *dbruntime.IteratorPool
@@ -152,16 +169,32 @@ func (db *DB) openDurability() error {
 		return fmt.Errorf("open db: recovery checks: %w", err)
 	}
 
-	wlog, err := wal.Open(wal.Config{
-		Dir:        db.opt.WorkDir,
-		BufferSize: db.opt.WALBufferSize,
-		FS:         db.fs,
-	})
-	if err != nil {
-		return fmt.Errorf("open db: wal open: %w", err)
+	n := db.opt.LSMShardCount
+	if n <= 0 {
+		return fmt.Errorf("open db: LSMShardCount must be > 0")
 	}
-	db.wal = wlog
+	db.lsmWALs = make([]*wal.Manager, n)
+	for shard := 0; shard < n; shard++ {
+		dir := db.lsmWALDir(shard)
+		if err := db.fs.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("open db: ensure lsm wal dir %d: %w", shard, err)
+		}
+		mgr, err := wal.Open(wal.Config{
+			Dir:        dir,
+			BufferSize: db.opt.WALBufferSize,
+			FS:         db.fs,
+		})
+		if err != nil {
+			return fmt.Errorf("open db: lsm wal shard %d: %w", shard, err)
+		}
+		db.lsmWALs[shard] = mgr
+	}
 	return nil
+}
+
+// lsmWALDir returns the per-shard WAL directory for the LSM data plane.
+func (db *DB) lsmWALDir(shard int) string {
+	return filepath.Join(db.opt.WorkDir, fmt.Sprintf("lsm-wal-%02d", shard))
 }
 
 func raftRetentionMark(ptrs map[uint64]localmeta.RaftLogPointer) wal.RetentionMark {
@@ -198,7 +231,7 @@ func (db *DB) checkWorkDirMode() error {
 }
 
 func (db *DB) openEngine() error {
-	lsmCore, err := lsm.NewLSM(db.runtimeLSMOptions(), db.wal)
+	lsmCore, err := lsm.NewLSM(db.runtimeLSMOptions(), db.lsmWALs)
 	if err != nil {
 		return fmt.Errorf("open db: lsm init: %w", err)
 	}
@@ -221,14 +254,19 @@ func (db *DB) startWriteRuntime() {
 		db.syncWG.Add(1)
 		go db.syncWorker()
 	}
-	workers := db.opt.CommitWorkers
+	// One commit processor per LSM data-plane shard. Each processor owns
+	// its shard's WAL Manager — no cross-shard sharing means no Manager.mu
+	// contention on the hot write path. Dispatcher fans batches out
+	// round-robin so each batch lives on exactly one shard
+	// (commit-worker affinity preserves SetBatch atomicity).
+	workers := db.opt.LSMShardCount
 	if workers <= 0 {
 		workers = 1
 	}
-	// Buffered channel sized to the number of processors so the dispatcher
-	// rarely stalls and processors rarely starve; the dispatcher always sees
-	// a slot once any processor has finished a batch.
-	db.commitDispatch = make(chan *dbruntime.CommitBatch, workers*2)
+	db.commitDispatch = make([]chan *dbruntime.CommitBatch, workers)
+	for i := 0; i < workers; i++ {
+		db.commitDispatch[i] = make(chan *dbruntime.CommitBatch, 2)
+	}
 
 	db.commitWG.Add(1)
 	go db.commitDispatcher()
@@ -350,7 +388,7 @@ func raftRetentionMarkForShard(ptrs map[uint64]localmeta.RaftLogPointer, shard i
 
 // RaftLog returns the raft peer-storage capability backed by sharded raft WALs.
 func (db *DB) RaftLog() RaftLog {
-	if db == nil || db.wal == nil {
+	if db == nil || len(db.lsmWALs) == 0 {
 		return nil
 	}
 	return dbRaftLog{db: db}
@@ -379,17 +417,24 @@ func Open(opt *Options) (_ *DB, err error) {
 		return nil, err
 	}
 	db.startWriteRuntime()
-	db.background.Start(dbruntime.BackgroundConfig{
-		StartCompacter:    db.lsm.StartCompacter,
-		EnableWALWatchdog: db.opt.EnableWALWatchdog,
-		WALWatchdogConfig: wal.WatchdogConfig{
-			Manager:      db.wal,
+	watchdogConfigs := make([]wal.WatchdogConfig, 0, len(db.lsmWALs))
+	for _, mgr := range db.lsmWALs {
+		if mgr == nil {
+			continue
+		}
+		watchdogConfigs = append(watchdogConfigs, wal.WatchdogConfig{
+			Manager:      mgr,
 			Interval:     db.opt.WALAutoGCInterval,
 			MinRemovable: db.opt.WALAutoGCMinRemovable,
 			MaxBatch:     db.opt.WALAutoGCMaxBatch,
 			WarnRatio:    db.opt.WALTypedRecordWarnRatio,
 			WarnSegments: db.opt.WALTypedRecordWarnSegments,
-		},
+		})
+	}
+	db.background.Start(dbruntime.BackgroundConfig{
+		StartCompacter:     db.lsm.StartCompacter,
+		EnableWALWatchdog:  db.opt.EnableWALWatchdog,
+		WALWatchdogConfigs: watchdogConfigs,
 		StartValueLogGC: func() {
 			if db.opt.ValueLogGCInterval > 0 {
 				if db.vlog != nil && db.vlog.lfDiscardStats != nil && db.vlog.lfDiscardStats.closer != nil {
@@ -494,11 +539,20 @@ func (db *DB) closeInternal() error {
 		errs = append(errs, err)
 	}
 
-	if db.wal != nil {
-		if err := db.wal.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("wal close: %w", err))
+	for shard, wd := range db.lsmWatchdogs {
+		if wd != nil {
+			wd.Stop()
+			db.lsmWatchdogs[shard] = nil
 		}
-		db.wal = nil
+	}
+	for shard, mgr := range db.lsmWALs {
+		if mgr == nil {
+			continue
+		}
+		if err := mgr.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("lsm wal shard %d close: %w", shard, err))
+		}
+		db.lsmWALs[shard] = nil
 	}
 
 	if db.dirLock != nil {
@@ -969,18 +1023,41 @@ func (db *DB) SetRegionMetrics(rm *metrics.RegionMetrics) {
 	db.background.SetRegionMetrics(rm)
 }
 
+// SyncWAL fans an fsync across every LSM data-plane WAL Manager. Used by
+// administrative durability calls; the hot write path syncs only the
+// shard the commit processor is pinned to.
 func (db *DB) SyncWAL() error {
-	if db == nil || db.wal == nil {
+	if db == nil || len(db.lsmWALs) == 0 {
 		return fmt.Errorf("db: wal is unavailable")
 	}
-	return db.wal.Sync()
+	var errs []error
+	for shard, mgr := range db.lsmWALs {
+		if mgr == nil {
+			continue
+		}
+		if err := mgr.Sync(); err != nil {
+			errs = append(errs, fmt.Errorf("lsm wal shard %d sync: %w", shard, err))
+		}
+	}
+	return stderrors.Join(errs...)
 }
 
+// ReplayWAL replays every LSM data-plane WAL Manager in shard order.
+// Cross-shard ordering is not preserved — callers must rely on internal-key
+// MVCC timestamps for record ordering.
 func (db *DB) ReplayWAL(fn func(info wal.EntryInfo, payload []byte) error) error {
-	if db == nil || db.wal == nil {
+	if db == nil || len(db.lsmWALs) == 0 {
 		return fmt.Errorf("db: wal is unavailable")
 	}
-	return db.wal.Replay(fn)
+	for shard, mgr := range db.lsmWALs {
+		if mgr == nil {
+			continue
+		}
+		if err := mgr.Replay(fn); err != nil {
+			return fmt.Errorf("lsm wal shard %d replay: %w", shard, err)
+		}
+	}
+	return nil
 }
 
 // IsClosed reports whether Close has finished and the DB no longer accepts work.
@@ -1185,41 +1262,56 @@ func (db *DB) nextCommitBatch(consumer *utils.MPSCConsumer[*dbruntime.CommitRequ
 }
 
 // commitDispatcher owns the MPSC queue's single consumer slot. It pulls
-// batches off the queue and fans them out to commitDispatch where any of the
-// N processors can pick them up. The dispatcher does no per-batch work
-// itself, so it never bottlenecks on vlog/WAL/applyRequests latency.
+// batches off the queue and routes each to one shard's processor channel
+// using round-robin. The dispatcher does no per-batch work itself, so it
+// never bottlenecks on vlog/WAL/applyRequests latency.
 //
-// On queue close, the dispatcher closes commitDispatch which is the signal
-// for processors to drain remaining batches and return.
+// On queue close, the dispatcher closes every per-shard channel which is
+// the signal for processors to drain remaining batches and return.
 func (db *DB) commitDispatcher() {
 	defer db.commitWG.Done()
 	consumer := db.commitQueue.Consumer()
+	closeAll := func() {
+		for _, ch := range db.commitDispatch {
+			close(ch)
+		}
+	}
 	if consumer == nil {
-		close(db.commitDispatch)
+		closeAll()
 		return
 	}
 	defer consumer.Close()
+	n := len(db.commitDispatch)
+	var rr int
 	for {
 		batch := db.nextCommitBatch(consumer)
 		if batch == nil {
-			close(db.commitDispatch)
+			closeAll()
 			return
 		}
-		db.commitDispatch <- batch
+		shardID := rr
+		rr++
+		if rr >= n {
+			rr = 0
+		}
+		batch.ShardID = shardID
+		db.commitDispatch[shardID] <- batch
 	}
 }
 
 // commitProcessor runs the per-batch CPU pipeline (collect -> vlog write ->
-// applyRequests -> ack) in parallel across multiple goroutines. Each batch
-// is fully owned by the goroutine that pulls it; coordination across
-// processors only happens at the WAL/memtable layers below applyRequests.
+// applyRequests -> ack) for batches pinned to one LSM shard. The processor
+// owns its shard end-to-end: WAL append, memtable apply, and (when sync
+// is inline) WAL fsync all hit one Manager, so there is no Manager.mu
+// contention across processors.
 //
 // SetBatch atomicity is preserved because a single commit request lives in
-// exactly one batch, and that batch is processed end-to-end by one
-// processor.
-func (db *DB) commitProcessor(id int) {
+// exactly one batch, and that batch is pinned to one shard by the
+// dispatcher.
+func (db *DB) commitProcessor(shardID int) {
 	defer db.commitWG.Done()
-	for batch := range db.commitDispatch {
+	walMgr := db.lsmWALs[shardID]
+	for batch := range db.commitDispatch[shardID] {
 		batch.BatchStart = time.Now()
 		requests, totalEntries, totalSize, waitSum := db.collectCommitRequests(batch.Reqs, batch.BatchStart)
 		if len(requests) == 0 {
@@ -1243,12 +1335,13 @@ func (db *DB) commitProcessor(id int) {
 			}
 		}
 
-		failedAt, err := db.applyRequests(batch.Requests)
+		failedAt, err := db.applyRequests(batch.Requests, shardID)
 		if err == nil && db.syncQueue != nil {
 			sb := &dbruntime.SyncBatch{
 				Reqs:      batch.Reqs,
 				Pool:      batch.Pool,
 				Requests:  batch.Requests,
+				ShardID:   shardID,
 				FailedAt:  failedAt,
 				ApplyDone: time.Now(),
 			}
@@ -1261,7 +1354,7 @@ func (db *DB) commitProcessor(id int) {
 
 		if err == nil && db.opt.SyncWrites {
 			syncStart := time.Now()
-			err = db.wal.Sync()
+			err = walMgr.Sync()
 			if db.writeMetrics != nil {
 				db.writeMetrics.RecordSync(time.Since(syncStart), 1)
 			}
@@ -1282,6 +1375,8 @@ func (db *DB) commitProcessor(id int) {
 func (db *DB) syncWorker() {
 	defer db.syncWG.Done()
 	pending := make([]*dbruntime.SyncBatch, 0, 64)
+	// per-shard buckets so one fsync covers many batches on the same WAL
+	buckets := make(map[int][]*dbruntime.SyncBatch, len(db.lsmWALs))
 	for first := range db.syncQueue {
 		pending = append(pending, first)
 	drain:
@@ -1297,15 +1392,32 @@ func (db *DB) syncWorker() {
 			}
 		}
 
+		for _, sb := range pending {
+			buckets[sb.ShardID] = append(buckets[sb.ShardID], sb)
+		}
 		syncStart := time.Now()
-		syncErr := db.wal.Sync()
+		errsByShard := make(map[int]error, len(buckets))
+		for shardID, sbs := range buckets {
+			if len(sbs) == 0 {
+				continue
+			}
+			mgr := db.lsmWALs[shardID]
+			if mgr == nil {
+				errsByShard[shardID] = fmt.Errorf("db: lsm wal shard %d not initialized", shardID)
+				continue
+			}
+			errsByShard[shardID] = mgr.Sync()
+		}
 		if db.writeMetrics != nil {
 			db.writeMetrics.RecordSync(time.Since(syncStart), len(pending))
 		}
 		for _, sb := range pending {
-			db.ackCommitBatch(sb.Reqs, sb.Pool, sb.Requests, sb.FailedAt, syncErr)
+			db.ackCommitBatch(sb.Reqs, sb.Pool, sb.Requests, sb.FailedAt, errsByShard[sb.ShardID])
 		}
 		pending = pending[:0]
+		for k := range buckets {
+			buckets[k] = buckets[k][:0]
+		}
 	}
 }
 
@@ -1377,8 +1489,8 @@ func (db *DB) releaseCommitBatch(batch *dbruntime.CommitBatch) {
 	db.commitBatchPool.Put(batch.Pool)
 }
 
-func (db *DB) applyRequests(reqs []*dbruntime.Request) (int, error) {
-	failedAt, err := db.writeRequestsToLSM(reqs)
+func (db *DB) applyRequests(reqs []*dbruntime.Request, shardID int) (int, error) {
+	failedAt, err := db.writeRequestsToLSM(reqs, shardID)
 	if err != nil {
 		return failedAt, pkgerrors.Wrap(err, "writeRequests")
 	}
@@ -1418,7 +1530,7 @@ func (db *DB) finishCommitRequests(reqs []*dbruntime.CommitRequest, defaultErr e
 	}
 }
 
-func (db *DB) writeRequestsToLSM(reqs []*dbruntime.Request) (int, error) {
+func (db *DB) writeRequestsToLSM(reqs []*dbruntime.Request, shardID int) (int, error) {
 	groups := make([][]*kv.Entry, 0, len(reqs))
 	groupToReq := make([]int, 0, len(reqs))
 	for i, r := range reqs {
@@ -1435,7 +1547,7 @@ func (db *DB) writeRequestsToLSM(reqs []*dbruntime.Request) (int, error) {
 	if len(groups) == 0 {
 		return -1, nil
 	}
-	failedGroup, err := db.lsm.SetBatchGroup(groups)
+	failedGroup, err := db.lsm.SetBatchGroup(shardID, groups)
 	if err != nil {
 		if failedGroup >= 0 && failedGroup < len(groupToReq) {
 			return groupToReq[failedGroup], err

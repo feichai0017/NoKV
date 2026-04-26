@@ -1,7 +1,9 @@
 package ycsb
 
 import (
+	"os"
 	"runtime"
+	"strconv"
 
 	"github.com/cockroachdb/pebble"
 	badger "github.com/dgraph-io/badger/v4"
@@ -107,12 +109,24 @@ func buildNoKVBenchmarkOptions(dir string, opts ycsbEngineOptions, memtable NoKV
 		IndexCacheBytes:     cacheBudgetBytes(indexCacheMB),
 		CompactionPolicy:    compactionPolicy,
 		ValueLogBucketCount: ycsbNoKVValueLogBuckets,
+		LSMShardCount:       ycsbNoKVLSMShards(),
 		WriteBatchWait:      0,
 		WriteHotKeyLimit:    0,
 		EnableWALWatchdog:   false,
 		ValueLogGCInterval:  0,
 		ManifestSync:        false,
 	}
+}
+
+// ycsbNoKVLSMShards reads NOKV_TEST_LSM_SHARDS for ad-hoc sweeps. Zero or
+// invalid falls back to the constructor default (4).
+func ycsbNoKVLSMShards() int {
+	if v := os.Getenv("NOKV_TEST_LSM_SHARDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
 }
 
 // buildBadgerBenchmarkOptions returns an explicit benchmark profile for
