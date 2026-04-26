@@ -14,9 +14,13 @@ Usage: scripts/demo/redis-smoke.sh [options]
 Options:
   --addr HOST:PORT       Redis gateway address (default: 127.0.0.1:6380)
   --timeout SECONDS      Readiness and command timeout (default: 60)
-  --key KEY              Key to write/read (default: unique smoke key)
+  --key KEY              Key prefix to write/read (default: unique smoke key)
   -h, --help             Show this help
 EOF
+}
+
+log() {
+  echo "redis-smoke: $*"
 }
 
 die() {
@@ -60,8 +64,8 @@ PORT=${ADDR##*:}
 if [[ -z "$KEY" ]]; then
   KEY="nokv:smoke:${EPOCHREALTIME:-$(date +%s)}:$$"
 fi
-VALUE="ok:${EPOCHREALTIME:-$(date +%s)}:$$"
 
+log "waiting for $ADDR"
 deadline=$((SECONDS + TIMEOUT))
 while (( SECONDS < deadline )); do
   if (echo >/dev/tcp/"$HOST"/"$PORT") >/dev/null 2>&1; then
@@ -113,17 +117,41 @@ read_bulk() {
   printf '%s' "$data"
 }
 
+key_at() {
+  printf '%s:%02d' "$KEY" "$1"
+}
+
+value_at() {
+  printf 'ok:%s:%02d' "$KEY" "$1"
+}
+
 open_gateway
 trap close_gateway EXIT
 
+log "connected to $ADDR"
+log "PING"
 send_resp PING
 expect_simple PONG
+log "PONG"
 
-send_resp SET "$KEY" "$VALUE"
-expect_simple OK
+log "writing 20 keys with prefix=$KEY"
+for i in $(seq 1 20); do
+  key=$(key_at "$i")
+  value=$(value_at "$i")
+  log "SET $key"
+  send_resp SET "$key" "$value"
+  expect_simple OK
+done
 
-send_resp GET "$KEY"
-actual=$(read_bulk)
-[[ "$actual" == "$VALUE" ]] || die "GET $KEY mismatch: expected $VALUE, got $actual"
+log "reading 5 sample keys"
+for i in 1 5 10 15 20; do
+  key=$(key_at "$i")
+  expected=$(value_at "$i")
+  log "GET $key"
+  send_resp GET "$key"
+  actual=$(read_bulk)
+  [[ "$actual" == "$expected" ]] || die "GET $key mismatch: expected $expected, got $actual"
+  log "OK $key=$actual"
+done
 
-echo "redis-smoke: ok key=$KEY value=$VALUE addr=$ADDR"
+log "ok wrote=20 read=5 prefix=$KEY addr=$ADDR"
