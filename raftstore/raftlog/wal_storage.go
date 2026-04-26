@@ -71,10 +71,15 @@ func OpenWALStorage(cfg WALStorageConfig) (*WALStorage, error) {
 
 	var replayPtr localmeta.RaftLogPointer
 
-	if err := cfg.WAL.Replay(func(info wal.EntryInfo, payload []byte) error {
+	if err := cfg.WAL.ReplayFiltered(func(info wal.EntryInfo) bool {
 		switch info.Type {
-		case wal.RecordTypeEntry:
-			return nil
+		case wal.RecordTypeRaftEntry, wal.RecordTypeRaftState, wal.RecordTypeRaftSnapshot:
+			return info.GroupID == cfg.GroupID
+		default:
+			return false
+		}
+	}, func(info wal.EntryInfo, payload []byte) error {
+		switch info.Type {
 		case wal.RecordTypeRaftEntry:
 			gid, entries, err := decodeRaftEntries(payload)
 			if err != nil {

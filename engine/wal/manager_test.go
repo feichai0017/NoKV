@@ -212,6 +212,50 @@ func TestManagerReplayRebuildsStaleCatalog(t *testing.T) {
 	}
 }
 
+func TestManagerReplayFilteredSkipsUnmatchedCatalogRecords(t *testing.T) {
+	dir := t.TempDir()
+	m, err := wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	groupPayload := func(groupID uint64, suffix byte) []byte {
+		var buf [binary.MaxVarintLen64 + 1]byte
+		n := binary.PutUvarint(buf[:], groupID)
+		out := append([]byte(nil), buf[:n]...)
+		return append(out, suffix)
+	}
+	if _, err := m.AppendRecords(wal.DurabilityBuffered,
+		wal.Record{Type: wal.RecordTypeRaftEntry, Payload: groupPayload(1, 'a')},
+		wal.Record{Type: wal.RecordTypeRaftEntry, Payload: groupPayload(2, 'b')},
+	); err != nil {
+		t.Fatalf("append records: %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	m, err = wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen wal: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	var got []uint64
+	if err := m.ReplayFiltered(func(info wal.EntryInfo) bool {
+		return info.Type == wal.RecordTypeRaftEntry && info.GroupID == 2
+	}, func(info wal.EntryInfo, _ []byte) error {
+		got = append(got, info.GroupID)
+		return nil
+	}); err != nil {
+		t.Fatalf("filtered replay: %v", err)
+	}
+	if len(got) != 1 || got[0] != 2 {
+		t.Fatalf("unexpected filtered groups: %v", got)
+	}
+}
+
 func TestManagerRemoveSegmentRemovesCatalog(t *testing.T) {
 	dir := t.TempDir()
 	m, err := wal.Open(wal.Config{Dir: dir})
