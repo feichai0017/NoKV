@@ -582,3 +582,24 @@ func TestRunCompactDefIngestKeepDecrementsTopOnce(t *testing.T) {
 		}
 	}
 }
+
+// TestStateIntraLevelEntryDeletesCleanly verifies the state machine round
+// trip for an IntraLevel entry: CompareAndAdd succeeds, Delete undoes the
+// table claims and does NOT panic on missing range bookkeeping. IntraLevel
+// is the marker used by L0→L0 compactions to claim by table id only.
+func TestStateIntraLevelEntryDeletesCleanly(t *testing.T) {
+	state := NewState(8)
+	entry := StateEntry{
+		ThisLevel:  0,
+		NextLevel:  0,
+		TableIDs:   []uint64{1, 2, 3, 4},
+		IntraLevel: true,
+	}
+	require.True(t, state.CompareAndAdd(LevelsLocked{}, entry))
+	require.True(t, state.HasTable(1))
+	require.True(t, state.HasTable(4))
+	require.False(t, state.HasTable(99))
+	require.NoError(t, state.Delete(entry))
+	require.False(t, state.HasTable(1))
+	require.False(t, state.HasTable(4))
+}

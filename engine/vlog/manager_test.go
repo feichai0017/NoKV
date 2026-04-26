@@ -370,3 +370,83 @@ func TestManagerSegmentOps(t *testing.T) {
 		t.Fatalf("expected error for missing fid")
 	}
 }
+
+// TestManagerConcurrentAppendReadAfterWrite is a Phase 0a regression for
+// the LogFile.Write high-water race fixed in 2026-04-27. With reserve()
+// handing out non-overlapping offset ranges followed by store.Lock-
+// serialized Writes, the writer with the smaller reservation could
+// previously rewind lf.size below an already-published pointer, causing
+// the immediate Read here to return io.EOF.
+//
+// Invariant V1 (slab-substrate note §3.4): once AppendEntries returns
+// successfully, every published pointer in the result must be Read-able
+// — even under concurrent appenders racing for store.Lock.
+func TestManagerConcurrentAppendReadAfterWrite(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := Open(Config{Dir: dir, MaxSize: 64 << 20})
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	const (
+		appenders   = 16
+		batchesEach = 64
+		entriesEach = 8
+		payloadSize = 1024
+	)
+
+	type result struct {
+		err error
+	}
+	done := make(chan result, appenders)
+
+	for w := range appenders {
+		go func(workerID int) {
+			value := make([]byte, payloadSize)
+			for i := range value {
+				value[i] = byte((workerID*7 + i) & 0xff)
+			}
+			for b := range batchesEach {
+				entries := make([]*kv.Entry, entriesEach)
+				for i := range entries {
+					key := []byte{byte(workerID), byte(b), byte(i)}
+					entries[i] = kv.NewEntry(key, value)
+				}
+				ptrs, err := mgr.AppendEntries(entries, nil)
+				if err != nil {
+					done <- result{err: err}
+					return
+				}
+				// Read every just-published pointer immediately. Any EOF
+				// here means the writer with our offset range finished
+				// after a writer with a larger offset, and the plain
+				// Store rewound lf.size below our published end.
+				for i := range ptrs {
+					raw, release, err := mgr.Read(&ptrs[i])
+					if err != nil {
+						done <- result{err: err}
+						return
+					}
+					got, _, derr := kv.DecodeValueSlice(raw)
+					release()
+					if derr != nil {
+						done <- result{err: derr}
+						return
+					}
+					if len(got) != payloadSize {
+						done <- result{err: errors.New("payload length mismatch after concurrent append")}
+						return
+					}
+				}
+			}
+			done <- result{err: nil}
+		}(w)
+	}
+
+	for range appenders {
+		if r := <-done; r.err != nil {
+			t.Fatalf("worker error: %v", r.err)
+		}
+	}
+}

@@ -687,13 +687,21 @@ func (r KeyRange) OverlapsWith(dst KeyRange) bool {
 }
 
 // StateEntry captures the metadata tracked during compaction scheduling.
+//
+// IntraLevel marks the entry as a within-level compaction (e.g. L0→L0) that
+// claims its input by table ID only and does NOT register a key range with
+// the level. This lets multiple workers run concurrent intra-level
+// compactions on disjoint table sets even when the picked SSTs have
+// overlapping keyranges (the common case for L0 random writes). Inter-level
+// compactions (L0→Lbase, Ln→Ln+1) keep the original range-based locking.
 type StateEntry struct {
-	ThisLevel int
-	NextLevel int
-	ThisRange KeyRange
-	NextRange KeyRange
-	ThisSize  int64
-	TableIDs  []uint64
+	ThisLevel  int
+	NextLevel  int
+	ThisRange  KeyRange
+	NextRange  KeyRange
+	ThisSize   int64
+	TableIDs   []uint64
+	IntraLevel bool
 }
 
 // LevelsLocked is a marker to indicate level locks are held by the caller.
@@ -777,6 +785,9 @@ func (cs *State) AddRangeWithTables(level int, kr KeyRange, tableIDs []uint64) {
 }
 
 // Delete clears state for a completed compaction.
+//
+// IntraLevel entries (L0→L0) only registered table IDs, so Delete only
+// undoes the table claims and skips the range bookkeeping.
 func (cs *State) Delete(entry StateEntry) error {
 	cs.Lock()
 	defer cs.Unlock()
@@ -791,28 +802,30 @@ func (cs *State) Delete(entry StateEntry) error {
 	thisLevel := cs.levels[entry.ThisLevel]
 	nextLevel := cs.levels[entry.NextLevel]
 
-	// Validate all affected ranges first so Delete remains atomic on error.
-	found := thisLevel.contains(entry.ThisRange)
-	if entry.ThisLevel != entry.NextLevel && !entry.NextRange.IsEmpty() {
-		found = nextLevel.contains(entry.NextRange) && found
-	}
-	if !found {
-		return fmt.Errorf(
-			"compact state delete: keyRange not found; this=%s thisLevel=%d thisState=%s next=%s nextLevel=%d nextState=%s",
-			entry.ThisRange,
-			entry.ThisLevel,
-			thisLevel.debug(),
-			entry.NextRange,
-			entry.NextLevel,
-			nextLevel.debug(),
-		)
+	if !entry.IntraLevel {
+		// Validate all affected ranges first so Delete remains atomic on error.
+		found := thisLevel.contains(entry.ThisRange)
+		if entry.ThisLevel != entry.NextLevel && !entry.NextRange.IsEmpty() {
+			found = nextLevel.contains(entry.NextRange) && found
+		}
+		if !found {
+			return fmt.Errorf(
+				"compact state delete: keyRange not found; this=%s thisLevel=%d thisState=%s next=%s nextLevel=%d nextState=%s",
+				entry.ThisRange,
+				entry.ThisLevel,
+				thisLevel.debug(),
+				entry.NextRange,
+				entry.NextLevel,
+				nextLevel.debug(),
+			)
+		}
+		_ = thisLevel.remove(entry.ThisRange)
+		if entry.ThisLevel != entry.NextLevel && !entry.NextRange.IsEmpty() {
+			_ = nextLevel.remove(entry.NextRange)
+		}
 	}
 
 	thisLevel.delSize -= entry.ThisSize
-	_ = thisLevel.remove(entry.ThisRange)
-	if entry.ThisLevel != entry.NextLevel && !entry.NextRange.IsEmpty() {
-		_ = nextLevel.remove(entry.NextRange)
-	}
 
 	for _, fid := range entry.TableIDs {
 		_, ok := cs.tables[fid]
@@ -825,6 +838,11 @@ func (cs *State) Delete(entry StateEntry) error {
 }
 
 // CompareAndAdd reserves ranges and table IDs if they do not overlap.
+//
+// IntraLevel entries (L0→L0) skip range overlap checks entirely and only
+// claim by table ID — multiple concurrent within-level compactions are
+// safe as long as their table sets are disjoint (which the picker
+// guarantees via state.HasTable).
 func (cs *State) CompareAndAdd(_ LevelsLocked, entry StateEntry) bool {
 	cs.Lock()
 	defer cs.Unlock()
@@ -839,15 +857,19 @@ func (cs *State) CompareAndAdd(_ LevelsLocked, entry StateEntry) bool {
 	thisLevel := cs.levels[entry.ThisLevel]
 	nextLevel := cs.levels[entry.NextLevel]
 
-	if thisLevel.overlapsWith(entry.ThisRange) {
-		return false
+	if !entry.IntraLevel {
+		if thisLevel.overlapsWith(entry.ThisRange) {
+			return false
+		}
+		if nextLevel.overlapsWith(entry.NextRange) {
+			return false
+		}
+		thisLevel.ranges = append(thisLevel.ranges, entry.ThisRange)
+		nextLevel.ranges = append(nextLevel.ranges, entry.NextRange)
 	}
-	if nextLevel.overlapsWith(entry.NextRange) {
-		return false
-	}
-
-	thisLevel.ranges = append(thisLevel.ranges, entry.ThisRange)
-	nextLevel.ranges = append(nextLevel.ranges, entry.NextRange)
+	// Intra-level entries do not register a range — the table-id set is the
+	// only claim. Other workers checking state.HasTable will skip these
+	// tables; range overlap from peer L0→Lbase is correctly NOT blocked.
 	thisLevel.delSize += entry.ThisSize
 	for _, fid := range entry.TableIDs {
 		cs.tables[fid] = struct{}{}

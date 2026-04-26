@@ -43,7 +43,7 @@ const nonTxnMaxVersion = kv.MaxVersion
 // uses `& (N-1)` for placement.
 //
 // Total Manager budget under the LSM data-plane sharding plan
-// (see docs/notes/2026-04-26-lsm-engine-throughput-roadmap.md):
+// (see docs/notes/2026-04-27-sharded-wal-memtable.md):
 // 4 raft + 4 LSM data = 8 Managers. There is no separate control-plane
 // Manager — db.wal is dissolved into the LSM shards.
 const defaultRaftWALShards = 4

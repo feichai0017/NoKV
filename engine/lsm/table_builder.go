@@ -94,7 +94,7 @@ func (tb *tableBuilder) add(e *kv.Entry, valueLen uint32, isStale bool) {
 		tb.finishBlock()
 		// Create a new block and start writing.
 		tb.curBlock = &block{
-			data: make([]byte, tb.opt.BlockSize), // TODO encrypt the block, the size of the block will increase, need to reserve some padding position
+			data: make([]byte, tb.opt.BlockSize),
 		}
 	}
 	// record the hash value of the key
@@ -271,7 +271,6 @@ func (tb *tableBuilder) finishBlock() {
 	tb.finishBlockEncoding(tb.curBlock)
 	tb.estimateSz += int64(tb.curBlock.diskEnd)
 	tb.blockList = append(tb.blockList, tb.curBlock)
-	// TODO: estimate the size of the sst file after the builder is serialized to disk
 	tb.keyCount += uint32(len(tb.curBlock.entryOffsets))
 	tb.curBlock = nil // indicates that the current block has been serialized to memory
 }
@@ -456,7 +455,6 @@ func (tb *tableBuilder) done() (buildData, error) {
 		bits := utils.BloomBitsPerKey(len(tb.prefixHashes), tb.opt.BloomFalsePositive)
 		pf = utils.NewFilter(tb.prefixHashes, bits)
 	}
-	// TODO: build SSTable index more efficiently.
 	// Overall SSTable Binary Format:
 	// +--------------------+--------------------+ ... +--------------------+--------------------+
 	// | Data Block 1       | Data Block 2       |     | Data Block N       | Index Block (Proto)|
@@ -529,7 +527,6 @@ func (b *tableBuilder) writeBlockOffset(bl *block, startOffset uint32) *storagep
 	return offset
 }
 
-// TODO: better estimate builder size before serialization.
 func (b *tableBuilder) ReachedCapacity() bool {
 	return b.estimateSz > b.sstSize
 }

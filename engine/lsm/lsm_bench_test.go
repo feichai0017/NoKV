@@ -806,3 +806,115 @@ func BenchmarkLSMMultiLevelIteratorBoundsPruning(b *testing.B) {
 		})
 	}
 }
+
+// openShardedBenchLSM mirrors openShardHintTestLSM but takes *testing.B and
+// uses a larger memtable so the bench loops do not trigger flush.
+func openShardedBenchLSM(b *testing.B, shardCount int) (*LSM, []*wal.Manager) {
+	b.Helper()
+	dir := b.TempDir()
+	opts := newTestLSMOptions(dir, nil)
+	opts.MemTableSize = 64 << 20
+	wals := make([]*wal.Manager, shardCount)
+	for i := range wals {
+		mgr, err := wal.Open(wal.Config{Dir: dir + fmt.Sprintf("/wal-%02d", i)})
+		if err != nil {
+			b.Fatalf("open wal %d: %v", i, err)
+		}
+		wals[i] = mgr
+	}
+	lsm, err := NewLSM(opts, wals)
+	if err != nil {
+		b.Fatalf("new lsm: %v", err)
+	}
+	b.Cleanup(func() {
+		_ = lsm.Close()
+		for _, mgr := range wals {
+			_ = mgr.Close()
+		}
+	})
+	return lsm, wals
+}
+
+// makeShardedBenchEntries fabricates internal-key entries with monotonically
+// increasing versions so MVCC tiebreak is well-defined.
+func makeShardedBenchEntries(count, valueSize int) []*kv.Entry {
+	entries := make([]*kv.Entry, count)
+	value := make([]byte, valueSize)
+	for i := range entries {
+		userKey := make([]byte, 16)
+		copy(userKey, "shardbench")
+		binary.LittleEndian.PutUint64(userKey[8:], uint64(i))
+		entries[i] = &kv.Entry{
+			Key:     kv.InternalKey(kv.CFDefault, userKey, uint64(i+1)),
+			Value:   value,
+			CF:      kv.CFDefault,
+			Version: uint64(i + 1),
+		}
+	}
+	return entries
+}
+
+// BenchmarkShardedSetBatchByShardCount measures writeSome / SetBatchGroup
+// throughput as the data plane shard count varies. Pins to shardID=0 so
+// per-shard hot path cost is observed without dispatcher overhead.
+func BenchmarkShardedSetBatchByShardCount(b *testing.B) {
+	const batchSize = 64
+	const valueSize = 128
+	for _, shardCount := range []int{1, 2, 4, 8} {
+		b.Run(fmt.Sprintf("shards_%d", shardCount), func(b *testing.B) {
+			lsm, _ := openShardedBenchLSM(b, shardCount)
+			entries := makeShardedBenchEntries(batchSize, valueSize)
+			b.ReportAllocs()
+			b.SetBytes(int64(batchSize * valueSize))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := lsm.SetBatchGroup(0, [][]*kv.Entry{entries}); err != nil {
+					b.Fatalf("set batch group: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkShardedCrossShardMVCCMerge measures the cost of the cross-shard
+// memtable walk + max-version selection without any hint. Seeds the same
+// userKey on every shard with strictly increasing versions, then reads
+// with kv.MaxVersion and verifies Get picks the latest.
+func BenchmarkShardedCrossShardMVCCMerge(b *testing.B) {
+	for _, shardCount := range []int{1, 2, 4, 8} {
+		b.Run(fmt.Sprintf("shards_%d", shardCount), func(b *testing.B) {
+			lsm, _ := openShardedBenchLSM(b, shardCount)
+			userKey := []byte("mvcc-merge-bench")
+			value := []byte("v")
+
+			for shardID := range shardCount {
+				entry := &kv.Entry{
+					Key:     kv.InternalKey(kv.CFDefault, userKey, uint64(shardID+1)),
+					Value:   value,
+					CF:      kv.CFDefault,
+					Version: uint64(shardID + 1),
+				}
+				if _, err := lsm.SetBatchGroup(shardID, [][]*kv.Entry{{entry}}); err != nil {
+					b.Fatalf("seed shard %d: %v", shardID, err)
+				}
+			}
+			if lsm.shardHints != nil {
+				lsm.shardHints = newShardHintTable()
+			}
+
+			query := kv.InternalKey(kv.CFDefault, userKey, kv.MaxVersion)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				entry, err := lsm.Get(query)
+				if err != nil || entry == nil {
+					b.Fatalf("get: err=%v entry=%v", err, entry)
+				}
+				if entry.Version != uint64(shardCount) {
+					b.Fatalf("expected version=%d got %d", shardCount, entry.Version)
+				}
+				entry.DecrRef()
+			}
+		})
+	}
+}

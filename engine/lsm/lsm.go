@@ -40,11 +40,12 @@ import (
 // and a WAL Manager), the level manager, and the flush runtime into one
 // coherent storage core. See the package docstring for the durability
 // ordering invariant and
-// docs/notes/2026-04-26-lsm-engine-throughput-roadmap.md for the
+// docs/notes/2026-04-27-sharded-wal-memtable.md for the
 // sharding rationale and routing/recovery/flush invariants.
 type LSM struct {
 	shards     []*lsmShard
 	shardHints *shardHintTable
+	negatives  *negativeCache
 	levels     *levelManager
 	option     *Options
 	closer     *utils.Closer
@@ -330,6 +331,7 @@ func NewLSM(opt *Options, walMgrs []*wal.Manager) (*LSM, error) {
 		option:     frozen,
 		shards:     shards,
 		shardHints: newShardHintTable(),
+		negatives:  newNegativeCache(),
 		closer:     utils.NewCloser(),
 		logger:     frozen.Logger,
 	}
@@ -470,6 +472,7 @@ func (lsm *LSM) writeSome(s *lsmShard, batches []*writeBatch) (int, error) {
 		s.lock.RUnlock()
 		panic(fmt.Sprintf("lsm: durable WAL batch could not be applied to memtable: %v", err))
 	}
+	lsm.invalidateNegativeCache(entries)
 	lsm.recordShardHints(s.id, entries)
 	s.lock.RUnlock()
 	return n, nil
@@ -582,8 +585,8 @@ func (lsm *LSM) SetBatch(entries []*kv.Entry) error {
 // Each inner batch remains indivisible: rotation may split between batches,
 // but never inside one batch. The returned failedAt is the first batch index
 // that was not applied, or -1 on success. Routing is the caller's choice —
-// commit-worker affinity preserves SetBatch atomicity (see
-// docs/notes/2026-04-26-lsm-engine-throughput-roadmap.md §2.2).
+// per-key affinity preserves SetBatch atomicity (see
+// docs/notes/2026-04-27-sharded-wal-memtable.md §2.4).
 func (lsm *LSM) SetBatchGroup(shardID int, groups [][]*kv.Entry) (int, error) {
 	if len(groups) == 0 {
 		return -1, nil
@@ -620,7 +623,12 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 	lsm.closer.Add(1)
 	defer lsm.closer.Done()
 
-	if shardID, ok := lsm.lookupShardHint(key); ok && !lsm.hasRangeTombstones() {
+	hasRangeTombstones := lsm.hasRangeTombstones()
+	if !hasRangeTombstones && lsm.negativeHit(key) {
+		return nil, utils.ErrKeyNotFound
+	}
+
+	if shardID, ok := lsm.lookupShardHint(key); ok && !hasRangeTombstones {
 		tables, release := lsm.getMemTablesForShard(shardID)
 		best := bestMemtableEntry(key, tables)
 		if release != nil {
@@ -664,13 +672,52 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 	// query from the levels runtime
 	entry, err := lsm.levels.Get(key)
 	if err != nil || entry == nil {
+		if !hasRangeTombstones && (err == utils.ErrKeyNotFound || (err == nil && entry == nil)) {
+			lsm.rememberNegative(key)
+		}
 		return entry, err
 	}
 	if isCovered(entry) {
 		entry.DecrRef()
+		if !hasRangeTombstones {
+			lsm.rememberNegative(key)
+		}
 		return nil, utils.ErrKeyNotFound
 	}
 	return entry, nil
+}
+
+func (lsm *LSM) negativeHit(key []byte) bool {
+	if lsm == nil || lsm.negatives == nil {
+		return false
+	}
+	return lsm.negatives.contains(key)
+}
+
+func (lsm *LSM) rememberNegative(key []byte) {
+	if lsm == nil || lsm.negatives == nil {
+		return
+	}
+	lsm.negatives.remember(key)
+}
+
+func (lsm *LSM) invalidateNegativeCache(entries []*kv.Entry) {
+	if lsm == nil || lsm.negatives == nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry == nil || len(entry.Key) == 0 {
+			continue
+		}
+		lsm.negatives.invalidate(entry.Key)
+	}
+}
+
+func (lsm *LSM) clearNegativeCache() {
+	if lsm == nil || lsm.negatives == nil {
+		return
+	}
+	lsm.negatives.clear()
 }
 
 func (lsm *LSM) lookupShardHint(key []byte) (int, bool) {
