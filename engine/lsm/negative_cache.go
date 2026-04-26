@@ -162,3 +162,34 @@ func negativeKey(internalKey []byte) ([]byte, uint64, uint64, bool) {
 	}
 	return baseKey, xxhash.Sum64(baseKey), xxhash.Sum64(internalKey), true
 }
+
+// snapshotKeys returns a copy of every internal key currently held in the
+// cache, suitable for handing off to a slab-backed persistence consumer at
+// Close time. The returned slice is independent of the cache buckets, so the
+// caller can iterate it without holding bucket locks.
+func (c *negativeCache) snapshotKeys() [][]byte {
+	if c == nil {
+		return nil
+	}
+	out := make([][]byte, 0, len(c.entries)/8)
+	for i := range c.entries {
+		b := &c.entries[i]
+		b.mu.RLock()
+		if b.valid && len(b.key) > 0 {
+			// Verify the entry's generation still matches its base — stale
+			// entries (those whose base was invalidated) are dropped on
+			// snapshot so we don't restore them next time.
+			baseKey := kv.InternalToBaseKey(b.key)
+			if len(baseKey) > 0 {
+				baseHash := xxhash.Sum64(baseKey)
+				if gen, ok := c.generation(baseKey, baseHash); ok && gen == b.gen {
+					cp := make([]byte, len(b.key))
+					copy(cp, b.key)
+					out = append(out, cp)
+				}
+			}
+		}
+		b.mu.RUnlock()
+	}
+	return out
+}

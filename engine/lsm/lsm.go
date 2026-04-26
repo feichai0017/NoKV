@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 
@@ -45,7 +46,8 @@ import (
 type LSM struct {
 	shards     []*lsmShard
 	shardHints *shardHintTable
-	negatives  *negativeCache
+	negatives        *negativeCache
+	negativesPersist *negativePersistence
 	levels     *levelManager
 	option     *Options
 	closer     *utils.Closer
@@ -146,6 +148,15 @@ func (lsm *LSM) Close() error {
 	}
 	if lsm.levels != nil {
 		closeErr = errors.Join(closeErr, lsm.levels.close())
+	}
+	if lsm.negativesPersist != nil && lsm.negatives != nil {
+		if n, err := lsm.negativesPersist.Snapshot(lsm.negatives); err != nil {
+			lsm.logger.Warn("negative cache snapshot on close failed",
+				slog.String("err", err.Error()))
+		} else if n > 0 {
+			lsm.logger.Info("negative cache snapshot written",
+				slog.Int("entries", n))
+		}
 	}
 	return closeErr
 }
@@ -334,6 +345,19 @@ func NewLSM(opt *Options, walMgrs []*wal.Manager) (*LSM, error) {
 		negatives:  newNegativeCache(),
 		closer:     utils.NewCloser(),
 		logger:     frozen.Logger,
+	}
+	if frozen.NegativeCachePersistent && frozen.WorkDir != "" {
+		lsm.negativesPersist = newNegativePersistence(
+			filepath.Join(frozen.WorkDir, "negative-slab"),
+			frozen.NegativeCacheSlabMaxSize,
+		)
+		if restored, err := lsm.negativesPersist.Restore(lsm.negatives); err != nil {
+			lsm.logger.Warn("negative cache restore failed; cold start",
+				slog.String("err", err.Error()))
+		} else if restored > 0 {
+			lsm.logger.Info("negative cache warmed from slab",
+				slog.Int("restored", restored))
+		}
 	}
 	if lsm.logger == nil {
 		lsm.logger = slog.Default()

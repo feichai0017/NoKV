@@ -160,6 +160,20 @@ type Options struct {
 	// ThrottleCallback receives write admission changes after the LSM updates its
 	// internal throttle state.
 	ThrottleCallback func(WriteThrottleState)
+
+	// NegativeCachePersistent enables snapshot-on-Close + restore-on-Open for
+	// the in-memory negative cache, backed by an engine/slab segment under
+	// WorkDir. Defaults to false. When enabled, a process restart skips the
+	// cold-start re-warm phase for previously-known not-found keys (HDFS path
+	// probes, S3 GetObject 404 patterns, fsmeta Lookup misses). The slab is
+	// best-effort (Derived consistency class — see
+	// docs/notes/2026-04-27-slab-substrate.md §6.1): a corrupt or missing
+	// snapshot forces a re-warm but does not affect read correctness.
+	NegativeCachePersistent bool
+	// NegativeCacheSlabMaxSize bounds the on-disk snapshot size. Snapshots
+	// stop appending once the limit is hit; remaining keys re-warm normally.
+	// Zero falls back to a 64 MiB default.
+	NegativeCacheSlabMaxSize int64
 }
 
 // Clone returns a shallow copy of the LSM options. It is used when background

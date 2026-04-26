@@ -1,9 +1,12 @@
 package lsm
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )
@@ -70,4 +73,64 @@ func TestNegativeCacheClearDropsRememberedMisses(t *testing.T) {
 
 	lsm.clearNegativeCache()
 	require.False(t, lsm.negativeHit(query))
+}
+
+// TestNegativeCachePersistsAcrossOpen exercises Phase 3 of the slab
+// substrate redesign: with NegativeCachePersistent enabled, a process
+// restart should replay the slab snapshot back into the in-memory cache
+// so previously-known not-found keys do not have to re-warm via the LSM.
+func TestNegativeCachePersistsAcrossOpen(t *testing.T) {
+	dir := t.TempDir()
+
+	// First open: trigger misses to populate cache, then Close to snapshot.
+	queries := [][]byte{
+		kv.InternalKey(kv.CFDefault, []byte("missing-1"), kv.MaxVersion),
+		kv.InternalKey(kv.CFDefault, []byte("missing-2"), kv.MaxVersion),
+		kv.InternalKey(kv.CFDefault, []byte("missing-3"), kv.MaxVersion),
+	}
+
+	openLSM := func() (*LSM, []*walManagerHandle) {
+		t.Helper()
+		opts := newTestLSMOptions(dir, nil)
+		opts.NegativeCachePersistent = true
+		opts.NegativeCacheSlabMaxSize = 1 << 20
+		walDir := filepath.Join(dir, "wal-00")
+		require.NoError(t, os.MkdirAll(walDir, 0o755))
+		mgr, err := wal.Open(wal.Config{Dir: walDir})
+		require.NoError(t, err)
+		lsm, err := NewLSM(opts, []*wal.Manager{mgr})
+		require.NoError(t, err)
+		return lsm, []*walManagerHandle{{mgr: mgr}}
+	}
+	closeLSM := func(lsm *LSM, wals []*walManagerHandle) {
+		t.Helper()
+		require.NoError(t, lsm.Close())
+		for _, w := range wals {
+			require.NoError(t, w.mgr.Close())
+		}
+	}
+
+	lsm1, wals1 := openLSM()
+	for _, q := range queries {
+		_, err := lsm1.Get(q)
+		require.ErrorIs(t, err, utils.ErrKeyNotFound)
+		require.True(t, lsm1.negativeHit(q))
+	}
+	closeLSM(lsm1, wals1)
+
+	// Snapshot must exist.
+	_, err := os.Stat(filepath.Join(dir, "negative-slab", "negative.slab"))
+	require.NoError(t, err, "snapshot file should exist after Close")
+
+	// Second open: cache should be warm without any explicit miss.
+	lsm2, wals2 := openLSM()
+	defer closeLSM(lsm2, wals2)
+	for _, q := range queries {
+		require.True(t, lsm2.negativeHit(q),
+			"key %q should be warm in negative cache after restore", q)
+	}
+}
+
+type walManagerHandle struct {
+	mgr *wal.Manager
 }
