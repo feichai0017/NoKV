@@ -246,15 +246,17 @@ func (lsm *LSM) MaxVersion() uint64 {
 	var max uint64
 
 	lsm.lock.RLock()
-	if lsm.memTable != nil && lsm.memTable.maxVersion > max {
-		max = lsm.memTable.maxVersion
+	if lsm.memTable != nil {
+		if v := lsm.memTable.maxVersion.Load(); v > max {
+			max = v
+		}
 	}
 	for _, mt := range lsm.immutables {
 		if mt == nil {
 			continue
 		}
-		if mt.maxVersion > max {
-			max = mt.maxVersion
+		if v := mt.maxVersion.Load(); v > max {
+			max = v
 		}
 	}
 	lsm.lock.RUnlock()

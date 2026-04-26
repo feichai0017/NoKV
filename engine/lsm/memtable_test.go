@@ -34,7 +34,7 @@ func TestOpenMemTableReplayWithTypedRecords(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, mt)
 	require.Equal(t, segID, mt.segmentID)
-	require.Equal(t, uint64(9), mt.maxVersion)
+	require.Equal(t, uint64(9), mt.maxVersion.Load())
 	require.Equal(t, int64(infos[1].Length)+8, mt.walSize.Load())
 
 	got, err := mt.Get(entry.Key)

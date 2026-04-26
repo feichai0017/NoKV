@@ -30,10 +30,15 @@ type memIndex interface {
 
 // memTable holds the active Skiplist and its WAL segment id.
 type memTable struct {
-	lsm        *LSM
-	segmentID  uint32
-	index      memIndex
-	maxVersion uint64
+	lsm       *LSM
+	segmentID uint32
+	index     memIndex
+	// maxVersion is the highest internal-key timestamp ever inserted into this
+	// memtable. It is mutated concurrently from applyBatch (called under
+	// lsm.lock read-lock by multiple write goroutines) so accesses must be
+	// atomic; pre-Pipelined-Write the field was guarded by a write-lock and
+	// did not need atomicity.
+	maxVersion atomic.Uint64
 	walSize    atomic.Int64
 
 	// rtMu protects rangeTombstones. Written by Set/applyBatch (which may run
@@ -142,8 +147,13 @@ func (m *memTable) applyBatch(entries []*kv.Entry, walBytes int64) error {
 		m.walSize.Add(walBytes)
 	}
 	for _, entry := range entries {
-		if ts := kv.Timestamp(entry.Key); ts > m.maxVersion {
-			m.maxVersion = ts
+		if ts := kv.Timestamp(entry.Key); ts > 0 {
+			for {
+				cur := m.maxVersion.Load()
+				if ts <= cur || m.maxVersion.CompareAndSwap(cur, ts) {
+					break
+				}
+			}
 		}
 		if m.index != nil {
 			m.index.Add(entry)
@@ -238,8 +248,8 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 	}
 	err := lsm.wal.ReplaySegment(uint32(fid), func(info wal.EntryInfo, payload []byte) error {
 		applyEntry := func(entry *kv.Entry) {
-			if ts := kv.Timestamp(entry.Key); ts > mt.maxVersion {
-				mt.maxVersion = ts
+			if ts := kv.Timestamp(entry.Key); ts > mt.maxVersion.Load() {
+				mt.maxVersion.Store(ts)
 			}
 			if mt.index != nil {
 				mt.index.Add(entry)

@@ -441,7 +441,29 @@ func (m *Manager) runFsyncBatch() {
 			m.mu.Unlock()
 			return
 		}
-		err := m.flushAndSyncLocked()
+		// Phase 1 (under lock): flush bufio bytes [m.fsyncDurableSeq+1 .. target]
+		// into the OS page cache and capture the active file handle. Anything
+		// new appended after this point belongs to a future seq and will be
+		// covered by a subsequent fsync cycle.
+		flushErr := m.flushBufioLocked()
+		active := m.active
+		m.mu.Unlock()
+
+		// Phase 2 (no lock): the slow fsync syscall runs concurrently with new
+		// writers. They acquire m.mu, append into bufio, and queue their seq
+		// (> target) for the next round. This is double-buffering at the
+		// page-cache layer: while target is being durably persisted, the next
+		// batch is already accumulating in bufio.
+		var syncErr error
+		if flushErr == nil && active != nil {
+			syncErr = active.Sync()
+		}
+
+		m.mu.Lock()
+		err := flushErr
+		if err == nil {
+			err = syncErr
+		}
 		m.fsyncErr = err
 		m.fsyncDurableSeq = target
 		m.fsyncCond.Broadcast()
@@ -453,19 +475,17 @@ func (m *Manager) runFsyncBatch() {
 	}
 }
 
-func (m *Manager) flushAndSyncLocked() error {
+// flushBufioLocked drains the in-memory bufio writer into the active file's
+// OS-level page cache. It does not call fsync.
+func (m *Manager) flushBufioLocked() error {
 	if m.writer != nil {
 		if err := m.writer.Flush(); err != nil {
 			return err
 		}
 	}
-	if m.active != nil {
-		if err := m.active.Sync(); err != nil {
-			return err
-		}
-	}
 	return nil
 }
+
 
 func (m *Manager) ensureCapacity(need int64) error {
 	if m.activeSize+need <= m.segmentSize {
