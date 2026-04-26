@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
@@ -38,10 +39,6 @@ func TestNewGRPCClientEmptyAddress(t *testing.T) {
 	cli, err := NewGRPCClient(context.Background(), "")
 	require.Error(t, err)
 	require.Nil(t, cli)
-}
-
-func uint64Ptr(v uint64) *uint64 {
-	return &v
 }
 
 func TestGRPCClientRoundTrip(t *testing.T) {
@@ -373,7 +370,7 @@ func TestGRPCClientRejectsInvalidMetadataWitness(t *testing.T) {
 		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
 		RequiredRootToken:          &coordpb.RootToken{Term: 1, Index: 5, Revision: 5},
 		RequiredDescriptorRevision: 7,
-		MaxRootLag:                 uint64Ptr(2),
+		MaxRootLag:                 proto.Uint64(2),
 	})
 	require.Error(t, err)
 	require.True(t, IsInvalidWitness(err))
@@ -406,7 +403,7 @@ func TestGRPCClientAcceptsValidMetadataWitness(t *testing.T) {
 		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
 		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 8, Revision: 9},
 		RequiredDescriptorRevision: 8,
-		MaxRootLag:                 uint64Ptr(2),
+		MaxRootLag:                 proto.Uint64(2),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
@@ -470,7 +467,7 @@ func TestGRPCClientRetriesStaleMetadataWitnessEraAcrossEndpoints(t *testing.T) {
 		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
 		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 8, Revision: 9},
 		RequiredDescriptorRevision: 8,
-		MaxRootLag:                 uint64Ptr(2),
+		MaxRootLag:                 proto.Uint64(2),
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(11), resp.GetRegionDescriptor().GetRegionId())
@@ -482,7 +479,7 @@ func TestGRPCClientRetriesStaleMetadataWitnessEraAcrossEndpoints(t *testing.T) {
 		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
 		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 8, Revision: 9},
 		RequiredDescriptorRevision: 8,
-		MaxRootLag:                 uint64Ptr(2),
+		MaxRootLag:                 proto.Uint64(2),
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(12), resp.GetRegionDescriptor().GetRegionId())
@@ -530,7 +527,7 @@ func TestGRPCClientAcceptsZeroEraMetadataWitnessAfterDetachedEra(t *testing.T) {
 		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
 		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 8, Revision: 9},
 		RequiredDescriptorRevision: 8,
-		MaxRootLag:                 uint64Ptr(2),
+		MaxRootLag:                 proto.Uint64(2),
 	})
 	require.NoError(t, err)
 
@@ -640,7 +637,7 @@ func TestGRPCClientRejectsZeroEraMetadataWitnessWithoutAuthoritativeAttachedServ
 		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
 		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 8, Revision: 9},
 		RequiredDescriptorRevision: 8,
-		MaxRootLag:                 uint64Ptr(2),
+		MaxRootLag:                 proto.Uint64(2),
 	})
 	require.NoError(t, err)
 

@@ -27,10 +27,18 @@ func TestMetaRootNodeIsolationElectsNewLeaderAndHeals(t *testing.T) {
 	require.NoError(t, err)
 	cluster.RefreshAll()
 
-	cluster.IsolateNode(leaderID)
-	_ = cluster.Drivers[cluster.FollowerIDs(leaderID)[0]].Campaign()
+	followers := cluster.FollowerIDs(leaderID)
+	candidateID := followers[0]
+	voterID := followers[1]
+	cluster.PauseTicks(voterID)
+	defer cluster.ResumeTicks(voterID)
+
+	cluster.IsolateNodeEgress(leaderID)
+	// The old leader's egress is blocked, so Campaign may observe a transport
+	// timeout while the live voter still receives enough messages to elect.
+	_ = cluster.Drivers[candidateID].Campaign()
 	newLeaderID := cluster.WaitLeader(leaderID)
-	require.NotEqual(t, leaderID, newLeaderID)
+	require.Equal(t, candidateID, newLeaderID)
 	cluster.RefreshStore(newLeaderID)
 
 	commit, err := cluster.Stores[newLeaderID].Append(context.Background(),
