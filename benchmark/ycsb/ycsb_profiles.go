@@ -9,6 +9,7 @@ import (
 	badger "github.com/dgraph-io/badger/v4"
 	badgeropts "github.com/dgraph-io/badger/v4/options"
 	NoKV "github.com/feichai0017/NoKV"
+	nokvlsm "github.com/feichai0017/NoKV/engine/lsm"
 )
 
 const (
@@ -124,6 +125,13 @@ func buildNoKVBenchmarkOptions(dir string, opts ycsbEngineOptions, memtable NoKV
 	cfg.EnableWALWatchdog = false
 	cfg.ValueLogGCInterval = 0
 	cfg.ManifestSync = false
+
+	// Maximum-throughput profile: skip the production defaults that trade
+	// CPU for IO/bloom benefits — the benchmark stresses the write path
+	// on a fast local disk where snappy compression and the prefix bloom
+	// filter cost more than they save. Production keeps both on.
+	cfg.BlockCompression = nokvlsm.BlockCompressionNone
+	cfg.PrefixExtractor = nil
 
 	return cfg
 }
