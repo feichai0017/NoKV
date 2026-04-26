@@ -118,10 +118,6 @@ type Options struct {
 	// grows beyond this size (bytes). Values <= 0 disable rewrites.
 	ManifestRewriteThreshold int64
 
-	// WALGCPolicy controls whether old WAL segments can be deleted.
-	// Nil defaults to AllowAllWALGCPolicy.
-	WALGCPolicy WALGCPolicy
-
 	// ThrottleCallback receives write admission changes after the LSM updates its
 	// internal throttle state.
 	ThrottleCallback func(WriteThrottleState)

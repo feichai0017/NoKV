@@ -178,12 +178,9 @@ func (lsm *LSM) recovery() (*memTable, []*memTable, error) {
 		cleaned := make([]uint64, 0, len(fids))
 		for _, fid := range fids {
 			if fid <= uint64(seg) {
-				if !lsm.canRemoveWalSegment(uint32(fid)) {
-					cleaned = append(cleaned, fid)
-					continue
-				}
-				if err := lsm.wal.RemoveSegment(uint32(fid)); err != nil && !os.IsNotExist(err) {
+				if err := lsm.wal.RemoveSegment(uint32(fid)); err != nil && !os.IsNotExist(err) && !errors.Is(err, wal.ErrSegmentRetained) {
 					slog.Default().Error("remove wal segment", "segment", fid, "error", err)
+					cleaned = append(cleaned, fid)
 				}
 				continue
 			}

@@ -14,6 +14,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/lsm/tombstone"
 	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/vfs"
+	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -303,10 +304,8 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 			lm.rtCollector.Add(rt)
 		}
 	}
-	if lm.canRemoveWalSegment(uint32(fid)) {
-		if err := lm.lsm.wal.RemoveSegment(uint32(fid)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
+	if err := lm.lsm.wal.RemoveSegment(uint32(fid)); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, wal.ErrSegmentRetained) {
+		return err
 	}
 	if lm.compaction != nil {
 		lm.compaction.Trigger()
@@ -419,11 +418,4 @@ func (lm *levelManager) maxVersion() uint64 {
 		lh.RUnlock()
 	}
 	return max
-}
-
-func (lm *levelManager) canRemoveWalSegment(id uint32) bool {
-	if lm == nil || lm.lsm == nil {
-		return true
-	}
-	return lm.lsm.canRemoveWalSegment(id)
 }

@@ -6,8 +6,6 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm"
-	"github.com/feichai0017/NoKV/engine/wal"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/thermos"
 )
 
@@ -96,60 +94,4 @@ func SlowdownDelay(batchSize int64, rate uint64) time.Duration {
 		return time.Duration(math.MaxInt64)
 	}
 	return time.Duration(delayNs)
-}
-
-// WALGCPolicyConfig captures the DB-provided hooks needed to decide whether a
-// WAL segment is safe to remove.
-type WALGCPolicyConfig struct {
-	RaftPointers   func() map[uint64]localmeta.RaftLogPointer
-	SegmentMetrics func(segmentID uint32) wal.RecordMetrics
-	Warn           func(msg string, args ...any)
-}
-
-// WALGCPolicy adapts raft pointer snapshots and WAL segment metrics into the
-// LSM-level WAL GC policy interface.
-type WALGCPolicy struct {
-	raftPointers   func() map[uint64]localmeta.RaftLogPointer
-	segmentMetrics func(segmentID uint32) wal.RecordMetrics
-	warn           func(msg string, args ...any)
-}
-
-// NewWALGCPolicy builds the runtime WAL GC policy used by the DB-backed LSM.
-func NewWALGCPolicy(cfg WALGCPolicyConfig) lsm.WALGCPolicy {
-	return &WALGCPolicy{
-		raftPointers:   cfg.RaftPointers,
-		segmentMetrics: cfg.SegmentMetrics,
-		warn:           cfg.Warn,
-	}
-}
-
-// CanRemoveSegment reports whether the target WAL segment can be garbage-collected.
-func (p *WALGCPolicy) CanRemoveSegment(segmentID uint32) bool {
-	if p == nil {
-		return true
-	}
-	if p.raftPointers != nil {
-		ptrs := p.raftPointers()
-		for _, ptr := range ptrs {
-			if ptr.SegmentIndex > 0 && segmentID >= uint32(ptr.SegmentIndex) {
-				return false
-			}
-			if ptr.Segment > 0 && segmentID >= ptr.Segment {
-				return false
-			}
-		}
-	}
-	if p.segmentMetrics != nil {
-		metrics := p.segmentMetrics(segmentID)
-		if metrics.RaftRecords() > 0 && p.warn != nil {
-			p.warn(
-				"wal segment retains raft records during GC eligibility",
-				"segment", segmentID,
-				"raft_entries", metrics.RaftEntries,
-				"raft_states", metrics.RaftStates,
-				"raft_snapshots", metrics.RaftSnapshots,
-			)
-		}
-	}
-	return true
 }
