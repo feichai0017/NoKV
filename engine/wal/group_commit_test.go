@@ -94,3 +94,55 @@ func TestManagerFsyncBatchedPropagatesSyncErrorToBatch(t *testing.T) {
 	})
 	require.ErrorIs(t, err, injected)
 }
+
+func TestManagerRotateWaitsForInflightBatchedFsync(t *testing.T) {
+	dir := t.TempDir()
+	segment := filepath.Join(dir, "00001.wal")
+	releaseSync := make(chan struct{})
+	syncSeen := make(chan struct{})
+	var once sync.Once
+	policy := vfs.NewFaultPolicy()
+	policy.SetHook(func(op vfs.Op, path string) error {
+		if op == vfs.OpFileSync && path == segment {
+			once.Do(func() {
+				close(syncSeen)
+				<-releaseSync
+			})
+		}
+		return nil
+	})
+	mgr, err := wal.Open(wal.Config{Dir: dir, FS: vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)})
+	require.NoError(t, err)
+	defer func() { _ = mgr.Close() }()
+
+	appendDone := make(chan error, 1)
+	go func() {
+		_, err := mgr.AppendRecords(wal.DurabilityFsyncBatched, wal.Record{
+			Type:    wal.RecordTypeRaftEntry,
+			Payload: []byte("pinned"),
+		})
+		appendDone <- err
+	}()
+
+	select {
+	case <-syncSeen:
+	case <-time.After(time.Second):
+		t.Fatalf("expected batched fsync to start")
+	}
+
+	rotateDone := make(chan error, 1)
+	go func() {
+		rotateDone <- mgr.Rotate()
+	}()
+
+	select {
+	case err := <-rotateDone:
+		t.Fatalf("rotate completed while batched fsync still held active segment: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(releaseSync)
+	require.NoError(t, <-appendDone)
+	require.NoError(t, <-rotateDone)
+	require.Equal(t, uint32(2), mgr.ActiveSegment())
+}

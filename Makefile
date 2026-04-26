@@ -1,7 +1,7 @@
 # NoKV Makefile
 # Provides standardized commands for development workflow
 
-.PHONY: help build test test-short test-race test-coverage lint fmt clean docker-up docker-down bench install-tools install-tla-tools
+.PHONY: help build test test-short test-race test-coverage lint fmt clean docker-up docker-dev-up docker-down bench install-tools install-tla-tools
 .PHONY: proto proto-check proto-breaking-check
 .PHONY: tlc-eunomia tlc-eunomiamultidim tlc-mountlifecycle tlc-subtreeauthority tlc-leaseonly-counterexample tlc-leasestart-counterexample tlc-subtreewithoutfrontiercoverage-counterexample tlc-subtreewithoutseal-counterexample
 
@@ -35,6 +35,7 @@ help:
 	@echo "  make tlc-subtreewithoutfrontiercoverage-counterexample - Run TLC and expect a counterexample for spec/SubtreeWithoutFrontierCoverage.tla"
 	@echo "  make tlc-subtreewithoutseal-counterexample - Run TLC and expect a counterexample for spec/SubtreeWithoutSeal.tla"
 	@echo "  make docker-up          - Start Docker Compose cluster"
+	@echo "  make docker-dev-up      - Build local image and start Docker Compose cluster"
 	@echo "  make docker-down        - Stop Docker Compose cluster"
 	@echo "  make clean              - Remove build artifacts and test data"
 	@echo ""
@@ -299,7 +300,17 @@ record-formal-artifacts: record-tlc-eunomia record-tlc-eunomiamultidim record-tl
 # Start Docker Compose cluster
 docker-up:
 	@echo "Starting Docker Compose cluster..."
-	docker compose up --build
+	@if docker compose pull --policy always --ignore-buildable; then \
+		docker compose up -d; \
+	else \
+		echo "Published image unavailable; falling back to local build..."; \
+		docker compose up -d --build; \
+	fi
+
+# Build local image and start Docker Compose cluster
+docker-dev-up:
+	@echo "Building local image and starting Docker Compose cluster..."
+	docker compose up -d --build
 
 # Stop Docker Compose cluster
 docker-down:
