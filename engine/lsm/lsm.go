@@ -52,7 +52,6 @@ type LSM struct {
 	logger     *slog.Logger
 
 	discardStatsCh chan map[manifest.ValueLogID]int64
-	walGCPolicy    WALGCPolicy
 
 	throttleFn    func(WriteThrottleState)
 	throttleState atomic.Int32
@@ -154,15 +153,12 @@ func (lsm *LSM) getDiscardStatsCh() chan map[manifest.ValueLogID]int64 {
 	return lsm.discardStatsCh
 }
 
-func (lsm *LSM) getWALGCPolicy() WALGCPolicy {
-	if lsm == nil {
-		return AllowAllWALGCPolicy{}
+func (lsm *LSM) walRetentionMark() wal.RetentionMark {
+	if lsm == nil || lsm.levels == nil {
+		return wal.RetentionMark{FirstSegment: 1}
 	}
-	return normalizeWALGCPolicy(lsm.walGCPolicy)
-}
-
-func (lsm *LSM) canRemoveWalSegment(id uint32) bool {
-	return lsm.getWALGCPolicy().CanRemoveSegment(id)
+	seg, _ := lsm.levels.logPointer()
+	return wal.RetentionMark{FirstSegment: seg + 1}
 }
 
 func (lsm *LSM) getLogger() *slog.Logger {
@@ -321,7 +317,6 @@ func NewLSM(opt *Options, walMgr *wal.Manager) (*LSM, error) {
 	if frozen.DiscardStatsCh != nil {
 		lsm.discardStatsCh = *frozen.DiscardStatsCh
 	}
-	lsm.walGCPolicy = normalizeWALGCPolicy(frozen.WALGCPolicy)
 	lsm.throttleFn = frozen.ThrottleCallback
 	lsm.flushQueue = newFlushRuntime()
 	// initialize levelManager
@@ -330,6 +325,9 @@ func NewLSM(opt *Options, walMgr *wal.Manager) (*LSM, error) {
 		return nil, fmt.Errorf("lsm init level manager: %w", err)
 	}
 	lsm.levels = lm
+	if err := walMgr.RegisterRetention("lsm", lsm.walRetentionMark); err != nil {
+		return nil, fmt.Errorf("lsm register wal retention: %w", err)
+	}
 	// Populate range tombstone collector from existing SSTables
 	if lsm.levels != nil && lsm.levels.rtCollector != nil {
 		lsm.levels.rebuildRangeTombstones()

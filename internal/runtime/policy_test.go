@@ -7,8 +7,6 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm"
-	"github.com/feichai0017/NoKV/engine/wal"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/thermos"
 	"github.com/stretchr/testify/require"
 )
@@ -45,49 +43,4 @@ func TestSlowdownDelay(t *testing.T) {
 	require.Zero(t, SlowdownDelay(128, 0))
 	require.Equal(t, time.Second, SlowdownDelay(1024, 1024))
 	require.Equal(t, time.Duration(math.MaxInt64), SlowdownDelay(math.MaxInt64, 1))
-}
-
-func TestWALGCPolicyRaftPointers(t *testing.T) {
-	policy := &WALGCPolicy{
-		raftPointers: func() map[uint64]localmeta.RaftLogPointer {
-			return map[uint64]localmeta.RaftLogPointer{
-				1: {GroupID: 1, Segment: 4, Offset: 128},
-				2: {GroupID: 2, Segment: 2, Offset: 64},
-			}
-		},
-	}
-
-	require.True(t, policy.CanRemoveSegment(1), "segment 1 is older than every raft pointer")
-	require.False(t, policy.CanRemoveSegment(2), "segment 2 is still referenced by group 2")
-	require.False(t, policy.CanRemoveSegment(4), "segment 4 is still referenced by group 1")
-}
-
-func TestWALGCPolicyRaftSegmentIndex(t *testing.T) {
-	policy := &WALGCPolicy{
-		raftPointers: func() map[uint64]localmeta.RaftLogPointer {
-			return map[uint64]localmeta.RaftLogPointer{
-				1: {GroupID: 1, SegmentIndex: 5},
-			}
-		},
-	}
-
-	require.True(t, policy.CanRemoveSegment(4))
-	require.False(t, policy.CanRemoveSegment(5))
-	require.False(t, policy.CanRemoveSegment(6))
-}
-
-func TestWALGCPolicyWarnsForRaftRecords(t *testing.T) {
-	warned := false
-	policy := &WALGCPolicy{
-		segmentMetrics: func(segmentID uint32) wal.RecordMetrics {
-			require.Equal(t, uint32(9), segmentID)
-			return wal.RecordMetrics{RaftEntries: 1, RaftStates: 2, RaftSnapshots: 3}
-		},
-		warn: func(_ string, _ ...any) {
-			warned = true
-		},
-	}
-
-	require.True(t, policy.CanRemoveSegment(9))
-	require.True(t, warned)
 }

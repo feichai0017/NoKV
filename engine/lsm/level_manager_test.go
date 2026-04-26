@@ -10,35 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type testWALGCPolicy struct {
-	blocked map[uint32]struct{}
-}
-
-// CanRemoveSegment returns false for blocked segment IDs and true otherwise.
-func (p testWALGCPolicy) CanRemoveSegment(segmentID uint32) bool {
-	_, ok := p.blocked[segmentID]
-	return !ok
-}
-
-func TestLevelsRuntimeCanRemoveWalSegmentDelegatesPolicy(t *testing.T) {
-	lsm := &LSM{walGCPolicy: testWALGCPolicy{
-		blocked: map[uint32]struct{}{
-			3: {},
-			8: {},
-		},
-	}}
-	lm := &levelManager{lsm: lsm}
-	require.True(t, lm.canRemoveWalSegment(1))
-	require.False(t, lm.canRemoveWalSegment(3))
-	require.True(t, lm.canRemoveWalSegment(7))
-	require.False(t, lm.canRemoveWalSegment(8))
-}
-
-func TestLevelsRuntimeCanRemoveWalSegmentNilLSM(t *testing.T) {
-	lm := &levelManager{}
-	require.True(t, lm.canRemoveWalSegment(1))
-}
-
 func TestL0ReplaceTablesOrdering(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()

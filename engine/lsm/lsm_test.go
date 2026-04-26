@@ -1388,9 +1388,6 @@ func TestLevelsRuntimeAdjustThrottleAndPointers(t *testing.T) {
 		t.Fatalf("expected max version 7, got %d", v)
 	}
 
-	if !lsm.levels.canRemoveWalSegment(1) {
-		t.Fatalf("expected WAL segment to be removable without raft pointers")
-	}
 	_ = lsm.levels.cacheMetrics()
 }
 

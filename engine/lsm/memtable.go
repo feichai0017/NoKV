@@ -97,7 +97,7 @@ func (m *memTable) Set(entry *kv.Entry) error {
 	if entry == nil || len(entry.Key) == 0 {
 		return utils.ErrEmptyKey
 	}
-	info, err := m.lsm.wal.AppendEntry(entry)
+	info, err := m.lsm.wal.AppendEntry(wal.DurabilityFlushed, entry)
 	if err != nil {
 		return err
 	}
@@ -136,7 +136,7 @@ func (m *memTable) setBatch(entries []*kv.Entry) error {
 	if len(entries) == 1 {
 		return m.Set(entries[0])
 	}
-	info, err := m.lsm.wal.AppendEntryBatch(entries)
+	info, err := m.lsm.wal.AppendEntryBatch(wal.DurabilityFlushed, entries)
 	if err != nil {
 		return err
 	}
@@ -178,12 +178,9 @@ func (lsm *LSM) recovery() (*memTable, []*memTable, error) {
 		cleaned := make([]uint64, 0, len(fids))
 		for _, fid := range fids {
 			if fid <= uint64(seg) {
-				if !lsm.canRemoveWalSegment(uint32(fid)) {
-					cleaned = append(cleaned, fid)
-					continue
-				}
-				if err := lsm.wal.RemoveSegment(uint32(fid)); err != nil && !os.IsNotExist(err) {
+				if err := lsm.wal.RemoveSegment(uint32(fid)); err != nil && !os.IsNotExist(err) && !errors.Is(err, wal.ErrSegmentRetained) {
 					slog.Default().Error("remove wal segment", "segment", fid, "error", err)
+					cleaned = append(cleaned, fid)
 				}
 				continue
 			}

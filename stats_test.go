@@ -3,10 +3,9 @@ package NoKV
 import (
 	"encoding/json"
 	"expvar"
-	"fmt"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/metrics"
@@ -70,16 +69,10 @@ func TestStatsSnapshotTracksThrottleAndWalRemovals(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	require.NoError(t, db.Set([]byte("wal-metrics"), []byte("value")))
-	require.NoError(t, db.wal.Rotate())
-
-	segments, err := db.wal.ListSegments()
-	require.NoError(t, err)
-	require.NotEmpty(t, segments)
-
-	var removedID uint32
-	_, err = fmt.Sscanf(filepath.Base(segments[0]), "%05d.wal", &removedID)
-	require.NoError(t, err)
-	require.NoError(t, db.wal.RemoveSegment(removedID))
+	require.NoError(t, db.lsm.Rotate())
+	require.Eventually(t, func() bool {
+		return db.Info().Snapshot().WAL.SegmentsRemoved > 0
+	}, 5*time.Second, 10*time.Millisecond)
 
 	db.applyThrottle(lsm.WriteThrottleStop)
 	defer db.applyThrottle(lsm.WriteThrottleNone)
