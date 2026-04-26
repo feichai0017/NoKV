@@ -241,6 +241,14 @@ type Options struct {
 	// prioritizes levels with high range tombstone density.
 	CompactionTombstoneWeight float64
 
+	// CompactionWriteBytesPerSec paces compaction output writes. Zero disables
+	// pacing. Flush writes are never paced.
+	CompactionWriteBytesPerSec int64
+	// CompactionPacingBypassL0 bypasses output pacing when L0 table count
+	// reaches this threshold. Zero lets Open derive a conservative threshold
+	// when compaction pacing is enabled.
+	CompactionPacingBypassL0 int
+
 	// CompactionValueAlertThreshold triggers stats alerts when a level's
 	// value-density (value bytes / total bytes) exceeds this ratio.
 	CompactionValueAlertThreshold float64
@@ -404,6 +412,8 @@ func (opt *Options) applyLSMSharedOptions(dst *lsmpkg.Options) {
 	dst.IngestShardParallelism = opt.IngestShardParallelism
 	dst.CompactionValueWeight = opt.CompactionValueWeight
 	dst.CompactionTombstoneWeight = opt.CompactionTombstoneWeight
+	dst.CompactionWriteBytesPerSec = opt.CompactionWriteBytesPerSec
+	dst.CompactionPacingBypassL0 = opt.CompactionPacingBypassL0
 	dst.CompactionValueAlertThreshold = opt.CompactionValueAlertThreshold
 	dst.BlockCacheBytes = opt.BlockCacheBytes
 	dst.IndexCacheBytes = opt.IndexCacheBytes
@@ -430,6 +440,8 @@ func (opt *Options) copyNormalizedLSMOptions(src *lsmpkg.Options) {
 	opt.IngestShardParallelism = src.IngestShardParallelism
 	opt.CompactionValueWeight = src.CompactionValueWeight
 	opt.CompactionTombstoneWeight = src.CompactionTombstoneWeight
+	opt.CompactionWriteBytesPerSec = src.CompactionWriteBytesPerSec
+	opt.CompactionPacingBypassL0 = src.CompactionPacingBypassL0
 	opt.CompactionValueAlertThreshold = src.CompactionValueAlertThreshold
 	opt.BlockCacheBytes = src.BlockCacheBytes
 	opt.IndexCacheBytes = src.IndexCacheBytes

@@ -113,6 +113,34 @@ func TestTableBuilderCompressesBlocksWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestBuildDataCopyChargesCompactionPacerPerBlock(t *testing.T) {
+	opt := &Options{
+		BlockSize:          128,
+		SSTableMaxSz:       1 << 20,
+		BloomFalsePositive: 0.0,
+	}
+
+	builder := newTableBuiler(opt)
+	for i := range 8 {
+		key := fmt.Appendf(nil, "pace-%02d", i)
+		builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, key, 1), bytes.Repeat([]byte("v"), 32)))
+	}
+	bd, err := builder.done()
+	require.NoError(t, err)
+
+	pacer := newCompactionPacer(1 << 30)
+	pacer.tokens = 1 << 30
+	bd.pacer = pacer
+	var expected int64
+	for _, bl := range bd.blockList {
+		expected += int64(bl.diskEnd)
+	}
+
+	dst := make([]byte, bd.size)
+	require.Equal(t, bd.size, bd.Copy(dst))
+	require.Equal(t, expected, pacer.charged.Load())
+}
+
 func TestTableBuilderFinishAndEntryValueLen(t *testing.T) {
 	opt := &Options{
 		BlockSize:          128,

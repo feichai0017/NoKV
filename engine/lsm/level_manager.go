@@ -41,6 +41,7 @@ func (lsm *LSM) initLevelManager(opt *Options) (_ *levelManager, err error) {
 		return nil, err
 	}
 	lm.rtCollector = tombstone.NewCollector()
+	lm.compactionPacer = newCompactionPacer(opt.CompactionWriteBytesPerSec)
 	lm.compaction = newCompaction(lm, lm.opt.NumCompactors, lm.opt.CompactionPolicy, lsm.getLogger())
 	return lm, nil
 }
@@ -54,6 +55,7 @@ type levelManager struct {
 	lsm              *LSM
 	compactState     *State
 	compaction       *compaction
+	compactionPacer  *compactionPacer
 	rtCollector      *tombstone.Collector
 	logPtrMu         sync.RWMutex
 	logPtrSeg        uint32

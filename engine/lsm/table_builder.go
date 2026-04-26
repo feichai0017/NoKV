@@ -33,12 +33,14 @@ type tableBuilder struct {
 	estimateSz    int64
 	valueSize     int64
 	rangeDeletes  uint32
+	pacer         *compactionPacer
 }
 type buildData struct {
 	blockList []*block
 	index     []byte
 	checksum  []byte
 	size      int
+	pacer     *compactionPacer
 }
 type block struct {
 	offset            int // Offset of the block start within the table.
@@ -421,6 +423,9 @@ func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err
 func (bd *buildData) Copy(dst []byte) int {
 	var written int
 	for _, bl := range bd.blockList {
+		if bd.pacer != nil {
+			bd.pacer.charge(bl.diskEnd)
+		}
 		written += copy(dst[written:], bl.diskData[:bl.diskEnd])
 	}
 	written += copy(dst[written:], bd.index)
@@ -438,6 +443,7 @@ func (tb *tableBuilder) done() (buildData, error) {
 	}
 	bd := buildData{
 		blockList: tb.blockList,
+		pacer:     tb.pacer,
 	}
 
 	var f utils.Filter

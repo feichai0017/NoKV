@@ -1337,12 +1337,13 @@ func (db *DB) releaseCommitBatch(batch *dbruntime.CommitBatch) {
 }
 
 func (db *DB) applyRequests(reqs []*dbruntime.Request) (int, error) {
-	for i, r := range reqs {
+	failedAt, err := db.writeRequestsToLSM(reqs)
+	if err != nil {
+		return failedAt, pkgerrors.Wrap(err, "writeRequests")
+	}
+	for _, r := range reqs {
 		if r == nil || len(r.Entries) == 0 {
 			continue
-		}
-		if err := db.writeToLSM(r); err != nil {
-			return i, pkgerrors.Wrap(err, "writeRequests")
 		}
 		if len(r.PtrBuckets) == 0 {
 			continue
@@ -1376,12 +1377,39 @@ func (db *DB) finishCommitRequests(reqs []*dbruntime.CommitRequest, defaultErr e
 	}
 }
 
-func (db *DB) writeToLSM(b *dbruntime.Request) error {
+func (db *DB) writeRequestsToLSM(reqs []*dbruntime.Request) (int, error) {
+	groups := make([][]*kv.Entry, 0, len(reqs))
+	groupToReq := make([]int, 0, len(reqs))
+	for i, r := range reqs {
+		if r == nil || len(r.Entries) == 0 {
+			continue
+		}
+		if err := db.prepareLSMRequest(r); err != nil {
+			// Nothing has reached the LSM yet, so the whole commit batch must fail.
+			return 0, err
+		}
+		groups = append(groups, r.Entries)
+		groupToReq = append(groupToReq, i)
+	}
+	if len(groups) == 0 {
+		return -1, nil
+	}
+	failedGroup, err := db.lsm.SetBatchGroup(groups)
+	if err != nil {
+		if failedGroup >= 0 && failedGroup < len(groupToReq) {
+			return groupToReq[failedGroup], err
+		}
+		return 0, err
+	}
+	return -1, nil
+}
+
+func (db *DB) prepareLSMRequest(b *dbruntime.Request) error {
 	if len(b.PtrIdxs) == 0 {
 		if len(b.Ptrs) != 0 && len(b.Ptrs) != len(b.Entries) {
 			return pkgerrors.Errorf("Ptrs and Entries don't match: %+v", b)
 		}
-		return db.lsm.SetBatch(b.Entries)
+		return nil
 	}
 	if len(b.Ptrs) != len(b.Entries) {
 		return pkgerrors.Errorf("Ptrs and Entries don't match: %+v", b)
@@ -1391,9 +1419,6 @@ func (db *DB) writeToLSM(b *dbruntime.Request) error {
 		entry := b.Entries[idx]
 		entry.Meta = entry.Meta | kv.BitValuePointer
 		entry.Value = b.Ptrs[idx].Encode()
-	}
-	if err := db.lsm.SetBatch(b.Entries); err != nil {
-		return err
 	}
 	return nil
 }

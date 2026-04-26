@@ -79,26 +79,15 @@ func TestMemTableSetRejectsInvalidInput(t *testing.T) {
 	require.Error(t, nilMem.Set(entry))
 }
 
-func TestMemTableReservationAccounting(t *testing.T) {
+func TestMemTableCanReserveUsesWALSize(t *testing.T) {
 	var mt memTable
 
 	require.True(t, mt.canReserve(10, 20))
-	require.True(t, mt.tryReserve(10, 20))
-	require.False(t, mt.tryReserve(11, 20))
 
 	mt.walSize.Store(5)
-	require.False(t, mt.canReserve(6, 20))
-	require.False(t, mt.tryReserve(6, 20))
+	require.True(t, mt.canReserve(15, 20))
+	require.False(t, mt.canReserve(16, 20))
 
-	mt.releaseReserve(10)
-	require.Equal(t, int64(0), mt.reservedSize.Load())
-	require.True(t, mt.tryReserve(15, 20))
-	mt.releaseReserve(15)
-	require.Equal(t, int64(0), mt.reservedSize.Load())
-}
-
-func TestMemTableReservationUnderflowIsClamped(t *testing.T) {
-	var mt memTable
-	mt.releaseReserve(1)
-	require.Equal(t, int64(0), mt.reservedSize.Load())
+	mt.walSize.Store(21)
+	require.False(t, mt.canReserve(1, 20))
 }

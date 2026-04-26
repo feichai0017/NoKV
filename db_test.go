@@ -1405,6 +1405,53 @@ func TestApplyRequestsInlineRequestWithoutPtrs(t *testing.T) {
 	got.DecrRef()
 }
 
+func TestApplyRequestsCoalescesCommitBatchIntoOneLSMRecord(t *testing.T) {
+	local := NewDefaultOptions()
+	local.WorkDir = t.TempDir()
+	local.EnableWALWatchdog = false
+	local.ValueLogGCInterval = 0
+	local.WriteBatchWait = 0
+	local.ValueThreshold = 1 << 20
+
+	db := openTestDB(t, local)
+	defer func() { _ = db.Close() }()
+
+	first := kv.NewInternalEntry(kv.CFDefault, []byte("coalesce-a"), nonTxnMaxVersion, []byte("v1"), 0, 0)
+	second := kv.NewInternalEntry(kv.CFDefault, []byte("coalesce-b"), nonTxnMaxVersion-1, []byte("v2"), 0, 0)
+	defer first.DecrRef()
+	defer second.DecrRef()
+
+	reqs := []*dbruntime.Request{
+		{Entries: []*kv.Entry{first}},
+		{Entries: []*kv.Entry{second}},
+	}
+
+	failedAt, err := db.applyRequests(reqs)
+	require.Equal(t, -1, failedAt)
+	require.NoError(t, err)
+
+	var batchRecords int
+	var decoded int
+	err = db.wal.Replay(func(info wal.EntryInfo, payload []byte) error {
+		if info.Type != wal.RecordTypeEntryBatch {
+			return nil
+		}
+		batchRecords++
+		entries, err := wal.DecodeEntryBatch(payload)
+		if err != nil {
+			return err
+		}
+		decoded += len(entries)
+		for _, entry := range entries {
+			entry.DecrRef()
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, batchRecords)
+	require.Equal(t, 2, decoded)
+}
+
 func TestFinishCommitRequestsPerRequestErrors(t *testing.T) {
 	db := &DB{}
 	req1 := &dbruntime.Request{}

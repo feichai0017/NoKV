@@ -363,16 +363,9 @@ const (
 	walBatchLenOverhead   int64 = 4 // uint32 per-entry encoded length
 )
 
-func estimateSingleEntryWALSize(entry *kv.Entry) int64 {
-	return int64(kv.EstimateEncodeSize(entry)) + walRecordOverhead
-}
-
-func estimateBatchWALSize(entries []*kv.Entry) int64 {
-	if len(entries) <= 1 {
-		if len(entries) == 0 {
-			return 0
-		}
-		return estimateSingleEntryWALSize(entries[0])
+func estimatePipelineBatchWALSize(entries []*kv.Entry) int64 {
+	if len(entries) == 0 {
+		return 0
 	}
 	size := walRecordOverhead + walBatchCountOverhead
 	for _, entry := range entries {
@@ -381,51 +374,160 @@ func estimateBatchWALSize(entries []*kv.Entry) int64 {
 	return size
 }
 
+type writeBatch struct {
+	entries []*kv.Entry
+	index   int
+}
+
+func (b *writeBatch) estimate() int64 {
+	if b == nil {
+		return 0
+	}
+	return estimatePipelineBatchWALSize(b.entries)
+}
+
+func (lsm *LSM) applyWriteBatches(batches []*writeBatch) (int, error) {
+	for len(batches) > 0 {
+		n, err := lsm.writeSome(batches)
+		if err != nil {
+			return batches[0].index, err
+		}
+		if n == 0 {
+			if err := lsm.rotateForWrite(); err != nil {
+				return batches[0].index, err
+			}
+			continue
+		}
+		batches = batches[n:]
+	}
+	return -1, nil
+}
+
+func (lsm *LSM) writeSome(batches []*writeBatch) (int, error) {
+	lsm.lock.RLock()
+	mt := lsm.memTable
+	if mt == nil {
+		lsm.lock.RUnlock()
+		return 0, ErrMemtableNotInitialized
+	}
+	n, entries, estimate, err := fitWritePrefix(mt, lsm.option.MemTableSize, batches)
+	if err != nil {
+		lsm.lock.RUnlock()
+		return 0, err
+	}
+	if n == 0 {
+		lsm.lock.RUnlock()
+		return 0, nil
+	}
+	info, err := lsm.wal.AppendEntryBatch(wal.DurabilityFlushed, entries)
+	if err != nil {
+		lsm.lock.RUnlock()
+		return 0, err
+	}
+	walBytes := int64(info.Length) + 8
+	if estimate > 0 && walBytes > estimate {
+		// The estimator is conservative for admission, but the persisted byte
+		// count is the WAL return value. Keep this guard to catch encoder drift
+		// before it silently overcommits the active memtable.
+		lsm.lock.RUnlock()
+		panic(fmt.Sprintf("lsm: WAL batch larger than estimate: got=%d estimate=%d", walBytes, estimate))
+	}
+	if err := mt.applyBatch(entries, walBytes); err != nil {
+		lsm.lock.RUnlock()
+		panic(fmt.Sprintf("lsm: durable WAL batch could not be applied to memtable: %v", err))
+	}
+	lsm.lock.RUnlock()
+	return n, nil
+}
+
+func fitWritePrefix(mt *memTable, limit int64, batches []*writeBatch) (int, []*kv.Entry, int64, error) {
+	if mt == nil || len(batches) == 0 {
+		return 0, nil, 0, nil
+	}
+	var entries []*kv.Entry
+	var bestN int
+	var bestEstimate int64
+	for i, batch := range batches {
+		if batch == nil || len(batch.entries) == 0 {
+			continue
+		}
+		if err := validateWriteEntries(batch.entries); err != nil {
+			if bestN == 0 {
+				return 0, nil, 0, err
+			}
+			break
+		}
+		if batch.estimate() > limit {
+			if bestN == 0 {
+				return 0, nil, 0, utils.ErrTxnTooBig
+			}
+			break
+		}
+		entries = append(entries, batch.entries...)
+		estimate := estimatePipelineBatchWALSize(entries)
+		if !mt.canReserve(estimate, limit) {
+			break
+		}
+		bestN = i + 1
+		bestEstimate = estimate
+	}
+	if bestN == 0 {
+		return 0, nil, 0, nil
+	}
+	return bestN, entries[:totalWriteEntries(batches[:bestN])], bestEstimate, nil
+}
+
+func validateWriteEntries(entries []*kv.Entry) error {
+	for _, entry := range entries {
+		if entry == nil || len(entry.Key) == 0 {
+			return utils.ErrEmptyKey
+		}
+	}
+	return nil
+}
+
+func totalWriteEntries(batches []*writeBatch) int {
+	var total int
+	for _, batch := range batches {
+		if batch != nil {
+			total += len(batch.entries)
+		}
+	}
+	return total
+}
+
+func (lsm *LSM) rotateForWrite() error {
+	lsm.lock.Lock()
+	old, err := lsm.rotateLocked()
+	lsm.lock.Unlock()
+	if err != nil {
+		return err
+	}
+	return lsm.submitFlush(old)
+}
+
+func (lsm *LSM) prepareWrite() error {
+	if lsm == nil {
+		return ErrLSMNil
+	}
+	if lsm.closed.Load() {
+		return ErrLSMClosed
+	}
+	lsm.closer.Add(1)
+	if lsm.closed.Load() {
+		lsm.closer.Done()
+		return ErrLSMClosed
+	}
+	return nil
+}
+
 // Set writes one entry into the active memtable/WAL.
 // entry.Key must be an InternalKey (CF + user key + timestamp suffix).
 func (lsm *LSM) Set(entry *kv.Entry) (err error) {
 	if entry == nil || len(entry.Key) == 0 {
 		return utils.ErrEmptyKey
 	}
-	// graceful shutdown
-	lsm.closer.Add(1)
-	defer lsm.closer.Done()
-	// Reserve capacity under read lock so concurrent writers can proceed without
-	// serialising on lsm.lock unless a rotation is required.
-	estimate := estimateSingleEntryWALSize(entry)
-	for {
-		lsm.lock.RLock()
-		mt := lsm.memTable
-		if mt == nil {
-			lsm.lock.RUnlock()
-			return ErrMemtableNotInitialized
-		}
-		if mt.tryReserve(estimate, lsm.option.MemTableSize) {
-			err = mt.Set(entry)
-			mt.releaseReserve(estimate)
-			lsm.lock.RUnlock()
-			return err
-		}
-		lsm.lock.RUnlock()
-
-		var (
-			old    *memTable
-			rotErr error
-		)
-		lsm.lock.Lock()
-		if lsm.memTable == mt && !mt.canReserve(estimate, lsm.option.MemTableSize) {
-			old, rotErr = lsm.rotateLocked()
-		}
-		lsm.lock.Unlock()
-		if rotErr != nil {
-			return rotErr
-		}
-		if old != nil {
-			if err := lsm.submitFlush(old); err != nil {
-				return err
-			}
-		}
-	}
+	return lsm.SetBatch([]*kv.Entry{entry})
 }
 
 // SetBatch atomically writes a batch of entries into one memtable WAL record.
@@ -438,50 +540,34 @@ func (lsm *LSM) SetBatch(entries []*kv.Entry) error {
 	if len(entries) == 0 {
 		return nil
 	}
-	lsm.closer.Add(1)
-	defer lsm.closer.Done()
-	for _, entry := range entries {
-		if entry == nil || len(entry.Key) == 0 {
-			return utils.ErrEmptyKey
-		}
-	}
-	totalEstimate := estimateBatchWALSize(entries)
-	if totalEstimate > lsm.option.MemTableSize {
-		return utils.ErrTxnTooBig
-	}
-	for {
-		lsm.lock.RLock()
-		mt := lsm.memTable
-		if mt == nil {
-			lsm.lock.RUnlock()
-			return ErrMemtableNotInitialized
-		}
-		if mt.tryReserve(totalEstimate, lsm.option.MemTableSize) {
-			err := mt.setBatch(entries)
-			mt.releaseReserve(totalEstimate)
-			lsm.lock.RUnlock()
-			return err
-		}
-		lsm.lock.RUnlock()
+	_, err := lsm.SetBatchGroup([][]*kv.Entry{entries})
+	return err
+}
 
-		var (
-			old    *memTable
-			rotErr error
-		)
-		lsm.lock.Lock()
-		if lsm.memTable == mt && !mt.canReserve(totalEstimate, lsm.option.MemTableSize) {
-			old, rotErr = lsm.rotateLocked()
-		}
-		lsm.lock.Unlock()
-		if rotErr != nil {
-			return rotErr
-		}
-		if old != nil {
-			if err := lsm.submitFlush(old); err != nil {
-				return err
-			}
-		}
+// SetBatchGroup writes multiple atomic batches through one LSM apply pass.
+//
+// Each inner batch remains indivisible: rotation may split between batches, but
+// never inside one batch. The returned failedAt is the first batch index that
+// was not applied, or -1 on success.
+func (lsm *LSM) SetBatchGroup(groups [][]*kv.Entry) (int, error) {
+	if len(groups) == 0 {
+		return -1, nil
 	}
+	if err := lsm.prepareWrite(); err != nil {
+		return 0, err
+	}
+	defer lsm.closer.Done()
+	batches := make([]*writeBatch, 0, len(groups))
+	for idx, entries := range groups {
+		if len(entries) == 0 {
+			continue
+		}
+		batches = append(batches, &writeBatch{entries: append([]*kv.Entry(nil), entries...), index: idx})
+	}
+	if len(batches) == 0 {
+		return -1, nil
+	}
+	return lsm.applyWriteBatches(batches)
 }
 
 // Get returns the newest visible entry for key.

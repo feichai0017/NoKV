@@ -132,6 +132,14 @@ type Options struct {
 	// high proportion of range tombstones. Must be non-negative.
 	CompactionTombstoneWeight float64
 
+	// CompactionWriteBytesPerSec paces compaction output writes. Zero disables
+	// pacing. Flush writes are never paced.
+	CompactionWriteBytesPerSec int64
+	// CompactionPacingBypassL0 bypasses output pacing when L0 table count
+	// reaches this threshold. Zero derives a conservative threshold when
+	// compaction pacing is enabled; negative values are clamped to zero.
+	CompactionPacingBypassL0 int
+
 	// CompactionValueAlertThreshold triggers stats alerts when value density
 	// exceeds this ratio.
 	CompactionValueAlertThreshold float64
@@ -187,6 +195,15 @@ func (opt *Options) NormalizeInPlace() {
 	}
 	if opt.CompactionValueAlertThreshold <= 0 {
 		opt.CompactionValueAlertThreshold = DefaultCompactionValueAlertThreshold
+	}
+	if opt.CompactionWriteBytesPerSec < 0 {
+		opt.CompactionWriteBytesPerSec = 0
+	}
+	if opt.CompactionPacingBypassL0 < 0 {
+		opt.CompactionPacingBypassL0 = 0
+	}
+	if opt.CompactionWriteBytesPerSec > 0 && opt.CompactionPacingBypassL0 == 0 {
+		opt.CompactionPacingBypassL0 = max(1, opt.L0SlowdownWritesTrigger/2)
 	}
 	if opt.WriteThrottleMinRate <= 0 {
 		opt.WriteThrottleMinRate = DefaultWriteThrottleMinRate

@@ -35,11 +35,8 @@ type memTable struct {
 	index      memIndex
 	maxVersion uint64
 	walSize    atomic.Int64
-	// reservedSize tracks in-flight write reservations to avoid overcommitting
-	// a memtable when multiple writers proceed under read locks.
-	reservedSize atomic.Int64
 
-	// rtMu protects rangeTombstones. Written by setBatch (which may run
+	// rtMu protects rangeTombstones. Written by Set/applyBatch (which may run
 	// under lsm.lock read-lock or write-lock), read concurrently by
 	// isKeyCoveredByRangeTombstone. The cached per-CF span index is rebuilt
 	// lazily on demand when rtIndexDirty is set.
@@ -129,20 +126,26 @@ func (m *memTable) Size() int64 {
 	return m.index.MemSize()
 }
 
-func (m *memTable) setBatch(entries []*kv.Entry) error {
-	if m == nil || len(entries) == 0 {
+func (m *memTable) applyBatch(entries []*kv.Entry, walBytes int64) error {
+	if m == nil {
+		return ErrMemtableNotInitialized
+	}
+	if len(entries) == 0 {
 		return nil
 	}
-	if len(entries) == 1 {
-		return m.Set(entries[0])
+	for _, entry := range entries {
+		if entry == nil || len(entry.Key) == 0 {
+			return utils.ErrEmptyKey
+		}
 	}
-	info, err := m.lsm.wal.AppendEntryBatch(wal.DurabilityFlushed, entries)
-	if err != nil {
-		return err
+	if walBytes > 0 {
+		m.walSize.Add(walBytes)
 	}
-	m.walSize.Add(int64(info.Length) + 8)
-	if m.index != nil {
-		for _, entry := range entries {
+	for _, entry := range entries {
+		if ts := kv.Timestamp(entry.Key); ts > m.maxVersion {
+			m.maxVersion = ts
+		}
+		if m.index != nil {
 			m.index.Add(entry)
 			m.trackRangeTombstone(entry)
 		}
@@ -279,54 +282,10 @@ func (mt *memTable) canReserve(need, limit int64) bool {
 		return true
 	}
 	used := mt.walSize.Load()
-	reserved := mt.reservedSize.Load()
-	if used < 0 || reserved < 0 || used > limit {
+	if used < 0 || used > limit {
 		return false
 	}
-	remaining := limit - used
-	if reserved > remaining {
-		return false
-	}
-	remaining -= reserved
-	return need <= remaining
-}
-
-func (mt *memTable) tryReserve(need, limit int64) bool {
-	if mt == nil {
-		return false
-	}
-	if need <= 0 {
-		return true
-	}
-	for {
-		used := mt.walSize.Load()
-		reserved := mt.reservedSize.Load()
-		if used < 0 || reserved < 0 || used > limit {
-			return false
-		}
-		remaining := limit - used
-		if reserved > remaining {
-			return false
-		}
-		remaining -= reserved
-		if need > remaining {
-			return false
-		}
-		if mt.reservedSize.CompareAndSwap(reserved, reserved+need) {
-			return true
-		}
-	}
-}
-
-func (mt *memTable) releaseReserve(need int64) {
-	if mt == nil || need <= 0 {
-		return
-	}
-	if n := mt.reservedSize.Add(-need); n < 0 {
-		// Defensive clamping: reservation accounting bug must not crash the whole service.
-		// Keep the counter non-negative and surface via diagnostics/tests.
-		mt.reservedSize.Store(0)
-	}
+	return need <= limit-used
 }
 
 // reference counting helpers, delegate to the backing index.

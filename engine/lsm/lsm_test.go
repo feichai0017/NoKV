@@ -1320,6 +1320,165 @@ func TestLSMSetBatchConcurrentReservations(t *testing.T) {
 	}
 }
 
+func newWritePipelineEntry(key string, version uint64) *kv.Entry {
+	return kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte(key), version), []byte("value-"+key))
+}
+
+func newTestWriteBatch(entries ...*kv.Entry) *writeBatch {
+	return &writeBatch{entries: entries}
+}
+
+func TestWriteBatchesGroupIntoOneWALBatch(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	entries := []*kv.Entry{
+		newWritePipelineEntry("pipe-a", 1),
+		newWritePipelineEntry("pipe-b", 2),
+		newWritePipelineEntry("pipe-c", 3),
+	}
+	defer func() {
+		for _, entry := range entries {
+			entry.DecrRef()
+		}
+	}()
+	batches := []*writeBatch{
+		newTestWriteBatch(entries[0]),
+		newTestWriteBatch(entries[1]),
+		newTestWriteBatch(entries[2]),
+	}
+
+	failedAt, err := lsm.applyWriteBatches(batches)
+	require.Equal(t, -1, failedAt)
+	require.NoError(t, err)
+	for _, entry := range entries {
+		got, err := lsm.Get(entry.Key)
+		require.NoError(t, err)
+		require.Equal(t, entry.Value, got.Value)
+		got.DecrRef()
+	}
+
+	var batchRecords int
+	var decoded int
+	err = lsm.wal.ReplaySegment(lsm.memTable.segmentID, func(info wal.EntryInfo, payload []byte) error {
+		if info.Type != wal.RecordTypeEntryBatch {
+			return nil
+		}
+		batchRecords++
+		entries, err := wal.DecodeEntryBatch(payload)
+		if err != nil {
+			return err
+		}
+		decoded += len(entries)
+		for _, entry := range entries {
+			entry.DecrRef()
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, batchRecords)
+	require.Equal(t, 3, decoded)
+}
+
+func TestWriteBatchesWALFailureDoesNotApplyMemtable(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	entry := newWritePipelineEntry("wal-fail", 1)
+	defer entry.DecrRef()
+
+	require.NoError(t, lsm.wal.Close())
+	failedAt, err := lsm.applyWriteBatches([]*writeBatch{newTestWriteBatch(entry)})
+	require.Equal(t, 0, failedAt)
+	require.Error(t, err)
+
+	got, err := lsm.memTable.Get(entry.Key)
+	require.NoError(t, err)
+	require.Empty(t, got.Value)
+	got.DecrRef()
+}
+
+func TestFitWritePrefixStopsAtRequestBoundary(t *testing.T) {
+	entries := []*kv.Entry{
+		newWritePipelineEntry("fit-a", 1),
+		newWritePipelineEntry("fit-b", 2),
+		newWritePipelineEntry("fit-c", 3),
+	}
+	defer func() {
+		for _, entry := range entries {
+			entry.DecrRef()
+		}
+	}()
+	batches := []*writeBatch{
+		newTestWriteBatch(entries[0]),
+		newTestWriteBatch(entries[1]),
+		newTestWriteBatch(entries[2]),
+	}
+	limit := estimatePipelineBatchWALSize(entries[:2])
+
+	var mt memTable
+	n, gotEntries, estimate, err := fitWritePrefix(&mt, limit, batches)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	require.Len(t, gotEntries, 2)
+	require.Equal(t, limit, estimate)
+	require.Equal(t, entries[0], gotEntries[0])
+	require.Equal(t, entries[1], gotEntries[1])
+}
+
+func TestWriteBatchesRotateOnlyBetweenRequests(t *testing.T) {
+	entries := []*kv.Entry{
+		newWritePipelineEntry("rotate-a", 1),
+		newWritePipelineEntry("rotate-b", 2),
+		newWritePipelineEntry("rotate-c", 3),
+	}
+	defer func() {
+		for _, entry := range entries {
+			entry.DecrRef()
+		}
+	}()
+	limit := estimatePipelineBatchWALSize(entries[:2])
+	dir := t.TempDir()
+	wlog, err := wal.Open(wal.Config{Dir: dir})
+	require.NoError(t, err)
+	opts := newTestLSMOptions(dir, nil)
+	opts.MemTableSize = limit
+	lsm, err := NewLSM(opts, wlog)
+	require.NoError(t, err)
+	defer func() { _ = lsm.Close() }()
+
+	failedAt, err := lsm.applyWriteBatches([]*writeBatch{
+		newTestWriteBatch(entries[0]),
+		newTestWriteBatch(entries[1]),
+		newTestWriteBatch(entries[2]),
+	})
+	require.Equal(t, -1, failedAt)
+	require.NoError(t, err)
+
+	var batches int
+	var decoded int
+	err = lsm.wal.Replay(func(info wal.EntryInfo, payload []byte) error {
+		if info.Type != wal.RecordTypeEntryBatch {
+			return nil
+		}
+		batches++
+		entries, err := wal.DecodeEntryBatch(payload)
+		if err != nil {
+			return err
+		}
+		decoded += len(entries)
+		for _, entry := range entries {
+			entry.DecrRef()
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, batches)
+	require.Equal(t, 3, decoded)
+}
+
 func TestLevelsRuntimeAdjustThrottleAndPointers(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()

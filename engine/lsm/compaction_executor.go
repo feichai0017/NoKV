@@ -662,6 +662,7 @@ func (lm *levelManager) subcompact(it index.Iterator, kr KeyRange, cd compactDef
 		// Copy Options so background tuning does not affect the active compaction.
 		builderOpt := lm.opt.Clone()
 		builder := newTableBuilerWithSSTSize(builderOpt, cd.plan.NextFileSize)
+		builder.pacer = lm.compactionPacerForBuild()
 
 		// This would do the iteration and add keys to builder.
 		addKeys(builder)
