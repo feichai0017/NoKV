@@ -220,6 +220,17 @@ func (c *Cluster) IsolateNode(nodeID uint64) {
 	}
 }
 
+func (c *Cluster) IsolateNodeEgress(nodeID uint64) {
+	c.tb.Helper()
+	transport := c.transport(nodeID)
+	for _, peerID := range clusterNodeIDs {
+		if peerID == nodeID {
+			continue
+		}
+		transport.SetPeer(peerID, c.blockedPeerAddrs[peerID])
+	}
+}
+
 func (c *Cluster) RestoreNode(nodeID uint64) {
 	c.tb.Helper()
 	for _, id := range clusterNodeIDs {
