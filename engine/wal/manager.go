@@ -13,6 +13,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/vfs"
@@ -48,9 +49,13 @@ const (
 	DurabilityFlushed
 	// DurabilityFsync acknowledges after fsyncing the active segment.
 	DurabilityFsync
-	// DurabilityFsyncBatched currently fsyncs synchronously; a later group-commit
-	// pipeline may batch multiple requests behind this contract.
+	// DurabilityFsyncBatched acknowledges after a group-commit fsync.
 	DurabilityFsyncBatched
+)
+
+const (
+	defaultFsyncBatchWindow = 50 * time.Microsecond
+	defaultFsyncBatchSize   = 128
 )
 
 // resolveOpenConfig resolves constructor defaults once at the WAL open boundary.
@@ -132,6 +137,11 @@ type Manager struct {
 	recordTotals    RecordMetrics
 	segmentTotals   map[uint32]RecordMetrics
 	retention       map[string]RetentionFunc
+	fsyncCond       *sync.Cond
+	fsyncClosed     bool
+	fsyncBatchSeq   uint64
+	fsyncDurableSeq uint64
+	fsyncErr        error
 }
 
 // Open creates or resumes a WAL manager.
@@ -151,6 +161,7 @@ func Open(cfg Config) (*Manager, error) {
 		bufferSize:    cfg.BufferSize,
 		segmentTotals: make(map[uint32]RecordMetrics, 16),
 	}
+	m.fsyncCond = sync.NewCond(&m.mu)
 	if err := m.openLatestSegment(); err != nil {
 		return nil, err
 	}
@@ -372,7 +383,7 @@ func (m *Manager) applyDurabilityLocked(policy DurabilityPolicy) error {
 			return m.writer.Flush()
 		}
 		return nil
-	case DurabilityFsync, DurabilityFsyncBatched:
+	case DurabilityFsync:
 		if err := m.writer.Flush(); err != nil {
 			return err
 		}
@@ -380,9 +391,72 @@ func (m *Manager) applyDurabilityLocked(policy DurabilityPolicy) error {
 			return err
 		}
 		return nil
+	case DurabilityFsyncBatched:
+		return m.enqueueFsyncBatchLocked()
 	default:
 		return fmt.Errorf("wal: invalid durability policy %d", policy)
 	}
+}
+
+func (m *Manager) enqueueFsyncBatchLocked() error {
+	if m.fsyncClosed {
+		return fmt.Errorf("wal: manager closed")
+	}
+	seq := m.fsyncBatchSeq + 1
+	m.fsyncBatchSeq = seq
+	if m.fsyncBatchSeq-m.fsyncDurableSeq == 1 {
+		go m.runFsyncBatch()
+	}
+	for m.fsyncDurableSeq < seq && !m.fsyncClosed {
+		m.fsyncCond.Wait()
+	}
+	if m.fsyncDurableSeq >= seq {
+		return m.fsyncErr
+	}
+	return fmt.Errorf("wal: manager closed")
+}
+
+func (m *Manager) runFsyncBatch() {
+	timer := time.NewTimer(defaultFsyncBatchWindow)
+	<-timer.C
+
+	for {
+		m.mu.Lock()
+		target := m.fsyncBatchSeq
+		if pending := target - m.fsyncDurableSeq; pending < defaultFsyncBatchSize && !m.fsyncClosed {
+			m.mu.Unlock()
+			time.Sleep(defaultFsyncBatchWindow)
+			m.mu.Lock()
+			target = m.fsyncBatchSeq
+		}
+		if target == m.fsyncDurableSeq || m.fsyncClosed {
+			m.mu.Unlock()
+			return
+		}
+		err := m.flushAndSyncLocked()
+		m.fsyncErr = err
+		m.fsyncDurableSeq = target
+		m.fsyncCond.Broadcast()
+		more := m.fsyncBatchSeq > m.fsyncDurableSeq && !m.fsyncClosed
+		m.mu.Unlock()
+		if !more {
+			return
+		}
+	}
+}
+
+func (m *Manager) flushAndSyncLocked() error {
+	if m.writer != nil {
+		if err := m.writer.Flush(); err != nil {
+			return err
+		}
+	}
+	if m.active != nil {
+		if err := m.active.Sync(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *Manager) ensureCapacity(need int64) error {
@@ -521,6 +595,10 @@ func (m *Manager) Close() error {
 	defer m.mu.Unlock()
 	if m.closed {
 		return nil
+	}
+	m.fsyncClosed = true
+	if m.fsyncCond != nil {
+		m.fsyncCond.Broadcast()
 	}
 	if m.active == nil {
 		m.closed = true
