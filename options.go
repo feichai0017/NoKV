@@ -283,6 +283,21 @@ type Options struct {
 	// IngestShardParallelism caps how many ingest shards can be compacted in a
 	// single ingest-only pass. A value <= 0 falls back to 1 (sequential).
 	IngestShardParallelism int
+
+	// NegativeCachePersistent enables snapshot-on-Close + restore-on-Open for
+	// the in-memory negative cache, backed by an engine/slab segment under
+	// WorkDir/negative-slab/. Default false. When enabled, a process restart
+	// skips the cold-start re-warm phase for previously-known not-found keys
+	// (fsmeta Lookup misses, S3 GetObject 404, HDFS path probes). The slab
+	// is best-effort (Derived consistency class — see
+	// docs/notes/2026-04-27-slab-substrate.md §6.1): a corrupt or missing
+	// snapshot forces a re-warm but does not affect read correctness.
+	NegativeCachePersistent bool
+	// NegativeCacheSlabMaxSize bounds the on-disk snapshot size in bytes.
+	// Snapshots stop appending once the limit is hit; remaining keys re-warm
+	// normally. Zero falls back to a 64 MiB default. Ignored unless
+	// NegativeCachePersistent is true.
+	NegativeCacheSlabMaxSize int64
 }
 
 // CompactionPolicy defines compaction priority-arrangement strategy.
@@ -461,6 +476,8 @@ func (opt *Options) applyLSMSharedOptions(dst *lsmpkg.Options) {
 	dst.IndexCacheBytes = opt.IndexCacheBytes
 	dst.PrefixExtractor = opt.PrefixExtractor
 	dst.BlockCompression = opt.BlockCompression
+	dst.NegativeCachePersistent = opt.NegativeCachePersistent
+	dst.NegativeCacheSlabMaxSize = opt.NegativeCacheSlabMaxSize
 }
 
 func (opt *Options) copyNormalizedLSMOptions(src *lsmpkg.Options) {
@@ -490,6 +507,8 @@ func (opt *Options) copyNormalizedLSMOptions(src *lsmpkg.Options) {
 	opt.IndexCacheBytes = src.IndexCacheBytes
 	opt.PrefixExtractor = src.PrefixExtractor
 	opt.BlockCompression = src.BlockCompression
+	opt.NegativeCachePersistent = src.NegativeCachePersistent
+	opt.NegativeCacheSlabMaxSize = src.NegativeCacheSlabMaxSize
 }
 
 func nativeMetadataPrefix(key []byte) []byte {
