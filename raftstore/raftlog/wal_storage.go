@@ -178,7 +178,7 @@ func (ws *WALStorage) Append(entries []myraft.Entry) error {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
-	infos, err := ws.wal.AppendRecords(wal.Record{
+	infos, err := ws.wal.AppendRecords(wal.DurabilityFsyncBatched, wal.Record{
 		Type:    wal.RecordTypeRaftEntry,
 		Payload: payload,
 	})
@@ -215,7 +215,7 @@ func (ws *WALStorage) ApplySnapshot(snap myraft.Snapshot) error {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
-	infos, err := ws.wal.AppendRecords(wal.Record{
+	infos, err := ws.wal.AppendRecords(wal.DurabilityFsyncBatched, wal.Record{
 		Type:    wal.RecordTypeRaftSnapshot,
 		Payload: payload,
 	})
@@ -281,7 +281,7 @@ func (ws *WALStorage) SetHardState(st myraft.HardState) error {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
-	infos, err := ws.wal.AppendRecords(wal.Record{
+	infos, err := ws.wal.AppendRecords(wal.DurabilityFsyncBatched, wal.Record{
 		Type:    wal.RecordTypeRaftState,
 		Payload: payload,
 	})

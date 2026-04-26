@@ -22,7 +22,7 @@ func TestOpenMemTableReplayWithTypedRecords(t *testing.T) {
 	payload, err := wal.EncodeEntryBatch([]*kv.Entry{entry})
 	require.NoError(t, err)
 
-	infos, err := lsm.wal.AppendRecords(
+	infos, err := lsm.wal.AppendRecords(wal.DurabilityBuffered,
 		wal.Record{Type: wal.RecordTypeRaftState, Payload: []byte("ignored")},
 		wal.Record{Type: wal.RecordTypeEntryBatch, Payload: payload},
 	)
@@ -50,7 +50,7 @@ func TestOpenMemTableReplayDecodeError(t *testing.T) {
 
 	const segID = uint32(78)
 	require.NoError(t, lsm.wal.SwitchSegment(segID, true))
-	_, err := lsm.wal.AppendRecords(wal.Record{
+	_, err := lsm.wal.AppendRecords(wal.DurabilityBuffered, wal.Record{
 		Type:    wal.RecordTypeEntryBatch,
 		Payload: []byte("bad-entry-payload"),
 	})

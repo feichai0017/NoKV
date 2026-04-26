@@ -1226,7 +1226,7 @@ func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 	walMgr := db.wal
 
 	appendRaft := func(data string) {
-		_, err := walMgr.AppendRecords(wal.Record{Type: wal.RecordTypeRaftEntry, Payload: []byte(data)})
+		_, err := walMgr.AppendRecords(wal.DurabilityBuffered, wal.Record{Type: wal.RecordTypeRaftEntry, Payload: []byte(data)})
 		require.NoError(t, err)
 		require.NoError(t, walMgr.Sync())
 	}

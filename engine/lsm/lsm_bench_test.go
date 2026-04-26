@@ -31,7 +31,7 @@ func newBenchLSM(b *testing.B, memTableSize int64) *LSM {
 func newBenchLSMWithEngine(b *testing.B, memTableSize int64, memTableEngine string) *LSM {
 	b.Helper()
 	dir := b.TempDir()
-	wlog, err := wal.Open(wal.Config{Dir: dir, SyncOnWrite: false})
+	wlog, err := wal.Open(wal.Config{Dir: dir})
 	if err != nil {
 		b.Fatalf("open wal: %v", err)
 	}

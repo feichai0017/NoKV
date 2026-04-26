@@ -8,7 +8,10 @@ import (
 
 func newBenchManager(b *testing.B) *Manager {
 	b.Helper()
-	mgr, err := Open(Config{Dir: b.TempDir(), SyncOnWrite: false, SegmentSize: 256 << 20})
+	mgr, err := Open(Config{
+		Dir:         b.TempDir(),
+		SegmentSize: 256 << 20,
+	})
 	if err != nil {
 		b.Fatalf("open wal: %v", err)
 	}
@@ -27,7 +30,7 @@ func BenchmarkWALAppend(b *testing.B) {
 	b.SetBytes(int64(len(payload)))
 
 	for b.Loop() {
-		if _, err := mgr.AppendEntry(entry); err != nil {
+		if _, err := mgr.AppendEntry(DurabilityBuffered, entry); err != nil {
 			b.Fatalf("append: %v", err)
 		}
 	}
@@ -39,7 +42,7 @@ func BenchmarkWALReplay(b *testing.B) {
 	entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("bench-key"), 1), payload)
 	defer entry.DecrRef()
 	for range 10_000 {
-		if _, err := mgr.AppendEntry(entry); err != nil {
+		if _, err := mgr.AppendEntry(DurabilityBuffered, entry); err != nil {
 			b.Fatalf("append preload: %v", err)
 		}
 	}

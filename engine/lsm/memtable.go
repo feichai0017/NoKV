@@ -97,7 +97,7 @@ func (m *memTable) Set(entry *kv.Entry) error {
 	if entry == nil || len(entry.Key) == 0 {
 		return utils.ErrEmptyKey
 	}
-	info, err := m.lsm.wal.AppendEntry(entry)
+	info, err := m.lsm.wal.AppendEntry(wal.DurabilityFlushed, entry)
 	if err != nil {
 		return err
 	}
@@ -136,7 +136,7 @@ func (m *memTable) setBatch(entries []*kv.Entry) error {
 	if len(entries) == 1 {
 		return m.Set(entries[0])
 	}
-	info, err := m.lsm.wal.AppendEntryBatch(entries)
+	info, err := m.lsm.wal.AppendEntryBatch(wal.DurabilityFlushed, entries)
 	if err != nil {
 		return err
 	}
