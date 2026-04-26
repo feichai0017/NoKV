@@ -9,10 +9,8 @@ One-command demo of the full 333 HA topology (3 meta-root + 3 coordinator +
 # Pull image + start every service + run bootstrap once
 docker compose up -d
 
-# Wait a few seconds, then verify
-redis-cli -p 6380 ping                    # → PONG
-redis-cli -p 6380 set demo hello
-redis-cli -p 6380 get demo                # → hello
+# Wait for the Redis-compatible gateway and verify write/read persistence
+scripts/demo/redis-smoke.sh
 ```
 
 That's it. `docker compose down -v` wipes data volumes too.
@@ -24,7 +22,7 @@ consecutive numbers — easy to remember, easy to script against.
 
 | Service | Port | Purpose |
 |---|---|---|
-| Redis gateway | `6380` | RESP protocol — `redis-cli -p 6380 ...` |
+| Redis gateway | `6380` | RESP protocol — `scripts/demo/redis-smoke.sh`, or `redis-cli -p 6380 ...` |
 | Redis expvar | `9300` | `/debug/vars` JSON |
 | Meta-root-1 gRPC | `2380` | `nokv eunomia-audit --root-peer 1=127.0.0.1:2380 ...` |
 | Meta-root-2 gRPC | `2381` | |

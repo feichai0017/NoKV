@@ -42,7 +42,7 @@ go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --coordinator-addr 127.0.0.1:2379
 Quick smoke test:
 
 ```bash
-redis-cli -p 6380 ping
+scripts/demo/redis-smoke.sh
 ```
 
 ### Inspect stats
@@ -56,6 +56,7 @@ This runs the cluster and gateway in containers with the published GHCR image.
 
 ```bash
 docker compose up -d
+scripts/demo/redis-smoke.sh
 ```
 
 To force-refresh `:latest` before startup, use:

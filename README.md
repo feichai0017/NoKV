@@ -186,6 +186,7 @@ Documentation: [`docs/fsmeta.md`](docs/fsmeta.md) · [positioning note](docs/not
 
 # Or: Docker Compose (cluster + fsmeta + Redis gateway, with mount-init bootstrap)
 docker compose up -d
+scripts/demo/redis-smoke.sh
 
 # Local Docker development build
 docker compose up -d --build
