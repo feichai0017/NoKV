@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,7 +17,7 @@ func TestWatchdogAutoGC(t *testing.T) {
 
 	record := Record{Type: RecordTypeRaftEntry, Payload: []byte("raft-entry")}
 	for i := range 4 {
-		_, err := mgr.AppendRecords(record)
+		_, err := mgr.AppendRecords(DurabilityBuffered, record)
 		require.NoError(t, err)
 		if i < 3 {
 			require.NoError(t, mgr.Rotate())
@@ -26,9 +25,6 @@ func TestWatchdogAutoGC(t *testing.T) {
 	}
 	require.NoError(t, mgr.Sync())
 
-	ptrs := map[uint64]localmeta.RaftLogPointer{
-		42: {GroupID: 42, Segment: 4, SegmentIndex: 4},
-	}
 	wd := NewWatchdog(WatchdogConfig{
 		Manager:      mgr,
 		Interval:     time.Hour,
@@ -36,7 +32,6 @@ func TestWatchdogAutoGC(t *testing.T) {
 		MaxBatch:     2,
 		WarnRatio:    0,
 		WarnSegments: 0,
-		RaftPointers: func() map[uint64]localmeta.RaftLogPointer { return ptrs },
 	})
 
 	wd.RunOnce()
@@ -72,7 +67,7 @@ func TestWatchdogTypedWarning(t *testing.T) {
 	defer func() { _ = mgr.Close() }()
 
 	record := Record{Type: RecordTypeRaftEntry, Payload: []byte("raft-entry")}
-	_, err = mgr.AppendRecords(record)
+	_, err = mgr.AppendRecords(DurabilityBuffered, record)
 	require.NoError(t, err)
 	require.NoError(t, mgr.Sync())
 

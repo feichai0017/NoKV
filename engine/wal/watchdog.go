@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"errors"
 	"log/slog"
 	"math"
 	"os"
@@ -8,7 +9,6 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/metrics"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -26,7 +26,6 @@ type WatchdogConfig struct {
 	MaxBatch     int
 	WarnRatio    float64
 	WarnSegments int64
-	RaftPointers func() map[uint64]localmeta.RaftLogPointer
 }
 
 // resolveDefaults resolves constructor-boundary defaults for the watchdog config.
@@ -64,7 +63,6 @@ type Watchdog struct {
 	warnRatio    float64
 	warnSegments int64
 	autoEnabled  bool
-	raftPointers func() map[uint64]localmeta.RaftLogPointer
 	closer       *utils.Closer
 
 	autoRuns        atomic.Uint64
@@ -91,7 +89,6 @@ func NewWatchdog(cfg WatchdogConfig) *Watchdog {
 		warnRatio:    cfg.WarnRatio,
 		warnSegments: cfg.WarnSegments,
 		autoEnabled:  cfg.MinRemovable > 0 && cfg.MaxBatch > 0,
-		raftPointers: cfg.RaftPointers,
 		closer:       utils.NewCloser(),
 	}
 	w.warnReason.Store("")
@@ -170,13 +167,10 @@ func (w *Watchdog) observe() {
 
 	wmetrics := w.manager.Metrics()
 	segmentMetrics := w.manager.SegmentMetrics()
-	var ptrs map[uint64]localmeta.RaftLogPointer
-	if w.raftPointers != nil {
-		ptrs = w.raftPointers()
-	}
-	analysis := metrics.AnalyzeWALBacklog(wmetrics, segmentMetrics, ptrs)
+	analysis := metrics.AnalyzeWALBacklog(wmetrics, segmentMetrics)
+	removable := w.filterRemovable(analysis.RemovableSegments)
 
-	w.removableCount.Store(int64(len(analysis.RemovableSegments)))
+	w.removableCount.Store(int64(len(removable)))
 	w.lastRatioBits.Store(math.Float64bits(analysis.TypedRecordRatio))
 
 	warning, reason := metrics.WALTypedWarning(analysis.TypedRecordRatio, analysis.SegmentsWithRaft, w.warnRatio, w.warnSegments)
@@ -190,11 +184,11 @@ func (w *Watchdog) observe() {
 	if !w.autoEnabled {
 		return
 	}
-	if len(analysis.RemovableSegments) < w.minRemovable {
+	if len(removable) < w.minRemovable {
 		return
 	}
 
-	batch := analysis.RemovableSegments
+	batch := removable
 	if len(batch) > w.maxBatch {
 		batch = batch[:w.maxBatch]
 	}
@@ -202,7 +196,7 @@ func (w *Watchdog) observe() {
 	removed := 0
 	for _, id := range batch {
 		if err := w.manager.RemoveSegment(id); err != nil {
-			if os.IsNotExist(err) {
+			if os.IsNotExist(err) || errors.Is(err, ErrSegmentRetained) {
 				continue
 			}
 			slog.Default().Warn("wal watchdog remove segment failed", "segment", id, "err", err)
@@ -216,4 +210,17 @@ func (w *Watchdog) observe() {
 	w.autoRuns.Add(1)
 	w.segmentsRemoved.Add(uint64(removed))
 	w.lastAutoUnix.Store(time.Now().Unix())
+}
+
+func (w *Watchdog) filterRemovable(candidates []uint32) []uint32 {
+	if len(candidates) == 0 {
+		return nil
+	}
+	out := make([]uint32, 0, len(candidates))
+	for _, id := range candidates {
+		if w.manager.CanRemoveSegment(id) {
+			out = append(out, id)
+		}
+	}
+	return out
 }

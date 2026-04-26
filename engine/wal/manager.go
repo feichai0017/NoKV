@@ -13,6 +13,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/vfs"
@@ -33,10 +34,29 @@ type Config struct {
 	Dir         string
 	SegmentSize int64
 	FileMode    os.FileMode
-	SyncOnWrite bool
 	BufferSize  int
+	MaxSegments int
 	FS          vfs.FS
 }
+
+// DurabilityPolicy describes when an append may be acknowledged.
+type DurabilityPolicy uint8
+
+const (
+	// DurabilityBuffered acknowledges after records are copied into the WAL writer buffer.
+	DurabilityBuffered DurabilityPolicy = iota + 1
+	// DurabilityFlushed acknowledges after flushing records into the OS page cache.
+	DurabilityFlushed
+	// DurabilityFsync acknowledges after fsyncing the active segment.
+	DurabilityFsync
+	// DurabilityFsyncBatched acknowledges after a group-commit fsync.
+	DurabilityFsyncBatched
+)
+
+const (
+	defaultFsyncBatchWindow = 50 * time.Microsecond
+	defaultFsyncBatchSize   = 128
+)
 
 // resolveOpenConfig resolves constructor defaults once at the WAL open boundary.
 func (cfg Config) resolveOpenConfig() (Config, error) {
@@ -59,12 +79,22 @@ func (cfg Config) resolveOpenConfig() (Config, error) {
 	return cfg, nil
 }
 
+func (p DurabilityPolicy) valid() bool {
+	switch p {
+	case DurabilityBuffered, DurabilityFlushed, DurabilityFsync, DurabilityFsyncBatched:
+		return true
+	default:
+		return false
+	}
+}
+
 // EntryInfo describes an entry written to WAL.
 type EntryInfo struct {
 	SegmentID uint32
 	Offset    int64
 	Length    uint32
 	Type      RecordType
+	GroupID   uint64
 }
 
 // Metrics captures runtime information about WAL manager state.
@@ -103,9 +133,16 @@ type Manager struct {
 	segmentSize     int64
 	removedSegments atomic.Uint64
 	bufferSize      int
+	segmentCount    int
 	writer          *bufio.Writer
 	recordTotals    RecordMetrics
 	segmentTotals   map[uint32]RecordMetrics
+	retention       map[string]RetentionFunc
+	fsyncCond       *sync.Cond
+	fsyncClosed     bool
+	fsyncBatchSeq   uint64
+	fsyncDurableSeq uint64
+	fsyncErr        error
 }
 
 // Open creates or resumes a WAL manager.
@@ -125,6 +162,7 @@ func Open(cfg Config) (*Manager, error) {
 		bufferSize:    cfg.BufferSize,
 		segmentTotals: make(map[uint32]RecordMetrics, 16),
 	}
+	m.fsyncCond = sync.NewCond(&m.mu)
 	if err := m.openLatestSegment(); err != nil {
 		return nil, err
 	}
@@ -148,6 +186,7 @@ func (m *Manager) openLatestSegment() error {
 		}
 	}
 	sort.Ints(ids)
+	m.segmentCount = len(ids)
 	if len(ids) == 0 {
 		return m.switchSegmentLocked(1, true)
 	}
@@ -196,12 +235,20 @@ func (m *Manager) switchSegmentLocked(id uint32, truncate bool) error {
 		if err := m.active.Sync(); err != nil {
 			return err
 		}
+		if err := m.rebuildActiveCatalogLocked(); err != nil {
+			return err
+		}
 		if err := m.active.Close(); err != nil {
 			return err
 		}
 	}
 
 	path := m.segmentPath(id)
+	_, statErr := m.cfg.FS.Stat(path)
+	segmentExists := statErr == nil
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	}
 	flag := os.O_CREATE | os.O_RDWR
 	if truncate {
 		flag |= os.O_TRUNC
@@ -226,6 +273,9 @@ func (m *Manager) switchSegmentLocked(id uint32, truncate bool) error {
 	}
 	m.active = f
 	m.activeID = id
+	if !segmentExists {
+		m.segmentCount++
+	}
 	if truncate {
 		m.activeSize = 0
 	} else {
@@ -245,7 +295,7 @@ func (m *Manager) switchSegment(id uint32, truncate bool) error {
 }
 
 // AppendEntry appends a single encoded kv entry record to WAL.
-func (m *Manager) AppendEntry(entry *kv.Entry) (EntryInfo, error) {
+func (m *Manager) AppendEntry(durability DurabilityPolicy, entry *kv.Entry) (EntryInfo, error) {
 	if entry == nil || len(entry.Key) == 0 {
 		return EntryInfo{}, fmt.Errorf("wal: invalid entry")
 	}
@@ -254,7 +304,7 @@ func (m *Manager) AppendEntry(entry *kv.Entry) (EntryInfo, error) {
 	if err != nil {
 		return EntryInfo{}, err
 	}
-	infos, err := m.AppendRecords(Record{
+	infos, err := m.AppendRecords(durability, Record{
 		Type:    RecordTypeEntry,
 		Payload: payload,
 	})
@@ -268,12 +318,12 @@ func (m *Manager) AppendEntry(entry *kv.Entry) (EntryInfo, error) {
 }
 
 // AppendEntryBatch appends a batch of kv entries as one WAL record.
-func (m *Manager) AppendEntryBatch(entries []*kv.Entry) (EntryInfo, error) {
+func (m *Manager) AppendEntryBatch(durability DurabilityPolicy, entries []*kv.Entry) (EntryInfo, error) {
 	payload, err := EncodeEntryBatch(entries)
 	if err != nil {
 		return EntryInfo{}, err
 	}
-	infos, err := m.AppendRecords(Record{
+	infos, err := m.AppendRecords(durability, Record{
 		Type:    RecordTypeEntryBatch,
 		Payload: payload,
 	})
@@ -286,12 +336,15 @@ func (m *Manager) AppendEntryBatch(entries []*kv.Entry) (EntryInfo, error) {
 	return infos[0], nil
 }
 
-// AppendRecords appends typed records to WAL and returns their locations.
-func (m *Manager) AppendRecords(records ...Record) ([]EntryInfo, error) {
+// AppendRecords appends typed records with explicit durability semantics.
+func (m *Manager) AppendRecords(durability DurabilityPolicy, records ...Record) ([]EntryInfo, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
 		return nil, fmt.Errorf("wal: manager closed")
+	}
+	if !durability.valid() {
+		return nil, fmt.Errorf("wal: invalid durability policy %d", durability)
 	}
 	results := make([]EntryInfo, len(records))
 	for i, rec := range records {
@@ -319,15 +372,95 @@ func (m *Manager) AppendRecords(records ...Record) ([]EntryInfo, error) {
 		m.segmentTotals[m.activeID] = segMetrics
 		addRecordMetric(&m.recordTotals, rec.Type)
 	}
-	if m.cfg.SyncOnWrite {
-		if err := m.writer.Flush(); err != nil {
-			return nil, err
-		}
-		if err := m.active.Sync(); err != nil {
-			return nil, err
-		}
+	if err := m.applyDurabilityLocked(durability); err != nil {
+		return nil, err
 	}
 	return results, nil
+}
+
+func (m *Manager) applyDurabilityLocked(policy DurabilityPolicy) error {
+	switch policy {
+	case DurabilityBuffered:
+		return nil
+	case DurabilityFlushed:
+		if m.writer != nil {
+			return m.writer.Flush()
+		}
+		return nil
+	case DurabilityFsync:
+		if err := m.writer.Flush(); err != nil {
+			return err
+		}
+		if err := m.active.Sync(); err != nil {
+			return err
+		}
+		return nil
+	case DurabilityFsyncBatched:
+		return m.enqueueFsyncBatchLocked()
+	default:
+		return fmt.Errorf("wal: invalid durability policy %d", policy)
+	}
+}
+
+func (m *Manager) enqueueFsyncBatchLocked() error {
+	if m.fsyncClosed {
+		return fmt.Errorf("wal: manager closed")
+	}
+	seq := m.fsyncBatchSeq + 1
+	m.fsyncBatchSeq = seq
+	if m.fsyncBatchSeq-m.fsyncDurableSeq == 1 {
+		go m.runFsyncBatch()
+	}
+	for m.fsyncDurableSeq < seq && !m.fsyncClosed {
+		m.fsyncCond.Wait()
+	}
+	if m.fsyncDurableSeq >= seq {
+		return m.fsyncErr
+	}
+	return fmt.Errorf("wal: manager closed")
+}
+
+func (m *Manager) runFsyncBatch() {
+	timer := time.NewTimer(defaultFsyncBatchWindow)
+	<-timer.C
+
+	for {
+		m.mu.Lock()
+		target := m.fsyncBatchSeq
+		if pending := target - m.fsyncDurableSeq; pending < defaultFsyncBatchSize && !m.fsyncClosed {
+			m.mu.Unlock()
+			time.Sleep(defaultFsyncBatchWindow)
+			m.mu.Lock()
+			target = m.fsyncBatchSeq
+		}
+		if target == m.fsyncDurableSeq || m.fsyncClosed {
+			m.mu.Unlock()
+			return
+		}
+		err := m.flushAndSyncLocked()
+		m.fsyncErr = err
+		m.fsyncDurableSeq = target
+		m.fsyncCond.Broadcast()
+		more := m.fsyncBatchSeq > m.fsyncDurableSeq && !m.fsyncClosed
+		m.mu.Unlock()
+		if !more {
+			return
+		}
+	}
+}
+
+func (m *Manager) flushAndSyncLocked() error {
+	if m.writer != nil {
+		if err := m.writer.Flush(); err != nil {
+			return err
+		}
+	}
+	if m.active != nil {
+		if err := m.active.Sync(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *Manager) ensureCapacity(need int64) error {
@@ -349,6 +482,9 @@ func (m *Manager) Rotate() error {
 
 // rotateLocked advances to a new segment; caller must hold m.mu.
 func (m *Manager) rotateLocked() error {
+	if m.cfg.MaxSegments > 0 && m.segmentCount >= m.cfg.MaxSegments {
+		return ErrWALBackpressure
+	}
 	nextID := m.activeID + 1
 	return m.switchSegmentLocked(nextID, true)
 }
@@ -399,6 +535,12 @@ func (m *Manager) ListSegments() ([]string, error) {
 
 // Replay traverses all WAL segments and feeds entries to callback.
 func (m *Manager) Replay(fn func(info EntryInfo, payload []byte) error) error {
+	return m.ReplayFiltered(nil, fn)
+}
+
+// ReplayFiltered traverses WAL segments and only decodes records accepted by
+// filter. Nil filter accepts all records.
+func (m *Manager) ReplayFiltered(filter func(EntryInfo) bool, fn func(info EntryInfo, payload []byte) error) error {
 	m.mu.Lock()
 	files, err := m.cfg.FS.Glob(filepath.Join(m.cfg.Dir, "*.wal"))
 	m.mu.Unlock()
@@ -411,50 +553,29 @@ func (m *Manager) Replay(fn func(info EntryInfo, payload []byte) error) error {
 		if _, err := fmt.Sscanf(filepath.Base(path), "%05d.wal", &id); err != nil {
 			continue
 		}
-		if err := m.replayFile(uint32(id), path, fn); err != nil {
+		if err := m.replayFile(uint32(id), path, filter, fn); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (m *Manager) replayFile(id uint32, path string, fn func(info EntryInfo, payload []byte) error) error {
-	f, err := m.cfg.FS.OpenHandle(path)
+func (m *Manager) replayFile(id uint32, path string, filter func(EntryInfo) bool, fn func(info EntryInfo, payload []byte) error) error {
+	entries, err := m.loadSegmentCatalog(id)
+	if err == nil {
+		err = m.replayIndexedFile(path, entries, filter, fn)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, errStaleCatalog) {
+			return err
+		}
+	}
+	entries, err = m.rebuildSegmentCatalog(id, path)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
-
-	reIter := NewRecordIterator(f, m.bufferSize)
-	defer func() { _ = reIter.Close() }()
-
-	var offset int64
-	for reIter.Next() {
-		length := reIter.Length()
-		recType := reIter.Type()
-		payload := reIter.Record()
-		info := EntryInfo{
-			SegmentID: id,
-			Offset:    offset,
-			Length:    length,
-			Type:      recType,
-		}
-		if err := fn(info, payload); err != nil {
-			return err
-		}
-		offset += int64(length) + 8
-	}
-
-	switch err := reIter.Err(); err {
-	case nil, io.EOF:
-		return nil
-	case ErrPartialRecord:
-		return nil
-	case kv.ErrBadChecksum:
-		return fmt.Errorf("wal: checksum mismatch segment=%d offset=%d", id, offset)
-	default:
-		return err
-	}
+	return m.replayIndexedFile(path, entries, filter, fn)
 }
 
 // Close closes the manager and active segment.
@@ -463,6 +584,10 @@ func (m *Manager) Close() error {
 	defer m.mu.Unlock()
 	if m.closed {
 		return nil
+	}
+	m.fsyncClosed = true
+	if m.fsyncCond != nil {
+		m.fsyncCond.Broadcast()
 	}
 	if m.active == nil {
 		m.closed = true
@@ -478,6 +603,13 @@ func (m *Manager) Close() error {
 		}
 	}
 	if err := m.active.Sync(); err != nil {
+		closeErr := m.active.Close()
+		m.active = nil
+		m.writer = nil
+		m.closed = true
+		return errors.Join(err, closeErr)
+	}
+	if err := m.rebuildActiveCatalogLocked(); err != nil {
 		closeErr := m.active.Close()
 		m.active = nil
 		m.writer = nil
@@ -506,7 +638,7 @@ func (m *Manager) ReplaySegment(id uint32, fn func(info EntryInfo, payload []byt
 	if _, err := m.cfg.FS.Stat(path); err != nil {
 		return err
 	}
-	return m.replayFile(id, path, fn)
+	return m.replayFile(id, path, nil, fn)
 }
 
 // VerifyDir scans WAL segments in the provided directory, truncating any
@@ -610,14 +742,37 @@ func checkSegment(fs vfs.FS, path string) error {
 	}
 }
 
+func (m *Manager) rebuildActiveCatalogLocked() error {
+	if m.activeID == 0 || m.active == nil {
+		return nil
+	}
+	if _, err := m.active.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	_, err := m.scanAndWriteSegmentCatalog(m.activeID, m.active)
+	if _, seekErr := m.active.Seek(0, io.SeekEnd); err == nil {
+		err = seekErr
+	}
+	return err
+}
+
 // RemoveSegment deletes a WAL segment from disk.
 func (m *Manager) RemoveSegment(id uint32) error {
+	if !m.CanRemoveSegment(id) {
+		return ErrSegmentRetained
+	}
 	path := m.segmentPath(id)
 	if err := m.cfg.FS.Remove(path); err != nil {
 		return err
 	}
+	if err := m.cfg.FS.Remove(m.catalogPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	m.removedSegments.Add(1)
 	m.mu.Lock()
+	if m.segmentCount > 0 {
+		m.segmentCount--
+	}
 	if metrics, ok := m.segmentTotals[id]; ok {
 		m.recordTotals.Entries -= metrics.Entries
 		m.recordTotals.RaftEntries -= metrics.RaftEntries
@@ -645,13 +800,9 @@ func (m *Manager) Metrics() *Metrics {
 	if m == nil {
 		return nil
 	}
-	files, err := m.ListSegments()
-	count := 0
-	if err == nil {
-		count = len(files)
-	}
 	segmentRaft := 0
 	m.mu.Lock()
+	count := m.segmentCount
 	for _, metrics := range m.segmentTotals {
 		if metrics.RaftRecords() > 0 {
 			segmentRaft++

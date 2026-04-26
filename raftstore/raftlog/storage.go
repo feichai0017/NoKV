@@ -12,3 +12,9 @@ type PeerStorage interface {
 	ApplySnapshot(snap myraft.Snapshot) error
 	SetHardState(st myraft.HardState) error
 }
+
+// AppendWithHardStateStorage is an optional optimization for storage engines
+// that can persist raft entries and HardState in one durable write.
+type AppendWithHardStateStorage interface {
+	AppendWithHardState(entries []myraft.Entry, st myraft.HardState) error
+}

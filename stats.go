@@ -491,11 +491,45 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Raft.GroupCount = len(ptrs)
 	}
 
-	analysis := metrics.AnalyzeWALBacklog(wstats, segmentMetrics, ptrs)
+	analysis := metrics.AnalyzeWALBacklog(wstats, segmentMetrics)
 	snap.WAL.RecordCounts = analysis.RecordCounts
 	snap.WAL.SegmentsWithRaftRecords = analysis.SegmentsWithRaft
-	snap.WAL.RemovableRaftSegments = len(analysis.RemovableSegments)
-	snap.WAL.TypedRecordRatio = analysis.TypedRecordRatio
+	removableRaftSegments := 0
+	for _, id := range analysis.RemovableSegments {
+		if segmentMetrics[id].RaftRecords() > 0 && wstats != nil && id < wstats.ActiveSegment {
+			removableRaftSegments++
+		}
+	}
+	s.db.raftWALMu.Lock()
+	for _, mgr := range s.db.raftWALs {
+		if mgr == nil {
+			continue
+		}
+		shardStats := mgr.Metrics()
+		shardSegments := mgr.SegmentMetrics()
+		shardAnalysis := metrics.AnalyzeWALBacklog(shardStats, shardSegments)
+		snap.WAL.RecordCounts.Entries += shardAnalysis.RecordCounts.Entries
+		snap.WAL.RecordCounts.RaftEntries += shardAnalysis.RecordCounts.RaftEntries
+		snap.WAL.RecordCounts.RaftStates += shardAnalysis.RecordCounts.RaftStates
+		snap.WAL.RecordCounts.RaftSnapshots += shardAnalysis.RecordCounts.RaftSnapshots
+		snap.WAL.RecordCounts.Other += shardAnalysis.RecordCounts.Other
+		snap.WAL.SegmentsWithRaftRecords += shardAnalysis.SegmentsWithRaft
+		if shardStats != nil {
+			snap.WAL.SegmentCount += int64(shardStats.SegmentCount)
+			snap.WAL.SegmentsRemoved += shardStats.RemovedSegments
+		}
+		for _, id := range shardAnalysis.RemovableSegments {
+			if shardSegments[id].RaftRecords() > 0 && shardStats != nil && id < shardStats.ActiveSegment {
+				removableRaftSegments++
+			}
+		}
+	}
+	s.db.raftWALMu.Unlock()
+	snap.WAL.RemovableRaftSegments = removableRaftSegments
+	if total := snap.WAL.RecordCounts.Total(); total > 0 {
+		raftRecords := snap.WAL.RecordCounts.RaftRecords()
+		snap.WAL.TypedRecordRatio = float64(raftRecords) / float64(total)
+	}
 
 	if len(ptrs) > 0 {
 		var minSeg uint32
@@ -541,7 +575,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Raft.LagWarning = true
 	}
 
-	warning, reason := metrics.WALTypedWarning(snap.WAL.TypedRecordRatio, analysis.SegmentsWithRaft, s.db.opt.WALTypedRecordWarnRatio, s.db.opt.WALTypedRecordWarnSegments)
+	warning, reason := metrics.WALTypedWarning(snap.WAL.TypedRecordRatio, snap.WAL.SegmentsWithRaftRecords, s.db.opt.WALTypedRecordWarnRatio, s.db.opt.WALTypedRecordWarnSegments)
 	if watchdog := s.db.background.WALWatchdog(); watchdog != nil {
 		wsnap := watchdog.Snapshot()
 		snap.WAL.AutoGCRuns = wsnap.AutoRuns

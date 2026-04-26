@@ -18,7 +18,7 @@ func appendEntryValue(t *testing.T, m *wal.Manager, key, value string) wal.Entry
 	t.Helper()
 	entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte(key), 1), []byte(value))
 	defer entry.DecrRef()
-	info, err := m.AppendEntry(entry)
+	info, err := m.AppendEntry(wal.DurabilityBuffered, entry)
 	if err != nil {
 		t.Fatalf("append entry: %v", err)
 	}
@@ -91,8 +91,15 @@ func TestManagerCloseReturnsSyncFailure(t *testing.T) {
 func TestManagerCloseRetriesAfterCloseFailure(t *testing.T) {
 	dir := t.TempDir()
 	injected := errors.New("close fail")
-	// The first close happens during Open() replay; fail the next close invoked by Manager.Close().
-	policy := vfs.NewFaultPolicy(vfs.FailOnNthRule(vfs.OpFileClose, "", 2, injected))
+	failClose := false
+	policy := vfs.NewFaultPolicy()
+	policy.SetHook(func(op vfs.Op, _ string) error {
+		if op == vfs.OpFileClose && failClose {
+			failClose = false
+			return injected
+		}
+		return nil
+	})
 	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
 
 	m, err := wal.Open(wal.Config{Dir: dir, FS: fs})
@@ -101,6 +108,7 @@ func TestManagerCloseRetriesAfterCloseFailure(t *testing.T) {
 	}
 	appendEntryValue(t, m, "k", "x")
 
+	failClose = true
 	err = m.Close()
 	if !errors.Is(err, injected) {
 		t.Fatalf("expected close failure, got %v", err)
@@ -159,6 +167,118 @@ func TestManagerAppendAndReplay(t *testing.T) {
 		if entries[i] != got[i] {
 			t.Fatalf("entry %d mismatch: want %q got %q", i, entries[i], got[i])
 		}
+	}
+}
+
+func TestManagerReplayRebuildsStaleCatalog(t *testing.T) {
+	dir := t.TempDir()
+	m, err := wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	appendEntryValue(t, m, "k", "catalog")
+	if err := m.Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	catalogPath := filepath.Join(dir, "00001.wal.idx")
+	if err := os.WriteFile(catalogPath, []byte("stale"), 0o644); err != nil {
+		t.Fatalf("write stale catalog: %v", err)
+	}
+
+	var got []string
+	if err := m.Replay(func(_ wal.EntryInfo, payload []byte) error {
+		entry, err := kv.DecodeEntry(payload)
+		if err != nil {
+			return err
+		}
+		got = append(got, string(entry.Value))
+		entry.DecrRef()
+		return nil
+	}); err != nil {
+		t.Fatalf("replay with stale catalog: %v", err)
+	}
+	if len(got) != 1 || got[0] != "catalog" {
+		t.Fatalf("unexpected replayed values: %v", got)
+	}
+	info, err := os.Stat(catalogPath)
+	if err != nil {
+		t.Fatalf("stat rebuilt catalog: %v", err)
+	}
+	if info.Size() <= int64(len("stale")) {
+		t.Fatalf("expected catalog to be rebuilt, size=%d", info.Size())
+	}
+}
+
+func TestManagerReplayFilteredSkipsUnmatchedCatalogRecords(t *testing.T) {
+	dir := t.TempDir()
+	m, err := wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	groupPayload := func(groupID uint64, suffix byte) []byte {
+		var buf [binary.MaxVarintLen64 + 1]byte
+		n := binary.PutUvarint(buf[:], groupID)
+		out := append([]byte(nil), buf[:n]...)
+		return append(out, suffix)
+	}
+	if _, err := m.AppendRecords(wal.DurabilityBuffered,
+		wal.Record{Type: wal.RecordTypeRaftEntry, Payload: groupPayload(1, 'a')},
+		wal.Record{Type: wal.RecordTypeRaftEntry, Payload: groupPayload(2, 'b')},
+	); err != nil {
+		t.Fatalf("append records: %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	m, err = wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen wal: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	var got []uint64
+	if err := m.ReplayFiltered(func(info wal.EntryInfo) bool {
+		return info.Type == wal.RecordTypeRaftEntry && info.GroupID == 2
+	}, func(info wal.EntryInfo, _ []byte) error {
+		got = append(got, info.GroupID)
+		return nil
+	}); err != nil {
+		t.Fatalf("filtered replay: %v", err)
+	}
+	if len(got) != 1 || got[0] != 2 {
+		t.Fatalf("unexpected filtered groups: %v", got)
+	}
+}
+
+func TestManagerRemoveSegmentRemovesCatalog(t *testing.T) {
+	dir := t.TempDir()
+	m, err := wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	appendEntryValue(t, m, "k1", "v1")
+	if err := m.Rotate(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	appendEntryValue(t, m, "k2", "v2")
+
+	catalogPath := filepath.Join(dir, "00001.wal.idx")
+	if _, err := os.Stat(catalogPath); err != nil {
+		t.Fatalf("expected rotated segment catalog: %v", err)
+	}
+	if err := m.RemoveSegment(1); err != nil {
+		t.Fatalf("remove segment: %v", err)
+	}
+	if _, err := os.Stat(catalogPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected catalog removal, got %v", err)
 	}
 }
 
@@ -446,7 +566,7 @@ func TestManagerAppendRecordsTyped(t *testing.T) {
 		Type:    wal.RecordTypeRaftEntry,
 		Payload: []byte("raft-data"),
 	}
-	infos, err := m.AppendRecords(rec)
+	infos, err := m.AppendRecords(wal.DurabilityBuffered, rec)
 	if err != nil {
 		t.Fatalf("append records: %v", err)
 	}
@@ -528,7 +648,7 @@ func TestManagerAppendEntryBatchAndReplay(t *testing.T) {
 	defer e1.DecrRef()
 	defer e2.DecrRef()
 
-	info, err := m.AppendEntryBatch([]*kv.Entry{e1, e2})
+	info, err := m.AppendEntryBatch(wal.DurabilityBuffered, []*kv.Entry{e1, e2})
 	if err != nil {
 		t.Fatalf("append entry batch: %v", err)
 	}
@@ -582,13 +702,13 @@ func TestManagerAppendEntryRejectsInvalidInput(t *testing.T) {
 	}
 	defer func() { _ = m.Close() }()
 
-	if _, err := m.AppendEntry(nil); err == nil {
+	if _, err := m.AppendEntry(wal.DurabilityBuffered, nil); err == nil {
 		t.Fatalf("expected error for nil entry")
 	}
 
 	e := kv.NewEntry(nil, []byte("v"))
 	defer e.DecrRef()
-	if _, err := m.AppendEntry(e); err == nil {
+	if _, err := m.AppendEntry(wal.DurabilityBuffered, e); err == nil {
 		t.Fatalf("expected error for empty key entry")
 	}
 }

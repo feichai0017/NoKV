@@ -35,9 +35,9 @@ uint32 checksum (CRC32 Castagnoli over type + payload)
 
 ```go
 mgr, _ := wal.Open(wal.Config{Dir: path})
-info, _ := mgr.AppendEntry(entry)
-batchInfo, _ := mgr.AppendEntryBatch(entries)
-typedInfos, _ := mgr.AppendRecords(wal.Record{
+info, _ := mgr.AppendEntry(wal.DurabilityFlushed, entry)
+batchInfo, _ := mgr.AppendEntryBatch(wal.DurabilityFlushed, entries)
+typedInfos, _ := mgr.AppendRecords(wal.DurabilityFsyncBatched, wal.Record{
     Type:    wal.RecordTypeRaftEntry,
     Payload: raftPayload,
 })
@@ -51,10 +51,12 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 
 Key behaviours:
 - `AppendEntry`/`AppendEntryBatch`/`AppendRecords` automatically call `ensureCapacity` to decide when to rotate; they return `EntryInfo{SegmentID, Offset, Length}` so upper layers can keep storage WAL checkpoints and store-local raft replay pointers.
+- Every append must declare a `DurabilityPolicy`: `DurabilityBuffered` (writer buffer only), `DurabilityFlushed` (OS page cache), `DurabilityFsync` (fsync now), or `DurabilityFsyncBatched` (fsync contract reserved for the group-commit pipeline).
 - `Sync` flushes the active file (used for `Options.SyncWrites`).
 - `Rotate` forces a new segment (used after flush/compaction checkpoints similar to RocksDB's `LogFileManager::SwitchLog`).
 - `Replay` iterates segments in numeric order, forwarding each payload to the callback. Errors abort replay so recovery can surface corruption early.
 - Metrics (`wal.Manager.Metrics`) reveal the active segment ID, total segments, and number of removed segments—these feed directly into `StatsSnapshot` and `nokv stats` output.
+- `RegisterRetention` lets LSM and raft participants publish the oldest WAL segment they still need. `RemoveSegment` rejects retained segments with `ErrSegmentRetained`.
 
 Compared with Badger: Badger keeps a single vlog for both data and durability. NoKV splits WAL (durability) from vlog (value separation), matching RocksDB's separation of WAL and blob files.
 
@@ -91,6 +93,8 @@ surface warnings when raft-typed records dominate the log. It:
 
 - Samples WAL metrics + per-segment metrics and combines them with
   `raftstore/localmeta` raft pointer snapshots to compute removable segments.
+- Filters those candidates through all registered WAL retention participants
+  before deleting any segment.
 - Removes up to `WALAutoGCMaxBatch` segments when at least
   `WALAutoGCMinRemovable` are eligible.
 - Exposes counters (`wal.auto_gc_runs/removed/last_unix`) and warning state
@@ -103,6 +107,9 @@ Relevant options (see `options.go` for defaults):
 - `WALAutoGCMaxBatch`
 - `WALTypedRecordWarnRatio`
 - `WALTypedRecordWarnSegments`
+
+For hard admission control, `wal.Config.MaxSegments` rejects segment growth with
+`ErrWALBackpressure` once the WAL reaches the configured segment cap.
 
 ---
 
@@ -117,7 +124,7 @@ Relevant options (see `options.go` for defaults):
 
 ## 8. Operational Tips
 
-- Configure `Options.SyncWrites=true` for synchronous durability (default async, similar to RocksDB's default).
+- Configure `Options.SyncWrites=true` for DB-level synchronous durability. Raft log/state/snapshot appends use the WAL `DurabilityFsyncBatched` contract directly.
 - After large flushes, forcing `Rotate` keeps WAL files short, reducing replay time.
 - Archived WAL segments can be copied alongside manifest files for hot-backup strategies—since the manifest contains the WAL log number, snapshots behave like RocksDB's `Checkpoints`.
 
