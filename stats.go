@@ -2,6 +2,7 @@ package NoKV
 
 import (
 	"expvar"
+	"maps"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -476,15 +477,47 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		segmentMetrics map[uint32]wal.RecordMetrics
 		ptrs           map[uint64]localmeta.RaftLogPointer
 	)
-	if s.db.wal != nil {
-		wstats = s.db.wal.Metrics()
-		if wstats != nil {
-			snap.WAL.ActiveSegment = int64(wstats.ActiveSegment)
-			snap.WAL.ActiveSize = wstats.ActiveSize
-			snap.WAL.SegmentCount = int64(wstats.SegmentCount)
-			snap.WAL.SegmentsRemoved = wstats.RemovedSegments
+	// Aggregate metrics across every LSM data-plane WAL shard. Each
+	// shard owns its own fd / fsync worker, so we sum SegmentCount /
+	// RecordCounts and take the highest ActiveSegment as a coarse
+	// health signal. Per-segment metrics are unioned (segment IDs are
+	// allocated from a single global counter so they never collide
+	// across shards).
+	var aggregated wal.Metrics
+	var anyShardStats bool
+	for _, mgr := range s.db.lsmWALs {
+		if mgr == nil {
+			continue
 		}
-		segmentMetrics = s.db.wal.SegmentMetrics()
+		shardStats := mgr.Metrics()
+		if shardStats != nil {
+			anyShardStats = true
+			if shardStats.ActiveSegment > aggregated.ActiveSegment {
+				aggregated.ActiveSegment = shardStats.ActiveSegment
+			}
+			aggregated.ActiveSize += shardStats.ActiveSize
+			aggregated.SegmentCount += shardStats.SegmentCount
+			aggregated.RemovedSegments += shardStats.RemovedSegments
+			aggregated.SegmentsWithRaftRecords += shardStats.SegmentsWithRaftRecords
+			aggregated.RecordCounts.Entries += shardStats.RecordCounts.Entries
+			aggregated.RecordCounts.RaftEntries += shardStats.RecordCounts.RaftEntries
+			aggregated.RecordCounts.RaftStates += shardStats.RecordCounts.RaftStates
+			aggregated.RecordCounts.RaftSnapshots += shardStats.RecordCounts.RaftSnapshots
+			aggregated.RecordCounts.Other += shardStats.RecordCounts.Other
+		}
+		shardSegments := mgr.SegmentMetrics()
+		if segmentMetrics == nil {
+			segmentMetrics = shardSegments
+		} else {
+			maps.Copy(segmentMetrics, shardSegments)
+		}
+	}
+	if anyShardStats {
+		wstats = &aggregated
+		snap.WAL.ActiveSegment = int64(aggregated.ActiveSegment)
+		snap.WAL.ActiveSize = aggregated.ActiveSize
+		snap.WAL.SegmentCount = int64(aggregated.SegmentCount)
+		snap.WAL.SegmentsRemoved = aggregated.RemovedSegments
 	}
 	if s.db.opt != nil && s.db.opt.RaftPointerSnapshot != nil {
 		ptrs = s.db.opt.RaftPointerSnapshot()
@@ -576,14 +609,28 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	}
 
 	warning, reason := metrics.WALTypedWarning(snap.WAL.TypedRecordRatio, snap.WAL.SegmentsWithRaftRecords, s.db.opt.WALTypedRecordWarnRatio, s.db.opt.WALTypedRecordWarnSegments)
-	if watchdog := s.db.background.WALWatchdog(); watchdog != nil {
-		wsnap := watchdog.Snapshot()
-		snap.WAL.AutoGCRuns = wsnap.AutoRuns
-		snap.WAL.AutoGCRemoved = wsnap.SegmentsRemoved
-		snap.WAL.AutoGCLastUnix = wsnap.LastAutoUnix
-		if wsnap.Warning {
+	watchdogs := s.db.background.WALWatchdogs()
+	if len(watchdogs) > 0 {
+		var anyWarn bool
+		var warnReason string
+		for _, watchdog := range watchdogs {
+			if watchdog == nil {
+				continue
+			}
+			wsnap := watchdog.Snapshot()
+			snap.WAL.AutoGCRuns += wsnap.AutoRuns
+			snap.WAL.AutoGCRemoved += wsnap.SegmentsRemoved
+			if wsnap.LastAutoUnix > snap.WAL.AutoGCLastUnix {
+				snap.WAL.AutoGCLastUnix = wsnap.LastAutoUnix
+			}
+			if wsnap.Warning && !anyWarn {
+				anyWarn = true
+				warnReason = wsnap.WarningReason
+			}
+		}
+		if anyWarn {
 			snap.WAL.TypedRecordWarning = true
-			snap.WAL.TypedRecordReason = wsnap.WarningReason
+			snap.WAL.TypedRecordReason = warnReason
 		} else if warning {
 			snap.WAL.TypedRecordWarning = true
 			snap.WAL.TypedRecordReason = reason

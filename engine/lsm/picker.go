@@ -39,6 +39,8 @@ func (lm *levelManager) buildPickerInput() PickerInput {
 			IngestValueBytes:   lvl.ingestValueBytes(),
 			IngestValueDensity: lvl.ingestValueDensity(),
 			IngestAgeSeconds:   lvl.maxIngestAgeSeconds(),
+			KeyCount:           lvl.keyCount(),
+			RangeTombstones:    lvl.rangeTombstoneCount(),
 		}
 		if lm.compactState != nil {
 			li.DelSize = lm.compactState.DelSize(i)
@@ -46,13 +48,14 @@ func (lm *levelManager) buildPickerInput() PickerInput {
 		levels[i] = li
 	}
 	return PickerInput{
-		Levels:                  levels,
-		Targets:                 lm.levelTargets(),
-		NumLevelZeroTables:      lm.opt.NumLevelZeroTables,
-		BaseTableSize:           lm.opt.BaseTableSize,
-		BaseLevelSize:           lm.opt.BaseLevelSize,
-		IngestBacklogMergeScore: lm.opt.IngestBacklogMergeScore,
-		CompactionValueWeight:   lm.opt.CompactionValueWeight,
+		Levels:                    levels,
+		Targets:                   lm.levelTargets(),
+		NumLevelZeroTables:        lm.opt.NumLevelZeroTables,
+		BaseTableSize:             lm.opt.BaseTableSize,
+		BaseLevelSize:             lm.opt.BaseLevelSize,
+		IngestBacklogMergeScore:   lm.opt.IngestBacklogMergeScore,
+		CompactionValueWeight:     lm.opt.CompactionValueWeight,
+		CompactionTombstoneWeight: lm.opt.CompactionTombstoneWeight,
 	}
 }
 
@@ -300,6 +303,8 @@ type LevelInput struct {
 	TotalSize          int64
 	TotalValueBytes    int64
 	MainValueBytes     int64
+	KeyCount           uint64
+	RangeTombstones    uint64
 	IngestTables       int
 	IngestSize         int64
 	IngestValueBytes   int64
@@ -310,13 +315,14 @@ type LevelInput struct {
 
 // PickerInput captures the inputs needed for compaction picking.
 type PickerInput struct {
-	Levels                  []LevelInput
-	Targets                 Targets
-	NumLevelZeroTables      int
-	BaseTableSize           int64
-	BaseLevelSize           int64
-	IngestBacklogMergeScore float64
-	CompactionValueWeight   float64
+	Levels                    []LevelInput
+	Targets                   Targets
+	NumLevelZeroTables        int
+	BaseTableSize             int64
+	BaseLevelSize             int64
+	IngestBacklogMergeScore   float64
+	CompactionValueWeight     float64
+	CompactionTombstoneWeight float64
 }
 
 // PickPriorities returns compaction candidates ordered by priority.
@@ -372,6 +378,14 @@ func PickPriorities(in PickerInput) []Priority {
 				valueScore = lvl.IngestValueDensity
 			}
 			pri.ApplyValueWeight(in.CompactionValueWeight, valueScore)
+		}
+		if in.CompactionTombstoneWeight > 0 && level < len(in.Levels) {
+			lvl := in.Levels[level]
+			if lvl.RangeTombstones > 0 && lvl.KeyCount > 0 {
+				density := float64(lvl.RangeTombstones) / float64(lvl.KeyCount)
+				pri.Score += in.CompactionTombstoneWeight * math.Min(density*4, 4)
+				pri.Adjusted = pri.Score
+			}
 		}
 		if merge {
 			extras = append(extras, pri)

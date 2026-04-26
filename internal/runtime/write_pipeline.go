@@ -181,10 +181,13 @@ func (cq *CommitQueue) AddPending(entries int64, bytes int64) {
 }
 
 // CommitBatch is the temporary grouping drained by one commit-worker pass.
+// ShardID is set by the dispatcher and pins the batch to one LSM data-plane
+// shard end-to-end (preserves SetBatch atomicity).
 type CommitBatch struct {
 	Reqs        []*CommitRequest
 	Pool        *[]*CommitRequest
 	Requests    []*Request
+	ShardID     int
 	BatchStart  time.Time
 	ValueLogDur time.Duration
 }
@@ -194,6 +197,7 @@ type SyncBatch struct {
 	Reqs      []*CommitRequest
 	Pool      *[]*CommitRequest
 	Requests  []*Request
+	ShardID   int
 	FailedAt  int
 	ApplyDone time.Time
 }

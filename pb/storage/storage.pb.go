@@ -186,15 +186,17 @@ func (x *ManifestChange) GetChecksum() []byte {
 
 // TableIndex is the protobuf-encoded SSTable index block payload.
 type TableIndex struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Offsets       []*BlockOffset         `protobuf:"bytes,1,rep,name=offsets,proto3" json:"offsets,omitempty"`
-	BloomFilter   []byte                 `protobuf:"bytes,2,opt,name=bloomFilter,proto3" json:"bloomFilter,omitempty"`
-	MaxVersion    uint64                 `protobuf:"varint,3,opt,name=maxVersion,proto3" json:"maxVersion,omitempty"`
-	KeyCount      uint32                 `protobuf:"varint,4,opt,name=keyCount,proto3" json:"keyCount,omitempty"`
-	StaleDataSize uint32                 `protobuf:"varint,5,opt,name=staleDataSize,proto3" json:"staleDataSize,omitempty"`
-	ValueSize     uint64                 `protobuf:"varint,6,opt,name=valueSize,proto3" json:"valueSize,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	Offsets             []*BlockOffset         `protobuf:"bytes,1,rep,name=offsets,proto3" json:"offsets,omitempty"`
+	BloomFilter         []byte                 `protobuf:"bytes,2,opt,name=bloomFilter,proto3" json:"bloomFilter,omitempty"`
+	MaxVersion          uint64                 `protobuf:"varint,3,opt,name=maxVersion,proto3" json:"maxVersion,omitempty"`
+	KeyCount            uint32                 `protobuf:"varint,4,opt,name=keyCount,proto3" json:"keyCount,omitempty"`
+	StaleDataSize       uint32                 `protobuf:"varint,5,opt,name=staleDataSize,proto3" json:"staleDataSize,omitempty"`
+	ValueSize           uint64                 `protobuf:"varint,6,opt,name=valueSize,proto3" json:"valueSize,omitempty"`
+	PrefixBloomFilter   []byte                 `protobuf:"bytes,7,opt,name=prefixBloomFilter,proto3" json:"prefixBloomFilter,omitempty"`
+	RangeTombstoneCount uint32                 `protobuf:"varint,8,opt,name=rangeTombstoneCount,proto3" json:"rangeTombstoneCount,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *TableIndex) Reset() {
@@ -269,12 +271,28 @@ func (x *TableIndex) GetValueSize() uint64 {
 	return 0
 }
 
+func (x *TableIndex) GetPrefixBloomFilter() []byte {
+	if x != nil {
+		return x.PrefixBloomFilter
+	}
+	return nil
+}
+
+func (x *TableIndex) GetRangeTombstoneCount() uint32 {
+	if x != nil {
+		return x.RangeTombstoneCount
+	}
+	return 0
+}
+
 // BlockOffset points to a single data block inside one SSTable file.
 type BlockOffset struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
 	Offset        uint32                 `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
 	Len           uint32                 `protobuf:"varint,3,opt,name=len,proto3" json:"len,omitempty"`
+	Compression   uint32                 `protobuf:"varint,4,opt,name=compression,proto3" json:"compression,omitempty"`
+	RawLen        uint32                 `protobuf:"varint,5,opt,name=rawLen,proto3" json:"rawLen,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -330,6 +348,20 @@ func (x *BlockOffset) GetLen() uint32 {
 	return 0
 }
 
+func (x *BlockOffset) GetCompression() uint32 {
+	if x != nil {
+		return x.Compression
+	}
+	return 0
+}
+
+func (x *BlockOffset) GetRawLen() uint32 {
+	if x != nil {
+		return x.RawLen
+	}
+	return 0
+}
+
 var File_storage_storage_proto protoreflect.FileDescriptor
 
 const file_storage_storage_proto_rawDesc = "" +
@@ -346,7 +378,7 @@ const file_storage_storage_proto_rawDesc = "" +
 	"\n" +
 	"\x06CREATE\x10\x00\x12\n" +
 	"\n" +
-	"\x06DELETE\x10\x01\"\xe6\x01\n" +
+	"\x06DELETE\x10\x01\"\xc6\x02\n" +
 	"\n" +
 	"TableIndex\x126\n" +
 	"\aoffsets\x18\x01 \x03(\v2\x1c.nokv.storage.v1.BlockOffsetR\aoffsets\x12 \n" +
@@ -356,11 +388,15 @@ const file_storage_storage_proto_rawDesc = "" +
 	"maxVersion\x12\x1a\n" +
 	"\bkeyCount\x18\x04 \x01(\rR\bkeyCount\x12$\n" +
 	"\rstaleDataSize\x18\x05 \x01(\rR\rstaleDataSize\x12\x1c\n" +
-	"\tvalueSize\x18\x06 \x01(\x04R\tvalueSize\"I\n" +
+	"\tvalueSize\x18\x06 \x01(\x04R\tvalueSize\x12,\n" +
+	"\x11prefixBloomFilter\x18\a \x01(\fR\x11prefixBloomFilter\x120\n" +
+	"\x13rangeTombstoneCount\x18\b \x01(\rR\x13rangeTombstoneCount\"\x83\x01\n" +
 	"\vBlockOffset\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12\x16\n" +
 	"\x06offset\x18\x02 \x01(\rR\x06offset\x12\x10\n" +
-	"\x03len\x18\x03 \x01(\rR\x03lenB2Z0github.com/feichai0017/NoKV/pb/storage;storagepbb\x06proto3"
+	"\x03len\x18\x03 \x01(\rR\x03len\x12 \n" +
+	"\vcompression\x18\x04 \x01(\rR\vcompression\x12\x16\n" +
+	"\x06rawLen\x18\x05 \x01(\rR\x06rawLenB2Z0github.com/feichai0017/NoKV/pb/storage;storagepbb\x06proto3"
 
 var (
 	file_storage_storage_proto_rawDescOnce sync.Once

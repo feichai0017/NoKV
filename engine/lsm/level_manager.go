@@ -41,6 +41,7 @@ func (lsm *LSM) initLevelManager(opt *Options) (_ *levelManager, err error) {
 		return nil, err
 	}
 	lm.rtCollector = tombstone.NewCollector()
+	lm.compactionPacer = newCompactionPacer(opt.CompactionWriteBytesPerSec)
 	lm.compaction = newCompaction(lm, lm.opt.NumCompactors, lm.opt.CompactionPolicy, lsm.getLogger())
 	return lm, nil
 }
@@ -54,6 +55,7 @@ type levelManager struct {
 	lsm              *LSM
 	compactState     *State
 	compaction       *compaction
+	compactionPacer  *compactionPacer
 	rtCollector      *tombstone.Collector
 	logPtrMu         sync.RWMutex
 	logPtrSeg        uint32
@@ -236,7 +238,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 
 	iter.Rewind()
 	if !iter.Valid() {
-		if err := lm.lsm.wal.RemoveSegment(uint32(fid)); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, wal.ErrSegmentRetained) {
+		if err := immutable.shard.wal.RemoveSegment(uint32(fid)); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, wal.ErrSegmentRetained) {
 			return err
 		}
 		return nil
@@ -297,6 +299,13 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 		return err
 	}
 	lm.setLogPointer(immutable.segmentID, uint64(immutable.walSize.Load()))
+	if shard := immutable.shard; shard != nil {
+		// Monotonic per-shard high-water; flushes within a shard are
+		// strictly ordered so a simple Store is safe.
+		if cur := shard.highestFlushedSeg.Load(); immutable.segmentID > cur {
+			shard.highestFlushedSeg.Store(immutable.segmentID)
+		}
+	}
 	lm.levels[0].add(table)
 	// Register any range tombstones discovered during this flush.
 	if lm.rtCollector != nil {
@@ -304,7 +313,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 			lm.rtCollector.Add(rt)
 		}
 	}
-	if err := lm.lsm.wal.RemoveSegment(uint32(fid)); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, wal.ErrSegmentRetained) {
+	if err := immutable.shard.wal.RemoveSegment(uint32(fid)); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, wal.ErrSegmentRetained) {
 		return err
 	}
 	if lm.compaction != nil {

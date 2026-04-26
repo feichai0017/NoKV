@@ -519,7 +519,7 @@ func openSnapshotLSMWithTweak(t testing.TB, tweak func(*lsm.Options)) *lsm.LSM {
 	opt := testSnapshotLSMOptionsWithTweak(t, tweak)
 	wlog, err := wal.Open(wal.Config{Dir: opt.WorkDir})
 	require.NoError(t, err)
-	lsmInst, err := lsm.NewLSM(opt, wlog)
+	lsmInst, err := lsm.NewLSM(opt, []*wal.Manager{wlog})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, wlog.Close()) })
 	return lsmInst

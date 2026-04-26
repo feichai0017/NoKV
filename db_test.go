@@ -238,6 +238,7 @@ func TestOpenNormalizesLegacyUnsetFieldsWithoutMutatingCaller(t *testing.T) {
 	require.Greater(t, db.opt.IngestBacklogMergeScore, 0.0)
 	require.Greater(t, db.opt.IngestShardParallelism, 0)
 	require.Greater(t, db.opt.CompactionValueWeight, 0.0)
+	require.Greater(t, db.opt.CompactionTombstoneWeight, 0.0)
 	require.Greater(t, db.opt.CompactionValueAlertThreshold, 0.0)
 	require.Greater(t, db.opt.ThermosTopK, 0)
 }
@@ -254,6 +255,8 @@ func TestNewDefaultOptionsExposeConcreteCompactionDefaults(t *testing.T) {
 	require.LessOrEqual(t, opt.CompactionResumeTrigger, opt.CompactionSlowdownTrigger)
 	require.Greater(t, opt.IngestCompactBatchSize, 0)
 	require.Greater(t, opt.IngestBacklogMergeScore, 0.0)
+	require.NotNil(t, opt.PrefixExtractor)
+	require.Greater(t, opt.CompactionTombstoneWeight, 0.0)
 }
 
 func TestNewDefaultOptionsExposeConcreteBatchDefaults(t *testing.T) {
@@ -1362,7 +1365,7 @@ func TestApplyRequestsFailureIndex(t *testing.T) {
 		},
 	}
 
-	failedAt, err := db.applyRequests(reqs)
+	failedAt, err := db.applyRequests(reqs, 0)
 	require.Equal(t, 1, failedAt)
 	require.Error(t, err)
 
@@ -1392,7 +1395,7 @@ func TestApplyRequestsInlineRequestWithoutPtrs(t *testing.T) {
 		},
 	}
 
-	failedAt, err := db.applyRequests(reqs)
+	failedAt, err := db.applyRequests(reqs, 0)
 	require.Equal(t, -1, failedAt)
 	require.NoError(t, err)
 
@@ -1400,6 +1403,53 @@ func TestApplyRequestsInlineRequestWithoutPtrs(t *testing.T) {
 	require.NoError(t, getErr)
 	require.Equal(t, []byte("v1"), got.Value)
 	got.DecrRef()
+}
+
+func TestApplyRequestsCoalescesCommitBatchIntoOneLSMRecord(t *testing.T) {
+	local := NewDefaultOptions()
+	local.WorkDir = t.TempDir()
+	local.EnableWALWatchdog = false
+	local.ValueLogGCInterval = 0
+	local.WriteBatchWait = 0
+	local.ValueThreshold = 1 << 20
+
+	db := openTestDB(t, local)
+	defer func() { _ = db.Close() }()
+
+	first := kv.NewInternalEntry(kv.CFDefault, []byte("coalesce-a"), nonTxnMaxVersion, []byte("v1"), 0, 0)
+	second := kv.NewInternalEntry(kv.CFDefault, []byte("coalesce-b"), nonTxnMaxVersion-1, []byte("v2"), 0, 0)
+	defer first.DecrRef()
+	defer second.DecrRef()
+
+	reqs := []*dbruntime.Request{
+		{Entries: []*kv.Entry{first}},
+		{Entries: []*kv.Entry{second}},
+	}
+
+	failedAt, err := db.applyRequests(reqs, 0)
+	require.Equal(t, -1, failedAt)
+	require.NoError(t, err)
+
+	var batchRecords int
+	var decoded int
+	err = db.lsmWALs[0].Replay(func(info wal.EntryInfo, payload []byte) error {
+		if info.Type != wal.RecordTypeEntryBatch {
+			return nil
+		}
+		batchRecords++
+		entries, err := wal.DecodeEntryBatch(payload)
+		if err != nil {
+			return err
+		}
+		decoded += len(entries)
+		for _, entry := range entries {
+			entry.DecrRef()
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, batchRecords)
+	require.Equal(t, 2, decoded)
 }
 
 func TestFinishCommitRequestsPerRequestErrors(t *testing.T) {
@@ -1548,7 +1598,16 @@ func drSimulateCrash(t *testing.T, db *DB) {
 			_ = mgr.Close()
 		}
 	}
-	_ = db.wal.Close()
+	// Close each WAL Manager but do not nil the slot — commit processor
+	// goroutines still hold the pointer (cached at startup) and the race
+	// detector flags the slot rewrite even though the goroutine never
+	// re-reads the slice. A closed Manager is enough to fail subsequent
+	// writes; nilling is unnecessary.
+	for _, mgr := range db.lsmWALs {
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+	}
 	if db.dirLock != nil {
 		_ = db.dirLock.Close()
 		db.dirLock = nil
@@ -1570,7 +1629,7 @@ func drRequireNotFound(t *testing.T, db *DB, key []byte) {
 
 func drFirstWALSegmentPath(t *testing.T, dir string) string {
 	t.Helper()
-	files, err := filepath.Glob(filepath.Join(dir, "*.wal"))
+	files, err := filepath.Glob(filepath.Join(dir, "lsm-wal-*", "*.wal"))
 	require.NoError(t, err)
 	require.NotEmpty(t, files, "expected at least one wal segment")
 	return files[0]
@@ -2080,6 +2139,11 @@ func TestRecoveryWALReplayTruncatedTailBatchIsNotPartiallyApplied(t *testing.T) 
 		opt := newTestOptions(t)
 		opt.WorkDir = dir
 		opt.MemTableEngine = engine
+		// Both writes need to land in one WAL so the truncation hits the
+		// batch tail rather than orphaning the anchor on a peer shard.
+		// (anchor and the batch's first key hash to different shards
+		// under N=4.)
+		opt.LSMShardCount = 1
 
 		db := openTestDB(t, opt)
 		require.NoError(t, db.Set([]byte("anchor"), []byte("ok")))
@@ -2145,14 +2209,19 @@ func TestRecoveryVlogPointerRoundTripAfterReopen(t *testing.T) {
 
 func TestCloseAggregatesWalAndDirLockErrors(t *testing.T) {
 	dir := t.TempDir()
-	walPath := filepath.Join(dir, "00001.wal")
+	// Per-key affinity routes Set("k") to one of N shards; arm the fault
+	// on every shard's wal-00001 second sync — only the routed shard fires.
 	walSyncErr := errors.New("wal sync close error")
 	dirCloseErr := errors.New("dir lock close error")
-	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
-		// Open() recovery may issue one sync on the active segment; fail the next
-		// one so the error is observed during DB.Close aggregation.
-		vfs.FailOnNthRule(vfs.OpFileSync, walPath, 2, walSyncErr),
-	))
+	rules := make([]vfs.FaultRule, 0, 8)
+	for shard := range 8 {
+		rules = append(rules, vfs.FailOnNthRule(
+			vfs.OpFileSync,
+			filepath.Join(dir, fmt.Sprintf("lsm-wal-%02d", shard), "00001.wal"),
+			2, walSyncErr,
+		))
+	}
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(rules...))
 
 	opt := newTestOptions(t)
 	opt.WorkDir = dir
@@ -2177,11 +2246,18 @@ func TestCloseAggregatesWalAndDirLockErrors(t *testing.T) {
 
 func TestFaultFSWriteFailureThenRecoverableReopen(t *testing.T) {
 	dir := t.TempDir()
-	walPath := filepath.Join(dir, "00001.wal")
+	// Per-key affinity routes the write to one of N shards; arm a fault
+	// on every shard's wal-00001 — only one fires.
 	injected := errors.New("wal write injected")
-	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
-		vfs.FailOnceRule(vfs.OpFileWrite, walPath, injected),
-	))
+	rules := make([]vfs.FaultRule, 0, 8)
+	for shard := range 8 {
+		rules = append(rules, vfs.FailOnceRule(
+			vfs.OpFileWrite,
+			filepath.Join(dir, fmt.Sprintf("lsm-wal-%02d", shard), "00001.wal"),
+			injected,
+		))
+	}
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(rules...))
 
 	opt := newTestOptions(t)
 	opt.WorkDir = dir
@@ -2222,7 +2298,7 @@ func TestRecoveryTruncateFailureThenSucceedsWithHealthyFS(t *testing.T) {
 	faultFS := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
 		vfs.FailOnceRule(vfs.OpFileTrunc, seg, truncErr),
 	))
-	err := wal.VerifyDir(dir, faultFS)
+	err := wal.VerifyDir(filepath.Dir(seg), faultFS)
 	require.ErrorIs(t, err, truncErr)
 
 	db = openTestDB(t, opt)
@@ -2374,7 +2450,7 @@ func TestSyncPipelineWALConsistency(t *testing.T) {
 	value := []byte("hello-sync-pipeline")
 
 	readWALFiles := func(dir string) []byte {
-		matches, err := filepath.Glob(filepath.Join(dir, "*.wal"))
+		matches, err := filepath.Glob(filepath.Join(dir, "lsm-wal-*", "*.wal"))
 		require.NoError(t, err)
 		var all []byte
 		for _, f := range matches {
@@ -2553,7 +2629,9 @@ func TestRaftLogUsesShardedWAL(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, storage.Append([]myraft.Entry{{Index: 1, Term: 1, Data: []byte("raft")}}))
 
-	require.Equal(t, uint64(0), db.wal.Metrics().RecordCounts.RaftEntries)
+	for _, mgr := range db.lsmWALs {
+		require.Equal(t, uint64(0), mgr.Metrics().RecordCounts.RaftEntries)
+	}
 	shard := raftWALShard(9)
 	matches, err := filepath.Glob(filepath.Join(dir, fmt.Sprintf("raft-wal-%02d", shard), "*.wal"))
 	require.NoError(t, err)

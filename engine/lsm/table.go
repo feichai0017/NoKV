@@ -20,6 +20,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/golang/snappy"
 	"github.com/pkg/errors"
 )
 
@@ -42,6 +43,7 @@ type table struct {
 	createdAt     time.Time
 	staleDataSize uint32
 	valueSize     uint64
+	rangeDeletes  uint32
 	keyCount      uint32
 	maxVersion    uint64
 	hasBloom      bool
@@ -110,6 +112,7 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) (out *
 		t.maxVersion = idx.GetMaxVersion()
 		t.staleDataSize = idx.GetStaleDataSize()
 		t.valueSize = idx.GetValueSize()
+		t.rangeDeletes = idx.GetRangeTombstoneCount()
 		t.lm.cache.addIndex(t.fid, idx)
 	}
 	t.hasBloom = t.ss.HasBloomFilter()
@@ -172,6 +175,7 @@ func (t *table) index() *storagepb.TableIndex {
 		t.maxVersion = idx.GetMaxVersion()
 		t.staleDataSize = idx.GetStaleDataSize()
 		t.valueSize = idx.GetValueSize()
+		t.rangeDeletes = idx.GetRangeTombstoneCount()
 	}
 	return idx
 }
@@ -251,6 +255,9 @@ func (t *table) StaleDataSize() uint32 { return t.staleDataSize }
 // ValueSize reports total value bytes referenced by this table (inline + vlog pointers).
 func (t *table) ValueSize() uint64 { return t.valueSize }
 
+// RangeTombstoneCount reports range deletion markers stored in this table.
+func (t *table) RangeTombstoneCount() uint32 { return t.rangeDeletes }
+
 // Point-read and block lookup path.
 // Search search for a key in the table
 func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
@@ -267,6 +274,9 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 			return fmt.Errorf("table.Search expects internal key: %x", key)
 		})
 		probe := kv.InternalToBaseKey(key)
+		if t.prefixBloomMiss(idx, probe) {
+			return nil, utils.ErrKeyNotFound
+		}
 		if !bloomFilter.MayContainKey(probe) {
 			return nil, utils.ErrKeyNotFound
 		}
@@ -300,6 +310,25 @@ func (t *table) searchPointWithIndex(idx *storagepb.TableIndex, key []byte, maxV
 		return entry, err
 	}
 	return t.searchPointInBlock(blockIdx, key, maxVs)
+}
+
+func (t *table) prefixBloomMiss(idx *storagepb.TableIndex, baseKey []byte) bool {
+	if t == nil || t.lm == nil || t.lm.opt == nil || t.lm.opt.PrefixExtractor == nil || idx == nil {
+		return false
+	}
+	filter := utils.Filter(idx.GetPrefixBloomFilter())
+	if len(filter) == 0 {
+		return false
+	}
+	_, userKey, ok := kv.SplitBaseKey(baseKey)
+	if !ok {
+		return false
+	}
+	prefix := t.lm.opt.PrefixExtractor(userKey)
+	if len(prefix) == 0 {
+		return false
+	}
+	return !filter.MayContainKey(prefix)
 }
 
 func (t *table) searchPointInBlock(blockIdx int, key []byte, maxVs *uint64) (*kv.Entry, error) {
@@ -361,24 +390,65 @@ func (t *table) loadBlock(idx int) (*block, error) {
 	var b *block
 	key := t.blockCacheKey(idx)
 	lvl := t.level()
-	if cached, ok := t.lm.cache.getBlock(lvl, key); ok && cached != nil {
-		return cached, nil
-	}
-
 	ko, ok := t.blockOffset(idx)
 	utils.CondPanicFunc(!ok || ko == nil, func() error { return fmt.Errorf("block t.offset id=%d", idx) })
+	if cached, ok := t.lm.cache.getBlock(lvl, key); ok && cached != nil {
+		return t.decodeCachedBlock(ko, cached)
+	}
+
 	b = &block{
 		offset: int(ko.GetOffset()),
 		tbl:    t,
 	}
 
 	var err error
-	if b.data, err = t.read(b.offset, int(ko.GetLen())); err != nil {
+	if b.diskData, err = t.read(b.offset, int(ko.GetLen())); err != nil {
 		return nil, errors.Wrapf(err,
 			"failed to read from sstable: %d at offset: %d, len: %d",
 			t.fid, b.offset, ko.GetLen())
 	}
+	b.diskEnd = len(b.diskData)
+	b.compression = BlockCompression(ko.GetCompression())
+	b.rawLen = int(ko.GetRawLen())
+	if b.data, err = decodeBlockPayload(b.diskData, b.compression, b.rawLen); err != nil {
+		return nil, err
+	}
+	if err := decodeBlockMetadata(b); err != nil {
+		return nil, err
+	}
 
+	t.lm.cache.addBlock(lvl, t, key, b)
+
+	return b, nil
+}
+
+func (t *table) decodeCachedBlock(ko *storagepb.BlockOffset, cached *blockEntry) (*block, error) {
+	if cached == nil {
+		return nil, errors.New("nil cached block")
+	}
+	data, err := decodeBlockPayload(cached.diskData, cached.compression, cached.rawLen)
+	if err != nil {
+		return nil, err
+	}
+	b := &block{
+		offset:      int(ko.GetOffset()),
+		tbl:         t,
+		data:        data,
+		diskData:    cached.diskData,
+		diskEnd:     len(cached.diskData),
+		compression: cached.compression,
+		rawLen:      cached.rawLen,
+	}
+	if err := decodeBlockMetadata(b); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func decodeBlockMetadata(b *block) error {
+	if b == nil {
+		return errors.New("nil block")
+	}
 	// Binary Format for a Data Block (read from disk):
 	// +--------------------------------+--------------------------------+
 	// | ... (Key-Value Entries) ...    | Entry Offsets List (var length)|
@@ -388,11 +458,14 @@ func (t *table) loadBlock(idx int) (*block, error) {
 	// | Block Checksum Length (4B)     |
 	// +--------------------------------+
 
+	if len(b.data) < 4 {
+		return errors.New("block data too small")
+	}
 	readPos := len(b.data) - 4 // First read checksum length.
 	b.chkLen = int(kv.BytesToU32(b.data[readPos : readPos+4]))
 
-	if b.chkLen > len(b.data) {
-		return nil, errors.New("invalid checksum length. Either the data is " +
+	if b.chkLen > len(b.data) || readPos < b.chkLen {
+		return errors.New("invalid checksum length. Either the data is " +
 			"corrupted or the table options are incorrectly set")
 	}
 
@@ -401,22 +474,25 @@ func (t *table) loadBlock(idx int) (*block, error) {
 
 	b.data = b.data[:readPos]
 
-	if err = b.verifyCheckSum(); err != nil {
-		return nil, err
+	if err := b.verifyCheckSum(); err != nil {
+		return err
 	}
 
 	readPos -= 4
+	if readPos < 0 {
+		return errors.New("invalid block offsets")
+	}
 	numEntries := int(kv.BytesToU32(b.data[readPos : readPos+4]))
 	entriesIndexStart := readPos - (numEntries * 4)
 	entriesIndexEnd := entriesIndexStart + numEntries*4
+	if entriesIndexStart < 0 || entriesIndexEnd > len(b.data) {
+		return errors.New("invalid block entry offsets")
+	}
 
 	b.entryOffsets = kv.BytesToU32Slice(b.data[entriesIndexStart:entriesIndexEnd])
 
 	b.entriesIndexStart = entriesIndexStart
-
-	t.lm.cache.addBlock(lvl, t, key, b)
-
-	return b, nil
+	return nil
 }
 
 func (t *table) read(off, sz int) ([]byte, error) {
@@ -426,6 +502,24 @@ func (t *table) read(off, sz int) ([]byte, error) {
 	}
 	defer release()
 	return ss.Bytes(off, sz)
+}
+
+func decodeBlockPayload(payload []byte, compression BlockCompression, rawLen int) ([]byte, error) {
+	switch compression {
+	case BlockCompressionNone:
+		return payload, nil
+	case BlockCompressionSnappy:
+		decoded, err := snappy.Decode(nil, payload)
+		if err != nil {
+			return nil, err
+		}
+		if rawLen > 0 && len(decoded) != rawLen {
+			return nil, fmt.Errorf("snappy block length mismatch: got=%d want=%d", len(decoded), rawLen)
+		}
+		return decoded, nil
+	default:
+		return nil, fmt.Errorf("unknown block compression %d", compression)
+	}
 }
 
 const maxUint32 = uint64(math.MaxUint32)
@@ -978,6 +1072,7 @@ func (t *table) openSSTableLocked(loadIndex bool) error {
 			t.maxVersion = idx.GetMaxVersion()
 			t.staleDataSize = idx.GetStaleDataSize()
 			t.valueSize = idx.GetValueSize()
+			t.rangeDeletes = idx.GetRangeTombstoneCount()
 			t.lm.cache.addIndex(t.fid, idx)
 		}
 		t.hasBloom = ss.HasBloomFilter()

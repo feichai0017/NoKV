@@ -27,16 +27,18 @@ func (lsm *LSM) HasAnyRangeTombstone() bool {
 	if lsm == nil {
 		return false
 	}
-	lsm.lock.RLock()
-	mem := lsm.memTable
-	immutables := lsm.immutables
-	lsm.lock.RUnlock()
-	if mem != nil && mem.hasRangeTombstones() {
-		return true
-	}
-	for _, mt := range immutables {
-		if mt != nil && mt.hasRangeTombstones() {
+	for _, s := range lsm.shards {
+		s.lock.RLock()
+		mem := s.memTable
+		immutables := s.immutables
+		s.lock.RUnlock()
+		if mem != nil && mem.hasRangeTombstones() {
 			return true
+		}
+		for _, mt := range immutables {
+			if mt != nil && mt.hasRangeTombstones() {
+				return true
+			}
 		}
 	}
 	return lsm.RangeTombstoneCount() > 0
