@@ -52,7 +52,6 @@ type LSM struct {
 	logger     *slog.Logger
 
 	discardStatsCh chan map[manifest.ValueLogID]int64
-	walGCPolicy    WALGCPolicy
 
 	throttleFn    func(WriteThrottleState)
 	throttleState atomic.Int32
@@ -152,17 +151,6 @@ func (lsm *LSM) getDiscardStatsCh() chan map[manifest.ValueLogID]int64 {
 		return nil
 	}
 	return lsm.discardStatsCh
-}
-
-func (lsm *LSM) getWALGCPolicy() WALGCPolicy {
-	if lsm == nil {
-		return AllowAllWALGCPolicy{}
-	}
-	return normalizeWALGCPolicy(lsm.walGCPolicy)
-}
-
-func (lsm *LSM) canRemoveWalSegment(id uint32) bool {
-	return lsm.getWALGCPolicy().CanRemoveSegment(id)
 }
 
 func (lsm *LSM) walRetentionMark() wal.RetentionMark {
@@ -329,7 +317,6 @@ func NewLSM(opt *Options, walMgr *wal.Manager) (*LSM, error) {
 	if frozen.DiscardStatsCh != nil {
 		lsm.discardStatsCh = *frozen.DiscardStatsCh
 	}
-	lsm.walGCPolicy = normalizeWALGCPolicy(frozen.WALGCPolicy)
 	lsm.throttleFn = frozen.ThrottleCallback
 	lsm.flushQueue = newFlushRuntime()
 	// initialize levelManager

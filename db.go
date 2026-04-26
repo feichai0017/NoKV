@@ -252,19 +252,7 @@ func (db *DB) runtimeLSMOptions() *lsm.Options {
 		DiscardStatsCh:           &db.discardStatsCh,
 		ManifestSync:             db.opt.ManifestSync,
 		ManifestRewriteThreshold: db.opt.ManifestRewriteThreshold,
-		WALGCPolicy: dbruntime.NewWALGCPolicy(dbruntime.WALGCPolicyConfig{
-			RaftPointers: db.opt.RaftPointerSnapshot,
-			SegmentMetrics: func(segmentID uint32) wal.RecordMetrics {
-				if db.wal == nil {
-					return wal.RecordMetrics{}
-				}
-				return db.wal.SegmentRecordMetrics(segmentID)
-			},
-			Warn: func(msg string, args ...any) {
-				slog.Default().Warn(msg, args...)
-			},
-		}),
-		ThrottleCallback: db.applyThrottle,
+		ThrottleCallback:         db.applyThrottle,
 	}
 	db.opt.applyLSMSharedOptions(cfg)
 	return cfg
