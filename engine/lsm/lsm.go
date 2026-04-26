@@ -562,7 +562,10 @@ func (lsm *LSM) SetBatchGroup(groups [][]*kv.Entry) (int, error) {
 		if len(entries) == 0 {
 			continue
 		}
-		batches = append(batches, &writeBatch{entries: append([]*kv.Entry(nil), entries...), index: idx})
+		// LSM is the sole consumer of entries for the duration of this call,
+		// and it does not mutate the slice. Aliasing the caller's slice avoids
+		// a per-batch allocation on the write hot path.
+		batches = append(batches, &writeBatch{entries: entries, index: idx})
 	}
 	if len(batches) == 0 {
 		return -1, nil

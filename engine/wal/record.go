@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/feichai0017/NoKV/engine/kv"
 )
@@ -133,6 +134,35 @@ func EncodeRecord(w io.Writer, recType RecordType, payload []byte) (int, error) 
 	return int(length) + 8, nil // length + 4 bytes for header + 4 bytes for CRC.
 }
 
+// entryBufPool reuses the short-lived per-entry encoding buffer used by
+// EncodeEntryBatch. Each entry's encoded bytes are copied into the outer
+// output buffer immediately, so the per-entry buffer can be safely returned
+// to the pool after the batch encode completes. The outer output buffer is
+// NOT pooled because its slice escapes to the caller; reusing it would race
+// with the next EncodeEntryBatch on a different goroutine.
+var entryBufPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
+}
+
+func acquireEntryBuf() *bytes.Buffer {
+	buf := entryBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	return buf
+}
+
+func releaseEntryBuf(buf *bytes.Buffer) {
+	if buf == nil {
+		return
+	}
+	// Drop oversized buffers so a single huge entry does not pin a large
+	// allocation forever in the pool.
+	const maxPooledCap = 1 << 20 // 1 MiB
+	if buf.Cap() > maxPooledCap {
+		return
+	}
+	entryBufPool.Put(buf)
+}
+
 // EncodeEntryBatch encodes entries into a single payload suitable for RecordTypeEntryBatch.
 //
 // Payload layout:
@@ -145,18 +175,23 @@ func EncodeEntryBatch(entries []*kv.Entry) ([]byte, error) {
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("wal: empty entry batch")
 	}
+	// Outer out buffer is fresh per-call because its byte slice escapes.
+	// The per-entry scratch buffer is pooled (its bytes get copied into out
+	// immediately so reuse is safe).
 	var out bytes.Buffer
+	entryBuf := acquireEntryBuf()
+	defer releaseEntryBuf(entryBuf)
+
 	var header [4]byte
 	binary.BigEndian.PutUint32(header[:], uint32(len(entries)))
 	if _, err := out.Write(header[:]); err != nil {
 		return nil, err
 	}
-	var entryBuf bytes.Buffer
 	for _, e := range entries {
 		if e == nil || len(e.Key) == 0 {
 			return nil, fmt.Errorf("wal: invalid entry in batch")
 		}
-		payload, err := kv.EncodeEntry(&entryBuf, e)
+		payload, err := kv.EncodeEntry(entryBuf, e)
 		if err != nil {
 			return nil, err
 		}

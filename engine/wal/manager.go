@@ -3,7 +3,6 @@ package wal
 
 import (
 	"bufio"
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -299,15 +298,20 @@ func (m *Manager) AppendEntry(durability DurabilityPolicy, entry *kv.Entry) (Ent
 	if entry == nil || len(entry.Key) == 0 {
 		return EntryInfo{}, fmt.Errorf("wal: invalid entry")
 	}
-	var buf bytes.Buffer
-	payload, err := kv.EncodeEntry(&buf, entry)
+	// Reuse the shared entryBufPool. AppendRecords synchronously copies the
+	// payload into the WAL bufio writer, so the buffer is safe to release
+	// once that call returns.
+	buf := acquireEntryBuf()
+	payload, err := kv.EncodeEntry(buf, entry)
 	if err != nil {
+		releaseEntryBuf(buf)
 		return EntryInfo{}, err
 	}
 	infos, err := m.AppendRecords(durability, Record{
 		Type:    RecordTypeEntry,
 		Payload: payload,
 	})
+	releaseEntryBuf(buf)
 	if err != nil {
 		return EntryInfo{}, err
 	}
