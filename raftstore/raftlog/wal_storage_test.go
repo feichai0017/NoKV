@@ -276,6 +276,51 @@ func TestWALStorageHardStateAndEntries(t *testing.T) {
 	require.NoError(t, ws.MaybeCompact(2, 1))
 }
 
+func TestWALStorageAppendWithHardStateWritesOneBatch(t *testing.T) {
+	dir := t.TempDir()
+	walMgr := openWalManager(t, dir)
+	localMeta := openLocalMetaStore(t, dir)
+
+	ws, err := OpenWALStorage(WALStorageConfig{
+		GroupID:   7,
+		WAL:       walMgr,
+		LocalMeta: localMeta,
+	})
+	require.NoError(t, err)
+
+	hard := myraft.HardState{Term: 3, Vote: 1, Commit: 2}
+	entries := []myraft.Entry{
+		{Index: 1, Term: 2, Data: []byte("e1")},
+		{Index: 2, Term: 3, Data: []byte("e2")},
+	}
+	require.NoError(t, ws.AppendWithHardState(entries, hard))
+
+	hs, _, err := ws.InitialState()
+	require.NoError(t, err)
+	require.Equal(t, hard, hs)
+	last, err := ws.LastIndex()
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), last)
+
+	ptr, ok := localMeta.RaftPointer(7)
+	require.True(t, ok)
+	require.Equal(t, uint64(2), ptr.AppliedIndex)
+	require.Equal(t, uint64(2), ptr.Committed)
+
+	var stateRecords, entryRecords int
+	require.NoError(t, walMgr.Replay(func(info wal.EntryInfo, _ []byte) error {
+		switch info.Type {
+		case wal.RecordTypeRaftState:
+			stateRecords++
+		case wal.RecordTypeRaftEntry:
+			entryRecords++
+		}
+		return nil
+	}))
+	require.Equal(t, 1, stateRecords)
+	require.Equal(t, 1, entryRecords)
+}
+
 func TestWALStorageEncodingHelpers(t *testing.T) {
 	hs := myraft.HardState{Term: 3, Vote: 7, Commit: 9}
 	data, err := encodeRaftHardState(5, hs)
