@@ -18,6 +18,7 @@ INTERVAL=""
 DASHBOARD=0
 DASHBOARD_PORT=18080
 BUILD=0
+BUILD_FLAG_SET=0
 TIMEOUT=120
 DRY_RUN=0
 
@@ -79,10 +80,12 @@ while [[ $# -gt 0 ]]; do
       ;;
     --build)
       BUILD=1
+      BUILD_FLAG_SET=1
       shift
       ;;
     --no-build)
       BUILD=0
+      BUILD_FLAG_SET=1
       shift
       ;;
     --timeout)
@@ -116,6 +119,9 @@ fi
 if ! [[ "$TIMEOUT" =~ ^[0-9]+$ ]]; then
   echo "--timeout must be an integer number of seconds" >&2
   exit 1
+fi
+if [[ "$BUILD_FLAG_SET" == "0" ]]; then
+  log "using the published image by default; pass --build to build locally"
 fi
 
 compose_up() {

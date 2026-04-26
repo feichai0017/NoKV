@@ -31,7 +31,7 @@ x-nokv-image: &nokv-image
   image: ${NOKV_IMAGE:-ghcr.io/feichai0017/nokv:latest}
 
 x-common: &common
-  <<: *nokv-image
+  image: ${NOKV_IMAGE:-ghcr.io/feichai0017/nokv:latest}
   restart: unless-stopped
   stop_signal: SIGINT
   stop_grace_period: 30s
