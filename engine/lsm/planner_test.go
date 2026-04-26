@@ -2,6 +2,7 @@ package lsm
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 	"time"
 
@@ -148,4 +149,91 @@ func TestTableHelpers(t *testing.T) {
 
 	bot = collectBotTables(TableMeta{ID: 99, MinKey: ikey("z", 1)}, tables, 10)
 	require.Nil(t, bot)
+}
+
+// TestPlanForL0ToL0AllowsConcurrentWorkers verifies that two consecutive
+// PlanForL0ToL0 calls (simulating two compactor workers) each receive a
+// disjoint slice of L0 tables and that the second call is NOT blocked by
+// the first claiming an InfRange entry on level 0. With the IntraLevel
+// flag the state machine claims by table ID only, so peer workers see
+// the right tables filtered out via state.HasTable but no range overlap
+// blocks them.
+func TestPlanForL0ToL0AllowsConcurrentWorkers(t *testing.T) {
+	state := NewState(8)
+	tables := makeL0PlannerTestTables(t, 16)
+
+	// Worker 0 picks first.
+	plan0, ok0 := PlanForL0ToL0(0, tables, 0, state, time.Time{})
+	require.True(t, ok0)
+	require.True(t, plan0.IntraLevel)
+	require.Len(t, plan0.TopIDs, l0ToL0MaxTablesPerWorker)
+	require.True(t, state.CompareAndAdd(LevelsLocked{}, plan0.StateEntry(0)))
+
+	// Worker 1 picks second; should get the remaining tables.
+	plan1, ok1 := PlanForL0ToL0(0, tables, 0, state, time.Time{})
+	require.True(t, ok1, "second worker must find a non-conflicting plan")
+	require.True(t, plan1.IntraLevel)
+	require.Len(t, plan1.TopIDs, l0ToL0MaxTablesPerWorker)
+	for _, fid := range plan0.TopIDs {
+		for _, fid2 := range plan1.TopIDs {
+			require.NotEqual(t, fid, fid2, "plans must hold disjoint table sets")
+		}
+	}
+	require.True(t, state.CompareAndAdd(LevelsLocked{}, plan1.StateEntry(0)))
+
+	// Worker 2 finds nothing usable (only 16 tables / cap=8 each = 2 plans max).
+	_, ok2 := PlanForL0ToL0(0, tables, 0, state, time.Time{})
+	require.False(t, ok2)
+}
+
+// TestPlanForL0ToL0DoesNotBlockL0ToLbase verifies the core PR motivation:
+// an in-flight L0→L0 compaction must NOT prevent a peer worker from
+// running L0→Lbase on a different (non-overlapping) range. Pre-fix,
+// L0→L0 used InfRange and any subsequent L0→Lbase hit
+// `state.Overlaps(0, anything)`. With IntraLevel the L0 entry only
+// claims tables, so L0→Lbase can claim a fresh range slice.
+func TestPlanForL0ToL0DoesNotBlockL0ToLbase(t *testing.T) {
+	state := NewState(8)
+	l0 := makeL0PlannerTestTables(t, 12)
+	lbase := []TableMeta{
+		{ID: 100, MinKey: ikey("a", 10), MaxKey: ikey("z", 1), Size: 32 << 20},
+	}
+
+	planA, okA := PlanForL0ToL0(0, l0, 0, state, time.Time{})
+	require.True(t, okA)
+	require.True(t, planA.IntraLevel)
+	require.True(t, state.CompareAndAdd(LevelsLocked{}, planA.StateEntry(0)))
+
+	planB, okB := PlanForL0ToLbase(l0, 1, lbase, state)
+	require.True(t, okB, "L0→Lbase must not be blocked by an in-flight L0→L0")
+	require.False(t, planB.IntraLevel)
+	planAIDs := make(map[uint64]struct{}, len(planA.TopIDs))
+	for _, fid := range planA.TopIDs {
+		planAIDs[fid] = struct{}{}
+	}
+	for _, fid := range planB.TopIDs {
+		_, claimed := planAIDs[fid]
+		require.False(t, claimed, "L0→Lbase must not pick tables already claimed by L0→L0")
+	}
+}
+
+// makeL0PlannerTestTables fabricates N L0 TableMeta entries with overlapping
+// keyranges (the realistic L0 case for random-write workloads).
+func makeL0PlannerTestTables(t *testing.T, n int) []TableMeta {
+	t.Helper()
+	out := make([]TableMeta, n)
+	for i := range out {
+		out[i] = TableMeta{
+			ID:        uint64(i + 1),
+			MinKey:    ikey(formatL0Key(i*2), 10),
+			MaxKey:    ikey(formatL0Key(i*2+10), 1),
+			Size:      8 << 20,
+			CreatedAt: time.Time{}, // skip "younger than 10s" filter
+		}
+	}
+	return out
+}
+
+func formatL0Key(i int) string {
+	return fmt.Sprintf("k%05d", i)
 }
