@@ -22,7 +22,7 @@ func BenchmarkShardedNegativeCache(b *testing.B) {
 
 			// Seed a small set of present keys so reads aren't all-miss
 			// (otherwise levels.Get fast path may dominate).
-			for i := 0; i < seedHits; i++ {
+			for i := range seedHits {
 				userKey := make([]byte, 16)
 				copy(userKey, "negbench-hit")
 				binary.LittleEndian.PutUint64(userKey[8:], uint64(i))
@@ -45,7 +45,7 @@ func BenchmarkShardedNegativeCache(b *testing.B) {
 			}
 
 			if mode == "warm_neg" {
-				for i := 0; i < 1024; i++ {
+				for i := range 1024 {
 					_, _ = lsm.Get(missQuery(i % 1024))
 				}
 			}

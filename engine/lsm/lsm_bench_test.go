@@ -887,7 +887,7 @@ func BenchmarkShardedCrossShardMVCCMerge(b *testing.B) {
 			userKey := []byte("mvcc-merge-bench")
 			value := []byte("v")
 
-			for shardID := 0; shardID < shardCount; shardID++ {
+			for shardID := range shardCount {
 				entry := &kv.Entry{
 					Key:     kv.InternalKey(kv.CFDefault, userKey, uint64(shardID+1)),
 					Value:   value,

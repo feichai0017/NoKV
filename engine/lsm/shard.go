@@ -35,4 +35,3 @@ func newLSMShard(id int, walMgr *wal.Manager) *lsmShard {
 		wal: walMgr,
 	}
 }
-

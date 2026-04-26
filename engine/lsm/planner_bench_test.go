@@ -22,7 +22,7 @@ func BenchmarkPlanForL0ToL0Concurrent(b *testing.B) {
 				state := NewState(8)
 				var wg sync.WaitGroup
 				wg.Add(workers)
-				for w := 0; w < workers; w++ {
+				for range workers {
 					go func() {
 						defer wg.Done()
 						plan, ok := PlanForL0ToL0(0, tables, 0, state, time.Time{})

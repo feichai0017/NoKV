@@ -401,13 +401,13 @@ func TestManagerConcurrentAppendReadAfterWrite(t *testing.T) {
 	}
 	done := make(chan result, appenders)
 
-	for w := 0; w < appenders; w++ {
+	for w := range appenders {
 		go func(workerID int) {
 			value := make([]byte, payloadSize)
 			for i := range value {
 				value[i] = byte((workerID*7 + i) & 0xff)
 			}
-			for b := 0; b < batchesEach; b++ {
+			for b := range batchesEach {
 				entries := make([]*kv.Entry, entriesEach)
 				for i := range entries {
 					key := []byte{byte(workerID), byte(b), byte(i)}
@@ -444,7 +444,7 @@ func TestManagerConcurrentAppendReadAfterWrite(t *testing.T) {
 		}(w)
 	}
 
-	for w := 0; w < appenders; w++ {
+	for range appenders {
 		if r := <-done; r.err != nil {
 			t.Fatalf("worker error: %v", r.err)
 		}
