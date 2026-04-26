@@ -134,9 +134,11 @@ type Options struct {
 	// pinned to one shard (preserves SetBatch atomicity).
 	CommitWorkers int
 	// LSMShardCount is the number of WAL Manager + memtable pairs that back
-	// the LSM data plane. Must be a power of two. Zero falls back to the
-	// constructor default. See
-	// docs/notes/2026-04-26-lsm-data-plane-sharding-design.md.
+	// the LSM data plane. The shard router uses `& (N-1)` for placement so
+	// the value must be a power of two. Zero falls back to the constructor
+	// default; non-power-of-two values are rounded DOWN to the nearest
+	// power of two during Open (e.g. 6 → 4, 12 → 8). See
+	// docs/notes/2026-04-26-lsm-engine-throughput-roadmap.md.
 	LSMShardCount int
 	ManifestSync  bool
 	// ManifestRewriteThreshold triggers a manifest rewrite when the active

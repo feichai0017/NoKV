@@ -2,6 +2,7 @@ package NoKV
 
 import (
 	"expvar"
+	"maps"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -508,9 +509,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		if segmentMetrics == nil {
 			segmentMetrics = shardSegments
 		} else {
-			for k, v := range shardSegments {
-				segmentMetrics[k] = v
-			}
+			maps.Copy(segmentMetrics, shardSegments)
 		}
 	}
 	if anyShardStats {

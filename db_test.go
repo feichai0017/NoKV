@@ -2214,7 +2214,7 @@ func TestCloseAggregatesWalAndDirLockErrors(t *testing.T) {
 	walSyncErr := errors.New("wal sync close error")
 	dirCloseErr := errors.New("dir lock close error")
 	rules := make([]vfs.FaultRule, 0, 8)
-	for shard := 0; shard < 8; shard++ {
+	for shard := range 8 {
 		rules = append(rules, vfs.FailOnNthRule(
 			vfs.OpFileSync,
 			filepath.Join(dir, fmt.Sprintf("lsm-wal-%02d", shard), "00001.wal"),
@@ -2250,7 +2250,7 @@ func TestFaultFSWriteFailureThenRecoverableReopen(t *testing.T) {
 	// on every shard's wal-00001 — only one fires.
 	injected := errors.New("wal write injected")
 	rules := make([]vfs.FaultRule, 0, 8)
-	for shard := 0; shard < 8; shard++ {
+	for shard := range 8 {
 		rules = append(rules, vfs.FailOnceRule(
 			vfs.OpFileWrite,
 			filepath.Join(dir, fmt.Sprintf("lsm-wal-%02d", shard), "00001.wal"),

@@ -365,6 +365,20 @@ scan 时一次 `readv` 读 N 个相邻 block，syscall 数下降。
 | 4.6 | Cross-shard memtable hint | 0.5 | 读路径 -10~17%（多 shard 副产品） |
 | 4.2 | Filter 永驻独立 cache | 1 | bloom 命中率 100% |
 | 4.3 | Ribbon Filter | 1 | filter 占用 -30% |
+| —   | WAL DurabilityFsyncBatched / rotation 生命周期 fence | 0.5 | 消除 raft WAL fsync 路径上的伪错误 ack |
+
+#### WAL fsync/rotation race —— Tier 1 follow-up
+
+`Manager.runFsyncBatch` 把 `active := m.active` 缓存到 goroutine 局部变量、释放 `m.mu`、然后无锁调 `active.Sync()` 来允许 phase-1 flush 与 phase-2 fsync 流水。同时 `switchSegmentLocked`（被 `rotateLocked` / 显式 `Rotate` / `SwitchSegment` 调用）会在持锁下 `m.active.Sync()` + `m.active.Close()`。两路在同一个 fd 上 race 时：
+
+- 数据：rotation 自己 Sync 已落盘；不会丢。
+- 错误回传：fsync worker 的 `active.Sync()` 可能在 rotation `Close()` 后返回 `EBADF`，向当前 batched waiters 报伪错误。
+
+只影响 `DurabilityFsyncBatched` 路径（仅 `raftstore/raftlog` 使用），LSM 数据面跑 `DurabilityFlushed` 不触发。修法二选一：
+1. **Segment refcount**：fsync worker 入临界区时 `seg.refInc()`，rotation 等 ref==0 才 Close。
+2. **Inflight fence**：`fsyncRunning atomic.Bool`，rotation 在 close 前 spin/cond 等到 false。
+
+推荐 (1)，能覆盖未来更多 unlocked-on-fd 场景。
 
 **3-4 周做完后预期**：
 - 写吞吐 N=4 c=128：725K → 1M+

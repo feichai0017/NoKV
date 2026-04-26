@@ -11,7 +11,7 @@ import (
 // queue of immutable memtables awaiting flush, and the WAL manager backing
 // both. With multiple shards each pair runs on its own fd, fsync worker,
 // and bufio.Writer so writes do not contend on a single Manager.mu. See
-// docs/notes/2026-04-26-lsm-data-plane-sharding-design.md for the broader
+// docs/notes/2026-04-26-lsm-engine-throughput-roadmap.md for the broader
 // plan and the routing/recovery/flush invariants.
 type lsmShard struct {
 	id int

@@ -43,7 +43,7 @@ const nonTxnMaxVersion = kv.MaxVersion
 // uses `& (N-1)` for placement.
 //
 // Total Manager budget under the LSM data-plane sharding plan
-// (see docs/notes/2026-04-26-lsm-data-plane-sharding-design.md):
+// (see docs/notes/2026-04-26-lsm-engine-throughput-roadmap.md):
 // 4 raft + 4 LSM data = 8 Managers. There is no separate control-plane
 // Manager — db.wal is dissolved into the LSM shards.
 const defaultRaftWALShards = 4
@@ -76,10 +76,10 @@ type (
 	// DB is the global handle for the engine and owns shared resources.
 	DB struct {
 		sync.RWMutex
-		opt             *Options
-		fs              vfs.FS
-		dirLock         io.Closer
-		lsm             *lsm.LSM
+		opt     *Options
+		fs      vfs.FS
+		dirLock io.Closer
+		lsm     *lsm.LSM
 		// lsmWALs holds one WAL Manager per LSM data-plane shard. The
 		// number of entries is db.opt.LSMShardCount (resolved at Open).
 		// Each Manager has its own fd, fsync worker, and bufio.Writer so
@@ -178,7 +178,7 @@ func (db *DB) openDurability() error {
 		return fmt.Errorf("open db: LSMShardCount must be > 0")
 	}
 	db.lsmWALs = make([]*wal.Manager, n)
-	for shard := 0; shard < n; shard++ {
+	for shard := range n {
 		dir := db.lsmWALDir(shard)
 		if err := db.fs.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("open db: ensure lsm wal dir %d: %w", shard, err)
