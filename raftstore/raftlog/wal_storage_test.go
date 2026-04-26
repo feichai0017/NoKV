@@ -108,7 +108,7 @@ func TestWALStorageRejectsLocalMetaPointerToNonRaftRecord(t *testing.T) {
 	defer func() { _ = localMeta.Close() }()
 
 	plain := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("plain"), 1), []byte("entry"))
-	info, err := walMgr.AppendEntry(plain)
+	info, err := walMgr.AppendEntry(wal.DurabilityBuffered, plain)
 	require.NoError(t, err)
 	plain.DecrRef()
 	require.NoError(t, walMgr.Sync())

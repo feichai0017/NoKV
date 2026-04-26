@@ -165,6 +165,14 @@ func (lsm *LSM) canRemoveWalSegment(id uint32) bool {
 	return lsm.getWALGCPolicy().CanRemoveSegment(id)
 }
 
+func (lsm *LSM) walRetentionMark() wal.RetentionMark {
+	if lsm == nil || lsm.levels == nil {
+		return wal.RetentionMark{FirstSegment: 1}
+	}
+	seg, _ := lsm.levels.logPointer()
+	return wal.RetentionMark{FirstSegment: seg + 1}
+}
+
 func (lsm *LSM) getLogger() *slog.Logger {
 	if lsm == nil || lsm.logger == nil {
 		return slog.Default()
@@ -330,6 +338,9 @@ func NewLSM(opt *Options, walMgr *wal.Manager) (*LSM, error) {
 		return nil, fmt.Errorf("lsm init level manager: %w", err)
 	}
 	lsm.levels = lm
+	if err := walMgr.RegisterRetention("lsm", lsm.walRetentionMark); err != nil {
+		return nil, fmt.Errorf("lsm register wal retention: %w", err)
+	}
 	// Populate range tombstone collector from existing SSTables
 	if lsm.levels != nil && lsm.levels.rtCollector != nil {
 		lsm.levels.rebuildRangeTombstones()

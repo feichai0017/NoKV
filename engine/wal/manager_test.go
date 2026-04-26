@@ -18,7 +18,7 @@ func appendEntryValue(t *testing.T, m *wal.Manager, key, value string) wal.Entry
 	t.Helper()
 	entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte(key), 1), []byte(value))
 	defer entry.DecrRef()
-	info, err := m.AppendEntry(entry)
+	info, err := m.AppendEntry(wal.DurabilityBuffered, entry)
 	if err != nil {
 		t.Fatalf("append entry: %v", err)
 	}
@@ -446,7 +446,7 @@ func TestManagerAppendRecordsTyped(t *testing.T) {
 		Type:    wal.RecordTypeRaftEntry,
 		Payload: []byte("raft-data"),
 	}
-	infos, err := m.AppendRecords(rec)
+	infos, err := m.AppendRecords(wal.DurabilityBuffered, rec)
 	if err != nil {
 		t.Fatalf("append records: %v", err)
 	}
@@ -528,7 +528,7 @@ func TestManagerAppendEntryBatchAndReplay(t *testing.T) {
 	defer e1.DecrRef()
 	defer e2.DecrRef()
 
-	info, err := m.AppendEntryBatch([]*kv.Entry{e1, e2})
+	info, err := m.AppendEntryBatch(wal.DurabilityBuffered, []*kv.Entry{e1, e2})
 	if err != nil {
 		t.Fatalf("append entry batch: %v", err)
 	}
@@ -582,13 +582,13 @@ func TestManagerAppendEntryRejectsInvalidInput(t *testing.T) {
 	}
 	defer func() { _ = m.Close() }()
 
-	if _, err := m.AppendEntry(nil); err == nil {
+	if _, err := m.AppendEntry(wal.DurabilityBuffered, nil); err == nil {
 		t.Fatalf("expected error for nil entry")
 	}
 
 	e := kv.NewEntry(nil, []byte("v"))
 	defer e.DecrRef()
-	if _, err := m.AppendEntry(e); err == nil {
+	if _, err := m.AppendEntry(wal.DurabilityBuffered, e); err == nil {
 		t.Fatalf("expected error for empty key entry")
 	}
 }

@@ -144,16 +144,38 @@ func (db *DB) openDurability() error {
 	}
 
 	wlog, err := wal.Open(wal.Config{
-		Dir:         db.opt.WorkDir,
-		SyncOnWrite: false,
-		BufferSize:  db.opt.WALBufferSize,
-		FS:          db.fs,
+		Dir:        db.opt.WorkDir,
+		BufferSize: db.opt.WALBufferSize,
+		FS:         db.fs,
 	})
 	if err != nil {
 		return fmt.Errorf("open db: wal open: %w", err)
 	}
 	db.wal = wlog
+	if db.opt.RaftPointerSnapshot != nil {
+		if err := db.wal.RegisterRetention("raft", func() wal.RetentionMark {
+			return raftRetentionMark(db.opt.RaftPointerSnapshot())
+		}); err != nil {
+			return fmt.Errorf("open db: wal raft retention: %w", err)
+		}
+	}
 	return nil
+}
+
+func raftRetentionMark(ptrs map[uint64]localmeta.RaftLogPointer) wal.RetentionMark {
+	var first uint32
+	for _, ptr := range ptrs {
+		if ptr.Segment > 0 && (first == 0 || ptr.Segment < first) {
+			first = ptr.Segment
+		}
+		if ptr.SegmentIndex > 0 {
+			seg := uint32(ptr.SegmentIndex)
+			if first == 0 || seg < first {
+				first = seg
+			}
+		}
+	}
+	return wal.RetentionMark{FirstSegment: first}
 }
 
 func (db *DB) checkWorkDirMode() error {

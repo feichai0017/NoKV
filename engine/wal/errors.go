@@ -7,4 +7,8 @@ var (
 	ErrPartialRecord = errors.New("wal: partial record")
 	// ErrEmptyRecord indicates a WAL record header advertised zero payload length.
 	ErrEmptyRecord = errors.New("wal: empty record")
+	// ErrSegmentRetained indicates a retention participant still needs the WAL segment.
+	ErrSegmentRetained = errors.New("wal: segment retained")
+	// ErrWALBackpressure indicates the WAL reached its configured hard cap.
+	ErrWALBackpressure = errors.New("wal: backpressure")
 )
