@@ -63,6 +63,13 @@ type remoteRootBackend struct {
 	*rootclient.Client
 }
 
+var _ rootTailBackend = (*remoteRootBackend)(nil)
+
+func (*remoteRootBackend) TailNotify() <-chan struct{} {
+	// Remote meta-root subscriptions use ObserveTail/WaitForTail fallback.
+	return nil
+}
+
 func (b *remoteRootBackend) IsLeader() bool {
 	// A remote coordinator is not co-located with one root raft peer. Writes are
 	// routed by the remote client to the current metadata-root leader, so the

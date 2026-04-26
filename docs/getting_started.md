@@ -42,7 +42,7 @@ go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --coordinator-addr 127.0.0.1:2379
 Quick smoke test:
 
 ```bash
-redis-cli -p 6380 ping
+scripts/demo/redis-smoke.sh
 ```
 
 ### Inspect stats
@@ -55,7 +55,8 @@ go run ./cmd/nokv stats --workdir ./artifacts/cluster/store-1
 This runs the cluster and gateway in containers.
 
 ```bash
-docker compose up --build
+docker compose up -d --build
+scripts/demo/redis-smoke.sh
 ```
 
 Tear down:
