@@ -68,6 +68,24 @@ func TestSessionValueRoundTrip(t *testing.T) {
 	}, record)
 }
 
+func TestUsageValueRoundTrip(t *testing.T) {
+	value, err := EncodeUsageValue(UsageRecord{
+		Bytes:  4096,
+		Inodes: 12,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "usage", ValueKindUsage.String())
+	require.Equal(t, "unknown(120)", ValueKind('x').String())
+
+	kind, err := ValueKindOf(value)
+	require.NoError(t, err)
+	require.Equal(t, ValueKindUsage, kind)
+
+	record, err := DecodeUsageValue(value)
+	require.NoError(t, err)
+	require.Equal(t, UsageRecord{Bytes: 4096, Inodes: 12}, record)
+}
+
 func TestValueDecodersRejectWrongKind(t *testing.T) {
 	value, err := EncodeDentryValue(DentryRecord{Parent: RootInode, Name: "file", Inode: 22})
 	require.NoError(t, err)

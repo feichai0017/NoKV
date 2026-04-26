@@ -109,6 +109,88 @@ func TestTenureRenewableAndSealedEra(t *testing.T) {
 	}
 }
 
+func TestEunomiaProjectionAndPresence(t *testing.T) {
+	st := rootstate.State{
+		Tenure: rootstate.Tenure{HolderID: "c1", Era: 1},
+		Legacy: rootstate.Legacy{HolderID: "c1", Era: 1},
+		Handover: rootstate.Handover{
+			HolderID:     "c1",
+			LegacyEra:    1,
+			SuccessorEra: 2,
+			LegacyDigest: "digest",
+			Stage:        rootproto.HandoverStageConfirmed,
+		},
+	}
+	projected := st.Eunomia()
+	if !projected.Tenure.Present() || !projected.Legacy.Present() || !projected.Handover.Present() {
+		t.Fatalf("expected all eunomia records to be present: %+v", projected)
+	}
+	if (rootstate.Tenure{HolderID: " ", Era: 1}).Present() {
+		t.Fatalf("blank tenure holder must not be present")
+	}
+	if (rootstate.Legacy{HolderID: "c1"}).Present() {
+		t.Fatalf("legacy without era must not be present")
+	}
+	if (rootstate.Handover{HolderID: "c1", LegacyEra: 1, SuccessorEra: 2, LegacyDigest: "digest"}).Present() {
+		t.Fatalf("handover without stage must not be present")
+	}
+}
+
+func TestResolveLineageDigest(t *testing.T) {
+	current := rootstate.Tenure{
+		HolderID:        "c1",
+		ExpiresUnixNano: 1_000,
+		Era:             7,
+		LineageDigest:   "current-digest",
+	}
+	seal := rootstate.Legacy{
+		HolderID: "c1",
+		Era:      7,
+		Mandate:  rootproto.MandateDefault,
+		SealedAt: rootstate.Cursor{Term: 1, Index: 9},
+	}
+
+	if got := rootstate.ResolveLineageDigest(current, rootstate.Legacy{}, "c1", 500); got != "current-digest" {
+		t.Fatalf("same-holder continuation should reuse current lineage digest, got %q", got)
+	}
+	if got := rootstate.ResolveLineageDigest(current, seal, "c1", 500); got != rootstate.DigestOfLegacy(seal) {
+		t.Fatalf("sealed era should resolve legacy digest, got %q", got)
+	}
+	if got := rootstate.ResolveLineageDigest(current, rootstate.Legacy{}, " ", 500); got != "" {
+		t.Fatalf("blank holder should resolve no digest, got %q", got)
+	}
+}
+
+func TestValidateTenureYieldAndLegacyFormation(t *testing.T) {
+	current := rootstate.Tenure{HolderID: "c1", Era: 7, ExpiresUnixNano: 1_000}
+
+	if err := rootstate.ValidateTenureYield(current, "c1", 500); err != nil {
+		t.Fatalf("current holder should be able to yield, got err=%v", err)
+	}
+	if err := rootstate.ValidateTenureYield(current, "c2", 500); !errors.Is(err, rootstate.ErrPrimacy) {
+		t.Fatalf("non-holder yield must fail primacy, got err=%v", err)
+	}
+	if err := rootstate.ValidateTenureYield(rootstate.Tenure{}, "c1", 500); !errors.Is(err, rootstate.ErrPrimacy) {
+		t.Fatalf("empty tenure yield must fail primacy, got err=%v", err)
+	}
+	if err := rootstate.ValidateTenureYield(current, "", 500); !errors.Is(err, rootstate.ErrInvalidTenure) {
+		t.Fatalf("blank holder yield must fail invalid tenure, got err=%v", err)
+	}
+
+	if err := rootstate.ValidateLegacyFormation(current, "c1"); err != nil {
+		t.Fatalf("current holder should form legacy, got err=%v", err)
+	}
+	if err := rootstate.ValidateLegacyFormation(current, "c2"); !errors.Is(err, rootstate.ErrPrimacy) {
+		t.Fatalf("non-holder legacy formation must fail primacy, got err=%v", err)
+	}
+	if err := rootstate.ValidateLegacyFormation(rootstate.Tenure{}, "c1"); !errors.Is(err, rootstate.ErrPrimacy) {
+		t.Fatalf("empty tenure legacy formation must fail primacy, got err=%v", err)
+	}
+	if err := rootstate.ValidateLegacyFormation(current, " "); !errors.Is(err, rootstate.ErrInvalidTenure) {
+		t.Fatalf("blank holder legacy formation must fail invalid tenure, got err=%v", err)
+	}
+}
+
 func TestValidateInheritance(t *testing.T) {
 	current := rootstate.Tenure{
 		HolderID:        "c1",

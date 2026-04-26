@@ -23,6 +23,9 @@ type fakeExecutor struct {
 	readDirReq  fsmeta.ReadDirRequest
 	snapshotReq fsmeta.SnapshotSubtreeRequest
 	quotaReq    fsmeta.QuotaUsageRequest
+	renameReq   fsmeta.RenameSubtreeRequest
+	linkReq     fsmeta.LinkRequest
+	unlinkReq   fsmeta.UnlinkRequest
 	err         error
 }
 
@@ -95,15 +98,18 @@ func (e *fakeExecutor) GetQuotaUsage(_ context.Context, req fsmeta.QuotaUsageReq
 	return fsmeta.UsageRecord{Bytes: 4096, Inodes: 2}, nil
 }
 
-func (e *fakeExecutor) RenameSubtree(context.Context, fsmeta.RenameSubtreeRequest) error {
+func (e *fakeExecutor) RenameSubtree(_ context.Context, req fsmeta.RenameSubtreeRequest) error {
+	e.renameReq = req
 	return e.err
 }
 
-func (e *fakeExecutor) Link(context.Context, fsmeta.LinkRequest) error {
+func (e *fakeExecutor) Link(_ context.Context, req fsmeta.LinkRequest) error {
+	e.linkReq = req
 	return e.err
 }
 
-func (e *fakeExecutor) Unlink(context.Context, fsmeta.UnlinkRequest) error {
+func (e *fakeExecutor) Unlink(_ context.Context, req fsmeta.UnlinkRequest) error {
+	e.unlinkReq = req
 	return e.err
 }
 
@@ -155,6 +161,72 @@ func TestGRPCServiceCreateAndReadDirPlus(t *testing.T) {
 	require.Len(t, resp.GetEntries(), 1)
 	require.Equal(t, "checkpoint", resp.GetEntries()[0].GetDentry().GetName())
 	require.Equal(t, uint64(4096), resp.GetEntries()[0].GetInode().GetSize())
+}
+
+func TestGRPCServiceReadDirAndMutationRPCs(t *testing.T) {
+	executor := &fakeExecutor{}
+	client, cleanup := openBufconnClient(t, executor)
+	defer cleanup()
+
+	readDirResp, err := client.ReadDir(context.Background(), &fsmetapb.ReadDirRequest{
+		Mount:      "vol",
+		Parent:     uint64(fsmeta.RootInode),
+		StartAfter: "a",
+		Limit:      32,
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.ReadDirRequest{
+		Mount:      "vol",
+		Parent:     fsmeta.RootInode,
+		StartAfter: "a",
+		Limit:      32,
+	}, executor.readDirReq)
+	require.Len(t, readDirResp.GetEntries(), 1)
+	require.Equal(t, "checkpoint", readDirResp.GetEntries()[0].GetName())
+
+	_, err = client.RenameSubtree(context.Background(), &fsmetapb.RenameSubtreeRequest{
+		Mount:      "vol",
+		FromParent: 1,
+		FromName:   "old",
+		ToParent:   2,
+		ToName:     "new",
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.RenameSubtreeRequest{
+		Mount:      "vol",
+		FromParent: 1,
+		FromName:   "old",
+		ToParent:   2,
+		ToName:     "new",
+	}, executor.renameReq)
+
+	_, err = client.Link(context.Background(), &fsmetapb.LinkRequest{
+		Mount:      "vol",
+		FromParent: 1,
+		FromName:   "file",
+		ToParent:   2,
+		ToName:     "alias",
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.LinkRequest{
+		Mount:      "vol",
+		FromParent: 1,
+		FromName:   "file",
+		ToParent:   2,
+		ToName:     "alias",
+	}, executor.linkReq)
+
+	_, err = client.Unlink(context.Background(), &fsmetapb.UnlinkRequest{
+		Mount:  "vol",
+		Parent: 2,
+		Name:   "alias",
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.UnlinkRequest{
+		Mount:  "vol",
+		Parent: 2,
+		Name:   "alias",
+	}, executor.unlinkReq)
 }
 
 func TestGRPCServiceErrorMapping(t *testing.T) {

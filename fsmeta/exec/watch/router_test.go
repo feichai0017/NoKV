@@ -120,6 +120,36 @@ func TestRouterDeduplicatesReplicatedApplyEvents(t *testing.T) {
 	}
 }
 
+func TestRouterStatsTracksPublishedAndSubscribers(t *testing.T) {
+	router := NewRouter()
+	require.Equal(t, map[string]any{
+		"subscribers":     0,
+		"regions":         0,
+		"recent_events":   0,
+		"events_total":    uint64(0),
+		"delivered_total": uint64(0),
+		"dropped_total":   uint64(0),
+		"overflow_total":  uint64(0),
+	}, router.Stats())
+
+	sub, err := router.Subscribe(context.Background(), fsmeta.WatchRequest{KeyPrefix: []byte("k/")})
+	require.NoError(t, err)
+	defer sub.Close()
+	router.Publish(fsmeta.WatchEvent{
+		Cursor:        fsmeta.WatchCursor{RegionID: 1, Term: 1, Index: 1},
+		CommitVersion: 10,
+		Source:        fsmeta.WatchEventSourceCommit,
+		Key:           []byte("k/a"),
+	})
+
+	stats := router.Stats()
+	require.Equal(t, 1, stats["subscribers"])
+	require.Equal(t, 1, stats["regions"])
+	require.Equal(t, 1, stats["recent_events"])
+	require.Equal(t, uint64(1), stats["events_total"])
+	require.Equal(t, uint64(1), stats["delivered_total"])
+}
+
 func TestRouterReplaysEventsAfterResumeCursor(t *testing.T) {
 	router := NewRouter()
 	prefix := []byte("k/")

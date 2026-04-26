@@ -124,3 +124,15 @@ func TestWatcherRejectsRetiredMount(t *testing.T) {
 	require.ErrorIs(t, err, fsmeta.ErrMountRetired)
 	require.Equal(t, 1, lookup.calls)
 }
+
+func TestWatcherStatsIncludesRouterSnapshot(t *testing.T) {
+	router := fsmetawatch.NewRouter()
+	w := watcher{Router: router}
+
+	stats := w.Stats()
+	require.Equal(t, 0, stats["subscribers"])
+	require.Equal(t, uint64(0), stats["events_total"])
+
+	empty := watcher{}
+	require.Empty(t, empty.Stats())
+}

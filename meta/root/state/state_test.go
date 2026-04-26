@@ -104,6 +104,31 @@ func TestApplyTenurePreservesIssuedAtForSameEra(t *testing.T) {
 	require.Equal(t, "pred", st.Tenure.LineageDigest)
 }
 
+func TestApplyLegacyToStateDefaultsMandateAndClearsHandover(t *testing.T) {
+	st := rootstate.State{
+		Tenure: rootstate.Tenure{HolderID: "c1", Era: 7, Mandate: rootproto.MandateTSO},
+		Handover: rootstate.Handover{
+			HolderID:     "c1",
+			LegacyEra:    6,
+			SuccessorEra: 7,
+			LegacyDigest: "old",
+			Stage:        rootproto.HandoverStageConfirmed,
+		},
+	}
+	cursor := rootstate.Cursor{Term: 2, Index: 8}
+	rootstate.ApplyEventToState(&st, cursor, rootevent.TenureSealed("c1", 7, 0, eunomia.Frontiers(rootstate.State{TSOFence: 51}, 0)))
+
+	require.Equal(t, rootstate.Legacy{
+		HolderID:  "c1",
+		Era:       7,
+		Mandate:   rootproto.MandateTSO,
+		Frontiers: eunomia.Frontiers(rootstate.State{TSOFence: 51}, 0),
+		SealedAt:  cursor,
+	}, st.Legacy)
+	require.Equal(t, rootstate.Handover{}, st.Handover)
+	require.Equal(t, cursor, st.LastCommitted)
+}
+
 func TestStateProtocolHelpers(t *testing.T) {
 	witness := rootproto.NewMandateWitness(rootproto.MandateTSO, 8, 51)
 	require.Equal(t, rootproto.MandateTSO, witness.Mandate)
@@ -138,6 +163,69 @@ func TestCloneDescriptorsDetachesMapAndValues(t *testing.T) {
 
 	in[7].StartKey[0] = 'x'
 	require.Equal(t, byte('m'), out[7].StartKey[0])
+}
+
+func TestCloneSnapshotDetachesAuthorityMapsAndPendingChanges(t *testing.T) {
+	base := testDescriptor(7, []byte("a"), []byte("m"))
+	target := testDescriptor(8, []byte("a"), []byte("m"))
+	snapshot := rootstate.Snapshot{
+		State: rootstate.State{ClusterEpoch: 3},
+		Mounts: map[string]rootstate.MountRecord{
+			"vol": {MountID: "vol", RootInode: 1, State: rootstate.MountStateActive},
+		},
+		Subtrees: map[string]rootstate.SubtreeAuthority{
+			"vol/1": {SubtreeID: "vol/1", Mount: "vol", RootInode: 1, State: rootstate.SubtreeAuthorityActive},
+		},
+		Quotas: map[string]rootstate.QuotaFence{
+			"vol/0": {SubjectID: "vol/0", Mount: "vol", Era: 1},
+		},
+		Descriptors: map[uint64]descriptor.Descriptor{7: base},
+		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
+			7: {Kind: rootstate.PendingPeerChangeAddition, StoreID: 2, PeerID: 20, Base: base, Target: target},
+		},
+		PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
+			7: {Kind: rootstate.PendingRangeChangeSplit, ParentRegionID: 7, BaseParent: base, Left: target},
+		},
+	}
+
+	cloned := rootstate.CloneSnapshot(snapshot)
+	peerChange := snapshot.PendingPeerChanges[7]
+	peerChange.Target.StartKey[0] = 'x'
+	snapshot.PendingPeerChanges[7] = peerChange
+	rangeChange := snapshot.PendingRangeChanges[7]
+	rangeChange.Left.StartKey[0] = 'x'
+	snapshot.PendingRangeChanges[7] = rangeChange
+	snapshot.Mounts["vol"] = rootstate.MountRecord{MountID: "vol", State: rootstate.MountStateRetired}
+	snapshot.Subtrees["vol/1"] = rootstate.SubtreeAuthority{SubtreeID: "mutated"}
+	snapshot.Quotas["vol/0"] = rootstate.QuotaFence{SubjectID: "mutated"}
+	snapshot.PendingPeerChanges[7] = rootstate.PendingPeerChange{Base: testDescriptor(9, []byte("x"), []byte("z"))}
+	snapshot.PendingRangeChanges[7] = rootstate.PendingRangeChange{BaseParent: testDescriptor(10, []byte("x"), []byte("z"))}
+
+	require.Equal(t, rootstate.MountStateActive, cloned.Mounts["vol"].State)
+	require.Equal(t, "vol/1", cloned.Subtrees["vol/1"].SubtreeID)
+	require.Equal(t, uint64(1), cloned.Quotas["vol/0"].Era)
+	require.Equal(t, uint64(7), cloned.PendingPeerChanges[7].Base.RegionID)
+	require.Equal(t, uint64(7), cloned.PendingRangeChanges[7].BaseParent.RegionID)
+	require.Equal(t, byte('a'), cloned.PendingPeerChanges[7].Target.StartKey[0])
+	require.Equal(t, byte('a'), cloned.PendingRangeChanges[7].Left.StartKey[0])
+}
+
+func TestCloneEmptyMapsAndDescriptorRevision(t *testing.T) {
+	require.Empty(t, rootstate.CloneMounts(nil))
+	require.Nil(t, rootstate.CloneSubtreeAuthorities(nil))
+	require.Nil(t, rootstate.CloneQuotaFences(nil))
+	require.Empty(t, rootstate.ClonePendingPeerChanges(nil))
+	require.Empty(t, rootstate.ClonePendingRangeChanges(nil))
+	require.Zero(t, rootstate.MaxDescriptorRevision(nil))
+
+	low := testDescriptor(1, []byte("a"), []byte("m"))
+	low.RootEpoch = 3
+	high := testDescriptor(2, []byte("m"), []byte("z"))
+	high.RootEpoch = 9
+	require.Equal(t, uint64(9), rootstate.MaxDescriptorRevision(map[uint64]descriptor.Descriptor{
+		low.RegionID:  low,
+		high.RegionID: high,
+	}))
 }
 
 func TestApplyStoreMembershipEventsToSnapshot(t *testing.T) {

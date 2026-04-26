@@ -93,6 +93,20 @@ func TestTypedClientRoundTrip(t *testing.T) {
 		Type:   fsmeta.InodeTypeFile,
 	}, record)
 
+	records, err := cli.ReadDir(context.Background(), fsmeta.ReadDirRequest{
+		Mount:      "vol",
+		Parent:     fsmeta.RootInode,
+		StartAfter: "batch-0001",
+		Limit:      16,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []fsmeta.DentryRecord{{
+		Parent: fsmeta.RootInode,
+		Name:   "checkpoint",
+		Inode:  42,
+		Type:   fsmeta.InodeTypeFile,
+	}}, records)
+
 	pairs, err := cli.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
 		Mount:  "vol",
 		Parent: fsmeta.RootInode,
@@ -103,6 +117,31 @@ func TestTypedClientRoundTrip(t *testing.T) {
 		Dentry: fsmeta.DentryRecord{Parent: fsmeta.RootInode, Name: "checkpoint", Inode: 42, Type: fsmeta.InodeTypeFile},
 		Inode:  fsmeta.InodeRecord{Inode: 42, Type: fsmeta.InodeTypeFile, Size: 4096, Mode: 0o644, LinkCount: 1},
 	}}, pairs)
+}
+
+func TestTypedClientMutationRPCs(t *testing.T) {
+	cli, cleanup := openBufconnClient(t, &fakeExecutor{})
+	defer cleanup()
+
+	require.NoError(t, cli.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{
+		Mount:      "vol",
+		FromParent: 1,
+		FromName:   "old",
+		ToParent:   2,
+		ToName:     "new",
+	}))
+	require.NoError(t, cli.Link(context.Background(), fsmeta.LinkRequest{
+		Mount:      "vol",
+		FromParent: 1,
+		FromName:   "file",
+		ToParent:   2,
+		ToName:     "alias",
+	}))
+	require.NoError(t, cli.Unlink(context.Background(), fsmeta.UnlinkRequest{
+		Mount:  "vol",
+		Parent: 2,
+		Name:   "alias",
+	}))
 }
 
 func TestTypedClientErrorTranslation(t *testing.T) {
@@ -164,7 +203,40 @@ func TestTypedClientWatchSubtree(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return len(watcher.sub.acks) == 1 && watcher.sub.acks[0] == evt.Cursor
 	}, time.Second, 10*time.Millisecond)
+	watchStream, ok := stream.(*WatchStream)
+	require.True(t, ok)
+	require.NoError(t, watchStream.AckEvent(got))
 	require.NoError(t, stream.Close())
+}
+
+func TestWatchSessionHelpers(t *testing.T) {
+	sub := &stubWatchSubscription{
+		ready: fsmeta.WatchCursor{RegionID: 1, Term: 2, Index: 3},
+		events: []fsmeta.WatchEvent{{
+			Cursor:        fsmeta.WatchCursor{RegionID: 1, Term: 2, Index: 4},
+			CommitVersion: 99,
+			Source:        fsmeta.WatchEventSourceCommit,
+			Key:           []byte("fsm/key"),
+		}},
+	}
+	session := NewWatchSession(sub)
+
+	require.Equal(t, sub.ready, session.ReadyCursor())
+	want := sub.events[0]
+	evt, err := session.Recv()
+	require.NoError(t, err)
+	require.Equal(t, want, evt)
+	require.NoError(t, session.Ack(evt))
+	require.Equal(t, []fsmeta.WatchCursor{evt.Cursor}, sub.acks)
+	require.NoError(t, session.Close())
+	require.True(t, sub.closed)
+
+	var nilSession *WatchSession
+	_, err = nilSession.Recv()
+	require.Error(t, err)
+	require.Error(t, nilSession.Ack(evt))
+	require.Equal(t, fsmeta.WatchCursor{}, nilSession.ReadyCursor())
+	require.NoError(t, nilSession.Close())
 }
 
 func TestTypedClientSnapshotSubtree(t *testing.T) {
@@ -244,6 +316,36 @@ func (s *fakeWatchSub) Close() {
 }
 
 func (s *fakeWatchSub) Err() error {
+	return nil
+}
+
+type stubWatchSubscription struct {
+	events []fsmeta.WatchEvent
+	acks   []fsmeta.WatchCursor
+	ready  fsmeta.WatchCursor
+	closed bool
+}
+
+func (s *stubWatchSubscription) Recv() (fsmeta.WatchEvent, error) {
+	if len(s.events) == 0 {
+		return fsmeta.WatchEvent{}, errors.New("empty")
+	}
+	evt := s.events[0]
+	s.events = s.events[1:]
+	return evt, nil
+}
+
+func (s *stubWatchSubscription) ReadyCursor() fsmeta.WatchCursor {
+	return s.ready
+}
+
+func (s *stubWatchSubscription) Ack(cursor fsmeta.WatchCursor) error {
+	s.acks = append(s.acks, cursor)
+	return nil
+}
+
+func (s *stubWatchSubscription) Close() error {
+	s.closed = true
 	return nil
 }
 
