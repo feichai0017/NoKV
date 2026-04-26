@@ -380,6 +380,9 @@ func (lm *levelManager) importExternalSST(paths []string) (*ExternalSSTImportRes
 	}
 	l0.sortTablesLocked()
 	l0.rebuildRangeFilterLocked()
+	if lm.lsm != nil {
+		lm.lsm.clearNegativeCache()
+	}
 
 	return result, nil
 }

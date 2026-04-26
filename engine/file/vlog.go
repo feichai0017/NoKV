@@ -112,7 +112,20 @@ func (lf *LogFile) Write(offset uint32, buf []byte) (err error) {
 	}
 	err = lf.f.AppendBuffer(offset, buf)
 	if err == nil {
-		lf.size.Store(offset + uint32(len(buf)))
+		end := offset + uint32(len(buf))
+		// reserve() in vlog/manager hands out non-overlapping offset ranges
+		// without serializing the subsequent Write calls. Two concurrent
+		// AppendEntries can therefore race on lf.size: if the writer with
+		// the larger reservation finishes first, a plain Store from the
+		// later writer would shrink lfsz back below an already-published
+		// pointer, producing spurious EOF on Read. Use a monotonic CAS so
+		// lfsz only ever advances.
+		for {
+			cur := lf.size.Load()
+			if end <= cur || lf.size.CompareAndSwap(cur, end) {
+				break
+			}
+		}
 	}
 	return err
 }

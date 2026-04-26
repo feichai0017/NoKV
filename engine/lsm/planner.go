@@ -243,16 +243,21 @@ func findTableByID(tables []*table, fid uint64) *table {
 }
 
 // addSplits prepares key ranges for parallel sub-compactions.
+//
+// Cap the split count at max(NumCompactors, 5): more splits == more
+// concurrent builder goroutines per compaction, but each builder needs
+// its own table builder buffer (~SSTable block size × bloom × index),
+// so an unbounded split count exhausts memory. NumCompactors is the
+// natural upper bound — beyond that, extra splits sit in the
+// utils.Throttle queue without saving wall time.
 func (lm *levelManager) addSplits(cd *compactDef) {
 	cd.splits = cd.splits[:0]
 
-	// Let's say we have 10 tables in cd.bot and min width = 3. Then, we'll pick
-	// 0, 1, 2 (pick), 3, 4, 5 (pick), 6, 7, 8 (pick), 9 (pick, because last table).
-	// This gives us 4 picks for 10 tables.
-	// In an edge case, 142 tables in bottom led to 48 splits. That's too many splits, because it
-	// then uses up a lot of memory for table builder.
-	// We should keep it so we have at max 5 splits.
-	width := max(int(math.Ceil(float64(len(cd.bot))/5.0)), 3)
+	maxSplits := 5
+	if lm != nil && lm.opt != nil && lm.opt.NumCompactors > maxSplits {
+		maxSplits = lm.opt.NumCompactors
+	}
+	width := max(int(math.Ceil(float64(len(cd.bot))/float64(maxSplits))), 3)
 	skr := cd.plan.ThisRange
 	skr.Extend(cd.plan.NextRange)
 
@@ -282,7 +287,11 @@ func (lm *levelManager) addSplits(cd *compactDef) {
 
 // fillMaxLevelTables handles max-level compaction.
 func (lm *levelManager) fillMaxLevelTables(tables []*table, cd *compactDef) bool {
-	plan, ok := PlanForMaxLevel(cd.thisLevel.levelNum, tableMetaSnapshot(tables), cd.plan.ThisFileSize, lm.compactState, time.Now())
+	var ttlMinAge time.Duration
+	if lm != nil && lm.opt != nil {
+		ttlMinAge = lm.opt.TTLCompactionMinAge
+	}
+	plan, ok := PlanForMaxLevel(cd.thisLevel.levelNum, tableMetaSnapshot(tables), cd.plan.ThisFileSize, lm.compactState, time.Now(), ttlMinAge)
 	if !ok {
 		return false
 	}
@@ -409,12 +418,14 @@ func (lm *levelManager) fillTablesL0ToLbase(cd *compactDef) bool {
 }
 
 // fillTablesL0ToL0 performs L0->L0 compaction.
+//
+// Multiple compactor workers may invoke this concurrently — PlanForL0ToL0
+// caps each call at l0ToL0MaxTablesPerWorker tables and skips tables
+// already claimed by state.HasTable, so workers naturally partition the
+// available L0 SSTs. The plan is marked IntraLevel so the state machine
+// claims by table ID without registering an InfRange that would block
+// peer L0→Lbase compactions.
 func (lm *levelManager) fillTablesL0ToL0(cd *compactDef) bool {
-	if cd.compactorId != 0 {
-		// Only allow compactor 0 to avoid L0->L0 contention.
-		return false
-	}
-
 	cd.nextLevel = lm.levels[0]
 	cd.plan.NextLevel = cd.plan.ThisLevel
 	cd.plan.NextFileSize = cd.plan.ThisFileSize
@@ -442,13 +453,10 @@ func (lm *levelManager) fillTablesL0ToL0(cd *compactDef) bool {
 		return false
 	}
 
-	// Avoid L0->other-level compactions during this phase.
-	lm.compactState.AddRangeWithTables(cd.thisLevel.levelNum, InfRange, cd.plan.TopIDs)
-
 	// L0->L0 compaction collapses into a single file, reducing L0 count and read amplification.
 	cd.plan.ThisFileSize = math.MaxUint32
 	cd.plan.NextFileSize = cd.plan.ThisFileSize
-	return true
+	return lm.compactState.CompareAndAdd(LevelsLocked{}, cd.stateEntry())
 }
 
 // getKeyRange returns the merged min/max key range for a set of tables.
@@ -496,16 +504,21 @@ type Plan struct {
 	IngestMode   IngestMode
 	DropPrefixes [][]byte
 	StatsTag     string
+	// IntraLevel marks plans whose input lives entirely on a single level
+	// (e.g. L0→L0). Such plans claim their input by table ID only and do
+	// not register a key range — see StateEntry.IntraLevel.
+	IntraLevel bool
 }
 
 // StateEntry creates a compaction state entry for this plan.
 func (p Plan) StateEntry(thisSize int64) StateEntry {
 	entry := StateEntry{
-		ThisLevel: p.ThisLevel,
-		NextLevel: p.NextLevel,
-		ThisRange: p.ThisRange,
-		NextRange: p.NextRange,
-		ThisSize:  thisSize,
+		ThisLevel:  p.ThisLevel,
+		NextLevel:  p.NextLevel,
+		ThisRange:  p.ThisRange,
+		NextRange:  p.NextRange,
+		ThisSize:   thisSize,
+		IntraLevel: p.IntraLevel,
 	}
 	if len(p.TopIDs) == 0 && len(p.BotIDs) == 0 {
 		return entry
@@ -621,7 +634,7 @@ func PlanForRegular(level int, tables []TableMeta, nextLevel int, next []TableMe
 }
 
 // PlanForMaxLevel selects tables to rewrite stale data in the max level.
-func PlanForMaxLevel(level int, tables []TableMeta, targetFileSize int64, state *State, now time.Time) (Plan, bool) {
+func PlanForMaxLevel(level int, tables []TableMeta, targetFileSize int64, state *State, now time.Time, ttlMinAge time.Duration) (Plan, bool) {
 	if len(tables) == 0 {
 		return Plan{}, false
 	}
@@ -633,6 +646,30 @@ func PlanForMaxLevel(level int, tables []TableMeta, targetFileSize int64, state 
 		return Plan{}, false
 	}
 	for _, t := range sorted {
+		if t.StaleSize == 0 {
+			continue
+		}
+		if shouldTTLCompact(t, now, ttlMinAge) {
+			kr := RangeForTables([]TableMeta{t})
+			if state != nil && state.Overlaps(level, kr) {
+				continue
+			}
+			top := []TableMeta{t}
+			bot := collectBotTables(t, tables, targetFileSize)
+			nextRange := kr
+			if len(bot) > 0 {
+				nextRange.Extend(RangeForTables(bot))
+			}
+			return Plan{
+				ThisLevel: level,
+				NextLevel: level,
+				TopIDs:    tableIDsFromMeta(top),
+				BotIDs:    tableIDsFromMeta(bot),
+				ThisRange: kr,
+				NextRange: nextRange,
+				StatsTag:  "ttl",
+			}, true
+		}
 		if !t.CreatedAt.IsZero() && now.Sub(t.CreatedAt) < time.Hour {
 			continue
 		}
@@ -659,6 +696,13 @@ func PlanForMaxLevel(level int, tables []TableMeta, targetFileSize int64, state 
 		}, true
 	}
 	return Plan{}, false
+}
+
+func shouldTTLCompact(t TableMeta, now time.Time, ttlMinAge time.Duration) bool {
+	if ttlMinAge <= 0 || t.CreatedAt.IsZero() || t.StaleSize == 0 {
+		return false
+	}
+	return !now.Before(t.CreatedAt) && now.Sub(t.CreatedAt) >= ttlMinAge
 }
 
 // PlanForIngestShard builds a plan for a single ingest shard.
@@ -717,8 +761,21 @@ func PlanForL0ToLbase(l0 []TableMeta, nextLevel int, next []TableMeta, state *St
 	var out []TableMeta
 	var kr KeyRange
 	for _, t := range l0 {
+		// Skip tables already claimed by a peer compactor (in-flight
+		// L0→L0 or another L0→Lbase). With IntraLevel L0→L0 claims
+		// by table ID only, so we must walk past those claims to find
+		// an un-claimed contiguous-overlap group instead of bailing.
+		if state != nil && state.HasTable(t.ID) {
+			if len(out) > 0 {
+				// A gap inside an in-progress accumulation breaks
+				// the contiguous-overlap invariant; commit what we
+				// have and stop.
+				break
+			}
+			continue
+		}
 		dkr := RangeForTables([]TableMeta{t})
-		if kr.OverlapsWith(dkr) {
+		if len(out) == 0 || kr.OverlapsWith(dkr) {
 			out = append(out, t)
 			kr.Extend(dkr)
 		} else {
@@ -751,7 +808,21 @@ func PlanForL0ToLbase(l0 []TableMeta, nextLevel int, next []TableMeta, state *St
 	}, true
 }
 
+// l0ToL0MaxTablesPerWorker caps how many L0 tables a single worker grabs in
+// one L0→L0 compaction. Lower than this and the merge-collapse benefit is
+// too small; higher and one worker eats every available L0 SST and blocks
+// peer workers. 8 matches RocksDB's `max_subcompactions` default and is
+// enough to drop ~3 levels of write amplification per cycle.
+const l0ToL0MaxTablesPerWorker = 8
+
 // PlanForL0ToL0 builds a plan for L0 -> L0 compaction.
+//
+// Concurrent workers can each generate a non-conflicting plan: each call
+// picks at most l0ToL0MaxTablesPerWorker tables that aren't already
+// claimed by state.HasTable. The resulting Plan is marked IntraLevel so
+// the state machine claims by table ID only — peer workers see those
+// tables filtered out and a concurrent L0→Lbase is not blocked by a
+// fictitious "InfRange" claim.
 func PlanForL0ToL0(level int, tables []TableMeta, fileSize int64, state *State, now time.Time) (Plan, bool) {
 	var out []TableMeta
 	for _, t := range tables {
@@ -765,16 +836,20 @@ func PlanForL0ToL0(level int, tables []TableMeta, fileSize int64, state *State, 
 			continue
 		}
 		out = append(out, t)
+		if len(out) >= l0ToL0MaxTablesPerWorker {
+			break
+		}
 	}
 	if len(out) < 4 {
 		return Plan{}, false
 	}
 	return Plan{
-		ThisLevel: level,
-		NextLevel: level,
-		TopIDs:    tableIDsFromMeta(out),
-		ThisRange: InfRange,
-		NextRange: InfRange,
+		ThisLevel:  level,
+		NextLevel:  level,
+		TopIDs:     tableIDsFromMeta(out),
+		ThisRange:  KeyRange{},
+		NextRange:  KeyRange{},
+		IntraLevel: true,
 	}, true
 }
 

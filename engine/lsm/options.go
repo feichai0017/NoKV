@@ -3,6 +3,7 @@ package lsm
 import (
 	"log/slog"
 	"runtime"
+	"time"
 
 	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/vfs"
@@ -131,6 +132,10 @@ type Options struct {
 	// CompactionTombstoneWeight increases the priority of levels containing a
 	// high proportion of range tombstones. Must be non-negative.
 	CompactionTombstoneWeight float64
+	// TTLCompactionMinAge forces stale-data cleanup for max-level tables older
+	// than this age. Zero disables age-triggered cleanup; size-triggered stale
+	// cleanup remains active.
+	TTLCompactionMinAge time.Duration
 
 	// CompactionWriteBytesPerSec paces compaction output writes. Zero disables
 	// pacing. Flush writes are never paced.
@@ -192,6 +197,9 @@ func (opt *Options) NormalizeInPlace() {
 	}
 	if opt.CompactionTombstoneWeight == 0 {
 		opt.CompactionTombstoneWeight = DefaultCompactionTombstoneWeight
+	}
+	if opt.TTLCompactionMinAge < 0 {
+		opt.TTLCompactionMinAge = 0
 	}
 	if opt.CompactionValueAlertThreshold <= 0 {
 		opt.CompactionValueAlertThreshold = DefaultCompactionValueAlertThreshold

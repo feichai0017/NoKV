@@ -138,7 +138,7 @@ type Options struct {
 	// the value must be a power of two. Zero falls back to the constructor
 	// default; non-power-of-two values are rounded DOWN to the nearest
 	// power of two during Open (e.g. 6 → 4, 12 → 8). See
-	// docs/notes/2026-04-26-lsm-engine-throughput-roadmap.md.
+	// docs/notes/2026-04-27-sharded-wal-memtable.md.
 	LSMShardCount int
 	ManifestSync  bool
 	// ManifestRewriteThreshold triggers a manifest rewrite when the active
@@ -264,6 +264,9 @@ type Options struct {
 	// CompactionTombstoneWeight adjusts how aggressively the scheduler
 	// prioritizes levels with high range tombstone density.
 	CompactionTombstoneWeight float64
+	// TTLCompactionMinAge forces stale-data cleanup for max-level SSTables
+	// older than this age. Zero disables age-triggered cleanup.
+	TTLCompactionMinAge time.Duration
 
 	// CompactionWriteBytesPerSec paces compaction output writes. Zero disables
 	// pacing. Flush writes are never paced.
@@ -450,6 +453,7 @@ func (opt *Options) applyLSMSharedOptions(dst *lsmpkg.Options) {
 	dst.IngestShardParallelism = opt.IngestShardParallelism
 	dst.CompactionValueWeight = opt.CompactionValueWeight
 	dst.CompactionTombstoneWeight = opt.CompactionTombstoneWeight
+	dst.TTLCompactionMinAge = opt.TTLCompactionMinAge
 	dst.CompactionWriteBytesPerSec = opt.CompactionWriteBytesPerSec
 	dst.CompactionPacingBypassL0 = opt.CompactionPacingBypassL0
 	dst.CompactionValueAlertThreshold = opt.CompactionValueAlertThreshold
@@ -478,6 +482,7 @@ func (opt *Options) copyNormalizedLSMOptions(src *lsmpkg.Options) {
 	opt.IngestShardParallelism = src.IngestShardParallelism
 	opt.CompactionValueWeight = src.CompactionValueWeight
 	opt.CompactionTombstoneWeight = src.CompactionTombstoneWeight
+	opt.TTLCompactionMinAge = src.TTLCompactionMinAge
 	opt.CompactionWriteBytesPerSec = src.CompactionWriteBytesPerSec
 	opt.CompactionPacingBypassL0 = src.CompactionPacingBypassL0
 	opt.CompactionValueAlertThreshold = src.CompactionValueAlertThreshold
