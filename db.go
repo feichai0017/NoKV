@@ -36,6 +36,8 @@ import (
 // Non-transactional writes use monotonic versions <= this sentinel.
 const nonTxnMaxVersion = kv.MaxVersion
 
+const defaultRaftWALShards = 8
+
 type (
 	// BatchSetItem represents one non-transactional write in the default CF.
 	//
@@ -56,7 +58,7 @@ type (
 		NewInternalIterator(opt *index.Options) index.Iterator
 	}
 
-	// RaftLog opens raft peer storage without exposing the underlying WAL manager.
+	// RaftLog opens raft peer storage without exposing the underlying raft WAL shards.
 	RaftLog interface {
 		Open(groupID uint64, meta *localmeta.Store) (raftlog.PeerStorage, error)
 	}
@@ -69,6 +71,9 @@ type (
 		dirLock         io.Closer
 		lsm             *lsm.LSM
 		wal             *wal.Manager
+		raftWALMu       sync.Mutex
+		raftWALs        [defaultRaftWALShards]*wal.Manager
+		raftWatchdogs   [defaultRaftWALShards]*wal.Watchdog
 		vlog            *valueLog
 		nonTxnVersion   atomic.Uint64
 		blockWrites     atomic.Int32
@@ -152,13 +157,6 @@ func (db *DB) openDurability() error {
 		return fmt.Errorf("open db: wal open: %w", err)
 	}
 	db.wal = wlog
-	if db.opt.RaftPointerSnapshot != nil {
-		if err := db.wal.RegisterRetention("raft", func() wal.RetentionMark {
-			return raftRetentionMark(db.opt.RaftPointerSnapshot())
-		}); err != nil {
-			return fmt.Errorf("open db: wal raft retention: %w", err)
-		}
-	}
 	return nil
 }
 
@@ -259,14 +257,81 @@ func (db *DB) runtimeLSMOptions() *lsm.Options {
 }
 
 func (l dbRaftLog) Open(groupID uint64, meta *localmeta.Store) (raftlog.PeerStorage, error) {
+	walMgr, err := l.db.raftWALFor(groupID)
+	if err != nil {
+		return nil, err
+	}
 	return raftlog.OpenWALStorage(raftlog.WALStorageConfig{
 		GroupID:   groupID,
-		WAL:       l.db.wal,
+		WAL:       walMgr,
 		LocalMeta: meta,
 	})
 }
 
-// RaftLog returns the raft peer-storage capability backed by the DB WAL.
+func (db *DB) raftWALFor(groupID uint64) (*wal.Manager, error) {
+	if db == nil || db.opt == nil {
+		return nil, fmt.Errorf("db raft wal: nil db")
+	}
+	shard := raftWALShard(groupID)
+	db.raftWALMu.Lock()
+	defer db.raftWALMu.Unlock()
+	if mgr := db.raftWALs[shard]; mgr != nil {
+		return mgr, nil
+	}
+	mgr, err := wal.Open(wal.Config{
+		Dir:        db.raftWALDir(shard),
+		BufferSize: db.opt.WALBufferSize,
+		FS:         db.fs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if db.opt.RaftPointerSnapshot != nil {
+		if err := mgr.RegisterRetention("raft", func() wal.RetentionMark {
+			return raftRetentionMarkForShard(db.opt.RaftPointerSnapshot(), shard)
+		}); err != nil {
+			_ = mgr.Close()
+			return nil, err
+		}
+	}
+	if db.opt.EnableWALWatchdog {
+		wd := wal.NewWatchdog(wal.WatchdogConfig{
+			Manager:      mgr,
+			Interval:     db.opt.WALAutoGCInterval,
+			MinRemovable: db.opt.WALAutoGCMinRemovable,
+			MaxBatch:     db.opt.WALAutoGCMaxBatch,
+			WarnRatio:    db.opt.WALTypedRecordWarnRatio,
+			WarnSegments: db.opt.WALTypedRecordWarnSegments,
+		})
+		if wd != nil {
+			wd.Start()
+			db.raftWatchdogs[shard] = wd
+		}
+	}
+	db.raftWALs[shard] = mgr
+	return mgr, nil
+}
+
+func (db *DB) raftWALDir(shard int) string {
+	return filepath.Join(db.opt.WorkDir, fmt.Sprintf("raft-wal-%02d", shard))
+}
+
+func raftWALShard(groupID uint64) int {
+	const mix = 11400714819323198485
+	return int((groupID * mix) & (defaultRaftWALShards - 1))
+}
+
+func raftRetentionMarkForShard(ptrs map[uint64]localmeta.RaftLogPointer, shard int) wal.RetentionMark {
+	filtered := make(map[uint64]localmeta.RaftLogPointer)
+	for groupID, ptr := range ptrs {
+		if raftWALShard(groupID) == shard {
+			filtered[groupID] = ptr
+		}
+	}
+	return raftRetentionMark(filtered)
+}
+
+// RaftLog returns the raft peer-storage capability backed by sharded raft WALs.
 func (db *DB) RaftLog() RaftLog {
 	if db == nil || db.wal == nil {
 		return nil
@@ -331,6 +396,11 @@ func (db *DB) runRecoveryChecks() error {
 	}
 	if err := wal.VerifyDir(db.opt.WorkDir, db.fs); err != nil {
 		return err
+	}
+	for shard := range defaultRaftWALShards {
+		if err := wal.VerifyDir(filepath.Join(db.opt.WorkDir, fmt.Sprintf("raft-wal-%02d", shard)), db.fs); err != nil {
+			return err
+		}
 	}
 	vlogDir := filepath.Join(db.opt.WorkDir, "vlog")
 	bucketCount := max(db.opt.ValueLogBucketCount, 1)
@@ -403,6 +473,10 @@ func (db *DB) closeInternal() error {
 		db.vlog = nil
 	}
 
+	if err := db.closeRaftWALs(); err != nil {
+		errs = append(errs, err)
+	}
+
 	if db.wal != nil {
 		if err := db.wal.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("wal close: %w", err))
@@ -422,8 +496,29 @@ func (db *DB) closeInternal() error {
 	if len(errs) > 0 {
 		return stderrors.Join(errs...)
 	}
-
 	return nil
+}
+
+func (db *DB) closeRaftWALs() error {
+	db.raftWALMu.Lock()
+	defer db.raftWALMu.Unlock()
+	var errs []error
+	for shard, wd := range db.raftWatchdogs {
+		if wd != nil {
+			wd.Stop()
+			db.raftWatchdogs[shard] = nil
+		}
+	}
+	for shard, mgr := range db.raftWALs {
+		if mgr == nil {
+			continue
+		}
+		if err := mgr.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("raft wal shard %d close: %w", shard, err))
+		}
+		db.raftWALs[shard] = nil
+	}
+	return stderrors.Join(errs...)
 }
 
 // Del removes a key from the default column family by writing a tombstone.
