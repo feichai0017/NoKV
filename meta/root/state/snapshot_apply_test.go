@@ -106,6 +106,30 @@ func TestApplyMountRegisteredDeclaresRootAuthority(t *testing.T) {
 	}, snapshot.Subtrees[key])
 }
 
+func TestApplyMountRetiredToSnapshot(t *testing.T) {
+	snapshot := rootstate.Snapshot{}
+	registeredAt := rootstate.Cursor{Term: 1, Index: 1}
+	retiredAt := rootstate.Cursor{Term: 1, Index: 2}
+	rootstate.ApplyEventToSnapshot(&snapshot, registeredAt, rootevent.MountRegistered("vol", 1, 1))
+	rootstate.ApplyEventToSnapshot(&snapshot, retiredAt, rootevent.MountRetired("vol"))
+
+	require.Equal(t, rootstate.MountRecord{
+		MountID:       "vol",
+		RootInode:     1,
+		SchemaVersion: 1,
+		State:         rootstate.MountStateRetired,
+		RegisteredAt:  registeredAt,
+		RetiredAt:     retiredAt,
+	}, snapshot.Mounts["vol"])
+
+	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 3}, rootevent.MountRetired("missing"))
+	require.Equal(t, rootstate.MountRecord{
+		MountID:   "missing",
+		State:     rootstate.MountStateRetired,
+		RetiredAt: rootstate.Cursor{Term: 1, Index: 3},
+	}, snapshot.Mounts["missing"])
+}
+
 func TestApplySubtreeAuthorityRejectsIncompleteCoverage(t *testing.T) {
 	snapshot := rootstate.Snapshot{}
 	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 1}, rootevent.SubtreeAuthorityDeclared("vol", 1, "vol", 0, 10))

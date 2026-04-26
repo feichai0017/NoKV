@@ -28,6 +28,23 @@ func TestUsageKeyAllowsMountWideScope(t *testing.T) {
 	require.Equal(t, KeyKindUsage, kind)
 }
 
+func TestAuxiliaryKeyEncoders(t *testing.T) {
+	mount, err := EncodeMountKey("vol")
+	require.NoError(t, err)
+	kind, err := KeyKindOf(mount)
+	require.NoError(t, err)
+	require.Equal(t, KeyKindMount, kind)
+	require.Equal(t, "mount", kind.String())
+	require.Equal(t, "unknown(120)", KeyKind('x').String())
+
+	chunk, err := EncodeChunkKey("vol", 22, 3)
+	require.NoError(t, err)
+	kind, err = KeyKindOf(chunk)
+	require.NoError(t, err)
+	require.Equal(t, KeyKindChunk, kind)
+	require.Equal(t, "chunk", kind.String())
+}
+
 func TestDentryPrefixGroupsDirectoryEntries(t *testing.T) {
 	prefix, err := EncodeDentryPrefix("vol", 9)
 	require.NoError(t, err)

@@ -116,6 +116,23 @@ func TestPlanRenameSubtreeRejectsNoop(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidRequest)
 }
 
+func TestPlanSnapshotSubtreeScansRootPrefix(t *testing.T) {
+	plan, err := PlanSnapshotSubtree(SnapshotSubtreeRequest{
+		Mount:     "vol",
+		RootInode: 7,
+	})
+	require.NoError(t, err)
+
+	prefix, err := EncodeDentryPrefix("vol", 7)
+	require.NoError(t, err)
+	require.Equal(t, OperationSnapshotSubtree, plan.Kind)
+	require.Equal(t, "vol", string(plan.Mount))
+	require.Equal(t, prefix, plan.PrimaryKey)
+	require.Equal(t, [][]byte{prefix}, plan.ReadPrefixes)
+	require.Empty(t, plan.ReadKeys)
+	require.Empty(t, plan.MutateKeys)
+}
+
 func TestPlanLinkTouchesSourceDestinationAndRejectsNoop(t *testing.T) {
 	plan, err := PlanLink(LinkRequest{
 		Mount:      "vol",
@@ -144,6 +161,22 @@ func TestPlanLinkTouchesSourceDestinationAndRejectsNoop(t *testing.T) {
 		ToName:     "same",
 	})
 	require.ErrorIs(t, err, ErrInvalidRequest)
+}
+
+func TestPlanUnlinkTouchesDentry(t *testing.T) {
+	plan, err := PlanUnlink(UnlinkRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Name:   "file",
+	})
+	require.NoError(t, err)
+
+	dentry, err := EncodeDentryKey("vol", 7, "file")
+	require.NoError(t, err)
+	require.Equal(t, OperationUnlink, plan.Kind)
+	require.Equal(t, dentry, plan.PrimaryKey)
+	require.Equal(t, [][]byte{dentry}, plan.ReadKeys)
+	require.Equal(t, [][]byte{dentry}, plan.MutateKeys)
 }
 
 func TestPlansCloneKeys(t *testing.T) {
