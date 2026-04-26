@@ -87,11 +87,22 @@ func TestPlanBuilderSelections(t *testing.T) {
 	require.Equal(t, uint64(2), plan.TopIDs[0])
 
 	old := time.Now().Add(-2 * time.Hour)
+	recent := time.Now().Add(-5 * time.Second)
 	t4 := TableMeta{ID: 4, MinKey: ikey("f", 10), MaxKey: ikey("g", 1), StaleSize: 12 << 20, CreatedAt: old, Size: 8 << 20}
 	t5 := TableMeta{ID: 5, MinKey: ikey("h", 10), MaxKey: ikey("i", 1), StaleSize: 1, CreatedAt: old, Size: 8 << 20}
-	plan, ok = PlanForMaxLevel(6, []TableMeta{t4, t5}, 20<<20, nil, time.Now())
+	plan, ok = PlanForMaxLevel(6, []TableMeta{t4, t5}, 20<<20, nil, time.Now(), 0)
 	require.True(t, ok)
 	require.Equal(t, uint64(4), plan.TopIDs[0])
+
+	ttlCandidate := TableMeta{ID: 6, MinKey: ikey("j", 10), MaxKey: ikey("k", 1), StaleSize: 1, CreatedAt: old, Size: 8 << 20}
+	plan, ok = PlanForMaxLevel(6, []TableMeta{ttlCandidate}, 20<<20, nil, time.Now(), time.Hour)
+	require.True(t, ok)
+	require.Equal(t, uint64(6), plan.TopIDs[0])
+	require.Equal(t, "ttl", plan.StatsTag)
+
+	recentTTL := TableMeta{ID: 13, MinKey: ikey("l", 10), MaxKey: ikey("m", 1), StaleSize: 1, CreatedAt: recent, Size: 8 << 20}
+	_, ok = PlanForMaxLevel(6, []TableMeta{recentTTL}, 20<<20, nil, time.Now(), time.Hour)
+	require.False(t, ok)
 
 	shard := []TableMeta{
 		{ID: 7, MinKey: ikey("a", 9), MaxKey: ikey("b", 1), Size: 4 << 20},
@@ -111,7 +122,6 @@ func TestPlanBuilderSelections(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, 2, len(plan.TopIDs))
 
-	recent := time.Now().Add(-5 * time.Second)
 	l0 = []TableMeta{
 		{ID: 20, MinKey: ikey("a", 9), MaxKey: ikey("b", 1), Size: 5 << 20, CreatedAt: old},
 		{ID: 21, MinKey: ikey("b", 9), MaxKey: ikey("c", 1), Size: 5 << 20, CreatedAt: old},

@@ -282,7 +282,11 @@ func (lm *levelManager) addSplits(cd *compactDef) {
 
 // fillMaxLevelTables handles max-level compaction.
 func (lm *levelManager) fillMaxLevelTables(tables []*table, cd *compactDef) bool {
-	plan, ok := PlanForMaxLevel(cd.thisLevel.levelNum, tableMetaSnapshot(tables), cd.plan.ThisFileSize, lm.compactState, time.Now())
+	var ttlMinAge time.Duration
+	if lm != nil && lm.opt != nil {
+		ttlMinAge = lm.opt.TTLCompactionMinAge
+	}
+	plan, ok := PlanForMaxLevel(cd.thisLevel.levelNum, tableMetaSnapshot(tables), cd.plan.ThisFileSize, lm.compactState, time.Now(), ttlMinAge)
 	if !ok {
 		return false
 	}
@@ -621,7 +625,7 @@ func PlanForRegular(level int, tables []TableMeta, nextLevel int, next []TableMe
 }
 
 // PlanForMaxLevel selects tables to rewrite stale data in the max level.
-func PlanForMaxLevel(level int, tables []TableMeta, targetFileSize int64, state *State, now time.Time) (Plan, bool) {
+func PlanForMaxLevel(level int, tables []TableMeta, targetFileSize int64, state *State, now time.Time, ttlMinAge time.Duration) (Plan, bool) {
 	if len(tables) == 0 {
 		return Plan{}, false
 	}
@@ -633,6 +637,30 @@ func PlanForMaxLevel(level int, tables []TableMeta, targetFileSize int64, state 
 		return Plan{}, false
 	}
 	for _, t := range sorted {
+		if t.StaleSize == 0 {
+			continue
+		}
+		if shouldTTLCompact(t, now, ttlMinAge) {
+			kr := RangeForTables([]TableMeta{t})
+			if state != nil && state.Overlaps(level, kr) {
+				continue
+			}
+			top := []TableMeta{t}
+			bot := collectBotTables(t, tables, targetFileSize)
+			nextRange := kr
+			if len(bot) > 0 {
+				nextRange.Extend(RangeForTables(bot))
+			}
+			return Plan{
+				ThisLevel: level,
+				NextLevel: level,
+				TopIDs:    tableIDsFromMeta(top),
+				BotIDs:    tableIDsFromMeta(bot),
+				ThisRange: kr,
+				NextRange: nextRange,
+				StatsTag:  "ttl",
+			}, true
+		}
 		if !t.CreatedAt.IsZero() && now.Sub(t.CreatedAt) < time.Hour {
 			continue
 		}
@@ -659,6 +687,13 @@ func PlanForMaxLevel(level int, tables []TableMeta, targetFileSize int64, state 
 		}, true
 	}
 	return Plan{}, false
+}
+
+func shouldTTLCompact(t TableMeta, now time.Time, ttlMinAge time.Duration) bool {
+	if ttlMinAge <= 0 || t.CreatedAt.IsZero() || t.StaleSize == 0 {
+		return false
+	}
+	return !now.Before(t.CreatedAt) && now.Sub(t.CreatedAt) >= ttlMinAge
 }
 
 // PlanForIngestShard builds a plan for a single ingest shard.

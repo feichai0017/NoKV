@@ -55,10 +55,10 @@
 
 | 维度 | 缺口 |
 |---|---|
-| Filter | 无 Ribbon、无 negative cache、filter 仍走 BlockCache LRU 未独立永驻 |
-| SST 格式 | 单层 index，restart interval 固定 |
-| 读路径 | 跨 shard memtable Get 无 hint cache，N 倍 ART lookup |
-| Compaction 结构 | 纯 leveled，未 hybrid tiered+leveled；无 TTL compaction |
+| Filter | 无 Ribbon；filter 当前内联在 decoded TableIndex / IndexCache 内，不存在独立 filter block eviction 问题 |
+| SST 格式 | 单层 index；当前 block 内是完整 entry offset 表，没有 Pebble-style restart interval |
+| 读路径 | 跨 shard memtable Get hint 已落地；高 miss 场景由 negative cache 兜底 |
+| Compaction 结构 | hybrid scheduler 已有；缺口是更激进的 L0 tiered layout 与 SST 大索引结构 |
 | IO | syscall 模型，无 io_uring / vectored / O_DIRECT |
 | 架构 | shared levels/manifest（未 shard-per-core） |
 
@@ -218,9 +218,13 @@ Pebble 风格：L0 SST 与 L1 不重叠时直接 rename。fsmeta workload 命中
 
 ---
 
-### 4.2 Filter Block 独立 Cache + 永驻 —— 待办
+### 4.2 Filter Block 独立 Cache + 永驻 —— 暂不单独做
 
-filter blocks 用独立 cache，标 `Pinned` 优先级，不参与普通 LRU。
+当前 SST 格式把 bloom / prefix bloom 内联在 decoded `TableIndex` 里，
+`TableIndex` 走独立 `IndexCache`，不和 data block 竞争 BlockCache。
+因此没有 Pebble-style filter block eviction 问题。只有在后续引入
+Two-Level Index / 独立 filter block layout 时，才需要单独的 pinned
+filter cache。
 
 ---
 
@@ -231,10 +235,14 @@ filter 占用 -30%。
 
 ---
 
-### 4.4 Negative Cache —— 待办
+### 4.4 Negative Cache —— ✅ 已落地
 
-维护 known-absent keys cache（容量 1k-10k）。命中即返回 not found。
-高 read miss 场景 ×N 加速。必须在写路径正确失效。
+> 实现：`engine/lsm/negative_cache.go` + `lsm.Get` 入口 fast path。
+
+维护 bounded exact negative cache。缓存 key 是完整 internal key，写路径按
+base key 推进 generation，使所有 read-version miss 同时失效。存在 range
+tombstone 时 conservative disable，避免复杂范围失效；external SST ingest
+成功后清空 cache，避免导入表被旧 miss 短路。
 
 ---
 
@@ -250,7 +258,7 @@ filter 占用 -30%。
 
 ---
 
-### 4.6 跨 shard memtable Get hint cache —— 新增（Sharding 副产品）
+### 4.6 跨 shard memtable Get hint cache —— ✅ 已落地（Sharding 副产品）
 
 **问题**：cross-shard 读路径每个 Get 走遍 N 个 memtable。当前
 profile 显示 LSM Get cum 17% CPU，N=8 时会扩大。
@@ -271,10 +279,13 @@ read amp 上升。
 
 ---
 
-### 5.2 TTL Compaction —— 待办
+### 5.2 TTL Compaction —— ✅ 已落地
 
-按 SST oldest-write-time，超过 TTL 强制 compact。fsmeta 收益尤其大
-（retired snapshot / unlinked dentry 自动 GC）。
+> 实现：`Options.TTLCompactionMinAge` + `PlanForMaxLevel(..., ttlMinAge)`。
+
+max level 表只要存在 stale bytes 且年龄超过 `TTLCompactionMinAge`，
+即使 stale bytes 未达到 10MiB size threshold，也会触发 rewrite。
+Zero disables age-triggered cleanup，保留原 size-triggered 行为。
 
 ---
 
@@ -288,10 +299,12 @@ read amp 上升。
 
 ## 6. SST 格式优化
 
-### 6.1 Block Restart Interval 自适应 —— 待办
+### 6.1 Block Restart Interval 自适应 —— 暂不适用
 
-短 key (<32B) → interval 4 或 8；长 key → 16-32。fsmeta 元数据 key 短，
-seek path binary search depth 下降。
+NoKV 当前 block format 存完整 `entryOffsets` 表，seek 直接在 offset
+数组上定位，再 decode entry；没有 Pebble-style restart interval 这个
+调参面。短 key 优化已经由 prefix compression + Prefix Bloom + compressed
+cache 承担。除非后续重写 block format，否则不单独实现 restart interval。
 
 ### 6.2 Two-Level Index + Index Compression —— 待办
 
@@ -356,29 +369,16 @@ scan 时一次 `readv` 读 N 个相邻 block，syscall 数下降。
 | L0 sublevels read path | ✅ |
 | Commit burst coalesce | ✅ |
 | per-key affinity routing | ✅ |
+| Cross-shard memtable hint (§4.6) | ✅ |
+| Negative Cache (§4.4) | ✅ |
+| TTL Compaction (§5.2) | ✅ |
 
 ### Tier 1 — 短期最高 ROI（更新）
 
 | # | 优化 | 周 | 主要收益 |
 |---|---|---|---|
 | 7.1 | io_uring | 3 | 写侧 syscall.write -50% |
-| 4.6 | Cross-shard memtable hint | 0.5 | 读路径 -10~17%（多 shard 副产品） |
-| 4.2 | Filter 永驻独立 cache | 1 | bloom 命中率 100% |
 | 4.3 | Ribbon Filter | 1 | filter 占用 -30% |
-| —   | WAL DurabilityFsyncBatched / rotation 生命周期 fence | 0.5 | 消除 raft WAL fsync 路径上的伪错误 ack |
-
-#### WAL fsync/rotation race —— Tier 1 follow-up
-
-`Manager.runFsyncBatch` 把 `active := m.active` 缓存到 goroutine 局部变量、释放 `m.mu`、然后无锁调 `active.Sync()` 来允许 phase-1 flush 与 phase-2 fsync 流水。同时 `switchSegmentLocked`（被 `rotateLocked` / 显式 `Rotate` / `SwitchSegment` 调用）会在持锁下 `m.active.Sync()` + `m.active.Close()`。两路在同一个 fd 上 race 时：
-
-- 数据：rotation 自己 Sync 已落盘；不会丢。
-- 错误回传：fsync worker 的 `active.Sync()` 可能在 rotation `Close()` 后返回 `EBADF`，向当前 batched waiters 报伪错误。
-
-只影响 `DurabilityFsyncBatched` 路径（仅 `raftstore/raftlog` 使用），LSM 数据面跑 `DurabilityFlushed` 不触发。修法二选一：
-1. **Segment refcount**：fsync worker 入临界区时 `seg.refInc()`，rotation 等 ref==0 才 Close。
-2. **Inflight fence**：`fsyncRunning atomic.Bool`，rotation 在 close 前 spin/cond 等到 false。
-
-推荐 (1)，能覆盖未来更多 unlocked-on-fd 场景。
 
 **3-4 周做完后预期**：
 - 写吞吐 N=4 c=128：725K → 1M+
@@ -398,11 +398,8 @@ scan 时一次 `readv` 读 N 个相邻 block，syscall 数下降。
 
 | # | 优化 | 收益场景 |
 |---|---|---|
-| 4.4 | Negative Cache | 高 miss 率 |
-| 5.2 | TTL Compaction | snapshot / 长寿命数据 |
 | 6.3 | mmap SST | read-heavy 元数据 |
 | 7.3 | Direct IO | 内存紧张部署 |
-| 6.1 | 自适应 restart interval | 短 key workload |
 | 6.2 | Two-Level Index | 大 SST |
 
 ### Tier 4 — 远期
@@ -427,16 +424,16 @@ scan 时一次 `readv` 读 N 个相邻 block，syscall 数下降。
 | Compressed Cache | ✅ | ✅ | ✅ | ✅ | **✅** | ✅ |
 | Prefix Bloom | ✅ | ✅ | ✅ | ⚠️ | **✅** | ✅ |
 | Ribbon Filter | ✅ | ❌ | ✅ | ❌ | ❌ | ✅ |
-| Filter 独立永驻 cache | ✅ | ⚠️ | ✅ | ✅ | ❌ | ✅ |
-| Hybrid Tiered+Leveled | ✅ | ❌ | ✅ | ✅ | ❌ | ✅ |
+| Filter 独立永驻 cache | ✅ | ⚠️ | ✅ | ✅ | N/A（filter 内联 TableIndex） | N/A |
+| Hybrid scheduler | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Two-Level Index | ✅ | ✅ | ✅ | ⚠️ | ❌ | ✅ (Tier2) |
 | io_uring | ⚠️ | ⚠️ | ✅ | ✅ | (planned) | ✅ |
 | mmap SST | ⚠️ | ⚠️ | ❌ | ✅ | ❌ | ✅ (可选) |
 | Shard-per-Core | ❌ | ❌ | ❌ | ✅ | ❌ | (Tier4) |
 
 **结论**：当前能力对照 RocksDB / Pebble / TiKV / ScyllaDB 的核心列表，
-NoKV 已落地 ✅ 11 项，剩余主要差距在 **Ribbon Filter / Filter 永驻 /
-Hybrid Tiered+Leveled / Two-Level Index / io_uring**。Tier 1+2 推完，
+NoKV 已落地 ✅ 13 项，剩余主要差距在 **Ribbon Filter /
+Two-Level Index / io_uring / 更激进 L0 tiered layout**。Tier 1+2 推完，
 单机引擎成熟度和 RocksDB / Pebble 同代，部分维度（unified sharded
 WAL+memtable+commit pipeline、subcompactions+auto-tuning concurrency、
 compressed block cache + prefix bloom）已经接近或更现代。
@@ -469,7 +466,7 @@ compressed block cache + prefix bloom）已经接近或更现代。
 |---|---|
 | Pre-shard baseline | ~300 µs |
 | 当前（N=4, c=128） | 491 µs (写侧 contention 影响) / 单纯读 ~150 µs |
-| Tier 1 完成（cross-shard hint）| ~100 µs |
+| Tier 1 已完成（cross-shard hint + negative cache）| ~100 µs |
 | Tier 1+2 完成（compressed cache + Ribbon）| ~50 µs |
 
 ---
@@ -481,7 +478,7 @@ compressed block cache + prefix bloom）已经接近或更现代。
 | Sharded LSM (已落地) | 同 (key, version) 在多 shard 下需 tiebreaker —— 已用 per-key affinity 路由解决 |
 | Pipelined Write (已落地) | 错误回传 + crash 一致性需仔细设计 —— 已通过 syncQueue 分桶 |
 | Subcompactions | 实现复杂；fan-out/fan-in 错误处理 |
-| Hybrid Tiered+Leveled | read amp 略升，需 Filter 永驻配合 |
+| 更激进 L0 tiered layout | read amp 略升，需要依赖 Prefix Bloom / TableIndex 常驻来抵消 |
 | mmap SST | 无法精确控制驱逐，OS 行为不一定可预测 |
 | Direct IO | 失去 OS read-ahead 优势，scan 可能变慢 |
 | Shard-per-Core | 数年工程，期间引擎双轨 |
@@ -514,11 +511,11 @@ compressed block cache + prefix bloom）已经接近或更现代。
 ## 14. 一句话总结
 
 > **写路径**：sharded WAL+memtable+commit pipeline ✅、Subcompactions ✅、
-> Adaptive L0 ✅；下一波是 io_uring + cross-shard memtable hint。
+> Adaptive L0 ✅；下一波主要是 io_uring。
 > **读路径**：Compressed Block Cache ✅、Prefix Bloom ✅、Adaptive
-> Iterator Prefetch ✅、IteratorPool ✅；下一波是 Filter 独立永驻
-> cache + Ribbon Filter + 跨 SST iterator pin。
-> **结构**：Hybrid Tiered+Leveled、Two-Level Index 仍待办。
+> Iterator Prefetch ✅、IteratorPool ✅、cross-shard hint ✅、Negative
+> Cache ✅；下一波是 Ribbon Filter + 跨 SST iterator pin。
+> **结构**：TTL Compaction ✅；Two-Level Index / 更激进 L0 tiered layout 仍待办。
 > **远期**：Shard-per-Core 让性能从亚线性扩展变线性扩展。
 >
 > 目前 N=4 c=128 = 725K ops/s（YCSB-A，benchmark-tuned），相对 175K
