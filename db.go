@@ -983,6 +983,56 @@ func (db *DB) runValueLogGCPeriodically() {
 	}
 }
 
+// requestsHaveVlogWork reports whether any entry in any request needs to be
+// offloaded to the value log. When this returns false the commit pipeline can
+// skip db.vlog.write entirely — saving a function call, the heads/touched
+// map allocations, the per-request bucketEntries map, and the rewind closure
+// preparation. This is the metadata-profile fast path: when every value is
+// inline-eligible (below ValueThreshold or pinned inline by a policy), the
+// commit pipeline runs as pure WAL → memtable → SST with no vlog code on the
+// hot path. See docs/notes/2026-04-27-slab-substrate.md §4 (Phase 1).
+//
+// This call counts a policy decision per entry (via shouldWriteValueToLSM →
+// MatchPolicy). vlog.write subsequently uses peekShouldWriteValueToLSM so the
+// per-entry decision is recorded exactly once across the pipeline.
+func (db *DB) requestsHaveVlogWork(reqs []*dbruntime.Request) bool {
+	for _, req := range reqs {
+		if req == nil {
+			continue
+		}
+		for _, e := range req.Entries {
+			if !db.shouldWriteValueToLSM(e) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// peekShouldWriteValueToLSM mirrors shouldWriteValueToLSM but does not
+// record a policy-matcher decision. Used by vlog.write to avoid double-
+// counting the per-entry decision that the commit pipeline's pre-scan
+// already recorded via requestsHaveVlogWork.
+func (db *DB) peekShouldWriteValueToLSM(e *kv.Entry) bool {
+	if e.IsRangeDelete() {
+		return true
+	}
+	matcher := db.policyMatcher.Load()
+	if matcher != nil {
+		if policy := matcher.PeekPolicy(e); policy != nil {
+			switch policy.Strategy {
+			case kv.AlwaysInline:
+				return true
+			case kv.AlwaysOffload:
+				return false
+			case kv.ThresholdBased:
+				return int64(len(e.Value)) < policy.Threshold
+			}
+		}
+	}
+	return int64(len(e.Value)) < db.opt.ValueThreshold
+}
+
 func (db *DB) shouldWriteValueToLSM(e *kv.Entry) bool {
 	// Range deletes always stay in LSM
 	if e.IsRangeDelete() {
@@ -1430,19 +1480,25 @@ func (db *DB) runCommitBurst(walMgr *wal.Manager, shardID int, burst []*dbruntim
 		return
 	}
 
-	if err := db.vlog.write(mergedRequests); err != nil {
-		// Whole burst failed before reaching LSM. Each batch's whole
-		// request set is unapplied — failedAt = -1 means "ack with
-		// the default error for every request".
-		for _, batch := range burst {
-			db.ackCommitBatch(batch.Reqs, batch.Pool, batch.Requests, -1, err)
+	// Metadata-profile fast path: skip vlog.write entirely when no entry in
+	// the burst needs offloading. Saves the heads/touched/bucketEntries map
+	// allocations and the rewind closure preparation that vlog.write does
+	// even when every entry stays inline. See docs/notes/2026-04-27-slab-substrate.md §4.
+	var vlogDur time.Duration
+	if db.requestsHaveVlogWork(mergedRequests) {
+		if err := db.vlog.write(mergedRequests); err != nil {
+			// Whole burst failed before reaching LSM. Each batch's whole
+			// request set is unapplied — failedAt = -1 means "ack with
+			// the default error for every request".
+			for _, batch := range burst {
+				db.ackCommitBatch(batch.Reqs, batch.Pool, batch.Requests, -1, err)
+			}
+			return
 		}
-		return
-	}
-
-	vlogDur := max(time.Since(burstStart), 0)
-	if db.writeMetrics != nil && vlogDur > 0 {
-		db.writeMetrics.RecordValueLog(vlogDur)
+		vlogDur = max(time.Since(burstStart), 0)
+		if db.writeMetrics != nil && vlogDur > 0 {
+			db.writeMetrics.RecordValueLog(vlogDur)
+		}
 	}
 	for _, batch := range burst {
 		batch.ValueLogDur = vlogDur
@@ -1530,14 +1586,17 @@ func (db *DB) runSingleCommit(walMgr *wal.Manager, shardID int, batch *dbruntime
 		db.writeMetrics.RecordBatch(len(requests), totalEntries, totalSize, waitSum)
 	}
 
-	if err := db.vlog.write(requests); err != nil {
-		db.ackCommitBatch(batch.Reqs, batch.Pool, requests, -1, err)
-		return
-	}
-	if db.writeMetrics != nil {
-		batch.ValueLogDur = max(time.Since(batch.BatchStart), 0)
-		if batch.ValueLogDur > 0 {
-			db.writeMetrics.RecordValueLog(batch.ValueLogDur)
+	// Metadata-profile fast path — see runCommitBurst for rationale.
+	if db.requestsHaveVlogWork(requests) {
+		if err := db.vlog.write(requests); err != nil {
+			db.ackCommitBatch(batch.Reqs, batch.Pool, requests, -1, err)
+			return
+		}
+		if db.writeMetrics != nil {
+			batch.ValueLogDur = max(time.Since(batch.BatchStart), 0)
+			if batch.ValueLogDur > 0 {
+				db.writeMetrics.RecordValueLog(batch.ValueLogDur)
+			}
 		}
 	}
 

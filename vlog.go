@@ -409,7 +409,7 @@ func (vlog *valueLog) write(reqs []*dbruntime.Request) error {
 		req.PtrBuckets = req.PtrBuckets[:0]
 		bucketEntries := make(map[uint32][]int)
 		for i, e := range req.Entries {
-			if !vlog.db.shouldWriteValueToLSM(e) {
+			if !vlog.db.peekShouldWriteValueToLSM(e) {
 				wrote = true
 				bucket := vlog.bucketForEntry(e)
 				bucketEntries[bucket] = append(bucketEntries[bucket], i)
