@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-53676479.js";
+            window.path_to_searchindex_js = "searchindex-a3cf97d7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2018305d.js"></script>
@@ -2288,9 +2288,9 @@ uint32 checksum (CRC32 Castagnoli over type + payload)
 <hr>
 <h2 id="3-public-api-go"><a class="header" href="#3-public-api-go">3. Public API (Go)</a></h2>
 <pre><code class="language-go">mgr, _ := wal.Open(wal.Config{Dir: path})
-info, _ := mgr.AppendEntry(entry)
-batchInfo, _ := mgr.AppendEntryBatch(entries)
-typedInfos, _ := mgr.AppendRecords(wal.Record{
+info, _ := mgr.AppendEntry(wal.DurabilityFlushed, entry)
+batchInfo, _ := mgr.AppendEntryBatch(wal.DurabilityFlushed, entries)
+typedInfos, _ := mgr.AppendRecords(wal.DurabilityFsyncBatched, wal.Record{
     Type:    wal.RecordTypeRaftEntry,
     Payload: raftPayload,
 })
@@ -2304,10 +2304,12 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 <p>Key behaviours:</p>
 <ul>
 <li><code>AppendEntry</code>/<code>AppendEntryBatch</code>/<code>AppendRecords</code> automatically call <code>ensureCapacity</code> to decide when to rotate; they return <code>EntryInfo{SegmentID, Offset, Length}</code> so upper layers can keep storage WAL checkpoints and store-local raft replay pointers.</li>
+<li>Every append must declare a <code>DurabilityPolicy</code>: <code>DurabilityBuffered</code> (writer buffer only), <code>DurabilityFlushed</code> (OS page cache), <code>DurabilityFsync</code> (fsync now), or <code>DurabilityFsyncBatched</code> (fsync contract reserved for the group-commit pipeline).</li>
 <li><code>Sync</code> flushes the active file (used for <code>Options.SyncWrites</code>).</li>
 <li><code>Rotate</code> forces a new segment (used after flush/compaction checkpoints similar to RocksDB’s <code>LogFileManager::SwitchLog</code>).</li>
 <li><code>Replay</code> iterates segments in numeric order, forwarding each payload to the callback. Errors abort replay so recovery can surface corruption early.</li>
 <li>Metrics (<code>wal.Manager.Metrics</code>) reveal the active segment ID, total segments, and number of removed segments—these feed directly into <code>StatsSnapshot</code> and <code>nokv stats</code> output.</li>
+<li><code>RegisterRetention</code> lets LSM and raft participants publish the oldest WAL segment they still need. <code>RemoveSegment</code> rejects retained segments with <code>ErrSegmentRetained</code>.</li>
 </ul>
 <p>Compared with Badger: Badger keeps a single vlog for both data and durability. NoKV splits WAL (durability) from vlog (value separation), matching RocksDB’s separation of WAL and blob files.</p>
 <hr>
@@ -2343,6 +2345,8 @@ surface warnings when raft-typed records dominate the log. It:</p>
 <ul>
 <li>Samples WAL metrics + per-segment metrics and combines them with
 <code>raftstore/localmeta</code> raft pointer snapshots to compute removable segments.</li>
+<li>Filters those candidates through all registered WAL retention participants
+before deleting any segment.</li>
 <li>Removes up to <code>WALAutoGCMaxBatch</code> segments when at least
 <code>WALAutoGCMinRemovable</code> are eligible.</li>
 <li>Exposes counters (<code>wal.auto_gc_runs/removed/last_unix</code>) and warning state
@@ -2357,6 +2361,8 @@ surface warnings when raft-typed records dominate the log. It:</p>
 <li><code>WALTypedRecordWarnRatio</code></li>
 <li><code>WALTypedRecordWarnSegments</code></li>
 </ul>
+<p>For hard admission control, <code>wal.Config.MaxSegments</code> rejects segment growth with
+<code>ErrWALBackpressure</code> once the WAL reaches the configured segment cap.</p>
 <hr>
 <h2 id="7-recovery-walkthrough"><a class="header" href="#7-recovery-walkthrough">7. Recovery Walkthrough</a></h2>
 <ol>
@@ -2368,7 +2374,7 @@ surface warnings when raft-typed records dominate the log. It:</p>
 <hr>
 <h2 id="8-operational-tips"><a class="header" href="#8-operational-tips">8. Operational Tips</a></h2>
 <ul>
-<li>Configure <code>Options.SyncWrites=true</code> for synchronous durability (default async, similar to RocksDB’s default).</li>
+<li>Configure <code>Options.SyncWrites=true</code> for DB-level synchronous durability. Raft log/state/snapshot appends use the WAL <code>DurabilityFsyncBatched</code> contract directly.</li>
 <li>After large flushes, forcing <code>Rotate</code> keeps WAL files short, reducing replay time.</li>
 <li>Archived WAL segments can be copied alongside manifest files for hot-backup strategies—since the manifest contains the WAL log number, snapshots behave like RocksDB’s <code>Checkpoints</code>.</li>
 </ul>
