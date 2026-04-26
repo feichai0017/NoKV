@@ -17,7 +17,7 @@ func TestCacheHotColdMetrics(t *testing.T) {
 		t.Fatalf("expected cache to initialize")
 		return
 	}
-	if cache.blocks == nil || cache.blocks.rc == nil {
+	if cache.blocks == nil || len(cache.blocks.shards) == 0 {
 		t.Fatalf("expected block cache to initialize")
 		return
 	}
@@ -25,13 +25,13 @@ func TestCacheHotColdMetrics(t *testing.T) {
 	tbl := &table{}
 	blk := &block{tbl: tbl}
 	cache.addBlock(0, tbl, 1, blk)
-	cache.blocks.rc.Wait()
+	cache.blocks.wait()
 	cache.getBlock(0, 1)
 	// Miss on different key.
 	cache.getBlock(0, 2)
 
 	cache.addBlock(1, tbl, 42, &block{tbl: tbl})
-	cache.blocks.rc.Wait()
+	cache.blocks.wait()
 	cache.getBlock(1, 42)
 	cache.getBlock(1, 43)
 
@@ -68,10 +68,25 @@ func TestBlockCacheOperations(t *testing.T) {
 
 	bc.add(2, nil, 1, blk)
 	bc.add(0, nil, 1, blk)
-	bc.rc.Wait()
+	bc.wait()
 	_, _ = bc.get(1)
 
 	bc.close()
+}
+
+func TestBlockCacheShardsKeys(t *testing.T) {
+	bc := newBlockCache(1 << 20)
+	require.NotNil(t, bc)
+	require.GreaterOrEqual(t, len(bc.shards), 1)
+
+	bc.add(0, nil, 1, &block{data: []byte("one")})
+	bc.add(0, nil, 2, &block{data: []byte("two")})
+	bc.wait()
+	_, ok1 := bc.get(1)
+	_, ok2 := bc.get(2)
+	require.True(t, ok1)
+	require.True(t, ok2)
+	require.NoError(t, func() error { bc.close(); return nil }())
 }
 
 func TestIndexCacheEvictionByBudget(t *testing.T) {

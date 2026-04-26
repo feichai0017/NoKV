@@ -82,6 +82,40 @@ func (lh *levelHandler) getTotalValueSize() int64 {
 	return lh.totalValueSize + lh.ingest.totalValueSize()
 }
 
+func (lh *levelHandler) keyCount() uint64 {
+	lh.RLock()
+	defer lh.RUnlock()
+	var total uint64
+	for _, t := range lh.tables {
+		if t != nil {
+			total += uint64(t.keyCount)
+		}
+	}
+	for _, t := range lh.ingest.allTables() {
+		if t != nil {
+			total += uint64(t.keyCount)
+		}
+	}
+	return total
+}
+
+func (lh *levelHandler) rangeTombstoneCount() uint64 {
+	lh.RLock()
+	defer lh.RUnlock()
+	var total uint64
+	for _, t := range lh.tables {
+		if t != nil {
+			total += uint64(t.RangeTombstoneCount())
+		}
+	}
+	for _, t := range lh.ingest.allTables() {
+		if t != nil {
+			total += uint64(t.RangeTombstoneCount())
+		}
+	}
+	return total
+}
+
 func (lh *levelHandler) addSize(t *table) {
 	lh.totalSize += t.Size()
 	lh.totalStaleSize += int64(t.StaleDataSize())

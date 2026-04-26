@@ -20,6 +20,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/golang/snappy"
 	"github.com/pkg/errors"
 )
 
@@ -42,6 +43,7 @@ type table struct {
 	createdAt     time.Time
 	staleDataSize uint32
 	valueSize     uint64
+	rangeDeletes  uint32
 	keyCount      uint32
 	maxVersion    uint64
 	hasBloom      bool
@@ -110,6 +112,7 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) (out *
 		t.maxVersion = idx.GetMaxVersion()
 		t.staleDataSize = idx.GetStaleDataSize()
 		t.valueSize = idx.GetValueSize()
+		t.rangeDeletes = idx.GetRangeTombstoneCount()
 		t.lm.cache.addIndex(t.fid, idx)
 	}
 	t.hasBloom = t.ss.HasBloomFilter()
@@ -172,6 +175,7 @@ func (t *table) index() *storagepb.TableIndex {
 		t.maxVersion = idx.GetMaxVersion()
 		t.staleDataSize = idx.GetStaleDataSize()
 		t.valueSize = idx.GetValueSize()
+		t.rangeDeletes = idx.GetRangeTombstoneCount()
 	}
 	return idx
 }
@@ -251,6 +255,9 @@ func (t *table) StaleDataSize() uint32 { return t.staleDataSize }
 // ValueSize reports total value bytes referenced by this table (inline + vlog pointers).
 func (t *table) ValueSize() uint64 { return t.valueSize }
 
+// RangeTombstoneCount reports range deletion markers stored in this table.
+func (t *table) RangeTombstoneCount() uint32 { return t.rangeDeletes }
+
 // Point-read and block lookup path.
 // Search search for a key in the table
 func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
@@ -267,6 +274,9 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 			return fmt.Errorf("table.Search expects internal key: %x", key)
 		})
 		probe := kv.InternalToBaseKey(key)
+		if t.prefixBloomMiss(idx, probe) {
+			return nil, utils.ErrKeyNotFound
+		}
 		if !bloomFilter.MayContainKey(probe) {
 			return nil, utils.ErrKeyNotFound
 		}
@@ -300,6 +310,25 @@ func (t *table) searchPointWithIndex(idx *storagepb.TableIndex, key []byte, maxV
 		return entry, err
 	}
 	return t.searchPointInBlock(blockIdx, key, maxVs)
+}
+
+func (t *table) prefixBloomMiss(idx *storagepb.TableIndex, baseKey []byte) bool {
+	if t == nil || t.lm == nil || t.lm.opt == nil || t.lm.opt.PrefixExtractor == nil || idx == nil {
+		return false
+	}
+	filter := utils.Filter(idx.GetPrefixBloomFilter())
+	if len(filter) == 0 {
+		return false
+	}
+	_, userKey, ok := kv.SplitBaseKey(baseKey)
+	if !ok {
+		return false
+	}
+	prefix := t.lm.opt.PrefixExtractor(userKey)
+	if len(prefix) == 0 {
+		return false
+	}
+	return !filter.MayContainKey(prefix)
 }
 
 func (t *table) searchPointInBlock(blockIdx int, key []byte, maxVs *uint64) (*kv.Entry, error) {
@@ -373,7 +402,7 @@ func (t *table) loadBlock(idx int) (*block, error) {
 	}
 
 	var err error
-	if b.data, err = t.read(b.offset, int(ko.GetLen())); err != nil {
+	if b.data, err = t.readBlockPayload(b.offset, ko); err != nil {
 		return nil, errors.Wrapf(err,
 			"failed to read from sstable: %d at offset: %d, len: %d",
 			t.fid, b.offset, ko.GetLen())
@@ -426,6 +455,31 @@ func (t *table) read(off, sz int) ([]byte, error) {
 	}
 	defer release()
 	return ss.Bytes(off, sz)
+}
+
+func (t *table) readBlockPayload(off int, ko *storagepb.BlockOffset) ([]byte, error) {
+	if ko == nil {
+		return nil, errors.New("nil block offset")
+	}
+	payload, err := t.read(off, int(ko.GetLen()))
+	if err != nil {
+		return nil, err
+	}
+	switch BlockCompression(ko.GetCompression()) {
+	case BlockCompressionNone:
+		return payload, nil
+	case BlockCompressionSnappy:
+		decoded, err := snappy.Decode(nil, payload)
+		if err != nil {
+			return nil, err
+		}
+		if rawLen := int(ko.GetRawLen()); rawLen > 0 && len(decoded) != rawLen {
+			return nil, fmt.Errorf("snappy block length mismatch: got=%d want=%d", len(decoded), rawLen)
+		}
+		return decoded, nil
+	default:
+		return nil, fmt.Errorf("unknown block compression %d", ko.GetCompression())
+	}
 }
 
 const maxUint32 = uint64(math.MaxUint32)
@@ -978,6 +1032,7 @@ func (t *table) openSSTableLocked(loadIndex bool) error {
 			t.maxVersion = idx.GetMaxVersion()
 			t.staleDataSize = idx.GetStaleDataSize()
 			t.valueSize = idx.GetValueSize()
+			t.rangeDeletes = idx.GetRangeTombstoneCount()
 			t.lm.cache.addIndex(t.fid, idx)
 		}
 		t.hasBloom = ss.HasBloomFilter()

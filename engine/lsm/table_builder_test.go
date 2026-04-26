@@ -1,7 +1,9 @@
 package lsm
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	storagepb "github.com/feichai0017/NoKV/pb/storage"
 	"os"
 	"path/filepath"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/vfs"
+	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 	proto "google.golang.org/protobuf/proto"
 )
@@ -33,6 +36,81 @@ func TestTableBuilderPersistsStaleDataSizeInIndex(t *testing.T) {
 	require.NoError(t, proto.Unmarshal(bd.index, &tableIndex))
 	require.Equal(t, uint32(builder.staleDataSize), tableIndex.GetStaleDataSize())
 	require.Equal(t, uint64(builder.valueSize), tableIndex.GetValueSize())
+}
+
+func TestTableBuilderPersistsRangeTombstoneCount(t *testing.T) {
+	opt := &Options{
+		BlockSize:          4 << 10,
+		SSTableMaxSz:       1 << 20,
+		BloomFalsePositive: 0.0,
+	}
+
+	builder := newTableBuiler(opt)
+	rt := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 10), []byte("z"))
+	rt.Meta = kv.BitRangeDelete
+	builder.AddKey(rt)
+	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("b"), 9), []byte("value")))
+
+	bd, err := builder.done()
+	require.NoError(t, err)
+
+	var tableIndex storagepb.TableIndex
+	require.NoError(t, proto.Unmarshal(bd.index, &tableIndex))
+	require.Equal(t, uint32(1), tableIndex.GetRangeTombstoneCount())
+}
+
+func TestTableBuilderPersistsPrefixBloomInIndex(t *testing.T) {
+	opt := &Options{
+		BlockSize:          4 << 10,
+		SSTableMaxSz:       1 << 20,
+		BloomFalsePositive: 0.01,
+		PrefixExtractor: func(key []byte) []byte {
+			if len(key) < 2 {
+				return nil
+			}
+			return key[:2]
+		},
+	}
+
+	builder := newTableBuiler(opt)
+	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("aa-1"), 1), []byte("value-a")))
+	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("bb-1"), 1), []byte("value-b")))
+
+	bd, err := builder.done()
+	require.NoError(t, err)
+
+	var tableIndex storagepb.TableIndex
+	require.NoError(t, proto.Unmarshal(bd.index, &tableIndex))
+	require.NotEmpty(t, tableIndex.GetBloomFilter())
+	require.NotEmpty(t, tableIndex.GetPrefixBloomFilter())
+	require.True(t, utils.Filter(tableIndex.GetPrefixBloomFilter()).MayContainKey([]byte("aa")))
+	require.True(t, utils.Filter(tableIndex.GetPrefixBloomFilter()).MayContainKey([]byte("bb")))
+}
+
+func TestTableBuilderCompressesBlocksWhenConfigured(t *testing.T) {
+	opt := &Options{
+		BlockSize:          4 << 10,
+		SSTableMaxSz:       1 << 20,
+		BloomFalsePositive: 0.0,
+		BlockCompression:   BlockCompressionSnappy,
+	}
+
+	builder := newTableBuiler(opt)
+	for i := range 16 {
+		key := fmt.Appendf(nil, "key-%02d", i)
+		builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, key, 1), bytes.Repeat([]byte("metadata-value-"), 32)))
+	}
+
+	bd, err := builder.done()
+	require.NoError(t, err)
+
+	var tableIndex storagepb.TableIndex
+	require.NoError(t, proto.Unmarshal(bd.index, &tableIndex))
+	require.NotEmpty(t, tableIndex.GetOffsets())
+	for _, offset := range tableIndex.GetOffsets() {
+		require.Equal(t, uint32(BlockCompressionSnappy), offset.GetCompression())
+		require.Greater(t, offset.GetRawLen(), offset.GetLen())
+	}
 }
 
 func TestTableBuilderFinishAndEntryValueLen(t *testing.T) {

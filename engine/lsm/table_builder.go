@@ -16,6 +16,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/golang/snappy"
 	proto "google.golang.org/protobuf/proto"
 )
 
@@ -26,10 +27,12 @@ type tableBuilder struct {
 	blockList     []*block
 	keyCount      uint32
 	keyHashes     []uint32
+	prefixHashes  []uint32
 	maxVersion    uint64
 	staleDataSize int
 	estimateSz    int64
 	valueSize     int64
+	rangeDeletes  uint32
 }
 type buildData struct {
 	blockList []*block
@@ -43,10 +46,14 @@ type block struct {
 	entriesIndexStart int
 	chkLen            int
 	data              []byte
+	diskData          []byte
 	baseKey           []byte
 	entryOffsets      []uint32
 	end               int
+	diskEnd           int
+	rawLen            int
 	estimateSz        int64
+	compression       BlockCompression
 	tbl               *table
 	release           func()
 }
@@ -89,11 +96,22 @@ func (tb *tableBuilder) add(e *kv.Entry, valueLen uint32, isStale bool) {
 		}
 	}
 	// record the hash value of the key
-	tb.keyHashes = append(tb.keyHashes, utils.Hash(kv.InternalToBaseKey(key)))
+	baseKey := kv.InternalToBaseKey(key)
+	tb.keyHashes = append(tb.keyHashes, utils.Hash(baseKey))
+	if tb.opt != nil && tb.opt.PrefixExtractor != nil {
+		if _, userKey, ok := kv.SplitBaseKey(baseKey); ok {
+			if prefix := tb.opt.PrefixExtractor(userKey); len(prefix) > 0 {
+				tb.prefixHashes = append(tb.prefixHashes, utils.Hash(prefix))
+			}
+		}
+	}
 
 	// update the maxVersion
 	if version := kv.Timestamp(key); version > tb.maxVersion {
 		tb.maxVersion = version
+	}
+	if e.IsRangeDelete() {
+		tb.rangeDeletes++
 	}
 
 	// calculate the diff of the key
@@ -248,11 +266,33 @@ func (tb *tableBuilder) finishBlock() {
 	// Append the block checksum and its length.
 	tb.append(checksum)
 	tb.append(kv.U32ToBytes(uint32(len(checksum))))
-	tb.estimateSz += tb.curBlock.estimateSz
+	tb.finishBlockEncoding(tb.curBlock)
+	tb.estimateSz += int64(tb.curBlock.diskEnd)
 	tb.blockList = append(tb.blockList, tb.curBlock)
 	// TODO: estimate the size of the sst file after the builder is serialized to disk
 	tb.keyCount += uint32(len(tb.curBlock.entryOffsets))
 	tb.curBlock = nil // indicates that the current block has been serialized to memory
+}
+
+func (tb *tableBuilder) finishBlockEncoding(bl *block) {
+	if bl == nil {
+		return
+	}
+	raw := bl.data[:bl.end]
+	bl.rawLen = len(raw)
+	bl.diskData = raw
+	bl.diskEnd = len(raw)
+	bl.compression = BlockCompressionNone
+	if tb.opt == nil || tb.opt.BlockCompression != BlockCompressionSnappy {
+		return
+	}
+	encoded := snappy.Encode(nil, raw)
+	if len(encoded) >= len(raw) {
+		return
+	}
+	bl.diskData = encoded
+	bl.diskEnd = len(encoded)
+	bl.compression = BlockCompressionSnappy
 }
 
 // append appends to curBlock.data
@@ -381,7 +421,7 @@ func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err
 func (bd *buildData) Copy(dst []byte) int {
 	var written int
 	for _, bl := range bd.blockList {
-		written += copy(dst[written:], bl.data[:bl.end])
+		written += copy(dst[written:], bl.diskData[:bl.diskEnd])
 	}
 	written += copy(dst[written:], bd.index)
 	written += copy(dst[written:], kv.U32ToBytes(uint32(len(bd.index))))
@@ -405,6 +445,11 @@ func (tb *tableBuilder) done() (buildData, error) {
 		bits := utils.BloomBitsPerKey(len(tb.keyHashes), tb.opt.BloomFalsePositive)
 		f = utils.NewFilter(tb.keyHashes, bits)
 	}
+	var pf utils.Filter
+	if tb.opt.BloomFalsePositive > 0 && len(tb.prefixHashes) > 0 {
+		bits := utils.BloomBitsPerKey(len(tb.prefixHashes), tb.opt.BloomFalsePositive)
+		pf = utils.NewFilter(tb.prefixHashes, bits)
+	}
 	// TODO: build SSTable index more efficiently.
 	// Overall SSTable Binary Format:
 	// +--------------------+--------------------+ ... +--------------------+--------------------+
@@ -413,7 +458,7 @@ func (tb *tableBuilder) done() (buildData, error) {
 	// | Index Block Length (4B) | SSTable Checksum (8B) | SSTable Checksum Length (4B) |
 	// +-------------------------+-----------------------+------------------------------+
 
-	index, dataSize, err := tb.buildIndex(f)
+	index, dataSize, err := tb.buildIndex(f, pf)
 	if err != nil {
 		return buildData{}, err
 	}
@@ -426,10 +471,13 @@ func (tb *tableBuilder) done() (buildData, error) {
 	return bd, nil
 }
 
-func (tb *tableBuilder) buildIndex(bloom []byte) ([]byte, uint32, error) {
+func (tb *tableBuilder) buildIndex(bloom, prefixBloom []byte) ([]byte, uint32, error) {
 	tableIndex := &storagepb.TableIndex{}
 	if len(bloom) > 0 {
 		tableIndex.BloomFilter = bloom
+	}
+	if len(prefixBloom) > 0 {
+		tableIndex.PrefixBloomFilter = prefixBloom
 	}
 	tableIndex.KeyCount = tb.keyCount
 	tableIndex.MaxVersion = tb.maxVersion
@@ -441,10 +489,11 @@ func (tb *tableBuilder) buildIndex(bloom []byte) ([]byte, uint32, error) {
 		}
 	}
 	tableIndex.ValueSize = uint64(tb.valueSize)
+	tableIndex.RangeTombstoneCount = tb.rangeDeletes
 	tableIndex.Offsets = tb.writeBlockOffsets()
 	var dataSize uint32
 	for i := range tb.blockList {
-		dataSize += uint32(tb.blockList[i].end)
+		dataSize += uint32(tb.blockList[i].diskEnd)
 	}
 	data, err := proto.Marshal(tableIndex)
 	if err != nil {
@@ -459,7 +508,7 @@ func (tb *tableBuilder) writeBlockOffsets() []*storagepb.BlockOffset {
 	for _, bl := range tb.blockList {
 		offset := tb.writeBlockOffset(bl, startOffset)
 		offsets = append(offsets, offset)
-		startOffset += uint32(bl.end)
+		startOffset += uint32(bl.diskEnd)
 	}
 	return offsets
 }
@@ -467,8 +516,10 @@ func (tb *tableBuilder) writeBlockOffsets() []*storagepb.BlockOffset {
 func (b *tableBuilder) writeBlockOffset(bl *block, startOffset uint32) *storagepb.BlockOffset {
 	offset := &storagepb.BlockOffset{}
 	offset.Key = bl.baseKey
-	offset.Len = uint32(bl.end)
+	offset.Len = uint32(bl.diskEnd)
 	offset.Offset = startOffset
+	offset.Compression = uint32(bl.compression)
+	offset.RawLen = uint32(bl.rawLen)
 	return offset
 }
 

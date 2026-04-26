@@ -1,6 +1,7 @@
 package NoKV
 
 import (
+	"encoding/binary"
 	"time"
 
 	"github.com/feichai0017/NoKV/engine/kv"
@@ -142,6 +143,12 @@ type Options struct {
 	BlockCacheBytes int64
 	// IndexCacheBytes bounds the in-memory budget for decoded SSTable indexes.
 	IndexCacheBytes int64
+	// PrefixExtractor enables SST prefix bloom filters. Nil disables prefix
+	// bloom creation. The default extractor recognizes NoKV native metadata
+	// keys and returns nil for unrelated user keys.
+	PrefixExtractor lsmpkg.PrefixExtractor
+	// BlockCompression controls SST data-block compression.
+	BlockCompression lsmpkg.BlockCompression
 
 	// RaftLagWarnSegments determines how many WAL segments a follower can lag
 	// behind the active segment before stats surfaces a warning. Zero disables
@@ -230,6 +237,9 @@ type Options struct {
 	// levels whose entries reference large value log payloads. Higher values
 	// make the compaction picker favour levels with high ValuePtr density.
 	CompactionValueWeight float64
+	// CompactionTombstoneWeight adjusts how aggressively the scheduler
+	// prioritizes levels with high range tombstone density.
+	CompactionTombstoneWeight float64
 
 	// CompactionValueAlertThreshold triggers stats alerts when a level's
 	// value-density (value bytes / total bytes) exceeds this ratio.
@@ -281,6 +291,8 @@ func NewDefaultOptions() *Options {
 		MaxBatchSize:                  defaultWriteBatchMaxSize,
 		BlockCacheBytes:               lsmpkg.DefaultBlockCacheBytes,
 		IndexCacheBytes:               lsmpkg.DefaultIndexCacheBytes,
+		PrefixExtractor:               nativeMetadataPrefix,
+		BlockCompression:              lsmpkg.DefaultBlockCompression,
 		SyncWrites:                    false,
 		ManifestSync:                  false,
 		ManifestRewriteThreshold:      64 << 20,
@@ -297,6 +309,7 @@ func NewDefaultOptions() *Options {
 		WALTypedRecordWarnRatio:       0.35,
 		WALTypedRecordWarnSegments:    6,
 		CompactionValueWeight:         lsmpkg.DefaultCompactionValueWeight,
+		CompactionTombstoneWeight:     lsmpkg.DefaultCompactionTombstoneWeight,
 		CompactionValueAlertThreshold: lsmpkg.DefaultCompactionValueAlertThreshold,
 		ValueLogGCInterval:            10 * time.Minute,
 		ValueLogGCDiscardRatio:        0.5,
@@ -390,9 +403,12 @@ func (opt *Options) applyLSMSharedOptions(dst *lsmpkg.Options) {
 	dst.IngestBacklogMergeScore = opt.IngestBacklogMergeScore
 	dst.IngestShardParallelism = opt.IngestShardParallelism
 	dst.CompactionValueWeight = opt.CompactionValueWeight
+	dst.CompactionTombstoneWeight = opt.CompactionTombstoneWeight
 	dst.CompactionValueAlertThreshold = opt.CompactionValueAlertThreshold
 	dst.BlockCacheBytes = opt.BlockCacheBytes
 	dst.IndexCacheBytes = opt.IndexCacheBytes
+	dst.PrefixExtractor = opt.PrefixExtractor
+	dst.BlockCompression = opt.BlockCompression
 }
 
 func (opt *Options) copyNormalizedLSMOptions(src *lsmpkg.Options) {
@@ -413,7 +429,46 @@ func (opt *Options) copyNormalizedLSMOptions(src *lsmpkg.Options) {
 	opt.IngestBacklogMergeScore = src.IngestBacklogMergeScore
 	opt.IngestShardParallelism = src.IngestShardParallelism
 	opt.CompactionValueWeight = src.CompactionValueWeight
+	opt.CompactionTombstoneWeight = src.CompactionTombstoneWeight
 	opt.CompactionValueAlertThreshold = src.CompactionValueAlertThreshold
 	opt.BlockCacheBytes = src.BlockCacheBytes
 	opt.IndexCacheBytes = src.IndexCacheBytes
+	opt.PrefixExtractor = src.PrefixExtractor
+	opt.BlockCompression = src.BlockCompression
+}
+
+func nativeMetadataPrefix(key []byte) []byte {
+	const (
+		magicLen = 4
+		version  = byte(1)
+	)
+	if len(key) < magicLen+3 {
+		return nil
+	}
+	if key[0] != 'f' || key[1] != 's' || key[2] != 'm' || key[3] != 0 || key[4] != version {
+		return nil
+	}
+	pos := magicLen + 1
+	mountLen, n := binary.Uvarint(key[pos:])
+	if n <= 0 {
+		return nil
+	}
+	pos += n
+	if mountLen == 0 || uint64(len(key)-pos) < mountLen+1 {
+		return nil
+	}
+	pos += int(mountLen)
+	kindPos := pos
+	pos++
+	switch key[kindPos] {
+	case 'd', 'c':
+		if len(key) < pos+8 {
+			return nil
+		}
+		return key[:pos+8]
+	case 'i', 'm', 's', 'u':
+		return key[:pos]
+	default:
+		return nil
+	}
 }

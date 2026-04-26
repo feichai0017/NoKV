@@ -238,6 +238,7 @@ func TestOpenNormalizesLegacyUnsetFieldsWithoutMutatingCaller(t *testing.T) {
 	require.Greater(t, db.opt.IngestBacklogMergeScore, 0.0)
 	require.Greater(t, db.opt.IngestShardParallelism, 0)
 	require.Greater(t, db.opt.CompactionValueWeight, 0.0)
+	require.Greater(t, db.opt.CompactionTombstoneWeight, 0.0)
 	require.Greater(t, db.opt.CompactionValueAlertThreshold, 0.0)
 	require.Greater(t, db.opt.ThermosTopK, 0)
 }
@@ -254,6 +255,8 @@ func TestNewDefaultOptionsExposeConcreteCompactionDefaults(t *testing.T) {
 	require.LessOrEqual(t, opt.CompactionResumeTrigger, opt.CompactionSlowdownTrigger)
 	require.Greater(t, opt.IngestCompactBatchSize, 0)
 	require.Greater(t, opt.IngestBacklogMergeScore, 0.0)
+	require.NotNil(t, opt.PrefixExtractor)
+	require.Greater(t, opt.CompactionTombstoneWeight, 0.0)
 }
 
 func TestNewDefaultOptionsExposeConcreteBatchDefaults(t *testing.T) {

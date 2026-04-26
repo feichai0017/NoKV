@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"bytes"
 	"fmt"
 	storagepb "github.com/feichai0017/NoKV/pb/storage"
 	"os"
@@ -119,6 +120,41 @@ func TestTableReverseIteration(t *testing.T) {
 		require.True(t, it.Valid())
 		require.Equal(t, []byte("j"), splitTableUserKey(t, it.Item().Entry().Key))
 	})
+}
+
+func TestTableSearchCompressedBlock(t *testing.T) {
+	dir, err := os.MkdirTemp("", "nokv-table-compressed")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, os.RemoveAll(dir)) }()
+
+	opt := &Options{
+		WorkDir:            dir,
+		MemTableSize:       1 << 20,
+		SSTableMaxSz:       1 << 20,
+		BlockSize:          4 << 10,
+		BloomFalsePositive: 0.01,
+		BlockCompression:   BlockCompressionSnappy,
+	}
+
+	lsm := buildTestLSM(t, opt)
+	defer func() { require.NoError(t, lsm.Close()) }()
+
+	builder := newTableBuiler(opt)
+	key := []byte("compressed-key")
+	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, key, 7), bytes.Repeat([]byte("metadata-value-"), 32)))
+
+	tableName := vfs.FileNameSSTable(dir, 10)
+	tbl, err := openTable(lsm.levels, tableName, builder)
+	require.NoError(t, err)
+	defer func() { _ = tbl.DecrRef() }()
+
+	var maxVs uint64
+	got, err := tbl.Search(kv.InternalKey(kv.CFDefault, key, 7), &maxVs)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	defer got.DecrRef()
+	require.Equal(t, uint64(7), maxVs)
+	require.Equal(t, bytes.Repeat([]byte("metadata-value-"), 32), got.Value)
 }
 
 // TestTableReverseIterationMultiBlock tests reverse iteration across multiple blocks.

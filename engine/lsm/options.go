@@ -8,11 +8,26 @@ import (
 	"github.com/feichai0017/NoKV/engine/vfs"
 )
 
+// PrefixExtractor maps a user key to the prefix used for SST-level prefix
+// bloom filtering. Returning nil or an empty prefix disables prefix filtering
+// for that key.
+type PrefixExtractor func(userKey []byte) []byte
+
+// BlockCompression selects the SST data-block compression codec.
+type BlockCompression uint32
+
+const (
+	BlockCompressionNone BlockCompression = iota
+	BlockCompressionSnappy
+)
+
 const (
 	// DefaultBlockSize is the default SST block size in bytes.
 	DefaultBlockSize = 8 << 10
 	// DefaultBloomFalsePositive is the default bloom filter false positive rate.
 	DefaultBloomFalsePositive = 0.01
+	// DefaultBlockCompression is the default data-block compression codec.
+	DefaultBlockCompression = BlockCompressionSnappy
 	// DefaultLevelSizeMultiplier is the default leveled target size ratio between levels.
 	DefaultLevelSizeMultiplier = 8
 	// DefaultTableSizeMultiplier is the default target size ratio between adjacent tables.
@@ -37,6 +52,9 @@ const (
 	DefaultCompactionValueWeight = 0.35
 	// DefaultCompactionValueAlertThreshold raises value-density alerts above this ratio.
 	DefaultCompactionValueAlertThreshold = 0.6
+	// DefaultCompactionTombstoneWeight biases picker priorities toward levels
+	// with dense range tombstones.
+	DefaultCompactionTombstoneWeight = 1.0
 	// DefaultWriteThrottleMinRate is the slowest write rate used during slowdown mode.
 	DefaultWriteThrottleMinRate int64 = 128 << 20
 	// DefaultWriteThrottleMaxRate is the initial write rate used when slowdown first activates.
@@ -59,6 +77,11 @@ type Options struct {
 	BlockSize int
 	// BloomFalsePositive is the false positive probabiltiy of bloom filter.
 	BloomFalsePositive float64
+	// PrefixExtractor enables SST prefix bloom filters for prefix-local
+	// workloads. It receives user keys, not internal CF/timestamp keys.
+	PrefixExtractor PrefixExtractor
+	// BlockCompression controls SST data-block compression.
+	BlockCompression BlockCompression
 
 	// Cache budgets. Zero disables the corresponding user-space cache.
 	BlockCacheBytes int64
@@ -105,6 +128,9 @@ type Options struct {
 	// CompactionValueWeight increases the priority of levels containing a high
 	// proportion of ValueLog-backed payloads. Must be non-negative.
 	CompactionValueWeight float64
+	// CompactionTombstoneWeight increases the priority of levels containing a
+	// high proportion of range tombstones. Must be non-negative.
+	CompactionTombstoneWeight float64
 
 	// CompactionValueAlertThreshold triggers stats alerts when value density
 	// exceeds this ratio.
@@ -152,6 +178,12 @@ func (opt *Options) NormalizeInPlace() {
 	}
 	if opt.CompactionValueWeight == 0 {
 		opt.CompactionValueWeight = DefaultCompactionValueWeight
+	}
+	if opt.CompactionTombstoneWeight < 0 {
+		opt.CompactionTombstoneWeight = 0
+	}
+	if opt.CompactionTombstoneWeight == 0 {
+		opt.CompactionTombstoneWeight = DefaultCompactionTombstoneWeight
 	}
 	if opt.CompactionValueAlertThreshold <= 0 {
 		opt.CompactionValueAlertThreshold = DefaultCompactionValueAlertThreshold
