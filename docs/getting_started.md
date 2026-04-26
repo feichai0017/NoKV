@@ -52,11 +52,34 @@ go run ./cmd/nokv stats --workdir ./artifacts/cluster/store-1
 ```
 
 ## Option B: Docker Compose
-This runs the cluster and gateway in containers.
+This runs the cluster and gateway in containers with the published GHCR image.
+
+```bash
+docker compose up -d
+scripts/demo/redis-smoke.sh
+```
+
+To force-refresh `:latest` before startup, use:
+
+```bash
+make docker-up
+```
+
+`make docker-up` pulls the published image first. If the GHCR package is not
+published or public yet, it falls back to a local Docker build.
+
+For local Docker development builds from this checkout:
 
 ```bash
 docker compose up -d --build
-scripts/demo/redis-smoke.sh
+```
+
+Local builds are tagged as the configured NoKV image. If you build locally and
+then want to return to the published `:latest`, run the pull command above.
+For reproducible runs, pin a published SHA tag:
+
+```bash
+NOKV_IMAGE_TAG=<commit-sha> docker compose up -d
 ```
 
 Tear down:
