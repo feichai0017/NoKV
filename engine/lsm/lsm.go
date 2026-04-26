@@ -44,6 +44,7 @@ import (
 // sharding rationale and routing/recovery/flush invariants.
 type LSM struct {
 	shards     []*lsmShard
+	shardHints *shardHintTable
 	levels     *levelManager
 	option     *Options
 	closer     *utils.Closer
@@ -326,10 +327,11 @@ func NewLSM(opt *Options, walMgrs []*wal.Manager) (*LSM, error) {
 		shards[i] = newLSMShard(i, mgr)
 	}
 	lsm := &LSM{
-		option: frozen,
-		shards: shards,
-		closer: utils.NewCloser(),
-		logger: frozen.Logger,
+		option:     frozen,
+		shards:     shards,
+		shardHints: newShardHintTable(),
+		closer:     utils.NewCloser(),
+		logger:     frozen.Logger,
 	}
 	if lsm.logger == nil {
 		lsm.logger = slog.Default()
@@ -468,6 +470,7 @@ func (lsm *LSM) writeSome(s *lsmShard, batches []*writeBatch) (int, error) {
 		s.lock.RUnlock()
 		panic(fmt.Sprintf("lsm: durable WAL batch could not be applied to memtable: %v", err))
 	}
+	lsm.recordShardHints(s.id, entries)
 	s.lock.RUnlock()
 	return n, nil
 }
@@ -616,15 +619,21 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 	}
 	lsm.closer.Add(1)
 	defer lsm.closer.Done()
+
+	if shardID, ok := lsm.lookupShardHint(key); ok && !lsm.hasRangeTombstones() {
+		tables, release := lsm.getMemTablesForShard(shardID)
+		best := bestMemtableEntry(key, tables)
+		if release != nil {
+			release()
+		}
+		if best != nil {
+			return best, nil
+		}
+	}
+
 	tables, release := lsm.getMemTables()
 	if release != nil {
 		defer release()
-	}
-	isMemHit := func(entry *kv.Entry) bool {
-		if entry == nil {
-			return false
-		}
-		return entry.Value != nil || entry.Meta != 0 || entry.ExpiresAt != 0
 	}
 
 	// isCovered checks range tombstone coverage for a found entry using
@@ -644,27 +653,7 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 	// same userKey may live on more than one shard at different versions.
 	// Walk every memtable and keep the highest-version hit so MVCC reads
 	// see the most recent write regardless of which shard accepted it.
-	var best *kv.Entry
-	for _, mt := range tables {
-		if mt == nil {
-			continue
-		}
-		entry, _ := mt.Get(key)
-		if !isMemHit(entry) {
-			if entry != nil {
-				entry.DecrRef()
-			}
-			continue
-		}
-		if best == nil || entry.Version > best.Version {
-			if best != nil {
-				best.DecrRef()
-			}
-			best = entry
-		} else {
-			entry.DecrRef()
-		}
-	}
+	best := bestMemtableEntry(key, tables)
 	if best != nil {
 		if isCovered(best) {
 			best.DecrRef()
@@ -682,6 +671,61 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 		return nil, utils.ErrKeyNotFound
 	}
 	return entry, nil
+}
+
+func (lsm *LSM) lookupShardHint(key []byte) (int, bool) {
+	if lsm == nil || len(lsm.shards) <= 1 || lsm.shardHints == nil {
+		return 0, false
+	}
+	shardID, ok := lsm.shardHints.lookup(key)
+	if !ok || shardID < 0 || shardID >= len(lsm.shards) {
+		return 0, false
+	}
+	return shardID, true
+}
+
+func (lsm *LSM) recordShardHints(shardID int, entries []*kv.Entry) {
+	if lsm == nil || len(lsm.shards) <= 1 || lsm.shardHints == nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry == nil || len(entry.Key) == 0 {
+			continue
+		}
+		lsm.shardHints.remember(entry.Key, shardID)
+	}
+}
+
+func bestMemtableEntry(key []byte, tables []*memTable) *kv.Entry {
+	var best *kv.Entry
+	for _, mt := range tables {
+		if mt == nil {
+			continue
+		}
+		entry, _ := mt.Get(key)
+		if !isMemtableHit(entry) {
+			if entry != nil {
+				entry.DecrRef()
+			}
+			continue
+		}
+		if best == nil || entry.Version > best.Version {
+			if best != nil {
+				best.DecrRef()
+			}
+			best = entry
+		} else {
+			entry.DecrRef()
+		}
+	}
+	return best
+}
+
+func isMemtableHit(entry *kv.Entry) bool {
+	if entry == nil {
+		return false
+	}
+	return entry.Value != nil || entry.Meta != 0 || entry.ExpiresAt != 0
 }
 
 // MemSize returns the active memtable memory usage summed across shards.
@@ -763,6 +807,54 @@ func (lsm *LSM) getMemTables() ([]*memTable, func()) {
 			tbl.DecrRef()
 		}
 	}
+}
+
+func (lsm *LSM) getMemTablesForShard(shardID int) ([]*memTable, func()) {
+	if lsm == nil || shardID < 0 || shardID >= len(lsm.shards) {
+		return nil, nil
+	}
+	s := lsm.shards[shardID]
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	tables := make([]*memTable, 0, 1+len(s.immutables))
+	if s.memTable != nil {
+		tables = append(tables, s.memTable)
+		s.memTable.IncrRef()
+	}
+	last := len(s.immutables) - 1
+	for i := range s.immutables {
+		tables = append(tables, s.immutables[last-i])
+		s.immutables[last-i].IncrRef()
+	}
+	return tables, func() {
+		for _, tbl := range tables {
+			tbl.DecrRef()
+		}
+	}
+}
+
+func (lsm *LSM) hasRangeTombstones() bool {
+	if lsm == nil {
+		return false
+	}
+	if lsm.levels != nil && lsm.levels.rtCollector != nil && lsm.levels.rtCollector.Count() > 0 {
+		return true
+	}
+	for _, s := range lsm.shards {
+		s.lock.RLock()
+		if s.memTable != nil && s.memTable.hasRangeTombstones() {
+			s.lock.RUnlock()
+			return true
+		}
+		for _, mt := range s.immutables {
+			if mt != nil && mt.hasRangeTombstones() {
+				s.lock.RUnlock()
+				return true
+			}
+		}
+		s.lock.RUnlock()
+	}
+	return false
 }
 
 func (lsm *LSM) submitFlush(mt *memTable) error {
