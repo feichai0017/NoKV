@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a3cf97d7.js";
+            window.path_to_searchindex_js = "searchindex-587b1194.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2018305d.js"></script>
@@ -453,14 +453,15 @@ restart path for an already-running store.</p>
 <pre><code class="language-bash">go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --coordinator-addr 127.0.0.1:2379
 </code></pre>
 <p>Quick smoke test:</p>
-<pre><code class="language-bash">redis-cli -p 6380 ping
+<pre><code class="language-bash">scripts/demo/redis-smoke.sh
 </code></pre>
 <h3 id="inspect-stats"><a class="header" href="#inspect-stats">Inspect stats</a></h3>
 <pre><code class="language-bash">go run ./cmd/nokv stats --workdir ./artifacts/cluster/store-1
 </code></pre>
 <h2 id="option-b-docker-compose"><a class="header" href="#option-b-docker-compose">Option B: Docker Compose</a></h2>
 <p>This runs the cluster and gateway in containers.</p>
-<pre><code class="language-bash">docker compose up --build
+<pre><code class="language-bash">docker compose up -d --build
+scripts/demo/redis-smoke.sh
 </code></pre>
 <p>Tear down:</p>
 <pre><code class="language-bash">docker compose down -v
@@ -6405,10 +6406,8 @@ library</li>
 <pre><code class="language-bash"># Build images + start every service + run bootstrap once
 docker compose up -d --build
 
-# Wait a few seconds, then verify
-redis-cli -p 6380 ping                    # → PONG
-redis-cli -p 6380 set demo hello
-redis-cli -p 6380 get demo                # → hello
+# Wait for the Redis-compatible gateway and verify write/read persistence
+scripts/demo/redis-smoke.sh
 </code></pre>
 <p>That’s it. <code>docker compose down -v</code> wipes data volumes too.</p>
 <h2 id="exposed-ports-all-bound-to-127001"><a class="header" href="#exposed-ports-all-bound-to-127001">Exposed ports (all bound to 127.0.0.1)</a></h2>
@@ -6420,7 +6419,7 @@ consecutive numbers — easy to remember, easy to script against.</p>
 <tr><th>Service</th><th>Port</th><th>Purpose</th></tr>
 </thead>
 <tbody>
-<tr><td>Redis gateway</td><td><code>6380</code></td><td>RESP protocol — <code>redis-cli -p 6380 ...</code></td></tr>
+<tr><td>Redis gateway</td><td><code>6380</code></td><td>RESP protocol — <code>scripts/demo/redis-smoke.sh</code>, or <code>redis-cli -p 6380 ...</code></td></tr>
 <tr><td>Redis expvar</td><td><code>9300</code></td><td><code>/debug/vars</code> JSON</td></tr>
 <tr><td>Meta-root-1 gRPC</td><td><code>2380</code></td><td><code>nokv eunomia-audit --root-peer 1=127.0.0.1:2380 ...</code></td></tr>
 <tr><td>Meta-root-2 gRPC</td><td><code>2381</code></td><td></td></tr>
