@@ -3,6 +3,12 @@ package client
 import (
 	"context"
 	"errors"
+	"net"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
 	coordablation "github.com/feichai0017/NoKV/coordinator/ablation"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
@@ -10,11 +16,6 @@ import (
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
-	"net"
-	"strings"
-	"sync"
-	"testing"
-	"time"
 
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
@@ -37,6 +38,10 @@ func TestNewGRPCClientEmptyAddress(t *testing.T) {
 	cli, err := NewGRPCClient(context.Background(), "")
 	require.Error(t, err)
 	require.Nil(t, cli)
+}
+
+func uint64Ptr(v uint64) *uint64 {
+	return &v
 }
 
 func TestGRPCClientRoundTrip(t *testing.T) {
@@ -368,7 +373,7 @@ func TestGRPCClientRejectsInvalidMetadataWitness(t *testing.T) {
 		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
 		RequiredRootToken:          &coordpb.RootToken{Term: 1, Index: 5, Revision: 5},
 		RequiredDescriptorRevision: 7,
-		MaxRootLag:                 new(uint64(2)),
+		MaxRootLag:                 uint64Ptr(2),
 	})
 	require.Error(t, err)
 	require.True(t, IsInvalidWitness(err))
@@ -401,7 +406,7 @@ func TestGRPCClientAcceptsValidMetadataWitness(t *testing.T) {
 		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
 		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 8, Revision: 9},
 		RequiredDescriptorRevision: 8,
-		MaxRootLag:                 new(uint64(2)),
+		MaxRootLag:                 uint64Ptr(2),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
@@ -465,7 +470,7 @@ func TestGRPCClientRetriesStaleMetadataWitnessEraAcrossEndpoints(t *testing.T) {
 		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
 		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 8, Revision: 9},
 		RequiredDescriptorRevision: 8,
-		MaxRootLag:                 new(uint64(2)),
+		MaxRootLag:                 uint64Ptr(2),
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(11), resp.GetRegionDescriptor().GetRegionId())
@@ -477,7 +482,7 @@ func TestGRPCClientRetriesStaleMetadataWitnessEraAcrossEndpoints(t *testing.T) {
 		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
 		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 8, Revision: 9},
 		RequiredDescriptorRevision: 8,
-		MaxRootLag:                 new(uint64(2)),
+		MaxRootLag:                 uint64Ptr(2),
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(12), resp.GetRegionDescriptor().GetRegionId())
@@ -525,7 +530,7 @@ func TestGRPCClientAcceptsZeroEraMetadataWitnessAfterDetachedEra(t *testing.T) {
 		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
 		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 8, Revision: 9},
 		RequiredDescriptorRevision: 8,
-		MaxRootLag:                 new(uint64(2)),
+		MaxRootLag:                 uint64Ptr(2),
 	})
 	require.NoError(t, err)
 
@@ -635,7 +640,7 @@ func TestGRPCClientRejectsZeroEraMetadataWitnessWithoutAuthoritativeAttachedServ
 		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
 		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 8, Revision: 9},
 		RequiredDescriptorRevision: 8,
-		MaxRootLag:                 new(uint64(2)),
+		MaxRootLag:                 uint64Ptr(2),
 	})
 	require.NoError(t, err)
 

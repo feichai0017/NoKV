@@ -3,7 +3,7 @@
 
 .PHONY: help build test test-short test-race test-coverage lint fmt clean docker-up docker-down bench install-tools install-tla-tools
 .PHONY: proto proto-check proto-breaking-check
-.PHONY: tlc-eunomia tlc-eunomiamultidim tlc-mountlifecycle tlc-subtreeauthority tlc-leaseonly-counterexample tlc-leasestart-counterexample tlc-subtreewithoutfrontiercoverage-counterexample tlc-subtreewithoutseal-counterexample apalache-typecheck apalache-check-eunomia apalache-check-eunomiamultidim
+.PHONY: tlc-eunomia tlc-eunomiamultidim tlc-mountlifecycle tlc-subtreeauthority tlc-leaseonly-counterexample tlc-leasestart-counterexample tlc-subtreewithoutfrontiercoverage-counterexample tlc-subtreewithoutseal-counterexample
 
 GOLANGCI_LINT_VERSION ?= v2.9.0
 BUF_VERSION ?= 1.66.0
@@ -25,7 +25,7 @@ help:
 	@echo "  make proto-breaking-check - Run Buf breaking checks against main"
 	@echo "  make bench              - Run benchmarks"
 	@echo "  make install-tools      - Install development tools"
-	@echo "  make install-tla-tools  - Install pinned TLC and Apalache locally under third_party/"
+	@echo "  make install-tla-tools  - Install pinned TLC locally under third_party/"
 	@echo "  make tlc-eunomia            - Run TLC on spec/Eunomia.tla"
 	@echo "  make tlc-eunomiamultidim    - Run TLC on spec/EunomiaMultiDim.tla"
 	@echo "  make tlc-mountlifecycle        - Run TLC on spec/MountLifecycle.tla"
@@ -34,9 +34,6 @@ help:
 	@echo "  make tlc-leasestart-counterexample - Run TLC and expect a counterexample for spec/LeaseStartOnly.tla"
 	@echo "  make tlc-subtreewithoutfrontiercoverage-counterexample - Run TLC and expect a counterexample for spec/SubtreeWithoutFrontierCoverage.tla"
 	@echo "  make tlc-subtreewithoutseal-counterexample - Run TLC and expect a counterexample for spec/SubtreeWithoutSeal.tla"
-	@echo "  make apalache-typecheck - Run Apalache typecheck on current specs"
-	@echo "  make apalache-check-eunomia - Run bounded Apalache check on Eunomia invariants"
-	@echo "  make apalache-check-eunomiamultidim - Run bounded Apalache check on EunomiaMultiDim invariants"
 	@echo "  make docker-up          - Start Docker Compose cluster"
 	@echo "  make docker-down        - Stop Docker Compose cluster"
 	@echo "  make clean              - Remove build artifacts and test data"
@@ -297,34 +294,7 @@ record-tlc-subtreewithoutseal:
 		echo "✓ Recorded TLC counterexample for SubtreeWithoutSeal"; \
 	fi
 
-record-apalache-eunomia:
-	@echo "Recording Apalache bounded-check output for Eunomia..."
-	./scripts/tla/record_apalache_check.sh spec/Eunomia.tla spec/Eunomia.cfg G1_Eunomia,G2_Primacy,G2_PrimacyInductive,G3_Silence,G4_Finality 8 spec/artifacts/apalache-eunomia.out
-	@echo "✓ Recorded Apalache output for Eunomia"
-
-record-apalache-eunomiamultidim:
-	@echo "Recording Apalache bounded-check output for EunomiaMultiDim..."
-	./scripts/tla/record_apalache_check.sh spec/EunomiaMultiDim.tla spec/EunomiaMultiDim.cfg NoWriteBehindServedRead 6 spec/artifacts/apalache-eunomiamultidim.out
-	@echo "✓ Recorded Apalache output for EunomiaMultiDim"
-
-record-formal-artifacts: record-tlc-eunomia record-tlc-eunomiamultidim record-tlc-mountlifecycle record-tlc-subtreeauthority record-tlc-leaseonly record-tlc-tokenonly record-tlc-chubbyfenced record-tlc-leasestart record-tlc-subtreewithoutfrontiercoverage record-tlc-subtreewithoutseal record-apalache-eunomia record-apalache-eunomiamultidim
-
-apalache-typecheck:
-	@echo "Running Apalache typecheck on current specs..."
-	./scripts/tla/apalache.sh typecheck --features=no-rows spec/Eunomia.tla
-	./scripts/tla/apalache.sh typecheck --features=no-rows spec/EunomiaMultiDim.tla
-	./scripts/tla/apalache.sh typecheck --features=no-rows spec/LeaseOnly.tla
-	./scripts/tla/apalache.sh typecheck --features=no-rows spec/LeaseStartOnly.tla
-	./scripts/tla/apalache.sh typecheck --features=no-rows spec/ChubbyFencedLease.tla
-	./scripts/tla/apalache.sh typecheck --features=no-rows spec/TokenOnly.tla
-
-apalache-check-eunomia:
-	@echo "Running bounded Apalache check on Eunomia..."
-	./scripts/tla/apalache.sh --features=no-rows check --config=spec/Eunomia.cfg --no-deadlock --length=8 --inv=G1_Eunomia,G2_Primacy,G2_PrimacyInductive,G3_Silence,G4_Finality spec/Eunomia.tla
-
-apalache-check-eunomiamultidim:
-	@echo "Running bounded Apalache check on EunomiaMultiDim..."
-	./scripts/tla/apalache.sh --features=no-rows check --config=spec/EunomiaMultiDim.cfg --no-deadlock --length=6 --inv=NoWriteBehindServedRead spec/EunomiaMultiDim.tla
+record-formal-artifacts: record-tlc-eunomia record-tlc-eunomiamultidim record-tlc-mountlifecycle record-tlc-subtreeauthority record-tlc-leaseonly record-tlc-tokenonly record-tlc-chubbyfenced record-tlc-leasestart record-tlc-subtreewithoutfrontiercoverage record-tlc-subtreewithoutseal
 
 # Start Docker Compose cluster
 docker-up:
