@@ -28,7 +28,7 @@ Validate with `redis-cli -p 6380 ping`. Metrics are exposed at `http://127.0.0.1
 
    ```bash
    ./scripts/dev/cluster.sh
-   # or: docker compose up --build
+   # or: docker compose up -d
    ```
 
 2. Run the gateway:

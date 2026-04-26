@@ -52,10 +52,16 @@ go run ./cmd/nokv stats --workdir ./artifacts/cluster/store-1
 ```
 
 ## Option B: Docker Compose
-This runs the cluster and gateway in containers.
+This runs the cluster and gateway in containers with the published GHCR image.
 
 ```bash
-docker compose up --build
+docker compose up -d
+```
+
+For local Docker development builds from this checkout:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
 
 Tear down:

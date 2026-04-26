@@ -1,0 +1,37 @@
+# Local development override for building the NoKV image from this checkout.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+
+x-nokv-dev-build: &nokv-dev-build
+  build: .
+  image: ${NOKV_IMAGE:-nokv:dev}
+  pull_policy: build
+
+services:
+  bootstrap:
+    <<: *nokv-dev-build
+  meta-root-1:
+    <<: *nokv-dev-build
+  meta-root-2:
+    <<: *nokv-dev-build
+  meta-root-3:
+    <<: *nokv-dev-build
+  coordinator-1:
+    <<: *nokv-dev-build
+  coordinator-2:
+    <<: *nokv-dev-build
+  coordinator-3:
+    <<: *nokv-dev-build
+  store-1:
+    <<: *nokv-dev-build
+  store-2:
+    <<: *nokv-dev-build
+  store-3:
+    <<: *nokv-dev-build
+  redis:
+    <<: *nokv-dev-build
+  mount-init:
+    <<: *nokv-dev-build
+  fsmeta:
+    <<: *nokv-dev-build

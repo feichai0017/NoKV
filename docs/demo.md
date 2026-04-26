@@ -6,8 +6,8 @@ One-command demo of the full 333 HA topology (3 meta-root + 3 coordinator +
 ## One-shot startup
 
 ```bash
-# Build images + start every service + run bootstrap once
-docker compose up -d --build
+# Pull image + start every service + run bootstrap once
+docker compose up -d
 
 # Wait a few seconds, then verify
 redis-cli -p 6380 ping                    # → PONG
@@ -172,7 +172,7 @@ scripts/demo/recycle-demo.sh --dashboard
 That script does one full reset:
 
 1. `docker compose down -v --remove-orphans`
-2. `docker compose up -d --build`
+2. `docker compose up -d`
 3. wait until `redis-cli -p 6380 ping` succeeds
 4. optionally restart the local dashboard proxy on `:18080`
 

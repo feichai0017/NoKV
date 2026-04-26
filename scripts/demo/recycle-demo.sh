@@ -3,7 +3,7 @@
 #
 # This is intentionally a one-shot reset script:
 #   docker compose down -v --remove-orphans
-#   docker compose up -d --build
+#   docker compose up -d
 #   wait until redis gateway answers PING
 #   optionally restart the local dashboard proxy
 #
@@ -17,7 +17,7 @@ cd "$ROOT_DIR"
 INTERVAL=""
 DASHBOARD=0
 DASHBOARD_PORT=18080
-BUILD=1
+BUILD=0
 TIMEOUT=120
 DRY_RUN=0
 
@@ -28,7 +28,7 @@ Usage: scripts/demo/recycle-demo.sh [options]
 One-shot reset:
   - stop and remove the demo stack
   - wipe docker volumes (-v)
-  - rebuild/restart the stack
+  - restart the stack
   - wait for redis gateway readiness
   - optionally restart the local dashboard proxy
 
@@ -36,7 +36,8 @@ Options:
   --dashboard             restart dashboard_server.py after the cluster is ready
   --dashboard-port PORT   dashboard port (default: 18080)
   --interval SECONDS      repeat forever, sleeping this many seconds between cycles
-  --no-build              skip docker compose --build on startup
+  --build                 build the local image with docker-compose.dev.yml
+  --no-build              use the published image (default)
   --timeout SECONDS       readiness timeout waiting for redis ping (default: 120)
   --dry-run               print actions without executing them
   -h, --help              show this help
@@ -75,6 +76,10 @@ while [[ $# -gt 0 ]]; do
     --interval)
       INTERVAL="${2:-}"
       shift 2
+      ;;
+    --build)
+      BUILD=1
+      shift
       ;;
     --no-build)
       BUILD=0
@@ -115,7 +120,7 @@ fi
 
 compose_up() {
   if [[ "$BUILD" == "1" ]]; then
-    run docker compose up -d --build
+    run docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
   else
     run docker compose up -d
   fi
