@@ -28,6 +28,11 @@ type levelHandler struct {
 	ingestMergeDurationNs atomic.Int64
 	ingestTablesCompacted atomic.Uint64
 	ingestMergeTables     atomic.Uint64
+
+	// l0Sublevels groups L0 tables into non-overlapping sublevels for point
+	// reads. Only populated when levelNum == 0; nil otherwise. Rebuilt by
+	// sortTablesLocked().
+	l0Sublevels []l0Sublevel
 }
 
 type tableRange struct {
@@ -257,6 +262,9 @@ func (lh *levelHandler) sortTablesLocked() {
 		sort.Slice(lh.tables, func(i, j int) bool {
 			return lh.tables[i].fid < lh.tables[j].fid
 		})
+		// Rebuild sublevel layout for the read path. Compaction picker still
+		// reads lh.tables directly; sublevels exist only to accelerate Get.
+		lh.l0Sublevels = buildL0Sublevels(lh.tables)
 		return
 	}
 	// L1+ tables are non-overlapping by key range.
@@ -378,11 +386,19 @@ func (lh *levelHandler) selectTablesForKey(key []byte, record bool) []*table {
 	total := len(lh.tables)
 	fallback := false
 	var tables []*table
-	if lh.levelNum == 0 || len(lh.filter.spans) < rangeFilterMinSpanCount {
+	if lh.levelNum == 0 {
+		// L0 first tries the sublevel index, falling back to a linear scan
+		// if sublevels have not been built yet (e.g. between mutations).
+		tables = l0CandidateTables(lh.l0Sublevels, key)
+		if tables == nil {
+			fallback = true
+			tables = lh.getTablesForKeyLinear(key)
+		}
+	} else if len(lh.filter.spans) < rangeFilterMinSpanCount {
 		fallback = true
 		tables = lh.getTablesForKeyLinear(key)
 	} else {
-		if lh.levelNum > 0 && !lh.filter.nonOverlapping {
+		if !lh.filter.nonOverlapping {
 			fallback = true
 		}
 		tables = lh.filter.tablesForPoint(key)
