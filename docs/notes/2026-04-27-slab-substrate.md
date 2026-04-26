@@ -1,7 +1,12 @@
 # 2026-04-27 Slab Substrate：NoKV metadata primitives 的 typed sidecar 物理执行层
 
-> 状态：**Phase 0 已完成**（vlog `LogFile.Write` high-water race fix）。
-> 其余 phase 是 design proposal，待按本文路线分步落地。
+> 状态：**Phase 0–5 已落地，6 forward-ref**。Phase 0 在 PR #161；Phase 1–5
+> 在 `feature/slab-substrate` 分支：metadata default no-offload fast path
+> (Phase 1)、`engine/slab/Segment` 物理层抽出 (Phase 2)、persistent
+> Negative Slab (Phase 3)、SnapshotSlab spike → 不做 (Phase 4，独立 note)、
+> DirPageSlab RFC (Phase 5，独立 note) 都已 commit。Phase 5b（拆出
+> `engine/slab/Manager` + vlog 降级成 wrapper）在同一分支上完成。Phase 6
+> （UpdateSlab）独立 RFC，**不在本分支**。
 >
 > 本文是 vlog 重构的第三版 note。前两版（"MetaSlab redesign" / "Slab
 > substrate v1"）依次被 review 修正，最终切法不再是"重构 vlog"，而是
@@ -287,15 +292,18 @@ lifecycle** 是真正"NoKV 自己的东西"——前者直接对应 fsmeta primi
 
 | Phase | 动作 | Class | 状态 | 验证 |
 |---|---|---|---|---|
-| **0** | LogFile.Write high-water CAS | — | ✓ done | 1M+3KB 全 6 workload 第一 |
-| **0a** | manager 并发 AppendEntries+Read 测试 | — | ✓ done | invariant V1 显式覆盖 |
+| **0** | LogFile.Write high-water CAS | — | ✓ done (PR #161, b6b0dd25) | 1M+3KB 全 6 workload 第一 |
+| **0a** | manager 并发 AppendEntries+Read 测试 | — | ✓ done (PR #161) | invariant V1 显式覆盖 |
 | **0b** | 修正 design note（本文） | — | ✓ done | 本文 |
-| **1** | metadata default no-offload fast path | — | TODO | 1M+1KB metadata baseline |
-| **2** | 抽 `engine/slab/` 物理层；vlog 改 wrapper；加 SlabManifest（id/class/owner/state/frontier/checksum/path） | — | TODO | 现有 vlog 单测 + 1M+3KB bench 全绿 |
-| **3** | NegativeSlab | Derived | TODO | restart 后 cold-start latency 提升 |
-| **4** | SnapshotSlab + spike SST snapshot install 现状对比 | Lifecycle-bound | spike first | snapshot export 可以 sendfile |
-| **5** | **DirPageSlab**（最有创新价值） | Derived | TODO | 大目录 ReadDirPlus latency 显著下降 |
-| **6** | （future）UpdateSlab 独立 RFC | Transactional | independent | 先 design 后实现 |
+| **1** | metadata default no-offload fast path | — | ✓ done (c0458f03) | BenchmarkDBCommitVlogFastPath inline +22%~+64% |
+| **2** | 抽 `engine/slab/Segment` 物理层；vlog 文件层改 wrapper | — | ✓ done (083a71a0) | 现有 vlog 单测 + 1M+3KB bench 全绿 |
+| **2a** | `Segment` size 语义重做（Open=0, LoadSizeFromFile, Capacity） | — | ✓ done | TestSegmentFreshOpenSizeIsZero / TestSegmentLoadSizeFromFile |
+| **3** | NegativeSlab + 顶层 `NoKV.Options` 透传 | Derived | ✓ done (c0dbaa35 + 后续) | TestNegativeCachePersistsAcrossOpen |
+| **4** | SnapshotSlab spike → 不做 | Lifecycle-bound | ✓ done | `2026-04-27-snapshot-slab-spike.md` |
+| **5** | DirPageSlab RFC（API + 格式 + frontier） | Derived | ✓ RFC done | `2026-04-27-dirpage-slab-rfc.md` |
+| **5b** | 拆出 `engine/slab/Manager` + vlog 降级成 wrapper | — | ✓ done | 现有 vlog/lsm 全测 + 数据 race-free |
+| **5c-5f** | DirPageSlab 实现（page write/read、ReadDirPlus 集成、失效、bench） | Derived | TODO | 大目录 ReadDirPlus latency |
+| **6** | UpdateSlab 独立 RFC | Transactional | independent | 先 design 后实现，**不在本分支** |
 
 ## 10. 1M + 3KB bench baseline（vlog 路径走满）
 
