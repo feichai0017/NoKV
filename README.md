@@ -185,7 +185,8 @@ Documentation: [`docs/fsmeta.md`](docs/fsmeta.md) · [positioning note](docs/not
 ./scripts/dev/cluster.sh --config ./raft_config.example.json
 
 # Or: Docker Compose (cluster + fsmeta + Redis gateway, with mount-init bootstrap)
-docker compose up --build
+docker compose up -d --build
+scripts/demo/redis-smoke.sh
 ```
 
 ![NoKV demo](./img/nokv-demo.gif)
