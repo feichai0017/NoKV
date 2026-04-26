@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-587b1194.js";
+            window.path_to_searchindex_js = "searchindex-85f45741.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2018305d.js"></script>
@@ -376,7 +376,7 @@ make build
 
 # 2. Launch full cluster: meta-root + coordinator + 3 stores + fsmeta gateway
 ./scripts/dev/cluster.sh --config ./raft_config.example.json
-# (Or: docker compose up --build  — includes mount-init bootstrap)
+# (Or: docker compose up -d  — includes mount-init bootstrap)
 
 # 3. Register a mount (rooted authority)
 nokv mount register --coordinator-addr 127.0.0.1:2379 \
@@ -459,9 +459,22 @@ restart path for an already-running store.</p>
 <pre><code class="language-bash">go run ./cmd/nokv stats --workdir ./artifacts/cluster/store-1
 </code></pre>
 <h2 id="option-b-docker-compose"><a class="header" href="#option-b-docker-compose">Option B: Docker Compose</a></h2>
-<p>This runs the cluster and gateway in containers.</p>
-<pre><code class="language-bash">docker compose up -d --build
+<p>This runs the cluster and gateway in containers with the published GHCR image.</p>
+<pre><code class="language-bash">docker compose up -d
 scripts/demo/redis-smoke.sh
+</code></pre>
+<p>To force-refresh <code>:latest</code> before startup, use:</p>
+<pre><code class="language-bash">make docker-up
+</code></pre>
+<p><code>make docker-up</code> pulls the published image first. If the GHCR package is not
+published or public yet, it falls back to a local Docker build.</p>
+<p>For local Docker development builds from this checkout:</p>
+<pre><code class="language-bash">docker compose up -d --build
+</code></pre>
+<p>Local builds are tagged as the configured NoKV image. If you build locally and
+then want to return to the published <code>:latest</code>, run the pull command above.
+For reproducible runs, pin a published SHA tag:</p>
+<pre><code class="language-bash">NOKV_IMAGE_TAG=&lt;commit-sha&gt; docker compose up -d
 </code></pre>
 <p>Tear down:</p>
 <pre><code class="language-bash">docker compose down -v
@@ -5150,7 +5163,7 @@ is not present.</li>
 <p><code>nokv-fsmeta</code> 启动时先拉一次 <code>ListMounts</code> / <code>ListQuotaFences</code> / <code>ListSubtreeAuthorities</code> 做 bootstrap，然后通过 <code>WatchRootEvents</code> 跟随后续变化。<code>MonitorInterval</code> 是 root-event stream 断开后的重连 backoff；它不是 steady-state polling interval。</p>
 <h2 id="7-部署"><a class="header" href="#7-部署">7. 部署</a></h2>
 <p>Docker Compose 会启动 meta-root、coordinator、raftstore、fsmeta gateway、Redis gateway，并通过 <code>mount-init</code> 注册默认 mount：</p>
-<pre><code class="language-bash">docker compose up -d --build
+<pre><code class="language-bash">docker compose up -d
 </code></pre>
 <p>直接启动 fsmeta gateway：</p>
 <pre><code class="language-bash">go run ./cmd/nokv-fsmeta \
@@ -6403,8 +6416,8 @@ library</li>
 <p>One-command demo of the full 333 HA topology (3 meta-root + 3 coordinator +
 3 store + 1 Redis gateway) with a live browser dashboard.</p>
 <h2 id="one-shot-startup"><a class="header" href="#one-shot-startup">One-shot startup</a></h2>
-<pre><code class="language-bash"># Build images + start every service + run bootstrap once
-docker compose up -d --build
+<pre><code class="language-bash"># Pull image + start every service + run bootstrap once
+docker compose up -d
 
 # Wait for the Redis-compatible gateway and verify write/read persistence
 scripts/demo/redis-smoke.sh
@@ -6869,7 +6882,7 @@ go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedP
 <li>
 <p>Start NoKV and Coordinator using the helper script or Docker Compose. Both consume <code>raft_config.example.json</code>, initialise manifests for each store, and launch <code>nokv coordinator</code> automatically:</p>
 <pre><code class="language-bash">./scripts/dev/cluster.sh
-# or: docker compose up --build
+# or: docker compose up -d
 </code></pre>
 </li>
 <li>
@@ -7098,7 +7111,7 @@ go run ./cmd/nokv coordinator --addr 127.0.0.1:2379 --id-start 1 --ts-start 100 
 # Tear down with Ctrl+C
 
 # Docker-compose sandbox (3 nodes + Coordinator)
-docker compose up --build
+docker compose up -d
 docker compose down -v
 
 # Build RocksDB locally (installs into ./third_party/rocksdb/dist by default)

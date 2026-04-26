@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-587b1194.js";
+            window.path_to_searchindex_js = "searchindex-85f45741.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2018305d.js"></script>
@@ -214,9 +214,22 @@ restart path for an already-running store.</p>
 <pre><code class="language-bash">go run ./cmd/nokv stats --workdir ./artifacts/cluster/store-1
 </code></pre>
 <h2 id="option-b-docker-compose"><a class="header" href="#option-b-docker-compose">Option B: Docker Compose</a></h2>
-<p>This runs the cluster and gateway in containers.</p>
-<pre><code class="language-bash">docker compose up -d --build
+<p>This runs the cluster and gateway in containers with the published GHCR image.</p>
+<pre><code class="language-bash">docker compose up -d
 scripts/demo/redis-smoke.sh
+</code></pre>
+<p>To force-refresh <code>:latest</code> before startup, use:</p>
+<pre><code class="language-bash">make docker-up
+</code></pre>
+<p><code>make docker-up</code> pulls the published image first. If the GHCR package is not
+published or public yet, it falls back to a local Docker build.</p>
+<p>For local Docker development builds from this checkout:</p>
+<pre><code class="language-bash">docker compose up -d --build
+</code></pre>
+<p>Local builds are tagged as the configured NoKV image. If you build locally and
+then want to return to the published <code>:latest</code>, run the pull command above.
+For reproducible runs, pin a published SHA tag:</p>
+<pre><code class="language-bash">NOKV_IMAGE_TAG=&lt;commit-sha&gt; docker compose up -d
 </code></pre>
 <p>Tear down:</p>
 <pre><code class="language-bash">docker compose down -v

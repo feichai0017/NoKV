@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-587b1194.js";
+            window.path_to_searchindex_js = "searchindex-85f45741.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2018305d.js"></script>
@@ -210,7 +210,7 @@ go run ./cmd/nokv coordinator --addr 127.0.0.1:2379 --id-start 1 --ts-start 100 
 # Tear down with Ctrl+C
 
 # Docker-compose sandbox (3 nodes + Coordinator)
-docker compose up --build
+docker compose up -d
 docker compose down -v
 
 # Build RocksDB locally (installs into ./third_party/rocksdb/dist by default)

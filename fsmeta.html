@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-587b1194.js";
+            window.path_to_searchindex_js = "searchindex-85f45741.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2018305d.js"></script>
@@ -314,7 +314,7 @@
 <p><code>nokv-fsmeta</code> 启动时先拉一次 <code>ListMounts</code> / <code>ListQuotaFences</code> / <code>ListSubtreeAuthorities</code> 做 bootstrap，然后通过 <code>WatchRootEvents</code> 跟随后续变化。<code>MonitorInterval</code> 是 root-event stream 断开后的重连 backoff；它不是 steady-state polling interval。</p>
 <h2 id="7-部署"><a class="header" href="#7-部署">7. 部署</a></h2>
 <p>Docker Compose 会启动 meta-root、coordinator、raftstore、fsmeta gateway、Redis gateway，并通过 <code>mount-init</code> 注册默认 mount：</p>
-<pre><code class="language-bash">docker compose up -d --build
+<pre><code class="language-bash">docker compose up -d
 </code></pre>
 <p>直接启动 fsmeta gateway：</p>
 <pre><code class="language-bash">go run ./cmd/nokv-fsmeta \
