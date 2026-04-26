@@ -476,25 +476,33 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		segmentMetrics map[uint32]wal.RecordMetrics
 		ptrs           map[uint64]localmeta.RaftLogPointer
 	)
-	// Aggregate metrics across every LSM data-plane WAL shard. Active
-	// segment is the highest active across shards (most-recently-rotated
-	// shard wins) since the snapshot is a coarse health signal, not a
-	// per-shard breakdown.
+	// Aggregate metrics across every LSM data-plane WAL shard. Each
+	// shard owns its own fd / fsync worker, so we sum SegmentCount /
+	// RecordCounts and take the highest ActiveSegment as a coarse
+	// health signal. Per-segment metrics are unioned (segment IDs are
+	// allocated from a single global counter so they never collide
+	// across shards).
+	var aggregated wal.Metrics
+	var anyShardStats bool
 	for _, mgr := range s.db.lsmWALs {
 		if mgr == nil {
 			continue
 		}
 		shardStats := mgr.Metrics()
 		if shardStats != nil {
-			if int64(shardStats.ActiveSegment) > snap.WAL.ActiveSegment {
-				snap.WAL.ActiveSegment = int64(shardStats.ActiveSegment)
+			anyShardStats = true
+			if shardStats.ActiveSegment > aggregated.ActiveSegment {
+				aggregated.ActiveSegment = shardStats.ActiveSegment
 			}
-			snap.WAL.ActiveSize += shardStats.ActiveSize
-			snap.WAL.SegmentCount += int64(shardStats.SegmentCount)
-			snap.WAL.SegmentsRemoved += shardStats.RemovedSegments
-			if wstats == nil {
-				wstats = shardStats
-			}
+			aggregated.ActiveSize += shardStats.ActiveSize
+			aggregated.SegmentCount += shardStats.SegmentCount
+			aggregated.RemovedSegments += shardStats.RemovedSegments
+			aggregated.SegmentsWithRaftRecords += shardStats.SegmentsWithRaftRecords
+			aggregated.RecordCounts.Entries += shardStats.RecordCounts.Entries
+			aggregated.RecordCounts.RaftEntries += shardStats.RecordCounts.RaftEntries
+			aggregated.RecordCounts.RaftStates += shardStats.RecordCounts.RaftStates
+			aggregated.RecordCounts.RaftSnapshots += shardStats.RecordCounts.RaftSnapshots
+			aggregated.RecordCounts.Other += shardStats.RecordCounts.Other
 		}
 		shardSegments := mgr.SegmentMetrics()
 		if segmentMetrics == nil {
@@ -504,6 +512,13 @@ func (s *Stats) Snapshot() StatsSnapshot {
 				segmentMetrics[k] = v
 			}
 		}
+	}
+	if anyShardStats {
+		wstats = &aggregated
+		snap.WAL.ActiveSegment = int64(aggregated.ActiveSegment)
+		snap.WAL.ActiveSize = aggregated.ActiveSize
+		snap.WAL.SegmentCount = int64(aggregated.SegmentCount)
+		snap.WAL.SegmentsRemoved = aggregated.RemovedSegments
 	}
 	if s.db.opt != nil && s.db.opt.RaftPointerSnapshot != nil {
 		ptrs = s.db.opt.RaftPointerSnapshot()

@@ -31,10 +31,6 @@ func (noopTransport) Send(context.Context, myraft.Message) {}
 func openTestDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
-	// Percolator-backed kv service tests rely on same-startTS write
-	// ordering. Multi-shard round-robin breaks that until per-key
-	// affinity routing lands; pin to one shard.
-	opt.LSMShardCount = 1
 	localMeta, err := localmeta.OpenLocalStore(opt.WorkDir, nil)
 	require.NoError(t, err)
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot

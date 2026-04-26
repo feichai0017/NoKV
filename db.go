@@ -264,8 +264,12 @@ func (db *DB) startWriteRuntime() {
 		workers = 1
 	}
 	db.commitDispatch = make([]chan *dbruntime.CommitBatch, workers)
+	// Large per-shard channel: lets the dispatcher run ahead of slow
+	// processors so drain (in runCommitBurst) sees multiple batches and
+	// coalesces them into one WAL append + flush + (optional) sync.
+	// Bytes are negligible (32 * 8B = 256B per shard).
 	for i := 0; i < workers; i++ {
-		db.commitDispatch[i] = make(chan *dbruntime.CommitBatch, 2)
+		db.commitDispatch[i] = make(chan *dbruntime.CommitBatch, 32)
 	}
 
 	db.commitWG.Add(1)
@@ -1282,21 +1286,71 @@ func (db *DB) commitDispatcher() {
 	}
 	defer consumer.Close()
 	n := len(db.commitDispatch)
-	var rr int
+	var rrFallback int
 	for {
 		batch := db.nextCommitBatch(consumer)
 		if batch == nil {
 			closeAll()
 			return
 		}
-		shardID := rr
-		rr++
-		if rr >= n {
-			rr = 0
-		}
+		shardID := db.shardForBatch(batch, n, &rrFallback)
 		batch.ShardID = shardID
 		db.commitDispatch[shardID] <- batch
 	}
+}
+
+// shardForBatch picks the destination shard for a commit batch using
+// per-key affinity: hash the user key of the batch's first entry and mod
+// by the shard count. This keeps every write to the same key on the
+// same shard so percolator's same-startTS lock-on/lock-off and any other
+// "later same-version write wins" pattern stays correct.
+//
+// The whole batch is still pinned to one shard end-to-end (preserves
+// SetBatch atomicity at the LSM level). When a batch carries entries
+// for multiple keys, the shard is chosen by the first key — peers in
+// the same batch land there too. They will be re-routed to their own
+// shard on later writes (when those keys arrive in their own batches),
+// which is harmless because subsequent reads merge across all shards.
+//
+// Empty batches (no key to hash) round-robin via *rr to keep load even.
+func (db *DB) shardForBatch(batch *dbruntime.CommitBatch, n int, rr *int) int {
+	if n <= 1 {
+		return 0
+	}
+	if batch != nil {
+		for _, cr := range batch.Reqs {
+			if cr == nil || cr.Req == nil {
+				continue
+			}
+			for _, e := range cr.Req.Entries {
+				if e == nil || len(e.Key) == 0 {
+					continue
+				}
+				_, userKey, _, ok := kv.SplitInternalKey(e.Key)
+				if !ok || len(userKey) == 0 {
+					continue
+				}
+				return int(fnv1a32(userKey)) & (n - 1)
+			}
+		}
+	}
+	id := *rr
+	*rr++
+	if *rr >= n {
+		*rr = 0
+	}
+	return id
+}
+
+// fnv1a32 is the inline FNV-1a 32-bit hash used by shard routing. It
+// avoids the hash/fnv allocation per call.
+func fnv1a32(b []byte) uint32 {
+	var h uint32 = 2166136261
+	for _, c := range b {
+		h ^= uint32(c)
+		h *= 16777619
+	}
+	return h
 }
 
 // commitProcessor runs the per-batch CPU pipeline (collect -> vlog write ->
@@ -1305,71 +1359,222 @@ func (db *DB) commitDispatcher() {
 // is inline) WAL fsync all hit one Manager, so there is no Manager.mu
 // contention across processors.
 //
-// SetBatch atomicity is preserved because a single commit request lives in
-// exactly one batch, and that batch is pinned to one shard by the
-// dispatcher.
+// Burst coalescing: when the dispatcher delivers small batches faster
+// than the processor can drain them, the processor pulls every batch
+// already sitting in its channel and merges them into a single
+// vlog.write + lsm.SetBatchGroup + (optional) Sync. That collapses N
+// fsync/flush syscalls into one per burst — the bufio.Flush hotspot
+// pprof identified at 47% under N=4. SetBatch atomicity is preserved
+// because each batch's groups are still atomic (LSM processes them in
+// order with per-group atomicity); failedAt from the merged apply is
+// fanned back out to the originating batches.
 func (db *DB) commitProcessor(shardID int) {
 	defer db.commitWG.Done()
 	walMgr := db.lsmWALs[shardID]
-	for batch := range db.commitDispatch[shardID] {
-		batch.BatchStart = time.Now()
-		requests, totalEntries, totalSize, waitSum := db.collectCommitRequests(batch.Reqs, batch.BatchStart)
-		if len(requests) == 0 {
-			db.ackCommitBatch(batch.Reqs, batch.Pool, nil, -1, nil)
-			continue
+	burst := make([]*dbruntime.CommitBatch, 0, 8)
+	for first := range db.commitDispatch[shardID] {
+		burst = burst[:0]
+		burst = append(burst, first)
+		// Drain any extra batches already sitting in the channel.
+	drain:
+		for {
+			select {
+			case b, ok := <-db.commitDispatch[shardID]:
+				if !ok {
+					break drain
+				}
+				burst = append(burst, b)
+			default:
+				break drain
+			}
 		}
+		db.runCommitBurst(walMgr, shardID, burst)
+	}
+}
+
+// runCommitBurst processes a burst of batches as a single WAL append +
+// memtable apply, then fans the result back to each batch for ack.
+func (db *DB) runCommitBurst(walMgr *wal.Manager, shardID int, burst []*dbruntime.CommitBatch) {
+	if len(burst) == 0 {
+		return
+	}
+	// Fast path: when only one batch is ready, skip the merge bookkeeping
+	// (boundaries / perBatchFailedAt allocations, request-list copy). At
+	// high N the dispatcher rarely buffers more than one batch per shard
+	// and the merge cost dominates the savings.
+	if len(burst) == 1 {
+		db.runSingleCommit(walMgr, shardID, burst[0])
+		return
+	}
+	burstStart := time.Now()
+	// Per-batch metadata + flattened request list. boundaries[i] is the
+	// start index of batch i's requests in mergedRequests.
+	boundaries := make([]int, len(burst)+1)
+	var mergedRequests []*dbruntime.Request
+	for i, batch := range burst {
+		batch.BatchStart = burstStart
+		requests, totalEntries, totalSize, waitSum := db.collectCommitRequests(batch.Reqs, burstStart)
 		batch.Requests = requests
 		if db.writeMetrics != nil {
 			db.writeMetrics.RecordBatch(len(requests), totalEntries, totalSize, waitSum)
 		}
+		boundaries[i] = len(mergedRequests)
+		mergedRequests = append(mergedRequests, requests...)
+	}
+	boundaries[len(burst)] = len(mergedRequests)
 
-		err := db.vlog.write(requests)
-		if err != nil {
-			db.ackCommitBatch(batch.Reqs, batch.Pool, requests, -1, err)
-			continue
+	if len(mergedRequests) == 0 {
+		for _, batch := range burst {
+			db.ackCommitBatch(batch.Reqs, batch.Pool, nil, -1, nil)
 		}
-		if db.writeMetrics != nil {
-			batch.ValueLogDur = max(time.Since(batch.BatchStart), 0)
-			if batch.ValueLogDur > 0 {
-				db.writeMetrics.RecordValueLog(batch.ValueLogDur)
+		return
+	}
+
+	if err := db.vlog.write(mergedRequests); err != nil {
+		// Whole burst failed before reaching LSM. Each batch's whole
+		// request set is unapplied — failedAt = -1 means "ack with
+		// the default error for every request".
+		for _, batch := range burst {
+			db.ackCommitBatch(batch.Reqs, batch.Pool, batch.Requests, -1, err)
+		}
+		return
+	}
+
+	vlogDur := max(time.Since(burstStart), 0)
+	if db.writeMetrics != nil && vlogDur > 0 {
+		db.writeMetrics.RecordValueLog(vlogDur)
+	}
+	for _, batch := range burst {
+		batch.ValueLogDur = vlogDur
+	}
+
+	mergedFailedAt, applyErr := db.applyRequests(mergedRequests, shardID)
+	// Fan mergedFailedAt back to per-batch failedAt:
+	// - if mergedFailedAt == -1: every batch succeeded (-1).
+	// - else find batch k containing it; batches < k succeeded (-1),
+	//   batch k partially failed at (mergedFailedAt - boundaries[k]),
+	//   batches > k were not attempted (failedAt = 0).
+	perBatchFailedAt := make([]int, len(burst))
+	if mergedFailedAt < 0 {
+		for i := range perBatchFailedAt {
+			perBatchFailedAt[i] = -1
+		}
+	} else {
+		// boundaries length is len(burst)+1; binary or linear search.
+		for i := range burst {
+			switch {
+			case mergedFailedAt >= boundaries[i+1]:
+				perBatchFailedAt[i] = -1
+			case mergedFailedAt < boundaries[i]:
+				perBatchFailedAt[i] = 0
+			default:
+				perBatchFailedAt[i] = mergedFailedAt - boundaries[i]
 			}
 		}
+	}
 
-		failedAt, err := db.applyRequests(batch.Requests, shardID)
-		if err == nil && db.syncQueue != nil {
+	if applyErr == nil && db.syncQueue != nil {
+		// Hand each batch off to the sync worker individually so
+		// per-batch ack ordering is preserved.
+		for i, batch := range burst {
 			sb := &dbruntime.SyncBatch{
 				Reqs:      batch.Reqs,
 				Pool:      batch.Pool,
 				Requests:  batch.Requests,
 				ShardID:   shardID,
-				FailedAt:  failedAt,
+				FailedAt:  perBatchFailedAt[i],
 				ApplyDone: time.Now(),
 			}
 			batch.Reqs = nil
 			batch.Pool = nil
 			db.releaseCommitBatch(batch)
 			db.syncQueue <- sb
-			continue
 		}
-
-		if err == nil && db.opt.SyncWrites {
-			syncStart := time.Now()
-			err = walMgr.Sync()
-			if db.writeMetrics != nil {
-				db.writeMetrics.RecordSync(time.Since(syncStart), 1)
-			}
-		}
-
-		if db.writeMetrics != nil {
-			totalDur := max(time.Since(batch.BatchStart), 0)
-			applyDur := max(totalDur-batch.ValueLogDur, 0)
-			if applyDur > 0 {
-				db.writeMetrics.RecordApply(applyDur)
-			}
-		}
-
-		db.ackCommitBatch(batch.Reqs, batch.Pool, batch.Requests, failedAt, err)
+		return
 	}
+
+	syncErr := applyErr
+	if applyErr == nil && db.opt.SyncWrites {
+		syncStart := time.Now()
+		syncErr = walMgr.Sync()
+		if db.writeMetrics != nil {
+			db.writeMetrics.RecordSync(time.Since(syncStart), len(burst))
+		}
+	}
+
+	if db.writeMetrics != nil {
+		totalDur := max(time.Since(burstStart), 0)
+		applyDur := max(totalDur-vlogDur, 0)
+		if applyDur > 0 {
+			db.writeMetrics.RecordApply(applyDur)
+		}
+	}
+
+	for i, batch := range burst {
+		db.ackCommitBatch(batch.Reqs, batch.Pool, batch.Requests, perBatchFailedAt[i], syncErr)
+	}
+}
+
+// runSingleCommit is the burst-size-1 fast path. It mirrors the Phase-2
+// per-batch pipeline (no merge / boundaries / per-batch failedAt fan-out)
+// to eliminate coalesce overhead when there is no extra batch to drain.
+func (db *DB) runSingleCommit(walMgr *wal.Manager, shardID int, batch *dbruntime.CommitBatch) {
+	batch.BatchStart = time.Now()
+	requests, totalEntries, totalSize, waitSum := db.collectCommitRequests(batch.Reqs, batch.BatchStart)
+	if len(requests) == 0 {
+		db.ackCommitBatch(batch.Reqs, batch.Pool, nil, -1, nil)
+		return
+	}
+	batch.Requests = requests
+	if db.writeMetrics != nil {
+		db.writeMetrics.RecordBatch(len(requests), totalEntries, totalSize, waitSum)
+	}
+
+	if err := db.vlog.write(requests); err != nil {
+		db.ackCommitBatch(batch.Reqs, batch.Pool, requests, -1, err)
+		return
+	}
+	if db.writeMetrics != nil {
+		batch.ValueLogDur = max(time.Since(batch.BatchStart), 0)
+		if batch.ValueLogDur > 0 {
+			db.writeMetrics.RecordValueLog(batch.ValueLogDur)
+		}
+	}
+
+	failedAt, err := db.applyRequests(batch.Requests, shardID)
+	if err == nil && db.syncQueue != nil {
+		sb := &dbruntime.SyncBatch{
+			Reqs:      batch.Reqs,
+			Pool:      batch.Pool,
+			Requests:  batch.Requests,
+			ShardID:   shardID,
+			FailedAt:  failedAt,
+			ApplyDone: time.Now(),
+		}
+		batch.Reqs = nil
+		batch.Pool = nil
+		db.releaseCommitBatch(batch)
+		db.syncQueue <- sb
+		return
+	}
+
+	if err == nil && db.opt.SyncWrites {
+		syncStart := time.Now()
+		err = walMgr.Sync()
+		if db.writeMetrics != nil {
+			db.writeMetrics.RecordSync(time.Since(syncStart), 1)
+		}
+	}
+
+	if db.writeMetrics != nil {
+		totalDur := max(time.Since(batch.BatchStart), 0)
+		applyDur := max(totalDur-batch.ValueLogDur, 0)
+		if applyDur > 0 {
+			db.writeMetrics.RecordApply(applyDur)
+		}
+	}
+
+	db.ackCommitBatch(batch.Reqs, batch.Pool, batch.Requests, failedAt, err)
 }
 
 func (db *DB) syncWorker() {

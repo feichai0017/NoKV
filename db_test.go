@@ -97,14 +97,7 @@ func openTestDB(t testing.TB, opt *Options) *DB {
 
 func TestColumnFamilies(t *testing.T) {
 	clearDir()
-	// This test writes the same userKey twice with the same version
-	// (nonTxnMaxVersion) and relies on later-write-wins semantics. With
-	// multiple LSM shards and round-robin batch routing the two writes
-	// land in different memtables with no MVCC tiebreaker. Pin to one
-	// shard so the test's same-version semantics hold.
-	pinned := *opt
-	pinned.LSMShardCount = 1
-	db := openTestDB(t, &pinned)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	key := []byte("user-key")
@@ -2144,6 +2137,8 @@ func TestRecoveryWALReplayTruncatedTailBatchIsNotPartiallyApplied(t *testing.T) 
 		opt.MemTableEngine = engine
 		// Both writes need to land in one WAL so the truncation hits the
 		// batch tail rather than orphaning the anchor on a peer shard.
+		// (anchor and the batch's first key hash to different shards
+		// under N=4.)
 		opt.LSMShardCount = 1
 
 		db := openTestDB(t, opt)
@@ -2210,15 +2205,19 @@ func TestRecoveryVlogPointerRoundTripAfterReopen(t *testing.T) {
 
 func TestCloseAggregatesWalAndDirLockErrors(t *testing.T) {
 	dir := t.TempDir()
-	// Inject the fault on shard 0's WAL — the only one Set() touches.
-	walPath := filepath.Join(dir, "lsm-wal-00", "00001.wal")
+	// Per-key affinity routes Set("k") to one of N shards; arm the fault
+	// on every shard's wal-00001 second sync — only the routed shard fires.
 	walSyncErr := errors.New("wal sync close error")
 	dirCloseErr := errors.New("dir lock close error")
-	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
-		// Open() recovery may issue one sync on the active segment; fail the next
-		// one so the error is observed during DB.Close aggregation.
-		vfs.FailOnNthRule(vfs.OpFileSync, walPath, 2, walSyncErr),
-	))
+	rules := make([]vfs.FaultRule, 0, 8)
+	for shard := 0; shard < 8; shard++ {
+		rules = append(rules, vfs.FailOnNthRule(
+			vfs.OpFileSync,
+			filepath.Join(dir, fmt.Sprintf("lsm-wal-%02d", shard), "00001.wal"),
+			2, walSyncErr,
+		))
+	}
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(rules...))
 
 	opt := newTestOptions(t)
 	opt.WorkDir = dir
@@ -2243,12 +2242,18 @@ func TestCloseAggregatesWalAndDirLockErrors(t *testing.T) {
 
 func TestFaultFSWriteFailureThenRecoverableReopen(t *testing.T) {
 	dir := t.TempDir()
-	// Set("first") routes to shard 0; inject the fault there.
-	walPath := filepath.Join(dir, "lsm-wal-00", "00001.wal")
+	// Per-key affinity routes the write to one of N shards; arm a fault
+	// on every shard's wal-00001 — only one fires.
 	injected := errors.New("wal write injected")
-	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
-		vfs.FailOnceRule(vfs.OpFileWrite, walPath, injected),
-	))
+	rules := make([]vfs.FaultRule, 0, 8)
+	for shard := 0; shard < 8; shard++ {
+		rules = append(rules, vfs.FailOnceRule(
+			vfs.OpFileWrite,
+			filepath.Join(dir, fmt.Sprintf("lsm-wal-%02d", shard), "00001.wal"),
+			injected,
+		))
+	}
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(rules...))
 
 	opt := newTestOptions(t)
 	opt.WorkDir = dir

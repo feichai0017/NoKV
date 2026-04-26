@@ -6,7 +6,6 @@ import (
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"os"
 	"path/filepath"
-	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -25,12 +24,6 @@ func testOptionsForDir(dir string) *NoKV.Options {
 	opt.SSTableMaxSz = 1 << 20
 	opt.ValueLogFileSize = 1 << 20
 	opt.ValueThreshold = utils.DefaultValueThreshold
-	// Percolator's lock CF protocol writes lock-on then lock-off at the
-	// same start TS for a given key. With multi-shard round-robin those
-	// two writes can land on different shards' memtables and the read
-	// path has no MVCC tiebreaker for equal versions. Pin to one shard
-	// until Phase 3 introduces per-key affinity routing.
-	opt.LSMShardCount = 1
 	return opt
 }
 
@@ -51,12 +44,27 @@ func applyVersionedEntryForTxnTest(t *testing.T, db *NoKV.DB, cf kv.ColumnFamily
 
 func latestWALPath(t *testing.T, dir string) string {
 	t.Helper()
-	// LSM data plane is sharded into <dir>/lsm-wal-XX/.
+	// LSM data plane is sharded into <dir>/lsm-wal-XX/. Per-key affinity
+	// sends every write for one key to one shard, so the "active" WAL is
+	// whichever shard's segment is largest — that's the one tests want
+	// to truncate.
 	files, err := filepath.Glob(filepath.Join(dir, "lsm-wal-*", "*.wal"))
 	require.NoError(t, err)
 	require.NotEmpty(t, files)
-	sort.Strings(files)
-	return files[len(files)-1]
+	var (
+		bestPath string
+		bestSize int64
+	)
+	for _, f := range files {
+		info, err := os.Stat(f)
+		require.NoError(t, err)
+		if info.Size() > bestSize {
+			bestSize = info.Size()
+			bestPath = f
+		}
+	}
+	require.NotEmpty(t, bestPath)
+	return bestPath
 }
 
 func truncateTail(t *testing.T, path string, trim int64) {
