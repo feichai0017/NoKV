@@ -63,6 +63,40 @@ func TestCompactionMoveToIngest(t *testing.T) {
 	}
 }
 
+func TestCompactionTrivialMoveToNextLevel(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	tbl := buildTableWithEntry(t, lsm, 1101, "trivial-move", 3, "value")
+	src := lsm.levels.levels[1]
+	dst := lsm.levels.levels[2]
+	src.add(tbl)
+
+	cd := buildCompactDef(lsm, 0, 1, 2)
+	cd.top = []*table{tbl}
+	cd.plan.TopIDs = []uint64{tbl.fid}
+	cd.plan.ThisRange = getKeyRange(tbl)
+	cd.plan.NextRange = cd.plan.ThisRange
+	cd.thisSize = tbl.Size()
+
+	beforeRef := tbl.Load()
+	require.True(t, lsm.levels.canMoveToNextLevel(cd))
+	require.NoError(t, lsm.levels.moveToNextLevel(cd))
+	require.Equal(t, beforeRef, tbl.Load())
+	require.Equal(t, int32(2), tbl.lvl.Load())
+
+	require.Empty(t, src.tablesSnapshot())
+	got := dst.tablesSnapshot()
+	require.Len(t, got, 1)
+	require.Equal(t, tbl.fid, got[0].fid)
+
+	version := lsm.levels.manifestMgr.Current()
+	require.Empty(t, version.Levels[1])
+	require.Len(t, version.Levels[2], 1)
+	require.Equal(t, tbl.fid, version.Levels[2][0].FileID)
+}
+
 func TestCompactBuildTablesOverlappingBotTablesKeepsOrder(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()

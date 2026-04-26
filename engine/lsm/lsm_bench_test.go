@@ -55,7 +55,7 @@ func newBenchLSMWithEngine(b *testing.B, memTableSize int64, memTableEngine stri
 		CompactionValueWeight:         0.35,
 		CompactionValueAlertThreshold: 0.6,
 	}
-	lsm, err := NewLSM(opt, wlog)
+	lsm, err := NewLSM(opt, []*wal.Manager{wlog})
 	if err != nil {
 		b.Fatalf("new lsm: %v", err)
 	}
@@ -89,9 +89,12 @@ func waitForFlush(b *testing.B, lsm *LSM) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if lsm.FlushPending() == 0 {
-			lsm.lock.RLock()
-			pending := len(lsm.immutables)
-			lsm.lock.RUnlock()
+			pending := 0
+			for _, s := range lsm.shards {
+				s.lock.RLock()
+				pending += len(s.immutables)
+				s.lock.RUnlock()
+			}
 			if pending == 0 {
 				return
 			}
@@ -204,7 +207,7 @@ func BenchmarkLSMMemtableIterSeek(b *testing.B) {
 					b.Fatalf("seed memtable: %v", err)
 				}
 			}
-			it := lsm.memTable.NewIterator(&index.Options{IsAsc: true})
+			it := lsm.shards[0].memTable.NewIterator(&index.Options{IsAsc: true})
 			defer func() { _ = it.Close() }()
 			b.ReportAllocs()
 			b.ResetTimer()

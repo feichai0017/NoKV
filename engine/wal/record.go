@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/feichai0017/NoKV/engine/kv"
 )
@@ -94,43 +95,117 @@ func DecodeRecord(r io.Reader) (RecordType, []byte, uint32, error) {
 	return recType, payload, length, nil
 }
 
-func EncodeRecord(w io.Writer, recType RecordType, payload []byte) (int, error) {
-	total := len(payload) + 1 // Type byte + payload length.
-	length := uint32(total)
-
-	var hdr [4]byte
-	binary.BigEndian.PutUint32(hdr[:], length)
-	if _, err := w.Write(hdr[:]); err != nil {
-		return 0, err
-	}
-
+// EncodeRecordTo appends one WAL record's on-disk encoding to dst and returns
+// the extended slice. The encoded layout matches EncodeRecord:
+//
+//	[4 BE length][1 type][payload bytes][4 BE CRC32]
+//
+// where length covers (type + payload) and CRC32 covers (type + payload).
+//
+// This decouples the CPU work (CRC + serialization) from any io.Writer so that
+// callers in AppendRecords can encode records outside m.mu in parallel and
+// then briefly hold the lock only for the bufio copy step.
+func EncodeRecordTo(dst []byte, recType RecordType, payload []byte) []byte {
 	typeByte := byte(recType)
-	if _, err := w.Write([]byte{typeByte}); err != nil {
-		return 0, err
-	}
+	payloadLen := uint32(len(payload) + 1) // type byte + payload
 
-	if _, err := w.Write(payload); err != nil {
-		return 0, err
-	}
+	// 4-byte length header.
+	var hdr [4]byte
+	binary.BigEndian.PutUint32(hdr[:], payloadLen)
+	dst = append(dst, hdr[:]...)
 
-	hasher := kv.CRC32()
-	typeBuf := [1]byte{typeByte}
-	if _, err := hasher.Write(typeBuf[:]); err != nil {
-		kv.PutCRC32(hasher)
-		return 0, err
-	}
-	if _, err := hasher.Write(payload); err != nil {
-		kv.PutCRC32(hasher)
-		return 0, err
-	}
-	var crcBuf [4]byte
-	binary.BigEndian.PutUint32(crcBuf[:], hasher.Sum32())
-	kv.PutCRC32(hasher)
-	if _, err := w.Write(crcBuf[:]); err != nil {
-		return 0, err
-	}
+	// 1-byte type.
+	dst = append(dst, typeByte)
 
-	return int(length) + 8, nil // length + 4 bytes for header + 4 bytes for CRC.
+	// payload bytes.
+	dst = append(dst, payload...)
+
+	// CRC32 over (type + payload).
+	h := kv.CRC32()
+	_, _ = h.Write([]byte{typeByte})
+	_, _ = h.Write(payload)
+	crc := h.Sum32()
+	kv.PutCRC32(h)
+
+	binary.BigEndian.PutUint32(hdr[:], crc)
+	dst = append(dst, hdr[:]...)
+	return dst
+}
+
+// EncodedRecordSize returns the number of on-disk bytes produced by
+// EncodeRecordTo for a payload of length n.
+//
+//	[4 length][1 type][n payload][4 CRC] = 9 + n
+func EncodedRecordSize(payloadLen int) int {
+	return 9 + payloadLen
+}
+
+// EncodeRecord is a convenience wrapper that streams one record's encoding to
+// w. Retained for callers that already have a writer; AppendRecords no longer
+// uses it on the hot path.
+func EncodeRecord(w io.Writer, recType RecordType, payload []byte) (int, error) {
+	encoded := EncodeRecordTo(nil, recType, payload)
+	n, err := w.Write(encoded)
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// recordBufPool reuses scratch byte slices for AppendRecords' lock-free
+// encoding phase. The slice is filled outside m.mu and copied into the WAL
+// bufio writer under the lock, so the pool is safe to reuse.
+var recordBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, 4<<10) // 4 KiB initial cap
+		return &b
+	},
+}
+
+func acquireRecordBuf() *[]byte {
+	bp := recordBufPool.Get().(*[]byte)
+	*bp = (*bp)[:0]
+	return bp
+}
+
+func releaseRecordBuf(bp *[]byte) {
+	if bp == nil {
+		return
+	}
+	const maxPooledCap = 1 << 20 // 1 MiB
+	if cap(*bp) > maxPooledCap {
+		return
+	}
+	recordBufPool.Put(bp)
+}
+
+// entryBufPool reuses the short-lived per-entry encoding buffer used by
+// EncodeEntryBatch. Each entry's encoded bytes are copied into the outer
+// output buffer immediately, so the per-entry buffer can be safely returned
+// to the pool after the batch encode completes. The outer output buffer is
+// NOT pooled because its slice escapes to the caller; reusing it would race
+// with the next EncodeEntryBatch on a different goroutine.
+var entryBufPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
+}
+
+func acquireEntryBuf() *bytes.Buffer {
+	buf := entryBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	return buf
+}
+
+func releaseEntryBuf(buf *bytes.Buffer) {
+	if buf == nil {
+		return
+	}
+	// Drop oversized buffers so a single huge entry does not pin a large
+	// allocation forever in the pool.
+	const maxPooledCap = 1 << 20 // 1 MiB
+	if buf.Cap() > maxPooledCap {
+		return
+	}
+	entryBufPool.Put(buf)
 }
 
 // EncodeEntryBatch encodes entries into a single payload suitable for RecordTypeEntryBatch.
@@ -145,18 +220,23 @@ func EncodeEntryBatch(entries []*kv.Entry) ([]byte, error) {
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("wal: empty entry batch")
 	}
+	// Outer out buffer is fresh per-call because its byte slice escapes.
+	// The per-entry scratch buffer is pooled (its bytes get copied into out
+	// immediately so reuse is safe).
 	var out bytes.Buffer
+	entryBuf := acquireEntryBuf()
+	defer releaseEntryBuf(entryBuf)
+
 	var header [4]byte
 	binary.BigEndian.PutUint32(header[:], uint32(len(entries)))
 	if _, err := out.Write(header[:]); err != nil {
 		return nil, err
 	}
-	var entryBuf bytes.Buffer
 	for _, e := range entries {
 		if e == nil || len(e.Key) == 0 {
 			return nil, fmt.Errorf("wal: invalid entry in batch")
 		}
-		payload, err := kv.EncodeEntry(&entryBuf, e)
+		payload, err := kv.EncodeEntry(entryBuf, e)
 		if err != nil {
 			return nil, err
 		}

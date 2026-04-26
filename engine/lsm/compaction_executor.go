@@ -124,6 +124,14 @@ func (lm *levelManager) doCompact(id int, p Priority) (retErr error) {
 			return ErrFillTables
 		}
 		cleanup = true
+		if lm.canMoveToNextLevel(&cd) {
+			if err := lm.moveToNextLevel(&cd); err != nil {
+				lm.getLogger().Error("trivial move failed", "worker", id, "err", err, "def", cd)
+				return err
+			}
+			lm.getLogger().Info("trivial move complete", "worker", id, "from_level", cd.thisLevel.levelNum, "to_level", cd.nextLevel.levelNum, "tables", len(cd.top))
+			return nil
+		}
 		// Continue with the normal merge path.
 		if err := lm.runCompactDef(id, l, cd); err != nil {
 			lm.getLogger().Error("compaction failed", "worker", id, "err", err, "def", cd)
@@ -276,6 +284,107 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 	if cd.nextLevel != nil && cd.nextLevel.levelNum == lm.opt.MaxLevelNum-1 && lm.rtCollector != nil {
 		lm.rebuildRangeTombstones()
 	}
+	return nil
+}
+
+func (lm *levelManager) canMoveToNextLevel(cd *compactDef) bool {
+	if cd == nil || cd.thisLevel == nil || cd.nextLevel == nil {
+		return false
+	}
+	if cd.plan.IngestMode != IngestNone {
+		return false
+	}
+	if cd.thisLevel == cd.nextLevel {
+		return false
+	}
+	if len(cd.top) == 0 || len(cd.bot) != 0 {
+		return false
+	}
+	if cd.thisLevel.levelNum == 0 {
+		// L0 trivial move is only safe when the chosen group has no overlap
+		// with any other L0 table. Otherwise promoting it would leave older
+		// L0 tables masking newer keys at the destination level.
+		if !l0GroupHasNoOtherOverlap(cd.top, cd.thisLevel.tables) {
+			return false
+		}
+	}
+	return true
+}
+
+func (lm *levelManager) moveToNextLevel(cd *compactDef) error {
+	if !lm.canMoveToNextLevel(cd) {
+		return errors.New("invalid compaction definition for trivial move")
+	}
+	var edits []manifest.Edit
+	for _, tbl := range cd.top {
+		if tbl == nil {
+			continue
+		}
+		edits = append(edits, manifest.Edit{
+			Type: manifest.EditDeleteFile,
+			File: &manifest.FileMeta{FileID: tbl.fid, Level: cd.thisLevel.levelNum},
+		})
+		add := manifest.Edit{
+			Type: manifest.EditAddFile,
+			File: &manifest.FileMeta{
+				Level:     cd.nextLevel.levelNum,
+				FileID:    tbl.fid,
+				Size:      uint64(tbl.Size()),
+				Smallest:  kv.SafeCopy(nil, tbl.MinKey()),
+				Largest:   kv.SafeCopy(nil, tbl.MaxKey()),
+				ValueSize: tbl.ValueSize(),
+			},
+		}
+		if created := tbl.GetCreatedAt(); created != nil {
+			add.File.CreatedAt = uint64(created.Unix())
+		}
+		edits = append(edits, add)
+	}
+	if len(edits) == 0 {
+		return nil
+	}
+	if err := lm.manifestMgr.LogEdits(edits...); err != nil {
+		return err
+	}
+
+	toMove := make(map[uint64]*table, len(cd.top))
+	for _, tbl := range cd.top {
+		if tbl != nil {
+			toMove[tbl.fid] = tbl
+		}
+	}
+
+	first, second := cd.thisLevel, cd.nextLevel
+	if first.levelNum > second.levelNum {
+		first, second = second, first
+	}
+	first.Lock()
+	second.Lock()
+
+	remaining := cd.thisLevel.tables[:0]
+	for _, tbl := range cd.thisLevel.tables {
+		if _, found := toMove[tbl.fid]; found {
+			cd.thisLevel.subtractSize(tbl)
+			continue
+		}
+		remaining = append(remaining, tbl)
+	}
+	cd.thisLevel.tables = remaining
+	cd.thisLevel.rebuildRangeFilterLocked()
+
+	for _, tbl := range cd.top {
+		if tbl == nil {
+			continue
+		}
+		tbl.setLevel(cd.nextLevel.levelNum)
+		cd.nextLevel.addSize(tbl)
+		cd.nextLevel.tables = append(cd.nextLevel.tables, tbl)
+	}
+	cd.nextLevel.sortTablesLocked()
+	cd.nextLevel.rebuildRangeFilterLocked()
+
+	second.Unlock()
+	first.Unlock()
 	return nil
 }
 
@@ -564,6 +673,7 @@ func (lm *levelManager) subcompact(it index.Iterator, kr KeyRange, cd compactDef
 		// Copy Options so background tuning does not affect the active compaction.
 		builderOpt := lm.opt.Clone()
 		builder := newTableBuilerWithSSTSize(builderOpt, cd.plan.NextFileSize)
+		builder.pacer = lm.compactionPacerForBuild()
 
 		// This would do the iteration and add keys to builder.
 		addKeys(builder)

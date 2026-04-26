@@ -33,6 +33,8 @@ message TableIndex {
   uint32 keyCount = 4;
   uint32 staleDataSize = 5;
   uint64 valueSize = 6;
+  bytes prefixBloomFilter = 7;
+  uint32 rangeTombstoneCount = 8;
 }
 
 // BlockOffset points to a single data block inside one SSTable file.
@@ -40,4 +42,6 @@ message BlockOffset {
   bytes key = 1;
   uint32 offset = 2;
   uint32 len = 3;
+  uint32 compression = 4;
+  uint32 rawLen = 5;
 }

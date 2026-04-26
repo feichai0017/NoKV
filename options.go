@@ -1,6 +1,7 @@
 package NoKV
 
 import (
+	"encoding/binary"
 	"time"
 
 	"github.com/feichai0017/NoKV/engine/kv"
@@ -13,9 +14,19 @@ import (
 )
 
 const (
-	defaultWriteBatchMaxCount       = 64
-	defaultWriteBatchMaxSize  int64 = 1 << 20
-	defaultThermosTopK              = 16
+	defaultWriteBatchMaxCount = 64
+	// defaultCommitWorkers=1 matches legacy behaviour. The fan-out path is
+	// available for benchmarking but with the current shared-WAL architecture
+	// more workers contend on wal.Manager.mu rather than parallelize. Raise
+	// only after LSM data-plane WAL is sharded.
+	defaultCommitWorkers           = 1
+	defaultWriteBatchMaxSize int64 = 1 << 20
+	defaultThermosTopK             = 16
+	// defaultLSMShardCount is the number of WAL Manager + memtable pairs
+	// that back the LSM data plane. Each shard runs on its own fd, fsync
+	// worker, and bufio.Writer so writes do not contend on a single
+	// Manager.mu. Must be a power of two.
+	defaultLSMShardCount = 4
 )
 
 // Options holds the top-level database configuration.
@@ -115,7 +126,21 @@ type Options struct {
 	// WAL fsync from the commit pipeline. When false (the default), the commit
 	// worker performs fsync inline. Only effective when SyncWrites is true.
 	SyncPipeline bool
-	ManifestSync bool
+	// CommitWorkers is the number of parallel processor goroutines downstream
+	// of the commit dispatcher. A single dispatcher continues to own the MPSC
+	// queue consumer and fans batches out to N workers. Zero or negative falls
+	// back to a single processor (legacy behavior). When the LSM data plane
+	// is sharded, CommitWorkers is coupled to LSMShardCount so each worker is
+	// pinned to one shard (preserves SetBatch atomicity).
+	CommitWorkers int
+	// LSMShardCount is the number of WAL Manager + memtable pairs that back
+	// the LSM data plane. The shard router uses `& (N-1)` for placement so
+	// the value must be a power of two. Zero falls back to the constructor
+	// default; non-power-of-two values are rounded DOWN to the nearest
+	// power of two during Open (e.g. 6 → 4, 12 → 8). See
+	// docs/notes/2026-04-26-lsm-engine-throughput-roadmap.md.
+	LSMShardCount int
+	ManifestSync  bool
 	// ManifestRewriteThreshold triggers a manifest rewrite when the active
 	// MANIFEST file grows beyond this size (bytes). Values <= 0 disable rewrites.
 	ManifestRewriteThreshold int64
@@ -142,6 +167,12 @@ type Options struct {
 	BlockCacheBytes int64
 	// IndexCacheBytes bounds the in-memory budget for decoded SSTable indexes.
 	IndexCacheBytes int64
+	// PrefixExtractor enables SST prefix bloom filters. Nil disables prefix
+	// bloom creation. The default extractor recognizes NoKV native metadata
+	// keys and returns nil for unrelated user keys.
+	PrefixExtractor lsmpkg.PrefixExtractor
+	// BlockCompression controls SST data-block compression.
+	BlockCompression lsmpkg.BlockCompression
 
 	// RaftLagWarnSegments determines how many WAL segments a follower can lag
 	// behind the active segment before stats surfaces a warning. Zero disables
@@ -230,6 +261,17 @@ type Options struct {
 	// levels whose entries reference large value log payloads. Higher values
 	// make the compaction picker favour levels with high ValuePtr density.
 	CompactionValueWeight float64
+	// CompactionTombstoneWeight adjusts how aggressively the scheduler
+	// prioritizes levels with high range tombstone density.
+	CompactionTombstoneWeight float64
+
+	// CompactionWriteBytesPerSec paces compaction output writes. Zero disables
+	// pacing. Flush writes are never paced.
+	CompactionWriteBytesPerSec int64
+	// CompactionPacingBypassL0 bypasses output pacing when L0 table count
+	// reaches this threshold. Zero lets Open derive a conservative threshold
+	// when compaction pacing is enabled.
+	CompactionPacingBypassL0 int
 
 	// CompactionValueAlertThreshold triggers stats alerts when a level's
 	// value-density (value bytes / total bytes) exceeds this ratio.
@@ -277,10 +319,14 @@ func NewDefaultOptions() *Options {
 		// Conservative defaults to avoid long batch-induced pauses.
 		WriteBatchMaxCount:            defaultWriteBatchMaxCount,
 		WriteBatchMaxSize:             defaultWriteBatchMaxSize,
+		CommitWorkers:                 defaultCommitWorkers,
+		LSMShardCount:                 defaultLSMShardCount,
 		MaxBatchCount:                 defaultWriteBatchMaxCount,
 		MaxBatchSize:                  defaultWriteBatchMaxSize,
 		BlockCacheBytes:               lsmpkg.DefaultBlockCacheBytes,
 		IndexCacheBytes:               lsmpkg.DefaultIndexCacheBytes,
+		PrefixExtractor:               nativeMetadataPrefix,
+		BlockCompression:              lsmpkg.DefaultBlockCompression,
 		SyncWrites:                    false,
 		ManifestSync:                  false,
 		ManifestRewriteThreshold:      64 << 20,
@@ -297,6 +343,7 @@ func NewDefaultOptions() *Options {
 		WALTypedRecordWarnRatio:       0.35,
 		WALTypedRecordWarnSegments:    6,
 		CompactionValueWeight:         lsmpkg.DefaultCompactionValueWeight,
+		CompactionTombstoneWeight:     lsmpkg.DefaultCompactionTombstoneWeight,
 		CompactionValueAlertThreshold: lsmpkg.DefaultCompactionValueAlertThreshold,
 		ValueLogGCInterval:            10 * time.Minute,
 		ValueLogGCDiscardRatio:        0.5,
@@ -363,6 +410,18 @@ func (opt *Options) resolveOpenDefaults() {
 	if opt.WALBufferSize <= 0 {
 		opt.WALBufferSize = wal.DefaultBufferSize
 	}
+	if opt.LSMShardCount <= 0 {
+		opt.LSMShardCount = defaultLSMShardCount
+	}
+	// Power-of-two so the eventual hash routing can use & (N-1).
+	if opt.LSMShardCount&(opt.LSMShardCount-1) != 0 {
+		// Round down to nearest power of two; never zero.
+		n := 1
+		for n*2 <= opt.LSMShardCount {
+			n *= 2
+		}
+		opt.LSMShardCount = n
+	}
 }
 
 func (opt *Options) normalizeLSMSharedOptions() {
@@ -390,9 +449,14 @@ func (opt *Options) applyLSMSharedOptions(dst *lsmpkg.Options) {
 	dst.IngestBacklogMergeScore = opt.IngestBacklogMergeScore
 	dst.IngestShardParallelism = opt.IngestShardParallelism
 	dst.CompactionValueWeight = opt.CompactionValueWeight
+	dst.CompactionTombstoneWeight = opt.CompactionTombstoneWeight
+	dst.CompactionWriteBytesPerSec = opt.CompactionWriteBytesPerSec
+	dst.CompactionPacingBypassL0 = opt.CompactionPacingBypassL0
 	dst.CompactionValueAlertThreshold = opt.CompactionValueAlertThreshold
 	dst.BlockCacheBytes = opt.BlockCacheBytes
 	dst.IndexCacheBytes = opt.IndexCacheBytes
+	dst.PrefixExtractor = opt.PrefixExtractor
+	dst.BlockCompression = opt.BlockCompression
 }
 
 func (opt *Options) copyNormalizedLSMOptions(src *lsmpkg.Options) {
@@ -413,7 +477,48 @@ func (opt *Options) copyNormalizedLSMOptions(src *lsmpkg.Options) {
 	opt.IngestBacklogMergeScore = src.IngestBacklogMergeScore
 	opt.IngestShardParallelism = src.IngestShardParallelism
 	opt.CompactionValueWeight = src.CompactionValueWeight
+	opt.CompactionTombstoneWeight = src.CompactionTombstoneWeight
+	opt.CompactionWriteBytesPerSec = src.CompactionWriteBytesPerSec
+	opt.CompactionPacingBypassL0 = src.CompactionPacingBypassL0
 	opt.CompactionValueAlertThreshold = src.CompactionValueAlertThreshold
 	opt.BlockCacheBytes = src.BlockCacheBytes
 	opt.IndexCacheBytes = src.IndexCacheBytes
+	opt.PrefixExtractor = src.PrefixExtractor
+	opt.BlockCompression = src.BlockCompression
+}
+
+func nativeMetadataPrefix(key []byte) []byte {
+	const (
+		magicLen = 4
+		version  = byte(1)
+	)
+	if len(key) < magicLen+3 {
+		return nil
+	}
+	if key[0] != 'f' || key[1] != 's' || key[2] != 'm' || key[3] != 0 || key[4] != version {
+		return nil
+	}
+	pos := magicLen + 1
+	mountLen, n := binary.Uvarint(key[pos:])
+	if n <= 0 {
+		return nil
+	}
+	pos += n
+	if mountLen == 0 || uint64(len(key)-pos) < mountLen+1 {
+		return nil
+	}
+	pos += int(mountLen)
+	kindPos := pos
+	pos++
+	switch key[kindPos] {
+	case 'd', 'c':
+		if len(key) < pos+8 {
+			return nil
+		}
+		return key[:pos+8]
+	case 'i', 'm', 's', 'u':
+		return key[:pos]
+	default:
+		return nil
+	}
 }

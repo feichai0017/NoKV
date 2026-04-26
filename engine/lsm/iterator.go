@@ -22,21 +22,26 @@ func (*emptyIterator) Valid() bool      { return false }
 func (*emptyIterator) Item() index.Item { return nil }
 func (*emptyIterator) Close() error     { return nil }
 
-// NewIterators builds iterators over mutable/immutable memtables and SST levels.
+// NewIterators builds iterators over mutable/immutable memtables across all
+// shards plus the SST levels. Per-shard ordering is preserved (active first,
+// then immutables newest-to-oldest); cross-shard ordering is resolved by
+// MVCC timestamps at the merge layer.
 func (lsm *LSM) NewIterators(opt *index.Options) []index.Iterator {
 	iters := make([]index.Iterator, 0)
-	lsm.lock.RLock()
-	mem := lsm.memTable
-	immutables := append([]*memTable(nil), lsm.immutables...)
-	lsm.lock.RUnlock()
-	if mem != nil {
-		iters = append(iters, mem.NewIterator(opt))
-	}
-	for _, imm := range immutables {
-		if imm == nil {
-			continue
+	for _, s := range lsm.shards {
+		s.lock.RLock()
+		mem := s.memTable
+		immutables := append([]*memTable(nil), s.immutables...)
+		s.lock.RUnlock()
+		if mem != nil {
+			iters = append(iters, mem.NewIterator(opt))
 		}
-		iters = append(iters, imm.NewIterator(opt))
+		for _, imm := range immutables {
+			if imm == nil {
+				continue
+			}
+			iters = append(iters, imm.NewIterator(opt))
+		}
 	}
 	iters = append(iters, lsm.levels.iterators(opt)...)
 	return iters

@@ -1,12 +1,14 @@
 package lsm
 
 import (
-	storagepb "github.com/feichai0017/NoKV/pb/storage"
+	"math/bits"
+	"runtime"
 	"sync"
 
 	"github.com/dgraph-io/ristretto/v2"
 
 	"github.com/feichai0017/NoKV/metrics"
+	storagepb "github.com/feichai0017/NoKV/pb/storage"
 	coreCache "github.com/feichai0017/NoKV/utils/cache"
 	"google.golang.org/protobuf/proto"
 )
@@ -86,14 +88,14 @@ func (c *cache) delIndex(fid uint64) {
 	c.indexes.Del(fid)
 }
 
-func (c *cache) getBlock(level int, key uint64) (*block, bool) {
+func (c *cache) getBlock(level int, key uint64) (*blockEntry, bool) {
 	if c == nil || c.blocks == nil {
 		return nil, false
 	}
-	blk, ok := c.blocks.get(key)
+	entry, ok := c.blocks.get(key)
 	if ok {
 		c.metrics.RecordBlock(level, true)
-		return blk, true
+		return entry, true
 	}
 	c.metrics.RecordBlock(level, false)
 	return nil, false
@@ -126,13 +128,21 @@ func newIndexCache(budgetBytes int64) *coreCache.Cache {
 
 type blockCache struct {
 	budgetBytes int64
+	shards      []blockCacheShard
+	mask        uint64
+}
+
+type blockCacheShard struct {
+	budgetBytes int64
 	rc          *ristretto.Cache[uint64, *blockEntry]
 }
 
 type blockEntry struct {
-	key uint64
-	tbl *table
-	blk *block
+	key         uint64
+	tbl         *table
+	diskData    []byte
+	compression BlockCompression
+	rawLen      int
 
 	cost        int64
 	releaseOnce sync.Once
@@ -151,71 +161,129 @@ func newBlockCache(budgetBytes int64) *blockCache {
 	if budgetBytes <= 0 {
 		return nil
 	}
-	bc := &blockCache{budgetBytes: budgetBytes}
-	rc, err := ristretto.NewCache(&ristretto.Config[uint64, *blockEntry]{
-		NumCounters: cacheCountersForBudget(budgetBytes, defaultBlockCacheAdmissionSize),
-		MaxCost:     budgetBytes,
-		BufferItems: 64,
-		Cost: func(entry *blockEntry) int64 {
-			if entry == nil || entry.cost <= 0 {
-				return 1
-			}
-			return entry.cost
-		},
-		OnEvict: func(item *ristretto.Item[*blockEntry]) {
-			if item == nil || item.Value == nil {
-				return
-			}
-			item.Value.release()
-		},
-	})
-	if err != nil {
-		return nil
+	shards := blockCacheShardCount()
+	if budgetBytes < int64(shards) {
+		shards = 1
 	}
-	bc.rc = rc
+	bc := &blockCache{
+		budgetBytes: budgetBytes,
+		shards:      make([]blockCacheShard, shards),
+		mask:        uint64(shards - 1),
+	}
+	perShard := budgetBytes / int64(shards)
+	remainder := budgetBytes % int64(shards)
+	for i := range bc.shards {
+		budget := perShard
+		if int64(i) < remainder {
+			budget++
+		}
+		rc, err := ristretto.NewCache(&ristretto.Config[uint64, *blockEntry]{
+			NumCounters: cacheCountersForBudget(budget, defaultBlockCacheAdmissionSize),
+			MaxCost:     budget,
+			BufferItems: 64,
+			Cost: func(entry *blockEntry) int64 {
+				if entry == nil || entry.cost <= 0 {
+					return 1
+				}
+				return entry.cost
+			},
+			OnEvict: func(item *ristretto.Item[*blockEntry]) {
+				if item == nil || item.Value == nil {
+					return
+				}
+				item.Value.release()
+			},
+		})
+		if err != nil {
+			bc.close()
+			return nil
+		}
+		bc.shards[i] = blockCacheShard{budgetBytes: budget, rc: rc}
+	}
 	return bc
 }
 
-func (c *blockCache) get(key uint64) (*block, bool) {
-	if c == nil || c.rc == nil {
+func (c *blockCache) get(key uint64) (*blockEntry, bool) {
+	shard := c.shard(key)
+	if shard == nil || shard.rc == nil {
 		return nil, false
 	}
-	if be, ok := c.rc.Get(key); ok && be != nil && be.blk != nil {
-		return be.blk, true
+	if be, ok := shard.rc.Get(key); ok && be != nil && len(be.diskData) > 0 {
+		return be, true
 	}
 	return nil, false
 }
 
 func (c *blockCache) add(level int, tbl *table, key uint64, blk *block) {
-	if c == nil || c.rc == nil || blk == nil {
+	shard := c.shard(key)
+	if shard == nil || shard.rc == nil || blk == nil {
 		return
 	}
 	if level > 1 {
 		return
 	}
-	cost := blockCacheCost(blk)
-	if cost <= 0 || cost > c.budgetBytes {
+	payload := blk.diskData
+	if len(payload) == 0 {
+		payload = blk.data
+	}
+	cost := int64(len(payload))
+	if cost <= 0 || cost > shard.budgetBytes {
 		return
 	}
 	entry := &blockEntry{
-		key:  key,
-		tbl:  tbl,
-		blk:  blk,
-		cost: cost,
+		key:         key,
+		tbl:         tbl,
+		diskData:    append([]byte(nil), payload...),
+		compression: blk.compression,
+		rawLen:      blk.rawLen,
+		cost:        cost,
 	}
 	if entry.tbl != nil {
 		entry.tbl.IncrRef()
 	}
-	if accepted := c.rc.Set(key, entry, cost); !accepted {
+	if accepted := shard.rc.Set(key, entry, cost); !accepted {
 		entry.release()
 	}
 }
 
 func (c *blockCache) close() {
-	if c == nil || c.rc == nil {
+	if c == nil {
 		return
 	}
-	c.rc.Close()
+	for i := range c.shards {
+		if c.shards[i].rc != nil {
+			c.shards[i].rc.Close()
+			c.shards[i].rc = nil
+		}
+	}
+}
+
+func (c *blockCache) wait() {
+	if c == nil {
+		return
+	}
+	for i := range c.shards {
+		if c.shards[i].rc != nil {
+			c.shards[i].rc.Wait()
+		}
+	}
+}
+
+func (c *blockCache) shard(key uint64) *blockCacheShard {
+	if c == nil || len(c.shards) == 0 {
+		return nil
+	}
+	const mix = 11400714819323198485
+	idx := (key * mix) & c.mask
+	return &c.shards[idx]
+}
+
+func blockCacheShardCount() int {
+	n := min(max(runtime.GOMAXPROCS(0), 1), 32)
+	if n&(n-1) != 0 {
+		n = min(1<<bits.Len(uint(n)), 32)
+	}
+	return n
 }
 
 func indexCacheCost(idx *storagepb.TableIndex) int64 {
@@ -227,22 +295,6 @@ func indexCacheCost(idx *storagepb.TableIndex) int64 {
 		return 1
 	}
 	return cost
-}
-
-func blockCacheCost(blk *block) int64 {
-	if blk == nil {
-		return 0
-	}
-	if blk.estimateSz > 0 {
-		return blk.estimateSz
-	}
-	if cap(blk.data) > 0 {
-		return int64(cap(blk.data))
-	}
-	if len(blk.data) > 0 {
-		return int64(len(blk.data))
-	}
-	return 1
 }
 
 func cacheCountersForBudget(budgetBytes, avgItemBytes int64) int64 {
