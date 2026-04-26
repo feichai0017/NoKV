@@ -1223,7 +1223,8 @@ func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
-	walMgr := db.wal
+	walMgr, err := db.raftWALFor(1)
+	require.NoError(t, err)
 
 	appendRaft := func(data string) {
 		_, err := walMgr.AppendRecords(wal.DurabilityBuffered, wal.Record{Type: wal.RecordTypeRaftEntry, Payload: []byte(data)})
@@ -1233,7 +1234,7 @@ func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 
 	appendRaft("group1-seg1")
 	require.NoError(t, localMeta.SaveRaftPointer(localmeta.RaftLogPointer{GroupID: 1, Segment: walMgr.ActiveSegment(), AppliedIndex: 10, AppliedTerm: 1}))
-	require.NoError(t, localMeta.SaveRaftPointer(localmeta.RaftLogPointer{GroupID: 2, Segment: walMgr.ActiveSegment(), AppliedIndex: 9, AppliedTerm: 1}))
+	require.NoError(t, localMeta.SaveRaftPointer(localmeta.RaftLogPointer{GroupID: 9, Segment: walMgr.ActiveSegment(), AppliedIndex: 9, AppliedTerm: 1}))
 
 	snapBefore := db.Info().Snapshot()
 	logRecoveryMetric(t, "raft_wal_backlog_pre", map[string]any{
@@ -1256,7 +1257,7 @@ func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 		SegmentIndex:   3,
 	}))
 	require.NoError(t, localMeta.SaveRaftPointer(localmeta.RaftLogPointer{
-		GroupID:        2,
+		GroupID:        9,
 		Segment:        3,
 		AppliedIndex:   28,
 		AppliedTerm:    4,
@@ -2532,4 +2533,29 @@ func TestDBWrapperNilAndOpenGuards(t *testing.T) {
 	require.ErrorContains(t, db.RollbackExternalSST([]uint64{1}), "snapshot bridge requires open db")
 	_, err = db.ExportSnapshot(localmeta.RegionMeta{})
 	require.ErrorContains(t, err, "snapshot bridge requires open db")
+}
+
+func TestRaftLogUsesShardedWAL(t *testing.T) {
+	dir := t.TempDir()
+	localMeta, err := localmeta.OpenLocalStore(filepath.Join(dir, "raftmeta"), nil)
+	require.NoError(t, err)
+	defer func() { _ = localMeta.Close() }()
+
+	opt := NewDefaultOptions()
+	opt.WorkDir = dir
+	opt.EnableWALWatchdog = false
+	opt.ValueLogGCInterval = 0
+	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
+	db := openTestDB(t, opt)
+	defer func() { _ = db.Close() }()
+
+	storage, err := db.RaftLog().Open(9, localMeta)
+	require.NoError(t, err)
+	require.NoError(t, storage.Append([]myraft.Entry{{Index: 1, Term: 1, Data: []byte("raft")}}))
+
+	require.Equal(t, uint64(0), db.wal.Metrics().RecordCounts.RaftEntries)
+	shard := raftWALShard(9)
+	matches, err := filepath.Glob(filepath.Join(dir, fmt.Sprintf("raft-wal-%02d", shard), "*.wal"))
+	require.NoError(t, err)
+	require.NotEmpty(t, matches)
 }
