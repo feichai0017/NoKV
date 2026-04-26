@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/engine/wal"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,9 +38,6 @@ func TestWatchdogFiltersRetainedSegments(t *testing.T) {
 		return wal.RetentionMark{FirstSegment: 2}
 	}))
 
-	ptrs := map[uint64]localmeta.RaftLogPointer{
-		42: {GroupID: 42, Segment: 4, SegmentIndex: 4},
-	}
 	wd := wal.NewWatchdog(wal.WatchdogConfig{
 		Manager:      mgr,
 		Interval:     time.Hour,
@@ -49,7 +45,6 @@ func TestWatchdogFiltersRetainedSegments(t *testing.T) {
 		MaxBatch:     4,
 		WarnRatio:    0,
 		WarnSegments: 0,
-		RaftPointers: func() map[uint64]localmeta.RaftLogPointer { return ptrs },
 	})
 
 	wd.RunOnce()

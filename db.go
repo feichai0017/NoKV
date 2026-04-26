@@ -319,7 +319,6 @@ func Open(opt *Options) (_ *DB, err error) {
 			MaxBatch:     db.opt.WALAutoGCMaxBatch,
 			WarnRatio:    db.opt.WALTypedRecordWarnRatio,
 			WarnSegments: db.opt.WALTypedRecordWarnSegments,
-			RaftPointers: db.opt.RaftPointerSnapshot,
 		},
 		StartValueLogGC: func() {
 			if db.opt.ValueLogGCInterval > 0 {

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/metrics"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -27,7 +26,6 @@ type WatchdogConfig struct {
 	MaxBatch     int
 	WarnRatio    float64
 	WarnSegments int64
-	RaftPointers func() map[uint64]localmeta.RaftLogPointer
 }
 
 // resolveDefaults resolves constructor-boundary defaults for the watchdog config.
@@ -65,7 +63,6 @@ type Watchdog struct {
 	warnRatio    float64
 	warnSegments int64
 	autoEnabled  bool
-	raftPointers func() map[uint64]localmeta.RaftLogPointer
 	closer       *utils.Closer
 
 	autoRuns        atomic.Uint64
@@ -92,7 +89,6 @@ func NewWatchdog(cfg WatchdogConfig) *Watchdog {
 		warnRatio:    cfg.WarnRatio,
 		warnSegments: cfg.WarnSegments,
 		autoEnabled:  cfg.MinRemovable > 0 && cfg.MaxBatch > 0,
-		raftPointers: cfg.RaftPointers,
 		closer:       utils.NewCloser(),
 	}
 	w.warnReason.Store("")
@@ -171,11 +167,7 @@ func (w *Watchdog) observe() {
 
 	wmetrics := w.manager.Metrics()
 	segmentMetrics := w.manager.SegmentMetrics()
-	var ptrs map[uint64]localmeta.RaftLogPointer
-	if w.raftPointers != nil {
-		ptrs = w.raftPointers()
-	}
-	analysis := metrics.AnalyzeWALBacklog(wmetrics, segmentMetrics, ptrs)
+	analysis := metrics.AnalyzeWALBacklog(wmetrics, segmentMetrics)
 	removable := w.filterRemovable(analysis.RemovableSegments)
 
 	w.removableCount.Store(int64(len(removable)))
