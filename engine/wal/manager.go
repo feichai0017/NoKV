@@ -94,6 +94,7 @@ type EntryInfo struct {
 	Offset    int64
 	Length    uint32
 	Type      RecordType
+	GroupID   uint64
 }
 
 // Metrics captures runtime information about WAL manager state.
@@ -534,6 +535,12 @@ func (m *Manager) ListSegments() ([]string, error) {
 
 // Replay traverses all WAL segments and feeds entries to callback.
 func (m *Manager) Replay(fn func(info EntryInfo, payload []byte) error) error {
+	return m.ReplayFiltered(nil, fn)
+}
+
+// ReplayFiltered traverses WAL segments and only decodes records accepted by
+// filter. Nil filter accepts all records.
+func (m *Manager) ReplayFiltered(filter func(EntryInfo) bool, fn func(info EntryInfo, payload []byte) error) error {
 	m.mu.Lock()
 	files, err := m.cfg.FS.Glob(filepath.Join(m.cfg.Dir, "*.wal"))
 	m.mu.Unlock()
@@ -546,17 +553,17 @@ func (m *Manager) Replay(fn func(info EntryInfo, payload []byte) error) error {
 		if _, err := fmt.Sscanf(filepath.Base(path), "%05d.wal", &id); err != nil {
 			continue
 		}
-		if err := m.replayFile(uint32(id), path, fn); err != nil {
+		if err := m.replayFile(uint32(id), path, filter, fn); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (m *Manager) replayFile(id uint32, path string, fn func(info EntryInfo, payload []byte) error) error {
+func (m *Manager) replayFile(id uint32, path string, filter func(EntryInfo) bool, fn func(info EntryInfo, payload []byte) error) error {
 	entries, err := m.loadSegmentCatalog(id)
 	if err == nil {
-		err = m.replayIndexedFile(path, entries, fn)
+		err = m.replayIndexedFile(path, entries, filter, fn)
 		if err == nil {
 			return nil
 		}
@@ -568,7 +575,7 @@ func (m *Manager) replayFile(id uint32, path string, fn func(info EntryInfo, pay
 	if err != nil {
 		return err
 	}
-	return m.replayIndexedFile(path, entries, fn)
+	return m.replayIndexedFile(path, entries, filter, fn)
 }
 
 // Close closes the manager and active segment.
@@ -631,7 +638,7 @@ func (m *Manager) ReplaySegment(id uint32, fn func(info EntryInfo, payload []byt
 	if _, err := m.cfg.FS.Stat(path); err != nil {
 		return err
 	}
-	return m.replayFile(id, path, fn)
+	return m.replayFile(id, path, nil, fn)
 }
 
 // VerifyDir scans WAL segments in the provided directory, truncating any

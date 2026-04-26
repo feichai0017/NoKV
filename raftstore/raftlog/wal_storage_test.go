@@ -1,6 +1,7 @@
 package raftlog
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"os"
@@ -234,6 +235,45 @@ func TestWALStorageValidatesLocalMetaPointerWithBacklog(t *testing.T) {
 	ptr, ok := localMeta.RaftPointer(1)
 	require.True(t, ok)
 	require.NoError(t, validateRaftPointer(walMgr, ptr))
+}
+
+func TestWALStorageReplaySkipsMalformedRecordsForOtherGroups(t *testing.T) {
+	dir := t.TempDir()
+	walMgr := openWalManager(t, dir)
+	localMeta := openLocalMetaStore(t, dir)
+
+	ws, err := OpenWALStorage(WALStorageConfig{
+		GroupID:   1,
+		WAL:       walMgr,
+		LocalMeta: localMeta,
+	})
+	require.NoError(t, err)
+	require.NoError(t, ws.Append([]myraft.Entry{{Index: 1, Term: 1, Data: []byte("g1")}}))
+
+	var malformed bytes.Buffer
+	writeUvarint(&malformed, 2)
+	_, err = walMgr.AppendRecords(wal.DurabilityBuffered, wal.Record{
+		Type:    wal.RecordTypeRaftEntry,
+		Payload: malformed.Bytes(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, walMgr.Close())
+	require.NoError(t, localMeta.Close())
+
+	walMgr = openWalManager(t, dir)
+	defer func() { _ = walMgr.Close() }()
+	localMeta = openLocalMetaStore(t, dir)
+	defer func() { _ = localMeta.Close() }()
+
+	ws, err = OpenWALStorage(WALStorageConfig{
+		GroupID:   1,
+		WAL:       walMgr,
+		LocalMeta: localMeta,
+	})
+	require.NoError(t, err)
+	last, err := ws.LastIndex()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), last)
 }
 
 func TestWALStorageHardStateAndEntries(t *testing.T) {

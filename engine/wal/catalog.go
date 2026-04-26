@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"path/filepath"
 
@@ -16,6 +17,7 @@ var errStaleCatalog = errors.New("wal: stale catalog")
 
 type catalogEntry struct {
 	Type   RecordType
+	Group  uint64
 	Offset int64
 	Length uint32
 }
@@ -67,8 +69,13 @@ func (m *Manager) scanAndWriteSegmentCatalog(id uint32, r io.Reader) ([]catalogE
 	)
 	for reIter.Next() {
 		length := reIter.Length()
+		groupID, err := recordGroupID(reIter.Type(), reIter.Record())
+		if err != nil {
+			return nil, err
+		}
 		entries = append(entries, catalogEntry{
 			Type:   reIter.Type(),
+			Group:  groupID,
 			Offset: offset,
 			Length: length,
 		})
@@ -88,7 +95,7 @@ func (m *Manager) scanAndWriteSegmentCatalog(id uint32, r io.Reader) ([]catalogE
 	return entries, nil
 }
 
-func (m *Manager) replayIndexedFile(path string, entries []catalogEntry, fn func(info EntryInfo, payload []byte) error) error {
+func (m *Manager) replayIndexedFile(path string, entries []catalogEntry, filter func(EntryInfo) bool, fn func(info EntryInfo, payload []byte) error) error {
 	f, err := m.cfg.FS.OpenHandle(path)
 	if err != nil {
 		return err
@@ -96,6 +103,16 @@ func (m *Manager) replayIndexedFile(path string, entries []catalogEntry, fn func
 	defer func() { _ = f.Close() }()
 
 	for _, entry := range entries {
+		info := EntryInfo{
+			SegmentID: segmentIDFromPath(path),
+			Offset:    entry.Offset,
+			Length:    entry.Length,
+			Type:      entry.Type,
+			GroupID:   entry.Group,
+		}
+		if filter != nil && !filter(info) {
+			continue
+		}
 		if _, err := f.Seek(entry.Offset, io.SeekStart); err != nil {
 			return err
 		}
@@ -106,15 +123,14 @@ func (m *Manager) replayIndexedFile(path string, entries []catalogEntry, fn func
 			}
 			return err
 		}
-		if recType != entry.Type || length != entry.Length {
+		groupID, err := recordGroupID(recType, payload)
+		if err != nil {
+			return err
+		}
+		if recType != entry.Type || length != entry.Length || groupID != entry.Group {
 			return errStaleCatalog
 		}
-		info := EntryInfo{
-			SegmentID: segmentIDFromPath(path),
-			Offset:    entry.Offset,
-			Length:    length,
-			Type:      recType,
-		}
+		info.Length = length
 		if err := fn(info, payload); err != nil {
 			return err
 		}
@@ -125,46 +141,59 @@ func (m *Manager) replayIndexedFile(path string, entries []catalogEntry, fn func
 func encodeSegmentCatalog(entries []catalogEntry) []byte {
 	var buf bytes.Buffer
 	_, _ = buf.Write(catalogMagic[:])
+	var body bytes.Buffer
 	var header [4]byte
 	binary.BigEndian.PutUint32(header[:], uint32(len(entries)))
-	_, _ = buf.Write(header[:])
+	_, _ = body.Write(header[:])
 	for _, entry := range entries {
-		_ = buf.WriteByte(byte(entry.Type))
-		var tmp [12]byte
-		binary.BigEndian.PutUint64(tmp[:8], uint64(entry.Offset))
-		binary.BigEndian.PutUint32(tmp[8:], entry.Length)
-		_, _ = buf.Write(tmp[:])
+		_ = body.WriteByte(byte(entry.Type))
+		var tmp [20]byte
+		binary.BigEndian.PutUint64(tmp[:8], entry.Group)
+		binary.BigEndian.PutUint64(tmp[8:16], uint64(entry.Offset))
+		binary.BigEndian.PutUint32(tmp[16:], entry.Length)
+		_, _ = body.Write(tmp[:])
 	}
+	bodyBytes := body.Bytes()
+	_, _ = buf.Write(bodyBytes)
+	var crc [4]byte
+	binary.BigEndian.PutUint32(crc[:], crc32.ChecksumIEEE(bodyBytes))
+	_, _ = buf.Write(crc[:])
 	return buf.Bytes()
 }
 
 func decodeSegmentCatalog(data []byte) ([]catalogEntry, error) {
-	if len(data) < len(catalogMagic)+4 {
+	if len(data) < len(catalogMagic)+4+4 {
 		return nil, io.ErrUnexpectedEOF
 	}
 	if !bytes.Equal(data[:len(catalogMagic)], catalogMagic[:]) {
 		return nil, fmt.Errorf("wal: invalid catalog magic")
 	}
-	count := binary.BigEndian.Uint32(data[len(catalogMagic) : len(catalogMagic)+4])
-	rest := data[len(catalogMagic)+4:]
-	if uint64(count) > uint64(len(rest))/13 {
+	body := data[len(catalogMagic) : len(data)-4]
+	gotCRC := binary.BigEndian.Uint32(data[len(data)-4:])
+	if crc32.ChecksumIEEE(body) != gotCRC {
+		return nil, fmt.Errorf("wal: catalog checksum mismatch")
+	}
+	count := binary.BigEndian.Uint32(body[:4])
+	rest := body[4:]
+	if uint64(count) > uint64(len(rest))/21 {
 		return nil, io.ErrUnexpectedEOF
 	}
-	if len(rest) != int(count)*13 {
+	if len(rest) != int(count)*21 {
 		return nil, io.ErrUnexpectedEOF
 	}
 	entries := make([]catalogEntry, 0, count)
 	for range count {
 		entry := catalogEntry{
 			Type:   RecordType(rest[0]),
-			Offset: int64(binary.BigEndian.Uint64(rest[1:9])),
-			Length: binary.BigEndian.Uint32(rest[9:13]),
+			Group:  binary.BigEndian.Uint64(rest[1:9]),
+			Offset: int64(binary.BigEndian.Uint64(rest[9:17])),
+			Length: binary.BigEndian.Uint32(rest[17:21]),
 		}
 		if entry.Offset < 0 || entry.Length == 0 {
 			return nil, fmt.Errorf("wal: invalid catalog entry")
 		}
 		entries = append(entries, entry)
-		rest = rest[13:]
+		rest = rest[21:]
 	}
 	return entries, nil
 }
@@ -181,4 +210,17 @@ func segmentIDFromPath(path string) uint32 {
 	var id uint32
 	_, _ = fmt.Sscanf(filepath.Base(path), "%05d.wal", &id)
 	return id
+}
+
+func recordGroupID(recType RecordType, payload []byte) (uint64, error) {
+	switch recType {
+	case RecordTypeRaftEntry, RecordTypeRaftState, RecordTypeRaftSnapshot:
+		groupID, n := binary.Uvarint(payload)
+		if n <= 0 {
+			return 0, fmt.Errorf("wal: malformed raft record group id")
+		}
+		return groupID, nil
+	default:
+		return 0, nil
+	}
 }
