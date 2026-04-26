@@ -44,16 +44,16 @@ import (
 // docs/notes/2026-04-27-sharded-wal-memtable.md for the
 // sharding rationale and routing/recovery/flush invariants.
 type LSM struct {
-	shards     []*lsmShard
-	shardHints *shardHintTable
+	shards           []*lsmShard
+	shardHints       *shardHintTable
 	negatives        *negativeCache
 	negativesPersist *negativePersistence
-	levels     *levelManager
-	option     *Options
-	closer     *utils.Closer
-	flushQueue *flushRuntime
-	flushWG    sync.WaitGroup
-	logger     *slog.Logger
+	levels           *levelManager
+	option           *Options
+	closer           *utils.Closer
+	flushQueue       *flushRuntime
+	flushWG          sync.WaitGroup
+	logger           *slog.Logger
 
 	discardStatsCh chan map[manifest.ValueLogID]int64
 

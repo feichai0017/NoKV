@@ -30,10 +30,10 @@ import (
 //   - magic   uint32  ("NCSL", little-endian) — discrimination from junk files
 //   - version uint16
 //   - entries: repeated of
-//       len uvarint  (length of internalKey)
-//       key [len]byte
+//     len uvarint  (length of internalKey)
+//     key [len]byte
 //   - footer: repeated entries terminated by EOF; CRC of the framed body
-//             follows when len == 0.
+//     follows when len == 0.
 //
 // Reload tolerates partial trailing records (returns the keys that decoded
 // cleanly up to the truncation point).
