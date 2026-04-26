@@ -211,7 +211,7 @@ func TestHitStorage(t *testing.T) {
 	}
 	// Hit the memtable path.
 	hitMemtable := func() {
-		v, err := lsm.primaryShard().memTable.Get(e.Key)
+		v, err := lsm.shards[0].memTable.Get(e.Key)
 		require.NoError(t, err)
 		utils.CondPanic(!bytes.Equal(v.Value, e.Value), fmt.Errorf("[hitMemtable] !equal(v.Value, e.Value)"))
 	}
@@ -1190,7 +1190,7 @@ func TestLSMBatchAndMemHelpers(t *testing.T) {
 	if lsm.MemSize() <= 0 {
 		t.Fatalf("expected memtable size to be positive")
 	}
-	if _, ok := lsm.primaryShard().memTable.index.(*index.ART); !ok {
+	if _, ok := lsm.shards[0].memTable.index.(*index.ART); !ok {
 		t.Fatalf("expected ART-backed memtable")
 	}
 
@@ -1220,7 +1220,7 @@ func TestLSMSetBatchWritesSingleBatchRecord(t *testing.T) {
 	if err := lsm.SetBatch(entries); err != nil {
 		t.Fatalf("set batch: %v", err)
 	}
-	shard := lsm.primaryShard()
+	shard := lsm.shards[0]
 	if err := shard.wal.Sync(); err != nil {
 		t.Fatalf("wal sync: %v", err)
 	}
@@ -1350,7 +1350,7 @@ func TestWriteBatchesGroupIntoOneWALBatch(t *testing.T) {
 		newTestWriteBatch(entries[2]),
 	}
 
-	failedAt, err := lsm.applyWriteBatches(lsm.primaryShard(), batches)
+	failedAt, err := lsm.applyWriteBatches(lsm.shards[0], batches)
 	require.Equal(t, -1, failedAt)
 	require.NoError(t, err)
 	for _, entry := range entries {
@@ -1362,7 +1362,7 @@ func TestWriteBatchesGroupIntoOneWALBatch(t *testing.T) {
 
 	var batchRecords int
 	var decoded int
-	shard := lsm.primaryShard()
+	shard := lsm.shards[0]
 	err = shard.wal.ReplaySegment(shard.memTable.segmentID, func(info wal.EntryInfo, payload []byte) error {
 		if info.Type != wal.RecordTypeEntryBatch {
 			return nil
@@ -1391,9 +1391,9 @@ func TestWriteBatchesWALFailureDoesNotApplyMemtable(t *testing.T) {
 	entry := newWritePipelineEntry("wal-fail", 1)
 	defer entry.DecrRef()
 
-	shard := lsm.primaryShard()
+	shard := lsm.shards[0]
 	require.NoError(t, shard.wal.Close())
-	failedAt, err := lsm.applyWriteBatches(lsm.primaryShard(), []*writeBatch{newTestWriteBatch(entry)})
+	failedAt, err := lsm.applyWriteBatches(lsm.shards[0], []*writeBatch{newTestWriteBatch(entry)})
 	require.Equal(t, 0, failedAt)
 	require.Error(t, err)
 
@@ -1452,7 +1452,7 @@ func TestWriteBatchesRotateOnlyBetweenRequests(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = lsm.Close() }()
 
-	failedAt, err := lsm.applyWriteBatches(lsm.primaryShard(), []*writeBatch{
+	failedAt, err := lsm.applyWriteBatches(lsm.shards[0], []*writeBatch{
 		newTestWriteBatch(entries[0]),
 		newTestWriteBatch(entries[1]),
 		newTestWriteBatch(entries[2]),
@@ -1462,7 +1462,7 @@ func TestWriteBatchesRotateOnlyBetweenRequests(t *testing.T) {
 
 	var batches int
 	var decoded int
-	err = lsm.primaryShard().wal.Replay(func(info wal.EntryInfo, payload []byte) error {
+	err = lsm.shards[0].wal.Replay(func(info wal.EntryInfo, payload []byte) error {
 		if info.Type != wal.RecordTypeEntryBatch {
 			return nil
 		}

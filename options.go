@@ -138,7 +138,7 @@ type Options struct {
 	// the value must be a power of two. Zero falls back to the constructor
 	// default; non-power-of-two values are rounded DOWN to the nearest
 	// power of two during Open (e.g. 6 → 4, 12 → 8). See
-	// docs/notes/2026-04-26-lsm-engine-throughput-roadmap.md.
+	// docs/notes/2026-04-27-sharded-wal-memtable.md.
 	LSMShardCount int
 	ManifestSync  bool
 	// ManifestRewriteThreshold triggers a manifest rewrite when the active

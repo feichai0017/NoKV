@@ -11,7 +11,7 @@ import (
 // queue of immutable memtables awaiting flush, and the WAL manager backing
 // both. With multiple shards each pair runs on its own fd, fsync worker,
 // and bufio.Writer so writes do not contend on a single Manager.mu. See
-// docs/notes/2026-04-26-lsm-engine-throughput-roadmap.md for the broader
+// docs/notes/2026-04-27-sharded-wal-memtable.md for the broader
 // plan and the routing/recovery/flush invariants.
 type lsmShard struct {
 	id int
@@ -36,12 +36,3 @@ func newLSMShard(id int, walMgr *wal.Manager) *lsmShard {
 	}
 }
 
-// primaryShard returns shards[0]. Used by non-pipeline callers (admin
-// tools, recovery glue, tests) that don't have an explicit shard pick.
-// Production write paths always route by user-key affinity instead.
-func (lsm *LSM) primaryShard() *lsmShard {
-	if lsm == nil || len(lsm.shards) == 0 {
-		return nil
-	}
-	return lsm.shards[0]
-}

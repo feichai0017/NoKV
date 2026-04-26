@@ -40,7 +40,7 @@ import (
 // and a WAL Manager), the level manager, and the flush runtime into one
 // coherent storage core. See the package docstring for the durability
 // ordering invariant and
-// docs/notes/2026-04-26-lsm-engine-throughput-roadmap.md for the
+// docs/notes/2026-04-27-sharded-wal-memtable.md for the
 // sharding rationale and routing/recovery/flush invariants.
 type LSM struct {
 	shards     []*lsmShard
@@ -585,8 +585,8 @@ func (lsm *LSM) SetBatch(entries []*kv.Entry) error {
 // Each inner batch remains indivisible: rotation may split between batches,
 // but never inside one batch. The returned failedAt is the first batch index
 // that was not applied, or -1 on success. Routing is the caller's choice —
-// commit-worker affinity preserves SetBatch atomicity (see
-// docs/notes/2026-04-26-lsm-engine-throughput-roadmap.md §2.2).
+// per-key affinity preserves SetBatch atomicity (see
+// docs/notes/2026-04-27-sharded-wal-memtable.md §2.4).
 func (lsm *LSM) SetBatchGroup(shardID int, groups [][]*kv.Entry) (int, error) {
 	if len(groups) == 0 {
 		return -1, nil
