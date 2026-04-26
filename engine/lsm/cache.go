@@ -88,14 +88,14 @@ func (c *cache) delIndex(fid uint64) {
 	c.indexes.Del(fid)
 }
 
-func (c *cache) getBlock(level int, key uint64) (*block, bool) {
+func (c *cache) getBlock(level int, key uint64) (*blockEntry, bool) {
 	if c == nil || c.blocks == nil {
 		return nil, false
 	}
-	blk, ok := c.blocks.get(key)
+	entry, ok := c.blocks.get(key)
 	if ok {
 		c.metrics.RecordBlock(level, true)
-		return blk, true
+		return entry, true
 	}
 	c.metrics.RecordBlock(level, false)
 	return nil, false
@@ -138,9 +138,11 @@ type blockCacheShard struct {
 }
 
 type blockEntry struct {
-	key uint64
-	tbl *table
-	blk *block
+	key         uint64
+	tbl         *table
+	diskData    []byte
+	compression BlockCompression
+	rawLen      int
 
 	cost        int64
 	releaseOnce sync.Once
@@ -201,13 +203,13 @@ func newBlockCache(budgetBytes int64) *blockCache {
 	return bc
 }
 
-func (c *blockCache) get(key uint64) (*block, bool) {
+func (c *blockCache) get(key uint64) (*blockEntry, bool) {
 	shard := c.shard(key)
 	if shard == nil || shard.rc == nil {
 		return nil, false
 	}
-	if be, ok := shard.rc.Get(key); ok && be != nil && be.blk != nil {
-		return be.blk, true
+	if be, ok := shard.rc.Get(key); ok && be != nil && len(be.diskData) > 0 {
+		return be, true
 	}
 	return nil, false
 }
@@ -220,15 +222,21 @@ func (c *blockCache) add(level int, tbl *table, key uint64, blk *block) {
 	if level > 1 {
 		return
 	}
-	cost := blockCacheCost(blk)
+	payload := blk.diskData
+	if len(payload) == 0 {
+		payload = blk.data
+	}
+	cost := int64(len(payload))
 	if cost <= 0 || cost > shard.budgetBytes {
 		return
 	}
 	entry := &blockEntry{
-		key:  key,
-		tbl:  tbl,
-		blk:  blk,
-		cost: cost,
+		key:         key,
+		tbl:         tbl,
+		diskData:    append([]byte(nil), payload...),
+		compression: blk.compression,
+		rawLen:      blk.rawLen,
+		cost:        cost,
 	}
 	if entry.tbl != nil {
 		entry.tbl.IncrRef()
@@ -287,22 +295,6 @@ func indexCacheCost(idx *storagepb.TableIndex) int64 {
 		return 1
 	}
 	return cost
-}
-
-func blockCacheCost(blk *block) int64 {
-	if blk == nil {
-		return 0
-	}
-	if blk.estimateSz > 0 {
-		return blk.estimateSz
-	}
-	if cap(blk.data) > 0 {
-		return int64(cap(blk.data))
-	}
-	if len(blk.data) > 0 {
-		return int64(len(blk.data))
-	}
-	return 1
 }
 
 func cacheCountersForBudget(budgetBytes, avgItemBytes int64) int64 {

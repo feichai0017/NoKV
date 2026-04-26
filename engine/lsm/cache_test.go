@@ -89,6 +89,26 @@ func TestBlockCacheShardsKeys(t *testing.T) {
 	require.NoError(t, func() error { bc.close(); return nil }())
 }
 
+func TestBlockCacheStoresCompressedPayload(t *testing.T) {
+	bc := newBlockCache(1 << 20)
+	require.NotNil(t, bc)
+	blk := &block{
+		data:        []byte("decoded-block-payload"),
+		diskData:    []byte("zip"),
+		compression: BlockCompressionSnappy,
+		rawLen:      len("decoded-block-payload"),
+	}
+
+	bc.add(0, nil, 7, blk)
+	bc.wait()
+	entry, ok := bc.get(7)
+	require.True(t, ok)
+	require.Equal(t, []byte("zip"), entry.diskData)
+	require.Equal(t, int64(3), entry.cost)
+	require.Nil(t, entry.tbl)
+	bc.close()
+}
+
 func TestIndexCacheEvictionByBudget(t *testing.T) {
 	idx1 := &storagepb.TableIndex{KeyCount: 1, BloomFilter: make([]byte, 64)}
 	idx2 := &storagepb.TableIndex{KeyCount: 2, BloomFilter: make([]byte, 64)}

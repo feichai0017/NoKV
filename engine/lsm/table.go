@@ -390,24 +390,65 @@ func (t *table) loadBlock(idx int) (*block, error) {
 	var b *block
 	key := t.blockCacheKey(idx)
 	lvl := t.level()
-	if cached, ok := t.lm.cache.getBlock(lvl, key); ok && cached != nil {
-		return cached, nil
-	}
-
 	ko, ok := t.blockOffset(idx)
 	utils.CondPanicFunc(!ok || ko == nil, func() error { return fmt.Errorf("block t.offset id=%d", idx) })
+	if cached, ok := t.lm.cache.getBlock(lvl, key); ok && cached != nil {
+		return t.decodeCachedBlock(ko, cached)
+	}
+
 	b = &block{
 		offset: int(ko.GetOffset()),
 		tbl:    t,
 	}
 
 	var err error
-	if b.data, err = t.readBlockPayload(b.offset, ko); err != nil {
+	if b.diskData, err = t.read(b.offset, int(ko.GetLen())); err != nil {
 		return nil, errors.Wrapf(err,
 			"failed to read from sstable: %d at offset: %d, len: %d",
 			t.fid, b.offset, ko.GetLen())
 	}
+	b.diskEnd = len(b.diskData)
+	b.compression = BlockCompression(ko.GetCompression())
+	b.rawLen = int(ko.GetRawLen())
+	if b.data, err = decodeBlockPayload(b.diskData, b.compression, b.rawLen); err != nil {
+		return nil, err
+	}
+	if err := decodeBlockMetadata(b); err != nil {
+		return nil, err
+	}
 
+	t.lm.cache.addBlock(lvl, t, key, b)
+
+	return b, nil
+}
+
+func (t *table) decodeCachedBlock(ko *storagepb.BlockOffset, cached *blockEntry) (*block, error) {
+	if cached == nil {
+		return nil, errors.New("nil cached block")
+	}
+	data, err := decodeBlockPayload(cached.diskData, cached.compression, cached.rawLen)
+	if err != nil {
+		return nil, err
+	}
+	b := &block{
+		offset:      int(ko.GetOffset()),
+		tbl:         t,
+		data:        data,
+		diskData:    cached.diskData,
+		diskEnd:     len(cached.diskData),
+		compression: cached.compression,
+		rawLen:      cached.rawLen,
+	}
+	if err := decodeBlockMetadata(b); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func decodeBlockMetadata(b *block) error {
+	if b == nil {
+		return errors.New("nil block")
+	}
 	// Binary Format for a Data Block (read from disk):
 	// +--------------------------------+--------------------------------+
 	// | ... (Key-Value Entries) ...    | Entry Offsets List (var length)|
@@ -417,11 +458,14 @@ func (t *table) loadBlock(idx int) (*block, error) {
 	// | Block Checksum Length (4B)     |
 	// +--------------------------------+
 
+	if len(b.data) < 4 {
+		return errors.New("block data too small")
+	}
 	readPos := len(b.data) - 4 // First read checksum length.
 	b.chkLen = int(kv.BytesToU32(b.data[readPos : readPos+4]))
 
-	if b.chkLen > len(b.data) {
-		return nil, errors.New("invalid checksum length. Either the data is " +
+	if b.chkLen > len(b.data) || readPos < b.chkLen {
+		return errors.New("invalid checksum length. Either the data is " +
 			"corrupted or the table options are incorrectly set")
 	}
 
@@ -430,22 +474,25 @@ func (t *table) loadBlock(idx int) (*block, error) {
 
 	b.data = b.data[:readPos]
 
-	if err = b.verifyCheckSum(); err != nil {
-		return nil, err
+	if err := b.verifyCheckSum(); err != nil {
+		return err
 	}
 
 	readPos -= 4
+	if readPos < 0 {
+		return errors.New("invalid block offsets")
+	}
 	numEntries := int(kv.BytesToU32(b.data[readPos : readPos+4]))
 	entriesIndexStart := readPos - (numEntries * 4)
 	entriesIndexEnd := entriesIndexStart + numEntries*4
+	if entriesIndexStart < 0 || entriesIndexEnd > len(b.data) {
+		return errors.New("invalid block entry offsets")
+	}
 
 	b.entryOffsets = kv.BytesToU32Slice(b.data[entriesIndexStart:entriesIndexEnd])
 
 	b.entriesIndexStart = entriesIndexStart
-
-	t.lm.cache.addBlock(lvl, t, key, b)
-
-	return b, nil
+	return nil
 }
 
 func (t *table) read(off, sz int) ([]byte, error) {
@@ -457,15 +504,8 @@ func (t *table) read(off, sz int) ([]byte, error) {
 	return ss.Bytes(off, sz)
 }
 
-func (t *table) readBlockPayload(off int, ko *storagepb.BlockOffset) ([]byte, error) {
-	if ko == nil {
-		return nil, errors.New("nil block offset")
-	}
-	payload, err := t.read(off, int(ko.GetLen()))
-	if err != nil {
-		return nil, err
-	}
-	switch BlockCompression(ko.GetCompression()) {
+func decodeBlockPayload(payload []byte, compression BlockCompression, rawLen int) ([]byte, error) {
+	switch compression {
 	case BlockCompressionNone:
 		return payload, nil
 	case BlockCompressionSnappy:
@@ -473,12 +513,12 @@ func (t *table) readBlockPayload(off int, ko *storagepb.BlockOffset) ([]byte, er
 		if err != nil {
 			return nil, err
 		}
-		if rawLen := int(ko.GetRawLen()); rawLen > 0 && len(decoded) != rawLen {
+		if rawLen > 0 && len(decoded) != rawLen {
 			return nil, fmt.Errorf("snappy block length mismatch: got=%d want=%d", len(decoded), rawLen)
 		}
 		return decoded, nil
 	default:
-		return nil, fmt.Errorf("unknown block compression %d", ko.GetCompression())
+		return nil, fmt.Errorf("unknown block compression %d", compression)
 	}
 }
 
