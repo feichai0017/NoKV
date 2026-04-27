@@ -1,83 +1,23 @@
-package runtime
+package commit
+
+// Queue + batch + sync envelope types owned by the commit pipeline.
+// Request (the underlying write envelope shared with engine/vlog) lives
+// in runtime — see runtime/request.go.
 
 import (
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/runtime"
 	"github.com/feichai0017/NoKV/utils"
 )
 
-// Request is the runtime write-envelope used by the DB write pipeline and the
-// value-log path. It is intentionally internal to the repository: callers
-// should interact with DB APIs instead of constructing write-pipeline requests.
-type Request struct {
-	Entries    []*kv.Entry
-	Ptrs       []kv.ValuePtr
-	PtrIdxs    []int
-	PtrBuckets []uint32
-	Err        error
-	utils.RefCount
-	EnqueueAt time.Time
-	WG        sync.WaitGroup
-}
-
-// RequestPool reuses write-envelope objects on the DB/value-log hot path.
-var RequestPool = sync.Pool{
-	New: func() any { return new(Request) },
-}
-
-func (req *Request) Reset() {
-	req.Entries = req.Entries[:0]
-	req.Ptrs = req.Ptrs[:0]
-	req.PtrIdxs = req.PtrIdxs[:0]
-	req.PtrBuckets = req.PtrBuckets[:0]
-	req.Err = nil
-	req.RefCount.Reset()
-	req.EnqueueAt = time.Time{}
-	req.WG = sync.WaitGroup{}
-}
-
-func (req *Request) LoadEntries(entries []*kv.Entry) {
-	if cap(req.Entries) < len(entries) {
-		req.Entries = make([]*kv.Entry, len(entries))
-	} else {
-		req.Entries = req.Entries[:len(entries)]
-	}
-	copy(req.Entries, entries)
-}
-
-// IncrRef adds one lifecycle reference.
-func (req *Request) IncrRef() { req.Incr() }
-
-// DecrRef releases one lifecycle reference and returns the request to pool at
-// zero. It panics on refcount underflow to surface lifecycle bugs early.
-func (req *Request) DecrRef() {
-	if req.Decr() > 0 {
-		return
-	}
-	for _, e := range req.Entries {
-		e.DecrRef()
-	}
-	req.Entries = nil
-	req.Ptrs = nil
-	req.PtrIdxs = nil
-	req.PtrBuckets = nil
-	RequestPool.Put(req)
-}
-
-// Wait blocks until commit workers finish processing this request.
-func (req *Request) Wait() error {
-	req.WG.Wait()
-	err := req.Err
-	req.DecrRef()
-	return err
-}
-
-// CommitRequest is the queue element used by the DB commit worker.
+// CommitRequest is the queue element used by the commit Pipeline. It
+// wraps a runtime.Request with the queue-side accounting (entry count,
+// payload size) the dispatcher needs.
 type CommitRequest struct {
-	Req        *Request
+	Req        *runtime.Request
 	EntryCount int
 	Size       int64
 }
@@ -87,8 +27,8 @@ var CommitRequestPool = sync.Pool{
 	New: func() any { return &CommitRequest{} },
 }
 
-// CommitQueue is the MPSC-backed queue shared by write submitters and the
-// commit worker.
+// CommitQueue is the MPSC-backed queue shared by write submitters and
+// the commit dispatcher.
 type CommitQueue struct {
 	q              *utils.MPSCQueue[*CommitRequest]
 	pendingBytes   atomic.Int64
@@ -180,23 +120,24 @@ func (cq *CommitQueue) AddPending(entries int64, bytes int64) {
 	cq.pendingBytes.Add(bytes)
 }
 
-// CommitBatch is the temporary grouping drained by one commit-worker pass.
-// ShardID is set by the dispatcher and pins the batch to one LSM data-plane
-// shard end-to-end (preserves SetBatch atomicity).
+// CommitBatch is the temporary grouping drained by one commit-worker
+// pass. ShardID is set by the dispatcher and pins the batch to one LSM
+// data-plane shard end-to-end (preserves SetBatch atomicity).
 type CommitBatch struct {
 	Reqs        []*CommitRequest
 	Pool        *[]*CommitRequest
-	Requests    []*Request
+	Requests    []*runtime.Request
 	ShardID     int
 	BatchStart  time.Time
 	ValueLogDur time.Duration
 }
 
-// SyncBatch is the handoff object between the commit worker and the sync worker.
+// SyncBatch is the handoff object between the commit worker and the
+// sync worker.
 type SyncBatch struct {
 	Reqs      []*CommitRequest
 	Pool      *[]*CommitRequest
-	Requests  []*Request
+	Requests  []*runtime.Request
 	ShardID   int
 	FailedAt  int
 	ApplyDone time.Time

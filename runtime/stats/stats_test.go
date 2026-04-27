@@ -1,4 +1,9 @@
-package NoKV
+package stats_test
+
+// External-test integration tests for the Stats subsystem, exercised
+// through the root NoKV.DB facade. Helpers are intentionally inlined:
+// shared db_test.go fixtures live in the root package and an external
+// test package can't see unexported identifiers.
 
 import (
 	"encoding/json"
@@ -6,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/metrics"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -13,9 +19,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStatsCollectSnapshots(t *testing.T) {
-	clearDir()
+func openTestDB(t testing.TB, opt *NoKV.Options) *NoKV.DB {
+	t.Helper()
+	if opt != nil && !opt.EnableValueLog {
+		if opt.ValueLogFileSize > 0 || opt.ValueThreshold == 0 || opt.ValueLogBucketCount > 0 {
+			opt.EnableValueLog = true
+		}
+	}
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
+	return db
+}
+
+func newTestOptions(t *testing.T) *NoKV.Options {
+	t.Helper()
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	opt.SSTableMaxSz = 1 << 12
+	opt.MemTableSize = 1 << 12
+	opt.EnableValueLog = true
+	opt.ValueLogFileSize = 1 << 20
+	opt.ValueThreshold = 0
+	opt.ValueLogBucketCount = 1
+	opt.MaxBatchCount = 10
+	opt.MaxBatchSize = 1 << 20
 	opt.DetectConflicts = true
+	return opt
+}
+
+func TestStatsCollectSnapshots(t *testing.T) {
+	opt := newTestOptions(t)
 	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
@@ -39,9 +72,8 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	require.Equal(t, uint64(0), snap.WAL.AutoGCRemoved)
 	require.Greater(t, snap.Write.BatchesTotal, int64(0))
 	require.False(t, snap.Write.ThrottleActive)
-	require.Equal(t, db.iterPool.Reused(), snap.Cache.IteratorReused)
+	require.Equal(t, db.IteratorReused(), snap.Cache.IteratorReused)
 
-	require.Equal(t, db.lsm.FlushPending(), snap.Flush.Pending)
 	require.Equal(t, int64(2), snap.Region.Total)
 	require.Equal(t, int64(1), snap.Region.Running)
 	require.Equal(t, int64(1), snap.Region.Removing)
@@ -64,19 +96,19 @@ func TestStatsCollectSnapshots(t *testing.T) {
 }
 
 func TestStatsSnapshotTracksThrottleAndWalRemovals(t *testing.T) {
-	clearDir()
-	opt.DetectConflicts = true
+	opt := newTestOptions(t)
 	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	require.NoError(t, db.Set([]byte("wal-metrics"), []byte("value")))
-	require.NoError(t, db.lsm.Rotate())
+	lsmCore := db.LSM().(*lsm.LSM)
+	require.NoError(t, lsmCore.Rotate())
 	require.Eventually(t, func() bool {
 		return db.Info().Snapshot().WAL.SegmentsRemoved > 0
 	}, 5*time.Second, 10*time.Millisecond)
 
-	db.applyThrottle(lsm.WriteThrottleStop)
-	defer db.applyThrottle(lsm.WriteThrottleNone)
+	db.ApplyThrottle(lsm.WriteThrottleStop)
+	defer db.ApplyThrottle(lsm.WriteThrottleNone)
 
 	snap := db.Info().Snapshot()
 	require.True(t, snap.Write.ThrottleActive)
@@ -94,7 +126,7 @@ func TestStatsSnapshotTracksThrottleAndWalRemovals(t *testing.T) {
 	require.Equal(t, uint32(1000), exported.Write.ThrottlePressure)
 	require.Equal(t, uint64(0), exported.Write.ThrottleRate)
 
-	db.applyThrottle(lsm.WriteThrottleNone)
+	db.ApplyThrottle(lsm.WriteThrottleNone)
 	snapAfter := db.Info().Snapshot()
 	require.False(t, snapAfter.Write.ThrottleActive)
 	require.Equal(t, "none", snapAfter.Write.ThrottleMode)

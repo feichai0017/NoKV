@@ -291,7 +291,7 @@ func (db *DB) runtimeLSMOptions() *lsm.Options {
 		DiscardStatsCh:           &db.discardStatsCh,
 		ManifestSync:             db.opt.ManifestSync,
 		ManifestRewriteThreshold: db.opt.ManifestRewriteThreshold,
-		ThrottleCallback:         db.applyThrottle,
+		ThrottleCallback:         db.ApplyThrottle,
 	}
 	db.opt.applyLSMSharedOptions(cfg)
 	return cfg
@@ -1367,7 +1367,7 @@ func (db *DB) IsClosed() bool {
 	return db.isClosed.Load() == 1
 }
 
-func (db *DB) applyThrottle(state lsm.WriteThrottleState) {
+func (db *DB) ApplyThrottle(state lsm.WriteThrottleState) {
 	state = dbruntime.NormalizeWriteThrottleState(state)
 	stop := int32(0)
 	slow := int32(0)

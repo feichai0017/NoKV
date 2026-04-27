@@ -1475,7 +1475,7 @@ func TestFinishCommitRequestsPerRequestErrors(t *testing.T) {
 	req2.WG.Add(1)
 	reqErr := errors.New("request failed")
 
-	batch := []*dbruntime.CommitRequest{
+	batch := []*commit.CommitRequest{
 		{Req: req1},
 		{Req: req2},
 	}
@@ -2515,8 +2515,8 @@ func TestSendToWriteChWaitsForThrottleClear(t *testing.T) {
 	db := openTestDB(t, opts)
 	defer func() { _ = db.Close() }()
 
-	db.applyThrottle(lsm.WriteThrottleStop)
-	defer db.applyThrottle(lsm.WriteThrottleNone)
+	db.ApplyThrottle(lsm.WriteThrottleStop)
+	defer db.ApplyThrottle(lsm.WriteThrottleNone)
 
 	done := make(chan error, 1)
 	go func() {
@@ -2536,7 +2536,7 @@ func TestSendToWriteChWaitsForThrottleClear(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	db.applyThrottle(lsm.WriteThrottleNone)
+	db.ApplyThrottle(lsm.WriteThrottleNone)
 
 	select {
 	case err := <-done:
@@ -2551,7 +2551,7 @@ func TestSendToWriteChReturnsBlockedWritesWhenClosedWhileThrottled(t *testing.T)
 	opts.WriteBatchWait = 0
 	db := openTestDB(t, opts)
 
-	db.applyThrottle(lsm.WriteThrottleStop)
+	db.ApplyThrottle(lsm.WriteThrottleStop)
 
 	done := make(chan error, 1)
 	go func() {
@@ -3209,8 +3209,8 @@ func TestValueLogGCSkipBlocked(t *testing.T) {
 	require.NoError(t, db.Set(e.Key, e.Value))
 	e.DecrRef()
 
-	db.applyThrottle(lsm.WriteThrottleStop)
-	defer db.applyThrottle(lsm.WriteThrottleNone)
+	db.ApplyThrottle(lsm.WriteThrottleStop)
+	defer db.ApplyThrottle(lsm.WriteThrottleNone)
 
 	if err := db.RunValueLogGC(0.5); err != nil && !errors.Is(err, utils.ErrNoRewrite) {
 		t.Fatalf("expected ErrNoRewrite when writes blocked, got %v", err)

@@ -93,11 +93,11 @@ type Pipeline struct {
 	cfg  Config
 	host Host
 
-	queue     runtime.CommitQueue
-	dispatch  []chan *runtime.CommitBatch
+	queue     CommitQueue
+	dispatch  []chan *CommitBatch
 	wg        sync.WaitGroup
 	batchPool sync.Pool
-	syncQueue chan *runtime.SyncBatch
+	syncQueue chan *SyncBatch
 	syncWG    sync.WaitGroup
 }
 
@@ -114,7 +114,7 @@ func New(cfg Config, host Host) *Pipeline {
 	queueCap := max(cfg.WriteBatchMaxCount*8, 1024)
 	p.queue.Init(queueCap)
 	p.batchPool.New = func() any {
-		batch := make([]*runtime.CommitRequest, 0, cfg.WriteBatchMaxCount)
+		batch := make([]*CommitRequest, 0, cfg.WriteBatchMaxCount)
 		return &batch
 	}
 	return p
@@ -126,13 +126,13 @@ func New(cfg Config, host Host) *Pipeline {
 // Pipeline instance.
 func (p *Pipeline) Start() {
 	if p.cfg.SyncWrites && p.cfg.SyncPipeline {
-		p.syncQueue = make(chan *runtime.SyncBatch, 128)
+		p.syncQueue = make(chan *SyncBatch, 128)
 		p.syncWG.Add(1)
 		go p.syncWorker()
 	}
-	p.dispatch = make([]chan *runtime.CommitBatch, p.cfg.ShardCount)
+	p.dispatch = make([]chan *CommitBatch, p.cfg.ShardCount)
 	for i := 0; i < p.cfg.ShardCount; i++ {
-		p.dispatch[i] = make(chan *runtime.CommitBatch, 32)
+		p.dispatch[i] = make(chan *CommitBatch, 32)
 	}
 	p.wg.Add(1)
 	go p.dispatcher()
@@ -201,7 +201,7 @@ func (p *Pipeline) Send(entries []*kv.Entry, waitOnThrottle bool) (*runtime.Requ
 	req.WG.Add(1)
 	req.IncrRef()
 
-	cr := runtime.CommitRequestPool.Get().(*runtime.CommitRequest)
+	cr := CommitRequestPool.Get().(*CommitRequest)
 	cr.Req = req
 	cr.EntryCount = int(count)
 	cr.Size = size
@@ -210,14 +210,14 @@ func (p *Pipeline) Send(entries []*kv.Entry, waitOnThrottle bool) (*runtime.Requ
 		req.WG.Done()
 		req.Entries = nil
 		req.DecrRef()
-		runtime.CommitRequestPool.Put(cr)
+		CommitRequestPool.Put(cr)
 		return nil, err
 	}
 
 	return req, nil
 }
 
-func (p *Pipeline) enqueue(cr *runtime.CommitRequest) error {
+func (p *Pipeline) enqueue(cr *CommitRequest) error {
 	if cr == nil {
 		return nil
 	}
@@ -245,14 +245,14 @@ func (p *Pipeline) enqueue(cr *runtime.CommitRequest) error {
 	return nil
 }
 
-func (p *Pipeline) nextBatch(consumer *utils.MPSCConsumer[*runtime.CommitRequest]) *runtime.CommitBatch {
+func (p *Pipeline) nextBatch(consumer *utils.MPSCConsumer[*CommitRequest]) *CommitBatch {
 	cq := &p.queue
 	first := cq.Pop(consumer)
 	if first == nil {
 		return nil
 	}
 
-	batchPtr := p.batchPool.Get().(*[]*runtime.CommitRequest)
+	batchPtr := p.batchPool.Get().(*[]*CommitRequest)
 	batch := (*batchPtr)[:0]
 	pendingEntries := int64(0)
 	pendingBytes := int64(0)
@@ -270,7 +270,7 @@ func (p *Pipeline) nextBatch(consumer *utils.MPSCConsumer[*runtime.CommitRequest
 		}
 	}
 
-	addToBatch := func(cr *runtime.CommitRequest) {
+	addToBatch := func(cr *CommitRequest) {
 		batch = append(batch, cr)
 		pendingEntries += int64(cr.EntryCount)
 		pendingBytes += cr.Size
@@ -282,7 +282,7 @@ func (p *Pipeline) nextBatch(consumer *utils.MPSCConsumer[*runtime.CommitRequest
 	}
 	remaining := limitCount - len(batch)
 	if remaining > 0 && pendingBytes < limitSize {
-		cq.DrainReady(consumer, remaining, func(cr *runtime.CommitRequest) bool {
+		cq.DrainReady(consumer, remaining, func(cr *CommitRequest) bool {
 			addToBatch(cr)
 			return pendingBytes < limitSize
 		})
@@ -292,7 +292,7 @@ func (p *Pipeline) nextBatch(consumer *utils.MPSCConsumer[*runtime.CommitRequest
 	if wm := p.host.WriteMetrics(); wm != nil {
 		wm.UpdateQueue(cq.Len(), int(cq.PendingEntries()), cq.PendingBytes())
 	}
-	return &runtime.CommitBatch{Reqs: batch, Pool: batchPtr}
+	return &CommitBatch{Reqs: batch, Pool: batchPtr}
 }
 
 // dispatcher owns the MPSC queue's single consumer slot. It pulls
@@ -336,7 +336,7 @@ func (p *Pipeline) dispatcher() {
 // other "later same-version write wins" pattern stays correct.
 //
 // Empty batches (no key to hash) round-robin via *rr to keep load even.
-func shardForBatch(batch *runtime.CommitBatch, n int, rr *int) int {
+func shardForBatch(batch *CommitBatch, n int, rr *int) int {
 	if n <= 1 {
 		return 0
 	}
@@ -393,7 +393,7 @@ func fnv1a32(b []byte) uint32 {
 func (p *Pipeline) processor(shardID int) {
 	defer p.wg.Done()
 	walMgr := p.host.LSMWALs()[shardID]
-	burst := make([]*runtime.CommitBatch, 0, 8)
+	burst := make([]*CommitBatch, 0, 8)
 	for first := range p.dispatch[shardID] {
 		burst = burst[:0]
 		burst = append(burst, first)
@@ -416,7 +416,7 @@ func (p *Pipeline) processor(shardID int) {
 
 // runBurst processes a burst of batches as a single WAL append +
 // memtable apply, then fans the result back to each batch for ack.
-func (p *Pipeline) runBurst(walMgr *wal.Manager, shardID int, burst []*runtime.CommitBatch) {
+func (p *Pipeline) runBurst(walMgr *wal.Manager, shardID int, burst []*CommitBatch) {
 	if len(burst) == 0 {
 		return
 	}
@@ -507,7 +507,7 @@ func (p *Pipeline) runBurst(walMgr *wal.Manager, shardID int, burst []*runtime.C
 		// Hand each batch off to the sync worker individually so per-batch
 		// ack ordering is preserved.
 		for i, batch := range burst {
-			sb := &runtime.SyncBatch{
+			sb := &SyncBatch{
 				Reqs:      batch.Reqs,
 				Pool:      batch.Pool,
 				Requests:  batch.Requests,
@@ -548,7 +548,7 @@ func (p *Pipeline) runBurst(walMgr *wal.Manager, shardID int, burst []*runtime.C
 // runSingle is the burst-size-1 fast path. It mirrors the per-batch
 // pipeline (no merge / boundaries / per-batch failedAt fan-out) to
 // eliminate coalesce overhead when there is no extra batch to drain.
-func (p *Pipeline) runSingle(walMgr *wal.Manager, shardID int, batch *runtime.CommitBatch) {
+func (p *Pipeline) runSingle(walMgr *wal.Manager, shardID int, batch *CommitBatch) {
 	wm := p.host.WriteMetrics()
 	batch.BatchStart = time.Now()
 	requests, totalEntries, totalSize, waitSum := collectCommitRequests(batch.Reqs, batch.BatchStart)
@@ -578,7 +578,7 @@ func (p *Pipeline) runSingle(walMgr *wal.Manager, shardID int, batch *runtime.Co
 
 	failedAt, err := p.applyRequests(batch.Requests, shardID)
 	if err == nil && p.syncQueue != nil {
-		sb := &runtime.SyncBatch{
+		sb := &SyncBatch{
 			Reqs:      batch.Reqs,
 			Pool:      batch.Pool,
 			Requests:  batch.Requests,
@@ -616,9 +616,9 @@ func (p *Pipeline) syncWorker() {
 	defer p.syncWG.Done()
 	wals := p.host.LSMWALs()
 	wm := p.host.WriteMetrics()
-	pending := make([]*runtime.SyncBatch, 0, 64)
+	pending := make([]*SyncBatch, 0, 64)
 	// per-shard buckets so one fsync covers many batches on the same WAL
-	buckets := make(map[int][]*runtime.SyncBatch, len(wals))
+	buckets := make(map[int][]*SyncBatch, len(wals))
 	for first := range p.syncQueue {
 		pending = append(pending, first)
 	drain:
@@ -663,7 +663,7 @@ func (p *Pipeline) syncWorker() {
 	}
 }
 
-func (p *Pipeline) ackBatch(reqs []*runtime.CommitRequest, pool *[]*runtime.CommitRequest, requests []*runtime.Request, failedAt int, defaultErr error) {
+func (p *Pipeline) ackBatch(reqs []*CommitRequest, pool *[]*CommitRequest, requests []*runtime.Request, failedAt int, defaultErr error) {
 	if defaultErr != nil && failedAt >= 0 && failedAt < len(requests) {
 		perReqErr := make(map[*runtime.Request]error, len(requests)-failedAt)
 		for i := failedAt; i < len(requests); i++ {
@@ -684,7 +684,7 @@ func (p *Pipeline) ackBatch(reqs []*runtime.CommitRequest, pool *[]*runtime.Comm
 	}
 }
 
-func collectCommitRequests(reqs []*runtime.CommitRequest, now time.Time) ([]*runtime.Request, int, int64, int64) {
+func collectCommitRequests(reqs []*CommitRequest, now time.Time) ([]*runtime.Request, int, int64, int64) {
 	requests := make([]*runtime.Request, 0, len(reqs))
 	var (
 		totalEntries int
@@ -707,7 +707,7 @@ func collectCommitRequests(reqs []*runtime.CommitRequest, now time.Time) ([]*run
 	return requests, totalEntries, totalSize, waitSum
 }
 
-func (p *Pipeline) releaseBatch(batch *runtime.CommitBatch) {
+func (p *Pipeline) releaseBatch(batch *CommitBatch) {
 	if batch == nil || batch.Pool == nil {
 		return
 	}
@@ -749,11 +749,11 @@ func (p *Pipeline) applyRequests(reqs []*runtime.Request, shardID int) (int, err
 
 // FinishCommitRequests acks each pending request with either defaultErr
 // or perReqErr[req] (when present). Exported for root-package tests.
-func FinishCommitRequests(reqs []*runtime.CommitRequest, defaultErr error, perReqErr map[*runtime.Request]error) {
+func FinishCommitRequests(reqs []*CommitRequest, defaultErr error, perReqErr map[*runtime.Request]error) {
 	finishCommitRequests(reqs, defaultErr, perReqErr)
 }
 
-func finishCommitRequests(reqs []*runtime.CommitRequest, defaultErr error, perReqErr map[*runtime.Request]error) {
+func finishCommitRequests(reqs []*CommitRequest, defaultErr error, perReqErr map[*runtime.Request]error) {
 	for _, cr := range reqs {
 		if cr == nil || cr.Req == nil {
 			continue
@@ -771,7 +771,7 @@ func finishCommitRequests(reqs []*runtime.CommitRequest, defaultErr error, perRe
 		cr.Req = nil
 		cr.EntryCount = 0
 		cr.Size = 0
-		runtime.CommitRequestPool.Put(cr)
+		CommitRequestPool.Put(cr)
 	}
 }
 
