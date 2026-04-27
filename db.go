@@ -21,8 +21,9 @@ import (
 	"github.com/feichai0017/NoKV/engine/vfs"
 	vlogpkg "github.com/feichai0017/NoKV/engine/vlog"
 	"github.com/feichai0017/NoKV/engine/wal"
-	dbruntime "github.com/feichai0017/NoKV/runtime"
 	"github.com/feichai0017/NoKV/metrics"
+	dbruntime "github.com/feichai0017/NoKV/runtime"
+	iterpkg "github.com/feichai0017/NoKV/runtime/iterator"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
@@ -119,7 +120,7 @@ type (
 		commitDispatch  []chan *dbruntime.CommitBatch
 		syncQueue       chan *dbruntime.SyncBatch
 		syncWG          sync.WaitGroup
-		iterPool        *dbruntime.IteratorPool
+		iterPool        *iterpkg.IteratorPool
 		hotWriteLimited atomic.Uint64
 		policyMatcher   atomic.Pointer[kv.ValueSeparationPolicyMatcher]
 		background      dbruntime.BackgroundServices
@@ -241,7 +242,7 @@ func (db *DB) openEngine() error {
 	}
 	db.lsm = lsmCore
 	db.nonTxnVersion.Store(db.lsm.Diagnostics().MaxVersion)
-	db.iterPool = dbruntime.NewIteratorPool()
+	db.iterPool = iterpkg.NewIteratorPool()
 	if db.opt.EnableValueLog {
 		db.initVLog()
 	}
@@ -924,6 +925,25 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 		return nil, utils.ErrInvalidRequest
 	}
 	return entry, nil
+}
+
+// NewIterator creates a DB-level iterator over user keys in the default
+// column family. The state machine + Item materialization live in
+// runtime/iterator; this method wires DB internals (lsm, vlog, iterPool)
+// into iterpkg.New as a thin facade.
+func (db *DB) NewIterator(opt *index.Options) index.Iterator {
+	return iterpkg.New(iterpkg.Deps{
+		Storage: db.lsm,
+		Vlog:    db.vlog,
+		Pool:    db.iterPool,
+	}, opt)
+}
+
+// NewInternalIterator returns an iterator over internal keys (CF marker +
+// user key + timestamp). Callers should decode kv.Entry.Key via
+// kv.SplitInternalKey and handle ok=false.
+func (db *DB) NewInternalIterator(opt *index.Options) index.Iterator {
+	return iterpkg.NewInternal(db.lsm, opt)
 }
 
 // Info returns the live stats collector for snapshot/diagnostic access.

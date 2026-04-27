@@ -12,7 +12,6 @@ import (
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm"
-	"github.com/feichai0017/NoKV/runtime"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
 )
@@ -38,15 +37,15 @@ type Vlog interface {
 type Deps struct {
 	Storage Storage
 	Vlog    Vlog
-	Pool    *runtime.IteratorPool
+	Pool    *IteratorPool
 }
 
 // DBIterator wraps the merged LSM iterators and optionally resolves value-log pointers.
 type DBIterator struct {
 	iitr index.Iterator
 	vlog Vlog
-	pool *runtime.IteratorPool
-	ctx  *runtime.IteratorContext
+	pool *IteratorPool
+	ctx  *IteratorContext
 	rtv  *lsm.RangeTombstoneView
 	// rtCheck indicates whether this iterator snapshot needs tombstone
 	// coverage checks.
