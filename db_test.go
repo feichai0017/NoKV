@@ -3304,3 +3304,51 @@ func TestPipelineCloseAcksPendingRequests(t *testing.T) {
 		}
 	}
 }
+
+// TestPipelineSendBlockedWritesFastFails confirms the waitOnThrottle=false
+// branch of Pipeline.Send: when applyThrottle has stopped writes, a
+// non-blocking submission must return ErrBlockedWrites without queueing
+// the request. This is the path vlog GC and other internal writeback
+// paths take when they can't afford to stall.
+func TestPipelineSendBlockedWritesFastFails(t *testing.T) {
+	cfg := newTestOptions(t)
+	db := openTestDB(t, cfg)
+	defer func() { _ = db.Close() }()
+
+	db.ApplyThrottle(lsm.WriteThrottleStop)
+	defer db.ApplyThrottle(lsm.WriteThrottleNone)
+
+	entry := kv.NewInternalEntry(kv.CFDefault, []byte("blocked-fast-fail"), nonTxnMaxVersion, []byte("v"), 0, 0)
+	defer entry.DecrRef()
+
+	_, err := db.pipeline.Send([]*kv.Entry{entry}, false)
+	require.ErrorIs(t, err, utils.ErrBlockedWrites,
+		"non-blocking Send under WriteThrottleStop must return ErrBlockedWrites instead of queueing")
+}
+
+// TestPipelineSendOversizedBatchRejected confirms the batch-cap check
+// in Pipeline.Send: a batch whose entry count or estimated size
+// exceeds MaxBatchCount/MaxBatchSize must be rejected before reaching
+// the queue (so a rogue caller can't OOM the dispatcher's pending
+// accounting).
+func TestPipelineSendOversizedBatchRejected(t *testing.T) {
+	cfg := newTestOptions(t)
+	cfg.MaxBatchCount = 4 // leave MaxBatchSize at 1<<20 for exclusive count test
+	db := openTestDB(t, cfg)
+	defer func() { _ = db.Close() }()
+
+	entries := make([]*kv.Entry, 5)
+	for i := range entries {
+		entries[i] = kv.NewInternalEntry(kv.CFDefault,
+			fmt.Appendf(nil, "oversized-%d", i), nonTxnMaxVersion, []byte("v"), 0, 0)
+	}
+	defer func() {
+		for _, e := range entries {
+			e.DecrRef()
+		}
+	}()
+
+	_, err := db.pipeline.Send(entries, true)
+	require.ErrorIs(t, err, utils.ErrTxnTooBig,
+		"Send must reject batches whose count >= MaxBatchCount")
+}
