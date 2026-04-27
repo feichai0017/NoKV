@@ -23,6 +23,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/metrics"
 	dbruntime "github.com/feichai0017/NoKV/runtime"
+	"github.com/feichai0017/NoKV/runtime/commit"
 	iterpkg "github.com/feichai0017/NoKV/runtime/iterator"
 	"github.com/feichai0017/NoKV/runtime/stats"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -31,7 +32,6 @@ import (
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/thermos"
 	"github.com/feichai0017/NoKV/utils"
-	pkgerrors "github.com/pkg/errors"
 )
 
 // nonTxnMaxVersion is the read upper-bound sentinel used by non-transactional APIs.
@@ -106,21 +106,9 @@ type (
 		throttleCh      chan struct{}
 		hotWrite        *thermos.RotatingThermos
 		writeMetrics    *metrics.WriteMetrics
-		commitQueue     dbruntime.CommitQueue
-		commitWG        sync.WaitGroup
-		commitBatchPool sync.Pool
-		// commitDispatch holds one channel per LSM data-plane shard. The
-		// dispatcher routes each batch to commitDispatch[shardID]; the
-		// pinned processor drains it. cap=32 lets the dispatcher run
-		// ahead of slow processors so the burst coalesce loop in
-		// runCommitBurst sees multiple batches and merges them into one
-		// WAL append. We tried a custom SPSC ring (utils.SPSCQueue) here;
-		// benchmarks showed cap=32 buffered chan was 30-40% faster on
-		// YCSB-A — the chan buffer already amortizes scheduler hops and
-		// the atomic traffic on a user-space ring outweighs the savings.
-		commitDispatch  []chan *dbruntime.CommitBatch
-		syncQueue       chan *dbruntime.SyncBatch
-		syncWG          sync.WaitGroup
+		// pipeline owns the commit queue, per-shard dispatch channels,
+		// processors, and the optional sync worker. See runtime/commit.
+		pipeline        *commit.Pipeline
 		iterPool        *iterpkg.IteratorPool
 		hotWriteLimited atomic.Uint64
 		policyMatcher   atomic.Pointer[kv.ValueSeparationPolicyMatcher]
@@ -154,10 +142,6 @@ func newDB(opt *Options) *DB {
 		RotationInterval: cfg.ThermosRotationInterval,
 	})
 	db.discardStatsCh = make(chan map[manifest.ValueLogID]int64, 16)
-	db.commitBatchPool.New = func() any {
-		batch := make([]*dbruntime.CommitRequest, 0, db.opt.WriteBatchMaxCount)
-		return &batch
-	}
 	return db
 }
 
@@ -255,33 +239,27 @@ func (db *DB) openEngine() error {
 }
 
 func (db *DB) startWriteRuntime() {
-	queueCap := max(db.opt.WriteBatchMaxCount*8, 1024)
-	db.commitQueue.Init(queueCap)
-	if db.opt.SyncWrites && db.opt.SyncPipeline {
-		db.syncQueue = make(chan *dbruntime.SyncBatch, 128)
-		db.syncWG.Add(1)
-		go db.syncWorker()
-	}
-	// One commit processor per LSM data-plane shard. Each processor owns
-	// its shard's WAL Manager — no cross-shard sharing means no Manager.mu
-	// contention on the hot write path. Dispatcher fans batches out
-	// round-robin so each batch lives on exactly one shard
-	// (commit-worker affinity preserves SetBatch atomicity).
+	// One commit processor per LSM data-plane shard. Each processor
+	// owns its shard's WAL Manager — no cross-shard sharing means no
+	// Manager.mu contention on the hot write path. The dispatcher fans
+	// batches out by per-key affinity so each batch lives on exactly
+	// one shard (preserving SetBatch atomicity).
 	workers := db.opt.LSMShardCount
 	if workers <= 0 {
 		workers = 1
 	}
-	db.commitDispatch = make([]chan *dbruntime.CommitBatch, workers)
-	for i := 0; i < workers; i++ {
-		db.commitDispatch[i] = make(chan *dbruntime.CommitBatch, 32)
-	}
-
-	db.commitWG.Add(1)
-	go db.commitDispatcher()
-	for i := 0; i < workers; i++ {
-		db.commitWG.Add(1)
-		go db.commitProcessor(i)
-	}
+	db.pipeline = commit.New(commit.Config{
+		ShardCount:         workers,
+		SyncWrites:         db.opt.SyncWrites,
+		SyncPipeline:       db.opt.SyncPipeline,
+		MaxBatchCount:      db.opt.MaxBatchCount,
+		MaxBatchSize:       db.opt.MaxBatchSize,
+		WriteBatchMaxCount: db.opt.WriteBatchMaxCount,
+		WriteBatchMaxSize:  db.opt.WriteBatchMaxSize,
+		WriteBatchWait:     db.opt.WriteBatchWait,
+		ValueThreshold:     int(db.opt.ValueThreshold),
+	}, db)
+	db.pipeline.Start()
 }
 
 func (db *DB) runtimeLSMOptions() *lsm.Options {
@@ -519,7 +497,9 @@ func (db *DB) closeInternal() error {
 		closer.Close()
 	}
 
-	db.stopCommitWorkers()
+	if db.pipeline != nil {
+		db.pipeline.Close()
+	}
 	db.runtimeModules.CloseAll()
 
 	var errs []error
@@ -989,6 +969,29 @@ func (db *DB) RaftWALsLocked(fn func(wals []*wal.Manager)) {
 	fn(db.raftWALs[:])
 }
 
+// commit.Host implementation: read-only accessors plus UpdateHeadBuckets
+// the commit Pipeline uses to wire DB-side state without importing the
+// root NoKV package.
+
+func (db *DB) ThrottleSignal() <-chan struct{} {
+	db.throttleMu.Lock()
+	ch := db.throttleCh
+	db.throttleMu.Unlock()
+	return ch
+}
+
+// commit.Host LSM/Vlog use narrower interfaces than stats.Host LSM/Vlog;
+// expose them via differently-named accessors that satisfy the commit
+// surface without colliding with stats.Host method names.
+func (db *DB) CommitLSM() commit.LSM   { return db.lsm }
+func (db *DB) CommitVlog() commit.Vlog { return db.vlog }
+
+func (db *DB) UpdateHeadBuckets(buckets []uint32) {
+	db.Lock()
+	db.updateHeadBuckets(buckets)
+	db.Unlock()
+}
+
 // RunValueLogGC triggers a value log garbage collection. No-op (returns
 // nil) when EnableValueLog is false — callers can wire this into a
 // scheduler unconditionally.
@@ -1222,7 +1225,7 @@ func (db *DB) shouldPersistHead(next *kv.ValuePtr, bucket uint32) bool {
 	return false
 }
 
-// requestsHaveVlogWork reports whether any entry in any request needs to be
+// RequestsHaveVlogWork reports whether any entry in any request needs to be
 // offloaded to the value log. When this returns false the commit pipeline can
 // skip db.vlog.write entirely — saving a function call, the heads/touched
 // map allocations, the per-request bucketEntries map, and the rewind closure
@@ -1237,7 +1240,7 @@ func (db *DB) shouldPersistHead(next *kv.ValuePtr, bucket uint32) bool {
 //
 // When EnableValueLog is false (the default) this returns false
 // immediately — the metadata-profile deployment never enters vlog code.
-func (db *DB) requestsHaveVlogWork(reqs []*dbruntime.Request) bool {
+func (db *DB) RequestsHaveVlogWork(reqs []*dbruntime.Request) bool {
 	if db == nil || db.vlog == nil {
 		return false
 	}
@@ -1257,7 +1260,7 @@ func (db *DB) requestsHaveVlogWork(reqs []*dbruntime.Request) bool {
 // peekShouldWriteValueToLSM mirrors shouldWriteValueToLSM but does not
 // record a policy-matcher decision. Used by vlog.write to avoid double-
 // counting the per-entry decision that the commit pipeline's pre-scan
-// already recorded via requestsHaveVlogWork.
+// already recorded via RequestsHaveVlogWork.
 func (db *DB) peekShouldWriteValueToLSM(e *kv.Entry) bool {
 	if e.IsRangeDelete() {
 		return true
@@ -1394,66 +1397,12 @@ func (db *DB) applyThrottle(state lsm.WriteThrottleState) {
 	}
 }
 
+// sendToWriteCh delegates to the commit Pipeline. Kept as a thin facade
+// so legacy call sites (vlog SendToWriteCh dep, db_bench_test.go) and
+// internal batch helpers (batchSet) keep their current names without
+// reaching into runtime/commit directly.
 func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*dbruntime.Request, error) {
-	var size int64
-	count := int64(len(entries))
-	for _, e := range entries {
-		size += int64(e.EstimateSize(int(db.opt.ValueThreshold)))
-	}
-	limitCount, limitSize := db.opt.MaxBatchCount, db.opt.MaxBatchSize
-	if count >= limitCount || size >= limitSize {
-		return nil, utils.ErrTxnTooBig
-	}
-	if db.slowWrites.Load() == 1 {
-		if db.lsm != nil {
-			if d := dbruntime.SlowdownDelay(size, db.lsm.ThrottleRateBytesPerSec()); d > 0 {
-				time.Sleep(d)
-			}
-		}
-	}
-	for db.blockWrites.Load() == 1 {
-		if !waitOnThrottle {
-			return nil, utils.ErrBlockedWrites
-		}
-		if db.isClosed.Load() == 1 || db.commitQueue.Closed() {
-			return nil, utils.ErrBlockedWrites
-		}
-		db.throttleMu.Lock()
-		ch := db.throttleCh
-		db.throttleMu.Unlock()
-		if db.blockWrites.Load() == 0 {
-			break
-		}
-		select {
-		case <-ch:
-		case <-db.commitQueue.CloseCh():
-			return nil, utils.ErrBlockedWrites
-		}
-	}
-
-	req := dbruntime.RequestPool.Get().(*dbruntime.Request)
-	req.Reset()
-	req.Entries = entries
-	if db.writeMetrics != nil {
-		req.EnqueueAt = time.Now()
-	}
-	req.WG.Add(1)
-	req.IncrRef()
-
-	cr := dbruntime.CommitRequestPool.Get().(*dbruntime.CommitRequest)
-	cr.Req = req
-	cr.EntryCount = int(count)
-	cr.Size = size
-
-	if err := db.enqueueCommitRequest(cr); err != nil {
-		req.WG.Done()
-		req.Entries = nil
-		req.DecrRef()
-		dbruntime.CommitRequestPool.Put(cr)
-		return nil, err
-	}
-
-	return req, nil
+	return db.pipeline.Send(entries, waitOnThrottle)
 }
 
 func (db *DB) maybeThrottleWrite(cf kv.ColumnFamily, key []byte) error {
@@ -1478,611 +1427,6 @@ func (db *DB) batchSet(entries []*kv.Entry) error {
 		return err
 	}
 	return req.Wait()
-}
-
-func (db *DB) enqueueCommitRequest(cr *dbruntime.CommitRequest) error {
-	if cr == nil {
-		return nil
-	}
-	cq := &db.commitQueue
-	if cq.Closed() && cq.CloseCh() == nil {
-		return utils.ErrBlockedWrites
-	}
-	if cq.Closed() {
-		return utils.ErrBlockedWrites
-	}
-	cq.AddPending(int64(cr.EntryCount), cr.Size)
-	queued := false
-	defer func() {
-		if !queued {
-			cq.AddPending(-int64(cr.EntryCount), -cr.Size)
-		}
-	}()
-	if !cq.Push(cr) {
-		return utils.ErrBlockedWrites
-	}
-	queued = true
-	qLen := cq.Len()
-	qEntries := cq.PendingEntries()
-	qBytes := cq.PendingBytes()
-	db.writeMetrics.UpdateQueue(qLen, int(qEntries), qBytes)
-	return nil
-}
-
-func (db *DB) nextCommitBatch(consumer *utils.MPSCConsumer[*dbruntime.CommitRequest]) *dbruntime.CommitBatch {
-	cq := &db.commitQueue
-	first := cq.Pop(consumer)
-	if first == nil {
-		return nil
-	}
-
-	batchPtr := db.commitBatchPool.Get().(*[]*dbruntime.CommitRequest)
-	batch := (*batchPtr)[:0]
-	pendingEntries := int64(0)
-	pendingBytes := int64(0)
-	coalesceWait := db.opt.WriteBatchWait
-
-	limitCount, limitSize := db.opt.WriteBatchMaxCount, db.opt.WriteBatchMaxSize
-	backlog := cq.Len()
-	if backlog > limitCount && limitCount > 0 {
-		factor := min(max(backlog/limitCount, 1), 4)
-		if scaled := limitCount * factor; scaled > 0 {
-			limitCount = min(scaled, backlog)
-		}
-		if scaled := limitSize * int64(factor); scaled > 0 {
-			limitSize = scaled
-		}
-	}
-
-	addToBatch := func(cr *dbruntime.CommitRequest) {
-		batch = append(batch, cr)
-		pendingEntries += int64(cr.EntryCount)
-		pendingBytes += cr.Size
-	}
-
-	addToBatch(first)
-	if coalesceWait > 0 && cq.Len() == 0 && len(batch) < limitCount && pendingBytes < limitSize {
-		time.Sleep(coalesceWait)
-	}
-	remaining := limitCount - len(batch)
-	if remaining > 0 && pendingBytes < limitSize {
-		cq.DrainReady(consumer, remaining, func(cr *dbruntime.CommitRequest) bool {
-			addToBatch(cr)
-			return pendingBytes < limitSize
-		})
-	}
-
-	cq.AddPending(-pendingEntries, -pendingBytes)
-	qLen := cq.Len()
-	qEntries := cq.PendingEntries()
-	qBytes := cq.PendingBytes()
-	db.writeMetrics.UpdateQueue(qLen, int(qEntries), qBytes)
-	return &dbruntime.CommitBatch{Reqs: batch, Pool: batchPtr}
-}
-
-// commitDispatcher owns the MPSC queue's single consumer slot. It pulls
-// batches off the queue and routes each to one shard's processor channel
-// using round-robin. The dispatcher does no per-batch work itself, so it
-// never bottlenecks on vlog/WAL/applyRequests latency.
-//
-// On queue close, the dispatcher closes every per-shard channel which is
-// the signal for processors to drain remaining batches and return.
-func (db *DB) commitDispatcher() {
-	defer db.commitWG.Done()
-	consumer := db.commitQueue.Consumer()
-	closeAll := func() {
-		for _, ch := range db.commitDispatch {
-			close(ch)
-		}
-	}
-	if consumer == nil {
-		closeAll()
-		return
-	}
-	defer consumer.Close()
-	n := len(db.commitDispatch)
-	var rrFallback int
-	for {
-		batch := db.nextCommitBatch(consumer)
-		if batch == nil {
-			closeAll()
-			return
-		}
-		shardID := db.shardForBatch(batch, n, &rrFallback)
-		batch.ShardID = shardID
-		db.commitDispatch[shardID] <- batch
-	}
-}
-
-// shardForBatch picks the destination shard for a commit batch using
-// per-key affinity: hash the user key of the batch's first entry and mod
-// by the shard count. This keeps every write to the same key on the
-// same shard so percolator's same-startTS lock-on/lock-off and any other
-// "later same-version write wins" pattern stays correct.
-//
-// The whole batch is still pinned to one shard end-to-end (preserves
-// SetBatch atomicity at the LSM level). When a batch carries entries
-// for multiple keys, the shard is chosen by the first key — peers in
-// the same batch land there too. They will be re-routed to their own
-// shard on later writes (when those keys arrive in their own batches),
-// which is harmless because subsequent reads merge across all shards.
-//
-// Empty batches (no key to hash) round-robin via *rr to keep load even.
-func (db *DB) shardForBatch(batch *dbruntime.CommitBatch, n int, rr *int) int {
-	if n <= 1 {
-		return 0
-	}
-	if batch != nil {
-		for _, cr := range batch.Reqs {
-			if cr == nil || cr.Req == nil {
-				continue
-			}
-			for _, e := range cr.Req.Entries {
-				if e == nil || len(e.Key) == 0 {
-					continue
-				}
-				_, userKey, _, ok := kv.SplitInternalKey(e.Key)
-				if !ok || len(userKey) == 0 {
-					continue
-				}
-				return int(fnv1a32(userKey)) & (n - 1)
-			}
-		}
-	}
-	id := *rr
-	*rr++
-	if *rr >= n {
-		*rr = 0
-	}
-	return id
-}
-
-// fnv1a32 is the inline FNV-1a 32-bit hash used by shard routing. It
-// avoids the hash/fnv allocation per call.
-func fnv1a32(b []byte) uint32 {
-	var h uint32 = 2166136261
-	for _, c := range b {
-		h ^= uint32(c)
-		h *= 16777619
-	}
-	return h
-}
-
-// commitProcessor runs the per-batch CPU pipeline (collect -> vlog write ->
-// applyRequests -> ack) for batches pinned to one LSM shard. The processor
-// owns its shard end-to-end: WAL append, memtable apply, and (when sync
-// is inline) WAL fsync all hit one Manager, so there is no Manager.mu
-// contention across processors.
-//
-// Burst coalescing: when the dispatcher delivers small batches faster
-// than the processor can drain them, the processor pulls every batch
-// already sitting in its channel and merges them into a single
-// vlog.write + lsm.SetBatchGroup + (optional) Sync. That collapses N
-// fsync/flush syscalls into one per burst — the bufio.Flush hotspot
-// pprof identified at 47% under N=4. SetBatch atomicity is preserved
-// because each batch's groups are still atomic (LSM processes them in
-// order with per-group atomicity); failedAt from the merged apply is
-// fanned back out to the originating batches.
-func (db *DB) commitProcessor(shardID int) {
-	defer db.commitWG.Done()
-	walMgr := db.lsmWALs[shardID]
-	burst := make([]*dbruntime.CommitBatch, 0, 8)
-	for first := range db.commitDispatch[shardID] {
-		burst = burst[:0]
-		burst = append(burst, first)
-		// Drain any extras already sitting in the channel.
-	drain:
-		for {
-			select {
-			case b, ok := <-db.commitDispatch[shardID]:
-				if !ok {
-					break drain
-				}
-				burst = append(burst, b)
-			default:
-				break drain
-			}
-		}
-		db.runCommitBurst(walMgr, shardID, burst)
-	}
-}
-
-// runCommitBurst processes a burst of batches as a single WAL append +
-// memtable apply, then fans the result back to each batch for ack.
-func (db *DB) runCommitBurst(walMgr *wal.Manager, shardID int, burst []*dbruntime.CommitBatch) {
-	if len(burst) == 0 {
-		return
-	}
-	// Fast path: when only one batch is ready, skip the merge bookkeeping
-	// (boundaries / perBatchFailedAt allocations, request-list copy). At
-	// high N the dispatcher rarely buffers more than one batch per shard
-	// and the merge cost dominates the savings.
-	if len(burst) == 1 {
-		db.runSingleCommit(walMgr, shardID, burst[0])
-		return
-	}
-	burstStart := time.Now()
-	// Per-batch metadata + flattened request list. boundaries[i] is the
-	// start index of batch i's requests in mergedRequests.
-	boundaries := make([]int, len(burst)+1)
-	var mergedRequests []*dbruntime.Request
-	for i, batch := range burst {
-		batch.BatchStart = burstStart
-		requests, totalEntries, totalSize, waitSum := db.collectCommitRequests(batch.Reqs, burstStart)
-		batch.Requests = requests
-		if db.writeMetrics != nil {
-			db.writeMetrics.RecordBatch(len(requests), totalEntries, totalSize, waitSum)
-		}
-		boundaries[i] = len(mergedRequests)
-		mergedRequests = append(mergedRequests, requests...)
-	}
-	boundaries[len(burst)] = len(mergedRequests)
-
-	if len(mergedRequests) == 0 {
-		for _, batch := range burst {
-			db.ackCommitBatch(batch.Reqs, batch.Pool, nil, -1, nil)
-		}
-		return
-	}
-
-	// Metadata-profile fast path: skip vlog.write entirely when no entry in
-	// the burst needs offloading. Saves the heads/touched/bucketEntries map
-	// allocations and the rewind closure preparation that vlog.write does
-	// even when every entry stays inline. See docs/notes/2026-04-27-slab-substrate.md §4.
-	var vlogDur time.Duration
-	if db.requestsHaveVlogWork(mergedRequests) {
-		if err := db.vlog.Write(mergedRequests); err != nil {
-			// Whole burst failed before reaching LSM. Each batch's whole
-			// request set is unapplied — failedAt = -1 means "ack with
-			// the default error for every request".
-			for _, batch := range burst {
-				db.ackCommitBatch(batch.Reqs, batch.Pool, batch.Requests, -1, err)
-			}
-			return
-		}
-		vlogDur = max(time.Since(burstStart), 0)
-		if db.writeMetrics != nil && vlogDur > 0 {
-			db.writeMetrics.RecordValueLog(vlogDur)
-		}
-	}
-	for _, batch := range burst {
-		batch.ValueLogDur = vlogDur
-	}
-
-	mergedFailedAt, applyErr := db.applyRequests(mergedRequests, shardID)
-	// Fan mergedFailedAt back to per-batch failedAt:
-	// - if mergedFailedAt == -1: every batch succeeded (-1).
-	// - else find batch k containing it; batches < k succeeded (-1),
-	//   batch k partially failed at (mergedFailedAt - boundaries[k]),
-	//   batches > k were not attempted (failedAt = 0).
-	perBatchFailedAt := make([]int, len(burst))
-	if mergedFailedAt < 0 {
-		for i := range perBatchFailedAt {
-			perBatchFailedAt[i] = -1
-		}
-	} else {
-		// boundaries length is len(burst)+1; binary or linear search.
-		for i := range burst {
-			switch {
-			case mergedFailedAt >= boundaries[i+1]:
-				perBatchFailedAt[i] = -1
-			case mergedFailedAt < boundaries[i]:
-				perBatchFailedAt[i] = 0
-			default:
-				perBatchFailedAt[i] = mergedFailedAt - boundaries[i]
-			}
-		}
-	}
-
-	if applyErr == nil && db.syncQueue != nil {
-		// Hand each batch off to the sync worker individually so
-		// per-batch ack ordering is preserved.
-		for i, batch := range burst {
-			sb := &dbruntime.SyncBatch{
-				Reqs:      batch.Reqs,
-				Pool:      batch.Pool,
-				Requests:  batch.Requests,
-				ShardID:   shardID,
-				FailedAt:  perBatchFailedAt[i],
-				ApplyDone: time.Now(),
-			}
-			batch.Reqs = nil
-			batch.Pool = nil
-			db.releaseCommitBatch(batch)
-			db.syncQueue <- sb
-		}
-		return
-	}
-
-	syncErr := applyErr
-	if applyErr == nil && db.opt.SyncWrites {
-		syncStart := time.Now()
-		syncErr = walMgr.Sync()
-		if db.writeMetrics != nil {
-			db.writeMetrics.RecordSync(time.Since(syncStart), len(burst))
-		}
-	}
-
-	if db.writeMetrics != nil {
-		totalDur := max(time.Since(burstStart), 0)
-		applyDur := max(totalDur-vlogDur, 0)
-		if applyDur > 0 {
-			db.writeMetrics.RecordApply(applyDur)
-		}
-	}
-
-	for i, batch := range burst {
-		db.ackCommitBatch(batch.Reqs, batch.Pool, batch.Requests, perBatchFailedAt[i], syncErr)
-	}
-}
-
-// runSingleCommit is the burst-size-1 fast path. It mirrors the Phase-2
-// per-batch pipeline (no merge / boundaries / per-batch failedAt fan-out)
-// to eliminate coalesce overhead when there is no extra batch to drain.
-func (db *DB) runSingleCommit(walMgr *wal.Manager, shardID int, batch *dbruntime.CommitBatch) {
-	batch.BatchStart = time.Now()
-	requests, totalEntries, totalSize, waitSum := db.collectCommitRequests(batch.Reqs, batch.BatchStart)
-	if len(requests) == 0 {
-		db.ackCommitBatch(batch.Reqs, batch.Pool, nil, -1, nil)
-		return
-	}
-	batch.Requests = requests
-	if db.writeMetrics != nil {
-		db.writeMetrics.RecordBatch(len(requests), totalEntries, totalSize, waitSum)
-	}
-
-	// Metadata-profile fast path — see runCommitBurst for rationale.
-	if db.requestsHaveVlogWork(requests) {
-		if err := db.vlog.Write(requests); err != nil {
-			db.ackCommitBatch(batch.Reqs, batch.Pool, requests, -1, err)
-			return
-		}
-		if db.writeMetrics != nil {
-			batch.ValueLogDur = max(time.Since(batch.BatchStart), 0)
-			if batch.ValueLogDur > 0 {
-				db.writeMetrics.RecordValueLog(batch.ValueLogDur)
-			}
-		}
-	}
-
-	failedAt, err := db.applyRequests(batch.Requests, shardID)
-	if err == nil && db.syncQueue != nil {
-		sb := &dbruntime.SyncBatch{
-			Reqs:      batch.Reqs,
-			Pool:      batch.Pool,
-			Requests:  batch.Requests,
-			ShardID:   shardID,
-			FailedAt:  failedAt,
-			ApplyDone: time.Now(),
-		}
-		batch.Reqs = nil
-		batch.Pool = nil
-		db.releaseCommitBatch(batch)
-		db.syncQueue <- sb
-		return
-	}
-
-	if err == nil && db.opt.SyncWrites {
-		syncStart := time.Now()
-		err = walMgr.Sync()
-		if db.writeMetrics != nil {
-			db.writeMetrics.RecordSync(time.Since(syncStart), 1)
-		}
-	}
-
-	if db.writeMetrics != nil {
-		totalDur := max(time.Since(batch.BatchStart), 0)
-		applyDur := max(totalDur-batch.ValueLogDur, 0)
-		if applyDur > 0 {
-			db.writeMetrics.RecordApply(applyDur)
-		}
-	}
-
-	db.ackCommitBatch(batch.Reqs, batch.Pool, batch.Requests, failedAt, err)
-}
-
-func (db *DB) syncWorker() {
-	defer db.syncWG.Done()
-	pending := make([]*dbruntime.SyncBatch, 0, 64)
-	// per-shard buckets so one fsync covers many batches on the same WAL
-	buckets := make(map[int][]*dbruntime.SyncBatch, len(db.lsmWALs))
-	for first := range db.syncQueue {
-		pending = append(pending, first)
-	drain:
-		for {
-			select {
-			case sb, ok := <-db.syncQueue:
-				if !ok {
-					break drain
-				}
-				pending = append(pending, sb)
-			default:
-				break drain
-			}
-		}
-
-		for _, sb := range pending {
-			buckets[sb.ShardID] = append(buckets[sb.ShardID], sb)
-		}
-		syncStart := time.Now()
-		errsByShard := make(map[int]error, len(buckets))
-		for shardID, sbs := range buckets {
-			if len(sbs) == 0 {
-				continue
-			}
-			mgr := db.lsmWALs[shardID]
-			if mgr == nil {
-				errsByShard[shardID] = fmt.Errorf("db: lsm wal shard %d not initialized", shardID)
-				continue
-			}
-			errsByShard[shardID] = mgr.Sync()
-		}
-		if db.writeMetrics != nil {
-			db.writeMetrics.RecordSync(time.Since(syncStart), len(pending))
-		}
-		for _, sb := range pending {
-			db.ackCommitBatch(sb.Reqs, sb.Pool, sb.Requests, sb.FailedAt, errsByShard[sb.ShardID])
-		}
-		pending = pending[:0]
-		for k := range buckets {
-			buckets[k] = buckets[k][:0]
-		}
-	}
-}
-
-func (db *DB) ackCommitBatch(reqs []*dbruntime.CommitRequest, pool *[]*dbruntime.CommitRequest, requests []*dbruntime.Request, failedAt int, defaultErr error) {
-	if defaultErr != nil && failedAt >= 0 && failedAt < len(requests) {
-		perReqErr := make(map[*dbruntime.Request]error, len(requests)-failedAt)
-		for i := failedAt; i < len(requests); i++ {
-			if requests[i] != nil {
-				perReqErr[requests[i]] = defaultErr
-			}
-		}
-		db.finishCommitRequests(reqs, nil, perReqErr)
-	} else {
-		db.finishCommitRequests(reqs, defaultErr, nil)
-	}
-	if pool != nil {
-		for i := range reqs {
-			reqs[i] = nil
-		}
-		*pool = reqs[:0]
-		db.commitBatchPool.Put(pool)
-	}
-}
-
-func (db *DB) stopCommitWorkers() {
-	db.commitQueue.Close()
-	db.commitWG.Wait()
-	if db.syncQueue != nil {
-		close(db.syncQueue)
-		db.syncWG.Wait()
-	}
-}
-
-func (db *DB) collectCommitRequests(reqs []*dbruntime.CommitRequest, now time.Time) ([]*dbruntime.Request, int, int64, int64) {
-	requests := make([]*dbruntime.Request, 0, len(reqs))
-	var (
-		totalEntries int
-		totalSize    int64
-		waitSum      int64
-	)
-	for _, cr := range reqs {
-		if cr == nil || cr.Req == nil {
-			continue
-		}
-		r := cr.Req
-		requests = append(requests, r)
-		totalEntries += len(r.Entries)
-		totalSize += cr.Size
-		if !r.EnqueueAt.IsZero() {
-			waitSum += now.Sub(r.EnqueueAt).Nanoseconds()
-			r.EnqueueAt = time.Time{}
-		}
-	}
-	return requests, totalEntries, totalSize, waitSum
-}
-
-func (db *DB) releaseCommitBatch(batch *dbruntime.CommitBatch) {
-	if batch == nil || batch.Pool == nil {
-		return
-	}
-	batch.Requests = nil
-	batch.BatchStart = time.Time{}
-	batch.ValueLogDur = 0
-	reqs := batch.Reqs
-	for i := range reqs {
-		reqs[i] = nil
-	}
-	*batch.Pool = reqs[:0]
-	db.commitBatchPool.Put(batch.Pool)
-}
-
-func (db *DB) applyRequests(reqs []*dbruntime.Request, shardID int) (int, error) {
-	failedAt, err := db.writeRequestsToLSM(reqs, shardID)
-	if err != nil {
-		return failedAt, pkgerrors.Wrap(err, "writeRequests")
-	}
-	for _, r := range reqs {
-		if r == nil || len(r.Entries) == 0 {
-			continue
-		}
-		if len(r.PtrBuckets) == 0 {
-			continue
-		}
-		db.Lock()
-		db.updateHeadBuckets(r.PtrBuckets)
-		db.Unlock()
-	}
-	return -1, nil
-}
-
-func (db *DB) finishCommitRequests(reqs []*dbruntime.CommitRequest, defaultErr error, perReqErr map[*dbruntime.Request]error) {
-	for _, cr := range reqs {
-		if cr == nil || cr.Req == nil {
-			continue
-		}
-		if perReqErr != nil {
-			if reqErr, ok := perReqErr[cr.Req]; ok {
-				cr.Req.Err = reqErr
-			} else {
-				cr.Req.Err = defaultErr
-			}
-		} else {
-			cr.Req.Err = defaultErr
-		}
-		cr.Req.WG.Done()
-		cr.Req = nil
-		cr.EntryCount = 0
-		cr.Size = 0
-		dbruntime.CommitRequestPool.Put(cr)
-	}
-}
-
-func (db *DB) writeRequestsToLSM(reqs []*dbruntime.Request, shardID int) (int, error) {
-	groups := make([][]*kv.Entry, 0, len(reqs))
-	groupToReq := make([]int, 0, len(reqs))
-	for i, r := range reqs {
-		if r == nil || len(r.Entries) == 0 {
-			continue
-		}
-		if err := db.prepareLSMRequest(r); err != nil {
-			// Nothing has reached the LSM yet, so the whole commit batch must fail.
-			return 0, err
-		}
-		groups = append(groups, r.Entries)
-		groupToReq = append(groupToReq, i)
-	}
-	if len(groups) == 0 {
-		return -1, nil
-	}
-	failedGroup, err := db.lsm.SetBatchGroup(shardID, groups)
-	if err != nil {
-		if failedGroup >= 0 && failedGroup < len(groupToReq) {
-			return groupToReq[failedGroup], err
-		}
-		return 0, err
-	}
-	return -1, nil
-}
-
-func (db *DB) prepareLSMRequest(b *dbruntime.Request) error {
-	if len(b.PtrIdxs) == 0 {
-		if len(b.Ptrs) != 0 && len(b.Ptrs) != len(b.Entries) {
-			return pkgerrors.Errorf("Ptrs and Entries don't match: %+v", b)
-		}
-		return nil
-	}
-	if len(b.Ptrs) != len(b.Entries) {
-		return pkgerrors.Errorf("Ptrs and Entries don't match: %+v", b)
-	}
-
-	for _, idx := range b.PtrIdxs {
-		entry := b.Entries[idx]
-		entry.Meta = entry.Meta | kv.BitValuePointer
-		entry.Value = b.Ptrs[idx].Encode()
-	}
-	return nil
 }
 
 func (db *DB) requireOpenLSM() (*lsm.LSM, error) {

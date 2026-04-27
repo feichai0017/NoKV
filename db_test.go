@@ -23,6 +23,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/metrics"
 	dbruntime "github.com/feichai0017/NoKV/runtime"
+	"github.com/feichai0017/NoKV/runtime/commit"
 	iterpkg "github.com/feichai0017/NoKV/runtime/iterator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -1380,7 +1381,7 @@ func TestApplyRequestsFailureIndex(t *testing.T) {
 		},
 	}
 
-	failedAt, err := db.applyRequests(reqs, 0)
+	failedAt, err := db.pipeline.ApplyRequests(reqs, 0)
 	require.Equal(t, 1, failedAt)
 	require.Error(t, err)
 
@@ -1410,7 +1411,7 @@ func TestApplyRequestsInlineRequestWithoutPtrs(t *testing.T) {
 		},
 	}
 
-	failedAt, err := db.applyRequests(reqs, 0)
+	failedAt, err := db.pipeline.ApplyRequests(reqs, 0)
 	require.Equal(t, -1, failedAt)
 	require.NoError(t, err)
 
@@ -1441,7 +1442,7 @@ func TestApplyRequestsCoalescesCommitBatchIntoOneLSMRecord(t *testing.T) {
 		{Entries: []*kv.Entry{second}},
 	}
 
-	failedAt, err := db.applyRequests(reqs, 0)
+	failedAt, err := db.pipeline.ApplyRequests(reqs, 0)
 	require.Equal(t, -1, failedAt)
 	require.NoError(t, err)
 
@@ -1468,7 +1469,6 @@ func TestApplyRequestsCoalescesCommitBatchIntoOneLSMRecord(t *testing.T) {
 }
 
 func TestFinishCommitRequestsPerRequestErrors(t *testing.T) {
-	db := &DB{}
 	req1 := &dbruntime.Request{}
 	req2 := &dbruntime.Request{}
 	req1.WG.Add(1)
@@ -1483,7 +1483,7 @@ func TestFinishCommitRequestsPerRequestErrors(t *testing.T) {
 		req2: reqErr,
 	}
 
-	db.finishCommitRequests(batch, nil, perReq)
+	commit.FinishCommitRequests(batch, nil, perReq)
 	req1.WG.Wait()
 	req2.WG.Wait()
 
