@@ -32,7 +32,15 @@ import (
 	"sync"
 
 	xxhash "github.com/cespare/xxhash/v2"
+
+	"github.com/feichai0017/NoKV/engine/slab"
 )
+
+// ConsumerClass declares this cache as a Derived slab consumer: total
+// loss only re-warms the cache via subsequent Get misses. Corruption /
+// truncation here MUST NOT propagate back into the LSM truth path.
+// See engine/slab/consumer_class.go.
+const ConsumerClass = slab.ConsumerClassDerived
 
 // DefaultBucketCount is the table size used when Config.BucketCount is
 // zero. Power-of-two so we can mask instead of mod. ~64K buckets ×

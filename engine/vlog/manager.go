@@ -21,6 +21,12 @@ import (
 
 const defaultMaxSize int64 = 1 << 29
 
+// ConsumerClass declares the value log as an Authoritative slab
+// consumer: every byte in a vlog segment is referenced by an LSM
+// ValuePtr, so corruption / truncation here is data loss. See
+// engine/slab/consumer_class.go.
+const ConsumerClass = slab.ConsumerClassAuthoritative
+
 type Config struct {
 	Dir      string
 	FileMode os.FileMode
