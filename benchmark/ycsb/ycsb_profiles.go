@@ -97,9 +97,18 @@ func buildNoKVBenchmarkOptions(dir string, opts ycsbEngineOptions, memtable NoKV
 
 	cfg.MemTableSize = int64(opts.MemtableMB) << 20
 	cfg.SSTableMaxSz = int64(opts.SSTableMB) << 20
-	cfg.ValueLogFileSize = opts.VlogFileMB << 20
-	cfg.ValueLogMaxEntries = 1 << 20
-	cfg.ValueThreshold = int64(opts.ValueThreshold)
+	// YCSB defaults to the metadata-service profile: every value inlined
+	// into the LSM, no vlog directory created, no vlog GC running. This
+	// matches the production target (DFS / object-store / fsmeta-style
+	// metadata workloads where value sizes sit in the 100B-1KB envelope).
+	// Opt into the value-separation (vlog) path explicitly via
+	// -ycsb_nokv_enable_vlog when running blob / large-value workloads.
+	cfg.EnableValueLog = opts.NoKVEnableValueLog
+	if cfg.EnableValueLog {
+		cfg.ValueLogFileSize = opts.VlogFileMB << 20
+		cfg.ValueLogMaxEntries = 1 << 20
+		cfg.ValueThreshold = int64(opts.ValueThreshold)
+	}
 	cfg.WriteBatchMaxCount = ycsbNoKVWriteBatchMaxCount
 	cfg.WriteBatchMaxSize = ycsbNoKVWriteBatchMaxSize
 	cfg.MaxBatchCount = ycsbNoKVWriteBatchMaxCount

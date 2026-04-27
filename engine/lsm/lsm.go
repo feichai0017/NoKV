@@ -26,11 +26,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/manifest"
+	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -43,15 +45,16 @@ import (
 // docs/notes/2026-04-27-sharded-wal-memtable.md for the
 // sharding rationale and routing/recovery/flush invariants.
 type LSM struct {
-	shards     []*lsmShard
-	shardHints *shardHintTable
-	negatives  *negativeCache
-	levels     *levelManager
-	option     *Options
-	closer     *utils.Closer
-	flushQueue *flushRuntime
-	flushWG    sync.WaitGroup
-	logger     *slog.Logger
+	shards           []*lsmShard
+	shardHints       *shardHintTable
+	negatives        *negativecache.Cache
+	negativesPersist *negativecache.Persistence
+	levels           *levelManager
+	option           *Options
+	closer           *utils.Closer
+	flushQueue       *flushRuntime
+	flushWG          sync.WaitGroup
+	logger           *slog.Logger
 
 	discardStatsCh chan map[manifest.ValueLogID]int64
 
@@ -146,6 +149,15 @@ func (lsm *LSM) Close() error {
 	}
 	if lsm.levels != nil {
 		closeErr = errors.Join(closeErr, lsm.levels.close())
+	}
+	if lsm.negativesPersist != nil {
+		if n, err := lsm.negativesPersist.Snapshot(); err != nil {
+			lsm.logger.Warn("negative cache snapshot on close failed",
+				slog.String("err", err.Error()))
+		} else if n > 0 {
+			lsm.logger.Info("negative cache snapshot written",
+				slog.Int("entries", n))
+		}
 	}
 	return closeErr
 }
@@ -331,9 +343,30 @@ func NewLSM(opt *Options, walMgrs []*wal.Manager) (*LSM, error) {
 		option:     frozen,
 		shards:     shards,
 		shardHints: newShardHintTable(),
-		negatives:  newNegativeCache(),
 		closer:     utils.NewCloser(),
 		logger:     frozen.Logger,
+	}
+	if frozen.NegativeCachePersistent && frozen.WorkDir != "" {
+		inner, persist, err := negativecache.OpenWithPersistence(
+			negativecache.Config{GroupKeyFn: kv.InternalToBaseKey},
+			negativecache.PersistConfig{
+				Dir:     filepath.Join(frozen.WorkDir, "negative-slab"),
+				MaxSize: frozen.NegativeCacheSlabMaxSize,
+			},
+		)
+		if err != nil {
+			if lsm.logger == nil {
+				lsm.logger = slog.Default()
+			}
+			lsm.logger.Warn("negative cache restore failed; cold start",
+				slog.String("err", err.Error()))
+		}
+		lsm.negatives = inner
+		lsm.negativesPersist = persist
+	} else {
+		lsm.negatives = negativecache.New(negativecache.Config{
+			GroupKeyFn: kv.InternalToBaseKey,
+		})
 	}
 	if lsm.logger == nil {
 		lsm.logger = slog.Default()
@@ -342,7 +375,7 @@ func NewLSM(opt *Options, walMgrs []*wal.Manager) (*LSM, error) {
 		lsm.discardStatsCh = *frozen.DiscardStatsCh
 	}
 	lsm.throttleFn = frozen.ThrottleCallback
-	lsm.flushQueue = newFlushRuntime()
+	lsm.flushQueue = newFlushRuntime(len(lsm.shards))
 	// initialize levelManager
 	lm, err := lsm.initLevelManager(frozen)
 	if err != nil {
@@ -688,17 +721,17 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 }
 
 func (lsm *LSM) negativeHit(key []byte) bool {
-	if lsm == nil || lsm.negatives == nil {
+	if lsm == nil {
 		return false
 	}
-	return lsm.negatives.contains(key)
+	return lsm.negatives.Has(key)
 }
 
 func (lsm *LSM) rememberNegative(key []byte) {
-	if lsm == nil || lsm.negatives == nil {
+	if lsm == nil {
 		return
 	}
-	lsm.negatives.remember(key)
+	lsm.negatives.Remember(key)
 }
 
 func (lsm *LSM) invalidateNegativeCache(entries []*kv.Entry) {
@@ -709,15 +742,15 @@ func (lsm *LSM) invalidateNegativeCache(entries []*kv.Entry) {
 		if entry == nil || len(entry.Key) == 0 {
 			continue
 		}
-		lsm.negatives.invalidate(entry.Key)
+		lsm.negatives.Invalidate(entry.Key)
 	}
 }
 
 func (lsm *LSM) clearNegativeCache() {
-	if lsm == nil || lsm.negatives == nil {
+	if lsm == nil {
 		return
 	}
-	lsm.negatives.clear()
+	lsm.negatives.Clear()
 }
 
 func (lsm *LSM) lookupShardHint(key []byte) (int, bool) {

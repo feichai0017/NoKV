@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -57,9 +56,6 @@ type levelManager struct {
 	compaction       *compaction
 	compactionPacer  *compactionPacer
 	rtCollector      *tombstone.Collector
-	logPtrMu         sync.RWMutex
-	logPtrSeg        uint32
-	logPtrOffset     uint64
 	compactionLastNs atomic.Int64
 	compactionMaxNs  atomic.Int64
 	compactionRuns   atomic.Uint64
@@ -181,7 +177,6 @@ func (lm *levelManager) build() error {
 	}
 
 	version := lm.manifestMgr.Current()
-	lm.setLogPointer(version.LogSegment, version.LogOffset)
 	lm.cache = newCache(lm.opt)
 	var maxFID uint64
 	for level, files := range version.Levels {
@@ -284,24 +279,31 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 		File:   meta,
 		LogSeg: immutable.segmentID,
 	}
-	pointerEdit := manifest.Edit{
-		Type:      manifest.EditLogPointer,
-		LogSeg:    immutable.segmentID,
-		LogOffset: uint64(immutable.walSize.Load()),
-	}
 	// Strict durability mode: persist SST directory entries before manifest references.
 	if lm.opt.ManifestSync {
 		if err := vfs.SyncDir(lm.opt.FS, lm.opt.WorkDir); err != nil {
 			return err
 		}
 	}
-	if err := lm.manifestMgr.LogEdits(fileEdit, pointerEdit); err != nil {
+	// EditAddFile carries LogSeg per-table, which is the recovery
+	// anchor recovery actually consults. EditLogPointer used to encode
+	// a global "WAL replay starts here" tuple but became dead state
+	// once the data plane sharded — recovery now drives WAL replay
+	// per-shard via wal.Manager.Replay. We no longer emit
+	// EditLogPointer from the flush path; the manifest type and read
+	// path keep the apply branch only so older manifests round-trip
+	// cleanly. See manifest/types.go::Version.
+	if err := lm.manifestMgr.LogEdits(fileEdit); err != nil {
 		return err
 	}
-	lm.setLogPointer(immutable.segmentID, uint64(immutable.walSize.Load()))
 	if shard := immutable.shard; shard != nil {
-		// Monotonic per-shard high-water; flushes within a shard are
-		// strictly ordered so a simple Store is safe.
+		// Monotonic per-shard high-water. Per-shard flush serialization
+		// is enforced by flushRuntime (see flush_runtime.go: per-shard
+		// queue + inFlight flag) so this Store cannot race against a
+		// later same-shard flush. The `> cur` guard is kept as a belt-
+		// and-braces against future runtime regressions; without
+		// flushRuntime serialization the WAL retention mark below
+		// would advance out of order and recovery could lose segments.
 		if cur := shard.highestFlushedSeg.Load(); immutable.segmentID > cur {
 			shard.highestFlushedSeg.Store(immutable.segmentID)
 		}
@@ -330,19 +332,6 @@ func (lm *levelManager) ValueLogHead() map[uint32]manifest.ValueLogMeta {
 // ValueLogStatus returns manifest metadata for all known value-log files.
 func (lm *levelManager) ValueLogStatus() map[manifest.ValueLogID]manifest.ValueLogMeta {
 	return lm.manifestMgr.ValueLogStatus()
-}
-
-func (lm *levelManager) setLogPointer(seg uint32, offset uint64) {
-	lm.logPtrMu.Lock()
-	lm.logPtrSeg = seg
-	lm.logPtrOffset = offset
-	lm.logPtrMu.Unlock()
-}
-
-func (lm *levelManager) logPointer() (uint32, uint64) {
-	lm.logPtrMu.RLock()
-	defer lm.logPtrMu.RUnlock()
-	return lm.logPtrSeg, lm.logPtrOffset
 }
 
 func (lm *levelManager) compactionStats() (int64, float64) {

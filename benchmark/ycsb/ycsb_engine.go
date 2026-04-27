@@ -36,6 +36,11 @@ type ycsbEngineOptions struct {
 	MemtableMB           int
 	SSTableMB            int
 	VlogFileMB           int
+	// NoKVEnableValueLog opts NoKV into the engine/vlog Authoritative
+	// consumer. Default false = metadata-service profile (every value
+	// inlined into the LSM, no vlog directory). Set true to exercise
+	// the value-separation path on large/blob workloads.
+	NoKVEnableValueLog bool
 
 	// Badger specific cache sizes (in MB).
 	BadgerBlockCacheMB int

@@ -14,6 +14,8 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/file"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/slab"
+	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/utils"
 	pkgerrors "github.com/pkg/errors"
 )
@@ -72,32 +74,66 @@ func (m *Manager) AppendEntry(e *kv.Entry) (*kv.ValuePtr, error) {
 	return ptr, nil
 }
 
+// openLogFile opens (or creates) a single segment file outside the
+// Manager. Used by VerifyDir / CheckDir / CheckHead helpers that scan a
+// directory's segments one at a time without participating in the
+// rotation lifecycle.
+func openLogFile(fs vfs.FS, fid uint32, path, dir string, maxSize int64, readOnly bool) (*slab.Segment, error) {
+	flag := os.O_CREATE | os.O_RDWR
+	if readOnly {
+		flag = os.O_RDONLY
+	}
+	seg := &slab.Segment{}
+	if err := seg.Open(&file.Options{
+		FID:      uint64(fid),
+		FileName: path,
+		Dir:      dir,
+		Flag:     flag,
+		MaxSz:    int(maxSize),
+		FS:       fs,
+	}); err != nil {
+		return nil, err
+	}
+	return seg, nil
+}
+
 // reserve allocates space in the active segment, rotating if needed.
-func (m *Manager) reserve(sz int) (*file.LogFile, uint32, uint32, error) {
+// Holds the slab manager's lock so reserve+rotate composes atomically;
+// the actual Write call lands later under store.Lock (the per-segment
+// rwmutex), which is why the publish discipline plus monotonic CAS in
+// Segment.Write are needed — see slab-substrate note §4.
+func (m *Manager) reserve(sz int) (*slab.Segment, uint32, uint32, error) {
 	if sz <= 0 {
 		return nil, 0, 0, fmt.Errorf("vlog manager: invalid append size %d", sz)
 	}
-	m.filesLock.Lock()
-	defer m.filesLock.Unlock()
-	lf, fid, err := m.ensureActiveLocked()
-	if err != nil {
+	var (
+		store *slab.Segment
+		fid   uint32
+		start uint32
+	)
+	headerSize := uint32(kv.ValueLogHeaderSize)
+	maxSize := m.inner.MaxSize()
+	if err := m.inner.WithLock(func() error {
+		lf, lfid, err := m.inner.EnsureActiveLocked()
+		if err != nil {
+			return err
+		}
+		cur := max(m.offset.Load(), headerSize)
+		if int64(cur)+int64(sz) > maxSize {
+			lf, lfid, err = m.inner.RotateLocked(cur)
+			if err != nil {
+				return err
+			}
+			cur = headerSize
+		}
+		start = cur
+		m.offset.Store(cur + uint32(sz))
+		store, fid = lf, lfid
+		return nil
+	}); err != nil {
 		return nil, 0, 0, err
 	}
-	if m.offset < uint32(kv.ValueLogHeaderSize) {
-		m.offset = uint32(kv.ValueLogHeaderSize)
-	}
-	if int(m.offset)+sz > int(m.cfg.MaxSize) {
-		if err := m.rotateLocked(); err != nil {
-			return nil, 0, 0, err
-		}
-		lf, fid, err = m.ensureActiveLocked()
-		if err != nil {
-			return nil, 0, 0, err
-		}
-	}
-	start := m.offset
-	m.offset += uint32(sz)
-	return lf, fid, start, nil
+	return store, fid, start, nil
 }
 
 // AppendEntries encodes and appends a batch of entries into the value log.
@@ -198,14 +234,14 @@ func (m *Manager) AppendEntries(entries []*kv.Entry, writeMask []bool) ([]kv.Val
 }
 
 func (m *Manager) Read(ptr *kv.ValuePtr) ([]byte, func(), error) {
-	store, unlock, err := m.getStoreForRead(ptr.Fid)
+	store, unlock, err := m.inner.AcquireRead(ptr.Fid)
 	if err != nil {
 		if unlock != nil {
 			unlock()
 		}
 		return nil, nil, err
 	}
-	buf, err := store.Read(ptr)
+	buf, err := store.Read(ptr.Offset, ptr.Len)
 	if err != nil {
 		unlock()
 		return nil, nil, err
@@ -261,7 +297,7 @@ func (m *Manager) Iterate(fid uint32, offset uint32, fn kv.LogEntry) (uint32, er
 	if fn == nil {
 		return offset, fmt.Errorf("vlog manager iterate: nil callback")
 	}
-	store, err := m.getFile(fid)
+	store, err := m.inner.GetSegment(fid)
 	if err != nil {
 		return 0, err
 	}
@@ -297,7 +333,7 @@ func (m *Manager) Sample(fid uint32, opt SampleOptions, cb SampleCallback) (*Sam
 	if cb == nil {
 		return nil, fmt.Errorf("vlog manager sample: nil callback")
 	}
-	store, err := m.getFile(fid)
+	store, err := m.inner.GetSegment(fid)
 	if err != nil {
 		return nil, err
 	}
@@ -485,7 +521,7 @@ func extractFID(path string) uint64 {
 	return fid
 }
 
-func sanitizeValueLog(store *file.LogFile) (uint32, error) {
+func sanitizeValueLog(store *slab.Segment) (uint32, error) {
 	start, err := firstNonZeroOffset(store)
 	if err != nil {
 		return 0, err
@@ -514,7 +550,7 @@ func sanitizeValueLog(store *file.LogFile) (uint32, error) {
 	}
 }
 
-func checkValueLog(store *file.LogFile) (uint32, error) {
+func checkValueLog(store *slab.Segment) (uint32, error) {
 	start, err := firstNonZeroOffset(store)
 	if err != nil {
 		return 0, err
@@ -545,7 +581,7 @@ func checkValueLog(store *file.LogFile) (uint32, error) {
 	}
 }
 
-func checkValueLogUntil(store *file.LogFile, endOffset uint32) (uint32, error) {
+func checkValueLogUntil(store *slab.Segment, endOffset uint32) (uint32, error) {
 	start, err := firstNonZeroOffset(store)
 	if err != nil {
 		return 0, err
@@ -589,8 +625,12 @@ func checkValueLogUntil(store *file.LogFile, endOffset uint32) (uint32, error) {
 	}
 }
 
-func firstNonZeroOffset(store *file.LogFile) (uint32, error) {
-	size := store.Size()
+func firstNonZeroOffset(store *slab.Segment) (uint32, error) {
+	// Use Capacity here, not Size: this helper is part of the VerifyDir /
+	// sanitize pre-pass that runs before any LoadSizeFromFile, so the
+	// logical high-water is still 0. We need to scan the entire mapped
+	// region (preallocated MaxSz) looking for the first written byte.
+	size := store.Capacity()
 	start := int64(kv.ValueLogHeaderSize)
 	if size <= start {
 		return uint32(start), nil
@@ -621,7 +661,7 @@ func firstNonZeroOffset(store *file.LogFile) (uint32, error) {
 	return uint32(start), nil
 }
 
-func iterateLogFile(store *file.LogFile, bucket uint32, fid uint32, offset uint32, fn kv.LogEntry) (uint32, error) {
+func iterateLogFile(store *slab.Segment, bucket uint32, fid uint32, offset uint32, fn kv.LogEntry) (uint32, error) {
 	if offset == 0 {
 		offset = uint32(kv.ValueLogHeaderSize)
 	}

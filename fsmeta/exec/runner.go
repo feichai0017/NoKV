@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	xxhash "github.com/cespare/xxhash/v2"
+	"github.com/feichai0017/NoKV/engine/slab/dirpage"
+	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	"github.com/feichai0017/NoKV/fsmeta"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
@@ -62,6 +65,8 @@ type Executor struct {
 	mounts                 MountResolver
 	quotas                 QuotaResolver
 	subtrees               SubtreeHandoffPublisher
+	negCache               *negativecache.Cache
+	dirPages               *dirpage.Cache
 	lockTTL                uint64
 	txnRetriesTotal        atomic.Uint64
 	txnRetryExhaustedTotal atomic.Uint64
@@ -92,6 +97,40 @@ func WithMountResolver(resolver MountResolver) Option {
 func WithQuotaResolver(resolver QuotaResolver) Option {
 	return func(e *Executor) {
 		e.quotas = resolver
+	}
+}
+
+// WithNegativeCache wires a generic engine/slab/negativecache.Cache as the
+// fast-path "this dentry does not exist" memo. Lookup checks Has on the
+// dentry primary key before consulting the runner; misses are recorded via
+// Remember; mutating ops (Create/Link/Unlink/Rename/RenameSubtree) call
+// Invalidate on the touched dentry keys after a successful commit.
+//
+// Caller is responsible for constructing the cache with an identity
+// GroupKeyFn (each fsmeta key is its own invalidation group); a nil cache
+// disables the fast path.
+func WithNegativeCache(cache *negativecache.Cache) Option {
+	return func(e *Executor) {
+		e.negCache = cache
+	}
+}
+
+// WithDirPageCache wires a generic engine/slab/dirpage.Cache as the
+// ReadDirPlus fast path. ReadDirPlus first asks the cache for a fresh
+// page set keyed by (mountHash, parentInode); on hit the runner-side
+// dentry scan + N inode BatchGet are skipped entirely. On miss, the
+// runner path runs as today and the assembled DentryAttrPair slice is
+// asynchronously materialized into the cache for the next call.
+//
+// Mutating ops (Create/Link/Unlink/Rename/RenameSubtree) call Invalidate
+// on the affected parent directory's PageKey after a successful commit
+// so subsequent Lookup observes the change.
+//
+// A nil cache disables the fast path. The mount hash uses xxhash.Sum64
+// over the MountID string, so collision probability is negligible.
+func WithDirPageCache(cache *dirpage.Cache) Option {
+	return func(e *Executor) {
+		e.dirPages = cache
 	}
 }
 
@@ -189,14 +228,27 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest, inode f
 	}); err != nil {
 		return err
 	}
+	// The new dentry replaces a previously-missing key; drop any negative
+	// memo a prior Lookup may have planted, and bump the parent's dirpage
+	// epoch so a stale ReadDirPlus result cannot mask the new entry.
+	e.invalidateNegative(plan.MutateKeys[0])
+	e.invalidateDirPages(req.Mount, req.Parent)
 	return nil
 }
 
-// Lookup returns the dentry record for parent/name.
+// Lookup returns the dentry record for parent/name. When a negative cache
+// is wired (WithNegativeCache), Lookup short-circuits a previously-known
+// missing key into ErrNotFound without round-tripping through the runner.
+// Misses observed by the runner are recorded so the next Lookup hits the
+// fast path; subsequent Create/Link/Rename for the same key Invalidate the
+// entry so the negative memo cannot mask a now-existing dentry.
 func (e *Executor) Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error) {
 	plan, err := fsmeta.PlanLookup(req)
 	if err != nil {
 		return fsmeta.DentryRecord{}, err
+	}
+	if e.negCache != nil && e.negCache.Has(plan.PrimaryKey) {
+		return fsmeta.DentryRecord{}, fsmeta.ErrNotFound
 	}
 	version, err := e.reserveReadVersion(ctx)
 	if err != nil {
@@ -207,9 +259,58 @@ func (e *Executor) Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta
 		return fsmeta.DentryRecord{}, err
 	}
 	if !ok {
+		if e.negCache != nil {
+			e.negCache.Remember(plan.PrimaryKey)
+		}
 		return fsmeta.DentryRecord{}, fsmeta.ErrNotFound
 	}
 	return fsmeta.DecodeDentryValue(value)
+}
+
+// invalidateNegative drops cached "missing" memos for every dentry key that
+// was just mutated, so the next Lookup re-issues against the runner instead
+// of returning a stale ErrNotFound. Safe with a nil cache.
+func (e *Executor) invalidateNegative(keys ...[]byte) {
+	if e == nil || e.negCache == nil {
+		return
+	}
+	for _, k := range keys {
+		if len(k) > 0 {
+			e.negCache.Invalidate(k)
+		}
+	}
+}
+
+// dirPageKey hashes (mount, parent) into the dirpage cache's PageKey
+// shape. fsmeta.MountID is a string; we use xxhash.Sum64 to fold it into
+// a uint64 mount slot. Collision probability across reasonable mount
+// counts (<= 10K) is ~5e-12, well below "fallback re-warm" tolerance.
+func dirPageKey(mount fsmeta.MountID, parent fsmeta.InodeID) dirpage.PageKey {
+	return dirpage.PageKey{
+		Mount:  xxhash.Sum64String(string(mount)),
+		Parent: uint64(parent),
+	}
+}
+
+// invalidateDirPages bumps the dirpage cache's epoch for every parent
+// directory the just-committed mutation touched. Safe with a nil cache.
+// Caller passes (mount, parent) tuples — the helper folds duplicates so
+// rename across a single parent doesn't double-bump.
+func (e *Executor) invalidateDirPages(mount fsmeta.MountID, parents ...fsmeta.InodeID) {
+	if e == nil || e.dirPages == nil {
+		return
+	}
+	seen := make(map[fsmeta.InodeID]struct{}, len(parents))
+	for _, p := range parents {
+		if p == 0 {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		e.dirPages.Invalidate(dirPageKey(mount, p))
+	}
 }
 
 // ReadDir returns one directory page from a dentry prefix scan.
@@ -228,11 +329,35 @@ func (e *Executor) ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fs
 // ReadDirPlus returns one directory page fused with inode attributes at the
 // same snapshot version. This is the first native fsmeta operation that avoids
 // client-side dentry scan plus N point reads.
+//
+// When a dirpage cache is wired and the request omits an explicit
+// SnapshotVersion (i.e. the caller is asking for "latest"), Lookup checks
+// the cache first against the parent's current invalidation epoch. On hit
+// the runner-side dentry scan + N inode BatchGet are skipped; on miss the
+// runner path runs as today and the assembled pairs are asynchronously
+// materialized into the cache for the next caller.
+//
+// Snapshot-versioned reads bypass the cache: pages are tagged with the
+// "latest" frontier and a stale snapshot-versioned read might disagree
+// with the live cache, so we keep that path on the authoritative LSM
+// route.
 func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error) {
 	plan, err := fsmeta.PlanReadDir(req)
 	if err != nil {
 		return nil, err
 	}
+
+	useDirPage := e.dirPages != nil && req.SnapshotVersion == 0
+	var pageKey dirpage.PageKey
+	var frontier uint64
+	if useDirPage {
+		pageKey = dirPageKey(req.Mount, req.Parent)
+		frontier = e.dirPages.CurrentEpoch(pageKey)
+		if entries, ok := e.dirPages.Lookup(pageKey, frontier); ok {
+			return decodeDirPageEntries(entries)
+		}
+	}
+
 	version, err := e.readVersion(ctx, req.SnapshotVersion)
 	if err != nil {
 		return nil, err
@@ -242,6 +367,9 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 		return nil, err
 	}
 	if len(dentries) == 0 {
+		if useDirPage {
+			_ = e.dirPages.MaterializeAsync(pageKey, frontier, nil)
+		}
 		return []fsmeta.DentryAttrPair{}, nil
 	}
 	inodeKeys := make([][]byte, 0, len(dentries))
@@ -272,6 +400,55 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 		out = append(out, fsmeta.DentryAttrPair{
 			Dentry: dentry,
 			Inode:  inode,
+		})
+	}
+	if useDirPage {
+		// Materialize is best-effort: if Invalidate fired since we read,
+		// the cache drops the write and the next call re-fetches.
+		_ = e.dirPages.MaterializeAsync(pageKey, frontier, encodeDirPageEntries(req, out))
+	}
+	return out, nil
+}
+
+// encodeDirPageEntries converts assembled DentryAttrPairs into the
+// generic dirpage Entry shape. AttrBlob is the encoded InodeRecord; if
+// encoding fails we drop the entry from the materialization so the cache
+// never serves a value the consumer can't decode (the next ReadDirPlus
+// re-runs the runner path).
+func encodeDirPageEntries(req fsmeta.ReadDirRequest, pairs []fsmeta.DentryAttrPair) []dirpage.Entry {
+	out := make([]dirpage.Entry, 0, len(pairs))
+	for _, p := range pairs {
+		blob, err := fsmeta.EncodeInodeValue(p.Inode)
+		if err != nil {
+			continue
+		}
+		out = append(out, dirpage.Entry{
+			Name:     []byte(p.Dentry.Name),
+			Inode:    uint64(p.Dentry.Inode),
+			AttrBlob: blob,
+		})
+	}
+	_ = req // reserved for future per-mount projection (e.g. xattr split)
+	return out
+}
+
+// decodeDirPageEntries reverses encodeDirPageEntries. Decode failure on
+// any entry treats the whole page set as corrupt and forces a fallback
+// to the runner.
+func decodeDirPageEntries(entries []dirpage.Entry) ([]fsmeta.DentryAttrPair, error) {
+	out := make([]fsmeta.DentryAttrPair, 0, len(entries))
+	for _, e := range entries {
+		inode, err := fsmeta.DecodeInodeValue(e.AttrBlob)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, fsmeta.DentryAttrPair{
+			Dentry: fsmeta.DentryRecord{
+				Name:  string(e.Name),
+				Inode: fsmeta.InodeID(e.Inode),
+				Type:  inode.Type,
+			},
+			Inode: inode,
 		})
 	}
 	return out, nil
@@ -427,6 +604,11 @@ func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
 	}); err != nil {
 		return err
 	}
+	// Link writes a fresh dentry at ReadKeys[1]; drop any negative memo
+	// and bump the destination parent's dirpage epoch so the new dentry
+	// shows up on the next ReadDirPlus.
+	e.invalidateNegative(plan.ReadKeys[1])
+	e.invalidateDirPages(req.Mount, req.ToParent)
 	return nil
 }
 
@@ -481,6 +663,13 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 	}); err != nil {
 		return err
 	}
+	// Unlink removed the dentry; the next Lookup must observe ErrNotFound
+	// from the runner instead of any prior positive memo (we do not cache
+	// hits today, but Invalidate is also the right thing for any future
+	// hit-cache layering). Bump the parent's dirpage epoch so a cached
+	// ReadDirPlus does not still surface the dentry.
+	e.invalidateNegative(plan.MutateKeys[0])
+	e.invalidateDirPages(req.Mount, req.Parent)
 	return nil
 }
 
@@ -535,6 +724,15 @@ func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRe
 	if handoffStarted && committedAt == 0 {
 		return fmt.Errorf("subtree handoff started without committed frontier")
 	}
+	// RenameSubtree (v0) only moves the subtree root dentry; ReadKeys[0]
+	// is the source dentry (now gone) and MutateKeys carry the destination
+	// dentry (now present). Invalidate both so neither key serves a stale
+	// negative memo, and bump the source + destination parents' dirpage
+	// epochs so cached ReadDirPlus on either parent observes the move.
+	// Subtree internal pages survive — only the root dentry moved.
+	e.invalidateNegative(plan.ReadKeys...)
+	e.invalidateNegative(plan.MutateKeys...)
+	e.invalidateDirPages(req.Mount, req.FromParent, req.ToParent)
 	return nil
 }
 

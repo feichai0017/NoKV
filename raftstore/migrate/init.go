@@ -153,6 +153,13 @@ func Init(cfg InitConfig) (InitResult, error) {
 	opts.WorkDir = cfg.WorkDir
 	opts.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
 	opts.AllowedModes = []raftmode.Mode{raftmode.ModePreparing}
+	// Migration must be able to read any existing vlog data when
+	// exporting the seed snapshot. Auto-detect by directory presence so
+	// metadata-only deployments stay vlog-disabled while existing
+	// vlog-backed workdirs migrate cleanly.
+	if _, statErr := os.Stat(filepath.Join(cfg.WorkDir, "vlog")); statErr == nil {
+		opts.EnableValueLog = true
+	}
 	db, err := NoKV.Open(opts)
 	if err != nil {
 		return InitResult{}, fmt.Errorf("migrate: open db: %w", err)

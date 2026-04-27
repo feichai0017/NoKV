@@ -90,6 +90,18 @@ func TestAPI(t *testing.T) {
 
 func openTestDB(t testing.TB, opt *Options) *DB {
 	t.Helper()
+	// Tests written before the EnableValueLog opt-in flag landed assumed
+	// vlog was on by default. Auto-enable when the test fixture clearly
+	// expects vlog to exist (explicit ValueLogFileSize, explicit "all
+	// values to vlog" via ValueThreshold=0, or BucketCount > 0). New
+	// tests that want metadata-only behavior must construct Options
+	// without setting any of these fields and leave EnableValueLog at
+	// its default false.
+	if opt != nil && !opt.EnableValueLog {
+		if opt.ValueLogFileSize > 0 || opt.ValueThreshold == 0 || opt.ValueLogBucketCount > 0 {
+			opt.EnableValueLog = true
+		}
+	}
 	db, err := Open(opt)
 	require.NoError(t, err)
 	return db
@@ -2636,4 +2648,73 @@ func TestRaftLogUsesShardedWAL(t *testing.T) {
 	matches, err := filepath.Glob(filepath.Join(dir, fmt.Sprintf("raft-wal-%02d", shard), "*.wal"))
 	require.NoError(t, err)
 	require.NotEmpty(t, matches)
+}
+
+// TestDBValueLogDisabledByDefault locks the new opt-in semantics: with
+// EnableValueLog left at its default false, NoKV opens without spinning
+// up vlog managers, never creates the WorkDir/vlog directory, and
+// inlines every value regardless of size. This is the metadata-first
+// configuration the slab-substrate redesign promises (see
+// docs/notes/2026-04-27-slab-substrate.md).
+func TestDBValueLogDisabledByDefault(t *testing.T) {
+	dir := t.TempDir()
+	cfg := NewDefaultOptions()
+	cfg.WorkDir = dir
+	require.False(t, cfg.EnableValueLog, "NewDefaultOptions must default EnableValueLog to false")
+
+	db, err := Open(cfg)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	require.Nil(t, db.vlog, "vlog must not be initialized when EnableValueLog is false")
+
+	// A value larger than ValueThreshold would otherwise be sent to vlog;
+	// with vlog disabled the engine inlines it.
+	bigValue := make([]byte, 8<<10) // 8 KiB > default 2 KiB threshold
+	for i := range bigValue {
+		bigValue[i] = byte(i & 0xff)
+	}
+	require.NoError(t, db.Set([]byte("big"), bigValue))
+	got, err := db.Get([]byte("big"))
+	require.NoError(t, err)
+	require.Equal(t, bigValue, got.Value)
+
+	// vlog directory must not exist on disk.
+	_, err = os.Stat(filepath.Join(dir, "vlog"))
+	require.ErrorIs(t, err, os.ErrNotExist, "vlog dir must not be created when EnableValueLog is false")
+
+	// RunValueLogGC must be a no-op rather than panicking.
+	require.NoError(t, db.RunValueLogGC(0.5))
+}
+
+// TestDBValueLogEnabledRoundTrip verifies that explicitly enabling vlog
+// still produces a working value-separation path: a >threshold value is
+// stored and read back identically, and the vlog directory exists on
+// disk. This is the migration-friendly opt-in flow.
+func TestDBValueLogEnabledRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	cfg := NewDefaultOptions()
+	cfg.WorkDir = dir
+	cfg.EnableValueLog = true
+	cfg.ValueThreshold = 64
+	cfg.ValueLogFileSize = 1 << 20
+	cfg.ValueLogBucketCount = 1
+
+	db, err := Open(cfg)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	require.NotNil(t, db.vlog, "vlog must be initialized when EnableValueLog is true")
+
+	bigValue := make([]byte, 4<<10)
+	for i := range bigValue {
+		bigValue[i] = byte(i)
+	}
+	require.NoError(t, db.Set([]byte("big-vlog"), bigValue))
+	got, err := db.Get([]byte("big-vlog"))
+	require.NoError(t, err)
+	require.Equal(t, bigValue, got.Value)
+
+	_, err = os.Stat(filepath.Join(dir, "vlog"))
+	require.NoError(t, err, "vlog dir must exist when EnableValueLog is true")
 }

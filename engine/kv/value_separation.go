@@ -70,10 +70,22 @@ func NewValueSeparationPolicyMatcher(policies []*ValueSeparationPolicy) *ValueSe
 
 // MatchPolicy finds the first matching policy for the given entry.
 // Policies are evaluated in the order they are added, so more specific policies should be added first.
-// Returns nil if no policy matches.
+// Returns nil if no policy matches. Increments totalDecisions and per-policy hit counters.
 func (m *ValueSeparationPolicyMatcher) MatchPolicy(e *Entry) *ValueSeparationPolicy {
 	m.totalDecisions.Add(1)
+	return m.matchPolicyLocked(e, true)
+}
 
+// PeekPolicy returns the matching policy without recording a decision. It is
+// used by callers that need to read the policy outcome without inflating the
+// stats counters — e.g. the metadata-profile fast path that pre-scans a batch
+// to decide whether to call vlog.write at all (the actual decision is later
+// recorded by the vlog path itself when it runs).
+func (m *ValueSeparationPolicyMatcher) PeekPolicy(e *Entry) *ValueSeparationPolicy {
+	return m.matchPolicyLocked(e, false)
+}
+
+func (m *ValueSeparationPolicyMatcher) matchPolicyLocked(e *Entry, recordHit bool) *ValueSeparationPolicy {
 	if len(m.policies) == 0 {
 		return nil
 	}
@@ -97,8 +109,9 @@ func (m *ValueSeparationPolicyMatcher) MatchPolicy(e *Entry) *ValueSeparationPol
 			continue
 		}
 
-		// Policy matches - update stats using index
-		m.hitCounts[i].Add(1)
+		if recordHit {
+			m.hitCounts[i].Add(1)
+		}
 		return p
 	}
 

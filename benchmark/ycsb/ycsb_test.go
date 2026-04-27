@@ -54,6 +54,7 @@ func TestBenchmarkYCSB(t *testing.T) {
 		MemtableMB:           *ycsbMemtableMB,
 		SSTableMB:            *ycsbSSTableMB,
 		VlogFileMB:           *ycsbVlogFileMB,
+		NoKVEnableValueLog:   *ycsbNoKVEnableVlog,
 		BadgerBlockCacheMB:   *fBadgerBlockMB,
 		BadgerIndexCacheMB:   *fBadgerIndexMB,
 		BadgerCompression:    strings.ToLower(*fBadgerCompression),

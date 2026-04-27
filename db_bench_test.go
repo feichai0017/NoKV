@@ -167,3 +167,55 @@ func BenchmarkDBBatchSet(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkDBCommitVlogFastPath compares commit pipeline throughput between
+// the metadata profile (every value below ValueThreshold → vlog short-circuited
+// per Phase 1 of the slab substrate redesign) and the vlog profile (values above
+// the threshold → vlog.write must run). The "Inline" subtests should beat
+// "Vlog" by the cost of the vlog.write closure prep + map allocations that
+// the fast path skips.
+//
+// See docs/notes/2026-04-27-slab-substrate.md §4.
+func BenchmarkDBCommitVlogFastPath(b *testing.B) {
+	type profile struct {
+		name      string
+		valueSize int
+	}
+	profiles := []profile{
+		// Inline cases — every value < default ValueThreshold (2048).
+		{"Inline_64B", 64},
+		{"Inline_256B", 256},
+		{"Inline_1KB", 1024},
+		// Vlog cases — every value > 2048 → vlog path mandatory.
+		{"Vlog_4KB", 4 << 10},
+		{"Vlog_8KB", 8 << 10},
+	}
+	const batchSize = 64
+
+	for _, p := range profiles {
+		b.Run(p.name, func(b *testing.B) {
+			value := make([]byte, p.valueSize)
+			db := newBenchDB(b, func(opt *Options) {
+				opt.WriteBatchMaxCount = 128
+				opt.MaxBatchCount = 128
+			})
+			b.ReportAllocs()
+			b.SetBytes(int64(batchSize * len(value)))
+			b.ResetTimer()
+			for i := 0; b.Loop(); i++ {
+				entries := make([]*kv.Entry, batchSize)
+				for j := range batchSize {
+					key := makeBenchKey(i*batchSize + j)
+					entries[j] = kv.NewInternalEntry(kv.CFDefault, key, nonTxnMaxVersion, value, 0, 0)
+				}
+				req, err := db.sendToWriteCh(entries, true)
+				if err != nil {
+					b.Fatalf("send: %v", err)
+				}
+				if err := req.Wait(); err != nil {
+					b.Fatalf("wait: %v", err)
+				}
+			}
+		})
+	}
+}

@@ -169,9 +169,6 @@ func (m *Manager) apply(edit Edit) {
 				break
 			}
 		}
-	case EditLogPointer:
-		m.version.LogSegment = edit.LogSeg
-		m.version.LogOffset = edit.LogOffset
 	case EditValueLogHead:
 		if edit.ValueLog != nil {
 			meta := *edit.ValueLog
@@ -257,7 +254,7 @@ func (m *Manager) logEditsLocked(edits []Edit) error {
 
 func requiresSync(edit Edit) bool {
 	switch edit.Type {
-	case EditAddFile, EditDeleteFile, EditLogPointer, EditValueLogHead, EditDeleteValueLog, EditUpdateValueLog:
+	case EditAddFile, EditDeleteFile, EditValueLogHead, EditDeleteValueLog, EditUpdateValueLog:
 		return true
 	default:
 		return false
@@ -377,10 +374,6 @@ func (m *Manager) writeSnapshot(w io.Writer) error {
 		}
 	}
 
-	if err := writeEdit(w, Edit{Type: EditLogPointer, LogSeg: version.LogSegment, LogOffset: version.LogOffset}); err != nil {
-		return err
-	}
-
 	if len(version.ValueLogs) > 0 {
 		ids := make([]ValueLogID, 0, len(version.ValueLogs))
 		for id := range version.ValueLogs {
@@ -485,8 +478,6 @@ func (m *Manager) Current() Version {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cp := Version{
-		LogSegment:   m.version.LogSegment,
-		LogOffset:    m.version.LogOffset,
 		Levels:       make(map[int][]FileMeta),
 		ValueLogs:    make(map[ValueLogID]ValueLogMeta),
 		ValueLogHead: make(map[uint32]ValueLogMeta, len(m.version.ValueLogHead)),

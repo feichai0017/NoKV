@@ -37,12 +37,7 @@ func runManifestCmd(w io.Writer, args []string) error {
 	defer func() { _ = mgr.Close() }()
 
 	version := mgr.Current()
-	out := map[string]any{
-		"log_pointer": map[string]any{
-			"segment": version.LogSegment,
-			"offset":  version.LogOffset,
-		},
-	}
+	out := map[string]any{}
 	heads := mgr.ValueLogHead()
 	if len(heads) > 0 {
 		buckets := make([]uint32, 0, len(heads))
@@ -110,7 +105,6 @@ func runManifestCmd(w io.Writer, args []string) error {
 		return enc.Encode(out)
 	}
 
-	_, _ = fmt.Fprintf(w, "Manifest Log Pointer : segment=%d offset=%d\n", version.LogSegment, version.LogOffset)
 	if heads != nil {
 		buckets := make([]uint32, 0, len(heads))
 		for bucket := range heads {

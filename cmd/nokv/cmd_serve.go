@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -139,6 +140,11 @@ func runServeCmd(w io.Writer, args []string) error {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = *workDir
 	opt.MemTableEngine = NoKV.MemTableEngineART
+	// Auto-detect existing vlog so a workdir written by an older build
+	// (or by a future explicit-vlog deployment) is reopen-safe.
+	if _, statErr := os.Stat(filepath.Join(*workDir, "vlog")); statErr == nil {
+		opt.EnableValueLog = true
+	}
 	fsmetaInlinePolicy, err := enginekv.NewAlwaysInlinePolicy(enginekv.CFDefault, "fsm\x00")
 	if err != nil {
 		return fmt.Errorf("configure fsmeta value separation policy: %w", err)
