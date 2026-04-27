@@ -21,8 +21,9 @@ import (
 	"github.com/feichai0017/NoKV/engine/vfs"
 	vlogpkg "github.com/feichai0017/NoKV/engine/vlog"
 	"github.com/feichai0017/NoKV/engine/wal"
-	dbruntime "github.com/feichai0017/NoKV/runtime"
 	"github.com/feichai0017/NoKV/metrics"
+	dbruntime "github.com/feichai0017/NoKV/runtime"
+	iterpkg "github.com/feichai0017/NoKV/runtime/iterator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
@@ -570,7 +571,7 @@ func TestDBIteratorSeekAndValueCopy(t *testing.T) {
 		require.True(t, it.Valid())
 		item := it.Item()
 		require.Equal(t, []byte("b"), item.Entry().Key)
-		val, err := item.(*Item).ValueCopy(nil)
+		val, err := item.(*iterpkg.Item).ValueCopy(nil)
 		require.NoError(t, err)
 		require.Equal(t, []byte("vb"), val)
 	})
@@ -590,7 +591,7 @@ func TestDBIteratorSeekAndValueCopy(t *testing.T) {
 		require.True(t, it.Valid())
 		item := it.Item()
 		require.True(t, kv.IsValuePtr(item.Entry()))
-		val, err := item.(*Item).ValueCopy(nil)
+		val, err := item.(*iterpkg.Item).ValueCopy(nil)
 		require.NoError(t, err)
 		require.Equal(t, value, val)
 	})
@@ -2213,7 +2214,7 @@ func TestRecoveryVlogPointerRoundTripAfterReopen(t *testing.T) {
 		defer func() { _ = it.Close() }()
 		it.Seek([]byte("vp-1"))
 		require.True(t, it.Valid())
-		item, ok := it.Item().(*Item)
+		item, ok := it.Item().(*iterpkg.Item)
 		require.True(t, ok)
 		val, err := item.ValueCopy(nil)
 		require.NoError(t, err)

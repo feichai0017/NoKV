@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/engine/index"
+	iterpkg "github.com/feichai0017/NoKV/runtime/iterator"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,7 +32,7 @@ func TestDBIteratorVLogReadError(t *testing.T) {
 	}
 
 	// Check that error is captured when vlog read fails
-	dbIter, ok := iter.(*DBIterator)
+	dbIter, ok := iter.(*iterpkg.DBIterator)
 	require.True(t, ok, "should be DBIterator")
 
 	// We should either have an error (if we hit corruption) or have read all entries successfully
@@ -52,7 +53,7 @@ func TestDBIteratorErrorClearedOnRewind(t *testing.T) {
 
 	iter := db.NewIterator(&index.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
-	dbIter := iter.(*DBIterator)
+	dbIter := iter.(*iterpkg.DBIterator)
 
 	// Trigger error by iterating
 	firstErr := iterateUntilEnd(iter)
@@ -92,7 +93,7 @@ func TestDBIteratorLegitimateFilteringNoError(t *testing.T) {
 
 	iter := db.NewIterator(&index.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
-	dbIter := iter.(*DBIterator)
+	dbIter := iter.(*iterpkg.DBIterator)
 
 	// Iterator should be invalid (no visible entries)
 	iter.Rewind()
@@ -110,7 +111,7 @@ func TestDBIteratorSeekClearsError(t *testing.T) {
 
 	iter := db.NewIterator(&index.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
-	dbIter := iter.(*DBIterator)
+	dbIter := iter.(*iterpkg.DBIterator)
 
 	// Trigger error
 	firstErr := iterateUntilEnd(iter)
@@ -138,7 +139,7 @@ func TestDBIteratorEmptyDatabaseNoError(t *testing.T) {
 
 	iter := db.NewIterator(&index.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
-	dbIter := iter.(*DBIterator)
+	dbIter := iter.(*iterpkg.DBIterator)
 
 	iter.Rewind()
 	require.False(t, iter.Valid(), "empty database")
@@ -220,7 +221,7 @@ func iterateUntilEnd(iter index.Iterator) error {
 		iter.Next()
 	}
 
-	if dbIter, ok := iter.(*DBIterator); ok {
+	if dbIter, ok := iter.(*iterpkg.DBIterator); ok {
 		return dbIter.Err()
 	}
 	return nil
