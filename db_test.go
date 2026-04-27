@@ -218,9 +218,9 @@ func TestOpenNormalizesLegacyUnsetFieldsWithoutMutatingCaller(t *testing.T) {
 	opt.CompactionSlowdownTrigger = 0
 	opt.CompactionStopTrigger = 0
 	opt.CompactionResumeTrigger = 0
-	opt.IngestCompactBatchSize = 0
-	opt.IngestBacklogMergeScore = 0
-	opt.IngestShardParallelism = 0
+	opt.SpillCompactBatchSize = 0
+	opt.SpillBacklogMergeScore = 0
+	opt.SpillShardParallelism = 0
 	opt.CompactionValueWeight = 0
 	opt.CompactionValueAlertThreshold = 0
 	opt.ThermosTopK = 0
@@ -250,9 +250,9 @@ func TestOpenNormalizesLegacyUnsetFieldsWithoutMutatingCaller(t *testing.T) {
 	require.Greater(t, db.opt.CompactionSlowdownTrigger, 0.0)
 	require.GreaterOrEqual(t, db.opt.CompactionStopTrigger, db.opt.CompactionSlowdownTrigger)
 	require.LessOrEqual(t, db.opt.CompactionResumeTrigger, db.opt.CompactionSlowdownTrigger)
-	require.Greater(t, db.opt.IngestCompactBatchSize, 0)
-	require.Greater(t, db.opt.IngestBacklogMergeScore, 0.0)
-	require.Greater(t, db.opt.IngestShardParallelism, 0)
+	require.Greater(t, db.opt.SpillCompactBatchSize, 0)
+	require.Greater(t, db.opt.SpillBacklogMergeScore, 0.0)
+	require.Greater(t, db.opt.SpillShardParallelism, 0)
 	require.Greater(t, db.opt.CompactionValueWeight, 0.0)
 	require.Greater(t, db.opt.CompactionTombstoneWeight, 0.0)
 	require.Greater(t, db.opt.CompactionValueAlertThreshold, 0.0)
@@ -269,8 +269,8 @@ func TestNewDefaultOptionsExposeConcreteCompactionDefaults(t *testing.T) {
 	require.Greater(t, opt.CompactionSlowdownTrigger, 0.0)
 	require.GreaterOrEqual(t, opt.CompactionStopTrigger, opt.CompactionSlowdownTrigger)
 	require.LessOrEqual(t, opt.CompactionResumeTrigger, opt.CompactionSlowdownTrigger)
-	require.Greater(t, opt.IngestCompactBatchSize, 0)
-	require.Greater(t, opt.IngestBacklogMergeScore, 0.0)
+	require.Greater(t, opt.SpillCompactBatchSize, 0)
+	require.Greater(t, opt.SpillBacklogMergeScore, 0.0)
 	require.NotNil(t, opt.PrefixExtractor)
 	require.Greater(t, opt.CompactionTombstoneWeight, 0.0)
 }
@@ -1583,7 +1583,7 @@ func drWaitForFlushedSST(t *testing.T, db *DB) {
 		snap := db.Info().Snapshot()
 		hasSST := false
 		for _, lvl := range snap.LSM.Levels {
-			if lvl.TableCount > 0 || lvl.IngestTables > 0 {
+			if lvl.TableCount > 0 || lvl.SpillTables > 0 {
 				hasSST = true
 				break
 			}

@@ -10,11 +10,11 @@ import (
 )
 
 const (
-	ingestShardBits  = 2
-	ingestShardCount = 1 << ingestShardBits
+	spillShardBits  = 2
+	spillShardCount = 1 << spillShardBits
 )
 
-type ingestShard struct {
+type spillShard struct {
 	tables    []*table
 	ranges    []tableRange
 	prefixMax [][]byte
@@ -22,7 +22,7 @@ type ingestShard struct {
 	valueSize int64
 }
 
-func (sh *ingestShard) rebuildRanges() {
+func (sh *spillShard) rebuildRanges() {
 	if sh == nil {
 		return
 	}
@@ -52,29 +52,29 @@ func (sh *ingestShard) rebuildRanges() {
 	}
 }
 
-type ingestBuffer struct {
-	shards []ingestShard
+type spillBuffer struct {
+	shards []spillShard
 }
 
-func (buf *ingestBuffer) ensureInit() {
+func (buf *spillBuffer) ensureInit() {
 	if buf.shards == nil {
-		buf.shards = make([]ingestShard, ingestShardCount)
+		buf.shards = make([]spillShard, spillShardCount)
 	}
 }
 
 func shardIndexForRange(min []byte) int {
 	_, userKey, _, ok := kv.SplitInternalKey(min)
 	utils.CondPanicFunc(!ok, func() error {
-		return fmt.Errorf("ingest shardIndexForRange expects internal key: %x", min)
+		return fmt.Errorf("spill shardIndexForRange expects internal key: %x", min)
 	})
 	if len(userKey) == 0 {
 		return 0
 	}
 	// Use the top bits of the first byte to partition into fixed shards.
-	return int(userKey[0] >> (8 - ingestShardBits))
+	return int(userKey[0] >> (8 - spillShardBits))
 }
 
-func (buf *ingestBuffer) add(t *table) {
+func (buf *spillBuffer) add(t *table) {
 	if t == nil {
 		return
 	}
@@ -87,7 +87,7 @@ func (buf *ingestBuffer) add(t *table) {
 	sh.rebuildRanges()
 }
 
-func (buf *ingestBuffer) addBatch(ts []*table) {
+func (buf *spillBuffer) addBatch(ts []*table) {
 	if len(ts) == 0 {
 		return
 	}
@@ -109,7 +109,7 @@ func (buf *ingestBuffer) addBatch(ts []*table) {
 	}
 }
 
-func (buf *ingestBuffer) remove(toDel map[uint64]struct{}) {
+func (buf *spillBuffer) remove(toDel map[uint64]struct{}) {
 	if len(toDel) == 0 {
 		return
 	}
@@ -142,7 +142,7 @@ func (buf *ingestBuffer) remove(toDel map[uint64]struct{}) {
 	}
 }
 
-func (buf ingestBuffer) tableCount() int {
+func (buf spillBuffer) tableCount() int {
 	var n int
 	for _, sh := range buf.shards {
 		n += len(sh.tables)
@@ -150,7 +150,7 @@ func (buf ingestBuffer) tableCount() int {
 	return n
 }
 
-func (buf ingestBuffer) totalSize() int64 {
+func (buf spillBuffer) totalSize() int64 {
 	var n int64
 	for _, sh := range buf.shards {
 		n += sh.size
@@ -158,7 +158,7 @@ func (buf ingestBuffer) totalSize() int64 {
 	return n
 }
 
-func (buf ingestBuffer) totalValueSize() int64 {
+func (buf spillBuffer) totalValueSize() int64 {
 	var n int64
 	for _, sh := range buf.shards {
 		n += sh.valueSize
@@ -166,7 +166,7 @@ func (buf ingestBuffer) totalValueSize() int64 {
 	return n
 }
 
-func (buf ingestBuffer) allTables() []*table {
+func (buf spillBuffer) allTables() []*table {
 	var out []*table
 	for _, sh := range buf.shards {
 		out = append(out, sh.tables...)
@@ -174,7 +174,7 @@ func (buf ingestBuffer) allTables() []*table {
 	return out
 }
 
-func (buf *ingestBuffer) allMeta() []TableMeta {
+func (buf *spillBuffer) allMeta() []TableMeta {
 	if buf == nil {
 		return nil
 	}
@@ -182,7 +182,7 @@ func (buf *ingestBuffer) allMeta() []TableMeta {
 	return tableMetaSnapshot(buf.allTables())
 }
 
-func (buf *ingestBuffer) shardMetaByIndex(idx int) []TableMeta {
+func (buf *spillBuffer) shardMetaByIndex(idx int) []TableMeta {
 	if buf == nil {
 		return nil
 	}
@@ -197,7 +197,7 @@ func (buf *ingestBuffer) shardMetaByIndex(idx int) []TableMeta {
 	return tableMetaSnapshot(sh.tables)
 }
 
-func (buf *ingestBuffer) sortShards() {
+func (buf *spillBuffer) sortShards() {
 	buf.ensureInit()
 	for i := range buf.shards {
 		sh := &buf.shards[i]
@@ -210,10 +210,10 @@ func (buf *ingestBuffer) sortShards() {
 	}
 }
 
-func (buf ingestBuffer) shardViews() []IngestShardView {
+func (buf spillBuffer) shardViews() []SpillShardView {
 	buf.ensureInit()
 	now := time.Now()
-	var views []IngestShardView
+	var views []SpillShardView
 	for i, sh := range buf.shards {
 		if len(sh.tables) == 0 {
 			continue
@@ -234,7 +234,7 @@ func (buf ingestBuffer) shardViews() []IngestShardView {
 		if sh.size > 0 {
 			density = float64(sh.valueSize) / float64(sh.size)
 		}
-		views = append(views, IngestShardView{
+		views = append(views, SpillShardView{
 			Index:        i,
 			TableCount:   len(sh.tables),
 			SizeBytes:    sh.size,
@@ -246,7 +246,7 @@ func (buf ingestBuffer) shardViews() []IngestShardView {
 	return views
 }
 
-func (buf ingestBuffer) search(key []byte, maxVersion *uint64) (*kv.Entry, error) {
+func (buf spillBuffer) search(key []byte, maxVersion *uint64) (*kv.Entry, error) {
 	if maxVersion == nil {
 		var tmp uint64
 		maxVersion = &tmp
@@ -303,19 +303,19 @@ func (buf ingestBuffer) search(key []byte, maxVersion *uint64) (*kv.Entry, error
 	return nil, utils.ErrKeyNotFound
 }
 
-func (buf ingestBuffer) shardOrderBySize() []int {
+func (buf spillBuffer) shardOrderBySize() []int {
 	buf.ensureInit()
 	views := buf.shardViews()
-	return PickShardOrder(IngestPickInput{Shards: views})
+	return PickShardOrder(SpillPickInput{Shards: views})
 }
 
-func (lh *levelHandler) ingestShardByBacklog() int {
-	lh.ingest.ensureInit()
-	views := lh.ingest.shardViews()
-	return PickShardByBacklog(IngestPickInput{Shards: views})
+func (lh *levelHandler) spillShardByBacklog() int {
+	lh.spill.ensureInit()
+	views := lh.spill.shardViews()
+	return PickShardByBacklog(SpillPickInput{Shards: views})
 }
 
-func (buf ingestBuffer) maxAgeSeconds() float64 {
+func (buf spillBuffer) maxAgeSeconds() float64 {
 	now := time.Now()
 	var maxAge float64
 	for _, sh := range buf.shards {
@@ -332,7 +332,7 @@ func (buf ingestBuffer) maxAgeSeconds() float64 {
 	return maxAge
 }
 
-func (buf ingestBuffer) tablesWithinBounds(lower, upper []byte) []*table {
+func (buf spillBuffer) tablesWithinBounds(lower, upper []byte) []*table {
 	var tables []*table
 	for _, sh := range buf.shards {
 		if len(sh.tables) == 0 {
@@ -349,62 +349,62 @@ func (buf ingestBuffer) tablesWithinBounds(lower, upper []byte) []*table {
 
 // ---- levelHandler helpers that wrap the buffer ----
 
-func (lh *levelHandler) addIngest(t *table) {
+func (lh *levelHandler) addSpill(t *table) {
 	if t == nil {
 		return
 	}
 	lh.Lock()
 	defer lh.Unlock()
-	lh.ingest.ensureInit()
+	lh.spill.ensureInit()
 	t.setLevel(lh.levelNum)
-	lh.ingest.add(t)
+	lh.spill.add(t)
 }
 
-func (lh *levelHandler) ingestValueBytes() int64 {
+func (lh *levelHandler) spillValueBytes() int64 {
 	lh.RLock()
 	defer lh.RUnlock()
-	return lh.ingest.totalValueSize()
+	return lh.spill.totalValueSize()
 }
 
-func (lh *levelHandler) ingestValueDensity() float64 {
+func (lh *levelHandler) spillValueDensity() float64 {
 	lh.RLock()
 	defer lh.RUnlock()
-	total := lh.ingest.totalSize()
+	total := lh.spill.totalSize()
 	if total <= 0 {
 		return 0
 	}
-	return float64(lh.ingest.totalValueSize()) / float64(total)
+	return float64(lh.spill.totalValueSize()) / float64(total)
 }
 
-// ingestDensityLocked computes ingest value density; caller must hold lh lock.
-func (lh *levelHandler) ingestDensityLocked() float64 {
-	total := lh.ingest.totalSize()
+// spillDensityLocked computes spill value density; caller must hold lh lock.
+func (lh *levelHandler) spillDensityLocked() float64 {
+	total := lh.spill.totalSize()
 	if total <= 0 {
 		return 0
 	}
-	return float64(lh.ingest.totalValueSize()) / float64(total)
+	return float64(lh.spill.totalValueSize()) / float64(total)
 }
 
-func (lh *levelHandler) maxIngestAgeSeconds() float64 {
+func (lh *levelHandler) maxSpillAgeSeconds() float64 {
 	lh.RLock()
 	defer lh.RUnlock()
-	return lh.ingest.maxAgeSeconds()
+	return lh.spill.maxAgeSeconds()
 }
 
-func (lh *levelHandler) numIngestTables() int {
+func (lh *levelHandler) numSpillTables() int {
 	lh.RLock()
 	defer lh.RUnlock()
-	return lh.ingest.tableCount()
+	return lh.spill.tableCount()
 }
 
-// numIngestTablesLocked returns the ingest table count without acquiring the lock.
+// numSpillTablesLocked returns the spill table count without acquiring the lock.
 // Caller must already hold at least a read lock.
-func (lh *levelHandler) numIngestTablesLocked() int {
-	return lh.ingest.tableCount()
+func (lh *levelHandler) numSpillTablesLocked() int {
+	return lh.spill.tableCount()
 }
 
-func (lh *levelHandler) ingestDataSize() int64 {
+func (lh *levelHandler) spillDataSize() int64 {
 	lh.RLock()
 	defer lh.RUnlock()
-	return lh.ingest.totalSize()
+	return lh.spill.totalSize()
 }

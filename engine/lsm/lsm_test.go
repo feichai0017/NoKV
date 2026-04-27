@@ -361,7 +361,7 @@ func TestIngestBufferAccounting(t *testing.T) {
 		maxVersion: 4,
 	}
 
-	var buf ingestBuffer
+	var buf spillBuffer
 	buf.add(t1)
 	buf.addBatch([]*table{t2, t3})
 
@@ -766,29 +766,29 @@ func TestLevelHandlerIngestMetrics(t *testing.T) {
 	}
 
 	lh := &levelHandler{levelNum: 3}
-	lh.addIngest(t1)
-	lh.addIngest(t2)
+	lh.addSpill(t1)
+	lh.addSpill(t2)
 
-	if got := lh.numIngestTables(); got != 2 {
+	if got := lh.numSpillTables(); got != 2 {
 		t.Fatalf("expected 2 ingest tables, got %d", got)
 	}
-	if got := lh.ingestDataSize(); got != 180 {
+	if got := lh.spillDataSize(); got != 180 {
 		t.Fatalf("expected ingest size 180, got %d", got)
 	}
-	if got := lh.ingestValueBytes(); got != 40 {
+	if got := lh.spillValueBytes(); got != 40 {
 		t.Fatalf("expected ingest value bytes 40, got %d", got)
 	}
 	expectDensity := float64(40) / float64(180)
-	if math.Abs(lh.ingestValueDensity()-expectDensity) > 1e-9 {
+	if math.Abs(lh.spillValueDensity()-expectDensity) > 1e-9 {
 		t.Fatalf("unexpected ingest density")
 	}
-	if math.Abs(lh.ingestDensityLocked()-expectDensity) > 1e-9 {
+	if math.Abs(lh.spillDensityLocked()-expectDensity) > 1e-9 {
 		t.Fatalf("unexpected ingest density locked")
 	}
-	if lh.maxIngestAgeSeconds() <= 0 {
+	if lh.maxSpillAgeSeconds() <= 0 {
 		t.Fatalf("expected non-zero max ingest age")
 	}
-	if idx := lh.ingestShardByBacklog(); idx < 0 {
+	if idx := lh.spillShardByBacklog(); idx < 0 {
 		t.Fatalf("expected valid ingest shard index")
 	}
 }
@@ -892,7 +892,7 @@ func TestIngestSearch(t *testing.T) {
 
 	key := kv.InternalKey(kv.CFDefault, []byte("b"), 1)
 
-	var buf ingestBuffer
+	var buf spillBuffer
 	buf.add(tbl)
 
 	found, err := buf.search(key, nil)
@@ -924,7 +924,7 @@ func TestIngestSearchPrefersLatestVersion(t *testing.T) {
 	defer func() { _ = tblOld.DecrRef() }()
 	defer func() { _ = tblNew.DecrRef() }()
 
-	var buf ingestBuffer
+	var buf spillBuffer
 	buf.add(tblOld)
 	buf.add(tblNew)
 
@@ -950,7 +950,7 @@ func TestLevelGetPrefersMainVersion(t *testing.T) {
 	defer func() { _ = mainTbl.DecrRef() }()
 
 	lh := &levelHandler{levelNum: 3}
-	lh.ingest.add(ingestTbl)
+	lh.spill.add(ingestTbl)
 	lh.tables = []*table{mainTbl}
 
 	key := kv.InternalKey(kv.CFDefault, []byte("k"), math.MaxUint64)
@@ -1049,8 +1049,8 @@ func TestLevelSearchIngestAndLN(t *testing.T) {
 	key := kv.InternalKey(kv.CFDefault, []byte("c"), 1)
 
 	lh := &levelHandler{levelNum: 3}
-	lh.ingest.add(tbl)
-	found, err := lh.ingest.search(key, nil)
+	lh.spill.add(tbl)
+	found, err := lh.spill.search(key, nil)
 	if err != nil || found == nil {
 		t.Fatalf("ingest search err=%v entry=%v", err, found)
 	}
@@ -1558,8 +1558,8 @@ func TestLevelHandlerOverlapAndMetrics(t *testing.T) {
 	lh.tables = []*table{
 		{minKey: min, maxKey: max},
 	}
-	lh.ingest.ensureInit()
-	lh.ingest.add(&table{
+	lh.spill.ensureInit()
+	lh.spill.add(&table{
 		minKey:    kv.InternalKey(kv.CFDefault, []byte("k"), 1),
 		maxKey:    kv.InternalKey(kv.CFDefault, []byte("p"), 1),
 		size:      50,
@@ -1570,7 +1570,7 @@ func TestLevelHandlerOverlapAndMetrics(t *testing.T) {
 	lh.totalValueSize = 40
 	lh.totalStaleSize = 10
 	metrics := lh.metricsSnapshot()
-	if metrics.ValueDensity <= 0 || metrics.IngestValueDensity <= 0 {
+	if metrics.ValueDensity <= 0 || metrics.SpillValueDensity <= 0 {
 		t.Fatalf("expected non-zero density metrics")
 	}
 
@@ -1597,7 +1597,7 @@ func TestCompact(t *testing.T) {
 				return true
 			}
 		}
-		for _, sh := range lh.ingest.shards {
+		for _, sh := range lh.spill.shards {
 			for _, t := range sh.tables {
 				if t.fid == fid {
 					return true
@@ -1671,13 +1671,13 @@ func TestCompact(t *testing.T) {
 		// Use a test-only tweak to satisfy validation checks.
 		tricky(cd.thisLevel.tablesSnapshot())
 		ok := lsm.levels.fillTables(cd)
-		if !ok && lsm.levels.levels[6].numIngestTables() > 0 {
+		if !ok && lsm.levels.levels[6].numSpillTables() > 0 {
 			pri := Priority{
-				Level:      6,
-				IngestMode: IngestDrain,
-				Target:     lsm.levels.levelTargets(),
-				Score:      2,
-				Adjusted:   2,
+				Level:     6,
+				SpillMode: SpillDrain,
+				Target:    lsm.levels.levelTargets(),
+				Score:     2,
+				Adjusted:  2,
 			}
 			require.NoError(t, lsm.levels.doCompact(0, pri))
 			tricky(cd.thisLevel.tablesSnapshot())
@@ -1701,7 +1701,7 @@ func TestCompact(t *testing.T) {
 				}
 			}
 			if !ok {
-				for _, sh := range level.ingest.shards {
+				for _, sh := range level.spill.shards {
 					for _, tbl := range sh.tables {
 						if tbl.fid > prevMax {
 							ok = true
@@ -1764,30 +1764,30 @@ func TestIngestMergeStaysInIngest(t *testing.T) {
 	cd.top = []*table{tables[0]}
 	cd.plan.ThisRange = getKeyRange(cd.top...)
 	cd.plan.NextRange = cd.plan.ThisRange
-	if err := lsm.levels.moveToIngest(cd); err != nil {
-		t.Fatalf("moveToIngest: %v", err)
+	if err := lsm.levels.moveToSpill(cd); err != nil {
+		t.Fatalf("moveToSpill: %v", err)
 	}
 
 	target := lsm.levels.levels[6]
-	beforeIngest := target.numIngestTables()
-	if beforeIngest == 0 {
-		t.Fatalf("expected ingest tables after moveToIngest")
+	beforeSpill := target.numSpillTables()
+	if beforeSpill == 0 {
+		t.Fatalf("expected ingest tables after moveToSpill")
 	}
 	beforeMain := target.numTables()
 
 	pri := Priority{
-		Level:      6,
-		Score:      5.0,
-		Adjusted:   5.0,
-		Target:     lsm.levels.levelTargets(),
-		IngestMode: IngestKeep,
+		Level:     6,
+		Score:     5.0,
+		Adjusted:  5.0,
+		Target:    lsm.levels.levelTargets(),
+		SpillMode: SpillKeep,
 	}
 	if err := lsm.levels.doCompact(0, pri); err != nil {
 		t.Fatalf("ingest merge compact failed: %v", err)
 	}
 
-	afterIngest := target.numIngestTables()
-	if afterIngest == 0 {
+	afterSpill := target.numSpillTables()
+	if afterSpill == 0 {
 		t.Fatalf("expected ingest tables to remain after merge")
 	}
 	if target.numTables() != beforeMain {
@@ -1799,11 +1799,11 @@ func TestIngestMergeStaysInIngest(t *testing.T) {
 func TestIngestShardParallelSafety(t *testing.T) {
 	clearDir()
 	opt.NumCompactors = 4
-	opt.IngestShardParallelism = 4
+	opt.SpillShardParallelism = 4
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
 
-	// Write enough data to spawn multiple L0 tables, then move to ingest.
+	// Write enough data to spawn multiple L0 tables, then move to spill.
 	for range 4 {
 		baseTest(t, lsm, 512)
 	}
@@ -1816,31 +1816,31 @@ func TestIngestShardParallelSafety(t *testing.T) {
 	cd.top = []*table{tables[0]}
 	cd.plan.ThisRange = getKeyRange(cd.top...)
 	cd.plan.NextRange = cd.plan.ThisRange
-	if err := lsm.levels.moveToIngest(cd); err != nil {
-		t.Fatalf("moveToIngest: %v", err)
+	if err := lsm.levels.moveToSpill(cd); err != nil {
+		t.Fatalf("moveToSpill: %v", err)
 	}
 
 	// Trigger parallel ingest-only compactions across shards.
 	pri := Priority{
-		Level:      6,
-		Score:      6.0,
-		Adjusted:   6.0,
-		Target:     lsm.levels.levelTargets(),
-		IngestMode: IngestDrain,
+		Level:     6,
+		Score:     6.0,
+		Adjusted:  6.0,
+		Target:    lsm.levels.levelTargets(),
+		SpillMode: SpillDrain,
 	}
 	if err := lsm.levels.doCompact(0, pri); err != nil {
-		t.Fatalf("parallel ingest compaction failed: %v", err)
+		t.Fatalf("parallel spill compaction failed: %v", err)
 	}
 
 	// Ensure manifest/lists are consistent even if ingest drained.
 	target := lsm.levels.levels[6]
-	_ = target.numIngestTables()
+	_ = target.numSpillTables()
 
 	// Simulate restart and ensure ingest state can be recovered (may be empty if fully drained).
 	require.NoError(t, lsm.Close())
 	lsm = buildLSM()
 	defer func() { _ = lsm.Close() }()
-	_ = lsm.levels.levels[6].numIngestTables()
+	_ = lsm.levels.levels[6].numSpillTables()
 }
 
 // baseTest performs correctness checks.

@@ -152,7 +152,7 @@ func TestLevelHandlerIteratorsRespectBoundsWithIngest(t *testing.T) {
 	ingestE := buildTableWithEntry(t, lsm, 205, "e", 1, "ve")
 
 	lh.tables = []*table{tblA, tblD, tblG}
-	lh.ingest.addBatch([]*table{ingestB, ingestE})
+	lh.spill.addBatch([]*table{ingestB, ingestE})
 	lh.Sort()
 
 	iters := lh.iterators(&index.Options{

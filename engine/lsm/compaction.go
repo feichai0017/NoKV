@@ -394,8 +394,8 @@ func (p *SchedulerPolicy) arrangeTiered(workerID int, priorities []Priority) []P
 		return arrangeLeveled(workerID, ordered)
 	}
 	queues := classifyQueues(ordered)
-	ingestScore := maxScore(queues.keep, queues.drain)
-	quota := p.effectiveQuota(ingestScore)
+	spillScore := maxScore(queues.keep, queues.drain)
+	quota := p.effectiveQuota(spillScore)
 	return arrangeByQueues(workerID, queues, quota)
 }
 
@@ -405,7 +405,7 @@ func (p *SchedulerPolicy) observeTiered(event FeedbackEvent) {
 	if p == nil {
 		return
 	}
-	if !event.Priority.IngestMode.UsesIngest() {
+	if !event.Priority.SpillMode.UsesSpill() {
 		// Non-ingest success gradually decays stale ingest bias.
 		if event.Err == nil {
 			p.decayBiasTowardsZero()
@@ -438,17 +438,17 @@ func (p *SchedulerPolicy) arrangeHybrid(workerID int, priorities []Priority) []P
 		return arrangeLeveled(workerID, ordered)
 	}
 	queues := classifyQueues(ordered)
-	ingestScore := maxScore(queues.keep, queues.drain)
-	if ingestScore < hybridTieredThreshold {
+	spillScore := maxScore(queues.keep, queues.drain)
+	if spillScore < hybridTieredThreshold {
 		return arrangeLeveled(workerID, ordered)
 	}
-	quota := p.effectiveQuota(ingestScore)
+	quota := p.effectiveQuota(spillScore)
 	return arrangeByQueues(workerID, queues, quota)
 }
 
 func hasIngestWork(priorities []Priority) bool {
 	return slices.ContainsFunc(priorities, func(p Priority) bool {
-		return p.IngestMode.UsesIngest()
+		return p.SpillMode.UsesSpill()
 	})
 }
 
@@ -458,9 +458,9 @@ func classifyQueues(priorities []Priority) priorityQueues {
 		switch {
 		case p.Level == 0 && p.Adjusted >= l0ReliefScoreMin:
 			q.l0 = append(q.l0, p)
-		case p.IngestMode == IngestKeep:
+		case p.SpillMode == SpillKeep:
 			q.keep = append(q.keep, p)
-		case p.IngestMode == IngestDrain:
+		case p.SpillMode == SpillDrain:
 			q.drain = append(q.drain, p)
 		default:
 			q.regular = append(q.regular, p)
@@ -473,12 +473,12 @@ func classifyQueues(priorities []Priority) priorityQueues {
 	return q
 }
 
-func tieredQuotaByPressure(ingestScore float64) queueQuota {
+func tieredQuotaByPressure(spillScore float64) queueQuota {
 	switch {
-	case ingestScore >= 6:
+	case spillScore >= 6:
 		// Severe ingest backlog: aggressively drain/merge ingest first.
 		return queueQuota{l0: 2, keep: 3, drain: 3, regular: 1}
-	case ingestScore >= 3:
+	case spillScore >= 3:
 		// Balanced mode: keep ingest and regular making progress together.
 		return queueQuota{l0: 2, keep: 2, drain: 2, regular: 2}
 	default:
@@ -487,8 +487,8 @@ func tieredQuotaByPressure(ingestScore float64) queueQuota {
 	}
 }
 
-func (p *SchedulerPolicy) effectiveQuota(ingestScore float64) queueQuota {
-	quota := tieredQuotaByPressure(ingestScore)
+func (p *SchedulerPolicy) effectiveQuota(spillScore float64) queueQuota {
+	quota := tieredQuotaByPressure(spillScore)
 	return applyIngestBias(quota, int(p.ingestBias.Load()))
 }
 

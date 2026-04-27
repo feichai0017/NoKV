@@ -45,10 +45,10 @@ const (
 	DefaultCompactionStopTrigger = 12.0
 	// DefaultCompactionResumeTrigger clears throttling once max score falls below this value.
 	DefaultCompactionResumeTrigger = 2.0
-	// DefaultIngestCompactBatchSize is the default number of ingest tables compacted per cycle.
-	DefaultIngestCompactBatchSize = 4
-	// DefaultIngestBacklogMergeScore triggers ingest merge when backlog crosses this value.
-	DefaultIngestBacklogMergeScore = 2.0
+	// DefaultSpillCompactBatchSize is the default number of spill tables compacted per cycle.
+	DefaultSpillCompactBatchSize = 4
+	// DefaultSpillBacklogMergeScore triggers spill merge when backlog crosses this value.
+	DefaultSpillBacklogMergeScore = 2.0
 	// DefaultCompactionValueWeight biases picker priorities toward value-pointer-heavy levels.
 	DefaultCompactionValueWeight = 0.35
 	// DefaultCompactionValueAlertThreshold raises value-density alerts above this ratio.
@@ -122,9 +122,9 @@ type Options struct {
 	// slowdown first becomes active.
 	WriteThrottleMaxRate int64
 
-	IngestCompactBatchSize  int
-	IngestBacklogMergeScore float64
-	IngestShardParallelism  int
+	SpillCompactBatchSize  int
+	SpillBacklogMergeScore float64
+	SpillShardParallelism  int
 
 	// CompactionValueWeight increases the priority of levels containing a high
 	// proportion of ValueLog-backed payloads. Must be non-negative.
@@ -197,8 +197,8 @@ func (opt *Options) NormalizeInPlace() {
 		opt.NumCompactors = DefaultNumCompactors()
 	}
 	opt.normalizeCompactionOptions()
-	if opt.IngestShardParallelism <= 0 {
-		opt.IngestShardParallelism = max(opt.NumCompactors/2, 2)
+	if opt.SpillShardParallelism <= 0 {
+		opt.SpillShardParallelism = max(opt.NumCompactors/2, 2)
 	}
 	if opt.CompactionValueWeight < 0 {
 		opt.CompactionValueWeight = 0
@@ -266,11 +266,11 @@ func (opt *Options) normalizeCompactionOptions() {
 	if opt.CompactionResumeTrigger <= 0 {
 		opt.CompactionResumeTrigger = DefaultCompactionResumeTrigger
 	}
-	if opt.IngestCompactBatchSize <= 0 {
-		opt.IngestCompactBatchSize = DefaultIngestCompactBatchSize
+	if opt.SpillCompactBatchSize <= 0 {
+		opt.SpillCompactBatchSize = DefaultSpillCompactBatchSize
 	}
-	if opt.IngestBacklogMergeScore <= 0 {
-		opt.IngestBacklogMergeScore = DefaultIngestBacklogMergeScore
+	if opt.SpillBacklogMergeScore <= 0 {
+		opt.SpillBacklogMergeScore = DefaultSpillBacklogMergeScore
 	}
 	if opt.L0StopWritesTrigger <= opt.L0SlowdownWritesTrigger {
 		opt.L0StopWritesTrigger = opt.L0SlowdownWritesTrigger + 1

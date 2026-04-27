@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCompactionMoveToIngest(t *testing.T) {
+func TestCompactionMoveToSpill(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -34,19 +34,19 @@ func TestCompactionMoveToIngest(t *testing.T) {
 		cd.nextLevel = lsm.levels.levels[1]
 	}
 
-	beforeIngest := cd.nextLevel.numIngestTables()
-	if err := lsm.levels.moveToIngest(cd); err != nil {
-		t.Fatalf("moveToIngest: %v", err)
+	beforeSpill := cd.nextLevel.numSpillTables()
+	if err := lsm.levels.moveToSpill(cd); err != nil {
+		t.Fatalf("moveToSpill: %v", err)
 	}
-	afterIngest := cd.nextLevel.numIngestTables()
-	if afterIngest <= beforeIngest {
-		t.Fatalf("expected ingest buffer to grow, before=%d after=%d", beforeIngest, afterIngest)
+	afterSpill := cd.nextLevel.numSpillTables()
+	if afterSpill <= beforeSpill {
+		t.Fatalf("expected spill buffer to grow, before=%d after=%d", beforeSpill, afterSpill)
 	}
 
 	// Ensure the moved table has been removed from the source level.
 	found := false
 	cd.nextLevel.RLock()
-	for _, sh := range cd.nextLevel.ingest.shards {
+	for _, sh := range cd.nextLevel.spill.shards {
 		for _, tbl := range sh.tables {
 			if tbl.fid == cd.top[0].fid {
 				found = true
@@ -325,58 +325,58 @@ func TestSchedulerPolicyArrangeLeveled(t *testing.T) {
 func TestSchedulerPolicyArrangeTieredPrefersIngest(t *testing.T) {
 	p := NewSchedulerPolicy(PolicyTiered)
 	in := []Priority{
-		{Level: 0, Adjusted: 9, IngestMode: IngestNone},
-		{Level: 3, Adjusted: 2, IngestMode: IngestKeep},
-		{Level: 2, Adjusted: 5, IngestMode: IngestDrain},
-		{Level: 1, Adjusted: 8, IngestMode: IngestNone},
+		{Level: 0, Adjusted: 9, SpillMode: SpillNone},
+		{Level: 3, Adjusted: 2, SpillMode: SpillKeep},
+		{Level: 2, Adjusted: 5, SpillMode: SpillDrain},
+		{Level: 1, Adjusted: 8, SpillMode: SpillNone},
 	}
 	out := p.Arrange(0, in)
 	require.Len(t, out, 4)
 	require.Equal(t, 0, out[0].Level)
-	require.Equal(t, IngestKeep, out[1].IngestMode)
-	require.Equal(t, IngestDrain, out[2].IngestMode)
+	require.Equal(t, SpillKeep, out[1].SpillMode)
+	require.Equal(t, SpillDrain, out[2].SpillMode)
 	require.Equal(t, 1, out[3].Level)
 }
 
 func TestSchedulerPolicyArrangeHybridSwitchesByIngestPressure(t *testing.T) {
 	p := NewSchedulerPolicy(PolicyHybrid)
 	withMildIngest := []Priority{
-		{Level: 1, Adjusted: 2, IngestMode: IngestNone},
-		{Level: 2, Adjusted: 1.5, IngestMode: IngestDrain},
+		{Level: 1, Adjusted: 2, SpillMode: SpillNone},
+		{Level: 2, Adjusted: 1.5, SpillMode: SpillDrain},
 	}
 	out := p.Arrange(0, withMildIngest)
 	require.Equal(t, 1, out[0].Level)
 
 	noIngest := []Priority{
-		{Level: 2, Adjusted: 2, IngestMode: IngestNone},
-		{Level: 0, Adjusted: 1.5, IngestMode: IngestNone},
+		{Level: 2, Adjusted: 2, SpillMode: SpillNone},
+		{Level: 0, Adjusted: 1.5, SpillMode: SpillNone},
 	}
 	out = p.Arrange(0, noIngest)
 	require.Equal(t, 0, out[0].Level)
 
 	withHeavyIngest := []Priority{
-		{Level: 1, Adjusted: 1.2, IngestMode: IngestNone},
-		{Level: 2, Adjusted: 4.5, IngestMode: IngestDrain},
-		{Level: 3, Adjusted: 3.5, IngestMode: IngestKeep},
+		{Level: 1, Adjusted: 1.2, SpillMode: SpillNone},
+		{Level: 2, Adjusted: 4.5, SpillMode: SpillDrain},
+		{Level: 3, Adjusted: 3.5, SpillMode: SpillKeep},
 	}
 	out = p.Arrange(0, withHeavyIngest)
-	require.Equal(t, IngestKeep, out[0].IngestMode)
-	require.Equal(t, IngestDrain, out[1].IngestMode)
+	require.Equal(t, SpillKeep, out[0].SpillMode)
+	require.Equal(t, SpillDrain, out[1].SpillMode)
 }
 
 func TestSchedulerPolicyTieredFeedbackAdjustsQuota(t *testing.T) {
 	baseInput := []Priority{
-		{Level: 0, Adjusted: 3.0, IngestMode: IngestNone},
-		{Level: 6, Adjusted: 6.0, IngestMode: IngestKeep},
-		{Level: 6, Adjusted: 5.9, IngestMode: IngestKeep},
-		{Level: 6, Adjusted: 5.8, IngestMode: IngestKeep},
-		{Level: 6, Adjusted: 5.7, IngestMode: IngestKeep},
-		{Level: 5, Adjusted: 6.5, IngestMode: IngestDrain},
-		{Level: 5, Adjusted: 6.4, IngestMode: IngestDrain},
-		{Level: 5, Adjusted: 6.3, IngestMode: IngestDrain},
-		{Level: 5, Adjusted: 6.2, IngestMode: IngestDrain},
-		{Level: 2, Adjusted: 5.5, IngestMode: IngestNone},
-		{Level: 2, Adjusted: 5.4, IngestMode: IngestNone},
+		{Level: 0, Adjusted: 3.0, SpillMode: SpillNone},
+		{Level: 6, Adjusted: 6.0, SpillMode: SpillKeep},
+		{Level: 6, Adjusted: 5.9, SpillMode: SpillKeep},
+		{Level: 6, Adjusted: 5.8, SpillMode: SpillKeep},
+		{Level: 6, Adjusted: 5.7, SpillMode: SpillKeep},
+		{Level: 5, Adjusted: 6.5, SpillMode: SpillDrain},
+		{Level: 5, Adjusted: 6.4, SpillMode: SpillDrain},
+		{Level: 5, Adjusted: 6.3, SpillMode: SpillDrain},
+		{Level: 5, Adjusted: 6.2, SpillMode: SpillDrain},
+		{Level: 2, Adjusted: 5.5, SpillMode: SpillNone},
+		{Level: 2, Adjusted: 5.4, SpillMode: SpillNone},
 	}
 
 	normal := NewSchedulerPolicy(PolicyTiered)
@@ -387,7 +387,7 @@ func TestSchedulerPolicyTieredFeedbackAdjustsQuota(t *testing.T) {
 	failed := NewSchedulerPolicy(PolicyTiered)
 	for range 3 {
 		failed.Observe(FeedbackEvent{
-			Priority: Priority{IngestMode: IngestDrain},
+			Priority: Priority{SpillMode: SpillDrain},
 			Err:      errors.New("injected ingest failure"),
 		})
 	}
@@ -398,7 +398,7 @@ func TestSchedulerPolicyTieredFeedbackAdjustsQuota(t *testing.T) {
 	success := NewSchedulerPolicy(PolicyTiered)
 	for range 3 {
 		success.Observe(FeedbackEvent{
-			Priority: Priority{IngestMode: IngestKeep},
+			Priority: Priority{SpillMode: SpillKeep},
 			Err:      nil,
 		})
 	}
@@ -409,7 +409,7 @@ func TestSchedulerPolicyTieredFeedbackAdjustsQuota(t *testing.T) {
 
 func firstRegularNonL0(prios []Priority) int {
 	for i, p := range prios {
-		if p.IngestMode == IngestNone && p.Level != 0 {
+		if p.SpillMode == SpillNone && p.Level != 0 {
 			return i
 		}
 	}
@@ -443,7 +443,7 @@ func requireDecrOnce(t *testing.T, before map[*table]int32) {
 func hasIngestTable(lh *levelHandler, fid uint64) bool {
 	lh.RLock()
 	defer lh.RUnlock()
-	for _, sh := range lh.ingest.shards {
+	for _, sh := range lh.spill.shards {
 		for _, tbl := range sh.tables {
 			if tbl != nil && tbl.fid == fid {
 				return true
@@ -466,8 +466,8 @@ func TestRunCompactDefIngestNoneDecrementsTopOnce(t *testing.T) {
 	if ok := lsm.levels.fillTables(cd); !ok {
 		t.Fatalf("fillTables failed for ingest-none path")
 	}
-	if cd.plan.IngestMode != IngestNone {
-		t.Fatalf("expected ingest-none plan, got %v", cd.plan.IngestMode)
+	if cd.plan.SpillMode != SpillNone {
+		t.Fatalf("expected ingest-none plan, got %v", cd.plan.SpillMode)
 	}
 	before := tableRefSnapshot(cd.top)
 	if err := lsm.levels.runCompactDef(0, 0, *cd); err != nil {
@@ -488,7 +488,7 @@ func TestRunCompactDefIngestDrainDecrementsTopOnce(t *testing.T) {
 	l0 := lsm.levels.levels[0]
 	l0Tables := l0.tablesSnapshot()
 	if len(l0Tables) == 0 {
-		t.Fatalf("expected L0 tables before moveToIngest")
+		t.Fatalf("expected L0 tables before moveToSpill")
 	}
 
 	move := buildCompactDef(lsm, 0, 0, 6)
@@ -498,20 +498,20 @@ func TestRunCompactDefIngestDrainDecrementsTopOnce(t *testing.T) {
 	if move.nextLevel == nil {
 		move.nextLevel = lsm.levels.levels[6]
 	}
-	if err := lsm.levels.moveToIngest(move); err != nil {
-		t.Fatalf("moveToIngest: %v", err)
+	if err := lsm.levels.moveToSpill(move); err != nil {
+		t.Fatalf("moveToSpill: %v", err)
 	}
 
 	target := lsm.levels.levels[6]
-	if target.numIngestTables() == 0 {
-		t.Fatalf("expected ingest tables after moveToIngest")
+	if target.numSpillTables() == 0 {
+		t.Fatalf("expected ingest tables after moveToSpill")
 	}
 
 	cd := buildCompactDef(lsm, 0, 6, 6)
-	cd.plan.IngestMode = IngestDrain
+	cd.plan.SpillMode = SpillDrain
 	cd.plan.StatsTag = "test-ingest-drain"
-	if ok := lsm.levels.fillTablesIngestShard(cd, -1); !ok {
-		t.Fatalf("fillTablesIngestShard failed for ingest-drain path")
+	if ok := lsm.levels.fillTablesSpillShard(cd, -1); !ok {
+		t.Fatalf("fillTablesSpillShard failed for ingest-drain path")
 	}
 	if len(cd.top) == 0 {
 		t.Fatalf("expected ingest top tables for drain compaction")
@@ -539,7 +539,7 @@ func TestRunCompactDefIngestKeepDecrementsTopOnce(t *testing.T) {
 
 	l0Tables := lsm.levels.levels[0].tablesSnapshot()
 	if len(l0Tables) == 0 {
-		t.Fatalf("expected L0 tables before moveToIngest")
+		t.Fatalf("expected L0 tables before moveToSpill")
 	}
 
 	move := buildCompactDef(lsm, 0, 0, 6)
@@ -549,20 +549,20 @@ func TestRunCompactDefIngestKeepDecrementsTopOnce(t *testing.T) {
 	if move.nextLevel == nil {
 		move.nextLevel = lsm.levels.levels[6]
 	}
-	if err := lsm.levels.moveToIngest(move); err != nil {
-		t.Fatalf("moveToIngest: %v", err)
+	if err := lsm.levels.moveToSpill(move); err != nil {
+		t.Fatalf("moveToSpill: %v", err)
 	}
 
 	target := lsm.levels.levels[6]
-	if target.numIngestTables() == 0 {
-		t.Fatalf("expected ingest tables after moveToIngest")
+	if target.numSpillTables() == 0 {
+		t.Fatalf("expected ingest tables after moveToSpill")
 	}
 
 	cd := buildCompactDef(lsm, 0, 6, 6)
-	cd.plan.IngestMode = IngestKeep
+	cd.plan.SpillMode = SpillKeep
 	cd.plan.StatsTag = "test-ingest-keep"
-	if ok := lsm.levels.fillTablesIngestShard(cd, -1); !ok {
-		t.Fatalf("fillTablesIngestShard failed for ingest-keep path")
+	if ok := lsm.levels.fillTablesSpillShard(cd, -1); !ok {
+		t.Fatalf("fillTablesSpillShard failed for ingest-keep path")
 	}
 	if len(cd.top) == 0 {
 		t.Fatalf("expected ingest top tables for keep compaction")
@@ -573,7 +573,7 @@ func TestRunCompactDefIngestKeepDecrementsTopOnce(t *testing.T) {
 	}
 	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 	requireDecrOnce(t, before)
-	if target.numIngestTables() == 0 {
+	if target.numSpillTables() == 0 {
 		t.Fatalf("expected ingest tables to remain after ingest-keep compaction")
 	}
 	for tbl := range before {

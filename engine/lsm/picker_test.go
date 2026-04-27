@@ -7,26 +7,26 @@ import (
 )
 
 func TestIngestModeFlags(t *testing.T) {
-	require.False(t, IngestNone.UsesIngest())
-	require.True(t, IngestDrain.UsesIngest())
-	require.True(t, IngestKeep.UsesIngest())
-	require.True(t, IngestKeep.KeepsIngest())
-	require.False(t, IngestDrain.KeepsIngest())
+	require.False(t, SpillNone.UsesSpill())
+	require.True(t, SpillDrain.UsesSpill())
+	require.True(t, SpillKeep.UsesSpill())
+	require.True(t, SpillKeep.KeepsSpill())
+	require.False(t, SpillDrain.KeepsSpill())
 }
 
 func TestIngestPicker(t *testing.T) {
-	shards := []IngestShardView{
+	shards := []SpillShardView{
 		{Index: 1, SizeBytes: 10},
 		{Index: 2, SizeBytes: 30},
 		{Index: 3, SizeBytes: 20, MaxAgeSec: 120, ValueDensity: 0.5},
 	}
-	order := PickShardOrder(IngestPickInput{Shards: shards})
+	order := PickShardOrder(SpillPickInput{Shards: shards})
 	require.Equal(t, []int{2, 3, 1}, order)
 
-	pick := PickShardByBacklog(IngestPickInput{Shards: shards})
+	pick := PickShardByBacklog(SpillPickInput{Shards: shards})
 	require.Equal(t, 3, pick)
 
-	require.Equal(t, -1, PickShardByBacklog(IngestPickInput{}))
+	require.Equal(t, -1, PickShardByBacklog(SpillPickInput{}))
 }
 
 func TestPriorityHelpers(t *testing.T) {
@@ -85,28 +85,28 @@ func TestBuildTargetsAndPickPriorities(t *testing.T) {
 				TotalValueBytes: 100,
 			},
 			{
-				Level:              1,
-				IngestTables:       2,
-				IngestSize:         200,
-				IngestValueBytes:   40,
-				IngestValueDensity: 1.5,
-				IngestAgeSeconds:   200,
-				MainValueBytes:     30,
+				Level:             1,
+				SpillTables:       2,
+				SpillSize:         200,
+				SpillValueBytes:   40,
+				SpillValueDensity: 1.5,
+				SpillAgeSeconds:   200,
+				MainValueBytes:    30,
 			},
 		},
-		Targets:                 targets,
-		NumLevelZeroTables:      4,
-		BaseTableSize:           4,
-		BaseLevelSize:           10,
-		IngestBacklogMergeScore: 1.0,
-		CompactionValueWeight:   1.0,
+		Targets:                targets,
+		NumLevelZeroTables:     4,
+		BaseTableSize:          4,
+		BaseLevelSize:          10,
+		SpillBacklogMergeScore: 1.0,
+		CompactionValueWeight:  1.0,
 	}
 	prios := PickPriorities(input)
 	require.NotEmpty(t, prios)
 
 	var hasIngestDrain bool
 	for _, p := range prios {
-		if p.IngestMode == IngestDrain {
+		if p.SpillMode == SpillDrain {
 			hasIngestDrain = true
 		}
 	}
