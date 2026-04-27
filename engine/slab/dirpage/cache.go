@@ -11,12 +11,6 @@ import (
 	"github.com/feichai0017/NoKV/engine/vfs"
 )
 
-// ConsumerClass declares this cache as a Derived slab consumer: total
-// loss only forces a re-scan of the LSM dentry rows that built the
-// pages, so corruption / truncation here MUST NOT propagate back into
-// the truth path. See engine/slab/consumer_class.go.
-const ConsumerClass = slab.ConsumerClassDerived
-
 // Config controls how a Cache opens its backing slab and shapes its
 // pages. Sensible defaults apply when zero.
 type Config struct {
