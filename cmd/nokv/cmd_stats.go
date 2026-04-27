@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -214,6 +216,13 @@ func localStatsSnapshot(workDir string, attachMetrics bool) (NoKV.StatsSnapshot,
 		raftmode.ModePreparing,
 		raftmode.ModeSeeded,
 		raftmode.ModeCluster,
+	}
+	// Auto-detect whether the workdir was written with the vlog
+	// Authoritative consumer enabled. Stats reporting must reflect
+	// existing vlog state even though EnableValueLog defaults to false
+	// after the slab-substrate redesign.
+	if _, err := os.Stat(filepath.Join(workDir, "vlog")); err == nil {
+		opts.EnableValueLog = true
 	}
 	db, err := NoKV.Open(opts)
 	if err != nil {

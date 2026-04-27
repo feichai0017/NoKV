@@ -65,6 +65,7 @@ func TestRunStatsCmd(t *testing.T) {
 	dir := t.TempDir()
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
+	opt.EnableValueLog = true
 	opt.ValueThreshold = 0
 	db, err := NoKV.Open(opt)
 	require.NoError(t, err)
@@ -121,6 +122,7 @@ func TestRunVlogCmd(t *testing.T) {
 	dir := t.TempDir()
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
+	opt.EnableValueLog = true
 	opt.ValueThreshold = 0
 	db, err := NoKV.Open(opt)
 	require.NoError(t, err)
@@ -196,7 +198,12 @@ func TestRunManifestCmdPlain(t *testing.T) {
 	var buf bytes.Buffer
 	err := runManifestCmd(&buf, []string{"-workdir", dir})
 	require.NoError(t, err)
-	require.Contains(t, buf.String(), "Manifest Log Pointer")
+	// "Manifest Log Pointer" was removed when the legacy
+	// LogSegment/LogOffset fields were deleted (slab-substrate cleanup).
+	// The plain-text manifest output now starts with "Levels:" and lists
+	// any per-level files plus the value-log section.
+	require.Contains(t, buf.String(), "Levels:")
+	require.Contains(t, buf.String(), "ValueLog segments:")
 }
 func TestRunRegionsCmd(t *testing.T) {
 	dir := t.TempDir()
@@ -1381,6 +1388,9 @@ func prepareDBWorkdir(t *testing.T) string {
 	dir := t.TempDir()
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
+	// vlog is opt-in since the slab-substrate redesign; the cmd tests
+	// that follow exercise the vlog / stats paths that need it.
+	opt.EnableValueLog = true
 	opt.ValueThreshold = 0
 	db, err := NoKV.Open(opt)
 	require.NoError(t, err)
