@@ -57,6 +57,12 @@ type Host interface {
 	SlowWritesActive() bool
 	HotWriteLimited() uint64
 
+	// ValueLogDisabledOrphans returns the number of value-log segments
+	// the manifest still references when EnableValueLog=false. Zero
+	// when vlog is enabled, or when there is nothing to migrate. The
+	// stats subsystem surfaces this only when Vlog() returns nil.
+	ValueLogDisabledOrphans() int
+
 	// Options-snapshot accessors.
 	RaftLagWarnSegments() int64
 	WALTypedRecordWarnRatio() float64
@@ -185,6 +191,11 @@ type ValueLogStatsSnapshot struct {
 	DiscardQueue   int                        `json:"discard_queue"`
 	Heads          map[uint32]kv.ValuePtr     `json:"heads,omitempty"`
 	GC             metrics.ValueLogGCSnapshot `json:"gc"`
+	// DisabledOrphans is non-zero when EnableValueLog=false but the
+	// manifest still references that many value-log segments — every
+	// Get/iterator hit on a value pointer will fail until the operator
+	// either re-enables EnableValueLog or migrates values out of vlog.
+	DisabledOrphans int `json:"disabled_orphans,omitempty"`
 }
 
 // WALStatsSnapshot captures WAL head position, record mix, and watchdog status.
@@ -699,6 +710,12 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.ValueLog.PendingDeletes = stats.PendingDeletes
 		snap.ValueLog.DiscardQueue = stats.DiscardQueue
 		snap.ValueLog.Heads = stats.Heads
+	} else {
+		// EnableValueLog=false. If the manifest still references
+		// value-log segments, surface the orphan count so operators
+		// see the mismatch in stats output without waiting for a
+		// failing read to surface it.
+		snap.ValueLog.DisabledOrphans = s.host.ValueLogDisabledOrphans()
 	}
 	if hot := s.host.HotWrite(); hot != nil {
 		topK := s.host.ThermosTopK()

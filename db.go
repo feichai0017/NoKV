@@ -230,6 +230,17 @@ func (db *DB) openEngine() error {
 	db.iterPool = iterpkg.NewIteratorPool()
 	if db.opt.EnableValueLog {
 		db.initVLog()
+	} else {
+		// Operator diagnostic: when vlog is disabled but the manifest
+		// still references value-log segments, every Get/iterator hit
+		// on a value pointer will fail with a clear error. Surface the
+		// mismatch here too so operators see it at Open time without
+		// waiting for the first read failure.
+		if status := db.lsm.ValueLogStatusSnapshot(); len(status) > 0 {
+			slog.Default().Warn("value log disabled but manifest references existing vlog segments",
+				"segments", len(status),
+				"action", "set Options.EnableValueLog=true to read the existing data, or migrate values out")
+		}
 	}
 	db.background.Init(stats.New(db, 0))
 	if len(db.opt.ValueSeparationPolicies) > 0 {
@@ -951,6 +962,12 @@ func (db *DB) WriteMetrics() *metrics.WriteMetrics  { return db.writeMetrics }
 func (db *DB) BlockWritesActive() bool              { return db.blockWrites.Load() == 1 }
 func (db *DB) SlowWritesActive() bool               { return db.slowWrites.Load() == 1 }
 func (db *DB) HotWriteLimited() uint64              { return db.hotWriteLimited.Load() }
+func (db *DB) ValueLogDisabledOrphans() int {
+	if db == nil || db.lsm == nil || db.opt.EnableValueLog {
+		return 0
+	}
+	return len(db.lsm.ValueLogStatusSnapshot())
+}
 func (db *DB) RaftLagWarnSegments() int64           { return db.opt.RaftLagWarnSegments }
 func (db *DB) WALTypedRecordWarnRatio() float64     { return db.opt.WALTypedRecordWarnRatio }
 func (db *DB) WALTypedRecordWarnSegments() int64    { return db.opt.WALTypedRecordWarnSegments }

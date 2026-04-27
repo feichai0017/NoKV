@@ -69,6 +69,9 @@ func renderStats(w io.Writer, snap stats.StatsSnapshot, asJSON bool) error {
 	_, _ = fmt.Fprintf(w, "ValueLog.Segments      %d\n", snap.ValueLog.Segments)
 	_, _ = fmt.Fprintf(w, "ValueLog.PendingDelete %d\n", snap.ValueLog.PendingDeletes)
 	_, _ = fmt.Fprintf(w, "ValueLog.DiscardQueue  %d\n", snap.ValueLog.DiscardQueue)
+	if snap.ValueLog.DisabledOrphans > 0 {
+		_, _ = fmt.Fprintf(w, "ValueLog.Warning       EnableValueLog=false but manifest references %d vlog segments — reads on those keys will fail\n", snap.ValueLog.DisabledOrphans)
+	}
 	if snap.ValueLog.GC.GCRuns > 0 || snap.ValueLog.GC.GCScheduled > 0 {
 		_, _ = fmt.Fprintf(w, "ValueLog.GC            runs=%d scheduled=%d active=%d removed=%d skipped=%d throttled=%d rejected=%d parallel=%d\n",
 			snap.ValueLog.GC.GCRuns,
