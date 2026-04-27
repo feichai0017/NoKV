@@ -22,14 +22,14 @@ import (
 	vlogpkg "github.com/feichai0017/NoKV/engine/vlog"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/metrics"
-	dbruntime "github.com/feichai0017/NoKV/runtime"
-	"github.com/feichai0017/NoKV/runtime/commit"
-	iterpkg "github.com/feichai0017/NoKV/runtime/iterator"
-	"github.com/feichai0017/NoKV/runtime/stats"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
+	dbruntime "github.com/feichai0017/NoKV/runtime"
+	"github.com/feichai0017/NoKV/runtime/commit"
+	iterpkg "github.com/feichai0017/NoKV/runtime/iterator"
+	"github.com/feichai0017/NoKV/runtime/stats"
 	"github.com/feichai0017/NoKV/thermos"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -941,9 +941,9 @@ func (db *DB) Info() *stats.Stats {
 // over DB struct fields so the snapshot logic can live in runtime/stats
 // without importing the root NoKV package.
 
-func (db *DB) LSM() stats.LSMSource             { return db.lsm }
-func (db *DB) Vlog() stats.VlogSource           { return db.vlog }
-func (db *DB) LSMWALs() []*wal.Manager          { return db.lsmWALs }
+func (db *DB) LSM() stats.LSMSource                 { return db.lsm }
+func (db *DB) Vlog() stats.VlogSource               { return db.vlog }
+func (db *DB) LSMWALs() []*wal.Manager              { return db.lsmWALs }
 func (db *DB) BackgroundWatchdogs() []*wal.Watchdog { return db.background.WALWatchdogs() }
 func (db *DB) HotWrite() *thermos.RotatingThermos   { return db.hotWrite }
 func (db *DB) IteratorReused() uint64               { return db.iterPool.Reused() }
