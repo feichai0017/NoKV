@@ -38,8 +38,8 @@ flowchart TD
 | --- | --- | --- |
 | WAL tail truncated | Replay stops safely at truncated tail, preserving valid prefix records | `engine/wal/manager_test.go::TestManagerReplayHandlesTruncate` |
 | Crash before memtable flush install | WAL replay restores user data not yet flushed to SST | `db_test.go::TestRecoveryWALReplayRestoresData` |
-| Manifest references missing SST | Startup removes stale manifest entry and continues | `db_test.go::TestRecoveryCleansMissingSSTFromManifest` |
-| Manifest references corrupt/unreadable SST | Startup removes stale entry and continues | `db_test.go::TestRecoveryCleansCorruptSSTFromManifest` |
+| Manifest references missing SST | Startup fails fast and the manifest entry is preserved (operator must investigate before continuing) | `db_test.go::TestRecoveryFailsOnMissingSST` |
+| Manifest references corrupt/unreadable SST | Startup fails fast and the manifest entry is preserved (operator must investigate before continuing) | `db_test.go::TestRecoveryFailsOnCorruptSST` |
 | ValueLog stale segment (manifest marked invalid) | Recovery deletes stale file from disk | `db_test.go::TestRecoveryRemovesStaleValueLogSegment` |
 | ValueLog orphan segment (disk only) | Recovery deletes orphan file not tracked by manifest | `db_test.go::TestRecoveryRemovesOrphanValueLogSegment` |
 | Manifest rewrite interrupted | Recovery keeps using CURRENT-selected manifest and data remains readable | `db_test.go::TestRecoveryManifestRewriteCrash` |
@@ -61,7 +61,7 @@ Set `RECOVERY_TRACE_METRICS=1` to emit `RECOVERY_METRIC ...` lines in tests.
 
 ```bash
 RECOVERY_TRACE_METRICS=1 \
-go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFromManifest|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
+go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|FailsOnMissingSST|FailsOnCorruptSST|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
 ```
 
 Outputs are saved under `artifacts/recovery/`.
