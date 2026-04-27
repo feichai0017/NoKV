@@ -229,7 +229,9 @@ func (db *DB) openEngine() error {
 	db.nonTxnVersion.Store(db.lsm.Diagnostics().MaxVersion)
 	db.iterPool = iterpkg.NewIteratorPool()
 	if db.opt.EnableValueLog {
-		db.initVLog()
+		if err := db.initVLog(); err != nil {
+			return fmt.Errorf("open db: init value log: %w", err)
+		}
 	} else {
 		// Operator diagnostic: when vlog is disabled but the manifest
 		// still references value-log segments, every Get/iterator hit
@@ -1089,7 +1091,10 @@ func (db *DB) vlogCloser() *utils.Closer {
 // matcher, etc.). Heads observed during replay are installed into
 // db.vheads / db.lastLoggedHeads here so the Consumer never reaches
 // back into the DB struct.
-func (db *DB) initVLog() {
+//
+// Returns a non-nil error when bucket-manager open or replay fails so
+// the caller (Open) can surface it to the caller instead of panicking.
+func (db *DB) initVLog() error {
 	heads := db.getHeads()
 	vlogDir := filepath.Join(db.opt.WorkDir, "vlog")
 
@@ -1138,7 +1143,9 @@ func (db *DB) initVLog() {
 	maps.Copy(db.lastLoggedHeads, heads)
 
 	vlog, observed, err := vlogpkg.OpenConsumer(cfg, deps, heads, nil)
-	utils.Panic(err)
+	if err != nil {
+		return err
+	}
 	db.vlog = vlog
 	if db.vheads == nil {
 		db.vheads = make(map[uint32]kv.ValuePtr)
@@ -1149,6 +1156,7 @@ func (db *DB) initVLog() {
 		}
 		db.vheads[bucket] = head
 	}
+	return nil
 }
 
 // getHeads returns the value-log head snapshot held by the LSM manifest.

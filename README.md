@@ -40,7 +40,7 @@
 
 1. **Native metadata primitives** — `ReadDirPlus`, `WatchSubtree`, `SnapshotSubtree`, and cross-region `RenameSubtree` are first-class server-side operations, not client-side compositions over `Get` / `Put` / `Scan`.
 2. **Single source of namespace truth** — mount lifecycle, subtree authority, snapshot epoch, and quota fence live in one rooted, replicated event log.
-3. **Vertical integration** — own LSM (with ART memtable) + own Raft + own Percolator MVCC + own coordinator. No external dependency gates how a metadata primitive interacts with the storage layer.
+3. **Vertical integration** — own LSM (with ART memtable) + own raftstore (per-region runtime, transport, membership, snapshot install, apply observer; consensus algorithm is `etcd/raft` `RawNode`) + own Percolator MVCC + own coordinator. No external dependency gates how a metadata primitive interacts with the storage layer.
 
 > NoKV is a **substrate**, not a finished filesystem server. Build a FUSE driver / S3 gateway / dataset metadata service on top; we don't ship those out of the box. We do ship the metadata primitives, the rooted truth kernel, and a Redis-compatible gateway over the underlying KV.
 
@@ -93,7 +93,7 @@ Apple M3 Pro · `records=1M` · `ops=1M` · `value_size=1000` · `conc=16`
 | Production distributed SQL | **CockroachDB**, TiDB | Different scope |
 | Production distributed KV | **TiKV, FoundationDB** | NoKV's KV layer is an in-house substrate for `fsmeta`, not a TiKV/FDB replacement |
 | Just an embedded LSM | **Pebble**, **Badger** | NoKV's engine is not a drop-in library |
-| A Raft library | **etcd/raft**, dragonboat | NoKV has its own Raft integrated with the storage substrate |
+| A Raft library | **etcd/raft**, dragonboat | NoKV builds its raftstore (per-region runtime, transport, membership, snapshot install, apply observer) on top of `etcd/raft` `RawNode` — the integration is owned, the consensus algorithm is reused |
 
 NoKV's value comes from **owning the entire vertical** so namespace-metadata-natural primitives can be implemented as first-class server-side ops (not client-side compositions over `Get`/`Put`/`Scan`).
 
@@ -386,5 +386,5 @@ Local scripts, Docker Compose, and all CLI tools consume the same file. Programm
 
 <div align="center">
 <sub><strong>Open-source namespace metadata substrate for DFS, OSS, and AI dataset metadata.</strong></sub><br/>
-<sub>Built from scratch — no external storage engine, no external Raft library, no external coordinator.</sub>
+<sub>Built from scratch — own storage engine, own raftstore on top of <code>etcd/raft</code> <code>RawNode</code>, own coordinator.</sub>
 </div>
