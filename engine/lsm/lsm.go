@@ -47,7 +47,7 @@ import (
 type LSM struct {
 	shards           []*lsmShard
 	shardHints       *shardHintTable
-	negatives        *negativeCache
+	negatives        *negativecache.Cache
 	negativesPersist *negativecache.Persistence
 	levels           *levelManager
 	option           *Options
@@ -361,10 +361,12 @@ func NewLSM(opt *Options, walMgrs []*wal.Manager) (*LSM, error) {
 			lsm.logger.Warn("negative cache restore failed; cold start",
 				slog.String("err", err.Error()))
 		}
-		lsm.negatives = newNegativeCacheWithInner(inner)
+		lsm.negatives = inner
 		lsm.negativesPersist = persist
 	} else {
-		lsm.negatives = newNegativeCache()
+		lsm.negatives = negativecache.New(negativecache.Config{
+			GroupKeyFn: kv.InternalToBaseKey,
+		})
 	}
 	if lsm.logger == nil {
 		lsm.logger = slog.Default()
@@ -719,17 +721,17 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 }
 
 func (lsm *LSM) negativeHit(key []byte) bool {
-	if lsm == nil || lsm.negatives == nil {
+	if lsm == nil {
 		return false
 	}
-	return lsm.negatives.contains(key)
+	return lsm.negatives.Has(key)
 }
 
 func (lsm *LSM) rememberNegative(key []byte) {
-	if lsm == nil || lsm.negatives == nil {
+	if lsm == nil {
 		return
 	}
-	lsm.negatives.remember(key)
+	lsm.negatives.Remember(key)
 }
 
 func (lsm *LSM) invalidateNegativeCache(entries []*kv.Entry) {
@@ -740,15 +742,15 @@ func (lsm *LSM) invalidateNegativeCache(entries []*kv.Entry) {
 		if entry == nil || len(entry.Key) == 0 {
 			continue
 		}
-		lsm.negatives.invalidate(entry.Key)
+		lsm.negatives.Invalidate(entry.Key)
 	}
 }
 
 func (lsm *LSM) clearNegativeCache() {
-	if lsm == nil || lsm.negatives == nil {
+	if lsm == nil {
 		return
 	}
-	lsm.negatives.clear()
+	lsm.negatives.Clear()
 }
 
 func (lsm *LSM) lookupShardHint(key []byte) (int, bool) {

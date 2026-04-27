@@ -54,7 +54,7 @@ func BenchmarkShardedNegativeCache(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				if mode == "cold_neg" && lsm.negatives != nil {
-					lsm.negatives.clear()
+					lsm.negatives.Clear()
 				}
 				_, _ = lsm.Get(missQuery(i & 1023))
 			}
