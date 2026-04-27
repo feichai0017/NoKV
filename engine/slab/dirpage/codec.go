@@ -48,9 +48,11 @@ const recordHeaderFixed = 4 + 2 // magic + version
 
 // PageKey identifies one cached directory listing. Mount and Parent are
 // opaque to dirpage; the consumer (typically fsmeta) maps its own typed
-// identifiers to these uint widths.
+// identifiers to these uint widths. Mount is uint64 — fsmeta's MountID
+// is a string, callers hash it (e.g. xxhash.Sum64) so collision
+// probability across mounts is negligible (~5e-12 at 10K mounts).
 type PageKey struct {
-	Mount  uint32
+	Mount  uint64
 	Parent uint64
 }
 
@@ -66,7 +68,7 @@ type Entry struct {
 // pageHeader is the decoded prefix of a dirpage record (everything before
 // the entries).
 type pageHeader struct {
-	Mount      uint32
+	Mount      uint64
 	Parent     uint64
 	PageNo     uint32
 	Frontier   uint64
@@ -78,9 +80,8 @@ type pageHeader struct {
 // page. Slightly pessimistic (assumes max varint width).
 func estimatePageSize(entries []Entry) int {
 	const overhead = recordHeaderFixed +
-		binary.MaxVarintLen32*2 + // mount + page_no
-		binary.MaxVarintLen64*2 + // parent + frontier
-		binary.MaxVarintLen32 + // entry_count
+		binary.MaxVarintLen64*3 + // mount + parent + frontier
+		binary.MaxVarintLen32*2 + // page_no + entry_count
 		4 // crc32
 	total := overhead
 	for _, e := range entries {
@@ -105,7 +106,7 @@ func encodePage(dst []byte, hdr pageHeader, entries []Entry) []byte {
 	dst = append(dst, fixed[:]...)
 
 	// header (varint)
-	dst = binary.AppendUvarint(dst, uint64(hdr.Mount))
+	dst = binary.AppendUvarint(dst, hdr.Mount)
 	dst = binary.AppendUvarint(dst, hdr.Parent)
 	dst = binary.AppendUvarint(dst, uint64(hdr.PageNo))
 	dst = binary.AppendUvarint(dst, hdr.Frontier)
@@ -224,7 +225,7 @@ func decodePage(buf []byte) (pageHeader, []Entry, int, error) {
 	cursor += 4
 
 	hdr := pageHeader{
-		Mount:      uint32(mount),
+		Mount:      mount,
 		Parent:     parent,
 		PageNo:     uint32(pageNo),
 		Frontier:   frontier,
