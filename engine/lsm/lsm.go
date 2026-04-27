@@ -375,7 +375,7 @@ func NewLSM(opt *Options, walMgrs []*wal.Manager) (*LSM, error) {
 		lsm.discardStatsCh = *frozen.DiscardStatsCh
 	}
 	lsm.throttleFn = frozen.ThrottleCallback
-	lsm.flushQueue = newFlushRuntime()
+	lsm.flushQueue = newFlushRuntime(len(lsm.shards))
 	// initialize levelManager
 	lm, err := lsm.initLevelManager(frozen)
 	if err != nil {

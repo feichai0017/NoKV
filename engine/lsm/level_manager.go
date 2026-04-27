@@ -300,8 +300,13 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	}
 	lm.setLogPointer(immutable.segmentID, uint64(immutable.walSize.Load()))
 	if shard := immutable.shard; shard != nil {
-		// Monotonic per-shard high-water; flushes within a shard are
-		// strictly ordered so a simple Store is safe.
+		// Monotonic per-shard high-water. Per-shard flush serialization
+		// is enforced by flushRuntime (see flush_runtime.go: per-shard
+		// queue + inFlight flag) so this Store cannot race against a
+		// later same-shard flush. The `> cur` guard is kept as a belt-
+		// and-braces against future runtime regressions; without
+		// flushRuntime serialization the WAL retention mark below
+		// would advance out of order and recovery could lose segments.
 		if cur := shard.highestFlushedSeg.Load(); immutable.segmentID > cur {
 			shard.highestFlushedSeg.Store(immutable.segmentID)
 		}
