@@ -968,10 +968,10 @@ func (db *DB) ValueLogDisabledOrphans() int {
 	}
 	return len(db.lsm.ValueLogStatusSnapshot())
 }
-func (db *DB) RaftLagWarnSegments() int64           { return db.opt.RaftLagWarnSegments }
-func (db *DB) WALTypedRecordWarnRatio() float64     { return db.opt.WALTypedRecordWarnRatio }
-func (db *DB) WALTypedRecordWarnSegments() int64    { return db.opt.WALTypedRecordWarnSegments }
-func (db *DB) ThermosTopK() int                     { return db.opt.ThermosTopK }
+func (db *DB) RaftLagWarnSegments() int64        { return db.opt.RaftLagWarnSegments }
+func (db *DB) WALTypedRecordWarnRatio() float64  { return db.opt.WALTypedRecordWarnRatio }
+func (db *DB) WALTypedRecordWarnSegments() int64 { return db.opt.WALTypedRecordWarnSegments }
+func (db *DB) ThermosTopK() int                  { return db.opt.ThermosTopK }
 
 func (db *DB) RaftPointerSnapshot() func() map[uint64]localmeta.RaftLogPointer {
 	if db == nil || db.opt == nil {

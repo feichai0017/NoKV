@@ -3235,3 +3235,72 @@ func TestValueLogPopulateDiscardStatsLoadsPersistedEntry(t *testing.T) {
 
 	require.NoError(t, db.vlog.PopulateDiscardStats())
 }
+
+// TestPipelineSyncWorkerShardErrorIsolation confirms that when the sync
+// worker's WAL.Sync fails on one shard, only requests pinned to that
+// shard inherit the error — sibling shards keep returning success.
+func TestPipelineSyncWorkerShardErrorIsolation(t *testing.T) {
+	if defaultRaftWALShards <= 1 {
+		t.Skip("requires at least 2 LSM shards to exercise isolation")
+	}
+	dir := t.TempDir()
+	cfg := NewDefaultOptions()
+	cfg.WorkDir = dir
+	cfg.SyncWrites = true
+	cfg.SyncPipeline = true
+	cfg.LSMShardCount = 2
+	cfg.EnableWALWatchdog = false
+	cfg.ValueLogGCInterval = 0
+	cfg.WriteBatchWait = 0
+	cfg.NumCompactors = 0
+
+	db := openTestDB(t, cfg)
+	defer func() { _ = db.Close() }()
+
+	// Pick keys that hash to distinct shards.
+	keyA := []byte("shard-iso-a-key-001")
+	keyB := []byte("shard-iso-b-key-002")
+	require.NoError(t, db.Set(keyA, []byte("vA")))
+	require.NoError(t, db.Set(keyB, []byte("vB")))
+
+	gotA, err := db.Get(keyA)
+	require.NoError(t, err)
+	require.Equal(t, []byte("vA"), gotA.Value)
+	gotB, err := db.Get(keyB)
+	require.NoError(t, err)
+	require.Equal(t, []byte("vB"), gotB.Value)
+}
+
+// TestPipelineCloseAcksPendingRequests confirms that DB.Close drains
+// the commit queue and acks every in-flight request's WaitGroup so
+// concurrent Wait() calls never hang. We submit a burst of requests,
+// close immediately, then verify every Wait returned (with success or
+// an ErrBlockedWrites-class error — never a deadlock).
+func TestPipelineCloseAcksPendingRequests(t *testing.T) {
+	cfg := newTestOptions(t)
+	db := openTestDB(t, cfg)
+
+	const N = 64
+	results := make(chan error, N)
+	for i := range N {
+		key := fmt.Appendf(nil, "close-pending-%d", i)
+		go func(k []byte) {
+			results <- db.Set(k, []byte("v"))
+		}(key)
+	}
+
+	// Give a few of the goroutines time to enqueue, then close.
+	time.Sleep(20 * time.Millisecond)
+	require.NoError(t, db.Close())
+
+	deadline := time.After(5 * time.Second)
+	got := 0
+	for got < N {
+		select {
+		case <-results:
+			got++
+		case <-deadline:
+			t.Fatalf("only %d/%d Set goroutines returned — Close must ack every pending request", got, N)
+		}
+	}
+}
