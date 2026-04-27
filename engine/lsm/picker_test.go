@@ -6,27 +6,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIngestModeFlags(t *testing.T) {
-	require.False(t, IngestNone.UsesIngest())
-	require.True(t, IngestDrain.UsesIngest())
-	require.True(t, IngestKeep.UsesIngest())
-	require.True(t, IngestKeep.KeepsIngest())
-	require.False(t, IngestDrain.KeepsIngest())
+func TestStagingModeFlags(t *testing.T) {
+	require.False(t, StagingNone.UsesStaging())
+	require.True(t, StagingDrain.UsesStaging())
+	require.True(t, StagingKeep.UsesStaging())
+	require.True(t, StagingKeep.KeepsStaging())
+	require.False(t, StagingDrain.KeepsStaging())
 }
 
-func TestIngestPicker(t *testing.T) {
-	shards := []IngestShardView{
+func TestStagingPicker(t *testing.T) {
+	shards := []StagingShardView{
 		{Index: 1, SizeBytes: 10},
 		{Index: 2, SizeBytes: 30},
 		{Index: 3, SizeBytes: 20, MaxAgeSec: 120, ValueDensity: 0.5},
 	}
-	order := PickShardOrder(IngestPickInput{Shards: shards})
+	order := PickShardOrder(StagingPickInput{Shards: shards})
 	require.Equal(t, []int{2, 3, 1}, order)
 
-	pick := PickShardByBacklog(IngestPickInput{Shards: shards})
+	pick := PickShardByBacklog(StagingPickInput{Shards: shards})
 	require.Equal(t, 3, pick)
 
-	require.Equal(t, -1, PickShardByBacklog(IngestPickInput{}))
+	require.Equal(t, -1, PickShardByBacklog(StagingPickInput{}))
 }
 
 func TestPriorityHelpers(t *testing.T) {
@@ -85,30 +85,30 @@ func TestBuildTargetsAndPickPriorities(t *testing.T) {
 				TotalValueBytes: 100,
 			},
 			{
-				Level:              1,
-				IngestTables:       2,
-				IngestSize:         200,
-				IngestValueBytes:   40,
-				IngestValueDensity: 1.5,
-				IngestAgeSeconds:   200,
-				MainValueBytes:     30,
+				Level:               1,
+				StagingTables:       2,
+				StagingSize:         200,
+				StagingValueBytes:   40,
+				StagingValueDensity: 1.5,
+				StagingAgeSeconds:   200,
+				MainValueBytes:      30,
 			},
 		},
-		Targets:                 targets,
-		NumLevelZeroTables:      4,
-		BaseTableSize:           4,
-		BaseLevelSize:           10,
-		IngestBacklogMergeScore: 1.0,
-		CompactionValueWeight:   1.0,
+		Targets:                  targets,
+		NumLevelZeroTables:       4,
+		BaseTableSize:            4,
+		BaseLevelSize:            10,
+		StagingBacklogMergeScore: 1.0,
+		CompactionValueWeight:    1.0,
 	}
 	prios := PickPriorities(input)
 	require.NotEmpty(t, prios)
 
-	var hasIngestDrain bool
+	var hasStagingDrain bool
 	for _, p := range prios {
-		if p.IngestMode == IngestDrain {
-			hasIngestDrain = true
+		if p.StagingMode == StagingDrain {
+			hasStagingDrain = true
 		}
 	}
-	require.True(t, hasIngestDrain)
+	require.True(t, hasStagingDrain)
 }

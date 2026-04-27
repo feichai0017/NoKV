@@ -79,7 +79,7 @@ func TestPlanBuilderSelections(t *testing.T) {
 	require.Equal(t, 0, left)
 	require.Equal(t, 2, right)
 
-	plan, ok := PlanForIngestFallback(2, []TableMeta{t1})
+	plan, ok := PlanForStagingFallback(2, []TableMeta{t1})
 	require.True(t, ok)
 	require.Equal(t, 2, plan.ThisLevel)
 
@@ -110,7 +110,7 @@ func TestPlanBuilderSelections(t *testing.T) {
 		{ID: 8, MinKey: ikey("b", 9), MaxKey: ikey("c", 1), Size: 4 << 20},
 		{ID: 9, MinKey: ikey("c", 9), MaxKey: ikey("d", 1), Size: 4 << 20},
 	}
-	plan, ok = PlanForIngestShard(0, shard, 1, []TableMeta{}, 4<<20, 1, nil)
+	plan, ok = PlanForStagingShard(0, shard, 1, []TableMeta{}, 4<<20, 1, nil)
 	require.True(t, ok)
 	require.Len(t, plan.TopIDs, 3)
 

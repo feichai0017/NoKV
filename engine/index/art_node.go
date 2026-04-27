@@ -154,7 +154,7 @@ func (n *artNode) prefixBytes(arena *Arena) []byte {
 	if n.prefixLen <= artMaxPrefixLen {
 		return n.prefix[:n.prefixLen]
 	}
-	// Long prefixes spill into the arena.
+	// Long prefixes staging into the arena.
 	if arena == nil || n.prefixOverflowOffset == 0 {
 		return n.prefix[:artMaxPrefixLen]
 	}

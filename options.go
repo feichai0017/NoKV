@@ -14,18 +14,15 @@ import (
 )
 
 const (
-	defaultWriteBatchMaxCount = 64
-	// defaultCommitWorkers=1 matches legacy behaviour. The fan-out path is
-	// available for benchmarking but with the current shared-WAL architecture
-	// more workers contend on wal.Manager.mu rather than parallelize. Raise
-	// only after LSM data-plane WAL is sharded.
-	defaultCommitWorkers           = 1
-	defaultWriteBatchMaxSize int64 = 1 << 20
-	defaultThermosTopK             = 16
+	defaultWriteBatchMaxCount       = 64
+	defaultWriteBatchMaxSize  int64 = 1 << 20
+	defaultThermosTopK              = 16
 	// defaultLSMShardCount is the number of WAL Manager + memtable pairs
 	// that back the LSM data plane. Each shard runs on its own fd, fsync
 	// worker, and bufio.Writer so writes do not contend on a single
-	// Manager.mu. Must be a power of two.
+	// Manager.mu. The commit pipeline launches one processor per shard,
+	// so write concurrency is determined entirely by LSMShardCount —
+	// there is no separate CommitWorkers knob. Must be a power of two.
 	defaultLSMShardCount = 4
 )
 
@@ -148,16 +145,11 @@ type Options struct {
 	// WAL fsync from the commit pipeline. When false (the default), the commit
 	// worker performs fsync inline. Only effective when SyncWrites is true.
 	SyncPipeline bool
-	// CommitWorkers is the number of parallel processor goroutines downstream
-	// of the commit dispatcher. A single dispatcher continues to own the MPSC
-	// queue consumer and fans batches out to N workers. Zero or negative falls
-	// back to a single processor (legacy behavior). When the LSM data plane
-	// is sharded, CommitWorkers is coupled to LSMShardCount so each worker is
-	// pinned to one shard (preserves SetBatch atomicity).
-	CommitWorkers int
 	// LSMShardCount is the number of WAL Manager + memtable pairs that back
-	// the LSM data plane. The shard router uses `& (N-1)` for placement so
-	// the value must be a power of two. Zero falls back to the constructor
+	// the LSM data plane and equivalently the number of commit-pipeline
+	// processors (one per shard, pinned end-to-end so SetBatch atomicity
+	// is preserved). The shard router uses `& (N-1)` for placement so the
+	// value must be a power of two. Zero falls back to the constructor
 	// default; non-power-of-two values are rounded DOWN to the nearest
 	// power of two during Open (e.g. 6 → 4, 12 → 8). See
 	// docs/notes/2026-04-27-sharded-wal-memtable.md.
@@ -270,14 +262,14 @@ type Options struct {
 	// drops to this value or lower. Defaults are populated up front; zero is only
 	// interpreted Open resolves the constructor default when left zero.
 	CompactionResumeTrigger float64
-	// IngestCompactBatchSize decides how many L0 tables to promote into the
-	// ingest buffer per compaction cycle. NewDefaultOptions populates a concrete
+	// StagingCompactBatchSize decides how many L0 tables to promote into the
+	// staging buffer per compaction cycle. NewDefaultOptions populates a concrete
 	// default; Open resolves the constructor default when left zero.
-	IngestCompactBatchSize int
-	// IngestBacklogMergeScore triggers an ingest-merge task when the ingest
+	StagingCompactBatchSize int
+	// StagingBacklogMergeScore triggers a staging-merge task when the staging
 	// backlog score exceeds this threshold. Defaults are populated up front; zero
 	// is only interpreted Open resolves the constructor default when left zero.
-	IngestBacklogMergeScore float64
+	StagingBacklogMergeScore float64
 
 	// CompactionValueWeight adjusts how aggressively the scheduler prioritises
 	// levels whose entries reference large value log payloads. Higher values
@@ -302,9 +294,9 @@ type Options struct {
 	// value-density (value bytes / total bytes) exceeds this ratio.
 	CompactionValueAlertThreshold float64
 
-	// IngestShardParallelism caps how many ingest shards can be compacted in a
-	// single ingest-only pass. A value <= 0 falls back to 1 (sequential).
-	IngestShardParallelism int
+	// StagingShardParallelism caps how many staging shards can be compacted in a
+	// single staging-only pass. A value <= 0 falls back to 1 (sequential).
+	StagingShardParallelism int
 
 	// NegativeCachePersistent enables snapshot-on-Close + restore-on-Open for
 	// the in-memory negative cache, backed by an engine/slab segment under
@@ -359,7 +351,6 @@ func NewDefaultOptions() *Options {
 		// Conservative defaults to avoid long batch-induced pauses.
 		WriteBatchMaxCount:            defaultWriteBatchMaxCount,
 		WriteBatchMaxSize:             defaultWriteBatchMaxSize,
-		CommitWorkers:                 defaultCommitWorkers,
 		LSMShardCount:                 defaultLSMShardCount,
 		MaxBatchCount:                 defaultWriteBatchMaxCount,
 		MaxBatchSize:                  defaultWriteBatchMaxSize,
@@ -407,11 +398,11 @@ func NewDefaultOptions() *Options {
 	opt.CompactionSlowdownTrigger = lsmpkg.DefaultCompactionSlowdownTrigger
 	opt.CompactionStopTrigger = lsmpkg.DefaultCompactionStopTrigger
 	opt.CompactionResumeTrigger = lsmpkg.DefaultCompactionResumeTrigger
-	opt.IngestCompactBatchSize = lsmpkg.DefaultIngestCompactBatchSize
-	opt.IngestBacklogMergeScore = lsmpkg.DefaultIngestBacklogMergeScore
+	opt.StagingCompactBatchSize = lsmpkg.DefaultStagingCompactBatchSize
+	opt.StagingBacklogMergeScore = lsmpkg.DefaultStagingBacklogMergeScore
 	opt.NumCompactors = 4
 	opt.CompactionPolicy = CompactionPolicyLeveled
-	opt.IngestShardParallelism = 2
+	opt.StagingShardParallelism = 2
 	return opt
 }
 
@@ -485,9 +476,9 @@ func (opt *Options) applyLSMSharedOptions(dst *lsmpkg.Options) {
 	dst.CompactionResumeTrigger = opt.CompactionResumeTrigger
 	dst.WriteThrottleMinRate = opt.WriteThrottleMinRate
 	dst.WriteThrottleMaxRate = opt.WriteThrottleMaxRate
-	dst.IngestCompactBatchSize = opt.IngestCompactBatchSize
-	dst.IngestBacklogMergeScore = opt.IngestBacklogMergeScore
-	dst.IngestShardParallelism = opt.IngestShardParallelism
+	dst.StagingCompactBatchSize = opt.StagingCompactBatchSize
+	dst.StagingBacklogMergeScore = opt.StagingBacklogMergeScore
+	dst.StagingShardParallelism = opt.StagingShardParallelism
 	dst.CompactionValueWeight = opt.CompactionValueWeight
 	dst.CompactionTombstoneWeight = opt.CompactionTombstoneWeight
 	dst.TTLCompactionMinAge = opt.TTLCompactionMinAge
@@ -516,9 +507,9 @@ func (opt *Options) copyNormalizedLSMOptions(src *lsmpkg.Options) {
 	opt.CompactionResumeTrigger = src.CompactionResumeTrigger
 	opt.WriteThrottleMinRate = src.WriteThrottleMinRate
 	opt.WriteThrottleMaxRate = src.WriteThrottleMaxRate
-	opt.IngestCompactBatchSize = src.IngestCompactBatchSize
-	opt.IngestBacklogMergeScore = src.IngestBacklogMergeScore
-	opt.IngestShardParallelism = src.IngestShardParallelism
+	opt.StagingCompactBatchSize = src.StagingCompactBatchSize
+	opt.StagingBacklogMergeScore = src.StagingBacklogMergeScore
+	opt.StagingShardParallelism = src.StagingShardParallelism
 	opt.CompactionValueWeight = src.CompactionValueWeight
 	opt.CompactionTombstoneWeight = src.CompactionTombstoneWeight
 	opt.TTLCompactionMinAge = src.TTLCompactionMinAge

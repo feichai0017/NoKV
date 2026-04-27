@@ -1,7 +1,7 @@
 # NoKV — Documentation
 
 <div align="center">
-  <img src="assets/logo.svg" width="160" alt="NoKV" />
+  <img src="img/logo.svg" width="160" alt="NoKV" />
 
   <p><strong>An open-source namespace metadata substrate for distributed filesystems, object storage, and AI dataset metadata.</strong></p>
 
@@ -75,8 +75,8 @@ For the authority schema behind those primitives, read **[notes/2026-04-25-names
 
 | Topic | Location |
 |---|---|
-| TLA+ / TLC models for control-plane and metadata transition safety | [`spec/`](../spec) · [spec/README.md](../spec/README.md) |
-| Checked artifacts | [`spec/artifacts/`](../spec/artifacts/) |
+| TLA+ / TLC models for control-plane and metadata transition safety | [`spec/`](spec) · [spec/README.md](spec/README.md) |
+| Checked artifacts | [`spec/artifacts/`](spec/artifacts/) |
 
 ### 🏛️ Distributed runtime — the layer below fsmeta
 
@@ -103,7 +103,7 @@ The single-node substrate that everything sits on. Independently usable as an em
 | WAL discipline and replay | [wal.md](wal.md) |
 | MemTable + ART/SkipList (ART pinned for fsmeta) | [memtable.md](memtable.md) |
 | Flush pipeline | [flush.md](flush.md) |
-| Leveled compaction + ingest buffer | [compaction.md](compaction.md) · [ingest_buffer.md](ingest_buffer.md) |
+| Leveled compaction + staging buffer | [compaction.md](compaction.md) · [staging_buffer.md](staging_buffer.md) |
 | Value log (KV separation + GC) | [vlog.md](vlog.md) |
 | Manifest semantics | [manifest.md](manifest.md) |
 | Range filter | [range_filter.md](range_filter.md) |
@@ -130,7 +130,7 @@ The single-node substrate that everything sits on. Independently usable as an em
 All notes under [`notes/`](notes/) are dated decision records — they explain the *why*, not just the what.
 
 - [Why WAL is stdio and vlog/SST are mmap](notes/2026-01-16-mmap-choice.md)
-- [Compaction and ingest buffer design](notes/2026-02-01-compaction-and-ingest.md)
+- [Compaction and staging buffer design](notes/2026-02-01-compaction-and-staging.md)
 - [Value log KV separation + HashKV buckets](notes/2026-02-05-vlog-design-and-gc.md)
 - [Arena memory kernel + adaptive index (SkipList ↔ ART)](notes/2026-02-09-memory-kernel-arena-and-adaptive-index.md)
 - [MPSC write pipeline with adaptive coalescing](notes/2026-02-09-write-pipeline-mpsc-and-adaptive-batching.md)
@@ -148,7 +148,7 @@ All notes under [`notes/`](notes/) are dated decision records — they explain t
 ## 🏗️ Architecture at a Glance
 
 <p align="center">
-  <img src="assets/architecture.svg" alt="NoKV Architecture" width="100%" />
+  <img src="img/architecture.svg" alt="NoKV Architecture" width="100%" />
 </p>
 
 ```
@@ -208,7 +208,7 @@ Full walkthrough: [getting_started.md](getting_started.md) · CLI reference: [cl
 | | |
 |---|---|
 | **[fsmeta service](fsmeta.md)** | The headline product — namespace metadata API |
-| **[Formal specs](../spec/README.md)** | TLA+ / TLC models for transition safety |
+| **[Formal specs](spec/README.md)** | TLA+ / TLC models for transition safety |
 | **[CLI surface](cli.md)** | `nokv` — stats, manifest, regions, mount, quota, migrate |
 | **[Topology config](config.md)** | One JSON file shared by scripts, Docker, all CLI |
 | **[Coordinator](coordinator.md)** | Route / TSO / heartbeat / root-event subscribe |

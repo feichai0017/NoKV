@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCompactionMoveToIngest(t *testing.T) {
+func TestCompactionMoveToStaging(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -34,19 +34,19 @@ func TestCompactionMoveToIngest(t *testing.T) {
 		cd.nextLevel = lsm.levels.levels[1]
 	}
 
-	beforeIngest := cd.nextLevel.numIngestTables()
-	if err := lsm.levels.moveToIngest(cd); err != nil {
-		t.Fatalf("moveToIngest: %v", err)
+	beforeStaging := cd.nextLevel.numStagingTables()
+	if err := lsm.levels.moveToStaging(cd); err != nil {
+		t.Fatalf("moveToStaging: %v", err)
 	}
-	afterIngest := cd.nextLevel.numIngestTables()
-	if afterIngest <= beforeIngest {
-		t.Fatalf("expected ingest buffer to grow, before=%d after=%d", beforeIngest, afterIngest)
+	afterStaging := cd.nextLevel.numStagingTables()
+	if afterStaging <= beforeStaging {
+		t.Fatalf("expected staging buffer to grow, before=%d after=%d", beforeStaging, afterStaging)
 	}
 
 	// Ensure the moved table has been removed from the source level.
 	found := false
 	cd.nextLevel.RLock()
-	for _, sh := range cd.nextLevel.ingest.shards {
+	for _, sh := range cd.nextLevel.staging.shards {
 		for _, tbl := range sh.tables {
 			if tbl.fid == cd.top[0].fid {
 				found = true
@@ -59,7 +59,7 @@ func TestCompactionMoveToIngest(t *testing.T) {
 	}
 	cd.nextLevel.RUnlock()
 	if !found {
-		t.Fatalf("table %d not found in ingest buffer", cd.top[0].fid)
+		t.Fatalf("table %d not found in staging buffer", cd.top[0].fid)
 	}
 }
 
@@ -322,61 +322,61 @@ func TestSchedulerPolicyArrangeLeveled(t *testing.T) {
 	require.Equal(t, 0, forWorker1[1].Level)
 }
 
-func TestSchedulerPolicyArrangeTieredPrefersIngest(t *testing.T) {
+func TestSchedulerPolicyArrangeTieredPrefersStaging(t *testing.T) {
 	p := NewSchedulerPolicy(PolicyTiered)
 	in := []Priority{
-		{Level: 0, Adjusted: 9, IngestMode: IngestNone},
-		{Level: 3, Adjusted: 2, IngestMode: IngestKeep},
-		{Level: 2, Adjusted: 5, IngestMode: IngestDrain},
-		{Level: 1, Adjusted: 8, IngestMode: IngestNone},
+		{Level: 0, Adjusted: 9, StagingMode: StagingNone},
+		{Level: 3, Adjusted: 2, StagingMode: StagingKeep},
+		{Level: 2, Adjusted: 5, StagingMode: StagingDrain},
+		{Level: 1, Adjusted: 8, StagingMode: StagingNone},
 	}
 	out := p.Arrange(0, in)
 	require.Len(t, out, 4)
 	require.Equal(t, 0, out[0].Level)
-	require.Equal(t, IngestKeep, out[1].IngestMode)
-	require.Equal(t, IngestDrain, out[2].IngestMode)
+	require.Equal(t, StagingKeep, out[1].StagingMode)
+	require.Equal(t, StagingDrain, out[2].StagingMode)
 	require.Equal(t, 1, out[3].Level)
 }
 
-func TestSchedulerPolicyArrangeHybridSwitchesByIngestPressure(t *testing.T) {
+func TestSchedulerPolicyArrangeHybridSwitchesByStagingPressure(t *testing.T) {
 	p := NewSchedulerPolicy(PolicyHybrid)
-	withMildIngest := []Priority{
-		{Level: 1, Adjusted: 2, IngestMode: IngestNone},
-		{Level: 2, Adjusted: 1.5, IngestMode: IngestDrain},
+	withMildStaging := []Priority{
+		{Level: 1, Adjusted: 2, StagingMode: StagingNone},
+		{Level: 2, Adjusted: 1.5, StagingMode: StagingDrain},
 	}
-	out := p.Arrange(0, withMildIngest)
+	out := p.Arrange(0, withMildStaging)
 	require.Equal(t, 1, out[0].Level)
 
-	noIngest := []Priority{
-		{Level: 2, Adjusted: 2, IngestMode: IngestNone},
-		{Level: 0, Adjusted: 1.5, IngestMode: IngestNone},
+	noStaging := []Priority{
+		{Level: 2, Adjusted: 2, StagingMode: StagingNone},
+		{Level: 0, Adjusted: 1.5, StagingMode: StagingNone},
 	}
-	out = p.Arrange(0, noIngest)
+	out = p.Arrange(0, noStaging)
 	require.Equal(t, 0, out[0].Level)
 
-	withHeavyIngest := []Priority{
-		{Level: 1, Adjusted: 1.2, IngestMode: IngestNone},
-		{Level: 2, Adjusted: 4.5, IngestMode: IngestDrain},
-		{Level: 3, Adjusted: 3.5, IngestMode: IngestKeep},
+	withHeavyStaging := []Priority{
+		{Level: 1, Adjusted: 1.2, StagingMode: StagingNone},
+		{Level: 2, Adjusted: 4.5, StagingMode: StagingDrain},
+		{Level: 3, Adjusted: 3.5, StagingMode: StagingKeep},
 	}
-	out = p.Arrange(0, withHeavyIngest)
-	require.Equal(t, IngestKeep, out[0].IngestMode)
-	require.Equal(t, IngestDrain, out[1].IngestMode)
+	out = p.Arrange(0, withHeavyStaging)
+	require.Equal(t, StagingKeep, out[0].StagingMode)
+	require.Equal(t, StagingDrain, out[1].StagingMode)
 }
 
 func TestSchedulerPolicyTieredFeedbackAdjustsQuota(t *testing.T) {
 	baseInput := []Priority{
-		{Level: 0, Adjusted: 3.0, IngestMode: IngestNone},
-		{Level: 6, Adjusted: 6.0, IngestMode: IngestKeep},
-		{Level: 6, Adjusted: 5.9, IngestMode: IngestKeep},
-		{Level: 6, Adjusted: 5.8, IngestMode: IngestKeep},
-		{Level: 6, Adjusted: 5.7, IngestMode: IngestKeep},
-		{Level: 5, Adjusted: 6.5, IngestMode: IngestDrain},
-		{Level: 5, Adjusted: 6.4, IngestMode: IngestDrain},
-		{Level: 5, Adjusted: 6.3, IngestMode: IngestDrain},
-		{Level: 5, Adjusted: 6.2, IngestMode: IngestDrain},
-		{Level: 2, Adjusted: 5.5, IngestMode: IngestNone},
-		{Level: 2, Adjusted: 5.4, IngestMode: IngestNone},
+		{Level: 0, Adjusted: 3.0, StagingMode: StagingNone},
+		{Level: 6, Adjusted: 6.0, StagingMode: StagingKeep},
+		{Level: 6, Adjusted: 5.9, StagingMode: StagingKeep},
+		{Level: 6, Adjusted: 5.8, StagingMode: StagingKeep},
+		{Level: 6, Adjusted: 5.7, StagingMode: StagingKeep},
+		{Level: 5, Adjusted: 6.5, StagingMode: StagingDrain},
+		{Level: 5, Adjusted: 6.4, StagingMode: StagingDrain},
+		{Level: 5, Adjusted: 6.3, StagingMode: StagingDrain},
+		{Level: 5, Adjusted: 6.2, StagingMode: StagingDrain},
+		{Level: 2, Adjusted: 5.5, StagingMode: StagingNone},
+		{Level: 2, Adjusted: 5.4, StagingMode: StagingNone},
 	}
 
 	normal := NewSchedulerPolicy(PolicyTiered)
@@ -387,29 +387,29 @@ func TestSchedulerPolicyTieredFeedbackAdjustsQuota(t *testing.T) {
 	failed := NewSchedulerPolicy(PolicyTiered)
 	for range 3 {
 		failed.Observe(FeedbackEvent{
-			Priority: Priority{IngestMode: IngestDrain},
-			Err:      errors.New("injected ingest failure"),
+			Priority: Priority{StagingMode: StagingDrain},
+			Err:      errors.New("injected staging failure"),
 		})
 	}
 	failedOut := failed.Arrange(0, baseInput)
 	failedIdx := firstRegularNonL0(failedOut)
-	require.Less(t, failedIdx, normalIdx, "ingest failures should shift quota toward regular progress")
+	require.Less(t, failedIdx, normalIdx, "staging failures should shift quota toward regular progress")
 
 	success := NewSchedulerPolicy(PolicyTiered)
 	for range 3 {
 		success.Observe(FeedbackEvent{
-			Priority: Priority{IngestMode: IngestKeep},
+			Priority: Priority{StagingMode: StagingKeep},
 			Err:      nil,
 		})
 	}
 	successOut := success.Arrange(0, baseInput)
 	successIdx := firstRegularNonL0(successOut)
-	require.Greater(t, successIdx, normalIdx, "ingest successes should increase ingest scheduling share")
+	require.Greater(t, successIdx, normalIdx, "staging successes should increase staging scheduling share")
 }
 
 func firstRegularNonL0(prios []Priority) int {
 	for i, p := range prios {
-		if p.IngestMode == IngestNone && p.Level != 0 {
+		if p.StagingMode == StagingNone && p.Level != 0 {
 			return i
 		}
 	}
@@ -440,10 +440,10 @@ func requireDecrOnce(t *testing.T, before map[*table]int32) {
 	}
 }
 
-func hasIngestTable(lh *levelHandler, fid uint64) bool {
+func hasStagingTable(lh *levelHandler, fid uint64) bool {
 	lh.RLock()
 	defer lh.RUnlock()
-	for _, sh := range lh.ingest.shards {
+	for _, sh := range lh.staging.shards {
 		for _, tbl := range sh.tables {
 			if tbl != nil && tbl.fid == fid {
 				return true
@@ -453,7 +453,7 @@ func hasIngestTable(lh *levelHandler, fid uint64) bool {
 	return false
 }
 
-func TestRunCompactDefIngestNoneDecrementsTopOnce(t *testing.T) {
+func TestRunCompactDefStagingNoneDecrementsTopOnce(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -464,20 +464,20 @@ func TestRunCompactDefIngestNoneDecrementsTopOnce(t *testing.T) {
 	cd := buildCompactDef(lsm, 0, 0, 1)
 	tricky(cd.thisLevel.tablesSnapshot())
 	if ok := lsm.levels.fillTables(cd); !ok {
-		t.Fatalf("fillTables failed for ingest-none path")
+		t.Fatalf("fillTables failed for staging-none path")
 	}
-	if cd.plan.IngestMode != IngestNone {
-		t.Fatalf("expected ingest-none plan, got %v", cd.plan.IngestMode)
+	if cd.plan.StagingMode != StagingNone {
+		t.Fatalf("expected staging-none plan, got %v", cd.plan.StagingMode)
 	}
 	before := tableRefSnapshot(cd.top)
 	if err := lsm.levels.runCompactDef(0, 0, *cd); err != nil {
-		t.Fatalf("runCompactDef ingest-none: %v", err)
+		t.Fatalf("runCompactDef staging-none: %v", err)
 	}
 	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 	requireDecrOnce(t, before)
 }
 
-func TestRunCompactDefIngestDrainDecrementsTopOnce(t *testing.T) {
+func TestRunCompactDefStagingDrainDecrementsTopOnce(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -488,7 +488,7 @@ func TestRunCompactDefIngestDrainDecrementsTopOnce(t *testing.T) {
 	l0 := lsm.levels.levels[0]
 	l0Tables := l0.tablesSnapshot()
 	if len(l0Tables) == 0 {
-		t.Fatalf("expected L0 tables before moveToIngest")
+		t.Fatalf("expected L0 tables before moveToStaging")
 	}
 
 	move := buildCompactDef(lsm, 0, 0, 6)
@@ -498,38 +498,38 @@ func TestRunCompactDefIngestDrainDecrementsTopOnce(t *testing.T) {
 	if move.nextLevel == nil {
 		move.nextLevel = lsm.levels.levels[6]
 	}
-	if err := lsm.levels.moveToIngest(move); err != nil {
-		t.Fatalf("moveToIngest: %v", err)
+	if err := lsm.levels.moveToStaging(move); err != nil {
+		t.Fatalf("moveToStaging: %v", err)
 	}
 
 	target := lsm.levels.levels[6]
-	if target.numIngestTables() == 0 {
-		t.Fatalf("expected ingest tables after moveToIngest")
+	if target.numStagingTables() == 0 {
+		t.Fatalf("expected staging tables after moveToStaging")
 	}
 
 	cd := buildCompactDef(lsm, 0, 6, 6)
-	cd.plan.IngestMode = IngestDrain
-	cd.plan.StatsTag = "test-ingest-drain"
-	if ok := lsm.levels.fillTablesIngestShard(cd, -1); !ok {
-		t.Fatalf("fillTablesIngestShard failed for ingest-drain path")
+	cd.plan.StagingMode = StagingDrain
+	cd.plan.StatsTag = "test-staging-drain"
+	if ok := lsm.levels.fillTablesStagingShard(cd, -1); !ok {
+		t.Fatalf("fillTablesStagingShard failed for staging-drain path")
 	}
 	if len(cd.top) == 0 {
-		t.Fatalf("expected ingest top tables for drain compaction")
+		t.Fatalf("expected staging top tables for drain compaction")
 	}
 	before := tableRefSnapshot(cd.top)
 	if err := lsm.levels.runCompactDef(0, 6, *cd); err != nil {
-		t.Fatalf("runCompactDef ingest-drain: %v", err)
+		t.Fatalf("runCompactDef staging-drain: %v", err)
 	}
 	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 	requireDecrOnce(t, before)
 	for tbl := range before {
-		if hasIngestTable(target, tbl.fid) {
-			t.Fatalf("drained table %d still present in ingest buffer", tbl.fid)
+		if hasStagingTable(target, tbl.fid) {
+			t.Fatalf("drained table %d still present in staging buffer", tbl.fid)
 		}
 	}
 }
 
-func TestRunCompactDefIngestKeepDecrementsTopOnce(t *testing.T) {
+func TestRunCompactDefStagingKeepDecrementsTopOnce(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -539,7 +539,7 @@ func TestRunCompactDefIngestKeepDecrementsTopOnce(t *testing.T) {
 
 	l0Tables := lsm.levels.levels[0].tablesSnapshot()
 	if len(l0Tables) == 0 {
-		t.Fatalf("expected L0 tables before moveToIngest")
+		t.Fatalf("expected L0 tables before moveToStaging")
 	}
 
 	move := buildCompactDef(lsm, 0, 0, 6)
@@ -549,36 +549,36 @@ func TestRunCompactDefIngestKeepDecrementsTopOnce(t *testing.T) {
 	if move.nextLevel == nil {
 		move.nextLevel = lsm.levels.levels[6]
 	}
-	if err := lsm.levels.moveToIngest(move); err != nil {
-		t.Fatalf("moveToIngest: %v", err)
+	if err := lsm.levels.moveToStaging(move); err != nil {
+		t.Fatalf("moveToStaging: %v", err)
 	}
 
 	target := lsm.levels.levels[6]
-	if target.numIngestTables() == 0 {
-		t.Fatalf("expected ingest tables after moveToIngest")
+	if target.numStagingTables() == 0 {
+		t.Fatalf("expected staging tables after moveToStaging")
 	}
 
 	cd := buildCompactDef(lsm, 0, 6, 6)
-	cd.plan.IngestMode = IngestKeep
-	cd.plan.StatsTag = "test-ingest-keep"
-	if ok := lsm.levels.fillTablesIngestShard(cd, -1); !ok {
-		t.Fatalf("fillTablesIngestShard failed for ingest-keep path")
+	cd.plan.StagingMode = StagingKeep
+	cd.plan.StatsTag = "test-staging-keep"
+	if ok := lsm.levels.fillTablesStagingShard(cd, -1); !ok {
+		t.Fatalf("fillTablesStagingShard failed for staging-keep path")
 	}
 	if len(cd.top) == 0 {
-		t.Fatalf("expected ingest top tables for keep compaction")
+		t.Fatalf("expected staging top tables for keep compaction")
 	}
 	before := tableRefSnapshot(cd.top)
 	if err := lsm.levels.runCompactDef(0, 6, *cd); err != nil {
-		t.Fatalf("runCompactDef ingest-keep: %v", err)
+		t.Fatalf("runCompactDef staging-keep: %v", err)
 	}
 	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 	requireDecrOnce(t, before)
-	if target.numIngestTables() == 0 {
-		t.Fatalf("expected ingest tables to remain after ingest-keep compaction")
+	if target.numStagingTables() == 0 {
+		t.Fatalf("expected staging tables to remain after staging-keep compaction")
 	}
 	for tbl := range before {
-		if hasIngestTable(target, tbl.fid) {
-			t.Fatalf("replaced table %d still present in ingest buffer", tbl.fid)
+		if hasStagingTable(target, tbl.fid) {
+			t.Fatalf("replaced table %d still present in staging buffer", tbl.fid)
 		}
 	}
 }

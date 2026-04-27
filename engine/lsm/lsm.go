@@ -18,7 +18,7 @@
 // bytes — it only consumes their APIs.
 //
 // Design references: docs/memtable.md, docs/flush.md, docs/compaction.md,
-// docs/ingest_buffer.md, docs/range_filter.md, docs/cache.md, and the
+// docs/staging_buffer.md, docs/range_filter.md, docs/cache.md, and the
 // dated notes under docs/notes/ beginning with 2026-02-01 through 2026-04-05.
 package lsm
 

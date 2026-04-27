@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./img/logo.svg" width="200" alt="NoKV" />
+  <img src="./docs/img/logo.svg" width="200" alt="NoKV" />
 
   <h1>NoKV</h1>
 
@@ -102,7 +102,7 @@ NoKV's value comes from **owning the entire vertical** so namespace-metadata-nat
 ## 🏗️ Architecture
 
 <p align="center">
-  <img src="./img/architecture.svg" alt="NoKV Architecture" width="100%" />
+  <img src="./docs/img/architecture.svg" alt="NoKV Architecture" width="100%" />
 </p>
 
 ```
@@ -191,7 +191,7 @@ docker compose up -d --build
 make docker-up
 ```
 
-![NoKV demo](./img/nokv-demo.gif)
+![NoKV demo](./docs/img/nokv-demo.gif)
 
 ### Use `fsmeta` from Go (embedded — same Executor as the gRPC server)
 
@@ -303,7 +303,7 @@ All design notes under [`docs/notes/`](./docs/notes/) are dated decision records
 |---|---|---|
 | **[`fsmeta/`](./fsmeta)** | **Namespace metadata schema, executor, gRPC service, embedded API** | **[fsmeta](docs/fsmeta.md)** |
 | [`fsmeta/exec/watch/`](./fsmeta/exec/watch) | WatchSubtree router + RemoteSource + catch-up replay | [fsmeta](docs/fsmeta.md) |
-| [`spec/`](./spec) | TLA+ models for control-plane and metadata transition safety | [spec/README.md](./spec/README.md) |
+| [`docs/spec/`](./docs/spec) | TLA+ models for control-plane and metadata transition safety | [spec/README.md](./docs/spec/README.md) |
 | [`meta/root/`](./meta/root) | Typed rooted truth kernel (Delos-lite) | [Rooted Truth](docs/rooted_truth.md) |
 | [`coordinator/`](./coordinator) | Routing, TSO, store discovery, root-event publish, streaming subscribe | [Coordinator](docs/coordinator.md) |
 | [`raftstore/`](./raftstore) | Multi-Raft, transport, membership, SST snapshot install, apply observer | [RaftStore](docs/raftstore.md) |

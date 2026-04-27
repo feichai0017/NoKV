@@ -339,7 +339,7 @@ func (lm *levelManager) importExternalSST(paths []string) (*ExternalSSTImportRes
 			Largest:   kv.SafeCopy(nil, tbl.MaxKey()),
 			CreatedAt: uint64(time.Now().Unix()),
 			ValueSize: tbl.ValueSize(),
-			Ingest:    false,
+			Staging:   false,
 		}
 		importedMetas = append(importedMetas, meta)
 	}

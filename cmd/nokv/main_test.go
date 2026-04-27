@@ -23,6 +23,7 @@ import (
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
+	"github.com/feichai0017/NoKV/runtime/stats"
 	"github.com/stretchr/testify/require"
 )
 
@@ -80,7 +81,7 @@ func TestRunStatsCmd(t *testing.T) {
 	if err := runStatsCmd(&buf, []string{"-workdir", dir, "-json"}); err != nil {
 		t.Fatalf("runStatsCmd: %v", err)
 	}
-	var snap NoKV.StatsSnapshot
+	var snap stats.StatsSnapshot
 	if err := json.Unmarshal(buf.Bytes(), &snap); err != nil {
 		t.Fatalf("unmarshal snapshot: %v", err)
 	}
@@ -159,15 +160,15 @@ func TestRunVlogCmdPlain(t *testing.T) {
 
 func TestRenderStatsWarnLine(t *testing.T) {
 	var buf bytes.Buffer
-	snap := NoKV.StatsSnapshot{
+	snap := stats.StatsSnapshot{
 		Entries: 1,
-		WAL: NoKV.WALStatsSnapshot{
+		WAL: stats.WALStatsSnapshot{
 			ActiveSegment:   7,
 			SegmentCount:    3,
 			SegmentsRemoved: 1,
 			ActiveSize:      4096,
 		},
-		Raft: NoKV.RaftStatsSnapshot{
+		Raft: stats.RaftStatsSnapshot{
 			GroupCount:       2,
 			LaggingGroups:    1,
 			MaxLagSegments:   5,
@@ -611,14 +612,14 @@ func TestParseExpvarSnapshotFull(t *testing.T) {
 				"value_density_alert": true,
 				"levels": []any{
 					map[string]any{
-						"level":              float64(0),
-						"tables":             float64(1),
-						"size_bytes":         float64(10),
-						"value_bytes":        float64(5),
-						"stale_bytes":        float64(2),
-						"ingest_tables":      float64(1),
-						"ingest_size_bytes":  float64(3),
-						"ingest_value_bytes": float64(4),
+						"level":               float64(0),
+						"tables":              float64(1),
+						"size_bytes":          float64(10),
+						"value_bytes":         float64(5),
+						"stale_bytes":         float64(2),
+						"staging_tables":      float64(1),
+						"staging_size_bytes":  float64(3),
+						"staging_value_bytes": float64(4),
 					},
 				},
 			},
@@ -653,9 +654,9 @@ func TestParseExpvarSnapshotFull(t *testing.T) {
 
 func TestRenderStatsFull(t *testing.T) {
 	var buf bytes.Buffer
-	snap := NoKV.StatsSnapshot{
+	snap := stats.StatsSnapshot{
 		Entries: 1,
-		Flush: NoKV.FlushStatsSnapshot{
+		Flush: stats.FlushStatsSnapshot{
 			Pending:       2,
 			LastWaitMs:    1,
 			MaxWaitMs:     2,
@@ -664,7 +665,7 @@ func TestRenderStatsFull(t *testing.T) {
 			LastReleaseMs: 5,
 			MaxReleaseMs:  6,
 		},
-		Compaction: NoKV.CompactionStatsSnapshot{
+		Compaction: stats.CompactionStatsSnapshot{
 			Backlog:              3,
 			MaxScore:             4.5,
 			LastDurationMs:       1.2,
@@ -673,31 +674,31 @@ func TestRenderStatsFull(t *testing.T) {
 			ValueWeight:          1.0,
 			ValueWeightSuggested: 2.0,
 		},
-		ValueLog: NoKV.ValueLogStatsSnapshot{
+		ValueLog: stats.ValueLogStatsSnapshot{
 			Segments:       1,
 			PendingDeletes: 1,
 			DiscardQueue:   1,
 			Heads:          map[uint32]kv.ValuePtr{0: {Bucket: 0, Fid: 1, Offset: 2, Len: 3}},
 		},
-		Write: NoKV.WriteStatsSnapshot{
+		Write: stats.WriteStatsSnapshot{
 			HotKeyLimited: 2,
 		},
-		LSM: NoKV.LSMStatsSnapshot{
+		LSM: stats.LSMStatsSnapshot{
 			ValueDensityMax:   1.5,
 			ValueDensityAlert: true,
 			ValueBytesTotal:   10,
-			Levels: []NoKV.LSMLevelStats{{
-				Level:            0,
-				TableCount:       1,
-				SizeBytes:        2,
-				ValueBytes:       3,
-				StaleBytes:       4,
-				IngestTables:     1,
-				IngestSizeBytes:  2,
-				IngestValueBytes: 3,
+			Levels: []stats.LSMLevelStats{{
+				Level:             0,
+				TableCount:        1,
+				SizeBytes:         2,
+				ValueBytes:        3,
+				StaleBytes:        4,
+				StagingTables:     1,
+				StagingSizeBytes:  2,
+				StagingValueBytes: 3,
 			}},
 		},
-		WAL: NoKV.WALStatsSnapshot{
+		WAL: stats.WALStatsSnapshot{
 			ActiveSegment:           1,
 			SegmentCount:            2,
 			ActiveSize:              4096,
@@ -712,7 +713,7 @@ func TestRenderStatsFull(t *testing.T) {
 			AutoGCRemoved:           2,
 			AutoGCLastUnix:          time.Now().Unix(),
 		},
-		Raft: NoKV.RaftStatsSnapshot{
+		Raft: stats.RaftStatsSnapshot{
 			GroupCount:       1,
 			LaggingGroups:    1,
 			MaxLagSegments:   2,
@@ -721,7 +722,7 @@ func TestRenderStatsFull(t *testing.T) {
 			LagWarnThreshold: 1,
 			LagWarning:       true,
 		},
-		Region: NoKV.RegionStatsSnapshot{
+		Region: stats.RegionStatsSnapshot{
 			Total:     5,
 			New:       1,
 			Running:   1,
@@ -729,8 +730,8 @@ func TestRenderStatsFull(t *testing.T) {
 			Tombstone: 1,
 			Other:     1,
 		},
-		Hot: NoKV.HotStatsSnapshot{
-			WriteKeys: []NoKV.HotKeyStat{{Key: "k", Count: 1}},
+		Hot: stats.HotStatsSnapshot{
+			WriteKeys: []stats.HotKeyStat{{Key: "k", Count: 1}},
 		},
 	}
 	require.NoError(t, renderStats(&buf, snap, false))

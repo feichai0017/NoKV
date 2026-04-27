@@ -168,23 +168,23 @@ func (e *nokvEngine) printStats() {
 	}
 	snap := e.db.Info().Snapshot()
 	var (
-		l0Tables int
-		l0Bytes  int64
-		l0Ingest int
+		l0Tables  int
+		l0Bytes   int64
+		l0Staging int
 	)
 	for _, lvl := range snap.LSM.Levels {
 		if lvl.Level == 0 {
 			l0Tables = lvl.TableCount
 			l0Bytes = lvl.SizeBytes
-			l0Ingest = lvl.IngestTables
+			l0Staging = lvl.StagingTables
 			break
 		}
 	}
-	fmt.Printf("[NoKV Stats] entries=%d l0_tables=%d l0_bytes=%d l0_ingest=%d flush_pending=%d compaction_backlog=%d compaction_max=%.2f write_q=%d write_entries=%d write_bytes=%d throttle=%v vlog_segments=%d vlog_pending=%d vlog_discard=%d\n",
+	fmt.Printf("[NoKV Stats] entries=%d l0_tables=%d l0_bytes=%d l0_staging=%d flush_pending=%d compaction_backlog=%d compaction_max=%.2f write_q=%d write_entries=%d write_bytes=%d throttle=%v vlog_segments=%d vlog_pending=%d vlog_discard=%d\n",
 		snap.Entries,
 		l0Tables,
 		l0Bytes,
-		l0Ingest,
+		l0Staging,
 		snap.Flush.Pending,
 		snap.Compaction.Backlog,
 		snap.Compaction.MaxScore,

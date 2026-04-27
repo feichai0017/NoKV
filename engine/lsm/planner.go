@@ -62,7 +62,7 @@ func (cd *compactDef) setNextLevel(lm *levelManager, t Targets, next *levelHandl
 func (cd *compactDef) applyPlan(plan Plan) {
 	plan.ThisFileSize = cd.plan.ThisFileSize
 	plan.NextFileSize = cd.plan.NextFileSize
-	plan.IngestMode = cd.plan.IngestMode
+	plan.StagingMode = cd.plan.StagingMode
 	plan.DropPrefixes = cd.plan.DropPrefixes
 	plan.StatsTag = cd.plan.StatsTag
 	cd.plan = plan
@@ -73,8 +73,8 @@ func (lm *levelManager) resolvePlanLocked(cd *compactDef) bool {
 	if cd == nil || cd.thisLevel == nil || cd.nextLevel == nil {
 		return false
 	}
-	topFromIngest := cd.plan.IngestMode.UsesIngest()
-	top := resolveTablesLocked(cd.thisLevel, cd.plan.TopIDs, topFromIngest)
+	topFromStaging := cd.plan.StagingMode.UsesStaging()
+	top := resolveTablesLocked(cd.thisLevel, cd.plan.TopIDs, topFromStaging)
 	if len(cd.plan.TopIDs) != len(top) {
 		return false
 	}
@@ -112,16 +112,16 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 	defer cd.unlockLevels()
 
 	if cd.thisLevel.numTablesLocked() == 0 {
-		if cd.thisLevel.isLastLevel() && cd.thisLevel.numIngestTablesLocked() > 0 {
-			meta := cd.thisLevel.ingest.allMeta()
+		if cd.thisLevel.isLastLevel() && cd.thisLevel.numStagingTablesLocked() > 0 {
+			meta := cd.thisLevel.staging.allMeta()
 			if len(meta) == 0 {
 				return false
 			}
-			plan, ok := PlanForIngestFallback(cd.thisLevel.levelNum, meta)
+			plan, ok := PlanForStagingFallback(cd.thisLevel.levelNum, meta)
 			if !ok {
 				return false
 			}
-			cd.plan.IngestMode = IngestKeep
+			cd.plan.StagingMode = StagingKeep
 			cd.applyPlan(plan)
 			if !lm.resolvePlanLocked(cd) {
 				return false
@@ -147,26 +147,26 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 	return lm.compactState.CompareAndAdd(LevelsLocked{}, cd.stateEntry())
 }
 
-func (lm *levelManager) fillTablesIngestShard(cd *compactDef, shardIdx int) bool {
+func (lm *levelManager) fillTablesStagingShard(cd *compactDef, shardIdx int) bool {
 	cd.lockLevels()
 	defer cd.unlockLevels()
 
-	totalIngest := cd.thisLevel.numIngestTablesLocked()
-	if totalIngest == 0 {
+	totalStaging := cd.thisLevel.numStagingTablesLocked()
+	if totalStaging == 0 {
 		return false
 	}
-	batchSize := lm.opt.IngestCompactBatchSize
-	if batchSize <= 0 || batchSize > totalIngest {
-		batchSize = totalIngest
+	batchSize := lm.opt.StagingCompactBatchSize
+	if batchSize <= 0 || batchSize > totalStaging {
+		batchSize = totalStaging
 	}
 	if shardIdx < 0 {
-		shardIdx = cd.thisLevel.ingestShardByBacklog()
+		shardIdx = cd.thisLevel.stagingShardByBacklog()
 	}
-	shMeta := cd.thisLevel.ingest.shardMetaByIndex(shardIdx)
+	shMeta := cd.thisLevel.staging.shardMetaByIndex(shardIdx)
 	if len(shMeta) == 0 {
 		return false
 	}
-	plan, ok := PlanForIngestShard(cd.thisLevel.levelNum, shMeta, cd.nextLevel.levelNum, tableMetaSnapshot(cd.nextLevel.tables), cd.targetFileSize(), batchSize, lm.compactState)
+	plan, ok := PlanForStagingShard(cd.thisLevel.levelNum, shMeta, cd.nextLevel.levelNum, tableMetaSnapshot(cd.nextLevel.tables), cd.targetFileSize(), batchSize, lm.compactState)
 	if !ok {
 		return false
 	}
@@ -178,13 +178,13 @@ func (lm *levelManager) fillTablesIngestShard(cd *compactDef, shardIdx int) bool
 }
 
 // resolveTablesLocked maps IDs to tables; caller must hold lh lock.
-func resolveTablesLocked(lh *levelHandler, ids []uint64, ingest bool) []*table {
+func resolveTablesLocked(lh *levelHandler, ids []uint64, staging bool) []*table {
 	if lh == nil || len(ids) == 0 {
 		return nil
 	}
 	var tables []*table
-	if ingest {
-		tables = lh.ingest.allTables()
+	if staging {
+		tables = lh.staging.allTables()
 	} else {
 		tables = lh.tables
 	}
@@ -310,9 +310,9 @@ func (lm *levelManager) fillTablesL0(cd *compactDef) bool {
 	return lm.fillTablesL0ToL0(cd)
 }
 
-func (lm *levelManager) moveToIngest(cd *compactDef) error {
+func (lm *levelManager) moveToStaging(cd *compactDef) error {
 	if cd == nil || cd.thisLevel == nil || cd.nextLevel == nil {
-		return errors.New("invalid compaction definition for ingest move")
+		return errors.New("invalid compaction definition for staging move")
 	}
 	if len(cd.top) == 0 {
 		return nil
@@ -337,7 +337,7 @@ func (lm *levelManager) moveToIngest(cd *compactDef) error {
 				Largest:   kv.SafeCopy(nil, tbl.MaxKey()),
 				CreatedAt: uint64(time.Now().Unix()),
 				ValueSize: tbl.ValueSize(),
-				Ingest:    true,
+				Staging:   true,
 			},
 		}
 		edits = append(edits, add)
@@ -372,15 +372,15 @@ func (lm *levelManager) moveToIngest(cd *compactDef) error {
 	}
 	cd.thisLevel.tables = remaining
 
-	cd.nextLevel.ingest.ensureInit()
+	cd.nextLevel.staging.ensureInit()
 	for _, t := range cd.top {
 		if t == nil {
 			continue
 		}
 		t.setLevel(cd.nextLevel.levelNum)
 	}
-	cd.nextLevel.ingest.addBatch(cd.top)
-	cd.nextLevel.ingest.sortShards()
+	cd.nextLevel.staging.addBatch(cd.top)
+	cd.nextLevel.staging.sortShards()
 	second.Unlock()
 	first.Unlock()
 
@@ -501,7 +501,7 @@ type Plan struct {
 	NextRange    KeyRange
 	ThisFileSize int64
 	NextFileSize int64
-	IngestMode   IngestMode
+	StagingMode  StagingMode
 	DropPrefixes [][]byte
 	StatsTag     string
 	// IntraLevel marks plans whose input lives entirely on a single level
@@ -583,8 +583,8 @@ func OverlappingTables(tables []TableMeta, kr KeyRange) (int, int) {
 	return left, right
 }
 
-// PlanForIngestFallback builds a plan when only ingest tables are available.
-func PlanForIngestFallback(level int, tables []TableMeta) (Plan, bool) {
+// PlanForStagingFallback builds a plan when only staging tables are available.
+func PlanForStagingFallback(level int, tables []TableMeta) (Plan, bool) {
 	if len(tables) == 0 {
 		return Plan{}, false
 	}
@@ -705,8 +705,8 @@ func shouldTTLCompact(t TableMeta, now time.Time, ttlMinAge time.Duration) bool 
 	return !now.Before(t.CreatedAt) && now.Sub(t.CreatedAt) >= ttlMinAge
 }
 
-// PlanForIngestShard builds a plan for a single ingest shard.
-func PlanForIngestShard(level int, shardTables []TableMeta, nextLevel int, next []TableMeta, targetFileSize int64, batchSize int, state *State) (Plan, bool) {
+// PlanForStagingShard builds a plan for a single staging shard.
+func PlanForStagingShard(level int, shardTables []TableMeta, nextLevel int, next []TableMeta, targetFileSize int64, batchSize int, state *State) (Plan, bool) {
 	if len(shardTables) == 0 {
 		return Plan{}, false
 	}
