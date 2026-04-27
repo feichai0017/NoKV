@@ -3,12 +3,13 @@ package NoKV
 import (
 	"encoding/json"
 	"expvar"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
 	"time"
 
 	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/metrics"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	"github.com/feichai0017/NoKV/runtime/stats"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,7 +46,7 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	require.Equal(t, int64(1), snap.Region.Running)
 	require.Equal(t, int64(1), snap.Region.Removing)
 
-	db.Info().collect()
+	db.Info().Collect()
 	exported := loadExpvarStatsSnapshot(t)
 	require.Equal(t, snap.Entries, exported.Entries)
 	require.Equal(t, snap.Flush.Pending, exported.Flush.Pending)
@@ -85,7 +86,7 @@ func TestStatsSnapshotTracksThrottleAndWalRemovals(t *testing.T) {
 	require.Greater(t, snap.WAL.SegmentsRemoved, uint64(0))
 	require.Greater(t, snap.WAL.SegmentCount, int64(0))
 
-	db.Info().collect()
+	db.Info().Collect()
 	exported := loadExpvarStatsSnapshot(t)
 	require.Equal(t, snap.WAL.SegmentsRemoved, exported.WAL.SegmentsRemoved)
 	require.True(t, exported.Write.ThrottleActive)
@@ -100,7 +101,7 @@ func TestStatsSnapshotTracksThrottleAndWalRemovals(t *testing.T) {
 	require.Equal(t, uint32(0), snapAfter.Write.ThrottlePressure)
 	require.Equal(t, uint64(0), snapAfter.Write.ThrottleRate)
 
-	db.Info().collect()
+	db.Info().Collect()
 	exportedAfter := loadExpvarStatsSnapshot(t)
 	require.False(t, exportedAfter.Write.ThrottleActive)
 
@@ -108,13 +109,13 @@ func TestStatsSnapshotTracksThrottleAndWalRemovals(t *testing.T) {
 	require.Nil(t, expvar.Get("NoKV.Stats.Write.Throttle"))
 }
 
-func loadExpvarStatsSnapshot(t *testing.T) StatsSnapshot {
+func loadExpvarStatsSnapshot(t *testing.T) stats.StatsSnapshot {
 	t.Helper()
 
 	v := expvar.Get("NoKV.Stats")
 	require.NotNil(t, v)
 
-	var snap StatsSnapshot
+	var snap stats.StatsSnapshot
 	require.NoError(t, json.Unmarshal([]byte(v.String()), &snap))
 	return snap
 }

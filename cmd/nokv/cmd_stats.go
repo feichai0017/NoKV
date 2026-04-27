@@ -16,6 +16,7 @@ import (
 	"github.com/feichai0017/NoKV/metrics"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
+	"github.com/feichai0017/NoKV/runtime/stats"
 )
 
 func runStatsCmd(w io.Writer, args []string) error {
@@ -29,7 +30,7 @@ func runStatsCmd(w io.Writer, args []string) error {
 		return err
 	}
 
-	var snap NoKV.StatsSnapshot
+	var snap stats.StatsSnapshot
 	var err error
 	switch {
 	case *expvarURL != "":
@@ -45,7 +46,7 @@ func runStatsCmd(w io.Writer, args []string) error {
 	return renderStats(w, snap, *asJSON)
 }
 
-func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
+func renderStats(w io.Writer, snap stats.StatsSnapshot, asJSON bool) error {
 	if asJSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
@@ -199,13 +200,13 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 	return nil
 }
 
-func localStatsSnapshot(workDir string, attachMetrics bool) (NoKV.StatsSnapshot, error) {
+func localStatsSnapshot(workDir string, attachMetrics bool) (stats.StatsSnapshot, error) {
 	if workDir == "" {
-		return NoKV.StatsSnapshot{}, fmt.Errorf("workdir is required")
+		return stats.StatsSnapshot{}, fmt.Errorf("workdir is required")
 	}
 	metaStore, err := localmeta.OpenLocalStore(workDir, nil)
 	if err != nil {
-		return NoKV.StatsSnapshot{}, err
+		return stats.StatsSnapshot{}, err
 	}
 	defer func() { _ = metaStore.Close() }()
 	opts := NoKV.NewDefaultOptions()
@@ -226,7 +227,7 @@ func localStatsSnapshot(workDir string, attachMetrics bool) (NoKV.StatsSnapshot,
 	}
 	db, err := NoKV.Open(opts)
 	if err != nil {
-		return NoKV.StatsSnapshot{}, fmt.Errorf("open db for offline stats: %w", err)
+		return stats.StatsSnapshot{}, fmt.Errorf("open db for offline stats: %w", err)
 	}
 	defer func() {
 		_ = db.Close()
@@ -239,7 +240,7 @@ func localStatsSnapshot(workDir string, attachMetrics bool) (NoKV.StatsSnapshot,
 	return db.Info().Snapshot(), nil
 }
 
-func fetchExpvarSnapshot(url string) (NoKV.StatsSnapshot, error) {
+func fetchExpvarSnapshot(url string) (stats.StatsSnapshot, error) {
 	if !strings.Contains(url, "://") {
 		url = "http://" + url
 	}
@@ -252,21 +253,21 @@ func fetchExpvarSnapshot(url string) (NoKV.StatsSnapshot, error) {
 	}
 	resp, err := http.Get(url) // #nosec G107 - CLI utility, user-provided URL.
 	if err != nil {
-		return NoKV.StatsSnapshot{}, err
+		return stats.StatsSnapshot{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return NoKV.StatsSnapshot{}, fmt.Errorf("expvar request failed: %s", resp.Status)
+		return stats.StatsSnapshot{}, fmt.Errorf("expvar request failed: %s", resp.Status)
 	}
 	var data map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return NoKV.StatsSnapshot{}, err
+		return stats.StatsSnapshot{}, err
 	}
 	return parseExpvarSnapshot(data), nil
 }
 
-func parseExpvarSnapshot(data map[string]any) NoKV.StatsSnapshot {
-	var snap NoKV.StatsSnapshot
+func parseExpvarSnapshot(data map[string]any) stats.StatsSnapshot {
+	var snap stats.StatsSnapshot
 	if raw, ok := data["NoKV.Stats"]; ok {
 		if blob, err := json.Marshal(raw); err == nil {
 			if err := json.Unmarshal(blob, &snap); err == nil {

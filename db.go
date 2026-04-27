@@ -24,6 +24,7 @@ import (
 	"github.com/feichai0017/NoKV/metrics"
 	dbruntime "github.com/feichai0017/NoKV/runtime"
 	iterpkg "github.com/feichai0017/NoKV/runtime/iterator"
+	"github.com/feichai0017/NoKV/runtime/stats"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
@@ -246,7 +247,7 @@ func (db *DB) openEngine() error {
 	if db.opt.EnableValueLog {
 		db.initVLog()
 	}
-	db.background.Init(newStats(db))
+	db.background.Init(stats.New(db, 0))
 	if len(db.opt.ValueSeparationPolicies) > 0 {
 		db.policyMatcher.Store(kv.NewValueSeparationPolicyMatcher(db.opt.ValueSeparationPolicies))
 	}
@@ -947,12 +948,45 @@ func (db *DB) NewInternalIterator(opt *index.Options) index.Iterator {
 }
 
 // Info returns the live stats collector for snapshot/diagnostic access.
-func (db *DB) Info() *Stats {
+func (db *DB) Info() *stats.Stats {
 	if db == nil {
 		return nil
 	}
-	stats, _ := db.background.StatsCollector().(*Stats)
-	return stats
+	s, _ := db.background.StatsCollector().(*stats.Stats)
+	return s
+}
+
+// stats.Host implementation: read-only accessors the stats subsystem
+// uses to assemble a StatsSnapshot. They are intentionally a thin lift
+// over DB struct fields so the snapshot logic can live in runtime/stats
+// without importing the root NoKV package.
+
+func (db *DB) LSM() stats.LSMSource             { return db.lsm }
+func (db *DB) Vlog() stats.VlogSource           { return db.vlog }
+func (db *DB) LSMWALs() []*wal.Manager          { return db.lsmWALs }
+func (db *DB) BackgroundWatchdogs() []*wal.Watchdog { return db.background.WALWatchdogs() }
+func (db *DB) HotWrite() *thermos.RotatingThermos   { return db.hotWrite }
+func (db *DB) IteratorReused() uint64               { return db.iterPool.Reused() }
+func (db *DB) WriteMetrics() *metrics.WriteMetrics  { return db.writeMetrics }
+func (db *DB) BlockWritesActive() bool              { return db.blockWrites.Load() == 1 }
+func (db *DB) SlowWritesActive() bool               { return db.slowWrites.Load() == 1 }
+func (db *DB) HotWriteLimited() uint64              { return db.hotWriteLimited.Load() }
+func (db *DB) RaftLagWarnSegments() int64           { return db.opt.RaftLagWarnSegments }
+func (db *DB) WALTypedRecordWarnRatio() float64     { return db.opt.WALTypedRecordWarnRatio }
+func (db *DB) WALTypedRecordWarnSegments() int64    { return db.opt.WALTypedRecordWarnSegments }
+func (db *DB) ThermosTopK() int                     { return db.opt.ThermosTopK }
+
+func (db *DB) RaftPointerSnapshot() func() map[uint64]localmeta.RaftLogPointer {
+	if db == nil || db.opt == nil {
+		return nil
+	}
+	return db.opt.RaftPointerSnapshot
+}
+
+func (db *DB) RaftWALsLocked(fn func(wals []*wal.Manager)) {
+	db.raftWALMu.Lock()
+	defer db.raftWALMu.Unlock()
+	fn(db.raftWALs[:])
 }
 
 // RunValueLogGC triggers a value log garbage collection. No-op (returns

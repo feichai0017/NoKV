@@ -1607,7 +1607,7 @@ func drForEachMemTableEngine(t *testing.T, fn func(t *testing.T, engine MemTable
 
 func drSimulateCrash(t *testing.T, db *DB) {
 	t.Helper()
-	_ = db.Info().close()
+	_ = db.Info().Close()
 	for _, mgr := range db.vlog.Managers() {
 		if mgr != nil {
 			_ = mgr.Close()

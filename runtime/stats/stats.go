@@ -1,4 +1,9 @@
-package NoKV
+// Package stats owns periodic runtime metric collection and snapshot
+// publication for a NoKV.DB. The Stats type runs a small ticker that
+// builds a StatsSnapshot from its Host and republishes it through expvar
+// under "NoKV.Stats". The root NoKV package provides Stats with a Host
+// implementation; tests construct mock Hosts directly.
+package stats
 
 import (
 	"expvar"
@@ -9,6 +14,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/metrics"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -17,9 +23,51 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
+// LSMSource is the narrow LSM surface stats reads from. Implemented by
+// engine/lsm.LSM.
+type LSMSource interface {
+	Diagnostics() lsm.Diagnostics
+	ThrottlePressurePermille() uint32
+	ThrottleRateBytesPerSec() uint64
+}
+
+// VlogSource is the narrow value-log surface stats reads from.
+// Implemented by engine/vlog.Consumer.
+type VlogSource interface {
+	Metrics() metrics.ValueLogMetrics
+}
+
+// Host wires the Stats subsystem back into its DB host. Every accessor
+// is read-only; Stats never mutates host state.
+type Host interface {
+	// Storage subsystems.
+	LSM() LSMSource
+	Vlog() VlogSource
+	LSMWALs() []*wal.Manager
+	// RaftWALsLocked invokes fn while holding the host's raft-WAL mutex.
+	// Stats only iterates the slice while the lock is held.
+	RaftWALsLocked(fn func(wals []*wal.Manager))
+	BackgroundWatchdogs() []*wal.Watchdog
+	HotWrite() *thermos.RotatingThermos
+	IteratorReused() uint64
+	WriteMetrics() *metrics.WriteMetrics
+
+	// Atomic indicators of write throttling state.
+	BlockWritesActive() bool
+	SlowWritesActive() bool
+	HotWriteLimited() uint64
+
+	// Options-snapshot accessors.
+	RaftLagWarnSegments() int64
+	WALTypedRecordWarnRatio() float64
+	WALTypedRecordWarnSegments() int64
+	ThermosTopK() int
+	RaftPointerSnapshot() func() map[uint64]localmeta.RaftLogPointer
+}
+
 // Stats owns periodic runtime metric collection and snapshot publication.
 type Stats struct {
-	db       *DB
+	host     Host
 	closer   *utils.Closer
 	once     sync.Once
 	interval time.Duration
@@ -231,11 +279,15 @@ type RangeFilterStatsSnapshot struct {
 	Fallbacks         uint64 `json:"fallbacks"`
 }
 
-func newStats(db *DB) *Stats {
+// New constructs a Stats wired to host. interval defaults to 5s when 0.
+func New(host Host, interval time.Duration) *Stats {
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
 	s := &Stats{
-		db:       db,
+		host:     host,
 		closer:   utils.NewCloser(),
-		interval: 5 * time.Second,
+		interval: interval,
 	}
 	statsExpvarOnce.Do(func() {
 		expvar.Publish("NoKV.Stats", expvar.Func(func() any {
@@ -261,7 +313,11 @@ func (s *Stats) StartStats() {
 
 // Close stops the stats loop.
 func (s *Stats) Close() error {
-	return s.close()
+	if s == nil {
+		return nil
+	}
+	s.closer.Close()
+	return nil
 }
 
 // SetRegionMetrics attaches region metrics recorder used in snapshots.
@@ -279,20 +335,20 @@ func (s *Stats) run() {
 	defer ticker.Stop()
 
 	// Collect once at startup so expvar has values immediately.
-	s.collect()
+	s.Collect()
 
 	for {
 		select {
 		case <-ticker.C:
-			s.collect()
+			s.Collect()
 		case <-s.closer.Closed():
 			return
 		}
 	}
 }
 
-// collect snapshots background queues and propagates them to expvar.
-func (s *Stats) collect() {
+// Collect snapshots background queues and propagates them to expvar.
+func (s *Stats) Collect() {
 	if s == nil {
 		return
 	}
@@ -303,19 +359,17 @@ func (s *Stats) collect() {
 // Snapshot returns a point-in-time metrics snapshot without mutating state.
 func (s *Stats) Snapshot() StatsSnapshot {
 	var snap StatsSnapshot
-	if s == nil || s.db == nil {
+	if s == nil || s.host == nil {
 		return snap
 	}
 
-	if s.db.opt != nil {
-		if thresh := s.db.opt.RaftLagWarnSegments; thresh > 0 {
-			snap.Raft.LagWarnThreshold = thresh
-		}
+	if thresh := s.host.RaftLagWarnSegments(); thresh > 0 {
+		snap.Raft.LagWarnThreshold = thresh
 	}
 
 	// Flush backlog and LSM diagnostics.
-	if s.db.lsm != nil {
-		diag := s.db.lsm.Diagnostics()
+	if lsmSrc := s.host.LSM(); lsmSrc != nil {
+		diag := lsmSrc.Diagnostics()
 		snap.Compaction.ValueWeight = diag.Compaction.ValueWeight
 		alertThreshold := diag.Compaction.AlertThreshold
 		fstats := diag.Flush
@@ -422,10 +476,12 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		if total := cm.IndexHits + cm.IndexMisses; total > 0 {
 			snap.Cache.IndexHitRate = float64(cm.IndexHits) / float64(total)
 		}
+		snap.Write.ThrottlePressure = lsmSrc.ThrottlePressurePermille()
+		snap.Write.ThrottleRate = lsmSrc.ThrottleRateBytesPerSec()
 	}
 
-	if s.db.writeMetrics != nil {
-		wsnap := s.db.writeMetrics.Snapshot()
+	if wm := s.host.WriteMetrics(); wm != nil {
+		wsnap := wm.Snapshot()
 		snap.Write.QueueDepth = wsnap.QueueLen
 		snap.Write.QueueEntries = wsnap.QueueEntries
 		snap.Write.QueueBytes = wsnap.QueueBytes
@@ -439,8 +495,8 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Write.SyncCount = wsnap.SyncSamples
 		snap.Write.BatchesTotal = wsnap.Batches
 	}
-	stopActive := s.db.blockWrites.Load() == 1
-	slowActive := s.db.slowWrites.Load() == 1
+	stopActive := s.host.BlockWritesActive()
+	slowActive := s.host.SlowWritesActive()
 	snap.Write.ThrottleActive = stopActive || slowActive
 	snap.Write.SlowdownActive = slowActive
 	switch {
@@ -451,16 +507,12 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	default:
 		snap.Write.ThrottleMode = "none"
 	}
-	if s.db.lsm != nil {
-		snap.Write.ThrottlePressure = s.db.lsm.ThrottlePressurePermille()
-		snap.Write.ThrottleRate = s.db.lsm.ThrottleRateBytesPerSec()
-	}
 	if stopActive && snap.Write.ThrottlePressure == 0 {
 		snap.Write.ThrottlePressure = 1000
 	} else if slowActive && snap.Write.ThrottlePressure == 0 {
 		snap.Write.ThrottlePressure = 1
 	}
-	snap.Write.HotKeyLimited = s.db.hotWriteLimited.Load()
+	snap.Write.HotKeyLimited = s.host.HotWriteLimited()
 
 	if rm := s.regionMetrics.Load(); rm != nil {
 		rms := rm.Snapshot()
@@ -485,7 +537,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	// across shards).
 	var aggregated wal.Metrics
 	var anyShardStats bool
-	for _, mgr := range s.db.lsmWALs {
+	for _, mgr := range s.host.LSMWALs() {
 		if mgr == nil {
 			continue
 		}
@@ -519,8 +571,8 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.WAL.SegmentCount = int64(aggregated.SegmentCount)
 		snap.WAL.SegmentsRemoved = aggregated.RemovedSegments
 	}
-	if s.db.opt != nil && s.db.opt.RaftPointerSnapshot != nil {
-		ptrs = s.db.opt.RaftPointerSnapshot()
+	if ptrFn := s.host.RaftPointerSnapshot(); ptrFn != nil {
+		ptrs = ptrFn()
 		snap.Raft.GroupCount = len(ptrs)
 	}
 
@@ -533,31 +585,31 @@ func (s *Stats) Snapshot() StatsSnapshot {
 			removableRaftSegments++
 		}
 	}
-	s.db.raftWALMu.Lock()
-	for _, mgr := range s.db.raftWALs {
-		if mgr == nil {
-			continue
-		}
-		shardStats := mgr.Metrics()
-		shardSegments := mgr.SegmentMetrics()
-		shardAnalysis := metrics.AnalyzeWALBacklog(shardStats, shardSegments)
-		snap.WAL.RecordCounts.Entries += shardAnalysis.RecordCounts.Entries
-		snap.WAL.RecordCounts.RaftEntries += shardAnalysis.RecordCounts.RaftEntries
-		snap.WAL.RecordCounts.RaftStates += shardAnalysis.RecordCounts.RaftStates
-		snap.WAL.RecordCounts.RaftSnapshots += shardAnalysis.RecordCounts.RaftSnapshots
-		snap.WAL.RecordCounts.Other += shardAnalysis.RecordCounts.Other
-		snap.WAL.SegmentsWithRaftRecords += shardAnalysis.SegmentsWithRaft
-		if shardStats != nil {
-			snap.WAL.SegmentCount += int64(shardStats.SegmentCount)
-			snap.WAL.SegmentsRemoved += shardStats.RemovedSegments
-		}
-		for _, id := range shardAnalysis.RemovableSegments {
-			if shardSegments[id].RaftRecords() > 0 && shardStats != nil && id < shardStats.ActiveSegment {
-				removableRaftSegments++
+	s.host.RaftWALsLocked(func(wals []*wal.Manager) {
+		for _, mgr := range wals {
+			if mgr == nil {
+				continue
+			}
+			shardStats := mgr.Metrics()
+			shardSegments := mgr.SegmentMetrics()
+			shardAnalysis := metrics.AnalyzeWALBacklog(shardStats, shardSegments)
+			snap.WAL.RecordCounts.Entries += shardAnalysis.RecordCounts.Entries
+			snap.WAL.RecordCounts.RaftEntries += shardAnalysis.RecordCounts.RaftEntries
+			snap.WAL.RecordCounts.RaftStates += shardAnalysis.RecordCounts.RaftStates
+			snap.WAL.RecordCounts.RaftSnapshots += shardAnalysis.RecordCounts.RaftSnapshots
+			snap.WAL.RecordCounts.Other += shardAnalysis.RecordCounts.Other
+			snap.WAL.SegmentsWithRaftRecords += shardAnalysis.SegmentsWithRaft
+			if shardStats != nil {
+				snap.WAL.SegmentCount += int64(shardStats.SegmentCount)
+				snap.WAL.SegmentsRemoved += shardStats.RemovedSegments
+			}
+			for _, id := range shardAnalysis.RemovableSegments {
+				if shardSegments[id].RaftRecords() > 0 && shardStats != nil && id < shardStats.ActiveSegment {
+					removableRaftSegments++
+				}
 			}
 		}
-	}
-	s.db.raftWALMu.Unlock()
+	})
 	snap.WAL.RemovableRaftSegments = removableRaftSegments
 	if total := snap.WAL.RecordCounts.Total(); total > 0 {
 		raftRecords := snap.WAL.RecordCounts.RaftRecords()
@@ -602,14 +654,14 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Raft.MaxLagSegments = maxLag
 		snap.Raft.LaggingGroups = lagging
 	}
-	threshold := max(s.db.opt.RaftLagWarnSegments, 0)
+	threshold := max(s.host.RaftLagWarnSegments(), 0)
 	snap.Raft.LagWarnThreshold = threshold
 	if threshold > 0 && snap.Raft.MaxLagSegments >= threshold && snap.Raft.LaggingGroups > 0 {
 		snap.Raft.LagWarning = true
 	}
 
-	warning, reason := metrics.WALTypedWarning(snap.WAL.TypedRecordRatio, snap.WAL.SegmentsWithRaftRecords, s.db.opt.WALTypedRecordWarnRatio, s.db.opt.WALTypedRecordWarnSegments)
-	watchdogs := s.db.background.WALWatchdogs()
+	warning, reason := metrics.WALTypedWarning(snap.WAL.TypedRecordRatio, snap.WAL.SegmentsWithRaftRecords, s.host.WALTypedRecordWarnRatio(), s.host.WALTypedRecordWarnSegments())
+	watchdogs := s.host.BackgroundWatchdogs()
 	if len(watchdogs) > 0 {
 		var anyWarn bool
 		var warnReason string
@@ -641,33 +693,24 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	}
 
 	// Value log backlog.
-	if s.db.vlog != nil {
-		stats := s.db.vlog.Metrics()
+	if vlogSrc := s.host.Vlog(); vlogSrc != nil {
+		stats := vlogSrc.Metrics()
 		snap.ValueLog.Segments = stats.Segments
 		snap.ValueLog.PendingDeletes = stats.PendingDeletes
 		snap.ValueLog.DiscardQueue = stats.DiscardQueue
 		snap.ValueLog.Heads = stats.Heads
 	}
-	if s.db != nil && s.db.hotWrite != nil {
-		for _, item := range s.db.hotWrite.TopN(s.db.opt.ThermosTopK) {
+	if hot := s.host.HotWrite(); hot != nil {
+		topK := s.host.ThermosTopK()
+		for _, item := range hot.TopN(topK) {
 			snap.Hot.WriteKeys = append(snap.Hot.WriteKeys, HotKeyStat{Key: item.Key, Count: item.Count})
 		}
-		hotStats := s.db.hotWrite.Stats()
+		hotStats := hot.Stats()
 		snap.Hot.WriteRing = &hotStats
 	}
-	if s.db != nil && s.db.iterPool != nil {
-		snap.Cache.IteratorReused = s.db.iterPool.Reused()
-	}
+	snap.Cache.IteratorReused = s.host.IteratorReused()
 	snap.ValueLog.GC = metrics.DefaultValueLogGCCollector().Snapshot()
 	snap.Transport = transportpkg.GRPCMetricsSnapshot()
 	snap.Redis = metrics.DefaultRedisSnapshot()
 	return snap
-}
-
-func (s *Stats) close() error {
-	if s == nil {
-		return nil
-	}
-	s.closer.Close()
-	return nil
 }
