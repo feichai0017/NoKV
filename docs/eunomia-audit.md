@@ -123,8 +123,8 @@ enum:
 Any non-empty `finality_defect` or any `true` flag under `snapshot anomalies`
 indicates that the rooted handoff state has drifted from the expected
 `active lease → sealed predecessor → inherited successor → closed handoff`
-lifecycle — which is exactly the property `spec/Eunomia.tla` proves meta-root must
-preserve.
+lifecycle — which is exactly the property `spec/Eunomia.tla` specifies and
+model-checks under finite bounds for meta-root.
 
 ## Runtime diagnostics and metrics
 

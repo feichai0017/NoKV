@@ -32,6 +32,8 @@ help:
 	@echo "  make tlc-subtreeauthority      - Run TLC on spec/SubtreeAuthority.tla"
 	@echo "  make tlc-leaseonly-counterexample - Run TLC and expect a counterexample for spec/LeaseOnly.tla"
 	@echo "  make tlc-leasestart-counterexample - Run TLC and expect a counterexample for spec/LeaseStartOnly.tla"
+	@echo "  make tlc-tokenonly-counterexample - Run TLC and expect a counterexample for spec/TokenOnly.tla"
+	@echo "  make tlc-chubbyfenced-counterexample - Run TLC and expect a counterexample for spec/ChubbyFencedLease.tla"
 	@echo "  make tlc-subtreewithoutfrontiercoverage-counterexample - Run TLC and expect a counterexample for spec/SubtreeWithoutFrontierCoverage.tla"
 	@echo "  make tlc-subtreewithoutseal-counterexample - Run TLC and expect a counterexample for spec/SubtreeWithoutSeal.tla"
 	@echo "  make docker-up          - Start Docker Compose cluster"
