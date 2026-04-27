@@ -87,6 +87,6 @@ Stage 3 adds two namespace-facing positive models:
   uniqueness shape that is stronger than the cardinality-only `Primacy`
   invariant and better suited for a later proof.
 
-`record-formal-artifacts` stores sanitized TLC outputs under `spec/artifacts/`
+`record-formal-artifacts` stores sanitized TLC outputs under `artifacts/`
 so the current result shape is checked into the repo. These are bounded model
 checks, not a TLAPS / Coq / Dafny proof.

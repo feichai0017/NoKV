@@ -6,7 +6,7 @@
 // meta/root/ but never owns durable cluster state. The execution plane
 // (raftstore/) applies and publishes, and coordinator reconstructs its
 // view by tailing rooted commits. Contracts between the planes are
-// specified in TLA+ under spec/Eunomia.tla.
+// specified in TLA+ under docs/spec/Eunomia.tla.
 //
 // Heavy logic is deliberately split into sibling packages:
 // catalog (region/event validation), view (directory + store health),

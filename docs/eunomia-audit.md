@@ -3,7 +3,7 @@
 `nokv eunomia-audit` is a read-only operator tool that projects a live 3-peer
 meta-root cluster's current rooted state into the `coordinator/audit`
 Eunomia vocabulary. It is the operator counterpart to the TLA+ Eunomia model
-(`spec/Eunomia.tla`) and the
+(`docs/spec/Eunomia.tla`) and the
 `coordinator/audit` library that coordinator/server consults at runtime.
 
 Because NoKV only ships the separated topology (3 meta-root + N coordinator),
@@ -123,7 +123,7 @@ enum:
 Any non-empty `finality_defect` or any `true` flag under `snapshot anomalies`
 indicates that the rooted handoff state has drifted from the expected
 `active lease → sealed predecessor → inherited successor → closed handoff`
-lifecycle — which is exactly the property `spec/Eunomia.tla` proves meta-root must
+lifecycle — which is exactly the property `docs/spec/Eunomia.tla` proves meta-root must
 preserve.
 
 ## Runtime diagnostics and metrics

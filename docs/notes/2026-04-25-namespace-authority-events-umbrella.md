@@ -120,7 +120,7 @@ Mount 是 fsmeta 的 namespace 根。fsmeta 不需要完整 POSIX mount，但需
 
 当前代码已实现这条 registry：mount membership 进入 `meta/root` rooted truth，`nokv-fsmeta` 的写路径通过 coordinator mount view 做 admission，未注册或 retired mount 会被拒绝。
 
-`spec/MountLifecycle.tla` 覆盖这条 lifecycle：
+`docs/spec/MountLifecycle.tla` 覆盖这条 lifecycle：
 
 - `MountRegistered` 只能把未出现过的 mount 变成 active；
 - `MountRetired` 是终态，retired mount 不能再次 active；
@@ -180,7 +180,7 @@ SubtreeHandoffCompleted(mount_id, subtree_root, authority_id, era, inherited_fro
 
 `WatchSubtree` 使用 subtree prefix 过滤 data-plane apply events，不把每个 watch 事件写进 root。`RenameSubtree` 使用这组 rooted handoff event 推进 subtree authority frontier。
 
-`spec/SubtreeAuthority.tla` 建模这组 handoff 语义。这个 spec 不建模 dentry 写入，只建模 authority 记录本身：
+`docs/spec/SubtreeAuthority.tla` 建模这组 handoff 语义。这个 spec 不建模 dentry 写入，只建模 authority 记录本身：
 
 - `Primacy`：每个 subtree 至多一个 active authority；
 - `Inheritance`：successor frontier 必须覆盖 predecessor frontier；
