@@ -103,7 +103,7 @@ The single-node substrate that everything sits on. Independently usable as an em
 | WAL discipline and replay | [wal.md](wal.md) |
 | MemTable + ART/SkipList (ART pinned for fsmeta) | [memtable.md](memtable.md) |
 | Flush pipeline | [flush.md](flush.md) |
-| Leveled compaction + ingest buffer | [compaction.md](compaction.md) · [ingest_buffer.md](ingest_buffer.md) |
+| Leveled compaction + staging buffer | [compaction.md](compaction.md) · [staging_buffer.md](staging_buffer.md) |
 | Value log (KV separation + GC) | [vlog.md](vlog.md) |
 | Manifest semantics | [manifest.md](manifest.md) |
 | Range filter | [range_filter.md](range_filter.md) |
@@ -130,7 +130,7 @@ The single-node substrate that everything sits on. Independently usable as an em
 All notes under [`notes/`](notes/) are dated decision records — they explain the *why*, not just the what.
 
 - [Why WAL is stdio and vlog/SST are mmap](notes/2026-01-16-mmap-choice.md)
-- [Compaction and ingest buffer design](notes/2026-02-01-compaction-and-ingest.md)
+- [Compaction and staging buffer design](notes/2026-02-01-compaction-and-staging.md)
 - [Value log KV separation + HashKV buckets](notes/2026-02-05-vlog-design-and-gc.md)
 - [Arena memory kernel + adaptive index (SkipList ↔ ART)](notes/2026-02-09-memory-kernel-arena-and-adaptive-index.md)
 - [MPSC write pipeline with adaptive coalescing](notes/2026-02-09-write-pipeline-mpsc-and-adaptive-batching.md)

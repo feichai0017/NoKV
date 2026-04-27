@@ -14,20 +14,20 @@ import (
 
 type levelHandler struct {
 	sync.RWMutex
-	levelNum                  int
-	tables                    []*table
-	filter                    rangeFilter
-	spill                     spillBuffer
-	totalSize                 int64
-	totalStaleSize            int64
-	totalValueSize            int64
-	lm                        *levelManager
-	spillRuns                 atomic.Uint64
-	spillMergeRuns            atomic.Uint64
-	spillDurationNs           atomic.Int64
-	spillMergeDurationNs      atomic.Int64
-	spillTablesCompactedCount atomic.Uint64
-	spillMergeTables          atomic.Uint64
+	levelNum                    int
+	tables                      []*table
+	filter                      rangeFilter
+	staging                     stagingBuffer
+	totalSize                   int64
+	totalStaleSize              int64
+	totalValueSize              int64
+	lm                          *levelManager
+	stagingRuns                 atomic.Uint64
+	stagingMergeRuns            atomic.Uint64
+	stagingDurationNs           atomic.Int64
+	stagingMergeDurationNs      atomic.Int64
+	stagingTablesCompactedCount atomic.Uint64
+	stagingMergeTables          atomic.Uint64
 
 	// l0Sublevels groups L0 tables into non-overlapping sublevels for point
 	// reads. Only populated when levelNum == 0; nil otherwise. Rebuilt by
@@ -44,7 +44,7 @@ type tableRange struct {
 func (lh *levelHandler) close() error {
 	lh.RLock()
 	tables := append([]*table(nil), lh.tables...)
-	spillTables := append([]*table(nil), lh.spill.allTables()...)
+	stagingTables := append([]*table(nil), lh.staging.allTables()...)
 	lh.RUnlock()
 
 	var closeErr error
@@ -54,7 +54,7 @@ func (lh *levelHandler) close() error {
 		}
 		closeErr = errors.Join(closeErr, t.closeHandle())
 	}
-	for _, t := range spillTables {
+	for _, t := range stagingTables {
 		if t == nil {
 			continue
 		}
@@ -78,13 +78,13 @@ func (lh *levelHandler) add(t *table) {
 func (lh *levelHandler) getTotalSize() int64 {
 	lh.RLock()
 	defer lh.RUnlock()
-	return lh.totalSize + lh.spill.totalSize()
+	return lh.totalSize + lh.staging.totalSize()
 }
 
 func (lh *levelHandler) getTotalValueSize() int64 {
 	lh.RLock()
 	defer lh.RUnlock()
-	return lh.totalValueSize + lh.spill.totalValueSize()
+	return lh.totalValueSize + lh.staging.totalValueSize()
 }
 
 func (lh *levelHandler) keyCount() uint64 {
@@ -96,7 +96,7 @@ func (lh *levelHandler) keyCount() uint64 {
 			total += uint64(t.keyCount)
 		}
 	}
-	for _, t := range lh.spill.allTables() {
+	for _, t := range lh.staging.allTables() {
 		if t != nil {
 			total += uint64(t.keyCount)
 		}
@@ -113,7 +113,7 @@ func (lh *levelHandler) rangeTombstoneCount() uint64 {
 			total += uint64(t.RangeTombstoneCount())
 		}
 	}
-	for _, t := range lh.spill.allTables() {
+	for _, t := range lh.staging.allTables() {
 		if t != nil {
 			total += uint64(t.RangeTombstoneCount())
 		}
@@ -173,22 +173,22 @@ func (lh *levelHandler) metricsSnapshot() LevelMetrics {
 	lh.RLock()
 	defer lh.RUnlock()
 	return LevelMetrics{
-		Level:                lh.levelNum,
-		TableCount:           len(lh.tables),
-		SizeBytes:            lh.totalSize,
-		ValueBytes:           lh.totalValueSize,
-		StaleBytes:           lh.totalStaleSize,
-		SpillTableCount:      lh.spill.tableCount(),
-		SpillSizeBytes:       lh.spill.totalSize(),
-		SpillValueBytes:      lh.spill.totalValueSize(),
-		ValueDensity:         lh.densityLocked(),
-		SpillValueDensity:    lh.spillDensityLocked(),
-		SpillRuns:            int64(lh.spillRuns.Load()),
-		SpillMs:              float64(lh.spillDurationNs.Load()) / 1e6,
-		SpillTablesCompacted: int64(lh.spillTablesCompactedCount.Load()),
-		SpillMergeRuns:       int64(lh.spillMergeRuns.Load()),
-		SpillMergeMs:         float64(lh.spillMergeDurationNs.Load()) / 1e6,
-		SpillMergeTables:     int64(lh.spillMergeTables.Load()),
+		Level:                  lh.levelNum,
+		TableCount:             len(lh.tables),
+		SizeBytes:              lh.totalSize,
+		ValueBytes:             lh.totalValueSize,
+		StaleBytes:             lh.totalStaleSize,
+		StagingTableCount:      lh.staging.tableCount(),
+		StagingSizeBytes:       lh.staging.totalSize(),
+		StagingValueBytes:      lh.staging.totalValueSize(),
+		ValueDensity:           lh.densityLocked(),
+		StagingValueDensity:    lh.stagingDensityLocked(),
+		StagingRuns:            int64(lh.stagingRuns.Load()),
+		StagingMs:              float64(lh.stagingDurationNs.Load()) / 1e6,
+		StagingTablesCompacted: int64(lh.stagingTablesCompactedCount.Load()),
+		StagingMergeRuns:       int64(lh.stagingMergeRuns.Load()),
+		StagingMergeMs:         float64(lh.stagingMergeDurationNs.Load()) / 1e6,
+		StagingMergeTables:     int64(lh.stagingMergeTables.Load()),
 	}
 }
 
@@ -212,7 +212,7 @@ func (lh *levelHandler) numTablesLocked() int {
 	return len(lh.tables)
 }
 
-// Get finds key inside this level, considering spill shards and level semantics.
+// Get finds key inside this level, considering staging shards and level semantics.
 func (lh *levelHandler) Get(key []byte) (*kv.Entry, error) {
 	lh.RLock()
 	defer lh.RUnlock()
@@ -223,7 +223,7 @@ func (lh *levelHandler) Get(key []byte) (*kv.Entry, error) {
 		best   *kv.Entry
 		maxVer uint64
 	)
-	if entry, err := lh.spill.search(key, &maxVer); err == nil {
+	if entry, err := lh.staging.search(key, &maxVer); err == nil {
 		best = entry
 	} else if err != utils.ErrKeyNotFound {
 		return nil, err
@@ -251,7 +251,7 @@ func (lh *levelHandler) Sort() {
 	defer lh.Unlock()
 	lh.sortTablesLocked()
 	lh.rebuildRangeFilterLocked()
-	lh.spill.sortShards()
+	lh.staging.sortShards()
 }
 
 // sortTablesLocked sorts lh.tables using level-specific ordering semantics.
@@ -527,30 +527,30 @@ func (lh *levelHandler) deleteTables(toDel []*table) error {
 	lh.tables = newTables
 	lh.rebuildRangeFilterLocked()
 
-	lh.spill.remove(toDelMap)
+	lh.staging.remove(toDelMap)
 
 	lh.Unlock() // Unlock s _before_ we DecrRef our tables, which can be slow.
 
 	return decrRefs(removed)
 }
 
-func (lh *levelHandler) deleteSpillTables(toDel []*table) error {
+func (lh *levelHandler) deleteStagingTables(toDel []*table) error {
 	lh.Lock() // s.Unlock() below
 
 	toDelMap := make(map[uint64]struct{})
 	for _, t := range toDel {
 		toDelMap[t.fid] = struct{}{}
 	}
-	removed := lh.collectSpillTablesLocked(toDelMap)
+	removed := lh.collectStagingTablesLocked(toDelMap)
 
-	lh.spill.remove(toDelMap)
+	lh.staging.remove(toDelMap)
 
 	lh.Unlock()
 
 	return decrRefs(removed)
 }
 
-func (lh *levelHandler) replaceSpillTables(toDel, toAdd []*table) error {
+func (lh *levelHandler) replaceStagingTables(toDel, toAdd []*table) error {
 	lh.Lock()
 
 	toDelMap := make(map[uint64]struct{})
@@ -560,10 +560,10 @@ func (lh *levelHandler) replaceSpillTables(toDel, toAdd []*table) error {
 		}
 		toDelMap[t.fid] = struct{}{}
 	}
-	removed := lh.collectSpillTablesLocked(toDelMap)
-	lh.spill.remove(toDelMap)
+	removed := lh.collectStagingTablesLocked(toDelMap)
+	lh.staging.remove(toDelMap)
 	if len(toAdd) > 0 {
-		lh.spill.addBatch(toAdd)
+		lh.staging.addBatch(toAdd)
 	}
 
 	lh.Unlock()
@@ -571,12 +571,12 @@ func (lh *levelHandler) replaceSpillTables(toDel, toAdd []*table) error {
 	return decrRefs(removed)
 }
 
-func (lh *levelHandler) collectSpillTablesLocked(fidSet map[uint64]struct{}) []*table {
+func (lh *levelHandler) collectStagingTablesLocked(fidSet map[uint64]struct{}) []*table {
 	if len(fidSet) == 0 {
 		return nil
 	}
 	var out []*table
-	for _, sh := range lh.spill.shards {
+	for _, sh := range lh.staging.shards {
 		for _, t := range sh.tables {
 			if t == nil {
 				continue
@@ -589,22 +589,22 @@ func (lh *levelHandler) collectSpillTablesLocked(fidSet map[uint64]struct{}) []*
 	return out
 }
 
-func (lh *levelHandler) recordSpillMetrics(merge bool, duration time.Duration, tables int) {
+func (lh *levelHandler) recordStagingMetrics(merge bool, duration time.Duration, tables int) {
 	if tables < 0 {
 		tables = 0
 	}
 	if merge {
-		lh.spillMergeRuns.Add(1)
-		lh.spillMergeDurationNs.Add(duration.Nanoseconds())
+		lh.stagingMergeRuns.Add(1)
+		lh.stagingMergeDurationNs.Add(duration.Nanoseconds())
 		if tables > 0 {
-			lh.spillMergeTables.Add(uint64(tables))
+			lh.stagingMergeTables.Add(uint64(tables))
 		}
 		return
 	}
-	lh.spillRuns.Add(1)
-	lh.spillDurationNs.Add(duration.Nanoseconds())
+	lh.stagingRuns.Add(1)
+	lh.stagingDurationNs.Add(duration.Nanoseconds())
 	if tables > 0 {
-		lh.spillTablesCompactedCount.Add(uint64(tables))
+		lh.stagingTablesCompactedCount.Add(uint64(tables))
 	}
 }
 
@@ -625,16 +625,16 @@ func (lh *levelHandler) iterators(opt *index.Options) []index.Iterator {
 	}
 
 	var itrs []index.Iterator
-	spillTables := lh.spill.tablesWithinBounds(topt.LowerBound, topt.UpperBound)
-	itrs = append(itrs, iteratorsReversed(spillTables, topt)...)
+	stagingTables := lh.staging.tablesWithinBounds(topt.LowerBound, topt.UpperBound)
+	itrs = append(itrs, iteratorsReversed(stagingTables, topt)...)
 	if len(mainTables) == 1 {
 		itrs = append(itrs, mainTables[0].NewIterator(topt))
 	} else if len(mainTables) > 1 {
 		itrs = append(itrs, NewConcatIterator(mainTables, topt))
 	}
 	if bounded && lh.lm != nil {
-		total := len(lh.tables) + lh.spill.tableCount()
-		candidates := len(mainTables) + len(spillTables)
+		total := len(lh.tables) + lh.staging.tableCount()
+		candidates := len(mainTables) + len(stagingTables)
 		fallback := len(lh.filter.spans) == 0
 		if lh.levelNum > 0 && len(lh.filter.spans) > 0 && !lh.filter.nonOverlapping {
 			fallback = true

@@ -6,27 +6,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSpillModeFlags(t *testing.T) {
-	require.False(t, SpillNone.UsesSpill())
-	require.True(t, SpillDrain.UsesSpill())
-	require.True(t, SpillKeep.UsesSpill())
-	require.True(t, SpillKeep.KeepsSpill())
-	require.False(t, SpillDrain.KeepsSpill())
+func TestStagingModeFlags(t *testing.T) {
+	require.False(t, StagingNone.UsesStaging())
+	require.True(t, StagingDrain.UsesStaging())
+	require.True(t, StagingKeep.UsesStaging())
+	require.True(t, StagingKeep.KeepsStaging())
+	require.False(t, StagingDrain.KeepsStaging())
 }
 
-func TestSpillPicker(t *testing.T) {
-	shards := []SpillShardView{
+func TestStagingPicker(t *testing.T) {
+	shards := []StagingShardView{
 		{Index: 1, SizeBytes: 10},
 		{Index: 2, SizeBytes: 30},
 		{Index: 3, SizeBytes: 20, MaxAgeSec: 120, ValueDensity: 0.5},
 	}
-	order := PickShardOrder(SpillPickInput{Shards: shards})
+	order := PickShardOrder(StagingPickInput{Shards: shards})
 	require.Equal(t, []int{2, 3, 1}, order)
 
-	pick := PickShardByBacklog(SpillPickInput{Shards: shards})
+	pick := PickShardByBacklog(StagingPickInput{Shards: shards})
 	require.Equal(t, 3, pick)
 
-	require.Equal(t, -1, PickShardByBacklog(SpillPickInput{}))
+	require.Equal(t, -1, PickShardByBacklog(StagingPickInput{}))
 }
 
 func TestPriorityHelpers(t *testing.T) {
@@ -85,30 +85,30 @@ func TestBuildTargetsAndPickPriorities(t *testing.T) {
 				TotalValueBytes: 100,
 			},
 			{
-				Level:             1,
-				SpillTables:       2,
-				SpillSize:         200,
-				SpillValueBytes:   40,
-				SpillValueDensity: 1.5,
-				SpillAgeSeconds:   200,
-				MainValueBytes:    30,
+				Level:               1,
+				StagingTables:       2,
+				StagingSize:         200,
+				StagingValueBytes:   40,
+				StagingValueDensity: 1.5,
+				StagingAgeSeconds:   200,
+				MainValueBytes:      30,
 			},
 		},
-		Targets:                targets,
-		NumLevelZeroTables:     4,
-		BaseTableSize:          4,
-		BaseLevelSize:          10,
-		SpillBacklogMergeScore: 1.0,
-		CompactionValueWeight:  1.0,
+		Targets:                  targets,
+		NumLevelZeroTables:       4,
+		BaseTableSize:            4,
+		BaseLevelSize:            10,
+		StagingBacklogMergeScore: 1.0,
+		CompactionValueWeight:    1.0,
 	}
 	prios := PickPriorities(input)
 	require.NotEmpty(t, prios)
 
-	var hasSpillDrain bool
+	var hasStagingDrain bool
 	for _, p := range prios {
-		if p.SpillMode == SpillDrain {
-			hasSpillDrain = true
+		if p.StagingMode == StagingDrain {
+			hasStagingDrain = true
 		}
 	}
-	require.True(t, hasSpillDrain)
+	require.True(t, hasStagingDrain)
 }

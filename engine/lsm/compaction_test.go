@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCompactionMoveToSpill(t *testing.T) {
+func TestCompactionMoveToStaging(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -34,19 +34,19 @@ func TestCompactionMoveToSpill(t *testing.T) {
 		cd.nextLevel = lsm.levels.levels[1]
 	}
 
-	beforeSpill := cd.nextLevel.numSpillTables()
-	if err := lsm.levels.moveToSpill(cd); err != nil {
-		t.Fatalf("moveToSpill: %v", err)
+	beforeStaging := cd.nextLevel.numStagingTables()
+	if err := lsm.levels.moveToStaging(cd); err != nil {
+		t.Fatalf("moveToStaging: %v", err)
 	}
-	afterSpill := cd.nextLevel.numSpillTables()
-	if afterSpill <= beforeSpill {
-		t.Fatalf("expected spill buffer to grow, before=%d after=%d", beforeSpill, afterSpill)
+	afterStaging := cd.nextLevel.numStagingTables()
+	if afterStaging <= beforeStaging {
+		t.Fatalf("expected staging buffer to grow, before=%d after=%d", beforeStaging, afterStaging)
 	}
 
 	// Ensure the moved table has been removed from the source level.
 	found := false
 	cd.nextLevel.RLock()
-	for _, sh := range cd.nextLevel.spill.shards {
+	for _, sh := range cd.nextLevel.staging.shards {
 		for _, tbl := range sh.tables {
 			if tbl.fid == cd.top[0].fid {
 				found = true
@@ -59,7 +59,7 @@ func TestCompactionMoveToSpill(t *testing.T) {
 	}
 	cd.nextLevel.RUnlock()
 	if !found {
-		t.Fatalf("table %d not found in spill buffer", cd.top[0].fid)
+		t.Fatalf("table %d not found in staging buffer", cd.top[0].fid)
 	}
 }
 
@@ -322,61 +322,61 @@ func TestSchedulerPolicyArrangeLeveled(t *testing.T) {
 	require.Equal(t, 0, forWorker1[1].Level)
 }
 
-func TestSchedulerPolicyArrangeTieredPrefersSpill(t *testing.T) {
+func TestSchedulerPolicyArrangeTieredPrefersStaging(t *testing.T) {
 	p := NewSchedulerPolicy(PolicyTiered)
 	in := []Priority{
-		{Level: 0, Adjusted: 9, SpillMode: SpillNone},
-		{Level: 3, Adjusted: 2, SpillMode: SpillKeep},
-		{Level: 2, Adjusted: 5, SpillMode: SpillDrain},
-		{Level: 1, Adjusted: 8, SpillMode: SpillNone},
+		{Level: 0, Adjusted: 9, StagingMode: StagingNone},
+		{Level: 3, Adjusted: 2, StagingMode: StagingKeep},
+		{Level: 2, Adjusted: 5, StagingMode: StagingDrain},
+		{Level: 1, Adjusted: 8, StagingMode: StagingNone},
 	}
 	out := p.Arrange(0, in)
 	require.Len(t, out, 4)
 	require.Equal(t, 0, out[0].Level)
-	require.Equal(t, SpillKeep, out[1].SpillMode)
-	require.Equal(t, SpillDrain, out[2].SpillMode)
+	require.Equal(t, StagingKeep, out[1].StagingMode)
+	require.Equal(t, StagingDrain, out[2].StagingMode)
 	require.Equal(t, 1, out[3].Level)
 }
 
-func TestSchedulerPolicyArrangeHybridSwitchesBySpillPressure(t *testing.T) {
+func TestSchedulerPolicyArrangeHybridSwitchesByStagingPressure(t *testing.T) {
 	p := NewSchedulerPolicy(PolicyHybrid)
-	withMildSpill := []Priority{
-		{Level: 1, Adjusted: 2, SpillMode: SpillNone},
-		{Level: 2, Adjusted: 1.5, SpillMode: SpillDrain},
+	withMildStaging := []Priority{
+		{Level: 1, Adjusted: 2, StagingMode: StagingNone},
+		{Level: 2, Adjusted: 1.5, StagingMode: StagingDrain},
 	}
-	out := p.Arrange(0, withMildSpill)
+	out := p.Arrange(0, withMildStaging)
 	require.Equal(t, 1, out[0].Level)
 
-	noSpill := []Priority{
-		{Level: 2, Adjusted: 2, SpillMode: SpillNone},
-		{Level: 0, Adjusted: 1.5, SpillMode: SpillNone},
+	noStaging := []Priority{
+		{Level: 2, Adjusted: 2, StagingMode: StagingNone},
+		{Level: 0, Adjusted: 1.5, StagingMode: StagingNone},
 	}
-	out = p.Arrange(0, noSpill)
+	out = p.Arrange(0, noStaging)
 	require.Equal(t, 0, out[0].Level)
 
-	withHeavySpill := []Priority{
-		{Level: 1, Adjusted: 1.2, SpillMode: SpillNone},
-		{Level: 2, Adjusted: 4.5, SpillMode: SpillDrain},
-		{Level: 3, Adjusted: 3.5, SpillMode: SpillKeep},
+	withHeavyStaging := []Priority{
+		{Level: 1, Adjusted: 1.2, StagingMode: StagingNone},
+		{Level: 2, Adjusted: 4.5, StagingMode: StagingDrain},
+		{Level: 3, Adjusted: 3.5, StagingMode: StagingKeep},
 	}
-	out = p.Arrange(0, withHeavySpill)
-	require.Equal(t, SpillKeep, out[0].SpillMode)
-	require.Equal(t, SpillDrain, out[1].SpillMode)
+	out = p.Arrange(0, withHeavyStaging)
+	require.Equal(t, StagingKeep, out[0].StagingMode)
+	require.Equal(t, StagingDrain, out[1].StagingMode)
 }
 
 func TestSchedulerPolicyTieredFeedbackAdjustsQuota(t *testing.T) {
 	baseInput := []Priority{
-		{Level: 0, Adjusted: 3.0, SpillMode: SpillNone},
-		{Level: 6, Adjusted: 6.0, SpillMode: SpillKeep},
-		{Level: 6, Adjusted: 5.9, SpillMode: SpillKeep},
-		{Level: 6, Adjusted: 5.8, SpillMode: SpillKeep},
-		{Level: 6, Adjusted: 5.7, SpillMode: SpillKeep},
-		{Level: 5, Adjusted: 6.5, SpillMode: SpillDrain},
-		{Level: 5, Adjusted: 6.4, SpillMode: SpillDrain},
-		{Level: 5, Adjusted: 6.3, SpillMode: SpillDrain},
-		{Level: 5, Adjusted: 6.2, SpillMode: SpillDrain},
-		{Level: 2, Adjusted: 5.5, SpillMode: SpillNone},
-		{Level: 2, Adjusted: 5.4, SpillMode: SpillNone},
+		{Level: 0, Adjusted: 3.0, StagingMode: StagingNone},
+		{Level: 6, Adjusted: 6.0, StagingMode: StagingKeep},
+		{Level: 6, Adjusted: 5.9, StagingMode: StagingKeep},
+		{Level: 6, Adjusted: 5.8, StagingMode: StagingKeep},
+		{Level: 6, Adjusted: 5.7, StagingMode: StagingKeep},
+		{Level: 5, Adjusted: 6.5, StagingMode: StagingDrain},
+		{Level: 5, Adjusted: 6.4, StagingMode: StagingDrain},
+		{Level: 5, Adjusted: 6.3, StagingMode: StagingDrain},
+		{Level: 5, Adjusted: 6.2, StagingMode: StagingDrain},
+		{Level: 2, Adjusted: 5.5, StagingMode: StagingNone},
+		{Level: 2, Adjusted: 5.4, StagingMode: StagingNone},
 	}
 
 	normal := NewSchedulerPolicy(PolicyTiered)
@@ -387,29 +387,29 @@ func TestSchedulerPolicyTieredFeedbackAdjustsQuota(t *testing.T) {
 	failed := NewSchedulerPolicy(PolicyTiered)
 	for range 3 {
 		failed.Observe(FeedbackEvent{
-			Priority: Priority{SpillMode: SpillDrain},
-			Err:      errors.New("injected spill failure"),
+			Priority: Priority{StagingMode: StagingDrain},
+			Err:      errors.New("injected staging failure"),
 		})
 	}
 	failedOut := failed.Arrange(0, baseInput)
 	failedIdx := firstRegularNonL0(failedOut)
-	require.Less(t, failedIdx, normalIdx, "spill failures should shift quota toward regular progress")
+	require.Less(t, failedIdx, normalIdx, "staging failures should shift quota toward regular progress")
 
 	success := NewSchedulerPolicy(PolicyTiered)
 	for range 3 {
 		success.Observe(FeedbackEvent{
-			Priority: Priority{SpillMode: SpillKeep},
+			Priority: Priority{StagingMode: StagingKeep},
 			Err:      nil,
 		})
 	}
 	successOut := success.Arrange(0, baseInput)
 	successIdx := firstRegularNonL0(successOut)
-	require.Greater(t, successIdx, normalIdx, "spill successes should increase spill scheduling share")
+	require.Greater(t, successIdx, normalIdx, "staging successes should increase staging scheduling share")
 }
 
 func firstRegularNonL0(prios []Priority) int {
 	for i, p := range prios {
-		if p.SpillMode == SpillNone && p.Level != 0 {
+		if p.StagingMode == StagingNone && p.Level != 0 {
 			return i
 		}
 	}
@@ -440,10 +440,10 @@ func requireDecrOnce(t *testing.T, before map[*table]int32) {
 	}
 }
 
-func hasSpillTable(lh *levelHandler, fid uint64) bool {
+func hasStagingTable(lh *levelHandler, fid uint64) bool {
 	lh.RLock()
 	defer lh.RUnlock()
-	for _, sh := range lh.spill.shards {
+	for _, sh := range lh.staging.shards {
 		for _, tbl := range sh.tables {
 			if tbl != nil && tbl.fid == fid {
 				return true
@@ -453,7 +453,7 @@ func hasSpillTable(lh *levelHandler, fid uint64) bool {
 	return false
 }
 
-func TestRunCompactDefSpillNoneDecrementsTopOnce(t *testing.T) {
+func TestRunCompactDefStagingNoneDecrementsTopOnce(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -464,20 +464,20 @@ func TestRunCompactDefSpillNoneDecrementsTopOnce(t *testing.T) {
 	cd := buildCompactDef(lsm, 0, 0, 1)
 	tricky(cd.thisLevel.tablesSnapshot())
 	if ok := lsm.levels.fillTables(cd); !ok {
-		t.Fatalf("fillTables failed for spill-none path")
+		t.Fatalf("fillTables failed for staging-none path")
 	}
-	if cd.plan.SpillMode != SpillNone {
-		t.Fatalf("expected spill-none plan, got %v", cd.plan.SpillMode)
+	if cd.plan.StagingMode != StagingNone {
+		t.Fatalf("expected staging-none plan, got %v", cd.plan.StagingMode)
 	}
 	before := tableRefSnapshot(cd.top)
 	if err := lsm.levels.runCompactDef(0, 0, *cd); err != nil {
-		t.Fatalf("runCompactDef spill-none: %v", err)
+		t.Fatalf("runCompactDef staging-none: %v", err)
 	}
 	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 	requireDecrOnce(t, before)
 }
 
-func TestRunCompactDefSpillDrainDecrementsTopOnce(t *testing.T) {
+func TestRunCompactDefStagingDrainDecrementsTopOnce(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -488,7 +488,7 @@ func TestRunCompactDefSpillDrainDecrementsTopOnce(t *testing.T) {
 	l0 := lsm.levels.levels[0]
 	l0Tables := l0.tablesSnapshot()
 	if len(l0Tables) == 0 {
-		t.Fatalf("expected L0 tables before moveToSpill")
+		t.Fatalf("expected L0 tables before moveToStaging")
 	}
 
 	move := buildCompactDef(lsm, 0, 0, 6)
@@ -498,38 +498,38 @@ func TestRunCompactDefSpillDrainDecrementsTopOnce(t *testing.T) {
 	if move.nextLevel == nil {
 		move.nextLevel = lsm.levels.levels[6]
 	}
-	if err := lsm.levels.moveToSpill(move); err != nil {
-		t.Fatalf("moveToSpill: %v", err)
+	if err := lsm.levels.moveToStaging(move); err != nil {
+		t.Fatalf("moveToStaging: %v", err)
 	}
 
 	target := lsm.levels.levels[6]
-	if target.numSpillTables() == 0 {
-		t.Fatalf("expected spill tables after moveToSpill")
+	if target.numStagingTables() == 0 {
+		t.Fatalf("expected staging tables after moveToStaging")
 	}
 
 	cd := buildCompactDef(lsm, 0, 6, 6)
-	cd.plan.SpillMode = SpillDrain
-	cd.plan.StatsTag = "test-spill-drain"
-	if ok := lsm.levels.fillTablesSpillShard(cd, -1); !ok {
-		t.Fatalf("fillTablesSpillShard failed for spill-drain path")
+	cd.plan.StagingMode = StagingDrain
+	cd.plan.StatsTag = "test-staging-drain"
+	if ok := lsm.levels.fillTablesStagingShard(cd, -1); !ok {
+		t.Fatalf("fillTablesStagingShard failed for staging-drain path")
 	}
 	if len(cd.top) == 0 {
-		t.Fatalf("expected spill top tables for drain compaction")
+		t.Fatalf("expected staging top tables for drain compaction")
 	}
 	before := tableRefSnapshot(cd.top)
 	if err := lsm.levels.runCompactDef(0, 6, *cd); err != nil {
-		t.Fatalf("runCompactDef spill-drain: %v", err)
+		t.Fatalf("runCompactDef staging-drain: %v", err)
 	}
 	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 	requireDecrOnce(t, before)
 	for tbl := range before {
-		if hasSpillTable(target, tbl.fid) {
-			t.Fatalf("drained table %d still present in spill buffer", tbl.fid)
+		if hasStagingTable(target, tbl.fid) {
+			t.Fatalf("drained table %d still present in staging buffer", tbl.fid)
 		}
 	}
 }
 
-func TestRunCompactDefSpillKeepDecrementsTopOnce(t *testing.T) {
+func TestRunCompactDefStagingKeepDecrementsTopOnce(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -539,7 +539,7 @@ func TestRunCompactDefSpillKeepDecrementsTopOnce(t *testing.T) {
 
 	l0Tables := lsm.levels.levels[0].tablesSnapshot()
 	if len(l0Tables) == 0 {
-		t.Fatalf("expected L0 tables before moveToSpill")
+		t.Fatalf("expected L0 tables before moveToStaging")
 	}
 
 	move := buildCompactDef(lsm, 0, 0, 6)
@@ -549,36 +549,36 @@ func TestRunCompactDefSpillKeepDecrementsTopOnce(t *testing.T) {
 	if move.nextLevel == nil {
 		move.nextLevel = lsm.levels.levels[6]
 	}
-	if err := lsm.levels.moveToSpill(move); err != nil {
-		t.Fatalf("moveToSpill: %v", err)
+	if err := lsm.levels.moveToStaging(move); err != nil {
+		t.Fatalf("moveToStaging: %v", err)
 	}
 
 	target := lsm.levels.levels[6]
-	if target.numSpillTables() == 0 {
-		t.Fatalf("expected spill tables after moveToSpill")
+	if target.numStagingTables() == 0 {
+		t.Fatalf("expected staging tables after moveToStaging")
 	}
 
 	cd := buildCompactDef(lsm, 0, 6, 6)
-	cd.plan.SpillMode = SpillKeep
-	cd.plan.StatsTag = "test-spill-keep"
-	if ok := lsm.levels.fillTablesSpillShard(cd, -1); !ok {
-		t.Fatalf("fillTablesSpillShard failed for spill-keep path")
+	cd.plan.StagingMode = StagingKeep
+	cd.plan.StatsTag = "test-staging-keep"
+	if ok := lsm.levels.fillTablesStagingShard(cd, -1); !ok {
+		t.Fatalf("fillTablesStagingShard failed for staging-keep path")
 	}
 	if len(cd.top) == 0 {
-		t.Fatalf("expected spill top tables for keep compaction")
+		t.Fatalf("expected staging top tables for keep compaction")
 	}
 	before := tableRefSnapshot(cd.top)
 	if err := lsm.levels.runCompactDef(0, 6, *cd); err != nil {
-		t.Fatalf("runCompactDef spill-keep: %v", err)
+		t.Fatalf("runCompactDef staging-keep: %v", err)
 	}
 	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 	requireDecrOnce(t, before)
-	if target.numSpillTables() == 0 {
-		t.Fatalf("expected spill tables to remain after spill-keep compaction")
+	if target.numStagingTables() == 0 {
+		t.Fatalf("expected staging tables to remain after staging-keep compaction")
 	}
 	for tbl := range before {
-		if hasSpillTable(target, tbl.fid) {
-			t.Fatalf("replaced table %d still present in spill buffer", tbl.fid)
+		if hasStagingTable(target, tbl.fid) {
+			t.Fatalf("replaced table %d still present in staging buffer", tbl.fid)
 		}
 	}
 }

@@ -1,6 +1,6 @@
-# 2026-02-01 Compaction 与 Ingest Buffer 设计
+# 2026-02-01 Compaction 与 Staging Buffer 设计
 
-本文档深入解析 NoKV 的 **Compaction（压缩）** 机制与 **Ingest Buffer（导入缓冲）** 的协同设计。这是 NoKV 解决 LSM Tree 经典的“写停顿（Write Stall）”问题的核心武器，也是体现其工业级稳定性的关键设计。
+本文档深入解析 NoKV 的 **Compaction（压缩）** 机制与 **Staging Buffer（暂存缓冲）** 的协同设计。这是 NoKV 解决 LSM Tree 经典的“写停顿（Write Stall）”问题的核心武器，也是体现其工业级稳定性的关键设计。
 
 ---
 
@@ -19,7 +19,7 @@
 
 ## 1.1 参考论文与工程对标
 
-以下论文/系统是 NoKV compaction 与 ingest buffer 设计的主要参考坐标（按主题分类）：
+以下论文/系统是 NoKV compaction 与 staging buffer 设计的主要参考坐标（按主题分类）：
 
 * **LSM 设计与调参理论**：
   * [Monkey (SIGMOD 2017)](https://stratos.seas.harvard.edu/publications/monkey-optimal-navigable-key-value-store) —— 全局调参、Bloom 过滤器与合并策略的权衡模型。
@@ -34,19 +34,19 @@
 
 ---
 
-## 2. 核心组件：Ingest Buffer
+## 2. 核心组件：Staging Buffer
 
-为了实现上述哲学，NoKV 为每一层（Level 1+）引入了一个特殊的结构：**Ingest Buffer**。
+为了实现上述哲学，NoKV 为每一层（Level 1+）引入了一个特殊的结构：**Staging Buffer**。
 
-### 2.1 结构定义 (`lsm/ingest.go`)
+### 2.1 结构定义 (`lsm/staging.go`)
 它不是一个简单的队列，而是一个**分片化**的容器：
 
 ```go
-type ingestBuffer struct {
-    shards []ingestShard // 默认 4 个分片
+type stagingBuffer struct {
+    shards []stagingShard // 默认 4 个分片
 }
 
-type ingestShard struct {
+type stagingShard struct {
     tables    []*table   // 暂存在这里的 SSTable 列表
     ranges    []tableRange // 对应的 Key 范围索引
 }
@@ -66,10 +66,10 @@ NoKV 的 Compaction 流程被设计为“快慢双轨”制。
 这是应对 Write Stall 的“救火”机制。
 
 *   **触发**：L0 文件数过多。
-*   **动作 (`moveToIngest`)**：
+*   **动作 (`moveToStaging`)**：
     1.  不进行数据合并。
     2.  直接将 L0 的 SSTable 文件从 L0 列表中移除。
-    3.  将这些文件加入到 L1 的 `Ingest Buffer` 中。
+    3.  将这些文件加入到 L1 的 `Staging Buffer` 中。
 *   **代价**：纯元数据操作，**微秒级**完成。
 *   **结果**：L0 瞬间清空，写停顿解除。L1 暂时持有这些未排序的文件。
 
@@ -81,27 +81,27 @@ graph TD
     end
 
     subgraph Action_Offload_Fast["Action: Offload (Fast)"]
-        Move["Move to Ingest"]
+        Move["Move to Staging"]
     end
 
     subgraph After_L0_Empty["After: L0 Empty"]
         L0_New["L0: Empty"]
         L1_New["L1: Sorted SSTables"]
-        L1_Ingest["L1 Ingest Buffer: 15 Unsorted Tables"]
+        L1_Staging["L1 Staging Buffer: 15 Unsorted Tables"]
     end
 
-    L0 --> Move --> L1_Ingest
+    L0 --> Move --> L1_Staging
 ```
 
 ### 3.2 慢路径：后台异步归并 (Merge)
 
 这是“还债”机制，确保存储结构的最终有序性。
 
-*   **触发**：Compactor 发现某层的 `Ingest Buffer` 积压严重（`Score > 1`）。
-*   **模式选择 (IngestMode)**：
-    *   **IngestDrain**：将 Ingest Shard 合并进 Main Tables，彻底清空缓冲。
-    *   **IngestKeep**：合并 Shard，但如果下游压力也大，可能会将输出结果继续保留在 Ingest Buffer 中（暂存结果），以避免写入放大的级联效应。
-*   **动作 (`fillTablesIngestShard`)**：
+*   **触发**：Compactor 发现某层的 `Staging Buffer` 积压严重（`Score > 1`）。
+*   **模式选择 (StagingMode)**：
+    *   **StagingDrain**：将 Staging Shard 合并进 Main Tables，彻底清空缓冲。
+    *   **StagingKeep**：合并 Shard，但如果下游压力也大，可能会将输出结果继续保留在 Staging Buffer 中（暂存结果），以避免写入放大的级联效应。
+*   **动作 (`fillTablesStagingShard`)**：
     1.  挑选一个积压最严重的 `Shard`。
     2.  锁定该 Shard 和 L1 中与其 Key 范围重叠的 `Main Tables`。
     3.  执行标准的归并排序。
@@ -117,7 +117,7 @@ graph TD
 1.  **查 MemTable**。
 2.  **查 L0**。
 3.  **查 L1**：
-    *   **先查 L1 Ingest Buffer**：因为这里面是从 L0 刚“甩”下来的新数据，版本更新。
+    *   **先查 L1 Staging Buffer**：因为这里面是从 L0 刚“甩”下来的新数据，版本更新。
         *   需要在 Shard 内进行二分查找（因为 buffer 内的表之间可能有重叠）。
     *   **后查 L1 Main Tables**：这是标准的有序数据，查找很快。
 4.  **查 L2...**
@@ -136,11 +136,11 @@ graph TD
 
 ## 6. 总结
 
-NoKV 的 Compaction 和 Ingest Buffer 设计解决了一组复杂的工程矛盾：
+NoKV 的 Compaction 和 Staging Buffer 设计解决了一组复杂的工程矛盾：
 
 | 问题 | 传统方案 | NoKV 方案 | 收益 |
 | :--- | :--- | :--- | :--- |
-| **L0 拥堵** | 阻塞写入，强制合并 | **L0 -> Ingest Buffer** (快速卸载) | **零写停顿 (Zero Write Stall)** |
+| **L0 拥堵** | 阻塞写入，强制合并 | **L0 -> Staging Buffer** (快速卸载) | **零写停顿 (Zero Write Stall)** |
 | **合并卡顿** | 单线程大合并 | **Sharding + Subcompaction** | 并行处理，利用多核/SSD 优势 |
 | **VLog 膨胀** | 被动等待 | **Value-Aware Scoring** | 主动出击，加速空间回收 |
 
@@ -153,25 +153,25 @@ NoKV 的 Compaction 和 Ingest Buffer 设计解决了一组复杂的工程矛盾
 ### 7.1 与 bLSM / Performance Stability 的对比
 | 论文观点 | 原文侧重点 | NoKV 改动 | 实际影响 |
 | :-- | :-- | :-- | :-- |
-| 写停顿主因是 L0 拥堵 + Compaction 过慢 | 强调稳定吞吐 | **Ingest Buffer + 快速卸载** | 写停顿几乎消失 |
+| 写停顿主因是 L0 拥堵 + Compaction 过慢 | 强调稳定吞吐 | **Staging Buffer + 快速卸载** | 写停顿几乎消失 |
 | 需要把后台任务节奏“拉平” | 关注 tail latency | **分片 + 并行 compaction + 动态调度** | 把抖动压在后台 |
 
 ### 7.2 与 Monkey / Dostoevsky 的对比
 | 论文观点 | 原文侧重点 | NoKV 改动 | 实际影响 |
 | :-- | :-- | :-- | :-- |
-| LSM 参数需全局权衡（读/写/空间） | 理论模型 | **引入 ingest buffer 作为工程缓冲层** | 实际调参更稳定 |
-| Lazy leveling 降低合并成本 | 减少写放大 | **IngestKeep/Drain 模式** | 热点时延降低 |
+| LSM 参数需全局权衡（读/写/空间） | 理论模型 | **引入 staging buffer 作为工程缓冲层** | 实际调参更稳定 |
+| Lazy leveling 降低合并成本 | 减少写放大 | **StagingKeep/Drain 模式** | 热点时延降低 |
 
 ### 7.3 与 RocksDB / PebblesDB 的对比
 | 系统 | 原始设计 | NoKV 改动 | 说明 |
 | :-- | :-- | :-- | :-- |
-| RocksDB | L0 → leveled，universal 作为可选 | **引入每层 ingest 缓冲区** | 更适合 burst 场景 |
+| RocksDB | L0 → leveled，universal 作为可选 | **引入每层 staging 缓冲区** | 更适合 burst 场景 |
 | PebblesDB | 碎片化 LSM | **按前缀分片 shard** | 保持范围局部性 |
 
 ### 7.4 与论文原型不同的工程化点
 
-* **分片并行**：按 key 前缀 shard，使 ingest 与 compaction 可并行而不互相覆盖。
-* **IngestKeep / IngestDrain**：把“快速止血”和“慢速还债”拆成两条路径。
+* **分片并行**：按 key 前缀 shard，使 staging 与 compaction 可并行而不互相覆盖。
+* **StagingKeep / StagingDrain**：把“快速止血”和“慢速还债”拆成两条路径。
 * **Value-aware compaction**：与 VLog discard stats 联动，把无效指针尽快清掉。
 * **调度基于 backlog/score**：优先处理最急的 shard，而非随机挑选。
 

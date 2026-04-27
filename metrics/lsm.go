@@ -2,20 +2,20 @@ package metrics
 
 // LevelMetrics captures aggregated statistics for a single LSM level.
 type LevelMetrics struct {
-	Level                int
-	TableCount           int
-	SizeBytes            int64
-	ValueBytes           int64
-	StaleBytes           int64
-	SpillTableCount      int
-	SpillSizeBytes       int64
-	SpillValueBytes      int64
-	ValueDensity         float64
-	SpillValueDensity    float64
-	SpillRuns            int64
-	SpillMs              float64
-	SpillTablesCompacted int64
-	SpillMergeRuns       int64
-	SpillMergeMs         float64
-	SpillMergeTables     int64
+	Level                  int
+	TableCount             int
+	SizeBytes              int64
+	ValueBytes             int64
+	StaleBytes             int64
+	StagingTableCount      int
+	StagingSizeBytes       int64
+	StagingValueBytes      int64
+	ValueDensity           float64
+	StagingValueDensity    float64
+	StagingRuns            int64
+	StagingMs              float64
+	StagingTablesCompacted int64
+	StagingMergeRuns       int64
+	StagingMergeMs         float64
+	StagingMergeTables     int64
 }

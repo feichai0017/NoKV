@@ -267,9 +267,9 @@ func throttleRateForPressure(pressure uint32, minRate, maxRate int64) uint64 {
 const (
 	// PolicyLeveled keeps the legacy leveled-style execution ordering.
 	PolicyLeveled = "leveled"
-	// PolicyTiered prioritizes spill-buffer convergence before regular compaction.
+	// PolicyTiered prioritizes staging-buffer convergence before regular compaction.
 	PolicyTiered = "tiered"
-	// PolicyHybrid adapts between leveled and tiered ordering by spill pressure.
+	// PolicyHybrid adapts between leveled and tiered ordering by staging pressure.
 	PolicyHybrid = "hybrid"
 )
 
@@ -314,8 +314,8 @@ type FeedbackEvent struct {
 // The mode stays concrete and local: there is one policy object with one
 // explicit behavior switch, not a plugin surface.
 type SchedulerPolicy struct {
-	mode      string
-	spillBias atomic.Int32
+	mode        string
+	stagingBias atomic.Int32
 }
 
 // NewSchedulerPolicy constructs a compaction scheduler policy by name.
@@ -353,8 +353,8 @@ func (p *SchedulerPolicy) Arrange(workerID int, priorities []Priority) []Priorit
 	}
 }
 
-// Observe spills runtime execution feedback and updates scheduler bias when
-// the configured mode uses spill-aware ordering.
+// Observe staging runtime execution feedback and updates scheduler bias when
+// the configured mode uses staging-aware ordering.
 func (p *SchedulerPolicy) Observe(event FeedbackEvent) {
 	if p == nil {
 		return
@@ -377,10 +377,10 @@ func arrangeLeveled(workerID int, priorities []Priority) []Priority {
 	return priorities
 }
 
-// arrangeTiered prioritizes spill convergence with guarded fairness.
+// arrangeTiered prioritizes staging convergence with guarded fairness.
 //
 // Design:
-//   - Split priorities into four queues: L0 relief, spill-keep, spill-drain,
+//   - Split priorities into four queues: L0 relief, staging-keep, staging-drain,
 //     and regular.
 //   - Interleave queues by pressure-aware quotas instead of draining one queue
 //     completely, to avoid starvation.
@@ -390,23 +390,23 @@ func (p *SchedulerPolicy) arrangeTiered(workerID int, priorities []Priority) []P
 		return priorities
 	}
 	ordered := append([]Priority(nil), priorities...)
-	if !hasSpillWork(ordered) {
+	if !hasStagingWork(ordered) {
 		return arrangeLeveled(workerID, ordered)
 	}
 	queues := classifyQueues(ordered)
-	spillScore := maxScore(queues.keep, queues.drain)
-	quota := p.effectiveQuota(spillScore)
+	stagingScore := maxScore(queues.keep, queues.drain)
+	quota := p.effectiveQuota(stagingScore)
 	return arrangeByQueues(workerID, queues, quota)
 }
 
-// observeTiered observes runtime execution feedback and updates spill-aware
+// observeTiered observes runtime execution feedback and updates staging-aware
 // scheduling bias.
 func (p *SchedulerPolicy) observeTiered(event FeedbackEvent) {
 	if p == nil {
 		return
 	}
-	if !event.Priority.SpillMode.UsesSpill() {
-		// Non-spill success gradually decays stale spill bias.
+	if !event.Priority.StagingMode.UsesStaging() {
+		// Non-staging success gradually decays stale staging bias.
 		if event.Err == nil {
 			p.decayBiasTowardsZero()
 		}
@@ -427,28 +427,28 @@ func (p *SchedulerPolicy) observeTiered(event FeedbackEvent) {
 // arrangeHybrid adapts between leveled and tiered scheduling.
 //
 // Design:
-// - Low spill pressure: keep leveled behavior for stable mixed workloads.
-// - High spill pressure: switch to tiered queue scheduling.
+// - Low staging pressure: keep leveled behavior for stable mixed workloads.
+// - High staging pressure: switch to tiered queue scheduling.
 func (p *SchedulerPolicy) arrangeHybrid(workerID int, priorities []Priority) []Priority {
 	if len(priorities) <= 1 {
 		return priorities
 	}
 	ordered := append([]Priority(nil), priorities...)
-	if !hasSpillWork(ordered) {
+	if !hasStagingWork(ordered) {
 		return arrangeLeveled(workerID, ordered)
 	}
 	queues := classifyQueues(ordered)
-	spillScore := maxScore(queues.keep, queues.drain)
-	if spillScore < hybridTieredThreshold {
+	stagingScore := maxScore(queues.keep, queues.drain)
+	if stagingScore < hybridTieredThreshold {
 		return arrangeLeveled(workerID, ordered)
 	}
-	quota := p.effectiveQuota(spillScore)
+	quota := p.effectiveQuota(stagingScore)
 	return arrangeByQueues(workerID, queues, quota)
 }
 
-func hasSpillWork(priorities []Priority) bool {
+func hasStagingWork(priorities []Priority) bool {
 	return slices.ContainsFunc(priorities, func(p Priority) bool {
-		return p.SpillMode.UsesSpill()
+		return p.StagingMode.UsesStaging()
 	})
 }
 
@@ -458,9 +458,9 @@ func classifyQueues(priorities []Priority) priorityQueues {
 		switch {
 		case p.Level == 0 && p.Adjusted >= l0ReliefScoreMin:
 			q.l0 = append(q.l0, p)
-		case p.SpillMode == SpillKeep:
+		case p.StagingMode == StagingKeep:
 			q.keep = append(q.keep, p)
-		case p.SpillMode == SpillDrain:
+		case p.StagingMode == StagingDrain:
 			q.drain = append(q.drain, p)
 		default:
 			q.regular = append(q.regular, p)
@@ -473,26 +473,26 @@ func classifyQueues(priorities []Priority) priorityQueues {
 	return q
 }
 
-func tieredQuotaByPressure(spillScore float64) queueQuota {
+func tieredQuotaByPressure(stagingScore float64) queueQuota {
 	switch {
-	case spillScore >= 6:
-		// Severe spill backlog: aggressively drain/merge spill first.
+	case stagingScore >= 6:
+		// Severe staging backlog: aggressively drain/merge staging first.
 		return queueQuota{l0: 2, keep: 3, drain: 3, regular: 1}
-	case spillScore >= 3:
-		// Balanced mode: keep spill and regular making progress together.
+	case stagingScore >= 3:
+		// Balanced mode: keep staging and regular making progress together.
 		return queueQuota{l0: 2, keep: 2, drain: 2, regular: 2}
 	default:
-		// Mild spill pressure: preserve regular throughput while still servicing spill.
+		// Mild staging pressure: preserve regular throughput while still servicing staging.
 		return queueQuota{l0: 2, keep: 1, drain: 1, regular: 3}
 	}
 }
 
-func (p *SchedulerPolicy) effectiveQuota(spillScore float64) queueQuota {
-	quota := tieredQuotaByPressure(spillScore)
-	return applySpillBias(quota, int(p.spillBias.Load()))
+func (p *SchedulerPolicy) effectiveQuota(stagingScore float64) queueQuota {
+	quota := tieredQuotaByPressure(stagingScore)
+	return applyStagingBias(quota, int(p.stagingBias.Load()))
 }
 
-func applySpillBias(quota queueQuota, bias int) queueQuota {
+func applyStagingBias(quota queueQuota, bias int) queueQuota {
 	if bias == 0 {
 		return quota
 	}
@@ -519,9 +519,9 @@ func applySpillBias(quota queueQuota, bias int) queueQuota {
 
 func (p *SchedulerPolicy) shiftBias(delta int32) {
 	for {
-		old := p.spillBias.Load()
+		old := p.stagingBias.Load()
 		next := clampI32(old+delta, -2, 2)
-		if p.spillBias.CompareAndSwap(old, next) {
+		if p.stagingBias.CompareAndSwap(old, next) {
 			return
 		}
 	}
@@ -529,7 +529,7 @@ func (p *SchedulerPolicy) shiftBias(delta int32) {
 
 func (p *SchedulerPolicy) decayBiasTowardsZero() {
 	for {
-		old := p.spillBias.Load()
+		old := p.stagingBias.Load()
 		var next int32
 		switch {
 		case old > 0:
@@ -539,7 +539,7 @@ func (p *SchedulerPolicy) decayBiasTowardsZero() {
 		default:
 			return
 		}
-		if p.spillBias.CompareAndSwap(old, next) {
+		if p.stagingBias.CompareAndSwap(old, next) {
 			return
 		}
 	}

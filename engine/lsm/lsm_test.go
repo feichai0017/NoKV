@@ -330,7 +330,7 @@ func TestMemtableTombstoneShadowsSST(t *testing.T) {
 	}
 }
 
-func TestSpillBufferAccounting(t *testing.T) {
+func TestStagingBufferAccounting(t *testing.T) {
 	now := time.Now()
 	t1 := &table{
 		fid:           1,
@@ -361,7 +361,7 @@ func TestSpillBufferAccounting(t *testing.T) {
 		maxVersion: 4,
 	}
 
-	var buf spillBuffer
+	var buf stagingBuffer
 	buf.add(t1)
 	buf.addBatch([]*table{t2, t3})
 
@@ -744,7 +744,7 @@ func TestMaxLevelCompactionRangeDeleteResurrection(t *testing.T) {
 	}
 }
 
-func TestLevelHandlerSpillMetrics(t *testing.T) {
+func TestLevelHandlerStagingMetrics(t *testing.T) {
 	now := time.Now()
 	t1 := &table{
 		fid:        10,
@@ -766,30 +766,30 @@ func TestLevelHandlerSpillMetrics(t *testing.T) {
 	}
 
 	lh := &levelHandler{levelNum: 3}
-	lh.addSpill(t1)
-	lh.addSpill(t2)
+	lh.addStaging(t1)
+	lh.addStaging(t2)
 
-	if got := lh.numSpillTables(); got != 2 {
-		t.Fatalf("expected 2 spill tables, got %d", got)
+	if got := lh.numStagingTables(); got != 2 {
+		t.Fatalf("expected 2 staging tables, got %d", got)
 	}
-	if got := lh.spillDataSize(); got != 180 {
-		t.Fatalf("expected spill size 180, got %d", got)
+	if got := lh.stagingDataSize(); got != 180 {
+		t.Fatalf("expected staging size 180, got %d", got)
 	}
-	if got := lh.spillValueBytes(); got != 40 {
-		t.Fatalf("expected spill value bytes 40, got %d", got)
+	if got := lh.stagingValueBytes(); got != 40 {
+		t.Fatalf("expected staging value bytes 40, got %d", got)
 	}
 	expectDensity := float64(40) / float64(180)
-	if math.Abs(lh.spillValueDensity()-expectDensity) > 1e-9 {
-		t.Fatalf("unexpected spill density")
+	if math.Abs(lh.stagingValueDensity()-expectDensity) > 1e-9 {
+		t.Fatalf("unexpected staging density")
 	}
-	if math.Abs(lh.spillDensityLocked()-expectDensity) > 1e-9 {
-		t.Fatalf("unexpected spill density locked")
+	if math.Abs(lh.stagingDensityLocked()-expectDensity) > 1e-9 {
+		t.Fatalf("unexpected staging density locked")
 	}
-	if lh.maxSpillAgeSeconds() <= 0 {
-		t.Fatalf("expected non-zero max spill age")
+	if lh.maxStagingAgeSeconds() <= 0 {
+		t.Fatalf("expected non-zero max staging age")
 	}
-	if idx := lh.spillShardByBacklog(); idx < 0 {
-		t.Fatalf("expected valid spill shard index")
+	if idx := lh.stagingShardByBacklog(); idx < 0 {
+		t.Fatalf("expected valid staging shard index")
 	}
 }
 
@@ -882,7 +882,7 @@ func tableContainsRangeDelete(tbl *table) bool {
 	return false
 }
 
-func TestSpillSearch(t *testing.T) {
+func TestStagingSearch(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -892,12 +892,12 @@ func TestSpillSearch(t *testing.T) {
 
 	key := kv.InternalKey(kv.CFDefault, []byte("b"), 1)
 
-	var buf spillBuffer
+	var buf stagingBuffer
 	buf.add(tbl)
 
 	found, err := buf.search(key, nil)
 	if err != nil {
-		t.Fatalf("spill search: %v", err)
+		t.Fatalf("staging search: %v", err)
 	}
 	if found == nil {
 		t.Fatalf("expected entry")
@@ -914,7 +914,7 @@ func TestSpillSearch(t *testing.T) {
 	}
 }
 
-func TestSpillSearchPrefersLatestVersion(t *testing.T) {
+func TestStagingSearchPrefersLatestVersion(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -924,14 +924,14 @@ func TestSpillSearchPrefersLatestVersion(t *testing.T) {
 	defer func() { _ = tblOld.DecrRef() }()
 	defer func() { _ = tblNew.DecrRef() }()
 
-	var buf spillBuffer
+	var buf stagingBuffer
 	buf.add(tblOld)
 	buf.add(tblNew)
 
 	key := kv.InternalKey(kv.CFDefault, []byte("b"), math.MaxUint64)
 	found, err := buf.search(key, nil)
 	if err != nil || found == nil {
-		t.Fatalf("spill search err=%v entry=%v", err, found)
+		t.Fatalf("staging search err=%v entry=%v", err, found)
 	}
 	if string(found.Value) != "v3" {
 		t.Fatalf("expected latest value v3, got %q", string(found.Value))
@@ -944,13 +944,13 @@ func TestLevelGetPrefersMainVersion(t *testing.T) {
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
 
-	spillTbl := buildTableWithEntry(t, lsm, 21, "k", 1, "old")
+	stagingTbl := buildTableWithEntry(t, lsm, 21, "k", 1, "old")
 	mainTbl := buildTableWithEntry(t, lsm, 22, "k", 3, "new")
-	defer func() { _ = spillTbl.DecrRef() }()
+	defer func() { _ = stagingTbl.DecrRef() }()
 	defer func() { _ = mainTbl.DecrRef() }()
 
 	lh := &levelHandler{levelNum: 3}
-	lh.spill.add(spillTbl)
+	lh.staging.add(stagingTbl)
 	lh.tables = []*table{mainTbl}
 
 	key := kv.InternalKey(kv.CFDefault, []byte("k"), math.MaxUint64)
@@ -964,7 +964,7 @@ func TestLevelGetPrefersMainVersion(t *testing.T) {
 	got.DecrRef()
 }
 
-func TestLevelGetMainWhenSpillEmpty(t *testing.T) {
+func TestLevelGetMainWhenStagingEmpty(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -1038,7 +1038,7 @@ func TestLevelSearchRespectsMaxVersion(t *testing.T) {
 	}
 }
 
-func TestLevelSearchSpillAndLN(t *testing.T) {
+func TestLevelSearchStagingAndLN(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -1049,10 +1049,10 @@ func TestLevelSearchSpillAndLN(t *testing.T) {
 	key := kv.InternalKey(kv.CFDefault, []byte("c"), 1)
 
 	lh := &levelHandler{levelNum: 3}
-	lh.spill.add(tbl)
-	found, err := lh.spill.search(key, nil)
+	lh.staging.add(tbl)
+	found, err := lh.staging.search(key, nil)
 	if err != nil || found == nil {
-		t.Fatalf("spill search err=%v entry=%v", err, found)
+		t.Fatalf("staging search err=%v entry=%v", err, found)
 	}
 	found.DecrRef()
 
@@ -1067,11 +1067,11 @@ func TestLevelSearchSpillAndLN(t *testing.T) {
 		t.Fatalf("expected no table for key")
 	}
 
-	spillHit, err := lh.Get(key)
-	if err != nil || spillHit == nil {
-		t.Fatalf("level get err=%v entry=%v", err, spillHit)
+	stagingHit, err := lh.Get(key)
+	if err != nil || stagingHit == nil {
+		t.Fatalf("level get err=%v entry=%v", err, stagingHit)
 	}
-	spillHit.DecrRef()
+	stagingHit.DecrRef()
 
 	l0 := &levelHandler{levelNum: 0, tables: []*table{tbl}}
 	l0Hit, err := l0.Get(key)
@@ -1558,8 +1558,8 @@ func TestLevelHandlerOverlapAndMetrics(t *testing.T) {
 	lh.tables = []*table{
 		{minKey: min, maxKey: max},
 	}
-	lh.spill.ensureInit()
-	lh.spill.add(&table{
+	lh.staging.ensureInit()
+	lh.staging.add(&table{
 		minKey:    kv.InternalKey(kv.CFDefault, []byte("k"), 1),
 		maxKey:    kv.InternalKey(kv.CFDefault, []byte("p"), 1),
 		size:      50,
@@ -1570,7 +1570,7 @@ func TestLevelHandlerOverlapAndMetrics(t *testing.T) {
 	lh.totalValueSize = 40
 	lh.totalStaleSize = 10
 	metrics := lh.metricsSnapshot()
-	if metrics.ValueDensity <= 0 || metrics.SpillValueDensity <= 0 {
+	if metrics.ValueDensity <= 0 || metrics.StagingValueDensity <= 0 {
 		t.Fatalf("expected non-zero density metrics")
 	}
 
@@ -1597,7 +1597,7 @@ func TestCompact(t *testing.T) {
 				return true
 			}
 		}
-		for _, sh := range lh.spill.shards {
+		for _, sh := range lh.staging.shards {
 			for _, t := range sh.tables {
 				if t.fid == fid {
 					return true
@@ -1671,13 +1671,13 @@ func TestCompact(t *testing.T) {
 		// Use a test-only tweak to satisfy validation checks.
 		tricky(cd.thisLevel.tablesSnapshot())
 		ok := lsm.levels.fillTables(cd)
-		if !ok && lsm.levels.levels[6].numSpillTables() > 0 {
+		if !ok && lsm.levels.levels[6].numStagingTables() > 0 {
 			pri := Priority{
-				Level:     6,
-				SpillMode: SpillDrain,
-				Target:    lsm.levels.levelTargets(),
-				Score:     2,
-				Adjusted:  2,
+				Level:       6,
+				StagingMode: StagingDrain,
+				Target:      lsm.levels.levelTargets(),
+				Score:       2,
+				Adjusted:    2,
 			}
 			require.NoError(t, lsm.levels.doCompact(0, pri))
 			tricky(cd.thisLevel.tablesSnapshot())
@@ -1701,7 +1701,7 @@ func TestCompact(t *testing.T) {
 				}
 			}
 			if !ok {
-				for _, sh := range level.spill.shards {
+				for _, sh := range level.staging.shards {
 					for _, tbl := range sh.tables {
 						if tbl.fid > prevMax {
 							ok = true
@@ -1746,7 +1746,7 @@ func TestCompact(t *testing.T) {
 	runTest(1, l0TOLMax, l0ToL0, nextCompact, maxToMax, parallerCompact)
 }
 
-func TestSpillMergeStaysInSpill(t *testing.T) {
+func TestStagingMergeStaysInStaging(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -1754,93 +1754,93 @@ func TestSpillMergeStaysInSpill(t *testing.T) {
 	// Generate enough data to create multiple L0 tables.
 	baseTest(t, lsm, 256)
 
-	// Move one L0 table to the max level spill buffer.
+	// Move one L0 table to the max level staging buffer.
 	l0 := lsm.levels.levels[0]
 	tables := l0.tablesSnapshot()
 	if len(tables) == 0 {
-		t.Fatalf("expected L0 tables before spill merge test")
+		t.Fatalf("expected L0 tables before staging merge test")
 	}
 	cd := buildCompactDef(lsm, 0, 0, 6)
 	cd.top = []*table{tables[0]}
 	cd.plan.ThisRange = getKeyRange(cd.top...)
 	cd.plan.NextRange = cd.plan.ThisRange
-	if err := lsm.levels.moveToSpill(cd); err != nil {
-		t.Fatalf("moveToSpill: %v", err)
+	if err := lsm.levels.moveToStaging(cd); err != nil {
+		t.Fatalf("moveToStaging: %v", err)
 	}
 
 	target := lsm.levels.levels[6]
-	beforeSpill := target.numSpillTables()
-	if beforeSpill == 0 {
-		t.Fatalf("expected spill tables after moveToSpill")
+	beforeStaging := target.numStagingTables()
+	if beforeStaging == 0 {
+		t.Fatalf("expected staging tables after moveToStaging")
 	}
 	beforeMain := target.numTables()
 
 	pri := Priority{
-		Level:     6,
-		Score:     5.0,
-		Adjusted:  5.0,
-		Target:    lsm.levels.levelTargets(),
-		SpillMode: SpillKeep,
+		Level:       6,
+		Score:       5.0,
+		Adjusted:    5.0,
+		Target:      lsm.levels.levelTargets(),
+		StagingMode: StagingKeep,
 	}
 	if err := lsm.levels.doCompact(0, pri); err != nil {
-		t.Fatalf("spill merge compact failed: %v", err)
+		t.Fatalf("staging merge compact failed: %v", err)
 	}
 
-	afterSpill := target.numSpillTables()
-	if afterSpill == 0 {
-		t.Fatalf("expected spill tables to remain after merge")
+	afterStaging := target.numStagingTables()
+	if afterStaging == 0 {
+		t.Fatalf("expected staging tables to remain after merge")
 	}
 	if target.numTables() != beforeMain {
 		t.Fatalf("main table count changed unexpectedly: before=%d after=%d", beforeMain, target.numTables())
 	}
 }
 
-// Concurrent shard compaction should not violate compactState and should keep spill merge output in spill.
-func TestSpillShardParallelSafety(t *testing.T) {
+// Concurrent shard compaction should not violate compactState and should keep staging merge output in staging.
+func TestStagingShardParallelSafety(t *testing.T) {
 	clearDir()
 	opt.NumCompactors = 4
-	opt.SpillShardParallelism = 4
+	opt.StagingShardParallelism = 4
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
 
-	// Write enough data to spawn multiple L0 tables, then move to spill.
+	// Write enough data to spawn multiple L0 tables, then move to staging.
 	for range 4 {
 		baseTest(t, lsm, 512)
 	}
 	l0 := lsm.levels.levels[0]
 	tables := l0.tablesSnapshot()
 	if len(tables) == 0 {
-		t.Fatalf("expected L0 tables for parallel spill test")
+		t.Fatalf("expected L0 tables for parallel staging test")
 	}
 	cd := buildCompactDef(lsm, 0, 0, 6)
 	cd.top = []*table{tables[0]}
 	cd.plan.ThisRange = getKeyRange(cd.top...)
 	cd.plan.NextRange = cd.plan.ThisRange
-	if err := lsm.levels.moveToSpill(cd); err != nil {
-		t.Fatalf("moveToSpill: %v", err)
+	if err := lsm.levels.moveToStaging(cd); err != nil {
+		t.Fatalf("moveToStaging: %v", err)
 	}
 
-	// Trigger parallel spill-only compactions across shards.
+	// Trigger parallel staging-only compactions across shards.
 	pri := Priority{
-		Level:     6,
-		Score:     6.0,
-		Adjusted:  6.0,
-		Target:    lsm.levels.levelTargets(),
-		SpillMode: SpillDrain,
+		Level:       6,
+		Score:       6.0,
+		Adjusted:    6.0,
+		Target:      lsm.levels.levelTargets(),
+		StagingMode: StagingDrain,
 	}
 	if err := lsm.levels.doCompact(0, pri); err != nil {
-		t.Fatalf("parallel spill compaction failed: %v", err)
+		t.Fatalf("parallel staging compaction failed: %v", err)
 	}
 
-	// Ensure manifest/lists are consistent even if spill drained.
+	// Ensure manifest/lists are consistent even if staging drained.
 	target := lsm.levels.levels[6]
-	_ = target.numSpillTables()
+	_ = target.numStagingTables()
 
-	// Simulate restart and ensure spill state can be recovered (may be empty if fully drained).
+	// Simulate restart and ensure staging state can be recovered (may be empty if fully drained).
 	require.NoError(t, lsm.Close())
 	lsm = buildLSM()
 	defer func() { _ = lsm.Close() }()
-	_ = lsm.levels.levels[6].numSpillTables()
+	_ = lsm.levels.levels[6].numStagingTables()
 }
 
 // baseTest performs correctness checks.

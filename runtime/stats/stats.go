@@ -94,42 +94,42 @@ type HotKeyStat struct {
 
 // LSMLevelStats captures aggregated metrics per LSM level.
 type LSMLevelStats struct {
-	Level                     int     `json:"level"`
-	TableCount                int     `json:"tables"`
-	SizeBytes                 int64   `json:"size_bytes"`
-	ValueBytes                int64   `json:"value_bytes"`
-	StaleBytes                int64   `json:"stale_bytes"`
-	SpillTables               int     `json:"spill_tables"`
-	SpillSizeBytes            int64   `json:"spill_size_bytes"`
-	SpillValueBytes           int64   `json:"spill_value_bytes"`
-	ValueDensity              float64 `json:"value_density"`
-	SpillValueDensity         float64 `json:"spill_value_density"`
-	SpillRuns                 int64   `json:"spill_runs"`
-	SpillMs                   float64 `json:"spill_ms"`
-	SpillTablesCompactedCount int64   `json:"spill_tables_compacted"`
-	MergeRuns                 int64   `json:"spill_merge_runs"`
-	MergeMs                   float64 `json:"spill_merge_ms"`
-	MergeTables               int64   `json:"spill_merge_tables"`
+	Level                       int     `json:"level"`
+	TableCount                  int     `json:"tables"`
+	SizeBytes                   int64   `json:"size_bytes"`
+	ValueBytes                  int64   `json:"value_bytes"`
+	StaleBytes                  int64   `json:"stale_bytes"`
+	StagingTables               int     `json:"staging_tables"`
+	StagingSizeBytes            int64   `json:"staging_size_bytes"`
+	StagingValueBytes           int64   `json:"staging_value_bytes"`
+	ValueDensity                float64 `json:"value_density"`
+	StagingValueDensity         float64 `json:"staging_value_density"`
+	StagingRuns                 int64   `json:"staging_runs"`
+	StagingMs                   float64 `json:"staging_ms"`
+	StagingTablesCompactedCount int64   `json:"staging_tables_compacted"`
+	MergeRuns                   int64   `json:"staging_merge_runs"`
+	MergeMs                     float64 `json:"staging_merge_ms"`
+	MergeTables                 int64   `json:"staging_merge_tables"`
 }
 
 func levelMetricsToStats(lvl metrics.LevelMetrics) LSMLevelStats {
 	return LSMLevelStats{
-		Level:                     lvl.Level,
-		TableCount:                lvl.TableCount,
-		SizeBytes:                 lvl.SizeBytes,
-		ValueBytes:                lvl.ValueBytes,
-		StaleBytes:                lvl.StaleBytes,
-		SpillTables:               lvl.SpillTableCount,
-		SpillSizeBytes:            lvl.SpillSizeBytes,
-		SpillValueBytes:           lvl.SpillValueBytes,
-		ValueDensity:              lvl.ValueDensity,
-		SpillValueDensity:         lvl.SpillValueDensity,
-		SpillRuns:                 lvl.SpillRuns,
-		SpillMs:                   lvl.SpillMs,
-		SpillTablesCompactedCount: lvl.SpillTablesCompacted,
-		MergeRuns:                 lvl.SpillMergeRuns,
-		MergeMs:                   lvl.SpillMergeMs,
-		MergeTables:               lvl.SpillMergeTables,
+		Level:                       lvl.Level,
+		TableCount:                  lvl.TableCount,
+		SizeBytes:                   lvl.SizeBytes,
+		ValueBytes:                  lvl.ValueBytes,
+		StaleBytes:                  lvl.StaleBytes,
+		StagingTables:               lvl.StagingTableCount,
+		StagingSizeBytes:            lvl.StagingSizeBytes,
+		StagingValueBytes:           lvl.StagingValueBytes,
+		ValueDensity:                lvl.ValueDensity,
+		StagingValueDensity:         lvl.StagingValueDensity,
+		StagingRuns:                 lvl.StagingRuns,
+		StagingMs:                   lvl.StagingMs,
+		StagingTablesCompactedCount: lvl.StagingTablesCompacted,
+		MergeRuns:                   lvl.StagingMergeRuns,
+		MergeMs:                     lvl.StagingMergeMs,
+		MergeTables:                 lvl.StagingMergeTables,
 	}
 }
 
@@ -167,19 +167,19 @@ type FlushStatsSnapshot struct {
 	Completed     int64   `json:"completed"`
 }
 
-// CompactionStatsSnapshot summarizes compaction backlog, runtime, and spill behavior.
+// CompactionStatsSnapshot summarizes compaction backlog, runtime, and staging behavior.
 type CompactionStatsSnapshot struct {
 	Backlog              int64   `json:"backlog"`
 	MaxScore             float64 `json:"max_score"`
 	LastDurationMs       float64 `json:"last_duration_ms"`
 	MaxDurationMs        float64 `json:"max_duration_ms"`
 	Runs                 uint64  `json:"runs"`
-	SpillRuns            int64   `json:"spill_runs"`
-	MergeRuns            int64   `json:"spill_merge_runs"`
-	SpillMs              float64 `json:"spill_ms"`
-	MergeMs              float64 `json:"spill_merge_ms"`
-	SpillTables          int64   `json:"spill_tables"`
-	MergeTables          int64   `json:"spill_merge_tables"`
+	StagingRuns          int64   `json:"staging_runs"`
+	MergeRuns            int64   `json:"staging_merge_runs"`
+	StagingMs            float64 `json:"staging_ms"`
+	MergeMs              float64 `json:"staging_merge_ms"`
+	StagingTables        int64   `json:"staging_tables"`
+	MergeTables          int64   `json:"staging_merge_tables"`
 	ValueWeight          float64 `json:"value_weight"`
 	ValueWeightSuggested float64 `json:"value_weight_suggested,omitempty"`
 }
@@ -420,31 +420,31 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		if levels := diag.Levels; len(levels) > 0 {
 			snap.LSM.Levels = make([]LSMLevelStats, 0, len(levels))
 			var maxDensity float64
-			var spillRuns, spillMergeRuns int64
-			var spillMs, spillMergeMs float64
-			var spillTables, spillMergeTables int64
+			var stagingRuns, stagingMergeRuns int64
+			var stagingMs, stagingMergeMs float64
+			var stagingTables, stagingMergeTables int64
 			for _, lvl := range levels {
 				statsLvl := levelMetricsToStats(lvl)
 				snap.LSM.Levels = append(snap.LSM.Levels, statsLvl)
 				if statsLvl.ValueDensity > maxDensity {
 					maxDensity = statsLvl.ValueDensity
 				}
-				if statsLvl.SpillValueDensity > maxDensity {
-					maxDensity = statsLvl.SpillValueDensity
+				if statsLvl.StagingValueDensity > maxDensity {
+					maxDensity = statsLvl.StagingValueDensity
 				}
-				spillRuns += statsLvl.SpillRuns
-				spillMergeRuns += statsLvl.MergeRuns
-				spillMs += statsLvl.SpillMs
-				spillMergeMs += statsLvl.MergeMs
-				spillTables += statsLvl.SpillTablesCompactedCount
-				spillMergeTables += statsLvl.MergeTables
+				stagingRuns += statsLvl.StagingRuns
+				stagingMergeRuns += statsLvl.MergeRuns
+				stagingMs += statsLvl.StagingMs
+				stagingMergeMs += statsLvl.MergeMs
+				stagingTables += statsLvl.StagingTablesCompactedCount
+				stagingMergeTables += statsLvl.MergeTables
 			}
-			snap.Compaction.SpillRuns = spillRuns
-			snap.Compaction.MergeRuns = spillMergeRuns
-			snap.Compaction.SpillMs = spillMs
-			snap.Compaction.MergeMs = spillMergeMs
-			snap.Compaction.SpillTables = spillTables
-			snap.Compaction.MergeTables = spillMergeTables
+			snap.Compaction.StagingRuns = stagingRuns
+			snap.Compaction.MergeRuns = stagingMergeRuns
+			snap.Compaction.StagingMs = stagingMs
+			snap.Compaction.MergeMs = stagingMergeMs
+			snap.Compaction.StagingTables = stagingTables
+			snap.Compaction.MergeTables = stagingMergeTables
 			snap.LSM.ValueDensityMax = maxDensity
 			if alertThreshold > 0 && maxDensity >= alertThreshold {
 				snap.LSM.ValueDensityAlert = true
@@ -462,7 +462,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		if len(snap.LSM.Levels) > 0 {
 			var totalValue int64
 			for _, lvl := range snap.LSM.Levels {
-				totalValue += lvl.ValueBytes + lvl.SpillValueBytes
+				totalValue += lvl.ValueBytes + lvl.StagingValueBytes
 			}
 			snap.LSM.ValueBytesTotal = totalValue
 		}

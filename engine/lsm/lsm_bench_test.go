@@ -50,9 +50,9 @@ func newBenchLSMWithEngine(b *testing.B, memTableSize int64, memTableEngine stri
 		NumLevelZeroTables:            8,
 		MaxLevelNum:                   utils.MaxLevelNum,
 		NumCompactors:                 1,
-		SpillCompactBatchSize:         4,
-		SpillBacklogMergeScore:        2.0,
-		SpillShardParallelism:         1,
+		StagingCompactBatchSize:       4,
+		StagingBacklogMergeScore:      2.0,
+		StagingShardParallelism:       1,
 		CompactionValueWeight:         0.35,
 		CompactionValueAlertThreshold: 0.6,
 	}

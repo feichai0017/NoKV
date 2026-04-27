@@ -29,18 +29,18 @@ func (lm *levelManager) buildPickerInput() PickerInput {
 			continue
 		}
 		li := LevelInput{
-			Level:             i,
-			NumTables:         lvl.numTables(),
-			TotalSize:         lvl.getTotalSize(),
-			TotalValueBytes:   lvl.getTotalValueSize(),
-			MainValueBytes:    lvl.mainValueBytes(),
-			SpillTables:       lvl.numSpillTables(),
-			SpillSize:         lvl.spillDataSize(),
-			SpillValueBytes:   lvl.spillValueBytes(),
-			SpillValueDensity: lvl.spillValueDensity(),
-			SpillAgeSeconds:   lvl.maxSpillAgeSeconds(),
-			KeyCount:          lvl.keyCount(),
-			RangeTombstones:   lvl.rangeTombstoneCount(),
+			Level:               i,
+			NumTables:           lvl.numTables(),
+			TotalSize:           lvl.getTotalSize(),
+			TotalValueBytes:     lvl.getTotalValueSize(),
+			MainValueBytes:      lvl.mainValueBytes(),
+			StagingTables:       lvl.numStagingTables(),
+			StagingSize:         lvl.stagingDataSize(),
+			StagingValueBytes:   lvl.stagingValueBytes(),
+			StagingValueDensity: lvl.stagingValueDensity(),
+			StagingAgeSeconds:   lvl.maxStagingAgeSeconds(),
+			KeyCount:            lvl.keyCount(),
+			RangeTombstones:     lvl.rangeTombstoneCount(),
 		}
 		if lm.compactState != nil {
 			li.DelSize = lm.compactState.DelSize(i)
@@ -53,7 +53,7 @@ func (lm *levelManager) buildPickerInput() PickerInput {
 		NumLevelZeroTables:        lm.opt.NumLevelZeroTables,
 		BaseTableSize:             lm.opt.BaseTableSize,
 		BaseLevelSize:             lm.opt.BaseLevelSize,
-		SpillBacklogMergeScore:    lm.opt.SpillBacklogMergeScore,
+		StagingBacklogMergeScore:  lm.opt.StagingBacklogMergeScore,
 		CompactionValueWeight:     lm.opt.CompactionValueWeight,
 		CompactionTombstoneWeight: lm.opt.CompactionTombstoneWeight,
 	}
@@ -114,7 +114,7 @@ type Priority struct {
 	Adjusted     float64
 	DropPrefixes [][]byte
 	Target       Targets
-	SpillMode    SpillMode
+	StagingMode  StagingMode
 	StatsTag     string
 }
 
@@ -146,28 +146,28 @@ func MoveL0ToFront(prios []Priority) []Priority {
 	return prios
 }
 
-// SpillMode describes how a compaction interacts with spill tables.
-type SpillMode uint8
+// StagingMode describes how a compaction interacts with staging tables.
+type StagingMode uint8
 
 const (
-	// SpillNone indicates a regular compaction using main tables only.
-	SpillNone SpillMode = iota
-	// SpillDrain compacts spill tables and writes output into main tables.
-	SpillDrain
-	// SpillKeep compacts spill tables and keeps output in spill buffers.
-	SpillKeep
+	// StagingNone indicates a regular compaction using main tables only.
+	StagingNone StagingMode = iota
+	// StagingDrain compacts staging tables and writes output into main tables.
+	StagingDrain
+	// StagingKeep compacts staging tables and keeps output in staging buffers.
+	StagingKeep
 )
 
-func (m SpillMode) UsesSpill() bool {
-	return m != SpillNone
+func (m StagingMode) UsesStaging() bool {
+	return m != StagingNone
 }
 
-func (m SpillMode) KeepsSpill() bool {
-	return m == SpillKeep
+func (m StagingMode) KeepsStaging() bool {
+	return m == StagingKeep
 }
 
-// SpillShardView is a lightweight view of a spill shard for strategy decisions.
-type SpillShardView struct {
+// StagingShardView is a lightweight view of a staging shard for strategy decisions.
+type StagingShardView struct {
 	Index        int
 	TableCount   int
 	SizeBytes    int64
@@ -176,17 +176,17 @@ type SpillShardView struct {
 	ValueDensity float64
 }
 
-// SpillPickInput bundles inputs for spill shard picking.
-type SpillPickInput struct {
-	Shards []SpillShardView
+// StagingPickInput bundles inputs for staging shard picking.
+type StagingPickInput struct {
+	Shards []StagingShardView
 }
 
 // PickShardOrder returns shard indices sorted by backlog size (largest first).
-func PickShardOrder(in SpillPickInput) []int {
+func PickShardOrder(in StagingPickInput) []int {
 	if len(in.Shards) == 0 {
 		return nil
 	}
-	shards := append([]SpillShardView(nil), in.Shards...)
+	shards := append([]StagingShardView(nil), in.Shards...)
 	sort.Slice(shards, func(i, j int) bool {
 		return shards[i].SizeBytes > shards[j].SizeBytes
 	})
@@ -198,7 +198,7 @@ func PickShardOrder(in SpillPickInput) []int {
 }
 
 // PickShardByBacklog returns the shard index with the highest backlog score.
-func PickShardByBacklog(in SpillPickInput) int {
+func PickShardByBacklog(in StagingPickInput) int {
 	if len(in.Shards) == 0 {
 		return -1
 	}
@@ -214,7 +214,7 @@ func PickShardByBacklog(in SpillPickInput) int {
 	return best.Index
 }
 
-func backlogScore(sh SpillShardView) float64 {
+func backlogScore(sh StagingShardView) float64 {
 	score := float64(sh.SizeBytes)
 	if sh.MaxAgeSec > 0 {
 		score *= 1.0 + math.Min(sh.MaxAgeSec/60.0, 4.0)
@@ -298,19 +298,19 @@ func BuildTargets(levelSizes []int64, opt TargetOptions) Targets {
 
 // LevelInput captures per-level metrics for compaction picking.
 type LevelInput struct {
-	Level             int
-	NumTables         int
-	TotalSize         int64
-	TotalValueBytes   int64
-	MainValueBytes    int64
-	KeyCount          uint64
-	RangeTombstones   uint64
-	SpillTables       int
-	SpillSize         int64
-	SpillValueBytes   int64
-	SpillValueDensity float64
-	SpillAgeSeconds   float64
-	DelSize           int64
+	Level               int
+	NumTables           int
+	TotalSize           int64
+	TotalValueBytes     int64
+	MainValueBytes      int64
+	KeyCount            uint64
+	RangeTombstones     uint64
+	StagingTables       int
+	StagingSize         int64
+	StagingValueBytes   int64
+	StagingValueDensity float64
+	StagingAgeSeconds   float64
+	DelSize             int64
 }
 
 // PickerInput captures the inputs needed for compaction picking.
@@ -320,7 +320,7 @@ type PickerInput struct {
 	NumLevelZeroTables        int
 	BaseTableSize             int64
 	BaseLevelSize             int64
-	SpillBacklogMergeScore    float64
+	StagingBacklogMergeScore  float64
 	CompactionValueWeight     float64
 	CompactionTombstoneWeight float64
 }
@@ -332,17 +332,17 @@ func PickPriorities(in PickerInput) []Priority {
 	}
 	prios := make([]Priority, len(in.Levels))
 	var extras []Priority
-	addPriority := func(level int, score float64, mode SpillMode) {
+	addPriority := func(level int, score float64, mode StagingMode) {
 		pri := Priority{
-			Level:     level,
-			Score:     score,
-			Adjusted:  score,
-			Target:    in.Targets,
-			SpillMode: mode,
-			StatsTag:  "regular",
+			Level:       level,
+			Score:       score,
+			Adjusted:    score,
+			Target:      in.Targets,
+			StagingMode: mode,
+			StatsTag:    "regular",
 		}
-		spill := mode.UsesSpill()
-		merge := mode.KeepsSpill()
+		staging := mode.UsesStaging()
+		merge := mode.KeepsStaging()
 		if in.CompactionValueWeight > 0 && level < len(in.Levels) {
 			lvl := in.Levels[level]
 			var valueBytes int64
@@ -354,8 +354,8 @@ func PickPriorities(in PickerInput) []Priority {
 				if target <= 0 {
 					target = float64(in.BaseTableSize)
 				}
-			case spill:
-				valueBytes = lvl.SpillValueBytes
+			case staging:
+				valueBytes = lvl.StagingValueBytes
 				target = float64(in.Targets.FileSz[level])
 				if target <= 0 {
 					target = float64(in.BaseTableSize)
@@ -374,8 +374,8 @@ func PickPriorities(in PickerInput) []Priority {
 				}
 			}
 			valueScore := float64(valueBytes) / target
-			if spill && valueScore == 0 {
-				valueScore = lvl.SpillValueDensity
+			if staging && valueScore == 0 {
+				valueScore = lvl.StagingValueDensity
 			}
 			pri.ApplyValueWeight(in.CompactionValueWeight, valueScore)
 		}
@@ -398,11 +398,11 @@ func PickPriorities(in PickerInput) []Priority {
 	if numL0 <= 0 {
 		numL0 = 1
 	}
-	addPriority(0, float64(in.Levels[0].NumTables)/float64(numL0), SpillNone)
+	addPriority(0, float64(in.Levels[0].NumTables)/float64(numL0), StagingNone)
 
 	for i := 1; i < len(in.Levels); i++ {
 		lvl := in.Levels[i]
-		if lvl.SpillTables > 0 {
+		if lvl.StagingTables > 0 {
 			denom := in.Targets.FileSz[i]
 			if denom <= 0 {
 				denom = in.BaseTableSize
@@ -410,41 +410,41 @@ func PickPriorities(in PickerInput) []Priority {
 					denom = 1
 				}
 			}
-			spillScore := float64(lvl.SpillSize) / float64(denom)
-			if spillScore < 1.0 {
-				spillScore = 1.0
+			stagingScore := float64(lvl.StagingSize) / float64(denom)
+			if stagingScore < 1.0 {
+				stagingScore = 1.0
 			}
-			ageSec := lvl.SpillAgeSeconds
+			ageSec := lvl.StagingAgeSeconds
 			if ageSec > 0 {
 				ageFactor := math.Min(ageSec/60.0, 4.0)
-				spillScore += ageFactor
+				stagingScore += ageFactor
 			}
-			addPriority(i, spillScore+1.0, SpillDrain)
-			trigger := in.SpillBacklogMergeScore
+			addPriority(i, stagingScore+1.0, StagingDrain)
+			trigger := in.StagingBacklogMergeScore
 			if trigger <= 0 {
 				trigger = 2.0
 			}
 			dynTrigger := trigger
-			if spillScore >= trigger*2 {
+			if stagingScore >= trigger*2 {
 				dynTrigger = trigger * 0.8
 			} else if ageSec > 120 {
 				dynTrigger = trigger * 0.9
 			}
-			if spillScore >= dynTrigger {
+			if stagingScore >= dynTrigger {
 				pri := Priority{
-					Level:     i,
-					Score:     spillScore * 0.8,
-					Adjusted:  spillScore * 0.8,
-					Target:    in.Targets,
-					SpillMode: SpillKeep,
-					StatsTag:  "spill-merge",
+					Level:       i,
+					Score:       stagingScore * 0.8,
+					Adjusted:    stagingScore * 0.8,
+					Target:      in.Targets,
+					StagingMode: StagingKeep,
+					StatsTag:    "staging-merge",
 				}
 				prios = append(prios, pri)
 			}
 			continue
 		}
 		sz := lvl.TotalSize - lvl.DelSize
-		addPriority(i, float64(sz)/float64(in.Targets.TargetSz[i]), SpillNone)
+		addPriority(i, float64(sz)/float64(in.Targets.TargetSz[i]), StagingNone)
 	}
 
 	var prevLevel int

@@ -62,7 +62,7 @@ func (cd *compactDef) setNextLevel(lm *levelManager, t Targets, next *levelHandl
 func (cd *compactDef) applyPlan(plan Plan) {
 	plan.ThisFileSize = cd.plan.ThisFileSize
 	plan.NextFileSize = cd.plan.NextFileSize
-	plan.SpillMode = cd.plan.SpillMode
+	plan.StagingMode = cd.plan.StagingMode
 	plan.DropPrefixes = cd.plan.DropPrefixes
 	plan.StatsTag = cd.plan.StatsTag
 	cd.plan = plan
@@ -73,8 +73,8 @@ func (lm *levelManager) resolvePlanLocked(cd *compactDef) bool {
 	if cd == nil || cd.thisLevel == nil || cd.nextLevel == nil {
 		return false
 	}
-	topFromSpill := cd.plan.SpillMode.UsesSpill()
-	top := resolveTablesLocked(cd.thisLevel, cd.plan.TopIDs, topFromSpill)
+	topFromStaging := cd.plan.StagingMode.UsesStaging()
+	top := resolveTablesLocked(cd.thisLevel, cd.plan.TopIDs, topFromStaging)
 	if len(cd.plan.TopIDs) != len(top) {
 		return false
 	}
@@ -112,16 +112,16 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 	defer cd.unlockLevels()
 
 	if cd.thisLevel.numTablesLocked() == 0 {
-		if cd.thisLevel.isLastLevel() && cd.thisLevel.numSpillTablesLocked() > 0 {
-			meta := cd.thisLevel.spill.allMeta()
+		if cd.thisLevel.isLastLevel() && cd.thisLevel.numStagingTablesLocked() > 0 {
+			meta := cd.thisLevel.staging.allMeta()
 			if len(meta) == 0 {
 				return false
 			}
-			plan, ok := PlanForSpillFallback(cd.thisLevel.levelNum, meta)
+			plan, ok := PlanForStagingFallback(cd.thisLevel.levelNum, meta)
 			if !ok {
 				return false
 			}
-			cd.plan.SpillMode = SpillKeep
+			cd.plan.StagingMode = StagingKeep
 			cd.applyPlan(plan)
 			if !lm.resolvePlanLocked(cd) {
 				return false
@@ -147,26 +147,26 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 	return lm.compactState.CompareAndAdd(LevelsLocked{}, cd.stateEntry())
 }
 
-func (lm *levelManager) fillTablesSpillShard(cd *compactDef, shardIdx int) bool {
+func (lm *levelManager) fillTablesStagingShard(cd *compactDef, shardIdx int) bool {
 	cd.lockLevels()
 	defer cd.unlockLevels()
 
-	totalSpill := cd.thisLevel.numSpillTablesLocked()
-	if totalSpill == 0 {
+	totalStaging := cd.thisLevel.numStagingTablesLocked()
+	if totalStaging == 0 {
 		return false
 	}
-	batchSize := lm.opt.SpillCompactBatchSize
-	if batchSize <= 0 || batchSize > totalSpill {
-		batchSize = totalSpill
+	batchSize := lm.opt.StagingCompactBatchSize
+	if batchSize <= 0 || batchSize > totalStaging {
+		batchSize = totalStaging
 	}
 	if shardIdx < 0 {
-		shardIdx = cd.thisLevel.spillShardByBacklog()
+		shardIdx = cd.thisLevel.stagingShardByBacklog()
 	}
-	shMeta := cd.thisLevel.spill.shardMetaByIndex(shardIdx)
+	shMeta := cd.thisLevel.staging.shardMetaByIndex(shardIdx)
 	if len(shMeta) == 0 {
 		return false
 	}
-	plan, ok := PlanForSpillShard(cd.thisLevel.levelNum, shMeta, cd.nextLevel.levelNum, tableMetaSnapshot(cd.nextLevel.tables), cd.targetFileSize(), batchSize, lm.compactState)
+	plan, ok := PlanForStagingShard(cd.thisLevel.levelNum, shMeta, cd.nextLevel.levelNum, tableMetaSnapshot(cd.nextLevel.tables), cd.targetFileSize(), batchSize, lm.compactState)
 	if !ok {
 		return false
 	}
@@ -178,13 +178,13 @@ func (lm *levelManager) fillTablesSpillShard(cd *compactDef, shardIdx int) bool 
 }
 
 // resolveTablesLocked maps IDs to tables; caller must hold lh lock.
-func resolveTablesLocked(lh *levelHandler, ids []uint64, spill bool) []*table {
+func resolveTablesLocked(lh *levelHandler, ids []uint64, staging bool) []*table {
 	if lh == nil || len(ids) == 0 {
 		return nil
 	}
 	var tables []*table
-	if spill {
-		tables = lh.spill.allTables()
+	if staging {
+		tables = lh.staging.allTables()
 	} else {
 		tables = lh.tables
 	}
@@ -310,9 +310,9 @@ func (lm *levelManager) fillTablesL0(cd *compactDef) bool {
 	return lm.fillTablesL0ToL0(cd)
 }
 
-func (lm *levelManager) moveToSpill(cd *compactDef) error {
+func (lm *levelManager) moveToStaging(cd *compactDef) error {
 	if cd == nil || cd.thisLevel == nil || cd.nextLevel == nil {
-		return errors.New("invalid compaction definition for spill move")
+		return errors.New("invalid compaction definition for staging move")
 	}
 	if len(cd.top) == 0 {
 		return nil
@@ -337,7 +337,7 @@ func (lm *levelManager) moveToSpill(cd *compactDef) error {
 				Largest:   kv.SafeCopy(nil, tbl.MaxKey()),
 				CreatedAt: uint64(time.Now().Unix()),
 				ValueSize: tbl.ValueSize(),
-				Spill:     true,
+				Staging:   true,
 			},
 		}
 		edits = append(edits, add)
@@ -372,15 +372,15 @@ func (lm *levelManager) moveToSpill(cd *compactDef) error {
 	}
 	cd.thisLevel.tables = remaining
 
-	cd.nextLevel.spill.ensureInit()
+	cd.nextLevel.staging.ensureInit()
 	for _, t := range cd.top {
 		if t == nil {
 			continue
 		}
 		t.setLevel(cd.nextLevel.levelNum)
 	}
-	cd.nextLevel.spill.addBatch(cd.top)
-	cd.nextLevel.spill.sortShards()
+	cd.nextLevel.staging.addBatch(cd.top)
+	cd.nextLevel.staging.sortShards()
 	second.Unlock()
 	first.Unlock()
 
@@ -501,7 +501,7 @@ type Plan struct {
 	NextRange    KeyRange
 	ThisFileSize int64
 	NextFileSize int64
-	SpillMode    SpillMode
+	StagingMode  StagingMode
 	DropPrefixes [][]byte
 	StatsTag     string
 	// IntraLevel marks plans whose input lives entirely on a single level
@@ -583,8 +583,8 @@ func OverlappingTables(tables []TableMeta, kr KeyRange) (int, int) {
 	return left, right
 }
 
-// PlanForSpillFallback builds a plan when only spill tables are available.
-func PlanForSpillFallback(level int, tables []TableMeta) (Plan, bool) {
+// PlanForStagingFallback builds a plan when only staging tables are available.
+func PlanForStagingFallback(level int, tables []TableMeta) (Plan, bool) {
 	if len(tables) == 0 {
 		return Plan{}, false
 	}
@@ -705,8 +705,8 @@ func shouldTTLCompact(t TableMeta, now time.Time, ttlMinAge time.Duration) bool 
 	return !now.Before(t.CreatedAt) && now.Sub(t.CreatedAt) >= ttlMinAge
 }
 
-// PlanForSpillShard builds a plan for a single spill shard.
-func PlanForSpillShard(level int, shardTables []TableMeta, nextLevel int, next []TableMeta, targetFileSize int64, batchSize int, state *State) (Plan, bool) {
+// PlanForStagingShard builds a plan for a single staging shard.
+func PlanForStagingShard(level int, shardTables []TableMeta, nextLevel int, next []TableMeta, targetFileSize int64, batchSize int, state *State) (Plan, bool) {
 	if len(shardTables) == 0 {
 		return Plan{}, false
 	}
