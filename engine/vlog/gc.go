@@ -1,98 +1,75 @@
-package NoKV
+package vlog
+
+// GC scheduling sits between the per-bucket Manager (which owns Sample /
+// Iterate / Rewind) and the host's batch-writer (which pushes the
+// rewritten entries back into the LSM through Deps.BatchSet). The
+// scheduler is parallelism-bounded by gcTokens, throttled by LSM
+// backlog/score thresholds, and serialized per-bucket by gcBucketBusy.
 
 import (
 	"fmt"
-	"log/slog"
 	"sort"
 	"time"
 
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/manifest"
-	vlogpkg "github.com/feichai0017/NoKV/engine/vlog"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
 )
 
-func (vlog *valueLog) flushDiscardStats() {
-	defer vlog.lfDiscardStats.closer.Done()
-
-	mergeStats := func(stats map[manifest.ValueLogID]int64, force bool) ([]byte, error) {
-		vlog.lfDiscardStats.Lock()
-		defer vlog.lfDiscardStats.Unlock()
-		for fid, count := range stats {
-			vlog.lfDiscardStats.m[fid] += count
-			vlog.lfDiscardStats.updatesSinceFlush++
-		}
-
-		threshold := vlog.lfDiscardStats.flushThreshold
-
-		if !force && vlog.lfDiscardStats.updatesSinceFlush < threshold {
-			return nil, nil
-		}
-		if vlog.lfDiscardStats.updatesSinceFlush == 0 {
-			return nil, nil
-		}
-
-		encodedDS, err := encodeDiscardStats(vlog.lfDiscardStats.m)
-		if err != nil {
-			return nil, err
-		}
-		vlog.lfDiscardStats.updatesSinceFlush = 0
-		return encodedDS, nil
+// shouldSkipRewrite reports whether an entry can be safely dropped from
+// a rewrite batch (deleted/expired, or no longer a value-pointer).
+func shouldSkipRewrite(e *kv.Entry) bool {
+	if e == nil {
+		return true
 	}
-
-	process := func(stats map[manifest.ValueLogID]int64, force bool) error {
-		encodedDS, err := mergeStats(stats, force)
-		if err != nil || encodedDS == nil {
-			return err
-		}
-
-		entry := kv.NewInternalEntry(kv.CFDefault, valueLogDiscardStatsKey, 1, encodedDS, 0, 0)
-		entries := []*kv.Entry{entry}
-		req, err := vlog.db.sendToWriteCh(entries, false)
-		if err != nil {
-			entry.DecrRef()
-			return errors.Wrapf(err, "failed to push discard stats to write channel")
-		}
-		return req.Wait()
+	if e.IsDeletedOrExpired() {
+		return true
 	}
-
-	closer := vlog.lfDiscardStats.closer
-	for {
-		select {
-		case <-closer.Closed():
-			for {
-				select {
-				case stats := <-vlog.lfDiscardStats.flushChan:
-					if err := process(stats, false); err != nil {
-						slog.Default().Error("process discard stats", "error", err)
-					}
-				default:
-					goto drainComplete
-				}
-			}
-		drainComplete:
-			if err := process(nil, true); err != nil {
-				slog.Default().Error("process discard stats", "error", err)
-			}
-			return
-		case stats := <-vlog.lfDiscardStats.flushChan:
-			if err := process(stats, false); err != nil {
-				slog.Default().Error("process discard stats", "error", err)
-			}
-		}
-	}
+	return !kv.IsValuePtr(e)
 }
 
-func (vlog *valueLog) runGC(discardRatio float64, heads map[uint32]kv.ValuePtr) error {
+// IteratorRefAdd registers a live iterator that may be reading from
+// segments queued for deletion; vlog defers FilterPendingDeletes-driven
+// removal until all such iterators have called IteratorRefDel.
+func (c *Consumer) IteratorRefAdd() {
+	if c == nil {
+		return
+	}
+	c.numActiveIterators.Add(1)
+}
+
+// IteratorRefDel undoes IteratorRefAdd.
+func (c *Consumer) IteratorRefDel() {
+	if c == nil {
+		return
+	}
+	c.numActiveIterators.Add(-1)
+}
+
+// IteratorCount returns the number of registered live iterators.
+func (c *Consumer) IteratorCount() int {
+	if c == nil {
+		return 0
+	}
+	return int(c.numActiveIterators.Load())
+}
+
+// RunGC schedules one GC cycle: pick candidate FIDs (limited by the
+// effective parallelism), kick off concurrent doRunGC workers under the
+// per-bucket-busy guard and gcTokens semaphore, return whichever error
+// shape best matches the outcome (nil on at least one rewrite, ErrNoRewrite
+// when nothing was eligible, ErrRejected when a previous cycle is still
+// in flight).
+func (c *Consumer) RunGC(discardRatio float64, heads map[uint32]kv.ValuePtr) error {
 	select {
-	case vlog.garbageCh <- struct{}{}:
+	case c.garbageCh <- struct{}{}:
 		defer func() {
-			<-vlog.garbageCh
+			<-c.garbageCh
 		}()
 
-		limit, throttled, skipped := vlog.effectiveGCParallelism()
+		limit, throttled, skipped := c.effectiveGCParallelism()
 		if skipped {
 			metrics.DefaultValueLogGCCollector().IncSkipped()
 			return utils.ErrNoRewrite
@@ -105,7 +82,7 @@ func (vlog *valueLog) runGC(discardRatio float64, heads map[uint32]kv.ValuePtr) 
 			return utils.ErrNoRewrite
 		}
 
-		files := vlog.pickLogs(heads, limit)
+		files := c.pickLogs(heads, limit)
 		if len(files) == 0 {
 			return utils.ErrNoRewrite
 		}
@@ -113,21 +90,21 @@ func (vlog *valueLog) runGC(discardRatio float64, heads map[uint32]kv.ValuePtr) 
 		scheduled := 0
 
 		for _, id := range files {
-			if !vlog.tryStartBucketGC(id.Bucket) {
+			if !c.tryStartBucketGC(id.Bucket) {
 				continue
 			}
-			if !vlog.tryAcquireGCToken() {
-				vlog.finishBucketGC(id.Bucket)
+			if !c.tryAcquireGCToken() {
+				c.finishBucketGC(id.Bucket)
 				continue
 			}
 			scheduled++
 			metrics.DefaultValueLogGCCollector().IncScheduled()
 			metrics.DefaultValueLogGCCollector().IncActive()
 			go func(job manifest.ValueLogID) {
-				defer vlog.releaseGCToken()
-				defer vlog.finishBucketGC(job.Bucket)
+				defer c.releaseGCToken()
+				defer c.finishBucketGC(job.Bucket)
 				defer metrics.DefaultValueLogGCCollector().DecActive()
-				err := vlog.doRunGC(job.Bucket, job.FileID, discardRatio)
+				err := c.doRunGC(job.Bucket, job.FileID, discardRatio)
 				results <- err
 			}(id)
 		}
@@ -161,33 +138,36 @@ func (vlog *valueLog) runGC(discardRatio float64, heads map[uint32]kv.ValuePtr) 
 	}
 }
 
-func (vlog *valueLog) effectiveGCParallelism() (effective int, throttled bool, skipped bool) {
-	base := vlog.gcParallelism
+// effectiveGCParallelism reduces or skips GC based on LSM compaction
+// backlog and max-score, both of which signal that the LSM is already
+// behind and a rewrite would deepen the hole.
+func (c *Consumer) effectiveGCParallelism() (effective int, throttled bool, skipped bool) {
+	base := c.gcParallelism
 	if base <= 0 {
 		return 0, false, true
 	}
-	if vlog.db == nil || vlog.db.lsm == nil {
+	if c.deps.LSM == nil {
 		return base, false, false
 	}
 
-	reduceScore := vlog.opt.ValueLogGCReduceScore
+	reduceScore := c.cfg.GCReduceScore
 	if reduceScore <= 0 {
 		reduceScore = 2.0
 	}
-	skipScore := vlog.opt.ValueLogGCSkipScore
+	skipScore := c.cfg.GCSkipScore
 	if skipScore <= 0 {
 		skipScore = 4.0
 	}
-	reduceBacklog := vlog.opt.ValueLogGCReduceBacklog
+	reduceBacklog := c.cfg.GCReduceBacklog
 	if reduceBacklog <= 0 {
-		reduceBacklog = max(vlog.opt.NumCompactors, 2)
+		reduceBacklog = max(c.cfg.NumCompactors, 2)
 	}
-	skipBacklog := vlog.opt.ValueLogGCSkipBacklog
+	skipBacklog := c.cfg.GCSkipBacklog
 	if skipBacklog <= 0 {
 		skipBacklog = max(reduceBacklog*2, 4)
 	}
 
-	diag := vlog.db.lsm.Diagnostics()
+	diag := c.deps.LSM.Diagnostics()
 	backlog, maxScore := diag.Compaction.Backlog, diag.Compaction.MaxScore
 	if (skipBacklog > 0 && backlog >= int64(skipBacklog)) || (skipScore > 0 && maxScore >= skipScore) {
 		return 0, true, true
@@ -202,60 +182,63 @@ func (vlog *valueLog) effectiveGCParallelism() (effective int, throttled bool, s
 	return base, false, false
 }
 
-func (vlog *valueLog) tryStartBucketGC(bucket uint32) bool {
-	if int(bucket) >= len(vlog.gcBucketBusy) {
+func (c *Consumer) tryStartBucketGC(bucket uint32) bool {
+	if int(bucket) >= len(c.gcBucketBusy) {
 		return false
 	}
-	return vlog.gcBucketBusy[bucket].CompareAndSwap(0, 1)
+	return c.gcBucketBusy[bucket].CompareAndSwap(0, 1)
 }
 
-func (vlog *valueLog) finishBucketGC(bucket uint32) {
-	if int(bucket) >= len(vlog.gcBucketBusy) {
+func (c *Consumer) finishBucketGC(bucket uint32) {
+	if int(bucket) >= len(c.gcBucketBusy) {
 		return
 	}
-	vlog.gcBucketBusy[bucket].Store(0)
+	c.gcBucketBusy[bucket].Store(0)
 }
 
-func (vlog *valueLog) tryAcquireGCToken() bool {
-	if vlog.gcTokens == nil {
+func (c *Consumer) tryAcquireGCToken() bool {
+	if c.gcTokens == nil {
 		return true
 	}
 	select {
-	case vlog.gcTokens <- struct{}{}:
+	case c.gcTokens <- struct{}{}:
 		return true
 	default:
 		return false
 	}
 }
 
-func (vlog *valueLog) releaseGCToken() {
-	if vlog.gcTokens == nil {
+func (c *Consumer) releaseGCToken() {
+	if c.gcTokens == nil {
 		return
 	}
 	select {
-	case <-vlog.gcTokens:
+	case <-c.gcTokens:
 	default:
 	}
 }
 
-func (vlog *valueLog) doRunGC(bucket uint32, fid uint32, discardRatio float64) (err error) {
+// doRunGC samples a candidate segment, decides whether to rewrite it
+// based on the discard ratio, and rewrites it through the host's
+// batch-writer if the heuristic clears.
+func (c *Consumer) doRunGC(bucket uint32, fid uint32, discardRatio float64) (err error) {
 	defer func() {
 		if err == nil {
-			vlog.lfDiscardStats.Lock()
-			delete(vlog.lfDiscardStats.m, manifest.ValueLogID{Bucket: bucket, FileID: fid})
-			vlog.lfDiscardStats.Unlock()
+			c.lfDiscardStats.Lock()
+			delete(c.lfDiscardStats.m, manifest.ValueLogID{Bucket: bucket, FileID: fid})
+			c.lfDiscardStats.Unlock()
 		}
 	}()
 
-	mgr, err := vlog.managerFor(bucket)
+	mgr, err := c.ManagerFor(bucket)
 	if err != nil {
 		return err
 	}
-	opts := vlogpkg.SampleOptions{
-		SizeRatio:     vlog.gcSampleSizeRatio(),
-		CountRatio:    vlog.gcSampleCountRatio(),
-		FromBeginning: vlog.opt.ValueLogGCSampleFromHead,
-		MaxEntries:    vlog.opt.ValueLogMaxEntries,
+	opts := SampleOptions{
+		SizeRatio:     c.GCSampleSizeRatio(),
+		CountRatio:    c.GCSampleCountRatio(),
+		FromBeginning: c.cfg.GCSampleFromHead,
+		MaxEntries:    c.cfg.GCMaxEntries,
 	}
 	start := time.Now()
 	stats, err := mgr.Sample(fid, opts, func(e *kv.Entry, vp *kv.ValuePtr) (bool, error) {
@@ -272,7 +255,7 @@ func (vlog *valueLog) doRunGC(bucket uint32, fid uint32, discardRatio float64) (
 		if len(userKey) == 0 {
 			return false, nil
 		}
-		entry, err := vlog.db.GetInternalEntry(cf, userKey, version)
+		entry, err := c.deps.GetInternalEntry(cf, userKey, version)
 		if err != nil {
 			if errors.Is(err, utils.ErrEmptyKey) {
 				return false, nil
@@ -283,7 +266,7 @@ func (vlog *valueLog) doRunGC(bucket uint32, fid uint32, discardRatio float64) (
 			return false, err
 		}
 		defer entry.DecrRef()
-		if shouldSkipValueLogRewrite(entry) {
+		if shouldSkipRewrite(entry) {
 			return true, nil
 		}
 
@@ -315,25 +298,28 @@ func (vlog *valueLog) doRunGC(bucket uint32, fid uint32, discardRatio float64) (
 		return utils.ErrNoRewrite
 	}
 
-	vlog.logf("Fid: %d bucket: %d. Skipped: %5.2fMB Data status={total:%5.2f discard:%5.2f count:%d}", fid, bucket, stats.SkippedMiB, stats.TotalMiB, stats.DiscardMiB, stats.Count)
+	c.Logf("Fid: %d bucket: %d. Skipped: %5.2fMB Data status={total:%5.2f discard:%5.2f count:%d}", fid, bucket, stats.SkippedMiB, stats.TotalMiB, stats.DiscardMiB, stats.Count)
 
 	sizeWindow := stats.SizeWindow
 	if sizeWindow == 0 {
-		sizeWindow = float64(vlog.opt.ValueLogFileSize) / float64(utils.Mi)
+		sizeWindow = float64(c.cfg.FileSize) / float64(utils.Mi)
 	}
 	if (stats.Count < stats.CountWindow && stats.TotalMiB < sizeWindow*0.75) || stats.DiscardMiB < discardRatio*stats.TotalMiB {
 		return utils.ErrNoRewrite
 	}
 
-	if err = vlog.rewrite(bucket, fid); err != nil {
+	if err = c.rewrite(bucket, fid); err != nil {
 		return err
 	}
 	metrics.DefaultValueLogGCCollector().IncRuns()
 	return nil
 }
 
-func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
-	mgr, err := vlog.managerFor(bucket)
+// rewrite copies live entries from segment fid back into the LSM through
+// the host's BatchSet hook, then queues the segment for deletion (or
+// removes it immediately when no iterators are active).
+func (c *Consumer) rewrite(bucket uint32, fid uint32) error {
+	mgr, err := c.ManagerFor(bucket)
 	if err != nil {
 		return err
 	}
@@ -349,7 +335,7 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 		if e == nil || len(e.Key) == 0 {
 			return nil
 		}
-		entry, err := vlog.db.lsm.Get(e.Key)
+		entry, err := c.deps.LSM.Get(e.Key)
 		if err != nil {
 			if errors.Is(err, utils.ErrEmptyKey) {
 				return nil
@@ -366,7 +352,7 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 			return utils.ErrNoRewrite
 		}
 		defer entry.DecrRef()
-		if shouldSkipValueLogRewrite(entry) {
+		if shouldSkipRewrite(entry) {
 			return nil
 		}
 
@@ -391,11 +377,11 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 		ne.Meta = 0
 		ne.ExpiresAt = e.ExpiresAt
 
-		es := int64(ne.EstimateSize(vlog.db.opt.ValueLogFileSize))
+		es := int64(ne.EstimateSize(c.cfg.FileSize))
 		es += int64(len(e.Value))
-		limitCount, limitSize := vlog.opt.MaxBatchCount, vlog.opt.MaxBatchSize
+		limitCount, limitSize := c.cfg.MaxBatchCount, c.cfg.MaxBatchSize
 		if int64(len(wb)+1) >= limitCount || size+es >= limitSize {
-			if err := vlog.db.batchSet(wb); err != nil {
+			if err := c.deps.BatchSet(wb); err != nil {
 				return err
 			}
 			size = 0
@@ -417,7 +403,7 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 	batchSize := 1024
 	for i := 0; i < len(wb); {
 		end := min(i+batchSize, len(wb))
-		if err := vlog.db.batchSet(wb[i:end]); err != nil {
+		if err := c.deps.BatchSet(wb[i:end]); err != nil {
 			if err == utils.ErrTxnTooBig {
 				if batchSize <= 1 {
 					return utils.ErrNoRewrite
@@ -431,7 +417,7 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 	}
 	if len(wb) > 0 {
 		testKey := wb[len(wb)-1].Key
-		if vs, err := vlog.db.lsm.Get(testKey); err == nil {
+		if vs, err := c.deps.LSM.Get(testKey); err == nil {
 			if vs == nil {
 				return utils.ErrKeyNotFound
 			}
@@ -444,38 +430,37 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 	}
 
 	deleteNow := false
-	vlog.filesToDeleteLock.Lock()
-	if vlog.iteratorCount() == 0 {
+	c.filesToDeleteLock.Lock()
+	if c.IteratorCount() == 0 {
 		deleteNow = true
 	} else {
-		vlog.filesToBeDeleted = append(vlog.filesToBeDeleted, manifest.ValueLogID{Bucket: bucket, FileID: fid})
+		c.filesToBeDeleted = append(c.filesToBeDeleted, manifest.ValueLogID{Bucket: bucket, FileID: fid})
 	}
-	vlog.filesToDeleteLock.Unlock()
+	c.filesToDeleteLock.Unlock()
 
 	if deleteNow {
-		if err := vlog.removeValueLogFile(bucket, fid); err != nil {
+		if err := c.removeValueLogFile(bucket, fid); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (vlog *valueLog) iteratorCount() int {
-	return int(vlog.numActiveIterators.Load())
-}
+// FilterPendingDeletes returns a copy of fids with any entries currently
+// queued for deletion removed. Used by the GC scheduler to avoid picking
+// candidates that are about to disappear.
+func (c *Consumer) FilterPendingDeletes(fids []manifest.ValueLogID) []manifest.ValueLogID {
+	c.filesToDeleteLock.Lock()
+	defer c.filesToDeleteLock.Unlock()
 
-func (vlog *valueLog) filterPendingDeletes(fids []manifest.ValueLogID) []manifest.ValueLogID {
-	vlog.filesToDeleteLock.Lock()
-	defer vlog.filesToDeleteLock.Unlock()
-
-	if len(vlog.filesToBeDeleted) == 0 {
+	if len(c.filesToBeDeleted) == 0 {
 		out := make([]manifest.ValueLogID, len(fids))
 		copy(out, fids)
 		return out
 	}
 
-	toDelete := make(map[manifest.ValueLogID]struct{}, len(vlog.filesToBeDeleted))
-	for _, id := range vlog.filesToBeDeleted {
+	toDelete := make(map[manifest.ValueLogID]struct{}, len(c.filesToBeDeleted))
+	for _, id := range c.filesToBeDeleted {
 		toDelete[id] = struct{}{}
 	}
 
@@ -489,16 +474,16 @@ func (vlog *valueLog) filterPendingDeletes(fids []manifest.ValueLogID) []manifes
 	return out
 }
 
-func (vlog *valueLog) pickLogs(heads map[uint32]kv.ValuePtr, limit int) (files []manifest.ValueLogID) {
-	if len(vlog.managers) == 0 || limit <= 0 {
+func (c *Consumer) pickLogs(heads map[uint32]kv.ValuePtr, limit int) (files []manifest.ValueLogID) {
+	if len(c.managers) == 0 || limit <= 0 {
 		return nil
 	}
-	if limit > len(vlog.managers) {
-		limit = len(vlog.managers)
+	if limit > len(c.managers) {
+		limit = len(c.managers)
 	}
 
-	existing := make([]map[uint32]struct{}, len(vlog.managers))
-	for bucket, mgr := range vlog.managers {
+	existing := make([]map[uint32]struct{}, len(c.managers))
+	for bucket, mgr := range c.managers {
 		if mgr == nil {
 			continue
 		}
@@ -513,13 +498,13 @@ func (vlog *valueLog) pickLogs(heads map[uint32]kv.ValuePtr, limit int) (files [
 		existing[bucket] = set
 	}
 
-	bestID := make([]manifest.ValueLogID, len(vlog.managers))
-	bestDiscard := make([]int64, len(vlog.managers))
-	bestSet := make([]bool, len(vlog.managers))
+	bestID := make([]manifest.ValueLogID, len(c.managers))
+	bestDiscard := make([]int64, len(c.managers))
+	bestSet := make([]bool, len(c.managers))
 
-	vlog.lfDiscardStats.RLock()
-	for id, discard := range vlog.lfDiscardStats.m {
-		if int(id.Bucket) >= len(vlog.managers) {
+	c.lfDiscardStats.RLock()
+	for id, discard := range c.lfDiscardStats.m {
+		if int(id.Bucket) >= len(c.managers) {
 			continue
 		}
 		if existing[id.Bucket] == nil {
@@ -528,7 +513,7 @@ func (vlog *valueLog) pickLogs(heads map[uint32]kv.ValuePtr, limit int) (files [
 		if _, ok := existing[id.Bucket][id.FileID]; !ok {
 			continue
 		}
-		mgr := vlog.managers[id.Bucket]
+		mgr := c.managers[id.Bucket]
 		if mgr == nil {
 			continue
 		}
@@ -546,10 +531,10 @@ func (vlog *valueLog) pickLogs(heads map[uint32]kv.ValuePtr, limit int) (files [
 			bestSet[id.Bucket] = true
 		}
 	}
-	vlog.lfDiscardStats.RUnlock()
+	c.lfDiscardStats.RUnlock()
 
 	files = make([]manifest.ValueLogID, 0, limit)
-	selectedBuckets := make([]bool, len(vlog.managers))
+	selectedBuckets := make([]bool, len(c.managers))
 	for bucket := range bestSet {
 		if !bestSet[bucket] || bestDiscard[bucket] <= 0 {
 			continue
@@ -557,7 +542,7 @@ func (vlog *valueLog) pickLogs(heads map[uint32]kv.ValuePtr, limit int) (files [
 		files = append(files, bestID[bucket])
 		selectedBuckets[bucket] = true
 	}
-	files = vlog.filterPendingDeletes(files)
+	files = c.FilterPendingDeletes(files)
 	if len(files) > 1 {
 		sort.Slice(files, func(i, j int) bool {
 			return bestDiscard[files[i].Bucket] > bestDiscard[files[j].Bucket]
@@ -571,7 +556,7 @@ func (vlog *valueLog) pickLogs(heads map[uint32]kv.ValuePtr, limit int) (files [
 	}
 
 	candidates := make([]manifest.ValueLogID, 0)
-	for bucket, mgr := range vlog.managers {
+	for bucket, mgr := range c.managers {
 		if mgr == nil || selectedBuckets[bucket] {
 			continue
 		}
@@ -590,11 +575,11 @@ func (vlog *valueLog) pickLogs(heads map[uint32]kv.ValuePtr, limit int) (files [
 	if len(candidates) == 0 {
 		return files
 	}
-	candidates = vlog.filterPendingDeletes(candidates)
+	candidates = c.FilterPendingDeletes(candidates)
 	if len(candidates) == 0 {
 		return files
 	}
-	start := max(int(vlog.gcPickSeed.Add(1)), 0)
+	start := max(int(c.gcPickSeed.Add(1)), 0)
 	for i := 0; i < len(candidates); i++ {
 		id := candidates[(start+i)%len(candidates)]
 		if selectedBuckets[id.Bucket] {
@@ -609,51 +594,18 @@ func (vlog *valueLog) pickLogs(heads map[uint32]kv.ValuePtr, limit int) (files [
 	return files
 }
 
-func (vlog *valueLog) populateDiscardStats() error {
-	var statsMap map[manifest.ValueLogID]int64
-	vs, err := vlog.db.GetInternalEntry(kv.CFDefault, valueLogDiscardStatsKey, nonTxnMaxVersion)
-	if err != nil {
-		return err
-	}
-	defer vs.DecrRef()
-	if vs.Meta == 0 && len(vs.Value) == 0 {
-		return nil
-	}
-	val := vs.Value
-	if kv.IsValuePtr(vs) {
-		var vp kv.ValuePtr
-		vp.Decode(val)
-		result, cb, err := vlog.read(&vp)
-		val = kv.SafeCopy(nil, result)
-		if cb != nil {
-			cb()
-		}
-		if err != nil {
-			return err
-		}
-	}
-	if len(val) == 0 {
-		return nil
-	}
-	statsMap, err = decodeDiscardStats(val)
-	if err != nil {
-		return errors.Wrapf(err, "failed to unmarshal discard stats")
-	}
-	vlog.logf("Value Log Discard stats: %v", statsMap)
-	vlog.lfDiscardStats.flushChan <- statsMap
-	return nil
-}
-
-func (vlog *valueLog) gcSampleSizeRatio() float64 {
-	r := vlog.opt.ValueLogGCSampleSizeRatio
+// GCSampleSizeRatio returns the size-ratio knob for Sample() with a 0.10 default.
+func (c *Consumer) GCSampleSizeRatio() float64 {
+	r := c.cfg.GCSampleSizeRatio
 	if r <= 0 {
 		return 0.10
 	}
 	return r
 }
 
-func (vlog *valueLog) gcSampleCountRatio() float64 {
-	r := vlog.opt.ValueLogGCSampleCountRatio
+// GCSampleCountRatio returns the count-ratio knob for Sample() with a 0.01 default.
+func (c *Consumer) GCSampleCountRatio() float64 {
+	r := c.cfg.GCSampleCountRatio
 	if r <= 0 {
 		return 0.01
 	}

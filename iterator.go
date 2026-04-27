@@ -6,6 +6,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm"
+	vlogpkg "github.com/feichai0017/NoKV/engine/vlog"
 	dbruntime "github.com/feichai0017/NoKV/internal/runtime"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
@@ -14,7 +15,7 @@ import (
 // DBIterator wraps the merged LSM iterators and optionally resolves value-log pointers.
 type DBIterator struct {
 	iitr index.Iterator
-	vlog *valueLog
+	vlog *vlogpkg.Consumer
 	pool *dbruntime.IteratorPool
 	ctx  *dbruntime.IteratorContext
 	rtv  *lsm.RangeTombstoneView
@@ -53,7 +54,7 @@ type DBIterator struct {
 // Item is the user-facing iterator item backed by an entry and optional vlog reader.
 type Item struct {
 	e        *kv.Entry
-	vlog     *valueLog
+	vlog     *vlogpkg.Consumer
 	valueBuf []byte
 }
 
@@ -75,7 +76,7 @@ func (it *Item) ValueCopy(dst []byte) ([]byte, error) {
 		}
 		var vp kv.ValuePtr
 		vp.Decode(val)
-		fetched, cb, err := it.vlog.read(&vp)
+		fetched, cb, err := it.vlog.Read(&vp)
 		if cb != nil {
 			defer cb()
 		}
@@ -514,7 +515,7 @@ func (iter *DBIterator) materializeDecoded(src *kv.Entry, cf kv.ColumnFamily, us
 		} else {
 			var vp kv.ValuePtr
 			vp.Decode(src.Value)
-			val, cb, err := iter.vlog.read(&vp)
+			val, cb, err := iter.vlog.Read(&vp)
 			if cb != nil {
 				defer cb()
 			}

@@ -642,7 +642,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 
 	// Value log backlog.
 	if s.db.vlog != nil {
-		stats := s.db.vlog.metrics()
+		stats := s.db.vlog.Metrics()
 		snap.ValueLog.Segments = stats.Segments
 		snap.ValueLog.PendingDeletes = stats.PendingDeletes
 		snap.ValueLog.DiscardQueue = stats.DiscardQueue

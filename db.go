@@ -89,7 +89,7 @@ type (
 		raftWALMu       sync.Mutex
 		raftWALs        [defaultRaftWALShards]*wal.Manager
 		raftWatchdogs   [defaultRaftWALShards]*wal.Watchdog
-		vlog            *valueLog
+		vlog            *vlogpkg.Consumer
 		nonTxnVersion   atomic.Uint64
 		blockWrites     atomic.Int32
 		slowWrites      atomic.Int32
@@ -138,7 +138,7 @@ func newDB(opt *Options) *DB {
 	}
 	db := &DB{opt: cfg, writeMetrics: metrics.NewWriteMetrics()}
 	db.fs = vfs.Ensure(cfg.FS)
-	db.headLogDelta = valueLogHeadLogInterval
+	db.headLogDelta = vlogpkg.HeadLogInterval
 	db.throttleCh = make(chan struct{})
 	db.hotWrite = dbruntime.NewHotWriteRing(dbruntime.HotWriteConfig{
 		Enabled:          cfg.ThermosEnabled && cfg.WriteHotKeyLimit > 0,
@@ -443,8 +443,8 @@ func Open(opt *Options) (_ *DB, err error) {
 		WALWatchdogConfigs: watchdogConfigs,
 		StartValueLogGC: func() {
 			if db.opt.ValueLogGCInterval > 0 {
-				if db.vlog != nil && db.vlog.lfDiscardStats != nil && db.vlog.lfDiscardStats.closer != nil {
-					db.vlog.lfDiscardStats.closer.Add(1)
+				if closer := db.vlogCloser(); closer != nil {
+					closer.Add(1)
 					go db.runValueLogGCPeriodically()
 				}
 			}
@@ -513,8 +513,8 @@ func (db *DB) closeInternal() error {
 		return nil
 	}
 
-	if vlog := db.vlog; vlog != nil && vlog.lfDiscardStats != nil && vlog.lfDiscardStats.closer != nil {
-		vlog.lfDiscardStats.closer.Close()
+	if closer := db.vlogCloser(); closer != nil {
+		closer.Close()
 	}
 
 	db.stopCommitWorkers()
@@ -537,7 +537,7 @@ func (db *DB) closeInternal() error {
 	}
 
 	if db.vlog != nil {
-		if err := db.vlog.close(); err != nil {
+		if err := db.vlog.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("vlog close: %w", err))
 		}
 		db.vlog = nil
@@ -803,7 +803,7 @@ func (db *DB) resolveDetachedValue(src *kv.Entry) ([]byte, byte, error) {
 	}
 	var vp kv.ValuePtr
 	vp.Decode(src.Value)
-	result, cb, err := db.vlog.read(&vp)
+	result, cb, err := db.vlog.Read(&vp)
 	if cb != nil {
 		defer cb()
 	}
@@ -909,7 +909,7 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 	}
 	var vp kv.ValuePtr
 	vp.Decode(entry.Value)
-	result, cb, readErr := db.vlog.read(&vp)
+	result, cb, readErr := db.vlog.Read(&vp)
 	if cb != nil {
 		defer cb()
 	}
@@ -956,7 +956,7 @@ func (db *DB) RunValueLogGC(discardRatio float64) error {
 	}
 	if len(heads) == 0 && db.vlog != nil {
 		heads = make(map[uint32]kv.ValuePtr)
-		for bucket, mgr := range db.vlog.managers {
+		for bucket, mgr := range db.vlog.Managers() {
 			if mgr == nil {
 				continue
 			}
@@ -964,7 +964,7 @@ func (db *DB) RunValueLogGC(discardRatio float64) error {
 		}
 	}
 	// Pick a log file and run GC
-	if err := db.vlog.runGC(discardRatio, heads); err != nil {
+	if err := db.vlog.RunGC(discardRatio, heads); err != nil {
 		if stderrors.Is(err, utils.ErrEmptyKey) {
 			return nil
 		}
@@ -974,10 +974,11 @@ func (db *DB) RunValueLogGC(discardRatio float64) error {
 }
 
 func (db *DB) runValueLogGCPeriodically() {
-	if db.vlog == nil || db.vlog.lfDiscardStats == nil || db.vlog.lfDiscardStats.closer == nil {
+	closer := db.vlogCloser()
+	if closer == nil {
 		return
 	}
-	defer db.vlog.lfDiscardStats.closer.Done()
+	defer closer.Done()
 
 	ticker := time.NewTicker(db.opt.ValueLogGCInterval)
 	defer ticker.Stop()
@@ -988,15 +989,183 @@ func (db *DB) runValueLogGCPeriodically() {
 			err := db.RunValueLogGC(db.opt.ValueLogGCDiscardRatio)
 			if err != nil {
 				if err == utils.ErrNoRewrite {
-					db.vlog.logf("No rewrite on GC.")
+					db.vlog.Logf("No rewrite on GC.")
 				} else {
 					slog.Default().Warn("value log gc", "error", err)
 				}
 			}
-		case <-db.vlog.lfDiscardStats.closer.Closed():
+		case <-closer.Closed():
 			return
 		}
 	}
+}
+
+// vlogCloser exposes the value-log Consumer's lifecycle Closer (or nil
+// when vlog is disabled) so DB-side background loops can register on
+// the same shutdown signal as the discard-stats flush worker.
+func (db *DB) vlogCloser() *utils.Closer {
+	if db == nil || db.vlog == nil {
+		return nil
+	}
+	return db.vlog.BackgroundCloser()
+}
+
+// initVLog opens the value-log Consumer with all the DB-side hooks the
+// engine/vlog package needs (LSM access, batch writeback, value-policy
+// matcher, etc.). Heads observed during replay are installed into
+// db.vheads / db.lastLoggedHeads here so the Consumer never reaches
+// back into the DB struct.
+func (db *DB) initVLog() {
+	heads := db.getHeads()
+	vlogDir := filepath.Join(db.opt.WorkDir, "vlog")
+
+	cfg := vlogpkg.ConsumerConfig{
+		Dir:                        vlogDir,
+		BucketCount:                max(db.opt.ValueLogBucketCount, 1),
+		GCParallelism:              db.opt.ValueLogGCParallelism,
+		NumCompactors:              db.opt.NumCompactors,
+		FileSize:                   db.opt.ValueLogFileSize,
+		Verbose:                    db.opt.ValueLogVerbose,
+		SyncWrites:                 db.opt.SyncWrites,
+		DiscardStatsFlushThreshold: db.opt.DiscardStatsFlushThreshold,
+		GCReduceScore:              db.opt.ValueLogGCReduceScore,
+		GCSkipScore:                db.opt.ValueLogGCSkipScore,
+		GCReduceBacklog:            db.opt.ValueLogGCReduceBacklog,
+		GCSkipBacklog:              db.opt.ValueLogGCSkipBacklog,
+		GCSampleSizeRatio:          db.opt.ValueLogGCSampleSizeRatio,
+		GCSampleCountRatio:         db.opt.ValueLogGCSampleCountRatio,
+		GCSampleFromHead:           db.opt.ValueLogGCSampleFromHead,
+		GCMaxEntries:               db.opt.ValueLogMaxEntries,
+		MaxBatchCount:              db.opt.MaxBatchCount,
+		MaxBatchSize:               db.opt.MaxBatchSize,
+		DiscardStatsCh:             db.discardStatsCh,
+		FS:                         db.fs,
+	}
+	deps := vlogpkg.Deps{
+		LSM:              db.lsm,
+		GetInternalEntry: db.GetInternalEntry,
+		BatchSet:         db.batchSet,
+		SendToWriteCh: func(entries []*kv.Entry, waitOnThrottle bool) (vlogpkg.Waiter, error) {
+			req, err := db.sendToWriteCh(entries, waitOnThrottle)
+			if err != nil {
+				return nil, err
+			}
+			return req, nil
+		},
+		PeekShouldWriteValueToLSM: db.peekShouldWriteValueToLSM,
+	}
+
+	// lastLoggedHeads tracks what is actually persisted in the manifest,
+	// so it must be primed *only* from the manifest snapshot — not from
+	// the manager-initial heads we discover during replay. Otherwise the
+	// first updateHeadBuckets would short-circuit shouldPersistHead and
+	// the bucket head would never reach the manifest.
+	db.lastLoggedHeads = make(map[uint32]kv.ValuePtr, len(heads))
+	maps.Copy(db.lastLoggedHeads, heads)
+
+	vlog, observed, err := vlogpkg.OpenConsumer(cfg, deps, heads, nil)
+	utils.Panic(err)
+	db.vlog = vlog
+	if db.vheads == nil {
+		db.vheads = make(map[uint32]kv.ValuePtr)
+	}
+	for bucket, head := range observed {
+		if existing, ok := db.vheads[bucket]; ok && !existing.IsZero() {
+			continue
+		}
+		db.vheads[bucket] = head
+	}
+}
+
+// getHeads returns the value-log head snapshot held by the LSM manifest.
+// Empty result means no vlog heads have ever been logged.
+func (db *DB) getHeads() map[uint32]kv.ValuePtr {
+	heads := db.lsm.ValueLogHeadSnapshot()
+	if len(heads) == 0 {
+		return make(map[uint32]kv.ValuePtr)
+	}
+	return heads
+}
+
+// valueLogStatusSnapshot returns the manifest's view of every value-log
+// segment (bucket, fid, valid). Nil when LSM is closed.
+func (db *DB) valueLogStatusSnapshot() map[manifest.ValueLogID]manifest.ValueLogMeta {
+	if db == nil || db.lsm == nil {
+		return nil
+	}
+	return db.lsm.ValueLogStatusSnapshot()
+}
+
+// updateHeadBuckets advances db.vheads / db.lastLoggedHeads after the
+// commit pipeline appended new value-log entries. For each bucket we
+// fetch the live Manager head, panic on regression (impossible unless a
+// concurrent rewind happened), and persist to the manifest only when the
+// head moved past the headLogDelta threshold.
+func (db *DB) updateHeadBuckets(buckets []uint32) {
+	if len(buckets) == 0 {
+		return
+	}
+	if db.vlog == nil {
+		return
+	}
+	if db.vheads == nil {
+		db.vheads = make(map[uint32]kv.ValuePtr)
+	}
+	if db.lastLoggedHeads == nil {
+		db.lastLoggedHeads = make(map[uint32]kv.ValuePtr)
+	}
+	for _, bucket := range buckets {
+		mgr, err := db.vlog.ManagerFor(bucket)
+		if err != nil {
+			continue
+		}
+		head := mgr.Head()
+		if head.IsZero() {
+			continue
+		}
+		next := &kv.ValuePtr{Bucket: bucket, Fid: head.Fid, Offset: head.Offset, Len: head.Len}
+		if prev, ok := db.vheads[bucket]; ok && next.Less(&prev) {
+			utils.CondPanicFunc(true, func() error {
+				return fmt.Errorf("value log head regression: bucket=%d prev=%+v next=%+v", bucket, prev, next)
+			})
+		}
+		db.vheads[bucket] = *next
+		if !db.shouldPersistHead(next, bucket) {
+			continue
+		}
+		if err := db.lsm.LogValueLogHead(next); err != nil {
+			slog.Default().Error("log value log head", "bucket", bucket, "error", err)
+			continue
+		}
+		metrics.DefaultValueLogGCCollector().IncHeadUpdates()
+		db.lastLoggedHeads[bucket] = *next
+	}
+}
+
+// shouldPersistHead gates manifest writes by db.headLogDelta: skip the
+// log entry unless the new head moved at least headLogDelta bytes past
+// the last logged offset (or the FID rolled over).
+func (db *DB) shouldPersistHead(next *kv.ValuePtr, bucket uint32) bool {
+	if db == nil || next == nil || next.IsZero() {
+		return false
+	}
+	if db.headLogDelta == 0 {
+		return true
+	}
+	last := db.lastLoggedHeads[bucket]
+	if last.IsZero() {
+		return true
+	}
+	if next.Fid != last.Fid {
+		return true
+	}
+	if next.Offset < last.Offset {
+		return true
+	}
+	if next.Offset-last.Offset >= db.headLogDelta {
+		return true
+	}
+	return false
 }
 
 // requestsHaveVlogWork reports whether any entry in any request needs to be
@@ -1508,7 +1677,7 @@ func (db *DB) runCommitBurst(walMgr *wal.Manager, shardID int, burst []*dbruntim
 	// even when every entry stays inline. See docs/notes/2026-04-27-slab-substrate.md §4.
 	var vlogDur time.Duration
 	if db.requestsHaveVlogWork(mergedRequests) {
-		if err := db.vlog.write(mergedRequests); err != nil {
+		if err := db.vlog.Write(mergedRequests); err != nil {
 			// Whole burst failed before reaching LSM. Each batch's whole
 			// request set is unapplied — failedAt = -1 means "ack with
 			// the default error for every request".
@@ -1610,7 +1779,7 @@ func (db *DB) runSingleCommit(walMgr *wal.Manager, shardID int, batch *dbruntime
 
 	// Metadata-profile fast path — see runCommitBurst for rationale.
 	if db.requestsHaveVlogWork(requests) {
-		if err := db.vlog.write(requests); err != nil {
+		if err := db.vlog.Write(requests); err != nil {
 			db.ackCommitBatch(batch.Reqs, batch.Pool, requests, -1, err)
 			return
 		}
