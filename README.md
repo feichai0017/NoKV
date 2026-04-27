@@ -303,7 +303,7 @@ All design notes under [`docs/notes/`](./docs/notes/) are dated decision records
 |---|---|---|
 | **[`fsmeta/`](./fsmeta)** | **Namespace metadata schema, executor, gRPC service, embedded API** | **[fsmeta](docs/fsmeta.md)** |
 | [`fsmeta/exec/watch/`](./fsmeta/exec/watch) | WatchSubtree router + RemoteSource + catch-up replay | [fsmeta](docs/fsmeta.md) |
-| [`docs/spec/`](./docs/spec) | TLA+ models for control-plane and metadata transition safety | [spec/README.md](./docs/spec/README.md) |
+| [`spec/`](./spec) | TLA+ models for control-plane and metadata transition safety | [spec/README.md](./spec/README.md) |
 | [`meta/root/`](./meta/root) | Typed rooted truth kernel (Delos-lite) | [Rooted Truth](docs/rooted_truth.md) |
 | [`coordinator/`](./coordinator) | Routing, TSO, store discovery, root-event publish, streaming subscribe | [Coordinator](docs/coordinator.md) |
 | [`raftstore/`](./raftstore) | Multi-Raft, transport, membership, SST snapshot install, apply observer | [RaftStore](docs/raftstore.md) |
