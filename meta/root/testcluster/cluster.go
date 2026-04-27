@@ -102,6 +102,15 @@ func (c *Cluster) Close() {
 	}
 }
 
+// WaitLeader waits for unanimous LeaderID agreement across non-excluded
+// peers AND for the elected leader's Store to be operational (its
+// gRPC-backed Refresh completes without error). The two-stage wait
+// matters under leader-transition fault tests: raft may have elected a
+// new leader (LeaderID set on every driver) while the new leader's
+// Store + transport is still finishing a no-op commit / connection
+// re-establishment. Returning before the leader is operational lets a
+// follow-up Append race the still-closing gRPC connection with
+// "code = Canceled desc = grpc: the client connection is closing".
 func (c *Cluster) WaitLeader(excluded ...uint64) uint64 {
 	c.tb.Helper()
 	skip := make(map[uint64]struct{}, len(excluded))
@@ -135,6 +144,16 @@ func (c *Cluster) WaitLeader(excluded ...uint64) uint64 {
 			return false
 		}
 		if _, excluded := skip[candidate]; excluded {
+			return false
+		}
+		// Stage 2: leader is elected by raft; confirm its Store is
+		// serviceable. A failing Refresh here means the new leader's
+		// transport / state machine is still settling — keep polling.
+		store := c.Stores[candidate]
+		if store == nil {
+			return false
+		}
+		if err := store.Refresh(); err != nil {
 			return false
 		}
 		leaderID = candidate
