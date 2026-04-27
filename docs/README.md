@@ -1,7 +1,7 @@
 # NoKV — Documentation
 
 <div align="center">
-  <img src="assets/logo.svg" width="160" alt="NoKV" />
+  <img src="img/logo.svg" width="160" alt="NoKV" />
 
   <p><strong>An open-source namespace metadata substrate for distributed filesystems, object storage, and AI dataset metadata.</strong></p>
 
@@ -148,7 +148,7 @@ All notes under [`notes/`](notes/) are dated decision records — they explain t
 ## 🏗️ Architecture at a Glance
 
 <p align="center">
-  <img src="assets/architecture.svg" alt="NoKV Architecture" width="100%" />
+  <img src="img/architecture.svg" alt="NoKV Architecture" width="100%" />
 </p>
 
 ```
