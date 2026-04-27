@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIngestModeFlags(t *testing.T) {
+func TestSpillModeFlags(t *testing.T) {
 	require.False(t, SpillNone.UsesSpill())
 	require.True(t, SpillDrain.UsesSpill())
 	require.True(t, SpillKeep.UsesSpill())
@@ -14,7 +14,7 @@ func TestIngestModeFlags(t *testing.T) {
 	require.False(t, SpillDrain.KeepsSpill())
 }
 
-func TestIngestPicker(t *testing.T) {
+func TestSpillPicker(t *testing.T) {
 	shards := []SpillShardView{
 		{Index: 1, SizeBytes: 10},
 		{Index: 2, SizeBytes: 30},
@@ -104,11 +104,11 @@ func TestBuildTargetsAndPickPriorities(t *testing.T) {
 	prios := PickPriorities(input)
 	require.NotEmpty(t, prios)
 
-	var hasIngestDrain bool
+	var hasSpillDrain bool
 	for _, p := range prios {
 		if p.SpillMode == SpillDrain {
-			hasIngestDrain = true
+			hasSpillDrain = true
 		}
 	}
-	require.True(t, hasIngestDrain)
+	require.True(t, hasSpillDrain)
 }

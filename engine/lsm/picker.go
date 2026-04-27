@@ -166,7 +166,7 @@ func (m SpillMode) KeepsSpill() bool {
 	return m == SpillKeep
 }
 
-// SpillShardView is a lightweight view of an spill shard for strategy decisions.
+// SpillShardView is a lightweight view of a spill shard for strategy decisions.
 type SpillShardView struct {
 	Index        int
 	TableCount   int

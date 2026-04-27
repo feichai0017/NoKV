@@ -266,7 +266,7 @@ type Options struct {
 	// spill buffer per compaction cycle. NewDefaultOptions populates a concrete
 	// default; Open resolves the constructor default when left zero.
 	SpillCompactBatchSize int
-	// SpillBacklogMergeScore triggers an spill-merge task when the spill
+	// SpillBacklogMergeScore triggers a spill-merge task when the spill
 	// backlog score exceeds this threshold. Defaults are populated up front; zero
 	// is only interpreted Open resolves the constructor default when left zero.
 	SpillBacklogMergeScore float64

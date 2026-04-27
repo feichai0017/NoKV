@@ -212,7 +212,7 @@ func (lh *levelHandler) numTablesLocked() int {
 	return len(lh.tables)
 }
 
-// Get finds key inside this level, considering ingest shards and level semantics.
+// Get finds key inside this level, considering spill shards and level semantics.
 func (lh *levelHandler) Get(key []byte) (*kv.Entry, error) {
 	lh.RLock()
 	defer lh.RUnlock()
@@ -541,7 +541,7 @@ func (lh *levelHandler) deleteSpillTables(toDel []*table) error {
 	for _, t := range toDel {
 		toDelMap[t.fid] = struct{}{}
 	}
-	removed := lh.collectIngestTablesLocked(toDelMap)
+	removed := lh.collectSpillTablesLocked(toDelMap)
 
 	lh.spill.remove(toDelMap)
 
@@ -560,7 +560,7 @@ func (lh *levelHandler) replaceSpillTables(toDel, toAdd []*table) error {
 		}
 		toDelMap[t.fid] = struct{}{}
 	}
-	removed := lh.collectIngestTablesLocked(toDelMap)
+	removed := lh.collectSpillTablesLocked(toDelMap)
 	lh.spill.remove(toDelMap)
 	if len(toAdd) > 0 {
 		lh.spill.addBatch(toAdd)
@@ -571,7 +571,7 @@ func (lh *levelHandler) replaceSpillTables(toDel, toAdd []*table) error {
 	return decrRefs(removed)
 }
 
-func (lh *levelHandler) collectIngestTablesLocked(fidSet map[uint64]struct{}) []*table {
+func (lh *levelHandler) collectSpillTablesLocked(fidSet map[uint64]struct{}) []*table {
 	if len(fidSet) == 0 {
 		return nil
 	}

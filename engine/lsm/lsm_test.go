@@ -330,7 +330,7 @@ func TestMemtableTombstoneShadowsSST(t *testing.T) {
 	}
 }
 
-func TestIngestBufferAccounting(t *testing.T) {
+func TestSpillBufferAccounting(t *testing.T) {
 	now := time.Now()
 	t1 := &table{
 		fid:           1,
@@ -744,7 +744,7 @@ func TestMaxLevelCompactionRangeDeleteResurrection(t *testing.T) {
 	}
 }
 
-func TestLevelHandlerIngestMetrics(t *testing.T) {
+func TestLevelHandlerSpillMetrics(t *testing.T) {
 	now := time.Now()
 	t1 := &table{
 		fid:        10,
@@ -770,26 +770,26 @@ func TestLevelHandlerIngestMetrics(t *testing.T) {
 	lh.addSpill(t2)
 
 	if got := lh.numSpillTables(); got != 2 {
-		t.Fatalf("expected 2 ingest tables, got %d", got)
+		t.Fatalf("expected 2 spill tables, got %d", got)
 	}
 	if got := lh.spillDataSize(); got != 180 {
-		t.Fatalf("expected ingest size 180, got %d", got)
+		t.Fatalf("expected spill size 180, got %d", got)
 	}
 	if got := lh.spillValueBytes(); got != 40 {
-		t.Fatalf("expected ingest value bytes 40, got %d", got)
+		t.Fatalf("expected spill value bytes 40, got %d", got)
 	}
 	expectDensity := float64(40) / float64(180)
 	if math.Abs(lh.spillValueDensity()-expectDensity) > 1e-9 {
-		t.Fatalf("unexpected ingest density")
+		t.Fatalf("unexpected spill density")
 	}
 	if math.Abs(lh.spillDensityLocked()-expectDensity) > 1e-9 {
-		t.Fatalf("unexpected ingest density locked")
+		t.Fatalf("unexpected spill density locked")
 	}
 	if lh.maxSpillAgeSeconds() <= 0 {
-		t.Fatalf("expected non-zero max ingest age")
+		t.Fatalf("expected non-zero max spill age")
 	}
 	if idx := lh.spillShardByBacklog(); idx < 0 {
-		t.Fatalf("expected valid ingest shard index")
+		t.Fatalf("expected valid spill shard index")
 	}
 }
 
@@ -882,7 +882,7 @@ func tableContainsRangeDelete(tbl *table) bool {
 	return false
 }
 
-func TestIngestSearch(t *testing.T) {
+func TestSpillSearch(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -897,7 +897,7 @@ func TestIngestSearch(t *testing.T) {
 
 	found, err := buf.search(key, nil)
 	if err != nil {
-		t.Fatalf("ingest search: %v", err)
+		t.Fatalf("spill search: %v", err)
 	}
 	if found == nil {
 		t.Fatalf("expected entry")
@@ -914,7 +914,7 @@ func TestIngestSearch(t *testing.T) {
 	}
 }
 
-func TestIngestSearchPrefersLatestVersion(t *testing.T) {
+func TestSpillSearchPrefersLatestVersion(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -931,7 +931,7 @@ func TestIngestSearchPrefersLatestVersion(t *testing.T) {
 	key := kv.InternalKey(kv.CFDefault, []byte("b"), math.MaxUint64)
 	found, err := buf.search(key, nil)
 	if err != nil || found == nil {
-		t.Fatalf("ingest search err=%v entry=%v", err, found)
+		t.Fatalf("spill search err=%v entry=%v", err, found)
 	}
 	if string(found.Value) != "v3" {
 		t.Fatalf("expected latest value v3, got %q", string(found.Value))
@@ -944,13 +944,13 @@ func TestLevelGetPrefersMainVersion(t *testing.T) {
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
 
-	ingestTbl := buildTableWithEntry(t, lsm, 21, "k", 1, "old")
+	spillTbl := buildTableWithEntry(t, lsm, 21, "k", 1, "old")
 	mainTbl := buildTableWithEntry(t, lsm, 22, "k", 3, "new")
-	defer func() { _ = ingestTbl.DecrRef() }()
+	defer func() { _ = spillTbl.DecrRef() }()
 	defer func() { _ = mainTbl.DecrRef() }()
 
 	lh := &levelHandler{levelNum: 3}
-	lh.spill.add(ingestTbl)
+	lh.spill.add(spillTbl)
 	lh.tables = []*table{mainTbl}
 
 	key := kv.InternalKey(kv.CFDefault, []byte("k"), math.MaxUint64)
@@ -964,7 +964,7 @@ func TestLevelGetPrefersMainVersion(t *testing.T) {
 	got.DecrRef()
 }
 
-func TestLevelGetMainWhenIngestEmpty(t *testing.T) {
+func TestLevelGetMainWhenSpillEmpty(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -1038,7 +1038,7 @@ func TestLevelSearchRespectsMaxVersion(t *testing.T) {
 	}
 }
 
-func TestLevelSearchIngestAndLN(t *testing.T) {
+func TestLevelSearchSpillAndLN(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -1052,7 +1052,7 @@ func TestLevelSearchIngestAndLN(t *testing.T) {
 	lh.spill.add(tbl)
 	found, err := lh.spill.search(key, nil)
 	if err != nil || found == nil {
-		t.Fatalf("ingest search err=%v entry=%v", err, found)
+		t.Fatalf("spill search err=%v entry=%v", err, found)
 	}
 	found.DecrRef()
 
@@ -1067,11 +1067,11 @@ func TestLevelSearchIngestAndLN(t *testing.T) {
 		t.Fatalf("expected no table for key")
 	}
 
-	ingestHit, err := lh.Get(key)
-	if err != nil || ingestHit == nil {
-		t.Fatalf("level get err=%v entry=%v", err, ingestHit)
+	spillHit, err := lh.Get(key)
+	if err != nil || spillHit == nil {
+		t.Fatalf("level get err=%v entry=%v", err, spillHit)
 	}
-	ingestHit.DecrRef()
+	spillHit.DecrRef()
 
 	l0 := &levelHandler{levelNum: 0, tables: []*table{tbl}}
 	l0Hit, err := l0.Get(key)
@@ -1746,7 +1746,7 @@ func TestCompact(t *testing.T) {
 	runTest(1, l0TOLMax, l0ToL0, nextCompact, maxToMax, parallerCompact)
 }
 
-func TestIngestMergeStaysInIngest(t *testing.T) {
+func TestSpillMergeStaysInSpill(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -1754,11 +1754,11 @@ func TestIngestMergeStaysInIngest(t *testing.T) {
 	// Generate enough data to create multiple L0 tables.
 	baseTest(t, lsm, 256)
 
-	// Move one L0 table to the max level ingest buffer.
+	// Move one L0 table to the max level spill buffer.
 	l0 := lsm.levels.levels[0]
 	tables := l0.tablesSnapshot()
 	if len(tables) == 0 {
-		t.Fatalf("expected L0 tables before ingest merge test")
+		t.Fatalf("expected L0 tables before spill merge test")
 	}
 	cd := buildCompactDef(lsm, 0, 0, 6)
 	cd.top = []*table{tables[0]}
@@ -1771,7 +1771,7 @@ func TestIngestMergeStaysInIngest(t *testing.T) {
 	target := lsm.levels.levels[6]
 	beforeSpill := target.numSpillTables()
 	if beforeSpill == 0 {
-		t.Fatalf("expected ingest tables after moveToSpill")
+		t.Fatalf("expected spill tables after moveToSpill")
 	}
 	beforeMain := target.numTables()
 
@@ -1783,20 +1783,20 @@ func TestIngestMergeStaysInIngest(t *testing.T) {
 		SpillMode: SpillKeep,
 	}
 	if err := lsm.levels.doCompact(0, pri); err != nil {
-		t.Fatalf("ingest merge compact failed: %v", err)
+		t.Fatalf("spill merge compact failed: %v", err)
 	}
 
 	afterSpill := target.numSpillTables()
 	if afterSpill == 0 {
-		t.Fatalf("expected ingest tables to remain after merge")
+		t.Fatalf("expected spill tables to remain after merge")
 	}
 	if target.numTables() != beforeMain {
 		t.Fatalf("main table count changed unexpectedly: before=%d after=%d", beforeMain, target.numTables())
 	}
 }
 
-// Concurrent shard compaction should not violate compactState and should keep ingest merge output in ingest.
-func TestIngestShardParallelSafety(t *testing.T) {
+// Concurrent shard compaction should not violate compactState and should keep spill merge output in spill.
+func TestSpillShardParallelSafety(t *testing.T) {
 	clearDir()
 	opt.NumCompactors = 4
 	opt.SpillShardParallelism = 4
@@ -1810,7 +1810,7 @@ func TestIngestShardParallelSafety(t *testing.T) {
 	l0 := lsm.levels.levels[0]
 	tables := l0.tablesSnapshot()
 	if len(tables) == 0 {
-		t.Fatalf("expected L0 tables for parallel ingest test")
+		t.Fatalf("expected L0 tables for parallel spill test")
 	}
 	cd := buildCompactDef(lsm, 0, 0, 6)
 	cd.top = []*table{tables[0]}
@@ -1820,7 +1820,7 @@ func TestIngestShardParallelSafety(t *testing.T) {
 		t.Fatalf("moveToSpill: %v", err)
 	}
 
-	// Trigger parallel ingest-only compactions across shards.
+	// Trigger parallel spill-only compactions across shards.
 	pri := Priority{
 		Level:     6,
 		Score:     6.0,
@@ -1832,11 +1832,11 @@ func TestIngestShardParallelSafety(t *testing.T) {
 		t.Fatalf("parallel spill compaction failed: %v", err)
 	}
 
-	// Ensure manifest/lists are consistent even if ingest drained.
+	// Ensure manifest/lists are consistent even if spill drained.
 	target := lsm.levels.levels[6]
 	_ = target.numSpillTables()
 
-	// Simulate restart and ensure ingest state can be recovered (may be empty if fully drained).
+	// Simulate restart and ensure spill state can be recovered (may be empty if fully drained).
 	require.NoError(t, lsm.Close())
 	lsm = buildLSM()
 	defer func() { _ = lsm.Close() }()
