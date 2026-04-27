@@ -314,7 +314,7 @@ type FeedbackEvent struct {
 // The mode stays concrete and local: there is one policy object with one
 // explicit behavior switch, not a plugin surface.
 type SchedulerPolicy struct {
-	mode       string
+	mode      string
 	spillBias atomic.Int32
 }
 
