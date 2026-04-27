@@ -28,6 +28,7 @@ var (
 		WorkDir:             "./work_test",
 		SSTableMaxSz:        1 << 10,
 		MemTableSize:        1 << 10,
+		EnableValueLog:      true, // these tests exercise the vlog path
 		ValueLogFileSize:    1 << 20,
 		ValueThreshold:      0,
 		ValueLogBucketCount: 1,

@@ -97,6 +97,11 @@ func buildNoKVBenchmarkOptions(dir string, opts ycsbEngineOptions, memtable NoKV
 
 	cfg.MemTableSize = int64(opts.MemtableMB) << 20
 	cfg.SSTableMaxSz = int64(opts.SSTableMB) << 20
+	// YCSB exercises the value-separation path (vlog) when value sizes
+	// exceed ValueThreshold. With EnableValueLog defaulting to false in
+	// the engine, the bench harness must opt in explicitly so the path
+	// is actually wired.
+	cfg.EnableValueLog = true
 	cfg.ValueLogFileSize = opts.VlogFileMB << 20
 	cfg.ValueLogMaxEntries = 1 << 20
 	cfg.ValueThreshold = int64(opts.ValueThreshold)

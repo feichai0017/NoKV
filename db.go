@@ -242,7 +242,9 @@ func (db *DB) openEngine() error {
 	db.lsm = lsmCore
 	db.nonTxnVersion.Store(db.lsm.Diagnostics().MaxVersion)
 	db.iterPool = dbruntime.NewIteratorPool()
-	db.initVLog()
+	if db.opt.EnableValueLog {
+		db.initVLog()
+	}
 	db.background.Init(newStats(db))
 	if len(db.opt.ValueSeparationPolicies) > 0 {
 		db.policyMatcher.Store(kv.NewValueSeparationPolicyMatcher(db.opt.ValueSeparationPolicies))
@@ -468,19 +470,21 @@ func (db *DB) runRecoveryChecks() error {
 			return err
 		}
 	}
-	vlogDir := filepath.Join(db.opt.WorkDir, "vlog")
-	bucketCount := max(db.opt.ValueLogBucketCount, 1)
-	for bucket := range bucketCount {
-		cfg := vlogpkg.Config{
-			Dir:      filepath.Join(vlogDir, fmt.Sprintf("bucket-%03d", bucket)),
-			FileMode: utils.DefaultFileMode,
-			MaxSize:  int64(db.opt.ValueLogFileSize),
-			Bucket:   uint32(bucket),
-			FS:       db.fs,
-		}
-		if err := vlogpkg.VerifyDir(cfg); err != nil {
-			if !stderrors.Is(err, os.ErrNotExist) {
-				return err
+	if db.opt.EnableValueLog {
+		vlogDir := filepath.Join(db.opt.WorkDir, "vlog")
+		bucketCount := max(db.opt.ValueLogBucketCount, 1)
+		for bucket := range bucketCount {
+			cfg := vlogpkg.Config{
+				Dir:      filepath.Join(vlogDir, fmt.Sprintf("bucket-%03d", bucket)),
+				FileMode: utils.DefaultFileMode,
+				MaxSize:  int64(db.opt.ValueLogFileSize),
+				Bucket:   uint32(bucket),
+				FS:       db.fs,
+			}
+			if err := vlogpkg.VerifyDir(cfg); err != nil {
+				if !stderrors.Is(err, os.ErrNotExist) {
+					return err
+				}
 			}
 		}
 	}
@@ -794,6 +798,9 @@ func (db *DB) resolveDetachedValue(src *kv.Entry) ([]byte, byte, error) {
 	if !kv.IsValuePtr(src) {
 		return src.Value, meta, nil
 	}
+	if db.vlog == nil {
+		return nil, meta, fmt.Errorf("value pointer encountered but EnableValueLog is false; LSM still references vlog data, re-enable EnableValueLog to read it")
+	}
 	var vp kv.ValuePtr
 	vp.Decode(src.Value)
 	result, cb, err := db.vlog.read(&vp)
@@ -896,6 +903,10 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 		}
 		return entry, nil
 	}
+	if db.vlog == nil {
+		entry.DecrRef()
+		return nil, fmt.Errorf("value pointer encountered but EnableValueLog is false; LSM still references vlog data, re-enable EnableValueLog to read it")
+	}
 	var vp kv.ValuePtr
 	vp.Decode(entry.Value)
 	result, cb, readErr := db.vlog.read(&vp)
@@ -924,8 +935,13 @@ func (db *DB) Info() *Stats {
 	return stats
 }
 
-// RunValueLogGC triggers a value log garbage collection.
+// RunValueLogGC triggers a value log garbage collection. No-op (returns
+// nil) when EnableValueLog is false — callers can wire this into a
+// scheduler unconditionally.
 func (db *DB) RunValueLogGC(discardRatio float64) error {
+	if db == nil || db.vlog == nil {
+		return nil
+	}
 	if discardRatio >= 1.0 || discardRatio <= 0.0 {
 		return utils.ErrInvalidRequest
 	}
@@ -995,7 +1011,13 @@ func (db *DB) runValueLogGCPeriodically() {
 // This call counts a policy decision per entry (via shouldWriteValueToLSM →
 // MatchPolicy). vlog.write subsequently uses peekShouldWriteValueToLSM so the
 // per-entry decision is recorded exactly once across the pipeline.
+//
+// When EnableValueLog is false (the default) this returns false
+// immediately — the metadata-profile deployment never enters vlog code.
 func (db *DB) requestsHaveVlogWork(reqs []*dbruntime.Request) bool {
+	if db == nil || db.vlog == nil {
+		return false
+	}
 	for _, req := range reqs {
 		if req == nil {
 			continue

@@ -40,6 +40,28 @@ type Options struct {
 	// must opt into seeded/cluster directories explicitly.
 	AllowedModes []raftmode.Mode
 
+	// EnableValueLog opts into the engine/vlog Authoritative consumer. When
+	// false (the default) NoKV behaves as a pure metadata-first KV: every
+	// value is inlined into the LSM regardless of size, no vlog directory
+	// is created, no vlog manager is opened, no value-log GC goroutine
+	// runs, and the commit pipeline never enters vlog code paths.
+	//
+	// Set to true for workloads that benefit from value separation: large
+	// values (typically > a few KB), embedded blob storage, or any
+	// workload where the inlined-value write amplification dominates.
+	// When enabled, ValueThreshold / ValueLogFileSize / ValueLogBucketCount
+	// / ValueLogGC* control the vlog behavior as before.
+	//
+	// This is a breaking change vs releases prior to the slab-substrate
+	// redesign — older versions defaulted vlog ON. Existing deployments
+	// that depend on value separation MUST set EnableValueLog=true on
+	// upgrade. Reopening a DB with EnableValueLog=false against a
+	// directory that contains previously-written vlog data is allowed
+	// (the data is left in place, untouched) but any LSM SST entries
+	// holding a ValuePtr will fail to read until the user re-enables
+	// vlog or runs a future migration tool.
+	EnableValueLog bool
+
 	ValueThreshold int64
 	WorkDir        string
 	MemTableSize   int64

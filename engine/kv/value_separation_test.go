@@ -155,7 +155,8 @@ func TestValueSeparationPolicyIntegration(t *testing.T) {
 		MaxBatchCount:           3,
 		MaxBatchSize:            1024,
 		MemTableSize:            1024,
-		ValueThreshold:          32, // Global fallback threshold
+		EnableValueLog:          true, // value-separation policies require the vlog path
+		ValueThreshold:          32,   // Global fallback threshold
 		ValueSeparationPolicies: policies,
 		SyncWrites:              true,
 	}
