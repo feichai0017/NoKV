@@ -28,21 +28,29 @@
 
 ## What is NoKV?
 
-**NoKV is the open-source counterpart of the "stateless schema layer + transactional KV" pattern** that powers Meta Tectonic (over ZippyDB), Google Colossus (over Bigtable), and DeepSeek 3FS (over FoundationDB). It exposes namespace metadata as a first-class service via **`fsmeta`** (gRPC + embedded Go), backed by an in-house transactional KV substrate.
+**NoKV is the metadata substrate that filesystems, object storage, and AI dataset layers shouldn't have to build themselves.**
 
-**Three audiences, one substrate:**
+Meta Tectonic uses ZippyDB. Google Colossus uses Spanner. DeepSeek 3FS uses FoundationDB. Each big-tech system extracted a **separate metadata layer** from its data layer — because grafting namespace semantics onto a generic KV is the part that breaks under scale.
 
-- 🗂️ **Distributed filesystems** — DFS frontends (FUSE / NFS / SMB drivers) consume `fsmeta` for inode / dentry / mount / subtree authority
-- 🪣 **Object storage namespace layers** — S3-compatible gateways consume the same `fsmeta` for bucket / prefix / version metadata
-- 🧪 **AI dataset metadata** — checkpoint storms, dataset versioning, prefix-scoped change feeds for training pipelines
+NoKV is that layer, open-sourced and namespace-native: server-side `ReadDirPlus` / `WatchSubtree` / `SnapshotSubtree` / `RenameSubtree`, formally-verified authority handoff, sub-second prefix-scoped change feeds. **You bring the data plane** (FUSE driver, S3 frontend, dataset SDK); **NoKV owns namespace truth.**
 
-**Why the substrate matters:**
+> Where it sits: NoKV is the layer **above** generic KV (FoundationDB / TiKV / etcd) and **below** filesystem-shaped consumers (CephFS / JuiceFS / S3 gateways / AI training pipelines). Apache-2.0.
 
-1. **Native metadata primitives** — `ReadDirPlus`, `WatchSubtree`, `SnapshotSubtree`, and cross-region `RenameSubtree` are first-class server-side operations, not client-side compositions over `Get` / `Put` / `Scan`.
-2. **Single source of namespace truth** — mount lifecycle, subtree authority, snapshot epoch, and quota fence live in one rooted, replicated event log.
-3. **Vertical integration** — own LSM (with ART memtable) + own raftstore (per-region runtime, transport, membership, snapshot install, apply observer; consensus algorithm is `etcd/raft` `RawNode`) + own Percolator MVCC + own coordinator. No external dependency gates how a metadata primitive interacts with the storage layer.
+**Why namespace metadata is its own layer, not a feature you bolt onto generic KV:**
 
-> NoKV is a **substrate**, not a finished filesystem server. Build a FUSE driver / S3 gateway / dataset metadata service on top; we don't ship those out of the box. We do ship the metadata primitives, the rooted truth kernel, and a Redis-compatible gateway over the underlying KV.
+1. **Server-side namespace primitives.** `ReadDirPlus` returns one directory + N child stats in one round-trip; client-side stitching on a generic KV does 1+N round-trips with a **42×** end-to-end latency penalty (measured on the same NoKV cluster — see Headline Evidence). `WatchSubtree` ships a prefix-scoped change feed at **178 ms p50**, vs. client-side prefix scans on key-range watches.
+
+2. **Namespace correctness is its own class.** Subtree authority handoff, mount lifecycle, snapshot epoch, and quota fence have a formal correctness model that generic KV doesn't speak. NoKV's **Eunomia** protocol is TLC-model-checked under finite bounds for handoff legality — a property no general-purpose KV provides because it isn't a general-purpose KV property.
+
+3. **Bring your own data plane.** NoKV does **not** store object bytes, chunk data, or POSIX file content. You wire it under a FUSE driver, an S3 gateway, or a dataset SDK; NoKV is the namespace truth those frontends consume. This is the layer split Meta / Google / DeepSeek already chose internally — extracted, packaged, and Apache-2.0.
+
+**Three audiences that all sit on the same substrate:**
+
+- 🗂️ **Distributed filesystems** — DFS frontends (FUSE / NFS / SMB drivers, JuiceFS / CubeFS-style services) consume `fsmeta` for inode / dentry / mount / subtree authority instead of writing their own metadata layer on top of Redis / TiKV / FoundationDB
+- 🪣 **Object storage namespace layers** — S3-compatible gateways consume the same `fsmeta` for bucket / prefix / version metadata, getting fast `LIST` (server-side `ReadDirPlus`) and prefix-scoped event streams without client-side stitching
+- 🧪 **AI dataset metadata** — checkpoint storms (atomic multi-key `AssertionNotExist`), dataset versioning (`SnapshotSubtree`), prefix-scoped change feeds for training pipelines (`WatchSubtree`) — without retrofitting them onto a generic KV
+
+> NoKV does for namespace metadata what etcd did for cluster state: a purpose-built coordination layer instead of forcing engineers to re-derive namespace semantics on every project.
 
 <br/>
 
@@ -85,17 +93,17 @@ Apple M3 Pro · `records=1M` · `ops=1M` · `value_size=1000` · `conc=16`
 
 ## 🧭 Why NoKV vs X?
 
-| If you need… | You should probably use… | Why NoKV exists |
+| If you need… | You should probably use… | Where NoKV fits |
 |---|---|---|
-| A **complete distributed filesystem** (FUSE-mountable, full POSIX) | **CephFS, JuiceFS** | NoKV is the metadata substrate, not the full FS server |
-| A **production object store** | **MinIO, Ceph RGW** | Same — NoKV provides namespace metadata, not S3 HTTP / object body I/O |
-| **Hyperscaler-style "schema layer + transactional KV"** for your own DFS / OSS / dataset metadata | — | **This is what NoKV is for**: the open-source counterpart to Tectonic over ZippyDB, Colossus over Bigtable, 3FS over FDB |
-| Production distributed SQL | **CockroachDB**, TiDB | Different scope |
-| Production distributed KV | **TiKV, FoundationDB** | NoKV's KV layer is an in-house substrate for `fsmeta`, not a TiKV/FDB replacement |
-| Just an embedded LSM | **Pebble**, **Badger** | NoKV's engine is not a drop-in library |
-| A Raft library | **etcd/raft**, dragonboat | NoKV builds its raftstore (per-region runtime, transport, membership, snapshot install, apply observer) on top of `etcd/raft` `RawNode` — the integration is owned, the consensus algorithm is reused |
+| A **complete distributed filesystem** (FUSE-mountable, full POSIX) | **CephFS, JuiceFS** | NoKV is **not** an FS — but JuiceFS-style systems default to Redis / TiKV for their metadata backend, which breaks at scale. **NoKV can be JuiceFS's metadata backend.** |
+| A **production object store** | **MinIO, Ceph RGW** | NoKV is **not** an object store — object body I/O isn't its job. NoKV provides the namespace layer above the object backend (bucket / prefix / version) |
+| **A custom metadata service you're writing on top of FoundationDB / TiKV / etcd** | (your 4,000 lines of application code) | **This is exactly what NoKV replaces.** `ReadDirPlus` / `WatchSubtree` / `SnapshotSubtree` are server-side primitives — you don't have to stitch them client-side. Apache-2.0. |
+| A **production distributed KV** | **TiKV, FoundationDB, CockroachDB** | NoKV **does not compete** with them — they own the generic-KV market. NoKV is a metadata-native layer that can run **on top of** them (or, today, on its own engine) |
+| Production distributed SQL | **CockroachDB, TiDB** | Different scope (relational, not namespace) |
+| Just an embedded LSM | **Pebble, Badger** | NoKV's engine is not a drop-in library |
+| A Raft library | **etcd/raft, dragonboat** | NoKV's raftstore (per-region runtime, transport, membership, snapshot install, apply observer) is built **on top of** `etcd/raft` `RawNode`. Owned: the integration. Reused: the consensus algorithm. |
 
-NoKV's value comes from **owning the entire vertical** so namespace-metadata-natural primitives can be implemented as first-class server-side ops (not client-side compositions over `Get`/`Put`/`Scan`).
+NoKV's value comes from being **metadata-native, not generic-KV-with-metadata-glued-on**. The same architectural slice big-tech filesystems already extract internally — `ReadDirPlus`, prefix-scoped event streams, formally-verified authority handoff — packaged as a layer you can drop in instead of writing yourself.
 
 <br/>
 
