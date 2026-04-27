@@ -3,8 +3,8 @@ package lsm
 import (
 	"bytes"
 	"encoding/binary"
-	"math/rand"
 	"fmt"
+	"math/rand"
 	"testing"
 	"time"
 
