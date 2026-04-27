@@ -49,14 +49,6 @@ func writeEdit(w io.Writer, edit Edit) error {
 		} else {
 			buf = append(buf, 0)
 		}
-	case EditLogPointer:
-		// EditLogPointer Data Format:
-		// +----------------+----------------+
-		// | LogSegment (v) | LogOffset (v)  |
-		// +----------------+----------------+
-		// (v) denotes Uvarint
-		buf = binary.AppendUvarint(buf, uint64(edit.LogSeg))
-		buf = binary.AppendUvarint(buf, edit.LogOffset)
 	case EditValueLogHead:
 		// EditValueLogHead Data Format:
 		// +----------------+----------------+----------------+
@@ -187,21 +179,6 @@ func decodeEdit(data []byte) (Edit, error) {
 			ValueSize: valueSize,
 			Ingest:    ingest,
 		}
-	case EditLogPointer:
-		// EditLogPointer Data Format:
-		// +----------------+----------------+
-		// | LogSegment (v) | LogOffset (v)  |
-		// +----------------+----------------+
-		// (v) denotes Uvarint
-		seg, n := binary.Uvarint(data[pos:])
-		pos += n
-		off, n := binary.Uvarint(data[pos:])
-		pos += n
-		if pos > len(data) {
-			return Edit{}, fmt.Errorf("manifest log pointer truncated")
-		}
-		edit.LogSeg = uint32(seg)
-		edit.LogOffset = off
 	case EditValueLogHead:
 		// EditValueLogHead Data Format:
 		// +----------------+----------------+----------------+

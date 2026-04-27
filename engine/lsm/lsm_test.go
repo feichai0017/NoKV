@@ -1533,11 +1533,9 @@ func TestLevelsRuntimeAdjustThrottleAndPointers(t *testing.T) {
 		t.Fatalf("unexpected throttle events: %+v", events)
 	}
 
-	lsm.levels.setLogPointer(3, 9)
-	seg, off := lsm.levels.logPointer()
-	if seg != 3 || off != 9 {
-		t.Fatalf("unexpected log pointer %d/%d", seg, off)
-	}
+	// (removed: setLogPointer/logPointer were the in-memory cache for
+	//  the legacy Version.LogSegment/LogOffset diagnostic fields.
+	//  Recovery is per-shard via wal.Manager.Replay; the cache was dead.)
 
 	lsm.levels.recordCompactionMetrics(5 * time.Millisecond)
 	lastMs, maxMs, runs := lsm.levels.compactionDurations()

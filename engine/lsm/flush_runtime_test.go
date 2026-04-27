@@ -96,8 +96,8 @@ func TestFlushRuntimePerShardSerialization(t *testing.T) {
 	var inFlight [shardCount]atomic.Int32
 	var maxInFlight [shardCount]atomic.Int32
 
-	for s := 0; s < shardCount; s++ {
-		for i := 0; i < perShard; i++ {
+	for s := range shardCount {
+		for i := range perShard {
 			if err := rt.enqueue(shardedMemTable(s)); err != nil {
 				t.Fatalf("enqueue shard=%d i=%d: %v", s, i, err)
 			}
@@ -105,7 +105,7 @@ func TestFlushRuntimePerShardSerialization(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	for w := 0; w < workers; w++ {
+	for range workers {
 		wg.Go(func() {
 			for {
 				task, ok := rt.next()
@@ -136,7 +136,7 @@ func TestFlushRuntimePerShardSerialization(t *testing.T) {
 	_ = rt.close()
 	wg.Wait()
 
-	for s := 0; s < shardCount; s++ {
+	for s := range shardCount {
 		if got := maxInFlight[s].Load(); got > 1 {
 			t.Fatalf("shard %d had %d concurrent in-flight tasks; per-shard serialization invariant violated", s, got)
 		}
@@ -153,7 +153,7 @@ func TestFlushRuntimePerShardSerialization(t *testing.T) {
 func TestFlushRuntimeCrossShardParallelism(t *testing.T) {
 	const shardCount = 4
 	rt := newFlushRuntime(shardCount)
-	for s := 0; s < shardCount; s++ {
+	for s := range shardCount {
 		if err := rt.enqueue(shardedMemTable(s)); err != nil {
 			t.Fatalf("enqueue shard=%d: %v", s, err)
 		}
@@ -167,7 +167,7 @@ func TestFlushRuntimeCrossShardParallelism(t *testing.T) {
 	release := make(chan struct{})
 
 	var workers sync.WaitGroup
-	for w := 0; w < shardCount; w++ {
+	for range shardCount {
 		workers.Go(func() {
 			task, ok := rt.next()
 			if !ok {

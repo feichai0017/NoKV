@@ -54,28 +54,6 @@ func TestManagerCreateAndRecover(t *testing.T) {
 	}
 }
 
-func TestManagerLogPointer(t *testing.T) {
-	dir := t.TempDir()
-	mgr, err := manifest.Open(dir, nil)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	defer func() { _ = mgr.Close() }()
-
-	edit := manifest.Edit{
-		Type:      manifest.EditLogPointer,
-		LogSeg:    5,
-		LogOffset: 1024,
-	}
-	if err := mgr.LogEdits(edit); err != nil {
-		t.Fatalf("log pointer: %v", err)
-	}
-	version := mgr.Current()
-	if version.LogSegment != 5 || version.LogOffset != 1024 {
-		t.Fatalf("log pointer mismatch: %+v", version)
-	}
-}
-
 func TestManagerValueLog(t *testing.T) {
 	dir := t.TempDir()
 	mgr, err := manifest.Open(dir, nil)
@@ -299,12 +277,13 @@ func TestManagerRewrite(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("log edit: %v", err)
 	}
+	// Add a second EditAddFile so the rewrite threshold is breached
+	// without requiring the now-removed EditLogPointer edit type.
 	if err := mgr.LogEdits(manifest.Edit{
-		Type:      manifest.EditLogPointer,
-		LogSeg:    3,
-		LogOffset: 128,
+		Type: manifest.EditAddFile,
+		File: &manifest.FileMeta{Level: 0, FileID: 11, Size: 1},
 	}); err != nil {
-		t.Fatalf("log pointer: %v", err)
+		t.Fatalf("log edit 2: %v", err)
 	}
 
 	current, err := os.ReadFile(filepath.Join(dir, "CURRENT"))
@@ -327,11 +306,8 @@ func TestManagerRewrite(t *testing.T) {
 	defer func() { _ = mgr.Close() }()
 
 	version := mgr.Current()
-	if len(version.Levels[0]) != 1 || version.Levels[0][0].FileID != 10 {
-		t.Fatalf("expected file 10 after rewrite: %+v", version.Levels[0])
-	}
-	if version.LogSegment != 3 || version.LogOffset != 128 {
-		t.Fatalf("expected log pointer preserved, got seg=%d off=%d", version.LogSegment, version.LogOffset)
+	if len(version.Levels[0]) != 2 {
+		t.Fatalf("expected 2 files after rewrite, got: %+v", version.Levels[0])
 	}
 }
 
