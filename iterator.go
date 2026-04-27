@@ -7,7 +7,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm"
 	vlogpkg "github.com/feichai0017/NoKV/engine/vlog"
-	dbruntime "github.com/feichai0017/NoKV/internal/runtime"
+	dbruntime "github.com/feichai0017/NoKV/runtime"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
 )

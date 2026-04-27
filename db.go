@@ -21,7 +21,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/vfs"
 	vlogpkg "github.com/feichai0017/NoKV/engine/vlog"
 	"github.com/feichai0017/NoKV/engine/wal"
-	dbruntime "github.com/feichai0017/NoKV/internal/runtime"
+	dbruntime "github.com/feichai0017/NoKV/runtime"
 	"github.com/feichai0017/NoKV/metrics"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
