@@ -7,6 +7,8 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/feichai0017/NoKV/engine/slab/dirpage"
+	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	"github.com/feichai0017/NoKV/fsmeta"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
@@ -823,4 +825,124 @@ func (e fakeKeyConflictError) Error() string {
 
 func (e fakeKeyConflictError) KeyErrors() []*kvrpcpb.KeyError {
 	return e.errors
+}
+
+// -----------------------------------------------------------------------------
+// Slab-consumer integration tests: NegativeSlab + DirPageSlab wiring.
+// These exercise the executor's negCache / dirPages hooks end-to-end
+// against the fake runner; the underlying cache logic is tested in
+// engine/slab/{negativecache,dirpage}/_test.go.
+// -----------------------------------------------------------------------------
+
+func TestExecutorNegativeCacheLookupShortCircuit(t *testing.T) {
+	runner := newFakeRunner()
+	cache := negativecache.New(negativecache.Config{
+		GroupKeyFn: func(k []byte) []byte { return k },
+	})
+	executor, err := New(runner, WithNegativeCache(cache))
+	require.NoError(t, err)
+
+	req := fsmeta.LookupRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "missing"}
+
+	// First lookup: real LSM probe (runner.Get), records the miss.
+	_, err = executor.Lookup(context.Background(), req)
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	firstGetCalls := runner.getCalls
+
+	// Second lookup: served by cache, no runner round-trip.
+	_, err = executor.Lookup(context.Background(), req)
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	require.Equal(t, firstGetCalls, runner.getCalls,
+		"runner.Get must not be called when negative cache memo is fresh")
+}
+
+func TestExecutorNegativeCacheInvalidatedByCreate(t *testing.T) {
+	runner := newFakeRunner()
+	cache := negativecache.New(negativecache.Config{
+		GroupKeyFn: func(k []byte) []byte { return k },
+	})
+	executor, err := New(runner, WithNegativeCache(cache))
+	require.NoError(t, err)
+
+	req := fsmeta.LookupRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "novel"}
+	_, err = executor.Lookup(context.Background(), req)
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+
+	// Create the dentry. After commit the cache must drop the memo so the
+	// next Lookup re-issues against the runner and observes the new entry.
+	err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount: "vol", Parent: fsmeta.RootInode, Name: "novel", Inode: 100,
+	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+	require.NoError(t, err)
+
+	record, err := executor.Lookup(context.Background(), req)
+	require.NoError(t, err, "create must invalidate the prior negative memo")
+	require.Equal(t, fsmeta.InodeID(100), record.Inode)
+}
+
+func TestExecutorDirPageReadDirPlusCacheHit(t *testing.T) {
+	runner := newFakeRunner()
+	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
+	require.NoError(t, err)
+	defer func() { _ = cache.Close() }()
+	executor, err := New(runner, WithDirPageCache(cache))
+	require.NoError(t, err)
+
+	mount := fsmeta.MountID("vol")
+	parent := fsmeta.RootInode
+	for i, name := range []string{"a", "b", "c"} {
+		err := executor.Create(context.Background(), fsmeta.CreateRequest{
+			Mount: mount, Parent: parent, Name: name, Inode: fsmeta.InodeID(10 + i),
+		}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+		require.NoError(t, err)
+	}
+
+	req := fsmeta.ReadDirRequest{Mount: mount, Parent: parent, Limit: 100}
+
+	// First call: runner Scan + BatchGet, then async materialize.
+	first, err := executor.ReadDirPlus(context.Background(), req)
+	require.NoError(t, err)
+	require.Len(t, first, 3)
+	scansAfterFirst := len(runner.scanVersions)
+
+	// Second call: cache hit → no new Scan / BatchGet against the runner.
+	second, err := executor.ReadDirPlus(context.Background(), req)
+	require.NoError(t, err)
+	require.Len(t, second, 3)
+	require.Equal(t, scansAfterFirst, len(runner.scanVersions),
+		"runner.Scan must not be called when dirpage cache hits")
+}
+
+func TestExecutorDirPageInvalidatedByCreate(t *testing.T) {
+	runner := newFakeRunner()
+	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
+	require.NoError(t, err)
+	defer func() { _ = cache.Close() }()
+	executor, err := New(runner, WithDirPageCache(cache))
+	require.NoError(t, err)
+
+	mount := fsmeta.MountID("vol")
+	parent := fsmeta.RootInode
+
+	// Materialize an initial empty page set under frontier 0.
+	_, err = executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount: mount, Parent: parent, Limit: 10,
+	})
+	require.NoError(t, err)
+
+	// Create a dentry; this must bump the dirpage epoch.
+	err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount: mount, Parent: parent, Name: "fresh", Inode: 99,
+	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+	require.NoError(t, err)
+
+	// Next ReadDirPlus must miss the cache (epoch advanced) and re-scan.
+	scansBefore := len(runner.scanVersions)
+	out, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount: mount, Parent: parent, Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, out, 1, "create must invalidate the cached empty page set")
+	require.Greater(t, len(runner.scanVersions), scansBefore,
+		"epoch bump must force a runner scan on the next ReadDirPlus")
 }
