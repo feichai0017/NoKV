@@ -33,7 +33,7 @@ func writeEdit(w io.Writer, edit Edit) error {
 		// +----------------+----------------+----------------+----------------+----------------+
 		// | Level (v)      | FileID (v)     | Size (v)       | Smallest (lv)  | Largest (lv)   |
 		// +----------------+----------------+----------------+----------------+----------------+
-		// | CreatedAt (v)  | ValueSize (v)  | Staging (1B)    |
+		// | CreatedAt (v)  | ValueSize (v)  | Landing (1B)    |
 		// +----------------+----------------+
 		// (v) denotes Uvarint, (lv) denotes Length-prefixed Bytes (Uvarint length + bytes)
 		meta := edit.File
@@ -44,7 +44,7 @@ func writeEdit(w io.Writer, edit Edit) error {
 		buf = appendBytes(buf, meta.Largest)
 		buf = binary.AppendUvarint(buf, meta.CreatedAt)
 		buf = binary.AppendUvarint(buf, meta.ValueSize)
-		if meta.Staging {
+		if meta.Landing {
 			buf = append(buf, 1)
 		} else {
 			buf = append(buf, 0)
@@ -136,7 +136,7 @@ func decodeEdit(data []byte) (Edit, error) {
 		// +----------------+----------------+----------------+----------------+----------------+
 		// | Level (v)      | FileID (v)     | Size (v)       | Smallest (lv)  | Largest (lv)   |
 		// +----------------+----------------+----------------+----------------+----------------+
-		// | CreatedAt (v)  | ValueSize (v)  | Staging (1B)    |
+		// | CreatedAt (v)  | ValueSize (v)  | Landing (1B)    |
 		// +----------------+----------------+
 		// (v) denotes Uvarint, (lv) denotes Length-prefixed Bytes (Uvarint length + bytes)
 		level, n := binary.Uvarint(data[pos:])
@@ -161,9 +161,9 @@ func decodeEdit(data []byte) (Edit, error) {
 				valueSize = vs
 			}
 		}
-		var staging bool
+		var landing bool
 		if pos < len(data) {
-			staging = data[pos] == 1
+			landing = data[pos] == 1
 			pos++
 		}
 		if pos > len(data) {
@@ -177,7 +177,7 @@ func decodeEdit(data []byte) (Edit, error) {
 			Largest:   largest,
 			CreatedAt: created,
 			ValueSize: valueSize,
-			Staging:   staging,
+			Landing:   landing,
 		}
 	case EditValueLogHead:
 		// EditValueLogHead Data Format:

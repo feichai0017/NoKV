@@ -153,7 +153,7 @@ func (s *Store) SetAdvertiseAddrs(clientAddr, raftAddr string) {
 	s.addressMu.Unlock()
 }
 
-// WorkDir returns the store-local workdir used for metadata and staging.
+// WorkDir returns the store-local workdir used for metadata and landing.
 func (s *Store) WorkDir() string {
 	if s == nil {
 		return ""

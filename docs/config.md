@@ -31,7 +31,7 @@ Key option groups (see `options.go` for the full list):
   - `ValueLogBucketCount`
 - **LSM & compaction**
   - `MemTableSize`, `MemTableEngine`, `SSTableMaxSz`, `NumCompactors`
-  - `NumLevelZeroTables`, `IngestCompactBatchSize`, `IngestBacklogMergeScore`
+  - `NumLevelZeroTables`, `LandingCompactBatchSize`, `LandingBacklogMergeScore`
   - `CompactionValueWeight`, `CompactionValueAlertThreshold`
 - **Caches**
   - `BlockCacheBytes`, `IndexCacheBytes`
@@ -62,7 +62,7 @@ defer db.Close()
 ```
 
 Notes:
-- `NewDefaultOptions()` populates concrete compaction/ingest defaults up front.
+- `NewDefaultOptions()` populates concrete compaction/landing defaults up front.
   `Open()` resolves constructor-owned defaults once, then the DB and LSM layers
   consume the resolved values directly.
 - `WriteBatchMaxCount`, `WriteBatchMaxSize`, `MaxBatchCount`, `MaxBatchSize`,

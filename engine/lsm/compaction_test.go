@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCompactionMoveToStaging(t *testing.T) {
+func TestCompactionMoveToLanding(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -34,19 +34,19 @@ func TestCompactionMoveToStaging(t *testing.T) {
 		cd.nextLevel = lsm.levels.levels[1]
 	}
 
-	beforeStaging := cd.nextLevel.numStagingTables()
-	if err := lsm.levels.moveToStaging(cd); err != nil {
-		t.Fatalf("moveToStaging: %v", err)
+	beforeLanding := cd.nextLevel.numLandingTables()
+	if err := lsm.levels.moveToLanding(cd); err != nil {
+		t.Fatalf("moveToLanding: %v", err)
 	}
-	afterStaging := cd.nextLevel.numStagingTables()
-	if afterStaging <= beforeStaging {
-		t.Fatalf("expected staging buffer to grow, before=%d after=%d", beforeStaging, afterStaging)
+	afterLanding := cd.nextLevel.numLandingTables()
+	if afterLanding <= beforeLanding {
+		t.Fatalf("expected landing buffer to grow, before=%d after=%d", beforeLanding, afterLanding)
 	}
 
 	// Ensure the moved table has been removed from the source level.
 	found := false
 	cd.nextLevel.RLock()
-	for _, sh := range cd.nextLevel.staging.shards {
+	for _, sh := range cd.nextLevel.landing.shards {
 		for _, tbl := range sh.tables {
 			if tbl.fid == cd.top[0].fid {
 				found = true
@@ -59,7 +59,7 @@ func TestCompactionMoveToStaging(t *testing.T) {
 	}
 	cd.nextLevel.RUnlock()
 	if !found {
-		t.Fatalf("table %d not found in staging buffer", cd.top[0].fid)
+		t.Fatalf("table %d not found in landing buffer", cd.top[0].fid)
 	}
 }
 
@@ -322,61 +322,61 @@ func TestSchedulerPolicyArrangeLeveled(t *testing.T) {
 	require.Equal(t, 0, forWorker1[1].Level)
 }
 
-func TestSchedulerPolicyArrangeTieredPrefersStaging(t *testing.T) {
+func TestSchedulerPolicyArrangeTieredPrefersLanding(t *testing.T) {
 	p := NewSchedulerPolicy(PolicyTiered)
 	in := []Priority{
-		{Level: 0, Adjusted: 9, StagingMode: StagingNone},
-		{Level: 3, Adjusted: 2, StagingMode: StagingKeep},
-		{Level: 2, Adjusted: 5, StagingMode: StagingDrain},
-		{Level: 1, Adjusted: 8, StagingMode: StagingNone},
+		{Level: 0, Adjusted: 9, LandingMode: LandingNone},
+		{Level: 3, Adjusted: 2, LandingMode: LandingKeep},
+		{Level: 2, Adjusted: 5, LandingMode: LandingDrain},
+		{Level: 1, Adjusted: 8, LandingMode: LandingNone},
 	}
 	out := p.Arrange(0, in)
 	require.Len(t, out, 4)
 	require.Equal(t, 0, out[0].Level)
-	require.Equal(t, StagingKeep, out[1].StagingMode)
-	require.Equal(t, StagingDrain, out[2].StagingMode)
+	require.Equal(t, LandingKeep, out[1].LandingMode)
+	require.Equal(t, LandingDrain, out[2].LandingMode)
 	require.Equal(t, 1, out[3].Level)
 }
 
-func TestSchedulerPolicyArrangeHybridSwitchesByStagingPressure(t *testing.T) {
+func TestSchedulerPolicyArrangeHybridSwitchesByLandingPressure(t *testing.T) {
 	p := NewSchedulerPolicy(PolicyHybrid)
-	withMildStaging := []Priority{
-		{Level: 1, Adjusted: 2, StagingMode: StagingNone},
-		{Level: 2, Adjusted: 1.5, StagingMode: StagingDrain},
+	withMildLanding := []Priority{
+		{Level: 1, Adjusted: 2, LandingMode: LandingNone},
+		{Level: 2, Adjusted: 1.5, LandingMode: LandingDrain},
 	}
-	out := p.Arrange(0, withMildStaging)
+	out := p.Arrange(0, withMildLanding)
 	require.Equal(t, 1, out[0].Level)
 
-	noStaging := []Priority{
-		{Level: 2, Adjusted: 2, StagingMode: StagingNone},
-		{Level: 0, Adjusted: 1.5, StagingMode: StagingNone},
+	noLanding := []Priority{
+		{Level: 2, Adjusted: 2, LandingMode: LandingNone},
+		{Level: 0, Adjusted: 1.5, LandingMode: LandingNone},
 	}
-	out = p.Arrange(0, noStaging)
+	out = p.Arrange(0, noLanding)
 	require.Equal(t, 0, out[0].Level)
 
-	withHeavyStaging := []Priority{
-		{Level: 1, Adjusted: 1.2, StagingMode: StagingNone},
-		{Level: 2, Adjusted: 4.5, StagingMode: StagingDrain},
-		{Level: 3, Adjusted: 3.5, StagingMode: StagingKeep},
+	withHeavyLanding := []Priority{
+		{Level: 1, Adjusted: 1.2, LandingMode: LandingNone},
+		{Level: 2, Adjusted: 4.5, LandingMode: LandingDrain},
+		{Level: 3, Adjusted: 3.5, LandingMode: LandingKeep},
 	}
-	out = p.Arrange(0, withHeavyStaging)
-	require.Equal(t, StagingKeep, out[0].StagingMode)
-	require.Equal(t, StagingDrain, out[1].StagingMode)
+	out = p.Arrange(0, withHeavyLanding)
+	require.Equal(t, LandingKeep, out[0].LandingMode)
+	require.Equal(t, LandingDrain, out[1].LandingMode)
 }
 
 func TestSchedulerPolicyTieredFeedbackAdjustsQuota(t *testing.T) {
 	baseInput := []Priority{
-		{Level: 0, Adjusted: 3.0, StagingMode: StagingNone},
-		{Level: 6, Adjusted: 6.0, StagingMode: StagingKeep},
-		{Level: 6, Adjusted: 5.9, StagingMode: StagingKeep},
-		{Level: 6, Adjusted: 5.8, StagingMode: StagingKeep},
-		{Level: 6, Adjusted: 5.7, StagingMode: StagingKeep},
-		{Level: 5, Adjusted: 6.5, StagingMode: StagingDrain},
-		{Level: 5, Adjusted: 6.4, StagingMode: StagingDrain},
-		{Level: 5, Adjusted: 6.3, StagingMode: StagingDrain},
-		{Level: 5, Adjusted: 6.2, StagingMode: StagingDrain},
-		{Level: 2, Adjusted: 5.5, StagingMode: StagingNone},
-		{Level: 2, Adjusted: 5.4, StagingMode: StagingNone},
+		{Level: 0, Adjusted: 3.0, LandingMode: LandingNone},
+		{Level: 6, Adjusted: 6.0, LandingMode: LandingKeep},
+		{Level: 6, Adjusted: 5.9, LandingMode: LandingKeep},
+		{Level: 6, Adjusted: 5.8, LandingMode: LandingKeep},
+		{Level: 6, Adjusted: 5.7, LandingMode: LandingKeep},
+		{Level: 5, Adjusted: 6.5, LandingMode: LandingDrain},
+		{Level: 5, Adjusted: 6.4, LandingMode: LandingDrain},
+		{Level: 5, Adjusted: 6.3, LandingMode: LandingDrain},
+		{Level: 5, Adjusted: 6.2, LandingMode: LandingDrain},
+		{Level: 2, Adjusted: 5.5, LandingMode: LandingNone},
+		{Level: 2, Adjusted: 5.4, LandingMode: LandingNone},
 	}
 
 	normal := NewSchedulerPolicy(PolicyTiered)
@@ -387,29 +387,29 @@ func TestSchedulerPolicyTieredFeedbackAdjustsQuota(t *testing.T) {
 	failed := NewSchedulerPolicy(PolicyTiered)
 	for range 3 {
 		failed.Observe(FeedbackEvent{
-			Priority: Priority{StagingMode: StagingDrain},
-			Err:      errors.New("injected staging failure"),
+			Priority: Priority{LandingMode: LandingDrain},
+			Err:      errors.New("injected landing failure"),
 		})
 	}
 	failedOut := failed.Arrange(0, baseInput)
 	failedIdx := firstRegularNonL0(failedOut)
-	require.Less(t, failedIdx, normalIdx, "staging failures should shift quota toward regular progress")
+	require.Less(t, failedIdx, normalIdx, "landing failures should shift quota toward regular progress")
 
 	success := NewSchedulerPolicy(PolicyTiered)
 	for range 3 {
 		success.Observe(FeedbackEvent{
-			Priority: Priority{StagingMode: StagingKeep},
+			Priority: Priority{LandingMode: LandingKeep},
 			Err:      nil,
 		})
 	}
 	successOut := success.Arrange(0, baseInput)
 	successIdx := firstRegularNonL0(successOut)
-	require.Greater(t, successIdx, normalIdx, "staging successes should increase staging scheduling share")
+	require.Greater(t, successIdx, normalIdx, "landing successes should increase landing scheduling share")
 }
 
 func firstRegularNonL0(prios []Priority) int {
 	for i, p := range prios {
-		if p.StagingMode == StagingNone && p.Level != 0 {
+		if p.LandingMode == LandingNone && p.Level != 0 {
 			return i
 		}
 	}
@@ -440,10 +440,10 @@ func requireDecrOnce(t *testing.T, before map[*table]int32) {
 	}
 }
 
-func hasStagingTable(lh *levelHandler, fid uint64) bool {
+func hasLandingTable(lh *levelHandler, fid uint64) bool {
 	lh.RLock()
 	defer lh.RUnlock()
-	for _, sh := range lh.staging.shards {
+	for _, sh := range lh.landing.shards {
 		for _, tbl := range sh.tables {
 			if tbl != nil && tbl.fid == fid {
 				return true
@@ -453,7 +453,7 @@ func hasStagingTable(lh *levelHandler, fid uint64) bool {
 	return false
 }
 
-func TestRunCompactDefStagingNoneDecrementsTopOnce(t *testing.T) {
+func TestRunCompactDefLandingNoneDecrementsTopOnce(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -464,20 +464,20 @@ func TestRunCompactDefStagingNoneDecrementsTopOnce(t *testing.T) {
 	cd := buildCompactDef(lsm, 0, 0, 1)
 	tricky(cd.thisLevel.tablesSnapshot())
 	if ok := lsm.levels.fillTables(cd); !ok {
-		t.Fatalf("fillTables failed for staging-none path")
+		t.Fatalf("fillTables failed for landing-none path")
 	}
-	if cd.plan.StagingMode != StagingNone {
-		t.Fatalf("expected staging-none plan, got %v", cd.plan.StagingMode)
+	if cd.plan.LandingMode != LandingNone {
+		t.Fatalf("expected landing-none plan, got %v", cd.plan.LandingMode)
 	}
 	before := tableRefSnapshot(cd.top)
 	if err := lsm.levels.runCompactDef(0, 0, *cd); err != nil {
-		t.Fatalf("runCompactDef staging-none: %v", err)
+		t.Fatalf("runCompactDef landing-none: %v", err)
 	}
 	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 	requireDecrOnce(t, before)
 }
 
-func TestRunCompactDefStagingDrainDecrementsTopOnce(t *testing.T) {
+func TestRunCompactDefLandingDrainDecrementsTopOnce(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -488,7 +488,7 @@ func TestRunCompactDefStagingDrainDecrementsTopOnce(t *testing.T) {
 	l0 := lsm.levels.levels[0]
 	l0Tables := l0.tablesSnapshot()
 	if len(l0Tables) == 0 {
-		t.Fatalf("expected L0 tables before moveToStaging")
+		t.Fatalf("expected L0 tables before moveToLanding")
 	}
 
 	move := buildCompactDef(lsm, 0, 0, 6)
@@ -498,38 +498,38 @@ func TestRunCompactDefStagingDrainDecrementsTopOnce(t *testing.T) {
 	if move.nextLevel == nil {
 		move.nextLevel = lsm.levels.levels[6]
 	}
-	if err := lsm.levels.moveToStaging(move); err != nil {
-		t.Fatalf("moveToStaging: %v", err)
+	if err := lsm.levels.moveToLanding(move); err != nil {
+		t.Fatalf("moveToLanding: %v", err)
 	}
 
 	target := lsm.levels.levels[6]
-	if target.numStagingTables() == 0 {
-		t.Fatalf("expected staging tables after moveToStaging")
+	if target.numLandingTables() == 0 {
+		t.Fatalf("expected landing tables after moveToLanding")
 	}
 
 	cd := buildCompactDef(lsm, 0, 6, 6)
-	cd.plan.StagingMode = StagingDrain
-	cd.plan.StatsTag = "test-staging-drain"
-	if ok := lsm.levels.fillTablesStagingShard(cd, -1); !ok {
-		t.Fatalf("fillTablesStagingShard failed for staging-drain path")
+	cd.plan.LandingMode = LandingDrain
+	cd.plan.StatsTag = "test-landing-drain"
+	if ok := lsm.levels.fillTablesLandingShard(cd, -1); !ok {
+		t.Fatalf("fillTablesLandingShard failed for landing-drain path")
 	}
 	if len(cd.top) == 0 {
-		t.Fatalf("expected staging top tables for drain compaction")
+		t.Fatalf("expected landing top tables for drain compaction")
 	}
 	before := tableRefSnapshot(cd.top)
 	if err := lsm.levels.runCompactDef(0, 6, *cd); err != nil {
-		t.Fatalf("runCompactDef staging-drain: %v", err)
+		t.Fatalf("runCompactDef landing-drain: %v", err)
 	}
 	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 	requireDecrOnce(t, before)
 	for tbl := range before {
-		if hasStagingTable(target, tbl.fid) {
-			t.Fatalf("drained table %d still present in staging buffer", tbl.fid)
+		if hasLandingTable(target, tbl.fid) {
+			t.Fatalf("drained table %d still present in landing buffer", tbl.fid)
 		}
 	}
 }
 
-func TestRunCompactDefStagingKeepDecrementsTopOnce(t *testing.T) {
+func TestRunCompactDefLandingKeepDecrementsTopOnce(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -539,7 +539,7 @@ func TestRunCompactDefStagingKeepDecrementsTopOnce(t *testing.T) {
 
 	l0Tables := lsm.levels.levels[0].tablesSnapshot()
 	if len(l0Tables) == 0 {
-		t.Fatalf("expected L0 tables before moveToStaging")
+		t.Fatalf("expected L0 tables before moveToLanding")
 	}
 
 	move := buildCompactDef(lsm, 0, 0, 6)
@@ -549,36 +549,36 @@ func TestRunCompactDefStagingKeepDecrementsTopOnce(t *testing.T) {
 	if move.nextLevel == nil {
 		move.nextLevel = lsm.levels.levels[6]
 	}
-	if err := lsm.levels.moveToStaging(move); err != nil {
-		t.Fatalf("moveToStaging: %v", err)
+	if err := lsm.levels.moveToLanding(move); err != nil {
+		t.Fatalf("moveToLanding: %v", err)
 	}
 
 	target := lsm.levels.levels[6]
-	if target.numStagingTables() == 0 {
-		t.Fatalf("expected staging tables after moveToStaging")
+	if target.numLandingTables() == 0 {
+		t.Fatalf("expected landing tables after moveToLanding")
 	}
 
 	cd := buildCompactDef(lsm, 0, 6, 6)
-	cd.plan.StagingMode = StagingKeep
-	cd.plan.StatsTag = "test-staging-keep"
-	if ok := lsm.levels.fillTablesStagingShard(cd, -1); !ok {
-		t.Fatalf("fillTablesStagingShard failed for staging-keep path")
+	cd.plan.LandingMode = LandingKeep
+	cd.plan.StatsTag = "test-landing-keep"
+	if ok := lsm.levels.fillTablesLandingShard(cd, -1); !ok {
+		t.Fatalf("fillTablesLandingShard failed for landing-keep path")
 	}
 	if len(cd.top) == 0 {
-		t.Fatalf("expected staging top tables for keep compaction")
+		t.Fatalf("expected landing top tables for keep compaction")
 	}
 	before := tableRefSnapshot(cd.top)
 	if err := lsm.levels.runCompactDef(0, 6, *cd); err != nil {
-		t.Fatalf("runCompactDef staging-keep: %v", err)
+		t.Fatalf("runCompactDef landing-keep: %v", err)
 	}
 	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 	requireDecrOnce(t, before)
-	if target.numStagingTables() == 0 {
-		t.Fatalf("expected staging tables to remain after staging-keep compaction")
+	if target.numLandingTables() == 0 {
+		t.Fatalf("expected landing tables to remain after landing-keep compaction")
 	}
 	for tbl := range before {
-		if hasStagingTable(target, tbl.fid) {
-			t.Fatalf("replaced table %d still present in staging buffer", tbl.fid)
+		if hasLandingTable(target, tbl.fid) {
+			t.Fatalf("replaced table %d still present in landing buffer", tbl.fid)
 		}
 	}
 }

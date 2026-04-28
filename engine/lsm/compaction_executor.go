@@ -33,7 +33,7 @@ func (lm *levelManager) doCompact(id int, p Priority) (retErr error) {
 		plan: Plan{
 			ThisLevel:    l,
 			ThisFileSize: lm.targetFileSizeForLevel(t, l),
-			StagingMode:  p.StagingMode,
+			LandingMode:  p.LandingMode,
 			DropPrefixes: p.DropPrefixes,
 			StatsTag:     p.StatsTag,
 		},
@@ -51,13 +51,13 @@ func (lm *levelManager) doCompact(id int, p Priority) (retErr error) {
 		}
 	}()
 
-	if p.StagingMode.UsesStaging() && l > 0 {
+	if p.LandingMode.UsesLanding() && l > 0 {
 		cd.setNextLevel(lm, t, cd.thisLevel)
-		order := cd.thisLevel.staging.shardOrderBySize()
+		order := cd.thisLevel.landing.shardOrderBySize()
 		if len(order) == 0 {
 			return ErrFillTables
 		}
-		baseLimit := lm.opt.StagingShardParallelism
+		baseLimit := lm.opt.LandingShardParallelism
 		if baseLimit <= 0 {
 			baseLimit = max(lm.opt.NumCompactors/2, 1)
 		}
@@ -75,13 +75,13 @@ func (lm *levelManager) doCompact(id int, p Priority) (retErr error) {
 		var ran bool
 		for i := 0; i < shardLimit; i++ {
 			sub := cd
-			if !lm.fillTablesStagingShard(&sub, order[i]) {
+			if !lm.fillTablesLandingShard(&sub, order[i]) {
 				continue
 			}
-			sub.plan.StagingMode = p.StagingMode
+			sub.plan.LandingMode = p.LandingMode
 			sub.plan.StatsTag = p.StatsTag
 			if err := lm.runCompactDef(id, l, sub); err != nil {
-				lm.getLogger().Error("staging compaction failed", "worker", id, "err", err, "def", sub)
+				lm.getLogger().Error("landing compaction failed", "worker", id, "err", err, "def", sub)
 				if stateDelErr := lm.compactState.Delete(sub.stateEntry()); stateDelErr != nil {
 					return errors.Join(err, stateDelErr)
 				}
@@ -91,7 +91,7 @@ func (lm *levelManager) doCompact(id int, p Priority) (retErr error) {
 				return err
 			}
 			ran = true
-			lm.getLogger().Info("staging compaction complete", "worker", id, "level", sub.thisLevel.levelNum, "shard", order[i])
+			lm.getLogger().Info("landing compaction complete", "worker", id, "level", sub.thisLevel.levelNum, "shard", order[i])
 		}
 		if !ran {
 			return ErrFillTables
@@ -107,11 +107,11 @@ func (lm *levelManager) doCompact(id int, p Priority) (retErr error) {
 		}
 		cleanup = true
 		if cd.nextLevel.levelNum != 0 {
-			if err := lm.moveToStaging(&cd); err != nil {
-				lm.getLogger().Error("move to staging failed", "worker", id, "err", err, "def", cd)
+			if err := lm.moveToLanding(&cd); err != nil {
+				lm.getLogger().Error("move to landing failed", "worker", id, "err", err, "def", cd)
 				return err
 			}
-			lm.getLogger().Info("moved L0 tables to staging buffer", "worker", id, "tables", len(cd.top), "target_level", cd.nextLevel.levelNum)
+			lm.getLogger().Info("moved L0 tables to landing buffer", "worker", id, "tables", len(cd.top), "target_level", cd.nextLevel.levelNum)
 			return nil
 		}
 	} else {
@@ -213,7 +213,7 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 					Largest:   kv.SafeCopy(nil, tbl.MaxKey()),
 					CreatedAt: uint64(time.Now().Unix()),
 					ValueSize: tbl.ValueSize(),
-					Staging:   cd.plan.StagingMode == StagingKeep,
+					Landing:   cd.plan.LandingMode == LandingKeep,
 				},
 			}
 			manifestEdits = append(manifestEdits, add)
@@ -231,8 +231,8 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 	}
 	cleanupNeeded = false
 
-	if cd.plan.StagingMode == StagingKeep {
-		if err := thisLevel.replaceStagingTables(cd.top, newTables); err != nil {
+	if cd.plan.LandingMode == LandingKeep {
+		if err := thisLevel.replaceLandingTables(cd.top, newTables); err != nil {
 			return err
 		}
 		if thisLevel.levelNum > 0 {
@@ -242,13 +242,13 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 		if err := nextLevel.replaceTables(cd.bot, newTables); err != nil {
 			return err
 		}
-		switch cd.plan.StagingMode {
-		case StagingDrain:
-			if err := thisLevel.deleteStagingTables(cd.top); err != nil {
+		switch cd.plan.LandingMode {
+		case LandingDrain:
+			if err := thisLevel.deleteLandingTables(cd.top); err != nil {
 				return err
 			}
 		default:
-			// StagingNone (and unknown modes) own top tables in the main level list.
+			// LandingNone (and unknown modes) own top tables in the main level list.
 			if err := thisLevel.deleteTables(cd.top); err != nil {
 				return err
 			}
@@ -273,10 +273,10 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 			"duration", dur.Round(time.Millisecond).String(),
 		)
 	}
-	// Record staging metrics if applicable.
-	if cd.plan.StagingMode.UsesStaging() {
+	// Record landing metrics if applicable.
+	if cd.plan.LandingMode.UsesLanding() {
 		tablesCompacted := len(cd.top) + len(cd.bot)
-		cd.thisLevel.recordStagingMetrics(cd.plan.StagingMode == StagingKeep, time.Since(timeStart), tablesCompacted)
+		cd.thisLevel.recordLandingMetrics(cd.plan.LandingMode == LandingKeep, time.Since(timeStart), tablesCompacted)
 	}
 	lm.recordCompactionMetrics(time.Since(timeStart))
 	// After max-level compaction, range tombstone layout may change.
@@ -291,7 +291,7 @@ func (lm *levelManager) canMoveToNextLevel(cd *compactDef) bool {
 	if cd == nil || cd.thisLevel == nil || cd.nextLevel == nil {
 		return false
 	}
-	if cd.plan.StagingMode != StagingNone {
+	if cd.plan.LandingMode != LandingNone {
 		return false
 	}
 	if cd.thisLevel == cd.nextLevel {
