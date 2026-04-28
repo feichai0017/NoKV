@@ -21,7 +21,15 @@ jobs:
           go test ./... -coverprofile=coverage.out
           awk 'NR == 1 || $0 !~ /(\.pb\.go:|_grpc\.pb\.go:)/' coverage.out > coverage.filtered.out
           mv coverage.filtered.out coverage.out
+      # Skip codecov upload on Dependabot PRs: GitHub does not expose
+      # repo secrets to Dependabot-triggered workflow runs by default
+      # (security policy), so secrets.CODECOV_TOKEN is empty there and
+      # codecov-action's pre-check fails with a misleading 'missing
+      # dependency: gpg' error. We still gate codecov hard on push-to-
+      # main and human-authored PRs via fail_ci_if_error: true, so
+      # coverage regressions stay blocking on the actual code paths.
       - name: Upload coverage to Codecov
+        if: github.actor != 'dependabot[bot]'
         uses: codecov/codecov-action@v6
         with:
           files: coverage.out
