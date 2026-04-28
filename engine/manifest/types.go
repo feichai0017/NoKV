@@ -9,7 +9,7 @@ type FileMeta struct {
 	Largest   []byte
 	CreatedAt uint64
 	ValueSize uint64
-	Staging   bool
+	Landing   bool
 }
 
 // ValueLogMeta describes a value log segment.

@@ -1,6 +1,6 @@
 # Compaction & Cache Strategy
 
-> NoKV’s compaction pipeline borrows the leveled‑LSM layout from RocksDB, but layers it with an ingest buffer, lightweight cache telemetry, and simple concurrency guards so the implementation stays approachable while still handling bursty workloads.
+> NoKV’s compaction pipeline borrows the leveled‑LSM layout from RocksDB, but layers it with a landing buffer, lightweight cache telemetry, and simple concurrency guards so the implementation stays approachable while still handling bursty workloads.
 
 ---
 
@@ -9,31 +9,31 @@
 Compactions are orchestrated by `lsm.compaction` with `lsm.levelManager` supplying scheduling input and executing the plan. Each level owns two lists of tables:
 
 - `tables` – the canonical sorted run for the level.
-- `ingest` – a staging buffer that temporarily holds SSTables moved from the level above when there is not yet enough work (or bandwidth) to do a full merge.
+- `landing` – a landing buffer that temporarily holds SSTables moved from the level above when there is not yet enough work (or bandwidth) to do a full merge.
 
 The compaction runtime periodically calls into the picker to build a list of `Priority` entries. The priorities consider three signals:
 
 1. **L0 table count** – loosely capped by `Options.NumLevelZeroTables`.
 2. **Level size vs target** – computed by `levelTargets()`, which dynamically adjusts the “base” level depending on total data volume.
-3. **Ingest buffer backlog** – if a level’s `ingest` shards have data, they receive elevated scores so staged tables are merged promptly.
+3. **Landing buffer backlog** – if a level’s `landing` shards have data, they receive elevated scores so landed tables are merged promptly.
 
-The highest adjusted score is processed first.  L0 compactions can either move tables into the ingest buffer of the base level (cheap re‑parenting) or compact directly into a lower level when the overlap warrants it.
+The highest adjusted score is processed first.  L0 compactions can either move tables into the landing buffer of the base level (cheap re‑parenting) or compact directly into a lower level when the overlap warrants it.
 
 Planning now happens via `Plan`: LSM snapshots table metadata into `TableMeta`, `PlanFor*` selects table IDs + key ranges, and LSM resolves the plan back to `*table` before executing.
 
 ---
 
-## 2. Ingest Buffer
+## 2. Landing Buffer
 
-`moveToIngest` (see `engine/lsm/compaction_executor.go`) performs a metadata-only migration:
+`moveToLanding` (see `engine/lsm/compaction_executor.go`) performs a metadata-only migration:
 
 1. Records a `manifest.EditDeleteFile` for the source level.
 2. Logs a new `manifest.EditAddFile` targeting the destination level.
-3. Removes the table from `thisLevel.tables` and appends it to `nextLevel.ingest`.
+3. Removes the table from `thisLevel.tables` and appends it to `nextLevel.landing`.
 
-This keeps write amplification low when many small L0 tables arrive at once. Reads still see the newest data because `levelHandler.searchLNSST` checks the ingest buffer before consulting the canonical level tables.
+This keeps write amplification low when many small L0 tables arrive at once. Reads still see the newest data because `levelHandler.searchLNSST` checks the landing buffer before consulting the canonical level tables.
 
-Compaction tests (`engine/lsm/compaction_test.go`) assert that after calling `moveToIngest` the table disappears from the source level and shows up in the ingest buffer.
+Compaction tests (`engine/lsm/compaction_test.go`) assert that after calling `moveToLanding` the table disappears from the source level and shows up in the landing buffer.
 
 ---
 
@@ -59,7 +59,7 @@ NoKV’s cache strategy has two explicit user-space caches plus direct bloom pro
 | OS page cache path | Deeper levels bypass user-space cache and rely on mmap + kernel page cache. | Same as above |
 | Bloom filters | Embedded in `pb.TableIndex` and probed directly from the decoded index. | no separate cache layer |
 
-Cache hit/miss signals are exported through `StatsSnapshot.Cache` (and surfaced by `nokv stats` / expvar), which is especially helpful when tuning ingest behaviour. If L0/L1 cache misses spike, the ingest buffer likely needs to be drained faster. `TestCacheHotColdMetrics` verifies cache hit accounting.
+Cache hit/miss signals are exported through `StatsSnapshot.Cache` (and surfaced by `nokv stats` / expvar), which is especially helpful when tuning landing behaviour. If L0/L1 cache misses spike, the landing buffer likely needs to be drained faster. `TestCacheHotColdMetrics` verifies cache hit accounting.
 
 ---
 
@@ -80,7 +80,7 @@ This tight coupling keeps the value log from growing indefinitely after heavy ov
 Relevant tests to keep compaction healthy:
 
 - `engine/lsm/compaction_test.go`
-  - `TestCompactionMoveToIngest` – ensures metadata migration works and the ingest buffer grows.
+  - `TestCompactionMoveToLanding` – ensures metadata migration works and the landing buffer grows.
   - `TestCompactStatusGuards` – checks overlap detection.
 - `engine/lsm/cache_test.go`
   - `TestCacheHotColdMetrics` – validates cache hit accounting.
@@ -93,7 +93,7 @@ When adding new compaction heuristics or cache behaviour, extend these tests (or
 
 ## 7. Practical Tips
 
-- Tune `Options.IngestCompactBatchSize` when ingest queues build up; increasing it lets a single move cover more tables.
+- Tune `Options.LandingCompactBatchSize` when landing queues build up; increasing it lets a single move cover more tables.
 - Observe `NoKV.Stats.cache.*` and `NoKV.Stats.compaction.*` via the CLI (`nokv stats`) to decide whether you need more compaction workers or bigger caches.
 - For workloads dominated by range scans, consider increasing `Options.BlockCacheBytes` if you want to keep more L0/L1 blocks in the user-space cache; cold data relies on the OS page cache.
 - Keep an eye on `NoKV.Stats.value_log.gc` (for example `gc_runs` and `head_updates`); if compactions are generating discard stats but the value log head doesn’t move, GC thresholds may be too conservative.

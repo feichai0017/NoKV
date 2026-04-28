@@ -262,14 +262,14 @@ type Options struct {
 	// drops to this value or lower. Defaults are populated up front; zero is only
 	// interpreted Open resolves the constructor default when left zero.
 	CompactionResumeTrigger float64
-	// StagingCompactBatchSize decides how many L0 tables to promote into the
-	// staging buffer per compaction cycle. NewDefaultOptions populates a concrete
+	// LandingCompactBatchSize decides how many L0 tables to promote into the
+	// landing buffer per compaction cycle. NewDefaultOptions populates a concrete
 	// default; Open resolves the constructor default when left zero.
-	StagingCompactBatchSize int
-	// StagingBacklogMergeScore triggers a staging-merge task when the staging
+	LandingCompactBatchSize int
+	// LandingBacklogMergeScore triggers a landing-merge task when the landing
 	// backlog score exceeds this threshold. Defaults are populated up front; zero
 	// is only interpreted Open resolves the constructor default when left zero.
-	StagingBacklogMergeScore float64
+	LandingBacklogMergeScore float64
 
 	// CompactionValueWeight adjusts how aggressively the scheduler prioritises
 	// levels whose entries reference large value log payloads. Higher values
@@ -294,9 +294,9 @@ type Options struct {
 	// value-density (value bytes / total bytes) exceeds this ratio.
 	CompactionValueAlertThreshold float64
 
-	// StagingShardParallelism caps how many staging shards can be compacted in a
-	// single staging-only pass. A value <= 0 falls back to 1 (sequential).
-	StagingShardParallelism int
+	// LandingShardParallelism caps how many landing shards can be compacted in a
+	// single landing-only pass. A value <= 0 falls back to 1 (sequential).
+	LandingShardParallelism int
 
 	// NegativeCachePersistent enables snapshot-on-Close + restore-on-Open for
 	// the in-memory negative cache, backed by an engine/slab segment under
@@ -398,11 +398,11 @@ func NewDefaultOptions() *Options {
 	opt.CompactionSlowdownTrigger = lsmpkg.DefaultCompactionSlowdownTrigger
 	opt.CompactionStopTrigger = lsmpkg.DefaultCompactionStopTrigger
 	opt.CompactionResumeTrigger = lsmpkg.DefaultCompactionResumeTrigger
-	opt.StagingCompactBatchSize = lsmpkg.DefaultStagingCompactBatchSize
-	opt.StagingBacklogMergeScore = lsmpkg.DefaultStagingBacklogMergeScore
+	opt.LandingCompactBatchSize = lsmpkg.DefaultLandingCompactBatchSize
+	opt.LandingBacklogMergeScore = lsmpkg.DefaultLandingBacklogMergeScore
 	opt.NumCompactors = 4
 	opt.CompactionPolicy = CompactionPolicyLeveled
-	opt.StagingShardParallelism = 2
+	opt.LandingShardParallelism = 2
 	return opt
 }
 
@@ -476,9 +476,9 @@ func (opt *Options) applyLSMSharedOptions(dst *lsmpkg.Options) {
 	dst.CompactionResumeTrigger = opt.CompactionResumeTrigger
 	dst.WriteThrottleMinRate = opt.WriteThrottleMinRate
 	dst.WriteThrottleMaxRate = opt.WriteThrottleMaxRate
-	dst.StagingCompactBatchSize = opt.StagingCompactBatchSize
-	dst.StagingBacklogMergeScore = opt.StagingBacklogMergeScore
-	dst.StagingShardParallelism = opt.StagingShardParallelism
+	dst.LandingCompactBatchSize = opt.LandingCompactBatchSize
+	dst.LandingBacklogMergeScore = opt.LandingBacklogMergeScore
+	dst.LandingShardParallelism = opt.LandingShardParallelism
 	dst.CompactionValueWeight = opt.CompactionValueWeight
 	dst.CompactionTombstoneWeight = opt.CompactionTombstoneWeight
 	dst.TTLCompactionMinAge = opt.TTLCompactionMinAge
@@ -507,9 +507,9 @@ func (opt *Options) copyNormalizedLSMOptions(src *lsmpkg.Options) {
 	opt.CompactionResumeTrigger = src.CompactionResumeTrigger
 	opt.WriteThrottleMinRate = src.WriteThrottleMinRate
 	opt.WriteThrottleMaxRate = src.WriteThrottleMaxRate
-	opt.StagingCompactBatchSize = src.StagingCompactBatchSize
-	opt.StagingBacklogMergeScore = src.StagingBacklogMergeScore
-	opt.StagingShardParallelism = src.StagingShardParallelism
+	opt.LandingCompactBatchSize = src.LandingCompactBatchSize
+	opt.LandingBacklogMergeScore = src.LandingBacklogMergeScore
+	opt.LandingShardParallelism = src.LandingShardParallelism
 	opt.CompactionValueWeight = src.CompactionValueWeight
 	opt.CompactionTombstoneWeight = src.CompactionTombstoneWeight
 	opt.TTLCompactionMinAge = src.TTLCompactionMinAge

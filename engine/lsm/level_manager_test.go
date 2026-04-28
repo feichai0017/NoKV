@@ -136,7 +136,7 @@ func TestLevelHandlerL0BoundedMetricsRecordFallback(t *testing.T) {
 	}
 }
 
-func TestLevelHandlerIteratorsRespectBoundsWithStaging(t *testing.T) {
+func TestLevelHandlerIteratorsRespectBoundsWithLanding(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() {
@@ -148,11 +148,11 @@ func TestLevelHandlerIteratorsRespectBoundsWithStaging(t *testing.T) {
 	tblA := buildTableWithEntry(t, lsm, 201, "a", 1, "va")
 	tblD := buildTableWithEntry(t, lsm, 202, "d", 1, "vd")
 	tblG := buildTableWithEntry(t, lsm, 203, "g", 1, "vg")
-	stagingB := buildTableWithEntry(t, lsm, 204, "b", 1, "vb")
-	stagingE := buildTableWithEntry(t, lsm, 205, "e", 1, "ve")
+	landingB := buildTableWithEntry(t, lsm, 204, "b", 1, "vb")
+	landingE := buildTableWithEntry(t, lsm, 205, "e", 1, "ve")
 
 	lh.tables = []*table{tblA, tblD, tblG}
-	lh.staging.addBatch([]*table{stagingB, stagingE})
+	lh.landing.addBatch([]*table{landingB, landingE})
 	lh.Sort()
 
 	iters := lh.iterators(&index.Options{
@@ -175,7 +175,7 @@ func TestLevelHandlerIteratorsRespectBoundsWithStaging(t *testing.T) {
 	require.True(t, bytes.Equal(keys[1], []byte("d")) || bytes.Equal(keys[1], []byte("e")))
 	require.NotEqual(t, string(keys[0]), string(keys[1]))
 
-	for _, tbl := range []*table{tblA, tblD, tblG, stagingB, stagingE} {
+	for _, tbl := range []*table{tblA, tblD, tblG, landingB, landingE} {
 		require.NoError(t, tbl.DecrRef())
 	}
 }
