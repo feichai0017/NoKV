@@ -1455,12 +1455,10 @@ func TestWriteBatchesRotateOnlyBetweenRequests(t *testing.T) {
 	// Pin every WAL segment so the async flush worker, which fires after
 	// the rotation triggered by entries[2], cannot race the Replay
 	// assertion below by calling RemoveSegment on the rotated-out
-	// segment. The "lsm" retention participant releases segments below
-	// highestFlushedSeg+1; this test-only "test-pin" participant
-	// guarantees the segments survive long enough for Replay to count
-	// both batches deterministically on slow CI runners.
+	// segment. RetentionMark.FirstSegment is the *lowest* segment id this
+	// participant still needs, so FirstSegment=1 keeps every segment.
 	require.NoError(t, wlog.RegisterRetention("test-pin", func() wal.RetentionMark {
-		return wal.RetentionMark{FirstSegment: 1 << 30}
+		return wal.RetentionMark{FirstSegment: 1}
 	}))
 
 	failedAt, err := lsm.applyWriteBatches(lsm.shards[0], []*writeBatch{
