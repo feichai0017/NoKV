@@ -192,14 +192,6 @@ func renderStats(w io.Writer, snap stats.StatsSnapshot, asJSON bool) error {
 			snap.Transport.WatchdogActive,
 		)
 	}
-	if snap.Redis.CommandsTotal > 0 || snap.Redis.ConnectionsAccepted > 0 {
-		_, _ = fmt.Fprintf(w, "Redis.Gateway          commands=%d errors=%d active_conn=%d accepted_conn=%d\n",
-			snap.Redis.CommandsTotal,
-			snap.Redis.ErrorsTotal,
-			snap.Redis.ConnectionsActive,
-			snap.Redis.ConnectionsAccepted,
-		)
-	}
 	return nil
 }
 

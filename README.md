@@ -130,9 +130,8 @@ Documentation: [`docs/fsmeta.md`](docs/fsmeta.md) · [positioning note](docs/not
 # Local processes — meta-root + coordinator + 3-store cluster + fsmeta gateway
 ./scripts/dev/cluster.sh --config ./raft_config.example.json
 
-# Or: Docker Compose (cluster + fsmeta + Redis gateway, with mount-init bootstrap)
+# Or: Docker Compose (cluster + fsmeta gateway, with mount-init bootstrap)
 docker compose up -d
-scripts/demo/redis-smoke.sh
 
 # Local Docker development build
 docker compose up -d --build
@@ -200,16 +199,6 @@ nokv-fsmeta --addr 127.0.0.1:8090 --coordinator-addr 127.0.0.1:2379 \
 
 Then use any gRPC client against `fsmeta.proto` (Go typed client at `fsmeta/client/`).
 
-### Use the Redis gateway (secondary product line, KV layer only)
-
-```bash
-nokv-redis --addr 127.0.0.1:6380 --coordinator-addr 127.0.0.1:2379
-redis-cli -p 6380 set hello world
-redis-cli -p 6380 get hello
-```
-
-> `nokv-redis` is a thin RESP gateway over the underlying transactional KV. It does **not** consume `fsmeta` — it's a separate product surface for users who only need Redis-style KV access to NoKV's storage substrate.
-
 ### Inspect runtime state
 
 ```bash
@@ -246,7 +235,6 @@ Full guide: [`docs/getting_started.md`](docs/getting_started.md) · CLI referenc
 | [`thermos/`](./thermos) | Hot-key observer | [Thermos](docs/thermos.md) |
 | [`cmd/nokv/`](./cmd/nokv) | CLI: stats, manifest, regions, vlog, migrate, mount, quota | [CLI](docs/cli.md) |
 | [`cmd/nokv-fsmeta/`](./cmd/nokv-fsmeta) | Standalone fsmeta gRPC gateway | [fsmeta](docs/fsmeta.md) |
-| [`cmd/nokv-redis/`](./cmd/nokv-redis) | Redis-compatible gateway (secondary product line) | [Redis](docs/nokv-redis.md) |
 
 <br/>
 

@@ -92,7 +92,6 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	require.Nil(t, expvar.Get("NoKV.Stats.Flush.Pending"))
 	require.Nil(t, expvar.Get("NoKV.Stats.WAL.ActiveSegment"))
 	require.Nil(t, expvar.Get("NoKV.Txns.Active"))
-	require.Nil(t, expvar.Get("NoKV.Redis"))
 }
 
 func TestStatsSnapshotTracksThrottleAndWalRemovals(t *testing.T) {
