@@ -125,7 +125,7 @@ func TestExecutionProtocolTracksTopologyLifecycle(t *testing.T) {
 		// enqueued. Wait until the pending publish is visible, or it was already
 		// published by the background runtime, before forcing an explicit flush.
 		return status.Publish == PublishStateTerminalPublished || rs.hasPendingRegionUpdate(region.ID)
-	}, 20*time.Second, 20*time.Millisecond)
+	}, 10*time.Second, 20*time.Millisecond)
 
 	rs.flushRegionUpdates()
 

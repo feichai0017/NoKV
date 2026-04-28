@@ -285,13 +285,28 @@ func (s *Store) recordTopologyProposed(target transitionTarget) {
 	s.updateTopologyExecution(target.TransitionID, func(entry *TopologyExecution) {
 		entry.RegionID = target.RegionID
 		entry.Action = target.Action
-		entry.Outcome = ExecutionOutcomeProposed
-		entry.LastError = ""
-		if s.schedulerClient() == nil {
-			entry.Publish = PublishStateNotRequired
-			return
+		// Outcome is a forward-only state machine: Queued → Proposed →
+		// Applied. The raft apply path is synchronous inside
+		// proposeTransition (peer.ProposeConfChange runs processReady,
+		// which fires handlePeerConfChange → applyTerminalOutcome →
+		// recordTopologyApplied before returning), so by the time
+		// proposeTransition returns the entry may already be at
+		// Applied or Failed. Regressing back to Proposed here masked
+		// the real Applied state and forced a downstream observer
+		// (typically the publish loop's recordTopologyPublished) to
+		// re-promote it — racing against any caller polling for
+		// Outcome==Applied.
+		if entry.Outcome < ExecutionOutcomeProposed {
+			entry.Outcome = ExecutionOutcomeProposed
+			entry.LastError = ""
 		}
-		entry.Publish = PublishStatePlannedPublished
+		if entry.Publish < PublishStatePlannedPublished {
+			if s.schedulerClient() == nil {
+				entry.Publish = PublishStateNotRequired
+				return
+			}
+			entry.Publish = PublishStatePlannedPublished
+		}
 	})
 }
 
