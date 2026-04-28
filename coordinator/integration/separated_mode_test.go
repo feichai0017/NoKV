@@ -226,9 +226,25 @@ func TestSeparatedModeCoordinatorChaosMonotonicAllocID(t *testing.T) {
 		prevLastID := lastID
 		svc, store := openSeparatedCoordinator(t, targets, "c1")
 
+		// Each iteration tears down the previous coordinator and opens
+		// a fresh one; the meta/root tenure lifecycle (seal previous,
+		// campaign new) is exactly the chaos this test exercises. A
+		// single AllocID call can land in the brief window between an
+		// old tenure's seal and the new tenure's campaign and observe
+		// 'metadata root not leader'. Production clients retry; mirror
+		// that here so the test asserts the steady-state monotonicity
+		// invariant rather than the absence of transient leader-change
+		// errors that production already tolerates.
 		start := time.Now()
-		alloc, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: batch})
-		require.NoError(t, err)
+		var alloc *coordpb.AllocIDResponse
+		require.Eventually(t, func() bool {
+			a, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: batch})
+			if err != nil {
+				return false
+			}
+			alloc = a
+			return true
+		}, 5*time.Second, 50*time.Millisecond, "iteration %d AllocID never succeeded under leader churn", i)
 		recoveryGaps = append(recoveryGaps, time.Since(start))
 
 		firstID := alloc.GetFirstId()
