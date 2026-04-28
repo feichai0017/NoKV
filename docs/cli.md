@@ -39,7 +39,7 @@ Common fields:
 - `region.total`, `region.running`, `region.removing`
 - `hot.write_keys`
 - `lsm.levels`, `lsm.value_bytes_total`
-- `transport.*`, `redis.*`
+- `transport.*`
 
 Example:
 

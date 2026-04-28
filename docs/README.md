@@ -118,9 +118,8 @@ The single-node substrate that everything sits on. Independently usable as an em
 |---|---|
 | **CLI reference** (`nokv` — stats / manifest / regions / mount / quota / migrate) | [cli.md](cli.md) |
 | **`nokv-fsmeta`** standalone gRPC gateway | [fsmeta.md](fsmeta.md) |
-| **`nokv-redis`** secondary Redis-compatible gateway (KV layer only, does not consume fsmeta) | [nokv-redis.md](nokv-redis.md) |
 | Configuration (one JSON file shared by all binaries) | [config.md](config.md) |
-| Cluster demo & dashboard | [demo.md](demo.md) |
+| Cluster demo | [demo.md](demo.md) |
 | Scripts layout | [scripts.md](scripts.md) |
 | Stats / expvar / metrics (4 namespaces: executor, watch, quota, mount) | [stats.md](stats.md) |
 | Testing strategy (failpoints, chaos, restart, migration) | [testing.md](testing.md) |
@@ -216,7 +215,6 @@ Full walkthrough: [getting_started.md](getting_started.md) · CLI reference: [cl
 | **[Percolator / MVCC](percolator.md)** | 2PC primitives in distributed mode |
 | **[Runtime call chains](runtime.md)** | Function-level sequence diagrams |
 | **[Testing](testing.md)** | Failpoints, chaos, restart, migration |
-| **[NoKV Redis](nokv-redis.md)** | Secondary RESP gateway (KV layer only) |
 | **[SUMMARY.md](SUMMARY.md)** | Full mdbook table of contents |
 
 ---
