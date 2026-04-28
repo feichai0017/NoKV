@@ -2,8 +2,8 @@
 // It owns the MemTable (with adaptive ART/SkipList index over arena),
 // the flush pipeline (Prepare → Build → Install → Release), leveled
 // compaction (planner + picker + executor), iterators, caches, range
-// tombstones, range filter, and external SST ingest (with an ingest
-// buffer that avoids write stalls on L0 pressure).
+// tombstones, range filter, external SST ingest, and the per-level
+// landing buffer that avoids write stalls on L0 pressure.
 //
 // Durability ordering (enforced end-to-end):
 //

@@ -1616,7 +1616,7 @@ func TestCompact(t *testing.T) {
 		return false
 	}
 	l0TOLMax := func() {
-		// Ensure L0 accumulates enough tables to trigger the ingest path. Newer Go versions
+		// Ensure L0 accumulates enough tables to trigger the landing path. Newer Go versions
 		// batch allocations slightly differently, so loop until we hit the configured limit.
 		required := lsm.levels.opt.NumLevelZeroTables
 		for tries := 0; tries < 8 && lsm.levels.levels[0].numTables() < required; tries++ {

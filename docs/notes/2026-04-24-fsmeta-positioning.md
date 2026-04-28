@@ -154,7 +154,7 @@ fsmeta 不是从零发明架构。下表明确每一条设计决定的学术/工
 | 单 shard 原子原语替代分布式事务 | CFS (EuroSys'23) | 用 NoKV 已有 region-local Percolator 实现；跨 region 仍用 `TwoPhaseCommit`。 |
 | dynamic subtree partitioning | Weil SC'04 (CephFS) | **Eunomia 形式化 bounded handoff**，规避 Ceph balancer 的 unbounded migration 不稳定性。 |
 | per-directory incremental split + LSM metadata | IndexFS (SC'14) | LSM 已是一等公民，不需要中间层。 |
-| bulk insertion for checkpoint storm | IndexFS (SC'14) | `engine/lsm/` ingest buffer 天生适合；专门 BatchCreate API 属于后续扩展。 |
+| bulk insertion for checkpoint storm | IndexFS (SC'14) | `engine/lsm/` landing buffer 天生适合；专门 BatchCreate API 属于后续扩展。 |
 | hierarchical metadata 分层扩展 | Tectonic (FAST'21) | 分层但都落在**同一 NoKV KV 上**，避免 ZippyDB hash-by-dir 的 MapReduce 融化问题。 |
 | client-side path resolution cache | InfiniFS / CFS | 用 `meta/root` tail subscription 做 bounded-freshness 客户端 cache 失效。 |
 | serverless / elastic meta workers | λFS (ASPLOS'23) | 后续可选；当前先保证架构分层允许 fsmeta 水平扩展。 |
