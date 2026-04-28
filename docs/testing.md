@@ -18,7 +18,7 @@ go test ./raftstore/integration -count=1
 
 # Crash recovery scenarios
 RECOVERY_TRACE_METRICS=1 \
-go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFromManifest|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
+go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|FailsOnMissingSST|FailsOnCorruptSST|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
 
 # Protobuf schema hygiene
 make proto-check
@@ -80,7 +80,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 
 | Scenario | Coverage | Focus |
 | --- | --- | --- |
-| Crash recovery | `db_test.go` | WAL replay, missing SST cleanup, vlog GC restart, manifest rewrite safety. |
+| Crash recovery | `db_test.go` | WAL replay, fail-fast on missing/corrupt SST (manifest preserved for investigation), vlog GC restart, manifest rewrite safety. |
 | WAL pointer desync | `raftstore/raftlog/wal_storage_test.go::TestWALStorageDetectsTruncatedSegment` | Detects store-local raft pointer offsets beyond truncated WAL tails to avoid silent corruption. |
 | Distributed transaction contention | `raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet`, `percolator/*_test.go` | Lock conflicts, retries, and 2PC sequencing under region routing. |
 | Value separation + GC | `engine/vlog/manager_test.go`, `db_test.go::TestRecoveryRemovesStaleValueLogSegment` | GC correctness, manifest integration, iterator stability. |
