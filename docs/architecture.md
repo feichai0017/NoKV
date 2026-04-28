@@ -132,11 +132,11 @@ Then read:
 - `manifest.Manager` stores only storage-engine metadata: SST metadata, WAL checkpoints, and ValueLog metadata. Store-local raft replay pointers live in `raftstore/localmeta`.
 - `CURRENT` provides crash-safe pointer updates for storage-engine metadata. Region descriptors are no longer stored in the storage manifest.
 
-### 2.4 LSM Compaction & Ingest Buffer
+### 2.4 LSM Compaction & Landing Buffer
 - `lsm.compaction` drives compaction cycles; `lsm.levelManager` supplies table metadata and executes the plan.
 - Planning is split inside `lsm`: `PlanFor*` selects table IDs + key ranges, then LSM resolves IDs back to tables and runs the merge.
 - `lsm.State` guards overlapping key ranges and tracks in-flight table IDs.
-- Ingest shard selection is policy-driven in `lsm` (`PickShardOrder` / `PickShardByBacklog`) while the ingest buffer remains in `lsm`.
+- Landing shard selection is policy-driven in `lsm` (`PickShardOrder` / `PickShardByBacklog`) while the landing buffer remains in `lsm`.
 
 ```mermaid
 flowchart TD
@@ -147,9 +147,9 @@ flowchart TD
   Exec --> State["lsm.State guard"]
   Exec --> Build["subcompact/build SST"]
   Build --> Manifest["manifest edits"]
-  L0["L0 tables"] -->|moveToIngest| Ingest["ingest buffer shards"]
-  Ingest -->|IngestDrain: ingest-only| Main["Main tables"]
-  Ingest -->|IngestKeep: ingest-merge| Ingest
+  L0["L0 tables"] -->|moveToLanding| Landing["landing buffer shards"]
+  Landing -->|LandingDrain: landing-only| Main["Main tables"]
+  Landing -->|LandingKeep: landing-merge| Landing
 ```
 
 ### 2.5 Distributed Transaction Path
@@ -173,7 +173,7 @@ NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrR
 | `kv.Entry` (detached public result) | caller | none | Returned by `DB.Get`; **must not** call `DecrRef`. |
 | `kv.Entry` (borrowed internal result) | caller | yes (`DecrRef`) | Returned by `DB.GetInternalEntry`; caller must release exactly once. |
 | `request` | commit queue/worker | waiter path (`Wait`) | `IncrRef` on enqueue; `Wait` does one `DecrRef`; zero returns request to pool and releases entries. |
-| `table` | level/main+ingest lists, block cache | table iterators, prefetch workers | Removed tables are decremented once after manifest+in-memory swap; zero deletes SST. |
+| `table` | level/main+landing lists, block cache | table iterators, prefetch workers | Removed tables are decremented once after manifest+in-memory swap; zero deletes SST. |
 | `Skiplist` / `ART` index | memtable | iterators | Iterator creation increments index ref; iterator `Close` decrements; double-close is idempotent. |
 
 ---

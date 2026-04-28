@@ -7,15 +7,15 @@ type LevelMetrics struct {
 	SizeBytes              int64
 	ValueBytes             int64
 	StaleBytes             int64
-	StagingTableCount      int
-	StagingSizeBytes       int64
-	StagingValueBytes      int64
+	LandingTableCount      int
+	LandingSizeBytes       int64
+	LandingValueBytes      int64
 	ValueDensity           float64
-	StagingValueDensity    float64
-	StagingRuns            int64
-	StagingMs              float64
-	StagingTablesCompacted int64
-	StagingMergeRuns       int64
-	StagingMergeMs         float64
-	StagingMergeTables     int64
+	LandingValueDensity    float64
+	LandingRuns            int64
+	LandingMs              float64
+	LandingTablesCompacted int64
+	LandingMergeRuns       int64
+	LandingMergeMs         float64
+	LandingMergeTables     int64
 }

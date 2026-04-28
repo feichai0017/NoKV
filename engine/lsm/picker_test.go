@@ -6,27 +6,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStagingModeFlags(t *testing.T) {
-	require.False(t, StagingNone.UsesStaging())
-	require.True(t, StagingDrain.UsesStaging())
-	require.True(t, StagingKeep.UsesStaging())
-	require.True(t, StagingKeep.KeepsStaging())
-	require.False(t, StagingDrain.KeepsStaging())
+func TestLandingModeFlags(t *testing.T) {
+	require.False(t, LandingNone.UsesLanding())
+	require.True(t, LandingDrain.UsesLanding())
+	require.True(t, LandingKeep.UsesLanding())
+	require.True(t, LandingKeep.KeepsLanding())
+	require.False(t, LandingDrain.KeepsLanding())
 }
 
-func TestStagingPicker(t *testing.T) {
-	shards := []StagingShardView{
+func TestLandingPicker(t *testing.T) {
+	shards := []LandingShardView{
 		{Index: 1, SizeBytes: 10},
 		{Index: 2, SizeBytes: 30},
 		{Index: 3, SizeBytes: 20, MaxAgeSec: 120, ValueDensity: 0.5},
 	}
-	order := PickShardOrder(StagingPickInput{Shards: shards})
+	order := PickShardOrder(LandingPickInput{Shards: shards})
 	require.Equal(t, []int{2, 3, 1}, order)
 
-	pick := PickShardByBacklog(StagingPickInput{Shards: shards})
+	pick := PickShardByBacklog(LandingPickInput{Shards: shards})
 	require.Equal(t, 3, pick)
 
-	require.Equal(t, -1, PickShardByBacklog(StagingPickInput{}))
+	require.Equal(t, -1, PickShardByBacklog(LandingPickInput{}))
 }
 
 func TestPriorityHelpers(t *testing.T) {
@@ -86,11 +86,11 @@ func TestBuildTargetsAndPickPriorities(t *testing.T) {
 			},
 			{
 				Level:               1,
-				StagingTables:       2,
-				StagingSize:         200,
-				StagingValueBytes:   40,
-				StagingValueDensity: 1.5,
-				StagingAgeSeconds:   200,
+				LandingTables:       2,
+				LandingSize:         200,
+				LandingValueBytes:   40,
+				LandingValueDensity: 1.5,
+				LandingAgeSeconds:   200,
 				MainValueBytes:      30,
 			},
 		},
@@ -98,17 +98,17 @@ func TestBuildTargetsAndPickPriorities(t *testing.T) {
 		NumLevelZeroTables:       4,
 		BaseTableSize:            4,
 		BaseLevelSize:            10,
-		StagingBacklogMergeScore: 1.0,
+		LandingBacklogMergeScore: 1.0,
 		CompactionValueWeight:    1.0,
 	}
 	prios := PickPriorities(input)
 	require.NotEmpty(t, prios)
 
-	var hasStagingDrain bool
+	var hasLandingDrain bool
 	for _, p := range prios {
-		if p.StagingMode == StagingDrain {
-			hasStagingDrain = true
+		if p.LandingMode == LandingDrain {
+			hasLandingDrain = true
 		}
 	}
-	require.True(t, hasStagingDrain)
+	require.True(t, hasLandingDrain)
 }

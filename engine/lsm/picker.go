@@ -34,11 +34,11 @@ func (lm *levelManager) buildPickerInput() PickerInput {
 			TotalSize:           lvl.getTotalSize(),
 			TotalValueBytes:     lvl.getTotalValueSize(),
 			MainValueBytes:      lvl.mainValueBytes(),
-			StagingTables:       lvl.numStagingTables(),
-			StagingSize:         lvl.stagingDataSize(),
-			StagingValueBytes:   lvl.stagingValueBytes(),
-			StagingValueDensity: lvl.stagingValueDensity(),
-			StagingAgeSeconds:   lvl.maxStagingAgeSeconds(),
+			LandingTables:       lvl.numLandingTables(),
+			LandingSize:         lvl.landingDataSize(),
+			LandingValueBytes:   lvl.landingValueBytes(),
+			LandingValueDensity: lvl.landingValueDensity(),
+			LandingAgeSeconds:   lvl.maxLandingAgeSeconds(),
 			KeyCount:            lvl.keyCount(),
 			RangeTombstones:     lvl.rangeTombstoneCount(),
 		}
@@ -53,7 +53,7 @@ func (lm *levelManager) buildPickerInput() PickerInput {
 		NumLevelZeroTables:        lm.opt.NumLevelZeroTables,
 		BaseTableSize:             lm.opt.BaseTableSize,
 		BaseLevelSize:             lm.opt.BaseLevelSize,
-		StagingBacklogMergeScore:  lm.opt.StagingBacklogMergeScore,
+		LandingBacklogMergeScore:  lm.opt.LandingBacklogMergeScore,
 		CompactionValueWeight:     lm.opt.CompactionValueWeight,
 		CompactionTombstoneWeight: lm.opt.CompactionTombstoneWeight,
 	}
@@ -114,7 +114,7 @@ type Priority struct {
 	Adjusted     float64
 	DropPrefixes [][]byte
 	Target       Targets
-	StagingMode  StagingMode
+	LandingMode  LandingMode
 	StatsTag     string
 }
 
@@ -146,28 +146,28 @@ func MoveL0ToFront(prios []Priority) []Priority {
 	return prios
 }
 
-// StagingMode describes how a compaction interacts with staging tables.
-type StagingMode uint8
+// LandingMode describes how a compaction interacts with landing tables.
+type LandingMode uint8
 
 const (
-	// StagingNone indicates a regular compaction using main tables only.
-	StagingNone StagingMode = iota
-	// StagingDrain compacts staging tables and writes output into main tables.
-	StagingDrain
-	// StagingKeep compacts staging tables and keeps output in staging buffers.
-	StagingKeep
+	// LandingNone indicates a regular compaction using main tables only.
+	LandingNone LandingMode = iota
+	// LandingDrain compacts landing tables and writes output into main tables.
+	LandingDrain
+	// LandingKeep compacts landing tables and keeps output in landing buffers.
+	LandingKeep
 )
 
-func (m StagingMode) UsesStaging() bool {
-	return m != StagingNone
+func (m LandingMode) UsesLanding() bool {
+	return m != LandingNone
 }
 
-func (m StagingMode) KeepsStaging() bool {
-	return m == StagingKeep
+func (m LandingMode) KeepsLanding() bool {
+	return m == LandingKeep
 }
 
-// StagingShardView is a lightweight view of a staging shard for strategy decisions.
-type StagingShardView struct {
+// LandingShardView is a lightweight view of a landing shard for strategy decisions.
+type LandingShardView struct {
 	Index        int
 	TableCount   int
 	SizeBytes    int64
@@ -176,17 +176,17 @@ type StagingShardView struct {
 	ValueDensity float64
 }
 
-// StagingPickInput bundles inputs for staging shard picking.
-type StagingPickInput struct {
-	Shards []StagingShardView
+// LandingPickInput bundles inputs for landing shard picking.
+type LandingPickInput struct {
+	Shards []LandingShardView
 }
 
 // PickShardOrder returns shard indices sorted by backlog size (largest first).
-func PickShardOrder(in StagingPickInput) []int {
+func PickShardOrder(in LandingPickInput) []int {
 	if len(in.Shards) == 0 {
 		return nil
 	}
-	shards := append([]StagingShardView(nil), in.Shards...)
+	shards := append([]LandingShardView(nil), in.Shards...)
 	sort.Slice(shards, func(i, j int) bool {
 		return shards[i].SizeBytes > shards[j].SizeBytes
 	})
@@ -198,7 +198,7 @@ func PickShardOrder(in StagingPickInput) []int {
 }
 
 // PickShardByBacklog returns the shard index with the highest backlog score.
-func PickShardByBacklog(in StagingPickInput) int {
+func PickShardByBacklog(in LandingPickInput) int {
 	if len(in.Shards) == 0 {
 		return -1
 	}
@@ -214,7 +214,7 @@ func PickShardByBacklog(in StagingPickInput) int {
 	return best.Index
 }
 
-func backlogScore(sh StagingShardView) float64 {
+func backlogScore(sh LandingShardView) float64 {
 	score := float64(sh.SizeBytes)
 	if sh.MaxAgeSec > 0 {
 		score *= 1.0 + math.Min(sh.MaxAgeSec/60.0, 4.0)
@@ -305,11 +305,11 @@ type LevelInput struct {
 	MainValueBytes      int64
 	KeyCount            uint64
 	RangeTombstones     uint64
-	StagingTables       int
-	StagingSize         int64
-	StagingValueBytes   int64
-	StagingValueDensity float64
-	StagingAgeSeconds   float64
+	LandingTables       int
+	LandingSize         int64
+	LandingValueBytes   int64
+	LandingValueDensity float64
+	LandingAgeSeconds   float64
 	DelSize             int64
 }
 
@@ -320,7 +320,7 @@ type PickerInput struct {
 	NumLevelZeroTables        int
 	BaseTableSize             int64
 	BaseLevelSize             int64
-	StagingBacklogMergeScore  float64
+	LandingBacklogMergeScore  float64
 	CompactionValueWeight     float64
 	CompactionTombstoneWeight float64
 }
@@ -332,17 +332,17 @@ func PickPriorities(in PickerInput) []Priority {
 	}
 	prios := make([]Priority, len(in.Levels))
 	var extras []Priority
-	addPriority := func(level int, score float64, mode StagingMode) {
+	addPriority := func(level int, score float64, mode LandingMode) {
 		pri := Priority{
 			Level:       level,
 			Score:       score,
 			Adjusted:    score,
 			Target:      in.Targets,
-			StagingMode: mode,
+			LandingMode: mode,
 			StatsTag:    "regular",
 		}
-		staging := mode.UsesStaging()
-		merge := mode.KeepsStaging()
+		landing := mode.UsesLanding()
+		merge := mode.KeepsLanding()
 		if in.CompactionValueWeight > 0 && level < len(in.Levels) {
 			lvl := in.Levels[level]
 			var valueBytes int64
@@ -354,8 +354,8 @@ func PickPriorities(in PickerInput) []Priority {
 				if target <= 0 {
 					target = float64(in.BaseTableSize)
 				}
-			case staging:
-				valueBytes = lvl.StagingValueBytes
+			case landing:
+				valueBytes = lvl.LandingValueBytes
 				target = float64(in.Targets.FileSz[level])
 				if target <= 0 {
 					target = float64(in.BaseTableSize)
@@ -374,8 +374,8 @@ func PickPriorities(in PickerInput) []Priority {
 				}
 			}
 			valueScore := float64(valueBytes) / target
-			if staging && valueScore == 0 {
-				valueScore = lvl.StagingValueDensity
+			if landing && valueScore == 0 {
+				valueScore = lvl.LandingValueDensity
 			}
 			pri.ApplyValueWeight(in.CompactionValueWeight, valueScore)
 		}
@@ -398,11 +398,11 @@ func PickPriorities(in PickerInput) []Priority {
 	if numL0 <= 0 {
 		numL0 = 1
 	}
-	addPriority(0, float64(in.Levels[0].NumTables)/float64(numL0), StagingNone)
+	addPriority(0, float64(in.Levels[0].NumTables)/float64(numL0), LandingNone)
 
 	for i := 1; i < len(in.Levels); i++ {
 		lvl := in.Levels[i]
-		if lvl.StagingTables > 0 {
+		if lvl.LandingTables > 0 {
 			denom := in.Targets.FileSz[i]
 			if denom <= 0 {
 				denom = in.BaseTableSize
@@ -410,41 +410,41 @@ func PickPriorities(in PickerInput) []Priority {
 					denom = 1
 				}
 			}
-			stagingScore := float64(lvl.StagingSize) / float64(denom)
-			if stagingScore < 1.0 {
-				stagingScore = 1.0
+			landingScore := float64(lvl.LandingSize) / float64(denom)
+			if landingScore < 1.0 {
+				landingScore = 1.0
 			}
-			ageSec := lvl.StagingAgeSeconds
+			ageSec := lvl.LandingAgeSeconds
 			if ageSec > 0 {
 				ageFactor := math.Min(ageSec/60.0, 4.0)
-				stagingScore += ageFactor
+				landingScore += ageFactor
 			}
-			addPriority(i, stagingScore+1.0, StagingDrain)
-			trigger := in.StagingBacklogMergeScore
+			addPriority(i, landingScore+1.0, LandingDrain)
+			trigger := in.LandingBacklogMergeScore
 			if trigger <= 0 {
 				trigger = 2.0
 			}
 			dynTrigger := trigger
-			if stagingScore >= trigger*2 {
+			if landingScore >= trigger*2 {
 				dynTrigger = trigger * 0.8
 			} else if ageSec > 120 {
 				dynTrigger = trigger * 0.9
 			}
-			if stagingScore >= dynTrigger {
+			if landingScore >= dynTrigger {
 				pri := Priority{
 					Level:       i,
-					Score:       stagingScore * 0.8,
-					Adjusted:    stagingScore * 0.8,
+					Score:       landingScore * 0.8,
+					Adjusted:    landingScore * 0.8,
 					Target:      in.Targets,
-					StagingMode: StagingKeep,
-					StatsTag:    "staging-merge",
+					LandingMode: LandingKeep,
+					StatsTag:    "landing-merge",
 				}
 				prios = append(prios, pri)
 			}
 			continue
 		}
 		sz := lvl.TotalSize - lvl.DelSize
-		addPriority(i, float64(sz)/float64(in.Targets.TargetSz[i]), StagingNone)
+		addPriority(i, float64(sz)/float64(in.Targets.TargetSz[i]), LandingNone)
 	}
 
 	var prevLevel int

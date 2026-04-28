@@ -169,9 +169,9 @@ func renderStats(w io.Writer, snap stats.StatsSnapshot, asJSON bool) error {
 		for _, lvl := range snap.LSM.Levels {
 			_, _ = fmt.Fprintf(w, "  - L%d tables=%d size=%dB value=%dB stale=%dB",
 				lvl.Level, lvl.TableCount, lvl.SizeBytes, lvl.ValueBytes, lvl.StaleBytes)
-			if lvl.StagingTables > 0 {
-				_, _ = fmt.Fprintf(w, " stagingTables=%d stagingSize=%dB stagingValue=%dB",
-					lvl.StagingTables, lvl.StagingSizeBytes, lvl.StagingValueBytes)
+			if lvl.LandingTables > 0 {
+				_, _ = fmt.Fprintf(w, " landingTables=%d landingSize=%dB landingValue=%dB",
+					lvl.LandingTables, lvl.LandingSizeBytes, lvl.LandingValueBytes)
 			}
 			_, _ = fmt.Fprintln(w)
 		}

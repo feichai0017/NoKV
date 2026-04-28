@@ -172,7 +172,7 @@ func (lm *levelManager) build() error {
 			tables:   make([]*table, 0),
 			lm:       lm,
 		}
-		lh.staging.ensureInit()
+		lh.landing.ensureInit()
 		lm.levels = append(lm.levels, lh)
 	}
 
@@ -188,8 +188,8 @@ func (lm *levelManager) build() error {
 			if meta.FileID > maxFID {
 				maxFID = meta.FileID
 			}
-			if meta.Staging {
-				lm.levels[level].addStaging(t)
+			if meta.Landing {
+				lm.levels[level].addLanding(t)
 				continue
 			}
 			lm.levels[level].add(t)

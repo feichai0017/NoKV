@@ -267,9 +267,9 @@ func throttleRateForPressure(pressure uint32, minRate, maxRate int64) uint64 {
 const (
 	// PolicyLeveled keeps the legacy leveled-style execution ordering.
 	PolicyLeveled = "leveled"
-	// PolicyTiered prioritizes staging-buffer convergence before regular compaction.
+	// PolicyTiered prioritizes landing-buffer convergence before regular compaction.
 	PolicyTiered = "tiered"
-	// PolicyHybrid adapts between leveled and tiered ordering by staging pressure.
+	// PolicyHybrid adapts between leveled and tiered ordering by landing pressure.
 	PolicyHybrid = "hybrid"
 )
 
@@ -315,7 +315,7 @@ type FeedbackEvent struct {
 // explicit behavior switch, not a plugin surface.
 type SchedulerPolicy struct {
 	mode        string
-	stagingBias atomic.Int32
+	landingBias atomic.Int32
 }
 
 // NewSchedulerPolicy constructs a compaction scheduler policy by name.
@@ -353,8 +353,8 @@ func (p *SchedulerPolicy) Arrange(workerID int, priorities []Priority) []Priorit
 	}
 }
 
-// Observe staging runtime execution feedback and updates scheduler bias when
-// the configured mode uses staging-aware ordering.
+// Observe landing runtime execution feedback and updates scheduler bias when
+// the configured mode uses landing-aware ordering.
 func (p *SchedulerPolicy) Observe(event FeedbackEvent) {
 	if p == nil {
 		return
@@ -377,10 +377,10 @@ func arrangeLeveled(workerID int, priorities []Priority) []Priority {
 	return priorities
 }
 
-// arrangeTiered prioritizes staging convergence with guarded fairness.
+// arrangeTiered prioritizes landing convergence with guarded fairness.
 //
 // Design:
-//   - Split priorities into four queues: L0 relief, staging-keep, staging-drain,
+//   - Split priorities into four queues: L0 relief, landing-keep, landing-drain,
 //     and regular.
 //   - Interleave queues by pressure-aware quotas instead of draining one queue
 //     completely, to avoid starvation.
@@ -390,23 +390,23 @@ func (p *SchedulerPolicy) arrangeTiered(workerID int, priorities []Priority) []P
 		return priorities
 	}
 	ordered := append([]Priority(nil), priorities...)
-	if !hasStagingWork(ordered) {
+	if !hasLandingWork(ordered) {
 		return arrangeLeveled(workerID, ordered)
 	}
 	queues := classifyQueues(ordered)
-	stagingScore := maxScore(queues.keep, queues.drain)
-	quota := p.effectiveQuota(stagingScore)
+	landingScore := maxScore(queues.keep, queues.drain)
+	quota := p.effectiveQuota(landingScore)
 	return arrangeByQueues(workerID, queues, quota)
 }
 
-// observeTiered observes runtime execution feedback and updates staging-aware
+// observeTiered observes runtime execution feedback and updates landing-aware
 // scheduling bias.
 func (p *SchedulerPolicy) observeTiered(event FeedbackEvent) {
 	if p == nil {
 		return
 	}
-	if !event.Priority.StagingMode.UsesStaging() {
-		// Non-staging success gradually decays stale staging bias.
+	if !event.Priority.LandingMode.UsesLanding() {
+		// Non-landing success gradually decays stale landing bias.
 		if event.Err == nil {
 			p.decayBiasTowardsZero()
 		}
@@ -427,28 +427,28 @@ func (p *SchedulerPolicy) observeTiered(event FeedbackEvent) {
 // arrangeHybrid adapts between leveled and tiered scheduling.
 //
 // Design:
-// - Low staging pressure: keep leveled behavior for stable mixed workloads.
-// - High staging pressure: switch to tiered queue scheduling.
+// - Low landing pressure: keep leveled behavior for stable mixed workloads.
+// - High landing pressure: switch to tiered queue scheduling.
 func (p *SchedulerPolicy) arrangeHybrid(workerID int, priorities []Priority) []Priority {
 	if len(priorities) <= 1 {
 		return priorities
 	}
 	ordered := append([]Priority(nil), priorities...)
-	if !hasStagingWork(ordered) {
+	if !hasLandingWork(ordered) {
 		return arrangeLeveled(workerID, ordered)
 	}
 	queues := classifyQueues(ordered)
-	stagingScore := maxScore(queues.keep, queues.drain)
-	if stagingScore < hybridTieredThreshold {
+	landingScore := maxScore(queues.keep, queues.drain)
+	if landingScore < hybridTieredThreshold {
 		return arrangeLeveled(workerID, ordered)
 	}
-	quota := p.effectiveQuota(stagingScore)
+	quota := p.effectiveQuota(landingScore)
 	return arrangeByQueues(workerID, queues, quota)
 }
 
-func hasStagingWork(priorities []Priority) bool {
+func hasLandingWork(priorities []Priority) bool {
 	return slices.ContainsFunc(priorities, func(p Priority) bool {
-		return p.StagingMode.UsesStaging()
+		return p.LandingMode.UsesLanding()
 	})
 }
 
@@ -458,9 +458,9 @@ func classifyQueues(priorities []Priority) priorityQueues {
 		switch {
 		case p.Level == 0 && p.Adjusted >= l0ReliefScoreMin:
 			q.l0 = append(q.l0, p)
-		case p.StagingMode == StagingKeep:
+		case p.LandingMode == LandingKeep:
 			q.keep = append(q.keep, p)
-		case p.StagingMode == StagingDrain:
+		case p.LandingMode == LandingDrain:
 			q.drain = append(q.drain, p)
 		default:
 			q.regular = append(q.regular, p)
@@ -473,26 +473,26 @@ func classifyQueues(priorities []Priority) priorityQueues {
 	return q
 }
 
-func tieredQuotaByPressure(stagingScore float64) queueQuota {
+func tieredQuotaByPressure(landingScore float64) queueQuota {
 	switch {
-	case stagingScore >= 6:
-		// Severe staging backlog: aggressively drain/merge staging first.
+	case landingScore >= 6:
+		// Severe landing backlog: aggressively drain/merge landing first.
 		return queueQuota{l0: 2, keep: 3, drain: 3, regular: 1}
-	case stagingScore >= 3:
-		// Balanced mode: keep staging and regular making progress together.
+	case landingScore >= 3:
+		// Balanced mode: keep landing and regular making progress together.
 		return queueQuota{l0: 2, keep: 2, drain: 2, regular: 2}
 	default:
-		// Mild staging pressure: preserve regular throughput while still servicing staging.
+		// Mild landing pressure: preserve regular throughput while still servicing landing.
 		return queueQuota{l0: 2, keep: 1, drain: 1, regular: 3}
 	}
 }
 
-func (p *SchedulerPolicy) effectiveQuota(stagingScore float64) queueQuota {
-	quota := tieredQuotaByPressure(stagingScore)
-	return applyStagingBias(quota, int(p.stagingBias.Load()))
+func (p *SchedulerPolicy) effectiveQuota(landingScore float64) queueQuota {
+	quota := tieredQuotaByPressure(landingScore)
+	return applyLandingBias(quota, int(p.landingBias.Load()))
 }
 
-func applyStagingBias(quota queueQuota, bias int) queueQuota {
+func applyLandingBias(quota queueQuota, bias int) queueQuota {
 	if bias == 0 {
 		return quota
 	}
@@ -519,9 +519,9 @@ func applyStagingBias(quota queueQuota, bias int) queueQuota {
 
 func (p *SchedulerPolicy) shiftBias(delta int32) {
 	for {
-		old := p.stagingBias.Load()
+		old := p.landingBias.Load()
 		next := clampI32(old+delta, -2, 2)
-		if p.stagingBias.CompareAndSwap(old, next) {
+		if p.landingBias.CompareAndSwap(old, next) {
 			return
 		}
 	}
@@ -529,7 +529,7 @@ func (p *SchedulerPolicy) shiftBias(delta int32) {
 
 func (p *SchedulerPolicy) decayBiasTowardsZero() {
 	for {
-		old := p.stagingBias.Load()
+		old := p.landingBias.Load()
 		var next int32
 		switch {
 		case old > 0:
@@ -539,7 +539,7 @@ func (p *SchedulerPolicy) decayBiasTowardsZero() {
 		default:
 			return
 		}
-		if p.stagingBias.CompareAndSwap(old, next) {
+		if p.landingBias.CompareAndSwap(old, next) {
 			return
 		}
 	}
