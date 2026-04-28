@@ -64,7 +64,7 @@ At a high level, the codebase is organized around four long-lived layers:
 
 ```mermaid
 flowchart LR
-    App["App / CLI / Redis client"]
+    App["App / CLI / fsmeta client"]
     App --> Embedded["Embedded NoKV DB"]
     App --> RPC["NoKV RPC / raftstore/client"]
 

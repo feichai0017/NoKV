@@ -21,7 +21,6 @@ flowchart TD
         HOT["thermos"]
         REGION["region metrics"]
         TRANSPORT["grpc transport metrics"]
-        REDIS["redis gateway metrics"]
     end
     LSM --> SNAP["Stats.Snapshot()"]
     WAL --> SNAP
@@ -29,7 +28,6 @@ flowchart TD
     HOT --> SNAP
     REGION --> SNAP
     TRANSPORT --> SNAP
-    REDIS --> SNAP
     SNAP --> EXP["Stats.collect -> expvar"]
     SNAP --> CLI["nokv stats"]
 ```
@@ -57,7 +55,6 @@ Two-layer design:
 - `cache.*`
 - `lsm.*`
 - `transport.*`
-- `redis.*`
 
 Representative fields:
 
@@ -80,7 +77,7 @@ Representative fields:
 
 - `NoKV.Stats`
 
-All domains (`flush`, `compaction`, `value_log`, `wal`, `raft`, `write`, `region`, `hot`, `cache`, `lsm`, `transport`, `redis`) are nested under this object.
+All domains (`flush`, `compaction`, `value_log`, `wal`, `raft`, `write`, `region`, `hot`, `cache`, `lsm`, `transport`) are nested under this object.
 
 Legacy scalar compatibility keys are removed. Consumers should read fields from `NoKV.Stats` directly.
 
