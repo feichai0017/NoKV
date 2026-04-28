@@ -118,18 +118,14 @@ func TestExecutionProtocolTracksTopologyLifecycle(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		status, ok := rs.TopologyExecution(target.TransitionID)
-		// Wait until apply finishes; the explicit flushRegionUpdates() call
-		// below is idempotent for any post-Applied publish state (Pending,
-		// Failed mid-retry, Published, ...), and the final Eventually verifies
-		// the Published outcome — so we don't gate on the publish boundary
-		// here. Earlier versions checked
-		// `Publish == TerminalPublished || hasPendingRegionUpdate(region.ID)`,
-		// which races: on publish failure, recordTopologyPublishFailure flips
-		// Publish to TerminalFailed before flushRegionUpdates re-queues the
-		// event into regionUpdates, opening a gap where neither side is true.
-		// Slow CI runners can poll in that gap and never observe success.
-		return ok && status.Outcome == ExecutionOutcomeApplied
-	}, 20*time.Second, 20*time.Millisecond)
+		if !ok || status.Outcome != ExecutionOutcomeApplied {
+			return false
+		}
+		// Applied status is recorded just before the terminal root event is
+		// enqueued. Wait until the pending publish is visible, or it was already
+		// published by the background runtime, before forcing an explicit flush.
+		return status.Publish == PublishStateTerminalPublished || rs.hasPendingRegionUpdate(region.ID)
+	}, 10*time.Second, 20*time.Millisecond)
 
 	rs.flushRegionUpdates()
 
