@@ -192,7 +192,6 @@ go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedP
 - `nokv-config stores` / `regions` / `coordinator` remain the structured topology source for shell scripts.
 - `config.regions` remain bootstrap/deployment metadata, not restart-time peer truth.
 - `nokv-config catalog` writes Region metadata into the local peer catalog.
-- `cmd/nokv-redis` uses the same `raft_config.json`, so local scripts and Redis gateway stay aligned.
 - Go tools can import `github.com/feichai0017/NoKV/config` and call `config.LoadFile` / `Validate` directly.
 
-Maintaining a single `raft_config.json` still keeps development scripts, Docker Compose, Redis gateway, and automated tests aligned. The difference now is that shell behavior is shared and explicit instead of repeated across four separate entrypoints.
+Maintaining a single `raft_config.json` still keeps development scripts, Docker Compose, and automated tests aligned. The difference now is that shell behavior is shared and explicit instead of repeated across four separate entrypoints.

@@ -33,7 +33,7 @@ admission, transition execution, publish boundaries, and restart state, read
 
 ```mermaid
 flowchart TD
-    Client["Client / Redis gateway / CLI"]
+    Client["Client / fsmeta gateway / CLI"]
     Client --> KV["kv.Service"]
     Client --> Coordinator["Coordinator"]
 
@@ -173,7 +173,7 @@ The `cmd/nokv serve` command uses `server.Node` internally and prints a local pe
 
 ### 8.1 Topology & Routing
 - Topology is sourced from `raft_config.example.json` (via `config.LoadFile`) and
-  reused by scripts, Docker Compose, and the Redis gateway as bootstrap metadata.
+  reused by scripts and Docker Compose as bootstrap metadata.
 - Runtime routing is Coordinator-first: `raftstore/client` resolves Regions by key through
   `GetRegionByKey` and caches route entries for retries.
 - `raft_config` regions are treated as bootstrap/deployment metadata and are not

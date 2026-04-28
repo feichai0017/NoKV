@@ -147,7 +147,6 @@ type StatsSnapshot struct {
 	Cache      CacheStatsSnapshot                `json:"cache"`
 	LSM        LSMStatsSnapshot                  `json:"lsm"`
 	Transport  transportpkg.GRPCTransportMetrics `json:"transport"`
-	Redis      metrics.RedisSnapshot             `json:"redis"`
 }
 
 // FlushStatsSnapshot summarizes flush queue depth and stage timing.
@@ -728,6 +727,5 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	snap.Cache.IteratorReused = s.host.IteratorReused()
 	snap.ValueLog.GC = metrics.DefaultValueLogGCCollector().Snapshot()
 	snap.Transport = transportpkg.GRPCMetricsSnapshot()
-	snap.Redis = metrics.DefaultRedisSnapshot()
 	return snap
 }
