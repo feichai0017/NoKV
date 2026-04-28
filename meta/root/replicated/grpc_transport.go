@@ -21,6 +21,12 @@ const (
 	rootTransportServiceName    = "nokv.meta.root.Transport"
 	rootTransportStepMethod     = "Step"
 	rootTransportStepFullMethod = "/" + rootTransportServiceName + "/" + rootTransportStepMethod
+
+	// invalidatePeerCloseGrace is how long invalidatePeer waits before
+	// actually closing the cached *grpc.ClientConn. Long enough that any
+	// concurrent Step RPC sharing the same conn finishes (success or its
+	// real error) instead of seeing "client connection is closing".
+	invalidatePeerCloseGrace = 100 * time.Millisecond
 )
 
 type rootTransportServer interface {
@@ -236,6 +242,15 @@ func (t *GRPCTransport) Send(msgs ...myraft.Message) error {
 
 // invalidatePeer tears down the cached gRPC client for id so the next Send
 // re-dials. Safe to call even if there is no cached client.
+//
+// The actual conn.Close() is deferred to a background goroutine. Send fans
+// out concurrent Step RPCs that share one cached *grpc.ClientConn, so closing
+// synchronously here makes any peer goroutine still inside Step see
+// "rpc error: code = Canceled desc = grpc: the client connection is closing"
+// — even when the underlying problem on this peer was transient. Removing
+// from the cache immediately is enough to ensure the next Send re-dials;
+// the delayed close lets in-flight calls finish (with whatever error they
+// would otherwise have returned) before the conn is torn down.
 func (t *GRPCTransport) invalidatePeer(id uint64) {
 	if t == nil {
 		return
@@ -246,7 +261,10 @@ func (t *GRPCTransport) invalidatePeer(id uint64) {
 	delete(t.clients, id)
 	t.mu.Unlock()
 	if conn != nil {
-		_ = conn.Close()
+		go func() {
+			time.Sleep(invalidatePeerCloseGrace)
+			_ = conn.Close()
+		}()
 	}
 }
 
