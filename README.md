@@ -28,43 +28,33 @@
 
 ## What is NoKV?
 
-**NoKV is the open-source counterpart of the "stateless schema layer + transactional KV" pattern** that powers Meta Tectonic (over ZippyDB), Google Colossus (over Bigtable), and DeepSeek 3FS (over FoundationDB). It exposes namespace metadata as a first-class service via **`fsmeta`** (gRPC + embedded Go), backed by an in-house transactional KV substrate.
+**NoKV is the metadata substrate that filesystems, object storage, and AI dataset layers shouldn't have to build themselves.**
 
-**Three audiences, one substrate:**
+Meta Tectonic uses ZippyDB. Google Colossus uses Spanner. DeepSeek 3FS uses FoundationDB. Each big-tech system extracted a **separate metadata layer** from its data layer — because grafting namespace semantics onto a generic KV is the part that breaks under scale.
 
-- 🗂️ **Distributed filesystems** — DFS frontends (FUSE / NFS / SMB drivers) consume `fsmeta` for inode / dentry / mount / subtree authority
-- 🪣 **Object storage namespace layers** — S3-compatible gateways consume the same `fsmeta` for bucket / prefix / version metadata
-- 🧪 **AI dataset metadata** — checkpoint storms, dataset versioning, prefix-scoped change feeds for training pipelines
+NoKV is that layer, open-sourced and namespace-native: server-side `ReadDirPlus` / `WatchSubtree` / `SnapshotSubtree` / `RenameSubtree`, formally-verified authority handoff, sub-second prefix-scoped change feeds. **You bring the data plane** (FUSE driver, S3 frontend, dataset SDK); **NoKV owns namespace truth.**
 
-**Why the substrate matters:**
+> Where it sits: NoKV is the layer **above** generic KV (FoundationDB / TiKV / etcd) and **below** filesystem-shaped consumers (CephFS / JuiceFS / S3 gateways / AI training pipelines). Apache-2.0.
 
-1. **Native metadata primitives** — `ReadDirPlus`, `WatchSubtree`, `SnapshotSubtree`, and cross-region `RenameSubtree` are first-class server-side operations, not client-side compositions over `Get` / `Put` / `Scan`.
-2. **Single source of namespace truth** — mount lifecycle, subtree authority, snapshot epoch, and quota fence live in one rooted, replicated event log.
-3. **Vertical integration** — own LSM (with ART memtable) + own raftstore (per-region runtime, transport, membership, snapshot install, apply observer; consensus algorithm is `etcd/raft` `RawNode`) + own Percolator MVCC + own coordinator. No external dependency gates how a metadata primitive interacts with the storage layer.
+**Why namespace metadata is its own layer, not a feature you bolt onto generic KV:**
 
-> NoKV is a **substrate**, not a finished filesystem server. Build a FUSE driver / S3 gateway / dataset metadata service on top; we don't ship those out of the box. We do ship the metadata primitives, the rooted truth kernel, and a Redis-compatible gateway over the underlying KV.
+1. **Server-side namespace primitives.** `ReadDirPlus` returns one directory + N child stats in one round-trip; client-side stitching on a generic KV does 1+N round-trips with a **42×** end-to-end latency penalty (measured on the same NoKV cluster — see Headline Evidence). `WatchSubtree` ships a prefix-scoped change feed at **178 ms p50**, vs. client-side prefix scans on key-range watches.
+
+2. **Namespace correctness is its own class.** Subtree authority handoff, mount lifecycle, snapshot epoch, and quota fence have a formal correctness model that generic KV doesn't speak. NoKV's **Eunomia** protocol is TLC-model-checked under finite bounds for handoff legality — a property no general-purpose KV provides because it isn't a general-purpose KV property.
+
+3. **Bring your own data plane.** NoKV does **not** store object bytes, chunk data, or POSIX file content. You wire it under a FUSE driver, an S3 gateway, or a dataset SDK; NoKV is the namespace truth those frontends consume. This is the layer split Meta / Google / DeepSeek already chose internally — extracted, packaged, and Apache-2.0.
+
+**Three audiences that all sit on the same substrate:**
+
+- 🗂️ **Distributed filesystems** — DFS frontends (FUSE / NFS / SMB drivers, JuiceFS / CubeFS-style services) consume `fsmeta` for inode / dentry / mount / subtree authority instead of writing their own metadata layer on top of Redis / TiKV / FoundationDB
+- 🪣 **Object storage namespace layers** — S3-compatible gateways consume the same `fsmeta` for bucket / prefix / version metadata, getting fast `LIST` (server-side `ReadDirPlus`) and prefix-scoped event streams without client-side stitching
+- 🧪 **AI dataset metadata** — checkpoint storms (atomic multi-key `AssertionNotExist`), dataset versioning (`SnapshotSubtree`), prefix-scoped change feeds for training pipelines (`WatchSubtree`) — without retrofitting them onto a generic KV
+
+> NoKV does for namespace metadata what etcd did for cluster state: a purpose-built coordination layer instead of forcing engineers to re-derive namespace semantics on every project.
 
 <br/>
 
 ## 📊 Headline Evidence
-
-### `fsmeta` native API vs generic KV (same NoKV cluster, Docker Compose)
-
-| Operation | native-fsmeta | generic-KV | Speedup |
-|---|---:|---:|---:|
-| `ReadDirPlus` (avg) | **12.0 ms** | 510.3 ms | **42.5×** |
-| `ReadDirPlus` (p50) | 11.3 ms | 508.7 ms | **44.8×** |
-| `Create` (checkpoint storm, avg) | 338.6 ms | 434.7 ms | 1.28× |
-
-> CSV: [`benchmark/fsmeta/results/fsmeta_formal_native_vs_generic_20260425T051640Z.csv`](./benchmark/fsmeta/results/)
-
-### `WatchSubtree` end-to-end change-feed latency (3-node Docker Compose, 512 events)
-
-| Metric | p50 | p95 | p99 |
-|---|---:|---:|---:|
-| `watch_notify` | **178 ms** | **472 ms** | 1235 ms |
-
-> CSV: [`benchmark/fsmeta/results/fsmeta_watchsubtree_20260425T083316Z.csv`](./benchmark/fsmeta/results/) — sub-second end-to-end change feed for prefix-scoped metadata watches.
 
 ### Underlying KV layer (YCSB single-node, NoKV vs Badger / Pebble)
 
@@ -85,17 +75,17 @@ Apple M3 Pro · `records=1M` · `ops=1M` · `value_size=1000` · `conc=16`
 
 ## 🧭 Why NoKV vs X?
 
-| If you need… | You should probably use… | Why NoKV exists |
+| If you need… | You should probably use… | Where NoKV fits |
 |---|---|---|
-| A **complete distributed filesystem** (FUSE-mountable, full POSIX) | **CephFS, JuiceFS** | NoKV is the metadata substrate, not the full FS server |
-| A **production object store** | **MinIO, Ceph RGW** | Same — NoKV provides namespace metadata, not S3 HTTP / object body I/O |
-| **Hyperscaler-style "schema layer + transactional KV"** for your own DFS / OSS / dataset metadata | — | **This is what NoKV is for**: the open-source counterpart to Tectonic over ZippyDB, Colossus over Bigtable, 3FS over FDB |
-| Production distributed SQL | **CockroachDB**, TiDB | Different scope |
-| Production distributed KV | **TiKV, FoundationDB** | NoKV's KV layer is an in-house substrate for `fsmeta`, not a TiKV/FDB replacement |
-| Just an embedded LSM | **Pebble**, **Badger** | NoKV's engine is not a drop-in library |
-| A Raft library | **etcd/raft**, dragonboat | NoKV builds its raftstore (per-region runtime, transport, membership, snapshot install, apply observer) on top of `etcd/raft` `RawNode` — the integration is owned, the consensus algorithm is reused |
+| A **complete distributed filesystem** (FUSE-mountable, full POSIX) | **CephFS, JuiceFS** | NoKV is **not** an FS — but JuiceFS-style systems default to Redis / TiKV for their metadata backend, which breaks at scale. **NoKV can be JuiceFS's metadata backend.** |
+| A **production object store** | **MinIO, Ceph RGW** | NoKV is **not** an object store — object body I/O isn't its job. NoKV provides the namespace layer above the object backend (bucket / prefix / version) |
+| **A custom metadata service you're writing on top of FoundationDB / TiKV / etcd** | **NoKV** | **This is exactly what NoKV replaces.** `ReadDirPlus` / `WatchSubtree` / `SnapshotSubtree` are server-side primitives — you don't have to stitch them client-side. Apache-2.0. |
+| A **production distributed KV** | **TiKV, FoundationDB, CockroachDB** | NoKV **does not compete** with them — they own the generic-KV market. NoKV is a metadata-native layer that can run **on top of** them (or, today, on its own engine) |
+| Production distributed SQL | **CockroachDB, TiDB** | Different scope (relational, not namespace) |
+| Just an embedded LSM | **Pebble, Badger** | NoKV's engine is not a drop-in library |
+| A Raft library | **etcd/raft, dragonboat** | NoKV's raftstore (per-region runtime, transport, membership, snapshot install, apply observer) is built **on top of** `etcd/raft` `RawNode`. Owned: the integration. Reused: the consensus algorithm. |
 
-NoKV's value comes from **owning the entire vertical** so namespace-metadata-natural primitives can be implemented as first-class server-side ops (not client-side compositions over `Get`/`Put`/`Scan`).
+NoKV's value comes from being **metadata-native, not generic-KV-with-metadata-glued-on**. The same architectural slice big-tech filesystems already extract internally — `ReadDirPlus`, prefix-scoped event streams, formally-verified authority handoff — packaged as a layer you can drop in instead of writing yourself.
 
 <br/>
 
@@ -104,46 +94,6 @@ NoKV's value comes from **owning the entire vertical** so namespace-metadata-nat
 <p align="center">
   <img src="./docs/img/architecture.svg" alt="NoKV Architecture" width="100%" />
 </p>
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│ Layer 1  Userspace API (namespace semantics)                │
-│   fsmeta/  — Create / Lookup / ReadDir / ReadDirPlus /      │
-│              RenameSubtree / Link / Unlink / SnapshotSubtree│
-│              WatchSubtree (catch-up replay + ack window)    │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-┌──────────────────────┴──────────────────────────────────────┐
-│ Layer 2  Distributed runtime                                 │
-│                                                              │
-│  Control plane:              Execution plane:                │
-│  • meta/root  — typed         • raftstore  — per-region Raft │
-│    rooted truth (mount,       • percolator — 2PC + MVCC      │
-│    subtree authority,           + AssertionNotExist          │
-│    snapshot epoch, quota      • apply observer → fsmeta      │
-│    fence)                       watch router                 │
-│                               • SST snapshot install         │
-│  • coordinator — TSO,                                        │
-│    routing, store discovery,                                 │
-│    rooted event publish,                                     │
-│    streaming root-event sub                                  │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-┌──────────────────────┴──────────────────────────────────────┐
-│ Layer 3  Single-node storage engine                          │
-│   engine/  — LSM + ART memtable + WAL + value log + manifest │
-│   + per-CF/prefix value separation policy                    │
-└──────────────────────────────────────────────────────────────┘
-```
-
-Four boundaries that distinguish this stack:
-
-1. **fsmeta-first API.** Metadata operations expose filesystem/object-namespace shapes directly, instead of forcing users to assemble them from raw KV calls.
-2. **Layer separation enforced in code.** The fsmeta executor consumes a narrow `TxnRunner`; the default `OpenWithRaftstore` adapter owns raftstore wiring; lower layers do not import fsmeta.
-3. **Multi-gateway-safe by construction.** Quota fences live in rooted truth; usage counters are data-plane keys updated in the same Percolator transaction as metadata mutations. Subtree authority handoff uses rooted events with runtime repair.
-4. **Root-event driven lifecycle.** `coordinator.WatchRootEvents` pushes mount retire, quota fence, and pending handoff updates to gateways after a bootstrap snapshot; the monitor interval is only reconnect backoff.
-
-Deep-dive: [`docs/architecture.md`](docs/architecture.md) · [`docs/runtime.md`](docs/runtime.md) · [`docs/control_and_execution_protocols.md`](docs/control_and_execution_protocols.md)
 
 <br/>
 
@@ -277,26 +227,6 @@ Full guide: [`docs/getting_started.md`](docs/getting_started.md) · CLI referenc
 
 <br/>
 
-## ✨ Notable Design Points
-
-| | Feature | Reference |
-|---|---|---|
-| 🌡️ | **Ingest Buffer for anti-stall LSM** — "catch first, sort later" absorbs L0 pressure without blocking writes | [`engine/lsm/`](./engine/lsm) · [design note](docs/notes/2026-02-01-compaction-and-ingest.md) |
-| 🪣 | **Value Log with KV separation + hash buckets + parallel GC** — WiscKey + HashKV merged into a single pragmatic design | [`engine/vlog/`](./engine/vlog) · [design note](docs/notes/2026-02-05-vlog-design-and-gc.md) |
-| 🧠 | **Adaptive memtable index (SkipList ↔ ART)** over arena memory — ART pinned for fsmeta deployments (prefix-heavy dentries compress to single inner-node prefixes) | [`engine/lsm/memtable.go`](./engine/lsm/memtable.go) · [design note](docs/notes/2026-02-09-memory-kernel-arena-and-adaptive-index.md) |
-| 🚦 | **MPSC write pipeline with adaptive coalescing** — thousands of concurrent producers, one long-lived consumer, backlog-aware batching | [`internal/runtime/write_pipeline.go`](./internal/runtime/write_pipeline.go) · [design note](docs/notes/2026-02-09-write-pipeline-mpsc-and-adaptive-batching.md) |
-| 🔍 | **Per-CF / per-prefix value separation policy** — fsmeta keys (`fsm\x00`) forced inline, never redirected to vlog | [`engine/kv/value_separation.go`](./engine/kv/value_separation.go) |
-| 🎯 | **Thermos as a side-channel observer** — hot-key detection without putting it on the main read path | [`thermos/`](./thermos) · [design note](docs/notes/2026-01-16-thermos-design.md) |
-| 🧰 | **VFS abstraction with 18-op fault injection** — cross-platform atomic rename semantics, FaultFS for testing any syscall failure | [`engine/vfs/`](./engine/vfs) · [design note](docs/notes/2026-02-15-vfs-abstraction-and-deterministic-reliability.md) |
-| 📦 | **SST-based Raft snapshot install** — snapshots ship materialized SST files, target node ingests directly | [`raftstore/snapshot/`](./raftstore/snapshot) · [design note](docs/notes/2026-03-31-sst-snapshot-install.md) |
-| 🏛️ | **Delos-lite rooted truth kernel** — typed event log is the single source of truth; coordinator and raftstore are consumers | [`meta/root/`](./meta/root) · [design note](docs/notes/2026-04-03-delos-lite-metadata-root-roadmap.md) |
-| 🪞 | **Apply observer at store level** — post-commit semantic events with `(region_id, term, index, commit_version)` cursor; survives raft snapshot replay | [`raftstore/store/observer.go`](./raftstore/store/observer.go) |
-| 🔁 | **Cross-region atomic RenameSubtree** — Percolator 2PC + commit-ts-expired auto-retry (3×) + monitor reconciliation for pending moves | [`fsmeta/exec/runner.go`](./fsmeta/exec/runner.go) |
-
-All design notes under [`docs/notes/`](./docs/notes/) are dated decision records — read them to understand *why* something is the way it is, not just what it does.
-
-<br/>
-
 ## 🧩 Modules
 
 | Module | Responsibility | Docs |
@@ -366,17 +296,6 @@ Local scripts, Docker Compose, and all CLI tools consume the same file. Programm
 
 <br/>
 
-## 📖 Further Reading
-
-- [`docs/fsmeta.md`](docs/fsmeta.md) — namespace metadata service complete reference
-- [`docs/architecture.md`](docs/architecture.md) — three-layer architecture deep dive
-- [`docs/runtime.md`](docs/runtime.md) — function-level call chains
-- [`docs/control_and_execution_protocols.md`](docs/control_and_execution_protocols.md) — control-plane / execution-plane contract
-- [`docs/notes/`](docs/notes/) — dated design decision records
-- Local-only research drafts are intentionally excluded from Git.
-- [`docs/SUMMARY.md`](docs/SUMMARY.md) — full table of contents (mdbook index)
-
-<br/>
 
 ## 📄 License
 
