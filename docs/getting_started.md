@@ -33,18 +33,6 @@ discover store addresses from Coordinator heartbeats.
 Do not rerun `scripts/ops/bootstrap.sh` or treat `scripts/dev/cluster.sh` as the
 restart path for an already-running store.
 
-Start the Redis-compatible gateway in another shell:
-
-```bash
-go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --coordinator-addr 127.0.0.1:2379
-```
-
-Quick smoke test:
-
-```bash
-scripts/demo/redis-smoke.sh
-```
-
 ### Inspect stats
 
 ```bash
@@ -52,11 +40,12 @@ go run ./cmd/nokv stats --workdir ./artifacts/cluster/store-1
 ```
 
 ## Option B: Docker Compose
-This runs the cluster and gateway in containers with the published GHCR image.
+This runs the full cluster (3 meta-root + 3 coordinator + 3 store + fsmeta gateway)
+in containers with the published GHCR image.
 
 ```bash
 docker compose up -d
-scripts/demo/redis-smoke.sh
+docker compose logs -f
 ```
 
 To force-refresh `:latest` before startup, use:

@@ -19,7 +19,7 @@ Coordinator currently owns:
 - **ID service**: `AllocID`
 - **TSO**: `Tso`
 
-Runtime clients (for example `cmd/nokv-redis` raft backend) use Coordinator as the
+Runtime clients (for example `cmd/nokv-fsmeta`) use Coordinator as the
 routing source of truth, but Coordinator is not the durable owner of cluster topology
 truth. Durable truth lives in `meta/root`.
 
@@ -30,7 +30,7 @@ truth. Durable truth lives in `meta/root`.
 ```mermaid
 flowchart LR
     Store["nokv serve"] -->|"StoreHeartbeat / RegionHeartbeat"| Coordinator["Coordinator (gRPC)"]
-    Gateway["nokv-redis (raft mode)"] -->|"GetRegionByKey / Tso"| Coordinator
+    Gateway["nokv-fsmeta"] -->|"GetRegionByKey / Tso"| Coordinator
     Coordinator --> Cluster["coordinator/catalog.Cluster"]
     Cluster --> Scheduler["leader-transfer hint planner"]
 ```

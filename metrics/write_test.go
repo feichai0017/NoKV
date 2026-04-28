@@ -56,33 +56,6 @@ func TestCacheCountersSnapshot(t *testing.T) {
 	}
 }
 
-func TestRedisMetricsCounters(t *testing.T) {
-	rm := NewRedisMetrics([]string{"get"})
-	rm.IncCommand("get")
-	rm.IncCommand("set")
-	rm.IncError()
-	rm.ConnOpened()
-	rm.ConnClosed()
-
-	snap := rm.Snapshot()
-	if snap.CommandsTotal != 2 {
-		t.Fatalf("expected commands_total=2, got %d", snap.CommandsTotal)
-	}
-	if snap.ErrorsTotal != 1 {
-		t.Fatalf("expected errors_total=1, got %d", snap.ErrorsTotal)
-	}
-	if snap.ConnectionsAccepted != 1 {
-		t.Fatalf("expected connections_accepted=1, got %d", snap.ConnectionsAccepted)
-	}
-	if snap.ConnectionsActive != 0 {
-		t.Fatalf("expected connections_active=0, got %d", snap.ConnectionsActive)
-	}
-	cmds := snap.CommandsPerOperation
-	if cmds["GET"] != 1 || cmds["SET"] != 1 {
-		t.Fatalf("unexpected command counts: %+v", cmds)
-	}
-}
-
 func TestRegionMetrics(t *testing.T) {
 	rm := NewRegionMetrics()
 	rm.RecordUpdate(localmeta.RegionMeta{ID: 1, State: localmeta.RegionStateRunning})
