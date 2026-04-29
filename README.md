@@ -1,7 +1,8 @@
 <div align="center">
   <img src="./docs/img/logo.svg" width="200" alt="NoKV" />
 
-  <h1>NoKV</h1>
+  <img width="1411" height="945" alt="image" src="https://github.com/user-attachments/assets/d56c9346-54d7-4237-b33b-a9d67e23cd55" />
+
 
   <p>
     <strong>An open-source namespace metadata substrate for distributed filesystems, object storage, and AI dataset metadata.</strong>
@@ -13,7 +14,7 @@
     <a href="https://goreportcard.com/report/github.com/feichai0017/NoKV"><img alt="Go Report Card" src="https://img.shields.io/badge/go%20report-A+-brightgreen" /></a>
     <a href="https://pkg.go.dev/github.com/feichai0017/NoKV"><img alt="Go Reference" src="https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&logoColor=white" /></a>
     <a href="https://github.com/avelino/awesome-go#databases-implemented-in-go"><img alt="Mentioned in Awesome" src="https://awesome.re/mentioned-badge.svg" /></a>
-    <a href="https://landscape.cncf.io/?item=app-definition-and-development--database--nokv"><img alt="CNCF Landscape" src="https://img.shields.io/badge/CNCF%20Landscape-listed-5699C6?logo=cncf&logoColor=white" /></a>
+    <a href="https://landscape.cncf.io/?group=projects-and-products&item=runtime--cloud-native-storage--nokv"><img alt="CNCF Landscape" src="https://img.shields.io/badge/CNCF%20Landscape-listed-5699C6?logo=cncf&logoColor=white" /></a>
   </p>
 
   <p>
