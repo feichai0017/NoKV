@@ -1,54 +1,54 @@
 # FSMetadata
 
-## 导读
+## TL;DR
 
-- 主题：NoKV 的 namespace metadata substrate。
-- 核心对象：Mount、Inode、Dentry、SubtreeAuthority、SnapshotEpoch、QuotaFence、UsageCounter。
-- 调用链：`fsmeta/client -> fsmeta/server -> fsmeta/exec -> TxnRunner -> raftstore/percolator/coordinator`。
-- 代码合同：wire 在 `pb/fsmeta/fsmeta.proto`，执行器在 `fsmeta/exec`，默认 NoKV runtime 在 `fsmeta/exec.OpenWithRaftstore`。
+- Topic: NoKV's namespace metadata substrate.
+- Core objects: Mount, Inode, Dentry, SubtreeAuthority, SnapshotEpoch, QuotaFence, UsageCounter.
+- Call chain: `fsmeta/client -> fsmeta/server -> fsmeta/exec -> TxnRunner -> raftstore/percolator/coordinator`.
+- Code contract: wire is in `pb/fsmeta/fsmeta.proto`, the executor is in `fsmeta/exec`, and the default NoKV runtime is `fsmeta/exec.OpenWithRaftstore`.
 
-## 1. 结论
+## 1. Conclusion
 
-`fsmeta` 是 NoKV 的原生元数据服务。它不是 FUSE frontend，不负责对象 body I/O，也不承诺完整 POSIX。它提供的是分布式文件系统、对象存储 namespace、AI dataset metadata 都能复用的元数据底座。
+`fsmeta` is NoKV's native metadata service. It isn't a FUSE frontend, it doesn't handle object body I/O, and it doesn't promise full POSIX. What it provides is a metadata substrate that distributed filesystems, object-storage namespaces, and AI dataset metadata can all reuse.
 
-这层的价值不在于把 inode/dentry 编成几种 key。真正的边界是：常见 namespace 操作被做成服务端原语，而不是让上层应用自己用 `Get` / `Put` / `Scan` 拼协议。
+The value of this layer isn't picking a few keys to encode inode/dentry. The real boundary is: common namespace operations are exposed as server-side primitives, instead of asking each upper-layer application to stitch a protocol out of `Get` / `Put` / `Scan`.
 
-## 2. 当前 API
+## 2. Current API
 
-当前 v1 API 由 `pb/fsmeta/fsmeta.proto` 定义，`fsmeta/server` 暴露 gRPC，`fsmeta/client` 提供 Go typed client。
+The current v1 API is defined by `pb/fsmeta/fsmeta.proto`. `fsmeta/server` exposes gRPC; `fsmeta/client` provides a Go typed client.
 
-| RPC | 当前语义 |
+| RPC | Current semantics |
 |---|---|
-| `Create` | 原子创建一个 dentry 和 inode；服务端 `AssertionNotExist` 拒绝重复创建。 |
-| `Lookup` | 按 `(mount, parent_inode, name)` 读取一个 dentry。 |
-| `ReadDir` | 按 dentry prefix 扫一个目录页。 |
-| `ReadDirPlus` | 在同一个 snapshot version 下扫 dentry 并批量读取 inode attr。 |
-| `WatchSubtree` | prefix-scoped change feed；支持 ready、ack、back-pressure 和 cursor replay。 |
-| `SnapshotSubtree` | 发布一个稳定 MVCC read version，后续 `ReadDir` / `ReadDirPlus` 可用它读取快照。 |
-| `RetireSnapshotSubtree` | 主动 retire 一个 snapshot epoch。 |
-| `GetQuotaUsage` | 读取 mount/scope 的持久化 quota usage counter。 |
-| `RenameSubtree` | 原子移动一个 subtree root dentry；descendants 通过 inode 引用自然跟随。 |
-| `Link` | 给已有非目录 inode 创建第二个 dentry，并在同一事务内增加 link count。 |
-| `Unlink` | 删除一个 dentry；递减 link count，最后一个 link 被删时删除 inode record。 |
+| `Create` | Atomically creates a dentry and inode; the server uses `AssertionNotExist` to reject duplicate creation. |
+| `Lookup` | Read a dentry by `(mount, parent_inode, name)`. |
+| `ReadDir` | Scan one directory page by dentry prefix. |
+| `ReadDirPlus` | Scan dentries and batch-read inode attrs under the same snapshot version. |
+| `WatchSubtree` | A prefix-scoped change feed; supports ready, ack, back-pressure, and cursor replay. |
+| `SnapshotSubtree` | Publishes a stable MVCC read version; subsequent `ReadDir` / `ReadDirPlus` can use it to read the snapshot. |
+| `RetireSnapshotSubtree` | Proactively retire a snapshot epoch. |
+| `GetQuotaUsage` | Read the persistent quota usage counter for a mount/scope. |
+| `RenameSubtree` | Atomically move the root dentry of a subtree; descendants follow naturally via inode references. |
+| `Link` | Create a second dentry for an existing non-directory inode and increment link count in the same transaction. |
+| `Unlink` | Delete a dentry; decrement link count and delete the inode record when the last link is removed. |
 
-## 3. 数据模型
+## 3. Data model
 
-`fsmeta` 的 key schema 在 `fsmeta/keys.go`，value schema 在 `fsmeta/value.go`。
+`fsmeta`'s key schema is in `fsmeta/keys.go`; value schema is in `fsmeta/value.go`.
 
-| 对象 | 存储位置 | 说明 |
+| Object | Storage location | Notes |
 |---|---|---|
-| Mount metadata key | `EncodeMountKey` | 预留的 mount-level 数据 key；mount lifecycle truth 不存在这里。 |
-| Inode | `EncodeInodeKey(mount, inode)` | 文件/目录属性，含 `size`、`mode`、`link_count`。 |
-| Dentry | `EncodeDentryKey(mount, parent, name)` | parent/name 到 inode 的映射。 |
-| Chunk | `EncodeChunkKey(mount, inode, chunk)` | schema 已有，当前 fsmeta API 不暴露对象 body/chunk I/O。 |
-| Session | `EncodeSessionKey(mount, session)` | schema 预留给后续 session/lease。 |
-| Usage | `EncodeUsageKey(mount, scope)` | quota usage counter；scope=0 表示 mount-wide，非 0 表示直接 accounting scope。 |
+| Mount metadata key | `EncodeMountKey` | Reserved mount-level data key; mount lifecycle truth does not live here. |
+| Inode | `EncodeInodeKey(mount, inode)` | File/directory attributes, including `size`, `mode`, `link_count`. |
+| Dentry | `EncodeDentryKey(mount, parent, name)` | Mapping from parent/name to inode. |
+| Chunk | `EncodeChunkKey(mount, inode, chunk)` | Schema is in place; the current fsmeta API doesn't expose object body / chunk I/O. |
+| Session | `EncodeSessionKey(mount, session)` | Schema reserved for later session/lease use. |
+| Usage | `EncodeUsageKey(mount, scope)` | Quota usage counter; scope=0 means mount-wide, non-zero means a direct accounting scope. |
 
-Key/value 都有 magic + schema version。value 是手写二进制布局，不走 JSON。
+Both keys and values carry a magic + schema version. Values use a hand-written binary layout — not JSON.
 
-## 4. 执行边界
+## 4. Execution boundary
 
-`fsmeta/exec.Executor` 只依赖一个窄接口：
+`fsmeta/exec.Executor` depends on a single narrow interface:
 
 ```go
 type TxnRunner interface {
@@ -60,103 +60,103 @@ type TxnRunner interface {
 }
 ```
 
-默认 runtime 用 `OpenWithRaftstore` 把 coordinator、raftstore client、TSO、watch source、mount/quota cache、snapshot publisher、subtree handoff publisher 接起来。嵌入式用户可以直接用这个入口；测试和自定义部署可以继续传自己的 `TxnRunner`。
+The default runtime uses `OpenWithRaftstore` to wire up coordinator, raftstore client, TSO, watch source, mount/quota cache, snapshot publisher, and subtree handoff publisher. Embedded users can use this entry point directly; tests and custom deployments can keep passing in their own `TxnRunner`.
 
-分层约束是：
+The layering constraints are:
 
-- `Executor` 不直接知道 raft region / store routing。
-- `OpenWithRaftstore` 是 NoKV 默认适配器，负责 raftstore wiring。
-- `meta/root` 不保存 inode/dentry 高频数据，只保存 lifecycle / authority truth。
-- `raftstore` 和 `percolator` 不理解 fsmeta 语义，只提供事务和 apply observation。
+- `Executor` does not directly know about raft region / store routing.
+- `OpenWithRaftstore` is NoKV's default adapter; it owns the raftstore wiring.
+- `meta/root` does not store high-frequency inode/dentry data — only lifecycle / authority truth.
+- `raftstore` and `percolator` don't understand fsmeta semantics; they only provide transactions and apply observation.
 
-## 5. 原生 primitive
+## 5. Native primitives
 
 ### ReadDirPlus
 
-`ReadDirPlus` 是当前最直接的 shape advantage：一次 dentry scan，加一次 `BatchGet` inode attrs，读同一个 snapshot version。generic-KV baseline 需要 scan 后对每个 dentry 做点查，形成 N+1。
+`ReadDirPlus` is the most direct shape advantage today: one dentry scan plus one `BatchGet` of inode attrs, all read under the same snapshot version. A generic-KV baseline has to do a point lookup per dentry after the scan, producing N+1.
 
-严格语义：任意 inode 缺失或解码失败，整页返回错误。fsmeta 不返回半真半假的目录页。
+Strict semantics: if any inode is missing or fails to decode, the whole page returns an error. fsmeta does not return half-true directory pages.
 
 ### WatchSubtree
 
-`WatchSubtree` 订阅 fsmeta key prefix，对外暴露的是 `(region_id, term, index)` cursor 和 `commit_version`。事件来源包括：
+`WatchSubtree` subscribes to an fsmeta key prefix and externally exposes a `(region_id, term, index)` cursor and a `commit_version`. Event sources include:
 
-- `CMD_COMMIT` 成功；
-- `CMD_RESOLVE_LOCK` 且 `commit_version != 0`。
+- a successful `CMD_COMMIT`;
+- `CMD_RESOLVE_LOCK` with `commit_version != 0`.
 
-`CMD_PREWRITE`、rollback、diagnostic commands 不产生可见事件。
+`CMD_PREWRITE`, rollback, and diagnostic commands do not produce visible events.
 
-v1 已支持：
+v1 already supports:
 
-- ready signal；
-- back-pressure window；
-- ack；
-- per-region recent ring；
-- resume cursor replay；
-- cursor 过期时返回 `ErrWatchCursorExpired`。
+- ready signal;
+- back-pressure window;
+- ack;
+- per-region recent ring;
+- resume cursor replay;
+- `ErrWatchCursorExpired` when a cursor has expired.
 
 ### SnapshotSubtree
 
-`SnapshotSubtree` 只发布 read epoch，不复制目录树。token 形状是 `(mount, root_inode, read_version)`。后续 `ReadDir` / `ReadDirPlus` 使用 `snapshot_version` 读取同一个 MVCC 视图。
+`SnapshotSubtree` only publishes a read epoch — it does not copy the directory tree. The token shape is `(mount, root_inode, read_version)`. Subsequent `ReadDir` / `ReadDirPlus` use `snapshot_version` to read the same MVCC view.
 
-当前已经有 `SnapshotEpochPublished` / `SnapshotEpochRetired` rooted events。数据面 MVCC GC 还没有把这些 epoch 作为 retention lower bound 使用，这是后续 GC 层的工作。
+`SnapshotEpochPublished` / `SnapshotEpochRetired` rooted events are already in place. The data-plane MVCC GC does not yet use these epochs as a retention lower bound — that's the next piece of work for the GC layer.
 
 ### RenameSubtree
 
-当前 dentry schema 用 `parent_inode_id` 引用父目录，所以 subtree rename 的物理写入量和普通 rename 一样：删除旧 root dentry，写入新 root dentry。descendants 不需要逐条改 key。
+The current dentry schema references the parent directory via `parent_inode_id`, so a subtree rename's physical write volume is the same as a regular rename: delete the old root dentry, write the new root dentry. Descendants don't have to be rewritten one by one.
 
-额外语义在 authority 层：
+The extra semantics live in the authority layer:
 
-- mutation 前发布 `SubtreeHandoffStarted`；
-- dentry mutation 走 Percolator 2PC；
-- mutation 后发布 `SubtreeHandoffCompleted`；
-- runtime monitor 通过 `WatchRootEvents` 发现 pending handoff 并补 complete。
+- publish `SubtreeHandoffStarted` before mutation;
+- the dentry mutation goes through Percolator 2PC;
+- publish `SubtreeHandoffCompleted` after mutation;
+- the runtime monitor uses `WatchRootEvents` to discover pending handoffs and complete them.
 
-这个设计优先保证 rooted authority 不会永久卡在未知状态。极端情况下可能推进一个空 era，但不会留下无人修复的 pending handoff。
+This design prioritizes guaranteeing that rooted authority can never get stuck in an unknown state forever. In extreme cases it may advance an empty era — but it will not leave behind an orphaned pending handoff that no one will repair.
 
 ### Link / Unlink
 
-`Link` 只允许非目录 inode。它会创建新 dentry，并在同一事务内增加 `InodeRecord.LinkCount`。
+`Link` is allowed only for non-directory inodes. It creates a new dentry and increments `InodeRecord.LinkCount` in the same transaction.
 
-`Unlink` 删除一个 dentry，并根据 link count 更新 inode：
+`Unlink` deletes one dentry and updates the inode based on link count:
 
-- link count 大于 1：递减并写回 inode；
-- link count 小于等于 1：删除 inode record。
+- link count > 1: decrement and write back the inode;
+- link count ≤ 1: delete the inode record.
 
-目录 hard link 仍然非法。
+Hard links to directories remain illegal.
 
 ### Quota Fence
 
-Quota fence 是 rooted truth；usage counter 是 data-plane key。写路径会把 usage counter mutation 和 dentry/inode mutation 放进同一个 Percolator transaction。
+The quota fence is rooted truth; the usage counter is a data-plane key. The write path packs the usage counter mutation and the dentry/inode mutation into the same Percolator transaction.
 
-这解决两个问题：
+This solves two problems:
 
-- 多个 `nokv-fsmeta` gateway 不会各自维护本地计数导致突破 limit；
-- gateway 重启不会丢 usage。
+- multiple `nokv-fsmeta` gateways won't each maintain a local counter and breach the limit;
+- a gateway restart won't lose usage.
 
-fence 变化通过 coordinator root-event stream 推给 fsmeta runtime，cache miss 时也会回源查询 coordinator。
+Fence changes are pushed to the fsmeta runtime via the coordinator root-event stream; on cache miss, the runtime falls back to querying the coordinator.
 
-## 6. Rooted Truth vs Runtime View
+## 6. Rooted truth vs runtime view
 
 | Domain | Rooted truth | Runtime view |
 |---|---|---|
-| Mount | `MountRegistered` / `MountRetired` | fsmeta mount admission cache，retired mount 会关闭相关 watch subscription。 |
-| Subtree authority | `SubtreeAuthorityDeclared` / `SubtreeHandoffStarted` / `SubtreeHandoffCompleted` | RenameSubtree frontier、pending handoff repair。 |
-| Snapshot epoch | `SnapshotEpochPublished` / `SnapshotEpochRetired` | snapshot-version reads。 |
-| Quota fence | `QuotaFenceUpdated` | quota fence cache + persisted usage counter keys。 |
-| WatchSubtree | 不进 `meta/root` | raftstore apply observer + fsmeta router。 |
+| Mount | `MountRegistered` / `MountRetired` | fsmeta mount admission cache; a retired mount closes related watch subscriptions. |
+| Subtree authority | `SubtreeAuthorityDeclared` / `SubtreeHandoffStarted` / `SubtreeHandoffCompleted` | RenameSubtree frontier, pending handoff repair. |
+| Snapshot epoch | `SnapshotEpochPublished` / `SnapshotEpochRetired` | snapshot-version reads. |
+| Quota fence | `QuotaFenceUpdated` | quota fence cache + persisted usage counter keys. |
+| WatchSubtree | Not in `meta/root` | raftstore apply observer + fsmeta router. |
 
-`nokv-fsmeta` 启动时先拉一次 `ListMounts` / `ListQuotaFences` / `ListSubtreeAuthorities` 做 bootstrap，然后通过 `WatchRootEvents` 跟随后续变化。`MonitorInterval` 是 root-event stream 断开后的重连 backoff；它不是 steady-state polling interval。
+On startup, `nokv-fsmeta` first pulls `ListMounts` / `ListQuotaFences` / `ListSubtreeAuthorities` for bootstrap, then follows subsequent changes via `WatchRootEvents`. `MonitorInterval` is the reconnect backoff after the root-event stream drops — not a steady-state polling interval.
 
-## 7. 部署
+## 7. Deployment
 
-Docker Compose 会启动 meta-root、coordinator、raftstore、fsmeta gateway，并通过 `mount-init` 注册默认 mount：
+Docker Compose brings up meta-root, coordinator, raftstore, and fsmeta gateway, and registers a default mount via `mount-init`:
 
 ```bash
 docker compose up -d
 ```
 
-直接启动 fsmeta gateway：
+Start the fsmeta gateway directly:
 
 ```bash
 go run ./cmd/nokv-fsmeta \
@@ -165,7 +165,7 @@ go run ./cmd/nokv-fsmeta \
   --metrics-addr 127.0.0.1:9400
 ```
 
-注册 mount：
+Register a mount:
 
 ```bash
 nokv mount register \
@@ -175,7 +175,7 @@ nokv mount register \
   --schema-version 1
 ```
 
-设置 quota：
+Set quota:
 
 ```bash
 nokv quota set \
@@ -187,32 +187,32 @@ nokv quota set \
 
 ## 8. Metrics
 
-`nokv-fsmeta --metrics-addr` 暴露四组 expvar：
+`nokv-fsmeta --metrics-addr` exposes four expvar groups:
 
-| Namespace | 含义 |
+| Namespace | Meaning |
 |---|---|
-| `nokv_fsmeta_executor` | transaction retry / retry exhausted。 |
-| `nokv_fsmeta_watch` | subscribers、events、delivered、dropped、overflow、remote source state。 |
-| `nokv_fsmeta_mount` | mount cache hit/miss、admission rejects。 |
-| `nokv_fsmeta_quota` | fence check/reject、cache hit/miss、fence updates、usage mutations。 |
+| `nokv_fsmeta_executor` | transaction retry / retry exhausted. |
+| `nokv_fsmeta_watch` | subscribers, events, delivered, dropped, overflow, remote source state. |
+| `nokv_fsmeta_mount` | mount cache hit/miss, admission rejects. |
+| `nokv_fsmeta_quota` | fence check/reject, cache hit/miss, fence updates, usage mutations. |
 
 ## 9. Benchmarks
 
-fsmeta benchmark 在 `benchmark/fsmeta`。核心对照是同一个 NoKV 集群上的两条路径：
+The fsmeta benchmark lives in `benchmark/fsmeta`. The core comparison is two paths against the same NoKV cluster:
 
-| Driver | 行为 |
+| Driver | Behavior |
 |---|---|
-| `native-fsmeta` | 调 fsmeta typed API。 |
-| `generic-kv` | 用同样的 raftstore/percolator substrate，在客户端拼 metadata schema。 |
+| `native-fsmeta` | Calls the fsmeta typed API. |
+| `generic-kv` | Uses the same raftstore/percolator substrate but stitches the metadata schema on the client. |
 
-Stage 1 headline：`ReadDirPlus` 平均延迟 12.0 ms vs 510.3 ms，约 42.5x。结果 CSV 在 `benchmark/fsmeta/results/`。
+Stage 1 headline: `ReadDirPlus` average latency 12.0 ms vs 510.3 ms — about 42.5×. Result CSVs are in `benchmark/fsmeta/results/`.
 
-WatchSubtree evidence workload 也在同一 benchmark 包里，`watch_notify` 在 Docker Compose 3-node 集群下达到 sub-second p95。
+The WatchSubtree evidence workload lives in the same benchmark package; `watch_notify` reaches sub-second p95 on a Docker Compose 3-node cluster.
 
-## 10. 非目标
+## 10. Non-goals
 
-- 不提供 FUSE / NFS / SMB frontend。
-- 不提供 S3 HTTP gateway 或 object body I/O。
-- 不把每个 inode/dentry mutation 写进 `meta/root`。
-- 不做 recursive materialized snapshot；`SnapshotSubtree` 是 MVCC read epoch。
-- 不承诺 data-plane MVCC GC 已经按 snapshot epoch 做 retention。
+- No FUSE / NFS / SMB frontend.
+- No S3 HTTP gateway or object body I/O.
+- No write of every inode/dentry mutation into `meta/root`.
+- No recursive materialized snapshot — `SnapshotSubtree` is an MVCC read epoch.
+- No claim that data-plane MVCC GC already retains by snapshot epoch.

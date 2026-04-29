@@ -12,7 +12,6 @@ This note consolidates NoKV's ValueLog (vlog) design, GC mechanics, and recent p
 | :-- | :-- | :-- | :-- |
 | KV separation | WiscKey | vlog + ValuePtr | Smaller LSM, more sequential writes |
 | Hash partitioning | HashKV | `ValueLogBucketCount` | Garbage localization |
-| Hash partitioning | HashKV | `ValueLogBucketCount` | Garbage localization |
 | Parallel GC | Engineering | `ValueLogGCParallelism` | Higher cleanup throughput |
 | Pressure control | Engineering | reduce/skip thresholds | Doesn't fight compaction for resources |
 
@@ -236,6 +235,7 @@ Threshold parameters:
 ## 8.3 Key differences from the papers
 
 ### WiscKey vs NoKV
+
 | Axis | WiscKey | NoKV |
 | :-- | :-- | :-- |
 | vlog metadata | Paper prototype doesn't emphasize manifest | **manifest records head / delete** |
@@ -244,6 +244,7 @@ Threshold parameters:
 | Hot handling | No explicit hot/cold | Plain hash multi-bucket |
 
 ### HashKV vs NoKV
+
 | Axis | HashKV | NoKV |
 | :-- | :-- | :-- |
 | Partition strategy | Hash partition | **Hash bucketing + hot/cold routing** |

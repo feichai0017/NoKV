@@ -152,18 +152,21 @@ This is a mature industrial design that cares not only about "fits on disk" but 
 ## 7. Key differences from the original papers (what we changed)
 
 ### 7.1 vs bLSM / Performance Stability
+
 | Paper insight | Paper focus | NoKV change | Real impact |
 | :-- | :-- | :-- | :-- |
 | Write stall is mainly caused by L0 congestion + slow compaction | Stable throughput | **Landing Buffer + fast offload** | Write stall almost gone |
 | Background tasks need rhythm "smoothing" | Tail latency | **Sharding + parallel compaction + dynamic scheduling** | Jitter pushed to background |
 
 ### 7.2 vs Monkey / Dostoevsky
+
 | Paper insight | Paper focus | NoKV change | Real impact |
 | :-- | :-- | :-- | :-- |
 | LSM parameters require global trade-off (read/write/space) | Theoretical model | **Introduce landing buffer as engineering buffer layer** | Tuning is more stable in practice |
 | Lazy leveling reduces merge cost | Lower write amplification | **LandingKeep / Drain modes** | Lower hot-key tail latency |
 
 ### 7.3 vs RocksDB / PebblesDB
+
 | System | Original design | NoKV change | Notes |
 | :-- | :-- | :-- | :-- |
 | RocksDB | L0 → leveled, universal as option | **Per-level landing buffer** | Better fit for bursty scenarios |

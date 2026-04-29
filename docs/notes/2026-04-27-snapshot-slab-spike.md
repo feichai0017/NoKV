@@ -18,7 +18,7 @@ Code:
 
 Physical layout:
 
-```
+```text
 snapshot/
   snapshot.json     (region-scoped manifest)
   tables/
