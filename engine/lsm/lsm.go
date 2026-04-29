@@ -18,8 +18,7 @@
 // bytes — it only consumes their APIs.
 //
 // Design references: docs/memtable.md, docs/flush.md, docs/compaction.md,
-// docs/landing_buffer.md, docs/range_filter.md, docs/cache.md, and the
-// dated notes under docs/notes/ beginning with 2026-02-01 through 2026-04-05.
+// docs/landing_buffer.md, docs/range_filter.md, docs/cache.md.
 package lsm
 
 import (
@@ -41,9 +40,7 @@ import (
 // data-plane shards (each owning an active memtable, an immutable queue,
 // and a WAL Manager), the level manager, and the flush runtime into one
 // coherent storage core. See the package docstring for the durability
-// ordering invariant and
-// docs/notes/2026-04-27-sharded-wal-memtable.md for the
-// sharding rationale and routing/recovery/flush invariants.
+// ordering invariant.
 type LSM struct {
 	shards           []*lsmShard
 	shardHints       *shardHintTable
@@ -618,8 +615,7 @@ func (lsm *LSM) SetBatch(entries []*kv.Entry) error {
 // Each inner batch remains indivisible: rotation may split between batches,
 // but never inside one batch. The returned failedAt is the first batch index
 // that was not applied, or -1 on success. Routing is the caller's choice —
-// per-key affinity preserves SetBatch atomicity (see
-// docs/notes/2026-04-27-sharded-wal-memtable.md §2.4).
+// per-key affinity preserves SetBatch atomicity.
 func (lsm *LSM) SetBatchGroup(shardID int, groups [][]*kv.Entry) (int, error) {
 	if len(groups) == 0 {
 		return -1, nil

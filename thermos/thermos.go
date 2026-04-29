@@ -12,7 +12,7 @@
 // what to do with a detected hot key (throttle / reject / reroute) is
 // a caller-side policy, not something this package imposes.
 //
-// See docs/thermos.md and docs/notes/2026-01-16-thermos-design.md.
+// See docs/thermos.md.
 package thermos
 
 import (

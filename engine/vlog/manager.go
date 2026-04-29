@@ -3,8 +3,6 @@
 // the logical write cursor, GC sample / discard stats, and rewind on
 // write failure. The mmap segment substrate (open/read/write/seal/
 // rotate/remove/close) lives in engine/slab.
-//
-// See docs/notes/2026-04-27-slab-substrate.md for the layered design.
 package vlog
 
 import (

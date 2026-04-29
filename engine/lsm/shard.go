@@ -10,9 +10,7 @@ import (
 // lsmShard owns one slice of the LSM data plane: the active memtable, the
 // queue of immutable memtables awaiting flush, and the WAL manager backing
 // both. With multiple shards each pair runs on its own fd, fsync worker,
-// and bufio.Writer so writes do not contend on a single Manager.mu. See
-// docs/notes/2026-04-27-sharded-wal-memtable.md for the broader
-// plan and the routing/recovery/flush invariants.
+// and bufio.Writer so writes do not contend on a single Manager.mu.
 type lsmShard struct {
 	id int
 	// lock guards memTable and immutables for this shard.

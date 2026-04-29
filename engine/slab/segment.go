@@ -5,8 +5,6 @@
 // and remap between read-only and writable. It does NOT know what the bytes
 // mean — there is no kv.ValuePtr, no bucket routing, no business GC, no
 // manifest integration. Those are consumer concerns.
-//
-// See docs/notes/2026-04-27-slab-substrate.md for the layered design.
 package slab
 
 import (
@@ -140,8 +138,7 @@ func (s *Segment) Write(offset uint32, buf []byte) (err error) {
 		// the larger reservation finishes first, a plain Store from the
 		// later writer would shrink the high-water back below an already-
 		// published pointer, producing spurious EOF on Read. Use a
-		// monotonic CAS so the high-water only ever advances. See
-		// docs/notes/2026-04-27-slab-substrate.md §4.
+		// monotonic CAS so the high-water only ever advances.
 		for {
 			cur := s.size.Load()
 			if end <= cur || s.size.CompareAndSwap(cur, end) {

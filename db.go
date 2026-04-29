@@ -44,8 +44,7 @@ const nonTxnMaxVersion = kv.MaxVersion
 // and per-Manager.mu contention. Must be a power of two — raftWALShard
 // uses `& (N-1)` for placement.
 //
-// Total Manager budget under the LSM data-plane sharding plan
-// (see docs/notes/2026-04-27-sharded-wal-memtable.md):
+// Total Manager budget under the LSM data-plane sharding plan:
 // 4 raft + 4 LSM data = 8 Managers. There is no separate control-plane
 // Manager — db.wal is dissolved into the LSM shards.
 const defaultRaftWALShards = 4
@@ -1257,7 +1256,7 @@ func (db *DB) shouldPersistHead(next *kv.ValuePtr, bucket uint32) bool {
 // preparation. This is the metadata-profile fast path: when every value is
 // inline-eligible (below ValueThreshold or pinned inline by a policy), the
 // commit pipeline runs as pure WAL → memtable → SST with no vlog code on the
-// hot path. See docs/notes/2026-04-27-slab-substrate.md §4 (Phase 1).
+// hot path.
 //
 // This call counts a policy decision per entry (via shouldWriteValueToLSM →
 // MatchPolicy). vlog.write subsequently uses peekShouldWriteValueToLSM so the

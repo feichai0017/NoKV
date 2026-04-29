@@ -166,8 +166,7 @@ type Options struct {
 	// WorkDir. Defaults to false. When enabled, a process restart skips the
 	// cold-start re-warm phase for previously-known not-found keys (HDFS path
 	// probes, S3 GetObject 404 patterns, fsmeta Lookup misses). The slab is
-	// best-effort (Derived consistency class — see
-	// docs/notes/2026-04-27-slab-substrate.md §6.1): a corrupt or missing
+	// best-effort (Derived consistency class): a corrupt or missing
 	// snapshot forces a re-warm but does not affect read correctness.
 	NegativeCachePersistent bool
 	// NegativeCacheSlabMaxSize bounds the on-disk snapshot size. Snapshots

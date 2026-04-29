@@ -174,8 +174,6 @@ func BenchmarkDBBatchSet(b *testing.B) {
 // the threshold → vlog.write must run). The "Inline" subtests should beat
 // "Vlog" by the cost of the vlog.write closure prep + map allocations that
 // the fast path skips.
-//
-// See docs/notes/2026-04-27-slab-substrate.md §4.
 func BenchmarkDBCommitVlogFastPath(b *testing.B) {
 	type profile struct {
 		name      string
