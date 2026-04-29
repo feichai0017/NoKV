@@ -21,13 +21,13 @@ jobs:
           go test ./... -coverprofile=coverage.out
           awk 'NR == 1 || $0 !~ /(\.pb\.go:|_grpc\.pb\.go:)/' coverage.out > coverage.filtered.out
           mv coverage.filtered.out coverage.out
-      # Upload coverage only from the public repository. The private mirror
-      # carries research artifacts and Codecov rejects tokenless uploads from
-      # private repositories; tests still run there, but coverage upload is not
-      # part of the private CI contract. Also skip Dependabot because GitHub does
-      # not expose repo secrets to Dependabot-triggered runs by default.
+      # Upload coverage only from trusted public-repo contexts. The private
+      # mirror carries research artifacts and Codecov rejects tokenless uploads
+      # from private repositories; fork and Dependabot PRs also do not receive
+      # CODECOV_TOKEN. Tests still run in those contexts, but coverage upload is
+      # not part of their CI contract.
       - name: Upload coverage to Codecov
-        if: github.repository == 'feichai0017/NoKV' && github.actor != 'dependabot[bot]'
+        if: github.repository == 'feichai0017/NoKV' && github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
         uses: codecov/codecov-action@v6
         with:
           files: coverage.out
