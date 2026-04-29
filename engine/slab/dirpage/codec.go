@@ -4,8 +4,7 @@
 // fan-out of N LSM prefix scans + N inode Gets into a single sequential
 // page read.
 //
-// Wire format and consistency model are described in
-// docs/notes/2026-04-27-dirpage-slab-rfc.md. Briefly:
+// Wire format and consistency model in brief:
 //
 //   - LSM is authoritative; pages here are best-effort cache (Derived
 //     consistency class).

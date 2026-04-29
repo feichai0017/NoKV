@@ -116,7 +116,7 @@ Authority lifecycle (rooted in `meta/root`, managed via `nokv mount` / `nokv quo
 | **Snapshot epoch** | `SnapshotEpochPublished` / `SnapshotEpochRetired` | Read-version cache |
 | **Quota fence** | `QuotaFenceUpdated` (mount + subtree level, bytes + inodes) | Usage in raftstore (transactional, not in-memory) |
 
-Documentation: [`docs/fsmeta.md`](docs/fsmeta.md) · [positioning note](docs/notes/2026-04-24-fsmeta-positioning.md) · [namespace authority events umbrella](docs/notes/2026-04-25-namespace-authority-events-umbrella.md)
+Documentation: [`docs/fsmeta.md`](docs/fsmeta.md)
 
 <br/>
 

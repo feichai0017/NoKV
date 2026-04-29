@@ -12,8 +12,7 @@
 // previously-cached entry whose group matches becomes stale on the
 // next Has lookup.
 //
-// Persistence is optional and best-effort (Derived consistency class
-// per docs/notes/2026-04-27-slab-substrate.md §5):
+// Persistence is optional and best-effort (Derived consistency class):
 //
 //   - Snapshot writes every still-fresh entry into a slab segment.
 //   - Reload re-issues Remember for each restored entry, restoring

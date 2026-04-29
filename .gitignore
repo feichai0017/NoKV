@@ -16,6 +16,7 @@ benchmark/eunomia/results/
 build/
 book/
 docs/research/
+docs/notes/
 
 cpu.pprof
 mem.pprof
