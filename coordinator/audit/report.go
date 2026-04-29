@@ -33,7 +33,7 @@ type SnapshotAnomalies struct {
 	FinalityDefect              FinalityDefect
 }
 
-// Report is the standalone eunomia-audit projection for one rooted snapshot.
+// Report is the standalone audit projection for one rooted snapshot.
 type Report struct {
 	HolderID               string
 	NowUnixNano            int64

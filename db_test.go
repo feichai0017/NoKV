@@ -2657,8 +2657,7 @@ func TestRaftLogUsesShardedWAL(t *testing.T) {
 // EnableValueLog left at its default false, NoKV opens without spinning
 // up vlog managers, never creates the WorkDir/vlog directory, and
 // inlines every value regardless of size. This is the metadata-first
-// configuration the slab-substrate redesign promises (see
-// docs/notes/2026-04-27-slab-substrate.md).
+// configuration the slab-substrate redesign promises.
 func TestDBValueLogDisabledByDefault(t *testing.T) {
 	dir := t.TempDir()
 	cfg := NewDefaultOptions()

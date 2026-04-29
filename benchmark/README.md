@@ -73,62 +73,6 @@ Key components:
   `data/ycsb/results`, and a text report is saved under
   `results/ycsb/ycsb_results_*.txt`.
 
-## Control-Plane Evaluation
-
-The `benchmark/` submodule also owns the repeatable control-plane evaluation
-artifacts used by the separated `meta/root` work. The split is deliberate:
-
-- the main module keeps only control-plane implementation code
-- `benchmark/eunomia` keeps only NoKV-native control-plane artifact code:
-  witness tax, detached ablation, helper-process infrastructure, and NoKV-side
-  control experiments
-- `benchmark/eunomia/etcd` owns upstream etcd issue evidence
-- `benchmark/eunomia/crdb` owns CockroachDB `#66562` issue evidence
-- `benchmark/eunomia/scripts` owns repeatable runners and netem wrappers
-- benchmark-only dependencies such as embedded etcd do not leak into the main
-  module
-
-Fixed-parameter localhost evaluation:
-
-```bash
-./benchmark/eunomia/scripts/run_eval.sh
-```
-
-Default parameters:
-
-- witness-tax benchmark count: `5`
-- recovery test count: `5`
-- benchmark benchtime: `500ms`
-
-Outputs:
-
-- raw benchmark logs under `benchmark/eunomia/results/<stamp>/`
-- a paper-friendly markdown summary at `summary.md`
-- witness-tax logs comparing `baseline` vs `disable_client_verify` (and `disable_reply_evidence_disable_client_verify`) for `AllocID` / `Tso` / `GetRegionByKey`
-- CRDB `#66562` logs showing `without_lease_start_coverage` vs `with_lease_start_coverage`, replaying the original `n1 -> n2 transfer -> n2 expiry -> n3 fresh lease` schedule with both snapshot and trace-level `lease_start_coverage_violation` evidence
-
-Linux netem wrapper via Docker:
-
-```bash
-./benchmark/eunomia/scripts/run_netem_docker.sh
-```
-
-Environment overrides:
-
-- `CONTROL_PLANE_NETEM_DELAY` default `1ms`
-- `CONTROL_PLANE_NETEM_JITTER` default `0ms`
-- `CONTROL_PLANE_NETEM_LOSS` default `0%`
-- `CONTROL_PLANE_BENCHTIME` default `500ms`
-- `CONTROL_PLANE_PERF_COUNT` default `5`
-- `CONTROL_PLANE_RECOVERY_COUNT` default `5`
-
-Current scope limits:
-
-- `run_eval.sh` is a localhost runner
-- `run_netem_docker.sh` applies `tc netem` inside a Linux Docker
-  container on loopback; it is still a single-host impairment setup, not a
-  multi-host cluster benchmark
-
 ## FSMetadata Native-vs-Generic Evaluation
 
 The fsmeta benchmark compares two drivers against the same NoKV cluster and the

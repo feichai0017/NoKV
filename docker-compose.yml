@@ -72,7 +72,7 @@ services:
       - meta-root-1-data:/var/lib/nokv-meta-root
     expose: ["2380", "2480", "9380"]
     ports:
-      - "2380:2380"   # gRPC service (coord / eunomia-audit from host dial here)
+      - "2380:2380"   # gRPC service (coord / host-side audit tools dial here)
       - "9380:9380"   # expvar dashboard
 
   meta-root-2:

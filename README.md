@@ -1,9 +1,6 @@
 <div align="center">
   <img src="./docs/img/logo.svg" width="200" alt="NoKV" />
 
-  <img width="1411" height="945" alt="image" src="https://github.com/user-attachments/assets/d56c9346-54d7-4237-b33b-a9d67e23cd55" />
-
-
   <p>
     <strong>An open-source namespace metadata substrate for distributed filesystems, object storage, and AI dataset metadata.</strong>
   </p>
@@ -119,7 +116,7 @@ Authority lifecycle (rooted in `meta/root`, managed via `nokv mount` / `nokv quo
 | **Snapshot epoch** | `SnapshotEpochPublished` / `SnapshotEpochRetired` | Read-version cache |
 | **Quota fence** | `QuotaFenceUpdated` (mount + subtree level, bytes + inodes) | Usage in raftstore (transactional, not in-memory) |
 
-Documentation: [`docs/fsmeta.md`](docs/fsmeta.md) · [positioning note](docs/notes/2026-04-24-fsmeta-positioning.md) · [namespace authority events umbrella](docs/notes/2026-04-25-namespace-authority-events-umbrella.md)
+Documentation: [`docs/fsmeta.md`](docs/fsmeta.md)
 
 <br/>
 

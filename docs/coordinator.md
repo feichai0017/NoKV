@@ -148,9 +148,6 @@ Product assumptions:
 - no dynamic metadata-root membership
 - no production-grade dynamic coordinator membership manager
 
-Separated deployment design and tradeoffs are discussed in
-`docs/notes/2026-04-12-coordinator-meta-separation.md`.
-
 ---
 
 ## 4. Persistence (`--workdir`)

@@ -20,9 +20,6 @@
 //     meta/root's rooted-event substrate only for namespace-level authority
 //     where Eunomia semantics apply. Per-inode and per-dentry mutations are
 //     data-plane writes, never rooted events.
-//
-// See docs/notes/2026-04-24-fsmeta-positioning.md for the market gap analysis
-// and phased roadmap.
 package fsmeta
 
 import "errors"

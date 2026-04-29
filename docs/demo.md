@@ -20,7 +20,7 @@ consecutive numbers — easy to remember, easy to script against.
 
 | Service | Port | Purpose |
 |---|---|---|
-| Meta-root-1 gRPC | `2380` | `nokv eunomia-audit --root-peer 1=127.0.0.1:2380 ...` |
+| Meta-root-1 gRPC | `2380` | host-side tools dial rooted state directly |
 | Meta-root-2 gRPC | `2381` | |
 | Meta-root-3 gRPC | `2382` | |
 | Meta-root-1 expvar | `9380` | `/debug/vars` JSON |
@@ -41,8 +41,7 @@ consecutive numbers — easy to remember, easy to script against.
 ### Why are meta-root gRPC ports exposed?
 
 Meta-root (`2380/2381/2382`) is exposed so host-side tools like
-`nokv eunomia-audit` and `nokv-config` can query rooted state directly for
-debugging.
+`nokv-config` can query rooted state directly for debugging.
 
 **For production, don't expose meta-root publicly.** The gRPC API accepts
 `ApplyTenure` and `ApplyHandover` which are lease-gated but still
@@ -53,20 +52,6 @@ docker network, not through host ports.
 
 Same applies to coordinator gRPC (`2390/2391/2392`): convenient for
 host-side client experiments, don't expose publicly.
-
-### Live audit from the host
-
-```bash
-# Project rooted state through the Eunomia audit vocabulary
-nokv eunomia-audit \
-  --root-peer 1=127.0.0.1:2380 \
-  --root-peer 2=127.0.0.1:2381 \
-  --root-peer 3=127.0.0.1:2382
-```
-
-Or point any tool using `raft_config.example.json` at `--scope host` to
-pick up `127.0.0.1:2379,2390,2391` and `2380/2381/2382` from the config
-file automatically — no extra flags.
 
 ## Failure drills
 
@@ -85,6 +70,5 @@ Run them straight from the terminal:
 
 - [docs/config.md](config.md) — `raft_config.example.json` schema (two-layer
   model: address directory vs bootstrap seed)
-- [docs/eunomia-audit.md](eunomia-audit.md) — the Eunomia audit tool
 - [docs/coordinator.md](coordinator.md) — Eunomia lease lifecycle
 - [docs/rooted_truth.md](rooted_truth.md) — meta-root internals

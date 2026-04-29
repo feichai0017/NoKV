@@ -8,8 +8,7 @@
 // 3-peer raft quorum; callers under meta/root/server, meta/root/client,
 // coordinator/, and raftstore/ consume the resulting State as truth.
 //
-// See docs/rooted_truth.md for the overall kernel design and
-// spec/Eunomia.tla for the formal authority-handoff model.
+// See docs/rooted_truth.md for the overall kernel design.
 package state
 
 import (

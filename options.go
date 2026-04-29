@@ -151,8 +151,7 @@ type Options struct {
 	// is preserved). The shard router uses `& (N-1)` for placement so the
 	// value must be a power of two. Zero falls back to the constructor
 	// default; non-power-of-two values are rounded DOWN to the nearest
-	// power of two during Open (e.g. 6 → 4, 12 → 8). See
-	// docs/notes/2026-04-27-sharded-wal-memtable.md.
+	// power of two during Open (e.g. 6 → 4, 12 → 8).
 	LSMShardCount int
 	ManifestSync  bool
 	// ManifestRewriteThreshold triggers a manifest rewrite when the active
@@ -303,8 +302,7 @@ type Options struct {
 	// WorkDir/negative-slab/. Default false. When enabled, a process restart
 	// skips the cold-start re-warm phase for previously-known not-found keys
 	// (fsmeta Lookup misses, S3 GetObject 404, HDFS path probes). The slab
-	// is best-effort (Derived consistency class — see
-	// docs/notes/2026-04-27-slab-substrate.md §6.1): a corrupt or missing
+	// is best-effort (Derived consistency class): a corrupt or missing
 	// snapshot forces a re-warm but does not affect read correctness.
 	NegativeCachePersistent bool
 	// NegativeCacheSlabMaxSize bounds the on-disk snapshot size in bytes.

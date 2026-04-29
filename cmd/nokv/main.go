@@ -41,8 +41,6 @@ func main() {
 		err = runMountCmd(os.Stdout, args)
 	case "quota":
 		err = runQuotaCmd(os.Stdout, args)
-	case "eunomia-audit":
-		err = runEunomiaAuditCmd(os.Stdout, args)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -70,7 +68,6 @@ func printUsage(w io.Writer) {
 	  meta-root Start metadata root gRPC service
 	  mount     Register, retire, or list rooted fsmeta mounts
 	  quota     Set, clear, or list rooted fsmeta quota fences
-	  eunomia-audit Read-only eunomia audit against a live meta-root cluster
 
 Run "nokv <command> -h" for command-specific flags.`)
 }
