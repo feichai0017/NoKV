@@ -2,7 +2,7 @@
 
 This section is NoKV's long-form documentation area.
 
-The main documentation leans toward reference manual; `notes` is more like an engineering log and technical essay collection — its job is to explain:
+The main documentation leans toward a reference manual; `notes` is more like an engineering log and technical essay collection — its job is to explain:
 
 - Why a particular boundary exists.
 - Why an implementation had to be torn down and redone.

@@ -203,7 +203,7 @@ The old cap=5 was hardcoded into the width calculation. Bumping to `max(NumCompa
 
 ## 7. Known trade-offs
 
-- L0→L0 cap=8 means at most 8 SSTs are merged in one L0→L0. If L0 SST count is far above 4×NumCompactors (extreme backlog), idle workers can still appear — but at that point L0 has already stop-written; the bottleneck has shifted to compaction speed, and adding workers won't help (each worker still has to do one 8-table merge of work).
+- L0→L0 cap=8 means at most 8 SSTs are merged in one L0→L0. If L0 SST count is far above 4×NumCompactors (extreme backlog), idle workers can still appear — but at that point L0 has already hit write-stop; the bottleneck has shifted to compaction speed, and adding workers won't help (each worker still has to do one 8-table merge of work).
 - IntraLevel entries don't write a range, meaning the metric `State.HasRanges()` won't reflect L0→L0 occupancy. If we later want to differentiate "active L0→L0 sub-task count" in stats, we'll need a separate metric.
 - When `PlanForL0ToLbase` sees a table reserved by IntraLevel, it breaks accumulation. So the L0→Lbase group is always **before** or **after** the held tables, never spanning across them. This is fine for normal workloads; in the extreme "L0→L0 happens to hold the middle tables of L0", L0→Lbase may plan a smaller group than ideal.
 

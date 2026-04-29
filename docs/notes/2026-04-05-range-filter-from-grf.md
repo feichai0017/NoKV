@@ -246,9 +246,11 @@ Instead of jumping straight to a persistent global filter, we get more value-per
 - table-level pruning
 - in-table block-range pruning
 
+Doing those two well is the highest-ROI move; build them out solidly first, and only then weigh anything more elaborate.
+
 ### 9.3 Read-path optimization must not back-pollute recovery and metadata design
 
-Important for NoKV.
+This principle matters a lot for NoKV.
 
 NoKV's engineering trunk isn't "how advanced is filter X" — it's:
 

@@ -89,7 +89,7 @@ During the spike I noticed two possible follow-ups that **are not part of the sl
 
 ### 5.2 sendfile in `io.Copy(tw, f)`
 
-`writePayload` does `io.Copy(tw, f)` where `tw` is `*tar.Writer`, eventually flowing to `w` (network conn). If `w` implements `ReaderFrom` (which `*net.TCPConn` does), `io.Copy` automatically uses sendfile. So when going over a conn it's already zero-copy, **as long as** the tar intermediate buffer is preserved. The tar header + body format necessarily writes header buffer first then body; the body section's `io.Copy` still uses sendfile under tar. There's no need to redesign the physical layer for zero-copy.
+`writePayload` does `io.Copy(tw, f)` where `tw` is `*tar.Writer`. `io.Copy`'s zero-copy fast paths come from `dst.ReadFrom(src)` or `src.WriteTo(dst)`; `*tar.Writer` does not implement `ReaderFrom`, so the file → conn sendfile path is **not** selected through this wrapper — the file is read into Go memory and pushed through `tar.Writer.Write`. So the current path is **not** already zero-copy under tar; treating it as such was wrong. If we ever care, the right shape is a tar-aware writer that exposes the body section directly to the conn (or skipping tar entirely for the body) so `ReadFrom` on the conn can take over. Marking this as a real follow-up to revisit, not a settled non-issue.
 
 ## 6. Decision log
 
