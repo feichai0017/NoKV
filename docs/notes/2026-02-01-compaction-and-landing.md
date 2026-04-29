@@ -1,77 +1,78 @@
-# 2026-02-01 Compaction 与 Landing Buffer 设计
+# 2026-02-01 Compaction and Landing Buffer design
 
-本文档深入解析 NoKV 的 **Compaction（压缩）** 机制与 **Landing Buffer（暂存缓冲）** 的协同设计。这是 NoKV 解决 LSM Tree 经典的“写停顿（Write Stall）”问题的核心武器，也是体现其工业级稳定性的关键设计。
-
----
-
-## 1. 设计理念：拒绝“写停顿”
-
-在 LSM Tree 架构中，数据从 MemTable 刷入 L0 层。由于 L0 层的 SSTable 之间 Key 是重叠的，当 L0 文件数量达到上限（如 15 个）时，必须触发 L0 -> L1 的 Compaction。
-
-*   **传统痛点**：L0 -> L1 的 Compaction 需要将 L0 文件与 L1 中所有重叠的文件读出，进行归并排序（Merge Sort），然后重写。这个过程涉及大量 IO 和 CPU，耗时较长。
-*   **后果**：如果写入速度超过了 L0 -> L1 的压缩速度，L0 就会被填满，系统被迫触发 **Write Stall**（限制甚至停止写入），导致严重的性能抖动。
-
-**NoKV 的哲学**：
-> **“先收下，再整理。”**
-> 当 L0 拥堵时，不要阻塞写入去等待漫长的排序，而是先把 L0 的文件“甩”给下一层，让下一层暂时“保管”，等有空了再慢慢整理。
+This note dissects NoKV's **compaction** mechanism and the cooperative design with the **landing buffer**. Together they are the core weapon NoKV uses against the classic LSM-Tree "write stall" problem, and a key piece of evidence for our industrial-grade stability claim.
 
 ---
 
-## 1.1 参考论文与工程对标
+## 1. Design philosophy: refuse to "write stall"
 
-以下论文/系统是 NoKV compaction 与 landing buffer 设计的主要参考坐标（按主题分类）：
+In the LSM-Tree architecture, data flushes from MemTable into L0. Because L0 SSTables overlap on key ranges, once L0 file count hits the cap (e.g. 15), an L0 → L1 compaction is forced.
 
-* **LSM 设计与调参理论**：
-  * [Monkey (SIGMOD 2017)](https://stratos.seas.harvard.edu/publications/monkey-optimal-navigable-key-value-store) —— 全局调参、Bloom 过滤器与合并策略的权衡模型。
-  * [Dostoevsky (SIGMOD 2018)](https://stratos.seas.harvard.edu/publications/dostoevsky-better-space-time-trade-offs-lsm-tree-based-key-value-stores) —— Lazy Leveling / 低合并成本的层级策略。
-* **写停顿与稳定性**：
-  * [bLSM (SIGMOD 2012)](https://dblp.uni-trier.de/rec/conf/sigmod/SearsR12.html) —— 强调写入吞吐稳定与 tail latency。
-  * [Performance Stability in LSM-based Storage Systems](https://arxiv.org/abs/1906.09667) —— compaction 抖动与写停顿成因分析。
-* **工程系统实践**：
-  * [RocksDB Compaction (官方文档)](https://github.com/facebook/rocksdb/wiki/Compaction) —— leveled/tiered/universal 与 L0 处理策略。
-  * [PebblesDB](https://utsaslab.github.io/pebblesdb/) —— 碎片化/分片思路降低写放大。
-  * [Co-KV](https://arxiv.org/abs/1807.04151) —— 把 compaction 视作核心瓶颈的系统研究。
+*   **Traditional pain**: an L0 → L1 compaction must read the L0 files plus all overlapping L1 files, merge-sort them, and rewrite. This involves heavy I/O and CPU and takes a long time.
+*   **Consequence**: if write rate exceeds L0 → L1 compaction rate, L0 fills up and the system is forced into **write stall** (throttling or stopping writes), causing severe performance jitter.
+
+**NoKV's philosophy**:
+> **"Land first, sort later."**
+> When L0 is congested, don't block writes waiting for a long sort — *toss* the L0 files into the next level, let it park them temporarily, and sort them on a slower schedule.
 
 ---
 
-## 2. 核心组件：Landing Buffer
+## 1.1 Reference papers and engineering peers
 
-为了实现上述哲学，NoKV 为每一层（Level 1+）引入了一个特殊的结构：**Landing Buffer**。
+The following papers / systems are NoKV's main reference points for compaction and landing buffer design (grouped by topic):
 
-### 2.1 结构定义 (`lsm/landing.go`)
-它不是一个简单的队列，而是一个**分片化**的容器：
+* **LSM design and tuning theory**:
+  * [Monkey (SIGMOD 2017)](https://stratos.seas.harvard.edu/publications/monkey-optimal-navigable-key-value-store) — global tuning, Bloom filter and merge-policy trade-off model.
+  * [Dostoevsky (SIGMOD 2018)](https://stratos.seas.harvard.edu/publications/dostoevsky-better-space-time-trade-offs-lsm-tree-based-key-value-stores) — Lazy Leveling / lower merge-cost level strategy.
+* **Write stall and stability**:
+  * [bLSM (SIGMOD 2012)](https://dblp.uni-trier.de/rec/conf/sigmod/SearsR12.html) — emphasis on stable write throughput and tail latency.
+  * [Performance Stability in LSM-based Storage Systems](https://arxiv.org/abs/1906.09667) — analysis of compaction jitter and write-stall causes.
+* **Engineering systems**:
+  * [RocksDB Compaction (official docs)](https://github.com/facebook/rocksdb/wiki/Compaction) — leveled / tiered / universal and L0 strategies.
+  * [PebblesDB](https://utsaslab.github.io/pebblesdb/) — fragmentation / sharding ideas to reduce write amplification.
+  * [Co-KV](https://arxiv.org/abs/1807.04151) — research that frames compaction as the central bottleneck.
+
+---
+
+## 2. Core component: the Landing Buffer
+
+To realize the philosophy above, NoKV introduces a special structure on every level (Level 1+): **the Landing Buffer**.
+
+### 2.1 Structure (`lsm/landing.go`)
+
+It's not a flat queue — it's a **sharded** container:
 
 ```go
 type landingBuffer struct {
-    shards []landingShard // 默认 4 个分片
+    shards []landingShard // 4 shards by default
 }
 
 type landingShard struct {
-    tables    []*table   // 暂存在这里的 SSTable 列表
-    ranges    []tableRange // 对应的 Key 范围索引
+    tables    []*table     // SSTables parked here
+    ranges    []tableRange // matching key-range index
 }
 ```
 
-*   **分片 (Sharding)**：根据 Key 的前缀将暂存的表分配到不同的 Shard。
-*   **并行性**：这允许后台的多个 Compactor 线程并行地处理不同 Key 范围的积压数据。
+*   **Sharding**: parked tables are routed to a shard by key prefix.
+*   **Parallelism**: this lets multiple background compactor threads work different key ranges simultaneously.
 
 ---
 
-## 3. 交互逻辑：救火与还债
+## 3. Interaction logic: emergency response and debt repayment
 
-NoKV 的 Compaction 流程被设计为“快慢双轨”制。
+NoKV's compaction is designed as a "fast lane / slow lane" two-track system.
 
-### 3.1 快路径：L0 溢出卸载 (Offloading)
+### 3.1 Fast path: L0 overflow offload
 
-这是应对 Write Stall 的“救火”机制。
+This is the firefighting mechanism for write stalls.
 
-*   **触发**：L0 文件数过多。
-*   **动作 (`moveToLanding`)**：
-    1.  不进行数据合并。
-    2.  直接将 L0 的 SSTable 文件从 L0 列表中移除。
-    3.  将这些文件加入到 L1 的 `Landing Buffer` 中。
-*   **代价**：纯元数据操作，**微秒级**完成。
-*   **结果**：L0 瞬间清空，写停顿解除。L1 暂时持有这些未排序的文件。
+*   **Trigger**: L0 file count exceeds threshold.
+*   **Action (`moveToLanding`)**:
+    1.  No data merge.
+    2.  Remove the L0 SSTables from the L0 list.
+    3.  Append them to L1's `Landing Buffer`.
+*   **Cost**: pure metadata operation, **microsecond-scale**.
+*   **Result**: L0 is empty instantly, write stall released. L1 temporarily holds the unsorted files.
 
 ```mermaid
 graph TD
@@ -93,86 +94,89 @@ graph TD
     L0 --> Move --> L1_Landing
 ```
 
-### 3.2 慢路径：后台异步归并 (Merge)
+### 3.2 Slow path: background async merge
 
-这是“还债”机制，确保存储结构的最终有序性。
+This is the debt-repayment mechanism that ensures the storage layout eventually returns to fully sorted.
 
-*   **触发**：Compactor 发现某层的 `Landing Buffer` 积压严重（`Score > 1`）。
-*   **模式选择 (LandingMode)**：
-    *   **LandingDrain**：将 Landing Shard 合并进 Main Tables，彻底清空缓冲。
-    *   **LandingKeep**：合并 Shard，但如果下游压力也大，可能会将输出结果继续保留在 Landing Buffer 中（暂存结果），以避免写入放大的级联效应。
-*   **动作 (`fillTablesLandingShard`)**：
-    1.  挑选一个积压最严重的 `Shard`。
-    2.  锁定该 Shard 和 L1 中与其 Key 范围重叠的 `Main Tables`。
-    3.  执行标准的归并排序。
-    4.  生成新的 `Main Tables`，清空该 Shard。
-
----
-
-## 4. 读路径的权衡
-
-这种设计本质上是 **“空间换时间”** 和 **“读写权衡”**。我们牺牲了一点点读性能，换取了极致的写稳定性。
-
-**查询流程 (`Get`)**：
-1.  **查 MemTable**。
-2.  **查 L0**。
-3.  **查 L1**：
-    *   **先查 L1 Landing Buffer**：因为这里面是从 L0 刚“甩”下来的新数据，版本更新。
-        *   需要在 Shard 内进行二分查找（因为 buffer 内的表之间可能有重叠）。
-    *   **后查 L1 Main Tables**：这是标准的有序数据，查找很快。
-4.  **查 L2...**
+*   **Trigger**: a compactor sees that some level's `Landing Buffer` is overloaded (`Score > 1`).
+*   **Mode selection (LandingMode)**:
+    *   **LandingDrain**: merge the landing shard into Main Tables, fully clearing the buffer.
+    *   **LandingKeep**: merge the shard, but if downstream pressure is also high, keep the output in Landing Buffer (staged result) to avoid a cascade of write amplification.
+*   **Action (`fillTablesLandingShard`)**:
+    1.  Pick the most backlogged shard.
+    2.  Lock that shard plus the overlapping `Main Tables` in L1.
+    3.  Run a standard merge sort.
+    4.  Produce new `Main Tables`, clearing the shard.
 
 ---
 
-## 5. 协同设计：Value-Aware Compaction
+## 4. Read path trade-offs
 
-除了处理写抖动，Compaction 还承担了**回收 VLog 空间**的任务。
+This design is fundamentally **"space for time"** and **"read/write trade-off"**. We pay a small read cost to get extreme write stability.
 
-*   **痛点**：在 KV 分离架构中，LSM 里的删除只是写了一个 Tombstone，VLog 里的旧 Value 依然占着磁盘。
-*   **方案**：
-    *   **Value Density (价值密度)**：Compaction Picker 会计算每一层的 `TotalValueBytes / TotalSizeBytes`。
-    *   **Discard Stats (失效统计)**：虽然 VLog GC 依赖专门的 discard stats，但 Compaction 必须负责通过重写 SSTable 来丢弃那些指向无效 Value 的指针。
-    *   **策略**：Compaction 会优先选择 Value 密度异常（或者包含大量 Stale 数据）的层级进行压缩，主动触发指针清理。
+**Query flow (`Get`)**:
+1.  **Check MemTable**.
+2.  **Check L0**.
+3.  **Check L1**:
+    *   **First check L1 Landing Buffer**: this is the freshly tossed-down newer data, with newer versions.
+        *   We binary-search inside the shard (because tables in the buffer can overlap).
+    *   **Then check L1 Main Tables**: this is the standard sorted data — fast lookup.
+4.  **Check L2 ...**
 
-## 6. 总结
+---
 
-NoKV 的 Compaction 和 Landing Buffer 设计解决了一组复杂的工程矛盾：
+## 5. Cooperative design: value-aware compaction
 
-| 问题 | 传统方案 | NoKV 方案 | 收益 |
+Beyond handling write jitter, compaction also bears the responsibility of **reclaiming VLog space**.
+
+*   **Pain**: in a KV-separation architecture, deleting in LSM only writes a tombstone — the old value still occupies the VLog disk.
+*   **Approach**:
+    *   **Value Density**: the compaction picker computes per-level `TotalValueBytes / TotalSizeBytes`.
+    *   **Discard Stats**: VLog GC depends on dedicated discard stats, but compaction is responsible for rewriting SSTables to drop pointers to invalid values.
+    *   **Strategy**: compaction prioritizes levels with abnormal value density (or lots of stale data), proactively triggering pointer cleanup.
+
+## 6. Summary
+
+NoKV's compaction + landing buffer design resolves a knot of engineering trade-offs:
+
+| Problem | Traditional approach | NoKV approach | Benefit |
 | :--- | :--- | :--- | :--- |
-| **L0 拥堵** | 阻塞写入，强制合并 | **L0 -> Landing Buffer** (快速卸载) | **零写停顿 (Zero Write Stall)** |
-| **合并卡顿** | 单线程大合并 | **Sharding + Subcompaction** | 并行处理，利用多核/SSD 优势 |
-| **VLog 膨胀** | 被动等待 | **Value-Aware Scoring** | 主动出击，加速空间回收 |
+| **L0 congestion** | Block writes, force merge | **L0 → Landing Buffer** (fast offload) | **Zero write stall** |
+| **Merge stall** | Single-threaded big merge | **Sharding + subcompaction** | Parallel processing, multicore/SSD friendly |
+| **VLog bloat** | Wait passively | **Value-aware scoring** | Active reclamation |
 
-这是一个非常成熟的工业级设计，它不仅关注“存得下”，更关注“写得稳”和“删得掉”。
+This is a mature industrial design that cares not only about "fits on disk" but also "writes stay smooth" and "deletions actually reclaim space."
 
 ---
 
-## 7. 与论文原始设计的关键对比（我们做了哪些改动）
+## 7. Key differences from the original papers (what we changed)
 
-### 7.1 与 bLSM / Performance Stability 的对比
-| 论文观点 | 原文侧重点 | NoKV 改动 | 实际影响 |
+### 7.1 vs bLSM / Performance Stability
+
+| Paper insight | Paper focus | NoKV change | Real impact |
 | :-- | :-- | :-- | :-- |
-| 写停顿主因是 L0 拥堵 + Compaction 过慢 | 强调稳定吞吐 | **Landing Buffer + 快速卸载** | 写停顿几乎消失 |
-| 需要把后台任务节奏“拉平” | 关注 tail latency | **分片 + 并行 compaction + 动态调度** | 把抖动压在后台 |
+| Write stall is mainly caused by L0 congestion + slow compaction | Stable throughput | **Landing Buffer + fast offload** | Write stall almost gone |
+| Background tasks need rhythm "smoothing" | Tail latency | **Sharding + parallel compaction + dynamic scheduling** | Jitter pushed to background |
 
-### 7.2 与 Monkey / Dostoevsky 的对比
-| 论文观点 | 原文侧重点 | NoKV 改动 | 实际影响 |
+### 7.2 vs Monkey / Dostoevsky
+
+| Paper insight | Paper focus | NoKV change | Real impact |
 | :-- | :-- | :-- | :-- |
-| LSM 参数需全局权衡（读/写/空间） | 理论模型 | **引入 landing buffer 作为工程缓冲层** | 实际调参更稳定 |
-| Lazy leveling 降低合并成本 | 减少写放大 | **LandingKeep/Drain 模式** | 热点时延降低 |
+| LSM parameters require global trade-off (read/write/space) | Theoretical model | **Introduce landing buffer as engineering buffer layer** | Tuning is more stable in practice |
+| Lazy leveling reduces merge cost | Lower write amplification | **LandingKeep / Drain modes** | Lower hot-key tail latency |
 
-### 7.3 与 RocksDB / PebblesDB 的对比
-| 系统 | 原始设计 | NoKV 改动 | 说明 |
+### 7.3 vs RocksDB / PebblesDB
+
+| System | Original design | NoKV change | Notes |
 | :-- | :-- | :-- | :-- |
-| RocksDB | L0 → leveled，universal 作为可选 | **引入每层 landing 缓冲区** | 更适合 burst 场景 |
-| PebblesDB | 碎片化 LSM | **按前缀分片 shard** | 保持范围局部性 |
+| RocksDB | L0 → leveled, universal as option | **Per-level landing buffer** | Better fit for bursty scenarios |
+| PebblesDB | Fragmented LSM | **Prefix-sharded** | Preserves range locality |
 
-### 7.4 与论文原型不同的工程化点
+### 7.4 Engineering moves vs paper prototypes
 
-* **分片并行**：按 key 前缀 shard，使 landing 与 compaction 可并行而不互相覆盖。
-* **LandingKeep / LandingDrain**：把“快速止血”和“慢速还债”拆成两条路径。
-* **Value-aware compaction**：与 VLog discard stats 联动，把无效指针尽快清掉。
-* **调度基于 backlog/score**：优先处理最急的 shard，而非随机挑选。
+* **Sharded parallelism**: shard by key prefix so landing and compaction can run in parallel without overwriting each other.
+* **LandingKeep / LandingDrain**: separate "fast hemostasis" from "slow debt repayment" into two paths.
+* **Value-aware compaction**: cooperate with VLog discard stats to clean up stale pointers faster.
+* **Schedule by backlog/score**: process the most overloaded shard first, not random selection.
 
-> 简单总结：论文解决的是“理论最优解”，NoKV 做的是“工程稳定性 + 可运维”。
+> One-line summary: papers tackle "theoretical optimum"; NoKV tackles "engineering stability + operability."

@@ -1,44 +1,37 @@
-# 2026-04-27 Sharded WAL + Memtable：把 LSM 数据面写穿到底
+# 2026-04-27 Sharded WAL + Memtable: punch the LSM data plane all the way through
 
-> 状态：已落地。覆盖 commits `765416a6` (PR #158, sharding 主干)、`58ad25ef`
-> (PR #159, WAL fsync/rotation fence)、`858e0b40` (PR #160, cross-shard
-> hint cache)。本文不是路线图，而是这一组 PR 的 **decision record**——
-> 为什么要这么做、形状是什么、不变量怎么保住、剩下哪些已知 trade-off。
+> Status: shipped. Covers commits `765416a6` (PR #158, sharding trunk), `58ad25ef` (PR #159, WAL fsync/rotation fence), and `858e0b40` (PR #160, cross-shard hint cache). This note isn't a roadmap — it's the **decision record** for that set of PRs: why we did it, what shape it took, what invariants hold, and the trade-offs we knowingly accepted.
 
 ---
 
-## 1. 问题陈述
+## 1. Problem statement
 
-`feature/lsm-write-path-optimizations` 把 YCSB-A 推到 ~400K ops/s 之后，
-profile 长这样：
+After `feature/lsm-write-path-optimizations` pushed YCSB-A to ~400K ops/s, the profile looked like:
 
-| 路径 | CPU 占比 |
+| Path | CPU share |
 |---|---|
-| `runtime.lock2`（绝大多数来自 `wal.Manager.mu`） | 16.57% |
-| `pthread_cond_wait`（同一把锁的 cond 等待）| 19% |
-| `syscall.rawsyscalln`（fsync）| 18.90% |
+| `runtime.lock2` (vast majority from `wal.Manager.mu`) | 16.57% |
+| `pthread_cond_wait` (cond wait on the same lock) | 19% |
+| `syscall.rawsyscalln` (fsync) | 18.90% |
 | memtable apply | 2% |
 
-特征是**单点结构性瓶颈**：
+This is a **single-point structural bottleneck**:
 
-- 一个 `wal.Manager` ⇒ 一个 fd ⇒ 一个 fsync worker ⇒ 一个 bufio.Writer
-- 试过保持单 WAL 加多 commit worker，**实测吞吐反退 10%**——worker 互
-  相在 `mu` 上排队，并行度被锁吃掉。
-- 单只 shard WAL、memtable 还共享，会让 recovery 必须把 N 个 WAL 流
-  合并成一个 memtable 的版本顺序，flush 还得 lock-step rotate N 个
-  WAL，复杂且容易错。
+- One `wal.Manager` ⇒ one fd ⇒ one fsync worker ⇒ one `bufio.Writer`.
+- We tried "single WAL + multiple commit workers" — **measured throughput regression of 10%**: workers contended on `mu`, and the lock ate the parallelism.
+- A single-shard WAL with shared memtable forces recovery to merge N WAL streams into one memtable's version order, and flush has to lock-step rotate N WALs. Complex and error-prone.
 
-结论：**WAL + memtable 一起分 shard 是最干净的形状**。
+Conclusion: **sharding WAL + memtable together is the cleanest shape**.
 
-## 2. 整体设计
+## 2. Overall design
 
 ```
-   多 caller goroutine
+   many caller goroutines
          │ lock-free push
          ▼
    ╔═════════════════════════════════╗
    ║ utils.MPSCQueue (CommitQueue)   ║  Vyukov MPSC ring
-   ║ 多生产者 CAS / 单消费者 pop     ║
+   ║ multi-producer CAS / single pop ║
    ╚═════════════════════════════════╝
          │ pop
          ▼
@@ -46,38 +39,38 @@ profile 长这样：
          │  shardID = fnv1a32(firstUserKey) & (N-1)
          ▼
    ┌────┬────┬────┬────┐
-   │ ch │ ch │ ch │ ch │  N 个 buffered chan, cap=32
+   │ ch │ ch │ ch │ ch │  N buffered chans, cap=32
    └─┬──┴─┬──┴─┬──┴─┬──┘
      ▼    ▼    ▼    ▼
    ┌────────────────────┐
-   │ commitProcessor[i] │  N 个 goroutine, pin 到 shard
+   │ commitProcessor[i] │  N goroutines, pinned to shard
    │ 1) drain channel   │
    │ 2) merge → 1× vlog │
    │       + 1× SetBatch│
    │       + 1× Sync    │
-   │ 3) per-batch failedAt 还原                   │
-   │ 4) → syncQueue (per-shard 分桶)              │
+   │ 3) per-batch failedAt restoration                   │
+   │ 4) → syncQueue (per-shard bucket)                   │
    └─┬────┬────┬────┬───┘
      ▼    ▼    ▼    ▼
    ┌─────────────────────────────────────────────┐
-   │  vlog (按 key hash 分 N 个 bucket)          │
+   │  vlog (N hash-partitioned buckets by key)   │
    └─────────────────────────────────────────────┘
    ┌─────────────────────────────────────────────┐
    │  lsm.shards[shardID]                        │
-   │   ├─ wal.Manager (独立 fd / bufio / fsync) │
+   │   ├─ wal.Manager (own fd / bufio / fsync)  │
    │   │   └─ activeSyncRefs fence (rotation)   │
    │   ├─ memTable (ART)                        │
-   │   ├─ immutables[] (待 flush)               │
+   │   ├─ immutables[] (pending flush)          │
    │   ├─ sync.RWMutex (per-shard)              │
    │   └─ highestFlushedSeg.atomic.Uint32       │
-   │      ── retention 高水位 (per-shard)        │
+   │      ── retention high watermark (per-shard) │
    └─────────────────────────────────────────────┘
                 │ flush
                 ▼
-   共享 levelManager (L0 sublevels + L1..L6)
+   shared levelManager (L0 sublevels + L1..L6)
 ```
 
-### 2.1 数据结构（`engine/lsm/shard.go`）
+### 2.1 Data structures (`engine/lsm/shard.go`)
 
 ```go
 type lsmShard struct {
@@ -86,85 +79,64 @@ type lsmShard struct {
     memTable           *memTable
     immutables         []*memTable
     wal                *wal.Manager
-    highestFlushedSeg  atomic.Uint32 // per-shard retention 高水位
+    highestFlushedSeg  atomic.Uint32 // per-shard retention watermark
 }
 ```
 
-`LSM` 上原来的 `lock` / `memTable` / `immutables` / `wal` 字段全部
-删除，统一收进 `shards []*lsmShard`。`memTable` 加一个反向指针
-`shard *lsmShard`，自己知道往哪个 WAL 写、归属哪个 shard。
+The old `lock` / `memTable` / `immutables` / `wal` fields on `LSM` are deleted, all replaced by `shards []*lsmShard`. `memTable` gets a back-pointer `shard *lsmShard` so it knows which WAL to write to and which shard it belongs to.
 
-### 2.2 总 Manager 预算
+### 2.2 Manager budget
 
 ```
-4 raft shards (从 8 降到 4)
-+ 4 LSM data shards (新)
-= 8 wal.Manager 实例
+4 raft shards (down from 8)
++ 4 LSM data shards (new)
+= 8 wal.Manager instances
 ```
 
-老的全局 `db.wal` 解散，没有独立 control-plane Manager。`db` 上的
-`wal *wal.Manager` 字段换成 `lsmWALs []*wal.Manager`。
+The old global `db.wal` is dissolved; there is no separate control-plane Manager. The `wal *wal.Manager` field on `db` becomes `lsmWALs []*wal.Manager`.
 
-每个 Manager ≈ 4 MiB bufio + 1 fd + 2 goroutine（fsync worker +
-watchdog），合计 ≈ 32 MiB + 8 fd + 16 goroutine。远低于进程上限。
+Each Manager ≈ 4 MiB bufio + 1 fd + 2 goroutines (fsync worker + watchdog), totaling ≈ 32 MiB + 8 fds + 16 goroutines. Far below process limits.
 
-### 2.3 路由：per-key affinity
+### 2.3 Routing: per-key affinity
 
-最初用过 round-robin 派发整个 batch 到 shard，落地之后发现一个隐藏 issue：
-percolator 的 lock-on/lock-off 协议在同一个 `startTS` 写同一个 key 两次
-（先 prewrite 写 CFLock，再 commit 删 CFLock）。这两次写如果落到不同
-shard 的 memtable，**版本号相同没有 tiebreaker**——`Get` 走遍所有 shard
-取 max-version，遇到平票就看遍历顺序。
+We initially used round-robin to dispatch whole batches to shards. After landing it, a hidden issue surfaced: percolator's lock-on/lock-off protocol writes the same key twice under the same `startTS` (prewrite writes CFLock, commit deletes CFLock). If those two writes land on different shard memtables, **the version is identical with no tiebreaker** — `Get` walks every shard taking max-version, and a tie depends on traversal order.
 
-修法：dispatcher 改成按 batch 第一条 entry 的 user-key 哈希路由：
+Fix: dispatcher routes by the user-key hash of the batch's first entry:
 
 ```go
 shardID := fnv1a32(firstUserKey) & (N-1)
 ```
 
-- 同一 user-key 永远落同一 shard ⇒ percolator / fsmeta 的
-  same-startTS 写法保持 last-write-wins。
-- 整个 batch 仍只去一个 shard ⇒ SetBatch 原子性保留。
-- 一个 batch 里多个 key 的话，全部跟着第一条 key 的 shard 走。
+- The same user-key always lands on the same shard ⇒ percolator / fsmeta same-startTS writes preserve last-write-wins.
+- The whole batch still goes to one shard ⇒ SetBatch atomicity preserved.
+- If a batch contains many keys, all of them follow the first key's shard.
 
-### 2.4 SetBatch 原子性不变量
+### 2.4 SetBatch atomicity invariant
 
-形式化：
+Formally:
 
-- 一个 `*CommitRequest` 只活在一个 `CommitBatch` 里。
-- 一个 `CommitBatch` 端到端只交给一个 `commitProcessor`。
-- 一个 `commitProcessor` 与一个 shard 一一绑定。
-- ⇒ 一个 `CommitRequest` 只 append 一个 WAL shard、apply 一个
-  memtable shard，**WAL 写 + memtable apply 在 LSM 层原子**。
+- A `*CommitRequest` lives in exactly one `CommitBatch`.
+- A `CommitBatch` is end-to-end handed to exactly one `commitProcessor`.
+- A `commitProcessor` is one-to-one bound to a shard.
+- ⇒ a `CommitRequest` appends one WAL shard and applies one memtable shard. **WAL append + memtable apply are atomic at the LSM layer.**
 
-burst coalesce 不破坏这个不变量：merge 后的 `lsm.SetBatchGroup` 仍把
-每个原 batch 当成独立 group，per-group atomic 由 `applyWriteBatches`
-内部保证。
+Burst coalesce doesn't break this invariant: the merged `lsm.SetBatchGroup` still treats each original batch as an independent group; per-group atomicity is enforced inside `applyWriteBatches`.
 
-### 2.5 commit burst coalesce
+### 2.5 Commit burst coalesce
 
-每个 commit processor 拿到一个 batch 之后，**先 drain 通道里所有
-ready batch**（非阻塞 select default），merge 成一次
-`vlog.write` + 一次 `lsm.SetBatchGroup` + 一次 (optional) `Sync`。
-这把 N 个 WAL 写 syscall 折叠成 1 个，对应 profile 上 47% 的
-`bufio.Flush` 热点。
+Each commit processor, after pulling one batch, **first drains every ready batch in the channel** (non-blocking select default), merging into one `vlog.write` + one `lsm.SetBatchGroup` + one (optional) `Sync`. This folds N WAL-write syscalls into one — directly attacking the 47% `bufio.Flush` hotspot in the profile.
 
-`failedAt` 从 merged apply 还原回每 batch：用 boundaries 数组追踪
-每 batch 在 merged request slice 里的偏移。
+`failedAt` is restored back to per-batch from the merged apply: a boundaries array tracks each batch's offset in the merged request slice.
 
-burst==1 时走 `runSingleCommit` fast path，跳过 merge bookkeeping。
+When `burst==1`, we use `runSingleCommit` fast-path and skip merge bookkeeping.
 
-per-shard channel cap 从初始 2 抬到 32，给 dispatcher 留 burst 空间。
+Per-shard channel cap raised from initial 2 to 32, leaving room for dispatcher bursts.
 
-> **试过的反案**：把 chan 换成 `utils.SPSCQueue`（自实现 lock-free
-> 环 + parked 标志），bench 实测比 buffered chan cap=32 慢 30-40%——
-> Go runtime 对 channel 的 buffered 路径已经 amortize 大部分调度开销，
-> user-space atomic 流量超过省下的 scheduler op。SPSCQueue 已删除（commit
-> `4675a597`）。
+> **Tried and rejected**: replacing the chan with a `utils.SPSCQueue` (own lock-free ring + parked flag), bench-measured 30-40% slower than buffered chan cap=32 — the Go runtime's buffered-channel path already amortizes most scheduling cost; user-space atomic traffic exceeds the saved scheduler ops. SPSCQueue removed (commit `4675a597`).
 
-### 2.6 跨 shard MVCC 读
+### 2.6 Cross-shard MVCC reads
 
-`LSM.Get` 不再是单 memtable lookup：
+`LSM.Get` is no longer a single-memtable lookup:
 
 ```go
 var best *kv.Entry
@@ -175,20 +147,17 @@ for _, s := range lsm.shards {
             best = entry
         }
     }
-    // immutables 同理
+    // immutables likewise
     s.lock.RUnlock()
 }
-// 没命中 → levels.Get（共享 L0..LN）
+// no hit → levels.Get (shared L0..LN)
 ```
 
-Iterator / range tombstone / MaxVersion 都改成走遍所有 shard。N=4 下
-ART memtable sub-µs，O(N) 增量 < bloom/block 读。
+Iterator / range tombstone / MaxVersion all walk every shard. At N=4, ART memtable lookup is sub-µs; the O(N) growth is < bloom/block read cost.
 
-### 2.7 Cross-shard hint cache（PR #160 副产品）
+### 2.7 Cross-shard hint cache (PR #160 spinoff)
 
-跨 shard walk 在 profile 里占 ~17% CPU。Hint cache 用 64K bucket
-xxhash 表把 (userKey → 最近写入 shardID) 缓起来，Get 命中 hint 时只
-walk 一个 shard：
+The cross-shard walk used ~17% CPU in the profile. Hint cache uses a 64K bucket xxhash table to cache `(userKey → most-recent-write shardID)`. When `Get` hits the hint, it walks only one shard:
 
 ```go
 if shardID, ok := lsm.lookupShardHint(key); ok && !lsm.hasRangeTombstones() {
@@ -196,54 +165,39 @@ if shardID, ok := lsm.lookupShardHint(key); ok && !lsm.hasRangeTombstones() {
     if best := bestMemtableEntry(key, tables); best != nil {
         return best, nil
     }
-    // miss → fallback 全 walk
+    // miss → fallback to full walk
 }
 ```
 
-正确性靠 fallback 兜底（hint stale 不破坏一致性，最坏多走一次）。
-**有 range tombstone 时禁用**——避免漏判某 shard 的 RT 覆盖。
+Correctness is held by the fallback (a stale hint doesn't break consistency, worst-case is one extra walk). **Disabled when range tombstones exist** to avoid missing an RT-covered key in another shard.
 
-### 2.8 Recovery + Retention：弃用全局 logPointer
+### 2.8 Recovery + retention: dump the global logPointer
 
-老设计 manifest 里有一个全局 `logPointer` 当 retention 高水位，recovery
-跳过 ≤ logPointer 的段。多 shard 下这个高水位**不准**——shard A 刚
-flush 完写 logPointer=100，shard B 的 80-99 段可能还没 flush，被误删
-就丢数据。
+The old design kept a global `logPointer` in manifest as the retention watermark; recovery skipped segments ≤ logPointer. Under multi-shard, this watermark is **inaccurate** — shard A flushes and writes logPointer=100, but shard B's segments 80-99 may not have flushed yet, and they get falsely deleted, losing data.
 
-新方案：
+New approach:
 
-- 每个 shard 在内存里维护 `highestFlushedSeg.atomic.Uint32`，flush 完
-  同步推进。
-- 每个 shard 注册自己的 retention callback：
-  `RetentionMark{ FirstSegment: highestFlushedSeg+1 }`。
-- recovery 路径**不再读 manifest 的 logPointer 跳过段**——直接 replay
-  磁盘上还在的所有段。
-- WAL 段在 flush 完成时 `inline-delete`，不依赖 retention 兜底。
-- 万一 flush 完但 inline-delete 没跑（crash 中），recovery 重新 apply
-  这些段的 entry——MVCC 让重复 apply **幂等**（同 key 同 version 落
-  同一个 ART 节点），SST 可能多一份但内容等价，下一轮 compaction
-  自然合并。
+- Each shard maintains `highestFlushedSeg.atomic.Uint32` in memory and advances it after every flush.
+- Each shard registers its own retention callback: `RetentionMark{ FirstSegment: highestFlushedSeg+1 }`.
+- The recovery path **no longer reads manifest's logPointer to skip segments** — it replays every segment present on disk.
+- WAL segments are `inline-delete`d on flush completion; they don't depend on retention as backstop.
+- If a flush completes but inline-delete didn't run (mid-crash), recovery re-applies those segments' entries — MVCC makes repeated apply **idempotent** (same key + version lands on the same ART node), and any duplicate SST has equivalent contents that subsequent compaction merges naturally.
 
-### 2.9 WAL fsync/rotation lifecycle fence（PR #159）
+### 2.9 WAL fsync/rotation lifecycle fence (PR #159)
 
-副产品 issue：`runFsyncBatch` 为了让 phase-2 fsync 不堵新 caller，
-释放了 `m.mu` 之后再调 `active.Sync()`。同期 `switchSegmentLocked`
-（rotate / Close）会在持锁下 `m.active.Sync()` + `m.active.Close()`。
-两路在同一个 fd 上 race，可能 close 一个正在 syscall 里的 fd ——
-**数据不丢**（rotation 自己 Sync 已落盘），但 fsync worker 可能拿到
-伪 EBADF，把伪错误向上抛给 batched fsync waiter。
+Spinoff issue: `runFsyncBatch`, in order to keep phase-2 fsync from blocking new callers, releases `m.mu` before calling `active.Sync()`. Concurrently, `switchSegmentLocked` (rotate / Close) holds the lock and calls `m.active.Sync()` + `m.active.Close()`. The two paths race on the same fd, potentially closing an fd that's in mid-syscall — **no data loss** (rotation's own Sync has hit disk) but the fsync worker may receive a spurious EBADF and propagate that fake error to batched fsync waiters.
 
-修法：segment 级 refcount + cond。
+Fix: segment-level refcount + cond.
 
 ```go
 type Manager struct {
     activeFileCond *sync.Cond
-    activeSyncRefs int  // > 0 表示有 fsync 正在用 m.active
+    activeSyncRefs int  // > 0 means an fsync is using m.active
 }
 
 // runFsyncBatch
 flushBufioLocked()
-active := m.pinActiveForSyncLocked(flushErr)  // refs++ 在 lock 下
+active := m.pinActiveForSyncLocked(flushErr)  // refs++ under lock
 m.mu.Unlock()
 syncErr = active.Sync()
 m.mu.Lock()
@@ -256,68 +210,58 @@ m.waitActiveSyncRefsLocked()  // ← cond.Wait until refs == 0
 m.active.Close()
 ```
 
-`Close` 也要 wait（同一类危险）。覆盖测试：
-`TestManagerRotateWaitsForInflightBatchedFsync`。
+`Close` waits too (same hazard class). Coverage test: `TestManagerRotateWaitsForInflightBatchedFsync`.
 
-### 2.10 Flush + Range tombstones
+### 2.10 Flush + range tombstones
 
-每个 shard 自己 rotate；共享一个 `flushQueue` + N 个 flush worker。
-SST 进共享 L0+sublevels（已有逻辑无须改）。
+Each shard rotates on its own; a shared `flushQueue` + N flush workers. SSTs land in shared L0+sublevels (existing logic, unchanged).
 
-DELETE_RANGE 走单 batch ⇒ 按 §2.3 路由落单 shard memtable。读路径
-已经 walk all shards，无须改。
+DELETE_RANGE goes through a single batch ⇒ routes to one shard's memtable per §2.3. The read path already walks every shard, no change needed.
 
-## 3. 实测结果
+## 3. Results
 
 YCSB-A 50/50 R-W (1KB value, 500K records / 500K ops):
 
-| 阶段 | ops/s | p99 |
+| Phase | ops/s | p99 |
 |---|---|---|
 | Pre-shard baseline | 175K | — |
-| Phase 1（pipelined write 等已落地）| ~400K | — |
+| Phase 1 (pipelined write etc. landed) | ~400K | — |
 | **Sharded data plane (N=4, conc=128)** | **725K** (benchmark-tuned) | 491µs |
-| 同上 production-default | ~605K | — |
+| Same, production default | ~605K | — |
 
-工业基线对比（`make bench`，500K rec / 500K ops / conc=64 / value=1KB）：
+Industrial-baseline comparison (`make bench`, 500K rec / 500K ops / conc=64 / value=1KB):
 
 | Workload | NoKV | Badger | Pebble | NoKV vs best peer |
 |---|---|---|---|---|
 | A 50/50 RW | 617K | 340K | 274K | +81% |
 | B 95/5 RW | 685K | 546K | 585K | +17% |
 | C 100% read | 1037K | 593K | 564K | +75% |
-| D 95% R + 5% latest | 694K | 765K | 686K | -9% (Badger 赢) |
-| E 95% scan | 140K | 44K | 219K | -36% (Pebble 赢) |
+| D 95% R + 5% latest | 694K | 765K | 686K | -9% (Badger wins) |
+| E 95% scan | 140K | 44K | 219K | -36% (Pebble wins) |
 | F RMW | 402K | 228K | 306K | +31% |
 
-5/6 workload 第一，1/6 第二。
+5 of 6 workloads first, 1 of 6 second.
 
-profile 验证：`runtime.lock2` 从 16.57% 降到 < 1%；剩余 47% 在
-`syscall.write`（io_uring 路线的目标）。
+Profile validation: `runtime.lock2` dropped from 16.57% to <1%; the remaining 47% is in `syscall.write` (the io_uring route's target).
 
-## 4. 决策日志
+## 4. Decision log
 
-- shard 在 LSM 层而不是 DB / coordinator 层 — 锁争用就在 LSM 层。
-- WAL 和 memtable 一起分，不只是 WAL — recovery / flush 协调更简单。
-- per-key affinity 路由，不是 round-robin — 修 percolator same-startTS
-  路径。
-- N=4 LSM + N=4 raft = 8 个 Manager。原全局 `db.wal` 解散进 4 个
-  LSM shard，没有独立 control-plane Manager。
-- 弃用全局 manifest logPointer，per-shard `highestFlushedSeg` +
-  inline-delete。
-- buffered chan cap=32 + burst coalesce，**否决** `utils.SPSCQueue`
-  替换（实测慢 30-40%）。
-- WAL fsync/rotation race 用 segment-level refcount + cond 解决，
-  不退回持锁 fsync。
-- shard hint cache 64K bucket xxhash on baseKey，
-  range-tombstone 时禁用 fast path。
+- Sharding at the LSM layer instead of DB / coordinator — that's where the lock contention lives.
+- Shard WAL and memtable together, not just WAL — simpler recovery / flush coordination.
+- Per-key affinity routing instead of round-robin — fixes percolator same-startTS writes.
+- N=4 LSM + N=4 raft = 8 Managers. The old global `db.wal` is dissolved into 4 LSM shards; there is no separate control-plane Manager.
+- Drop the global manifest logPointer; use per-shard `highestFlushedSeg` + inline-delete.
+- Buffered chan cap=32 + burst coalesce; **rejected** the `utils.SPSCQueue` replacement (30-40% slower in bench).
+- WAL fsync/rotation race fixed with segment-level refcount + cond, not by reverting to fsync-under-lock.
+- Shard hint cache uses 64K bucket xxhash on baseKey; fast path disabled when range tombstones exist.
 
-## 5. 已知 trade-off + 后续
+## 5. Known trade-offs + future work
 
-| 项 | 性质 |
+| Item | Nature |
 |---|---|
-| 同 batch 含跨 shard key 时全部走 first key 的 shard | per-key affinity 副作用，反正后续单 key 写还是同 shard |
-| 共享 levels / manifest / blockCache / flushQueue | N=4 没痛点；N≥8 时 manifest 写争用会浮现 |
-| 跨 shard memtable Get 是 N 倍 ART lookup | hint cache 已经把热点 key 压回单 shard；冷 key 仍 N× |
-| 大 dataset (>= 1GB) 时 BlockCache 装不下 → cache miss 主导 YCSB-C | 路线：Filter pinned cache + Negative cache（PR #161 在路上）+ Ribbon |
+| If a batch contains keys spanning shards, all go to the first key's shard | Per-key affinity side effect; subsequent single-key writes still hit the same shard |
+| Shared levels / manifest / blockCache / flushQueue | No pain at N=4; manifest write contention may surface at N≥8 |
+| Cross-shard memtable Get is N× ART lookups | Hint cache reduces hot keys to single-shard; cold keys still pay N× |
+| Large dataset (≥ 1GB) makes BlockCache too small → cache miss dominates YCSB-C | Roadmap: pinned filter cache + negative cache (PR #161 in flight) + Ribbon |
 
-每项独立 PR、独立 design note。
+Each item is its own PR, its own design note.

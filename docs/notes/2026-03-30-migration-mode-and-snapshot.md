@@ -1,85 +1,85 @@
-# 2026-03-30 迁移设计里最关键的不是命令，而是 mode 和 snapshot 语义
+# 2026-03-30 The most important thing in migration design isn't commands — it's mode and snapshot semantics
 
-> 状态：当前 migration 主线已经形成。本文关注的是背后的状态协议，而不是 CLI 表面。
+> Status: the migration trunk is now in place. This note focuses on the underlying state protocol, not the CLI surface.
 
-## 导读
+## TL;DR
 
-- 🧭 主题：迁移为什么首先是目录生命周期协议，而不是一组运维命令。
-- 🧱 核心对象：`mode`、raft durable snapshot、logical region snapshot。
-- 🔁 调用链：`standalone -> preparing -> seeded -> serve/expand -> cluster`。
-- 📚 参考对象：分布式数据库里的 lifecycle gate、逻辑快照与协议快照分层。
+- 🧭 Topic: why migration is fundamentally a directory lifecycle protocol, not a set of operational commands.
+- 🧱 Core objects: `mode`, raft durable snapshot, logical region snapshot.
+- 🔁 Call chain: `standalone -> preparing -> seeded -> serve/expand -> cluster`.
+- 📚 Reference: lifecycle gates in distributed databases, layered logical vs protocol snapshots.
 
-## 1. 为什么这件事重要
+## 1. Why this matters
 
-在分布式系统里，迁移经常被误解成一组“方便运维的命令”。
+In distributed systems, migration is often misread as "a set of operationally convenient commands."
 
-但真正决定迁移是否成立的，不是命令数量，而是两个更深的东西：
+But what actually determines whether migration holds isn't the number of commands — it's two deeper things:
 
-1. workdir 当前到底处于什么生命周期状态
-2. snapshot 到底代表什么语义层次
+1. What lifecycle state is the workdir actually in.
+2. What semantic level does the snapshot represent.
 
-如果这两个问题没有被严格定义，最后通常会出现：
+If neither of these is rigorously defined, you typically end up with:
 
-- 目录状态模糊
-- 半迁移目录仍然能被错误打开
-- snapshot 混杂 raft metadata 和应用状态
-- 扩副本和恢复只能靠脚本和运气
+- Ambiguous directory state.
+- Half-migrated directories that can still be opened wrong.
+- Snapshots mixing raft metadata with application state.
+- Replica expansion and recovery that depend on scripts and luck.
 
-## 2. 当前相关实现
+## 2. Relevant implementation
 
 - `raftstore/mode`
 - `raftstore/migrate`
 - `raftstore/raftlog/snapshot.go`
 - `raftstore/snapshot`
 
-当前主线可以概括成：
+The current trunk:
 
 ```mermaid
 flowchart TD
     A["standalone workdir"] --> B["mode: preparing"]
-    B --> C["migrate init\n写 seed region 语义"]
+    B --> C["migrate init\nwrite seed region semantics"]
     C --> D["mode: seeded"]
     D --> E["serve / expand"]
     E --> F["mode: cluster"]
 ```
 
-## 3. `mode` 为什么是协议，不是状态枚举
+## 3. Why `mode` is a protocol, not a status enum
 
-### 当前 mode
+### Current modes
 
 - `standalone`
 - `preparing`
 - `seeded`
 - `cluster`
 
-### 为什么它重要
+### Why it matters
 
-这不是给 CLI 提示用的标签，而是 workdir lifecycle contract。
+This isn't a CLI hint label — it's a workdir lifecycle contract.
 
-只要一个目录进入了 `preparing/seeded/cluster`，系统就必须明确知道：
+Once a directory enters `preparing/seeded/cluster`, the system must explicitly know:
 
-- 它不再是普通 standalone DB
-- 某些打开路径必须拒绝
-- 某些恢复逻辑必须切到 region/peer 语义
+- It's no longer a plain standalone DB.
+- Some open paths must refuse to proceed.
+- Some recovery logic must switch to region/peer semantics.
 
-也就是说：
+In other words:
 
-> `mode` 是对目录身份的正式判定。
+> `mode` is a formal verdict on the directory's identity.
 
-没有这一层，迁移过程就只能靠“别乱用目录”这种口头约定。
+Without this layer, migration could only rely on "don't misuse the directory" — a verbal convention.
 
-## 4. snapshot 为什么必须分层
+## 4. Why snapshot must be layered
 
-相关代码：
+Relevant code:
 
 - `raftstore/raftlog/snapshot.go`
 - `raftstore/snapshot`
 
-当前最重要的分层是：
+The most important layering:
 
 ### 4.1 raft durable metadata snapshot
 
-表达的是：
+Expresses:
 
 - index
 - term
@@ -88,30 +88,30 @@ flowchart TD
 
 ### 4.2 logical region snapshot
 
-表达的是：
+Expresses:
 
-- 某个 key range 内真正的逻辑状态
-- region-scoped state
-- 后续 bootstrap/install 所需的数据语义
+- The actual logical state inside a key range.
+- Region-scoped state.
+- Data semantics needed for later bootstrap/install.
 
-### 为什么这条分层必须存在
+### Why this layering must exist
 
-因为迁移要解决的问题不是“恢复一个 raft group”，而是：
+Because migration is not solving "recover a raft group." It's solving:
 
-- 把一个原本没有分布式身份的 workdir
-- 提升成一个有 region/peer 语义的状态片段
-- 然后让它能进入 cluster 生命周期
+- Take a workdir that has no distributed identity.
+- Promote it into a state slice that has region/peer semantics.
+- Then let it enter the cluster lifecycle.
 
-如果 snapshot 不分层，迁移就会变成：
+Without snapshot layering, migration becomes:
 
-- 一部分协议 metadata
-- 一部分逻辑数据
-- 一部分目录复制
-- 一部分脚本约定
+- Some protocol metadata.
+- Some logical data.
+- Some directory copy.
+- Some script convention.
 
-最终谁也说不清系统到底在恢复什么。
+And nobody can say what the system is actually recovering.
 
-## 5. 当前调用逻辑
+## 5. Current call flow
 
 ### `migrate init`
 
@@ -123,8 +123,8 @@ sequenceDiagram
     participant LM as localmeta
 
     CLI->>MODE: standalone -> preparing
-    CLI->>SNAP: 构造 seed region state
-    CLI->>LM: 写 replicas.binpb / raft-progress.binpb
+    CLI->>SNAP: build seed region state
+    CLI->>LM: write replicas.binpb / raft-progress.binpb
     CLI->>MODE: preparing -> seeded
 ```
 
@@ -137,77 +137,77 @@ sequenceDiagram
     participant Coordinator as coordinator
     participant MR as meta/root
 
-    CLI->>RS: 启动 seeded workdir
-    RS->>Coordinator: 注册 rooted truth / liveness
+    CLI->>RS: start seeded workdir
+    RS->>Coordinator: register rooted truth / liveness
     Coordinator->>MR: append rooted metadata
     CLI->>RS: expand membership
     RS->>MR: planned + terminal truth
 ```
 
-## 6. 哪些看起来简单但其实是错路
+## 6. Things that look simple but are wrong paths
 
-### 6.1 只把迁移做成脚本链
+### 6.1 Treating migration as a chain of scripts
 
-这会让：
+This produces:
 
-- 状态边界不清楚
-- 错误恢复路径不清楚
-- 测试只能测脚本 happy path
+- Unclear state boundaries.
+- Unclear error-recovery paths.
+- Tests that only exercise the script's happy path.
 
-### 6.2 把 snapshot 当成一个统称
+### 6.2 Treating "snapshot" as a single concept
 
-如果不分 raft durable snapshot 和 logical region snapshot，后面所有关于：
+Without separating raft durable snapshot from logical region snapshot, every later design around:
 
 - install
 - migration
 - restore
 - reshard
 
-的设计都会反复纠缠。
+ends up entangled.
 
-### 6.3 让 standalone 打开路径默认接受所有目录
+### 6.3 Letting the standalone open path accept any directory by default
 
-这会直接让迁移中的目录被错误当成普通 DB 继续写，最终破坏状态提升协议。
+That immediately lets a mid-migration workdir get opened as a regular DB and written through, which destroys the state-promotion protocol.
 
-## 7. 设计理念
+## 7. Design philosophy
 
-这里背后的理念其实很简单：
+The underlying philosophy is straightforward:
 
-### 7.1 目录生命周期要写进协议
+### 7.1 Directory lifecycle must be encoded in the protocol
 
-### 7.2 snapshot 语义要精确，不要模糊
+### 7.2 Snapshot semantics must be precise, not fuzzy
 
-### 7.3 迁移是状态提升，不是工具链拼接
+### 7.3 Migration is state promotion, not toolchain stitching
 
-## 8. 参考对象
+## 8. Reference patterns
 
-这条线借鉴的是一类通用工程原则，而不是某个系统的现成模块：
+This line borrows from general engineering principles, not any one system:
 
-- 分布式数据库里关于生命周期 gate 的做法
-- region/shard 系统里逻辑快照与协议快照分层的经验
-- Delos/FDB 一类系统对“最小 durable 核心 + 可重建 view”的强调
+- Lifecycle-gate practices in distributed databases.
+- Logical-vs-protocol snapshot layering experience in region/shard systems.
+- Delos / FDB-style emphasis on "minimal durable core + reconstructible view."
 
-## 9. 当前已经落地的边界
+## 9. Boundaries already in place
 
-- mode gate 已经存在，并能阻止半迁移目录被当成普通 standalone 打开。
-- `localmeta` / `snapshot` / `migrate` 已经分层。
-- migration 已经不是 dump/import 风格，而是 state promotion。
-- seed region、snapshot install 和 membership expansion 已经能进入当前分布式主线。
+- mode gate exists and prevents half-migrated dirs from being opened as plain standalone.
+- `localmeta` / `snapshot` / `migrate` are layered.
+- migration is no longer dump/import style — it's state promotion.
+- seed region, snapshot install, and membership expansion can enter the distributed trunk.
 
-## 10. 当前没有实现的能力
+## 10. Capabilities not yet implemented
 
-- 不做在线自动切分已有 standalone 数据。
-- 不做自动 rebalance。
-- 不提供 failed migration 的独立 rollback / repair 命令。
-- migration observability 仍然偏基础。
-- SST ingest / zero-copy snapshot install 仍是后续优化，不是当前语义前提。
+- No online auto-split of existing standalone data.
+- No automatic rebalance.
+- No standalone rollback / repair commands for failed migration.
+- Migration observability is still basic.
+- SST ingest / zero-copy snapshot install remain future optimizations, not semantic prerequisites.
 
-## 11. 总结
+## 11. Summary
 
-NoKV 当前 migration 设计真正成立的关键，不是有多少命令，而是：
+What actually makes NoKV's current migration design hold up isn't the number of commands. It's that:
 
-- workdir mode 被做成了正式协议
-- snapshot 被做成了分层语义
-- standalone 到 distributed 是状态提升，而不是系统切换
+- workdir mode is a formal protocol.
+- snapshot is layered semantically.
+- standalone-to-distributed is a state promotion, not a system switch.
 
-这也是为什么后面的 control-plane、snapshot install、scheduler/control-plane runtime 都能继续建立在这条主线上，而不是重做一遍。
+This is also why subsequent control-plane, snapshot install, and scheduler / control-plane runtime work can build on this trunk instead of being redone.

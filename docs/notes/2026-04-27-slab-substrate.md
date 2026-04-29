@@ -1,313 +1,250 @@
-# 2026-04-27 Slab Substrate：NoKV metadata primitives 的 typed sidecar 物理执行层
+# 2026-04-27 Slab Substrate: a typed sidecar physical layout for NoKV's metadata primitives
 
-> 状态：**Phase 0–5 已落地，6 forward-ref**。Phase 0 在 PR #161；Phase 1–5
-> 在 `feature/slab-substrate` 分支：metadata default no-offload fast path
-> (Phase 1)、`engine/slab/Segment` 物理层抽出 (Phase 2)、persistent
-> Negative Slab (Phase 3)、SnapshotSlab spike → 不做 (Phase 4，独立 note)、
-> DirPageSlab RFC (Phase 5，独立 note) 都已 commit。Phase 5b（拆出
-> `engine/slab/Manager` + vlog 降级成 wrapper）在同一分支上完成。Phase 6
-> （UpdateSlab）独立 RFC，**不在本分支**。
+> Status: **Phases 0–5 shipped, 6 forward-ref**. Phase 0 in PR #161; Phases 1–5 on the `feature/slab-substrate` branch: metadata default no-offload fast path (Phase 1), `engine/slab/Segment` physical layer extraction (Phase 2), persistent Negative Slab (Phase 3), SnapshotSlab spike → not building (Phase 4, separate note), DirPageSlab RFC (Phase 5, separate note) — all committed. Phase 5b (split out `engine/slab/Manager` + downgrade vlog to a wrapper) completed on the same branch. Phase 6 (UpdateSlab) is an independent RFC, **not on this branch**.
 >
-> 本文是 vlog 重构的第三版 note。前两版（"MetaSlab redesign" / "Slab
-> substrate v1"）依次被 review 修正，最终切法不再是"重构 vlog"，而是
-> **把 slab 升级成 NoKV native metadata primitives 的 typed sidecar
-> 物理执行层**。slab 不是新版 vlog，是 fsmeta primitive（`ReadDirPlus`、
-> `SnapshotSubtree`、`WatchSubtree`、`RenameSubtree`）的 *primitive-aware
-> physical layout*。
+> This is the third version of the vlog refactor note. The first two ("MetaSlab redesign" / "Slab substrate v1") were each refined in review. The final cut is no longer "refactor vlog" — it's **upgrade slab into a typed sidecar physical layout for NoKV native metadata primitives**. Slab isn't a new vlog. It's the *primitive-aware physical layout* of fsmeta primitives (`ReadDirPlus`, `SnapshotSubtree`, `WatchSubtree`, `RenameSubtree`).
 
 ---
 
-## 1. 重新定位：从"vlog 重构"到"primitive-aware physical layout"
+## 1. Repositioning: from "vlog refactor" to "primitive-aware physical layout"
 
-之前两版 note 把 slab 当成 "更通用的 vlog"，思路是 "value 不分 size，按
-metadata 语义分 layout"。这次 review 进一步指出：**真正有创新价值的是
-"按 NoKV native primitive 决定物理位置"**——
+The first two versions treated slab as "a more general vlog" — same idea, "values aren't size-graded, they're laid out by metadata semantics." This review pushed further: **what's actually innovative is "the physical location is determined by the NoKV native primitive."**
 
-| 通用 KV 视角（旧） | NoKV native 视角（新） |
+| Generic-KV view (old) | NoKV-native view (new) |
 |---|---|
-| value > threshold 进 vlog | `ReadDirPlus` 大目录进 DirPage Slab |
-| 通用 negative cache | fsmeta key 的 negative slab，跟 mount/subtree 绑定 |
-| snapshot = LSM 范围扫 | `SnapshotSubtree` 直接产出 sealed slab artifact |
-| GC by reference scanning | GC by lifecycle event（mount/subtree retire） |
+| value > threshold goes to vlog | `ReadDirPlus` large directories go to DirPage Slab |
+| Generic negative cache | fsmeta-key negative slab, bound to mount/subtree |
+| snapshot = LSM range scan | `SnapshotSubtree` produces a sealed slab artifact directly |
+| GC by reference scanning | GC by lifecycle event (mount/subtree retire) |
 
-slab 跟 NoKV 自己的 primitive 绑起来，才是真正区别于 RocksDB / Pebble /
-Badger / FoundationDB 的设计点。否则就是又写一个通用 KV 优化。
+Tying slab to NoKV's own primitives is what actually distinguishes us from RocksDB / Pebble / Badger / FoundationDB. Otherwise we'd just be writing yet another generic-KV optimization.
 
-## 2. 产品定位与现状错配
+## 2. Mismatch between product positioning and current state
 
-NoKV 的客户场景是 **metadata-first**：
+NoKV's customer scenarios are **metadata-first**:
 
-| 场景 | value 大小 | 主要 primitive |
+| Scenario | Value size | Main primitive |
 |---|---|---|
-| DFS metadata（HDFS / CephFS / JuiceFS / SeaweedFS filer） | 150B-1KB | `ReadDirPlus`、`Lookup` |
-| 对象存储 metadata（S3 manifest / bucket index） | 200B-1KB | `ListObjects`、`HeadObject` |
-| AI training metadata（dataset manifest / feature schema） | 100-500B | `SnapshotSubtree`、checkpoint |
-| 嵌入式偶发大对象 | 4KB-1MB | 显式 blob API |
+| DFS metadata (HDFS / CephFS / JuiceFS / SeaweedFS filer) | 150B-1KB | `ReadDirPlus`, `Lookup` |
+| Object-store metadata (S3 manifest / bucket index) | 200B-1KB | `ListObjects`, `HeadObject` |
+| AI training metadata (dataset manifest / feature schema) | 100-500B | `SnapshotSubtree`, checkpoint |
+| Embedded occasional large objects | 4KB-1MB | Explicit blob API |
 
-vlog 当前形态的问题：
+Problems with vlog as it stands:
 
-1. **mandatory 在主写路径上**：`db.vlog.write()` 是 commit pipeline 必经
-2. **bug 暴露面大**：1M+3KB bench 发现 `LogFile.Write` 在 reserve 解耦
-   写顺序时把 lf.size 缩回去（fix 见 §4）
-3. **物理层和业务语义混在 `engine/vlog/`**：mmap segment 管理、bucket
-   路由、ValuePtr 编解码、GC sample 全在一个包里——其它子系统想复用
-   mmap 物理层就得拖 vlog 业务语义
-4. **没有 primitive-awareness**：所有大 value 都进 vlog，不区分 dataset
-   snapshot / dir page / negative cache / value separation 各自不同的
-   生命周期和一致性需求
+1. **Mandatory on the primary write path**: `db.vlog.write()` is unavoidable in the commit pipeline.
+2. **Large bug surface**: 1M+3KB bench exposed `LogFile.Write` shrinking `lf.size` when out-of-order Writes followed reservation decoupling (fix in §4).
+3. **Physical layer and business semantics tangled in `engine/vlog/`**: mmap segment management, bucket routing, ValuePtr encode/decode, and GC sampling all live in one package — any other subsystem that wants to reuse the mmap physical layer has to pull in vlog business semantics.
+4. **No primitive-awareness**: every large value goes to vlog; we don't differentiate dataset snapshot, dir page, negative cache, and value separation, each of which has different lifecycle and consistency needs.
 
-## 3. 三层架构
+## 3. Three-layer architecture
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  Layer 3 — Rooted Lifecycle（控制平面集成）                              │
-│    correctness-critical slab → meta/root 生命周期                      │
-│    derived slab → 不进 root，丢失重建                                    │
-│    snapshot slab → epoch 绑定，retire 整文件删除                         │
+│  Layer 3 — Rooted Lifecycle (control-plane integration)              │
+│    correctness-critical slab → meta/root lifecycle                   │
+│    derived slab → not in root, lost-and-rebuild                      │
+│    snapshot slab → epoch-bound, retire by file unlink                │
 ├──────────────────────────────────────────────────────────────────────┤
-│  Layer 2 — Typed Slab Consumers（业务语义）                             │
+│  Layer 2 — Typed Slab Consumers (business semantics)                 │
 │  ┌──────────────┬──────────────┬──────────────┬────────────────────┐│
 │  │ ValueLog     │ Negative     │ DirPage      │ Snapshot          ││
 │  │ (existing)   │ Slab         │ Slab         │ Slab              ││
 │  │ Authoritative│ Derived      │ Derived      │ Lifecycle-bound   ││
 │  └──────────────┴──────────────┴──────────────┴────────────────────┘│
 ├──────────────────────────────────────────────────────────────────────┤
-│  Layer 1 — Slab Substrate（engine/slab/）                            │
-│    BlobLog / SlabFile：append / read / seal / verify / remove         │
-│    没有：ValuePtr、bucket 路由、business GC、main manifest 集成          │
+│  Layer 1 — Slab Substrate (engine/slab/)                             │
+│    BlobLog / SlabFile: append / read / seal / verify / remove        │
+│    Does NOT include: ValuePtr, bucket routing, business GC,          │
+│                      main-manifest integration                       │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-**关键 invariant**：每一层只关心自己那一层的事。物理层不知道 DirPage 是
-什么；DirPage Consumer 不知道 Snapshot 怎么 seal；Rooted Lifecycle
-不知道 mmap 怎么 grow。
+**Key invariant**: each layer cares only about its own concerns. The physical layer doesn't know what DirPage is; the DirPage Consumer doesn't know how Snapshot seals; Rooted Lifecycle doesn't know how mmap grows.
 
-## 4. Phase 0：vlog `LogFile.Write` high-water CAS（已完成）
+## 4. Phase 0: vlog `LogFile.Write` high-water CAS (done)
 
-### 4.1 Bug 现象
+### 4.1 Bug
 
-1M YCSB + 3KB value（触发 value separation）跑 ~4 秒后 `NoKV read: EOF`。
-最小复现：200k records + 3KB + conc=16 在 0.79s 内必崩。
+1M YCSB + 3KB value (triggering value separation) crashed with `NoKV read: EOF` after ~4 seconds. Minimal repro: 200k records + 3KB + conc=16 fails reliably within 0.79s.
 
-debug log 命中 `EOF #3`：`offset+valsz > lfsz` 且 `offset == lfsz`，
-说明写入这条 entry 的 batch 已经 publish ptr，但 lf.size 没包含尾部。
+Debug log shows `EOF #3`: `offset+valsz > lfsz` with `offset == lfsz`, meaning the batch that wrote the entry already published the ptr but `lf.size` didn't include the tail.
 
 ### 4.2 Root cause
 
-`engine/vlog/manager.reserve()` 持 `m.filesLock` 给每个 batch 拿 disjoint
-offset 区间，**释放 filesLock 之后**才去抢 `store.Lock` 写入。N 个 batch
-的 reserve 顺序与 Write 完成顺序解耦：较大 offset 的 Write 先完成
-（lfsz=300），较小 offset 的 Write 后完成（lfsz.Store(200) 把高水位覆盖
-回小值）→ 已 publish 的 ptr 在 Read 时命中 EOF。
+`engine/vlog/manager.reserve()` holds `m.filesLock` to hand each batch a disjoint offset range, **and only after releasing filesLock** does the batch contend `store.Lock` to write. Reserve order across N batches is decoupled from Write completion order: the larger-offset Write completes first (lfsz=300), the smaller-offset Write completes later (`lfsz.Store(200)` overwrites the high watermark backwards) → an already-published ptr hits EOF on Read.
 
 ### 4.3 Fix
 
-`LogFile.Write` 改用 monotonic CAS（`engine/file/vlog.go:113-129`）。
+`LogFile.Write` switched to monotonic CAS (`engine/file/vlog.go:113-129`).
 
-### 4.4 关键 invariant
+### 4.4 Key invariant
 
-> **Invariant V1**：value pointer 只有在 `db.vlog.write(reqs)` 完整返回
-> 之后才会被 publish 到 LSM。reader 可见 ptr 时，对应 batch 的所有 Write
-> 都已经完成、lf.size 必然 ≥ ptr.offset + ptr.len。
+> **Invariant V1**: a value pointer is only published into LSM after `db.vlog.write(reqs)` returns in full. By the time a reader sees a ptr, every Write of the corresponding batch has completed and `lf.size ≥ ptr.offset + ptr.len`.
 
-high-water CAS **只保证 lf.size 不回退**，不保证"高水位以内没有洞"。
-洞是真实存在的（reserve 之后未 Write 的区间），但 V1 屏蔽 reader 不会
-撞到洞。`db.go runBurstCommit / runSingleCommit` 的 `vlog.write →
-applyRequests` 顺序保证 V1。
+The high-water CAS only ensures `lf.size` is monotonic — it doesn't guarantee "no holes within the watermark." Holes do exist (reserved-but-not-Written intervals), but V1 prevents readers from ever hitting them. `db.go runBurstCommit / runSingleCommit` enforces V1 by ordering `vlog.write → applyRequests`.
 
-### 4.5 测试覆盖
+### 4.5 Test coverage
 
-- `engine/file/vlog_test.go::TestLogFileWriteSizeMonotonicOutOfOrder` —
-  覆盖 lf.size 单调（无 fix 时失败）
-- `engine/vlog/manager_test.go::TestManagerConcurrentAppendReadAfterWrite`
-  — 16 worker × 64 batch × 8 entry 并发 AppendEntries + 立即 Read，覆盖
-  invariant V1（ptr publish discipline）
+- `engine/file/vlog_test.go::TestLogFileWriteSizeMonotonicOutOfOrder` — covers `lf.size` monotonicity (fails without the fix).
+- `engine/vlog/manager_test.go::TestManagerConcurrentAppendReadAfterWrite` — 16 worker × 64 batch × 8 entries, concurrent AppendEntries + immediate Read, explicitly covers invariant V1 (ptr publish discipline).
 
-## 5. 一致性等级分类（这是设计核心，不是实现细节）
+## 5. Consistency-class taxonomy (this is the design center, not implementation detail)
 
-每个 slab consumer 必须明确标一个 consistency class。**slab 不是同一种
-东西**，混在一起设计就会出 UpdateSlab 那种"破坏 MVCC 语义"的事故。
+Every slab consumer must declare a consistency class. **Slabs are not all the same kind of object** — mixing them in one design produces accidents like UpdateSlab "breaking MVCC semantics."
 
-| Class | 含义 | 例子 | 失败语义 |
+| Class | Meaning | Example | Failure semantics |
 |---|---|---|---|
-| **Authoritative** | 数据本体由 slab 持有，丢了就是数据损坏 | ValueLog（ptr → vlog payload） | 必须 WAL/manifest/GC 严格保证 |
-| **Lifecycle-bound** | 由外部生命周期事件管理（snapshot epoch / mount retire） | Snapshot Slab | seal 后不可变，retire 后整文件删除 |
-| **Derived** | LSM 是 authoritative，slab 是 cache/物化 | Negative Slab、DirPage Slab、（future）Hot Cache | 丢失可重建，不参与 commit |
-| **Transactional** | 跟 MVCC version / commit 集成，必须 atomic | （future）UpdateSlab 等待独立 design | 跟 WAL/Percolator 一起设计才能做 |
+| **Authoritative** | The data body is held by slab; losing it is data loss. | ValueLog (ptr → vlog payload) | Strict WAL/manifest/GC guarantees required. |
+| **Lifecycle-bound** | Managed by external lifecycle events (snapshot epoch / mount retire). | Snapshot Slab | Immutable after seal; whole-file delete after retire. |
+| **Derived** | LSM is authoritative; slab is cache/materialization. | Negative Slab, DirPage Slab, (future) Hot Cache | Lossy-recoverable; doesn't participate in commit. |
+| **Transactional** | Integrated with MVCC version / commit; must be atomic. | (future) UpdateSlab — awaits independent design | Must be designed alongside WAL/Percolator. |
 
-**这个分类本身就是 design point**：之前 metaslab note 把 5 个 slab 当成
-同种东西，正是因为没区分 class。
+**This taxonomy itself is a design point**: the previous metaslab note treated five slabs as homogeneous because it didn't separate classes.
 
-## 6. V1 三个 Consumer
+## 6. Three v1 consumers
 
-### 6.1 NegativeSlab（Derived）
+### 6.1 NegativeSlab (Derived)
 
-**对应 NoKV primitive**：fsmeta `Lookup` / `GetAttr` 对不存在 path 的
-查询；S3 GetObject 404；HDFS 路径探测。
+**NoKV primitive it serves**: fsmeta `Lookup` / `GetAttr` for non-existent paths; S3 GetObject 404; HDFS path probes.
 
-**机制**：`engine/lsm/negative_cache.go` 当前是 in-memory cuckoo filter，
-进程重启全部丢失。加 `slab.Manager` 后端：
-- async append miss key（不在主 read 路径上）
-- restart 时 iterate segment 重建 in-memory cuckoo filter
-- crash 丢 segment 数据 = 重新 warm，**不影响 read correctness**
-- **不需要 manifest**（重建即可）
+**Mechanism**: `engine/lsm/negative_cache.go` is currently an in-memory cuckoo filter — wiped on process restart. Add a `slab.Manager` backend:
+- async append miss-keys (off the main read path)
+- on restart, iterate segments to rebuild the in-memory cuckoo filter
+- crash losing segment data = re-warm; **read correctness is unaffected**
+- **no manifest needed** (rebuild suffices)
 
-**为什么是第一个 consumer**：失败不影响 correctness，最小风险，最适合
-验证 slab substrate 抽象可行性。
+**Why first consumer**: failure doesn't affect correctness, lowest risk, ideal for validating the slab substrate abstraction.
 
-**收益**：进程 restart 后立刻有完整 negative cache，零 warmup。
+**Win**: full negative cache available immediately after process restart, zero warmup.
 
-### 6.2 SnapshotSlab（Lifecycle-bound）
+### 6.2 SnapshotSlab (Lifecycle-bound)
 
-**对应 NoKV primitive**：`fsmeta.SnapshotSubtree`、AI dataset
-checkpoint、`PlanSnapshotSubtree`。
+**NoKV primitive it serves**: `fsmeta.SnapshotSubtree`, AI dataset checkpoint, `PlanSnapshotSubtree`.
 
-**机制**：`SnapshotSubtree` 当前返回一个 `SnapshotSubtreeToken`（MVCC
-read epoch），后续 read 走 LSM MVCC。SnapshotSlab 改成"snapshot 可以
-materialize 成 sealed slab artifact"：
+**Mechanism**: `SnapshotSubtree` currently returns a `SnapshotSubtreeToken` (MVCC read epoch); subsequent reads still go through LSM MVCC. SnapshotSlab adds "a snapshot can materialize into a sealed slab artifact":
 
 ```go
-// 取一个 subtree snapshot，materialize 成 slab
+// Take a subtree snapshot, materialize into a slab.
 artifact, err := db.MaterializeSnapshot(SnapshotSubtreeRequest{...})
-// artifact 是一个 sealed slab file，包含所有 dentry+attr
-// 可以通过 export / scp / S3 上传
-// retire 时整文件删除，不需要 GC scan
+// `artifact` is a sealed slab file containing all dentries+attrs.
+// Can be exported via export / scp / S3.
+// Retire = file unlink, no GC scan needed.
 ```
 
-**生命周期**：
-- write：snapshot epoch 触发，一次性写入
-- seal：epoch 关闭后 slab seal，不可变
-- retire：epoch retire 时 unlink slab 文件，O(1)
+**Lifecycle**:
+- write: triggered by snapshot epoch, write once.
+- seal: after epoch closes, slab seals — immutable.
+- retire: when the epoch retires, unlink the slab file, O(1).
 
-**收益**：
-- AI dataset checkpoint 可以 export 成单一 slab artifact（zero-copy
-  sendfile 跨节点）
-- snapshot 跟 epoch lifecycle 严格绑定，不需要独立 GC
-- 跟 `2026-03-31-sst-snapshot-install.md` 对齐：SST snapshot 是
-  raft-level 物理迁移，SnapshotSlab 是 fsmeta-level 逻辑 export
+**Wins**:
+- AI dataset checkpoints can export as a single slab artifact (zero-copy sendfile across nodes).
+- Snapshot lifecycle is strictly bound to the epoch — no separate GC.
+- Aligned with `2026-03-31-sst-snapshot-install.md`: SST snapshot is raft-level physical migration; SnapshotSlab is fsmeta-level logical export.
 
-**Phase 4 spike**：先调研 SST snapshot install 现状，确认 SnapshotSlab
-不重复 raft snapshot 的功能后再做。
+**Phase 4 spike**: investigate the existing SST snapshot install first; only build SnapshotSlab if it doesn't duplicate raft snapshot.
 
-### 6.3 DirPageSlab（Derived）—— 最贴 NoKV 的创新点
+### 6.3 DirPageSlab (Derived) — the most NoKV-distinctive innovation
 
-**对应 NoKV primitive**：`fsmeta` 的 `ReadDirPlus`-style 操作（返回
-`DentryAttrPair`）。
+**NoKV primitive it serves**: `fsmeta` `ReadDirPlus`-style operations (returning `DentryAttrPair`).
 
-**痛点**：大目录 listing 是 metadata 系统的核心瓶颈，通用 KV 很难原生
-优化。当前 NoKV 走 LSM prefix scan：
-- 每次 ReadDirPlus 都走 N 个 SST 的 prefix range
-- block cache 装的是 SST data block，不是 packed dirent
-- 大目录（10K+ entry）每次 list 都是 N 次 IO + N 次 decode
+**Pain**: large-directory listing is the central bottleneck for metadata systems; generic KV cannot natively optimize. Today NoKV walks LSM prefix scans:
+- Each ReadDirPlus walks N SSTs' prefix range.
+- Block cache holds SST data blocks, not packed dirents.
+- Large directories (10K+ entries) pay N IOs + N decodes per list.
 
-**机制**：DirPage Slab 把大目录的 dentry+attr 物化成 packed pages：
+**Mechanism**: DirPage Slab materializes large directories' dentry+attr into packed pages:
 
 ```
 DirPage record:
   mount        uint32
   parent_inode uint64
   page_no      uint32
-  frontier     uint64  // WatchSubtree event cursor，判断 page 是否过期
+  frontier     uint64  // WatchSubtree event cursor; check if page is stale
   checksum     uint32
   payload      []packed DentryAttrPair
 ```
 
-**读路径**：
-1. `ReadDirPlus` 先查 DirPageSlab：找 (mount, parent_inode) 的 pages
-2. 如果存在且 frontier ≥ 当前 WatchSubtree epoch → 直接 sequential 读
-   page，O(1) decode 出 DentryAttrPair[]
-3. 否则 fallback LSM prefix scan，async 写入新 page
+**Read path**:
+1. `ReadDirPlus` first checks DirPageSlab: find pages for `(mount, parent_inode)`.
+2. If present and `frontier ≥ current WatchSubtree epoch` → sequential page read, O(1) decode into `DentryAttrPair[]`.
+3. Otherwise, fall back to LSM prefix scan; async-write a new page.
 
-**写路径**：
-- 主写路径**不变**——dentry 仍写 LSM（authoritative truth）
-- DirPage 是 derived，async materialize（compaction 后台 / 第一次
-  ReadDirPlus 时 lazy build）
-- `RenameSubtree` / `Unlink` 把相关 (mount, parent_inode) 的 pages
-  invalid（标 stale），不需要同步重写
+**Write path**:
+- The main write path **does not change** — dentries still go to LSM (authoritative truth).
+- DirPage is derived, async-materialized (compaction background / lazy build on first ReadDirPlus).
+- `RenameSubtree` / `Unlink` invalidates pages for affected `(mount, parent_inode)` (mark stale); no synchronous rewrite required.
 
-**与 fsmeta primitive 的耦合**：
-- WatchSubtree 的 event cursor → DirPage frontier
-- RenameSubtree → invalidate source + dest parent 的 pages
-- SnapshotSubtree → 可以基于 DirPage materialize（如果 frontier 够新）
+**Coupling with fsmeta primitives**:
+- WatchSubtree event cursor → DirPage frontier.
+- RenameSubtree → invalidate source + destination parent pages.
+- SnapshotSubtree → can materialize from DirPage if frontier is fresh enough.
 
-**为什么是 NoKV 的 design point**：
-- 通用 KV（RocksDB / Pebble / Badger）：不知道 "directory" 是什么，
-  没法专门优化
-- TiKV：靠应用层（CDC、TiFlash）做物化，跟 KV 引擎解耦
-- NoKV：fsmeta primitive 是 first-class，DirPage 直接对应
-  `ReadDirPlus`，是引擎自己的 native optimization
+**Why this is the NoKV design point**:
+- Generic KV (RocksDB / Pebble / Badger): doesn't know what a "directory" is, so it can't be specifically optimized.
+- TiKV: depends on application-layer (CDC, TiFlash) materialization, decoupled from the KV engine.
+- NoKV: fsmeta primitives are first-class; DirPage corresponds directly to `ReadDirPlus` — it's a native engine optimization.
 
-**收益**：
-- 大目录 ReadDirPlus 从 N 次 SST IO + N 次 decode → 1 次 page read
-- block cache 不再被大目录 dirent 占据
-- WatchSubtree 集成天然，不需要外部 invalidation 机制
+**Wins**:
+- Large-directory ReadDirPlus goes from N SST IOs + N decodes → 1 page read.
+- Block cache no longer crowded out by large-directory dirents.
+- WatchSubtree integration is natural — no external invalidation mechanism needed.
 
-### 6.4 ValueLog Consumer（Authoritative，保留）
+### 6.4 ValueLog Consumer (Authoritative, retained)
 
-`engine/vlog/` 包**继续存在**，对 `db.go` 接口零改动：
-- bucket 路由、ValuePtr 编解码、discardStats、main manifest 集成都留在
-  vlog 这层
-- 物理 IO 委托给 `slab.Manager`
+The `engine/vlog/` package **stays**, with zero API changes for `db.go`:
+- bucket routing, ValuePtr encode/decode, discardStats, main-manifest integration all stay in this layer.
+- physical IO delegates to `slab.Manager`.
 
-**降级**：从"主写路径默认必经层"降成"value separation consumer"。
-metadata profile（value < threshold）下 commit pipeline 不进 vlog 代码
-路径（Phase 1 fast path）。
+**Demotion**: from "primary write path mandatory" to "value separation consumer". In metadata profile (value < threshold), the commit pipeline doesn't enter vlog code (Phase 1 fast path).
 
-**main manifest 不动**：ValueLog 是 Authoritative class，segment 元数据
-（valueLogHead / discardStats）必须在 main manifest，是 correctness
-边界。
+**Main manifest unchanged**: ValueLog is Authoritative class; segment metadata (valueLogHead / discardStats) must remain in the main manifest — that's the correctness boundary.
 
-## 7. Update Slab：明确移出 v1
+## 7. Update Slab: explicitly out of scope for v1
 
-之前两版 note 都把 UpdateSlab 当成"in-place 优化"。但它**改变了 "一个
-version = 一个 LSM entry" 的 invariant**：
-- snapshot read：拿 LSM 历史版本 + slot 当前值 → 时间错乱
-- Percolator commit：lock/write/data 三列，slot 走哪一列？slot CAS 跟
-  lock acquire 怎么排序？
-- crash recovery：WAL replay 主路径 entry vs slot record 的相对顺序怎么定？
-- Bloom + range filter：slot 改了不通过 LSM，filter 不变 → false negative
+Both prior versions treated UpdateSlab as "in-place optimization." But it **breaks the invariant "one version = one LSM entry"**:
+- snapshot read: get LSM historical version + slot current value → time-warp.
+- Percolator commit: lock/write/data three CFs — which CF does the slot live in? How does slot CAS sequence with lock acquire?
+- crash recovery: how do we order WAL replay's main-path entry vs slot record?
+- Bloom + range filter: slot updates don't go through LSM; the filter doesn't change → false negative.
 
-UpdateSlab 是 **Transactional class**，必须独立 design RFC。如果以后做，
-设计应该是 **versioned append/delta**（每次 update 写新 version 到 slab，
-版本链跟 MVCC 对齐），**不是 in-place fixed slot**。
+UpdateSlab is **Transactional class**; it must be its own RFC. If we ever build it, the design should be **versioned append/delta** (each update writes a new version into slab; the version chain aligns with MVCC), **not** in-place fixed slot.
 
-本次 vlog 重构 **不做 UpdateSlab**。
+This vlog refactor **does not include UpdateSlab**.
 
-## 8. 创新点（论文级 design points）
+## 8. Innovation list (paper-grade design points)
 
-| Design point | 含义 | 跟谁不一样 |
+| Design point | Meaning | Different from |
 |---|---|---|
-| **Primitive-aware physical layout** | 物理位置按 metadata primitive 决定，不按 value size threshold | RocksDB / Badger 都是 size-based |
-| **Authority-scoped lifecycle** | slab 创建/seal/retire 跟 mount / subtree / snapshot epoch 绑定 | 通用 KV 靠后台 GC scan reference |
-| **Correctness-class separation** | Authoritative / Lifecycle-bound / Derived / Transactional 明确分开 | 大多数 KV 把 cache 和 data 当成同种东西 |
-| **Directory-page materialization** | ReadDirPlus 从 KV prefix scan → metadata-native page read | 通用 KV 不知道 dir 是什么 |
-| **Snapshot as storage artifact** | SnapshotSubtree 产出 sealed slab，可 export/transfer | snapshot 通常是 MVCC token，不是物理对象 |
-| **GC by lifecycle, not scanning** | 整文件 unlink，不需要 reference counting | vlog GC 必须 sample + scan |
+| **Primitive-aware physical layout** | Physical location determined by metadata primitive, not value-size threshold. | RocksDB / Badger are size-based. |
+| **Authority-scoped lifecycle** | Slab create/seal/retire bound to mount / subtree / snapshot epoch. | Generic KVs rely on background GC scanning references. |
+| **Correctness-class separation** | Authoritative / Lifecycle-bound / Derived / Transactional explicitly separated. | Most KVs treat cache and data as the same kind of thing. |
+| **Directory-page materialization** | ReadDirPlus from KV prefix scan → metadata-native page read. | Generic KVs don't know what a directory is. |
+| **Snapshot as storage artifact** | SnapshotSubtree produces a sealed slab, can export/transfer. | Snapshots are usually MVCC tokens, not physical objects. |
+| **GC by lifecycle, not scanning** | Whole-file unlink, no reference counting. | vlog GC must sample + scan. |
 
-这六个里面，**Directory-page materialization** 和 **Authority-scoped
-lifecycle** 是真正"NoKV 自己的东西"——前者直接对应 fsmeta primitive，
-后者直接对应三平面定位（control plane 事件驱动 slab 生命周期）。
+Of these six, **Directory-page materialization** and **Authority-scoped lifecycle** are the "NoKV-original" pieces — the former corresponds directly to fsmeta primitives; the latter aligns with the three-plane positioning (control-plane events drive slab lifecycle).
 
-## 9. v1 路线
+## 9. v1 roadmap
 
-| Phase | 动作 | Class | 状态 | 验证 |
+| Phase | Action | Class | Status | Validation |
 |---|---|---|---|---|
-| **0** | LogFile.Write high-water CAS | — | ✓ done (PR #161, b6b0dd25) | 1M+3KB 全 6 workload 第一 |
-| **0a** | manager 并发 AppendEntries+Read 测试 | — | ✓ done (PR #161) | invariant V1 显式覆盖 |
-| **0b** | 修正 design note（本文） | — | ✓ done | 本文 |
+| **0** | LogFile.Write high-water CAS | — | ✓ done (PR #161, b6b0dd25) | 1M+3KB all 6 workloads first |
+| **0a** | manager concurrent AppendEntries+Read tests | — | ✓ done (PR #161) | invariant V1 explicitly covered |
+| **0b** | Correct design note (this) | — | ✓ done | this note |
 | **1** | metadata default no-offload fast path | — | ✓ done (c0458f03) | BenchmarkDBCommitVlogFastPath inline +22%~+64% |
-| **2** | 抽 `engine/slab/Segment` 物理层；vlog 文件层改 wrapper | — | ✓ done (083a71a0) | 现有 vlog 单测 + 1M+3KB bench 全绿 |
-| **2a** | `Segment` size 语义重做（Open=0, LoadSizeFromFile, Capacity） | — | ✓ done | TestSegmentFreshOpenSizeIsZero / TestSegmentLoadSizeFromFile |
-| **3** | NegativeSlab + 顶层 `NoKV.Options` 透传 | Derived | ✓ done (c0dbaa35 + 后续) | TestNegativeCachePersistsAcrossOpen |
-| **4** | SnapshotSlab spike → 不做 | Lifecycle-bound | ✓ done | `2026-04-27-snapshot-slab-spike.md` |
-| **5** | DirPageSlab RFC（API + 格式 + frontier） | Derived | ✓ RFC done | `2026-04-27-dirpage-slab-rfc.md` |
-| **5b** | 拆出 `engine/slab/Manager` + vlog 降级成 wrapper | — | ✓ done | 现有 vlog/lsm 全测 + 数据 race-free |
-| **5c-5f** | DirPageSlab 实现（page write/read、ReadDirPlus 集成、失效、bench） | Derived | TODO | 大目录 ReadDirPlus latency |
-| **6** | UpdateSlab 独立 RFC | Transactional | independent | 先 design 后实现，**不在本分支** |
+| **2** | Extract `engine/slab/Segment` physical layer; vlog file layer becomes a wrapper | — | ✓ done (083a71a0) | existing vlog unit tests + 1M+3KB bench all green |
+| **2a** | Redo `Segment` size semantics (Open=0, LoadSizeFromFile, Capacity) | — | ✓ done | TestSegmentFreshOpenSizeIsZero / TestSegmentLoadSizeFromFile |
+| **3** | NegativeSlab + top-level `NoKV.Options` propagation | Derived | ✓ done (c0dbaa35 + later) | TestNegativeCachePersistsAcrossOpen |
+| **4** | SnapshotSlab spike → not building | Lifecycle-bound | ✓ done | `2026-04-27-snapshot-slab-spike.md` |
+| **5** | DirPageSlab RFC (API + format + frontier) | Derived | ✓ RFC done | `2026-04-27-dirpage-slab-rfc.md` |
+| **5b** | Split out `engine/slab/Manager` + downgrade vlog to wrapper | — | ✓ done | existing vlog/lsm full tests + race-clean |
+| **5c-5f** | DirPageSlab implementation (page write/read, ReadDirPlus integration, invalidation, bench) | Derived | TODO | large-directory ReadDirPlus latency |
+| **6** | UpdateSlab independent RFC | Transactional | independent | design first, then implement, **not on this branch** |
 
-## 10. 1M + 3KB bench baseline（vlog 路径走满）
+## 10. 1M + 3KB bench baseline (vlog path fully exercised)
 
-Phase 0 fix 后跑通，全 6 workload NoKV 第一：
+After Phase 0 fix, all 6 workloads place NoKV first:
 
 | Workload | NoKV | Badger | Pebble | NoKV vs Badger |
 |---|---|---|---|---|
@@ -318,41 +255,25 @@ Phase 0 fix 后跑通，全 6 workload NoKV 第一：
 | E scan | 69K | 29K | 46K | 2.4x |
 | F RMW | 510K | 225K | 26K | 2.3x |
 
-这是 vlog 路径走满（Authoritative consumer）的对比起点。Phase 1 完成后
-跑 1M+1KB（不触发 value separation）作为 metadata profile baseline。
-Phase 5 DirPageSlab 完成后跑专门的大目录 ReadDirPlus bench（fsmeta 自己
-的 workload，不是 YCSB）。
+This is the comparison starting point with vlog fully exercised (Authoritative consumer). After Phase 1 ships, run 1M+1KB (no value separation) as the metadata-profile baseline. After Phase 5 DirPageSlab ships, run a dedicated large-directory ReadDirPlus bench (fsmeta's own workload, not YCSB).
 
-## 11. 决策日志
+## 11. Decision log
 
-- **不做"通用 vlog"**：slab 是 NoKV native primitive 的 typed sidecar
-  物理执行层，不是 BadgerDB 风格的 generic value separation
-- **物理层叫 Slab，单文件叫 Segment**：跟 kernel allocator / RocksDB /
-  Pebble 术语对齐
-- **vlog 包名保留**：跟 Badger / RocksDB BlobDB 命名沿袭一致，外部用户
-  不困惑
-- **ValueLog 元数据留在 main manifest**：Authoritative class，是
-  correctness 边界
-- **Negative / DirPage 用独立 SlabManifest 或不用 manifest**：Derived
-  class，丢失可重建
-- **DirPage Slab 是核心创新**：直接对应 fsmeta `ReadDirPlus` primitive，
-  是其他通用 KV 没有的 design point
-- **UpdateSlab 移出本次重构**：Transactional class，破坏 "一个 version
-  = 一个 LSM entry" invariant，必须独立 RFC
-- **DeleteSlab 移出本次重构**：现有 LSM RangeTombstone 已经覆盖大部分
-  批量删除场景
-- **Snapshot consumer 加 spike 调研**：可能跟 SST snapshot install 重复
+- **Don't build a "generic vlog"**: slab is a typed sidecar physical layout for NoKV native primitives, not a BadgerDB-style generic value separation.
+- **Physical layer named Slab; single file named Segment**: aligned with kernel allocator / RocksDB / Pebble terminology.
+- **Keep the vlog package name**: consistent with Badger / RocksDB BlobDB conventions; users won't be confused.
+- **ValueLog metadata stays in main manifest**: Authoritative class — correctness boundary.
+- **Negative / DirPage use independent SlabManifest or no manifest**: Derived class; lossy-recoverable.
+- **DirPage Slab is the core innovation**: directly corresponds to fsmeta `ReadDirPlus`; no other generic KV has this design point.
+- **UpdateSlab out of this refactor**: Transactional class; breaks "one version = one LSM entry" invariant — must be its own RFC.
+- **DeleteSlab out of this refactor**: existing LSM RangeTombstone already covers most batch-delete cases.
+- **Add a spike for the Snapshot consumer**: may overlap with SST snapshot install.
 
-## 12. 关联文档
+## 12. Related notes
 
-- `2026-04-27-sharded-wal-memtable.md` — 主写路径 sharding，跟 Phase 1
-  no-offload fast path 都是主路径优化
-- `2026-04-27-parallel-l0-compaction.md` — compaction 并行化
-- `2026-03-31-sst-snapshot-install.md` — raft-level snapshot install
-  现状，Phase 4 spike 时需要参考
-- `2026-04-25-namespace-authority-events-umbrella.md` — control plane
-  事件下发模型，DirPage / Snapshot Slab 的 lifecycle 触发要对齐
-- `2026-04-24-fsmeta-positioning.md` — fsmeta 产品定位，slab consumer
-  设计的源头
-- `2026-04-25-snapshot-subtree-mvcc-epoch.md` — SnapshotSubtree 的
-  epoch 模型，SnapshotSlab 的 lifecycle 基础
+- `2026-04-27-sharded-wal-memtable.md` — primary write-path sharding; both this and Phase 1 no-offload fast path are main-path optimizations.
+- `2026-04-27-parallel-l0-compaction.md` — compaction parallelization.
+- `2026-03-31-sst-snapshot-install.md` — current raft-level snapshot install; reference during Phase 4 spike.
+- `2026-04-25-namespace-authority-events-umbrella.md` — control-plane event delivery model; DirPage / Snapshot Slab lifecycle triggers must align.
+- `2026-04-24-fsmeta-positioning.md` — fsmeta product positioning; the source of slab-consumer designs.
+- `2026-04-25-snapshot-subtree-mvcc-epoch.md` — SnapshotSubtree epoch model; lifecycle foundation for SnapshotSlab.

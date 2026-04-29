@@ -1855,7 +1855,7 @@ func TestLandingShardParallelSafety(t *testing.T) {
 // baseTest performs correctness checks.
 func baseTest(t *testing.T, lsm *LSM, n int) {
 	// Tracking entry for debugging.
-	e := kv.NewInternalEntry(kv.CFDefault, []byte("CRTS😁NoKVMrGSBtL"), kv.MaxVersion, []byte("我草了"), 0, 123)
+	e := kv.NewInternalEntry(kv.CFDefault, []byte("CRTS😁NoKVMrGSBtL"), kv.MaxVersion, []byte("debug-tracker"), 0, 123)
 	defer e.DecrRef()
 	//caseList := make([]*kv.Entry, 0)
 	//caseList = append(caseList, e)

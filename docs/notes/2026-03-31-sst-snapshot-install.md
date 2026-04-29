@@ -1,38 +1,38 @@
-# 2026-03-31 基于 SST 的 Snapshot Install 设计与实现
+# 2026-03-31 SST-based snapshot install design and implementation
 
-> 状态：已在 migration 路径和内部 raft snapshot payload 路径中落地。本文重点解释为什么 NoKV 选择了“region-scoped、self-contained、与源端 vlog 独立”的 SST snapshot 方案。
+> Status: shipped on the migration path and the internal raft snapshot payload path. This note explains why NoKV picked the "region-scoped, self-contained, source-vlog-independent" SST snapshot scheme.
 
-## 导读
+## TL;DR
 
-- 🧭 主题：为什么 NoKV 要把 snapshot install 做成 region-scoped、自描述、可回滚的 SST 协议。
-- 🧱 核心对象：`snapshot.json`、`tables/*.sst`、external SST ingest、rollback。
-- 🔁 调用链：`ExportSnapshot -> snapshot dir -> ImportSnapshot -> staged publish/rollback`。
-- 📚 参考对象：LSM external ingest、工业分布式 KV 的 range snapshot install。
+- 🧭 Topic: why NoKV builds snapshot install as a region-scoped, self-describing, rollback-capable SST protocol.
+- 🧱 Core objects: `snapshot.json`, `tables/*.sst`, external SST ingest, rollback.
+- 🔁 Call chain: `ExportSnapshot -> snapshot dir -> ImportSnapshot -> staged publish/rollback`.
+- 📚 Reference: LSM external ingest, range snapshot install in industrial distributed KVs.
 
-## 1. 为什么这件事重要
+## 1. Why this matters
 
-在 standalone 到 distributed 的桥接已经成立之后，真正的瓶颈不再是“流程怎么走”，而是：
+Once the standalone-to-distributed bridge is in place, the real bottleneck stops being "what's the flow" and becomes:
 
-> 数据怎么以更低写放大、更清楚恢复语义的方式搬过去。
+> How to move data with lower write amplification and clearer recovery semantics.
 
-第一阶段 correctness-first 的路径是对的：
+The first stage's correctness-first path was right:
 
-- 逻辑 region snapshot
-- 内存 payload
-- 常规 write/apply 路径导入
+- Logical region snapshot
+- In-memory payload
+- Import via the regular write/apply path
 
-但这条路径有明显代价：
+But that path has obvious cost:
 
-- 全量逻辑重编码
-- 大 snapshot 内存开销偏高
-- 目标侧还要再走一遍常规 write path
-- 写放大较大
+- Full logical re-encoding
+- High memory cost for big snapshots
+- The destination still has to walk the regular write path
+- Considerable write amplification
 
-所以需要升级 snapshot install 的数据搬运层。
+So the data-transport layer of snapshot install needs an upgrade.
 
-## 2. 当前系统边界
+## 2. Current system boundary
 
-相关代码：
+Relevant code:
 
 - `raftstore/snapshot/meta.go`
 - `raftstore/snapshot/dir.go`
@@ -43,11 +43,11 @@
 - `lsm/external_sst.go`
 - `db_snapshot.go`
 
-分层如下：
+Layering:
 
 ```mermaid
 flowchart TD
-    SRC["源 region 逻辑迭代"] --> EXP["ExportSnapshot / ExportSnapshotTo"]
+    SRC["source region logical iteration"] --> EXP["ExportSnapshot / ExportSnapshotTo"]
     EXP --> META["snapshot.json"]
     EXP --> SST["tables/*.sst"]
     SST --> IMP["ImportSnapshot / ImportSnapshotFrom"]
@@ -55,83 +55,83 @@ flowchart TD
     IMP --> RS["raftstore install / migrate expand"]
 ```
 
-## 3. 设计目标
+## 3. Design goals
 
-这次设计不是重做 migration 主线，而是只替换“数据搬运层”。
+This work is not a redesign of the migration trunk — it only replaces the data-transport layer.
 
-保持不变的东西：
+What stays the same:
 
-- standalone 提升成 full-range seed region
-- `expand` 把 seed 扩成 replicated region
-- install-before-publish 的生命周期边界
+- Standalone is promoted into a full-range seed region.
+- `expand` grows the seed into a replicated region.
+- Install-before-publish lifecycle boundary.
 
-要改进的东西：
+What we want to improve:
 
-- snapshot 产物形式
-- install 的写放大
-- 大 snapshot 的内存占用
+- Snapshot artifact format
+- Install write amplification
+- Memory footprint for large snapshots
 
-## 4. 我们最终采用的设计
+## 4. The design we ended up with
 
 ### 4.1 region-scoped
 
-snapshot 以 region key range 为边界，而不是以底层 LSM 文件边界为边界。
+Snapshot boundaries are region key ranges, not the underlying LSM file boundaries.
 
 ### 4.2 self-contained
 
-导出的 snapshot 必须自描述：
+The exported snapshot must be self-describing:
 
-- 自带 `snapshot.json`
-- 自带 `tables/*.sst`
-- 不依赖源端额外目录结构
+- Carries its own `snapshot.json`
+- Carries its own `tables/*.sst`
+- Doesn't depend on extra source-side directory structure
 
-### 4.3 与源端 vlog 独立
+### 4.3 independent of source-side vlog
 
-这里是最关键的一点。
+This is the most important point.
 
-因为 NoKV 使用 value separation，一部分 value 可能以 `ValuePtr` 形式留在 vlog 中。直接搬现有 SST 文件会遇到一个致命问题：
+NoKV uses value separation, so some values may live in vlog as `ValuePtr`. Carrying existing SST files directly hits a fatal issue:
 
-- 目标端导入后，SST 里的引用仍然可能指向源端 vlog
+- After import on the destination, references inside the SST may still point at the source's vlog.
 
-所以当前第一阶段方案明确要求：
+So the first-stage scheme explicitly mandates:
 
-> snapshot export 时把 value materialize 成 inline user bytes。
+> When exporting a snapshot, materialize values into inline user bytes.
 
-这样目标端不需要继续理解源端 vlog 布局。
+This way the destination doesn't need to understand the source's vlog layout.
 
-## 5. 为什么一些更简单的方案是错的
+## 5. Why simpler-looking alternatives are wrong
 
-### 5.1 直接复用现有 SST 文件
+### 5.1 Reuse existing SST files directly
 
-这条路看起来最省事，但对第一阶段是错的。原因：
+Looks easiest, but wrong for stage 1. Reasons:
 
-- 现有 SST 边界未必和 region 边界一致
-- 现有 SST 可能仍然依赖源端 vlog
-- 会把 compaction 历史反向泄露给 snapshot 协议
+- Existing SST boundaries don't necessarily match region boundaries.
+- Existing SSTs may still depend on the source vlog.
+- It leaks compaction history backwards into the snapshot protocol.
 
-### 5.2 把源端 vlog 一起打包
+### 5.2 Bundle the source vlog along with the snapshot
 
-这条路理论上可行，但第一阶段不值得。
+Theoretically feasible, but not worth it for stage 1.
 
-因为这样 install 协议会立刻变成：
+The install protocol immediately balloons into:
 
-- SST 文件
+- SST files
 - vlog segments
-- vlog head / manifest 语义
-- 跨层 rollback
+- vlog head / manifest semantics
+- Cross-layer rollback
 
-复杂度上升太快。
+Complexity grows too fast.
 
-### 5.3 把 split / reshard 和 snapshot redesign 一起做
+### 5.3 Combine split / reshard with snapshot redesign
 
-这也不适合第一阶段。当前正确的顺序应该是：
+Also wrong order for stage 1. The right sequence is:
 
-1. 先把 snapshot install 这条数据搬运链做干净
-2. 再讨论更复杂的 reshard/reshaping 联动
+1. First clean up the snapshot install data-transport chain.
+2. Then discuss more complex reshard/reshaping linkage.
 
-## 6. Snapshot 目录长什么样
+## 6. What the snapshot directory looks like
 
-当前目录形态：
+Current layout:
 
 ```text
 snapshot/
@@ -142,21 +142,21 @@ snapshot/
     ...
 ```
 
-其中：
+Where:
 
 - `snapshot.json`
   - region-scoped manifest
-  - 记录版本、region、entry_count、table_count、size、created_at 等信息
+  - records version, region, entry_count, table_count, size, created_at
 - `tables/*.sst`
-  - snapshot 专用 SST payload
+  - snapshot-specific SST payload
 
-这个 manifest 不是用来替代 LSM 的 `MANIFEST`，而是为了明确表达：
+This manifest is not a replacement for the LSM `MANIFEST` — it explicitly states:
 
-> 这是一个 region-scoped snapshot contract。
+> "This is a region-scoped snapshot contract."
 
-## 7. 导出与安装调用逻辑
+## 7. Export and install call flow
 
-### 7.1 导出
+### 7.1 Export
 
 ```mermaid
 sequenceDiagram
@@ -164,13 +164,13 @@ sequenceDiagram
     participant SNAP as snapshot exporter
     participant LSM as SST builder
 
-    SRC->>SNAP: 按 region key range 迭代 entry
+    SRC->>SNAP: iterate entries by region key range
     SNAP->>SNAP: materialize inline value
-    SNAP->>LSM: 生成 snapshot 专用 SST
-    SNAP->>SNAP: 写 snapshot.json
+    SNAP->>LSM: build snapshot-specific SST
+    SNAP->>SNAP: write snapshot.json
 ```
 
-### 7.2 安装
+### 7.2 Install
 
 ```mermaid
 sequenceDiagram
@@ -179,71 +179,71 @@ sequenceDiagram
     participant LSM as external SST ingest
     participant RS as raftstore
 
-    SNAP->>IMP: 读取 snapshot.json + tables/*.sst
+    SNAP->>IMP: read snapshot.json + tables/*.sst
     IMP->>LSM: import external SST
-    IMP-->>RS: 返回 staged result
+    IMP-->>RS: return staged result
     RS->>RS: publish / host peer
-    alt publish 失败
+    alt publish fails
         RS->>IMP: rollback imported files
     end
 ```
 
-## 8. 为什么 `ImportSnapshot(...)` 返回富结果
+## 8. Why `ImportSnapshot(...)` returns a rich result
 
-这是当前设计里一个经常被忽略、但非常重要的点。
+This is an often-overlooked but very important detail.
 
-`ImportSnapshot(...)` 返回的不是“一个 region meta”，而是 staged result。因为高层 install 必须处理这条生命周期：
+`ImportSnapshot(...)` returns not "one region meta" but a staged result. Because the high-level install must handle the lifecycle:
 
-1. 导入 SST
-2. 尝试 publish / host peer
-3. 如果高层 publish 失败，需要 rollback 已导入文件
+1. Import SST
+2. Attempt publish / host peer
+3. If high-level publish fails, rollback imported files
 
-所以 import 结果必须至少携带：
+So the import result must carry at least:
 
-- 导入后的 region/meta
-- 已导入 file id
-- rollback 能力
+- The imported region/meta
+- The list of imported file IDs
+- Rollback capability
 
-这样高层 install 才能保持 snapshot 语义，同时仍然拥有正确的失败回滚路径。
+Only then can the high-level install preserve snapshot semantics while keeping a correct failure-rollback path.
 
-## 9. 设计理念
+## 9. Design philosophy
 
-### 9.1 Snapshot 协议要面向 region，不要面向 LSM 现状
+### 9.1 Snapshot protocol must be region-shaped, not LSM-state-shaped
 
-### 9.2 第一阶段先保证 self-contained，再追求更激进的零拷贝
+### 9.2 First stage prefers self-contained over aggressive zero-copy
 
-### 9.3 安装失败必须能 rollback，不能让 ingest 成为单向脏写
+### 9.3 Install failure must roll back — ingest must not become a one-way dirty write
 
-## 10. 参考对象
+## 10. Reference patterns
 
-这里借鉴的是几类成熟思路：
+Borrows from several mature ideas:
 
-- LSM 系统里的 external SST ingest
-- 分布式 KV 里的 region/range snapshot install
-- 工业系统中对 rollback 和 staged publish 的严格要求
+- External SST ingest in LSM systems
+- Region/range snapshot install in distributed KVs
+- Strict rollback and staged publish requirements in industrial systems
 
-NoKV 当前没有照搬某个现成实现，而是把这些思路收进了自己现有的 migration 和 snapshot 分层中。
+NoKV doesn't copy any one implementation — these ideas are folded into the existing migration and snapshot layering.
 
-## 11. 当前已经做到的
+## 11. What's already in place
 
-- region-scoped snapshot 目录已经成立
-- external SST ingest primitive 已存在
-- snapshot install 已接入 migration / raftstore 主线
-- rollback 语义已经进入接口设计
+- region-scoped snapshot directory exists
+- external SST ingest primitive exists
+- snapshot install is wired into migration / raftstore trunk
+- rollback semantics are part of the interface design
 
-## 12. 后续还值得继续做的
+## 12. Worth doing later
 
-- 针对超大 snapshot 的 streaming / chunking
-- 更系统的 install 观测和性能基准
-- 是否要研究更强的 vlog-aware snapshot 优化
+- Streaming / chunking for very large snapshots
+- More systematic install observability and perf benchmarks
+- Whether to research stronger vlog-aware snapshot optimization
 
-## 13. 总结
+## 13. Summary
 
-NoKV 当前的 SST snapshot install 设计，本质上不是“把现有 SST 拿来搬一搬”，而是：
+NoKV's current SST snapshot install isn't "haul the existing SSTs over." It's:
 
-- 以 region 语义为中心
-- 导出 self-contained snapshot
-- 保持与源端 vlog 解耦
-- 把 install 和 rollback 做成正式协议
+- Region-shaped semantics at the center
+- Export self-contained snapshots
+- Stay decoupled from source vlog
+- Install + rollback as a formal protocol
 
-这条线让 migration 和 snapshot install 继续保持干净，也为后面做更高性能的 snapshot 路线留出了空间。
+This keeps migration and snapshot install clean, and leaves room for higher-performance snapshot routes later.

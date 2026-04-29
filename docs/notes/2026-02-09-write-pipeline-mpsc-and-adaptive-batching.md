@@ -1,61 +1,52 @@
-# NoKV 写入流水线：从 MPSC 节拍器到自适应聚合的深度演进
+# NoKV write pipeline: from an MPSC metronome to adaptive aggregation
 
-高性能存储引擎的写入路径必须像“节拍器”一样稳定。NoKV 的写入流水线不仅是一个并发队列，它是一套具备 **自适应反馈能力** 和 **分段一致性保证** 的异步聚合系统。本文深度拆解 NoKV 如何在高并发压力下保持极致的写入吞吐与低尾延迟。
-
----
-
-## 1. 架构模型：MPSC 聚合流水线
-
-NoKV 并没有让每个用户协程都直接去竞争底层的磁盘锁或 WAL 互斥量，而是采用了 **MPSC (Multi-Producer, Single-Consumer)** 异步聚合模型。
-
-### 1.1 设计背景：为什么是 MPSC？
-在 LSM 引擎中，WAL (预写日志) 的写入必须是严格顺序的。如果让 1000 个用户协程并发地调用 `write()` 系统调用，内核态的上下文切换和文件锁竞争会瞬间压垮系统。
-NoKV 通过 MPSC 模型，将数千个前台并发压力汇聚到一个后台 `commitWorker` 中，将随机小写入转化为大块的顺序磁盘 IO。
-
-### 1.2 核心组件：commitQueue
-`commitQueue`（位于 `internal/runtime/write_pipeline.go`）现在是一个围绕
-`utils.MPSCQueue[*commitRequest]` 封装的专用写入队列，而不是旧的
-RingBuffer + 双 channel 协议。当前实现由三部分组成：
-* **Bounded MPSC queue**：基于每槽位 sequence 的 bounded
-  multi-producer/single-consumer 队列，提供严格单 consumer 语义和显式
-  shutdown。
-* **Long-lived consumer session**：`commitWorker` 启动后只获取一次
-  `MPSCConsumer`，通过 `Pop`/`DrainReady` 批量取请求，减少热路径上的重复
-  acquire/release 开销。
-* **队列外统计与背压**：`pendingEntries`、`pendingBytes` 和
-  `ReservedLen()` 共同决定积压观测与批次放大；队列满时由 `MPSCQueue`
-  自身阻塞 producer，而不是依赖额外 “spaces/items” channel。
+A high-performance storage engine's write path needs to behave like a metronome — steady. NoKV's write pipeline is not just a concurrent queue; it's an asynchronous aggregation system with **adaptive feedback** and **per-stage consistency guarantees**. This note dissects how NoKV holds high write throughput and low tail latency under heavy concurrent pressure.
 
 ---
 
-## 2. 自适应批处理算法 (Adaptive Coalescing)
+## 1. The architectural model: an MPSC aggregation pipeline
 
-`nextCommitBatch` 是整个流水线的灵魂。它不是死板地按照固定大小打包，而是能够根据系统负载动态调整其“吞吐模式”。
+NoKV does **not** let every user goroutine fight for the underlying disk lock or WAL mutex directly. Instead, it uses an **MPSC (Multi-Producer, Single-Consumer)** asynchronous aggregation model.
 
-### 2.1 积压驱动的动态上限
-系统实时监控队列积压程度（`commitQueue.len()`，底层是
-`MPSCQueue.ReservedLen()`）。当积压严重时，Worker 会自动“变强”：
+### 1.1 Why MPSC?
+In an LSM engine, WAL (write-ahead log) writes must be strictly sequential. Letting a thousand user goroutines call `write()` concurrently floods the kernel with context switches and file-lock contention.
+NoKV uses MPSC to funnel thousands of foreground producers into a single background `commitWorker`, converting random small writes into large sequential disk I/O.
+
+### 1.2 Core component: `commitQueue`
+`commitQueue` (in `internal/runtime/write_pipeline.go`) is now a write-specific queue wrapped around `utils.MPSCQueue[*commitRequest]`, replacing the old RingBuffer + dual-channel protocol. Today's implementation has three pieces:
+* **Bounded MPSC queue**: a bounded multi-producer / single-consumer queue using per-slot sequence numbers, providing strict single-consumer semantics and explicit shutdown.
+* **Long-lived consumer session**: once `commitWorker` starts, it acquires `MPSCConsumer` exactly once and uses `Pop`/`DrainReady` to batch-pull requests. This avoids repeat acquire/release on the hot path.
+* **Out-of-queue accounting and backpressure**: `pendingEntries`, `pendingBytes`, and `ReservedLen()` together drive backlog observation and batch amplification. When the queue is full, `MPSCQueue` itself blocks producers — we don't lean on a separate "spaces/items" channel.
+
+---
+
+## 2. Adaptive batching algorithm
+
+`nextCommitBatch` is the soul of the pipeline. It does not pack into fixed-size batches mechanically — it dynamically reshapes its "throughput mode" based on system load.
+
+### 2.1 Backlog-driven dynamic ceiling
+The system continuously observes queue backlog (`commitQueue.len()`, internally `MPSCQueue.ReservedLen()`). When backlog grows, the worker "levels up":
 ```go
-// 动态调整 Batch 限制
+// Dynamically scale the batch limit
 backlog := cq.len()
 if backlog > limitCount {
-    // 如果队列积压，按比例放大 Batch 大小，最高 4 倍
+    // If the queue is backing up, grow the batch size up to 4x.
     factor := min(max(backlog/limitCount, 1), 4)
     limitCount = min(limitCount*factor, backlog)
     limitSize *= int64(factor)
 }
 ```
-**设计价值**：这利用了批处理的规模效应。压力越大，聚合度越高，单次磁盘 I/O 摊薄的成本就越低，从而在高压下实现吞吐量的“逆增长”。
+**Design value**: this exploits batching economy of scale. The more pressure, the deeper the batches, the lower the per-byte cost of each disk I/O. The result is a counter-intuitive "throughput growth" effect under load.
 
-### 2.2 现状
-当前实现不再基于 Thermos 放大写批次。批处理大小只由队列压力和显式批次限制决定。
+### 2.2 Current status
+The current implementation no longer scales batch size based on Thermos. Batch size is determined by queue pressure and explicit batch limits only.
 
-### 2.3 Coalesce 等待机制
-在队列瞬时为空时，Worker 不会立即触发提交，而是会短暂等待一个 `WriteBatchWait`（默认 200us）。这个微小的停顿是低延迟与高吞吐之间的微妙平衡点，它能让微量的突发流量共享一次 `fsync` 成本。
+### 2.3 Coalescing wait
+When the queue is briefly empty, the worker doesn't fire a commit immediately — it waits for a short `WriteBatchWait` (default 200µs). This tiny pause is the delicate balance between low latency and high throughput: it lets a small burst share a single `fsync` cost.
 
 ---
 
-## 3. 核心调用逻辑：一个请求的“入库”之旅
+## 3. The core call flow: one request's journey
 
 ```mermaid
 graph TD
@@ -64,7 +55,7 @@ graph TD
     B -- Pass --> C[Encode Internal Key]
     C --> D["Push to MPSC commit queue"]
     D --> E[Wait for Request.WaitGroup]
-    
+
     subgraph "commitWorker (Background)"
         F["nextCommitBatch: Pop + DrainReady"] --> G[vlog.write: Value Separation]
         G --> H[wal.Append: Durability]
@@ -75,42 +66,40 @@ graph TD
         K --> M[Signal All WaitGroups]
         L --> M
     end
-    
+
     M --> N[User returns Success/Err]
 ```
 
 ---
 
-## 4. 健壮性设计：分段式错误归因与回滚
+## 4. Robustness: per-stage error attribution and rollback
 
-在聚合系统中，最怕的是“一人犯错，全家连坐”。如果一个包含 100 个请求的 Batch 在执行到第 50 个时磁盘满了，剩下的 50 个怎么办？
+In an aggregation system, the worst outcome is "one error, everybody pays." If a batch of 100 requests fails on item 50 because the disk filled up, what happens to the other 50?
 
-NoKV 实现了 **精确的失败路径追踪**：
-1.  **逐请求执行**：`applyRequests` 会在遇到第一个错误时停止，并返回 `failedAt` 索引。
-2.  **错误隔离**：
+NoKV uses **precise failure-point tracking**:
+1.  **Per-request execution**: `applyRequests` stops on the first error and returns the `failedAt` index.
+2.  **Error isolation**:
     ```go
-    // finishCommitRequests 负责分发结果
+    // finishCommitRequests routes the result.
     for i, cr := range batch.reqs {
         if i < failedAt {
-            cr.req.Err = nil // 前面的请求已经成功落盘
+            cr.req.Err = nil // requests before the fault are durable.
         } else {
-            cr.req.Err = actualErr // 从失败点开始的所有请求标记为错误
+            cr.req.Err = actualErr // everything from the fault on is marked failed.
         }
         cr.req.wg.Done()
     }
     ```
-3.  **VLog 回滚**：如果写入一半失败，VLog 会执行 `Rewind` 操作，将文件头指针回滚到上一个已知的安全点，防止留下不完整的脏数据。
+3.  **VLog rollback**: if a write fails partway through, the VLog `Rewind`s its file head pointer back to the last known safe point, preventing partial dirty data from staying behind.
 
 ---
 
-## 5. 性能参数推导与调优
+## 5. Tunable parameters and their reasoning
 
-| 参数 | 默认值 | 调优逻辑 |
+| Parameter | Default | Tuning rationale |
 | :--- | :--- | :--- |
-| `WriteBatchMaxCount` | 64 | 聚合深度。提高可增加吞吐，但会拉长 P99 延迟。 |
-| `WriteBatchWait` | 200us | 聚合等待时间。Sync 写场景下建议保留，非 Sync 场景可设为 0。 |
-| `SyncWrites` | false | 是否每次 Batch 都调用 `fsync`。设为 true 会让吞吐下降一个数量级，但保证强持久性。 |
+| `WriteBatchMaxCount` | 64 | Aggregation depth. Higher boosts throughput but stretches P99. |
+| `WriteBatchWait` | 200µs | Coalesce wait. Recommended for sync-write scenarios; can drop to 0 in async-write mode. |
+| `SyncWrites` | false | Whether to call `fsync` on every batch. Setting it true lowers throughput by an order of magnitude but guarantees strong durability. |
 
-**总结**：NoKV 的写路径通过 bounded MPSC 聚合、批量 `DrainReady` 和
-显式的 value-log / LSM / sync 分段，避免前台协程直接竞争底层持久化路径。
-这种“漏斗式”设计配合自适应批处理，是当前写入吞吐和尾延迟控制的关键。 
+**Bottom line**: NoKV's write path keeps foreground goroutines off the persistence hot path through a bounded MPSC funnel, batch `DrainReady`, and explicit value-log / LSM / sync staging. This funnel design plus adaptive batching is the key to current write throughput and tail-latency control.

@@ -1,25 +1,25 @@
-# 2026-03-30 分布式测试为什么不能只靠黑盒，以及 failpoint 该怎么克制
+# 2026-03-30 Why distributed testing can't lean on black-box alone, and how to keep failpoints disciplined
 
-> 状态：当前 NoKV 已经形成多层分布式测试体系。本文重点不是罗列 case，而是解释为什么测试必须按边界和故障模型分层。
+> Status: NoKV has built up a multi-tier distributed test framework. The point of this note is **not** to enumerate cases — it's to explain why testing must be layered by boundary and fault model.
 
-## 导读
+## TL;DR
 
-- 🧭 主题：为什么分布式测试必须同时有黑盒路径验证和窄边界故障注入。
-- 🧱 核心对象：`testcluster`、failpoint、integration、recovery tests。
-- 🔁 调用链：`单测 -> 集成 -> 多节点 deterministic -> failpoint/chaos`。
-- 📚 参考对象：工业数据库常见的 fault injection 与 deterministic cluster harness。
+- 🧭 Topic: why distributed testing must combine black-box path validation with narrow-boundary fault injection.
+- 🧱 Core objects: `testcluster`, failpoint, integration tests, recovery tests.
+- 🔁 Call chain: `unit -> integration -> multi-node deterministic -> failpoint/chaos`.
+- 📚 Reference: fault-injection patterns and deterministic cluster harnesses common in industrial databases.
 
-## 1. 为什么这件事重要
+## 1. Why this matters
 
-分布式系统最常见的测试失真有两种：
+The two most common failure modes in distributed-system testing:
 
-1. 只有单测，没有系统路径验证。
-2. 只有黑盒集成，没有边界级故障命中能力。
+1. Only unit tests, no system-path validation.
+2. Only black-box integration, no boundary-level fault-hit capability.
 
-前者的问题是：证明不了真实系统会跑通。
-后者的问题是：很难稳定打中 publish、persist、send、install 这些真正危险的生命周期边界。
+The first can't prove the real system actually works.
+The second can't reliably hit the dangerous lifecycle boundaries — publish, persist, send, install.
 
-NoKV 现在的方向不是选其中之一，而是分层：
+NoKV's direction is not to pick one — it's to **layer**:
 
 - package-level tests
 - node-local integration
@@ -29,7 +29,7 @@ NoKV 现在的方向不是选其中之一，而是分层：
 - failpoints
 - `testcluster` harness
 
-## 2. 当前相关实现
+## 2. Relevant implementation
 
 - `raftstore/testcluster`
 - `raftstore/failpoints`
@@ -37,90 +37,90 @@ NoKV 现在的方向不是选其中之一，而是分层：
 - `meta/root/backend/replicated`
 - `coordinator/server`
 
-## 3. 为什么不能只靠黑盒
+## 3. Why black-box alone is insufficient
 
-假设只写黑盒集成：
+Suppose you only write black-box integration:
 
-- 启三个节点
-- 发请求
-- 看最终收敛
+- Spin up three nodes
+- Send requests
+- Verify final convergence
 
-这当然有价值，但它打不中一些真正危险的边界：
+This has value, but it can't reliably hit some genuinely dangerous boundaries:
 
-- ready advance 后、send 前
-- snapshot apply 后、publish 前
-- root event persist 后、view reload 前
-- install bootstrap 和 compact rewrite 的切换边界
+- After ready advance, before send
+- After snapshot apply, before publish
+- After root event persist, before view reload
+- The transition between install bootstrap and compact rewrite
 
-这些边界如果只靠黑盒随机跑到，稳定性和定位能力都不够。
+If you wait for black-box randomness to land on these boundaries, neither stability nor diagnosability is enough.
 
-## 4. 为什么也不能只靠 failpoint
+## 4. Why failpoint alone is also insufficient
 
-如果反过来把所有复杂路径都交给 failpoint，又会出现另一种坏形态：
+The other extreme — handing every complex path to failpoints — produces another bad shape:
 
-- 生产代码里布满测试分支
-- failpoint 越打越细
-- 整个系统被测试手段反过来塑形
+- Production code peppered with test branches
+- Failpoints proliferate
+- The whole system gets reshaped by its own testing tools
 
-所以真正正确的问题不是“要不要 failpoint”，而是：
+So the real question isn't "should we use failpoints" — it's:
 
-> failpoint 是否只用于高价值、黑盒难命中、资源注入又不够精确的生命周期边界。
+> Are failpoints used **only** for high-value, hard-to-black-box-hit lifecycle boundaries where resource injection isn't precise enough?
 
-## 5. 当前 NoKV 的测试分层
+## 5. NoKV's current test layering
 
 ```mermaid
 flowchart TD
-    U["unit tests\n窄逻辑与状态机"] --> I["integration\n单节点与局部路径"]
-    I --> D["raftstore/testcluster\n数据面 deterministic"]
-    I --> P["coordinator/testcluster\n控制面 deterministic"]
-    D --> F["failpoints\n命中高价值边界"]
+    U["unit tests\nnarrow logic & state machines"] --> I["integration\nsingle-node and local paths"]
+    I --> D["raftstore/testcluster\ndata-plane deterministic"]
+    I --> P["coordinator/testcluster\ncontrol-plane deterministic"]
+    D --> F["failpoints\nhit high-value boundaries"]
     D --> X["transport chaos / restart / recovery"]
     P --> F
 ```
 
 ### 5.1 `testcluster`
 
-它的价值不是“写测试方便一点”，而是把多节点环境搭建收成正式 harness。
+Its value isn't "easier to write tests" — it converts multi-node environment setup into a formal harness.
 
-当前已经明确分成两层：
+It's now explicitly split into two layers:
 
 - `raftstore/testcluster`
-  - 起 store
-  - 接 transport
-  - 带单 Coordinator 依赖跑 data-plane 场景
+  - Spin up stores
+  - Wire transport
+  - Run data-plane scenarios with a single Coordinator dependency
 - `coordinator/testcluster`
-  - 起 `3 coordinator + replicated meta`
-  - 测 rooted watch/reload、leader/follower propagation
-  - 专门承接 control-plane 场景
+  - Spin up `3 coordinator + replicated meta`
+  - Test rooted watch/reload, leader/follower propagation
+  - Dedicated to control-plane scenarios
 
-`raftstore/testcluster` 负责的能力主要是：
+`raftstore/testcluster` provides:
 
-- 起 Coordinator
-- 起多个节点
+- Spin up Coordinator
+- Spin up multiple nodes
 - block/unblock peer
 - restart node
 - wait leader / hosted / scheduler mode
 
-这样 migration、snapshot、membership 测试就不用重复造 data-plane cluster 脚手架；而 control-plane 集成测试也不再继续塞进 store harness。
+So migration, snapshot, and membership tests don't keep rebuilding data-plane cluster scaffolding; control-plane integration tests don't keep getting stuffed into the store harness.
 
-### 5.2 failpoint
+### 5.2 Failpoints
 
-当前合理的 failpoint 应该集中在：
+Today, the legitimate places for failpoints concentrate around:
 
 - publish boundary
 - persist boundary
 - send boundary
 - install boundary
 
-这些点的共同特点是：
+These have a common signature:
 
-- 风险高
-- 黑盒难稳定命中
-- 一旦失败最容易留下半状态
+- High risk
+- Hard to hit reliably from black-box
+- Most likely to leave half-state on failure
 
-## 6. 调用逻辑和测试落点
+## 6. Call flow and test landing points
 
-以 rooted metadata 路径为例：
+Take the rooted metadata path as an example:
 
 ```mermaid
 sequenceDiagram
@@ -129,74 +129,74 @@ sequenceDiagram
     participant Coordinator as coordinator
     participant MR as meta/root
 
-    T->>RS: 触发 peer change / split / merge
+    T->>RS: trigger peer change / split / merge
     RS->>Coordinator: publish planned truth
     Coordinator->>MR: append root event
-    Note over Coordinator,MR: failpoint 可命中 persist 边界
+    Note over Coordinator,MR: failpoint can hit persist boundary
     RS->>RS: apply local admin/conf change
-    Note over RS: failpoint 可命中 apply/publish 边界
+    Note over RS: failpoint can hit apply/publish boundary
     RS->>Coordinator: publish terminal truth
 ```
 
-这里可以看出：
+You can see:
 
-- 黑盒集成能证明整条链成立
-- failpoint 能稳定命中最危险的中间边界
+- Black-box integration proves the chain holds end-to-end.
+- Failpoints reliably hit the most dangerous middle boundaries.
 
-## 7. 设计理念
+## 7. Design philosophy
 
-### 7.1 不把测试手段当架构替代品
+### 7.1 Don't let test mechanisms substitute for architecture
 
-failpoint 不能替代清楚的分层。相反，好的 failpoint 设计应当建立在边界已经清楚的前提上。
+Failpoints can't replace clear layering. Conversely, a good failpoint design assumes the boundaries are already clear.
 
-### 7.2 不为了测试去污染生产路径
+### 7.2 Don't pollute production paths for the sake of testing
 
-只有那些：
+Only boundaries that are:
 
-- 价值高
-- 命中难
-- 故障模型明确
+- High value
+- Hard to hit
+- With clear fault models
 
-的边界，才值得打点。
+are worth instrumenting.
 
-### 7.3 系统级正确性要靠多层测试共同证明
+### 7.3 System-level correctness must be proved by multiple layers together
 
-没有哪一层测试能单独承担全部证明责任。
+No single test layer can carry the whole proof on its own.
 
-## 8. 参考对象
+## 8. Reference patterns
 
-这里借鉴的不是某个框架，而是工业系统里非常成熟的一套做法：
+Not borrowing from any one framework — this is a mature pattern in industrial systems:
 
-- unit test 证明局部逻辑
-- deterministic cluster/integration 证明路径成立
-- failpoint/fault injection 命中高价值边界
-- transport/restart/recovery 测真实分布式故障
+- unit tests prove local logic
+- deterministic cluster / integration prove path composition
+- failpoint / fault injection hit high-value boundaries
+- transport / restart / recovery test real distributed faults
 
-## 9. 当前已经落地的覆盖
+## 9. Coverage already in place
 
-- 多层测试已经形成
-- `testcluster` 已经是独立 harness
-- failpoint 打点开始收敛到高价值边界
-- migration / rooted metadata / distributed path 已有核心路径覆盖
-- Coordinator outage、transport partition、restart recovery、split/merge restart safety 已经进入集成测试矩阵
+- Multi-tier testing is established
+- `testcluster` is an independent harness
+- Failpoints are converging onto high-value boundaries
+- migration / rooted metadata / distributed paths have core coverage
+- Coordinator outage, transport partition, restart recovery, split/merge restart safety are now part of the integration matrix
 
-## 10. 当前没有覆盖充分的部分
+## 10. Coverage gaps still open
 
-- 长时间 stress / soak 还不是默认测试。
-- shell scripts 还没有直接 golden / smoke 测试。
-- invariant helper 仍然偏少。
-- degraded-mode 已有核心 case，但还没有覆盖所有 publish / reload interleaving。
-- transport chaos 已覆盖分区和链路抖动，但还不是大规模 fault matrix。
-- scheduler/control-plane runtime 侧测试还没有形成完整策略矩阵。
+- Long-running stress / soak isn't a default test yet.
+- Shell scripts still lack direct golden / smoke tests.
+- Invariant helpers are still relatively few.
+- Degraded mode has core cases but doesn't yet cover every publish / reload interleaving.
+- Transport chaos covers partition and link jitter but isn't a large-scale fault matrix yet.
+- Scheduler / control-plane runtime testing doesn't yet have a complete policy matrix.
 
-## 11. 总结
+## 11. Summary
 
-NoKV 当前的分布式测试主线已经从“多写几个 case”进化成了“按边界和故障模型分层验证”。
+NoKV's distributed test trunk has evolved from "write more cases" to "validate by layered boundary and fault model."
 
-最重要的不是测试数量，而是：
+What matters is not test count, but:
 
-- 黑盒测试负责系统级收敛
-- `testcluster` 负责多节点环境控制
-- failpoint 只负责高价值、黑盒难命中的边界
+- Black-box tests prove system-level convergence
+- `testcluster` provides multi-node environment control
+- Failpoints handle only high-value, black-box-hard boundaries
 
-这条分层如果守住，后面系统越复杂，测试体系越不会反过来把代码搞脏。
+Hold this layering, and as the system grows more complex, the test framework will not start polluting the code in return.
