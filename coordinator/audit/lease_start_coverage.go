@@ -2,9 +2,9 @@ package audit
 
 import eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 
-// LeaseStartCoverageReport is the minimal eunomia-audit bridge for the NoKV-native
-// CRDB #66562 reproduction schedule. It intentionally stays outside rooted
-// persisted schema.
+// LeaseStartCoverageReport is the minimal audit bridge for lease-start
+// coverage diagnostics. It intentionally stays outside rooted persisted
+// schema.
 type LeaseStartCoverageReport struct {
 	Predecessor eunomia.LeaseView                `json:"predecessor"`
 	Successor   eunomia.LeaseView                `json:"successor"`

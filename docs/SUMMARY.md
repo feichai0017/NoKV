@@ -40,7 +40,6 @@
 
 - [Configuration](config.md)
 - [CLI](cli.md)
-- [eunomia-audit](eunomia-audit.md)
 - [Cluster Demo](demo.md)
 - [Scripts](scripts.md)
 - [Stats & Observability](stats.md)

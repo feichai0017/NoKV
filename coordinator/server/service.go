@@ -5,8 +5,7 @@
 // This package owns the SERVICE layer. It consumes rooted truth from
 // meta/root/ but never owns durable cluster state. The execution plane
 // (raftstore/) applies and publishes, and coordinator reconstructs its
-// view by tailing rooted commits. Contracts between the planes are
-// specified in TLA+ under spec/Eunomia.tla.
+// view by tailing rooted commits.
 //
 // Heavy logic is deliberately split into sibling packages:
 // catalog (region/event validation), view (directory + store health),
@@ -14,7 +13,7 @@
 // (rooted adapter), audit (snapshot + trace audit).
 //
 // Design references: docs/coordinator.md, docs/control_and_execution_protocols.md,
-// docs/rooted_truth.md, docs/eunomia-audit.md.
+// docs/rooted_truth.md.
 package server
 
 import (

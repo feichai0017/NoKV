@@ -1,9 +1,8 @@
 # NoKV Makefile
 # Provides standardized commands for development workflow
 
-.PHONY: help build test test-short test-race test-coverage lint fmt clean docker-up docker-dev-up docker-down bench install-tools install-tla-tools
+.PHONY: help build test test-short test-race test-coverage lint fmt clean docker-up docker-dev-up docker-down bench install-tools
 .PHONY: proto proto-check proto-breaking-check
-.PHONY: tlc-eunomia tlc-eunomiamultidim tlc-mountlifecycle tlc-subtreeauthority tlc-leaseonly-counterexample tlc-leasestart-counterexample tlc-subtreewithoutfrontiercoverage-counterexample tlc-subtreewithoutseal-counterexample
 
 GOLANGCI_LINT_VERSION ?= v2.9.0
 BUF_VERSION ?= 1.66.0
@@ -25,17 +24,6 @@ help:
 	@echo "  make proto-breaking-check - Run Buf breaking checks against main"
 	@echo "  make bench              - Run benchmarks"
 	@echo "  make install-tools      - Install development tools"
-	@echo "  make install-tla-tools  - Install pinned TLC locally under third_party/"
-	@echo "  make tlc-eunomia            - Run TLC on spec/Eunomia.tla"
-	@echo "  make tlc-eunomiamultidim    - Run TLC on spec/EunomiaMultiDim.tla"
-	@echo "  make tlc-mountlifecycle        - Run TLC on spec/MountLifecycle.tla"
-	@echo "  make tlc-subtreeauthority      - Run TLC on spec/SubtreeAuthority.tla"
-	@echo "  make tlc-leaseonly-counterexample - Run TLC and expect a counterexample for spec/LeaseOnly.tla"
-	@echo "  make tlc-leasestart-counterexample - Run TLC and expect a counterexample for spec/LeaseStartOnly.tla"
-	@echo "  make tlc-tokenonly-counterexample - Run TLC and expect a counterexample for spec/TokenOnly.tla"
-	@echo "  make tlc-chubbyfenced-counterexample - Run TLC and expect a counterexample for spec/ChubbyFencedLease.tla"
-	@echo "  make tlc-subtreewithoutfrontiercoverage-counterexample - Run TLC and expect a counterexample for spec/SubtreeWithoutFrontierCoverage.tla"
-	@echo "  make tlc-subtreewithoutseal-counterexample - Run TLC and expect a counterexample for spec/SubtreeWithoutSeal.tla"
 	@echo "  make docker-up          - Start Docker Compose cluster"
 	@echo "  make docker-dev-up      - Build local image and start Docker Compose cluster"
 	@echo "  make docker-down        - Stop Docker Compose cluster"
@@ -129,174 +117,6 @@ install-tools:
 	GOTOOLCHAIN=go$(PROJECT_GO_VERSION) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	go install github.com/bufbuild/buf/cmd/buf@v$(BUF_VERSION)
 	@echo "✓ Tools installed"
-
-install-tla-tools:
-	@echo "Installing pinned TLA+ tools locally..."
-	./scripts/tla/setup.sh
-
-tlc-eunomia:
-	@echo "Running TLC on spec/Eunomia.tla..."
-	./scripts/tla/tlc.sh spec/Eunomia.tla
-
-tlc-eunomiamultidim:
-	@echo "Running TLC on spec/EunomiaMultiDim.tla..."
-	./scripts/tla/tlc.sh spec/EunomiaMultiDim.tla
-
-tlc-mountlifecycle:
-	@echo "Running TLC on spec/MountLifecycle.tla..."
-	./scripts/tla/tlc.sh spec/MountLifecycle.tla
-
-tlc-subtreeauthority:
-	@echo "Running TLC on spec/SubtreeAuthority.tla..."
-	./scripts/tla/tlc.sh spec/SubtreeAuthority.tla
-
-tlc-leaseonly-counterexample:
-	@echo "Running TLC on spec/LeaseOnly.tla (expecting counterexample)..."
-	@if ./scripts/tla/tlc.sh spec/LeaseOnly.tla; then \
-		echo "expected TLC to find a counterexample for LeaseOnly, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ TLC found the expected counterexample for LeaseOnly"; \
-	fi
-
-tlc-leasestart-counterexample:
-	@echo "Running TLC on spec/LeaseStartOnly.tla (expecting counterexample)..."
-	@if ./scripts/tla/tlc.sh spec/LeaseStartOnly.tla; then \
-		echo "expected TLC to find a counterexample for LeaseStartOnly, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ TLC found the expected counterexample for LeaseStartOnly"; \
-	fi
-
-tlc-chubbyfenced-counterexample:
-	@echo "Running TLC on spec/ChubbyFencedLease.tla (expecting coverage counterexample)..."
-	@if ./scripts/tla/tlc.sh spec/ChubbyFencedLease.tla; then \
-		echo "expected TLC to find a counterexample for ChubbyFencedLease, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ TLC found the expected counterexample for ChubbyFencedLease"; \
-	fi
-
-tlc-tokenonly-counterexample:
-	@echo "Running TLC on spec/TokenOnly.tla (expecting stale-delivery counterexample)..."
-	@if ./scripts/tla/tlc.sh spec/TokenOnly.tla; then \
-		echo "expected TLC to find a counterexample for TokenOnly, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ TLC found the expected counterexample for TokenOnly"; \
-	fi
-
-tlc-subtreewithoutfrontiercoverage-counterexample:
-	@echo "Running TLC on spec/SubtreeWithoutFrontierCoverage.tla (expecting inheritance counterexample)..."
-	@if ./scripts/tla/tlc.sh spec/SubtreeWithoutFrontierCoverage.tla; then \
-		echo "expected TLC to find a counterexample for SubtreeWithoutFrontierCoverage, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ TLC found the expected counterexample for SubtreeWithoutFrontierCoverage"; \
-	fi
-
-tlc-subtreewithoutseal-counterexample:
-	@echo "Running TLC on spec/SubtreeWithoutSeal.tla (expecting primacy counterexample)..."
-	@if ./scripts/tla/tlc.sh spec/SubtreeWithoutSeal.tla; then \
-		echo "expected TLC to find a counterexample for SubtreeWithoutSeal, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ TLC found the expected counterexample for SubtreeWithoutSeal"; \
-	fi
-
-tlc-contrast-models: tlc-leaseonly-counterexample tlc-tokenonly-counterexample tlc-chubbyfenced-counterexample tlc-leasestart-counterexample tlc-subtreewithoutfrontiercoverage-counterexample tlc-subtreewithoutseal-counterexample
-
-record-tlc-eunomia:
-	@echo "Recording TLC output for Eunomia..."
-	@if ./scripts/tla/record_tlc.sh spec/Eunomia.tla spec/artifacts/tlc-eunomia.out; then \
-		echo "✓ Recorded TLC output for Eunomia"; \
-	else \
-		echo "expected Eunomia to succeed under TLC, but recording failed"; \
-		exit 1; \
-	fi
-
-record-tlc-eunomiamultidim:
-	@echo "Recording TLC output for EunomiaMultiDim..."
-	@if ./scripts/tla/record_tlc.sh spec/EunomiaMultiDim.tla spec/artifacts/tlc-eunomiamultidim.out; then \
-		echo "✓ Recorded TLC output for EunomiaMultiDim"; \
-	else \
-		echo "expected EunomiaMultiDim to succeed under TLC, but recording failed"; \
-		exit 1; \
-	fi
-
-record-tlc-mountlifecycle:
-	@echo "Recording TLC output for MountLifecycle..."
-	@if ./scripts/tla/record_tlc.sh spec/MountLifecycle.tla spec/artifacts/tlc-mountlifecycle.out; then \
-		echo "✓ Recorded TLC output for MountLifecycle"; \
-	else \
-		echo "expected MountLifecycle to succeed under TLC, but recording failed"; \
-		exit 1; \
-	fi
-
-record-tlc-subtreeauthority:
-	@echo "Recording TLC output for SubtreeAuthority..."
-	@if ./scripts/tla/record_tlc.sh spec/SubtreeAuthority.tla spec/artifacts/tlc-subtreeauthority.out; then \
-		echo "✓ Recorded TLC output for SubtreeAuthority"; \
-	else \
-		echo "expected SubtreeAuthority to succeed under TLC, but recording failed"; \
-		exit 1; \
-	fi
-
-record-tlc-leaseonly:
-	@echo "Recording TLC counterexample for LeaseOnly..."
-	@if ./scripts/tla/record_tlc.sh spec/LeaseOnly.tla spec/artifacts/tlc-leaseonly.out; then \
-		echo "expected LeaseOnly recording to fail with counterexample, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ Recorded TLC counterexample for LeaseOnly"; \
-	fi
-
-record-tlc-tokenonly:
-	@echo "Recording TLC counterexample for TokenOnly..."
-	@if ./scripts/tla/record_tlc.sh spec/TokenOnly.tla spec/artifacts/tlc-tokenonly.out; then \
-		echo "expected TokenOnly recording to fail with counterexample, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ Recorded TLC counterexample for TokenOnly"; \
-	fi
-
-record-tlc-chubbyfenced:
-	@echo "Recording TLC counterexample for ChubbyFencedLease..."
-	@if ./scripts/tla/record_tlc.sh spec/ChubbyFencedLease.tla spec/artifacts/tlc-chubbyfenced.out; then \
-		echo "expected ChubbyFencedLease recording to fail with counterexample, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ Recorded TLC counterexample for ChubbyFencedLease"; \
-	fi
-
-record-tlc-leasestart:
-	@echo "Recording TLC counterexample for LeaseStartOnly..."
-	@if ./scripts/tla/record_tlc.sh spec/LeaseStartOnly.tla spec/artifacts/tlc-leasestart.out; then \
-		echo "expected LeaseStartOnly recording to fail with counterexample, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ Recorded TLC counterexample for LeaseStartOnly"; \
-	fi
-
-record-tlc-subtreewithoutfrontiercoverage:
-	@echo "Recording TLC counterexample for SubtreeWithoutFrontierCoverage..."
-	@if ./scripts/tla/record_tlc.sh spec/SubtreeWithoutFrontierCoverage.tla spec/artifacts/tlc-subtreewithoutfrontiercoverage.out; then \
-		echo "expected SubtreeWithoutFrontierCoverage recording to fail with counterexample, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ Recorded TLC counterexample for SubtreeWithoutFrontierCoverage"; \
-	fi
-
-record-tlc-subtreewithoutseal:
-	@echo "Recording TLC counterexample for SubtreeWithoutSeal..."
-	@if ./scripts/tla/record_tlc.sh spec/SubtreeWithoutSeal.tla spec/artifacts/tlc-subtreewithoutseal.out; then \
-		echo "expected SubtreeWithoutSeal recording to fail with counterexample, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ Recorded TLC counterexample for SubtreeWithoutSeal"; \
-	fi
-
-record-formal-artifacts: record-tlc-eunomia record-tlc-eunomiamultidim record-tlc-mountlifecycle record-tlc-subtreeauthority record-tlc-leaseonly record-tlc-tokenonly record-tlc-chubbyfenced record-tlc-leasestart record-tlc-subtreewithoutfrontiercoverage record-tlc-subtreewithoutseal
 
 # Start Docker Compose cluster
 docker-up:
