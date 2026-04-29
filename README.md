@@ -1,9 +1,6 @@
 <div align="center">
   <img src="./docs/img/logo.svg" width="200" alt="NoKV" />
 
-  <img width="1411" height="945" alt="image" src="https://github.com/user-attachments/assets/d56c9346-54d7-4237-b33b-a9d67e23cd55" />
-
-
   <p>
     <strong>An open-source namespace metadata substrate for distributed filesystems, object storage, and AI dataset metadata.</strong>
   </p>
