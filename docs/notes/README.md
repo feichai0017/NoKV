@@ -1,150 +1,150 @@
-# 设计笔记与实现记录
+# Design Notes and Implementation Records
 
-这一节是 NoKV 的长文档区域。
+This section is NoKV's long-form documentation area.
 
-主文档更偏参考手册，`notes` 更像工程记录与技术随笔，主要用来解释：
+The main documentation leans toward reference manual; `notes` is more like an engineering log and technical essay collection — its job is to explain:
 
-- 某个边界为什么存在
-- 某次实现为什么要推翻重做
-- 哪些“看起来简单”的方案最后证明是错的
-- 代码库在演进过程中学到了什么
+- Why a particular boundary exists.
+- Why an implementation had to be torn down and redone.
+- Which "looks simple" approaches turned out to be wrong.
+- What the codebase has learned along the way.
 
 <div class="blog-hero">
   <div class="blog-hero-copy">
-    <span class="masthead-kicker">工程日志</span>
-    <h2>NoKV 是怎么被做出来的</h2>
-    <p>这些文章记录设计取舍、实现教训、调试过程，以及代码中那些边界背后的原因。</p>
+    <span class="masthead-kicker">Engineering log</span>
+    <h2>How NoKV got built</h2>
+    <p>These posts record design tradeoffs, implementation lessons, debugging traces, and the reasons behind the boundaries you find in the code.</p>
   </div>
   <div class="blog-hero-meta">
-    <div class="tag-pill">设计</div>
-    <div class="tag-pill">实现</div>
-    <div class="tag-pill">分布式系统</div>
-    <div class="tag-pill">存储内核</div>
+    <div class="tag-pill">Design</div>
+    <div class="tag-pill">Implementation</div>
+    <div class="tag-pill">Distributed systems</div>
+    <div class="tag-pill">Storage kernel</div>
   </div>
 </div>
 
-## 推荐阅读
+## Recommended reading
 
 <div class="blog-grid">
   <div class="blog-card">
     <span class="blog-date">2026-03-30</span>
-    <h3><a href="2026-03-30-standalone-to-distributed-bridge.html">从单机到分布式的桥接</a></h3>
-    <p>解释为什么 NoKV 把单机和分布式视为同一套系统，以及为什么迁移必须做成协议而不是 dump/import 工具。</p>
+    <h3><a href="2026-03-30-standalone-to-distributed-bridge.html">Bridging standalone and distributed</a></h3>
+    <p>Why NoKV treats single-node and distributed as one system, and why migration must be a protocol rather than a dump/import tool.</p>
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-03-30</span>
-    <h3><a href="2026-03-30-coordinator-and-execution-layering.html">Coordinator 与执行面分层</a></h3>
-    <p>解释为什么 control plane、truth kernel 和 data-plane executor 必须分开，以及为什么 Coordinator 不能直接写本地 truth。</p>
+    <h3><a href="2026-03-30-coordinator-and-execution-layering.html">Coordinator and execution-plane layering</a></h3>
+    <p>Why control plane, truth kernel, and data-plane executor must be separated, and why Coordinator must not write local truth directly.</p>
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-03-30</span>
-    <h3><a href="2026-03-30-migration-mode-and-snapshot.html">迁移里的 mode 与 snapshot 语义</a></h3>
-    <p>说明 migration 的本体其实是目录生命周期协议和 snapshot 分层，而不是补几条 CLI 命令。</p>
+    <h3><a href="2026-03-30-migration-mode-and-snapshot.html">Mode and snapshot semantics in migration</a></h3>
+    <p>Why migration is fundamentally a directory lifecycle protocol and snapshot layering — not a few extra CLI commands.</p>
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-03-30</span>
-    <h3><a href="2026-03-30-distributed-testing-and-failpoints.html">分布式测试与 failpoint</a></h3>
-    <p>解释为什么 NoKV 同时使用 live integration、testcluster 和窄边界 failpoint，以及 failpoint 应该如何克制。</p>
+    <h3><a href="2026-03-30-distributed-testing-and-failpoints.html">Distributed testing and failpoints</a></h3>
+    <p>Why NoKV uses live integration, testcluster, and narrow-boundary failpoints simultaneously — and how restrained failpoints should be.</p>
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-03-31</span>
-    <h3><a href="2026-03-31-sst-snapshot-install.html">基于 SST 的 Snapshot Install</a></h3>
-    <p>说明 NoKV 为什么选择 region-scoped、self-contained、与源端 vlog 独立的 SST snapshot install 方案。</p>
+    <h3><a href="2026-03-31-sst-snapshot-install.html">SST-based snapshot install</a></h3>
+    <p>Why NoKV picked region-scoped, self-contained, vlog-independent SST snapshot install.</p>
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-04-03</span>
-    <h3><a href="2026-04-03-delos-lite-metadata-root-roadmap.html">Rooted Metadata、Delos-lite 与 VirtualLog</a></h3>
-    <p>完整说明 NoKV 当前的 metadata truth、Coordinator 隔离、VirtualLog contract、local/replicated backend，以及为什么这条主线适合作为后续研究平台。</p>
+    <h3><a href="2026-04-03-delos-lite-metadata-root-roadmap.html">Rooted metadata, Delos-lite, and VirtualLog</a></h3>
+    <p>Full description of NoKV's current metadata truth, Coordinator isolation, VirtualLog contract, local/replicated backends, and why this mainline is a good research platform.</p>
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-04-05</span>
-    <h3><a href="2026-04-05-range-filter-from-grf.html">Range Filter：从 GRF 得到启发，但不照搬 GRF</a></h3>
-    <p>解释 NoKV 为什么需要 read-path pruning、GRF 到底提供了什么启发、为什么当前实现选择更保守的 in-memory advisory 方案，以及它与 LSM 读路径的关系。</p>
+    <h3><a href="2026-04-05-range-filter-from-grf.html">Range filter: inspired by GRF, not a clone of GRF</a></h3>
+    <p>Why NoKV needs read-path pruning, what GRF actually contributes as inspiration, why we picked a more conservative in-memory advisory implementation, and how it relates to the LSM read path.</p>
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-04-12</span>
-    <h3><a href="2026-04-12-coordinator-meta-separation.html">Coordinator 和 meta/root 分离部署设计</a></h3>
-    <p>讨论 co-located 与 separated control-plane deployment 的边界、TSO/ID window、Coordinator lease、freshness 语义和落地顺序。</p>
+    <h3><a href="2026-04-12-coordinator-meta-separation.html">Separated deployment for Coordinator and meta/root</a></h3>
+    <p>Boundaries of co-located vs separated control-plane deployment, TSO/ID window, Coordinator lease, freshness semantics, and the order to land them.</p>
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-04-24</span>
-    <h3><a href="2026-04-24-fsmeta-positioning.html">fsmeta 定位：面向分布式文件系统的元数据底座</a></h3>
-    <p>说明为什么 fsmeta 不走 JuiceFS TKV 兼容路线，而是把 metadata-native API 作为 NoKV 的云原生生态位。</p>
+    <h3><a href="2026-04-24-fsmeta-positioning.html">fsmeta positioning: a metadata substrate for distributed filesystems</a></h3>
+    <p>Why fsmeta does not take a JuiceFS TKV-compatibility route and instead makes metadata-native APIs NoKV's cloud-native niche.</p>
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-04-25</span>
-    <h3><a href="2026-04-25-namespace-authority-events-umbrella.html">Namespace Authority Events Umbrella</a></h3>
-    <p>统一 mount、subtree、snapshot、quota primitive 的 RootEvent 命名、payload 和 runtime view 边界。</p>
+    <h3><a href="2026-04-25-namespace-authority-events-umbrella.html">Namespace authority events umbrella</a></h3>
+    <p>Unifies the RootEvent naming, payload, and runtime view boundaries across mount, subtree, snapshot, and quota primitives.</p>
   </div>
   <div class="blog-card">
     <span class="blog-date">2026-04-25</span>
-    <h3><a href="2026-04-25-snapshot-subtree-mvcc-epoch.html">SnapshotSubtree：subtree-scoped MVCC epoch</a></h3>
-    <p>说明 SnapshotSubtree 为什么只发布 read epoch，不复制目录树，也不把 dentry 列表写进 meta/root。</p>
+    <h3><a href="2026-04-25-snapshot-subtree-mvcc-epoch.html">SnapshotSubtree: subtree-scoped MVCC epoch</a></h3>
+    <p>Why SnapshotSubtree publishes only a read epoch — it doesn't copy the directory tree and doesn't write dentry lists into meta/root.</p>
   </div>
 </div>
 
-## 这里应该写什么
+## What belongs here
 
-- 参考文档放不下的设计取舍
-- 有明确症状、错误假设和最终修复的调试记录
-- 带 benchmark 背景和设计解释的性能调查
-- 解释包边界为何变化的重构说明
+- Design tradeoffs that don't fit in the reference docs.
+- Debugging records with concrete symptoms, wrong assumptions, and the eventual fix.
+- Performance investigations with benchmark context and design explanation.
+- Refactoring writeups that explain why a package boundary moved.
 
-## 写作风格
+## Writing style
 
-每篇 note 都应该像一篇小型技术博客，但保持工程视角：
+Each note should read like a small technical blog post but keep an engineering perspective:
 
-1. 从具体问题或设计问题开始
-2. 先把系统边界讲清楚
-3. 讲清 tradeoff 和被否决的方案
-4. 需要时放图、调用链、对象关系和命令
-5. 最后说明代码里已经改了什么、还有什么没解决
+1. Start from a concrete problem or design question.
+2. Pin down the system boundary first.
+3. Walk through tradeoffs and the rejected options.
+4. Add diagrams, call chains, object relationships, and commands where useful.
+5. Close by stating what the code already changed and what's still unresolved.
 
-`notes` 的重点是解释设计和演进，而不是把正文写成文件导航。除非某个模块名或文件名对理解确实必要，否则不需要强制罗列具体代码路径；相比“这个函数在哪”，更重要的是“为什么这样分层、为什么不选别的路、边界到底是什么”。
+The point of `notes` is to explain design and evolution — not to act as a file index. Unless a particular module or file name is genuinely necessary for understanding, don't force-list code paths. What matters more than "where is this function" is "why this layering, why we rejected the alternative, where the boundary actually is".
 
-建议在最近的设计类 note 顶部增加一个简短导读块，至少包含：
+For recent design-flavored notes, add a short TL;DR block at the top, including at least:
 
-- 🧭 主题
-- 🧱 核心对象
-- 🔁 调用链
-- 📚 参考对象
+- 🧭 Topic
+- 🧱 Core objects
+- 🔁 Call chain
+- 📚 References
 
-## 建议模板
+## Suggested template
 
 ```md
-# 标题
+# Title
 
-## 导读
+## TL;DR
 
-- 🧭 主题：
-- 🧱 核心对象：
-- 🔁 调用链：
-- 📚 参考对象：
+- 🧭 Topic:
+- 🧱 Core objects:
+- 🔁 Call chain:
+- 📚 References:
 
-## 为什么这件事重要
+## Why this matters
 
-## 当前系统边界
+## Current system boundary
 
-## 看起来简单但其实错的路
+## Paths that look simple but are wrong
 
-## 我们最终采用的设计
+## The design we ended up with
 
-## 关键对象与边界
+## Key objects and boundaries
 
-## 图示与调用逻辑
+## Diagrams and call logic
 
-## 设计理念
+## Design principles
 
-## 参考对象
+## References
 
-## 这次改变了什么
+## What changed
 
-## 还没解决什么
+## What we haven't solved
 ```
 
-## 新增一篇 note
+## Adding a new note
 
-1. 创建 `docs/notes/YYYY-MM-DD-short-title.md`
-2. 把它加到 `docs/SUMMARY.md`
-3. 优先写清楚图、对象关系、调用链和设计理念，少写空泛描述
-4. `notes` 统一使用中文撰写；必要时保留英文术语，但不要把正文写成中英混杂的半成品
+1. Create `docs/notes/YYYY-MM-DD-short-title.md`.
+2. Add it to `docs/SUMMARY.md`.
+3. Prioritize clear diagrams, object relationships, call chains, and design rationale — keep generic narration short.
+4. `notes` are written in English; keep technical terms as-is, but don't ship half-finished mixed-language prose.

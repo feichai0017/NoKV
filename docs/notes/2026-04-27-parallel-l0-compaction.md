@@ -1,15 +1,12 @@
-# 2026-04-27 Parallel L0 Compaction：让 NumCompactors=4 真的并行
+# 2026-04-27 Parallel L0 Compaction: making `NumCompactors=4` actually parallel
 
-> 状态：已落地。本文是 plan B 的实际形态——bench log 在大数据集下持续
-> 输出 `worker=0 level=0` 循环（其余 worker 全部 idle），代码 trace 之后
-> 发现 root cause 不是 subcompactions（那个早就实现了），而是 **L0→L0
-> fallback 路径上有两个硬编码的并发抑制点**，本 PR 把这两点消除。
+> Status: shipped. This is the production form of plan B. The bench log on large datasets kept emitting `worker=0 level=0` in a loop (every other worker idle). Code-tracing showed the root cause was **not** subcompactions (those were already implemented) — it was **two hardcoded concurrency-suppression points on the L0→L0 fallback path**. This PR removes both of them.
 
 ---
 
-## 1. 现象
+## 1. Symptom
 
-跑 30M / 50M `make bench` 的 NoKV load 阶段，日志里出现：
+Running 30M / 50M `make bench` against the NoKV load phase, the log showed:
 
 ```
 INFO compaction complete worker=0 level=0
@@ -18,62 +15,58 @@ WARN write stop enabled due to compaction backlog
 INFO compaction complete worker=0 level=0
 INFO write slowdown enabled due to compaction backlog
 WARN write stop enabled due to compaction backlog
-...（无限循环）
+...(infinite loop)
 ```
 
-`NumCompactors=4` 配置下只有 worker 0 在干活，worker 1/2/3 整个 cycle
-都返回 `false` 然后等下一个 ticker（5s）。L0 backlog 堆积速度 >
-单 worker 的消化速度 → write stop。
+With `NumCompactors=4`, only worker 0 was working; workers 1/2/3 returned `false` for the entire cycle and waited for the next ticker (5s). L0 backlog accumulation rate > one worker's drain rate → write stop.
 
-## 2. 代码 trace 出来的两个抑制点
+## 2. The two suppression points exposed by code tracing
 
-### Trap #1：硬编码 "compactor 0 only"
+### Trap #1: hardcoded "compactor 0 only"
 
 ```go
-// engine/lsm/planner.go (旧版)
+// engine/lsm/planner.go (old)
 func (lm *levelManager) fillTablesL0ToL0(cd *compactDef) bool {
     if cd.compactorId != 0 {
         // Only allow compactor 0 to avoid L0->L0 contention.
-        return false  // ← worker 1/2/3 在 fallback 路径直接被 reject
+        return false  // ← workers 1/2/3 are rejected outright on the fallback path
     }
     ...
 }
 ```
 
-### Trap #2：L0→L0 写 InfRange 状态条目
+### Trap #2: L0→L0 writes an InfRange state entry
 
 ```go
-// PlanForL0ToL0 (旧版)
+// PlanForL0ToL0 (old)
 return Plan{
     ThisLevel: level,
     NextLevel: level,
     TopIDs:    tableIDsFromMeta(out),
-    ThisRange: InfRange,  // ← 整个 L0 keyspace 全占
+    ThisRange: InfRange,  // ← grabs the entire L0 keyspace
     NextRange: InfRange,
 }, true
 
 // fillTablesL0ToL0
 lm.compactState.AddRangeWithTables(0, InfRange, cd.plan.TopIDs)
 //                                    ^^^^^^^^
-// 任何后续 PlanForL0ToLbase 看到 state.Overlaps(0, anything)==true 直接 bail
+// any subsequent PlanForL0ToLbase sees state.Overlaps(0, anything)==true
+// and bails immediately
 ```
 
-**两个 trap 叠加的死循环**：
+**The deadly cycle from these two combined**:
 
-1. dataset 大 → L1/L2 都被占 → `PlanForL0ToLbase` 因 state.Overlaps 失败
-2. fallback 到 L0→L0：trap #1 让只有 worker 0 能进
-3. worker 0 跑 L0→L0，注册 InfRange
-4. 在 worker 0 跑期间，worker 1/2/3 试 L0→Lbase → trap #2 让 InfRange 阻塞
-5. worker 1/2/3 试 L0→L0 fallback → trap #1 reject
-6. worker 1/2/3 整个 cycle 返回 false → ticker 等 5s
-7. worker 0 跑完释放，循环回 1
+1. Big dataset → L1/L2 are occupied → `PlanForL0ToLbase` fails on `state.Overlaps`.
+2. Falls back to L0→L0: trap #1 lets only worker 0 in.
+3. Worker 0 runs L0→L0 and registers InfRange.
+4. While worker 0 is running, workers 1/2/3 try L0→Lbase → trap #2 makes the InfRange block them.
+5. Workers 1/2/3 try L0→L0 fallback → trap #1 rejects them.
+6. Workers 1/2/3 return false the entire cycle → ticker waits 5s.
+7. Worker 0 finishes and releases, loop back to step 1.
 
-## 3. 修法：State 加 IntraLevel 标志
+## 3. Fix: add an `IntraLevel` flag to State
 
-核心思想：**within-level compaction（L0→L0）只按 table id 占资源，不
-注册 key range**。peer worker 的 L0→L0 通过 `state.HasTable` 看到被占
-的 table 自动跳过；peer worker 的 L0→Lbase 不会被一个虚假的 InfRange
-range 卡住。
+Core idea: **within-level compaction (L0→L0) only reserves resources by table id, not by key range**. Peer workers' L0→L0 see the held tables via `state.HasTable` and skip them automatically; peer workers' L0→Lbase isn't blocked by a fake InfRange range.
 
 ### 3.1 `StateEntry.IntraLevel`
 
@@ -85,7 +78,7 @@ type StateEntry struct {
 }
 ```
 
-### 3.2 `CompareAndAdd` 跳过 range 检查
+### 3.2 `CompareAndAdd` skips the range check
 
 ```go
 func (cs *State) CompareAndAdd(_ LevelsLocked, entry StateEntry) bool {
@@ -96,7 +89,7 @@ func (cs *State) CompareAndAdd(_ LevelsLocked, entry StateEntry) bool {
         thisLevel.ranges = append(thisLevel.ranges, entry.ThisRange)
         nextLevel.ranges = append(nextLevel.ranges, entry.NextRange)
     }
-    // Intra-level: 只占 tables，不占 range
+    // Intra-level: only reserve tables, not ranges.
     thisLevel.delSize += entry.ThisSize
     for _, fid := range entry.TableIDs {
         cs.tables[fid] = struct{}{}
@@ -105,22 +98,22 @@ func (cs *State) CompareAndAdd(_ LevelsLocked, entry StateEntry) bool {
 }
 ```
 
-### 3.3 `Delete` 对应跳过 range 清理
+### 3.3 `Delete` correspondingly skips range cleanup
 
 ```go
 if !entry.IntraLevel {
-    // 原 range 清理逻辑
+    // original range-cleanup logic
 }
-// 都跑 table id 清理
+// Both branches still clean up table ids.
 for _, fid := range entry.TableIDs {
     delete(cs.tables, fid)
 }
 ```
 
-### 3.4 `PlanForL0ToL0` 改用 IntraLevel + cap
+### 3.4 `PlanForL0ToL0` switches to IntraLevel + cap
 
 ```go
-const l0ToL0MaxTablesPerWorker = 8  // 防止一个 worker 吃光所有 L0
+const l0ToL0MaxTablesPerWorker = 8  // prevent one worker from eating all L0 tables
 
 func PlanForL0ToL0(...) (Plan, bool) {
     var out []TableMeta
@@ -134,22 +127,20 @@ func PlanForL0ToL0(...) (Plan, bool) {
         ThisLevel:  level,
         NextLevel:  level,
         TopIDs:     tableIDsFromMeta(out),
-        ThisRange:  KeyRange{},  // 不再 InfRange
+        ThisRange:  KeyRange{},  // no longer InfRange
         NextRange:  KeyRange{},
         IntraLevel: true,
     }, true
 }
 ```
 
-cap=8 是 RocksDB 的 `max_subcompactions` 同款值——4 张是 L0→L0 合并
-收益的下限（少了不值得 merge），8 张以上一个 worker 单次合并耗时太长
-反而饿死 peer。
+cap=8 matches RocksDB's `max_subcompactions`. 4 tables is the lower bound where L0→L0 merge is worth it (fewer is not worth merging); above 8, one worker's single merge runs long and starves peers.
 
-### 3.5 `fillTablesL0ToL0` 删除 worker 0 限制
+### 3.5 `fillTablesL0ToL0` removes the worker-0 restriction
 
 ```go
 func (lm *levelManager) fillTablesL0ToL0(cd *compactDef) bool {
-    // 不再 if cd.compactorId != 0 { return false }
+    // No longer: if cd.compactorId != 0 { return false }
     cd.nextLevel = lm.levels[0]
     ...
     plan, ok := PlanForL0ToL0(...)
@@ -159,23 +150,22 @@ func (lm *levelManager) fillTablesL0ToL0(cd *compactDef) bool {
     cd.plan.ThisFileSize = math.MaxUint32
     cd.plan.NextFileSize = cd.plan.ThisFileSize
     return lm.compactState.CompareAndAdd(LevelsLocked{}, cd.stateEntry())
-    // 不再 AddRangeWithTables(0, InfRange, ...)
+    // No longer: AddRangeWithTables(0, InfRange, ...)
 }
 ```
 
-### 3.6 `PlanForL0ToLbase` 跳过被 IntraLevel 占用的 table
+### 3.6 `PlanForL0ToLbase` skips IntraLevel-occupied tables
 
-L0→L0 现在按 table 占资源不占 range，所以 L0→Lbase 在选 contiguous
-overlap group 时必须自己用 `state.HasTable` 把已占 table 跳过：
+L0→L0 now holds resources by table, not by range, so when L0→Lbase picks a contiguous overlap group it must use `state.HasTable` to skip held tables itself:
 
 ```go
 for _, t := range l0 {
     if state != nil && state.HasTable(t.ID) {
         if len(out) > 0 {
-            // 累积中间出现 gap，承诺已经累计的部分
+            // gap appeared mid-accumulation; commit what we have
             break
         }
-        continue  // 还没开始累积，跳过这个 table 找下一个
+        continue  // not yet accumulating, skip this table and find the next
     }
     dkr := RangeForTables([]TableMeta{t})
     if len(out) == 0 || kr.OverlapsWith(dkr) {
@@ -187,62 +177,40 @@ for _, t := range l0 {
 }
 ```
 
-## 4. addSplits cap 从 5 → max(NumCompactors, 5)
+## 4. addSplits cap from 5 → `max(NumCompactors, 5)`
 
-旧 cap=5 hard-coded 在 width 计算里。bump 成 `max(NumCompactors, 5)`
-让每次 compaction 内部的 builder fan-out 跟 NumCompactors 同步——
-NumCompactors=8 时一次 compaction 也能并行 8 个 builder goroutine
-而不是 5。
+The old cap=5 was hardcoded into the width calculation. Bumping to `max(NumCompactors, 5)` lets each compaction's internal builder fan-out match `NumCompactors` — at `NumCompactors=8`, one compaction can run 8 builder goroutines instead of 5.
 
-## 5. 测试
+## 5. Tests
 
-`engine/lsm/parallel_l0_test.go`：
+`engine/lsm/parallel_l0_test.go`:
 
-- `TestPlanForL0ToL0AllowsConcurrentWorkers` — 两次连续 PlanForL0ToL0
-  调用都成功并各自得到 disjoint table 集
-- `TestPlanForL0ToL0DoesNotBlockL0ToLbase` — L0→L0 占了前 8 个 table
-  之后，L0→Lbase 仍能拿到剩余 table 的 plan
-- `TestStateIntraLevelEntryDeletesCleanly` — IntraLevel 条目的
-  CompareAndAdd → Delete round-trip，不破坏 table id 计数
+- `TestPlanForL0ToL0AllowsConcurrentWorkers` — two consecutive PlanForL0ToL0 calls both succeed with disjoint table sets.
+- `TestPlanForL0ToL0DoesNotBlockL0ToLbase` — after L0→L0 reserves the first 8 tables, L0→Lbase still gets a plan from the rest.
+- `TestStateIntraLevelEntryDeletesCleanly` — round-trip CompareAndAdd → Delete on an IntraLevel entry, without breaking table-id accounting.
 
-`engine/lsm/parallel_l0_bench_test.go`：
+`engine/lsm/parallel_l0_bench_test.go`:
 
-- `BenchmarkPlanForL0ToL0Concurrent` — 1/2/4/8 worker 并发挑 plan
-- `BenchmarkPlanForL0ToLbaseUnderL0ToL0Pressure` — L0→L0 已占用时
-  L0→Lbase 找 non-conflicting group 的 cost
+- `BenchmarkPlanForL0ToL0Concurrent` — concurrent plan picking at 1/2/4/8 workers.
+- `BenchmarkPlanForL0ToLbaseUnderL0ToL0Pressure` — L0→Lbase cost of finding a non-conflicting group while L0→L0 is occupying tables.
 
-## 6. 决策日志
+## 6. Decision log
 
-- **不动 picker 优先级算法**：worker 仍然按相同的 priority 列表挑
-  level，只是 fallback 到 L0→L0 时不再被 worker_id 限制。最小侵入。
-- **不引入新 lock**：State 仍然单一 `sync.RWMutex`，IntraLevel 只是改
-  CompareAndAdd 内部分支。锁粒度不变。
-- **cap 选 8**：和 RocksDB max_subcompactions 一致，这是 L0→L0 合并
-  收益和 worker 公平性的甜蜜点。
-- **不真改 PlanForL0ToLbase 寻找多 group**：L0→Lbase 自身已经会跳过
-  被占 table 找下一个 contiguous overlap group。多 worker 并行 L0→Lbase
-  在 Lbase（L1）的 range 必然冲突 → 一个时刻最多只有一个 L0→Lbase
-  真正在跑。这是正确的。
+- **Don't touch the picker priority algorithm**: workers still pick levels by the same priority list — they're just no longer worker-id-restricted on the L0→L0 fallback. Minimal intrusion.
+- **No new locks**: State still has a single `sync.RWMutex`; IntraLevel is only an internal branch in `CompareAndAdd`. Lock granularity unchanged.
+- **cap=8**: matches RocksDB `max_subcompactions`, the sweet spot between L0→L0 merge benefit and worker fairness.
+- **Don't actually have `PlanForL0ToLbase` find multiple groups**: L0→Lbase already skips held tables to find the next contiguous overlap group. Multiple parallel L0→Lbase necessarily collide on Lbase (L1) ranges — at most one L0→Lbase truly runs at a time. That's correct.
 
-## 7. 已知 trade-off
+## 7. Known trade-offs
 
-- L0→L0 cap=8 表示一次 L0→L0 最多合并 8 张 SST。如果 L0 SST 数远超
-  4×NumCompactors（极端 backlog 时），仍然有 idle worker——但此时 L0
-  已经 stop write 了，瓶颈已经转到 compaction speed 本身，加 worker
-  数不会缓解（每个 worker 还是要做一次 8-table merge 的活）。
-- IntraLevel entry 不写 range，意味着 metric `State.HasRanges()` 不
-  会反映 L0→L0 占用。如果将来要在 stats 中区分 "active L0→L0 sub-task
-  count"，需要单独 metric。
-- PlanForL0ToLbase 看到 IntraLevel 占的 table 时是 break 累积——
-  这意味着 L0→Lbase 选的 group 永远在被 L0→L0 占的 table 之**前**或
-  之**后**，不能跨越占用区间。常规 workload 没问题；极端的"L0→L0
-  正好占在 L0 中间几个 table" 场景下 L0→Lbase 可能 plan 偏小。
+- L0→L0 cap=8 means at most 8 SSTs are merged in one L0→L0. If L0 SST count is far above 4×NumCompactors (extreme backlog), idle workers can still appear — but at that point L0 has already stop-written; the bottleneck has shifted to compaction speed, and adding workers won't help (each worker still has to do one 8-table merge of work).
+- IntraLevel entries don't write a range, meaning the metric `State.HasRanges()` won't reflect L0→L0 occupancy. If we later want to differentiate "active L0→L0 sub-task count" in stats, we'll need a separate metric.
+- When `PlanForL0ToLbase` sees a table reserved by IntraLevel, it breaks accumulation. So the L0→Lbase group is always **before** or **after** the held tables, never spanning across them. This is fine for normal workloads; in the extreme "L0→L0 happens to hold the middle tables of L0", L0→Lbase may plan a smaller group than ideal.
 
-## 8. 验证
+## 8. Validation
 
-`go test ./engine/lsm/ -count=1` 全绿，新 3 个 test 通过。
-`go test -race ./engine/lsm/ -count=1` race-clean。
-新 2 个 bench 跑通。
+`go test ./engine/lsm/ -count=1` all green, the 3 new tests pass.
+`go test -race ./engine/lsm/ -count=1` race-clean.
+The 2 new benches run.
 
-下一步：在 30M `make bench` 上观测 worker_id 在 compaction 日志里的
-分布——预期会从 100% worker=0 变成 worker={0,1,2,3} 均分。
+Next step: observe the worker_id distribution in compaction logs on 30M `make bench`. Expectation is the 100% worker=0 distribution flattens to worker={0,1,2,3} evenly.

@@ -1,69 +1,69 @@
 # 2026-04-25 Namespace Authority Events Umbrella
 
-## 导读
+## TL;DR
 
-- 🧭 主题：统一 namespace / subtree / snapshot / quota primitive 的 rooted event 边界
-- 🧱 核心对象：Mount、Subtree、SnapshotEpoch、QuotaFence、StoreMembership
-- 🔁 调用链：`fsmeta/server -> coordinator/meta-root command -> rooted event -> coordinator/runtime view -> raftstore/fsmeta primitive`
-- 📚 参考对象：NoKV Eunomia、`meta/root` rooted truth、DaisyNFS / FSCQ 的 verified metadata 边界、TiKV PD 的 membership / runtime view 分层
+- 🧭 Topic: a unified rooted-event boundary across namespace / subtree / snapshot / quota primitives.
+- 🧱 Core objects: Mount, Subtree, SnapshotEpoch, QuotaFence, StoreMembership.
+- 🔁 Call chain: `fsmeta/server -> coordinator/meta-root command -> rooted event -> coordinator/runtime view -> raftstore/fsmeta primitive`.
+- 📚 Reference: NoKV Eunomia, `meta/root` rooted truth, DaisyNFS / FSCQ-style verified metadata boundaries, TiKV PD's membership / runtime view layering.
 
-## 1. 结论
+## 1. Conclusion
 
-namespace primitive 不应该各自发明 RootEvent。当前代码已经按这份 umbrella 落了主要 domain：
+Namespace primitives must not each invent their own RootEvent. The current code already covers the major domains under this umbrella:
 
 | Domain | Rooted truth | Runtime view | Stage |
 |---|---|---|---|
-| Store membership | store 是否属于集群、是否 retired | address、heartbeat、capacity、load | done |
-| Mount lifecycle | mount 是否存在、root inode、schema version | mount admission cache、watch subscription close | done |
-| Subtree authority | 某个 subtree 的 authority era / handoff frontier | watcher fan-out、pending handoff repair | done |
-| Snapshot epoch | snapshot ID、read timestamp、covered subtree | snapshot-version reads | done |
-| Quota fence | quota limit、fence era、frontier | quota fence cache + data-plane usage counter | done |
+| Store membership | whether a store belongs to the cluster, whether retired | address, heartbeat, capacity, load | done |
+| Mount lifecycle | whether mount exists, root inode, schema version | mount admission cache, watch subscription close | done |
+| Subtree authority | a subtree's authority era / handoff frontier | watcher fan-out, pending handoff repair | done |
+| Snapshot epoch | snapshot ID, read timestamp, covered subtree | snapshot-version reads | done |
+| Quota fence | quota limit, fence era, frontier | quota fence cache + data-plane usage counter | done |
 
-原则：
+Principle:
 
-> `meta/root` 只保存必须持久、可审计、影响 authority legality 的事实。地址、负载、cache、watcher 和高频 usage counter 不进 root；usage counter 是 data-plane key，并入 fsmeta metadata transaction。
+> `meta/root` only stores facts that **must** be durable, auditable, and that affect authority legality. Address, load, cache, watcher, and high-frequency usage counters do not belong in root; usage counters are data-plane keys, folded into the fsmeta metadata transaction.
 
-## 2. 为什么要先做 umbrella
+## 2. Why we built the umbrella first
 
-如果不先统一 schema，后面会出现五种互相不兼容的 event 风格：
+Without a unified schema, you end up with five mutually incompatible event styles:
 
-- store membership 一套；
-- mount registry 一套；
-- snapshot 一套；
-- quota 一套；
-- subtree handoff 又一套。
+- one for store membership;
+- one for mount registry;
+- one for snapshot;
+- one for quota;
+- one for subtree handoff.
 
-结果是 `meta/root/state` 变成事件堆场，`coordinator/rootview` 每个 primitive 写一份 materialization，测试矩阵也会碎掉。
+Result: `meta/root/state` becomes an event landfill, `coordinator/rootview` writes a separate materialization for every primitive, and the test matrix shatters.
 
-这份 umbrella 的目的不是一次实现所有 event，而是先固定三件事：
+The umbrella's purpose isn't to land every event at once. It's to fix three things first:
 
-1. 哪些事实可以进入 rooted truth；
-2. event 命名和 payload 风格；
-3. compact state 怎么按 domain 分层。
+1. Which facts may enter rooted truth.
+2. Event naming and payload style.
+3. How compact state is layered by domain.
 
-## 3. Event 命名规则
+## 3. Event naming rules
 
-用 lifecycle 动词，不用模糊状态词。
+Use lifecycle verbs, avoid fuzzy state words.
 
-| 推荐 | 避免 | 理由 |
+| Recommended | Avoid | Reason |
 |---|---|---|
-| `StoreJoined` / `StoreRetired` | 暂时离线类命名 | `retired` 明确表示 membership 终态 |
-| `MountRegistered` / `MountRetired` | `MountAdded` / `MountDeleted` | mount 是 authority object，不只是 map entry |
-| `SnapshotEpochPublished` / `SnapshotEpochRetired` | `SnapshotCreated` | snapshot 关键是 read epoch，不是文件对象 |
-| `QuotaFenceUpdated` | `QuotaChanged` | fence 表示 authority boundary |
-| `SubtreeHandoffStarted` / `SubtreeHandoffCompleted` | `SubtreeMoved` | handoff 是协议，不是单次赋值 |
+| `StoreJoined` / `StoreRetired` | "temporarily offline" wording | `retired` clearly denotes a terminal membership state |
+| `MountRegistered` / `MountRetired` | `MountAdded` / `MountDeleted` | mount is an authority object, not just a map entry |
+| `SnapshotEpochPublished` / `SnapshotEpochRetired` | `SnapshotCreated` | the essential thing about a snapshot is a read epoch, not a file object |
+| `QuotaFenceUpdated` | `QuotaChanged` | fence denotes an authority boundary |
+| `SubtreeHandoffStarted` / `SubtreeHandoffCompleted` | `SubtreeMoved` | handoff is a protocol, not a single assignment |
 
-所有 event 都应满足：
+Every event must:
 
-- payload 只包含 truth 字段；
-- 不包含 runtime address / load / cache；
-- 有明确 idempotent materialization 规则；
-- 能从 compact state 反推出当前 truth；
-- 能被 audit 工具独立解释。
+- carry only truth fields in its payload;
+- not include runtime address / load / cache;
+- have a well-defined idempotent materialization rule;
+- allow the current truth to be reconstructed from compact state;
+- be independently interpretable by audit tools.
 
-## 4. Compact state 分层
+## 4. Compact state layering
 
-`rootstate.Snapshot` 不应该只有 flat fields。当前方向是按 domain 分层：
+`rootstate.Snapshot` should not be a flat field bag. The current direction is to layer it by domain:
 
 ```go
 type Snapshot struct {
@@ -81,11 +81,11 @@ type Snapshot struct {
 }
 ```
 
-这不是要求一次改完。当前已按这个方向加入 `Stores`、`Mounts`、`Subtrees`、`SnapshotEpochs`、`Quotas` 等 compact state；后续新增 domain 也应继续沿用这个分层，不要把所有东西塞进 `State`。
+We're not requiring this all in one go. Today we've already added `Stores`, `Mounts`, `Subtrees`, `SnapshotEpochs`, `Quotas`, etc. in this direction; future domains continue to follow this layering — don't stuff everything into `State`.
 
 ## 5. Store membership events
 
-Store membership 的最小形状：
+Minimum shape for store membership:
 
 ```go
 type StoreMembership struct {
@@ -96,14 +96,14 @@ type StoreMembership struct {
 }
 ```
 
-Events：
+Events:
 
 ```text
 StoreJoined(store_id)
 StoreRetired(store_id)
 ```
 
-不进 rooted truth 的字段：
+Fields **not** in rooted truth:
 
 - `client_addr`
 - `raft_addr`
@@ -112,28 +112,28 @@ StoreRetired(store_id)
 - `available`
 - `leader_count`
 
-这些字段由 store heartbeat 刷新到 coordinator runtime view。
+These are refreshed into the coordinator runtime view by store heartbeat.
 
 ## 6. Mount lifecycle events
 
-Mount 是 fsmeta 的 namespace 根。fsmeta 不需要完整 POSIX mount，但需要一个 durable mount registry，避免每个 caller 自己约定 mount string。
+Mount is fsmeta's namespace root. fsmeta doesn't need full POSIX mount, but it needs a durable mount registry so callers don't all invent their own mount strings.
 
-当前代码已实现这条 registry：mount membership 进入 `meta/root` rooted truth，`nokv-fsmeta` 的写路径通过 coordinator mount view 做 admission，未注册或 retired mount 会被拒绝。
+The current code implements that registry: mount membership lives in `meta/root` rooted truth; `nokv-fsmeta`'s write path performs admission via the coordinator mount view; an unregistered or retired mount is rejected.
 
-`spec/MountLifecycle.tla` 覆盖这条 lifecycle：
+`spec/MountLifecycle.tla` covers this lifecycle:
 
-- `MountRegistered` 只能把未出现过的 mount 变成 active；
-- `MountRetired` 是终态，retired mount 不能再次 active；
-- mount 的 root inode 和 schema version 属于 rooted identity，不是 runtime cache。
+- `MountRegistered` can only turn a never-seen mount into active;
+- `MountRetired` is terminal — a retired mount cannot become active again;
+- a mount's root inode and schema version are part of rooted identity, not runtime cache.
 
-建议 events：
+Recommended events:
 
 ```text
 MountRegistered(mount_id, root_inode, schema_version)
 MountRetired(mount_id, retired_at)
 ```
 
-Compact record：
+Compact record:
 
 ```go
 type MountRecord struct {
@@ -145,26 +145,26 @@ type MountRecord struct {
 }
 ```
 
-进入 rooted truth：
+In rooted truth:
 
-- mount 是否存在；
-- root inode；
-- fsmeta schema version；
-- retired 状态。
+- whether the mount exists;
+- root inode;
+- fsmeta schema version;
+- retired status.
 
-不进入 rooted truth：
+Not in rooted truth:
 
-- active client sessions；
-- local mount cache；
-- mount endpoint / frontend address。
+- active client sessions;
+- local mount cache;
+- mount endpoint / frontend address.
 
 ## 7. Subtree authority events
 
-`WatchSubtree` 本身不需要把每个 watch subscription 写进 root。subscription 是 runtime view。
+`WatchSubtree` itself does not need every watch subscription written into root. Subscriptions are runtime view.
 
-但 subtree 的 authority boundary 需要 rooted event，否则后续 `RenameSubtree` / `SnapshotSubtree` / `QuotaFence` 会各自发明边界。
+But subtree authority boundaries do need rooted events; otherwise `RenameSubtree` / `SnapshotSubtree` / `QuotaFence` will each invent their own boundaries.
 
-当前 event 形状：
+Current event shape:
 
 ```text
 SubtreeAuthorityDeclared(mount_id, subtree_root, authority_id, era)
@@ -172,35 +172,35 @@ SubtreeHandoffStarted(mount_id, subtree_root, from_authority, to_authority, lega
 SubtreeHandoffCompleted(mount_id, subtree_root, authority_id, era, inherited_frontier)
 ```
 
-这套命名直接对应 Eunomia：
+The naming maps directly onto Eunomia:
 
-- `authority_id + era` 类似 Tenure；
-- `legacy_frontier` 类似 Legacy；
-- `handoff completed` 对应 Finality。
+- `authority_id + era` ≈ Tenure;
+- `legacy_frontier` ≈ Legacy;
+- `handoff completed` ≈ Finality.
 
-`WatchSubtree` 使用 subtree prefix 过滤 data-plane apply events，不把每个 watch 事件写进 root。`RenameSubtree` 使用这组 rooted handoff event 推进 subtree authority frontier。
+`WatchSubtree` filters data-plane apply events by subtree prefix; it does not write each watch event into root. `RenameSubtree` advances the subtree authority frontier through this set of rooted handoff events.
 
-`spec/SubtreeAuthority.tla` 建模这组 handoff 语义。这个 spec 不建模 dentry 写入，只建模 authority 记录本身：
+`spec/SubtreeAuthority.tla` models these handoff semantics. The spec doesn't model dentry writes — only the authority records:
 
-- `Primacy`：每个 subtree 至多一个 active authority；
-- `Inheritance`：successor frontier 必须覆盖 predecessor frontier；
-- `Silence`：sealed authority 的 reply 不再 admissible；
-- `Finality`：sealed predecessor 必须处于 pending handoff 或 closed。
+- `Primacy`: at most one active authority per subtree;
+- `Inheritance`: successor frontier must cover predecessor frontier;
+- `Silence`: a sealed authority's replies are no longer admissible;
+- `Finality`: a sealed predecessor must be in pending handoff or closed.
 
-当前 `RenameSubtree` 按这个 spec 方向实现 rooted handoff event，而不是另起一套 rename-local 状态机。
+The current `RenameSubtree` follows this spec by emitting rooted handoff events rather than inventing a rename-local state machine.
 
 ## 8. Snapshot epoch events
 
-`SnapshotSubtree` 的核心不是复制一份数据，而是发布一个 stable read epoch。
+`SnapshotSubtree`'s essence isn't to copy data — it's to publish a stable read epoch.
 
-建议 events：
+Recommended events:
 
 ```text
 SnapshotEpochPublished(snapshot_id, mount_id, subtree_root, read_ts, frontier)
 SnapshotEpochRetired(snapshot_id)
 ```
 
-Compact record：
+Compact record:
 
 ```go
 type SnapshotEpoch struct {
@@ -214,78 +214,78 @@ type SnapshotEpoch struct {
 }
 ```
 
-`read_ts` 来自 coordinator TSO。`frontier` 表示 snapshot 覆盖的 metadata frontier。真正的数据读取仍然走 Percolator MVCC，不把文件列表写进 root。
+`read_ts` comes from coordinator TSO. `frontier` denotes the metadata frontier covered by the snapshot. Actual data reads still go through Percolator MVCC — we don't write file lists into root.
 
 ## 9. Quota fence events
 
-Quota fence 已实现。event 是：
+Quota fence is implemented. The event is:
 
 ```text
 QuotaFenceUpdated(subject, limit_bytes, limit_inodes, era, frontier)
 ```
 
-当前语义：
+Current semantics:
 
-- rooted truth 保存 quota limit 和 fence era；
-- data plane 保存 usage counter key；
-- 写路径把 usage counter mutation 和 dentry/inode mutation 放进同一个 Percolator transaction；
-- gateway 重启不丢 usage，多 gateway 通过同一个 usage key 上的 Percolator conflict 串行化。
+- rooted truth holds the quota limit and fence era;
+- the data plane holds the usage counter key;
+- the write path packs usage-counter mutation and dentry/inode mutation into the same Percolator transaction;
+- gateway restart doesn't lose usage; multiple gateways serialize through Percolator conflict on the same usage key.
 
-不要把每次 usage 增减写进 root。那会把高频数据面计数污染 authority truth。
+Don't write every usage increment/decrement into root. That would pollute authority truth with high-frequency data-plane counters.
 
-## 10. WatchSubtree 与 rooted event 的边界
+## 10. The WatchSubtree vs rooted-event boundary
 
-`WatchSubtree` 是 fsmeta 的 headline primitive，但它自己的 event stream 不等于 RootEvent。
+`WatchSubtree` is fsmeta's headline primitive, but its event stream is not RootEvent.
 
-两条流要分开：
+The two streams must stay separate:
 
-| 流 | 来源 | 内容 | 持久性 |
+| Stream | Source | Content | Persistence |
 |---|---|---|---|
-| RootEvent | `meta/root` | authority / lifecycle truth | 持久、审计 |
-| WatchEvent | raftstore apply hook | file/dentry mutation notification | 可恢复 cursor，但不进 root |
+| RootEvent | `meta/root` | authority / lifecycle truth | durable, auditable |
+| WatchEvent | raftstore apply hook | file/dentry mutation notifications | recoverable cursor, but not in root |
 
-`WatchSubtree` 可以借鉴 `meta/root` 的 TailSubscription 模式，但不能把每个 file mutation 塞进 `meta/root`。
+`WatchSubtree` can borrow the TailSubscription pattern from `meta/root`, but it must not push every file mutation into `meta/root`.
 
-## 11. 实施状态
+## 11. Implementation status
 
-1. `StoreJoined` / `StoreRetired`：最小 rooted membership，已实现。
-2. `MountRegistered` / `MountRetired`：fsmeta namespace registry，已实现。
-3. `WatchSubtree`：runtime watch stream，不新增 high-frequency root events，已实现 ready / ack / replay。
-4. `SnapshotEpochPublished` / `SnapshotEpochRetired`：MVCC snapshot epoch，已实现。
-5. `SubtreeAuthorityDeclared` / `SubtreeHandoffStarted` / `SubtreeHandoffCompleted`：RenameSubtree authority frontier，已实现。
-6. `QuotaFenceUpdated`：rooted fence + data-plane usage counter，已实现。
+1. `StoreJoined` / `StoreRetired`: minimal rooted membership — done.
+2. `MountRegistered` / `MountRetired`: fsmeta namespace registry — done.
+3. `WatchSubtree`: runtime watch stream; no high-frequency root events added; ready / ack / replay all done.
+4. `SnapshotEpochPublished` / `SnapshotEpochRetired`: MVCC snapshot epoch — done.
+5. `SubtreeAuthorityDeclared` / `SubtreeHandoffStarted` / `SubtreeHandoffCompleted`: RenameSubtree authority frontier — done.
+6. `QuotaFenceUpdated`: rooted fence + data-plane usage counter — done.
 
-这个顺序的好处已经体现在代码里：先验证 root schema 扩展，再做 runtime watch，再做 read-only snapshot，最后接入 handoff 和 quota。
+The benefit of this ordering is already visible in code: we validated root-schema extension first, then runtime watch, then read-only snapshot, then handoff and quota.
 
-## 12. 测试规则
+## 12. Testing rules
 
-每新增一种 RootEvent 必须有四类测试：
+Every new RootEvent must come with four classes of tests:
 
-| 测试 | 位置 | 目的 |
+| Test | Location | Purpose |
 |---|---|---|
-| event constructor / clone | `meta/root/event` | payload 不 alias |
-| wire roundtrip | `meta/wire` | proto 编码不丢字段 |
-| state materialization | `meta/root/state` | compact state 正确 |
-| coordinator bootstrap | `coordinator/integration` | runtime view 从 rooted snapshot 恢复 |
+| event constructor / clone | `meta/root/event` | payload doesn't alias |
+| wire roundtrip | `meta/wire` | proto encoding doesn't drop fields |
+| state materialization | `meta/root/state` | compact state is correct |
+| coordinator bootstrap | `coordinator/integration` | runtime view restores from rooted snapshot |
 
-如果 event 会影响 data-plane admission，还要加 `raftstore/integration` 测试。
+If the event affects data-plane admission, also add a `raftstore/integration` test.
 
-## 13. 不做什么
+## 13. What we don't do
 
-- 不把 WatchEvent 当 RootEvent。
-- 不把 runtime address、watcher、session、cache、load 写进 root。
-- 不把 mount registry 放进 fsmeta 本地内存当 truth。
-- 不让 snapshot 记录具体 dentry 列表。
-- 不把 `RenameSubtree` 的每个 dentry mutation 展开成 rooted event；root 只记录 authority handoff frontier。
+- Don't treat WatchEvent as RootEvent.
+- Don't write runtime address, watcher, session, cache, or load into root.
+- Don't keep the mount registry as truth in fsmeta local memory.
+- Don't record specific dentry lists in snapshots.
+- Don't expand each `RenameSubtree` dentry mutation into rooted events — root only records the authority handoff frontier.
 
-## 14. 完成信号
+## 14. Definition of done
 
-这份 umbrella 完成后，任何新增 namespace primitive 都必须先回答：
+After this umbrella, any new namespace primitive must answer:
 
-1. 它有没有 rooted truth？
-2. 如果有，event 名是什么，payload 是否只包含 truth？
-3. 它对应的 runtime view 是什么？
-4. 它和 Eunomia / authority handoff 有没有关系？
-5. 它的四类测试在哪里？
+1. Does it have rooted truth?
+2. If yes, what's the event name; does the payload contain only truth fields?
+3. What is its corresponding runtime view?
+4. Does it relate to Eunomia / authority handoff?
+5. Where do its four classes of tests live?
 
-答不上来，就不写代码。
+Can't answer? Don't write the code.

@@ -1,43 +1,43 @@
-# 2026-03-30 为什么 Coordinator 和执行面必须分层
+# 2026-03-30 Why Coordinator and the execution plane must stay layered
 
-> 状态：当前这条边界已经进一步收敛。`coordinator` 负责 rooted view、service 和 proposal gate；`raftstore` 负责 data-plane execute；`meta/root` 负责最小 truth。本文重点解释为什么 `Coordinator` 不能和执行面混成一层。
+> Status: this boundary has continued to converge. `coordinator` owns the rooted view, services, and proposal gate; `raftstore` owns data-plane execute; `meta/root` owns minimal truth. This note explains why `Coordinator` cannot be merged into the execution plane.
 
-## 导读
+## TL;DR
 
-- 🧭 主题：为什么 `coordinator` 必须是 view/service 层，而不是半个执行器。
-- 🧱 核心对象：`meta/root`、`coordinator`、`raftstore`、`RootEvent`。
-- 🔁 调用链：`planned truth -> data-plane execute -> terminal truth`。
-- 📚 参考对象：TiKV 的控制面/执行面分离、Delos/FDB 的 truth/service 解耦。
+- 🧭 Topic: why `coordinator` must be a view/service layer, not a half-baked executor.
+- 🧱 Core objects: `meta/root`, `coordinator`, `raftstore`, `RootEvent`.
+- 🔁 Call chain: `planned truth -> data-plane execute -> terminal truth`.
+- 📚 Reference: TiKV's control-plane / execution-plane separation; Delos / FDB-style truth/service decoupling.
 
-## 1. 为什么这件事重要
+## 1. Why this matters
 
-分布式 KV 最容易在控制面上犯的一个错误是：
+The most common mistake distributed KVs make on the control plane:
 
-- 先做一个中心服务
-- 再把目录、调度、元数据、执行入口、运维命令慢慢都堆进去
-- 最后得到一个又大又胖的“控制平面大脑”
+- Build one central service first.
+- Then keep stuffing routing, scheduling, metadata, execution entry points, and operational commands into it.
+- End up with one fat "control-plane brain."
 
-这样短期看起来方便，长期的问题非常明显：
+It looks convenient short-term. The long-term cost is severe:
 
-1. authority 和 runtime 混在一起
-2. 恢复路径和正常执行路径不一致
-3. 执行面被 control-plane 越权写脏
+1. authority and runtime get tangled.
+2. recovery path diverges from the normal execute path.
+3. the execution plane gets dirtied by control-plane overreach.
 
-NoKV 当前选择的是另一条路：
+NoKV picks a different path:
 
-- `meta/root` 作为最小 truth kernel
-- `coordinator` 作为 rooted view + service
-- `raftstore` 作为 executor
+- `meta/root` as the minimal truth kernel
+- `coordinator` as the rooted view + service
+- `raftstore` as the executor
 
-## 2. 当前分层
+## 2. Current layering
 
-相关代码：
+Relevant code:
 
 - `coordinator`
 - `meta/root`
 - `raftstore/store`
 
-结构如下：
+Structure:
 
 ```mermaid
 flowchart LR
@@ -48,11 +48,11 @@ flowchart LR
     DP --> Coordinator
 ```
 
-### 三层职责
+### Three layers of responsibility
 
 #### `meta/root`
 
-负责：
+Owns:
 
 - rooted truth
 - transition state machine
@@ -60,7 +60,7 @@ flowchart LR
 
 #### `coordinator`
 
-负责：
+Owns:
 
 - route view
 - transition view
@@ -70,25 +70,25 @@ flowchart LR
 
 #### `raftstore`
 
-负责：
+Owns:
 
 - consume target
-- 执行 conf change / admin command
+- execute conf change / admin command
 - local apply
-- terminal truth publish
+- publish terminal truth
 
-## 3. 为什么 `Coordinator` 不能直接做执行面
+## 3. Why `Coordinator` cannot directly serve as the execution plane
 
-### 3.1 control-plane 不等于 execution-plane
+### 3.1 control-plane is not execution-plane
 
-`Coordinator` 擅长的是：
+What `Coordinator` is good at:
 
-- 看全局视图
-- 做路由和目录服务
-- 做 proposal gate
-- 做 scheduler decision 和 rooted assessment
+- Global view
+- Routing and directory service
+- Proposal gate
+- Scheduler decisions and rooted assessment
 
-但真正执行这些动作的仍然是 leader store：
+But the actual *execution* of those actions happens at the leader store:
 
 - `AddPeer`
 - `RemovePeer`
@@ -97,31 +97,31 @@ flowchart LR
 - `Merge`
 - snapshot install
 
-如果让 `Coordinator` 直接改本地 region 运行时，会立刻出现三个问题：
+If we let `Coordinator` directly mutate local region runtime, three problems appear immediately:
 
-1. 本地 truth 与 raft apply 路径脱节
-2. 正常执行和恢复路径不一致
-3. control-plane 开始兼做 executor，错误模型爆炸
+1. Local truth becomes detached from the raft apply path.
+2. Normal execute path and recovery path no longer agree.
+3. The control-plane starts moonlighting as an executor, blowing up the error model.
 
-### 3.2 执行必须落在 leader peer 上
+### 3.2 Execution must land on the leader peer
 
-相关代码：
+Relevant code:
 
 - `raftstore/store/transition_executor.go`
 - `raftstore/store/membership_ops.go`
 - `raftstore/store/admin_ops.go`
 
-真正执行时必须经过：
+Real execution must go through:
 
-1. 找到本地 leader peer
-2. publish planned truth
-3. propose conf change / admin command
-4. local apply
-5. publish terminal truth
+1. Find the local leader peer.
+2. Publish planned truth.
+3. Propose conf change / admin command.
+4. Local apply.
+5. Publish terminal truth.
 
-这条路径必须保持清楚，否则整个 lifecycle 会变脏。
+This path must stay clean — otherwise the entire lifecycle gets polluted.
 
-## 4. 当前实际调用逻辑
+## 4. Actual call flow today
 
 ### 4.1 peer change
 
@@ -133,81 +133,81 @@ sequenceDiagram
     participant RS as Raftstore
     participant RP as Region Leader Peer
 
-    OP->>Coordinator: 请求加副本/删副本
+    OP->>Coordinator: request add/remove replica
     Coordinator->>MR: rooted lifecycle assessment + append planned event
-    Coordinator-->>RS: target 可执行
+    Coordinator-->>RS: target executable
     RS->>RP: propose conf change
-    RP-->>RS: apply 完成
+    RP-->>RS: apply complete
     RS->>Coordinator: publish terminal event
     Coordinator->>MR: append applied truth
 ```
 
 ### 4.2 split / merge
 
-路径类似，只是 proposal payload 从 conf change 换成 admin command。
+Same path; the proposal payload is an admin command instead of a conf change.
 
-## 5. 这条分层的收益
+## 5. Benefits of this layering
 
-### 5.1 `Coordinator` 不重新长成 authority
+### 5.1 `Coordinator` doesn't grow back into authority
 
-当前 `coordinator` 的主要代码：
+`coordinator`'s main code today:
 
 - `coordinator/storage/root.go`
 - `coordinator/catalog/cluster.go`
 - `coordinator/server`
 
-可以看出来，它已经不是一个“大 metadata 数据库”了，而是一个 rooted view host。
+It's clearly no longer a "big metadata database" but a rooted view host.
 
-### 5.2 执行面更容易纯化
+### 5.2 The execution plane is easier to keep pure
 
-`raftstore` 当前已经被进一步压成：
+`raftstore` has been compressed further into:
 
 - builder
 - executor
 - outcome
 
-这为后续继续做纯 executor 化提供了清楚的落点。
+This gives a clear landing for further "pure executor" cleanup.
 
-### 5.3 后续 scheduler/runtime 语义更容易单独生长
+### 5.3 Future scheduler / runtime semantics can grow independently
 
-你以后可以继续在 `Coordinator` 里做 scheduler policy、admission、backoff 和 debug surface，但这些都不需要倒灌进 `meta/root`。
+You can keep adding scheduler policy, admission, backoff, and debug surface inside `Coordinator` without leaking back into `meta/root`.
 
-## 6. 设计理念
+## 6. Design philosophy
 
-这里的核心理念有两条：
+Two core principles:
 
-### 6.1 `Coordinator` 是全局视图和服务层，不是本地状态执行器
+### 6.1 `Coordinator` is the global view and service layer, not the local-state executor
 
-### 6.2 执行路径必须和恢复路径共享同一条 truth model
+### 6.2 Execute path and recovery path must share one truth model
 
-如果一个动作只能在运行时成立、恢复后解释不出来，那它就是设计上不干净。
+If an action only holds at runtime and can't be reconstructed after recovery, it's design-dirty.
 
-## 7. 参考对象
+## 7. Reference patterns
 
-这条分层借鉴的是一些工业系统长期证明有效的结构：
+This layering borrows from some industrial structures with long track records:
 
-- TiKV 里 control-plane 与 raft 执行面的基本分离
-- FoundationDB / Delos 一类系统里 truth 与 service 的解耦
-- 数据库内核里“不要让编排器直接写执行器本地状态”的基本原则
+- TiKV's basic separation between control-plane and raft execution.
+- FoundationDB / Delos-style truth/service decoupling.
+- The database-kernel principle "don't let the orchestrator write executor-local state directly."
 
-## 8. 当前已经做对的地方
+## 8. What's already correct today
 
-- `Coordinator` 不再维护第二份 authority truth
-- `meta/root` 持有 transition state machine
-- `raftstore` 已经更接近 target-driven executor
-- transition view 已经从 rooted truth materialize 出来
+- `Coordinator` no longer maintains a second copy of authority truth.
+- `meta/root` owns the transition state machine.
+- `raftstore` is closer to a target-driven executor.
+- The transition view is materialized from rooted truth.
 
-## 9. 还值得继续做的
+## 9. Still worth doing
 
-- `raftstore` 继续纯 executor 化
-- `Coordinator` 对外 transition/debug surface 继续增强
+- Continue pushing `raftstore` toward pure executor.
+- Continue strengthening `Coordinator`'s outward transition / debug surface.
 
-## 10. 总结
+## 10. Summary
 
-`Coordinator` 和执行面不能混成一层，根本原因不是“命名要好看”，而是：
+The reason `Coordinator` and the execution plane can't merge into one layer isn't aesthetic naming. It's that:
 
-- control-plane 不应该篡改本地执行态
-- authority、view、runtime、executor 必须分层
-- 只有这样，系统恢复、测试、调度和演进才不会互相污染
+- control-plane should not mutate local execution state.
+- authority, view, runtime, executor must be layered.
+- Only with this layering do recovery, testing, scheduling, and evolution stop polluting each other.
 
-当前 NoKV 这条线已经开始站稳，而且它是后续继续做 scheduler/control-plane runtime 研究的必要前提。
+NoKV is starting to settle into this line, and it's a prerequisite for any further scheduler / control-plane runtime research.

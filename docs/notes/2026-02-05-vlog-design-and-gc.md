@@ -1,67 +1,67 @@
-# 2026-02-05 vlog 设计与 GC（WiscKey + HashKV 工程化）
+# 2026-02-05 vlog design and GC (engineered WiscKey + HashKV)
 
-这份笔记把 NoKV 的 ValueLog（vlog）设计、GC 机制、以及最近的并行化与热冷分流优化整理成一份完整版本。内容融合 **WiscKey**（KV 分离）与 **HashKV**（哈希分区/热冷分离）两条主线，并结合当前实现细节与参数策略。
+This note consolidates NoKV's ValueLog (vlog) design, GC mechanics, and recent parallelization + hot/cold routing work into a single complete picture. It blends two threads — **WiscKey** (KV separation) and **HashKV** (hash partitioning + hot/cold separation) — and ties them to current implementation details and tuning strategy.
 
 ---
 
-## 一页摘要（TL;DR）
+## TL;DR
 
-**核心思路**：LSM 只保存 Key+ValuePtr，大 Value 顺序写入 vlog；再用 **多桶 + 热冷分流** 把热点更新局部化，并通过 **并行 GC + 压力控制** 把 GC 开销稳定在可控范围。
+**Core idea**: LSM keeps only Key + ValuePtr; large values go append-only into vlog; **multi-bucket + hot/cold routing** localizes hot updates; **parallel GC + pressure control** keeps GC overhead in a controllable band.
 
-| 设计点 | 借鉴 | NoKV 实现 | 直接收益 |
+| Design point | Inspiration | NoKV implementation | Direct benefit |
 | :-- | :-- | :-- | :-- |
-| KV 分离 | WiscKey | vlog + ValuePtr | LSM 更小、写入更顺序 |
-| 哈希分区 | HashKV | `ValueLogBucketCount` | 垃圾局部化 |
-| 哈希分区 | HashKV | `ValueLogBucketCount` | 垃圾局部化 |
-| GC 并行 | 工程化 | `ValueLogGCParallelism` | 提升清理吞吐 |
-| 压力控制 | 工程化 | reduce/skip 阈值 | 不与 compaction 抢资源 |
+| KV separation | WiscKey | vlog + ValuePtr | Smaller LSM, more sequential writes |
+| Hash partitioning | HashKV | `ValueLogBucketCount` | Garbage localization |
+| Hash partitioning | HashKV | `ValueLogBucketCount` | Garbage localization |
+| Parallel GC | Engineering | `ValueLogGCParallelism` | Higher cleanup throughput |
+| Pressure control | Engineering | reduce/skip thresholds | Doesn't fight compaction for resources |
 
 ---
 
-## 1. 论文借鉴要点
+## 1. Paper background
 
 ### 1.1 WiscKey
-* **KV 分离**：LSM 只存 Key + ValuePtr，大 Value 写入 vlog。
-* **顺序写**：写入走日志追加，延迟稳定。
-* **GC 必要性**：旧值只能通过搬运+删除回收。
+* **KV separation**: LSM stores Key + ValuePtr; large values go to vlog.
+* **Sequential writes**: append-only writes give stable latency.
+* **GC necessity**: stale values can only be reclaimed by copy + delete.
 
 ### 1.2 HashKV
-* **哈希分区**：ValueLog 分桶，key 的历史版本集中。
-* **热冷分离**：热点更新影响局部桶，冷数据保持稳定。
-* **轻 GC**：热点桶高频回收，冷桶低频维护。
+* **Hash partitioning**: bucketize ValueLog so a key's history is concentrated.
+* **Hot/cold separation**: hot updates affect local buckets while cold data stays stable.
+* **Lightweight GC**: hot buckets get aggressive reclamation; cold buckets get low-frequency maintenance.
 
-### 1.3 参考论文（标题）
+### 1.3 Reference papers
 * **[WiscKey: Separating Keys from Values in SSD-conscious Storage](https://www.usenix.org/conference/fast16/technical-sessions/presentation/lu)**
 * **[HashKV: Enabling Efficient Updates in KV Storage via Hashing](https://www.usenix.org/conference/atc18/presentation/chan)**
 
 ---
 
-## 2. 设计目标（工程化视角）
+## 2. Design goals (engineering view)
 
-1) **写路径极简**：顺序追加为主，不引入复杂索引结构。  
-2) **GC 不扰动主路径**：并行但受控，避免和 compaction 争 IO。  
-3) **热点更新局部化**：尽量把垃圾限制在热桶。  
-4) **可观测 + 可调参**：让调参是“看得见的系统工程”。  
-
----
-
-## 2.1 设计约束与假设
-
-* **Crash Recovery 必须可靠**：vlog 的 head/删除状态必须可恢复。
-* **写放大优先于读放大**：更倾向把写成本压低，读路径可容忍一次额外跳转。
-* **GC 可退让**：GC 是“后台维护”，不能把 compaction 压死。
+1) **Minimal write path**: append dominates; no fancy index structures.
+2) **GC must not perturb the main path**: parallel but throttled, doesn't fight compaction for I/O.
+3) **Localize hot updates**: keep garbage inside hot buckets when possible.
+4) **Observable + tunable**: parameter tuning is "visible system engineering."
 
 ---
 
-## 3. 架构总览（分层模型）
+## 2.1 Constraints and assumptions
+
+* **Crash recovery must be reliable**: vlog head and delete state must be recoverable.
+* **Prefer write amplification cost over read amplification**: lean on lower write cost; the read path can tolerate one extra hop.
+* **GC can yield**: GC is "background maintenance" — it must not crush compaction.
+
+---
+
+## 3. Architecture overview (layered model)
 
 ```mermaid
 flowchart TD
-  subgraph DB["DB Policy 层"]
-    VlogGo["vlog.go / vlog_gc.go<br/>写入路由 + GC 调度"]
+  subgraph DB["DB Policy layer"]
+    VlogGo["vlog.go / vlog_gc.go<br/>write routing + GC scheduling"]
   end
   subgraph Mgr["ValueLog Manager"]
-    MgrGo["vlog/manager.go<br/>分段/轮转/读写"]
+    MgrGo["vlog/manager.go<br/>segment / rotation / read-write"]
   end
   subgraph IO["IO Layer"]
     File["file/ (mmap)<br/>LogFile"]
@@ -72,7 +72,7 @@ flowchart TD
 
 ---
 
-## 4. 目录布局与分桶结构
+## 4. Directory layout and bucketing
 
 ```text
 <workdir>/
@@ -86,14 +86,14 @@ flowchart TD
     ...
 ```
 
-* `ValueLogBucketCount > 1` 启用分桶。
-* ValuePtr 现在包含 `Bucket/Fid/Offset/Len`，LSM 可以精确定位。
+* `ValueLogBucketCount > 1` enables bucketing.
+* ValuePtr now contains `Bucket/Fid/Offset/Len`, allowing precise positioning from the LSM side.
 
 ---
 
-## 4.1 记录格式与 ValuePtr 布局
+## 4.1 Record format and ValuePtr layout
 
-**vlog 记录格式**（与 WAL 一致）：
+**vlog record format** (same as WAL):
 
 ```
 +--------+----------+------+-------------+-----------+-------+
@@ -102,7 +102,7 @@ flowchart TD
                                              + CRC32 (4B)
 ```
 
-**ValuePtr 布局**：
+**ValuePtr layout**:
 
 ```
 +------+--------+-----+--------+
@@ -111,13 +111,13 @@ flowchart TD
 | 4B   | 4B     | 4B  | 4B     |
 ```
 
-这保证了：**LSM 索引只需持有 ValuePtr 即可定位到具体桶 + 文件 + 偏移**。
+This guarantees: **the LSM index needs only ValuePtr to locate exact bucket + file + offset**.
 
 ---
 
-## 4.2 Manifest 与恢复关系（NoKV 特有工程点）
+## 4.2 Manifest and recovery (NoKV-specific engineering)
 
-与论文原型不同，NoKV **把 vlog 的 head 与删除事件写入 manifest**：
+Different from the paper prototype, NoKV **records vlog head and delete events into the manifest**:
 
 ```mermaid
 flowchart LR
@@ -127,11 +127,11 @@ flowchart LR
   D --> E["rebuild vlog state"]
 ```
 
-这样恢复时不依赖完整目录扫描，避免误删/误开段。
+So recovery doesn't depend on a full directory scan, avoiding accidental delete / open of segments.
 
 ---
 
-## 5. 写入路径（顺序追加）
+## 5. Write path (append)
 
 ```mermaid
 sequenceDiagram
@@ -145,42 +145,42 @@ sequenceDiagram
   C->>M: Apply to memtable
 ```
 
-关键保证：**vlog 写入在 WAL 之前**，崩溃恢复时不会出现“指针悬空”。
+Key guarantee: **vlog append happens before WAL**, so crash recovery never produces "dangling pointers."
 
 ---
 
-## 6. 读路径（指针解引用）
+## 6. Read path (pointer dereference)
 
 ```mermaid
 flowchart LR
-  K["Get(key)"] --> LSM["LSM 查索引"]
-  LSM -->|inline value| V["直接返回"]
-  LSM -->|ValuePtr| P["定位 bucket/fid/offset"]
-  P --> R["vlog 读取 (mmap)"]
+  K["Get(key)"] --> LSM["LSM index lookup"]
+  LSM -->|inline value| V["return directly"]
+  LSM -->|ValuePtr| P["locate bucket/fid/offset"]
+  P --> R["vlog read (mmap)"]
   R --> V
 ```
 
-读路径的代价在于一次额外的 vlog 定位，但换来更小的 LSM 与更顺序的写入。
+The read path costs one extra vlog seek but in exchange the LSM is smaller and writes are more sequential.
 
 ---
 
-## 6. 普通分桶（当前实现）
+## 6. Plain bucketing (current implementation)
 
-热度统计只看写路径（写热点），避免读热点污染：
+Hot-key statistics only follow the write path (write hotspots), preventing read hotspots from polluting:
 
 ```mermaid
 flowchart TD
-  E["Entry 写入"] --> H["Hash(key)"]
+  E["Entry write"] --> H["Hash(key)"]
   H --> B["bucket 0..N-1"]
   B --> V["vlog append"]
 ```
 
-默认配置（可调）：
+Default config (tunable):
 * `ValueLogBucketCount = 16`
 
 ---
 
-## 7. GC 机制（采样 + 重写）
+## 7. GC mechanism (sample + rewrite)
 
 ```mermaid
 sequenceDiagram
@@ -190,73 +190,73 @@ sequenceDiagram
   participant LSM as LSM
   participant New as Active Segment
 
-  GC->>Stats: 选择候选文件
-  GC->>Old: Sample 10%
-  GC->>LSM: 校验指针是否仍指向旧值
-  alt discard 过阈值
-    loop 遍历旧文件
+  GC->>Stats: pick candidate file
+  GC->>Old: sample 10%
+  GC->>LSM: verify pointers still target old values
+  alt discard exceeds threshold
+    loop iterate old file
       GC->>Old: Read Entry
       GC->>LSM: Double Check
       alt still live
         GC->>New: Rewrite
       end
     end
-    GC->>Old: 删除旧文件
-  else discard不足
-    GC-->>Stats: 跳过
+    GC->>Old: delete old file
+  else discard insufficient
+    GC-->>Stats: skip
   end
 ```
 
 ---
 
-## 8. 并行 GC + 压力控制（核心工程化）
+## 8. Parallel GC + pressure control (core engineering)
 
-### 8.1 并行调度
-* `ValueLogGCParallelism` 控制并发数（默认自动）。
-* **同桶互斥**：同一桶不会并发 GC（无锁 CAS）。
-* 全局 semaphore 限制同时 GC 数量。
+### 8.1 Parallel scheduling
+* `ValueLogGCParallelism` controls concurrency (default auto).
+* **Same-bucket exclusivity**: a single bucket is never GC'd concurrently (lock-free CAS).
+* Global semaphore caps total in-flight GC.
 
-### 8.2 压力控制
-当 compaction 压力过高时，GC 自动降级或跳过：
+### 8.2 Pressure control
+When compaction pressure is high, GC automatically degrades or skips:
 
 ```mermaid
 flowchart LR
-  A["Compaction Stats"] --> B{"压力评估"}
-  B -->|低| C["并行 GC"]
-  B -->|中| D["并行度减半"]
-  B -->|高| E["跳过本轮 GC"]
+  A["Compaction Stats"] --> B{"pressure evaluation"}
+  B -->|low| C["parallel GC"]
+  B -->|medium| D["halve parallelism"]
+  B -->|high| E["skip this round"]
 ```
 
-阈值参数：
+Threshold parameters:
 * `ValueLogGCReduceScore / ValueLogGCReduceBacklog`
 * `ValueLogGCSkipScore / ValueLogGCSkipBacklog`
 
 ---
 
-## 8.3 与论文实现的关键差异（重点对比）
+## 8.3 Key differences from the papers
 
 ### WiscKey vs NoKV
-| 维度 | WiscKey | NoKV |
+| Axis | WiscKey | NoKV |
 | :-- | :-- | :-- |
-| vlog 元数据 | 论文原型不强调 manifest | **manifest 记录 head/删除** |
-| GC 触发 | 依赖扫描与 stale ratio | **来自 LSM discard stats** |
-| GC 并行 | 未强调 | **多桶并行 + 压力控制** |
-| 热点处理 | 无显式热冷 | 普通 hash 多桶 |
+| vlog metadata | Paper prototype doesn't emphasize manifest | **manifest records head / delete** |
+| GC trigger | Scan + stale ratio | **driven by LSM discard stats** |
+| GC parallelism | Not emphasized | **multi-bucket parallel + pressure control** |
+| Hot handling | No explicit hot/cold | Plain hash multi-bucket |
 
 ### HashKV vs NoKV
-| 维度 | HashKV | NoKV |
+| Axis | HashKV | NoKV |
 | :-- | :-- | :-- |
-| 分区策略 | 哈希分区 | **哈希分桶 + 热/冷分流** |
-| 目标 | 降低更新放大 | **降低 GC 波动 + write amp** |
-| GC 调度 | 以分区为单位 | **分桶并行 + compaction 压力控制** |
+| Partition strategy | Hash partition | **Hash bucketing + hot/cold routing** |
+| Goal | Reduce update amplification | **Reduce GC jitter + write amp** |
+| GC scheduling | By partition | **Per-bucket parallel + compaction pressure control** |
 
-> 结论：NoKV 保留论文的“核心思想”，但在**恢复一致性、调度策略、观测性**上做了工程化强化。
+> Bottom line: NoKV keeps the papers' core ideas but strengthens **recovery consistency, scheduling policy, observability** through engineering.
 
 ---
 
-## 9. 可观测性与调参抓手
+## 9. Observability and tuning levers
 
-关键指标（expvar）：
+Key metrics (expvar):
 * `NoKV.ValueLog.GcParallelism`
 * `NoKV.ValueLog.GcActive`
 * `NoKV.ValueLog.GcScheduled`
@@ -264,26 +264,26 @@ flowchart LR
 * `NoKV.ValueLog.GcSkipped`
 * `NoKV.ValueLog.GcRejected`
 
-简单调参建议：
-* 低负载：调高 `ValueLogGCParallelism`
-* 高负载：降低 `ReduceScore` 或 `ReduceBacklog`，更快降级
+Simple tuning advice:
+* Low load: raise `ValueLogGCParallelism`
+* High load: lower `ReduceScore` or `ReduceBacklog` to degrade faster
 
 ---
 
-## 10. 代价与边界
+## 10. Costs and limits
 
-* 桶数过多 → 文件碎片化、head 追踪成本上升  
-* 热桶过小 → 轮转频繁、写放大升高  
-* 并行 GC 过高 → 可能与 compaction 争抢 IO  
+* Too many buckets → file fragmentation, higher head-tracking cost
+* Hot bucket too small → frequent rotation, higher write amplification
+* Parallel GC too high → can fight compaction for I/O
 
 ---
 
-## 11. 小结
+## 11. Summary
 
-NoKV 的 vlog 设计是典型的 “**WiscKey + HashKV + 工程化调度**”：
+NoKV's vlog design is the textbook combination "**WiscKey + HashKV + engineered scheduling**":
 
-* **写路径保持顺序**，延迟稳定  
-* **多桶 + 热冷分流** 把垃圾局部化  
-* **并行 GC + 压力控制** 把系统稳定性和吞吐平衡起来  
+* **Write path stays sequential**, latency stable
+* **Multi-bucket + hot/cold routing** localizes garbage
+* **Parallel GC + pressure control** balances stability and throughput
 
-这使得 vlog 从“可用”走向“可运维 + 可扩展”。
+This is what moves vlog from "usable" to "operationally manageable + scalable."

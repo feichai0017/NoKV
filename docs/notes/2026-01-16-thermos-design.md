@@ -1,115 +1,115 @@
-# 2026-01-16 Thermos 设计说明
+# 2026-01-16 Thermos design note
 
-本文档记录 `thermos` 的原始设计思路。需要注意：当前生产实现已经收口，Thermos 只保留为可选的内部热点检测器和写热点限流工具；文中关于读预取、compaction hint 和 value-log 热冷路由的设想不再代表当前默认实现。
+This note records the original design thinking behind `thermos`. Note: the production implementation has since been narrowed; Thermos remains as an optional internal hot-key detector and write-side hot-key throttling tool. The ambitions in this note around read prefetch, compaction hints, and value-log hot/cold routing **no longer reflect the current default implementation**.
 
-当前实现已并入 NoKV 仓库，位于 `thermos/` 包。
-
----
-
-## 1. 设计灵感：取其神而弃其形
-
-**来源**：[HotRing: A Hotspot-Aware In-Memory Key-Value Store (FAST '20)](https://www.usenix.org/conference/fast20/presentation/chen-jiqiang)
-
-### 1.1 论文解决的痛点
-在传统的 Hash 索引（链地址法）中，如果链表很长且热点数据位于链表尾部，每次访问热点都需要遍历大量冷数据，造成严重的 CPU Cache Miss 和长尾延迟。HotRing 提出将链表改为**环形结构**，并让 Head 指针智能指向热点节点，从而实现 $O(1)$ 的热点访问。
-
-### 1.2 NoKV 的工程转化
-NoKV 并没有照搬论文作为主索引（因为主索引是 LSM Tree），而是提取了 **“热点感知”** 这一核心思想，设计了一个**轻量级、旁路式**的热点统计模块。
-
-*   **差异点**：
-    *   **定位**：论文是存数据的**索引**；NoKV 是记账的**统计器**。
-    *   **结构**：论文是**环形链表 + 智能指针**；NoKV 是**分片 Hash + 有序链表 + 滑动窗口**。
-*   **核心价值**：在百万级 QPS 下，以极低的开销（Lock-Free List）精准识别系统中的“热点”，为缓存优化和限流提供数据支撑。
+The current implementation lives in the `thermos/` package inside the NoKV repo.
 
 ---
 
-## 2. 核心架构：反馈驱动设计 (Feedback-Driven)
+## 1. Where the inspiration came from: take the spirit, drop the form
 
-NoKV 的 Thermos 不仅仅是一个统计工具，它是整个系统“自适应优化”的大脑。
+**Source**: [HotRing: A Hotspot-Aware In-Memory Key-Value Store (FAST '20)](https://www.usenix.org/conference/fast20/presentation/chen-jiqiang)
 
-### 2.1 架构全景图
+### 1.1 What the paper solves
+In a traditional hash index (chained), if the chain is long and the hot data lives near the tail, every hot access walks past a lot of cold data. That kills CPU cache locality and produces awful tail latency. HotRing turns the chain into a **ring structure** and lets the head pointer intelligently point at the hot node, achieving $O(1)$ hot access.
+
+### 1.2 How NoKV adapted it
+NoKV does **not** copy the paper as the primary index — our primary index is the LSM Tree. Instead we extracted the core idea, **hotness awareness**, and built a lightweight, side-channel hot-key tracker.
+
+*   **Differences**:
+    *   **Role**: the paper is a data-bearing **index**; NoKV's is an accounting **counter**.
+    *   **Structure**: the paper uses a **ring + smart pointer**; NoKV uses **sharded hash + ordered list + sliding window**.
+*   **Core value**: at million-QPS rates, identify the system's actual hotspots at very low cost (lock-free list), and feed that signal into cache and throttling decisions.
+
+---
+
+## 2. Core architecture: feedback-driven design
+
+NoKV's Thermos is not just a counter. It's the brain of the system's "self-adaptive" loop.
+
+### 2.1 Architecture overview
 
 ```mermaid
 graph TD
     Client[Client Request] --> DB[DB Layer]
-    
+
     subgraph "Thermos Subsystem (The Brain)"
         Tracker[Hot Key Tracker]
         Window[Sliding Window]
         Decay[Decay Loop]
     end
-    
+
     subgraph "Execution Layer"
         LSM[LSM Tree]
         Cache[Block Cache]
         Compaction[Compaction Picker]
         Limiter[Write Limiter]
     end
-    
+
     DB -->|"1. Touch(key)"| Tracker
     Tracker -->|"2. Update Counters"| Window
     Decay -.->|"3. Age Out"| Window
-    
+
     Tracker -.->|"4. TopN Report"| Compaction
     Compaction -->|"5. Hot Score"| LSM
 ```
 
-### 2.2 关键交互流程
-1.  **探测 (Probe)**：
-    *   **读路径**：每次 `Get` 命中时调用 `Touch`。
-    *   **写路径**：只有当启用了限流（`WriteHotKeyLimit`）或突发检测时，才会调用 `TouchAndClamp`。
-2.  **计算 (Compute)**：Thermos 内部利用**滑动窗口**算法计算实时 QPS。
-3.  **反馈 (Feedback)**：
-    *   **Compaction 评分**：`lsm/picker.go` 在选择压缩层级时，会参考 `Thermos.TopN`。如果某一层包含大量热点 Key，会优先压缩该层（Hot Overlap Score），减少热点数据的读放大。
-    *   **缓存预取 (Prefetch)**：DB 层会根据 TopN 结果触发预取逻辑。虽然 Thermos 不直接控制 Cache，但它提供的热点名单是预取策略的重要输入。
-    *   **写入限流**：对于写频率过高的 Key，`TouchAndClamp` 会触发限流保护。
+### 2.2 Key interaction flow
+1.  **Probe**:
+    *   **Read path**: every successful `Get` calls `Touch`.
+    *   **Write path**: only when throttling (`WriteHotKeyLimit`) or burst detection is enabled, the write side calls `TouchAndClamp`.
+2.  **Compute**: Thermos uses a **sliding window** algorithm to derive real-time QPS internally.
+3.  **Feedback**:
+    *   **Compaction scoring**: `lsm/picker.go` consults `Thermos.TopN` when picking a level to compact. If a level holds many hot keys, it gets compaction priority (Hot Overlap Score), reducing read amplification on the hot path.
+    *   **Cache prefetch**: the DB layer can trigger prefetch logic based on TopN. Thermos doesn't drive cache itself, but the hot-key list it exposes is an important input to prefetch policy.
+    *   **Write throttling**: for keys with abnormally high write frequency, `TouchAndClamp` triggers protective throttling.
 
 ---
 
-## 3. 实现细节深度解析
+## 3. Implementation details
 
-### 3.1 并发控制：Lock-Free 与 Spin-Lock
-为了支撑高并发，Thermos 采用了混合并发策略：
+### 3.1 Concurrency: lock-free with selective spin locks
+Thermos uses a hybrid concurrency strategy to support high parallelism:
 
-*   **主链表 (Buckets & List)**：采用 **Lock-Free** 的 CAS 操作进行节点插入。
-    *   **Ordered List**：链表节点按 `(Tag, Key)` 排序，查找失败可提前终止。
-*   **滑动窗口 (Window Counters)**：由于涉及复杂的窗口滚动和数组更新，使用了轻量级的 **Spin-Lock (自旋锁)** 保护。
-    *   `node.lockWindow()`: `CAS(&lock, 0, 1)`。
-*   **衰减 (Decay)**：后台协程定期衰减时，会有互斥锁保护 `decayMu`，但实际的计数器衰减是原子操作。
+*   **Primary chain (Buckets & List)**: lock-free CAS for node insertion.
+    *   **Ordered List**: nodes are sorted by `(Tag, Key)`, so failed lookups can short-circuit.
+*   **Sliding window (Window Counters)**: window rotation and array updates are non-trivial, so we guard them with a lightweight **spin lock**.
+    *   `node.lockWindow()`: `CAS(&lock, 0, 1)`.
+*   **Decay**: a background goroutine periodically decays the counters under `decayMu`, but the actual counter decay is an atomic operation.
 
-### 3.2 统计算法：滑动窗口与衰减
-如何区分“历史热点”和“突发热点”？
+### 3.2 Statistical algorithm: sliding window plus decay
+How do you separate "long-tail historical hotspots" from "current burst hotspots"?
 
-1.  **滑动窗口 (Sliding Window)**：
-    *   将时间切分为多个 Slot（如 8 个 Slot，每个 250ms）。
-    *   `Touch` 时根据 `Timestamp % Slots` 写入对应 Slot。
-    *   **效果**：能够精准反映“最近 2 秒”的热度，过期数据自动失效。
-2.  **衰减 (Decay)**：
-    *   后台协程定期将所有 Counter 右移一位（`count >> 1`）。
-    *   **效果**：模拟热度的“半衰期”，让不再访问的旧热点逐渐冷却。
+1.  **Sliding window**:
+    *   Time is partitioned into slots (e.g. 8 slots, 250ms each).
+    *   `Touch` writes into the slot indexed by `Timestamp % Slots`.
+    *   **Effect**: precisely reflects the last ~2 seconds of activity; expired data falls off automatically.
+2.  **Decay**:
+    *   The background goroutine periodically right-shifts every counter (`count >> 1`).
+    *   **Effect**: simulates a "half-life" so that previously hot keys cool off if no longer accessed.
 
 ---
 
-## 3.3 与论文/算法的关键差异（工程化改动）
+## 3.3 Key differences from the paper / classic algorithms (engineering changes)
 
-| 对比点 | 论文 / 经典算法 | NoKV Thermos |
+| Axis | Paper / classical algorithm | NoKV Thermos |
 | :-- | :-- | :-- |
-| 目标 | 作为索引或严格频率估计 | **作为系统级热点反馈信号** |
-| 数据结构 | 环形链表/Sketch | **哈希分桶 + 有序链表** |
-| 误差控制 | 明确误差界 | **工程可接受范围** |
-| 并发 | 复杂锁或全局结构 | **Lock-Free + 轻量自旋锁** |
-| 时间维度 | 常态累计 | **滑动窗口 + 衰减** |
+| Goal | Index or strict frequency estimation | **System-level hot-key feedback signal** |
+| Data structure | Ring list / sketch | **Sharded hashing + ordered list** |
+| Error bounds | Explicit error guarantees | **Engineering-acceptable range** |
+| Concurrency | Heavy locks or global structure | **Lock-free + light spin lock** |
+| Time dimension | Steady accumulation | **Sliding window + decay** |
 
-结论：NoKV Thermos 是“**工程可用**”优先的实现，而不是“**数学最优**”优先。
+Bottom line: NoKV Thermos prioritizes **engineering usability** over **mathematical optimality**.
 
 ---
 
-## 4. 实际应用场景
+## 4. Real-world applications
 
-### 4.1 可观测性 (Observability)
-运维人员可以通过 CLI 实时查看系统热点，瞬间定位“谁在打挂数据库”。
+### 4.1 Observability
+Operators can inspect the system's hotspots via CLI in real time, immediately identifying "who is overloading the database":
 ```bash
-# 使用 stats 命令查看
+# Use the stats command
 $ go run cmd/nokv/main.go stats --workdir ./work_test
 ...
 Hot Keys:
@@ -117,21 +117,21 @@ Hot Keys:
   key: config:global, count: 12000
 ```
 
-### 4.2 缓存与性能 (Performance)
-*   **VIP 缓存区 (Hot Tier)**：LSM Cache 内部维护了一个小型的 `Clock-Pro` 缓存（Hot Tier）。虽然它不是绝对的“免死金牌”（仍可能被更热的数据挤出），但它为热点 Block 提供了比普通 LRU 更强的保护。
-*   **热点压缩优先**：通过 Thermos 的反馈，系统能主动将热点数据所在的重叠 SSTable 进行合并，将热点数据的查询路径压缩到最短。
+### 4.2 Cache and performance
+*   **VIP cache tier (Hot Tier)**: the LSM Cache internally maintains a small `Clock-Pro` cache (Hot Tier). It's not absolute immunity (hotter data can still evict), but it provides hot blocks more protection than plain LRU.
+*   **Hot-priority compaction**: Thermos feedback lets the system actively merge overlapping SSTables that hold hot data, shortening the hot key's query path.
 
 ---
 
-## 5. 未来展望
+## 5. Future directions
 
-基于目前的 Thermos 基础，NoKV 未来可以实现更高级的特性：
+Based on the current Thermos foundation, NoKV could pursue more advanced features:
 
-1.  **写吸收 (Write Absorption)**：
-    *   对于超高频写入的热点（如计数器），可以在内存中聚合 100 次更新为 1 次 VLog 写入，大幅降低 LSM 写放大。
-2.  **动态数据迁移**：
-    *   在分布式场景下，发现某个 Region 出现热点，自动触发 Region Split 或将该热点 Key 迁移到专用节点。
+1.  **Write absorption**:
+    *   For ultra-high-frequency hot writes (like counters), aggregate 100 in-memory updates into 1 VLog write, drastically reducing LSM write amplification.
+2.  **Dynamic data migration**:
+    *   In a distributed setting, when one Region develops a hotspot, automatically trigger Region split or migrate the hot key to a dedicated node.
 
-## 6. 总结
+## 6. Summary
 
-NoKV 的 `thermos` 是一个 **“学术灵感 + 工程务实”** 的典范。它没有追求理论上完美的环形索引结构，而是抓住了“热点感知”这一核心价值，用混合并发结构（Lock-Free + SpinLock）解决了工程中最头疼的**监控盲区**问题，并成功反哺了 Compaction 调度。
+NoKV's `thermos` is a textbook example of **"academic inspiration + engineering pragmatism"**. Instead of chasing the paper's theoretically perfect ring index, it captured the core value — hotspot awareness — and used hybrid concurrency (lock-free + spin lock) to solve the most painful real-world problem: **the monitoring blind spot**. It successfully feeds back into Compaction scheduling.
