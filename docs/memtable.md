@@ -64,7 +64,7 @@ Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas
 
 * `memTable.Get` looks up the chosen index and returns a borrowed, ref-counted `*kv.Entry` from the internal pool. The index search returns the **matched internal key** plus value struct, so memtable hit entries carry the concrete version key instead of the query sentinel key. Internal callers must release borrowed entries with `DecrRef` when done.
 * `MemTable.IncrRef/DecrRef` delegate to the index, allowing iterators to hold references while the flush manager processes immutable tables—mirroring RocksDB's `MemTable::Ref/Unref` lifecycle.
-* WAL-backed values that exceed the value threshold are stored as pointers; the memtable stores the encoded pointer, and the transaction/iterator logic reads from the vlog on demand.
+* Values are stored inline. Legacy `BitValuePointer` entries are rejected by higher layers because the value-log path has been removed.
 * `DB.Get` returns detached entries; callers must not call `DecrRef` on them.
 * `DB.GetInternalEntry` returns borrowed entries; callers must call `DecrRef` exactly once.
 
@@ -75,9 +75,8 @@ Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas
 | Subsystem | Interaction |
 | --- | --- |
 | Distributed 2PC | `kv.Apply` + `percolator` write committed MVCC versions through the same WAL/memtable pipeline in raft mode. |
-| Manifest | Flush completion logs `EditLogPointer(segmentID)` so restart can discard WAL files already persisted into SSTs. |
+| Manifest | Flush completion logs SST metadata plus `LogSeg` coverage so restart can skip WAL segments already persisted into SSTs. |
 | Stats | `Stats.Snapshot` pulls `FlushPending/Active/Queue` counters via [`lsm.FlushMetrics`](../engine/lsm/lsm.go#L120-L128), exposing how many immutables are waiting. |
-| Value Log | `lsm.flush` emits discard stats keyed by `segmentID`, letting the value log GC know when entries become obsolete. |
 
 ---
 
@@ -86,8 +85,8 @@ Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas
 | Aspect | RocksDB | BadgerDB | NoKV |
 | --- | --- | --- | --- |
 | Data structure | Skiplist + arena | Skiplist + arena | Skiplist or ART + arena (`art` default) |
-| WAL linkage | `logfile_number` per memtable | Segment ID stored in vlog entries | `segmentID` on `memTable`, logged via manifest |
-| Recovery | Memtable replays from WAL, referencing `MANIFEST` | Replays WAL segments | Replays WAL segments, prunes ≤ manifest log pointer |
+| WAL linkage | `logfile_number` per memtable | Segment ID stored in log entries | `segmentID` on `memTable`, logged via manifest coverage |
+| Recovery | Memtable replays from WAL, referencing `MANIFEST` | Replays WAL segments | Replays WAL segments using manifest coverage + WAL retention |
 | Flush trigger | Size/entries/time | Size-based | WAL-size budget (`walSize`) with explicit queue metrics |
 
 ---

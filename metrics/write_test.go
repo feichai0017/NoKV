@@ -10,7 +10,6 @@ func TestWriteMetricsSnapshot(t *testing.T) {
 	m := NewWriteMetrics()
 	m.UpdateQueue(5, 10, 1024)
 	m.RecordBatch(2, 20, 2048, int64(3*time.Millisecond))
-	m.RecordValueLog(5 * time.Millisecond)
 	m.RecordApply(7 * time.Millisecond)
 	m.RecordSync(2*time.Millisecond, 3)
 
@@ -21,7 +20,7 @@ func TestWriteMetricsSnapshot(t *testing.T) {
 	if snap.Batches != 2 || snap.AvgBatchEntries <= 0 || snap.AvgBatchBytes <= 0 {
 		t.Fatalf("batch snapshot mismatch: %+v", snap)
 	}
-	if snap.AvgRequestWaitMs <= 0 || snap.AvgValueLogMs <= 0 || snap.AvgApplyMs <= 0 {
+	if snap.AvgRequestWaitMs <= 0 || snap.AvgApplyMs <= 0 {
 		t.Fatalf("timing averages missing: %+v", snap)
 	}
 	if snap.SyncSamples != 1 {
@@ -74,42 +73,5 @@ func TestRegionMetrics(t *testing.T) {
 	snap = rm.Snapshot()
 	if snap.Total != 1 || snap.Tombstone != 0 {
 		t.Fatalf("unexpected snapshot after remove: %+v", snap)
-	}
-}
-
-func TestValueLogCounters(t *testing.T) {
-	ResetValueLogGCMetricsForTesting()
-	collector := DefaultValueLogGCCollector()
-	before := collector.Snapshot()
-
-	collector.IncRuns()
-	collector.IncSegmentsRemoved()
-	collector.IncHeadUpdates()
-	collector.IncScheduled()
-	collector.IncThrottled()
-	collector.IncSkipped()
-	collector.IncRejected()
-	collector.IncActive()
-	collector.DecActive()
-	collector.SetParallelism(3)
-
-	after := collector.Snapshot()
-	if after.GCRuns != before.GCRuns+1 {
-		t.Fatalf("expected gc runs to increment")
-	}
-	if after.SegmentsRemoved != before.SegmentsRemoved+1 {
-		t.Fatalf("expected segments removed to increment")
-	}
-	if after.HeadUpdates != before.HeadUpdates+1 {
-		t.Fatalf("expected head updates to increment")
-	}
-	if after.GCScheduled != 1 || after.GCThrottled != 1 || after.GCSkipped != 1 || after.GCRejected != 1 {
-		t.Fatalf("unexpected gc counters: %+v", after)
-	}
-	if after.GCActive != 0 {
-		t.Fatalf("expected gc active to return to zero, got %d", after.GCActive)
-	}
-	if after.GCParallelism != 3 {
-		t.Fatalf("expected gc parallelism=3, got %d", after.GCParallelism)
 	}
 }

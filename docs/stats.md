@@ -17,14 +17,14 @@ flowchart TD
     subgraph COLLECTORS["Collectors"]
         LSM["lsm.* metrics"]
         WAL["wal metrics"]
-        VLOG["value log metrics"]
+        SLAB["slab sidecar metrics"]
         HOT["thermos"]
         REGION["region metrics"]
         TRANSPORT["grpc transport metrics"]
     end
     LSM --> SNAP["Stats.Snapshot()"]
     WAL --> SNAP
-    VLOG --> SNAP
+    SLAB --> SNAP
     HOT --> SNAP
     REGION --> SNAP
     TRANSPORT --> SNAP
@@ -46,8 +46,8 @@ Two-layer design:
 - `entries`
 - `flush.*`
 - `compaction.*`
-- `value_log.*` (includes `value_log.gc.*`)
 - `wal.*`
+- `slab.*`
 - `raft.*`
 - `write.*`
 - `region.*`
@@ -60,7 +60,6 @@ Representative fields:
 
 - `flush.pending`, `flush.queue_length`, `flush.last_wait_ms`
 - `compaction.backlog`, `compaction.max_score`, `compaction.value_weight`
-- `value_log.segments`, `value_log.pending_deletes`, `value_log.gc.gc_runs`
 - `wal.active_segment`, `wal.segment_count`, `wal.typed_record_ratio`
 - `raft.group_count`, `raft.lagging_groups`, `raft.max_lag_segments`
 - `write.queue_depth`, `write.avg_request_wait_ms`, `write.hot_key_limited`
@@ -77,7 +76,7 @@ Representative fields:
 
 - `NoKV.Stats`
 
-All domains (`flush`, `compaction`, `value_log`, `wal`, `raft`, `write`, `region`, `hot`, `cache`, `lsm`, `transport`) are nested under this object.
+All domains (`flush`, `compaction`, `wal`, `raft`, `write`, `region`, `hot`, `cache`, `lsm`, `transport`) are nested under this object.
 
 Legacy scalar compatibility keys are removed. Consumers should read fields from `NoKV.Stats` directly.
 
@@ -98,12 +97,9 @@ Example:
     "pending": 2,
     "queue_length": 2
   },
-  "value_log": {
-    "segments": 6,
-    "pending_deletes": 1,
-    "gc": {
-      "gc_runs": 12
-    }
+  "wal": {
+    "active_segment": 3,
+    "segment_count": 4
   },
   "hot": {
     "write_keys": [

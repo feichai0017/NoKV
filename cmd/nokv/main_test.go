@@ -15,7 +15,6 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/wal"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -31,7 +30,6 @@ func TestRunManifestCmd(t *testing.T) {
 	dir := t.TempDir()
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
-	opt.ValueThreshold = 0
 	db, err := NoKV.Open(opt)
 	require.NoError(t, err)
 	if err := db.Set([]byte("cli-manifest"), []byte("value")); err != nil {
@@ -66,8 +64,6 @@ func TestRunStatsCmd(t *testing.T) {
 	dir := t.TempDir()
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
-	opt.EnableValueLog = true
-	opt.ValueThreshold = 0
 	db, err := NoKV.Open(opt)
 	require.NoError(t, err)
 	if err := db.Set([]byte("cli-stats"), []byte("value")); err != nil {
@@ -87,9 +83,6 @@ func TestRunStatsCmd(t *testing.T) {
 	}
 	if snap.Entries == 0 {
 		t.Fatalf("expected entry count > 0")
-	}
-	if snap.ValueLog.Segments == 0 {
-		t.Fatalf("expected value log segments > 0")
 	}
 	if len(snap.LSM.Levels) == 0 {
 		t.Fatalf("expected LSM level metrics")
@@ -116,46 +109,7 @@ func TestLocalStatsSnapshotAllowsSeededWorkdir(t *testing.T) {
 
 	snap, err := localStatsSnapshot(dir, false)
 	require.NoError(t, err)
-	require.Greater(t, snap.ValueLog.Segments, 0)
-}
-
-func TestRunVlogCmd(t *testing.T) {
-	dir := t.TempDir()
-	opt := NoKV.NewDefaultOptions()
-	opt.WorkDir = dir
-	opt.EnableValueLog = true
-	opt.ValueThreshold = 0
-	db, err := NoKV.Open(opt)
-	require.NoError(t, err)
-	if err := db.Set([]byte("cli-vlog"), []byte("value")); err != nil {
-		t.Fatalf("set: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-
-	var buf bytes.Buffer
-	if err := runVlogCmd(&buf, []string{"-workdir", dir, "-json"}); err != nil {
-		t.Fatalf("runVlogCmd: %v", err)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(buf.Bytes(), &payload); err != nil {
-		t.Fatalf("unmarshal vlog output: %v", err)
-	}
-	if _, ok := payload["segments"]; ok {
-		return
-	}
-	if _, ok := payload["buckets"]; !ok {
-		t.Fatalf("expected segments or buckets array in vlog output")
-	}
-}
-
-func TestRunVlogCmdPlain(t *testing.T) {
-	dir := prepareDBWorkdir(t)
-	var buf bytes.Buffer
-	err := runVlogCmd(&buf, []string{"-workdir", dir})
-	require.NoError(t, err)
-	require.Contains(t, buf.String(), "Active FID")
+	require.Greater(t, snap.Entries, int64(0))
 }
 
 func TestRenderStatsWarnLine(t *testing.T) {
@@ -199,18 +153,15 @@ func TestRunManifestCmdPlain(t *testing.T) {
 	var buf bytes.Buffer
 	err := runManifestCmd(&buf, []string{"-workdir", dir})
 	require.NoError(t, err)
-	// "Manifest Log Pointer" was removed when the legacy
-	// LogSegment/LogOffset fields were deleted (slab-substrate cleanup).
-	// The plain-text manifest output now starts with "Levels:" and lists
-	// any per-level files plus the value-log section.
+	// The plain-text manifest output starts with "Levels:" and lists
+	// any per-level files.
 	require.Contains(t, buf.String(), "Levels:")
-	require.Contains(t, buf.String(), "ValueLog segments:")
 }
+
 func TestRunRegionsCmd(t *testing.T) {
 	dir := t.TempDir()
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
-	opt.ValueThreshold = 0
 	db, err := NoKV.Open(opt)
 	require.NoError(t, err)
 	if err := db.Set([]byte("cli-region"), []byte("value")); err != nil {
@@ -241,9 +192,6 @@ func TestFetchExpvarSnapshot(t *testing.T) {
 		payload := map[string]any{
 			"NoKV.Stats": map[string]any{
 				"entries": float64(12),
-				"value_log": map[string]any{
-					"segments": float64(2),
-				},
 				"hot": map[string]any{
 					"write_keys": []any{
 						map[string]any{"key": "k1", "count": float64(3)},
@@ -265,7 +213,6 @@ func TestFetchExpvarSnapshot(t *testing.T) {
 	snap, err := fetchExpvarSnapshot(url)
 	require.NoError(t, err)
 	require.Equal(t, int64(12), snap.Entries)
-	require.Equal(t, 2, snap.ValueLog.Segments)
 	require.Len(t, snap.Hot.WriteKeys, 1)
 	require.Equal(t, "k1", snap.Hot.WriteKeys[0].Key)
 	require.Len(t, snap.LSM.Levels, 1)
@@ -436,17 +383,6 @@ func TestMainManifestCommand(t *testing.T) {
 	require.Equal(t, 0, code)
 }
 
-func TestMainVlogCommand(t *testing.T) {
-	dir := prepareDBWorkdir(t)
-	code := captureExitCode(t, func() {
-		oldArgs := os.Args
-		os.Args = []string{"nokv", "vlog", "-workdir", dir}
-		defer func() { os.Args = oldArgs }()
-		main()
-	})
-	require.Equal(t, 0, code)
-}
-
 func TestMainRegionsCommand(t *testing.T) {
 	dir := t.TempDir()
 	metaStore, err := localmeta.OpenLocalStore(dir, nil)
@@ -594,11 +530,6 @@ func TestParseExpvarSnapshotFull(t *testing.T) {
 			"write": map[string]any{
 				"hot_key_limited": float64(4),
 			},
-			"value_log": map[string]any{
-				"segments":        float64(3),
-				"pending_deletes": float64(1),
-				"discard_queue":   float64(2),
-			},
 			"raft": map[string]any{
 				"group_count":      float64(2),
 				"lagging_groups":   float64(1),
@@ -674,12 +605,6 @@ func TestRenderStatsFull(t *testing.T) {
 			ValueWeight:          1.0,
 			ValueWeightSuggested: 2.0,
 		},
-		ValueLog: stats.ValueLogStatsSnapshot{
-			Segments:       1,
-			PendingDeletes: 1,
-			DiscardQueue:   1,
-			Heads:          map[uint32]kv.ValuePtr{0: {Bucket: 0, Fid: 1, Offset: 2, Len: 3}},
-		},
 		Write: stats.WriteStatsSnapshot{
 			HotKeyLimited: 2,
 		},
@@ -736,7 +661,6 @@ func TestRenderStatsFull(t *testing.T) {
 	}
 	require.NoError(t, renderStats(&buf, snap, false))
 	out := buf.String()
-	require.Contains(t, out, "ValueLog.Head")
 	require.Contains(t, out, "LSM.Levels:")
 	require.Contains(t, out, "WriteHotKeys:")
 }
@@ -744,17 +668,6 @@ func TestRenderStatsFull(t *testing.T) {
 func TestLocalStatsSnapshotMissingWorkdir(t *testing.T) {
 	_, err := localStatsSnapshot("", false)
 	require.Error(t, err)
-}
-
-func TestRunVlogCmdMissingDir(t *testing.T) {
-	var buf bytes.Buffer
-	err := runVlogCmd(&buf, []string{"-workdir", t.TempDir()})
-	require.Error(t, err)
-}
-
-func TestRunVlogCmdMissingWorkdir(t *testing.T) {
-	var buf bytes.Buffer
-	require.Error(t, runVlogCmd(&buf, nil))
 }
 
 func TestRunRegionsCmdPlainNoRegions(t *testing.T) {
@@ -1389,10 +1302,6 @@ func prepareDBWorkdir(t *testing.T) string {
 	dir := t.TempDir()
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
-	// vlog is opt-in since the slab-substrate redesign; the cmd tests
-	// that follow exercise the vlog / stats paths that need it.
-	opt.EnableValueLog = true
-	opt.ValueThreshold = 0
 	db, err := NoKV.Open(opt)
 	require.NoError(t, err)
 	require.NoError(t, db.Set([]byte("seed"), []byte("value")))

@@ -22,8 +22,6 @@ func testOptionsForDir(dir string) *NoKV.Options {
 	opt.WorkDir = dir
 	opt.MemTableSize = 1 << 12
 	opt.SSTableMaxSz = 1 << 20
-	opt.ValueLogFileSize = 1 << 20
-	opt.ValueThreshold = utils.DefaultValueThreshold
 	return opt
 }
 

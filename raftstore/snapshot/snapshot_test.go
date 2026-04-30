@@ -478,7 +478,6 @@ func openSnapshotDBWithTweak(t testing.TB, tweak func(*NoKV.Options)) *NoKV.DB {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
 	opt.SyncWrites = false
-	opt.ValueThreshold = 32
 	if tweak != nil {
 		tweak(opt)
 	}

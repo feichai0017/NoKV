@@ -17,7 +17,6 @@ const (
 
 	ycsbNoKVWriteBatchMaxCount = 10_000
 	ycsbNoKVWriteBatchMaxSize  = 128 << 20
-	ycsbNoKVValueLogBuckets    = 16
 
 	ycsbBadgerNumVersionsToKeep       = 1
 	ycsbBadgerNumMemtables            = 5
@@ -81,7 +80,7 @@ func defaultBadgerCacheBudgetMB(totalMB int) (blockMB, indexMB int) {
 
 // buildNoKVBenchmarkOptions starts from NoKV.NewDefaultOptions() and
 // overrides only the workload-specific sizing plus the background helpers
-// (WAL watchdog, vlog GC, batch coalescing wait, hot-key throttle) that
+// (WAL watchdog, batch coalescing wait, hot-key throttle) that
 // would otherwise muddy benchmark numbers. The shape is intentionally
 // production-like so that perf changes in NewDefaultOptions are picked
 // up by YCSB on the next run without manual re-sync.
@@ -97,25 +96,12 @@ func buildNoKVBenchmarkOptions(dir string, opts ycsbEngineOptions, memtable NoKV
 
 	cfg.MemTableSize = int64(opts.MemtableMB) << 20
 	cfg.SSTableMaxSz = int64(opts.SSTableMB) << 20
-	// YCSB defaults to the metadata-service profile: every value inlined
-	// into the LSM, no vlog directory created, no vlog GC running. This
-	// matches the production target (DFS / object-store / fsmeta-style
-	// metadata workloads where value sizes sit in the 100B-1KB envelope).
-	// Opt into the value-separation (vlog) path explicitly via
-	// -ycsb_nokv_enable_vlog when running blob / large-value workloads.
-	cfg.EnableValueLog = opts.NoKVEnableValueLog
-	if cfg.EnableValueLog {
-		cfg.ValueLogFileSize = opts.VlogFileMB << 20
-		cfg.ValueLogMaxEntries = 1 << 20
-		cfg.ValueThreshold = int64(opts.ValueThreshold)
-	}
 	cfg.WriteBatchMaxCount = ycsbNoKVWriteBatchMaxCount
 	cfg.WriteBatchMaxSize = ycsbNoKVWriteBatchMaxSize
 	cfg.MaxBatchCount = ycsbNoKVWriteBatchMaxCount
 	cfg.MaxBatchSize = ycsbNoKVWriteBatchMaxSize
 	cfg.DetectConflicts = false
 	cfg.SyncWrites = opts.SyncWrites
-	cfg.ValueLogBucketCount = ycsbNoKVValueLogBuckets
 
 	totalCacheMB := normalizeTotalCacheMB(opts.BlockCacheMB)
 	blockCacheMB, indexCacheMB := resolveNoKVCacheBudgetMB(totalCacheMB, opts.NoKVIndexCacheMB)
@@ -132,7 +118,6 @@ func buildNoKVBenchmarkOptions(dir string, opts ycsbEngineOptions, memtable NoKV
 	cfg.WriteBatchWait = 0
 	cfg.WriteHotKeyLimit = 0
 	cfg.EnableWALWatchdog = false
-	cfg.ValueLogGCInterval = 0
 	cfg.ManifestSync = false
 
 	// Maximum-throughput profile: skip the production defaults that trade

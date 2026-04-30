@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"hash/crc32"
 	"math"
 	"unsafe"
 )
@@ -159,36 +158,4 @@ func MemHash(data []byte) uint64 {
 // SafeCopy does append(a[:0], src...).
 func SafeCopy(a, src []byte) []byte {
 	return append(a[:0], src...)
-}
-
-// ValueLogBucket returns the hash bucket for a key when using a bucketed value log.
-// The hash is computed on the key without the MVCC timestamp suffix, so all
-// versions of the same base key land in the same bucket.
-func ValueLogBucket(keyBytes []byte, buckets uint32) uint32 {
-	if buckets <= 1 {
-		return 0
-	}
-	return ValueLogBucketFromHash(ValueLogHash(keyBytes), buckets)
-}
-
-// ValueLogHash returns the stable hash used for value-log bucket routing.
-// keyBytes may be an internal key or a base key; internal keys are normalized to
-// their base-key form before hashing.
-func ValueLogHash(keyBytes []byte) uint32 {
-	if len(keyBytes) == 0 {
-		return 0
-	}
-	baseKey := InternalToBaseKey(keyBytes)
-	if len(baseKey) == 0 {
-		return 0
-	}
-	return crc32.Checksum(baseKey, CastagnoliCrcTable)
-}
-
-// ValueLogBucketFromHash maps a precomputed hash to a bucket index.
-func ValueLogBucketFromHash(hash uint32, buckets uint32) uint32 {
-	if buckets <= 1 {
-		return 0
-	}
-	return hash % buckets
 }

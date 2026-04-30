@@ -181,7 +181,7 @@ For recovery and transport fault validation, use direct Go tests instead of shel
 
 ```bash
 RECOVERY_TRACE_METRICS=1 \
-go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|FailsOnMissingSST|FailsOnCorruptSST|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
+go test ./... -run 'TestRecovery(FailsOnMissingSST|FailsOnCorruptSST|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
 
 CHAOS_TRACE_METRICS=1 \
 go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport

@@ -1,6 +1,6 @@
 # VFS
 
-The `vfs` package provides a small filesystem abstraction used by WAL, manifest, SST, value-log, and raftstore paths.
+The `vfs` package provides a small filesystem abstraction used by WAL, manifest, SST, slab, and raftstore paths.
 
 ---
 

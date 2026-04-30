@@ -13,7 +13,6 @@ func newBenchDB(b *testing.B, optFn func(*Options)) *DB {
 	opt := NewDefaultOptions()
 	opt.WorkDir = b.TempDir()
 	opt.EnableWALWatchdog = false
-	opt.ValueLogGCInterval = 0
 	opt.SyncWrites = false
 	opt.ManifestSync = false
 	opt.WriteBatchWait = 0
@@ -73,9 +72,7 @@ func BenchmarkDBSetSmall(b *testing.B) {
 }
 
 func BenchmarkDBSetLarge(b *testing.B) {
-	db := newBenchDB(b, func(opt *Options) {
-		opt.ValueThreshold = 64
-	})
+	db := newBenchDB(b, nil)
 	value := make([]byte, 4<<10)
 	key := benchKeyBuffer()
 	b.ReportAllocs()
@@ -104,9 +101,7 @@ func BenchmarkDBGetSmall(b *testing.B) {
 }
 
 func BenchmarkDBGetLarge(b *testing.B) {
-	db := newBenchDB(b, func(opt *Options) {
-		opt.ValueThreshold = 64
-	})
+	db := newBenchDB(b, nil)
 	value := make([]byte, 4<<10)
 	keys := loadBenchKeys(b, db, 10_000, value)
 	b.ReportAllocs()
@@ -168,25 +163,20 @@ func BenchmarkDBBatchSet(b *testing.B) {
 	}
 }
 
-// BenchmarkDBCommitVlogFastPath compares commit pipeline throughput between
-// the metadata profile (every value below ValueThreshold → vlog short-circuited
-// per Phase 1 of the slab substrate redesign) and the vlog profile (values above
-// the threshold → vlog.write must run). The "Inline" subtests should beat
-// "Vlog" by the cost of the vlog.write closure prep + map allocations that
-// the fast path skips.
-func BenchmarkDBCommitVlogFastPath(b *testing.B) {
+// BenchmarkDBCommitInlineValueSizes measures commit pipeline throughput across
+// metadata-sized and larger inline values. NoKV no longer routes user values
+// through a separate blob log, so these cases exercise the same WAL + memtable path.
+func BenchmarkDBCommitInlineValueSizes(b *testing.B) {
 	type profile struct {
 		name      string
 		valueSize int
 	}
 	profiles := []profile{
-		// Inline cases — every value < default ValueThreshold (2048).
 		{"Inline_64B", 64},
 		{"Inline_256B", 256},
 		{"Inline_1KB", 1024},
-		// Vlog cases — every value > 2048 → vlog path mandatory.
-		{"Vlog_4KB", 4 << 10},
-		{"Vlog_8KB", 8 << 10},
+		{"Inline_4KB", 4 << 10},
+		{"Inline_8KB", 8 << 10},
 	}
 	const batchSize = 64
 

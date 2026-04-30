@@ -9,7 +9,7 @@ This architecture is also meant to support NoKV as a **maintainable and extensib
 At a high level, the codebase is organized around four long-lived layers:
 
 - **Root facade and runtime surface** – the top-level `DB` APIs and thin system entrypoints.
-- **Single-node engine substrate** – `engine/*` owns WAL, LSM, manifest, value log, file, and VFS mechanics.
+- **Single-node engine substrate** – `engine/*` owns WAL, LSM, manifest, slab sidecars, file, and VFS mechanics.
 - **Distributed execution and control plane** – `raftstore/*`, `meta/*`, and `coordinator/*` host replicated execution, rooted metadata, and cluster control logic.
 - **Experiment and evidence layer** – `benchmark/*`, scripts, and docs keep evaluation and design claims attached to the implementation.
 
@@ -50,12 +50,12 @@ At a high level, the codebase is organized around four long-lived layers:
 │ Embedded NoKV core      │
 │  ├ WAL Manager          │
 │  ├ MemTable / Flush     │
-│  ├ ValueLog + GC        │
+│  ├ SST / Compaction     │
 │  └ Manifest / Stats     │
 └─────────────────────────┘
 ```
 
-- **Embedded mode** uses `NoKV.Open` directly: WAL→MemTable→SST durability, ValueLog separation, non-transactional APIs with internal version ordering, and rich stats.
+- **Embedded mode** uses `NoKV.Open` directly: WAL→MemTable→SST durability, inline metadata values, non-transactional APIs with internal version ordering, and rich stats.
 - **Distributed mode** layers `raftstore` on top: multi-Raft regions reuse the same WAL, keep store-local recovery metadata separate from storage manifest state, expose metrics, and serve NoKV RPCs.
 - **Control plane split**: `raft_config` provides bootstrap topology; Coordinator provides runtime routing/TSO/control-plane state in cluster mode.
 - **Clients** obtain leader-aware routing, automatic NotLeader/EpochNotMatch retries, and two-phase commit helpers.
@@ -69,7 +69,7 @@ flowchart LR
     App --> RPC["NoKV RPC / raftstore/client"]
 
     subgraph "Standalone shape"
-        Embedded --> Core["WAL + LSM + VLog + MVCC"]
+        Embedded --> Core["WAL + LSM + MVCC"]
     end
 
     subgraph "Distributed shape"
@@ -117,19 +117,15 @@ Then read:
 - `db.go`
 - `engine/lsm/`
 - `engine/wal/`
-- `vlog.go`
+- `engine/slab/` for derived sidecar caches
 
 ### 2.1 WAL & MemTable
 - `wal.Manager` appends `[len|type|payload|crc]` records (typed WAL), rotates segments, and replays logs on crash.
 - `MemTable` accumulates writes until full, then enters the flush queue; the concrete flush runtime runs `Enqueue → Build → Install → Release`, logs edits, and releases WAL segments.
-- Writes are handled by a single commit worker that performs value-log append first, then WAL/memtable apply, keeping durability ordering simple and consistent.
-
-### 2.2 ValueLog
-- Large values are written to the ValueLog before the WAL append; the resulting `ValuePtr` is stored in WAL/LSM so replay can recover.
-- `vlog.Manager` tracks the active head and uses flush discard stats to trigger GC; manifest records new heads and removed segments.
+- Writes are handled by commit workers that append one WAL batch and then apply the same entries to the memtable.
 
 ### 2.3 Manifest
-- `manifest.Manager` stores only storage-engine metadata: SST metadata, WAL checkpoints, and ValueLog metadata. Store-local raft replay pointers live in `raftstore/localmeta`.
+- `manifest.Manager` stores only storage-engine metadata: SST metadata and WAL coverage carried by SST edits. Store-local raft replay pointers live in `raftstore/localmeta`.
 - `CURRENT` provides crash-safe pointer updates for storage-engine metadata. Region descriptors are no longer stored in the storage manifest.
 
 ### 2.4 LSM Compaction & Landing Buffer
@@ -159,7 +155,7 @@ flowchart TD
 
 ### 2.6 Write Pipeline & Backpressure
 - Writes enqueue into a commit queue inside `db.go` where requests are coalesced into batches before a commit worker drains them.
-- The commit worker always writes the value log first (when needed), then applies WAL/LSM updates; `SyncWrites` adds a WAL fsync step.
+- The commit worker appends one inline-value WAL batch, applies the same entries to the active memtable, and then honors `SyncWrites` with a WAL fsync step.
 - Batch sizing adapts to backlog through `WriteBatchMaxCount`, `WriteBatchMaxSize`, and `WriteBatchWait`.
 - Backpressure is enforced in two places: LSM throttling toggles `db.blockWrites` when L0 backlog grows, and Thermos can reject hot keys via `WriteHotKeyLimit`.
 
@@ -270,21 +266,21 @@ The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC
 
 ## 6. Failure Handling
 
-- Manifest edits capture only storage metadata, WAL checkpoints, and ValueLog pointers. Store-local region recovery state and raft replay pointers are loaded from `raftstore/localmeta`.
-- WAL replay reconstructs memtables and Raft groups; ValueLog recovery trims partial records.
+- Manifest edits capture only storage metadata. Store-local region recovery state and raft replay pointers are loaded from `raftstore/localmeta`.
+- WAL replay reconstructs memtables and Raft groups.
 - `Stats.StartStats` resumes metrics sampling immediately after restart, making it easy to verify recovery correctness via `nokv stats`.
 
 ---
 
 ## 7. Observability & Tooling
 
-- `StatsSnapshot` publishes flush/compaction/WAL/VLog/raft/region/hot/cache metrics. `nokv stats` and the expvar endpoint expose the same data.
+- `StatsSnapshot` publishes flush/compaction/WAL/raft/region/hot/cache metrics. `nokv stats` and the expvar endpoint expose the same data.
 - `nokv regions` inspects the local peer catalog.
 - `nokv serve` advertises Region samples on startup (ID, key range, peers) for quick verification.
 - Inspect scheduler/control-plane state via Coordinator APIs/metrics.
 - Scripts:
   - `scripts/dev/cluster.sh` – launch a multi-node NoKV cluster locally.
-  - `RECOVERY_TRACE_METRICS=1 go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|FailsOnMissingSST|FailsOnCorruptSST|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v` – crash-recovery validation.
+  - `RECOVERY_TRACE_METRICS=1 go test ./... -run 'TestRecovery(FailsOnMissingSST|FailsOnCorruptSST|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v` – crash-recovery validation.
   - `CHAOS_TRACE_METRICS=1 go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport` – inject network faults and observe transport metrics.
 
 ---

@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/metrics"
@@ -31,18 +30,11 @@ type LSMSource interface {
 	ThrottleRateBytesPerSec() uint64
 }
 
-// VlogSource is the narrow value-log surface stats reads from.
-// Implemented by engine/vlog.Consumer.
-type VlogSource interface {
-	Metrics() metrics.ValueLogMetrics
-}
-
 // Host wires the Stats subsystem back into its DB host. Every accessor
 // is read-only; Stats never mutates host state.
 type Host interface {
 	// Storage subsystems.
 	LSM() LSMSource
-	Vlog() VlogSource
 	LSMWALs() []*wal.Manager
 	// RaftWALsLocked invokes fn while holding the host's raft-WAL mutex.
 	// Stats only iterates the slice while the lock is held.
@@ -56,12 +48,6 @@ type Host interface {
 	BlockWritesActive() bool
 	SlowWritesActive() bool
 	HotWriteLimited() uint64
-
-	// ValueLogDisabledOrphans returns the number of value-log segments
-	// the manifest still references when EnableValueLog=false. Zero
-	// when vlog is enabled, or when there is nothing to migrate. The
-	// stats subsystem surfaces this only when Vlog() returns nil.
-	ValueLogDisabledOrphans() int
 
 	// Options-snapshot accessors.
 	RaftLagWarnSegments() int64
@@ -138,7 +124,6 @@ type StatsSnapshot struct {
 	Entries    int64                             `json:"entries"`
 	Flush      FlushStatsSnapshot                `json:"flush"`
 	Compaction CompactionStatsSnapshot           `json:"compaction"`
-	ValueLog   ValueLogStatsSnapshot             `json:"value_log"`
 	WAL        WALStatsSnapshot                  `json:"wal"`
 	Raft       RaftStatsSnapshot                 `json:"raft"`
 	Write      WriteStatsSnapshot                `json:"write"`
@@ -183,20 +168,6 @@ type CompactionStatsSnapshot struct {
 	ValueWeightSuggested float64 `json:"value_weight_suggested,omitempty"`
 }
 
-// ValueLogStatsSnapshot reports value-log segment status and GC counters.
-type ValueLogStatsSnapshot struct {
-	Segments       int                        `json:"segments"`
-	PendingDeletes int                        `json:"pending_deletes"`
-	DiscardQueue   int                        `json:"discard_queue"`
-	Heads          map[uint32]kv.ValuePtr     `json:"heads,omitempty"`
-	GC             metrics.ValueLogGCSnapshot `json:"gc"`
-	// DisabledOrphans is non-zero when EnableValueLog=false but the
-	// manifest still references that many value-log segments — every
-	// Get/iterator hit on a value pointer will fail until the operator
-	// either re-enables EnableValueLog or migrates values out of vlog.
-	DisabledOrphans int `json:"disabled_orphans,omitempty"`
-}
-
 // WALStatsSnapshot captures WAL head position, record mix, and watchdog status.
 type WALStatsSnapshot struct {
 	ActiveSegment           int64             `json:"active_segment"`
@@ -233,7 +204,6 @@ type WriteStatsSnapshot struct {
 	AvgBatchEntries  float64 `json:"avg_batch_entries"`
 	AvgBatchBytes    float64 `json:"avg_batch_bytes"`
 	AvgRequestWaitMs float64 `json:"avg_request_wait_ms"`
-	AvgValueLogMs    float64 `json:"avg_vlog_ms"`
 	AvgApplyMs       float64 `json:"avg_apply_ms"`
 	AvgSyncMs        float64 `json:"avg_sync_ms"`
 	AvgSyncBatch     float64 `json:"avg_sync_batch"`
@@ -498,7 +468,6 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Write.AvgBatchEntries = wsnap.AvgBatchEntries
 		snap.Write.AvgBatchBytes = wsnap.AvgBatchBytes
 		snap.Write.AvgRequestWaitMs = wsnap.AvgRequestWaitMs
-		snap.Write.AvgValueLogMs = wsnap.AvgValueLogMs
 		snap.Write.AvgApplyMs = wsnap.AvgApplyMs
 		snap.Write.AvgSyncMs = wsnap.AvgSyncMs
 		snap.Write.AvgSyncBatch = wsnap.AvgSyncBatch
@@ -702,20 +671,6 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.WAL.TypedRecordReason = reason
 	}
 
-	// Value log backlog.
-	if vlogSrc := s.host.Vlog(); vlogSrc != nil {
-		stats := vlogSrc.Metrics()
-		snap.ValueLog.Segments = stats.Segments
-		snap.ValueLog.PendingDeletes = stats.PendingDeletes
-		snap.ValueLog.DiscardQueue = stats.DiscardQueue
-		snap.ValueLog.Heads = stats.Heads
-	} else {
-		// EnableValueLog=false. If the manifest still references
-		// value-log segments, surface the orphan count so operators
-		// see the mismatch in stats output without waiting for a
-		// failing read to surface it.
-		snap.ValueLog.DisabledOrphans = s.host.ValueLogDisabledOrphans()
-	}
 	if hot := s.host.HotWrite(); hot != nil {
 		topK := s.host.ThermosTopK()
 		for _, item := range hot.TopN(topK) {
@@ -725,7 +680,6 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Hot.WriteRing = &hotStats
 	}
 	snap.Cache.IteratorReused = s.host.IteratorReused()
-	snap.ValueLog.GC = metrics.DefaultValueLogGCCollector().Snapshot()
 	snap.Transport = transportpkg.GRPCMetricsSnapshot()
 	return snap
 }

@@ -157,13 +157,8 @@ func TestTableBuilderFinishAndEntryValueLen(t *testing.T) {
 	require.NotEmpty(t, buf)
 	builder.Close()
 
-	var vp kv.ValuePtr
-	vp.Fid = 1
-	vp.Len = 123
-	ptrBytes := vp.Encode()
-	entry := kv.NewEntry([]byte("ptr"), ptrBytes)
-	entry.Meta |= kv.BitValuePointer
-	require.Equal(t, uint32(123), entryValueLen(entry))
+	entry := kv.NewEntry([]byte("inline"), []byte("inline-value"))
+	require.Equal(t, uint32(len("inline-value")), entryValueLen(entry))
 }
 
 func TestTableBuilderFlushRenameFailureCleansTempFile(t *testing.T) {

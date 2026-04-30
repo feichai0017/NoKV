@@ -5,7 +5,6 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/vfs"
 )
 
@@ -49,7 +48,7 @@ const (
 	DefaultLandingCompactBatchSize = 4
 	// DefaultLandingBacklogMergeScore triggers landing merge when backlog crosses this value.
 	DefaultLandingBacklogMergeScore = 2.0
-	// DefaultCompactionValueWeight biases picker priorities toward value-pointer-heavy levels.
+	// DefaultCompactionValueWeight biases picker priorities toward value-dense levels.
 	DefaultCompactionValueWeight = 0.35
 	// DefaultCompactionValueAlertThreshold raises value-density alerts above this ratio.
 	DefaultCompactionValueAlertThreshold = 0.6
@@ -127,7 +126,7 @@ type Options struct {
 	LandingShardParallelism  int
 
 	// CompactionValueWeight increases the priority of levels containing a high
-	// proportion of ValueLog-backed payloads. Must be non-negative.
+	// proportion of value bytes. Must be non-negative.
 	CompactionValueWeight float64
 	// CompactionTombstoneWeight increases the priority of levels containing a
 	// high proportion of range tombstones. Must be non-negative.
@@ -148,8 +147,6 @@ type Options struct {
 	// CompactionValueAlertThreshold triggers stats alerts when value density
 	// exceeds this ratio.
 	CompactionValueAlertThreshold float64
-
-	DiscardStatsCh *chan map[manifest.ValueLogID]int64
 
 	// ManifestSync controls whether manifest edits are fsynced immediately.
 	ManifestSync bool

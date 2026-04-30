@@ -72,7 +72,6 @@ func TestExpandedPeerRestartPreservesRegionAndData(t *testing.T) {
 
 	seedDir := t.TempDir()
 	standalone := testcluster.OpenStandaloneDB(t, seedDir, func(opt *NoKV.Options) {
-		opt.ValueThreshold = 8
 	})
 	key := []byte("restart-key")
 	value := make([]byte, 2048)
@@ -118,7 +117,6 @@ func TestExpandedPeerRestartPreservesRegionAndDataWithSST(t *testing.T) {
 
 	seedDir := t.TempDir()
 	standalone := testcluster.OpenStandaloneDB(t, seedDir, func(opt *NoKV.Options) {
-		opt.ValueThreshold = 8
 	})
 	key := []byte("restart-sst-key")
 	value := make([]byte, 2048)

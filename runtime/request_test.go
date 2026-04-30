@@ -19,12 +19,9 @@ func TestRequestDecrRefUnderflowPanics(t *testing.T) {
 func TestRequestResetAndLoadEntries(t *testing.T) {
 	oldEntry := kv.NewEntry([]byte("old"), []byte("value"))
 	req := &Request{
-		Entries:    []*kv.Entry{oldEntry},
-		Ptrs:       []kv.ValuePtr{{Len: 1}},
-		PtrIdxs:    []int{1},
-		PtrBuckets: []uint32{7},
-		Err:        errors.New("boom"),
-		EnqueueAt:  time.Now(),
+		Entries:   []*kv.Entry{oldEntry},
+		Err:       errors.New("boom"),
+		EnqueueAt: time.Now(),
 	}
 	req.Init(3)
 	req.WG.Add(1)
@@ -41,9 +38,6 @@ func TestRequestResetAndLoadEntries(t *testing.T) {
 
 	req.Reset()
 	require.Empty(t, req.Entries)
-	require.Empty(t, req.Ptrs)
-	require.Empty(t, req.PtrIdxs)
-	require.Empty(t, req.PtrBuckets)
 	require.NoError(t, req.Err)
 	require.True(t, req.EnqueueAt.IsZero())
 	require.EqualValues(t, 0, req.Load())
@@ -74,8 +68,5 @@ func TestRequestWaitReleasesEntries(t *testing.T) {
 
 	require.EqualError(t, err, "commit failed")
 	require.Nil(t, req.Entries)
-	require.Nil(t, req.Ptrs)
-	require.Nil(t, req.PtrIdxs)
-	require.Nil(t, req.PtrBuckets)
 	require.EqualValues(t, 0, entry.Load())
 }

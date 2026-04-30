@@ -222,7 +222,7 @@ func (tb *tableBuilder) AddKey(e *kv.Entry) {
 	tb.AddKeyWithLen(e, entryValueLen(e))
 }
 
-// AddKeyWithLen adds a key with an explicit value length (inline vs ValuePtr).
+// AddKeyWithLen adds a key with an explicit value length.
 func (tb *tableBuilder) AddKeyWithLen(e *kv.Entry, valueLen uint32) {
 	tb.add(e, valueLen, false)
 }
@@ -235,14 +235,6 @@ func (tb *tableBuilder) Close() {
 func entryValueLen(e *kv.Entry) uint32 {
 	if e == nil {
 		return 0
-	}
-	if e.Meta&kv.BitValuePointer > 0 {
-		var vptr kv.ValuePtr
-		req := int(unsafe.Sizeof(vptr))
-		if len(e.Value) >= req {
-			vptr.Decode(e.Value)
-			return vptr.Len
-		}
 	}
 	return uint32(len(e.Value))
 }

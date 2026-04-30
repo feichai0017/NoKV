@@ -21,14 +21,6 @@ Key option groups (see `options.go` for the full list):
   - `WriteBatchMaxCount`, `WriteBatchMaxSize`, `WriteBatchWait`
   - `MaxBatchCount`, `MaxBatchSize`
   - `WriteThrottleMinRate`, `WriteThrottleMaxRate`
-- **Value log**
-  - `ValueThreshold`, `ValueLogFileSize`, `ValueLogMaxEntries`
-  - `ValueLogGCInterval`, `ValueLogGCDiscardRatio`
-  - `ValueLogGCParallelism`, `ValueLogGCReduceScore`, `ValueLogGCSkipScore`
-  - `ValueLogGCReduceBacklog`, `ValueLogGCSkipBacklog`
-  - `ValueLogGCSampleSizeRatio`, `ValueLogGCSampleCountRatio`,
-    `ValueLogGCSampleFromHead`
-  - `ValueLogBucketCount`
 - **LSM & compaction**
   - `MemTableSize`, `MemTableEngine`, `SSTableMaxSz`, `NumCompactors`
   - `NumLevelZeroTables`, `LandingCompactBatchSize`, `LandingBacklogMergeScore`
@@ -52,7 +44,6 @@ Example:
 opt := NoKV.NewDefaultOptions()
 opt.WorkDir = "./data"
 opt.SyncWrites = true
-opt.ValueThreshold = 2048
 opt.WriteBatchMaxCount = 128
 db, err := NoKV.Open(opt)
 if err != nil {
@@ -74,7 +65,7 @@ Notes:
   - `WriteBatchMaxCount` / `WriteBatchMaxSize` bound commit-worker request
     coalescing.
   - `MaxBatchCount` / `MaxBatchSize` bound internal apply/rewrite batches such
-    as `batchSet` and value-log GC rewrites.
+    as `batchSet`.
 - Write slowdown is bandwidth-driven: `WriteThrottleMaxRate` applies when
   slowdown first becomes active, and pressure lowers the target rate toward
   `WriteThrottleMinRate` as compaction debt approaches the stop threshold.

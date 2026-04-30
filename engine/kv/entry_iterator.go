@@ -5,8 +5,8 @@ import (
 	"io"
 )
 
-// EntryIterator sequentially decodes entries stored using the unified
-// value-log/WAL layout:
+// EntryIterator sequentially decodes entries stored using the unified WAL/SST
+// record layout:
 //
 //	| header(varint fields) | key bytes | value bytes | crc32 (4B) |
 //

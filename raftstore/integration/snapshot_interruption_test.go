@@ -19,7 +19,6 @@ func TestExpandSnapshotInstallInterruptedBeforePublish(t *testing.T) {
 
 	seedDir := t.TempDir()
 	standalone := testcluster.OpenStandaloneDB(t, seedDir, func(opt *NoKV.Options) {
-		opt.ValueThreshold = 8
 	})
 	key := []byte("snapshot-interrupt-key")
 	value := make([]byte, 2048)
@@ -86,7 +85,6 @@ func TestExpandSSTSnapshotInstallInterruptedBeforePublish(t *testing.T) {
 
 	seedDir := t.TempDir()
 	standalone := testcluster.OpenStandaloneDB(t, seedDir, func(opt *NoKV.Options) {
-		opt.ValueThreshold = 8
 	})
 	key := []byte("sst-snapshot-interrupt-key")
 	value := make([]byte, 2048)

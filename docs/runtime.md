@@ -1,197 +1,100 @@
-# Runtime Call Chains (Current)
+# Runtime Call Chains
 
-This document focuses on the current execution paths in NoKV and maps API calls
-to concrete functions in the codebase.
-
-It intentionally describes only what is running today.
-
----
-
-## 1. API Surface Snapshot
-
-| Mode | Read APIs | Write APIs | Txn APIs |
-| --- | --- | --- | --- |
-| Embedded (`NoKV.DB`) | `Get`, `NewIterator`, `NewInternalIterator` | `Set`, `SetBatch`, `SetWithTTL`, `Del`, `DeleteRange`, `ApplyInternalEntries` | N/A (no standalone local txn API) |
-| Distributed (`raftstore/kv`) | `KvGet`, `KvBatchGet`, `KvScan` | N/A direct write | `KvPrewrite`, `KvCommit`, `KvBatchRollback`, `KvResolveLock`, `KvCheckTxnStatus` |
-
-Core entry points:
-
-- Embedded DB: [`db.go`](../db.go), [`iterator.go`](../iterator.go)
-- Distributed RPC: [`raftstore/kv/service.go`](../raftstore/kv/service.go)
-- Raft read/propose bridge: [`raftstore/store/command_ops.go`](../raftstore/store/command_ops.go)
-- MVCC logic: [`percolator/txn.go`](../percolator/txn.go), [`percolator/reader.go`](../percolator/reader.go)
+This page documents the runtime paths after the value-log removal. Metadata
+values are stored inline in WAL, memtable, and SST records. Legacy records with
+`BitValuePointer` fail fast with `ErrUnsupportedValueLog`.
 
 ---
 
-## 2. Embedded Write Path (`Set` / `SetBatch` / `SetWithTTL` / `Del` / `DeleteRange`)
+## 1. Embedded Write Path
 
-### 2.1 Function-Level Chain
+`Set`, `SetBatch`, `SetWithTTL`, `Del`, and `DeleteRange` share one path:
 
-1. `DB.Set` / `DB.SetBatch` / `DB.SetWithTTL` / `DB.Del` / `DB.DeleteRange` allocates monotonic non-transactional versions and creates internal-key entries via `kv.NewInternalEntry`.
-2. `DB.ApplyInternalEntries` validates each internal key via `kv.SplitInternalKey`, then calls `batchSet`.
-3. `batchSet` enqueues request (`sendToWriteCh` -> `enqueueCommitRequest` -> bounded MPSC commit queue).
-4. `commitWorker` acquires a long-lived `utils.MPSCConsumer[*commitRequest]` and drains a batch:
-   - `vlog.write(requests)` writes large values first and produces `ValuePtr`.
-   - `applyRequests` -> `writeToLSM` -> `lsm.SetBatch`.
-   - if `SyncWrites` uses the dedicated sync pipeline, committed-but-unsynced
-     batches are handed off to `syncWorker`; otherwise `commitWorker` performs
-     `wal.Sync()` inline when required.
-5. `lsm.SetBatch` writes one atomic batch by delegating to `memTable.setBatch`;
-   inside that step:
-   - `wal.AppendEntryBatch`
-   - mem index insert.
-
-### 2.2 Sequence Diagram
+1. The public API allocates a non-transactional version and builds internal-key
+   entries with `kv.NewInternalEntry`.
+2. `ApplyInternalEntries` validates each key via `kv.SplitInternalKey`.
+3. `batchSet` enqueues a commit request into the bounded MPSC commit queue.
+4. The commit worker drains a request batch and calls `applyRequests`.
+5. `applyRequests` writes one WAL entry-batch record and applies the same batch
+   to the active memtable.
+6. If `SyncWrites` is enabled, the request is handed to the sync pipeline or
+   synchronously fsynced, depending on `SyncPipeline`.
 
 ```mermaid
 sequenceDiagram
     participant U as User API
-    participant DB as DB.Set/SetBatch/SetWithTTL/Del/DeleteRange
-    participant Q as "commitQueue (MPSCQueue)"
+    participant DB as DB.ApplyInternalEntries
+    participant Q as "commitQueue (MPSC)"
     participant W as commitWorker
-    participant V as vlog.write
-    participant L as lsm.SetBatch
-    participant M as memTable.setBatch
+    participant L as LSM.SetBatchGroup
     participant WAL as wal.AppendEntryBatch
-    U->>DB: Set/SetBatch/SetWithTTL/Del/DeleteRange
-    DB->>DB: NewInternalEntry + ApplyInternalEntries
-    DB->>Q: sendToWriteCh / enqueueCommitRequest
-    Q->>W: nextCommitBatch
-    W->>V: write(requests)
-    V-->>W: ValuePtr for large values
-    W->>L: writeToLSM(entries)
-    L->>M: setBatch(entries)
-    M->>WAL: AppendEntryBatch(entries)
+    participant M as memTable.applyBatch
+    U->>DB: Set / SetBatch / Del / DeleteRange
+    DB->>Q: enqueue commit request
+    Q->>W: drain request batch
+    W->>L: SetBatchGroup(groups)
+    L->>WAL: append one atomic WAL batch
+    L->>M: apply entries inline
     M-->>L: index.Add(...)
-    L-->>W: success
+    L-->>W: success / failed group index
 ```
+
+Invariant: WAL append failure means the memtable is not touched. WAL success
+followed by memtable apply failure is treated as unrecoverable and panics.
 
 ---
 
-## 3. Embedded Read Path (`Get` / `GetInternalEntry`)
-
-### 3.1 Function-Level Chain
+## 2. Embedded Read Path
 
 1. `DB.Get` builds `InternalKey(CFDefault, userKey, nonTxnMaxVersion)`.
-2. `loadBorrowedEntry` calls `lsm.Get` for the newest visible internal record.
-3. If value is pointer (`BitValuePointer`), read real bytes via `vlog.read`, clear pointer bit.
-4. `PopulateInternalMeta` ensures `CF/Version` cache matches internal key.
-5. `DB.Get` returns detached public entry via `cloneEntry` (user key + copied value).
-6. `DB.GetInternalEntry` returns borrowed internal entry (caller must `DecrRef`).
-
-### 3.2 Sequence Diagram
-
-```mermaid
-sequenceDiagram
-    participant U as User API
-    participant DB as DB.Get/GetInternalEntry
-    participant LSM as lsm.Get
-    participant VLOG as vlog.read
-    U->>DB: Get(userKey)
-    DB->>DB: InternalKey(CFDefault,userKey,nonTxnMaxVersion)
-    DB->>LSM: Get(internalKey)
-    LSM-->>DB: pooled Entry (internal key)
-    alt BitValuePointer set
-        DB->>VLOG: read(ValuePtr)
-        VLOG-->>DB: raw value bytes
-    end
-    DB->>DB: PopulateInternalMeta
-    alt Get (public)
-        DB->>DB: cloneEntry -> user key/value copy
-        DB-->>U: detached Entry
-    else GetInternalEntry
-        DB-->>U: borrowed internal Entry (DecrRef required)
-    end
-```
-
----
-
-## 4. Iterator Paths
-
-### 4.1 Public Iterator (`DB.NewIterator`)
-
-1. Build merged internal iterator: `lsm.NewIterators` + `lsm.NewMergeIterator`.
-2. `Seek` converts user key to internal seek key (`CFDefault + nonTxnMaxVersion`).
-3. `populate/materialize`:
-   - parse internal key (`kv.SplitInternalKey`)
-   - apply bounds on user key
-   - optionally resolve vlog pointer
-   - expose user-key item.
-
-### 4.2 Internal Iterator (`DB.NewInternalIterator`)
-
-- Directly returns merged iterator over internal keys.
-- No user-key rewrite; caller handles `kv.SplitInternalKey`.
+2. `loadBorrowedEntry` asks `lsm.Get` for the newest visible internal record.
+3. If the record carries `BitValuePointer`, the read returns
+   `ErrUnsupportedValueLog`.
+4. `PopulateInternalMeta` aligns the decoded entry metadata with its internal
+   key.
+5. `DB.Get` returns a detached public entry with copied user key/value bytes.
+6. `DB.GetInternalEntry` returns a borrowed internal entry; the caller must
+   call `DecrRef`.
 
 ```mermaid
 flowchart TD
-  A["DB.NewIterator"] --> B["lsm.NewMergeIterator(internal keys)"]
-  B --> C["Seek(userKey -> InternalKey)"]
-  C --> D["populate/materialize"]
-  D --> E["SplitInternalKey + bounds check"]
-  E --> F{"BitValuePointer?"}
-  F -- no --> G["Expose inline value"]
-  F -- yes --> H["vlog.read(ValuePtr)"]
-  H --> G
-  G --> I["Item.Entry uses user key"]
+  A["DB.Get(userKey)"] --> B["InternalKey(CFDefault, userKey, maxVersion)"]
+  B --> C["lsm.Get(internalKey)"]
+  C --> D{"BitValuePointer?"}
+  D -- yes --> E["ErrUnsupportedValueLog"]
+  D -- no --> F["PopulateInternalMeta"]
+  F --> G["cloneEntry -> detached user key/value"]
 ```
 
 ---
 
-## 5. Distributed Read Path (`KvGet` / `KvBatchGet` / `KvScan`)
+## 3. Iterators
 
-### 5.1 Function-Level Chain
+`DB.NewIterator` builds a merged internal iterator from LSM iterators and
+materializes public entries on demand:
 
-1. `raftstore/kv.Service` builds `RaftCmdRequest` from NoKV RPC.
-2. `Store.ReadCommand`:
-   - `validateCommand` (region/epoch/leader/key-range)
-   - `peer.LinearizableRead`
-   - `peer.WaitApplied`
-   - `commandApplier(req)` (injected as `kv.Apply`).
-3. `kv.Apply` executes:
-   - `handleGet` -> `percolator.Reader.GetLock` + `GetValue`
-   - `handleScan` -> iterate `CFWrite`, resolve visible versions.
+1. Convert user seek key to internal seek key.
+2. Split internal keys with `kv.SplitInternalKey`.
+3. Apply user-key bounds and delete/expiry filtering.
+4. Reject legacy `BitValuePointer` values.
+5. Expose user-key entries.
 
-### 5.2 Sequence Diagram
-
-```mermaid
-sequenceDiagram
-    participant C as NoKV Client
-    participant SVC as kv.Service
-    participant ST as Store.ReadCommand
-    participant P as peer.LinearizableRead
-    participant AP as kv.Apply
-    participant R as percolator.Reader
-    participant DB as DB
-    C->>SVC: KvGet/KvBatchGet/KvScan
-    SVC->>ST: ReadCommand(RaftCmdRequest)
-    ST->>ST: validateCommand
-    ST->>P: LinearizableRead + WaitApplied
-    ST->>AP: commandApplier(req)
-    AP->>R: GetLock/GetValue or scan CFWrite
-    R->>DB: GetInternalEntry/NewInternalIterator
-    AP-->>SVC: RaftCmdResponse
-    SVC-->>C: NoKV response
-```
+`DB.NewInternalIterator` bypasses user-key rewrite and returns internal records
+directly.
 
 ---
 
-## 6. Distributed Write Path (2PC via Raft Apply)
+## 4. Distributed Write Path
 
-### 6.1 Function-Level Chain
+Raftstore and Percolator ultimately reuse the same embedded write path:
 
-1. Client (`raftstore/client`) runs `Mutate` / `TwoPhaseCommit` by region.
-2. RPC layer (`kv.Service`) sends write commands through `Store.ProposeCommand`.
-3. Raft replication commits log entries; apply path invokes `kv.Apply`.
-4. `kv.Apply` dispatches to `percolator.Prewrite/Commit/BatchRollback/ResolveLock/CheckTxnStatus`.
-5. Percolator mutators call `applyVersionedOps`:
-   - build entries via `kv.NewInternalEntry`
-   - call `db.ApplyInternalEntries`
-   - release refs (`DecrRef`).
-6. Storage then follows the same embedded write pipeline (MPSC commit queue ->
-   vlog -> LSM/WAL, with optional sync handoff).
-
-### 6.2 Sequence Diagram
+1. `raftstore/client` issues `Mutate` / `TwoPhaseCommit` by region.
+2. `kv.Service` routes the command through `Store.ProposeCommand`.
+3. Raft replication commits the command.
+4. The apply path calls `percolator.Prewrite`, `Commit`, rollback, or resolve.
+5. Percolator builds MVCC entries with `kv.NewInternalEntry`.
+6. `DB.ApplyInternalEntries` persists them through the commit queue, WAL, and
+   memtable.
 
 ```mermaid
 sequenceDiagram
@@ -199,23 +102,21 @@ sequenceDiagram
     participant SVC as kv.Service
     participant ST as Store.ProposeCommand
     participant RF as Raft replicate/apply
-    participant AP as kv.Apply
     participant TXN as percolator.txn
     participant DB as DB.ApplyInternalEntries
-    CL->>SVC: KvPrewrite/KvCommit/...
+    CL->>SVC: KvPrewrite / KvCommit / ...
     SVC->>ST: ProposeCommand
-    ST->>RF: route to leader + replicate
-    RF->>AP: apply committed command
-    AP->>TXN: Prewrite/Commit/Resolve...
-    TXN->>DB: applyVersionedOps -> ApplyInternalEntries
+    ST->>RF: replicate and apply
+    RF->>TXN: execute MVCC mutation
+    TXN->>DB: ApplyInternalEntries
     DB-->>TXN: write result
-    AP-->>SVC: RaftCmdResponse
-    SVC-->>CL: NoKV response
+    TXN-->>SVC: response
+    SVC-->>CL: result
 ```
 
 ---
 
-## 7. Entry Ownership and Refcount Rules
+## 5. Entry Ownership
 
 | Source | Returned entry type | Key form | Caller action |
 | --- | --- | --- | --- |
@@ -226,12 +127,11 @@ sequenceDiagram
 
 ---
 
-## 8. Key/Value Shape by Stage
+## 6. Key/Value Shape
 
 | Stage | `Entry.Key` | `Entry.Value` | Notes |
 | --- | --- | --- | --- |
 | User write before queue | Internal key (`CF + user key + ts`) | Raw user bytes | Built by `NewInternalEntry` |
-| After vlog step | Internal key | Inline value or `ValuePtr.Encode()` | Pointer marked by `BitValuePointer` |
-| LSM/WAL stored form | Internal key | Encoded value payload | Used by replay/flush/compaction |
-| `GetInternalEntry` output | Internal key | Raw value bytes (pointer resolved) | Internal caller view |
-| `Get` / public iterator output | User key | Raw value bytes | External caller view |
+| WAL/memtable/SST stored form | Internal key | Encoded inline value payload | Used by replay, flush, compaction |
+| `GetInternalEntry` output | Internal key | Raw inline value bytes | Internal caller view |
+| `Get` / public iterator output | User key | Raw inline value bytes | External caller view |

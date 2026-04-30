@@ -1,6 +1,6 @@
 # WAL Subsystem
 
-NoKV's write-ahead log mirrors RocksDB's durability model and is implemented as a compact Go module similar to Badger's journal. WAL appends happen alongside memtable writes (via `lsm.SetBatch` in the DB write pipeline), while values that are routed to the value log are written *before* the WAL so that replay always sees durable value pointers.
+NoKV's write-ahead log mirrors RocksDB's durability model and is implemented as a compact typed log. WAL appends happen alongside memtable writes through the DB commit pipeline; metadata values are stored inline, so replay does not depend on a separate value-log/blob layer.
 
 ---
 
@@ -58,7 +58,8 @@ Key behaviours:
 - Metrics (`wal.Manager.Metrics`) reveal the active segment ID, total segments, and number of removed segments—these feed directly into `StatsSnapshot` and `nokv stats` output.
 - `RegisterRetention` lets LSM and raft participants publish the oldest WAL segment they still need. `RemoveSegment` rejects retained segments with `ErrSegmentRetained`.
 
-Compared with Badger: Badger keeps a single vlog for both data and durability. NoKV splits WAL (durability) from vlog (value separation), matching RocksDB's separation of WAL and blob files.
+NoKV stores metadata values inline in the LSM. The WAL is only the durability
+and replay log; it is not paired with a value-log/blob layer.
 
 ---
 

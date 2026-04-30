@@ -71,12 +71,7 @@ nokv execution --addr 127.0.0.1:20161 --json
 ### `nokv manifest`
 
 - Reads manifest version state
-- Shows log pointer, per-level file info, and value-log metadata
-
-### `nokv vlog`
-
-- Lists value-log segments and current head per bucket
-- Useful after GC/recovery checks
+- Shows per-level file info
 
 ### `nokv regions`
 
@@ -86,7 +81,7 @@ nokv execution --addr 127.0.0.1:20161 --json
 ### `nokv migrate plan`
 
 - Runs a read-only preflight check for standalone -> cluster-seed migration
-- Verifies manifest, WAL, and value-log structure without repairing tails
+- Verifies manifest and WAL structure without repairing tails
 - Reports current mode, local catalog occupancy, blockers, and next step
 
 ### `nokv migrate init`

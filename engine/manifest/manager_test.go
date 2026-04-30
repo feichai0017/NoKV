@@ -54,89 +54,6 @@ func TestManagerCreateAndRecover(t *testing.T) {
 	}
 }
 
-func TestManagerValueLog(t *testing.T) {
-	dir := t.TempDir()
-	mgr, err := manifest.Open(dir, nil)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	defer func() { _ = mgr.Close() }()
-
-	if err := mgr.LogValueLogHead(0, 2, 4096); err != nil {
-		t.Fatalf("log value log head: %v", err)
-	}
-	version := mgr.Current()
-	meta := mgr.ValueLogHead()[0]
-	if !meta.Valid || meta.FileID != 2 || meta.Offset != 4096 {
-		t.Fatalf("value log head mismatch: %+v", meta)
-	}
-	if err := mgr.LogValueLogDelete(0, 2); err != nil {
-		t.Fatalf("log value log delete: %v", err)
-	}
-	version = mgr.Current()
-	if meta, ok := version.ValueLogs[manifest.ValueLogID{Bucket: 0, FileID: 2}]; !ok {
-		t.Fatalf("expected value log entry tracked after deletion")
-	} else if meta.Valid {
-		t.Fatalf("expected value log entry marked invalid")
-	}
-	meta = mgr.ValueLogHead()[0]
-	if meta.Valid {
-		t.Fatalf("expected head cleared after deletion: %+v", meta)
-	}
-}
-
-func TestManagerValueLogUpdate(t *testing.T) {
-	dir := t.TempDir()
-	mgr, err := manifest.Open(dir, nil)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-
-	if err := mgr.LogValueLogHead(0, 3, 2048); err != nil {
-		t.Fatalf("log head: %v", err)
-	}
-	if err := mgr.LogValueLogDelete(0, 3); err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-
-	meta := manifest.ValueLogMeta{Bucket: 0, FileID: 3, Offset: 2048, Valid: true}
-	if err := mgr.LogValueLogUpdate(meta); err != nil {
-		t.Fatalf("update: %v", err)
-	}
-
-	current := mgr.Current()
-	restored, ok := current.ValueLogs[manifest.ValueLogID{Bucket: 0, FileID: 3}]
-	if !ok {
-		t.Fatalf("expected fid 3 metadata after update")
-	}
-	if !restored.Valid || restored.Offset != 2048 {
-		t.Fatalf("unexpected restored meta: %+v", restored)
-	}
-	head := mgr.ValueLogHead()[0]
-	if head.Valid {
-		t.Fatalf("expected head to remain cleared after update: %+v", head)
-	}
-
-	if err := mgr.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-
-	mgr, err = manifest.Open(dir, nil)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	defer func() { _ = mgr.Close() }()
-
-	current = mgr.Current()
-	restored, ok = current.ValueLogs[manifest.ValueLogID{Bucket: 0, FileID: 3}]
-	if !ok {
-		t.Fatalf("expected fid 3 metadata after reopen")
-	}
-	if !restored.Valid || restored.Offset != 2048 {
-		t.Fatalf("unexpected metadata after reopen: %+v", restored)
-	}
-}
-
 func TestManagerCorruptManifest(t *testing.T) {
 	dir := t.TempDir()
 	mgr, err := manifest.Open(dir, nil)
@@ -155,54 +72,6 @@ func TestManagerCorruptManifest(t *testing.T) {
 	}
 	if _, err := manifest.Open(dir, nil); err == nil {
 		t.Fatalf("expected error for corrupt manifest")
-	}
-}
-
-func TestManagerValueLogReplaySequence(t *testing.T) {
-	dir := t.TempDir()
-	mgr, err := manifest.Open(dir, nil)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-
-	if err := mgr.LogValueLogHead(0, 1, 128); err != nil {
-		t.Fatalf("log head 1: %v", err)
-	}
-	if err := mgr.LogValueLogDelete(0, 1); err != nil {
-		t.Fatalf("delete head 1: %v", err)
-	}
-	if err := mgr.LogValueLogHead(0, 2, 4096); err != nil {
-		t.Fatalf("log head 2: %v", err)
-	}
-	if err := mgr.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-
-	mgr, err = manifest.Open(dir, nil)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	defer func() { _ = mgr.Close() }()
-
-	version := mgr.Current()
-	if meta1, ok := version.ValueLogs[manifest.ValueLogID{Bucket: 0, FileID: 1}]; !ok {
-		t.Fatalf("expected fid 1 metadata after replay")
-	} else if meta1.Valid {
-		t.Fatalf("expected fid 1 to remain invalid after deletion: %+v", meta1)
-	}
-	if meta2, ok := version.ValueLogs[manifest.ValueLogID{Bucket: 0, FileID: 2}]; !ok {
-		t.Fatalf("expected fid 2 metadata after replay")
-	} else {
-		if !meta2.Valid {
-			t.Fatalf("expected fid 2 to be valid: %+v", meta2)
-		}
-		if meta2.Offset != 4096 {
-			t.Fatalf("unexpected fid 2 offset: %d", meta2.Offset)
-		}
-	}
-	head := mgr.ValueLogHead()[0]
-	if !head.Valid || head.FileID != 2 || head.Offset != 4096 {
-		t.Fatalf("unexpected replay head: %+v", head)
 	}
 }
 
@@ -322,14 +191,6 @@ func TestManagerSnapshotsAndCloneHelpers(t *testing.T) {
 	mgr.SetSync(true)
 	if got := mgr.Dir(); got != dir {
 		t.Fatalf("expected dir %s, got %s", dir, got)
-	}
-
-	if err := mgr.LogValueLogUpdate(manifest.ValueLogMeta{Bucket: 0, FileID: 7, Offset: 9, Valid: true}); err != nil {
-		t.Fatalf("log value log update: %v", err)
-	}
-	status := mgr.ValueLogStatus()
-	if len(status) != 1 || status[manifest.ValueLogID{Bucket: 0, FileID: 7}].Offset != 9 {
-		t.Fatalf("unexpected value log status: %+v", status)
 	}
 
 	if err := mgr.Rewrite(); err != nil {

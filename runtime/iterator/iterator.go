@@ -1,5 +1,5 @@
 // Package iterator implements the user-facing DB iterator state machine
-// on top of an LSM merge iterator + value-log resolver. The root NoKV
+// on top of an LSM merge iterator. The root NoKV
 // package keeps the (db *DB) NewIterator / NewInternalIterator wrappers
 // as thin facades around iterator.New / iterator.NewInternal so callers
 // continue to write `db.NewIterator(...)` while all of the actual
@@ -8,12 +8,12 @@ package iterator
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/utils"
-	"github.com/pkg/errors"
 )
 
 // Storage is the narrow LSM surface the user-facing iterator needs:
@@ -26,31 +26,22 @@ type Storage interface {
 	PinRangeTombstoneView() *lsm.RangeTombstoneView
 }
 
-// Vlog resolves a value pointer into its concrete bytes; only the Read
-// method is needed here. Implemented by engine/vlog.Consumer.
-type Vlog interface {
-	Read(*kv.ValuePtr) ([]byte, func(), error)
-}
-
-// Deps wires the iterator into its host. Storage + Vlog + Pool are the
-// only DB-side touch points the iterator needs to function.
+// Deps wires the iterator into its host.
 type Deps struct {
 	Storage Storage
-	Vlog    Vlog
 	Pool    *IteratorPool
 }
 
-// DBIterator wraps the merged LSM iterators and optionally resolves value-log pointers.
+// DBIterator wraps the merged LSM iterators.
 type DBIterator struct {
 	iitr index.Iterator
-	vlog Vlog
 	pool *IteratorPool
 	ctx  *IteratorContext
 	rtv  *lsm.RangeTombstoneView
 	// rtCheck indicates whether this iterator snapshot needs tombstone
 	// coverage checks.
 	rtCheck bool
-	// keyOnly avoids eager value log materialisation when true.
+	// keyOnly avoids eager value copying when true.
 	keyOnly bool
 
 	lowerBound []byte
@@ -79,10 +70,9 @@ type DBIterator struct {
 	err      error // terminal error that stopped iteration
 }
 
-// Item is the user-facing iterator item backed by an entry and optional vlog reader.
+// Item is the user-facing iterator item backed by an entry.
 type Item struct {
 	e        *kv.Entry
-	vlog     Vlog
 	valueBuf []byte
 }
 
@@ -99,23 +89,7 @@ func (it *Item) ValueCopy(dst []byte) ([]byte, error) {
 	}
 	val := it.e.Value
 	if kv.IsValuePtr(it.e) {
-		if it.vlog == nil {
-			return nil, utils.ErrKeyNotFound
-		}
-		var vp kv.ValuePtr
-		vp.Decode(val)
-		fetched, cb, err := it.vlog.Read(&vp)
-		if cb != nil {
-			defer cb()
-		}
-		if err != nil {
-			return nil, err
-		}
-		it.valueBuf = append(it.valueBuf[:0], fetched...)
-		dst = append(dst[:0], it.valueBuf...)
-		it.e.Value = it.valueBuf
-		it.e.Meta &^= kv.BitValuePointer
-		return dst, nil
+		return nil, utils.ErrUnsupportedValueLog
 	}
 	if len(val) == 0 {
 		return dst[:0], nil
@@ -133,7 +107,6 @@ func New(deps Deps, opt *index.Options) index.Iterator {
 	ctx := deps.Pool.Get()
 	ctx.Append(deps.Storage.NewIterators(opt)...)
 	itr := &DBIterator{
-		vlog:       deps.Vlog,
 		pool:       deps.Pool,
 		ctx:        ctx,
 		keyOnly:    keyOnly,
@@ -143,7 +116,6 @@ func New(deps Deps, opt *index.Options) index.Iterator {
 		hasUpper:   len(opt.UpperBound) > 0,
 		isAsc:      opt.IsAsc,
 	}
-	itr.item.vlog = deps.Vlog
 	itr.item.e = &itr.entry
 	itr.iitr = lsm.NewMergeIterator(ctx.Iterators(), !opt.IsAsc)
 	if deps.Storage != nil {
@@ -535,25 +507,7 @@ func (iter *DBIterator) materializeDecoded(src *kv.Entry, cf kv.ColumnFamily, us
 		iter.entry.Version = ts
 	}
 	if kv.IsValuePtr(src) {
-		if iter.keyOnly {
-			// Leave pointer encoded; defer value fetch to Item.ValueCopy.
-			iter.entry.Value = src.Value
-			iter.item.valueBuf = iter.item.valueBuf[:0]
-		} else {
-			var vp kv.ValuePtr
-			vp.Decode(src.Value)
-			val, cb, err := iter.vlog.Read(&vp)
-			if cb != nil {
-				defer cb()
-			}
-			if err != nil {
-				return false, errors.Wrapf(err, "value-log read failed for key %q", userKey)
-			}
-			iter.valueBuf = append(iter.valueBuf[:0], val...)
-			iter.entry.Value = iter.valueBuf
-			iter.entry.Meta &^= kv.BitValuePointer
-			iter.item.valueBuf = iter.entry.Value
-		}
+		return false, fmt.Errorf("%w for key %q", utils.ErrUnsupportedValueLog, userKey)
 	} else {
 		if src.Value == nil {
 			return false, nil

@@ -41,10 +41,7 @@ func PutCRC32(h hash.Hash32) {
 	crc32Pool.Put(h)
 }
 
-// LogEntry represents the callback signature used during WAL/vlog replay.
-type LogEntry func(e *Entry, vp *ValuePtr) error
-
-// EntryHeader is the unified entry header used by WAL and value log encodings.
+// EntryHeader is the unified entry header used by WAL encodings.
 // Binary layout (Encode):
 //
 //	varint(KeyLen) | varint(ValueLen) | varint(Meta) | varint(ExpiresAt)
@@ -152,9 +149,8 @@ func EncodeEntry(buf *bytes.Buffer, e *Entry) ([]byte, error) {
 // EncodeEntryTo is the core streaming encoder.
 // It serializes the entry fields currently stored in e and writes them directly
 // to w. The encoder treats e.Key and e.Value as raw bytes and does not validate
-// whether e.Key is a user key, base key, or internal key, nor whether e.Value
-// already uses ValueStruct/ValuePtr layout; callers that persist entries are
-// responsible for supplying bytes in the correct internal format.
+// whether e.Key is a user key, base key, or internal key. Callers that persist
+// entries are responsible for supplying bytes in the correct internal format.
 //
 // The encoded layout is: | header | key | value | crc32 |
 // - header: Varint-encoded, contains Key/Value lengths, Meta, and ExpiresAt.
@@ -324,7 +320,7 @@ func DecodeEntryFrom(r io.Reader) (*Entry, uint32, error) {
 	return entry, recordLen, nil
 }
 
-// EstimateEncodeSize estimates the encoded size of an entry in the WAL/value log.
+// EstimateEncodeSize estimates the encoded size of an entry in WAL/SST streams.
 func EstimateEncodeSize(e *Entry) int {
 	return len(e.Key) + len(e.Value) + 8 /* ExpiresAt uint64 */ +
 		crc32.Size + MaxEntryHeaderSize
@@ -342,7 +338,8 @@ func DecodeEntry(data []byte) (*Entry, error) {
 	return entry, err
 }
 
-// DecodeValueSlice parses a value log payload and returns a slice referencing the encoded value.
+// DecodeValueSlice parses an encoded entry record and returns a slice referencing
+// the encoded value.
 // The returned slice aliases the provided data.
 func DecodeValueSlice(data []byte) ([]byte, EntryHeader, error) {
 	var header EntryHeader

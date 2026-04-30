@@ -1,8 +1,8 @@
 package commit
 
 // Queue + batch + sync envelope types owned by the commit pipeline.
-// Request (the underlying write envelope shared with engine/vlog) lives
-// in runtime — see runtime/request.go.
+// Request (the underlying write envelope) lives in runtime — see
+// runtime/request.go.
 
 import (
 	"sync"
@@ -124,12 +124,11 @@ func (cq *CommitQueue) AddPending(entries int64, bytes int64) {
 // pass. ShardID is set by the dispatcher and pins the batch to one LSM
 // data-plane shard end-to-end (preserves SetBatch atomicity).
 type CommitBatch struct {
-	Reqs        []*CommitRequest
-	Pool        *[]*CommitRequest
-	Requests    []*runtime.Request
-	ShardID     int
-	BatchStart  time.Time
-	ValueLogDur time.Duration
+	Reqs       []*CommitRequest
+	Pool       *[]*CommitRequest
+	Requests   []*runtime.Request
+	ShardID    int
+	BatchStart time.Time
 }
 
 // SyncBatch is the handoff object between the commit worker and the

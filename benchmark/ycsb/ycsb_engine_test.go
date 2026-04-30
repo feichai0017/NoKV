@@ -82,21 +82,17 @@ func TestLatencyRecorderEdgeCases(t *testing.T) {
 func TestBuildNoKVBenchmarkOptions(t *testing.T) {
 	opts := buildNoKVBenchmarkOptions(t.TempDir(), ycsbEngineOptions{
 		BlockCacheMB:         512,
-		ValueThreshold:       1024,
 		MemtableMB:           64,
 		SSTableMB:            512,
-		VlogFileMB:           512,
 		SyncWrites:           false,
 		NoKVCompactionPolicy: "leveled",
 	}, NoKV.MemTableEngineART)
 
 	require.Equal(t, NoKV.MemTableEngineART, opts.MemTableEngine)
 	require.False(t, opts.ThermosEnabled)
-	require.Equal(t, 16, opts.ValueLogBucketCount)
 	require.Zero(t, opts.WriteBatchWait)
 	require.Zero(t, opts.WriteHotKeyLimit)
 	require.False(t, opts.EnableWALWatchdog)
-	require.Zero(t, opts.ValueLogGCInterval)
 	require.Equal(t, ycsbNoKVWriteBatchMaxCount, opts.WriteBatchMaxCount)
 	require.Equal(t, int64(ycsbNoKVWriteBatchMaxCount), opts.MaxBatchCount)
 	require.Equal(t, int64(384)<<20, opts.BlockCacheBytes)
@@ -107,10 +103,8 @@ func TestBuildNoKVBenchmarkOptionsExplicitCacheOverrides(t *testing.T) {
 	opts := buildNoKVBenchmarkOptions(t.TempDir(), ycsbEngineOptions{
 		BlockCacheMB:         512,
 		NoKVIndexCacheMB:     64,
-		ValueThreshold:       1024,
 		MemtableMB:           64,
 		SSTableMB:            512,
-		VlogFileMB:           512,
 		SyncWrites:           false,
 		NoKVCompactionPolicy: "leveled",
 	}, NoKV.MemTableEngineART)

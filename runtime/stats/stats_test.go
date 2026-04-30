@@ -21,11 +21,6 @@ import (
 
 func openTestDB(t testing.TB, opt *NoKV.Options) *NoKV.DB {
 	t.Helper()
-	if opt != nil && !opt.EnableValueLog {
-		if opt.ValueLogFileSize > 0 || opt.ValueThreshold == 0 || opt.ValueLogBucketCount > 0 {
-			opt.EnableValueLog = true
-		}
-	}
 	db, err := NoKV.Open(opt)
 	require.NoError(t, err)
 	return db
@@ -37,10 +32,6 @@ func newTestOptions(t *testing.T) *NoKV.Options {
 	opt.WorkDir = t.TempDir()
 	opt.SSTableMaxSz = 1 << 12
 	opt.MemTableSize = 1 << 12
-	opt.EnableValueLog = true
-	opt.ValueLogFileSize = 1 << 20
-	opt.ValueThreshold = 0
-	opt.ValueLogBucketCount = 1
 	opt.MaxBatchCount = 10
 	opt.MaxBatchSize = 1 << 20
 	opt.DetectConflicts = true

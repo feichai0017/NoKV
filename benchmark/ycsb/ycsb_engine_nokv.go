@@ -180,7 +180,7 @@ func (e *nokvEngine) printStats() {
 			break
 		}
 	}
-	fmt.Printf("[NoKV Stats] entries=%d l0_tables=%d l0_bytes=%d l0_landing=%d flush_pending=%d compaction_backlog=%d compaction_max=%.2f write_q=%d write_entries=%d write_bytes=%d throttle=%v vlog_segments=%d vlog_pending=%d vlog_discard=%d\n",
+	fmt.Printf("[NoKV Stats] entries=%d l0_tables=%d l0_bytes=%d l0_landing=%d flush_pending=%d compaction_backlog=%d compaction_max=%.2f write_q=%d write_entries=%d write_bytes=%d throttle=%v\n",
 		snap.Entries,
 		l0Tables,
 		l0Bytes,
@@ -192,8 +192,5 @@ func (e *nokvEngine) printStats() {
 		snap.Write.QueueEntries,
 		snap.Write.QueueBytes,
 		snap.Write.ThrottleActive,
-		snap.ValueLog.Segments,
-		snap.ValueLog.PendingDeletes,
-		snap.ValueLog.DiscardQueue,
 	)
 }

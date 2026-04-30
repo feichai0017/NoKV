@@ -2,8 +2,6 @@ package lsm
 
 import (
 	"github.com/feichai0017/NoKV/engine/index"
-	"github.com/feichai0017/NoKV/engine/kv"
-	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/metrics"
 )
 
@@ -89,40 +87,6 @@ func (lm *levelManager) rangeFilterDiagnostics() RangeFilterDiagnostics {
 		BoundedPruned:     lm.rangeFilter.boundedPruned.Load(),
 		Fallbacks:         lm.rangeFilter.fallbacks.Load(),
 	}
-}
-
-// ValueLogHeadSnapshot returns the persisted per-bucket vlog head pointers.
-func (lsm *LSM) ValueLogHeadSnapshot() map[uint32]kv.ValuePtr {
-	if lsm == nil || lsm.levels == nil {
-		return nil
-	}
-	heads := lsm.levels.ValueLogHead()
-	if len(heads) == 0 {
-		return nil
-	}
-	out := make(map[uint32]kv.ValuePtr, len(heads))
-	for bucket, meta := range heads {
-		if !meta.Valid {
-			continue
-		}
-		out[bucket] = kv.ValuePtr{
-			Bucket: bucket,
-			Fid:    meta.FileID,
-			Offset: uint32(meta.Offset),
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-// ValueLogStatusSnapshot returns persisted metadata for all known vlog files.
-func (lsm *LSM) ValueLogStatusSnapshot() map[manifest.ValueLogID]manifest.ValueLogMeta {
-	if lsm == nil || lsm.levels == nil {
-		return nil
-	}
-	return lsm.levels.ValueLogStatus()
 }
 
 func countMemIndexEntries(idx memIndex) int64 {

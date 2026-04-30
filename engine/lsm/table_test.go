@@ -9,7 +9,6 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
-	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/utils"
@@ -17,8 +16,6 @@ import (
 )
 
 func buildTestLSM(t *testing.T, opt *Options) *LSM {
-	c := make(chan map[manifest.ValueLogID]int64, 16)
-	opt.DiscardStatsCh = &c
 	wlog, err := wal.Open(wal.Config{Dir: opt.WorkDir})
 	require.NoError(t, err)
 	lsm, err := NewLSM(opt, []*wal.Manager{wlog})

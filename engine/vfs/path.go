@@ -3,7 +3,6 @@ package vfs
 import (
 	"fmt"
 	"math"
-	"os"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -25,11 +24,6 @@ func FID(name string) uint64 {
 		return 0
 	}
 	return uint64(id)
-}
-
-// VlogFilePath returns the vlog filename for the given ID.
-func VlogFilePath(dirPath string, fid uint32) string {
-	return fmt.Sprintf("%s%s%05d.vlog", dirPath, string(os.PathSeparator), fid)
 }
 
 // FileNameSSTable returns the SSTable filename for the given ID.

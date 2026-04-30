@@ -14,7 +14,6 @@ func TestFileHelpers(t *testing.T) {
 
 	dir := t.TempDir()
 	require.Equal(t, filepath.Join(dir, "00042.sst"), FileNameSSTable(dir, 42))
-	require.Equal(t, filepath.Join(dir, "00007.vlog"), VlogFilePath(dir, 7))
 
 	require.NoError(t, SyncDir(nil, dir))
 }

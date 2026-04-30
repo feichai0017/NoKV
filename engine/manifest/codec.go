@@ -49,43 +49,6 @@ func writeEdit(w io.Writer, edit Edit) error {
 		} else {
 			buf = append(buf, 0)
 		}
-	case EditValueLogHead:
-		// EditValueLogHead Data Format:
-		// +----------------+----------------+----------------+
-		// | Bucket (v)     | FileID (v)     | Offset (v)     |
-		// +----------------+----------------+----------------+
-		// (v) denotes Uvarint
-		if edit.ValueLog != nil {
-			buf = binary.AppendUvarint(buf, uint64(edit.ValueLog.Bucket))
-			buf = binary.AppendUvarint(buf, uint64(edit.ValueLog.FileID))
-			buf = binary.AppendUvarint(buf, edit.ValueLog.Offset)
-		}
-	case EditDeleteValueLog:
-		// EditDeleteValueLog Data Format:
-		// +----------------+----------------+
-		// | Bucket (v)     | FileID (v)     |
-		// +----------------+----------------+
-		// (v) denotes Uvarint
-		if edit.ValueLog != nil {
-			buf = binary.AppendUvarint(buf, uint64(edit.ValueLog.Bucket))
-			buf = binary.AppendUvarint(buf, uint64(edit.ValueLog.FileID))
-		}
-	case EditUpdateValueLog:
-		// EditUpdateValueLog Data Format:
-		// +----------------+----------------+----------------+----------+
-		// | Bucket (v)     | FileID (v)     | Offset (v)     | Valid (1B)|
-		// +----------------+----------------+----------------+----------+
-		// (v) denotes Uvarint
-		if edit.ValueLog != nil {
-			buf = binary.AppendUvarint(buf, uint64(edit.ValueLog.Bucket))
-			buf = binary.AppendUvarint(buf, uint64(edit.ValueLog.FileID))
-			buf = binary.AppendUvarint(buf, edit.ValueLog.Offset)
-			if edit.ValueLog.Valid {
-				buf = append(buf, 1)
-			} else {
-				buf = append(buf, 0)
-			}
-		}
 	default:
 		return fmt.Errorf("unsupported manifest edit type: %d", edit.Type)
 	}
@@ -178,75 +141,6 @@ func decodeEdit(data []byte) (Edit, error) {
 			CreatedAt: created,
 			ValueSize: valueSize,
 			Landing:   landing,
-		}
-	case EditValueLogHead:
-		// EditValueLogHead Data Format:
-		// +----------------+----------------+----------------+
-		// | Bucket (v)     | FileID (v)     | Offset (v)     |
-		// +----------------+----------------+----------------+
-		// (v) denotes Uvarint
-		if pos < len(data) {
-			bucket64, n := binary.Uvarint(data[pos:])
-			pos += n
-			fid64, n := binary.Uvarint(data[pos:])
-			pos += n
-			offset, n := binary.Uvarint(data[pos:])
-			pos += n
-			if pos > len(data) {
-				return Edit{}, fmt.Errorf("manifest value log head truncated")
-			}
-			edit.ValueLog = &ValueLogMeta{
-				Bucket: uint32(bucket64),
-				FileID: uint32(fid64),
-				Offset: offset,
-				Valid:  true,
-			}
-		}
-	case EditDeleteValueLog:
-		// EditDeleteValueLog Data Format:
-		// +----------------+----------------+
-		// | Bucket (v)     | FileID (v)     |
-		// +----------------+----------------+
-		// (v) denotes Uvarint
-		if pos < len(data) {
-			bucket64, n := binary.Uvarint(data[pos:])
-			pos += n
-			fid64, n := binary.Uvarint(data[pos:])
-			pos += n
-			if pos > len(data) {
-				return Edit{}, fmt.Errorf("manifest value log delete truncated")
-			}
-			edit.ValueLog = &ValueLogMeta{
-				Bucket: uint32(bucket64),
-				FileID: uint32(fid64),
-			}
-		}
-	case EditUpdateValueLog:
-		// EditUpdateValueLog Data Format:
-		// +----------------+----------------+----------------+----------+
-		// | Bucket (v)     | FileID (v)     | Offset (v)     | Valid (1B)|
-		// +----------------+----------------+----------------+----------+
-		// (v) denotes Uvarint
-		if pos < len(data) {
-			bucket64, n := binary.Uvarint(data[pos:])
-			pos += n
-			fid64, n := binary.Uvarint(data[pos:])
-			pos += n
-			offset, n := binary.Uvarint(data[pos:])
-			pos += n
-			if pos > len(data) {
-				return Edit{}, fmt.Errorf("manifest value log update truncated")
-			}
-			valid := false
-			if pos < len(data) {
-				valid = data[pos] == 1
-			}
-			edit.ValueLog = &ValueLogMeta{
-				Bucket: uint32(bucket64),
-				FileID: uint32(fid64),
-				Offset: offset,
-				Valid:  valid,
-			}
 		}
 	default:
 		return Edit{}, fmt.Errorf("unsupported manifest edit type: %d", edit.Type)

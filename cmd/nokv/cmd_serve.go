@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,7 +17,6 @@ import (
 	"github.com/feichai0017/NoKV/config"
 	coordadapter "github.com/feichai0017/NoKV/coordinator/adapter"
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
-	enginekv "github.com/feichai0017/NoKV/engine/kv"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -140,16 +138,6 @@ func runServeCmd(w io.Writer, args []string) error {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = *workDir
 	opt.MemTableEngine = NoKV.MemTableEngineART
-	// Auto-detect existing vlog so a workdir written by an older build
-	// (or by a future explicit-vlog deployment) is reopen-safe.
-	if _, statErr := os.Stat(filepath.Join(*workDir, "vlog")); statErr == nil {
-		opt.EnableValueLog = true
-	}
-	fsmetaInlinePolicy, err := enginekv.NewAlwaysInlinePolicy(enginekv.CFDefault, "fsm\x00")
-	if err != nil {
-		return fmt.Errorf("configure fsmeta value separation policy: %w", err)
-	}
-	opt.ValueSeparationPolicies = append(opt.ValueSeparationPolicies, fsmetaInlinePolicy)
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
 	opt.AllowedModes = []raftmode.Mode{
 		raftmode.ModeStandalone,

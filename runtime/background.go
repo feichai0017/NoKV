@@ -25,7 +25,6 @@ type StatsCollector interface {
 // scoped to that shard's segments.
 type BackgroundConfig struct {
 	StartCompacter     func()
-	StartValueLogGC    func()
 	EnableWALWatchdog  bool
 	WALWatchdogConfigs []wal.WatchdogConfig
 }
@@ -63,9 +62,6 @@ func (s *BackgroundServices) Start(cfg BackgroundConfig) {
 	}
 	if s.stats != nil {
 		s.stats.StartStats()
-	}
-	if cfg.StartValueLogGC != nil {
-		cfg.StartValueLogGC()
 	}
 }
 

@@ -554,44 +554,10 @@ func tablesStrictlyOrdered(tables []*table) bool {
 	return true
 }
 
-func (lm *levelManager) updateDiscardStats(discardStats map[manifest.ValueLogID]int64) {
-	if lm == nil || lm.lsm == nil {
-		return
-	}
-	ch := lm.lsm.getDiscardStatsCh()
-	if ch == nil {
-		return
-	}
-	select {
-	case ch <- discardStats:
-	default:
-	}
-}
-
 // subcompact runs a single parallel compaction over a key range.
 func (lm *levelManager) subcompact(it index.Iterator, kr KeyRange, cd compactDef,
 	inflightBuilders *utils.Throttle, res chan<- *table) {
 	var lastKey []byte
-	// Track discardStats for value log GC.
-	discardStats := make(map[manifest.ValueLogID]int64)
-	valueBias := 1.0
-	if cd.thisLevel != nil {
-		valueBias = cd.thisLevel.valueBias(lm.opt.CompactionValueWeight)
-	}
-	defer func() {
-		lm.updateDiscardStats(discardStats)
-	}()
-	updateStats := func(e *kv.Entry) {
-		if e.Meta&kv.BitValuePointer > 0 {
-			var vp kv.ValuePtr
-			vp.Decode(e.Value)
-			weighted := float64(vp.Len) * valueBias
-			if weighted < 1 {
-				weighted = float64(vp.Len)
-			}
-			discardStats[manifest.ValueLogID{Bucket: vp.Bucket, FileID: vp.Fid}] += int64(math.Round(weighted))
-		}
-	}
 
 	// Keep tombstone state across builder splits.
 	rtTracker := tombstone.NewCompactionTracker()
@@ -643,14 +609,12 @@ func (lm *levelManager) subcompact(it index.Iterator, kr KeyRange, cd compactDef
 				if rtTracker.Covers(cf, userKey, version) {
 					// Covered point versions become stale once a newer range
 					// tombstone is active at this key.
-					updateStats(entry)
 					continue
 				}
 			}
 
 			valueLen := entryValueLen(entry)
 			if isExpired {
-				updateStats(entry)
 				builder.AddStaleEntryWithLen(entry, valueLen)
 			} else {
 				builder.AddKeyWithLen(entry, valueLen)

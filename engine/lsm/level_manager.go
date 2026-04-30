@@ -324,16 +324,6 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	return nil
 }
 
-// ValueLogHead returns manifest-tracked per-bucket active value-log heads.
-func (lm *levelManager) ValueLogHead() map[uint32]manifest.ValueLogMeta {
-	return lm.manifestMgr.ValueLogHead()
-}
-
-// ValueLogStatus returns manifest metadata for all known value-log files.
-func (lm *levelManager) ValueLogStatus() map[manifest.ValueLogID]manifest.ValueLogMeta {
-	return lm.manifestMgr.ValueLogStatus()
-}
-
 func (lm *levelManager) compactionStats() (int64, float64) {
 	if lm == nil {
 		return 0, 0

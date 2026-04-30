@@ -1,4 +1,5 @@
-// Package file provides low-level file and mmap primitives shared by WAL, vlog, and SST layers.
+// Package file provides low-level file and mmap primitives shared by WAL, slab,
+// and SST layers.
 package file
 
 import "github.com/feichai0017/NoKV/engine/vfs"
