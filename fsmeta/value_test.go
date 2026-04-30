@@ -33,21 +33,23 @@ func TestDentryValueRoundTrip(t *testing.T) {
 
 func TestInodeValueRoundTrip(t *testing.T) {
 	value, err := EncodeInodeValue(InodeRecord{
-		Inode:     22,
-		Type:      InodeTypeFile,
-		Size:      4096,
-		LinkCount: 1,
+		Inode:       22,
+		Type:        InodeTypeFile,
+		Size:        4096,
+		LinkCount:   1,
+		OpaqueAttrs: []byte(`{"body_ref":"s3://bucket/checkpoint"}`),
 	})
 	require.NoError(t, err)
-	require.Equal(t, "6673760001690000000000000016010000000000001000000000000000000100000000000000000000000000000000", hex.EncodeToString(value))
+	require.Equal(t, "6673760001690000000000000016010000000000001000000000000000000100000000000000000000000000000000257b22626f64795f726566223a2273333a2f2f6275636b65742f636865636b706f696e74227d", hex.EncodeToString(value))
 
 	record, err := DecodeInodeValue(value)
 	require.NoError(t, err)
 	require.Equal(t, InodeRecord{
-		Inode:     22,
-		Type:      InodeTypeFile,
-		Size:      4096,
-		LinkCount: 1,
+		Inode:       22,
+		Type:        InodeTypeFile,
+		Size:        4096,
+		LinkCount:   1,
+		OpaqueAttrs: []byte(`{"body_ref":"s3://bucket/checkpoint"}`),
 	}, record)
 }
 
@@ -107,9 +109,25 @@ func TestValueCodecsRejectInvalidType(t *testing.T) {
 	_, err := EncodeInodeValue(InodeRecord{Inode: 22, Type: InodeType("symlink")})
 	require.ErrorIs(t, err, ErrInvalidValue)
 
-	value := encodeValue(ValueKindInode, append([]byte{
+	_, err = EncodeInodeValue(InodeRecord{
+		Inode:       22,
+		Type:        InodeTypeFile,
+		OpaqueAttrs: make([]byte, MaxInodeOpaqueAttrsBytes+1),
+	})
+	require.ErrorIs(t, err, ErrInvalidValue)
+
+	body := append([]byte{
 		0, 0, 0, 0, 0, 0, 0, 22,
 		99,
+	}, make([]byte, 32)...)
+	body = append(body, 0)
+	value := encodeValue(ValueKindInode, body)
+	_, err = DecodeInodeValue(value)
+	require.ErrorIs(t, err, ErrInvalidValue)
+
+	value = encodeValue(ValueKindInode, append([]byte{
+		0, 0, 0, 0, 0, 0, 0, 22,
+		1,
 	}, make([]byte, 32)...))
 	_, err = DecodeInodeValue(value)
 	require.ErrorIs(t, err, ErrInvalidValue)

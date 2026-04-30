@@ -74,6 +74,25 @@ func TestGenericKVDriverReadDirPlusUsesPointGets(t *testing.T) {
 	require.Zero(t, runner.batchGetCalls, "generic ReadDirPlus should not use native BatchGet fusion")
 }
 
+func TestGenericKVDriverLookup(t *testing.T) {
+	runner := newFakeTxnRunner()
+	driver, err := NewGenericKVDriver(runner)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	req := fsmeta.CreateRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "file-a", Inode: 42}
+	require.NoError(t, driver.Create(ctx, req, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, LinkCount: 1}))
+	runner.resetCallCounters()
+
+	got, err := driver.Lookup(ctx, fsmeta.LookupRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "file-a"})
+	require.NoError(t, err)
+	require.Equal(t, "file-a", got.Name)
+	require.Len(t, runner.getCalls, 1)
+
+	_, err = driver.Lookup(ctx, fsmeta.LookupRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "missing"})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+}
+
 func TestGenericKVDriverReadDirPlusReturnsNotFoundForDanglingDentry(t *testing.T) {
 	runner := newFakeTxnRunner()
 	driver, err := NewGenericKVDriver(runner)

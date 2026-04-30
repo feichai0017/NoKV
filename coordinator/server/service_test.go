@@ -515,6 +515,14 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 				Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 44, TSOFence: 77}, 5),
 				SealedAt:  rootstate.Cursor{Term: 2, Index: 8},
 			},
+			SnapshotEpochs: map[string]rootstate.SnapshotEpoch{
+				"vol/9/33": {
+					SnapshotID:  "vol/9/33",
+					Mount:       "vol",
+					RootInode:   9,
+					ReadVersion: 33,
+				},
+			},
 			Descriptors: map[uint64]descriptor.Descriptor{
 				11: testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}}),
 			},
@@ -549,6 +557,12 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 	require.Equal(t, "DEGRADED_MODE_HEALTHY", root["degraded_mode"])
 	require.Equal(t, uint64(7), root["storage_leader_id"])
 	require.NotZero(t, root["last_reload_unix_nano"])
+	require.Equal(t, 1, root["snapshot_epochs"])
+	require.Equal(t, map[string]any{
+		"active":             true,
+		"min_read_version":   uint64(33),
+		"enforcement_target": "mvcc_gc",
+	}, root["snapshot_retention"])
 	require.Equal(t, true, lease["enabled"])
 	require.Equal(t, "c1", lease["holder_id"])
 	require.Equal(t, true, lease["active"])

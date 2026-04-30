@@ -19,6 +19,7 @@ message InodeRecord {
   uint32 link_count = 5;
   int64 created_unix_ns = 6;
   int64 updated_unix_ns = 7;
+  bytes opaque_attrs = 8;
 }
 
 message DentryRecord {

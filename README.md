@@ -46,7 +46,7 @@ NoKV is that layer, open-sourced and namespace-native: server-side `ReadDirPlus`
 
 - 🗂️ **Distributed filesystems** — DFS frontends (FUSE / NFS / SMB drivers, JuiceFS / CubeFS-style services) consume `fsmeta` for inode / dentry / mount / subtree authority instead of writing their own metadata layer on top of Redis / TiKV / FoundationDB
 - 🪣 **Object storage namespace layers** — S3-compatible gateways consume the same `fsmeta` for bucket / prefix / version metadata, getting fast `LIST` (server-side `ReadDirPlus`) and prefix-scoped event streams without client-side stitching
-- 🧪 **AI dataset metadata** — checkpoint storms (atomic multi-key `AssertionNotExist`), dataset versioning (`SnapshotSubtree`), prefix-scoped change feeds for training pipelines (`WatchSubtree`) — without retrofitting them onto a generic KV
+- 🧪 **AI dataset and agent workspace metadata** — checkpoint storms (atomic multi-key `AssertionNotExist`), point-in-time namespace reads (`SnapshotSubtree`; long-lived retention is a GC boundary), prefix-scoped change feeds for training pipelines and shared agent workspaces (`WatchSubtree`) — without retrofitting them onto a generic KV
 
 > NoKV does for namespace metadata what etcd did for cluster state: a purpose-built coordination layer instead of forcing engineers to re-derive namespace semantics on every project.
 
@@ -112,7 +112,7 @@ Native API surface (gRPC at `nokv-fsmeta:8090`, also embedded Go via `fsmeta/exe
 |---|---|
 | `ReadDirPlus` | Fused directory scan + batch inode fetch under one snapshot, avoiding client-side N+1 metadata reads |
 | `WatchSubtree` | Prefix-scoped live change feed with ready signal, cursor replay, and flow-control acks |
-| `SnapshotSubtree` | MVCC read-version token for stable dataset / bucket / directory views |
+| `SnapshotSubtree` | MVCC read-version token for point-in-time dataset / bucket / directory reads; long-lived retention is a GC-layer boundary |
 | `RenameSubtree` | Cross-region atomic namespace move backed by Percolator 2PC |
 | Basic namespace ops | `Create`, `Lookup`, `ReadDir`, `Link`, `Unlink`, quota usage, and mount lifecycle |
 

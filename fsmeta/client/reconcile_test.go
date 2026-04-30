@@ -1,0 +1,112 @@
+package client
+
+import (
+	"context"
+	"fmt"
+	"testing"
+
+	"github.com/feichai0017/NoKV/fsmeta"
+	"github.com/stretchr/testify/require"
+)
+
+type reconcileClient struct {
+	watchErrs []error
+	watches   []fsmeta.WatchRequest
+	pages     [][]fsmeta.DentryAttrPair
+	reads     []fsmeta.ReadDirRequest
+}
+
+func (c *reconcileClient) WatchSubtree(_ context.Context, req fsmeta.WatchRequest) (WatchSubscription, error) {
+	c.watches = append(c.watches, req)
+	if len(c.watchErrs) > 0 {
+		err := c.watchErrs[0]
+		c.watchErrs = c.watchErrs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &stubWatchSubscription{ready: fsmeta.WatchCursor{RegionID: 1, Term: 1, Index: uint64(len(c.watches))}}, nil
+}
+
+func (c *reconcileClient) ReadDirPlus(_ context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error) {
+	c.reads = append(c.reads, req)
+	if len(c.pages) == 0 {
+		return nil, fmt.Errorf("unexpected ReadDirPlus")
+	}
+	page := c.pages[0]
+	c.pages = c.pages[1:]
+	return page, nil
+}
+
+func TestReadDirPlusAllPaginates(t *testing.T) {
+	cli := &reconcileClient{
+		pages: [][]fsmeta.DentryAttrPair{
+			{
+				{Dentry: fsmeta.DentryRecord{Name: "a"}},
+				{Dentry: fsmeta.DentryRecord{Name: "b"}},
+			},
+			{
+				{Dentry: fsmeta.DentryRecord{Name: "c"}},
+			},
+		},
+	}
+	got, err := ReadDirPlusAll(context.Background(), cli, fsmeta.ReadDirRequest{
+		Mount: "vol", Parent: fsmeta.RootInode, Limit: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	require.Len(t, cli.reads, 2)
+	require.Equal(t, "", cli.reads[0].StartAfter)
+	require.Equal(t, "b", cli.reads[1].StartAfter)
+}
+
+func TestWatchDirectoryWithReconcileOnExpiredCursor(t *testing.T) {
+	cli := &reconcileClient{
+		watchErrs: []error{fmt.Errorf("%w: stale", fsmeta.ErrWatchCursorExpired), nil},
+		pages: [][]fsmeta.DentryAttrPair{
+			{{Dentry: fsmeta.DentryRecord{Name: "artifact"}}},
+		},
+	}
+	watchReq := fsmeta.WatchRequest{
+		Mount:        "vol",
+		RootInode:    fsmeta.RootInode,
+		ResumeCursor: fsmeta.WatchCursor{RegionID: 7, Term: 1, Index: 100},
+	}
+	readReq := fsmeta.ReadDirRequest{Mount: "vol", Parent: fsmeta.RootInode, Limit: 100}
+
+	result, err := WatchDirectoryWithReconcile(context.Background(), cli, watchReq, readReq)
+	require.NoError(t, err)
+	require.True(t, result.Reconciled)
+	require.Len(t, result.Snapshot, 1)
+	require.NotNil(t, result.Subscription)
+	require.Len(t, cli.watches, 2)
+	require.Equal(t, watchReq.ResumeCursor, cli.watches[0].ResumeCursor)
+	require.Equal(t, fsmeta.WatchCursor{}, cli.watches[1].ResumeCursor,
+		"fresh watch must drop the expired cursor before full-state reconcile")
+	require.Len(t, cli.reads, 1)
+}
+
+func TestWatchDirectoryWithReconcileRejectsMismatchedRequest(t *testing.T) {
+	_, err := WatchDirectoryWithReconcile(context.Background(), &reconcileClient{},
+		fsmeta.WatchRequest{Mount: "vol", RootInode: 10},
+		fsmeta.ReadDirRequest{Mount: "vol", Parent: 11},
+	)
+	require.ErrorIs(t, err, fsmeta.ErrInvalidRequest)
+}
+
+func TestWatchDirectoryWithReconcileRejectsPartialBaseline(t *testing.T) {
+	cli := &reconcileClient{}
+	watchReq := fsmeta.WatchRequest{Mount: "vol", RootInode: fsmeta.RootInode}
+
+	_, err := WatchDirectoryWithReconcile(context.Background(), cli, watchReq,
+		fsmeta.ReadDirRequest{Mount: "vol", Parent: fsmeta.RootInode, StartAfter: "a"},
+	)
+	require.ErrorIs(t, err, fsmeta.ErrInvalidRequest)
+
+	_, err = WatchDirectoryWithReconcile(context.Background(), cli, watchReq,
+		fsmeta.ReadDirRequest{Mount: "vol", Parent: fsmeta.RootInode, SnapshotVersion: 10},
+	)
+	require.ErrorIs(t, err, fsmeta.ErrInvalidRequest)
+	require.Empty(t, cli.watches)
+	require.Empty(t, cli.reads)
+}

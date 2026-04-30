@@ -23,8 +23,8 @@ The current v1 API is defined by `pb/fsmeta/fsmeta.proto`. `fsmeta/server` expos
 | `Lookup` | Read a dentry by `(mount, parent_inode, name)`. |
 | `ReadDir` | Scan one directory page by dentry prefix. |
 | `ReadDirPlus` | Scan dentries and batch-read inode attrs under the same snapshot version. |
-| `WatchSubtree` | A prefix-scoped change feed; supports ready, ack, back-pressure, and cursor replay. |
-| `SnapshotSubtree` | Publishes a stable MVCC read version; subsequent `ReadDir` / `ReadDirPlus` can use it to read the snapshot. |
+| `WatchSubtree` | A prefix-scoped change feed; supports ready, ack, back-pressure, and bounded cursor replay. Cursor expiry requires full-state reconcile. |
+| `SnapshotSubtree` | Publishes an MVCC read-version token; subsequent `ReadDir` / `ReadDirPlus` can use it to read that version. Data-plane GC retention is a separate boundary. |
 | `RetireSnapshotSubtree` | Proactively retire a snapshot epoch. |
 | `GetQuotaUsage` | Read the persistent quota usage counter for a mount/scope. |
 | `RenameSubtree` | Atomically move the root dentry of a subtree; descendants follow naturally via inode references. |
@@ -38,13 +38,15 @@ The current v1 API is defined by `pb/fsmeta/fsmeta.proto`. `fsmeta/server` expos
 | Object | Storage location | Notes |
 |---|---|---|
 | Mount metadata key | `EncodeMountKey` | Reserved mount-level data key; mount lifecycle truth does not live here. |
-| Inode | `EncodeInodeKey(mount, inode)` | File/directory attributes, including `size`, `mode`, `link_count`. |
+| Inode | `EncodeInodeKey(mount, inode)` | File/directory attributes, including `size`, `mode`, `link_count`, and a bounded `opaque_attrs` payload. |
 | Dentry | `EncodeDentryKey(mount, parent, name)` | Mapping from parent/name to inode. |
 | Chunk | `EncodeChunkKey(mount, inode, chunk)` | Schema is in place; the current fsmeta API doesn't expose object body / chunk I/O. |
 | Session | `EncodeSessionKey(mount, session)` | Schema reserved for later session/lease use. |
 | Usage | `EncodeUsageKey(mount, scope)` | Quota usage counter; scope=0 means mount-wide, non-zero means a direct accounting scope. |
 
 Both keys and values carry a magic + schema version. Values use a hand-written binary layout — not JSON.
+
+`InodeRecord.opaque_attrs` is application-owned bytes capped at 16 KiB. It is intended for compact body references, checksums, content type, or a caller-defined protobuf payload. NoKV stores and returns it, but does not parse, index, authorize, or quota it separately.
 
 ## 4. Execution boundary
 
@@ -61,6 +63,13 @@ type TxnRunner interface {
 ```
 
 The default runtime uses `OpenWithRaftstore` to wire up coordinator, raftstore client, TSO, watch source, mount/quota cache, snapshot publisher, and subtree handoff publisher. Embedded users can use this entry point directly; tests and custom deployments can keep passing in their own `TxnRunner`.
+
+`OpenWithRaftstore` can also wire two derived slab caches when explicitly configured:
+
+- `NegativeCacheDir` enables a persistent negative dentry cache. It remembers recent lookup misses and invalidates on namespace mutations.
+- `DirPageCacheDir` enables a ReadDirPlus page cache. It materializes fused dentry+inode pages and invalidates by parent directory epoch.
+
+Both caches are derived state. They can be dropped or rebuilt without changing authoritative namespace truth.
 
 The layering constraints are:
 
@@ -95,11 +104,16 @@ v1 already supports:
 - resume cursor replay;
 - `ErrWatchCursorExpired` when a cursor has expired.
 
+`ErrWatchCursorExpired` is not a fatal protocol state. The client-side recovery
+pattern is: open a fresh watch without the old cursor, take a full `ReadDirPlus`
+baseline for the watched directory, then apply live events idempotently. The Go
+typed client exposes this as `client.WatchDirectoryWithReconcile`.
+
 ### SnapshotSubtree
 
 `SnapshotSubtree` only publishes a read epoch — it does not copy the directory tree. The token shape is `(mount, root_inode, read_version)`. Subsequent `ReadDir` / `ReadDirPlus` use `snapshot_version` to read the same MVCC view.
 
-`SnapshotEpochPublished` / `SnapshotEpochRetired` rooted events are already in place. The data-plane MVCC GC does not yet use these epochs as a retention lower bound — that's the next piece of work for the GC layer.
+`SnapshotEpochPublished` / `SnapshotEpochRetired` rooted events are already in place. Coordinator root views now carry active snapshot epochs and expose the oldest active `read_version` as the MVCC-GC retention floor. The current data-plane compactor does not yet drop MVCC history by read-version, so this is the enforcement hook for a future version-GC worker rather than a destructive cleanup path today.
 
 ### RenameSubtree
 
@@ -162,7 +176,9 @@ Start the fsmeta gateway directly:
 go run ./cmd/nokv-fsmeta \
   --addr 127.0.0.1:8090 \
   --coordinator-addr 127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392 \
-  --metrics-addr 127.0.0.1:9400
+  --metrics-addr 127.0.0.1:9400 \
+  --negative-cache-dir ./artifacts/fsmeta/negative-cache \
+  --dirpage-cache-dir ./artifacts/fsmeta/dirpage-cache
 ```
 
 Register a mount:
@@ -196,6 +212,9 @@ nokv quota set \
 | `nokv_fsmeta_mount` | mount cache hit/miss, admission rejects. |
 | `nokv_fsmeta_quota` | fence check/reject, cache hit/miss, fence updates, usage mutations. |
 
+When the derived caches are enabled, `nokv_fsmeta_executor` also reports whether
+NegativeCache / DirPage are active and the DirPage hit/miss/store counters.
+
 ## 9. Benchmarks
 
 The fsmeta benchmark lives in `benchmark/fsmeta`. The core comparison is two paths against the same NoKV cluster:
@@ -209,10 +228,16 @@ Stage 1 headline: `ReadDirPlus` average latency 12.0 ms vs 510.3 ms — about 42
 
 The WatchSubtree evidence workload lives in the same benchmark package; `watch_notify` reaches sub-second p95 on a Docker Compose 3-node cluster.
 
+Derived-cache evidence uses the same harness:
+
+- `hotspot-fanin` with `ReadDirPlus` measures the DirPage path when `nokv-fsmeta --dirpage-cache-dir ...` is enabled.
+- `negative-lookup` repeatedly probes missing dentries and measures the NegativeCache path when `nokv-fsmeta --negative-cache-dir ...` is enabled.
+
 ## 10. Non-goals
 
 - No FUSE / NFS / SMB frontend.
 - No S3 HTTP gateway or object body I/O.
+- No indexing or interpretation of `InodeRecord.opaque_attrs`.
 - No write of every inode/dentry mutation into `meta/root`.
 - No recursive materialized snapshot — `SnapshotSubtree` is an MVCC read epoch.
-- No claim that data-plane MVCC GC already retains by snapshot epoch.
+- No claim that data-plane MVCC version GC already deletes or retains by snapshot epoch; active epochs are materialized as a retention floor for the future GC worker.

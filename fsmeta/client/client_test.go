@@ -46,7 +46,14 @@ func (e *fakeExecutor) ReadDirPlus(context.Context, fsmeta.ReadDirRequest) ([]fs
 	}
 	return []fsmeta.DentryAttrPair{{
 		Dentry: fsmeta.DentryRecord{Parent: fsmeta.RootInode, Name: "checkpoint", Inode: 42, Type: fsmeta.InodeTypeFile},
-		Inode:  fsmeta.InodeRecord{Inode: 42, Type: fsmeta.InodeTypeFile, Size: 4096, Mode: 0o644, LinkCount: 1},
+		Inode: fsmeta.InodeRecord{
+			Inode:       42,
+			Type:        fsmeta.InodeTypeFile,
+			Size:        4096,
+			Mode:        0o644,
+			LinkCount:   1,
+			OpaqueAttrs: []byte(`{"body_ref":"cas://checkpoint"}`),
+		},
 	}}, nil
 }
 
@@ -115,7 +122,14 @@ func TestTypedClientRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []fsmeta.DentryAttrPair{{
 		Dentry: fsmeta.DentryRecord{Parent: fsmeta.RootInode, Name: "checkpoint", Inode: 42, Type: fsmeta.InodeTypeFile},
-		Inode:  fsmeta.InodeRecord{Inode: 42, Type: fsmeta.InodeTypeFile, Size: 4096, Mode: 0o644, LinkCount: 1},
+		Inode: fsmeta.InodeRecord{
+			Inode:       42,
+			Type:        fsmeta.InodeTypeFile,
+			Size:        4096,
+			Mode:        0o644,
+			LinkCount:   1,
+			OpaqueAttrs: []byte(`{"body_ref":"cas://checkpoint"}`),
+		},
 	}}, pairs)
 }
 

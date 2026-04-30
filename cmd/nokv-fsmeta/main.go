@@ -33,13 +33,19 @@ func main() {
 		addr        = flag.String("addr", "127.0.0.1:8090", "listen address for FSMetadata gRPC server")
 		coordAddr   = flag.String("coordinator-addr", "", "coordinator gRPC endpoint used for TSO, routing, and store discovery")
 		metricsAddr = flag.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
+		negCacheDir = flag.String("negative-cache-dir", "", "optional slab directory for persistent negative dentry cache")
+		dirPageDir  = flag.String("dirpage-cache-dir", "", "optional slab directory for ReadDirPlus page cache")
 	)
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	rt, err := openRuntime(ctx, fsmetaexec.Options{CoordinatorAddr: *coordAddr})
+	rt, err := openRuntime(ctx, fsmetaexec.Options{
+		CoordinatorAddr:  *coordAddr,
+		NegativeCacheDir: *negCacheDir,
+		DirPageCacheDir:  *dirPageDir,
+	})
 	if err != nil {
 		fatalf("open fsmeta runtime: %v", err)
 		return

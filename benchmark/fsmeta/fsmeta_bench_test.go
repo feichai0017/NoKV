@@ -29,7 +29,7 @@ var (
 	fsmetaDrivers        = flag.String("fsmeta_drivers", workload.DriverNativeFSMetadata, "comma-separated drivers: native-fsmeta,generic-kv")
 	fsmetaAddr           = flag.String("fsmeta_addr", "127.0.0.1:8090", "FSMetadata gRPC endpoint")
 	fsmetaCoordAddr      = flag.String("fsmeta_coordinator_addr", "127.0.0.1:2379", "Coordinator gRPC endpoint for generic-kv driver")
-	fsmetaWorkloads      = flag.String("fsmeta_workloads", "checkpoint-storm,hotspot-fanin", "comma-separated workloads")
+	fsmetaWorkloads      = flag.String("fsmeta_workloads", "checkpoint-storm,hotspot-fanin", "comma-separated workloads: checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup")
 	fsmetaMount          = flag.String("fsmeta_mount", "fsmeta-bench", "fsmeta mount id")
 	fsmetaClients        = flag.Int("fsmeta_clients", 8, "concurrent clients")
 	fsmetaDirs           = flag.Int("fsmeta_dirs", 16, "checkpoint-storm directory count")
@@ -217,6 +217,15 @@ func runBenchmarkWorkload(ctx context.Context, cli workload.Client, driverName, 
 			Files:              *fsmetaFiles,
 			StartInode:         startInode + 2_000_000,
 			BackPressureWindow: uint32(*fsmetaWatchWindow),
+		})
+	case workload.NegativeLookup:
+		result, err = workload.RunNegativeLookup(ctx, cli, workload.NegativeLookupConfig{
+			Mount:          fsmeta.MountID(*fsmetaMount),
+			RunID:          runID,
+			Clients:        *fsmetaClients,
+			Keys:           *fsmetaFiles,
+			ReadsPerClient: *fsmetaReadsPerClient,
+			Parent:         fsmeta.RootInode,
 		})
 	default:
 		return workload.Result{}, fmt.Errorf("unknown workload %q", workloadName)

@@ -123,11 +123,12 @@ func TestGRPCServiceCreateAndReadDirPlus(t *testing.T) {
 		Parent: uint64(fsmeta.RootInode),
 		Name:   "checkpoint",
 		Inode: &fsmetapb.InodeRecord{
-			Inode:     42,
-			Type:      fsmetapb.InodeType_INODE_TYPE_FILE,
-			Size:      4096,
-			Mode:      0o644,
-			LinkCount: 1,
+			Inode:       42,
+			Type:        fsmetapb.InodeType_INODE_TYPE_FILE,
+			Size:        4096,
+			Mode:        0o644,
+			LinkCount:   1,
+			OpaqueAttrs: []byte(`{"body_ref":"cas://checkpoint"}`),
 		},
 	})
 	require.NoError(t, err)
@@ -138,11 +139,12 @@ func TestGRPCServiceCreateAndReadDirPlus(t *testing.T) {
 		Inode:  42,
 	}, executor.createReq)
 	require.Equal(t, fsmeta.InodeRecord{
-		Inode:     42,
-		Type:      fsmeta.InodeTypeFile,
-		Size:      4096,
-		Mode:      0o644,
-		LinkCount: 1,
+		Inode:       42,
+		Type:        fsmeta.InodeTypeFile,
+		Size:        4096,
+		Mode:        0o644,
+		LinkCount:   1,
+		OpaqueAttrs: []byte(`{"body_ref":"cas://checkpoint"}`),
 	}, executor.createInode)
 
 	resp, err := client.ReadDirPlus(context.Background(), &fsmetapb.ReadDirRequest{
@@ -161,6 +163,7 @@ func TestGRPCServiceCreateAndReadDirPlus(t *testing.T) {
 	require.Len(t, resp.GetEntries(), 1)
 	require.Equal(t, "checkpoint", resp.GetEntries()[0].GetDentry().GetName())
 	require.Equal(t, uint64(4096), resp.GetEntries()[0].GetInode().GetSize())
+	require.Equal(t, []byte(nil), resp.GetEntries()[0].GetInode().GetOpaqueAttrs())
 }
 
 func TestGRPCServiceReadDirAndMutationRPCs(t *testing.T) {

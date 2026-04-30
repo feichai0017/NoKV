@@ -36,6 +36,7 @@ type InodeRecord struct {
 	LinkCount     uint32    `json:"link_count,omitempty"`
 	CreatedUnixNs int64     `json:"created_unix_ns,omitempty"`
 	UpdatedUnixNs int64     `json:"updated_unix_ns,omitempty"`
+	OpaqueAttrs   []byte    `json:"opaque_attrs,omitempty"`
 }
 
 // DentryRecord is the value stored under a parent/name dentry key.
@@ -83,7 +84,10 @@ func EncodeInodeValue(record InodeRecord) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	body := make([]byte, 0, 41)
+	if len(record.OpaqueAttrs) > MaxInodeOpaqueAttrsBytes {
+		return nil, ErrInvalidValue
+	}
+	body := make([]byte, 0, 41+binary.MaxVarintLen64+len(record.OpaqueAttrs))
 	body = binary.BigEndian.AppendUint64(body, uint64(record.Inode))
 	body = append(body, typ)
 	body = binary.BigEndian.AppendUint64(body, record.Size)
@@ -91,6 +95,8 @@ func EncodeInodeValue(record InodeRecord) ([]byte, error) {
 	body = binary.BigEndian.AppendUint32(body, record.LinkCount)
 	body = binary.BigEndian.AppendUint64(body, uint64(record.CreatedUnixNs))
 	body = binary.BigEndian.AppendUint64(body, uint64(record.UpdatedUnixNs))
+	body = binary.AppendUvarint(body, uint64(len(record.OpaqueAttrs)))
+	body = append(body, record.OpaqueAttrs...)
 	return encodeValue(ValueKindInode, body), nil
 }
 
@@ -266,8 +272,8 @@ func decodeValue(value []byte, expected ValueKind, out any) error {
 }
 
 func decodeInodeBody(body []byte) (InodeRecord, error) {
-	const size = 8 + 1 + 8 + 4 + 4 + 8 + 8
-	if len(body) != size {
+	const fixedSize = 8 + 1 + 8 + 4 + 4 + 8 + 8
+	if len(body) < fixedSize+1 {
 		return InodeRecord{}, ErrInvalidValue
 	}
 	record := InodeRecord{
@@ -286,6 +292,16 @@ func decodeInodeBody(body []byte) (InodeRecord, error) {
 	if err := validateInodeID(record.Inode); err != nil {
 		return InodeRecord{}, err
 	}
+	pos := fixedSize
+	attrsLen, n := binary.Uvarint(body[pos:])
+	if n <= 0 {
+		return InodeRecord{}, ErrInvalidValue
+	}
+	pos += n
+	if attrsLen > MaxInodeOpaqueAttrsBytes || attrsLen != uint64(len(body)-pos) {
+		return InodeRecord{}, ErrInvalidValue
+	}
+	record.OpaqueAttrs = append([]byte(nil), body[pos:]...)
 	return record, nil
 }
 

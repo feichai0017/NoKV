@@ -47,6 +47,7 @@ type Snapshot struct {
 	RootToken           rootstorage.TailToken
 	CatchUpState        CatchUpState
 	Stores              map[uint64]rootstate.StoreMembership
+	SnapshotEpochs      map[string]rootstate.SnapshotEpoch
 	Mounts              map[string]rootstate.MountRecord
 	Subtrees            map[string]rootstate.SubtreeAuthority
 	Quotas              map[string]rootstate.QuotaFence
@@ -65,6 +66,7 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 		RootToken:           snapshot.RootToken,
 		CatchUpState:        snapshot.CatchUpState,
 		Stores:              rootstate.CloneStoreMemberships(snapshot.Stores),
+		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(snapshot.SnapshotEpochs),
 		Mounts:              rootstate.CloneMounts(snapshot.Mounts),
 		Subtrees:            rootstate.CloneSubtreeAuthorities(snapshot.Subtrees),
 		Quotas:              rootstate.CloneQuotaFences(snapshot.Quotas),
@@ -87,6 +89,7 @@ func SnapshotFromRoot(snapshot rootstate.Snapshot) Snapshot {
 		},
 		CatchUpState:        CatchUpStateFresh,
 		Stores:              rootstate.CloneStoreMemberships(snapshot.Stores),
+		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(snapshot.SnapshotEpochs),
 		Mounts:              rootstate.CloneMounts(snapshot.Mounts),
 		Subtrees:            rootstate.CloneSubtreeAuthorities(snapshot.Subtrees),
 		Quotas:              rootstate.CloneQuotaFences(snapshot.Quotas),
@@ -115,6 +118,7 @@ func (s Snapshot) RootSnapshot() rootstate.Snapshot {
 			Handover:      s.Handover,
 		},
 		Stores:              rootstate.CloneStoreMemberships(s.Stores),
+		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(s.SnapshotEpochs),
 		Mounts:              rootstate.CloneMounts(s.Mounts),
 		Subtrees:            rootstate.CloneSubtreeAuthorities(s.Subtrees),
 		Quotas:              rootstate.CloneQuotaFences(s.Quotas),
@@ -122,6 +126,12 @@ func (s Snapshot) RootSnapshot() rootstate.Snapshot {
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.PendingPeerChanges),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.PendingRangeChanges),
 	}
+}
+
+// SnapshotRetentionFloor returns the oldest active fsmeta snapshot read version
+// currently materialized in this root view.
+func (s Snapshot) SnapshotRetentionFloor() (uint64, bool) {
+	return rootstate.SnapshotRetentionFloor(s.SnapshotEpochs)
 }
 
 // BootstrapInfo captures rooted Coordinator bootstrap results.

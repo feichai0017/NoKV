@@ -29,6 +29,14 @@ func (c *fakeClient) Create(_ context.Context, req fsmeta.CreateRequest, inode f
 	return nil
 }
 
+func (c *fakeClient) Lookup(_ context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error) {
+	entry, ok := c.dentries[dentryID(req.Parent, req.Name)]
+	if !ok {
+		return fsmeta.DentryRecord{}, fsmeta.ErrNotFound
+	}
+	return entry, nil
+}
+
 func (c *fakeClient) ReadDir(_ context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error) {
 	return c.readDir(req), nil
 }
@@ -112,6 +120,24 @@ func TestRunWatchSubtree(t *testing.T) {
 		}
 	}
 	require.True(t, sawNotify)
+}
+
+func TestRunNegativeLookup(t *testing.T) {
+	result, err := RunNegativeLookup(context.Background(), newFakeClient(), NegativeLookupConfig{
+		Mount:          "vol",
+		RunID:          "test",
+		Clients:        2,
+		Keys:           3,
+		ReadsPerClient: 4,
+		Parent:         fsmeta.RootInode,
+	})
+	require.NoError(t, err)
+	require.Equal(t, NegativeLookup, result.Name)
+	require.Equal(t, 8, result.Ops)
+	require.Zero(t, result.Errors)
+	rows := SummaryRows(result)
+	require.Len(t, rows, 1)
+	require.Equal(t, "lookup_missing", rows[0].Operation)
 }
 
 func TestWriteSummaryCSVIncludesDriver(t *testing.T) {

@@ -30,10 +30,11 @@ func TestFSMetadataClientServerOnRealCluster(t *testing.T) {
 		Inode:  42,
 	}
 	require.NoError(t, cli.Create(ctx, req, fsmeta.InodeRecord{
-		Type:      fsmeta.InodeTypeFile,
-		Size:      4096,
-		Mode:      0o644,
-		LinkCount: 1,
+		Type:        fsmeta.InodeTypeFile,
+		Size:        4096,
+		Mode:        0o644,
+		LinkCount:   1,
+		OpaqueAttrs: []byte(`{"body_ref":"cas://checkpoint-0001","sha256":"abc"}`),
 	}))
 
 	record, err := cli.Lookup(ctx, fsmeta.LookupRequest{
@@ -63,11 +64,12 @@ func TestFSMetadataClientServerOnRealCluster(t *testing.T) {
 			Type:   fsmeta.InodeTypeFile,
 		},
 		Inode: fsmeta.InodeRecord{
-			Inode:     req.Inode,
-			Type:      fsmeta.InodeTypeFile,
-			Size:      4096,
-			Mode:      0o644,
-			LinkCount: 1,
+			Inode:       req.Inode,
+			Type:        fsmeta.InodeTypeFile,
+			Size:        4096,
+			Mode:        0o644,
+			LinkCount:   1,
+			OpaqueAttrs: []byte(`{"body_ref":"cas://checkpoint-0001","sha256":"abc"}`),
 		},
 	}}, pairs)
 
@@ -279,6 +281,61 @@ func TestFSMetadataWatchSubtreeReplaysAfterResumeCursor(t *testing.T) {
 	}, 5*time.Second, 20*time.Millisecond)
 }
 
+func TestFSMetadataWatchSubtreeReconcilesAfterExpiredCursor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	runtime := openRealClusterRuntime(t, ctx)
+	router := fswatch.NewRouter()
+	reg, err := runtime.node.Server.Store().RegisterApplyObserver(router, 256)
+	require.NoError(t, err)
+	defer reg.Close()
+
+	cli, cleanup := openFSMetadataClient(t, ctx, runtime.executor, fsmetaserver.WithWatcher(router))
+	defer cleanup()
+
+	warmup, err := cli.WatchSubtree(ctx, fsmeta.WatchRequest{
+		Mount:              "vol",
+		RootInode:          fsmeta.RootInode,
+		BackPressureWindow: 8,
+	})
+	require.NoError(t, err)
+
+	baseline := fsmeta.CreateRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "baseline-artifact", Inode: 811}
+	require.NoError(t, cli.Create(ctx, baseline, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, LinkCount: 1}))
+	baselineKey, err := fsmeta.EncodeDentryKey(baseline.Mount, baseline.Parent, baseline.Name)
+	require.NoError(t, err)
+	baselineEvent := recvWatchKey(t, warmup, baselineKey)
+	require.NotZero(t, baselineEvent.Cursor.RegionID)
+	require.NotZero(t, baselineEvent.Cursor.Index)
+	require.NoError(t, warmup.Ack(baselineEvent.Cursor))
+	require.NoError(t, warmup.Close())
+
+	expired := baselineEvent.Cursor
+	expired.Index = 0
+
+	result, err := fsmetaclient.WatchDirectoryWithReconcile(ctx, cli,
+		fsmeta.WatchRequest{
+			Mount:              "vol",
+			RootInode:          fsmeta.RootInode,
+			ResumeCursor:       expired,
+			BackPressureWindow: 8,
+		},
+		fsmeta.ReadDirRequest{Mount: "vol", Parent: fsmeta.RootInode, Limit: 8},
+	)
+	require.NoError(t, err)
+	defer func() { _ = result.Subscription.Close() }()
+	require.True(t, result.Reconciled)
+	require.Equal(t, []string{"baseline-artifact"}, dentryNames(result.Snapshot))
+
+	live := fsmeta.CreateRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "live-after-reconcile", Inode: 812}
+	require.NoError(t, cli.Create(ctx, live, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, LinkCount: 1}))
+	liveKey, err := fsmeta.EncodeDentryKey(live.Mount, live.Parent, live.Name)
+	require.NoError(t, err)
+	got := recvWatchKey(t, result.Subscription, liveKey)
+	require.NoError(t, result.Subscription.Ack(got.Cursor))
+}
+
 func TestFSMetadataSnapshotSubtreeOnRealCluster(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -332,6 +389,68 @@ func TestFSMetadataSnapshotSubtreeOnRealCluster(t *testing.T) {
 
 	require.NoError(t, cli.RetireSnapshotSubtree(ctx, token))
 	require.Equal(t, token, publisher.retired)
+}
+
+func TestFSMetadataStageCommitArtifactPublishOnRealCluster(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	executor := openRealClusterExecutor(t, ctx)
+	cli, cleanup := openFSMetadataClient(t, ctx, executor)
+	defer cleanup()
+
+	const (
+		stagingInode fsmeta.InodeID = 9010
+		runInode     fsmeta.InodeID = 9011
+		fileInode    fsmeta.InodeID = 9012
+	)
+	mount := fsmeta.MountID("vol")
+	require.NoError(t, cli.Create(ctx, fsmeta.CreateRequest{
+		Mount:  mount,
+		Parent: fsmeta.RootInode,
+		Name:   ".staging",
+		Inode:  stagingInode,
+	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeDirectory, LinkCount: 1}))
+	require.NoError(t, cli.Create(ctx, fsmeta.CreateRequest{
+		Mount:  mount,
+		Parent: stagingInode,
+		Name:   "run-tmp",
+		Inode:  runInode,
+	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeDirectory, LinkCount: 1}))
+	require.NoError(t, cli.Create(ctx, fsmeta.CreateRequest{
+		Mount:  mount,
+		Parent: runInode,
+		Name:   "manifest.json",
+		Inode:  fileInode,
+	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, Size: 128, LinkCount: 1}))
+
+	_, err := cli.Lookup(ctx, fsmeta.LookupRequest{Mount: mount, Parent: fsmeta.RootInode, Name: "run-001"})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	staged, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{Mount: mount, Parent: runInode, Limit: 8})
+	require.NoError(t, err)
+	require.Equal(t, []string{"manifest.json"}, dentryNames(staged))
+
+	require.NoError(t, cli.RenameSubtree(ctx, fsmeta.RenameSubtreeRequest{
+		Mount:      mount,
+		FromParent: stagingInode,
+		FromName:   "run-tmp",
+		ToParent:   fsmeta.RootInode,
+		ToName:     "run-001",
+	}))
+
+	_, err = cli.Lookup(ctx, fsmeta.LookupRequest{Mount: mount, Parent: stagingInode, Name: "run-tmp"})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	published, err := cli.Lookup(ctx, fsmeta.LookupRequest{Mount: mount, Parent: fsmeta.RootInode, Name: "run-001"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.DentryRecord{
+		Parent: fsmeta.RootInode,
+		Name:   "run-001",
+		Inode:  runInode,
+		Type:   fsmeta.InodeTypeDirectory,
+	}, published)
+	children, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{Mount: mount, Parent: runInode, Limit: 8})
+	require.NoError(t, err)
+	require.Equal(t, []string{"manifest.json"}, dentryNames(children))
 }
 
 type snapshotRecorder struct {
