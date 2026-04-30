@@ -128,6 +128,23 @@ The extra semantics live in the authority layer:
 
 This design prioritizes guaranteeing that rooted authority can never get stuck in an unknown state forever. In extreme cases it may advance an empty era — but it will not leave behind an orphaned pending handoff that no one will repair.
 
+### Staged publish
+
+Large artifact bodies live outside fsmeta, but the namespace commit point can be
+made atomic. The Go typed client provides
+`client.PublishStagedNamespaceEntry` for the standard pattern:
+
+1. create a staged dentry/inode, usually under a private staging parent or
+   hidden staging name;
+2. let the caller write or validate the external body reference;
+3. rename the staged entry to the final path with `RenameSubtree`.
+
+If body preparation fails, the helper best-effort unlinks the staged entry. If
+the final rename fails, it leaves staging in place so the caller can inspect or
+retry without losing prepared external state. NoKV still does not parse or write
+the object body; callers can store compact body references in
+`InodeRecord.opaque_attrs`.
+
 ### Link / Unlink
 
 `Link` is allowed only for non-directory inodes. It creates a new dentry and increments `InodeRecord.LinkCount` in the same transaction.

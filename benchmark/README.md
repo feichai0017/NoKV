@@ -118,6 +118,23 @@ Then compare:
 - `hotspot-fanin` with `-fsmeta_readdirplus=true` for the DirPage cache path.
 - `negative-lookup` for repeated missing dentry probes and the NegativeCache path.
 
+For a fixed on/off comparison, run the helper from the repository root after
+the coordinator and stores are already up:
+
+```bash
+NOKV_FSMETA_COORDINATOR_ADDR=127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392 \
+  scripts/run_fsmeta_derived_cache_bench.sh
+```
+
+The helper starts two fsmeta gateways against the same cluster:
+
+- cache-off at `127.0.0.1:8090`
+- cache-on at `127.0.0.1:8091` with both `--negative-cache-dir` and
+  `--dirpage-cache-dir`
+
+It writes two CSV files named `fsmeta_derived_cache_off_*` and
+`fsmeta_derived_cache_on_*` under `data/fsmeta/results/`.
+
 The summary CSV is written under `data/fsmeta/results/` unless
 `-fsmeta_output` is set. Rows include a `driver` column so native and generic
 results can be plotted from one file.
