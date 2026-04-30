@@ -80,6 +80,10 @@ const (
 	// RootInode is the conventional root inode for one mount.
 	RootInode InodeID = 1
 
+	// MaxInodeOpaqueAttrsBytes bounds the application-owned inode payload.
+	// It is for compact body references and custom attributes, not object bodies.
+	MaxInodeOpaqueAttrsBytes = 16 * 1024
+
 	// DefaultReadDirLimit bounds one ReadDir planning request when callers do not
 	// supply an explicit page size.
 	DefaultReadDirLimit uint32 = 1024

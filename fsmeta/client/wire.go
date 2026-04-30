@@ -125,6 +125,7 @@ func inodeFromProto(pb *fsmetapb.InodeRecord) fsmeta.InodeRecord {
 		LinkCount:     pb.GetLinkCount(),
 		CreatedUnixNs: pb.GetCreatedUnixNs(),
 		UpdatedUnixNs: pb.GetUpdatedUnixNs(),
+		OpaqueAttrs:   append([]byte(nil), pb.GetOpaqueAttrs()...),
 	}
 }
 
@@ -137,6 +138,7 @@ func inodeToProto(record fsmeta.InodeRecord) *fsmetapb.InodeRecord {
 		LinkCount:     record.LinkCount,
 		CreatedUnixNs: record.CreatedUnixNs,
 		UpdatedUnixNs: record.UpdatedUnixNs,
+		OpaqueAttrs:   append([]byte(nil), record.OpaqueAttrs...),
 	}
 }
 

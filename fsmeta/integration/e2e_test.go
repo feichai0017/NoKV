@@ -30,10 +30,11 @@ func TestFSMetadataClientServerOnRealCluster(t *testing.T) {
 		Inode:  42,
 	}
 	require.NoError(t, cli.Create(ctx, req, fsmeta.InodeRecord{
-		Type:      fsmeta.InodeTypeFile,
-		Size:      4096,
-		Mode:      0o644,
-		LinkCount: 1,
+		Type:        fsmeta.InodeTypeFile,
+		Size:        4096,
+		Mode:        0o644,
+		LinkCount:   1,
+		OpaqueAttrs: []byte(`{"body_ref":"cas://checkpoint-0001","sha256":"abc"}`),
 	}))
 
 	record, err := cli.Lookup(ctx, fsmeta.LookupRequest{
@@ -63,11 +64,12 @@ func TestFSMetadataClientServerOnRealCluster(t *testing.T) {
 			Type:   fsmeta.InodeTypeFile,
 		},
 		Inode: fsmeta.InodeRecord{
-			Inode:     req.Inode,
-			Type:      fsmeta.InodeTypeFile,
-			Size:      4096,
-			Mode:      0o644,
-			LinkCount: 1,
+			Inode:       req.Inode,
+			Type:        fsmeta.InodeTypeFile,
+			Size:        4096,
+			Mode:        0o644,
+			LinkCount:   1,
+			OpaqueAttrs: []byte(`{"body_ref":"cas://checkpoint-0001","sha256":"abc"}`),
 		},
 	}}, pairs)
 

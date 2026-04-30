@@ -130,6 +130,7 @@ type InodeRecord struct {
 	LinkCount     uint32                 `protobuf:"varint,5,opt,name=link_count,json=linkCount,proto3" json:"link_count,omitempty"`
 	CreatedUnixNs int64                  `protobuf:"varint,6,opt,name=created_unix_ns,json=createdUnixNs,proto3" json:"created_unix_ns,omitempty"`
 	UpdatedUnixNs int64                  `protobuf:"varint,7,opt,name=updated_unix_ns,json=updatedUnixNs,proto3" json:"updated_unix_ns,omitempty"`
+	OpaqueAttrs   []byte                 `protobuf:"bytes,8,opt,name=opaque_attrs,json=opaqueAttrs,proto3" json:"opaque_attrs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -211,6 +212,13 @@ func (x *InodeRecord) GetUpdatedUnixNs() int64 {
 		return x.UpdatedUnixNs
 	}
 	return 0
+}
+
+func (x *InodeRecord) GetOpaqueAttrs() []byte {
+	if x != nil {
+		return x.OpaqueAttrs
+	}
+	return nil
 }
 
 type DentryRecord struct {
@@ -1943,7 +1951,7 @@ var File_fsmeta_fsmeta_proto protoreflect.FileDescriptor
 
 const file_fsmeta_fsmeta_proto_rawDesc = "" +
 	"\n" +
-	"\x13fsmeta/fsmeta.proto\x12\x0enokv.fsmeta.v1\"\xe9\x01\n" +
+	"\x13fsmeta/fsmeta.proto\x12\x0enokv.fsmeta.v1\"\x8c\x02\n" +
 	"\vInodeRecord\x12\x14\n" +
 	"\x05inode\x18\x01 \x01(\x04R\x05inode\x12-\n" +
 	"\x04type\x18\x02 \x01(\x0e2\x19.nokv.fsmeta.v1.InodeTypeR\x04type\x12\x12\n" +
@@ -1952,7 +1960,8 @@ const file_fsmeta_fsmeta_proto_rawDesc = "" +
 	"\n" +
 	"link_count\x18\x05 \x01(\rR\tlinkCount\x12&\n" +
 	"\x0fcreated_unix_ns\x18\x06 \x01(\x03R\rcreatedUnixNs\x12&\n" +
-	"\x0fupdated_unix_ns\x18\a \x01(\x03R\rupdatedUnixNs\"\x7f\n" +
+	"\x0fupdated_unix_ns\x18\a \x01(\x03R\rupdatedUnixNs\x12!\n" +
+	"\fopaque_attrs\x18\b \x01(\fR\vopaqueAttrs\"\x7f\n" +
 	"\fDentryRecord\x12\x16\n" +
 	"\x06parent\x18\x01 \x01(\x04R\x06parent\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +

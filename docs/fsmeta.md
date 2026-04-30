@@ -38,13 +38,15 @@ The current v1 API is defined by `pb/fsmeta/fsmeta.proto`. `fsmeta/server` expos
 | Object | Storage location | Notes |
 |---|---|---|
 | Mount metadata key | `EncodeMountKey` | Reserved mount-level data key; mount lifecycle truth does not live here. |
-| Inode | `EncodeInodeKey(mount, inode)` | File/directory attributes, including `size`, `mode`, `link_count`. |
+| Inode | `EncodeInodeKey(mount, inode)` | File/directory attributes, including `size`, `mode`, `link_count`, and a bounded `opaque_attrs` payload. |
 | Dentry | `EncodeDentryKey(mount, parent, name)` | Mapping from parent/name to inode. |
 | Chunk | `EncodeChunkKey(mount, inode, chunk)` | Schema is in place; the current fsmeta API doesn't expose object body / chunk I/O. |
 | Session | `EncodeSessionKey(mount, session)` | Schema reserved for later session/lease use. |
 | Usage | `EncodeUsageKey(mount, scope)` | Quota usage counter; scope=0 means mount-wide, non-zero means a direct accounting scope. |
 
 Both keys and values carry a magic + schema version. Values use a hand-written binary layout — not JSON.
+
+`InodeRecord.opaque_attrs` is application-owned bytes capped at 16 KiB. It is intended for compact body references, checksums, content type, or a caller-defined protobuf payload. NoKV stores and returns it, but does not parse, index, authorize, or quota it separately.
 
 ## 4. Execution boundary
 
@@ -235,6 +237,7 @@ Derived-cache evidence uses the same harness:
 
 - No FUSE / NFS / SMB frontend.
 - No S3 HTTP gateway or object body I/O.
+- No indexing or interpretation of `InodeRecord.opaque_attrs`.
 - No write of every inode/dentry mutation into `meta/root`.
 - No recursive materialized snapshot — `SnapshotSubtree` is an MVCC read epoch.
 - No claim that data-plane MVCC version GC already deletes or retains by snapshot epoch; active epochs are materialized as a retention floor for the future GC worker.
