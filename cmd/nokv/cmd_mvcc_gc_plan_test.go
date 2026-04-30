@@ -4,17 +4,22 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"testing"
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/fsmeta"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	rootserver "github.com/feichai0017/NoKV/meta/root/server"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/feichai0017/NoKV/percolator"
 	storekv "github.com/feichai0017/NoKV/raftstore/kv"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 func prepareMVCCGCPlanWorkdir(t *testing.T) string {
@@ -52,6 +57,17 @@ func applyMVCCGCPlanPutVersion(t *testing.T, db *NoKV.DB, key []byte, commitTs, 
 	defer defaultEntry.DecrRef()
 	require.NoError(t, db.ApplyInternalEntries([]*entrykv.Entry{defaultEntry}))
 	applyMVCCGCPlanWrite(t, db, key, commitTs, startTs)
+}
+
+func applyMVCCGCPlanLock(t *testing.T, db *NoKV.DB, key []byte, startTs uint64) {
+	t.Helper()
+	lock := percolator.EncodeLock(percolator.Lock{
+		Primary: key,
+		Ts:      startTs,
+	})
+	entry := entrykv.NewInternalEntry(entrykv.CFLock, key, entrykv.MaxVersion, entrykv.SafeCopy(nil, lock), 0, 0)
+	defer entry.DecrRef()
+	require.NoError(t, db.ApplyInternalEntries([]*entrykv.Entry{entry}))
 }
 
 func prepareMVCCGCApplyWorkdir(t *testing.T) (string, []byte) {
@@ -106,6 +122,35 @@ func TestRunMVCCGCPlanCmdPlain(t *testing.T) {
 	require.Contains(t, buf.String(), "MVCCGC.DroppableWrites")
 }
 
+func TestRunMVCCGCPlanCmdScansTxnFloorFromLocks(t *testing.T) {
+	dir := prepareMVCCGCPlanWorkdir(t)
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = dir
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
+	lockKey, err := fsmeta.EncodeInodeKey("vol", 99)
+	require.NoError(t, err)
+	applyMVCCGCPlanLock(t, db, lockKey, 50)
+	require.NoError(t, db.Close())
+
+	var buf bytes.Buffer
+	err = runMVCCGCPlanCmd(&buf, []string{
+		"-workdir", dir,
+		"-safe-point", "100",
+		"-txn-floor-from-locks",
+		"-json",
+	})
+	require.NoError(t, err)
+
+	var stats storekv.MVCCGCPlanStats
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &stats))
+	require.Equal(t, uint64(2), stats.Keys)
+	require.Equal(t, uint64(0), stats.DroppableWrites)
+	require.Equal(t, uint64(2), stats.SafePointClampedKeys)
+	require.Equal(t, uint64(50), stats.MinEffectiveSafePoint)
+	require.Equal(t, uint64(50), stats.MaxEffectiveSafePoint)
+}
+
 func TestRunMVCCGCPlanCmdRejectsInvalidFlags(t *testing.T) {
 	var buf bytes.Buffer
 	require.ErrorContains(t, runMVCCGCPlanCmd(&buf, []string{"-safe-point", "100"}), "workdir is required")
@@ -150,6 +195,56 @@ func TestRunMVCCGCPlanCmdLoadsMetaRootRetention(t *testing.T) {
 	require.Equal(t, uint64(100), stats.MaxEffectiveSafePoint)
 }
 
+func TestRunMVCCGCCmdUsesMetaRootRetentionOverGRPC(t *testing.T) {
+	dir := prepareMVCCGCPlanWorkdir(t)
+	addr := startMVCCGCRootServer(t, rootstate.Snapshot{
+		SnapshotEpochs: map[string]rootstate.SnapshotEpoch{
+			rootevent.SnapshotEpochID("vol", 1, 50): {
+				SnapshotID:  rootevent.SnapshotEpochID("vol", 1, 50),
+				Mount:       "vol",
+				RootInode:   1,
+				ReadVersion: 50,
+			},
+		},
+	})
+
+	var buf bytes.Buffer
+	err := runMVCCGCCmd(&buf, []string{
+		"-workdir", dir,
+		"-safe-point", "100",
+		"-meta-root-addr", addr,
+		"-apply",
+		"-json",
+	})
+	require.NoError(t, err)
+
+	var stats storekv.MVCCGCApplyStats
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &stats))
+	require.Equal(t, uint64(1), stats.SafePointClampedKeys)
+	require.Equal(t, uint64(1), stats.AppliedWriteDeletes)
+	require.Equal(t, uint64(1), stats.AppliedDefaultDeletes)
+
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = dir
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	volKey, err := fsmeta.EncodeInodeKey("vol", 10)
+	require.NoError(t, err)
+	retainedVol, err := db.GetInternalEntry(entrykv.CFWrite, volKey, 40)
+	require.NoError(t, err)
+	defer retainedVol.DecrRef()
+	require.Zero(t, retainedVol.Meta&entrykv.BitDelete)
+
+	otherKey, err := fsmeta.EncodeInodeKey("other", 10)
+	require.NoError(t, err)
+	droppedOther, err := db.GetInternalEntry(entrykv.CFWrite, otherKey, 40)
+	require.NoError(t, err)
+	defer droppedOther.DecrRef()
+	require.NotZero(t, droppedOther.Meta&entrykv.BitDelete)
+}
+
 func TestMVCCGCPolicyMergesManualAndRootFloorsConservatively(t *testing.T) {
 	orig := loadMVCCGCRootRetention
 	t.Cleanup(func() { loadMVCCGCRootRetention = orig })
@@ -173,7 +268,7 @@ func TestMVCCGCPolicyMergesManualAndRootFloorsConservatively(t *testing.T) {
 		metaRootAddr:       "root",
 		metaRootTimeout:    time.Second,
 	}
-	policy, err := opt.policy(context.Background())
+	policy, err := opt.policy(context.Background(), nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(60), policy.SnapshotRetention.GlobalFloor)
 	require.Equal(t, uint64(50), policy.SnapshotRetention.MountFloors["vol"])
@@ -225,4 +320,42 @@ func TestRunMVCCGCCmdJSONAppliesTombstones(t *testing.T) {
 func TestRunMVCCGCCmdRejectsInvalidBatch(t *testing.T) {
 	var buf bytes.Buffer
 	require.ErrorContains(t, runMVCCGCCmd(&buf, []string{"-workdir", t.TempDir(), "-safe-point", "100", "-batch-entries", "-1", "-apply"}), "batch-entries")
+}
+
+type mvccGCRootBackend struct {
+	snapshot rootstate.Snapshot
+}
+
+func (b mvccGCRootBackend) Snapshot() (rootstate.Snapshot, error) {
+	return b.snapshot, nil
+}
+
+func (b mvccGCRootBackend) Append(context.Context, ...rootevent.Event) (rootstate.CommitInfo, error) {
+	return rootstate.CommitInfo{}, nil
+}
+
+func (b mvccGCRootBackend) FenceAllocator(context.Context, rootstate.AllocatorKind, uint64) (uint64, error) {
+	return 0, nil
+}
+
+func (b mvccGCRootBackend) ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.EunomiaState, error) {
+	return rootstate.EunomiaState{}, nil
+}
+
+func (b mvccGCRootBackend) ApplyHandover(context.Context, rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
+	return rootstate.EunomiaState{}, nil
+}
+
+func startMVCCGCRootServer(t *testing.T, snapshot rootstate.Snapshot) string {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	srv := grpc.NewServer()
+	rootserver.Register(srv, mvccGCRootBackend{snapshot: snapshot})
+	t.Cleanup(func() {
+		srv.Stop()
+		_ = lis.Close()
+	})
+	go func() { _ = srv.Serve(lis) }()
+	return lis.Addr().String()
 }

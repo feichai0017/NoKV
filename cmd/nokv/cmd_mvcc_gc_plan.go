@@ -56,6 +56,7 @@ type mvccGCCommandOptions struct {
 	workDir            string
 	requestedSafePoint uint64
 	txnFloor           uint64
+	txnFloorFromLocks  bool
 	globalFloor        uint64
 	mountFloors        mountFloorFlags
 	metaRootAddr       string
@@ -71,6 +72,7 @@ func parseMVCCGCCommandOptions(name string, args []string, includeApply bool) (m
 	fs.StringVar(&opt.workDir, "workdir", "", "database work directory")
 	fs.Uint64Var(&opt.requestedSafePoint, "safe-point", 0, "requested MVCC GC safe point")
 	fs.Uint64Var(&opt.txnFloor, "txn-floor", 0, "oldest active transaction version")
+	fs.BoolVar(&opt.txnFloorFromLocks, "txn-floor-from-locks", false, "scan CFLock and use the oldest active lock as transaction floor")
 	fs.Uint64Var(&opt.globalFloor, "global-floor", 0, "global snapshot retention floor")
 	fs.StringVar(&opt.metaRootAddr, "meta-root-addr", "", "metadata-root gRPC address used to load active snapshot retention floors")
 	fs.DurationVar(&opt.metaRootTimeout, "meta-root-timeout", 5*time.Second, "metadata-root RPC timeout")
@@ -99,10 +101,18 @@ func parseMVCCGCCommandOptions(name string, args []string, includeApply bool) (m
 	return opt, nil
 }
 
-func (o mvccGCCommandOptions) policy(ctx context.Context) (storekv.MVCCGCSafePointPolicy, error) {
+func (o mvccGCCommandOptions) policy(ctx context.Context, db NoKV.MVCCStore) (storekv.MVCCGCSafePointPolicy, error) {
 	retention := rootstate.SnapshotRetentionIndex{
 		GlobalFloor: o.globalFloor,
 		MountFloors: cloneMountFloors(map[string]uint64(o.mountFloors)),
+	}
+	txnFloor := o.txnFloor
+	if o.txnFloorFromLocks {
+		floor, err := storekv.PlanMVCCGCTxnFloor(ctx, db)
+		if err != nil {
+			return storekv.MVCCGCSafePointPolicy{}, err
+		}
+		txnFloor = minNonZero(txnFloor, floor.OldestStartTs)
 	}
 	if strings.TrimSpace(o.metaRootAddr) != "" {
 		rootCtx, cancel := context.WithTimeout(ctx, o.metaRootTimeout)
@@ -115,7 +125,7 @@ func (o mvccGCCommandOptions) policy(ctx context.Context) (storekv.MVCCGCSafePoi
 	}
 	return storekv.MVCCGCSafePointPolicy{
 		RequestedSafePoint: o.requestedSafePoint,
-		TxnFloor:           o.txnFloor,
+		TxnFloor:           txnFloor,
 		SnapshotRetention:  retention,
 	}, nil
 }
@@ -133,7 +143,7 @@ func runMVCCGCPlanCmd(w io.Writer, args []string) error {
 	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
-	policy, err := opt.policy(ctx)
+	policy, err := opt.policy(ctx, db)
 	if err != nil {
 		return err
 	}
@@ -160,7 +170,7 @@ func runMVCCGCCmd(w io.Writer, args []string) error {
 	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
-	policy, err := opt.policy(ctx)
+	policy, err := opt.policy(ctx, db)
 	if err != nil {
 		return err
 	}
