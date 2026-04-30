@@ -4,6 +4,7 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/engine/mvcc"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/raftstore/transport"
@@ -35,7 +36,7 @@ type Config struct {
 
 // Storage captures the engine capabilities raftstore needs.
 type Storage struct {
-	MVCC NoKV.MVCCStore
+	MVCC mvcc.Store
 	Raft NoKV.RaftLog
 }
 

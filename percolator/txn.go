@@ -16,13 +16,13 @@ import (
 	"fmt"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 
-	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/mvcc"
 	"github.com/feichai0017/NoKV/percolator/latch"
 )
 
 // Prewrite applies mutation prewrites for a single region transaction.
-func Prewrite(db NoKV.MVCCStore, latches *latch.Manager, req *kvrpcpb.PrewriteRequest) []*kvrpcpb.KeyError {
+func Prewrite(db mvcc.Store, latches *latch.Manager, req *kvrpcpb.PrewriteRequest) []*kvrpcpb.KeyError {
 	if req == nil {
 		return nil
 	}
@@ -48,7 +48,7 @@ func Prewrite(db NoKV.MVCCStore, latches *latch.Manager, req *kvrpcpb.PrewriteRe
 	return errs
 }
 
-func prewriteMutation(db NoKV.MVCCStore, reader *Reader, req *kvrpcpb.PrewriteRequest, mut *kvrpcpb.Mutation) *kvrpcpb.KeyError {
+func prewriteMutation(db mvcc.Store, reader *Reader, req *kvrpcpb.PrewriteRequest, mut *kvrpcpb.Mutation) *kvrpcpb.KeyError {
 	key := mut.GetKey()
 	if len(key) == 0 {
 		return keyErrorAbort("empty key in mutation")
@@ -113,7 +113,7 @@ func validateCommitVersion(StartVersion uint64, CommitVersion uint64) *kvrpcpb.K
 
 // Commit finalises earlier prewrites by removing locks and writing commit
 // records. A non-nil KeyError is returned when commit should abort.
-func Commit(db NoKV.MVCCStore, latches *latch.Manager, req *kvrpcpb.CommitRequest) *kvrpcpb.KeyError {
+func Commit(db mvcc.Store, latches *latch.Manager, req *kvrpcpb.CommitRequest) *kvrpcpb.KeyError {
 	if req == nil {
 		return nil
 	}
@@ -156,7 +156,7 @@ func Commit(db NoKV.MVCCStore, latches *latch.Manager, req *kvrpcpb.CommitReques
 }
 
 // BatchRollback rolls back the provided keys for the given start version.
-func BatchRollback(db NoKV.MVCCStore, latches *latch.Manager, req *kvrpcpb.BatchRollbackRequest) *kvrpcpb.KeyError {
+func BatchRollback(db mvcc.Store, latches *latch.Manager, req *kvrpcpb.BatchRollbackRequest) *kvrpcpb.KeyError {
 	if req == nil {
 		return nil
 	}
@@ -176,7 +176,7 @@ func BatchRollback(db NoKV.MVCCStore, latches *latch.Manager, req *kvrpcpb.Batch
 
 // ResolveLock resolves locks for the given transaction. commitVersion == 0
 // performs a rollback; otherwise the keys are committed.
-func ResolveLock(db NoKV.MVCCStore, latches *latch.Manager, req *kvrpcpb.ResolveLockRequest) (uint64, *kvrpcpb.KeyError) {
+func ResolveLock(db mvcc.Store, latches *latch.Manager, req *kvrpcpb.ResolveLockRequest) (uint64, *kvrpcpb.KeyError) {
 	if req == nil {
 		return 0, nil
 	}
@@ -217,7 +217,7 @@ func ResolveLock(db NoKV.MVCCStore, latches *latch.Manager, req *kvrpcpb.Resolve
 
 // CheckTxnStatus inspects the primary lock state and optionally rolls back
 // expired transactions.
-func CheckTxnStatus(db NoKV.MVCCStore, latches *latch.Manager, req *kvrpcpb.CheckTxnStatusRequest) *kvrpcpb.CheckTxnStatusResponse {
+func CheckTxnStatus(db mvcc.Store, latches *latch.Manager, req *kvrpcpb.CheckTxnStatusRequest) *kvrpcpb.CheckTxnStatusResponse {
 	resp := &kvrpcpb.CheckTxnStatusResponse{}
 	if req == nil {
 		return resp
@@ -350,7 +350,7 @@ func keyExistsAt(reader *Reader, key []byte, readTs uint64) (bool, error) {
 	}
 }
 
-func commitKey(db NoKV.MVCCStore, reader *Reader, key []byte, lock *Lock, commitVersion uint64) *kvrpcpb.KeyError {
+func commitKey(db mvcc.Store, reader *Reader, key []byte, lock *Lock, commitVersion uint64) *kvrpcpb.KeyError {
 	write, _, err := reader.GetWriteByStartTs(key, lock.Ts)
 	if err != nil {
 		return keyErrorRetryable(err)
@@ -384,7 +384,7 @@ func commitKey(db NoKV.MVCCStore, reader *Reader, key []byte, lock *Lock, commit
 	return nil
 }
 
-func rollbackKey(db NoKV.MVCCStore, reader *Reader, key []byte, startTs uint64) *kvrpcpb.KeyError {
+func rollbackKey(db mvcc.Store, reader *Reader, key []byte, startTs uint64) *kvrpcpb.KeyError {
 	write, _, err := reader.GetWriteByStartTs(key, startTs)
 	if err != nil {
 		return keyErrorRetryable(err)
@@ -421,7 +421,7 @@ type versionedOp struct {
 	expires uint64
 }
 
-func applyVersionedOps(db NoKV.MVCCStore, ops ...versionedOp) error {
+func applyVersionedOps(db mvcc.Store, ops ...versionedOp) error {
 	if len(ops) == 0 {
 		return nil
 	}

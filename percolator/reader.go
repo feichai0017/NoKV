@@ -6,9 +6,9 @@ import (
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/mvcc"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -16,11 +16,11 @@ const lockColumnTs = kv.MaxVersion
 
 // Reader provides helper methods to inspect MVCC state within a DB instance.
 type Reader struct {
-	db NoKV.MVCCStore
+	db mvcc.Store
 }
 
 // NewReader constructs a Reader.
-func NewReader(db NoKV.MVCCStore) *Reader {
+func NewReader(db mvcc.Store) *Reader {
 	return &Reader{db: db}
 }
 

@@ -1,4 +1,4 @@
-package kv
+package mvccgc_test
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/feichai0017/NoKV/percolator"
+	"github.com/feichai0017/NoKV/raftstore/mvccgc"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,6 +22,13 @@ func openMVCCGCPlanTestDB(t *testing.T) *NoKV.DB {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
+}
+
+func applyVersionedEntryForApplyTest(t *testing.T, db *NoKV.DB, cf entrykv.ColumnFamily, key []byte, version uint64, value []byte, meta byte, expiresAt uint64) {
+	t.Helper()
+	entry := entrykv.NewInternalEntry(cf, key, version, entrykv.SafeCopy(nil, value), meta, expiresAt)
+	defer entry.DecrRef()
+	require.NoError(t, db.ApplyInternalEntries([]*entrykv.Entry{entry}))
 }
 
 func applyMVCCGCWrite(t *testing.T, db *NoKV.DB, key []byte, commitTs, startTs uint64) {
@@ -47,7 +55,7 @@ func TestPlanMVCCGCReportsMountScopedPlan(t *testing.T) {
 		applyMVCCGCWrite(t, db, key, 40, 30)
 	}
 
-	stats, err := PlanMVCCGC(context.Background(), db, MVCCGCSafePointPolicy{
+	stats, err := mvccgc.Plan(context.Background(), db, mvccgc.SafePointPolicy{
 		RequestedSafePoint: 100,
 		SnapshotRetention: rootstate.SnapshotRetentionIndex{
 			GlobalFloor: 50,
@@ -76,7 +84,7 @@ func TestPlanMVCCGCDoesNotDeleteData(t *testing.T) {
 	applyMVCCGCWrite(t, db, key, 90, 80)
 	applyMVCCGCWrite(t, db, key, 40, 30)
 
-	_, err = PlanMVCCGC(context.Background(), db, MVCCGCSafePointPolicy{RequestedSafePoint: 100})
+	_, err = mvccgc.Plan(context.Background(), db, mvccgc.SafePointPolicy{RequestedSafePoint: 100})
 	require.NoError(t, err)
 
 	entry, err := db.GetInternalEntry(entrykv.CFWrite, key, 40)
@@ -91,7 +99,7 @@ func TestPlanMVCCGCRejectsCorruptWritePayload(t *testing.T) {
 	require.NoError(t, err)
 	applyVersionedEntryForApplyTest(t, db, entrykv.CFWrite, key, 90, []byte{0xff}, 0, 0)
 
-	_, err = PlanMVCCGC(context.Background(), db, MVCCGCSafePointPolicy{RequestedSafePoint: 100})
+	_, err = mvccgc.Plan(context.Background(), db, mvccgc.SafePointPolicy{RequestedSafePoint: 100})
 	require.ErrorContains(t, err, "decode CFWrite")
 }
 
@@ -103,7 +111,7 @@ func TestPlanMVCCGCHonorsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err = PlanMVCCGC(ctx, db, MVCCGCSafePointPolicy{RequestedSafePoint: 100})
+	_, err = mvccgc.Plan(ctx, db, mvccgc.SafePointPolicy{RequestedSafePoint: 100})
 	require.ErrorIs(t, err, context.Canceled)
 }
 
@@ -115,7 +123,7 @@ func TestApplyMVCCGCDeletesDroppableWriteAndDefault(t *testing.T) {
 	applyMVCCGCPutVersion(t, db, key, 90, 80, "anchor")
 	applyMVCCGCPutVersion(t, db, key, 40, 30, "old")
 
-	stats, err := ApplyMVCCGC(context.Background(), db, MVCCGCSafePointPolicy{RequestedSafePoint: 100}, MVCCGCApplyOptions{})
+	stats, err := mvccgc.Apply(context.Background(), db, mvccgc.SafePointPolicy{RequestedSafePoint: 100}, mvccgc.ApplyOptions{})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), stats.AppliedWriteDeletes)
 	require.Equal(t, uint64(1), stats.AppliedDefaultDeletes)
@@ -151,7 +159,7 @@ func TestApplyMVCCGCHonorsMountScopedRetention(t *testing.T) {
 		applyMVCCGCPutVersion(t, db, key, 40, 30, "old")
 	}
 
-	stats, err := ApplyMVCCGC(context.Background(), db, MVCCGCSafePointPolicy{
+	stats, err := mvccgc.Apply(context.Background(), db, mvccgc.SafePointPolicy{
 		RequestedSafePoint: 100,
 		SnapshotRetention: rootstate.SnapshotRetentionIndex{
 			GlobalFloor: 50,
@@ -159,7 +167,7 @@ func TestApplyMVCCGCHonorsMountScopedRetention(t *testing.T) {
 				"vol": 50,
 			},
 		},
-	}, MVCCGCApplyOptions{})
+	}, mvccgc.ApplyOptions{})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), stats.AppliedWriteDeletes)
 	require.Equal(t, uint64(1), stats.AppliedDefaultDeletes)
@@ -185,11 +193,11 @@ func TestApplyMVCCGCBatchesWithoutRescanningDeletedKeys(t *testing.T) {
 		applyMVCCGCPutVersion(t, db, key, 40, 30, "old")
 	}
 
-	stats, err := ApplyMVCCGC(
+	stats, err := mvccgc.Apply(
 		context.Background(),
 		db,
-		MVCCGCSafePointPolicy{RequestedSafePoint: 100},
-		MVCCGCApplyOptions{BatchEntries: 2},
+		mvccgc.SafePointPolicy{RequestedSafePoint: 100},
+		mvccgc.ApplyOptions{BatchEntries: 2},
 	)
 	require.NoError(t, err)
 	require.Equal(t, uint64(4), stats.Keys)

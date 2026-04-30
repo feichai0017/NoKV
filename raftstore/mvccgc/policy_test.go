@@ -1,4 +1,4 @@
-package kv
+package mvccgc_test
 
 import (
 	"testing"
@@ -7,6 +7,7 @@ import (
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/feichai0017/NoKV/percolator"
+	"github.com/feichai0017/NoKV/raftstore/mvccgc"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,7 +19,7 @@ func TestMVCCGCSafePointPolicyUsesMountScopedSnapshotFloor(t *testing.T) {
 	otherKey, err := fsmeta.EncodeInodeKey("other", 10)
 	require.NoError(t, err)
 
-	policy := MVCCGCSafePointPolicy{
+	policy := mvccgc.SafePointPolicy{
 		RequestedSafePoint: 1_000,
 		SnapshotRetention: rootstate.SnapshotRetentionIndex{
 			GlobalFloor: 50,
@@ -36,7 +37,7 @@ func TestMVCCGCSafePointPolicyUsesMountScopedSnapshotFloor(t *testing.T) {
 }
 
 func TestMVCCGCSafePointPolicyFallsBackToGlobalFloorForUnknownKeys(t *testing.T) {
-	policy := MVCCGCSafePointPolicy{
+	policy := mvccgc.SafePointPolicy{
 		RequestedSafePoint: 1_000,
 		SnapshotRetention: rootstate.SnapshotRetentionIndex{
 			GlobalFloor: 50,
@@ -54,7 +55,7 @@ func TestMVCCGCSafePointPolicyHonorsDisabledRequestedSafePoint(t *testing.T) {
 	key, err := fsmeta.EncodeInodeKey("vol", 10)
 	require.NoError(t, err)
 
-	policy := MVCCGCSafePointPolicy{
+	policy := mvccgc.SafePointPolicy{
 		RequestedSafePoint: 0,
 		SnapshotRetention: rootstate.SnapshotRetentionIndex{
 			GlobalFloor: 50,
@@ -72,7 +73,7 @@ func TestMVCCGCSafePointPolicyUsesRequestedWhenUnblocked(t *testing.T) {
 	key, err := fsmeta.EncodeInodeKey("vol", 10)
 	require.NoError(t, err)
 
-	policy := MVCCGCSafePointPolicy{RequestedSafePoint: 1_000}
+	policy := mvccgc.SafePointPolicy{RequestedSafePoint: 1_000}
 	require.Equal(t, uint64(1_000), policy.EffectiveForKey(key))
 }
 
@@ -86,7 +87,7 @@ func TestMVCCGCSafePointPolicyPlansWritesWithKeyScopedFloor(t *testing.T) {
 		{CommitTs: 90, Write: percolator.Write{Kind: kvrpcpb.Mutation_Put, StartTs: 80}},
 		{CommitTs: 40, Write: percolator.Write{Kind: kvrpcpb.Mutation_Put, StartTs: 30}},
 	}
-	policy := MVCCGCSafePointPolicy{
+	policy := mvccgc.SafePointPolicy{
 		RequestedSafePoint: 100,
 		SnapshotRetention: rootstate.SnapshotRetentionIndex{
 			GlobalFloor: 50,

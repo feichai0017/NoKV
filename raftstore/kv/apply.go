@@ -8,9 +8,9 @@ import (
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/mvcc"
 	"github.com/feichai0017/NoKV/percolator"
 	"github.com/feichai0017/NoKV/percolator/latch"
 	"github.com/feichai0017/NoKV/utils"
@@ -21,7 +21,7 @@ const defaultLatchSlots = 512
 // Apply executes a RaftCmdRequest against the provided DB. The returned
 // response mirrors the request ordering. Only MVCC prewrite/commit operations
 // are supported at the moment.
-func Apply(db NoKV.MVCCStore, latches *latch.Manager, req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+func Apply(db mvcc.Store, latches *latch.Manager, req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("kv: nil raft command")
 	}
@@ -73,7 +73,7 @@ func Apply(db NoKV.MVCCStore, latches *latch.Manager, req *raftcmdpb.RaftCmdRequ
 
 // NewApplier wraps Apply into a reusable function suitable for store command
 // execution wiring.
-func NewApplier(db NoKV.MVCCStore, latches *latch.Manager) func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+func NewApplier(db mvcc.Store, latches *latch.Manager) func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 	if latches == nil {
 		latches = latch.NewManager(defaultLatchSlots)
 	}
@@ -82,7 +82,7 @@ func NewApplier(db NoKV.MVCCStore, latches *latch.Manager) func(*raftcmdpb.RaftC
 	}
 }
 
-func handleGet(db NoKV.MVCCStore, req *kvrpcpb.GetRequest) (*kvrpcpb.GetResponse, *kvrpcpb.KeyError, error) {
+func handleGet(db mvcc.Store, req *kvrpcpb.GetRequest) (*kvrpcpb.GetResponse, *kvrpcpb.KeyError, error) {
 	if req == nil {
 		return &kvrpcpb.GetResponse{NotFound: true}, nil, nil
 	}
@@ -112,7 +112,7 @@ func handleGet(db NoKV.MVCCStore, req *kvrpcpb.GetRequest) (*kvrpcpb.GetResponse
 	return &kvrpcpb.GetResponse{Value: val, ExpiresAt: expiresAt}, nil, nil
 }
 
-func handleScan(db NoKV.MVCCStore, req *kvrpcpb.ScanRequest) (*kvrpcpb.ScanResponse, error) {
+func handleScan(db mvcc.Store, req *kvrpcpb.ScanRequest) (*kvrpcpb.ScanResponse, error) {
 	if req == nil {
 		return &kvrpcpb.ScanResponse{}, nil
 	}
@@ -221,7 +221,7 @@ func advanceToNextUserKey(iter index.Iterator, current []byte) {
 	}
 }
 
-func collectVisibleValue(db NoKV.MVCCStore, iter index.Iterator, key []byte, readTs uint64) ([]byte, uint64, bool, error) {
+func collectVisibleValue(db mvcc.Store, iter index.Iterator, key []byte, readTs uint64) ([]byte, uint64, bool, error) {
 	for iter.Valid() {
 		item := iter.Item()
 		if item == nil {

@@ -1,88 +1,22 @@
 package percolator
 
-import kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+import "github.com/feichai0017/NoKV/engine/mvcc"
 
-// EffectiveMVCCSafePoint clamps a requested GC safe point by active retention
-// floors. A zero requested safe point disables MVCC GC. Zero floors are ignored.
+type GCWriteVersion = mvcc.GCWriteVersion
+type GCWriteDecision = mvcc.GCWriteDecision
+
 func EffectiveMVCCSafePoint(requested uint64, floors ...uint64) uint64 {
-	if requested == 0 {
-		return 0
-	}
-	effective := requested
-	for _, floor := range floors {
-		if floor != 0 && floor < effective {
-			effective = floor
-		}
-	}
-	return effective
+	return mvcc.EffectiveSafePoint(requested, floors...)
 }
 
-// GCWriteVersion is one CFWrite version for one user key.
-type GCWriteVersion struct {
-	CommitTs uint64
-	Write    Write
-}
-
-// GCWriteDecision describes whether one CFWrite version must be retained at a
-// safe point.
-type GCWriteDecision struct {
-	CommitTs             uint64
-	Write                Write
-	Keep                 bool
-	Anchor               bool
-	RetainDefaultStartTs uint64
-}
-
-// PlanWriteGC applies Percolator's MVCC anchor rule to one user key's CFWrite
-// versions. It is order-preserving: decisions are returned in the same order as
-// versions.
 func PlanWriteGC(versions []GCWriteVersion, safePoint uint64) []GCWriteDecision {
-	return AppendWriteGCDecisions(nil, versions, safePoint)
+	return mvcc.PlanWriteGC(versions, safePoint)
 }
 
-// AppendWriteGCDecisions appends GC decisions to dst. Callers that scan many
-// keys can reuse dst to avoid one short-lived allocation per user key.
 func AppendWriteGCDecisions(dst []GCWriteDecision, versions []GCWriteVersion, safePoint uint64) []GCWriteDecision {
-	anchor := -1
-	if safePoint != 0 {
-		var anchorTs uint64
-		for i, version := range versions {
-			if version.CommitTs < safePoint && version.CommitTs > anchorTs {
-				anchor = i
-				anchorTs = version.CommitTs
-			}
-		}
-	}
-
-	base := len(dst)
-	for range versions {
-		dst = append(dst, GCWriteDecision{})
-	}
-	for i, version := range versions {
-		keep := safePoint == 0 || version.CommitTs >= safePoint || i == anchor
-		decision := GCWriteDecision{
-			CommitTs: version.CommitTs,
-			Write:    version.Write,
-			Keep:     keep,
-			Anchor:   i == anchor,
-		}
-		if keep && WriteNeedsDefaultRecord(version.Write) {
-			decision.RetainDefaultStartTs = version.Write.StartTs
-		}
-		dst[base+i] = decision
-	}
-	return dst
+	return mvcc.AppendWriteGCDecisions(dst, versions, safePoint)
 }
 
-// WriteNeedsDefaultRecord reports whether a write record refers to CFDefault.
 func WriteNeedsDefaultRecord(write Write) bool {
-	if len(write.ShortValue) > 0 {
-		return false
-	}
-	switch write.Kind {
-	case kvrpcpb.Mutation_Delete, kvrpcpb.Mutation_Rollback:
-		return false
-	default:
-		return true
-	}
+	return mvcc.WriteNeedsDefaultRecord(write)
 }

@@ -57,16 +57,6 @@ type (
 		Value []byte
 	}
 
-	// MVCCStore defines MVCC/internal operations consumed by percolator and raftstore.
-	MVCCStore interface {
-		ApplyInternalEntries(entries []*kv.Entry) error
-		// GetInternalEntry returns a borrowed internal entry without cloning/copying.
-		// entry.Key remains in internal encoding (cf+user_key+ts). Callers must
-		// DecrRef exactly once.
-		GetInternalEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error)
-		NewInternalIterator(opt *index.Options) index.Iterator
-	}
-
 	// RaftLog opens raft peer storage without exposing the underlying raft WAL shards.
 	RaftLog interface {
 		Open(groupID uint64, meta *localmeta.Store) (raftlog.PeerStorage, error)
@@ -102,6 +92,7 @@ type (
 		// processors, and the optional sync worker. See runtime/commit.
 		pipeline        *commit.Pipeline
 		iterPool        *iterpkg.IteratorPool
+		mvccGCPlan      *mvccGCPlanState
 		hotWriteLimited atomic.Uint64
 		background      dbruntime.BackgroundServices
 		runtimeModules  dbruntime.Registry
@@ -398,10 +389,16 @@ func Open(opt *Options) (_ *DB, err error) {
 			WarnSegments: db.opt.WALTypedRecordWarnSegments,
 		})
 	}
+	var periodicTasks []dbruntime.PeriodicTaskConfig
+	if task, state, ok := db.newMVCCGCPlanTask(); ok {
+		db.mvccGCPlan = state
+		periodicTasks = append(periodicTasks, task)
+	}
 	db.background.Start(dbruntime.BackgroundConfig{
 		StartCompacter:     db.lsm.StartCompacter,
 		EnableWALWatchdog:  db.opt.EnableWALWatchdog,
 		WALWatchdogConfigs: watchdogConfigs,
+		PeriodicTasks:      periodicTasks,
 	})
 	return db, nil
 }
@@ -855,16 +852,22 @@ func (db *DB) Info() *stats.Stats {
 func (db *DB) LSM() stats.LSMSource                 { return db.lsm }
 func (db *DB) LSMWALs() []*wal.Manager              { return db.lsmWALs }
 func (db *DB) BackgroundWatchdogs() []*wal.Watchdog { return db.background.WALWatchdogs() }
-func (db *DB) HotWrite() *thermos.RotatingThermos   { return db.hotWrite }
-func (db *DB) IteratorReused() uint64               { return db.iterPool.Reused() }
-func (db *DB) WriteMetrics() *metrics.WriteMetrics  { return db.writeMetrics }
-func (db *DB) BlockWritesActive() bool              { return db.blockWrites.Load() == 1 }
-func (db *DB) SlowWritesActive() bool               { return db.slowWrites.Load() == 1 }
-func (db *DB) HotWriteLimited() uint64              { return db.hotWriteLimited.Load() }
-func (db *DB) RaftLagWarnSegments() int64           { return db.opt.RaftLagWarnSegments }
-func (db *DB) WALTypedRecordWarnRatio() float64     { return db.opt.WALTypedRecordWarnRatio }
-func (db *DB) WALTypedRecordWarnSegments() int64    { return db.opt.WALTypedRecordWarnSegments }
-func (db *DB) ThermosTopK() int                     { return db.opt.ThermosTopK }
+func (db *DB) MVCCGCPlanSnapshot() MVCCGCPlanSnapshot {
+	if db == nil || db.mvccGCPlan == nil {
+		return MVCCGCPlanSnapshot{}
+	}
+	return db.mvccGCPlan.snapshot(db.background.PeriodicTaskSnapshot(mvccGCPlanTaskName))
+}
+func (db *DB) HotWrite() *thermos.RotatingThermos  { return db.hotWrite }
+func (db *DB) IteratorReused() uint64              { return db.iterPool.Reused() }
+func (db *DB) WriteMetrics() *metrics.WriteMetrics { return db.writeMetrics }
+func (db *DB) BlockWritesActive() bool             { return db.blockWrites.Load() == 1 }
+func (db *DB) SlowWritesActive() bool              { return db.slowWrites.Load() == 1 }
+func (db *DB) HotWriteLimited() uint64             { return db.hotWriteLimited.Load() }
+func (db *DB) RaftLagWarnSegments() int64          { return db.opt.RaftLagWarnSegments }
+func (db *DB) WALTypedRecordWarnRatio() float64    { return db.opt.WALTypedRecordWarnRatio }
+func (db *DB) WALTypedRecordWarnSegments() int64   { return db.opt.WALTypedRecordWarnSegments }
+func (db *DB) ThermosTopK() int                    { return db.opt.ThermosTopK }
 
 func (db *DB) RaftPointerSnapshot() func() map[uint64]localmeta.RaftLogPointer {
 	if db == nil || db.opt == nil {

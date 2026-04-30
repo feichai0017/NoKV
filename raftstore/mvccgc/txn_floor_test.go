@@ -1,4 +1,4 @@
-package kv
+package mvccgc_test
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/percolator"
+	"github.com/feichai0017/NoKV/raftstore/mvccgc"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +26,7 @@ func TestPlanMVCCGCTxnFloorScansActiveLocks(t *testing.T) {
 	applyMVCCGCLock(t, db, []byte("b"), 30)
 	applyVersionedEntryForApplyTest(t, db, entrykv.CFLock, []byte("c"), entrykv.MaxVersion, nil, entrykv.BitDelete, 0)
 
-	floor, err := PlanMVCCGCTxnFloor(context.Background(), db)
+	floor, err := mvccgc.PlanTxnFloor(context.Background(), db)
 	require.NoError(t, err)
 	require.True(t, floor.Active())
 	require.Equal(t, uint64(2), floor.ActiveLocks)
@@ -37,7 +38,7 @@ func TestPlanMVCCGCTxnFloorRejectsCorruptLock(t *testing.T) {
 	db := openMVCCGCPlanTestDB(t)
 	applyVersionedEntryForApplyTest(t, db, entrykv.CFLock, []byte("bad"), entrykv.MaxVersion, []byte{0xff}, 0, 0)
 
-	_, err := PlanMVCCGCTxnFloor(context.Background(), db)
+	_, err := mvccgc.PlanTxnFloor(context.Background(), db)
 	require.ErrorContains(t, err, "decode CFLock")
 }
 
@@ -47,6 +48,6 @@ func TestPlanMVCCGCTxnFloorHonorsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := PlanMVCCGCTxnFloor(ctx, db)
+	_, err := mvccgc.PlanTxnFloor(ctx, db)
 	require.ErrorIs(t, err, context.Canceled)
 }

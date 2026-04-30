@@ -11,11 +11,12 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/engine/mvcc"
 	rootclient "github.com/feichai0017/NoKV/meta/root/client"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	storekv "github.com/feichai0017/NoKV/raftstore/kv"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
+	mvccgc "github.com/feichai0017/NoKV/raftstore/mvccgc"
 )
 
 var loadMVCCGCRootRetention = loadMVCCGCRootRetentionFromAddr
@@ -101,16 +102,16 @@ func parseMVCCGCCommandOptions(name string, args []string, includeApply bool) (m
 	return opt, nil
 }
 
-func (o mvccGCCommandOptions) policy(ctx context.Context, db NoKV.MVCCStore) (storekv.MVCCGCSafePointPolicy, error) {
+func (o mvccGCCommandOptions) policy(ctx context.Context, db mvcc.Store) (mvccgc.SafePointPolicy, error) {
 	retention := rootstate.SnapshotRetentionIndex{
 		GlobalFloor: o.globalFloor,
 		MountFloors: cloneMountFloors(map[string]uint64(o.mountFloors)),
 	}
 	txnFloor := o.txnFloor
 	if o.txnFloorFromLocks {
-		floor, err := storekv.PlanMVCCGCTxnFloor(ctx, db)
+		floor, err := mvccgc.PlanTxnFloor(ctx, db)
 		if err != nil {
-			return storekv.MVCCGCSafePointPolicy{}, err
+			return mvccgc.SafePointPolicy{}, err
 		}
 		txnFloor = minNonZero(txnFloor, floor.OldestStartTs)
 	}
@@ -119,11 +120,11 @@ func (o mvccGCCommandOptions) policy(ctx context.Context, db NoKV.MVCCStore) (st
 		defer cancel()
 		rootRetention, err := loadMVCCGCRootRetention(rootCtx, strings.TrimSpace(o.metaRootAddr))
 		if err != nil {
-			return storekv.MVCCGCSafePointPolicy{}, err
+			return mvccgc.SafePointPolicy{}, err
 		}
 		retention = mergeSnapshotRetention(retention, rootRetention)
 	}
-	return storekv.MVCCGCSafePointPolicy{
+	return mvccgc.SafePointPolicy{
 		RequestedSafePoint: o.requestedSafePoint,
 		TxnFloor:           txnFloor,
 		SnapshotRetention:  retention,
@@ -147,7 +148,7 @@ func runMVCCGCPlanCmd(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
-	stats, err := storekv.PlanMVCCGC(ctx, db, policy)
+	stats, err := mvccgc.Plan(ctx, db, policy)
 	if err != nil {
 		return err
 	}
@@ -174,7 +175,7 @@ func runMVCCGCCmd(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
-	stats, err := storekv.ApplyMVCCGC(ctx, db, policy, storekv.MVCCGCApplyOptions{BatchEntries: opt.batchEntries})
+	stats, err := mvccgc.Apply(ctx, db, policy, mvccgc.ApplyOptions{BatchEntries: opt.batchEntries})
 	if err != nil {
 		return err
 	}
@@ -251,7 +252,7 @@ func minNonZero(a, b uint64) uint64 {
 	return b
 }
 
-func renderMVCCGCPlan(w io.Writer, stats storekv.MVCCGCPlanStats, asJSON bool) error {
+func renderMVCCGCPlan(w io.Writer, stats mvccgc.PlanStats, asJSON bool) error {
 	if asJSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
@@ -261,19 +262,19 @@ func renderMVCCGCPlan(w io.Writer, stats storekv.MVCCGCPlanStats, asJSON bool) e
 	return nil
 }
 
-func renderMVCCGCApply(w io.Writer, stats storekv.MVCCGCApplyStats, asJSON bool) error {
+func renderMVCCGCApply(w io.Writer, stats mvccgc.ApplyStats, asJSON bool) error {
 	if asJSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		return enc.Encode(stats)
 	}
-	renderMVCCGCPlanPlain(w, stats.MVCCGCPlanStats)
+	renderMVCCGCPlanPlain(w, stats.PlanStats)
 	_, _ = fmt.Fprintf(w, "MVCCGC.AppliedWriteDeletes   %d\n", stats.AppliedWriteDeletes)
 	_, _ = fmt.Fprintf(w, "MVCCGC.AppliedDefaultDeletes %d\n", stats.AppliedDefaultDeletes)
 	return nil
 }
 
-func renderMVCCGCPlanPlain(w io.Writer, stats storekv.MVCCGCPlanStats) {
+func renderMVCCGCPlanPlain(w io.Writer, stats mvccgc.PlanStats) {
 	_, _ = fmt.Fprintf(w, "MVCCGC.Keys                 %d\n", stats.Keys)
 	_, _ = fmt.Fprintf(w, "MVCCGC.WriteVersions        %d\n", stats.WriteVersions)
 	_, _ = fmt.Fprintf(w, "MVCCGC.RetainedWrites       %d\n", stats.RetainedWrites)

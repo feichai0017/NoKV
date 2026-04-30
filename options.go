@@ -7,6 +7,7 @@ import (
 	lsmpkg "github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 )
@@ -160,6 +161,20 @@ type Options struct {
 	// watchdogs, GC policy, and diagnostics. It must return a detached snapshot.
 	// Nil disables raft-specific backlog accounting.
 	RaftPointerSnapshot func() map[uint64]localmeta.RaftLogPointer
+
+	// MVCCGCPlanInterval runs a background read-only MVCC GC planning pass at
+	// this interval. It never writes tombstones; it only records the current
+	// deletion plan for observability. Zero disables the planner.
+	MVCCGCPlanInterval time.Duration
+	// MVCCGCSafePoint is the requested MVCC GC safe point used by the
+	// background planner. Zero disables the planner even when
+	// MVCCGCPlanInterval is set.
+	MVCCGCSafePoint uint64
+	// MVCCGCSnapshotRetention returns active snapshot retention floors. The
+	// function must return a detached value because the planner may call it
+	// concurrently with metadata-root refresh paths. Nil means no snapshot
+	// retention floors are applied.
+	MVCCGCSnapshotRetention func() rootstate.SnapshotRetentionIndex
 
 	// NumCompactors controls how many background compaction workers are spawned.
 	// Zero uses an auto value derived from the host CPU count.
@@ -356,6 +371,9 @@ func (opt *Options) resolveOpenDefaults() {
 	}
 	if opt.WriteBatchWait < 0 {
 		opt.WriteBatchWait = 0
+	}
+	if opt.MVCCGCPlanInterval < 0 {
+		opt.MVCCGCPlanInterval = 0
 	}
 	opt.normalizeLSMSharedOptions()
 	if opt.WALBufferSize <= 0 {

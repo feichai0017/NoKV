@@ -17,7 +17,7 @@ import (
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/feichai0017/NoKV/percolator"
-	storekv "github.com/feichai0017/NoKV/raftstore/kv"
+	mvccgc "github.com/feichai0017/NoKV/raftstore/mvccgc"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
@@ -99,7 +99,7 @@ func TestRunMVCCGCPlanCmdJSON(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var stats storekv.MVCCGCPlanStats
+	var stats mvccgc.PlanStats
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &stats))
 	require.Equal(t, uint64(2), stats.Keys)
 	require.Equal(t, uint64(6), stats.WriteVersions)
@@ -142,7 +142,7 @@ func TestRunMVCCGCPlanCmdScansTxnFloorFromLocks(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var stats storekv.MVCCGCPlanStats
+	var stats mvccgc.PlanStats
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &stats))
 	require.Equal(t, uint64(2), stats.Keys)
 	require.Equal(t, uint64(0), stats.DroppableWrites)
@@ -185,7 +185,7 @@ func TestRunMVCCGCPlanCmdLoadsMetaRootRetention(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "127.0.0.1:2380", gotAddr)
 
-	var stats storekv.MVCCGCPlanStats
+	var stats mvccgc.PlanStats
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &stats))
 	require.Equal(t, uint64(5), stats.RetainedWrites)
 	require.Equal(t, uint64(1), stats.DroppableWrites)
@@ -218,7 +218,7 @@ func TestRunMVCCGCCmdUsesMetaRootRetentionOverGRPC(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var stats storekv.MVCCGCApplyStats
+	var stats mvccgc.ApplyStats
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &stats))
 	require.Equal(t, uint64(1), stats.SafePointClampedKeys)
 	require.Equal(t, uint64(1), stats.AppliedWriteDeletes)
@@ -295,7 +295,7 @@ func TestRunMVCCGCCmdJSONAppliesTombstones(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var stats storekv.MVCCGCApplyStats
+	var stats mvccgc.ApplyStats
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &stats))
 	require.Equal(t, uint64(1), stats.AppliedWriteDeletes)
 	require.Equal(t, uint64(1), stats.AppliedDefaultDeletes)

@@ -27,13 +27,15 @@ type BackgroundConfig struct {
 	StartCompacter     func()
 	EnableWALWatchdog  bool
 	WALWatchdogConfigs []wal.WatchdogConfig
+	PeriodicTasks      []PeriodicTaskConfig
 }
 
 // BackgroundServices owns DB-scoped background runtime services that
 // are not part of the DB's truth or public API surface.
 type BackgroundServices struct {
-	stats        StatsCollector
-	walWatchdogs []*wal.Watchdog
+	stats         StatsCollector
+	walWatchdogs  []*wal.Watchdog
+	periodicTasks map[string]*PeriodicTask
 }
 
 func (s *BackgroundServices) Init(stats StatsCollector) {
@@ -63,6 +65,17 @@ func (s *BackgroundServices) Start(cfg BackgroundConfig) {
 	if s.stats != nil {
 		s.stats.StartStats()
 	}
+	for _, tcfg := range cfg.PeriodicTasks {
+		task := NewPeriodicTask(tcfg)
+		if task == nil {
+			continue
+		}
+		if s.periodicTasks == nil {
+			s.periodicTasks = make(map[string]*PeriodicTask)
+		}
+		task.Start()
+		s.periodicTasks[task.Name()] = task
+	}
 }
 
 func (s *BackgroundServices) Close() error {
@@ -70,6 +83,13 @@ func (s *BackgroundServices) Close() error {
 		return nil
 	}
 	var errs []error
+	for name, task := range s.periodicTasks {
+		if task != nil {
+			task.Close()
+		}
+		delete(s.periodicTasks, name)
+	}
+	s.periodicTasks = nil
 	if s.stats != nil {
 		if err := s.stats.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("stats close: %w", err))
@@ -111,4 +131,15 @@ func (s *BackgroundServices) WALWatchdogs() []*wal.Watchdog {
 		return nil
 	}
 	return s.walWatchdogs
+}
+
+func (s *BackgroundServices) PeriodicTaskSnapshot(name string) PeriodicTaskSnapshot {
+	if s == nil || s.periodicTasks == nil {
+		return PeriodicTaskSnapshot{}
+	}
+	task := s.periodicTasks[name]
+	if task == nil {
+		return PeriodicTaskSnapshot{}
+	}
+	return task.Snapshot()
 }
