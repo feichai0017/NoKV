@@ -23,8 +23,8 @@ The current v1 API is defined by `pb/fsmeta/fsmeta.proto`. `fsmeta/server` expos
 | `Lookup` | Read a dentry by `(mount, parent_inode, name)`. |
 | `ReadDir` | Scan one directory page by dentry prefix. |
 | `ReadDirPlus` | Scan dentries and batch-read inode attrs under the same snapshot version. |
-| `WatchSubtree` | A prefix-scoped change feed; supports ready, ack, back-pressure, and cursor replay. |
-| `SnapshotSubtree` | Publishes a stable MVCC read version; subsequent `ReadDir` / `ReadDirPlus` can use it to read the snapshot. |
+| `WatchSubtree` | A prefix-scoped change feed; supports ready, ack, back-pressure, and bounded cursor replay. Cursor expiry requires full-state reconcile. |
+| `SnapshotSubtree` | Publishes an MVCC read-version token; subsequent `ReadDir` / `ReadDirPlus` can use it to read that version. Data-plane GC retention is a separate boundary. |
 | `RetireSnapshotSubtree` | Proactively retire a snapshot epoch. |
 | `GetQuotaUsage` | Read the persistent quota usage counter for a mount/scope. |
 | `RenameSubtree` | Atomically move the root dentry of a subtree; descendants follow naturally via inode references. |
@@ -62,6 +62,13 @@ type TxnRunner interface {
 
 The default runtime uses `OpenWithRaftstore` to wire up coordinator, raftstore client, TSO, watch source, mount/quota cache, snapshot publisher, and subtree handoff publisher. Embedded users can use this entry point directly; tests and custom deployments can keep passing in their own `TxnRunner`.
 
+`OpenWithRaftstore` can also wire two derived slab caches when explicitly configured:
+
+- `NegativeCacheDir` enables a persistent negative dentry cache. It remembers recent lookup misses and invalidates on namespace mutations.
+- `DirPageCacheDir` enables a ReadDirPlus page cache. It materializes fused dentry+inode pages and invalidates by parent directory epoch.
+
+Both caches are derived state. They can be dropped or rebuilt without changing authoritative namespace truth.
+
 The layering constraints are:
 
 - `Executor` does not directly know about raft region / store routing.
@@ -94,6 +101,11 @@ v1 already supports:
 - per-region recent ring;
 - resume cursor replay;
 - `ErrWatchCursorExpired` when a cursor has expired.
+
+`ErrWatchCursorExpired` is not a fatal protocol state. The client-side recovery
+pattern is: open a fresh watch without the old cursor, take a full `ReadDirPlus`
+baseline for the watched directory, then apply live events idempotently. The Go
+typed client exposes this as `client.WatchDirectoryWithReconcile`.
 
 ### SnapshotSubtree
 
@@ -162,7 +174,9 @@ Start the fsmeta gateway directly:
 go run ./cmd/nokv-fsmeta \
   --addr 127.0.0.1:8090 \
   --coordinator-addr 127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392 \
-  --metrics-addr 127.0.0.1:9400
+  --metrics-addr 127.0.0.1:9400 \
+  --negative-cache-dir ./artifacts/fsmeta/negative-cache \
+  --dirpage-cache-dir ./artifacts/fsmeta/dirpage-cache
 ```
 
 Register a mount:
@@ -195,6 +209,9 @@ nokv quota set \
 | `nokv_fsmeta_watch` | subscribers, events, delivered, dropped, overflow, remote source state. |
 | `nokv_fsmeta_mount` | mount cache hit/miss, admission rejects. |
 | `nokv_fsmeta_quota` | fence check/reject, cache hit/miss, fence updates, usage mutations. |
+
+When the derived caches are enabled, `nokv_fsmeta_executor` also reports whether
+NegativeCache / DirPage are active and the DirPage hit/miss/store counters.
 
 ## 9. Benchmarks
 

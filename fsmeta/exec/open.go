@@ -8,6 +8,8 @@ import (
 	"time"
 
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
+	"github.com/feichai0017/NoKV/engine/slab/dirpage"
+	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	"github.com/feichai0017/NoKV/raftstore/client"
@@ -28,6 +30,16 @@ type Options struct {
 	// MonitorInterval controls rooted lifecycle stream reconnect backoff.
 	// Zero uses the package default; negative disables the monitor.
 	MonitorInterval time.Duration
+
+	// NegativeCacheDir enables the slab-backed negative dentry cache. Empty
+	// disables it. This is a Derived cache: authoritative reads still fall
+	// back to raftstore/percolator on miss or invalidation.
+	NegativeCacheDir string
+
+	// DirPageCacheDir enables the slab-backed ReadDirPlus page cache. Empty
+	// disables it. Pages are derived from authoritative LSM reads and are
+	// invalidated by fsmeta mutations.
+	DirPageCacheDir string
 }
 
 // Runtime is a complete fsmeta runtime backed by the NoKV raftstore. It owns
@@ -106,8 +118,42 @@ func OpenWithRaftstore(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 	quotas := &quotaCache{coord: coord, ttl: quotaTTL}
 	pub := rootPublisher{coord: coord}
-	exec, err := New(runner, WithMountResolver(mounts), WithQuotaResolver(quotas), WithSubtreeHandoffPublisher(pub))
+	execOpts := []Option{WithMountResolver(mounts), WithQuotaResolver(quotas), WithSubtreeHandoffPublisher(pub)}
+	var negPersist *negativecache.Persistence
+	if opts.NegativeCacheDir != "" {
+		neg, persist, err := negativecache.OpenWithPersistence(
+			negativecache.Config{
+				GroupKeyFn: func(k []byte) []byte { return k },
+			},
+			negativecache.PersistConfig{
+				Dir: opts.NegativeCacheDir,
+			},
+		)
+		if err != nil {
+			_ = kv.Close()
+			_ = coord.Close()
+			return nil, fmt.Errorf("init negative cache: %w", err)
+		}
+		negPersist = persist
+		execOpts = append(execOpts, WithNegativeCache(neg))
+	}
+	var dirPages *dirpage.Cache
+	if opts.DirPageCacheDir != "" {
+		dirPages, err = dirpage.Open(dirpage.Config{
+			Dir: opts.DirPageCacheDir,
+		})
+		if err != nil {
+			_ = kv.Close()
+			_ = coord.Close()
+			return nil, fmt.Errorf("init dirpage cache: %w", err)
+		}
+		execOpts = append(execOpts, WithDirPageCache(dirPages))
+	}
+	exec, err := New(runner, execOpts...)
 	if err != nil {
+		if dirPages != nil {
+			_ = dirPages.Close()
+		}
 		_ = kv.Close()
 		_ = coord.Close()
 		return nil, fmt.Errorf("init executor: %w", err)
@@ -116,6 +162,9 @@ func OpenWithRaftstore(ctx context.Context, opts Options) (*Runtime, error) {
 	router := fsmetawatch.NewRouter()
 	source, err := fsmetawatch.StartRemoteSource(ctx, coord, router, dialOpts...)
 	if err != nil {
+		if dirPages != nil {
+			_ = dirPages.Close()
+		}
 		_ = kv.Close()
 		_ = coord.Close()
 		return nil, fmt.Errorf("init watch source: %w", err)
@@ -142,6 +191,16 @@ func OpenWithRaftstore(ctx context.Context, opts Options) (*Runtime, error) {
 		}
 		if err := source.Close(); err != nil && first == nil {
 			first = err
+		}
+		if negPersist != nil {
+			if _, err := negPersist.Snapshot(); err != nil && first == nil {
+				first = err
+			}
+		}
+		if dirPages != nil {
+			if err := dirPages.Close(); err != nil && first == nil {
+				first = err
+			}
 		}
 		if err := kv.Close(); err != nil && first == nil {
 			first = err

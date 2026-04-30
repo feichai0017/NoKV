@@ -167,10 +167,21 @@ func (e *Executor) Stats() map[string]any {
 			"txn_retry_exhausted_total": uint64(0),
 		}
 	}
-	return map[string]any{
+	out := map[string]any{
 		"txn_retries_total":         e.txnRetriesTotal.Load(),
 		"txn_retry_exhausted_total": e.txnRetryExhaustedTotal.Load(),
+		"negative_cache_enabled":    e.negCache != nil,
+		"dirpage_cache_enabled":     e.dirPages != nil,
 	}
+	if e.dirPages != nil {
+		stats := e.dirPages.Stats()
+		out["dirpage_hits"] = stats.Hits
+		out["dirpage_misses"] = stats.Misses
+		out["dirpage_stale"] = stats.Stale
+		out["dirpage_store_ok"] = stats.StoreOK
+		out["dirpage_dropped"] = stats.Dropped
+	}
+	return out
 }
 
 // Create creates one dentry and its inode record in a single transaction.
