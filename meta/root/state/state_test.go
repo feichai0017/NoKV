@@ -316,14 +316,47 @@ func TestSnapshotRetentionFloor(t *testing.T) {
 
 	snapshot := rootstate.Snapshot{
 		SnapshotEpochs: map[string]rootstate.SnapshotEpoch{
-			"newer": {ReadVersion: 90},
-			"old":   {ReadVersion: 30},
-			"zero":  {ReadVersion: 0},
+			"newer": {Mount: "vol", ReadVersion: 90},
+			"old":   {Mount: "data", ReadVersion: 30},
+			"zero":  {Mount: "vol", ReadVersion: 0},
 		},
 	}
 	floor, ok = snapshot.SnapshotRetentionFloor()
 	require.True(t, ok)
 	require.Equal(t, uint64(30), floor)
+
+	index := snapshot.SnapshotRetentionIndex()
+	require.True(t, index.Active())
+	require.Equal(t, uint64(30), index.GlobalFloor)
+	require.Equal(t, map[string]uint64{
+		"vol":  90,
+		"data": 30,
+	}, index.MountFloors)
+}
+
+func TestSnapshotRetentionIndexTracksMountFloors(t *testing.T) {
+	snapshot := rootstate.Snapshot{
+		SnapshotEpochs: map[string]rootstate.SnapshotEpoch{
+			"vol/root/90":  {Mount: "vol", RootInode: 1, ReadVersion: 90},
+			"vol/child/30": {Mount: "vol", RootInode: 7, ReadVersion: 30},
+			"data/root/70": {Mount: "data", RootInode: 1, ReadVersion: 70},
+			"data/zero":    {Mount: "data", RootInode: 9, ReadVersion: 0},
+		},
+	}
+
+	index := snapshot.SnapshotRetentionIndex()
+	require.True(t, index.Active())
+	require.Equal(t, uint64(30), index.GlobalFloor)
+	require.Equal(t, map[string]uint64{
+		"vol":  30,
+		"data": 70,
+	}, index.MountFloors)
+	floor, ok := index.FloorForMount("vol")
+	require.True(t, ok)
+	require.Equal(t, uint64(30), floor)
+	floor, ok = index.FloorForMount("missing")
+	require.False(t, ok)
+	require.Zero(t, floor)
 }
 
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {

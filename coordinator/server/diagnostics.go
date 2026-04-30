@@ -45,7 +45,7 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 			rootSnapshot = snapshot
 		}
 	}
-	snapshotFloor, snapshotFloorActive := rootSnapshot.SnapshotRetentionFloor()
+	snapshotRetention := rootSnapshot.SnapshotRetentionIndex()
 
 	nowUnixNano, _, holderID, renewIn, clockSkew := s.leaseCampaignBounds()
 	lease, _ := s.currentTenureView()
@@ -121,8 +121,9 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 			"read_state_load_error": loadErr,
 			"snapshot_epochs":       len(rootSnapshot.SnapshotEpochs),
 			"snapshot_retention": map[string]any{
-				"active":             snapshotFloorActive,
-				"min_read_version":   snapshotFloor,
+				"active":             snapshotRetention.Active(),
+				"min_read_version":   snapshotRetention.GlobalFloor,
+				"mount_floors":       snapshotRetention.MountFloors,
 				"enforcement_target": "mvcc_gc",
 			},
 		},

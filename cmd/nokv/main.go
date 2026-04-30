@@ -23,6 +23,10 @@ func main() {
 		err = runStatsCmd(os.Stdout, args)
 	case "execution":
 		err = runExecutionCmd(os.Stdout, args)
+	case "mvcc-gc-plan":
+		err = runMVCCGCPlanCmd(os.Stdout, args)
+	case "mvcc-gc":
+		err = runMVCCGCCmd(os.Stdout, args)
 	case "manifest":
 		err = runManifestCmd(os.Stdout, args)
 	case "regions":
@@ -57,6 +61,8 @@ func printUsage(w io.Writer) {
 	Commands:
 	  stats     Dump runtime backlog metrics (requires working directory or expvar endpoint)
 	  execution Query raftstore execution-plane diagnostics from admin RPC
+	  mvcc-gc-plan Plan MVCC GC without deleting data
+	  mvcc-gc  Apply MVCC GC tombstones (requires --apply)
 	  manifest  Inspect manifest state and levels
 	  regions   Show the local peer catalog used for store recovery
 	  migrate   Inspect or convert a standalone workdir for distributed mode

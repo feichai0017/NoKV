@@ -45,6 +45,22 @@ func EncodeMountKey(mount MountID) ([]byte, error) {
 	return encodeKey(mount, KeyKindMount, nil)
 }
 
+// EncodeMountPrefix returns the common key prefix for one mount. All fsmeta
+// records under the mount share this prefix regardless of key kind.
+func EncodeMountPrefix(mount MountID) ([]byte, error) {
+	return encodeMountPrefix(mount)
+}
+
+// EncodeMountKeyRange returns the half-open key range covering all fsmeta
+// records under one mount.
+func EncodeMountKeyRange(mount MountID) (start, end []byte, err error) {
+	start, err = EncodeMountPrefix(mount)
+	if err != nil {
+		return nil, nil, err
+	}
+	return start, prefixUpperBound(start), nil
+}
+
 // EncodeInodeKey returns the inode attribute record key.
 func EncodeInodeKey(mount MountID, inode InodeID) ([]byte, error) {
 	if err := validateInodeID(inode); err != nil {
@@ -106,7 +122,7 @@ func EncodeUsageKey(mount MountID, scope InodeID) ([]byte, error) {
 
 // KeyKindOf returns the kind byte encoded in a fsmeta key.
 func KeyKindOf(key []byte) (KeyKind, error) {
-	pos, err := decodeHeader(key)
+	_, pos, err := decodeHeaderParts(key)
 	if err != nil {
 		return 0, err
 	}
@@ -122,42 +138,71 @@ func KeyKindOf(key []byte) (KeyKind, error) {
 	}
 }
 
+// MountIDOfKey returns the mount encoded in a full fsmeta key.
+func MountIDOfKey(key []byte) (MountID, bool) {
+	mount, _, err := decodeHeaderParts(key)
+	if err != nil {
+		return "", false
+	}
+	return mount, true
+}
+
 func encodeKey(mount MountID, kind KeyKind, body []byte) ([]byte, error) {
-	if err := validateMountID(mount); err != nil {
+	out, err := encodeMountPrefix(mount)
+	if err != nil {
 		return nil, err
 	}
-	out := make([]byte, 0, len(keyMagic)+2+len(mount)+1+len(body))
-	out = append(out, keyMagic...)
-	out = append(out, keySchemaVersion)
-	out = binary.AppendUvarint(out, uint64(len(mount)))
-	out = append(out, string(mount)...)
 	out = append(out, byte(kind))
 	out = append(out, body...)
 	return out, nil
 }
 
-func decodeHeader(key []byte) (int, error) {
+func encodeMountPrefix(mount MountID) ([]byte, error) {
+	if err := validateMountID(mount); err != nil {
+		return nil, err
+	}
+	out := make([]byte, 0, len(keyMagic)+2+len(mount))
+	out = append(out, keyMagic...)
+	out = append(out, keySchemaVersion)
+	out = binary.AppendUvarint(out, uint64(len(mount)))
+	out = append(out, string(mount)...)
+	return out, nil
+}
+
+func prefixUpperBound(prefix []byte) []byte {
+	out := append([]byte(nil), prefix...)
+	for i := len(out) - 1; i >= 0; i-- {
+		if out[i] != 0xff {
+			out[i]++
+			return out[:i+1]
+		}
+	}
+	return nil
+}
+
+func decodeHeaderParts(key []byte) (MountID, int, error) {
 	if len(key) < len(keyMagic)+2 {
-		return 0, ErrInvalidKey
+		return "", 0, ErrInvalidKey
 	}
 	for i := range keyMagic {
 		if key[i] != keyMagic[i] {
-			return 0, ErrInvalidKey
+			return "", 0, ErrInvalidKey
 		}
 	}
 	pos := len(keyMagic)
 	if key[pos] != keySchemaVersion {
-		return 0, ErrInvalidKey
+		return "", 0, ErrInvalidKey
 	}
 	pos++
 	mountLen, n := binary.Uvarint(key[pos:])
 	if n <= 0 {
-		return 0, ErrInvalidKey
+		return "", 0, ErrInvalidKey
 	}
 	pos += n
 	if mountLen == 0 || uint64(len(key)-pos) < mountLen+1 {
-		return 0, ErrInvalidKey
+		return "", 0, ErrInvalidKey
 	}
+	mount := MountID(string(key[pos : pos+int(mountLen)]))
 	pos += int(mountLen)
-	return pos, nil
+	return mount, pos, nil
 }

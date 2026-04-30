@@ -288,25 +288,67 @@ type SnapshotEpoch struct {
 	PublishedAt Cursor
 }
 
+// SnapshotRetentionIndex summarizes active snapshot read-version floors.
+// GlobalFloor is the oldest active snapshot across all mounts. MountFloors
+// narrows the same retention pressure to one fsmeta mount when Mount is known.
+type SnapshotRetentionIndex struct {
+	GlobalFloor uint64
+	MountFloors map[string]uint64
+}
+
+// Active reports whether at least one snapshot epoch contributes a retention
+// floor.
+func (i SnapshotRetentionIndex) Active() bool {
+	return i.GlobalFloor != 0
+}
+
+// FloorForMount returns the oldest active snapshot read version for one mount.
+func (i SnapshotRetentionIndex) FloorForMount(mount string) (uint64, bool) {
+	if mount == "" || len(i.MountFloors) == 0 {
+		return 0, false
+	}
+	floor := i.MountFloors[mount]
+	return floor, floor != 0
+}
+
 // SnapshotRetentionFloor returns the oldest active snapshot read version.
 // Data-plane MVCC GC must not discard versions needed by any active snapshot
 // below this floor. The bool is false when no snapshot epoch is active.
 func SnapshotRetentionFloor(epochs map[string]SnapshotEpoch) (uint64, bool) {
-	var floor uint64
+	index := SnapshotRetentionIndexFor(epochs)
+	return index.GlobalFloor, index.Active()
+}
+
+// SnapshotRetentionIndexFor returns both global and mount-scoped retention
+// floors for active snapshot epochs.
+func SnapshotRetentionIndexFor(epochs map[string]SnapshotEpoch) SnapshotRetentionIndex {
+	index := SnapshotRetentionIndex{MountFloors: make(map[string]uint64)}
 	for _, epoch := range epochs {
 		if epoch.ReadVersion == 0 {
 			continue
 		}
-		if floor == 0 || epoch.ReadVersion < floor {
-			floor = epoch.ReadVersion
+		if index.GlobalFloor == 0 || epoch.ReadVersion < index.GlobalFloor {
+			index.GlobalFloor = epoch.ReadVersion
+		}
+		if epoch.Mount == "" {
+			continue
+		}
+		if current := index.MountFloors[epoch.Mount]; current == 0 || epoch.ReadVersion < current {
+			index.MountFloors[epoch.Mount] = epoch.ReadVersion
 		}
 	}
-	return floor, floor != 0
+	return index
 }
 
 // SnapshotRetentionFloor returns the oldest active snapshot read version in s.
 func (s Snapshot) SnapshotRetentionFloor() (uint64, bool) {
 	return SnapshotRetentionFloor(s.SnapshotEpochs)
+}
+
+// SnapshotRetentionIndex returns global and per-mount active snapshot floors in
+// s.
+func (s Snapshot) SnapshotRetentionIndex() SnapshotRetentionIndex {
+	return SnapshotRetentionIndexFor(s.SnapshotEpochs)
 }
 
 func CloneSnapshotEpochs(in map[string]SnapshotEpoch) map[string]SnapshotEpoch {
