@@ -80,7 +80,7 @@ func TestLevelHandlerRangeFilterPrunesPointAndBounds(t *testing.T) {
 	}
 }
 
-func TestLevelHandlerAddDefersRangeFilterRebuildUntilSort(t *testing.T) {
+func TestLevelHandlerAddRefreshesRangeFilter(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() {
@@ -94,11 +94,11 @@ func TestLevelHandlerAddDefersRangeFilterRebuildUntilSort(t *testing.T) {
 
 	lh.add(tblB)
 	lh.add(tblA)
-	require.Empty(t, lh.filter.spans)
 
-	lh.Sort()
 	require.Len(t, lh.filter.spans, 2)
 	require.True(t, lh.filter.nonOverlapping)
+	require.Equal(t, uint64(302), lh.tables[0].fid)
+	require.Equal(t, uint64(301), lh.tables[1].fid)
 
 	for _, tbl := range []*table{tblA, tblB} {
 		require.NoError(t, tbl.DecrRef())

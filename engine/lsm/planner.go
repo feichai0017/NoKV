@@ -371,6 +371,7 @@ func (lm *levelManager) moveToLanding(cd *compactDef) error {
 		remaining = append(remaining, tbl)
 	}
 	cd.thisLevel.tables = remaining
+	cd.thisLevel.refreshTableIndexesLocked()
 
 	cd.nextLevel.landing.ensureInit()
 	for _, t := range cd.top {
