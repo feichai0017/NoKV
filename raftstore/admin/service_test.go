@@ -390,7 +390,6 @@ func TestServiceValidationAndHelperMappings(t *testing.T) {
 func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 	sourceDir := t.TempDir()
 	sourceDB, sourceMeta := openAdminTestDBWithTweak(t, sourceDir, func(opt *NoKV.Options) {
-		opt.ValueThreshold = 16
 	})
 	defer func() {
 		require.NoError(t, sourceDB.Close())
@@ -480,7 +479,6 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 
 	targetDir := t.TempDir()
 	targetDB, targetMeta := openAdminTestDBWithTweak(t, targetDir, func(opt *NoKV.Options) {
-		opt.ValueThreshold = 16
 	})
 	defer func() {
 		require.NoError(t, targetDB.Close())
@@ -657,7 +655,6 @@ func TestServiceImportRegionSnapshotStreamRejectsRepeatedHeader(t *testing.T) {
 func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 	sourceDir := t.TempDir()
 	sourceDB, sourceMeta := openAdminTestDBWithTweak(t, sourceDir, func(opt *NoKV.Options) {
-		opt.ValueThreshold = 16
 	})
 	defer func() {
 		require.NoError(t, sourceDB.Close())
@@ -747,7 +744,6 @@ func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 
 	targetDir := t.TempDir()
 	targetDB, targetMeta := openAdminTestDBWithTweak(t, targetDir, func(opt *NoKV.Options) {
-		opt.ValueThreshold = 16
 	})
 	defer func() {
 		require.NoError(t, targetDB.Close())
@@ -817,7 +813,6 @@ func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 func TestServiceImportRegionSnapshotStreamRejectsMismatchedRegionMeta(t *testing.T) {
 	sourceDir := t.TempDir()
 	sourceDB, sourceMeta := openAdminTestDBWithTweak(t, sourceDir, func(opt *NoKV.Options) {
-		opt.ValueThreshold = 16
 	})
 	defer func() {
 		require.NoError(t, sourceDB.Close())
@@ -907,7 +902,6 @@ func TestServiceImportRegionSnapshotStreamRejectsMismatchedRegionMeta(t *testing
 
 	targetDir := t.TempDir()
 	targetDB, targetMeta := openAdminTestDBWithTweak(t, targetDir, func(opt *NoKV.Options) {
-		opt.ValueThreshold = 16
 	})
 	defer func() {
 		require.NoError(t, targetDB.Close())

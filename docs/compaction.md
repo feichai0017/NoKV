@@ -63,19 +63,7 @@ Cache hit/miss signals are exported through `StatsSnapshot.Cache` (and surfaced 
 
 ---
 
-## 5. Interaction with Value Log
-
-Compaction informs value‑log GC via discard statistics:
-
-1. During `subcompact`, every entry merged out is inspected.  If it stores a `ValuePtr`, the amount is added to the discard map.
-2. At the end of subcompaction, the accumulated discard map is pushed through `setDiscardStatsCh`.
-3. `valueLog` receives the stats and can safely rewrite or delete vlog segments with predominantly obsolete data.
-
-This tight coupling keeps the value log from growing indefinitely after heavy overwrite workloads.
-
----
-
-## 6. Testing Checklist
+## 5. Testing Checklist
 
 Relevant tests to keep compaction healthy:
 
@@ -91,11 +79,11 @@ When adding new compaction heuristics or cache behaviour, extend these tests (or
 
 ---
 
-## 7. Practical Tips
+## 6. Practical Tips
 
 - Tune `Options.LandingCompactBatchSize` when landing queues build up; increasing it lets a single move cover more tables.
 - Observe `NoKV.Stats.cache.*` and `NoKV.Stats.compaction.*` via the CLI (`nokv stats`) to decide whether you need more compaction workers or bigger caches.
 - For workloads dominated by range scans, consider increasing `Options.BlockCacheBytes` if you want to keep more L0/L1 blocks in the user-space cache; cold data relies on the OS page cache.
-- Keep an eye on `NoKV.Stats.value_log.gc` (for example `gc_runs` and `head_updates`); if compactions are generating discard stats but the value log head doesn’t move, GC thresholds may be too conservative.
+- Keep an eye on `NoKV.Stats.compaction.*` and `NoKV.Stats.wal.*`; if compaction backlog rises while WAL retention does not advance, a flush, raft-retention, or manifest-install boundary is holding old segments.
 
 With these mechanisms, NoKV stays resilient under bursty writes while keeping the code path small and discoverable—ideal for learning or embedding.  Dive into the source files referenced above for deeper implementation details.

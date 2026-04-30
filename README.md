@@ -220,18 +220,17 @@ Full guide: [`docs/getting_started.md`](docs/getting_started.md) · CLI referenc
 |---|---|---|
 | **[`fsmeta/`](./fsmeta)** | **Namespace metadata schema, executor, gRPC service, embedded API** | **[fsmeta](docs/fsmeta.md)** |
 | [`fsmeta/exec/watch/`](./fsmeta/exec/watch) | WatchSubtree router + RemoteSource + catch-up replay | [fsmeta](docs/fsmeta.md) |
-| [`spec/`](./spec) | TLA+ models for control-plane and metadata transition safety | [spec/README.md](./spec/README.md) |
 | [`meta/root/`](./meta/root) | Typed rooted truth kernel (Delos-lite) | [Rooted Truth](docs/rooted_truth.md) |
 | [`coordinator/`](./coordinator) | Routing, TSO, store discovery, root-event publish, streaming subscribe | [Coordinator](docs/coordinator.md) |
 | [`raftstore/`](./raftstore) | Multi-Raft, transport, membership, SST snapshot install, apply observer | [RaftStore](docs/raftstore.md) |
 | [`percolator/`](./percolator) | Distributed MVCC 2PC + AssertionNotExist | [Percolator](docs/percolator.md) |
 | [`engine/lsm/`](./engine/lsm) | MemTable, flush, leveled compaction, SST | [LSM](docs/memtable.md) · [flush](docs/flush.md) · [compaction](docs/compaction.md) |
 | [`engine/wal/`](./engine/wal) | WAL segments, CRC, rotation, replay | [WAL](docs/wal.md) |
-| [`engine/vlog/`](./engine/vlog) | KV-separated value log + hash buckets + parallel GC | [ValueLog](docs/vlog.md) |
+| [`engine/slab/`](./engine/slab) | Append-only mmap segment substrate for derived sidecar caches | [VFS](docs/vfs.md) |
 | [`engine/manifest/`](./engine/manifest) | VersionEdit log, atomic CURRENT | [Manifest](docs/manifest.md) |
 | [`engine/vfs/`](./engine/vfs) | VFS abstraction, FaultFS, cross-platform atomic rename | [VFS](docs/vfs.md) |
 | [`thermos/`](./thermos) | Hot-key observer | [Thermos](docs/thermos.md) |
-| [`cmd/nokv/`](./cmd/nokv) | CLI: stats, manifest, regions, vlog, migrate, mount, quota | [CLI](docs/cli.md) |
+| [`cmd/nokv/`](./cmd/nokv) | CLI: stats, manifest, regions, migrate, mount, quota | [CLI](docs/cli.md) |
 | [`cmd/nokv-fsmeta/`](./cmd/nokv-fsmeta) | Standalone fsmeta gRPC gateway | [fsmeta](docs/fsmeta.md) |
 
 <br/>

@@ -118,7 +118,7 @@ type Priority struct {
 	StatsTag     string
 }
 
-// ApplyValueWeight boosts the priority based on value log density.
+// ApplyValueWeight boosts the priority based on inline value-byte density.
 func (cp *Priority) ApplyValueWeight(weight, valueScore float64) {
 	if weight <= 0 || valueScore <= 0 {
 		return

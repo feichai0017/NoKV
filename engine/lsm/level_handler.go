@@ -142,30 +142,6 @@ func (lh *levelHandler) mainValueBytes() int64 {
 	return lh.totalValueSize
 }
 
-func (lh *levelHandler) valueDensity() float64 {
-	lh.RLock()
-	defer lh.RUnlock()
-	if lh.totalSize <= 0 {
-		return 0
-	}
-	return float64(lh.totalValueSize) / float64(lh.totalSize)
-}
-
-func (lh *levelHandler) valueBias(weight float64) float64 {
-	if weight <= 0 {
-		return 1.0
-	}
-	density := lh.valueDensity()
-	bias := 1.0 + weight*density
-	if bias > 4.0 {
-		return 4.0
-	}
-	if bias < 1.0 {
-		return 1.0
-	}
-	return bias
-}
-
 func (lh *levelHandler) metricsSnapshot() LevelMetrics {
 	if lh == nil {
 		return LevelMetrics{}

@@ -14,7 +14,6 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
-	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/utils"
@@ -1158,11 +1157,6 @@ func TestLSMMetricsAPIs(t *testing.T) {
 	if diag.Compaction.AlertThreshold <= 0 {
 		t.Fatalf("expected compaction value alert threshold to be positive")
 	}
-	requireNoError(lsm.LogValueLogHead(&kv.ValuePtr{Bucket: 0, Fid: 1, Offset: 2}))
-	requireNoError(lsm.LogValueLogUpdate(&manifest.ValueLogMeta{Bucket: 0, FileID: 1, Offset: 5, Valid: true}))
-	_ = lsm.ValueLogHeadSnapshot()
-	_ = lsm.ValueLogStatusSnapshot()
-	requireNoError(lsm.LogValueLogDelete(0, 1))
 }
 
 func TestLSMBatchAndMemHelpers(t *testing.T) {
@@ -1901,13 +1895,10 @@ func baseTest(t *testing.T, lsm *LSM, n int) {
 // buildLSM is the test harness helper.
 func buildLSM() *LSM {
 	// init DB Basic Test
-	c := make(chan map[manifest.ValueLogID]int64, 16)
-	opt.DiscardStatsCh = &c
 	wlog, err := wal.Open(wal.Config{Dir: opt.WorkDir})
 	if err != nil {
 		panic(err)
 	}
-	opt.DiscardStatsCh = &c
 	lsm, err := NewLSM(opt, []*wal.Manager{wlog})
 	if err != nil {
 		panic(err)

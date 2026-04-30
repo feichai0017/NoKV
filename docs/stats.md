@@ -17,14 +17,12 @@ flowchart TD
     subgraph COLLECTORS["Collectors"]
         LSM["lsm.* metrics"]
         WAL["wal metrics"]
-        VLOG["value log metrics"]
         HOT["thermos"]
         REGION["region metrics"]
         TRANSPORT["grpc transport metrics"]
     end
     LSM --> SNAP["Stats.Snapshot()"]
     WAL --> SNAP
-    VLOG --> SNAP
     HOT --> SNAP
     REGION --> SNAP
     TRANSPORT --> SNAP
@@ -46,7 +44,6 @@ Two-layer design:
 - `entries`
 - `flush.*`
 - `compaction.*`
-- `value_log.*` (includes `value_log.gc.*`)
 - `wal.*`
 - `raft.*`
 - `write.*`
@@ -60,7 +57,6 @@ Representative fields:
 
 - `flush.pending`, `flush.queue_length`, `flush.last_wait_ms`
 - `compaction.backlog`, `compaction.max_score`, `compaction.value_weight`
-- `value_log.segments`, `value_log.pending_deletes`, `value_log.gc.gc_runs`
 - `wal.active_segment`, `wal.segment_count`, `wal.typed_record_ratio`
 - `raft.group_count`, `raft.lagging_groups`, `raft.max_lag_segments`
 - `write.queue_depth`, `write.avg_request_wait_ms`, `write.hot_key_limited`
@@ -77,7 +73,7 @@ Representative fields:
 
 - `NoKV.Stats`
 
-All domains (`flush`, `compaction`, `value_log`, `wal`, `raft`, `write`, `region`, `hot`, `cache`, `lsm`, `transport`) are nested under this object.
+All domains (`flush`, `compaction`, `wal`, `raft`, `write`, `region`, `hot`, `cache`, `lsm`, `transport`) are nested under this object.
 
 Legacy scalar compatibility keys are removed. Consumers should read fields from `NoKV.Stats` directly.
 
@@ -98,12 +94,9 @@ Example:
     "pending": 2,
     "queue_length": 2
   },
-  "value_log": {
-    "segments": 6,
-    "pending_deletes": 1,
-    "gc": {
-      "gc_runs": 12
-    }
+  "wal": {
+    "active_segment": 3,
+    "segment_count": 4
   },
   "hot": {
     "write_keys": [
@@ -119,8 +112,8 @@ Example:
 
 - `flush.queue_length` + `compaction.backlog` both rising:
   flush/compaction under-provisioned.
-- `value_log.discard_queue` high for long periods:
-  check `value_log.gc.*` and compaction pressure.
+- `wal.segment_count` rising while `raft.max_lag_segments` stays high:
+  at least one raft group is retaining old WAL segments; inspect raft lag and snapshot progress.
 - `write.throttle_active=true` frequently:
   L0 pressure likely high; inspect `cache.block_l0_hit_rate` and compaction.
 - `write.hot_key_limited` increasing:

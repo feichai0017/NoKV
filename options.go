@@ -4,13 +4,11 @@ import (
 	"encoding/binary"
 	"time"
 
-	"github.com/feichai0017/NoKV/engine/kv"
 	lsmpkg "github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
-	"github.com/feichai0017/NoKV/utils"
 )
 
 const (
@@ -37,29 +35,6 @@ type Options struct {
 	// must opt into seeded/cluster directories explicitly.
 	AllowedModes []raftmode.Mode
 
-	// EnableValueLog opts into the engine/vlog Authoritative consumer. When
-	// false (the default) NoKV behaves as a pure metadata-first KV: every
-	// value is inlined into the LSM regardless of size, no vlog directory
-	// is created, no vlog manager is opened, no value-log GC goroutine
-	// runs, and the commit pipeline never enters vlog code paths.
-	//
-	// Set to true for workloads that benefit from value separation: large
-	// values (typically > a few KB), embedded blob storage, or any
-	// workload where the inlined-value write amplification dominates.
-	// When enabled, ValueThreshold / ValueLogFileSize / ValueLogBucketCount
-	// / ValueLogGC* control the vlog behavior as before.
-	//
-	// This is a breaking change vs releases prior to the slab-substrate
-	// redesign — older versions defaulted vlog ON. Existing deployments
-	// that depend on value separation MUST set EnableValueLog=true on
-	// upgrade. Reopening a DB with EnableValueLog=false against a
-	// directory that contains previously-written vlog data is allowed
-	// (the data is left in place, untouched) but any LSM SST entries
-	// holding a ValuePtr will fail to read until the user re-enables
-	// vlog or runs a future migration tool.
-	EnableValueLog bool
-
-	ValueThreshold int64
 	WorkDir        string
 	MemTableSize   int64
 	MemTableEngine MemTableEngine
@@ -71,43 +46,7 @@ type Options struct {
 	// MaxBatchSize bounds the size in bytes of one internal write batch.
 	// NewDefaultOptions exposes a concrete default; zero is only interpreted as
 	// a Open resolves the constructor default when left zero.
-	MaxBatchSize       int64
-	ValueLogFileSize   int
-	ValueLogMaxEntries uint32
-	// ValueLogBucketCount controls how many hash buckets the value log uses.
-	// Values <= 1 disable bucketization.
-	ValueLogBucketCount     int
-	ValueSeparationPolicies []*kv.ValueSeparationPolicy
-
-	// ValueLogGCInterval specifies how frequently to trigger a check for value
-	// log garbage collection. Zero or negative values disable automatic GC.
-	ValueLogGCInterval time.Duration
-	// ValueLogGCDiscardRatio is the discard ratio for a value log file to be
-	// considered for garbage collection. It must be in the range (0.0, 1.0).
-	ValueLogGCDiscardRatio float64
-	// ValueLogGCParallelism controls how many value-log GC tasks can run in
-	// parallel. Values <= 0 auto-tune based on compaction workers.
-	ValueLogGCParallelism int
-	// ValueLogGCReduceScore lowers GC parallelism when compaction max score meets
-	// or exceeds this threshold. Values <= 0 use defaults.
-	ValueLogGCReduceScore float64
-	// ValueLogGCSkipScore skips GC when compaction max score meets or exceeds this
-	// threshold. Values <= 0 use defaults.
-	ValueLogGCSkipScore float64
-	// ValueLogGCReduceBacklog lowers GC parallelism when compaction backlog meets
-	// or exceeds this threshold. Values <= 0 use defaults.
-	ValueLogGCReduceBacklog int
-	// ValueLogGCSkipBacklog skips GC when compaction backlog meets or exceeds this
-	// threshold. Values <= 0 use defaults.
-	ValueLogGCSkipBacklog int
-
-	// Value log GC sampling parameters. Ratios <= 0 fall back to defaults.
-	ValueLogGCSampleSizeRatio  float64
-	ValueLogGCSampleCountRatio float64
-	ValueLogGCSampleFromHead   bool
-
-	// ValueLogVerbose enables verbose logging across value-log operations.
-	ValueLogVerbose bool
+	MaxBatchSize int64
 
 	// WriteBatchMaxCount bounds how many requests the commit worker coalesces in
 	// one pass. NewDefaultOptions exposes a concrete default; zero is only
@@ -222,11 +161,6 @@ type Options struct {
 	// Nil disables raft-specific backlog accounting.
 	RaftPointerSnapshot func() map[uint64]localmeta.RaftLogPointer
 
-	// DiscardStatsFlushThreshold controls how many discard-stat updates must be
-	// accumulated before they are flushed back into the LSM. Zero keeps the
-	// default threshold.
-	DiscardStatsFlushThreshold int
-
 	// NumCompactors controls how many background compaction workers are spawned.
 	// Zero uses an auto value derived from the host CPU count.
 	NumCompactors int
@@ -271,8 +205,7 @@ type Options struct {
 	LandingBacklogMergeScore float64
 
 	// CompactionValueWeight adjusts how aggressively the scheduler prioritises
-	// levels whose entries reference large value log payloads. Higher values
-	// make the compaction picker favour levels with high ValuePtr density.
+	// levels whose entries carry a high value-byte density.
 	CompactionValueWeight float64
 	// CompactionTombstoneWeight adjusts how aggressively the scheduler
 	// prioritizes levels with high range tombstone density.
@@ -374,18 +307,7 @@ func NewDefaultOptions() *Options {
 		CompactionValueWeight:         lsmpkg.DefaultCompactionValueWeight,
 		CompactionTombstoneWeight:     lsmpkg.DefaultCompactionTombstoneWeight,
 		CompactionValueAlertThreshold: lsmpkg.DefaultCompactionValueAlertThreshold,
-		ValueLogGCInterval:            10 * time.Minute,
-		ValueLogGCDiscardRatio:        0.5,
-		ValueLogGCParallelism:         0,
-		ValueLogGCReduceScore:         2.0,
-		ValueLogGCSkipScore:           4.0,
-		ValueLogGCReduceBacklog:       0,
-		ValueLogGCSkipBacklog:         0,
-		ValueLogGCSampleSizeRatio:     0.10,
-		ValueLogGCSampleCountRatio:    0.01,
-		ValueLogBucketCount:           16,
 	}
-	opt.ValueThreshold = utils.DefaultValueThreshold
 
 	// Relax L0 throttling defaults and increase compaction parallelism a bit to
 	// reduce write-path sleeps under load.

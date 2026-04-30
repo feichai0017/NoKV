@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"os"
 	"path/filepath"
 	"sync"
@@ -19,7 +18,6 @@ import (
 	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/vfs"
-	vlogpkg "github.com/feichai0017/NoKV/engine/vlog"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/metrics"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -85,32 +83,26 @@ type (
 		// number of entries is db.opt.LSMShardCount (resolved at Open).
 		// Each Manager has its own fd, fsync worker, and bufio.Writer so
 		// commit workers do not contend on a single Manager.mu.
-		lsmWALs         []*wal.Manager
-		lsmWatchdogs    []*wal.Watchdog
-		raftWALMu       sync.Mutex
-		raftWALs        [defaultRaftWALShards]*wal.Manager
-		raftWatchdogs   [defaultRaftWALShards]*wal.Watchdog
-		vlog            *vlogpkg.Consumer
-		nonTxnVersion   atomic.Uint64
-		blockWrites     atomic.Int32
-		slowWrites      atomic.Int32
-		discardStatsCh  chan map[manifest.ValueLogID]int64
-		vheads          map[uint32]kv.ValuePtr
-		lastLoggedHeads map[uint32]kv.ValuePtr
-		headLogDelta    uint32
-		isClosed        atomic.Uint32
-		closeOnce       sync.Once
-		closeErr        error
-		throttleMu      sync.Mutex
-		throttleCh      chan struct{}
-		hotWrite        *thermos.RotatingThermos
-		writeMetrics    *metrics.WriteMetrics
+		lsmWALs       []*wal.Manager
+		lsmWatchdogs  []*wal.Watchdog
+		raftWALMu     sync.Mutex
+		raftWALs      [defaultRaftWALShards]*wal.Manager
+		raftWatchdogs [defaultRaftWALShards]*wal.Watchdog
+		nonTxnVersion atomic.Uint64
+		blockWrites   atomic.Int32
+		slowWrites    atomic.Int32
+		isClosed      atomic.Uint32
+		closeOnce     sync.Once
+		closeErr      error
+		throttleMu    sync.Mutex
+		throttleCh    chan struct{}
+		hotWrite      *thermos.RotatingThermos
+		writeMetrics  *metrics.WriteMetrics
 		// pipeline owns the commit queue, per-shard dispatch channels,
 		// processors, and the optional sync worker. See runtime/commit.
 		pipeline        *commit.Pipeline
 		iterPool        *iterpkg.IteratorPool
 		hotWriteLimited atomic.Uint64
-		policyMatcher   atomic.Pointer[kv.ValueSeparationPolicyMatcher]
 		background      dbruntime.BackgroundServices
 		runtimeModules  dbruntime.Registry
 	}
@@ -127,7 +119,6 @@ func newDB(opt *Options) *DB {
 	}
 	db := &DB{opt: cfg, writeMetrics: metrics.NewWriteMetrics()}
 	db.fs = vfs.Ensure(cfg.FS)
-	db.headLogDelta = vlogpkg.HeadLogInterval
 	db.throttleCh = make(chan struct{})
 	db.hotWrite = dbruntime.NewHotWriteRing(dbruntime.HotWriteConfig{
 		Enabled:          cfg.ThermosEnabled && cfg.WriteHotKeyLimit > 0,
@@ -140,7 +131,6 @@ func newDB(opt *Options) *DB {
 		NodeSampleBits:   cfg.ThermosNodeSampleBits,
 		RotationInterval: cfg.ThermosRotationInterval,
 	})
-	db.discardStatsCh = make(chan map[manifest.ValueLogID]int64, 16)
 	return db
 }
 
@@ -227,26 +217,7 @@ func (db *DB) openEngine() error {
 	db.lsm = lsmCore
 	db.nonTxnVersion.Store(db.lsm.Diagnostics().MaxVersion)
 	db.iterPool = iterpkg.NewIteratorPool()
-	if db.opt.EnableValueLog {
-		if err := db.initVLog(); err != nil {
-			return fmt.Errorf("open db: init value log: %w", err)
-		}
-	} else {
-		// Operator diagnostic: when vlog is disabled but the manifest
-		// still references value-log segments, every Get/iterator hit
-		// on a value pointer will fail with a clear error. Surface the
-		// mismatch here too so operators see it at Open time without
-		// waiting for the first read failure.
-		if status := db.lsm.ValueLogStatusSnapshot(); len(status) > 0 {
-			slog.Default().Warn("value log disabled but manifest references existing vlog segments",
-				"segments", len(status),
-				"action", "set Options.EnableValueLog=true to read the existing data, or migrate values out")
-		}
-	}
 	db.background.Init(stats.New(db, 0))
-	if len(db.opt.ValueSeparationPolicies) > 0 {
-		db.policyMatcher.Store(kv.NewValueSeparationPolicyMatcher(db.opt.ValueSeparationPolicies))
-	}
 	return nil
 }
 
@@ -269,7 +240,6 @@ func (db *DB) startWriteRuntime() {
 		WriteBatchMaxCount: db.opt.WriteBatchMaxCount,
 		WriteBatchMaxSize:  db.opt.WriteBatchMaxSize,
 		WriteBatchWait:     db.opt.WriteBatchWait,
-		ValueThreshold:     int(db.opt.ValueThreshold),
 	}, db)
 	db.pipeline.Start()
 }
@@ -300,7 +270,6 @@ func (db *DB) runtimeLSMOptions() *lsm.Options {
 		TableSizeMultiplier:      lsm.DefaultTableSizeMultiplier,
 		MaxLevelNum:              utils.MaxLevelNum,
 		CompactionPolicy:         string(db.opt.CompactionPolicy),
-		DiscardStatsCh:           &db.discardStatsCh,
 		ManifestSync:             db.opt.ManifestSync,
 		ManifestRewriteThreshold: db.opt.ManifestRewriteThreshold,
 		ThrottleCallback:         db.ApplyThrottle,
@@ -433,14 +402,6 @@ func Open(opt *Options) (_ *DB, err error) {
 		StartCompacter:     db.lsm.StartCompacter,
 		EnableWALWatchdog:  db.opt.EnableWALWatchdog,
 		WALWatchdogConfigs: watchdogConfigs,
-		StartValueLogGC: func() {
-			if db.opt.ValueLogGCInterval > 0 {
-				if closer := db.vlogCloser(); closer != nil {
-					closer.Add(1)
-					go db.runValueLogGCPeriodically()
-				}
-			}
-		},
 	})
 	return db, nil
 }
@@ -460,24 +421,6 @@ func (db *DB) runRecoveryChecks() error {
 	for shard := range defaultRaftWALShards {
 		if err := wal.VerifyDir(filepath.Join(db.opt.WorkDir, fmt.Sprintf("raft-wal-%02d", shard)), db.fs); err != nil {
 			return err
-		}
-	}
-	if db.opt.EnableValueLog {
-		vlogDir := filepath.Join(db.opt.WorkDir, "vlog")
-		bucketCount := max(db.opt.ValueLogBucketCount, 1)
-		for bucket := range bucketCount {
-			cfg := vlogpkg.Config{
-				Dir:      filepath.Join(vlogDir, fmt.Sprintf("bucket-%03d", bucket)),
-				FileMode: utils.DefaultFileMode,
-				MaxSize:  int64(db.opt.ValueLogFileSize),
-				Bucket:   uint32(bucket),
-				FS:       db.fs,
-			}
-			if err := vlogpkg.VerifyDir(cfg); err != nil {
-				if !stderrors.Is(err, os.ErrNotExist) {
-					return err
-				}
-			}
 		}
 	}
 	return nil
@@ -505,10 +448,6 @@ func (db *DB) closeInternal() error {
 		return nil
 	}
 
-	if closer := db.vlogCloser(); closer != nil {
-		closer.Close()
-	}
-
 	if db.pipeline != nil {
 		db.pipeline.Close()
 	}
@@ -528,13 +467,6 @@ func (db *DB) closeInternal() error {
 			errs = append(errs, fmt.Errorf("lsm close: %w", err))
 		}
 		db.lsm = nil
-	}
-
-	if db.vlog != nil {
-		if err := db.vlog.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("vlog close: %w", err))
-		}
-		db.vlog = nil
 	}
 
 	if err := db.closeRaftWALs(); err != nil {
@@ -756,8 +688,8 @@ func (db *DB) GetInternalEntry(cf kv.ColumnFamily, key []byte, version uint64) (
 
 // MaterializeInternalEntry converts a borrowed internal entry into a detached
 // internal entry suitable for export or replay. The returned entry preserves
-// canonical internal-key layout and resolves any value-log indirection into
-// inline value bytes.
+// canonical internal-key layout. Legacy value-log pointers are rejected because
+// new storage records keep values inline.
 func (db *DB) MaterializeInternalEntry(src *kv.Entry) (*kv.Entry, error) {
 	if db == nil {
 		return nil, fmt.Errorf("db is nil")
@@ -792,19 +724,7 @@ func (db *DB) resolveDetachedValue(src *kv.Entry) ([]byte, byte, error) {
 	if !kv.IsValuePtr(src) {
 		return src.Value, meta, nil
 	}
-	if db.vlog == nil {
-		return nil, meta, fmt.Errorf("value pointer encountered but EnableValueLog is false; LSM still references vlog data, re-enable EnableValueLog to read it")
-	}
-	var vp kv.ValuePtr
-	vp.Decode(src.Value)
-	result, cb, err := db.vlog.Read(&vp)
-	if cb != nil {
-		defer cb()
-	}
-	if err != nil {
-		return nil, meta, err
-	}
-	return result, meta &^ kv.BitValuePointer, nil
+	return nil, meta, utils.ErrUnsupportedValueLog
 }
 
 // Get reads the latest visible value for key from the default column family.
@@ -864,8 +784,7 @@ func (db *DB) Get(key []byte) (*kv.Entry, error) {
 	}, nil
 }
 
-// loadBorrowedEntry fetches one internal-key record from LSM and resolves value-log
-// indirection before returning it to the caller.
+// loadBorrowedEntry fetches one internal-key record from LSM.
 //
 // Ownership contract:
 //   - The returned entry is a borrowed, pool-managed object.
@@ -873,8 +792,8 @@ func (db *DB) Get(key []byte) (*kv.Entry, error) {
 //
 // Error behavior:
 //   - Returns ErrKeyNotFound when no record exists.
-//   - If vlog pointer resolution fails, this function releases the borrowed entry
-//     before returning the error to avoid leaking ref-counted entries.
+//   - If a legacy value-log pointer is encountered, this function releases the
+//     borrowed entry and returns ErrUnsupportedValueLog.
 func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 	entry, err := db.lsm.Get(internalKey)
 	if err != nil {
@@ -897,37 +816,17 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 		}
 		return entry, nil
 	}
-	if db.vlog == nil {
-		entry.DecrRef()
-		return nil, fmt.Errorf("value pointer encountered but EnableValueLog is false; LSM still references vlog data, re-enable EnableValueLog to read it")
-	}
-	var vp kv.ValuePtr
-	vp.Decode(entry.Value)
-	result, cb, readErr := db.vlog.Read(&vp)
-	if cb != nil {
-		defer cb()
-	}
-	if readErr != nil {
-		entry.DecrRef()
-		return nil, readErr
-	}
-	entry.Value = kv.SafeCopy(nil, result)
-	entry.Meta &^= kv.BitValuePointer
-	if !entry.PopulateInternalMeta() {
-		entry.DecrRef()
-		return nil, utils.ErrInvalidRequest
-	}
-	return entry, nil
+	entry.DecrRef()
+	return nil, utils.ErrUnsupportedValueLog
 }
 
 // NewIterator creates a DB-level iterator over user keys in the default
 // column family. The state machine + Item materialization live in
-// runtime/iterator; this method wires DB internals (lsm, vlog, iterPool)
+// runtime/iterator; this method wires DB internals (lsm, iterPool)
 // into iterpkg.New as a thin facade.
 func (db *DB) NewIterator(opt *index.Options) index.Iterator {
 	return iterpkg.New(iterpkg.Deps{
 		Storage: db.lsm,
-		Vlog:    db.vlog,
 		Pool:    db.iterPool,
 	}, opt)
 }
@@ -954,7 +853,6 @@ func (db *DB) Info() *stats.Stats {
 // without importing the root NoKV package.
 
 func (db *DB) LSM() stats.LSMSource                 { return db.lsm }
-func (db *DB) Vlog() stats.VlogSource               { return db.vlog }
 func (db *DB) LSMWALs() []*wal.Manager              { return db.lsmWALs }
 func (db *DB) BackgroundWatchdogs() []*wal.Watchdog { return db.background.WALWatchdogs() }
 func (db *DB) HotWrite() *thermos.RotatingThermos   { return db.hotWrite }
@@ -963,16 +861,10 @@ func (db *DB) WriteMetrics() *metrics.WriteMetrics  { return db.writeMetrics }
 func (db *DB) BlockWritesActive() bool              { return db.blockWrites.Load() == 1 }
 func (db *DB) SlowWritesActive() bool               { return db.slowWrites.Load() == 1 }
 func (db *DB) HotWriteLimited() uint64              { return db.hotWriteLimited.Load() }
-func (db *DB) ValueLogDisabledOrphans() int {
-	if db == nil || db.lsm == nil || db.opt.EnableValueLog {
-		return 0
-	}
-	return len(db.lsm.ValueLogStatusSnapshot())
-}
-func (db *DB) RaftLagWarnSegments() int64        { return db.opt.RaftLagWarnSegments }
-func (db *DB) WALTypedRecordWarnRatio() float64  { return db.opt.WALTypedRecordWarnRatio }
-func (db *DB) WALTypedRecordWarnSegments() int64 { return db.opt.WALTypedRecordWarnSegments }
-func (db *DB) ThermosTopK() int                  { return db.opt.ThermosTopK }
+func (db *DB) RaftLagWarnSegments() int64           { return db.opt.RaftLagWarnSegments }
+func (db *DB) WALTypedRecordWarnRatio() float64     { return db.opt.WALTypedRecordWarnRatio }
+func (db *DB) WALTypedRecordWarnSegments() int64    { return db.opt.WALTypedRecordWarnSegments }
+func (db *DB) ThermosTopK() int                     { return db.opt.ThermosTopK }
 
 func (db *DB) RaftPointerSnapshot() func() map[uint64]localmeta.RaftLogPointer {
 	if db == nil || db.opt == nil {
@@ -987,9 +879,8 @@ func (db *DB) RaftWALsLocked(fn func(wals []*wal.Manager)) {
 	fn(db.raftWALs[:])
 }
 
-// commit.Host implementation: read-only accessors plus UpdateHeadBuckets
-// the commit Pipeline uses to wire DB-side state without importing the
-// root NoKV package.
+// commit.Host implementation: read-only accessors the commit Pipeline uses
+// without importing the root NoKV package.
 
 func (db *DB) ThrottleSignal() <-chan struct{} {
 	db.throttleMu.Lock()
@@ -998,347 +889,7 @@ func (db *DB) ThrottleSignal() <-chan struct{} {
 	return ch
 }
 
-// commit.Host LSM/Vlog use narrower interfaces than stats.Host LSM/Vlog;
-// expose them via differently-named accessors that satisfy the commit
-// surface without colliding with stats.Host method names.
-func (db *DB) CommitLSM() commit.LSM   { return db.lsm }
-func (db *DB) CommitVlog() commit.Vlog { return db.vlog }
-
-func (db *DB) UpdateHeadBuckets(buckets []uint32) {
-	db.Lock()
-	db.updateHeadBuckets(buckets)
-	db.Unlock()
-}
-
-// RunValueLogGC triggers a value log garbage collection. No-op (returns
-// nil) when EnableValueLog is false — callers can wire this into a
-// scheduler unconditionally.
-func (db *DB) RunValueLogGC(discardRatio float64) error {
-	if db == nil || db.vlog == nil {
-		return nil
-	}
-	if discardRatio >= 1.0 || discardRatio <= 0.0 {
-		return utils.ErrInvalidRequest
-	}
-	heads := db.lsm.ValueLogHeadSnapshot()
-	if len(heads) == 0 {
-		db.RLock()
-		if len(db.vheads) > 0 {
-			heads = make(map[uint32]kv.ValuePtr, len(db.vheads))
-			maps.Copy(heads, db.vheads)
-		}
-		db.RUnlock()
-	}
-	if len(heads) == 0 && db.vlog != nil {
-		heads = make(map[uint32]kv.ValuePtr)
-		for bucket, mgr := range db.vlog.Managers() {
-			if mgr == nil {
-				continue
-			}
-			heads[uint32(bucket)] = mgr.Head()
-		}
-	}
-	// Pick a log file and run GC
-	if err := db.vlog.RunGC(discardRatio, heads); err != nil {
-		if stderrors.Is(err, utils.ErrEmptyKey) {
-			return nil
-		}
-		return err
-	}
-	return nil
-}
-
-func (db *DB) runValueLogGCPeriodically() {
-	closer := db.vlogCloser()
-	if closer == nil {
-		return
-	}
-	defer closer.Done()
-
-	ticker := time.NewTicker(db.opt.ValueLogGCInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			err := db.RunValueLogGC(db.opt.ValueLogGCDiscardRatio)
-			if err != nil {
-				if err == utils.ErrNoRewrite {
-					db.vlog.Logf("No rewrite on GC.")
-				} else {
-					slog.Default().Warn("value log gc", "error", err)
-				}
-			}
-		case <-closer.Closed():
-			return
-		}
-	}
-}
-
-// vlogCloser exposes the value-log Consumer's lifecycle Closer (or nil
-// when vlog is disabled) so DB-side background loops can register on
-// the same shutdown signal as the discard-stats flush worker.
-func (db *DB) vlogCloser() *utils.Closer {
-	if db == nil || db.vlog == nil {
-		return nil
-	}
-	return db.vlog.BackgroundCloser()
-}
-
-// initVLog opens the value-log Consumer with all the DB-side hooks the
-// engine/vlog package needs (LSM access, batch writeback, value-policy
-// matcher, etc.). Heads observed during replay are installed into
-// db.vheads / db.lastLoggedHeads here so the Consumer never reaches
-// back into the DB struct.
-//
-// Returns a non-nil error when bucket-manager open or replay fails so
-// the caller (Open) can surface it to the caller instead of panicking.
-func (db *DB) initVLog() error {
-	heads := db.getHeads()
-	vlogDir := filepath.Join(db.opt.WorkDir, "vlog")
-
-	cfg := vlogpkg.ConsumerConfig{
-		Dir:                        vlogDir,
-		BucketCount:                max(db.opt.ValueLogBucketCount, 1),
-		GCParallelism:              db.opt.ValueLogGCParallelism,
-		NumCompactors:              db.opt.NumCompactors,
-		FileSize:                   db.opt.ValueLogFileSize,
-		Verbose:                    db.opt.ValueLogVerbose,
-		SyncWrites:                 db.opt.SyncWrites,
-		DiscardStatsFlushThreshold: db.opt.DiscardStatsFlushThreshold,
-		GCReduceScore:              db.opt.ValueLogGCReduceScore,
-		GCSkipScore:                db.opt.ValueLogGCSkipScore,
-		GCReduceBacklog:            db.opt.ValueLogGCReduceBacklog,
-		GCSkipBacklog:              db.opt.ValueLogGCSkipBacklog,
-		GCSampleSizeRatio:          db.opt.ValueLogGCSampleSizeRatio,
-		GCSampleCountRatio:         db.opt.ValueLogGCSampleCountRatio,
-		GCSampleFromHead:           db.opt.ValueLogGCSampleFromHead,
-		GCMaxEntries:               db.opt.ValueLogMaxEntries,
-		MaxBatchCount:              db.opt.MaxBatchCount,
-		MaxBatchSize:               db.opt.MaxBatchSize,
-		DiscardStatsCh:             db.discardStatsCh,
-		FS:                         db.fs,
-	}
-	deps := vlogpkg.Deps{
-		LSM:              db.lsm,
-		GetInternalEntry: db.GetInternalEntry,
-		BatchSet:         db.batchSet,
-		SendToWriteCh: func(entries []*kv.Entry, waitOnThrottle bool) (vlogpkg.Waiter, error) {
-			req, err := db.sendToWriteCh(entries, waitOnThrottle)
-			if err != nil {
-				return nil, err
-			}
-			return req, nil
-		},
-		PeekShouldWriteValueToLSM: db.peekShouldWriteValueToLSM,
-	}
-
-	// lastLoggedHeads tracks what is actually persisted in the manifest,
-	// so it must be primed *only* from the manifest snapshot — not from
-	// the manager-initial heads we discover during replay. Otherwise the
-	// first updateHeadBuckets would short-circuit shouldPersistHead and
-	// the bucket head would never reach the manifest.
-	db.lastLoggedHeads = make(map[uint32]kv.ValuePtr, len(heads))
-	maps.Copy(db.lastLoggedHeads, heads)
-
-	vlog, observed, err := vlogpkg.OpenConsumer(cfg, deps, heads, nil)
-	if err != nil {
-		return err
-	}
-	db.vlog = vlog
-	if db.vheads == nil {
-		db.vheads = make(map[uint32]kv.ValuePtr)
-	}
-	for bucket, head := range observed {
-		if existing, ok := db.vheads[bucket]; ok && !existing.IsZero() {
-			continue
-		}
-		db.vheads[bucket] = head
-	}
-	return nil
-}
-
-// getHeads returns the value-log head snapshot held by the LSM manifest.
-// Empty result means no vlog heads have ever been logged.
-func (db *DB) getHeads() map[uint32]kv.ValuePtr {
-	heads := db.lsm.ValueLogHeadSnapshot()
-	if len(heads) == 0 {
-		return make(map[uint32]kv.ValuePtr)
-	}
-	return heads
-}
-
-// valueLogStatusSnapshot returns the manifest's view of every value-log
-// segment (bucket, fid, valid). Nil when LSM is closed.
-func (db *DB) valueLogStatusSnapshot() map[manifest.ValueLogID]manifest.ValueLogMeta {
-	if db == nil || db.lsm == nil {
-		return nil
-	}
-	return db.lsm.ValueLogStatusSnapshot()
-}
-
-// updateHeadBuckets advances db.vheads / db.lastLoggedHeads after the
-// commit pipeline appended new value-log entries. For each bucket we
-// fetch the live Manager head, panic on regression (impossible unless a
-// concurrent rewind happened), and persist to the manifest only when the
-// head moved past the headLogDelta threshold.
-func (db *DB) updateHeadBuckets(buckets []uint32) {
-	if len(buckets) == 0 {
-		return
-	}
-	if db.vlog == nil {
-		return
-	}
-	if db.vheads == nil {
-		db.vheads = make(map[uint32]kv.ValuePtr)
-	}
-	if db.lastLoggedHeads == nil {
-		db.lastLoggedHeads = make(map[uint32]kv.ValuePtr)
-	}
-	for _, bucket := range buckets {
-		mgr, err := db.vlog.ManagerFor(bucket)
-		if err != nil {
-			continue
-		}
-		head := mgr.Head()
-		if head.IsZero() {
-			continue
-		}
-		next := &kv.ValuePtr{Bucket: bucket, Fid: head.Fid, Offset: head.Offset, Len: head.Len}
-		if prev, ok := db.vheads[bucket]; ok && next.Less(&prev) {
-			utils.CondPanicFunc(true, func() error {
-				return fmt.Errorf("value log head regression: bucket=%d prev=%+v next=%+v", bucket, prev, next)
-			})
-		}
-		db.vheads[bucket] = *next
-		if !db.shouldPersistHead(next, bucket) {
-			continue
-		}
-		if err := db.lsm.LogValueLogHead(next); err != nil {
-			slog.Default().Error("log value log head", "bucket", bucket, "error", err)
-			continue
-		}
-		metrics.DefaultValueLogGCCollector().IncHeadUpdates()
-		db.lastLoggedHeads[bucket] = *next
-	}
-}
-
-// shouldPersistHead gates manifest writes by db.headLogDelta: skip the
-// log entry unless the new head moved at least headLogDelta bytes past
-// the last logged offset (or the FID rolled over).
-func (db *DB) shouldPersistHead(next *kv.ValuePtr, bucket uint32) bool {
-	if db == nil || next == nil || next.IsZero() {
-		return false
-	}
-	if db.headLogDelta == 0 {
-		return true
-	}
-	last := db.lastLoggedHeads[bucket]
-	if last.IsZero() {
-		return true
-	}
-	if next.Fid != last.Fid {
-		return true
-	}
-	if next.Offset < last.Offset {
-		return true
-	}
-	if next.Offset-last.Offset >= db.headLogDelta {
-		return true
-	}
-	return false
-}
-
-// RequestsHaveVlogWork reports whether any entry in any request needs to be
-// offloaded to the value log. When this returns false the commit pipeline can
-// skip db.vlog.write entirely — saving a function call, the heads/touched
-// map allocations, the per-request bucketEntries map, and the rewind closure
-// preparation. This is the metadata-profile fast path: when every value is
-// inline-eligible (below ValueThreshold or pinned inline by a policy), the
-// commit pipeline runs as pure WAL → memtable → SST with no vlog code on the
-// hot path.
-//
-// This call counts a policy decision per entry (via shouldWriteValueToLSM →
-// MatchPolicy). vlog.write subsequently uses peekShouldWriteValueToLSM so the
-// per-entry decision is recorded exactly once across the pipeline.
-//
-// When EnableValueLog is false (the default) this returns false
-// immediately — the metadata-profile deployment never enters vlog code.
-func (db *DB) RequestsHaveVlogWork(reqs []*dbruntime.Request) bool {
-	if db == nil || db.vlog == nil {
-		return false
-	}
-	for _, req := range reqs {
-		if req == nil {
-			continue
-		}
-		for _, e := range req.Entries {
-			if !db.shouldWriteValueToLSM(e) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// peekShouldWriteValueToLSM mirrors shouldWriteValueToLSM but does not
-// record a policy-matcher decision. Used by vlog.write to avoid double-
-// counting the per-entry decision that the commit pipeline's pre-scan
-// already recorded via RequestsHaveVlogWork.
-func (db *DB) peekShouldWriteValueToLSM(e *kv.Entry) bool {
-	if e.IsRangeDelete() {
-		return true
-	}
-	matcher := db.policyMatcher.Load()
-	if matcher != nil {
-		if policy := matcher.PeekPolicy(e); policy != nil {
-			switch policy.Strategy {
-			case kv.AlwaysInline:
-				return true
-			case kv.AlwaysOffload:
-				return false
-			case kv.ThresholdBased:
-				return int64(len(e.Value)) < policy.Threshold
-			}
-		}
-	}
-	return int64(len(e.Value)) < db.opt.ValueThreshold
-}
-
-func (db *DB) shouldWriteValueToLSM(e *kv.Entry) bool {
-	// Range deletes always stay in LSM
-	if e.IsRangeDelete() {
-		return true
-	}
-
-	// Check if we have policy-based separation enabled
-	matcher := db.policyMatcher.Load()
-	if matcher != nil {
-		if policy := matcher.MatchPolicy(e); policy != nil {
-			switch policy.Strategy {
-			case kv.AlwaysInline:
-				return true
-			case kv.AlwaysOffload:
-				return false
-			case kv.ThresholdBased:
-				return int64(len(e.Value)) < policy.Threshold
-			}
-		}
-	}
-
-	// Fall back to global threshold
-	return int64(len(e.Value)) < db.opt.ValueThreshold
-}
-
-// GetValueSeparationPolicyStats returns the current value separation policy statistics.
-// Returns nil if no policies are configured.
-func (db *DB) GetValueSeparationPolicyStats() map[string]int64 {
-	matcher := db.policyMatcher.Load()
-	if matcher == nil {
-		return nil
-	}
-	return matcher.GetStats()
-}
+func (db *DB) CommitLSM() commit.LSM { return db.lsm }
 
 // SetRegionMetrics attaches region metrics recorder so Stats snapshot and expvar
 // include region state counts.
@@ -1422,8 +973,7 @@ func (db *DB) ApplyThrottle(state lsm.WriteThrottleState) {
 }
 
 // sendToWriteCh delegates to the commit Pipeline. Kept as a thin facade
-// so legacy call sites (vlog SendToWriteCh dep, db_bench_test.go) and
-// internal batch helpers (batchSet) keep their current names without
+// so internal batch helpers (batchSet) keep their current names without
 // reaching into runtime/commit directly.
 func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*dbruntime.Request, error) {
 	return db.pipeline.Send(entries, waitOnThrottle)

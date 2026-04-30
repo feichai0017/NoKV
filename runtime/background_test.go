@@ -34,19 +34,14 @@ func TestBackgroundServicesLifecycle(t *testing.T) {
 	services.Init(stats)
 
 	compacterStarts := 0
-	valueLogGCStarts := 0
 	services.Start(BackgroundConfig{
 		StartCompacter: func() {
 			compacterStarts++
-		},
-		StartValueLogGC: func() {
-			valueLogGCStarts++
 		},
 		EnableWALWatchdog: true,
 	})
 
 	require.Equal(t, 1, compacterStarts)
-	require.Equal(t, 1, valueLogGCStarts)
 	require.Equal(t, 1, stats.started)
 	require.Same(t, stats, services.StatsCollector())
 	require.Empty(t, services.WALWatchdogs())

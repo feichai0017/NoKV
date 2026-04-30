@@ -146,11 +146,11 @@ func TestSegmentDoneWritingFileSyncFailure(t *testing.T) {
 }
 
 // TestSegmentWriteSizeMonotonicOutOfOrder reproduces the production race
-// where vlog/manager.reserve() hands out non-overlapping offset ranges
-// without serializing the subsequent store.Write calls. If a Write that
+// where a slab consumer hands out non-overlapping offset ranges without
+// serializing the subsequent store.Write calls. If a Write that
 // landed at a larger offset finishes first, a plain size.Store from a
 // later Write at a smaller offset would shrink the high-water back below
-// an already-published pointer, producing spurious EOF on Read. This
+// already-published data, producing spurious EOF on Read. This
 // test drives that exact pattern under a serializing lock (matching how
 // store.Lock guards Write in production) and asserts the high-water
 // only ever advances.
@@ -167,8 +167,8 @@ func TestSegmentWriteSizeMonotonicOutOfOrder(t *testing.T) {
 	defer func() { _ = s.Close() }()
 
 	// Truncate down to the header high-water so subsequent writes extend
-	// the live region. Mirrors a freshly-rotated active segment where
-	// vlog.Manager.offset starts at the header.
+	// the live region. Mirrors a freshly-rotated active segment where a
+	// consumer cursor starts at the header.
 	require.NoError(t, s.Truncate(int64(segmentTestHeaderSize)))
 
 	const (
@@ -254,8 +254,8 @@ func TestSegmentFreshOpenSizeIsZero(t *testing.T) {
 	require.ErrorIs(t, err, io.EOF, "Read past high-water must EOF even within Capacity")
 }
 
-// TestSegmentLoadSizeFromFile verifies the reload path used by vlog populate
-// for sealed segments: after Open (size = 0) the caller restores the logical
+// TestSegmentLoadSizeFromFile verifies the reload path for sealed segments:
+// after Open (size = 0) the caller restores the logical
 // high-water from the file's on-disk size, which equals the logical extent
 // after DoneWriting / VerifyDir truncation.
 func TestSegmentLoadSizeFromFile(t *testing.T) {

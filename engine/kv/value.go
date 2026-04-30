@@ -5,17 +5,8 @@ import (
 	"unsafe"
 )
 
-const (
-	// ValueLogHeaderSize is the size of the fixed vlog header.
-	// +----------------+------------------+
-	// | keyID(8 bytes) |  baseIV(12 bytes)|
-	// +----------------+------------------+
-	ValueLogHeaderSize  = 20
-	valuePtrEncodedSize = 16
-)
-
-// ValueStruct is the serialized form of a value (inline or pointer) used inside
-// Entry.Value, SST blocks, WAL/value log payloads, etc.
+// ValueStruct is the serialized form of an inline value used inside Entry.Value,
+// SST blocks, and WAL payloads.
 //
 // Binary layout (EncodeValue):
 //
@@ -25,8 +16,9 @@ const (
 //	| 1B   | varint(u64) | raw payload |
 //	+------+-------------+-------------+
 //
-// Meta bits include deletion/value-pointer flags. When Meta has BitValuePointer
-// set, Value bytes contains ValuePtr.Encode() output rather than user data.
+// Meta bits include deletion and legacy value-pointer flags. New writes must
+// store user data inline; BitValuePointer is recognized only so old data can
+// fail explicitly.
 type ValueStruct struct {
 	Meta      byte
 	Value     []byte
@@ -67,64 +59,8 @@ func sizeVarint(x uint64) (n int) {
 	return n
 }
 
-// ValuePtr points to a value stored in the value log and replaces the inline
-// Value when entries exceed ValueThreshold. Its binary encoding is a fixed-size
-// struct copied by value (see Encode/Decode):
-//
-//	+------+--------+-----+--------+
-//	| Len  | Offset | Fid | Bucket |
-//	+------+--------+-----+--------+
-//	| 4B   | 4B     | 4B  | 4B     |
-//	+------+--------+-----+--------+
-type ValuePtr struct {
-	Len    uint32
-	Offset uint32
-	Fid    uint32
-	Bucket uint32
-}
-
-func (p ValuePtr) Less(o *ValuePtr) bool {
-	if o == nil {
-		return false
-	}
-	if p.Bucket != o.Bucket {
-		return p.Bucket < o.Bucket
-	}
-	if p.Fid != o.Fid {
-		return p.Fid < o.Fid
-	}
-	if p.Offset != o.Offset {
-		return p.Offset < o.Offset
-	}
-	return p.Len < o.Len
-}
-
-func (p ValuePtr) IsZero() bool {
-	return p.Fid == 0 && p.Offset == 0 && p.Len == 0 && p.Bucket == 0
-}
-
-// Encode encodes the pointer using fixed big-endian fields to remain portable across architectures.
-func (p ValuePtr) Encode() []byte {
-	b := make([]byte, valuePtrEncodedSize)
-	binary.BigEndian.PutUint32(b[0:4], p.Len)
-	binary.BigEndian.PutUint32(b[4:8], p.Offset)
-	binary.BigEndian.PutUint32(b[8:12], p.Fid)
-	binary.BigEndian.PutUint32(b[12:16], p.Bucket)
-	return b
-}
-
-// Decode decodes the pointer from a fixed big-endian byte slice.
-func (p *ValuePtr) Decode(b []byte) {
-	if len(b) < valuePtrEncodedSize {
-		*p = ValuePtr{}
-		return
-	}
-	p.Len = binary.BigEndian.Uint32(b[0:4])
-	p.Offset = binary.BigEndian.Uint32(b[4:8])
-	p.Fid = binary.BigEndian.Uint32(b[8:12])
-	p.Bucket = binary.BigEndian.Uint32(b[12:16])
-}
-
+// IsValuePtr reports whether an entry carries the removed value-log pointer
+// bit. Callers should reject such entries with ErrUnsupportedValueLog.
 func IsValuePtr(e *Entry) bool {
 	return e.Meta&BitValuePointer > 0
 }

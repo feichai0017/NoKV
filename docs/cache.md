@@ -84,10 +84,10 @@ The only remaining Thermos integration is optional write throttling.
 
 ---
 
-## 6. Interaction with Value Log
+## 6. Interaction with Inline Values
 
-* Keys stored as value pointers (large values) still populate block cache entries for the key/index block. The value payload is read directly from the vlog (`valueLog.read`), so block cache hit rates remain meaningful.
-* Discard stats from flushes can demote cached blocks via `cache.dropBlock`, ensuring obsolete SST data leaves the cache quickly.
+* Values are inline in SST blocks. Block-cache hit rates therefore reflect both key/index locality and value payload locality.
+* Table deletion drops index-cache entries immediately. Data blocks age out through the block-cache admission and eviction policy.
 
 ---
 

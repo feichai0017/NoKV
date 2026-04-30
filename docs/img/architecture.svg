@@ -203,10 +203,10 @@
   </g>
   <g transform="translate(440, 520)">
     <rect x="0" y="0" width="160" height="76" rx="6" fill="white" stroke="#fcd34d" stroke-width="1.2"/>
-    <text x="80" y="22" text-anchor="middle" font-size="13" fill="#b45309" font-weight="700">ValueLog</text>
-    <text x="80" y="40" text-anchor="middle" font-size="10" fill="#d97706">KV separation · buckets</text>
-    <text x="80" y="54" text-anchor="middle" font-size="10" fill="#d97706">parallel GC · discard stats</text>
-    <text x="80" y="68" text-anchor="middle" font-size="9" fill="#92400e" font-style="italic">engine/vlog/</text>
+    <text x="80" y="22" text-anchor="middle" font-size="13" fill="#b45309" font-weight="700">Slab</text>
+    <text x="80" y="40" text-anchor="middle" font-size="10" fill="#d97706">derived sidecar pages</text>
+    <text x="80" y="54" text-anchor="middle" font-size="10" fill="#d97706">append-only mmap</text>
+    <text x="80" y="68" text-anchor="middle" font-size="9" fill="#92400e" font-style="italic">engine/slab/</text>
   </g>
   <g transform="translate(620, 520)">
     <rect x="0" y="0" width="160" height="76" rx="6" fill="white" stroke="#fcd34d" stroke-width="1.2"/>

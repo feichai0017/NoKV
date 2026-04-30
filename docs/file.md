@@ -1,78 +1,37 @@
-# File Abstractions
+# File and mmap primitives
 
-The `engine/file` package encapsulates direct file-system interaction for WAL, SST, and value-log files. It provides portable mmap helpers, allocation primitives, and log file wrappers.
-
----
-
-## 1. Core Types
-
-| Type | Purpose | Key Methods |
-| --- | --- | --- |
-| [`Options`](../engine/file/file.go#L5-L16) | Parameter bag for opening files (FID, path, size). | Used by WAL/vlog managers. |
-| [`MmapFile`](../engine/file/mmap_linux.go#L12-L98) | Cross-platform mmap wrapper. | `OpenMmapFile`, `AppendBuffer`, `Truncate`, `Sync`. |
-| [`LogFile`](../engine/file/vlog.go#L17-L223) | Value-log specific helper built on `MmapFile`. | `Open`, `Write`, `Read`, `DoneWriting`, `Truncate`, `Bootstrap`. |
-
-Darwin-specific builds live alongside (`mmap_darwin.go`, `sstable_darwin.go`) ensuring the package compiles on macOS without manual tuning.
+The `engine/file` package provides low-level file and mmap helpers shared by
+WAL, SST, and slab consumers.
 
 ---
 
-## 2. Mmap Management
+## 1. Components
 
-* `OpenMmapFile` opens or creates a file, optionally extending it to `maxSz`, then mmaps it. The returned `MmapFile` exposes `Data []byte` and the underlying `*os.File` handle.
-* Writes grow the map on demand: `AppendBuffer` checks if the write would exceed the current mapping and calls `Truncate` to expand (doubling up to 1 GiB increments).
-* `Sync` flushes dirty pages (`mmap.Msync`), while `Delete` unmaps, truncates, closes, and removes the file—used when dropping SSTs or value-log segments.
-
-RocksDB relies on custom Env implementations for portability; NoKV keeps the logic in Go, relying on build tags for OS differences.
-
----
-
-## 3. LogFile Semantics
-
-`LogFile` wraps `MmapFile` to simplify value-log operations:
-
-```go
-lf := &file.LogFile{}
-_ = lf.Open(&file.Options{FID: 1, FileName: "00001.vlog", MaxSz: 1<<29})
-var buf bytes.Buffer
-payload, _ := kv.EncodeEntry(&buf, entry)
-_ = lf.Write(offset, payload)
-_ = lf.DoneWriting(offset + uint32(len(payload)))
-```
-
-* `Open` mmaps the file and records current size (guarded to `< 4 GiB`).
-* `Read` validates offsets against both the mmap length and tracked size, preventing partial reads when GC or drop operations shrink the file.
-* Entry encoding uses shared helpers in `kv` (`kv.EncodeEntry` / `kv.EncodeEntryTo`); `LogFile` focuses on write/read/truncate + durability semantics.
-* `DoneWriting` guarantees durability for both data bytes `[0, offset)` and the file metadata (size).
-    * Sequence: It flushes dirty pages (`msync`), truncates the file to `offset`, and performs a file-descriptor level sync (`fsync`) to ensure the new file size is persisted on disk before returning.
-    * Contract: Success implies that after a crash, the file size will not exceed `offset`, and all data prior to `offset` is safe.
-    * After syncing, it reinitializes the mmap and keeps the file open in read-write mode for potential subsequent appends (if logic allows) or prepares it for read-only consumption.
-* `Rewind` (via `vlog.Manager.Rewind`) leverages `LogFile.Truncate` and `Init` to roll back partial batches after errors.
-
----
-
-## 4. SST Helpers
-
-While SSTable builders/readers live under `engine/lsm/table.go`, they rely on `engine/file` helpers to map index/data blocks efficiently. The build tags (`sstable_linux.go`, `sstable_darwin.go`) provide OS-specific tuning for direct I/O hints or mmap flags.
-
----
-
-## 5. Comparison
-
-| Engine | Approach |
+| Type | Role |
 | --- | --- |
-| RocksDB | C++ Env & random-access file wrappers. |
-| Badger | `y.File` abstraction with mmap. |
-| NoKV | Go-native mmap wrappers with explicit log helpers. |
-
-By keeping all filesystem primitives in one package, NoKV ensures WAL, vlog, and SST layers share consistent behaviour (sync semantics, truncation rules) and simplifies testing (`engine/file/mmap_linux_test.go`).
+| `file.Options` | Common open parameters: FID, path, flags, max size, and VFS |
+| `MmapFile` | Portable mmap-backed file with append, sync, truncate, delete, and remap helpers |
+| `vfs.FS` | Filesystem abstraction used by tests for deterministic fault injection |
 
 ---
 
-## 6. Operational Notes
+## 2. Sync and Truncation
 
-* `DoneWriting` provides strong crash-consistency guarantees. Even on filesystems where `ftruncate` metadata persistence is asynchronous, the explicit post-truncate `fsync` ensures the file size is durable upon success.
-* Value-log and WAL segments rely on `DoneWriting`/`Truncate` to seal files; avoid manipulating files externally or mmap metadata may desynchronise.
-* `LogFile` updates cached size internally on `Write`/`Truncate`, so read bounds stay consistent during rewrite/rewind flows.
-* `vfs.SyncDir` is used by strict durability flows to persist directory entry changes (create/rename/remove). For example, strict SST flush calls `SyncDir(workdir)` before manifest publication.
+- `MmapFile.Sync` flushes dirty pages.
+- `MmapFile.Truncate` changes the physical file size and remaps when needed.
+- `MmapFile.Delete` unmaps, closes, and removes the file.
+- Directory sync is handled through `vfs.SyncDir` when callers need rename
+  publication safety.
 
-For more on how these primitives plug into higher layers, see [`docs/wal.md`](wal.md) and [`docs/vlog.md`](vlog.md).
+---
+
+## 3. Current Users
+
+| Layer | Usage |
+| --- | --- |
+| WAL | Segment files and fsync/rotation tests |
+| SST | mmap-backed table files and block reads |
+| slab | append-only sidecar segments for namespace-derived caches |
+
+The file layer intentionally does not encode storage semantics such as WAL
+record headers, SST block formats, or slab consumer payloads.

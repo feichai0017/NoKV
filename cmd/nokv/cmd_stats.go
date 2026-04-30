@@ -6,9 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -66,39 +63,6 @@ func renderStats(w io.Writer, snap stats.StatsSnapshot, asJSON bool) error {
 	_, _ = fmt.Fprintf(w, "Compaction.LastMs      %.2f\n", snap.Compaction.LastDurationMs)
 	_, _ = fmt.Fprintf(w, "Compaction.MaxMs       %.2f\n", snap.Compaction.MaxDurationMs)
 	_, _ = fmt.Fprintf(w, "Compaction.Runs        %d\n", snap.Compaction.Runs)
-	_, _ = fmt.Fprintf(w, "ValueLog.Segments      %d\n", snap.ValueLog.Segments)
-	_, _ = fmt.Fprintf(w, "ValueLog.PendingDelete %d\n", snap.ValueLog.PendingDeletes)
-	_, _ = fmt.Fprintf(w, "ValueLog.DiscardQueue  %d\n", snap.ValueLog.DiscardQueue)
-	if snap.ValueLog.DisabledOrphans > 0 {
-		_, _ = fmt.Fprintf(w, "ValueLog.Warning       EnableValueLog=false but manifest references %d vlog segments — reads on those keys will fail\n", snap.ValueLog.DisabledOrphans)
-	}
-	if snap.ValueLog.GC.GCRuns > 0 || snap.ValueLog.GC.GCScheduled > 0 {
-		_, _ = fmt.Fprintf(w, "ValueLog.GC            runs=%d scheduled=%d active=%d removed=%d skipped=%d throttled=%d rejected=%d parallel=%d\n",
-			snap.ValueLog.GC.GCRuns,
-			snap.ValueLog.GC.GCScheduled,
-			snap.ValueLog.GC.GCActive,
-			snap.ValueLog.GC.SegmentsRemoved,
-			snap.ValueLog.GC.GCSkipped,
-			snap.ValueLog.GC.GCThrottled,
-			snap.ValueLog.GC.GCRejected,
-			snap.ValueLog.GC.GCParallelism,
-		)
-	}
-	if len(snap.ValueLog.Heads) > 0 {
-		buckets := make([]uint32, 0, len(snap.ValueLog.Heads))
-		for bucket := range snap.ValueLog.Heads {
-			buckets = append(buckets, bucket)
-		}
-		slices.Sort(buckets)
-		for _, bucket := range buckets {
-			head := snap.ValueLog.Heads[bucket]
-			if head.IsZero() {
-				continue
-			}
-			_, _ = fmt.Fprintf(w, "ValueLog.Head[%d]       fid=%d offset=%d len=%d\n",
-				bucket, head.Fid, head.Offset, head.Len)
-		}
-	}
 	_, _ = fmt.Fprintf(w, "Write.HotKeyThrottled  %d\n", snap.Write.HotKeyLimited)
 	if snap.Hot.WriteRing != nil {
 		hs := snap.Hot.WriteRing
@@ -212,13 +176,6 @@ func localStatsSnapshot(workDir string, attachMetrics bool) (stats.StatsSnapshot
 		raftmode.ModePreparing,
 		raftmode.ModeSeeded,
 		raftmode.ModeCluster,
-	}
-	// Auto-detect whether the workdir was written with the vlog
-	// Authoritative consumer enabled. Stats reporting must reflect
-	// existing vlog state even though EnableValueLog defaults to false
-	// after the slab-substrate redesign.
-	if _, err := os.Stat(filepath.Join(workDir, "vlog")); err == nil {
-		opts.EnableValueLog = true
 	}
 	db, err := NoKV.Open(opts)
 	if err != nil {

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -19,9 +18,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/vfs"
-	vlogpkg "github.com/feichai0017/NoKV/engine/vlog"
 	"github.com/feichai0017/NoKV/engine/wal"
-	"github.com/feichai0017/NoKV/metrics"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
@@ -94,18 +91,6 @@ func TestAPI(t *testing.T) {
 
 func openTestDB(t testing.TB, opt *Options) *DB {
 	t.Helper()
-	// Tests written before the EnableValueLog opt-in flag landed assumed
-	// vlog was on by default. Auto-enable when the test fixture clearly
-	// expects vlog to exist (explicit ValueLogFileSize, explicit "all
-	// values to vlog" via ValueThreshold=0, or BucketCount > 0). New
-	// tests that want metadata-only behavior must construct Options
-	// without setting any of these fields and leave EnableValueLog at
-	// its default false.
-	if opt != nil && !opt.EnableValueLog {
-		if opt.ValueLogFileSize > 0 || opt.ValueThreshold == 0 || opt.ValueLogBucketCount > 0 {
-			opt.EnableValueLog = true
-		}
-	}
 	db, err := Open(opt)
 	require.NoError(t, err)
 	return db
@@ -293,8 +278,6 @@ func newTestOptions(t *testing.T) *Options {
 	opt.WorkDir = t.TempDir()
 	opt.MemTableSize = 1 << 20
 	opt.SSTableMaxSz = 1 << 20
-	opt.ValueLogFileSize = 1 << 20
-	opt.ValueThreshold = 1 << 20
 	opt.DetectConflicts = true
 	return opt
 }
@@ -526,21 +509,20 @@ func TestGetEntryIsDetachedFromPool(t *testing.T) {
 	require.Equal(t, []byte("value-1"), again.Value)
 }
 
-func TestGetValueLogEntryIsDetached(t *testing.T) {
+func TestGetEntryIsDetached(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		value []byte
 	}{
 		{name: "small", value: bytes.Repeat([]byte("s"), 64)},
-		{name: "large", value: bytes.Repeat([]byte("l"), vlogpkg.SmallCopyThreshold+512)},
+		{name: "large", value: bytes.Repeat([]byte("l"), 8<<10)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			opt := newTestOptions(t)
-			opt.ValueThreshold = 0
 			db := openTestDB(t, opt)
 			defer func() { _ = db.Close() }()
 
-			key := []byte("vlog-detached-" + tc.name)
+			key := []byte("detached-" + tc.name)
 			require.NoError(t, db.Set(key, tc.value))
 
 			entry, err := db.Get(key)
@@ -577,21 +559,20 @@ func TestDBIteratorSeekAndValueCopy(t *testing.T) {
 		require.Equal(t, []byte("vb"), val)
 	})
 
-	t.Run("value-pointer", func(t *testing.T) {
+	t.Run("large-inline", func(t *testing.T) {
 		opt := newTestOptions(t)
-		opt.ValueThreshold = 0
 		db := openTestDB(t, opt)
 		defer func() { _ = db.Close() }()
 
 		value := bytes.Repeat([]byte("p"), 64)
 		require.NoError(t, db.Set([]byte("k"), value))
 
-		it := db.NewIterator(&index.Options{IsAsc: true, OnlyUseKey: true})
+		it := db.NewIterator(&index.Options{IsAsc: true})
 		defer func() { _ = it.Close() }()
 		it.Seek([]byte("k"))
 		require.True(t, it.Valid())
 		item := it.Item()
-		require.True(t, kv.IsValuePtr(item.Entry()))
+		require.False(t, kv.IsValuePtr(item.Entry()))
 		val, err := item.(*iterpkg.Item).ValueCopy(nil)
 		require.NoError(t, err)
 		require.Equal(t, value, val)
@@ -712,7 +693,6 @@ func TestRequestLoadEntriesCopiesSlice(t *testing.T) {
 	req.Reset()
 	defer func() {
 		req.Entries = nil
-		req.Ptrs = nil
 		dbruntime.RequestPool.Put(req)
 	}()
 
@@ -736,13 +716,11 @@ func TestRequestLoadEntriesCopiesSlice(t *testing.T) {
 func TestDirectoryLockPreventsConcurrentOpen(t *testing.T) {
 	dir := t.TempDir()
 	opt := &Options{
-		WorkDir:          dir,
-		ValueThreshold:   1 << 10,
-		MemTableSize:     1 << 12,
-		SSTableMaxSz:     1 << 20,
-		ValueLogFileSize: 1 << 18,
-		MaxBatchCount:    16,
-		MaxBatchSize:     1 << 20,
+		WorkDir:       dir,
+		MemTableSize:  1 << 12,
+		SSTableMaxSz:  1 << 20,
+		MaxBatchCount: 16,
+		MaxBatchSize:  1 << 20,
 	}
 
 	db := openTestDB(t, opt)
@@ -809,7 +787,7 @@ func TestWriteHotKeyThrottleBlocksDB(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------- //
-// Recovery and WAL/value log tests (merged from db_recovery_test.go)
+// Recovery and WAL tests (merged from db_recovery_test.go)
 
 func logRecoveryMetric(t *testing.T, name string, payload any) {
 	if os.Getenv("RECOVERY_TRACE_METRICS") == "" {
@@ -824,136 +802,14 @@ func logRecoveryMetric(t *testing.T, name string, payload any) {
 	t.Logf("RECOVERY_METRIC %s=%s", name, data)
 }
 
-func TestRecoveryRemovesStaleValueLogSegment(t *testing.T) {
-	dir := t.TempDir()
-	opt := &Options{
-		WorkDir:             dir,
-		ValueThreshold:      0,
-		MemTableSize:        1 << 12,
-		SSTableMaxSz:        1 << 20,
-		ValueLogFileSize:    1 << 14,
-		ValueLogBucketCount: 1,
-		MaxBatchCount:       100,
-		MaxBatchSize:        1 << 20,
-	}
-
-	db := openTestDB(t, opt)
-
-	for i := range 48 {
-		val := make([]byte, 512)
-		key := fmt.Appendf(nil, "key-%03d", i)
-		require.NoError(t, db.Set(key, val))
-	}
-	fids := db.vlog.Managers()[0].ListFIDs()
-	require.GreaterOrEqual(t, len(fids), 2)
-	staleFID := fids[0]
-
-	require.NoError(t, db.lsm.LogValueLogDelete(0, staleFID))
-
-	stalePath := filepath.Join(dir, "vlog", "bucket-000", fmt.Sprintf("%05d.vlog", staleFID))
-	if _, err := os.Stat(stalePath); err != nil {
-		t.Fatalf("expected stale value log file %s to exist: %v", stalePath, err)
-	}
-
-	require.NoError(t, db.Close())
-
-	db2 := openTestDB(t, opt)
-	defer func() { _ = db2.Close() }()
-
-	_, err := os.Stat(stalePath)
-	require.Error(t, err)
-	removed := os.IsNotExist(err)
-	require.True(t, removed, "expected stale value log file to be deleted on recovery")
-
-	status := db2.valueLogStatusSnapshot()
-	meta, ok := status[manifest.ValueLogID{Bucket: 0, FileID: staleFID}]
-	if ok {
-		require.False(t, meta.Valid)
-	}
-	logRecoveryMetric(t, "value_log_gc", map[string]any{
-		"stale_fid":         staleFID,
-		"stale_path":        stalePath,
-		"file_removed":      removed,
-		"status_has_entry":  ok,
-		"status_valid_flag": meta.Valid,
-		"status_len":        len(status),
-	})
-}
-
-func TestRecoveryRemovesOrphanValueLogSegment(t *testing.T) {
-	dir := t.TempDir()
-	opt := &Options{
-		WorkDir:             dir,
-		ValueThreshold:      0,
-		MemTableSize:        1 << 12,
-		SSTableMaxSz:        1 << 20,
-		ValueLogFileSize:    1 << 14,
-		ValueLogBucketCount: 1,
-		MaxBatchCount:       100,
-		MaxBatchSize:        1 << 20,
-	}
-
-	db := openTestDB(t, opt)
-	key := []byte("orphan-key")
-	val := make([]byte, 512)
-	require.NoError(t, db.Set(key, val))
-
-	headPtr := db.vlog.Managers()[0].Head()
-	require.False(t, headPtr.IsZero(), "expected value log head to be initialized")
-	headCopy := headPtr
-	require.NoError(t, db.lsm.LogValueLogHead(&headCopy))
-	before := db.valueLogStatusSnapshot()
-	beforeInfo := make(map[manifest.ValueLogID]bool, len(before))
-	for id, meta := range before {
-		beforeInfo[id] = meta.Valid
-	}
-	require.NoError(t, db.Close())
-
-	orphanFID := uint32(123)
-	orphanPath := filepath.Join(dir, "vlog", "bucket-000", fmt.Sprintf("%05d.vlog", orphanFID))
-	require.NoError(t, os.WriteFile(orphanPath, []byte("orphan"), 0o666))
-
-	db2 := openTestDB(t, opt)
-	defer func() { _ = db2.Close() }()
-
-	heads := db2.getHeads()
-	headMeta, hasHead := heads[0]
-	status := db2.valueLogStatusSnapshot()
-	statusInfo := make(map[manifest.ValueLogID]bool, len(status))
-	for id, meta := range status {
-		statusInfo[id] = meta.Valid
-	}
-	remainingFIDs := db2.vlog.Managers()[0].ListFIDs()
-
-	_, err := os.Stat(orphanPath)
-	require.Error(t, err)
-	require.True(t, os.IsNotExist(err), "expected orphan value log file to be deleted on recovery")
-
-	for _, fid := range remainingFIDs {
-		require.NotEqual(t, orphanFID, fid)
-	}
-
-	logRecoveryMetric(t, "value_log_orphan_cleanup", map[string]any{
-		"orphan_fid":        orphanFID,
-		"orphan_path":       orphanPath,
-		"pre_status_valid":  beforeInfo,
-		"post_status_valid": statusInfo,
-		"head_meta":         headMeta,
-		"head_present":      hasHead,
-		"fids_remaining":    remainingFIDs,
-	})
-}
-
 func TestRecoveryFailsOnMissingSST(t *testing.T) {
 	dir := t.TempDir()
 	opt := &Options{
-		WorkDir:          dir,
-		ValueThreshold:   1 << 20,
-		MemTableSize:     1 << 10,
-		SSTableMaxSz:     1 << 20,
-		ValueLogFileSize: 1 << 20,
-		MaxBatchCount:    100,
-		MaxBatchSize:     1 << 20,
+		WorkDir:       dir,
+		MemTableSize:  1 << 10,
+		SSTableMaxSz:  1 << 20,
+		MaxBatchCount: 100,
+		MaxBatchSize:  1 << 20,
 	}
 
 	db := openTestDB(t, opt)
@@ -1006,13 +862,11 @@ func TestRecoveryFailsOnMissingSST(t *testing.T) {
 func TestRecoveryFailsOnCorruptSST(t *testing.T) {
 	dir := t.TempDir()
 	opt := &Options{
-		WorkDir:          dir,
-		ValueThreshold:   1 << 20,
-		MemTableSize:     1 << 10,
-		SSTableMaxSz:     1 << 20,
-		ValueLogFileSize: 1 << 20,
-		MaxBatchCount:    100,
-		MaxBatchSize:     1 << 20,
+		WorkDir:       dir,
+		MemTableSize:  1 << 10,
+		SSTableMaxSz:  1 << 20,
+		MaxBatchCount: 100,
+		MaxBatchSize:  1 << 20,
 	}
 
 	db := openTestDB(t, opt)
@@ -1066,13 +920,11 @@ func TestRecoveryFailsOnCorruptSST(t *testing.T) {
 func TestRecoveryManifestRewriteCrash(t *testing.T) {
 	dir := t.TempDir()
 	opt := &Options{
-		WorkDir:          dir,
-		ValueThreshold:   1 << 20,
-		MemTableSize:     1 << 10,
-		SSTableMaxSz:     1 << 20,
-		ValueLogFileSize: 1 << 20,
-		MaxBatchCount:    100,
-		MaxBatchSize:     1 << 20,
+		WorkDir:       dir,
+		MemTableSize:  1 << 10,
+		SSTableMaxSz:  1 << 20,
+		MaxBatchCount: 100,
+		MaxBatchSize:  1 << 20,
 	}
 
 	db := openTestDB(t, opt)
@@ -1190,14 +1042,11 @@ func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
 func TestRecoveryWALReplayRestoresData(t *testing.T) {
 	dir := t.TempDir()
 	opt := &Options{
-		WorkDir:             dir,
-		ValueThreshold:      1 << 20,
-		MemTableSize:        1 << 16,
-		SSTableMaxSz:        1 << 20,
-		ValueLogFileSize:    1 << 20,
-		ValueLogBucketCount: 1,
-		MaxBatchCount:       100,
-		MaxBatchSize:        1 << 20,
+		WorkDir:       dir,
+		MemTableSize:  1 << 16,
+		SSTableMaxSz:  1 << 20,
+		MaxBatchCount: 100,
+		MaxBatchSize:  1 << 20,
 	}
 
 	db := openTestDB(t, opt)
@@ -1205,7 +1054,7 @@ func TestRecoveryWALReplayRestoresData(t *testing.T) {
 	val := []byte("wal-crash-value")
 	require.NoError(t, db.Set(key, val))
 
-	// Simulate crash: close WAL/ValueLog handles without flushing LSM.
+	// Simulate crash: close WAL handles without flushing LSM.
 	drSimulateCrash(t, db)
 
 	db2 := openTestDB(t, opt)
@@ -1225,14 +1074,11 @@ func TestRecoveryWALReplayRestoresData(t *testing.T) {
 func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 	root := t.TempDir()
 	opt := &Options{
-		WorkDir:             root,
-		ValueThreshold:      1 << 20,
-		MemTableSize:        1 << 12,
-		SSTableMaxSz:        1 << 20,
-		ValueLogFileSize:    1 << 20,
-		ValueLogBucketCount: 1,
-		MaxBatchCount:       32,
-		MaxBatchSize:        1 << 20,
+		WorkDir:       root,
+		MemTableSize:  1 << 12,
+		SSTableMaxSz:  1 << 20,
+		MaxBatchCount: 32,
+		MaxBatchSize:  1 << 20,
 	}
 	localMeta, err := localmeta.OpenLocalStore(root, nil)
 	require.NoError(t, err)
@@ -1294,34 +1140,6 @@ func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 	})
 }
 
-func TestRecoverySkipsValueLogReplay(t *testing.T) {
-	dir := t.TempDir()
-	opt := NewDefaultOptions()
-	opt.WorkDir = dir
-	opt.ValueLogFileSize = 1 << 16
-	opt.ValueThreshold = 1 << 20
-	opt.ValueLogBucketCount = 1
-	opt.EnableWALWatchdog = false
-	opt.ValueLogGCInterval = 0
-
-	db := openTestDB(t, opt)
-
-	userKey := []byte("vlog-replay-key")
-	internalKey := kv.InternalKey(kv.CFDefault, userKey, math.MaxUint64)
-	entry := kv.NewEntry(internalKey, []byte("payload"))
-	_, err := db.vlog.Managers()[0].AppendEntry(entry)
-	require.NoError(t, err)
-	entry.DecrRef()
-	require.NoError(t, db.vlog.Managers()[0].SyncActive())
-	require.NoError(t, db.Close())
-
-	db2 := openTestDB(t, opt)
-	defer func() { _ = db2.Close() }()
-
-	_, err = db2.Get(userKey)
-	require.ErrorIs(t, err, utils.ErrKeyNotFound)
-}
-
 func TestWriteHotKeyThrottleBlocksSet(t *testing.T) {
 	clearDir()
 	prev := opt.WriteHotKeyLimit
@@ -1359,7 +1177,6 @@ func TestApplyRequestsFailureIndex(t *testing.T) {
 	local := NewDefaultOptions()
 	local.WorkDir = t.TempDir()
 	local.EnableWALWatchdog = false
-	local.ValueLogGCInterval = 0
 	local.WriteBatchWait = 0
 
 	db := openTestDB(t, local)
@@ -1373,11 +1190,9 @@ func TestApplyRequestsFailureIndex(t *testing.T) {
 	reqs := []*dbruntime.Request{
 		{
 			Entries: []*kv.Entry{good},
-			Ptrs:    []kv.ValuePtr{{}},
 		},
 		{
 			Entries: []*kv.Entry{bad},
-			Ptrs:    []kv.ValuePtr{{}},
 		},
 	}
 
@@ -1395,9 +1210,7 @@ func TestApplyRequestsInlineRequestWithoutPtrs(t *testing.T) {
 	local := NewDefaultOptions()
 	local.WorkDir = t.TempDir()
 	local.EnableWALWatchdog = false
-	local.ValueLogGCInterval = 0
 	local.WriteBatchWait = 0
-	local.ValueThreshold = 1 << 20
 
 	db := openTestDB(t, local)
 	defer func() { _ = db.Close() }()
@@ -1425,9 +1238,7 @@ func TestApplyRequestsCoalescesCommitBatchIntoOneLSMRecord(t *testing.T) {
 	local := NewDefaultOptions()
 	local.WorkDir = t.TempDir()
 	local.EnableWALWatchdog = false
-	local.ValueLogGCInterval = 0
 	local.WriteBatchWait = 0
-	local.ValueThreshold = 1 << 20
 
 	db := openTestDB(t, local)
 	defer func() { _ = db.Close() }()
@@ -1608,11 +1419,6 @@ func drForEachMemTableEngine(t *testing.T, fn func(t *testing.T, engine MemTable
 func drSimulateCrash(t *testing.T, db *DB) {
 	t.Helper()
 	_ = db.Info().Close()
-	for _, mgr := range db.vlog.Managers() {
-		if mgr != nil {
-			_ = mgr.Close()
-		}
-	}
 	// Close each WAL Manager but do not nil the slot — commit processor
 	// goroutines still hold the pointer (cached at startup) and the race
 	// detector flags the slot rewrite even though the goroutine never
@@ -2089,8 +1895,6 @@ func TestRecoveryWALReplayMixedBatchDeleteAndRangeDelete(t *testing.T) {
 		opt.MemTableEngine = engine
 		opt.MemTableSize = 1 << 16
 		opt.SSTableMaxSz = 1 << 20
-		opt.ValueLogFileSize = 1 << 20
-		opt.ValueThreshold = 1 << 20
 
 		db := openTestDB(t, opt)
 		require.NoError(t, db.SetBatch([]BatchSetItem{
@@ -2186,39 +1990,6 @@ func TestRecoveryWALReplayTruncatedTailBatchIsNotPartiallyApplied(t *testing.T) 
 			}
 		}
 		require.True(t, found == 0 || found == 3, "batch replay must be atomic, found=%d", found)
-	})
-}
-
-func TestRecoveryVlogPointerRoundTripAfterReopen(t *testing.T) {
-	drForEachMemTableEngine(t, func(t *testing.T, engine MemTableEngine) {
-		dir := t.TempDir()
-		opt := newTestOptions(t)
-		opt.WorkDir = dir
-		opt.MemTableEngine = engine
-		opt.ValueThreshold = 0
-		opt.ValueLogFileSize = 1 << 16
-
-		v1 := bytes.Repeat([]byte("A"), 1024)
-		v2 := bytes.Repeat([]byte("B"), 1536)
-		db := openTestDB(t, opt)
-		require.NoError(t, db.Set([]byte("vp-1"), v1))
-		require.NoError(t, db.Set([]byte("vp-2"), v2))
-		require.NoError(t, db.Close())
-
-		db = openTestDB(t, opt)
-		defer func() { _ = db.Close() }()
-		drRequireValue(t, db, []byte("vp-1"), v1)
-		drRequireValue(t, db, []byte("vp-2"), v2)
-
-		it := db.NewIterator(&index.Options{IsAsc: true, OnlyUseKey: true})
-		defer func() { _ = it.Close() }()
-		it.Seek([]byte("vp-1"))
-		require.True(t, it.Valid())
-		item, ok := it.Item().(*iterpkg.Item)
-		require.True(t, ok)
-		val, err := item.ValueCopy(nil)
-		require.NoError(t, err)
-		require.Equal(t, v1, val)
 	})
 }
 
@@ -2381,82 +2152,6 @@ func TestConcurrentReadWriteFlushCompactionStress(t *testing.T) {
 	})
 }
 
-func TestValueSeparationPolicyDecisionLogic(t *testing.T) {
-	var err error
-
-	workDir, err := os.MkdirTemp("", "nokv-value-separation-test")
-	require.NoError(t, err)
-	defer func() {
-		err = os.RemoveAll(workDir)
-		require.NoError(t, err)
-	}()
-
-	inlinePolicy, err := kv.NewAlwaysInlinePolicy(kv.CFDefault, "meta_")
-	require.NoError(t, err)
-	require.NotNil(t, inlinePolicy)
-	offloadPolicy, err := kv.NewAlwaysOffloadPolicy(kv.CFDefault, "large_")
-	require.NoError(t, err)
-	require.NotNil(t, offloadPolicy)
-	thresholdPolicy, err := kv.NewThresholdBasedPolicy(kv.CFDefault, "medium_", 32)
-	require.NoError(t, err)
-	require.NotNil(t, thresholdPolicy)
-	policies := []*kv.ValueSeparationPolicy{
-		inlinePolicy,
-		offloadPolicy,
-		thresholdPolicy,
-	}
-	opt := &Options{
-		WorkDir:                 workDir,
-		MaxBatchCount:           3,
-		MaxBatchSize:            1024,
-		ValueThreshold:          32, // Global fallback threshold
-		ValueSeparationPolicies: policies,
-	}
-
-	db, err := Open(opt)
-	require.NoError(t, err)
-	require.NotNil(t, db)
-	defer func() {
-		err = db.Close()
-		require.NoError(t, err)
-	}()
-
-	largeValue := make([]byte, 128) // Larger than both thresholds
-	for i := range largeValue {
-		largeValue[i] = byte(i % 256)
-	}
-
-	// Test meta_ prefix (should be inlined regardless of size)
-	entry := kv.NewInternalEntry(kv.CFDefault, []byte("meta_test"), nonTxnMaxVersion, largeValue, 0, 0)
-	require.True(t, db.shouldWriteValueToLSM(entry))
-	entry.DecrRef()
-
-	// Test large_ prefix (should be offloaded regardless of size)
-	entry = kv.NewInternalEntry(kv.CFDefault, []byte("large_test"), nonTxnMaxVersion, []byte("small"), 0, 0)
-	require.False(t, db.shouldWriteValueToLSM(entry))
-	entry.DecrRef()
-
-	// Test medium_ prefix with small value (should be inlined due to threshold)
-	entry = kv.NewInternalEntry(kv.CFDefault, []byte("medium_test1"), nonTxnMaxVersion, []byte("small"), 0, 0)
-	require.True(t, db.shouldWriteValueToLSM(entry))
-	entry.DecrRef()
-
-	// Test medium_ prefix with large value (should be offloaded due to threshold)
-	entry = kv.NewInternalEntry(kv.CFDefault, []byte("medium_test2"), nonTxnMaxVersion, largeValue, 0, 0)
-	require.False(t, db.shouldWriteValueToLSM(entry))
-	entry.DecrRef()
-
-	// Test unmatched key with small value (should use global threshold)
-	entry = kv.NewInternalEntry(kv.CFDefault, []byte("regular_test1"), nonTxnMaxVersion, []byte("small"), 0, 0)
-	require.True(t, db.shouldWriteValueToLSM(entry))
-	entry.DecrRef()
-
-	// Test unmatched key with large value (should use global threshold)
-	entry = kv.NewInternalEntry(kv.CFDefault, []byte("regular_test2"), nonTxnMaxVersion, largeValue, 0, 0)
-	require.False(t, db.shouldWriteValueToLSM(entry))
-	entry.DecrRef()
-}
-
 // TestSyncPipelineWALConsistency opens two DBs (one with SyncPipeline off, one
 // with SyncPipeline on), writes the same keys, closes them, then compares the
 // raw WAL file bytes to make sure they are identical.
@@ -2482,9 +2177,7 @@ func TestSyncPipelineWALConsistency(t *testing.T) {
 		opts.SyncWrites = true
 		opts.SyncPipeline = pipeline
 		opts.EnableWALWatchdog = false
-		opts.ValueLogGCInterval = 0
 		opts.ManifestSync = false
-		opts.ValueThreshold = 1 << 20
 		opts.WriteBatchWait = 0
 
 		db := openTestDB(t, opts)
@@ -2612,7 +2305,6 @@ func TestDBWrapperNilAndOpenGuards(t *testing.T) {
 
 	require.NotNil(t, db.ExternalSSTOptions())
 	require.NotNil(t, db.RaftLog())
-	require.Nil(t, db.GetValueSeparationPolicyStats())
 
 	_, err = db.MaterializeInternalEntry(nil)
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
@@ -2635,7 +2327,6 @@ func TestRaftLogUsesShardedWAL(t *testing.T) {
 	opt := NewDefaultOptions()
 	opt.WorkDir = dir
 	opt.EnableWALWatchdog = false
-	opt.ValueLogGCInterval = 0
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
 	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
@@ -2653,95 +2344,21 @@ func TestRaftLogUsesShardedWAL(t *testing.T) {
 	require.NotEmpty(t, matches)
 }
 
-// TestDBValueLogDisabledByDefault locks the new opt-in semantics: with
-// EnableValueLog left at its default false, NoKV opens without spinning
-// up vlog managers, never creates the WorkDir/vlog directory, and
-// inlines every value regardless of size. This is the metadata-first
-// configuration the slab-substrate redesign promises.
-func TestDBValueLogDisabledByDefault(t *testing.T) {
-	dir := t.TempDir()
-	cfg := NewDefaultOptions()
-	cfg.WorkDir = dir
-	require.False(t, cfg.EnableValueLog, "NewDefaultOptions must default EnableValueLog to false")
-
-	db, err := Open(cfg)
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	require.Nil(t, db.vlog, "vlog must not be initialized when EnableValueLog is false")
-
-	// A value larger than ValueThreshold would otherwise be sent to vlog;
-	// with vlog disabled the engine inlines it.
-	bigValue := make([]byte, 8<<10) // 8 KiB > default 2 KiB threshold
-	for i := range bigValue {
-		bigValue[i] = byte(i & 0xff)
-	}
-	require.NoError(t, db.Set([]byte("big"), bigValue))
-	got, err := db.Get([]byte("big"))
-	require.NoError(t, err)
-	require.Equal(t, bigValue, got.Value)
-
-	// vlog directory must not exist on disk.
-	_, err = os.Stat(filepath.Join(dir, "vlog"))
-	require.ErrorIs(t, err, os.ErrNotExist, "vlog dir must not be created when EnableValueLog is false")
-
-	// RunValueLogGC must be a no-op rather than panicking.
-	require.NoError(t, db.RunValueLogGC(0.5))
-}
-
-// TestDBValueLogEnabledRoundTrip verifies that explicitly enabling vlog
-// still produces a working value-separation path: a >threshold value is
-// stored and read back identically, and the vlog directory exists on
-// disk. This is the migration-friendly opt-in flow.
-func TestDBValueLogEnabledRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	cfg := NewDefaultOptions()
-	cfg.WorkDir = dir
-	cfg.EnableValueLog = true
-	cfg.ValueThreshold = 64
-	cfg.ValueLogFileSize = 1 << 20
-	cfg.ValueLogBucketCount = 1
-
-	db, err := Open(cfg)
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	require.NotNil(t, db.vlog, "vlog must be initialized when EnableValueLog is true")
-
-	bigValue := make([]byte, 4<<10)
-	for i := range bigValue {
-		bigValue[i] = byte(i)
-	}
-	require.NoError(t, db.Set([]byte("big-vlog"), bigValue))
-	got, err := db.Get([]byte("big-vlog"))
-	require.NoError(t, err)
-	require.Equal(t, bigValue, got.Value)
-
-	_, err = os.Stat(filepath.Join(dir, "vlog"))
-	require.NoError(t, err, "vlog dir must exist when EnableValueLog is true")
-}
-
-// opt is the shared test-fixture Options used by the legacy vlog tests
-// and by stats_test.go / iterator_test.go / db_test.go fast-path tests.
+// opt is the shared test-fixture Options used by db_test.go fast-path tests.
 // Tests that mutate it must restore the previous value in a defer.
 var opt = &Options{
-	WorkDir:             "./work_test",
-	SSTableMaxSz:        1 << 10,
-	MemTableSize:        1 << 10,
-	EnableValueLog:      true,
-	ValueLogFileSize:    1 << 20,
-	ValueThreshold:      0,
-	ValueLogBucketCount: 1,
-	MaxBatchCount:       10,
-	MaxBatchSize:        1 << 20,
-	ThermosEnabled:      true,
-	ThermosBits:         8,
-	ThermosTopK:         8,
+	WorkDir:        "./work_test",
+	SSTableMaxSz:   1 << 10,
+	MemTableSize:   1 << 10,
+	MaxBatchCount:  10,
+	MaxBatchSize:   1 << 20,
+	ThermosEnabled: true,
+	ThermosBits:    8,
+	ThermosTopK:    8,
 }
 
 // clearDir wipes the shared opt.WorkDir between tests and re-points it
-// at a fresh temp directory. Used by stats_test.go and iterator_test.go
-// in addition to the vlog tests below.
+// at a fresh temp directory.
 func clearDir() {
 	if opt == nil {
 		return
@@ -2749,299 +2366,11 @@ func clearDir() {
 	if opt.WorkDir != "" {
 		_ = os.RemoveAll(opt.WorkDir)
 	}
-	dir, err := os.MkdirTemp("", "nokv-vlog-test-")
+	dir, err := os.MkdirTemp("", "nokv-test-")
 	if err != nil {
 		panic(err)
 	}
 	opt.WorkDir = dir
-}
-
-func newPointerEntry(userKey, value []byte) *kv.Entry {
-	return kv.NewInternalEntry(kv.CFDefault, userKey, nonTxnMaxVersion, value, kv.BitValuePointer, 0)
-}
-
-func keyForBucket(t *testing.T, bucket int, buckets int) []byte {
-	t.Helper()
-	for i := range 10000 {
-		userKey := fmt.Appendf(nil, "gc-bucket-key-%d", i)
-		internal := kv.InternalKey(kv.CFDefault, userKey, 1)
-		if kv.ValueLogBucket(internal, uint32(buckets)) == uint32(bucket) {
-			return userKey
-		}
-	}
-	t.Fatalf("unable to find key for bucket %d", bucket)
-	return nil
-}
-
-func newRandEntry(sz int) *kv.Entry {
-	v := make([]byte, sz)
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	_, _ = rng.Read(v[:rng.Intn(sz)])
-	key := fmt.Appendf(nil, "vlog-rand-%d-%d", time.Now().UnixNano(), rng.Uint64())
-	e := kv.NewEntry(key, v)
-	e.ExpiresAt = uint64(time.Now().Add(12 * time.Hour).Unix())
-	return e
-}
-
-func getItemValue(t *testing.T, item *kv.Entry) (val []byte) {
-	t.Helper()
-	if item == nil {
-		return nil
-	}
-	var v []byte
-	v = append(v, item.Value...)
-	if v == nil {
-		return nil
-	}
-	return v
-}
-
-func TestVlogBase(t *testing.T) {
-	clearDir()
-	db := openTestDB(t, opt)
-	defer func() { _ = db.Close() }()
-	log := db.vlog
-	const val1 = "sampleval012345678901234567890123"
-	const val2 = "samplevalb012345678901234567890123"
-	require.True(t, int64(len(val1)) >= db.opt.ValueThreshold)
-
-	e1 := newPointerEntry([]byte("samplekey"), []byte(val1))
-	e2 := newPointerEntry([]byte("samplekeyb"), []byte(val2))
-
-	b := new(dbruntime.Request)
-	b.Entries = []*kv.Entry{e1, e2}
-
-	require.NoError(t, log.Write([]*dbruntime.Request{b}))
-	e1.DecrRef()
-	e2.DecrRef()
-	require.Len(t, b.Ptrs, 2)
-	t.Logf("Pointer written: %+v %+v\n", b.Ptrs[0], b.Ptrs[1])
-
-	mgr1, err := log.ManagerFor(b.Ptrs[0].Bucket)
-	require.NoError(t, err)
-	mgr2, err := log.ManagerFor(b.Ptrs[1].Bucket)
-	require.NoError(t, err)
-	payload1, unlock1, err1 := mgr1.Read(&b.Ptrs[0])
-	payload2, unlock2, err2 := mgr2.Read(&b.Ptrs[1])
-	require.NoError(t, err1)
-	require.NoError(t, err2)
-	if unlock1 != nil {
-		defer unlock1()
-	}
-	if unlock2 != nil {
-		defer unlock2()
-	}
-	entry1, err := kv.DecodeEntry(payload1)
-	require.NoError(t, err)
-	defer entry1.DecrRef()
-	entry2, err := kv.DecodeEntry(payload2)
-	require.NoError(t, err)
-	defer entry2.DecrRef()
-
-	_, key1, ts1, ok := kv.SplitInternalKey(entry1.Key)
-	require.True(t, ok)
-	require.Equal(t, []byte("samplekey"), key1)
-	require.Equal(t, nonTxnMaxVersion, ts1)
-	require.Equal(t, []byte(val1), entry1.Value)
-	require.Equal(t, kv.BitValuePointer, entry1.Meta)
-
-	_, key2, ts2, ok := kv.SplitInternalKey(entry2.Key)
-	require.True(t, ok)
-	require.Equal(t, []byte("samplekeyb"), key2)
-	require.Equal(t, nonTxnMaxVersion, ts2)
-	require.Equal(t, []byte(val2), entry2.Value)
-	require.Equal(t, kv.BitValuePointer, entry2.Meta)
-}
-
-func TestVersionedEntryValueLogPointer(t *testing.T) {
-	clearDir()
-	prevThreshold := opt.ValueThreshold
-	prevFileSize := opt.ValueLogFileSize
-	opt.ValueThreshold = 0
-	opt.ValueLogFileSize = 1 << 20
-	defer func() {
-		opt.ValueThreshold = prevThreshold
-		opt.ValueLogFileSize = prevFileSize
-	}()
-
-	db := openTestDB(t, opt)
-	defer func() { _ = db.Close() }()
-
-	key := []byte("versioned-vlog")
-	version := uint64(7)
-	value := bytes.Repeat([]byte("v"), 64)
-
-	applyVersionedEntryForTest(t, db, kv.CFDefault, key, version, value, 0)
-	entry, err := db.GetInternalEntry(kv.CFDefault, key, version)
-	require.NoError(t, err)
-	require.Equal(t, kv.CFDefault, entry.CF)
-	_, userKey, _, ok := kv.SplitInternalKey(entry.Key)
-	require.True(t, ok)
-	require.Equal(t, key, userKey)
-	require.Equal(t, version, kv.Timestamp(entry.Key))
-	require.Equal(t, value, entry.Value)
-	entry.DecrRef()
-}
-
-func TestVlogSyncWritesCoversAllSegments(t *testing.T) {
-	clearDir()
-
-	prevSync := opt.SyncWrites
-	prevThreshold := opt.ValueThreshold
-	prevFileSize := opt.ValueLogFileSize
-	opt.SyncWrites = true
-	opt.ValueThreshold = 0
-	opt.ValueLogFileSize = 256
-	defer func() {
-		opt.SyncWrites = prevSync
-		opt.ValueThreshold = prevThreshold
-		opt.ValueLogFileSize = prevFileSize
-	}()
-
-	db := openTestDB(t, opt)
-	defer func() { _ = db.Close() }()
-	log := db.vlog
-
-	payload := bytes.Repeat([]byte("v"), 180)
-	e1 := newPointerEntry([]byte("sync-key-1"), payload)
-	e2 := newPointerEntry([]byte("sync-key-2"), payload)
-	req := &dbruntime.Request{Entries: []*kv.Entry{e1, e2}}
-
-	require.NoError(t, log.Write([]*dbruntime.Request{req}))
-	e1.DecrRef()
-	e2.DecrRef()
-
-	if len(req.Ptrs) != 2 {
-		t.Fatalf("expected 2 value pointers, got %d", len(req.Ptrs))
-	}
-	if req.Ptrs[0].Fid == req.Ptrs[1].Fid && req.Ptrs[0].Bucket == req.Ptrs[1].Bucket {
-		t.Fatalf("expected pointers in different vlog segments or buckets, got fid=%d bucket=%d", req.Ptrs[0].Fid, req.Ptrs[0].Bucket)
-	}
-}
-
-func TestValueGC(t *testing.T) {
-	clearDir()
-	opt.ValueLogFileSize = 1 << 20
-	origCompactors := opt.NumCompactors
-	origMemTableSize := opt.MemTableSize
-	origSSTableMaxSz := opt.SSTableMaxSz
-	opt.NumCompactors = 0
-	opt.MemTableSize = 8 << 20
-	opt.SSTableMaxSz = 8 << 20
-	db := openTestDB(t, opt)
-	defer func() { _ = db.Close() }()
-	defer func() {
-		opt.NumCompactors = origCompactors
-		opt.MemTableSize = origMemTableSize
-		opt.SSTableMaxSz = origSSTableMaxSz
-	}()
-	sz := 32 << 10
-	kvList := make([]*kv.Entry, 0, 100)
-	defer func() {
-		for _, e := range kvList {
-			e.DecrRef()
-		}
-	}()
-
-	for range 100 {
-		e := newRandEntry(sz)
-		eCopy := kv.NewEntry(e.Key, e.Value)
-		eCopy.Meta = e.Meta
-		eCopy.ExpiresAt = e.ExpiresAt
-		kvList = append(kvList, eCopy)
-
-		if e.ExpiresAt > 0 {
-			ttl := time.Until(time.Unix(int64(e.ExpiresAt), 0))
-			require.NoError(t, db.SetWithTTL(e.Key, e.Value, ttl))
-		} else {
-			require.NoError(t, db.Set(e.Key, e.Value))
-		}
-		e.DecrRef()
-	}
-	if err := db.RunValueLogGC(0.9); err != nil && !errors.Is(err, utils.ErrNoRewrite) {
-		require.NoError(t, err)
-	}
-	for _, e := range kvList {
-		item, err := db.Get(e.Key)
-		require.NoErrorf(t, err, "missing key after gc user_key=%q raw=%x", string(e.Key), e.Key)
-		val := getItemValue(t, item)
-		require.NotNil(t, val)
-		require.True(t, bytes.Equal(item.Key, e.Key), "key not equal: e:%s, v:%s", e.Key, item.Key)
-		require.True(t, bytes.Equal(item.Value, e.Value), "value not equal: e:%s, v:%s", e.Value, item.Key)
-	}
-}
-
-func TestValueLogGCParallelScheduling(t *testing.T) {
-	cfg := *opt
-	cfg.WorkDir = t.TempDir()
-	cfg.ValueThreshold = 0
-	cfg.ValueLogBucketCount = 2
-	cfg.ValueLogFileSize = 4 << 10
-	cfg.ValueLogGCParallelism = 2
-	cfg.ValueLogGCInterval = 0
-	cfg.NumCompactors = 2
-
-	db := openTestDB(t, &cfg)
-	defer func() { _ = db.Close() }()
-
-	key0 := keyForBucket(t, 0, cfg.ValueLogBucketCount)
-	key1 := keyForBucket(t, 1, cfg.ValueLogBucketCount)
-	payload := bytes.Repeat([]byte("x"), 512)
-
-	hasSealed := func() bool {
-		for bucket := 0; bucket < cfg.ValueLogBucketCount; bucket++ {
-			mgr, err := db.vlog.ManagerFor(uint32(bucket))
-			require.NoError(t, err)
-			if len(mgr.ListFIDs()) < 2 {
-				return false
-			}
-		}
-		return true
-	}
-
-	for i := 0; i < 200 && !hasSealed(); i++ {
-		require.NoError(t, db.Set(key0, payload))
-		require.NoError(t, db.Set(key1, payload))
-	}
-	require.True(t, hasSealed(), "expected sealed vlog segments in each bucket")
-
-	metrics.ResetValueLogGCMetricsForTesting()
-	before := metrics.DefaultValueLogGCCollector().Snapshot().GCScheduled
-
-	_ = db.RunValueLogGC(0.99)
-
-	after := metrics.DefaultValueLogGCCollector().Snapshot().GCScheduled
-	if after-before < 2 {
-		t.Fatalf("expected parallel GC scheduling, delta=%d", after-before)
-	}
-}
-
-func TestValueLogIterateReleasesEntries(t *testing.T) {
-	clearDir()
-	db := openTestDB(t, opt)
-	defer func() { _ = db.Close() }()
-
-	val := bytes.Repeat([]byte("x"), 128)
-	entry := kv.NewEntry([]byte("iter-key"), val)
-	require.NoError(t, db.Set(entry.Key, entry.Value))
-	entry.DecrRef()
-
-	managers := db.vlog.Managers()
-	active := managers[0].ActiveFID()
-
-	var captured []*kv.Entry
-	_, err := managers[0].Iterate(active, kv.ValueLogHeaderSize, func(e *kv.Entry, vp *kv.ValuePtr) error {
-		captured = append(captured, e)
-		return nil
-	})
-	require.NoError(t, err)
-	require.NotZero(t, len(captured), "expected to capture at least one entry")
-
-	for _, e := range captured {
-		if len(e.Key) != 0 || len(e.Value) != 0 {
-			t.Fatalf("expected entry to be reset after DecrRef")
-		}
-	}
 }
 
 func TestDecodeWalEntryReleasesEntries(t *testing.T) {
@@ -3060,181 +2389,6 @@ func TestDecodeWalEntryReleasesEntries(t *testing.T) {
 	}
 }
 
-func TestValueLogWriteAppendFailureRewinds(t *testing.T) {
-	clearDir()
-	cfg := *opt
-	cfg.ValueLogFileSize = 256
-	injected := errors.New("append failure")
-	rotatePath := filepath.Join(cfg.WorkDir, "vlog", "bucket-000", "00001.vlog")
-	cfg.FS = vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
-		vfs.FailOnceRule(vfs.OpOpenFile, rotatePath, injected),
-	))
-	db := openTestDB(t, &cfg)
-	defer func() { _ = db.Close() }()
-
-	mgr, err := db.vlog.ManagerFor(0)
-	require.NoError(t, err)
-	head := mgr.Head()
-
-	req := dbruntime.RequestPool.Get().(*dbruntime.Request)
-	req.Reset()
-	entries := []*kv.Entry{
-		newPointerEntry([]byte("afail"), bytes.Repeat([]byte("a"), 512)),
-		newPointerEntry([]byte("bfail"), bytes.Repeat([]byte("b"), 512)),
-	}
-	req.LoadEntries(entries)
-	req.IncrRef()
-	defer req.DecrRef()
-
-	err = db.vlog.Write([]*dbruntime.Request{req})
-	require.Error(t, err)
-	require.ErrorIs(t, err, injected)
-	require.Equal(t, head, mgr.Head())
-	require.Len(t, req.Ptrs, 0)
-}
-
-func TestValueLogWriteRotateFailureRewinds(t *testing.T) {
-	clearDir()
-	cfg := *opt
-	cfg.ValueLogFileSize = 256
-	injected := errors.New("rotate failure")
-	rotatePath := filepath.Join(cfg.WorkDir, "vlog", "bucket-000", "00001.vlog")
-	cfg.FS = vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
-		vfs.FailOnceRule(vfs.OpOpenFile, rotatePath, injected),
-	))
-	db := openTestDB(t, &cfg)
-	defer func() { _ = db.Close() }()
-
-	mgr, err := db.vlog.ManagerFor(0)
-	require.NoError(t, err)
-	head := mgr.Head()
-
-	req := dbruntime.RequestPool.Get().(*dbruntime.Request)
-	req.Reset()
-	entries := []*kv.Entry{
-		newPointerEntry([]byte("rfail1"), bytes.Repeat([]byte("x"), 512)),
-		newPointerEntry([]byte("rfail2"), bytes.Repeat([]byte("y"), 512)),
-	}
-	req.LoadEntries(entries)
-	req.IncrRef()
-	defer req.DecrRef()
-
-	err = db.vlog.Write([]*dbruntime.Request{req})
-	require.Error(t, err)
-	require.ErrorIs(t, err, injected)
-	require.Equal(t, head, mgr.Head())
-	require.Len(t, req.Ptrs, 0)
-}
-
-func TestValueLogWriteInlineRequestSkipsPtrs(t *testing.T) {
-	clearDir()
-	prevThreshold := opt.ValueThreshold
-	opt.ValueThreshold = 1 << 20
-	defer func() { opt.ValueThreshold = prevThreshold }()
-
-	db := openTestDB(t, opt)
-	defer func() { _ = db.Close() }()
-
-	req := dbruntime.RequestPool.Get().(*dbruntime.Request)
-	req.Reset()
-	entry := kv.NewInternalEntry(kv.CFDefault, []byte("inline-vlog"), nonTxnMaxVersion, []byte("v"), 0, 0)
-	req.LoadEntries([]*kv.Entry{entry})
-	req.IncrRef()
-	defer req.DecrRef()
-
-	require.NoError(t, db.vlog.Write([]*dbruntime.Request{req}))
-	require.Len(t, req.Ptrs, 0)
-	require.Len(t, req.PtrIdxs, 0)
-	require.Len(t, req.PtrBuckets, 0)
-}
-
-func TestValueLogReadCopiesSmallValue(t *testing.T) {
-	clearDir()
-	prevThreshold := opt.ValueThreshold
-	opt.ValueThreshold = 0
-	defer func() { opt.ValueThreshold = prevThreshold }()
-
-	db := openTestDB(t, opt)
-	defer func() { _ = db.Close() }()
-
-	entry := kv.NewInternalEntry(kv.CFDefault, []byte("small-read"), nonTxnMaxVersion, []byte("v"), 0, 0)
-	vp, err := db.vlog.NewValuePtr(entry)
-	entry.DecrRef()
-	require.NoError(t, err)
-
-	val, cb, err := db.vlog.Read(vp)
-	require.NoError(t, err)
-	require.Nil(t, cb)
-	require.Equal(t, []byte("v"), val)
-}
-
-func TestManifestHeadMatchesValueLogHead(t *testing.T) {
-	clearDir()
-	opt.ValueThreshold = 0
-	db := openTestDB(t, opt)
-	defer func() { _ = db.Close() }()
-
-	entry := kv.NewEntry([]byte("manifest-head"), []byte("value"))
-	entry.Key = kv.InternalKey(kv.CFDefault, entry.Key, math.MaxUint32)
-	if err := db.batchSet([]*kv.Entry{entry}); err != nil {
-		t.Fatalf("batchSet: %v", err)
-	}
-
-	mgr, err := db.vlog.ManagerFor(0)
-	require.NoError(t, err)
-	head := mgr.Head()
-	heads := db.getHeads()
-	meta, ok := heads[0]
-	if !ok {
-		t.Fatalf("expected manifest head")
-	}
-	if meta.Fid != head.Fid {
-		t.Fatalf("manifest fid %d does not match manager %d", meta.Fid, head.Fid)
-	}
-	if meta.Offset != head.Offset {
-		t.Fatalf("manifest offset %d does not match manager %d", meta.Offset, head.Offset)
-	}
-}
-
-func TestValueLogGCSkipBlocked(t *testing.T) {
-	clearDir()
-	opt := NewDefaultOptions()
-	opt.ValueLogFileSize = 1 << 20
-	opt.NumCompactors = 0
-	db := openTestDB(t, opt)
-	defer func() { _ = db.Close() }()
-
-	e := kv.NewEntry([]byte("gc-skip"), []byte("v"))
-	require.NoError(t, db.Set(e.Key, e.Value))
-	e.DecrRef()
-
-	db.ApplyThrottle(lsm.WriteThrottleStop)
-	defer db.ApplyThrottle(lsm.WriteThrottleNone)
-
-	if err := db.RunValueLogGC(0.5); err != nil && !errors.Is(err, utils.ErrNoRewrite) {
-		t.Fatalf("expected ErrNoRewrite when writes blocked, got %v", err)
-	}
-}
-
-func TestValueLogPopulateDiscardStatsLoadsPersistedEntry(t *testing.T) {
-	opt := newTestOptions(t)
-	db := openTestDB(t, opt)
-	defer func() { _ = db.Close() }()
-
-	stats := map[manifest.ValueLogID]int64{
-		{Bucket: 0, FileID: 7}: 99,
-		{Bucket: 1, FileID: 4}: 12,
-	}
-	encoded, err := vlogpkg.EncodeDiscardStats(stats)
-	require.NoError(t, err)
-
-	entry := kv.NewInternalEntry(kv.CFDefault, vlogpkg.DiscardStatsKey, nonTxnMaxVersion, encoded, 0, 0)
-	defer entry.DecrRef()
-	require.NoError(t, db.ApplyInternalEntries([]*kv.Entry{entry}))
-
-	require.NoError(t, db.vlog.PopulateDiscardStats())
-}
-
 // TestPipelineSyncWorkerShardErrorIsolation confirms that when the sync
 // worker's WAL.Sync fails on one shard, only requests pinned to that
 // shard inherit the error — sibling shards keep returning success.
@@ -3249,7 +2403,6 @@ func TestPipelineSyncWorkerShardErrorIsolation(t *testing.T) {
 	cfg.SyncPipeline = true
 	cfg.LSMShardCount = 2
 	cfg.EnableWALWatchdog = false
-	cfg.ValueLogGCInterval = 0
 	cfg.WriteBatchWait = 0
 	cfg.NumCompactors = 0
 
@@ -3307,8 +2460,8 @@ func TestPipelineCloseAcksPendingRequests(t *testing.T) {
 // TestPipelineSendBlockedWritesFastFails confirms the waitOnThrottle=false
 // branch of Pipeline.Send: when applyThrottle has stopped writes, a
 // non-blocking submission must return ErrBlockedWrites without queueing
-// the request. This is the path vlog GC and other internal writeback
-// paths take when they can't afford to stall.
+// the request. This is the path internal writeback callers take when
+// they can't afford to stall.
 func TestPipelineSendBlockedWritesFastFails(t *testing.T) {
 	cfg := newTestOptions(t)
 	db := openTestDB(t, cfg)

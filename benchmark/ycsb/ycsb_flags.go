@@ -10,7 +10,7 @@ var (
 	fSeed       = flag.Int64("seed", 42, "random seed for data generation")
 	fSyncWrites = flag.Bool("sync", false, "force fsync on every write")
 
-	fValueThreshold = flag.Int("value_threshold", 2048, "value size threshold (bytes) before offloading to the value log")
+	fValueThreshold = flag.Int("value_threshold", 2048, "Badger value size threshold (bytes)")
 
 	fBadgerBlockMB     = flag.Int("badger_block_cache_mb", -1, "Badger block cache size (MB); <=0 uses the default fair split from the total cache budget")
 	fBadgerIndexMB     = flag.Int("badger_index_cache_mb", -1, "Badger index cache size (MB); <=0 uses the default fair split from the total cache budget")
@@ -33,8 +33,7 @@ var (
 	ycsbNoKVCompaction    = flag.String("ycsb_nokv_compaction_policy", "leveled", "NoKV compaction policy: leveled|tiered|hybrid")
 	ycsbMemtableMB        = flag.Int("ycsb_memtable_mb", 64, "Memtable size (MB) for LSM engines (NoKV/RocksDB where applicable)")
 	ycsbSSTableMB         = flag.Int("ycsb_sstable_mb", 512, "Target SST size (MB) for LSM engines (NoKV/RocksDB where applicable)")
-	ycsbVlogFileMB        = flag.Int("ycsb_vlog_mb", 512, "Value log file size (MB) for engines that separate values (NoKV); only effective when -ycsb_nokv_enable_vlog=true")
-	ycsbNoKVEnableVlog    = flag.Bool("ycsb_nokv_enable_vlog", false, "Opt NoKV into the engine/vlog Authoritative consumer; default false matches the metadata-service profile (every value inlined into the LSM)")
+	ycsbVlogFileMB        = flag.Int("ycsb_vlog_mb", 512, "Badger value log file size (MB)")
 	ycsbValueDist         = flag.String("ycsb_value_dist", "fixed", "Value size distribution: fixed|uniform|normal|percentile")
 	ycsbValueMin          = flag.Int("ycsb_value_min", 0, "Min value size for uniform/normal distributions (bytes); 0 defaults to value_size")
 	ycsbValueMax          = flag.Int("ycsb_value_max", 0, "Max value size for uniform/normal distributions (bytes); 0 defaults to value_size")

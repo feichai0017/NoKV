@@ -578,8 +578,6 @@ func openDBAt(t *testing.T, dir string) (*NoKV.DB, *localmeta.Store) {
 	opt.WorkDir = dir
 	opt.MemTableSize = 1 << 12
 	opt.SSTableMaxSz = 1 << 20
-	opt.ValueLogFileSize = 1 << 20
-	opt.ValueThreshold = utils.DefaultValueThreshold
 	opt.RaftLagWarnSegments = 1
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
 	db, err := NoKV.Open(opt)

@@ -18,9 +18,6 @@ type WriteMetrics struct {
 	waitSumNs   atomic.Int64
 	waitSamples atomic.Int64
 
-	vlogSumNs   atomic.Int64
-	vlogSamples atomic.Int64
-
 	applySumNs   atomic.Int64
 	applySamples atomic.Int64
 
@@ -38,12 +35,10 @@ type WriteMetricsSnapshot struct {
 	AvgBatchEntries  float64
 	AvgBatchBytes    float64
 	AvgRequestWaitMs float64
-	AvgValueLogMs    float64
 	AvgApplyMs       float64
 	AvgSyncMs        float64
 	AvgSyncBatch     float64
 	RequestSamples   int64
-	ValueLogSamples  int64
 	ApplySamples     int64
 	SyncSamples      int64
 }
@@ -70,14 +65,6 @@ func (m *WriteMetrics) RecordBatch(reqs int, entries int, size int64, waitSumNs 
 	m.batchBytes.Add(size)
 	m.waitSumNs.Add(waitSumNs)
 	m.waitSamples.Add(int64(reqs))
-}
-
-func (m *WriteMetrics) RecordValueLog(d time.Duration) {
-	if m == nil {
-		return
-	}
-	m.vlogSumNs.Add(d.Nanoseconds())
-	m.vlogSamples.Add(1)
 }
 
 func (m *WriteMetrics) RecordApply(d time.Duration) {
@@ -111,22 +98,19 @@ func (m *WriteMetrics) Snapshot() WriteMetricsSnapshot {
 	batchBytes := m.batchBytes.Load()
 	waitSumNs := m.waitSumNs.Load()
 	waitSamples := m.waitSamples.Load()
-	vlogSumNs := m.vlogSumNs.Load()
-	vlogSamples := m.vlogSamples.Load()
 	applySumNs := m.applySumNs.Load()
 	applySamples := m.applySamples.Load()
 	syncSumNs := m.syncSumNs.Load()
 	syncSamples := m.syncSamples.Load()
 	syncBatchCount := m.syncBatchCount.Load()
 	snap := WriteMetricsSnapshot{
-		QueueLen:        queueLen,
-		QueueEntries:    queueEntries,
-		QueueBytes:      queueBytes,
-		Batches:         batchCount,
-		RequestSamples:  waitSamples,
-		ValueLogSamples: vlogSamples,
-		ApplySamples:    applySamples,
-		SyncSamples:     syncSamples,
+		QueueLen:       queueLen,
+		QueueEntries:   queueEntries,
+		QueueBytes:     queueBytes,
+		Batches:        batchCount,
+		RequestSamples: waitSamples,
+		ApplySamples:   applySamples,
+		SyncSamples:    syncSamples,
 	}
 	if batchCount > 0 {
 		snap.AvgBatchEntries = float64(batchEntries) / float64(batchCount)
@@ -134,9 +118,6 @@ func (m *WriteMetrics) Snapshot() WriteMetricsSnapshot {
 	}
 	if waitSamples > 0 {
 		snap.AvgRequestWaitMs = float64(waitSumNs) / float64(waitSamples) / 1e6
-	}
-	if vlogSamples > 0 {
-		snap.AvgValueLogMs = float64(vlogSumNs) / float64(vlogSamples) / 1e6
 	}
 	if applySamples > 0 {
 		snap.AvgApplyMs = float64(applySumNs) / float64(applySamples) / 1e6

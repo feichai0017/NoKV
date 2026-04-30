@@ -3,14 +3,14 @@
 // associated ack lifecycle. The Pipeline owns its queue + dispatch
 // state; the Host interface is the (intentionally narrow) set of DB
 // hooks the pipeline calls into for actual storage operations
-// (LSM.SetBatchGroup, vlog.Write, WAL.Sync) and for read-only state
+// (LSM.SetBatchGroup, WAL.Sync) and for read-only state
 // signals (block/slow-write throttle, hot-key tracking, write metrics).
 //
 // The hot path is fan-out by per-shard channel: the dispatcher pulls
 // each batch off the MPSC queue and routes it to one shard's processor
 // using key-affinity hashing. The processor coalesces a burst of
-// batches arriving on its channel into a single vlog.Write +
-// LSM.SetBatchGroup + (optional) Sync, then acks each originating
+// batches arriving on its channel into a single LSM.SetBatchGroup +
+// (optional) Sync, then acks each originating
 // batch with the per-batch failedAt fanned back out.
 package commit
 
@@ -38,7 +38,6 @@ type Config struct {
 	WriteBatchMaxCount int
 	WriteBatchMaxSize  int64
 	WriteBatchWait     time.Duration
-	ValueThreshold     int
 }
 
 // LSM is the narrow LSM surface the pipeline writes through. Implemented
@@ -48,33 +47,12 @@ type LSM interface {
 	ThrottleRateBytesPerSec() uint64
 }
 
-// Vlog is the value-log surface the pipeline writes through; nil when
-// vlog is disabled. Implemented by engine/vlog.Consumer.
-type Vlog interface {
-	Write(reqs []*runtime.Request) error
-}
-
 // Host wires the Pipeline back into its DB. Every accessor is read-only
-// except for UpdateHeadBuckets (which mutates DB-side vlog head
-// bookkeeping) and HotKeyAttempt (which records a hot-key sample).
+// except for HotKeyAttempt (which records a hot-key sample).
 type Host interface {
-	// CommitLSM and CommitVlog use distinct names from stats.Host's
-	// LSM/Vlog accessors so a single *DB struct can satisfy both
-	// interfaces without method-name collision (Go has no covariant
-	// return types).
 	CommitLSM() LSM
-	CommitVlog() Vlog
 	LSMWALs() []*wal.Manager
 	WriteMetrics() *metrics.WriteMetrics
-
-	// RequestsHaveVlogWork reports whether any request in reqs needs a
-	// vlog writeback. Lets the pipeline skip vlog.Write entirely on the
-	// metadata-profile fast path (every value below ValueThreshold).
-	RequestsHaveVlogWork(reqs []*runtime.Request) bool
-	// UpdateHeadBuckets advances DB-side vlog head bookkeeping for the
-	// PtrBuckets touched by a successfully-applied request. Called under
-	// no host lock; the host is responsible for any internal locking.
-	UpdateHeadBuckets(buckets []uint32)
 
 	// Throttle/lifecycle indicators consulted by Send before queueing.
 	BlockWritesActive() bool
@@ -161,7 +139,7 @@ func (p *Pipeline) Send(entries []*kv.Entry, waitOnThrottle bool) (*runtime.Requ
 	var size int64
 	count := int64(len(entries))
 	for _, e := range entries {
-		size += int64(e.EstimateSize(p.cfg.ValueThreshold))
+		size += int64(e.EstimateSize())
 	}
 	limitCount, limitSize := p.cfg.MaxBatchCount, p.cfg.MaxBatchSize
 	if count >= limitCount || size >= limitSize {
@@ -298,7 +276,7 @@ func (p *Pipeline) nextBatch(consumer *utils.MPSCConsumer[*CommitRequest]) *Comm
 // dispatcher owns the MPSC queue's single consumer slot. It pulls
 // batches off the queue and routes each to one shard's processor channel
 // using key-affinity hashing. The dispatcher does no per-batch work
-// itself, so it never bottlenecks on vlog/WAL/applyRequests latency.
+// itself, so it never bottlenecks on WAL/applyRequests latency.
 //
 // On queue close, the dispatcher closes every per-shard channel which
 // is the signal for processors to drain remaining batches and return.
@@ -376,8 +354,8 @@ func fnv1a32(b []byte) uint32 {
 	return h
 }
 
-// processor runs the per-batch CPU pipeline (collect -> vlog write ->
-// applyRequests -> ack) for batches pinned to one LSM shard. The
+// processor runs the per-batch CPU pipeline (collect -> applyRequests ->
+// ack) for batches pinned to one LSM shard. The
 // processor owns its shard end-to-end: WAL append, memtable apply, and
 // (when sync is inline) WAL fsync all hit one Manager, so there is no
 // Manager.mu contention across processors.
@@ -385,7 +363,7 @@ func fnv1a32(b []byte) uint32 {
 // Burst coalescing: when the dispatcher delivers small batches faster
 // than the processor can drain them, the processor pulls every batch
 // already sitting in its channel and merges them into a single
-// vlog.Write + LSM.SetBatchGroup + (optional) Sync. That collapses N
+// LSM.SetBatchGroup + (optional) Sync. That collapses N
 // fsync/flush syscalls into one per burst. SetBatch atomicity is
 // preserved because each batch's groups are still atomic (LSM
 // processes them in order with per-group atomicity); failedAt from the
@@ -453,32 +431,6 @@ func (p *Pipeline) runBurst(walMgr *wal.Manager, shardID int, burst []*CommitBat
 		return
 	}
 
-	// Metadata-profile fast path: skip vlog.Write entirely when no entry
-	// in the burst needs offloading. Saves the heads/touched/bucketEntries
-	// map allocations and the rewind closure preparation that vlog.Write
-	// does even when every entry stays inline.
-	var vlogDur time.Duration
-	if p.host.RequestsHaveVlogWork(mergedRequests) {
-		if vlogSrc := p.host.CommitVlog(); vlogSrc != nil {
-			if err := vlogSrc.Write(mergedRequests); err != nil {
-				// Whole burst failed before reaching LSM. Each batch's
-				// whole request set is unapplied — failedAt = -1 means
-				// "ack with the default error for every request".
-				for _, batch := range burst {
-					p.ackBatch(batch.Reqs, batch.Pool, batch.Requests, -1, err)
-				}
-				return
-			}
-			vlogDur = max(time.Since(burstStart), 0)
-			if wm != nil && vlogDur > 0 {
-				wm.RecordValueLog(vlogDur)
-			}
-		}
-	}
-	for _, batch := range burst {
-		batch.ValueLogDur = vlogDur
-	}
-
 	mergedFailedAt, applyErr := p.applyRequests(mergedRequests, shardID)
 	// Fan mergedFailedAt back to per-batch failedAt:
 	// - if mergedFailedAt == -1: every batch succeeded (-1).
@@ -534,9 +486,8 @@ func (p *Pipeline) runBurst(walMgr *wal.Manager, shardID int, burst []*CommitBat
 
 	if wm != nil {
 		totalDur := max(time.Since(burstStart), 0)
-		applyDur := max(totalDur-vlogDur, 0)
-		if applyDur > 0 {
-			wm.RecordApply(applyDur)
+		if totalDur > 0 {
+			wm.RecordApply(totalDur)
 		}
 	}
 
@@ -559,21 +510,6 @@ func (p *Pipeline) runSingle(walMgr *wal.Manager, shardID int, batch *CommitBatc
 	batch.Requests = requests
 	if wm != nil {
 		wm.RecordBatch(len(requests), totalEntries, totalSize, waitSum)
-	}
-
-	if p.host.RequestsHaveVlogWork(requests) {
-		if vlogSrc := p.host.CommitVlog(); vlogSrc != nil {
-			if err := vlogSrc.Write(requests); err != nil {
-				p.ackBatch(batch.Reqs, batch.Pool, requests, -1, err)
-				return
-			}
-			if wm != nil {
-				batch.ValueLogDur = max(time.Since(batch.BatchStart), 0)
-				if batch.ValueLogDur > 0 {
-					wm.RecordValueLog(batch.ValueLogDur)
-				}
-			}
-		}
 	}
 
 	failedAt, err := p.applyRequests(batch.Requests, shardID)
@@ -603,9 +539,8 @@ func (p *Pipeline) runSingle(walMgr *wal.Manager, shardID int, batch *CommitBatc
 
 	if wm != nil {
 		totalDur := max(time.Since(batch.BatchStart), 0)
-		applyDur := max(totalDur-batch.ValueLogDur, 0)
-		if applyDur > 0 {
-			wm.RecordApply(applyDur)
+		if totalDur > 0 {
+			wm.RecordApply(totalDur)
 		}
 	}
 
@@ -713,7 +648,6 @@ func (p *Pipeline) releaseBatch(batch *CommitBatch) {
 	}
 	batch.Requests = nil
 	batch.BatchStart = time.Time{}
-	batch.ValueLogDur = 0
 	reqs := batch.Reqs
 	for i := range reqs {
 		reqs[i] = nil
@@ -722,10 +656,9 @@ func (p *Pipeline) releaseBatch(batch *CommitBatch) {
 	p.batchPool.Put(batch.Pool)
 }
 
-// ApplyRequests writes reqs into LSM shard shardID and updates DB-side
-// vlog head bookkeeping for any successful PtrBuckets. Exported so the
-// root NoKV integration tests can drive the apply path directly without
-// going through the queue.
+// ApplyRequests writes reqs into LSM shard shardID. Exported so root-package
+// integration tests can drive the apply path directly without going through
+// the queue.
 func (p *Pipeline) ApplyRequests(reqs []*runtime.Request, shardID int) (int, error) {
 	return p.applyRequests(reqs, shardID)
 }
@@ -734,15 +667,6 @@ func (p *Pipeline) applyRequests(reqs []*runtime.Request, shardID int) (int, err
 	failedAt, err := p.writeRequestsToLSM(reqs, shardID)
 	if err != nil {
 		return failedAt, pkgerrors.Wrap(err, "writeRequests")
-	}
-	for _, r := range reqs {
-		if r == nil || len(r.Entries) == 0 {
-			continue
-		}
-		if len(r.PtrBuckets) == 0 {
-			continue
-		}
-		p.host.UpdateHeadBuckets(r.PtrBuckets)
 	}
 	return -1, nil
 }
@@ -803,20 +727,5 @@ func (p *Pipeline) writeRequestsToLSM(reqs []*runtime.Request, shardID int) (int
 }
 
 func prepareLSMRequest(b *runtime.Request) error {
-	if len(b.PtrIdxs) == 0 {
-		if len(b.Ptrs) != 0 && len(b.Ptrs) != len(b.Entries) {
-			return pkgerrors.Errorf("Ptrs and Entries don't match: %+v", b)
-		}
-		return nil
-	}
-	if len(b.Ptrs) != len(b.Entries) {
-		return pkgerrors.Errorf("Ptrs and Entries don't match: %+v", b)
-	}
-
-	for _, idx := range b.PtrIdxs {
-		entry := b.Entries[idx]
-		entry.Meta = entry.Meta | kv.BitValuePointer
-		entry.Value = b.Ptrs[idx].Encode()
-	}
 	return nil
 }

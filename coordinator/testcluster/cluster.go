@@ -2,6 +2,11 @@ package testcluster
 
 import (
 	"context"
+	"path/filepath"
+	"strconv"
+	"testing"
+	"time"
+
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
@@ -10,11 +15,6 @@ import (
 	rootreplicated "github.com/feichai0017/NoKV/meta/root/replicated"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
-	"net"
-	"path/filepath"
-	"strconv"
-	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -34,7 +34,7 @@ func OpenReplicated(tb testing.TB) *Cluster {
 func OpenReplicatedWithTickIntervals(tb testing.TB, tickIntervals map[uint64]time.Duration) *Cluster {
 	tb.Helper()
 
-	peerAddrs := reservePeerAddrs(tb)
+	peerAddrs := make(map[uint64]string, 3)
 	transports := make(map[uint64]rootreplicated.Transport, 3)
 	c := &Cluster{
 		tb:         tb,
@@ -44,8 +44,9 @@ func OpenReplicatedWithTickIntervals(tb testing.TB, tickIntervals map[uint64]tim
 		Services:   make(map[uint64]*coordserver.Service, 3),
 	}
 	for _, id := range []uint64{1, 2, 3} {
-		transport, err := rootreplicated.NewGRPCTransport(id, peerAddrs[id])
+		transport, err := rootreplicated.NewGRPCTransport(id, "127.0.0.1:0")
 		require.NoError(tb, err)
+		peerAddrs[id] = transport.Addr()
 		transports[id] = transport
 	}
 	for _, transport := range transports {
@@ -259,16 +260,4 @@ func (c *Cluster) WaitNotFoundReloaded(serviceID uint64, sub *rootstorage.TailSu
 		resp, err := c.Services[serviceID].GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: key})
 		return err == nil && resp.GetNotFound()
 	}, 8*time.Second, 50*time.Millisecond)
-}
-
-func reservePeerAddrs(tb testing.TB) map[uint64]string {
-	tb.Helper()
-	out := make(map[uint64]string, 3)
-	for _, id := range []uint64{1, 2, 3} {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		require.NoError(tb, err)
-		out[id] = ln.Addr().String()
-		require.NoError(tb, ln.Close())
-	}
-	return out
 }

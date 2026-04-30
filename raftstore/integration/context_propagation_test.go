@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -136,7 +135,7 @@ func TestClientReadWriteHonorContextUnderQuorumLoss(t *testing.T) {
 	defer cancel()
 
 	seedDir := t.TempDir()
-	standalone := testcluster.OpenStandaloneDB(t, seedDir, func(opt *NoKV.Options) { opt.ValueThreshold = 16 })
+	standalone := testcluster.OpenStandaloneDB(t, seedDir, nil)
 	key := []byte("ctx-read-key")
 	value := []byte("ctx-read-value")
 	require.NoError(t, standalone.Close())

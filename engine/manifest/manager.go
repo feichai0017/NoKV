@@ -1,5 +1,4 @@
-// Package manifest persists storage-engine metadata such as SST layout, WAL
-// replay position, and value-log state.
+// Package manifest persists storage-engine metadata such as SST layout.
 package manifest
 
 import (
@@ -9,10 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -100,9 +97,7 @@ func (m *Manager) createNew() error {
 		return err
 	}
 	m.version = Version{
-		Levels:       make(map[int][]FileMeta),
-		ValueLogs:    make(map[ValueLogID]ValueLogMeta),
-		ValueLogHead: make(map[uint32]ValueLogMeta),
+		Levels: make(map[int][]FileMeta),
 	}
 	return nil
 }
@@ -137,9 +132,7 @@ func (m *Manager) writeCurrent() error {
 
 func (m *Manager) replay() error {
 	m.version = Version{
-		Levels:       make(map[int][]FileMeta),
-		ValueLogs:    make(map[ValueLogID]ValueLogMeta),
-		ValueLogHead: make(map[uint32]ValueLogMeta),
+		Levels: make(map[int][]FileMeta),
 	}
 	reader := bufio.NewReader(m.manifest)
 	for {
@@ -167,43 +160,6 @@ func (m *Manager) apply(edit Edit) {
 			if fm.FileID == meta.FileID {
 				m.version.Levels[meta.Level] = append(files[:i], files[i+1:]...)
 				break
-			}
-		}
-	case EditValueLogHead:
-		if edit.ValueLog != nil {
-			meta := *edit.ValueLog
-			meta.Valid = true
-			id := ValueLogID{Bucket: meta.Bucket, FileID: meta.FileID}
-			m.version.ValueLogs[id] = meta
-			if m.version.ValueLogHead == nil {
-				m.version.ValueLogHead = make(map[uint32]ValueLogMeta)
-			}
-			m.version.ValueLogHead[meta.Bucket] = meta
-		}
-	case EditDeleteValueLog:
-		if edit.ValueLog != nil {
-			id := ValueLogID{Bucket: edit.ValueLog.Bucket, FileID: edit.ValueLog.FileID}
-			meta := m.version.ValueLogs[id]
-			meta.Bucket = edit.ValueLog.Bucket
-			meta.FileID = edit.ValueLog.FileID
-			meta.Offset = 0
-			meta.Valid = false
-			m.version.ValueLogs[id] = meta
-			if head, ok := m.version.ValueLogHead[meta.Bucket]; ok && head.FileID == meta.FileID {
-				delete(m.version.ValueLogHead, meta.Bucket)
-			}
-		}
-	case EditUpdateValueLog:
-		if edit.ValueLog != nil {
-			meta := *edit.ValueLog
-			id := ValueLogID{Bucket: meta.Bucket, FileID: meta.FileID}
-			m.version.ValueLogs[id] = meta
-			if head, ok := m.version.ValueLogHead[meta.Bucket]; ok && head.FileID == meta.FileID {
-				if meta.Valid {
-					m.version.ValueLogHead[meta.Bucket] = meta
-				} else {
-					delete(m.version.ValueLogHead, meta.Bucket)
-				}
 			}
 		}
 	}
@@ -254,7 +210,7 @@ func (m *Manager) logEditsLocked(edits []Edit) error {
 
 func requiresSync(edit Edit) bool {
 	switch edit.Type {
-	case EditAddFile, EditDeleteFile, EditValueLogHead, EditDeleteValueLog, EditUpdateValueLog:
+	case EditAddFile, EditDeleteFile:
 		return true
 	default:
 		return false
@@ -374,45 +330,6 @@ func (m *Manager) writeSnapshot(w io.Writer) error {
 		}
 	}
 
-	if len(version.ValueLogs) > 0 {
-		ids := make([]ValueLogID, 0, len(version.ValueLogs))
-		for id := range version.ValueLogs {
-			ids = append(ids, id)
-		}
-		sort.Slice(ids, func(i, j int) bool {
-			if ids[i].Bucket == ids[j].Bucket {
-				return ids[i].FileID < ids[j].FileID
-			}
-			return ids[i].Bucket < ids[j].Bucket
-		})
-		for _, id := range ids {
-			meta := version.ValueLogs[id]
-			metaCopy := meta
-			if meta.Valid {
-				if err := writeEdit(w, Edit{Type: EditUpdateValueLog, ValueLog: &metaCopy}); err != nil {
-					return err
-				}
-			} else {
-				if err := writeEdit(w, Edit{Type: EditDeleteValueLog, ValueLog: &metaCopy}); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	if len(version.ValueLogHead) > 0 {
-		buckets := make([]uint32, 0, len(version.ValueLogHead))
-		for bucket := range version.ValueLogHead {
-			buckets = append(buckets, bucket)
-		}
-		slices.Sort(buckets)
-		for _, bucket := range buckets {
-			head := version.ValueLogHead[bucket]
-			if err := writeEdit(w, Edit{Type: EditValueLogHead, ValueLog: &head}); err != nil {
-				return err
-			}
-		}
-	}
-
 	return nil
 }
 
@@ -478,15 +395,11 @@ func (m *Manager) Current() Version {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cp := Version{
-		Levels:       make(map[int][]FileMeta),
-		ValueLogs:    make(map[ValueLogID]ValueLogMeta),
-		ValueLogHead: make(map[uint32]ValueLogMeta, len(m.version.ValueLogHead)),
+		Levels: make(map[int][]FileMeta),
 	}
 	for level, files := range m.version.Levels {
 		cp.Levels[level] = append([]FileMeta(nil), files[:]...)
 	}
-	maps.Copy(cp.ValueLogs, m.version.ValueLogs)
-	maps.Copy(cp.ValueLogHead, m.version.ValueLogHead)
 	return cp
 }
 
@@ -512,51 +425,6 @@ func (m *Manager) Close() error {
 	}
 	m.manifest = nil
 	return nil
-}
-
-// LogValueLogHead records the active value log head pointer.
-func (m *Manager) LogValueLogHead(bucket uint32, fid uint32, offset uint64) error {
-	meta := &ValueLogMeta{
-		Bucket: bucket,
-		FileID: fid,
-		Offset: offset,
-		Valid:  true,
-	}
-	return m.LogEdits(Edit{Type: EditValueLogHead, ValueLog: meta})
-}
-
-// LogValueLogDelete records value log segment deletion.
-func (m *Manager) LogValueLogDelete(bucket uint32, fid uint32) error {
-	meta := &ValueLogMeta{
-		Bucket: bucket,
-		FileID: fid,
-		Valid:  false,
-	}
-	return m.LogEdits(Edit{Type: EditDeleteValueLog, ValueLog: meta})
-}
-
-// LogValueLogUpdate records an updated value log metadata entry.
-func (m *Manager) LogValueLogUpdate(meta ValueLogMeta) error {
-	cp := meta
-	return m.LogEdits(Edit{Type: EditUpdateValueLog, ValueLog: &cp})
-}
-
-// ValueLogHead returns the latest persisted value log head.
-func (m *Manager) ValueLogHead() map[uint32]ValueLogMeta {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make(map[uint32]ValueLogMeta, len(m.version.ValueLogHead))
-	maps.Copy(out, m.version.ValueLogHead)
-	return out
-}
-
-// ValueLogStatus returns a copy of all tracked value log segment metadata.
-func (m *Manager) ValueLogStatus() map[ValueLogID]ValueLogMeta {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make(map[ValueLogID]ValueLogMeta, len(m.version.ValueLogs))
-	maps.Copy(out, m.version.ValueLogs)
-	return out
 }
 
 // Internal encoding helpers

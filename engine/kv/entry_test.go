@@ -110,21 +110,6 @@ func TestEntryIterator(t *testing.T) {
 	assert.ErrorIs(t, it.Err(), io.EOF)
 }
 
-func TestValuePtrEncodeDecode(t *testing.T) {
-	ptr := ValuePtr{Len: 1, Offset: 2, Fid: 3, Bucket: 4}
-	encoded := ptr.Encode()
-	assert.Equal(t, valuePtrEncodedSize, len(encoded))
-	assert.Equal(t, []byte{0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4}, encoded)
-
-	var decoded ValuePtr
-	decoded.Decode(encoded)
-	assert.Equal(t, ptr, decoded)
-
-	decoded.Len, decoded.Offset, decoded.Fid, decoded.Bucket = 9, 9, 9, 9
-	decoded.Decode([]byte{1, 2}) // short buffer clears ptr
-	assert.Equal(t, ValuePtr{}, decoded)
-}
-
 func TestEntryHelpers(t *testing.T) {
 	e := NewEntry([]byte("k"), []byte("v"))
 	defer e.DecrRef()
@@ -166,10 +151,10 @@ func TestEntryHelpers(t *testing.T) {
 		t.Fatalf("expected encoded size > 0")
 	}
 
-	szInline := e2.EstimateSize(32)
-	szPtr := e2.EstimateSize(1)
-	if szInline >= szPtr {
-		t.Fatalf("expected pointer estimate > inline estimate")
+	sz := e2.EstimateSize()
+	expected := len(e2.Key) + len(e2.Value) + sizeVarint(uint64(e2.Meta)) + sizeVarint(e2.ExpiresAt)
+	if sz != expected {
+		t.Fatalf("unexpected estimate: got %d want %d", sz, expected)
 	}
 }
 
@@ -195,17 +180,6 @@ func TestEntryDecrRefUnderflowPanics(t *testing.T) {
 }
 
 func TestValueHelpers(t *testing.T) {
-	ptr := ValuePtr{Len: 2, Offset: 3, Fid: 4}
-	if ptr.IsZero() {
-		t.Fatalf("expected non-zero ValuePtr")
-	}
-	if ptr.Less(nil) {
-		t.Fatalf("expected Less to be false for nil")
-	}
-	if !ptr.Less(&ValuePtr{Len: 5, Offset: 3, Fid: 4}) {
-		t.Fatalf("expected ptr to be less than larger len")
-	}
-
 	entry := &Entry{Meta: BitValuePointer}
 	if !IsValuePtr(entry) {
 		t.Fatalf("expected IsValuePtr to be true")

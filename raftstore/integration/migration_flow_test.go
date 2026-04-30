@@ -18,7 +18,6 @@ func TestMigrationFlowEndToEnd(t *testing.T) {
 
 	seedDir := t.TempDir()
 	standalone := testcluster.OpenStandaloneDB(t, seedDir, func(opt *NoKV.Options) {
-		opt.ValueThreshold = 16
 	})
 	smallKey := []byte("small-key")
 	smallValue := []byte("small-value")
@@ -110,7 +109,6 @@ func TestMigrationExpandWithSSTSnapshot(t *testing.T) {
 
 	seedDir := t.TempDir()
 	standalone := testcluster.OpenStandaloneDB(t, seedDir, func(opt *NoKV.Options) {
-		opt.ValueThreshold = 16
 	})
 	smallKey := []byte("sst-small")
 	smallValue := []byte("small-value")

@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 
 	"github.com/feichai0017/NoKV/engine/manifest"
@@ -38,25 +37,6 @@ func runManifestCmd(w io.Writer, args []string) error {
 
 	version := mgr.Current()
 	out := map[string]any{}
-	heads := mgr.ValueLogHead()
-	if len(heads) > 0 {
-		buckets := make([]uint32, 0, len(heads))
-		for bucket := range heads {
-			buckets = append(buckets, bucket)
-		}
-		slices.Sort(buckets)
-		valueLogHeads := make([]map[string]any, 0, len(buckets))
-		for _, bucket := range buckets {
-			meta := heads[bucket]
-			valueLogHeads = append(valueLogHeads, map[string]any{
-				"bucket": bucket,
-				"fid":    meta.FileID,
-				"offset": meta.Offset,
-				"valid":  meta.Valid,
-			})
-		}
-		out["value_log_heads"] = valueLogHeads
-	}
 
 	levelInfo := make([]map[string]any, 0, len(version.Levels))
 	var levels []int
@@ -77,53 +57,16 @@ func runManifestCmd(w io.Writer, args []string) error {
 	}
 	out["levels"] = levelInfo
 
-	var valueLogs []map[string]any
-	var ids []manifest.ValueLogID
-	for id := range version.ValueLogs {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool {
-		if ids[i].Bucket == ids[j].Bucket {
-			return ids[i].FileID < ids[j].FileID
-		}
-		return ids[i].Bucket < ids[j].Bucket
-	})
-	for _, id := range ids {
-		meta := version.ValueLogs[id]
-		valueLogs = append(valueLogs, map[string]any{
-			"bucket": id.Bucket,
-			"fid":    id.FileID,
-			"offset": meta.Offset,
-			"valid":  meta.Valid,
-		})
-	}
-	out["value_logs"] = valueLogs
-
 	if *asJSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		return enc.Encode(out)
 	}
 
-	if heads != nil {
-		buckets := make([]uint32, 0, len(heads))
-		for bucket := range heads {
-			buckets = append(buckets, bucket)
-		}
-		slices.Sort(buckets)
-		for _, bucket := range buckets {
-			meta := heads[bucket]
-			_, _ = fmt.Fprintf(w, "ValueLog Head[%d]     : fid=%d offset=%d valid=%v\n", bucket, meta.FileID, meta.Offset, meta.Valid)
-		}
-	}
 	_, _ = fmt.Fprintln(w, "Levels:")
 	for _, lvl := range levelInfo {
 		_, _ = fmt.Fprintf(w, "  - L%d files=%d total=%d bytes value=%d bytes ids=%v\n",
 			lvl["level"], lvl["file_count"], lvl["total_bytes"], lvl["value_bytes"], lvl["file_ids"])
-	}
-	_, _ = fmt.Fprintln(w, "ValueLog segments:")
-	for _, vl := range valueLogs {
-		_, _ = fmt.Fprintf(w, "  - bucket=%d fid=%d offset=%d valid=%v\n", vl["bucket"], vl["fid"], vl["offset"], vl["valid"])
 	}
 	return nil
 }

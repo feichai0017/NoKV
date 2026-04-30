@@ -1,9 +1,9 @@
 // Package slab provides the append-only mmap-backed segment substrate used by
-// vlog (and, future Negative / DirPage / Snapshot consumers) for sideband
-// physical storage. The substrate is intentionally minimal: it knows how to
+// sideband physical storage consumers such as DirPage and NegativeCache. The
+// substrate is intentionally minimal: it knows how to
 // append bytes, read a (offset, length) range, seal/truncate/sync the file,
 // and remap between read-only and writable. It does NOT know what the bytes
-// mean — there is no kv.ValuePtr, no bucket routing, no business GC, no
+// mean — there is no value pointer, no bucket routing, no business GC, no
 // manifest integration. Those are consumer concerns.
 package slab
 
@@ -42,8 +42,7 @@ type Segment struct {
 // meaningful relationship to "how many bytes have been logically written".
 // Treating capacity as high-water made Read's EOF check (offset+len > size)
 // meaningless and risked returning trailing junk to a consumer that didn't
-// maintain its own logical cursor (vlog manager.offset, negative
-// persistence's explicit Truncate(headerSize)).
+// maintain its own logical cursor.
 //
 // Callers reopening an existing sealed segment (whose on-disk size has been
 // truncated to its logical extent by DoneWriting or VerifyDir/sanitize) must
@@ -94,7 +93,7 @@ func (s *Segment) Read(offset, length uint32) (buf []byte, err error) {
 // segment is still writable (callers can SetReadOnly to harden it).
 func (s *Segment) DoneWriting(offset uint32) error {
 	// Async flush + sync before acquiring the writer lock. We hold no lock
-	// here because the caller (vlog manager) ensures no concurrent Write.
+	// here because callers seal segments after publishing all writes.
 	_ = s.f.SyncAsyncRange(0, int64(offset))
 	if err := s.f.Sync(); err != nil {
 		return errors.Wrapf(err, "Unable to sync segment: %q", s.FileName())
@@ -132,13 +131,12 @@ func (s *Segment) Write(offset uint32, buf []byte) (err error) {
 	err = s.f.AppendBuffer(offset, buf)
 	if err == nil {
 		end := offset + uint32(len(buf))
-		// vlog/manager.reserve() hands out non-overlapping offset ranges
-		// without serializing the subsequent Write calls. Two concurrent
-		// AppendEntries can therefore race on s.size: if the writer with
-		// the larger reservation finishes first, a plain Store from the
-		// later writer would shrink the high-water back below an already-
-		// published pointer, producing spurious EOF on Read. Use a
-		// monotonic CAS so the high-water only ever advances.
+		// Some consumers hand out non-overlapping offset ranges without
+		// serializing the subsequent Write calls. Two concurrent writes can
+		// therefore race on s.size: if the writer with the larger
+		// reservation finishes first, a plain Store from the later writer
+		// would shrink the high-water back below already-published data.
+		// Use a monotonic CAS so the high-water only ever advances.
 		for {
 			cur := s.size.Load()
 			if end <= cur || s.size.CompareAndSwap(cur, end) {
@@ -150,8 +148,8 @@ func (s *Segment) Write(offset uint32, buf []byte) (err error) {
 }
 
 // Truncate explicitly sets the high-water (and underlying file) to offset.
-// Unlike Write this can shrink the high-water — used by vlog manager Rewind
-// after a write failure and by ad-hoc segment rebuild.
+// Unlike Write this can shrink the high-water; consumers use it for failed
+// append rollback and ad-hoc segment rebuild.
 func (s *Segment) Truncate(offset int64) error {
 	if err := s.f.Truncate(offset); err != nil {
 		return err
@@ -200,7 +198,7 @@ func (s *Segment) LoadSizeFromFile() error {
 
 // Bootstrap reserves and zeroes a header region of the given size. headerSize
 // of 0 is a no-op. Used by consumers that need a small fixed-format header
-// at the start of every segment (e.g. the vlog ValueLog header).
+// at the start of every segment.
 func (s *Segment) Bootstrap(headerSize int) error {
 	if s == nil {
 		return fmt.Errorf("segment bootstrap: nil receiver")

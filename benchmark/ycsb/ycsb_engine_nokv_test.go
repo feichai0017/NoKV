@@ -13,12 +13,10 @@ import (
 
 func TestNoKVEngineCRUD(t *testing.T) {
 	engine := newNoKVEngine(ycsbEngineOptions{
-		BaseDir:        t.TempDir(),
-		ValueSize:      8,
-		ValueThreshold: 1024,
-		MemtableMB:     1,
-		SSTableMB:      4,
-		VlogFileMB:     4,
+		BaseDir:    t.TempDir(),
+		ValueSize:  8,
+		MemtableMB: 1,
+		SSTableMB:  4,
 	})
 
 	require.Equal(t, "NoKV", engine.Name())
@@ -51,12 +49,10 @@ func TestNoKVEngineCRUD(t *testing.T) {
 
 func TestNoKVEnginePrintStats(t *testing.T) {
 	eng := newNoKVEngine(ycsbEngineOptions{
-		BaseDir:        t.TempDir(),
-		ValueSize:      8,
-		ValueThreshold: 1024,
-		MemtableMB:     1,
-		SSTableMB:      4,
-		VlogFileMB:     4,
+		BaseDir:    t.TempDir(),
+		ValueSize:  8,
+		MemtableMB: 1,
+		SSTableMB:  4,
 	})
 	engine, ok := eng.(*nokvEngine)
 	require.True(t, ok)
@@ -82,14 +78,12 @@ func TestNoKVEnginePrintStats(t *testing.T) {
 	require.Contains(t, string(out), "NoKV Stats")
 }
 
-func TestNoKVEngineScanWithValueLogEntries(t *testing.T) {
+func TestNoKVEngineScanWithLargeInlineEntries(t *testing.T) {
 	engine := newNoKVEngine(ycsbEngineOptions{
-		BaseDir:        t.TempDir(),
-		ValueSize:      256,
-		ValueThreshold: 1,
-		MemtableMB:     1,
-		SSTableMB:      4,
-		VlogFileMB:     4,
+		BaseDir:    t.TempDir(),
+		ValueSize:  256,
+		MemtableMB: 1,
+		SSTableMB:  4,
 	})
 	require.NoError(t, engine.Open(true))
 	defer func() {

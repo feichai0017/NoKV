@@ -20,7 +20,6 @@ func newBenchDB(b *testing.B, optFn func(*NoKV.Options)) *NoKV.DB {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = b.TempDir()
 	opt.EnableWALWatchdog = false
-	opt.ValueLogGCInterval = 0
 	opt.SyncWrites = false
 	opt.ManifestSync = false
 	opt.WriteBatchWait = 0

@@ -1,16 +1,10 @@
 package utils
 
-import (
-	"math"
-	"os"
-)
+import "os"
 
 const (
 	// MaxLevelNum _
 	MaxLevelNum = 7
-	// DefaultValueThreshold is the default cutoff for inlining values into the LSM.
-	// Values with len(value) >= threshold are written to the value log.
-	DefaultValueThreshold = 2048
 )
 
 // file
@@ -21,13 +15,10 @@ const (
 	ManifestDeletionsRatio            = 10
 	DefaultFileFlag                   = os.O_RDWR | os.O_CREATE | os.O_APPEND
 	DefaultFileMode                   = 0666
-	MaxValueLogSize                   = 10 << 20
 	// MaxHeaderSize is the worst-case size for uvarint encoding.
-	MaxHeaderSize            = 21
-	VlogHeaderSize           = 0
-	MaxVlogFileSize   uint32 = math.MaxUint32
-	Mi                int64  = 1 << 20
-	KVWriteChCapacity        = 1000
+	MaxHeaderSize           = 21
+	Mi                int64 = 1 << 20
+	KVWriteChCapacity       = 1000
 )
 
 // codec

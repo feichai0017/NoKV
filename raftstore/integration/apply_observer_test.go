@@ -32,7 +32,6 @@ func TestApplyObserverReceivesCommittedKeysFromRealRaftApply(t *testing.T) {
 
 	seedDir := t.TempDir()
 	standalone := testcluster.OpenStandaloneDB(t, seedDir, func(opt *NoKV.Options) {
-		opt.ValueThreshold = 16
 	})
 	require.NoError(t, standalone.Close())
 	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 121, PeerID: 101})

@@ -1,7 +1,6 @@
 // Package runtime holds the shared write-envelope (Request) plus the
-// generic lifecycle/policy helpers consumed by both the commit pipeline
-// (runtime/commit), the value-log writer (engine/vlog), and the DB
-// facade (root NoKV).
+// generic lifecycle/policy helpers consumed by the commit pipeline
+// (runtime/commit) and the DB facade (root NoKV).
 package runtime
 
 import (
@@ -13,34 +12,27 @@ import (
 )
 
 // Request is the runtime write-envelope used by the DB write pipeline
-// and the value-log path. It is intentionally internal to the
-// repository: callers should interact with DB APIs instead of
-// constructing write-pipeline requests.
+// It is intentionally internal to the repository: callers should interact with
+// DB APIs instead of constructing write-pipeline requests.
 //
 // All higher-level commit-pipeline types — CommitRequest, CommitQueue,
 // CommitBatch, SyncBatch — live in runtime/commit alongside the
 // Pipeline that owns them.
 type Request struct {
-	Entries    []*kv.Entry
-	Ptrs       []kv.ValuePtr
-	PtrIdxs    []int
-	PtrBuckets []uint32
-	Err        error
+	Entries []*kv.Entry
+	Err     error
 	utils.RefCount
 	EnqueueAt time.Time
 	WG        sync.WaitGroup
 }
 
-// RequestPool reuses write-envelope objects on the DB/value-log hot path.
+// RequestPool reuses write-envelope objects on the DB commit hot path.
 var RequestPool = sync.Pool{
 	New: func() any { return new(Request) },
 }
 
 func (req *Request) Reset() {
 	req.Entries = req.Entries[:0]
-	req.Ptrs = req.Ptrs[:0]
-	req.PtrIdxs = req.PtrIdxs[:0]
-	req.PtrBuckets = req.PtrBuckets[:0]
 	req.Err = nil
 	req.RefCount.Reset()
 	req.EnqueueAt = time.Time{}
@@ -70,9 +62,6 @@ func (req *Request) DecrRef() {
 		e.DecrRef()
 	}
 	req.Entries = nil
-	req.Ptrs = nil
-	req.PtrIdxs = nil
-	req.PtrBuckets = nil
 	RequestPool.Put(req)
 }
 

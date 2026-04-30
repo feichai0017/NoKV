@@ -21,16 +21,14 @@ import (
 const DefaultMaxSize int64 = 1 << 29
 
 // Config controls how a slab Manager opens a directory of segment files
-// and rotates between them. Each consumer of slab (vlog ValueLog, future
-// NegativeSlab persistence, DirPageSlab, ...) supplies its own Config so
-// the substrate can stay generic across Authoritative / Lifecycle-bound /
-// Derived consumer classes.
+// and rotates between them. Each slab consumer supplies its own Config so the
+// substrate can stay generic across authoritative and derived sidecar data.
 type Config struct {
 	// Dir is the directory holding segment files.
 	Dir string
-	// FileSuffix is the filename suffix for segment files (e.g. ".vlog",
-	// ".dirpage"). Required: enforces per-consumer isolation when multiple
-	// slab managers share a parent directory.
+	// FileSuffix is the filename suffix for segment files (e.g. ".dirpage").
+	// Required: enforces per-consumer isolation when multiple slab managers
+	// share a parent directory.
 	FileSuffix string
 	// FileMode is the os.FileMode applied when creating new segment files.
 	// Zero falls back to utils.DefaultFileMode.
@@ -39,8 +37,7 @@ type Config struct {
 	// Zero falls back to DefaultMaxSize.
 	MaxSize int64
 	// HeaderSize is the number of bytes reserved at offset 0 of each fresh
-	// segment (zero means no header). vlog uses kv.ValueLogHeaderSize;
-	// other consumers may use 0 or their own header layout.
+	// segment (zero means no header).
 	HeaderSize int
 	// FS provides the filesystem abstraction (vfs.OSFS in production,
 	// fault-injection FS in tests).
@@ -66,7 +63,7 @@ func (cfg Config) resolve() (Config, error) {
 
 // Manager owns a directory of mmap-backed Segment files and the rotation
 // lifecycle between them. It does not understand what the bytes mean —
-// no ValuePtr, no bucket routing, no GC sample logic, no main-manifest
+// no value pointer, no bucket routing, no GC sample logic, no main-manifest
 // integration. Those are consumer concerns layered on top.
 //
 // Concurrency model:
@@ -185,8 +182,8 @@ func (m *Manager) ListFIDs() []uint32 {
 }
 
 // WithLock runs fn while holding the manager's write lock. Used by
-// consumers (vlog reserve) that need to compose lookup + Rotate + write
-// reservation as a single atomic operation. fn must not call other
+// consumers that need to compose lookup + Rotate + write reservation as a
+// single atomic operation. fn must not call other
 // Manager methods that re-acquire the lock.
 func (m *Manager) WithLock(fn func() error) error {
 	m.filesLock.Lock()
@@ -432,7 +429,7 @@ type RewindSpec struct {
 
 // Rewind rolls the manager back to spec: drops segments with fid > spec.Fid,
 // truncates spec.Fid's segment to spec.Offset, and re-activates it. Used by
-// vlog after a write failure to undo partially-published state.
+// a consumer after a write failure to undo partially-published state.
 //
 // activeOffsetReset is invoked under the manager lock once the new active
 // is chosen, so consumers can re-derive their write cursor from spec.Offset.

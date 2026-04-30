@@ -16,7 +16,7 @@ var entryPool = sync.Pool{
 // Entry is the generic key/value mutation container used across the engine.
 //
 // It can hold:
-//   - fully encoded internal key/value payloads destined for WAL/vlog/SST paths
+//   - fully encoded internal key/value payloads destined for WAL/SST paths
 //   - borrowed or detached results produced by iterators and table lookups
 //   - scratch entries used by tests and internal buffering
 //
@@ -197,12 +197,9 @@ func (e *Entry) EncodedValueSize() uint32 {
 	return uint32(sz + enc)
 }
 
-// EstimateSize estimates the size of the entry when stored inline versus via value log pointer.
-func (e *Entry) EstimateSize(threshold int) int {
-	if len(e.Value) < threshold {
-		return len(e.Key) + len(e.Value) + 1 // Meta
-	}
-	return len(e.Key) + 12 + 1 // 12 for ValuePointer, 1 for meta.
+// EstimateSize estimates the inline memory footprint used by write admission.
+func (e *Entry) EstimateSize() int {
+	return len(e.Key) + len(e.Value) + sizeVarint(uint64(e.Meta)) + sizeVarint(e.ExpiresAt)
 }
 
 // IsRangeDelete reports whether the entry is a range tombstone.

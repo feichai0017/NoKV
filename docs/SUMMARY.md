@@ -16,7 +16,6 @@
 - [Flush](flush.md)
 - [Compaction](compaction.md)
 - [Landing Buffer](landing_buffer.md)
-- [Value Log](vlog.md)
 - [Manifest](manifest.md)
 - [VFS](vfs.md)
 - [File](file.md)

@@ -1,17 +1,13 @@
 package migrate
 
 import (
-	stderrors "errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
-	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/engine/manifest"
-	vlogpkg "github.com/feichai0017/NoKV/engine/vlog"
 	"github.com/feichai0017/NoKV/engine/wal"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	"github.com/feichai0017/NoKV/utils"
 )
 
 // PlanResult is the read-only migration preflight result for one workdir.
@@ -51,7 +47,6 @@ func BuildPlan(workDir string) (PlanResult, error) {
 	}
 
 	workDirExists := true
-	var valueLogHeads map[uint32]manifest.ValueLogMeta
 	if _, err := os.Stat(workDir); err != nil {
 		if os.IsNotExist(err) {
 			workDirExists = false
@@ -68,40 +63,10 @@ func BuildPlan(workDir string) (PlanResult, error) {
 		addBlocker(&result, fmt.Sprintf("manifest check failed: %v", err))
 	} else {
 		manifestPresent = true
-		mgr, err := manifest.Open(workDir, nil)
-		if err != nil {
-			addBlocker(&result, fmt.Sprintf("manifest open failed: %v", err))
-		} else {
-			valueLogHeads = mgr.ValueLogHead()
-			_ = mgr.Close()
-		}
 	}
 
 	if err := wal.CheckDir(workDir, nil); err != nil {
 		addBlocker(&result, fmt.Sprintf("wal check failed: %v", err))
-	}
-
-	opts := NoKV.NewDefaultOptions()
-	opts.WorkDir = workDir
-	vlogDir := filepath.Join(workDir, "vlog")
-	bucketCount := max(opts.ValueLogBucketCount, 1)
-	for bucket := range bucketCount {
-		head, ok := valueLogHeads[uint32(bucket)]
-		if !ok || !head.Valid {
-			continue
-		}
-		cfg := vlogpkg.Config{
-			Dir:      filepath.Join(vlogDir, fmt.Sprintf("bucket-%03d", bucket)),
-			MaxSize:  int64(opts.ValueLogFileSize),
-			Bucket:   uint32(bucket),
-			FileMode: utils.DefaultFileMode,
-		}
-		if err := vlogpkg.CheckHead(cfg, head.FileID, uint32(head.Offset)); err != nil {
-			if stderrors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			addBlocker(&result, fmt.Sprintf("vlog check failed for bucket %d: %v", bucket, err))
-		}
 	}
 
 	if workDirExists && manifestPresent {

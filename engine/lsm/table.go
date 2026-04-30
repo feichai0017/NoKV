@@ -252,7 +252,7 @@ func (t *table) GetCreatedAt() *time.Time {
 // StaleDataSize is the amount of stale data (that can be dropped by a compaction )in this SST.
 func (t *table) StaleDataSize() uint32 { return t.staleDataSize }
 
-// ValueSize reports total value bytes referenced by this table (inline + vlog pointers).
+// ValueSize reports total inline value bytes referenced by this table.
 func (t *table) ValueSize() uint64 { return t.valueSize }
 
 // RangeTombstoneCount reports range deletion markers stored in this table.

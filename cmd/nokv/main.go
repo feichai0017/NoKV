@@ -25,8 +25,6 @@ func main() {
 		err = runExecutionCmd(os.Stdout, args)
 	case "manifest":
 		err = runManifestCmd(os.Stdout, args)
-	case "vlog":
-		err = runVlogCmd(os.Stdout, args)
 	case "regions":
 		err = runRegionsCmd(os.Stdout, args)
 	case "migrate":
@@ -59,8 +57,7 @@ func printUsage(w io.Writer) {
 	Commands:
 	  stats     Dump runtime backlog metrics (requires working directory or expvar endpoint)
 	  execution Query raftstore execution-plane diagnostics from admin RPC
-	  manifest  Inspect manifest state, levels, and value log metadata
-	  vlog      List value log segments and active head
+	  manifest  Inspect manifest state and levels
 	  regions   Show the local peer catalog used for store recovery
 	  migrate   Inspect or convert a standalone workdir for distributed mode
 	  serve     Start NoKV gRPC service backed by a local raftstore

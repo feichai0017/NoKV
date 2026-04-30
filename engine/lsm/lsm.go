@@ -7,15 +7,11 @@
 //
 // Durability ordering (enforced end-to-end):
 //
-//	vlog append → WAL append → memtable apply → flush SST → manifest edit
+//	WAL append → memtable apply → flush SST → manifest edit
 //
 // Crash at any point leaves a consistent state; the manifest publication
 // is atomic via the CURRENT symlink plus varint edit log, and replay
-// walks the WAL checkpoint stored in the manifest.
-//
-// WAL and value log segment managers live in sibling packages
-// (engine/wal, engine/vlog). This package does not own their durable
-// bytes — it only consumes their APIs.
+// walks the shard WALs using segment retention marks.
 //
 // Design references: docs/memtable.md, docs/flush.md, docs/compaction.md,
 // docs/landing_buffer.md, docs/range_filter.md, docs/cache.md.
@@ -30,7 +26,6 @@ import (
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/engine/kv"
-	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/utils"
@@ -52,8 +47,6 @@ type LSM struct {
 	flushQueue       *flushRuntime
 	flushWG          sync.WaitGroup
 	logger           *slog.Logger
-
-	discardStatsCh chan map[manifest.ValueLogID]int64
 
 	throttleFn    func(WriteThrottleState)
 	throttleState atomic.Int32
@@ -157,13 +150,6 @@ func (lsm *LSM) Close() error {
 		}
 	}
 	return closeErr
-}
-
-func (lsm *LSM) getDiscardStatsCh() chan map[manifest.ValueLogID]int64 {
-	if lsm == nil {
-		return nil
-	}
-	return lsm.discardStatsCh
 }
 
 // shardRetentionMark returns the retention bound for a single shard's WAL
@@ -288,30 +274,6 @@ func (lsm *LSM) MaxVersion() uint64 {
 	return max
 }
 
-// LogValueLogHead persists value log head pointer via manifest.
-func (lsm *LSM) LogValueLogHead(ptr *kv.ValuePtr) error {
-	if lsm == nil || lsm.levels == nil || lsm.levels.manifestMgr == nil || ptr == nil {
-		return nil
-	}
-	return lsm.levels.manifestMgr.LogValueLogHead(ptr.Bucket, ptr.Fid, uint64(ptr.Offset))
-}
-
-// LogValueLogDelete records removal of a value log segment.
-func (lsm *LSM) LogValueLogDelete(bucket uint32, fid uint32) error {
-	if lsm == nil || lsm.levels == nil || lsm.levels.manifestMgr == nil {
-		return nil
-	}
-	return lsm.levels.manifestMgr.LogValueLogDelete(bucket, fid)
-}
-
-// LogValueLogUpdate restores or amends metadata for a value log segment.
-func (lsm *LSM) LogValueLogUpdate(meta *manifest.ValueLogMeta) error {
-	if lsm == nil || lsm.levels == nil || lsm.levels.manifestMgr == nil || meta == nil {
-		return nil
-	}
-	return lsm.levels.manifestMgr.LogValueLogUpdate(*meta)
-}
-
 // NewLSM constructs the LSM core, binding one shard to each WAL Manager
 // in walMgrs. The slice must be non-empty; len(walMgrs) is the data-plane
 // shard count.
@@ -367,9 +329,6 @@ func NewLSM(opt *Options, walMgrs []*wal.Manager) (*LSM, error) {
 	}
 	if lsm.logger == nil {
 		lsm.logger = slog.Default()
-	}
-	if frozen.DiscardStatsCh != nil {
-		lsm.discardStatsCh = *frozen.DiscardStatsCh
 	}
 	lsm.throttleFn = frozen.ThrottleCallback
 	lsm.flushQueue = newFlushRuntime(len(lsm.shards))

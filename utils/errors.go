@@ -13,24 +13,20 @@ var (
 	ErrStop     = errors.New("Stop")
 
 	// ErrTxnTooBig is returned if too many writes are fit into a single transaction.
-	ErrTxnTooBig      = errors.New("Txn is too big to fit into one request")
-	ErrDeleteVlogFile = errors.New("Delete vlog file")
+	ErrTxnTooBig = errors.New("Txn is too big to fit into one request")
 
 	// ErrEmptyKey is returned if an empty key is passed on an update function.
 	ErrEmptyKey = errors.New("Key cannot be empty")
 	// ErrNilValue is returned when a write API receives a nil value payload.
 	ErrNilValue = errors.New("Value cannot be nil")
 
-	// ErrNoRewrite is returned if a call for value log GC doesn't result in a log file rewrite.
-	ErrNoRewrite = errors.New(
-		"Value log GC attempt didn't result in any cleanup")
-
-	// ErrRejected is returned if a value log GC is called either while another GC is running, or
-	// after DB::Close has been called.
-	ErrRejected = errors.New("Value log GC request rejected")
-
 	// ErrInvalidRequest is returned if the user request is invalid.
 	ErrInvalidRequest = errors.New("Invalid request")
+
+	// ErrUnsupportedValueLog is returned when a legacy value-log pointer is
+	// encountered. NoKV no longer supports authoritative value separation;
+	// metadata values must be stored inline in the LSM.
+	ErrUnsupportedValueLog = errors.New("unsupported legacy value log data")
 
 	// ErrBlockedWrites is returned if the user called DropAll. During the process of dropping all
 	// data

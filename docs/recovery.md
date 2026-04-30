@@ -1,97 +1,56 @@
-# Crash Recovery Playbook
+# Recovery Model
 
-This document describes how NoKV restores state after abnormal exit, and which tests validate each recovery contract.
-
----
-
-## 1. Recovery Phases
-
-```mermaid
-flowchart TD
-    Start[DB.Open]
-    Verify[runRecoveryChecks]
-    WalOpen[wal.Open]
-    LSM[lsm.NewLSM]
-    Manifest[manifest replay + table load]
-    WALReplay[WAL replay to memtables]
-    VLog[valueLog recover]
-    Flush[submit immutable flush backlog]
-    Stats[stats/start background loops]
-
-    Start --> Verify --> WalOpen --> LSM --> Manifest --> WALReplay --> VLog --> Flush --> Stats
-```
-
-1. **Pre-flight verification**: `DB.runRecoveryChecks` runs `manifest.Verify`, `wal.VerifyDir`, and per-bucket `vlog.VerifyDir`.
-2. **WAL manager reopen**: `wal.Open` reopens latest segment and rebuilds counters.
-3. **Manifest replay + SST load**: `levelManager.build` replays manifest version and opens SST files.
-4. **Strict SST validation**: if a manifest SST is missing or unreadable/corrupt, startup fails and manifest state is left unchanged.
-5. **WAL replay**: `lsm.recovery` replays post-checkpoint WAL records into memtables.
-6. **Flush backlog restore**: recovered immutable memtables are resubmitted to the flush queue.
-7. **ValueLog recovery**: value-log managers reconcile on-disk files with manifest metadata, trim torn tails, and drop stale/orphan segments.
-8. **Runtime restart**: metrics and periodic workers start again.
+NoKV recovery is intentionally strict. Startup verifies durable metadata and
+fails fast on missing or corrupt authoritative files instead of silently
+repairing them.
 
 ---
 
-## 2. Failure Scenarios & Tests
+## 1. Startup Sequence
 
-| Failure Point | Expected Recovery Behaviour | Tests |
-| --- | --- | --- |
-| WAL tail truncated | Replay stops safely at truncated tail, preserving valid prefix records | `engine/wal/manager_test.go::TestManagerReplayHandlesTruncate` |
-| Crash before memtable flush install | WAL replay restores user data not yet flushed to SST | `db_test.go::TestRecoveryWALReplayRestoresData` |
-| Manifest references missing SST | Startup fails fast and the manifest entry is preserved (operator must investigate before continuing) | `db_test.go::TestRecoveryFailsOnMissingSST` |
-| Manifest references corrupt/unreadable SST | Startup fails fast and the manifest entry is preserved (operator must investigate before continuing) | `db_test.go::TestRecoveryFailsOnCorruptSST` |
-| ValueLog stale segment (manifest marked invalid) | Recovery deletes stale file from disk | `db_test.go::TestRecoveryRemovesStaleValueLogSegment` |
-| ValueLog orphan segment (disk only) | Recovery deletes orphan file not tracked by manifest | `db_test.go::TestRecoveryRemovesOrphanValueLogSegment` |
-| Manifest rewrite interrupted | Recovery keeps using CURRENT-selected manifest and data remains readable | `db_test.go::TestRecoveryManifestRewriteCrash` |
-| ValueLog contains records absent from LSM/WAL | Recovery does not replay vlog as source-of-truth | `db_test.go::TestRecoverySkipsValueLogReplay` |
+1. Validate workdir mode and open the manifest.
+2. Run `manifest.Verify` and `wal.VerifyDir`.
+3. Open LSM tables from manifest state.
+4. Replay retained LSM WAL records that are not already covered by flushed SSTs.
+5. Open raft WAL shards and raftstore local metadata.
+6. Rebuild runtime views from local metadata and rooted coordinator state.
+
+Values are inline in LSM records. The removed value-log path is not replayed or
+reconciled; legacy pointer records return `ErrUnsupportedValueLog`.
 
 ---
 
-## 3. Recovery Tooling
+## 2. Failure Policy
 
-### 3.1 Targeted tests
+| Failure | Policy |
+| --- | --- |
+| Missing SST referenced by manifest | Startup fails and leaves manifest intact |
+| Corrupt SST referenced by manifest | Startup fails and leaves manifest intact |
+| Torn WAL tail | Replay stops at the last complete record |
+| Partial `CURRENT.tmp` rewrite | Previous `CURRENT` remains authoritative |
+| Legacy value pointer | Read/materialization fails with `ErrUnsupportedValueLog` |
+
+---
+
+## 3. Recovery Tests
+
+Useful focused checks:
 
 ```bash
-go test ./... -run 'Recovery|ReplayHandlesTruncate'
+go test ./... -run 'TestRecovery(FailsOnMissingSST|FailsOnCorruptSST|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
 ```
 
-Set `RECOVERY_TRACE_METRICS=1` to emit `RECOVERY_METRIC ...` lines in tests.
+Relevant suites:
 
-### 3.2 Targeted harness command
-
-```bash
-RECOVERY_TRACE_METRICS=1 \
-go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|FailsOnMissingSST|FailsOnCorruptSST|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
-```
-
-Outputs are saved under `artifacts/recovery/`.
-
-### 3.3 CLI checks
-
-- `nokv manifest --workdir <dir>`: verify level files, WAL pointer, vlog metadata.
-- `nokv stats --workdir <dir>`: confirm flush backlog converges.
-- `nokv vlog --workdir <dir>`: inspect vlog segment state.
+- `db_test.go`: WAL replay, SST validation, manifest rewrite safety.
+- `engine/manifest/manager_test.go`: manifest append/rewrite safety.
+- `engine/wal/*_test.go`: WAL replay, durability, retention, backpressure.
+- `raftstore/raftlog/*_test.go`: raft log replay and snapshot import/export.
 
 ---
 
-## 4. Operational Signals
+## 4. Operator Commands
 
-Watch these fields during restart:
-
-- `flush.queue_length`
-- `wal.segment_count`
-- `value_log.heads`
-- `value_log.segments`
-- `value_log.pending_deletes`
-
-If `flush.queue_length` remains high after replay, inspect flush worker throughput and manifest sync settings.
-
----
-
-## 5. Notes on Consistency Model
-
-- WAL + manifest remain the authoritative recovery chain for LSM state.
-- ValueLog is reconciled/validated but is not replayed as a mutation source.
-- In strict flush mode (`ManifestSync=true`), SST install ordering is `SST Sync -> RenameNoReplace -> SyncDir -> manifest edit`.
-
-For deeper internals, see [flush.md](flush.md), [manifest.md](manifest.md), and [wal.md](wal.md).
+- `nokv manifest --workdir <dir>`: inspect manifest level state.
+- `nokv stats --workdir <dir>`: inspect local runtime stats.
+- `nokv regions --workdir <dir>`: inspect local region catalog.

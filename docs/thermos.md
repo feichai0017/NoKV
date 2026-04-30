@@ -1,6 +1,6 @@
 # Thermos
 
-`thermos` is NoKV's optional internal hotspot detector. The package lives in [`thermos/`](../thermos) and is no longer part of the default read path, LSM compaction planning, or value-log bucket routing.
+`thermos` is NoKV's optional internal hotspot detector. The package lives in [`thermos/`](../thermos) and is no longer part of the default read path or LSM compaction planning.
 
 ## Current Role
 
@@ -18,10 +18,10 @@ These integrations were intentionally removed from the default engine path:
 
 - read-path hot tracking and asynchronous read prefetch
 - LSM compaction scoring based on hot-key overlap
-- value-log hot/cold bucket routing
+- legacy value placement experiments
 - hot-write batch enlargement heuristics
 
-The default value-log configuration keeps ordinary hash bucketization enabled through `ValueLogBucketCount`, but bucket selection no longer depends on Thermos.
+NoKV now stores values inline in the LSM, so Thermos does not participate in value placement.
 
 ## Data Structure
 
@@ -50,7 +50,7 @@ These capabilities are still useful for optional write throttling and operationa
 
 When both `ThermosEnabled` and `WriteHotKeyLimit > 0` are set, NoKV records write frequency by `CF + UserKey` and returns `utils.ErrHotKeyWriteThrottle` once the limit is reached.
 
-This path exists to protect the engine from pathological skew. It is intentionally independent from cache warming, compaction, and value-log routing.
+This path exists to protect the engine from pathological skew. It is intentionally independent from cache warming and compaction.
 
 ## Stats
 
@@ -69,6 +69,6 @@ Thermos should be understood as:
 - an optional internal detector
 - an optional write throttling tool
 - not a required performance feature
-- not a default read-path or value-log optimization
+- not a default read-path optimization
 
 That narrower scope keeps the core engine path simpler and makes Thermos easier to reason about.

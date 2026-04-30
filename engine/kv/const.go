@@ -8,7 +8,7 @@ import (
 const (
 	// BitDelete marks an entry as a deletion tombstone.
 	BitDelete byte = 1 << 0
-	// BitValuePointer indicates that the value is stored in the value log.
+	// BitValuePointer marks a legacy value-log pointer. New writes must not set it.
 	BitValuePointer byte = 1 << 1
 	// BitRangeDelete marks an entry as a range tombstone.
 	BitRangeDelete byte = 1 << 2
@@ -18,6 +18,6 @@ const (
 )
 
 var (
-	// CastagnoliCrcTable is the shared CRC32 polynomial used across WAL and value log codecs.
+	// CastagnoliCrcTable is the shared CRC32 polynomial used across WAL and SST codecs.
 	CastagnoliCrcTable = crc32.MakeTable(crc32.Castagnoli)
 )
