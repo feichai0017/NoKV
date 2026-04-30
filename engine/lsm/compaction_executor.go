@@ -370,7 +370,7 @@ func (lm *levelManager) moveToNextLevel(cd *compactDef) error {
 		remaining = append(remaining, tbl)
 	}
 	cd.thisLevel.tables = remaining
-	cd.thisLevel.rebuildRangeFilterLocked()
+	cd.thisLevel.refreshTableIndexesLocked()
 
 	for _, tbl := range cd.top {
 		if tbl == nil {
@@ -380,8 +380,7 @@ func (lm *levelManager) moveToNextLevel(cd *compactDef) error {
 		cd.nextLevel.addSize(tbl)
 		cd.nextLevel.tables = append(cd.nextLevel.tables, tbl)
 	}
-	cd.nextLevel.sortTablesLocked()
-	cd.nextLevel.rebuildRangeFilterLocked()
+	cd.nextLevel.refreshTableIndexesLocked()
 
 	second.Unlock()
 	first.Unlock()

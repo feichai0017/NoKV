@@ -73,6 +73,7 @@ func (lh *levelHandler) add(t *table) {
 	lh.totalSize += t.Size()
 	lh.totalStaleSize += int64(t.StaleDataSize())
 	lh.totalValueSize += int64(t.ValueSize())
+	lh.refreshTableIndexesLocked()
 }
 
 func (lh *levelHandler) getTotalSize() int64 {
@@ -225,8 +226,7 @@ func (lh *levelHandler) Get(key []byte) (*kv.Entry, error) {
 func (lh *levelHandler) Sort() {
 	lh.Lock()
 	defer lh.Unlock()
-	lh.sortTablesLocked()
-	lh.rebuildRangeFilterLocked()
+	lh.refreshTableIndexesLocked()
 	lh.landing.sortShards()
 }
 
@@ -436,6 +436,12 @@ func (lh *levelHandler) selectTablesForBounds(lower, upper []byte, record bool) 
 func (lh *levelHandler) rebuildRangeFilterLocked() {
 	lh.filter = buildRangeFilter(lh.levelNum, lh.tables)
 }
+
+func (lh *levelHandler) refreshTableIndexesLocked() {
+	lh.sortTablesLocked()
+	lh.rebuildRangeFilterLocked()
+}
+
 func (lh *levelHandler) isLastLevel() bool {
 	return lh.levelNum == lh.lm.opt.MaxLevelNum-1
 }
@@ -473,8 +479,7 @@ func (lh *levelHandler) replaceTables(toDel, toAdd []*table) error {
 
 	// Assign tables.
 	lh.tables = newTables
-	lh.sortTablesLocked()
-	lh.rebuildRangeFilterLocked()
+	lh.refreshTableIndexesLocked()
 	lh.Unlock() // s.Unlock before we DecrRef tables -- that can be slow.
 	return decrRefs(removed)
 }
@@ -501,7 +506,7 @@ func (lh *levelHandler) deleteTables(toDel []*table) error {
 		lh.subtractSize(t)
 	}
 	lh.tables = newTables
-	lh.rebuildRangeFilterLocked()
+	lh.refreshTableIndexesLocked()
 
 	lh.landing.remove(toDelMap)
 

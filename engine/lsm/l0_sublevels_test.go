@@ -111,6 +111,50 @@ func TestSelectTablesForKeyL0UsesSublevels(t *testing.T) {
 	require.Empty(t, none, "key in the gap returns no candidates")
 }
 
+func TestL0AddRefreshesSublevelsForPointLookup(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	l0 := lsm.levels.levels[0]
+	a := buildTableWithEntry(t, lsm, 8101, "a", 1, "va")
+	l0.add(a)
+	l0.Sort()
+	require.Len(t, l0.l0Sublevels, 1)
+
+	// A later flush appends a new L0 table. The sublevel read index must be
+	// refreshed immediately; otherwise the point read path can miss this table.
+	z := buildTableWithEntry(t, lsm, 8102, "z", 1, "vz")
+	l0.add(z)
+
+	keyZ := []byte(kv.InternalKey(kv.CFDefault, []byte("z"), 100))
+	entry, err := l0.Get(keyZ)
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	require.Equal(t, []byte("vz"), entry.Value)
+	entry.DecrRef()
+}
+
+func TestL0DeleteRefreshesSublevelsForPointLookup(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	l0 := lsm.levels.levels[0]
+	a := buildTableWithEntry(t, lsm, 8201, "a", 1, "va")
+	z := buildTableWithEntry(t, lsm, 8202, "z", 1, "vz")
+	l0.add(a)
+	l0.add(z)
+	l0.Sort()
+
+	keyZ := []byte(kv.InternalKey(kv.CFDefault, []byte("z"), 100))
+	require.NotEmpty(t, l0.selectTablesForKey(keyZ, false))
+
+	require.NoError(t, l0.deleteTables([]*table{z}))
+	require.Empty(t, l0.selectTablesForKey(keyZ, false),
+		"deleted L0 tables must disappear from the sublevel read index")
+}
+
 func TestL0GetReadPathReturnsHighestVersionAcrossSublevels(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
