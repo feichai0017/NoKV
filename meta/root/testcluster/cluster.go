@@ -1,7 +1,6 @@
 package testcluster
 
 import (
-	"net"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -51,16 +50,17 @@ func OpenWithOptions(tb testing.TB, opts Options) *Cluster {
 		tb:                 tb,
 		baseDir:            opts.BaseDir,
 		maxRetainedRecords: opts.MaxRetainedRecords,
-		PeerAddrs:          reservePeerAddrs(tb),
-		blockedPeerAddrs:   reservePeerAddrs(tb),
+		PeerAddrs:          make(map[uint64]string, len(clusterNodeIDs)),
+		blockedPeerAddrs:   blockedPeerAddrs(),
 		Transports:         make(map[uint64]rootreplicated.Transport, len(clusterNodeIDs)),
 		Drivers:            make(map[uint64]*rootreplicated.NetworkDriver, len(clusterNodeIDs)),
 		Stores:             make(map[uint64]*rootreplicated.Store, len(clusterNodeIDs)),
 	}
 
 	for _, id := range clusterNodeIDs {
-		transport, err := rootreplicated.NewGRPCTransport(id, c.PeerAddrs[id])
+		transport, err := rootreplicated.NewGRPCTransport(id, "127.0.0.1:0")
 		require.NoError(tb, err)
+		c.PeerAddrs[id] = transport.Addr()
 		c.Transports[id] = transport
 	}
 	for _, transport := range c.Transports {
@@ -285,14 +285,10 @@ func (c *Cluster) transport(nodeID uint64) rootreplicated.Transport {
 	return transport
 }
 
-func reservePeerAddrs(tb testing.TB) map[uint64]string {
-	tb.Helper()
+func blockedPeerAddrs() map[uint64]string {
 	out := make(map[uint64]string, len(clusterNodeIDs))
 	for _, id := range clusterNodeIDs {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		require.NoError(tb, err)
-		out[id] = ln.Addr().String()
-		require.NoError(tb, ln.Close())
+		out[id] = "127.0.0.1:1"
 	}
 	return out
 }
