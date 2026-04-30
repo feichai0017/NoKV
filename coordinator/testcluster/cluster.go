@@ -27,12 +27,17 @@ type Cluster struct {
 	Services   map[uint64]*coordserver.Service
 }
 
+const stableRootTickInterval = 250 * time.Millisecond
+
 func OpenReplicated(tb testing.TB) *Cluster {
 	return OpenReplicatedWithTickIntervals(tb, nil)
 }
 
 func OpenReplicatedWithTickIntervals(tb testing.TB, tickIntervals map[uint64]time.Duration) *Cluster {
 	tb.Helper()
+	if tickIntervals == nil {
+		tickIntervals = stableRootTickIntervals()
+	}
 
 	peerAddrs := make(map[uint64]string, 3)
 	transports := make(map[uint64]rootreplicated.Transport, 3)
@@ -79,6 +84,16 @@ func OpenReplicatedWithTickIntervals(tb testing.TB, tickIntervals map[uint64]tim
 	}
 	tb.Cleanup(func() { c.Close() })
 	return c
+}
+
+func stableRootTickIntervals() map[uint64]time.Duration {
+	// Coverage builds and heavily parallel CI runs add enough scheduler jitter
+	// to make the production-like 100ms tick produce split elections in tests.
+	return map[uint64]time.Duration{
+		1: stableRootTickInterval,
+		2: stableRootTickInterval,
+		3: stableRootTickInterval,
+	}
 }
 
 func (c *Cluster) Close() {

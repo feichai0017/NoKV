@@ -27,10 +27,11 @@ func openNetworkTestCluster(t *testing.T, maxRetainedRecords int) (map[uint64]*S
 	drivers := map[uint64]*NetworkDriver{}
 	for _, id := range []uint64{1, 2, 3} {
 		driver, err := NewNetworkDriver(NetworkConfig{
-			ID:        id,
-			WorkDir:   t.TempDir(),
-			PeerIDs:   []uint64{1, 2, 3},
-			Transport: transports[id],
+			ID:           id,
+			WorkDir:      t.TempDir(),
+			PeerIDs:      []uint64{1, 2, 3},
+			Transport:    transports[id],
+			TickInterval: 250 * time.Millisecond,
 		})
 		require.NoError(t, err)
 		drivers[id] = driver
