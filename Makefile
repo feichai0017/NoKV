@@ -57,7 +57,7 @@ test-race:
 # Run tests with coverage
 test-coverage:
 	@echo "Running tests with coverage..."
-	go test -v -coverprofile=coverage.out -covermode=atomic ./...
+	go test -v -coverprofile=coverage.out -covermode=atomic $$(go list ./... | grep -v '/integration$$')
 	@echo "✓ Coverage report generated: coverage.out"
 	@echo "  View with: go tool cover -html=coverage.out"
 
