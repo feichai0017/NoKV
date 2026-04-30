@@ -309,6 +309,23 @@ func TestCloneSnapshotEpochsDetachesMap(t *testing.T) {
 	require.Equal(t, uint64(9), out["vol/7/9"].ReadVersion)
 }
 
+func TestSnapshotRetentionFloor(t *testing.T) {
+	floor, ok := (rootstate.Snapshot{}).SnapshotRetentionFloor()
+	require.False(t, ok)
+	require.Zero(t, floor)
+
+	snapshot := rootstate.Snapshot{
+		SnapshotEpochs: map[string]rootstate.SnapshotEpoch{
+			"newer": {ReadVersion: 90},
+			"old":   {ReadVersion: 30},
+			"zero":  {ReadVersion: 0},
+		},
+	}
+	floor, ok = snapshot.SnapshotRetentionFloor()
+	require.True(t, ok)
+	require.Equal(t, uint64(30), floor)
+}
+
 func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
 	desc := descriptor.Descriptor{
 		RegionID:  id,

@@ -101,9 +101,22 @@ NOKV_FSMETA_BENCH=1 go test ./fsmeta -run TestBenchmarkFSMeta -count=1 -v -args 
   -fsmeta_drivers native-fsmeta,generic-kv \
   -fsmeta_addr 127.0.0.1:8090 \
   -fsmeta_coordinator_addr 127.0.0.1:2379 \
-  -fsmeta_workloads checkpoint-storm,hotspot-fanin \
+  -fsmeta_workloads checkpoint-storm,hotspot-fanin,negative-lookup \
   -fsmeta_readdirplus=true
 ```
+
+For derived-cache runs, start `nokv-fsmeta` with:
+
+```bash
+nokv-fsmeta \
+  --negative-cache-dir /tmp/nokv-fsmeta-negative \
+  --dirpage-cache-dir /tmp/nokv-fsmeta-dirpage
+```
+
+Then compare:
+
+- `hotspot-fanin` with `-fsmeta_readdirplus=true` for the DirPage cache path.
+- `negative-lookup` for repeated missing dentry probes and the NegativeCache path.
 
 The summary CSV is written under `data/fsmeta/results/` unless
 `-fsmeta_output` is set. Rows include a `driver` column so native and generic

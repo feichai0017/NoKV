@@ -111,7 +111,7 @@ typed client exposes this as `client.WatchDirectoryWithReconcile`.
 
 `SnapshotSubtree` only publishes a read epoch — it does not copy the directory tree. The token shape is `(mount, root_inode, read_version)`. Subsequent `ReadDir` / `ReadDirPlus` use `snapshot_version` to read the same MVCC view.
 
-`SnapshotEpochPublished` / `SnapshotEpochRetired` rooted events are already in place. The data-plane MVCC GC does not yet use these epochs as a retention lower bound — that's the next piece of work for the GC layer.
+`SnapshotEpochPublished` / `SnapshotEpochRetired` rooted events are already in place. Coordinator root views now carry active snapshot epochs and expose the oldest active `read_version` as the MVCC-GC retention floor. The current data-plane compactor does not yet drop MVCC history by read-version, so this is the enforcement hook for a future version-GC worker rather than a destructive cleanup path today.
 
 ### RenameSubtree
 
@@ -226,10 +226,15 @@ Stage 1 headline: `ReadDirPlus` average latency 12.0 ms vs 510.3 ms — about 42
 
 The WatchSubtree evidence workload lives in the same benchmark package; `watch_notify` reaches sub-second p95 on a Docker Compose 3-node cluster.
 
+Derived-cache evidence uses the same harness:
+
+- `hotspot-fanin` with `ReadDirPlus` measures the DirPage path when `nokv-fsmeta --dirpage-cache-dir ...` is enabled.
+- `negative-lookup` repeatedly probes missing dentries and measures the NegativeCache path when `nokv-fsmeta --negative-cache-dir ...` is enabled.
+
 ## 10. Non-goals
 
 - No FUSE / NFS / SMB frontend.
 - No S3 HTTP gateway or object body I/O.
 - No write of every inode/dentry mutation into `meta/root`.
 - No recursive materialized snapshot — `SnapshotSubtree` is an MVCC read epoch.
-- No claim that data-plane MVCC GC already retains by snapshot epoch.
+- No claim that data-plane MVCC version GC already deletes or retains by snapshot epoch; active epochs are materialized as a retention floor for the future GC worker.

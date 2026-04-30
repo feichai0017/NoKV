@@ -204,7 +204,15 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 		RootToken:    rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 4}, Revision: 2},
 		CatchUpState: CatchUpStateLagging,
 		Stores:       map[uint64]rootstate.StoreMembership{},
-		Mounts:       map[string]rootstate.MountRecord{},
+		SnapshotEpochs: map[string]rootstate.SnapshotEpoch{
+			"vol/9/25": {
+				SnapshotID:  "vol/9/25",
+				Mount:       "vol",
+				RootInode:   9,
+				ReadVersion: 25,
+			},
+		},
+		Mounts: map[string]rootstate.MountRecord{},
 		Descriptors: map[uint64]descriptor.Descriptor{
 			desc2.RegionID: desc2,
 			desc1.RegionID: desc1,
@@ -225,7 +233,9 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 
 	cloned := CloneSnapshot(snapshot)
 	cloned.Descriptors[desc1.RegionID].StartKey[0] = 'x'
+	cloned.SnapshotEpochs["vol/9/25"] = rootstate.SnapshotEpoch{ReadVersion: 99}
 	require.Equal(t, byte('a'), snapshot.Descriptors[desc1.RegionID].StartKey[0])
+	require.Equal(t, uint64(25), snapshot.SnapshotEpochs["vol/9/25"].ReadVersion)
 
 	rootSnapshot := rootstate.Snapshot{
 		State: rootstate.State{
@@ -238,6 +248,7 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 		Stores: map[uint64]rootstate.StoreMembership{
 			7: {StoreID: 7, State: rootstate.StoreMembershipActive, JoinedAt: rootstate.Cursor{Term: 2, Index: 3}},
 		},
+		SnapshotEpochs:      snapshot.SnapshotEpochs,
 		Descriptors:         snapshot.Descriptors,
 		PendingPeerChanges:  snapshot.PendingPeerChanges,
 		PendingRangeChanges: snapshot.PendingRangeChanges,
@@ -247,6 +258,10 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 	require.Equal(t, rootstate.StoreMembershipActive, fromRoot.Stores[7].State)
 	require.Equal(t, uint64(40), fromRoot.Allocator.IDCurrent)
 	require.Equal(t, rootstate.Cursor{Term: 3, Index: 10}, fromRoot.RootToken.Cursor)
+	floor, ok := fromRoot.SnapshotRetentionFloor()
+	require.True(t, ok)
+	require.Equal(t, uint64(25), floor)
+	require.Equal(t, rootSnapshot.SnapshotEpochs, fromRoot.RootSnapshot().SnapshotEpochs)
 
 	idStart, tsStart := ResolveAllocatorStarts(5, 6, AllocatorState{IDCurrent: 10, TSCurrent: 20})
 	require.Equal(t, uint64(11), idStart)

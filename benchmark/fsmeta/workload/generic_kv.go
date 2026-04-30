@@ -108,6 +108,30 @@ func (d *GenericKVDriver) Create(ctx context.Context, req fsmeta.CreateRequest, 
 	return d.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, d.lockTTL)
 }
 
+// Lookup models a schema-over-KV point lookup for one dentry.
+func (d *GenericKVDriver) Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error) {
+	plan, err := fsmeta.PlanLookup(req)
+	if err != nil {
+		return fsmeta.DentryRecord{}, err
+	}
+	version, err := d.reserveReadVersion(ctx)
+	if err != nil {
+		return fsmeta.DentryRecord{}, err
+	}
+	value, ok, err := d.runner.Get(ctx, plan.PrimaryKey, version)
+	if err != nil {
+		return fsmeta.DentryRecord{}, err
+	}
+	if !ok {
+		return fsmeta.DentryRecord{}, fsmeta.ErrNotFound
+	}
+	record, err := fsmeta.DecodeDentryValue(value)
+	if err != nil {
+		return fsmeta.DentryRecord{}, err
+	}
+	return record, nil
+}
+
 // ReadDir scans the dentry prefix directly from the generic KV schema.
 func (d *GenericKVDriver) ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error) {
 	plan, err := fsmeta.PlanReadDir(req)

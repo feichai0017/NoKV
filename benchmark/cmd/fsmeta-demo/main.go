@@ -16,7 +16,7 @@ import (
 func main() {
 	var (
 		addr           = flag.String("addr", "127.0.0.1:8090", "FSMetadata gRPC endpoint")
-		workloadName   = flag.String("workload", workload.CheckpointStorm, "workload: checkpoint-storm|hotspot-fanin|watch-subtree")
+		workloadName   = flag.String("workload", workload.CheckpointStorm, "workload: checkpoint-storm|hotspot-fanin|watch-subtree|negative-lookup")
 		mount          = flag.String("mount", "fsmeta-demo", "fsmeta mount id")
 		runID          = flag.String("run-id", "", "run id suffix; defaults to current UTC timestamp")
 		clients        = flag.Int("clients", 4, "concurrent clients")
@@ -117,6 +117,15 @@ func run(ctx context.Context, cli workload.Client, cfg runConfig) (workload.Resu
 			Files:              cfg.files,
 			StartInode:         cfg.startInode,
 			BackPressureWindow: cfg.watchWindow,
+		})
+	case workload.NegativeLookup:
+		return workload.RunNegativeLookup(ctx, cli, workload.NegativeLookupConfig{
+			Mount:          cfg.mount,
+			RunID:          cfg.runID,
+			Clients:        cfg.clients,
+			Keys:           cfg.files,
+			ReadsPerClient: cfg.readsPerClient,
+			Parent:         fsmeta.RootInode,
 		})
 	default:
 		return workload.Result{}, fmt.Errorf("unknown workload %q", cfg.name)

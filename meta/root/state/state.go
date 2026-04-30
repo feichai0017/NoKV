@@ -288,6 +288,27 @@ type SnapshotEpoch struct {
 	PublishedAt Cursor
 }
 
+// SnapshotRetentionFloor returns the oldest active snapshot read version.
+// Data-plane MVCC GC must not discard versions needed by any active snapshot
+// below this floor. The bool is false when no snapshot epoch is active.
+func SnapshotRetentionFloor(epochs map[string]SnapshotEpoch) (uint64, bool) {
+	var floor uint64
+	for _, epoch := range epochs {
+		if epoch.ReadVersion == 0 {
+			continue
+		}
+		if floor == 0 || epoch.ReadVersion < floor {
+			floor = epoch.ReadVersion
+		}
+	}
+	return floor, floor != 0
+}
+
+// SnapshotRetentionFloor returns the oldest active snapshot read version in s.
+func (s Snapshot) SnapshotRetentionFloor() (uint64, bool) {
+	return SnapshotRetentionFloor(s.SnapshotEpochs)
+}
+
 func CloneSnapshotEpochs(in map[string]SnapshotEpoch) map[string]SnapshotEpoch {
 	if len(in) == 0 {
 		return make(map[string]SnapshotEpoch)

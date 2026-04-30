@@ -21,6 +21,7 @@ const (
 	CheckpointStorm = "checkpoint-storm"
 	HotspotFanIn    = "hotspot-fanin"
 	WatchSubtree    = "watch-subtree"
+	NegativeLookup  = "negative-lookup"
 
 	DriverNativeFSMetadata = "native-fsmeta"
 	DriverGenericKV        = "generic-kv"
@@ -32,6 +33,7 @@ var ErrWorkloadFailed = errors.New("benchmark/fsmeta/workload: workload complete
 // fsmeta/client.GRPCClient satisfies this interface.
 type Client interface {
 	Create(ctx context.Context, req fsmeta.CreateRequest, inode fsmeta.InodeRecord) error
+	Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error)
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
 	ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
 }
@@ -63,6 +65,15 @@ type WatchSubtreeConfig struct {
 	Files              int
 	StartInode         fsmeta.InodeID
 	BackPressureWindow uint32
+}
+
+type NegativeLookupConfig struct {
+	Mount          fsmeta.MountID
+	RunID          string
+	Clients        int
+	Keys           int
+	ReadsPerClient int
+	Parent         fsmeta.InodeID
 }
 
 type Result struct {
@@ -327,6 +338,38 @@ func RunWatchSubtree(ctx context.Context, cli Client, cfg WatchSubtreeConfig) (R
 	}
 
 	return finishResult(WatchSubtree, cfg.RunID, started, rec.snapshot())
+}
+
+func RunNegativeLookup(ctx context.Context, cli Client, cfg NegativeLookupConfig) (Result, error) {
+	cfg = normalizeNegativeLookupConfig(cfg)
+	started := time.Now()
+	rec := newRecorder()
+
+	var wg sync.WaitGroup
+	for worker := 0; worker < cfg.Clients; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for i := 0; i < cfg.ReadsPerClient; i++ {
+				idx := (worker*cfg.ReadsPerClient + i) % cfg.Keys
+				name := fmt.Sprintf("missing-%s-%08d", cfg.RunID, idx)
+				rec.recordCall("lookup_missing", func() error {
+					_, err := cli.Lookup(ctx, fsmeta.LookupRequest{
+						Mount:  cfg.Mount,
+						Parent: cfg.Parent,
+						Name:   name,
+					})
+					if errors.Is(err, fsmeta.ErrNotFound) {
+						return nil
+					}
+					return err
+				})
+			}
+		}(worker)
+	}
+	wg.Wait()
+
+	return finishResult(NegativeLookup, cfg.RunID, started, rec.snapshot())
 }
 
 func SummaryRows(result Result) []SummaryRow {
@@ -636,6 +679,28 @@ func normalizeHotspotFanInConfig(cfg HotspotFanInConfig) HotspotFanInConfig {
 	}
 	if cfg.StartInode == 0 {
 		cfg.StartInode = 2_000_000
+	}
+	return cfg
+}
+
+func normalizeNegativeLookupConfig(cfg NegativeLookupConfig) NegativeLookupConfig {
+	if cfg.Mount == "" {
+		cfg.Mount = "fsmeta-workload"
+	}
+	if cfg.RunID == "" {
+		cfg.RunID = NewRunID()
+	}
+	if cfg.Clients <= 0 {
+		cfg.Clients = 4
+	}
+	if cfg.Keys <= 0 {
+		cfg.Keys = 1024
+	}
+	if cfg.ReadsPerClient <= 0 {
+		cfg.ReadsPerClient = 64
+	}
+	if cfg.Parent == 0 {
+		cfg.Parent = fsmeta.RootInode
 	}
 	return cfg
 }
