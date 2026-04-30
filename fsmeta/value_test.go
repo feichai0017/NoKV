@@ -116,10 +116,12 @@ func TestValueCodecsRejectInvalidType(t *testing.T) {
 	})
 	require.ErrorIs(t, err, ErrInvalidValue)
 
-	value := encodeValue(ValueKindInode, append([]byte{
+	body := append([]byte{
 		0, 0, 0, 0, 0, 0, 0, 22,
 		99,
-	}, make([]byte, 32)...))
+	}, make([]byte, 32)...)
+	body = append(body, 0)
+	value := encodeValue(ValueKindInode, body)
 	_, err = DecodeInodeValue(value)
 	require.ErrorIs(t, err, ErrInvalidValue)
 

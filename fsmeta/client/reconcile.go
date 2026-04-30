@@ -71,6 +71,9 @@ func WatchDirectoryWithReconcile(ctx context.Context, cli DirectoryWatchClient, 
 	if len(watchReq.KeyPrefix) != 0 || watchReq.DescendRecursively || watchReq.Mount != readReq.Mount || watchReq.RootInode != readReq.Parent {
 		return WatchReconcileResult{}, fmt.Errorf("%w: watch/read directory mismatch", fsmeta.ErrInvalidRequest)
 	}
+	if readReq.StartAfter != "" || readReq.SnapshotVersion != 0 {
+		return WatchReconcileResult{}, fmt.Errorf("%w: watch reconcile requires a fresh full-directory read", fsmeta.ErrInvalidRequest)
+	}
 	sub, err := cli.WatchSubtree(ctx, watchReq)
 	if err == nil {
 		return WatchReconcileResult{Subscription: sub}, nil

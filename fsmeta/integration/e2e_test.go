@@ -312,7 +312,7 @@ func TestFSMetadataWatchSubtreeReconcilesAfterExpiredCursor(t *testing.T) {
 	require.NoError(t, warmup.Close())
 
 	expired := baselineEvent.Cursor
-	expired.Index--
+	expired.Index = 0
 
 	result, err := fsmetaclient.WatchDirectoryWithReconcile(ctx, cli,
 		fsmeta.WatchRequest{

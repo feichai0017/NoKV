@@ -93,3 +93,20 @@ func TestWatchDirectoryWithReconcileRejectsMismatchedRequest(t *testing.T) {
 	)
 	require.ErrorIs(t, err, fsmeta.ErrInvalidRequest)
 }
+
+func TestWatchDirectoryWithReconcileRejectsPartialBaseline(t *testing.T) {
+	cli := &reconcileClient{}
+	watchReq := fsmeta.WatchRequest{Mount: "vol", RootInode: fsmeta.RootInode}
+
+	_, err := WatchDirectoryWithReconcile(context.Background(), cli, watchReq,
+		fsmeta.ReadDirRequest{Mount: "vol", Parent: fsmeta.RootInode, StartAfter: "a"},
+	)
+	require.ErrorIs(t, err, fsmeta.ErrInvalidRequest)
+
+	_, err = WatchDirectoryWithReconcile(context.Background(), cli, watchReq,
+		fsmeta.ReadDirRequest{Mount: "vol", Parent: fsmeta.RootInode, SnapshotVersion: 10},
+	)
+	require.ErrorIs(t, err, fsmeta.ErrInvalidRequest)
+	require.Empty(t, cli.watches)
+	require.Empty(t, cli.reads)
+}

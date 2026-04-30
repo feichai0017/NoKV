@@ -362,6 +362,9 @@ func RunNegativeLookup(ctx context.Context, cli Client, cfg NegativeLookupConfig
 					if errors.Is(err, fsmeta.ErrNotFound) {
 						return nil
 					}
+					if err == nil {
+						return fmt.Errorf("negative lookup unexpectedly found %q", name)
+					}
 					return err
 				})
 			}
