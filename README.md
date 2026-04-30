@@ -52,6 +52,15 @@ NoKV is that layer, open-sourced and namespace-native: server-side `ReadDirPlus`
 
 <br/>
 
+## 📬 Contact Us
+
+We are looking for design partners, contributors, and research collaborators working on distributed filesystems, object-storage namespace layers, AI dataset infrastructure, or agent workspace metadata.
+
+- **Guocheng Song** — [songguocheng348@gmail.com](mailto:songguocheng348@gmail.com)
+- **Changhao Wang** — [wch19961116@gmail.com](mailto:wch19961116@gmail.com)
+
+<br/>
+
 ## 📊 Headline Evidence
 
 ### Underlying KV layer (YCSB single-node, NoKV vs Badger / Pebble)
