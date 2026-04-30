@@ -199,7 +199,7 @@ func (e *Entry) EncodedValueSize() uint32 {
 
 // EstimateSize estimates the inline memory footprint used by write admission.
 func (e *Entry) EstimateSize() int {
-	return len(e.Key) + len(e.Value) + 1 // Meta
+	return len(e.Key) + len(e.Value) + sizeVarint(uint64(e.Meta)) + sizeVarint(e.ExpiresAt)
 }
 
 // IsRangeDelete reports whether the entry is a range tombstone.

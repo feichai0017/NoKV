@@ -1,6 +1,6 @@
 # WAL Subsystem
 
-NoKV's write-ahead log mirrors RocksDB's durability model and is implemented as a compact typed log. WAL appends happen alongside memtable writes through the DB commit pipeline; metadata values are stored inline, so replay does not depend on a separate value-log/blob layer.
+NoKV's write-ahead log mirrors RocksDB's durability model and is implemented as a compact typed log. WAL appends happen alongside memtable writes through the DB commit pipeline; metadata values are stored inline, so replay does not depend on a separate blob layer.
 
 ---
 
@@ -59,7 +59,7 @@ Key behaviours:
 - `RegisterRetention` lets LSM and raft participants publish the oldest WAL segment they still need. `RemoveSegment` rejects retained segments with `ErrSegmentRetained`.
 
 NoKV stores metadata values inline in the LSM. The WAL is only the durability
-and replay log; it is not paired with a value-log/blob layer.
+and replay log; it is not paired with a separate blob layer.
 
 ---
 
@@ -118,7 +118,7 @@ For hard admission control, `wal.Config.MaxSegments` rejects segment growth with
 
 1. `wal.Open` reopens the highest segment, leaving the file pointer at the end (`switchSegmentLocked`).
 2. `manifest.Manager` supplies the WAL checkpoint (segment + offset) while building the version. Replay skips entries up to this checkpoint, ensuring we only reapply writes not yet materialised in SSTables.
-3. `wal.Manager.Replay` (invoked by the LSM recovery path) rebuilds memtables from entries newer than the manifest checkpoint. Value-log recovery only validates/truncates segments and does not reapply data.
+3. `wal.Manager.Replay` (invoked by the LSM recovery path) rebuilds memtables from entries newer than the manifest checkpoint. Values are inline, so recovery does not need a separate blob pass.
 4. If the final record is partially written, the CRC mismatch stops replay and the segment is truncated during recovery tests, mimicking RocksDB's tolerant behaviour.
 
 ---

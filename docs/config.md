@@ -92,9 +92,7 @@ Example (TOML):
 ```toml
 work_dir = "./data"
 mem_table_engine = "art"
-value_threshold = 2048
 write_hot_key_limit = 128
-value_log_gc_interval = "30s"
 ```
 
 Notes:

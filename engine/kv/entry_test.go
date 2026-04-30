@@ -152,8 +152,9 @@ func TestEntryHelpers(t *testing.T) {
 	}
 
 	sz := e2.EstimateSize()
-	if sz <= len(e2.Key)+len(e2.Value) {
-		t.Fatalf("expected estimate to include metadata byte")
+	expected := len(e2.Key) + len(e2.Value) + sizeVarint(uint64(e2.Meta)) + sizeVarint(e2.ExpiresAt)
+	if sz != expected {
+		t.Fatalf("unexpected estimate: got %d want %d", sz, expected)
 	}
 }
 

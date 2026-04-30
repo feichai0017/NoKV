@@ -17,14 +17,12 @@ flowchart TD
     subgraph COLLECTORS["Collectors"]
         LSM["lsm.* metrics"]
         WAL["wal metrics"]
-        SLAB["slab sidecar metrics"]
         HOT["thermos"]
         REGION["region metrics"]
         TRANSPORT["grpc transport metrics"]
     end
     LSM --> SNAP["Stats.Snapshot()"]
     WAL --> SNAP
-    SLAB --> SNAP
     HOT --> SNAP
     REGION --> SNAP
     TRANSPORT --> SNAP
@@ -47,7 +45,6 @@ Two-layer design:
 - `flush.*`
 - `compaction.*`
 - `wal.*`
-- `slab.*`
 - `raft.*`
 - `write.*`
 - `region.*`
@@ -115,8 +112,8 @@ Example:
 
 - `flush.queue_length` + `compaction.backlog` both rising:
   flush/compaction under-provisioned.
-- `value_log.discard_queue` high for long periods:
-  check `value_log.gc.*` and compaction pressure.
+- `wal.segment_count` rising while `raft.max_lag_segments` stays high:
+  at least one raft group is retaining old WAL segments; inspect raft lag and snapshot progress.
 - `write.throttle_active=true` frequently:
   L0 pressure likely high; inspect `cache.block_l0_hit_rate` and compaction.
 - `write.hot_key_limited` increasing:
