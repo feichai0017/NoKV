@@ -559,7 +559,7 @@ func TestDBIteratorSeekAndValueCopy(t *testing.T) {
 		require.Equal(t, []byte("vb"), val)
 	})
 
-	t.Run("value-pointer", func(t *testing.T) {
+	t.Run("large-inline", func(t *testing.T) {
 		opt := newTestOptions(t)
 		db := openTestDB(t, opt)
 		defer func() { _ = db.Close() }()
@@ -567,7 +567,7 @@ func TestDBIteratorSeekAndValueCopy(t *testing.T) {
 		value := bytes.Repeat([]byte("p"), 64)
 		require.NoError(t, db.Set([]byte("k"), value))
 
-		it := db.NewIterator(&index.Options{IsAsc: true, OnlyUseKey: true})
+		it := db.NewIterator(&index.Options{IsAsc: true})
 		defer func() { _ = it.Close() }()
 		it.Seek([]byte("k"))
 		require.True(t, it.Valid())

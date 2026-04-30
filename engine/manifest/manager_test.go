@@ -130,6 +130,28 @@ func TestManifestVerifyTruncatesPartialEdit(t *testing.T) {
 	defer func() { _ = mgr.Close() }()
 }
 
+func TestManagerRejectsLegacyValueLogManifestEdit(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := manifest.Open(dir, nil)
+	require.NoError(t, err)
+
+	current, err := os.ReadFile(filepath.Join(dir, "CURRENT"))
+	require.NoError(t, err)
+	path := filepath.Join(dir, string(current))
+	require.NoError(t, mgr.Close())
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	require.NoError(t, err)
+	payload := append([]byte("NoKV"), byte(2))
+	require.NoError(t, binary.Write(f, binary.LittleEndian, uint32(len(payload))))
+	_, err = f.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, err = manifest.Open(dir, nil)
+	require.ErrorIs(t, err, manifest.ErrUnsupportedValueLogManifest)
+}
+
 func TestManagerRewrite(t *testing.T) {
 	dir := t.TempDir()
 	mgr, err := manifest.Open(dir, nil)

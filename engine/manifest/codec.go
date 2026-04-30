@@ -49,6 +49,8 @@ func writeEdit(w io.Writer, edit Edit) error {
 		} else {
 			buf = append(buf, 0)
 		}
+	case editValueLogHead, editDeleteValueLog, editUpdateValueLog:
+		return fmt.Errorf("%w: edit type %d", ErrUnsupportedValueLogManifest, edit.Type)
 	default:
 		return fmt.Errorf("unsupported manifest edit type: %d", edit.Type)
 	}
@@ -142,6 +144,8 @@ func decodeEdit(data []byte) (Edit, error) {
 			ValueSize: valueSize,
 			Landing:   landing,
 		}
+	case editValueLogHead, editDeleteValueLog, editUpdateValueLog:
+		return Edit{}, fmt.Errorf("%w: edit type %d", ErrUnsupportedValueLogManifest, edit.Type)
 	default:
 		return Edit{}, fmt.Errorf("unsupported manifest edit type: %d", edit.Type)
 	}

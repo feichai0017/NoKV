@@ -24,9 +24,6 @@ type Item interface {
 type Options struct {
 	Prefix []byte
 	IsAsc  bool
-	// OnlyUseKey instructs iterators to avoid copying value bytes eagerly.
-	// Callers should use Item.Entry() and copy the entry value when value access is required.
-	OnlyUseKey bool
 	// AccessPattern lets callers hint expected IO behaviour (sequential scans,
 	// random point lookups, etc.) so the file layer can tune madvise settings.
 	AccessPattern utils.AccessPattern

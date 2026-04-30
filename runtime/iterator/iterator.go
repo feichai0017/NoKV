@@ -41,8 +41,6 @@ type DBIterator struct {
 	// rtCheck indicates whether this iterator snapshot needs tombstone
 	// coverage checks.
 	rtCheck bool
-	// keyOnly avoids eager value copying when true.
-	keyOnly bool
 
 	lowerBound []byte
 	upperBound []byte
@@ -103,13 +101,11 @@ func New(deps Deps, opt *index.Options) index.Iterator {
 	if opt == nil {
 		opt = &index.Options{}
 	}
-	keyOnly := opt.OnlyUseKey
 	ctx := deps.Pool.Get()
 	ctx.Append(deps.Storage.NewIterators(opt)...)
 	itr := &DBIterator{
 		pool:       deps.Pool,
 		ctx:        ctx,
-		keyOnly:    keyOnly,
 		lowerBound: opt.LowerBound,
 		upperBound: opt.UpperBound,
 		hasLower:   len(opt.LowerBound) > 0,
