@@ -15,6 +15,7 @@ const GCPlanTaskName = "mvcc-gc.plan"
 // GCPlanSnapshot exposes the last read-only background MVCC GC plan.
 type GCPlanSnapshot struct {
 	dbruntime.PeriodicTaskSnapshot
+	SkippedRuns  uint64
 	LastTxnFloor TxnFloor
 	LastPlan     PlanStats
 }
@@ -38,6 +39,7 @@ type GCPlanner struct {
 	mount     MountResolver
 
 	mu       sync.RWMutex
+	skipped  uint64
 	txnFloor TxnFloor
 	plan     PlanStats
 }
@@ -62,6 +64,7 @@ func NewGCPlanTask(cfg GCPlanConfig) (dbruntime.PeriodicTaskConfig, *GCPlanner, 
 func (s *GCPlanner) run(ctx context.Context) error {
 	requestedSafePoint := s.safePoint()
 	if requestedSafePoint == 0 {
+		s.recordSkipped()
 		return nil
 	}
 	txnFloor, err := PlanTxnFloor(ctx, s.store)
@@ -91,6 +94,7 @@ func (s *GCPlanner) Snapshot(task dbruntime.PeriodicTaskSnapshot) GCPlanSnapshot
 	defer s.mu.RUnlock()
 	return GCPlanSnapshot{
 		PeriodicTaskSnapshot: task,
+		SkippedRuns:          s.skipped,
 		LastTxnFloor:         s.txnFloor,
 		LastPlan:             s.plan,
 	}
@@ -100,5 +104,11 @@ func (s *GCPlanner) record(txnFloor TxnFloor, plan PlanStats) {
 	s.mu.Lock()
 	s.txnFloor = txnFloor
 	s.plan = plan
+	s.mu.Unlock()
+}
+
+func (s *GCPlanner) recordSkipped() {
+	s.mu.Lock()
+	s.skipped++
 	s.mu.Unlock()
 }

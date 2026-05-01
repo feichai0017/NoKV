@@ -64,6 +64,8 @@ type (
 		Open(groupID uint64, meta *localmeta.Store) (raftlog.PeerStorage, error)
 	}
 
+	mvccMaintenanceSnapshotSource func() storemvcc.MaintenanceSnapshot
+
 	// DB is the global handle for the engine and owns shared resources.
 	DB struct {
 		sync.RWMutex
@@ -94,7 +96,9 @@ type (
 		// processors, and the optional sync worker. See runtime/commit.
 		pipeline        *commit.Pipeline
 		iterPool        *iterpkg.IteratorPool
+		raftMode        raftmode.Mode
 		mvccGCPlan      *storemvcc.GCPlanner
+		mvccMaintenance atomic.Value
 		hotWriteLimited atomic.Uint64
 		background      dbruntime.BackgroundServices
 		runtimeModules  dbruntime.Registry
@@ -194,6 +198,7 @@ func (db *DB) checkWorkDirMode() error {
 		return fmt.Errorf("open db: read workdir mode: %w", err)
 	}
 	if raftmode.Allowed(db.opt.AllowedModes, mode) {
+		db.raftMode = mode
 		return nil
 	}
 	if len(db.opt.AllowedModes) == 0 {
@@ -352,6 +357,14 @@ func (db *DB) RaftLog() RaftLog {
 		return nil
 	}
 	return dbRaftLog{db: db}
+}
+
+// RaftMode returns the persisted lifecycle mode observed when the DB was opened.
+func (db *DB) RaftMode() raftmode.Mode {
+	if db == nil {
+		return ""
+	}
+	return db.raftMode
 }
 
 // Open constructs the database and returns initialization errors instead of panicking.
@@ -866,6 +879,32 @@ func (db *DB) MVCCGCPlanSnapshot() storemvcc.GCPlanSnapshot {
 	}
 	return db.mvccGCPlan.Snapshot(db.background.PeriodicTaskSnapshot(storemvcc.GCPlanTaskName))
 }
+
+// SetMVCCMaintenanceSnapshotSource attaches the raftstore-owned replicated
+// MVCC maintenance observer used by runtime stats. The source is read-only:
+// DB only calls it while building snapshots and never owns the worker lifecycle.
+func (db *DB) SetMVCCMaintenanceSnapshotSource(source func() storemvcc.MaintenanceSnapshot) {
+	if db == nil || source == nil {
+		return
+	}
+	db.mvccMaintenance.Store(mvccMaintenanceSnapshotSource(source))
+}
+
+func (db *DB) MVCCMaintenanceSnapshot() storemvcc.MaintenanceSnapshot {
+	if db == nil {
+		return storemvcc.MaintenanceSnapshot{}
+	}
+	v := db.mvccMaintenance.Load()
+	if v == nil {
+		return storemvcc.MaintenanceSnapshot{}
+	}
+	source, ok := v.(mvccMaintenanceSnapshotSource)
+	if !ok || source == nil {
+		return storemvcc.MaintenanceSnapshot{}
+	}
+	return source()
+}
+
 func (db *DB) HotWrite() *thermos.RotatingThermos  { return db.hotWrite }
 func (db *DB) IteratorReused() uint64              { return db.iterPool.Reused() }
 func (db *DB) WriteMetrics() *metrics.WriteMetrics { return db.writeMetrics }

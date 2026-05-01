@@ -112,6 +112,24 @@ func EncodeSessionKey(mount MountID, session SessionID) ([]byte, error) {
 	return encodeKey(mount, KeyKindSession, []byte(session))
 }
 
+// EncodeInodeSessionKey returns the exclusive writer-owner key for one inode.
+// Session IDs cannot contain NUL, so the 0x00 marker cannot collide with
+// EncodeSessionKey.
+func EncodeInodeSessionKey(mount MountID, inode InodeID) ([]byte, error) {
+	if err := validateInodeID(inode); err != nil {
+		return nil, err
+	}
+	var body [9]byte
+	binary.BigEndian.PutUint64(body[1:], uint64(inode))
+	return encodeKey(mount, KeyKindSession, body[:])
+}
+
+// EncodeSessionPrefix returns the scan prefix covering both session IDs and
+// inode owner records for one mount.
+func EncodeSessionPrefix(mount MountID) ([]byte, error) {
+	return encodeKey(mount, KeyKindSession, nil)
+}
+
 // EncodeUsageKey returns a quota usage/counter key. Scope 0 is mount-wide;
 // non-zero scopes are direct quota accounting roots.
 func EncodeUsageKey(mount MountID, scope InodeID) ([]byte, error) {

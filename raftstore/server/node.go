@@ -12,6 +12,7 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/admin"
 	"github.com/feichai0017/NoKV/raftstore/kv"
+	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/raftstore/transport"
@@ -32,11 +33,12 @@ func enableRaftDebugLogging() {
 // Node hosts one raftstore store together with the shared gRPC transport,
 // data-plane KV service, and admin service.
 type Node struct {
-	store     *store.Store
-	transport *transport.GRPCTransport
-	tickStop  chan struct{}
-	tickWG    sync.WaitGroup
-	tickEvery time.Duration
+	store           *store.Store
+	transport       *transport.GRPCTransport
+	mvccMaintenance *storemvcc.MaintenanceWorker
+	tickStop        chan struct{}
+	tickWG          sync.WaitGroup
+	tickEvery       time.Duration
 }
 
 // NewNode constructs one raftstore node using the provided configuration.
@@ -111,6 +113,10 @@ func NewNode(cfg Config) (*Node, error) {
 		store:     st,
 		transport: tr,
 	}
+	if worker, ok := newMVCCMaintenanceWorker(cfg.MVCCMaintenance, cfg.Storage.MVCC, st); ok {
+		node.mvccMaintenance = worker
+		worker.Start()
+	}
 	interval := cfg.RaftTickInterval
 	if interval <= 0 {
 		interval = defaultRaftTickInterval
@@ -143,11 +149,23 @@ func (n *Node) Transport() *transport.GRPCTransport {
 	return n.transport
 }
 
+// MVCCMaintenanceSnapshot returns the last replicated MVCC maintenance pass.
+func (n *Node) MVCCMaintenanceSnapshot() storemvcc.MaintenanceSnapshot {
+	if n == nil || n.mvccMaintenance == nil {
+		return storemvcc.MaintenanceSnapshot{}
+	}
+	return n.mvccMaintenance.Snapshot()
+}
+
 // Close stops the node transport. The caller remains responsible for closing
 // the DB and store once outstanding operations are drained.
 func (n *Node) Close() error {
 	if n == nil {
 		return nil
+	}
+	if n.mvccMaintenance != nil {
+		n.mvccMaintenance.Close()
+		n.mvccMaintenance = nil
 	}
 	if n.transport != nil {
 		if err := n.transport.Close(); err != nil {

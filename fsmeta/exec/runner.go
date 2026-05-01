@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync/atomic"
+	"time"
 
 	xxhash "github.com/cespare/xxhash/v2"
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
@@ -68,6 +70,7 @@ type Executor struct {
 	negCache               *negativecache.Cache
 	dirPages               *dirpage.Cache
 	lockTTL                uint64
+	now                    func() time.Time
 	txnRetriesTotal        atomic.Uint64
 	txnRetryExhaustedTotal atomic.Uint64
 }
@@ -80,6 +83,15 @@ func WithLockTTL(ttl uint64) Option {
 	return func(e *Executor) {
 		if ttl > 0 {
 			e.lockTTL = ttl
+		}
+	}
+}
+
+// WithClock overrides the wall clock used for write-session expiry.
+func WithClock(now func() time.Time) Option {
+	return func(e *Executor) {
+		if now != nil {
+			e.now = now
 		}
 	}
 }
@@ -245,6 +257,91 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest, inode f
 	e.invalidateNegative(plan.MutateKeys[0])
 	e.invalidateDirPages(req.Mount, req.Parent)
 	return nil
+}
+
+// UpdateInode updates mutable inode attributes and applies the size quota delta
+// in the same transaction. The parent field is required because quota and
+// DirPage invalidation are directory-scoped in fsmeta v1.
+func (e *Executor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error) {
+	plan, err := fsmeta.PlanUpdateInode(req)
+	if err != nil {
+		return fsmeta.InodeRecord{}, err
+	}
+	if !req.SetSize && !req.SetMode && !req.SetUpdatedUnixNs && !req.SetOpaqueAttrs {
+		return fsmeta.InodeRecord{}, fsmeta.ErrInvalidRequest
+	}
+	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
+		return fsmeta.InodeRecord{}, err
+	}
+	var updated fsmeta.InodeRecord
+	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+		dentry, err := e.readDentry(ctx, plan.ReadKeys[0], startVersion)
+		if err != nil {
+			return err
+		}
+		if dentry.Inode != req.Inode {
+			return fsmeta.ErrInvalidRequest
+		}
+		inode, ok, err := e.readInode(ctx, req.Mount, req.Inode, startVersion)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fsmeta.ErrNotFound
+		}
+		if dentry.Type != inode.Type {
+			return fsmeta.ErrInvalidValue
+		}
+		// v1 does not maintain an inode->parents reverse index. Updating a
+		// hard-linked inode would require invalidating and quota-adjusting every
+		// parent, so reject it rather than silently corrupting accounting.
+		if inode.LinkCount != 1 {
+			return fsmeta.ErrInvalidRequest
+		}
+		sizeDelta := int64(0)
+		if req.SetSize {
+			sizeDelta = inodeSizeChange(inode.Size, req.Size)
+			inode.Size = req.Size
+		}
+		if req.SetMode {
+			inode.Mode = req.Mode
+		}
+		if req.SetUpdatedUnixNs {
+			inode.UpdatedUnixNs = req.UpdatedUnixNs
+		}
+		if req.SetOpaqueAttrs {
+			inode.OpaqueAttrs = append([]byte(nil), req.OpaqueAttrs...)
+		}
+		value, err := fsmeta.EncodeInodeValue(inode)
+		if err != nil {
+			return err
+		}
+		mutations := []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   cloneBytes(plan.MutateKeys[0]),
+			Value: value,
+		}}
+		if sizeDelta != 0 {
+			quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
+				Mount: req.Mount,
+				Scope: req.Parent,
+				Bytes: sizeDelta,
+			}}, startVersion)
+			if err != nil {
+				return err
+			}
+			mutations = append(mutations, quotaMutations...)
+		}
+		if err := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
+			return err
+		}
+		updated = inode
+		return nil
+	}); err != nil {
+		return fsmeta.InodeRecord{}, err
+	}
+	e.invalidateDirPages(req.Mount, req.Parent)
+	return updated, nil
 }
 
 // Lookup returns the dentry record for parent/name. When a negative cache
@@ -684,6 +781,210 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 	return nil
 }
 
+// OpenWriteSession records one exclusive writer lease for an inode. It writes
+// both a session-id key and an inode-owner key so concurrent opens for the same
+// inode conflict on one Percolator key.
+func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSessionRequest) (fsmeta.SessionRecord, error) {
+	plan, err := fsmeta.PlanOpenWriteSession(req)
+	if err != nil {
+		return fsmeta.SessionRecord{}, err
+	}
+	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
+		return fsmeta.SessionRecord{}, err
+	}
+	if !e.expiryInFuture(req.ExpiresUnixNs) {
+		return fsmeta.SessionRecord{}, fsmeta.ErrInvalidRequest
+	}
+	record := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: req.ExpiresUnixNs}
+	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+		inode, ok, err := e.readInode(ctx, req.Mount, req.Inode, startVersion)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fsmeta.ErrNotFound
+		}
+		if inode.Type != fsmeta.InodeTypeFile {
+			return fsmeta.ErrInvalidRequest
+		}
+		now := e.clock().UnixNano()
+		if existing, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[1], startVersion); err != nil {
+			return err
+		} else if ok && sessionLive(existing, now) {
+			return fsmeta.ErrExists
+		}
+		mutations := make([]*kvrpcpb.Mutation, 0, 3)
+		if owner, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[2], startVersion); err != nil {
+			return err
+		} else if ok {
+			if sessionLive(owner, now) {
+				return fsmeta.ErrExists
+			}
+			staleSessionKey, err := fsmeta.EncodeSessionKey(req.Mount, owner.Session)
+			if err != nil {
+				return err
+			}
+			if string(staleSessionKey) != string(plan.ReadKeys[1]) {
+				mutations = append(mutations, &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Delete, Key: staleSessionKey})
+			}
+		}
+		value, err := fsmeta.EncodeSessionValue(record)
+		if err != nil {
+			return err
+		}
+		mutations = append(mutations,
+			&kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[0]), Value: value},
+			&kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[1]), Value: value},
+		)
+		return e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+	}); err != nil {
+		return fsmeta.SessionRecord{}, err
+	}
+	return record, nil
+}
+
+// HeartbeatWriteSession extends a live writer lease. Both session records must
+// agree, otherwise the session is considered lost and the caller must reopen.
+func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.HeartbeatWriteSessionRequest) (fsmeta.SessionRecord, error) {
+	plan, err := fsmeta.PlanHeartbeatWriteSession(req)
+	if err != nil {
+		return fsmeta.SessionRecord{}, err
+	}
+	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
+		return fsmeta.SessionRecord{}, err
+	}
+	if !e.expiryInFuture(req.ExpiresUnixNs) {
+		return fsmeta.SessionRecord{}, fsmeta.ErrInvalidRequest
+	}
+	record := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: req.ExpiresUnixNs}
+	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+		now := e.clock().UnixNano()
+		session, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[0], startVersion)
+		if err != nil {
+			return err
+		}
+		if !ok || !sessionLive(session, now) || session.Inode != req.Inode {
+			return fsmeta.ErrNotFound
+		}
+		owner, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[1], startVersion)
+		if err != nil {
+			return err
+		}
+		if !ok || !sessionLive(owner, now) || owner.Session != req.Session || owner.Inode != req.Inode {
+			return fsmeta.ErrNotFound
+		}
+		value, err := fsmeta.EncodeSessionValue(record)
+		if err != nil {
+			return err
+		}
+		mutations := []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[0]), Value: value},
+			{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[1]), Value: value},
+		}
+		return e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+	}); err != nil {
+		return fsmeta.SessionRecord{}, err
+	}
+	return record, nil
+}
+
+// CloseWriteSession releases one writer lease. It deletes the owner key only
+// when it still points at the closing session.
+func (e *Executor) CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteSessionRequest) error {
+	plan, err := fsmeta.PlanCloseWriteSession(req)
+	if err != nil {
+		return err
+	}
+	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+		session, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[0], startVersion)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fsmeta.ErrNotFound
+		}
+		mutations := []*kvrpcpb.Mutation{{Op: kvrpcpb.Mutation_Delete, Key: cloneBytes(plan.MutateKeys[0])}}
+		ownerKey, err := fsmeta.EncodeInodeSessionKey(req.Mount, session.Inode)
+		if err != nil {
+			return err
+		}
+		if owner, ok, err := e.readSessionByKey(ctx, ownerKey, startVersion); err != nil {
+			return err
+		} else if ok && owner.Session == req.Session && owner.Inode == session.Inode {
+			mutations = append(mutations, &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Delete, Key: ownerKey})
+		}
+		return e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ExpireWriteSessions removes stale session-id and inode-owner records for one
+// mount. It is a bounded maintenance primitive; callers should repeat until
+// Expired is zero when draining a large backlog.
+func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWriteSessionsRequest) (fsmeta.ExpireWriteSessionsResult, error) {
+	plan, err := fsmeta.PlanExpireWriteSessions(req)
+	if err != nil {
+		return fsmeta.ExpireWriteSessionsResult{}, err
+	}
+	now := e.clock().UnixNano()
+	var expired uint64
+	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+		kvs, err := e.runner.Scan(ctx, plan.StartKey, plan.Limit, startVersion)
+		if err != nil {
+			return err
+		}
+		deletes := make(map[string][]byte)
+		expiredSessions := make(map[fsmeta.SessionID]struct{})
+		for _, kv := range kvs {
+			if !bytes.HasPrefix(kv.Key, plan.PrimaryKey) {
+				break
+			}
+			record, err := fsmeta.DecodeSessionValue(kv.Value)
+			if err != nil {
+				return err
+			}
+			if sessionLive(record, now) {
+				continue
+			}
+			deletes[string(kv.Key)] = cloneBytes(kv.Key)
+			sessionKey, err := fsmeta.EncodeSessionKey(req.Mount, record.Session)
+			if err != nil {
+				return err
+			}
+			ownerKey, err := fsmeta.EncodeInodeSessionKey(req.Mount, record.Inode)
+			if err != nil {
+				return err
+			}
+			deletes[string(sessionKey)] = sessionKey
+			deletes[string(ownerKey)] = ownerKey
+			expiredSessions[record.Session] = struct{}{}
+		}
+		if len(deletes) == 0 {
+			expired = 0
+			return nil
+		}
+		keys := make([]string, 0, len(deletes))
+		for key := range deletes {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		mutations := make([]*kvrpcpb.Mutation, 0, len(deletes))
+		for _, key := range keys {
+			mutations = append(mutations, &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Delete, Key: deletes[key]})
+		}
+		if err := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
+			return err
+		}
+		expired = uint64(len(expiredSessions))
+		return nil
+	}); err != nil {
+		return fsmeta.ExpireWriteSessionsResult{}, err
+	}
+	return fsmeta.ExpireWriteSessionsResult{Expired: expired}, nil
+}
+
 // RenameSubtree moves the subtree root dentry from source to destination.
 // Descendants follow through inode parent links rather than key rewrites.
 func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error {
@@ -951,6 +1252,33 @@ func (e *Executor) readInode(ctx context.Context, mount fsmeta.MountID, inodeID 
 		return fsmeta.InodeRecord{}, false, err
 	}
 	return inode, true, nil
+}
+
+func (e *Executor) readSessionByKey(ctx context.Context, key []byte, version uint64) (fsmeta.SessionRecord, bool, error) {
+	value, ok, err := e.runner.Get(ctx, key, version)
+	if err != nil || !ok {
+		return fsmeta.SessionRecord{}, ok, err
+	}
+	record, err := fsmeta.DecodeSessionValue(value)
+	if err != nil {
+		return fsmeta.SessionRecord{}, false, err
+	}
+	return record, true, nil
+}
+
+func (e *Executor) expiryInFuture(expiresUnixNs int64) bool {
+	return expiresUnixNs > e.clock().UnixNano()
+}
+
+func (e *Executor) clock() time.Time {
+	if e != nil && e.now != nil {
+		return e.now()
+	}
+	return time.Now()
+}
+
+func sessionLive(record fsmeta.SessionRecord, nowUnixNs int64) bool {
+	return record.ExpiresUnixNs > nowUnixNs
 }
 
 func translateMutateError(err error) error {

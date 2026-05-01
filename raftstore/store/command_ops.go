@@ -382,6 +382,16 @@ func validateRequestKeys(meta localmeta.RegionMeta, req *raftcmdpb.RaftCmdReques
 			if len(key) > 0 && !keyInRange(meta, key) {
 				return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
 			}
+		case raftcmdpb.CmdType_CMD_MVCC_MAINTENANCE:
+			for _, entry := range r.GetMvccMaintenance().GetTombstones() {
+				if entry == nil {
+					continue
+				}
+				key := entry.GetKey()
+				if len(key) == 0 || !keyInRange(meta, key) {
+					return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
+				}
+			}
 		default:
 			return epochNotMatchError(&meta), AdmissionReasonInvalid
 		}

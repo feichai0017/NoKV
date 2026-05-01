@@ -9,8 +9,8 @@ import (
 	"github.com/feichai0017/NoKV/engine/index"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	txnstore "github.com/feichai0017/NoKV/percolator/storage"
 	txnmvcc "github.com/feichai0017/NoKV/percolator/mvcc"
+	txnstore "github.com/feichai0017/NoKV/percolator/storage"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -23,6 +23,9 @@ type ResolveLocksOptions struct {
 	// BatchLocks limits how many expired locks are resolved in one
 	// ApplyInternalEntries call. A non-positive value uses the default.
 	BatchLocks int
+	// MaxLocks stops one pass after scanning this many non-tombstone lock
+	// records. Zero means unlimited.
+	MaxLocks uint64
 }
 
 func (o ResolveLocksOptions) batchLocks() int {
@@ -43,10 +46,10 @@ type ResolveLocksStats struct {
 	RolledBackLocks    uint64
 }
 
-// ResolveExpiredLocks resolves expired Percolator locks in a local maintenance
-// store. It does not propose through raft; callers must not run it against a
-// live cluster-mode workdir.
-func ResolveExpiredLocks(ctx context.Context, db txnstore.Store, opt ResolveLocksOptions) (ResolveLocksStats, error) {
+// ResolveExpiredLocksReplicated resolves expired locks through semantic raft
+// ResolveLock commands. Use this path for cluster-mode stores so apply
+// observers and watch streams see normal transaction-resolution events.
+func ResolveExpiredLocksReplicated(ctx context.Context, db txnstore.Store, proposer LockResolverProposer, opt ResolveLocksOptions) (ResolveLocksStats, error) {
 	var stats ResolveLocksStats
 	if opt.CurrentTs == 0 {
 		return stats, nil
@@ -56,26 +59,42 @@ func ResolveExpiredLocks(ctx context.Context, db txnstore.Store, opt ResolveLock
 		if err := ctx.Err(); err != nil {
 			return stats, err
 		}
-		batch, err := collectResolveLockBatch(ctx, db, opt.CurrentTs, afterUserKey, opt.batchLocks())
+		var maxLocks uint64
+		if opt.MaxLocks > 0 {
+			if stats.ScannedLocks >= opt.MaxLocks {
+				return stats, nil
+			}
+			maxLocks = opt.MaxLocks - stats.ScannedLocks
+		}
+		batch, err := collectResolveLockBatch(ctx, db, opt.CurrentTs, afterUserKey, opt.batchLocks(), maxLocks)
 		if err != nil {
 			return stats, err
 		}
 		stats.add(batch.scan)
 		if len(batch.locks) > 0 {
-			entries, resolved, err := buildResolveLockEntries(ctx, db, opt.CurrentTs, batch.locks)
+			decisions, resolved, err := planResolveLocks(ctx, db, opt.CurrentTs, batch.locks)
 			if err != nil {
 				return stats, err
 			}
-			if len(entries) > 0 {
-				if err := db.ApplyInternalEntries(entries); err != nil {
-					releaseEntries(entries)
+			commands := groupResolveLockCommands(decisions)
+			for _, cmd := range commands {
+				applied, err := proposeResolveLocks(ctx, proposer, cmd.startTs, cmd.commitTs, cmd.keys)
+				if err != nil {
 					return stats, err
 				}
+				resolved.ResolvedLocks += applied
+				if cmd.commitTs == 0 {
+					resolved.RolledBackLocks += applied
+				} else {
+					resolved.CommittedLocks += applied
+				}
 			}
-			releaseEntries(entries)
 			stats.add(resolved)
 		}
 		if batch.done {
+			return stats, nil
+		}
+		if opt.MaxLocks > 0 && stats.ScannedLocks >= opt.MaxLocks {
 			return stats, nil
 		}
 		afterUserKey = batch.lastUserKey
@@ -94,7 +113,7 @@ type resolveLockBatch struct {
 	done        bool
 }
 
-func collectResolveLockBatch(ctx context.Context, db txnstore.Store, currentTs uint64, afterUserKey []byte, maxLocks int) (resolveLockBatch, error) {
+func collectResolveLockBatch(ctx context.Context, db txnstore.Store, currentTs uint64, afterUserKey []byte, maxExpiredLocks int, maxLocks uint64) (resolveLockBatch, error) {
 	var batch resolveLockBatch
 	if db == nil {
 		return batch, fmt.Errorf("raftstore/mvcc: nil MVCC store")
@@ -125,6 +144,9 @@ func collectResolveLockBatch(ctx context.Context, db txnstore.Store, currentTs u
 			batch.done = true
 			return batch, nil
 		}
+		if maxLocks > 0 && batch.scan.ScannedLocks >= maxLocks {
+			return batch, nil
+		}
 		batch.lastUserKey = entrykv.SafeCopy(batch.lastUserKey, userKey)
 		if entry.Meta&entrykv.BitDelete > 0 {
 			batch.scan.DeletedLockMarkers++
@@ -147,7 +169,7 @@ func collectResolveLockBatch(ctx context.Context, db txnstore.Store, currentTs u
 			lock: lock,
 		})
 		iter.Next()
-		if len(batch.locks) >= maxLocks {
+		if len(batch.locks) >= maxExpiredLocks {
 			return batch, nil
 		}
 	}
@@ -175,67 +197,75 @@ func seekLockStart(iter index.Iterator, afterUserKey []byte) {
 	}
 }
 
-func buildResolveLockEntries(ctx context.Context, db txnstore.Store, currentTs uint64, locks []lockRecord) ([]*entrykv.Entry, ResolveLocksStats, error) {
+type resolveLockDecision struct {
+	key      []byte
+	startTs  uint64
+	commitTs uint64
+	kind     kvrpcpb.Mutation_Op
+}
+
+type resolveLockCommand struct {
+	startTs  uint64
+	commitTs uint64
+	keys     [][]byte
+}
+
+func planResolveLocks(ctx context.Context, db txnstore.Store, currentTs uint64, locks []lockRecord) ([]resolveLockDecision, ResolveLocksStats, error) {
 	var stats ResolveLocksStats
-	var entries []*entrykv.Entry
-	seen := make(map[string]struct{}, len(locks))
+	decisions := make([]resolveLockDecision, 0, len(locks))
 	for _, rec := range locks {
 		if err := ctx.Err(); err != nil {
-			releaseEntries(entries)
 			return nil, stats, err
 		}
-		ops, committed, rolledBack, err := resolveOneLock(ctx, db, currentTs, rec)
+		decision, err := resolveOneLock(ctx, db, currentTs, rec)
 		if err != nil {
-			releaseEntries(entries)
 			return nil, stats, err
 		}
-		if len(ops) == 0 {
+		if decision == nil {
 			stats.RetainedLocks++
 			continue
 		}
-		for _, entry := range ops {
-			id := string(entry.Key)
-			if _, ok := seen[id]; ok {
-				entry.DecrRef()
-				continue
-			}
-			seen[id] = struct{}{}
-			entries = append(entries, entry)
-		}
-		stats.ResolvedLocks++
-		if committed {
-			stats.CommittedLocks++
-		}
-		if rolledBack {
-			stats.RolledBackLocks++
-		}
+		decisions = append(decisions, *decision)
 	}
-	return entries, stats, nil
+	return decisions, stats, nil
 }
 
-func resolveOneLock(ctx context.Context, db txnstore.Store, currentTs uint64, rec lockRecord) ([]*entrykv.Entry, bool, bool, error) {
+func resolveOneLock(ctx context.Context, db txnstore.Store, currentTs uint64, rec lockRecord) (*resolveLockDecision, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, false, false, err
+		return nil, err
 	}
 	if write, commitTs, ok, err := writeByStartTs(db, rec.lock.Primary, rec.lock.Ts); err != nil {
-		return nil, false, false, err
+		return nil, err
 	} else if ok {
 		if write.Kind == kvrpcpb.Mutation_Rollback {
-			return rollbackLockEntries(rec.key, rec.lock.Ts), false, true, nil
+			return &resolveLockDecision{
+				key:     entrykv.SafeCopy(nil, rec.key),
+				startTs: rec.lock.Ts,
+				kind:    rec.lock.Kind,
+			}, nil
 		}
-		return commitLockEntries(rec.key, rec.lock, commitTs), true, false, nil
+		return &resolveLockDecision{
+			key:      entrykv.SafeCopy(nil, rec.key),
+			startTs:  rec.lock.Ts,
+			commitTs: commitTs,
+			kind:     rec.lock.Kind,
+		}, nil
 	}
 
 	if !bytes.Equal(rec.key, rec.lock.Primary) {
 		primary, err := lockForKey(db, rec.lock.Primary)
 		if err != nil {
-			return nil, false, false, err
+			return nil, err
 		}
 		if primary != nil && primary.Ts == rec.lock.Ts && !lockExpired(*primary, currentTs) {
-			return nil, false, false, nil
+			return nil, nil
 		}
 	}
-	return rollbackLockEntries(rec.key, rec.lock.Ts), false, true, nil
+	return &resolveLockDecision{
+		key:     entrykv.SafeCopy(nil, rec.key),
+		startTs: rec.lock.Ts,
+		kind:    rec.lock.Kind,
+	}, nil
 }
 
 func lockForKey(db txnstore.Store, key []byte) (*txnmvcc.Lock, error) {
@@ -301,26 +331,31 @@ func writeByStartTs(db txnstore.Store, key []byte, startTs uint64) (txnmvcc.Writ
 	return txnmvcc.Write{}, 0, false, nil
 }
 
-func commitLockEntries(key []byte, lock txnmvcc.Lock, commitTs uint64) []*entrykv.Entry {
-	return []*entrykv.Entry{
-		entrykv.NewInternalEntry(entrykv.CFWrite, key, commitTs, txnmvcc.EncodeWrite(txnmvcc.Write{Kind: lock.Kind, StartTs: lock.Ts}), 0, 0),
-		entrykv.NewInternalEntry(entrykv.CFLock, key, entrykv.MaxVersion, nil, entrykv.BitDelete, 0),
-	}
-}
-
-func rollbackLockEntries(key []byte, startTs uint64) []*entrykv.Entry {
-	return []*entrykv.Entry{
-		entrykv.NewInternalEntry(entrykv.CFDefault, key, startTs, nil, entrykv.BitDelete, 0),
-		entrykv.NewInternalEntry(entrykv.CFWrite, key, startTs, txnmvcc.EncodeWrite(txnmvcc.Write{Kind: kvrpcpb.Mutation_Rollback, StartTs: startTs}), 0, 0),
-		entrykv.NewInternalEntry(entrykv.CFLock, key, entrykv.MaxVersion, nil, entrykv.BitDelete, 0),
-	}
-}
-
 func lockExpired(lock txnmvcc.Lock, currentTs uint64) bool {
 	if lock.TTL == 0 || currentTs == 0 {
 		return false
 	}
 	return currentTs >= lock.Ts+lock.TTL
+}
+
+func groupResolveLockCommands(decisions []resolveLockDecision) []resolveLockCommand {
+	type key struct {
+		startTs  uint64
+		commitTs uint64
+	}
+	groups := make([]resolveLockCommand, 0, len(decisions))
+	index := make(map[key]int, len(decisions))
+	for _, decision := range decisions {
+		k := key{startTs: decision.startTs, commitTs: decision.commitTs}
+		idx, ok := index[k]
+		if !ok {
+			idx = len(groups)
+			index[k] = idx
+			groups = append(groups, resolveLockCommand{startTs: decision.startTs, commitTs: decision.commitTs})
+		}
+		groups[idx].keys = append(groups[idx].keys, entrykv.SafeCopy(nil, decision.key))
+	}
+	return groups
 }
 
 func (s *ResolveLocksStats) add(other ResolveLocksStats) {

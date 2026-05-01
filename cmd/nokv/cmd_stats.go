@@ -125,6 +125,84 @@ func renderStats(w io.Writer, snap stats.StatsSnapshot, asJSON bool) error {
 	}
 	_, _ = fmt.Fprintf(w, "Regions.Total          %d (new=%d running=%d removing=%d tombstone=%d other=%d)\n",
 		snap.Region.Total, snap.Region.New, snap.Region.Running, snap.Region.Removing, snap.Region.Tombstone, snap.Region.Other)
+	if snap.MVCCGC.Enabled || snap.MVCCGC.Runs > 0 || snap.MVCCGC.DroppableWrites > 0 || snap.MVCCGC.ActiveLocks > 0 {
+		_, _ = fmt.Fprintf(w, "MVCCGC.Plan            enabled=%v runs=%d lastMs=%.2f\n",
+			snap.MVCCGC.Enabled, snap.MVCCGC.Runs, snap.MVCCGC.LastDurationMs)
+		if snap.MVCCGC.SkippedRuns > 0 {
+			_, _ = fmt.Fprintf(w, "MVCCGC.PlanSkipped     safePoint=0 runs=%d\n", snap.MVCCGC.SkippedRuns)
+		}
+		if snap.MVCCGC.LastError != "" {
+			_, _ = fmt.Fprintf(w, "MVCCGC.Warning         %s\n", snap.MVCCGC.LastError)
+		}
+		_, _ = fmt.Fprintf(w, "MVCCGC.TxnFloor        activeLocks=%d oldest=%d max=%d\n",
+			snap.MVCCGC.ActiveLocks, snap.MVCCGC.OldestStartTs, snap.MVCCGC.MaxStartTs)
+		_, _ = fmt.Fprintf(w, "MVCCGC.Candidates      keys=%d droppableKeys=%d writes=%d droppableWrites=%d\n",
+			snap.MVCCGC.ScannedKeys,
+			snap.MVCCGC.DroppableKeys,
+			snap.MVCCGC.WriteVersions,
+			snap.MVCCGC.DroppableWrites,
+		)
+		if snap.MVCCGC.SafePointClampedKeys > 0 || snap.MVCCGC.MaxVersionsPerKey > 0 {
+			_, _ = fmt.Fprintf(w, "MVCCGC.Policy          clampedKeys=%d maxVersionsPerKey=%d safePointMin=%d safePointMax=%d\n",
+				snap.MVCCGC.SafePointClampedKeys,
+				snap.MVCCGC.MaxVersionsPerKey,
+				snap.MVCCGC.MinEffectiveSafePoint,
+				snap.MVCCGC.MaxEffectiveSafePoint,
+			)
+		}
+	}
+	if snap.MVCCGC.MaintenanceEnabled ||
+		snap.MVCCGC.MaintenanceRuns > 0 ||
+		snap.MVCCGC.ResolvedLocks > 0 ||
+		snap.MVCCGC.AppliedWriteDeletes > 0 ||
+		snap.MVCCGC.AppliedDefaultDeletes > 0 ||
+		snap.MVCCGC.OrphanDefaults > 0 {
+		_, _ = fmt.Fprintf(w, "MVCCGC.Maintenance     enabled=%v runs=%d lastMs=%.2f\n",
+			snap.MVCCGC.MaintenanceEnabled,
+			snap.MVCCGC.MaintenanceRuns,
+			snap.MVCCGC.MaintenanceLastDurationMs,
+		)
+		if snap.MVCCGC.MaintenanceLastError != "" {
+			_, _ = fmt.Fprintf(w, "MVCCGC.MaintWarning    %s\n", snap.MVCCGC.MaintenanceLastError)
+		}
+		if snap.MVCCGC.MaintenanceResolveError != "" {
+			_, _ = fmt.Fprintf(w, "MVCCGC.ResolveWarning  %s\n", snap.MVCCGC.MaintenanceResolveError)
+		}
+		if snap.MVCCGC.MaintenanceApplyError != "" {
+			_, _ = fmt.Fprintf(w, "MVCCGC.ApplyWarning    %s\n", snap.MVCCGC.MaintenanceApplyError)
+		}
+		if snap.MVCCGC.MaintenanceOrphanError != "" {
+			_, _ = fmt.Fprintf(w, "MVCCGC.OrphanWarning   %s\n", snap.MVCCGC.MaintenanceOrphanError)
+		}
+		if snap.MVCCGC.MaintenanceSafePointSkipped {
+			_, _ = fmt.Fprintln(w, "MVCCGC.Apply           skipped safePoint=0")
+		}
+		if snap.MVCCGC.ScannedLocks > 0 ||
+			snap.MVCCGC.ExpiredLocks > 0 ||
+			snap.MVCCGC.ResolvedLocks > 0 ||
+			snap.MVCCGC.DeletedLockMarkers > 0 {
+			_, _ = fmt.Fprintf(w, "MVCCGC.ResolveLocks    scanned=%d expired=%d resolved=%d committed=%d rolledBack=%d deleted=%d\n",
+				snap.MVCCGC.ScannedLocks,
+				snap.MVCCGC.ExpiredLocks,
+				snap.MVCCGC.ResolvedLocks,
+				snap.MVCCGC.CommittedLocks,
+				snap.MVCCGC.RolledBackLocks,
+				snap.MVCCGC.DeletedLockMarkers,
+			)
+		}
+		if snap.MVCCGC.AppliedWriteDeletes > 0 || snap.MVCCGC.AppliedDefaultDeletes > 0 {
+			_, _ = fmt.Fprintf(w, "MVCCGC.Apply           writeDeletes=%d defaultDeletes=%d\n",
+				snap.MVCCGC.AppliedWriteDeletes,
+				snap.MVCCGC.AppliedDefaultDeletes,
+			)
+		}
+		if snap.MVCCGC.OrphanDefaults > 0 || snap.MVCCGC.AppliedOrphanDefaults > 0 {
+			_, _ = fmt.Fprintf(w, "MVCCGC.OrphanDefaults  found=%d appliedDeletes=%d\n",
+				snap.MVCCGC.OrphanDefaults,
+				snap.MVCCGC.AppliedOrphanDefaults,
+			)
+		}
+	}
 	if snap.LSM.ValueBytesTotal > 0 {
 		_, _ = fmt.Fprintf(w, "LSM.ValueBytesTotal   %d\n", snap.LSM.ValueBytesTotal)
 	}

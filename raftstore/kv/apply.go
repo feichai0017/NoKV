@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"time"
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"github.com/feichai0017/NoKV/percolator"
 	"github.com/feichai0017/NoKV/percolator/latch"
 	"github.com/feichai0017/NoKV/percolator/mvcc"
@@ -20,8 +20,8 @@ import (
 const defaultLatchSlots = 512
 
 // Apply executes a RaftCmdRequest against the provided DB. The returned
-// response mirrors the request ordering. Only MVCC prewrite/commit operations
-// are supported at the moment.
+// response mirrors the request ordering. Mutation commands are expected to
+// arrive through the replicated raft log.
 func Apply(db txnstore.Store, latches *latch.Manager, req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("kv: nil raft command")
@@ -59,6 +59,12 @@ func Apply(db txnstore.Store, latches *latch.Manager, req *raftcmdpb.RaftCmdRequ
 		case raftcmdpb.CmdType_CMD_CHECK_TXN_STATUS:
 			result := percolator.CheckTxnStatus(db, latches, r.GetCheckTxnStatus())
 			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_CheckTxnStatus{CheckTxnStatus: result}})
+		case raftcmdpb.CmdType_CMD_MVCC_MAINTENANCE:
+			result, err := applyMVCCMaintenance(db, r.GetMvccMaintenance())
+			if err != nil {
+				return nil, err
+			}
+			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_MvccMaintenance{MvccMaintenance: result}})
 		case raftcmdpb.CmdType_CMD_SCAN:
 			result, err := handleScan(db, r.GetScan())
 			if err != nil {
@@ -70,6 +76,83 @@ func Apply(db txnstore.Store, latches *latch.Manager, req *raftcmdpb.RaftCmdRequ
 		}
 	}
 	return resp, nil
+}
+
+func applyMVCCMaintenance(db txnstore.Store, req *kvrpcpb.MVCCMaintenanceRequest) (*kvrpcpb.MVCCMaintenanceResponse, error) {
+	entries, keyErr := buildMVCCMaintenanceEntries(req)
+	if keyErr != nil {
+		return &kvrpcpb.MVCCMaintenanceResponse{Error: keyErr}, nil
+	}
+	if len(entries) == 0 {
+		return &kvrpcpb.MVCCMaintenanceResponse{}, nil
+	}
+	defer func() {
+		for _, entry := range entries {
+			if entry != nil {
+				entry.DecrRef()
+			}
+		}
+	}()
+	// ApplyInternalEntries is the raft apply batch boundary for MVCC
+	// maintenance. NoKV's DB implementation maps it to one atomic LSM batch;
+	// if another Store implementation reports an error after partial
+	// persistence, the caller retries the whole tombstone batch and relies on
+	// tombstones being idempotent.
+	if err := db.ApplyInternalEntries(entries); err != nil {
+		return nil, err
+	}
+	return &kvrpcpb.MVCCMaintenanceResponse{AppliedEntries: uint64(len(entries))}, nil
+}
+
+func buildMVCCMaintenanceEntries(req *kvrpcpb.MVCCMaintenanceRequest) ([]*kv.Entry, *kvrpcpb.KeyError) {
+	if req == nil || len(req.GetTombstones()) == 0 {
+		return nil, nil
+	}
+	entries := make([]*kv.Entry, 0, len(req.GetTombstones()))
+	for i, tombstone := range req.GetTombstones() {
+		if tombstone == nil {
+			continue
+		}
+		cf, ok := maintenanceColumnFamily(tombstone.GetColumnFamily())
+		if !ok {
+			releaseEntries(entries)
+			return nil, maintenanceAbort("invalid column family")
+		}
+		if len(tombstone.GetKey()) == 0 {
+			releaseEntries(entries)
+			return nil, maintenanceAbort("empty key")
+		}
+		entry := kv.NewInternalEntry(cf, tombstone.GetKey(), tombstone.GetVersion(), nil, kv.BitDelete, 0)
+		if entry == nil {
+			releaseEntries(entries)
+			return nil, maintenanceAbort(fmt.Sprintf("entry %d build failed", i))
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+func releaseEntries(entries []*kv.Entry) {
+	for _, entry := range entries {
+		if entry != nil {
+			entry.DecrRef()
+		}
+	}
+}
+
+func maintenanceColumnFamily(cf kvrpcpb.InternalEntryTombstone_ColumnFamily) (kv.ColumnFamily, bool) {
+	switch cf {
+	case kvrpcpb.InternalEntryTombstone_DEFAULT:
+		return kv.CFDefault, true
+	case kvrpcpb.InternalEntryTombstone_WRITE:
+		return kv.CFWrite, true
+	default:
+		return 0, false
+	}
+}
+
+func maintenanceAbort(msg string) *kvrpcpb.KeyError {
+	return &kvrpcpb.KeyError{Abort: msg}
 }
 
 // NewApplier wraps Apply into a reusable function suitable for store command

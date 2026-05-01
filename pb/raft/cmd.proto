@@ -57,6 +57,7 @@ enum CmdType {
   CMD_BATCH_ROLLBACK = 5;
   CMD_RESOLVE_LOCK = 6;
   CMD_CHECK_TXN_STATUS = 7;
+  CMD_MVCC_MAINTENANCE = 8;
 }
 
 message Request {
@@ -70,6 +71,7 @@ message Request {
     nokv.kv.v1.BatchRollbackRequest batch_rollback = 6;
     nokv.kv.v1.ResolveLockRequest resolve_lock = 7;
     nokv.kv.v1.CheckTxnStatusRequest check_txn_status = 8;
+    nokv.kv.v1.MVCCMaintenanceRequest mvcc_maintenance = 9;
   }
 }
 
@@ -82,6 +84,7 @@ message Response {
     nokv.kv.v1.BatchRollbackResponse batch_rollback = 5;
     nokv.kv.v1.ResolveLockResponse resolve_lock = 6;
     nokv.kv.v1.CheckTxnStatusResponse check_txn_status = 7;
+    nokv.kv.v1.MVCCMaintenanceResponse mvcc_maintenance = 8;
   }
 }
 

@@ -12,9 +12,13 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/metrics"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	txnmvcc "github.com/feichai0017/NoKV/percolator/mvcc"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/feichai0017/NoKV/runtime/stats"
 	"github.com/stretchr/testify/require"
 )
@@ -129,6 +133,86 @@ func TestStatsSnapshotTracksThrottleAndWalRemovals(t *testing.T) {
 
 	// Legacy scalar key should remain absent.
 	require.Nil(t, expvar.Get("NoKV.Stats.Write.Throttle"))
+}
+
+func TestStatsSnapshotIncludesMVCCGCPlanner(t *testing.T) {
+	opt := newTestOptions(t)
+	opt.MVCCGCPlanInterval = 5 * time.Millisecond
+	opt.MVCCGCSafePointFn = func() uint64 { return 100 }
+	db := openTestDB(t, opt)
+	defer func() { _ = db.Close() }()
+	db.SetMVCCMaintenanceSnapshotSource(func() storemvcc.MaintenanceSnapshot {
+		return storemvcc.MaintenanceSnapshot{
+			Enabled:              true,
+			Runs:                 2,
+			LastUnix:             123,
+			LastDurationMs:       4.5,
+			LastResolveError:     "resolve warn",
+			LastSafePointSkipped: true,
+			LastResolveLocks: storemvcc.ResolveLocksStats{
+				ScannedLocks:       5,
+				ExpiredLocks:       4,
+				ResolvedLocks:      3,
+				CommittedLocks:     2,
+				RolledBackLocks:    1,
+				DeletedLockMarkers: 3,
+			},
+			LastApply: storemvcc.ApplyStats{
+				AppliedWriteDeletes:   7,
+				AppliedDefaultDeletes: 8,
+			},
+			LastOrphanDefaults: storemvcc.OrphanDefaultStats{
+				OrphanDefaults:        9,
+				AppliedDefaultDeletes: 10,
+			},
+		}
+	})
+
+	key := []byte("stats-mvcc-gc-key")
+	applyStatsMVCCWrite(t, db, key, 150, 140)
+	applyStatsMVCCWrite(t, db, key, 90, 80)
+	applyStatsMVCCWrite(t, db, key, 40, 30)
+
+	var snap stats.StatsSnapshot
+	require.Eventually(t, func() bool {
+		snap = db.Info().Snapshot()
+		return snap.MVCCGC.Enabled &&
+			snap.MVCCGC.Runs > 0 &&
+			snap.MVCCGC.LastError == "" &&
+			snap.MVCCGC.DroppableWrites == 1
+	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, uint64(1), snap.MVCCGC.ScannedKeys)
+	require.Equal(t, uint64(3), snap.MVCCGC.WriteVersions)
+	require.Equal(t, uint64(1), snap.MVCCGC.AnchorWrites)
+	require.Equal(t, uint64(3), snap.MVCCGC.MaxVersionsPerKey)
+	require.Equal(t, uint64(100), snap.MVCCGC.MaxEffectiveSafePoint)
+	require.True(t, snap.MVCCGC.MaintenanceEnabled)
+	require.Equal(t, uint64(2), snap.MVCCGC.MaintenanceRuns)
+	require.Equal(t, "resolve warn", snap.MVCCGC.MaintenanceResolveError)
+	require.True(t, snap.MVCCGC.MaintenanceSafePointSkipped)
+	require.Equal(t, uint64(3), snap.MVCCGC.ResolvedLocks)
+	require.Equal(t, uint64(7), snap.MVCCGC.AppliedWriteDeletes)
+	require.Equal(t, uint64(10), snap.MVCCGC.AppliedOrphanDefaults)
+
+	db.Info().Collect()
+	exported := loadExpvarStatsSnapshot(t)
+	require.Equal(t, snap.MVCCGC.Enabled, exported.MVCCGC.Enabled)
+	require.Equal(t, snap.MVCCGC.Runs, exported.MVCCGC.Runs)
+	require.Equal(t, snap.MVCCGC.DroppableWrites, exported.MVCCGC.DroppableWrites)
+	require.Equal(t, snap.MVCCGC.MaxVersionsPerKey, exported.MVCCGC.MaxVersionsPerKey)
+	require.Equal(t, snap.MVCCGC.MaintenanceRuns, exported.MVCCGC.MaintenanceRuns)
+	require.Equal(t, snap.MVCCGC.MaintenanceResolveError, exported.MVCCGC.MaintenanceResolveError)
+	require.Equal(t, snap.MVCCGC.MaintenanceSafePointSkipped, exported.MVCCGC.MaintenanceSafePointSkipped)
+	require.Equal(t, snap.MVCCGC.ResolvedLocks, exported.MVCCGC.ResolvedLocks)
+	require.Equal(t, snap.MVCCGC.AppliedWriteDeletes, exported.MVCCGC.AppliedWriteDeletes)
+}
+
+func applyStatsMVCCWrite(t *testing.T, db *NoKV.DB, key []byte, commitTs, startTs uint64) {
+	t.Helper()
+	write := txnmvcc.EncodeWrite(txnmvcc.Write{Kind: kvrpcpb.Mutation_Put, StartTs: startTs})
+	entry := entrykv.NewInternalEntry(entrykv.CFWrite, key, commitTs, write, 0, 0)
+	defer entry.DecrRef()
+	require.NoError(t, db.ApplyInternalEntries([]*entrykv.Entry{entry}))
 }
 
 func loadExpvarStatsSnapshot(t *testing.T) stats.StatsSnapshot {

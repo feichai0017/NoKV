@@ -65,13 +65,18 @@ func Plan(ctx context.Context, db txnstore.Store, policy SafePointPolicy) (PlanS
 	return stats, err
 }
 
-// Apply applies MVCC GC by writing point tombstones for droppable CFWrite
-// records and their unreferenced CFDefault payloads. It scans and applies in
-// bounded batches, and never writes to the DB while an iterator is open.
-//
-// Apply writes through the local Store surface. Cluster-mode GC must propose an
-// equivalent raft command instead of calling this helper directly.
-func Apply(ctx context.Context, db txnstore.Store, policy SafePointPolicy, opt ApplyOptions) (ApplyStats, error) {
+// ApplyReplicated applies MVCC GC through a MaintenanceProposer. Each tombstone
+// batch is submitted as a replicated raft command; there is intentionally no
+// local direct-apply path for production GC.
+func ApplyReplicated(ctx context.Context, db txnstore.Store, proposer MaintenanceProposer, policy SafePointPolicy, opt ApplyOptions) (ApplyStats, error) {
+	return applyWith(ctx, db, policy, opt, func(ctx context.Context, entries []*entrykv.Entry) error {
+		return proposeMaintenanceEntries(ctx, proposer, entries)
+	})
+}
+
+type applySubmitFn func(context.Context, []*entrykv.Entry) error
+
+func applyWith(ctx context.Context, db txnstore.Store, policy SafePointPolicy, opt ApplyOptions, submit applySubmitFn) (ApplyStats, error) {
 	var stats ApplyStats
 	var afterUserKey []byte
 	for {
@@ -90,14 +95,12 @@ func Apply(ctx context.Context, db txnstore.Store, policy SafePointPolicy, opt A
 			return stats, err
 		}
 		stats.add(batch.plan)
-		if len(batch.entries) > 0 {
-			if err := db.ApplyInternalEntries(batch.entries); err != nil {
-				releaseEntries(batch.entries)
-				return stats, err
-			}
-			stats.AppliedWriteDeletes += batch.writeDeletes
-			stats.AppliedDefaultDeletes += batch.defaultDeletes
+		if err := submit(ctx, batch.entries); err != nil {
+			releaseEntries(batch.entries)
+			return stats, err
 		}
+		stats.AppliedWriteDeletes += batch.writeDeletes
+		stats.AppliedDefaultDeletes += batch.defaultDeletes
 		releaseEntries(batch.entries)
 		if batch.done {
 			return stats, nil
@@ -195,6 +198,9 @@ func walk(ctx context.Context, db txnstore.Store, policy SafePointPolicy, afterU
 			return result, fmt.Errorf("raftstore/mvcc: decode CFWrite %x@%d: %w", userKey, commitTs, err)
 		}
 		versions = append(versions, txnmvcc.GCWriteVersion{CommitTs: commitTs, Write: write})
+		if uint64(len(versions)) > policy.maxVersionsPerKey() {
+			return result, fmt.Errorf("raftstore/mvcc: key %x has more than %d buffered write versions; split the pass or raise MaxVersionsPerKey", currentKey, policy.maxVersionsPerKey())
+		}
 		iter.Next()
 	}
 	return result, flush()

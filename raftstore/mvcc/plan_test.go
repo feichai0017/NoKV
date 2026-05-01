@@ -99,6 +99,20 @@ func TestPlanMVCCGCRejectsCorruptWritePayload(t *testing.T) {
 	require.ErrorContains(t, err, "decode CFWrite")
 }
 
+func TestPlanMVCCGCRejectsOverlongVersionChain(t *testing.T) {
+	db := openMVCCGCPlanTestDB(t)
+	key := []byte("vol/hot")
+	applyMVCCGCWrite(t, db, key, 150, 140)
+	applyMVCCGCWrite(t, db, key, 90, 80)
+	applyMVCCGCWrite(t, db, key, 40, 30)
+
+	_, err := storemvcc.Plan(context.Background(), db, storemvcc.SafePointPolicy{
+		RequestedSafePoint: 100,
+		MaxVersionsPerKey:  2,
+	})
+	require.ErrorContains(t, err, "buffered write versions")
+}
+
 func TestPlanMVCCGCHonorsContextCancellation(t *testing.T) {
 	db := openMVCCGCPlanTestDB(t)
 	key := []byte("vol/key")
@@ -117,7 +131,13 @@ func TestApplyMVCCGCDeletesDroppableWriteAndDefault(t *testing.T) {
 	applyMVCCGCPutVersion(t, db, key, 90, 80, "anchor")
 	applyMVCCGCPutVersion(t, db, key, 40, 30, "old")
 
-	stats, err := storemvcc.Apply(context.Background(), db, storemvcc.SafePointPolicy{RequestedSafePoint: 100}, storemvcc.ApplyOptions{})
+	stats, err := storemvcc.ApplyReplicated(
+		context.Background(),
+		db,
+		&testMaintenanceProposer{db: db},
+		storemvcc.SafePointPolicy{RequestedSafePoint: 100},
+		storemvcc.ApplyOptions{},
+	)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), stats.AppliedWriteDeletes)
 	require.Equal(t, uint64(1), stats.AppliedDefaultDeletes)
@@ -141,6 +161,49 @@ func TestApplyMVCCGCDeletesDroppableWriteAndDefault(t *testing.T) {
 	require.Equal(t, []byte("anchor"), anchorDefault.Value)
 }
 
+func TestApplyMVCCGCReplicatedUsesMaintenanceProposer(t *testing.T) {
+	db := openMVCCGCPlanTestDB(t)
+	key := []byte("vol/key")
+	applyMVCCGCPutVersion(t, db, key, 150, 140, "new")
+	applyMVCCGCPutVersion(t, db, key, 90, 80, "anchor")
+	applyMVCCGCPutVersion(t, db, key, 40, 30, "old")
+
+	proposer := &testMaintenanceProposer{db: db}
+	stats, err := storemvcc.ApplyReplicated(
+		context.Background(),
+		db,
+		proposer,
+		storemvcc.SafePointPolicy{RequestedSafePoint: 100},
+		storemvcc.ApplyOptions{BatchEntries: 1},
+	)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), stats.AppliedWriteDeletes)
+	require.Equal(t, uint64(1), stats.AppliedDefaultDeletes)
+	require.Equal(t, 1, proposer.calls)
+
+	droppedWrite, err := db.GetInternalEntry(entrykv.CFWrite, key, 40)
+	require.NoError(t, err)
+	defer droppedWrite.DecrRef()
+	require.NotZero(t, droppedWrite.Meta&entrykv.BitDelete)
+}
+
+func TestApplyMVCCGCReplicatedRejectsPartialProposerAck(t *testing.T) {
+	db := openMVCCGCPlanTestDB(t)
+	key := []byte("vol/key")
+	applyMVCCGCPutVersion(t, db, key, 150, 140, "new")
+	applyMVCCGCPutVersion(t, db, key, 90, 80, "anchor")
+	applyMVCCGCPutVersion(t, db, key, 40, 30, "old")
+
+	_, err := storemvcc.ApplyReplicated(
+		context.Background(),
+		db,
+		&testMaintenanceProposer{applied: 1},
+		storemvcc.SafePointPolicy{RequestedSafePoint: 100},
+		storemvcc.ApplyOptions{},
+	)
+	require.ErrorContains(t, err, "applied 1 entries")
+}
+
 func TestApplyMVCCGCHonorsMountScopedRetention(t *testing.T) {
 	db := openMVCCGCPlanTestDB(t)
 	volKey := []byte("vol/key")
@@ -151,16 +214,22 @@ func TestApplyMVCCGCHonorsMountScopedRetention(t *testing.T) {
 		applyMVCCGCPutVersion(t, db, key, 40, 30, "old")
 	}
 
-	stats, err := storemvcc.Apply(context.Background(), db, storemvcc.SafePointPolicy{
-		RequestedSafePoint: 100,
-		SnapshotRetention: rootstate.SnapshotRetentionIndex{
-			GlobalFloor: 50,
-			MountFloors: map[string]uint64{
-				"vol": 50,
+	stats, err := storemvcc.ApplyReplicated(
+		context.Background(),
+		db,
+		&testMaintenanceProposer{db: db},
+		storemvcc.SafePointPolicy{
+			RequestedSafePoint: 100,
+			SnapshotRetention: rootstate.SnapshotRetentionIndex{
+				GlobalFloor: 50,
+				MountFloors: map[string]uint64{
+					"vol": 50,
+				},
 			},
+			Mount: testMountResolver,
 		},
-		Mount: testMountResolver,
-	}, storemvcc.ApplyOptions{})
+		storemvcc.ApplyOptions{},
+	)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), stats.AppliedWriteDeletes)
 	require.Equal(t, uint64(1), stats.AppliedDefaultDeletes)
@@ -185,9 +254,10 @@ func TestApplyMVCCGCBatchesWithoutRescanningDeletedKeys(t *testing.T) {
 		applyMVCCGCPutVersion(t, db, key, 40, 30, "old")
 	}
 
-	stats, err := storemvcc.Apply(
+	stats, err := storemvcc.ApplyReplicated(
 		context.Background(),
 		db,
+		&testMaintenanceProposer{db: db},
 		storemvcc.SafePointPolicy{RequestedSafePoint: 100},
 		storemvcc.ApplyOptions{BatchEntries: 2},
 	)
@@ -215,9 +285,10 @@ func TestApplyMVCCGCStopsAtMaxKeys(t *testing.T) {
 		applyMVCCGCPutVersion(t, db, key, 40, 30, "old")
 	}
 
-	stats, err := storemvcc.Apply(
+	stats, err := storemvcc.ApplyReplicated(
 		context.Background(),
 		db,
+		&testMaintenanceProposer{db: db},
 		storemvcc.SafePointPolicy{RequestedSafePoint: 100},
 		storemvcc.ApplyOptions{BatchEntries: 100, MaxKeys: 2},
 	)
@@ -225,4 +296,23 @@ func TestApplyMVCCGCStopsAtMaxKeys(t *testing.T) {
 	require.Equal(t, uint64(2), stats.ScannedKeys)
 	require.Equal(t, uint64(2), stats.AppliedWriteDeletes)
 	require.Equal(t, uint64(2), stats.AppliedDefaultDeletes)
+}
+
+type testMaintenanceProposer struct {
+	db      *NoKV.DB
+	calls   int
+	applied uint64
+}
+
+func (p *testMaintenanceProposer) ProposeMVCCMaintenance(_ context.Context, entries []*entrykv.Entry) (uint64, error) {
+	p.calls++
+	if p.db != nil {
+		if err := p.db.ApplyInternalEntries(entries); err != nil {
+			return 0, err
+		}
+	}
+	if p.applied != 0 {
+		return p.applied, nil
+	}
+	return uint64(len(entries)), nil
 }

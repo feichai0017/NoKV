@@ -37,6 +37,7 @@ const (
 	CmdType_CMD_BATCH_ROLLBACK   CmdType = 5
 	CmdType_CMD_RESOLVE_LOCK     CmdType = 6
 	CmdType_CMD_CHECK_TXN_STATUS CmdType = 7
+	CmdType_CMD_MVCC_MAINTENANCE CmdType = 8
 )
 
 // Enum value maps for CmdType.
@@ -50,6 +51,7 @@ var (
 		5: "CMD_BATCH_ROLLBACK",
 		6: "CMD_RESOLVE_LOCK",
 		7: "CMD_CHECK_TXN_STATUS",
+		8: "CMD_MVCC_MAINTENANCE",
 	}
 	CmdType_value = map[string]int32{
 		"CMD_INVALID":          0,
@@ -60,6 +62,7 @@ var (
 		"CMD_BATCH_ROLLBACK":   5,
 		"CMD_RESOLVE_LOCK":     6,
 		"CMD_CHECK_TXN_STATUS": 7,
+		"CMD_MVCC_MAINTENANCE": 8,
 	}
 )
 
@@ -440,6 +443,7 @@ type Request struct {
 	//	*Request_BatchRollback
 	//	*Request_ResolveLock
 	//	*Request_CheckTxnStatus
+	//	*Request_MvccMaintenance
 	Cmd           isRequest_Cmd `protobuf_oneof:"cmd"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -552,6 +556,15 @@ func (x *Request) GetCheckTxnStatus() *kv.CheckTxnStatusRequest {
 	return nil
 }
 
+func (x *Request) GetMvccMaintenance() *kv.MVCCMaintenanceRequest {
+	if x != nil {
+		if x, ok := x.Cmd.(*Request_MvccMaintenance); ok {
+			return x.MvccMaintenance
+		}
+	}
+	return nil
+}
+
 type isRequest_Cmd interface {
 	isRequest_Cmd()
 }
@@ -584,6 +597,10 @@ type Request_CheckTxnStatus struct {
 	CheckTxnStatus *kv.CheckTxnStatusRequest `protobuf:"bytes,8,opt,name=check_txn_status,json=checkTxnStatus,proto3,oneof"`
 }
 
+type Request_MvccMaintenance struct {
+	MvccMaintenance *kv.MVCCMaintenanceRequest `protobuf:"bytes,9,opt,name=mvcc_maintenance,json=mvccMaintenance,proto3,oneof"`
+}
+
 func (*Request_Get) isRequest_Cmd() {}
 
 func (*Request_Scan) isRequest_Cmd() {}
@@ -598,6 +615,8 @@ func (*Request_ResolveLock) isRequest_Cmd() {}
 
 func (*Request_CheckTxnStatus) isRequest_Cmd() {}
 
+func (*Request_MvccMaintenance) isRequest_Cmd() {}
+
 type Response struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Cmd:
@@ -609,6 +628,7 @@ type Response struct {
 	//	*Response_BatchRollback
 	//	*Response_ResolveLock
 	//	*Response_CheckTxnStatus
+	//	*Response_MvccMaintenance
 	Cmd           isResponse_Cmd `protobuf_oneof:"cmd"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -714,6 +734,15 @@ func (x *Response) GetCheckTxnStatus() *kv.CheckTxnStatusResponse {
 	return nil
 }
 
+func (x *Response) GetMvccMaintenance() *kv.MVCCMaintenanceResponse {
+	if x != nil {
+		if x, ok := x.Cmd.(*Response_MvccMaintenance); ok {
+			return x.MvccMaintenance
+		}
+	}
+	return nil
+}
+
 type isResponse_Cmd interface {
 	isResponse_Cmd()
 }
@@ -746,6 +775,10 @@ type Response_CheckTxnStatus struct {
 	CheckTxnStatus *kv.CheckTxnStatusResponse `protobuf:"bytes,7,opt,name=check_txn_status,json=checkTxnStatus,proto3,oneof"`
 }
 
+type Response_MvccMaintenance struct {
+	MvccMaintenance *kv.MVCCMaintenanceResponse `protobuf:"bytes,8,opt,name=mvcc_maintenance,json=mvccMaintenance,proto3,oneof"`
+}
+
 func (*Response_Get) isResponse_Cmd() {}
 
 func (*Response_Scan) isResponse_Cmd() {}
@@ -759,6 +792,8 @@ func (*Response_BatchRollback) isResponse_Cmd() {}
 func (*Response_ResolveLock) isResponse_Cmd() {}
 
 func (*Response_CheckTxnStatus) isResponse_Cmd() {}
+
+func (*Response_MvccMaintenance) isResponse_Cmd() {}
 
 type RaftCmdRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -905,7 +940,7 @@ const file_raft_cmd_proto_rawDesc = "" +
 	"\x14max_stale_read_index\x18\b \x01(\x04R\x11maxStaleReadIndex\x12)\n" +
 	"\x11max_stale_read_ms\x18\t \x01(\x04R\x0emaxStaleReadMs\x12\x19\n" +
 	"\bstore_id\x18\n" +
-	" \x01(\x04R\astoreId\"\xec\x03\n" +
+	" \x01(\x04R\astoreId\"\xbd\x04\n" +
 	"\aRequest\x120\n" +
 	"\bcmd_type\x18\x01 \x01(\x0e2\x15.nokv.raft.v1.CmdTypeR\acmdType\x12*\n" +
 	"\x03get\x18\x02 \x01(\v2\x16.nokv.kv.v1.GetRequestH\x00R\x03get\x12-\n" +
@@ -914,8 +949,9 @@ const file_raft_cmd_proto_rawDesc = "" +
 	"\x06commit\x18\x05 \x01(\v2\x19.nokv.kv.v1.CommitRequestH\x00R\x06commit\x12I\n" +
 	"\x0ebatch_rollback\x18\x06 \x01(\v2 .nokv.kv.v1.BatchRollbackRequestH\x00R\rbatchRollback\x12C\n" +
 	"\fresolve_lock\x18\a \x01(\v2\x1e.nokv.kv.v1.ResolveLockRequestH\x00R\vresolveLock\x12M\n" +
-	"\x10check_txn_status\x18\b \x01(\v2!.nokv.kv.v1.CheckTxnStatusRequestH\x00R\x0echeckTxnStatusB\x05\n" +
-	"\x03cmd\"\xc2\x03\n" +
+	"\x10check_txn_status\x18\b \x01(\v2!.nokv.kv.v1.CheckTxnStatusRequestH\x00R\x0echeckTxnStatus\x12O\n" +
+	"\x10mvcc_maintenance\x18\t \x01(\v2\".nokv.kv.v1.MVCCMaintenanceRequestH\x00R\x0fmvccMaintenanceB\x05\n" +
+	"\x03cmd\"\x94\x04\n" +
 	"\bResponse\x12+\n" +
 	"\x03get\x18\x01 \x01(\v2\x17.nokv.kv.v1.GetResponseH\x00R\x03get\x12.\n" +
 	"\x04scan\x18\x02 \x01(\v2\x18.nokv.kv.v1.ScanResponseH\x00R\x04scan\x12:\n" +
@@ -923,7 +959,8 @@ const file_raft_cmd_proto_rawDesc = "" +
 	"\x06commit\x18\x04 \x01(\v2\x1a.nokv.kv.v1.CommitResponseH\x00R\x06commit\x12J\n" +
 	"\x0ebatch_rollback\x18\x05 \x01(\v2!.nokv.kv.v1.BatchRollbackResponseH\x00R\rbatchRollback\x12D\n" +
 	"\fresolve_lock\x18\x06 \x01(\v2\x1f.nokv.kv.v1.ResolveLockResponseH\x00R\vresolveLock\x12N\n" +
-	"\x10check_txn_status\x18\a \x01(\v2\".nokv.kv.v1.CheckTxnStatusResponseH\x00R\x0echeckTxnStatusB\x05\n" +
+	"\x10check_txn_status\x18\a \x01(\v2\".nokv.kv.v1.CheckTxnStatusResponseH\x00R\x0echeckTxnStatus\x12P\n" +
+	"\x10mvcc_maintenance\x18\b \x01(\v2#.nokv.kv.v1.MVCCMaintenanceResponseH\x00R\x0fmvccMaintenanceB\x05\n" +
 	"\x03cmd\"t\n" +
 	"\x0eRaftCmdRequest\x12/\n" +
 	"\x06header\x18\x01 \x01(\v2\x17.nokv.raft.v1.CmdHeaderR\x06header\x121\n" +
@@ -931,7 +968,7 @@ const file_raft_cmd_proto_rawDesc = "" +
 	"\x0fRaftCmdResponse\x12/\n" +
 	"\x06header\x18\x01 \x01(\v2\x17.nokv.raft.v1.CmdHeaderR\x06header\x124\n" +
 	"\tresponses\x18\x02 \x03(\v2\x16.nokv.raft.v1.ResponseR\tresponses\x12=\n" +
-	"\fregion_error\x18\x03 \x01(\v2\x1a.nokv.error.v1.RegionErrorR\vregionError*\x9f\x01\n" +
+	"\fregion_error\x18\x03 \x01(\v2\x1a.nokv.error.v1.RegionErrorR\vregionError*\xb9\x01\n" +
 	"\aCmdType\x12\x0f\n" +
 	"\vCMD_INVALID\x10\x00\x12\v\n" +
 	"\aCMD_GET\x10\x01\x12\f\n" +
@@ -941,7 +978,8 @@ const file_raft_cmd_proto_rawDesc = "" +
 	"CMD_COMMIT\x10\x04\x12\x16\n" +
 	"\x12CMD_BATCH_ROLLBACK\x10\x05\x12\x14\n" +
 	"\x10CMD_RESOLVE_LOCK\x10\x06\x12\x18\n" +
-	"\x14CMD_CHECK_TXN_STATUS\x10\aB/Z-github.com/feichai0017/NoKV/pb/raft;raftcmdpbb\x06proto3"
+	"\x14CMD_CHECK_TXN_STATUS\x10\a\x12\x18\n" +
+	"\x14CMD_MVCC_MAINTENANCE\x10\bB/Z-github.com/feichai0017/NoKV/pb/raft;raftcmdpbb\x06proto3"
 
 var (
 	file_raft_cmd_proto_rawDescOnce sync.Once
@@ -958,35 +996,37 @@ func file_raft_cmd_proto_rawDescGZIP() []byte {
 var file_raft_cmd_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_raft_cmd_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_raft_cmd_proto_goTypes = []any{
-	(CmdType)(0),                      // 0: nokv.raft.v1.CmdType
-	(AdminCommand_Type)(0),            // 1: nokv.raft.v1.AdminCommand.Type
-	(*SplitCommand)(nil),              // 2: nokv.raft.v1.SplitCommand
-	(*MergeCommand)(nil),              // 3: nokv.raft.v1.MergeCommand
-	(*AdminCommand)(nil),              // 4: nokv.raft.v1.AdminCommand
-	(*CmdHeader)(nil),                 // 5: nokv.raft.v1.CmdHeader
-	(*Request)(nil),                   // 6: nokv.raft.v1.Request
-	(*Response)(nil),                  // 7: nokv.raft.v1.Response
-	(*RaftCmdRequest)(nil),            // 8: nokv.raft.v1.RaftCmdRequest
-	(*RaftCmdResponse)(nil),           // 9: nokv.raft.v1.RaftCmdResponse
-	(*meta.RegionDescriptor)(nil),     // 10: nokv.meta.v1.RegionDescriptor
-	(*meta.RegionEpoch)(nil),          // 11: nokv.meta.v1.RegionEpoch
-	(kv.ReadConsistency)(0),           // 12: nokv.kv.v1.ReadConsistency
-	(kv.ReadPreference)(0),            // 13: nokv.kv.v1.ReadPreference
-	(*kv.GetRequest)(nil),             // 14: nokv.kv.v1.GetRequest
-	(*kv.ScanRequest)(nil),            // 15: nokv.kv.v1.ScanRequest
-	(*kv.PrewriteRequest)(nil),        // 16: nokv.kv.v1.PrewriteRequest
-	(*kv.CommitRequest)(nil),          // 17: nokv.kv.v1.CommitRequest
-	(*kv.BatchRollbackRequest)(nil),   // 18: nokv.kv.v1.BatchRollbackRequest
-	(*kv.ResolveLockRequest)(nil),     // 19: nokv.kv.v1.ResolveLockRequest
-	(*kv.CheckTxnStatusRequest)(nil),  // 20: nokv.kv.v1.CheckTxnStatusRequest
-	(*kv.GetResponse)(nil),            // 21: nokv.kv.v1.GetResponse
-	(*kv.ScanResponse)(nil),           // 22: nokv.kv.v1.ScanResponse
-	(*kv.PrewriteResponse)(nil),       // 23: nokv.kv.v1.PrewriteResponse
-	(*kv.CommitResponse)(nil),         // 24: nokv.kv.v1.CommitResponse
-	(*kv.BatchRollbackResponse)(nil),  // 25: nokv.kv.v1.BatchRollbackResponse
-	(*kv.ResolveLockResponse)(nil),    // 26: nokv.kv.v1.ResolveLockResponse
-	(*kv.CheckTxnStatusResponse)(nil), // 27: nokv.kv.v1.CheckTxnStatusResponse
-	(*error1.RegionError)(nil),        // 28: nokv.error.v1.RegionError
+	(CmdType)(0),                       // 0: nokv.raft.v1.CmdType
+	(AdminCommand_Type)(0),             // 1: nokv.raft.v1.AdminCommand.Type
+	(*SplitCommand)(nil),               // 2: nokv.raft.v1.SplitCommand
+	(*MergeCommand)(nil),               // 3: nokv.raft.v1.MergeCommand
+	(*AdminCommand)(nil),               // 4: nokv.raft.v1.AdminCommand
+	(*CmdHeader)(nil),                  // 5: nokv.raft.v1.CmdHeader
+	(*Request)(nil),                    // 6: nokv.raft.v1.Request
+	(*Response)(nil),                   // 7: nokv.raft.v1.Response
+	(*RaftCmdRequest)(nil),             // 8: nokv.raft.v1.RaftCmdRequest
+	(*RaftCmdResponse)(nil),            // 9: nokv.raft.v1.RaftCmdResponse
+	(*meta.RegionDescriptor)(nil),      // 10: nokv.meta.v1.RegionDescriptor
+	(*meta.RegionEpoch)(nil),           // 11: nokv.meta.v1.RegionEpoch
+	(kv.ReadConsistency)(0),            // 12: nokv.kv.v1.ReadConsistency
+	(kv.ReadPreference)(0),             // 13: nokv.kv.v1.ReadPreference
+	(*kv.GetRequest)(nil),              // 14: nokv.kv.v1.GetRequest
+	(*kv.ScanRequest)(nil),             // 15: nokv.kv.v1.ScanRequest
+	(*kv.PrewriteRequest)(nil),         // 16: nokv.kv.v1.PrewriteRequest
+	(*kv.CommitRequest)(nil),           // 17: nokv.kv.v1.CommitRequest
+	(*kv.BatchRollbackRequest)(nil),    // 18: nokv.kv.v1.BatchRollbackRequest
+	(*kv.ResolveLockRequest)(nil),      // 19: nokv.kv.v1.ResolveLockRequest
+	(*kv.CheckTxnStatusRequest)(nil),   // 20: nokv.kv.v1.CheckTxnStatusRequest
+	(*kv.MVCCMaintenanceRequest)(nil),  // 21: nokv.kv.v1.MVCCMaintenanceRequest
+	(*kv.GetResponse)(nil),             // 22: nokv.kv.v1.GetResponse
+	(*kv.ScanResponse)(nil),            // 23: nokv.kv.v1.ScanResponse
+	(*kv.PrewriteResponse)(nil),        // 24: nokv.kv.v1.PrewriteResponse
+	(*kv.CommitResponse)(nil),          // 25: nokv.kv.v1.CommitResponse
+	(*kv.BatchRollbackResponse)(nil),   // 26: nokv.kv.v1.BatchRollbackResponse
+	(*kv.ResolveLockResponse)(nil),     // 27: nokv.kv.v1.ResolveLockResponse
+	(*kv.CheckTxnStatusResponse)(nil),  // 28: nokv.kv.v1.CheckTxnStatusResponse
+	(*kv.MVCCMaintenanceResponse)(nil), // 29: nokv.kv.v1.MVCCMaintenanceResponse
+	(*error1.RegionError)(nil),         // 30: nokv.error.v1.RegionError
 }
 var file_raft_cmd_proto_depIdxs = []int32{
 	10, // 0: nokv.raft.v1.SplitCommand.child:type_name -> nokv.meta.v1.RegionDescriptor
@@ -1004,23 +1044,25 @@ var file_raft_cmd_proto_depIdxs = []int32{
 	18, // 12: nokv.raft.v1.Request.batch_rollback:type_name -> nokv.kv.v1.BatchRollbackRequest
 	19, // 13: nokv.raft.v1.Request.resolve_lock:type_name -> nokv.kv.v1.ResolveLockRequest
 	20, // 14: nokv.raft.v1.Request.check_txn_status:type_name -> nokv.kv.v1.CheckTxnStatusRequest
-	21, // 15: nokv.raft.v1.Response.get:type_name -> nokv.kv.v1.GetResponse
-	22, // 16: nokv.raft.v1.Response.scan:type_name -> nokv.kv.v1.ScanResponse
-	23, // 17: nokv.raft.v1.Response.prewrite:type_name -> nokv.kv.v1.PrewriteResponse
-	24, // 18: nokv.raft.v1.Response.commit:type_name -> nokv.kv.v1.CommitResponse
-	25, // 19: nokv.raft.v1.Response.batch_rollback:type_name -> nokv.kv.v1.BatchRollbackResponse
-	26, // 20: nokv.raft.v1.Response.resolve_lock:type_name -> nokv.kv.v1.ResolveLockResponse
-	27, // 21: nokv.raft.v1.Response.check_txn_status:type_name -> nokv.kv.v1.CheckTxnStatusResponse
-	5,  // 22: nokv.raft.v1.RaftCmdRequest.header:type_name -> nokv.raft.v1.CmdHeader
-	6,  // 23: nokv.raft.v1.RaftCmdRequest.requests:type_name -> nokv.raft.v1.Request
-	5,  // 24: nokv.raft.v1.RaftCmdResponse.header:type_name -> nokv.raft.v1.CmdHeader
-	7,  // 25: nokv.raft.v1.RaftCmdResponse.responses:type_name -> nokv.raft.v1.Response
-	28, // 26: nokv.raft.v1.RaftCmdResponse.region_error:type_name -> nokv.error.v1.RegionError
-	27, // [27:27] is the sub-list for method output_type
-	27, // [27:27] is the sub-list for method input_type
-	27, // [27:27] is the sub-list for extension type_name
-	27, // [27:27] is the sub-list for extension extendee
-	0,  // [0:27] is the sub-list for field type_name
+	21, // 15: nokv.raft.v1.Request.mvcc_maintenance:type_name -> nokv.kv.v1.MVCCMaintenanceRequest
+	22, // 16: nokv.raft.v1.Response.get:type_name -> nokv.kv.v1.GetResponse
+	23, // 17: nokv.raft.v1.Response.scan:type_name -> nokv.kv.v1.ScanResponse
+	24, // 18: nokv.raft.v1.Response.prewrite:type_name -> nokv.kv.v1.PrewriteResponse
+	25, // 19: nokv.raft.v1.Response.commit:type_name -> nokv.kv.v1.CommitResponse
+	26, // 20: nokv.raft.v1.Response.batch_rollback:type_name -> nokv.kv.v1.BatchRollbackResponse
+	27, // 21: nokv.raft.v1.Response.resolve_lock:type_name -> nokv.kv.v1.ResolveLockResponse
+	28, // 22: nokv.raft.v1.Response.check_txn_status:type_name -> nokv.kv.v1.CheckTxnStatusResponse
+	29, // 23: nokv.raft.v1.Response.mvcc_maintenance:type_name -> nokv.kv.v1.MVCCMaintenanceResponse
+	5,  // 24: nokv.raft.v1.RaftCmdRequest.header:type_name -> nokv.raft.v1.CmdHeader
+	6,  // 25: nokv.raft.v1.RaftCmdRequest.requests:type_name -> nokv.raft.v1.Request
+	5,  // 26: nokv.raft.v1.RaftCmdResponse.header:type_name -> nokv.raft.v1.CmdHeader
+	7,  // 27: nokv.raft.v1.RaftCmdResponse.responses:type_name -> nokv.raft.v1.Response
+	30, // 28: nokv.raft.v1.RaftCmdResponse.region_error:type_name -> nokv.error.v1.RegionError
+	29, // [29:29] is the sub-list for method output_type
+	29, // [29:29] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_raft_cmd_proto_init() }
@@ -1036,6 +1078,7 @@ func file_raft_cmd_proto_init() {
 		(*Request_BatchRollback)(nil),
 		(*Request_ResolveLock)(nil),
 		(*Request_CheckTxnStatus)(nil),
+		(*Request_MvccMaintenance)(nil),
 	}
 	file_raft_cmd_proto_msgTypes[5].OneofWrappers = []any{
 		(*Response_Get)(nil),
@@ -1045,6 +1088,7 @@ func file_raft_cmd_proto_init() {
 		(*Response_BatchRollback)(nil),
 		(*Response_ResolveLock)(nil),
 		(*Response_CheckTxnStatus)(nil),
+		(*Response_MvccMaintenance)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

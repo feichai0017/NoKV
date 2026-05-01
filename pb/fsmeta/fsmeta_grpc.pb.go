@@ -22,6 +22,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	FSMetadata_Create_FullMethodName                = "/nokv.fsmeta.v1.FSMetadata/Create"
+	FSMetadata_UpdateInode_FullMethodName           = "/nokv.fsmeta.v1.FSMetadata/UpdateInode"
 	FSMetadata_Lookup_FullMethodName                = "/nokv.fsmeta.v1.FSMetadata/Lookup"
 	FSMetadata_ReadDir_FullMethodName               = "/nokv.fsmeta.v1.FSMetadata/ReadDir"
 	FSMetadata_ReadDirPlus_FullMethodName           = "/nokv.fsmeta.v1.FSMetadata/ReadDirPlus"
@@ -32,6 +33,10 @@ const (
 	FSMetadata_RenameSubtree_FullMethodName         = "/nokv.fsmeta.v1.FSMetadata/RenameSubtree"
 	FSMetadata_Link_FullMethodName                  = "/nokv.fsmeta.v1.FSMetadata/Link"
 	FSMetadata_Unlink_FullMethodName                = "/nokv.fsmeta.v1.FSMetadata/Unlink"
+	FSMetadata_OpenWriteSession_FullMethodName      = "/nokv.fsmeta.v1.FSMetadata/OpenWriteSession"
+	FSMetadata_HeartbeatWriteSession_FullMethodName = "/nokv.fsmeta.v1.FSMetadata/HeartbeatWriteSession"
+	FSMetadata_CloseWriteSession_FullMethodName     = "/nokv.fsmeta.v1.FSMetadata/CloseWriteSession"
+	FSMetadata_ExpireWriteSessions_FullMethodName   = "/nokv.fsmeta.v1.FSMetadata/ExpireWriteSessions"
 )
 
 // FSMetadataClient is the client API for FSMetadata service.
@@ -39,6 +44,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type FSMetadataClient interface {
 	Create(ctx context.Context, in *CreateRequest, opts ...grpc.CallOption) (*CreateResponse, error)
+	UpdateInode(ctx context.Context, in *UpdateInodeRequest, opts ...grpc.CallOption) (*UpdateInodeResponse, error)
 	Lookup(ctx context.Context, in *LookupRequest, opts ...grpc.CallOption) (*LookupResponse, error)
 	ReadDir(ctx context.Context, in *ReadDirRequest, opts ...grpc.CallOption) (*ReadDirResponse, error)
 	ReadDirPlus(ctx context.Context, in *ReadDirRequest, opts ...grpc.CallOption) (*ReadDirPlusResponse, error)
@@ -49,6 +55,10 @@ type FSMetadataClient interface {
 	RenameSubtree(ctx context.Context, in *RenameSubtreeRequest, opts ...grpc.CallOption) (*RenameSubtreeResponse, error)
 	Link(ctx context.Context, in *LinkRequest, opts ...grpc.CallOption) (*LinkResponse, error)
 	Unlink(ctx context.Context, in *UnlinkRequest, opts ...grpc.CallOption) (*UnlinkResponse, error)
+	OpenWriteSession(ctx context.Context, in *OpenWriteSessionRequest, opts ...grpc.CallOption) (*OpenWriteSessionResponse, error)
+	HeartbeatWriteSession(ctx context.Context, in *HeartbeatWriteSessionRequest, opts ...grpc.CallOption) (*HeartbeatWriteSessionResponse, error)
+	CloseWriteSession(ctx context.Context, in *CloseWriteSessionRequest, opts ...grpc.CallOption) (*CloseWriteSessionResponse, error)
+	ExpireWriteSessions(ctx context.Context, in *ExpireWriteSessionsRequest, opts ...grpc.CallOption) (*ExpireWriteSessionsResponse, error)
 }
 
 type fSMetadataClient struct {
@@ -63,6 +73,16 @@ func (c *fSMetadataClient) Create(ctx context.Context, in *CreateRequest, opts .
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateResponse)
 	err := c.cc.Invoke(ctx, FSMetadata_Create_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fSMetadataClient) UpdateInode(ctx context.Context, in *UpdateInodeRequest, opts ...grpc.CallOption) (*UpdateInodeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateInodeResponse)
+	err := c.cc.Invoke(ctx, FSMetadata_UpdateInode_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -172,11 +192,52 @@ func (c *fSMetadataClient) Unlink(ctx context.Context, in *UnlinkRequest, opts .
 	return out, nil
 }
 
+func (c *fSMetadataClient) OpenWriteSession(ctx context.Context, in *OpenWriteSessionRequest, opts ...grpc.CallOption) (*OpenWriteSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OpenWriteSessionResponse)
+	err := c.cc.Invoke(ctx, FSMetadata_OpenWriteSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fSMetadataClient) HeartbeatWriteSession(ctx context.Context, in *HeartbeatWriteSessionRequest, opts ...grpc.CallOption) (*HeartbeatWriteSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HeartbeatWriteSessionResponse)
+	err := c.cc.Invoke(ctx, FSMetadata_HeartbeatWriteSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fSMetadataClient) CloseWriteSession(ctx context.Context, in *CloseWriteSessionRequest, opts ...grpc.CallOption) (*CloseWriteSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CloseWriteSessionResponse)
+	err := c.cc.Invoke(ctx, FSMetadata_CloseWriteSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fSMetadataClient) ExpireWriteSessions(ctx context.Context, in *ExpireWriteSessionsRequest, opts ...grpc.CallOption) (*ExpireWriteSessionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExpireWriteSessionsResponse)
+	err := c.cc.Invoke(ctx, FSMetadata_ExpireWriteSessions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FSMetadataServer is the server API for FSMetadata service.
 // All implementations should embed UnimplementedFSMetadataServer
 // for forward compatibility.
 type FSMetadataServer interface {
 	Create(context.Context, *CreateRequest) (*CreateResponse, error)
+	UpdateInode(context.Context, *UpdateInodeRequest) (*UpdateInodeResponse, error)
 	Lookup(context.Context, *LookupRequest) (*LookupResponse, error)
 	ReadDir(context.Context, *ReadDirRequest) (*ReadDirResponse, error)
 	ReadDirPlus(context.Context, *ReadDirRequest) (*ReadDirPlusResponse, error)
@@ -187,6 +248,10 @@ type FSMetadataServer interface {
 	RenameSubtree(context.Context, *RenameSubtreeRequest) (*RenameSubtreeResponse, error)
 	Link(context.Context, *LinkRequest) (*LinkResponse, error)
 	Unlink(context.Context, *UnlinkRequest) (*UnlinkResponse, error)
+	OpenWriteSession(context.Context, *OpenWriteSessionRequest) (*OpenWriteSessionResponse, error)
+	HeartbeatWriteSession(context.Context, *HeartbeatWriteSessionRequest) (*HeartbeatWriteSessionResponse, error)
+	CloseWriteSession(context.Context, *CloseWriteSessionRequest) (*CloseWriteSessionResponse, error)
+	ExpireWriteSessions(context.Context, *ExpireWriteSessionsRequest) (*ExpireWriteSessionsResponse, error)
 }
 
 // UnimplementedFSMetadataServer should be embedded to have
@@ -198,6 +263,9 @@ type UnimplementedFSMetadataServer struct{}
 
 func (UnimplementedFSMetadataServer) Create(context.Context, *CreateRequest) (*CreateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Create not implemented")
+}
+func (UnimplementedFSMetadataServer) UpdateInode(context.Context, *UpdateInodeRequest) (*UpdateInodeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateInode not implemented")
 }
 func (UnimplementedFSMetadataServer) Lookup(context.Context, *LookupRequest) (*LookupResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Lookup not implemented")
@@ -228,6 +296,18 @@ func (UnimplementedFSMetadataServer) Link(context.Context, *LinkRequest) (*LinkR
 }
 func (UnimplementedFSMetadataServer) Unlink(context.Context, *UnlinkRequest) (*UnlinkResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Unlink not implemented")
+}
+func (UnimplementedFSMetadataServer) OpenWriteSession(context.Context, *OpenWriteSessionRequest) (*OpenWriteSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method OpenWriteSession not implemented")
+}
+func (UnimplementedFSMetadataServer) HeartbeatWriteSession(context.Context, *HeartbeatWriteSessionRequest) (*HeartbeatWriteSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method HeartbeatWriteSession not implemented")
+}
+func (UnimplementedFSMetadataServer) CloseWriteSession(context.Context, *CloseWriteSessionRequest) (*CloseWriteSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CloseWriteSession not implemented")
+}
+func (UnimplementedFSMetadataServer) ExpireWriteSessions(context.Context, *ExpireWriteSessionsRequest) (*ExpireWriteSessionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExpireWriteSessions not implemented")
 }
 func (UnimplementedFSMetadataServer) testEmbeddedByValue() {}
 
@@ -263,6 +343,24 @@ func _FSMetadata_Create_Handler(srv interface{}, ctx context.Context, dec func(i
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(FSMetadataServer).Create(ctx, req.(*CreateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FSMetadata_UpdateInode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateInodeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FSMetadataServer).UpdateInode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FSMetadata_UpdateInode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FSMetadataServer).UpdateInode(ctx, req.(*UpdateInodeRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -436,6 +534,78 @@ func _FSMetadata_Unlink_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FSMetadata_OpenWriteSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(OpenWriteSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FSMetadataServer).OpenWriteSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FSMetadata_OpenWriteSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FSMetadataServer).OpenWriteSession(ctx, req.(*OpenWriteSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FSMetadata_HeartbeatWriteSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HeartbeatWriteSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FSMetadataServer).HeartbeatWriteSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FSMetadata_HeartbeatWriteSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FSMetadataServer).HeartbeatWriteSession(ctx, req.(*HeartbeatWriteSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FSMetadata_CloseWriteSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CloseWriteSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FSMetadataServer).CloseWriteSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FSMetadata_CloseWriteSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FSMetadataServer).CloseWriteSession(ctx, req.(*CloseWriteSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FSMetadata_ExpireWriteSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExpireWriteSessionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FSMetadataServer).ExpireWriteSessions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FSMetadata_ExpireWriteSessions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FSMetadataServer).ExpireWriteSessions(ctx, req.(*ExpireWriteSessionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // FSMetadata_ServiceDesc is the grpc.ServiceDesc for FSMetadata service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -446,6 +616,10 @@ var FSMetadata_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Create",
 			Handler:    _FSMetadata_Create_Handler,
+		},
+		{
+			MethodName: "UpdateInode",
+			Handler:    _FSMetadata_UpdateInode_Handler,
 		},
 		{
 			MethodName: "Lookup",
@@ -482,6 +656,22 @@ var FSMetadata_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Unlink",
 			Handler:    _FSMetadata_Unlink_Handler,
+		},
+		{
+			MethodName: "OpenWriteSession",
+			Handler:    _FSMetadata_OpenWriteSession_Handler,
+		},
+		{
+			MethodName: "HeartbeatWriteSession",
+			Handler:    _FSMetadata_HeartbeatWriteSession_Handler,
+		},
+		{
+			MethodName: "CloseWriteSession",
+			Handler:    _FSMetadata_CloseWriteSession_Handler,
+		},
+		{
+			MethodName: "ExpireWriteSessions",
+			Handler:    _FSMetadata_ExpireWriteSessions_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

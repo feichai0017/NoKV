@@ -154,6 +154,26 @@ message CheckTxnStatusResponse {
   CheckTxnStatusAction action = 4;
 }
 
+message InternalEntryTombstone {
+  enum ColumnFamily {
+    DEFAULT = 0;
+    WRITE = 1;
+  }
+
+  ColumnFamily column_family = 1;
+  bytes key = 2;
+  uint64 version = 3;
+}
+
+message MVCCMaintenanceRequest {
+  repeated InternalEntryTombstone tombstones = 1;
+}
+
+message MVCCMaintenanceResponse {
+  KeyError error = 1;
+  uint64 applied_entries = 2;
+}
+
 message Context {
   uint64 region_id = 1;
   nokv.meta.v1.RegionEpoch region_epoch = 2;

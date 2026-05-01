@@ -110,7 +110,7 @@ func TestMVCCGCPlannerReadsSafePointEachRun(t *testing.T) {
 	applyMVCCGCPlannerWrite(t, db, key, 90, 80)
 	applyMVCCGCPlannerWrite(t, db, key, 40, 30)
 	waitMVCCGCPlannerSnapshot(t, db, func(s storemvcc.GCPlanSnapshot) bool {
-		return s.Runs > 0 && s.LastPlan.ScannedKeys == 0
+		return s.Runs > 0 && s.SkippedRuns > 0 && s.LastPlan.ScannedKeys == 0
 	})
 
 	safePoint.Store(100)
@@ -140,6 +140,7 @@ func TestMVCCGCPlannerRetainsLastPlanWhenSafePointDisabled(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	snap := db.MVCCGCPlanSnapshot()
 	require.Equal(t, uint64(1), snap.LastPlan.DroppableWrites)
+	require.Greater(t, snap.SkippedRuns, uint64(0))
 }
 
 func TestMVCCGCPlannerHonorsSnapshotRetentionAndTxnFloor(t *testing.T) {

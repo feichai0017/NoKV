@@ -15,6 +15,23 @@ func createRequestToProto(req fsmeta.CreateRequest, inode fsmeta.InodeRecord) *f
 	}
 }
 
+func updateInodeRequestToProto(req fsmeta.UpdateInodeRequest) *fsmetapb.UpdateInodeRequest {
+	return &fsmetapb.UpdateInodeRequest{
+		Mount:            string(req.Mount),
+		Parent:           uint64(req.Parent),
+		Inode:            uint64(req.Inode),
+		Name:             req.Name,
+		SetSize:          req.SetSize,
+		Size:             req.Size,
+		SetMode:          req.SetMode,
+		Mode:             req.Mode,
+		SetUpdatedUnixNs: req.SetUpdatedUnixNs,
+		UpdatedUnixNs:    req.UpdatedUnixNs,
+		SetOpaqueAttrs:   req.SetOpaqueAttrs,
+		OpaqueAttrs:      append([]byte(nil), req.OpaqueAttrs...),
+	}
+}
+
 func lookupRequestToProto(req fsmeta.LookupRequest) *fsmetapb.LookupRequest {
 	return &fsmetapb.LookupRequest{
 		Mount:  string(req.Mount),
@@ -101,6 +118,38 @@ func unlinkRequestToProto(req fsmeta.UnlinkRequest) *fsmetapb.UnlinkRequest {
 	}
 }
 
+func openWriteSessionRequestToProto(req fsmeta.OpenWriteSessionRequest) *fsmetapb.OpenWriteSessionRequest {
+	return &fsmetapb.OpenWriteSessionRequest{
+		Mount:         string(req.Mount),
+		Inode:         uint64(req.Inode),
+		Session:       string(req.Session),
+		ExpiresUnixNs: req.ExpiresUnixNs,
+	}
+}
+
+func heartbeatWriteSessionRequestToProto(req fsmeta.HeartbeatWriteSessionRequest) *fsmetapb.HeartbeatWriteSessionRequest {
+	return &fsmetapb.HeartbeatWriteSessionRequest{
+		Mount:         string(req.Mount),
+		Inode:         uint64(req.Inode),
+		Session:       string(req.Session),
+		ExpiresUnixNs: req.ExpiresUnixNs,
+	}
+}
+
+func closeWriteSessionRequestToProto(req fsmeta.CloseWriteSessionRequest) *fsmetapb.CloseWriteSessionRequest {
+	return &fsmetapb.CloseWriteSessionRequest{
+		Mount:   string(req.Mount),
+		Session: string(req.Session),
+	}
+}
+
+func expireWriteSessionsRequestToProto(req fsmeta.ExpireWriteSessionsRequest) *fsmetapb.ExpireWriteSessionsRequest {
+	return &fsmetapb.ExpireWriteSessionsRequest{
+		Mount: string(req.Mount),
+		Limit: req.Limit,
+	}
+}
+
 func dentryFromProto(pb *fsmetapb.DentryRecord) fsmeta.DentryRecord {
 	if pb == nil {
 		return fsmeta.DentryRecord{}
@@ -139,6 +188,17 @@ func inodeToProto(record fsmeta.InodeRecord) *fsmetapb.InodeRecord {
 		CreatedUnixNs: record.CreatedUnixNs,
 		UpdatedUnixNs: record.UpdatedUnixNs,
 		OpaqueAttrs:   append([]byte(nil), record.OpaqueAttrs...),
+	}
+}
+
+func sessionFromProto(pb *fsmetapb.SessionRecord) fsmeta.SessionRecord {
+	if pb == nil {
+		return fsmeta.SessionRecord{}
+	}
+	return fsmeta.SessionRecord{
+		Session:       fsmeta.SessionID(pb.GetSession()),
+		Inode:         fsmeta.InodeID(pb.GetInode()),
+		ExpiresUnixNs: pb.GetExpiresUnixNs(),
 	}
 }
 

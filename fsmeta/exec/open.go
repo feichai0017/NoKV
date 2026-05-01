@@ -31,6 +31,14 @@ type Options struct {
 	// Zero uses the package default; negative disables the monitor.
 	MonitorInterval time.Duration
 
+	// SessionCleanupInterval controls stale writer-session cleanup. Zero uses
+	// the package default; negative disables automatic cleanup.
+	SessionCleanupInterval time.Duration
+
+	// SessionCleanupLimit bounds one stale-session cleanup pass per mount. Zero
+	// uses fsmeta.DefaultSessionExpireLimit.
+	SessionCleanupLimit uint32
+
 	// NegativeCacheDir enables the slab-backed negative dentry cache. Empty
 	// disables it. This is a Derived cache: authoritative reads still fall
 	// back to raftstore/percolator on miss or invalidation.
@@ -50,6 +58,7 @@ type Runtime struct {
 	SnapshotPublisher fsmeta.SnapshotPublisher
 	MountResolver     MountResolver
 	QuotaResolver     QuotaResolver
+	SessionCleaner    interface{ Stats() map[string]any }
 
 	close func() error
 	once  sync.Once
@@ -74,6 +83,9 @@ func (r *Runtime) Close() error {
 func OpenWithRaftstore(ctx context.Context, opts Options) (*Runtime, error) {
 	if opts.CoordinatorAddr == "" {
 		return nil, errors.New("fsmeta/exec: coordinator addr is required")
+	}
+	if opts.SessionCleanupLimit > fsmeta.MaxSessionExpireLimit {
+		return nil, errors.New("fsmeta/exec: session cleanup limit exceeds maximum")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -174,6 +186,10 @@ func OpenWithRaftstore(ctx context.Context, opts Options) (*Runtime, error) {
 	if opts.MonitorInterval >= 0 {
 		mon = startMonitor(ctx, coord, router, mounts, quotas, pub, opts.MonitorInterval)
 	}
+	var sessions *sessionCleaner
+	if opts.SessionCleanupInterval >= 0 {
+		sessions = startSessionCleaner(ctx, coord, exec, opts.SessionCleanupInterval, opts.SessionCleanupLimit)
+	}
 
 	rt := &Runtime{
 		Executor:          exec,
@@ -181,9 +197,15 @@ func OpenWithRaftstore(ctx context.Context, opts Options) (*Runtime, error) {
 		SnapshotPublisher: pub,
 		MountResolver:     mounts,
 		QuotaResolver:     quotas,
+		SessionCleaner:    sessions,
 	}
 	rt.close = func() error {
 		var first error
+		if sessions != nil {
+			if err := sessions.Close(); err != nil {
+				first = err
+			}
+		}
 		if mon != nil {
 			if err := mon.Close(); err != nil {
 				first = err

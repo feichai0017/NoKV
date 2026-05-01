@@ -20,6 +20,7 @@ The current v1 API is defined by `pb/fsmeta/fsmeta.proto`. `fsmeta/server` expos
 | RPC | Current semantics |
 |---|---|
 | `Create` | Atomically creates a dentry and inode; the server uses `AssertionNotExist` to reject duplicate creation. |
+| `UpdateInode` | Atomically updates mutable inode fields (`size`, `mode`, `updated_unix_ns`, `opaque_attrs`) and applies the size quota delta. v1 is path-anchored by `(parent, name, inode)` and rejects hard-linked inode updates. |
 | `Lookup` | Read a dentry by `(mount, parent_inode, name)`. |
 | `ReadDir` | Scan one directory page by dentry prefix. |
 | `ReadDirPlus` | Scan dentries and batch-read inode attrs under the same snapshot version. |
@@ -30,6 +31,7 @@ The current v1 API is defined by `pb/fsmeta/fsmeta.proto`. `fsmeta/server` expos
 | `RenameSubtree` | Atomically move the root dentry of a subtree; descendants follow naturally via inode references. |
 | `Link` | Create a second dentry for an existing non-directory inode and increment link count in the same transaction. |
 | `Unlink` | Delete a dentry; decrement link count and delete the inode record when the last link is removed. |
+| `OpenWriteSession` / `HeartbeatWriteSession` / `CloseWriteSession` / `ExpireWriteSessions` | Maintain exclusive writer leases for file inodes with a session-id key plus an inode-owner key. Expiry cleanup uses server time and is bounded/repeatable. |
 
 ## 3. Data model
 
@@ -41,7 +43,7 @@ The current v1 API is defined by `pb/fsmeta/fsmeta.proto`. `fsmeta/server` expos
 | Inode | `EncodeInodeKey(mount, inode)` | File/directory attributes, including `size`, `mode`, `link_count`, and a bounded `opaque_attrs` payload. |
 | Dentry | `EncodeDentryKey(mount, parent, name)` | Mapping from parent/name to inode. |
 | Chunk | `EncodeChunkKey(mount, inode, chunk)` | Schema is in place; the current fsmeta API doesn't expose object body / chunk I/O. |
-| Session | `EncodeSessionKey(mount, session)` | Schema reserved for later session/lease use. |
+| Session | `EncodeSessionKey(mount, session)` and `EncodeInodeSessionKey(mount, inode)` | Writer lease state. The session key supports heartbeat/close by session ID; the inode-owner key enforces one live writer per inode. |
 | Usage | `EncodeUsageKey(mount, scope)` | Quota usage counter; scope=0 means mount-wide, non-zero means a direct accounting scope. |
 
 Both keys and values carry a magic + schema version. Values use a hand-written binary layout — not JSON.
@@ -113,7 +115,7 @@ typed client exposes this as `client.WatchDirectoryWithReconcile`.
 
 `SnapshotSubtree` only publishes a read epoch — it does not copy the directory tree. The token shape is `(mount, root_inode, read_version)`. Subsequent `ReadDir` / `ReadDirPlus` use `snapshot_version` to read the same MVCC view.
 
-`SnapshotEpochPublished` / `SnapshotEpochRetired` rooted events are already in place. Coordinator root views now carry active snapshot epochs and expose the oldest active `read_version` as the MVCC-GC retention floor. The current data-plane compactor does not yet drop MVCC history by read-version, so this is the enforcement hook for a future version-GC worker rather than a destructive cleanup path today.
+`SnapshotEpochPublished` / `SnapshotEpochRetired` rooted events are already in place. Coordinator root views carry active snapshot epochs and expose the oldest active `read_version` as the MVCC-GC retention floor. The raftstore MVCC maintenance worker uses that floor when planning replicated version cleanup, so active snapshot epochs keep their required MVCC history until retired.
 
 ### RenameSubtree
 
@@ -156,6 +158,11 @@ the object body; callers can store compact body references in
 
 Hard links to directories remain illegal.
 
+`UpdateInode` is deliberately narrower than POSIX `setattr`. It does not change
+inode identity, type, creation time, or link count. Because v1 has no reverse
+index from inode to every parent dentry, updating a hard-linked inode is rejected
+instead of producing stale quota counters or stale `ReadDirPlus` pages.
+
 ### Quota Fence
 
 The quota fence is rooted truth; the usage counter is a data-plane key. The write path packs the usage counter mutation and the dentry/inode mutation into the same Percolator transaction.
@@ -194,6 +201,7 @@ go run ./cmd/nokv-fsmeta \
   --addr 127.0.0.1:8090 \
   --coordinator-addr 127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392 \
   --metrics-addr 127.0.0.1:9400 \
+  --session-cleanup-interval 30s \
   --negative-cache-dir ./artifacts/fsmeta/negative-cache \
   --dirpage-cache-dir ./artifacts/fsmeta/dirpage-cache
 ```
@@ -220,7 +228,7 @@ nokv quota set \
 
 ## 8. Metrics
 
-`nokv-fsmeta --metrics-addr` exposes four expvar groups:
+`nokv-fsmeta --metrics-addr` exposes five expvar groups:
 
 | Namespace | Meaning |
 |---|---|
@@ -228,6 +236,7 @@ nokv quota set \
 | `nokv_fsmeta_watch` | subscribers, events, delivered, dropped, overflow, remote source state. |
 | `nokv_fsmeta_mount` | mount cache hit/miss, admission rejects. |
 | `nokv_fsmeta_quota` | fence check/reject, cache hit/miss, fence updates, usage mutations. |
+| `nokv_fsmeta_sessions` | stale writer-session cleanup runs, expired sessions, and last error. |
 
 When the derived caches are enabled, `nokv_fsmeta_executor` also reports whether
 NegativeCache / DirPage are active and the DirPage hit/miss/store counters.
@@ -257,4 +266,8 @@ Derived-cache evidence uses the same harness:
 - No indexing or interpretation of `InodeRecord.opaque_attrs`.
 - No write of every inode/dentry mutation into `meta/root`.
 - No recursive materialized snapshot — `SnapshotSubtree` is an MVCC read epoch.
-- No claim that data-plane MVCC version GC already deletes or retains by snapshot epoch; active epochs are materialized as a retention floor for the future GC worker.
+- No POSIX symlink/device/FIFO surface in the current fsmeta API.
+- No automatic fsmeta object repair beyond stale writer-session cleanup. Normal
+  `Unlink` deletes the last-link inode in the same transaction; broader
+  corruption repair needs an explicit reverse-index or audit design rather than
+  heuristic background deletion.

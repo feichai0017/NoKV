@@ -2,11 +2,14 @@ package mvcc_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	"github.com/feichai0017/NoKV/percolator"
+	"github.com/feichai0017/NoKV/percolator/latch"
 	txnmvcc "github.com/feichai0017/NoKV/percolator/mvcc"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/stretchr/testify/require"
@@ -29,7 +32,7 @@ func TestResolveExpiredLocksRollsBackExpiredPrimaryLock(t *testing.T) {
 	applyVersionedEntryForApplyTest(t, db, entrykv.CFDefault, key, 10, []byte("value"), 0, 0)
 	applyMVCCGCLockRecord(t, db, key, key, 10, 5, kvrpcpb.Mutation_Put)
 
-	stats, err := storemvcc.ResolveExpiredLocks(context.Background(), db, storemvcc.ResolveLocksOptions{
+	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, &testLockResolverProposer{db: db}, storemvcc.ResolveLocksOptions{
 		CurrentTs:  20,
 		BatchLocks: 1,
 	})
@@ -65,7 +68,7 @@ func TestResolveExpiredLocksCommitsSecondaryFromPrimaryWrite(t *testing.T) {
 	applyVersionedEntryForApplyTest(t, db, entrykv.CFDefault, secondary, 10, []byte("value"), 0, 0)
 	applyMVCCGCLockRecord(t, db, secondary, primary, 10, 5, kvrpcpb.Mutation_Put)
 
-	stats, err := storemvcc.ResolveExpiredLocks(context.Background(), db, storemvcc.ResolveLocksOptions{CurrentTs: 20})
+	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, &testLockResolverProposer{db: db}, storemvcc.ResolveLocksOptions{CurrentTs: 20})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), stats.ResolvedLocks)
 	require.Equal(t, uint64(1), stats.CommittedLocks)
@@ -84,12 +87,56 @@ func TestResolveExpiredLocksCommitsSecondaryFromPrimaryWrite(t *testing.T) {
 	require.NotZero(t, lock.Meta&entrykv.BitDelete)
 }
 
+func TestResolveExpiredLocksReplicatedUsesResolveLockCommand(t *testing.T) {
+	db := openMVCCGCPlanTestDB(t)
+	primary := []byte("primary")
+	secondary := []byte("secondary")
+	applyMVCCGCWrite(t, db, primary, 30, 10)
+	applyVersionedEntryForApplyTest(t, db, entrykv.CFDefault, secondary, 10, []byte("value"), 0, 0)
+	applyMVCCGCLockRecord(t, db, secondary, primary, 10, 5, kvrpcpb.Mutation_Put)
+
+	proposer := &testLockResolverProposer{db: db}
+	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, proposer, storemvcc.ResolveLocksOptions{CurrentTs: 20})
+	require.NoError(t, err)
+	require.Equal(t, 1, proposer.calls)
+	require.Equal(t, uint64(1), stats.ResolvedLocks)
+	require.Equal(t, uint64(1), stats.CommittedLocks)
+
+	write, err := db.GetInternalEntry(entrykv.CFWrite, secondary, 30)
+	require.NoError(t, err)
+	defer write.DecrRef()
+	decoded, err := txnmvcc.DecodeWrite(write.Value)
+	require.NoError(t, err)
+	require.Equal(t, kvrpcpb.Mutation_Put, decoded.Kind)
+	require.Equal(t, uint64(10), decoded.StartTs)
+}
+
+func TestResolveExpiredLocksReplicatedRollsBackExpiredPrimary(t *testing.T) {
+	db := openMVCCGCPlanTestDB(t)
+	key := []byte("primary")
+	applyVersionedEntryForApplyTest(t, db, entrykv.CFDefault, key, 10, []byte("value"), 0, 0)
+	applyMVCCGCLockRecord(t, db, key, key, 10, 5, kvrpcpb.Mutation_Put)
+
+	proposer := &testLockResolverProposer{db: db}
+	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, proposer, storemvcc.ResolveLocksOptions{CurrentTs: 20})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), stats.ResolvedLocks)
+	require.Equal(t, uint64(1), stats.RolledBackLocks)
+
+	write, err := db.GetInternalEntry(entrykv.CFWrite, key, 10)
+	require.NoError(t, err)
+	defer write.DecrRef()
+	decoded, err := txnmvcc.DecodeWrite(write.Value)
+	require.NoError(t, err)
+	require.Equal(t, kvrpcpb.Mutation_Rollback, decoded.Kind)
+}
+
 func TestResolveExpiredLocksRetainsLiveLock(t *testing.T) {
 	db := openMVCCGCPlanTestDB(t)
 	key := []byte("live")
 	applyMVCCGCLockRecord(t, db, key, key, 10, 100, kvrpcpb.Mutation_Put)
 
-	stats, err := storemvcc.ResolveExpiredLocks(context.Background(), db, storemvcc.ResolveLocksOptions{CurrentTs: 20})
+	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, &testLockResolverProposer{db: db}, storemvcc.ResolveLocksOptions{CurrentTs: 20})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), stats.ScannedLocks)
 	require.Equal(t, uint64(1), stats.RetainedLocks)
@@ -106,10 +153,56 @@ func TestResolveExpiredLocksUnblocksTxnFloor(t *testing.T) {
 	key := []byte("old")
 	applyMVCCGCLockRecord(t, db, key, key, 10, 5, kvrpcpb.Mutation_Put)
 
-	_, err := storemvcc.ResolveExpiredLocks(context.Background(), db, storemvcc.ResolveLocksOptions{CurrentTs: 20})
+	_, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, &testLockResolverProposer{db: db}, storemvcc.ResolveLocksOptions{CurrentTs: 20})
 	require.NoError(t, err)
 
 	floor, err := storemvcc.PlanTxnFloor(context.Background(), db)
 	require.NoError(t, err)
 	require.False(t, floor.Active())
+}
+
+func TestResolveExpiredLocksStopsAtMaxLocks(t *testing.T) {
+	db := openMVCCGCPlanTestDB(t)
+	for i := range 3 {
+		key := fmt.Appendf(nil, "lock-%d", i)
+		startTs := uint64(10 + i)
+		applyVersionedEntryForApplyTest(t, db, entrykv.CFDefault, key, startTs, []byte("value"), 0, 0)
+		applyMVCCGCLockRecord(t, db, key, key, startTs, 5, kvrpcpb.Mutation_Put)
+	}
+
+	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, &testLockResolverProposer{db: db}, storemvcc.ResolveLocksOptions{
+		CurrentTs:  20,
+		BatchLocks: 10,
+		MaxLocks:   2,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), stats.ScannedLocks)
+	require.Equal(t, uint64(2), stats.ExpiredLocks)
+	require.Equal(t, uint64(2), stats.ResolvedLocks)
+
+	floor, err := storemvcc.PlanTxnFloor(context.Background(), db)
+	require.NoError(t, err)
+	require.True(t, floor.Active())
+	require.Equal(t, uint64(12), floor.OldestStartTs)
+}
+
+type testLockResolverProposer struct {
+	db    *NoKV.DB
+	calls int
+}
+
+func (p *testLockResolverProposer) ProposeResolveLocks(_ context.Context, startVersion, commitVersion uint64, keys [][]byte) (uint64, error) {
+	p.calls++
+	if p.db == nil {
+		return uint64(len(keys)), nil
+	}
+	count, keyErr := percolator.ResolveLock(p.db, latch.NewManager(32), &kvrpcpb.ResolveLockRequest{
+		StartVersion:  startVersion,
+		CommitVersion: commitVersion,
+		Keys:          keys,
+	})
+	if keyErr != nil {
+		return 0, fmt.Errorf("resolve lock: %v", keyErr)
+	}
+	return count, nil
 }

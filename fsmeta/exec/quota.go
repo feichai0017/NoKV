@@ -340,3 +340,10 @@ func inodeSizeDelta(size uint64) int64 {
 	}
 	return int64(size)
 }
+
+func inodeSizeChange(oldSize, newSize uint64) int64 {
+	if newSize >= oldSize {
+		return inodeSizeDelta(newSize - oldSize)
+	}
+	return -inodeSizeDelta(oldSize - newSize)
+}

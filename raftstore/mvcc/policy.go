@@ -5,6 +5,8 @@ import (
 	txnmvcc "github.com/feichai0017/NoKV/percolator/mvcc"
 )
 
+const defaultMaxBufferedVersionsPerKey = 65536
+
 // MountResolver extracts a namespace mount identifier from a user key. GC
 // policy treats nil or unresolved keys as unknown layouts and falls back to the
 // global snapshot floor.
@@ -18,6 +20,17 @@ type SafePointPolicy struct {
 	SnapshotRetention  rootstate.SnapshotRetentionIndex
 	TxnFloor           uint64
 	Mount              MountResolver
+	// MaxVersionsPerKey bounds transient memory while planning one hot key.
+	// Zero uses a conservative default. The scanner returns an error instead of
+	// trying to hold an unbounded version list in memory.
+	MaxVersionsPerKey uint64
+}
+
+func (p SafePointPolicy) maxVersionsPerKey() uint64 {
+	if p.MaxVersionsPerKey != 0 {
+		return p.MaxVersionsPerKey
+	}
+	return defaultMaxBufferedVersionsPerKey
 }
 
 // EffectiveForKey returns the key-local safe point after applying active

@@ -91,6 +91,13 @@ const (
 	// MaxReadDirLimit keeps one directory page bounded before fsmeta grows a
 	// streaming API.
 	MaxReadDirLimit uint32 = 16 * 1024
+
+	// DefaultSessionExpireLimit bounds one stale-session cleanup pass when the
+	// caller does not provide an explicit page size.
+	DefaultSessionExpireLimit uint32 = 1024
+
+	// MaxSessionExpireLimit keeps one session cleanup pass bounded.
+	MaxSessionExpireLimit uint32 = 16 * 1024
 )
 
 func validateMountID(id MountID) error {
@@ -137,6 +144,16 @@ func normalizeReadDirLimit(limit uint32) (uint32, error) {
 		return DefaultReadDirLimit, nil
 	}
 	if limit > MaxReadDirLimit {
+		return 0, ErrInvalidPageSize
+	}
+	return limit, nil
+}
+
+func normalizeSessionExpireLimit(limit uint32) (uint32, error) {
+	if limit == 0 {
+		return DefaultSessionExpireLimit, nil
+	}
+	if limit > MaxSessionExpireLimit {
 		return 0, ErrInvalidPageSize
 	}
 	return limit, nil

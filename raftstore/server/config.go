@@ -4,8 +4,10 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	txnstore "github.com/feichai0017/NoKV/percolator/storage"
 	myraft "github.com/feichai0017/NoKV/raft"
+	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/raftstore/transport"
 )
@@ -30,8 +32,29 @@ type Config struct {
 	// RaftTickInterval controls how often the server calls BroadcastTick on the
 	// store router. When zero or negative a default of 100ms is used.
 	RaftTickInterval time.Duration
+	// MVCCMaintenance enables replicated MVCC maintenance for cluster-mode
+	// stores. A zero Interval disables the worker.
+	MVCCMaintenance MVCCMaintenanceConfig
 	// EnableRaftDebugLog enables verbose etcd/raft debug logging so replication/apply traces are emitted.
 	EnableRaftDebugLog bool
+}
+
+// MVCCMaintenanceConfig describes replicated MVCC maintenance owned by the
+// raftstore server. Destructive operations always go through raft proposals.
+type MVCCMaintenanceConfig struct {
+	Interval time.Duration
+	Timeout  time.Duration
+
+	SafePoint func() uint64
+	CurrentTs func() uint64
+	Retention func() rootstate.SnapshotRetentionIndex
+	Mount     storemvcc.MountResolver
+
+	Apply        storemvcc.ApplyOptions
+	ResolveLocks storemvcc.ResolveLocksOptions
+
+	RunOrphanDefaults bool
+	OrphanDefaults    storemvcc.OrphanDefaultOptions
 }
 
 // Storage captures the engine capabilities raftstore needs.

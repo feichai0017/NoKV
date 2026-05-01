@@ -34,12 +34,17 @@ type OrphanDefaultStats struct {
 	AppliedDefaultDeletes uint64
 }
 
-// ApplyOrphanDefaults deletes CFDefault records that are not referenced by a
-// CFWrite record and are not protected by an active CFLock at the same start_ts.
-//
-// This helper writes through the local Store surface. Cluster-mode cleanup must
-// go through raft instead.
-func ApplyOrphanDefaults(ctx context.Context, db txnstore.Store, opt OrphanDefaultOptions) (OrphanDefaultStats, error) {
+// ApplyOrphanDefaultsReplicated deletes orphan CFDefault records through a
+// replicated maintenance command. Use this path for cluster-mode stores.
+func ApplyOrphanDefaultsReplicated(ctx context.Context, db txnstore.Store, proposer MaintenanceProposer, opt OrphanDefaultOptions) (OrphanDefaultStats, error) {
+	return applyOrphanDefaultsWith(ctx, db, opt, func(ctx context.Context, entries []*entrykv.Entry) error {
+		return proposeMaintenanceEntries(ctx, proposer, entries)
+	})
+}
+
+type orphanDefaultSubmitFn func(context.Context, []*entrykv.Entry) error
+
+func applyOrphanDefaultsWith(ctx context.Context, db txnstore.Store, opt OrphanDefaultOptions, submit orphanDefaultSubmitFn) (OrphanDefaultStats, error) {
 	var stats OrphanDefaultStats
 	var afterUserKey []byte
 	var afterVersion uint64
@@ -52,13 +57,11 @@ func ApplyOrphanDefaults(ctx context.Context, db txnstore.Store, opt OrphanDefau
 			return stats, err
 		}
 		stats.add(batch.scan)
-		if len(batch.entries) > 0 {
-			if err := db.ApplyInternalEntries(batch.entries); err != nil {
-				releaseEntries(batch.entries)
-				return stats, err
-			}
-			stats.AppliedDefaultDeletes += uint64(len(batch.entries))
+		if err := submit(ctx, batch.entries); err != nil {
+			releaseEntries(batch.entries)
+			return stats, err
 		}
+		stats.AppliedDefaultDeletes += uint64(len(batch.entries))
 		releaseEntries(batch.entries)
 		if batch.done {
 			return stats, nil

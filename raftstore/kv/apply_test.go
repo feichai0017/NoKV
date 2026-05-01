@@ -1,9 +1,12 @@
 package kv
 
 import (
+	"errors"
+	"testing"
+
+	"github.com/feichai0017/NoKV/engine/index"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
-	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
@@ -88,6 +91,115 @@ func TestLockedErrorMapping(t *testing.T) {
 	require.Equal(t, lock.TTL, keyErr.GetLocked().GetLockTtl())
 	require.Equal(t, lock.Kind, keyErr.GetLocked().GetLockType())
 	require.Equal(t, lock.MinCommitTs, keyErr.GetLocked().GetMinCommitTs())
+}
+
+func TestApplyMVCCMaintenanceAppliesInternalEntries(t *testing.T) {
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_MVCC_MAINTENANCE,
+			Cmd: &raftcmdpb.Request_MvccMaintenance{MvccMaintenance: &kvrpcpb.MVCCMaintenanceRequest{
+				Tombstones: []*kvrpcpb.InternalEntryTombstone{
+					{
+						ColumnFamily: kvrpcpb.InternalEntryTombstone_DEFAULT,
+						Key:          []byte("maint-default"),
+						Version:      11,
+					},
+					{
+						ColumnFamily: kvrpcpb.InternalEntryTombstone_WRITE,
+						Key:          []byte("maint-write"),
+						Version:      22,
+					},
+				},
+			}},
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetResponses(), 1)
+	require.Equal(t, uint64(2), resp.GetResponses()[0].GetMvccMaintenance().GetAppliedEntries())
+	require.Nil(t, resp.GetResponses()[0].GetMvccMaintenance().GetError())
+
+	gotDefault, err := db.GetInternalEntry(entrykv.CFDefault, []byte("maint-default"), 11)
+	require.NoError(t, err)
+	defer gotDefault.DecrRef()
+	require.NotZero(t, gotDefault.Meta&entrykv.BitDelete)
+
+	gotWrite, err := db.GetInternalEntry(entrykv.CFWrite, []byte("maint-write"), 22)
+	require.NoError(t, err)
+	defer gotWrite.DecrRef()
+	require.NotZero(t, gotWrite.Meta&entrykv.BitDelete)
+}
+
+func TestApplyMVCCMaintenanceRejectsMalformedBatch(t *testing.T) {
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_MVCC_MAINTENANCE,
+			Cmd: &raftcmdpb.Request_MvccMaintenance{MvccMaintenance: &kvrpcpb.MVCCMaintenanceRequest{
+				Tombstones: []*kvrpcpb.InternalEntryTombstone{
+					{ColumnFamily: kvrpcpb.InternalEntryTombstone_ColumnFamily(99), Key: []byte("bad-cf"), Version: 1},
+					{ColumnFamily: kvrpcpb.InternalEntryTombstone_DEFAULT, Key: []byte("must-not-apply"), Version: 1},
+				},
+			}},
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetResponses(), 1)
+	keyErr := resp.GetResponses()[0].GetMvccMaintenance().GetError()
+	require.NotNil(t, keyErr)
+	require.Contains(t, keyErr.GetAbort(), "column family")
+	_, err = db.GetInternalEntry(entrykv.CFDefault, []byte("must-not-apply"), 1)
+	require.Error(t, err)
+}
+
+func TestApplyMVCCMaintenancePropagatesStoreBatchError(t *testing.T) {
+	storeErr := errors.New("store batch failed")
+	store := &failingMaintenanceStore{err: storeErr}
+	resp, err := Apply(store, nil, &raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_MVCC_MAINTENANCE,
+			Cmd: &raftcmdpb.Request_MvccMaintenance{MvccMaintenance: &kvrpcpb.MVCCMaintenanceRequest{
+				Tombstones: []*kvrpcpb.InternalEntryTombstone{
+					{ColumnFamily: kvrpcpb.InternalEntryTombstone_DEFAULT, Key: []byte("a"), Version: 1},
+					{ColumnFamily: kvrpcpb.InternalEntryTombstone_WRITE, Key: []byte("b"), Version: 2},
+				},
+			}},
+		}},
+	})
+	require.ErrorIs(t, err, storeErr)
+	require.Nil(t, resp)
+	require.Equal(t, 1, store.calls)
+	require.Equal(t, 2, store.entries)
+}
+
+type failingMaintenanceStore struct {
+	err     error
+	calls   int
+	entries int
+}
+
+func (s *failingMaintenanceStore) ApplyInternalEntries(entries []*entrykv.Entry) error {
+	s.calls++
+	s.entries += len(entries)
+	return s.err
+}
+
+func (s *failingMaintenanceStore) GetInternalEntry(entrykv.ColumnFamily, []byte, uint64) (*entrykv.Entry, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s *failingMaintenanceStore) NewInternalIterator(*index.Options) index.Iterator {
+	return nil
 }
 
 func TestHandleScanShortValueCarriesExpiresAt(t *testing.T) {

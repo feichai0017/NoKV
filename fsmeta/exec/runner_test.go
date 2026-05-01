@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
@@ -377,6 +378,214 @@ func TestExecutorCreateRejectsQuotaExceededBeforeMutation(t *testing.T) {
 	require.ErrorIs(t, err, fsmeta.ErrQuotaExceeded)
 	require.Empty(t, runner.mutations)
 	require.Equal(t, [][]QuotaChange{{{Mount: "vol", Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.changes)
+}
+
+func TestExecutorUpdateInodeUpdatesMutableFieldsAndQuota(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "file", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{
+		Inode:         22,
+		Type:          fsmeta.InodeTypeFile,
+		Size:          4096,
+		Mode:          0o644,
+		LinkCount:     1,
+		CreatedUnixNs: 10,
+		UpdatedUnixNs: 20,
+	})
+	quotaKey, err := fsmeta.EncodeUsageKey("vol", 7)
+	require.NoError(t, err)
+	quota := &fakeQuotaResolver{mutation: &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: quotaKey, Value: []byte("usage")}}
+	executor, err := New(runner, WithQuotaResolver(quota))
+	require.NoError(t, err)
+
+	updated, err := executor.UpdateInode(context.Background(), fsmeta.UpdateInodeRequest{
+		Mount:            "vol",
+		Parent:           7,
+		Inode:            22,
+		Name:             "file",
+		SetSize:          true,
+		Size:             8192,
+		SetMode:          true,
+		Mode:             0o600,
+		SetUpdatedUnixNs: true,
+		UpdatedUnixNs:    30,
+		SetOpaqueAttrs:   true,
+		OpaqueAttrs:      []byte("body=cas://1"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(8192), updated.Size)
+	require.Equal(t, uint32(0o600), updated.Mode)
+	require.Equal(t, int64(30), updated.UpdatedUnixNs)
+	require.Equal(t, []byte("body=cas://1"), updated.OpaqueAttrs)
+	require.Equal(t, int64(10), updated.CreatedUnixNs)
+	require.Equal(t, [][]QuotaChange{{{Mount: "vol", Scope: 7, Bytes: 4096}}}, quota.changes)
+	require.Len(t, runner.mutations, 1)
+	require.Equal(t, quotaKey, runner.mutations[0][1].GetKey())
+
+	stored, ok, err := executor.readInode(context.Background(), "vol", 22, 99)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, updated, stored)
+}
+
+func TestExecutorUpdateInodeRejectsHardLinkedInode(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "file", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 2})
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	_, err = executor.UpdateInode(context.Background(), fsmeta.UpdateInodeRequest{
+		Mount:   "vol",
+		Parent:  7,
+		Inode:   22,
+		Name:    "file",
+		SetSize: true,
+		Size:    8192,
+	})
+	require.ErrorIs(t, err, fsmeta.ErrInvalidRequest)
+	require.Empty(t, runner.mutations)
+}
+
+func TestExecutorUpdateInodeRejectsDentryTypeMismatch(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentryType(t, runner, "vol", 7, "file", 22, fsmeta.InodeTypeDirectory)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	_, err = executor.UpdateInode(context.Background(), fsmeta.UpdateInodeRequest{
+		Mount:   "vol",
+		Parent:  7,
+		Inode:   22,
+		Name:    "file",
+		SetMode: true,
+		Mode:    0o600,
+	})
+	require.ErrorIs(t, err, fsmeta.ErrInvalidValue)
+	require.Empty(t, runner.mutations)
+}
+
+func TestExecutorWriteSessionLifecycle(t *testing.T) {
+	runner := newFakeRunner()
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
+	now := time.Unix(0, 100)
+	executor, err := New(runner, WithClock(func() time.Time { return now }))
+	require.NoError(t, err)
+
+	opened, err := executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
+		Mount:         "vol",
+		Inode:         22,
+		Session:       "writer-1",
+		ExpiresUnixNs: 200,
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.SessionRecord{Session: "writer-1", Inode: 22, ExpiresUnixNs: 200}, opened)
+
+	sessionKey, err := fsmeta.EncodeSessionKey("vol", "writer-1")
+	require.NoError(t, err)
+	ownerKey, err := fsmeta.EncodeInodeSessionKey("vol", 22)
+	require.NoError(t, err)
+	require.Contains(t, runner.data, string(sessionKey))
+	require.Contains(t, runner.data, string(ownerKey))
+
+	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
+		Mount:         "vol",
+		Inode:         22,
+		Session:       "writer-2",
+		ExpiresUnixNs: 250,
+	})
+	require.ErrorIs(t, err, fsmeta.ErrExists)
+
+	heartbeat, err := executor.HeartbeatWriteSession(context.Background(), fsmeta.HeartbeatWriteSessionRequest{
+		Mount:         "vol",
+		Inode:         22,
+		Session:       "writer-1",
+		ExpiresUnixNs: 300,
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(300), heartbeat.ExpiresUnixNs)
+	stored, ok, err := executor.readSessionByKey(context.Background(), ownerKey, 99)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, int64(300), stored.ExpiresUnixNs)
+
+	err = executor.CloseWriteSession(context.Background(), fsmeta.CloseWriteSessionRequest{Mount: "vol", Session: "writer-1"})
+	require.NoError(t, err)
+	require.NotContains(t, runner.data, string(sessionKey))
+	require.NotContains(t, runner.data, string(ownerKey))
+}
+
+func TestExecutorOpenWriteSessionReclaimsExpiredOwner(t *testing.T) {
+	runner := newFakeRunner()
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
+	oldRecord := fsmeta.SessionRecord{Session: "writer-old", Inode: 22, ExpiresUnixNs: 50}
+	oldValue, err := fsmeta.EncodeSessionValue(oldRecord)
+	require.NoError(t, err)
+	oldSessionKey, err := fsmeta.EncodeSessionKey("vol", "writer-old")
+	require.NoError(t, err)
+	ownerKey, err := fsmeta.EncodeInodeSessionKey("vol", 22)
+	require.NoError(t, err)
+	runner.data[string(oldSessionKey)] = oldValue
+	runner.data[string(ownerKey)] = oldValue
+
+	executor, err := New(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
+	require.NoError(t, err)
+	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
+		Mount:         "vol",
+		Inode:         22,
+		Session:       "writer-new",
+		ExpiresUnixNs: 200,
+	})
+	require.NoError(t, err)
+	require.NotContains(t, runner.data, string(oldSessionKey))
+	newSessionKey, err := fsmeta.EncodeSessionKey("vol", "writer-new")
+	require.NoError(t, err)
+	require.Contains(t, runner.data, string(newSessionKey))
+	require.Contains(t, runner.data, string(ownerKey))
+}
+
+func TestExecutorOpenWriteSessionRejectsDirectory(t *testing.T) {
+	runner := newFakeRunner()
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeDirectory, LinkCount: 1})
+	executor, err := New(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
+	require.NoError(t, err)
+
+	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
+		Mount:         "vol",
+		Inode:         22,
+		Session:       "writer-1",
+		ExpiresUnixNs: 200,
+	})
+	require.ErrorIs(t, err, fsmeta.ErrInvalidRequest)
+	require.Empty(t, runner.mutations)
+}
+
+func TestExecutorExpireWriteSessionsDeletesBothIndexes(t *testing.T) {
+	runner := newFakeRunner()
+	expired := fsmeta.SessionRecord{Session: "writer-old", Inode: 22, ExpiresUnixNs: 50}
+	live := fsmeta.SessionRecord{Session: "writer-live", Inode: 23, ExpiresUnixNs: 500}
+	seedSession(t, runner, "vol", expired)
+	seedSession(t, runner, "vol", live)
+	executor, err := New(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
+	require.NoError(t, err)
+
+	result, err := executor.ExpireWriteSessions(context.Background(), fsmeta.ExpireWriteSessionsRequest{Mount: "vol"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.ExpireWriteSessionsResult{Expired: 1}, result)
+
+	expiredSessionKey, err := fsmeta.EncodeSessionKey("vol", expired.Session)
+	require.NoError(t, err)
+	expiredOwnerKey, err := fsmeta.EncodeInodeSessionKey("vol", expired.Inode)
+	require.NoError(t, err)
+	liveSessionKey, err := fsmeta.EncodeSessionKey("vol", live.Session)
+	require.NoError(t, err)
+	liveOwnerKey, err := fsmeta.EncodeInodeSessionKey("vol", live.Inode)
+	require.NoError(t, err)
+	require.NotContains(t, runner.data, string(expiredSessionKey))
+	require.NotContains(t, runner.data, string(expiredOwnerKey))
+	require.Contains(t, runner.data, string(liveSessionKey))
+	require.Contains(t, runner.data, string(liveOwnerKey))
 }
 
 func TestExecutorUnlinkReservesNegativeQuotaWhenInodeExists(t *testing.T) {
@@ -800,6 +1009,18 @@ func seedInode(t *testing.T, runner *fakeRunner, mount fsmeta.MountID, record fs
 	value, err := fsmeta.EncodeInodeValue(record)
 	require.NoError(t, err)
 	runner.data[string(key)] = value
+}
+
+func seedSession(t *testing.T, runner *fakeRunner, mount fsmeta.MountID, record fsmeta.SessionRecord) {
+	t.Helper()
+	value, err := fsmeta.EncodeSessionValue(record)
+	require.NoError(t, err)
+	sessionKey, err := fsmeta.EncodeSessionKey(mount, record.Session)
+	require.NoError(t, err)
+	ownerKey, err := fsmeta.EncodeInodeSessionKey(mount, record.Inode)
+	require.NoError(t, err)
+	runner.data[string(sessionKey)] = value
+	runner.data[string(ownerKey)] = value
 }
 
 func cloneMutation(mut *kvrpcpb.Mutation) *kvrpcpb.Mutation {

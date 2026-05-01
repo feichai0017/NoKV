@@ -14,6 +14,7 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/percolator"
 	"github.com/feichai0017/NoKV/percolator/latch"
 	txnstore "github.com/feichai0017/NoKV/percolator/storage"
@@ -809,10 +810,68 @@ func newTestMVCCApplier(db txnstore.Store) func(*raftcmdpb.RaftCmdRequest) (*raf
 			case raftcmdpb.CmdType_CMD_COMMIT:
 				err := percolator.Commit(db, latches, r.GetCommit())
 				resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_Commit{Commit: &kvrpcpb.CommitResponse{Error: err}}})
+			case raftcmdpb.CmdType_CMD_RESOLVE_LOCK:
+				count, err := percolator.ResolveLock(db, latches, r.GetResolveLock())
+				resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_ResolveLock{ResolveLock: &kvrpcpb.ResolveLockResponse{
+					Error:         err,
+					ResolvedLocks: count,
+				}}})
+			case raftcmdpb.CmdType_CMD_MVCC_MAINTENANCE:
+				count, keyErr, err := applyTestMVCCMaintenance(db, r.GetMvccMaintenance())
+				if err != nil {
+					return nil, err
+				}
+				resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_MvccMaintenance{MvccMaintenance: &kvrpcpb.MVCCMaintenanceResponse{
+					Error:          keyErr,
+					AppliedEntries: count,
+				}}})
 			default:
 				return nil, fmt.Errorf("unsupported test command %v", r.GetCmdType())
 			}
 		}
 		return resp, nil
+	}
+}
+
+func applyTestMVCCMaintenance(db txnstore.Store, req *kvrpcpb.MVCCMaintenanceRequest) (uint64, *kvrpcpb.KeyError, error) {
+	var entries []*entrykv.Entry
+	for _, tombstone := range req.GetTombstones() {
+		if tombstone == nil {
+			continue
+		}
+		cf, ok := testMaintenanceColumnFamily(tombstone.GetColumnFamily())
+		if !ok {
+			releaseTestEntries(entries)
+			return 0, &kvrpcpb.KeyError{Abort: "invalid column family"}, nil
+		}
+		if len(tombstone.GetKey()) == 0 {
+			releaseTestEntries(entries)
+			return 0, &kvrpcpb.KeyError{Abort: "empty key"}, nil
+		}
+		entries = append(entries, entrykv.NewInternalEntry(cf, tombstone.GetKey(), tombstone.GetVersion(), nil, entrykv.BitDelete, 0))
+	}
+	defer releaseTestEntries(entries)
+	if err := db.ApplyInternalEntries(entries); err != nil {
+		return 0, nil, err
+	}
+	return uint64(len(entries)), nil, nil
+}
+
+func releaseTestEntries(entries []*entrykv.Entry) {
+	for _, entry := range entries {
+		if entry != nil {
+			entry.DecrRef()
+		}
+	}
+}
+
+func testMaintenanceColumnFamily(cf kvrpcpb.InternalEntryTombstone_ColumnFamily) (entrykv.ColumnFamily, bool) {
+	switch cf {
+	case kvrpcpb.InternalEntryTombstone_DEFAULT:
+		return entrykv.CFDefault, true
+	case kvrpcpb.InternalEntryTombstone_WRITE:
+		return entrykv.CFWrite, true
+	default:
+		return 0, false
 	}
 }
