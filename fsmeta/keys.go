@@ -147,6 +147,13 @@ func MountIDOfKey(key []byte) (MountID, bool) {
 	return mount, true
 }
 
+// StringMountResolver adapts fsmeta keys to raftstore MVCC GC mount-scoped
+// retention policy.
+func StringMountResolver(key []byte) (string, bool) {
+	mount, ok := MountIDOfKey(key)
+	return string(mount), ok
+}
+
 func encodeKey(mount MountID, kind KeyKind, body []byte) ([]byte, error) {
 	out, err := encodeMountPrefix(mount)
 	if err != nil {

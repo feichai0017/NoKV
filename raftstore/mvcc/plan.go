@@ -1,22 +1,25 @@
-package mvccgc
+package mvcc
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/feichai0017/NoKV/engine/index"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
-	"github.com/feichai0017/NoKV/engine/mvcc"
+	txnmvcc "github.com/feichai0017/NoKV/percolator/mvcc"
+	txnstore "github.com/feichai0017/NoKV/percolator/storage"
 )
 
 const defaultApplyBatchEntries = 4096
 
-var errStop = fmt.Errorf("mvccgc: stop batch")
+var errStop = errors.New("raftstore/mvcc: stop batch")
 
 // PlanStats summarizes a non-destructive MVCC GC planning pass.
 type PlanStats struct {
-	Keys                  uint64
+	ScannedKeys           uint64
+	DroppableKeys         uint64
 	WriteVersions         uint64
 	RetainedWrites        uint64
 	DroppableWrites       uint64
@@ -43,6 +46,9 @@ type ApplyOptions struct {
 	// BatchEntries limits the number of tombstones submitted in one
 	// ApplyInternalEntries call. A non-positive value uses the default.
 	BatchEntries int
+	// MaxKeys stops one destructive pass after scanning this many user keys.
+	// Zero means unlimited.
+	MaxKeys uint64
 }
 
 func (o ApplyOptions) batchEntries() int {
@@ -53,7 +59,7 @@ func (o ApplyOptions) batchEntries() int {
 }
 
 // Plan scans CFWrite and applies MVCC GC policy without deleting data.
-func Plan(ctx context.Context, db mvcc.Store, policy SafePointPolicy) (PlanStats, error) {
+func Plan(ctx context.Context, db txnstore.Store, policy SafePointPolicy) (PlanStats, error) {
 	var stats PlanStats
 	_, err := walk(ctx, db, policy, nil, &stats, nil)
 	return stats, err
@@ -62,14 +68,24 @@ func Plan(ctx context.Context, db mvcc.Store, policy SafePointPolicy) (PlanStats
 // Apply applies MVCC GC by writing point tombstones for droppable CFWrite
 // records and their unreferenced CFDefault payloads. It scans and applies in
 // bounded batches, and never writes to the DB while an iterator is open.
-func Apply(ctx context.Context, db mvcc.Store, policy SafePointPolicy, opt ApplyOptions) (ApplyStats, error) {
+//
+// Apply writes through the local Store surface. Cluster-mode GC must propose an
+// equivalent raft command instead of calling this helper directly.
+func Apply(ctx context.Context, db txnstore.Store, policy SafePointPolicy, opt ApplyOptions) (ApplyStats, error) {
 	var stats ApplyStats
 	var afterUserKey []byte
 	for {
 		if err := ctx.Err(); err != nil {
 			return stats, err
 		}
-		batch, err := collectApplyBatch(ctx, db, policy, afterUserKey, opt.batchEntries())
+		var maxKeys uint64
+		if opt.MaxKeys > 0 {
+			if stats.ScannedKeys >= opt.MaxKeys {
+				return stats, nil
+			}
+			maxKeys = opt.MaxKeys - stats.ScannedKeys
+		}
+		batch, err := collectApplyBatch(ctx, db, policy, afterUserKey, opt.batchEntries(), maxKeys)
 		if err != nil {
 			return stats, err
 		}
@@ -86,21 +102,24 @@ func Apply(ctx context.Context, db mvcc.Store, policy SafePointPolicy, opt Apply
 		if batch.done {
 			return stats, nil
 		}
+		if opt.MaxKeys > 0 && stats.ScannedKeys >= opt.MaxKeys {
+			return stats, nil
+		}
 		afterUserKey = batch.lastUserKey
 	}
 }
 
-type groupFn func(userKey []byte, decisions []mvcc.GCWriteDecision) error
+type groupFn func(userKey []byte, decisions []txnmvcc.GCWriteDecision) error
 
 type walkResult struct {
 	lastUserKey []byte
 	stopped     bool
 }
 
-func walk(ctx context.Context, db mvcc.Store, policy SafePointPolicy, afterUserKey []byte, stats *PlanStats, fn groupFn) (walkResult, error) {
+func walk(ctx context.Context, db txnstore.Store, policy SafePointPolicy, afterUserKey []byte, stats *PlanStats, fn groupFn) (walkResult, error) {
 	var result walkResult
 	if db == nil {
-		return result, fmt.Errorf("mvccgc: nil MVCC store")
+		return result, fmt.Errorf("raftstore/mvcc: nil MVCC store")
 	}
 	iter := db.NewInternalIterator(&index.Options{IsAsc: true})
 	if iter == nil {
@@ -110,8 +129,8 @@ func walk(ctx context.Context, db mvcc.Store, policy SafePointPolicy, afterUserK
 
 	var (
 		currentKey []byte
-		versions   []mvcc.GCWriteVersion
-		decisions  []mvcc.GCWriteDecision
+		versions   []txnmvcc.GCWriteVersion
+		decisions  []txnmvcc.GCWriteDecision
 	)
 	flush := func() error {
 		if len(currentKey) == 0 {
@@ -123,7 +142,7 @@ func walk(ctx context.Context, db mvcc.Store, policy SafePointPolicy, afterUserK
 		stats.recordGroup(policy.RequestedSafePoint, safePoint, decisions)
 		if fn != nil {
 			if err := fn(currentKey, decisions); err != nil {
-				if err == errStop {
+				if errors.Is(err, errStop) {
 					result.stopped = true
 					currentKey = nil
 					versions = versions[:0]
@@ -150,7 +169,7 @@ func walk(ctx context.Context, db mvcc.Store, policy SafePointPolicy, afterUserK
 		entry := item.Entry()
 		cf, userKey, commitTs, ok := entrykv.SplitInternalKey(entry.Key)
 		if !ok {
-			return result, fmt.Errorf("mvccgc: expected internal key, got %x", entry.Key)
+			return result, fmt.Errorf("raftstore/mvcc: expected internal key, got %x", entry.Key)
 		}
 		if cf != entrykv.CFWrite {
 			break
@@ -171,11 +190,11 @@ func walk(ctx context.Context, db mvcc.Store, policy SafePointPolicy, afterUserK
 			iter.Next()
 			continue
 		}
-		write, err := mvcc.DecodeWrite(entry.Value)
+		write, err := txnmvcc.DecodeWrite(entry.Value)
 		if err != nil {
-			return result, fmt.Errorf("mvccgc: decode CFWrite %x@%d: %w", userKey, commitTs, err)
+			return result, fmt.Errorf("raftstore/mvcc: decode CFWrite %x@%d: %w", userKey, commitTs, err)
 		}
-		versions = append(versions, mvcc.GCWriteVersion{CommitTs: commitTs, Write: write})
+		versions = append(versions, txnmvcc.GCWriteVersion{CommitTs: commitTs, Write: write})
 		iter.Next()
 	}
 	return result, flush()
@@ -210,14 +229,17 @@ type applyBatch struct {
 	done           bool
 }
 
-func collectApplyBatch(ctx context.Context, db mvcc.Store, policy SafePointPolicy, afterUserKey []byte, maxEntries int) (applyBatch, error) {
+func collectApplyBatch(ctx context.Context, db txnstore.Store, policy SafePointPolicy, afterUserKey []byte, maxEntries int, maxKeys uint64) (applyBatch, error) {
 	var batch applyBatch
-	result, err := walk(ctx, db, policy, afterUserKey, &batch.plan, func(userKey []byte, decisions []mvcc.GCWriteDecision) error {
+	result, err := walk(ctx, db, policy, afterUserKey, &batch.plan, func(userKey []byte, decisions []txnmvcc.GCWriteDecision) error {
 		writes, defaults := buildDeletes(userKey, decisions)
 		batch.entries = append(batch.entries, writes...)
 		batch.entries = append(batch.entries, defaults...)
 		batch.writeDeletes += uint64(len(writes))
 		batch.defaultDeletes += uint64(len(defaults))
+		if maxKeys > 0 && batch.plan.ScannedKeys >= maxKeys {
+			return errStop
+		}
 		if len(batch.entries) >= maxEntries {
 			return errStop
 		}
@@ -232,7 +254,7 @@ func collectApplyBatch(ctx context.Context, db mvcc.Store, policy SafePointPolic
 	return batch, nil
 }
 
-func buildDeletes(userKey []byte, decisions []mvcc.GCWriteDecision) (writes, defaults []*entrykv.Entry) {
+func buildDeletes(userKey []byte, decisions []txnmvcc.GCWriteDecision) (writes, defaults []*entrykv.Entry) {
 	retainedDefault := make(map[uint64]struct{})
 	for _, decision := range decisions {
 		if decision.RetainDefaultStartTs != 0 {
@@ -244,7 +266,7 @@ func buildDeletes(userKey []byte, decisions []mvcc.GCWriteDecision) (writes, def
 			continue
 		}
 		writes = append(writes, entrykv.NewInternalEntry(entrykv.CFWrite, userKey, decision.CommitTs, nil, entrykv.BitDelete, 0))
-		if !mvcc.WriteNeedsDefaultRecord(decision.Write) {
+		if !txnmvcc.WriteNeedsDefaultRecord(decision.Write) {
 			continue
 		}
 		if _, ok := retainedDefault[decision.Write.StartTs]; ok {
@@ -255,8 +277,8 @@ func buildDeletes(userKey []byte, decisions []mvcc.GCWriteDecision) (writes, def
 	return writes, defaults
 }
 
-func (s *PlanStats) recordGroup(requestedSafePoint, safePoint uint64, plan []mvcc.GCWriteDecision) {
-	s.Keys++
+func (s *PlanStats) recordGroup(requestedSafePoint, safePoint uint64, plan []txnmvcc.GCWriteDecision) {
+	s.ScannedKeys++
 	if safePoint != 0 && safePoint < requestedSafePoint {
 		s.SafePointClampedKeys++
 	}
@@ -269,12 +291,14 @@ func (s *PlanStats) recordGroup(requestedSafePoint, safePoint uint64, plan []mvc
 	if safePoint > s.MaxEffectiveSafePoint {
 		s.MaxEffectiveSafePoint = safePoint
 	}
+	hasDrop := false
 	for _, decision := range plan {
 		s.WriteVersions++
 		if decision.Keep {
 			s.RetainedWrites++
 		} else {
 			s.DroppableWrites++
+			hasDrop = true
 		}
 		if decision.Anchor {
 			s.AnchorWrites++
@@ -283,10 +307,14 @@ func (s *PlanStats) recordGroup(requestedSafePoint, safePoint uint64, plan []mvc
 			s.RetainedDefaultRefs++
 		}
 	}
+	if hasDrop {
+		s.DroppableKeys++
+	}
 }
 
 func (s *ApplyStats) add(other PlanStats) {
-	s.Keys += other.Keys
+	s.ScannedKeys += other.ScannedKeys
+	s.DroppableKeys += other.DroppableKeys
 	s.WriteVersions += other.WriteVersions
 	s.RetainedWrites += other.RetainedWrites
 	s.DroppableWrites += other.DroppableWrites

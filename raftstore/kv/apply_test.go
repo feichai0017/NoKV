@@ -7,7 +7,7 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
-	"github.com/feichai0017/NoKV/percolator"
+	"github.com/feichai0017/NoKV/percolator/mvcc"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/stretchr/testify/require"
@@ -72,7 +72,7 @@ func TestLockedErrorMapping(t *testing.T) {
 	key := []byte("lock-key")
 	require.Nil(t, lockedError(key, nil))
 
-	lock := &percolator.Lock{
+	lock := &mvcc.Lock{
 		Primary:     []byte("primary"),
 		Ts:          42,
 		TTL:         9000,
@@ -101,7 +101,7 @@ func TestHandleScanShortValueCarriesExpiresAt(t *testing.T) {
 	startTs := uint64(11)
 	commitTs := uint64(22)
 	expiresAt := ^uint64(0)
-	write := percolator.EncodeWrite(percolator.Write{
+	write := mvcc.EncodeWrite(mvcc.Write{
 		Kind:       kvrpcpb.Mutation_Put,
 		StartTs:    startTs,
 		ShortValue: []byte("short-v"),
@@ -131,7 +131,7 @@ func TestHandleScanSkipsExpiredShortValue(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	key := []byte("short-expired")
-	write := percolator.EncodeWrite(percolator.Write{
+	write := mvcc.EncodeWrite(mvcc.Write{
 		Kind:       kvrpcpb.Mutation_Put,
 		StartTs:    11,
 		ShortValue: []byte("short-v"),

@@ -17,12 +17,13 @@ import (
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 
 	"github.com/feichai0017/NoKV/engine/kv"
-	"github.com/feichai0017/NoKV/engine/mvcc"
 	"github.com/feichai0017/NoKV/percolator/latch"
+	"github.com/feichai0017/NoKV/percolator/mvcc"
+	txnstore "github.com/feichai0017/NoKV/percolator/storage"
 )
 
 // Prewrite applies mutation prewrites for a single region transaction.
-func Prewrite(db mvcc.Store, latches *latch.Manager, req *kvrpcpb.PrewriteRequest) []*kvrpcpb.KeyError {
+func Prewrite(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.PrewriteRequest) []*kvrpcpb.KeyError {
 	if req == nil {
 		return nil
 	}
@@ -48,7 +49,7 @@ func Prewrite(db mvcc.Store, latches *latch.Manager, req *kvrpcpb.PrewriteReques
 	return errs
 }
 
-func prewriteMutation(db mvcc.Store, reader *Reader, req *kvrpcpb.PrewriteRequest, mut *kvrpcpb.Mutation) *kvrpcpb.KeyError {
+func prewriteMutation(db txnstore.Store, reader *Reader, req *kvrpcpb.PrewriteRequest, mut *kvrpcpb.Mutation) *kvrpcpb.KeyError {
 	key := mut.GetKey()
 	if len(key) == 0 {
 		return keyErrorAbort("empty key in mutation")
@@ -88,14 +89,14 @@ func prewriteMutation(db mvcc.Store, reader *Reader, req *kvrpcpb.PrewriteReques
 	default:
 		return keyErrorAbort(fmt.Sprintf("unsupported mutation op %v", mut.Op))
 	}
-	newLock := Lock{
+	newLock := mvcc.Lock{
 		Primary:     kv.SafeCopy(nil, req.PrimaryLock),
 		Ts:          req.StartVersion,
 		TTL:         req.LockTtl,
 		Kind:        mut.Op,
 		MinCommitTs: req.MinCommitTs,
 	}
-	encoded := EncodeLock(newLock)
+	encoded := mvcc.EncodeLock(newLock)
 	ops = append(ops, versionedOp{cf: kv.CFLock, key: key, version: lockColumnTs, value: encoded})
 	if err := applyVersionedOps(db, ops...); err != nil {
 		return keyErrorRetryable(err)
@@ -113,7 +114,7 @@ func validateCommitVersion(StartVersion uint64, CommitVersion uint64) *kvrpcpb.K
 
 // Commit finalises earlier prewrites by removing locks and writing commit
 // records. A non-nil KeyError is returned when commit should abort.
-func Commit(db mvcc.Store, latches *latch.Manager, req *kvrpcpb.CommitRequest) *kvrpcpb.KeyError {
+func Commit(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.CommitRequest) *kvrpcpb.KeyError {
 	if req == nil {
 		return nil
 	}
@@ -156,7 +157,7 @@ func Commit(db mvcc.Store, latches *latch.Manager, req *kvrpcpb.CommitRequest) *
 }
 
 // BatchRollback rolls back the provided keys for the given start version.
-func BatchRollback(db mvcc.Store, latches *latch.Manager, req *kvrpcpb.BatchRollbackRequest) *kvrpcpb.KeyError {
+func BatchRollback(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.BatchRollbackRequest) *kvrpcpb.KeyError {
 	if req == nil {
 		return nil
 	}
@@ -176,7 +177,7 @@ func BatchRollback(db mvcc.Store, latches *latch.Manager, req *kvrpcpb.BatchRoll
 
 // ResolveLock resolves locks for the given transaction. commitVersion == 0
 // performs a rollback; otherwise the keys are committed.
-func ResolveLock(db mvcc.Store, latches *latch.Manager, req *kvrpcpb.ResolveLockRequest) (uint64, *kvrpcpb.KeyError) {
+func ResolveLock(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.ResolveLockRequest) (uint64, *kvrpcpb.KeyError) {
 	if req == nil {
 		return 0, nil
 	}
@@ -217,7 +218,7 @@ func ResolveLock(db mvcc.Store, latches *latch.Manager, req *kvrpcpb.ResolveLock
 
 // CheckTxnStatus inspects the primary lock state and optionally rolls back
 // expired transactions.
-func CheckTxnStatus(db mvcc.Store, latches *latch.Manager, req *kvrpcpb.CheckTxnStatusRequest) *kvrpcpb.CheckTxnStatusResponse {
+func CheckTxnStatus(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.CheckTxnStatusRequest) *kvrpcpb.CheckTxnStatusResponse {
 	resp := &kvrpcpb.CheckTxnStatusResponse{}
 	if req == nil {
 		return resp
@@ -251,7 +252,7 @@ func CheckTxnStatus(db mvcc.Store, latches *latch.Manager, req *kvrpcpb.CheckTxn
 				cf:      kv.CFLock,
 				key:     req.PrimaryKey,
 				version: lockColumnTs,
-				value:   EncodeLock(*lock),
+				value:   mvcc.EncodeLock(*lock),
 			}); err != nil {
 				resp.Error = keyErrorRetryable(err)
 				return resp
@@ -287,7 +288,7 @@ func CheckTxnStatus(db mvcc.Store, latches *latch.Manager, req *kvrpcpb.CheckTxn
 }
 
 // keyErrorLocked builds a KeyError for a locked key.
-func keyErrorLocked(key []byte, lock *Lock) *kvrpcpb.KeyError {
+func keyErrorLocked(key []byte, lock *mvcc.Lock) *kvrpcpb.KeyError {
 	return &kvrpcpb.KeyError{
 		Locked: &kvrpcpb.Locked{
 			PrimaryLock: lock.Primary,
@@ -350,7 +351,7 @@ func keyExistsAt(reader *Reader, key []byte, readTs uint64) (bool, error) {
 	}
 }
 
-func commitKey(db mvcc.Store, reader *Reader, key []byte, lock *Lock, commitVersion uint64) *kvrpcpb.KeyError {
+func commitKey(db txnstore.Store, reader *Reader, key []byte, lock *mvcc.Lock, commitVersion uint64) *kvrpcpb.KeyError {
 	write, _, err := reader.GetWriteByStartTs(key, lock.Ts)
 	if err != nil {
 		return keyErrorRetryable(err)
@@ -374,7 +375,7 @@ func commitKey(db mvcc.Store, reader *Reader, key []byte, lock *Lock, commitVers
 		return keyErrorCommitTsExpired(key, commitVersion, lock.MinCommitTs)
 	}
 
-	entry := EncodeWrite(Write{Kind: lock.Kind, StartTs: lock.Ts})
+	entry := mvcc.EncodeWrite(mvcc.Write{Kind: lock.Kind, StartTs: lock.Ts})
 	if err := applyVersionedOps(db,
 		versionedOp{cf: kv.CFWrite, key: key, version: commitVersion, value: entry},
 		versionedOp{cf: kv.CFLock, key: key, version: lockColumnTs, meta: kv.BitDelete},
@@ -384,7 +385,7 @@ func commitKey(db mvcc.Store, reader *Reader, key []byte, lock *Lock, commitVers
 	return nil
 }
 
-func rollbackKey(db mvcc.Store, reader *Reader, key []byte, startTs uint64) *kvrpcpb.KeyError {
+func rollbackKey(db txnstore.Store, reader *Reader, key []byte, startTs uint64) *kvrpcpb.KeyError {
 	write, _, err := reader.GetWriteByStartTs(key, startTs)
 	if err != nil {
 		return keyErrorRetryable(err)
@@ -398,7 +399,7 @@ func rollbackKey(db mvcc.Store, reader *Reader, key []byte, startTs uint64) *kvr
 		return keyErrorRetryable(err)
 	}
 
-	rollback := EncodeWrite(Write{Kind: kvrpcpb.Mutation_Rollback, StartTs: startTs})
+	rollback := mvcc.EncodeWrite(mvcc.Write{Kind: kvrpcpb.Mutation_Rollback, StartTs: startTs})
 	ops := []versionedOp{
 		{cf: kv.CFDefault, key: key, version: startTs, meta: kv.BitDelete},
 		{cf: kv.CFWrite, key: key, version: startTs, value: rollback},
@@ -421,7 +422,7 @@ type versionedOp struct {
 	expires uint64
 }
 
-func applyVersionedOps(db mvcc.Store, ops ...versionedOp) error {
+func applyVersionedOps(db txnstore.Store, ops ...versionedOp) error {
 	if len(ops) == 0 {
 		return nil
 	}
@@ -439,7 +440,7 @@ func applyVersionedOps(db mvcc.Store, ops ...versionedOp) error {
 	return err
 }
 
-func isLockExpired(lock *Lock, currentTs uint64) bool {
+func isLockExpired(lock *mvcc.Lock, currentTs uint64) bool {
 	if lock == nil {
 		return false
 	}

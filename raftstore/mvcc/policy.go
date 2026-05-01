@@ -1,8 +1,8 @@
-package mvccgc
+package mvcc
 
 import (
-	"github.com/feichai0017/NoKV/engine/mvcc"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	txnmvcc "github.com/feichai0017/NoKV/percolator/mvcc"
 )
 
 // MountResolver extracts a namespace mount identifier from a user key. GC
@@ -22,8 +22,10 @@ type SafePointPolicy struct {
 
 // EffectiveForKey returns the key-local safe point after applying active
 // snapshot and transaction floors. Resolved mount keys use mount-scoped
-// snapshot floors. Unknown key layouts fall back to the global floor
-// conservatively.
+// snapshot floors. Unknown key layouts fall back to the aggregate global floor
+// conservatively. The global floor is the minimum of all active snapshot
+// epochs, not a separate all-mount snapshot; applying it to resolved mount keys
+// would let one mount pin GC for unrelated mounts.
 func (p SafePointPolicy) EffectiveForKey(userKey []byte) uint64 {
 	if p.RequestedSafePoint == 0 {
 		return 0
@@ -53,7 +55,7 @@ func (p SafePointPolicy) EffectiveForKey(userKey []byte) uint64 {
 }
 
 // PlanWritesForKey returns the MVCC GC plan for one key's CFWrite versions.
-func (p SafePointPolicy) PlanWritesForKey(userKey []byte, versions []mvcc.GCWriteVersion) []mvcc.GCWriteDecision {
+func (p SafePointPolicy) PlanWritesForKey(userKey []byte, versions []txnmvcc.GCWriteVersion) []txnmvcc.GCWriteDecision {
 	_, decisions := p.AppendPlanWritesForKey(nil, userKey, versions)
 	return decisions
 }
@@ -61,7 +63,7 @@ func (p SafePointPolicy) PlanWritesForKey(userKey []byte, versions []mvcc.GCWrit
 // AppendPlanWritesForKey appends a key-local GC plan to dst and returns the
 // effective safe point used for that key. The append form keeps long scans off
 // the allocator hot path.
-func (p SafePointPolicy) AppendPlanWritesForKey(dst []mvcc.GCWriteDecision, userKey []byte, versions []mvcc.GCWriteVersion) (uint64, []mvcc.GCWriteDecision) {
+func (p SafePointPolicy) AppendPlanWritesForKey(dst []txnmvcc.GCWriteDecision, userKey []byte, versions []txnmvcc.GCWriteVersion) (uint64, []txnmvcc.GCWriteDecision) {
 	safePoint := p.EffectiveForKey(userKey)
-	return safePoint, mvcc.AppendWriteGCDecisions(dst, versions, safePoint)
+	return safePoint, txnmvcc.AppendWriteGCDecisions(dst, versions, safePoint)
 }

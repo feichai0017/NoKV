@@ -166,16 +166,16 @@ type Options struct {
 	// this interval. It never writes tombstones; it only records the current
 	// deletion plan for observability. Zero disables the planner.
 	MVCCGCPlanInterval time.Duration
-	// MVCCGCSafePoint returns the requested MVCC GC safe point used by the
+	// MVCCGCSafePointFn returns the requested MVCC GC safe point used by the
 	// background planner. Nil disables the planner even when MVCCGCPlanInterval
 	// is set. A zero return value skips the current planning pass.
-	MVCCGCSafePoint func() uint64
-	// MVCCGCSnapshotRetention returns active snapshot retention floors. The
+	MVCCGCSafePointFn func() uint64
+	// MVCCGCSnapshotRetentionFn returns active snapshot retention floors. The
 	// function must return a detached value because the planner may call it
 	// concurrently with metadata-root refresh paths. rootstate Snapshot()
 	// helpers already satisfy that contract by cloning their mount-floor maps.
 	// Nil means no snapshot retention floors are applied.
-	MVCCGCSnapshotRetention func() rootstate.SnapshotRetentionIndex
+	MVCCGCSnapshotRetentionFn func() rootstate.SnapshotRetentionIndex
 
 	// NumCompactors controls how many background compaction workers are spawned.
 	// Zero uses an auto value derived from the host CPU count.

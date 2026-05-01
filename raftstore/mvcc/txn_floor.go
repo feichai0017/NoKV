@@ -1,4 +1,4 @@
-package mvccgc
+package mvcc
 
 import (
 	"context"
@@ -6,7 +6,8 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
-	"github.com/feichai0017/NoKV/engine/mvcc"
+	txnmvcc "github.com/feichai0017/NoKV/percolator/mvcc"
+	txnstore "github.com/feichai0017/NoKV/percolator/storage"
 )
 
 // TxnFloor summarizes active Percolator locks. The oldest lock start timestamp
@@ -24,10 +25,10 @@ func (f TxnFloor) Active() bool {
 
 // PlanTxnFloor scans CFLock and returns the oldest active transaction start
 // timestamp. It is read-only and ignores lock tombstones.
-func PlanTxnFloor(ctx context.Context, db mvcc.Store) (TxnFloor, error) {
+func PlanTxnFloor(ctx context.Context, db txnstore.Store) (TxnFloor, error) {
 	var floor TxnFloor
 	if db == nil {
-		return floor, fmt.Errorf("mvccgc: nil MVCC store")
+		return floor, fmt.Errorf("raftstore/mvcc: nil MVCC store")
 	}
 	iter := db.NewInternalIterator(&index.Options{IsAsc: true})
 	if iter == nil {
@@ -48,7 +49,7 @@ func PlanTxnFloor(ctx context.Context, db mvcc.Store) (TxnFloor, error) {
 		entry := item.Entry()
 		cf, userKey, _, ok := entrykv.SplitInternalKey(entry.Key)
 		if !ok {
-			return floor, fmt.Errorf("mvccgc: expected internal lock key, got %x", entry.Key)
+			return floor, fmt.Errorf("raftstore/mvcc: expected internal lock key, got %x", entry.Key)
 		}
 		if cf != entrykv.CFLock {
 			break
@@ -57,9 +58,9 @@ func PlanTxnFloor(ctx context.Context, db mvcc.Store) (TxnFloor, error) {
 			iter.Next()
 			continue
 		}
-		lock, err := mvcc.DecodeLock(entry.Value)
+		lock, err := txnmvcc.DecodeLock(entry.Value)
 		if err != nil {
-			return floor, fmt.Errorf("mvccgc: decode CFLock %x: %w", userKey, err)
+			return floor, fmt.Errorf("raftstore/mvcc: decode CFLock %x: %w", userKey, err)
 		}
 		if lock.Ts == 0 {
 			iter.Next()

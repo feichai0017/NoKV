@@ -19,9 +19,11 @@ import (
 	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
+	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/metrics"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
+	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	dbruntime "github.com/feichai0017/NoKV/runtime"
@@ -92,7 +94,7 @@ type (
 		// processors, and the optional sync worker. See runtime/commit.
 		pipeline        *commit.Pipeline
 		iterPool        *iterpkg.IteratorPool
-		mvccGCPlan      *mvccGCPlanState
+		mvccGCPlan      *storemvcc.GCPlanner
 		hotWriteLimited atomic.Uint64
 		background      dbruntime.BackgroundServices
 		runtimeModules  dbruntime.Registry
@@ -390,7 +392,13 @@ func Open(opt *Options) (_ *DB, err error) {
 		})
 	}
 	var periodicTasks []dbruntime.PeriodicTaskConfig
-	if task, state, ok := db.newMVCCGCPlanTask(); ok {
+	if task, state, ok := storemvcc.NewGCPlanTask(storemvcc.GCPlanConfig{
+		MVCCStore: db,
+		Interval:  db.opt.MVCCGCPlanInterval,
+		SafePoint: db.opt.MVCCGCSafePointFn,
+		Retention: db.opt.MVCCGCSnapshotRetentionFn,
+		Mount:     fsmeta.StringMountResolver,
+	}); ok {
 		db.mvccGCPlan = state
 		periodicTasks = append(periodicTasks, task)
 	}
@@ -852,11 +860,11 @@ func (db *DB) Info() *stats.Stats {
 func (db *DB) LSM() stats.LSMSource                 { return db.lsm }
 func (db *DB) LSMWALs() []*wal.Manager              { return db.lsmWALs }
 func (db *DB) BackgroundWatchdogs() []*wal.Watchdog { return db.background.WALWatchdogs() }
-func (db *DB) MVCCGCPlanSnapshot() MVCCGCPlanSnapshot {
+func (db *DB) MVCCGCPlanSnapshot() storemvcc.GCPlanSnapshot {
 	if db == nil || db.mvccGCPlan == nil {
-		return MVCCGCPlanSnapshot{}
+		return storemvcc.GCPlanSnapshot{}
 	}
-	return db.mvccGCPlan.snapshot(db.background.PeriodicTaskSnapshot(mvccGCPlanTaskName))
+	return db.mvccGCPlan.Snapshot(db.background.PeriodicTaskSnapshot(storemvcc.GCPlanTaskName))
 }
 func (db *DB) HotWrite() *thermos.RotatingThermos  { return db.hotWrite }
 func (db *DB) IteratorReused() uint64              { return db.iterPool.Reused() }

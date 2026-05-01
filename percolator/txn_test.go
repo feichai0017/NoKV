@@ -1,7 +1,6 @@
 package percolator
 
 import (
-	"encoding/binary"
 	"errors"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"os"
@@ -14,6 +13,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/percolator/latch"
+	"github.com/feichai0017/NoKV/percolator/mvcc"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -374,7 +374,7 @@ func TestCommitMissingLockWithRollbackWriteAborts(t *testing.T) {
 	key := []byte("rolled-back")
 	startTs := uint64(18)
 
-	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, startTs, EncodeWrite(Write{
+	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, startTs, mvcc.EncodeWrite(mvcc.Write{
 		Kind:    kvrpcpb.Mutation_Rollback,
 		StartTs: startTs,
 	}), 0)
@@ -435,7 +435,7 @@ func TestCommitMissingLockWithExistingWriteIsIdempotent(t *testing.T) {
 	startTs := uint64(12)
 	commitTs := uint64(22)
 
-	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, commitTs, EncodeWrite(Write{
+	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, commitTs, mvcc.EncodeWrite(mvcc.Write{
 		Kind:    kvrpcpb.Mutation_Put,
 		StartTs: startTs,
 	}), 0)
@@ -454,7 +454,7 @@ func TestCommitReturnsLockedOnDifferentTransactionLock(t *testing.T) {
 	latches := latch.NewManager(32)
 	key := []byte("locked-by-other")
 
-	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, EncodeLock(Lock{
+	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, mvcc.EncodeLock(mvcc.Lock{
 		Primary: key,
 		Ts:      30,
 		Kind:    kvrpcpb.Mutation_Put,
@@ -474,7 +474,7 @@ func TestReaderMostRecentWriteSkipsOtherCF(t *testing.T) {
 	db := openTestDB(t)
 	require.NoError(t, db.Set([]byte("b"), []byte("vb")))
 
-	entry := EncodeWrite(Write{Kind: kvrpcpb.Mutation_Put, StartTs: 1})
+	entry := mvcc.EncodeWrite(mvcc.Write{Kind: kvrpcpb.Mutation_Put, StartTs: 1})
 	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, []byte("a"), 10, entry, 0)
 
 	reader := NewReader(db)
@@ -612,7 +612,7 @@ func TestResolveLockSkipsEmptyAndMismatchedKeys(t *testing.T) {
 	latches := latch.NewManager(16)
 	key := []byte("other-lock")
 
-	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, EncodeLock(Lock{
+	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, mvcc.EncodeLock(mvcc.Lock{
 		Primary: key,
 		Ts:      55,
 		Kind:    kvrpcpb.Mutation_Put,
@@ -692,7 +692,7 @@ func TestResolveLockRollbackReturnsError(t *testing.T) {
 	store := rollbackTestStore{
 		getInternalEntry: func(cf kv.ColumnFamily, gotKey []byte, version uint64) (*kv.Entry, error) {
 			if cf == kv.CFLock && string(gotKey) == string(key) && version == lockColumnTs {
-				entry := kv.NewInternalEntry(cf, gotKey, version, EncodeLock(Lock{
+				entry := kv.NewInternalEntry(cf, gotKey, version, mvcc.EncodeLock(mvcc.Lock{
 					Primary: key,
 					Ts:      startTs,
 					Kind:    kvrpcpb.Mutation_Put,
@@ -915,100 +915,17 @@ func TestCheckTxnStatusTTLExpire(t *testing.T) {
 	require.Nil(t, lock)
 }
 
-func TestEncodeDecodeLockRoundTrip(t *testing.T) {
-	lock := Lock{
-		Primary:     []byte("primary"),
-		Ts:          10,
-		TTL:         20,
-		Kind:        kvrpcpb.Mutation_Put,
-		MinCommitTs: 30,
-	}
-	encoded := EncodeLock(lock)
-	got, err := DecodeLock(encoded)
-	require.NoError(t, err)
-	require.Equal(t, lock.Primary, got.Primary)
-	require.Equal(t, lock.Ts, got.Ts)
-	require.Equal(t, lock.TTL, got.TTL)
-	require.Equal(t, lock.Kind, got.Kind)
-	require.Equal(t, lock.MinCommitTs, got.MinCommitTs)
-}
-
-func TestDecodeLockErrors(t *testing.T) {
-	_, err := DecodeLock(nil)
-	require.Error(t, err)
-
-	_, err = DecodeLock([]byte{0x99})
-	require.Error(t, err)
-
-	_, err = DecodeLock([]byte{lockCodecVersion})
-	require.Error(t, err)
-
-	_, err = DecodeLock([]byte{lockCodecVersion, 0x05, 'a'})
-	require.Error(t, err)
-}
-
-func TestEncodeDecodeWriteRoundTrip(t *testing.T) {
-	write := Write{
-		Kind:       kvrpcpb.Mutation_Put,
-		StartTs:    42,
-		ShortValue: []byte("short"),
-		ExpiresAt:  12345,
-	}
-	encoded := EncodeWrite(write)
-	got, err := DecodeWrite(encoded)
-	require.NoError(t, err)
-	require.Equal(t, write.Kind, got.Kind)
-	require.Equal(t, write.StartTs, got.StartTs)
-	require.Equal(t, write.ShortValue, got.ShortValue)
-	require.Equal(t, write.ExpiresAt, got.ExpiresAt)
-}
-
-func TestDecodeWriteBackwardCompatibleWithoutExpiresAt(t *testing.T) {
-	// Old format: version, kind, startTs, hasShort, shortLen, shortValue.
-	raw := make([]byte, 0, 32)
-	raw = append(raw, writeCodecVersion, byte(kvrpcpb.Mutation_Put))
-	raw = binary.AppendUvarint(raw, 7)
-	raw = append(raw, 1)
-	raw = binary.AppendUvarint(raw, 5)
-	raw = append(raw, []byte("short")...)
-
-	got, err := DecodeWrite(raw)
-	require.NoError(t, err)
-	require.Equal(t, kvrpcpb.Mutation_Put, got.Kind)
-	require.Equal(t, uint64(7), got.StartTs)
-	require.Equal(t, []byte("short"), got.ShortValue)
-	require.Equal(t, uint64(0), got.ExpiresAt)
-}
-
-func TestDecodeWriteErrors(t *testing.T) {
-	_, err := DecodeWrite([]byte{writeCodecVersion})
-	require.Error(t, err)
-
-	_, err = DecodeWrite([]byte{0x99, 0x01, 0x01})
-	require.Error(t, err)
-
-	_, err = DecodeWrite([]byte{writeCodecVersion, byte(kvrpcpb.Mutation_Put), 0x01, 0x01})
-	require.Error(t, err)
-
-	_, err = DecodeWrite([]byte{writeCodecVersion, byte(kvrpcpb.Mutation_Put), 0x01, 0x01, 0x05})
-	require.Error(t, err)
-
-	// hasShort=0 with trailing truncated expires_at varint.
-	_, err = DecodeWrite([]byte{writeCodecVersion, byte(kvrpcpb.Mutation_Put), 0x01, 0x00, 0x80})
-	require.Error(t, err)
-}
-
 func TestReaderGetValueFromShortValueWithExpiresAt(t *testing.T) {
 	db := openTestDB(t)
 	reader := NewReader(db)
 	key := []byte("short-value")
-	write := Write{
+	write := mvcc.Write{
 		Kind:       kvrpcpb.Mutation_Put,
 		StartTs:    11,
 		ShortValue: []byte("v-short"),
 		ExpiresAt:  ^uint64(0),
 	}
-	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 20, EncodeWrite(write), 0)
+	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 20, mvcc.EncodeWrite(write), 0)
 
 	val, expiresAt, err := reader.GetValue(key, 30)
 	require.NoError(t, err)
@@ -1020,13 +937,13 @@ func TestReaderGetValueFromExpiredShortValue(t *testing.T) {
 	db := openTestDB(t)
 	reader := NewReader(db)
 	key := []byte("short-expired")
-	write := Write{
+	write := mvcc.Write{
 		Kind:       kvrpcpb.Mutation_Put,
 		StartTs:    11,
 		ShortValue: []byte("v-short"),
 		ExpiresAt:  1, // definitely expired
 	}
-	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 20, EncodeWrite(write), 0)
+	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 20, mvcc.EncodeWrite(write), 0)
 
 	_, _, err := reader.GetValue(key, 30)
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
@@ -1045,9 +962,9 @@ func TestCommitKeyAlreadyRolledBack(t *testing.T) {
 	db := openTestDB(t)
 	reader := NewReader(db)
 	key := []byte("rb")
-	lock := &Lock{Primary: key, Ts: 10, Kind: kvrpcpb.Mutation_Put}
+	lock := &mvcc.Lock{Primary: key, Ts: 10, Kind: kvrpcpb.Mutation_Put}
 
-	rollback := EncodeWrite(Write{Kind: kvrpcpb.Mutation_Rollback, StartTs: lock.Ts})
+	rollback := mvcc.EncodeWrite(mvcc.Write{Kind: kvrpcpb.Mutation_Rollback, StartTs: lock.Ts})
 	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 15, rollback, 0)
 
 	err := commitKey(db, reader, key, lock, 20)
@@ -1059,9 +976,9 @@ func TestCommitKeyWritesAndCleansLock(t *testing.T) {
 	db := openTestDB(t)
 	reader := NewReader(db)
 	key := []byte("commit")
-	lock := &Lock{Primary: key, Ts: 11, Kind: kvrpcpb.Mutation_Put}
+	lock := &mvcc.Lock{Primary: key, Ts: 11, Kind: kvrpcpb.Mutation_Put}
 
-	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, EncodeLock(*lock), 0)
+	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, mvcc.EncodeLock(*lock), 0)
 	commitErr := commitKey(db, reader, key, lock, 22)
 	require.Nil(t, commitErr)
 
@@ -1075,10 +992,10 @@ func TestCommitKeyAlreadyCommittedDifferentVersion(t *testing.T) {
 	db := openTestDB(t)
 	reader := NewReader(db)
 	key := []byte("dup")
-	lock := &Lock{Primary: key, Ts: 12, Kind: kvrpcpb.Mutation_Put}
+	lock := &mvcc.Lock{Primary: key, Ts: 12, Kind: kvrpcpb.Mutation_Put}
 
-	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 30, EncodeWrite(Write{Kind: lock.Kind, StartTs: lock.Ts}), 0)
-	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, EncodeLock(*lock), 0)
+	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 30, mvcc.EncodeWrite(mvcc.Write{Kind: lock.Kind, StartTs: lock.Ts}), 0)
+	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, mvcc.EncodeLock(*lock), 0)
 
 	commitErr := commitKey(db, reader, key, lock, 40)
 	require.Nil(t, commitErr)
@@ -1090,7 +1007,7 @@ func TestRollbackKeyCreatesRollbackWrite(t *testing.T) {
 	key := []byte("rb2")
 	startTs := uint64(17)
 
-	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, EncodeLock(Lock{
+	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, mvcc.EncodeLock(mvcc.Lock{
 		Primary: key,
 		Ts:      startTs,
 		Kind:    kvrpcpb.Mutation_Put,
@@ -1113,7 +1030,7 @@ func TestRollbackKeyReturnsNilWhenWriteAlreadyExists(t *testing.T) {
 	key := []byte("rb-existing")
 	startTs := uint64(17)
 
-	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 25, EncodeWrite(Write{
+	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 25, mvcc.EncodeWrite(mvcc.Write{
 		Kind:    kvrpcpb.Mutation_Put,
 		StartTs: startTs,
 	}), 0)
@@ -1169,8 +1086,8 @@ func TestRollbackKeyReturnsRetryableWhenApplyFails(t *testing.T) {
 
 func TestIsLockExpired(t *testing.T) {
 	require.False(t, isLockExpired(nil, 10))
-	require.False(t, isLockExpired(&Lock{Ts: 5, TTL: 0}, 10))
-	require.True(t, isLockExpired(&Lock{Ts: 5, TTL: 5}, 10))
+	require.False(t, isLockExpired(&mvcc.Lock{Ts: 5, TTL: 0}, 10))
+	require.True(t, isLockExpired(&mvcc.Lock{Ts: 5, TTL: 5}, 10))
 }
 
 func TestCommitTsExpired(t *testing.T) {
@@ -1222,7 +1139,7 @@ func TestIdempotentCommitCleansUpLock(t *testing.T) {
 	latches := latch.NewManager(32)
 	key := []byte("k")
 
-	lockVal := EncodeLock(Lock{
+	lockVal := mvcc.EncodeLock(mvcc.Lock{
 		Primary: key,
 		Ts:      11,
 		TTL:     3000,
@@ -1230,7 +1147,7 @@ func TestIdempotentCommitCleansUpLock(t *testing.T) {
 	})
 	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, lockVal, 0)
 
-	writeVal := EncodeWrite(Write{Kind: kvrpcpb.Mutation_Put, StartTs: 11})
+	writeVal := mvcc.EncodeWrite(mvcc.Write{Kind: kvrpcpb.Mutation_Put, StartTs: 11})
 	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 22, writeVal, 0)
 
 	commitReq := &kvrpcpb.CommitRequest{
@@ -1252,7 +1169,7 @@ func TestIdempotentCommitWithPushedMinCommitTs(t *testing.T) {
 	latches := latch.NewManager(32)
 	key := []byte("k")
 
-	lockVal := EncodeLock(Lock{
+	lockVal := mvcc.EncodeLock(mvcc.Lock{
 		Primary:     key,
 		Ts:          11,
 		TTL:         3000,
@@ -1261,7 +1178,7 @@ func TestIdempotentCommitWithPushedMinCommitTs(t *testing.T) {
 	})
 	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, lockVal, 0)
 
-	writeVal := EncodeWrite(Write{Kind: kvrpcpb.Mutation_Put, StartTs: 11})
+	writeVal := mvcc.EncodeWrite(mvcc.Write{Kind: kvrpcpb.Mutation_Put, StartTs: 11})
 	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 22, writeVal, 0)
 
 	commitReq := &kvrpcpb.CommitRequest{

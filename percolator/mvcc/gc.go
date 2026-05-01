@@ -45,12 +45,19 @@ func PlanWriteGC(versions []GCWriteVersion, safePoint uint64) []GCWriteDecision 
 func AppendWriteGCDecisions(dst []GCWriteDecision, versions []GCWriteVersion, safePoint uint64) []GCWriteDecision {
 	anchor := -1
 	if safePoint != 0 {
-		var anchorTs uint64
+		latest := -1
+		var latestTs uint64
 		for i, version := range versions {
-			if version.CommitTs < safePoint && version.CommitTs > anchorTs {
-				anchor = i
-				anchorTs = version.CommitTs
+			if version.CommitTs >= safePoint || version.Write.Kind == kvrpcpb.Mutation_Rollback {
+				continue
 			}
+			if version.CommitTs > latestTs {
+				latest = i
+				latestTs = version.CommitTs
+			}
+		}
+		if latest >= 0 && versions[latest].Write.Kind != kvrpcpb.Mutation_Delete {
+			anchor = latest
 		}
 	}
 

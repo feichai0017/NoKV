@@ -10,7 +10,7 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
-	"github.com/feichai0017/NoKV/percolator"
+	"github.com/feichai0017/NoKV/percolator/mvcc"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/kv"
@@ -591,7 +591,7 @@ func TestServiceKvScanRespectsRegionEnd(t *testing.T) {
 	startTs := uint64(10)
 	commitTs := uint64(20)
 	applyVersionedEntryForServiceTest(t, env.db, entrykv.CFDefault, []byte("mz"), startTs, []byte("value-z"), 0)
-	write := percolator.EncodeWrite(percolator.Write{Kind: kvrpcpb.Mutation_Put, StartTs: startTs})
+	write := mvcc.EncodeWrite(mvcc.Write{Kind: kvrpcpb.Mutation_Put, StartTs: startTs})
 	applyVersionedEntryForServiceTest(t, env.db, entrykv.CFWrite, []byte("mz"), commitTs, write, 0)
 
 	resp, err := env.service.KvScan(context.Background(), &kvrpcpb.KvScanRequest{

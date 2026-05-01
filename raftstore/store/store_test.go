@@ -14,9 +14,9 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/engine/mvcc"
 	"github.com/feichai0017/NoKV/percolator"
 	"github.com/feichai0017/NoKV/percolator/latch"
+	txnstore "github.com/feichai0017/NoKV/percolator/storage"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -794,7 +794,7 @@ func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *localmeta.Store, grou
 	return storage
 }
 
-func newTestMVCCApplier(db mvcc.Store) func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+func newTestMVCCApplier(db txnstore.Store) func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 	latches := latch.NewManager(512)
 	return func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 		resp := &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}

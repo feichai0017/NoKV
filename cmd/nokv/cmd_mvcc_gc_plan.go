@@ -11,13 +11,13 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/engine/mvcc"
 	"github.com/feichai0017/NoKV/fsmeta"
 	rootclient "github.com/feichai0017/NoKV/meta/root/client"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	txnstore "github.com/feichai0017/NoKV/percolator/storage"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
-	mvccgc "github.com/feichai0017/NoKV/raftstore/mvccgc"
+	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 )
 
 var loadMVCCGCRootRetention = loadMVCCGCRootRetentionFromAddr
@@ -64,11 +64,37 @@ type mvccGCCommandOptions struct {
 	metaRootAddr       string
 	metaRootTimeout    time.Duration
 	batchEntries       int
+	maxKeys            uint64
+	timeBudget         time.Duration
 	asJSON             bool
-	apply              bool
 }
 
-func parseMVCCGCCommandOptions(name string, args []string, includeApply bool) (mvccGCCommandOptions, error) {
+type mvccGCResolveLocksOptions struct {
+	workDir    string
+	currentTs  uint64
+	batchLocks int
+	asJSON     bool
+}
+
+type mvccGCOrphanDefaultsOptions struct {
+	workDir      string
+	batchEntries int
+	asJSON       bool
+}
+
+var (
+	mvccGCPlanModes = []raftmode.Mode{
+		raftmode.ModeStandalone,
+		raftmode.ModePreparing,
+		raftmode.ModeSeeded,
+		raftmode.ModeCluster,
+	}
+	mvccGCApplyModes = []raftmode.Mode{
+		raftmode.ModeStandalone,
+	}
+)
+
+func parseMVCCGCCommandOptions(name string, args []string, includeBatchEntries bool) (mvccGCCommandOptions, error) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	var opt mvccGCCommandOptions
 	fs.StringVar(&opt.workDir, "workdir", "", "database work directory")
@@ -80,9 +106,10 @@ func parseMVCCGCCommandOptions(name string, args []string, includeApply bool) (m
 	fs.DurationVar(&opt.metaRootTimeout, "meta-root-timeout", 5*time.Second, "metadata-root RPC timeout")
 	fs.BoolVar(&opt.asJSON, "json", false, "output JSON instead of plain text")
 	fs.Var(&opt.mountFloors, "mount-floor", "mount-specific snapshot retention floor mount=read_version (repeatable)")
-	if includeApply {
-		fs.BoolVar(&opt.apply, "apply", false, "apply GC tombstones")
+	if includeBatchEntries {
 		fs.IntVar(&opt.batchEntries, "batch-entries", 0, "maximum tombstones per apply batch")
+		fs.Uint64Var(&opt.maxKeys, "max-keys", 0, "maximum user keys scanned by one apply pass")
+		fs.DurationVar(&opt.timeBudget, "time-budget", 0, "maximum wall-clock duration for one apply pass")
 	}
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
@@ -97,22 +124,67 @@ func parseMVCCGCCommandOptions(name string, args []string, includeApply bool) (m
 	if opt.batchEntries < 0 {
 		return opt, fmt.Errorf("batch-entries must be non-negative")
 	}
+	if opt.timeBudget < 0 {
+		return opt, fmt.Errorf("time-budget must be non-negative")
+	}
 	if opt.metaRootTimeout <= 0 {
 		return opt, fmt.Errorf("meta-root-timeout must be positive")
 	}
 	return opt, nil
 }
 
-func (o mvccGCCommandOptions) policy(ctx context.Context, db mvcc.Store) (mvccgc.SafePointPolicy, error) {
+func parseMVCCGCResolveLocksOptions(args []string) (mvccGCResolveLocksOptions, error) {
+	fs := flag.NewFlagSet("mvcc-gc resolve-locks", flag.ContinueOnError)
+	var opt mvccGCResolveLocksOptions
+	fs.StringVar(&opt.workDir, "workdir", "", "database work directory")
+	fs.Uint64Var(&opt.currentTs, "current-ts", 0, "current timestamp used for lock TTL checks")
+	fs.IntVar(&opt.batchLocks, "batch-locks", 0, "maximum expired locks per resolve batch")
+	fs.BoolVar(&opt.asJSON, "json", false, "output JSON instead of plain text")
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return opt, err
+	}
+	if opt.workDir == "" {
+		return opt, fmt.Errorf("workdir is required")
+	}
+	if opt.currentTs == 0 {
+		return opt, fmt.Errorf("current-ts is required and must be greater than zero")
+	}
+	if opt.batchLocks < 0 {
+		return opt, fmt.Errorf("batch-locks must be non-negative")
+	}
+	return opt, nil
+}
+
+func parseMVCCGCOrphanDefaultsOptions(args []string) (mvccGCOrphanDefaultsOptions, error) {
+	fs := flag.NewFlagSet("mvcc-gc orphan-defaults", flag.ContinueOnError)
+	var opt mvccGCOrphanDefaultsOptions
+	fs.StringVar(&opt.workDir, "workdir", "", "database work directory")
+	fs.IntVar(&opt.batchEntries, "batch-entries", 0, "maximum default tombstones per apply batch")
+	fs.BoolVar(&opt.asJSON, "json", false, "output JSON instead of plain text")
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return opt, err
+	}
+	if opt.workDir == "" {
+		return opt, fmt.Errorf("workdir is required")
+	}
+	if opt.batchEntries < 0 {
+		return opt, fmt.Errorf("batch-entries must be non-negative")
+	}
+	return opt, nil
+}
+
+func (o mvccGCCommandOptions) policy(ctx context.Context, db txnstore.Store) (storemvcc.SafePointPolicy, error) {
 	retention := rootstate.SnapshotRetentionIndex{
 		GlobalFloor: o.globalFloor,
 		MountFloors: cloneMountFloors(map[string]uint64(o.mountFloors)),
 	}
 	txnFloor := o.txnFloor
 	if o.txnFloorFromLocks {
-		floor, err := mvccgc.PlanTxnFloor(ctx, db)
+		floor, err := storemvcc.PlanTxnFloor(ctx, db)
 		if err != nil {
-			return mvccgc.SafePointPolicy{}, err
+			return storemvcc.SafePointPolicy{}, err
 		}
 		txnFloor = minNonZero(txnFloor, floor.OldestStartTs)
 	}
@@ -121,30 +193,25 @@ func (o mvccGCCommandOptions) policy(ctx context.Context, db mvcc.Store) (mvccgc
 		defer cancel()
 		rootRetention, err := loadMVCCGCRootRetention(rootCtx, strings.TrimSpace(o.metaRootAddr))
 		if err != nil {
-			return mvccgc.SafePointPolicy{}, err
+			return storemvcc.SafePointPolicy{}, err
 		}
 		retention = mergeSnapshotRetention(retention, rootRetention)
 	}
-	return mvccgc.SafePointPolicy{
+	return storemvcc.SafePointPolicy{
 		RequestedSafePoint: o.requestedSafePoint,
 		TxnFloor:           txnFloor,
 		SnapshotRetention:  retention,
-		Mount:              fsmetaMountResolver,
+		Mount:              fsmeta.StringMountResolver,
 	}, nil
 }
 
-func fsmetaMountResolver(userKey []byte) (string, bool) {
-	mount, ok := fsmeta.MountIDOfKey(userKey)
-	return string(mount), ok
-}
-
 func runMVCCGCPlanCmd(w io.Writer, args []string) error {
-	opt, err := parseMVCCGCCommandOptions("mvcc-gc-plan", args, false)
+	opt, err := parseMVCCGCCommandOptions("mvcc-gc plan", args, false)
 	if err != nil {
 		return err
 	}
 
-	db, err := openMVCCGCStore(opt.workDir)
+	db, err := openMVCCGCStore(opt.workDir, mvccGCPlanModes)
 	if err != nil {
 		return err
 	}
@@ -155,7 +222,7 @@ func runMVCCGCPlanCmd(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
-	stats, err := mvccgc.Plan(ctx, db, policy)
+	stats, err := storemvcc.Plan(ctx, db, policy)
 	if err != nil {
 		return err
 	}
@@ -163,33 +230,95 @@ func runMVCCGCPlanCmd(w io.Writer, args []string) error {
 }
 
 func runMVCCGCCmd(w io.Writer, args []string) error {
-	opt, err := parseMVCCGCCommandOptions("mvcc-gc", args, true)
+	if len(args) == 0 {
+		return fmt.Errorf("mvcc-gc requires subcommand plan, apply, resolve-locks, or orphan-defaults")
+	}
+	switch args[0] {
+	case "plan":
+		return runMVCCGCPlanCmd(w, args[1:])
+	case "apply":
+		return runMVCCGCApplyCmd(w, args[1:])
+	case "resolve-locks":
+		return runMVCCGCResolveLocksCmd(w, args[1:])
+	case "orphan-defaults":
+		return runMVCCGCOrphanDefaultsCmd(w, args[1:])
+	default:
+		return fmt.Errorf("unknown mvcc-gc subcommand %q", args[0])
+	}
+}
+
+func runMVCCGCApplyCmd(w io.Writer, args []string) error {
+	opt, err := parseMVCCGCCommandOptions("mvcc-gc apply", args, true)
 	if err != nil {
 		return err
 	}
-	if !opt.apply {
-		return fmt.Errorf("mvcc-gc requires --apply; use mvcc-gc-plan to inspect first")
-	}
 
-	db, err := openMVCCGCStore(opt.workDir)
+	db, err := openMVCCGCStore(opt.workDir, mvccGCApplyModes)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
+	if opt.timeBudget > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, opt.timeBudget)
+		defer cancel()
+	}
 	policy, err := opt.policy(ctx, db)
 	if err != nil {
 		return err
 	}
-	stats, err := mvccgc.Apply(ctx, db, policy, mvccgc.ApplyOptions{BatchEntries: opt.batchEntries})
+	stats, err := storemvcc.Apply(ctx, db, policy, storemvcc.ApplyOptions{
+		BatchEntries: opt.batchEntries,
+		MaxKeys:      opt.maxKeys,
+	})
 	if err != nil {
 		return err
 	}
 	return renderMVCCGCApply(w, stats, opt.asJSON)
 }
 
-func openMVCCGCStore(workDir string) (*NoKV.DB, error) {
+func runMVCCGCResolveLocksCmd(w io.Writer, args []string) error {
+	opt, err := parseMVCCGCResolveLocksOptions(args)
+	if err != nil {
+		return err
+	}
+	db, err := openMVCCGCStore(opt.workDir, mvccGCApplyModes)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+
+	stats, err := storemvcc.ResolveExpiredLocks(context.Background(), db, storemvcc.ResolveLocksOptions{
+		CurrentTs:  opt.currentTs,
+		BatchLocks: opt.batchLocks,
+	})
+	if err != nil {
+		return err
+	}
+	return renderMVCCGCResolveLocks(w, stats, opt.asJSON)
+}
+
+func runMVCCGCOrphanDefaultsCmd(w io.Writer, args []string) error {
+	opt, err := parseMVCCGCOrphanDefaultsOptions(args)
+	if err != nil {
+		return err
+	}
+	db, err := openMVCCGCStore(opt.workDir, mvccGCApplyModes)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+
+	stats, err := storemvcc.ApplyOrphanDefaults(context.Background(), db, storemvcc.OrphanDefaultOptions{BatchEntries: opt.batchEntries})
+	if err != nil {
+		return err
+	}
+	return renderMVCCGCOrphanDefaults(w, stats, opt.asJSON)
+}
+
+func openMVCCGCStore(workDir string, allowedModes []raftmode.Mode) (*NoKV.DB, error) {
 	metaStore, err := localmeta.OpenLocalStore(workDir, nil)
 	if err != nil {
 		return nil, err
@@ -199,12 +328,7 @@ func openMVCCGCStore(workDir string) (*NoKV.DB, error) {
 	opts := NoKV.NewDefaultOptions()
 	opts.WorkDir = workDir
 	opts.RaftPointerSnapshot = metaStore.RaftPointerSnapshot
-	opts.AllowedModes = []raftmode.Mode{
-		raftmode.ModeStandalone,
-		raftmode.ModePreparing,
-		raftmode.ModeSeeded,
-		raftmode.ModeCluster,
-	}
+	opts.AllowedModes = allowedModes
 	db, err := NoKV.Open(opts)
 	if err != nil {
 		return nil, fmt.Errorf("open db for MVCC GC: %w", err)
@@ -259,7 +383,7 @@ func minNonZero(a, b uint64) uint64 {
 	return b
 }
 
-func renderMVCCGCPlan(w io.Writer, stats mvccgc.PlanStats, asJSON bool) error {
+func renderMVCCGCPlan(w io.Writer, stats storemvcc.PlanStats, asJSON bool) error {
 	if asJSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
@@ -269,7 +393,7 @@ func renderMVCCGCPlan(w io.Writer, stats mvccgc.PlanStats, asJSON bool) error {
 	return nil
 }
 
-func renderMVCCGCApply(w io.Writer, stats mvccgc.ApplyStats, asJSON bool) error {
+func renderMVCCGCApply(w io.Writer, stats storemvcc.ApplyStats, asJSON bool) error {
 	if asJSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
@@ -281,8 +405,39 @@ func renderMVCCGCApply(w io.Writer, stats mvccgc.ApplyStats, asJSON bool) error 
 	return nil
 }
 
-func renderMVCCGCPlanPlain(w io.Writer, stats mvccgc.PlanStats) {
-	_, _ = fmt.Fprintf(w, "MVCCGC.Keys                 %d\n", stats.Keys)
+func renderMVCCGCResolveLocks(w io.Writer, stats storemvcc.ResolveLocksStats, asJSON bool) error {
+	if asJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(stats)
+	}
+	_, _ = fmt.Fprintf(w, "MVCCGC.ScannedLocks       %d\n", stats.ScannedLocks)
+	_, _ = fmt.Fprintf(w, "MVCCGC.ExpiredLocks       %d\n", stats.ExpiredLocks)
+	_, _ = fmt.Fprintf(w, "MVCCGC.RetainedLocks      %d\n", stats.RetainedLocks)
+	_, _ = fmt.Fprintf(w, "MVCCGC.ResolvedLocks      %d\n", stats.ResolvedLocks)
+	_, _ = fmt.Fprintf(w, "MVCCGC.CommittedLocks     %d\n", stats.CommittedLocks)
+	_, _ = fmt.Fprintf(w, "MVCCGC.RolledBackLocks    %d\n", stats.RolledBackLocks)
+	_, _ = fmt.Fprintf(w, "MVCCGC.DeletedLockMarkers %d\n", stats.DeletedLockMarkers)
+	return nil
+}
+
+func renderMVCCGCOrphanDefaults(w io.Writer, stats storemvcc.OrphanDefaultStats, asJSON bool) error {
+	if asJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(stats)
+	}
+	_, _ = fmt.Fprintf(w, "MVCCGC.ScannedDefaults       %d\n", stats.ScannedDefaults)
+	_, _ = fmt.Fprintf(w, "MVCCGC.OrphanDefaults        %d\n", stats.OrphanDefaults)
+	_, _ = fmt.Fprintf(w, "MVCCGC.RetainedDefaults      %d\n", stats.RetainedDefaults)
+	_, _ = fmt.Fprintf(w, "MVCCGC.AppliedDefaultDeletes %d\n", stats.AppliedDefaultDeletes)
+	_, _ = fmt.Fprintf(w, "MVCCGC.DeletedDefaultMarkers %d\n", stats.DeletedDefaultMarkers)
+	return nil
+}
+
+func renderMVCCGCPlanPlain(w io.Writer, stats storemvcc.PlanStats) {
+	_, _ = fmt.Fprintf(w, "MVCCGC.ScannedKeys          %d\n", stats.ScannedKeys)
+	_, _ = fmt.Fprintf(w, "MVCCGC.DroppableKeys        %d\n", stats.DroppableKeys)
 	_, _ = fmt.Fprintf(w, "MVCCGC.WriteVersions        %d\n", stats.WriteVersions)
 	_, _ = fmt.Fprintf(w, "MVCCGC.RetainedWrites       %d\n", stats.RetainedWrites)
 	_, _ = fmt.Fprintf(w, "MVCCGC.DroppableWrites      %d\n", stats.DroppableWrites)

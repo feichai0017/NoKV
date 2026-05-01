@@ -16,8 +16,9 @@ import (
 	rootserver "github.com/feichai0017/NoKV/meta/root/server"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	"github.com/feichai0017/NoKV/percolator"
-	mvccgc "github.com/feichai0017/NoKV/raftstore/mvccgc"
+	txnmvcc "github.com/feichai0017/NoKV/percolator/mvcc"
+	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
+	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
@@ -45,7 +46,7 @@ func prepareMVCCGCPlanWorkdir(t *testing.T) string {
 
 func applyMVCCGCPlanWrite(t *testing.T, db *NoKV.DB, key []byte, commitTs, startTs uint64) {
 	t.Helper()
-	write := percolator.EncodeWrite(percolator.Write{Kind: kvrpcpb.Mutation_Put, StartTs: startTs})
+	write := txnmvcc.EncodeWrite(txnmvcc.Write{Kind: kvrpcpb.Mutation_Put, StartTs: startTs})
 	entry := entrykv.NewInternalEntry(entrykv.CFWrite, key, commitTs, entrykv.SafeCopy(nil, write), 0, 0)
 	defer entry.DecrRef()
 	require.NoError(t, db.ApplyInternalEntries([]*entrykv.Entry{entry}))
@@ -61,10 +62,12 @@ func applyMVCCGCPlanPutVersion(t *testing.T, db *NoKV.DB, key []byte, commitTs, 
 
 func applyMVCCGCPlanLock(t *testing.T, db *NoKV.DB, key []byte, startTs uint64) {
 	t.Helper()
-	lock := percolator.EncodeLock(percolator.Lock{
-		Primary: key,
-		Ts:      startTs,
-	})
+	applyMVCCGCPlanLockRecord(t, db, key, key, startTs, 0)
+}
+
+func applyMVCCGCPlanLockRecord(t *testing.T, db *NoKV.DB, key, primary []byte, startTs, ttl uint64) {
+	t.Helper()
+	lock := txnmvcc.EncodeLock(txnmvcc.Lock{Primary: primary, Ts: startTs, TTL: ttl, Kind: kvrpcpb.Mutation_Put})
 	entry := entrykv.NewInternalEntry(entrykv.CFLock, key, entrykv.MaxVersion, entrykv.SafeCopy(nil, lock), 0, 0)
 	defer entry.DecrRef()
 	require.NoError(t, db.ApplyInternalEntries([]*entrykv.Entry{entry}))
@@ -99,9 +102,9 @@ func TestRunMVCCGCPlanCmdJSON(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var stats mvccgc.PlanStats
+	var stats storemvcc.PlanStats
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &stats))
-	require.Equal(t, uint64(2), stats.Keys)
+	require.Equal(t, uint64(2), stats.ScannedKeys)
 	require.Equal(t, uint64(6), stats.WriteVersions)
 	require.Equal(t, uint64(5), stats.RetainedWrites)
 	require.Equal(t, uint64(1), stats.DroppableWrites)
@@ -118,7 +121,7 @@ func TestRunMVCCGCPlanCmdPlain(t *testing.T) {
 	var buf bytes.Buffer
 	err := runMVCCGCPlanCmd(&buf, []string{"-workdir", dir, "-safe-point", "100"})
 	require.NoError(t, err)
-	require.Contains(t, buf.String(), "MVCCGC.Keys")
+	require.Contains(t, buf.String(), "MVCCGC.ScannedKeys")
 	require.Contains(t, buf.String(), "MVCCGC.DroppableWrites")
 }
 
@@ -142,9 +145,9 @@ func TestRunMVCCGCPlanCmdScansTxnFloorFromLocks(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var stats mvccgc.PlanStats
+	var stats storemvcc.PlanStats
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &stats))
-	require.Equal(t, uint64(2), stats.Keys)
+	require.Equal(t, uint64(2), stats.ScannedKeys)
 	require.Equal(t, uint64(0), stats.DroppableWrites)
 	require.Equal(t, uint64(2), stats.SafePointClampedKeys)
 	require.Equal(t, uint64(50), stats.MinEffectiveSafePoint)
@@ -185,7 +188,7 @@ func TestRunMVCCGCPlanCmdLoadsMetaRootRetention(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "127.0.0.1:2380", gotAddr)
 
-	var stats mvccgc.PlanStats
+	var stats storemvcc.PlanStats
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &stats))
 	require.Equal(t, uint64(5), stats.RetainedWrites)
 	require.Equal(t, uint64(1), stats.DroppableWrites)
@@ -210,15 +213,15 @@ func TestRunMVCCGCCmdUsesMetaRootRetentionOverGRPC(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := runMVCCGCCmd(&buf, []string{
+		"apply",
 		"-workdir", dir,
 		"-safe-point", "100",
 		"-meta-root-addr", addr,
-		"-apply",
 		"-json",
 	})
 	require.NoError(t, err)
 
-	var stats mvccgc.ApplyStats
+	var stats storemvcc.ApplyStats
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &stats))
 	require.Equal(t, uint64(1), stats.SafePointClampedKeys)
 	require.Equal(t, uint64(1), stats.AppliedWriteDeletes)
@@ -276,26 +279,31 @@ func TestMVCCGCPolicyMergesManualAndRootFloorsConservatively(t *testing.T) {
 	require.Equal(t, uint64(40), policy.SnapshotRetention.MountFloors["manual"])
 }
 
-func TestRunMVCCGCCmdRequiresApply(t *testing.T) {
-	dir, _ := prepareMVCCGCApplyWorkdir(t)
+func TestRunMVCCGCCmdRequiresSubcommand(t *testing.T) {
 	var buf bytes.Buffer
-	err := runMVCCGCCmd(&buf, []string{"-workdir", dir, "-safe-point", "100"})
-	require.ErrorContains(t, err, "requires --apply")
+	err := runMVCCGCCmd(&buf, nil)
+	require.ErrorContains(t, err, "requires subcommand")
+}
+
+func TestRunMVCCGCCmdRejectsUnknownSubcommand(t *testing.T) {
+	var buf bytes.Buffer
+	err := runMVCCGCCmd(&buf, []string{"unknown"})
+	require.ErrorContains(t, err, "unknown mvcc-gc subcommand")
 }
 
 func TestRunMVCCGCCmdJSONAppliesTombstones(t *testing.T) {
 	dir, key := prepareMVCCGCApplyWorkdir(t)
 	var buf bytes.Buffer
 	err := runMVCCGCCmd(&buf, []string{
+		"apply",
 		"-workdir", dir,
 		"-safe-point", "100",
 		"-batch-entries", "2",
-		"-apply",
 		"-json",
 	})
 	require.NoError(t, err)
 
-	var stats mvccgc.ApplyStats
+	var stats storemvcc.ApplyStats
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &stats))
 	require.Equal(t, uint64(1), stats.AppliedWriteDeletes)
 	require.Equal(t, uint64(1), stats.AppliedDefaultDeletes)
@@ -319,7 +327,104 @@ func TestRunMVCCGCCmdJSONAppliesTombstones(t *testing.T) {
 
 func TestRunMVCCGCCmdRejectsInvalidBatch(t *testing.T) {
 	var buf bytes.Buffer
-	require.ErrorContains(t, runMVCCGCCmd(&buf, []string{"-workdir", t.TempDir(), "-safe-point", "100", "-batch-entries", "-1", "-apply"}), "batch-entries")
+	require.ErrorContains(t, runMVCCGCCmd(&buf, []string{"apply", "-workdir", t.TempDir(), "-safe-point", "100", "-batch-entries", "-1"}), "batch-entries")
+	require.ErrorContains(t, runMVCCGCCmd(&buf, []string{"apply", "-workdir", t.TempDir(), "-safe-point", "100", "-time-budget", "-1s"}), "time-budget")
+}
+
+func TestRunMVCCGCApplyRejectsClusterWorkdir(t *testing.T) {
+	dir, _ := prepareMVCCGCApplyWorkdir(t)
+	require.NoError(t, raftmode.Write(dir, raftmode.State{
+		Mode:     raftmode.ModeCluster,
+		StoreID:  1,
+		RegionID: 1,
+		PeerID:   1,
+	}))
+
+	var buf bytes.Buffer
+	err := runMVCCGCCmd(&buf, []string{"apply", "-workdir", dir, "-safe-point", "100"})
+	require.ErrorContains(t, err, `workdir mode "cluster"`)
+}
+
+func TestRunMVCCGCCmdApplyHonorsMaxKeys(t *testing.T) {
+	dir := prepareMVCCGCPlanWorkdir(t)
+	var buf bytes.Buffer
+	err := runMVCCGCCmd(&buf, []string{
+		"apply",
+		"-workdir", dir,
+		"-safe-point", "100",
+		"-max-keys", "1",
+		"-json",
+	})
+	require.NoError(t, err)
+
+	var stats storemvcc.ApplyStats
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &stats))
+	require.Equal(t, uint64(1), stats.ScannedKeys)
+}
+
+func TestRunMVCCGCCmdResolveLocksRollsBackExpiredLock(t *testing.T) {
+	dir := t.TempDir()
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = dir
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
+	key := []byte("expired")
+	applyMVCCGCPlanLockRecord(t, db, key, key, 10, 5)
+	require.NoError(t, db.Close())
+
+	var buf bytes.Buffer
+	err = runMVCCGCCmd(&buf, []string{
+		"resolve-locks",
+		"-workdir", dir,
+		"-current-ts", "20",
+		"-json",
+	})
+	require.NoError(t, err)
+
+	var stats storemvcc.ResolveLocksStats
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &stats))
+	require.Equal(t, uint64(1), stats.ResolvedLocks)
+	require.Equal(t, uint64(1), stats.RolledBackLocks)
+}
+
+func TestRunMVCCGCCmdOrphanDefaultsDeletesOrphan(t *testing.T) {
+	dir := t.TempDir()
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = dir
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
+	key := []byte("orphan")
+	defaultEntry := entrykv.NewInternalEntry(entrykv.CFDefault, key, 10, []byte("value"), 0, 0)
+	require.NoError(t, db.ApplyInternalEntries([]*entrykv.Entry{defaultEntry}))
+	defaultEntry.DecrRef()
+	require.NoError(t, db.Close())
+
+	var buf bytes.Buffer
+	err = runMVCCGCCmd(&buf, []string{
+		"orphan-defaults",
+		"-workdir", dir,
+		"-json",
+	})
+	require.NoError(t, err)
+
+	var stats storemvcc.OrphanDefaultStats
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &stats))
+	require.Equal(t, uint64(1), stats.OrphanDefaults)
+	require.Equal(t, uint64(1), stats.AppliedDefaultDeletes)
+}
+
+func TestRunMVCCGCCmdResolveLocksRejectsClusterWorkdir(t *testing.T) {
+	dir, _ := prepareMVCCGCApplyWorkdir(t)
+	require.NoError(t, raftmode.Write(dir, raftmode.State{
+		Mode:     raftmode.ModeCluster,
+		StoreID:  1,
+		RegionID: 1,
+		PeerID:   1,
+	}))
+
+	var buf bytes.Buffer
+	err := runMVCCGCCmd(&buf, []string{"resolve-locks", "-workdir", dir, "-current-ts", "20"})
+	require.ErrorContains(t, err, `workdir mode "cluster"`)
 }
 
 type mvccGCRootBackend struct {

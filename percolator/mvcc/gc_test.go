@@ -1,4 +1,4 @@
-package percolator
+package mvcc
 
 import (
 	"testing"
@@ -7,11 +7,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEffectiveMVCCSafePoint(t *testing.T) {
-	require.Zero(t, EffectiveMVCCSafePoint(0, 10, 20))
-	require.Equal(t, uint64(100), EffectiveMVCCSafePoint(100))
-	require.Equal(t, uint64(40), EffectiveMVCCSafePoint(100, 0, 40, 80))
-	require.Equal(t, uint64(100), EffectiveMVCCSafePoint(100, 0, 120))
+func TestEffectiveSafePoint(t *testing.T) {
+	require.Zero(t, EffectiveSafePoint(0, 10, 20))
+	require.Equal(t, uint64(100), EffectiveSafePoint(100))
+	require.Equal(t, uint64(40), EffectiveSafePoint(100, 0, 40, 80))
+	require.Equal(t, uint64(100), EffectiveSafePoint(100, 0, 120))
 }
 
 func TestPlanWriteGCKeepsAnchorAndNewerVersions(t *testing.T) {
@@ -72,8 +72,8 @@ func TestPlanWriteGCRetainsOnlyReferencedDefaultRecords(t *testing.T) {
 	decisions := PlanWriteGC(versions, 100)
 	require.True(t, decisions[0].Keep)
 	require.Zero(t, decisions[0].RetainDefaultStartTs)
-	require.True(t, decisions[1].Keep)
-	require.True(t, decisions[1].Anchor)
+	require.False(t, decisions[1].Keep)
+	require.False(t, decisions[1].Anchor)
 	require.Zero(t, decisions[1].RetainDefaultStartTs)
 	require.False(t, decisions[2].Keep)
 	require.False(t, decisions[3].Keep)
@@ -82,4 +82,33 @@ func TestPlanWriteGCRetainsOnlyReferencedDefaultRecords(t *testing.T) {
 	require.True(t, decisions[0].Keep)
 	require.True(t, decisions[0].Anchor)
 	require.Equal(t, uint64(20), decisions[0].RetainDefaultStartTs)
+}
+
+func TestPlanWriteGCIgnoresRollbackWhenChoosingAnchor(t *testing.T) {
+	versions := []GCWriteVersion{
+		{CommitTs: 90, Write: Write{Kind: kvrpcpb.Mutation_Rollback, StartTs: 80}},
+		{CommitTs: 40, Write: Write{Kind: kvrpcpb.Mutation_Put, StartTs: 30}},
+	}
+
+	decisions := PlanWriteGC(versions, 100)
+	require.False(t, decisions[0].Keep)
+	require.False(t, decisions[0].Anchor)
+	require.True(t, decisions[1].Keep)
+	require.True(t, decisions[1].Anchor)
+	require.Equal(t, uint64(30), decisions[1].RetainDefaultStartTs)
+}
+
+func TestPlanWriteGCDropsDeletedKeyWithoutAnchor(t *testing.T) {
+	versions := []GCWriteVersion{
+		{CommitTs: 90, Write: Write{Kind: kvrpcpb.Mutation_Delete, StartTs: 80}},
+		{CommitTs: 40, Write: Write{Kind: kvrpcpb.Mutation_Put, StartTs: 30}},
+	}
+
+	decisions := PlanWriteGC(versions, 100)
+	require.False(t, decisions[0].Keep)
+	require.False(t, decisions[0].Anchor)
+	require.False(t, decisions[1].Keep)
+	require.False(t, decisions[1].Anchor)
+	require.Zero(t, decisions[0].RetainDefaultStartTs)
+	require.Zero(t, decisions[1].RetainDefaultStartTs)
 }
