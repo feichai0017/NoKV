@@ -2,6 +2,7 @@ package NoKV
 
 import (
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,7 +50,7 @@ func TestMVCCGCPlannerDisabledByDefault(t *testing.T) {
 func TestMVCCGCPlannerRunsReadOnlyPlan(t *testing.T) {
 	opt := newTestOptions(t)
 	opt.MVCCGCPlanInterval = 5 * time.Millisecond
-	opt.MVCCGCSafePoint = 100
+	opt.MVCCGCSafePoint = func() uint64 { return 100 }
 	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
@@ -71,10 +72,32 @@ func TestMVCCGCPlannerRunsReadOnlyPlan(t *testing.T) {
 	require.Zero(t, entry.Meta&kv.BitDelete)
 }
 
+func TestMVCCGCPlannerReadsSafePointEachRun(t *testing.T) {
+	var safePoint atomic.Uint64
+	opt := newTestOptions(t)
+	opt.MVCCGCPlanInterval = 5 * time.Millisecond
+	opt.MVCCGCSafePoint = safePoint.Load
+	db := openTestDB(t, opt)
+	defer func() { _ = db.Close() }()
+
+	key := []byte("dynamic-safe-point-key")
+	applyMVCCGCPlannerWrite(t, db, key, 150, 140)
+	applyMVCCGCPlannerWrite(t, db, key, 90, 80)
+	applyMVCCGCPlannerWrite(t, db, key, 40, 30)
+	waitMVCCGCPlannerSnapshot(t, db, func(s MVCCGCPlanSnapshot) bool {
+		return s.Runs > 0 && s.LastPlan.Keys == 0
+	})
+
+	safePoint.Store(100)
+	waitMVCCGCPlannerSnapshot(t, db, func(s MVCCGCPlanSnapshot) bool {
+		return s.LastError == "" && s.LastPlan.DroppableWrites == 1
+	})
+}
+
 func TestMVCCGCPlannerHonorsSnapshotRetentionAndTxnFloor(t *testing.T) {
 	opt := newTestOptions(t)
 	opt.MVCCGCPlanInterval = 5 * time.Millisecond
-	opt.MVCCGCSafePoint = 100
+	opt.MVCCGCSafePoint = func() uint64 { return 100 }
 	opt.MVCCGCSnapshotRetention = func() rootstate.SnapshotRetentionIndex {
 		return rootstate.SnapshotRetentionIndex{
 			MountFloors: map[string]uint64{
@@ -111,7 +134,7 @@ func TestMVCCGCPlannerHonorsSnapshotRetentionAndTxnFloor(t *testing.T) {
 func TestMVCCGCPlannerRecordsTxnFloorErrors(t *testing.T) {
 	opt := newTestOptions(t)
 	opt.MVCCGCPlanInterval = 5 * time.Millisecond
-	opt.MVCCGCSafePoint = 100
+	opt.MVCCGCSafePoint = func() uint64 { return 100 }
 	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 

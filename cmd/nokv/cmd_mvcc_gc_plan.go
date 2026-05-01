@@ -12,6 +12,7 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/engine/mvcc"
+	"github.com/feichai0017/NoKV/fsmeta"
 	rootclient "github.com/feichai0017/NoKV/meta/root/client"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -128,7 +129,13 @@ func (o mvccGCCommandOptions) policy(ctx context.Context, db mvcc.Store) (mvccgc
 		RequestedSafePoint: o.requestedSafePoint,
 		TxnFloor:           txnFloor,
 		SnapshotRetention:  retention,
+		Mount:              fsmetaMountResolver,
 	}, nil
+}
+
+func fsmetaMountResolver(userKey []byte) (string, bool) {
+	mount, ok := fsmeta.MountIDOfKey(userKey)
+	return string(mount), ok
 }
 
 func runMVCCGCPlanCmd(w io.Writer, args []string) error {

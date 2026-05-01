@@ -2,22 +2,28 @@ package mvccgc
 
 import (
 	"github.com/feichai0017/NoKV/engine/mvcc"
-	"github.com/feichai0017/NoKV/fsmeta"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 )
 
+// MountResolver extracts a namespace mount identifier from a user key. GC
+// policy treats nil or unresolved keys as unknown layouts and falls back to the
+// global snapshot floor.
+type MountResolver func(userKey []byte) (mount string, ok bool)
+
 // SafePointPolicy resolves the safe point used for one user key. It keeps
-// fsmeta snapshot scoping out of transaction apply code and keeps deletion
+// namespace snapshot scoping out of transaction apply code and keeps deletion
 // policy out of rootstate.
 type SafePointPolicy struct {
 	RequestedSafePoint uint64
 	SnapshotRetention  rootstate.SnapshotRetentionIndex
 	TxnFloor           uint64
+	Mount              MountResolver
 }
 
 // EffectiveForKey returns the key-local safe point after applying active
-// snapshot and transaction floors. Fsmeta keys use mount-scoped snapshot floors.
-// Unknown key layouts fall back to the global floor conservatively.
+// snapshot and transaction floors. Resolved mount keys use mount-scoped
+// snapshot floors. Unknown key layouts fall back to the global floor
+// conservatively.
 func (p SafePointPolicy) EffectiveForKey(userKey []byte) uint64 {
 	if p.RequestedSafePoint == 0 {
 		return 0
@@ -26,13 +32,19 @@ func (p SafePointPolicy) EffectiveForKey(userKey []byte) uint64 {
 	if p.TxnFloor != 0 && p.TxnFloor < effective {
 		effective = p.TxnFloor
 	}
-	if mount, ok := fsmeta.MountIDOfKey(userKey); ok {
-		if floor, ok := p.SnapshotRetention.FloorForMount(string(mount)); ok {
+	if p.Mount != nil {
+		if mount, ok := p.Mount(userKey); ok {
+			floor, ok := p.SnapshotRetention.FloorForMount(mount)
+			if !ok {
+				return effective
+			}
 			if floor != 0 && floor < effective {
 				effective = floor
 			}
+			return effective
 		}
-	} else if p.SnapshotRetention.Active() {
+	}
+	if p.SnapshotRetention.Active() {
 		if floor := p.SnapshotRetention.GlobalFloor; floor != 0 && floor < effective {
 			effective = floor
 		}

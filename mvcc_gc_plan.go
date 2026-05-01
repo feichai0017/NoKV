@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/feichai0017/NoKV/fsmeta"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/raftstore/mvccgc"
 	dbruntime "github.com/feichai0017/NoKV/runtime"
@@ -20,7 +21,7 @@ type MVCCGCPlanSnapshot struct {
 
 type mvccGCPlanState struct {
 	db        *DB
-	safePoint uint64
+	safePoint func() uint64
 	retention func() rootstate.SnapshotRetentionIndex
 
 	mu       sync.RWMutex
@@ -29,7 +30,7 @@ type mvccGCPlanState struct {
 }
 
 func (db *DB) newMVCCGCPlanTask() (dbruntime.PeriodicTaskConfig, *mvccGCPlanState, bool) {
-	if db == nil || db.opt == nil || db.opt.MVCCGCPlanInterval <= 0 || db.opt.MVCCGCSafePoint == 0 {
+	if db == nil || db.opt == nil || db.opt.MVCCGCPlanInterval <= 0 || db.opt.MVCCGCSafePoint == nil {
 		return dbruntime.PeriodicTaskConfig{}, nil, false
 	}
 	state := &mvccGCPlanState{
@@ -45,6 +46,11 @@ func (db *DB) newMVCCGCPlanTask() (dbruntime.PeriodicTaskConfig, *mvccGCPlanStat
 }
 
 func (s *mvccGCPlanState) run(ctx context.Context) error {
+	requestedSafePoint := s.safePoint()
+	if requestedSafePoint == 0 {
+		s.record(mvccgc.TxnFloor{}, mvccgc.PlanStats{})
+		return nil
+	}
 	txnFloor, err := mvccgc.PlanTxnFloor(ctx, s.db)
 	if err != nil {
 		s.record(txnFloor, mvccgc.PlanStats{})
@@ -55,12 +61,18 @@ func (s *mvccGCPlanState) run(ctx context.Context) error {
 		retention = s.retention()
 	}
 	plan, err := mvccgc.Plan(ctx, s.db, mvccgc.SafePointPolicy{
-		RequestedSafePoint: s.safePoint,
+		RequestedSafePoint: requestedSafePoint,
 		SnapshotRetention:  retention,
 		TxnFloor:           txnFloor.OldestStartTs,
+		Mount:              fsmetaMountResolver,
 	})
 	s.record(txnFloor, plan)
 	return err
+}
+
+func fsmetaMountResolver(userKey []byte) (string, bool) {
+	mount, ok := fsmeta.MountIDOfKey(userKey)
+	return string(mount), ok
 }
 
 func (s *mvccGCPlanState) snapshot(task dbruntime.PeriodicTaskSnapshot) MVCCGCPlanSnapshot {

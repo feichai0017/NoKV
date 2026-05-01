@@ -6,10 +6,9 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
-	"github.com/feichai0017/NoKV/fsmeta"
+	enginemvcc "github.com/feichai0017/NoKV/engine/mvcc"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	"github.com/feichai0017/NoKV/percolator"
 	"github.com/feichai0017/NoKV/raftstore/mvccgc"
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +32,7 @@ func applyVersionedEntryForApplyTest(t *testing.T, db *NoKV.DB, cf entrykv.Colum
 
 func applyMVCCGCWrite(t *testing.T, db *NoKV.DB, key []byte, commitTs, startTs uint64) {
 	t.Helper()
-	write := percolator.EncodeWrite(percolator.Write{Kind: kvrpcpb.Mutation_Put, StartTs: startTs})
+	write := enginemvcc.EncodeWrite(enginemvcc.Write{Kind: kvrpcpb.Mutation_Put, StartTs: startTs})
 	applyVersionedEntryForApplyTest(t, db, entrykv.CFWrite, key, commitTs, write, 0, 0)
 }
 
@@ -45,10 +44,8 @@ func applyMVCCGCPutVersion(t *testing.T, db *NoKV.DB, key []byte, commitTs, star
 
 func TestPlanMVCCGCReportsMountScopedPlan(t *testing.T) {
 	db := openMVCCGCPlanTestDB(t)
-	volKey, err := fsmeta.EncodeInodeKey("vol", 10)
-	require.NoError(t, err)
-	otherKey, err := fsmeta.EncodeInodeKey("other", 10)
-	require.NoError(t, err)
+	volKey := []byte("vol/key")
+	otherKey := []byte("other/key")
 	for _, key := range [][]byte{volKey, otherKey} {
 		applyMVCCGCWrite(t, db, key, 150, 140)
 		applyMVCCGCWrite(t, db, key, 90, 80)
@@ -63,6 +60,7 @@ func TestPlanMVCCGCReportsMountScopedPlan(t *testing.T) {
 				"vol": 50,
 			},
 		},
+		Mount: testMountResolver,
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), stats.Keys)
@@ -79,12 +77,11 @@ func TestPlanMVCCGCReportsMountScopedPlan(t *testing.T) {
 
 func TestPlanMVCCGCDoesNotDeleteData(t *testing.T) {
 	db := openMVCCGCPlanTestDB(t)
-	key, err := fsmeta.EncodeInodeKey("vol", 10)
-	require.NoError(t, err)
+	key := []byte("vol/key")
 	applyMVCCGCWrite(t, db, key, 90, 80)
 	applyMVCCGCWrite(t, db, key, 40, 30)
 
-	_, err = mvccgc.Plan(context.Background(), db, mvccgc.SafePointPolicy{RequestedSafePoint: 100})
+	_, err := mvccgc.Plan(context.Background(), db, mvccgc.SafePointPolicy{RequestedSafePoint: 100})
 	require.NoError(t, err)
 
 	entry, err := db.GetInternalEntry(entrykv.CFWrite, key, 40)
@@ -95,30 +92,27 @@ func TestPlanMVCCGCDoesNotDeleteData(t *testing.T) {
 
 func TestPlanMVCCGCRejectsCorruptWritePayload(t *testing.T) {
 	db := openMVCCGCPlanTestDB(t)
-	key, err := fsmeta.EncodeInodeKey("vol", 10)
-	require.NoError(t, err)
+	key := []byte("vol/key")
 	applyVersionedEntryForApplyTest(t, db, entrykv.CFWrite, key, 90, []byte{0xff}, 0, 0)
 
-	_, err = mvccgc.Plan(context.Background(), db, mvccgc.SafePointPolicy{RequestedSafePoint: 100})
+	_, err := mvccgc.Plan(context.Background(), db, mvccgc.SafePointPolicy{RequestedSafePoint: 100})
 	require.ErrorContains(t, err, "decode CFWrite")
 }
 
 func TestPlanMVCCGCHonorsContextCancellation(t *testing.T) {
 	db := openMVCCGCPlanTestDB(t)
-	key, err := fsmeta.EncodeInodeKey("vol", 10)
-	require.NoError(t, err)
+	key := []byte("vol/key")
 	applyMVCCGCWrite(t, db, key, 90, 80)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err = mvccgc.Plan(ctx, db, mvccgc.SafePointPolicy{RequestedSafePoint: 100})
+	_, err := mvccgc.Plan(ctx, db, mvccgc.SafePointPolicy{RequestedSafePoint: 100})
 	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestApplyMVCCGCDeletesDroppableWriteAndDefault(t *testing.T) {
 	db := openMVCCGCPlanTestDB(t)
-	key, err := fsmeta.EncodeInodeKey("vol", 10)
-	require.NoError(t, err)
+	key := []byte("vol/key")
 	applyMVCCGCPutVersion(t, db, key, 150, 140, "new")
 	applyMVCCGCPutVersion(t, db, key, 90, 80, "anchor")
 	applyMVCCGCPutVersion(t, db, key, 40, 30, "old")
@@ -149,10 +143,8 @@ func TestApplyMVCCGCDeletesDroppableWriteAndDefault(t *testing.T) {
 
 func TestApplyMVCCGCHonorsMountScopedRetention(t *testing.T) {
 	db := openMVCCGCPlanTestDB(t)
-	volKey, err := fsmeta.EncodeInodeKey("vol", 10)
-	require.NoError(t, err)
-	otherKey, err := fsmeta.EncodeInodeKey("other", 10)
-	require.NoError(t, err)
+	volKey := []byte("vol/key")
+	otherKey := []byte("other/key")
 	for _, key := range [][]byte{volKey, otherKey} {
 		applyMVCCGCPutVersion(t, db, key, 150, 140, "new")
 		applyMVCCGCPutVersion(t, db, key, 90, 80, "mid")
@@ -167,6 +159,7 @@ func TestApplyMVCCGCHonorsMountScopedRetention(t *testing.T) {
 				"vol": 50,
 			},
 		},
+		Mount: testMountResolver,
 	}, mvccgc.ApplyOptions{})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), stats.AppliedWriteDeletes)
@@ -186,8 +179,7 @@ func TestApplyMVCCGCHonorsMountScopedRetention(t *testing.T) {
 func TestApplyMVCCGCBatchesWithoutRescanningDeletedKeys(t *testing.T) {
 	db := openMVCCGCPlanTestDB(t)
 	for i := range byte(4) {
-		key, err := fsmeta.EncodeInodeKey("vol", fsmeta.InodeID(100+uint64(i)))
-		require.NoError(t, err)
+		key := []byte{'v', 'o', 'l', '/', '0' + i}
 		applyMVCCGCPutVersion(t, db, key, 150, 140, "new")
 		applyMVCCGCPutVersion(t, db, key, 90, 80, "anchor")
 		applyMVCCGCPutVersion(t, db, key, 40, 30, "old")
@@ -206,8 +198,7 @@ func TestApplyMVCCGCBatchesWithoutRescanningDeletedKeys(t *testing.T) {
 	require.Equal(t, uint64(4), stats.DroppableWrites)
 
 	for i := range byte(4) {
-		key, err := fsmeta.EncodeInodeKey("vol", fsmeta.InodeID(100+uint64(i)))
-		require.NoError(t, err)
+		key := []byte{'v', 'o', 'l', '/', '0' + i}
 		droppedWrite, err := db.GetInternalEntry(entrykv.CFWrite, key, 40)
 		require.NoError(t, err)
 		require.NotZero(t, droppedWrite.Meta&entrykv.BitDelete)

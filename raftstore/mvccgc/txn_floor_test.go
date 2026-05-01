@@ -6,14 +6,14 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
-	"github.com/feichai0017/NoKV/percolator"
+	enginemvcc "github.com/feichai0017/NoKV/engine/mvcc"
 	"github.com/feichai0017/NoKV/raftstore/mvccgc"
 	"github.com/stretchr/testify/require"
 )
 
 func applyMVCCGCLock(t *testing.T, db *NoKV.DB, key []byte, startTs uint64) {
 	t.Helper()
-	lock := percolator.EncodeLock(percolator.Lock{
+	lock := enginemvcc.EncodeLock(enginemvcc.Lock{
 		Primary: key,
 		Ts:      startTs,
 	})

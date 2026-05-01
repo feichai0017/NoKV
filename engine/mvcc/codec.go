@@ -12,6 +12,10 @@ const (
 	writeCodecVersion byte = 1
 )
 
+// Codec versions are monotonic. Readers reject unknown future versions; any
+// future v2 reader must continue to accept v1 payloads until a deliberate
+// format break rewrites all MVCC state.
+
 // Lock captures the metadata recorded in the lock column family during
 // prewrite.
 type Lock struct {
