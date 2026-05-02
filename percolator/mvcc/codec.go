@@ -12,15 +12,18 @@ const (
 	writeCodecVersion byte = 1
 )
 
-// Codec versions are monotonic. Readers reject unknown future versions; any
-// future v2 reader must continue to accept v1 payloads until a deliberate
-// format break rewrites all MVCC state.
+// Readers reject unsupported codec versions. The current lock v1 layout is
+// allowed to change destructively before a production data-format guarantee.
 
 // Lock captures the metadata recorded in the lock column family during
 // prewrite.
 type Lock struct {
-	Primary     []byte
-	Ts          uint64
+	Primary []byte
+	// Ts is the logical transaction start timestamp from the TSO.
+	Ts uint64
+	// StartTime is the physical Unix millisecond time when the lock was
+	// created. TTL is measured from StartTime, never from Ts.
+	StartTime   uint64
 	TTL         uint64
 	Kind        kvrpcpb.Mutation_Op
 	MinCommitTs uint64
@@ -29,11 +32,12 @@ type Lock struct {
 // EncodeLock serialises a lock entry.
 func EncodeLock(lock Lock) []byte {
 	primaryLen := len(lock.Primary)
-	buf := make([]byte, 0, 1+binary.MaxVarintLen64*4+primaryLen)
+	buf := make([]byte, 0, 1+binary.MaxVarintLen64*5+primaryLen)
 	buf = append(buf, lockCodecVersion)
 	buf = binary.AppendUvarint(buf, uint64(primaryLen))
 	buf = append(buf, lock.Primary...)
 	buf = binary.AppendUvarint(buf, lock.Ts)
+	buf = binary.AppendUvarint(buf, lock.StartTime)
 	buf = binary.AppendUvarint(buf, lock.TTL)
 	buf = append(buf, byte(lock.Kind))
 	buf = binary.AppendUvarint(buf, lock.MinCommitTs)
@@ -71,8 +75,14 @@ func DecodeLock(data []byte) (Lock, error) {
 	if lock.Ts, err = readUvarint(); err != nil {
 		return Lock{}, err
 	}
+	if lock.StartTime, err = readUvarint(); err != nil {
+		return Lock{}, err
+	}
 	if lock.TTL, err = readUvarint(); err != nil {
 		return Lock{}, err
+	}
+	if lock.TTL > 0 && lock.StartTime == 0 {
+		return Lock{}, fmt.Errorf("mvcc: lock start time missing")
 	}
 	if pos >= len(data) {
 		return Lock{}, fmt.Errorf("mvcc: lock kind missing")

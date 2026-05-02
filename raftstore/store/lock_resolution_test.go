@@ -46,7 +46,7 @@ func TestStoreCheckTxnStatusRoutesThroughPrimaryRegion(t *testing.T) {
 
 	applyTestLockRecord(t, db, []byte("primary-key"), 20, 5)
 
-	resp, err := st.CheckTxnStatus(context.Background(), []byte("primary-key"), 20, 30)
+	resp, err := st.CheckTxnStatus(context.Background(), []byte("primary-key"), 20, 30, 30)
 	require.NoError(t, err)
 	require.Equal(t, kvrpcpb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback, resp.GetAction())
 	require.Nil(t, resp.GetError())

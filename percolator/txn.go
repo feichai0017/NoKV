@@ -14,6 +14,8 @@ package percolator
 
 import (
 	"fmt"
+	"time"
+
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 
 	"github.com/feichai0017/NoKV/engine/kv"
@@ -92,6 +94,7 @@ func prewriteMutation(db txnstore.Store, reader *Reader, req *kvrpcpb.PrewriteRe
 	newLock := mvcc.Lock{
 		Primary:     kv.SafeCopy(nil, req.PrimaryLock),
 		Ts:          req.StartVersion,
+		StartTime:   currentPhysicalTimeMillis(),
 		TTL:         req.LockTtl,
 		Kind:        mut.Op,
 		MinCommitTs: req.MinCommitTs,
@@ -238,7 +241,7 @@ func CheckTxnStatus(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.Chec
 			resp.Error = keyErrorLocked(req.PrimaryKey, lock)
 			return resp
 		}
-		if isLockExpired(lock, req.CurrentTs) {
+		if isLockExpired(lock, req.CurrentTime) {
 			if err := rollbackKey(db, reader, req.PrimaryKey, req.LockTs); err != nil {
 				resp.Error = err
 				return resp
@@ -440,12 +443,16 @@ func applyVersionedOps(db txnstore.Store, ops ...versionedOp) error {
 	return err
 }
 
-func isLockExpired(lock *mvcc.Lock, currentTs uint64) bool {
+func currentPhysicalTimeMillis() uint64 {
+	return uint64(time.Now().UnixMilli())
+}
+
+func isLockExpired(lock *mvcc.Lock, currentTime uint64) bool {
 	if lock == nil {
 		return false
 	}
-	if lock.TTL == 0 {
+	if lock.TTL == 0 || lock.StartTime == 0 || currentTime == 0 {
 		return false
 	}
-	return currentTs >= lock.Ts+lock.TTL
+	return currentTime >= lock.StartTime && currentTime-lock.StartTime >= lock.TTL
 }

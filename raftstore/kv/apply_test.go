@@ -78,6 +78,7 @@ func TestLockedErrorMapping(t *testing.T) {
 	lock := &mvcc.Lock{
 		Primary:     []byte("primary"),
 		Ts:          42,
+		StartTime:   4200,
 		TTL:         9000,
 		Kind:        kvrpcpb.Mutation_Put,
 		MinCommitTs: 100,

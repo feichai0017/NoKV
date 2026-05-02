@@ -18,6 +18,7 @@ func newMVCCMaintenanceWorker(cfg MVCCMaintenanceConfig, mvccStore txnstore.Stor
 		Timeout:             cfg.Timeout,
 		SafePoint:           cfg.SafePoint,
 		CurrentTs:           cfg.CurrentTs,
+		CurrentTime:         cfg.CurrentTime,
 		Retention:           cfg.Retention,
 		Mount:               cfg.Mount,
 		Apply:               cfg.Apply,

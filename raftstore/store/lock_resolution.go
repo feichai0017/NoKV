@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"time"
 
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
@@ -57,7 +56,7 @@ func (s *Store) ResolveLocks(ctx context.Context, startVersion, commitVersion ui
 
 // CheckTxnStatus routes the primary-key status check through the primary
 // region's normal raft apply path.
-func (s *Store) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, currentTs uint64) (*kvrpcpb.CheckTxnStatusResponse, error) {
+func (s *Store) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, currentTs, currentTime uint64) (*kvrpcpb.CheckTxnStatusResponse, error) {
 	if len(primary) == 0 {
 		return nil, fmt.Errorf("raftstore: primary key is required for check txn status")
 	}
@@ -81,7 +80,7 @@ func (s *Store) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, curr
 				CurrentTs:          currentTs,
 				CallerStartTs:      currentTs,
 				RollbackIfNotExist: true,
-				CurrentTime:        uint64(time.Now().Unix()),
+				CurrentTime:        currentTime,
 			}},
 		}},
 	})

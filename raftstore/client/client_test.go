@@ -857,7 +857,7 @@ func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 		{Op: kvrpcpb.Mutation_Put, Key: []byte("bravo"), Value: []byte("v3")},
 	}, 80, 81, 3000))
 
-	resp, err := cli.CheckTxnStatus(ctx, []byte("alfa"), 1, 2)
+	resp, err := cli.CheckTxnStatus(ctx, []byte("alfa"), 1, 2, 3)
 	require.NoError(t, err)
 	require.Nil(t, resp)
 
@@ -1292,7 +1292,7 @@ func TestClientCheckTxnStatusRetriesRouteUnavailable(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = cli.Close() }()
 
-	_, err = cli.CheckTxnStatus(context.Background(), []byte("alfa"), 1, 2)
+	_, err = cli.CheckTxnStatus(context.Background(), []byte("alfa"), 1, 2, 3)
 	require.NoError(t, err)
 
 	resolver.mu.Lock()

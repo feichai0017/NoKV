@@ -323,6 +323,10 @@ func readLockFingerprint(locked *kvrpcpb.Locked) string {
 	return string(locked.GetKey()) + "\x00" + fmt.Sprint(locked.GetLockVersion())
 }
 
+func currentPhysicalTimeMillis() uint64 {
+	return uint64(time.Now().UnixMilli())
+}
+
 func (c *Client) resolveReadLock(ctx context.Context, locked *kvrpcpb.Locked, readTs uint64) (bool, error) {
 	if locked == nil {
 		return false, nil
@@ -331,7 +335,7 @@ func (c *Client) resolveReadLock(ctx context.Context, locked *kvrpcpb.Locked, re
 	if len(lockKey) == 0 || len(locked.GetPrimaryLock()) == 0 || locked.GetLockVersion() == 0 {
 		return false, txnKeyError(&kvrpcpb.KeyError{Locked: locked})
 	}
-	statusResp, err := c.CheckTxnStatus(ctx, locked.GetPrimaryLock(), locked.GetLockVersion(), readTs)
+	statusResp, err := c.CheckTxnStatus(ctx, locked.GetPrimaryLock(), locked.GetLockVersion(), readTs, currentPhysicalTimeMillis())
 	if err != nil {
 		return false, err
 	}
@@ -772,7 +776,7 @@ func (c *Client) batchRollbackRegionOnce(ctx context.Context, region regionSnaps
 
 // CheckTxnStatus inspects the primary lock for a transaction and returns the
 // scheduler's decision (rollback, still alive, or already committed).
-func (c *Client) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, currentTs uint64) (*kvrpcpb.CheckTxnStatusResponse, error) {
+func (c *Client) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, currentTs, currentTime uint64) (*kvrpcpb.CheckTxnStatusResponse, error) {
 	var lastErr error
 	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
 		region, err := c.routeKeyWithRetry(ctx, primary)
@@ -802,7 +806,7 @@ func (c *Client) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, cur
 				CurrentTs:          currentTs,
 				CallerStartTs:      currentTs,
 				RollbackIfNotExist: true,
-				CurrentTime:        uint64(time.Now().Unix()),
+				CurrentTime:        currentTime,
 			},
 		}
 		resp, err := cl.KvCheckTxnStatus(ctx, req)

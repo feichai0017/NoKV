@@ -257,6 +257,9 @@ func runServeCmd(w io.Writer, args []string) error {
 				}
 				return tsoSource.Current()
 			},
+			CurrentTime: func() uint64 {
+				return uint64(time.Now().UnixMilli())
+			},
 			Retention: func() rootstate.SnapshotRetentionIndex {
 				if retentionSource == nil {
 					return rootstate.SnapshotRetentionIndex{}

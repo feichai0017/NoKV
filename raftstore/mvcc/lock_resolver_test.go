@@ -18,10 +18,11 @@ import (
 func applyMVCCGCLockRecord(t *testing.T, db *NoKV.DB, key, primary []byte, startTs, ttl uint64, kind kvrpcpb.Mutation_Op) {
 	t.Helper()
 	lock := txnmvcc.EncodeLock(txnmvcc.Lock{
-		Primary: primary,
-		Ts:      startTs,
-		TTL:     ttl,
-		Kind:    kind,
+		Primary:   primary,
+		Ts:        startTs,
+		StartTime: startTs,
+		TTL:       ttl,
+		Kind:      kind,
 	})
 	applyVersionedEntryForApplyTest(t, db, entrykv.CFLock, key, entrykv.MaxVersion, lock, 0, 0)
 }
@@ -33,8 +34,9 @@ func TestResolveExpiredLocksRollsBackExpiredPrimaryLock(t *testing.T) {
 	applyMVCCGCLockRecord(t, db, key, key, 10, 5, kvrpcpb.Mutation_Put)
 
 	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, &testLockResolver{db: db}, storemvcc.ResolveLocksOptions{
-		CurrentTs:  20,
-		BatchLocks: 1,
+		CurrentTs:   20,
+		CurrentTime: 20,
+		BatchLocks:  1,
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), stats.ScannedLocks)
@@ -68,7 +70,7 @@ func TestResolveExpiredLocksCommitsSecondaryFromPrimaryWrite(t *testing.T) {
 	applyVersionedEntryForApplyTest(t, db, entrykv.CFDefault, secondary, 10, []byte("value"), 0, 0)
 	applyMVCCGCLockRecord(t, db, secondary, primary, 10, 5, kvrpcpb.Mutation_Put)
 
-	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, &testLockResolver{db: db}, storemvcc.ResolveLocksOptions{CurrentTs: 20})
+	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, &testLockResolver{db: db}, storemvcc.ResolveLocksOptions{CurrentTs: 20, CurrentTime: 20})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), stats.ResolvedLocks)
 	require.Equal(t, uint64(1), stats.CommittedLocks)
@@ -95,7 +97,7 @@ func TestResolveExpiredLocksRollsBackSecondaryAfterPrimaryAuthorityRollback(t *t
 	applyMVCCGCLockRecord(t, db, secondary, primary, 10, 5, kvrpcpb.Mutation_Put)
 
 	resolver := &testLockResolver{db: db}
-	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, resolver, storemvcc.ResolveLocksOptions{CurrentTs: 20})
+	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, resolver, storemvcc.ResolveLocksOptions{CurrentTs: 20, CurrentTime: 20})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), stats.ScannedLocks)
 	require.Equal(t, uint64(1), stats.ExpiredLocks)
@@ -123,7 +125,7 @@ func TestResolveExpiredLocksReplicatedUsesResolveLockCommand(t *testing.T) {
 	applyMVCCGCLockRecord(t, db, secondary, primary, 10, 5, kvrpcpb.Mutation_Put)
 
 	proposer := &testLockResolver{db: db}
-	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, proposer, storemvcc.ResolveLocksOptions{CurrentTs: 20})
+	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, proposer, storemvcc.ResolveLocksOptions{CurrentTs: 20, CurrentTime: 20})
 	require.NoError(t, err)
 	require.Equal(t, 1, proposer.calls)
 	require.Equal(t, uint64(1), stats.ResolvedLocks)
@@ -145,7 +147,7 @@ func TestResolveExpiredLocksReplicatedRollsBackExpiredPrimary(t *testing.T) {
 	applyMVCCGCLockRecord(t, db, key, key, 10, 5, kvrpcpb.Mutation_Put)
 
 	proposer := &testLockResolver{db: db}
-	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, proposer, storemvcc.ResolveLocksOptions{CurrentTs: 20})
+	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, proposer, storemvcc.ResolveLocksOptions{CurrentTs: 20, CurrentTime: 20})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), stats.ResolvedLocks)
 	require.Equal(t, uint64(1), stats.RolledBackLocks)
@@ -163,7 +165,7 @@ func TestResolveExpiredLocksRetainsLiveLock(t *testing.T) {
 	key := []byte("live")
 	applyMVCCGCLockRecord(t, db, key, key, 10, 100, kvrpcpb.Mutation_Put)
 
-	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, &testLockResolver{db: db}, storemvcc.ResolveLocksOptions{CurrentTs: 20})
+	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, &testLockResolver{db: db}, storemvcc.ResolveLocksOptions{CurrentTs: 20, CurrentTime: 20})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), stats.ScannedLocks)
 	require.Equal(t, uint64(1), stats.RetainedLocks)
@@ -175,6 +177,39 @@ func TestResolveExpiredLocksRetainsLiveLock(t *testing.T) {
 	require.Equal(t, uint64(10), floor.OldestStartTs)
 }
 
+func TestResolveExpiredLocksDoesNotExpireFromLogicalTSODistance(t *testing.T) {
+	db := openMVCCGCPlanTestDB(t)
+	key := []byte("logical-live")
+	applyMVCCGCLockRecord(t, db, key, key, 10, 5000, kvrpcpb.Mutation_Put)
+
+	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, &testLockResolver{db: db}, storemvcc.ResolveLocksOptions{
+		CurrentTs:   1_000_000,
+		CurrentTime: 20,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), stats.ScannedLocks)
+	require.Equal(t, uint64(1), stats.RetainedLocks)
+	require.Zero(t, stats.ExpiredLocks)
+	require.Zero(t, stats.ResolvedLocks)
+}
+
+func TestResolveExpiredLocksExpiresFromPhysicalTimeWithoutLogicalTSODistance(t *testing.T) {
+	db := openMVCCGCPlanTestDB(t)
+	key := []byte("physical-expired")
+	applyVersionedEntryForApplyTest(t, db, entrykv.CFDefault, key, 10, []byte("value"), 0, 0)
+	applyMVCCGCLockRecord(t, db, key, key, 10, 5, kvrpcpb.Mutation_Put)
+
+	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, &testLockResolver{db: db}, storemvcc.ResolveLocksOptions{
+		CurrentTs:   10,
+		CurrentTime: 20,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), stats.ScannedLocks)
+	require.Equal(t, uint64(1), stats.ExpiredLocks)
+	require.Equal(t, uint64(1), stats.ResolvedLocks)
+	require.Equal(t, uint64(1), stats.RolledBackLocks)
+}
+
 func TestResolveExpiredLocksRetainsTTLAcrossUint64Boundary(t *testing.T) {
 	db := openMVCCGCPlanTestDB(t)
 	key := []byte("overflow-live")
@@ -182,7 +217,7 @@ func TestResolveExpiredLocksRetainsTTLAcrossUint64Boundary(t *testing.T) {
 	applyVersionedEntryForApplyTest(t, db, entrykv.CFDefault, key, startTs, []byte("value"), 0, 0)
 	applyMVCCGCLockRecord(t, db, key, key, startTs, 10, kvrpcpb.Mutation_Put)
 
-	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, &testLockResolver{db: db}, storemvcc.ResolveLocksOptions{CurrentTs: startTs + 4})
+	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, &testLockResolver{db: db}, storemvcc.ResolveLocksOptions{CurrentTs: 20, CurrentTime: startTs + 4})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), stats.ScannedLocks)
 	require.Equal(t, uint64(1), stats.RetainedLocks)
@@ -199,7 +234,7 @@ func TestResolveExpiredLocksUnblocksTxnFloor(t *testing.T) {
 	key := []byte("old")
 	applyMVCCGCLockRecord(t, db, key, key, 10, 5, kvrpcpb.Mutation_Put)
 
-	_, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, &testLockResolver{db: db}, storemvcc.ResolveLocksOptions{CurrentTs: 20})
+	_, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, &testLockResolver{db: db}, storemvcc.ResolveLocksOptions{CurrentTs: 20, CurrentTime: 20})
 	require.NoError(t, err)
 
 	floor, err := storemvcc.PlanTxnFloor(context.Background(), db)
@@ -217,9 +252,10 @@ func TestResolveExpiredLocksStopsAtMaxLocks(t *testing.T) {
 	}
 
 	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, &testLockResolver{db: db}, storemvcc.ResolveLocksOptions{
-		CurrentTs:  20,
-		BatchLocks: 10,
-		MaxLocks:   2,
+		CurrentTs:   20,
+		CurrentTime: 20,
+		BatchLocks:  10,
+		MaxLocks:    2,
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), stats.ScannedLocks)
@@ -238,7 +274,7 @@ type testLockResolver struct {
 	statusCalls int
 }
 
-func (p *testLockResolver) CheckTxnStatus(_ context.Context, primary []byte, lockTs, currentTs uint64) (*kvrpcpb.CheckTxnStatusResponse, error) {
+func (p *testLockResolver) CheckTxnStatus(_ context.Context, primary []byte, lockTs, currentTs, currentTime uint64) (*kvrpcpb.CheckTxnStatusResponse, error) {
 	p.statusCalls++
 	if p.db == nil {
 		return &kvrpcpb.CheckTxnStatusResponse{}, nil
@@ -249,6 +285,7 @@ func (p *testLockResolver) CheckTxnStatus(_ context.Context, primary []byte, loc
 		CurrentTs:          currentTs,
 		CallerStartTs:      currentTs,
 		RollbackIfNotExist: true,
+		CurrentTime:        currentTime,
 	}), nil
 }
 

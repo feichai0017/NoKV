@@ -24,10 +24,11 @@ type MaintenanceWorkerConfig struct {
 	Interval time.Duration
 	Timeout  time.Duration
 
-	SafePoint func() uint64
-	CurrentTs func() uint64
-	Retention func() rootstate.SnapshotRetentionIndex
-	Mount     MountResolver
+	SafePoint   func() uint64
+	CurrentTs   func() uint64
+	CurrentTime func() uint64
+	Retention   func() rootstate.SnapshotRetentionIndex
+	Mount       MountResolver
 
 	Apply        ApplyOptions
 	ResolveLocks ResolveLocksOptions
@@ -69,7 +70,7 @@ func NewMaintenanceWorker(cfg MaintenanceWorkerConfig) (*MaintenanceWorker, bool
 		return nil, false
 	}
 	hasGCApply := cfg.SafePoint != nil && cfg.MaintenanceProposer != nil
-	hasLockResolution := cfg.CurrentTs != nil && cfg.LockResolver != nil
+	hasLockResolution := cfg.CurrentTs != nil && cfg.CurrentTime != nil && cfg.LockResolver != nil
 	hasOrphanCleanup := cfg.RunOrphanDefaults && cfg.MaintenanceProposer != nil
 	if !hasGCApply && !hasLockResolution && !hasOrphanCleanup {
 		return nil, false
@@ -132,9 +133,14 @@ func (w *MaintenanceWorker) RunOnce(ctx context.Context) error {
 	if w.cfg.CurrentTs != nil {
 		currentTs = w.cfg.CurrentTs()
 	}
-	if currentTs != 0 && w.cfg.LockResolver != nil {
+	currentTime := uint64(0)
+	if w.cfg.CurrentTime != nil {
+		currentTime = w.cfg.CurrentTime()
+	}
+	if currentTs != 0 && currentTime != 0 && w.cfg.LockResolver != nil {
 		resolveOpt := w.cfg.ResolveLocks
 		resolveOpt.CurrentTs = currentTs
+		resolveOpt.CurrentTime = currentTime
 		resolveStats, resolveErr = ResolveExpiredLocksReplicated(runCtx, w.cfg.MVCCStore, w.cfg.LockResolver, resolveOpt)
 	}
 	if w.cfg.SafePoint != nil && w.cfg.MaintenanceProposer != nil {

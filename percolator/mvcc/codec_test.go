@@ -12,6 +12,7 @@ func TestEncodeDecodeLockRoundTrip(t *testing.T) {
 	lock := Lock{
 		Primary:     []byte("primary"),
 		Ts:          10,
+		StartTime:   1000,
 		TTL:         20,
 		Kind:        kvrpcpb.Mutation_Put,
 		MinCommitTs: 30,
@@ -21,6 +22,7 @@ func TestEncodeDecodeLockRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, lock.Primary, got.Primary)
 	require.Equal(t, lock.Ts, got.Ts)
+	require.Equal(t, lock.StartTime, got.StartTime)
 	require.Equal(t, lock.TTL, got.TTL)
 	require.Equal(t, lock.Kind, got.Kind)
 	require.Equal(t, lock.MinCommitTs, got.MinCommitTs)
@@ -38,6 +40,15 @@ func TestDecodeLockErrors(t *testing.T) {
 
 	_, err = DecodeLock([]byte{lockCodecVersion, 0x05, 'a'})
 	require.Error(t, err)
+
+	raw := make([]byte, 0, 16)
+	raw = append(raw, lockCodecVersion, 0)
+	raw = binary.AppendUvarint(raw, 10)
+	raw = binary.AppendUvarint(raw, 0)
+	raw = binary.AppendUvarint(raw, 20)
+	raw = append(raw, byte(kvrpcpb.Mutation_Put))
+	_, err = DecodeLock(raw)
+	require.ErrorContains(t, err, "lock start time missing")
 }
 
 func TestEncodeDecodeWriteRoundTrip(t *testing.T) {

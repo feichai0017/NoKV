@@ -23,7 +23,7 @@ type MaintenanceProposer interface {
 // authoritative region for each key. Implementations must preserve the normal
 // Percolator apply path instead of translating locks into raw tombstones.
 type LockResolver interface {
-	CheckTxnStatus(ctx context.Context, primary []byte, lockTs, currentTs uint64) (*kvrpcpb.CheckTxnStatusResponse, error)
+	CheckTxnStatus(ctx context.Context, primary []byte, lockTs, currentTs, currentTime uint64) (*kvrpcpb.CheckTxnStatusResponse, error)
 	ResolveLocks(ctx context.Context, startVersion, commitVersion uint64, keys [][]byte) (uint64, error)
 }
 
@@ -58,11 +58,11 @@ func proposeMaintenanceEntries(ctx context.Context, proposer MaintenanceProposer
 	return result, nil
 }
 
-func checkTxnStatus(ctx context.Context, resolver LockResolver, primary []byte, lockTs, currentTs uint64) (*kvrpcpb.CheckTxnStatusResponse, error) {
+func checkTxnStatus(ctx context.Context, resolver LockResolver, primary []byte, lockTs, currentTs, currentTime uint64) (*kvrpcpb.CheckTxnStatusResponse, error) {
 	if resolver == nil {
 		return nil, fmt.Errorf("raftstore/mvcc: nil lock resolver")
 	}
-	return resolver.CheckTxnStatus(ctx, primary, lockTs, currentTs)
+	return resolver.CheckTxnStatus(ctx, primary, lockTs, currentTs, currentTime)
 }
 
 func proposeResolveLocks(ctx context.Context, resolver LockResolver, startVersion, commitVersion uint64, keys [][]byte) (uint64, error) {

@@ -502,10 +502,11 @@ func TestStoreResolveLocksConvergesAfterPartialRegionFailure(t *testing.T) {
 func applyTestLockRecord(t *testing.T, db txnstore.Store, key []byte, startTs, ttl uint64) {
 	t.Helper()
 	lock := txnmvcc.EncodeLock(txnmvcc.Lock{
-		Primary: key,
-		Ts:      startTs,
-		TTL:     ttl,
-		Kind:    kvrpcpb.Mutation_Put,
+		Primary:   key,
+		Ts:        startTs,
+		StartTime: startTs,
+		TTL:       ttl,
+		Kind:      kvrpcpb.Mutation_Put,
 	})
 	entry := entrykv.NewInternalEntry(entrykv.CFLock, key, entrykv.MaxVersion, lock, 0, 0)
 	defer entry.DecrRef()

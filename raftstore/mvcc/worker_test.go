@@ -35,6 +35,7 @@ func TestMaintenanceWorkerRunOnceUsesReplicatedPaths(t *testing.T) {
 		Interval:            time.Hour,
 		SafePoint:           func() uint64 { return 100 },
 		CurrentTs:           func() uint64 { return 20 },
+		CurrentTime:         func() uint64 { return 20 },
 		Apply:               storemvcc.ApplyOptions{BatchEntries: 2},
 		ResolveLocks:        storemvcc.ResolveLocksOptions{BatchLocks: 1},
 		RunOrphanDefaults:   true,
@@ -72,6 +73,7 @@ func TestMaintenanceWorkerContinuesAfterResolveError(t *testing.T) {
 		Interval:            time.Hour,
 		SafePoint:           func() uint64 { return 100 },
 		CurrentTs:           func() uint64 { return 300 },
+		CurrentTime:         func() uint64 { return 300 },
 		Apply:               storemvcc.ApplyOptions{BatchEntries: 8},
 		ResolveLocks:        storemvcc.ResolveLocksOptions{BatchLocks: 1},
 	})
@@ -156,6 +158,7 @@ func TestMaintenanceWorkerAllowsLockResolutionOnly(t *testing.T) {
 		LockResolver: &testLockResolver{db: db},
 		Interval:     time.Hour,
 		CurrentTs:    func() uint64 { return 20 },
+		CurrentTime:  func() uint64 { return 20 },
 		ResolveLocks: storemvcc.ResolveLocksOptions{BatchLocks: 1},
 	})
 	require.True(t, ok)
@@ -276,7 +279,7 @@ func (p *failingLockResolver) ResolveLocks(context.Context, uint64, uint64, [][]
 	return 0, p.err
 }
 
-func (p *failingLockResolver) CheckTxnStatus(context.Context, []byte, uint64, uint64) (*kvrpcpb.CheckTxnStatusResponse, error) {
+func (p *failingLockResolver) CheckTxnStatus(context.Context, []byte, uint64, uint64, uint64) (*kvrpcpb.CheckTxnStatusResponse, error) {
 	return &kvrpcpb.CheckTxnStatusResponse{CommitVersion: 301}, nil
 }
 

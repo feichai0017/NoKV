@@ -153,6 +153,8 @@ func TestPrewriteAndCommitPut(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, lock)
 	require.Equal(t, req.StartVersion, lock.Ts)
+	require.NotZero(t, lock.StartTime)
+	require.Equal(t, req.LockTtl, lock.TTL)
 
 	commitReq := &kvrpcpb.CommitRequest{
 		Keys:          [][]byte{[]byte("k1")},
@@ -986,17 +988,92 @@ func TestCheckTxnStatusTTLExpire(t *testing.T) {
 		LockTtl:      5,
 	}
 	require.Empty(t, Prewrite(db, latches, pre))
-	resp := CheckTxnStatus(db, latches, &kvrpcpb.CheckTxnStatusRequest{
-		PrimaryKey:         []byte("primary"),
-		LockTs:             startTs,
-		CurrentTs:          startTs + 10,
-		RollbackIfNotExist: true,
-	})
-	require.Equal(t, kvrpcpb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback, resp.GetAction())
 	reader := NewReader(db)
 	lock, err := reader.GetLock([]byte("primary"))
 	require.NoError(t, err)
+	require.NotNil(t, lock)
+	resp := CheckTxnStatus(db, latches, &kvrpcpb.CheckTxnStatusRequest{
+		PrimaryKey:         []byte("primary"),
+		LockTs:             startTs,
+		CurrentTs:          startTs,
+		RollbackIfNotExist: true,
+		CurrentTime:        lock.StartTime + lock.TTL,
+	})
+	require.Equal(t, kvrpcpb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback, resp.GetAction())
+	lock, err = reader.GetLock([]byte("primary"))
+	require.NoError(t, err)
 	require.Nil(t, lock)
+}
+
+func TestCheckTxnStatusDoesNotExpireFromLogicalTSODistance(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	key := []byte("logical-live")
+	startTs := uint64(100)
+	pre := &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   key,
+			Value: []byte("value"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: startTs,
+		LockTtl:      5000,
+	}
+	require.Empty(t, Prewrite(db, latches, pre))
+
+	reader := NewReader(db)
+	lock, err := reader.GetLock(key)
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+
+	resp := CheckTxnStatus(db, latches, &kvrpcpb.CheckTxnStatusRequest{
+		PrimaryKey:         key,
+		LockTs:             startTs,
+		CurrentTs:          startTs + 1_000_000,
+		RollbackIfNotExist: true,
+		CurrentTime:        lock.StartTime + lock.TTL - 1,
+	})
+	require.Nil(t, resp.GetError())
+	require.Equal(t, kvrpcpb.CheckTxnStatusAction_CheckTxnStatusNoAction, resp.GetAction())
+	require.Equal(t, lock.TTL, resp.GetLockTtl())
+
+	lock, err = reader.GetLock(key)
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+}
+
+func TestCheckTxnStatusExpiresFromPhysicalTimeWithoutLogicalTSODistance(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	key := []byte("physical-expired")
+	startTs := uint64(100)
+	pre := &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   key,
+			Value: []byte("value"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: startTs,
+		LockTtl:      5,
+	}
+	require.Empty(t, Prewrite(db, latches, pre))
+
+	reader := NewReader(db)
+	lock, err := reader.GetLock(key)
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+
+	resp := CheckTxnStatus(db, latches, &kvrpcpb.CheckTxnStatusRequest{
+		PrimaryKey:         key,
+		LockTs:             startTs,
+		CurrentTs:          startTs,
+		RollbackIfNotExist: true,
+		CurrentTime:        lock.StartTime + lock.TTL,
+	})
+	require.Nil(t, resp.GetError())
+	require.Equal(t, kvrpcpb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback, resp.GetAction())
 }
 
 func TestReaderGetValueFromShortValueWithExpiresAt(t *testing.T) {
@@ -1170,8 +1247,10 @@ func TestRollbackKeyReturnsRetryableWhenApplyFails(t *testing.T) {
 
 func TestIsLockExpired(t *testing.T) {
 	require.False(t, isLockExpired(nil, 10))
-	require.False(t, isLockExpired(&mvcc.Lock{Ts: 5, TTL: 0}, 10))
-	require.True(t, isLockExpired(&mvcc.Lock{Ts: 5, TTL: 5}, 10))
+	require.False(t, isLockExpired(&mvcc.Lock{Ts: 5, StartTime: 100, TTL: 0}, 110))
+	require.False(t, isLockExpired(&mvcc.Lock{Ts: 5, StartTime: 0, TTL: 5}, 110))
+	require.False(t, isLockExpired(&mvcc.Lock{Ts: 5, StartTime: 100, TTL: 5}, 104))
+	require.True(t, isLockExpired(&mvcc.Lock{Ts: 5, StartTime: 100, TTL: 5}, 105))
 }
 
 func TestCommitTsExpired(t *testing.T) {
@@ -1224,10 +1303,11 @@ func TestIdempotentCommitCleansUpLock(t *testing.T) {
 	key := []byte("k")
 
 	lockVal := mvcc.EncodeLock(mvcc.Lock{
-		Primary: key,
-		Ts:      11,
-		TTL:     3000,
-		Kind:    kvrpcpb.Mutation_Put,
+		Primary:   key,
+		Ts:        11,
+		StartTime: 1100,
+		TTL:       3000,
+		Kind:      kvrpcpb.Mutation_Put,
 	})
 	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, lockVal, 0)
 
@@ -1256,6 +1336,7 @@ func TestIdempotentCommitWithPushedMinCommitTs(t *testing.T) {
 	lockVal := mvcc.EncodeLock(mvcc.Lock{
 		Primary:     key,
 		Ts:          11,
+		StartTime:   1100,
 		TTL:         3000,
 		Kind:        kvrpcpb.Mutation_Put,
 		MinCommitTs: 30,

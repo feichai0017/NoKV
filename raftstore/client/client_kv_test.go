@@ -175,6 +175,7 @@ func TestClientGetResolvesCommittedLockAndRetries(t *testing.T) {
 			require.Equal(t, []byte("primary"), req.GetRequest().GetPrimaryKey())
 			require.Equal(t, uint64(10), req.GetRequest().GetLockTs())
 			require.Equal(t, uint64(20), req.GetRequest().GetCurrentTs())
+			require.NotZero(t, req.GetRequest().GetCurrentTime())
 			return &kvrpcpb.KvCheckTxnStatusResponse{
 				Response: &kvrpcpb.CheckTxnStatusResponse{CommitVersion: 30},
 			}, nil
@@ -606,7 +607,7 @@ func TestClientCheckTxnStatusRetriesOnNotLeader(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = cli.Close() }()
 
-	resp, err := cli.CheckTxnStatus(context.Background(), []byte("alfa"), 10, 20)
+	resp, err := cli.CheckTxnStatus(context.Background(), []byte("alfa"), 10, 20, 30)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	require.Equal(t, uint64(77), resp.GetCommitVersion())
