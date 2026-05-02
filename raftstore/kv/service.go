@@ -30,21 +30,31 @@ func servicePhysicalTimeMillis() uint64 {
 }
 
 func checkTxnStatusRequestWithServiceTime(req *kvrpcpb.CheckTxnStatusRequest) *kvrpcpb.CheckTxnStatusRequest {
-	cloned := *req
-	cloned.PrimaryKey = append([]byte(nil), req.GetPrimaryKey()...)
-	if cloned.CurrentTime == 0 {
-		cloned.CurrentTime = servicePhysicalTimeMillis()
+	currentTime := req.GetCurrentTime()
+	if currentTime == 0 {
+		currentTime = servicePhysicalTimeMillis()
 	}
-	return &cloned
+	return &kvrpcpb.CheckTxnStatusRequest{
+		PrimaryKey:         append([]byte(nil), req.GetPrimaryKey()...),
+		LockTs:             req.GetLockTs(),
+		CurrentTs:          req.GetCurrentTs(),
+		RollbackIfNotExist: req.GetRollbackIfNotExist(),
+		CallerStartTs:      req.GetCallerStartTs(),
+		CurrentTime:        currentTime,
+	}
 }
 
 func txnHeartBeatRequestWithServiceTime(req *kvrpcpb.TxnHeartBeatRequest) *kvrpcpb.TxnHeartBeatRequest {
-	cloned := *req
-	cloned.PrimaryKey = append([]byte(nil), req.GetPrimaryKey()...)
-	if cloned.CurrentTime == 0 {
-		cloned.CurrentTime = servicePhysicalTimeMillis()
+	currentTime := req.GetCurrentTime()
+	if currentTime == 0 {
+		currentTime = servicePhysicalTimeMillis()
 	}
-	return &cloned
+	return &kvrpcpb.TxnHeartBeatRequest{
+		PrimaryKey:   append([]byte(nil), req.GetPrimaryKey()...),
+		StartVersion: req.GetStartVersion(),
+		TtlExtension: req.GetTtlExtension(),
+		CurrentTime:  currentTime,
+	}
 }
 
 func (s *Service) KvGet(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
