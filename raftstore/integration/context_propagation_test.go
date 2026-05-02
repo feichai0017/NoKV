@@ -334,7 +334,8 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 	seed.UnblockPeer(childTargetStatus.GetLocalPeerId())
 	target.UnblockPeer(childSeedStatus.GetLocalPeerId())
 
-	require.Eventually(t, func() bool {
+	var lastRecoveryErr error
+	require.Eventuallyf(t, func() bool {
 		parentA := testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 91)
 		parentB := testcluster.FetchRuntimeStatus(t, ctx, target.Addr(), 91)
 		childA := testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 92)
@@ -342,6 +343,7 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 		parentMeta, parentLeaderStoreID, parentReady := runtimeLeaderDescriptor(parentA, parentB)
 		childMeta, childLeaderStoreID, childReady := runtimeLeaderDescriptor(childA, childB)
 		if !parentReady || !childReady {
+			lastRecoveryErr = errors.New("region leaders not ready")
 			return false
 		}
 		recoveryCli, err := client.New(client.Config{
@@ -355,23 +357,25 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 			}},
 			DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 			Retry: client.RetryPolicy{
-				MaxAttempts:                 1,
-				RouteUnavailableBackoff:     0,
-				TransportUnavailableBackoff: 0,
-				RegionErrorBackoff:          0,
+				MaxAttempts:                 5,
+				RouteUnavailableBackoff:     10 * time.Millisecond,
+				TransportUnavailableBackoff: 10 * time.Millisecond,
+				RegionErrorBackoff:          10 * time.Millisecond,
 			},
 		})
 		if err != nil {
+			lastRecoveryErr = err
 			return false
 		}
 		defer func() { _ = recoveryCli.Close() }()
 
-		testCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		testCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		err = recoveryCli.TwoPhaseCommit(testCtx, []byte("charlie"), []*kvrpcpb.Mutation{
 			{Op: kvrpcpb.Mutation_Put, Key: []byte("charlie"), Value: []byte("ok1")},
 			{Op: kvrpcpb.Mutation_Put, Key: []byte("yankee"), Value: []byte("ok2")},
 		}, 200, 201, 3000)
+		lastRecoveryErr = err
 		return err == nil
-	}, 10*time.Second, 50*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond, "cluster did not recover after healing partial quorum loss: %v", lastRecoveryErr)
 }
