@@ -15,6 +15,26 @@ func createRequestFromProto(req *fsmetapb.CreateRequest) (fsmeta.CreateRequest, 
 	}, inode
 }
 
+func updateInodeRequestFromProto(req *fsmetapb.UpdateInodeRequest) fsmeta.UpdateInodeRequest {
+	if req == nil {
+		return fsmeta.UpdateInodeRequest{}
+	}
+	return fsmeta.UpdateInodeRequest{
+		Mount:            fsmeta.MountID(req.GetMount()),
+		Parent:           fsmeta.InodeID(req.GetParent()),
+		Inode:            fsmeta.InodeID(req.GetInode()),
+		Name:             req.GetName(),
+		SetSize:          req.GetSetSize(),
+		Size:             req.GetSize(),
+		SetMode:          req.GetSetMode(),
+		Mode:             req.GetMode(),
+		SetUpdatedUnixNs: req.GetSetUpdatedUnixNs(),
+		UpdatedUnixNs:    req.GetUpdatedUnixNs(),
+		SetOpaqueAttrs:   req.GetSetOpaqueAttrs(),
+		OpaqueAttrs:      append([]byte(nil), req.GetOpaqueAttrs()...),
+	}
+}
+
 func lookupRequestFromProto(req *fsmetapb.LookupRequest) fsmeta.LookupRequest {
 	return fsmeta.LookupRequest{
 		Mount:  fsmeta.MountID(req.GetMount()),
@@ -107,6 +127,50 @@ func unlinkRequestFromProto(req *fsmetapb.UnlinkRequest) fsmeta.UnlinkRequest {
 	}
 }
 
+func openWriteSessionRequestFromProto(req *fsmetapb.OpenWriteSessionRequest) fsmeta.OpenWriteSessionRequest {
+	if req == nil {
+		return fsmeta.OpenWriteSessionRequest{}
+	}
+	return fsmeta.OpenWriteSessionRequest{
+		Mount:         fsmeta.MountID(req.GetMount()),
+		Inode:         fsmeta.InodeID(req.GetInode()),
+		Session:       fsmeta.SessionID(req.GetSession()),
+		ExpiresUnixNs: req.GetExpiresUnixNs(),
+	}
+}
+
+func heartbeatWriteSessionRequestFromProto(req *fsmetapb.HeartbeatWriteSessionRequest) fsmeta.HeartbeatWriteSessionRequest {
+	if req == nil {
+		return fsmeta.HeartbeatWriteSessionRequest{}
+	}
+	return fsmeta.HeartbeatWriteSessionRequest{
+		Mount:         fsmeta.MountID(req.GetMount()),
+		Inode:         fsmeta.InodeID(req.GetInode()),
+		Session:       fsmeta.SessionID(req.GetSession()),
+		ExpiresUnixNs: req.GetExpiresUnixNs(),
+	}
+}
+
+func closeWriteSessionRequestFromProto(req *fsmetapb.CloseWriteSessionRequest) fsmeta.CloseWriteSessionRequest {
+	if req == nil {
+		return fsmeta.CloseWriteSessionRequest{}
+	}
+	return fsmeta.CloseWriteSessionRequest{
+		Mount:   fsmeta.MountID(req.GetMount()),
+		Session: fsmeta.SessionID(req.GetSession()),
+	}
+}
+
+func expireWriteSessionsRequestFromProto(req *fsmetapb.ExpireWriteSessionsRequest) fsmeta.ExpireWriteSessionsRequest {
+	if req == nil {
+		return fsmeta.ExpireWriteSessionsRequest{}
+	}
+	return fsmeta.ExpireWriteSessionsRequest{
+		Mount: fsmeta.MountID(req.GetMount()),
+		Limit: req.GetLimit(),
+	}
+}
+
 func inodeFromProto(pb *fsmetapb.InodeRecord) fsmeta.InodeRecord {
 	if pb == nil {
 		return fsmeta.InodeRecord{}
@@ -142,6 +206,14 @@ func inodeToProto(record fsmeta.InodeRecord) *fsmetapb.InodeRecord {
 		CreatedUnixNs: record.CreatedUnixNs,
 		UpdatedUnixNs: record.UpdatedUnixNs,
 		OpaqueAttrs:   append([]byte(nil), record.OpaqueAttrs...),
+	}
+}
+
+func sessionToProto(record fsmeta.SessionRecord) *fsmetapb.SessionRecord {
+	return &fsmetapb.SessionRecord{
+		Session:       string(record.Session),
+		Inode:         uint64(record.Inode),
+		ExpiresUnixNs: record.ExpiresUnixNs,
 	}
 }
 

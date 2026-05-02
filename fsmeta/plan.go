@@ -13,6 +13,7 @@ type OperationKind string
 
 const (
 	OperationCreate           OperationKind = "create"
+	OperationUpdateInode      OperationKind = "update_inode"
 	OperationLookup           OperationKind = "lookup"
 	OperationReadDir          OperationKind = "readdir"
 	OperationSnapshotSubtree  OperationKind = "snapshot_subtree"
@@ -20,6 +21,9 @@ const (
 	OperationLink             OperationKind = "link"
 	OperationUnlink           OperationKind = "unlink"
 	OperationOpenWriteSession OperationKind = "open_write_session"
+	OperationHeartbeatSession OperationKind = "heartbeat_write_session"
+	OperationCloseSession     OperationKind = "close_write_session"
+	OperationExpireSessions   OperationKind = "expire_write_sessions"
 )
 
 // OperationPlan describes the key set one metadata operation will touch.
@@ -42,6 +46,21 @@ type CreateRequest struct {
 	Parent InodeID
 	Name   string
 	Inode  InodeID
+}
+
+type UpdateInodeRequest struct {
+	Mount            MountID
+	Parent           InodeID
+	Inode            InodeID
+	Name             string
+	SetSize          bool
+	Size             uint64
+	SetMode          bool
+	Mode             uint32
+	SetUpdatedUnixNs bool
+	UpdatedUnixNs    int64
+	SetOpaqueAttrs   bool
+	OpaqueAttrs      []byte
 }
 
 type LookupRequest struct {
@@ -86,9 +105,31 @@ type UnlinkRequest struct {
 }
 
 type OpenWriteSessionRequest struct {
+	Mount         MountID
+	Inode         InodeID
+	Session       SessionID
+	ExpiresUnixNs int64
+}
+
+type HeartbeatWriteSessionRequest struct {
+	Mount         MountID
+	Inode         InodeID
+	Session       SessionID
+	ExpiresUnixNs int64
+}
+
+type CloseWriteSessionRequest struct {
 	Mount   MountID
-	Inode   InodeID
 	Session SessionID
+}
+
+type ExpireWriteSessionsRequest struct {
+	Mount MountID
+	Limit uint32
+}
+
+type ExpireWriteSessionsResult struct {
+	Expired uint64
 }
 
 func PlanCreate(req CreateRequest) (OperationPlan, error) {
@@ -115,6 +156,30 @@ func PlanCreate(req CreateRequest) (OperationPlan, error) {
 		PrimaryKey: cloneBytes(dentry),
 		ReadKeys:   cloneKeySet(dentry),
 		MutateKeys: cloneKeySet(dentry, inode),
+	}, nil
+}
+
+func PlanUpdateInode(req UpdateInodeRequest) (OperationPlan, error) {
+	if err := validateMountID(req.Mount); err != nil {
+		return OperationPlan{}, err
+	}
+	if err := validateInodeID(req.Parent); err != nil {
+		return OperationPlan{}, err
+	}
+	dentry, err := EncodeDentryKey(req.Mount, req.Parent, req.Name)
+	if err != nil {
+		return OperationPlan{}, err
+	}
+	inode, err := EncodeInodeKey(req.Mount, req.Inode)
+	if err != nil {
+		return OperationPlan{}, err
+	}
+	return OperationPlan{
+		Kind:       OperationUpdateInode,
+		Mount:      req.Mount,
+		PrimaryKey: cloneBytes(inode),
+		ReadKeys:   cloneKeySet(dentry, inode),
+		MutateKeys: cloneKeySet(inode),
 	}, nil
 }
 
@@ -253,12 +318,67 @@ func PlanOpenWriteSession(req OpenWriteSessionRequest) (OperationPlan, error) {
 	if err != nil {
 		return OperationPlan{}, err
 	}
+	owner, err := EncodeInodeSessionKey(req.Mount, req.Inode)
+	if err != nil {
+		return OperationPlan{}, err
+	}
 	return OperationPlan{
 		Kind:       OperationOpenWriteSession,
 		Mount:      req.Mount,
 		PrimaryKey: cloneBytes(session),
-		ReadKeys:   cloneKeySet(inode),
+		ReadKeys:   cloneKeySet(inode, session, owner),
+		MutateKeys: cloneKeySet(session, owner),
+	}, nil
+}
+
+func PlanHeartbeatWriteSession(req HeartbeatWriteSessionRequest) (OperationPlan, error) {
+	session, err := EncodeSessionKey(req.Mount, req.Session)
+	if err != nil {
+		return OperationPlan{}, err
+	}
+	owner, err := EncodeInodeSessionKey(req.Mount, req.Inode)
+	if err != nil {
+		return OperationPlan{}, err
+	}
+	return OperationPlan{
+		Kind:       OperationHeartbeatSession,
+		Mount:      req.Mount,
+		PrimaryKey: cloneBytes(session),
+		ReadKeys:   cloneKeySet(session, owner),
+		MutateKeys: cloneKeySet(session, owner),
+	}, nil
+}
+
+func PlanCloseWriteSession(req CloseWriteSessionRequest) (OperationPlan, error) {
+	session, err := EncodeSessionKey(req.Mount, req.Session)
+	if err != nil {
+		return OperationPlan{}, err
+	}
+	return OperationPlan{
+		Kind:       OperationCloseSession,
+		Mount:      req.Mount,
+		PrimaryKey: cloneBytes(session),
+		ReadKeys:   cloneKeySet(session),
 		MutateKeys: cloneKeySet(session),
+	}, nil
+}
+
+func PlanExpireWriteSessions(req ExpireWriteSessionsRequest) (OperationPlan, error) {
+	limit, err := normalizeSessionExpireLimit(req.Limit)
+	if err != nil {
+		return OperationPlan{}, err
+	}
+	prefix, err := EncodeSessionPrefix(req.Mount)
+	if err != nil {
+		return OperationPlan{}, err
+	}
+	return OperationPlan{
+		Kind:         OperationExpireSessions,
+		Mount:        req.Mount,
+		PrimaryKey:   cloneBytes(prefix),
+		StartKey:     cloneBytes(prefix),
+		Limit:        limit,
+		ReadPrefixes: cloneKeySet(prefix),
 	}, nil
 }
 

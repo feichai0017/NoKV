@@ -17,10 +17,13 @@ import (
 	"github.com/feichai0017/NoKV/config"
 	coordadapter "github.com/feichai0017/NoKV/coordinator/adapter"
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
+	"github.com/feichai0017/NoKV/fsmeta"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
+	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
@@ -44,6 +47,16 @@ func runServeCmd(w io.Writer, args []string) error {
 	scope := fs.String("scope", "host", "scope for config-resolved addresses: host|docker")
 	coordTimeout := fs.Duration("coordinator-timeout", 2*time.Second, "timeout for coordinator heartbeat RPCs")
 	metricsAddr := fs.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
+	mvccGCPlanInterval := fs.Duration("mvcc-gc-plan-interval", 0, "interval for read-only MVCC GC planning; zero disables")
+	mvccGCMaintenanceInterval := fs.Duration("mvcc-gc-maintenance-interval", 0, "interval for replicated MVCC GC maintenance; zero disables")
+	mvccGCSafePointLag := fs.Uint64("mvcc-gc-safe-point-lag", 0, "TSO lag retained behind the coordinator timestamp before MVCC GC may reclaim versions")
+	mvccGCTSOCacheTTL := fs.Duration("mvcc-gc-tso-cache-ttl", time.Minute, "maximum age of the last successful coordinator TSO reused for MVCC GC; zero disables cache")
+	mvccGCTimeout := fs.Duration("mvcc-gc-timeout", 30*time.Second, "timeout for one MVCC GC maintenance pass")
+	mvccGCBatchEntries := fs.Int("mvcc-gc-batch-entries", 0, "maximum MVCC GC tombstones per replicated maintenance batch")
+	mvccGCMaxKeys := fs.Uint64("mvcc-gc-max-keys", 0, "maximum MVCC user keys scanned by one destructive maintenance pass; zero means unlimited")
+	mvccGCResolveBatchLocks := fs.Int("mvcc-gc-resolve-batch-locks", 0, "maximum expired locks resolved per replicated maintenance batch")
+	mvccGCResolveMaxLocks := fs.Uint64("mvcc-gc-resolve-max-locks", 0, "maximum MVCC locks scanned by one lock-resolution pass; zero means unlimited")
+	mvccGCMetaRootAddr := fs.String("mvcc-gc-meta-root-addr", "", "metadata-root gRPC address for snapshot retention floors; config meta_root is used when empty")
 	var storeAddrFlags []string
 	fs.Func("store-addr", "remote store transport mapping in the form storeID=address (repeatable)", func(value string) error {
 		value = strings.TrimSpace(value)
@@ -101,6 +114,12 @@ func runServeCmd(w io.Writer, args []string) error {
 	if *electionTick <= 0 || *heartbeatTick <= 0 {
 		return fmt.Errorf("heartbeat and election ticks must be > 0")
 	}
+	if *mvccGCPlanInterval < 0 || *mvccGCMaintenanceInterval < 0 || *mvccGCTimeout < 0 {
+		return fmt.Errorf("mvcc-gc intervals and timeout must be non-negative")
+	}
+	if *mvccGCBatchEntries < 0 || *mvccGCResolveBatchLocks < 0 {
+		return fmt.Errorf("mvcc-gc batch limits must be non-negative")
+	}
 	explicitStoreAddrs := make(map[uint64]string, len(storeAddrFlags))
 	for _, mapping := range storeAddrFlags {
 		parts := strings.SplitN(mapping, "=", 2)
@@ -127,6 +146,35 @@ func runServeCmd(w io.Writer, args []string) error {
 		return err
 	}
 
+	// Cluster mode only: route scheduler heartbeats and operations through the Coordinator.
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), 5*time.Second)
+	coordCli, err := coordclient.NewGRPCClient(dialCtx, strings.TrimSpace(*coordAddr))
+	cancelDial()
+	if err != nil {
+		return fmt.Errorf("dial coordinator %q: %w", *coordAddr, err)
+	}
+	defer func() { _ = coordCli.Close() }()
+
+	var tsoSource *serveTSOSource
+	var retentionSource *serveRootRetentionSource
+	mvccGCEnabled := *mvccGCPlanInterval > 0 || *mvccGCMaintenanceInterval > 0
+	if mvccGCEnabled {
+		if *mvccGCSafePointLag == 0 {
+			return fmt.Errorf("--mvcc-gc-safe-point-lag is required when MVCC GC is enabled")
+		}
+		if *mvccGCTSOCacheTTL < 0 {
+			return fmt.Errorf("--mvcc-gc-tso-cache-ttl must be non-negative")
+		}
+		tsoSource = newServeTSOSource(coordCli, *coordTimeout, *mvccGCSafePointLag, *mvccGCTSOCacheTTL)
+		rootCtx, cancelRoot := context.WithTimeout(context.Background(), 5*time.Second)
+		retentionSource, err = newServeRootRetentionSource(rootCtx, cfg, scopeNorm, *mvccGCMetaRootAddr)
+		cancelRoot()
+		if err != nil {
+			return fmt.Errorf("open MVCC GC snapshot-retention source: %w", err)
+		}
+		defer func() { _ = retentionSource.Close() }()
+	}
+
 	localMeta, err := localmeta.OpenLocalStore(*workDir, nil)
 	if err != nil {
 		return fmt.Errorf("open raftstore local metadata: %w", err)
@@ -139,6 +187,11 @@ func runServeCmd(w io.Writer, args []string) error {
 	opt.WorkDir = *workDir
 	opt.MemTableEngine = NoKV.MemTableEngineART
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
+	if *mvccGCPlanInterval > 0 {
+		opt.MVCCGCPlanInterval = *mvccGCPlanInterval
+		opt.MVCCGCSafePointFn = tsoSource.SafePoint
+		opt.MVCCGCSnapshotRetentionFn = retentionSource.Retention
+	}
 	opt.AllowedModes = []raftmode.Mode{
 		raftmode.ModeStandalone,
 		raftmode.ModeSeeded,
@@ -152,13 +205,6 @@ func runServeCmd(w io.Writer, args []string) error {
 		_ = db.Close()
 	}()
 
-	// Cluster mode only: route scheduler heartbeats and operations through the Coordinator.
-	dialCtx, cancelDial := context.WithTimeout(context.Background(), 5*time.Second)
-	coordCli, err := coordclient.NewGRPCClient(dialCtx, strings.TrimSpace(*coordAddr))
-	cancelDial()
-	if err != nil {
-		return fmt.Errorf("dial coordinator %q: %w", *coordAddr, err)
-	}
 	coordScheduler := coordadapter.NewSchedulerClient(coordadapter.SchedulerClientConfig{
 		Coordinator: coordCli,
 		Timeout:     *coordTimeout,
@@ -186,11 +232,47 @@ func runServeCmd(w io.Writer, args []string) error {
 			MaxInflightMsgs: *maxInflight,
 			PreVote:         true,
 		},
+		MVCCMaintenance: serverpkg.MVCCMaintenanceConfig{
+			Interval: *mvccGCMaintenanceInterval,
+			Timeout:  *mvccGCTimeout,
+			SafePoint: func() uint64 {
+				if tsoSource == nil {
+					return 0
+				}
+				return tsoSource.SafePoint()
+			},
+			CurrentTs: func() uint64 {
+				if tsoSource == nil {
+					return 0
+				}
+				return tsoSource.Current()
+			},
+			Retention: func() rootstate.SnapshotRetentionIndex {
+				if retentionSource == nil {
+					return rootstate.SnapshotRetentionIndex{}
+				}
+				return retentionSource.Retention()
+			},
+			Mount: fsmeta.StringMountResolver,
+			Apply: storemvcc.ApplyOptions{
+				BatchEntries: *mvccGCBatchEntries,
+				MaxKeys:      *mvccGCMaxKeys,
+			},
+			ResolveLocks: storemvcc.ResolveLocksOptions{
+				BatchLocks: *mvccGCResolveBatchLocks,
+				MaxLocks:   *mvccGCResolveMaxLocks,
+			},
+			RunOrphanDefaults: *mvccGCMaintenanceInterval > 0,
+			OrphanDefaults: storemvcc.OrphanDefaultOptions{
+				BatchEntries: *mvccGCBatchEntries,
+			},
+		},
 		TransportAddr: *listenAddr,
 	})
 	if err != nil {
 		return err
 	}
+	db.SetMVCCMaintenanceSnapshotSource(server.MVCCMaintenanceSnapshot)
 	registerRuntimeStore(server.Store())
 	defer unregisterRuntimeStore(server.Store())
 	defer func() {

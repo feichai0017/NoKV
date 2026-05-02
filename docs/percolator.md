@@ -72,7 +72,7 @@ NoKV uses three MVCC column families:
 
 ### 2.1 Lock Record
 
-`percolator.Lock` (encoded by `EncodeLock`):
+`percolator/mvcc.Lock` (encoded by `mvcc.EncodeLock`):
 
 - `Primary`
 - `Ts` (start timestamp)
@@ -82,7 +82,7 @@ NoKV uses three MVCC column families:
 
 ### 2.2 Write Record
 
-`percolator.Write` (encoded by `EncodeWrite`):
+`percolator/mvcc.Write` (encoded by `mvcc.EncodeWrite`):
 
 - `Kind`
 - `StartTs`

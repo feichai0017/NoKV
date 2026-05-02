@@ -561,6 +561,7 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 	require.Equal(t, map[string]any{
 		"active":             true,
 		"min_read_version":   uint64(33),
+		"mount_floors":       map[string]uint64{"vol": 33},
 		"enforcement_target": "mvcc_gc",
 	}, root["snapshot_retention"])
 	require.Equal(t, true, lease["enabled"])

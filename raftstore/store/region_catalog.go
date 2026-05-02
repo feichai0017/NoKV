@@ -113,6 +113,14 @@ func (s *Store) RegionMetaByID(regionID uint64) (localmeta.RegionMeta, bool) {
 	return s.regionMgr().meta(regionID)
 }
 
+// RegionMetaByKey returns the stored region metadata that owns key.
+func (s *Store) RegionMetaByKey(key []byte) (localmeta.RegionMeta, bool) {
+	if s == nil || len(key) == 0 || s.regionMgr() == nil {
+		return localmeta.RegionMeta{}, false
+	}
+	return s.regionMgr().metaByKey(key)
+}
+
 // RegionSnapshot returns a snapshot containing all region metadata currently
 // known to the store. The resulting slice is safe for callers to modify.
 func (s *Store) RegionSnapshot() RegionSnapshot {

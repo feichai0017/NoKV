@@ -8,6 +8,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/index"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	txnstore "github.com/feichai0017/NoKV/percolator/storage"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
@@ -28,7 +29,7 @@ func (fakeBuilderRaftLog) Open(groupID uint64, meta *localmeta.Store) (raftlog.P
 	return nil, nil
 }
 
-var _ NoKV.MVCCStore = fakeBuilderMVCCStore{}
+var _ txnstore.Store = fakeBuilderMVCCStore{}
 var _ NoKV.RaftLog = fakeBuilderRaftLog{}
 
 func TestDefaultRaftConfigAppliesDefaults(t *testing.T) {

@@ -655,12 +655,43 @@ func TestRenderStatsFull(t *testing.T) {
 			Tombstone: 1,
 			Other:     1,
 		},
+		MVCCGC: stats.MVCCGCStatsSnapshot{
+			Enabled:               true,
+			Runs:                  2,
+			LastDurationMs:        3,
+			ActiveLocks:           1,
+			OldestStartTs:         10,
+			MaxStartTs:            20,
+			ScannedKeys:           4,
+			DroppableKeys:         1,
+			WriteVersions:         6,
+			DroppableWrites:       2,
+			SafePointClampedKeys:  1,
+			MaxVersionsPerKey:     3,
+			MinEffectiveSafePoint: 10,
+			MaxEffectiveSafePoint: 50,
+			MaintenanceEnabled:    true,
+			MaintenanceRuns:       4,
+			ResolvedLocks:         2,
+			CommittedLocks:        1,
+			RolledBackLocks:       1,
+			AppliedWriteDeletes:   5,
+			AppliedDefaultDeletes: 6,
+			OrphanDefaults:        7,
+			AppliedOrphanDefaults: 7,
+		},
 		Hot: stats.HotStatsSnapshot{
 			WriteKeys: []stats.HotKeyStat{{Key: "k", Count: 1}},
 		},
 	}
 	require.NoError(t, renderStats(&buf, snap, false))
 	out := buf.String()
+	require.Contains(t, out, "MVCCGC.Plan")
+	require.Contains(t, out, "MVCCGC.Candidates")
+	require.Contains(t, out, "MVCCGC.Maintenance")
+	require.Contains(t, out, "MVCCGC.ResolveLocks")
+	require.Contains(t, out, "MVCCGC.Apply")
+	require.Contains(t, out, "MVCCGC.OrphanDefaults")
 	require.Contains(t, out, "LSM.Levels:")
 	require.Contains(t, out, "WriteHotKeys:")
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/metrics"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	transportpkg "github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/thermos"
 	"github.com/feichai0017/NoKV/utils"
@@ -55,6 +56,8 @@ type Host interface {
 	WALTypedRecordWarnSegments() int64
 	ThermosTopK() int
 	RaftPointerSnapshot() func() map[uint64]localmeta.RaftLogPointer
+	MVCCGCPlanSnapshot() storemvcc.GCPlanSnapshot
+	MVCCMaintenanceSnapshot() storemvcc.MaintenanceSnapshot
 }
 
 // Stats owns periodic runtime metric collection and snapshot publication.
@@ -128,6 +131,7 @@ type StatsSnapshot struct {
 	Raft       RaftStatsSnapshot                 `json:"raft"`
 	Write      WriteStatsSnapshot                `json:"write"`
 	Region     RegionStatsSnapshot               `json:"region"`
+	MVCCGC     MVCCGCStatsSnapshot               `json:"mvcc_gc"`
 	Hot        HotStatsSnapshot                  `json:"hot"`
 	Cache      CacheStatsSnapshot                `json:"cache"`
 	LSM        LSMStatsSnapshot                  `json:"lsm"`
@@ -225,6 +229,52 @@ type RegionStatsSnapshot struct {
 	Removing  int64 `json:"removing"`
 	Tombstone int64 `json:"tombstone"`
 	Other     int64 `json:"other"`
+}
+
+// MVCCGCStatsSnapshot reports read-only MVCC GC planning and replicated
+// maintenance state.
+type MVCCGCStatsSnapshot struct {
+	Enabled               bool    `json:"enabled"`
+	Runs                  uint64  `json:"runs"`
+	SkippedRuns           uint64  `json:"skipped_runs,omitempty"`
+	LastUnix              int64   `json:"last_unix"`
+	LastDurationMs        float64 `json:"last_duration_ms"`
+	LastError             string  `json:"last_error,omitempty"`
+	ActiveLocks           uint64  `json:"active_locks"`
+	OldestStartTs         uint64  `json:"oldest_start_ts"`
+	MaxStartTs            uint64  `json:"max_start_ts"`
+	ScannedKeys           uint64  `json:"scanned_keys"`
+	DroppableKeys         uint64  `json:"droppable_keys"`
+	WriteVersions         uint64  `json:"write_versions"`
+	RetainedWrites        uint64  `json:"retained_writes"`
+	DroppableWrites       uint64  `json:"droppable_writes"`
+	AnchorWrites          uint64  `json:"anchor_writes"`
+	RetainedDefaultRefs   uint64  `json:"retained_default_refs"`
+	DeletedWriteMarkers   uint64  `json:"deleted_write_markers"`
+	SafePointClampedKeys  uint64  `json:"safe_point_clamped_keys"`
+	MaxVersionsPerKey     uint64  `json:"max_versions_per_key"`
+	MinEffectiveSafePoint uint64  `json:"min_effective_safe_point"`
+	MaxEffectiveSafePoint uint64  `json:"max_effective_safe_point"`
+
+	MaintenanceEnabled          bool    `json:"maintenance_enabled"`
+	MaintenanceRuns             uint64  `json:"maintenance_runs"`
+	MaintenanceLastUnix         int64   `json:"maintenance_last_unix"`
+	MaintenanceLastDurationMs   float64 `json:"maintenance_last_duration_ms"`
+	MaintenanceLastError        string  `json:"maintenance_last_error,omitempty"`
+	MaintenanceResolveError     string  `json:"maintenance_resolve_error,omitempty"`
+	MaintenanceApplyError       string  `json:"maintenance_apply_error,omitempty"`
+	MaintenanceOrphanError      string  `json:"maintenance_orphan_error,omitempty"`
+	MaintenanceSafePointSkipped bool    `json:"maintenance_safe_point_skipped,omitempty"`
+	ScannedLocks                uint64  `json:"scanned_locks"`
+	ExpiredLocks                uint64  `json:"expired_locks"`
+	ResolvedLocks               uint64  `json:"resolved_locks"`
+	CommittedLocks              uint64  `json:"committed_locks"`
+	RolledBackLocks             uint64  `json:"rolled_back_locks"`
+	DeletedLockMarkers          uint64  `json:"deleted_lock_markers"`
+	AppliedWriteDeletes         uint64  `json:"applied_write_deletes"`
+	AppliedDefaultDeletes       uint64  `json:"applied_default_deletes"`
+	OrphanDefaults              uint64  `json:"orphan_defaults"`
+	AppliedOrphanDefaults       uint64  `json:"applied_orphan_defaults"`
 }
 
 // HotStatsSnapshot contains write-hot keys and optional ring internals.
@@ -503,6 +553,9 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Region.Other = int64(rms.Other)
 	}
 
+	snap.MVCCGC = mvccGCStatsFromPlan(s.host.MVCCGCPlanSnapshot())
+	snap.MVCCGC.addMaintenance(s.host.MVCCMaintenanceSnapshot())
+
 	var (
 		wstats         *wal.Metrics
 		segmentMetrics map[uint32]wal.RecordMetrics
@@ -682,4 +735,55 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	snap.Cache.IteratorReused = s.host.IteratorReused()
 	snap.Transport = transportpkg.GRPCMetricsSnapshot()
 	return snap
+}
+
+func mvccGCStatsFromPlan(plan storemvcc.GCPlanSnapshot) MVCCGCStatsSnapshot {
+	return MVCCGCStatsSnapshot{
+		Enabled:               plan.Enabled,
+		Runs:                  plan.Runs,
+		SkippedRuns:           plan.SkippedRuns,
+		LastUnix:              plan.LastUnix,
+		LastDurationMs:        plan.LastDurationMs,
+		LastError:             plan.LastError,
+		ActiveLocks:           plan.LastTxnFloor.ActiveLocks,
+		OldestStartTs:         plan.LastTxnFloor.OldestStartTs,
+		MaxStartTs:            plan.LastTxnFloor.MaxStartTs,
+		ScannedKeys:           plan.LastPlan.ScannedKeys,
+		DroppableKeys:         plan.LastPlan.DroppableKeys,
+		WriteVersions:         plan.LastPlan.WriteVersions,
+		RetainedWrites:        plan.LastPlan.RetainedWrites,
+		DroppableWrites:       plan.LastPlan.DroppableWrites,
+		AnchorWrites:          plan.LastPlan.AnchorWrites,
+		RetainedDefaultRefs:   plan.LastPlan.RetainedDefaultRefs,
+		DeletedWriteMarkers:   plan.LastPlan.DeletedWriteMarkers,
+		SafePointClampedKeys:  plan.LastPlan.SafePointClampedKeys,
+		MaxVersionsPerKey:     plan.LastPlan.MaxVersionsPerKey,
+		MinEffectiveSafePoint: plan.LastPlan.MinEffectiveSafePoint,
+		MaxEffectiveSafePoint: plan.LastPlan.MaxEffectiveSafePoint,
+	}
+}
+
+func (s *MVCCGCStatsSnapshot) addMaintenance(maintenance storemvcc.MaintenanceSnapshot) {
+	if s == nil {
+		return
+	}
+	s.MaintenanceEnabled = maintenance.Enabled
+	s.MaintenanceRuns = maintenance.Runs
+	s.MaintenanceLastUnix = maintenance.LastUnix
+	s.MaintenanceLastDurationMs = maintenance.LastDurationMs
+	s.MaintenanceLastError = maintenance.LastError
+	s.MaintenanceResolveError = maintenance.LastResolveError
+	s.MaintenanceApplyError = maintenance.LastApplyError
+	s.MaintenanceOrphanError = maintenance.LastOrphanError
+	s.MaintenanceSafePointSkipped = maintenance.LastSafePointSkipped
+	s.ScannedLocks = maintenance.LastResolveLocks.ScannedLocks
+	s.ExpiredLocks = maintenance.LastResolveLocks.ExpiredLocks
+	s.ResolvedLocks = maintenance.LastResolveLocks.ResolvedLocks
+	s.CommittedLocks = maintenance.LastResolveLocks.CommittedLocks
+	s.RolledBackLocks = maintenance.LastResolveLocks.RolledBackLocks
+	s.DeletedLockMarkers = maintenance.LastResolveLocks.DeletedLockMarkers
+	s.AppliedWriteDeletes = maintenance.LastApply.AppliedWriteDeletes
+	s.AppliedDefaultDeletes = maintenance.LastApply.AppliedDefaultDeletes
+	s.OrphanDefaults = maintenance.LastOrphanDefaults.OrphanDefaults
+	s.AppliedOrphanDefaults = maintenance.LastOrphanDefaults.AppliedDefaultDeletes
 }

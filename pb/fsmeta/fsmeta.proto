@@ -22,6 +22,12 @@ message InodeRecord {
   bytes opaque_attrs = 8;
 }
 
+message SessionRecord {
+  string session = 1;
+  uint64 inode = 2;
+  int64 expires_unix_ns = 3;
+}
+
 message DentryRecord {
   uint64 parent = 1;
   string name = 2;
@@ -42,6 +48,25 @@ message CreateRequest {
 }
 
 message CreateResponse {}
+
+message UpdateInodeRequest {
+  string mount = 1;
+  uint64 parent = 2;
+  uint64 inode = 3;
+  string name = 4;
+  bool set_size = 5;
+  uint64 size = 6;
+  bool set_mode = 7;
+  uint32 mode = 8;
+  bool set_updated_unix_ns = 9;
+  int64 updated_unix_ns = 10;
+  bool set_opaque_attrs = 11;
+  bytes opaque_attrs = 12;
+}
+
+message UpdateInodeResponse {
+  InodeRecord inode = 1;
+}
 
 message LookupRequest {
   string mount = 1;
@@ -190,8 +215,47 @@ message UnlinkRequest {
 
 message UnlinkResponse {}
 
+message OpenWriteSessionRequest {
+  string mount = 1;
+  uint64 inode = 2;
+  string session = 3;
+  int64 expires_unix_ns = 4;
+}
+
+message OpenWriteSessionResponse {
+  SessionRecord session = 1;
+}
+
+message HeartbeatWriteSessionRequest {
+  string mount = 1;
+  uint64 inode = 2;
+  string session = 3;
+  int64 expires_unix_ns = 4;
+}
+
+message HeartbeatWriteSessionResponse {
+  SessionRecord session = 1;
+}
+
+message CloseWriteSessionRequest {
+  string mount = 1;
+  string session = 2;
+}
+
+message CloseWriteSessionResponse {}
+
+message ExpireWriteSessionsRequest {
+  string mount = 1;
+  uint32 limit = 2;
+}
+
+message ExpireWriteSessionsResponse {
+  uint64 expired = 1;
+}
+
 service FSMetadata {
   rpc Create(CreateRequest) returns (CreateResponse);
+  rpc UpdateInode(UpdateInodeRequest) returns (UpdateInodeResponse);
   rpc Lookup(LookupRequest) returns (LookupResponse);
   rpc ReadDir(ReadDirRequest) returns (ReadDirResponse);
   rpc ReadDirPlus(ReadDirRequest) returns (ReadDirPlusResponse);
@@ -202,4 +266,8 @@ service FSMetadata {
   rpc RenameSubtree(RenameSubtreeRequest) returns (RenameSubtreeResponse);
   rpc Link(LinkRequest) returns (LinkResponse);
   rpc Unlink(UnlinkRequest) returns (UnlinkResponse);
+  rpc OpenWriteSession(OpenWriteSessionRequest) returns (OpenWriteSessionResponse);
+  rpc HeartbeatWriteSession(HeartbeatWriteSessionRequest) returns (HeartbeatWriteSessionResponse);
+  rpc CloseWriteSession(CloseWriteSessionRequest) returns (CloseWriteSessionResponse);
+  rpc ExpireWriteSessions(ExpireWriteSessionsRequest) returns (ExpireWriteSessionsResponse);
 }

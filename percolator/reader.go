@@ -6,9 +6,10 @@ import (
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/percolator/mvcc"
+	txnstore "github.com/feichai0017/NoKV/percolator/storage"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -16,16 +17,16 @@ const lockColumnTs = kv.MaxVersion
 
 // Reader provides helper methods to inspect MVCC state within a DB instance.
 type Reader struct {
-	db NoKV.MVCCStore
+	db txnstore.Store
 }
 
 // NewReader constructs a Reader.
-func NewReader(db NoKV.MVCCStore) *Reader {
+func NewReader(db txnstore.Store) *Reader {
 	return &Reader{db: db}
 }
 
 // GetLock returns the lock stored for the provided key, if any.
-func (r *Reader) GetLock(key []byte) (*Lock, error) {
+func (r *Reader) GetLock(key []byte) (*mvcc.Lock, error) {
 	entry, err := r.db.GetInternalEntry(kv.CFLock, key, lockColumnTs)
 	if err != nil {
 		if err == utils.ErrKeyNotFound {
@@ -37,7 +38,7 @@ func (r *Reader) GetLock(key []byte) (*Lock, error) {
 	if entry.Meta&kv.BitDelete > 0 || entry.Value == nil {
 		return nil, nil
 	}
-	lock, err := DecodeLock(entry.Value)
+	lock, err := mvcc.DecodeLock(entry.Value)
 	if err != nil {
 		return nil, err
 	}
@@ -45,10 +46,10 @@ func (r *Reader) GetLock(key []byte) (*Lock, error) {
 }
 
 // MostRecentWrite returns the latest committed write for the specified key.
-func (r *Reader) MostRecentWrite(key []byte) (*Write, uint64, error) {
-	var result *Write
+func (r *Reader) MostRecentWrite(key []byte) (*mvcc.Write, uint64, error) {
+	var result *mvcc.Write
 	var commitTs uint64
-	if err := r.scanWrites(key, func(w Write, ts uint64) bool {
+	if err := r.scanWrites(key, func(w mvcc.Write, ts uint64) bool {
 		if result == nil || ts > commitTs {
 			copy := w
 			result = &copy
@@ -65,10 +66,10 @@ func (r *Reader) MostRecentWrite(key []byte) (*Write, uint64, error) {
 }
 
 // GetWriteByStartTs returns the commit record for the provided key/startTs pair.
-func (r *Reader) GetWriteByStartTs(key []byte, startTs uint64) (*Write, uint64, error) {
-	var result *Write
+func (r *Reader) GetWriteByStartTs(key []byte, startTs uint64) (*mvcc.Write, uint64, error) {
+	var result *mvcc.Write
 	var commitTs uint64
-	if err := r.scanWrites(key, func(w Write, ts uint64) bool {
+	if err := r.scanWrites(key, func(w mvcc.Write, ts uint64) bool {
 		if w.StartTs == startTs {
 			copy := w
 			result = &copy
@@ -118,10 +119,10 @@ func (r *Reader) GetValue(key []byte, readTs uint64) ([]byte, uint64, error) {
 	return kv.SafeCopy(nil, entry.Value), entry.ExpiresAt, nil
 }
 
-func (r *Reader) getWriteForRead(key []byte, readTs uint64) (*Write, uint64, error) {
-	var result *Write
+func (r *Reader) getWriteForRead(key []byte, readTs uint64) (*mvcc.Write, uint64, error) {
+	var result *mvcc.Write
 	var commitTs uint64
-	if err := r.scanWrites(key, func(w Write, ts uint64) bool {
+	if err := r.scanWrites(key, func(w mvcc.Write, ts uint64) bool {
 		if ts <= readTs && (result == nil || ts > commitTs) {
 			copy := w
 			result = &copy
@@ -137,7 +138,7 @@ func (r *Reader) getWriteForRead(key []byte, readTs uint64) (*Write, uint64, err
 	return result, commitTs, nil
 }
 
-func (r *Reader) scanWrites(key []byte, fn func(Write, uint64) bool) error {
+func (r *Reader) scanWrites(key []byte, fn func(mvcc.Write, uint64) bool) error {
 	iter := r.db.NewInternalIterator(&index.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
 	if iter == nil {
@@ -170,7 +171,7 @@ func (r *Reader) scanWrites(key []byte, fn func(Write, uint64) bool) error {
 			iter.Next()
 			continue
 		}
-		write, err := DecodeWrite(entry.Value)
+		write, err := mvcc.DecodeWrite(entry.Value)
 		if err != nil {
 			return err
 		}

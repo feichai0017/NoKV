@@ -134,6 +134,12 @@ func (s Snapshot) SnapshotRetentionFloor() (uint64, bool) {
 	return rootstate.SnapshotRetentionFloor(s.SnapshotEpochs)
 }
 
+// SnapshotRetentionIndex returns active fsmeta snapshot read-version floors
+// currently materialized in this root view.
+func (s Snapshot) SnapshotRetentionIndex() rootstate.SnapshotRetentionIndex {
+	return rootstate.SnapshotRetentionIndexFor(s.SnapshotEpochs)
+}
+
 // BootstrapInfo captures rooted Coordinator bootstrap results.
 type BootstrapInfo struct {
 	LoadedRegions int

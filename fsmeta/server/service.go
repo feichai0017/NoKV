@@ -17,6 +17,7 @@ import (
 // fsmeta/exec.Executor satisfies this interface.
 type Executor interface {
 	Create(ctx context.Context, req fsmeta.CreateRequest, inode fsmeta.InodeRecord) error
+	UpdateInode(ctx context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error)
 	Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error)
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
 	ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
@@ -25,6 +26,10 @@ type Executor interface {
 	RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error
 	Link(ctx context.Context, req fsmeta.LinkRequest) error
 	Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
+	OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSessionRequest) (fsmeta.SessionRecord, error)
+	HeartbeatWriteSession(ctx context.Context, req fsmeta.HeartbeatWriteSessionRequest) (fsmeta.SessionRecord, error)
+	CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteSessionRequest) error
+	ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWriteSessionsRequest) (fsmeta.ExpireWriteSessionsResult, error)
 }
 
 // Service exposes NoKV-native filesystem metadata operations over gRPC.
@@ -83,6 +88,20 @@ func (s *Service) Create(ctx context.Context, req *fsmetapb.CreateRequest) (*fsm
 		return nil, rpcError(err)
 	}
 	return &fsmetapb.CreateResponse{}, nil
+}
+
+func (s *Service) UpdateInode(ctx context.Context, req *fsmetapb.UpdateInodeRequest) (*fsmetapb.UpdateInodeResponse, error) {
+	if err := s.requireExecutor(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "fsmeta update inode request is required")
+	}
+	inode, err := s.executor.UpdateInode(ctx, updateInodeRequestFromProto(req))
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	return &fsmetapb.UpdateInodeResponse{Inode: inodeToProto(inode)}, nil
 }
 
 func (s *Service) Lookup(ctx context.Context, req *fsmetapb.LookupRequest) (*fsmetapb.LookupResponse, error) {
@@ -283,6 +302,61 @@ func (s *Service) Unlink(ctx context.Context, req *fsmetapb.UnlinkRequest) (*fsm
 		return nil, rpcError(err)
 	}
 	return &fsmetapb.UnlinkResponse{}, nil
+}
+
+func (s *Service) OpenWriteSession(ctx context.Context, req *fsmetapb.OpenWriteSessionRequest) (*fsmetapb.OpenWriteSessionResponse, error) {
+	if err := s.requireExecutor(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "fsmeta open write session request is required")
+	}
+	record, err := s.executor.OpenWriteSession(ctx, openWriteSessionRequestFromProto(req))
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	return &fsmetapb.OpenWriteSessionResponse{Session: sessionToProto(record)}, nil
+}
+
+func (s *Service) HeartbeatWriteSession(ctx context.Context, req *fsmetapb.HeartbeatWriteSessionRequest) (*fsmetapb.HeartbeatWriteSessionResponse, error) {
+	if err := s.requireExecutor(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "fsmeta heartbeat write session request is required")
+	}
+	record, err := s.executor.HeartbeatWriteSession(ctx, heartbeatWriteSessionRequestFromProto(req))
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	return &fsmetapb.HeartbeatWriteSessionResponse{Session: sessionToProto(record)}, nil
+}
+
+func (s *Service) CloseWriteSession(ctx context.Context, req *fsmetapb.CloseWriteSessionRequest) (*fsmetapb.CloseWriteSessionResponse, error) {
+	if err := s.requireExecutor(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "fsmeta close write session request is required")
+	}
+	if err := s.executor.CloseWriteSession(ctx, closeWriteSessionRequestFromProto(req)); err != nil {
+		return nil, rpcError(err)
+	}
+	return &fsmetapb.CloseWriteSessionResponse{}, nil
+}
+
+func (s *Service) ExpireWriteSessions(ctx context.Context, req *fsmetapb.ExpireWriteSessionsRequest) (*fsmetapb.ExpireWriteSessionsResponse, error) {
+	if err := s.requireExecutor(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "fsmeta expire write sessions request is required")
+	}
+	result, err := s.executor.ExpireWriteSessions(ctx, expireWriteSessionsRequestFromProto(req))
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	return &fsmetapb.ExpireWriteSessionsResponse{Expired: result.Expired}, nil
 }
 
 func (s *Service) requireExecutor() error {

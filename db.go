@@ -19,9 +19,11 @@ import (
 	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
+	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/metrics"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
+	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	dbruntime "github.com/feichai0017/NoKV/runtime"
@@ -57,20 +59,12 @@ type (
 		Value []byte
 	}
 
-	// MVCCStore defines MVCC/internal operations consumed by percolator and raftstore.
-	MVCCStore interface {
-		ApplyInternalEntries(entries []*kv.Entry) error
-		// GetInternalEntry returns a borrowed internal entry without cloning/copying.
-		// entry.Key remains in internal encoding (cf+user_key+ts). Callers must
-		// DecrRef exactly once.
-		GetInternalEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error)
-		NewInternalIterator(opt *index.Options) index.Iterator
-	}
-
 	// RaftLog opens raft peer storage without exposing the underlying raft WAL shards.
 	RaftLog interface {
 		Open(groupID uint64, meta *localmeta.Store) (raftlog.PeerStorage, error)
 	}
+
+	mvccMaintenanceSnapshotSource func() storemvcc.MaintenanceSnapshot
 
 	// DB is the global handle for the engine and owns shared resources.
 	DB struct {
@@ -102,6 +96,9 @@ type (
 		// processors, and the optional sync worker. See runtime/commit.
 		pipeline        *commit.Pipeline
 		iterPool        *iterpkg.IteratorPool
+		raftMode        raftmode.Mode
+		mvccGCPlan      *storemvcc.GCPlanner
+		mvccMaintenance atomic.Value
 		hotWriteLimited atomic.Uint64
 		background      dbruntime.BackgroundServices
 		runtimeModules  dbruntime.Registry
@@ -201,6 +198,7 @@ func (db *DB) checkWorkDirMode() error {
 		return fmt.Errorf("open db: read workdir mode: %w", err)
 	}
 	if raftmode.Allowed(db.opt.AllowedModes, mode) {
+		db.raftMode = mode
 		return nil
 	}
 	if len(db.opt.AllowedModes) == 0 {
@@ -361,6 +359,14 @@ func (db *DB) RaftLog() RaftLog {
 	return dbRaftLog{db: db}
 }
 
+// RaftMode returns the persisted lifecycle mode observed when the DB was opened.
+func (db *DB) RaftMode() raftmode.Mode {
+	if db == nil {
+		return ""
+	}
+	return db.raftMode
+}
+
 // Open constructs the database and returns initialization errors instead of panicking.
 func Open(opt *Options) (_ *DB, err error) {
 	if opt == nil {
@@ -398,10 +404,22 @@ func Open(opt *Options) (_ *DB, err error) {
 			WarnSegments: db.opt.WALTypedRecordWarnSegments,
 		})
 	}
+	var periodicTasks []dbruntime.PeriodicTaskConfig
+	if task, state, ok := storemvcc.NewGCPlanTask(storemvcc.GCPlanConfig{
+		MVCCStore: db,
+		Interval:  db.opt.MVCCGCPlanInterval,
+		SafePoint: db.opt.MVCCGCSafePointFn,
+		Retention: db.opt.MVCCGCSnapshotRetentionFn,
+		Mount:     fsmeta.StringMountResolver,
+	}); ok {
+		db.mvccGCPlan = state
+		periodicTasks = append(periodicTasks, task)
+	}
 	db.background.Start(dbruntime.BackgroundConfig{
 		StartCompacter:     db.lsm.StartCompacter,
 		EnableWALWatchdog:  db.opt.EnableWALWatchdog,
 		WALWatchdogConfigs: watchdogConfigs,
+		PeriodicTasks:      periodicTasks,
 	})
 	return db, nil
 }
@@ -855,16 +873,48 @@ func (db *DB) Info() *stats.Stats {
 func (db *DB) LSM() stats.LSMSource                 { return db.lsm }
 func (db *DB) LSMWALs() []*wal.Manager              { return db.lsmWALs }
 func (db *DB) BackgroundWatchdogs() []*wal.Watchdog { return db.background.WALWatchdogs() }
-func (db *DB) HotWrite() *thermos.RotatingThermos   { return db.hotWrite }
-func (db *DB) IteratorReused() uint64               { return db.iterPool.Reused() }
-func (db *DB) WriteMetrics() *metrics.WriteMetrics  { return db.writeMetrics }
-func (db *DB) BlockWritesActive() bool              { return db.blockWrites.Load() == 1 }
-func (db *DB) SlowWritesActive() bool               { return db.slowWrites.Load() == 1 }
-func (db *DB) HotWriteLimited() uint64              { return db.hotWriteLimited.Load() }
-func (db *DB) RaftLagWarnSegments() int64           { return db.opt.RaftLagWarnSegments }
-func (db *DB) WALTypedRecordWarnRatio() float64     { return db.opt.WALTypedRecordWarnRatio }
-func (db *DB) WALTypedRecordWarnSegments() int64    { return db.opt.WALTypedRecordWarnSegments }
-func (db *DB) ThermosTopK() int                     { return db.opt.ThermosTopK }
+func (db *DB) MVCCGCPlanSnapshot() storemvcc.GCPlanSnapshot {
+	if db == nil || db.mvccGCPlan == nil {
+		return storemvcc.GCPlanSnapshot{}
+	}
+	return db.mvccGCPlan.Snapshot(db.background.PeriodicTaskSnapshot(storemvcc.GCPlanTaskName))
+}
+
+// SetMVCCMaintenanceSnapshotSource attaches the raftstore-owned replicated
+// MVCC maintenance observer used by runtime stats. The source is read-only:
+// DB only calls it while building snapshots and never owns the worker lifecycle.
+func (db *DB) SetMVCCMaintenanceSnapshotSource(source func() storemvcc.MaintenanceSnapshot) {
+	if db == nil || source == nil {
+		return
+	}
+	db.mvccMaintenance.Store(mvccMaintenanceSnapshotSource(source))
+}
+
+func (db *DB) MVCCMaintenanceSnapshot() storemvcc.MaintenanceSnapshot {
+	if db == nil {
+		return storemvcc.MaintenanceSnapshot{}
+	}
+	v := db.mvccMaintenance.Load()
+	if v == nil {
+		return storemvcc.MaintenanceSnapshot{}
+	}
+	source, ok := v.(mvccMaintenanceSnapshotSource)
+	if !ok || source == nil {
+		return storemvcc.MaintenanceSnapshot{}
+	}
+	return source()
+}
+
+func (db *DB) HotWrite() *thermos.RotatingThermos  { return db.hotWrite }
+func (db *DB) IteratorReused() uint64              { return db.iterPool.Reused() }
+func (db *DB) WriteMetrics() *metrics.WriteMetrics { return db.writeMetrics }
+func (db *DB) BlockWritesActive() bool             { return db.blockWrites.Load() == 1 }
+func (db *DB) SlowWritesActive() bool              { return db.slowWrites.Load() == 1 }
+func (db *DB) HotWriteLimited() uint64             { return db.hotWriteLimited.Load() }
+func (db *DB) RaftLagWarnSegments() int64          { return db.opt.RaftLagWarnSegments }
+func (db *DB) WALTypedRecordWarnRatio() float64    { return db.opt.WALTypedRecordWarnRatio }
+func (db *DB) WALTypedRecordWarnSegments() int64   { return db.opt.WALTypedRecordWarnSegments }
+func (db *DB) ThermosTopK() int                    { return db.opt.ThermosTopK }
 
 func (db *DB) RaftPointerSnapshot() func() map[uint64]localmeta.RaftLogPointer {
 	if db == nil || db.opt == nil {

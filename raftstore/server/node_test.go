@@ -18,10 +18,12 @@ import (
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
+	txnmvcc "github.com/feichai0017/NoKV/percolator/mvcc"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
@@ -95,6 +97,71 @@ func TestNodePreservesConfiguredAdvertiseAddrs(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestNodeAutoStartsMVCCMaintenanceWorker(t *testing.T) {
+	db, localMeta := openTestDB(t)
+	key := []byte("auto-gc-key")
+	applyServerMVCCPutVersion(t, db, key, 150, 140, "new")
+	applyServerMVCCPutVersion(t, db, key, 90, 80, "anchor")
+	applyServerMVCCPutVersion(t, db, key, 40, 30, "old")
+
+	node, err := serverpkg.NewNode(serverpkg.Config{
+		Storage: serverpkg.Storage{
+			MVCC: db,
+			Raft: db.RaftLog(),
+		},
+		Store: storepkg.Config{
+			StoreID:   1,
+			LocalMeta: localMeta,
+		},
+		Raft: myraft.Config{
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		},
+		TransportAddr: "127.0.0.1:0",
+		MVCCMaintenance: serverpkg.MVCCMaintenanceConfig{
+			Interval: 10 * time.Millisecond,
+			SafePoint: func() uint64 {
+				return 100
+			},
+			Apply: storemvcc.ApplyOptions{BatchEntries: 8},
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = node.Close() })
+
+	region := localmeta.RegionMeta{
+		ID:       9,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 901}},
+	}
+	startRegionPeer(t, testNode{
+		storeID:   1,
+		peerID:    901,
+		region:    region,
+		db:        db,
+		localMeta: localMeta,
+		node:      node,
+	})
+
+	require.Eventually(t, func() bool {
+		snap := node.MVCCMaintenanceSnapshot()
+		return snap.Enabled && snap.Runs > 0
+	}, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		droppedWrite, err := db.GetInternalEntry(entrykv.CFWrite, key, 40)
+		if err != nil {
+			return false
+		}
+		defer droppedWrite.DecrRef()
+		return droppedWrite.Meta&entrykv.BitDelete != 0
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
 func TestNodeRequiresSnapshotBridge(t *testing.T) {
 	node, err := serverpkg.NewNode(serverpkg.Config{
 		Storage: serverpkg.Storage{
@@ -109,6 +176,16 @@ func TestNodeRequiresSnapshotBridge(t *testing.T) {
 	require.Nil(t, node)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "snapshot bridge")
+}
+
+func applyServerMVCCPutVersion(t *testing.T, db *NoKV.DB, key []byte, commitTs, startTs uint64, value string) {
+	t.Helper()
+	defaultEntry := entrykv.NewInternalEntry(entrykv.CFDefault, key, startTs, []byte(value), 0, 0)
+	defer defaultEntry.DecrRef()
+	write := txnmvcc.EncodeWrite(txnmvcc.Write{Kind: kvrpcpb.Mutation_Put, StartTs: startTs})
+	writeEntry := entrykv.NewInternalEntry(entrykv.CFWrite, key, commitTs, write, 0, 0)
+	defer writeEntry.DecrRef()
+	require.NoError(t, db.ApplyInternalEntries([]*entrykv.Entry{defaultEntry, writeEntry}))
 }
 
 type captureScheduler struct {

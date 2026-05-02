@@ -18,21 +18,42 @@ import (
 )
 
 type fakeExecutor struct {
-	createReq   fsmeta.CreateRequest
-	createInode fsmeta.InodeRecord
-	readDirReq  fsmeta.ReadDirRequest
-	snapshotReq fsmeta.SnapshotSubtreeRequest
-	quotaReq    fsmeta.QuotaUsageRequest
-	renameReq   fsmeta.RenameSubtreeRequest
-	linkReq     fsmeta.LinkRequest
-	unlinkReq   fsmeta.UnlinkRequest
-	err         error
+	createReq    fsmeta.CreateRequest
+	createInode  fsmeta.InodeRecord
+	updateReq    fsmeta.UpdateInodeRequest
+	readDirReq   fsmeta.ReadDirRequest
+	snapshotReq  fsmeta.SnapshotSubtreeRequest
+	quotaReq     fsmeta.QuotaUsageRequest
+	renameReq    fsmeta.RenameSubtreeRequest
+	linkReq      fsmeta.LinkRequest
+	unlinkReq    fsmeta.UnlinkRequest
+	openReq      fsmeta.OpenWriteSessionRequest
+	heartbeatReq fsmeta.HeartbeatWriteSessionRequest
+	closeReq     fsmeta.CloseWriteSessionRequest
+	expireReq    fsmeta.ExpireWriteSessionsRequest
+	err          error
 }
 
 func (e *fakeExecutor) Create(_ context.Context, req fsmeta.CreateRequest, inode fsmeta.InodeRecord) error {
 	e.createReq = req
 	e.createInode = inode
 	return e.err
+}
+
+func (e *fakeExecutor) UpdateInode(_ context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error) {
+	e.updateReq = req
+	if e.err != nil {
+		return fsmeta.InodeRecord{}, e.err
+	}
+	return fsmeta.InodeRecord{
+		Inode:         req.Inode,
+		Type:          fsmeta.InodeTypeFile,
+		Size:          req.Size,
+		Mode:          req.Mode,
+		LinkCount:     1,
+		UpdatedUnixNs: req.UpdatedUnixNs,
+		OpaqueAttrs:   append([]byte(nil), req.OpaqueAttrs...),
+	}, nil
 }
 
 func (e *fakeExecutor) Lookup(context.Context, fsmeta.LookupRequest) (fsmeta.DentryRecord, error) {
@@ -111,6 +132,35 @@ func (e *fakeExecutor) Link(_ context.Context, req fsmeta.LinkRequest) error {
 func (e *fakeExecutor) Unlink(_ context.Context, req fsmeta.UnlinkRequest) error {
 	e.unlinkReq = req
 	return e.err
+}
+
+func (e *fakeExecutor) OpenWriteSession(_ context.Context, req fsmeta.OpenWriteSessionRequest) (fsmeta.SessionRecord, error) {
+	e.openReq = req
+	if e.err != nil {
+		return fsmeta.SessionRecord{}, e.err
+	}
+	return fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: req.ExpiresUnixNs}, nil
+}
+
+func (e *fakeExecutor) HeartbeatWriteSession(_ context.Context, req fsmeta.HeartbeatWriteSessionRequest) (fsmeta.SessionRecord, error) {
+	e.heartbeatReq = req
+	if e.err != nil {
+		return fsmeta.SessionRecord{}, e.err
+	}
+	return fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: req.ExpiresUnixNs}, nil
+}
+
+func (e *fakeExecutor) CloseWriteSession(_ context.Context, req fsmeta.CloseWriteSessionRequest) error {
+	e.closeReq = req
+	return e.err
+}
+
+func (e *fakeExecutor) ExpireWriteSessions(_ context.Context, req fsmeta.ExpireWriteSessionsRequest) (fsmeta.ExpireWriteSessionsResult, error) {
+	e.expireReq = req
+	if e.err != nil {
+		return fsmeta.ExpireWriteSessionsResult{}, e.err
+	}
+	return fsmeta.ExpireWriteSessionsResult{Expired: 2}, nil
 }
 
 func TestGRPCServiceCreateAndReadDirPlus(t *testing.T) {
@@ -230,6 +280,66 @@ func TestGRPCServiceReadDirAndMutationRPCs(t *testing.T) {
 		Parent: 2,
 		Name:   "alias",
 	}, executor.unlinkReq)
+
+	updateResp, err := client.UpdateInode(context.Background(), &fsmetapb.UpdateInodeRequest{
+		Mount:            "vol",
+		Parent:           2,
+		Inode:            42,
+		Name:             "alias",
+		SetSize:          true,
+		Size:             8192,
+		SetMode:          true,
+		Mode:             0o600,
+		SetUpdatedUnixNs: true,
+		UpdatedUnixNs:    99,
+		SetOpaqueAttrs:   true,
+		OpaqueAttrs:      []byte("body=cas://2"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.UpdateInodeRequest{
+		Mount:            "vol",
+		Parent:           2,
+		Inode:            42,
+		Name:             "alias",
+		SetSize:          true,
+		Size:             8192,
+		SetMode:          true,
+		Mode:             0o600,
+		SetUpdatedUnixNs: true,
+		UpdatedUnixNs:    99,
+		SetOpaqueAttrs:   true,
+		OpaqueAttrs:      []byte("body=cas://2"),
+	}, executor.updateReq)
+	require.Equal(t, uint64(8192), updateResp.GetInode().GetSize())
+
+	openResp, err := client.OpenWriteSession(context.Background(), &fsmetapb.OpenWriteSessionRequest{
+		Mount:         "vol",
+		Inode:         42,
+		Session:       "writer-1",
+		ExpiresUnixNs: 1000,
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.OpenWriteSessionRequest{Mount: "vol", Inode: 42, Session: "writer-1", ExpiresUnixNs: 1000}, executor.openReq)
+	require.Equal(t, "writer-1", openResp.GetSession().GetSession())
+
+	heartbeatResp, err := client.HeartbeatWriteSession(context.Background(), &fsmetapb.HeartbeatWriteSessionRequest{
+		Mount:         "vol",
+		Inode:         42,
+		Session:       "writer-1",
+		ExpiresUnixNs: 2000,
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.HeartbeatWriteSessionRequest{Mount: "vol", Inode: 42, Session: "writer-1", ExpiresUnixNs: 2000}, executor.heartbeatReq)
+	require.Equal(t, int64(2000), heartbeatResp.GetSession().GetExpiresUnixNs())
+
+	_, err = client.CloseWriteSession(context.Background(), &fsmetapb.CloseWriteSessionRequest{Mount: "vol", Session: "writer-1"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.CloseWriteSessionRequest{Mount: "vol", Session: "writer-1"}, executor.closeReq)
+
+	expireResp, err := client.ExpireWriteSessions(context.Background(), &fsmetapb.ExpireWriteSessionsRequest{Mount: "vol", Limit: 64})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.ExpireWriteSessionsRequest{Mount: "vol", Limit: 64}, executor.expireReq)
+	require.Equal(t, uint64(2), expireResp.GetExpired())
 }
 
 func TestGRPCServiceErrorMapping(t *testing.T) {

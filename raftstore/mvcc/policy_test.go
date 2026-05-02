@@ -1,0 +1,128 @@
+package mvcc_test
+
+import (
+	"testing"
+
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	txnmvcc "github.com/feichai0017/NoKV/percolator/mvcc"
+	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
+	"github.com/stretchr/testify/require"
+)
+
+func testMountResolver(userKey []byte) (string, bool) {
+	switch string(userKey) {
+	case "vol/key":
+		return "vol", true
+	case "data/key":
+		return "data", true
+	case "other/key":
+		return "other", true
+	default:
+		return "", false
+	}
+}
+
+func TestMVCCGCSafePointFnPolicyUsesMountScopedSnapshotFloor(t *testing.T) {
+	volKey := []byte("vol/key")
+	dataKey := []byte("data/key")
+	otherKey := []byte("other/key")
+
+	policy := storemvcc.SafePointPolicy{
+		RequestedSafePoint: 1_000,
+		SnapshotRetention: rootstate.SnapshotRetentionIndex{
+			GlobalFloor: 50,
+			MountFloors: map[string]uint64{
+				"vol":  50,
+				"data": 200,
+			},
+		},
+		TxnFloor: 80,
+		Mount:    testMountResolver,
+	}
+
+	require.Equal(t, uint64(50), policy.EffectiveForKey(volKey))
+	require.Equal(t, uint64(80), policy.EffectiveForKey(dataKey))
+	require.Equal(t, uint64(80), policy.EffectiveForKey(otherKey))
+}
+
+func TestMVCCGCSafePointFnPolicyKeepsGlobalFloorAsUnknownLayoutFallback(t *testing.T) {
+	policy := storemvcc.SafePointPolicy{
+		RequestedSafePoint: 1_000,
+		SnapshotRetention: rootstate.SnapshotRetentionIndex{
+			GlobalFloor: 40,
+			MountFloors: map[string]uint64{
+				"vol": 80,
+			},
+		},
+		Mount: testMountResolver,
+	}
+
+	require.Equal(t, uint64(80), policy.EffectiveForKey([]byte("vol/key")))
+	require.Equal(t, uint64(40), policy.EffectiveForKey([]byte("unknown/key")))
+}
+
+func TestMVCCGCSafePointFnPolicyFallsBackToGlobalFloorForUnknownKeys(t *testing.T) {
+	policy := storemvcc.SafePointPolicy{
+		RequestedSafePoint: 1_000,
+		SnapshotRetention: rootstate.SnapshotRetentionIndex{
+			GlobalFloor: 50,
+			MountFloors: map[string]uint64{
+				"vol": 50,
+			},
+		},
+		TxnFloor: 80,
+	}
+
+	require.Equal(t, uint64(50), policy.EffectiveForKey([]byte("raw-user-key")))
+}
+
+func TestMVCCGCSafePointFnPolicyHonorsDisabledRequestedSafePoint(t *testing.T) {
+	policy := storemvcc.SafePointPolicy{
+		RequestedSafePoint: 0,
+		SnapshotRetention: rootstate.SnapshotRetentionIndex{
+			GlobalFloor: 50,
+			MountFloors: map[string]uint64{
+				"vol": 50,
+			},
+		},
+		TxnFloor: 80,
+		Mount:    testMountResolver,
+	}
+
+	require.Zero(t, policy.EffectiveForKey([]byte("vol/key")))
+}
+
+func TestMVCCGCSafePointFnPolicyUsesRequestedWhenUnblocked(t *testing.T) {
+	policy := storemvcc.SafePointPolicy{RequestedSafePoint: 1_000}
+	require.Equal(t, uint64(1_000), policy.EffectiveForKey([]byte("vol/key")))
+}
+
+func TestMVCCGCSafePointFnPolicyPlansWritesWithKeyScopedFloor(t *testing.T) {
+	volKey := []byte("vol/key")
+	otherKey := []byte("other/key")
+	versions := []txnmvcc.GCWriteVersion{
+		{CommitTs: 150, Write: txnmvcc.Write{Kind: kvrpcpb.Mutation_Put, StartTs: 140}},
+		{CommitTs: 90, Write: txnmvcc.Write{Kind: kvrpcpb.Mutation_Put, StartTs: 80}},
+		{CommitTs: 40, Write: txnmvcc.Write{Kind: kvrpcpb.Mutation_Put, StartTs: 30}},
+	}
+	policy := storemvcc.SafePointPolicy{
+		RequestedSafePoint: 100,
+		SnapshotRetention: rootstate.SnapshotRetentionIndex{
+			MountFloors: map[string]uint64{
+				"vol": 50,
+			},
+		},
+		Mount: testMountResolver,
+	}
+
+	volPlan := policy.PlanWritesForKey(volKey, versions)
+	require.True(t, volPlan[1].Keep)
+	require.True(t, volPlan[2].Keep)
+	require.True(t, volPlan[2].Anchor)
+
+	otherPlan := policy.PlanWritesForKey(otherKey, versions)
+	require.True(t, otherPlan[1].Keep)
+	require.True(t, otherPlan[1].Anchor)
+	require.False(t, otherPlan[2].Keep)
+}

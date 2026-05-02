@@ -268,7 +268,27 @@ the design.
 
 ---
 
-## 11. Current Boundaries and Guarantees
+## 11. MVCC Maintenance
+
+Replicated MVCC maintenance is a store-local background worker started by
+`nokv serve` when `--mvcc-gc-maintenance-interval` is positive and the required
+safe-point sources are configured. The worker resolves expired locks, applies
+MVCC write/default tombstones, and cleans orphan default records through Raft
+commands; it does not use a local direct-apply path in cluster mode.
+
+MVCC maintenance is **per-region atomic**, not cross-region atomic. A single
+pass may commit tombstones in one region and fail in another because of a
+region split, leader change, timeout, or range error. This is intentional:
+maintenance tombstones are idempotent, already-applied tombstones are skipped
+by later scans, and the next pass converges on the remaining regions.
+
+The safe point comes from Coordinator TSO minus `--mvcc-gc-safe-point-lag`.
+`nokv serve` can reuse the last successful TSO for a bounded
+`--mvcc-gc-tso-cache-ttl` window during short Coordinator outages. When that
+cache expires, the source returns zero and the worker skips destructive GC
+rather than risking an unsafe safe point.
+
+## 12. Current Boundaries and Guarantees
 
 - Reads served through `ReadCommand` are leader-strong and pass a Raft
   linearizability barrier (`LinearizableRead` + `WaitApplied`).

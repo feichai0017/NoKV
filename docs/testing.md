@@ -16,6 +16,9 @@ go test ./percolator/... ./raftstore/client/... -run 'Test.*(Commit|Prewrite|Two
 # Focused distributed migration / membership / restart suite
 go test ./raftstore/integration -count=1
 
+# Core chaos gate for GC + raftstore + fsmeta runtime stability
+go test ./raftstore/mvcc ./raftstore/store ./raftstore/server ./raftstore/integration ./fsmeta/exec ./fsmeta/integration -count=1
+
 # Crash recovery scenarios
 RECOVERY_TRACE_METRICS=1 \
 go test ./... -run 'TestRecovery(FailsOnMissingSST|FailsOnCorruptSST|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
@@ -135,6 +138,40 @@ When adding new distributed tests:
 | Request cancel / deadline propagation | Covered | `raftstore/client/client_test.go::TestClientGetHonorsCanceledContextDuringRouteLookup`, `raftstore/client/client_test.go::TestClientGetHonorsCanceledContextDuringRPC`, `raftstore/client/client_test.go::TestClientPutHonorsCanceledContextDuringRouteLookup`, `raftstore/client/client_test.go::TestClientPutHonorsCanceledContextDuringRPC`, `raftstore/client/client_test.go::TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRouteLookup`, `raftstore/client/client_test.go::TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRPC`, `raftstore/client/client_test.go::TestClientResolveLocksHonorsCanceledContextDuringMultiRegionRPC`, `raftstore/integration/context_propagation_test.go::TestClientReadWriteHonorContextUnderQuorumLoss`, `raftstore/integration/context_propagation_test.go::TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLoss` | Verifies read/write paths plus multi-region 2PC and resolve-lock flows preserve caller cancellation/deadlines through route lookup, RPC, and live split-region quorum loss instead of collapsing to generic retry exhaustion. |
 | Transport partition / interleave recovery | Covered | `raftstore/transport/grpc_transport_test.go::TestGRPCTransportHandlesPartition`, `raftstore/transport/grpc_transport_test.go::TestGRPCTransportFailpointBeforeSendRPCRecoversAfterClear`, `raftstore/peer/peer_test.go::TestPeerFailpointAfterReadyAdvanceBeforeSendRecoversOnLaterTicks`, `raftstore/integration/transport_chaos_test.go::TestPartitionedFollowerCatchesUpAfterRecovery`, `raftstore/integration/transport_chaos_test.go::TestTransferLeaderRecoversAfterPartitionedTargetReturns`, `raftstore/integration/transport_chaos_test.go::TestRepeatedLinkFlapConvergesDuringMembershipChanges` | Covers low-level gRPC link blocking, send-boundary failpoints, Ready advance/send publication gaps, repeated link flaps during membership operations, and live cluster recovery after follower isolation/restart plus transfer-leader timeout/retry under transport partitions. |
 | Split/merge restart safety | Covered | `raftstore/store/store_test.go::TestStoreRestartPreservesSplitMergeLocalMeta`, `raftstore/integration/split_merge_recovery_test.go::TestSplitMergeRestartSafetyAcrossStores` | Covers store-local recovery plus live multi-store split -> restart -> merge -> restart flow after making split/merge admin replay idempotent across restart. |
+
+## 8. Core Chaos Gate Matrix
+
+This matrix is the production-readiness gate for the metadata substrate. A row
+is not "covered" unless it is backed by an automated test that can run in CI
+without manual timing assumptions or known flaky behaviour.
+
+| Subsystem | Chaos Condition | Required Invariant | Current Tests | Status |
+| --- | --- | --- | --- | --- |
+| MVCC GC planner | active snapshot floor, active lock floor, corrupt write payload, overlong version chain | planner stays read-only, clamps safe point per key, and fails closed on corrupt metadata | `raftstore/mvcc/plan_test.go`, `raftstore/mvcc/policy_test.go`, `raftstore/mvcc/txn_floor_test.go`, `raftstore/mvcc/planner_test.go` | Covered |
+| MVCC maintenance worker | resolve-lock failure, apply failure, orphan-default cleanup, safepoint disabled, worker close during pass | each stage is bounded and independently observable; failed stages do not silently corrupt later stages | `raftstore/mvcc/worker_test.go`, `raftstore/mvcc/lock_resolver_test.go`, `raftstore/mvcc/orphan_default_test.go` | Covered |
+| Replicated GC propose | not leader, partial region failure, post-split routing, invalid tombstone batch | destructive GC goes through raft, is region-atomic, and converges after partial multi-region success | `raftstore/store/command_ops_test.go`, `raftstore/kv/apply_test.go` | Covered |
+| GC auto-start | node starts with maintenance interval and configured proposer paths | `nokv serve` / `server.Node` starts destructive maintenance only through replicated paths | `raftstore/server/node_test.go::TestNodeAutoStartsMVCCMaintenanceWorker` | Covered |
+| Region catalog lookup | many regions and split-derived ranges | maintenance routing uses indexed region lookup, not O(region-count) scans on every tombstone | `raftstore/store/region_catalog_test.go::TestStoreRegionMetaByKeyUsesRangeIndex`, `raftstore/store/command_ops_test.go::TestStoreProposeMVCCMaintenanceRoutesAfterSplit` | Covered |
+| Raftstore quorum loss | read/write and split-region 2PC under partition | caller context/deadline is preserved; recovery checks wait for cluster convergence instead of assuming instant raft recovery | `raftstore/integration/context_propagation_test.go` | Covered |
+| Raftstore membership chaos | follower partition/restart, transfer-leader timeout, repeated link flap | partitioned peers catch up; failed leadership movement can be retried; link flaps converge without metadata corruption | `raftstore/integration/transport_chaos_test.go` | Covered |
+| Raftstore restart / split-merge | split, merge, restart, removed peer restart, leader restart | local recovery metadata never rehosts removed peers and remains compatible with later membership changes | `raftstore/integration/restart_recovery_test.go`, `raftstore/integration/split_merge_recovery_test.go` | Covered |
+| Snapshot install boundary | interrupted install before publish, corrupt import, retry after failure | failed snapshot install does not publish a hosted peer or polluted region metadata | `raftstore/integration/snapshot_interruption_test.go`, `raftstore/store/peer_lifecycle_test.go`, `raftstore/admin/service_test.go` | Covered |
+| fsmeta watch | slow subscriber, expired cursor, reconnect/reconcile | watch replay is bounded; expired cursors force full-state reconcile instead of pretending exactly-once delivery | `fsmeta/exec/watch/router_test.go`, `fsmeta/client/reconcile_test.go`, `fsmeta/integration/e2e_test.go` | Covered |
+| fsmeta snapshot retention | SnapshotSubtree publish/retire, read-version use, MVCC retention floor | active snapshot epochs retain required MVCC history until explicit retire | `fsmeta/exec/runner_test.go`, `fsmeta/server/service_test.go`, `fsmeta/integration/e2e_test.go`, `raftstore/mvcc/policy_test.go` | Covered |
+| fsmeta session lifecycle | writer crash / heartbeat expiry / directory rejection / cleaner errors | stale writer sessions are expired by server time; directories cannot take file writer leases | `fsmeta/exec/runner_test.go`, `fsmeta/exec/session_cleaner_test.go` | Covered |
+| fsmeta namespace chaos | gateway restart, mixed mutations, subtree rename handoff | namespace operations remain transactionally visible and rooted handoff state converges after restart | `fsmeta/integration/namespace_chaos_test.go`, `fsmeta/integration/raftstore_runner_test.go` | Covered |
+
+CI policy for this matrix:
+
+1. `go test ./...` must be green before merging production-path changes.
+2. Any test listed above that fails under `-count=3` must be treated as a
+   product bug or a test bug and fixed before adding new feature work.
+3. New GC, raftstore, or fsmeta lifecycle code must add or update one row in
+   this matrix in the same patch.
+4. Chaos tests should wait for explicit convergence signals such as committed
+   data, tombstoned MVCC entries, leader descriptors, or rooted events. They
+   must not assert a fixed raft recovery latency unless latency is the feature
+   being tested.
 
 Next fault-matrix additions should focus on:
 

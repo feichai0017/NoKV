@@ -211,6 +211,12 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 				RootInode:   9,
 				ReadVersion: 25,
 			},
+			"data/1/40": {
+				SnapshotID:  "data/1/40",
+				Mount:       "data",
+				RootInode:   1,
+				ReadVersion: 40,
+			},
 		},
 		Mounts: map[string]rootstate.MountRecord{},
 		Descriptors: map[uint64]descriptor.Descriptor{
@@ -261,6 +267,12 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 	floor, ok := fromRoot.SnapshotRetentionFloor()
 	require.True(t, ok)
 	require.Equal(t, uint64(25), floor)
+	retentionIndex := fromRoot.SnapshotRetentionIndex()
+	require.Equal(t, uint64(25), retentionIndex.GlobalFloor)
+	require.Equal(t, map[string]uint64{
+		"vol":  25,
+		"data": 40,
+	}, retentionIndex.MountFloors)
 	require.Equal(t, rootSnapshot.SnapshotEpochs, fromRoot.RootSnapshot().SnapshotEpochs)
 
 	idStart, tsStart := ResolveAllocatorStarts(5, 6, AllocatorState{IDCurrent: 10, TSCurrent: 20})

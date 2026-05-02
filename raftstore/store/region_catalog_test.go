@@ -238,3 +238,48 @@ func TestStoreLoadsLocalMetaSnapshotWithoutScheduler(t *testing.T) {
 	require.Equal(t, []byte("m"), meta902.StartKey)
 	require.Equal(t, uint64(8), meta902.Epoch.ConfVersion)
 }
+
+func TestStoreRegionMetaByKeyUsesRangeIndex(t *testing.T) {
+	rs := NewStore(Config{})
+
+	require.NoError(t, rs.applyRegionMeta(localmeta.RegionMeta{
+		ID:       20,
+		StartKey: []byte("m"),
+		EndKey:   []byte("z"),
+		State:    metaregion.ReplicaStateRunning,
+	}))
+	require.NoError(t, rs.applyRegionMeta(localmeta.RegionMeta{
+		ID:       10,
+		StartKey: []byte("a"),
+		EndKey:   []byte("m"),
+		State:    metaregion.ReplicaStateRunning,
+	}))
+	require.NoError(t, rs.applyRegionMeta(localmeta.RegionMeta{
+		ID:       30,
+		StartKey: []byte("z"),
+		EndKey:   nil,
+		State:    metaregion.ReplicaStateRunning,
+	}))
+
+	meta, ok := rs.RegionMetaByKey([]byte("b"))
+	require.True(t, ok)
+	require.Equal(t, uint64(10), meta.ID)
+	meta.StartKey[0] = 'x'
+	again, ok := rs.RegionMetaByKey([]byte("b"))
+	require.True(t, ok)
+	require.Equal(t, []byte("a"), again.StartKey)
+
+	meta, ok = rs.RegionMetaByKey([]byte("m"))
+	require.True(t, ok)
+	require.Equal(t, uint64(20), meta.ID)
+
+	meta, ok = rs.RegionMetaByKey([]byte("zz"))
+	require.True(t, ok)
+	require.Equal(t, uint64(30), meta.ID)
+
+	_, ok = rs.RegionMetaByKey([]byte("0"))
+	require.False(t, ok)
+	require.NoError(t, rs.applyRegionRemoval(20))
+	_, ok = rs.RegionMetaByKey([]byte("q"))
+	require.False(t, ok)
+}

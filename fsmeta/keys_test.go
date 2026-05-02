@@ -45,6 +45,35 @@ func TestAuxiliaryKeyEncoders(t *testing.T) {
 	require.Equal(t, "chunk", kind.String())
 }
 
+func TestMountPrefixAndRangeCoverOnlyOneMount(t *testing.T) {
+	start, end, err := EncodeMountKeyRange("vol")
+	require.NoError(t, err)
+	require.NotEmpty(t, end)
+
+	inode, err := EncodeInodeKey("vol", 42)
+	require.NoError(t, err)
+	dentry, err := EncodeDentryKey("vol", 7, "name")
+	require.NoError(t, err)
+	other, err := EncodeInodeKey("volume", 42)
+	require.NoError(t, err)
+
+	require.True(t, bytes.HasPrefix(inode, start))
+	require.True(t, bytes.HasPrefix(dentry, start))
+	require.GreaterOrEqual(t, bytes.Compare(inode, start), 0)
+	require.Less(t, bytes.Compare(inode, end), 0)
+	require.GreaterOrEqual(t, bytes.Compare(dentry, start), 0)
+	require.Less(t, bytes.Compare(dentry, end), 0)
+	require.False(t, bytes.HasPrefix(other, start))
+	require.GreaterOrEqual(t, bytes.Compare(other, end), 0)
+
+	mount, ok := MountIDOfKey(dentry)
+	require.True(t, ok)
+	require.Equal(t, MountID("vol"), mount)
+
+	_, ok = MountIDOfKey(start)
+	require.False(t, ok)
+}
+
 func TestDentryPrefixGroupsDirectoryEntries(t *testing.T) {
 	prefix, err := EncodeDentryPrefix("vol", 9)
 	require.NoError(t, err)

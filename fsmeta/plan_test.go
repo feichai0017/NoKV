@@ -190,9 +190,10 @@ func TestPlansCloneKeys(t *testing.T) {
 
 func TestPlanOpenWriteSessionTouchesInodeAndSession(t *testing.T) {
 	plan, err := PlanOpenWriteSession(OpenWriteSessionRequest{
-		Mount:   "vol",
-		Inode:   44,
-		Session: "client-1",
+		Mount:         "vol",
+		Inode:         44,
+		Session:       "client-1",
+		ExpiresUnixNs: 100,
 	})
 	require.NoError(t, err)
 
@@ -200,9 +201,11 @@ func TestPlanOpenWriteSessionTouchesInodeAndSession(t *testing.T) {
 	require.NoError(t, err)
 	session, err := EncodeSessionKey("vol", "client-1")
 	require.NoError(t, err)
+	owner, err := EncodeInodeSessionKey("vol", 44)
+	require.NoError(t, err)
 
 	require.Equal(t, OperationOpenWriteSession, plan.Kind)
 	require.Equal(t, session, plan.PrimaryKey)
-	require.Equal(t, [][]byte{inode}, plan.ReadKeys)
-	require.Equal(t, [][]byte{session}, plan.MutateKeys)
+	require.Equal(t, [][]byte{inode, session, owner}, plan.ReadKeys)
+	require.Equal(t, [][]byte{session, owner}, plan.MutateKeys)
 }

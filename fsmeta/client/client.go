@@ -18,6 +18,7 @@ import (
 // Client is the typed fsmeta client surface consumed by demos and benchmarks.
 type Client interface {
 	Create(ctx context.Context, req fsmeta.CreateRequest, inode fsmeta.InodeRecord) error
+	UpdateInode(ctx context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error)
 	Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error)
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
 	ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
@@ -28,6 +29,10 @@ type Client interface {
 	RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error
 	Link(ctx context.Context, req fsmeta.LinkRequest) error
 	Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
+	OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSessionRequest) (fsmeta.SessionRecord, error)
+	HeartbeatWriteSession(ctx context.Context, req fsmeta.HeartbeatWriteSessionRequest) (fsmeta.SessionRecord, error)
+	CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteSessionRequest) error
+	ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWriteSessionsRequest) (fsmeta.ExpireWriteSessionsResult, error)
 	Close() error
 }
 
@@ -68,6 +73,17 @@ func (c *GRPCClient) Create(ctx context.Context, req fsmeta.CreateRequest, inode
 	}
 	_, err := c.rpc.Create(ctx, createRequestToProto(req, inode))
 	return translateRPCError(err)
+}
+
+func (c *GRPCClient) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error) {
+	if err := c.requireRPC(); err != nil {
+		return fsmeta.InodeRecord{}, err
+	}
+	resp, err := c.rpc.UpdateInode(ctx, updateInodeRequestToProto(req))
+	if err != nil {
+		return fsmeta.InodeRecord{}, translateRPCError(err)
+	}
+	return inodeFromProto(resp.GetInode()), nil
 }
 
 func (c *GRPCClient) Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error) {
@@ -187,6 +203,47 @@ func (c *GRPCClient) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
 	}
 	_, err := c.rpc.Unlink(ctx, unlinkRequestToProto(req))
 	return translateRPCError(err)
+}
+
+func (c *GRPCClient) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSessionRequest) (fsmeta.SessionRecord, error) {
+	if err := c.requireRPC(); err != nil {
+		return fsmeta.SessionRecord{}, err
+	}
+	resp, err := c.rpc.OpenWriteSession(ctx, openWriteSessionRequestToProto(req))
+	if err != nil {
+		return fsmeta.SessionRecord{}, translateRPCError(err)
+	}
+	return sessionFromProto(resp.GetSession()), nil
+}
+
+func (c *GRPCClient) HeartbeatWriteSession(ctx context.Context, req fsmeta.HeartbeatWriteSessionRequest) (fsmeta.SessionRecord, error) {
+	if err := c.requireRPC(); err != nil {
+		return fsmeta.SessionRecord{}, err
+	}
+	resp, err := c.rpc.HeartbeatWriteSession(ctx, heartbeatWriteSessionRequestToProto(req))
+	if err != nil {
+		return fsmeta.SessionRecord{}, translateRPCError(err)
+	}
+	return sessionFromProto(resp.GetSession()), nil
+}
+
+func (c *GRPCClient) CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteSessionRequest) error {
+	if err := c.requireRPC(); err != nil {
+		return err
+	}
+	_, err := c.rpc.CloseWriteSession(ctx, closeWriteSessionRequestToProto(req))
+	return translateRPCError(err)
+}
+
+func (c *GRPCClient) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWriteSessionsRequest) (fsmeta.ExpireWriteSessionsResult, error) {
+	if err := c.requireRPC(); err != nil {
+		return fsmeta.ExpireWriteSessionsResult{}, err
+	}
+	resp, err := c.rpc.ExpireWriteSessions(ctx, expireWriteSessionsRequestToProto(req))
+	if err != nil {
+		return fsmeta.ExpireWriteSessionsResult{}, translateRPCError(err)
+	}
+	return fsmeta.ExpireWriteSessionsResult{Expired: resp.GetExpired()}, nil
 }
 
 // WatchSubscription is one typed WatchSubtree client stream.
