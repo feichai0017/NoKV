@@ -1,7 +1,7 @@
 # NoKV Makefile
 # Provides standardized commands for development workflow
 
-.PHONY: help build test test-short test-race test-coverage test-contract-smoke test-correctness-smoke lint fmt clean docker-up docker-dev-up docker-down bench install-tools
+.PHONY: help build test test-short test-race test-coverage test-contract-smoke test-raftstore-contract-smoke test-correctness-smoke lint fmt clean docker-up docker-dev-up docker-down bench install-tools
 .PHONY: proto proto-check proto-breaking-check
 
 GOLANGCI_LINT_VERSION ?= v2.9.0
@@ -19,6 +19,7 @@ help:
 	@echo "  make test-race          - Run tests with race detector"
 	@echo "  make test-coverage      - Run tests with coverage report"
 	@echo "  make test-contract-smoke - Run seeded fsmeta contract model smoke tests"
+	@echo "  make test-raftstore-contract-smoke - Run seeded fsmeta contract tests on real raftstore"
 	@echo "  make test-correctness-smoke - Run distributed correctness smoke tests"
 	@echo "  make lint               - Run golangci-lint (requires installation)"
 	@echo "  make fmt                - Run go fix, format code with gofmt, and tidy modules"
@@ -69,8 +70,13 @@ test-contract-smoke:
 	@echo "Running fsmeta contract smoke tests..."
 	NOKV_CONTRACT_SEEDS=$${NOKV_CONTRACT_SEEDS:-64} NOKV_CONTRACT_STEPS=$${NOKV_CONTRACT_STEPS:-120} go test ./fsmeta/contract -run TestFSMetaExecutorModelContract -count=1 -v
 
+# Run seeded contract scripts against the real raftstore-backed fsmeta runner.
+test-raftstore-contract-smoke:
+	@echo "Running raftstore-backed fsmeta contract smoke tests..."
+	NOKV_RAFTSTORE_CONTRACT_SEEDS=$${NOKV_RAFTSTORE_CONTRACT_SEEDS:-2} NOKV_RAFTSTORE_CONTRACT_STEPS=$${NOKV_RAFTSTORE_CONTRACT_STEPS:-40} go test ./fsmeta/integration -run TestRaftstoreRunnerFSMetaContractOnSplitCluster -count=1 -v
+
 # Run the highest-signal distributed correctness suites before the full package sweep.
-test-correctness-smoke: test-contract-smoke
+test-correctness-smoke: test-contract-smoke test-raftstore-contract-smoke
 	@echo "Running distributed correctness smoke tests..."
 	go test -p $(GO_TEST_P) ./percolator/... ./raftstore/client ./raftstore/mvcc ./raftstore/store ./raftstore/integration ./coordinator/integration ./meta/root/integration -count=1
 
