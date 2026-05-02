@@ -1,7 +1,7 @@
 # NoKV Makefile
 # Provides standardized commands for development workflow
 
-.PHONY: help build test test-short test-race test-coverage test-contract-smoke test-raftstore-contract-smoke test-correctness-smoke lint fmt clean docker-up docker-dev-up docker-down bench install-tools
+.PHONY: help build test test-short test-race test-coverage test-contract-smoke test-raftstore-contract-smoke test-history-smoke test-model-smoke test-crash-matrix-smoke test-deterministic-simulation-smoke test-correctness-smoke test-correctness-nightly test-docker-chaos test-soak-smoke lint fmt clean docker-up docker-dev-up docker-down bench install-tools
 .PHONY: proto proto-check proto-breaking-check
 
 GOLANGCI_LINT_VERSION ?= v2.9.0
@@ -20,7 +20,14 @@ help:
 	@echo "  make test-coverage      - Run tests with coverage report"
 	@echo "  make test-contract-smoke - Run seeded fsmeta contract model smoke tests"
 	@echo "  make test-raftstore-contract-smoke - Run seeded fsmeta contract tests on real raftstore"
+	@echo "  make test-history-smoke - Run bounded concurrent fsmeta history checks"
+	@echo "  make test-model-smoke   - Run bounded transaction/raftstore/root model smoke tests"
+	@echo "  make test-crash-matrix-smoke - Run crash-consistency matrix smoke tests"
+	@echo "  make test-deterministic-simulation-smoke - Run seeded deterministic fault simulation"
 	@echo "  make test-correctness-smoke - Run distributed correctness smoke tests"
+	@echo "  make test-correctness-nightly - Run longer seeded correctness and failpoint matrix"
+	@echo "  make test-docker-chaos  - Run Docker fsmeta history checker under process chaos"
+	@echo "  make test-soak-smoke    - Run short Docker fsmeta soak smoke"
 	@echo "  make lint               - Run golangci-lint (requires installation)"
 	@echo "  make fmt                - Run go fix, format code with gofmt, and tidy modules"
 	@echo "  make proto              - Format .proto files and regenerate protobuf Go code"
@@ -75,10 +82,67 @@ test-raftstore-contract-smoke:
 	@echo "Running raftstore-backed fsmeta contract smoke tests..."
 	NOKV_RAFTSTORE_CONTRACT_SEEDS=$${NOKV_RAFTSTORE_CONTRACT_SEEDS:-2} NOKV_RAFTSTORE_CONTRACT_STEPS=$${NOKV_RAFTSTORE_CONTRACT_STEPS:-40} go test ./fsmeta/integration -run TestRaftstoreRunnerFSMetaContractOnSplitCluster -count=1 -v
 
+# Run bounded concurrent fsmeta histories through the model runner and the real
+# split-region raftstore path.
+test-history-smoke:
+	@echo "Running concurrent fsmeta history smoke tests..."
+	NOKV_CONTRACT_HISTORY_SEEDS=$${NOKV_CONTRACT_HISTORY_SEEDS:-8} NOKV_CONTRACT_HISTORY_STEPS=$${NOKV_CONTRACT_HISTORY_STEPS:-48} NOKV_CONTRACT_HISTORY_BATCH=$${NOKV_CONTRACT_HISTORY_BATCH:-3} go test ./fsmeta/contract -run TestFSMetaExecutorConcurrentHistoryContract -count=1 -v
+	NOKV_RAFTSTORE_HISTORY_SEEDS=$${NOKV_RAFTSTORE_HISTORY_SEEDS:-1} NOKV_RAFTSTORE_HISTORY_STEPS=$${NOKV_RAFTSTORE_HISTORY_STEPS:-24} NOKV_RAFTSTORE_HISTORY_BATCH=$${NOKV_RAFTSTORE_HISTORY_BATCH:-3} go test ./fsmeta/integration -run TestRaftstoreRunnerFSMetaConcurrentHistoryOnSplitCluster -count=1 -v
+
+# Run bounded generated model/fault schedules across transaction, data-plane,
+# and rooted control-plane surfaces.
+test-model-smoke:
+	@echo "Running distributed model smoke tests..."
+	NOKV_PERCOLATOR_MODEL_SEEDS=$${NOKV_PERCOLATOR_MODEL_SEEDS:-8} NOKV_PERCOLATOR_MODEL_STEPS=$${NOKV_PERCOLATOR_MODEL_STEPS:-64} go test ./percolator -run TestTxnModelGeneratedScheduleIsSerializable -count=1 -v
+	NOKV_RAFTSTORE_FAULT_SEEDS=$${NOKV_RAFTSTORE_FAULT_SEEDS:-1} NOKV_RAFTSTORE_FAULT_STEPS=$${NOKV_RAFTSTORE_FAULT_STEPS:-6} go test ./raftstore/integration -run TestTwoPhaseCommitFaultScheduleAcrossSplitCluster -count=1 -v
+	NOKV_ROOT_MODEL_SEEDS=$${NOKV_ROOT_MODEL_SEEDS:-2} NOKV_ROOT_MODEL_STEPS=$${NOKV_ROOT_MODEL_STEPS:-24} go test ./coordinator/integration -run TestRootModelReplayAndWatchSchedule -count=1 -v
+
+# Run explicit crash-window tests around 2PC and raft Ready advance/send
+# boundaries.
+test-crash-matrix-smoke:
+	@echo "Running crash-consistency matrix smoke tests..."
+	go test ./percolator -run TestPercolatorCrashMatrix -count=1 -v
+	go test ./raftstore/peer -run TestPeerFailpointAfterReadyAdvanceBeforeSendRecoversOnLaterTicks -count=1 -v
+
+# Run a reproducible seed-driven fault schedule across real split-region
+# raftstore runtimes.
+test-deterministic-simulation-smoke:
+	@echo "Running deterministic fault simulation smoke tests..."
+	NOKV_SIMULATION_SEEDS=$${NOKV_SIMULATION_SEEDS:-1} NOKV_SIMULATION_STEPS=$${NOKV_SIMULATION_STEPS:-6} go test ./raftstore/integration -run TestDeterministicFaultSimulationAcrossSplitCluster -count=1 -v
+
 # Run the highest-signal distributed correctness suites before the full package sweep.
-test-correctness-smoke: test-contract-smoke test-raftstore-contract-smoke
+test-correctness-smoke: test-contract-smoke test-raftstore-contract-smoke test-history-smoke test-model-smoke test-crash-matrix-smoke test-deterministic-simulation-smoke
 	@echo "Running distributed correctness smoke tests..."
 	go test -p $(GO_TEST_P) ./percolator/... ./raftstore/client ./raftstore/mvcc ./raftstore/store ./raftstore/integration ./coordinator/integration ./meta/root/integration -count=1
+
+# Run longer seeded model/fault schedules plus failpoint-heavy suites. This is
+# intended for nightly CI and manual release hardening, not every PR edit loop.
+test-correctness-nightly:
+	@echo "Running nightly correctness matrix..."
+	NOKV_CONTRACT_SEEDS=$${NOKV_CONTRACT_SEEDS:-256} NOKV_CONTRACT_STEPS=$${NOKV_CONTRACT_STEPS:-500} go test ./fsmeta/contract -run TestFSMetaExecutorModelContract -count=1 -v
+	NOKV_RAFTSTORE_CONTRACT_SEEDS=$${NOKV_RAFTSTORE_CONTRACT_SEEDS:-8} NOKV_RAFTSTORE_CONTRACT_STEPS=$${NOKV_RAFTSTORE_CONTRACT_STEPS:-120} go test ./fsmeta/integration -run TestRaftstoreRunnerFSMetaContractOnSplitCluster -count=1 -v
+	NOKV_CONTRACT_HISTORY_SEEDS=$${NOKV_CONTRACT_HISTORY_SEEDS:-64} NOKV_CONTRACT_HISTORY_STEPS=$${NOKV_CONTRACT_HISTORY_STEPS:-240} NOKV_CONTRACT_HISTORY_BATCH=$${NOKV_CONTRACT_HISTORY_BATCH:-3} go test ./fsmeta/contract -run TestFSMetaExecutorConcurrentHistoryContract -count=1 -v
+	NOKV_RAFTSTORE_HISTORY_SEEDS=$${NOKV_RAFTSTORE_HISTORY_SEEDS:-4} NOKV_RAFTSTORE_HISTORY_STEPS=$${NOKV_RAFTSTORE_HISTORY_STEPS:-80} NOKV_RAFTSTORE_HISTORY_BATCH=$${NOKV_RAFTSTORE_HISTORY_BATCH:-3} go test ./fsmeta/integration -run TestRaftstoreRunnerFSMetaConcurrentHistoryOnSplitCluster -count=1 -v
+	NOKV_PERCOLATOR_MODEL_SEEDS=$${NOKV_PERCOLATOR_MODEL_SEEDS:-64} NOKV_PERCOLATOR_MODEL_STEPS=$${NOKV_PERCOLATOR_MODEL_STEPS:-256} go test ./percolator -run TestTxnModelGeneratedScheduleIsSerializable -count=1 -v
+	NOKV_RAFTSTORE_FAULT_SEEDS=$${NOKV_RAFTSTORE_FAULT_SEEDS:-4} NOKV_RAFTSTORE_FAULT_STEPS=$${NOKV_RAFTSTORE_FAULT_STEPS:-18} go test ./raftstore/integration -run TestTwoPhaseCommitFaultScheduleAcrossSplitCluster -count=1 -v
+	NOKV_ROOT_MODEL_SEEDS=$${NOKV_ROOT_MODEL_SEEDS:-16} NOKV_ROOT_MODEL_STEPS=$${NOKV_ROOT_MODEL_STEPS:-128} go test ./coordinator/integration -run TestRootModelReplayAndWatchSchedule -count=1 -v
+	go test ./percolator -run TestPercolatorCrashMatrix -count=3 -v
+	go test ./raftstore/peer -run TestPeerFailpointAfterReadyAdvanceBeforeSendRecoversOnLaterTicks -count=3 -v
+	NOKV_SIMULATION_SEEDS=$${NOKV_SIMULATION_SEEDS:-4} NOKV_SIMULATION_STEPS=$${NOKV_SIMULATION_STEPS:-18} go test ./raftstore/integration -run TestDeterministicFaultSimulationAcrossSplitCluster -count=1 -v
+	CHAOS_TRACE_METRICS=1 go test ./raftstore/transport ./raftstore/integration -run 'Test(GRPCTransport|PartitionedFollower|TransferLeader|RepeatedLinkFlap|ExpandSnapshotInstallInterruptedBeforePublish)' -count=1 -v
+	go test ./raftstore/migrate ./coordinator/integration ./meta/root/integration -run 'Test.*Failpoint|TestMetaRootPartialSealRecoversFromCommittedLog' -count=3 -v
+
+# Run the Docker fsmeta history checker while restarting or killing one
+# service at a time. This target is intentionally separate from PR smoke.
+test-docker-chaos:
+	@echo "Running Docker fsmeta chaos history checker..."
+	./scripts/chaos/docker_fsmeta_history.sh
+
+# Run a short Docker soak. Override NOKV_SOAK_DURATION=24h or 72h for real
+# release-hardening runs.
+test-soak-smoke:
+	@echo "Running short Docker fsmeta soak..."
+	NOKV_SOAK_DURATION=$${NOKV_SOAK_DURATION:-30s} NOKV_SOAK_ROLLING_RESTARTS=$${NOKV_SOAK_ROLLING_RESTARTS:-0} ./scripts/soak/fsmeta_soak.sh
 
 # Run linter (requires golangci-lint to be installed)
 lint:

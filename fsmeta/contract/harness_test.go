@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -49,6 +50,7 @@ func envInt(name string, fallback int) int {
 }
 
 type versionedRunner struct {
+	mu     sync.Mutex
 	nextTS uint64
 	data   map[string][]versionedValue
 }
@@ -70,20 +72,26 @@ func (r *versionedRunner) ReserveTimestamp(_ context.Context, count uint64) (uin
 	if count == 0 {
 		return 0, errors.New("zero timestamp reservation")
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	first := r.nextTS
 	r.nextTS += count
 	return first, nil
 }
 
 func (r *versionedRunner) Get(_ context.Context, key []byte, version uint64) ([]byte, bool, error) {
-	value, ok := r.visible(key, version)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	value, ok := r.visibleLocked(key, version)
 	return value, ok, nil
 }
 
 func (r *versionedRunner) BatchGet(_ context.Context, keys [][]byte, version uint64) (map[string][]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	out := make(map[string][]byte, len(keys))
 	for _, key := range keys {
-		if value, ok := r.visible(key, version); ok {
+		if value, ok := r.visibleLocked(key, version); ok {
 			out[string(key)] = value
 		}
 	}
@@ -91,13 +99,15 @@ func (r *versionedRunner) BatchGet(_ context.Context, keys [][]byte, version uin
 }
 
 func (r *versionedRunner) Scan(_ context.Context, startKey []byte, limit uint32, version uint64) ([]fsmetaexec.KV, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	keys := make([][]byte, 0, len(r.data))
 	for key := range r.data {
 		raw := []byte(key)
 		if bytes.Compare(raw, startKey) < 0 {
 			continue
 		}
-		if _, ok := r.visible(raw, version); ok {
+		if _, ok := r.visibleLocked(raw, version); ok {
 			keys = append(keys, append([]byte(nil), raw...))
 		}
 	}
@@ -107,7 +117,7 @@ func (r *versionedRunner) Scan(_ context.Context, startKey []byte, limit uint32,
 		if uint32(len(out)) >= limit {
 			break
 		}
-		value, _ := r.visible(key, version)
+		value, _ := r.visibleLocked(key, version)
 		out = append(out, fsmetaexec.KV{
 			Key:   append([]byte(nil), key...),
 			Value: value,
@@ -116,11 +126,21 @@ func (r *versionedRunner) Scan(_ context.Context, startKey []byte, limit uint32,
 	return out, nil
 }
 
-func (r *versionedRunner) Mutate(_ context.Context, _ []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, _ uint64) error {
+func (r *versionedRunner) Mutate(_ context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, _ uint64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for _, mut := range mutations {
 		if mut.GetAssertionNotExist() {
-			if _, ok := r.visible(mut.GetKey(), startVersion); ok {
+			if _, ok := r.visibleLocked(mut.GetKey(), startVersion); ok {
 				return fsmeta.ErrExists
+			}
+			if _, ok := r.visibleLatestLocked(mut.GetKey()); ok {
+				return fsmeta.ErrExists
+			}
+		}
+		if bytes.Equal(mut.GetKey(), primary) && mut.GetOp() == kvrpcpb.Mutation_Delete {
+			if _, ok := r.visibleLatestLocked(mut.GetKey()); !ok {
+				return fsmeta.ErrNotFound
 			}
 		}
 	}
@@ -144,17 +164,27 @@ func (r *versionedRunner) Mutate(_ context.Context, _ []byte, mutations []*kvrpc
 	return nil
 }
 
-func (r *versionedRunner) visible(key []byte, version uint64) ([]byte, bool) {
+func (r *versionedRunner) visibleLatestLocked(key []byte) ([]byte, bool) {
+	return r.visibleLocked(key, ^uint64(0))
+}
+
+func (r *versionedRunner) visibleLocked(key []byte, version uint64) ([]byte, bool) {
 	versions := r.data[string(key)]
-	for i := len(versions) - 1; i >= 0; i-- {
-		candidate := versions[i]
+	var (
+		best      versionedValue
+		bestFound bool
+	)
+	for _, candidate := range versions {
 		if candidate.version > version {
 			continue
 		}
-		if candidate.deleted {
-			return nil, false
+		if !bestFound || candidate.version > best.version {
+			best = candidate
+			bestFound = true
 		}
-		return append([]byte(nil), candidate.value...), true
 	}
-	return nil, false
+	if !bestFound || best.deleted {
+		return nil, false
+	}
+	return append([]byte(nil), best.value...), true
 }

@@ -1019,6 +1019,31 @@ func TestL0SearchPrefersLatestVersion(t *testing.T) {
 	got.DecrRef()
 }
 
+func TestL0SearchPrefersNewestTableForSameVersion(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	key := []byte("same-version")
+	oldLock := kv.NewInternalEntry(kv.CFLock, key, kv.MaxVersion, []byte("lock"), 0, 0)
+	newDelete := kv.NewInternalEntry(kv.CFLock, key, kv.MaxVersion, nil, kv.BitDelete, 0)
+	tblOld := buildTableWithEntries(t, lsm, 41, oldLock)
+	tblNew := buildTableWithEntries(t, lsm, 42, newDelete)
+	defer func() { _ = tblOld.DecrRef() }()
+	defer func() { _ = tblNew.DecrRef() }()
+
+	query := kv.InternalKey(kv.CFLock, key, kv.MaxVersion)
+	l0 := &levelHandler{levelNum: 0, tables: []*table{tblOld, tblNew}}
+	got, err := l0.searchL0SST(query)
+	if err != nil || got == nil {
+		t.Fatalf("l0 search err=%v entry=%v", err, got)
+	}
+	if got.Meta&kv.BitDelete == 0 {
+		t.Fatalf("expected newest same-version table tombstone, got meta=%d value=%q", got.Meta, got.Value)
+	}
+	got.DecrRef()
+}
+
 func TestLevelSearchRespectsMaxVersion(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()

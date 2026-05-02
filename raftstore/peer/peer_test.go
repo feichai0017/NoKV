@@ -2,11 +2,12 @@ package peer
 
 import (
 	"context"
-	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"testing"
 	"time"
 
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	"github.com/stretchr/testify/require"
@@ -123,6 +124,39 @@ func TestLinearizableReadCanceledClearsPending(t *testing.T) {
 	p.readMu.Lock()
 	defer p.readMu.Unlock()
 	require.Empty(t, p.pendingReads)
+}
+
+func TestPeerFailpointAfterReadyAdvanceBeforeSendRecoversOnLaterTicks(t *testing.T) {
+	var applied []string
+	p := newTestPeer(t, newPayloadTestStorage(), func(entries []myraft.Entry) error {
+		for _, entry := range entries {
+			if len(entry.Data) > 0 {
+				applied = append(applied, string(entry.Data))
+			}
+		}
+		return nil
+	})
+	require.NoError(t, p.Bootstrap([]myraft.Peer{{ID: 11}}))
+	require.NoError(t, p.Campaign())
+	require.NoError(t, p.Flush())
+
+	failpoints.Set(failpoints.AfterReadyAdvanceBeforeSend)
+	t.Cleanup(func() { failpoints.Set(failpoints.None) })
+	err := p.Propose([]byte("first-after-advance"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "after ready advance before send")
+
+	failpoints.Set(failpoints.None)
+	require.NoError(t, p.Flush())
+	require.NoError(t, p.Propose([]byte("second-after-recovery")))
+	require.NoError(t, p.Flush())
+	require.Contains(t, applied, "second-after-recovery")
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	index, err := p.LinearizableRead(ctx)
+	require.NoError(t, err)
+	require.NoError(t, p.WaitApplied(ctx, index))
 }
 
 func TestReadIndexHelpersDeliverAndCancel(t *testing.T) {

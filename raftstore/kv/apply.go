@@ -336,10 +336,10 @@ func collectVisibleValue(db txnstore.Store, iter index.Iterator, key []byte, rea
 			return nil, 0, false, err
 		}
 		switch write.Kind {
-		case kvrpcpb.Mutation_Lock:
+		case kvrpcpb.Mutation_Lock, kvrpcpb.Mutation_Rollback:
 			iter.Next()
 			continue
-		case kvrpcpb.Mutation_Delete, kvrpcpb.Mutation_Rollback:
+		case kvrpcpb.Mutation_Delete:
 			advanceToNextUserKey(iter, key)
 			return nil, 0, false, nil
 		default:

@@ -63,6 +63,39 @@ func TestRunRegionsJSONFormat(t *testing.T) {
 	require.Len(t, regions, 2)
 }
 
+func TestRunMetaRootSimpleFormat(t *testing.T) {
+	cfgPath := writeSampleConfig(t)
+
+	output, err := captureStdout(t, func() error {
+		return runMetaRoot([]string{"--config", cfgPath, "--format", "simple", "--scope", "host"})
+	})
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	require.Len(t, lines, 3)
+	require.Equal(t, "1 127.0.0.1:2380 127.0.0.1:3380 ./artifacts/cluster/meta-root-1", lines[0])
+	require.Equal(t, "2 127.0.0.1:2381 127.0.0.1:3381 ./artifacts/cluster/meta-root-2", lines[1])
+	require.Equal(t, "3 127.0.0.1:2382 127.0.0.1:3382 ./artifacts/cluster/meta-root-3", lines[2])
+
+	output, err = captureStdout(t, func() error {
+		return runMetaRoot([]string{"--config", cfgPath, "--format", "simple", "--scope", "docker"})
+	})
+	require.NoError(t, err)
+	lines = strings.Split(strings.TrimSpace(output), "\n")
+	require.Equal(t, "1 nokv-meta-root-1:2380 nokv-meta-root-1:2480 /var/lib/nokv-meta-root-1", lines[0])
+}
+
+func TestRunMetaRootJSONFormat(t *testing.T) {
+	cfgPath := writeSampleConfig(t)
+	output, err := captureStdout(t, func() error {
+		return runMetaRoot([]string{"--config", cfgPath, "--format", "json"})
+	})
+	require.NoError(t, err)
+	var peers []config.MetaRootPeer
+	require.NoError(t, json.Unmarshal([]byte(output), &peers))
+	require.Len(t, peers, 3)
+	require.Equal(t, uint64(1), peers[0].NodeID)
+}
+
 func TestRunPDSimpleFormat(t *testing.T) {
 	cfgPath := writeSampleConfig(t)
 
@@ -219,6 +252,24 @@ func TestMainCoordinatorCommand(t *testing.T) {
 	require.Equal(t, 0, code)
 }
 
+func TestMainMetaRootCommand(t *testing.T) {
+	cfgPath := writeSampleConfig(t)
+	origArgs := os.Args
+	defer func() { os.Args = origArgs }()
+	os.Args = []string{
+		"nokv-config",
+		"meta-root",
+		"--config",
+		cfgPath,
+		"--format",
+		"simple",
+	}
+	code := captureExitCode(t, func() {
+		main()
+	})
+	require.Equal(t, 0, code)
+}
+
 func TestMainMissingArgs(t *testing.T) {
 	code := captureExitCode(t, func() {
 		origArgs := os.Args
@@ -361,6 +412,22 @@ func TestRunPDUnknownFormatAndScope(t *testing.T) {
 	require.Error(t, runCoordinator([]string{"--config", cfgPath, "--field", "bad"}))
 }
 
+func TestRunMetaRootUnknownFormatScopeAndMissingBlock(t *testing.T) {
+	cfgPath := writeSampleConfig(t)
+	require.Error(t, runMetaRoot([]string{"--config", cfgPath, "--format", "bad"}))
+	require.Error(t, runMetaRoot([]string{"--config", cfgPath, "--scope", "oops"}))
+
+	cfg := config.File{
+		Stores: []config.Store{{StoreID: 1, Addr: "127.0.0.1:1"}},
+	}
+	dir := t.TempDir()
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	path := filepath.Join(dir, "config.json")
+	require.NoError(t, os.WriteFile(path, raw, 0o600))
+	require.Error(t, runMetaRoot([]string{"--config", path}))
+}
+
 func TestLoadConfigMissingFile(t *testing.T) {
 	_, err := loadConfig(filepath.Join(t.TempDir(), "missing.json"))
 	require.Error(t, err)
@@ -491,6 +558,35 @@ func writeSampleConfig(t *testing.T) string {
 	t.Helper()
 	cfg := config.File{
 		MaxRetries: 3,
+		MetaRoot: &config.MetaRoot{Peers: []config.MetaRootPeer{
+			{
+				NodeID:              1,
+				Addr:                "127.0.0.1:2380",
+				DockerAddr:          "nokv-meta-root-1:2380",
+				TransportAddr:       "127.0.0.1:3380",
+				DockerTransportAddr: "nokv-meta-root-1:2480",
+				WorkDir:             "./artifacts/cluster/meta-root-1",
+				DockerWorkDir:       "/var/lib/nokv-meta-root-1",
+			},
+			{
+				NodeID:              2,
+				Addr:                "127.0.0.1:2381",
+				DockerAddr:          "nokv-meta-root-2:2380",
+				TransportAddr:       "127.0.0.1:3381",
+				DockerTransportAddr: "nokv-meta-root-2:2480",
+				WorkDir:             "./artifacts/cluster/meta-root-2",
+				DockerWorkDir:       "/var/lib/nokv-meta-root-2",
+			},
+			{
+				NodeID:              3,
+				Addr:                "127.0.0.1:2382",
+				DockerAddr:          "nokv-meta-root-3:2380",
+				TransportAddr:       "127.0.0.1:3382",
+				DockerTransportAddr: "nokv-meta-root-3:2480",
+				WorkDir:             "./artifacts/cluster/meta-root-3",
+				DockerWorkDir:       "/var/lib/nokv-meta-root-3",
+			},
+		}},
 		Coordinator: &config.Coordinator{
 			Addr:          "127.0.0.1:2379",
 			DockerAddr:    "nokv-pd:2379",

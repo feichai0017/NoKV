@@ -254,7 +254,17 @@ func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
 		version uint64
 		best    *kv.Entry
 	)
-	for _, table := range lh.selectTablesForKey(key, true) {
+	candidates := append([]*table(nil), lh.selectTablesForKey(key, true)...)
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i] == nil {
+			return false
+		}
+		if candidates[j] == nil {
+			return true
+		}
+		return candidates[i].fid > candidates[j].fid
+	})
+	for _, table := range candidates {
 		if table == nil {
 			continue
 		}

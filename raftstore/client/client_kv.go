@@ -464,6 +464,11 @@ func (c *Client) TwoPhaseCommit(ctx context.Context, primary []byte, mutations [
 		}
 	}
 	if err := c.commitKeysByRoute(ctx, [][]byte{append([]byte(nil), primary...)}, startVersion, commitVersion); err != nil {
+		if shouldRollbackAfterPrimaryCommitFailure(err) {
+			if rollbackErr := c.rollbackPrewrites(ctx, prewritten, startVersion); rollbackErr != nil {
+				return errors.Join(err, fmt.Errorf("client: rollback after primary commit failure: %w", rollbackErr))
+			}
+		}
 		return err
 	}
 	secondaryKeys := collectKeys(secondaryMutations)
@@ -548,6 +553,19 @@ func (c *Client) rollbackPrewrites(ctx context.Context, prewritten map[uint64][]
 func (c *Client) resolveCommittedSecondaries(ctx context.Context, keys [][]byte, startVersion, commitVersion uint64) error {
 	_, err := c.ResolveLocks(ctx, startVersion, commitVersion, keys)
 	return err
+}
+
+func shouldRollbackAfterPrimaryCommitFailure(err error) bool {
+	txnErr, ok := AsTxnKeyError(err)
+	if !ok {
+		return false
+	}
+	for _, keyErr := range txnErr.Errors {
+		if keyErr != nil && keyErr.GetCommitTsExpired() != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) prewriteRegionOnce(ctx context.Context, region regionSnapshot, primary []byte, startVersion, ttl uint64, muts []*kvrpcpb.Mutation) (*kvrpcpb.PrewriteResponse, *errorpb.RegionError, error) {

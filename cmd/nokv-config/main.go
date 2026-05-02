@@ -29,6 +29,8 @@ func main() {
 
 	var err error
 	switch subcmd {
+	case "meta-root":
+		err = runMetaRoot(args)
 	case "stores":
 		err = runStores(args)
 	case "regions":
@@ -45,6 +47,46 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "nokv-config %s: %v\n", subcmd, err)
 		exit(1)
+	}
+}
+
+func runMetaRoot(args []string) error {
+	fs := flag.NewFlagSet("meta-root", flag.ExitOnError)
+	configPath := fs.String("config", defaultConfigPath(), "path to raft configuration file")
+	format := fs.String("format", "simple", "output format: simple|json")
+	scope := fs.String("scope", "host", "address scope: host|docker")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	scopeNorm := strings.ToLower(strings.TrimSpace(*scope))
+	if scopeNorm != "host" && scopeNorm != "docker" {
+		return fmt.Errorf("unknown scope %q (expected host|docker)", *scope)
+	}
+
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		return err
+	}
+	if cfg.MetaRoot == nil {
+		return fmt.Errorf("meta_root block missing from configuration")
+	}
+
+	switch strings.ToLower(*format) {
+	case "json":
+		return json.NewEncoder(os.Stdout).Encode(cfg.MetaRootPeers())
+	case "simple":
+		for _, peer := range cfg.MetaRootPeers() {
+			fmt.Printf("%d %s %s %s\n",
+				peer.NodeID,
+				cfg.ResolveMetaRootServiceAddr(peer.NodeID, scopeNorm),
+				cfg.ResolveMetaRootTransportAddr(peer.NodeID, scopeNorm),
+				firstNonEmpty(cfg.ResolveMetaRootWorkDir(peer.NodeID, scopeNorm)),
+			)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown format %q", *format)
 	}
 }
 
@@ -219,6 +261,7 @@ func printUsage() {
 	fmt.Println(`Usage: nokv-config <command> [flags]
 
 Commands:
+  meta-root Print meta-root endpoints from the raft configuration
   stores   Print store endpoints from the raft configuration
   regions  Print region metadata from the raft configuration
   coordinator Print coordinator endpoint from the raft configuration
@@ -227,6 +270,7 @@ Commands:
 Flags:
   --config <path>   Path to raft_config JSON (defaults to ./raft_config.example.json)
   --format <fmt>    Output format (simple|json) depending on the command
+  --scope <scope>   Address scope (host|docker) for meta-root/coordinator
   --field <name>    For "coordinator --format simple": addr|workdir`)
 }
 
