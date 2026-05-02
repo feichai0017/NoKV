@@ -37,3 +37,27 @@ func TestPeriodicTaskDisabledWithoutNameIntervalOrRun(t *testing.T) {
 	require.Nil(t, NewPeriodicTask(PeriodicTaskConfig{Name: "x"}))
 	require.Nil(t, NewPeriodicTask(PeriodicTaskConfig{Name: "x", Interval: time.Millisecond}))
 }
+
+func TestPeriodicTaskCloseBeforeStartDoesNotBlock(t *testing.T) {
+	task := NewPeriodicTask(PeriodicTaskConfig{
+		Name:     "x",
+		Interval: time.Hour,
+		Run:      func(context.Context) error { return nil },
+	})
+	require.NotNil(t, task)
+
+	done := make(chan struct{})
+	go func() {
+		task.Close()
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+}

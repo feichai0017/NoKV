@@ -9,6 +9,7 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
+	dbruntime "github.com/feichai0017/NoKV/runtime"
 )
 
 const defaultSessionCleanupInterval = 30 * time.Second
@@ -30,11 +31,7 @@ type sessionCleaner struct {
 	interval time.Duration
 	limit    uint32
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	stop   chan struct{}
-	done   chan struct{}
-	once   sync.Once
+	periodic *dbruntime.PeriodicTask
 
 	mu    sync.RWMutex
 	stats sessionCleanerStats
@@ -58,45 +55,30 @@ func startSessionCleaner(ctx context.Context, mounts sessionMountLister, exec se
 	if interval == 0 {
 		interval = defaultSessionCleanupInterval
 	}
-	runCtx, cancel := context.WithCancel(ctx)
 	c := &sessionCleaner{
 		mounts:   mounts,
 		exec:     exec,
 		interval: interval,
 		limit:    limit,
-		ctx:      runCtx,
-		cancel:   cancel,
-		stop:     make(chan struct{}),
-		done:     make(chan struct{}),
 		stats: sessionCleanerStats{
 			Enabled: true,
 		},
 	}
-	go c.run()
+	c.periodic = dbruntime.NewPeriodicTask(dbruntime.PeriodicTaskConfig{
+		Name:     "fsmeta-session-cleaner",
+		Interval: interval,
+		Run:      c.runOnce,
+		Context:  ctx,
+	})
+	c.periodic.Start()
 	return c
 }
 
-func (c *sessionCleaner) run() {
-	defer close(c.done)
-	c.runOnce(c.ctx)
-	ticker := time.NewTicker(c.interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-c.ctx.Done():
-			return
-		case <-c.stop:
-			return
-		case <-ticker.C:
-			c.runOnce(c.ctx)
-		}
-	}
-}
-
-func (c *sessionCleaner) runOnce(ctx context.Context) {
+func (c *sessionCleaner) runOnce(ctx context.Context) error {
 	start := time.Now()
 	mounts, expired, err := c.expire(ctx)
 	c.record(start, mounts, expired, err)
+	return err
 }
 
 func (c *sessionCleaner) expire(ctx context.Context) (uint64, uint64, error) {
@@ -173,12 +155,6 @@ func (c *sessionCleaner) Close() error {
 	if c == nil {
 		return nil
 	}
-	c.once.Do(func() {
-		if c.cancel != nil {
-			c.cancel()
-		}
-		close(c.stop)
-	})
-	<-c.done
+	c.periodic.Close()
 	return nil
 }

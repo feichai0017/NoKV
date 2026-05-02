@@ -20,8 +20,8 @@ const defaultResolveLockBatch = 4096
 type ResolveLocksOptions struct {
 	// CurrentTs is the timestamp used for TTL checks. Zero disables resolution.
 	CurrentTs uint64
-	// BatchLocks limits how many expired locks are resolved in one
-	// ApplyInternalEntries call. A non-positive value uses the default.
+	// BatchLocks limits how many expired locks are resolved in one semantic
+	// ResolveLock proposal batch. A non-positive value uses the default.
 	BatchLocks int
 	// MaxLocks stops one pass after scanning this many non-tombstone lock
 	// records. Zero means unlimited.
@@ -335,7 +335,7 @@ func lockExpired(lock txnmvcc.Lock, currentTs uint64) bool {
 	if lock.TTL == 0 || currentTs == 0 {
 		return false
 	}
-	return currentTs >= lock.Ts+lock.TTL
+	return currentTs >= lock.Ts && currentTs-lock.Ts >= lock.TTL
 }
 
 func groupResolveLockCommands(decisions []resolveLockDecision) []resolveLockCommand {

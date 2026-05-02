@@ -33,8 +33,8 @@ type PlanStats struct {
 }
 
 // ApplyStats summarizes a destructive MVCC GC pass. The embedded plan counters
-// describe what the scanner decided; Applied* counters describe the tombstones
-// actually submitted through ApplyInternalEntries.
+// describe what the scanner decided; Applied* counters describe tombstones
+// acknowledged by replicated maintenance proposals.
 type ApplyStats struct {
 	PlanStats
 	AppliedWriteDeletes   uint64
@@ -43,8 +43,8 @@ type ApplyStats struct {
 
 // ApplyOptions configures a destructive MVCC GC pass.
 type ApplyOptions struct {
-	// BatchEntries limits the number of tombstones submitted in one
-	// ApplyInternalEntries call. A non-positive value uses the default.
+	// BatchEntries limits the number of tombstones submitted in one replicated
+	// maintenance proposal batch. A non-positive value uses the default.
 	BatchEntries int
 	// MaxKeys stops one destructive pass after scanning this many user keys.
 	// Zero means unlimited.
@@ -69,12 +69,12 @@ func Plan(ctx context.Context, db txnstore.Store, policy SafePointPolicy) (PlanS
 // batch is submitted as a replicated raft command; there is intentionally no
 // local direct-apply path for production GC.
 func ApplyReplicated(ctx context.Context, db txnstore.Store, proposer MaintenanceProposer, policy SafePointPolicy, opt ApplyOptions) (ApplyStats, error) {
-	return applyWith(ctx, db, policy, opt, func(ctx context.Context, entries []*entrykv.Entry) error {
+	return applyWith(ctx, db, policy, opt, func(ctx context.Context, entries []*entrykv.Entry) (maintenanceSubmitResult, error) {
 		return proposeMaintenanceEntries(ctx, proposer, entries)
 	})
 }
 
-type applySubmitFn func(context.Context, []*entrykv.Entry) error
+type applySubmitFn func(context.Context, []*entrykv.Entry) (maintenanceSubmitResult, error)
 
 func applyWith(ctx context.Context, db txnstore.Store, policy SafePointPolicy, opt ApplyOptions, submit applySubmitFn) (ApplyStats, error) {
 	var stats ApplyStats
@@ -95,12 +95,13 @@ func applyWith(ctx context.Context, db txnstore.Store, policy SafePointPolicy, o
 			return stats, err
 		}
 		stats.add(batch.plan)
-		if err := submit(ctx, batch.entries); err != nil {
+		applied, err := submit(ctx, batch.entries)
+		stats.AppliedWriteDeletes += applied.writeDeletes
+		stats.AppliedDefaultDeletes += applied.defaultDeletes
+		if err != nil {
 			releaseEntries(batch.entries)
 			return stats, err
 		}
-		stats.AppliedWriteDeletes += batch.writeDeletes
-		stats.AppliedDefaultDeletes += batch.defaultDeletes
 		releaseEntries(batch.entries)
 		if batch.done {
 			return stats, nil
@@ -227,12 +228,10 @@ func seekStart(iter index.Iterator, afterUserKey []byte) {
 }
 
 type applyBatch struct {
-	plan           PlanStats
-	entries        []*entrykv.Entry
-	lastUserKey    []byte
-	writeDeletes   uint64
-	defaultDeletes uint64
-	done           bool
+	plan        PlanStats
+	entries     []*entrykv.Entry
+	lastUserKey []byte
+	done        bool
 }
 
 func collectApplyBatch(ctx context.Context, db txnstore.Store, policy SafePointPolicy, afterUserKey []byte, maxEntries int, maxKeys uint64) (applyBatch, error) {
@@ -241,8 +240,6 @@ func collectApplyBatch(ctx context.Context, db txnstore.Store, policy SafePointP
 		writes, defaults := buildDeletes(userKey, decisions)
 		batch.entries = append(batch.entries, writes...)
 		batch.entries = append(batch.entries, defaults...)
-		batch.writeDeletes += uint64(len(writes))
-		batch.defaultDeletes += uint64(len(defaults))
 		if maxKeys > 0 && batch.plan.ScannedKeys >= maxKeys {
 			return errStop
 		}

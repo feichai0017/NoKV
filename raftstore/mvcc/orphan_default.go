@@ -37,12 +37,12 @@ type OrphanDefaultStats struct {
 // ApplyOrphanDefaultsReplicated deletes orphan CFDefault records through a
 // replicated maintenance command. Use this path for cluster-mode stores.
 func ApplyOrphanDefaultsReplicated(ctx context.Context, db txnstore.Store, proposer MaintenanceProposer, opt OrphanDefaultOptions) (OrphanDefaultStats, error) {
-	return applyOrphanDefaultsWith(ctx, db, opt, func(ctx context.Context, entries []*entrykv.Entry) error {
+	return applyOrphanDefaultsWith(ctx, db, opt, func(ctx context.Context, entries []*entrykv.Entry) (maintenanceSubmitResult, error) {
 		return proposeMaintenanceEntries(ctx, proposer, entries)
 	})
 }
 
-type orphanDefaultSubmitFn func(context.Context, []*entrykv.Entry) error
+type orphanDefaultSubmitFn func(context.Context, []*entrykv.Entry) (maintenanceSubmitResult, error)
 
 func applyOrphanDefaultsWith(ctx context.Context, db txnstore.Store, opt OrphanDefaultOptions, submit orphanDefaultSubmitFn) (OrphanDefaultStats, error) {
 	var stats OrphanDefaultStats
@@ -57,11 +57,12 @@ func applyOrphanDefaultsWith(ctx context.Context, db txnstore.Store, opt OrphanD
 			return stats, err
 		}
 		stats.add(batch.scan)
-		if err := submit(ctx, batch.entries); err != nil {
+		applied, err := submit(ctx, batch.entries)
+		stats.AppliedDefaultDeletes += applied.defaultDeletes
+		if err != nil {
 			releaseEntries(batch.entries)
 			return stats, err
 		}
-		stats.AppliedDefaultDeletes += uint64(len(batch.entries))
 		releaseEntries(batch.entries)
 		if batch.done {
 			return stats, nil

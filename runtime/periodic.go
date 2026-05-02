@@ -11,6 +11,7 @@ type PeriodicTaskConfig struct {
 	Name     string
 	Interval time.Duration
 	Run      func(context.Context) error
+	Context  context.Context
 }
 
 func (c PeriodicTaskConfig) enabled() bool {
@@ -31,11 +32,13 @@ type PeriodicTask struct {
 	interval time.Duration
 	runFn    func(context.Context) error
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	stop   chan struct{}
-	done   chan struct{}
+	ctx     context.Context
+	cancel  context.CancelFunc
+	stop    chan struct{}
+	done    chan struct{}
+	started chan struct{}
 
+	startOnce sync.Once
 	closeOnce sync.Once
 	mu        sync.RWMutex
 	snap      PeriodicTaskSnapshot
@@ -45,7 +48,11 @@ func NewPeriodicTask(cfg PeriodicTaskConfig) *PeriodicTask {
 	if !cfg.enabled() {
 		return nil
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	parent := cfg.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
 	return &PeriodicTask{
 		name:     cfg.Name,
 		interval: cfg.Interval,
@@ -54,6 +61,7 @@ func NewPeriodicTask(cfg PeriodicTaskConfig) *PeriodicTask {
 		cancel:   cancel,
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
+		started:  make(chan struct{}),
 		snap: PeriodicTaskSnapshot{
 			Enabled: true,
 		},
@@ -71,7 +79,10 @@ func (t *PeriodicTask) Start() {
 	if t == nil {
 		return
 	}
-	go t.loop()
+	t.startOnce.Do(func() {
+		close(t.started)
+		go t.loop()
+	})
 }
 
 func (t *PeriodicTask) Close() {
@@ -82,7 +93,11 @@ func (t *PeriodicTask) Close() {
 		t.cancel()
 		close(t.stop)
 	})
-	<-t.done
+	select {
+	case <-t.started:
+		<-t.done
+	default:
+	}
 }
 
 func (t *PeriodicTask) Snapshot() PeriodicTaskSnapshot {

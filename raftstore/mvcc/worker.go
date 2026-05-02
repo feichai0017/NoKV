@@ -8,7 +8,10 @@ import (
 
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	txnstore "github.com/feichai0017/NoKV/percolator/storage"
+	dbruntime "github.com/feichai0017/NoKV/runtime"
 )
+
+const MaintenanceTaskName = "mvcc-maintenance"
 
 // MaintenanceWorkerConfig wires replicated MVCC maintenance for one
 // raftstore node. The worker never writes through the local Store surface:
@@ -54,13 +57,7 @@ type MaintenanceSnapshot struct {
 type MaintenanceWorker struct {
 	cfg MaintenanceWorkerConfig
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	stop   chan struct{}
-	wg     sync.WaitGroup
-
-	startOnce sync.Once
-	closeOnce sync.Once
+	periodic *dbruntime.PeriodicTask
 
 	mu       sync.RWMutex
 	snapshot MaintenanceSnapshot
@@ -77,16 +74,17 @@ func NewMaintenanceWorker(cfg MaintenanceWorkerConfig) (*MaintenanceWorker, bool
 	if !hasGCApply && !hasLockResolution && !hasOrphanCleanup {
 		return nil, false
 	}
-	ctx, cancel := context.WithCancel(context.Background())
 	worker := &MaintenanceWorker{
-		cfg:    cfg,
-		ctx:    ctx,
-		cancel: cancel,
-		stop:   make(chan struct{}),
+		cfg: cfg,
 		snapshot: MaintenanceSnapshot{
 			Enabled: true,
 		},
 	}
+	worker.periodic = dbruntime.NewPeriodicTask(dbruntime.PeriodicTaskConfig{
+		Name:     MaintenanceTaskName,
+		Interval: cfg.Interval,
+		Run:      worker.RunOnce,
+	})
 	return worker, true
 }
 
@@ -95,10 +93,7 @@ func (w *MaintenanceWorker) Start() {
 	if w == nil {
 		return
 	}
-	w.startOnce.Do(func() {
-		w.wg.Add(1)
-		go w.loop()
-	})
+	w.periodic.Start()
 }
 
 // Close stops the background maintenance loop.
@@ -106,16 +101,7 @@ func (w *MaintenanceWorker) Close() {
 	if w == nil {
 		return
 	}
-	w.closeOnce.Do(func() {
-		if w.cancel != nil {
-			w.cancel()
-		}
-		if w.stop != nil {
-			close(w.stop)
-		}
-		w.wg.Wait()
-		w.stop = nil
-	})
+	w.periodic.Close()
 }
 
 // RunOnce executes one replicated maintenance pass. It is exposed so tests and
@@ -195,22 +181,6 @@ func (w *MaintenanceWorker) Snapshot() MaintenanceSnapshot {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return w.snapshot
-}
-
-func (w *MaintenanceWorker) loop() {
-	defer w.wg.Done()
-	ticker := time.NewTicker(w.cfg.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			_ = w.RunOnce(w.ctx)
-		case <-w.stop:
-			return
-		case <-w.ctx.Done():
-			return
-		}
-	}
 }
 
 type maintenanceStageErrors struct {

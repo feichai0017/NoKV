@@ -19,23 +19,23 @@ import (
 // succeeds and a later region fails, the caller sees the error and a lower
 // applied count; the next GC pass must rescan and converge via idempotent
 // tombstones.
-func (s *Store) ProposeMVCCMaintenance(ctx context.Context, entries []*entrykv.Entry) (uint64, error) {
+func (s *Store) ProposeMVCCMaintenance(ctx context.Context, entries []*entrykv.Entry) (uint64, uint64, uint64, error) {
 	if len(entries) == 0 {
-		return 0, nil
+		return 0, 0, 0, nil
 	}
 	batches := make([]maintenanceRegionBatch, 0, 1)
 	regionIndex := make(map[uint64]int)
 	for _, entry := range entries {
 		if entry == nil || len(entry.Key) == 0 {
-			return 0, fmt.Errorf("raftstore: empty MVCC maintenance entry")
+			return 0, 0, 0, fmt.Errorf("raftstore: empty MVCC maintenance entry")
 		}
 		cf, userKey, version, ok := entrykv.SplitInternalKey(entry.Key)
 		if !ok || len(userKey) == 0 {
-			return 0, fmt.Errorf("raftstore: invalid MVCC maintenance key %x", entry.Key)
+			return 0, 0, 0, fmt.Errorf("raftstore: invalid MVCC maintenance key %x", entry.Key)
 		}
 		meta, ok := s.RegionMetaByKey(userKey)
 		if !ok {
-			return 0, fmt.Errorf("raftstore: no region for MVCC maintenance key %x", userKey)
+			return 0, 0, 0, fmt.Errorf("raftstore: no region for MVCC maintenance key %x", userKey)
 		}
 		idx, ok := regionIndex[meta.ID]
 		if !ok {
@@ -45,25 +45,35 @@ func (s *Store) ProposeMVCCMaintenance(ctx context.Context, entries []*entrykv.E
 		}
 		tombstone, err := newInternalEntryTombstone(cf, userKey, version, entry)
 		if err != nil {
-			return 0, err
+			return 0, 0, 0, err
 		}
 		batches[idx].entries = append(batches[idx].entries, tombstone)
+		switch cf {
+		case entrykv.CFWrite:
+			batches[idx].writeDeletes++
+		case entrykv.CFDefault:
+			batches[idx].defaultDeletes++
+		}
 	}
 
-	var applied uint64
+	var applied, writeDeletes, defaultDeletes uint64
 	for _, batch := range batches {
 		count, err := s.proposeMVCCMaintenanceBatch(ctx, batch)
 		if err != nil {
-			return applied, err
+			return applied, writeDeletes, defaultDeletes, err
 		}
 		applied += count
+		writeDeletes += batch.writeDeletes
+		defaultDeletes += batch.defaultDeletes
 	}
-	return applied, nil
+	return applied, writeDeletes, defaultDeletes, nil
 }
 
 type maintenanceRegionBatch struct {
-	meta    localmeta.RegionMeta
-	entries []*kvrpcpb.InternalEntryTombstone
+	meta           localmeta.RegionMeta
+	entries        []*kvrpcpb.InternalEntryTombstone
+	writeDeletes   uint64
+	defaultDeletes uint64
 }
 
 func newInternalEntryTombstone(cf entrykv.ColumnFamily, userKey []byte, version uint64, entry *entrykv.Entry) (*kvrpcpb.InternalEntryTombstone, error) {

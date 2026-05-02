@@ -257,14 +257,14 @@ type blockingMaintenanceProposer struct {
 	once    sync.Once
 }
 
-func (p *blockingMaintenanceProposer) ProposeMVCCMaintenance(ctx context.Context, entries []*entrykv.Entry) (uint64, error) {
+func (p *blockingMaintenanceProposer) ProposeMVCCMaintenance(ctx context.Context, entries []*entrykv.Entry) (uint64, uint64, uint64, error) {
 	if len(entries) > 0 {
 		p.once.Do(func() {
 			close(p.entered)
 		})
 	}
 	<-ctx.Done()
-	return 0, ctx.Err()
+	return 0, 0, 0, ctx.Err()
 }
 
 type failingLockResolverProposer struct {
@@ -282,7 +282,7 @@ type sequencedMaintenanceProposer struct {
 	errs  []error
 }
 
-func (p *sequencedMaintenanceProposer) ProposeMVCCMaintenance(_ context.Context, entries []*entrykv.Entry) (uint64, error) {
+func (p *sequencedMaintenanceProposer) ProposeMVCCMaintenance(_ context.Context, entries []*entrykv.Entry) (uint64, uint64, uint64, error) {
 	p.mu.Lock()
 	call := p.calls
 	p.calls++
@@ -292,12 +292,13 @@ func (p *sequencedMaintenanceProposer) ProposeMVCCMaintenance(_ context.Context,
 	}
 	p.mu.Unlock()
 	if err != nil {
-		return 0, err
+		return 0, 0, 0, err
 	}
 	if p.db != nil {
 		if err := p.db.ApplyInternalEntries(entries); err != nil {
-			return 0, err
+			return 0, 0, 0, err
 		}
 	}
-	return uint64(len(entries)), nil
+	writes, defaults := countTestMaintenanceEntries(entries)
+	return uint64(len(entries)), writes, defaults, nil
 }

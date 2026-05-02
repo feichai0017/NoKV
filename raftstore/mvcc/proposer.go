@@ -15,7 +15,7 @@ import (
 // subset of region-local batches before returning an error; MVCC maintenance is
 // intentionally at-least-once and idempotent, not cross-region atomic.
 type MaintenanceProposer interface {
-	ProposeMVCCMaintenance(context.Context, []*entrykv.Entry) (uint64, error)
+	ProposeMVCCMaintenance(context.Context, []*entrykv.Entry) (entries, writeDeletes, defaultDeletes uint64, err error)
 }
 
 // LockResolverProposer submits semantic ResolveLock commands through raft.
@@ -25,21 +25,35 @@ type LockResolverProposer interface {
 	ProposeResolveLocks(ctx context.Context, startVersion, commitVersion uint64, keys [][]byte) (uint64, error)
 }
 
-func proposeMaintenanceEntries(ctx context.Context, proposer MaintenanceProposer, entries []*entrykv.Entry) error {
+type maintenanceSubmitResult struct {
+	entries        uint64
+	writeDeletes   uint64
+	defaultDeletes uint64
+}
+
+func proposeMaintenanceEntries(ctx context.Context, proposer MaintenanceProposer, entries []*entrykv.Entry) (maintenanceSubmitResult, error) {
 	if len(entries) == 0 {
-		return nil
+		return maintenanceSubmitResult{}, nil
 	}
 	if proposer == nil {
-		return fmt.Errorf("raftstore/mvcc: nil maintenance proposer")
+		return maintenanceSubmitResult{}, fmt.Errorf("raftstore/mvcc: nil maintenance proposer")
 	}
-	applied, err := proposer.ProposeMVCCMaintenance(ctx, entries)
+	applied, writeDeletes, defaultDeletes, err := proposer.ProposeMVCCMaintenance(ctx, entries)
+	result := maintenanceSubmitResult{
+		entries:        applied,
+		writeDeletes:   writeDeletes,
+		defaultDeletes: defaultDeletes,
+	}
 	if err != nil {
-		return err
+		return result, err
+	}
+	if writeDeletes+defaultDeletes != applied {
+		return result, fmt.Errorf("raftstore/mvcc: maintenance proposer applied %d entries but reported %d write and %d default deletes", applied, writeDeletes, defaultDeletes)
 	}
 	if applied != uint64(len(entries)) {
-		return fmt.Errorf("raftstore/mvcc: maintenance proposer applied %d entries, expected %d", applied, len(entries))
+		return result, fmt.Errorf("raftstore/mvcc: maintenance proposer applied %d entries, expected %d", applied, len(entries))
 	}
-	return nil
+	return result, nil
 }
 
 func proposeResolveLocks(ctx context.Context, proposer LockResolverProposer, startVersion, commitVersion uint64, keys [][]byte) (uint64, error) {

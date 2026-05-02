@@ -2,6 +2,7 @@ package mvcc_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
@@ -204,6 +205,25 @@ func TestApplyMVCCGCReplicatedRejectsPartialProposerAck(t *testing.T) {
 	require.ErrorContains(t, err, "applied 1 entries")
 }
 
+func TestApplyMVCCGCReplicatedReportsPartialSubmitStats(t *testing.T) {
+	db := openMVCCGCPlanTestDB(t)
+	key := []byte("vol/key")
+	applyMVCCGCPutVersion(t, db, key, 150, 140, "new")
+	applyMVCCGCPutVersion(t, db, key, 90, 80, "anchor")
+	applyMVCCGCPutVersion(t, db, key, 40, 30, "old")
+
+	stats, err := storemvcc.ApplyReplicated(
+		context.Background(),
+		db,
+		&partialMaintenanceProposer{err: errors.New("region failed"), writeDeletes: 1},
+		storemvcc.SafePointPolicy{RequestedSafePoint: 100},
+		storemvcc.ApplyOptions{},
+	)
+	require.ErrorContains(t, err, "region failed")
+	require.Equal(t, uint64(1), stats.AppliedWriteDeletes)
+	require.Zero(t, stats.AppliedDefaultDeletes)
+}
+
 func TestApplyMVCCGCHonorsMountScopedRetention(t *testing.T) {
 	db := openMVCCGCPlanTestDB(t)
 	volKey := []byte("vol/key")
@@ -304,15 +324,48 @@ type testMaintenanceProposer struct {
 	applied uint64
 }
 
-func (p *testMaintenanceProposer) ProposeMVCCMaintenance(_ context.Context, entries []*entrykv.Entry) (uint64, error) {
+func (p *testMaintenanceProposer) ProposeMVCCMaintenance(_ context.Context, entries []*entrykv.Entry) (uint64, uint64, uint64, error) {
 	p.calls++
 	if p.db != nil {
 		if err := p.db.ApplyInternalEntries(entries); err != nil {
-			return 0, err
+			return 0, 0, 0, err
 		}
 	}
 	if p.applied != 0 {
-		return p.applied, nil
+		limit := min(int(p.applied), len(entries))
+		writes, defaults := countTestMaintenanceEntries(entries[:limit])
+		return p.applied, writes, defaults, nil
 	}
-	return uint64(len(entries)), nil
+	writes, defaults := countTestMaintenanceEntries(entries)
+	return uint64(len(entries)), writes, defaults, nil
+}
+
+type partialMaintenanceProposer struct {
+	err            error
+	writeDeletes   uint64
+	defaultDeletes uint64
+}
+
+func (p *partialMaintenanceProposer) ProposeMVCCMaintenance(context.Context, []*entrykv.Entry) (uint64, uint64, uint64, error) {
+	return p.writeDeletes + p.defaultDeletes, p.writeDeletes, p.defaultDeletes, p.err
+}
+
+func countTestMaintenanceEntries(entries []*entrykv.Entry) (uint64, uint64) {
+	var writes, defaults uint64
+	for _, entry := range entries {
+		if entry == nil {
+			continue
+		}
+		cf, _, _, ok := entrykv.SplitInternalKey(entry.Key)
+		if !ok {
+			continue
+		}
+		switch cf {
+		case entrykv.CFWrite:
+			writes++
+		case entrykv.CFDefault:
+			defaults++
+		}
+	}
+	return writes, defaults
 }

@@ -99,7 +99,7 @@ func TestSessionCleanerRecordsStats(t *testing.T) {
 		stats: sessionCleanerStats{Enabled: true},
 	}
 
-	cleaner.runOnce(context.Background())
+	require.NoError(t, cleaner.runOnce(context.Background()))
 
 	stats := cleaner.Stats()
 	require.Equal(t, true, stats["enabled"])

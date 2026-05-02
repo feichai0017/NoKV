@@ -13,6 +13,10 @@ import (
 // ProposeResolveLocks submits a semantic Percolator ResolveLock command through
 // raft. It is used by cluster-mode MVCC maintenance; direct lock tombstones
 // would bypass apply observers and WatchSubtree notifications.
+//
+// The operation is atomic per region batch, not across regions. If one region
+// succeeds and a later region fails, the next maintenance pass must rescan and
+// converge through idempotent lock resolution.
 func (s *Store) ProposeResolveLocks(ctx context.Context, startVersion, commitVersion uint64, keys [][]byte) (uint64, error) {
 	if startVersion == 0 {
 		return 0, fmt.Errorf("raftstore: resolve locks start version is required")

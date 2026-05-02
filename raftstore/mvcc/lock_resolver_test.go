@@ -148,6 +148,25 @@ func TestResolveExpiredLocksRetainsLiveLock(t *testing.T) {
 	require.Equal(t, uint64(10), floor.OldestStartTs)
 }
 
+func TestResolveExpiredLocksRetainsTTLAcrossUint64Boundary(t *testing.T) {
+	db := openMVCCGCPlanTestDB(t)
+	key := []byte("overflow-live")
+	startTs := ^uint64(0) - 5
+	applyVersionedEntryForApplyTest(t, db, entrykv.CFDefault, key, startTs, []byte("value"), 0, 0)
+	applyMVCCGCLockRecord(t, db, key, key, startTs, 10, kvrpcpb.Mutation_Put)
+
+	stats, err := storemvcc.ResolveExpiredLocksReplicated(context.Background(), db, &testLockResolverProposer{db: db}, storemvcc.ResolveLocksOptions{CurrentTs: startTs + 4})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), stats.ScannedLocks)
+	require.Equal(t, uint64(1), stats.RetainedLocks)
+	require.Zero(t, stats.ResolvedLocks)
+
+	lock, err := db.GetInternalEntry(entrykv.CFLock, key, entrykv.MaxVersion)
+	require.NoError(t, err)
+	defer lock.DecrRef()
+	require.Zero(t, lock.Meta&entrykv.BitDelete)
+}
+
 func TestResolveExpiredLocksUnblocksTxnFloor(t *testing.T) {
 	db := openMVCCGCPlanTestDB(t)
 	key := []byte("old")
