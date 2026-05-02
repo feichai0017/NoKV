@@ -43,5 +43,8 @@ jobs:
     - name: Build
       run: make build
 
+    - name: Correctness smoke
+      run: make test-correctness-smoke
+
     - name: Test
       run: make test

@@ -1,12 +1,13 @@
 # NoKV Makefile
 # Provides standardized commands for development workflow
 
-.PHONY: help build test test-short test-race test-coverage lint fmt clean docker-up docker-dev-up docker-down bench install-tools
+.PHONY: help build test test-short test-race test-coverage test-contract-smoke test-correctness-smoke lint fmt clean docker-up docker-dev-up docker-down bench install-tools
 .PHONY: proto proto-check proto-breaking-check
 
 GOLANGCI_LINT_VERSION ?= v2.9.0
 BUF_VERSION ?= 1.66.0
 PROJECT_GO_VERSION ?= 1.26.2
+GO_TEST_P ?= 1
 
 # Default target
 help:
@@ -17,6 +18,8 @@ help:
 	@echo "  make test-short         - Run tests in short mode"
 	@echo "  make test-race          - Run tests with race detector"
 	@echo "  make test-coverage      - Run tests with coverage report"
+	@echo "  make test-contract-smoke - Run seeded fsmeta contract model smoke tests"
+	@echo "  make test-correctness-smoke - Run distributed correctness smoke tests"
 	@echo "  make lint               - Run golangci-lint (requires installation)"
 	@echo "  make fmt                - Run go fix, format code with gofmt, and tidy modules"
 	@echo "  make proto              - Format .proto files and regenerate protobuf Go code"
@@ -42,24 +45,34 @@ build:
 # Run all tests
 test:
 	@echo "Running all tests..."
-	go test -v ./...
+	go test -p $(GO_TEST_P) -v ./...
 
 # Run tests in short mode (faster, skips some long-running tests)
 test-short:
 	@echo "Running tests in short mode..."
-	go test -short -v ./...
+	go test -p $(GO_TEST_P) -short -v ./...
 
 # Run tests with race detector
 test-race:
 	@echo "Running tests with race detector..."
-	go test -race -v ./...
+	go test -p $(GO_TEST_P) -race -v ./...
 
 # Run tests with coverage
 test-coverage:
 	@echo "Running tests with coverage..."
-	go test -v -coverprofile=coverage.out -covermode=atomic $$(go list ./... | grep -v '/integration$$')
+	go test -p $(GO_TEST_P) -v -coverprofile=coverage.out -covermode=atomic $$(go list ./... | grep -v '/integration$$')
 	@echo "✓ Coverage report generated: coverage.out"
 	@echo "  View with: go tool cover -html=coverage.out"
+
+# Run seeded contract tests against the fsmeta executor model.
+test-contract-smoke:
+	@echo "Running fsmeta contract smoke tests..."
+	NOKV_CONTRACT_SEEDS=$${NOKV_CONTRACT_SEEDS:-64} NOKV_CONTRACT_STEPS=$${NOKV_CONTRACT_STEPS:-120} go test ./fsmeta/contract -run TestFSMetaExecutorModelContract -count=1 -v
+
+# Run the highest-signal distributed correctness suites before the full package sweep.
+test-correctness-smoke: test-contract-smoke
+	@echo "Running distributed correctness smoke tests..."
+	go test -p $(GO_TEST_P) ./percolator/... ./raftstore/client ./raftstore/mvcc ./raftstore/store ./raftstore/integration ./coordinator/integration ./meta/root/integration -count=1
 
 # Run linter (requires golangci-lint to be installed)
 lint:

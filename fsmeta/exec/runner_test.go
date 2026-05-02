@@ -545,6 +545,41 @@ func TestExecutorOpenWriteSessionReclaimsExpiredOwner(t *testing.T) {
 	require.Contains(t, runner.data, string(ownerKey))
 }
 
+func TestExecutorOpenWriteSessionDoesNotDeleteReusedLiveSession(t *testing.T) {
+	runner := newFakeRunner()
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 23, Type: fsmeta.InodeTypeFile, LinkCount: 1})
+	live := fsmeta.SessionRecord{Session: "writer-reused", Inode: 23, ExpiresUnixNs: 500}
+	seedSession(t, runner, "vol", live)
+	expired := fsmeta.SessionRecord{Session: "writer-reused", Inode: 22, ExpiresUnixNs: 50}
+	expiredValue, err := fsmeta.EncodeSessionValue(expired)
+	require.NoError(t, err)
+	expiredOwnerKey, err := fsmeta.EncodeInodeSessionKey("vol", expired.Inode)
+	require.NoError(t, err)
+	runner.data[string(expiredOwnerKey)] = expiredValue
+	liveSessionKey, err := fsmeta.EncodeSessionKey("vol", live.Session)
+	require.NoError(t, err)
+	liveOwnerKey, err := fsmeta.EncodeInodeSessionKey("vol", live.Inode)
+	require.NoError(t, err)
+	executor, err := New(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
+	require.NoError(t, err)
+
+	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
+		Mount:         "vol",
+		Inode:         22,
+		Session:       "writer-new",
+		ExpiresUnixNs: 200,
+	})
+
+	require.NoError(t, err)
+	require.Contains(t, runner.data, string(liveSessionKey))
+	require.Contains(t, runner.data, string(liveOwnerKey))
+	owner, ok, err := executor.readSessionByKey(context.Background(), expiredOwnerKey, 99)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, fsmeta.SessionID("writer-new"), owner.Session)
+}
+
 func TestExecutorOpenWriteSessionRejectsDirectory(t *testing.T) {
 	runner := newFakeRunner()
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeDirectory, LinkCount: 1})
@@ -585,6 +620,34 @@ func TestExecutorExpireWriteSessionsDeletesBothIndexes(t *testing.T) {
 	require.NotContains(t, runner.data, string(expiredSessionKey))
 	require.NotContains(t, runner.data, string(expiredOwnerKey))
 	require.Contains(t, runner.data, string(liveSessionKey))
+	require.Contains(t, runner.data, string(liveOwnerKey))
+}
+
+func TestExecutorExpireWriteSessionsDoesNotDeleteReusedLiveSession(t *testing.T) {
+	runner := newFakeRunner()
+	expired := fsmeta.SessionRecord{Session: "writer-reused", Inode: 22, ExpiresUnixNs: 50}
+	live := fsmeta.SessionRecord{Session: "writer-reused", Inode: 23, ExpiresUnixNs: 500}
+	expiredValue, err := fsmeta.EncodeSessionValue(expired)
+	require.NoError(t, err)
+	liveValue, err := fsmeta.EncodeSessionValue(live)
+	require.NoError(t, err)
+	sessionKey, err := fsmeta.EncodeSessionKey("vol", live.Session)
+	require.NoError(t, err)
+	expiredOwnerKey, err := fsmeta.EncodeInodeSessionKey("vol", expired.Inode)
+	require.NoError(t, err)
+	liveOwnerKey, err := fsmeta.EncodeInodeSessionKey("vol", live.Inode)
+	require.NoError(t, err)
+	runner.data[string(expiredOwnerKey)] = expiredValue
+	runner.data[string(sessionKey)] = liveValue
+	runner.data[string(liveOwnerKey)] = liveValue
+	executor, err := New(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
+	require.NoError(t, err)
+
+	result, err := executor.ExpireWriteSessions(context.Background(), fsmeta.ExpireWriteSessionsRequest{Mount: "vol"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.ExpireWriteSessionsResult{}, result)
+	require.NotContains(t, runner.data, string(expiredOwnerKey))
+	require.Contains(t, runner.data, string(sessionKey))
 	require.Contains(t, runner.data, string(liveOwnerKey))
 }
 

@@ -825,7 +825,15 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 				return err
 			}
 			if string(staleSessionKey) != string(plan.ReadKeys[1]) {
-				mutations = append(mutations, &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Delete, Key: staleSessionKey})
+				ownerValue, err := fsmeta.EncodeSessionValue(owner)
+				if err != nil {
+					return err
+				}
+				if value, ok, err := e.runner.Get(ctx, staleSessionKey, startVersion); err != nil {
+					return err
+				} else if ok && bytes.Equal(value, ownerValue) {
+					mutations = append(mutations, &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Delete, Key: staleSessionKey})
+				}
 			}
 		}
 		value, err := fsmeta.EncodeSessionValue(record)
@@ -957,9 +965,17 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 			if err != nil {
 				return err
 			}
-			deletes[string(sessionKey)] = sessionKey
-			deletes[string(ownerKey)] = ownerKey
-			expiredSessions[record.Session] = struct{}{}
+			if value, ok, err := e.runner.Get(ctx, sessionKey, startVersion); err != nil {
+				return err
+			} else if ok && bytes.Equal(value, kv.Value) {
+				deletes[string(sessionKey)] = sessionKey
+				expiredSessions[record.Session] = struct{}{}
+			}
+			if value, ok, err := e.runner.Get(ctx, ownerKey, startVersion); err != nil {
+				return err
+			} else if ok && bytes.Equal(value, kv.Value) {
+				deletes[string(ownerKey)] = ownerKey
+			}
 		}
 		if len(deletes) == 0 {
 			expired = 0
