@@ -97,6 +97,11 @@ func openRealClusterRuntimeWithOptions(t *testing.T, ctx context.Context, opts .
 
 func openSplitRealClusterExecutor(t *testing.T, ctx context.Context) *fsmetaexec.Executor {
 	t.Helper()
+	return openSplitRealClusterExecutorWithOptions(t, ctx)
+}
+
+func openSplitRealClusterExecutorWithOptions(t *testing.T, ctx context.Context, opts ...fsmetaexec.Option) *fsmetaexec.Executor {
+	t.Helper()
 
 	coord := testcluster.StartCoordinator(t)
 	t.Cleanup(func() { coord.Close(t) })
@@ -176,7 +181,9 @@ func openSplitRealClusterExecutor(t *testing.T, ctx context.Context) *fsmetaexec
 
 	runner, err := fsmetaexec.NewRaftstoreRunner(kv, coordRPC)
 	require.NoError(t, err)
-	executor, err := fsmetaexec.New(runner, fsmetaexec.WithMountResolver(testMountResolver{coord: coordRPC}))
+	executorOpts := []fsmetaexec.Option{fsmetaexec.WithMountResolver(testMountResolver{coord: coordRPC})}
+	executorOpts = append(executorOpts, opts...)
+	executor, err := fsmetaexec.New(runner, executorOpts...)
 	require.NoError(t, err)
 	return executor
 }
